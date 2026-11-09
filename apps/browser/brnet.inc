@@ -255,8 +255,8 @@ br_go:
                                     ; reported). One draw at the one place the
                                     ; text changes, which is here
     call br_free_all
-    call OSAPI_MEM_AVAIL
-    mov [br_membase], bx            ; conventional free total at this fetch's start
+    call br_avail
+    mov [br_membase], bx            ; the free total at this fetch's start
     mov ax, 1                       ; claim a small source window; grow on demand
     call br_srcclaim
     jc .nomem

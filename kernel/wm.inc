@@ -12,10 +12,11 @@
 ; every caller of a repainting routine already holds the gfx lock (SPEC 1.6).
 ; =============================================================================
 
-; --- window record, 20 bytes, fixed offsets (SPEC.md 11) ---------------------
+; --- window record, WIN_SIZE bytes (74 kern_big, 65 kern_small), fixed offsets
 W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible,
                                 ; bit2 = resizable, bit3 = fullscreen,
-                                ; bit4 = content-origin snapped (SPEC.md 11.94)
+                                ; bit4 = WF_NOSNAP, content origin NOT kept
+                                ; aligned (SPEC.md 11.94; aligned is the default)
 W_X     equ 2                   ; word, frame left (screen coords)
 W_Y     equ 4                   ; word, frame top (below menu bar: y >=
                                 ; MBAR_H - except under WF_FULL, SPEC 11.2)
@@ -498,15 +499,18 @@ wm_pkgcall:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 14). One
-; caller, kmain:4291, and zero outbound: it is four `rep stos` runs over `.bss`
+; caller, kmain's OVSCALL, and zero outbound: two `rep stosb` runs and a store over `.bss`
 ; through ES = DS = KERNEL_SEG, which `.boot2` supplies unchanged.
 ; ...AND BACK IN THE BLOB ON kern_big (SPEC.md 9.9.8): the window half had two
 ; bytes left and the PS/2 wheel's knock needed thirty-seven, which is this body
 ; to the byte. The blob had 248. kern_small keeps it in `.ovl`, where its blob
 ; is the tighter of the two; tools/os88ovlchk.py models kern_small, so that
-; arm is written LAST
+; arm is written LAST. ...AND `.boot3` SINCE BOOT3-PLAN WAVE 3 on every other
+; kernel (SPEC.md 2.5.3.2): OVSCALL's non-small arm became B3CALL when the
+; clock ladder and sch_idle_start took the same build choice, and this body
+; went with the macro (it was wave 4's to move anyway)
 %ifndef KERN_SMALL
-section .boot2
+B3SECT
 %else
 section .ovl                   ; BOTH kernels (SPEC.md 2.5.3.3): it was the
                                 ; blob on kern_small, and kmain_o needed that
@@ -526,14 +530,14 @@ wm_init:
     mov di, wm_zrun             ; pkgd + pkgs + wins + zord + zn are contiguous
     mov cx, wm_clask + 2 - wm_zrun  ; ...through wm_clreq/wm_clask
     rep stosb                   ; in .bss. THE NEST STACK IS IN THE RUN
-                                ; (SPEC.md 66.6.1): .bss is never zeroed at
-                                ; boot and int 19h keeps the LAST kernel's, so
-                                ; a stale [wm_pkgd] past WM_PKGD_MAX pins every
-                                ; region and image for the rest of the session
-                                ; and one below it walks garbage segments
-    mov [wm_fs], ax             ; no fullscreen window (SPEC.md 11.2); .bss
-                                ; is never zeroed at boot, so this is not
-                                ; redundant
+                                ; (SPEC.md 66.6.1). .bss arrives zeroed (SPEC.md
+                                ; 10 - the image's .text/.ovl gap is zero
+                                ; padding), so this is a backstop that costs no
+                                ; resident byte (blob or .ovl): a stale
+                                ; [wm_pkgd] past WM_PKGD_MAX would pin every
+                                ; region and image for the session
+    mov [wm_fs], ax             ; no fullscreen window (SPEC.md 11.2) - the
+                                ; same backstop
                                 ; (the close negotiators, the right-click
                                 ; handlers and SPEC.md 75.2's request are all
                                 ; in the one run above now)
@@ -1456,17 +1460,7 @@ wm_create:
                                 ; (CX is spent: wm_fit and the index math
                                 ; below set their own)
                                 ; (no size-changed handler either: W_ONSZ
-                                ; was in the zero run. Formerly:)
-                                ; lines up AX is 0 only for a KERNEL window and
-                                ; is the PACKAGE's own segment otherwise, so
-                                ; passing it through would install a handler at
-                                ; whatever offset that segment number happens to
-                                ; be - a near call into the middle of the
-                                ; package's image on the first adapter change.
-                                ; Cleared here and not only in wm_destroy where
-                                ; its siblings are: destroy covers a slot that
-                                ; has been USED, and this covers the first
-                                ; window in a slot that never has
+                                ; is in the zero run above)
     call wm_nat_bank            ; the TEMPLATE's own rect, banked while it is
                                 ; still in the record: this is the only moment
                                 ; the UNCLAMPED size exists, and without it a
@@ -1542,11 +1536,8 @@ wm_create:
 ; smaller adapter it lays out for a box it no longer has. The kernel is the
 ; only thing that knows the box moved, so the kernel has to say so.
 ;
-; A SIDE TABLE, not a word in the record: WIN_SIZE is what wm_idx2ptr
-; multiplies by and every reader of a window pays for a wider record, and
-; wm_about (SPEC.md 12.2) is the precedent for a per-slot HANDLER living
-; beside the table rather than in it. It also costs no .o88 a rebuild, which a
-; record that grew would.
+; W_ONSZ, a word IN the record (W_SIDE+0), zeroed by wm_create's run when the
+; slot is taken, so a reused slot inherits no stranger's handler.
 ;
 ; AN INLINE CELL (SPEC.md 20.3), and there is no body here: OSAPI_WM_ONRESIZE's cell is
 ; `mov [cs:bx+W_ONSZ], ax / retf`, the whole routine - the record is in
@@ -2086,16 +2077,15 @@ wm_timer:
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers AND the flags preserved)
 ;
-; wm_onresize's shape exactly and for its reason: a SIDE TABLE, not a word in
-; the record, because WIN_SIZE is the stride every reader of a window pays and
-; growing it costs every existing .o88 a rebuild. Cleared by wm_destroy, so a
-; reused slot never inherits a stranger's near pointer.
+; wm_onresize's shape: W_ONWK, a word in the record, zeroed by wm_create's run
+; when the slot is taken, so a reused slot never inherits a stranger's near
+; pointer.
 ;
 ; **AND THE FLAGS, which it did not promise until SPEC.md 54.10** - wm_onclose
 ; already did, for exactly the reason that now applies here. The SDK tells a
 ; package to install this from its ENTRY PROC after OSAPI_WM_CREATE, where the
 ; CF the entry owes the loader (SPEC.md 21) is still riding in the flags, and
-; wm_wkh_slot's `div` writes them. Every associated app installs one now
+; wm_wkh_slot's `div` used to write them. Every associated app installs one now
 ; (SPEC.md 54.10), so the alternative was a pushf/popf pair at nine call sites
 ; and a silent aborted launch at whichever one forgot.
 ;
@@ -2109,11 +2099,9 @@ wm_timer:
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers AND the flags preserved)
 ;
-; wm_onwake's shape and reason - a SIDE TABLE, not a word in the record,
-; because WIN_SIZE is the stride every reader of a window pays. Cleared by
-; wm_destroy, so a reused slot never inherits a stranger's near pointer, and
-; by wm_init, because unlike every other side table here this one is read for
-; a window that never installed anything.
+; wm_onwake's shape: W_ONCL, a word in the record, zeroed by wm_create's run
+; when the slot is taken - which matters more here than for most handlers,
+; because this word is read for a window that never installed anything.
 ; -----------------------------------------------------------------------------
 ; KERN_MEGA's ALONE: every other kernel's cell 0x0362 IS this store (an INLINE
 ; cell, kernel size pass 14), and the one kernel caller writes it in place.
@@ -2136,21 +2124,13 @@ wm_onclose:
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers preserved)
 ;
-; wm_onwake's shape and reason - a SIDE TABLE, not a word in the record,
-; because WIN_SIZE is the stride every reader of a window pays and growing it
-; costs every existing .o88 a rebuild. Cleared by wm_destroy, so a reused slot
-; never inherits a stranger's near pointer, and by wm_init, because like
-; wm_oncl this word is read for a window that never installed anything.
+; wm_onwake's shape: W_ONRC, a word in the record on both kernels, zeroed by
+; wm_create's run when the slot is taken - and, like W_ONCL, read for a
+; window that never installed anything.
 ;
-; It is in kern_small too: a side table is 24 bytes of .bss and the dispatch
-; is a word read on a path that today does nothing at all for a package
-; window - the record-growing that made SPEC.md 13.8.2 and 13.9 kern_big's
-; alone is exactly what this does not do.
-;
-; The FLAGS are preserved as well, which wm_onwake does not promise and
-; wm_onclose does: this is installed from an entry proc, where the CF a
-; package owes the loader is still riding in them (SPEC.md 21), and
-; wm_ptr2idx's div writes them.
+; The FLAGS are preserved as well: this is installed from an entry proc, where
+; the CF a package owes the loader is still riding in them (SPEC.md 21), and
+; the inline cell below writes none.
 ;
 ; AN INLINE CELL (SPEC.md 20.3), and there is no body here: OSAPI_WM_ONRCLICK's cell is
 ; `mov [cs:bx+W_ONRC], ax / retf`, the whole routine - the record is in
@@ -2317,7 +2297,7 @@ wm_close_req:
 ; silently when full (SPEC.md 10), and a package that kicks from every
 ; callback - which is what SPEC.md 71 tells it to do, so a dropped wake cannot
 ; stall it - would otherwise be the thing that fills the ring and drops the
-; mouse. The flag is per SLOT (wm_wkq), set here and cleared by wm_wake_disp
+; mouse. The flag is per WINDOW (W_WKQ, in the record), set here and cleared by wm_wake_disp
 ; BEFORE the handler runs, so a handler that re-posts itself gets exactly one
 ; more record.
 ;
@@ -2350,9 +2330,10 @@ wm_wake:
                                 ; state where the promise is owed and the
                                 ; record is GONE, and that one has to post
     cmp byte [evq_count], EVQ_CAP ; a BYTE since size pass 3, and no bank: AX
-    jae .full                   ; is banked at entry and dead on both arms -
-                                ; .full goes popf/stc/.out: pop si/pop ax/ret.
-                                ; evq_push would drop it silently; say so
+    jae .full                   ; is written on neither arm -
+                                ; .full goes popf/stc/.out: pop si/ret.
+                                ; evq_push would drop a record (SPEC.md
+                                ; 10.1); refuse instead, and say so
     mov byte [bx+W_WKQ], WKQ_RING
     mov [wm_wk_rec+EV_A], bx    ; (EV_TYPE is the record's own: below)
     mov si, wm_wk_rec
@@ -2423,7 +2404,7 @@ wm_wake_disp:
 ;
 ; The same dispatch with no queued promise to spend: the caller is not a
 ; popped EVT_WAKE but the kernel itself, standing where SPEC.md 74.1 says the
-; handler stands. So [wm_wkq] is deliberately NOT touched - a wake this window
+; handler stands. So W_WKQ is deliberately NOT touched - a wake this window
 ; really did post is still owed after this one, and clearing the flag here
 ; would leave a record in the ring with nothing saying it is coming.
 ;
@@ -2820,14 +2801,12 @@ wm_rz_paint:
 
 ; -----------------------------------------------------------------------------
 ; The zoom bank: the rect a zoomed window goes back to (SPEC.md 11.95).
-; One entry per window SLOT, a side table rather than four more words in the
-; record, because WIN_SIZE is what wm_idx2ptr multiplies by and every reader
-; of a window pays for a wider record whether it zooms or not.
+; Eight bytes in the record, W_ZOOMR (the ZR_* offsets below).
 ;
 ; ZR_W = 0 is "nothing banked", and it is a safe sentinel because a banked
-; width is a live window's, which WMIN_W floors at 96. .bss arrives zeroed
-; (the overlay note in kernel.asm), so a slot starts empty; wm_destroy clears
-; it again, or a reused slot would restore to a stranger's rect.
+; width is a live window's, which WMIN_W floors at 96. wm_create's zero run
+; empties it when the slot is taken, so a reused slot never restores to a
+; stranger's rect.
 ; -----------------------------------------------------------------------------
 ZR_X    equ 0
 ZR_Y    equ 2
@@ -3059,14 +3038,14 @@ wm_zoom:
 ; (gone: the bank is W_ZOOMR, in the record - `lea si, [bx+W_ZOOMR]`)
 
 ; -----------------------------------------------------------------------------
-; wm_destroy - free a window record and repaint everything
+; wm_destroy - free a window record and repaint what it vacated
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
 ;
 ; Clears W_FLAGS (used + visible), resets the slot's wm_owner entry to 0xFF,
 ; removes the window's index from wm_zord (compacting the byte array over
-; it, decrementing wm_zn), then repaints all. The record slot becomes
-; reusable by wm_create.
+; it, decrementing wm_zn), then wm_paint_dmg over the rect it vacated
+; (SPEC.md 11.91). The record slot becomes reusable by wm_create.
 ; -----------------------------------------------------------------------------
 wm_destroy:
     call kent_di                ; = push ax/bx/cx/dx/si/di
@@ -3204,9 +3183,9 @@ wm_destroy_seg:
 ;
 ; Raising an ALREADY visible window is the same argument - it moves up, so
 ; it can only cover more - which is why this path does not care whether the
-; visible bit was already set. wm_front on its own still does the full pass,
-; because a raise there is reached from a click that may also have to
-; UNCOVER something, and that is genuinely unknown.
+; visible bit was already set. wm_front asks wm_obscured first and draws
+; only the title bar, or only what was covered (AL = 2, SPEC.md 11.96.10);
+; it takes the full pass only for a window that is not visible.
 ;
 ; Four things change and all four are drawn here:
 ;   - the menu bar, because menu_activate just handed it to this window;
@@ -3232,8 +3211,8 @@ wm_destroy_seg:
 ; player's W_PAINT, twice - once to show the dialog and once to take it away.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; wm_lk / wm_unlk - THE DRAWING MUTEX, FOR THE THREE ENTRIES A PACKAGE REACHES
-;                   WITH IT FREE (SPEC.md 11.101.2)
+; wm_lk - THE DRAWING MUTEX, FOR THE FOUR ENTRIES A PACKAGE REACHES WITH IT
+;         FREE (show, hide, front, resize: SPEC.md 11.101.2, 11.1.2)
 ;
 ; `wm_show`, `wm_hide` and `wm_front` are API slots (0x0080/0x0088/0x0090), and
 ; a package's ENTRY PROC runs with the gfx lock free (SPEC.md 20.2) - which is
@@ -3260,10 +3239,10 @@ wm_destroy_seg:
 ; It is a RECURSIVE-AWARE take and not a bare gfx_lock, because every kernel
 ; caller already holds it and gfx_lock is not reentrant: ours is a no-op,
 ; anybody else's waits, free is taken. Unlike fprog's (12.8.4) this one may
-; block - all three run on the UI task and never inside dsk_xfer's [sch_lock].
+; block - all four run on the UI task and never inside dsk_xfer's [sch_lock].
 ;
-; in:  nothing;  out: wm_lk: AL = 1 we took it and owe wm_unlk, 0 it was ours.
-;      wm_unlk: AL as wm_lk answered. Neither touches another register.
+; in:  nothing;  out: AL = 1 we took it and owe gfx_unlock (wm_lk_go pays it),
+;      0 it was ours. Touches no other register.
 ; -----------------------------------------------------------------------------
 wm_lk:
     cmp byte [gfx_lock_flag], 0
@@ -3273,7 +3252,7 @@ wm_lk:
     jne wm_lk_take              ; nothing: `mov al,[sch_cur]` writes AL and not
                                 ; AH, and AL is overwritten on every path out
                                 ; (wm_lk_take's `mov al,1`, or the `xor al,al`
-                                ; below). The header's "Neither touches another
+                                ; below). The header's "Touches no other
                                 ; register" is about AH and is unaffected.
                                 ; SOMEBODY ELSE'S: gfx_lock waits for them,
                                 ; which is what a mutex is for.
@@ -3458,7 +3437,7 @@ wm_fs_vis:
 ;      2 draw it, but it was ALREADY ON THE GLASS, so only the part something
 ;      was sitting on has to be put back (SPEC.md 11.96.10). Only wm_front may
 ;      say 2: wm_show's window has no pixels on screen to keep.
-;      Caller holds the gfx lock and has already passed wm_fast_ok.
+;      Caller holds the gfx lock.
 ; out: nothing; AX/BX/BP/DI clobbered (both callers saved them)
 ;
 ; Four things change when a window comes to the top and all four are drawn
@@ -5694,7 +5673,8 @@ wm_paint_all:
 ; -----------------------------------------------------------------------------
 ; wm_content - content-area origin of a window
 ; in:  BX = window ptr
-; out: AX = content left (W_X+1), DX = content top (W_Y+TITLE_H);
+; out: AX = content left (W_X+1, or W_X for a window that spans the
+;      screen, SPEC.md 11.95.2), DX = content top (W_Y+TITLE_H);
 ;      WF_FULL set: AX = W_X, DX = W_Y - no border, no title bar (SPEC 11.2)
 ; -----------------------------------------------------------------------------
 wm_content:
@@ -5992,9 +5972,10 @@ gfx_hole    dw 0                ; non-0 while a hidden dock is OPEN (SPEC.md
                                 ; .text for wm_clip_n's reason, beside it
 %endif
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
-                                ; Initialized data, NOT .bss: every gfx_fill
-                                ; reads it, including the machine's first,
-                                ; and -f bin zeroes nothing.
+                                ; Initialized data in .text by choice: every
+                                ; gfx_fill reads it, including the machine's
+                                ; first, and .bss would arrive zeroed too
+                                ; (SPEC.md 10).
 wm_dmg_cullq db 0               ; SPEC.md 11.3.3: wm_dmg_wins ASKS for the cull
 wm_dmg_cull db 0                ; ...and wm_draw_win turns it on around W_PAINT
                                 ; alone, which is what keeps wm_su_try's own
@@ -6136,10 +6117,11 @@ wm_clip_set:
     ; the whole refresh. This is the one place that can prove that, and it is
     ; already on the path of all twelve background painters.
     ;
-    ; The region and not the window: the fragments are the content rect minus
-    ; the windows ON TOP of it, so a pointer over the window in FRONT of this
-    ; one is unreachable while the frame this used to test says otherwise
-    ; (SPEC.md 7.1.4.2).
+    ; Under CURFIX=1 the region and not the window: the fragments are the
+    ; content rect minus the windows ON TOP of it, so a pointer over the
+    ; window in FRONT of this one is unreachable while the frame says
+    ; otherwise (SPEC.md 7.1.4.2). A default build still asks about the
+    ; window's FRAME, read from [wm_clipwin] (SPEC.md 7.1.4.4).
     ;
     ; The FAILURE path above deliberately does not check: with no region armed
     ; every primitive falls to its own unconditional cur_unlazy, which is the
@@ -6861,10 +6843,11 @@ wm_clip_add:
 ;      disarmed; CF = 1 it does not - the caller must draw NOTHING
 ; clobbers: flags
 ;
-; This is the answer for the two primitives that cannot draw a partial
-; shape: font_char's 8x8 cell and ico_core's icon body (SPEC.md 6/25). Both
-; already skip a glyph that would cross a SCREEN edge; a clip edge is the
-; same decision one region in.
+; This is the answer for a shape drawn whole or not at all: ico_core's
+; icon body (SPEC.md 25), a font_run run before it goes per cell (6.1) and
+; vga12's scroll rect, with the cull's overlap test in wm_clip_rows.
+; font_char's 8x8 cell is no longer one of them: it is cut by ROWS through
+; wm_clip_rows (SPEC.md 11.3.2).
 ; -----------------------------------------------------------------------------
 wm_clip_test:
     CLIPQ                       ; ...the open dock's hole counts (SPEC.md 30.6.1)
@@ -7268,7 +7251,7 @@ rect_put:
 ; wm_ptr2idx - window record pointer to index (public, SPEC.md 11)
 ; in:  BX = window ptr (record-aligned)
 ; out: AL = window index, AH = 0. **AH = 0 IS A GUARANTEE**, not an inference
-;      from a record-aligned input - see the comment on the `xor ah, ah` below,
+;      from a record-aligned input - see the comment on the `div` below,
 ;      which is there because it was once the other thing.
 ; clobbers: nothing else. **CX AND SI ARE PRESERVED and callers rely on it**:
 ;      three separate places walk the z-order or a slot table holding one of
@@ -7294,12 +7277,15 @@ wm_ptr2idx:
                                 ; input is right is not a documented output
     cmp al, MAX_WIN             ; ...and the INDEX IS BOUNDED, because every
     jb .ok                      ; per-window table in this module is addressed
-    mov al, MAX_WIN - 1         ; off it: wm_su_segs, wm_su_ext, the size
-.ok:                            ; preferences. A pointer that is not a window
-    cbw                         ; then names the LAST window rather than a byte
-    pop cx                      ; of .text, which is wrong and bounded instead
-    ret                         ; of wrong and unbounded. (cbw: AL < MAX_WIN
-                                ; here, so AH = 0 - kernel size pass 17, -1)
+    mov al, MAX_WIN - 1         ; off it: wm_su_segs, wm_owner, the mask bits.
+.ok:                            ; A pointer that is not a window then names
+    cbw                         ; the LAST window rather than a byte of .text -
+    pop cx                      ; but only for an offset under 256*WIN_SIZE
+    ret                         ; past wm_wins: below the table, or past that,
+                                ; the `div` above raises INT 0 first (what that
+                                ; does on an IBM ROM: the note in wm_title_set).
+                                ; (cbw: AL < MAX_WIN here, so AH = 0 - kernel
+                                ; size pass 17, -1)
 
 ; -----------------------------------------------------------------------------
 ; wm_zabove - find this window in the z-order, and what is above it (SPEC.md 11)
@@ -8165,7 +8151,7 @@ wm_chrome_rect_x:
 ;      `call` / `retf` entry, the layer the block below the body describes)
 ;
 ; [ui_armlit] is the authority and the glass has to agree with it, which is
-; what lets ui_lit_set be a plain XOR of the difference. Two answers, and the
+; what lets ui_lit_go be a plain XOR of the difference. Two answers, and the
 ; second is the one that is easy to leave out:
 ;
 ;   - the armed window was drawn WITH its boxes (frontmost, not fullscreen):
@@ -11682,9 +11668,9 @@ wm_isrec:
 ; EVERY build, and a kernel with no animation in it still has to carry the
 ; choice across SYSTEM.CFG untouched rather than dropping it - a user who
 ; turns the zoom off, boots kern_small once and comes back should not find it
-; back on. It is .text with a real initialiser because .bss is not zeroed
-; (-f bin), and 1 is the default because the animation is what elendilon
-; shipped.
+; back on. It is .text with a real initialiser because its default is 1, not
+; the 0 .bss arrives holding (SPEC.md 10), and 1 is the default because the
+; animation is what elendilon shipped.
 ;
 ; NOT kern_small's, though: that kernel reads and writes no SYSTEM.CFG at all
 ; (SPEC.md 51.5) and has no Control Panel row for the zoom, so nothing there

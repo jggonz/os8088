@@ -5,8 +5,9 @@
 #
 # be7b2e6 is upstream's HEAD as of 2026-10-29 and the newest firmware SOURCE
 # that is public: the October 4 2026 release (a7cd888) published a .uf2 and
-# no source. patches/fw/01-pm1x-pr.patch is Elendilon/ISA-PicoMEM's pm1x-pr
-# (5e507be2), the firmware os8088 ships in firmware/picomem1/.
+# no source. patches/fw/01-pm-pr.patch is Elendilon/ISA-PicoMEM's pm-pr
+# (6204e0db): one commit, the firmware os8088 ships in firmware/picomem2/ and,
+# bar its two-line BIOS revision word, in firmware/picomem1/ (pm1x-pr, 5e507be2).
 repo=https://github.com/FreddyVRetro/ISA-PicoMEM.git
 commit=be7b2e6031ae93bb75733c363489aa9171a7205c
 # GPL-2.0, like the firmware. Nothing of it is vendored here: build.sh fetches

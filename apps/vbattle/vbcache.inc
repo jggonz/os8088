@@ -36,8 +36,11 @@ vb_b4k:
     ret
 
 ; vb_hipok - may the hold be read IN PLACE? (126.4.2's check, the whole
-; file aside): CF=0 yes, and on XMS the yield sites live; CF=1 no. The
-; UI task's
+; file aside): CF=0 yes, and on XMS the yield sites live and [vb_hlin] the
+; block's linear base; CF=1 no. The UI task's. ON kern_mega'S DESKTOP
+; (CPU_F_PM: its door) the answer is the tier's alone - a 286 or later -
+; and the check itself is made in each real-mode bracket (vb_main), where
+; the twin answers where the block is NOW (KERN-MEGA-PLAN 14.179)
 vb_hipok:
     cmp byte [vb_noinp], 0          ; (the A/B gate: the copying hold)
     jne .no
@@ -51,17 +54,28 @@ vb_hipok:
     ret
 .x:
     call OSAPI_CPU_INFO             ; AL = the tier, AH = CPU_F_*
-    test ah, CPU_F_PM               ; (kern_mega: a token is no address,
-    jnz .no                         ; and neither borrow is real mode's)
     mov [vb_tier], al
     cmp al, CPU_286
     jb .no
+    test ah, CPU_F_PM               ; (kern_mega's door: neither borrow is
+    jnz .yes                        ; protected mode's - its bracket checks)
+    cmp al, CPU_286
     ja .chk
     mov byte [la_csacc], 0x93       ; a 286: LOADALL, probed
     call la_capture
     call la_probe
     jc .no
 .chk:
+    mov ax, [vb_htok]               ; WHERE the block is: its token on a
+    mov dx, [vb_htok+2]             ; real-mode kernel; in kern_mega's
+    cmp byte [vb_pmd], 0            ; bracket the twin's answer (CX = 0,
+    je .at                          ; SPEC.md 53.2.3) - the pool may have
+    xor cx, cx                      ; moved it since the last bracket
+    call OSAPI_XMEM_COPY
+    jc .no
+.at:
+    mov [vb_hlin], ax
+    mov [vb_hlin+2], dx
     push ds                         ; the hold's first 16 bytes, by the
     pop es                          ; driver...
     mov si, vb_xsig
@@ -71,8 +85,8 @@ vb_hipok:
     mov di, 1
     call OSAPI_XMEM_COPY
     jc .no
-    mov ax, [vb_htok]               ; ...and in place
-    mov dx, [vb_htok+2]
+    mov ax, [vb_hlin]               ; ...and in place
+    mov dx, [vb_hlin+2]
     mov [vb_xpc], ax
     mov [vb_xpc+2], dx
     mov dx, VB_XH
@@ -90,6 +104,7 @@ vb_hipok:
     jz .no
     mov al, 1
     call vd_ypatch                  ; the yield sites live
+.yes:
     clc
     ret
 .no:
@@ -102,8 +117,6 @@ vb_hipok:
 vb_ctry:
     mov byte [vb_cmode], 0
     mov byte [vb_iinp], 0
-    cmp byte [vb_pmd], 0            ; (kern_mega's bracket: the copying hold)
-    jne .copy
     call vb_hipok
     jc .copy
     call vb_cplan

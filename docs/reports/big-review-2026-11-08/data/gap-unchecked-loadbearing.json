@@ -1,0 +1,245 @@
+{
+ "area": "gap-unchecked-loadbearing",
+ "title": "Verify the unchecked and unmeasured claims that recommendations rest on, and name the rows that would measure them",
+ "summary": "The load-bearing claims mostly hold as mechanisms but are smaller than stated. Report: docs/reports/big-review-2026-11-08/areas/gap-unchecked-loadbearing.md. No emulator and no make were run. The census comes from an `-Le` listing of kern_big assembled in the scratchpad. It matches build/kernel-full.bin in length, and 151 bytes differ (cfx_tab and the build number).\n\n- **bytes-5.** The push/pop census reproduces to within one per register. Entry callee-saves are 2,459 bytes in 612 routines. A prototype interprocedural liveness pass proves 79 saves (127 bytes) dead at every direct caller. Only ~93 of those bytes are removable, because the rest exit through the shared kret ladder.\n- **The \"AX is scratch\" convention is refuted.** 247 of the 512 bytes of AX entry-saves are in routines with 226 caller sites that read AX after the call.\n- **The liveness gate.** It pays as a correctness lint over the 502 headers whose `clobbers:` line names registers (and for KERNEL-BYTE-QUEUE 1's BP reads). It does not pay as a size pass.\n- **dr-19.** There are two caches, not three (§18.95 already absorbed the directory window). The FAT-window code is 519 bytes of .cold on kern_big and 422 on kern_small. One pool would net -100 to -300, would cost kern_small a larger FAT floor, and cannot be combined with ABI-BREAK-LIST L1.\n- **histsys-12.** The titles are already not resident, so the saving is -100 to -180. That overlaps drivers-10's -95.\n- **histsys-13.** The cursor-vs-token split is by design (SPEC 18.4.8 and 18.4.9 say so in their titles). Only the buffer register pair is a wart.\n- **md-21.** There are eight A20 bodies, not six: XMEM.DRV and HDD.DRV have their own. They use three different probe addresses.\n- **loader-14.** A clone of a running instance would copy its modified initialised data, so the opt-in clone is unsafe as proposed.\n- **wm-R2** leaves out its per-window .bss (the cost is +150 to +200, not +60 to +100).\n- **wm-R3.** The breakage is ~121 field reads in 33 files, not hundreds.\n\nNo existing row produces any of the deferred numbers. The report names the row to extend or create for each:\n\n- new `stkdie` (histsys-1);\n- a `uilat --workers N` leg (histsys-4);\n- new `xferfreeze` (histsys-5);\n- new `ifoff` with `--regrow` and `--mouse` legs (hm-1, isr-7);\n- field-only on the Victory 286 (mc-5).\n\nIt also lists every corrected estimate that moved by 30% or more, and the numbers that must be quoted as predicted rather than measured.",
+ "strengths": [
+  {
+   "title": "The register convention is already compressed where it is cheapest",
+   "why": "The shared kent_*/kentc_* prologues (147 call sites) and the kret_* ladder (197 tails) bank 6-7 registers for 3 bytes a site. The 4,791-byte census counts none of this. So the convention's uncompressed part is the part left, not all of it.",
+   "evidence": "kernel/kernel.asm:8446-8481, 8507-8550; listing census: kent_bp 21, kent_di 22, kentc_bp 23, kentc_di 81 calls"
+  },
+  {
+   "title": "The data a liveness gate needs already exists",
+   "why": "807 kernel routine headers carry a clobbers: line, and some state their liveness argument outright. A checker can be added without changing any source.",
+   "evidence": "kernel/kernel.asm:5080-5090 api_copyname header 'A FIFTH call site has to read this'"
+  },
+  {
+   "title": "The -Le listing is a complete, arm-resolved instruction stream",
+   "why": "With macro arguments substituted it shows every call that `nasm -l` hides behind %1, including all OSAPI_SLOT dispatcher calls. A host gate can run over it in about 5 s with no new build.",
+   "evidence": "build/kernel.map section table; scratchpad listing 59,758 instructions, 10,541 map-confirmed labels"
+  },
+  {
+   "title": "The sector cache's design record answers dr-19 from evidence",
+   "why": "It was simulated before it was built, and the record says what the first build got wrong (the 18.95.1 pollution gate). That makes the unified-pool question decidable without re-deriving it.",
+   "evidence": "SPEC.md 18.95 (39028-39140), 18.95.1"
+  }
+ ],
+ "findings": [
+  {
+   "id": "ul-1",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "bytes-5 re-derived: ~93-127 provable bytes, the convention change refuted, the gate justified only as a lint",
+   "detail": "The census is confirmed from a -Le listing. Resident push/pop is 4,926 bytes with CS/SS and 4,633-4,791 without, and the per-register pushes are AX 514, CX 363, BX 348, SI 298, DX 276, DI 276, BP 222, ES 183, DS 176.\n\nEntry callee-saves are 1,403 saves, 2,459 bytes, in 612 routines:\n- API cell targets: 294 bytes.\n- Address-taken, table or unresolvable tail: 716.\n- At least one caller reads the register after the call: 794.\n- Undetermined (int, indirect call or db in the path): 444.\n- No direct caller: 84.\n- **Dead at every direct caller: 79 saves, 127 bytes.** Only 93 of those bytes are in routines with their own pops; the rest exit through a shared kret rung, so dropping a middle register needs a different ladder.\n\nA 30-routine hand sample:\n- 26 hold as dead.\n- api_copyname was wrong in the first pass. It has one direct caller but is reached by fall-through from api_cpname0/api_cpname, where AX is an argument (kernel.asm:3713).\n- mem_can_move is arm-dependent: driver.inc:4489 is a caller on another arm.\n- 2 are ladder rungs.\n\ngfx_pixel shows why plain `nasm -l` is not enough: it is an API slot whose dispatcher call only appears as `call %1` there.\n\nThe 'AX scratch' convention: 247 of the 512 bytes of AX entry-saves are in routines with 226 caller sites that read AX after the call. The change would move those saves to the callers, not delete them.",
+   "evidence": [
+    "kernel/kernel.asm:8446-8550 kent_/kret_ ladders",
+    "kernel/kernel.asm:5184-5200 api_copyname, 5063, 3713",
+    "kernel/vga12.inc:1053-1061 gfx_pixel; kernel/kernel.asm:2651 OSAPI_SLOT gfx_pixel",
+    "kernel/memory.inc:1988 mem_can_move; kernel/driver.inc:4489 caller on another arm",
+    "build/kernel.map section table and labels",
+    "docs/plans/KERNEL-BYTE-QUEUE.md section 1 (BP liveness reads)"
+   ],
+   "recommendation": "Record the convention change as refused on evidence. Build tools/os88live.py over a per-build -Le listing (kern_big, kern_small, kern_mega). It must model:\n- fall-through entries;\n- the kent/kret ladders;\n- the OSAPI table;\n- tail jumps.\n\nRun it as a soak row that checks the 502 register-naming clobbers: headers and prints the dead-save list. Take the ~93 bytes inside the next size pass, not as a project.",
+   "phase": "now",
+   "bytes_est": "-93 to -127 resident (one-time, kern_big); 0 for the gate (host tool)",
+   "listed_as": "bytes-5; KERNEL-BYTE-QUEUE 1 (the cw_ shim sweep's liveness reads)",
+   "prior_art": "GEOS destroyed: headers with a checker; Microsoft C AX/BX/CX/DX/ES scratch split",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked the mechanics rather than re-running the census (the -Le listing is the reviewer's scratchpad build, not in build/). api_copyname is entered by fall-through from api_cpname0 (kernel.asm:5181-5184) and banks only AX and CX, both live arguments, as the finding says; driver.inc:4489 calls mem_can_move. The kent_/kret_ ladder argument for why only ~93 of the 127 bytes are removable holds. One caveat for the synthesis: of the 807 clobbers: headers, 509 name something other than none/flags/nothing, but many of those name only the routine's OUTPUT ('AX (the output), flags'), so '502 headers name non-output registers' overstates the lint's input; the gate is still justified as a lint. Not already queued: KERNEL-BYTE-QUEUE 1 covers only the BP liveness reads."
+  },
+  {
+   "id": "ul-2",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "dr-19 corrected: two caches, 519 bytes of FAT-window machinery, one pool nets -100 to -300 and costs kern_small",
+   "detail": "§18.95 already replaced the directory-only window (SPEC.md 39042-39048), so the caches are the sector cache and the FAT window. Map spans:\n- kern_big: dsk_fatw_* 386 + dsk_bpb_sig 26 + dsk_fat_window 107 = 519 bytes of .cold.\n- kern_small: 422.\n- The sector cache: dsk_rah_* 513 .cold + 19 .text/.bss on kern_big.\n\nA unified pool must add:\n- per-slot dirty bits;\n- a pin across dsk_next_clus_x's ES:BX read;\n- a second pinned slot for the DX/DX+1 straddle, because chunks read forward to track end;\n- a non-purgeable floor, because the FAT window may not be refused (18.8.3).\n\nThat is about +200 to +300. kern_small's FAT window is 2 sectors (1KB), against a 4.5KB track slot.",
+   "evidence": [
+    "kernel/disk.inc:5761-6313 fatw machinery",
+    "kernel/disk.inc:3954-4010 dsk_fat_window",
+    "kernel/disk.inc:6732-6760 DSK_RAH_SECS 9, DSK_RAH_RUNS 7",
+    "SPEC.md:39042-39048 'It replaces 19.2.3's directory-only window'",
+    "build/kernel.map and build/smallk/kernel.map symbol spans",
+    "docs/plans/ABI-BREAK-LIST.md L1"
+   ],
+   "recommendation": "Keep it as record, with -100 to -300. Note in L1's row that a unified pool and L1's below-kernel FAT window are alternatives.",
+   "phase": "record",
+   "bytes_est": "-100 to -300 .cold resident kern_big (was ~-300); kern_small worse off",
+   "listed_as": "dr-19; ABI-BREAK-LIST L1 (exclusive)",
+   "prior_art": "DOS BUFFERS= pool (no read-ahead, no per-volume parked FAT)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: SPEC.md 39042 says the sector cache replaced 19.2.3's directory-only window, so two caches, not three; DSK_RAH_SECS 9 / DSK_RAH_RUNS 7 at disk.inc:6732-6737; dsk_fat_window, dsk_fatw_* and dsk_bpb_sig are all .cold in build/kernel.map (0x86F7.., 0x8D82..). ABI-BREAK-LIST L1 moves the FAT window below KERNEL_SEG, so the alternatives note is right. Byte spans not re-summed."
+  },
+  {
+   "id": "ul-3",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "histsys-12 corrected: about -100 to -180 resident, and it overlaps drivers-10",
+   "detail": "DRV_TITLES has no resident cost: pass 14 moved the titles into the blob and CTRL.DRV (driver.inc:1166-1172).\n\nThe resident cost is:\n- 102 bytes of driver file names (map 0x939A-0x9406, less fdlg_s_drive);\n- drv_tab, 11 rows x 16 = 176 bytes.\n\nName-keyed discovery removes:\n- the names, -102;\n- DRVR_FILE and DRVR_TITLE, -44;\n- perhaps one row, -16.\n\nIt adds class-keyed lookups where code indexes a row (driver.inc:5642). drivers-10 (now, -~95) takes the same name bytes without a flag day.",
+   "evidence": [
+    "kernel/driver.inc:1166-1222 names and the pass-14 note",
+    "kernel/driver.inc:245-270 DRVR_* layout",
+    "build/kernel.map:6101-6137 drv_f_* and drv_tab",
+    "kernel/driver.inc:5642"
+   ],
+   "recommendation": "Quote -100 to -180, and never add it to drivers-10's -95. After drivers-10 the residual is about -10 to -80, and its case is extensibility.",
+   "phase": "flagday",
+   "bytes_est": "-100 to -180 resident (was -200 to -350); +~120 boot overlay",
+   "listed_as": "histsys-12; drivers-10 (overlap)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: driver.inc:1166-1172 is the pass-14 note that the titles are not resident; build/kernel.map has the drv_f_* names from 0x939A with fdlg_s_drive (6 bytes) at 0x93AC among them and drv_tab at 0x9438. The -100..-180 range and the drivers-10 overlap stand."
+  },
+  {
+   "id": "ul-4",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "histsys-13: the cursor-vs-token split is deliberate; only the buffer register pair is a wart",
+   "detail": "READ_SEQ takes the buffer at DX:BX and the cursor at ES:DI. WRITE_SEQ takes the buffer at ES:BX and a DI token. The token is [dsk_mgen], a generation number naming kernel-held hold state (dirty FAT, entry size) that cannot live in package memory. SPEC titles 18.4.8 ('whose place the CALLER keeps') and 18.4.9 ('whose place the KERNEL keeps') document the split.",
+   "evidence": [
+    "apps/os88api.inc:6119-6160",
+    "kernel/diskw.inc:3356-3371, 3429, 3503",
+    "SPEC.md:37608, 37793"
+   ],
+   "recommendation": "At the flag day, unify only the buffer pair: READ_SEQ takes the buffer at ES:BX and the cursor at DS:DI (the caller's own segment). Keep the token. This breaks 7 READ_SEQ users and no WRITE_SEQ users.",
+   "phase": "flagday",
+   "bytes_est": "~0",
+   "listed_as": "histsys-13; ABI-BREAK-LIST C2-C4 (neighbour)",
+   "verdict": "unchecked",
+   "verify_note": "Not in the third spot-checked; low, flag-day, ~0 bytes."
+  },
+  {
+   "id": "ul-5",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "md-21 corrected: eight A20 bodies with three probe aliases, not six",
+   "detail": "The kernel-tree copies are:\n- mega_a20/s/t (512 probes, FFFF:0510);\n- mr_a20 (512);\n- mega_wrprobe (a single test);\n- kdp_a20w/t and kd_a20shut (512, alias FFFF:FFF0, because 0500 is kern_dos's own code on the HMA arm);\n- kdh_tchk_src (65,536).\n\nTwo more were not counted: XMEM.DRV's xm_a20_* (XM_A20_SETTLE 512, XM_A20_ALIAS) and HDD.DRV's hd_xa_a20 (0510). mega.inc:10792 itself says its sequence is XMEM.DRV's.",
+   "evidence": [
+    "kernel/mega.inc:10760-10835",
+    "kernel/megares.inc:459-520",
+    "kerndos/kdpark.inc:136-180",
+    "kerndos/kdhma.inc:185-230",
+    "drivers/xmem/xmem.asm:1356-1500",
+    "drivers/hdd/hdxms.inc:134-170"
+   ],
+   "recommendation": "Write one A20 macro parameterised by alias and budget, in an include the drivers can share.",
+   "phase": "now",
+   "bytes_est": "0 to -20",
+   "listed_as": "md-21",
+   "verdict": "confirmed",
+   "verify_note": "xm_a20_probe/xm_a20_reopen with XM_A20_ALIAS = 0x0510 and XM_A20_SETTLE 512 (xmem.asm:1356-1413) and hd_xa_a20 probing [0x0510] (hdxms.inc:134-148) exist, and the six kernel/kerndos bodies are at the labels cited, so eight bodies is right. Small wording correction: mega.inc:10792 says its 512-probe SETTLE is XMEM.DRV's XM_A20_SETTLE, not that the whole sequence is XMEM.DRV's."
+  },
+  {
+   "id": "ul-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "loader-14 corrected: a clone of a running instance is not a pristine image",
+   "detail": "The entry half exists: ld_start runs an image taken from a caller's claim (OSAPI_PKG_START). The flaw is the source image: the first instance's region holds its modified initialised data, and ld_start zeroes only .bss. 'Pure image' would have to mean 'never writes its own initialised data', or the loader would keep a pristine copy. The second launch also re-reads the disk in full: the loader's file read is a streaming read, which §18.95.1 sends around the sector cache. The '0.2 s rep movsw' figure is arithmetic.",
+   "evidence": [
+    "kernel/loader.inc:1290-1308 ld_start",
+    "SPEC.md 18.95.1 (39140-39170) streaming gate"
+   ],
+   "recommendation": "Keep it as record. If a multi-instance package ever makes it worth doing, build hm-15's code-only shared PART, not a region clone.",
+   "phase": "record",
+   "bytes_est": "~+25 .cold for the clone (plausible) plus a pristine copy's heap, or not viable",
+   "listed_as": "loader-14; hm-15",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: ld_start (loader.inc:1300-1308) zeroes only [ld_bss] bytes at [ld_img] and then enters the package; initialised data is taken as it stands in the region, so a clone of a running instance's region carries that instance's modified data. The hazard is real against the proposal as written, and nothing in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE proposes the clone. The 0.2 s figure is arithmetic, as stated."
+  },
+  {
+   "id": "ul-7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "wm-R2 corrected: the estimate omits the per-window rect, and two deferral queues already exist",
+   "detail": "A per-window owed rect is 8 bytes x MAX_WIN: 96 .bss on kern_big and 48 on kern_small, on top of +60..+100 of drain code. The window manager already defers closes (wm_close_pass, SPEC 75.2) and wakes (the WKQ_* ring).",
+   "evidence": [
+    "kernel/wm.inc:2260 wm_close_pass",
+    "kernel/wm.inc:2313-2315 WKQ_*",
+    "kernel/wm.inc:5126-5150 wm_paint_dmg synchronous"
+   ],
+   "recommendation": "Re-price it at +150..+200. Any plan should drain at wm_close_pass's point rather than add a fourth.",
+   "phase": "record",
+   "bytes_est": "+150..+200 resident (was +60..+100)",
+   "listed_as": "wm-R2",
+   "verdict": "confirmed",
+   "verify_note": "MAX_WIN is 12 on kern_big and 6 on kern_small (wm.inc:148, 163), so 8 bytes a window is 96 and 48 .bss; wm_close_pass (wm.inc:2260, SPEC 75.2) and the WKQ_* ring (wm.inc:2313-2315) are the two existing deferral queues. Re-price stands."
+  },
+  {
+   "id": "ul-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "wm-R3 corrected: breakage is ~121 field reads in 33 files, not hundreds",
+   "detail": "grep over apps/ and drivers/ finds W_W 30, W_FLAGS 27, W_H 24, W_Y 21, W_X 18 and W_TITLE 1: 121 reads in 33 asm files. C reads go through one thunk family (CC_T_WFIELD). A handle that is the validated record offset would leave those reads unchanged.",
+   "evidence": [
+    "grep -E '\\+ *W_(X|Y|W|H|FLAGS|TITLE)' apps drivers",
+    "apps/cc/os88thunk.asm:845 CC_T_WFIELD"
+   ],
+   "recommendation": "Price it as a countable break (33 files plus the doors), paired with R6.",
+   "phase": "flagday",
+   "bytes_est": "~0 kernel beyond wm-2's bounded load; every package rebuilt",
+   "listed_as": "wm-R3; ABI-BREAK-LIST R6, K17-2/K17-3",
+   "verdict": "confirmed",
+   "verify_note": "Re-ran the grep: 121 matches of '+ W_(X|Y|W|H|FLAGS|TITLE)' in 33 .asm/.inc files under apps/ and drivers/; CC_T_WFIELD is apps/cc/os88thunk.asm:831-844."
+  },
+  {
+   "id": "ul-9",
+   "kind": "perf",
+   "severity": "low",
+   "title": "dr-6 not re-derived; the saving is about 4-8% of a cache hit",
+   "detail": "The sequence is confirmed (dsk_media_ok, the far fpg_busy, the second row lookup). 600-700 cycles a transfer is plausible from about 30 instructions, against §18.95.1's 1.6 ms per sector cache-hit copy, so ~50 us saved.",
+   "evidence": [
+    "kernel/disk.inc:1408-1420",
+    "kernel/disk.inc:8359-8400 dsk_media_ok"
+   ],
+   "recommendation": "Fold it into dr-16's sweep. Do not quote 250 cycles as measured.",
+   "phase": "now",
+   "bytes_est": "~0",
+   "listed_as": "dr-6; DISK-CPU-PLAN 7",
+   "verdict": "unchecked",
+   "verify_note": "Not in the third spot-checked; low and ~0 bytes. The 'do not quote 250 cycles as measured' advice is consistent with ul-11."
+  },
+  {
+   "id": "ul-10",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "No row produces any deferred measurement; the rows that would",
+   "detail": "- histsys-1 (dying 128-byte worker watermark): new soak row stkdie. Bounce plus a second window, close Bounce, read the slot with tools/stkwater.water(), breakpoint sch_stkdie.\n- histsys-4 (latency with N workers): a --workers N leg of tests/uilat.py (uilatn).\n- histsys-5 (worker freeze per int 13h): new soak row xferfreeze. Breakpoints on dsk_xfer's sch_lock inc/dec, the worker's slices counted via schacct.\n- hm-1 (regrow IF-off span): new row ifoff --regrow, using regrowshed's scenario with a moving grow, breakpoints at memory.inc 4559 and 4664.\n- isr-7 (rate cap): the same ifoff row, --mouse leg, mou_isr_body to EOI with os88mouserel motion on os8088_xt_vga and the 5150 CGA twin. serlease does not measure overruns.\n- mc-5: field only on the Victory 286; Bochs and 86Box cannot time it.",
+   "evidence": [
+    "tests/suite.py:11368 uilat, 2591 stk0water, 11377 stkpanel, 12297 regrowshed, 2702 serlease, 13905 curdisk, 13936 schacct",
+    "tools/stkwater.py water()",
+    "kernel/disk.inc:1462",
+    "kernel/memory.inc:4559, 4664",
+    "apps/bounce/bounce.asm:32, 133"
+   ],
+   "recommendation": "Register stkdie, xferfreeze and ifoff (two legs) and a uilat --workers leg in the soak tier. Run their union once in the final pass.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "listed_as": "histsys-1, histsys-4, histsys-5, hm-1, isr-7, mc-5",
+   "verdict": "confirmed",
+   "verify_note": "Every cited row exists as a soak row in tests/suite.py (uilat, stk0water, stkpanel, regrowshed, serlease, curdisk, schacct); none of stkdie, xferfreeze, ifoff or a uilat workers leg is registered, and tests/uilat.py has no workers option. tools/stkwater.py has water() (line 89), sch_stkdie is sched.inc:2600, and memory.inc 4559/4664 bracket mem_regrow's IF=0 window (the line numbers have drifted by a few in the ongoing doc pass). Note for mc-5: the IF-off figure is not wholly unmeasured - KERN-MEGA-PLAN 14.48.3 already derives ~16 ms from the Victory's MEASURED 0.257 ms/KB (LOADALL-PLAN.md:286); only a direct span reading is field-only."
+  },
+  {
+   "id": "ul-11",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "Numbers not to quote as measured, and corrected estimates that moved 30% or more",
+   "detail": "**Arithmetic or predicted, not measured:**\n- hm-1 86-170 ms (memory.inc:2046 is 16K words x ~25 clocks);\n- isr-7 baud ceilings (the cur_move spans themselves are measured);\n- mc-5 16 ms and 0.5 s;\n- histsys-4 N x 55 ms;\n- loader-14 0.2 s;\n- dr-6 250 cycles;\n- sysmisc-15 and video-17 (estimated).\n\n**Corrected estimates to use:**\n- bytes-2: XMS 250 -> 110-130.\n- hm-11: -> -0.8 to -1.5KB.\n- histsys-7: -216 -> -90 to -140.\n- histsys-9: kern_small -180 -> -108.\n- files-2: -3 -> -12.\n- hm-6: -2 -> 0 to +2.\n- ui-17: -3 -> +4 to +6.\n- ui-16: +4 -> +6 to +10.\n- isr-2: +8 -> +13.\n- sched-7: free -> +9 to +12.\n- dw-1: kern_small +4 -> ~+11.\n- dw-7: per site.\n- drivers-5: 0 -> +2 to +4 resident.\n- sysmisc-9: 22 -> 32.\n- sysmisc-3: 35 -> 40-60.\n- shell-2: 2,206 -> 3,180.\n- gfx-3: kern_small clocks.\n- files-11: cycles.\n- gfx-1: iterations.\n- isr-7: 1.94 -> 2.4/3.2 ms.\n- ui-15, sysmisc-12 and abi-11: counts.\n- mc-9: +1 -> 0.\n- This gap's own corrections: bytes-5, dr-19, histsys-12 and wm-R2.",
+   "evidence": [
+    "docs/reports/big-review-2026-11-08/data/*.json verify_note fields",
+    "kernel/memory.inc:2046",
+    "PERFORMANCE.md:1356"
+   ],
+   "recommendation": "The synthesis quotes the corrected column and labels the arithmetic numbers 'predicted'.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "The list matches the data's verify notes where spot-checked (bytes-2 XMS 110-130, histsys-7 -90..-140, histsys-9 kern_small -108, ui-16 +6..+10, ui-17 ~+6, isr-2 +13, sysmisc-9 +32, sysmisc-3 +40-60, shell-2 3,180, mc-9 0, hm-6 0..+2, hm-11 -0.8..-1.5KB). One correction: mc-5's 16 ms is not bare arithmetic - it is 64KB times the Victory 286's field-MEASURED 0.257 ms/KB (KERN-MEGA-PLAN 14.48.3, LOADALL-PLAN.md:286), so the synthesis should label it 'derived from a measured rate', not 'predicted'. Also sysmisc-9's +32 is a measured figure (LAST-DROP-PERF.md:589), as the list implies by putting it in the corrected column."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "Every public routine **preserves all registers**\n   except its documented outputs. Callers rely on this. Flags are not\n   preserved.",
+   "new_text": "Every public routine **preserves all registers**\n   except its documented outputs and the registers its header's `clobbers:`\n   line names. Callers rely on that header; a routine whose header names no\n   clobber preserves everything but its outputs. Flags are not\n   preserved.",
+   "why": "Hundreds of kernel routines, cross-module ones included (assoc_go, clk_tick, ss_open, desk_free, cmz_*), are contracted by a clobbers: header that names non-output registers - e.g. api_copyname's 'clobbers: SI and DI, which the copy spends and does NOT put back' (the header at kernel.asm:5079-5089) - so 'all registers except its documented outputs' overstates the rule the code keeps."
+  }
+ ]
+}

@@ -111,6 +111,13 @@ starts sooner.
 | Open... | Pick a `.VBT` file to play in this window. It replaces the battle the window had |
 | Close | Close the window |
 
+## The Video Battle menu
+
+| Item | What it does |
+|---|---|
+| About Video Battle | Shows who made it |
+| Close | Closes the window |
+
 The menu bar is the window's, so it is there between plays, not during one.
 
 ## What it needs

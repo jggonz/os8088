@@ -1,0 +1,719 @@
+{
+ "area": "diskwrite",
+ "title": "The FAT write path and fsck",
+ "summary": "The write path is the best-argued subsystem in the tree. One commit order (data, FAT flush, entry, free, flush) holds in every mutator: write, mkdir, delete, rmdir, rmtree, truncate, append-grow, held streams, fsck repairs and defrag moves. Replace is shadowed, so a power cut never costs the user's bytes, which DOS cannot claim. Every LBA and chain walk is bounded against a hostile disk. The defects are at the edges the prose did not reach. A hostile FileSize faults two unguarded divides (the truncate arm has the guard; its siblings do not). Since the whole-FAT snapshot became a window, a failed write on multi-window FAT16 can turn walked free space into permanent lost clusters (dskw_refat's header accepts lost clusters; a disk-full failure makes that most of the free space). An unreadable FAT window reports 'Disk full', the exact misreport the allocator's header forbids. The UI-task rule is still enforced by nothing. On design, the whole-file model's foreknowledge of size is unused: no up-front FERR_FULL, no contiguous allocation. Folders never grow (DOS 2.0 did). The compression hint lives in three dirent bytes that NT, Linux, macOS and OS/2 all interpret, so every packed file on every shipped disk lists in lower case on a modern host. fsck's model (kernel image, package-owned state, write generation, ordered repairs, moves only into free space) is sound and worth copying; its issues are one parse bug and stale docs. Most fixes are 0-25 bytes of .cold; the larger items (folder growth ~90, contiguous allocation ~70) are optional rethinks. A large share of SPEC 18.4's own text (fmv_gneed, the remount, the whole-FAT snapshot, refat's disk_read, 'no append or seek') describes a kernel several passes old.",
+ "strengths": [
+  {
+   "title": "Shadow replace with one commit point",
+   "evidence": "kernel/diskw.inc:1576-1597 (dskw_wbody: old chain held until the entry write, freed by dskw_relold after)",
+   "why": "DOS truncates in place on create-over-existing, so a crash there loses both versions; here a crash costs at most lost clusters."
+  },
+  {
+   "title": "One commit order everywhere, argued at each site",
+   "evidence": "mkdir :666-743, delete/rmdir :906-913, truncate :3838-3879, grow .seal :4007-4057, fsck repairs fsck.inc:1704-1724, moves :3105-3191",
+   "why": "The same 'worst case is lost clusters' argument can be checked locally at every mutator."
+  },
+  {
+   "title": "Hostile-disk discipline",
+   "evidence": "dsk_clus2lba_x/dskw_clok on every cluster; dskw_free_chain bounded by maxclus (:4801-4816); DSK_DIRW_MAX on directory walks; dskw_size32 refusal before I/O",
+   "why": "A corrupt or hostile volume can make an operation fail but cannot steer a write outside the volume."
+  },
+  {
+   "title": "Allocation marks before returning and separates full from I/O failure",
+   "evidence": "dskw_alloc :4716-4731",
+   "why": "A half-built chain can never hand the same cluster out twice."
+  },
+  {
+   "title": "Cross-cluster runs capped by DMA page from the advancing segment; zero-filled staged tail",
+   "evidence": "dskw_runadd/dskw_flushrun :1709-1848, dskw_wone :5053-5085",
+   "why": "The 8237 page bug is unreachable from any caller buffer, and a contiguous file is one int 13h per track."
+  },
+  {
+   "title": "Entry taken while in hand; entry store always re-reads before patching",
+   "evidence": "dskw_find :4421-4434, dskw_ent_store :4590-4669",
+   "why": "Saves a revolution per open, and a stale dsk_secbuf can never resurrect neighbouring entries."
+  },
+  {
+   "title": "Protection tiers as one routine; virtual read-only bit only in the staged copy",
+   "evidence": "dskw_pmask :220-315, dskw_imgro :247-282",
+   "why": "A mounted image cannot be destroyed, and nothing is written to the disk to say so."
+  },
+  {
+   "title": "Iterative rmtree using on-disk '..' with emptiness re-checked at every removal",
+   "evidence": "dskw_rtbody :977-1203",
+   "why": "No stack depth on 384-byte task stacks, and disagreeing scans give a refusal rather than a lost subtree."
+  },
+  {
+   "title": "fsck's stateless-kernel, generation-checked, bounded-step model",
+   "evidence": "fsck.inc:20-22, fsk_step :770-787, fsk_move/fsk_link only into free clusters, fsk_foldok re-asked before link",
+   "why": "It checks and defragments a live desktop safely and stops cleanly when the disk moves under it, where DOS CHKDSK /F and DEFRAG need an idle machine. This is the pattern for any long-running kernel service."
+  },
+  {
+   "title": "Formatter probe separates medium from drive; reach test writes a marker",
+   "evidence": "dskw_fmt_probe_x :5590-5837, dskw_fmt_reach_x :6064-6111",
+   "why": "It is the honest answer to the 40-track-disk-in-80-track-drive trap, and makes every test a positive one."
+  }
+ ],
+ "findings": [
+  {
+   "id": "dw-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "Hostile FileSize faults two unguarded divides (append/write-at and READ_AT)",
+   "detail": "dskw_wabody .div divides the offset by the cluster size with no high-word check. On APPEND the offset is the entry's size, accepted whenever it is cluster-aligned. dskw_read_at_x divides the caller's offset, bounded only by the entry's size. With a 512-byte cluster, a high word of 512 or more (offset of 32MB or more) overflows the quotient. Examples: an entry claiming 0x02000000 bytes on a floppy, then OSAPI_FILE_APPEND; or a DOS program lseeking past 32MB in such a file, since DOS.O88's window is READ_AT. No INT 0 handler exists in the tree. On an 8088 with the BIOS dummy, execution continues with garbage. On a 286+ the div re-executes forever. A DOS program's runtime INT 0 hook would run in kernel context. The truncate arm already has the guard, and SPEC 18.4.7.5 states the reason. Both divides are assembled on BOTH kernels (neither is under an %ifdef).",
+   "evidence": [
+    "kernel/diskw.inc:3930-3932 div bx, unguarded",
+    "kernel/diskw.inc:3786-3791 append offset = entry size",
+    "kernel/diskw.inc:3168-3170 div word [dwr_clb], unguarded",
+    "kernel/diskw.inc:3128-3134 offset bounded only by entry size",
+    "kernel/diskw.inc:3850-3851 truncate's guard cmp dx,bx / jae .corrupt",
+    "SPEC.md 18.4.7.5 'the divide would otherwise fault inside the file layer'"
+   ],
+   "recommendation": "Before each div add 'cmp dx, <bytes per cluster> / jae <FERR_IO arm>' (.jcor is in reach in wabody; READ_AT needs stc before .rdend). Fix the 'offset is under 33MB (SPEC.md 18.7)' comments in the same edit.",
+   "phase": "now",
+   "bytes_est": "about +4 at wabody's div and +6-8 at READ_AT's (cmp dx,[dwr_clb] / jae + an arm), .cold resident, on BOTH kernels",
+   "verdict": "corrected",
+   "verify_note": "Confirmed both divides unguarded (diskw.inc:3930-3932, 3168-3170) and truncate's guard at 3850-3851; nothing earlier bounds the entry's size high word. Correction: the READ_AT div and the wabody div are both outside any KERN_SMALL %ifdef, so kern_small needs both guards too; the '+11 kern_big, +4 kern_small' split was wrong."
+  },
+  {
+   "id": "dw-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "Failed write on multi-window FAT16 leaks the half-built chain the window evictions flushed",
+   "detail": "The plain rollback arms only call dskw_refat, which is an invalidate with no I/O. dskw_alloc's FAT16 scan and dskw_setfat's links move the FAT window, and dsk_fat_window flushes before it evicts, so the chain built so far reaches the disk as an orphan. On FERR_FULL the write has walked every free cluster, so the volume stays 'full' until a System Check repair, even after the user deletes the file they were saving. FAT12 floppies (whole window) are immune. The HELD arm already frees its own sub-chain before flushing, and its comment names exactly this leak ('on a DISK FULL, every free cluster the volume had left'). dskw_refat's header accepts lost clusters as the price of the window; the disk-full case is what makes that price the whole free space.",
+   "evidence": [
+    "kernel/diskw.inc:1600-1602 wbody .rollback = refat only",
+    "kernel/diskw.inc:4089-4092 wabody .rbdrop = refat only",
+    "kernel/diskw.inc:5008-5012 refat header admits an eviction may already have flushed part of the chain",
+    "kernel/diskw.inc:4069-4087 HELD rollback frees its own sub-chain first"
+   ],
+   "recommendation": "In both plain arms: mov ax,[dskw_first] / call dskw_free_chain / call dskw_flush_x, and dskw_refat only if that flush fails. The chain is linked in RAM, so the walk frees exactly what was built.",
+   "phase": "now",
+   "bytes_est": "+12 .cold resident kern_big, +9 kern_small",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: wdata sets [dskw_first] at the first allocation (:1671-1673), every allocation is EOC-marked before use, and in wabody the link to the file's last cluster happens only at .link after the sub-chain flush (:4024-4031), so freeing from [dskw_first] on .rbdrop frees exactly the unlinked sub-chain. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "dw-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "Unreadable FAT window reads as 'Disk full', after a per-cluster retry storm",
+   "detail": "dskw_alloc .one treats a CF from dsk_next_clus_x as 'used' and goes on. The rover keeps candidates in range, so that CF can only be I/O. The FAT16 .scan falls back to .one on the same load failure and asks again for the next cluster. With both FAT copies unreadable, every candidate costs a failed load (three attempts plus resets), and the answer is AX=0 CF=1, which every caller maps to FERR_FULL. That is exactly the misreport the routine's header says it exists to prevent.",
+   "evidence": [
+    "kernel/diskw.inc:4703-4713 .one: jc .skip",
+    "kernel/diskw.inc:4749-4750 .scan: jc .one",
+    "kernel/diskw.inc:4680-4684 header: an I/O error must not say 'Disk full'"
+   ],
+   "recommendation": "In .one, jc to 'pop ax / stc / jmp .iofail' so the answer is 0FFFFh, the I/O failure.",
+   "phase": "now",
+   "bytes_est": "+4-5 .cold resident, both kernels",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: dsk_next_clus_x (disk.inc:6537-6573) sets CF only for a cluster outside [2,maxclus] or a failed dsk_fat_ofs_x; .try wraps the candidate into range first, so CF in .one is I/O. It decodes no EOC, so CF never means 'end mark'."
+  },
+  {
+   "id": "dw-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The UI-task-only rule for every file cell is enforced by nothing",
+   "detail": "Every body shares .bss scratch (dskw_raw, dskw_n83, dsk_secbuf, the dirty range), and the N-stub stages names into one api_name/api_name2 pair. A package worker calling a file cell while the UI task is inside one cross-links the FAT silently. SPEC 18.4 itself says 'The kernel cannot enforce this'. The kernel already tests 'am I the UI task' with cmp byte [sch_cur],0 in several places. Prior art: DOS made re-entry detectable (InDOS); the Mac File Manager serialized async calls through a queue. A refusal is enough here.",
+   "evidence": [
+    "SPEC.md 18.4 Context paragraph 'an author rule with nothing behind it'",
+    "kernel/diskw.inc:27-31",
+    "kernel/kernel.asm:5213-5214 api_name/api_name2 shared staging",
+    "kernel/memory.inc:955, kernel/instance.inc:2203, kernel/toast.inc:407 the existing sch_cur==0 test"
+   ],
+   "recommendation": "Put cmp byte [sch_cur],0 / jne refuse (FERR_NODISK) once in the file cells' N-stub, or in dskw_mounted/dskw_gate, which every body passes. First confirm that kerndos, HIBER and drivers never call the bodies off task 0 - DOS.O88 owns a worker (dvw_start, apps/dos/dos.asm:2010), so its file calls must be shown to run on task 0 before the refusal lands.",
+   "phase": "now",
+   "bytes_est": "+9 .text resident (N-stub) or +14 .cold (two gates)",
+   "prior_art": "MS-DOS InDOS flag (detect re-entry); Mac File Manager async queue (serialize)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: SPEC.md:34500-34501 says it verbatim and diskw.inc:27-31 agrees; sch_cur==0 tests exist at memory.inc:955/4704, instance.inc:2203, toast.inc:407, wm.inc:11763. Added the DOS worker as the caller to clear first."
+  },
+  {
+   "id": "dw-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "A failed FAT flush keeps its dirt, which dsk_fatw_park may later write to another disk",
+   "detail": "dskw_flush_x's .ioerr skips .reset, so the dirty range survives a failed write. dskw_relold flushes 'EITHER WAY' precisely because dirt carried across a media change lands on the next disk's FAT. dsk_fatw_park flushes outgoing dirt at the top of the next mount, before it can know a floppy was swapped. So a post-commit flush failure, then a swap, then a volume switch, writes old FAT sectors onto the new disk.",
+   "evidence": [
+    "kernel/diskw.inc:4989-4992 .ioerr bypasses .reset",
+    "kernel/diskw.inc:962-970 relold's reason for flushing",
+    "kernel/disk.inc:5794-5799 park flushes dirt"
+   ],
+   "recommendation": ".ioerr: call dskw_ioerr / call dskw_refat (drop range and window). A post-commit failure then costs lost clusters, which the order already accepts. Check the held-stream path first: a HELD call's flush failure already poisons the stream (dws_hlose), so dropping the window there loses nothing new.",
+   "phase": "now",
+   "bytes_est": "+3 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: .ioerr (diskw.inc:4989) jumps to .out past .reset; .stale (:4977-4987) does reach .reset. disk.inc:5794-5799 flushes dirt in park with CF ignored."
+  },
+  {
+   "id": "dw-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "WRITE_AT's INSIDE arm writes up to 511 bytes past the caller's buffer onto disk slack",
+   "detail": "The INSIDE arm hands dsk_read_chain_x [dskw_rem] whole sectors straight from ES:BX, and dskw_size32 rounds [dskw_rem] up for a partial final sector. On the loose path (end at or past the size) any count is allowed, so the bytes after the caller's buffer reach the slack. SPEC 18.4's binding 'No memory ever leaks past EOF' says the kernel never hands a foreign machine what sits after a package's buffer. The GROW arm keeps that rule by zero-filling through dskw_wone; this arm does not. SPEC 18.4.7.2 accepts the rounding ('nothing there to lose') without noting that the bytes are the caller's memory past its buffer, which 18.4.7.1 itself names as the hazard. With DOS.O88 as the caller, the leaked bytes are its window buffer, i.e. an earlier file's data: the classic DOS slack leak, inherited.",
+   "evidence": [
+    "kernel/diskw.inc:3954-3966 INSIDE transfer",
+    "kernel/diskw.inc:3815-3831 loose allows any count",
+    "SPEC.md 18.4 'No memory ever leaks past EOF'",
+    "SPEC.md 18.4.7.2 'the transfer rounds up to a whole sector'",
+    "kernel/diskw.inc:5053-5056 dskw_wone zero-fills"
+   ],
+   "recommendation": "Route the final partial sector through dskw_wone with [dskw_clba] aimed at it, or amend 18.4's rule to name this arm as the exception.",
+   "phase": "now",
+   "bytes_est": "+25 .cold resident kern_big (kern_small has no INSIDE arm)",
+   "prior_art": "DOS leaked slack the same way; os8088's rule is stricter",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: dskw_size32 (:2727-2747) rounds [dskw_rem] up when the tail is non-zero, and the INSIDE arm passes [dskw_rem] sectors straight from [dskw_seg]:[dskw_src]. SPEC 18.4.7.2 (:38152-38157) permits the round-up; 18.4 (:34600-34604) forbids the leak. kern_small: the arm is %ifndef KERN_SMALL."
+  },
+  {
+   "id": "dw-7",
+   "kind": "bug",
+   "severity": "low",
+   "title": "DSKW_RT_MAX bounds the size of a tree, not the depth of a cycle",
+   "detail": "dskw_rtbody decrements the guard on every iteration, every file deleted included. A tree of 4,096 entries plus levels (an installed program tree on a 32MB partition) stops part-deleted with FERR_IO. A cycle is descent without removal, so re-arming the guard after each removal keeps cycle detection and lets any real tree finish. Also: the guard's 'jz .corrupt' leaves the volume chdir'd wherever the walk stood - it does not go through dskw_rt_go_home as .corrupt_home does.",
+   "evidence": [
+    "kernel/diskw.inc:1142-1144 guard decremented each pass, jz .corrupt (not .corrupt_home)",
+    "kernel/diskw.inc:1023-1028 'A 1.44MB volume cannot legitimately need this many'"
+   ],
+   "recommendation": "mov word [dskw_rt_guard], DSKW_RT_MAX after each successful removal (three sites: file, LFN slot, emptied folder - or one shared re-arm label), and send the guard's trip through .corrupt_home.",
+   "phase": "now",
+   "bytes_est": "+6 per re-arm site (6-18) plus 0 for the jump target, .cold resident kern_big",
+   "verdict": "corrected",
+   "verify_note": "Confirmed the guard counts every iteration (:1142-1144). Correction: the loop has three removal arms (.loop's file delete, .lfn, .empty's rmbody), so a single 6-byte store needs a shared label; and the guard's jz .corrupt skips dskw_rt_go_home, leaving the current directory deep in the tree - added."
+  },
+  {
+   "id": "dw-8",
+   "kind": "bug",
+   "severity": "low",
+   "title": "kern_small's WRITE_AT stub answers CF=1 with AX = the caller's offset",
+   "detail": "dwf_dskw_write_at on kern_small enters at stc, below the mov ax, FERR_NAME its three neighbours fall through. The contract says AX = FERR_* on failure; the caller's offset low word is often 0, which reads as FERR_OK with CF=1.",
+   "evidence": [
+    "kernel/diskw.inc:6805-6811",
+    "apps/os88api.inc:1072-1076 contract 'else AX = FERR_*'"
+   ],
+   "recommendation": "Move the dwf_dskw_write_at label above mov ax, FERR_NAME.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed at diskw.inc:6805-6811: the label sits on 'stc' after 'mov ax, FERR_NAME'. Low reach: the comment says DOS.O88, the one caller, does not ship on the small disks."
+  },
+  {
+   "id": "dw-9",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "dskw_find matches the volume label, so its name cannot be used",
+   "detail": "Only attr&3Fh==0Fh entries (LFN) are skipped, so the volume label is matched. A file named like the label is refused FERR_PROT on write, and a folder FERR_EXIST on mkdir. DOS matches the label only for searches that ask for attribute 08h.",
+   "evidence": [
+    "kernel/diskw.inc:4407-4410",
+    "kernel/diskw.inc:97 DSKW_PROT includes 0x08"
+   ],
+   "recommendation": "Replace 'and al,3Fh / cmp al,0Fh / je .next' with 'test al,08h / jnz .next', which skips both LFN and label entries. First grep that no caller uses dskw_find to locate the label on purpose.",
+   "phase": "now",
+   "bytes_est": "-2 .cold resident, both kernels",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed at :4407-4410; byte arithmetic (6 bytes -> 4) checks."
+  },
+  {
+   "id": "dw-10",
+   "kind": "prior-art",
+   "severity": "medium",
+   "title": "The compression hint occupies dirent bytes NT, Linux, macOS and OS/2 interpret",
+   "detail": "+12 is NTRes = 5Ah/5Bh. Bits 3 and 4 are set, and NT/2000+, Linux vfat (default shortname=mixed) and macOS msdosfs read those bits as 'base and extension lower case'. So every packed file, which is every package on every shipped disk under PKGZ=lz4, lists in lower case on a modern host. +13 (CrtTimeTenth) gets U's high byte: up to 2s create-time skew, and values above 199 are invalid. +20 is the OS/2 and NT FASTFAT EA handle on FAT12/16. SPEC 20.14.1 calls these 'three bytes FAT12 and FAT16 leave free'. The hint is a cache with a sniff fallback, so moving it is read-safe.",
+   "evidence": [
+    "kernel/disk.inc:154-157",
+    "kernel/diskw.inc:4195-4224 dskw_commit writes the hint",
+    "tools/os88disk.py:586-596 CZ_HINT = 0x5A at +12/+13/+20",
+    "SPEC.md:49252 'three bytes FAT12 and FAT16 leave free'",
+    "kernel/diskw.inc:4268-4277 dskw_czknow sniff fallback"
+   ],
+   "recommendation": "Choose a mark with bits 3 and 4 clear (40h-47h, A0h-A7h, ...); accept 5Ah/5Bh for one cycle in dskw_czknow and the listing's reader; switch tools/os88disk.py. Then decide, against a real NT CHKDSK, whether U may stay at +13/+20 or is learned from the 'CZ' header at open via dsk_peek_x, leaving a 1-bit flag.",
+   "phase": "flagday",
+   "bytes_est": "+6 .cold transitional, then 0",
+   "prior_art": "GEOS kept metadata inside the file header, where no host strips or misreads it; os8088's 'CZ' header already does this",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed 5Ah = 0101 1010b (bits 3 and 4 set); os88disk.py writes it for every packed file it is handed; SPEC 20.14.1 claims the bytes are free."
+  },
+  {
+   "id": "dw-11",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Short names with bytes 80h-FFh, or a leading 05h, are listed but cannot be opened, deleted or renamed",
+   "detail": "dskw_char_x accepts only A-Z, 0-9 and dskw_syms. The FAT short-name set includes 80h-FFh (the OEM code page), and a name whose first character is E5h is stored as 05h. The listing synthesises such names, but every operation goes through dskw_name83 and answers FERR_NAME, so a file a DOS machine wrote is visible and untouchable.",
+   "evidence": [
+    "kernel/diskw.inc:5217-5248 dskw_char_x",
+    "kernel/diskw.inc:5150-5160 dskw_name83 contract"
+   ],
+   "recommendation": "Accept 80h-FFh in dskw_char_x (no upcase, as DOS did without COUNTRY) and map a leading E5h to 05h in dskw_name83.",
+   "phase": "now",
+   "bytes_est": "+8 .cold resident",
+   "prior_art": "DOS 3.3+ OEM code-page names",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: dskw_char_x has no 80h-FFh arm; SPEC 18.4 'Names' states the 21h..7Eh choice deliberately, but calls it 'the FAT short-name set', which it is not."
+  },
+  {
+   "id": "dw-12",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Subdirectories never grow: a kernel-made folder on a 512-byte-cluster volume holds 14 entries",
+   "detail": "When a subdirectory's chain ends with no free slot, every create answers FERR_DIRFULL. On 512-byte clusters (1.44MB, 1.2MB, the 360KB system disk) a kernel-made folder holds 14 entries after '.' and '..'; on 1KB clusters (720KB, the other 360KB disks) 30. SPEC (19.3.2) records the 14-entry limit and RunCPM's section (SPEC.md:133703-133709) records a save that failed on the glass because of it. DOS 2.0 grew subdirectories from day one. The pieces exist: mkdir already allocates and zeroes a directory cluster, and both slot users (dskw_commit and fcp_relink) go through dskw_find's no-slot exit.",
+   "evidence": [
+    "kernel/diskw.inc:1548-1551 and :692-693 FERR_DIRFULL",
+    "kernel/diskw.inc:715-728 mkdir's zero loop",
+    "SPEC.md:43108-43111 'which a directory never grows past'",
+    "SPEC.md:133703-133709 RunCPM's Dir full"
+   ],
+   "recommendation": "dskw_dirgrow at dskw_find's no-slot exit for a subdirectory: alloc, zero (mkdir's loop factored out), flush, link the walker's last cluster to it, flush, publish its first sector as [dskw_fsec] with [dskw_fend]=1. A crash after the link leaves an empty extra cluster, which is harmless.",
+   "phase": "now",
+   "bytes_est": "+90 .cold resident kern_big (optional on kern_small)",
+   "prior_art": "MS-DOS 2.0+ extends a directory by a zeroed cluster",
+   "verdict": "corrected",
+   "verify_note": "Confirmed no growth path. Correction: the title said '1.44MB/720KB'; 720KB has 1KB clusters (30 entries). SPEC.md:43108-43111 is 19.3.2, the 360KB system disk at --spc 1."
+  },
+  {
+   "id": "dw-13",
+   "kind": "perf",
+   "severity": "medium",
+   "title": "A whole-file write discovers FERR_FULL only after writing everything it could",
+   "detail": "dskw_wdata allocates one cluster per pass and finds a full disk at the first failing dskw_alloc, after writing every byte before it. On an XT that is seconds to minutes of floppy for a save that cannot land, followed on FAT16 by dw-2's leak. The kernel knows [dskw_rem] before the first sector, which DOS's incremental model never could.",
+   "evidence": [
+    "kernel/diskw.inc:1662-1683 per-cluster alloc loop",
+    "kernel/diskw.inc:487-509 dskw_dfree_x / dsk_free_clus_x count",
+    "kernel/disk.inc:6484-6488 dsk_fcgoal early stop (OS88_BIGVOL)"
+   ],
+   "recommendation": "Compare ceil(rem/spc) against a goal-bounded dsk_free_clus_x ([dsk_fcgoal] = the clusters needed, which already stops a FAT16 count early) before any data I/O and refuse FERR_FULL. On a floppy the count is CPU only (the whole FAT is the window); on a multi-window FAT16 it faults FAT windows in, i.e. it is disk I/O, so the goal bound is what keeps it cheap. A replace needs room for both copies (the old chain is held), so the needed count is the new chain's alone.",
+   "phase": "now",
+   "bytes_est": "+18-25 .cold resident (kern_small has no dsk_fcgoal), free if dw-14 lands",
+   "prior_art": "Mac File Manager Allocate/SetEOF; OS/2 HPFS preallocation",
+   "verdict": "corrected",
+   "verify_note": "Confirmed no up-front check in dskw_wbody (:1520-1600). Correction: dsk_free_clus_x's FAT16 arm calls dsk_fat_ofs_x per FAT sector (disk.inc:6432-6490), which loads windows from disk on a FAT bigger than the window, so 'the count is CPU only' holds only for floppies; dsk_fcgoal (22.5.2.1) is the existing early stop to use."
+  },
+  {
+   "id": "dw-14",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Allocate a contiguous run when the size is known",
+   "detail": "dskw_alloc is first-fit from the rover, one cluster per call, so a full disk fragments 'exactly the way DOS's did'. Each fragment is a separate transfer, and on a floppy also a seek of 100ms or more on the XT. A whole-file write and a grow both know N up front.",
+   "evidence": [
+    "kernel/diskw.inc:4686-4790 dskw_alloc",
+    "kernel/diskw.inc:1621-1627 run coalescing",
+    "SPEC.md 18.4 'fragments exactly the way DOS's did'",
+    "kernel/fsck.inc:2800-2856 fsk_findrun (the same idea over a bitmap)"
+   ],
+   "recommendation": "For dskw_wbody and the non-held grow, search the window once for the lowest free run of N clusters at or after the rover (FAT16: a repne scasw variant of .scan); fall back to first-fit.",
+   "phase": "now",
+   "bytes_est": "+70 .cold resident kern_big",
+   "prior_art": "Mac PBAllocContig and HFS clumps; GEOS VM files",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed first-fit one-at-a-time (:4686-4790) and SPEC.md:34745-34746's sentence. The byte figure is an estimate, not measured; a FAT16 run that crosses windows needs its own handling."
+  },
+  {
+   "id": "dw-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Defer the post-commit FAT flush (frees only) to gfx_unlock, the gate held streams already use",
+   "detail": "dskw_relold flushes FAT1 and FAT2 after every replace, delete, rmdir and truncate: two int 13h calls, about 0.8s per operation on the XT, and 100 calls for a 50-file rmtree. Dirt that is only frees is always safe to lose (lost clusters) and safe to reuse unflushed, because those clusters are unreachable on disk. The one real danger is a floppy swap. WRITE_SEQ already closes that hole by committing at gfx_unlock, 'every way the user can reach the drive'.",
+   "evidence": [
+    "kernel/diskw.inc:962-974 dskw_relold .flush",
+    "kernel/diskw.inc:3366-3372 the gfx_unlock gate",
+    "kernel/diskw.inc:6798-6801 dwsf_commit"
+   ],
+   "recommendation": "dskw_relold frees and leaves the range dirty under a dskw_lazy byte; dwsf_commit (gfx_unlock) and OSAPI_BATCH_END flush it. Park and the next write's flush behave as today. kern_small keeps the immediate flush. Mind dw-5: deferred dirt is exactly what dsk_fatw_park carries across a swap, so the gfx_unlock flush must land before any path that can park.",
+   "phase": "now",
+   "bytes_est": "+15 .cold resident kern_big",
+   "prior_art": "DOS FAT BUFFERS flushed at close/reset; SmartDrive write-behind; HFS lazy VBM/MDB (all deferred everything; this defers only droppable frees)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed relold always flushes and the comment gives the media-change reason (:962-970); the gfx_unlock commit for held streams exists (:3366-3372, :6798-6801)."
+  },
+  {
+   "id": "dw-16",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The rover resets at every navigation, and FAT12 allocation is three nested calls a cluster",
+   "detail": "disk_mount_x stores [dsk_rover]=2 unconditionally, including on the keepcwd remount every dsk_chdir performs. So the first save after any navigation re-walks the used front of the FAT. FAT16 has repne scasw; FAT12 keeps ~1,400 cycles a cluster, about 0.8s on a nearly full 1.44MB disk after every chdir.",
+   "evidence": [
+    "kernel/disk.inc:4130-4140 rover reset beside the keepcwd branch",
+    "kernel/disk.inc:8258-8263 dsk_chdir_x is a keepcwd disk_mount_x",
+    "SPEC.md 18.4.10 'FAT12 ... keeps the loop', per-cluster cycle figure"
+   ],
+   "recommendation": "Reset the rover only on the non-keepcwd arm: a hint, so a same-disk remount cannot make it wrong. Optionally add a FAT12 whole-window scan like dsk_free_clus_x's fast path.",
+   "phase": "now",
+   "bytes_est": "0-3 (rover), +40 .cold (FAT12 scan)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed disk.inc:4130-4140 and dsk_chdir_x (:8258-8263)."
+  },
+  {
+   "id": "dw-17",
+   "kind": "perf",
+   "severity": "low",
+   "title": "rmtree finds every file twice",
+   "detail": "dskw_rt_scan stages the entry and its location via dskw_hit. dskw_dbody_n83 then calls dskw_find, a second directory walk from entry 0 per file.",
+   "evidence": [
+    "kernel/diskw.inc:1283-1292 rt_scan stages the entry",
+    "kernel/diskw.inc:1151 .loop calls dskw_dbody_n83",
+    "kernel/diskw.inc:2765-2766 dbody_n83 re-finds"
+   ],
+   "recommendation": "Enter the delete past its dskw_find (at the imgro and protection test) when dskw_raw is already staged.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed. The second walk usually ends in the same sector (the scan always finds the first live entry), so the cost is CPU and a re-read of that sector, not a long walk."
+  },
+  {
+   "id": "dw-18",
+   "kind": "bug",
+   "severity": "low",
+   "title": "fsck's FILEnnnn.CHK number uses an 8-bit multiply and wraps at 10,000 into duplicates",
+   "detail": "fsk_lost_num multiplies AL by 10, so any existing number of 2,560 or more is misparsed. fsk_save writes four digits of P_CHKN, so 10,000 becomes FILE0000, a duplicate name. Neither can collide in a 224/512-entry root in practice, but both are wrong.",
+   "evidence": [
+    "kernel/fsck.inc:2151-2163 mul dh",
+    "kernel/fsck.inc:2298-2307 four-digit write"
+   ],
+   "recommendation": "Use a 16-bit multiply; saturate P_CHKN at 9,999 and treat the cap as a full root (free the chain), as DOS CHKDSK stops at FILE9999.",
+   "phase": "now",
+   "bytes_est": "+6 FSCHECK.DRV image, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: 'mul dh' is AL*DH, so a three-digit prefix of 256 or more is truncated before the fourth digit."
+  },
+  {
+   "id": "dw-19",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Taking the terminator in a sector's last slot trusts the next sector to be zero",
+   "detail": "dskw_ent_store and fsk_save write no new end marker when the taken 00 slot is the sector's last, on the claim that the next sector 'has never been written and is already 00'. That holds for every directory DOS or os8088 makes. On a foreign or hostile disk, non-zero bytes past the terminator would become live entries.",
+   "evidence": [
+    "kernel/diskw.inc:4648-4654",
+    "kernel/fsck.inc:2285-2291"
+   ],
+   "recommendation": "Record only: a fix costs a second sector RMW in 1 case of 16, and every reader already treats entries as hostile.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed at both sites."
+  },
+  {
+   "id": "dw-20",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Pop runs and refusal tails shared across 1,000+ lines, held together by prose",
+   "detail": "dskw_find.out/.pdi/.psi/.pdx is the epilogue of six routines with matching push orders. More than ten 'X.out equ neighbour.ret' relays exist, and refusals jump into other bodies' labels (dskw_wbody.prot, dskw_rdata.corrupt, dskw_nbody.badarg, dskw_mkbody.exists). One reordered push in dskw_find silently breaks five callers.",
+   "evidence": [
+    "kernel/diskw.inc:4453-4463 shared pop run",
+    "kernel/diskw.inc:942, :1927, :2184, :2775, :3541 equ relays",
+    "kernel/diskw.inc:1295, :1380, :3538, :4790 jumps into dskw_find's run"
+   ],
+   "recommendation": "A DSKW_PUSH6/DSKW_POP6 macro pair that defines the order once, used by every routine that joins the shared run.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked :1295 (dskw_rt_scan -> dskw_find.out) and :4790 (dskw_alloc -> dskw_find.pdx)."
+  },
+  {
+   "id": "dw-21",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Two 'same question, two predicates' pairs: LFN detection and mounted-image detection",
+   "detail": "dskw_find detects LFN with attr&3Fh==0Fh; rmtree with attr==0Fh exactly, so an LFN slot with high attribute bits makes rmtree delete it as a file and stop FERR_NOENT. The defragmenter skips *.IMG by name, while dskw_imgro asks the claim table by cluster, which is the real fact.",
+   "evidence": [
+    "kernel/diskw.inc:4408-4409 masked",
+    "kernel/diskw.inc:1147 exact",
+    "kernel/fsck.inc:2640-2646 by name",
+    "kernel/diskw.inc:269-282 by cluster"
+   ],
+   "recommendation": "Mask in rmtree; let fsk_defent ask dsk_img_next by cluster, which also lets it move an unmounted .IMG.",
+   "phase": "now",
+   "bytes_est": "+2 .cold resident, +10 FSCHECK.DRV image",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed all four sites."
+  },
+  {
+   "id": "dw-22",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "WRITE_SEQ's single kernel-wide stream record thrashes under two concurrent streams",
+   "detail": "dws_rec is one record keyed by [dsk_mgen]. Two streams (an FTP upload and a DOS COPY, or two FTPD sessions) make each other's tokens cold every call. Each call then commits and falls back to APPEND: a name lookup plus a whole-chain walk (DISK-CPU-PLAN 6), O(n^2) over the file. DOS's SFT had FILES= entries, and READ_SEQ already made its cursor the caller's.",
+   "evidence": [
+    "kernel/diskw.inc:6597-6614 dws_rec",
+    "kernel/diskw.inc:3355-3364 token = dsk_mgen",
+    "docs/plans/DISK-CPU-PLAN.md section 6"
+   ],
+   "recommendation": "Make the committed position caller-held (an ES:DI cursor like READ_SEQ's) while the HOLD stays the kernel's, one at a time.",
+   "phase": "flagday",
+   "bytes_est": "0 to -20 kern_big",
+   "listed_as": "",
+   "prior_art": "MS-DOS SFT, one entry per open handle",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: one record, keyed by [dsk_mgen] (:3355-3364)."
+  },
+  {
+   "id": "dw-23",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "No 'volume dirty' mark while a hold or deferred dirt is pending",
+   "detail": "A kept hold (WSQF_KEEP) can outlive callbacks on a fixed disk, and so would dw-15's deferred frees. FAT16 reserves FAT[1] bit 15 (ClnShutBitMask) for this. AmigaOS ran the disk-validator on an unvalidated volume; HPFS had a dirty flag. Combined with System Check's AUTOSTRT link, a set bit at boot could trigger an unattended check.",
+   "evidence": [
+    "kernel/diskw.inc:3445-3451 WSQF_KEEP",
+    "SPEC.md 118.14.9 link-driven runs"
+   ],
+   "recommendation": "Record. The cost is one FAT-sector write per transition.",
+   "phase": "record",
+   "bytes_est": "+20 if taken",
+   "prior_art": "FAT16 ClnShutBitMask (Win95/NT); AmigaOS disk-validator; HPFS dirty flag",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-verified beyond WSQF_KEEP's existence (:3385)."
+  },
+  {
+   "id": "dw-24",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "Delete and rename orphan a host's LFN entries",
+   "detail": "The scan passes over LFN entries, so deleting or renaming a host-named file leaves its LFN run behind. Windows 95+ deletes the preceding LFN run with a matching checksum, and ScanDisk and fsck.fat report orphans otherwise.",
+   "evidence": [
+    "kernel/diskw.inc:4410",
+    "SPEC.md 18.4 'leaves that name's LFN entries orphaned'"
+   ],
+   "recommendation": "Record: mark the contiguous preceding 0Fh entries E5h in the same sector.",
+   "phase": "record",
+   "bytes_est": "+30 .cold if taken",
+   "prior_art": "Windows 95 VFAT",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md:34641-34646 says it as quoted."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; The FAT write path (SPEC.md 18.4). disk.inc reads a data floppy; this\n; module is the only one that modifies one, and the only caller of\n; disk_write anywhere in the kernel. Five public routines - dskw_write,\n; dskw_read, dskw_delete, dskw_rename, dskw_dfree - are the whole surface,",
+   "new_text": "; The FAT write path (SPEC.md 18.4). disk.inc reads a data floppy; this\n; module makes every FILE-level change to one - though it is not the only\n; caller of disk_write: the disk cloner (diskops.inc), the Control Panel's\n; boot-sector byte (driver.inc's cpc_fdbs) and FSCHECK.DRV (fsck.inc) write\n; sectors beneath it. Five public routines - dskw_write,\n; dskw_read, dskw_delete, dskw_rename, dskw_dfree - were the first surface,",
+   "why": "disk_write_x is also called by diskops.inc:2102/2362 (clone), driver.inc:6506 (cpc_fdbs) and fsck.inc:1082 (KC disk_write_x); the surface has grown READ_AT/APPEND/WRITE_AT/READ_SEQ/WRITE_SEQ/STAT/VOL_STAT."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; for the OS and for packages alike (they ARE the API cells 0x0120..0x0140,\n; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory\n; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles, no seek,\n; no partial rewrite, no paths: a name is resolved in one directory, the",
+   "new_text": "; for the OS and for packages alike (they ARE the API cells 0x0103..0x0118,\n; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory\n; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles and no\n; paths - the chunked and positioned doors (SPEC.md 18.4.4-18.4.9) came\n; later and are bodies here too: a name is resolved in one directory, the",
+   "why": "apps/os88api.inc:959/964/1007/1008/1103 put WRITE/READ/DELETE/RENAME/DFREE at 0x0103/0x0109/0x010F/0x0115/0x0118; dskw_read_at_x, dskw_wabody (APPEND/WRITE_AT) live in this file."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It is the\none module that may modify a data floppy, and the only module that calls\n`disk_write`. Five public routines are the file surface — the same five",
+   "new_text": "Every\nFILE-level change to a volume goes through it; the disk cloner (§18.99),\nthe Control Panel's boot-sector byte and `FSCHECK.DRV` (§118.14) call\n`disk_write` beneath it. Five public routines are the original file surface — the same five",
+   "why": "disk_write_x is called from diskops.inc:2102/2362, driver.inc:6506 and fsck.inc:1082 as well as diskw.inc."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "There is no\nopen/seek/handle model, no paths, no partial rewrite: a file is written in\none call from one buffer, read back the same way, and its name is resolved",
+   "new_text": "There is no\nopen/handle model and no paths: a file is written in one call from one\nbuffer, read back the same way (the chunked and positioned doors,\n§18.4.4–§18.4.9, came later), and its name is resolved",
+   "why": "OSAPI_FILE_READ_AT/APPEND/WRITE_AT/READ_SEQ/WRITE_SEQ are bodies in diskw.inc (dskw_read_at_x :2985+, dskw_wabody :3715-4100)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "is the largest subset that stays honest in 256KB with 12 pre-emptive tasks\nand no disk cache.",
+   "new_text": "was the largest subset that stayed honest in 256KB with pre-emptive tasks\nand no disk cache; the floor is a 128KB machine now, and §18.95's sector\ncache came later.",
+   "why": "diskw.inc:4294-4300 cites 18.95's sector cache; MIN_RAM_KB guard 5 boots both kernels on 128KB (CLAUDE.md hard rules)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`FERR_BIG` for a count ≥ 32MB, which no volume this kernel mounts can hold.",
+   "new_text": "`FERR_BIG` for a count ≥ 32MB, whose sector count does not fit the transfer's 16 bits (`kern_big` mounts bigger volumes, §18.7.5).",
+   "why": "dskw_size32 (diskw.inc:2727-2747) refuses when the sector count's high word is non-zero; OS88_BIGVOL (disk.inc:93-101) mounts past 32MB on kern_big."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128)",
+   "new_text": "BX = **sectors** per cluster (not bytes — the contract since §18.4 began; §18.2 rule 4 caps `spc` at 64, so `spc`×512 would fit, but the register is sectors)",
+   "why": "Mount rule 4 (disk.inc:5094-5108) refuses spc > 64, so spc=128 is not legal."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `dskw_sync` | in nothing. The coherence pass every successful write ends in: `fmv_mark` always, then `dskw_remount` only if `fmv_gneed` says something on screen is drawn from the global listing — otherwise `disk_nfiles` = 0 and `[dsk_lstale]` = 1, the §18.9 debt. Suppressed entirely by `[dskw_batch]`. Preserves all registers; CF is **not** propagated. |",
+   "new_text": "| `dskw_sync` | in nothing. The coherence pass every successful write ends in: `[dsk_mgen]` += 2 (`kern_big`, §18.4.8), `fmv_mark` always, then — unless `[dskw_batch]` defers it — `disk_nfiles` = 0 and `[dsk_lstale]` = 1, the §18.9 debt. It never remounts: nothing on screen reads the global listing (§38.2). Preserves all registers; CF is **not** propagated. |",
+   "why": "dskw_sync_x (diskw.inc:2882-2903) bumps dsk_mgen, calls fmv_mark, then publishes the empty listing unless batched; no fmv_gneed or remount exists in kernel/."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The second is a **remount**\n(§18.3) with `[dsk_keepcwd]` raised, exactly as `dsk_chdir` does (§19.2) —\nand it is the expensive half, so it happens **when something on screen is\ndrawn from that snapshot, and not otherwise**.",
+   "new_text": "The second used to be a\n**remount** (§18.3) with `[dsk_keepcwd]` raised, exactly as `dsk_chdir` does\n(§19.2), made when something on screen was drawn from that snapshot. Nothing\nis any more (§38.2), so it is always the deferral below: `disk_nfiles` = 0\nand `[dsk_lstale]` = 1, the §18.9 debt.",
+   "why": "dskw_sync_x (diskw.inc:2896-2903) always publishes the empty listing and the debt; its header (:2863-2866) says the rebuild 'is never now any more'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`fmv_gneed` is the question, and the answer is short because only **one**\nthing reads the global listing while it is on screen: the Standard File\ndialog, which is modal and deliberately keeps no cache of its own (§38.2).\nIts **New Folder** button is a write made while it is up, so this is the\ncase that must never be deferred. A Disk window is *not* on that list and\nits absence is §22.1/§22.8 rather than an oversight",
+   "new_text": "There was a question, `fmv_gneed`, for the one thing that read the global\nlisting while it was on screen: the Standard File dialog, whose **New\nFolder** button is a write made while it is up. It paints from its own\n`VIEW` cache now (§38.2), and the question went with it. A Disk window was\nnever on that list, and its absence is §22.1/§22.8 rather than an oversight",
+   "why": "grep finds no fmv_gneed in kernel/; SPEC.md:75456-75463 (38.2) says the chooser paints from its own VIEW cache and fmv_gneed is gone."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `fmv_gneed` | in nothing. Out: CF=1 = something on screen is drawn from the **global** listing, so §18.4's coherence remount must run now; CF=0 = record the debt instead. Only the Standard File dialog answers yes — a Disk window paints from its own cache (§22.1) and has just been marked. Clobbers flags. Called by `dskw_sync`. |",
+   "new_text": "| `fmv_gneed` | **gone** (§38.2): the Standard File dialog paints from its own `VIEW` cache, so nothing on screen reads the global listing and `dskw_sync` always records the debt. |",
+   "why": "No fmv_gneed label exists in kernel/ (grep); dskw_sync_x calls only fmv_mark."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; identical state a quiet mount publishes (18.9), paid by dsk_relist. What",
+   "new_text": "; identical state a quiet mount publishes (18.9), paid by the next mount\n; that lists (dsk_relist, which paid it, is deleted - SPEC.md 18.4). What",
+   "why": "dsk_relist is gone (files.inc:2187 'This was dsk_relist_x'; SPEC.md 18.4 'dsk_relist was the payment (it is deleted')."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "                                ; no listing, and dsk_relist is the payment",
+   "new_text": "                                ; no listing, and the next listing mount pays",
+   "why": "No dsk_relist label exists; the debt is paid by whatever mounts next (SPEC.md 18.4)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Allocation.** The resident FAT snapshot (`FAT_SEG`, §2.1) is the\nauthority:",
+   "new_text": "**Allocation.** The FAT window (§18.8), faulted in a sector range at a\ntime, is the authority:",
+   "why": "dskw_alloc reads through dsk_next_clus_x/dsk_fat_ofs_x, the window (diskw.inc:4703-4750, disk.inc:6537-6573); FAT16 is scanned a window at a time (18.4.10)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Rollback.** Any failure *before* the commit reloads the FAT snapshot from\ndisk (`dskw_refat`, one `disk_read` of `dsk_fatsz` sectors) and clears the\ndirty range, so a partially allocated chain never survives in RAM to be\nflushed by a later, unrelated operation.",
+   "new_text": "**Rollback.** Any failure *before* the commit invalidates the FAT window and\nclears the dirty range (`dskw_refat`, no I/O: the next access faults a clean\nwindow in off the disk), so a partially allocated chain never survives in\nRAM to be flushed by a later, unrelated operation. An eviction may already\nhave flushed part of that chain (§18.8), which costs lost clusters, never a\ncross-link.",
+   "why": "dskw_refat (diskw.inc:5002-5025) stores 0xFFFF/0 into three words and does no I/O; its header states the eviction caveat."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**What this deliberately does not do.** No paths (a name is resolved in the\ncurrent directory and nowhere else), no *recursive* directory removal —\n`dskw_rmdir` (§18.6) takes an empty folder and refuses anything else, so\nemptying a subtree is the user's job one level at a time — no append or seek, no\ntruncate-in-place, no FAT32, no volume-label editing, no timestamp\npreservation across a rewrite, and no attempt to defragment: chains are\nallocated first-fit from the rover, so a full disk fragments exactly the\nway DOS's did.",
+   "new_text": "**What this deliberately does not do.** No paths (a name is resolved in the\ncurrent directory and nowhere else), no FAT32, no volume-label editing, no\ntimestamp preservation across a rewrite, and no attempt to defragment while\nwriting: chains are allocated first-fit from the rover, so a full disk\nfragments exactly the way DOS's did (`FSCHECK.DRV` defragments on request,\n§118.14.5). Append, positioned writes and truncation came later\n(§18.4.4–§18.4.9, §18.4.7.5), and so did recursive removal (`dskw_rmtree`,\n§18.90).",
+   "why": "dskw_rmtree (diskw.inc:977-1203), APPEND/WRITE_AT/truncate (diskw.inc:3715-3880) all exist; rmtree is SPEC 18.90, not 18.6."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; out: AX = [dsk_spc] * 512 (a power of two, <= 32,768 by mount rule 8)",
+   "new_text": "; out: AX = [dsk_spc] * 512 (a power of two, <= 32,768 by mount rule 4)",
+   "why": "disk.inc:5094-5108 is rule 4 (spc a power of two, <= 64); rule 8 is 'the sector count is not 0', now rule 14's (disk.inc:5126)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "    mov cx, [dwr_clb]           ; a POWER OF TWO (mount rule 2: spc is), so",
+   "new_text": "    mov cx, [dwr_clb]           ; a POWER OF TWO (mount rule 4: spc is), so",
+   "why": "Rule 2 is the jmpBoot byte (disk.inc:5051); spc's power-of-two test is rule 4 (disk.inc:5094)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; capacity must each be a whole number of CLUSTERS. That is what makes the",
+   "new_text": "; capacity must each be a whole number of CLUSTERS on kern_small, and of\n; SECTORS on kern_big (SPEC.md 18.4.4.2). That is what makes the",
+   "why": "dskw_read_at_x masks with [dwr_clb]-1 on KERN_SMALL and with 511 otherwise (diskw.inc:3136-3146)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "    mov ax, [dwr_off]           ; clusters to skip. One div is enough: the\n    mov dx, [dwr_off+2]         ; offset is under 33MB (SPEC.md 18.7), so its\n    div bx                      ; high word is under 512, which is at or below\n    xchg cx, ax                 ; every cluster size there is",
+   "new_text": "    mov ax, [dwr_off]           ; clusters to skip. One div: a REAL file's\n    mov dx, [dwr_off+2]         ; quotient fits 16 bits (a volume holds under\n    div bx                      ; 65,525 clusters), but an APPEND's offset is\n    xchg cx, ax                 ; the entry's size, which a hostile disk can\n                                ; make overflow it - unguarded here, unlike\n                                ; .trunc's (SPEC.md 18.4.7.5)",
+   "why": "The offset comes from DSK_R_SIZE on APPEND (:3786-3791) and nothing checks DX < BX before this div; OS88_BIGVOL volumes exceed 32MB (disk.inc:93-101). Comment-only lines added."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "    ; offset / cluster_bytes, and one div is enough: a volume caps at 65,535\n    ; sectors (SPEC.md 18.7), so the offset is under 33MB and its high word is\n    ; under 512 - which is at or below every cluster size there is.",
+   "new_text": "    ; offset / cluster_bytes, and one div: a REAL file's quotient fits 16 bits\n    ; (a volume holds under 65,525 clusters), but the offset is bounded only\n    ; by the entry's size, and a hostile size can overflow it - unguarded.",
+   "why": "The only bound on [dwr_off] is the entry's size (:3128-3134); kern_big mounts volumes past 65,535 sectors (OS88_BIGVOL)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; real offset can carry (a volume caps at 32MB), and the body substitutes the",
+   "new_text": "; real offset can carry (no FAT16 volume reaches 4GB), and the body substitutes the",
+   "why": "OS88_BIGVOL mounts past 32MB; the sentinel holds because 65,524 clusters of at most 32KB (rule 4) stay under 2^31."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "enters with the offset's high word `0xFFFF`, which no real offset can carry\n(a volume caps at 32MB, §18.7), and the body substitutes the size once it has",
+   "new_text": "enters with the offset's high word `0xFFFF`, which no real offset can carry\n(no FAT16 volume reaches 4GB, §18.7.5), and the body substitutes the size once it has",
+   "why": "kern_big mounts volumes past 32MB (disk.inc:93-101, SPEC 18.7.5); the sentinel's argument is the 2^31 FAT16 ceiling, not 32MB."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; A size field whose sector count would not fit 16 bits (>= 32MB) cannot be\n; a real chain on any volume this kernel mounts (TotSec16 <= 65,535) and is\n; refused as FERR_IO up front:",
+   "new_text": "; A size field whose sector count would not fit 16 bits (>= 32MB) is past\n; what this path can count ([dskw_rem] is 16 bits; kern_big mounts bigger\n; volumes, SPEC.md 18.7.5, but no caller's buffer holds such a file) and is\n; refused as FERR_IO up front:",
+   "why": "OS88_BIGVOL (disk.inc:93-101) mounts TotSec32 volumes on kern_big, so TotSec16 <= 65,535 is not the bound; dskw_size32's 16-bit [dskw_rem] is."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; spent by dskw_rflush when the LBA stops being contiguous, when its DMA page",
+   "new_text": "; spent by dskw_flushrun when the LBA stops being contiguous, when its DMA page",
+   "why": "No dskw_rflush label exists; the run is spent by dskw_flushrun (diskw.inc:1802)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "                                ; [dskw_src] on a run at a time (dskw_rflush).",
+   "new_text": "                                ; [dskw_src] on a run at a time (dskw_flushrun).",
+   "why": "No dskw_rflush label exists; dskw_flushrun (diskw.inc:1802) advances the run."
+  },
+  {
+   "file": "kernel/fsck.inc",
+   "old_text": "; RESIDENT: the stub (.text), fsk_cnear (.cold), [dsk_wgen] and its bump in",
+   "new_text": "; RESIDENT: the cell (.text), the stub and fsk_cnear (.cold), [dsk_wgen] and its bump in",
+   "why": "osapi_vol_check is in 'section .cold' (fsck.inc:214-216); only kernel.asm:4441's OSAPI_RCSLOT cell is .text."
+  },
+  {
+   "file": "kernel/fsck.inc",
+   "old_text": "; **ES IS THE WORKSPACE, FROM fsk_entry's `mov es, dx` TO ITS RETURN**, and\n; nothing loads it again:",
+   "new_text": "; **ES IS THE WORKSPACE, FROM fsk_entry's `mov es, dx` TO ITS RETURN** -\n; except inside fsk_delsys, which spends ES on its name compares and on\n; the caller's buffer - and nothing else loads it again:",
+   "why": "fsk_delsys reloads ES (push ds/pop es at fsck.inc:536-537, the buffer swap at :563-564 and :599-601) before its delete."
+  },
+  {
+   "file": "kernel/fsck.inc",
+   "old_text": "; else 2), [fk_a] = the cluster, [fk_b] = its place, BH = 1 repaired. The\n; path is the entry at [fk_e]",
+   "new_text": "; else 2), [P_A] = the cluster, [P_B] = its place, BH = 1 repaired. The\n; path is the entry at [P_E]",
+   "why": "The workspace fields are P_A/P_B/P_E (fsck.inc:171-176); no fk_* symbol exists."
+  },
+  {
+   "file": "kernel/fsck.inc",
+   "old_text": "; in:  ES:SI = the entry ([fk_e]), BX = the level; out CF = 0",
+   "new_text": "; in:  ES:SI = the entry ([P_E]), BX = the level; out CF = 0",
+   "why": "P_E is 'the entry being handled' (fsck.inc:171); no fk_e symbol exists."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`.bss` 20 (`fsk_fp`, `fsk_cold`, `fsk_ws`, `fsk_sp`\nand `dsk_wgen`'s `DVOL_MAX`).",
+   "new_text": "`.bss` 20 (`fsk_fp`, `fsk_cold`, `fsk_ws`, `fsk_sp`\nand `dsk_wgen`'s `DVOL_MAX` of 8; kernel size pass 17 took `fsk_fp` and\n`fsk_ws`, leaving 14).",
+   "why": "fsck.inc:271-275 reserves only fsk_cold (4), fsk_sp (2) and dsk_wgen (DVOL_MAX = 8 on kern_big, disk.inc:221); :254 and :311 record the pass-17 removals."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "its per-call words are\n  the kernel's (`fsk_ws`, `fsk_sp`, `fsk_cold`, `.bss`, reached through\n  DS = KERNEL_SEG) and its scratch is the workspace's.",
+   "new_text": "its per-call words are\n  the kernel's (`fsk_sp`, `fsk_cold`, `.bss`, reached through\n  DS = KERNEL_SEG) and its scratch is the workspace's, which ES holds\n  throughout a call.",
+   "why": "No fsk_ws exists (fsck.inc:308-313: 'the kernel holds no [fsk_ws]')."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| 22 `FOLDERS` | 7 | Note | folders moved |",
+   "new_text": "| 22 `FOLDERS` | 7 | Note | folders moved |\n| 23 `PARTIAL` | 4, 7 | Note (4), Warning (7) | - (a folder was not gone into: lost chains are left as they are, and the defragmenter does not run) |",
+   "why": "FSKF_PARTIAL equ 23 (fsck.inc:83) is queued FSV_NOTE row 4 (:2078-2084) and FSV_WARN row 7 via .not (:2433-2441)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "lost clusters that form a loop with no head are freed |",
+   "new_text": "lost clusters that form a loop with no head are freed; after a check that did not go into every folder none is saved or freed (`PARTIAL`: an entry there may name them) |",
+   "why": "fsck.inc:2078-2084 skips the lost-chain phase and queues FSKF_PARTIAL when PF_SKIP is set."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**It runs only after a check that found nothing Broken**; otherwise its row\nsays `SKIPDEF` with the count, and the user runs *Check and repair* first.",
+   "new_text": "**It runs only after a check that found nothing Broken and went into every\nfolder**; otherwise its row says `SKIPDEF` with the count, and the user runs\n*Check and repair* first - or `PARTIAL`, when a folder was not gone into.",
+   "why": "fsck.inc:2438-2441 refuses the defrag phase with FSKF_PARTIAL when PF_SKIP is set, after the SKIPDEF test."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**three bytes FAT12 and FAT16 leave\nfree** (§19.1):",
+   "new_text": "**three bytes this kernel otherwise leaves\nalone** (§19.1) - though not free on other systems: Windows NT, Linux and\nmacOS read +12's bits 3 and 4 as lower-case flags (so 5Ah lists the name in\nlower case there), +13 is the create time's hundredths, and OS/2 and NT treat\n+20 as an EA handle on FAT12/16:",
+   "why": "DSK_CZ_MARK = 0x5A (disk.inc:157) sets bits 3 and 4 of NTRes; dskw_commit (diskw.inc:4195-4224) and os88disk.py:586 write it at +12/+13/+20."
+  },
+  {
+   "file": "kernel/fsck.inc",
+   "old_text": "fsk_die:  ; STKBALANCE-OK: unwinds every frame at once to fsk_entry's, through [fk_sp]",
+   "new_text": "fsk_die:  ; STKBALANCE-OK: unwinds every frame at once to fsk_entry's, through [fsk_sp]",
+   "why": "The saved stack word is fsk_sp (fsck.inc:273, stored at fsk_entry :329); no fk_sp exists. The marker text is untouched."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "                                ; as dskw_find does, so dskw_rt_zap can",
+   "new_text": "                                ; as dskw_find does, so rtbody's .lfn can",
+   "why": "dskw_rt_zap is written at dskw_rtbody's .lfn now (diskw.inc:1155-1158, :1338); no dskw_rt_zap label exists."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "    mul dx                      ; DX:AX = free sectors (DX = 0: free\n                                ; clusters * spc <= TotSec16 <= 5,760)",
+   "new_text": "    mul dx                      ; DX:AX = free sectors (under 2^22:\n                                ; clusters < 65,525 and spc <= 64)",
+   "why": "kern_big mounts volumes past 65,535 sectors (OS88_BIGVOL, disk.inc:93-101), so DX can be non-zero; rule 4 caps spc at 64 (disk.inc:5094-5108)."
+  }
+ ]
+}

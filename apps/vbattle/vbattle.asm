@@ -191,7 +191,10 @@ VB_RKEEPM   equ 24              ; ...and on kern_mega this more: the real-mode
                                 ; bracket's own conventional claims, made
                                 ; inside OSAPI_FSX_RUN after the rings - its
                                 ; service area (3-4 KB) and a driver's low
-                                ; copy (SOUND.DRV 8, HDD.DRV 4; SPEC.md 53.2.3)
+                                ; copy (SOUND.DRV 8, HDD.DRV 4; SPEC.md 53.2.3).
+                                ; A GUESS, kept only for a kern_mega that
+                                ; refuses FSXF_PREP: vb_prep asks the door for
+                                ; the exact figure (53.2.3.1)
 VB_NRCLM    equ 10              ; vb_nrsay's own reason past the FSXR_*: a
                                 ; claim with no real-mode segment
 VB_CPGAIN   equ 16              ; KB a compaction must buy to be posted
@@ -371,6 +374,7 @@ vb_entry:
     loop .sn
     mov byte [di], 0
 .snd:
+    call vb_low                     ; (kern_mega: our region conventional)
     call OSAPI_FILE_HERE
     mov [vb_selfdir], dx
     mov [vb_selfvol], bl
@@ -415,6 +419,9 @@ vb_entry:
     mov bx, [vb_win]
     mov si, vb_menus                ; File > Open... (and Close)
     call OSAPI_MENU_SET
+    mov bx, [vb_win]                ; the standard About card (SPEC.md 12.2)
+    mov si, vb_about
+    call OSAPI_ABOUT_SET
     clc
 .out:
     ret
@@ -690,12 +697,16 @@ vb_coverload:
 
 ; vb_cvplay - the picture's claim at a play's door: given back (the play
 ; wants the memory) - unless it is ABOVE 1MB (kern_mega with OS88_HIGHMEM:
-; SEG_REAL has no paragraph for it), where it costs the play nothing and
-; is kept, so the window is the picture again the moment the play returns
+; SEG_REAL has no paragraph for it) and the hold is sized already, where it
+; is kept, so the window is the picture again the moment the play returns.
+; Before the hold opens it goes either way: a pool block kept there was the
+; hold's 12 KB (KERN-MEGA-PLAN 14.178)
 vb_cvplay:
     mov dx, [vb_cvseg]
     or dx, dx
     jz vb_cvfree
+    cmp byte [vb_hopd], 0           ; (the hold not yet sized: the pool's
+    je vb_cvfree                    ; KB are its, as kern_big's are - 14.178)
     mov bl, SEG_REAL
     call OSAPI_SEG
     jnc vb_cvfree
@@ -792,16 +803,32 @@ vb_door:
     mov [vb_rkeep], ax
     cmp byte [vb_pmd], 0
     je .lo
-    mov dx, ds                      ; OUR REGION ABOVE 1MB (OS88_HIGH): the
-    mov bl, SEG_REAL                ; bracket copies it DOWN, so the rings
-    call OSAPI_SEG                  ; leave its room as well (53.2.3's
-    jnc .lo                         ; FSXR_ROOM otherwise)
-    add word [vb_rkeep], VB_REGKB
-.lo:
+    call vb_low                     ; OUR REGION ABOVE 1MB (OS88_HIGH) came
+    jnc .lo                         ; down at the entry (vb_low); refused
+    add word [vb_rkeep], VB_REGKB   ; there, again here, and refused here
+.lo:                                ; too the bracket copies it: its room
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov [vb_capm], ax
     mov [vb_vid], dl
+    ret
+
+; vb_low - kern_mega in protected mode: OUR REGION, which OS88_HIGH put
+; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
+; SEG_LOW, KERN-MEGA-PLAN 14.178) - at the entry, before anything is sized
+; or a window exists, and again at a play's door if the entry was refused.
+; Every real-mode bracket copies the region into conventional memory, so
+; above 1MB its pool block only sat idle beside the copy and the hold was
+; sized without its KB; down, the bracket runs it where it is (kern_big's
+; arrangement). CF = 0 conventional; CF = 1 still above 1MB, or a real-
+; mode kernel's refusal - every kernel but kern_mega in protected mode
+; refuses the verb as unknown, which costs one call and no CPU test
+; (tests/megapkg.txt). AX, BX, DX spent
+vb_low:
+    mov dx, ds
+    mov ax, vb_reloc
+    mov bl, SEG_LOW
+    call OSAPI_SEG
     ret
 
 ; vb_mklist - kern_mega's door to a REAL-MODE bracket (SPEC.md 53.2.3, the
@@ -823,6 +850,18 @@ vb_mklist:
     mov di, vb_rlst_bank
     call os88real_prep
     jc .out
+    call vb_mkfsxl
+    clc                             ; (the compares there leave CF anyhow)
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; vb_mkfsxl - the LIST of what a real-mode bracket reads (SPEC.md 53.2.3):
+; the bundle's file by the name vb_load found it under, SOUND.DRV when a
+; card plays and EMS.DRV for an EMS hold, into vb_fsxl. AX, SI, DI, ES spent
+vb_mkfsxl:
     push ds
     pop es
     mov di, vb_fsxl
@@ -846,9 +885,45 @@ vb_mklist:
 .e2:
     mov al, FSXL_END
     stosb
-    clc                             ; (the compares above leave CF anyhow)
-.out:
+    ret
+
+; vb_prep - kern_mega in protected mode, before the hold is sized (vb_load's
+; .rings) and before each play's rings are (.claimed): the real-mode bracket's door PREPARED with the list the play
+; will hand it (OSAPI_FSX_RUN FSXF_PREP, SPEC.md 53.2.3.1, KERN-MEGA-PLAN
+; 14.180) - each driver it carries brought down out of the pool, so the
+; hold has their KB as kern_big's XMS has, and [vb_rkeep] VB_RKEEP and the
+; conventional KB the door will still claim, so the rings leave exactly that
+; and not VB_RKEEPM's guess. Refused (a kern_mega before 14.180): vb_door's
+; guess stands. AX, BX, CX, DX spent
+vb_prep:
+    push si
+    push di
+    push bp
+    push es
+    call vb_mkfsxl
+    cmp word [vb_ring], 0           ; (before vb_cardclaim has run: the card
+    jne .l                          ; the play will claim a ring for)
+    call OSAPI_SND_CAPS
+    test ax, SND_CAP_PCM_BG
+    jz .l
+    dec di                          ; (over FSXL_END)
+    mov ax, FSXL_DRV | (DRVC_SOUND << 8)
+    stosw
+    mov al, FSXL_END
+    stosb
+.l:
+    mov bp, vb_fsxl
+    mov ax, vb_main
+    mov bx, [vb_win]
+    mov cx, FSXF_REAL | FSXF_PREP
+    xor si, si
+    call OSAPI_FSX_RUN
+    jc .o
+    add ax, VB_RKEEP
+    mov [vb_rkeep], ax
+.o:
     pop es
+    pop bp
     pop di
     pop si
     ret
@@ -1156,8 +1231,39 @@ vb_docnames:
     pop bx
     ret
 
-; vb_paint - W_PAINT: four lines of text, the rest of the box filled once
+; vb_paint - W_PAINT: the window's face, then the About card over it when
+; it is up (os88ui_about_d: drawn LAST, the region already armed)
 vb_paint:
+    call vb_face
+    cmp byte [vb_abon], 0
+    je .r
+    mov bx, [vb_win]
+    mov si, vb_ablines
+    call os88ui_about_d
+.r:
+    ret
+
+; vb_about - OSAPI_ABOUT_SET's handler: SI = the window, no region armed, so
+; the handler entry (os88ui_about) arms one
+vb_about:
+    mov byte [vb_abon], 1
+    mov bx, si
+    mov si, vb_ablines
+    jmp os88ui_about
+
+; vb_abdismiss - a key or click takes the card down; CF = 1 it was the
+; card's, and the caller must not also act on it (Enter must not play)
+vb_abdismiss:
+    push ax
+    mov si, [vb_win]
+    mov bx, vb_abon
+    mov ax, vb_paint
+    call os88ui_abdismiss
+    pop ax
+    ret
+
+; vb_face - four lines of text, the rest of the box filled once
+vb_face:
     push si
     mov bx, [vb_win]
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
@@ -1280,6 +1386,10 @@ vb_paint:
 
 ; vb_onkey - Enter plays; anything else is the window's
 vb_onkey:
+    push si
+    call vb_abdismiss               ; (the About card's, if it is up)
+    pop si
+    jc .r
     cmp byte [vb_none], 0           ; (no battle: nothing to play)
     jne .r
     cmp al, 13
@@ -1289,6 +1399,10 @@ vb_onkey:
 .r:
     ret
 vb_onclick:
+    push si
+    call vb_abdismiss
+    pop si
+    jc .r
     cmp byte [vb_none], 0
     jne .r
     push si
@@ -1457,6 +1571,14 @@ vb_play:
 .ran:
     call vb_between                 ; (the claims a desktop window holds)
     popf
+    jc .nc
+    cmp byte [vb_cnope], 0          ; kern_mega's bracket REFUSED THE CACHE
+    je .nc                          ; (vb_main): the battle loaded again
+    mov byte [vb_cnope], 0          ; with the copying hold, and played -
+    mov byte [vb_noinp], 1          ; once, the gate shut for the window's
+    call vb_unload                  ; life
+    jmp .go
+.nc:
     mov al, [vb_cvon]               ; (the picture's as the desktop came
     mov [vb_cvback], al             ; back: up already, no text flash - a
     jnc .back                       ; test's, vbtcover)
@@ -1587,13 +1709,16 @@ vb_dread:
     cmp dx, [di+FSEQ_OFF+2]
     je .at
 .seek:
-    xor cx, cx                      ; seek: zero the cursor, set the offset
+    call vb_bmseek                  ; FROM A BOOKMARK, or the cursor itself,
+    jnc .setoff                     ; when one is at or before it (126.4.8)
+    xor cx, cx                      ; ...else zero the cursor, set the offset
     mov [di+0], cx
     mov [di+2], cx
     mov [di+4], cx
     mov [di+6], cx
     mov [di+8], cx
     mov [di+10], cx
+.setoff:
     mov [di+FSEQ_OFF], ax
     mov [di+FSEQ_OFF+2], dx
 .at:
@@ -1612,7 +1737,7 @@ vb_dread:
     mov di, [vb_rcur]
     mov si, [vb_namep]
     push cx
-    call OSAPI_FILE_READ_SEQ
+    call vb_rseq                    ; (READ_SEQ, with the map's run: vbbm.inc)
     pop cx
     jc .bad
     or dx, dx
@@ -1965,6 +2090,7 @@ vb_load:
 .fail1:
     jmp .fail
 .sized:
+    call vb_bmbuild                 ; every clip head bookmarked (126.4.8)
     ; THE SMALLEST RING this bundle can play from (format 8): its largest
     ; clip's entries and 16 KB past them - record 0 and a piece, read with
     ; the entries before the clip may start (vb_headof)
@@ -2020,11 +2146,16 @@ vb_load:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
     push ax                         ; THE HOLD, opened here once a session
-    cmp byte [vb_pmd], 0            ; (kern_mega: at .claimed, below): a
-    jne .rh                         ; CACHE keeps the idle loop in its block
-    cmp byte [vb_hopd], 0           ; (126.4.6), and the claim has no part
-    jne .rh                         ; for it
-    mov byte [vb_hopd], 1
+    cmp byte [vb_hopd], 0           ; (kern_mega too, at its door: an XMS
+    jne .rh                         ; block, EMS pages and the bounce are
+    mov byte [vb_hopd], 1           ; refused inside a real-mode bracket): a
+                                    ; CACHE keeps the idle loop in its block
+                                    ; (126.4.6), and the claim has no part
+                                    ; for it
+    cmp byte [vb_pmd], 0            ; (kern_mega: its door PREPARED first,
+    je .hop                         ; the drivers down before the hold sizes
+    call vb_prep                    ; the pool - 53.2.3.1)
+.hop:
     call vb_hopen
 .rh:
     pop ax
@@ -2064,12 +2195,11 @@ vb_load:
                                     ; the rings' below (no hole on the desktop)
     cmp byte [vb_pmd], 0            ; ON kern_mega THE BRACKET READS: no
     je vb_lread                     ; paragraph is added to a selector
-    cmp byte [vb_hopd], 0           ; (VBATTLE-MEGA-PLAN W1) - and the HOLD
-    jne .ok                         ; is opened here, once: its XMS block,
-    mov byte [vb_hopd], 1           ; its EMS pages and its bounce are refused
-    call vb_hopen                   ; inside a real-mode bracket (W3)
-.ok:
-    clc
+    call vb_prep                    ; (again each play: the door's figure for
+                                    ; the rings, the drivers down if an
+                                    ; instance's end took them back up - and
+                                    ; an EMS hold's EMS.DRV now it is named)
+    clc                             ; (VBATTLE-MEGA-PLAN W1)
     ret
 .fail:
     stc
@@ -2426,12 +2556,29 @@ vb_cardclaim:
     call OSAPI_SND_CAPS
     test ax, SND_CAP_PCM_BG
     jz .out
-    mov ax, VB_RL / 1024 + 1
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    call vb_ringclm
     jc .out
     mov [vb_ring], dx
 .out:
+    ret
+
+; vb_ringclm - the card's ring and its words, all of it the page-safe head,
+; from the top, CONVENTIONAL on every kernel: the paragraph door with a head.
+; kern_mega's KB DMA door gives an OS88_HIGHMEM package a pool block for a
+; head (KERN-MEGA-PLAN 14.160), and vb_ring is in vb_rlst - FSXF_REAL's
+; bracket feeds it in real mode, where a pool block has no segment.
+; out: CF = 1 refused, else DX = the ring. Every other register kept
+vb_ringclm:
+    push ax
+    push bx
+    push cx
+    mov ax, (VB_RL / 1024 + 1) * 64 ; paragraphs (SPEC.md 50.3.7)
+    mov cx, ax
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vb_rclaim - the two CLIP RINGS, EACH ITS OWN CLAIM (VBATTLE-RAM-PLAN R1):
@@ -2439,22 +2586,53 @@ vb_cardclaim:
 ; a machine that has been used, the second-largest hole, where one claim for
 ; both could only ever have one - and then, when ring 1 went somewhere else
 ; and ring 0's run has room left over, ring 0 claimed again over all of it.
+; THE CACHE's pair (126.4.6) is ring 1 at its least, claimed first, and
+; ring 0 the largest run left (KERN-MEGA-PLAN 14.179).
 ; Each is cut to whole 4 KB and has its guard past it; VB_RKEEP is left free
 ; for the kernel's file reads (a FAT window). OSAPI_MEM_AVAIL counts the
 ; desktop's caches as free and the claim sheds them (SPEC.md 50.6.3): the
 ; battle reads one file through its own cursors and walks no directory.
+; THE DOOR'S ROOM (kern_mega: [vb_rkeep] past VB_RKEEP, FSXF_PREP's answer)
+; is HELD while the rings are sized - claimed as the door claims it, bottom-
+; up first fit, and given back before the bracket - so where it lands is
+; where the door's claims will: in a hole no ring is sized from (the card
+; ring's 64 KB-page gap under it, 8 KB at 640K + 384K), and the rings then
+; leave VB_RKEEP alone, or in the rings' run, which is the room left as
+; before. Kept out of the sum, it cost ring 0 a 4 KB unit whenever the
+; door's KB went to that gap (KERN-MEGA-PLAN 14.187). AX, BX, CX, DX spent;
 ; CF=1 and [vb_err] when there is not room for VB_CRMIN each
 vb_rclaim:
     call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
     sub ax, [vb_rkeep]              ; largest run claimed and given back. The
-    jc .no                          ; kernel can serve that only by shedding
+    jc vb_rcpair.no                 ; kernel can serve that only by shedding
     xor cx, cx                      ; (conventional: the DMA door, no head)
     call OSAPI_MEM_CLAIM_DMA        ; the caches and packing what moves - a
     jc .pk                          ; claim that fits a free run as it stands
     call OSAPI_MEM_FREE             ; does neither, and on a USED machine the
 .pk:                                ; directory read-ahead's 31.5 KB was left
-    call OSAPI_MEM_AVAIL            ; a hole under a 2 KB claim (VBATTLE-RAM-
-    call .pair                      ; PLAN R1). Then THE PAIR, half and half
+    mov ax, [vb_rkeep]              ; a hole under a 2 KB claim (VBATTLE-RAM-
+    push ax                         ; PLAN R1). THE DOOR'S ROOM HELD (above):
+    sub ax, VB_RKEEP                ; none on a real-mode kernel's door
+    jbe .rc
+    xor cx, cx
+    call OSAPI_MEM_CLAIM_DMA        ; (CX = 0: plain, bottom-up, conventional
+    jc .rc                          ; - the door's own placement; refused, the
+    mov word [vb_rkeep], VB_RKEEP   ; KB are left as they were)
+    push dx
+    call vb_rcpair
+    pop dx
+    pushf
+    call OSAPI_MEM_FREE
+    popf
+    jmp short .ro
+.rc:
+    call vb_rcpair
+.ro:
+    pop word [vb_rkeep]             ; (POP keeps CF)
+    ret
+vb_rcpair:
+    call OSAPI_MEM_AVAIL            ; Then THE PAIR, half and half
+    call .pair
     jc .no                          ; of what OSAPI_MEM_AVAIL says - which is
                                     ; exactly what a claim gets (it was
                                     ; checked against the heap at the instant:
@@ -2494,31 +2672,33 @@ vb_rclaim:
 .pair:                              ; ring 0 half of AX KB, ring 1 the
     sub ax, [vb_rkeep]              ; largest left. CF=1 none claimed
     jc .pno
+    mov bx, vb_rg0
     cmp byte [vb_cmode], 0          ; THE CACHE (126.4.6): a ring is only
     jne .pc                         ; for a clip it has no slot for - ring
     shr ax, 1                       ; 0 the run, ring 1 the least beside it
     jmp short .p0
 .pc:
-    mov dx, VB_CRMIN                ; ring 1: its least - VB_CRMIN, or the
-    cmp dx, [vb_rmin]               ; bundle's own (vb_rmin) UP to whole 4
+    mov ax, VB_CRMIN                ; ring 1: its least - VB_CRMIN, or the
+    cmp ax, [vb_rmin]               ; bundle's own (vb_rmin) UP to whole 4
     jae .pc1                        ; KB, since a ring is cut to them (62
-    mov dx, [vb_rmin]               ; cut to 60 refused the owner's VGA
-    add dx, 3                       ; battle under VBATTLED, 2026-11-07)
-    and dl, 0xFC
+    mov ax, [vb_rmin]               ; cut to 60 refused the owner's VGA
+    add ax, 3                       ; battle under VBATTLED, 2026-11-07)
+    and al, 0xFC
 .pc1:
-    add dx, 4                       ; ...a 4 KB step of slack, its guard
-    add dl, [vb_cgkb]
-    adc dh, 0
-    sub ax, dx
-    jc .pno
-.p0:
-    mov bx, vb_rg0
-    call .claim
-    jc .pno
+    add al, [vb_cgkb]               ; ...and its guard - CLAIMED FIRST, ring
+    adc ah, 0                       ; 0 then the largest left: a cache
+    mov bx, vb_rg1                  ; OSAPI_MEM_AVAIL counts free that a claim
+.p0:                                ; which fits does not shed (kern_mega's
+    call .claim                     ; pinned read-ahead, 9 KB) left ring 1
+    jc .pno                         ; short when ring 0 went first
     call OSAPI_MEM_AVAIL
     sub ax, [vb_rkeep]
     jc .pfree
     mov bx, vb_rg1
+    cmp byte [vb_cmode], 0
+    je .p1
+    mov bx, vb_rg0
+.p1:
     call .claim
     jnc .pok
 .pfree:
@@ -3283,13 +3463,21 @@ vb_main:
     call .ring                      ; places, which vb_rclaim summed from the
     mov bx, vb_rg1                  ; selector at the door
     call .ring
+    cmp byte [vb_hinp], 0           ; THE HOLD IN PLACE checked again in THIS
+    je .m1                          ; bracket: where the pool has the block
+    cmp byte [vb_cmode], 0          ; now (the twin's answer), A20 and a
+    jne .mc                         ; 286's LOADALL state this bracket's
+    call vb_hipq                    ; (a whole hold: else it copies)
+    jmp short .m1
+.mc:
+    call vb_hipok                   ; THE CACHE, planned at the door on the
+    jnc .m1                         ; tier: refused here (no LOADALL), the
+    mov byte [vb_cnope], 1          ; idle loop has no resident room to go
+    jmp short .back                 ; to - vb_play loads the copying hold
+.m1:
     call vb_lread                   ; ...and read (once a session)
     jc .back
-    cmp byte [vb_hinp], 0           ; THE HOLD IN PLACE checked again in THIS
-    je .m1                          ; bracket: the pool may have moved the
-    call vb_hipq                    ; block since (its token is its address
-.m1:                                ; only while it stays), and a 286's
-    call vb_main1                   ; LOADALL state is this bracket's
+    call vb_main1
 .back:
     mov byte [vb_ready], 0          ; (the hook off before the words go
     mov si, vb_rlst                 ; back to selectors)
@@ -4789,9 +4977,7 @@ vb_snd_open:
     mov [vb_dmin], ax
     cmp word [vb_ring], 0
     jne .have
-    mov ax, VB_RL / 1024 + 1
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    call vb_ringclm                 ; (conventional: vb_ringclm says why)
     jc vb_snd_start.out
     mov [vb_ring], dx
 .have:
@@ -5228,6 +5414,7 @@ vb_reader:
 %include "vbattle/vbhold.inc"
 %include "vbattle/vbcache.inc"
 %include "vbattle/vbinp.inc"
+%include "vbattle/vbbm.inc"
 %ifdef VB_DIAG
 %include "vbattle/vbprof.inc"
 %endif
@@ -5382,6 +5569,13 @@ VB_CMD_CLOSE  equ 1
 vb_it_open:   db 'Open...', 0
 vb_it_close:  db 'Close', 0
 vb_s_t1:      db ' VIDEO BATTLE', 0
+; the About card (SPEC.md 12.2, 20.5.1.1): the widest line is 29 cells against
+; the text window's 318-pixel content box
+vb_ablines:   dw vb_ab1, vb_ab2, vb_ab3, vb_ab4, 0
+vb_ab1:       db 'Video Battle for os8088', 0
+vb_ab2:       db 'Battles played as video clips', 0
+vb_ab3:       db 0
+vb_ab4:       db 'Contributed by Elendilon', 0
 vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
 vb_s_t4:      db ' Needs BATTLE.VBT beside it', 0
 vb_s_ready:   db ' Ready', 0
@@ -5434,6 +5628,11 @@ vb_s_healed:  db 'The party heals ', 0
 vb_s_hp:      db ' HP', 0
 vb_s_hits:    db ' hits ', 0
 vb_s_head:    db '        HP          MP', 0
+
+%define OS88UI_ABOUT                ; the About card (vb_about)
+%define OS88UI_NOBTN
+%define OS88UI_ABDISMISS
+%include "os88ui.inc"
 
 %define VD_YIELD                    ; (the yield sites, live in place: vbinp)
 %include "video/vdec.inc"
@@ -5530,6 +5729,16 @@ VB_VAR vb_selfname, 14              ; our own file, and its folder: a battle
 VB_VAR vb_selfdir, 2                ; embedded in it (vb_embfind)
 VB_VAR vb_selfvol, 1
 VB_VAR vb_embat, 4                  ; where it starts in the file, 0 none
+VB_VAR vb_bmok, 2                   ; BOOKMARKS (vbbm.inc, 126.4.8): built
+VB_VAR vb_bmclb, 2                  ; ...the cluster's bytes, 0 none
+VB_VAR vb_bmseg, 2                  ; ...the build's scratch cluster
+VB_VAR vb_bmc, FSEQ_SIZE            ; ...the build's cursor, and AFTER it
+VB_VAR vb_bmt, FSEQ_SIZE            ; ...the template (zeroed together)
+VB_VAR vb_bmk, 4 * (VB_MAXCLIP + 1) ; ...a clip head's +4/+6, the music last
+VB_VAR vb_nrun, 2                   ; THE MAP (vbbm.inc, 18.4.8.3): its runs,
+VB_VAR vb_rgen, 2                   ; ...the generation they hold under,
+VB_VAR vb_runs, 4 * VB_NRUN         ; ...each a first cluster and a last
+VB_VAR vb_xc, FSEQ_XSIZE            ; ...and the cursor a read hands it in
 VB_VAR vb_docvol, 1
 VB_VAR vb_docdir, 2
 VB_VAR vb_docname, 14
@@ -5703,6 +5912,8 @@ VB_VAR vb_icalls, 2                 ; ...records reached in place (a count)
 VB_VAR vb_iyc, 2                    ; ...yields inside a borrow (a count)
 VB_VAR vb_irings, 2                 ; ...rings given a clip in place
 VB_VAR vb_htok, 4                   ; ...the block's token
+VB_VAR vb_hlin, 4                   ; ...its linear base, read in place
+VB_VAR vb_cnope, 1                  ; ...kern_mega's bracket refused the cache
 VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
 VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)
 VB_VAR vb_hpno, 1                   ; ...its hold order had nothing
@@ -5876,6 +6087,7 @@ VB_VAR vb_tink, 1
 VB_VAR vb_tc, 1
 VB_VAR vb_tgnd, 1
 VB_VAR vb_texp, 16
+VB_VAR vb_abon, 1                   ; the About card is up (vb_about)
 VB_REGKB equ ((os88_image_end - $$) + VB_BSS + 1023) / 1024 + 1 ; the region in KB,
                                     ; image and bss: what a real-mode bracket
                                     ; copies down when it is above 1MB

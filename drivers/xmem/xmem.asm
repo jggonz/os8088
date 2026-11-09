@@ -2,9 +2,9 @@
 ; os8088 - XMEM.DRV: the store above 1MB (SPEC.md 41)
 ;
 ; Sizing, a small first-fit allocator over it, and one copy routine with ONE
-; ABI over TWO transports - together with its own prerequisites, the A20 gate
-; (SPEC.md 41.2) and the HMA claim (41.3), which are here because reaching the
-; store is the only thing they are for.
+; ABI over THREE transports (AH=87h, LOADALL, loaded bases) - with its own
+; prerequisites, the A20 gate (SPEC.md 41.2) and the HMA claim (41.3), which
+; are here because reaching the store is the only thing they are for.
 ;
 ; THIS IS AN OVERLAY, NOT A DRIVER (SPEC.md 41.12, 52.11), and the distinction
 ; is the whole reason the file exists. It has a driver's header, a driver's
@@ -81,23 +81,26 @@
 ; reason, which is that a loaded image cannot reach it: no API slot publishes
 ; it, so a driver that needs the scheduler held cannot ask for it itself.
 ;
-; THE CLAIM IS WHOLE KB, and that is heap and not a rung: drv_load_at claims
-; mem_bytes_kb_x of the file's unpacked size, so image + bss of 1,568 bytes
+; THE CLAIM IS WHOLE 512-BYTE GRANULES (SPEC.md 50.2.1; it was whole KB when
+; the figures below were taken), and that is heap and not a rung: drv_load_at
+; claims mem_bytes_gp_x of the unpacked file, so image + bss of 1,568 bytes
 ; held 2,048 of every 286+ machine's heap for the session, and 1,014 held
 ; 1,024 - until the HMA's loader, LOADALL and the two walks took the image to
-; 2,239 and the claim to 3,072. It is 2,042 now, back inside 2,048 (SPEC.md
+; 2,239 and the claim to 3,072. It is 2,041 now, back inside 2,048 (SPEC.md
 ; 41.12.6): the HMA's walk is the tail's, the LOADALL save shares the AH=87h
-; block, and la_borrow is one walk of SI. Six bytes are left; a byte spent
-; here is a byte of a KB on every 286 and 386. Two things in the image are
-; shaped by that, beyond plain tightening:
+; block, and la_borrow is one walk of SI. Seven bytes are left; a byte spent
+; here is a byte of a 512-byte granule on every 286 and 386. Two things in the
+; image are shaped by that, beyond plain tightening:
 ;
 ;   - THE SCRATCH LIVES ON TOP OF THE ATTACH-ONLY CODE (xm_once, at the foot
 ;     of the file). The block table, the AH=87h descriptor block (which the
 ;     LOADALL save shares), the copy's two ends, the pool's size and base and
 ;     the LOADALL state are 208 bytes nothing reads before attach has
-;     finished, and the A20 gate, its probe, the HMA loader and the unreal
-;     arm are 225 bytes nothing runs after it - so the image is the resident
-;     code plus the larger of the two, and today that is the code.
+;     finished, and the gate's enable call with its AH=88h question, the HMA
+;     loader and the unreal arm are 225 bytes nothing runs after it (the gate
+;     and its probe are resident: xm_bios re-opens A20 after every AH=87h) -
+;     so the image is the resident code plus the larger of the two, and today
+;     that is the code.
 ;     xm_attach zeroes the one over the other as its LAST step - from code
 ;     outside the region - and refuses to run twice on one image
 ;     ([xm_feat]'s CPU_F_A20, which only a verified gate sets and nothing
@@ -800,7 +803,7 @@ xm_chk:
 ; raises it around the whole dispatch, which is strictly wider and is exactly
 ; how dsk_xfer hands a locked scheduler to a block driver.
 ;
-; One ABI, two transports, and the caller cannot tell which ran - that is what
+; One ABI, three transports, and the caller cannot tell which ran - that is what
 ; makes the slot safe to hand to an 8086-only package.
 ; -----------------------------------------------------------------------------
 xm_copy:
@@ -823,9 +826,9 @@ xm_copy:
     jc .e2
     mov bp, cx                  ; BP = the byte count
     mov di, [es:si+XMC_CONV]    ; DI:BX = the conventional end, DX:AX the
-    mov bx, [es:si+XMC_CONV+2]  ; extended one - which is source and which
-    cmp byte [es:si+XMC_DIR], 0 ; destination already for extended ->
-    je .order                   ; conventional, and swapped for the other way
+    mov bx, [es:si+XMC_CONV+2]  ; extended one - destination and source as
+    cmp byte [es:si+XMC_DIR], 0 ; they stand for conventional -> extended
+    je .order                   ; (XMC_DIR 0), and swapped for the other way
     xchg ax, di
     xchg dx, bx
 .order:

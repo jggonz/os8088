@@ -1,0 +1,422 @@
+{
+ "area": "gap-xmem-driver-and-cells",
+ "title": "XMEM.DRV (drivers/xmem/xmem.asm) and the kernel's XMS/segment API cells in kernel.asm",
+ "summary": "XMEM.DRV's three transports (AH=87h, LOADALL, loaded bases) are correct and each restores what it borrows. The systemic hole is ownership. On kern_big nothing filters int 15h for DOS programs (xm-1), and the tier-2 copy never re-proves A20 (xm-2); both are confirmed medium hazards with small repairs. The ten low findings are confirmed, two of them corrected: xm-3 misses a third XM_MAX_BLKS reader, and xm-8 misses tests/vidxms.py as a second CPU_F_UNREAL reader. xm-3 and xm-8 also compete for the same attach-code region. 22 doc mismatches: 21 are confirmed and carried as 25 exact-match fixes, all comment- or prose-only (XMEM.DRV reassembles byte-identical with them applied, and checkdocs passes). The os88api.inc contract edit is dropped because tools/abilock.py fingerprints it. One extra fix covers the same 'two transports' in xm_copy's own header.",
+ "strengths": [
+  {
+   "title": "One gate word with tier-0 answers byte for byte",
+   "why": "[xm_kb] is written last, after the service table is staged. Every cell tests it through xm_have and refuses exactly as an 8088 does, so every package has already been exercised against the no-store path on the target machine.",
+   "evidence": "kernel/xmem.inc:342, :398-400, :485-500, :533-544"
+  },
+  {
+   "title": "The verb fence refuses unknown verbs by name",
+   "why": "A verb added later lands on a refusal, never on attach. That is the lesson of snd_entry's orphaned 12KB claim, kept and asserted with %if.",
+   "evidence": "drivers/xmem/xmem.asm:207-214"
+  },
+  {
+   "title": "The scratch is laid over the attach-only code",
+   "why": "208 bytes of table, descriptor block and LOADALL state cost no image bytes, because they overlay 225 bytes of code that runs only at attach. A once-per-image guard and times-asserts protect the layout.",
+   "evidence": "xmem.asm:1541-1599, 1785-1786; listing: xm_once at 0x718, image end 0x7F9"
+  },
+  {
+   "title": "An implicit-free first-fit allocator with every edge handled",
+   "why": "Free space is whatever no entry covers, so a free merges with no code. The round-up carry, the 64MB ceiling, the KB-span overflow in xm_chk and unaligned frees are all refused.",
+   "evidence": "xmem.asm:513-588, 605-645, 707-791"
+  },
+  {
+   "title": "Table mutations are published under cli against teardown on another task",
+   "why": "xm_relall runs on the dying task while the UI task may be mid-alloc. Single-window publication prevents a torn entry from freeing a live block and double-granting its range.",
+   "evidence": "xmem.asm:562-567, 618-632, 672-686"
+  },
+  {
+   "title": "Each transport restores what it borrowed",
+   "why": "AH=87h: the PIC is masked across the IBM AT's sti and A20 is reopened before any IRQ, by resident code. LOADALL: the 102-byte cell table is put back per piece. Loaded bases: DS/ES are reloaded in real mode, so no widened limit outlives a 2KB chunk.",
+   "evidence": "xmem.asm:1036-1061, 1135-1141, 945-952; apps/os88ub.inc:113-135"
+  },
+  {
+   "title": "LOADALL is admitted only by evidence",
+   "why": "Two round trips against the BIOS's own transport, with INT 6 hooked, decide whether LOADALL is used. A trap, a bad word or a cache that does not take all fall back to AH=87h.",
+   "evidence": "xmem.asm:1201-1238, 1244-1320"
+  },
+  {
+   "title": "The real-mode OSAPI_SEG answers with the caller's own arithmetic",
+   "why": "About 30 bytes. Every verb above SEG_BWIN is refused by one ja, so new protected-mode verbs cost real-mode kernels nothing.",
+   "evidence": "kernel/kernel.asm:6394-6426"
+  }
+ ],
+ "findings": [
+  {
+   "id": "xm-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "kern_big does not own int 15h: a DOS program can AH=87h over the pool and the HMA, or shut A20",
+   "detail": "dos_ivtab hooks 20h-2Fh and 33h and not int 15h. On kern_big no kernel code hooks int 15h; megados.inc:1742 is kern_mega's. A DOS program under DOS.O88 on a 286 or later therefore sees the BIOS's raw AH=88h figure and can AH=87h anywhere above 1MB: every instance's pool blocks, the RAM disk store, and .cold and SOUND.DRV in the HMA. On an IBM AT the BIOS's AH=87h also shuts A20 on exit, so the next IRQ0 reaches snd_tick and SOUND.DRV in the HMA with the gate shut - the lock-up xm_bios exists to prevent. HMA-PLAN.md section 3 records only the A20 half, as 'the same class as writing kernel memory', but a pre-XMS program using int 15h is behaving correctly, and HIMEM answers AH=88h with 0 exactly for that program. kern_mega's kern_dos already carries the table.",
+   "evidence": [
+    "apps/dos/dos.asm:3256-3300 dos_ivtab has no 0x15 entry",
+    "kernel/megados.inc:1742 the only int 15h hook (kern_mega)",
+    "drivers/xmem/xmem.asm:1037-1050 the IBM AT's AH=87h closes A20; the BIOS stis",
+    "docs/plans/HMA-PLAN.md:113-119 'Nothing in DOS hooks that today'",
+    "SPEC.md:183545-183556 kern_dos's int 15h table (AH=88h -> 0, AH=87h above 1MB refused AH=03h)"
+   ],
+   "recommendation": "DOS.O88 hooks int 15h for its programs: AH=88h answers AX=0 CF=0; AH=87h with either base at or above 0x100000 answers CF=1 AH=03h; E801h/E820h/C7h/8Ah and AH=24h answer CF=1 AH=86h; everything else chains to the BIOS. Run tests/dostrap/xmsprobe.asm under DOS.O88 on a QEMU 386.",
+   "phase": "now",
+   "bytes_est": "+45..60 DOS.O88 (package), 0 kernel",
+   "listed_as": "docs/plans/HMA-PLAN.md section 3 (A20 half only); not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE",
+   "verdict": "CONFIRMED",
+   "verify_note": "Re-read: dos_ivtab (dos.asm:3256-3300) has no 15h row; the only int 15h filter in the tree is kerndos/kdxms.inc's kdx_i15, and that file's header says 'kern_mega ONLY, AND THE WHOLE FILE IS' (included under KD_MEGA), so neither windowed DOS.O88 nor kern_big's kern_dos filters int 15h. megados.inc:1742 is kern_mega's IVT restore. SPEC.md 96.15.4's table is kern_mega's. HMA-PLAN.md 3 records only the shut-A20 half. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Medium holds: a correct pre-XMS program is the trigger, not a misbehaving one. The byte figure is an estimate.",
+   "prior_art": "HIMEM.SYS int 15h hook (AH=88h -> 0); kern_mega kern_dos's int 15h table"
+  },
+  {
+   "id": "xm-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The tier-2 copy never re-proves A20: a gate shut by a third party becomes a silent write 1MB lower",
+   "detail": "xm_copy probes A20 only on the LOADALL arm. Tier 2 calls xm_ucopy directly, and ub_set puts the base on the bus as given, so with A20 shut a pool block at 0x110000 is written at 0x010000, in the conventional heap. os88ub.inc's premise ('the BIOS's block move ... is the only thing in the tree that might close it') does not hold once DOS.O88 runs foreign code (or kern_dos's kd_a20shut runs). With .cold in the HMA the machine dies anyway; where COLDHMA.SYS is absent, or .cold is in ROM, the result is silent corruption.",
+   "evidence": [
+    "drivers/xmem/xmem.asm:837-849 tier-2 branch has no probe; LOADALL arm probes at :841",
+    "apps/os88ub.inc:44-47 the 'only thing in the tree' premise",
+    "drivers/xmem/xmem.asm:1356-1363 xm_a20_reopen is resident and clobbers only AX-DX"
+   ],
+   "recommendation": "Hoist 'call xm_a20_reopen / jc .e1' above the tier branch and delete the LOADALL arm's probe. The two ends are already stored in [xm_src]/[xm_dst] and BP is the count, so nothing live is clobbered. Optionally route osapi_xmem_walk's HMA door through the same reopen.",
+   "phase": "now",
+   "bytes_est": "~0 XMEM.DRV image (+3 if the walk gets it too); ~40 clocks a copy on a 386",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "Re-read xm_copy (xmem.asm:807-849): `cmp byte [xm_tier], CPU_386 / je .unreal` goes straight to xm_ucopy with no probe; only the tier-1 LOADALL arm calls xm_a20_probe, and it falls back to xm_bios rather than re-opening. xm_ucopy reads only [xm_src]/[xm_dst] and BP, and xm_a20_reopen (xmem.asm:1356) is resident (listing 0x6A0, before xm_once at 0x718), so the hoist is sound. Note the recommendation changes the LOADALL arm's behaviour from 'shut gate -> BIOS path' to 'shut gate -> re-open, then LOADALL'; both are correct. '~0 image' is plausible (net +2 for jc .e1 against the removed probe call and jc), not measured; XMEM.DRV has 7 bytes of slack."
+  },
+  {
+   "id": "xm-3",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Eight block-table entries for the whole machine; 13 cost no image byte",
+   "detail": "XM_MAX_BLKS = 8 is shared by the RAM disk, the cloner and around ten packages, while DOS.O88 alone exposes XMS_NH = 8 handles. HIMEM defaults to 32. The table sits in the scratch over the attach-only code, which costs nothing up to 225 bytes; the scratch is 208 today. The stride is 8 but an entry is 6 bytes, and xm_walk copies exactly 6. At stride 6, 13 entries are 78 bytes against 64, so the scratch goes 208 -> 222, still under 225.",
+   "evidence": [
+    "drivers/xmem/xmem.asm:160 XM_MAX_BLKS 8; :178 XM_BLKSZ 8",
+    "kernel/kernel.asm:1960 the mirror",
+    "apps/dos/dos.asm:14487 XMS_NH 8",
+    "xmem.asm:1541-1599 the scratch layout (208 bytes against 225 of code)"
+   ],
+   "recommendation": "XM_BLKSZ 6 and XM_MAX_BLKS 13 in both files (t_mirror holds them). Update tests/xmcheck.py:55 and tests/xmla.py:92. hiber.inc:610, fsx.inc:3567 and both xm_caps arms read the constant and need no edit.",
+   "phase": "now",
+   "bytes_est": "0 image (2,041 stays), 0 kernel",
+   "listed_as": "memory.md notes the 8-entry table (record); no row in ABI-BREAK-LIST/KERNEL-BYTE-QUEUE",
+   "verdict": "CORRECTED",
+   "verify_note": "The arithmetic holds: XM_SCRATCH = 8 + 48 + 64 + 4 + 28 + 2 = 208 now; 13 x 6 = 78 makes it 222 (even), under the 225-byte region (listing 0x718-0x7F9). Every table walk uses `add si, XM_BLKSZ` (xmem.asm:421, 466, 534, 559, 633, 681, 769), so the stride is one constant. Correction: kernel/fsx.inc:3567 is a third XM_MAX_BLKS reader (kern_mega's no-store answer), and the kernel.asm constant is shared by every build, so 13 also changes kern_mega's no-store BL figure (an immediate, no byte). xm-3 and xm-8 compete for the same region: if xm_arm and xm_gdt go, the region is 135 bytes, so a 222-byte scratch makes the image grow by 87 bytes and the two must be priced together."
+  },
+  {
+   "id": "xm-4",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "CAPS has no largest-run answer, and DOS.O88's XMS 08h reports the total as the largest",
+   "detail": "xm_caps answers the pool less every block, which is a total. DOS.O88's 08h returns that number as the largest block too ('for one pool with one free run is the same number'). Once the pool fragments, a program that allocates the largest free block (the common XMS idiom) gets A0h.",
+   "evidence": [
+    "drivers/xmem/xmem.asm:488-505",
+    "apps/dos/dos.asm:14623-14630"
+   ],
+   "recommendation": "Compute the largest gap in DOS.O88's 08h from OSAPI_XMEM_WALK, which kern_big already answers. That is package-only. A CAPS register answer would be a flagday ABI change, because callers may rely on SI/DI being preserved.",
+   "phase": "now",
+   "bytes_est": "+~50 DOS.O88, 0 kernel (flagday alternative: +~30 XMEM.DRV)",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "dos.asm .query: `call dos_xms_kb / mov dx, ax / mov bl, 0` with the 'same number' comment, and nothing under DOS_MEGA around it. The largest-run answer exists only on kern_mega (kerndos/kdxms.inc's kdx_largest, SPEC.md 96.15.4's 08h row). Spot-checked."
+  },
+  {
+   "id": "xm-5",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "On kern_big, DOS.O88's XMS move does not check the offset against the handle",
+   "detail": "dos_xms_fits and its call sites exist only under DOS_MEGA. On kern_big the kernel's xm_chk passes any range wholly inside some block the DOS instance owns, so a bad offset on handle A that lands inside handle B silently writes B. HIMEM answers A4h/A6h/A7h for that move.",
+   "evidence": [
+    "apps/dos/dos.asm:14874-14915 %ifdef DOS_MEGA around dos_xms_fits",
+    "apps/dos/dos.asm:14966, 14988 the guarded calls",
+    "drivers/xmem/xmem.asm:741-791 xm_chk checks 'some block of this owner'"
+   ],
+   "recommendation": "Take dos_xms_fits and the two non-bothx calls out of the %ifdef.",
+   "phase": "now",
+   "bytes_est": "+~55 DOS.O88",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "Re-read: `%ifdef DOS_MEGA` wraps dos_xms_fits and both `call dos_xms_fits` sites (dos.asm:14963-14968, 14985-14990). Spot-checked; the byte figure is an estimate."
+  },
+  {
+   "id": "xm-6",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Owner 0xFF is shared by the kernel and every driver, and nothing ever sweeps it",
+   "detail": "The RAM disk and the cloner stamp their blocks 0xFF. xm_free and xm_chk compare only BL, so any 0xFF caller can free or copy into any other's block. XMV_RELINST is reached only from instance teardown, so a 0xFF block that is forgotten is lost until reboot. The shared tag has already cost a bug (SPEC.md 62.9.10.2). kern_mega tags drivers 0C0h|row and FDh.",
+   "evidence": [
+    "drivers/ramdisk/rdstore.inc:131-134",
+    "kernel/driver.inc:2884-2895",
+    "kernel/xmem.inc:709-735 the only XMV_RELINST caller",
+    "SPEC.md:84183 kern_mega's 0C0h|row / FDh owners"
+   ],
+   "recommendation": "Stamp a driver row in drv_call/drv_cp_call that xm_ownbl maps to 0C0h|row, and have drv_release dispatch XMV_RELINST with it. xm_relall already takes any AL. The slot users of snd_inst must not see the tag.",
+   "phase": "record",
+   "bytes_est": "+~15 .cold, +~6 .text kern_big",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "rdstore.inc:131-134 says 'stamped 0xFF - the kernel ... nothing owns 0xFF, so our own detach is what frees it'; xm_release_rec (xmem.inc:709-735) is the only XMV_RELINST dispatch on kern_big. Record phase is right."
+  },
+  {
+   "id": "xm-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The tier-1 masked windows on a 6 MHz AT probably exceed one 1200-baud mouse byte (PREDICTED)",
+   "detail": "XM_MAX_COPY = 32KB is justified by not overrunning the mouse UART. On a 6 MHz 5170 a 32KB AH=87h is at least 11 ms, nearer 16 ms with wait states, with the PIC masked. A 16KB LOADALL piece is about 2x the Victory 286's 5 ms. A 7N1 byte at 1200 baud is 7.5 ms, and an 8250 holds one byte. No emulator here times a 286.",
+   "evidence": [
+    "drivers/xmem/xmem.asm:147-152 the rationale",
+    "xmem.asm:1036-1061 the PIC is masked across the BIOS call",
+    "xmem.asm:1083-1090 XM_LPIECE 16KB, about 5 ms on the Victory"
+   ],
+   "recommendation": "Take one field run on a 286-6 with a moving mouse. If overruns are confirmed, use an 8KB LOADALL piece (within 6% of 16KB per the Victory report) and consider 8KB internal AH=87h chunks, priced against the per-call reset.",
+   "phase": "record",
+   "bytes_est": "±0 (constants) to +~10 (internal chunking)",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "PREDICTED, not measured, and labelled so. The arithmetic holds: 16K words at 4 clocks is about 65K clocks, about 11 ms at 6 MHz with no wait states, against 9 bits / 1200 baud = 7.5 ms. The comment at xmem.asm:147-152 claims only that 32KB is better than 64KB. Record phase, needs a field run (docs/FIELD-MACHINES.md)."
+  },
+  {
+   "id": "xm-8",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "xm_arm (unreal FS/GS) is dead weight: one display label reads it, and it leaves the GDTR on zeroed memory",
+   "detail": "Since 41.15 the tier-2 copy uses loaded DS/ES bases. FS and GS are armed only so that CPU_F_UNREAL can be published. The SDK forbids FS/GS to packages. xm_arm's lgdt leaves GDTR on xm_gdt inside the region that attach zeroes, in a movable image. Deleting xm_arm and xm_gdt (90 bytes) leaves 135 bytes of attach code against 208 of scratch.",
+   "evidence": [
+    "drivers/xmem/xmem.asm:59-61, 1734-1782",
+    "apps/redline/inspmod.inc:1669 the CPU_F_UNREAL label",
+    "tests/vidxms.py:339-345 reads bit 0x04 as the bios arm's premise",
+    "apps/os88api.inc:2050-2052 no FS, no GS for packages",
+    "listing: xm_arm 0x79F, xm_gdt 0x7E9-0x7F9"
+   ],
+   "recommendation": "Delete xm_arm, xm_gdt and its call. Leave CPU_F_UNREAL defined and never set, and give tests/vidxms.py another tier-1 witness. Move SPEC.md 41.4's FS/GS rule to history. Spend the headroom on xm-3 or xm-9, not both.",
+   "phase": "now",
+   "bytes_est": "about -20 XMEM.DRV image (-17 region, -3 call site; 2,041 -> ~2,021)",
+   "listed_as": "not listed",
+   "verdict": "CORRECTED",
+   "verify_note": "Correct apart from the reader count. CPU_F_UNREAL has a second reader: tests/vidxms.py:339-345 reads cpu_feat bit 0x04 as evidence that XMEM.DRV attached at tier 1 (the 'bios' arm's premise), so deleting the arm needs that row's witness changed too. The only other FS writer is apps/video/video.asm:7937, under %ifdef LA_SIM (a test build). GDTR is left on xm_gdt in the zeroed region (lgdt at xmem.asm:1747), which is harmless because every later lgdt (ub_set, the BIOS) loads its own. Bytes: the region drops from 225 to 135, so the image is resident code plus the 208-byte scratch, -17. The `call xm_arm` at xmem.asm:294 is resident and goes too, -3. ESTIMATED from the listing. This competes with xm-3 for the region."
+  },
+  {
+   "id": "xm-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The conventional end is unchecked: ES=FFFFh reaches past 0x10FFEF into the pool's first 32KB",
+   "detail": "The kernel folds ES*16+SI with no bound, and the driver's xm_chk checks only the extended end. ES=FFFFh, SI=FFF0h, CX=32768 addresses 0x10FFE0..0x117FDF, past real mode's ceiling and into the first pool block. HMA drivers legitimately pass FFFF:xxxx, so only the part past 0x10FFEF should be refused.",
+   "evidence": [
+    "kernel/xmem.inc:650-659 the fold",
+    "drivers/xmem/xmem.asm:817-818 the only range check"
+   ],
+   "recommendation": "In xm_copy, refuse with AX=2 when conventional end + length > 0x10FFF0. It needs xm-8's room to stay inside 2,048.",
+   "phase": "now",
+   "bytes_est": "+~12 XMEM.DRV image",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "kernel xm_copy (xmem.inc:638-659) is `mov ax, es / mov dx, 16 / mul dx / add ax, bp / adc dx, 0`, and the comment at xmem.inc:604-606 says the length is deliberately left to the image; the image's xm_chk tests only the extended end (xmem.asm:817). A package in real mode can write conventional memory anyway; the new reach is another owner's pool block. 7 bytes of slack, so the +12 estimate needs room from elsewhere, as stated."
+  },
+  {
+   "id": "xm-10",
+   "kind": "size",
+   "severity": "low",
+   "title": "The kernel's copy cell spends 95 resident bytes folding an XMC_ block a register convention avoids",
+   "detail": "On kern_big xm_copy is 83 bytes of .text, plus xm_cblk's 12 of .bss. The rationale is that there are 'not seven [registers] to spare', but osapi_xmem_walk in the same file already passes the caller's ES in DX. COPY can do the same: DX:AX the extended end, CX the length, SI the offset, DI the caller's ES, BL the owner, BH the direction. The cell becomes about 41 bytes. The driver trades seven es: loads (about 33 bytes) for a fold (about 22). kern_mega keeps its block arm for mx_copy.",
+   "evidence": [
+    "build/kernel.map xm_copy 0xBDA..0xC2D (83 bytes), xm_cblk 12 bss",
+    "kernel/xmem.inc:84-90 the rationale; :514-517 the walk passes ES in DX",
+    "drivers/xmem/xmem.asm:813-832 the block reads"
+   ],
+   "recommendation": "Private overlay ABI 3 (XM_ABI_VER) with the register convention under %ifndef KERN_MEGA. PKG_FMT and DRV_VER do not move. Re-check tests/xmla.py.",
+   "phase": "now",
+   "bytes_est": "-54 resident kern_big (-42 .text, -12 .bss); -11 XMEM.DRV image",
+   "listed_as": "not listed (KERNEL-BYTE-QUEUE has no xmem row)",
+   "verdict": "CONFIRMED",
+   "verify_note": "build/kernel.map: xm_copy 0BDA, xm_release_rec 0C2D, so the span is 0x53 = 83 bytes; xm_cblk is resb XMC_SIZE (12) at xmem.inc:739. The -54/-11 figures are hand estimates, not measured spans. KERNEL-BYTE-QUEUE.md has no xmem row (grep)."
+  },
+  {
+   "id": "xm-11",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Folding XMEM_SEL/_RUN into OSAPI_SEG verbs saves 12 bytes of table per real-mode kernel, but works against V3",
+   "detail": "On every kernel but kern_mega, 0x04B3 and 0x04CB are 6-byte OSAPI_XREFUSE cells. As SEG_XSEL/SEG_XRUN the real-mode arm refuses for free (ja .no), saving 12 bytes of table on kern_big and kern_small for about +6 bytes of .mega dispatch. ABI-BREAK-LIST V3 proposes the opposite (hot 8-byte slots, for the Video Player's per-frame calls).",
+   "evidence": [
+    "kernel/kernel.asm:4338-4384 the cells",
+    "kernel/kernel.asm:6394-6426 osapi_segr refuses every verb above SEG_BWIN",
+    "kernel/kernel.asm:2595-2600 OSAPI_XREFUSE"
+   ],
+   "recommendation": "Record it beside V3 and decide by kern_mega's call rate. Fold only if V3 is refused. Keep CODESEL inline.",
+   "phase": "flagday",
+   "bytes_est": "-12 table bytes per real-mode kernel; +~6 .mega",
+   "listed_as": "ABI-BREAK-LIST V3 (opposite direction); T1 renumber",
+   "verdict": "CONFIRMED",
+   "verify_note": "Spot-checked: kernel.asm:4339-4343 and 4370-4374 assemble OSAPI_XREFUSE (OSAPI_ICELL 6) off kern_mega; ABI-BREAK-LIST.md:245 is V3, the opposite proposal. A flagday item, correctly phased."
+  },
+  {
+   "id": "xm-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The cells enforce SPEC.md 41.8's context rule nowhere, and the SDK prose does not state it",
+   "detail": "ALLOC, FREE and COPY are UI-task only per 41.8, because tier 1 is a BIOS call that borrows the caller's stack. No cell checks, and os88api.inc's ALLOC/FREE/COPY lines name no context. A worker copy on tier 1 runs AH=87h on a stack of about 256 bytes.",
+   "evidence": [
+    "SPEC.md:83543-83558",
+    "apps/os88api.inc:2960-2983",
+    "kernel/xmem.inc:608-680"
+   ],
+   "recommendation": "No code change. Name the rule in the SDK prose. That is an abilock-fingerprinted contract comment, so it needs `tools/abilock.py --update` (no bump).",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "not listed",
+   "verdict": "CONFIRMED",
+   "verify_note": "os88api.inc:2960-2983 names no context for ALLOC, FREE or COPY, and CAPS and CPU_INFO say 'Any context'. The SDK edit the reviewer proposed (doc D22) is NOT carried as a doc fix. Those are the indented contract comments of OSAPI_* %defines, which tools/abilock.py fingerprints (its header: 'an OSAPI_* %define's CONTRACT'), so applying it unchecked would fail `make` until the lock is updated. SPEC.md 41.8's half of the mismatch is carried."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; ABI over TWO transports - together with its own prerequisites, the A20 gate",
+   "new_text": "; ABI over THREE transports (AH=87h, LOADALL, loaded bases) - with its own\n; prerequisites, the A20 gate",
+   "why": "xm_copy dispatches to three transports: xm_bios (AH=87h), xm_lcopy (LOADALL, SPEC.md 41.13) and xm_ucopy (loaded bases, 41.15), xmem.asm:837-849."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; One ABI, two transports, and the caller cannot tell which ran - that is what",
+   "new_text": "; One ABI, three transports, and the caller cannot tell which ran - that is what",
+   "why": "Same three-way branch at xmem.asm:837-849; this is xm_copy's own header."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; 2,239 and the claim to 3,072. It is 2,042 now, back inside 2,048 (SPEC.md",
+   "new_text": "; 2,239 and the claim to 3,072. It is 2,041 now, back inside 2,048 (SPEC.md",
+   "why": "build/xmem.bin is 2,041 bytes, and a scratch assembly of this tree is byte-identical; SPEC.md 41.12.6 records the 2,042 -> 2,051 -> 2,041 path."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; block, and la_borrow is one walk of SI. Six bytes are left; a byte spent",
+   "new_text": "; block, and la_borrow is one walk of SI. Seven bytes are left; a byte spent",
+   "why": "2,048 - 2,041 = 7."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": ";     finished, and the A20 gate, its probe, the HMA loader and the unreal\n;     arm are 225 bytes nothing runs after it - so the image is the resident",
+   "new_text": ";     finished, and the gate's enable call with its AH=88h question, the HMA\n;     loader and the unreal arm are 225 bytes nothing runs after it (the gate\n;     and its probe are resident: xm_bios re-opens A20 after every AH=87h)\n;     - so the image is the resident",
+   "why": "The listing puts xm_a20_reopen..xm_kbc_wait at 0x6A0-0x717, before xm_once (0x718); the region 0x718-0x7F9 (225 bytes) holds xm_a20_enable, xm_hma, xm_arm and xm_gdt."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "    mov bx, [es:si+XMC_CONV+2]  ; extended one - which is source and which\n    cmp byte [es:si+XMC_DIR], 0 ; destination already for extended ->\n    je .order                   ; conventional, and swapped for the other way",
+   "new_text": "    mov bx, [es:si+XMC_CONV+2]  ; extended one - destination and source as\n    cmp byte [es:si+XMC_DIR], 0 ; they stand for conventional -> extended\n    je .order                   ; (XMC_DIR 0), and swapped for the other way",
+   "why": "Unswapped, DX:AX is stored to xm_dst and DI:BX to xm_src (xmem.asm:833-836), which is conventional -> extended; XMC_DIR 0 means exactly that (xmem.asm:141). Comment text only."
+  },
+  {
+   "file": "apps/os88ub.inc",
+   "old_text": "; the CPL is 0 throughout), the GDT's linear base computed from CS at every",
+   "new_text": "; the CPL is 0 throughout), the GDT's linear base computed from DS at every",
+   "why": "ub_set computes it from DS (os88ub.inc:110-113, `mov ax, ds`), and so does xm_arm (xmem.asm:1743)."
+  },
+  {
+   "file": "apps/os88ub.inc",
+   "old_text": "; gate at attach and no tier-2 path ever calls the BIOS's block move, which\n; is the only thing in the tree that might close it.",
+   "new_text": "; gate at attach and no tier-2 path of ours calls the BIOS's block move; a\n; DOS program can still shut it (AH=87h, AH=24h, port 92h or the 8042 -\n; docs/plans/HMA-PLAN.md 3), and kern_dos's kd_a20shut does for a program\n; that wants the wrap. Nothing on the tier-2 path re-proves the gate.",
+   "why": "DOS.O88 hooks no int 15h on kern_big (apps/dos/dos.asm dos_ivtab), kerndos/kdpark.inc's kd_a20shut shuts A20 on purpose, and xm_copy's tier-2 branch (xmem.asm:837-849) has no probe."
+  },
+  {
+   "file": "apps/os88xgap.inc",
+   "old_text": "; resident byte and no driver byte. XMEM.DRV has 21 bytes of its 2 KB claim\n; left,",
+   "new_text": "; resident byte and no driver byte. XMEM.DRV has 7 bytes of its 2 KB claim\n; left,",
+   "why": "build/xmem.bin is 2,041 of 2,048; SPEC.md 41.14 already records 21 as the figure 'then'."
+  },
+  {
+   "file": "apps/os88xgap.inc",
+   "old_text": "xg_s0:      dd 0                    ; the block's start, 0 apart from DS:0",
+   "new_text": "xg_s0:      dd 0                    ; the block's start, 0 apart from ES:0",
+   "why": "xg_gap's conventional end is the 8 KB OSAPI_MEM_CLAIM_DMA_HI scratch at ES:0 (os88xgap.inc:56-71), no longer DS:0 (its own header says 'it was DS:0')."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";      its DS), BL bit 0 = it will be far-called\n",
+   "new_text": ";      its DS), BL bit 0 = it will be far-called, BL bit 1 = CX is the\n;      window's length in paragraphs (0 = to the end)\n",
+   "why": "OSAPI_MEM_SUBSEG's SDK contract has BL bit 1 (apps/os88api.inc:2195-2203) and mega_subsegf tests it (kernel/mega.inc, `test bh, 2`)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";      or FFh, XMW_LONG refused (CF = 1, AX = 2, nothing written), any other\n;      BX ignored.",
+   "new_text": ";      or FFh, XMW_LONG refused (CF = 1, AX = 2, nothing written), XMW_FIXED\n;      putting the HMA's contents first when the tail is installed (SPEC.md\n;      28.4.13), any other BX ignored.",
+   "why": "xm_walk calls the tail's walk first for BX = XMW_FIXED when [xm_hdoor] is set (xmem.asm:396-401); apps/os88api.inc's WALK prose says the same."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Only `xmem.inc` writes FS or GS**, a rule the whole tree can\nkeep because a case-insensitive search finds nothing else.",
+   "new_text": "**Only XMEM.DRV's `xm_arm` writes FS or GS** in a shipped build, a rule the\nwhole tree can keep because a case-insensitive search finds nothing else but\nthe Video Player's `LA_SIM` test build.",
+   "why": "The only writers are xmem.asm:1756-1757 (xm_arm) and apps/video/video.asm:7937 under %ifdef LA_SIM; kernel/xmem.inc writes neither."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The tier-2 copy re-arms from the resident GDT\ninside the same `cli` window as the accesses that depend on it, because the\nBIOS is re-entered by *interrupts* and not only by kernel calls.",
+   "new_text": "The tier-2 copy no longer uses them: it loads\nDS's and ES's bases per chunk inside one `cli` window (§41.15), and FS and GS\nare armed once at attach so that `CPU_F_UNREAL` can say so.",
+   "why": "xm_ucopy (xmem.asm:912-967) loads DS/ES bases through os88ub.inc and touches neither FS nor GS; 41.15 itself says 'FS and GS are still armed once at attach'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the same attach that claims it; the bit also tells `xm_init` where its pool\nstarts",
+   "new_text": "the same attach that claims it; the bit also tells `xm_attach` where its pool\nstarts",
+   "why": "No xm_init exists; xm_attach sets the pool base from the HMA claim (xmem.asm:283-288)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "not a pointer: every byte crosses through COPY. UI-task context — the entry\nproc or any window callback,",
+   "new_text": "not a pointer: every byte crosses through COPY. `OSAPI_CPU_INFO` and `_CAPS`\nare any context; `_ALLOC`, `_FREE` and `_COPY` are UI-task context — the entry\nproc or any window callback,",
+   "why": "apps/os88api.inc says 'Any context' for OSAPI_CPU_INFO (it reads two bytes) and OSAPI_XMEM_CAPS; the rest of 41.8's paragraph is about COPY."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "on tier 2 it is a pure unreal-mode move\n(§41.4), and on tier 1 it is `int 15h AH=87h`, bounded to 32KB a call so its",
+   "new_text": "on tier 2 it is a move between loaded segment\nbases (§41.15), and on tier 1 LOADALL where attach verified it (§41.13), else\n`int 15h AH=87h`, bounded to 32KB a call so its",
+   "why": "xm_copy: CPU_386 -> xm_ucopy (loaded bases), xm_lall set -> xm_lcopy (LOADALL), else xm_bios (xmem.asm:837-849)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "1. Nothing above `cpudet.inc` may touch an A20 port or assume a gate exists.",
+   "new_text": "1. Nothing but XMEM.DRV's gate (§41.2), kern_mega's `mega_a20` and kern_dos's\n   own (`kd_a20shut`, §96.40.9.2, and the HMA arm's trampolines) may touch an\n   A20 port or assume a gate exists.",
+   "why": "cpudet.inc no longer has the gate (its own header says so); the A20 port writers are xmem.asm's gate, kernel/mega.inc's mega_a20 and kerndos/kdpark.inc's kd_a20shut plus kerndos/kdhma.inc's reopen."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**The image is ONE KB of heap, and its scratch is laid over its attach code.**\nThe table, the AH=87h descriptor block, the copy's two ends and the pool's\nsize and base (124 bytes) share an address range with the A20 gate, its probe\nand the AH=88h question (126 bytes), which run only inside `xm_attach`;",
+   "new_text": "**Its scratch is laid over its attach code** (the image was one KB of heap\nwhen this was written; it is 2KB now, §41.12.6). The table, the AH=87h\ndescriptor block, the copy's two ends, the pool's size and base and the\nLOADALL state (208 bytes) share an address range with the A20 enable's AH=88h\nquestion, the HMA loader and the unreal arm (225 bytes), which run only inside\n`xm_attach`;",
+   "why": "Listing: xm_once 0x718 to xm_once_end 0x7F9 is 225 bytes holding xm_a20_enable, xm_hma, xm_arm, xm_gdt; the scratch (XM_SCRATCH) is 208. The gate and probe are resident since HMA-PLAN."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The claim is `mem_bytes_kb_x` of the image, and the image had drifted to",
+   "new_text": "The claim was `mem_bytes_kb_x` of the image (whole 512-byte granules now,\n`mem_bytes_gp_x`, §50.2.1), and the image had drifted to",
+   "why": "drv_load_at calls mem_bytes_gp_x (kernel/driver.inc:3742); xmem.asm's own header says the claim was whole KB 'when the figures below were taken'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "UI-task context, like the four XMEM cells. `kern_small`'s cell is its `xm_copy`, which answers exactly that refusal |",
+   "new_text": "UI-task context, like `OSAPI_XMEM_ALLOC`, `_FREE` and `_COPY`. Every kernel but kern_mega answers it inline (`OSAPI_XREFUSE`: AX = 1, CF = 1) |",
+   "why": "kernel/kernel.asm:4339-4343 assembles OSAPI_XREFUSE at 0x04B3 on every kernel but kern_mega, kern_small included; CAPS is any context per apps/os88api.inc."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Additive: every other kernel ignores BX and writes 0 at `XMW_CLS`.",
+   "new_text": "Additive: every other kernel writes 0 at `XMW_CLS` and ignores BX, but for kern_big's `XMW_LONG` refusal above and its `XMW_FIXED` with the HMA's tail installed, which puts the HMA's contents in front (§28.4.13).",
+   "why": "xm_walk: XMW_LONG -> xm_no (AX = 2), XMW_FIXED with [xm_hdoor] set -> the tail's walk first (xmem.asm:384-401)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The kernel's\nown access to memory above 1MB goes through the same BIOS path (§41), so the\nline is already however it needs to be,",
+   "new_text": "XMEM.DRV\nopens A20 at attach and leaves it open, re-opening it after the BIOS's own\nmove (§41.2, `xm_bios`), so the line is already however it needs to be,",
+   "why": "Only tier 1 without LOADALL uses AH=87h; tier 2 and LOADALL need A20 open, and xm_bios re-opens it after its move (xmem.asm:837-849, 1045)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "one 8 KB copy up from DS:0 at gaps of 0, 512 bytes and 1, 2, 4 and 8 KB and",
+   "new_text": "one 8 KB copy up from an 8 KB scratch claim at gaps of 0, 512 bytes and 1, 2,\n4 and 8 KB and",
+   "why": "xg_gap copies up from an OSAPI_MEM_CLAIM_DMA_HI scratch (os88xgap.inc:56-71); its header says 'it was DS:0'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "left then (6 now, §41.12.6)",
+   "new_text": "left then (7 now, §41.12.6)",
+   "why": "2,048 - 2,041 = 7, the figure 41.12.6 itself ends on."
+  }
+ ]
+}

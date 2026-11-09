@@ -2,12 +2,25 @@
 ; rdiag - a KERNEL-SIZED payload that reports which sectors landed wrong
 ;         (SPEC.md 18.93.1)
 ;
-; The canary asks one question at one offset and has now been wrong twice about
-; where to ask it. This asks at EVERY offset: the payload is the same number of
-; sectors as KERNEL.SYS, so boot.asm partitions it into exactly the same
-; transfer runs, and every sector past the first carries its own file-sector
-; index as its first word. Sector 0 - which is always loaded correctly, being
-; ahead of any head boundary - then walks the rest and draws a map.
+; The canary asks one question at one offset and has been wrong three times
+; about where to ask it. This asks at EVERY offset: every sector past the first
+; carries its own file-sector index as its first word, and sector 0 - always
+; loaded correctly, being ahead of any head boundary - walks the rest and
+; draws a map.
+;
+; **IT NO LONGER TESTS A CYLINDER RUN** (the big review's BR-1 follow-up,
+; 2026-11-08). It is a FLAT_PAYLOAD, read whole by STAGE 1, and stage 1's loop
+; has been bounded at the TRACK since stage 2 took the cylinder bound over
+; (boot/boot.asm, "the run, bounded by the track"). So it no longer
+; partitions the payload into the runs stage 2 makes for KERNEL.SYS, no run it
+; makes crosses a head, and on every ROM it now draws all dots - including the
+; ROMs docs/FIELD-NOTES.md 31's survey found failing, when this was read in
+; cylinder runs. What it still sees is a SHORT transfer inside a track (the
+; first row of the table below). For the head-flip question it is inert until
+; stage 1's flat arm takes the cylinder bound behind a define; until then the
+; question is answered by booting the real KERNEL.SYS and reading
+; `boot_cylrun` and `b2_cylok` (SPEC.md 18.93.1, 31.14), as tests/cylrun.py
+; does.
 ;
 ; A '.' is a sector that arrived; an 'X' is one that did not. The shape of the
 ; X's is the diagnosis:

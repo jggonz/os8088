@@ -64,7 +64,7 @@ HOW A SCENARIO IS TIMED - the engine, `Run`, and why it is not settle:
   the shares, which are shares of BUSY time. Kernel samples resolve by
   LINEAR address over every code section at its run-time segment (`.text`,
   `.vga` at KERNEL_SEG; `.cold` at COLD_SEG less the mono slide; `.ovl`;
-  `.boot2` at [spl_fseg]), a local label rolls up into its routine unless
+  `.boot2` at [spl_fseg]; `.boot3` at B3_RAM while the blob lives), a local label rolls up into its routine unless
   --local, and anything else is bucketed: `pkg <title>` (a window's
   package image), `mod <FILE>` (an on-demand module's claim, from mod_tab),
   `BIOS`, `other`.
@@ -179,7 +179,7 @@ def machine_name(m):
 # =============================================================================
 # the kernel's map, where it RUNS
 # =============================================================================
-CODE_SECT = (".text", ".cold", ".vga", ".ovl", ".boot2")
+CODE_SECT = (".text", ".cold", ".vga", ".ovl", ".boot2", ".boot3")
 
 
 class KMap(object):
@@ -200,7 +200,10 @@ class KMap(object):
                 else 0
         segs = {".text": kseg, ".bss": kseg, ".vga": kseg,
                 ".cold": cold, ".ovl": eq.get("FAT_SEG"),
-                ".boot2": fseg or None}
+                ".boot2": fseg or None,
+                # the third boot-only home (SPEC.md 2.9.15), at its constant
+                # segment - live while the blob is, and placed only then
+                ".boot3": (eq.get("B3_RAM") if fseg else None)}
         rows = []
         for n, o in off.items():
             s = sect.get(n)

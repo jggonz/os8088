@@ -3,9 +3,11 @@
 ;
 ; The 512-byte sector relocates itself, finds the data area and reads the
 ; first BOOT2_SECS sectors of KERNEL.SYS to a scratch segment. Those sectors
-; are this file. Everything the sector could not afford is here: the int 1Eh
-; parameter table (SPEC.md 18.92/18.93), read_run's four bounds, the 286
-; head-cross gate (18.93.2), 18.93.1's canary and its shorten-and-reload.
+; are this file. Everything the sector could not afford is here: read_run's
+; bounds, the 286 head-cross gate (18.93.2), 18.93.1's canary and its
+; shorten-and-reload. (The int 1Eh table is stage 1's since SPEC.md 2.9.8,
+; and only stage 1's: the idempotent second copy this file kept went with
+; the big review's boot-7, 41 bytes of blob.)
 ;
 ; It is assembled INTO THE KERNEL, which buys it the kernel's own constants -
 ; the image's sector count falls out of MODC_START rather than being measured
@@ -44,75 +46,43 @@
 %endif                         ; reached and read_run is on its own
 
 ; --- what stage 2 needs of the world it is assembled into --------------------
-DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
-                                ; parameter table. ABOVE the BIOS data area
-                                ; (which ends at 0x4FF), clear of every
-                                ; documented use of the 0x500 page and BELOW
-                                ; KERNEL_SEG, so nothing the kernel or its heap
-                                ; can claim reaches it and it needs no restore
 B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
 BS_CYLASK   equ 509             ; boot/boot.asm's: the Floppy page's Cylinder
                                 ; byte in the boot sector, which stage 1's
                                 ; relocated copy still holds at SS:7C00 here
-KSIG_OFF    equ 4096 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.93.1's probe, as a
-                                ; MEMORY offset - one sector lower on a knob
-                                ; build, whose blob is a sector longer
-                                ; (kernel.asm's BOOT2_KNOBSEC), so the FILE
-                                ; sector is 21 at either length. The shipped
-                                ; literal stays first for t_canary's compare.
-                                ; ...as a MEMORY offset
-                                ; from KERNEL_SEG - the Makefile reads the same
-                                ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
-                                ; which is FILE SECTOR 21 and has to be: the
-                                ; probe must land in a run's SECOND half, and
-                                ; tests/unit/t_canary.py re-derives that from
-                                ; every shipped image's BPB. This equ and the
-                                ; Makefile's KSIG_OFF are one number typed
-                                ; twice; that row checks they agree.
+%include "ksig.inc"             ; KSIG_OFF: SPEC.md 18.93.1's probe, as a
+                                ; MEMORY offset from KERNEL_SEG. GENERATED per
+                                ; build arm by tools/os88ksig.py into
+                                ; $(BUILD)/ksig.inc (found by -I $(BUILD)/,
+                                ; like buildnum.inc), between the two KZIP
+                                ; passes - the big review's boot-10. It was
+                                ; typed here and in the Makefile, with per-arm
+                                ; arithmetic in both, and every move of it was
+                                ; a hand re-derivation.
                                 ;
-                                ; IT MOVES WITH BOOT2_SECS, and has had four
-                                ; values for that reason (4608 -> 4096 when
-                                ; kernel size pass 14 took kern_big 12 -> 13,
-                                ; kern_small staying at 11 and 5120; 5120 -> 4608 when
-                                ; kernel size pass 13 took kern_big 11 -> 12,
-                                ; kern_small staying at 11 and 5120 through
-                                ; BOOT2_SMALLSEC - one FILE sector, 21; 5632 -> 5120 when
-                                ; SPEC.md 26.10.5 took it 10 -> 11, 6144 ->
-                                ; 5632 when SPEC.md 6.0.1 took it 9 -> 10): 11776 while the
-                                ; blob was 13 sectors, 8704 when SPEC.md 2.9.12
-                                ; grew it to 19, and 14336 when 2.5.3's split
-                                ; took it back to 8. The number that has to
-                                ; stay put is the FILE sector, because that is
-                                ; what decides which half of a run the probe
-                                ; lands in - and a probe in a run's FIRST half
-                                ; is loaded CORRECTLY on exactly the machine
-                                ; this exists to catch. tests/unit/t_canary.py
-                                ; re-derives it per geometry and refused 8704
-                                ; the moment BOOT2_SECS changed
-                                ;
-                                ; ...AND IT MOVES WITH THE SET OF GEOMETRIES,
-                                ; which is what took it from 14336 to 50176.
-                                ; The band is the INTERSECTION over every
-                                ; shipped disk, and 19's 1.2MB 5.25" geometry
-                                ; shares none of the old one: data at LBA 29 in
-                                ; runs of 30, so file sector 36 is 5 into a
-                                ; FIRST half there.
-                                ;
-                                ; ...AND IT MOVED LAST BECAUSE `.text` SHRANK
-                                ; UNDER IT. 50176 named file sector 106, at the
-                                ; top of `.text` with 429 bytes above it, and
-                                ; below the end of `.text` the word is in the
-                                ; `.bss` zero padding where every word equals
-                                ; its neighbour a sector away - so the canary
-                                ; PASSES on the one fault it exists to catch.
-                                ; It sat that high because the offset had to be
-                                ; legal for TWO blob lengths, SPLSTARS' being
-                                ; a sector longer, and that intersection is
-                                ; only 106..109. One blob length (SPEC.md
-                                ; 15.3.8.5) widens the band to file sectors
-                                ; 21, 57 and 106..110, and 21 is the bottom of
-                                ; it. The Makefile's KSIG_OFF block carries the
-                                ; whole derivation
+                                ; THE RULE IS ABOUT THE RUN, NOT THE SECTOR
+                                ; (SPEC.md 18.93.1, 2.9.13.3). A run reads
+                                ; correctly up to the head flip and only goes
+                                ; wrong after it, so the probe must sit at or
+                                ; after a flip INSIDE A RUN THAT BEGAN BEFORE
+                                ; IT. Where runs begin is stage 2's business,
+                                ; not the geometry's: read_run cuts at the
+                                ; cylinder and the DMA page, and under KZIP the
+                                ; load restarts twice more - at `.text` (the
+                                ; plain head, in runs of its own) and at
+                                ; `.text` + KZ_HEADSEC (the packed tail). So
+                                ; the generator walks those runs on every
+                                ; system disk the arm ships on, with the arm's
+                                ; own blob, head, length and R, and writes the
+                                ; LOWEST offset that is in the tail, read after
+                                ; a flip on every one of them, and distinct
+                                ; from both neighbours - or fails the build.
+                                ; File sector 21, where this sat from
+                                ; 2026-09-05 to BR-1, was inert on the 360KB
+                                ; and 720KB disks for two months under a
+                                ; hand-typed number. tests/unit/t_canary.py is
+                                ; the independent second reader: its own walk,
+                                ; over the BPBs the images really carry.
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 
 ; --- A COMPRESSED KERNEL (SPEC.md 2.9.13), behind KZIP=1 ----------------------
@@ -123,10 +93,11 @@ B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 ; assembled. Without KZIP they are absent and every path below assembles away.
 ;
 ;   KZ_SECS    what stage 2 reads, in place of B2_KSECS
-;   KZ_HEADSEC how many of those are plain - SPL_RESIDENT, and for its reason:
-;              spl_tick far-calls viddet.inc while the rest is still landing,
-;              so those sectors have to be at their linked addresses DURING
-;              the read and not after it
+;   KZ_HEADSEC how many of those are plain - max(SPL_RESIDENT, the
+;              Makefile's KZ_HEADMIN), which kernel.asm's foot checks, and
+;              for its reason: spl_tick far-calls viddet.inc while the rest is
+;              still landing, so those sectors have to be at their linked
+;              addresses DURING the read and not after it
 ;   KZ_RPARA   how far UP the packed tail lands, in paragraphs, so expanding it
 ;              downwards can never overtake the source (SPEC.md 20.13's trick,
 ;              one level down)
@@ -219,8 +190,8 @@ boot2_entry:
     ; The cylinder, not the track, which on a two-headed floppy doubles it.
     ; It works because the BIOS issues READ DATA with the MULTI-TRACK bit set,
     ; so at the sector numbered EOT the FDC flips head and carries on from
-    ; sector 1 of the same cylinder - and EOT is the byte the parameter table
-    ; below patches. TRACKRUN=1 puts the bound back at the track.
+    ; sector 1 of the same cylinder - and EOT is the byte stage 1 patched
+    ; into the parameter table. TRACKRUN=1 puts the bound back at the track.
     ;
     ; **OUT OF [b2_spt] AND [b2_heads], NEVER OUT OF CX AND DH.** They are the
     ; same numbers, and the registers holding them are three instructions from
@@ -244,44 +215,17 @@ boot2_entry:
                                 ; dsk_xfer spends the rest of the session
                                 ; being careful for nothing
 
-    ; --- take over the diskette parameter table (SPEC.md 18.92/18.93) -------
-    ; int 1Eh is a POINTER, not a handler: it names an 11-byte table the BIOS
-    ; re-reads on every floppy operation, and byte 4 of it is EOT - the last
-    ; sector number the FDC may touch on a track. The IBM PC and XT ROMs say
-    ; 8, from the 8-sector diskettes of DOS 1.x, and the BIOS issues READ with
-    ; the multi-track bit set, so a run reaching sector 9 does not stop - it
-    ; flips to the other head and returns ITS sectors, with CF=0 and the full
-    ; count. Every DOS since 1982 has replaced this table at boot.
-    ;
-    ; The machine's own table is COPIED and one byte patched: the step rate,
-    ; head load/unload, motor timings and gap lengths in it belong to these
-    ; drives and are not ours to guess.
-    ;
-    ; No guard on the vector, deliberately: the BIOS read the BOOT SECTOR
-    ; through it, so a machine that could not use it never got here.
-%ifndef DPT_ROM                 ; DPTROM=1: LEAVE THE ROM'S TABLE ALONE (18.92.1)
-    push ds
-    push es
-    xor ax, ax
-    mov es, ax
-    mov bl, [b2_spt]            ; EOT, banked WHILE DS IS STILL OURS - the
-                                ; `lds si` below is what used to make this a
-                                ; second ES=0 window of its own. BX is free:
-                                ; stage 1 hands over DL, DH, CX, SI, DI and BP
-    mov di, DPT_AT
-    lds si, [es:0x0078]         ; DS:SI = the BIOS's table
-    mov cx, 11
-    cld
-    rep movsb                   ; ...ES:DI = ours
-    mov [es:DPT_AT + 4], bl     ; EOT = this disk's sectors per track
-    mov di, 0x0078              ; ...and the VECTOR through ES, which is
-    mov ax, DPT_AT              ; already 0, rather than setting DS to 0 to
-    stosw                       ; reach it. cld is set above
-    xor ax, ax
-    stosw
-    pop es
-    pop ds
-%endif                          ; DPT_ROM
+    ; --- the diskette parameter table is STAGE 1's (SPEC.md 2.9.8, 18.92) ---
+    ; EOT has to be this disk's SPT before the first run that reaches the end
+    ; of a track, and stage 1's blob read is that run, so boot/boot.asm copies
+    ; the ROM's table to 0000:0580, patches EOT and points int 1Eh at it
+    ; before it reads anything (DPTROM=1 leaves the ROM's table alone, there
+    ; and only there). This file copied it again for as long as it lived in
+    ; the boot sector; once stage 1 did it first, the copy here copied our own
+    ; patched table over itself, and the big review's boot-7 took it out (41
+    ; bytes of blob). Nothing else enters boot2_entry: FLAT_PAYLOAD jumps to
+    ; KERNEL_SEG and the hard disk calls kz_hd alone (SPEC.md 2.9.13.5), and
+    ; the kernel takes its own copy in dsk_dpt_init_x either way.
 
 %ifndef TRACK_RUN
     ; --- may this machine's FDC cross a head? (SPEC.md 18.93.2) -------------
@@ -321,22 +265,60 @@ boot2_entry:
     add ax, BOOT2_SECS          ; ...past ourselves: `.text` begins at the file
     mov [b2_lba], ax            ; sector after this one (SPEC.md 2.9)
 %ifdef KZIP
-    ; --- THE PLAIN HEAD, ITS OWN RUNS (SPEC.md 2.9.13.1) --------------------
-    ; No splash tick in here and nothing lost by that: the tick does not start
-    ; until SPL_RESIDENT sectors have landed, and KZ_HEADSEC is exactly that
-    ; many. What it costs is one extra int 13h - the head does not end on a
-    ; cylinder boundary - and what it buys is that viddet.inc is at its linked
-    ; address for the whole of the read that follows, which is the long one.
+    ; --- THE PLAIN HEAD, ITS OWN RUNS, AT THE TRACK (SPEC.md 2.9.13.1) -----
+    ; Its own runs because the tail lands R paragraphs further up, so the two
+    ; cannot share one; what that costs is an int 13h where the head does not
+    ; end on a run boundary, and what it buys is that viddet.inc is at its
+    ; linked address for the whole of the read that follows, the long one.
     ;
-    ; NOTHING BOUNDS IT BUT [b2_left], and that is read_run's second bound
-    ; already. The first version capped [b2_runmax] instead - which is not a
-    ; cap at all: read_run DIVIDES the LBA by it to find where the current run
-    ; ends, so a borrowed value redefines the geometry rather than shortening
-    ; one read.
+    ; AT THE TRACK BOUND, whatever the gate above chose (the big review's
+    ; BR-1, part 2). The splash's first tick runs code out of these sectors
+    ; - vid_setmode, gfx_rowbase - BEFORE the canary has looked at anything,
+    ; so a head read across a flip on a BIOS that flips at the wrong sector
+    ; would run the other head's bytes as the kernel's: on kern_big's 1.2MB
+    ; disk `.text` sectors 3..8 are past the flip, on kern_small's 360KB and
+    ; 720KB disks sectors 4..8. A track bound is a GEOMETRY read_run can
+    ; divide by (it is .rerun's own), unlike the borrowed head count the
+    ; first version put in [b2_runmax], which redefined the geometry instead
+    ; of shortening a read. What it costs is one more int 13h on an 8088
+    ; where the head crosses a track (kern_big 1.2MB and 1.44MB, kern_small's
+    ; two disks) and nothing where it does not (kern_big 360KB and 720KB).
+    ;
+    ; XCHG/PUSH/POP AND NO GUARD, because .rerun's one-shot guarantee rests on
+    ; [b2_runmax]: the pop puts back exactly what the gate (or .rerun) left,
+    ; so a second pass restores the TRACK and widens nothing, and .rerun's own
+    ; `mov sp, B2_STACK` discards the word if a head read exhausts its retries
+    ; - which, at the track bound, read_run answers with its halt and not with
+    ; .rerun. Under TRACKRUN=1 the bound is the track already.
+    ;
+    ; NOTHING ELSE BOUNDS IT: [b2_left] is read_run's second bound.
+%ifndef TRACK_RUN
+    mov ax, [b2_spt]
+    xchg ax, [b2_runmax]        ; the TRACK for the head...
+    push ax                     ; ...and the gate's bound banked for the tail
+%endif
     mov word [b2_left], KZ_HEADSEC
 .head_next:
     call read_run               ; the run, and [b2_lba]/[b2_left]/[b2_dest]
     jne .head_next              ; moved past it: ZF = nothing left
+%ifndef TRACK_RUN
+    pop word [b2_runmax]        ; ...and back, for the tail and the canary
+%endif
+%ifndef BOOT_NOSPLASH
+    ; --- THE FIRST TICK, AS SOON AS THE HEAD IS ABOARD (BOOT3-PLAN item E) --
+    ; It needs the SPL_RESIDENT sectors, and under KZIP KZ_HEADSEC is at least
+    ; that (kernel.asm's foot), so it can run here rather than after the first
+    ; tail run:
+    ; the packed tail is not expanded until kz_all, so nothing the first tick
+    ; may use is in it. The splash, the adapter probe and the bar at 0 come
+    ; one tail run sooner on every disk. After the pop and outside the bound
+    ; above, so .rerun is untouched: its second pass ticks 0 here again, the
+    ; bar's "climbs from 0" (SPEC.md 18.93.1). spl_tick preserves every
+    ; register, and clamps and stores whatever count it is given
+    xor ax, ax                      ; AX = 0 tail sectors done...
+    mov dx, KZ_SECS - KZ_HEADSEC    ; ...of the tail, the bar's whole
+    call spl_tick
+%endif
     add word [b2_dest], KZ_RPARA    ; ...and the packed tail lands R up, which
                                     ; os88kz.py rounds to a SECTOR: read_run's
                                     ; DMA-page bound divides the destination's
@@ -357,7 +339,7 @@ boot2_entry:
     mov ax, dx                      ; only thing this loop reads - the head is
     sub ax, [b2_left]               ; already aboard, and SPL_RESIDENT's test
                                     ; below would be a tautology here because
-                                    ; KZ_HEADSEC *is* SPL_RESIDENT
+                                    ; KZ_HEADSEC is at least SPL_RESIDENT
 %else
     mov dx, B2_KSECS            ; tick the splash once it is fully resident:
     mov ax, dx                  ; AX = sectors done, DX = total (SPEC.md 15).
@@ -397,8 +379,8 @@ boot2_entry:
     ; int 13h answered CF=0 and the full count for every run above. That is
     ; NOT the same as the right BYTES: a run bounded by the CYLINDER only
     ; lands in LBA order because the FDC's multi-track bit carries it onto the
-    ; other head at EOT, and EOT is the byte we patched into the parameter
-    ; table. A BIOS that keeps its own table ignores that patch, flips at 8
+    ; other head at EOT, and EOT is the byte stage 1 patched into the
+    ; parameter table. A BIOS that keeps its own table ignores that patch, flips at 8
     ; instead of 9, and returns the other head's sectors - silently.
     ;
     ; So verify the TRANSFER, never the table: reading our own patch back
@@ -421,46 +403,40 @@ boot2_entry:
     je .nocross                 ; already track-bounded: no run crossed a head
     mov bx, [b2_ksig]
 %ifdef KZIP
-    ; THE CANARY IS UNMOVED AND ITS REASONING IS UNTOUCHED (SPEC.md 2.9.13.3).
-    ; What it verifies is the TRANSFER, and its whole constraint is that its
-    ; FILE SECTOR crosses a head - which is a property of the sector number and
-    ; the geometry, not of what is in it. So it is still file sector 21 on
-    ; every shipped disk; only the memory address moved, because the packed
-    ; tail lands R paragraphs up from where the plain one did. The Makefile
-    ; sums the PACKED file's sector at the same offset.
-  %if KSIG_OFF >= KZ_HEADSEC * 512
-    push es
-    push ax                     ; **AX IS THE ANSWER, NOT A SCRATCH REGISTER.**
-                                ; It was loaded from [b2_runmax] above and is
-                                ; stored into [es:0x0004] below; using it to
-                                ; build the tail's segment here published
-                                ; KERNEL_SEG + KZ_RPARA as the run bound -
-                                ; 1472 on the 360KB disk, where the cylinder
-                                ; is 18. The kernel only tests the word `!= 0`
-                                ; (disk.inc), so the boot was correct and the
-                                ; FINDING was nonsense: SPEC.md 18.93.1's own
-                                ; published number, wrong on every compressed
-                                ; kernel whose KSIG sector lands past the
-                                ; plain head, and silent because nothing but
-                                ; tests/cylrun.py ever reads the value.
-    mov ax, es                  ; ES is KERNEL_SEG, and the two adjustments
-    add ax, KZ_RPARA            ; CANCEL: the tail's base is +head/16 +R and
-    mov es, ax                  ; the offset inside it is KSIG_OFF - head, so
-    pop ax                      ; +R and the SAME OFFSET is the same address
+    ; THE CANARY IS IN THE PACKED TAIL, AND ITS ADDRESS IS ONE IMMEDIATE
+    ; (SPEC.md 2.9.13.3). What it verifies is the TRANSFER, and the Makefile
+    ; sums the PACKED file's sector at KSIG_OFF + BOOT2_PAD (os88ksig.py's
+    ; choice: file sector 57 on kern_big at the 2026-11-08 build), tail
+    ; sector KSIG_OFF/512 - KZ_HEADSEC, which landed at KERNEL_SEG +
+    ; KZ_HEADSEC*512 + R + that many sectors: KSIG_OFF + R, the head's bytes
+    ; and the offset inside the tail cancelling. That is inside the 64KB the
+    ; handoff's ES already names on every kernel (40,960 on kern_big at the
+    ; 2026-11-08 build), so the ES bump this replaced - an arm that undid the
+    ; tail's lift only to add it back as a segment, 11 bytes on kern_small -
+    ; is gone, and the three fences below say where the immediate is legal.
+    ; KZ_RPARA is 0 on pass 1 (SPEC.md 2.9.13.4), which moves the value of a
+    ; `mov si, imm16` and never its length.
+  %if KSIG_OFF < KZ_HEADSEC * 512
+    %error "KSIG_OFF is in the KZIP plain head: the canary must sit in the packed tail, where `+ KZ_RPARA*16` names it - tools/os88ksig.py chose it, so the generator or $(BUILD)/ksig.inc is wrong (SPEC.md 18.93.1)"
   %endif
-%endif
+  %if KSIG_OFF + KZ_RPARA * 16 + 512 > 0x10000
+    %error "the canary's sector at KSIG_OFF + KZ_RPARA*16 leaves the 64KB the handoff's ES names - it needs the segment arm back (SPEC.md 2.9.13.3)"
+  %endif
+  %if KZ_SECS
+    %if KSIG_OFF + 512 > KZ_SECS * 512
+      %error "the canary's sector is past the end of the packed tail stage 2 reads (KZ_SECS) - move it lower (SPEC.md 18.93.1)"
+    %endif
+  %endif
+    mov si, KSIG_OFF + KZ_RPARA * 16
+%else
     mov si, KSIG_OFF
+%endif
     mov cx, 256
 .ksum:
     sub bx, [es:si]             ; BX ends 0 exactly when the sector sums to
     inc si                      ; KSIG
     inc si
     loop .ksum
-%ifdef KZIP
-  %if KSIG_OFF >= KZ_HEADSEC * 512
-    pop es                      ; (flags are not the answer: BX is)
-  %endif
-%endif
     or bx, bx
     jne .rerun
     inc byte [b2_cylok]         ; FE -> FF: this boot SAW a head crossed right
@@ -541,6 +517,63 @@ boot2_entry:
     %error "the packed kernel's tail is read over stage 2's blob - raise BLOB_LIFT (kernel.asm)"
   %endif
 %endif
+%endif
+
+; --- THE BOUNCE'S GUARDS (SPEC.md 2.9.13.7) ----------------------------------
+; read_run reads a run the 64KB DMA page would cut to P, the page boundary it
+; straddles, and copies it down - so [P, P + n*512) is written, and the part
+; above the run's own end is either this read's not-yet-read remainder or the
+; RAM past the read's end. Past the end it must stay under the blob, which is
+; the first thing above the load that is LIVE at stage 2 (the image's nobits
+; rungs, `.lowbss`, `.vgabuf` and `.boot3`'s scratch, are the kernel's, and
+; the kernel has not started; stage 1's sector and stack are above the blob,
+; and the IVT, the BIOS data area and the 0x580 DPT copy are under
+; KERNEL_SEG, below every P). The worst case is a run of B2_BMAXSEC sectors
+; at the HIGHEST page boundary the read crosses, so that is what is asserted,
+; per read, in bytes of linear address. A read that crosses no page cannot
+; bounce, and asserts nothing: kern_small's whole load is under its blob at
+; 0x10000.
+;
+; B2_BMAXSEC is kernel.asm's (BLOB_LIFT carries the same term): the largest
+; CYLINDER of any geometry a system disk is built in - 1.44MB's 18 x 2 - since
+; a run is never longer than the cylinder (bound 1). tests/unit/t_canary.py
+; reads it out of each kernel's map and refuses a shipped disk whose BPB
+; says more.
+%ifdef KZIP
+%if KZ_SECS
+B2_HLO      equ KERNEL_SEG*16                       ; the plain head's read
+B2_HHI      equ B2_HLO + KZ_HEADSEC*512
+B2_TLO      equ B2_HHI + KZ_RPARA*16                ; ...and the packed tail's
+B2_THI      equ B2_TLO + (KZ_SECS - KZ_HEADSEC)*512
+B2_HPHI     equ ((B2_HHI - 1) >> 16) << 16          ; the highest page each
+B2_TPHI     equ ((B2_THI - 1) >> 16) << 16          ; one reaches
+  %if B2_HPHI > B2_HLO
+    %if B2_HPHI + B2_BMAXSEC*512 > BLOB_SEG_AT*16
+      %error "the plain head's DMA bounce can reach stage 2's blob - see read_run's bound 3 (SPEC.md 2.9.13.7)"
+    %endif
+  %endif
+  %if B2_TPHI > B2_TLO
+B2_BNEND    equ B2_TPHI + B2_BMAXSEC*512            ; the bounce's worst end
+    %if B2_BNEND > BLOB_SEG_AT*16
+      %error "the packed tail's DMA bounce can reach stage 2's blob - BLOB_LIFT's bounce term (kernel.asm) should have prevented this (SPEC.md 2.9.13.7)"
+    %endif
+  %else
+B2_BNEND    equ 0                                   ; no page crossed: none
+  %endif
+%endif
+%else
+B2_PLO      equ KERNEL_SEG*16                       ; NOKZIP: one plain read
+B2_PHI      equ ((B2_PLO + B2_KSECS*512 - 1) >> 16) << 16
+  %if B2_PHI > B2_PLO
+B2_BNEND    equ B2_PHI + B2_BMAXSEC*512
+    %if B2_BNEND > BLOB_SEG_AT*16
+      %error "NOKZIP: the plain read's DMA bounce can reach stage 2's blob - BLOB_LIFT's bounce term (kernel.asm) should have prevented this (SPEC.md 2.9.13.7)"
+    %endif
+  %else
+B2_BNEND    equ 0
+  %endif
+%endif
+%ifdef KZIP
 
 ; -----------------------------------------------------------------------------
 ; kz_all - expand every block of the tail, in place (SPEC.md 2.9.13)
@@ -552,7 +585,10 @@ boot2_entry:
 ; Block i's bytes are at (head + R) paragraphs up plus what the blocks before
 ; it occupy; block i lands at (head + i * KZ_BLK). Both walk by whole
 ; PARAGRAPHS - os88kz.py pads each block to one - so neither pointer needs an
-; offset and the decoder starts every block at zero.
+; offset. Each block's 6-byte header is `packed, D + unpacked, D/16`, and the
+; decoder starts it at offset D of a segment D bytes below the landing, so
+; its matches reach back into the blocks already expanded (SPEC.md
+; 2.9.13.6). D + unpacked is under 64KB by os88kz.py's cap, so DI never wraps.
 ;
 ; A ROUTINE and not the straight line it began as, because the hard disk's
 ; boot sector calls it too (2.9.13.5) and a second copy of a decoder's driver
@@ -569,17 +605,22 @@ kz_all:
     mov ds, ax
     xor si, si
     lodsw                       ; the block's packed length...
-    mov bp, ax
-    lodsw                       ; ...and what it expands to
-    mov dx, ax
-    mov es, bx
-    push bx
-    push bp
-    call kz_expand              ; DS:SI -> ES:0, DX bytes, and DS:SI is left
+    xchg bp, ax
+    lodsw                       ; ...where its output ENDS, D + its length...
+    xchg dx, ax
+    lodsw                       ; ...and D/16, its DICTIONARY (2.9.13.6) in
+    push bx                     ; paragraphs: the final bytes below the
+    sub bx, ax                  ; landing its matches may reach. ES goes D
+    mov es, bx                  ; below the landing and DI starts at D, so
+    mov cl, 4                   ; a match reaching back D bytes is still at
+    shl ax, cl                  ; a non-negative offset. 0 on block 0, whose
+    xchg di, ax                 ; dictionary would be the plain head stage 2
+    push bp                     ; has written into (os88kz.py)
+    call kz_expand              ; DS:SI -> ES:DI..DX, and DS:SI is left
     pop bp                      ; past the stream
     pop bx
     pop ax
-    add bp, 4 + 15              ; the header, and up to the next paragraph
+    add bp, 6 + 15              ; the header, and up to the next paragraph
     mov cl, 4
     shr bp, cl
     add ax, bp                  ; ...the next block's bytes
@@ -600,16 +641,19 @@ kz_all:
 ; exists. boot/boothd.asm is a volume boot record with its own reader: it
 ; loads the blob to BLOB_SEG, loads `.text` to KERNEL_SEG and jumps there,
 ; never touching boot2_entry (2.9.9). So a packed kernel arriving that way
-; would be jumped INTO, and the sector has 23 spare bytes to do something
-; about it in.
+; would be jumped INTO, and the sector had the spare bytes to do something
+; about it in (it has seven left).
 ;
 ; What makes it fit in five of them is the ARITHMETIC AGREEING. The floppy
 ; reads the head to KERNEL_SEG and the blocks to KERNEL_SEG + head/16 + R; the
 ; hard disk reads one run to KERNEL_SEG + R, which puts the head at the bottom
 ; of it and the blocks at KERNEL_SEG + R + head/16 - THE SAME PLACE. So the
 ; whole of the difference is moving the head down, and kz_all is then the
-; identical call on identical addresses. The move cannot overlap: R is 20,992
-; and the head is 4,608.
+; identical call on identical addresses. The move cannot overlap: R is
+; KZ_RPARA*16 from os88kz.py (21,504 on kern_big and 10,752 on kern_small at
+; BOOT3-PLAN 16.18) and the head is 2,560 (3,072 on kern_mega). The blocks'
+; dictionaries (2.9.13.6) need nothing here: they reach only into blocks
+; kz_all has already expanded, never into the head this moves.
 ; -----------------------------------------------------------------------------
 kz_hd:
     push bp                     ; the caller's boot timer, which it writes into
@@ -632,7 +676,9 @@ kz_hd:
 
 ; -----------------------------------------------------------------------------
 ; kz_expand - one LZ4 block (SPEC.md 2.9.13.2)
-; in:  DS:SI = the block's stream, ES = where it expands to, DX = its length
+; in:  DS:SI = the block's stream, ES:DI = where it expands to, DX = where it
+;      stops (DI + its length). DI is the block's DICTIONARY, D (2.9.13.6):
+;      ES:0 .. ES:DI-1 are final bytes its matches may copy from
 ; out: DS:SI one past the stream, DI = DX
 ; clobbers: AX, BX, CX, DI, BP, flags
 ;
@@ -655,7 +701,6 @@ kz_hd:
 ; simplification costs is two sectors of the forty it saves.
 ; -----------------------------------------------------------------------------
 kz_expand:
-    xor di, di
 .seq:
     lodsb                       ; the token: literal length in the high nibble,
     mov bl, al                  ; match length - 4 in the low one
@@ -722,7 +767,9 @@ kz_expand:
 ;      the track (SPEC.md 18.91.1). Either way EOT stays SPT.
 ;   2. the sectors still wanted
 ;   3. the 64KB DMA page - a single 512-aligned sector cannot cross one, a run
-;      can, and the controller answers a straddle with error 09h
+;      can, and the controller answers a straddle with error 09h. That one
+;      no longer SHORTENS the run: the run is read whole to the next page's
+;      start and copied down (SPEC.md 2.9.13.7), so a run is bounds 1 and 2
 ; -----------------------------------------------------------------------------
 read_run:
     mov es, [b2_dest]
@@ -737,26 +784,40 @@ read_run:
     jae .page
     mov di, bx
 
-    ; --- 3: the 64KB DMA page ----------------------------------------------
+    ; --- 3: the 64KB DMA page - a BOUNCE, not a bound (SPEC.md 2.9.13.7) ---
+    ; A run the page would cut is read WHOLE to the start of the page above
+    ; - P, which no run of 64KB or less can straddle - and `.out` below copies
+    ; it down to [b2_dest]. It used to be cut in two there, and that is a
+    ; whole int 13h, 1-2 revolutions, to move what one call could
+    ; (PERFORMANCE.md Part 2): one call a page, every boot.
+    ;
+    ; THE BOUNCE IS INSIDE THE LOAD, so it costs the boot floor nothing. The
+    ; run is [dest, dest + n*512) with dest < P < its end, so [P, P + n*512)
+    ; is the run's own top half plus at most n-1 sectors above it - which is
+    ; the part of this same read not yet read, or past the read's end and
+    ; under the blob, where nothing is live at stage 2. The guard at the foot
+    ; of the KZIP section asserts that, from the highest page boundary any
+    ; read crosses plus B2_BMAXSEC, on every kernel; kernel.asm's BLOB_LIFT
+    ; carries the same term so that it holds by construction. The copy runs
+    ; UP the address space with the source above the destination, so the
+    ; overlap is the safe direction for a forward `rep movsw`.
 .page:
-    mov ax, es
-    mov cl, 4
-    shl ax, cl                  ; the low 16 bits of the physical address
-    neg ax                      ; bytes to the page end (0 = a whole page)
-    jz .have
-    mov cl, 9
-    shr ax, cl
-    cmp ax, di
-    jae .have
-    mov di, ax                  ; ...and never zero: every destination here is
-                                ; 512-ALIGNED (ES starts at KERNEL_SEG and
-                                ; advances 32 paragraphs a sector), so the
-                                ; remainder is a multiple of 512 and the shift
-                                ; can only reach 0 from an AX the jz has taken
-.have:
 %ifdef FLOPPY_ONE
     mov di, 1                   ; FLOPPY1=1: one sector a call, the transfer
-%endif                          ; as it was before any of this
+%else                           ; as it was before any of this - and one
+                                ; 512-aligned sector straddles no page
+    mov ax, es
+    mov dx, di
+    mov cl, 5
+    shl dx, cl                  ; the run in paragraphs...
+    add dx, ax                  ; ...and the segment it ends at
+    or ax, 0x0FFF
+    inc ax                      ; P: the next page's segment (an aligned ES
+    cmp dx, ax                  ; names the page after it, which no run
+    jbe .have                   ; reaches, so it never bounces)
+    mov es, ax                  ; the run would straddle P: read it there
+%endif
+.have:
     mov [b2_runsz], di
     mov si, 3                   ; attempts
 
@@ -862,6 +923,21 @@ read_run:
 %endif
     mov ax, [b2_runsz]          ; the whole run: CF=0 is the contract
 .out:
+%ifndef FLOPPY_ONE
+    mov dx, es                  ; a BOUNCED run (bound 3 above) is at P and
+    cmp dx, [b2_dest]           ; not at its destination: copy what the BIOS
+    je .placed                  ; moved - AX sectors, with DISK_TRUST_AL's
+    mov es, [b2_dest]           ; short count as with the contract's - down
+    push ds                     ; to it. ES FIRST: [b2_dest] is a DS-relative
+    mov ds, dx                  ; word, and DS is P after this. AH is 0 (a
+    mov ch, al                  ; run is under 256 sectors), so CH:CL = AL:0
+    mov cl, ah                  ; is AL * 256 words. DF is 0, as kz_expand's
+    xor si, si                  ; `rep movsb` takes it to be after an int 13h
+    xor di, di
+    rep movsw
+    pop ds
+.placed:
+%endif
     add [b2_lba], ax            ; AX = the sectors it moved
     sub [b2_left], ax
     pushf                       ; the loop test, banked past the shift: three
@@ -893,9 +969,12 @@ b2_cylok:    db 0xFF            ; SPEC.md 31.14: FF = Cylinder may apply. A
                                 ; other, and neither may be forced. A hard-disk
                                 ; boot calls only KZ_HD here, never
                                 ; boot2_entry, so it keeps FF and Cylinder is
-                                ; the user's word there. A MASK, so
-                                ; ovl_fdd_apply reads it `cs:` - the blob is
-                                ; one segment until mem_unblob - with one AND.
+                                ; the user's word there. A MASK, read `cs:` -
+                                ; the blob is one segment until mem_unblob -
+                                ; with one AND, by ovl_fdd_cylok (driver.inc),
+                                ; ovl_fdd_apply's blob door since it went to
+                                ; `.boot3` (BOOT3-PLAN wave 2), which may not
+                                ; name this label: it moves between passes.
                                 ; In the blob and not the image, because
                                 ; .rerun's second load overwrites the image
 b2_t0:       dw 0

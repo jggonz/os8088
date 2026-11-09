@@ -1,10 +1,23 @@
 ; Shared splash row composer. DS = KERNEL_SEG; CS owns the state.
 ; OS88_SPINNER prefix, still: emits the clock, spinner and row helpers.
+; A COPY OUTSIDE `.boot2` IS A MODULE'S - CTRL.DRV's Shut Down screen
+; (kernel/shutdown.inc, `.modu`) - which kern_mega runs in protected mode,
+; where CS is a read-only code alias: that copy stores its state through the
+; image's DATA segment (CSDO, PUSH_CSDATA: kernel/kernel.asm), byte for byte
+; the plain copy off kern_mega. It took ~99 completed #GPs a second while the
+; screen spun (KERN-MEGA-PLAN 14.150). The boot's copies (splash.inc, in
+; `.boot2`) run in real mode, before mega_enter, and stay plain. The section
+; decides, so no instance can forget to ask.
 ; The caller supplies prefix_l_{cx,spn,spx,spp}, row buffers and cosine table.
 ; FROM spl_prow DOWN, DS = CS: spl_spin points it there before its first call
 ; and nothing else calls them, so they reach the CS state with no `cs:` - 19
 ; bytes a copy (kernel size pass 18; the boot blob's copy is the one counted).
 %macro OS88_SPINNER 2
+%ifidni __?SECT?__, [section .boot2]
+ %assign OS88SPN_MOD 0
+%else
+ %assign OS88SPN_MOD 1
+%endif
 %1 %+ _clock:
     mov ax, 0x40
     mov es, ax
@@ -51,15 +64,28 @@ SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
     mov bx, ax
     mov al, [cs:%1 %+ _cos_tab + bx]  ; the table is signed BYTES; [spl_cos] stays
     cbw                            ; a word, which spl_xform's imul needs
+ %if OS88SPN_MOD
+    CSDO mov [CSEG %1 %+ _cos], ax
+ %else
     mov [cs:%1 %+ _cos], ax
+ %endif
 %endif
 
+%if OS88SPN_MOD
+    mov ax, [vid_rowadd]        ; (the module's: CSDO, as above)
+    CSDO mov [CSEG %1 %+ _radd], ax
+    mov ax, [vid_wrapbit]
+    CSDO mov [CSEG %1 %+ _rwbit], ax
+    mov ax, [vid_wrapfix]
+    CSDO mov [CSEG %1 %+ _rwfix], ax
+%else
     mov ax, [vid_rowadd]        ; the row walk's three words, banked into CS
     mov [cs:%1 %+ _radd], ax       ; because everything below runs with DS = CS
     mov ax, [vid_wrapbit]
     mov [cs:%1 %+ _rwbit], ax
     mov ax, [vid_wrapfix]
     mov [cs:%1 %+ _rwfix], ax
+%endif
     call %1 %+ _spinadr            ; ES:DI, through gfx_rowbase like every other
                                 ; row here - so CGA's bank interleave and
                                 ; Hercules' four are SPL_NEXTROW_CS's, as they
@@ -70,8 +96,18 @@ SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
                                 ; wherever that landed - the spinner vanished
                                 ; on all three adapters
     push ds
+%if OS88SPN_MOD
+ %ifdef KERN_MEGA
+    PUSH_CSDATA                 ; ...the image's DATA segment on kern_mega,
+    pop ds                      ; whose CS cannot be written through
+ %else
+    mov ax, cs
+    mov ds, ax
+ %endif
+%else
     mov ax, cs
     mov ds, ax                  ; ...so the row copy is one `rep movsb`
+%endif
 
     xor al, al                  ; ...the plain row: verticals only
     mov bx, %1 %+ _rowa
@@ -221,7 +257,7 @@ SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
 
 ; -----------------------------------------------------------------------------
 ; spl_xform - coin-flip a spinner x: AL = box-relative x (0..104) ->
-;             AX = 320 + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else
+;             AX = [spl_l_cx] + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else
 ; -----------------------------------------------------------------------------
 %1 %+ _xform:
     push cx

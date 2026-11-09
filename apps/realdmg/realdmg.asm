@@ -366,8 +366,12 @@ rw_plast        equ rw_pt0 + 2      ; word: [rw_nrun] at the last draw...
 rw_phist        equ rw_plast + 2    ; 8 words: draws by the frames run since
                                     ;   the one before, 1-7 and 8+ (rw_timed;
                                     ;   tests/rdgcore/rdgwin.py reads them)
+rw_czf          equ rw_phist + 16   ; byte: the game's file is stored PACKED
+                                    ;   (rw_czprobe): only OSAPI_FILE_READ
+                                    ;   unpacks it, so one claim or nothing
+rw_fnd          equ rw_czf + 1      ; OSAPI_FIND_SZ: rw_czprobe's record
 %ifdef RDG_AOT
-rw_aseg         equ rw_phist + 16   ; RWA_MAX words: each code image's claim,
+rw_aseg         equ rw_fnd + OSAPI_FIND_SZ ; RWA_MAX words: each code image's claim,
                                     ;   or 0 (rwaot.inc)
 rw_anseg        equ rw_aseg + RWA_MAX * 2 ; byte: images claimed
 rw_afix         equ rw_anseg + 1    ; byte: the images are read and put right
@@ -412,7 +416,7 @@ rw_acode        equ rw_arleft + 1   ; byte: the first image's row (after
                                     ;   the relocations' and the list's)
 rw_bssend       equ rw_acode + 1
 %else
-rw_bssend       equ rw_phist + 16
+rw_bssend       equ rw_fnd + OSAPI_FIND_SZ
 %endif
 RW_BSS          equ rw_bssend - rw_win   ; derived: a sum by hand drifted
 RW_FBUF         equ 5760            ; rdg_render's frame, at [rw_fseg]:0
@@ -800,6 +804,7 @@ rw_load:
     jmp rw_mfree
 rw_load0:
     push si
+    mov byte [rw_czf], 0            ; (the ROM in the package is not packed)
 %ifdef RDG_AOT
     cmp byte [rw_aemb], 0           ; THE ROM IN THE PACKAGE (REALDMG-SPEC
     je .file                        ;   20.13): its size is the meta's, and
@@ -819,6 +824,7 @@ rw_load0:
     jne .rdfail0
     cmp dx, 32
     jb .notrom
+    call rw_czprobe                 ; [rw_czf]: stored packed (rw_plan)
 .sized:
     mov [rw_romkb], dx
     push dx                         ; ONE OPERATION for the cartridge's reads
@@ -4996,6 +5002,7 @@ rw_s_slow3:     db 'Full Screen', 0
 rw_s_stop2:     db 'an invalid opcode', 0
 TOASTSTR rw_s_big, 'REALDMG: needs more XMS'
 TOASTSTR rw_s_notrom, 'REALDMG: not a GB ROM'
+TOASTSTR rw_s_cz, 'REALDMG: unpack the ROM'
 TOASTSTR rw_s_cgb, 'REALDMG: needs GB Color'
 rw_s_mbc:       db 'REALDMG: MBC '
 rw_s_mbcx:      db 'h unknown', 0

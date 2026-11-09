@@ -1142,8 +1142,9 @@ fpg_opbegin:
 ; widget PARKS on the bar between the caller's holds (fpg_finish) instead of
 ; coming down, so a load spread over timer callbacks is one bar, not one per
 ; chunk. out CF = 1 refused: another package holds it, or it could not arm.
-; Every register kept. UI task, a callback or a wake, locked or not (the file calls' own rule; fpg_arm banks the cursor debt lock-free) (fpg_stepb's
-; rule). The end only disowns it: the next gfx_unlock takes it down
+; Every register kept. UI task, a callback or a wake, locked or not (the file calls' own rule,
+; and fpg_stepb's; fpg_arm banks the cursor debt lock-free). The end only
+; disowns it: the next gfx_unlock takes it down
 ; -----------------------------------------------------------------------------
 osapi_fs_op:
     push ax

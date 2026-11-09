@@ -1,0 +1,682 @@
+{
+ "area": "files",
+ "title": "Disk window, file clipboard, Standard File dialog, associations",
+ "summary": "This is the most mature subsystem in the review. A file manager, a chooser, a file clipboard and an association layer share one browser, one listing store per window and one copy engine. Refusal paths are real and hostile on-disk input is bounded where it is read. The 2026 merges (the chooser becoming a Disk window, the listing-home change, the clipboard folding into one step machine) left very little duplication. The weak spot is the seam those merges created: a Disk window's listing claim is now the mount's write destination, named by [dsk_dseg], and the two memory mechanisms that can take or move that claim mid-mount were not both taught about it. On kern_small a shed inside the mount (the read-ahead window's or the FAT window's claim at step 2, before the listing is written) can hand the destination to the claimant, which can corrupt the FAT window (files-1). On kern_big fm_reloc skips the record being launched, so a compaction inside fm_kinit's first mount leaves FS_VSEG stale and fmv_store copies into the old segment (files-2). Each fix is about ten bytes, and the second saves bytes. Beyond those: the Save box commits names dskw_name83 refuses, the global purge-floor word is clobbered and lifted by unrelated parties, fm_measure is needlessly slow, and a lot of text is stale. SPEC.md 22's preamble and field table, 22.6.3's claim list and 54.0/54.1 still describe the global listing snapshot that 22.6.3 retired.",
+ "strengths": [
+  {
+   "title": "The chooser IS a Disk window",
+   "why": "One browser, painter and line editor; the dialog is hooks raised at named sites behind one resident compare. -1,750 resident bytes when it landed, and every Disk window got the chooser's keyboard selection. The pattern to copy wherever a dialog is a role of an existing window.",
+   "evidence": "fdlg.inc header; files.inc:636-643 (fm_kinit adopts [fdlg_win]=0FFFFh); fdlg_hook at fdlg.inc foot"
+  },
+  {
+   "title": "Posted answer, reaped next pass",
+   "why": "Ending a modal inside its own callback while the caller is about to draw that window is the classic use-after-destroy. Posting [fdlg_act] and closing in fdlg_reap with the lock taken fresh is Windows' PostMessage(WM_CLOSE)-not-DestroyWindow discipline. fdlg_gate's ZF/CF answer lets both filters freeze input between post and reap without tests of their own.",
+   "evidence": "fdlg.inc:531-690 (fdlg_reap_x), 946-966 (fdlg_post), 494-505 (fdlg_gate)"
+  },
+  {
+   "title": "Cheap guard on the caller's side of a boundary",
+   "why": "A per-pass hook that answers no 99% of the time costs one compare, not a far call (measured 1.12% of the machine before). The general rule in SPEC.md 38.1.1 deserves promotion to SPEC.md 1.",
+   "evidence": "ui.inc:845-868; fdlg_hook's resident compare"
+  },
+  {
+   "title": "Remembered folder per application",
+   "why": "Mac System 6 Standard File kept ONE folder in low-memory globals (SFSaveDisk/CurDirStore), so one app's dialog moved every app's default. os8088's per-instance side table does not.",
+   "evidence": "fdlg.inc:353-405 (.seed), 467-478 (fdlg_home_dir)"
+  },
+  {
+   "title": "Clipboard as a name; stackless tree walk; a paste that can suspend",
+   "why": "An attacker-shaped tree cannot overflow a 384-byte task stack, and the Replace question is a trip through the event loop with all state in .bss. A same-volume Cut is a three-sector relink.",
+   "evidence": "filecp.inc header, fcp_step 910-1012, fcp_relink 1045-1146"
+  },
+  {
+   "title": "Copies keep compression without knowing about it",
+   "why": "The read is raw and the write derives the hint from the bytes, so a packed file arrives packed on both builds with no special case in the engine.",
+   "evidence": "filecp.inc fcp_xfer 1747-1902; SPEC.md 20.14.4"
+  },
+  {
+   "title": "Coherence without I/O",
+   "why": "fmv_bcast re-aims dsk_dest at the acting window's claim and block-copies into every other window on that folder instead of re-mounting. A paste repaints one damage union, never wm_paint_all.",
+   "evidence": "files.inc:2184-2273, 7307-7430"
+  },
+  {
+   "title": "Hostile input bounded at the read",
+   "why": "ASSOC.DAT counts, sector count and table extent are checked against the file's own size before anything is parsed; header declaration counts are capped; I_SPTR is bounded into fm_pool before use.",
+   "evidence": "assoc.inc:1964-2045, 698-702; files.inc:747-750"
+  },
+  {
+   "title": "One layout cache for painter and hit-tester",
+   "why": "fm_layout computes every coordinate once, with field order asserted, so a click and a paint cannot disagree.",
+   "evidence": "files.inc:3109-3219, %error at 9814"
+  }
+ ],
+ "findings": [
+  {
+   "id": "files-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "kern_small: a shed during a loud mount can give the listing's own destination to the read-ahead or FAT window",
+   "detail": "fmv_load aims dsk_dest at the window's purgeable FS_VSEG claim (MEM_P_VIEW+slot, MEM_PG_LOW) and then mounts. Inside the mount, at step 2 - after the aim and before step 3 writes the listing - dsk_rah_want (MEM_P_DIRW, HIGH, only when a shed took the read-ahead window) and dsk_fatw_want -> dsk_fatw_claim (MEM_P_FATW, MED) claim, both sized by mem_avail_lvl_x at their own rank so a cheaper cache counts as free. mem_claim's shed-and-retry reaches mem_shed_one, which takes the cheapest record strictly below the claimant's rank (skipping only a dirty FAT window); once the TRIV caches are gone that can be this window's own cache. mem_pg_forget's view row hands it to fmv_demote, which zeroes FS_VSEG, FS_VKB and [fm_vseg] but not [dsk_dseg]. The retrying claim can receive those paragraphs, and step 3 then writes the entries and reference index through mov es,[dsk_dseg] into memory that is free or now the read-ahead or FAT window. FAT-window bytes are written back on the next write to that volume. The MEM_RR_ONE dsk_dseg row covers a move on kern_big, not a shed; SPEC.md 22.6.3's safety argument (and tools/dsegaudit.py) covers only the write window, and its 'one claimer in the whole mount is asc_use' is false. ico_need/asc_use in the harvest have the same exposure for the reference-index writes after them.",
+   "evidence": [
+    "files.inc:1693-1715 aim then dsk_chdir_x",
+    "disk.inc:4252 dsk_rah_want at mount step 2; disk.inc:4278 dsk_fatw_want; disk.inc:5991 dsk_fatw_claim",
+    "disk.inc:7505-7570 dsk_rah_want sizes by mem_avail_lvl_x MEM_PG_HIGH then mem_claimp_x",
+    "memory.inc:384 MEM_P_VIEW at LOW (kern_small); 363 FATW MED; 429 DIRW HIGH",
+    "memory.inc:1403-1438 mem_shed_one rank scan, only mem_fatw_dirty skipped",
+    "files.inc:1408-1437 fmv_demote leaves [dsk_dseg]",
+    "memory.inc:3369 rr row is move-only",
+    "SPEC.md:53470 'The one claimer in the whole mount is asc_use'"
+   ],
+   "recommendation": "In mem_shed_one's scan, under %ifdef KERN_SMALL, skip a record whose MC_SEG equals [dsk_dseg] (beside the mem_fatw_dirty skip). Add a soak row that fills a 128KB heap until VIEW caches are the cheapest takeable record, navigates a B: window, and compares the FAT window with the disk; remove the skip and the row should go red.",
+   "phase": "now",
+   "bytes_est": "+~10 .cold kern_small (mov/cmp/je: 4+4+2), 0 kern_big",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Re-read fmv_load, disk_mount_x steps 2-3, dsk_rah_want, dsk_fatw_want, mem_shed_one, mem_pg_own and fmv_demote. Both step-2 claims run with [dsk_dseg] aimed and before .listing; nothing in mem_shed_one or the view row protects the destination. Requires a prior shed of the read-ahead window or a FAT-window claim on that mount, plus no cheaper cache, so it needs memory pressure - but the outcome is a silent write into another claim. Byte estimate refined to ~10. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "files-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "kern_big: fm_reloc does not patch the window being launched",
+   "detail": "app_launch runs KD_INIT before publishing I_STATE=1 (the record is I_STATE 0 until then, so inst_next skips it entirely). fm_kinit_x claims the cache as MOVABLE with fm_reloc, then mounts through fmv_load (dsk_rah_want, dsk_fatw_want, ico_need and asc_use reach mem_claim and so the compactor; mem_can_move does not look at instance state). fm_reloc patches only I_STATE==1 KIND_FILES records, so after a move the launching window's FS_VSEG keeps the old base while [fm_vseg] (fm_reloc's mirror) and [dsk_dseg] (MEM_RR_ONE) move. fmv_store then sees FS_VSEG != [dsk_dseg] and copies the listing out of the new block into the old segment, which is free or someone else's, and FS_VSEG stays stale for the window's life; on DSK_BIGDIR mem_regrow is handed the stale segment. The Standard File chooser opens through the same path.",
+   "evidence": [
+    "instance.inc:1600-1610 KD_INIT before publish",
+    "files.inc:1297-1319 fmv_fit movable claim",
+    "files.inc:681-683 fm_kinit -> fmv_load",
+    "files.inc:9898-9922 fm_reloc's I_STATE==1 test",
+    "files.inc:1216 fmv_store compare",
+    "files.inc:1817-1819 regrow on FS_VSEG"
+   ],
+   "recommendation": "Walk the FM_NSLOT fm_pool blocks and patch any FS_VSEG equal to the moved base, whoever owns the block. fm_kinit_x zeroes FS_VSEG on reuse, so dead blocks are harmless.",
+   "phase": "now",
+   "bytes_est": "~-12 .text kern_big (a fixed 5-block walk replaces inst_next and the I_STATE/I_KIND tests)",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed as described: inst_next skips I_STATE 0, and KD_INIT runs before the publish store. Corrected only the byte estimate: by instruction count the current walk is ~36 bytes and a push cx / mov si,fm_pool / mov cx,FM_NSLOT / cmp-jne-mov / add si,FS_SIZE / loop walk ~23, so about -12 rather than -3. Needs a compaction inside the first mount, so medium stands."
+  },
+  {
+   "id": "files-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The Save box commits names that dskw_name83 refuses",
+   "detail": "fm_editkey's text arm bounds the buffer at 12, filters characters through dskw_char_x and refuses a leading or second dot. It does not enforce the 8-character stem or the 3-character extension, and it allows a trailing dot. fdlg_save (Enter and the Save button alike) checks only FS_MOK and a non-empty box, so ABCDEFGHIJ, A.BCDE or ABC. reaches the application, whose write fails FERR_NAME after the dialog has gone. SPEC.md 38.5 claims the box accepts exactly what dskw_name83 stores.",
+   "evidence": [
+    "files.inc:6686-6729 fm_editkey .text",
+    "diskw.inc:5166-5205 dskw_name83",
+    "fdlg.inc:968-980 fdlg_h_commit/fdlg_save; 1008-1010 .save button path",
+    "SPEC.md:75569"
+   ],
+   "recommendation": "In fdlg_save, after the empty test: mov si, fdlg_name / FDX dskw_name83n / jc fdlg_beep. Optionally enforce 8/3 per keystroke in fm_editkey for every naming prompt (+~14).",
+   "phase": "now",
+   "bytes_est": "+8 .cold kern_big; +8 FDLG.DRV image (0 resident) kern_small",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Read both sides; no other check exists between fdlg_save and the callback (fdlg_reap_x's commit only stats the name). The SPEC.md 38.5 sentence is fixed below to describe what the code does today."
+  },
+  {
+   "id": "files-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The single purge-floor word is clobbered by a paste and lifted by anyone",
+   "detail": "mem_pg_fl is one word (level plus owning task). fcp_paste's multi-file arm overwrites it with the UI task's MED regardless of another task's OSAPI_MEM_FLOOR. fcp_lend and mem_free_rec_x (any instance teardown) set MEM_LVL_TOP unconditionally. If DOS has set a floor and is waiting for its compaction to wake it, a paste or any window close in that gap lifts the floor, and DOS's claim then sheds the read-ahead window it asked to keep. Performance only; kern_big (FM_MSEL, OS88_COMPACT) only.",
+   "evidence": [
+    "memory.inc:1286-1300",
+    "filecp.inc:457-459",
+    "filecp.inc:2347-2348",
+    "memory.inc:4826",
+    "memory.inc:5845-5852"
+   ],
+   "recommendation": "Lift only one's own floor: compare the stamp's task with [sch_cur] in fcp_lend and mem_free_rec_x, and do not set a floor in fcp_paste while another task's floor stands. A per-task floor byte is the structural fix.",
+   "phase": "now",
+   "bytes_est": "~+6 at each of three sites, .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "All four sites read as described; mem_rank_bh applies the floor only for the stamped task, so the clobber is a lost floor, not a wrong refusal."
+  },
+  {
+   "id": "files-5",
+   "kind": "perf",
+   "severity": "low",
+   "title": "fm_measure stages every entry through a 24-byte far copy on every listing",
+   "detail": "The Used sum calls fmv_dient per entry: it banks and republishes fm_vp/fm_vseg, does a 16x16 mul and a DSK_DE_STRIDE dsk_copy_seg, all to read two words. That runs on every fmv_load and for every window fmv_bcast refreshes: roughly 40 ms for 300 entries and 130 ms at the 1,024-entry kern_big ceiling, per navigation, on the 8088 (predicted) - against a navigation that already costs at least one ~400 ms int 13h.",
+   "evidence": [
+    "files.inc:1849-1925",
+    "files.inc:1886-1907 the loop",
+    "files.inc:946-958 fmv_dient",
+    "files.inc:880-898 fmv_get_dir"
+   ],
+   "recommendation": "Walk the cache in place with ES = FS_VSEG, stepping SI by DSK_DE_STRIDE from FV_DOFF+20 and doing add/adc of the size dword (~40 cycles an entry). Keep the existing loop as the fallback when FS_VSEG=0. Take the MartyPC figure in the final pass.",
+   "phase": "now",
+   "bytes_est": "0 to -6 .cold; ~35 ms a 300-entry navigation PREDICTED",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "The loop is as described and the in-place walk is sound. Severity medium -> low: the predicted saving is a few percent of a navigation whose floor is one ~400 ms disk call, and the figure is arithmetic, not measured."
+  },
+  {
+   "id": "files-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "fmv_owner's 'cannot happen' fallback tags the cache as the menu save-under",
+   "detail": "With [fm_vinst]=0 the kern_big arm owns the cache as MEM_P_MSAVE, a purgeable TRIV tag whose mem_pg_own row names menu_sseg. If the branch is ever taken, a shed zeroes the wrong naming word and leaves FS_VSEG dangling: silent corruption from a defensive path.",
+   "evidence": [
+    "files.inc:1376-1382",
+    "memory.inc:1308 mem_pg_own MSAVE row"
+   ],
+   "recommendation": "Use a non-purgeable kernel tag, or refuse the claim (stc) on that branch.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked; the branch is unreachable today (fm_vp_set writes fm_vinst first), so this is latent."
+  },
+  {
+   "id": "files-7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The commit's volume put-back ignores a failed mount",
+   "detail": "fdlg_reap_x's commit calls dsk_chdir_x when the globals moved and never reads CF. Packages re-enter their own folder through inst_vol_enter, but the kernel requesters with no instance (drv_dlg_done_x, fm_img_done_x, compress's Uncompress To, DISKOPS's clone-to-image) then act wherever the failed mount landed (the root, with the write gate shut).",
+   "evidence": [
+    "fdlg.inc:597-606",
+    "kernel.asm:6684-6694 (packages' goto is redundant)"
+   ],
+   "recommendation": "On CF, skip the callback with a beep, the same way the staleness triple skips it.",
+   "phase": "now",
+   "bytes_est": "+2 to +5 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Read .commit: FDX dsk_chdir_x then .here with no jc."
+  },
+  {
+   "id": "files-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Opening a chooser ends other windows' prompts without repainting them",
+   "detail": "fdlg_open_x's .endp loop clears modes 1-2 in every pool block so the chooser can own fm_ebuf. Those windows keep drawing 'New folder: ...' or 'Rename ... to:' with no editor behind it until something repaints them, both during the dialog and after.",
+   "evidence": [
+    "fdlg.inc:336-351"
+   ],
+   "recommendation": "Mark each cleared block FS_DIRTY=FSD_PIXELS (fm_focus spends it as a redraw), or call fm_owed.",
+   "phase": "now",
+   "bytes_est": "~+4 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Read .endp: a byte store and nothing else."
+  },
+  {
+   "id": "files-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Modality filters presses, not drops",
+   "detail": "A drag that starts inside the chooser belongs to the chooser (fm_onclick's row path reaches fm_drag with no chooser test), and fm_dgdrop resolves the drop with wm_hit. So a file dragged out of a Save chooser moves into a Disk window behind it, or becomes a desktop shortcut through OS88_SHORTCUTS' .desk, while the system is supposedly input-modal.",
+   "evidence": [
+    "ui.inc:457-470 fdlg_grab on MDOWN/RDOWN only",
+    "files.inc:3730-3760 row press -> fm_drag",
+    "files.inc:7136-7156 fm_dgdrop",
+    "files.inc:7221-7229 .desk"
+   ],
+   "recommendation": "In fm_dgdrop, when [fdlg_win] is non-zero, refuse any target window that is not the chooser.",
+   "phase": "now",
+   "bytes_est": "~+10 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The FM_MSEL test at 3733 only skips multi-select in the chooser; fm_drag is still reached."
+  },
+  {
+   "id": "files-10",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "kern_small keeps a closed window's 2KB cache claimed",
+   "detail": "The cache is owned by MEM_P_VIEW+slot, which no teardown reaps, so it is freed only when the next tenant of that pool block runs fm_kinit_x. Every closed Disk window, and the chooser's block after every dialog, leaves its claim standing in a heap of about 31KB. The claim is purgeable, but it fragments the heap until shed, and shedding it calls fm_owed for a dead block.",
+   "evidence": [
+    "files.inc:555-565",
+    "files.inc:1432-1433"
+   ],
+   "recommendation": "Free the chooser's cache in fdlg_reap_x after app_close_win, and a KIND_FILES cache on close.",
+   "phase": "now",
+   "bytes_est": "~+10 .cold kern_small",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "fm_kinit_x's own comment says 'A window that closed left its claim standing'."
+  },
+  {
+   "id": "files-11",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The empty-icon test ORs 64 bytes per row",
+   "detail": "fm_draw_icon16 ORs all 32 words of the staged icon to decide 'no icon': about 1,500 cycles a row on the 8088 (or r16,[si+bx] + two dec + jns, x32) and ~3 ms a ten-row list paint (predicted). The fact is known earlier: dsk_ico_stage reaches its .none arm for ICO_R_NONE and for a store row ico_body refuses.",
+   "evidence": [
+    "files.inc:7741-7766",
+    "files.inc:990-1010",
+    "disk.inc dsk_ico_stage .none"
+   ],
+   "recommendation": "Have dsk_ico_stage answer a flag on its .none arm (e.g. CF=1) and test that, instead of scanning the body. Testing the reference byte alone is not equivalent: a row ico_body refuses also stages blank.",
+   "phase": "now",
+   "bytes_est": "~-6 .cold",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Corrected the mechanism (ICO_R_NONE is not the only blank case - ico_body's CF also blanks) and the cycle figure (~1,500 a row, not ~800). A genuinely all-zero store body would then draw blank rather than ico_app16; harmless."
+  },
+  {
+   "id": "files-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "A folder copy silently skips hidden and system files",
+   "detail": "fcp_scan asks dsk_dscan with DL=0 and also tests attr 0x0E itself, so a copied folder is short its hidden and system files with no notice. A cross-volume Cut's dskw_rmtree then stops at the first one with FERR_PROT and leaves a split tree. This is XCOPY's default without /H, but the user is not told until the delete half fails.",
+   "evidence": [
+    "filecp.inc:1222-1225 (DL=0 to dsk_dscan)",
+    "disk.inc dsk_dscan header: hidden and system only with DL=1",
+    "filecp.inc:1297-1298",
+    "diskw.inc:1006-1010"
+   ],
+   "recommendation": "State it in SPEC.md 22.3's limits; optionally toast a count of skipped files before the delete phase.",
+   "phase": "record",
+   "bytes_est": "0 (a toast would be ~+15)",
+   "listed_as": "",
+   "prior_art": "DOS XCOPY skips hidden/system unless /H",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md 22.3's 'Two limits' list does not mention it."
+  },
+  {
+   "id": "files-13",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Any volume's ASSOC.DAT can exhaust the association slots for the session",
+   "detail": "Nothing frees an association slot in a session. The ASSOC.DAT merge creates an app slot for every app row an extension row names, and assoc_ext_take accepts any first byte above 0x20, including lowercase or high-bit bytes no sanitized display name can match. A crafted or merely large cache fills 16/32 and later real declarations drop silently.",
+   "evidence": [
+    "assoc.inc:2077-2100 merge via assoc_app_get",
+    "assoc.inc:734-761 assoc_ext_take",
+    "SPEC.md 54.2 nothing frees a slot"
+   ],
+   "recommendation": "Pass the three bytes through dskw_char_x, and stop absorbing a volume's rows when only a few app slots remain.",
+   "phase": "now",
+   "bytes_est": "~+10 .cold kern_big",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked both routines."
+  },
+  {
+   "id": "files-14",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The inst_tab I_SPTR relocation row covers near pointers as well as segments",
+   "detail": "mem_rr_tab patches every I_SPTR equal to a moved base. For a built-in kind, I_SPTR is a near pointer into its KD_POOL (fm_pool), not a segment. On kern_big fm_pool is at 0AAFBh (build/kernel.map), above every conventional heap segment, which is the only reason this is safe; a heap that reaches A000h or above (kern_mega's selector values, or a smaller .text) could collide and rewrite a Disk window's state pointer. kern_small does not run the table (no OS88_COMPACT), where fm_pool is at 7D2Dh. Cross-area: recorded for the memory reviewer.",
+   "evidence": [
+    "memory.inc:3351",
+    "files.inc:9626 fm_pool in .bss",
+    "instance.inc:201 KD_POOL fm_pool",
+    "build/kernel.map fm_pool AAFB; build/smallk/kernel.map 7D2D"
+   ],
+   "recommendation": "Add a %error bounding fm_pool's offset above the highest heap segment, or filter the row by I_KIND.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Corrected the offset (0AAFBh on kern_big, not ~0C5xx) and added that kern_small, whose fm_pool is far lower, never runs mem_rr_tab."
+  },
+  {
+   "id": "files-15",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Three copies of the module far-hop and two macro vocabularies",
+   "detail": "fdx_go/fdt_go, fcpx_go and extmod's exk_go build the same far frame. FDBODY/FDX/FDK/FDKT/FDRET/FDXJ/FDENT/FDV and FCPBODY/FCPX/FCPXJ/FF/FD/FCV are two dialects of one idea. Each image must carry its own hop, so no resident byte is at stake, but one shared include would make the next module copy nothing.",
+   "evidence": [
+    "fdlg.inc:243-275",
+    "filecp.inc:254-284",
+    "fdlg.inc:131-208 macros",
+    "filecp.inc:82-190 macros"
+   ],
+   "recommendation": "Move the hop and the macro set into one %include (e.g. kernel/modhop.inc), parameterised by the image's section and by how DS is reached (fdlg assumes KERNEL_SEG, filecp loads it under ROM_ADOPT).",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: the two hops are the same frame and differ only in how ROM_ADOPT's segment is fetched."
+  },
+  {
+   "id": "files-16",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Source shaped around tools that cannot evaluate %ifdef",
+   "detail": "FDH_RECT exists only because os88ovlchk files fdlg.inc as .modd on both builds and refuses a near call that is legal on kern_big. FDENT is written 'call %1' so the scan cannot see the word. The hops carry STKBALANCE-OK annotations. Teaching the tools to read NASM's preprocessed source per build would let the code say what it means.",
+   "evidence": [
+    "SPEC.md:75802-75812 'FDH_RECT is not a convenience'",
+    "fdlg.inc:184-196 FDENT note",
+    "fdlg.inc:243-252 STKBALANCE-OK",
+    "tools/os88ovlchk.py:414,610 skips/does not evaluate the preprocessor"
+   ],
+   "recommendation": "Have tools/os88ovlchk.py and tools/stkbalance.py consume nasm -E output (with the build's defines) or the per-build listing.",
+   "phase": "now",
+   "bytes_est": "0 kernel; unlocks ~-10 .cold kern_big in fm_brect",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The SPEC text exists and ovlchk's own comment says it does not evaluate the preprocessor."
+  },
+  {
+   "id": "files-17",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The completion callback could carry the folder",
+   "detail": "The callback gets the name and must trust that its folder is current, which fdlg_reap makes true with a put-back that does not check its result (files-7). OSAPI_ARG_FILE already answers SI=name, DX=cluster, BL=drive. Passing AH=volume and BX=cluster is additive, since nothing is promised in AH or BX today (AH is 0 at the call), and it makes the folder explicit for kernel requesters.",
+   "evidence": [
+    "fdlg.inc:672-688 callback register setup",
+    "assoc.inc:1595-1603 osapi_arg_file_x",
+    "SPEC.md:75626-75632 callback contract"
+   ],
+   "recommendation": "Load AH=[fdlg_sdrv] and BX=[fdlg_scwd] before wm_pkgcall and document it in SPEC.md 38.6 and os88api.inc (abilock --update without a bump).",
+   "phase": "now",
+   "bytes_est": "~+6 .cold",
+   "listed_as": "",
+   "prior_art": "Mac SFReply carried vRefNum with the name",
+   "verdict": "unchecked",
+   "verify_note": "AH = 0 at the call confirmed; whether wm_pkgcall delivers BX untouched was not checked."
+  },
+  {
+   "id": "files-18",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "An extension filter for the Open form",
+   "detail": "Every Open chooser lists everything, and SPEC.md 38.6 tells each app to refuse after the pick. The natural carrier is AH, but fdlg_open_x never reads it (mov ah,0) and the contract defines no AH, so existing packages may leave junk there and adding it needs a bump. Non-matching rows should be greyed rather than hidden, per SPEC.md 47.",
+   "evidence": [
+    "fdlg.inc:318",
+    "SPEC.md:75605-75613",
+    "apps/os88api.inc:1160-1165"
+   ],
+   "recommendation": "Add to ABI-BREAK-LIST: AH = a filter (one 3-byte extension pointer or an index of the app's declared extensions); the Open form greys non-matching file rows and refuses them on commit.",
+   "phase": "flagday",
+   "bytes_est": "~+30 .cold kern_big / FDLG.DRV kern_small",
+   "listed_as": "",
+   "prior_art": "Mac SFGetFile typeList; Win 3.1 GetOpenFileName lpstrFilter; GEOS file selector token filter",
+   "verdict": "confirmed",
+   "verify_note": "fdlg_open_x overwrites AH; neither SPEC.md 38.6 nor the SDK defines it on entry. Not on ABI-BREAK-LIST."
+  },
+  {
+   "id": "files-19",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "System-modal, where COMMDLG was owner-modal and Mac SF app-modal",
+   "detail": "The chooser freezes every window, the bar and the dock. Owner-modal would be better UX, but SPEC.md 38.2 lists packages that now depend on system modality (Telnet's ZMODEM cancel inference, Artful, RAMDISK, Paint's fsx fence, the image commands).",
+   "evidence": [
+    "SPEC.md:75395-75460 38.2"
+   ],
+   "recommendation": "Record only; do not relax without paying for those five dependencies.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "Win 3.1 COMMDLG disables only the owner; Mac SF ran ModalDialog in a single-app world",
+   "verdict": "unchecked",
+   "verify_note": "Record-only."
+  },
+  {
+   "id": "files-20",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The single 'acting window' context held by discipline",
+   "detail": "Everything reads [fm_vp]/[fm_vseg]/[fm_vinst] and the fm_lrec mirror published by fm_vp_set; a path that skips it reads the previous window's directory. GEOS passed every method its instance pointer and Windows every WndProc its hwnd. Here the painter uses every register including BP, so the global is the honest choice on an 8088, but it is this subsystem's one invariant held by prose.",
+   "evidence": [
+    "files.inc:722-760 fm_vp_set header",
+    "files.inc:946-958 fmv_dient exists to dodge it"
+   ],
+   "recommendation": "Record. If the painter is ever restructured, pass the block in DI end to end.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "GEOS *ds:si instance pointer; Windows hwnd in every WndProc",
+   "verdict": "unchecked",
+   "verify_note": "Record-only."
+  },
+  {
+   "id": "files-21",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "ASSOC.DAT is the Mac Desktop file, arrived at independently",
+   "detail": "A per-volume, OS-maintained icon and association cache, rebuilt when stale, is what the Finder's Desktop file and later Desktop DB were. What the Mac did better was type/creator codes, which bind a document to its program without trusting an extension; FAT has no room for them without sidecars. Compared with Win 3.x's single global WIN.INI [Extensions] table, os8088's defaults plus header declarations plus per-volume cache need no installer and travel with the disk.",
+   "evidence": [
+    "assoc.inc:1827-1870 ASC layout",
+    "SPEC.md 54.7"
+   ],
+   "recommendation": "Record. Keep extensions, since header declarations (54.6) already cover the one file type os8088 owns, as GEOS did with tokens.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "Mac Desktop file/Desktop DB; Win 3.x WIN.INI [Extensions]/REG.DAT; OS/2 .TYPE extended attributes; GEOS file-header tokens; Amiga .info default tool",
+   "verdict": "unchecked",
+   "verify_note": "Record-only."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "0x0150 fdlg_open   in AL = 0 Open / 1 Save",
+   "new_text": "0x0124 fdlg_open   in AL = 0 Open / 1 Save",
+   "why": "The cell is OSAPI_JCELL api_fdlg_open at 0x0124 (kernel.asm:2744, os88api.inc OSAPI_FILE_DLG, and 38.6's own heading); 0x0150 is inst_pkg_spawn (SPEC.md:45932)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`fdlg_sizeof` **stats the chosen name**",
+   "new_text": "`fdlg_reap_x`'s commit half **stats the chosen name**",
+   "why": "There is no fdlg_sizeof; the dskw_stat/czsize sizing is inline in fdlg_reap_x's .commit (fdlg.inc:620-656), as 38.9's own fdlg_reap_x row says."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The rule is now the opposite and for a better reason: `fdlg_sizeof` reads the",
+   "new_text": "The rule is now the opposite and for a better reason: `fdlg_reap_x`'s commit half reads the",
+   "why": "Same retired name as 38.6.1; the stat runs in fdlg_reap_x's .commit after the volume put-back (fdlg.inc:597-656)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| the Standard File dialog | `MEM_K_FDLG`, `VIEW_KB`, taken at `fdlg_open` | the dialog's |",
+   "new_text": "| the Standard File chooser | it IS a Disk window (§38.1): its own `FS_VSEG` claim, taken at `fm_kinit` | the chooser's |",
+   "why": "MEM_K_FDLG is reserved and claimed by nothing (memory.inc:254, os88api.inc:2834); the chooser is a KIND_FILES window whose fm_kinit_x runs fmv_fit/fmv_load (files.inc:596-683)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The one claimer in the whole mount is `asc_use`, in the icon\nharvest, after the listing is written and sorted, with `ES` already forced to\n`LOW_SEG` across it for this exact reason (§66.5.10.2).",
+   "new_text": "It is not the only claimer in the mount. Step 2 claims\nafter the destination is aimed and before the listing is written:\n`dsk_rah_want` (the read-ahead window, if a shed took it) and `dsk_fatw_want`\n(a volume's FAT window). The icon harvest claims after the listing is written\nand sorted: `ico_need`, and `asc_use` with `ES` already forced to `LOW_SEG`\nacross it for this exact reason (§66.5.10.2). On `kern_big` a compaction in\nany of them moves `[dsk_dseg]` with the block (`mem_rr_tab`'s\n`MEM_RR_ONE dsk_dseg` row). On `kern_small` nothing yet stops a shed in any of\nthem from taking the block itself, because `fmv_demote` zeroes `FS_VSEG` and\n`[fm_vseg]` but not `[dsk_dseg]`.",
+   "why": "disk_mount_x step 2 calls dsk_rah_want (disk.inc:4252) and dsk_fatw_want -> dsk_fatw_claim (disk.inc:5991) with [dsk_dseg] already aimed by fmv_load (files.inc:1693-1715); memory.inc:3369's comment names ico_need; fmv_demote leaves [dsk_dseg] (files.inc:1408-1437)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Built-in app kind (KIND_FILES), **cap 4** — up to four windows, each on its\nown drive and its own folder —",
+   "new_text": "Built-in app kind (KIND_FILES), **cap 5** — up to four of the user's windows\n(`fm_count` holds them to `FM_MAXWIN`), each on its own drive and its own\nfolder, plus the Standard File chooser's (§38.1) —",
+   "why": "inst_kinds' Disk row has KD_CAP = VIEW_SLOTS+1 (instance.inc:203); FM_MAXWIN = VIEW_SLOTS bounds the user's windows and FM_NSLOT = FM_MAXWIN+1 (files.inc:424-425)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**The binding rule of this whole section, one sentence: paints read the\nwindow's cache; actions re-sync the global snapshot first.** `disk_dir`,\n`disk_icons` and `disk_nfiles` (§18/§19) stay exactly one global mount\nsnapshot and remain the only thing `loader.inc` and `diskw.inc` ever\nresolve a directory index against. Each window additionally owns a\nbyte-for-byte **copy** of that snapshot in its `VIEW_SEG` slot (§2.3/§22.1),\nwhich is what `W_PAINT`, `fm_layout` and the hit-tester read — so a repaint,\na drag, a raise, a resize or a `wm_paint_all` never touches the floppy. Any\n*action* that resolves against the globals (open a package, `dsk_chdir`,\n`dskw_mkdir`, and in general every `dskw_*`) first calls `fmv_sync`, which\nremounts **only** if the acting window's `(drive, cwd)` differs from\n`([disk_drive], [dsk_cwd])` — in the common case, where you act in the\nwindow you last navigated, a compare and a `ret`.",
+   "new_text": "**The binding rule of this whole section, one sentence: paints read the\nwindow's own cache, and a listing mount writes straight into it.** There is\nno global listing (§22.6.3): `fmv_load` aims `dsk_dest_x` at the window's\n`FS_VSEG` claim, mounts, and aims it back at nothing, leaving `disk_nfiles`\n0. That claim is what `W_PAINT`, `fm_layout` and the hit-tester read — so a\nrepaint, a drag, a raise, a resize or a `wm_paint_all` never touches the\nfloppy. Any *action* that works on the volume (open a package, `dsk_chdir`,\n`dskw_mkdir`, and in general every `dskw_*`) first calls `fmv_sync`, which\nre-lists **only** if the acting window's `(drive, cwd)` differs from\n`([disk_drive], [dsk_cwd])` — in the common case, where you act in the\nwindow you last navigated, a compare and a quiet `dsk_chdir_q`, which reads\nthe disk only when the medium could have changed (§18.9.1.2).",
+   "why": "disk_dir/disk_icons no longer exist; fmv_load aims dsk_dest_x at FS_VSEG and retires it with dsk_dest_0, zeroing disk_nfiles (files.inc:1693-1771); fmv_sync_x stands with dsk_chdir_q_x when fmv_ishere matches (files.inc:1947-1980)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "57 bytes under `KERN_BIG`",
+   "new_text": "61 bytes under `KERN_BIG`",
+   "why": "FS_SIZE = FS_USEDH+2 = 61 on kern_big (FS_PATH 24 + PTH_SIZE 33, then FS_FREEH/FS_USEDH; files.inc:376-383) and fm_pool is resb 5*61 (files.inc:9634)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| 14 | `FS_FERR` b | `FERR_*` of the last file operation **in this window**, 0 = none |",
+   "new_text": "| 14 | `FS_2UP` b | 1 = this window's last paint left a two-line prompt's first line up in the row area (§22.20.1) |\n| 15 | `FS_IOFH` b | the high byte of where the icon slots start in this window's own cache, 0 = it has none (§22.6.1) |",
+   "why": "There is no FS_FERR; offsets 14 and 15 are FS_2UP and FS_IOFH (files.inc:261,268)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| 24 | `FS_PATH` | `PTH_SIZE` bytes of remembered path — **`KERN_BIG` only** (§22.16) |",
+   "new_text": "| 24 | `FS_PATH` | `PTH_SIZE` bytes of remembered path — **`KERN_BIG` only** (§22.16) |\n| 57 | `FS_FREEH` w | **`KERN_BIG` only**: the high half of `FS_FREE`, which on that build is BYTES in a dword (§22.7.1); 0xFFFF = not known |\n| 59 | `FS_USEDH` w | **`KERN_BIG` only**: the high half of `FS_USED`, likewise |",
+   "why": "FS_FREEH equ FS_PATH+PTH_SIZE and FS_USEDH equ FS_FREEH+2 under KERN_BIG, 'BYTES in a dword (SPEC.md 22.7.1)' (files.inc:376-382); fm_measure writes them (files.inc:1851-1868)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": " `fm_msgbuf` (16B) plus `fm_msgwin` (word, the\nstate block that asked) carry the free-space line, which is why `FS_FERR` =\n255 alone does not draw it: the buffer holds one figure and it belongs to one\nwindow.",
+   "new_text": " The free-space line needs no module-global state: it is §22.7's, drawn from\nthe block's own `FS_FREE`/`FS_USED`.",
+   "why": "fm_msgbuf, fm_msgwin and FS_FERR exist nowhere in kernel/; fm_measure fills FS_FREE/FS_USED per block (files.inc:1849-1925)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`fm_title_flush` spends it through `wm_title_set` (§11.92): 17 rows, under\nthe caller-held lock, with no cascade. Exactly one routine calls the flush,",
+   "new_text": "`fm_repaint` spends it inline through `wm_title_set` (§11.92): 17 rows, under\nthe caller-held lock, with no cascade. Exactly one routine spends it,",
+   "why": "fm_title_flush was written into fm_repaint at its one call (kernel size pass 14; files.inc:7712-7722)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`fm_settitle`'s callers disagree about the lock: `fm_go`, `fm_mount` and\n`fm_view` hold it,",
+   "new_text": "`fm_settitle`'s callers disagree about the lock: `fm_go` and `fm_mount`\nhold it,",
+   "why": "There is no fm_view; the view toggle is fm_vflip (files.inc:6222), which does not call fm_settitle."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "outright and the operation ends with one `fmv_reload_all` — every",
+   "new_text": "outright and the operation ends with one re-list pass in `fm_paste_res` — every",
+   "why": "fmv_reload_all and fmv_repaint_all were written into fm_paste_res at their one call (kernel size pass 18; files.inc:7273-7290)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **And `fmv_repaint_all` puts the PIXELS back — the Disk windows, and\n  nothing else on the screen.** `fmv_reload_all` moves every window's cache;",
+   "new_text": "- **And `fm_paste_res`'s damage union puts the PIXELS back — the Disk windows,\n  and nothing else on the screen.** The re-list pass moves every window's cache;",
+   "why": "Same fold: the union (fmv_ux1..) is committed inside fm_paste_res (files.inc:7373-7430)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`fcp_selfchk` refuses a folder pasted into itself or its own subtree**,",
+   "new_text": "- **`fcp_run2` refuses a folder pasted into itself or its own subtree**,",
+   "why": "fcp_selfchk was written into fcp_run2 (kernel size pass 18); the walk is its .selfup loop (filecp.inc:618-652)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`fm_editkey`'s, so the box accepts exactly the bytes `dskw_name83` will store\nand nothing else (§22).",
+   "new_text": "`fm_editkey`'s, so the box takes only `dskw_char`'s characters, at most 12\nof them, with one `.` that does not lead (§22). It does not hold the stem to\n8 or the extension to 3, nor refuse a trailing `.`, and `fdlg_save` checks\nonly a good mount and a non-empty box, so a name `dskw_name83` would refuse\ncan still be committed.",
+   "why": "fm_editkey's .text arm bounds at 12, filters through dskw_char_x and refuses a leading or second dot only (files.inc:6686-6729); fdlg_save tests FS_MOK and [fdlg_name]!=0 (fdlg.inc:968-980); dskw_name83 refuses a 9th stem / 4th ext char and a trailing dot (diskw.inc:5166-5205)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`asc_use_x` claims `ASC_KB` = 3,072 bytes under `MEM_K_ASC`, a kernel\ntag rather than one of the `MEM_P_*` purgeable classes, and nothing frees it.",
+   "new_text": "`asc_use_x` claimed `ASC_KB` = 3,072 bytes under `MEM_K_ASC` when this\nwas decided, a kernel tag rather than one of the `MEM_P_*` purgeable classes,\nand nothing freed it (it is now the file's own size and freed at\n`asc_use_x`'s one exit, §54.7.4).",
+   "why": "ASC_KB is 8 (assoc.inc:1846); the claim is the file's sectors in paragraphs (assoc.inc:1969-1984) and .out frees it under MEM_K_ASC (assoc.inc:2233-2241)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "falls through to the package route and answers *\"Bad\n  package\"*,",
+   "new_text": "falls through to the package route and answers *\"Load\n  failed\"* (*\"Bad package\"* only with `LDDIAG=1`),",
+   "why": "fm_stattab maps LD_EBAD to fm_s_ldfail unless LD_DIAG (files.inc:2368-2373); LDDIAG=1 defines LD_DIAG (Makefile:1334-1341)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`disk_icons` is `dsk_nmax` × 64 bytes, already allocated, **already rewritten\nevery mount** (§18.3 step 4), and a type-0 file's slot was **already all\nzero** — the generic-icon sentinel. A document icon composed into that slot\ntherefore costs **no new per-file RAM and no work in any paint**, and every\nconsumer of the mount snapshot gets it with no change to a drawing path: both\nDisk window views, the per-window view caches (§22.1), and the file dialog\n(§38), which reads the snapshot directly because it is modal.",
+   "new_text": "A listing already carries one reference byte per entry (§22.6.3), **already\nrewritten every mount** (§18.3 step 4), and a type-0 file's byte was\n**already** `ICO_R_NONE` — the generic-icon sentinel. A document icon is\ncomposed into the machine-wide icon store (§25.9) once per association,\nkeyed by its slot, and the entry's byte names that row, so it costs **no new\nper-file RAM and no work in any paint**, and everything that shows a listing\ngets it with no change to a drawing path: both Disk window views (§22.1) and\nthe file dialog, which is a Disk window (§38.1).",
+   "why": "disk_icons no longer exists; the mount's pass 4b composes with assoc_compose and keys the store row by [assoc_docslot] (disk.inc:9290-9330), and fmv_get_icon resolves a window's reference byte through dsk_ico_stage (files.inc:990-1010, disk.inc dsk_ico_stage)."
+  },
+  {
+   "file": "kernel/assoc.inc",
+   "old_text": "ASSOC_NAPP   equ 16             ; app slots - 20 resident bytes each (stem,\n                                ; glyph, cluster, volume, default folder)",
+   "new_text": "ASSOC_NAPP   equ 16             ; app slots - 19 resident bytes each (stem,\n                                ; glyph, cluster, volume)",
+   "why": "Per slot: assoc_stem 8 + assoc_glyph 8 + assoc_clus 2 + assoc_drv 1 (assoc.inc:98-176); assoc_dfold went in kernel size pass 13 (SPEC.md 54.2). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; (SPEC.md 22). FOUR windows may be open at once (KIND_FILES, cap 4), each\n; on its own drive and its own folder.",
+   "new_text": "; (SPEC.md 22). FOUR of the user's windows may be open at once, each on its\n; own drive and its own folder (KIND_FILES, cap VIEW_SLOTS + 1: the fifth pool\n; block is the Standard File chooser's, SPEC.md 38.1).",
+   "why": "KD_CAP is VIEW_SLOTS+1 (instance.inc:203); FM_NSLOT = FM_MAXWIN+1 (files.inc:424-425). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; THE RULE THE WHOLE MODULE RESTS ON (SPEC.md 22): paints read the window's\n; cache; actions re-sync the global snapshot first. disk_dir / disk_icons /\n; disk_nfiles stay exactly ONE global mount snapshot, and are still the only\n; thing loader.inc and diskw.inc ever resolve an index against. Every window\n; additionally owns a byte-for-byte copy of a snapshot in its VIEW_SEG slot\n; (SPEC.md 2.3/22.1) - that is what W_PAINT, fm_layout and the hit-tester\n; read, so a repaint, a drag, a raise or a wm_paint_all costs ZERO floppy\n; I/O. Anything that acts calls fmv_sync first, which remounts only when the\n; acting window's (drive, cwd) is not the one currently mounted.",
+   "new_text": "; THE RULE THE WHOLE MODULE RESTS ON (SPEC.md 22): paints read the window's\n; own cache, and a listing mount writes straight into it. There is no global\n; listing (SPEC.md 22.6.3): fmv_load aims dsk_dest_x at the window's FS_VSEG\n; claim, mounts, and aims it back at nothing - and that claim is what\n; W_PAINT, fm_layout and the hit-tester read, so a repaint, a drag, a raise\n; or a wm_paint_all costs ZERO floppy I/O. Anything that acts calls fmv_sync\n; first, which re-lists only when the acting window's (drive, cwd) is not the\n; one currently mounted.",
+   "why": "No disk_dir/disk_icons or VIEW_SEG slot exists; fmv_load writes through dsk_dest_x into FS_VSEG (files.inc:1693-1771). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, 4 x FS_SIZE)",
+   "new_text": "; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, FM_NSLOT x\n; FS_SIZE: the user's four and the chooser's)",
+   "why": "fm_pool is FM_NSLOT (5) blocks (files.inc:9626-9643). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "so File/Edit/Nav/Builtins are this",
+   "new_text": "so File/Edit/Nav/Disk are this",
+   "why": "fm_menus' fourth title is fm_s_root / fm_items_disk, 'Disk' (files.inc:2712); Builtins is gone. Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; here. KD_INIT runs on the UI task with NO lock held, which is exactly the\n; context a mount needs.",
+   "new_text": "; here. KD_INIT runs on the UI task with NO lock held - except the Standard\n; File chooser's, which fdlg_open launches under its requester's held gfx lock\n; ([inst_lkhd], SPEC.md 38.6). A mount is legal either way, as it is in any\n; window callback.",
+   "why": "fdlg_open_x raises [inst_lkhd] around cw_app_launch with the caller's lock held (fdlg.inc:409-414); app_launch takes the lock only for wm_show (instance.inc:1600-1618). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; Each window owns one 4KB VIEW_SEG slot holding a byte-for-byte image of\n; disk_dir (at slot offset 0) and disk_icons (at FV_ICONS) - and on\n; kern_small that image is SPEC.md 25.8.5's pool plus its index, which is the\n; same bytes the global holds and not an expansion of them. Neither end of\n; that copy is addressable through DS - the source is LOW_SEG, the\n; destination VIEW_SEG - which is why it goes through disk.inc's\n; dsk_copy_out / dsk_copy_seg rather than a plain rep movsw.",
+   "new_text": "; Each window owns one listing claim (FS_VSEG: VIEW_KB, grown per folder on\n; DSK_BIGDIR, SPEC.md 22.6.4) that a loud mount writes straight into (SPEC.md\n; 22.6.3): the multi-selection bitmap, the entries at FV_DOFF and their\n; reference index. The claim is not addressable through DS, which is why\n; reads and the fmv_take copy go through disk.inc's dsk_copy_out /\n; dsk_copy_seg rather than a plain rep movsw.",
+   "why": "fmv_fit claims VIEW_KB into FS_VSEG (files.inc:1297-1323), fmv_load aims the mount at it and regrows it on DSK_BIGDIR (files.inc:1693-1830); FV_DOFF is the claim's layout (files.inc:397-400). Comment text only."
+  },
+  {
+   "file": "kernel/filecp.inc",
+   "old_text": ";   and a file may still be bigger than it, so a copy stays a truncating\n;   create followed by a run of dskw_append calls, each one a whole number\n;   of clusters.",
+   "new_text": ";   and a file may still be bigger than it, so a copy stays a truncating\n;   create followed by a run of appends, each one a whole number of\n;   clusters - dskw_append calls on kern_small, one held WRITE_SEQ stream on\n;   kern_big (SPEC.md 22.5.3).",
+   "why": "fcp_xfer's .more: KERN_BIG writes through dwf_dskw_write_seq with WSQF_HELD, else dskw_append_x (filecp.inc:1852-1862). Comment text only."
+  },
+  {
+   "file": "kernel/filecp.inc",
+   "old_text": "every caller of an fcp_ routine\n; is files.inc, which is cold too, so those calls stayed near.",
+   "new_text": "every caller of an fcp_ routine\n; is files.inc, which is cold too, so those calls stayed near - the one other\n; way in being the OSAPI_FILE_COPY cell's far call to fcpf_fcp_door (SPEC.md\n; 22.24). That is kern_big; on kern_small the bodies are FILECP.DRV's\n; (FCPBODY, below).",
+   "why": "kernel.asm:4092 OSAPI_RNCELL fcpf_fcp_door, filecp.inc:2242 'call fcp_door / retf'; FCPBODY makes _x bodies under FCP_MOD (filecp.inc:166-178). Comment text only."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "and fdlg_home_name\n; was unreachable from any package:",
+   "new_text": "and fdlg_open_x's\n; remembered-name arm (fdlg_hidx) was unreachable from any package:",
+   "why": "No fdlg_home_name exists; fdlg_open_x calls fdlg_hidx when SI = 0 (fdlg.inc:336-341). Comment text only."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "fdlg_seed decides\n; where a DIALOG opens",
+   "new_text": "fdlg_open_x's .seed\n; decides where a DIALOG opens",
+   "why": "fdlg_seed was written into fdlg_open_x as .seed in kernel size pass 17 (fdlg.inc:353-354). Comment text only."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "(fdlg_home_save records it into the\n; instance before the completion callback runs)",
+   "new_text": "(fdlg_reap_x's commit records it into the\n; instance through fdlg_home_dir before the completion callback runs)",
+   "why": "fdlg_reap_x's .commit calls fdlg_home_dir, which writes inst_fdrv/inst_fcwd/inst_fpick, before wm_pkgcall (fdlg.inc:617-688, 467-478). Comment text only."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; fdlg_commit dispatches a kernel window's completion proc through wm_pkgcall,",
+   "new_text": "; fdlg_reap_x's commit half dispatches a kernel window's completion proc\n; through wm_pkgcall,",
+   "why": "The dispatch is FDKT wm_pkgcall in fdlg_reap_x's .commit (fdlg.inc:688); there is no fdlg_commit. Comment text only."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; Called by fdlg_commit as an ordinary kernel near proc, through the resident\n; thunk in kernel.asm.",
+   "new_text": "; Called by fdlg_reap_x's commit half as an ordinary kernel near proc:\n; wm_pkgcall takes a W_SEG 0 window into `.cold` (SPEC.md 2.6.3), so no\n; thunk stands between (kernel.asm, beside drv_svc_call).",
+   "why": "kernel.asm:8315-8319 says the round trip 'needs NO thunk' and names drv_dlg_done_x as the cold body; there is no fdlg_commit. Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "(SPEC.md 38.2 - fdlg_close, no commit)",
+   "new_text": "(SPEC.md 38.2 - fdlg_reap_x's close half, no commit)",
+   "why": "There is no fdlg_close; Cancel is fdlg_reap_x's .close half (fdlg.inc:531-596). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; SI = the REQUESTER window, fdlg_commit's",
+   "new_text": "; SI = the REQUESTER window, the callback's",
+   "why": "No fdlg_commit; the contract is 38.6's completion callback (SI = the requester window). Comment text only."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; away with less: fdlg_commit destroys the dialog before it calls back",
+   "new_text": "; away with less: fdlg_reap_x closes the dialog before it calls back",
+   "why": "fdlg_reap_x's close half runs before its commit half's wm_pkgcall (fdlg.inc:531-688). Comment text only."
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; 22.6 retired the donation, so no listing is ever in a claim and [dsk_dseg] is\n; LOW_SEG for the life of the machine. Both rows are out of mem_rr_tab with it.",
+   "new_text": "; 22.6 retired the donation, so no listing is ever in a DONATED claim and\n; DV_SEG's row is out of mem_rr_tab with it. [dsk_dseg] is 0 at rest, but for\n; the length of a loud mount it names the Disk window's own claim (22.6.3),\n; and mem_rr_tab's MEM_RR_ONE dsk_dseg row follows it through a move.",
+   "why": "dsk_dseg is dw 0 (disk.inc:1115), dsk_dest_x stores DX = FS_VSEG into it (disk.inc:8588-8591, files.inc:1693-1715), and memory.inc:3369 still carries MEM_RR_ONE dsk_dseg. Comment text only."
+  },
+  {
+   "file": "kernel/instance.inc",
+   "old_text": "; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)",
+   "new_text": "; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own) -\n;      unless [inst_lkhd] is set, when the caller (fdlg_open) holds it and\n;      the show runs under that hold (SPEC.md 38.6)",
+   "why": "app_launch tests [inst_lkhd] and calls wm_show directly under the caller's hold (instance.inc:1612-1618); fdlg_open_x raises it (fdlg.inc:409-414). Comment text only."
+  }
+ ]
+}

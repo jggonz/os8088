@@ -1,11 +1,11 @@
 ; =============================================================================
 ; os8088 - memory.inc
 ;
-; The claim heap (SPEC.md 50): every paragraph of conventional memory above
-; the package pool, handed out in KB-granular, segment-aligned blocks to
-; whoever asks - a package through the API slots, or the kernel itself for
-; the things it uses speculatively (the menu save-under, a Disk window's
-; listing cache, the clipboard).
+; The claim heap (SPEC.md 50): every paragraph of conventional memory from
+; the heap floor up, handed out in MEM_GRAN-granular (512 bytes as shipped),
+; segment-aligned blocks to whoever asks - a package through the API slots,
+; or the kernel itself for the things it uses speculatively (the menu
+; save-under, a Disk window's listing cache, the clipboard).
 ;
 ; Why this exists. Before it, memory outside the pool was carved up by
 ; CONSTANTS - SND_SEG, SAVE_SEG, VIEW_SEG, BB_SEG - each claimed whole from
@@ -71,19 +71,27 @@ MEM_OWNER_MAX equ 8             ; play's ring, KERN-MEGA-PLAN 14.129)
                                 ; measured peak (scratch, canvas, undo,
                                 ; clipboard, LZW, plus the transient sixth it
                                 ; holds while trading a bigger clipboard for
-                                ; a smaller) with its region and one spare
+                                ; a smaller) and two spare: DATA claims, the
+                                ; REGION being owned by its instance slot and
+                                ; counted apart
 MC_SEG   equ 0                  ; word: base segment, 0 = free record
-MC_PARA  equ 2                  ; word: size in paragraphs (KB << 6)
-MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 is an instance
-                                ; slot; 0xFF00 | tag is the kernel's own
+MC_PARA  equ 2                  ; word: size in paragraphs, whole MEM_GRAN granules
+MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 an instance
+                                ; slot (a package's REGION, a built-in's data);
+                                ; 0xFF00 | tag the kernel's own; 0xFB00-0xFEFF
+                                ; a purgeable kernel cache, the high byte its
+                                ; rank (SPEC.md 50.6); anything else the
+                                ; SEGMENT of the package or driver whose data
+                                ; it is (SPEC.md 50.2)
 MC_DMA   equ 6                  ; word: WHERE THIS CLAIM MAY LAND, in one word,
                                 ; because a placement is what both halves are.
                                 ;
-                                ; Bits 0-14 are the 64KB-page-safe HEAD in
+                                ; Bits 0-13 are the 64KB-page-safe HEAD in
                                 ; paragraphs, 0 = no constraint - and
                                 ; mem_claim_1 refuses a head over 0x1000, a
-                                ; page being 4,096 paragraphs, so the top bit
-                                ; is free by that check and not by hope.
+                                ; page being 4,096 paragraphs, so the top two
+                                ; bits are free by that check and not by hope.
+                                ; (Bit 14 is MC_DISK, below.)
                                 ;
                                 ; Bit 15 (MC_DMA_HI) is the DOOR it came in
                                 ; through: set = top-down (SPEC.md 50.3.2), and
@@ -209,8 +217,10 @@ MEM_K_ASC  equ 0xFF06           ; one volume's ASSOC.DAT cache (SPEC.md
                                 ; it back (SPEC.md 18.8.4)
 MEM_K_MOD  equ 0xFF08           ; an on-demand kernel module's image (SPEC.md
                                 ; 2.8) - claimed top-down like a driver's,
-                                ; because its base IS its CS and so it can
-                                ; never move, and freed by the feature that
+                                ; because its base IS its CS - and PINNED
+                                ; (mem_can_move): nothing brackets a call into
+                                ; a module, so nothing can say no frame stands
+                                ; in it - and freed by the feature that
                                 ; asked for it rather than by a teardown
 MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99) -
                                 ; the job block AND the sectors in flight, so
@@ -296,6 +306,11 @@ MEM_K_MTBL equ 0xFF13           ; kern_mega's DESCRIPTOR TABLES in conventional
                                 ; whose extended memory cannot hold them;
                                 ; top-down and pinned for the session. 0xFF12
                                 ; is the image run table's, so this is 0xFF13
+MEM_K_SEAM equ 0xFF14           ; kern_mega's HUGE READ's SEAM (KERN-MEGA-PLAN
+                                ; 14.171, SPEC.md 20.14.5.4): 64KB, a copy of
+                                ; a packed stream either side of a bridge's
+                                ; cut, held for one OSAPI_FILE_READ and freed
+                                ; on its way out (dskw_hzfree)
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -455,6 +470,8 @@ MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
+                                ; the KB doors' answer, the pool counted
 %ifndef MEM_GRAN                ; (MEMGRAN=16 builds the 256-byte knob,
 MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
 %endif
@@ -484,7 +501,7 @@ MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
 ; MC_DMA is not one of them: it is how a claim that MOVES keeps the page
 ; property it was granted for, and nothing outside can move a claim.
 CLS_SEG    equ 0                ; word: base segment, 0 = a free record
-CLS_PARA   equ 2                ; word: size in paragraphs (KB << 6)
+CLS_PARA   equ 2                ; word: size in paragraphs, whole MEM_GRAN granules
 CLS_OWN    equ 4                ; word: owner (SPEC.md 50.2)
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
@@ -528,7 +545,8 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; mem_init - size the heap and clear the map (kmain, before anything claims)
 ;
 ; in:       nothing
-; out:      nothing (all registers preserved)
+; out:      nothing; every register preserved but BP (wm_cbd's argument -
+;           kmain_o holds nothing in it)
 ;
 ; int 12h gives conventional memory in KB; the heap is everything from
 ; HEAP_SEG (the paragraph the kernel ends on) to the top of it. On a
@@ -539,28 +557,20 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; Runs on task 0 before any other task exists, so it needs no critical
 ; section (SPEC.md 7's only-the-UI-task-calls-BIOS rule holds here).
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL
-section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
-                                ; whose window has room to spare
-%else
-section .boot2                    ; ...and kern_small: the BLOB half instead
-                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
-                                ; deadline is the same either way - kmain runs
-                                ; this long before drv_boot - so the choice is
-                                ; only about WHOSE bytes. On that kernel
+B3SECT                          ; `.boot3` on every kernel since BOOT3-PLAN
+                                ; wave 3 (SPEC.md 2.9.15): kern_big's arm was
+                                ; the WINDOW half (SPEC.md 2.5.3) until then,
+                                ; and kern_small's has been `.boot3` since
+                                ; wave 1 (the BLOB half before it). So the
+                                ; build choice OVBCALL made (SPEC.md 2.5.3.2)
+                                ; is gone for this body, and kmain_o calls it
+                                ; with a plain B3CALL. The deadline was the
+                                ; same either way - kmain runs this long
+                                ; before drv_boot - so the choice was only
+                                ; ever about WHOSE bytes, and on kern_small
                                 ; `.ovl` is read onto the FAT window and the
-                                ; mount buffers, and SPEC.md 22.6.3 has just
-                                ; taken the LISTING out of that region: the
-                                ; 800 bytes it gave back are only 288 of heap
-                                ; while the overlay still needs the rest, so
-                                ; every body moved here turns one more of them
-                                ; into heap. `.boot2` is written LAST on
-                                ; purpose: tools/os88ovlchk.py reads SOURCE
-                                ; and cannot evaluate the %ifdef, so it files
-                                ; this block by the arm below - which is the
-                                ; build the check exists to protect
-%endif
-                                ; docs/plans/LAST-DROP-BYTES.md row 11): kmain sizes
+                                ; mount buffers, whose bytes it needs back
+                                ; (docs/plans/LAST-DROP-BYTES.md row 11): kmain sizes
                                 ; the heap once. mem_unblob_x, which runs LATER
                                 ; and gives the blob back, is a different body
                                 ; and stays resident - it has to, because it
@@ -602,8 +612,8 @@ mem_init_x:
     ; It is ASKED OF [spl_fseg] rather than assumed to be HEAP_SEG, because
     ; that word is what stage 2 actually published and a kernel reached some
     ; other way - a diagnostic payload, a test harness - never wrote it.
-    ; COLD_SEG is its seed and is below the heap, so the compare refuses it
-    ; and that kernel keeps the whole floor.
+    ; 0 is its seed (kernel.asm's `spl_fseg: dw 0`), so the test skips the
+    ; raise and that kernel keeps the whole floor.
     ;
     ; A blob ABOVE the floor is not tested for: stage 2 puts itself exactly on
     ; HEAP_SEG and the floor is HEAP_SEG or one VGABUF rung below it, so the
@@ -611,11 +621,17 @@ mem_init_x:
     cmp word [spl_fseg], 0
     je .nospl
     mov ax, [spl_fseg]
-%ifdef KERN_SMALL
-    add ax, BOOT2_PAD / 16      ; ...the paragraph past the blob's last byte
-%else                           ; ...and past its nobits scratch, kern_big's
-    add ax, BOOT2_RES / 16      ; SYSTEM.CFG buffer (ovc_buf, driver.inc)
-%endif
+    add ax, BOOT2_PAD / 16      ; ...the paragraph past the blob's last byte.
+                                ; Every kernel since BOOT3-PLAN wave 2 moved
+                                ; SYSTEM.CFG's buffer (ovc_buf) from past the
+                                ; blob into `.boot3b`, under it. A floor ON THE
+                                ; 512-BYTE GRID, and it must stay one: every
+                                ; boot claim stacks bottom-up on it and a
+                                ; pinned one (the FAT window's) keeps its phase
+                                ; for the session, so a paragraph floor put
+                                ; every bottom-up base off the grid (SPEC.md 1)
+                                ; and PiXEL's OSAPI_MEM_CLAIM_DMA refused every
+                                ; open (tests/vesablitd.py, tests/vesasu.py)
 .nospl:
     mov [mem_base], ax
     mov [mem_top], ax           ; an empty heap until int 12h says more
@@ -671,7 +687,15 @@ section .cold                   ; ...and back, and mem_unblob_x is exactly why
                                 ; that could not live in it
 mem_unblob_x:
     push ax
+%ifdef B3_POISON
+    call b3p_lay                ; B3POISON=1 (a knob, never shipped): the dead
+                                ; range CCh, and KEPT out of the heap
+%endif
     call mem_floor_ax
+%ifdef B3_POISON
+    mov ax, [b3p_hi]            ; ...the QUARANTINE: the floor stays where
+                                ; mem_init_x raised it (b3p_lay's banner)
+%endif
     mov [mem_base], ax
 %ifdef OS88_COMPACT
     mov byte [mem_pg_rank], 0   ; DISSOLVE NOTHING, said rather than inherited:
@@ -689,9 +713,140 @@ mem_unblob_x:
     pop ax
     retf
 
+%ifdef B3_POISON
+%ifdef KERN_MEGA
+ %error "B3POISON=1 is kern_big's and kern_small's: b3p_trap is a real-mode vector and its record a CS write, and kern_mega runs the desktop in protected mode (tests/cswrites.txt, tests/seg0.txt)"
+%else                           ; (and so t_cswrite and t_seg0 count none of it)
+; -----------------------------------------------------------------------------
+; b3p_lay - B3POISON=1's runtime half of BOOT3-PLAN 4.2 (SPEC.md 2.9.15.4):
+;           the dead `.boot3`, `.boot3m`, `.boot3b`, the lift and the blob
+;           filled with CCh at the drop and QUARANTINED, so a late call into
+;           any of them is `int 3` at the very byte it lands on, for the
+;           whole session
+;
+; in:  nothing (near, from mem_unblob_x, before the floor store)
+; out: [b3p_lo], [b3p_hi] the range; every register preserved
+;
+; THE RANGE is [b3p_lo, b3p_hi), in paragraphs:
+;   hi  [mem_base] before the store - the paragraph past the blob that
+;       mem_init_x raised it to (or the floor itself on a kernel no stage 2
+;       published, whose `.boot3` is then the whole range)
+;   lo  the LOWER of the floor the store would write and `.boot3`'s first
+;       paragraph past b3_live: on a VGA or an EGA at home (COLD_SLIDE) the
+;       floor is HEAP_SEG and `.boot3`'s head sits under it, on the
+;       `.vgabuf` rung, whose first KVGABUF_SIZE bytes are the planar
+;       decoder's for the session - b3_live is asserted past them
+;       (boot3.inc), so everything from it up is as dead as the rest. On a
+;       mono machine, a ROM- or HMA-adopted one and kern_small the floor is
+;       at or below `.boot3`, and the range is exactly what the store gives
+;       back (the slid-off `.cold` copy and the VGA rung included)
+; Nothing in it is live: the shipped store hands all of [floor, hi) to the
+; heap, and the `.vgabuf` share below the floor stops at b3_live.
+;
+; WHY QUARANTINED, NOT GIVEN BACK (the plan said "before it compacts", and
+; the code disagreed): the shipped drop's mem_compact slides the boot's
+; claims down onto exactly these bytes - on kern_big on a CGA + Hercules
+; machine, all 13KB of them, measured - so poison laid and then given back
+; is overwritten before the desktop's first frame, and a late call then runs
+; a claim's bytes instead of trapping. Kept out of the heap, the range stays
+; CCh for the session: a late CALL traps where it lands, and a late WRITE
+; (an ISR, a buffer pointer left aimed at `.boot3b`) shows as bytes that are
+; no longer CCh, which tests/b3poison.py reads at its end. The price is the
+; range's bytes of heap, on a kernel nobody ships.
+;
+; It also takes int 3 (IVT 0Ch) for b3p_trap: a CCh is executed as `int 3`,
+; and what a BIOS leaves there is usually an IRET, which would walk the
+; poison a byte at a time into whatever follows it.
+; -----------------------------------------------------------------------------
+b3p_lay:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov word [es:3*4], b3p_trap
+    mov word [es:3*4+2], KERNEL_SEG
+    popf
+    mov dx, [mem_base]
+    mov [b3p_hi], dx
+    call mem_floor_ax
+    cmp ax, B3_SEG + (B3_LIVEOFF + 15) / 16
+    jbe .lo
+    mov ax, B3_SEG + (B3_LIVEOFF + 15) / 16
+.lo:
+    mov [b3p_lo], ax
+    cld
+    xchg ax, dx                 ; DX = the cursor, AX = the end
+.fill:                          ; 0FFFh paragraphs at a time (a segment's worth)
+    sub ax, dx
+    jbe .done
+    cmp ax, 0x0FFF
+    jbe .f1
+    mov ax, 0x0FFF
+.f1:
+    mov es, dx
+    add dx, ax
+    mov cl, 3
+    shl ax, cl                  ; paragraphs -> words
+    xchg ax, cx
+    xor di, di
+    mov ax, 0xCCCC
+    rep stosw
+    mov ax, [b3p_hi]
+    jmp short .fill
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+section .text                   ; the trap and its record: KERNEL_SEG, which
+                                ; does not move (a `.cold` handler would be a
+                                ; vector the slide had to re-point)
+; b3p_trap - int 3 under B3POISON=1. Records WHERE the poison was run and
+; WHO far-called it, then stops the machine: cli, hlt, for good. The row
+; (tests/b3poison.py) reads the record; a machine that never ran poison
+; keeps it 0.
+;   b3p_hit   CS, IP of the CCh executed (the frame's IP less one)
+;   b3p_from  IP, CS of the far return below the frame - the CALLER, when the
+;             poison was entered by a far call, which is BOOT3-PLAN R3's shape
+b3p_trap:
+    cli
+    push bp
+    mov bp, sp                  ; (BP addresses SS: the stack, which is right)
+    push ax
+    mov ax, [bp+4]
+    mov [cs:b3p_hit], ax
+    mov ax, [bp+2]
+    dec ax
+    mov [cs:b3p_hit+2], ax
+    mov ax, [bp+8]
+    mov [cs:b3p_from], ax
+    mov ax, [bp+10]
+    mov [cs:b3p_from+2], ax
+.halt:
+    hlt
+    jmp short .halt
+b3p_lo:     dw 0
+b3p_hi:     dw 0
+b3p_hit:    dw 0, 0
+b3p_from:   dw 0, 0
+section .cold
+%endif                          ; (KERN_MEGA)
+%endif
+
 ; -----------------------------------------------------------------------------
 ; mem_floor_ax - the heap's lowest paragraph (module internal)
-; out: AX = HEAP_SEG, or one VGABUF rung below it on a machine with no VGA
+; out: AX = the heap's first paragraph (onto 512 bytes under LADDER_PACK):
+;      past `.vgabuf` on a VGA, under it without one, and with neither a VGA
+;      nor an EGA (COLD_SLIDE) on the VGA rung itself - past `.cold` when it
+;      slid there, at the rung when `.cold` is in a ROM or the HMA
 ; clobbers: AX and the flags
 ;
 ; `.vgabuf` is the planar decoder's two buffers and nothing else, sitting in a
@@ -778,13 +933,14 @@ mem_floor_ax:
 ; **Two ends, one heap.** mem_claim is first fit from the BOTTOM upward, and
 ; is what data asks for. mem_claim_hi is first fit from the TOP downward, and
 ; is what a package's REGION asks for (SPEC.md 20.1/21), because the two have
-; different lifetimes and only one of them can ever move:
+; different lifetimes and move at different prices:
 ;
-;   a data claim can move within its lifetime by being freed and re-claimed;
-;   a package region can NEVER move, because its base IS its CS - relocating
-;   it would invalidate W_SEG, I_SPTR, every MB_SEG in the menu bar and every
-;   claim owner word. SPEC.md 66 compacts the DATA arena and deliberately
-;   leaves regions out for exactly this reason.
+;   a data claim moves whenever its holder declared a proc (SPEC.md 66.2);
+;   a package region is a CS, so moving it costs its holders' procs and
+;   mem_region_reloc's rewrite of W_SEG, I_SPTR, every MB_SEG and every claim
+;   owner word - it CAN move when frameless (SPEC.md 66.6.1), and putting it
+;   high keeps it out of the data traffic. The door is a preference about
+;   cost (SPEC.md 50.2); MC_RLOC alone says whether a claim moves.
 ;
 ; Allocated from one end they interleave, and one long-lived data claim
 ; landing mid-heap permanently splits the space a package can be loaded into:
@@ -946,6 +1102,9 @@ mem_claim_x:
 %endif                          ; ...and with no compactor there is no walk to
                                 ; be inside, so kern_small has no such state
                                 ; and asks nothing
+%ifdef KERN_MEGA
+    call mem_ringtop           ; A RING AT THE TOP END when it is free for
+%endif                          ; one (KERN-MEGA-PLAN 14.166): DI's door
     call mem_claim_1            ; COMPACT, THEN SHED AND RETRY (SPEC.md 66.4 /
     jnc .out                    ; 50.6.2). A cache loses to anything that is
 %ifdef OS88_COMPACT
@@ -1937,16 +2096,17 @@ mem_bpara:
 ;   OTHER TASKS      [sch_lock], raised across the moves, which pauses task
 ;                    switching while the tick keeps running - dsk_xfer's own
 ;                    bargain for exactly this (SPEC.md 18.9). It does NOT
-;                    reach a task already suspended mid-access, which is what
-;                    pins a claim whose owner has a live worker until SPEC.md
-;                    66.5's park handshake exists.
-;   INTERRUPTS       not bounded by sch_lock at all, so any claim with
-;                    MC_DMA != 0 is pinned outright. That is right twice over:
-;                    a bus master may be mid-transfer, and the 64KB page rule
-;                    is a property of the ADDRESS, so such a block cannot be
-;                    relocated even in principle.
-;   THE CALLER       mem_claim is reached from the UI task or a window
-;                    callback (a worker may not claim - SPEC.md 20.6 rule 7),
+;                    reach a task already suspended mid-access, so a claim
+;                    whose owner has a live worker moves only once that
+;                    worker has PARKED (SPEC.md 66.5, inst_seg_parked).
+;   INTERRUPTS       not bounded by sch_lock at all, so a block a chip is
+;                    armed on is pinned by its holder never declaring it
+;                    (SPEC.md 66.4.2): MC_DMA is a PLACEMENT rule mem_cp_dest
+;                    honours, not a pin. A driver IMAGE, whose ISR runs out
+;                    of it, moves at IF = 0.
+;   THE CALLER       mem_claim compacts only for the UI task or a window
+;                    callback (a worker's claim is served first fit alone,
+;                    never compacted for or shed for - SPEC.md 66.3.1),
 ;                    so the caller may itself be a holder deeper in its own
 ;                    frame - menu_drop holds the save-under across a whole
 ;                    menu, and a menu command can claim. Bounded by the
@@ -1962,9 +2122,9 @@ mem_bpara:
 ; clobbers: nothing else (flags)
 ;
 ; ONE routine decides, and every rule that pins a block lives in it - the
-; `dsk_xfer` reads-the-class-while-BX-is-still-the-row discipline. Three of
-; the tests below can never fire on a correctly-behaved holder, because
-; nothing declares a region or a DMA buffer movable; they are here because
+; `dsk_xfer` reads-the-class-while-BX-is-still-the-row discipline. Some of
+; the tests below can never fire on a correctly-behaved holder - nothing
+; declares a module image movable, for one - and they are here because
 ; "no caller does that" is not the same statement as "this cannot happen",
 ; and the failure it would buy is the worst one this tree can ship.
 ; -----------------------------------------------------------------------------
@@ -2105,7 +2265,10 @@ mem_can_move:
     call KERNEL_SEG:inst_seg_parked     ; CF = 0: no worker, or one that has
     jnc .cf                             ; PARKED at OSAPI_TASK_ALIVE (66.5).
                                         ; A segment matching no instance -
-                                        ; a driver's image - answers CF = 1
+                                        ; a driver's - answers CF = 0 only
+                                        ; once every TF_SERVICE task has
+                                        ; parked and no package worker is
+                                        ; inside a driver verb (66.5.5)
     mov byte [mem_wpin], 1      ; ...and RECORD that this is why we refused, so
     jmp short .pin              ; mem_compact knows a park would be worth
                                 ; asking for. Without it the compactor either
@@ -2306,10 +2469,11 @@ mem_is_region:
 ;   mem_busy_seg              ...and then the question a package's DATA claim
 ;                             already asks: is its worker running.
 ;                             inst_seg_parked IS "no worker, or one that has
-;                             parked at OSAPI_TASK_ALIVE" and raises
-;                             [mem_wpin] itself. This used to be two tests of
-;                             I_TASK and [sch_parked] written out here, which
-;                             had to keep agreeing with the ones next door
+;                             parked at OSAPI_TASK_ALIVE"; mem_can_move's
+;                             .busy arm raises [mem_wpin] when it refuses.
+;                             This used to be two tests of I_TASK and
+;                             [sch_parked] written out here, which had to
+;                             keep agreeing with the ones next door
 ;
 ; WHAT MAKES THE COUNTER SAFE IS ALREADY THERE: mem_compact raises [sch_lock]
 ; across the plan AND the moves, so no task can raise the depth between this
@@ -2374,9 +2538,10 @@ mem_is_region:
                                 ; "no worker, or one that has parked at
                                 ; OSAPI_TASK_ALIVE" (SPEC.md 66.5.4), which is
                                 ; exactly what 66.6.2 needs once the
-                                ; declaration above is in hand - and it raises
-                                ; [mem_wpin] itself, so a region asks for the
-                                ; park on the same terms a data claim does
+                                ; declaration above is in hand - and the .busy
+                                ; arm it shares raises [mem_wpin], so a region
+                                ; asks for the park on the same terms a data
+                                ; claim does
                                 ; THE WHAT-IF EXCUSES BOTH REMAINING TESTS, and
                                 ; the worker is the half that was missed: at
                                 ; ui_task's service point the asker's callback
@@ -2411,11 +2576,10 @@ mem_is_region:
 ; does nothing about a task already suspended inside such a loop, so an
 ; instance that owns a live worker keeps its claims where they are.
 ;
-; A DRIVER's segment is pinned unconditionally, and the reason is the same one
-; stated the other way round: a driver has no instance record to read I_TASK
-; out of, and it may well own a service task (SPEC.md 34.5's transient refill
-; task is exactly one). "I cannot tell" and "it is busy" have to be the same
-; answer here.
+; A DRIVER's segment has no instance record to read I_TASK out of, and it may
+; well own a service task (SPEC.md 34.5's transient refill task is exactly
+; one), so it moves only once every TF_SERVICE task has parked and no package
+; worker is inside a driver verb (inst_seg_parked's .drv arm, SPEC.md 66.5.5).
 ;
 ; **IT DOES NOT ASK THE NEST, AND MUST NOT.** A package's data claim may move
 ; while the package itself is executing - that is SPEC.md 66.3 rule 2's whole
@@ -2424,10 +2588,11 @@ mem_is_region:
 ; the owning segment" would refuse every claim of the package that asked. The
 ; frame question belongs to the CS itself, where mem_frameless and
 ; mem_can_move's driver-image arm ask it. A DRIVER's claim needs no such test
-; here either: it matches no instance, so inst_seg_parked pins it outright.
+; here either: it matches no instance, so inst_seg_parked asks its service
+; tasks instead.
 ;
-; Both of these lift when SPEC.md 66.5's park handshake lands - the point of
-; putting them behind one predicate is that they lift in one place.
+; Both of these lifted when SPEC.md 66.5's park handshake landed - in one
+; place, which is the point of putting them behind one predicate.
 ; -----------------------------------------------------------------------------
 ; (mem_busy_seg's body is mem_can_move's .busy arm, inline since size pass
 ; 10: it was the one caller. Everything above still describes it.)
@@ -2595,10 +2760,10 @@ mem_in_xfer:                    ; TWO WORDS (docs/plans/NO-PINNING-PLAN.md
 ; clobbers: nothing else (flags)
 ;
 ; SPEC.md 66.10. The compactor's third outcome, and the one that costs nothing
-; to execute: a purgeable block is never relocated - 63KB with a 64KB page
-; head cannot be packed tight, and a re-claim calls dsk_rah_flush, so copying
-; it would preserve nothing - but it can be made to STOP BEING A BARRIER,
-; which is the whole of what it was doing wrong.
+; to execute: a purgeable block that declared no relocation proc is never
+; relocated (one that did moves - mem_can_move, SPEC.md 50.6.7) - but it can
+; be made to STOP BEING A BARRIER, which is the whole of what it was doing
+; wrong.
 ;
 ; [mem_pg_rank] IS THE "ONLY UNDER PRESSURE" RULE, and it is a parameter that
 ; already existed: mem_compact takes the size of the pending claim, and 0
@@ -2920,7 +3085,7 @@ mem_cp_walk:
     xor dx, dx                  ; movers
     xor cx, cx                  ; largest run
     mov [mem_wpin], cl          ; ...and "a worker is what stopped me", which
-                                ; mem_busy_seg raises (SPEC.md 66.5)
+                                ; mem_can_move's .busy arm raises (SPEC.md 66.5)
     call mem_cp_fill0           ; BX = the fill point - the first paragraph
                                 ; nothing has been packed into yet - and the
                                 ; search key that walks with it. Both depend on
@@ -3076,13 +3241,14 @@ mem_cp_walk:
 ;
 ; WHAT IT COSTS is one image copy's worth of latency, charged once and only
 ; when a driver image actually moves: ~17 ms for the sound driver's 6KB, and
-; ~50 ms - three ticks - for the largest image in the tree, ETHER's 18KB. That
-; is the honest bound and not the typical case. What three lost ticks cost: the
-; BIOS clock, and at most one mouse PACKET, which mou_isr resyncs on the
-; framing bit rather than corrupting. It cannot land inside a floppy transfer -
-; dsk_xfer holds [sch_lock] and claims nothing - and it cannot land inside IRQ
-; discovery, which runs on the UI task with a frame in the image that
-; mem_in_nest already refuses on.
+; ~50 ms - under one tick - for the largest image in the tree, ETHER's 18KB.
+; That is the honest bound and not the typical case. What it costs: no tick,
+; the PIC holding one pending; about two serial mouse packets, the 8250 keeping
+; one byte of the ~six a 1200-baud mouse sends meanwhile, which mou_isr resyncs
+; on the framing bit rather than corrupting; and a sound refill IRQ ~50 ms late.
+; It cannot land inside a floppy transfer - dsk_xfer holds [sch_lock] and
+; claims nothing - and it cannot land inside IRQ discovery, which runs on the
+; UI task with a frame in the image that mem_in_nest already refuses on.
 ;
 ; Ordinary compaction is untouched: every other block takes this path with the
 ; flag unchanged. And no PACKAGE code runs inside it, a driver image's holder
@@ -3212,9 +3378,11 @@ mem_rr_none equ mem_rr_walk.done ; the relocation proc of a claim whose word
 ; rep movsw of up to 64KB. Making it conditional would put a second copy of
 ; "is this a region" somewhere that has to be kept agreeing with mem_is_region.
 ;
-; THREE ADDRESS SPACES, which is why there are three loops. wm_wins, inst_tab
-; and the seven scalars are .bss and reached through DS; menu_bar is .lowbss
-; and mem_tab is the claim table, both reached through SS (SPEC.md 2.6).
+; FOUR ADDRESS SPACES and ONE LOOP, mem_rr_walk, called once per group of
+; mem_rr_tab. wm_wins, inst_tab, drv_tab and the lone words are .bss and
+; reached through DS; menu_bar is .lowbss and mem_tab is the claim table, both
+; reached through SS (SPEC.md 2.6); and the hardware IRQ vectors through
+; segment 0 (SPEC.md 66.6.3.1).
 ;
 ; What needs NOTHING is most of the kernel: sound grants, XMS blocks, toast
 ; ownership, the dock, the clipboard, wm_owner and every wm_about / wm_onwk /
@@ -4037,9 +4205,11 @@ mem_compact:
     inc byte [sch_lock]         ; pause task switching across the PLAN as well
                                 ; as the moves - the dsk_xfer bargain (SPEC.md
                                 ; 18.9), where the tick, the mouse and any
-                                ; sound IRQ keep running. The plan is pure
-                                ; arithmetic over 32 records and costs
-                                ; microseconds, and taking it inside the same
+                                ; sound IRQ keep running. The plan is
+                                ; arithmetic over 32 records - a MEM_MAX scan
+                                ; per live claim in mem_cp_next, so some
+                                ; milliseconds on the 8088 (predicted, not
+                                ; measured) - and taking it inside the same
                                 ; window is what stops the map changing
                                 ; between deciding a move is worth making and
                                 ; making it
@@ -4971,10 +5141,31 @@ mem_avail_lvl_p:                ; AX/BX in PARAGRAPHS, otherwise the same
     test byte [ss:si+MC_DMA+1], MC_DMA_HI >> 8
     jz .lo
     inc dx                      ; a ceiling mover: its size joins the fill
-    jmp short .pack             ; point and a run is pending
+                                ; point and a run is pending - AND ITS PAGE
+    mov ax, [ss:si+MC_DMA]      ; HEAD WITH IT (SPEC.md 66.4.3.1, KERN-MEGA-
+    and ax, MC_DMA_HEAD         ; PLAN 14.185). The descending pass bumps an
+%ifdef MEM_ALIGN_CLASS          ; MC_DMA mover DOWN off a page its head would
+    test byte [ss:si+MC_DMA+1], MC_DISK >> 8
+    jz .hslack                  ; straddle - by less than the head - and a
+    add ax, 31                  ; DISK one down to 512 bytes (< 32 more), so
+.hslack:                        ; the run occupies at most its size plus that
+%endif                          ; under B: charged here, the hole measured at
+    add bx, ax                  ; B is never more than the pass leaves. The
+    jmp short .pack             ; slack's own gap is not a run (under-report)
 .lo:
     or dx, dx                   ; a floor mover packs onto the fill point...
-    jz .pack
+    jnz .barrier
+    push di                     ; ...AT mem_cp_dest's DESTINATION, which is
+    call mem_cp_dest            ; the fill point unless MC_DMA bumps it to the
+    mov bx, di                  ; next page's floor (or DISK aligns it): the
+    pop di                      ; run's own arithmetic, so the plan cannot put
+    jmp short .pack             ; a block where the run will not (SPEC.md
+                                ; 66.4.3.1, KERN-MEGA-PLAN 14.185). The gap the
+                                ; bump opens is NOT measured, as mem_cp_walk
+                                ; does not measure it: mem_compact decides on
+                                ; that walk's run, and a hole it cannot see
+                                ; is not one mem_claim compacts for. DI is the
+                                ; total, banked round the call that writes it
 .barrier:                       ; ...unless a run is pending under it, and
     call mem_cp_gap             ; then it is where that run stops: the hole is
     mov bx, [ss:si+MC_SEG]      ; base - fill, which is B - S - fill, and the
@@ -5252,6 +5443,12 @@ mmf_osapi_mem_claim_dma:        ; THE DMA DOOR'S FAR ENTRY IS THE BODY: AX =
     push cx                     ; KB, CX = the head's KB, ES = the caller.
 .pushed:                        ; Every register kept but DX
     push bx
+%ifdef KERN_MEGA
+    jcxz .conv                  ; A HEAD, FROM AN OS88_HIGHMEM PACKAGE: a
+    call COLD_SEG:mega_claimdf  ; pool block below 16MB with the head inside
+    jnc .out                    ; one 64KB page, born pinned (KERN-MEGA-PLAN
+.conv:                          ; 14.160). No head - the plain door, a carve,
+%endif                          ; an overlay - stays conventional, as before
     call mem_own                ; BX = owner word = the calling segment
     jc .fail
     call mem_claim_dma_x
@@ -5294,6 +5491,12 @@ mmf_osapi_mem_claim_dma_hi:     ; ...and the top-down DMA door's, the same
     push cx                     ; body down to the claim and the same tail
 .pushed:
     push bx
+%ifdef KERN_MEGA
+    jcxz .conv                  ; (the same pool arm: "from the top" means
+    call COLD_SEG:mega_claimdf  ; nothing to a pool block, and a head here
+    jnc mmf_osapi_mem_claim_dma.out ; is taken bottom-up anyway, 14.55)
+.conv:
+%endif
     call mem_own
     jc mmf_osapi_mem_claim_dma.fail
     call mem_claim_dma_hi_x
@@ -5312,11 +5515,23 @@ mmf_osapi_mem_huge:
 %ifdef KERN_MEGA
     or ax, ax                   ; AX = 0 ASKS (KERN-MEGA-MEMORY-PLAN MC5):
     jnz .claim                  ; the most one claim gets - the heap's, and
-    push bx                     ; in protected mode the pool's and the
-    call mem_rank_top           ; bridge's (mega_hugeqf)
+    cmp bx, MEMH_AVAIL          ; in protected mode the pool's and the
+    je .avail                   ; bridge's (mega_hugeqf), for the claim BX
+    push bx                     ; names: 16KB and 32KB windows never
+    call mem_rank_top           ; bridge (MEGA-HUGE-PLAN F3)
     call mem_avail_lvl_x
     pop bx
     call COLD_SEG:mega_hugeqf
+    clc
+    retf
+.avail:                         ; BX = MEMH_AVAIL: OSAPI_MEM_AVAIL with the
+    call mem_rank_top           ; POOL counted (MEGA-HUGE-PLAN F6) - what the
+    call mem_avail_lvl_x        ; KB doors serve THIS caller in either
+    xor dx, dx                  ; region; DX = the pool's best run, 0 none
+    cmp byte [mega_on], 0
+    je .ar                      ; real mode: the heap's answer as it stands
+    call MEGA_SEL_CODE:mega_availf
+.ar:
     clc
     retf
 .claim:
@@ -5420,8 +5635,12 @@ osapi_mem_regrow_x:
     call mem_ishidx             ; a pool SELECTOR (mega_claimhf, OS88_HIGHMEM):
     jc .conv                    ; resized in the pool, the selector kept...
     call COLD_SEG:mega_claimregrowf
-    jc .move
+    jc .huge
     retf
+.huge:                          ; A HUGE CLAIM the pool's regrow did not take
+    call COLD_SEG:mega_hugergf  ; - a bridge, or one run the pool cannot hold
+    jc .move                    ; (MEGA-HUGE-PLAN F8): CF = 1 is final for it,
+    retf                        ; as mega_claimkbf below refuses a run
 .move:                          ; ...or, past 64KB or with no room up there,
     push ax                     ; MOVED DOWN: a conventional claim, the old
     push bx                     ; bytes copied in and the pool block freed -
@@ -5470,6 +5689,14 @@ osapi_mem_regrow_x:
     pop ax
     retf
 .conv:
+    cmp byte [mega_on], 0       ; PROTECTED MODE: a claim mega_hugec made a
+    je osapi_mem_regrow_c       ; RUN over is regrown with its windows (F8)
+    call COLD_SEG:mega_hugecrgf
+    jnc .rr
+    jnz osapi_mem_regrow_c      ; (ZF = 0: no run - the plain regrow)
+.rr:
+    retf                        ; (CF = 1 with ZF = 1: a run, refused)
+osapi_mem_regrow_c:             ; (a far entry: the run's piece, mega_hgcpr)
 %endif
     push bx
     call mem_own                ; BX = the owner ES names (CF=1 = not a
@@ -5478,6 +5705,35 @@ osapi_mem_regrow_x:
 .out:
     pop bx                      ; pop leaves CF and DX alone
     retf
+
+%ifdef KERN_MEGA
+; mem_hrecf - FAR (mega.inc's huge regrow, MEGA-HUGE-PLAN F8): DX = a claim's
+; value, ES = the caller -> CF = 0, AX = its KB and CX = its MC_RLOC (CX =
+; FFFFh in: read; anything else is written first); CF = 1 it is no claim of
+; the caller's here. Keeps the rest
+mem_hrecf:
+    push bx
+    push si
+    call mem_own
+    jc .o
+    call mem_find_own
+    jc .o
+    cmp cx, 0xFFFF
+    je .r
+    mov [ss:si+MC_RLOC], cx
+.r:
+    mov cx, [ss:si+MC_RLOC]
+    mov ax, [ss:si+MC_PARA]
+    push cx
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    clc
+.o:
+    pop si
+    pop bx
+    retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_p - OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7): the claim heap counted
@@ -5516,7 +5772,9 @@ osapi_mem_p:
     ; does not take - so this arm only ADDS the pool, never removes the
     ; paragraph door. The pool counts in KB, so a pool claim is granted the
     ; KB that covers it: conventional memory is what the granule is for. A
-    ; DMA head stays conventional, as it does through the KB doors.
+    ; DMA head stays conventional: THE door for a page-safe buffer a
+    ; real-mode path names, where the KB DMA doors give an OS88_HIGHMEM
+    ; package's head a pool block (KERN-MEGA-PLAN 14.160).
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
@@ -5546,11 +5804,25 @@ osapi_mem_p:
     jmp short .gen
 .mreg:
     call mem_ishidx             ; a POOL block: OSAPI_MEM_REGROW's own arm
-    jc .gen                     ; resizes it (or moves it down), in KB
+    jc .mconv                   ; resizes it (or moves it down), in KB
     push ax
     call .kb
     call COLD_SEG:osapi_mem_regrow_x
     jc .mno
+    add sp, 2
+    jmp short .mkb
+.mconv:                         ; ...and so does it a conventional claim
+    cmp byte [mega_on], 0       ; mega_hugec made a RUN over (MEGA-HUGE-PLAN
+    je .gen                     ; F8): the paragraph regrow would leave its
+    push ax                     ; windows as they were
+    call .kb
+    call COLD_SEG:mega_hugecrgf
+    jnc .mok
+    jnz .mno                    ; (no run: the paragraph door's own)
+    pop ax                      ; a run, refused
+    stc
+    retf
+.mok:
     add sp, 2
     jmp short .mkb
 .kb:
@@ -5671,10 +5943,12 @@ osapi_mem_movable_x:
     call mem_movable_x
 %ifdef KERN_MEGA
     jmp short .out
-.hi:
-    stc
-%endif
-.out:
+.hi:                            ; above 1MB: a region never moves, and of the
+    call COLD_SEG:mega_bfpcf    ; (A BRIDGE: its conventional piece is the
+    jnc .seg                    ; claim declared, KERN-MEGA-PLAN 14.169)
+    call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
+%endif                          ; pinned, so only its pin is the caller's to
+.out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
 %ifdef KERN_MEGA
     pop dx
 %endif
@@ -5685,7 +5959,8 @@ osapi_mem_movable_x:
 ; -----------------------------------------------------------------------------
 ; osapi_mem_compact - API slot 0x0443: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
-;        MEMC_WHATIF (0): AL = a purge level, exactly as OSAPI_MEM_AVAIL_LVL's
+;        MEMC_WHATIF (0): AL = a purge level, answered as OSAPI_MEM_AVAIL
+;                         would answer at that level
 ;        MEMC_POST   (1): BX = a window of yours, AL = the shed rank the pass
 ;                         is to respect
 ;        MEMC_WHATIF_P (2): the what-if, in PARAGRAPHS
@@ -6221,6 +6496,10 @@ mmf_mem_claim:            call mem_claim_x
 
 mmf_mem_free:             call mem_free_x
                       retf
+%ifdef KERN_MEGA
+mmf_mem_claim_hi:         call mem_claim_hi_x ; (SEG_LOW: a region brought
+                      retf                    ; down, at the arena's top)
+%endif
 %ifdef KERN_BIG                 ; its callers are kern_big only
 mmf_mem_movable:          call mem_movable_x
                       retf
@@ -6265,7 +6544,9 @@ mem_dsk:  resb 1                  ; mem_hifit's DISK class, staged as [mem_dma]
 %endif                            ; is (SPEC.md 50.2.1.1)
 mem_dma:  resw 1                  ; mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
-mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
+mem_base: resw 1                  ; the arena's first paragraph: the floor
+                                  ; (mem_floor_ax), raised past stage 2's
+                                  ; blob until mem_unblob
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none -
                                 ; SET BY EVERY CALLER before the call (mem_hifit
                                 ; to 0, mem_regrowp to its own record), and
@@ -6397,7 +6678,7 @@ section .text
 ; out:      AX = kilobytes, at least 1
 ; clobbers: flags
 ;
-; The claim heap's unit is the kilobyte, so every caller of mem_claim that
+; The KB doors' unit is the kilobyte, so every caller of mem_claim that
 ; starts from a byte count spells this out; three of them did, in .text alone.
 ; CX is banked because one of the three carries the byte count in it, and a
 ; helper that clobbers a caller's register is worth less than the two bytes.
@@ -6477,5 +6758,124 @@ mem_bytes_kb_x:
                                 ; (mod_disarm), the two cancelling with
                                 ; nothing hot between them (kernel size pass
                                 ; 14; tests/unit/t_hotpar.py)
+
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; mem_ringtop - from mem_claim_x's retry, both `.cold` (kern_mega, KERN-MEGA-PLAN
+; 14.166, SPEC.md 50.3.2): A RING GOES TO THE TOP END of conventional memory
+; when the top end is free for it. in: AX = paragraphs (granule-rounded), SI
+; = the page-safe head in paragraphs, DI = the door's bits, BX = the owner.
+; out: DI | MC_DMA_HI when the top-down first fit would put the claim where
+; nothing above it but other RINGS and the kernel's own claims (0xFFxx: the
+; low descriptor tables, a boot driver's image) stands - so mem_claim_1 then takes exactly
+; that place - and DI as it was otherwise: no head (no ring), the top door
+; already, a kernel claim, real mode, or a claim with no head above the
+; candidate (a carve, an
+; overlay, a region: the top is not free, and a ring under them would be in
+; the middle - bottom-up first fit, 14.55's, stands). Everything else kept.
+;
+; WHY THE TOP: a ring is held while it plays and PINNED for all of that, and
+; bottom-up it lands on the FILL POINT, above whatever programs' claims and
+; caches stand there - which are freed while it plays (a program closed, a
+; cache shed), and their KB then stand UNDER the pin as a run of their own
+; (measured on a 1MB kern_mega: SOUND.DRV's 16KB staging pool over 86KB that
+; Sheet's spill had held, the heap's best run 474KB of 560KB free). The
+; floor end is never free for it after the boot - caches and spills stand
+; there - and the top end is, on a machine with a pool, from the boot until
+; a program wants a conventional CS.
+;
+; NOT THE READ-AHEAD'S LANDING, though it is pinned and page-safe and since
+; KERN-MEGA-PLAN 14.167 comes back mid-session (dsk_bnc_want): it is a CACHE,
+; which every claim sheds and every planner (mem_avail's walk, the
+; compactor's) dissolves rather than walks round, so wherever it lands it
+; cuts nothing a claim can have. Sent to the top it stood ABOVE the rings
+; and stranded its own 9KB there once shed - measured, the one claim 679KB
+; where 688KB is the answer bottom-up A ring at the top has only free memory
+; under it, and what is later taken top-down stacks under the ring and
+; frees back into that run. Idle (declared movable) it came in by the top
+; door, so the descending pass packs it back to the top (SPEC.md 66.4.1)
+; -----------------------------------------------------------------------------
+mem_ringtop:
+    or si, si
+    jz .r                       ; no head: not a ring
+    test di, MC_DMA_HI
+    jnz .r
+    cmp byte [ss:mega_pm], 0
+    je .r
+    cmp bh, MEM_PG_MIN          ; a kernel cache (0xFBxx..0xFExx: the
+    jae .r                      ; read-ahead's landing) or a kernel tag
+    push ax                     ; (0xFFxx): its own place - below
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si                  ; BX = the head
+    mov dx, [mem_top]
+.cand:                          ; DX = an edge: the base AX under it
+    sub dx, ax
+    jc .no
+.re:
+    cmp dx, [mem_base]
+    jb .no
+%ifdef MEM_ALIGN_CLASS
+    test di, MC_DISK            ; mem_claim_1's bumps, going DOWN: the DISK
+    jz .al                      ; class's 512-byte line...
+    and dl, 0xE0
+.al:
+%endif
+    mov cx, dx                  ; ...and the head inside its 64KB page, else
+    and ch, 0x0F                ; the highest base in this page whose head
+    add cx, bx                  ; still fits
+    cmp cx, 0x1000
+    jbe .fit
+    mov cx, dx
+    and cx, 0xF000
+    add cx, 0x1000
+    sub cx, bx
+    mov dx, cx
+    jmp short .re
+.fit:
+    mov si, mem_tab             ; an OVERLAP: just under it, as mem_claim_1
+.ov:                            ; does going down
+    cmp word [ss:si+MC_SEG], 0
+    je .ovn
+    mov cx, dx
+    add cx, ax                  ; CX = the candidate's end
+    cmp [ss:si+MC_SEG], cx
+    jae .ovn
+    mov cx, [ss:si+MC_SEG]
+    add cx, [ss:si+MC_PARA]
+    cmp cx, dx
+    jbe .ovn
+    mov dx, [ss:si+MC_SEG]
+    jmp short .cand
+.ovn:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .ov
+    mov si, mem_tab             ; THE CANDIDATE, DX: every claim above it
+.up:                            ; must be a ring, or the KERNEL'S own (the
+    cmp word [ss:si+MC_SEG], 0  ; descriptor tables and the boot drivers'
+    je .upn                     ; images of a machine with no pool, which
+    cmp [ss:si+MC_SEG], dx      ; hold the top from the boot), or it is not
+    jb .upn                     ; the top end
+    test word [ss:si+MC_DMA], MC_DMA_HEAD
+    jnz .upn
+    cmp byte [ss:si+MC_OWN+1], 0xFF
+    jne .no
+.upn:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .up
+    or di, MC_DMA_HI            ; the top door: mem_claim_1 takes DX
+.no:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+%endif
 
 section .text                   ; ...and the file ends in .text (CLAUDE.md 1)

@@ -84,9 +84,11 @@ MEGA_IMGS = ("megaapps.img", "megaapps120.img")
 # of it instead of megaapps: ARCADE's release disks are arcrel*.img, and the
 # owner chose a twin for the arm (2026-11-05, ARCADE-MEGA-PLAN 2.1); WIN16
 # left the apps disks for win16.img (SPEC.md 124.18.1), so its arm is on
-# megawin16*.img (124.31.1)
+# megawin16*.img (124.31.1); and XTMP3 left kern_mega's apps disks for
+# megaxtmp3*.img (the owner's, 2026-11-07, SPEC.md 20.18 item 1)
 OWN_DISKS = {"ARCADE.O88": ("arcrelmega.img", "arcrelmega120.img"),
-             "WIN16.O88": ("megawin16.img", "megawin16-120.img")}
+             "WIN16.O88": ("megawin16.img", "megawin16-120.img"),
+             "XTMP3.O88": ("megaxtmp3.img", "megaxtmp3-120.img")}
 
 
 def read(path):
@@ -552,10 +554,6 @@ def disks(megapkgs):
         for nm in (own or want):
             if not own and nm in OWN_DISKS:
                 continue                # (on its twin, checked there)
-            # XTMP3 is off the 1.2MB disks by SPEC.md 24.6.1's dated
-            # decision (2026-10-23), the shipped apps120.img's own
-            if nm == "XTMP3.O88" and img == "megaapps120.img":
-                continue
             check(nm in found, "megapkg: %s carries no %s" % (img, nm),
                   why="the arm is on kern_mega's apps disk where the shipped "
                       "build is on the shipped one", got="absent",

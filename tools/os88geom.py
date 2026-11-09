@@ -231,6 +231,8 @@ _MIRROR = {
     "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
     "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
     "DSL_SLOT": ("kernel/desk.inc", 0x3F),
+    "DSL_PIN": ("kernel/desk.inc", 0x40),   # a placed item: tools/os88pmcfg.py
+                                            # and os88deskcfg.py write it
     "DSL_GONE": ("kernel/desk.inc", 0x80),
     # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
     "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only

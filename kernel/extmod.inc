@@ -1082,7 +1082,8 @@ wm_reflows:
 ; (SPEC.md 30.5) and its own height as the floor. A secondary has no menu bar
 ; and no dock, so its whole extent is desktop, and DX IS AN OUTPUT TOO (SPEC.md
 ; 11.93) - the bottom a window that will not fit the band may hang down to,
-; which there IS ye. Two displays at most, so "not the primary" is display 1.
+; which on a secondary is that display's own bottom (VY + CH). Two displays
+; at most, so "not the primary" is display 1.
 ; -----------------------------------------------------------------------------
 wm_fit_box:
     push ax                     ; (NO ext_one: with one display - a collapsed
@@ -1103,7 +1104,7 @@ wm_fit_box:
     retf
 
 ; --- WHICH DISPLAY A LANDING DECIDED ON (SPEC.md 39.16.4.2) -------------------
-; wm_land_fit asks wm_disp_now ONCE and every step after it is answered from
+; ui_drag_size asks wm_disp_now ONCE and every step after it is answered from
 ; here, because the RESIZE it applies can stop the straddle being true: a
 ; 250x303 Arkanoid dropped over the seam takes the CGA's 208x156 and no longer
 ; reaches the CGA at all, so wm_kind_bank recorded the HERCULES against a CGA
@@ -1343,9 +1344,9 @@ ext_fcut:                       ; [gfx_dnest] = 1 was asked by the caller,
     xchg ax, si                 ; (ES is font_char's to clobber: it banked it)
                                 ; positive. AX carries SI's old value out of
                                 ; the xchg and is spent below - `mov al,1`
-                                ; then vid_ctx_ptr, which takes its index in
-                                ; AL and does `mul dl`, so AH is that
-                                ; instruction's OUTPUT and not an input
+                                ; then ext_ctx_ptr, which takes its index in
+                                ; AL (a branch: no `mul`), and the load after
+                                ; it overwrites AX whole, so AH is no input
 
     mov bx, [vid_cw]            ; BX = k, this display's columns of the cell,
     sub bx, cx                  ; and BP = n, its rows. Both are 1..8: the

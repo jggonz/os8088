@@ -47,8 +47,8 @@ HD_MAXVOL    equ 4              ; volumes mountable at once: ONE PER FAT
                                 ; PARTITION, because four primaries is the
                                 ; whole of what a partition table holds and
                                 ; each is its own drive letter and its own
-                                ; desktop icon (SPEC.md 52.4). It matches the
-                                ; kernel's own spare rows (DVOL_MAX - 2)
+                                ; desktop icon (SPEC.md 52.4). The kernel's
+                                ; DVOL_MAX (8) holds them beside the floppies
 
 ; --- one device row, stride HDD_SIZE ----------------------------------------
 HDD_KIND     equ 0              ; db: HDK_*
@@ -155,7 +155,7 @@ HP_MAXLO     equ 0xFED0         ; largest FAT16 there is: 65,524 clusters of
 ; =============================================================================
 HDT_INIT     equ 0              ; in: DX = the resident's segment, BX = hd_svc's
                                 ; offset in it, CX = its DISPATCHER's offset
-                                ; in it (DRV_ORG + PKG_DISP: E00Ch from the
+                                ; in it (DRV_ORG + PKG_DISP: C00Ch from the
                                 ; HMA). DX and not AX, because AL is
                                 ; the verb. Called once
                                 ; immediately after the image is read, before

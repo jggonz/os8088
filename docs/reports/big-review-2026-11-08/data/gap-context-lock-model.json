@@ -1,0 +1,283 @@
+{
+ "area": "gap-context-lock-model",
+ "title": "One execution-context and lock model: who may run what, on which stack, under which lock, and who paints",
+ "summary": "The kernel has three real locks. gfx_lock is a 4-byte owner-stamped RAM semaphore with a one-debt fairness rule. sch_lock is a counted pre-emption disable. The third is IF=0. Alongside them sit at least eight ad-hoc context bytes, but no model says which contexts exist, what each may call, or how the locks nest. The report writes that matrix as the code has it: UI task with the lock free, held, or under sch_lock; worker free or holding the lock; dying worker; ISR; rate hook; fsx bracket; kern_mega fault; fatal panels. It is set against drawing, the locks, yields, claims, disk, window operations, WAKE, toasts and mod_drop. Three things fall out of it. Teardown runs on the dying task's stack, which is the root of histsys-1, hm-3, ui-2, the heap's 'dying worker's repaint' special case, a worker reset of the global mem_pg_floor, and kern_mega killing a faulting worker on its faulted stack; teardown should be the UI task's seventh kind of posted work (ctx-1, about +16 to +26 resident). sch_lock has about forty takers and six meanings; releasing it across int 13h (histsys-5) is feasible on kern_big and kern_small with three changes, about +33 to +38, the first of which closes a real bug the release would create (the mouse ISR's 'held by us' arm reads sch_cur at interrupt time). The context rules are prose in two lists that disagree, and none is enforced. Also: a worker dying while it holds the gfx lock deadlocks on kern_big and kern_small (ctx-2); ISR-callable doors assume SS = LOW_SEG, which the kernel itself says is false on SeaBIOS (ctx-5); kern_small lets any task shed (ctx-6); IF=0 has no bound and no instrument (ctx-4). After ctx-1 deferred damage becomes a perf and stack-depth question rather than a safety one (ctx-9).",
+ "strengths": [
+  {
+   "title": "gfx_lock is already a fair, owner-stamped RAM semaphore in 4 bytes",
+   "why": "The flag and owner go in one word store inside the cli window, so the pair can never disagree. want/last is a one-debt fairness rule that took press-to-menu from 1.4-14.7 s to 37-70 ms. Three readers ask 'is it MINE' rather than 'is it held'.",
+   "evidence": "kernel/vga12.inc:296-323, 5082-5136, 5262; SPEC.md 7.3"
+  },
+  {
+   "title": "The image nest is task-aware",
+   "why": "wm_nest_pushd keeps a stack for the UI task and only a count (wm_tcnt) for other tasks, under pushf/cli because the driver cell is reached from IRQ0.",
+   "evidence": "kernel/wm.inc:11735-11754, 11818-11855; kernel/memory.inc:2455-2475"
+  },
+  {
+   "title": "Only the UI task compacts or sheds on kern_big, stated and enforced in code",
+   "why": "The comment gives the reason in context terms: a pre-empted UI task holds claims in registers. Of all the context rules, this one has a code fence.",
+   "evidence": "kernel/memory.inc:955-965, 4703-4706"
+  },
+  {
+   "title": "CURBAR_ON is task-scoped",
+   "why": "It stores sch_cur+1 because its painter runs lock-free at IF=1. That is the right shape for every context flag an ISR reads, and the model for fixing cur_inxfer.",
+   "evidence": "kernel/mouse.inc:66-74"
+  },
+  {
+   "title": "The DOS window's IVT exchange is a complete context discipline in package code",
+   "why": "A program's vectors, including a refusing int 13h, are live exactly while its own task runs, so a windowed DOS program cannot re-enter the BIOS disk path.",
+   "evidence": "apps/dos/dosw.inc:11-30"
+  },
+  {
+   "title": "kern_mega already does owner-died release and posted teardown",
+   "why": "mega_fkill releases a lock the faulting task held and posts callback faults to ui_task (mega_fkq). It is the existing proof that ctx-1 and ctx-2 fit the kernel.",
+   "evidence": "kernel/mega.inc:2659, 2694-2701, 2939"
+  }
+ ],
+ "findings": [
+  {
+   "id": "ctx-1",
+   "kind": "rethink",
+   "severity": "high",
+   "title": "Post instance teardown to the UI task, so paint and teardown have one context",
+   "detail": "inst_task_die runs on the dying worker: gfx_lock, then inst_unwin -> wm_destroy -> the damage pass far-calling other packages' W_PAINT, then desk_drop_x -> mod_drop, gfx_unlock, mem_free_rec and task_exit. That one decision is the root of: histsys-1 (a 128-byte slice carries a repaint chain, and t_stkclass does not price kernel code below an OSAPI call); hm-3 (DESK.DRV is dropped while the UI task may be in dkd_hover); ui-2 (the UI reads handler words before gfx_lock and the worker can destroy the window first); the worker's claim cannot compact, so raise caches decline a copy; mem_free_rec_x stores the global [mem_pg_floor] from the worker while the UI task may be between a planning AVAIL and its CLAIM; kern_mega's mega_fkill .worker runs the whole chain on the stack that just faulted. The UI task already drains six posted kinds of work at the top of its pass, where nothing is held and wm_pkgd is 0. Rule 7 already forbids workers every window-changing slot, so once teardown moves, every damage source is on the UI task by construction.",
+   "evidence": [
+    "kernel/instance.inc:1921-1947 inst_task_die",
+    "kernel/instance.inc:1903-1919 inst_unwin -> wm_destroy",
+    "kernel/instance.inc:1938 desk_drop_x on the worker",
+    "kernel/memory.inc:961-963 'a dying worker's repaint banking raise caches (inst_task_die)'",
+    "kernel/memory.inc:4825-4830 mem_free_rec_x writes [mem_pg_floor]",
+    "kernel/mega.inc:2686-2705 mega_fkill .worker jumps into inst_task_die on the faulting SP",
+    "kernel/ui.inc:100-125, 839-900 the existing posted-work ladder",
+    "kernel/ui.inc:823-831 13.9.2's under-lock re-test exists because of this",
+    "tests/unit/t_stkclass.py:31-36 does not price the kernel below an OSAPI call"
+   ],
+   "recommendation": "In inst_task_die: (1) release a lock the task owns (ctx-2); (2) under one cli, store I_TASK <- 0xFF and set bit inst_idx of a new .bss word [inst_reap]; (3) increment [ui_post]; (4) task_exit with BX = 0. The UI ladder gains a step: for each bit, take gfx_lock, run app_close_win's task-less tail from .noflush (inst_rel_rec, inst_unwin, mem_free_rec, desk_drop_x, I_STATE <- 0, with toast_owner_gone moved there too), then gfx_unlock. Factor that tail behind a label. Keep .tp_locked's re-test, since rule 7 is not enforced. Add a soak row that closes Bounce (class 128) over a second visible window under tools/stkwater.py; break it by reverting the post.",
+   "phase": "now",
+   "bytes_est": "+16 to +26 resident kern_big (inst_task_die about -8, UI drain about +22 to +32, +2 .bss); about 5 less on kern_small (no desk_drop). ESTIMATED.",
+   "listed_as": "histsys-1 (same fix, wider scope); not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE",
+   "prior_art": "Windows 3.x and the Mac always tore windows down on the application's or shell's own thread; mega_fkq is this kernel's own precedent",
+   "verdict": "confirmed",
+   "verify_note": "Re-read inst_task_die (instance.inc:1921-1947): inst_rel_rec, toast_owner_gone, gfx_lock, inst_unwin (wm_destroy + wm_destroy_seg), desk_drop_x on kern_big, gfx_unlock, mem_free_rec, task_exit - all on the worker reached from inst_pkg_alive .die. memory.inc:974-978 names 'a dying worker's repaint banking raise caches (inst_task_die)'; mem_free_rec_x (memory.inc:4847-4848) stores the global [mem_pg_floor] unconditionally; mega_fkill .worker (mega.inc:2705-2721) sets SP to the faulting frame and far-jumps into inst_task_die. The UI ladder already drains posted work (ui.inc .chk_close/wm_clreq, inst_launch, the timer pass, compaction) at a point where nothing is held. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Rethink; bytes ESTIMATED and plausible. Line numbers in memory.inc have moved (+~15)."
+  },
+  {
+   "id": "ctx-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "A worker that dies holding the gfx lock deadlocks the desktop on kern_big and kern_small",
+   "detail": "SPEC.md 20.6 rule 4 says calling OSAPI_TASK_ALIVE under the lock deadlocks because inst_task_die takes the lock, and that 'gfx_lock is a byte with no owner field, so there is no kernel defence'. gfx_lock_own has existed since 59.4, and kern_mega's mega_fkill .worker already reads it and calls gfx_unlock before inst_task_die. kern_big and kern_small do not, so inst_task_die's gfx_lock spins on its own hold for ever: scheduling continues and nothing draws again. gfx_lock's held arm could also detect a self-take generally, and does not.",
+   "evidence": [
+    "kernel/instance.inc:1926 call gfx_lock in inst_task_die",
+    "kernel/vga12.inc:310-318 gfx_lock_own",
+    "kernel/mega.inc:2694-2701 mega_fkill releases a lock the task owns ('inst_task_die takes the lock itself')",
+    "kernel/vga12.inc:5082-5104 .retry/.block never compares the owner",
+    "SPEC.md 20.6 rule 4"
+   ],
+   "recommendation": "At the top of inst_task_die: mov al,[sch_cur] / cmp al,[gfx_lock_own] / jne .nolk / call gfx_unlock. 0xFF never matches a slot, so no flag test is needed. Then delete kern_mega's duplicate in mega_fkill .worker. Optionally, in gfx_lock's held arm only, compare the owner with sch_cur and branch to a named panel (histsys-2's generalised panel).",
+   "phase": "now",
+   "bytes_est": "+12 .text kern_big/kern_small, about -24 .mega; optional self-take panel about +10 .text. Inside ctx-1's figure if both land. ESTIMATED.",
+   "listed_as": "not listed; SPEC.md 20.6 rule 4 documents the package rule",
+   "prior_art": "OS/2 1.x system semaphores: ERROR_SEM_OWNER_DIED to the next requester",
+   "verdict": "corrected",
+   "verify_note": "The deadlock is real: inst_task_die calls gfx_lock (instance.inc:1926) and gfx_lock's .retry/.block never compares the owner (vga12.inc:5082-5104), so a worker that calls OSAPI_TASK_ALIVE holding the lock spins for ever; mega_fkill .worker (mega.inc:2709-2717) already releases an owned lock first. Corrections: SPEC.md 20.6 rule 4 documents this as a binding package rule ('Calling OSAPI_TASK_ALIVE while holding it deadlocks'), so it is a missing kernel defence against a documented package error (kind hazard), not an unknown kernel bug; and the SPEC text has already been amended to say gfx_lock records its owner but does not consult it (the reviewer's quote is gone). Bytes: mov al,[sch_cur] (3) + cmp al,[gfx_lock_own] (4) + jne (2) + call gfx_unlock (3) = +12 .text, not +9; the kern_mega block it would replace is 24 bytes (A0 3 + cmp byte imm 5 + je 2 + cmp 4 + jne 2 + mov bp 3 + far call 5), so about -24 .mega rather than -13. ESTIMATED."
+  },
+  {
+   "id": "ctx-3",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "sch_lock can be released across the UI task's floppy int 13h only with three changes; the first fixes a bug the release would create",
+   "detail": "sch_lock has about forty takers and six meanings, while SPEC.md 7 said two: no BIOS re-entry plus the mouse ISR's proof that no other task is mid-primitive; a FAT-window ES banked across a walk; a stable heap map across plan and moves; a PCM clip owning the CPU; the xmem copy and kern_mega pool bases; hibernate's frozen state. The mouse ISR's int 13h arm draws when the lock is free 'because dsk_xfer holds [sch_lock] throughout, so no other task is running', and when it is held it compares [sch_cur] against [gfx_lock_own] AT INTERRUPT TIME. With switching live, a scheduled worker that takes the lock and is mid-fill reads as 'held by us', and the arrow is drawn into its primitive: FIELD-NOTES 34's smear. Also, nothing but sch_lock stops a rule-7 violator entering dsk_xfer and the ROM while the UI task is parked inside. What already holds: on kern_big a worker gets first fit only; only the UI task compacts; DOS windows install a refusing int 13h while their task runs; sch_switch refuses a foreign SS; hibernate, the compactor and the clip hold their own counts.",
+   "evidence": [
+    "kernel/disk.inc:1462, 2000, 2030-2035, 2433 dsk_xfer's lock, CURXFER and retry dance",
+    "kernel/mouse.inc:4226-4271 the int 13h arm, reading [sch_cur] at ISR time",
+    "kernel/mouse.inc:44-60 cur_inxfer is a global constant 1",
+    "kernel/memory.inc:955-965 workers get first fit only on kern_big",
+    "apps/dos/dosw.inc:17 'a refusing 13h'",
+    "kernel/sched.inc:2408-2419 foreign-SS refusal",
+    "kernel/hiber.inc:1843, 1985 hibernate's own hold",
+    "SPEC.md 7 'exactly **two** routines raise it'"
+   ],
+   "recommendation": "(1) In the ISR, after the cur_inxfer test, add cmp byte [sch_cur],0 / jne .gates (+7), the CURBAR_ON shape. (2) Add a disk-owner byte to dsk_xfer in gfx_lock's shape, so a second task yield-waits instead of re-entering the ROM (+~16); also rule 7's first runtime fence. (3) Skip dsk_xfer's own inc only when sch_cur = 0 AND sch_lock = 0 AND the row is a BIOS floppy and not KERN_MEGA, mirrored at the exits and the retry dance (+~10 to +15). Measure a worker's frame rate during a 16 KB read on os8088_5150_cga_gla before deciding.",
+   "phase": "now",
+   "bytes_est": "+33 to +38 resident ESTIMATED (+~25 more for an optional AT int 15h AH=90h hook)",
+   "listed_as": "histsys-5 (this is its precondition list); DISK-CPU-PLAN 7.2 aside",
+   "prior_art": "OS/2 1.x and NetWare blocked the caller on the device (int 15h 90h/91h) and ran others; a per-device semaphore rather than a global preempt-off",
+   "verdict": "confirmed",
+   "verify_note": "mouse.inc:4232-4282: with cur_inxfer set, a free lock draws on the stated ground that 'dsk_xfer holds [sch_lock] throughout, so no other task is running', and a held lock is tested 'held by us' by comparing [sch_cur] read at interrupt time with [gfx_lock_own]. With switching live during the transfer a worker holding the lock mid-fill would satisfy that test, so change (1) is a real precondition. cur_inxfer is a global byte set by CURXFER_ON (mouse.inc:57-62); dsk_xfer drops and retakes sch_lock round fpg_busy on the retry path (disk.inc:~2041-2046); dosw.inc:17 installs a refusing 13h. The proposed ISR test (cmp byte [sch_cur],0 = 5 + jne 2) is +7 as stated. Remaining bytes ESTIMATED. Not in either queue."
+  },
+  {
+   "id": "ctx-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "IF=0 has no bound and no instrument; set one per machine class and measure it in the final pass",
+   "detail": "Long IF=0 windows: mem_regrow path 3 (86 ms per 32 KB); driver image move (17-50 ms, deliberate); mem_avail_lvl_p's walk (~10-20 ms, predicted); kern_mega pool piece (~16.4 ms); the arrow inside mou_isr (2.4-3.2 ms); mega_leds (up to 2 x 65,536 polls); sch_switch (~0.46 ms). The 8250's one-byte holding register sets the bound: ~8.3 ms at 1,200 baud (mouse), ~4.2 ms at 2,400 (WireBall link), ~1 ms at 9,600 (the SERIAL.DRV lease default). IRQ0 ticks are lost past 55 ms. An 8 ms XT bound is achievable with hm-1 (refined: keep IF=0 for kernel-tag owners, whose ISRs may write the block; IF=0 does nothing against DMA) and hm-5, leaving the driver move as the documented exception. A 1 ms bound is not achievable while the arrow is drawn in the serial ISR (isr-7). No suite row measures IF=0 duration.",
+   "evidence": [
+    "kernel/memory.inc:4559-4664 and 2030 (86 ms/32 KB)",
+    "kernel/memory.inc:3072-3092 driver image move at IF=0",
+    "kernel/memory.inc:4927-5023 avail walk in cli",
+    "kernel/mouse.inc:4212-4300 cursor in ISR",
+    "kernel/sched.inc:1243-1249 sch_account already latches and disambiguates the PIT",
+    "tests/suite.py: no IF=0/latency row (only uilat for lock latency, serlease for overruns)"
+   ],
+   "recommendation": "Adopt per-class bounds in SPEC.md 7: XT 8 ms; SERIAL.DRV at 9,600 on an 8250 documented as sharing the CPU with an ISR-drawn arrow. Add an IFLAT=1 knob, private tree, where sch_isr records max(period - latched count) at entry with the sub-tick at divisor 2048. Add a soak row 'iflat' on os8088_5150_cga_gla and os8088_xt_vga: a 32 KB regrow, an OSAPI_MEM_AVAIL with 16 claims, continuous mouse motion, assert the max against the bound. Pair it with serlease at divisor 12. Break it by reverting hm-1.",
+   "phase": "now",
+   "bytes_est": "0 shipped (knob only); hm-1's fix becomes ~+16 .cold with the kernel-tag refinement; hm-5 +0 to +6",
+   "listed_as": "hm-1, hm-5, mc-5, isr-7, mc-15 (local fixes); no queue row",
+   "verdict": "confirmed",
+   "verify_note": "No suite row measures IF=0 duration (grep of tests/suite.py: uilat measures lock latency, serlease a lease's line state). The IF=0 regions are hm-1 and hm-5's, both confirmed by their verifier; the 86 ms per 32 KB figure is the kernel's own (memory.inc:2046). The 9,600-baud default is SPEC.md 115's Open (divisor 0 = 12). The per-class bounds are arithmetic from the 8250's one-byte holding register, not measurements. Note hm-1's verifier already made the same refinement (keep IF=0 for MEM_K_DRV and ISR-written blocks)."
+  },
+  {
+   "id": "ctx-5",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Every ISR-callable door assumes SS = LOW_SEG, which the kernel itself says is false",
+   "detail": "evq_push writes the ring through SS ([ss:di+EV_TYPE], push ss/pop es) on the claim that SS is LOW_SEG 'for every kernel task and every ISR on one'. sch_switch's SS test records SeaBIOS hopping stacks for int 16h, which ui_task polls with sch_lock clear, so an IRQ there lands on the ROM's SS. mou_isr is safe because MOUPRIV loads SS; isr-2 is the case where the PicoMEM feed swaps SP only. A package IRQ handler calling OSAPI_WM_WAKE ('Any context - ISR-safe', no SS precondition) writes a record at foreignSS:evq_buf. It is latent unless a shipped package calls WAKE from IRQ context, which was not traced.",
+   "evidence": [
+    "kernel/events.inc:106-107, 117-118 SS-relative ring",
+    "kernel/sched.inc:2408-2419 SeaBIOS stack hop with sch_lock clear",
+    "apps/os88api.inc:6605-6606 'Any context - ISR-safe'",
+    "kernel/wm.inc:2343-2369 wm_wake -> evq_push"
+   ],
+   "recommendation": "Load ES from a constant in evq_push (mov ax, LOW_SEG / mov es, ax; AX is already banked) above the full-ring test, and address both accesses through ES. Verify kern_mega's spelling. State the model's rule: an ISR-callable door may assume DS and nothing else. Until then, amend the WM_WAKE cell text.",
+   "phase": "now",
+   "bytes_est": "about +3 .text kern_big/kern_small ESTIMATED",
+   "listed_as": "isr-2 family; not listed",
+   "verdict": "confirmed",
+   "verify_note": "evq_push reads [ss:di+EV_TYPE] and loads ES by push ss/pop es (events.inc:109-126); sch_switch's SS test (sched.inc:2429-2437) records SeaBIOS hopping stacks for int 16h AH=01h with sch_lock clear. mou_isr is covered by MOUPRIV (default; NO_MOUPRIV is a knob). The OSAPI_WM_WAKE cell has since been amended to 'ISR-safe given SS = LOW_SEG' (os88api.inc:6619-6622), so the reviewer's cell mismatch is already fixed; the kernel comment at events.inc:109-111 is not and is carried below. The fix (mov ax,LOW_SEG / mov es,ax replacing push ss/pop es, es: replacing ss:) is about +3. Latent: no package IRQ handler calling WAKE was traced by the reviewer or here."
+  },
+  {
+   "id": "ctx-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "On kern_small any task's claim may shed, which is the case the kern_big gate exists to forbid",
+   "detail": "Both 'ONLY THE UI TASK ... SHEDS' tests are inside %ifdef OS88_COMPACT. mem_regrow's own reason ('a shed from its stack could free a cache the pre-empted UI task holds in a register') applies equally on kern_small, which has purgeable claims and 7 task slots. The FAT walk defends itself with sch_lock because of exactly this. Whether every other UI-side holder does is stated nowhere. PLAUSIBLE, not reproduced.",
+   "evidence": [
+    "kernel/memory.inc:954-965 (gated)",
+    "kernel/memory.inc:4703-4706 (gated, with its reason)",
+    "kernel/disk.inc:6405-6420 the FAT walk's self-defence"
+   ],
+   "recommendation": "Take the two cmp byte [sch_cur],0 / jne pairs out of the OS88_COMPACT guard, or state the kern_small rule in SPEC.md 66.3.1 and list the holders that defend themselves.",
+   "phase": "now",
+   "bytes_est": "about +14 .text kern_small, 0 kern_big ESTIMATED",
+   "listed_as": "not listed",
+   "verdict": "corrected",
+   "verify_note": "Both sch_cur tests (memory.inc:967, 4726) are under %ifdef OS88_COMPACT, defined for KERN_BIG only (kernel.asm:1089-1090). But SPEC.md 66.3.1 states the exclusion deliberately: 'The test is on OS88_COMPACT kernels only. kern_small has no compactor, and its user manages its RAM.' Its stated reason covers compaction, not the shed the gate also stops, so the finding stands as a low hazard against a recorded decision rather than an oversight. +14 (two 5-byte compares and two jne) is right. The disk.inc:6426 comment that says any task sheds is carried as a doc fix."
+  },
+  {
+   "id": "ctx-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Context rules should be machine-readable tags and a call-graph gate, not two prose lists",
+   "detail": "SPEC.md 20.6 rule 7 and the SDK's rule 7 name different cells. SPEC has wm_saveu and OSAPI_DRV_CALL; the SDK has OSAPI_GFX_PEN and OSAPI_WM_CLIP_TEST. Each list has been amended twice for 'forbidden by omission', and rule 7 ends 'None of this is enforced'. One layer down, t_stkclass stops at the far call, so no gate walks KERNEL code from a worker entry. That is why the worker-side repaint in inst_task_die was invisible.",
+   "evidence": [
+    "SPEC.md 20.6 rule 7",
+    "apps/os88api.inc:3969-3994",
+    "tests/unit/t_stkclass.py:31-36",
+    "tools/stkdepth.py (call graph per root)"
+   ],
+   "recommendation": "Do abi-8 with the matrix's vocabulary: @ctx ui|ui-locked|any|worker|isr|hook|bracket, @blocks, @moves (the Mac's 'may move memory'). Generate SPEC 20.6's list, the SDK's list and isr-16's interrupt-time table from the tags. Extend the gate across the boundary: tag the kernel entry points a worker reaches, then assert that no worker root reaches wm_pkgcall or mod_drop, and that no inc..dec span of sch_lock reaches a @blocks routine (ctx-8, gated).",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "listed_as": "abi-8, isr-16 (this extends both across the kernel boundary)",
+   "prior_art": "Inside Macintosh's 'may move memory' and interrupt-level appendices; Win 3.1 SDK's interrupt-callable list",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md 20.6 rule 7 (SPEC.md:46200-46206) lists wm_saveu but not OSAPI_GFX_PEN or OSAPI_WM_CLIP_TEST; the SDK's rule 7 (os88api.inc:3977-3981) lists GFX_PEN and CLIP_TEST and not wm_saveu. SPEC's paragraph also says 'OSAPI_DRV_CALL (§20.11) is on the list' while its list does not name it, and the forbidden-slots sentence is broken ('and every verb of' runs into 'os88pcm_play blocks ...', SPEC.md:46241-46242). Weakness; 0 shipped bytes."
+  },
+  {
+   "id": "ctx-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The lock order 'never block under sch_lock' is obeyed and stated in prose, but not numbered or enforced",
+   "detail": "task_yield under sch_lock resumes the caller at once. So task_sleep under it leaves T_STATE = 2 on a running task, and a contended gfx_lock under it spins for ever because the holder is never scheduled. Every site that must wait drops the lock by hand: the compactor's park, and dsk_xfer round fpg_busy. wm.inc:3263 is the only statement of the rule. On kern_mega a package fault under sch_lock is fatal, so every widened hold widens that too.",
+   "evidence": [
+    "kernel/sched.inc:1881-1883",
+    "kernel/memory.inc:4101-4103",
+    "kernel/disk.inc:2030-2035",
+    "kernel/wm.inc:3263",
+    "kernel/mega.inc:2564-2565"
+   ],
+   "recommendation": "Write it as a numbered rule in SPEC.md 7. Either put a tripwire in gfx_lock's .block arm (cmp byte [sch_lock],0 / jne panel, off the fast path), or gate it statically under ctx-7.",
+   "phase": "now",
+   "bytes_est": "+7 .text for the tripwire, or 0 with the static gate",
+   "listed_as": "not listed",
+   "verdict": "corrected",
+   "verify_note": "task_yield returns at once when [sch_lock] is non-zero (sched.inc:1893-1895), and the compactor and dsk_xfer drop the lock by hand where they must wait. Correction: the rule is no longer unwritten - SPEC.md 7's sch_lock bullet now says 'Under it task_yield resumes its caller (§8), so nothing that holds it may wait on another task: a gfx_lock another task owns spins for ever, and a task_sleep returns at once and is applied late'. It is still not a numbered rule and not enforced; the tripwire recommendation stands (spot-check)."
+  },
+  {
+   "id": "ctx-9",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Deferred damage, reconciled: after ctx-1 it is a coalescing and stack-depth question, not a safety one",
+   "detail": "With rule 7 obeyed and ctx-1 landed, every damage source is on the UI task. What remains: coalescing (a task-owned close's hide-then-destroy, several resizes in one handler) and the nesting depth of paints inside callbacks on the UI task's 1,024 bytes, where WM_PKGD_MAX is 8 and 'three deeper than anything measured'. histsys-10's +60 to +120 (global, all operations, flag day) and wm-R2's +60 to +100 (per-window, opt-in) are the same design. A per-window rect costs 96 .bss on kern_big. A global four-rect list through the wm_clip_tab splitter is 32 .bss plus about 50-70 of code. A single bounding union is cheaper but violates PERFORMANCE.md rule 1.",
+   "evidence": [
+    "kernel/wm.inc:170-175 WM_PKGD_MAX",
+    "kernel/wm.inc:389-394 re-entrancy by construction",
+    "kernel/wm.inc:127 WIN_SIZE 74, MAX_WIN 12 (162)",
+    "histsys.md histsys-10; wm.json wm-R2"
+   ],
+   "recommendation": "Record it. Decide it with wm-R2's plan as an opt-in, default synchronous (OS/2 CS_SYNCPAINT's shape), costed at about +80 to +100 resident.",
+   "phase": "record",
+   "bytes_est": "about +80 to +100 resident (32 .bss + 50-70 code) if built",
+   "listed_as": "histsys-10, wm-R2 (reconciled here)",
+   "prior_art": "Mac updateRgn and updateEvt; Win 3.x WM_PAINT synthesised on an empty queue; OS/2 CS_SYNCPAINT",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check: WM_PKGD_MAX 8 (wm.inc:168), WIN_SIZE 74 and MAX_WIN 12 on kern_big (wm.inc:128, 163), so an 8-byte per-window rect is 96 .bss. Record-only; bytes ESTIMATED."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "`gfx_lock`:\n  `cli`; if flag set → `sti`, `call task_yield`, retry; else set flag, `sti`,\n  then `call cursor_hide`.",
+   "new_text": "`gfx_lock`:\n  `cli`; if the flag is set → note a waiter (`gfx_lock_want`), `sti`,\n  `call task_yield`, retry; else set the flag and its owner (`gfx_lock_own` =\n  `[sch_cur]`) in one word store, `sti`, and PROMISE the hide (`cur_lazy`,\n  §7.1.4) rather than calling `cursor_hide`. §7.3 adds the one-debt fairness\n  rule.",
+   "why": "gfx_lock (vga12.inc:5082-5140) sets gfx_lock_want before yielding, stores flag and owner as one word, applies 7.3's last-owner debt, and sets cur_lazy instead of calling cursor_hide."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(gfx_lock, `wm_destroy`, gfx_unlock, `task_exit` with BX = the record, which frees the record and with it the package region inside one IF=0 window)",
+   "new_text": "(gfx_lock, `wm_destroy`, gfx_unlock, `mem_free_rec` — every heap claim, region included (§50.4) — then `task_exit` with BX = the record, which frees the record and the task slot inside one IF=0 window)",
+   "why": "inst_task_die (instance.inc:1921-1947) frees the region with mem_free_rec at IF=1 after gfx_unlock; task_exit's cli window (sched.inc:1198ff) releases only the record byte and the task slot."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "so a worker-owning\n   package's region is released from `task_exit` under IF=0, not from the\n   UI task under the lock.",
+   "new_text": "so a worker-owning\n   package's region is released on its own worker, by `inst_task_die`'s\n   `mem_free_rec` after the lock is given back and just before `task_exit`,\n   not from the UI task under the lock.",
+   "why": "Rule 7 of the same list (already corrected) says mem_free_rec frees the region before the record store; inst_task_die calls mem_free_rec at IF=1 after gfx_unlock and only then task_exit."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; The kernel's own app_bounce_task is the reference implementation of all\n; of this.",
+   "new_text": "; apps/bounce/bounce.asm's bn_worker (SPEC.md 112.2) is the reference\n; implementation of all of this.",
+   "why": "app_bounce_task was removed from the kernel (kernel.asm:8247 says so); Bounce is a package and SPEC.md 112.2 names bn_worker as 20.6's reference implementation. Column-0 SDK prose, so not in the abilock fingerprint."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "; now (SPEC.md 10.1.1), which SS names for\n                                ; every kernel task and every ISR on one",
+   "new_text": "; now (SPEC.md 10.1.1), which SS names for\n                                ; every kernel task and for an ISR that\n                                ; interrupted one - NOT for one that landed\n                                ; while a ROM was on its own stack (sch_switch's\n                                ; SS test, SPEC.md 8.5), which is why mou_isr\n                                ; loads its own SS (MOUPRIV)",
+   "why": "sch_switch (sched.inc:2429-2437) records SeaBIOS hopping stacks for int 16h with sch_lock clear, so an IRQ there arrives with the ROM's SS; the OSAPI_WM_WAKE cell was already amended to 'ISR-safe given SS = LOW_SEG'."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "The plan is pure\n                                ; arithmetic over 32 records and costs\n                                ; microseconds, and taking it inside the same",
+   "new_text": "The plan is\n                                ; arithmetic over 32 records - a MEM_MAX scan\n                                ; per live claim in mem_cp_next, so some\n                                ; milliseconds on the 8088 (predicted, not\n                                ; measured) - and taking it inside the same",
+   "why": "mem_cp_next (memory.inc:2698ff) scans all MEM_MAX records for every step and mem_can_move runs per record; hm-5's verifier put it at ~0.45 ms a step, ~7 ms for 16 live claims before the predicates."
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; purgeable one is shed by any ordinary claim\n                                ; from any other task, and mem_fatw_dirty does",
+   "new_text": "; purgeable one is shed by an ordinary claim\n                                ; from another task (kern_small; a compacting\n                                ; kernel sheds and moves on the UI task alone,\n                                ; SPEC.md 66.3.1), and mem_fatw_dirty does",
+   "why": "mem_claim's and mem_regrow's shed (memory.inc:967, 4726) are gated to sch_cur = 0 under OS88_COMPACT; only kern_small lets any task shed."
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_lk / wm_unlk - THE DRAWING MUTEX, FOR THE THREE ENTRIES A PACKAGE REACHES\n;                   WITH IT FREE (SPEC.md 11.101.2)",
+   "new_text": "; wm_lk - THE DRAWING MUTEX, FOR THE FOUR ENTRIES A PACKAGE REACHES WITH IT\n;         FREE (show, hide, front, resize: SPEC.md 11.101.2, 11.1.2)",
+   "why": "wm_lk_go (wm.inc:3313ff) serves four doors - osapi_wm_resize, wm_hide, wm_front, wm_show - and wm_unlk is no longer a routine (inlined into wm_lk_go, kernel size pass 16)."
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; block - all three run on the UI task and never inside dsk_xfer's [sch_lock].\n;\n; in:  nothing;  out: wm_lk: AL = 1 we took it and owe wm_unlk, 0 it was ours.\n;      wm_unlk: AL as wm_lk answered. Neither touches another register.",
+   "new_text": "; block - all four run on the UI task and never inside dsk_xfer's [sch_lock].\n;\n; in:  nothing;  out: AL = 1 we took it and owe gfx_unlock (wm_lk_go pays it),\n;      0 it was ours. Touches no other register.",
+   "why": "Same routine: four doors, and the release is wm_lk_go's inlined gfx_unlock, not a wm_unlk routine."
+  }
+ ]
+}

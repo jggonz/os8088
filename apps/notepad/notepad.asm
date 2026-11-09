@@ -4659,6 +4659,7 @@ np_save:
     call np_goto                ; the folder this document belongs to, if the
     jc .err                     ; volume has been moved since (SPEC.md 19.2);
                                 ; CF = we are not there, so write nothing
+    push ds                     ; (ours, back at .staged)
     mov ds, [np_dseg]
     xor si, si                  ; DS:SI = the note, ES:DI the expansion. NO
     xor di, di                  ; kernel variable is readable while DS is the
@@ -4675,8 +4676,11 @@ np_save:
     stosb
     jmp short .stage
 .staged:
-    push cs
-    pop ds                      ; ...and back, before anything else is read
+    pop ds                      ; ...and back, before anything else is read:
+                                ; the one we came in with, never CS - which
+                                ; is read-only under kern_mega, and the
+                                ; saved message's copy stores through DS
+                                ; (np_setmsg, np_scpy; KERN-MEGA-PLAN 14.150)
     mov cx, di                  ; ES:BX = the staged bytes (SPEC.md 20.3),
     xor bx, bx                  ; DX:CX their count (SPEC.md 18.4.1)
     xor dx, dx

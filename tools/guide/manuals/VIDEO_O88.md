@@ -20,16 +20,16 @@ out of coloured text characters, or 16 and 256 colours on a VGA. These are
 some of the demo videos, made for a 4.77 MHz IBM PC with a hard disk. Each
 is a copy your browser can play, with the video's own sound.
 
-![Take On Me: black and white, full screen on a Hercules card.](video:herc/07-pcm11)
-![Sonic 2: a picture made of 80 x 25 coloured text characters, on a CGA card.](video:cga/01-cotxt)
-![Trackmania: sixteen colours on a CGA card and an RGB monitor.](video:cga/07-cga16)
-![The same clip in about 450 colours, on a CGA card's composite output.](video:cga/09-cmp5o)
-![Star Wars: playing in its window, on a Hercules card.](video:herc/04-adpcm)
-![Steamboat Willie: a video made to play Live, on the desktop.](video:cga/11-live)
+![Take On Me: black and white, full screen on a Hercules card.](video:herc/06-takon)
+![Sonic 2: a picture made of 80 x 25 coloured text characters, on a CGA card.](video:cga/01-sonic)
+![Miku Miku: CGA's own four colours, full screen on a CGA card.](video:cga/04-miku)
+![Trackmania in about 450 colours, on a CGA card's composite output.](video:cga/09-a01o)
+![Star Wars: playing in its window, on a Hercules card.](video:herc/04-starw)
+![Steamboat Willie: a video made to play Live, on the desktop.](video:cga/11-willy)
 
 All of these, and more, are on the video demo hard drives: one for a CGA
-card and one for a Hercules card, each with os8088 installed and its videos
-in `MEDIA`. Their page in this guide is **Video demo**, under Hard disk & CD.
+card, one for a Hercules card and one for a VGA card, each with os8088
+installed and its videos in `MEDIA`. Their page in this guide is **Video demo**, under Hard disk & CD.
 
 ## Starting Video Player
 
@@ -144,9 +144,9 @@ points says **Seek: no keyframes**.
 Some videos only play on the whole screen: 256-colour videos, colour CGA
 videos, and videos made of text characters.
 
-![Sin City on the whole screen of a Hercules card.](shot:video-herc-full){full}
+![Bad Carrot on the whole screen of a Hercules card.](shot:video-herc-full){full}
 
-![Trackmania in sixteen colours on a CGA card.](shot:video-cga-colour)
+![Miku Miku in CGA's own four colours.](shot:video-cga-colour)
 ![Sonic 2, drawn in coloured text characters on a CGA card.](shot:video-cga-text)
 
 ## Keys in the window

@@ -79,6 +79,9 @@ MRS_GAIN    equ 10
     MRW mwt_lim                     ; mwt_place: the highest end a voice
                                     ; may have, in its sample's window
     MRW mwt_nwin                    ; the windows mwt_wins made, x 2
+%ifdef PKG_MEGA
+    MRB mwt_run                     ; 1: the bank is a huge claim's run
+%endif
     MRBUF mwt_win, MWT_NWIN * 2     ; window w: a SEG_SUB at 2,048w paragraphs
     MRBUF mwt_wlim, MWT_NWIN * 2    ; ...and its length, FFFFh for 64 KB
     MRW mwt_nbase                   ; mwt_place: a voice's start, as an offset
@@ -178,9 +181,23 @@ mwt_load:
     cmp byte [mr_hasbank], 0
     je .no
     mov ax, [mr_bankkb]             ; the claim: the bank's own KB - the
-    call OSAPI_MEM_CLAIM            ; last chunk reads into what is left
+%ifdef PKG_MEGA                     ; last chunk reads into what is left.
+    mov bx, 0x8000                  ; kern_mega's arm: ONE huge claim, a
+    call OSAPI_MEM_HUGE             ; window every 32KB - mwt_wins's own
+    mov word [mr_msg], mr_s_bankmem ; shape (SPEC.md 105.10.2): above 1MB
+    jc .no                          ; where the pool holds it, the heap's
+    mov byte [mwt_run], 0           ; run otherwise. BX = 0 and CX = 8: the
+    or bx, bx                       ; run's windows ARE mwt_win's; BX kept
+    jnz .hrun                       ; (real mode, CX = 1000h) the SUBs as
+    cmp cx, 8                       ; ever
+    jne .hrun
+    mov byte [mwt_run], 1
+.hrun:
+%else
+    call OSAPI_MEM_CLAIM
     mov word [mr_msg], mr_s_bankmem
     jc .no
+%endif
     mov [mwt_bseg], dx
     call mwt_wins                   ; its windows, before a byte is read into
     jc .free                        ; them (no LDT entry: the claim goes back)
@@ -313,10 +330,22 @@ mwt_wins:
     mov cx, [mr_bankkb]             ; CX = the claim's KB from its base
 .w:
     push cx
+%ifdef PKG_MEGA
+    cmp byte [mwt_run], 0           ; kern_mega's huge claim: window w IS
+    je .sub                         ; its run's selector w, DX + 8w (SPEC.md
+    mov dx, si                      ; 50.3.5's BX = 8000h) - no LDT entry of
+    shl dx, 1                       ; its own
+    shl dx, 1
+    add dx, [mwt_bseg]
+    clc
+    jmp short .got
+.sub:
+%endif
     mov dx, [mwt_bseg]
     mov bl, SEG_SUB
     xor cx, cx
     call OSAPI_SEG
+.got:
     pop cx
     jc .x
     mov [mwt_win + si], dx

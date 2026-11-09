@@ -293,6 +293,48 @@ w16_vclaimm:
 %endif
 %endmacro
 
+; W16SELF sfx - after a headered part's gate (parts 9, 10 and 11: w16%1_base):
+; the ARM's word for the part's OWN data selector, at W16S_SELF, which
+; w16_ptin writes when the part comes (its code half's pair, + 8). Nothing in
+; real mode, where a part's own data is reached through CS as it always was.
+%macro W16SELF 1
+%ifdef PKG_MEGA
+w16%1_self: dw 0                    ; +17 the arm's own data selector (CSDO)
+  %if w16%1_self - w16%1_base != W16S_SELF
+    %error "w16%1_self is not at W16S_SELF"
+  %endif
+%endif
+%endmacro
+
+; CSDO insn / [CSEG x] - insn STORES into this part's own bytes (one of parts
+; 9, 10, 11, which carry W16SELF), its memory operand spelled [CSEG x]. Off
+; the arm CSEG is `cs:` and CSDO the bare instruction: the shipped WIN16 is
+; byte for byte what it was. In the arm CS is the part's read-only CODE half,
+; and a store through it is a #GP kern_mega completes (mega_gpw, ~884 clocks
+; a 286) - Program Manager took ~180 a key in a group and ~850 a Tile, from
+; the MDI paint (KERN-MEGA-PLAN 14.164) - so there DS is the part's DATA
+; half ([cs:W16S_SELF]) for the one instruction and back: ~45 clocks and 7
+; bytes a site. FLAGS kept (push, mov sreg and pop write none). The
+; instruction may not read DS itself - DS is WIN16's image in a part
+; everywhere else - which a store of a register or an immediate, every site,
+; does not. The kernel's modules and XT-MP3's part spell it the same, so
+; tests/unit/t_cswrite.py counts a `[CSEG x]` outside a CSDO as a write
+; through CS, and tests/unit/t_w16xsec.py takes CSEG for `cs:` (rule 3)
+%ifdef PKG_MEGA
+ %define CSEG ds:
+ %macro CSDO 1+
+    push ds
+    mov ds, [cs:W16S_SELF]
+    %1
+    pop ds
+ %endmacro
+%else
+ %define CSEG cs:
+ %macro CSDO 1+
+    %1
+ %endmacro
+%endif
+
 %ifdef PKG_MEGA
 
 W16V_LO   equ 0x0300            ; the first virtual paragraph (W16_GH0 0100h + 2 x
@@ -579,8 +621,12 @@ w16_vclaim:
     rcr ax, 1                       ;   the first of which names it (the map
     mov cl, 5                       ;   SEG_SUBs into it, past 64 KB too);
     shr ax, cl                      ;   OSAPI_MEM_HUGE's unit is the KB
-    xor bx, bx
-    call OSAPI_MEM_HUGE
+    mov bx, HUGE_NOBRIDGE           ; ONE RUN OF MEMORY (KERN-MEGA-PLAN
+    call OSAPI_MEM_HUGE             ;   14.169): the map's virtual paragraphs,
+                                    ;   w16_pvirt's linear bases and SEG_TILE's
+                                    ;   huge pointers all assume it, and a
+                                    ;   BRIDGE (SPEC.md 50.3.5) is two - a
+                                    ;   block across its cut would be cut short
     jc .got
     mov cl, 6
     shl ax, cl                      ; granted, in paragraphs

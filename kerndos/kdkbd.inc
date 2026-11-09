@@ -177,7 +177,7 @@ kd_kbd_isr:
 section .bss
 kd_kbold:   resd 1              ; the ROM's own handler. The SEGMENT half being
                                 ; zero is `kd_kbd_stop`'s "not hooked" test,
-                                ; and nobits is not zeroed by anything here -
+                                ; and kd_entry's .bss clear makes it 0 -
                                 ; `kd_kbd_start` writes both halves before
                                 ; anything can read them, and it is called once
 section .text

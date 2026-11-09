@@ -23,7 +23,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x0076` | `OSAPI_WM_CREATE` | SI=template; out BX = win ptr, CF on full |
 | `0x007C` | `OSAPI_WM_SHOW` | BX=win ptr |
 | `0x0082` | `OSAPI_WM_HIDE` | BX=win ptr |
-| `0x02BC` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is held, as OSAPI_WM_HIDE wants it... |
+| `0x02BC` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is HELD - unlike OSAPI_WM_HIDE, which takes it itself, this cell does not... |
 | `0x0088` | `OSAPI_WM_FRONT` | BX=win ptr |
 | `0x008E` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
 | `0x0096` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
@@ -103,7 +103,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0050` | `OSAPI_GFX_XOR_RECT` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0058` | `OSAPI_GFX_XOR_FILL` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0398` | `OSAPI_ICON_PEN` | AL = the colour the next OSAPI_ICON_DRAW's MASK rows lay down, AH = the colour its DATA rows draw over them... |
-| `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a first byte that is neither 1 nor ICON_SOLID, or a record taller than 16) |
+| `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a first byte that is neither 1 nor ICON_SOLID - and on kern_small anything but 1... |
 | `0x0393` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
 | `0x00B3` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
 | `0x0481` | `OSAPI_GFX_DESK` | AX,BX = x1,y1 CX,DX = x2,y2 (inclusive), lock held (W_PAINT): lay the DESKTOP'S OWN GROUND there... |
@@ -157,7 +157,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `0x0115` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
 | `0x0431` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
 | `0x043D` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
-| `0x0118` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster. NO DISK I/O - AND THAT IS NOT THE SAME AS CHEAP (SPEC.md 18.4.5)... |
+| `0x0118` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster... |
 | `0x042B` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |
 | `0x0124` | `OSAPI_FILE_DLG` | AL = 0 Open / 1 Save, BX = your window ptr, DI = completion proc, SI = default name (NUL, <= 12) or 0... |
 | `0x0190` | `OSAPI_VOL_KIND` | AL = a volume index (0 = A:). CF=1 = there is no such volume... |
@@ -205,7 +205,7 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 | `0x03AC` | `OSAPI_MEM_CLAIM_HI` | AX = KB; out CF, DX = segment |
 | `0x03B2` | `OSAPI_MEM_CLAIM_DMA_HI` | ...and CX = the page-safe HEAD |
 | `0x01AA` | `OSAPI_MEM_FREE` | DX = the segment you were given; out CF=0 released, CF=1 not yours (or inside a compaction's relocation proc, SPEC.md 66.3 rule 3)... |
-| `0x0443` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL planned as if YOUR OWN REGION could move... |
+| `0x0443` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL at that level, planned as if YOUR OWN REGION could move... |
 | `0x0487` | `OSAPI_MEM_HMA` | A DRIVER'S BUFFER IN THE HMA (SPEC.md 2.10.8): AX = bytes, 1..8,192, out CF=0 DX = its segment and AX = its first OFFSET... |
 | `0x01B0` | `OSAPI_MEM_AVAIL` | out AX = largest free run in KB, BX = total free KB... |
 | `0x0425` | `OSAPI_MEM_FLOOR` | AL = the level; preserves every register and the flags... |
@@ -290,7 +290,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 | slot | call | takes |
 |---|---|---|
 | `0x045B` | `OSAPI_FSX_SPK` | THE SPEAKER AT A SAMPLE RATE (SPEC.md 34.11), from INSIDE YOUR OWN FSXF_RATE BRACKET only (53.2.2) - PCM with no card... |
-| `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
+| `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter / 0 exit, BX = YOUR window either way; caller holds the gfx lock (window callbacks do); out CF=1 refused, entering or leaving, when the... |
 | `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
 | `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
 | `0x023B` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
@@ -347,6 +347,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88m83.inc` | §77.20.1 | The 8.3 name mangle: `m83_mangle` turns a sender's pathname into the name this machine stores it under (`banana split.mod` -> `BANANA~1.MOD`, a legal name left alone, always `~1`). ONE copy, so FTPD's uploads and Telnet's Zmodem downloads land on the same name by construction; `tools/os88bbs.py`'s `mangle83` is its reference. |
 | `apps/os88real.inc` | §53.2.3 | A package's half of `FSXF_REAL`, the fsx bracket in real mode on kern_mega: `os88real_prep` asks `SEG_REAL` for every claim word of an `OS88REAL_LIST` at the door (CF = 1: one has no real segment - do not ask for the bit), and `os88real_swap`, first and last in the entry proc, exchanges them with the answers only when the bracket IS real - so a bracket the kernel ran in protected mode instead keeps its selectors. The kernel renames nothing of yours. |
 | `apps/os88rseq.inc` | §18.4.8.1 | `os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at `DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where `READ_AT` walks the chain from the front every call. The offset stays yours and a cursor whose offset differs is re-seeded, so a seek needs nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero the cursor with `os88_rseq_new` whenever the FILE changes. |
+| `apps/os88huge.inc` | §50.3.8 | WALKING AN OSAPI_MEM_HUGE CLAIM by the step it answered, on every kernel: a 14-byte record (`HW_SEG`, `HW_STEP`, `HW_LEN`, `HW_CUT`, `HW_FOFF`) and `hw_aim` (a 32-bit offset as ES:DI, with how far its window reaches), `hw_get`/`hw_put` (copies to and from ES:DI), `hw_claim` (the cell and the record), `hw_claimfit` (a HOLD: the ask first, the claim with the heap's largest run kept N KB, the one forced-bridge retry - every whole-file hold's), `hw_fread` (a file read into the claim in window-sized `os88_rseq` calls) and `hw_fwrite` (onto an `os88_wseq` stream) - every span split where a window ends, so never across a kern_mega bridge's cut. One `%define` an arm. XTMP3's kern_mega hold is the worked example (SPEC.md 121.6.1). |
 | `apps/os88wseq.inc` | §18.4.9.4 | An APPEND OF ANY SIZE: `os88_wseq_open` (a name, a stream record of `WSEQ_SIZE` and a buffer of yours) creates the file empty, `os88_wseq_put` takes ES:SI and any count as often as you like, and `os88_wseq_close` writes the tail. It buffers into whole clusters for `OSAPI_FILE_WRITE_SEQ` - which, like `OSAPI_FILE_APPEND`, refuses a chunk that is not one - and falls back to `OSAPI_FILE_APPEND` on the small kernel. The read side is os88rseq.inc. |
 | `apps/os88data.inc` | §19.9.1 | SYSTEM\APPDATA on your own volume: `od_read` and `od_write`, which walk there with `OSAPI_FILE_GOTO_QM` (never the display remount), bank the folder's cluster, rewrite a file of unchanged length in ONE sector with `OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For a high-score table or a settings file; five packages carry it. |
 | `apps/os88link.inc` | §26.10.6 | LINKS and AUTOSTART: `OS88_LINK` lays down a 50-byte `.LNK` record and `ol_autostart` writes it into `\AUTOSTRT` on the BOOT volume, making the folder if need be, so the program it names is opened at every boot (Shift held skips it). Over os88data.inc's walk, so it needs `OD_BOOTVOL`; REDLINE's Apply on boot is the worked example. |
@@ -581,5 +582,5 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *How it works today - `docs/` (50):* [86BOX.md](86BOX.md), [AGENT-SKILLS.md](AGENT-SKILLS.md), [APPLE2-SPEC.md](APPLE2-SPEC.md), [ARCADE-SPEC.md](ARCADE-SPEC.md), [BIFF-NOTES.md](BIFF-NOTES.md), [BOCHS.md](BOCHS.md), [C-TOOLCHAIN.md](C-TOOLCHAIN.md), [C64-SPEC.md](C64-SPEC.md), [DOS-DEBUGGING.md](DOS-DEBUGGING.md), [FIELD-MACHINES.md](FIELD-MACHINES.md), [FIELD-NOTES.md](FIELD-NOTES.md), [HEAP-CLAIMS.md](HEAP-CLAIMS.md), [HERCULES-TESTING.md](HERCULES-TESTING.md), [HOW-ARCADE-WAS-BUILT.md](HOW-ARCADE-WAS-BUILT.md), [HOW-CDROM-WAS-BUILT.md](HOW-CDROM-WAS-BUILT.md), [HOW-INSTALL-WAS-BUILT.md](HOW-INSTALL-WAS-BUILT.md), [HOW-MIXER-WAS-BUILT.md](HOW-MIXER-WAS-BUILT.md), [HOW-SYSCHECK-WAS-BUILT.md](HOW-SYSCHECK-WAS-BUILT.md), [HOW-VBATTLE-WAS-BUILT.md](HOW-VBATTLE-WAS-BUILT.md), [HOW-VESA-WAS-BUILT.md](HOW-VESA-WAS-BUILT.md), [HOW-WAVERACK-WAS-BUILT.md](HOW-WAVERACK-WAS-BUILT.md), [HOW-WIN16-WAS-BUILT.md](HOW-WIN16-WAS-BUILT.md), [HOW-WIREFLEET-WAS-BUILT.md](HOW-WIREFLEET-WAS-BUILT.md), [HOW-XTMP3-WAS-BUILT.md](HOW-XTMP3-WAS-BUILT.md), [IMAGER.md](IMAGER.md), [KERNEL-MEMORY.md](KERNEL-MEMORY.md), [KODAK-EXAMPLE.md](KODAK-EXAMPLE.md), [LIVE-MEDIA.md](LIVE-MEDIA.md), [MARTYPC-DEBUG.md](MARTYPC-DEBUG.md), [README.md](README.md), [REALDMG-SPEC.md](REALDMG-SPEC.md), [REDLINE.md](REDLINE.md), [TEST-INCIDENTS.md](TEST-INCIDENTS.md), [TESTING.md](TESTING.md), [UPSTREAM.md](UPSTREAM.md), [WEAVE-SPEC.md](WEAVE-SPEC.md), [WRITING-TESTS.md](WRITING-TESTS.md), [browser/screenshots/README.md](browser/screenshots/README.md), [lemband-format.md](lemband-format.md), [syscheck/design/CODEX-PROMPTS.md](syscheck/design/CODEX-PROMPTS.md), [syscheck/design/PROMPT.md](syscheck/design/PROMPT.md), [xtmp3/ENGINE.md](xtmp3/ENGINE.md), [xtmp3/FACE.md](xtmp3/FACE.md), [xtmp3/FIELD.md](xtmp3/FIELD.md), [xtmp3/NUMERICS.md](xtmp3/NUMERICS.md), [xtmp3/STD.md](xtmp3/STD.md), [xtmp3/XT-STUDY-TABLES.md](xtmp3/XT-STUDY-TABLES.md), [xtmp3/XT-STUDY.md](xtmp3/XT-STUDY.md), [xtmp3/XT.md](xtmp3/XT.md), [xtmp3/listen/README.md](xtmp3/listen/README.md)
 
-*Not reference:* 113 open plans in `docs/plans/`, 224 design records in `docs/plans/completed/`, 11 superseded files in `docs/history/`, 119 measurements in `docs/reports/`.
+*Not reference:* 116 open plans in `docs/plans/`, 226 design records in `docs/plans/completed/`, 11 superseded files in `docs/history/`, 171 measurements in `docs/reports/`.
 

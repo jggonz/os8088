@@ -23,13 +23,60 @@
 ;   H1      RQL, the 18 IMDCT rows, ENCR, the antialias tables, the lines
 ;   H2      IMWIN, the overlap, the IMDCT scratch
 ;
-; Every variable lives in this part's own image and is reached through CS.
+; Every variable lives in this part's own image and is READ through CS. It is
+; WRITTEN through CSDO / [CSEG x] (below): through CS on every real-mode
+; kernel, byte for byte what this part always was, and in the kern_mega ARM
+; (PKG_MEGA, apps/os88mega.inc) through the part's own DATA selector - there
+; CS is a read-only code alias, and a store through it is a #GP the kernel
+; completes, ~140 a granule, which halved XT Standard's measured speed on a
+; 386DX-25 and pushed a song that kern_big plays live to Decode First
+; (KERN-MEGA-PLAN 14.150). tests/cswrites.txt holds the file to none.
 ; Labels are x3x_ (SPEC.md 121).
 ; =============================================================================
 
     cpu 8086
     bits 16
     org 0
+
+; CSDO insn - insn writes this part's own byte or word, spelled [CSEG x]:
+; `cs:` off kern_mega's arm; in the arm DS = [cs:x3x_dsel], the data selector
+; banked at every verb's entry (X3X_DSEL), for the one instruction, then back.
+; FLAGS kept (push, mov sreg and pop write none), 2 bytes of the caller's
+; stack more for the moment - which a completed #GP took many times over.
+; tools/x3xtgen.py's kernels use it too (a clip's count)
+%ifdef PKG_MEGA
+ %define CSEG ds:
+ %macro CSDO 1+
+    push ds
+    mov ds, [cs:x3x_dsel]
+    %1
+    pop ds
+ %endmacro
+ %macro X3X_DSEL 0                  ; a verb's entry: DS is ours (x3gran.inc
+    mov [x3x_dsel], ds              ; section 2), so the bank is a DS store
+ %endmacro
+%else
+ %define CSEG cs:
+ %macro CSDO 1+
+    %1
+ %endmacro
+ %macro X3X_DSEL 0
+ %endmacro
+%endif
+; CSDO_ON ... CSDO_OFF - CSDO for a RUN of stores (kernel/kernel.asm's, and
+; held to its rules by tests/unit/t_cswrite.py): DS = the data selector once,
+; every memory operand naming its segment, entered and left only at its ends
+%macro CSDO_ON 0
+%ifdef PKG_MEGA
+    push ds
+    mov ds, [cs:x3x_dsel]
+%endif
+%endmacro
+%macro CSDO_OFF 0
+%ifdef PKG_MEGA
+    pop ds
+%endif
+%endmacro
 
 %include "x3xtk.inc"
 
@@ -151,16 +198,36 @@ x3x_cnt     dw 0
 x3x_ptr     dw 0
 x3x_wstep   dw 0                    ; OPEN's encoder walk step (the tail stays
                                     ; read-only: a second OPEN re-checks it)
+%ifdef PKG_MEGA
+x3x_dsel    dw 0                    ; this part's DATA selector (CSDO's DS)
+%endif
 
 ; a dword counter in this part, += 1
+; (each pair is ONE switch of DS in kern_mega's arm, where CSDO would be two)
 %macro X3X_INC32 1
+%ifdef PKG_MEGA
+    push ds
+    mov ds, [cs:x3x_dsel]
+    add word [%1], 1
+    adc word [%1 + 2], 0
+    pop ds
+%else
     add word [cs:%1], 1
     adc word [cs:%1 + 2], 0
+%endif
 %endmacro
 ; X3Z_STAGE word %1 += 1, saturating at FFFFh
 %macro X3X_STG 1
+%ifdef PKG_MEGA
+    push ds
+    mov ds, [cs:x3x_dsel]
+    add word [x3x_s_stage + 2 * %1], 1
+    sbb word [x3x_s_stage + 2 * %1], 0
+    pop ds
+%else
     add word [cs:x3x_s_stage + 2 * %1], 1
     sbb word [cs:x3x_s_stage + 2 * %1], 0
+%endif
 %endmacro
 
 ; =============================================================================
@@ -233,7 +300,8 @@ x3x_captab dw x3x_std_caps, x3x_fast_caps, x3x_turbo_caps, x3x_speech_caps
 
 ; CLOSE - nothing to free: the primary owns every claim
 x3x_close:
-    mov byte [cs:x3x_isopen], 0
+    X3X_DSEL
+    CSDO mov byte [CSEG x3x_isopen], 0
     clc
     retf
 
@@ -243,6 +311,7 @@ x3x_close:
 ; changes, the tables having moved with their claims. RESIDENT (before
 ; x3x_tail): it is called after the shrink. Not OPEN: nothing to re-read
 x3x_reseg:
+    X3X_DSEL
     cmp byte [cs:x3x_isopen], 0
     je .out
     push ax
@@ -253,18 +322,18 @@ x3x_reseg:
     mov cx, [cs:x3x_nwseg]
     xor bx, bx
 .ws: mov ax, [es:si]
-    mov [cs:x3x_wseg + bx], ax
+    CSDO mov [CSEG x3x_wseg + bx], ax
     inc si
     inc si
     inc bx
     inc bx
     loop .ws
     mov ax, [es:si]
-    mov [cs:x3x_segsy], ax
+    CSDO mov [CSEG x3x_segsy], ax
     mov ax, [es:si + 2]
-    mov [cs:x3x_segh1], ax
+    CSDO mov [CSEG x3x_segh1], ax
     mov ax, [es:si + 4]
-    mov [cs:x3x_segh2], ax
+    CSDO mov [CSEG x3x_segh2], ax
     pop si
     pop cx
     pop bx
@@ -312,6 +381,7 @@ x3x_statsv:
 ; damaged tail is X3E_TABLE and never executed.
 ; =============================================================================
 x3x_open:
+    X3X_DSEL
     push bx
     push cx
     push dx
@@ -319,8 +389,8 @@ x3x_open:
     push ds
     push cs
     pop ds
-    mov word [cs:x3x_fs1], 0
-    mov word [cs:x3x_fs2], 0
+    CSDO mov word [CSEG x3x_fs1], 0
+    CSDO mov word [CSEG x3x_fs2], 0
     mov si, x3x_tail
     mov cx, (x3x_imgend - x3x_tail) / 2
     call x3x_fl32
@@ -337,7 +407,7 @@ x3x_open:
     pop bx
     jmp x3x_opentail
 .gone:
-    mov byte [cs:x3x_isopen], 0
+    CSDO mov byte [CSEG x3x_isopen], 0
     mov ax, X3E_TABLE
     pop si
     pop dx
@@ -374,8 +444,9 @@ x3x_fl32:
     add bx, ax
     add dx, bx
     loop .t
-.r: mov [cs:x3x_fs1], bx            ; (.r: where a profile run ends a check)
-    mov [cs:x3x_fs2], dx
+.r:
+    CSDO mov [CSEG x3x_fs1], bx  ; (.r: where a profile run ends a check)
+    CSDO mov [CSEG x3x_fs2], dx
     pop dx
     pop bx
     pop ax
@@ -386,6 +457,7 @@ x3x_fl32:
 ; the window shape silence carries. in: nothing. out: CF = 0.
 ; =============================================================================
 x3x_reset:
+    X3X_DSEL
     cmp byte [cs:x3x_isopen], 0
     je .no
     call x3x_doreset
@@ -426,8 +498,8 @@ x3x_doreset:
     inc bx
     jmp short .ring
 .rd:
-    mov word [cs:x3x_slot], 0
-    mov word [cs:x3x_prevbt], 0
+    CSDO mov word [CSEG x3x_slot], 0
+    CSDO mov word [CSEG x3x_prevbt], 0
     pop es
     pop di
     pop si
@@ -445,6 +517,7 @@ x3x_doreset:
 ; Keeps every register but AX and CX.
 ; =============================================================================
 x3x_granule:
+    X3X_DSEL
     push bx
     push dx
     push si
@@ -471,32 +544,32 @@ x3x_granule:
     stc
     jmp .out
 .go:
-    mov [cs:x3x_rseg], es
-    mov [cs:x3x_roff], si
-    mov [cs:x3x_oseg], dx
-    mov [cs:x3x_ooff], di
-    mov word [cs:x3x_clips], 0
+    CSDO mov [CSEG x3x_rseg], es
+    CSDO mov [CSEG x3x_roff], si
+    CSDO mov [CSEG x3x_oseg], dx
+    CSDO mov [CSEG x3x_ooff], di
+    CSDO mov word [CSEG x3x_clips], 0
     X3X_INC32 x3x_s_gran
     mov al, [es:si + X3G_VER]
-    mov [cs:x3x_ver], al
+    CSDO mov [CSEG x3x_ver], al
     mov al, [es:si + X3G_SRI]
-    mov [cs:x3x_sri], al
+    CSDO mov [CSEG x3x_sri], al
     mov al, [es:si + X3G_MS]
-    mov [cs:x3x_isms], al
+    CSDO mov [CSEG x3x_isms], al
     mov al, [es:si + X3G_ISSC]
-    mov [cs:x3x_issc], al
+    CSDO mov [CSEG x3x_issc], al
     mov al, [es:si + X3G_PLAN]
     cmp al, X3G_PLAN_PL
     jbe .pl
     xor al, al
 .pl:
-    mov [cs:x3x_plan], al
+    CSDO mov [CSEG x3x_plan], al
     push si
     add si, X3G_SFBS
     mov bx, x3x_sfbw
     mov cx, 13
 .w: mov al, [es:si]
-    mov [cs:bx], al
+    CSDO mov [CSEG bx], al
     inc si
     inc bx
     loop .w
@@ -517,13 +590,13 @@ x3x_granule:
     call x3x_effgi
     cmp byte [es:si + X3G_NCH], 2
     je .stereo
-    mov byte [cs:x3x_plan], 0
+    CSDO mov byte [CSEG x3x_plan], 0
     mov bx, 0
     call x3x_setgi
     mov bx, [cs:x3x_roff]
     add bx, X3G_CH0
     call x3x_rqmono
-    mov byte [cs:x3x_mode], 0
+    CSDO mov byte [CSEG x3x_mode], 0
     call x3x_hybrid
     jmp .synth
 .stereo:
@@ -547,7 +620,7 @@ x3x_granule:
     mov bx, 0
     call x3x_setgi
     call x3x_mix
-    mov byte [cs:x3x_mode], 0
+    CSDO mov byte [CSEG x3x_mode], 0
     call x3x_hybrid
     jmp .synth
 .split:
@@ -574,27 +647,27 @@ x3x_granule:
     jbe .sz3
     mov ax, 576
 .sz3:
-    mov [cs:x3x_nzsplit], ax
+    CSDO mov [CSEG x3x_nzsplit], ax
     mov bx, 0
     call x3x_setgi
     call x3x_splitnz
     mov si, X3X_H1_XL
     call x3x_place
-    mov byte [cs:x3x_mode], 1
+    CSDO mov byte [CSEG x3x_mode], 1
     call x3x_hybrid
     mov bx, 1
     call x3x_setgi
     call x3x_splitnz
     mov si, X3X_H1_XR
     call x3x_place
-    mov byte [cs:x3x_mode], 2
+    CSDO mov byte [CSEG x3x_mode], 2
     call x3x_hybrid
 .synth:
     call x3x_synth
     call x3x_pcmout
     mov ax, [cs:x3x_clips]
-    add [cs:x3x_s_clip], ax
-    adc word [cs:x3x_s_clip + 2], 0
+    CSDO add [CSEG x3x_s_clip], ax
+    CSDO adc word [CSEG x3x_s_clip + 2], 0
     push ax
     mov ax, [cs:x3x_nout]
     mov cx, 18
@@ -699,11 +772,11 @@ x3x_effgi:
     cmp byte [es:si + X3X_R_CH0 + X3X_R_OK], 0
     je .silent
     mov al, [es:si + X3X_R_CH0 + X3X_R_BT]
-    mov [cs:x3x_ebt + bx], al
+    CSDO mov [CSEG x3x_ebt + bx], al
     mov al, [es:si + X3X_R_CH0 + X3X_R_MIXED]
-    mov [cs:x3x_emx + bx], al
+    CSDO mov [CSEG x3x_emx + bx], al
     mov al, [es:si + X3X_R_CH0 + X3X_R_WINSW]
-    mov [cs:x3x_ews + bx], al
+    CSDO mov [CSEG x3x_ews + bx], al
     jmp short .set
 .silent:
     mov al, [cs:x3x_prevbt + bx]
@@ -718,12 +791,12 @@ x3x_effgi:
     mov al, 3
     mov ah, 1
 .s2:
-    mov [cs:x3x_ebt + bx], al
-    mov byte [cs:x3x_emx + bx], 0
-    mov [cs:x3x_ews + bx], ah
+    CSDO mov [CSEG x3x_ebt + bx], al
+    CSDO mov byte [CSEG x3x_emx + bx], 0
+    CSDO mov [CSEG x3x_ews + bx], ah
 .set:
     mov al, [cs:x3x_ebt + bx]
-    mov [cs:x3x_prevbt + bx], al
+    CSDO mov [CSEG x3x_prevbt + bx], al
     pop si
     pop ax
     ret
@@ -732,11 +805,11 @@ x3x_effgi:
 ; reconstructs, and its runs are built
 x3x_setgi:
     mov al, [cs:x3x_ebt + bx]
-    mov [cs:x3x_bt], al
+    CSDO mov [CSEG x3x_bt], al
     mov al, [cs:x3x_emx + bx]
-    mov [cs:x3x_mixed], al
+    CSDO mov [CSEG x3x_mixed], al
     mov al, [cs:x3x_ews + bx]
-    mov [cs:x3x_winsw], al
+    CSDO mov [CSEG x3x_winsw], al
     jmp x3x_mkruns
 
 ; x3x_mkruns - the bitstream-to-subband placement of the current block as
@@ -750,13 +823,14 @@ x3x_mkruns:
     push dx
     push si
     push di
+    CSDO_ON                         ; (the run table, one DS switch in the arm)
     mov di, x3x_runs
     cmp byte [cs:x3x_bt], 2
     je .short
-    mov word [cs:di], 576
-    mov word [cs:di + 2], 0
-    mov word [cs:di + 4], 2
-    mov word [cs:x3x_nruns], 1
+    mov word [CSEG di], 576
+    mov word [CSEG di + 2], 0
+    mov word [CSEG di + 4], 2
+    mov word [CSEG x3x_nruns], 1
     jmp .done
 .short:
     mov si, x3x_sfbw                ; the record's 13 short-band widths
@@ -766,9 +840,9 @@ x3x_mkruns:
     mov ax, 0                       ; first band
     cmp byte [cs:x3x_mixed], 0
     je .pure
-    mov word [cs:di], 36
-    mov word [cs:di + 2], 0
-    mov word [cs:di + 4], 2
+    mov word [CSEG di], 36
+    mov word [CSEG di + 2], 0
+    mov word [CSEG di + 4], 2
     add di, 6
     inc dx
     mov cx, 36
@@ -791,17 +865,17 @@ x3x_mkruns:
     shl ax, 1
     mov cx, ax
     pop ax
-    mov [cs:di], ax
-    mov [cs:di + 2], cx
-    mov word [cs:di + 4], 6
+    mov [CSEG di], ax
+    mov [CSEG di + 2], cx
+    mov word [CSEG di + 4], 6
     add cx, 2
-    mov [cs:di + 6], ax
-    mov [cs:di + 8], cx
-    mov word [cs:di + 10], 6
+    mov [CSEG di + 6], ax
+    mov [CSEG di + 8], cx
+    mov word [CSEG di + 10], 6
     add cx, 2
-    mov [cs:di + 12], ax
-    mov [cs:di + 14], cx
-    mov word [cs:di + 16], 6
+    mov [CSEG di + 12], ax
+    mov [CSEG di + 14], cx
+    mov word [CSEG di + 16], 6
     add di, 18
     add dx, 3
     add bx, ax                      ; acc += width
@@ -811,8 +885,9 @@ x3x_mkruns:
     inc si
     jmp short .band
 .end:
-    mov [cs:x3x_nruns], dx
+    mov [CSEG x3x_nruns], dx
 .done:
+    CSDO_OFF
     pop di
     pop si
     pop dx
@@ -1035,7 +1110,7 @@ x3x_rqmono:
     mov es, [cs:x3x_rseg]
     cmp byte [es:bx + X3X_R_OK], 0
     jne .ok
-    mov word [cs:x3x_nzx], 0
+    CSDO mov word [CSEG x3x_nzx], 0
     mov di, X3X_H1_X
     mov cx, 576
     jmp x3x_zero
@@ -1045,7 +1120,7 @@ x3x_rqmono:
     jbe .nz
     mov ax, 576
 .nz:
-    mov [cs:x3x_rem], ax
+    CSDO mov [CSEG x3x_rem], ax
     lea si, [bx + X3X_R_IX]
     cmp byte [cs:x3x_bt], 2
     je .short
@@ -1054,7 +1129,8 @@ x3x_rqmono:
     cmp cx, dx
     jbe .c
     mov cx, dx
-.c: mov [cs:x3x_nzx], cx            ; X is zero from here up
+.c:
+    CSDO mov [CSEG x3x_nzx], cx  ; X is zero from here up
     push dx
     push cx
     mov di, X3X_H1_X
@@ -1070,7 +1146,7 @@ x3x_rqmono:
     mov cx, dx
     jmp x3x_zero
 .short:
-    mov word [cs:x3x_nzx], 576
+    CSDO mov word [CSEG x3x_nzx], 576
     push si
     mov di, X3X_H1_X
     mov cx, 576
@@ -1079,7 +1155,7 @@ x3x_rqmono:
     pop si
     mov bx, x3x_runs
     mov ax, [cs:x3x_nruns]
-    mov [cs:x3x_cnt], ax
+    CSDO mov [CSEG x3x_cnt], ax
 .run:
     cmp word [cs:x3x_cnt], 0
     je .done
@@ -1088,7 +1164,7 @@ x3x_rqmono:
     jbe .n
     mov cx, [cs:x3x_rem]
 .n: jcxz .done
-    sub [cs:x3x_rem], cx
+    CSDO sub [CSEG x3x_rem], cx
     mov di, [cs:bx + 2]
     add di, X3X_H1_X
     mov dx, [cs:bx + 4]
@@ -1096,7 +1172,7 @@ x3x_rqmono:
     call x3x_rqline
     pop bx
     add bx, 6
-    dec word [cs:x3x_cnt]
+    CSDO dec word [CSEG x3x_cnt]
     jmp short .run
 .done:
     ret
@@ -1114,7 +1190,7 @@ x3x_rqplain:
     jbe .nz
     mov ax, 576
 .nz:
-    mov [cs:x3x_rem], ax
+    CSDO mov [CSEG x3x_rem], ax
     lea si, [bx + X3X_R_IX]
     mov cx, ax
     mov dx, 2
@@ -1133,7 +1209,7 @@ x3x_mix:
     mov es, [cs:x3x_rseg]
     mov bx, [cs:x3x_roff]
     mov al, [cs:x3x_plan]
-    mov [cs:x3x_hasplan], al
+    CSDO mov [CSEG x3x_hasplan], al
     ; max(nz) over the two channels (a silent one's lines are zeros)
     xor ax, ax
     cmp byte [es:bx + X3X_R_CH0 + X3X_R_OK], 0
@@ -1162,7 +1238,7 @@ x3x_mix:
     jbe .l1
     mov cx, dx
 .l1:
-    mov [cs:x3x_nzx], cx
+    CSDO mov [CSEG x3x_nzx], cx
     push dx
     push cx
     mov di, X3X_H1_X
@@ -1179,8 +1255,8 @@ x3x_mix:
     mov cx, dx
     jmp x3x_zero
 .short:
-    mov word [cs:x3x_nzx], 576
-    mov [cs:x3x_rem], ax
+    CSDO mov word [CSEG x3x_nzx], 576
+    CSDO mov [CSEG x3x_rem], ax
     push bx
     push si
     mov di, X3X_H1_X
@@ -1190,9 +1266,9 @@ x3x_mix:
     pop si
     pop bx
     mov ax, x3x_runs
-    mov [cs:x3x_ptr], ax
+    CSDO mov [CSEG x3x_ptr], ax
     mov ax, [cs:x3x_nruns]
-    mov [cs:x3x_cnt], ax
+    CSDO mov [CSEG x3x_cnt], ax
 .run:
     cmp word [cs:x3x_cnt], 0
     je .done
@@ -1202,13 +1278,13 @@ x3x_mix:
     jbe .n
     mov cx, [cs:x3x_rem]
 .n: jcxz .done
-    sub [cs:x3x_rem], cx
+    CSDO sub [CSEG x3x_rem], cx
     mov dx, [cs:di + 4]
     mov di, [cs:di + 2]
     add di, X3X_H1_X
     call x3x_mixline
-    add word [cs:x3x_ptr], 6
-    dec word [cs:x3x_cnt]
+    CSDO add word [CSEG x3x_ptr], 6
+    CSDO dec word [CSEG x3x_cnt]
     jmp short .run
 .done:
     ret
@@ -1433,7 +1509,7 @@ x3x_place:
     mov ds, [cs:x3x_segh1]
     mov bx, x3x_runs
     mov ax, [cs:x3x_nruns]
-    mov [cs:x3x_cnt], ax
+    CSDO mov [CSEG x3x_cnt], ax
 .run:
     cmp word [cs:x3x_cnt], 0
     je .done
@@ -1446,7 +1522,7 @@ x3x_place:
     add di, dx
     loop .c
     add bx, 6
-    dec word [cs:x3x_cnt]
+    CSDO dec word [CSEG x3x_cnt]
     jmp short .run
 .done:
     ret
@@ -1464,7 +1540,8 @@ x3x_splitnz:
     cmp byte [cs:x3x_bt], 2
     jne .l
     mov ax, 576
-.l: mov [cs:x3x_nzx], ax
+.l:
+    CSDO mov [CSEG x3x_nzx], ax
     pop ax
     ret
 
@@ -1510,12 +1587,12 @@ x3x_hybrid:
     add ax, 8
     cmp ax, [cs:x3x_nzx]
     jbe .a4
-    mov [cs:x3x_nzx], ax
+    CSDO mov [CSEG x3x_nzx], ax
 .a4:
     xor bx, bx
     call [cs:x3x_aafn]
 .noaa:
-    mov word [cs:x3x_sb], 0
+    CSDO mov word [CSEG x3x_sb], 0
 .sb:
     mov ax, [cs:x3x_sb]
     cmp ax, [cs:x3x_nsb]
@@ -1554,7 +1631,7 @@ x3x_hybrid:
 .keep:
     call x3x_keepys
 .nx:
-    inc word [cs:x3x_sb]
+    CSDO inc word [CSEG x3x_sb]
     jmp short .sb
 
 ; x3x_produce - the subband x3x_sb of X into Y36 (H2). CF = 1 when its 18
@@ -1613,13 +1690,13 @@ x3x_produce:
     push ax
     cmp cx, X3X_FAST_MIN
     jb .sparse
-    add word [cs:x3x_s_fast], 1
-    adc word [cs:x3x_s_fast + 2], 0
+    CSDO add word [CSEG x3x_s_fast], 1
+    CSDO adc word [CSEG x3x_s_fast + 2], 0
     call x3x_imfast
     jmp short .win
 .sparse:
-    add word [cs:x3x_s_sparse], 1
-    adc word [cs:x3x_s_sparse + 2], 0
+    CSDO add word [CSEG x3x_s_sparse], 1
+    CSDO adc word [CSEG x3x_s_sparse + 2], 0
     call x3x_imsparse
 .win:
     pop ax
@@ -1672,13 +1749,13 @@ x3x_produce:
     clc
     ret
 .allz:
-    add word [cs:x3x_s_zero], 1
-    adc word [cs:x3x_s_zero + 2], 0
+    CSDO add word [CSEG x3x_s_zero], 1
+    CSDO adc word [CSEG x3x_s_zero + 2], 0
     stc
     ret
 .short:
-    add word [cs:x3x_s_short], 1
-    adc word [cs:x3x_s_short + 2], 0
+    CSDO add word [CSEG x3x_s_short], 1
+    CSDO adc word [CSEG x3x_s_short + 2], 0
     ; Y36 = 0, then each window's 6-point IMDCT added in
     mov di, X3X_H2_Y36
     mov cx, 36
@@ -2200,7 +2277,7 @@ x3x_synth:
 .ld:                                ; (Lee and the V codes done)
     mov es, [cs:x3x_segsy]
     mov bp, X3X_SY_SLOT
-    mov word [cs:x3x_t], 18
+    CSDO mov word [CSEG x3x_t], 18
 .w: mov ax, [cs:x3x_slot]
     mov dx, ax
     neg dx
@@ -2214,9 +2291,9 @@ x3x_synth:
     push bp
     call [cs:x3x_winfn]
     pop bp
-    inc word [cs:x3x_slot]
+    CSDO inc word [CSEG x3x_slot]
     add bp, X3X_SLOTSZ
-    dec word [cs:x3x_t]
+    CSDO dec word [CSEG x3x_t]
     jnz .w
 .wd:
     ret
@@ -2289,13 +2366,13 @@ x3x_opentail:
     push ds
     push es
     cld
-    mov byte [cs:x3x_isopen], 0
+    CSDO mov byte [CSEG x3x_isopen], 0
     mov al, [es:di + X3O_PROF]
     mov ah, [es:di + X3O_DIV]
     call x3x_chkpd
     jc .out
-    mov [cs:x3x_prof], al
-    mov [cs:x3x_div], ah
+    CSDO mov [CSEG x3x_prof], al
+    CSDO mov [CSEG x3x_div], ah
     mov si, bx                      ; the CAPS block
     mov ax, X3E_CHAN
     cmp byte [es:di + X3O_OCH], 1
@@ -2304,9 +2381,9 @@ x3x_opentail:
     mov cl, [es:di + X3O_FMT]
     cmp cl, X3_FMT_U8
     ja .bad
-    mov [cs:x3x_fmt], cl
+    CSDO mov [CSEG x3x_fmt], cl
     mov ax, [es:di + X3O_GAIN]
-    mov [cs:x3x_gain], ax
+    CSDO mov [CSEG x3x_gain], ax
     ; the stream: version 1, 2 or 25, rate index 0..2. The SPEECH tables run
     ; at 2 or 4 on ANY version: XT Speech's own rule (2 on MPEG-2.5, 4 on
     ; MPEG-2) is the engine's, and XT Standard divided by its source (2 on
@@ -2324,8 +2401,8 @@ x3x_opentail:
     cmp cl, 25
     jne .bad
 .verok:
-    mov [cs:x3x_over], cl
-    mov [cs:x3x_osri], ch
+    CSDO mov [CSEG x3x_over], cl
+    CSDO mov [CSEG x3x_osri], ch
     ; the segments: NSEG of them, none zero
     mov ax, X3E_MEM
     mov cl, [cs:si]
@@ -2342,42 +2419,42 @@ x3x_opentail:
     mov cl, [cs:x3x_div]
     div cl                          ; AL = 32 / divisor
     xor ah, ah
-    mov [cs:x3x_nsb], ax
-    mov [cs:x3x_nout], ax
+    CSDO mov [CSEG x3x_nsb], ax
+    CSDO mov [CSEG x3x_nout], ax
     ; the profile's routines
     mov bl, [cs:x3x_prof]
     xor bh, bh
     shl bx, 1
     mov bx, [cs:x3x_ptab + bx]      ; the profile's descriptor
     mov ax, [cs:bx]                 ; window segments
-    mov [cs:x3x_nwseg], ax
+    CSDO mov [CSEG x3x_nwseg], ax
     mov ax, [cs:bx + 2]
-    mov [cs:x3x_desc], ax
+    CSDO mov [CSEG x3x_desc], ax
     mov ax, [cs:bx + 4]
-    mov [cs:x3x_aafn], ax
+    CSDO mov [CSEG x3x_aafn], ax
     lea ax, [bx + 6]                ; the kernels: Lee, Lee end, window, end
     cmp byte [cs:x3x_div], 4
     jne .w4
     mov ax, x3x_kd_sp4
 .w4:
-    mov [cs:x3x_kdesc], ax
+    CSDO mov [CSEG x3x_kdesc], ax
     ; X3O_SEG: the window segments, then SY, H1, H2
     mov cx, [cs:x3x_nwseg]
     lea si, [di + X3O_SEG]
     xor bx, bx
 .ws: mov ax, [es:si]
-    mov [cs:x3x_wseg + bx], ax
+    CSDO mov [CSEG x3x_wseg + bx], ax
     inc si
     inc si
     inc bx
     inc bx
     loop .ws
     mov ax, [es:si]
-    mov [cs:x3x_segsy], ax
+    CSDO mov [CSEG x3x_segsy], ax
     mov ax, [es:si + 2]
-    mov [cs:x3x_segh1], ax
+    CSDO mov [CSEG x3x_segh1], ax
     mov ax, [es:si + 4]
-    mov [cs:x3x_segh2], ax
+    CSDO mov [CSEG x3x_segh2], ax
     ; XTGEN.BIN, 128-byte aligned in this image: its paragraph is this
     ; part's own plus its offset, ASKED (OSAPI_SEG's SEG_SUB: the sum on
     ; every real-mode kernel). Under kern_mega CS is the part's CODE half,
@@ -2403,14 +2480,14 @@ x3x_opentail:
     jmp .bad
 .gok:
     xchg ax, dx
-    mov [cs:x3x_gseg], ax
+    CSDO mov [CSEG x3x_gseg], ax
     mov es, ax
     call x3x_gencheck
     mov ax, X3E_TABLE
     jc .bad
     ; expand
-    mov word [cs:x3x_fs1], 0
-    mov word [cs:x3x_fs2], 0
+    CSDO mov word [CSEG x3x_fs1], 0
+    CSDO mov word [CSEG x3x_fs2], 0
     call x3x_xwin                   ; the window rows (and their fl32)
     call x3x_xsy                    ; ENCV and Lee planes
     call x3x_xh1                    ; RQL, IMDCT rows, ENCR, antialias
@@ -2428,8 +2505,12 @@ x3x_opentail:
     cmp cx, [cs:x3x_fs2]
     jne .bad
     ; the counters since OPEN
+%ifdef PKG_MEGA
+    mov es, [cs:x3x_dsel]           ; (the arm's: CS is read-only there)
+%else
     push cs
     pop es
+%endif
     mov di, x3x_stats
     mov cx, (x3x_s_end - x3x_stats) / 2
     xor ax, ax
@@ -2437,25 +2518,29 @@ x3x_opentail:
     ; the profile's two kernels into the resident slot: the window pass,
     ; then Lee's (both position-independent: absolute [cs:] data, relative
     ; jumps inside, the slow V code an indirect call)
+%ifdef PKG_MEGA
+    mov es, [cs:x3x_dsel]           ; written through the DATA selector, run
+%else                               ; through CS (a far call reloads it)
     push cs
     pop es
+%endif
     push ds
     push cs
     pop ds
     mov bx, [cs:x3x_kdesc]
     mov di, x3x_kslot
-    mov [cs:x3x_winfn], di
+    CSDO mov [CSEG x3x_winfn], di
     mov si, [cs:bx + 4]
     mov cx, [cs:bx + 6]
     sub cx, si
     rep movsb
-    mov [cs:x3x_leefn], di
+    CSDO mov [CSEG x3x_leefn], di
     mov si, [cs:bx]
     mov cx, [cs:bx + 2]
     sub cx, si
     rep movsb
     pop ds
-    mov byte [cs:x3x_isopen], 1
+    CSDO mov byte [CSEG x3x_isopen], 1
     call x3x_doreset
     clc
     jmp short .out
@@ -2527,7 +2612,7 @@ x3x_vlevels:
     mov ds, [cs:x3x_gseg]
     mov di, x3x_lv
     xor ax, ax
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     inc di
     inc di
     mov cl, [XG_VMAP + 1]           ; s0
@@ -2540,7 +2625,7 @@ x3x_vlevels:
     mov cl, [si]
     inc si
 .l: add ax, dx
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     inc di
     inc di
     loop .l
@@ -2558,7 +2643,7 @@ x3x_rlevels:
     mov di, x3x_lv
     mov cx, 128
 .l: lodsw
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     inc di
     inc di
     loop .l
@@ -2570,7 +2655,7 @@ x3x_rlevels:
 ; running sum's high word, then the negation pass), rings zeroed; fl32 over
 ; the rows
 x3x_xwin:
-    mov word [cs:x3x_t], 0
+    CSDO mov word [CSEG x3x_t], 0
 .seg:
     mov bx, [cs:x3x_t]
     cmp bx, [cs:x3x_nwseg]
@@ -2614,7 +2699,7 @@ x3x_xwin:
     xor cl, cl                      ; 256 words a row
     call x3x_fl32
     pop ds
-    inc word [cs:x3x_t]
+    CSDO inc word [CSEG x3x_t]
     jmp short .seg
 .done:
     ret
@@ -2687,7 +2772,7 @@ x3x_xsy:
     call x3x_vlevels
     mov di, X3X_SY_ENCV + 4096
     mov cx, 4096
-    mov word [cs:x3x_wstep], 2      ; 2 at(v) = 2v
+    CSDO mov word [CSEG x3x_wstep], 2 ; 2 at(v) = 2v
     call x3x_xwalk
     ; fl32 over ENCV
     push ds
@@ -2870,7 +2955,7 @@ x3x_xh1:
     ; ENCR: the walk with at(b) = 4b; then the sentinel
     mov di, X3X_H1_ENCR + 8192
     mov cx, 8192
-    mov word [cs:x3x_wstep], 8      ; 2 at(b) = 8b
+    CSDO mov word [CSEG x3x_wstep], 8 ; 2 at(b) = 8b
     call x3x_xwalk
     ; b = 8192: k is 127 by then (8 x 8191 is past every midpoint)
     mov byte [es:X3X_H1_ENCR], -127

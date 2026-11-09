@@ -1372,9 +1372,14 @@ w16_clipkids:
     ret
 
 ; w16_cutkid - w16_clipkids' for the child SI: its rectangle on the screen,
-; inclusive, cut out of [w16_kl]..[w16_kb] when it spans a side
+; inclusive, cut out of [w16_kl]..[w16_kb] when it spans a side. Keeps BX
+; and CX - CX IS w16_clipkids' `loop` count: lost, the walk ran on past the
+; window table, cutting garbage records into the clip, and on kern_mega
+; read past WIN16's data limit, a #GP that closed Solitaire, Cardfile and
+; MDI.EXE at their first paint (KERN-MEGA-PLAN 14.164)
 w16_cutkid:
     push bx
+    push cx
     mov ax, [si + W16W_X]           ; AX..CX x DX..BX: the child, screen
     add ax, [w16_ox]
     mov cx, ax
@@ -1424,6 +1429,7 @@ w16_cutkid:
     dec ax
     mov [w16_kr], ax
 .out:
+    pop cx
     pop bx
     ret
 

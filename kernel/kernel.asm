@@ -1,22 +1,28 @@
 ; =============================================================================
 ; os8088 1.0 - kernel
 ;
-; A Macintosh-style GUI for the 8086: 640x480x16 (VGA mode 12h), pre-emptive
-; round-robin multitasking off the PIT, serial Microsoft mouse on COM1.
+; A Macintosh-style GUI for the 8086: VGA or EGA (modes 12h and 10h, not on
+; kern_small), Hercules or CGA, picked at boot (SPEC.md 39); pre-emptive round-robin multitasking
+; off the PIT; a serial mouse on COM1 or COM2, a PS/2 mouse or a pointing
+; driver (SPEC.md 9). Four kernels build from this file - the split below.
 ;
 ; Runs in real mode, near model: CS = DS = KERNEL_SEG for all kernel code and
-; every task, SS = LOW_SEG, ES scratch. EVERY inter-module call inside the
-; kernel is near - there is no far code and no second code segment. The
-; module contracts (register use, data layouts, concurrency rules) live in
-; SPEC.md; that document is binding.
+; every task, SS = LOW_SEG, ES scratch. Calls inside `.text` are near; `.cold`
+; (COLD_SEG), the boot blob ([spl_fseg]) and the boot overlay's window half
+; (`.ovl`, FAT_SEG) are segments of their own, reached by far calls through
+; fixed shims (SPEC.md 2.5, 2.6, 33). The module contracts (register use,
+; data layouts, concurrency rules) live in SPEC.md; that document is binding.
 ;
-; Three fixed entry points, at KERNEL_SEG (0x0060 - see the ladder below):
+; Two fixed entry points and three fixed words, at KERNEL_SEG (0x0060 - see
+; the ladder below):
 ;   0060:0000  cold entry (the boot sector jumps here)
-;   0060:0008  boot splash tick (SPEC.md 15): far-called by the boot sector
-;              after every sector it reads, while the rest of this image is
-;              still coming off the floppy
-;   0060:0010  os8088 API jump table (SPEC.md 20.3): 8-byte DS-switching cells
-;              at pinned offsets, far-called by loaded packages
+;   0060:0004  boot_cylrun - the loader's head-crossing finding (18.93.1);
+;              0060:0008..000B are free (stage 2 calls the splash NEAR,
+;              SPEC.md 2.9.4); 0060:000C boot_ticks (15.4) and 0060:000E the
+;              debug registry (57) are fixed words, not entry points
+;   0060:0010  os8088 API jump table (SPEC.md 20.3): 8-byte SLOTs, 6-byte
+;              rare cells and inline cells at pinned offsets, far-called by
+;              loaded packages
 ; =============================================================================
 
 cpu 8086
@@ -92,9 +98,10 @@ PKG_FILE_HI  equ 512            ; the HIGH word of the biggest FILE the mount
                                 ; meant, and it stopped bounding the FILE the
                                 ; moment a package could carry parts beyond
                                 ; its own segment. 32MB is the DERIVATION:
-                                ; a part's offset is a word of 512-byte
-                                ; sectors (SPEC.md 20.12.3) and READ_AT's
-                                ; div by 512 needs the high word under 512 -
+                                ; READ_AT's div by 512 needs the high word
+                                ; under 512 (a part's own `off` is a word of
+                                ; PARAGRAPHS, SPEC.md 20.12.2.1, so every part
+                                ; starts in the file's first 1MB) -
                                 ; 1MB, the decision it was, became the one
                                 ; limit left on kern_mega
 %if PKG_FILE_HI & 0FFh
@@ -117,8 +124,15 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   0x00600  KERNEL_SEG  .text + .bss                KIMG_PARA (derived)
 ;            FAT_SEG     mount-time FAT snapshot     FAT_PARA
 ;            LOW_SEG     .lowbss + task 0's stack    LOW_PARA
+;            (VGA_RAM)   `.vga`, kern_big only       VGA_PARA
+;            COLD_RAM    `.cold`                     COLD_PARA
+;            (MEGA_RAM)  `.mega`, kern_mega only     MEGA_PARA
+;            VGABUF_RAM  `.vgabuf`                   VGABUF_PARA
 ;            HEAP_SEG    the claim heap              up to int 12h's top
 ;            (the top)   the boot sector + its stack 2,560 B, until handoff
+;
+;   (the ROM_COLD order, which every shipped kernel builds; NO_ROM_COLD=1
+;   puts `.cold` between KERNEL_SEG and FAT_SEG - the ladder below is exact)
 ;
 ; That last rung is not the kernel's and is not reserved: boot/boot.asm
 ; relocates itself to the last 512 bytes the machine has and runs there while
@@ -138,8 +152,11 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;
 ; **Everything from KERNEL_SEG to the end of task 0's stack is the kernel**,
 ; and the KERN_BUDGET guard holds that whole span to a budget just above the
-; BIOS data area (100KB of machine on kern_big, 64KB on kern_small). Code, data, scratch, the FAT snapshot, the disk buffers and
-; every task stack are inside it. The one deliberate exception is the menu
+; BIOS data area (100KB of machine on kern_big and kern_emu, 64KB on
+; kern_small; on kern_mega 68KB held against MEGA_RESIDENT, the span less the
+; rungs that go above 1MB - rule 4 below). Code, data, scratch, the FAT
+; snapshot, the disk buffers and every task stack are inside it. The one
+; deliberate exception is the menu
 ; save-under, which is a heap claim (SPEC.md 12.4/50) because it is 20KB that
 ; only exists while a menu is down.
 ;
@@ -160,7 +177,8 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; =============================================================================
 ; --- the split (docs/history/KERN-SPLIT-PLAN.md) -------------------------------------
 ; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is
-; `make KERN_BIG=1`. The reason is written out in docs/KERNEL-MEMORY.md: a
+; `make KERN_SMALL=1` (`make small`); with no knob the Makefile sends
+; -DKERN_BIG. The reason is written out in docs/KERNEL-MEMORY.md: a
 ; 128KB machine and a 640KB machine stop wanting the same feature set long
 ; before they stop fitting the same image, so each build has a budget of its
 ; own (KERN_BUDGET below).
@@ -750,9 +768,10 @@ TOAST_MAX   equ 24
     mov [cs:%1], %2
  %endif
 %endmacro
-; MEGA_CSELTOP - kern_mega: the word on top of the stack, a 512-aligned DATA
-; segment, becomes its CODE alias (LDT entry seg/32, selector (seg >> 2) | 4,
-; kernel/mega.inc). Every register and FLAGS preserved.
+; MEGA_CSELTOP - kern_mega: the word on top of the stack, an image's DATA
+; selector (a pair's data half), becomes its CODE half, the selector 8 below
+; it (KERN-MEGA-MEMORY-PLAN MC7.4); a GDT selector, and any segment in real
+; mode, is left alone. Every register and FLAGS preserved.
 %macro MEGA_CSELTOP 0
     push bp
     mov bp, sp
@@ -980,6 +999,15 @@ TOAST_MAX   equ 24
   %define OS88_DRIVERS 1
 %endif
 
+; A PICOMEM 2's DISK, ONE SECTOR A CALL WITH IRQ0 MASKED (SPEC.md 18.91.7):
+; drv_sniff finds the card's first unit, dsk_xfer reads it so. kern_big and
+; kern_emu; not kern_mega, whose int 13h is its bracket's
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define DSK_PMHD 1
+ %endif
+%endif
+
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
 ; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
@@ -1096,8 +1124,8 @@ TOAST_MAX   equ 24
 
 ; SPEC.md 38's Standard File dialog, on FCP_MOD's terms one block up and
 ; through the same seam (SPEC.md 38.0, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2
-; wave 2). SEVEN entries, because SPEC.md 13.10.5's thumb drag is kern_big's
-; already and takes fdlg_onup and fdlg_ondrag with it.
+; wave 2). FIVE entries (FD_NENT, SPEC.md 38.0): `fdlg_onup` stays resident,
+; and the old dialog's paint, key and click callbacks went with its window.
 %ifdef KERN_SMALL
   %define FDLG_MOD 1
 %endif
@@ -1137,9 +1165,9 @@ TOAST_MAX   equ 24
 ; COLD_SLIDE - the kernel moves `.cold` BY ITSELF (docs/plans/MOVABLE-COLD-
 ; PLAN.md): down over the VGA rung on a machine with neither a VGA nor an EGA,
 ; which can never use it. It needs the kernel's own list of the words that
-; name `.cold`'s segment - cfx_tab, which tools/os88cfx.py stamps into the
-; blob after the assembly - and ROM_ADOPT's mod_cfix for the modules. kern_big
-; alone: kern_small drives no VGA at all (MONO-RECLAIM-PLAN 2), so it has no
+; name `.cold`'s segment - cfx_tab, which tools/os88cfx.py stamps into
+; `.boot3` (boot3.inc) after the assembly - and ROM_ADOPT's mod_cfix for the
+; modules. kern_big alone: kern_small drives no VGA at all (MONO-RECLAIM-PLAN 2), so it has no
 ; rung to slide over. NO_COLD_SLIDE is the A/B
 %ifdef ROM_ADOPT
   %ifdef KERN_BIG
@@ -1148,6 +1176,13 @@ TOAST_MAX   equ 24
     %endif
   %endif
 %endif
+; `.boot3` - EVERY KERNEL has the third boot-only home (SPEC.md 2.9.15,
+; docs/plans/completed/BOOT3-PLAN.md): the file's last section, landing under the blob,
+; dropped at mem_unblob. kernel/boot3.inc is its frame and B3SECT / B3CALL /
+; B2CALL (beside BLOBCALL) its macros. kern_big and kern_emu took it over from
+; `.cfx` in wave 0; kern_small, kern_mega and the NO_COLD_SLIDE / NO_ROM_COLD
+; knobs switched it on in wave 1, and with that the macros' fallback arms went:
+; a B3SECT body is in `.boot3` on every kernel (the owner's "same boot ladder")
 ; LADDER_PACK - the TOP of the ladder in paragraphs, not 512-byte rungs
 ; (docs/plans/MOVABLE-COLD-PLAN.md 5). Guard 6 names every base an int 13h
 ; transfer can land on - KERNEL_SEG, FAT_SEG, LOW_SEG, HEAP_SEG and the claims
@@ -1234,8 +1269,9 @@ DRV_HMA_SEG equ 0xF000
 ; OVBCALL's arm for it below both read this ONE symbol, so the section a body
 ; is in and the entry that reaches it cannot disagree.
 ;
-; kern_big puts the probe in the WINDOW half and kern_small in the BLOB half,
-; like the other OVBCALL bodies - EXCEPT on a kern_small KNOB build, which
+; kern_big puts the probe in the WINDOW half and kern_small in `.boot3` (the
+; BLOB half until BOOT3-PLAN wave 1; the name stayed), like the other OVBCALL
+; bodies - EXCEPT on a kern_small KNOB build, which
 ; takes kern_big's arrangement for the probe alone. That is how a diagnostic
 ; arm gets room without a shipped kernel paying for it. The blob is
 ; BOOT2_SECS sectors on every build, because the boot canary rests on there
@@ -1401,15 +1437,18 @@ DRV_HMA_SEG equ 0xF000
  %endif
 %endif
 
-; THE BUDGETS. Three rules, each a different quantity (docs/KERNEL-MEMORY.md):
+; THE BUDGETS. Three rules, each a different quantity, and kern_mega's own
+; (rule 4, below) (docs/KERNEL-MEMORY.md):
 ;
 ;   1. kern_big fully RESIDES in KERN_RESIDENT_KB (100KB) once it is at the
 ;      desktop - every non-purgeable byte, no drivers, no XMS, on VGA. Guard 1
 ;      below is the static half, this span; tests/kernresident.py is the half
 ;      an assembler cannot see, a claim made at boot and never given back.
 ;   2. kern_small fully RESIDES in KERN_SMALL_RESIDENT_KB (64KB). Guard 1 is
-;      all of it: tests/small128.py asserts that no pinned claim stands on its
-;      bare desktop, so its span IS what it holds.
+;      the static half, this span; tests/small128.py is the rest - no pinned
+;      claim stands on its bare desktop but the kernel's own, the keyboard
+;      mouse's one 512-byte granule on a mouseless machine (SPEC.md 2.8.8),
+;      which it charges at its size: KERN_END + 512 must fit too.
 ;   3. BOTH BOOT on 128KB - guard 5, MIN_RAM_KB below. Booting and residing
 ;      are separate questions: overlays and the boot order are what a 128KB
 ;      boot exercises, and they have broken it at a resident size well under
@@ -1434,9 +1473,10 @@ DRV_HMA_SEG equ 0xF000
 ;      SHAPE build with a budget of its own and not a KERN_KNOB build any more
 ;      (kern_mega size pass 1, docs/plans/completed/msp1/megabudget.md): the
 ;      owner made it "a normal build with its own budget", a step towards a
-;      release that is not one yet. KERN_SIZE at boot is NOT what it is held
-;      to - that transient is guard 5's mega arm, the conventional memory of
-;      the 1MB floor machine. Sized at the 64,512 bytes it measured with
+;      release, which came on 2026-11-07 (MEGA-RELEASE-PLAN 8 and 9).
+;      KERN_SIZE at boot is NOT what it is held to - that transient is guard
+;      5's mega arm, the conventional memory of the 1MB floor machine. Sized
+;      at the 64,512 bytes it measured with
 ;      kern_big's own headroom, 3,584 (seven steps).
 KERN_RESIDENT_KB       equ 100  ; rule 1
 KERN_SMALL_RESIDENT_KB equ 64   ; rule 2
@@ -1486,9 +1526,10 @@ KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
 ; happened to sit, and moves 6 through 9 of KERN_BUDGET below ate the whole
 ; of the gap it left; at the ceiling the two can only meet on a machine too
 ; small to run the OS, so what the guard asserts now is which machines those
-; are. The sector refuses to relocate at all when the kernel's read would
-; reach it, which is the same question asked of the machine actually in front
-; of it rather than of the smallest one we support.
+; are. The sector refuses a machine that cannot hold stage 2's blob at
+; HEAP_SEG under its own 2,560 bytes (SPEC.md 2.7.1), which is the same
+; question asked of the machine actually in front of it rather than of the
+; smallest one we support.
 BOOT_SECT   equ 512             ; the sector itself, sitting at the very top
 BOOT_STACK  equ 2048            ; ...and its stack, growing down from there
 ; MIN_RAM_KB - THE MACHINE BOTH KERNELS BOOT ON (rule 3 at KERN_BUDGET).
@@ -1555,13 +1596,14 @@ DSK_FAT_SECS equ 9              ; resident FAT cap, sectors (4,608 bytes).
                                 ; Exactly what the largest geometry this OS
                                 ; boots or builds declares: 1.44MB = 9, 1.2MB
                                 ; = 7, 720KB = 3, 360KB = 2. It is an
-                                ; ACCEPTANCE threshold (SPEC.md 18.2 rule 10),
-                                ; not a buffer with slack: a volume claiming
-                                ; more is refused before a byte of it is read,
-                                ; and every FAT16 volume there can be is
-                                ; refused by this number alone (a FAT is only
-                                ; FAT16 with >= 4,085 clusters, i.e. >= 16 FAT
-                                ; sectors)
+                                ; ACCEPTANCE threshold for a FLOPPY (SPEC.md
+                                ; 18.2 rule 10): a floppy claiming more is
+                                ; refused before a byte of it is read, and
+                                ; every FAT16 floppy by this number alone (a
+                                ; FAT is only FAT16 with >= 4,085 clusters,
+                                ; i.e. >= 16 FAT sectors). A FIXED volume's
+                                ; FAT has no cap: this is the size of its
+                                ; window (SPEC.md 18.8)
 %endif
 FAT_PARA    equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
 
@@ -1574,10 +1616,10 @@ STK0_SIZE   equ 512             ; task 0's stack - the UI task's, and so the
                                 ; everything below task 0's SAVED SP with
                                 ; 0xCC, drives the machine, and reads the
                                 ; deepest byte back. It reads 238 against
-                                ; SPEC.md 15.1's 246, whose drive is heavier,
+                                ; SPEC.md 2.1's 246, whose drive is heavier,
                                 ; so 246 is the number to divide by.
                                 ;
-                                ; 2.08x SPEC.md 15.1's 246, and that is
+                                ; 2.08x SPEC.md 2.1's 246, and that is
                                 ; GENEROUS by the standard this tree actually
                                 ; holds: docs/plans/completed/STACK-SLOTS-PLAN.md 12 has Frotz
                                 ; at 1.26x - a 22-level chain reading 240 of a
@@ -1925,11 +1967,57 @@ HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
 ; is lost: mem_init raises [mem_base] over the blob wherever [spl_fseg] says it
 ; is, and mem_unblob drops the floor back under it, lift and all. The guard
 ; below `kz_all` proves the read clears it on every build.
-%ifdef ROM_COLD
-BLOB_LIFT   equ 96
-%else
-BLOB_LIFT   equ 0
-%endif
+; ...AND ON A KERNEL WITH A `.boot3` THE LIFT IS DERIVED (SPEC.md 2.9.15.3,
+; BOOT3-PLAN 3.3), because that section is the file's last and lands under the
+; blob: every term in bytes of linear address, the result in paragraphs, and
+; the larger of three - the floor of 96 (what every kernel had, so a `.boot3`
+; that fits under it moves nothing), the read's end (the section's end plus
+; KZ_MARGIN plus R's sector rounding and the tail's own, 511 each, rounded to a
+; sector because the blob is a read target) and the nobits scratch's end.
+; HEAP_SEG is already a multiple of 32 paragraphs. `%if` cannot choose on a
+; forward reference, so the max is arithmetic: a relational operator is 0 or 1
+; in an ordinary NASM expression. BLOB_SEG_AT reaches the code only as an
+; immediate (DSK_HCYLSEG, B2CALL), whose size does not depend on its value, so
+; the forward reference creates no size cycle. boot2.asm's KZIP guard stays the
+; EXACT check - a last block that GROWS adds to R past this bound
+KZ_MARGIN_K equ 64              ; boot2.asm's KZ_MARGIN (boot3.inc's guard)
+B3_END      equ B3_RAM * 16 + B3_EXT + B3_RES ; (B3_EXT: `.boot3` and
+B3_LIFT_RD  equ ((B3_RAM * 16 + B3_EXT + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
+                                ; `.boot3m` after it, boot3.inc)
+B3_LIFT_RS  equ ((B3_END + 511) & ~511) / 16 - HEAP_SEG
+; ...AND STAGE 2'S DMA BOUNCE (SPEC.md 2.9.13.7): a run the 64KB page would cut
+; is read whole to that page's start P and copied down, so up to B2_BMAXSEC
+; sectors from the HIGHEST page boundary the read crosses are written - past
+; the read's own end when the last page falls near it. The blob may not be
+; there. This term is that bounce's end, from the same estimate of the read's
+; end as B3_LIFT_RD and only when the read crosses a page at all; it is 0 on
+; kern_big, kern_emu and kern_small at this build (their bounce, if any, ends
+; far inside the read) and lifts kern_mega's blob, whose read ends 14,848
+; bytes past 0x20000 - inside MEGA_BOOT_KB. boot2.asm's guard is the exact
+; check, on the read's real numbers.
+B2_BMAXSEC  equ 36              ; the longest run read_run can make: the
+                                ; largest CYLINDER a system disk is built in,
+                                ; 1.44MB's 18 x 2 (bound 1). t_canary holds
+                                ; every shipped disk's BPB to it
+B3_RD_END   equ (B3_RAM * 16 + B3_EXT + KZ_MARGIN_K + 1022 + 511) & ~511
+B3_PG_HI    equ ((B3_RD_END - 1) >> 16) << 16
+B3_LIFT_BN  equ ((B3_PG_HI + B2_BMAXSEC * 512) / 16 - HEAP_SEG) * (B3_PG_HI > KERNEL_SEG * 16)
+B3_LIFT_F   equ 96 + (B3_LIFT_RD - 96) * (B3_LIFT_RD > 96)
+B3_LIFT_F2  equ B3_LIFT_F + (B3_LIFT_BN - B3_LIFT_F) * (B3_LIFT_BN > B3_LIFT_F)
+B3_LIFT_0   equ B3_LIFT_F2 + (B3_LIFT_RS - B3_LIFT_F2) * (B3_LIFT_RS > B3_LIFT_F2)
+; ...AND OFF THE 64KB DMA PAGE (BOOT3-PLAN 3.3's page term, wave 4). Stage 1
+; bounds every run at the destination's page (boot.asm's second bound), so a
+; blob that straddles one costs an int 13h call BEFORE THE BAR for nothing: a
+; 7-sector blob at kern_small's 0xF800 was read 4 + 2 + 1 where 6 + 1 does it
+; (tests/unit/t_blobruns.py, which walks that bound). So when
+; [blob, blob + BOOT2_PAD) would cross a page, the lift rounds the blob UP to
+; it - at most BOOT2_PAD of boot RAM, 0 resident, and only on the kernel
+; whose blob lands there: kern_small at this build (0xF800 -> 0x10000, guard
+; 5's 128KB headroom ~2KB less); kern_big's, kern_emu's and kern_mega's
+; blobs cross no page and this term is 0 there
+B3_BLOB0    equ (HEAP_SEG + B3_LIFT_0) * 16
+B3_PGX      equ ((B3_BLOB0 >> 16) != ((B3_BLOB0 + BOOT2_PAD - 1) >> 16))
+BLOB_LIFT   equ B3_LIFT_0 + ((((B3_BLOB0 + 0xFFFF) >> 16) << 12) - HEAP_SEG - B3_LIFT_0) * B3_PGX
 BLOB_SEG_AT equ HEAP_SEG + BLOB_LIFT
 
 
@@ -1993,10 +2081,11 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; SIZES, and stage 2 reads the kernel's remainder to KERNEL_SEG:0000, so
 ; `cold_entry` lands where it always did.
 ;
-; ITS SIZE IS A RUNG, not a measurement, for SPL_RESIDENT's reason: the boot
-; sector has to know how many sectors to read before anything has told it, so
-; the number is a constant both ends share and an assertion at the bottom of
-; this file is what keeps them honest.
+; ITS SIZE IS A RUNG, not a measurement: the boot sector has to know how many
+; sectors to read before anything has told it, so the number is a constant
+; both ends share and an assertion at the bottom of this file is what keeps
+; them honest. (SPL_RESIDENT used to be the same kind of constant; since the
+; big review's boot-4 it is derived at the foot of this file.)
 ; THE BLOB IS ONE SECTION (SPEC.md 2.9.14). `.boot2` is the loader, the loading
 ; screen AND the boot overlay's blob half - every boot-only body that has to
 ; outlive drv_boot's first mount. The overlay used to be a section of its own
@@ -2008,10 +2097,10 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; that splash.inc already needed is emitted where the section is declared.
 ;
 ; ONE RUNG, hand-set and asserted at the foot of this file: BOOT2_SECS is how
-; long the blob is. Stage 1 has to know it before anything has told it -
-; SPL_RESIDENT's reason - and the Makefile reads it out of this file with one
-; `sed` so the two cannot disagree.
-; THERE IS ONE BLOB LENGTH NOW, AND THAT IS WHAT KSIG_OFF RESTS ON.
+; long the blob is. Stage 1 has to know it before anything has told it, and
+; the Makefile reads it out of this file with one `sed` so the two cannot
+; disagree.
+; THERE WAS ONE BLOB LENGTH, AND UNTIL boot-10 THAT IS WHAT KSIG_OFF RESTED ON.
 ; `BOOT2_SECS_STARS equ 9` stood here, with a second `sed` in the Makefile to
 ; find it, because SPLSTARS' twinkle wanted 4,193 bytes of a 4,096-byte blob -
 ; over by 97, WHEREVER OVL_AT fell, so moving the split alone could not pay for
@@ -2026,18 +2115,26 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; all four sit at the top of `.text`; the single-length band is seven wide and
 ; reaches memory 6,656. A second blob length pinned the canary to the part of
 ; `.text` a size pass eats first, which is how it came to have thirty bytes of
-; headroom left. The Makefile's KSIG_OFF block is the other end of this.
-; The ninth sector holds the boot copy of Dock layout setup (SPEC.md 30.5).
-; The whole blob is freed before the desktop; KERN_BUDGET is unchanged. It is
-; nine on kern_small too, which has no such copy: KSIG_OFF (the Makefile) is
-; one constant for every kernel, and it names file sector 21 only at nine.
+; headroom left. The other end of this is no longer a Makefile constant:
+; since the big review's boot-10 (2026-11-08) tools/os88ksig.py CHOOSES
+; KSIG_OFF per build arm into $(BUILD)/ksig.inc, walking the runs stage 2 cuts
+; on that arm's own system disks (the Makefile's KSIGGEOM) at the blob length
+; that arm HAS, and fails the build if no sector crosses a head on all of them.
+; The whole blob is freed before the desktop, so its length is no term of
+; KERN_BUDGET. kern_small's is BOOT2_SMALLSEC shorter and a knob's BOOT2_KNOBSEC
+; longer, and the canary's FILE sector is whatever each arm's band gives: at
+; the 2026-11-08 build 57 on kern_big, kern_emu, kern_mega and a knob, 33 on
+; kern_small (KSIG_OFF 22528, 22016, 22016, 22016 and 11264). The paragraphs
+; below that move KSIG_OFF by hand are the history of that constant.
 ; ELEVEN since SPEC.md 26.10.5: the eleventh is AUTOSTART's walk, which was
 ; CTRL.DRV's and cost a machine with an empty \AUTOSTRT 1.2 s of module load on
 ; every boot. It is free for stage 1 on every geometry and costs stage 2 one
 ; int 13h on 720KB (213 ms measured, tests/unit/t_blobruns.py's 720 row), and
 ; KSIG_OFF moved one memory sector down again (5632 -> 5120), file sector 21.
 ; TEN since SPEC.md 6.0.1: the tenth sector is `.boot2`'s, for the timed font
-; pick (font_init in the blob on both kernels), and KSIG_OFF moved one memory
+; pick (font_init in the blob on both kernels, then - BOOT3-PLAN wave 1 - in
+; `.boot3`, the sector left as slack, and since BOOT3-PLAN 16.16 in the blob
+; again, inside wave 4's seven sectors), and KSIG_OFF moved one memory
 ; sector down with it (6144 -> 5632) so the FILE sector is still 21. It sits
 ; inside the same int 13h run on all four geometries (tests/unit/t_blobruns.py).
 ; ELEVEN ON A KNOB BUILD (SPEC.md 2.5.3.3): a knob kernel ships nowhere, so its
@@ -2046,8 +2143,8 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; 9 bytes short. The literal stays FIRST on the line: the Makefile, os88layout,
 ; t_blobruns and kzboot all read the shipped figure off it, and the Makefile
 ; adds the knob's sector in the same block that defines KERN_KNOB, so the two
-; cannot disagree. KSIG_OFF is derived from the total there, so the canary
-; stays on file sector 21 at either length.
+; cannot disagree. KSIG_OFF used to be derived from the total there by hand;
+; os88ksig.py now chooses it for whichever length the arm has (see above).
 ; ...AND ELEVEN ON kern_emu (SPEC.md 9.11.2.1), for the knob's reason one step
 ; along: it is a shipped kernel, but only an emulator boots it - its probe is
 ; 386 code - so its stage 1 reading one sector more costs no period machine
@@ -2059,9 +2156,10 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; are the one caller they have outside the panel. KSIG_OFF moved one memory
 ; sector down again (5120 -> 4608), file sector 21; t_blobruns priced the
 ; sector at no int 13h on any geometry. kern_small has no such copy - no
-; drv_boot, no second display - so it STAYS at eleven, and its KSIG_OFF at
-; 5120: BOOT2_SMALLSEC takes the sector back off, and the Makefile does the
-; same in the block that reads this line. The literal stays kern_big's.
+; drv_boot, no second display - so it STAYS at eleven: BOOT2_SMALLSEC takes
+; the sector back off. (Its KSIG_OFF stayed at 5120 then, by a matching hand
+; adjustment in the Makefile; os88ksig.py chooses it since boot-10.) The
+; literal stays kern_big's.
 ; THIRTEEN since kernel size pass 14 (docs/plans/completed/ksp14/vesa.md): the
 ; thirteenth is VESA.DRV's attach (vx_boot_x) and the block of kernel pointers
 ; it hands over (vx_blk), which were resident `.cold` and `.text` for want of
@@ -2082,21 +2180,24 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; sector by name - it boots only on a 286 or better, so stage 1 reading one
 ; sector more costs no period 8088 anything, and its blob is the knob length
 ; it always was (byte-identical kernel, the Makefile's KERN_MEGA block).
+; SEVEN, ON EVERY KERNEL, since BOOT3-PLAN wave 4 (2026-11-08; SPEC.md 2.9.14):
+; `.boot2` went back to its original purpose - the loader, the loading
+; screen, the first tick's adapter probe and the status line - and every
+; other body in it (kmain_o, the boot's adapter switch, xm_boot_x, vx_boot_x,
+; vmm_boot_x, the Dock geometry, kern_small's desk grid) moved to `.boot3`,
+; KERNEL.SYS's last section, which rides the packed read AFTER the bar is
+; up. kern_big's thirteen, kern_emu's and kern_mega's fourteen and
+; kern_small's eleven all became seven, and with them BOOT2_SMALLSEC and
+; kern_emu's and kern_mega's extra sector went: what is left fits seven on
+; all four (tests/blobbodies.txt is the ratchet that keeps it so). Only a
+; KNOB build keeps a sector more, for the reason above. The paragraphs above
+; are the history of how it grew; tests/unit/t_blobruns.py prices the seven.
 %ifdef KERN_KNOB
-  %define BOOT2_KNOBSEC 1
-%elifdef KERN_EMU
-  %define BOOT2_KNOBSEC 1
-%elifdef KERN_MEGA
   %define BOOT2_KNOBSEC 1
 %else
   %define BOOT2_KNOBSEC 0
 %endif
-%ifdef KERN_SMALL
-  %define BOOT2_SMALLSEC 2
-%else
-  %define BOOT2_SMALLSEC 0
-%endif
-BOOT2_SECS  equ 13 + BOOT2_KNOBSEC - BOOT2_SMALLSEC ; sectors stage 1 reads before it jumps - the
+BOOT2_SECS  equ 7 + BOOT2_KNOBSEC ; sectors stage 1 reads before it jumps - the
                                 ; loader, its screen and the blob half of
                                 ; the boot overlay, one section to BOOT2_PAD.
                                 ; THE TOTAL IS THIS, so
@@ -2111,31 +2212,11 @@ BOOT2_SECS  equ 13 + BOOT2_KNOBSEC - BOOT2_SMALLSEC ; sectors stage 1 reads befo
                                 ; the image; the disk is unchanged every time,
                                 ; the sectors having left there.
                                 ;
-                                ; The six that took it from 13 are SPEC.md
-                                ; 2.9.12's, and they are not for a feature:
-                                ; they are the room to move twenty-five
-                                ; BOOT-ONLY bodies out of `.text` and `.cold`
-                                ; into `.boot2`, where mem_unblob gives them back
-                                ; to the heap at the end of kmain.
-                                ; docs/plans/LAST-DROP-BYTES.md is the register of
-                                ; them and names the caller that makes each one
-                                ; boot-only. 18 is 36 bytes short of the whole
-                                ; register; 19 takes it with room over.
-                                ;
-                                ; WHAT IT COST, measured off the images by
-                                ; tests/unit/t_blobruns.py and not reasoned
-                                ; from one geometry: ONE extra int 13h on 360KB
-                                ; and one on 720KB, none on 1.44MB, plus the
-                                ; six in-run sectors - which land on EVERY
-                                ; geometry, ~144 ms at PERFORMANCE.md's 24 ms a
-                                ; sector, and are the half a call table hides.
-                                ; All of it before the first splash pixel.
-                                ;
-                                ; 20 and 21 change no call on any geometry and
-                                ; are deliberately NOT taken - they are there
-                                ; when something needs them. 22 buys 1.44MB a
-                                ; third call and 23 buys 720KB a fourth, and
-                                ; that is where the next conversation is
+                                ; What a sector more or less costs, per
+                                ; geometry, is tests/unit/t_blobruns.py's
+                                ; table, measured off the images - not this
+                                ; comment, which argued 18, 19 and 22 here for
+                                ; a blob length long since retired
 
 BOOT2_PAD   equ BOOT2_SECS * 512
 
@@ -2157,8 +2238,26 @@ section .lowbss  nobits vstart=0
 section .bss     nobits vfollows=.text valign=1
 section .text    start=BOOT2_PAD vstart=0
 section .cold    start=COLD_START vstart=COLD_VSTART
-%ifdef COLD_SLIDE               ; the kernel's own list of the words naming
-section .cfx     start=CFX_START vstart=0 ; `.cold` (MOVABLE-COLD-PLAN 4)
+section .boot3   start=B3_START vstart=0 ; the third boot-only home, the
+                                ; file's last section on every kernel (SPEC.md
+                                ; 2.9.15), which holds the slide's own list
+                                ; where there is a slide (MOVABLE-COLD-PLAN 4)
+%include "boot3.inc"            ; ...as its FIRST bytes: the head - where it
+                                ; is, the slide and its list - opens the
+                                ; section here, for `.boot2`'s `jmp
+                                ; boot2_entry` reason; the foot is at the foot
+section .boot3m  start=B3M_START vstart=0 ; ...the keyboard mouse's
+                                ; pointer half after it, a MODULE IMAGE that
+                                ; is copied into a claim and never run where
+                                ; it lies (SPEC.md 2.8.8, 9.6.7; mouse.inc)
+%ifdef B3B_ON                   ; ...and its NOBITS SCRATCH (SPEC.md 2.9.15.1,
+section .boot3b  nobits vstart=B3B_AT ; BOOT3-PLAN wave 2): SYSTEM.CFG's file
+%endif                          ; buffer, ovc_buf, past `.boot3m`'s last byte
+                                ; on the next LINEAR 512-byte boundary (it is
+                                ; a disk-read destination) - B3_SEG-relative,
+                                ; because its readers are `.boot3` bodies that
+                                ; reach it through CS (boot3.inc)
+%ifdef COLD_SLIDE
 section .vga     start=VGA_START vstart=VGA_VSTART ; ...and the VGA rung (2)
 %endif
 %ifdef KERN_MEGA                ; kern_mega's own segment: protected-mode code
@@ -2276,9 +2375,10 @@ section .text
 ; Its blob half is assembled into `.boot2` - INSIDE THE BLOB (SPEC.md 2.9.6,
 ; 2.9.14) - in the same section as the loader and the splash, because the blob
 ; is one segment and every label in it is an offset from [spl_fseg]. Stage 1
-; reads the whole blob before it jumps and stage 2 copies it to HEAP_SEG, so
-; the overlay is resident from the first instruction of the boot and stays
-; until kmain gives the blob back after spl_finish. It costs no RAM after that
+; reads the whole blob straight to the heap's floor before it jumps (SPEC.md
+; 2.9.5) - nothing copies it - so the overlay is resident from the first
+; instruction of the boot and stays until kmain gives the blob back after
+; spl_finish. It costs no RAM after that
 ; at all, and - this is the point - none of it counts against KERN_CODE_MAX.
 ; Its OTHER half, `.ovl`, is the bodies dead at the first mount (below).
 ;
@@ -2377,7 +2477,7 @@ boot_ticks:                     ; 0060:000C - the boot timer (SPEC.md 15.4).
                                 ; unknown rather than a plausible wrong
                                 ; number. The offset is fixed because the boot
                                 ; sector has no other way to name it, exactly
-                                ; like the two jumps above and the table below.
+                                ; like the cold entry above and the table below.
 
     times 0x0E - ($ - $$) db 0
 dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
@@ -2421,7 +2521,8 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 ; POP and RETF touch no flags, so a routine's CF answer survives the return
 ; (menu_win_set and inst_pkg_alive contractually preserve the FLAGS word).
 ;
-; Three cells need more than that and jump to a stub below instead:
+; Some cells need more than that and reach a shared body below instead -
+; two of the shapes (SPEC.md 20.3 lists every one):
 ;   X  the caller's DS must reach the kernel routine (a package pointer it
 ;      has to dereference) - the stub puts it in ES
 ;   N  the caller passes a NUL name at DS:SI while ES:BX is already spoken
@@ -2552,7 +2653,8 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %endif
 
 ; ---- the INLINE cells (SPEC.md 20.3): THE CELL IS THE ROUTINE ---------------
-; Fifteen routines were ONE memory access and a `ret` - a getter, a setter or
+; Fifteen routines were ONE memory access and a `ret` when this shape was made
+; (t_api_abi.py's INLINE ledger holds today's twenty) - a getter, a setter or
 ; a window-record word - with no caller anywhere but their own cell. The cell
 ; runs with CS = KERNEL_SEG (the table is .text and every caller far-calls
 ; KERNEL_SEG:cell), so `mov ax, [cs:ticks] / retf` IS the whole call: no DS
@@ -2774,14 +2876,11 @@ apic_xm_copy:
     OSAPI_SLOT wm_geom            ; 0x0174 - content size + visibility
                                   ;          (SPEC.md 11): content size
                                   ;          without touching the record
-; --- every published slot keeps its NUMBER (SPEC.md 20.8) -------------------
-;     This block was once moved down three cells when the paragraph-counting
-;     arena was retired, and a package built against the older SDK then
-;     called wm_resize where it meant cm_alloc. The numbers are the ABI:
-;     the three arena slots stay at 0x01B8..0x01C8 as wrappers over the
-;     claim heap (osapi_cm_*, kernel/memory.inc), the six slots after them
-;     keep their published numbers, and everything ADDED since starts at
-;     0x0200 - the first free number above them.
+; --- the v3 arena's three cells were WITHDRAWN (SPEC.md 20.3.1) -------------
+;     They were 0x01B8..0x01C8, wrappers over the claim heap. Kernel size
+;     pass 4 deleted them and moved every later cell down, as 20.3.1 now
+;     requires of a withdrawn cell; the (dropped) lines below are their
+;     record, not live cells.
     ; (dropped) OSAPI_CXCELL osapi_cm_alloc_x   ; 0x01B8 - the v3 arena (SPEC.md 20.8):
                                   ;          AX = PARAGRAPHS -> AX = segment.
                                   ;          X - the owner fence needs the
@@ -3032,8 +3131,9 @@ apic_wm_snap:
     mov bx, [cs:menu_win]
     OSAPI_IEND
     OSAPI_RSLOT fsx_caps           ; 0x022F - fullscreen exclusive (SPEC.md
-                                  ;          53): AX = the FSXM bitmask this
-                                  ;          adapter can set, DL = vid_kind.
+                                  ;          53): AX = the FSXM bitmask the
+                                  ;          display of window BX (BX = 1..15:
+                                  ;          display BX-1) can set, DL = its kind.
                                   ;          Any context - it is how an app
                                   ;          greys its mode menu (SPEC.md 47)
     OSAPI_RXCELL fsx_run       ; 0x0235 - the bracket (SPEC.md 53.1): AX =
@@ -3046,8 +3146,8 @@ rmk_7:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT fsx_mode           ; 0x023B - a foreign mode + its FSI info
                                   ;          block (SPEC.md 53.4): AL = FSXM
                                   ;          id, ES:DI = the caller's buffer
-    OSAPI_SLOT fsx_wait           ; 0x0241 - frame clock / present (SPEC.md
-                                  ;          53.5): AL = 0 tick / 1 retrace
+    OSAPI_SLOT fsx_wait           ; 0x0241 - frame clock (SPEC.md
+                                  ;          53.5): AL = 0 tick / 1 retrace / 2 frame
     ; (dropped) OSAPI_SLOT gfx_line           ; 0x02E0 - RETIRED (SPEC.md 5.12.7). The
                                   ;          cell stays - a slot number is a
                                   ;          published constant (20.3) - and
@@ -3226,8 +3326,8 @@ apic_toast_show:
                                   ;         impossible rather than merely rare
 apic_wm_destroy:
     OSAPI_RSLOT wm_destroy         ; 0x02BC  BX = a window of YOURS; the gfx lock
-                                  ;         is held, exactly as OSAPI_WM_HIDE
-                                  ;         wants it. Frees the RECORD, where
+                                  ;         is HELD - unlike OSAPI_WM_HIDE,
+                                  ;         which takes it itself. Frees the RECORD, where
                                   ;         hide only takes the pixels down.
                                   ;
                                   ;         For the unowned species (SPEC.md
@@ -4766,7 +4866,7 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
 
 ; -----------------------------------------------------------------------------
 ; api_fdlg_open - slot 0x0124. The N stub's shape with ONE difference, and it
-; is why this cannot be an OSAPI_NSTUB: every other N cell's name is an
+; is why this cannot be an N cell (api_rn): every other N cell's name is an
 ; argument the operation cannot run without, and THIS one's is optional -
 ; SPEC.md 38.6 publishes SI as "a default name, or 0", and fdlg_open_x tests
 ; it (`or si, si / jnz .setname`) to choose between the caller's default and
@@ -4775,14 +4875,16 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
 ; Staged unconditionally, that 0 became `api_name` - a kernel address, never
 ; zero - holding whatever the copy found at the CALLER's offset 0, which for a
 ; package is its own 32-byte header (SPEC.md 20.2). So an app that asked for
-; no default got `O8` and the version bytes in the name box, and fdlg_home_name
-; was unreachable from any package: the branch that calls it cannot be taken
-; through a stub that never leaves SI zero. Four of the six packages that use
+; no default got `O8` and the version bytes in the name box, and fdlg_open_x's
+; remembered-name arm (fdlg_hidx) was unreachable from any package: the
+; branch that calls it cannot be taken through a stub that never leaves SI
+; zero. Four of the six packages that use
 ; the dialog ask for no default - Tracker, Frotz (twice) and ModPlug (twice,
 ; Open and PlayList > Add...) - so this was every one of them.
 ;
-; It takes no V for the reason the macro's header gives: fdlg_seed decides
-; where a DIALOG opens, and a volume switch underneath it would pre-empt that.
+; It takes no V for the reason the macro's header gives: fdlg_open_x's .seed
+; decides where a DIALOG opens, and a volume switch underneath it would
+; pre-empt that.
 ; -----------------------------------------------------------------------------
 api_fdlg_open:
     push ds
@@ -5034,7 +5136,7 @@ api_file_sysc:
     pop ds                      ; switched and never switched back - so it
                                 ; staged 13 bytes of KERNEL image as the file
                                 ; name and handed that to dskw_write_sys.
-                                ; OSAPI_NSTUB avoids it by copying BEFORE it
+                                ; api_rn (the N body) avoids it by copying BEFORE it
                                 ; touches DS; this one has to put it back
     pop bx
     jc .refuse
@@ -5211,8 +5313,8 @@ api_copyname:
     ret
 
 api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
-api_name2:  times 13 db 0       ; slots are reachable before anything clears
-                                ; .bss, and -f bin clears nothing)
+api_name2:  times 13 db 0       ; slots are not reached before kmain, and
+                                ; by then .bss is zero as well)
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The
 ; loading screen and the boot overlay are two sections of one image at one
 ; address - stage 2 copies the whole rung to HEAP_SEG and publishes the segment
@@ -5223,12 +5325,13 @@ api_name2:  times 13 db 0       ; slots are reachable before anything clears
 ;
 ; ONE DWORD AND A MACRO rather than a dword per entry: the segment half is
 ; written once, by stage 2, and the offset half per call - four bytes of .text
-; for the pointer instead of four per site. It is .text and not .bss for the
-; reason api_name is: `-f bin` zeroes nothing.
+; for the pointer instead of four per site. It is .text and not .bss because stage 2
+; writes the segment half BEFORE kz_all, into the plain head kz_all leaves
+; alone: a .bss word would be expanded over (SPEC.md 2.9.13).
 ;
 ; ZERO IS "NO BLOB", and it is the seed and the retirement value both. Every
 ; far call through this pair is behind that test - SPLCALL, OVLCALL(C),
-; spl_gate and sch_isr's copy - and BLOBCALL is the only call that skips it,
+; and sch_isr's copy - and BLOBCALL is the only call that skips it,
 ; from inside the blob, where the blob is aboard by construction. That guard is
 ; what makes a kernel started some other way survive a spl_step; the pointer's
 ; seed never was. It used to be COLD_SEG:mod_gone, tested with `jbe` - which
@@ -5368,25 +5471,18 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 ;
 ; **TWENTY bytes a site** (pushf 1 + cmp word 6 + jbe 2 + mov word 6 + call far
 ; 4 + popf 1), and the flags are banked across them because the
-; busiest caller is inside dsk_xfer's run loop with its own CF in flight. That
-; count is why SPLGATE below exists, and why this form still does too: nothing
-; in here is a CODE reference - only DS-relative data - so it drops into
+; busiest caller is inside dsk_xfer's run loop with its own CF in flight.
+; Nothing in here is a CODE reference - only DS-relative data - so it drops into
 ; `.text`, `.cold` and `.boot2` unchanged, and those three are three
 ; address spaces (SPEC.md 2.6). It is the portable form and the expensive one.
 ;
-; SPLGATE - the same call through `.text`'s shared gate, 3 bytes a
-; site. **`.text` ONLY**, and that is not a convention: a near call out of
-; `.cold` into `.text` is a jump into another segment, which is exactly what
-; tools/os88ovlchk.py exists to refuse - so the misuse fails the build rather
-; than the machine. kmain's eleven sites are all of `.text`'s, and every one of
-; them runs ONCE per boot, so the near call+ret this adds is ~99us on a
-; nine-second boot and the per-sector site in dsk_xfer keeps the inline form.
-;
-; A site names its target and so does its stub, and the NAME is the link: a
-; SPLGATE with no matching SPLSTUB is an undefined symbol, not a wrong address.
-; That is the whole reason the stub is generated from the target rather than
-; written out - SPEC.md 2.9.5.1 is what a second copy of a target looks like
-; when it goes wrong.
+; SPLGATE / SPLGATE1 / SPLSTUB AND THE GATE THEY SHARED ARE GONE (BOOT3-PLAN
+; wave 4): `.text`'s one shared copy of this test, `spl_gate`, 3 bytes a site
+; plus a stub per shared target, which kmain's eleven boot calls once used.
+; Its last two sites were kmain's `SPLGATE1 kmain_o` and dkb_geom's, and both
+; are `call B3_SEG:` now - kmain_o and ovl_dock_geom are `.boot3`'s, at a
+; constant segment, so there is no pointer to stage and kmain needs no test
+; (dkb_geom keeps its own). 9 bytes a site became 5, and the 14-byte gate went.
 %macro SPLCALL 1
     pushf
     cmp word [spl_fseg], 0
@@ -5418,24 +5514,6 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %%done:                         ; never "a record was read"
 %endmacro
 
-%macro SPLGATE 1
-    call splg_%1
-%endmacro
-
-; ...and the SINGLE-SITE form, which is the one most targets want. A stub only
-; pays when it is SHARED: 3 at the site + 8 for the stub is 11 against 9
-; written out here, so the two forms cross over at two sites. splf_step (three
-; sites, all in kmain) and splf_stepq (two, both in mouse.inc) keep their
-; stubs; the other ten targets use these. The NAME is still the link - it is
-; written at the site and nowhere else, so a target this configuration does not
-; assemble is an undefined symbol exactly as a stub for one would be, and the
-; per-stub %ifdefs are gone because the site already carries the one that
-; matters. Using the shared form without a SPLSTUB is a build error; using this
-; form where a stub exists costs 2 bytes and nothing else.
-%macro SPLGATE1 1
-    mov word [spl_fp], %1
-    call spl_gate
-%endmacro
 
 ; OVLCALL - into the WINDOW half, `.ovl` (SPEC.md 2.5.3; it was OVWCALL and
 ; `.ovlw` until SPEC.md 2.9.14 gave the name back). A plain far call, where the
@@ -5452,21 +5530,24 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 
 ; OVBCALL - into whichever half THIS BUILD put the body in (SPEC.md 2.5.3.2).
 ; A boot-only body that finishes before the first mount may live in EITHER
-; half, and the two kernels answer differently: kern_big puts the six OVBCALL
-; bodies in `.ovl`, kern_small in the blob, because the region `.ovl` lands
-; on is what stops kern_small's mount buffers shedding (the `.ovl` guard at
-; the foot of this file, and DSK_NENT in dskwin.inc).
+; half, and the two kernels answer differently: kern_big puts the OVBCALL
+; bodies in `.ovl`, kern_small in `.boot3` (the blob until BOOT3-PLAN wave 1;
+; there were six until wave 3 sent mem_init_x to `.boot3` on every kernel),
+; because the region `.ovl` lands on is what stops kern_small's mount buffers
+; shedding (the `.ovl` guard at the foot of this file, and DSK_NENT in
+; dskwin.inc).
 ;
-; **IT IS NOT A THIRD KIND OF ENTRY** - it expands to OVLCALL or to BLOBCALL
-; and nothing else, so there is nothing new at the site to get wrong. What it
+; **IT IS NOT A NEW KIND OF ENTRY** - it expands to OVLCALL or to B3CALL and
+; nothing else, so there is nothing new at the site to get wrong. What it
 ; buys is that the arms are written ONCE, here, rather than at every call
-; site. Every site is in kmain_o, which is in the blob, so the blob arm is
-; BLOBCALL and costs no resident byte (it was SPLGATE1 from `.text`, four
-; resident bytes a site, until SPEC.md 2.5.3.3). mouse_init's arm reads
-; MOU_IN_BLOB rather than KERN_SMALL, for the knob builds' reason given where
-; that symbol is defined.
+; site. Every site is in kmain_o, in `.boot3` since BOOT3-PLAN wave 4 (the
+; blob's before it), and costs no resident byte (it was SPLGATE1 from `.text`,
+; four resident bytes a site, until SPEC.md 2.5.3.3; then BLOBCALL, a byte
+; shorter than B3CALL, until wave 1).
+; mouse_init's arm reads MOU_IN_BLOB rather than KERN_SMALL, for the knob
+; builds' reason given where that symbol is defined.
 ;
-; tools/os88ovlchk.py knows this name (MACHALF) and holds it to the `.boot2`
+; tools/os88ovlchk.py knows this name (MACHALF) and holds it to the `.boot3`
 ; arm, which is the kern_small model that every build-conditional `section`
 ; in the tree is written to - so an OVBCALL aimed at a body that did NOT move
 ; fails rule 2d exactly as a mismatched SPLGATE1 would, and an OVLCALL aimed
@@ -5474,38 +5555,79 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %macro OVBCALL 1
 %ifidn %1, mouse_init           ; ...the probe follows MOU_IN_BLOB (above
 %ifdef MOU_IN_BLOB              ; the %includes), which is KERN_SMALL minus
-    BLOBCALL %1                 ; the knob builds
+    B3CALL %1                   ; the knob builds
 %else
     OVLCALL %1
 %endif
 %elifdef KERN_SMALL
-    BLOBCALL %1                 ; every OVBCALL site is in kmain_o, which is
-%else                           ; itself in the blob (SPEC.md 2.5.3.3)
+    B3CALL %1                   ; `.boot3` since BOOT3-PLAN wave 1 (the blob
+%else                           ; before it, BLOBCALL from kmain_o)
     OVLCALL %1
 %endif
 %endmacro
 
-; OVSCALL - OVBCALL'S MIRROR: a body in `.ovl` on kern_small and in the blob
-; on kern_big. wm_init is the one (SPEC.md 9.9.8 bought its `.ovl` bytes on
-; kern_big for the PS/2 wheel's knock). tools/os88ovlchk.py holds it to `.ovl`,
-; the kern_small arm, by the same rule that holds OVBCALL to `.boot2`.
+; OVSCALL - OVBCALL'S MIRROR: a body in `.ovl` on kern_small and in `.boot3`
+; on every other kernel (SPEC.md 2.5.3.2). It was the BLOB there, for wm_init
+; alone (SPEC.md 9.9.8 bought its `.ovl` bytes on kern_big for the PS/2
+; wheel's knock), until BOOT3-PLAN wave 3 relieved `.ovl` by moving the clock
+; ladder and sch_idle_start out of it on every kernel but kern_small - the
+; same build choice, so the same macro, and wm_init went with it. Its bodies
+; write `%ifndef KERN_SMALL` / B3SECT / `%else` / `section .ovl`, the kern_small
+; arm LAST, and tools/os88ovlchk.py holds OVSCALL to `.ovl`, the kern_small
+; model, by the same rule that holds OVBCALL to `.boot3`. Both arms are 5 bytes.
 %macro OVSCALL 1
 %ifdef KERN_SMALL
     OVLCALL %1
 %else
-    BLOBCALL %1
+    B3CALL %1
 %endif
 %endmacro
 
 
-; BLOBCALL / MARKW / BPMARKW - the entries, spelled for a caller that
-; is itself IN THE BLOB (kmain_o). The blob is one segment, so a
-; blob entry is `push cs` + a near call - the far frame its `retf` wants -
-; with no pointer and no liveness guard: the caller is executing in the blob,
-; so the blob is aboard by construction.
+; BLOBCALL - a blob entry, spelled for a caller that is itself IN THE BLOB
+; (since BOOT3-PLAN wave 4 the shipped kernels' only sites are splash.inc's
+; and viddet.inc's vid_detect calls, plus EXTD.DRV's extmod.inc, where the
+; same two instructions reach a far entry inside the module's own image; from
+; `.boot3`, where kmain_o now is, the way into the blob is B2CALL). The blob is
+; one segment, so a blob entry is `push cs` + a near call - the far frame its
+; `retf` wants - with no pointer and no liveness guard: the caller is
+; executing in the blob, so the blob is aboard by construction.
 %macro BLOBCALL 1
     push cs
     call %1
+%endmacro
+
+; B3SECT / B3CALL / B2CALL - `.boot3`, the third boot-only home (SPEC.md
+; 2.9.15.2, docs/plans/completed/BOOT3-PLAN.md 4), which every kernel has. A body marked
+; B3SECT is in `.boot3`; its callers reach it with B3CALL, which is
+; `call B3_SEG:x` (5 bytes; OVLCALL's shape - a constant segment, nothing
+; published, nothing retired) or, inside `.boot3`, `push cs` + a near call.
+; Until wave 1 these had fallback arms for a kernel without the section, each
+; body and each call naming its old home; every kernel switched on in wave 1
+; and the arms, and the words, went with them. A body whose home is still
+; BUILD-CONDITIONAL is OVBCALL's (below the boot overlay's macros), which now
+; names `.boot3` on kern_small where it named the blob.
+; B2CALL is the way back INTO THE BLOB from `.boot3`: `call BLOB_SEG_AT:x`, the
+; very constant stage 1 (HEAP_PARA) and boothd (BLOB_SEG) are built with - a
+; new assumption that the blob is where it was read (the owner's choice over
+; SPLCALL's 19 bytes a site, BOOT3-PLAN 15 q9), fenced by tests/unit/
+; t_bootfloor.py --fence on every build. Its target must end in `retf`.
+%macro B3SECT 0
+section .boot3
+%endmacro
+%macro B3CALL 1
+ %ifidn __?SECT?__, [section .boot3]
+    push cs
+    call %1
+ %else
+    call B3_SEG:%1
+ %endif
+%endmacro
+%macro B2CALL 1
+ %ifnidn __?SECT?__, [section .boot3]
+  %error "B2CALL outside .boot3 - from the blob itself it is BLOBCALL"
+ %endif
+    call BLOB_SEG_AT:%1
 %endmacro
 
 ; COLDCALL / COLDSEG_TO - `.cold` reaching its OWN segment without NAMING it
@@ -5544,11 +5666,14 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endif
     mov %1, cs
 %endmacro
+; MARKW / BPMARKW - MARK and BPMARK spelled for kmain_o, a caller outside
+; `.text` (in `.boot3` since BOOT3-PLAN wave 4, the blob's before it)
 %macro MARKW 1
 %ifdef BOOT_MARK
     call kmo_mark               ; MARK's own four-byte shape: the index rides
 %if ((%1) % 5) == 0             ; in the instruction stream, read `cs:` by a
-    db (%1) | 0x80              ; stub that is itself in the blob
+    db (%1) | 0x80              ; stub in `.boot3` beside kmain_o (the blob's
+                                ; until BOOT3-PLAN wave 4)
 %else
     db (%1)
 %endif
@@ -5569,38 +5694,39 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endif
 %endmacro
 
-; SPLSTUB - one three-instruction landing per SHARED target, emitted at the gate
-%macro SPLSTUB 1
-splg_%1:
-    mov word [spl_fp], %1
-    jmp short spl_gate
-%endmacro
 
 
 ; =============================================================================
-; kmain_o - kmain's BOOT HALF, in the blob (SPEC.md 2.5.3.3)
+; kmain_o - kmain's BOOT HALF, in `.boot3` (SPEC.md 2.5.3.3, 2.9.15)
 ;
-; Everything kmain does from its first far call to spl_finish: it runs once,
-; and it is given back with the rest of the blob by the mem_unblob_x kmain
-; makes on its return. It ENDS by calling spl_finish, so the blob is live for
-; the whole body by construction - no argument about call order is needed.
+; Everything kmain does from its first far call to as_boot: it runs once, and
+; it is given back with the rest of `.boot3` and the blob by the mem_unblob_x
+; kmain makes on its return. kmain enters it only after kz_all has expanded
+; `.boot3` (stage 2 jumps to the kernel only then), and returns from it before
+; mem_unblob_x - so the section is live for the whole body by construction.
 ;
-; A caller in the blob reaches another blob entry with BLOBCALL (`push cs` /
-; near call, 4 bytes): the blob is one segment, and it is
-; aboard because this code is running in it. Everything resident is reached
-; FAR - OVLCALL for the window half until drv_boot_x's mount (os88ovlchk rule
-; 2e scans THIS body for that line now), `call KERNEL_SEG:`/`COLD_SEG:` shims
-; for `.text` and `.cold`. MARK and BPMARK are MARKW and BPMARKW here, the
-; same numbers spelled for a blob caller.
+; IT WAS THE BLOB'S UNTIL BOOT3-PLAN WAVE 4, which took it - and every other
+; body that is not the loader, the splash, the first tick's probe or the
+; status line - out of `.boot2` on every kernel, so that the blob stage 1
+; reads before the bar shows is no bigger than its purpose (SPEC.md 2.9.14).
+; A `.boot3` body is reached with B3CALL (`push cs` + a near call here); what
+; stayed in the blob with B2CALL (`call BLOB_SEG_AT:`, its target ending in
+; `retf`). Everything resident is reached FAR - OVLCALL for the window half
+; until drv_boot_x's mount (os88ovlchk rule 2e scans THIS body for that
+; line), `call KERNEL_SEG:`/`COLD_SEG:` shims for `.text` and `.cold`. MARK
+; and BPMARK are MARKW and BPMARKW here, the same numbers spelled for a
+; caller outside `.text`; MARKW's landing kmo_mark moved with this body,
+; because it reads the index byte through CS.
 ; =============================================================================
-section .boot2
+B3SECT
 kmain_o:
     OVLCALL  dsk_boot_from_x    ; WHICH VOLUME DID WE COME OFF? (SPEC.md
                                 ; 52.10.3) DL and BX:CX are the boot sector's
                                 ; handoff and nothing above touches them - the
                                 ; segment loads spend AX alone - so this is
                                 ; the first instruction that may. On a floppy
-                                ; boot BX:CX are 0 and DL is 0 or 1, and all
+                                ; boot DL is the unit (0..3) and BX:CX are
+                                ; whatever stage 2 left - unread - and all
                                 ; this does is store the byte drv_mounted used
                                 ; to hardcode. On a hard disk it claims the
                                 ; boot partition as a DVK_BIOS row, which is
@@ -5695,7 +5821,7 @@ kmain_o:
                                 ; here, and this also closes the ticks-only
                                 ; era - the boot sector's load and the three
                                 ; calls above it
-    OVLCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
+    OVSCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
                                 ; task. Inert while ui_task never sleeps - the
                                 ; scan skips its slot, so it is reached only
                                 ; where sch_switch used to resume the outgoing
@@ -5704,19 +5830,19 @@ kmain_o:
                                 ; table is cleared
     ; (no evq_init: the ring's three .bss indices arrive zeroed - events.inc)
     MARKW 6
-    OVLCALL  clk_init        ; system clock (SPEC.md 37): probe the RTC,
+    OVSCALL  clk_init           ; system clock (SPEC.md 37): probe the RTC,
                                 ; or fall back to the fixed date - before the
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
     MARKW 7
-    BLOBCALL vid_init               ; video adapter (SPEC.md 39): probe, publish
+    B2CALL   vid_init           ; video adapter (SPEC.md 39): probe, publish
                                 ; the runtime geometry. Re-runs what the
                                 ; splash already did, EXCEPT the mode set -
                                 ; the loading screen stays up and keeps
                                 ; ticking until spl_finish below (15.3)
     MARKW 8
 %ifdef KERN_BIG
-    OVLCALL  vid_ctx_init       ; ...and bank that geometry as display 0's
+    B3CALL   vid_ctx_init       ; ...and bank that geometry as display 0's
                                 ; (SPEC.md 39.12). AFTER vid_apply and never
                                 ; FROM it: vid_apply runs from the splash while
                                 ; the rest of the kernel is still coming off
@@ -5735,7 +5861,7 @@ kmain_o:
                                 ; there
     MARKW 10
 %ifdef KERN_BIG
-    call bvs_disp_init          ; (the blob's own, driver.inc: KSW_SECT)
+    call bvs_disp_init          ; (the boot's own, driver.inc: KSW_SECT)
                                 ; ...and if it has BOTH mono cards, programme
                                 ; the second one too (SPEC.md 39.13). Here
                                 ; because [vid_avail] is what decides, so this
@@ -5752,16 +5878,16 @@ kmain_o:
     ; `.cold` out of RAM already, and its floor falls past both rungs anyway.
     ; HERE because nothing has stored `.cold`'s segment yet that the kernel's
     ; own list does not hold (mod_fp is filled below, from a listed word), and
-    ; nothing claims the RAM `.cfx` landed on until mem_unblob
+    ; nothing claims the RAM `.boot3` landed on until mem_unblob
     test byte [vid_avail], VID_A_VGA | VID_A_EGA
     jnz .noslide
     cmp word [api_coldseg], COLD_HOME
     jne .noslide
-    call CFX_RAM:cfx_slide      ; (in `.cfx`, beside its list: transient)
+    B3CALL cfx_slide            ; (in `.boot3`, beside its list: transient)
 .noslide:
 %endif
     MARKW 11
-    OVBCALL   mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
+    B3CALL    mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
     MARKW 12
@@ -5801,18 +5927,21 @@ kmain_o:
     pop bx
     pop ax
 %endif
-    mov di, mod_fp              ; mod_init, WRITTEN OUT IN THE BLOB (kernel
+    mov di, mod_fp              ; mod_init, WRITTEN OUT IN THE BOOT (kernel
     mov cx, MOD_NSLOT           ; size pass 13 on kern_small, pass 14 on
 .modinit:                       ; kern_big once its blob had the room: 10
-    mov word [di], mod_gone     ; resident bytes of `.cold` for 15 of blob).
-    mov word [di+2], COLD_SEG   ; The segment is the cold one by NAME - a blob
-    add di, 4                   ; word tools/os88rom.py moves with it - where
+    mov word [di], mod_gone     ; resident bytes of `.cold` for 15 of blob;
+    mov word [di+2], COLD_SEG   ; `.boot3`'s with kmain_o since BOOT3-PLAN
+    add di, 4                   ; wave 4). The segment is the cold one by NAME
+                                ; - a `.boot3` word tools/os88rom.py moves
+                                ; with it (rt_b3) - where
     loop .modinit               ; mod_disarm, running in `.cold`, takes it
                                 ; from CS
                                 ; on-demand modules (SPEC.md 2.8): point every
-                                ; entry slot at mod_gone. `-f bin` zeroes no
-                                ; .bss, so until this runs those slots hold
-                                ; whatever was in memory - and they are
+                                ; entry slot at mod_gone. `.bss` arrives as
+                                ; the file's zero gap (nothing asserts it -
+                                ; SPEC.md 2.5), so until this runs those slots
+                                ; hold 0000:0000, the IVT - and they are
                                 ; far-call targets. It is here rather than
                                 ; lower down because it needs nothing but the
                                 ; table itself, and the rule for a thing that
@@ -5826,12 +5955,18 @@ kmain_o:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-    BLOBCALL  font_init          ; needs int 10h, so after the mode is set;
-                                ; in the blob on BOTH kernels (SPEC.md 6.0.1)
+%ifndef KERN_SMALL
+    B2CALL    font_init          ; needs int 10h, so after the mode is set;
+                                ; `.boot2` on kern_big, kern_emu and kern_mega
+                                ; (SPEC.md 6.0.1, 2.9.15), before spl_finish
+%else
+    B3CALL    font_init          ; ...and `.boot3` on kern_small (BOOT3-PLAN
+                                ; 16.17; the kern_small arm LAST, the model's)
+%endif
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
-    OVSCALL  wm_init            ; the blob on kern_big, `.ovl` on kern_small
+    OVSCALL  wm_init            ; `.boot3`, and `.ovl` on kern_small
     MARKW 15
 %ifdef BANDCOMP
     call KERNEL_SEG:ovw_band_init              ; SPEC.md 5.9.2: the composer's 2KB, before the
@@ -5846,7 +5981,7 @@ kmain_o:
                                 ; no app instances exist until launched
     MARKW 17
     BPMARKW 4                    ; ...the window manager, the bar, the table
-    BLOBCALL splf_step           ; a notch: the mode set and the font are done.
+    B2CALL   splf_step          ; a notch: the mode set and the font are done.
                                 ; ON A HARD DISK THIS IS THE FRAME THAT PUTS
                                 ; THE SCREEN UP, at 0 of SPL_POST (SPEC.md
                                 ; 2.9.9.1) - so the line below is the first
@@ -5857,7 +5992,7 @@ kmain_o:
     mov [mdg_n0], ax
 %endif
     MARKW 18
-    BLOBCALL ovl_spl_msg_mouse   ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
+    B2CALL   ovl_spl_msg_mouse  ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
     OVBCALL   mouse_init         ; IRQ4 live; cursor stays hidden until shown.
@@ -5867,7 +6002,7 @@ kmain_o:
     BPMARKW 5                    ; ...and SPEC.md 9.4.1's two waits, which are
                                 ; the largest phase of a boot that is not
                                 ; the disk
-    BLOBCALL splf_step           ; ...and another: the serial reset holds
+    B2CALL   splf_step          ; ...and another: the serial reset holds
                                 ; DTR/RTS low for MOU_RSTLOW ticks (~165ms),
                                 ; which is the only non-I/O phase up here
                                 ; long enough to see (SPEC.md 15.3)
@@ -5876,7 +6011,7 @@ kmain_o:
     mov [mdg_n1], ax
 %endif
     MARKW 20
-    BLOBCALL ovl_spl_msg_fdd     ; ...and the SECOND stall the hard disk exposed
+    B2CALL   ovl_spl_msg_fdd    ; ...and the SECOND stall the hard disk exposed
                                 ; (SPEC.md 15.6.4): desk_init asks SPEC.md
                                 ; 18.97's TRACK 0 question about unit 1, and a
                                 ; drive heading for the absent verdict costs
@@ -5919,7 +6054,7 @@ kmain_o:
     MARKW 27
     BPMARKW 6                    ; ...the desktop, the dock, the driver table
 
-    BLOBCALL splf_step           ; a notch, and the last one kmain spends by
+    B2CALL   splf_step          ; a notch, and the last one kmain spends by
                                 ; hand: everything below is sectors, and
                                 ; dsk_xfer ticks the bar itself (SPEC 15.3)
 %ifdef MOU_DIAG
@@ -5929,14 +6064,17 @@ kmain_o:
     MARKW 28
 
 %ifdef KERN_MEGA
-    BLOBCALL mega_wrprobe       ; a DOS session the machine was RESET out of
+    B3CALL   mega_wrprobe       ; a DOS session the machine was RESET out of
                                 ; comes back (W7, kernel/megados.inc): before
                                 ; the drivers, which it would replace anyway,
                                 ; and before anything writes above 1MB
 %endif
-    BLOBCALL drv_boot_x         ; ...and load what SYSTEM.CFG asks for
+    B3CALL   drv_boot_x         ; ...and load what SYSTEM.CFG asks for (in
+                                ; `.boot3` on every kernel: kern_big's since
+                                ; BOOT3-PLAN wave 2, kern_small's one-byte
+                                ; `retf` rung since wave 4)
 %ifdef KERN_EMU
-    BLOBCALL vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
+    B3CALL   vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
                                 ; stops at drv_check with nothing called: the
                                 ; kernel is its owner and this is where it
@@ -5963,12 +6101,19 @@ kmain_o:
                                 ; several seconds of floppy on this machine
     MARKW 29
 %ifdef KERN_BIG
-    BLOBCALL hb_probe_x         ; ...and is there a hibernation to resume?
+    B3CALL   hb_probe_x         ; ...and is there a hibernation to resume?
                                 ; (SPEC.md 87.5) After drv_boot, so a driver
                                 ; volume is mounted to be looked at; before
                                 ; the first paint, because the answer is a
                                 ; window ui_task's first pass puts up
 %endif
+    call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
+                                ; mouse's pointer half out of `.boot3m` into a
+                                ; claim (SPEC.md 9.6.7, 2.8.8). After every
+                                ; probe that could prove one - mouse_init, the
+                                ; PS/2 reset, drv_boot_x's USBMOUSE.DRV,
+                                ; vmm_boot_x - and before as_boot launches
+                                ; anything, so the claim is the heap's top
 
     ; --- the WINDOW half is dead from here (SPEC.md 2.5.3) -------------------
     ; drv_boot's mount has taken the FAT window `.ovl` was read onto, so
@@ -6004,14 +6149,14 @@ kmain_o:
 %endif
     MARKW 31
 
-    BLOBCALL spl_finish         ; the bar to 100% and the screen handed back:
+    B2CALL   spl_finish         ; the bar to 100% and the screen handed back:
                                 ; the paint kmain makes on return covers every
                                 ; pixel of it, so the loading screen needs no
                                 ; erase. The LAST call of the body but one:
                                 ; kmain releases the blob as soon as this
                                 ; returns
 %ifdef VID_EXT
-    BLOBCALL vx_boot_x          ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+    B3CALL   vx_boot_x          ; ...and VESA.DRV, if SYSTEM.CFG asked for it
                                 ; (SPEC.md 120.4): a DRVC_OVL row drv_boot_x
                                 ; read and stopped at, attached here and the
                                 ; desktop switched onto it through the blob's
@@ -6027,27 +6172,28 @@ kmain_o:
 %endif
 %ifdef OS88_SHORTCUTS
 %ifndef KERN_MEGA               ; (kern_mega walks it after mega_enter: kmain)
-    BLOBCALL as_boot            ; ...AUTOSTART, the one thing after it (SPEC.md
+    B3CALL   as_boot            ; ...AUTOSTART, the one thing after it (SPEC.md
                                 ; 26.10.5): it LAUNCHES, and a launch must not
                                 ; race the loading screen's IRQ0 frames, which
-                                ; spl_finish has just stopped. Still the blob's,
-                                ; so still no resident byte
+                                ; spl_finish has just stopped. `.boot3`'s,
+                                ; so no resident byte (and no blob byte)
 %endif
 %endif
 %ifdef KERN_MEGA
-    BLOBCALL mega_gateb         ; ...and the half of kmain's mega_enter that
+    B3CALL   mega_gateb         ; ...and the half of kmain's mega_enter that
                                 ; has no side effect (kern_mega size pass 2):
                                 ; the tier and where the tables go, asked
                                 ; here so the code that asks is given back
-                                ; with the blob. LAST, as near the switch as
-                                ; the blob reaches
+                                ; with `.boot3` (the blob's until BOOT3-PLAN
+                                ; wave 1). LAST, as near the switch as kmain_o
+                                ; reaches
 %endif
 
     retf
 %ifdef BOOT_MARK
 kmo_mark:                       ; MARKW's landing - mark_here's shape, one
-    pushf                       ; segment along: the byte is read through the
-    push bp                     ; BLOB's CS, which is where it is
+    pushf                       ; segment along: the byte is read through
+    push bp                     ; `.boot3`'s CS, which is where it is
     mov bp, sp
     push bx
     mov bx, [bp+4]              ; the return address (flags and bp above it)
@@ -6094,9 +6240,14 @@ kmain:
                                 ; stops with its number up instead of resetting
 %endif
     MARK 0
-    SPLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
+    call B3_SEG:kmain_o         ; ...the whole boot, from `.boot3`, up to and
                                 ; including spl_finish (SPEC.md 2.5.3.3). MARK
-                                ; 1-31 are in there, as MARKW
+                                ; 1-31 are in there, as MARKW. A CONSTANT
+                                ; segment since BOOT3-PLAN wave 4, and so no
+                                ; [spl_fseg] test: SPLGATE1's guarded a kernel
+                                ; entered without stage 2, which skipped its
+                                ; whole boot and could not have run anyway
+                                ; (SPEC.md 2.9.5.3). 5 bytes for 9
 
     ; --- ...AND STAGE 2 GOES BACK TO THE HEAP (SPEC.md 2.9.5, 50.6.3) -------
     ; The line above is the last thing that ever wants the loading screen, so
@@ -6296,10 +6447,12 @@ osapi_xmem_run:                 ; (eleven bytes of .text: the segment binds
 
 ; ---- osapi_mem_subseg - API slot 0x04D1 (KERN-MEGA-PLAN 14.44) -------------
 ; in:  AX = a paragraph offset into the CALLER's own region (the X cell's ES =
-;      its DS), BL bit 0 = it will be far-called
+;      its DS), BL bit 0 = it will be far-called, BL bit 1 = CX is the
+;      window's length in paragraphs (0 = to the end)
 ; out: CF = 0, DX = a DATA selector whose base is that paragraph and whose
-;      limit runs to the region's end or 64KB, whichever is first, its CODE
-;      twin at DX - 8 when bit 0 asked for one; the same selector again for
+;      limit runs to the region's end or 64KB, whichever is first (or CX
+;      paragraphs, under bit 1), its CODE twin at DX - 8 when bit 0 asked
+;      for one; the same selector again for
 ;      the same paragraph, freed with the region and moved with it. CF = 1,
 ;      every register kept: your segment + AX is the answer - every kernel
 ;      but kern_mega, and kern_mega in real mode, for an offset past the
@@ -6376,6 +6529,7 @@ SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
 SEG_LEND    equ 11              ; kern_mega's lent stack (124.31.2), refused below too
 SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and too
 SEG_TYPE    equ 13              ; kern_mega's code/data retype of a window (124.31.6), and too
+SEG_LOW     equ 14              ; kern_mega's own region down to conventional memory (50.6.11), and too
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA
@@ -6545,9 +6699,10 @@ osapi_img_name equ mod_gone     ; `stc / retf`: CF = 1, every register kept
 ;      record EIGHT bytes, a kernel cache's whole tag at +6 (KERN-MEGA-PLAN
 ;      14.92). On kern_big the pool is XMEM.DRV's
 ;      and the walk is its table's (xmem.inc, SPEC.md 28.4.8): owner a slot
-;      or FFh, XMW_LONG refused (CF = 1, AX = 2, nothing written), any other
-;      BX ignored. CF = 1, AX = 1 no pool: kern_small, kern_mega in
-;      real mode, and a kern_big machine with no store
+;      or FFh, XMW_LONG refused (CF = 1, AX = 2, nothing written), XMW_FIXED
+;      putting the HMA's contents first when the tail is installed (SPEC.md
+;      28.4.13), any other BX ignored. CF = 1, AX = 1 no pool: kern_small,
+;      kern_mega in real mode, and a kern_big machine with no store
 ; THE TASK MANAGER'S "RAM IS RAM" (KERN-MEGA-PLAN 13.6): what is above 1MB, and
 ; whose, so a package's memory is one figure wherever it was placed.
 %ifdef KERN_MEGA
@@ -6626,7 +6781,9 @@ osapi_rand:
 ; at a table the kernel already had.
 osapi_font_glyphs:
     mov si, [font_base]         ; wherever font_init found it: the ROM's own
-    mov dx, [font_seg]          ; table, or a baked face's copy in LOW_SEG
+    mov dx, [font_seg]          ; table, its MEM_K_FONT heap copy on a slow-ROM
+                                ; machine (SPEC.md 6.0.1), or a baked face's
+                                ; copy in LOW_SEG
     mov ax, FONT_FIRST | (FONT_LAST << 8)   ; AL and AH in one instruction
     mov cx, 8
     ret
@@ -6655,10 +6812,12 @@ osapi_vol_stat:
     call COLD_SEG:dwf_dskw_vstat    ; AX/BX/CX/DX and CF are ours
     ret
 %else
-osapi_vol_stat equ osapi_snd_fm     ; DOS-only, and DOS is not on the
-                                    ; small disks (SPEC.md 18.4.7.4): the cell
-                                    ; refuses with snd.inc's kern_small FM
-                                    ; body, the same `stc` / `ret`
+osapi_vol_stat equ osapi_snd_fm     ; a refusal on this kernel (SPEC.md
+                                    ; 18.4.7.4): DOS is not on the small disks,
+                                    ; and every other caller tests CF - the
+                                    ; open of os88wseq.inc's stream then
+                                    ; fails. The cell refuses with snd.inc's
+                                    ; kern_small FM body, the same `stc` / `ret`
 %endif
 
 ; ---- osapi_file_here / osapi_file_goto - the volume's location (SPEC.md 19.2)
@@ -6686,9 +6845,10 @@ osapi_vol_stat equ osapi_snd_fm     ; DOS-only, and DOS is not on the
 ;                     context only, exactly like the other file slots.
 ;
 ; The four existing callers keep working unchanged: `here` still answers the
-; folder the dialog just committed to (fdlg_home_save records it into the
-; instance before the completion callback runs), and their `goto` back to it
-; is now a compare that finds the volume already there. Redundant, not wrong -
+; folder the dialog just committed to (fdlg_reap_x's commit records it into the
+; instance through fdlg_home_dir before the completion callback runs), and
+; their `goto` back to it is now a compare that finds the volume already
+; there. Redundant, not wrong -
 ; which is the only way to retire a duty a published slot handed to apps.
 ;
 ; A caller with no instance behind it - the kernel, a driver - gets the
@@ -6975,9 +7135,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; Dock page's dock_apply/dock_reflow are `.modu` there too, written ONCE as a
 ; macro each (VSW_AVAIL, VSW_SWITCH, VSW_DISP, WM_REFIT, DOCK_APPLY) because
 ; the BOOT reaches them as well - drv_boot applies SYSTEM.CFG's adapter and
-; Dock setting and kmain_o arranges the displays - and so the blob carries a
+; Dock setting and kmain_o arranges the displays - and so the boot carries a
 ; second expansion of each (driver.inc, `bvs_`), reaching the kernel through
-; BSWK/BSWC: the same hop, KGO_PAIR, expanded in the blob. DRV_ATTACH's
+; BSWK/BSWC: the same hop, `.boot3`'s KGO_PAIR b3 (b3_kgo/b3_cgo). It was the
+; blob's, with a pair of its own (KGO_PAIR bvs), until BOOT3-PLAN wave 4; only
+; bvs_apply, the splash's first tick's, stays there. DRV_ATTACH's
 ; trade (SPEC.md 51): copies in images that come and go, against one in a
 ; segment every machine pays for.
 ; -----------------------------------------------------------------------------
@@ -6998,9 +7160,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
     call %1                     ; in the image on kern_small and resident on
 %endmacro                       ; kern_big (vid_equip, wm_su_drop_all): the
                                 ; scan does not read `call %1`
-; (BSWK/BSWC, the blob's pair through bvs_kgo/bvs_cgo, are driver.inc's,
-; beside the blob's expansions: a name of a `.boot2` label written here would
-; be a reference INTO the blob from `.text` - tests/ovlrefs.txt)
+; (BSWK/BSWC, the boot's pair through b3_kgo/b3_cgo - `.boot3`'s since
+; BOOT3-PLAN wave 4, the blob's bvs_kgo/bvs_cgo before it - are driver.inc's,
+; beside the boot's expansions: a name of a boot-only label written here
+; would be a reference into it from `.text` - tests/ovlrefs.txt)
 
 ; KGO_PAIR - %1_cgo / %1_kgo: CPXC's and CPXK's far hop, built by hand, for an
 ; image whose CS is not the kernel's: the call left the address of `dw target`
@@ -7011,8 +7174,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; preserved both ways (MOV, LEA, PUSH, POP and RETF write none), so the kernel
 ; routine sees exactly what the site handed it. ONE tail for both: they differ
 ; in the segment slot and the retf. DS must be KERNEL_SEG at the site - the
-; kernel half's segment slot is PUSHED from it. Expanded TWICE: `cp` in
-; CTRL.DRV (ctrl.inc) and `bvs` in the boot blob (driver.inc). The CS it
+; kernel half's segment slot is PUSHED from it. Expanded once an image: `cp`
+; in CTRL.DRV (ctrl.inc), `hbg` in HIBER.DRV (hiber.inc), and the boot's in
+; `.boot3` - `b3` (driver.inc) and kern_small's `bvw` (desk.inc); the blob's
+; `bvs` went in BOOT3-PLAN wave 4. The CS it
 ; stores is the far return's, on the stack, spent before the hop returns - not
 ; a published segment, which is what os88ovlchk's CS rule is about.
 %macro HBGC 1                   ; HIBER.DRV's CPXC (hiber.inc): its own far hop
@@ -7358,6 +7523,9 @@ mod_fpt:
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
+    MODFP KBFP, MOD_KBM, KBM_NENT ; the keyboard mouse's pointer half (2.8.8):
+                                ; its slots are the gate, an empty one being
+                                ; mod_gone's CF = 1, "not mine" (9.6.7)
 %if MODFP_I != MOD_MAX
   %error "MODFP: MODFP_I blocks against MOD_MAX rows"
 %endif
@@ -7375,50 +7543,8 @@ MOD_NSLOT equ (mod_fp_end - mod_fp) / 4
                                 ; (the fence), snd.inc (the release walk)
                                 ; and viddet.inc (the mode leaves)
 
-; =============================================================================
-; SPLGATE's landing pads (SPEC.md 2.9.5.2)
-;
-; DOWN HERE for the same reason the BOOTMARK block below is: this is `.text`,
-; and `.text` ABOVE the %includes pushes splash.inc out of the image's first
-; SPL_RESIDENT sectors.
-;
-; One stub a TARGET, not a site: kmain calls splf_step three times and pays
-; three bytes for each, against one stub of eight shared between them. The
-; stubs are generated from the target name (SPLSTUB) so the name is written
-; once and a mismatch is an undefined symbol.
-;
-; The gate itself is the guard the inline macro carries at every site, kept
-; word for word - SPEC.md 2.9.5.1 is what happens when this test is not on
-; this side of the far call - plus the `ret` that makes it shareable. It
-; preserves the flags, so a caller with CF in flight is unchanged, and it
-; clobbers NO register: the target arrives as the stub's own immediate rather
-; than in AX, which is what keeps this a size change and not a register-
-; discipline change.
-; =============================================================================
-; ONE STUB, because one target has more than one site: splf_step, three times
-; in kmain. Every other target is called once and writes its own immediate at
-; that one site (SPLGATE1 / SPLGATE1 above) - a stub for it would be 11 bytes
-; where the site alone is 9, and it would carry a %ifdef the site already has.
-; That took ovl_font_init's BAKED_FONT arm and ovl_xm_sniff's KERN_BIG arm out
-; of this block, and with them the one snag worth remembering: a stub names a
-; target, so a stub for a target this CONFIGURATION does not assemble is an
-; undefined symbol - which is the property that makes a missing pairing a build
-; error and not a wrong address, and it is not theoretical. Both were found by
-; the assembler within a minute of each other, one by `make` and one by
-; test-full's kern_small row.
-;
-; **splf_stepq's stub is gone with its sites** (SPEC.md 9.4.7). Both were in
-; mouse_init's identify window, which is in the blob now: a SPLGATE is a NEAR
-; call to a `.text` stub and `.boot2` cannot make one, so both became the inline
-; SPLCALL form and the 8-byte landing pad had nothing left to land.
-spl_gate:
-    pushf
-    cmp word [spl_fseg], 0
-    je .dead
-    call far [spl_fp]
-.dead:
-    popf
-    ret
+; (SPLGATE's landing pads and spl_gate were here, SPEC.md 2.9.5.2: gone with
+; their last two sites in BOOT3-PLAN wave 4 - see SPLCALL's note above.)
 
 ; =============================================================================
 ; BOOTMARK=1's blocks (see the MARK macro above)
@@ -7807,18 +7933,20 @@ MARK_FNVEC  equ $ - mark_fvec
 ;
 ; **AND WHERE A CELL ALREADY PUBLISHES THE ROUTINE, THE CELL IS THE DOOR**
 ; (size pass 9; MODULE-SELFCONTAIN-PLAN 5's apic_ rule taken the whole way).
-; Thirteen shims below are `cw_X equ apic_X`: the name stays, so not one far
-; call site changed, and it lands on the routine's own OSAPI cell, which for a
-; caller whose DS is already KERNEL_SEG IS the shim's semantics - the cell's
-; push/pop of DS and its `retf` touch no flag and no other register. Four
-; bytes each. What it costs is the cell's DS switch, ~50 cycles a call on an
-; 8088 for a SLOT cell and ~130 for a rare (RSLOT) one, and two or four bytes
-; more of stack - so it is taken only where every caller is a dialog, a
-; window being built, the Control Panel or a hibernate step, and NOT for the
-; drawing shims a repaint calls by the dozen (gfx_fill/lock/unlock/frame,
-; font_run), nor - until SPEC.md 14.8 made Bounce a package - for anything a
-; built-in WORKER called from its 128-byte slice (task_sleep, task_yield,
-; wm_clip_set, wm_content: the Bounce task's). No kind has a task now.
+; Twenty-one shims below (kern_big's count) are `cw_X equ apic_X`: the name
+; stays, so not one far call site changed, and it lands on the routine's own
+; OSAPI cell, which for a caller whose DS is already KERNEL_SEG IS the shim's
+; semantics - the cell's push/pop of DS and its `retf` touch no flag and no
+; other register. Four bytes each. What it costs is the cell's DS switch, ~50
+; cycles a call on an 8088 for a SLOT cell and ~130 for a rare (RSLOT) one,
+; and two or four bytes more of stack - so it is taken only where every
+; caller is a dialog, a window being built, the Control Panel or a hibernate
+; step, and NOT for the drawing shims a repaint calls by the dozen
+; (gfx_fill/frame/fill_pat, font_run - the lock pair took its cell in size
+; pass 13, a lock being per OPERATION), nor - until SPEC.md 14.8 made Bounce
+; a package - for anything a built-in WORKER called from its 128-byte slice
+; (task_sleep, task_yield, wm_clip_set, wm_content: the Bounce task's). No
+; kind has a task now.
 ; =============================================================================
 cw_app_launch:          call app_launch
                     retf
@@ -7981,8 +8109,9 @@ cw_drv_pkg_call equ apic_drv_pkg_call ; ...and its PAINT, which is the same
 %endif
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
-; (cw_vid_disp_init went in kernel size pass 13: its two callers, kmain_o and
-; drv_boot_x, are the blob's and reach vid_disp_init through spw_near)
+; (cw_vid_disp_init went in kernel size pass 13: its two callers are boot-only
+; and run the boot's own expansion, bvs_disp_init (driver.inc) - kmain_o and
+; drv_boot_x, both near and all three `.boot3`'s since BOOT3-PLAN wave 4)
 %ifdef KERN_BIG
 ; vidsel.inc's whole dual-display half is inside one %ifdef KERN_BIG, so these
 ; bodies do not exist in the small build.
@@ -8305,18 +8434,19 @@ dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
 ; drv_svc_call is called by snd_tick inside IRQ0, so it pays a far call 18.2
 ; times a second (54.6 under 53.2.1 FSXF_FASTTICK) - ~6us on a tick that has
 ; a whole 55ms, and it does nothing at all when no driver publishes a stream.
-; drv_boot's thunk is GONE (SPEC.md 2.5.2): the body is in the overlay and
-; kmain's one call site reaches it through SPLGATE1, which is the crossing the
+; drv_boot's thunk is GONE (SPEC.md 2.5.2): the body is in `.boot3` and
+; kmain_o's one call site reaches it with B3CALL, which is the crossing the
 ; thunk used to be.
 %ifdef OS88_DRIVERS                     ; (kern_small: no caller - snd.inc's
 drv_svc_call:  call COLD_SEG:drv_svc_call_x ; are all OS88_DRIVERS's now)
            ret                          ; drv_task, drv_cfg and drv_dlg are
 %endif                                  ; their cells' own (SPEC.md 20.3.2)
 ; ...and the other end of that round trip (SPEC.md 51.10) needs NO thunk:
-; fdlg_commit dispatches a kernel window's completion proc through wm_pkgcall,
-; which takes a W_SEG 0 window into `.cold` (SPEC.md 2.6.3), so the offset
-; handed to fdlg_open is the cold body - drv_dlg_done_x here, and fm_img_done_x
-; for the Disk window's image commands (SPEC.md 18.99.8).
+; fdlg_reap_x's commit half dispatches a kernel window's completion proc
+; through wm_pkgcall, which takes a W_SEG 0 window into `.cold` (SPEC.md
+; 2.6.3), so the offset handed to fdlg_open is the cold body - drv_dlg_done_x
+; here, and fm_img_done_x for the Disk window's image commands (SPEC.md
+; 18.99.8).
 
 ; --- ...and memory.inc's (SPEC.md 50). The claim heap: every claim and free
 ; in the machine, none of them on a drawing path. The busiest is the menu
@@ -8345,7 +8475,7 @@ osapi_mem_compact_x:            ; machinery is assembled: the what-if IS the
 section .text
 %endif
 %ifndef KERN_BIG                ; **kern_small HAS NO DRIVER LAYER AND NO
-section .cold                   ; HIBERNATE** (SPEC.md 51.11.3), so 0x0550's
+section .cold                   ; HIBERNATE** (SPEC.md 51.11.3), so 0x0419's
 drv_suspend_x:    xor cx, cx    ; three verbs answer here. The suspend and the
                   cmp al, 2     ; resume ANSWER SUCCESS with no records -
                   cmc           ; nothing had to get out of the way - because
@@ -8643,16 +8773,60 @@ KTEXT_SIZE equ kernel_text_end - $$
 ; that memory.
 ;
 ; It is also what refused the tempting shape here for a while: routing
-; spw_vid_detect into the boot overlay through spl_gate. `.boot2` is aboard
-; before stage 1 jumps and vid_detect would be too, which reads as free - but
-; spl_gate is at the far end of `.text`, so the PATH is not aboard even though
-; the destination is. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 were refused
+; spw_vid_detect into the boot overlay through spl_gate (a `.text` gate that
+; BOOT3-PLAN wave 4 deleted). `.boot2` is aboard before stage 1 jumps and
+; vid_detect would be too, which reads as free - but spl_gate was at the far
+; end of `.text`, so the PATH was not aboard even though the destination was. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 were refused
 ; on this. SPEC.md 2.5.3.3 took them anyway by changing the PATH: spl_chrome
 ; is `.boot2`, the same segment as `.boot2`, so it reaches vid_detect with a
 ; BLOBCALL (`push cs` / near call) and no `.text` byte in between.
 SPL_RES_SIZE equ spw_resident_end - $$
-%if SPL_RES_SIZE > SPL_RESIDENT * 512
-%error "the splash's first tick reaches code outside the sectors stage 2 waits for - raise SPL_RESIDENT in BOTH kernel/splash.inc and boot/boot2.asm, or move what grew (SPEC.md 15)"
+;
+; AND SPL_RESIDENT IS DERIVED FROM IT NOW (the big review's boot-4, BR-153).
+; It was typed in splash.inc and checked here, and the check was the only
+; thing tying the number to what it measured - so it moved only when the %if
+; fired, and the last raise left it at 9 against a need of 5. The label is
+; past the four bytes the ticks store and read (viddet.inc), so this is the
+; whole of the CODE window by construction. What it does not count is DATA
+; further up `.text` that tick code names: tests/unit/t_resident.py walks for
+; that, and the one store that must survive the first tick is counted in by
+; name just below. It reaches only an immediate in `.boot2` (the NOKZIP arm's
+; tick gate), the plain head's length (tools/os88ksig.py head) and the %ifs
+; below, so no byte of `.text` can move with it.
+;
+; vid_setmode's one store that is NOT re-made before anything reads it: the
+; CGA's 3D8h shadow, banked on the first tick (vidsel.inc). It is past
+; spw_resident_end - vidsel.inc is included after viddet.inc - so the label
+; does not cover it, and SPL_RESIDENT is derived from WHICHEVER ENDS LATER.
+; It was a %if of its own against the label's window until a knob tripped it
+; (`make BOOTPROF=1`, BOOT3-PLAN 16.14): vid_cgamode sits 0xC3 bytes past
+; spw_resident_end on kern_big, so the check held only while the label landed
+; at least that far short of a sector boundary - 27 bytes of rung slack on the
+; shipped kernel, and BOOTPROF's 28 bytes ahead of the label spent them.
+; A guard whose answer is where padding falls is the banner's wrong question;
+; counting the byte in is the derivation finishing its job. On every shipped
+; kernel the answer is the same sector count as the label's (5 / 5 / 5 / 6 on
+; kern_big / kern_small / kern_emu / kern_mega), so nothing shipped moves; a
+; knob that pushes the byte over gets the sector it needs.
+SPL_RES_TICK equ vid_cgamode + 1 - $$
+SPL_RESIDENT equ ((SPL_RES_SIZE > SPL_RES_TICK ? SPL_RES_SIZE : SPL_RES_TICK) + 511) / 512
+;
+; ...and the line that keeps the derivation honest about it: an edit to the two
+; equs above that drops vid_cgamode out of the window fails here rather than as
+; a CGA that comes back from its first fsx bracket in 80x25 text with blink on.
+%if vid_cgamode - $$ >= SPL_RESIDENT * 512
+%error "vid_cgamode is past the resident window: the first tick's store into it would land in a sector stage 2 has not read (or the packed tail), and the CGA's 3D8h shadow would be lost - SPL_RESIDENT must be derived over it as well as over spw_resident_end (SPEC.md 15, 2.9.4)"
+%endif
+;
+; ...AND THE PLAIN HEAD MUST HOLD IT (SPEC.md 2.9.13.1). Under KZIP the first
+; tick runs the moment the KZ_HEADSEC plain sectors are in (BOOT3-PLAN item
+; E), so the head is at least the window; it may be LONGER, and on kern_big
+; is: the Makefile's KZ_HEADMIN says why its length is a call-count decision
+; of its own and not this number.
+%ifdef KZIP
+ %if KZ_SECS && KZ_HEADSEC < SPL_RESIDENT  ; (pass 1's KZ_HEADSEC is a 0 placeholder)
+  %error "KZ_HEADSEC is shorter than SPL_RESIDENT: the splash's first tick would run code the packed tail has not expanded yet - the head is max(SPL_RESIDENT, KZ_HEADMIN) off pass 1's map, so a pass 2 handed another number is the Makefile's mistake (SPEC.md 2.9.13.1, 15)"
+ %endif
 %endif
 
 section .lowbss
@@ -8738,143 +8912,13 @@ VGA_SIZE equ vga_end - $$
   %error "`.vga` and `.cold` overlap in the file"
 %endif
 section .cold
-; --- .cfx: THE KERNEL'S OWN LIST of the words outside `.cold` that name its
-; segment - in `.text`, the window half and the blob - which the slide
-; re-points (docs/plans/MOVABLE-COLD-PLAN.md 4). ZEROS AS ASSEMBLED:
-; tools/os88cfx.py finds the words by moving COLD_CS and stamps them in, so
-; the list is always this assembly's own. AFTER `.cold` IN THE FILE, so stage
-; 2's one read lands it on the RAM just past the kernel - the cold rung's
-; slack, `.vgabuf`, and the heap floor under the blob's lift - which nothing
-; claims until mem_unblob. It is wanted once, at the boot, before mem_init;
-; a resident copy would be the bytes the slide exists to give back, and the
-; blob had no sector for it that did not cost 360KB and 720KB a whole int 13h
-; call (tests/unit/t_blobruns.py --sectors 14).
-CFX_MAX     equ 256
-CFX_START   equ (COLD_START + COLD_SIZE + 15) & ~15  ; on a paragraph...
-CFX_RAM     equ KERNEL_SEG + (CFX_START - BOOT2_PAD) / 16 ; ...so a segment
-section .cfx
-; -----------------------------------------------------------------------------
-; cfx_slide - move `.cold` down over the VGA rung (MOVABLE-COLD-PLAN 2, 4)
-; in:  far-called from kmain_o (CS = CFX_RAM: this is `.cfx`, transient like
-;      the list beside it), DS = KERNEL_SEG, `.cold` at home, `.cfx` stamped
-; out: `.cold` runs at COLD_SEG - VGA_PARA, and every word outside it that
-;      named its segment - [api_coldseg] among them - names the new one;
-;      every register preserved
-;
-; IN `.cfx` AND NOT THE BLOB: the blob had 78 bytes and this needs ~100, so it
-; rides beside its own list in the RAM nothing claims until mem_unblob.
-; ~105 ms on a 4.77 MHz 8088, the `rep movsw` of `.cold` (ESTIMATED off
-; PERFORMANCE.md Set 117.2's 13.3 cycles a byte). Downward and overlapping,
-; so DF = 0 copies it correctly. The list is read where stage 2 left it,
-; above the kernel, which the copy - going DOWN - cannot reach.
-; -----------------------------------------------------------------------------
-cfx_slide:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push ds
-    push es
-    mov bp, [spl_fseg]          ; the blob's segment, for its own group
-    mov ax, COLD_RAM
-    mov ds, ax
-    mov ax, COLD_RAM - VGA_PARA
-    mov es, ax
-    xor si, si
-    xor di, di
-    mov cx, (COLD_SIZE + 1) / 2
-    cld
-    rep movsw
-    mov ax, CFX_RAM
-    mov ds, ax                  ; DS:SI = cfx_tab, the three groups in order
-    mov si, cfx_tab
-    mov dx, -VGA_PARA           ; what every listed word gains
-    mov ax, KERNEL_SEG          ; `.text`...
-    call cfx_grp
-    mov ax, FAT_SEG             ; ...the window half...
-    call cfx_grp
-    mov ax, bp                  ; ...and this blob
-    call cfx_grp
-    pop es
-    pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
-
-; cfx_grp - one group of cfx_tab: AX = its segment, DS:SI = its stream, DX =
-; the delta. A byte 1-255 is the step to the next word, a 0 is followed by the
-; step as a word, and a word of 0 ends it (tools/os88cfx.py's format). Leaves
-; SI past the group; clobbers AX, BX, ES
-cfx_grp:
-    mov es, ax
-    xor bx, bx
-.n:
-    lodsb
-    or al, al
-    jz .w
-    xor ah, ah
-    jmp short .a
-.w:
-    lodsw
-    or ax, ax
-    jz .done
-.a:
-    add bx, ax
-    add [es:bx], dx
-    jmp short .n
-.done:
-    ret
-cfx_tab:    times CFX_MAX db 0
-cfx_tab_end:
-; -----------------------------------------------------------------------------
-; cfx_grid - desk_rowcalc's geometry for the BOOT (desk.inc's DESK_GRID): the
-;            blob's bvw_rowcalc far-calls it and then reflows (kernel size pass
-;            15). All registers preserved but flags.
-;
-; HERE because the blob had nine bytes and `.cfx` is the RAM nothing claims
-; until mem_unblob - which is after kmain_o's last call - and PAST cfx_tab
-; because the first KVGABUF_SIZE bytes of this section are `.vgabuf`'s RAM
-; too (VGABUF_RAM is COLD_RAM + COLD_PARA): the slide is done with them
-; before the planar decoder's first use, and this is called long after. It
-; names no segment, so os88cfx has nothing to stamp in it.
-; -----------------------------------------------------------------------------
-cfx_grid:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    DESK_GRID
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
-; cfx_ctxcap - vid_ctx_capture for the blob's bvs_disp_init (vidsel.inc's
-; VID_CTXCAP), here for cfx_grid's reason
-VID_CTXCAP cfx_ctxcap, retf
-; cfx_cfgname - SYSTEM.CFG's name staged for the blob's ovc_load (driver.inc's
-; CFGN_STAGE), here for cfx_grid's reason (kernel size pass 16)
-CFGN_STAGE cfx_cfgname, retf
-%if cfx_grid - $$ < KVGABUF_SIZE
-  %error "cfx_grid lies in the RAM `.vgabuf` shares with `.cfx`"
 %endif
-cfx_end:
-CFX_SIZE    equ cfx_end - $$
-%if (CFX_RAM * 16 + CFX_SIZE) > BLOB_SEG_AT * 16
-  %error "`.cfx` lands on stage 2's blob - raise BLOB_LIFT (MOVABLE-COLD-PLAN 4)"
-%endif
+; --- `.boot3`, THE THIRD BOOT-ONLY HOME (SPEC.md 2.9.15): the file's last
+; section, its frame - the slide's own list among it - in a file of its own
+; so that `ls kernel/` finds it beside boot2's loader (BOOT3-PLAN 1)
+%define B3_FOOT                 ; (the head opened the section where it was
+%include "boot3.inc"            ; declared: BOOT3-PLAN wave 1)
 section .cold
-%endif
 %if COLD_VSTART + COLD_SIZE > 0xFF00
   %error "`.cold` runs past FF00 at COLD_VSTART - lower HMA_COLD_AT (an offset past FFFF wraps, in RAM as in the HMA)"
 %endif
@@ -8956,14 +9000,30 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 ; the boot overlay is the last thing stage 2 reads (SPEC.md 2.5.3).
 %ifdef KERN_MEGA
 MEGA_START   equ COLD_START + COLD_PARA * 16 ; `.mega` on its rung, over the
-MODC_START   equ MEGA_START + MEGA_SIZE ; cold one - the file's last section
-%elifdef COLD_SLIDE
-MODC_START   equ CFX_START + CFX_SIZE ; `.cfx` is the file's last section
-%elifdef ROM_COLD
-MODC_START   equ COLD_START + COLD_SIZE ; `.cold` is the file's last section
-%else
-MODC_START   equ OVL_START + OVL_SIZE
+%endif                                  ; cold one
+MODC_START   equ B3_START + B3_EXT ; `.boot3` - and `.boot3m` after it, the
+                                    ; keyboard mouse's image (BOOT3-PLAN wave
+                                    ; 5) - are the file's last sections on
+                                    ; every kernel (these guards hold them past
+                                    ; `.cold`, `.ovl`, `.vga` and `.mega`)
+%if B3_START < COLD_START + COLD_SIZE || B3_START < OVL_START + OVL_SIZE
+  %error "`.boot3` is not past `.cold` and `.ovl` in the file - MODC_START would cut into them"
 %endif
+%ifdef COLD_SLIDE
+ %if B3_START < VGA_START + VGA_SIZE
+  %error "`.boot3` is not past `.vga` in the file"
+ %endif
+%endif
+%ifdef KERN_MEGA
+ %if B3_START < MEGA_START + MEGA_SIZE
+  %error "`.boot3` is not past `.mega` in the file - it is the file's last section"
+ %endif
+%endif
+%ifndef KZIP                    ; ...and NOKZIP's plain read clears the blob,
+ %if KERNEL_SEG * 16 + ((MODC_START - BOOT2_PAD + 511) & ~511) > BLOB_SEG_AT * 16
+  %error "NOKZIP: stage 2's flat read of KERNEL.SYS (B2_KSECS, whole sectors to MODC_START) runs into the blob - the derived BLOB_LIFT should have prevented this (BOOT3-PLAN 13)"
+ %endif                         ; rounded as the read rounds it - the whole
+%endif                          ; file past the blob, not `.boot3` alone
 MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
 %ifdef KERN_BIG
@@ -9420,10 +9480,24 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
  %else
   %assign KS_MINRAM MIN_RAM_KB   ; ...and guard 5's ceiling, because a report
  %endif
-  %assign KS_BOOTMX KS_MINRAM*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BOOT2_PAD
+  %assign KS_BOOTMX KS_MINRAM*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BLOB_LIFT*16 - BOOT2_PAD
+                                 ; (the LIFT counted, as guard 5 counts it:
+                                 ; the KERN_SIZE that puts the blob's end at
+                                 ; the ceiling, BOOT3-PLAN wave 0)
                                  ; that names one guard teaches everybody to
                                  ; steer by it, and for a while the one it
                                  ; named was the looser of the two
+  %assign KS_BLIFT  BLOB_LIFT    ; ...and the third boot-only home (SPEC.md
+  %assign KS_B3     B3_EXT       ; 2.9.15): its size, segment and scratch, and
+  %assign KS_B3M    B3M_SIZE     ; (B3_EXT counts `.boot3m`, wave 5's image,
+                                 ; which is also printed alone)
+  %assign KS_B3RAM  B3_RAM       ; the blob's nobits floor, which is what a
+  %assign KS_B3RES  B3_RES       ; 128KB machine's boot arena is measured
+                                 ; from (kernsize's boot3 and boot lines)
+  %assign KS_B2RES  BOOT2_PAD    ; (mem_init_x's floor: the blob alone on
+                                 ; every kernel since BOOT3-PLAN wave 2 took
+                                 ; ovc_buf from past it into `.boot3b`)
+  %warning ksb: boot3=KS_B3 b3m=KS_B3M b3ram=KS_B3RAM b3res=KS_B3RES b2res=KS_B2RES blift=KS_BLIFT
   %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG colds=KS_COLDS fats=KS_FATS lows=KS_LOWS vgas=KS_VGAS blobseg=KS_BLOB minramkb=KS_MINRAM bootmax=KS_BOOTMX grace=KS_GRACE toppara=KS_TOPP vga=KS_VGA vgars=KS_VGARS
   %ifdef KERN_MEGA              ; ...and kern_mega's own rung, on a line of
     %assign KS_MEGA  MEGA_SIZE  ; its own (tools/kernsize.py's `mega`
@@ -9680,7 +9754,7 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    own constraint instead of borrowing the shipped kernel's.
 %ifndef KERN_KNOB
 %ifndef KERN_MEGA
-%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
+%if BLOB_SEG_AT*16 + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
@@ -9700,12 +9774,22 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    and whether to hold it to a smaller machine (a 256KB IBM 5170) is the
 ;    owner's (docs/plans/completed/msp1/megabudget.md)
 %ifdef KERN_MEGA
-%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
+%if BLOB_SEG_AT*16 + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "kern_mega cannot BOOT on its 1MB floor machine's 640KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
+; 5a. ...and the blob crosses no 64KB DMA page (BLOB_LIFT's page term,
+;    BOOT3-PLAN wave 4): stage 1 would split its read there for nothing
+%if (BLOB_SEG_AT*16 >> 16) != ((BLOB_SEG_AT*16 + BOOT2_PAD - 1) >> 16)
+%error "stage 2's blob straddles a 64KB DMA page - stage 1 splits its read there (boot.asm's second bound); BLOB_LIFT's page term should have prevented this"
+%endif
 ; 5b. ...and BOOT2_PAD is in that sum because STAGE 2 SITS ON THE HEAP'S FLOOR
-;    (SPEC.md 2.9.5), which is the kernel's own last paragraph. It is given
+;    (SPEC.md 2.9.5), which is the kernel's own last paragraph - LIFTED by
+;    BLOB_LIFT on every ROM_COLD kernel (SPEC.md 2.10.3), and derived from
+;    `.boot3` where there is one (2.9.15.3). The sum is the blob's own end,
+;    BLOB_SEG_AT*16 + BOOT2_PAD, on every kernel: it was KERNEL_SEG*16 +
+;    KERN_SIZE + BOOT2_PAD, which is HEAP_SEG's and missed the lift's 1,536
+;    bytes (BR-154 / boot-18 of the 2026-11-08 review, BOOT3-PLAN wave 0). It is given
 ;    back at spl_finish and the arena is compacted onto it, so it is not
 ;    footprint in KERN_BUDGET's sense - but it IS occupied at the same moment
 ;    the boot sector and its stack are, which is exactly what guard 5 asks
@@ -9784,7 +9868,7 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ; both errors below fire by name. So: add a new section's rung to the list -
 ; never a line of anything else after the last %endif.
 ;
-; TWELVE LABELS AND NOT TWO. The `.text`/`.cold` pair is where the defect was
+; TWENTY LABELS AND NOT TWO. The `.text`/`.cold` pair is where the defect was
 ; actually found, and it is the cheap half; `.modc` is the one that decides
 ; the shape of this block, because the same mis-placement there is machine-
 ; breaking rather than merely under-reported - and a `.modc` ladder is one

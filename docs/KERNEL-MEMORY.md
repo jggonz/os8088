@@ -20,7 +20,7 @@ below were read off the tool at the last bless.
 | | rule | guard |
 |---|---|---|
 | 1 | **`kern_big` fully RESIDES in 100KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 100,864, plus `tests/kernresident.py` |
-| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check |
+| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check (the keyboard mouse's 512 excepted, and charged) |
 | 3 | **BOTH BOOT on 128KB** | guard 5, `MIN_RAM_KB` = 128, plus `tests/small128.py` and `tests/kernresident.py` on the 128KB machine |
 | 4 | **`kern_mega` RESIDES in 68KB of CONVENTIONAL memory** once it has switched, and **BOOTS on a 1MB machine's 640KB** | guard 1's mega arm, `KERN_BUDGET` = 68,096 against `MEGA_RESIDENT`; guard 5's mega arm, `MEGA_BOOT_KB` = 640 |
 
@@ -46,8 +46,11 @@ docs/history/KERN-BUDGET-LEDGER.md.
 **Booting on a machine and residing in one are different questions.** Guard 5
 asks whether stage 1 can put its 512-byte sector and its 2,048-byte stack at
 the top of that machine and still read the kernel **and the stage-2 blob** in
-underneath (`KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD <= MIN_RAM_KB*1024 -
-BOOT_SECT - BOOT_STACK`) — a *reach* at one instant of boot. Rules 1 and 2 ask
+underneath (`BLOB_SEG_AT*16 + BOOT2_PAD <= MIN_RAM_KB*1024 - BOOT_SECT -
+BOOT_STACK`: the blob's own end, which is the heap floor PLUS the blob's
+lift - the guard read `KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD` and missed the
+lift's 1,536 bytes on every ROM_COLD kernel until BOOT3-PLAN wave 0, SPEC.md
+§2.9.15.3) — a *reach* at one instant of boot. Rules 1 and 2 ask
 what is still occupied once the desktop is up: every non-purgeable byte, **no
 drivers loaded, no XMS, on VGA** (the adapter that does not drop a rung of its
 own, so the rule is stated against the configuration that costs the most).
@@ -59,8 +62,9 @@ asserted by booting, not only by guard 5's arithmetic.
 **kern_mega is rule 4: a budget of its own, on a different quantity.** It was
 a knob build until kern_mega size pass 1, so nothing bound it but guard 2;
 the owner then made it *"a normal build with its own budget"*
-(docs/plans/completed/msp1/megabudget.md) - a step towards a general release
-that is not one yet, so no release artefact carries its disks. What it is held
+(docs/plans/completed/msp1/megabudget.md) - a step towards a general release,
+which came on 2026-11-07: the release zip now requires its disks
+(docs/plans/MEGA-RELEASE-PLAN.md 8 and 9), though `all` does not build them. What it is held
 to is **`MEGA_RESIDENT`**: `KERN_SIZE` less the `.cold` and `.mega` rungs,
 which are copied above 1MB at the switch and handed to the heap, so it is
 what a running kern_mega keeps of the conventional 640KB a user's programs
@@ -89,10 +93,25 @@ big build can report it. The assembler sees only the static half of a
 resident rule; a claim made at boot and never given back is the other half.
 `tests/kernresident.py` boots a bare VGA desktop under MartyPC and walks
 `mem_tab` for it on kern_big, and `tests/small128.py` asserts kern_small's
-bare desktop holds no pinned claim at all, so its span is its whole footprint.
+bare desktop holds no pinned claim but the kernel's own. That one is the
+keyboard mouse's pointer half (SPEC.md §2.8.8): on a machine no pointer has
+spoken on - both rows' machines, whose mouse nothing moves - it is one
+512-byte `MEM_K_MOD` granule, pinned for the session at the heap's TOP, and
+both rows charge it to the footprint at its SIZE rather than its address. Its
+address is the 128KB machine's last 512 bytes because it has to be: when
+`kbm_adopt` claims it, the heap's floor is still raised past stage 2's live
+blob (`mem_init_x`, until `mem_unblob`), and the `.boot3m` image it copies
+goes with the rest of the boot, so the claim cannot wait. A bottom-up claim
+then would sit above the blob - a pinned island mid-heap once `mem_unblob`
+hands the floor back, and on kern_big still past 100KB by address.
+So on a mouseless machine the footprint is the span plus 512, and on one with
+a pointer it is the span.
 
 **None of the rules binds a KNOB build.** `make`'s `$(KNOBS)` — anything but a
-bare `make`, `make KERN_SMALL=1`, `make emu` and `make mega` — passes `-DKERN_KNOB`, and
+bare `make`, `make KERN_SMALL=1`, `make emu`, `make mega`, the handful the
+Makefile exempts because they reach no kernel byte, and `NOKZIP=1` (the
+shipped image read unpacked: the blob is all it changes, BOOT3-PLAN 16.13) —
+passes `-DKERN_KNOB`, and
 guards 1 and 5 are skipped for it (kern_mega's 640KB boot arm excepted: that is
 the only conventional memory its machine has). A knob kernel exists to answer a question
 about a machine, nobody boots it, and every machine this project tests on
@@ -132,7 +151,9 @@ to a package (see "The levers that move both guards" below).
 
 ### Which guard binds
 
-As blessed (`tools/kernsize.py`, `-DKERN_SMALL` for the second row):
+As blessed at an earlier commit and not re-taken since (`tools/kernsize.py`,
+`-DKERN_SMALL` for the second row; the kernsize block below is the latest
+bless, `ksize` 96,768 on kern_big and 59,392 on kern_small):
 
 | | `KERN_SIZE` | of `KERN_BUDGET` | spare | `.text`+`.bss` | of `KERN_CODE_MAX` | left | before guard 5 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -229,7 +250,19 @@ line:
 - **`accrued`** — how much of each current rung changes have already spent
   without crossing it. Read this before believing any spare figure.
 - **`footprint`** — `KERN_SIZE` against guard 1, in bytes and 512-byte steps.
-- **`boot`** — the same size against guard 5.
+- **`boot`** — the same size against guard 5, the blob's lift counted, and
+  the **boot arena** at `MIN_RAM_KB`: from the blob's top, `mem_init_x`'s
+  floor (`BLOB_SEG_AT*16 + BOOT2_PAD`; it was `BOOT2_RES`, 512 bytes higher,
+  while SYSTEM.CFG's buffer sat past the blob) to the top of RAM, what the
+  boot's own claims have. 24,064 bytes on kern_big at 128KB and 63,488 on
+  kern_small (BOOT3-PLAN wave 0; 62,464 on kern_small at wave 1, its lift
+  stepping twice; 22,528 on kern_big at wave 2 and 20,480 at wave 3, until
+  wave 4 gives most of it back);
+  it is the host figure that stands in for a kern_big 128KB boot row, which
+  the owner took out.
+- **`boot3`** — the third boot-only home (SPEC.md §2.9.15): `.boot3`'s bytes,
+  what is free under the blob, and how far it can grow before the derived
+  lift steps (the certain bound). Boot RAM, never a resident byte.
 - **`segment`** — `.text` + `.bss` against guard 2.
 - **`ladder`** — every segment base, and the line every RAM figure in the
   project falls out of: **heap KB = int 12h − 110.5** on `kern_big`
@@ -462,31 +495,38 @@ written into several change records and is wrong every time. If a byte has to
 stop being resident, the mechanism is an **on-demand module** (SPEC.md §2.8),
 not a section move.
 
-`kern_big`, as blessed (`kernsize --json`; the `.text`/`.bss`/`.cold`/
-`.lowbss` figures are the `sections` line and the rungs are `kernel.asm`'s):
+`kern_big`, as `kernsize` printed it on 2026-11-08 (the `.text`/`.bss`/`.vga`/`.cold`/
+`.lowbss` figures are the `sections` line and the segments its `ladder` line;
+run the tool for today's):
 
 | rung | segment | size | what it is |
 |---|---|---:|---|
-| image (`.text` 47,333 + `.bss` 5,525) | `KERNEL_SEG` 0x0060 | 53,248 | resident code in the kernel's own segment, its read-only data and its scratch |
-| `.cold` (40,432) | `COLD_SEG` 0x0D60 | 40,448 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
-| FAT window | `FAT_SEG` 0x1740 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
-| `.lowbss` (6,366) + task 0's stack (512) | `LOW_SEG` 0x1860 | 7,168 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
-| `.vgabuf` (336) | `VGABUF_SEG` 0x1A20 | 512 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1). **The only rung a machine can decline**: `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine's heap starts 512 bytes lower (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
-| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1A40 | **105,984** | 105.0 KB on VGA, 104.0 on a 1bpp adapter, whose heap starts under the `.vgabuf` rung |
+| image (`.text` 40,328 + `.bss` 5,366) | `KERNEL_SEG` 0x0060 | 46,080 | resident code in the kernel's own segment, its read-only data and its scratch |
+| FAT window | `FAT_SEG` 0x0BA0 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
+| `.lowbss` (5,358) + task 0's stack (512) | `LOW_SEG` 0x0CC0 | 5,872 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
+| `.vga` (2,030) | `VGA_RAM` 0x0E2F | 2,032 | code only a VGA or an EGA runs, inside `KERNEL_SEG`'s 64KB window (SPEC.md §2.10.9); on a machine with neither, `kmain_o` slides `.cold` down over it (`cfx_slide`). 0 on `kern_small` |
+| `.cold` (37,566) | `COLD_SEG` 0x0EAE | 37,568 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
+| `.vgabuf` (336) | `VGABUF_SEG` 0x17DA | 608 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1), plus the pad to `KERN_END`'s one 512-byte rounding (`LADDER_PACK`). `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
+| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1800 | **96,768** | 96.0 KB on VGA; lower on a machine without one - under `.vgabuf` with no VGA, and with neither a VGA nor an EGA just past `.cold` slid down onto the VGA rung (`mem_floor_ax`) |
 
-`kern_small`'s ladder is `KERNEL 0x0060  COLD 0x0a00  FAT 0x1060  LOW 0x10a0
-HEAP 0x11c0` — `KERN_SIZE` **71,168 bytes**, the heap starting at 71.0 KB — so
-a 128KB machine has 57.0 KB of heap by arithmetic; `tests/small128.py` boots
+`kern_small`'s ladder, as `kernsize -DKERN_SMALL` printed it the same day (the
+kernsize block above, at 59,392, is an older bless), is `KERNEL 0x0060  FAT 0x0880  LOW 0x08c0  COLD 0x0994
+HEAP 0x0ec0` — `KERN_SIZE` **58,880 bytes**, the heap starting at 59.0 KB — so
+a 128KB machine has 69.0 KB of heap by arithmetic; `tests/small128.py` boots
 one under MartyPC and reads what is actually free after the boot-time claims,
-and on this tree the two AGREE: **58,368 bytes = 57.0 KB, with no pinned
-claim standing**. It was 54.0 KB at 74,240; the three kilobytes between are
+and when it was last taken, at `KERN_SIZE` 71,168, the two AGREED: **58,368
+bytes = 57.0 KB, with no pinned claim standing**. It was 54.0 KB at 74,240; the three kilobytes between are
 kernel size pass 4 (docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md).
 A 640KB machine reporting 639KB has ~534 KB under `kern_big` before any
 driver or read-ahead claim.
 
-**Not in the span**: stage 2's blob (`.boot2`, 4,751 bytes: the loader, the
-splash and the boot overlay's blob half) and the overlay's window half
-(`.ovl`, 5,075 bytes loaded onto the FAT window and `dsk_secbuf`), both
+**Not in the span**: stage 2's blob (`.boot2`, 3,296 bytes of 3,584 in the
+shipped KZIP build since BOOT3-PLAN wave 4: the loader, the splash, the first
+tick's probe and the status line, and nothing else - tests/blobbodies.txt;
+`kernsize` prints 3,102, because it assembles the NOKZIP arm and so leaves out
+the KZIP-only loader - `kz_all`, `kz_expand`, `kz_hd`, the head loop), the
+third boot-only home `.boot3` (below), and the overlay's window half
+(`.ovl`, 5,119 bytes loaded onto the FAT window and `dsk_secbuf`), both
 dead by the first desktop — see below; on `kern_small` the split is a BUILD
 CHOICE, SPEC.md §2.5.3.2), the on-demand modules (files read
 into a heap claim when asked for, §2.8), and the menu save-under, which is a
@@ -497,16 +537,16 @@ sized from the rect actually dropped (`menu_save_kb`, §12.4; `MENU_SAVE_KB`
 ### What the Task Manager shows
 
 The memory view's `System` row is `KERN_KB` = `(KERN_SIZE + 1023) / 1024`,
-**104** on `kern_big`, with one indented row per span the ladder declares,
+**95** on `kern_big`, with one indented row per span the ladder declares,
 every figure from `OSAPI_SYS_KB` (SPEC.md §20.9) so that a package never
 carries a copy of the ladder:
 
 | row | constant | bytes | shown |
 |---|---|---:|---:|
-| `Code+data` | `SKB_IMG` = the rest | 98,048 | 96 |
+| `Code+data` | `SKB_IMG` = the rest | 88,832 | 87 |
 | `Stacks` | `SKB_STK` + `SKB_STK0` | 2,816 + 512 | 3 |
 | `FAT snap` | `SKB_FAT` = `FAT_PARA`·16 | 4,608 | 5 |
-| **`System`** | **`KERN_SIZE`** | **105,984** | **104** |
+| **`System`** | **`KERN_SIZE`** | **96,768** | **95** |
 
 The KB column is rounded **cumulatively** — each running boundary to the
 nearest kilobyte, each row the difference of two boundaries — so the rows
@@ -540,7 +580,7 @@ Three floors, and they are different questions:
 
 | floor | `kern_big` | `kern_small` | where it is asserted |
 |---|---:|---:|---|
-| stage 1 refuses to load the kernel over itself — prints `RAM`, halts | ~118.5 KB | ~87 KB | `boot/boot.asm`'s `MEMFIT`: `HEAP_PARA` + 8 blob sectors + the sector and its 2,048-byte stack, derived from `kernsize`'s `kend` at build time. `make test RAMKB=<n>` makes the sector believe a smaller machine (SeaBIOS answers 639 whatever `-m` says) |
+| stage 1 refuses to load the kernel over itself — prints `RAM`, halts | ~118.5 KB | ~87 KB | `boot/boot.asm`'s `MEMFIT`: `HEAP_PARA` + the blob's `BOOT2_SECS` sectors + the sector and its 2,048-byte stack, derived from `kernsize`'s `kend` at build time. `make test RAMKB=<n>` makes the sector believe a smaller machine (SeaBIOS answers 639 whatever `-m` says) |
 | the machine the configuration is CLAIMED to boot on | 128 KB | 128 KB | guard 5, `MIN_RAM_KB`; `kernsize`'s `boot` line says how far under it the kernel is |
 | what is left for programs | 527 KB on 639 | 47.5 KB on 128 | the `ladder` line; `tests/small128.py` and `tests/kernresident.py` read the real figure off a booted machine |
 
@@ -563,17 +603,27 @@ constraint instead of borrowing the shipped kernel's.
 ### The image — `.text` + `.bss`
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
-`.bss` follows `.text` immediately and is uninitialised by definition, so it
-costs nothing on the floppy and everything in RAM; the pair is charged
+`.bss` follows `.text` immediately and is `nobits`, so NASM emits nothing for
+it - the next section's `start=` pads its range with zeros, which KZIP packs
+to almost nothing on the floppy - and it costs everything in RAM; the pair is charged
 rounded up to a whole 512 bytes (the alignment invariant below). **The whole
-of `.bss` is zeroed before `kmain` runs**; `nasm -f bin` zeroes nothing, which
-is why anything read before that point (`[fdlg_win]`, the splash's state)
-lives in `.text` as a `dw 0`.
+of `.bss` is zero when `kmain` runs** - no instruction clears it; the load
+lands the padding - and it is NOT zero before then (under KZIP it holds the
+packed stream until `kz_all`), which is why the splash's state lives in the
+plain head of `.text`. That head is `max(SPL_RESIDENT, KZ_HEADMIN)` sectors,
+and `SPL_RESIDENT` is DERIVED from `spw_resident_end` and `[vid_cgamode]`
+(whichever ends later) at the foot of
+`kernel.asm` (the big review's boot-4: 5 sectors on kern_big, kern_small and
+kern_emu, 6 on kern_mega) - so a first-tick store must land below that line,
+in the blob, or nowhere; `tests/unit/t_resident.py` walks the ticks for the
+ones that do not, against `tests/tickrefs.txt` (SPEC.md 2.9.4, 2.9.13.1).
+None of it is a resident byte: the head and the window are boot-time shapes
+of the same image.
 
-The file on disk runs past the image rung, and the gap is where `.cold`
-lands: it is declared with an explicit `start=` at the rung boundary, so NASM
-emits the padding as zeros and stage 2's single contiguous read puts it on
-`COLD_SEG`. Expressing it as a section start is what makes it non-circular —
+The file on disk runs past the image rung, and the section after the gap is
+declared with an explicit `start=` at the rung boundary - `.ovl` at `FAT_SEG`
+on every shipped kernel, `.cold` at `COLD_SEG` under `NO_ROM_COLD` - so NASM
+emits the padding as zeros and the load (`kz_all` under KZIP) puts it there. Expressing it as a section start is what makes it non-circular —
 padding *inside* `.text` would grow `KTEXT_SIZE`, which grows `KIMG_PARA`,
 which grows the padding.
 
@@ -584,7 +634,7 @@ SS ≠ DS everywhere in the kernel (SPEC.md §1) — and the layout is:
 
 | | bytes | what |
 |---|---:|---|
-| `sch_stacks` | 2,816 (`kern_small` 1,280) | the background slices, one per slot 1..`MAX_TASKS`−1 |
+| `sch_stacks` | 2,816 (`kern_small` 960) | the background slices, one per slot 1..`MAX_TASKS`−1 |
 | `sch_chstack` | `SCH_CHSTK` = 128 | the ROM's `int 08h` chain runs here, not on the interrupted task (§8.5) |
 | `mou_pstack` | `MOU_PSTK` = 128 | both mouse ISRs run here, not on the interrupted task (§9.10) |
 | task 0 | `STK0_SIZE` = 512 | the UI task's, above the top of `.lowbss`, growing down onto it |
@@ -593,13 +643,13 @@ SS ≠ DS everywhere in the kernel (SPEC.md §1) — and the layout is:
 §8.7). `SCH_PARTITION` in `kernel/sched.inc` is one `SCH_SLOT <bytes>` line
 per background slot and the only place the layout is written; `sch_stkbase`,
 `sch_stksize` and `SCH_STK_TOTAL` derive from it. `kern_big` (`MAX_TASKS` =
-14) is 3 × 128, 6 × 192, 2 × 256, 2 × 384; `kern_small` (`MAX_TASKS` = 7) is
-128, 128, 192, 192, 256, 384. A spawn takes the smallest free slice that fits
+14) is 3 × 128, 6 × 192, 2 × 256, 2 × 384; `kern_small` (`MAX_TASKS` = 5) is
+128, 192, 256, 384. A spawn takes the smallest free slice that fits
 what the package declared in its header (§8.7.2), and a package that
 declares nothing gets `SCH_STACK` = 384, the largest class — which is what
 `CC_STACK` in `apps/cc/crt0.asm` mirrors and `tests/unit/t_mirror.py` guards.
 The idle task holds one 128-byte slot for the life of the machine, so
-`kern_big` has **twelve usable worker slots** and `kern_small` five. Running
+`kern_big` has **twelve usable worker slots** and `kern_small` three. Running
 out is `OSAPI_TASK_SPAWN`'s `CF=1`, which every package already degrades on;
 a Timer or Bounce that cannot get a slot rolls its launch back instead.
 
@@ -664,7 +714,7 @@ what `tests/stackprobe` was written for.
 turned a slot index into a slice base with a byte swap that only works at
 256, and `apps/taskmgr`'s bss was a hand-chained map of literal offsets. Both
 are gone — the base is looked up in `sch_stkbase` (§8.6), every size must be
-a multiple of 128 and even, and the Task Manager derives every offset — so a
+even (`SCH_SLOT`'s `%error`; only `SCH_STACK` is still held to a multiple of 128), and the Task Manager derives every offset — so a
 class change is one line of `SCH_PARTITION` and a rebuild. `MAX_TASKS` is
 mirrored in `apps/os88api.inc` at the larger of the two kernels' values (14),
 because a package sizes its snapshot buffer from it and over-allocating is
@@ -749,13 +799,17 @@ straddle with error 09h. The symptom is a **"Disk error" toast on any save
 larger than the distance from the buffer to the next 64KB boundary**: Paint's
 63KB BMP hits it immediately, a Note Pad text file never does.
 
-Every base in the ladder is an int 13h target — the FAT window, `dsk_secbuf`,
-a package image being loaded, a package's file buffer out of the heap — so
-the image rounds to a whole 512 bytes rather than to a paragraph, `FAT_PARA`
-and `LOW_PARA` are multiples of 32 paragraphs, and `VGABUF_PARA` is too so
-that the mono floor under it stays aligned. Guard 6 proves the ladder, guard
-2d the decoder rung, and guard 6b the heap: `mem_claim` rounds to whole KB,
-so every base it hands out is `HEAP_SEG` + n·64 paragraphs.
+Every base an int 13h transfer can land on — the FAT window, `dsk_secbuf`,
+a package image being loaded, a package's file buffer out of the heap — has
+to be 512-aligned, so the image rung and the FAT window stay whole 512-byte
+steps (`FAT_PARA` is a multiple of 32 paragraphs) and `FAT_SEG` and `LOW_SEG`
+sit on them. Above that, `LADDER_PACK` (every kernel but kern_mega) rounds the
+top of `.lowbss`, `.vga`, `.cold` and `.vgabuf` only to the paragraph, none of
+them being a transfer target, `KERN_END` alone rounds to 512, and
+`mem_floor_ax` rounds a lower heap floor up at run time. Guard 6 proves the ladder, guard
+2d the decoder rung, and guard 6b the heap: `mem_claim` rounds every size to
+`MEM_GRAN` paragraphs (512 bytes), so every base it hands out is the floor,
+the top or a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
 
 ### The boot sector has to get out of the way
 
@@ -771,6 +825,41 @@ heap. The address is computed, so there is no constant to keep in step and
 no fixed ceiling on the footprint; guard 5 is a statement about `MIN_RAM_KB`
 instead, and the sector itself refuses (`RAM`) any machine where the read
 would reach it (`MEMFIT`, §2.7.1).
+
+### What is live while stage 2 reads, and where the DMA bounce goes
+
+The boot floor is the highest byte live at the one instant everything is: stage
+2 reading the kernel, with stage 1's sector and stack still at the ceiling.
+kern_big at BOOT3-PLAN 16.18, linear addresses:
+
+```
+  0x00000  IVT, BIOS data area, 0x580 the DPT copy (SPEC.md §2.9.8)     live
+  0x00600  KERNEL_SEG: the plain head, 5 sectors (spl_tick runs it)      live
+  0x01000  ...the packed tail's landing: what kz_all will expand into
+  0x06400  the packed tail, read here, R = 21,504 up                     filling
+  0x10000  ┐ THE DMA BOUNCE (SPEC.md §2.9.13.7): a run the 64KB page
+  0x14800  ┘ would cut is read whole to the page's start and copied
+             down - inside the read itself, never above it
+  0x19600  the tail's last sector ends
+  0x19A00  BLOB_SEG_AT: stage 2's blob, 7 sectors                        live
+  0x1A800  ...its end: the highest live byte below the ceiling
+     ...   free - 19,968 bytes of it on a 128KB machine
+  top-2560 stage 1's relocated sector and its 2,048-byte stack           live
+```
+
+**The bounce adds nothing to guard 5**, on any kernel, and that is the design
+rather than luck: the region a bounced run writes is the run's own top half
+plus at most 35 sectors above its end, which is either the same read's
+not-yet-read remainder or RAM past the read's end and **under the blob**.
+`boot/boot2.asm` asserts that per read (`P + B2_BMAXSEC*512 <= BLOB_SEG_AT*16`
+from the highest page boundary the read crosses) and `BLOB_LIFT` carries the
+same term, so the blob's end stays the highest live byte and guard 5's sum
+needs no new term. It lifted one kernel: **kern_mega's** blob, 3,072 bytes
+(0x23C00 → 0x24800), whose read ends 14,848 bytes past 0x20000 - against a
+640KB floor. kern_small reads nothing past its blob at 0x10000, so its bounce
+never fires. The margins under 128KB's 128,512 (the top less 2,560) are
+**19,968** on kern_big, **19,456** on kern_emu and **59,392** on kern_small,
+all unchanged by it; `kernsize`'s `boot` line is the same figure.
 
 `KERNEL_SEG` is the only constant `boot/boot.asm` and `kernel/kernel.asm`
 share. `apps/os88api.inc` carries a third copy, baked into every package's
@@ -1006,7 +1095,10 @@ it has two halves, because they die at different times:
 | `.ovl` | 5,075 | **the first mount** | `FAT_SEG`, off the kernel's own contiguous read, spilling into `dsk_secbuf`, the one mount-owned buffer left (4,608 + 512 = 5,120 bytes, all readable — SPEC.md §2.1.2), so **45 bytes** spare | `call FAT_SEG:`, a constant |
 
 Those are kern_big's figures (`tools/kernsize.py --json`, build 903; kern_emu's
-blob is 4,757). On `kern_small` the window is 1,024 (a two-sector FAT) + 512 =
+blob is 4,757). **Since BOOT3-PLAN wave 3 the window half is 3,161 bytes on
+kern_big and kern_emu and 3,160 on kern_mega, so 1,959 and 1,960 spare**: the
+clock ladder, `sch_idle_start`, `vid_ctx_init` and `mem_init_x` (1,958
+bytes) moved to `.boot3` (below). On `kern_small` the window is 1,024 (a two-sector FAT) + 512 =
 1,536 against a `.ovl` of 1,480, and SPEC.md §2.5.3.2 is why that build puts
 more of the overlay in the blob.
 
@@ -1055,6 +1147,145 @@ label in it is an offset from its base, so `[spl_fseg]` reaches the loader,
 the splash and the overlay's blob half alike. Offset 0 is a `jmp boot2_entry`
 emitted at the declaration, because the overlay's blocks and `splash.inc` are
 assembled ahead of `boot/boot2.asm`, which is included at the foot.
+
+### The third boot-only home: `.boot3`
+
+SPEC.md §2.9.15 (docs/plans/completed/BOOT3-PLAN.md). KERNEL.SYS's LAST section, read
+with the kernel after the splash is up rather than ahead of it as the blob
+is, landing under the blob at a constant segment (`B3_SEG`; on kern_big
+`VGABUF_RAM`, over `.vgabuf`'s RAM and the lift) and given back at
+`mem_unblob_x` with the blob. So it is the blob's lifetime without the
+blob's price - the blob's every byte delays the first splash pixel, and on
+kern_big its 13 sectors were full until wave 4 took the blob back to its
+purpose and to 7 sectors on every kernel (below).
+
+**`.boot3` is NOT `.cold`**, and the two names will be confused the way
+`.cold` and `.boot2` are: it costs **boot RAM and load time, never a
+resident byte**. What it costs is (a) its packed sectors in stage 2's tail,
+after the bar - `t_blobruns --tail N` prices them, in the fast tier - and
+(b) once it outgrows the floor of 96 paragraphs under the blob, the blob's
+DERIVED lift (SPEC.md §2.9.15.3): 512 bytes of boot RAM a step, which guard
+5 counts. `kernsize`'s `boot3` line is the room left before that step (523
+bytes at wave 0, 16 at wave 1 on kern_big) and its `boot` line carries the
+boot arena at 128KB.
+
+**Every kernel has it since wave 1** (MEASURED, this tree's maps):
+
+| kernel | `.boot3` | where | lift (paragraphs) | `.boot2` it took from the blob |
+|---|---|---|---|---|
+| kern_big, kern_emu | 1,042 bytes (wave 0's 535 + `hb_probe_x`, `as_boot` and `font_init`) | `VGABUF_RAM` 0x17DA | 96, the floor | 6,478 -> 5,974 (-504) |
+| kern_small | 1,441 (`font_init` and OVBCALL's six bodies) | `.cold`'s end, 0x0EB7 | **160** | 4,745 -> 3,310 (-1,435) |
+| kern_mega | 1,010 (`hb_probe_x`, `font_init`, `mega_wrprobe`, `mega_gateb`, the three `cfx_` bodies) | `KERN_END` 0x2140 | **160** | 6,709 -> 5,713 (-996) |
+
+(`kernsize`'s figures, which leave out the KZIP-only loader.)
+
+The big
+review's canary fix, boot-7 and item E then took the shipped blob down **21
+bytes on kern_big, kern_emu and kern_mega and 32 on kern_small** (MEASURED off
+the maps: kern_big 6,148 -> 6,127 of 6,656; kern_small 3,495 -> 3,463 of
+5,632; kern_mega 5,887 -> 5,866 of 7,168; docs/plans/completed/BOOT3-PLAN.md 16.6).
+
+**Wave 2 took the SYSTEM.CFG reader and the boot driver loader** -
+`drv_boot_x` and its cone, `bxf_sync`, a KGO pair of `.boot3`'s own - out of
+the blob on kern_big, kern_emu and kern_mega, and SYSTEM.CFG's buffer
+`ovc_buf` with them into `.boot3b`, the section's nobits scratch on a linear
+512-byte boundary (MEASURED, the shipped KZIP maps):
+
+| kernel | `.boot3` (+ `.boot3b`) | lift (paragraphs) | the blob (of its sectors) | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|
+| kern_big | 1,042 -> 2,754 (+ 926: a 414-byte pad, 512 of buffer) | 96 -> **224** | 6,127 -> **4,489** (-1,638) of 6,656 | 24,064 -> 22,528 at 128KB | 85,648 -> 87,200 (168 -> 171 sectors) |
+| kern_emu | 1,042 -> 2,755 (+ 925) | 96 -> **224** | 6,244 -> 4,605 (-1,639) of 7,168 | 23,552 -> 22,016 at 128KB | 86,304 -> 87,872 (169 -> 172) |
+| kern_mega | 1,010 -> 2,670 (+ 914) | 160 -> **256** | 5,866 -> 4,281 (-1,585) of 7,168 | 508,928 -> 507,904 at 640KB | 116,832 -> 118,400 (229 -> 232) |
+
+What stays in the blob is what reads the blob's CS or what `kmain_o` also
+calls (the status line and the driver titles, `xm_boot_x`, the adapter
+switch's instance, two doors); SPEC.md §2.9.15 lists it. The heap's boot floor is
+the blob alone now, `BOOT2_PAD`, and `BOOT2_RES` is gone: the buffer it
+counted is under the blob, inside the lift. Guard 5's headroom at 128KB
+falls with the lift, 2,048 bytes: kern_big 22,016 -> 19,968, kern_emu
+21,504 -> 19,456 (the arena falls 512 less, the floor's 512 coming back).
+Stage 2's `int 13h` count is unchanged on every disk (`blobruns`). kern_small
+has no SYSTEM.CFG reader and is byte-identical.
+
+**Wave 3 relieved `.ovl`** on kern_big, kern_emu and kern_mega: the clock
+ladder whole (`clk_init` to `clk_bcd`, 1,782 bytes), `sch_idle_start` (35),
+`vid_ctx_init` (63) and `mem_init_x` (78) left the window half, and `wm_init`
+(34) left the blob, all for `.boot3` (MEASURED, the shipped KZIP maps):
+
+| kernel | `.ovl` (of 5,120) | `.boot3` (+ `.boot3b`) | lift (paragraphs) | the blob | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|---|
+| kern_big | 5,119 -> **3,161** (1 -> 1,959 spare) | 2,754 -> 4,746 (+ 982) | 224 -> **352** | 4,489 -> 4,456 of 6,656 | 22,528 -> 20,480 at 128KB | 87,200 -> 87,248 (171 sectors, unchanged) |
+| kern_emu | 5,119 -> **3,161** | 2,755 -> 4,747 (+ 981) | 224 -> **352** | 4,605 -> 4,572 of 7,168 | 22,016 -> 19,968 | 87,872 -> 87,904 (172) |
+| kern_mega | 5,118 -> **3,160** (2 -> 1,960 spare) | 2,670 -> 4,662 (+ 970) | 256 -> **384** | 4,281 -> 4,248 of 7,168 | 507,904 -> 505,856 at 640KB | 118,400 -> 118,448 (232) |
+
+KERNEL.SYS does not grow by the bytes moved: they were in the packed stream
+already, and the zeros they leave in `.ovl` pack to almost nothing. What
+grows is `.boot3`'s end, so the lift steps four times (2,048 bytes of boot
+RAM; guard 5's headroom at 128KB 19,968 -> 17,920 on kern_big, 19,456 ->
+17,408 on kern_emu), which wave 4's shorter blob is planned to give most of
+back. kern_small keeps all of it in `.ovl` (`OVSCALL`, SPEC.md §2.5.3.2) and
+is byte-identical.
+
+**Wave 4 took `.boot2` back to its original purpose, on every kernel**
+(SPEC.md §2.9.14.2): `kmain_o` itself, the boot's adapter switch and its KGO
+pair, `xm_boot_x`, `vx_boot_x` and `vx_blk`, kern_emu's `vmm_boot_x`, the
+Dock's boot geometry and kern_small's desk-grid copy moved to `.boot3`, and
+`BOOT2_SECS` fell to **7** on all four. `kmain`'s call is `call
+B3_SEG:kmain_o` and `dkb_geom`'s `call B3_SEG:ovl_dock_geom` - 5 bytes for
+`SPLGATE1`'s 9 each - and with its last two sites `spl_gate` went: **−22
+bytes of `.text`** on kern_big, kern_emu and kern_mega, −18 on kern_small,
+no rung crossed on any of them (and the bytes are still real). MEASURED, the
+shipped KZIP maps:
+
+| kernel | resident | the blob | `.boot3` (+ `.boot3b`) | lift (paragraphs) | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|---|
+| kern_big | 96,768 (`.text` −22, no rung) | 4,456 of 6,656 -> **3,296 of 3,584** | 4,746 -> 5,847 (+ 905) | 352 -> **416** | 20,480 -> **22,528** at 128KB | 87,248 -> **84,704** (171 -> 166 sectors) |
+| kern_emu | 96,768 | 4,572 of 7,168 -> **3,311 of 3,584** | 4,747 -> 5,949 (+ 803) | 352 -> **416** | 19,968 -> **22,528** | 87,904 -> **84,912** (172 -> 166) |
+| kern_mega | MEGA_RESIDENT 62,976 (`.text` −22) | 4,248 of 7,168 -> **3,213 of 3,584** | 4,662 -> 5,637 (+ 1,019) | 384 -> **448** | 505,856 -> **508,416** at 640KB | 118,448 -> **115,360** (232 -> 226) |
+| kern_small | 58,880 (`.text` −18) | 3,463 of 5,632 -> **3,102 of 3,584** | 1,441 -> 1,803 | 160 -> **320** (the page term) | 62,464 -> **61,952** | 55,136 -> **53,424** (108 -> 105) |
+
+The blob's six (seven) sectors back outweigh the lift's two steps on kern_big,
+kern_emu and kern_mega, so the arena GROWS by 2,048 bytes there - the blob
+ends lower (kern_big 0x1B000 -> 0x1A800). On kern_small the lift's **page
+term** (SPEC.md §2.9.15.3) moves the blob onto the 64KB DMA page at 0x10000,
+where it is read in two calls instead of three: 512 bytes of its 128KB boot
+arena for one `int 13h` before the bar. Every byte of it is boot RAM; 0 is
+resident.
+
+**Wave 5 took the keyboard mouse's pointer half out of the resident footprint**
+(SPEC.md §9.6.7, §2.8.8): `kbm_tab`, `kbm_key`, `kbm_btn`, `kbm_rclick`,
+`kbm_move`, `kbm_p5spend`, `kbm_ui` and `kbm_post` are `.boot3m`, a module
+image after `.boot3` in KERNEL.SYS, which `kbm_adopt` copies into a 512-byte
+`MEM_K_MOD` claim at `kmain_o`'s end **only when no pointer has spoken**, and
+which `mou_hotplug`'s `.have` drops when one first does. This is the one
+place in the boot-only homes where something OUTLIVES the drop - as a heap
+claim, on one class of machine - so it is the exception to "`.boot3` costs no
+resident byte" and says so: the image is never run where it lies (rule B9),
+and its claim is heap, a mouseless machine's only standing cost. MEASURED,
+against the commit before:
+
+| kernel | static resident | a mouseless machine | `.boot3` + `.boot3m` | lift (paragraphs) | KERNEL.SYS |
+|---|---|---|---|---|---|
+| kern_big | **−346** (`.text` −364, `.bss` +12, `.cold` +6): `KERN_SIZE` 96,768 -> **96,256** | one 512-byte granule: **+166** net | 5,847 -> 6,372 | 416 -> 448 (`HEAP_SEG` fell 32, so the blob's floor stays 0x1A800) | 84,704 -> 84,864 (166 sectors either way) |
+| kern_emu | −346, no rung crossed (96,768) | +166 | 5,949 -> 6,484 | 416 -> 448 (floor 0x1A800 -> 0x1AA00: 512 of the 128KB arena) | 84,912 -> 85,088 (166 -> 167; emu.img's read is 7 calls either way) |
+| kern_mega | **−352 conventional**: `MEGA_RESIDENT` 62,976 -> **62,464** | 512 conventional until `mega_enter`, then above 1MB (0) | 5,637 -> 6,165 | 448 -> 480 (floor stays 0x23E00) | 115,360 -> 115,536 (226 sectors) |
+| kern_small | **−346**: `KERN_SIZE` 58,880 -> **58,368** | +166, on the 128KB machine | 1,803 -> 2,388 | 320 -> 352 (the page term holds the blob at 0x10000) | 53,424 -> 53,568 (105 sectors) |
+
+No `int 13h` call was added on any shipped disk (`t_blobruns`): kern_big's
+packed tail grew 160 bytes inside the sector it already ended in, with 128 of
+that sector left - the 360KB and 720KB disks still read KERNEL.SYS in 11
+stage-2 calls with no sector to spare.
+
+Resident: 0 bytes on every kernel, in every wave but wave 4's −22/−18 and wave 5's −346 (−352 on kern_mega). The lift's two steps on kern_small cost
+1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's
+headroom (60,928 -> 59,904); kern_mega's 1,024 of a 640KB floor. The blob
+keeps its length on every kernel until wave 4 shortens it, so the bytes are
+slack inside its sectors.
+
+A body goes there with `B3SECT` and is called with `B3CALL`; it calls back
+into the blob with `B2CALL`. Rules B1-B9 of `tools/os88ovlchk.py` are the
+fences (SPEC.md §2.9.15.4); the one that matters when spending is B2: **a
+body the first tick reaches cannot go there** - it is still packed then.
 
 ---
 
@@ -1124,8 +1355,9 @@ memory here:
   in, and `%ifdef GFX_VGA` is not such a test (kern_big defines it on every
   machine).
 - **The rung may not name `.cold`'s segment.** The slide re-points only the
-  words in the kernel's own list (`.cfx`), and `tools/os88cfx.py` refuses a
-  build with one in the rung; a `.text` shim makes the far call instead.
+  words in the kernel's own list (`cfx_tab`, in `.boot3`), and
+  `tools/os88cfx.py` refuses a build with one in the rung; a `.text` shim
+  makes the far call instead.
 
 ---
 

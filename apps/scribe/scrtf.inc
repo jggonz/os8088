@@ -418,10 +418,12 @@ sc_rpap:
     PKG_LDS sc_pseg
     mov ax, [si]
     mov bx, [si+2]
-    push cs                         ; DS back on the package: sc_rpp is a
-    pop ds                          ; SCVAR, and CS IS the package because
-                                    ; part 1 is in this segment (SPEC.md
-                                    ; 95.8.8). While SCRIBE.OVL had a CS of
+    pop ds                          ; DS back on the package, off the stack:
+    push ds                         ; sc_rpp is a SCVAR. It was `push cs /
+                                    ; pop ds`, and on kern_mega CS is part 1's
+                                    ; CODE selector, so every store below was
+                                    ; a #GP (KERN-MEGA-PLAN 14.162). While
+                                    ; SCRIBE.OVL had a CS of
                                     ; its own this idiom wrote four bytes of
                                     ; somebody else's heap once per paragraph,
                                     ; and read them back through the SAME

@@ -88,9 +88,9 @@ MOU_VMROW   equ 6               ; [mou_port] once the backdoor has won. Serial
 ;
 ; In .text and not .bss, because -f bin zeroes nothing and this is read at
 ; boot - and, more sharply than for XMEM, because [vmm_on] is what stands
-; between an 8088 and a far call into an image that is not loaded. A .bss byte
-; survives an int 19h warm boot with the previous kernel's value in it; a .text
-; one is re-read from the disk.
+; between an 8088 and a far call into an image that is not loaded. A warm boot
+; re-reads either from the disk (int 19h is a full reload, and .bss comes back
+; as the image's zero padding); .text states the 0 where it is read.
 ; -----------------------------------------------------------------------------
 vmm_on      db 0                ; THE GATE. 1 = the image is attached and the
                                 ; backdoor won the contest. Every poll site
@@ -157,11 +157,12 @@ vmm_dsp:
 ; word of sch_stkdie. So the apply runs on mou_pstack, and #147's invariant
 ; holds unchanged.
 ;
-; It is safe to borrow because it is PROVABLY IDLE while [vmm_on] is set:
-; vmm_boot_x settles the contest on MOU_VMROW and calls mou_lockon, which
-; clears IER on both UARTs, masks both lines at the master 8259 and calls
-; mou_p2_off. Neither mouse ISR can fire, so neither can be inside
-; MOUPRIV_ENTER, and [mou_psave] has no other writer.
+; It is safe to borrow because nothing can be on it at the same time:
+; vmm_poll holds IF = 0 from MOUPRIV_ENTER to MOUPRIV_LEAVE, and both mouse
+; ISRs run IF = 0 from gate to iret (SPEC.md 9.10). vmm_boot_x's mou_lockon
+; normally keeps both ISRs silent too - IER 0 on both UARTs, both lines
+; masked, mou_p2_off - but a serial lease (SPEC.md 115) re-arms one line, and
+; the IF = 0 argument is what covers that.
 ;
 ; The swap is INSIDE the cli, and that is load-bearing rather than tidy: SP is
 ; what sch_switch saves into the task's record, so a tick taken while SP points
@@ -253,13 +254,13 @@ vmm_poll:
 ; **Expands to nothing on kern_big AND kern_small** (SPEC.md 9.11.7) - it is
 ; defined unconditionally and tests KERN_EMU in its body, so a call site needs
 ; no %ifdef of its own and the two shipped kernels assemble it to no bytes at
-; all. Used by ui_task's pass and by menu_drop,
-; both of which already hold DS = KERNEL_SEG; task_yield's site is written out
+; all. Used by ui_task's pass, which already holds DS = KERNEL_SEG;
+; task_yield's site is written out
 ; longhand in sched.inc because it does not.
 ;
 ; DS-RELATIVE HERE and cs-relative at task_yield's site, which is not an
-; inconsistency: a segment override costs two bytes, and these two callers
-; already hold the kernel's DS, so paying it here would buy nothing at either.
+; inconsistency: a segment override costs two bytes, and this caller
+; already holds the kernel's DS, so paying it here would buy nothing.
 ; task_yield's caller may be a package, so that one site pays it and gets back
 ; far more - see sched.inc.
 %macro VMM_POLL 0
@@ -272,7 +273,7 @@ vmm_poll:
 %endmacro
 
 %ifdef KERN_EMU
-section .boot2
+B3SECT                          ; `.boot3` since BOOT3-PLAN wave 4
 ; -----------------------------------------------------------------------------
 ; vmm_boot_x - attach the image and settle the contest (SPEC.md 9.11.2)
 ;
@@ -292,15 +293,16 @@ section .boot2
 ; failing this compare never reads a sector of. cpu_detect runs from the boot
 ; overlay long before drv_boot_x, so the tier is published.
 ;
-; IN THE BLOB, beside xm_boot_x, which is the same shape - attach an overlay
-; drv_boot_x has already read, once, and give it back on a refusal. It runs
-; once and is given back to the heap with the rest of `.boot2` at spl_finish.
+; IN `.boot3` (the blob until BOOT3-PLAN wave 4), beside xm_boot_x, which is
+; the same shape - attach an overlay drv_boot_x has already read, once, and
+; give it back on a refusal. It runs once and is given back to the heap with
+; the rest of `.boot3` at mem_unblob_x.
 ; It used to be `.cold`, resident for the life of the machine, because the blob
 ; was full when it was written; SPEC.md 2.9.14 made the blob one section and
 ; SPEC.md 2.5 folded the old `.ovl` into it, and the room that left is what
 ; this spends (SPEC.md 9.11.2.1).
 ;
-; CS IS THE BLOB'S here, not KERNEL_SEG, so every edge out is far: driver.inc's
+; CS IS `.boot3`'s here, not KERNEL_SEG, so every edge out is far: driver.inc's
 ; drvf_* entries for drv_call and drv_release (xm_boot_x's), and the
 ; ovw_mou_lockon thunk in `.text`. DS is the kernel's (SPEC.md 1's near model)
 ; and every store below goes through it.
@@ -326,11 +328,11 @@ vmm_boot_x:
                                 ; and the row already carries the DRVE_*
     mov bp, [bx+DRVR_ENT]
     mov ax, (VMM_ABI_VER << 8) | DRVV_ATTACH    ; AH: the ABI the image
-    call bvs_cgo                ; checks against its own
+    call b3_cgo                 ; checks against its own
     dw drv_call
     jc  .refuse
 
-    ; --- won: settle the contest, as mou_claim / mou_p2_byte do --------------
+    ; --- won: settle the contest, as mou_settle does for the others ----------
     mov byte [mou_port],  MOU_VMROW
     mov byte [mou_line],  MOU_P2LINE
     mov al, 1
@@ -342,7 +344,7 @@ vmm_boot_x:
     mov byte [vmm_on], 1        ; LAST, and deliberately so: it is the gate
     jmp short .out              ; every poll site reads. An immediate store
                                 ; and not AL's: mou_lockon spends AX..CX since
-                                ; kernel size pass 18 (this is `.boot2`, given
+                                ; kernel size pass 18 (this is `.boot3`, given
                                 ; back, so the two bytes are nobody's)
 
 .refuse:
@@ -357,8 +359,8 @@ vmm_boot_x:
                                 ; drive either
     cmp word [bx+DRVR_SEG], 0   ; ...and hand the image straight back - on the
     je  .out                    ; CPU path only if drv_boot_x read it anyway,
-    call bvs_cgo  ; which has no tier test of its own
-    dw drv_release              ; (the blob's hop: drvf_drv_release went)
+    call b3_cgo   ; which has no tier test of its own
+    dw drv_release              ; (`.boot3`'s hop: drvf_drv_release went)
 .out:
     pop es
     pop bp
@@ -368,7 +370,7 @@ vmm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain_o reaches this with BLOBCALL
+    retf                        ; FAR: kmain_o reaches this with B3CALL
 
 section .text
 %endif                          ; KERN_EMU

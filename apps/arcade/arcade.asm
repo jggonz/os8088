@@ -969,6 +969,10 @@ ar_paint:
 
 ar_onkey:                           ; AX = the key, SI = the window
     push si
+    push ax                         ; the About card takes the key that
+    call ar_abdismiss               ;   dismisses it: Enter must not also
+    pop ax                          ;   play, an arrow not also move the
+    jc .out                         ;   list under it (as ar_onclick)
     cmp byte [af_setm], 0           ; the card is SETTINGS: its keys first
     je .list
     push ax
@@ -2389,11 +2393,16 @@ ar_l8:      db 'Game > Reset: power the board off', 0
 TOASTSTR ar_s_vgaonly, 'Pac-Man needs a VGA'
 TOASTSTR ar_s_qbvga, 'Q*bert needs a VGA'
 
-ar_ablines: dw ar_ab1, ar_ab2, ar_ab3, ar_ab4, 0
+; One line for every game's owner, not one per machine: the card is sized to
+; the window's content box (os88ui_about_d clamps), and the list of boards
+; only grows. Each machine's own credit is its README.TXT entry.
+ar_ablines: dw ar_ab1, ar_ab2, ar_ab3, ar_ab4, ar_ab5, ar_ab6, 0
 ar_ab1:     db 'Arcade for os8088', 0
-ar_ab2:     db 'An 8080 board, translated', 0
+ar_ab2:     db 'Arcade boards, translated', 0
 ar_ab3:     db 'to 8086 ahead of time', 0
-ar_ab4:     db 'Space Invaders (C) Taito', 0
+ar_ab4:     db 'Games (C) their owners', 0
+ar_ab5:     db 0
+ar_ab6:     db 'Contributed by Elendilon', 0
 
 TOASTSTR ar_s_bad, 'Arcade: code part bad'
 ar_s_romno: db ': not found', 0
@@ -2443,6 +2452,9 @@ AR_VAR ar_impname, 13               ; the import (arcimp.inc): the zip,
 AR_VAR ar_zsize, 4                  ;   its size,
 AR_VAR ar_zkb, 2                    ;   its claim's KB, its claim,
 AR_VAR ar_zclaim, 2
+%ifdef PKG_MEGA
+AR_VAR ar_zrun, 1                   ; 1: the zips' claims are huge runs (arcimp.inc)
+%endif
 AR_VAR ar_cdseg, 2                  ;   its central directory: where,
 AR_VAR ar_cdoff, 2
 AR_VAR ar_cdend, 2                  ;   where it ends, how many entries

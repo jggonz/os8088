@@ -2,25 +2,26 @@
 ; os8088 - files.inc
 ;
 ; The Disk window - a minimal file manager for the FAT data floppy
-; (SPEC.md 22). FOUR windows may be open at once (KIND_FILES, cap 4), each
-; on its own drive and its own folder. No boot-time window; app_launch
-; creates one on demand (fm_kinit is the KD_INIT), and CMD_FILES dispatch /
-; desk_click reach it through files_open / files_open_drive, which front an
-; existing window on the target, or create one, or - at the cap - move the
-; frontmost one there.
+; (SPEC.md 22). FOUR of the user's windows may be open at once, each on its
+; own drive and its own folder (KIND_FILES, cap VIEW_SLOTS + 1: the fifth pool
+; block is the Standard File chooser's, SPEC.md 38.1). No boot-time window;
+; app_launch creates one on demand (fm_kinit is the KD_INIT), and CMD_FILES
+; dispatch / desk_click reach it through files_open / files_open_drive, which
+; front an existing window on the target, or create one, or - at the cap -
+; move the frontmost one there.
 ;
 ; THE RULE THE WHOLE MODULE RESTS ON (SPEC.md 22): paints read the window's
-; cache; actions re-sync the global snapshot first. disk_dir / disk_icons /
-; disk_nfiles stay exactly ONE global mount snapshot, and are still the only
-; thing loader.inc and diskw.inc ever resolve an index against. Every window
-; additionally owns a byte-for-byte copy of a snapshot in its VIEW_SEG slot
-; (SPEC.md 2.3/22.1) - that is what W_PAINT, fm_layout and the hit-tester
-; read, so a repaint, a drag, a raise or a wm_paint_all costs ZERO floppy
-; I/O. Anything that acts calls fmv_sync first, which remounts only when the
-; acting window's (drive, cwd) is not the one currently mounted.
+; own cache, and a listing mount writes straight into it. There is no global
+; listing (SPEC.md 22.6.3): fmv_load aims dsk_dest_x at the window's FS_VSEG
+; claim, mounts, and aims it back at nothing - and that claim is what
+; W_PAINT, fm_layout and the hit-tester read, so a repaint, a drag, a raise
+; or a wm_paint_all costs ZERO floppy I/O. Anything that acts calls fmv_sync
+; first, which re-lists only when the acting window's (drive, cwd) is not the
+; one currently mounted.
 ;
-; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, 4 x FS_SIZE)
-; that app_launch allocates and hands to fm_kinit in DI. fm_vp_set
+; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, FM_NSLOT x
+; FS_SIZE: the user's four and the chooser's) that app_launch allocates and
+; hands to fm_kinit in DI. fm_vp_set
 ; publishes the acting window's block, cache segment and instance record
 ; into [fm_vp] / [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields
 ; the 400-line painter reads on its hot path - it uses every register
@@ -43,7 +44,7 @@
 ;
 ; The window also owns the menu bar. fm_menus (below) is Locator's SECOND
 ; SPEC.md 12.2 menu set: same AM_NAME, so the bar still reads 'Locator',
-; but a real AM_ONCMD - fm_oncmd - so File/Edit/Nav/Builtins are this
+; but a real AM_ONCMD - fm_oncmd - so File/Edit/Nav/Disk are this
 ; window's commands rather than the desktop's. fm_oncmd runs under the gfx
 ; lock exactly like W_ONCLICK, which is why three of its commands are
 ; POSTED (inst_launch_post / ui_post_cmd) instead of called: see the jump
@@ -481,7 +482,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
-; .bss is not zeroed by the loader: every state variable is set here.
+; Every state variable is set here rather than assumed from .bss's zero.
 ; -----------------------------------------------------------------------------
 section .ovl                   ; BOTH kernels (SPEC.md 2.5.3.3): it was the
                                 ; blob on kern_small, and kmain_o needed that
@@ -541,8 +542,10 @@ files_init_x:
 ; This is also where the new window's listing comes from: app_launch has no
 ; argument channel, so the caller parked the target in fm_seed_* (the
 ; [cp_sel]-before-KIND_CTRL precedent, SPEC.md 31) and fmv_load pulls it in
-; here. KD_INIT runs on the UI task with NO lock held, which is exactly the
-; context a mount needs.
+; here. KD_INIT runs on the UI task with NO lock held - except the Standard
+; File chooser's, which fdlg_open launches under its requester's held gfx lock
+; ([inst_lkhd], SPEC.md 38.6). A mount is legal either way, as it is in any
+; window callback.
 ; -----------------------------------------------------------------------------
 section .cold                   ; ...and back: fm_kinit_x is a KIND's, run
                                 ; whenever a Disk window opens
@@ -684,8 +687,8 @@ fm_kinit_x:
     mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
 %ifdef KERN_BIG
     call fm_pthseed             ; a KD_POOL block is REUSED, so the path is
-%endif                          ; cleared rather than assumed empty (.bss gets
-                                ; no image bytes and nothing zeroes it)
+%endif                          ; cleared rather than assumed empty (a reused
+                                ; block keeps its last owner's bytes)
     call fm_settitle
     and word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
                                 ; a moment from now, caption included - do not
@@ -698,13 +701,12 @@ fm_kinit_x:
 ; =============================================================================
 ; The view cache (SPEC.md 2.3/22.1)
 ;
-; Each window owns one 4KB VIEW_SEG slot holding a byte-for-byte image of
-; disk_dir (at slot offset 0) and disk_icons (at FV_ICONS) - and on
-; kern_small that image is SPEC.md 25.8.5's pool plus its index, which is the
-; same bytes the global holds and not an expansion of them. Neither end of
-; that copy is addressable through DS - the source is LOW_SEG, the
-; destination VIEW_SEG - which is why it goes through disk.inc's
-; dsk_copy_out / dsk_copy_seg rather than a plain rep movsw.
+; Each window owns one listing claim (FS_VSEG: VIEW_KB, grown per folder on
+; DSK_BIGDIR, SPEC.md 22.6.4) that a loud mount writes straight into (SPEC.md
+; 22.6.3): the multi-selection bitmap, the entries at FV_DOFF and their
+; reference index. The claim is not addressable through DS, which is why
+; reads and the fmv_take copy go through disk.inc's dsk_copy_out /
+; dsk_copy_seg rather than a plain rep movsw.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -5857,7 +5859,7 @@ fm_c_unmnt:
 ; completion proc.
 ;
 ; **DISKOPS.DRV is not loaded here**, and that is deliberate: a cancelled dialog
-; calls nothing back (SPEC.md 38.2 - fdlg_close, no commit), so an image
+; calls nothing back (SPEC.md 38.2 - fdlg_reap_x's close half, no commit), so an image
 ; loaded on this side would be left resident with nothing to drop it. The
 ; completion proc loads it, which costs a disk read the user is already
 ; standing over.
@@ -5919,7 +5921,7 @@ fm_img_done_x:
 
 
 
-    call fm_svp_set             ; SI = the REQUESTER window, fdlg_commit's
+    call fm_svp_set             ; SI = the REQUESTER window, the callback's
                                 ; contract (SPEC.md 38.6) - and [fm_vp] is
                                 ; re-aimed at ITS view FIRST, because the
                                 ; dialog's teardown repaints whatever sat
@@ -5973,7 +5975,7 @@ fm_img_done_x:
     call fm_clone_res
 
     ; ONE tail, and it is a REPAINT for both halves. Nothing here can get
-    ; away with less: fdlg_commit destroys the dialog before it calls back
+    ; away with less: fdlg_reap_x closes the dialog before it calls back
     ; (SPEC.md 38.6), so what this window owes is the rectangle the dialog was
     ; covering - which is the whole of it or none of it, and 11.3's
     ; granularity refusal answers that the same way a mount does. The prompt

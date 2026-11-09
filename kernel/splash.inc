@@ -1,12 +1,17 @@
 ; =============================================================================
 ; splash.inc - boot-time loading screen (SPEC.md 15)
 ;
-; While the boot sector is still pulling the rest of this kernel off the
-; floppy, it far-calls spl_tick (via the pinned 0800:0008 entry) after every
-; sector that lands. The first tick switches to mode 12h and draws the
-; welcome dialog; every tick advances a pixel-granular progress bar, a
-; percentage, and a spinning vector "8088" - stroke digits coin-flipped
-; about their vertical axis through a 16-entry cosine table.
+; While stage 2 is still pulling the rest of this kernel off the floppy, it
+; calls spl_tick NEAR (both are `.boot2`, SPEC.md 2.9.4) after every run that
+; lands, once SPL_RESIDENT sectors of `.text` are aboard - under KZIP that is
+; the plain head, so the first tick comes the moment the head is in, with AX =
+; 0, before any tail run (SPEC.md 2.9.13.1, BOOT3-PLAN item E). State is the blob's,
+; read `cs:`, except spl_live/spl_busy/spl_quiet, which are `.text` bytes in
+; viddet.inc because the IRQ0 handlers read them through DS. The first tick
+; switches to mode 12h and draws the welcome dialog; every tick advances a
+; pixel-granular progress bar, a percentage, and a spinning vector "8088" -
+; stroke digits coin-flipped about their vertical axis through a 16-entry
+; cosine table.
 ;
 ; This module runs before ANY other module is resident, so it is entirely
 ; self-contained: BIOS int 10h for mode set and text, its own planar
@@ -33,48 +38,19 @@ section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
                                 ; .text to them, and the whole module lands in
                                 ; the image instead
 
-SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
-                                ; ticking us (must match boot/boot.asm).
-                                ; It was 6, and the module ended at 3,072
-                                ; bytes EXACTLY - no headroom at all, so the
-                                ; next thing that had to be resident (the
-                                ; equipment-flag fix in viddet.inc, 32 bytes)
-                                ; failed the assertion below rather than
-                                ; silently ticking a splash that was not
-                                ; aboard.
-                                ;
-                                ; It is 8 for the second instance of exactly
-                                ; that, and the shape is worth recognising:
-                                ; the assertion fires on whatever crosses the
-                                ; line, not on whatever is to blame. This time
-                                ; it was a MERGE - SPEC.md 39.6's 15-byte CGA
-                                ; pre-clear in viddet.inc arriving on top of
-                                ; the other branch's growth - and the module
-                                ; ended 4 bytes over 3,584. Shaving four bytes
-                                ; off a module that has twice filled its rung
-                                ; buys one more collision; a sector buys 512.
-                                ;
-                                ; **AND IT IS 9 FOR THE THIRD**, which is the
-                                ; same shape a third time and by now a pattern
-                                ; worth naming: another MERGE, SPEC.md 72's
-                                ; Ethernet driver arriving on top of the
-                                ; integration branch's four new API slots. The
-                                ; module ended 20 bytes over 4,096, and the 20
-                                ; is one API slot: 8 bytes of jump table plus
-                                ; its 12-byte X stub, both of which live above
-                                ; this module by construction. Nothing in
-                                ; splash.inc grew at all - which is precisely
-                                ; what "fires on whatever crosses the line"
-                                ; means, and why shaving bytes out of the
-                                ; splash would have been work aimed at the
-                                ; wrong file.
-                                ;
-                                ; One more sector is one more BIOS read before
-                                ; the bar starts moving: ~24 ms on the field
-                                ; machine (PERFORMANCE.md's measured sector
-                                ; inside a coalesced run), where the figure
-                                ; this comment used to quote - a fifth of a
-                                ; second - was a sector at the pre-18.91 238 ms
+; SPL_RESIDENT - the sectors stage 2 must have landed before it ticks us - is
+; NOT TYPED HERE ANY MORE (the big review's boot-4, BR-153). It was a hand rung
+; for years - 6, then 8, then 9, each raise forced by whatever crossed the line
+; last (twice a MERGE: SPEC.md 39.6's CGA pre-clear, then SPEC.md 72's API
+; slots; nothing in this file had grown either time) - and the last of them
+; left it four sectors bigger than what it measures. kernel.asm's foot derives
+; it from spw_resident_end, which viddet.inc puts after the bytes the ticks
+; touch, and from [vid_cgamode], the first tick's one lasting store past that
+; label (whichever ends later): 5 on kern_big, kern_small and kern_emu, 6 on
+; kern_mega. Under KZIP the
+; plain head is max(SPL_RESIDENT, the Makefile's KZ_HEADMIN) - never shorter,
+; and the foot refuses a build where it is. What the ticks reach past that label -
+; data further up `.text` - is tests/unit/t_resident.py's to walk.
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
 ; gfx_nextrow, brought INTO this module (SPEC.md 2.9.4) - and now a NEAR call
@@ -495,8 +471,9 @@ spl_reset:
                                 ; that wipes the framebuffer under a live line
                                 ; is the one that has to put it back, at the
                                 ; NEW geometry. After kmain gives the blob
-                                ; back this reaches spl_dead and returns
-                                ; (2.9.5), which is the right answer: by then
+                                ; back, [spl_fseg] is 0 and the SPLCALL that
+                                ; reaches spl_reset skips the call (2.9.5.3),
+                                ; which is the right answer: by then
                                 ; the desktop owns the screen and [spl_live]
                                 ; would have refused anyway
     dec byte [spl_busy]
@@ -520,7 +497,7 @@ spl_chrome:
     BLOBCALL vid_detect         ; the adapter probe happens HERE, before any
                                 ; other kernel module is even resident: the
                                 ; splash owns the first mode set, and kmain's
-    call bvs_apply              ; (the blob's own copy, viddet.inc's VID_APPLY)
+    BLOBCALL bvs_apply          ; (the blob's own copy, viddet.inc's VID_APPLY: FAR)
     mov bp, vid_setmode         ; vid_init later re-runs all three (SPEC 39.1).
     call KERNEL_SEG:spw_near    ; BP names the routine (viddet.inc's door)
 

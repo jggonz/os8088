@@ -192,8 +192,8 @@ CLO_WINSEC   equ 128            ; sectors per int 13h window: dsk_xfer advances
 
 ; --- this image's ABI with the resident thunk --------------------------------
 CLE_DISP     equ 0              ; ONE entry for the cloner: the image
-                                ; dispatches on DL itself, so four verbs cost
-                                ; one mod_fp slot...
+                                ; dispatches on DL itself, so every verb (six,
+                                ; ten with OS88_IMG) costs one mod_fp slot...
 CLO_NENT     equ 2              ; ...and a SECOND for the compressor, which
                                 ; rides in this image since SPEC.md 20.15.3 -
                                 ; compress.inc is `.modl` too, included right

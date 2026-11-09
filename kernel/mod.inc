@@ -67,10 +67,17 @@ MOD_NFSCK   equ 0
 ; whole panel (SPEC.md 2.8.7). LAST, so every image keeps its id.
 %ifdef OS88_SHORTCUTS
 MOD_SETS    equ MOD_NIMG
-MOD_MAX     equ MOD_NIMG + 1
+MOD_KBM     equ MOD_NIMG + 1
 %else
-MOD_MAX     equ MOD_NIMG
+MOD_KBM     equ MOD_NIMG
 %endif
+; ...and MOD_KBM, the second row that is no image os88mod.py cuts: the
+; keyboard mouse's pointer half, `.boot3m`, ADOPTED FROM MEMORY at the boot's
+; end on a machine with no pointer and dropped when one first speaks
+; (SPEC.md 2.8.8, 9.6.7). No file on any disk names it, so mod_need is never
+; asked for it - kbm_adopt (mouse.inc) claims and arms it itself. LAST, for
+; MOD_SETS's reason
+MOD_MAX     equ MOD_KBM + 1
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
 MOD_DISKOPS equ 2               ; DISKOPS.DRV: the cloner, Write Img and
@@ -134,6 +141,11 @@ MOD_MAX_KB  equ 16              ; the biggest module image we will claim,
 ; are known. Summed rather than hashed: the point is that two builds of one
 ; commit differ, and a section size differing by ONE byte moves every address
 ; above it.
+MOD_BNUM    equ BUILD_NUM       ; ...and the build number as an ASSEMBLER number,
+                                ; for a header met before apps.inc %includes
+                                ; buildnum.inc: mouse.inc's `.boot3m` (SPEC.md
+                                ; 2.8.8). BUILD_NUM is a %define, which cannot
+                                ; be named ahead of its line; an equ can
 %ifdef KERN_MEGA                ; ...and `.mega`'s, or code moving from `.text`
 MOD_STAMP   equ (KTEXT_SIZE + KBSS_SIZE + COLD_SIZE + MEGA_SIZE + KLOW_SIZE) & 0xFFFF
 %else                           ; to `.mega` would keep the sum and move every
@@ -150,7 +162,7 @@ MODR_SIZE   equ 4               ; ...and that is the whole row. It was 8: two
                                 ; a power of two. The dead word went first and
                                 ; the padding with it - the live part had been
                                 ; the first four bytes for a while, and MOD_MAX
-                                ; is THREE, so the pad was wasting six.
+                                ; was THREE then, so the pad was wasting six.
 MODR_SHIFT  equ 2               ; ...still a power of two, so the id -> row
                                 ; conversion is shifts and never a multiply.
                                 ; ONE SITE reads it now - mod_row, which
@@ -166,11 +178,11 @@ MODR_SHIFT  equ 2               ; ...still a power of two, so the id -> row
 section .text
 ; DATA stays in the kernel segment, reached through DS, exactly as a cold
 ; module's own data does (SPEC.md 2.6). The CODE below is .cold, and that is
-; not a tidiness choice: in .text it would be ~430 bytes against the 438 this
-; kernel has left under KERN_CODE_MAX, and that guard cannot be raised by
-; anybody. Being cold also means the module thunks that call mod_need are in
-; the same segment and reach it with a NEAR call, so the pair of cw_* shims
-; the first draft needed does not exist.
+; not a tidiness choice: in .text it would have been ~430 bytes against the
+; 438 the kernel had left under KERN_CODE_MAX when this was written, and that
+; guard cannot be raised by anybody. Being cold also means the module thunks
+; that call mod_need are in the same segment and reach it with a NEAR call,
+; so the pair of cw_* shims the first draft needed does not exist.
 
 %ifdef DOCK_OPT
 mod_f_dock: db 'DOCK.DRV', 0
@@ -216,6 +228,8 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw MOD_STAMP        ; MOD_H_STAMP
 
 mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
+mod_f_kbm:  db 'KBMOUSE', 0     ; SPEC.md 2.8.8: no file has this name - it is
+                                ; what the RAM view calls the claim
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
@@ -253,6 +267,8 @@ mod_r_dock:
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
+mod_r_kbm:                      ; MOD_KBM, NAMED for mod_r_fdlg's reason:
+    dw 0, mod_f_kbm             ; kbm_adopt (mouse.inc) stores its claim here
 mod_tab_end:                    ; (a label and no byte: tools/os88rom.py
                                 ; counts the ROWS by it, MOD_SETS included,
                                 ; because the ROM answers per row)
@@ -467,7 +483,7 @@ mod_need:
     mov es, dx                  ; ...and NO second `mov si, [bx+MODR_FILE]`:
     mov cx, bp                  ; SI is still the one loaded for drv_find, and
 %ifdef ROM_ADOPT                 ; mem_claim_x banks SI/DI around everything
-    mov al, ROMF_COPY           ; including the compaction (memory.inc:520).
+    mov al, ROMF_COPY           ; including the compaction (memory.inc, mem_claim_x).
     call far [rom_mfp]          ; ...or the ROM has the bytes: the first CX
     jnc .rdone                  ; of the image to ES:0, and the read's own
                                 ; answer, AX = CX and DX = 0. A ROM that holds
@@ -751,7 +767,10 @@ MOD_HIOK_SETS equ 1 << MOD_SETS ; CTRL.DRV's settings core, the same file
 MOD_HIOK_SETS equ 0
 %endif
 %ifdef KERN_BIG
-MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS
+MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS | (1 << MOD_KBM)
+; (MOD_KBM, the keyboard mouse's adopted image, SPEC.md 2.8.8: armed at the
+; boot in real mode like any boot-loaded module, so mod_hiboot moves it; its
+; code half is readable, access byte 9Ah, so its table reads through CS hold)
 %else
 MOD_HIOK equ 0
 %endif
@@ -887,7 +906,7 @@ mod_disarm:
                                 ; (its parity pad cancelled memory.inc's at
                                 ; mem_bytes_kb_x, kernel size pass 14)
 .slot:                          ; a CALLED loop, not a fall-through:
-    mov word [di], mod_gone     ; (kmain_o's blob loop is this, written out)
+    mov word [di], mod_gone     ; (kmain_o's `.boot3` loop is this, written out)
     COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
@@ -977,19 +996,21 @@ mod_drop:
 ; WHY IT EXISTS - AND NOT FOR THE REASON THIS COMMENT USED TO GIVE. It said
 ; ".bss arrives as whatever was in memory - `-f bin` zeroes nothing". That is
 ; false here and clip.inc's declaration block says so from the other end:
-; `.bss` is `nobits vfollows=.text` and `.cold`'s file position is padded past
-; it, so NASM emits at least KBSS_SIZE zero bytes and stage 2's one contiguous
-; read lands them. `.bss` IS zero at boot, which is precisely why clip.inc
+; `.bss` is `nobits vfollows=.text` and the next section's file position
+; (`.ovl`'s at FAT_SEG; `.cold`'s under NO_ROM_COLD) is padded past it, so NASM
+; emits at least KBSS_SIZE zero bytes and the load lands them (kz_all under
+; KZIP, stage 2's read on NOKZIP). `.bss` IS zero at boot, which is precisely why clip.inc
 ; needs no init entry point.
 ;
-; What this routine is for is the OTHER thing: a row's resting value is not
-; zero. Every MODR_SEG must read mod_gone before the first thunk runs, or a
+; What this routine is for is the OTHER thing: a slot's resting value is not
+; zero. Every mod_fp slot must read mod_gone before the first thunk runs, or a
 ; thunk that reaches its far call ahead of its own mod_need jumps to segment
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.
 ; -----------------------------------------------------------------------------
-; (mod_init_x is gone: kmain_o writes its loop out in the blob on every
-; kernel - kernel size pass 13 on kern_small, pass 14 on kern_big)
+; (mod_init_x is gone: kmain_o writes its loop out on every kernel - kernel
+; size pass 13 on kern_small, pass 14 on kern_big - in the blob then, in
+; `.boot3` since BOOT3-PLAN wave 4)
 
 section .cold                   ; the far entry, for kmain
 

@@ -21,7 +21,9 @@
 ; after a 512-aligned 512-byte buffer it put the resident's image at 5,121 -
 ; one byte past 5KB - so `drv_load`, which rounds an image UP to whole KB and
 ; claims that, took SIX. In front of the `align` it is absorbed by padding
-; that was already there and the image is exactly 5,120. Nothing else moved.
+; that was already there and the image was exactly 5,120. Nothing else moved.
+; (It is 4,096 now - SPEC.md 52.13.6, 117.4 - and the byte still sits in
+; front of the align.)
 hd_mbrok:    db 0               ; HMB_*: whether hd_mbr is the DISK's table
 
 %ifdef HD_TOOL

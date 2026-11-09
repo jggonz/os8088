@@ -2,17 +2,20 @@
 ; os8088 - HDD.DRV
 ;
 ; The loadable hard-disk driver (SPEC.md 51.8/52): MFM through an XT
-; controller card's own ROM, and CHS-only IDE. Everything the user can see is
-; here - the Control Panel's Hard Drive page, the disk tool that partitions
-; and formats, and the Mount button - because the kernel's half of this is four
-; API slots and a volume table, and nothing above them belongs in a kernel
-; that boots machines with no hard disk at all.
+; controller card's own ROM, and CHS-only IDE: the transport, the volume
+; table and mounting, because the kernel's half of this is four API slots and
+; a volume table, and nothing above them belongs in a kernel that boots
+; machines with no hard disk at all. Everything the user can see - the Control
+; Panel's Hard Drive page with its Mount button, the disk tool that partitions
+; and formats, the installer - is HDDTOOL.DRV's, read off the system volume on
+; demand (SPEC.md 52.11, 52.13).
 ;
-; WHAT THE KERNEL KEEPS AND WHY. A volume is a small index with 16-bit
+; WHAT THE KERNEL KEEPS AND WHY. A volume is a small index with
 ; VOLUME-RELATIVE LBAs (SPEC.md 18.7), so the FAT layer, the directory
-; walker and the write path are the floppy's, unchanged, and a partition is
-; capped at 65,535 sectors - 31.99MB, which is exactly the DOS 3.3 limit
-; these machines ran. This driver holds the 32-bit partition base and adds
+; walker and the write path are the floppy's, unchanged. They were 16 bits,
+; which capped a partition at 31.99MB; since SPEC.md 18.7.5 DSV_BLK takes a
+; 32-bit one in DI:SI and the cap is FAT16's own (HP_MAXHI:HP_MAXLO,
+; 2,047.9MB). This driver holds the 32-bit partition base and adds
 ; it, which is the whole of what "partitions" means to os8088.
 ;
 ; THE TRANSPORT LADDER (SPEC.md 52.1), in probe order:
@@ -37,10 +40,12 @@
 ; is not an exotic path - it is a 286 with an early IDE drive and a CMOS type
 ; table that predates it.
 ;
-; Prefix hd_. Sub-modules: part.inc (the partition table and the allocator),
-; fmt.inc (the FAT formatter), tool.inc (the one window both of those are
-; reached through), page.inc (the Control Panel page). All near procs with
-; near rets, like any package (SPEC.md 51.1).
+; Prefix hd_. Sub-modules: hddabi.inc (the contract with HDDTOOL.DRV),
+; hdcom.inc (code both images assemble), cfg.inc (the settings blob),
+; hdtool.inc (loading and calling the tool), mount.inc (the volume table),
+; hdxms.inc (the read into XMS) and hdsec.inc (the buffers); fmt.inc and
+; tool.inc are HDDTOOL.DRV's. All near procs with near rets, like any package
+; (SPEC.md 51.1).
 ; =============================================================================
 
 %define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
@@ -330,8 +335,12 @@ hd_xfer:
     call hd_chs
     jc hd_xfer_fail4
     call hd_bios_run            ; AX = sectors this one int 13h may carry
-    jc hd_xfer_fail4            ; ...or none of them can: an unaligned buffer
-    mov [hd_run], ax            ; whose next sector would straddle a DMA page
+    jc hd_xfer_fail9            ; ...or none of them can: an unaligned buffer
+    mov [hd_run], ax            ; whose next sector would straddle a DMA page,
+                                ; or one above 1MB - 09h, the ROM's own word
+                                ; for it, and what kern_mega bounces on
+                                ; (BLKCAP_SEL, SPEC.md 51.8.1): it is asked
+                                ; before the first int 13h, so nothing moved
     mov bp, 3
 .attempt:
     mov es, [hd_bseg]           ; reloaded per attempt: the buffer walks a
@@ -371,6 +380,9 @@ hd_xfer:
 hd_xfer_ok:
     xor al, al                  ; and CF = 0
     jmp short hd_xfer_out
+hd_xfer_fail9:
+    mov al, 0x09                ; "DMA boundary": no int 13h reaches the buffer
+    jmp short hd_xfer_fail
 hd_xfer_fail4:
     mov al, 0x04                ; "sector not found": a CHS the geometry cannot
 hd_xfer_fail:                   ; name, or a buffer no transfer can reach
@@ -501,9 +513,10 @@ hd_xfer_ide:
                                 ; READ (a failed read never asserts DRQ) and
                                 ; catches NOTHING on a WRITE: the last sector's
                                 ; data is already shifted out and its completion
-                                ; status has never been looked at. Every write
-                                ; in this driver is one sector, so without this
-                                ; a write fault is reported to the kernel as
+                                ; status has never been looked at. A write is
+                                ; a whole run - a data run or a FAT range, one
+                                ; command - so without this a fault on its last
+                                ; sector is reported to the kernel as
                                 ; success - and the commit order in SPEC.md
                                 ; 18.4.1 is only safe while a failed data write
                                 ; comes back as a failure.
@@ -876,7 +889,7 @@ hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
                                 ; lifetime is one hd_cfg_mark or one
                                 ; hd_ready, and no partition table is read
                                 ; during either (SPEC.md 52.13.6)
-                                ; hd_cap MOVED to page.inc, beside the strings
+                                ; hd_cap MOVED to cppage.inc, beside the strings
                                 ; it is composed from: a built caption belongs
                                 ; to the image that letters it, exactly as a
                                 ; constant one does (hddabi.inc's HDM_*)
@@ -889,7 +902,7 @@ hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
 ; `align 512` would otherwise spend on zeros. The rule for the run below still
 ; binds them: nothing but hd_attach's and hd_ready's own trees calls them.
 ; Which routines sit here is a packing question and nothing else - the image
-; is 3,584 bytes whenever the resident above stays under 3,072 and the run
+; is 4,096 bytes whenever the resident above stays under 3,584 and the run
 ; under 512, and the assertion at hd_mbr_end says when it stops being.
 ; =============================================================================
 
@@ -1533,7 +1546,10 @@ hd_ready:
 ; attach-only data and lives with the attach-only code.
 ; =============================================================================
 hd_services:
-    dw 0                        ; DSV_CAPS    - sound's
+    dw BLKCAP_SEL               ; DSV_CAPS    - DSV_BLK takes a selector as it
+                                ; is (SPEC.md 51.8.1): rung 1 is `rep insw`
+                                ; through ES, and rung 0 answers 09h for a
+                                ; buffer its ROM cannot reach (hd_bios_run)
     dw 0                        ; DSV_FM
     dw 0                        ; DSV_STREAM
     dw 0                        ; DSV_TICK
@@ -1556,9 +1572,11 @@ hd_services:
     dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
     dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
                                 ;               between the edges (13.8.4)
-    dw hd_pkg                   ; DSV_PKGCALL - THE DOOR, and it reaches two
-                                ; verbs, neither a sector: HDV_ARM and
-                                ; HDV_DISARM (52.1.4). No package reaches
+    dw hd_pkg                   ; DSV_PKGCALL - THE DOOR, and it reaches three
+                                ; verbs, none naming a sector: HDV_ARM and
+                                ; HDV_DISARM (52.1.4) and HDV_TOOL (117.4),
+                                ; whose HDI_GO can erase a partition through
+                                ; the install engine. No package reaches
                                 ; DSV_BLK through it
 hd_svc_end:                     ; ...AND STOPS HERE, its length in the header
                                 ; (OS88_DRIVER's fourth argument, +15). A cell

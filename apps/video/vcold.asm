@@ -37,7 +37,7 @@
 ;@data vp_xip vp_snd vp_v2 vp_shadow vp_lysplt vp_lybkb vp_rlst vp_rlst_bank
 ;@data vp_rwhy vp_xbase vp_xrun vp_nkeys vp_skscr vp_kekb vp_audio vp_nosnd
 ;@data vp_aseg vp_spkpwm vp_rlbuf vp_name vp_rran vp_rpic vp_rxo vp_ptgt
-;@data vp_ptfp VP_SPK VP_RL
+;@data vp_ptfp VP_SPK VP_RL vp_rbkb vp_main vp_win
 ;@call os88real_prep vp_mclaim vp_scaps vp_fxget vp_ringkb vp_mfree vp_bset
 ;@call vp_fxbind vp_sesspic vp_fmt
 ;@data:VP_DIAG vp_prseg vp_prn vp_prnl vp_prbd vp_prna vp_frames vp_pr61
@@ -76,6 +76,7 @@
 %else
     dw 0
 %endif
+    dw vc_rprep                     ;    VK_RPREP
 
 ; the vectors: each a near routine below, far-called
 vc_rdoor:
@@ -86,6 +87,9 @@ vc_rpost:
     retf
 vc_rline:
     call vp_rline
+    retf
+vc_rprep:
+    call vp_rprep
     retf
 %ifdef VP_DIAG
 vc_prbeg:
@@ -252,9 +256,10 @@ vp_rclaims:
     VPC vp_scaps
     test ax, SND_CAP_PCM_BG
     jz .spk
-    mov ax, VP_RL / 1024 + 1        ; a card's: vp_sndprep's .hw
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov ax, (VP_RL / 1024 + 1) * 64 ; a card's: vp_sndprep's .hw, and
+    mov cx, ax                      ; conventional as it is there (the
+    mov bl, MEMP_CLAIM_HI           ; paragraph door with a head)
+    call OSAPI_MEM_P
     jc .o
     jmp short .got
 .spk:
@@ -295,6 +300,36 @@ vp_rgive:
     VPC vp_mfree
 .o:
     pop dx
+    ret
+
+; vp_rprep - kern_mega in protected mode: the real-mode bracket's door
+; PREPARED with the list a play would hand it (OSAPI_FSX_RUN FSXF_PREP,
+; SPEC.md 53.2.3.1, KERN-MEGA-PLAN 14.180) - every driver it carries
+; brought down out of the pool, so the bank has their KB as kern_big's XMS
+; has, and [vp_rbkb] the conventional KB the door will still claim; FFFFh
+; when it is refused (a kern_mega before 14.180, or no window yet). Every
+; register kept
+vp_rprep:
+    push ax
+    push bx
+    push cx
+    push si
+    push bp
+    mov word [vp_rbkb], 0xFFFF
+    call vp_rmklist                 ; BP = the list
+    mov ax, vp_main
+    mov bx, [vp_win]
+    mov cx, FSXF_REAL | FSXF_PREP
+    xor si, si
+    call OSAPI_FSX_RUN
+    jc .o
+    mov [vp_rbkb], ax
+.o:
+    pop bp
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vp_rmklist - BP = the FSXL_ list (SPEC.md 53.2.3): the file, HDD.DRV, the

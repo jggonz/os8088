@@ -1,7 +1,8 @@
 ; =============================================================================
 ; kerndos/kdlayout.inc - the segment ladder
 ;
-; kern_dos sits at the bottom of conventional memory and everything above it
+; kern_dos sits at the bottom of conventional memory (on kern_mega's HMA arm
+; only its low rungs do: the image is at FFFF:0010) and everything above it
 ; is the DOS program's, which is the whole point (docs/plans/KERN-DOS-PLAN.md
 ; its §1: ~39 KB for all of this against a 600 KB target).
 ;
@@ -132,7 +133,7 @@ KD_IMG_KB   equ 34              ; 34 until SPEC.md 96.11.7's character devices
 ; **AND THE XMS DOOR's REVIEW** (KERN-MEGA-DOS-PLAN 10.4): the largest-run
 ; walk here and the core's 0Ch-0Fh, the kept block size and 0Bh's bounds.
 ; kern_mega's kern_dos lives in the HMA (W4), so this rung no longer comes
-; off the DOS program at all - it is the HMA's, which holds 63
+; off the DOS program at all - it is the HMA's, which holds 63KB.
 ; **36 -> 37 FOR THE LOADER'S OWN EXEPACK UNPACKER** (kerndos/kdxpack.inc,
 ; KERN-MEGA-PLAN 14.24), and it is the HMA's kilobyte, not the program's
 ; **37 -> 38 FOR THE PROGRAM'S LAST SCREEN** (KERN-MEGA-PLAN 14.106,
@@ -203,7 +204,8 @@ KIMG_PARA   equ KD_IMG_KB * 64  ; the bss, rounded up to whole KB and asserted
                                 ; falls 0x0600 -> 0x0080 in BOTH hosts. 863
                                 ; bytes spare
 ; --- the exit code's mailbox (SPEC.md 96.41, docs/plans/KERN-DOS-PLAN.md 8.2)
-; MIRRORED in kernel/hiber.inc, and tests/unit/t_mirror.py is the guard.
+; MIRRORED in kernel/hiber.inc. NOT watched: tests/unit/t_mirror.py scans
+; kernel/ and not kerndos/, so the two are kept in step by hand.
 KDB_SEG     equ 0x0040          ; the BDA...
 KDB_OFF     equ 0x00F0          ; ...and its intra-application area, which the
                                 ; BIOS sets up at POST and never touches again

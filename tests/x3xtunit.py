@@ -15,6 +15,18 @@ model (tools/x3simxt.py), in Unicorn's x86 core (SPEC.md 121.4).
   --synthetic  N random records with disagreeing block types and random
                plans, to reach the split path no LAME fixture takes
   (none)       all three: four fixtures, 30 synthetic granules a profile
+  --mega       ...of the part's kern_mega ARM (-DPKG_MEGA, KERN-MEGA-PLAN
+               14.150), run as protected mode runs it: its CODE view at
+               PART_SEG mapped read and execute only, so a store through CS
+               faults, and its DATA a second view of the same bytes at
+               DATA_SEG, which every verb is handed as DS. The arm must be
+               exact AND store nothing through CS; the shipped part, run
+               this way (--mega --shipped), faults at its first store
+
+THE FAILING CASE (docs/WRITING-TESTS.md 1): `--mega --shipped` runs the
+shipped part, which writes through CS, in that map - and fails at OPEN's
+first store, `x3xtunit: a store through CS at 1000:xxxx`; so does the arm
+with any one CSDO taken off its line. Seen when --mega was written.
 
 The part's one kernel call is OSAPI_SEG (OPEN asks it for XTGEN.BIN's
 segment, KERN-MEGA-MEMORY-PLAN MC7), answered at its cell in KERNEL_SEG the
@@ -60,6 +72,8 @@ import x3xtgen as G           # noqa: E402
 import x3xttab as XT          # noqa: E402
 
 PART_SEG = 0x1000
+DATA_SEG = 0xA000                # --mega: the part's DATA view (Part)
+MEGA = False                     # --mega
 CLAIM_SEG = 0x2200
 REC_SEG = 0x8000
 OUT_SEG = 0x8200
@@ -99,14 +113,15 @@ def rmseg(d):
     return int(m.group(1), 16), open(out, 'rb').read()
 
 
-def build(out):
+def build(out, mega=False):
     global RMSEG
     RMSEG = rmseg(os.path.dirname(out))
     inc = os.path.join(os.path.dirname(out), 'x3xtk.inc')
     G.emit(inc)
     G.xtgen(os.path.join(os.path.dirname(out), 'XTGEN.BIN'))
     subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'apps', 'xtmp3') + '/',
-                    '-I', os.path.dirname(out) + '/', '-I', os.path.join(ROOT, 'apps') + '/', '-o', out,
+                    '-I', os.path.dirname(out) + '/', '-I', os.path.join(ROOT, 'apps') + '/']
+                   + (['-DPKG_MEGA'] if mega else []) + ['-o', out,
                     os.path.join(ROOT, 'apps', 'xtmp3', 'x3xt.asm')], check=True)
     G.seal(out)
     return open(out, 'rb').read()
@@ -118,7 +133,22 @@ class Part:
 
     def __init__(self, image):
         self.uc = Uc(UC_ARCH_X86, UC_MODE_16)
-        self.uc.mem_map(0, 1 << 20)
+        if MEGA:
+            # TWO VIEWS OF ONE 64KB, as kern_mega's code/data pair: CS's
+            # read and execute only, DS's read and write (DATA_SEG)
+            import ctypes
+            from unicorn import UC_PROT_ALL, UC_PROT_READ, UC_PROT_EXEC
+            self._buf = ctypes.create_string_buffer(0x10000)
+            lo, hi = PART_SEG * 16, DATA_SEG * 16
+            self.uc.mem_map(0, lo)
+            self.uc.mem_map_ptr(lo, 0x10000, UC_PROT_READ | UC_PROT_EXEC,
+                                ctypes.addressof(self._buf))
+            self.uc.mem_map(lo + 0x10000, hi - lo - 0x10000)
+            self.uc.mem_map_ptr(hi, 0x10000, UC_PROT_ALL,
+                                ctypes.addressof(self._buf))
+            self.uc.mem_map(hi + 0x10000, (1 << 20) - hi - 0x10000)
+        else:
+            self.uc.mem_map(0, 1 << 20)
         self.uc.mem_write(PART_SEG * 16, image)
         self.uc.mem_write(KSEG * 16 + RMSEG[0], RMSEG[1])  # OSAPI_SEG (rmseg)
         self.image = image
@@ -138,7 +168,7 @@ class Part:
                     'bp': 0x6666, 'es': 0x7777}
         for k, r in names.items():
             uc.reg_write(r, sentinel.get(k, 0))
-        regs.setdefault('ds', PART_SEG)
+        regs.setdefault('ds', DATA_SEG if MEGA else PART_SEG)
         outs = regs.pop('_outs', ())
         for k, v in regs.items():
             uc.reg_write(names[k], v & 0xFFFF)
@@ -149,7 +179,15 @@ class Part:
         uc.reg_write(UC_X86_REG_CS, 0)
         uc.reg_write(UC_X86_REG_IP, STUB)
         uc.reg_write(UC_X86_REG_FLAGS, 0x0202)
-        uc.emu_start(STUB, STUB + 5, timeout=0, count=400_000_000)
+        try:
+            uc.emu_start(STUB, STUB + 5, timeout=0, count=400_000_000)
+        except Exception as e:
+            cs, ip = uc.reg_read(UC_X86_REG_CS), uc.reg_read(UC_X86_REG_IP)
+            raise SystemExit('x3xtunit: a store through CS at %04X:%04X (%s) - '
+                             'protected mode faults there (--mega)'
+                             % (cs, ip, e) if MEGA else
+                             'x3xtunit: the part faulted at %04X:%04X (%s)'
+                             % (cs, ip, e))
         out = {k: uc.reg_read(r) for k, r in names.items()}
         fl = uc.reg_read(UC_X86_REG_FLAGS)
         out['cf'] = fl & 1
@@ -533,11 +571,16 @@ def main():
     ap.add_argument('--granules', type=int, default=0)
     ap.add_argument('--expand', action='store_true')
     ap.add_argument('--synthetic', type=int, default=0)
+    ap.add_argument('--mega', action='store_true')
+    ap.add_argument('--shipped', action='store_true',
+                    help='with --mega: the shipped part (which must fail)')
     ap.add_argument('-v', action='store_true')
     a = ap.parse_args()
-    out = os.path.join(ROOT, 'build', 'x3xtunit', 'x3xt.bin')
+    global MEGA
+    MEGA = a.mega
+    out = os.path.join(ROOT, 'build', 'x3xtunit' + ('mega' if a.mega else ''), 'x3xt.bin')
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    image = build(out)
+    image = build(out, mega=a.mega and not a.shipped)
     fails = 0
     every = not (a.expand or a.synthetic or a.fixture)
     if a.expand or every:

@@ -2,7 +2,7 @@
 ; os8088 - HDD.DRV / hdcom.inc
 ;
 ; Code and scratch that BOTH images need, assembled into each of them
-; (SPEC.md 52.12). Nothing in here crosses the segment boundary: each image
+; (SPEC.md 52.11.1). Nothing in here crosses the segment boundary: each image
 ; gets its own copy of these routines and its own copy of the data they work
 ; on, and that is the point - a far call per decimal digit would be absurd,
 ; and a shared line buffer would be a second thing to keep in step.
@@ -114,7 +114,8 @@ hd_dev_row_ck:
 ; -----------------------------------------------------------------------------
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)
 ; in:  DI = the device row, [hd_lba] = the LBA
-; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past the drive
+; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past what CHS can
+;      name (cylinder 1,024 and up) - not the drive's own HDD_CYL
 ; clobbers: flags
 ;
 ; ONE `div` pair and no 32/16 two-step, and that is provable rather than

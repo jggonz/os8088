@@ -49,9 +49,9 @@
   "sources": [
    "apps/arcade"
   ],
-  "stamped": "1f3846d4",
-  "strings": "3f4829e726debac5",
-  "why": "review fixes: shorter toasts (the page quotes none), .ROM length checked against its set (the page's 'wrong set' wording covers it), Q*bert's sound board actually heard on a 386+ as the Sound section already says - no words change"
+  "stamped": "607f6357",
+  "strings": "f2e769a1e0e72cf8",
+  "why": "About card credits the contributor and covers every board; page gains the Arcade menu table (About Arcade, Close) as 1942's has"
  },
  "ARCHIVO_F88": {
   "sources": [],
@@ -85,9 +85,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "55a051b4",
-  "strings": "e12e9e2c75e19803",
-  "why": "Unchanged: XTMP3's track split the look-ahead out of apengine.inc into aplook.inc (35efae82). AUDIO.O88 assembles byte-identical and no user-visible string changed. Only the file a string lives in moved."
+  "stamped": "e15cc130",
+  "strings": "685a84aa6fd914d9",
+  "why": "kern_mega arm only: the hold filled by the stream (KERN-MEGA-PLAN 14.186); the page already says it reads a song a little at a time as it plays, which is now true on every kernel - unchanged"
  },
  "AUTOSTRT": {
   "sources": [],
@@ -112,9 +112,9 @@
    "tools/os88vbt.py",
    "tools/vbtscene.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "0848db46e848836d",
-  "why": "the demo as demo_project builds it (full and --floppy), the four disks' versions"
+  "stamped": "d70ec25c",
+  "strings": "248798d5d21fc5a7",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "BEVERLY_MOD": {
   "sources": [],
@@ -188,9 +188,9 @@
  },
  "CATALOG_TXT": {
   "sources": [],
-  "stamped": "9deeee7d",
+  "stamped": "5e4740bb",
   "strings": null,
-  "why": "checked: the Weave disk's CATALOG.TXT says how a user puts their own bundle on a disk (copy it, double-click it) instead of naming the Makefile's BUNDLES="
+  "why": "covers the live volume's STORIES/CATALOG.TXT (tools/getstories.py write_catalog) beside the Weave disk's"
  },
  "CAT_GIF": {
   "sources": [],
@@ -516,9 +516,18 @@
    "firmware/picomem1/README.md",
    "firmware/picomem1/SHA256SUMS"
   ],
-  "stamped": "e4576a70",
+  "stamped": "d70ec25c",
   "strings": "52a90b0aba7759ae",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "why": "a 2.0 is pointed at the PicoMEM 2 firmware now in the tree"
+ },
+ "FW_PICOMEM2": {
+  "sources": [
+   "firmware/picomem2/README.md",
+   "firmware/picomem2/SHA256SUMS"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "29fb8825c8c9bb27",
+  "why": "new page: the PicoMEM 2.0 firmware, its fixes, what it lacks against PM2-10-4-26, flashing"
  },
  "GAMES": {
   "sources": [],
@@ -563,6 +572,14 @@
   "stamped": "98a487a2",
   "strings": "e6fb502f9e95b17d",
   "why": "HDDTOOL.DRV-side change only; nothing the page describes"
+ },
+ "HELLO_O88": {
+  "sources": [
+   "apps/hello"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "c96da6e079e0172e",
+  "why": "first page, written from apps/hello/hello.asm and SPEC.md 27: the window, File's Greeting/About pages, the About card"
  },
  "HELV_F88": {
   "sources": [],
@@ -922,9 +939,17 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "24c3d243",
-  "strings": "538de81c8b536080",
-  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
+  "stamped": "1a37e25e",
+  "strings": "7a12d506e63a5b3b",
+  "why": "077bf46d (14.147) added one user-visible refusal, 'REALDMG: unpack the ROM' for a packed cartridge over 256K; the Good to know list names it. The packed shipped demo now plays on kern_mega, which the page never said it did not. The toast and replay edits below the page's level."
+ },
+ "RECORDER_O88": {
+  "sources": [
+   "apps/recorder"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "231b245f664b1611",
+  "why": "first page, written from apps/recorder/recorder.asm and SPEC.md 35: the buttons, Sound menu, status lines and every message"
  },
  "REDLINE_O88": {
   "sources": [
@@ -964,9 +989,9 @@
   "sources": [
    "apps/runcpm"
   ],
-  "stamped": "e4576a70",
-  "strings": "67bdba87c78bc549",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "87c45da6",
+  "strings": "c7f6d06375d430a5",
+  "why": "files past 64KB open as one huge claim (SPEC 74.3.3): the limits bullet rewritten to the memory rule, the 8MB ceiling and the RAM? message"
  },
  "SALES_SLK": {
   "sources": [],
@@ -1220,9 +1245,9 @@
    "tools/os88vbtgui.py",
    "tools/os88vbt.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "23d8f003319c2003",
-  "why": "written against the builder's README in os88vbtbundle.py, os88vbtgui.py's tabs and Build tab labels, and os88vbt.py's commands"
+  "stamped": "d70ec25c",
+  "strings": "625b853e3ccf1b2e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "TOOL_VENC": {
   "sources": [
@@ -1265,17 +1290,17 @@
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against vbprof.inc (VBPROF1-9.DAT, XMS or conventional record) and SPEC.md 126.8"
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "same About card as VBATTLE.O88, whose page this one defers to for window, menu and keys; the rest of the vbattle diff is kern_mega hold sizing below this page's detail"
  },
  "VBATTLE_O88": {
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against apps/vbattle (window strings, File menu, keys in vbgame.inc/vb_keys, adapter choice in vb_load) and SPEC.md 126; shots taken on the VGA XT"
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "Video Battle gains the standard About card; page gains the Video Battle menu table (About Video Battle, Close)"
  },
  "VESA_DRV": {
   "sources": [

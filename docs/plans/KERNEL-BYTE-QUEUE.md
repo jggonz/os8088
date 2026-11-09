@@ -5,6 +5,14 @@ The byte pass over the merge window (four commits, `-539` sections and a
 verified. This is what it did **not** take, with the arithmetic attached and
 the blockers named, so the next round is work rather than a prompt.
 
+**Status at 2026-11-08 (big review, bytes lens):** item 1's census now reads
+45 shim bodies in `kernel.asm`'s block and 23 zero-byte aliases (21 of them
+`cw_X equ apic_X`) on kern_big, and its inline-word alternative is priced at
+about zero net (big-review bytes-7); item 2 is TAKEN - `hb_probe_x` is a
+`BLOBCALL` into the boot blob; item 3 is superseded (it says so); item 4's
+rung arithmetic is moot under `LADDER_PACK`, which rounds `LOW`'s top and
+`.cold` to the paragraph. Everything below is the tree it was written on.
+
 Numbers are against the tree at the end of that pass:
 
     kern_big    text 50,636   bss 5,959   cold 37,998   lowbss 9,182
@@ -94,7 +102,7 @@ stalls on liveness reads, this is the thing to cost properly.
 
 ---
 
-## 2. `hb_probe_x` → the boot overlay — ~60 `.cold`
+## 2. `hb_probe_x` → the boot overlay — ~60 `.cold` — DONE (in `.boot2`, `BLOBCALL` from `kmain_o`, not `.ovlw`; tests/ovlrefs.txt)
 
 `hb_probe_x` (`kernel/hiber.inc`) is ~60 of hibernate's `.cold` bytes and is
 called **exactly once**, from `kmain`, *between two calls that are already in

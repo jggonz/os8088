@@ -50,7 +50,8 @@ org 0x7C00
 %define KERNEL_SECTORS 16
 %endif
 %ifndef BOOT2_SECS
-%define BOOT2_SECS 2            ; must match kernel/kernel.asm's own constant
+%define BOOT2_SECS 2            ; STALE placeholder: the Makefile always
+                                ; passes kernel/kernel.asm's real value
 %endif
 
 ; --- FLAT_PAYLOAD: the four diagnostics that boot through this sector --------
@@ -304,7 +305,7 @@ entry:
     ; FDC may touch on a track. THE IBM PC AND XT ROMS SAY 8, from the
     ; 8-sector diskettes of DOS 1.x, and a 360KB disk has NINE.
     ;
-    ; Stage 2 has patched this since SPEC.md 18.92 and that was enough for as
+    ; Stage 2 patched this from SPEC.md 18.92 on, and that was enough for as
     ; long as this sector read FOUR sectors: LBA 12 on a 360KB volume is
     ; cylinder 0, head 1, sector 4, so a four-sector run ends at sector 7 and
     ; never meets EOT. SPEC.md 2.9.6 made it THIRTEEN, the first run became
@@ -315,8 +316,9 @@ entry:
     ;
     ; The machine's own table is COPIED and one byte patched: the step rate,
     ; head load/unload, motor timings and gap lengths in it belong to these
-    ; drives and are not ours to guess. Stage 2 still does the same thing to
-    ; the same address, which is now idempotent rather than necessary.
+    ; drives and are not ours to guess. This is the ONLY copy: stage 2 kept a
+    ; second one, idempotent once this ran first, until the big review's
+    ; boot-7 deleted it (SPEC.md 2.9.8).
     xor ax, ax
     mov es, ax                  ; ES = 0 for the vector, and outside the knob
                                 ; below because the reads that follow want it
@@ -376,15 +378,12 @@ entry:
     ; nothing to be left over, the loop ending when [left] does. Three
     ; attempts, with a controller reset between, for read_run's reason.
     ;
-    ; THE PAGE BOUND IS NOT DECORATION. The blob lands just under the top of
-    ; conventional RAM, in [top-8192, top-2560), so a 64KB boundary falls
-    ; inside it whenever int 12h's KB total is 3..8 more than a multiple of 64
-    ; - and the controller answers a straddling transfer with error 09h, which
-    ; through the retry above is "Disk error" and a halt. No machine we support
-    ; reports such a total; the window was two values wide when the blob was
-    ; 2,560 bytes and is six now that SPEC.md 2.9.6 has put the boot overlay in
-    ; it, and twenty bytes of a sector with 132 free is the wrong thing to be
-    ; clever about.
+    ; THE PAGE BOUND IS NOT DECORATION, but it is no longer a run-time fact.
+    ; The blob lands at HEAP_PARA, a build constant (SPEC.md 2.9.5), so
+    ; whether it straddles a 64KB page - which the controller answers with
+    ; error 09h, "Disk error" through the retry above - is fixed per kernel.
+    ; The bound stays because FLAT_PAYLOAD's whole-image read shares this
+    ; loop.
 .next:
     mov ax, [lba]               ; LBA -> CHS
     xor dx, dx

@@ -502,6 +502,9 @@ KNOBS = [
     ("nofddpark",   ["NOFDDPARK=1"]),
     ("mseloff",     ["MSELOFF=1"]),
     ("vgadirty",    ["VGADIRTY=1"]),
+    # BOOT3-PLAN 4.2's runtime fence: tests/b3poison.py boots both
+    ("b3poison",    ["B3POISON=1"]),
+    ("b3poison-small", ["KERN_SMALL=1", "B3POISON=1"]),
     ("dljunk",      ["DLJUNK=0x61"], "boot360.bin"),
 ]
 

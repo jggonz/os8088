@@ -1,0 +1,634 @@
+{
+ "area": "wm",
+ "title": "Window manager and damage/redraw",
+ "summary": "The window manager is the tree's most carefully measured subsystem: synchronous painter's-algorithm repaint with one bounding-box damage rect, a 16-rect clip list and record pointers as the ABI, pushed very far by making every operation repaint only what it provably changed (show/raise reveal nothing, hide/drag repaint a rect, the dither skips ground a window will cover, vacated-rect and shadow-only owing, an opt-in raise cache with explicit promise bits). PERFORMANCE.md Part 5's rows are honoured by the code. The weaknesses are structural: the damage pass still needs a transitive 'redraw everything above a marked window' closure because lower windows are not exactly clipped; two caller-armed one-shot arguments to wm_paint_dmg (npro, stwin) are consumed only on its non-empty path (wm-3); package-supplied window pointers are validated at some doors and not others, and wm_ptr2idx's 8-bit div raises INT 0 on a wild pointer, which on an IBM ROM masks every interrupt (wm-1). Several XT redraw wins (KHP_DMGSTALE/RAISEOL/RELIT/CAPTION) ship only on kern_mega. The source itself is a hazard: 52% comment, much of it per-pass byte history, and about twenty comments or doc passages describe retired designs (the side tables now in the record, wm_fast_ok, 'no do-not-erase flag', bss never zeroed) as current; verification confirmed 28 edits, refuted one, and deferred the duplicated natural-bank banner to wm-14's merge. Nothing needs a big rewrite; the highest-value items are small and ABI-free, and the one big rethink (exact clipping in the damage pass, dropping the closure) is kernel-internal.",
+ "strengths": [
+  {
+   "title": "wm_pkgcall is the one dispatch site for every window callback",
+   "evidence": "kernel/wm.inc:396-505",
+   "why": "Re-entrant (far pointer read from the record), segment-agnostic (W_SEG=0 kernel window via wm_cbd), package authors never write retf; per-callback pen and depth claim banked on the stack so nested paints inherit nothing. The shape to copy for any new callback kind."
+  },
+  {
+   "title": "Per-slot state in the record, zeroed when the slot is TAKEN",
+   "evidence": "kernel/wm.inc:93-127, 1418-1431, %error guards 124-166",
+   "why": "One rep stosb from W_MENUS to the end kills the stale-handler-in-a-reused-slot class by construction; layout invariants are assembler-checked rather than prose."
+  },
+  {
+   "title": "Damage engine exactness tricks",
+   "evidence": "wm_dmg_gray kernel/wm.inc:6242-6375; wm_dmg_stale 4937; wm_dmg_shad 5366-5380/5444-5465; wm_dmg_bands 814-962",
+   "why": "Dither minus every frame (phase-correct because the dither is absolute x+y), vacated-rect test, shadow owed as two lines, per-display bands as clip seeds - each removes a double draw for a few bytes."
+  },
+  {
+   "title": "Derived-not-tracked state and self-healing flags",
+   "evidence": "wm_zoom kernel/wm.inc:2862-2873; wm_timer/wm_tarm 2049-2079",
+   "why": "State that can only be stale in the safe direction (one wasted walk, never a missed timer)."
+  },
+  {
+   "title": "One-shot arguments cleared by the consumer",
+   "evidence": "kernel/wm.inc:5468-5481",
+   "why": "A caller that forgets inherits the safe default (a wasted repaint, never a missed one). wm-3 is the one gap."
+  },
+  {
+   "title": "Recursive-aware lock doors",
+   "evidence": "wm_lk/wm_lk_go kernel/wm.inc:3268-3352",
+   "why": "Makes 'call it with or without the gfx lock' true for show/hide/front/resize and closed FIELD-NOTES 34.1's arrow-in-the-cache class."
+  },
+  {
+   "title": "Preference -> clamp -> floor as one sequence",
+   "evidence": "wm_apply_wh kernel/wm.inc:1948-1982; WM_REFIT 1236-1293; wm_fit floor-last 629-645",
+   "why": "The three sizing voices cannot be composed differently in two places."
+  },
+  {
+   "title": "Raise cache with explicit application promises",
+   "evidence": "WF_SAVEU/WF_1BPP/WF_STALE/WF_OWNBG kernel/wm.inc:172-300; drop-after-occlusion in wm_clip_set 6100-6123",
+   "why": "The application states the fact only it knows; the kernel never guesses, and a covered window keeps the save-under it exists for."
+  }
+ ],
+ "findings": [
+  {
+   "id": "wm-1",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "wm_ptr2idx raises INT 0 on a wild window pointer; its comment says it is bounded",
+   "detail": "wm_ptr2idx does sub ax,wm_wins / div cl (CL=WIN_SIZE). The quotient overflows AL - INT 0 - for any BX below wm_wins or more than 255*WIN_SIZE (18,870 bytes) above it. On a 5150/5160 ROM the INT 0 stub masks the 8259 and IRETs: every interrupt gone (instance.inc:1976, wm.inc:8280-8292 already record this). The clamp comment claims a non-window pointer 'names the LAST window ... wrong and bounded' - true only inside that window. Package-facing paths reach it unvalidated: OSAPI_WM_SHOW/HIDE/FRONT (wm_su_precover, wm_zabove), OSAPI_WM_DESTROY, OSAPI_WM_CLIP_SET -> wm_clip_occl -> wm_zabove, the close request. Only inst_wchk (two slots) and wm_isrec (saveu/noanim/quiet) validate. (Precisely: the 8-bit quotient overflows when BX - wm_wins, taken unsigned, is >= 256*WIN_SIZE - 18,944 bytes on kern_big, 16,640 on kern_small - which includes every BX below wm_wins.)",
+   "evidence": [
+    "kernel/wm.inc:7278-7301 the div and the clamp comment",
+    "kernel/instance.inc:1975-1979 'div cl FAULTS (int 0, no handler installed)'",
+    "kernel/wm.inc:8280-8292 what INT 0 does on an IBM ROM",
+    "kernel/wm.inc:7317-7335 wm_zabove calls it first",
+    "kernel/wm.inc:6380-6388 wm_clip_occl -> wm_zabove (worker-reachable via OSAPI_WM_CLIP_SET)"
+   ],
+   "recommendation": "Bound before dividing: cmp ax, MAX_WIN*WIN_SIZE / jae clamp (+5 bytes, ~+8 clocks), or take wm-2 which removes the divide entirely. Fix the comment either way.",
+   "phase": "now",
+   "bytes_est": "+5 .text resident (or see wm-2)",
+   "verdict": "corrected",
+   "verify_note": "Confirmed: wm_ptr2idx (wm.inc:7278) is sub/div cl with no bound; the kernel installs no INT 0 handler, and wm_title_set's note (8280-8292) records the IBM-ROM mask. OSAPI_WM_DESTROY reaches it twice unvalidated (wm_su_drop -> wm_su_slot, then wm_destroy's own call at 3094); show/hide/front via wm_su_precover/wm_zabove. Correction: the quotient overflows for AX >= 256*WIN_SIZE (18,944 on kern_big, 16,640 on kern_small), not 255*WIN_SIZE; offsets 255*WIN_SIZE..256*WIN_SIZE-1 give AL=255 and are clamped. inst_wchk's own comment has the same off-by-one. Fix cost +5 (cmp ax,imm16 3 + jae 2) is right."
+  },
+  {
+   "id": "wm-2",
+   "kind": "size",
+   "severity": "medium",
+   "title": "Store the slot index in the record so wm_ptr2idx is a load, not a div",
+   "detail": "Every damage pass calls wm_ptr2idx per marked window (wm_dmg_bit) and wm_idx2ptr per window per walk, O(n^2) in the marking's .mbelow loop; div r8 is 80-90 clocks on the 8088, mul r8 ~70. A byte W_IDX at the record's end, outside wm_create's zero run, written once by wm_init (in .boot2/.ovl, free), makes wm_ptr2idx 'mov al,[bx+W_IDX]/cmp al,MAX_WIN/jb/mov al,MAX_WIN-1/cbw/ret' - 11 bytes vs 19, no divide, no INT 0 (a wild BX reads one byte and is clamped). WIN_SIZE is unpublished, so kernel-internal; tools/os88geom.py's mirror moves with it. A 12-word constant table for wm_idx2ptr (+20 bytes, ~-40 clocks a call) is a separate, record-only trade. Correction: .mbelow tests the mask bit before it calls wm_idx2ptr, so the mul is paid per MARKED lower window, not per pair.",
+   "evidence": [
+    "kernel/wm.inc:7278-7301 wm_ptr2idx body (19 bytes)",
+    "kernel/wm.inc:7357-7371 wm_idx2ptr mul",
+    "kernel/wm.inc:4871-4881 wm_dmg_bit",
+    "kernel/wm.inc:5384-5420 .mbelow inner loop with idx2ptr per pair",
+    "tools/os88geom.py:142 WIN_SIZE mirror"
+   ],
+   "recommendation": "Take with wm-1: add W_IDX (WIN_SIZE 74->75 / 65->66), shorten the create-time zero run by one, fill it in wm_init, rewrite wm_ptr2idx as a bounded load.",
+   "phase": "now",
+   "bytes_est": "-8 .text, +12 .bss kern_big (+6 kern_small): net +4 / -2 resident; ~-80 clocks a call",
+   "verdict": "corrected",
+   "verify_note": "Body sizes check: current wm_ptr2idx is 19 bytes, the bounded load 11 (W_IDX < 128 so disp8). Correction to the detail: the .mbelow loop tests the mask bit first and calls wm_idx2ptr only for a MARKED lower window (wm.inc:5394-5402), so it is not a mul per pair; wm_dmg_bit's div runs once per marked window. WIN_SIZE is unpublished; tools/os88geom.py mirrors it (t_mirror)."
+  },
+  {
+   "id": "wm-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "wm_paint_dmg's empty-rect arm leaks every one-shot argument into the next pass",
+   "detail": "wm_dmg_npro is consumed only at .promote and wm_dmg_stwin only in wm_dmg_wins' .wdone; the .chrome arm (taken when the clamped rect is empty) reaches neither. (wm_dmg_dk is safe - the entry's word store at wm_dmg_fs clears it - and wm_su_son is armed inside the pass, not by callers.) Callers arm before calling: wm_hide_b sets npro for a desk window, ui_drag sets npro and stwin (via wm_dmg_vacate), desk.inc:978-986 sets stwin=1 with an EMPTY vacated rect plus npro, deskmod.inc:330 sets npro. If such a rect clamps to nothing (a window wholly off the live screen, e.g. after a display removal), the next unrelated pass inherits them: a leaked npro suppresses the next real promotion (front window left with a grey title bar and no grow box), and a leaked stwin makes wm_dmg_stale answer 'clean' for every window that misses the stale vacated rect - with desk's empty rect, every window - so windows the next damage really reached are not redrawn. PLAUSIBLE: requires an empty clamped rect.",
+   "evidence": [
+    "kernel/wm.inc:5307-5313 .chrome arm returns without consuming",
+    "kernel/wm.inc:5285 npro consumed only at .promote",
+    "kernel/wm.inc:5468-5481 stwin/su_son/dk cleared only in wm_dmg_wins",
+    "kernel/wm.inc:3735 wm_hide_b arms npro",
+    "kernel/ui.inc:2025 ui_drag arms npro",
+    "kernel/desk.inc:980-986 stwin=1 and npro",
+    "kernel/deskmod.inc:330 npro"
+   ],
+   "recommendation": "Clear stwin and npro on the .chrome path too (xor ax,ax / mov [wm_dmg_stwin],ax / mov [wm_dmg_npro],al = 8 bytes, or a shared tail with .wdone), or pass them as a flags argument cleared in one place (see wm-17).",
+   "phase": "now",
+   "bytes_est": "+8 .text resident",
+   "verdict": "corrected",
+   "verify_note": "Confirmed .chrome (empty clamped rect) reaches neither .promote nor wm_dmg_wins' .wdone, so a caller-armed wm_dmg_npro and wm_dmg_stwin survive into the next pass. Corrections: wm_dmg_dk is NOT leaked - wm_paint_dmg's entry `mov word [wm_dmg_fs], 0` clears fs and dk together (wm.inc:5196, %error 5957); wm_su_son is armed inside a pass (wm_su_sub, 9185/10590) and cleared by wm_draw_win (11087), not by callers before the call. And a leaked stwin=1 (desk.inc:978) cannot make wm_dmg_stale read [1+W_X]: desk arms the vacated rect EMPTY (x2 = 8000h), so gfx_rect_hit fails first and the answer is .clean - i.e. EVERY overlapping window is excused from marking in the next unrelated pass (a missed repaint); a leaked ui_drag stwin excuses every window that missed the stale rect. Reachability stays low (all four arming callers pass on-screen rects)."
+  },
+  {
+   "id": "wm-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "wm_ask_size trusts a W_ONSIZE negotiator to keep BX, which no contract says",
+   "detail": "wm_ask_size banks AX, SI, BP around wm_pkgcall; its callers write [bx+W_W] straight after. wm_pkgcall restores only DS/ES, and the general rule is 'a window callback may clobber AX-DI and ES'. Neither SPEC.md 11.1 nor the SDK's OSAPI_WM_ONSIZE prose says a negotiator owes BX or DI. The one shipped negotiator (pt_onsize) happens to preserve everything.",
+   "evidence": [
+    "kernel/wm.inc:2465-2481 wm_ask_size banks AX/SI/BP only",
+    "kernel/ui.inc:2243-2245 mov [bx+W_W],cx right after",
+    "kernel/wm.inc:2934, 2977 wm_zoom uses BX after",
+    "kernel/extmod.inc:713 EXK wm_ask_size",
+    "SPEC.md:26382 'may clobber AX/BX/CX/DX/SI/DI/ES like any window callback'",
+    "apps/os88api.inc:3178-3192 negotiator contract silent on BX",
+    "apps/paint/paint.asm:11758 pt_onsize preserves BX by choice"
+   ],
+   "recommendation": "push bx/pop bx in wm_ask_size, and say in the SDK that a negotiator answers in CX/DX and may clobber what any callback may.",
+   "phase": "now",
+   "bytes_est": "+2 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "wm_ask_size (wm.inc:2465) banks only AX/SI/BP around wm_pkgcall, which restores only DS/ES (and the pen words); its own header promises 'every other register preserved'. ui_grow writes [bx+W_W] right after (ui.inc:2243). Evidence correction: the general clobber rule is at SPEC.md:26382 ('may clobber AX/BX/CX/DX/SI/DI/ES like any window callback') and 18329, not 98747."
+  },
+  {
+   "id": "wm-5",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "wm_snap_ax moves a window at a LEFT dock's band edge onto the strip (kern_big)",
+   "detail": "With a left dock, dkx_band sets vid_band_x0 = DOCK_SW = 32. wm_fit floors x at the band edge then calls wm_snap_win; ui_drag snaps a drop the same way. wm_snap_ax rounds the CONTENT origin down: x=32 -> content 33 -> 32 -> frame x=31, which is the strip's rule column. It only special-cases x<7 (jns .fits). The border then overlaps the live strip, so wm_dock_clear (dock_live_hit) answers dirty and every later show/raise/dock update pays wm_dock_under's window repaint - the cost wm_fit's one-pixel rule exists to avoid on a bottom dock. PLAUSIBLE: argued from geometry, not observed.",
+   "evidence": [
+    "kernel/dock.inc:73 DOCK_SW equ 32",
+    "kernel/dockmod.inc:409-433 dkx_band left: band_x0 = thk",
+    "kernel/wm.inc:648-661 wm_fit floors x0 then wm_snap_win",
+    "kernel/wm.inc:4102-4136 wm_snap_ax rounds down, floor at 0 only",
+    "kernel/ui.inc:1803 ui_drag calls wm_snap_ax",
+    "kernel/wm.inc:3627-3648 wm_dock_clear via dock_live_hit"
+   ],
+   "recommendation": "In wm_snap_ax (DOCK_OPT arm) compare the rounded x with vid_band_x0 instead of 0 and take the next aligned x up when below.",
+   "phase": "now",
+   "bytes_est": "+6 .text kern_big, 0 kern_small",
+   "verdict": "confirmed",
+   "verify_note": "Geometry checks out: dkx_band (dockmod.inc:409-433) sets vid_band_x0 = dock_thk (32) on a left strip whose rect is x 0..31 (SPEC.md 30.5 table); wm_fit floors x at 32 then wm_snap_win; wm_snap_ax rounds the content origin down (33 -> 32 -> frame 31) and only special-cases a negative result; wm_flush_ck suppresses the border only at the display's column 0. wm_zoom's standard rect (x = band_x0) goes through wm_resize's snap the same way, so a zoomed window under a left dock also lands on column 31. Still argued from code, not observed."
+  },
+  {
+   "id": "wm-6",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "wm_resize clamps against the union width and ignores the side-dock band",
+   "detail": "wm_resize_nb clamps width and x against [vid_w] - the virtual desktop width, the union on an extended desktop - and never reads vid_band_x0/xe, while wm_fit and wm_zoom use the band and wm_apply_wh routes multi-display through EXT_APPLY. OSAPI_WM_RESIZE from an app can therefore grow a primary window to straddle the seam, and push a window over a left or right dock strip. PLAUSIBLE: no app shown to do it.",
+   "evidence": [
+    "kernel/wm.inc:2508-2512, 2531-2545 [vid_w] clamps",
+    "kernel/viddet.inc:299-307 vid_w is the virtual desktop",
+    "kernel/wm.inc:583-589 wm_fit uses vid_band_x0/xe",
+    "kernel/wm.inc:2898-2905 wm_zoom uses the band"
+   ],
+   "recommendation": "Clamp with the same band words wm_fit uses on DOCK_OPT, and decide whether the union width is intended on two displays.",
+   "phase": "now",
+   "bytes_est": "+10 .text kern_big",
+   "verdict": "confirmed",
+   "verify_note": "wm_resize_nb (wm.inc:2495-2545) clamps width and x against [vid_w] (the virtual desktop, viddet.inc:305) and never reads vid_band_x0/xe or EXT_FITBOX, unlike wm_fit (584) and wm_zoom (2899). Plausible, not observed."
+  },
+  {
+   "id": "wm-7",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "OSAPI_WM_DESTROY and OSAPI_WM_FULLSCREEN draw without taking the gfx lock",
+   "detail": "SPEC.md 11.101.2 gave show/hide/front/resize the recursive-aware door because an entry proc runs with the lock free and an unheld repaint banks the arrow into a save-under (FIELD-NOTES 34.1). OSAPI_WM_DESTROY repaints through wm_paint_dmg and OSAPI_WM_FULLSCREEN through wm_raise/wm_paint_all with no door; the SDK justifies destroy's requirement 'as OSAPI_WM_HIDE wants it', no longer true. wm_fullscreen also draws a HIDDEN window whole if called before OSAPI_WM_SHOW (no visible test before wm_raise). wm_lk_go cannot carry fullscreen's CF as written (its or al,al clobbers flags).",
+   "evidence": [
+    "kernel/kernel.asm:3228 OSAPI_RSLOT wm_destroy",
+    "kernel/kernel.asm:2724 OSAPI_RSLOT wm_fullscreen",
+    "kernel/wm.inc:3321-3352 the four doors through wm_lk_go",
+    "kernel/wm.inc:4316-4345 fullscreen enter: no visible test before wm_raise",
+    "apps/os88api.inc:307-308 'as OSAPI_WM_HIDE wants it'"
+   ],
+   "recommendation": "Give destroy the wm_lk_go door (+6). For fullscreen add pushf/popf in wm_lk_go (+2) and a door (+6), and refuse or defer the raise for a hidden window (+~5); or keep the contract and fix the SDK text.",
+   "phase": "now",
+   "bytes_est": "+6..+19 .text resident",
+   "verdict": "corrected",
+   "verify_note": "Destroy: the SDK (os88api.inc:304) and kernel.asm:3228 both REQUIRE the lock ('the gfx lock is held'), so a destroy without it is a contract violation, not a kernel hazard - the defect is the stale rationale 'as OSAPI_WM_HIDE wants it' (hide takes it itself since 11.101.2); that text is fixed below. Fullscreen: os88api.inc:892-894 says 'caller holds the gfx lock (window callbacks do)' - also a stated contract. wm_lk_go's `or al,al` would indeed clobber CF. The hidden-window draw is real by reading (wm_fullscreen calls wm_raise with no visible test, wm.inc:4325-4331) but unobserved. Severity lowered to low; the door is a consistency choice, not a fix."
+  },
+  {
+   "id": "wm-8",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_WM_TIMER with AX >= 32768 fires at once",
+   "detail": "wm_timer stores [ticks]+AX; the scan fires when [ticks]-W_TIMER is non-negative (sign test). For AX >= 32768 the difference is positive on the next pass, so a 30-60 minute timer fires within a tick. The SDK contract gives no range.",
+   "evidence": [
+    "kernel/wm.inc:2061-2079 wm_timer",
+    "kernel/ui.inc:805-812 sign-test scan",
+    "apps/os88api.inc:3231-3259 no range stated"
+   ],
+   "recommendation": "Document 'AX <= 32767 ticks (30 minutes)' in the SDK and SPEC.md 13.9, or clamp in wm_timer.",
+   "phase": "now",
+   "bytes_est": "0 (doc) / +6 .text (clamp)",
+   "verdict": "confirmed",
+   "verify_note": "wm_timer stores [ticks]+AX (wm.inc:2049); ui.inc:805-812 fires on a non-negative [ticks]-W_TIMER, so AX >= 32768 fires on the next scan. Neither os88api.inc:3231ff nor SPEC.md 13.9 states a range. Note OSAPI_WM_TIMER's body is inside the KERN_BIG arm."
+  },
+  {
+   "id": "wm-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "wm_su_drop ignores mem_free's refusal and loses the claim",
+   "detail": "wm_su_drop zeroes the slot word then calls mem_free; mem_free_x refuses (CF=1) while a compaction relocation walk is busy. The cache claim is then owned and unreachable. Reachable only if a drop happens inside a relocation proc (a package proc calling OSAPI_WM_CLIP_SET or SAVEU).",
+   "evidence": [
+    "kernel/wm.inc:9866-9888 and word [si],0 before mem_free, CF ignored",
+    "kernel/memory.inc:4446-4453 mem_cp_busy refusal"
+   ],
+   "recommendation": "Clear the slot only on CF=0, or state that relocation procs may not call clip/saveu.",
+   "phase": "now",
+   "bytes_est": "+3 .text resident",
+   "verdict": "corrected",
+   "verify_note": "wm_su_drop zeroes the slot then ignores mem_free's CF (wm.inc:9880-9882); mem_free_x refuses under mem_cp_busy (memory.inc:4446). But SPEC.md 66.3 author rule 3 (line 118315) already forbids a relocation proc to 'claim, free, resize, yield, draw', so the path needs a package to break a binding rule; the 'or state that relocation procs may not call clip/saveu' half is essentially already written. Robustness only."
+  },
+  {
+   "id": "wm-10",
+   "kind": "size",
+   "severity": "low",
+   "title": "wm_lk's gfx_lock_flag test is redundant",
+   "detail": "gfx_unlock stamps gfx_lock_own = 0xFF before dropping the flag, so owner==sch_cur already implies held; wm_lk's 'free' and 'other' outcomes are the same wm_lk_take, so the leading cmp/je pair can go. fpg_arm partitions the states differently and keeps its test, as wm_lk's own comment notes.",
+   "evidence": [
+    "kernel/wm.inc:3268-3307 wm_lk",
+    "kernel/mouse.inc:5381-5386 unlock stamps 0xFF first",
+    "kernel/vga12.inc:310-312 gfx_lock_own 0xFF = nobody",
+    "kernel/fprog.inc:617-621 fpg_arm's different partition"
+   ],
+   "recommendation": "Delete cmp byte [gfx_lock_flag],0 / je wm_lk_take.",
+   "phase": "now",
+   "bytes_est": "-7 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "gfx_unlock ends with `mov word [gfx_lock_flag], 0xFF00` (vga12.inc:5258, owner 0xFF and flag 0 in one store) and gfx_lock writes flag+owner in one word store; the only other writers of the flag (KFZTRACE strip, kern_mega's fault strip) restore it or halt. So owner == sch_cur implies held, and the leading cmp byte [mem],0 / je (5+2 = 7 bytes) is redundant. -7 is right."
+  },
+  {
+   "id": "wm-11",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The XT does not get the redraw knobs built and measured for it",
+   "detail": "KHP_DMGSTALE (+38, drags over hidden windows -12 to -32%), KHP_RAISEOL (+90, CGA raise -5 to -14 ms), KHP_RELIT (+32, fullscreen exit 781->629 ms CGA) and KHP_CAPTION (+34) are kern_mega only, which runs on 286/386 VGA machines where these milliseconds matter least; the measurements are 4.77 MHz XT. Meanwhile wm.inc carries both arms of wm_dmg_stale, wm_raise, wm_draw_win and wm_cov_rect indefinitely.",
+   "evidence": [
+    "kernel/kernel.asm:283-294 KHP defines in the KERN_MEGA block",
+    "docs/plans/khp1/LOG.md:359,376,411-412 measured on the XT",
+    "kernel/wm.inc:4974-5009, 3580-3582, 10875-10950, 9124-9170 dual arms"
+   ],
+   "recommendation": "Decide each for kern_big against its bytes (+194 for all four) and delete the losing arm; a knob not shipped on the target is a second source tree in the hottest file.",
+   "phase": "now",
+   "bytes_est": "+194 resident kern_big if all four (+38/+90/+32/+34)",
+   "listed_as": "LAST-DROP-PERF.md 7.1 rows 2, 4, 5, 7",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:283-294 defines KHP_RELIT/CAPTION/DMGSTALE/RAISEOL under %ifdef KERN_MEGA only; LAST-DROP-PERF.md 7.1 rows 2/4/5/7 carry them (+32/+38/+34/+90) as a pending decision. Already listed, as the reviewer says."
+  },
+  {
+   "id": "wm-12",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Transitive marking redraws windows that were never damaged",
+   "detail": "wm_dmg_wins marks a window that merely overlaps a marked window below it, because the lower one is redrawn WHOLE (unclipped except by the cull) and would paint over it. Vacated-rect and DMGSTALE keep the first link short, but one marked window at the bottom of a cascade still repaints the cascade (Part 5's widget-drop row). The marking loop is O(n^2) over z-order pairs, with a mul and an overlap test per MARKED lower window. Cheap intermediate: clip each marked window's draw to its visible region (the 11.97 chrome clip already does this for the outline, the 11.3.3 cull for W_PAINT) and mark an upper window only when it meets the lower window's VISIBLE region intersected with the damage.",
+   "evidence": [
+    "kernel/wm.inc:5384-5420 .mbelow closure",
+    "kernel/wm.inc:5486-5510 marked windows drawn whole",
+    "PERFORMANCE.md Part 5 widget-drop row ('every ordinary window over its old or new rect redrawn WHOLE')"
+   ],
+   "recommendation": "Count .mbelow hits on MartyPC first (one rebuild), then prototype the visible-region predicate behind a knob. See Rethink R1 in the report.",
+   "phase": "now",
+   "bytes_est": "~+40..+80 .text (predicate), unmeasured",
+   "verdict": "corrected",
+   "verify_note": "The closure is as described (wm.inc:5384-5420: a window is marked when it overlaps any marked window below). Correction: the inner loop tests the mask bit first, so wm_idx2ptr's mul and wm_ovl run only per marked lower window, not 'a mul per inner step'. Byte estimate unmeasured, as stated."
+  },
+  {
+   "id": "wm-13",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "Window-pointer validation is inconsistent across the wm doors",
+   "detail": "wm_saveu/wm_noanim/wm_quiet (wm_isrec), wm_ownseg and two inst_wchk slots validate BX; SHOW/HIDE/FRONT/DESTROY/CLIP_SET/BAND/OWNBG/KEEPH/SNAP/SIZABLE do not, and the inline setter cells (mov [cs:bx+W_ONCLICK],ax/retf) cannot - BX=0 there writes the kernel's first 74 bytes of .text. A policy question: the tree trusts packages but spends bytes validating at some doors.",
+   "evidence": [
+    "kernel/wm.inc:11672-11678 wm_isrec",
+    "kernel/wm.inc:8358-8361 wm_saveu validates",
+    "kernel/wm.inc:8413-8446 wm_band does not",
+    "kernel/wm.inc:1530-1536 inline setter cells",
+    "kernel/instance.inc:1981-2000 inst_wchk"
+   ],
+   "recommendation": "Write the rule into SPEC.md 11: either BX is trusted at every door (remove the inconsistent checks) or one shared validating prologue for the RSLOT doors. wm-1/wm-2 make the shared funnel safe regardless.",
+   "phase": "now",
+   "bytes_est": "-12..+30 .text depending on the rule",
+   "verdict": "confirmed",
+   "verify_note": "wm_isrec (11672, a bound only), wm_saveu/noanim/quiet and inst_wchk validate; wm_band, show/hide/front, destroy, clip_set and the inline setter cells (mov [cs:bx+W_*],ax / retf at wm.inc:1519-2156, kernel.asm:3517/3551) do not. A policy question, correctly framed."
+  },
+  {
+   "id": "wm-14",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "wm_dmg_bands and the natural-bank banner exist twice, with dead inner arms",
+   "detail": "DOCK_OPT == KERN_BIG, so the %ifdef KERN_BIG inside the DOCK_OPT copy has a dead %else and the one inside the non-DOCK_OPT copy a dead %if; the copies differ by the six-line side-band clamp. Two 60-line banners to keep true (both already stale, mismatch 9).",
+   "evidence": [
+    "kernel/wm.inc:813-962 DOCK_OPT copy",
+    "kernel/wm.inc:963-1104 the other copy",
+    "kernel/kernel.asm:1263-1265 DOCK_OPT defined iff KERN_BIG"
+   ],
+   "recommendation": "One body with %ifdef DOCK_OPT around the six lines.",
+   "phase": "now",
+   "bytes_est": "0 (source -~140 lines)",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:1263 defines DOCK_OPT iff KERN_BIG; wm.inc:813-962 and 963-1104 differ only by the side-band clamp (diffed). Merging them also makes the stale natural-bank banner (doc mismatch 11) uniquely editable."
+  },
+  {
+   "id": "wm-15",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "wm.inc narrates its own history and the narration goes stale",
+   "detail": "12,041 lines, 6,235 pure comment; much is per-instruction history ('kernel size pass 15, -2', commented-out stores at 3113-3150). 22 comments/doc passages describe retired designs as current (the pass-4 side tables alone account for eight). The rationale is valuable; the byte ledger belongs in git log and the KSP reports, which already carry it.",
+   "evidence": [
+    "kernel/wm.inc:3113-3150 commented-out clears",
+    "kernel/wm.inc:1545, 2089, 2112, 2139, 2823, 919, 1060 side-table banners",
+    "see doc_mismatches"
+   ],
+   "recommendation": "A comment pass: keep contracts, invariants and why; drop pass ledgers and commented-out code; apply the mismatch fixes.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: commented-out clears at wm.inc:3113-3150 and the side-table banners at 1545/2089/2112/2139/2823 are as described (fixed below)."
+  },
+  {
+   "id": "wm-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The content white fill is still the default double-draw",
+   "detail": "wm_draw_win fills content white before W_PAINT unless WF_OWNBG - the erase-then-draw pattern CLAUDE.md calls canonical. About 29 package directories (assembly and C) name OSAPI_WM_OWNBG / os88_wm_ownbg (grep), out of ~70 under apps/. This is Windows' WM_ERASEBKGND with a default brush; the opt-out is the right shape and the rest is a queue.",
+   "evidence": [
+    "kernel/wm.inc:11017-11030",
+    "grep: 32 asm + 9 C packages call OSAPI_WM_OWNBG / os88_wm_ownbg"
+   ],
+   "recommendation": "Make OWNBG the documented expectation (docs/INDEX.md, porting skills) and keep a ratchet list of non-callers like tests/movable.txt. No kernel change.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "The default fill and the opt-out are as described (wm.inc:11017-11030). The counts could not be reproduced: grep finds WM_OWNBG/wm_ownbg named in about 29 package directories (asm and C together, hosttests excluded) out of ~70 under apps/; treat '32 asm + 9 C' as approximate."
+  },
+  {
+   "id": "wm-17",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "One-shot arguments to the damage pass are globals with many lifetimes",
+   "detail": "wm_dmg_mine cleared by wm_raise, wm_dmg_rzwin by wm_resize_nb, dk/stwin/su_son by wm_dmg_wins, npro by .promote, cullq by wm_dmg_wins's bracket, cvf_on by wm_draw_win. Each was right when written; as a set they are an implicit calling convention a new early-out can break (wm-3).",
+   "evidence": [
+    "kernel/wm.inc:3588",
+    "kernel/wm.inc:2592-2595",
+    "kernel/wm.inc:5468-5481",
+    "kernel/wm.inc:5285",
+    "kernel/wm.inc:5501-5506",
+    "kernel/wm.inc:11083-11087"
+   ],
+   "recommendation": "One flags byte plus the rect words, cleared in ONE place at wm_paint_dmg's exit.",
+   "phase": "now",
+   "bytes_est": "~-10 .text",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked the lifetimes: wm_dmg_mine cleared/armed in wm_raise (3489), wm_dmg_rzwin by wm_resize_nb (2591-2595), dk/stwin/su_son at .wdone (5523-5525), npro at .promote (5285), su_son also by wm_draw_win (11087). Note dk is additionally cleared at entry with wm_dmg_fs."
+  },
+  {
+   "id": "wm-18",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "The clip region is a 16-rect list with no coalescing",
+   "detail": "wm_clip_split replaces a rect with up to four fragments and never merges neighbours; at 16 each caller degrades (clip_set skips the frame, gray dithers all, covered draws anyway). QuickDraw/X11 Y-X banded regions keep above/below strips full width and merge equal bands. Overflow frequency on a 12-window desktop is unmeasured.",
+   "evidence": [
+    "kernel/wm.inc:6740-6798 wm_clip_split",
+    "kernel/wm.inc:6800-6829 wm_clip_add .full",
+    "kernel/wm.inc:6330-6340 gray's .whole degradation"
+   ],
+   "recommendation": "Counter in wm_clip_add's .full (one rebuild) before changing anything.",
+   "phase": "record",
+   "bytes_est": "0 to measure",
+   "prior_art": "Mac QuickDraw regions; X11 Y-X banded regions",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-verified."
+  },
+  {
+   "id": "wm-19",
+   "kind": "size",
+   "severity": "low",
+   "title": "band.inc: 1,634 bytes for a title bar that is slower on VGA (knob only)",
+   "detail": "The composer measured 36.5 vs 40.8 ms (Hercules), 37.1 vs 42.0 (CGA), 38.3 vs 30.3 (VGA) for 1,634 bytes; code read clean (clip, polarity, replay). Since the caption's one-font_run_x path took most of the double-write out of the default bar, its remaining argument is the stripes. No shipped kernel assembles it.",
+   "evidence": [
+    "kernel/band.inc:46-63",
+    "kernel/kernel.asm:875-906 BANDCOMP is a knob"
+   ],
+   "recommendation": "Retire BAND=1 and its buildmatrix row, or keep it explicitly as a reference implementation.",
+   "phase": "record",
+   "bytes_est": "0 shipped",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:904-908: BANDCOMP is defined only under BAND (a knob) on KERN_BIG; no shipped kernel assembles band.inc."
+  },
+  {
+   "id": "wm-20",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "wm_anim yields while holding the gfx lock",
+   "detail": "wm_anim loops task_yield for every frame of the zoom with the caller's lock held; workers block for the whole animation (~WM_ANIM_N x 27.5 ms). Deliberate (the XOR outline must not be overdrawn) but the one place the WM holds the screen across a scheduling point, and SPEC.md 11.99 does not say so.",
+   "evidence": [
+    "kernel/wm.inc:11433-11488",
+    "kernel/wm.inc:3386-3388 called from wm_show_b under the lock"
+   ],
+   "recommendation": "State it in SPEC.md 11.99.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "refuted",
+   "verify_note": "SPEC.md 11.99 already says it: 'The lock is HELD across the wait' and wm_anim's frame wait task_yields (SPEC.md:25441-25445). Nothing to add."
+  },
+  {
+   "id": "wm-R1",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Exact clipping in the damage pass, dropping the painter's-algorithm closure",
+   "detail": "Mac and Windows never redraw an undamaged window above a damaged one: each draws only into visRgn intersect updateRgn, in any order. os8088 is most of the way there (outline clipped 11.97, W_PAINT under the cull 11.3.3, glyph rows 11.3.2 and columns 11.3.4 on kern_big, icons 11.3.5). What still forces the closure is the cull rounding a cell OUTWARD and gfx_blit4/gfx_scroll taking no clip (SPEC.md 11.3's named holes). Kernel-internal, no ABI.",
+   "evidence": [
+    "kernel/wm.inc:6829-6855 cull rounds outward (wm_dw_cull note)",
+    "SPEC.md 11.3 'Two are still holes' gfx_blit4/gfx_scroll",
+    "kernel/wm.inc:5384-5420 the closure"
+   ],
+   "recommendation": "Prototype behind a knob, measured on MartyPC: an inward-rounding cull when the window above will not be redrawn, plus clip support for blit4/scroll; then drop .mbelow.",
+   "phase": "now",
+   "bytes_est": "unmeasured; est. +100..+250 .text/.cold",
+   "prior_art": "Mac QuickDraw BeginUpdate; Windows BeginPaint/update region; GEOS mask regions",
+   "verdict": "confirmed",
+   "verify_note": "The named holes exist (SPEC.md 18993 'Two are still holes'; 11.3.3 is 'the one pass that may round a cell OUTWARD'). A design proposal, unmeasured, as stated."
+  },
+  {
+   "id": "wm-R2",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Deferred invalidation (WM_PAINT / update regions)",
+   "detail": "Every wm operation repaints synchronously. A per-window owed rect accumulated by damage and drained once per UI pass would coalesce sequences that repaint twice today (task-owned close: hide then destroy; several OSAPI_WM_RESIZE in one handler; drop then ONRESIZE relayout). Callers that rely on pixels being on the glass at return (raise-cache take-after-draw) need auditing. OS/2's CS_SYNCPAINT shows how to introduce it opt-in.",
+   "evidence": [
+    "kernel/wm.inc:5128-5145 the empty-rect special case exists for hide-then-destroy",
+    "kernel/wm.inc:5149 wm_paint_dmg is synchronous"
+   ],
+   "recommendation": "Write a plan; default sync, opt-in deferred per window.",
+   "phase": "record",
+   "bytes_est": "+60..+100 resident (est.)",
+   "prior_art": "Windows 3.x InvalidateRect/WM_PAINT; OS/2 PM CS_SYNCPAINT; Mac update events",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-verified."
+  },
+  {
+   "id": "wm-R3",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Window handles instead of record pointers in the ABI",
+   "detail": "Raw record pointers are why validation is inconsistent (wm-13) and why the funnel was dangerous (wm-1). A slot-index handle validated by one cmp at every door ends the class, but packages read W_X..W_H via [es:bx+...] in hundreds of places, so it breaks every package. wm-1/wm-2 get the safety for ~5 bytes without it.",
+   "evidence": [
+    "SPEC.md 11 'The record lives in KERNEL_SEG ... through an es: override'",
+    "kernel/instance.inc:1981-2000 inst_wchk"
+   ],
+   "recommendation": "Record only; if R6 (content coordinates, design B) is ever taken, take this with it.",
+   "phase": "flagday",
+   "bytes_est": "unestimated; every package rebuilt",
+   "listed_as": "pairs with ABI-BREAK-LIST R6 and K17-2/K17-3",
+   "prior_art": "Windows HWND + IsWindow; GEOS optr",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity flag-day record item; not re-verified."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; --- window record, 20 bytes, fixed offsets (SPEC.md 11) ---------------------",
+   "new_text": "; --- window record, WIN_SIZE bytes (74 kern_big, 65 kern_small), fixed offsets",
+   "why": "wm.inc:127 WIN_SIZE equ 74 (KERN_BIG arm), wm.inc:132 WIN_SIZE equ 65 (kern_small)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; bit4 = content-origin snapped (SPEC.md 11.94)",
+   "new_text": "; bit4 = WF_NOSNAP, content origin NOT kept\n                                ; aligned (SPEC.md 11.94; aligned is the default)",
+   "why": "wm.inc:205 WF_NOSNAP equ 16 is an opt-out; wm_snap_want (3905) snaps unless WF_NOSNAP|WF_FULL"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Window record, 26 bytes, fixed offsets:",
+   "new_text": "Window record, `WIN_SIZE` bytes (74 on kern_big, 65 on kern_small), fixed offsets:",
+   "why": "wm.inc:127/132 WIN_SIZE 74/65; the same block's own `WIN_SIZE equ 74` line (SPEC.md:18403) says so"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "is the single dispatch\npoint for all six near pointers.",
+   "new_text": "is the single dispatch\npoint for every callback word in the record.",
+   "why": "wm_pkgcall (wm.inc:396) is reached for W_PAINT, ONKEY, ONCLICK, ONDRAG, ONTIMER, ONSIZE, ONSZ, ONWK, ONCL, ONRC, ABOUT and ONWH (ui.inc:237/579/825/1352/1569, wm.inc:2206/2470) - more than six"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; caller, kmain:4291, and zero outbound: it is four `rep stos` runs over `.bss`",
+   "new_text": "; caller, kmain's OVSCALL, and zero outbound: two `rep stosb` runs and a store over `.bss`",
+   "why": "kernel.asm:5834 is the one call (OVSCALL wm_init); the body (wm.inc:514-536) is rep stosb into wm_owner, rep stosb over wm_zrun..wm_clask, mov [wm_fs],ax"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "                                ; (SPEC.md 66.6.1): .bss is never zeroed at\n                                ; boot and int 19h keeps the LAST kernel's, so\n                                ; a stale [wm_pkgd] past WM_PKGD_MAX pins every\n                                ; region and image for the rest of the session\n                                ; and one below it walks garbage segments\n    mov [wm_fs], ax             ; no fullscreen window (SPEC.md 11.2); .bss\n                                ; is never zeroed at boot, so this is not\n                                ; redundant\n",
+   "new_text": "                                ; (SPEC.md 66.6.1). .bss arrives zeroed (SPEC.md\n                                ; 10 - the image's .text/.cold gap is zero\n                                ; padding), so this is a backstop that costs no\n                                ; resident byte (blob or .ovl): a stale\n                                ; [wm_pkgd] past WM_PKGD_MAX would pin every\n                                ; region and image for the session\n    mov [wm_fs], ax             ; no fullscreen window (SPEC.md 11.2) - the\n                                ; same backstop\n",
+   "why": "SPEC.md 10 (line 18051) and 30.x (68153) say .bss arrives zeroed; kernel.asm:8691 COLD_START sits past KTEXT_SIZE+KBSS_SIZE so the gap is file padding; boot/osrom.asm:861 zeroes it on the ROM build; kernel.asm:5705 and 5896 rely on it"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.\n                                ; Initialized data, NOT .bss: every gfx_fill\n                                ; reads it, including the machine's first,\n                                ; and -f bin zeroes nothing.\n",
+   "new_text": "wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.\n                                ; Initialized data in .text by choice: every\n                                ; gfx_fill reads it, including the machine's\n                                ; first, and .bss would arrive zeroed too\n                                ; (SPEC.md 10).\n",
+   "why": "same evidence as the wm_init fix: .bss arrives zeroed (SPEC.md:18051, kernel.asm:8691); no gfx_fill runs before the image has landed"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; back on. It is .text with a real initialiser because .bss is not zeroed\n; (-f bin), and 1 is the default because the animation is what elendilon\n; shipped.",
+   "new_text": "; back on. It is .text with a real initialiser because its default is 1, not\n; the 0 .bss arrives holding (SPEC.md 10), and 1 is the default because the\n; animation is what elendilon shipped.",
+   "why": "wm.inc:11695 wm_animon db 1; .bss arrives zeroed (SPEC.md:18051)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**initialized data in\n.text, not .bss**, because every `gfx_fill` reads it including the machine's\nfirst and `-f bin` zeroes nothing.",
+   "new_text": "**initialized data in\n.text** - every `gfx_fill` reads it, including the machine's first, and it\nsits beside the other region words (`.bss` would arrive zeroed too, §10).",
+   "why": "SPEC.md 10 (18051) states .bss arrives zeroed; kernel.asm:8691 puts .cold past text+bss so the gap is zero padding"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; A SIDE TABLE, not a word in the record: WIN_SIZE is what wm_idx2ptr\n; multiplies by and every reader of a window pays for a wider record, and\n; wm_about (SPEC.md 12.2) is the precedent for a per-slot HANDLER living\n; beside the table rather than in it. It also costs no .o88 a rebuild, which a\n; record that grew would.\n",
+   "new_text": "; W_ONSZ, a word IN the record (W_SIDE+0), zeroed by wm_create's run when the\n; slot is taken, so a reused slot inherits no stranger's handler.\n",
+   "why": "wm.inc:112 W_ONSZ equ W_SIDE+0; the cell is `mov [cs:bx+W_ONSZ], ax / retf` (1552); wm_create zeroes W_MENUS..WIN_SIZE (1420)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_onresize's shape exactly and for its reason: a SIDE TABLE, not a word in\n; the record, because WIN_SIZE is the stride every reader of a window pays and\n; growing it costs every existing .o88 a rebuild. Cleared by wm_destroy, so a\n; reused slot never inherits a stranger's near pointer.\n",
+   "new_text": "; wm_onresize's shape: W_ONWK, a word in the record, zeroed by wm_create's run\n; when the slot is taken, so a reused slot never inherits a stranger's near\n; pointer.\n",
+   "why": "wm.inc:113 W_ONWK equ W_SIDE+2; zero run wm.inc:1420; wm_destroy's clears are commented out (3113-3150)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_wkh_slot's `div` writes them. Every associated app installs one now",
+   "new_text": "; wm_wkh_slot's `div` used to write them. Every associated app installs one now",
+   "why": "wm_wkh_slot is gone (wm.inc:2329-2335 says so); the inline cell writes no flag (2104)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_onwake's shape and reason - a SIDE TABLE, not a word in the record,\n; because WIN_SIZE is the stride every reader of a window pays. Cleared by\n; wm_destroy, so a reused slot never inherits a stranger's near pointer, and\n; by wm_init, because unlike every other side table here this one is read for\n; a window that never installed anything.\n",
+   "new_text": "; wm_onwake's shape: W_ONCL, a word in the record, zeroed by wm_create's run\n; when the slot is taken - which matters more here than for most handlers,\n; because this word is read for a window that never installed anything.\n",
+   "why": "wm.inc:114 W_ONCL equ W_SIDE+4; 2126-2131 '(wm_clh_slot is gone: the negotiator is W_ONCL, in the record)'"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_onwake's shape and reason - a SIDE TABLE, not a word in the record,\n; because WIN_SIZE is the stride every reader of a window pays and growing it\n; costs every existing .o88 a rebuild. Cleared by wm_destroy, so a reused slot\n; never inherits a stranger's near pointer, and by wm_init, because like\n; wm_oncl this word is read for a window that never installed anything.\n;\n; It is in kern_small too: a side table is 24 bytes of .bss and the dispatch\n; is a word read on a path that today does nothing at all for a package\n; window - the record-growing that made SPEC.md 13.8.2 and 13.9 kern_big's\n; alone is exactly what this does not do.\n;\n; The FLAGS are preserved as well, which wm_onwake does not promise and\n; wm_onclose does: this is installed from an entry proc, where the CF a\n; package owes the loader is still riding in them (SPEC.md 21), and\n; wm_ptr2idx's div writes them.\n",
+   "new_text": "; wm_onwake's shape: W_ONRC, a word in the record on both kernels, zeroed by\n; wm_create's run when the slot is taken - and, like W_ONCL, read for a\n; window that never installed anything.\n;\n; The FLAGS are preserved as well: this is installed from an entry proc, where\n; the CF a package owes the loader is still riding in them (SPEC.md 21), and\n; the inline cell below writes none.\n",
+   "why": "wm.inc:115 W_ONRC equ W_SIDE+6 (inside kern_small's 65-byte record too); 2174 '(wm_rch_slot is gone: the handler is W_ONRC, in the record)'"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; One entry per window SLOT, a side table rather than four more words in the\n; record, because WIN_SIZE is what wm_idx2ptr multiplies by and every reader\n; of a window pays for a wider record whether it zooms or not.\n;\n; ZR_W = 0 is \"nothing banked\", and it is a safe sentinel because a banked\n; width is a live window's, which WMIN_W floors at 96. .bss arrives zeroed\n; (the overlay note in kernel.asm), so a slot starts empty; wm_destroy clears\n; it again, or a reused slot would restore to a stranger's rect.\n",
+   "new_text": "; Eight bytes in the record, W_ZOOMR (the ZR_* offsets below).\n;\n; ZR_W = 0 is \"nothing banked\", and it is a safe sentinel because a banked\n; width is a live window's, which WMIN_W floors at 96. wm_create's zero run\n; empties it when the slot is taken, so a reused slot never restores to a\n; stranger's rect.\n",
+   "why": "wm.inc:119 W_ZOOMR equ W_SIDE+16; 3064 '(gone: the bank is W_ZOOMR, in the record)'; wm_destroy's zoomr clear is commented out (3140)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "                                ; (no size-changed handler either: W_ONSZ\n                                ; was in the zero run. Formerly:)\n                                ; lines up AX is 0 only for a KERNEL window and\n                                ; is the PACKAGE's own segment otherwise, so\n                                ; passing it through would install a handler at\n                                ; whatever offset that segment number happens to\n                                ; be - a near call into the middle of the\n                                ; package's image on the first adapter change.\n                                ; Cleared here and not only in wm_destroy where\n                                ; its siblings are: destroy covers a slot that\n                                ; has been USED, and this covers the first\n                                ; window in a slot that never has\n",
+   "new_text": "                                ; (no size-changed handler either: W_ONSZ\n                                ; is in the zero run above)\n",
+   "why": "wm.inc:1420 zero run covers W_MENUS..WIN_SIZE, W_ONSZ = W_SIDE+0 inside it; the remaining lines are a fragment of a retired install with no code behind them"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; wm_destroy - free a window record and repaint everything\n",
+   "new_text": "; wm_destroy - free a window record and repaint what it vacated\n",
+   "why": "wm_destroy ends in wm_paint_dmg over the banked rect (wm.inc:3151-3157), an empty rect for an already hidden window"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; it, decrementing wm_zn), then repaints all. The record slot becomes\n",
+   "new_text": "; it, decrementing wm_zn), then wm_paint_dmg over the rect it vacated\n; (SPEC.md 11.91). The record slot becomes\n",
+   "why": "wm.inc:3151-3157 pops the banked rect and calls wm_paint_dmg; no wm_paint_all"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; visible bit was already set. wm_front on its own still does the full pass,\n; because a raise there is reached from a click that may also have to\n; UNCOVER something, and that is genuinely unknown.\n",
+   "new_text": "; visible bit was already set. wm_front asks wm_obscured first and draws\n; only the title bar, or only what was covered (AL = 2, SPEC.md 11.96.10);\n; it takes the full pass only for a window that is not visible.\n",
+   "why": "wm_front_b (wm.inc:4385-4433): wm_obscured -> AL 0/2 -> wm_raise; .slow (wm_paint_all) only when bit 1 (visible) is clear"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": ";      Caller holds the gfx lock and has already passed wm_fast_ok.\n",
+   "new_text": ";      Caller holds the gfx lock.\n",
+   "why": "no wm_fast_ok exists; grep finds it only in 'used to' notes at wm.inc:4333, 5540, 7712"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": ";      from a record-aligned input - see the comment on the `xor ah, ah` below,\n",
+   "new_text": ";      from a record-aligned input - see the comment on the `div` below,\n",
+   "why": "there is no xor ah,ah in wm_ptr2idx; the history comment sits on `div cl` (7283) and AH is cleared by `cbw` (7299)"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "    mov al, MAX_WIN - 1         ; off it: wm_su_segs, wm_su_ext, the size\n.ok:                            ; preferences. A pointer that is not a window\n    cbw                         ; then names the LAST window rather than a byte\n    pop cx                      ; of .text, which is wrong and bounded instead\n    ret                         ; of wrong and unbounded. (cbw: AL < MAX_WIN\n                                ; here, so AH = 0 - kernel size pass 17, -1)\n",
+   "new_text": "    mov al, MAX_WIN - 1         ; off it: wm_su_segs, wm_owner, the mask bits.\n.ok:                            ; A pointer that is not a window then names\n    cbw                         ; the LAST window rather than a byte of .text -\n    pop cx                      ; but only for an offset under 256*WIN_SIZE\n    ret                         ; past wm_wins: below the table, or past that,\n                                ; the `div` above raises INT 0 first (what that\n                                ; does on an IBM ROM: the note in wm_title_set).\n                                ; (cbw: AL < MAX_WIN here, so AH = 0 - kernel\n                                ; size pass 17, -1)\n",
+   "why": "W_SUEXT (wm.inc:122) and W_PREF (117) are in the record; wm_su_slot (9816) and wm_destroy's wm_owner (3105) still index off it; `div cl` (7283) overflows AL for AX >= 256*WIN_SIZE incl. any BX below wm_wins"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; lock is held, as OSAPI_WM_HIDE wants it. Frees",
+   "new_text": "; lock is HELD - unlike OSAPI_WM_HIDE, which takes\n                                 ; it itself, this cell does not. Frees",
+   "why": "kernel.asm:3228 OSAPI_RSLOT wm_destroy has no wm_lk door; wm_hide goes through wm_lk_go (wm.inc:3321-3324, SPEC.md 11.101.2)"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";         is held, exactly as OSAPI_WM_HIDE\n                                  ;         wants it.",
+   "new_text": ";         is HELD - unlike OSAPI_WM_HIDE,\n                                  ;         which takes it itself.",
+   "why": "same: wm_destroy is reached directly, wm_hide through wm_lk_go (wm.inc:3321-3324)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "3. **Clipping is for background tasks only.** `wm_paint_all` draws visible\n   windows back to front, so the painter's algorithm resolves overlap for\n   free and the repaint path must stay unclipped.",
+   "new_text": "3. **Clipping is for background tasks; the repaint path clips only inside its\n   own brackets** - §11.3.3's cull around `W_PAINT` and §11.97's chrome clip,\n   each armed and disarmed by the pass itself. `wm_paint_all` draws visible\n   windows back to front, so the painter's algorithm resolves overlap for\n   free and no painter's region may reach it.",
+   "why": "wm_draw_win arms the 11.3.3 cull around W_PAINT (wm.inc:11036-11043) and wm_chrome_clip (11.97) is armed at 10899 and from wm_dmg_wins (5472)"
+  },
+  {
+   "file": "REDRAW-SPEC.md",
+   "old_text": "   unconditional, for every window, and there is no \"do not erase me\" flag.\n   By the time the app is asked to paint, its pixels are already gone. This\n   is still true — Part 1 did not change it.",
+   "new_text": "   unconditional, for every window, and there was no \"do not erase me\" flag.\n   By the time the app was asked to paint, its pixels were already gone.\n   Part 1 did not change it; SPEC.md §11.90.1's `WF_OWNBG` has since made the\n   fill opt-out, and §11.90.2's `OSAPI_WM_DAMAGE` tells such a window which\n   rect it owes.",
+   "why": "wm_draw_win skips the fill for WF_OWNBG (wm.inc:11017-11030); OSAPI_WM_OWNBG/OSAPI_WM_DAMAGE are SPEC.md 11.90.1/11.90.2 (19754, 19792)"
+  },
+  {
+   "file": "REDRAW-SPEC.md",
+   "old_text": "**the repaint path is still\nunclipped** — SPEC.md §11.3 rule 3.",
+   "new_text": "**the repaint path is still\nunclipped** outside its own two brackets — SPEC.md §11.3 rule 3 (§11.3.3's\ncull, §11.97's chrome clip).",
+   "why": "the damage/repaint pass arms the 11.3.3 cull (wm.inc:11036-11043) and the 11.97 chrome clip (10899, 5472)"
+  },
+  {
+   "file": "REDRAW-SPEC.md",
+   "old_text": "1's point 1, still true, no opt-out flag,",
+   "new_text": "1's point 1, true when this was measured (SPEC.md §11.90.1's `WF_OWNBG` is\nthe opt-out since),",
+   "why": "WF_OWNBG skips the fill (wm.inc:11017-11030), SPEC.md 11.90.1"
+  }
+ ]
+}

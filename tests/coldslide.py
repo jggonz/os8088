@@ -11,9 +11,15 @@ at boot and the heap floor falls by it. Two boots of the shipped 360KB disks:
      * the bytes at the new home are kernel.bin's `.cold`, every one - the
        copy is the whole of the move, so a short or misaligned one is a
        kernel that runs garbage;
-     * every `.text` word the kernel's own list (`.cfx`) holds names the new
-       segment - read out of the guest, against the two-assembly diff
-       tools/os88rom.py takes, not against the list itself;
+     * every `.text` word the kernel's own list (cfx_tab, in `.boot3`) holds
+       names the new segment - read out of the guest, against the
+       two-assembly diff tools/os88rom.py takes, not against the list itself.
+       The list's fourth group, `.boot3`'s own `call COLD_SEG:` words (11
+       since BOOT3-PLAN wave 1 moved hb_probe_x, as_boot and font_init
+       there, 22 since wave 2 moved drv_boot_x's cone), is read at a STOP: the section is the heap's by the time the
+       desktop is up, so a first boot breaks on spl_finish - in the blob,
+       after the slide at MARK 10 and before mem_unblob_x - and reads them
+       there, every one, against the slid segment;
      * [mem_base] = MONO_FLOOR, and the Task Manager's kernel row
        ([vga_skkern]) has both rungs off it;
      * the Control Panel opens, and CTRL.DRV - loaded AFTER the slide - has
@@ -33,6 +39,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import os88layout  # noqa: E402
+import os88marty   # noqa: E402
 import os88rom     # noqa: E402
 import os88sym     # noqa: E402
 import os88ui      # noqa: E402
@@ -81,8 +88,31 @@ def main():
     cold = coldimage()
     kbase = EQ["KERNEL_SEG"] << 4
     want(vpara > 0 and tsites and csites,
-         "the rung is %d paragraphs; %d `.text` words and %d in CTRL.DRV name "
-         "`.cold`" % (vpara, len(tsites), len(csites)))
+         "the rung is %d paragraphs; %d `.text` words, %d in `.boot3` and %d "
+         "in CTRL.DRV name `.cold`" % (vpara, len(tsites),
+                                       len(t["lists"]["b3"]), len(csites)))
+
+    print("A0: Hercules, stopped at spl_finish - `.boot3`'s own words")
+    b3, b3seg = t["lists"]["b3"], t["b3seg"]
+    want(len(b3) > 0, "`.boot3` holds %d `call COLD_SEG:` words at %04X"
+         % (len(b3), b3seg))
+    stop = (EQ["BLOB_SEG_AT"] << 4) + os88sym.syms()["spl_finish"]
+    with os88marty.launch(SYS, apps=APPS, machine=HERC, boot=False) as m:
+        m.bp_exec(stop)
+        m.run()
+        st = m.wait_stop(limit=180)
+        want(st == "breakpoint", "the boot stopped at spl_finish (%05X): %s"
+             % (stop, st))
+        if st == "breakpoint":
+            cs = u16(m.read(S("api_coldseg"), 2))
+            want(cs == slid, "[api_coldseg] = %04X there: the slide has run"
+                 % cs)
+            bw = [u16(m.readseg(b3seg, o, 2)) for o in b3]
+            want(bw and all(w == slid for w in bw),
+                 "all %d `.boot3` words say %04X (%d do not) - cfx_slide's "
+                 "fourth group" % (len(bw), slid,
+                                   sum(1 for w in bw if w != slid)))
+        m.bp_exec()
 
     print("A: Hercules, no VGA and no EGA")
     with os88ui.boot(SYS, apps=APPS, machine=HERC, label="coldslide") as ui:

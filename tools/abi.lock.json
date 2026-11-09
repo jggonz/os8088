@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9897275d1de41377ab98e82419e1204a163a6d1b14adc80ccb19a8387bead69f",
+  "fingerprint": "2b81e577ee229534d3d5272b0ea0f1bbe0f58c5702033444ec41dd161085d321",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "0970b202fca06bf2ed9667ff3c51121bce57e8bd16eaed6af18b931798dd2311",
+  "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1792,6 +1792,181 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "TOAST_MAX and the TOASTSTR/TOASTRUN/TOASTEND macros (SPEC.md 59.10.1): assembly-time macros and a constant, no cell moved or re-contracted - everything built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "KERN-MEGA-PLAN 14.160: the KB DMA doors' contract says where an OS88_HIGHMEM package's head claim lands on kern_mega (a page-safe pool block), and OSAPI_MEM_P's that a head stays conventional - no cell moved, every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "63343e9acc62891e2a76d91d15f56aba3b292086003ca4a6130322ce376c5b34",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "KERN-MEGA-PLAN 14.160: the KB DMA doors' contract says where an OS88_HIGHMEM package's head claim lands on kern_mega (a page-safe pool block), and OSAPI_MEM_P's that a head stays conventional - no cell moved, every package built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "BLKCAP_SEL (DSV_CAPS bit 4 for DRVC_DISK, SPEC.md 51.8.1): an addition - a driver that leaves it clear is bounced exactly as before, and no cell moved; no bump (KERN-MEGA-PLAN 14.167)",
+   "to": 12
+  },
+  {
+   "fingerprint": "d5a7ccaff103edfdd72c6bfad1bd26adac4c72c719f138cfec571dc2a5c68ca7",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "77fa8fa412d1dea757104900e271e1b4ebf1faf777727198fce13c1db8198af3",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "25553679c9728a4bbaf4bc8e34d1b258fb303bbc7c71145ce5230dfaeb2db45b",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX = 2, bit 1) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the cut's rules in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
+   "to": 10
+  },
+  {
+   "fingerprint": "0904a6ee6a78253a98e9494bda497b7b686f5efbfdf023b0161d0c8f6ac89024",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX = 2, bit 1) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the cut's rules in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
+   "to": 12
+  },
+  {
+   "fingerprint": "b89d4ba965edc87688bc5e965ee07429382c9542d9a2f7fef309251f30c16041",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.174): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "b1d48f7a750aa67e4aa18dcd681357cef392ee4318b5b461ae7324aaaa45b562",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.174): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "b17dfe3075902ee596997aa22421a316ed306324db1f1e5543fbc30d65101bd8",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of mega-fsxpar (KERN-MEGA-PLAN 14.178): OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE on top of F8's regrow - an addition, every older verb as it was, real-mode kernels refuse it as an unknown verb; no PKG_FMT or DRV_VER bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "21ca0722f0583976b9c5107db252d61c76c5b108f682ffb577a66077f26c121b",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of mega-fsxpar (KERN-MEGA-PLAN 14.178): OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE on top of F8's regrow - an addition, every older verb as it was, real-mode kernels refuse it as an unknown verb; no PKG_FMT or DRV_VER bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "384bdaff9353a174d8a2d1f2d70e78504b915d419293c1c62b11339416646eed",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
+   "to": 10
+  },
+  {
+   "fingerprint": "1de7b23ac1205c3f46ac3c96b633f2773c7022d61acce1d4b81b50b984528e8b",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
+   "to": 12
+  },
+  {
+   "fingerprint": "2ccd68403e71e26080195ac024d08343cb3c88398727562c3b11a7f74f002f51",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of mega-release (14.179's abi note kept) with FSXF_PREP (OSAPI_FSX_RUN CX bit 4, SPEC.md 53.2.3.1): a flag added, every kernel before it refuses the bit - PKG_FMT kept",
+   "to": 10
+  },
+  {
+   "fingerprint": "3c15f5f68255cec0f0c0908499be5bbb059098b89ee9bcb3fd1f3cc36a1e08dd",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of mega-release (14.179's abi note kept) with FSXF_PREP (OSAPI_FSX_RUN CX bit 4, SPEC.md 53.2.3.1): a flag added, every kernel before it refuses the bit - PKG_FMT kept",
+   "to": 12
+  },
+  {
+   "fingerprint": "1f5a4843b2874631347f27e6e4dcf96f9a46045233ff1383e0f21489054793fe",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "d84fa47996327791a588948499c4f0698466167ce3f733c9c378a3ce06aea947",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "87516c5c225e834a9aaf557016aac3a677c65df86636586148794771ea980f95",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon (READ_SEQ caller flags, run and map, SPEC.md 18.4.8.3) into mega-release (OSAPI_MEM_HUGE asks, SEG_LOW, XMEM_COPY WHERE, FSXF_PREP): both additions, nothing built before stops running - no PKG_FMT or DRV_VER bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "b73f0151622a64563f2d77ed06e8f030539c1b6a5bd71279010752b721c5c57d",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of elendilon (READ_SEQ caller flags, run and map, SPEC.md 18.4.8.3) into mega-release (OSAPI_MEM_HUGE asks, SEG_LOW, XMEM_COPY WHERE, FSXF_PREP): both additions, nothing built before stops running - no PKG_FMT or DRV_VER bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "1f1fd60b3543677d42c972a5ee1984ade5e006d17e56f62bc33431865884c872",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "big review 2026-11-08: contract COMMENTS corrected to match the code (worker register state, clipboard context, pen state after font_run/gfx_blit4, slot cross-references); no cell moved or re-contracted, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "2f0c55b8ccad8075c68853729b7707c0077cc55d61fc156affdc8b88c3c9f85c",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "big review 2026-11-08: contract COMMENTS corrected to match the code (worker register state, clipboard context, pen state after font_run/gfx_blit4, slot cross-references); no cell moved or re-contracted, so no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "f11a45b52a9cbd5f4717109f78ebf403b557f6adabef044ca7a97638de11abf9",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "big review 2026-11-08 round 2: contract COMMENTS corrected to match the code (gap reviews and coherence pass); no cell moved or re-contracted, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "8ee8ec9d82a343ecaee04fe6089eb2f4da70f7b025cafb2f8b566be86d42cf46",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "big review 2026-11-08 round 2: contract COMMENTS corrected to match the code (gap reviews and coherence pass); no cell moved or re-contracted, so no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon (kern_mega MEGA-HUGE/14.17x-14.187) into the-big-review: both sides' SDK changes combined - elendilon's additions and clarifications and the big review's comment corrections; no cell moved or re-contracted, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "2b81e577ee229534d3d5272b0ea0f1bbe0f58c5702033444ec41dd161085d321",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of elendilon (kern_mega MEGA-HUGE/14.17x-14.187) into the-big-review: both sides' SDK changes combined - elendilon's additions and clarifications and the big review's comment corrections; no cell moved or re-contracted, so no bump",
    "to": 12
   }
  ]

@@ -202,13 +202,31 @@ def session(arm, cap, brk):
     # ...and the wavetable's, `make mrwttest`'s apps disk: the synthetic bank
     # beside the package
     apps = "build/mrwt720.img" if arm == "wt" else APPS
+    bank = "build/mrsynth/MIDIRACK.BNK"
+    if arm == "wt" and BIGBANK:
+        # --bigbank: the padded synthetic bank (SPEC.md 105.10.2) - BIGBANK
+        # KB of silent samples first, so every sample a voice plays lies past
+        # the bank's first 64KB - on a 720KB disk of its own
+        d = os.path.dirname(cap)
+        bank = os.path.join(d, "MIDIRACK.BNK")
+        subprocess.run(["python3", "tools/os88midbank.py", "synth", "-o", bank,
+                        "--pad", str(BIGBANK)], check=True,
+                       stdout=subprocess.DEVNULL)
+        if not os.environ.get("OS88_MEGA"):    # (kern_mega's is below)
+            apps = os.path.join(d, "apps.img")
+            subprocess.run(["python3", "tools/os88disk.py", "-o", apps,
+                            "--size", "720", "APPS:build/midirack.o88",
+                            "APPS:" + bank, "MEDIA/MIDI:" + SONG,
+                            "MEDIA/MIDI:" + INTRO, "--folder",
+                            "SYSTEM/APPDATA"], check=True,
+                           stdout=subprocess.DEVNULL)
     if os.environ.get("OS88_MEGA") and arm in ("sb", "wt", "end"):
         # kern_mega (tests/megaport.txt): MIDIRack's ARM, which megaapps.img
         # carries - but beside MEDIA\MIDI's whole library, where the row
         # wants the 720KB disk's two songs. So the shape mrwt720.img has,
         # with the arm in it (and the bank for wt)
         apps = os.path.join(os.path.dirname(cap), "apps.img")
-        bank = (["APPS:build/mrsynth/MIDIRACK.BNK"] if arm == "wt" else [])
+        bank = (["APPS:" + bank] if arm == "wt" else [])
         subprocess.run(["python3", "tools/os88disk.py", "-o", apps,
                         "--size", "720", "APPS:build/megak/apps/midirack.o88"]
                        + bank + ["MEDIA/MIDI:" + SONG, "MEDIA/MIDI:" + INTRO,
@@ -594,6 +612,21 @@ def arm_wt(ui, p):
         fail("wt: no mix claim")
     print("PASS wt: the bank in a claim at %04X, %d voices" %
           (p.w("mwt_bseg"), p.b("mrv_n")), flush=True)
+    if BIGBANK:
+        kb = p.w("mr_bankkb")
+        print("     the bank is %d KB, its played samples past its first "
+              "64KB" % kb, flush=True)
+        if kb < BIGBANK:
+            fail("wt: the bank read is %d KB, not the padded one" % kb)
+        if os.environ.get("OS88_MEGA"):
+            lin = ui.m.lin(p.w("mwt_bseg"))
+            if lin < 0x100000:
+                fail("wt: the %d KB bank is CONVENTIONAL memory, at %06Xh "
+                     "(SPEC.md 105.10.2: the arm's huge claim is above 1MB)"
+                     % (kb, lin))
+            else:
+                print("PASS wt: the bank ABOVE 1MB, at %06Xh" % lin,
+                      flush=True)
     return tail
 
 
@@ -907,18 +940,23 @@ def arm_mpu(ui, p, brk):
 
 RATES = [0, 8000, 11025, 16000, 22050, 32000, 44100]   # mr_rates (mrout.inc)
 RATE = 0
+BIGBANK = 0                     # --bigbank KB: the wt arm's padded bank
 
 
 def main():
-    global RATE
+    global RATE, BIGBANK
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=sorted(ARMS))
     ap.add_argument("--rate", type=int, default=0,
                     help="Settings' rate, an index into mr_rates (sb arm)")
     ap.add_argument("--break", dest="brk", action="store_true",
                     help="transpose the reference a tritone: must FAIL")
+    ap.add_argument("--bigbank", type=int, default=0, metavar="KB",
+                    help="wt: a synthetic bank padded by KB of silence first "
+                    "(SPEC.md 105.10.2)")
     a = ap.parse_args()
     RATE = a.rate
+    BIGBANK = a.bigbank
     machine, src = ARMS[a.arm]
     with tempfile.TemporaryDirectory() as d:
         cap = os.path.join(d, "cap")

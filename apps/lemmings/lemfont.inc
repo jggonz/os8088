@@ -228,7 +228,8 @@ _lem_f_cell:
     shl ax, cl                      ; plane * LEM_FPLANE (16)
     add si, ax
     mov ax, [bp+4]
-    mov ds, ax
+    push ds                         ; (ours again after: never CS's, which is
+    mov ds, ax                      ;   read-only on kern_mega)
     mov di, [bp-8]
     mov cx, 16
 .vcopy:
@@ -237,7 +238,6 @@ _lem_f_cell:
     inc si
     add di, LEM_VSTRIDE
     loop .vcopy
-    push cs
     pop ds
     jmp .vnext
 .vzero:

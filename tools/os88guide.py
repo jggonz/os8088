@@ -68,6 +68,7 @@ SECTORS = {2880: "1440", 2400: "1200", 1440: "720", 720: "360"}
 # is the disks most people need; "own" is a disk that ships one program of
 # its own, or a set that repeats programs already on the main disks.
 SECTION = {"start": "main", "xt": "main", "x720": "main", "small": "main",
+           "mega": "main",
            "emu": "main", "live": "main", "all": "own", "progs": "own"}
 # Every section but "main" is one expandable item at the end of the disk row:
 # (its title, the line under it). The count of disks is the page's to add.
@@ -174,6 +175,16 @@ FIRMWARE = [
          "SHA256SUMS": "Checksums, to confirm the download is intact.",
          "COPYING": "The firmware's licence (GPL version 2).",
          "v1board.patch": "The one change made to the firmware's source.",
+     }},
+    {"id": "fw-picomem2", "title": "PicoMEM 2 firmware",
+     "summary": "Firmware for the PicoMEM 2.0 card that keeps its Sound "
+                "Blaster playing through disk reads under os8088.",
+     "dir": "firmware/picomem2",
+     "notes": {
+         "PM2_11_8_26_OS8088.uf2": "The firmware. Copy it onto the card in its BOOT mode.",
+         "README.md": "What the firmware fixes, what it lacks against the October release, and how to install it.",
+         "SHA256SUMS": "Checksums, to confirm the download is intact.",
+         "COPYING": "The firmware's licence (GPL version 2).",
      }},
 ]
 
@@ -604,7 +615,7 @@ TEXTS = None
 ENTRIES = {}
 PREVIEWS = []           # tools/guide/videos/previews.json, as a list
 PREVIEW_IDX = {}        # source SHA-256 -> index into PREVIEWS
-PREVIEW_BY_NAME = {}    # "cga/03-cga4" -> its PREVIEWS record, for a manual's video:
+PREVIEW_BY_NAME = {}    # "cga/04-miku" -> its PREVIEWS record, for a manual's video:
 
 
 def load_previews():

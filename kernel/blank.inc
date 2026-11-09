@@ -118,7 +118,7 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; -----------------------------------------------------------------------------
 ; State. In .text with real initialisers rather than in .bss, and here that is
 ; not the usual caution - .bss does arrive zeroed (kernel.asm: the image's gap
-; to COLD_START is emitted as zeros and stage 2's one contiguous read
+; to OVL_START, COLD_START on NO_ROM_COLD, is emitted as zeros and the load
 ; lands them), and it costs the same image bytes either way, because the rung
 ; KIMG_PARA rounds covers .text and .bss together.
 ;
@@ -135,7 +135,9 @@ blk_t0      dw 0                ; [ticks] when the current idle period began
 blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 
 ; -----------------------------------------------------------------------------
-; The settings (SPEC.md 79.4), and they are in EVERY BUILD.
+; The settings (SPEC.md 79.4). THEY ARE kern_big's ALONE NOW: the next two
+; paragraphs are the argument that once carried them on kern_small too, and
+; the note after them is why it no longer does.
 ;
 ; kern_small has no animation - SAVER.DRV is inside %ifdef KERN_BIG here and
 ; drv_load_at, its only loader, is inside one in driver.inc - but it reads and
@@ -602,7 +604,7 @@ section .cold
 ; this file that can multiply at all. SS_MAXMIN is what a word of ticks holds.
 ;
 ; kern_big's ALONE now: its three callers - SYSTEM.CFG's reader
-; (through wm_cbd), ss_set_x and the blanker's wake - are all kern_big's,
+; (through wm_cbd), ss_post_x and ssf_set's blanker wake - are all kern_big's,
 ; and kern_small, which reads no SYSTEM.CFG and has no saver, keeps [ss_idle]
 ; at its resting BLK_IDLE for ever (kernel size pass 13, -23 there).
 ; -----------------------------------------------------------------------------

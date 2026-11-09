@@ -34,6 +34,20 @@
 ;
 ; It saves VIDSND.TXT, its report, beside itself when it finishes.
 ;
+; (t) THE TONE, KEY T: the same card set-up, but the DMA buffer holds a
+;     635 Hz sine (35 samples, 42 periods in the 1,470-byte ring) instead of
+;     silence, so a row can be HEARD - and recorded, and counted on the host
+;     (tools/vstone.py). Ten 5 s rows, each after 2 s of silence: the tone
+;     alone; the ISR holding 16 ms with no disk; whole tracks read with the
+;     ISR holding 0, 4, 8 and 16 ms; one sector a call holding 16 ms; one
+;     sector a call with the card's line MASKED at the 8259 for each call,
+;     holding 16 ms; and the last two again with IRQ0 - the timer, whose hook
+;     is where Video Battle and Video Player decode - as the holder. It asks whether a PicoMEM 2's sound breaks when its
+;     int 13h copy is held by an interrupt - the card mixes nothing while it
+;     waits for the PC to copy a sector, and has 5 ms of output mixed ahead -
+;     and whether masking the holder for each call is the cure. The report
+;     is VSTONE.TXT (numbered, as the others).
+;
 ; It SUSPENDS the drivers (OSAPI_DRV_SUSPEND, SPEC.md 51.11) and programs the
 ; DSP, DMA channel 1 and the PIC itself, as the fallback of VIDEO-PLAN 4.4
 ; would, and resumes them on every path out. The IRQ line is found here with
@@ -70,6 +84,10 @@ VS_TRKKB    equ 16                  ; the int 13h target: a 26-sector track
 VS_B25      equ 157880 / 4 / 17
 VS_B50      equ 157880 / 2 / 17
 VS_B75      equ 157880 * 3 / 4 / 17
+VS_TMS      equ 4773 / 17           ; (t): `loop` turns in a millisecond
+VS_TGAP     equ 36                  ; (t): 2 s of silence before each row
+VS_TLEN     equ 35                  ; (t): a period of the sine, in samples
+VS_TPER     equ 42                  ; (t): periods in the 1,470-byte ring
 
 vs_entry:
     push si
@@ -102,12 +120,24 @@ vs_onkey:
     or bl, 0x20
     cmp bl, 'r'
     je .run
+    cmp bl, 't'
+    je .tone
     call bl_key
     jc .out
+    mov si, [vs_win]                ; bl_paint's SI is the WINDOW, and a run
+    call bl_paint                   ; spends SI: with it the window manager
+    jmp short .out                  ; was asked about whatever SI held, and
+.run:                               ; the report went down at (269, 5) - a
+    mov byte [vs_tmode], 0          ; white block over the menu bar and the
+    call vs_run                     ; title, at the end of every tone test
+    mov si, [vs_win]                ; (the owner's 5150, 2026-11-08)
     call bl_paint
     jmp short .out
-.run:
+.tone:
+    mov byte [vs_tmode], 1
     call vs_run
+    mov byte [vs_tmode], 0
+    mov si, [vs_win]
     call bl_paint
 .out:
     pop di
@@ -126,6 +156,7 @@ vs_onclick:
     push si
     push di
     call vs_run
+    mov si, [vs_win]
     call bl_paint
     pop di
     pop si
@@ -512,6 +543,292 @@ vs_ceil:
     pop bx
     ret
 
+; =============================================================================
+; (t) the tone rows
+; =============================================================================
+
+; vs_tones - the ten rows, each after VS_TGAP ticks of silence. Needs
+; [vs_port], [vs_irq] and the tone in the buffer. AH=8 is asked here: a
+; machine with no fixed disk plays the two rows that need none
+vs_tones:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [vs_spt], 0
+    mov ah, 8
+    mov dl, 0x80
+    push es
+    int 0x13
+    pop es
+    jc .geo
+    mov al, cl
+    and al, 0x3F
+    mov [vs_spt], al
+    inc dh
+    mov [vs_heads], dh
+.geo:
+    mov si, vs_s_thdr
+    call bl_sline
+    mov si, vs_trows
+.row:
+    lodsw                           ; the hold, in ms
+    cmp ax, 0xFFFF
+    je .done
+    mov bx, ax
+    lodsb                           ; the disk: 0 none, 1 tracks, 2 sectors,
+    mov dl, al                      ; 3 sectors with the line masked
+    lodsb                           ; the holder: 0 the card's ISR, 1 IRQ0
+    mov [vs_thold], al
+    lodsw                           ; the label
+    push si
+    mov si, ax
+    or dl, dl
+    jz .go
+    cmp byte [vs_spt], 0            ; a disk row and no disk: say so
+    jne .go
+    mov di, vs_s_tnohd
+    call bl_kvs
+    pop si
+    jmp short .row
+.go:
+    mov [vs_tdisk], dl              ; (before the mul takes DX)
+    mov ax, VS_TMS                  ; ms -> `loop` turns
+    mul bx
+    mov word [vs_burn], 0
+    mov word [vs_tburn], 0
+    cmp byte [vs_thold], 0
+    jne .t0
+    mov [vs_burn], ax
+    jmp short .bs
+.t0:
+    mov [vs_tburn], ax
+.bs:
+    call vs_tsil
+    call vs_trow                    ; AX = IRQs, CX = reads
+    mov dx, cx
+    push ax
+    mov ax, dx
+    xor dx, dx
+    mov cx, 6
+    call bl_kv                      ; "label   <reads>"
+    pop ax
+    push si
+    mov si, vs_s_tirq
+    xor dx, dx
+    call bl_kv                      ; "...IRQs   <n>" (150 is a whole 5 s)
+    pop si
+    pop si
+    jmp short .row
+.done:
+    call vs_tsil
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vs_tsil - VS_TGAP ticks of silence, the card stopped. The rows are found
+; in a recording by these gaps
+vs_tsil:
+    push ax
+    push si
+    mov si, [vs_win]                ; (bl_paint's SI: the window)
+    call bl_paint                   ; the rows so far, inside the gap
+    pop si
+    call OSAPI_GET_TICKS
+    mov [vs_t0], ax
+.w:
+    call OSAPI_GET_TICKS
+    sub ax, [vs_t0]
+    cmp ax, VS_TGAP
+    jb .w
+    pop ax
+    ret
+
+; vs_trow - the tone for VS_TICKS with [vs_burn] turns burnt per interrupt,
+; the foreground reading as [vs_tdisk] says. out: AX = IRQs, CX = reads
+vs_trow:
+    push bx
+    push dx
+    push es
+    mov word [vs_irqs], 0
+    mov word [vs_trk], 0
+    mov byte [vs_head], 0
+    mov byte [vs_cyl], 1
+    mov byte [vs_sec], 1
+    call vs_hook
+    cmp byte [vs_thold], 0
+    je .nt0
+    call vs_t0hook
+.nt0:
+    mov al, 211
+    mov bx, 735
+    mov cx, 1470
+    mov dl, 0x1C
+    call vs_play
+    call vs_race
+    call OSAPI_GET_TICKS
+    mov [vs_t0], ax
+.rd:
+    mov al, [vs_tdisk]
+    or al, al
+    jz .tick
+    mov es, [vs_tbuf]
+    xor bx, bx
+    mov ch, [vs_cyl]
+    mov dh, [vs_head]
+    mov dl, 0x80
+    cmp al, 1
+    jne .one
+    mov al, [vs_spt]                ; 1: a whole track a call
+    mov ah, 2
+    mov cl, 1
+    int 0x13
+    jc .tick
+    inc word [vs_trk]
+    jmp short .nexth
+.one:
+    mov cl, [vs_sec]                ; 2, 3: one sector a call
+    mov ax, 0x0201
+    cmp byte [vs_tdisk], 3
+    je .mask
+    int 0x13
+    jmp short .got
+.mask:
+    call vs_tmask                   ; the holder's line shut for the call:
+    mov ax, 0x0201                  ; an `sti` inside the ROM cannot open it
+    int 0x13
+    call vs_tunmask
+.got:
+    jc .tick
+    inc word [vs_trk]
+    mov al, [vs_sec]
+    inc al
+    mov [vs_sec], al
+    cmp al, [vs_spt]
+    jbe .tick
+    mov byte [vs_sec], 1
+.nexth:
+    mov al, [vs_head]
+    inc al
+    cmp al, [vs_heads]
+    jb .h
+    xor al, al
+    inc byte [vs_cyl]
+.h:
+    mov [vs_head], al
+.tick:
+    call OSAPI_GET_TICKS
+    sub ax, [vs_t0]
+    cmp ax, VS_TICKS
+    jb .rd
+    call vs_stop
+    call vs_unhook
+    cmp byte [vs_thold], 0
+    je .nt0u
+    call vs_t0unhook
+.nt0u:
+    mov ax, [vs_irqs]
+    mov cx, [vs_trk]
+    pop es
+    pop dx
+    pop bx
+    ret
+
+; vs_tmask / vs_tunmask - [vs_irq]'s bit set / cleared in the 8259's mask.
+; An interrupt raised while it is set waits in the IRR, as an os8088 read
+; holding off IRQ0 would leave the tick waiting
+vs_tmask:
+    push ax
+    push cx
+    pushf
+    cli
+    call vs_tline
+    mov ah, 1
+    shl ah, cl
+    in al, 0x21
+    or al, ah
+    out 0x21, al
+    popf
+    pop cx
+    pop ax
+    ret
+
+vs_tunmask:
+    push ax
+    push cx
+    pushf
+    cli
+    call vs_tline
+    mov ah, 1
+    shl ah, cl
+    not ah
+    in al, 0x21
+    and al, ah
+    out 0x21, al
+    popf
+    pop cx
+    pop ax
+    ret
+
+; vs_tline - CL = the holder's line: the card's, or 0 for IRQ0
+vs_tline:
+    mov cl, [vs_irq]
+    cmp byte [vs_thold], 0
+    je .o
+    xor cl, cl
+.o:
+    ret
+
+; vs_t0isr - IRQ0 first through here: burn [vs_tburn] turns with interrupts
+; off, as a decode in the timer's hook does, then the kernel's own handler
+vs_t0isr:
+    push cx
+    mov cx, [cs:vs_tburn]
+    jcxz .n
+.b:
+    loop .b
+.n:
+    pop cx
+    jmp far [cs:vs_t0vec]
+
+vs_t0hook:
+    push ax
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov ax, [es:0x20]
+    mov [vs_t0vec], ax
+    mov ax, [es:0x22]
+    mov [vs_t0vec + 2], ax
+    mov word [es:0x20], vs_t0isr
+    mov [es:0x22], cs
+    popf
+    pop es
+    pop ax
+    ret
+
+vs_t0unhook:
+    push ax
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov ax, [vs_t0vec]
+    mov [es:0x20], ax
+    mov ax, [vs_t0vec + 2]
+    mov [es:0x22], ax
+    popf
+    pop es
+    pop ax
+    ret
+
 ; vs_put - BX = result word index: store AX there, and a report line
 vs_put:
     push bx
@@ -540,6 +857,10 @@ vs_run:
     mov word [vs_flags], 0
     mov word [bl_nrow], 0
     mov si, vs_s_title
+    cmp byte [vs_tmode], 0
+    je .ttl
+    mov si, vs_s_ttone
+.ttl:
     call bl_sline
     cmp word [vs_buf], 0
     jne .have
@@ -562,6 +883,17 @@ vs_run:
     mov ax, 0x8080
     cld
     rep stosw
+    cmp byte [vs_tmode], 0          ; (t): the sine over the ring's 1,470
+    je .sil                         ; bytes, 42 periods of 35
+    xor di, di
+    mov dx, VS_TPER
+.per:
+    mov si, vs_sine
+    mov cx, VS_TLEN
+    rep movsb
+    dec dx
+    jnz .per
+.sil:
     pop es
     ; --- the drivers out of the way, and the card's port off their record
     push es
@@ -620,6 +952,11 @@ vs_run:
     mov ax, [vs_ver]
     mov bx, 13
     call vs_put
+    cmp byte [vs_tmode], 0
+    je .crow
+    call vs_tones                   ; (t) instead of (c) and (e)
+    jmp .resume
+.crow:
 
     ; --- (c) one interrupt a frame ----------------------------------------
     mov si, vs_s_hdrc
@@ -749,6 +1086,10 @@ vs_run:
     mov bx, 14
     call vs_put
     mov si, vs_f_txt                ; the report, beside the bench
+    cmp byte [vs_tmode], 0
+    je .sv
+    mov si, vs_f_tone
+.sv:
     call bl_save
     inc word [vs_done]
     pop bp
@@ -811,7 +1152,7 @@ vs_tpl:
 
 vs_ttl:       db 'Video Sound Bench', 0
 vs_s_title:   db 'VIDSND - a frame interrupt off the card (VIDEO-PLAN W0 c,e)', 0
-vs_s_hint:    db 'Press R: ~50 s, the desktop frozen. Saves VIDSND.TXT.', 0
+vs_s_hint:    db 'R: ~50 s, the desktop frozen, VIDSND.TXT. T: the tone, ~65 s.', 0
 vs_s_hdrc:    db '-- (c) interrupts in 5 s: PCM8 30 fps, PCM8 60 fps, ADPCM4 --', 0
 vs_s_hdre:    db '-- (e) tracks read in 5 s, the ISR burning 0/25/50/75% --', 0
 vs_r_port:    db 'DSP base port', 0
@@ -833,6 +1174,58 @@ vs_r_pmirq:   db "...the card's own IRQ", 0
 vs_r_drq:     db 'DMA ch 1 masked (4)', 0
 vs_s_noion:   db 'tracks, 50% ints on: NOT RUN - a PicoMEM ISR may not sti', 0
 vs_cands:     db 7, 5, 3, 2, 0
+vs_s_ttone:   db 'VIDSND T - a 635 Hz tone, held and read under (PicoMEM 2)', 0
+vs_s_thdr:    db '-- (t) reads in 5 s, each row after 2 s of silence --', 0
+vs_s_tirq:    db '  ...IRQs (151 = 5 s)', 0
+vs_s_tnohd:   db 'NOT RUN - no fixed disk', 0
+vs_f_tone:    db 'VSTONE.TXT', 0
+vs_tl_a:      db 'A tone alone', 0
+vs_tl_b:      db 'B hold 16 ms, no disk', 0
+vs_tl_c:      db 'C tracks, hold 0', 0
+vs_tl_d:      db 'D tracks, hold 4 ms', 0
+vs_tl_e:      db 'E tracks, hold 8 ms', 0
+vs_tl_f:      db 'F tracks, hold 16 ms', 0
+vs_tl_g:      db 'G 1 sector/call, hold 16', 0
+vs_tl_h:      db 'H 1 sector/call masked, 16', 0
+vs_tl_i:      db 'I IRQ0 holds 16, 1 sector', 0
+vs_tl_j:      db 'J IRQ0 16, 1 sector masked', 0
+; the rows: the hold in ms; the disk (0 none, 1 tracks, 2 sectors, 3 sectors
+; with the holder's line masked for each call); the holder (0 the card's ISR,
+; 1 IRQ0 - the timer, as Video Battle's and Video Player's decode is); the label
+vs_trows:     dw 0
+              db 0, 0
+              dw vs_tl_a
+              dw 16
+              db 0, 0
+              dw vs_tl_b
+              dw 0
+              db 1, 0
+              dw vs_tl_c
+              dw 4
+              db 1, 0
+              dw vs_tl_d
+              dw 8
+              db 1, 0
+              dw vs_tl_e
+              dw 16
+              db 1, 0
+              dw vs_tl_f
+              dw 16
+              db 2, 0
+              dw vs_tl_g
+              dw 16
+              db 3, 0
+              dw vs_tl_h
+              dw 16
+              db 2, 1
+              dw vs_tl_i
+              dw 16
+              db 3, 1
+              dw vs_tl_j
+              dw 0xFFFF
+vs_sine:      db 128, 139, 150, 161, 170, 178, 184, 189, 191, 192, 190, 187
+              db 181, 174, 166, 156, 145, 134, 122, 111, 100, 90, 82, 75
+              db 69, 66, 64, 65, 67, 72, 78, 86, 95, 106, 117
 
 vs_win:       dw 0
 vs_buf:       dw 0
@@ -850,6 +1243,12 @@ vs_irq:       db 0
 vs_omask:     db 0
 vs_susp:      db 0
 vs_bsti:      db 0
+vs_tmode:     db 0
+vs_thold:     db 0
+vs_tburn:     dw 0
+vs_t0vec:     dw 0, 0
+vs_tdisk:     db 0
+vs_sec:       db 0
 vs_spt:       db 0
 vs_heads:     db 0
 vs_cyl:       db 0

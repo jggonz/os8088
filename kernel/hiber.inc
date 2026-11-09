@@ -142,14 +142,16 @@ KDS_FMT     equ 0x0450          ; db the two streams' format, KDH_FMT's byte:
                                 ; LZ_LZB = the 360KB disk's DOS.O88 (96.44.18)
 KDS_LB      equ 0x0500          ; db[512] the launch block, on HS_IVT's ground
 KDS_TMPSEG  equ 0x1000          ; 64KB up: above kern_dos's image, which starts
-                                ; at KD_SEG and is 46KB, so the stream and the
+                                ; at KD_SEG and is under 40KB (KD_IMG_KB,
+                                ; kerndos/kdlayout.inc), so the stream and the
                                 ; thing it expands to never meet and SPEC.md
                                 ; 20.13.7's in-place rules need no thought
 
 ; --- kern_dos's own three numbers, MIRRORED (kerndos/kdlayout.inc) -----------
-; tests/unit/t_mirror.py is what keeps them honest: a name defined in more than
-; one place has to agree everywhere, and these three are the whole of what the
-; kernel needs to know about a machine it is handing over to.
+; NOT watched: tests/unit/t_mirror.py scans kernel/ but not kerndos/, so
+; nothing compares these with kdlayout.inc's, and they are kept in step by
+; hand. These three are the whole of what the kernel needs to know about a
+; machine it is handing over to.
 %ifndef KERN_MEGA
 KD_SEG      equ 0x0060          ; linear 0x00600, above the IVT and the BDA
 KD_ORG      equ 0               ; ...and the image at its offset 0
@@ -271,12 +273,18 @@ KDH_SIG     equ 0x3248444B      ; 'KDH2', little-endian (SPEC.md 96.40.1)
 KDH_NOCODE  equ 0xFFFF          ; ...and what KDH_CODE says until it has one
 
 ; --- the exit code's mailbox (SPEC.md 96.41) --------------------------------
-; MIRRORED in kerndos/kdlayout.inc, and tests/unit/t_mirror.py is the guard.
+; MIRRORED in kerndos/kdlayout.inc. NOT watched: tests/unit/t_mirror.py does
+; not scan kerndos/, so the two are kept in step by hand.
 KDB_SEG     equ 0x0040          ; the BDA...
 KDB_OFF     equ 0x00F0          ; ...and its intra-application area
 KDB_SIG     equ 0x3158444B      ; 'KDX1', little-endian
 KDB_CODE    equ 4               ; dw the program's exit code, behind the magic
 KDB_AKB     equ 6               ; dw ...and the arena it was given, in KB
+%ifdef KERN_MEGA
+MRF_SIG     equ 0x3146524D      ; 'MRF1' in the same cell: kernel/megares.inc's
+                                ; stub REFUSED the image it was streaming back
+                                ; (KERN-MEGA-PLAN 14.158) - hbm_ask drops it
+%endif
 %if HS_EXT + HS_XMAX*HS_XSTRIDE > HS_STACK - 512
   %error "hiber: the extent list would run into the stub's stack"
 %endif
@@ -366,7 +374,8 @@ section .cold
 ; hb_probe - is there a hibernation to offer? (SPEC.md 87.5; kmain, after
 ;            drv_boot and before the first paint)
 ; in:  nothing
-; out: nothing (all registers preserved). A hit records the volume in [hb_vol]
+; out: nothing; AX, DX and SI kept, BP clobbered (kmain_o holds nothing in
+;      it). A hit records the volume in [hb_vol]
 ;      and posts UI_RBQ_ASK, which ui_task's first pass spends.
 ;
 ; The ONE root a pointer can be in - hb_pick's volume, the one a hibernate
@@ -377,16 +386,17 @@ section .cold
 ; machine pays eight compares and no I/O; a machine with a hard disk pays
 ; one quiet mount of its root.
 ; -----------------------------------------------------------------------------
-section .boot2                    ; IN THE BLOB (SPEC.md 2.5.3.3): kmain_o is its
+B3SECT                          ; IN `.boot3` (SPEC.md 2.9.15): kmain_o is its
                                 ; one caller, after drv_boot and before its own
-                                ; BLOBCALL spl_finish
+                                ; BLOBCALL spl_finish - it was the blob's until
+                                ; BOOT3-PLAN wave 1
 hb_probe_x:
     push ax
     push dx
     push si
-    xor ax, ax                  ; .bss is whatever the LAST kernel left
-    mov [hb_resumes], ax        ; (a warm boot clears nothing), and three of
-    mov [hb_xseg], ax           ; these are read before anything writes them.
+    xor ax, ax                  ; .bss arrives zeroed (SPEC.md 10: stage 2's
+    mov [hb_resumes], ax        ; read lands the image's padding over it), so
+    mov [hb_xseg], ax           ; these three stores repeat a zero.
     mov [hb_dosakb], ax         ; FIVE STORES THROUGH THE ACCUMULATOR, which
     dec ax                      ; this routine has already pushed: 20 bytes
     mov [hb_doscode], ax        ; against 29, and `mov [m], ax` is 14 clocks
@@ -1500,7 +1510,8 @@ hbm_pses_x:
 ; out: AX = s1, DX = s2: one word in every 256 bytes of every conventional
 ;      heap record a live PACKAGE instance owns, its place in the line
 ;      stepping 34 bytes (mod 256) a sample, Fletcher's two running sums
-;      mod 65536. ~2,500 reads for 640KB, a few ms on a 4.77 MHz 8088
+;      mod 65536. At most ~2,500 reads for 640KB, some 60 ms on a 4.77 MHz
+;      8088 (predicted from the loop's ~27 bytes a sample, not measured)
 ; clobbers: nothing else
 ;
 ; THE PROGRAMS AND NOT THE MACHINE, and that is the measurement and not a
@@ -2185,16 +2196,17 @@ hbm_hfree:
 ; out: CX = records written
 ; clobbers: AX, BX, DX, DI, BP
 ;
-; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE is the
-; RAM disk, and both are things a DOS program WANTS rather than fights -
-; neither owns a chip anyone is about to take. The caller's third is 96.23.6.
+; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE the
+; cable and DRVC_FILE2 the RAM disk, things a DOS program WANTS rather than
+; fights - none of them owns a chip anyone is about to take. The caller's own
+; extra class (DL) is 96.23.6.
 ; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
 ; DRVC_CD is a read-only volume a DOS program may be reading (119.1).
 ;
 ; ...AND THE CALLER MAY HAVE ASKED FOR ONE OF THEM ANYWAY (SPEC.md 51.11.4).
 ; [cs:hbm_spm] is the slot's BL, bit 1<<class: a set bit does not ADD a class
 ; to the sweep, it takes one OFF the skip list, so the mask can only reach the
-; three rows this loop was already deciding about and a 0 is exactly today.
+; rows this loop was already deciding about and a 0 is exactly today.
 ; The test hangs off the skip itself, so a row that was going to be taken pays
 ; nothing for it. It is MODULE data, so the whole feature is resident-free.
 hbm_sweep:
@@ -2429,6 +2441,26 @@ hbm_ask:
     call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .askit:
+%ifdef KERN_MEGA
+    ; A REFUSAL THE LAST BOOT COULD NOT ACT ON (KERN-MEGA-PLAN 14.158): the
+    ; streaming stub (megares.inc) checks the extended section's sum after
+    ; this kernel is gone, so it cannot forget the pair itself - it leaves
+    ; 'MRF1' in the BDA mailbox, which its int 19h does not touch, and the
+    ; pointer is dropped here as hbm_wake's own refusal drops it: the next
+    ; boot ordinary rather than the same refusal again
+    mov ax, KDB_SEG
+    mov es, ax
+    cmp word [es:KDB_OFF], MRF_SIG & 0xFFFF
+    jne .ask2
+    cmp word [es:KDB_OFF + 2], MRF_SIG >> 16
+    jne .ask2
+    xor ax, ax
+    mov [es:KDB_OFF], ax        ; spent, as hbm_dosbda spends its own
+    mov [es:KDB_OFF + 2], ax
+    mov si, hbm_s_lost          ; 'Hibernation: unreadable'
+    jmp short .drop
+.ask2:
+%endif
     mov byte [hb_down], 0
     call hbm_kbdrain            ; a key held at the hibernate's own prompt
                                 ; repeats through int 19h into this boot, and
@@ -2662,7 +2694,7 @@ hbm_res:
 ; It does not come back. The machine it hands over has no kernel in it.
 ; -----------------------------------------------------------------------------
 hbm_dosrun:
-    CSDO mov byte [CSEG hbm_dosheld], 0    ; module BSS is not zeroed: only hbm_wrimg
+    CSDO mov byte [CSEG hbm_dosheld], 0    ; stored, not assumed (a module that stays loaded keeps its bss): only hbm_wrimg
                                     ; below may say the locks are held
     ; --- 1. the record, where the poster left it (SPEC.md 96.40) -----------
     ; It is copied into the MODULE's own data and every read of it carries a
@@ -3205,7 +3237,7 @@ hbm_dosrun:
     xor bh, bh                  ; **[mou_port] IS ALREADY A BYTE OFFSET** and
                                 ; not a row number: `mou_isr` walks the table
                                 ; with `inc bx`/`inc bx` against MOU_PEND and
-                                ; `mou_claim` banks that same BX, which is why
+                                ; mou_settle banks that same BX, which is why
                                 ; MOU_P2ROW is 4 on a two-port machine rather
                                 ; than 2. Scaling it again reads past the end
                                 ; of `mou_bases` and hands kern_dos whatever
@@ -5693,7 +5725,8 @@ hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
             db 'Press any key to restart it.', 13, 10, 0
 
 ; hbg_kgo / hbg_cgo - this image's far hop into the kernel (kernel.asm's
-; KGO_PAIR, CTRL.DRV's cp_ pair and the blob's bvs_ one): drv_row_x,
+; KGO_PAIR, CTRL.DRV's cp_ pair and `.boot3`'s b3_ - the blob's bvs_ one went
+; in BOOT3-PLAN wave 4): drv_row_x,
 ; drv_unload_x and drv_load_at are reached through it, so the three resident
 ; four-byte far shims that only images called could go (kernel size pass 14)
 KGO_PAIR hbg

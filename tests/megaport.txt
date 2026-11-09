@@ -55,6 +55,7 @@ ftpdfocus secs=120   # FTPD's Setup page keeps no caret it cannot type into
 modstr secs=70   # DISKOPS.DRV and FORMAT.DRV letter their own strings through CS, and the formatted 1.44MB B: mounts
 rdcz secs=60   # a compressed README.TXT with its directory hint struck still reaches Note Pad unpacked, off FAT and off the RAM disk
 rdboot secs=150   # RAMDISK.DRV attached AT BOOT, before mega_enter, reads its seed out of its own image (14.112: CPU_F_PM banked at a real-mode attach)
+shutdown secs=90 +--card +vga   # confirmed Shut Down: cancellation, the settings flush, halted tasks under the live spinner, Ctrl-Alt-Del back in; on kern_mega the handover is IDT gate 20h naming sch_old08 and IVT 08h the BIOS's; red at the base, [ticks] still counting (KERN-MEGA-PLAN 14.157)
 cpup secs=40   # the Control Panel acts on the RELEASE (sch_coop), and the held radio draws pressed on the VGA glass
 cpnames secs=50 +hdd   # every Control Panel list name and page heading letters (CTRL.DRV strings through CS), plus HDD.DRV's row ticked in on a Bochs ATA disk - cpnameshdd's whole run
 dtwrite secs=40   # the RTC write is spent by the panel's CLOSE - and on Bochs's MC146818 the stepped year reaches the CHIP at the close and not before
@@ -108,10 +109,12 @@ sheeteval secs=80   # what SHEET's evaluator answers, 102 checks by the host
 sheetxl2 secs=90   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
 scsize secs=130   # SCRIBE's parts and claims (heapmap's kern_mega pool: the region and its three claims above 1MB), round trips, picture, TOOBIG, sort, undo
 gbsave secs=160   # RealDMG's ARM: battery RAM and MBC3 clock saved on close (GBSAVE.SAV) and read back on a second boot; red with rw_onclose answering without writing
+gbship secs=90   # RealDMG's ARM opens the SHIPPED packed MEDIA/GBDEMO.GB off megaapps.img and the game runs (rw_czprobe: a packed cart never takes the in-place bank cache's raw READ_SEQ); red with the base's megaapps.img (--apps): 'not a GB ROM', no frame
 wirefleetdeploy secs=60   # WireFleet deployment, refusals, rotation, removal, auto, Ready, button cancel, About - the VGA leg (Bochs has no CGA/Hercules)
 chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
 
 # WINDOW MANAGER AND INPUT
+dispclose secs=45   # closing ASKS: W_ONCLOSE, the deferred OSAPI_WM_CLOSE, os88ui_ask's alert through every branch, NOTES.TXT read off the floppy (VGA leg); red: Note Pad re-assembled with np_onclose's `jnc .go` a `jmp .go` (a dirty note closes unasked)
 bptrace secs=70   # os88ui driven with breakpoints ARMED (bp_trace) - the shim's bp_exec, pump and stepped double-click
 sizesnap secs=20   # the SIZE snap keeps a maximized window at x=0, w=[vid_pw]
 btnmove secs=30   # a standard button answers where its window IS after a drag
@@ -133,6 +136,7 @@ tnest secs=40   # a worker's call into an image is counted in wm_tcnt (.cold cal
 curbusy secs=60   # the hourglass while frozen, the arrow after (office360.img as it is, in B:)
 cfgtrip secs=40   # a setting survives the panel and a reboot (diffed against the image as MOUNTED)
 int0sweep secs=140   # does anything raise a divide error - the `int 0` breakpoint is #DE's IDT gate under protected mode
+stk0water secs=50   # task 0's stack water under protected mode (an IRQ an IDT frame plus a reflection): 276 of STK0_SIZE's 512 bytes on kern_mega's drive, against kern_big's 238 - a MEASUREMENT that fails nothing; red only as a stack too small: a STK0_SIZE=256 kern_mega (its guard lowered) never reaches the desktop
 stkpanel secs=20   # the stack-overflow death panel runs to .hang with all 41 characters and the parked SP
 kbdburst secs=80   # a key burst through kern_mega's REFLECTED int 09h (one X batch, 1 ms a key)
 mouseup secs=40   # 13.7's release, the os88ui arm and MOUSEUP-PLAN 4.2's guard (--break-si goes red)
@@ -146,6 +150,7 @@ a2move secs=80 @OS88_BOCHS_MEGS=1   # ...the Apple II's, the same
 
 # FILES, DIALOGS AND THE DESK
 fpgnotch secs=30   # dsk_xfer asks once a run whether a bar is live; its .cold breakpoints run above 1MB here
+fdswap secs=70   # a floppy swapped under an open Disk window (the shim's `mount`) lists the NEW disk at `..`, and the old one swapped back, as mtools reads them; red: LBA 0's swap detector served from the read-ahead (dsk_rah_busy's inc/dec out) AND the listing mount's flush out - the base row's break alone (the flush) stays green here, kern_mega's chunks being keyed by the signature its uncached LBA 0 read takes (no DSK_RAHINT)
 deskmodal secs=40   # a widget DELETE with a Disk window in front; scratch system disk off mega.img
 deskcalgrid secs=40   # the Desk Calendar grid out of its bss, the clock set through clk_*
 msel secs=150   # multi-select and set operations; the listing segment is a selector here
@@ -175,6 +180,8 @@ deskcalremind secs=150   # reminders ring on card 3, the clock set through clk_*
 deskclock secs=120   # the Desk Clock desk window, its faces, settings, alarm, and its relaunch after a reset (a power cycle under Bochs)
 stikboot secs=40   # a Sticky App comes back at boot; stikrestore360.img rebuilt on mega.img (tests/megafix.py)
 stikmenu secs=90   # Locator's Sticky Apps menu (STIKMENU.DRV, whose image is a selector here)
+hibsumok secs=45   # the programs' sum's POSITIVE CONTROL off C: (kern_mega's kernel.sys, boothd, HIBER.DRV and CTRL.DRV): Mines open, hibernate, power off, resume, Mines back where it was; red: megares.inc's extended-section sum compare inverted (`je .fail`), a clean image refused.
+hibsumbad secs=150   # the programs' sum's REFUSAL: Mines's region damaged in the image's EXTENDED SECTION on the host, megares.inc's streaming stub refuses, a key restarts into an ordinary desktop and both files are gone; red at the base and with IRQ1 unmasked alone - the key never taken, the 8042's one buffer held by a masked PS/2 mouse's byte (KERN-MEGA-PLAN 14.158)
 stikhiber secs=40   # a pending RESUME stands the Sticky App relaunch down: HIBERNAT.PTR on the shim's C:, stik_boot asked for after mega_enter
 hdnoclaim secs=50   # a mounted hard-disk partition costs no heap - on kern_mega the image and any claim are XMEM-pool blocks, read off mx_tab
 
@@ -184,6 +191,10 @@ hdnoclaim secs=50   # a mounted hard-disk partition costs no heap - on kern_mega
 # through so an install in one launch is what the next one boots. Their red
 # checks broke HDDTOOL.DRV, HDD.DRV, INSTALL.O88 or kern_dos on a throwaway
 # mega.img (KERN-MEGA-PLAN 14.95).
+wseqfull secs=40   # a HELD stream (OSAPI_FILE_WRITE_SEQ) into a VHD with 4MB free: one call refused FERR_FULL at chunk 128, the 128 before it kept byte for byte, the VHD fscks clean - C: boots kern_mega's own kernel.sys and boothd (viddisk.py's kdir); red: the held rollback's `jnc .rbkept` out (diskw.inc), so a refusal loses the stream - 32 KB left
+wseqcut secs=40   # a POWER CUT mid-hold (the Bochs killed once W has written 150 chunks): STREAM.DAT its committed first 32KB, byte for byte, and the VHD fscks clean; red: dwf_dskw_write_seq's mask without WSQF_HELD, so every call links - 4.9MB after the cut
+wseqioerr secs=40   # a DYING disk under a held stream (every data write's int 13h answered AH=10h CF=1 from chunk 100 on): the refused call loses itself, STREAM.DAT keeps every chunk before it and fscks clean - C: a BIOS volume here, HDD.DRV left off it (on a 386 its rung 1 PIO bypasses dsk_xfer's int 13h); red: the held rollback's `jz .rbdrop` a `jmp` (diskw.inc), 34KB and a 17-cluster chain under a 3.7MB entry
+fsckhd secs=40   # DEFRAG of an installed FAT16 system disk off its own link at boot: KERNEL.SYS moved down and the VBR's BOOTHD_KOFS patched, nothing left in pieces, every byte the same, and C: boots kern_mega from the new run (its kernel.sys, boothd and own FSCHECK.DRV out of megak/); red: fsck.inc's 2a without the two VBR stores - 'BOOTHD_KOFS does not name KERNEL.SYS's new run' and C: does not boot
 install secs=110   # the wizard erase-installs off mega.img, its progress widget ON THE GLASS (VGA via fbuf), gives HDDTOOL back, upgrades from C:, and C: boots
 instdeep secs=40   # the installed volume carries the whole tree and README.TXT's packed bytes (14.95: mega.img had no SYSTEM/APPDATA/NOTES)
 instassoc secs=40   # the installed ASSOC.DAT describes C: - every row's cluster a folder of that volume
@@ -235,6 +246,9 @@ vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_de
 # (KERN-MEGA-MEMORY-PLAN MC7.4) - so "it moved" and "nothing names the old
 # block" are asked of the paragraph under each word (sheetmove.seg_key).
 regmove secs=100 @OS88_BOCHS_MEGS=1   # Note Pad's REGION moves in the descending pass: its selector rebased, W_SEG/I_SPTR/owners naming the new paragraph, image and picture intact (found tests/filler's BX: 14.90)
+rdmove secs=90 @OS88_BOCHS_MEGS=1   # the RAM disk's STORE ([rd_arena], a selector: its paragraph read through the LDT) slides DOWN into the hole heapfrag A leaves, bytes hashed the same, and D: still mounts; red on a HEAPCOMPACT=0 kern_mega (OS88_MEGA_BUILD=its tree): 'arena moved NO'
+sheetmove secs=95 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
+paintmove secs=90 @OS88_BOCHS_MEGS=1   # a LIVE Paint canvas slides down under it: the paragraph under [pt_base] follows, the bytes hash the same, the row table's deltas and the undo delta hold, and the raise repaints the same picture off the glass (Paint shoved clear of heapfrag on 640x480); red on a HEAPCOMPACT=0 kern_mega: 'canvas moved NO'. Check 5 reads the glass here: with heapfrag's old paint, a figure line drawn below its frame, it goes red at x 154..191, y 284..290 - as kern_big on os8088_xt_vga does
 drvmove secs=45 @OS88_BOCHS_MEGS=1   # the RAM disk's IMAGE moves; no kernel word names the old paragraph, and int 33h planted as a REAL vector follows it (mem_ivt_relocf, 14.90)
 sndmove secs=70 @OS88_BOCHS_MEGS=1   # SOUND.DRV's image moves on Bochs's SB16: the IVT's IRQ5 rows (0Dh and 25h) follow it - they did not before 14.90 - and the IDT gate lands the image's distance on
 regpin secs=110 @OS88_BOCHS_MEGS=1   # a worker-owning region with no restart point does NOT move (mem_can_move's pin, unchanged on kern_mega), Calc's beside it does
@@ -258,7 +272,7 @@ heapdrv secs=60   # SOUND.DRV's buffers are in the SOUND group on the Task Manag
 pkgmove-browser secs=80 @OS88_BOCHS_MEGS=1   # the Browser's four claims (source, document, lines, links) move, live, bytes and picture identical
 tmselfsu secs=200 @OS88_BOCHS_MEGS=1   # the Task Manager arm keeps its OWN raise cache and still sees everyone else's - witnessed off tm_update's one door and the kernel's three wm_su_* (MegaOwn), not every font_run. At 1MB every cache is a conventional claim: the claim table's question, unchanged
 tmselfsu@16m secs=200 @OS88_BOCHS_MEGS=16   # ...and at 16MB, where its raise cache is a POOL block: tm_quiet leaves it out of the pool walk's key by the LONG record's tag (OSAPI_XMEM_WALK BX = XMW_LONG, KERN-MEGA-PLAN 14.92) - RED before it on QUIET and CELLS (six drops of six, TM holds 0000), and OTHERS red with tm_ownws answering "ours" for the whole range
-heapcheck secs=50 @OS88_BOCHS_MEGS=1   # heapfrag's 18 checks and the region suite on a 1MB kern_mega; check 13 asks for the ceiling block's OWN merged run (hf_ceilask, KERN-MEGA-PLAN 14.93) - red with HEAPCOMPACT=0 and with the descending pass taken out, on kern_big and kern_mega
+heapcheck secs=50 @OS88_BOCHS_MEGS=1   # heapfrag's 18 checks and the region suite on a 1MB kern_mega; check 13 asks for the ceiling block's OWN merged run (hf_ceilask, KERN-MEGA-PLAN 14.93) - red with HEAPCOMPACT=0 and with the descending pass taken out, on kern_big and kern_mega; check 14 BUILDS its page layout from the big claim's base (KERN-MEGA-PLAN 14.184) - red with mem_cp_dest's bump taken out, on both; 14b claims mem_avail's answer with that block movable and must be GRANTED (14.185) - red at the base on both, mem_avail planning no page bump
 
 # DESKTOP RUNNERS-UP (wave 2)
 # The nearest duplicates of rows the first list chose. Every one was seen to
@@ -323,6 +337,7 @@ stikregister secs=210   # a Sticky App registers, refuses a second launch with n
 # HMA). A row with two arms keeps its first: on kern_mega a plain launch IS
 # the whole machine, and the page draws no radio (KERN-MEGA-PLAN 12.1 item 1).
 dosshrink secs=30   # a free MCB 16 bytes under the program's SP survives five INT 21h calls - the HMA trampoline built a 7-word frame there until KERN-MEGA-PLAN 14.105
+dosfcbwr secs=80   # the rest of the FCB family on the trip (15h/22h/28h writes, rename, 12h's find, the EXTENDED FCB, the PSP's two FCBs) answers IBM DOS 3.30's table, 15 rows; red: DOS_T21's 15h and 22h pointed back at .bad (a kern_mega built with them so)
 dosfcb secs=30   # AH=29h parses a name into an FCB as IBM DOS 3.30 does; red with the wildcard fill made '*'
 dosvec secs=30   # INT 25h's stack balances and AH=00h exits 0, read through m.lin; red with `xor al, al` taken out
 dosmcb secs=30   # AH=4Ah grows a block back into what it gave up: the trip's allocator coalesces as DOS does
@@ -409,6 +424,8 @@ thm95/86box secs=90 OS88_MEGA_EMU=86box +--legs +B   # leg B, the Windows theme 
 zonedmg/86box secs=30 OS88_MEGA_EMU=86box   # a zone's damage owes the window over it a redraw, read off the Hercules VRAM itself; red: POKE wm_paint_dmg=c3
 midiracksb secs=30 OS88_MEGA_EMU=86box   # MIDIRack's synth on the SB2.0: the card takes 16,000 samples a second of guest time and the capture's pitch matches the song 10 of 10; red: --break
 midirackwt secs=30 OS88_MEGA_EMU=86box   # ...the wavetable bank (build/mrwt720.img's), 10 of 10; red: --break
+midirackwtbig secs=40 OS88_MEGA_EMU=86box   # ...a 199 KB padded bank, the ARM's OSAPI_MEM_HUGE claim (BX = 8000h, SPEC.md 105.10.2) ABOVE 1MB and its run's windows played past 64KB, 10 of 10; red: the arm before - the bank CONVENTIONAL, at 012400h
+rcbig secs=35 OS88_MEGA_EMU=86box   # RUNCPM's two copies past 64KB on kern_mega (SPEC.md 74.3.3), byte for byte - the huge claims runs of selectors there; red: the tree before - both opens refused, NO FILE. 35s is 21 measured
 midiracksbmem secs=40 OS88_MEGA_EMU=86box OS88_MEGA_MEGS=1   # the two rings live only while they play, the grant ring and the refusals, on a 1MB kern_mega (mem_tab names paragraphs, the package selectors); red: POKE mmf_osapi_mem_free=f8cb
 audhand secs=40 OS88_MEGA_EMU=86box   # the Audio Player's AP_HANDOFF queue is found by the running player (its wakes from a PLAYING stream on the SB); red: POKE osapi_file_goto_qm+5=c3 (GOTO_QM as GOTO_Q)
 vidsound secs=40 OS88_MEGA_EMU=86box   # VIDEO.O88 off an IDE C: (MR BIOS type 47, identified) with the SB2.0 the clock: 1,800 frames, no pause, the play 59.59 s for 59.56 s of sound, the capture byte-exact; red: POKE mmf_osapi_mem_claim_dma_hi=f9cb

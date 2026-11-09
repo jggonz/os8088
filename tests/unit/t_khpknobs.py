@@ -51,7 +51,7 @@ def assemble(label, inc, defs, ks):
         cmd = (["nasm", "-f", "bin", "-w+error", "-I", "kernel/", "-I",
                 "apps/", "-I", inc] + defs +
                ["-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1",
-                "-DKZ_HEADSEC=9"] + ["-D" + k for k in ks] +
+                "-DKZ_HEADSEC=0"] + ["-D" + k for k in ks] +
                ["-o", out, "kernel/kernel.asm"])
         r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if r.returncode != 0:

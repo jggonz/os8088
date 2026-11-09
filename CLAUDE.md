@@ -992,7 +992,8 @@ user gives a different workflow. The worked example is
   `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
 - **Near model.** CS = DS = `KERNEL_SEG` for kernel code and every task;
   **SS = `LOW_SEG`**, because task stacks live outside the kernel's segment.
-  Every inter-module kernel call is near — there is no far code (§33).
+  Calls between modules in `.text` are near; `.cold` is a code segment of its
+  own, entered far (§2.6).
   **SS ≠ DS, so `[bp+disp]` addresses SS**: kernel code holding a pointer in BP
   needs `[ds:bp+…]`.
 - **Register discipline.** Public routines preserve every register but their
@@ -1033,7 +1034,9 @@ user gives a different workflow. The worked example is
   `MEGA_RESIDENT` - its size less the `.cold` and `.mega` rungs it moves above
   1MB). `kern_big` and `kern_small` boot on 128KB and `kern_mega` on a 1MB
   machine's 640KB (`MEGA_BOOT_KB`), and `.text` + `.bss` stay inside one 64KB
-  window (`KERN_CODE_MAX`). Development may run 2KB over a budget
+  window (`KERN_CODE_MAX`) - on kern_big the near-called VGA rung shares that
+  window above the FAT window and LOW, so its guard binds first (`kernsize`'s
+  `window` line, docs/KERNEL-MEMORY.md). Development may run 2KB over a budget
   (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
   release. **Raising any of them is a decision to take with whoever asked for
   the feature, not a build fix.**
@@ -1175,7 +1178,7 @@ Three defects cost this project bug after bug: a **visible redraw**, a
 MartyPC's `flicker()`/`pace()` measure them (PERFORMANCE.md Part 3.1/3.2).
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
-itself for one of four reasons — it is 6,553 lines and over half is a log of
+itself for one of four reasons — it is over 15,000 lines and most of it is a log of
 field measurements:
 
 - **Part 5** before touching a redraw path — the standing budget names the
@@ -1333,7 +1336,14 @@ in docs/TESTING.md, per capability.
   `setup-cc.sh` + `cc8086.py` (the C toolchain's fetch and its gate, §73);
   `stkwater.py`/`stkdepth.py` (how deep a task stack HAS been, and which
   call chain took it there - docs/KERNEL-MEMORY.md's "Task stacks");
-  `kfzread.py` (the KFZ heartbeat out of a field screenshot).
+  `kfzread.py` (the KFZ heartbeat out of a field screenshot);
+  `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
+  of memory, how the 8088 takes an interrupt, all 256 vectors and which
+  ones os8088 and its DOS hook, and every field after them; ON DEMAND, no emulator. Every os8088
+  claim on it stands on a source anchor `--selfcheck` re-checks, and it
+  will not write a page whose anchors fail. Chapter 2 is the BIOS data
+  area byte by byte, the 0500h page and one floppy read followed through
+  them; docs/plans/completed/INTERRUPT-GUIDE-PLAN.md is how it was built).
 - `docs/` — the maintained accounts. `*-PLAN.md` are design records for work
   that has landed; `FIELD-NOTES.md`/`FIELD-MACHINES.md` are what real hardware
   said.

@@ -1,0 +1,729 @@
+{
+ "area": "input",
+ "title": "Mouse, keyboard, serial lease, VMware pointer",
+ "summary": "The input subsystem is one of the kernel's strongest areas, and almost every rule in it traces to a named field machine. Each serial port decodes independently. The port contest weighs the identify burst, clean-packet runs, line errors and DSR/DCD, which is more evidence than any DOS-era driver used. Four backends end in one mou_apply and one mou_settle. The ISRs run on a private stack that sets SS as well as SP, waits are timed in ticks rather than spin counts, and the 32-bit VMware protocol is kept out of both shipped kernels. The weak spots are at the edges of the hardware model:\n- A 16550 whose FIFO is already on is treated as an 8250 (input-1).\n- The tick can park an AT ROM's int 09h with IRQ1 still in service, on the int 15h and kern_mega paths that SPEC 9.8.3 left unmasked. Under int 13h's sch_lock that becomes a predicted floppy timeout (input-2).\n- After the contest settles, the serial ISR keeps reading retired and foreign UARTs and drops their bytes (input-3).\n- SPEC 115 makes pinning the serial lease's ring the caller's duty, and nothing enforces it (input-4, R1).\nEach fix is a handful of bytes and none needs an ABI break. The largest byte lever is the keyboard mouse: about 456 resident bytes on every machine, a textbook on-demand module that is still resident (R2). Comments and SPEC have drifted in about thirty places: names folded away (mou_claim), constants that moved (MOU_DRAINT 9 to 18), and a SPEC 9 intro that still describes the pre-9.5.2 ISR and the pre-kern_emu VMware arrangement.",
+ "strengths": [
+  {
+   "title": "Per-port decoders and an evidence-weighted contest",
+   "why": "A modem's resync cannot break the mouse's run, and a losing device cannot move the arrow or click while it loses. The identify burst is read in the one window where the kernel owns the port outright, and line errors bar a port from the run. No DOS driver weighed this much evidence.",
+   "evidence": "kernel/mouse.inc:3689-3753, 3789-3935, 942-1107"
+  },
+  {
+   "title": "One back end, one settle",
+   "why": "The binding both-buttons fall-through and the blk_act, cur_shchk and ui_post stores exist exactly once for serial, PS/2, driver and VMware. This is the pattern to copy wherever two producers feed one state machine.",
+   "evidence": "kernel/mouse.inc:4139 (mou_apply), 1162 (MOU_SETTLE_STORES)"
+  },
+  {
+   "title": "Ticks rather than spin counts, and every elapsed time is wrap-safe",
+   "why": "One constant means the same thing on a 4.77 MHz XT and on a 486.",
+   "evidence": "kernel/mouse.inc:196-200 MOU_P2TMO, 1654-1675 mou_p2wr"
+  },
+  {
+   "title": "The private ISR stack sets SS as well as SP, with no register",
+   "why": "It survives a ROM service that switched stacks (SeaBIOS) and costs about 48 bytes off every task slice.",
+   "evidence": "kernel/mouse.inc:395-425; SPEC.md 9.10.1"
+  },
+  {
+   "title": "The overrun guard predicts nothing",
+   "why": "It winds the tail back on a full buffer whatever byte arrives, which makes the nested-beep hang impossible rather than unlikely.",
+   "evidence": "kernel/mouse.inc:3315-3383"
+  },
+  {
+   "title": "Vector hygiene",
+   "why": "kbm_isr refuses to chain to itself, mouse_unhook restores int 09h or int 15h by [kbm_ivec], and the step byte records that int 74h is ours. Together these close the SPEC 9.6.5 freeze class.",
+   "evidence": "kernel/mouse.inc:3042-3046, 1454-1490, 2003-2007"
+  },
+  {
+   "title": "KBD_I15: one vector, decided once",
+   "why": "The scancode comes from the ROM's own read wherever an 8042 would lose a byte to a peek, and an XT pays nothing for it.",
+   "evidence": "kernel/mouse.inc:664-688, 3079-3107"
+  },
+  {
+   "title": "The probe is split by lifetime",
+   "why": "The probe lives in .ovl/.boot2. Everything that hotplug or unhook can reach stays resident, each edge is named in tests/ovlrefs.txt, and the far doors share one stub.",
+   "evidence": "kernel/mouse.inc:504-583"
+  },
+  {
+   "title": "The serial lease is nothing resident beyond routing",
+   "why": "The module lives only while a lease is held. A leased row is routed through the existing ISR scan, so it inherits the cross-wired IRQ handling.",
+   "evidence": "kernel/serial.inc; kernel/mouse.inc:3728-3729, 3776-3778"
+  },
+  {
+   "title": "kern_emu isolates the 386 protocol",
+   "why": "VMM_POLL assembles to zero bytes on both shipped kernels.",
+   "evidence": "kernel/vmmouse.inc:39-60, 260-267"
+  },
+  {
+   "title": "The published 'MO' block is asserted by offset",
+   "why": "It is read on the one machine with no debugger and is treated as an ABI.",
+   "evidence": "kernel/mouse.inc:6520-6560"
+  },
+  {
+   "title": "mouproto.inc is shared as source with kern_dos",
+   "why": "It carries the arithmetic and nothing else, which is CLAUDE.md's shared-source rule applied correctly.",
+   "evidence": "kernel/mouproto.inc"
+  }
+ ],
+ "findings": [
+  {
+   "id": "input-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "A 16550 whose FIFO is already on is treated as an 8250",
+   "detail": "mouse_init programs LCR, DLL, DLM, MCR and IER and flushes RX, LSR and IIR, but never writes FCR (base+2). The ISR reads one RX byte per port per interrupt, and the SPEC 9.13 re-arm rewrites only MCR and IER. If an earlier OS, a warm-booted driver or a DOS program under DOS.O88 left the FIFO enabled, two things can happen. At trigger level 14 the pointer lags about 117 ms at 1200 baud and drains at one byte per four character times. At trigger level 1, two bytes queued during any IF=0 hold longer than 8.3 ms leave INTR asserted after the single read. The edge-triggered 8259 sees no new edge, and the mouse is silent for the session (SPEC 9.5.2's stuck-line symptom by another road).",
+   "evidence": [
+    "kernel/mouse.inc:767-800 UART programming, no FCR write",
+    "kernel/mouse.inc:888-896 the flush only reads",
+    "kernel/mouse.inc:3720-3753 one RX read per port per IRQ",
+    "kernel/mouse.inc:1585-1590 the 9.13 re-arm writes MCR/IER only",
+    "SPEC.md:213126 nothing in the tree touches FCR"
+   ],
+   "recommendation": "Write FCR=0 in mouse_init beside the LCR writes (mov ax,0x0200 / call mou_ov_pall); an 8250 ignores the write. Do the same in osapi_mouse's 9.13 re-arm. Optionally re-read the same row's LSR after mou_byte (pop bx / jmp short .scan), so no byte is ever left behind.",
+   "phase": "now",
+   "bytes_est": "+6 .ovl (kern_big) / +6 .boot2 (kern_small), 0 resident; +6 .text kern_big for the 9.13 re-arm; optional +2 .text both kernels",
+   "listed_as": "",
+   "prior_art": "Every DOS comm driver and Windows' COMM.DRV either disables the FIFO or drains it in a loop until IIR reports no interrupt.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read mouse.inc 767-900 and 1570-1590: no write to base+2 anywhere in kernel/ (grep FCR/fifo finds only a comment saying the 8250 has no FIFO). The scan takes one RX per row and moves on, so a FIFO holding a byte at or above trigger 1 keeps INTR high with no new edge. The in-session path (a DOS program enables the FIFO, exits, and the 9.13 re-arm rewrites MCR/IER only) is the likeliest trigger. Not measured. mov ax,imm16 + call near = 6 bytes, so the estimate holds."
+  },
+  {
+   "id": "input-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The tick can park a ROM int 09h with IRQ1 still in service, on the paths SPEC 9.8.3 left unmasked",
+   "detail": "On a KBD_I15 machine (kern_big on an AT ROM that advertises 4Fh), kbm_isr is not in the int 09h chain, so the ROM's handler is entered directly from IRQ1. kern_mega keeps a jmp far. sch_isr switches on every tick when sch_lock, chbusy and coop are clear and SS is LOW_SEG, without asking whether it interrupted an interrupt handler. The IBM AT int 09h executes sti at entry and sends its EOI only at the end. SPEC 9.8.3 exempts these paths because the AT ROM disables the keyboard interface; that covers a nested second byte but not a park. A tick inside the handler can switch to another task, for example the UI task that kbm_i15's sch_wake_ui has just made runnable. IRQ1 then stays in service until the parked task is next scheduled, and that blocks IRQ2-7. The serial mouse overruns and the PS/2 mouse on the cascade stalls. If the running task enters int 13h, which holds sch_lock for the whole call, the parked task cannot run at all: the floppy's IRQ6 cannot be delivered, the BIOS times out after about 2 s, and the call returns a disk error. PREDICTED, not measured. SeaBIOS does not sti in its IRQ handlers, so QEMU and Bochs cannot show it.",
+   "evidence": [
+    "kernel/mouse.inc:3016-3019 the I15 path skips the IMR bracket",
+    "kernel/mouse.inc:3034-3039 kern_mega jmp far",
+    "kernel/mouse.inc:3079-3099 kbm_i15 wakes the UI task",
+    "kernel/sched.inc:2380-2392 'pre-emptive: switch every tick'",
+    "kernel/disk.inc:1462 sch_lock held across int 13h",
+    "SPEC.md:16220-16258 9.8.3, IRQ1 'stays in service for as long as the handler is stretched or parked'"
+   ],
+   "recommendation": "Adopt the generic rule: sch_isr refuses a switch while any IRQ other than IRQ0 is in service. Read the master ISR with OCW3 0Bh, test AL & 0FEh, and restore 0Ah; khb_* already uses this sequence at sched.inc:1947-1953. This covers the 4Fh path, kern_mega's jump and any driver ISR that sti's. Coordinate with the scheduler review, and verify on 86Box with an AMI or Phoenix AT BIOS.",
+   "phase": "now",
+   "bytes_est": "+~14-16 .text resident (sched.inc), all kernels; ~40 cycles on the switch path only, ESTIMATED",
+   "listed_as": "",
+   "prior_art": "AmigaOS Exec defers dispatch until the outermost interrupt returns. OS/2 1.x dispatches only on the way back to task time. DOS TSRs read the 8259 ISR before popping up.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read kbm_isr (2960-3060), kbm_i15 (3079-3100), sch_isr's switch gates (sched.inc 2380-2420) and SPEC 9.8.3. The I15 and kern_mega paths bypass the IMR bracket, and nothing in sch_isr reads the ISR before switching; sch_switch's only extra test is SS == LOW_SEG, which an AT ROM's int 09h (no stack hop) passes. Detail tightened: in pre-emptive mode IRQ1 stays in service until the parked task is next scheduled, not necessarily for a whole UI pass. The disk-timeout case is real because disk.inc holds sch_lock across int 13h, so the parked task cannot run during the call. Still a prediction."
+  },
+  {
+   "id": "input-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "After the contest, the ISR still reads retired and foreign UARTs and drops their bytes",
+   "detail": "mou_isr_body scans every row with a nonzero base on every interrupt, for the rest of the session, because mou_lockon leaves the bases in place for mouse_unhook. mou_byte then drops any byte from a row that is not [mou_port], after the RX read has already consumed it. LSR data-ready does not depend on IER, so a retired port that someone else re-arms is still drained. Example: a DOS program under DOS.O88 (or any package) drives COM2 while the mouse is on COM1. Every mouse IRQ4 also scans row 2, after row 0's mou_byte -> cur_move. A COM2 byte that arrives during the arrow move is taken and thrown away before the program's own IRQ3 handler can see it. At 9600 baud a byte arrives about once per cur_move. The lease avoids this only for programs that use it.",
+   "evidence": [
+    "kernel/mouse.inc:3720-3753 the scan walks all rows",
+    "kernel/mouse.inc:1215-1260 mou_lockon keeps the bases",
+    "kernel/mouse.inc:3793-3798 a non-winner byte goes to .jbout after the RX read"
+   ],
+   "recommendation": "Once [mou_seen] is set, scan only [mou_port]'s row and [ser_row]; losers are IER 0 and cannot be why a line fired. For example, after the ser_row test: cmp byte [mou_seen],0 / je .take / cmp bl,[mou_port] / jne .next. Cross-wired machines are unaffected, because the mouse's own row is always scanned. Two-port machines also save one IN per row per IRQ.",
+   "phase": "now",
+   "bytes_est": "+~13 .text resident, both kernels",
+   "listed_as": "",
+   "prior_art": "Neither Windows 3.x's mouse driver nor OS/2 reads a UART it has not claimed; COMM.DRV and COM.SYS own their ports exclusively.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read mou_isr_body .scan (3720-3753), mou_lockon (1215-1270) and mou_byte's head (3789-3798). Bases stay nonzero after lockon, the scan reads RX on any data-ready row, and mou_byte drops non-[mou_port] rows once [mou_seen] is set. The suggested sequence is 5+2+4+2 = 13 bytes, so the estimate moves from ~11 to ~13."
+  },
+  {
+   "id": "input-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The serial lease trusts its caller to pin the region the ISR writes into",
+   "detail": "srl_open validates the instance record, ES == I_SPTR and SI+517 <= I_SIZE, but never checks the region's MC_RLOC. It banks ES, and srl_pump then writes [es:si+...] from IRQ context. SPEC 115 makes the pin the caller's written duty ('The caller must pin its own region with OSAPI_MEM_MOVABLE, AX=0, before opening'), and the one caller, WireFleet, complies at wflink.inc:118-121. Every package must declare OS88_REGION_MOVABLE, though, so a caller that forgets the pin, or opts back in while leased, is moved by the next compaction. The ISR then keeps writing paragraphs that belong to another claim. That is silent corruption rather than 'lost bytes', and nothing enforces the contract.",
+   "evidence": [
+    "kernel/serial.inc:226-243 the validation, with no MC_RLOC test",
+    "kernel/serial.inc:272 srl_seg is banked",
+    "kernel/serial.inc:423-470 srl_pump writes from the ISR",
+    "kernel/memory.inc:4473-4488 mem_movable_x",
+    "apps/wirefleet/wflink.inc:118-121 the caller's pin",
+    "SPEC.md:225404-225405 the pin is the caller's contract"
+   ],
+   "recommendation": "(a) Have the module refuse Open with AX=5 when the region record's MC_RLOC != 0 (kern_big only; kern_small has no compaction), or (b) better, R1: move the ring into SERIAL.DRV's own image.",
+   "phase": "now",
+   "bytes_est": "(a) +~20 SERIAL.DRV module, 0 resident",
+   "listed_as": "docs/reports/CODE-REVIEW-TWO-CYCLES-2026-11-01.md, Video bullet: 'A serial lease whose ring is inside the package's own region can lose bytes'",
+   "prior_art": "Windows 3.x OpenComm allocates its queues in the driver's own fixed memory.",
+   "verdict": "corrected",
+   "verify_note": "The code is as stated: srl_open (serial.inc:207-275) has no MC_RLOC test, and srl_pump writes through the banked ES. The reviewer missed that SPEC 115 (225404-225405) states the pin as the caller's contract on purpose, and that the only caller complies. This is unenforced hardening of a documented contract, not a latent defect in shipped code, so severity drops from medium to low. The fix stays worthwhile."
+  },
+  {
+   "id": "input-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Shift+PrtSc runs the ROM's Print Screen inside kbm_isr's IRQ mask",
+   "detail": "On the kern_big int 09h path and on kern_small, kbm_isr calls the ROM with every IRQ but IRQ1 masked, and nothing hooks int 05h. On an 83-key keyboard PrtSc is Shift + keypad '*', so it is easy to press by accident. The ROM then walks 2,000 cells through int 10h AH=08h and int 17h with the clock, the scheduler, the serial mouse and the floppy masked. That is seconds with no printer, and tens of seconds while printing. Ticks are lost and the clock drifts. Separately, while an FSXF_RATE sample ISR plays, every keystroke now delays IRQ0 by up to about 1,725 cycles.",
+   "evidence": [
+    "kernel/mouse.inc:3021-3031 the IMR bracket around the ROM call",
+    "no write to IVT 14h anywhere in kernel/ (grep)",
+    "SPEC.md:16162 the ROM's Print Screen path EOIs early",
+    "SPEC.md:37323 0x500 is the print-screen status byte"
+   ],
+   "recommendation": "Set the BIOS print-screen status byte at linear 0500h to 1 in mouse_init; the IBM ROM's int 05h returns immediately while it reads 1, and DOS uses the same byte. Re-set it after a hibernate resume, which stages data over 0500h. Alternatively hook int 05h to an existing iret and restore it in mouse_unhook.",
+   "phase": "now",
+   "bytes_est": "+5 .ovl/.boot2, 0 resident (the int 05h hook alternative is about +12, partly resident)",
+   "listed_as": "",
+   "prior_art": "Windows 3.x takes PrtSc for itself (a clipboard snapshot); DOS treats 0050:0000 as the in-progress flag.",
+   "verdict": "confirmed",
+   "verify_note": "grep finds no int 05h vector write in kernel/; the shipped arm's mask is 0FDh around the ROM call, so IRQ0 is masked for the whole Print Screen. hiber.inc:143 (KDS_LB at 0x0500) confirms the resume caveat. One side effect to note: setting 0500h=1 also disables Print Screen for DOS programs under DOS.O88."
+  },
+  {
+   "id": "input-6",
+   "kind": "bug",
+   "severity": "low",
+   "title": "The 'MO' block publishes the doctored 8042 command byte as 'the BIOS's'",
+   "detail": "mou_p2cmd0 is the BIOS byte with bit 4 cleared and bit 5 forced set. The raw byte, mou_p2cmdr, is stored outside the published span. The code comment and SPEC 9.4.4 both say the span holds the byte 'as the machine's own BIOS left it'; the comment also says every failure path puts it back, but the failure paths restore mou_p2cmdr. Bit 5 is exactly SPEC 9.9.7's field defect (PC MODE on an AT controller), so a sysbench reading from that kind of machine cannot show how the BIOS left it. MOUDIAG's cmd column has the same problem.",
+   "evidence": [
+    "kernel/mouse.inc:1903-1912 the two banks",
+    "kernel/mouse.inc:6459-6467 the declarations",
+    "SPEC.md:14127-14130"
+   ],
+   "recommendation": "Swap the two declarations so the raw byte sits at +6 inside the asserted span and the doctored one below it. Rename them so mou_p2_off keeps writing the doctored byte and .fail the raw one. Fix the declaration comment in the same change.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mouse.inc:1901-1912: cmdr = BIOS & 0EFh, cmd0 = that | 20h; only cmd0 is inside the published span (6466-6469). No doc fix is emitted here: rewriting SPEC 9.4.4 or the declaration comment to say 'doctored' would be undone by the recommended swap, so the comment belongs to the code change."
+  },
+  {
+   "id": "input-7",
+   "kind": "bug",
+   "severity": "low",
+   "title": "srl_open's 'settled' test lags the ISR by one UI pass",
+   "detail": "srl_open treats the contest as settled only when [mou_hpst] == 2, and mou_hotplug's .have arm sets that on the pass after the ISR settled the contest. Inside that window, an Open the user named (BL bit 7), or one where the other port identified, takes the port the mouse has just won. The ISR then routes that row to SERIAL.DRV, and the mouse is dead until Close. That breaks SPEC 115.1's rule that 'a winning serial mouse's port is never eligible'.",
+   "evidence": [
+    "kernel/serial.inc:265-268",
+    "kernel/serial.inc:323-334 the .unsettled rules 2 and 3 take the port",
+    "kernel/mouse.inc:3911-3916 the settle happens in the ISR",
+    "kernel/mouse.inc:1371-1379 hpst=2 is set only on the next pass"
+   ],
+   "recommendation": "Test [mou_seen] instead (cmp byte [mou_seen],0 / je .unsettled); the settled arm already compares [mou_port].",
+   "phase": "now",
+   "bytes_est": "0 (module)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "serial.inc:265-268 tests [mou_hpst]; mou_hotplug sets 2 only in .have, on the next pass after [mou_seen]. In .unsettled, rules 2 and 3 can take the winning row, and mou_lockon later skips it because it equals [mou_port]. Swapping the compare is the same size (5+2 bytes)."
+  },
+  {
+   "id": "input-8",
+   "kind": "bug",
+   "severity": "low",
+   "title": "KBDDIAG=1 drops SPEC 9.8.3's IMR bracket, so the diagnostic build re-creates the defect it exists to diagnose",
+   "detail": "The KBD_DIAG arm calls the ROM with every IRQ open; the shipped arm masks all but IRQ1. kbddiag.inc's header still says the only change is call versus jump, which stopped being true when the shipped kernel began calling the ROM too. The field kernel built to diagnose keyboard faults therefore lets a tick run inside the ROM's handler again.",
+   "evidence": [
+    "kernel/mouse.inc:2978-2996 the diag arm",
+    "kernel/mouse.inc:3021-3031 the shipped arm",
+    "kernel/kbddiag.inc:24-25"
+   ],
+   "recommendation": "Wrap the diagnostic call in the same in 21h / push / or FDh / out ... pop / out bracket, then fix the header.",
+   "phase": "now",
+   "bytes_est": "+~8 knob build only, 0 shipped",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Both arms re-read: the KBD_DIAG arm is pushf / call far [cs:kbm_old9] with no IMR write. The header doc fix emitted here describes the current code (no bracket); if the code fix lands, its last clause goes with it."
+  },
+  {
+   "id": "input-9",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mou_p2_off writes the 8042 on the UI task with nothing excluding int 09h",
+   "detail": "mou_p2_off sends 0A7h and then the command-byte pair (60h, then the value) with IF=1 and IRQ1 live. An AT ROM's int 09h writes 0ADh and 0AEh to port 64h. If IRQ1 lands between the two halves, the pending controller command is replaced, the value byte goes to port 60h with nothing pending, and the 8042 forwards it to the keyboard; the command byte is never restored. mou_p2_init masks IRQ1 for exactly this class of race. The path runs only when a serial mouse beats a live PS/2 mouse, and at unhook.",
+   "evidence": [
+    "kernel/mouse.inc:2189-2203 mou_p2_off",
+    "kernel/mouse.inc:1753-1765 mou_p2wcmd",
+    "kernel/mouse.inc:1848-1863 the probe masks IRQ1",
+    "kernel/mouse.inc:1261-1268 the mou_lockon caller"
+   ],
+   "recommendation": "Bank and mask IRQ1 at the master around the two writes, as the probe does. Do not use pushf/cli: mou_p2wr's timeout counts ticks.",
+   "phase": "now",
+   "bytes_est": "+~12 .text resident kern_big",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mou_p2_off masks only IRQ12 at the slave; mou_p2wcmd writes 60h to 64h, then the value to 60h after mou_p2wr's tick-timed wait. The probe's IRQ1 mask comment (1848-1863) describes the same race."
+  },
+  {
+   "id": "input-10",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "PS/2 sync rests on byte 0's bit 3 alone",
+   "detail": "The decoder re-syncs only by refusing a header without bit 3. The probe flushes the 8042 buffer after F4 has enabled reporting, which can cut a packet in half. A misaligned stream then takes b1 or b2 as a header whenever bit 3 happens to be set. Until it realigns, the low bits read as buttons (phantom clicks) and the deltas are garbage. A hot-replugged device's AA 00 is taken as a header.",
+   "evidence": [
+    "kernel/mouse.inc:2283-2293",
+    "kernel/mouse.inc:2066-2069 the flush after F4"
+   ],
+   "recommendation": "Reset [mou_p2ph] to 0 when [ticks] has moved by 2 or more since the last aux byte. A packet's bytes arrive within milliseconds and packets are at least 10 ms apart.",
+   "phase": "now",
+   "bytes_est": "+~12 .text, +2 .bss kern_big",
+   "listed_as": "",
+   "prior_art": "Linux psmouse's lost-sync timeout; Windows i8042prt's per-packet timer.",
+   "verdict": "confirmed",
+   "verify_note": "mou_p2_byte's only sync is test al,08h on phase 0; mou_p2flush follows F4 before 0AEh. 0AAh has bit 3 set. This is a plausible weakness, not an observed one."
+  },
+  {
+   "id": "input-11",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The hot-plug poller drops DTR on a modem port every 3 s for the whole session",
+   "detail": "While [mou_seen] is 0, mou_hotplug power-cycles every unleased live port through mou_pall. It stops only on an identify or a PS/2 answer. On a mouseless XT with a modem each drop is a hang-up (&D2), and an os8088 null-modem peer sees DSR/DCD flicker. SPEC 115.1.1's rule 4 already treats DSR/DCD as 'not a mouse'.",
+   "evidence": [
+    "kernel/mouse.inc:1335-1342 and 1354-1370",
+    "kernel/serial.inc:342-352 the DSR/DCD rule"
+   ],
+   "recommendation": "Skip the drop on a port whose MSR shows DSR or DCD (the lease's own rule), which makes the drop per port inside mou_hotplug only.",
+   "phase": "now",
+   "bytes_est": "+~14 .text resident",
+   "listed_as": "",
+   "prior_art": "MOUSE.COM and Windows 3.x probed once at load and never power-cycled a port they could not identify.",
+   "verdict": "confirmed",
+   "verify_note": "MOU_REPOLL = 55 ticks (~3 s); mou_pall/mou_pout skip only [ser_row] and zero bases, so a modem port loses DTR each cycle. It also rewrites MCR under any DOS program driving that port."
+  },
+  {
+   "id": "input-12",
+   "kind": "size",
+   "severity": "medium",
+   "title": "The keyboard mouse is about 456 resident bytes on every machine and qualifies as an on-demand module",
+   "detail": "Measured from build/kernel.map: kbm_tab..kbm_isr less mou_clamp is 306 bytes, kbm_p5spend 16, kbm_pollm..kbm_ui 108, kbm_post 9, plus 17 bytes of state. This is resident on both kernels, and on most machines a mouse retires it seconds after boot (SPEC 9.6.1.1). It is needed only when someone presses an arrow on a pointerless desktop, and loading it then needs the system disk in the drive. Its own header calls it 'a FIRST CANDIDATE TO REMOVE'; a module is the middle road. See R2.",
+   "evidence": [
+    "build/kernel.map 0x43E9-0x455F, 0x46CC-0x4768, 0x476E-0x477F",
+    "build/smallk/kernel.map 0x3054-0x31A6 (306 less mou_clamp, the same span)",
+    "kernel/mouse.inc:2402-2427"
+   ],
+   "recommendation": "Keep resident only kbm_key's two gates, KBM_SCAN's keypad-5 latch, kbm_shf, and thunks for the claim path, kbm_poll/kbm_pollm, kbm_ui and kbm_p5spend. Move the table, button, rclick, move, the kbm_ui body and the state into a KBMOUSE module loaded on the first claimed key, and drop it when [mou_ptr] is set (t_moddrop requires the drop).",
+   "phase": "now",
+   "bytes_est": "-300 to -380 resident on both kernels, +~450 module, ESTIMATED; the first press costs one disk read (~400 ms on an XT)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spans re-measured from build/kernel.map and they match: 306 + 16 + 108 + 9 + 17 = 456. kern_small's kbm_tab..kbm_isr span is the same 306 once mou_clamp is taken out. Whether it qualifies under CLAUDE.md's module rule depends on accepting a system-disk read at the moment the mouse has failed; that is a judgement for the owner, not a defect."
+  },
+  {
+   "id": "input-13",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Keys are dispatched before clicks queued in the same pass",
+   "detail": "ui_task polls int 16h first and sends the key to wm_top, and only then drains the event ring that holds the clicks. If a click on a window and the typing after it land in one pass, the keys go to the window that was in front before the click. On an XT a pass that repaints lasts hundreds of milliseconds, so the window for this is real. See R3.",
+   "evidence": [
+    "kernel/ui.inc:134-136 the key poll comes first",
+    "kernel/ui.inc:205-227 wm_top dispatch",
+    "kernel/ui.inc:254-256 .events afterwards"
+   ],
+   "recommendation": "Measure how often it happens first. A partial fix: kbm_isr already calls the ROM on most paths, so it can compare the BIOS tail before and after and push an ordering marker into the ring; ui_task takes a key from int 16h only when it pops a marker. The 4Fh path and kern_mega keep today's behaviour.",
+   "phase": "record",
+   "bytes_est": "+~30 resident plus one appended EVT_* code (an ABI addition, not a break), ESTIMATED",
+   "listed_as": "",
+   "prior_art": "Windows 3.x's system queue, the Mac Event Manager, the GEOS Input Manager and AmigaOS input.device all keep keyboard and mouse in one time-ordered stream.",
+   "verdict": "confirmed",
+   "verify_note": "ui.inc 134-256 re-read: int 16h AH=01h and the wm_top dispatch run before .events drains the ring. The byte estimate is unverified."
+  },
+  {
+   "id": "input-14",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "A settled serial mouse is never offered a reset edge again",
+   "detail": "[mou_hpst]=2 is terminal. SPEC 9.4 opens with the wedge: a mouse hot-plugged onto live DTR stays wedged until it is power-cycled. After a settle that stays true for the rest of the session, for example after the cable is bumped.",
+   "evidence": [
+    "kernel/mouse.inc:1298-1299",
+    "SPEC.md:15610-15616"
+   ],
+   "recommendation": "Record it. If it is ever wanted, add a Control Panel verb or a key combination that runs one drop-hold-raise on [mou_port] alone; the machinery already exists.",
+   "phase": "record",
+   "bytes_est": "+~20 in the panel module",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mou_hotplug's first compare returns on state 2 for the rest of the session."
+  },
+  {
+   "id": "input-15",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "mou_b0 and mou_b1 live in the high bytes of other tables' words, guarded only by prose",
+   "detail": "mou_b0 is mou_phase+1 and mou_b1 is mou_masks+1. The only guard is the comment 'READ AS BYTES ONLY'. A future word read of mou_masks would silently return a packet byte, which is the kind of invariant CLAUDE.md wants held by a gate rather than by a comment.",
+   "evidence": [
+    "kernel/mouse.inc:6291-6302",
+    "kernel/mouse.inc:316-317"
+   ],
+   "recommendation": "Keep the 4 bytes and add a tests/unit grep that refuses word reads of mou_masks and mou_phase, or spend the 4 bytes.",
+   "phase": "record",
+   "bytes_est": "0 (or +4 .text)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mouse.inc:6291 and 6298 define the two equs. Note that mou_newround already does word writes to mou_phase, which are intended and clear b0 too."
+  },
+  {
+   "id": "input-16",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "mou_claim no longer exists, and 22 references remain",
+   "detail": "mou_claim was folded into mou_byte's .pkt arm in kernel size pass 17. Ten kernel comments and twelve SPEC lines still name it, most of them as live code.",
+   "evidence": [
+    "kernel/mouse.inc:1184-1186",
+    "kernel/mouse.inc:40,1115,1153,1250,1385,1491,3738,6408,6430",
+    "kernel/hiber.inc:3233",
+    "kernel/vmmouse.inc:333",
+    "SPEC.md:14710,14751,14758,14829,14865,14889,14903,14927,15335,15568,17050,17602"
+   ],
+   "recommendation": "Write 'mou_byte's .pkt arm (mou_claim until size pass 17)' once in SPEC 9.5.1.1, and name MOU_SETTLE_STORES or mou_settle where a line means the stores. A checkdocs rule for retired labels in backticks would stop the next one.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "grep confirms. The doc fixes below cover every present-tense reference. The past-tense or cost-record ones are left as history: mouse.inc 1385 and 1491, and SPEC 14865, 14903, 15335 and 17602. vmmouse.inc:333 was an extra hit the reviewer missed."
+  },
+  {
+   "id": "input-17",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The two diagnostic knobs carry two copies of one formatter",
+   "detail": "The mdg_tpl/line/h16/h8/h1 and kbg_tpl/line/h* routines are the same code. The knobs are mutually exclusive, so no shipped byte is spent and the cost is maintenance only. The mdg_* copy learned to use hand loops because ES is not its own, while kbg_show sets ES itself.",
+   "evidence": [
+    "kernel/moudiag.inc mdg_tpl..mdg_h1",
+    "kernel/kbddiag.inc kbg_tpl..kbg_h*",
+    "kernel/kbddiag.inc:31-33 the mutual-exclusion %error"
+   ],
+   "recommendation": "Factor the formatter into a diagfmt.inc the next time either knob is touched.",
+   "phase": "record",
+   "bytes_est": "0 shipped",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Both files define the parallel tpl/line/h16/h8/h1 set (moudiag 440-537, kbddiag 518-592), and kbddiag.inc:31-33 refuses both knobs at once."
+  },
+  {
+   "id": "input-18",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The serial ISR saves all nine registers for every byte",
+   "detail": "The full frame costs about 650 cycles per byte (about 136 µs), roughly 1.6% of an XT while the hand moves at 1200 baud, ESTIMATED from PERFORMANCE Part 2's tables. Phase-1 and phase-2 bytes need only AX, BX, DX and DS. A light path would save about 0.25% of the machine.",
+   "evidence": [
+    "kernel/mouse.inc:3689-3701",
+    "kernel/mouse.inc:3758-3774"
+   ],
+   "recommendation": "Not worth its bytes. Record the number so nobody re-derives it.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity perf record, not re-derived. The frame is nine push/pop pairs as stated, but the cycle figure was not checked against PERFORMANCE.md."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; mouse_x/mouse_y themselves range over the full 0..639 / 0..479.",
+   "new_text": "; mouse_x/mouse_y themselves range over the live screen, 0..[vid_wm1] /\n; 0..[vid_hm1] - or both displays' union on a two-display kern_big\n; (mou_clamp, SPEC.md 39.15.4).",
+   "why": "mou_clamp (mouse.inc:2737-2779) bounds x/y to [vid_wm1]/[vid_hm1], or via vid_disp_find/vid_pt_clamp on two displays; 639/479 are VGA reference values only."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; driver ever written assume: 3F8 is IRQ4 and 2F8 is IRQ3. A card whose jumper\n; disagrees with its base address is out of scope here, as it was before.",
+   "new_text": "; driver ever written assume: 3F8 is IRQ4 and 2F8 is IRQ3. A card whose jumper\n; disagrees with its base is still serviced where both rows are live - any\n; hooked line services every live port (SPEC.md 9.5.2, 9.5.2.1) - but a lone\n; card jumpered to the other line is not: only a live row's line is hooked.",
+   "why": "mou_isr_body (3720-3753) scans every live row on either line, mou_lockon masks by [mou_line]; mouse_init's .hook (693-712) hooks only rows with a nonzero base."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "                                ; see mou_claim and SPEC.md 9.5. Eight costs",
+   "new_text": "                                ; see mou_byte and SPEC.md 9.5. Eight costs",
+   "why": "mou_claim was folded into mou_byte's .pkt arm in kernel size pass 17 (mouse.inc:1184-1186, 3884)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; that can win one machine's contest - the serial run (mou_claim), the aux",
+   "new_text": "; that can win one machine's contest - the serial run (mou_byte's .pkt), the aux",
+   "why": "mou_claim no longer exists; the serial run is counted in mou_byte's .pkt arm (mouse.inc:3884-3922)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; in one; kern_small takes the macro inline in mou_claim instead, where the",
+   "new_text": "; in one; kern_small takes the macro inline in mou_byte instead, where the",
+   "why": "kern_small's MOU_SETTLE_STORES site is mouse.inc:3922-3924 inside mou_byte's .pkt arm; mou_claim is gone."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "    jz .next                    ; mou_claim sets it with [mou_seen]) masks",
+   "new_text": "    jz .next                    ; the settle sets it with [mou_seen]) masks",
+   "why": "[mou_line] is stored beside [mou_seen] by MOU_SETTLE_STORES (mouse.inc:1162-1173) and by vmm_boot_x; mou_claim no longer exists."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; - up to half a second, self-healing on the next packet - which is the price",
+   "new_text": "; - up to ~1 s (MOU_DRAINT), self-healing on the next packet - the price",
+   "why": "MOU_DRAINT equ 18 (mouse.inc:95), ~1.0 s; it was 9 before FIELD-NOTES 44."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; 520 bytes of .text, which is two 512-byte steps of KERN_BUDGET: the spare\n; went 4,096 -> 3,584 -> 3,072.",
+   "new_text": "; About 456 bytes resident on kern_big today (build/kernel.map, 2026-11-08:\n; kbm_tab..kbm_isr less mou_clamp 306, kbm_p5spend 16, kbm_pollm..kbm_ui 108,\n; kbm_post 9, state 17). It was 520 bytes of .text when it landed, two\n; 512-byte steps of KERN_BUDGET: the spare went 4,096 -> 3,584 -> 3,072.",
+   "why": "build/kernel.map: kbm_tab 43E9..kbm_isr 455F less mou_clamp 451B..455F = 306; kbm_p5spend 46CC-46DC = 16; kbm_pollm 46DC..mou_evfill 4748 = 108; kbm_post 475F-4768 = 9; kbm_p5..kbm_ev 476E-477F = 17."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; rather than removing it unasked.\n; docs/KERNEL-MEMORY.md carries the same note beside the numbers.\n",
+   "new_text": "; rather than removing it unasked.\n",
+   "why": "grep of docs/KERNEL-MEMORY.md finds no keyboard-mouse or kbm note."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_isr still has the staged\n;           button byte in DX and kbm_move its step in DL.",
+   "new_text": "; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_apply still has the\n;           buttons in CL and kbm_move its step in DL.",
+   "why": "MOU_DECODE_MS (mouproto.inc:34) returns the buttons in CL; mou_apply calls mou_clamp and then decodes CL (mouse.inc:4139-4174)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; This is the only place os8088 touches the keyboard hardware, and it does the\n; least a hook can do: it PEEKS port 60h and chains.",
+   "new_text": "; This is the kernel's only int 09h hook (the PS/2 half reaches the same 8042\n; through port 64h, SPEC.md 9.9), and it does the least a hook can do: it\n; PEEKS port 60h and chains.",
+   "why": "mou_p2cw/mou_p2wcmd write the 8042 through 64h/60h (mouse.inc:1753-1765, 2189-2203), so kbm_isr is not the only code touching the keyboard controller."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; the EOI. Nothing here writes a port, queues a key or ends an interrupt.",
+   "new_text": "; the EOI. What this writes is the master 8259's mask around the ROM's call\n; (SPEC.md 9.8.3) and, on the self-chain refusal alone, an EOI; it queues no\n; key.",
+   "why": "kbm_isr's shipped int 09h arm writes port 21h around the ROM call (mouse.inc:3021-3031) and .selfchain sends EOI to port 20h (3042-3046)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "    mov al, [mou_p2cmd0]        ; ...and the command byte back as the BIOS had\n    call mou_p2wcmd             ; it, IRQ12 bit and all",
+   "new_text": "    mov al, [mou_p2cmd0]        ; ...and the command byte back as the BIOS had\n    call mou_p2wcmd             ; it, IRQ12 bit and all - but with bit 5 SET\n                                ; (the aux clock off) and bit 4 clear, which\n                                ; is what mou_p2cmd0 holds",
+   "why": "mou_p2cmd0 is the BIOS byte AND 0EFh OR 20h (mouse.inc:1901-1912); only mou_p2cmdr is the raw byte."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "                                ; mou_claim will not count this port until",
+   "new_text": "                                ; mou_byte's run will not count this port until",
+   "why": "The MOU_ERRQ test is in mou_byte's .pkt arm (mouse.inc:3899-3909); mou_claim is gone."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; IT SWAPS UNCONDITIONALLY where MOUPRIV_ENTER tests SS first, and that is\n; ten bytes of the difference. The macro's test exists because a ROM service\n; the kernel calls with IF=1 may have switched stacks under an ISR (SPEC.md\n; 7.4's int 13h);",
+   "new_text": "; IT SWAPS SP ALONE where MOUPRIV_ENTER banks and loads SS as well (SPEC.md\n; 9.10.1). The macro's SS half exists because a ROM service the kernel calls\n; with IF=1 may have switched stacks under an ISR (SPEC.md 7.4's int 13h);",
+   "why": "MOUPRIV_ENTER (mouse.inc:395-425) banks SS and loads it from mou_lowss with no compare; osapi_mouse_feed (4008-4010) swaps SP alone."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; odd byte of each pair is padding and costs 4 bytes in all). The two ports",
+   "new_text": "; odd byte of each pair holds that row's mou_b0, below). The two ports",
+   "why": "mou_b0 equ mou_phase + 1 (mouse.inc:6291), so mou_phase's odd bytes are not padding."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "                                ; came in on, banked by mou_claim beside",
+   "new_text": "                                ; came in on, banked by MOU_SETTLE_STORES beside",
+   "why": "MOU_SETTLE_STORES (mouse.inc:1162-1173) stores [mou_line]; vmm_boot_x stores its own copy; mou_claim is gone."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "                                ; on next to a working PS/2 one. Set beside\n                                ; [mou_seen] in mou_claim and in mou_p2_byte at\n                                ; its settle; never cleared. BELOW",
+   "new_text": "                                ; on next to a working PS/2 one. Set beside\n                                ; [mou_seen] by MOU_SETTLE_STORES (every\n                                ; backend's settle) and by vmm_boot_x's copy;\n                                ; never cleared. BELOW",
+   "why": "The only stores to [mou_ptr] are MOU_SETTLE_STORES (mouse.inc:1169) and vmm_boot_x (vmmouse.inc:338)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1",
+   "new_text": "mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1,\n                                ; 3 a wheel mouse's Z byte owed (SPEC.md 9.9.8)",
+   "why": "mou_p2_byte's .b2 stores [mou_p2wz] (3 in wheel mode) into mou_p2ph and .b23 takes phase 3 as the Z byte (mouse.inc:2306-2316)."
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "                                ; `mou_claim` banks that same BX, which is why",
+   "new_text": "                                ; the settle banks that same BX, which is why",
+   "why": "mou_byte's .pkt arm passes BL to mou_settle/MOU_SETTLE_STORES as [mou_port] (mouse.inc:3917-3924); mou_claim is gone."
+  },
+  {
+   "file": "kernel/vmmouse.inc",
+   "old_text": "    ; --- won: settle the contest, as mou_claim / mou_p2_byte do --------------",
+   "new_text": "    ; --- won: settle the contest, as mou_settle does for the others ----------",
+   "why": "mou_claim no longer exists; the other backends settle through mou_settle/MOU_SETTLE_STORES (mouse.inc:1162-1182)."
+  },
+  {
+   "file": "kernel/vmmouse.inc",
+   "old_text": "; all. Used by ui_task's pass and by menu_drop,\n; both of which already hold DS = KERNEL_SEG; task_yield's site is written out",
+   "new_text": "; all. Used by ui_task's pass, which already holds DS = KERNEL_SEG;\n; task_yield's site is written out",
+   "why": "grep VMM_POLL: the only expansion site is kernel/ui.inc:256; menu.inc has none."
+  },
+  {
+   "file": "kernel/vmmouse.inc",
+   "old_text": "; inconsistency: a segment override costs two bytes, and these two callers\n; already hold the kernel's DS, so paying it here would buy nothing at either.",
+   "new_text": "; inconsistency: a segment override costs two bytes, and this caller\n; already holds the kernel's DS, so paying it here would buy nothing.",
+   "why": "Only ui.inc:256 expands VMM_POLL; sched.inc's site is written out longhand."
+  },
+  {
+   "file": "kernel/vmmouse.inc",
+   "old_text": "; It is safe to borrow because it is PROVABLY IDLE while [vmm_on] is set:\n; vmm_boot_x settles the contest on MOU_VMROW and calls mou_lockon, which\n; clears IER on both UARTs, masks both lines at the master 8259 and calls\n; mou_p2_off. Neither mouse ISR can fire, so neither can be inside\n; MOUPRIV_ENTER, and [mou_psave] has no other writer.",
+   "new_text": "; It is safe to borrow because nothing can be on it at the same time:\n; vmm_poll holds IF = 0 from MOUPRIV_ENTER to MOUPRIV_LEAVE, and both mouse\n; ISRs run IF = 0 from gate to iret (SPEC.md 9.10). vmm_boot_x's mou_lockon\n; normally keeps both ISRs silent too - IER 0 on both UARTs, both lines\n; masked, mou_p2_off - but a serial lease (SPEC.md 115) re-arms one line, and\n; the IF = 0 argument is what covers that.",
+   "why": "srl_open unmasks the leased row's line and sets IER=1 (serial.inc:281-287, 351-354), so mou_isr can run on kern_emu; vmm_poll's ENTER..LEAVE is inside pushf/cli..popf (vmmouse.inc:220-237)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "    ; is for ui_task and menu_drop, which already hold the kernel's; this site",
+   "new_text": "    ; is for ui_task, which already holds the kernel's; this site",
+   "why": "The only VMM_POLL expansion is kernel/ui.inc:256."
+  },
+  {
+   "file": "kernel/kbddiag.inc",
+   "old_text": "; sees exactly the hardware state it sees on a plain kernel; the one thing\n; that changes is that kbm_isr CALLS the ROM rather than jumping to it.",
+   "new_text": "; sees exactly the hardware state it sees on a plain kernel. What changes is\n; kbg_pre and kbg_post around the ROM's call - and that, unlike the shipped\n; kernel's call (SPEC.md 9.8.3), this one is made with every IRQ still open.",
+   "why": "The shipped kbm_isr also CALLS the ROM, under an IMR bracket (mouse.inc:3021-3031); the KBD_DIAG arm (2978-2996) calls it with no bracket and runs kbg_post."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **And the VMware absolute-pointer backdoor on I/O port `0x5658`** (§9.10),\n  which is how the browser build (v86) gets a grabless absolute pointer.\n  `kern_big` only, behind `[cpu_tier] == CPU_386` at run time and a `cpu 386`\n  island at assembly — the probe and every command are 32-bit.",
+   "new_text": "- **And the VMware absolute-pointer backdoor on I/O port `0x5658`** (§9.11),\n  which is how the browser build (v86) gets a grabless absolute pointer.\n  `kern_emu` only (§9.11.7), behind `[cpu_tier] == CPU_386` at run time, and\n  the protocol is `VMMOUSE.DRV`'s rather than the kernel's — the probe and\n  every command are 32-bit.",
+   "why": "vmmouse.inc is %ifdef KERN_EMU (39-60) and its header says the protocol and 386 island live in VMMOUSE.DRV; the VMware section is 9.11."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- ISR: `mou_isr` (IRQ4) and `mou_isr3` (IRQ3) differ only in the port row\n  each hands the shared body in BX — the one register that can be spent\n  before DS is loaded and still index a table afterwards, so it is pushed\n  *first* and popped *last*, and it stays the port row all the way to the\n  completed packet because **every port decodes independently** (§9.5). Then:\n  save the remaining registers + DS/ES, load DS=KERNEL_SEG, read that port's\n  RX register — **always**, whatever is to be done with the byte, because the\n  read is what clears the UART's interrupt — assemble packet",
+   "new_text": "- ISR: `mou_isr` (IRQ4) and `mou_isr3` (IRQ3) differ only in the 8259 bit\n  each stamps into `[mou_lfired]` (§9.5.2.1). The shared body switches to\n  its own stack (§9.10), saves the registers + DS/ES, loads DS=KERNEL_SEG\n  and scans **every live port**, not the one the vector is named for\n  (§9.5.2): an LSR read each, and that port's RX read wherever a byte is\n  waiting — the read is what clears that UART's interrupt — handed to\n  `mou_byte` with the port row in BX, which stays the row all the way to the\n  completed packet because **every port decodes independently** (§9.5). A\n  leased row goes to `SERIAL.DRV` instead (§115.2). Then: assemble packet",
+   "why": "mou_isr/mou_isr3 only stamp MOU_L4/MOU_L3 into [mou_lfired] (mouse.inc:3667-3686); mou_isr_body's .scan reads every live row's LSR and RX only on data-ready (3720-3753)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "1px white outline. Two 16-row × 16-bit tables: `cur_and` (white outline\n  mask) and `cur_data` (black body). **The tables are 16×16; the arrow is\n  `CUR_GW`×`CUR_GH` = 8×12, and that is what every walk is bounded by**",
+   "new_text": "1px white outline. Two tables of `CUR_GH` = 12 one-byte rows (the pictures\n  are written as 16-bit words and `CUR_ROW` keeps the top byte): `cur_and`\n  (white outline mask) and `cur_data` (black body). **The arrow is\n  `CUR_GW`×`CUR_GH` = 8×12, and that is what every walk is bounded by**",
+   "why": "CUR_TABSZ equ CUR_GH, 'one BYTE a row' (mouse.inc:256-258); CUR_ROW emits db (%1) >> 8 (5959-5961)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "with interrupts on; guard their critical sections with cli/sti so the ISR",
+   "new_text": "with interrupts on; guard their critical sections with pushf/cli … popf so the ISR",
+   "why": "cursor_show/cursor_hide use pushf/cli ... popf (mouse.inc header lines 17-20 and their bodies)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "machine that is not in a browser (`kern_big` only, §9.10).",
+   "new_text": "machine that is not in a browser (`kern_emu` only, §9.11.3).",
+   "why": "vmm_poll and VMM_POLL are KERN_EMU only (vmmouse.inc:60-62, 265-267); the section is 9.11.3."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(`[mou_seen]`, set by the ISR at every third byte and never cleared),",
+   "new_text": "(`[mou_seen]`, set when a port completes `[mou_need]` clean packets in a row\n(§9.5) or another backend settles the contest (§9.5.1.1), and never cleared),",
+   "why": "mou_byte's .pkt arm settles only when [bx+mou_run] reaches [bx+mou_need] (mouse.inc:3909-3924); other backends settle via mou_settle."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "byte was inside `MOU_DRAINT` = 9 of the raise, so the **quiet** test below\n(≥46 ticks against `MOU_DRAINQ` = 3)",
+   "new_text": "byte was inside `MOU_DRAINT` = 18 of the raise, so the **quiet** test below\n(≥37 ticks against `MOU_DRAINQ` = 3)",
+   "why": "MOU_DRAINT equ 18 (mouse.inc:95); 55 - 18 = 37."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "for `MOU_DRAINQ` ticks (~165ms) **or** `MOU_DRAINT` ticks (~0.5s) have passed",
+   "new_text": "for `MOU_DRAINQ` ticks (~165ms) **or** `MOU_DRAINT` ticks (~1s) have passed",
+   "why": "MOU_DRAINT equ 18, ~1.0 s (mouse.inc:95)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "1200-baud burst, and `MOU_DRAINT` stays 9 as the ceiling.",
+   "new_text": "1200-baud burst, and `MOU_DRAINT` stays the ceiling - 18 (~1s) since\ndocs/FIELD-NOTES.md 44's 69-byte PnP burst outran 9 (§9.4.1).",
+   "why": "MOU_DRAINT equ 18 (mouse.inc:95); SPEC.md 14002-14007 records the raise from 9."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`[mou_lfired]` is stamped after `mov ds, ax` and not before.** The store\n  needs DS; the entry has only BX pushed by then, and BX is the one register\n  the push sequence does not spend.",
+   "new_text": "- **`[mou_lfired]` is stamped FIRST, through CS and with no register**\n  (`mov byte [cs:mou_lfired], MOU_L4`), so the private-stack swap after it\n  is one copy for both doors (§9.10). kern_mega, whose code selector is not\n  writable, stamps it through the data alias instead.",
+   "why": "mou_isr/mou_isr3 store [cs:mou_lfired] before MOUPRIV_ENTER, kern_mega via k_dsel (mouse.inc:3667-3686)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "into `[mou_lfired]` before falling into the shared body, `mou_claim` banks\nthat into `[mou_line]`",
+   "new_text": "into `[mou_lfired]` before falling into the shared body, the settle\n(`MOU_SETTLE_STORES`, §9.5.1.1) banks that into `[mou_line]`",
+   "why": "MOU_SETTLE_STORES stores [mou_line] (mouse.inc:1162-1173); mou_claim was folded into mou_byte in size pass 17."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "padding. The per-pass cost of `mou_hotplug` after the mouse is found is\nunchanged at two compares,",
+   "new_text": "padding. The per-pass cost of `mou_hotplug` after the mouse is found is\none compare (`[mou_hpst]` = 2 is terminal, §9.4),",
+   "why": "mou_hotplug's first instruction is cmp byte [mou_hpst], 2 / je (mouse.inc:1298-1299)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(`mou_claim`), the aux port (`mou_p2_isr`, §9.9), a pointing **driver**",
+   "new_text": "(`mou_byte`'s `.pkt` arm, `mou_claim` until kernel size pass 17), the aux\nport (`mou_p2_isr`, §9.9), a pointing **driver**",
+   "why": "mouse.inc:1184-1186: mou_claim is written in mou_byte's .pkt arm since kernel size pass 17."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "512-byte image rung** on a kernel with three bytes left in one. `mou_claim`\ntakes the macro inline there,",
+   "new_text": "512-byte image rung** on a kernel with three bytes left in one. `mou_byte`'s\n`.pkt` arm takes the macro inline there,",
+   "why": "kern_small's MOU_SETTLE_STORES is inline in mou_byte's .pkt arm (mouse.inc:3920-3924)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Two callers pay a few cycles for it and neither pays a byte.** `mou_claim`\ntests `[mou_seen]` at its own top",
+   "new_text": "**Two callers pay a few cycles for it and neither pays a byte.** `mou_byte`'s\n`.pkt` arm tests `[mou_seen]` at its own top",
+   "why": "mou_byte's .pkt arm does cmp byte [mou_seen],0 / jne .settled before call mou_settle (mouse.inc:3896-3921)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "4), and `mou_claim` will not add a packet to a port's run, and",
+   "new_text": "4), and `mou_byte`'s `.pkt` arm will not add a packet to a port's run, and",
+   "why": "The MOU_ERRQ test is in mou_byte's .pkt arm (mouse.inc:3899-3909)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "workaround worked.** Once a port is settled, `[mou_seen]` is 1 and `mou_claim`\nreturns at its first compare",
+   "new_text": "workaround worked.** Once a port is settled, `[mou_seen]` is 1 and `mou_byte`'s\n`.pkt` arm skips the run at its first compare",
+   "why": "cmp byte [mou_seen],0 / jne .settled skips the run count (mouse.inc:3896-3897)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "itself — `mou_claim` beside `[mou_seen]`, `mou_p2_byte` at its settle —",
+   "new_text": "itself — `MOU_SETTLE_STORES` beside `[mou_seen]`, for every backend's settle\n(§9.5.1.1), and `vmm_boot_x`'s own copy —",
+   "why": "Stores to [mou_ptr]: MOU_SETTLE_STORES (mouse.inc:1169) and vmm_boot_x (vmmouse.inc:338) only."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "3. On success it **settles the contest**, as `mou_claim` and `mou_p2_byte` do:",
+   "new_text": "3. On success it **settles the contest**, as `mou_settle` does for the other\n   backends (§9.5.1.1):",
+   "why": "The serial and PS/2 settles go through mou_settle/MOU_SETTLE_STORES (mouse.inc:2321, 3917-3924); mou_claim is gone."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "serial mouse's identify, or the PS/2 aux port — and **it is never cleared**.",
+   "new_text": "serial contest settling (§9.5), the PS/2 aux port's first packet, a pointing\ndriver's first report (§9.12) or the VMware backdoor (§9.11) — and **it is\nnever cleared**.",
+   "why": "The identify sets only [mou_ident]/[mou_idany]; [mou_ptr] is stored by MOU_SETTLE_STORES (mouse.inc:1169) and vmm_boot_x (vmmouse.inc:338)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "shared prologue above the gate. `mou_eoi`'s single `iret` and `mou_p2_isr`'s\ncarry the restore.",
+   "new_text": "shared prologue above the gate. `mou_eoi`'s single `iret` carries the\nrestore for all three: `mou_p2_isr` sends the slave's EOI and joins it.",
+   "why": "mou_p2_isr ends out 0A0h / jmp mou_eoi (mouse.inc:2256-2258); mou_eoi holds the only MOUPRIV_LEAVE/iret."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 9.5.6 A port reporting line errors cannot win the contest",
+   "new_text": "#### 9.5.6 A port reporting line errors cannot win the contest",
+   "why": "Its siblings 9.5.1-9.5.3 are #### under ### 9.5; level only, the out-of-order numbering is left."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 9.5.4 The WHEEL mouse's fourth byte, and why the contest could never be won",
+   "new_text": "#### 9.5.4 The WHEEL mouse's fourth byte, and why the contest could never be won",
+   "why": "A subsection of ### 9.5, whose other children are ####."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 9.5.5 …and its LOW NIBBLE is the wheel (`kern_big`)",
+   "new_text": "#### 9.5.5 …and its LOW NIBBLE is the wheel (`kern_big`)",
+   "why": "A subsection of ### 9.5, whose other children are ####."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 9.6.1.1 The keyboard mouse RETIRES when a real pointer proves itself",
+   "new_text": "##### 9.6.1.1 The keyboard mouse RETIRES when a real pointer proves itself",
+   "why": "A child of #### 9.6.1, so one level below it."
+  },
+  {
+   "file": "docs/plans/MOUSE-BOOT-FREEZE-PLAN.md",
+   "old_text": "> * **B1 — the poll interval is timed from the desktop.** `kmain` stamps a new\n>   base word `[mou_hpbase]` at the first frame, so the poller's first DTR drop\n>   moves from the first UI pass (on a long boot) to ~3s after the desktop.\n>   `[mou_hpt]` is left 0-until-a-drop so `sysbench`'s \"poller stamp (0=nvr)\"\n>   (§9.4.2) still reads true.",
+   "new_text": "> * **B1 — the poll interval is timed from the desktop.** `kmain` stamps\n>   `[mou_hpt]` at the first frame, so the poller's first DTR drop moves from\n>   the first UI pass (on a long boot) to ~3s after the desktop. It was built\n>   as a separate `[mou_hpbase]` and later folded into the one stamp (SPEC.md\n>   9.4.8, \"One stamp, not three\"); `[mou_hpst]` = 3 now carries the \"poller\n>   fired\" reading.",
+   "why": "No mou_hpbase exists in the tree; kernel.asm:6147 stores [mou_hpt] at the desktop and SPEC.md 14526 says one stamp."
+  },
+  {
+   "file": "docs/plans/MOUSE-BOOT-FREEZE-PLAN.md",
+   "old_text": "last byte **or** `MOU_DRAINT` = 9 ticks after the raise, whichever first.",
+   "new_text": "last byte **or** `MOU_DRAINT` ticks after the raise (9 when built, 18 since\n>   FIELD-NOTES 44), whichever first.",
+   "why": "MOU_DRAINT equ 18 (mouse.inc:95)."
+  }
+ ]
+}

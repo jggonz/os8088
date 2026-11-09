@@ -9,8 +9,8 @@ HARD DISK. Loading this script builds two scratch disks in build/guide/scratch/
 
   vidherc.vhd   a formatted (not bootable) XT-IDE fixed disk, made by
                 tools/os88hdd.py --noboot over MartyPC's own default_xtide.vhd,
-                holding apps/video/demo/herc/{03-PCM11,04-ADPCM,06-ADPCM,
-                08-LIVE}.V88 and build/video.o88 in its root
+                holding apps/video/demo/herc/{03-BADCA,04-STARW,
+                07-WILLY}.V88 and build/video.o88 in its root
   vidsys360.img build/os8088-360.img plus a SYSTEM.CFG that wants HDD.DRV,
                 so the floppy boot mounts that disk as C:
 
@@ -42,8 +42,7 @@ RUN_DEFAULT = "os8088_xt_vga"           # run.py's --machine default
 HDD_CFGBIT = 1                          # kernel/driver.inc's drv_cfgbit: HDD
 
 MACHINE = "os8088_5150_herc_hdd_sb_gla"
-VIDEOS = ("herc/03-PCM11.V88", "herc/04-ADPCM.V88", "herc/06-ADPCM.V88",
-          "herc/08-LIVE.V88")
+VIDEOS = ("herc/03-BADCA.V88", "herc/04-STARW.V88", "herc/07-WILLY.V88")
 VHD = os.path.join(SCRATCH, "vidherc.vhd")
 
 
@@ -127,7 +126,7 @@ if not globals().get("SKIP_SETUP"):    # (VIDEO_O88_CGA.py borrows the helpers)
 
 def capture(ui, shot):
     # 1. Star Wars, 600 x 165: plays in its window
-    w = open_video(ui, "04-ADPCM.V88")
+    w = open_video(ui, "04-STARW.V88")
     place(ui, w, 56, 60)
     park(ui)
     ui.m.type_text(" ")
@@ -136,21 +135,16 @@ def capture(ui, shot):
     stop(ui, w)
 
     # 2. a 720 x 261 video is too big for a window, so Play is full screen
-    w = open_video(ui, "06-ADPCM.V88")       # Sin City
-    ui.m.type_text(" ")
-    os88marty.guest_sleep(ui.m, 12.0)
-    shot("video-herc-full", settle=False)
-    stop(ui, w)
-    w = open_video(ui, "03-PCM11.V88")       # Bad Carrot, as an alternative
+    w = open_video(ui, "03-BADCA.V88")       # Bad Carrot
     ui.m.type_text(" ")
     os88marty.guest_sleep(ui.m, 40.0)
-    shot("video-herc-full-alt", settle=False)
+    shot("video-herc-full", settle=False)
     stop(ui, w)
 
     # 3. Steamboat Willie, Live: on the desktop, beside a Calculator. The
     # Live player reads the whole file into memory and a drag can miss it
     # while it does (place() carries on: the picture still shows the play)
-    w = open_video(ui, "08-LIVE.V88", wait=8.0)
+    w = open_video(ui, "07-WILLY.V88", wait=8.0)
     place(ui, w, 40, 50)
     ui.path("B:/APPS/CALC.O88")
     ui.m.type_text("12*3=")

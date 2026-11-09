@@ -27,6 +27,17 @@ ROM of its own and puts it on a scratch disk PLAIN:
      own frame counter must run. Break it on purpose by forcing rw_load onto
      the bank cache's raw READ_SEQ path and the package refuses the file.
 
+ON KERN_MEGA (tests/megaport.txt's `mega-gbship`, OS88_MEGA): B reads
+build/megaapps.img and megaapps120.img, and C boots kern_mega's pair -
+mega.img and megaapps.img, which carry REALDMG's ARM (SPEC.md 20.18) and
+the same packed MEDIA/GBDEMO.GB. That is the leg the bug was on: the arm
+puts every cartridge of 32KB or more IN PLACE above 1MB (REALDMG-SPEC
+10.3.1), read a bank at a time by OSAPI_FILE_READ_SEQ, which is RAW (SPEC.md
+20.14.3), so the shipped demo came in as 1,095 bytes of LZ4 and RealDMG
+said "not a GB ROM" while kern_big played it (KERN-MEGA-PLAN 14.147). RED,
+measured: `--apps` a copy of megaapps.img with the arm from before
+rw_czprobe - RealDMG starts, the cartridge never runs.
+
 SOAK: one package, and it needs rgbds for A.
 """
 import argparse
@@ -49,6 +60,10 @@ COMMITTED = os.path.join(ROOT, "apps", "realdmg", "GBDEMO.GB")
 SHIPPED = [("emu360.img", "MEDIA/GBDEMO.GB"),
            ("apps.img", "MEDIA/GBDEMO.GB"),
            ("apps120.img", "MEDIA/GBDEMO.GB")]
+MEGA = bool(os.environ.get("OS88_MEGA"))
+if MEGA:
+    SHIPPED = [("megaapps.img", "MEDIA/GBDEMO.GB"),
+               ("megaapps120.img", "MEDIA/GBDEMO.GB")]
 
 fails = []
 
@@ -78,6 +93,8 @@ def main():
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--secs", type=float, default=60,
                     help="guest seconds to wait for the game to start")
+    ap.add_argument("--apps", help="C boots this apps disk instead of the "
+                    "shipped one (the red leg: a disk with another REALDMG.O88)")
     a = ap.parse_args()
     with open(COMMITTED, "rb") as f:
         want = f.read()
@@ -108,18 +125,39 @@ def main():
         print("B  %s %s: %d bytes packed, unwraps to the committed %d" % (img, path, len(got), len(want)))
 
     # --- C: RealDMG plays the packed one off the shipped pair ----------------
-    viewoff = gbwindow.label_off(os.path.join(ROOT, "build", "realdmg.lst"), "rdg_viewseg")
-    with os88ui.boot(os.path.join(ROOT, "build", "os8088-360.img"),
-                     apps=os.path.join(ROOT, "build", "emu360.img"),
+    if MEGA:                            # kern_mega's pair, and the ARM's map
+        sysimg, apps = "os8088.img", "apps.img"     # (os88megacommon swaps
+        lst = os.path.join(ROOT, "build", "megak", "apps", "realdmg.lst")
+    else:                                           #  both for mega's own)
+        sysimg, apps = "os8088-360.img", "emu360.img"
+        lst = os.path.join(ROOT, "build", "realdmg.lst")
+    apps = a.apps or os.path.join(ROOT, "build", apps)
+    viewoff = gbwindow.label_off(lst, "rdg_viewseg")
+    with os88ui.boot(os.path.join(ROOT, "build", sysimg), apps=apps,
                      machine=a.machine) as ui:
         m = ui.m
         ui.path("B:/MEDIA/GBDEMO.GB")
         seg = view = None
-        f = 0
+        f = was = 0
         left = a.secs
         while left > 0:
             M.guest_sleep(m, 1)
             left -= 1
+            if MEGA:                    # the package and its view are LDT
+                import dispapps         #   selectors (tests/gbsave.py)
+                got = dispapps.pkg_seg(m, 0)
+                seg = got and got[1]
+                view = seg and int.from_bytes(m.readseg(seg, viewoff, 2), "little")
+                was = f
+                f = view and int.from_bytes(
+                    m.readseg(view, gbwindow.S_FRAMES, 2), "little") or 0
+                # RUNNING, not a number: a refused cartridge leaves the view
+                # claimed and its counter whatever the claim held (the red
+                # leg read 39,810 there), so it must ADVANCE between two
+                # looks a guest second apart, at a Game Boy's rate or under
+                if f > 30 and was and 0 < f - was <= 120:
+                    break
+                continue
             seg = seg or gbwindow.find_seg(m, b"REALDMG", viewoff)
             if seg:
                 view = int.from_bytes(m.read(seg * 16 + viewoff, 2), "little")
@@ -129,11 +167,12 @@ def main():
                     break
         if not seg:
             fail("RealDMG never started from B:/MEDIA/GBDEMO.GB")
-        elif not view or f <= 30:
+        elif not view or f <= 30 or (MEGA and not (was and 0 < f - was <= 120)):
             fail("RealDMG started but the packed cartridge never ran "
                  "(%d game frames in %.0f guest seconds)" % (f, a.secs))
         else:
-            print("C  emu360.img: B:/MEDIA/GBDEMO.GB opened in RealDMG, %d game frames" % f)
+            print("C  %s: B:/MEDIA/GBDEMO.GB opened in RealDMG, %d game frames"
+                  % (os.path.basename(apps), f))
     print("gbship: %s" % ("PASS" if not fails else "FAIL"))
     return 1 if fails else 0
 

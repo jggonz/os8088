@@ -21,8 +21,9 @@
 ; is safe to read twice - port 64h (status, no side effect) before the ROM's
 ; handler and port 60h AFTER it, when the 8042 has already handed the byte
 ; over and a re-read returns the same byte and consumes nothing. So the ROM
-; sees exactly the hardware state it sees on a plain kernel; the one thing
-; that changes is that kbm_isr CALLS the ROM rather than jumping to it.
+; sees exactly the hardware state it sees on a plain kernel. What changes is
+; kbg_pre and kbg_post around the ROM's call - and that, unlike the shipped
+; kernel's call (SPEC.md 9.8.3), this one is made with every IRQ still open.
 ;
 ; Drawn with font_run (SPEC.md 6.6): every line is padded to KBG_W cells, so
 ; the padding is the erase and nothing is drawn twice.
@@ -609,9 +610,9 @@ kbg_t3: db 'c tick f st>st 60 hd tl>tl key  is ir im x', 0
 kbg_t4: db '? .... . ..>.. .. .. ..>.. .... .. .. .. ..', 0
 kbg_t5: db '-', 0
 
-; .text and INITIALISED, not .bss: .bss is not zeroed (SPEC.md 12.8.5.1) and
-; a knob kernel's budget is not billed (docs/KERNEL-MEMORY.md), so the zeroes
-; are cheaper than an init routine and a call to it
+; .text and INITIALISED, not .bss. Either would be zero at boot (.bss is the
+; image's zero padding, SPEC.md 12.8.5.1), and a knob kernel's budget is not
+; billed (docs/KERNEL-MEMORY.md), so the placement costs nothing either way
 kbg_ring:   times KBG_N * KBG_REC db 0
 kbg_rec:    times KBG_REC db 0
 kbg_buf:    times KBG_W + 1 db 0

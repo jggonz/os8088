@@ -27,6 +27,7 @@ w16r_gate:
 %if w16r_gate - w16r_base != W16S_GATE || w16vr_myds - w16r_base != W16S_MYDS
   %error "w16r_gate or w16vr_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
+    W16SELF r
 
 ; -----------------------------------------------------------------------------
 ; Arc (GDI.23) and Pie (GDI.26) - args: +0 yEnd, +2 xEnd, +4 yStart, +6 xStart,

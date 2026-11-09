@@ -1,0 +1,356 @@
+{
+ "area": "gap-api-shape-includes",
+ "title": "gap-api-shape-includes: The kernel-adjacent package includes that exist because of an API's shape (rseq, wseq, data, link, pit, m83, pself, partsbody, crt0)",
+ "summary": "The includes work as os8088's libc. The kernel's file API is stateless and takes a name on every call, NFSv2's model, and each efficiency is won back by a token the caller holds: the READ_SEQ cursor, the WRITE_SEQ token, os88data's banked folder, op_clb. That is right for an 8088 and keeps resident bytes near zero, and every include's header states the kernel limitation it compensates for. The weaknesses fall into four kinds. (1) Geometry leaks into every caller, and the only way to learn the cluster size is a full FAT count (DFREE/VOL_STAT, ~105 ms on a 20 MB disk). op_clbget, op_self and wseq all pay it for a byte the kernel holds in [dsk_spc], and the parts standard rounds to clusters even on kern_big, where READ_AT takes sectors, which brings back SPEC 18.4.4.2's 32 KB-cluster cost. (2) The kern_small stubs answer inconsistently: VOL_STAT and WRITE_AT give a bare stc with AX left as the caller had it. As a result os88wseq's documented kern_small APPEND path cannot run (its open fails with CF=1, AX=0; REDLINE ships on util360), and os88data's bank is useless for writes on kern_small. (3) The READ_SEQ cursor does not name its file, and its register shape needs a 76-byte shim in about 13 carriers. (4) pit_now is wrong inside an armed FASTTICK/RATE bracket; its users know, but the include does not say so and SPEC 53.2.1 says the opposite. The fixes are small: a granule cell of about 16 bytes per kernel, a name stamp of about 20 .cold bytes in the cursor's free bytes 3-5, a 0-byte stub-label move, an optional READ_AT-shaped stream cell (about 14 bytes), and doc corrections. Two approaches were considered and rejected: absorbing wseq into the kernel (it is stdio's fwrite and belongs in user space) and moving the parts body into a module (a part is read from the package's own disk, a module from the system disk). crt0 meets every rule checked (SS/ES/DF/CF ordering/register saves/worker park/claims). Its faults are two stale comments and a plain .OVL arm that no shipped package uses. 13 doc/code mismatches are recorded, among them SPEC 72.15.1's 'eighteen hours' (it is one hour), SPEC 18.4.7.4's and diskw.inc's 'DOS is the only caller' of VOL_STAT/WRITE_AT, os88pit's 'TWO USERS' (it has nine), and crt0's misquote of SPEC 73.4. VERIFIED at bdd82658: 10 findings confirmed, 1 corrected (gi-8: x3stub's cli-less sb_now is deliberate and documented), 0 refuted. Doc mismatches: 13 confirmed, and the verifier added one (diskw.inc's READ_SEQ banner contradicts disk.inc's [dsk_mgen] rule). One reviewer count is corrected: os88pit.inc has EIGHT shipped carriers, not nine (WIN16 only cites it in a comment). The three apps/os88api.inc fixes need tools/abilock.py --update.",
+ "strengths": [
+  {
+   "title": "One body per convention, each with a guard",
+   "why": "Two copies drifted twice before m83 was shared. Mirrors are compared by test (t_mirror for os88link, Unicorn-run tests/m83.py, tests/pitnow.py), so a drift fails the build rather than the user.",
+   "evidence": "apps/os88m83.inc:6-17; apps/os88link.inc:62-63; tests/pitnow.py"
+  },
+  {
+   "title": "Staleness takes a cold path, never an error",
+   "why": "dsk_mgen is seeded 1 and steps by 2, so it is always odd: a zeroed cursor can never match, and the add needs no wrap test. os88_rseq re-seeds on any offset mismatch, so a seek, a retry or a first call needs nothing at the call site.",
+   "evidence": "kernel/disk.inc:11177-11188; apps/os88rseq.inc:38-46"
+  },
+  {
+   "title": "os88data verifies its own bank",
+   "why": "A WRITE_AT refusal is taken as evidence that the banked folder is wrong, and the one-sector in-place write is taken only for a file this package itself wrote in full since the last walk, which keeps the compression-hint rule intact.",
+   "evidence": "apps/os88data.inc:47-61, 313-341"
+  },
+  {
+   "title": "pit_now and sch_account share one coherence rule",
+   "why": "Both read the IRR in the same latch window, and the header records the measured failure (40 in 60,000 reads) that motivated it.",
+   "evidence": "apps/os88pit.inc:24-34, 70-76; kernel/sched.inc:1305-1314"
+  },
+  {
+   "title": "crt0's trampolines are defensive by design",
+   "why": "They save everything rather than the minimum per callback, set CF after the pops, gate the worker with cc_iswk (a stack-range test, no kernel call), park a worker that returns until TASK_ALIVE ends it, refuse a full return stash rather than overrun it, and declare the region movable with the DS alias so kern_mega finds the claim.",
+   "evidence": "apps/cc/crt0.asm:105-111, 422-494, 1040-1056, 1000-1016, 1354-1385"
+  },
+  {
+   "title": "os88real's contract is complete",
+   "why": "Words are renamed at the door; a 0 word stays 0 both ways; the pin requirement is stated with its reason; the 2-* macro trap is documented where it occurs.",
+   "evidence": "apps/os88real.inc:13-60"
+  }
+ ],
+ "findings": [
+  {
+   "id": "gi-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "os88wseq's documented kern_small path cannot run: OSAPI_VOL_STAT is a bare stc there, so the open fails CF=1 AX=0",
+   "detail": "The header promises that on kern_small each chunk goes through APPEND. But os88_wseq_open calls OSAPI_VOL_STAT first, and on kern_small that is osapi_snd_fm's stc/ret, which leaves AX unchanged (0, from the xor at :74). The .stat path then banks WS_ERR = 0 (the stream is not marked failed) and answers CF=1 with AX=0, which is no FERR code. No file is created. REDLINE's Inspect report (the only user) answers 'Report not saved'. REDLINE.O88 ships on util360.img and is not in SMALLOMIT, so a kern_small machine can open it; whether REDLINE otherwise runs there was not checked.",
+   "evidence": [
+    "apps/os88wseq.inc:37-40",
+    "apps/os88wseq.inc:66-104",
+    "kernel/kernel.asm:6653-6657",
+    "kernel/snd.inc:714-717",
+    "apps/redline/inspect.inc:801-806",
+    "Makefile:14896-14901",
+    "build/util360.img carries ::/REDLINE.O88"
+   ],
+   "recommendation": "Ask OSAPI_FILE_DFREE (BX = sectors/cluster, present on both kernels, same cost) instead of VOL_STAT, and bank a real FERR_* (FERR_NODISK) when the stat refuses. Later, use gi-2's cell.",
+   "phase": "now",
+   "bytes_est": "+2 package bytes, 0 kernel",
+   "listed_as": "ABI-BREAK-LIST T3 (osapi_vol_stat among kern_small's bare refusals; refused removal)",
+   "verdict": "confirmed",
+   "verify_note": "Re-read at bdd82658. OS88_SNDCARD is defined only under KERN_BIG (kernel.asm:1008-1010), so kern_small's osapi_vol_stat is osapi_snd_fm's bare stc/ret (snd.inc:714-717). AX is still the 0 from the xor at os88wseq.inc:74. The .stat path moves it into WS_ERR and returns CF=1, AX=0. REDLINE's ri_report (inspect.inc:805-806) is the only caller. REDLINE is not in SMALLOMIT (Makefile:14896-14902; rlapply is). It is a bug only if REDLINE runs on kern_small, which nobody has checked, so medium is the ceiling. It is not ABI-BREAK-LIST T3 itself: T3 proposes removing the cell and was refused. Related, not listed. A DFREE swap is a few package bytes (BX = spc, then a shl by 9)."
+  },
+  {
+   "id": "gi-2",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The cluster size can only be learned through a full free-cluster count",
+   "detail": "DFREE and VOL_STAT both run dsk_free_clus_x: ~105 ms on a 20 MB disk (measured) and ~55 ms modelled on a 1.44 MB floppy. The SDK tells callers to ask DFREE for the cluster size. op_clbget (once per instance with lazy parts), op_self (every call) and os88_wseq_open (every stream) pay the count for [dsk_spc], which the kernel already holds, validated by mount rule 4.",
+   "evidence": [
+    "kernel/diskw.inc:491-499",
+    "kernel/diskw.inc:546-560",
+    "kernel/disk.inc:6336-6346",
+    "apps/os88api.inc:6021-6022",
+    "apps/os88partsbody.inc:1734-1756",
+    "apps/os88pself.inc:41-45,59-60",
+    "apps/os88wseq.inc:32-36,81"
+   ],
+   "recommendation": "Append one cell (e.g. OSAPI_FILE_GRAIN) behind inst_vol_enter: AX = bytes per cluster ([dsk_spc]*512, at most 32768), CX = READ_AT's granule (512 on kern_big, a cluster on kern_small). No count and no I/O. Retires the DFREE call in three includes and enables gi-3.",
+   "phase": "now",
+   "bytes_est": "+14 to +16 resident per kernel",
+   "prior_art": "DOS AH=32h (Get DPB) gives sectors per cluster without counting; only AH=36h counts, and DOS 4+ caches the free count in the DPB.",
+   "verdict": "confirmed",
+   "verify_note": "dskw_dfree_x and dwf_dskw_vstat both start with dsk_free_clus_x, which has no cache: it counts every FAT entry, or asks the redirector (diskw.inc:491-560, disk.inc:6354ff). No other cell exposes [dsk_spc]. op_clbget caches its answer once (partsbody:1734-1756). op_self asks on every call by design (pself:41-45 'Not cached'). wseq asks once per stream. The ~16-byte cell estimate is plausible for a cold far body plus a 6-byte slot. It is not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "gi-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The parts standard and op_self round reads to CLUSTERS on kern_big, which brings back the cost SPEC 18.4.4.2 removed",
+   "detail": "op_lazyp, op_claim and op_self compute head slack and read length in whole clusters, so the code also works on kern_small. On kern_big READ_AT takes sectors, and 18.4.4.2 was written because a 1.8 KB read cost 64 KB of disk and RAM on a 2 GB volume. A 4 KB lazy part on a 16 KB-cluster partition claims and reads up to ~32 KB, and up to ~64 KB at 32 KB clusters. On floppies the difference is negligible, which is why it has not shown.",
+   "evidence": [
+    "apps/os88partsbody.inc:1834-1870",
+    "apps/os88pself.inc:41-45,62-80",
+    "SPEC.md 18.4.4.2",
+    "kernel/diskw.inc:3140-3146"
+   ],
+   "recommendation": "With gi-2's cell, op_clbget banks CX (the READ_AT granule) in [op_clb] and op_self uses it for its mask. Every downstream computation is mask arithmetic and is unchanged.",
+   "phase": "now",
+   "bytes_est": "~0 package bytes (kernel cost is gi-2's); saves up to ~2 clusters of RAM and disk read per fetch on large-cluster disks",
+   "verdict": "confirmed",
+   "verify_note": "dskw_read_at masks with 511 on kern_big and with [dwr_clb]-1 only under KERN_SMALL (diskw.inc:3143-3148). op_lazyp rounds both head and length to op_clb, which is BYTES PER CLUSTER (partsbody:1834-1858), and op_self does the same with a DFREE mask. SPEC 18.4.4.2's 1.8 KB/64 KB example is the cost this brings back for a lazy part on a large-cluster partition. SPEC 20.12 (around 46873) knows READ_AT takes sectors on kern_big but still sizes the window in clusters. No SPEC text chooses clusters on kern_big deliberately; the evident reason is one body for both kernels. On floppies this costs nothing."
+  },
+  {
+   "id": "gi-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The READ_SEQ cursor names no file and stays trusted across a quiet folder change",
+   "detail": "A hot cursor is checked only against dsk_mgen and the volume. dsk_mgen moves only on committed writes and on mounts that read a boot sector, so a quiet GOTO_QM on a trusted floppy, or a fixed-disk directory change, leaves a cursor for A\\X.DAT valid for B\\Y.DAT at the same offset. The result is the wrong clusters with CF=0. SPEC 18.4.8.1 and os88rseq.inc state the zero-on-change rule; os88api.inc says 'a stale cursor is never an error'.",
+   "evidence": [
+    "kernel/diskw.inc:3104-3115",
+    "kernel/diskw.inc:3258-3263",
+    "kernel/disk.inc:11177-11183",
+    "kernel/disk.inc:4199-4204",
+    "apps/os88api.inc:6119-6137",
+    "apps/os88rseq.inc:21-24"
+   ],
+   "recommendation": "Stamp an 8-bit name sum plus the current folder's low cluster byte into the cursor's free bytes 3-5 in dwf_dskw_read_seq, and treat a mismatch as cold. No ABI change: those bytes are kernel-private, and a zeroed cursor stays cold. Also fix the os88api.inc sentence.",
+   "phase": "now",
+   "bytes_est": "+20 .cold resident kern_big, 0 kern_small",
+   "prior_art": "NFS's stateless reads carry a file handle that names the file; the cursor lacks only that.",
+   "verdict": "confirmed",
+   "verify_note": "The hot path compares only RSQ_GEN against [dsk_mgen] and RSQ_VOL against [disk_drive] (diskw.inc:3106-3112). disk_mount_x bumps [dsk_mgen] only when dsk_bpb_bank_get misses (disk.inc:4199-4204), so a fixed-disk or batch-trusted navigation keeps a cursor hot. This is a documented CALLER contract (os88rseq.inc:21-24, SPEC 18.4.8.1 'Moving to another file zeroes the cursor'), so it is a hazard of the shape and no live bug was shown. The kernel's own READ_SEQ banner (diskw.inc:3249-3253) says the opposite ('every snapshot the kernel builds bumps [dsk_mgen] ... a navigation ... make the next call re-seed'). The verifier added a doc fix for that sentence. The +20 .cold estimate is unchecked but plausible."
+  },
+  {
+   "id": "gi-5",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "os88_rseq (76 B) is carried by ~13 readers to give READ_SEQ READ_AT's shape; move that logic into the cell",
+   "detail": "os88_rseq puts DX:BX/ES:DI back into READ_AT's registers, re-seeds on an offset mismatch, and retries READ_AT on FERR_NAME. The carriers are DOS, PIXEL, Audio, MIDIRACK, FTPD, XTMP3, Video, SysCheck, WAVERACK, RAMDISK.DRV, HDDTOOL, parts bodies with OP_HAS_READ, and the C SDK. A cell with READ_AT's registers plus a DS:DI cursor, which re-seeds itself and is a READ_AT alias on kern_small, retires the include.",
+   "evidence": [
+    "apps/os88rseq.inc:38-71",
+    "build/ftpd.map:879-885 (0x18C-0x1D8 = 76 B)",
+    "SPEC.md 18.4.8.1 ('76 bytes of helper ... measured')",
+    "kernel/diskw.inc:3277-3338"
+   ],
+   "recommendation": "Append the cell now. Withdraw 0x0455 at the flag day with the C2/C3 batch. Confirm the cell layer reads a caller-DS cursor cheaply; otherwise keep ES:DI and save only the re-seed and alias part.",
+   "phase": "flagday",
+   "bytes_est": "+14 .cold kern_big, +3 kern_small; -76 per carrier (~-1 KB package/driver bytes)",
+   "listed_as": "none (read-side twin of diskwrite.md dw-22)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: build/ftpd.map has os88_rseq at 0x18C and the next symbol at 0x1D8, which is 76 bytes. os88rseq.inc is included by audio, dos (dosbe), ftpd, midirack, pixel, syscheck, video, waverack, xtmp3, hddtool, ramdisk.drv, os88partsbody (OP_HAS_READ), os88wseq and the C SDK. That is about 13 carriers. A flag-day rethink, not listed."
+  },
+  {
+   "id": "gi-6",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The kern_small stubs leave AX undefined, so shared fallbacks cannot tell 'no door' from a refusal",
+   "detail": "READ_SEQ and WRITE_SEQ answer FERR_NAME, but WRITE_AT and VOL_STAT are bare stc with the caller's AX. Consequences: wseq returns AX=0 (gi-1), and od_write on kern_small tries WRITE_AT for every stamped save, sees a refusal, and re-walks root, SYSTEM, APPDATA (3 GOTO_QM and 2 FILE_FIND scans) before the full write. The bank never helps a write there.",
+   "evidence": [
+    "kernel/diskw.inc:6813-6825",
+    "kernel/kernel.asm:6653-6657",
+    "apps/os88data.inc:62-64",
+    "apps/os88data.inc:313-336"
+   ],
+   "recommendation": "Move the dwf_dskw_write_at label up onto `mov ax, FERR_NAME` (0 bytes), and point osapi_vol_stat at a stub that answers FERR_NODISK (+4). Whether od_write may then skip the walk on FERR_NAME is the witness-rule question in Open questions.",
+   "phase": "now",
+   "bytes_est": "0 to +4 kern_small",
+   "listed_as": "ABI-BREAK-LIST T3 (same cells; this keeps them and fixes their answer)",
+   "verdict": "confirmed",
+   "verify_note": "kern_small's dwf_dskw_write_at is `stc`/`retf` with AX untouched (diskw.inc:6819-6820). The label sits one instruction below `mov ax, FERR_NAME`, which the READ_SEQ/WRITE_SEQ labels share, so the 0-byte move is real. od_write on kern_small: the first save after a walk is the full arm with od_fresh=1. Every later banked save matches the stamp, calls WRITE_AT, is refused, reaches .full with od_fresh=0 and runs od_walk (os88data.inc:313-336). So the bank never saves a walk on a write there. The header's 'every save there takes the full arm, still with no display remount' is true but leaves out the walk. Related to T3, not the same item."
+  },
+  {
+   "id": "gi-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "pit_now is wrong inside an armed FSXF_FASTTICK/FSXF_RATE bracket; only its users say so",
+   "detail": "sch_fast_on reloads channel 0 at 65536/N or at the caller's divisor, while 0040:006C stays at 18.2 Hz. pit_now's low half then laps N times a tick, goes backwards mid-tick, and never triggers the IRR fix-up. isoTron and RealDMG work around it, and MIDIRACK's 0xFFFF divisor is harmless. Neither os88pit.inc nor SPEC 72.15.1 says so, and SPEC 53.2.1 says nothing outside sched.inc can tell.",
+   "evidence": [
+    "kernel/sched.inc:509-534",
+    "apps/os88pit.inc:48-83",
+    "apps/isotron/itfs.inc:905-906",
+    "apps/isotron/itsweep.inc:940",
+    "apps/realdmg/rwlog.inc:100-114",
+    "apps/midirack/mrout.inc:1435-1437",
+    "SPEC.md:106957"
+   ],
+   "recommendation": "Document the limitation in the include and in SPEC 53.2.1 and 72.15.1 (0 bytes). Record, but do not build now, a kernel OSAPI_PIT_NOW that knows [sch_fast]/[sch_racc]: about +20 resident, and its 46.7 us far call against ~30 us inline matters to profilers.",
+   "phase": "now",
+   "bytes_est": "0 (docs); +20 resident if the cell is ever taken",
+   "prior_art": "Windows 3.x's VTD virtualised the PIT, so GetTickCount/timeGetTime stayed right under timeBeginPeriod.",
+   "verdict": "confirmed",
+   "verify_note": "sch_fast_on loads sch_fdivs[N] (or the RATE divisor on kern_big) into channel 0 (sched.inc:509-534), while [ticks]/006C stay at 18.2 Hz (SPEC 53.2.1). pit_now assumes 65,536 counts a tick and negates the raw count (os88pit.inc:57-83), so inside a bracket its low half laps N times a tick. isoTron already avoids it (itfs.inc:905-906). RealDMG's rwlog times by its hook periods and falls back to pit_now only outside a bracket. MIDIRACK's 0xFFFF divisor is about one tick a period. SPEC 53.2.1's 'nothing outside sched.inc can tell' is literally wrong for a count reader. Docs-only, 0 bytes."
+  },
+  {
+   "id": "gi-8",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Kernel conventions are copied without a mirror gate",
+   "detail": "m83_syms copies dskw_syms (identical today) with no t_mirror row. x3stub's sb_now is a third pit_now copy without cli, which breaks SPEC 34.1's latch-atomicity rule (test-only, X3STUB=1). os88pit.inc alone of the set has no %ifndef guard.",
+   "evidence": [
+    "apps/os88m83.inc:214",
+    "kernel/diskw.inc:175-176",
+    "apps/xtmp3/x3stub.asm:24-26,347-378",
+    "apps/os88pit.inc:1-50"
+   ],
+   "recommendation": "Add a t_mirror row for the legal-character set; comment or fix sb_now; add the include guard.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "verdict": "corrected",
+   "verify_note": "m83_syms and dskw_syms are byte-identical today, and no t_mirror row or other gate compares them (only tools/os88cdiso.py names dskw_syms): confirmed. os88pit.inc has no %ifndef guard while os88rseq/os88wseq do: confirmed. The sb_now part is REFUTED as a defect: x3stub.asm:347-351 says it is pit_now 'without its cli (a backend never masks interrupts)'. That is a deliberate choice, documented at the site, in a test-only stub (X3STUB=1). The 'comment or fix sb_now' recommendation reduces to nothing."
+  },
+  {
+   "id": "gi-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "crt0's plain .OVL arm ships in no package and keeps the folder bug the lazy arm fixed",
+   "detail": "Without CC_OVL_PART, cc_ovneed reads <NAME>.OVL by name 'in the folder it was launched from', but names resolve where the instance stands (SPEC 19.2.1), which the file dialog moves. The lazy arm's comment names exactly this hole. Every shipped C package with an overlay uses CC_OVL_PART; only tests/cfsx uses the plain arm.",
+   "evidence": [
+    "apps/cc/crt0.asm:194-195",
+    "apps/cc/crt0.asm:1146-1156",
+    "apps/cc/crt0.asm:1256-1261",
+    "grep: apple2, c64, cword, lemmings, loom, runcpm, weave all CC_OVL_PART; tests/cfsx/cfsx.asm CC_HAS_OVL only"
+   ],
+   "recommendation": "Retire the arm (source only), or give it the lazy arm's go-home bracket; at least correct the comments.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "verdict": "confirmed",
+   "verify_note": "The plain arm is the %else of CC_OVL_EAGER/CC_OVL_LAZY (crt0.asm:1206), and CC_OVL_PART defines EAGER unless LAZY is set (:206-207), so this arm means no CC_OVL_PART. It reads cc_ovfile with OSAPI_FILE_READ where the instance stands (:1256-1261). apple2, c64, cword, lemmings, loom, runcpm and weave all define CC_OVL_PART. Only tests/cfsx defines CC_HAS_OVL without it. 0 shipped bytes."
+  },
+  {
+   "id": "gi-10",
+   "kind": "perf",
+   "severity": "low",
+   "title": "os88_wseq_put copies byte by byte with a five-instruction loop",
+   "detail": "mov al,[es:si] / mov [di],al / inc / inc / loop costs about 50+ clocks a byte on the 8088, against rep movsb's ~17 after a DS/ES swap: about 85 ms against ~30 ms per 8 KB report. The stream's int 13h calls dominate.",
+   "evidence": [
+    "apps/os88wseq.inc:146-151"
+   ],
+   "recommendation": "Swap DS/ES around a rep movsb.",
+   "phase": "now",
+   "bytes_est": "+4 package bytes",
+   "verdict": "confirmed",
+   "verify_note": "os88wseq.inc:146-151 is the five-instruction byte loop as quoted. The 8088 estimates (about 50 against 17 clocks a byte) are plausible from PERFORMANCE Part 2's fetch floor. The int 13h calls dominate a report write, so this stays low."
+  },
+  {
+   "id": "gi-11",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "os88data exists because no file cell takes a path",
+   "detail": "About 397 B in FTPD and ~20 carriers (~8 KB of package bytes), almost all of it the root, SYSTEM, APPDATA walk by FIND ordinal scans and quiet gotos. A 'resolve a relative path to (drive, folder cluster)' cell over the existing walker would shrink it to one call, but the bank already makes the steady state one GOTO_QM.",
+   "evidence": [
+    "apps/os88data.inc:169-252",
+    "build/ftpd.map:1486-1519 (0x2549-0x26D6)",
+    "apps/os88api.inc:6034-6058 (OSAPI_FILE_PATH's walker)"
+   ],
+   "recommendation": "Record only; ~+80 resident bytes is not justified now. If C3 lands, od_qm and crt0's lazy home are its consumers.",
+   "phase": "record",
+   "bytes_est": "+80 resident kern_big; -~250 per carrier",
+   "listed_as": "ABI-BREAK-LIST C3 (consumer)",
+   "prior_art": "DOS 2.0 put paths in every file call.",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: ftpd.map has 0x2549-0x26D6, which is 397 bytes. od_walk is root, SYSTEM, APPDATA by FIND ordinal and GOTO_QM (os88data.inc:169-252). Record only. The 'C3 consumer' tie is the reviewer's reading of ABI-BREAK-LIST."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "apps/os88wseq.inc",
+   "old_text": "; ON kern_small, whose WRITE_SEQ answers FERR_NAME, each chunk goes through\n; OSAPI_FILE_APPEND instead - the same rule, the same chunks, a lookup and a\n; walk a call. The stream is PLAIN",
+   "new_text": "; ON kern_small THE OPEN IS REFUSED, and no chunk is reached: OSAPI_VOL_STAT\n; is a bare `stc` there (kernel.asm's osapi_vol_stat), so os88_wseq_open\n; answers CF=1 with AX = 0, which is no FERR_* code. The APPEND arm in\n; os88_wseq_out was written for that kernel's FERR_NAME WRITE_SEQ - the same\n; rule, the same chunks, a lookup and a walk a call - and on kern_big it only\n; repeats WRITE_SEQ's refusal of a misaligned chunk. The stream is PLAIN",
+   "why": "os88_wseq_open calls OSAPI_VOL_STAT first (os88wseq.inc:81); on kern_small that is osapi_snd_fm's stc/ret (kernel.asm:6654, snd.inc:714-717, OS88_SNDCARD is KERN_BIG-only), AX is still the 0 from the xor at :74, and .stat banks it and returns CF=1 AX=0. Comment-only; describes the code as it stands until gi-1's fix."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; DOS AH=36h's own register shape, and that is not an accident: DOS.O88\n; is this slot's only caller and it forwards these four to the program\n; unchanged.",
+   "new_text": "; DOS AH=36h's own register shape, and that is not an accident: DOS.O88\n; forwards these four to the program unchanged, and the other callers\n; (SysCheck, PIXEL, XTMP3, REDLINE's inspector, os88wseq.inc, HDD.DRV's\n; installer) take the same four.",
+   "why": "`call OSAPI_VOL_STAT` appears in apps/pixel/pxpump.inc:81, apps/xtmp3/x3conv.inc:851/1713/1777, apps/redline/inspect.inc:136, apps/syscheck/scan.inc:220, apps/syscheck/disk.inc:128, apps/os88wseq.inc:81 and drivers/hdd/inst.inc:1710 besides DOS."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "osapi_vol_stat equ osapi_snd_fm     ; DOS-only, and DOS is not on the\n                                    ; small disks (SPEC.md 18.4.7.4): the cell\n                                    ; refuses with snd.inc's kern_small FM\n                                    ; body, the same `stc` / `ret`",
+   "new_text": "osapi_vol_stat equ osapi_snd_fm     ; a refusal on this kernel (SPEC.md\n                                    ; 18.4.7.4): DOS is not on the small disks,\n                                    ; and every other caller tests CF - the\n                                    ; open of os88wseq.inc's stream then\n                                    ; fails. The cell refuses with snd.inc's\n                                    ; kern_small FM body, the same `stc` / `ret`",
+   "why": "Eight non-DOS packages/drivers call OSAPI_VOL_STAT; REDLINE (util360.img, not in SMALLOMIT) reaches it through os88wseq.inc's open. Comment text only."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "dwf_dskw_write_at:  stc         ; DOS.O88 is the one caller (SPEC.md\n                    retf        ; 18.4.7.4) and it does not ship on the small\n                                ; disks: the INSIDE arm, dsk_write_chain and\n                                ; this door are kern_big's, and an append",
+   "new_text": "dwf_dskw_write_at:  stc         ; every caller tests CF (SPEC.md 18.4.7.4):\n                    retf        ; DOS.O88 does not ship on the small disks,\n                                ; and os88data.inc's od_write takes its full\n                                ; arm (SPEC.md 19.9.1). The INSIDE arm,\n                                ; dsk_write_chain and this door are\n                                ; kern_big's, and an append",
+   "why": "OSAPI_FILE_WRITE_AT is called by os88data.inc's od_write (apps/os88data.inc:325, carried by many packages), WAVERACK (wrrec.inc:910), XTMP3 (x3conv.inc:2789) and ETHER.DRV (ethcfg.inc:899) besides DOS; od_write falls to .full on CF=1. Comment text only."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "DOS is the only caller of the offset door and of `OSAPI_VOL_STAT`,\nand it does not ship on the small disks (§24.5, `SMALLPKGS`). So on\n`kern_small` both cells are `stc`/`ret` stubs — legitimate here because the\none caller tests `CF` (KERN-SMALL-CUT-PLAN §10) — and with them go",
+   "new_text": "DOS was the only caller of the offset door and of `OSAPI_VOL_STAT` when\nthey were cut, and it does not ship on the small disks (§24.5, `SMALLPKGS`).\nSo on `kern_small` both cells are `stc`/`ret` stubs — legitimate here because\nevery caller tests `CF` (KERN-SMALL-CUT-PLAN §10): `apps/os88data.inc`'s\n`od_write` falls back to a full write (§19.9.1), and `apps/os88wseq.inc`'s\nopen refuses its stream, so REDLINE's Inspect report is refused there —\nand with them go",
+   "why": "Both cells now have callers besides DOS (os88data.inc, WAVERACK, XTMP3, ETHER.DRV for WRITE_AT; SysCheck, PIXEL, XTMP3, REDLINE, os88wseq.inc, HDD.DRV for VOL_STAT). REDLINE ships on util360.img and is not in SMALLOMIT (Makefile:14896-14902)."
+  },
+  {
+   "file": "apps/os88data.inc",
+   "old_text": "    call od_qm                      ; a word: we never left the volume. A\n    pop dx                          ; refusal here has nobody to tell, as\n    pop bx                          ; the old FILE_GOTO's had not either\n    pop ax\n",
+   "new_text": "    call od_qm                      ; a word, or a quiet mount home from an\n    pop dx                          ; OD_BOOTVOL/OD_TVOL visit to another\n    pop bx                          ; volume. A refusal here has nobody to\n    pop ax                          ; tell, as the old FILE_GOTO's had not\n                                    ; either\n",
+   "why": "Under OD_BOOTVOL or OD_TVOL od_walk runs on [od_tdrv], which can be another volume (od_enter, apps/os88data.inc:136-143), so od_back's OSAPI_FILE_GOTO_QM is then a quiet mount; od_enter's own comment at :151 says 'a word, or a quiet mount'. Code lines are re-emitted unchanged; only text after ';' moves."
+  },
+  {
+   "file": "apps/os88pit.inc",
+   "old_text": "; ONE BODY, TWO USERS: ETHER.DRV's stage profiler (SPEC.md 72.15) and the FTP\n; server's own split (SPEC.md 77.32). Two clocks that were copy-pasted cannot",
+   "new_text": "; NOT INSIDE AN ARMED FSXF_FASTTICK OR FSXF_RATE BRACKET. Channel 0 then\n; reloads at 65536/N or at the caller's divisor while 006C keeps its 18.2 Hz\n; (SPEC.md 53.2.1, 53.2.2), so the low half laps several times a tick and a\n; span read across a lap goes backwards. Time a bracket by its hook's periods\n; or by the tick, as isoTron and RealDMG do.\n;\n; ONE BODY, MANY USERS: ETHER.DRV's stage profiler (SPEC.md 72.15) and the FTP\n; server's own split (SPEC.md 77.32) were the first two; ARCADE, isoTron,\n; MIDIRACK, PIXELSTEIN, RealDMG and XTMP3 include it too. Two clocks that\n; were copy-pasted cannot",
+   "why": "`%include \"os88pit.inc\"` is in arcade, ftpd, isotron, midirack, pixelstein (pxgame), realdmg, xtmp3 (x3eng) and drivers/ether (ethprof) - eight shipped carriers (WIN16 only cites it in a comment). sch_fast_on reloads channel 0 at sch_fdivs[N] or the RATE divisor (sched.inc:509-534) while [ticks]/006C stay 18.2 Hz; isoTron (itfs.inc:905-906) and RealDMG (rwlog.inc, .pit fallback) already avoid pit_now inside a bracket."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "a stage may run eighteen hours before it wraps",
+   "new_text": "a stage may run an hour before it wraps",
+   "why": "The high half is the low word of 0040:006C, which laps in 65,536 ticks of 54.92 ms, and 2^32 x 838 ns = 3,599 s; apps/os88pit.inc:6-10 says 'an HOUR'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "adjustment**, and nothing outside sched.inc can tell. Measured under QEMU:",
+   "new_text": "adjustment**, and nothing outside sched.inc that keeps to the tick can tell.\nA reader of channel 0's COUNT can: `apps/os88pit.inc`'s `pit_now` laps inside\nan armed bracket, so its users time one by the tick or by their hook (isoTron,\nRealDMG). Measured under QEMU:",
+   "why": "sch_fast_on reprograms channel 0's divisor (sched.inc:509-534); pit_now (os88pit.inc:48-83) assumes 65,536 counts a tick, and isoTron's itfs.inc:905-906 already says it cannot be used inside FASTTICK."
+  },
+  {
+   "file": "apps/cc/crt0.asm",
+   "old_text": "; the answer. SPEC.md 73.4 pins the shape - \"pops, then `or ax, ax`, then\n; stc/clc, then ret\", because",
+   "new_text": "; the answer. SPEC.md 73.4 pins the shape - \"pops, then `cmp ax, 1`, then\n; `ret`\", because",
+   "why": "cc_onclose ends `cmp ax, 1` / `ret` (crt0.asm:734-735), and SPEC.md 73.4 says 'pops, then `cmp ax, 1`, then `ret`' and records that the or/jz/clc/stc form was retired in apps size pass 1."
+  },
+  {
+   "file": "apps/cc/crt0.asm",
+   "old_text": "    mov si, cc_ovfile               ; the name resolves in THIS INSTANCE's\n    call OSAPI_FILE_READ            ; directory - the folder it was launched\n    jc .noread                      ; from (SPEC.md 19.2.1), so no visit is\n                                    ; needed and none is made\n",
+   "new_text": "    mov si, cc_ovfile               ; the name resolves where THIS INSTANCE\n    call OSAPI_FILE_READ            ; STANDS (SPEC.md 19.2.1), which the file\n    jc .noread                      ; dialog moves: the hole CC_OVL_LAZY's\n                                    ; go-home bracket closes. No shipped\n                                    ; package takes this arm (tests/cfsx)\n",
+   "why": "This is the no-CC_OVL_PART arm (the %else of CC_OVL_EAGER/CC_OVL_LAZY at crt0.asm:1206; CC_OVL_PART defines EAGER unless LAZY, :206-207). SPEC.md 19.2.1: the current directory belongs to the instance and moves with it; the lazy arm's comment (:1146-1153) names the same hole. Every shipped C package with an overlay defines CC_OVL_PART; only tests/cfsx takes this arm."
+  },
+  {
+   "file": "apps/cc/crt0.asm",
+   "old_text": "; three refusals are exactly what every unconverted package ships.",
+   "new_text": "; three refusals are exactly what an unconverted package ships (none in the\n; shipped set; tests/cfsx is the last).",
+   "why": "apple2, c64, cword, lemmings, loom, runcpm and weave all define CC_OVL_PART; tests/cfsx/cfsx.asm defines CC_HAS_OVL only."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; other file slots take it), CX = its\n                                 ; capacity (a cluster multiple, READ_AT's\n                                 ; rule), ES:DI = YOUR 16-byte cursor, in any\n                                 ; segment. To start or seek: zero it and set\n                                 ; FSEQ_OFF (a cluster multiple). Out CF=0 and\n",
+   "new_text": "                                 ; other file slots take it), CX = its\n                                 ; capacity (whole SECTORS, READ_AT's kern_big\n                                 ; rule, SPEC.md 18.4.4.2; a cluster multiple\n                                 ; keeps the cursor hot), ES:DI = YOUR 16-byte\n                                 ; cursor, in any segment. To start or seek:\n                                 ; zero it and set FSEQ_OFF (a sector\n                                 ; multiple). Out CF=0 and\n",
+   "why": "ABILOCK: indented OSAPI contract lines are in tools/abilock.py's fingerprint; apply all three apps/os88api.inc entries, then run `python3 tools/abilock.py --update \"OSAPI_FILE_READ_AT/READ_SEQ contract comments corrected\"` (no PKG_FMT bump), or make fails. READ_SEQ is kern_big's alone, and kern_big's READ_AT tests the offset against 511 (diskw.inc:3143-3148, SPEC.md 18.4.4.2); a read ending mid-cluster leaves the cursor cold (diskw.inc:3315-3319). NOTE: these are indented OSAPI contract lines, which tools/abilock.py fingerprints - apply with `python3 tools/abilock.py --update \"OSAPI_FILE_READ_SEQ contract comment corrected\"` (no PKG_FMT bump)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; Anything that remounts or writes makes the\n                                 ; next call re-seed from the name silently,\n                                 ; so a stale cursor is never an error. Only\n                                 ; FSEQ_OFF is yours to write\n",
+   "new_text": "                                 ; A write, or a mount that reads a boot\n                                 ; sector, makes the next call re-seed from\n                                 ; the name silently, so a stale cursor is\n                                 ; never an error - but the cursor NAMES NO\n                                 ; FILE: zero it whenever the name or the\n                                 ; folder changes (SPEC.md 18.4.8.1). Only\n                                 ; FSEQ_OFF is yours to write\n",
+   "why": "ABILOCK: indented OSAPI contract lines are in tools/abilock.py's fingerprint; apply all three apps/os88api.inc entries, then run `python3 tools/abilock.py --update \"OSAPI_FILE_READ_AT/READ_SEQ contract comments corrected\"` (no PKG_FMT bump), or make fails. [dsk_mgen] moves on committed writes and on mounts that READ a boot sector, not on a banked mount (a fixed disk, a quiet hop a batch vouches for) (disk.inc:11177-11183, 4199-4204); the hot check compares only RSQ_GEN and RSQ_VOL (diskw.inc:3106-3112), so a cursor is trusted for any name. SPEC.md 18.4.8.1 states the zero-on-change rule. Same abilock note as the entry above (apply both, then one --update)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; terminates. Offset AND capacity must each\n                                 ; be a cluster multiple; FERR_NAME if not.\n",
+   "new_text": "                                 ; terminates. Offset AND capacity must each\n                                 ; be a cluster multiple (whole SECTORS on\n                                 ; kern_big, SPEC.md 18.4.4.2); FERR_NAME if\n                                 ; not.\n",
+   "why": "ABILOCK: indented OSAPI contract lines are in tools/abilock.py's fingerprint; apply all three apps/os88api.inc entries, then run `python3 tools/abilock.py --update \"OSAPI_FILE_READ_AT/READ_SEQ contract comments corrected\"` (no PKG_FMT bump), or make fails. dskw_read_at tests [dwr_off] against 511 on kern_big and [dwr_clb]-1 only under KERN_SMALL (diskw.inc:3143-3148). Indented OSAPI_FILE_READ_AT contract lines: abilock fingerprint, `python3 tools/abilock.py --update` (no bump)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (spc*512 overflows\n;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*",
+   "new_text": "; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (1..64 by mount\n;      rule 4, so spc*512 fits a word; the cell answers sectors and callers\n;      multiply); CF=1, AX = FERR_*",
+   "why": "Mount rule 4 (disk.inc:5106-5120) refuses spc = 0, spc > 64 and non-powers of two, precisely because 128 overflows dskw_clbytes' word; the same routine's body says 'spc <= 64' (diskw.inc:500)."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; in: every snapshot the kernel builds bumps [dsk_mgen] in disk_mount_x, so a\n; navigation, a media change, a write's remount or another instance moving\n; the volume all make the next call re-seed from the name, silently, at the\n; offset the cursor holds.",
+   "new_text": "; in: a committed write and every mount that READS a boot sector bump\n; [dsk_mgen] (disk.inc), so a media change, a write, or a navigation on a\n; floppy outside a batch make the next call re-seed from the name, silently,\n; at the offset the cursor holds. A banked mount (a fixed disk, a quiet hop a\n; batch vouches for) does not, and the cursor names no file - which is why\n; the caller zeroes it when the file changes (SPEC.md 18.4.8.1).",
+   "why": "VERIFIER-FOUND. disk_mount_x adds 2 to [dsk_mgen] only when dsk_bpb_bank_get misses (disk.inc:4199-4204); [dsk_mgen]'s own banner says 'not on a mount that trusts a banked one, which is a quiet hop a batch vouches for or a fixed disk' (disk.inc:11177-11183). This is gi-4's mechanism."
+  }
+ ]
+}

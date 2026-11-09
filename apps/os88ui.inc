@@ -38,11 +38,15 @@
 ; second shared include in apps/ and the first carrying code.
 ;
 ; --- IN THE KERNEL -----------------------------------------------------------
-; Included ONCE, into `.cold`, with OS88UI_KERNEL defined. Cold because that
-; is where its callers are (fdlg.inc and ctrl.inc are cold in their entirety);
-; .text reaches it through the one far entry at the bottom of this file, which
-; is the fdf_/cpf_ pattern. DS is KERNEL_SEG in both worlds, so the data word
-; below needs no override either way.
+; Included ONCE, from fdlg.inc, with OS88UI_KERNEL defined, and most of it
+; lands in `.cold`: the button, its hit test and the arm on kern_big, and the
+; scroll bar on both kernels. The check-box and radio glyph goes into CTRL.DRV's
+; image instead (OS88UI_KGLYPH = .modu) on both, and on kern_small the button
+; is expanded into CTRL.DRV and FDLG.DRV (OS88UI_KBTNIMG) and is not resident
+; at all. On-demand images reach the `.cold` bodies through their own far hops
+; (CPXC, HBGC); os88ui_arm_f, the one far entry at the bottom of this file, is
+; the Control Panel's. DS is KERNEL_SEG in both worlds, so the data word below
+; needs no override either way.
 ;
 ; WHAT IT IS NOT FOR. A skinned control. ModPlug's bevelled well and LED
 ; transport are a deliberate port of ModPlugPlayer's look (SPEC.md 56) and
@@ -81,8 +85,9 @@
 ; NEITHER DEFECT SHOWS IN A SCREENSHOT - the final frame is identical - so a
 ; gate for a control reads the CALLS (tests/radio.py records every gfx_fill's
 ; rect and every font_run_x's y). PERFORMANCE.md Part 1 is why: a double-draw
-; flash and a visible redraw are two of the three things an emulator cannot
-; show, and this project has paid for both repeatedly.
+; flash and a visible redraw never reach a screendump, though on MartyPC both
+; are measurable with m.flicker() (PERFORMANCE.md Part 3.1), and this project
+; has paid for both repeatedly.
 ;
 ; os88ui_chk (SPEC.md 13.15) DID NOT FOLLOW RULE 1 for years - it filled its
 ; whole rect white and then drew frame, mark and label over it - and it does
@@ -275,7 +280,11 @@
 
 OS88UI_DIS  equ 1               ; disabled: dithered frame AND label (47 r2)
 OS88UI_DEF  equ 2               ; the default button's outer ring, 2px out
-OS88UI_FILL equ 4               ; ERASE THE INTERIOR FIRST - and the question
+OS88UI_FILL equ 4               ; HISTORICAL: os88ui_btn erases its interior
+                                ; unconditionally and no longer reads this bit
+                                ; (SPEC.md 20.5.1.3.1); it survives as a flag an
+                                ; OS88UI_OWN painter is handed. What it meant
+                                ; was ERASE THE INTERIOR FIRST - and the question
                                 ; it answers is NOT "is my background white".
                                 ; It is: CAN THIS BUTTON BE DRAWN A SECOND
                                 ; TIME WITHOUT THE GROUND BEING REPAINTED
@@ -290,8 +299,8 @@ OS88UI_FILL equ 4               ; ERASE THE INTERIOR FIRST - and the question
                                 ; is what makes the failure read as "47 rule 1
                                 ; is broken" when the mechanism is fine and
                                 ; the erase is what is missing (SPEC.md 47,
-                                ; docs/plans/completed/UIHELPERS-PLAN.md 13.4). Set it unless
-                                ; the caller white-fills its content first.
+                                ; docs/plans/completed/UIHELPERS-PLAN.md 13.4). It was set
+                                ; unless the caller white-filled its content first.
 OS88UI_INK  equ 8               ; ...and DI's HIGH BYTE is the ink, for a
                                 ; button whose label is deliberately not black
                                 ; (Piano's song buttons, SPEC.md 47's own
@@ -1402,8 +1411,10 @@ OS88UI_GDOWN  equ 4             ; ...and the PRESSED look (SPEC.md 13.8): the
                                 ; (`and si, 3`) and bit 2 was free; the
                                 ; disabled flag has AH to itself and keeps it
 OS88UI_GW     equ 12            ; both are 12 x 12
-; ...and the size os88ui_glyph's masked-sprite pass is allowed to be. The
-; record it hands the kernel is `db 1, OS88UI_GW`, and icon_draw_x refuses
+; ...and the size os88ui_glyph's masked-sprite pass was allowed to be, when it
+; had one: it draws with fills now (SPEC.md 13.15.1), so this guards only a
+; glyph moved back onto that pass. The record it handed the kernel was
+; `db 1, OS88UI_GW`, and icon_draw_x refuses
 ; ww = 0, ww > 1, rows = 0 or rows > ICO_STAGE_H - so the ONLY one of the four
 ; a change here can trip is the last, and this is it, checked rather than
 ; reasoned about. ICO_STAGE_H is the kernel's and is not published to a
@@ -1424,7 +1435,7 @@ OS88UI_GW     equ 12            ; both are 12 x 12
 ; would cost a push and a pop at all six call sites to carry one bit that
 ; fits beside the index for free.
 ;
-; THE WHITE BOX IS UNCONDITIONAL, where the button's is a flag. A radio's
+; THE WHITE BOX IS UNCONDITIONAL, as the button's interior is now. A radio's
 ; whole job is to be redrawn in place when the selection moves, so there is
 ; no caller for whom the erase is waste - and drawing one bitmap over
 ; another without it is the same defect the button's OS88UI_FILL note
@@ -1572,8 +1583,8 @@ os88ui_gdot:
 ; gone: the pictures, the sprite record, the per-row dither compose and the
 ; 45-to-65-call `.gpix` arm.
 ;
-; WHAT THAT BUYS, per copy and in twenty-three of them (the kernel's .cold and
-; twenty-two package images): the four pictures, the record and its staging,
+; WHAT THAT BUYS, per copy and in twenty-three of them (the kernel's CTRL.DRV
+; image and twenty-two package images): the four pictures, the record and its staging,
 ; and most of the body. What it COSTS is calls - eight for a set radio against
 ; the sprite pass's one - and that trade was the owner's to take: a control
 ; glyph is drawn once and then sits there until someone interacts with it.
@@ -1696,8 +1707,11 @@ section .cold
 ; --- the click machinery: every PACKAGE, and kern_BIG ------------------------
 ; A package always has it - it is four small routines and a word, and the
 ; press/release pair is the SDK's own idiom. The kernel has it only in the big
-; build, because kern_small's dialogs still fire on the press (SPEC.md 13.8.3
-; is kern_big's, docs/plans/completed/UIHELPERS-PLAN.md 18) and 40 bytes of .cold plus two of
+; build. kern_small's file dialog fires on the release too, through a byte of
+; its own (fdlg_down); its Control Panel's own pages still act on the press,
+; and a driver page's release is the driver's, forwarded as DSV_CPUP - so
+; the shared arm (SPEC.md 13.8.3 is kern_big's, docs/plans/completed/UIHELPERS-PLAN.md 18)
+; is not needed there, and 40 bytes of .cold plus two of
 ; .bss is a whole 512-byte rung on the guard the 128KB machine lives under -
 ; measured, not assumed: making these unconditional cost kern_small exactly
 ; that and nothing else.
@@ -1736,7 +1750,7 @@ section .cold
 ; word (SPEC.md 2.6 rule 1), which is the trap os88ui_krect's own comment
 ; records costing eight bytes through the middle of sch_isr.
 
-%ifndef OS88UI_KERNEL              ; the kernel walks its own rects (fdlg_bhit, fm_bhit)
+%ifndef OS88UI_KERNEL              ; the kernel walks its own rects (fm_bhit, fdb_bhit)
 ; -----------------------------------------------------------------------------
 ; os88ui_bfind - which button of a table is the point in?
 ; in:  BX = an array of 4-word rects, AX = how many, CX = x, DX = y
@@ -2869,14 +2883,18 @@ os88ui_sbdragging:
 ; in:  BX = a block
 ; out: CF = 1 = no drag, or a DIFFERENT bar's. Every register preserved.
 ;
-; SPEC.md 13.10.5.10. There is one gesture record and there are two kernel
-; bars, so "a drag is live" and "a drag is live ON THIS BAR" stopped being the
-; same question the moment the file dialog was wired. Without this,
-; os88ui_sbfix would fix the Disk window's dragged pos into the DIALOG's block
-; - a thumb drawn where nothing is, and a hit test that agrees with it.
+; SPEC.md 13.10.5.10. There is one gesture record and one block, and fm_sbset
+; fills that block for whichever Disk window is being painted - the file
+; dialog's chooser among them - so "a drag is live" and "a drag is live ON THIS
+; BAR" are different questions. Without this, os88ui_sbfix would fix the
+; dragged window's pos into another window's block - a thumb drawn where
+; nothing is, and a hit test that agrees with it.
 ;
-; The identity is (x1, y1), which is enough: two bars on screen at the same
-; time cannot share a top-left corner.
+; The identity is (x1, y1): two bars VISIBLE at once cannot share a top-left
+; corner. Two Disk windows with the same right edge and content top can, while
+; one hides the other's corner, and a damage repaint of the hidden one during
+; the drag then takes the dragged pos; the window identity fm_btn1 uses for
+; its pressed button would close that.
 ; -----------------------------------------------------------------------------
 os88ui_sbmine:
     cmp byte [os88ui_sbd_on], 0
@@ -6530,10 +6548,12 @@ section .bss
 ; -----------------------------------------------------------------------------
 ; os88ui_krect - THE kernel's button rect, and there is exactly one on purpose
 ;
-; Every kernel caller builds its rect here and calls straight into os88ui_btn,
-; which only READS it - so one scratch serves the file dialog, both Control
-; Panel pages and the Timer. They are all UI-task, all under the gfx lock, and
-; nothing in the drawing path re-enters, so two can never be in flight.
+; Every kernel caller builds its rect here and draws it through os88ui_kbtn,
+; or hit-tests it, and neither writes it - so one scratch serves the file
+; dialog, the Disk window's header buttons, every Control Panel page, the
+; shutdown card and the hibernate dialog. They are all UI-task, all under the
+; gfx lock, and nothing in the drawing path re-enters, so two can never be in
+; flight.
 ;
 ; **IT IS IN .bss, AND THAT IS A RULE RATHER THAN A PREFERENCE.** A cold
 ; module has a CS of its own and DS is STILL KERNEL_SEG (SPEC.md 2.6), so a
@@ -6638,23 +6658,19 @@ section .cold
 OS88UI_KBTN_BODY os88ui_kbtn, os88ui_btn
 
 ; -----------------------------------------------------------------------------
-; os88ui_btn_f / os88ui_glyph_f - the far entries (SPEC.md 2.6)
+; the far entries (SPEC.md 2.6) - and of all those this file once held, only
+; os88ui_arm_f below is left
 ;
-; The bodies above are near procs in .cold, which is where MOST of their
-; callers are - fdlg.inc is cold in its entirety. Two kinds of caller are
-; not, and both reach them through here, the same fdf_/cpf_ shape every other
-; crossing in this kernel uses: apps.inc, which is .text (the Timer's button),
-; and ctrl.inc, which is an ON-DEMAND MODULE now (SPEC.md 2.8) and so runs
-; from a heap claim with a CS of its own.
+; os88ui_btn_f and os88ui_glyph_f served the callers that are not in `.cold`:
+; apps.inc's Timer button, which is a package now, and ctrl.inc once it became
+; an ON-DEMAND MODULE (SPEC.md 2.8) with a CS of its own. The Control Panel's
+; near calls to os88ui_glyph and os88ui_btn were legal for as long as ctrl.inc
+; was cold and became a jump into its own image the day it stopped being -
+; which tools/os88ovlchk.py could not see, because it globbed kernel/*.inc and
+; this file is not one. It scans this file now, and the EXTRA table there is
+; where a third such file goes.
 ;
-; The Control Panel is why the glyph entry exists. Its eleven near calls to
-; os88ui_glyph and os88ui_btn were legal for as long as ctrl.inc was cold and
-; became a jump into its own image the day it stopped being - which
-; tools/os88ovlchk.py could not see, because it globbed kernel/*.inc and this
-; file is not one. It scans this file now; that is the more important half of
-; the fix, and the EXTRA table there is where a third such file goes.
-;
-; Packages never see either: both are inside %ifdef OS88UI_KERNEL.
+; Packages never see any of it: it is all inside %ifdef OS88UI_KERNEL.
 ; -----------------------------------------------------------------------------
 ; (os88ui_btn_f, the far `call os88ui_kbtn / retf` entry, went in kernel
 ; size pass 15: its callers are fdlg.inc, .cold beside os88ui_kbtn and so a

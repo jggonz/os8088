@@ -22,8 +22,8 @@
 ;
 ; WHAT IT COSTS THE DOS PROGRAM IS NOTHING. `KD_IMG_KB` was 35 and the image
 ; measured 34,969 of 35,840 before this, so this landed in slack that was
-; already bought and `LOW_SEG` did not move. (`KD_IMG_KB` is 33 since apps
-; size pass 1 - kerndos/kdlayout.inc carries the measurement.)
+; already bought and `LOW_SEG` did not move. (kerndos/kdlayout.inc carries
+; the current `KD_IMG_KB` and its measurement.)
 ;
 ; **SERIAL ONLY.** A PS/2 mouse ([mou_port] = MOU_P2ROW, SPEC.md 9.9) is a
 ; different transport on a different line through the 8042, and DOS.O88 sends

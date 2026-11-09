@@ -34,7 +34,8 @@
 ;
 ; TAKEN ONLY FOR A WHOLE HOLD, after a check (vb_hipq): XMS on a 286 or
 ; later, real mode (a token is no address under kern_mega's CPU_F_PM,
-; SPEC.md 50.6.10), LOADALL probed on a 286 with INT 6 hooked, and on
+; SPEC.md 50.6.10 - its bracket asks where the block is, [vb_hlin]),
+; LOADALL probed on a 286 with INT 6 hooked, and on
 ; either tier the hold's first 16 bytes read in place against
 ; OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it. EMS
 ; when the frame's four quarters are ours. `[vb_noinp]` is the A/B gate.
@@ -117,8 +118,8 @@ vb_bat:
     inc word [vb_icalls]
     cmp byte [vb_htype], 2
     je .ems
-    add ax, [vb_htok]
-    adc dx, [vb_htok+2]
+    add ax, [vb_hlin]               ; (where the block is: vb_hipok's)
+    adc dx, [vb_hlin+2]
     mov [vb_xpc], ax
     mov [vb_xpc+2], dx
     mov dx, VB_XH

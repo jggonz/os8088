@@ -1,0 +1,276 @@
+{
+ "area": "gap-fault-containment-error-model",
+ "title": "Fault containment and the error model: one fatal path, one refusal shape, one error space, and hostile-input discipline",
+ "summary": "The kernel has one good example of each thing the brief asks for, and none of them is applied as a rule.\n- **One fatal path:** the stack-overflow panel costs 174 bytes on kern_big and is safe to draw, but it handles only stack overflow. Divide faults go to the BIOS stub: on a 5150 it masks every IRQ (wm.inc:8280), and on a 286+ the `div` re-runs for ever.\n- **One refusal shape:** XREFUSE answers AX=1, but elsewhere CF is the only part a refusal has in common.\n- **One error space:** only FERR has a text door.\n- **Hostile input:** the 17-rule BPB table is the model to follow; elsewhere fences are per site.\n\nProposals, in order:\n1. Point int 0, and int 6 on a 286+, at the generalised death panel: about +40/+55 resident, +12/+20 `.ovl`. It turns wm-1, loader-4, dw-1, a new FSX_SPK N=0 bug and every package divide into a named stop.\n2. Record an owner decision: close the faulting package (the DOS/UNIX two-tier model) rather than stop the machine, about +45..+65 resident.\n3. A zero-byte fast-tier ratchet registering every div/idiv with its proof. 5 of ~90 kernel divide sites are unfenced, and all 5 trust a value that crossed a boundary.\n4. A MAX column in SYSTEM.CFG's map (0 resident). It retires sysmisc-2 in general.\n5. One error CLASS, DOS 59h style, written into the SDK; not one renumbered error number space.\n6. A concrete APICHK knob, 0 shipped bytes.\n\nSeven doc/code mismatches recorded.",
+ "strengths": [
+  {
+   "title": "BPB 17-rule table plus per-call quotient guards",
+   "why": "The reference implementation of 'every byte off a disk is hostile': one reader validates, every consumer trusts proven fields. disk_read still refuses an oversized quotient after the mount has validated the BPB.",
+   "evidence": "kernel/disk.inc:5025-5300, 1755-1767; SPEC.md:34395-34410"
+  },
+  {
+   "title": "fsk_needcl saturates instead of faulting on a hostile FileSize",
+   "why": "This is the exact guard dw-1 says the write layer lacks. The fix pattern is already in the tree.",
+   "evidence": "kernel/fsck.inc:1817-1828"
+  },
+  {
+   "title": "Table dispatch and colour xlat are bounded everywhere they were read",
+   "why": "ui_cmd's wrap-and-compare, clk_rtc_write, toast_say's unsigned bound, osapi_ferr_text's 'a hostile code above 0x7FFF', and 'and al,15' before every xlatb. A wild index cannot leave a table.",
+   "evidence": "kernel/ui.inc:3022-3028; kernel/clockw.inc:71-76; kernel/toast.inc:309-330; kernel/files.inc:2410-2416; kernel/font.inc:994,1339,1349,2434"
+  },
+  {
+   "title": "The death panel's construction",
+   "why": "It moves SP off the dead stack first, disarms the clip, takes no lock and uses one font_run pass. That is 174 bytes .text + 4 .bss on kern_big (173 on small): a shared body any fatal cause can use.",
+   "evidence": "kernel/sched.inc:2635-2773; build/kernel.map:4299-4313"
+  },
+  {
+   "title": "kern_mega's fault containment model",
+   "why": "A package's own fault unwinds to the innermost catch, a worker is killed, a kernel fault stays fatal, and a loop guard limits repeat incidents. This is OS/2 1.x's per-process kill, done properly.",
+   "evidence": "kernel/mega.inc:2504-2560, 3023-3100; kernel/wm.inc:446-456"
+  },
+  {
+   "title": "DOS banks IVT 00h per world, and BOOT_MARK already wrote the stub shape",
+   "why": "A kernel int 0 handler needs no change to DOS: it becomes the desktop's copy. The 4-byte stub shape and its exclusions (not NMI, not 8 and up) already exist behind a knob.",
+   "evidence": "apps/dos/dosw.inc:89-110; kernel/kernel.asm:7647-7765"
+  }
+ ],
+ "findings": [
+  {
+   "id": "gfce-1",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "One fatal path: point int 0 (and #UD on a 286+) at the death panel",
+   "detail": "Nothing writes IVT 0 on kern_big or kern_small outside the BOOT_MARK knob. On the owner's 5150 ROM the dummy masks every IRQ; on any 286+ the div re-runs for ever. Plain input reaches it: ctrl.inc:5966-5975 records a shipped Control Panel gutter click that overflowed a div.\n\nThe design:\n- A boot-overlay install of vector 0 always, and vector 6 only when cpu_tier >= 286 (never 5, which is PrtSc).\n- An ~11-byte resident stub: cli, pop IP and CS, DS=CS, SI = the message, jmp into sch_diepanel.\n- The panel takes the message in SI and prints CS:IP where the stack-overflow case prints T_SP, under a generic 'AT' label.\n- sched-9's INST_MAX bound (+4) rides with it.\n\nIt turns these into a named stop:\n- wm-1 and loader-4 (a wild BX into wm_ptr2idx);\n- dw-1 (FileSize of 32MB or more);\n- gfce-4 (FSX_SPK N=0, with IF=0);\n- gfce-5 (deskmod .make);\n- every package or C-package divide on file data.\n\nPolicy cost: on non-IBM 8088 ROMs a divide overflow currently continues, often harmlessly; it will now stop the machine. That is the kernel's written doctrine (sched.inc:2580-2583).",
+   "evidence": [
+    "kernel/kernel.asm:6093, 7725-7758 (only BOOT_MARK hooks vectors 0,1,3-7)",
+    "kernel/wm.inc:8280-8292 (5150 ROM stub masks the 8259)",
+    "kernel/instance.inc:1975-1977 ('int 0, no handler installed')",
+    "kernel/ctrl.inc:5966-5975 (shipped divide overflow from a click)",
+    "kernel/sched.inc:2686-2724 (panel body, SP moved first)",
+    "apps/dos/dosw.inc:89-110 (IVT 00h banked per DOS world)"
+   ],
+   "recommendation": "Ship the vector-0 stub on both kernels and the gated vector-6 stub on kern_big. Generalise sch_diepanel to take SI = message and AX/DX = the evidence word(s); print 'DIVIDE ERROR TASK nn AT cccc:iiii NAME'. Add a soak row (a tests/ package dividing by zero in a callback) on MartyPC GLaBIOS and as box-<row> on an 86Box 286, and check it times out when the install is removed.",
+   "phase": "now",
+   "bytes_est": "~+40 resident kern_small, ~+55 kern_big (with #UD), +12 .ovl (+8 more for vector 6), ESTIMATED",
+   "listed_as": "not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE; same proposal as isr-8 and histsys-2, scoped and priced here",
+   "prior_art": "DOS int 0 'Divide overflow'; Mac SysError bomb box with an ID; OS/2 trap screen; Win 3.0 UAE",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: nothing writes IVT 0 (or 1, 3-7) on kern_big or kern_small outside BOOT_MARK's mark_hook (kernel.asm:7721-7752, mark_fvec 0,1,3,4,5,6,7); the comments at instance.inc:1984, ctrl.inc:5980-5982 and wm.inc:8264-8275 all say no handler is installed. The 286+ half is architectural: #DE pushes the IP OF the div, so the BIOS dummy's IRET re-runs it. The 5150 masking claim rests on the tree's own note (wm.inc:8268-8275); the reviewer's open question about the 1986 XT BIOS revision stands. The panel body the stub would join is 174 bytes on kern_big (sch_stkdie 53AE to sch_stkbase 545C, strings included) and 173 on kern_small, matching the maps. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE; same proposal as isr-8/histsys-2, both verified. Byte figures are estimates."
+  },
+  {
+   "id": "gfce-2",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "A package's own divide fault should close the package, not the machine",
+   "detail": "UNIX, DOS, Win 3.0 and OS/2 all contain a user-code fault to the process that raised it. kern_mega does too, but needs catch frames on every callback (mega_pcin_x).\n\nA real-mode version needs no catches. If the faulting CS is a live instance's segment, or inside a claim it owns, and is not a kernel CS:\n- request the instance's close (I_STATE 2);\n- toast '<NAME>: divide error';\n- set AX=FFFFh;\n- IRET.\n\nOn an 8088 the pushed IP is already past the div. On a 286+ the div must be skipped: F6/F7 + ModRM + 0-2 displacement bytes + a possible prefix, about 20 bytes. A kernel CS, sch_lock held, or the rate hook in flight still goes to the gfce-1 panel.",
+   "evidence": [
+    "kernel/mega.inc:2504-2560 (mega_fkill: package fault closes the package)",
+    "kernel/mega.inc:3038-3075 (catch frame cost per callback)",
+    "kernel/sched.inc:2580-2583 ('a halted machine is a bug report')"
+   ],
+   "recommendation": "Record as an owner decision before gfce-1 ships, because it decides what the panel is for: halt as a bug report, or the app dies and the desk lives.",
+   "phase": "record",
+   "bytes_est": "~+45 to +65 resident on top of gfce-1, ESTIMATED",
+   "listed_as": "none",
+   "prior_art": "SIGFPE vs panic(); DOS int 0 terminate; Win 3.0 UAE; OS/2 1.x per-process trap kill",
+   "verdict": "confirmed",
+   "verify_note": "A design decision to record, not a defect. mega_fkill (mega.inc, after mega_fault at ~2475-2510) is the precedent: a package fault closes the package on kern_mega. 8086/8088 #DE pushes the address after the div, so the 286+ skip decoder is the only extra code. The estimate is plausible; unmeasured."
+  },
+  {
+   "id": "gfce-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The divide fence is a habit; make it a ratchet",
+   "detail": "The kernel has 103 div/idiv/xlatb sites (95 div, 1 idiv, 7 xlatb; 13 of them in kern_mega-only or knob-only files), and drivers/ has 48 more div/idiv. By reading, the ~90 kernel divide sites outside kern_mega and knob files classify as:\n- ~40 with a constant divisor;\n- ~20 mouse/pane hit tests, each with a signed guard and an implicit bound (ctrl.inc:5975 was the one that shipped wrong);\n- ~20 disk-geometry divides, fenced by the BPB rules and per-call guards;\n- 5 pointer-into-table divides;\n- 3 on a caller's number.\n\nFive are unfenced, and every one trusts a value that crossed a boundary:\n- diskw.inc:3170 and 3932 (dw-1);\n- wm.inc:7283 (wm-1);\n- deskmod.inc:254 (gfce-5);\n- snd.inc:1117 and fsx.inc:4008 (gfce-4; one 8086 site and kern_mega's twin).\n\nThe fenced ones are fenced by a comment someone wrote correctly.",
+   "evidence": [
+    "kernel/diskw.inc:3170, 3932",
+    "kernel/wm.inc:7278-7301",
+    "kernel/deskmod.inc:251-254",
+    "kernel/snd.inc:1104-1117",
+    "kernel/fsx.inc:4006-4008",
+    "kernel/compress.inc:3436-3441 (the proved-in-comment model)",
+    "tests/textsites.txt precedent (CLAUDE.md, Text is font_run)"
+   ],
+   "recommendation": "Add tests/unit/t_divsites.py (fast) and tests/divsites.txt. Register every div/idiv in kernel/ and drivers/ by file and label with a reason: const, fenced <label>, validated <rule> or kernel-only. A new divide fails the build until it is registered, and the 'unfenced' count only goes down. It can also carry xlat and computed jumps.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "listed_as": "none",
+   "verdict": "confirmed",
+   "verify_note": "Counts reproduced: 95 div, 1 idiv, 7 xlatb in kernel/*.inc and kernel.asm; 48 div/idiv in drivers/. The named unfenced sites exist (current lines wm.inc:7263, diskw.inc:3177 and 3939, deskmod.inc:257, snd.inc:1121, fsx.inc ~4010). One of the five, FSX_SPK's N, is unfenced BY CONTRACT (see gfce-4), so a ratchet must register it as 'trusted by ruling' rather than as a gap. 0 shipped bytes is correct for a host-side gate."
+  },
+  {
+   "id": "gfce-4",
+   "kind": "bug",
+   "severity": "low",
+   "title": "OSAPI_FSX_SPK divides by the caller's N with interrupts off",
+   "detail": "osapi_fsx_spk (kern_big) documents 'DX = N ... not checked here: packages are trusted', then does mov bx,dx / xor dx,dx / div bx under IF=0. kern_mega's rms_spk does the same. N=0 is a divide by zero:\n- on a 286+ it spins at IF=0 after the PIT was reprogrammed, a dead machine;\n- on an 8088 it continues, trims sch_rdiv by a garbage remainder and moves the clock.\n\nAny N >= 1 is safe.",
+   "evidence": [
+    "kernel/snd.inc:1073-1074 ('not checked here: packages are trusted')",
+    "kernel/snd.inc:1082-1117",
+    "kernel/fsx.inc:3977, 4006-4008",
+    "apps/os88api.inc:797-799 (SPK_E 1 and 3; 2 free)"
+   ],
+   "recommendation": "test dx,dx / jz to a new SPK_E_ARG = 2 at both doors; abilock --update without a bump (a code added).",
+   "phase": "now",
+   "bytes_est": "+4 .text kern_big, +4 kern_mega rms part, 0 kern_small",
+   "listed_as": "none",
+   "verdict": "refuted",
+   "verify_note": "The divide is real (snd.inc:1112-1121 mov bx,dx / xor dx,dx / div bx; rms_spk the same in fsx.inc), but leaving N unchecked is a recorded decision, not a bug: SPEC.md 34.11.1 says 'N must be 74..255 ... the door does not re-check it: packages are trusted (the owner's ruling, docs/plans/LAST-DROP-BYTES.md 7.11), and a door that fenced its caller's N, ISR and block cost 55 bytes of every kern_big'. Only a package that ignores os88spk_init's refusal can pass N=0. Also a correction to the 8088 half: on an IBM ROM the int 0 dummy masks the 8259 (wm.inc:8268-8275), so it does not simply continue there. It is still one of the things gfce-1's panel would name."
+  },
+  {
+   "id": "gfce-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "DESK.DRV's .make divides a package BX fenced only by plausibility",
+   "detail": "deskmod.inc's .make arm reads [bx+W_FLAGS] and [bx+W_SEG], then does div cl on bx - wm_wins with no range test. The only fence is [bx+W_SEG] == [ld_base] during a load. This is wm-1's shape in a module.",
+   "evidence": [
+    "kernel/deskmod.inc:236-258"
+   ],
+   "recommendation": "Take wm-2's stored W_IDX if it lands; otherwise run wm_isrec's three-instruction bound first.",
+   "phase": "now",
+   "bytes_est": "+5 DESK.DRV, 0 resident",
+   "listed_as": "none",
+   "verdict": "confirmed",
+   "verify_note": "deskmod.inc:236-266: .make tests W_FLAGS, [ld_base] == [bx+W_SEG] and the loading record's I_STATE, then sub ax,wm_wins / div cl with no range test, and indexes wm_owner+si with the unbounded quotient. The fence is plausibility only. Low severity is right: the arm is reachable only from a package's entry proc during a load."
+  },
+  {
+   "id": "gfce-6",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "SYSTEM.CFG gets a domain column, not per-byte patches",
+   "detail": "The settings unpack copies every mapped byte raw. Hostility is then each reader's job: the dock clamps, thm_set refuses, and the Date/Time page uses clk_h12 as a count and corrupts .bss (sysmisc-2). The domains are tiny: 0..1 flags, a tier range, bitmasks, and 0..15 colours.",
+   "evidence": [
+    "kernel/driver.inc:4965-4972 (%%up_u raw copy)",
+    "kernel/driver.inc:896-935 (CFG_MAP rows)",
+    "kernel/driver.inc:883-885 ('the default stands')",
+    "kernel/dockmod.inc:289-296 (one reader clamping)"
+   ],
+   "recommendation": "Give each CFG_MAP row a MAX byte, and have the unpack read an out-of-domain byte as the default 0 (cmp al,[cs:si-1] / jbe / xor al,al). sysmisc-2's fix becomes one row's MAX, and future count-shaped keys are covered on the day they are added.",
+   "phase": "now",
+   "bytes_est": "~+22 .ovl and ~+22 CTRL.DRV (15 rows + 7 code on kern_big), 0 resident",
+   "listed_as": "none (generalises sysmisc-2)",
+   "verdict": "corrected",
+   "verify_note": "Confirmed that CFG_BOOT's %1_unpack (driver.inc:4950-4966) copies every mapped byte raw, and that sysmisc-2 (verified) is one consequence. 15 rows on kern_big with DOCK_OPT, 8 otherwise (DRV_CFG_MAPN). Correction to the recommendation: an out-of-domain byte should SKIP the store, so the boot default stands as driver.inc's map header promises ('the default stands'), not store 0 - 0 is not every key's default, and a skip is no larger than a xor. Byte figures are estimates."
+  },
+  {
+   "id": "gfce-7",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "cmz_jsayx tells a code from a string at 16; fm_errtab has 11 entries",
+   "detail": "An AX of 11..15 would read the code bytes of osapi_ferr_text as string pointers, which is toast_say's documented failure mode. Only kernel calls feed it today, so the hazard is latent.",
+   "evidence": [
+    "kernel/compress.inc:3416-3429",
+    "kernel/files.inc:2396-2399 (FM_NERR = 11)",
+    "kernel/toast.inc:325-327"
+   ],
+   "recommendation": "cmp ax, FM_NERR in place of cmp ax, 16.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "none",
+   "verdict": "confirmed",
+   "verify_note": "compress.inc:3416-3420: cmz_jsayx takes AX < 16 as a FERR_* and indexes fm_errtab, which has FM_NERR = 11 entries (files.inc:2401). Both callers (2331, 2680) pass kernel FERR codes today, so it is latent. cmp ax, imm8 encodes the same for 11 and 16: 0 bytes."
+  },
+  {
+   "id": "gfce-8",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "One error CLASS, not one error NUMBER",
+   "detail": "FERR, DRVE, LD and FSKE all reuse 1..10 for unrelated meanings, and verb-local codes and bare stc stubs add more. No consumer mixes families, so a renumbered single space buys only one text door and costs every FERR-checking package a rebuild. What is missing is the column a program acts on: DOS 3's class and action. The mapping onto it is total, for example:\n- media / user action: NODISK, WPROT, DRVE_DISK, LD_EDISK, FSKE_CHANGED;\n- hardware / retry: FERR_IO, DRVE_HW, FSKE_IO;\n- not found: FERR_NOENT, DRVE_NOENT, DRVE_NOVOL, FSKE_NOTHERE, FSKE_NOENT;\n- out of resource: FULL, DIRFULL, BIG, DRVE_MEM, LD_EBIG, LD_ENOMEM, FSKE_SMALL;\n- bad format: DRVE_BAD, LD_EBAD, LD_EVER, FSKE_IMAGE, FSKE_NOFAT;\n- locked: FERR_PROT, DRVE_BUSY, DRVE_CLASS;\n- app error: FERR_NAME, LD_EABORT, FSKE_ARG;\n- internal: DRVE_TWICE.",
+   "evidence": [
+    "kernel/diskw.inc:57-70",
+    "kernel/driver.inc:281-327, 2104-2125",
+    "kernel/loader.inc:44-56",
+    "apps/os88api.inc:2603-2611, 797-799, 3999-4019",
+    "kernel/snd.inc:705-719 (CF-only and AX=4 refusals)",
+    "kernel/kernel.asm:2594-2605 (XREFUSE AX=1)",
+    "kernel/driver.inc:6658-6662 (DRV_CALL AX=0)"
+   ],
+   "recommendation": "Now: write the class table into SPEC.md 18.4. Add one SDK preamble sentence: CF=1 is the only universal refusal, and AX=1 means 'not on this kernel'. Flag day: abi-9's AX=1 across families, moving DRV_CALL's xor ax,ax and the bare stc stubs. Do not renumber into one space.",
+   "phase": "flagday",
+   "bytes_est": "now 0; flag day ~0 to +3 per stub that keeps its own body",
+   "listed_as": "abi-9, histsys-14; abi-9's flag-day half is not yet an ABI-BREAK-LIST row and should be",
+   "verdict": "confirmed",
+   "verify_note": "Every code named in the class mapping exists (DRVE_* in driver.inc, LD_* in loader.inc, FSKE_* in fsck.inc/os88api.inc). abi-9 (verified) confirms the AX=0/AX=1/FERR_PROT/bare-stc refusal shapes. A proposal for SPEC.md 18.4 plus a flag-day item; the observation that abi-9's flag-day half is not an ABI-BREAK-LIST row holds (grep finds no such row)."
+  },
+  {
+   "id": "gfce-9",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "APICHK=1: the checked kernel, concretely",
+   "detail": "Cell length is ABI and macros build every cell. In a knob build, OSAPI_SLOT and OSAPI_RCELL emit call/dw apichk_<name> wherever a host-generated build/apichk.inc tags the cell, so every cell keeps its length. The tags are derived from the SDK contract comments:\n- W: wm_isrec plus W_SEG == caller DS;\n- T: [sch_cur] = 0;\n- G: the gfx lock is held, and widths/heights are signed-positive;\n- D: DF = 0.\n\nA violation logs to E9 and the debug registry with the cell and the caller's CS:IP, then proceeds ('RIP and continue'). It would have caught wm-1, loader-4, histsys-11, gfx-1 and wm-4 at the first offending call, naming the package.",
+   "evidence": [
+    "kernel/kernel.asm:2432-2530 (cell macros)",
+    "tests/suite.py:12288 (smalllaunch: every package opens)",
+    "areas/abi.md abi-15, areas/engsys.md engsys-20"
+   ],
+   "recommendation": "Build the knob plus a soak row shaped like smalllaunch: open every package on the system and apps disks under APICHK and fail on any APICHK E9 line. Add an arm to buildmatrix.",
+   "phase": "now",
+   "bytes_est": "0 shipped (knob only)",
+   "listed_as": "abi-15, engsys-20",
+   "prior_art": "Windows 3.1 debug KERNEL (RIP), NT checked build",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: the cell macros are at kernel.asm:2425/2442 (OSAPI_SLOT, 8 bytes) and 2495 (OSAPI_RCELL, 6 bytes), so a same-length call/dw substitution is feasible; smalllaunch is at tests/suite.py:12288. A knob proposal; 0 shipped bytes."
+  },
+  {
+   "id": "gfce-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "kern_mega has two fatal panels with two vocabularies",
+   "detail": "'STACK OVERFLOW  TASK 04  SP 1A2C  TASKMGR' (sch_dpstr/sch_dphex4) and ' kern_mega FAULT vv err eeee at cccc:iiii sp ssss - reboot ' (mega_fbuf/mega_bhex4). With gfce-1, all three causes can print one line through sch_dpstr: '<WHAT> TASK nn AT cccc:iiii <NAME>' (plus the error code on kern_mega).",
+   "evidence": [
+    "kernel/sched.inc:2765-2773",
+    "kernel/mega.inc:2471-2501, 14796"
+   ],
+   "recommendation": "Record; unify when gfce-1 lands.",
+   "phase": "record",
+   "bytes_est": "~-20 .mega, ESTIMATED",
+   "listed_as": "none",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: sch_s_over 'STACK OVERFLOW  TASK ' (sched.inc) and mega_fbuf ' kern_mega FAULT vv err eeee at cccc:iiii sp ssss - reboot ' (mega.inc:14804) are two vocabularies. The -20 .mega estimate is unmeasured."
+  },
+  {
+   "id": "gfce-11",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The hung fsx bracket already has an exit: Ctrl-Alt-Del",
+   "detail": "kbm_isr always far-jumps to the ROM's int 09h, and the real-mode bracket leaves int 09h alone, so the BIOS warm reset answers from inside a hung bracket. video-18's Ctrl+Alt+Esc latch would rescue only a loop that already polls fsx_wait. Two cases defeat Ctrl-Alt-Del:\n- an app that replaced int 09h itself;\n- a divide fault on a 5150 ROM, which masks IRQ1 (fixed by gfce-1).",
+   "evidence": [
+    "kernel/mouse.inc:2875-2960 (.chain at 2954)",
+    "SPEC.md:26691 (Ctrl-Alt-Del still warm-resets from shutdown)",
+    "SPEC.md:106661-106663"
+   ],
+   "recommendation": "No latch. Correct SPEC.md 53.1's sentence (see mismatches).",
+   "phase": "record",
+   "bytes_est": "0 (against video-18's +15)",
+   "listed_as": "video-18",
+   "verdict": "confirmed",
+   "verify_note": "kbm_isr (mouse.inc:2885-) falls to .chain on every path except kern_mega's stale-byte refusal, and KBM_SCAN only sets kbm_p5 for keypad 5 before falling into .chain, so Del reaches the ROM's int 09h. kern_big's fsx bracket does not touch IVT 09h or IRQ1's mask (fsx.inc's PIC writes are kern_mega's fsx_rdownf). So Ctrl-Alt-Del answers unless the app replaced int 09h or spins at IF = 0. SPEC.md 53.1's sentence is corrected below."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "`sch_stkdie` is the only `cli`/`hlt` in the kernel, and until §8.8 it printed",
+   "new_text": "`sch_stkdie` is the only `cli`/`hlt` in kern_big and kern_small (kern_mega's `mega_fault` is the other, and the `BOOTMARK=1` and `BOOTHALT=` knobs add their own), and until §8.8 it printed",
+   "why": "kern_mega's mega_fault does cli and ends in .dead: hlt (kernel/mega.inc, section .mega); BOOTMARK's mark_faulted (kernel.asm:7714-7719) and the BOOTHALT MARK macros (kernel.asm:5294-5298, 5320-5324, 5548-5552) are cli/hlt too. With no knob, kern_big and kern_small have no other cli+hlt stop."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)",
+   "new_text": "FERR_BIG     equ 10              ; larger than the buffer - or, on a write,\n                                 ; than the 32MB a 16-bit sector count can\n                                 ; hold (SPEC.md 18.4.1)",
+   "why": "Counts are DX:CX and SPEC.md 18.4.1 is 'no 64KB ceiling on either'; the kernel's own twin (kernel/diskw.inc:71-73) says 'larger than the caller's buffer - or, on a write, than the 32MB sector count a 16-bit count can hold'. The line is an equ, not an OSAPI_ %define, so tools/abilock.py strips its comment and the fingerprint does not move."
+  },
+  {
+   "file": "kernel/instance.inc",
+   "old_text": "; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins exceeds\n; 255*WIN_SIZE (its clamp bounds the index it returns, so the `wm_owner+si`\n; load is bounded; the fault is not), and a pointer that is in range but not\n; a window names the last one. This is that test. The loader does not need",
+   "new_text": "; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins reaches\n; 256*WIN_SIZE, taken unsigned, so a BX below the table faults too (its\n; clamp bounds the index it returns, so the `wm_owner+si` load is bounded;\n; the fault is not), and a pointer that is in range but not a window names\n; the last one. This is that test. The loader does not need",
+   "why": "wm_ptr2idx (wm.inc ~7260) does sub ax, wm_wins / div cl: the 8-bit quotient overflows at 256*WIN_SIZE, not past 255*WIN_SIZE (offsets 255*WIN_SIZE..256*WIN_SIZE-1 give 255), and a BX below wm_wins wraps high; wm.inc's own clamp comment already says 'only for an offset under 256*WIN_SIZE past wm_wins'. wm_wins is 9FCAh on kern_big and 766Bh on kern_small, so every BX below it does fault. Comment-only."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "An app that hangs in the bracket hangs the\n  machine — the same truth as any runaway callback, documented rather than\n  defended.",
+   "new_text": "An app that hangs in the bracket hangs the\n  desktop — the same truth as any runaway callback, documented rather than\n  defended. Ctrl-Alt-Del still warm-resets: IRQ1 reaches the ROM's int 09h\n  through `kbm_isr`'s chain (§9.6.5), unless the app replaced that vector\n  itself or spins with `IF` = 0.",
+   "why": "kbm_isr (kernel/mouse.inc:2885-) ends in a far jump to kbm_old9 on every path but kern_mega's stale-byte refusal, and kern_big's bracket leaves IVT 09h and IRQ1's mask alone, so the BIOS warm reset still answers from inside a hung bracket; the scheduler keeps pre-empting, so it is the desktop (the UI task) that hangs, not the machine."
+  }
+ ]
+}
