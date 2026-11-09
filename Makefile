@@ -14510,15 +14510,18 @@ $(BUILD)/viddemo/%/00-VIDS.TXT: apps/video/demo/%/00-VIDS.TXT tools/checkreadme.
 		$< $@
 
 .SECONDEXPANSION:
-# the desktop's shortcuts, one a video, in the grid of the adapter the disk is
-# for - and, beside them, 'DA' 0 and no other key (SPEC.md 98.5, 51.5.4)
+# the desktop's shortcuts - the guide to the videos first, then one a video -
+# in the grid of the adapter the disk is for, and beside them 'DA' 0 and no
+# other key (SPEC.md 98.5, 51.5.4). Each picture is the Disk window's: the
+# page with the glyph of the package its extension opens in
 .PRECIOUS: $(BUILD)/viddemo/%/system.cfg
-$(BUILD)/viddemo/%/system.cfg: $(BUILD)/video.o88 \
-	$$(wildcard apps/video/demo/$$*/*.V88) \
+$(BUILD)/viddemo/%/system.cfg: $(BUILD)/video.o88 $(BUILD)/notepad.o88 \
+	$(BUILD)/viddemo/%/00-VIDS.TXT $$(wildcard apps/video/demo/$$*/*.V88) \
 	tools/os88deskcfg.py tools/os88geom.py tools/os88mini.py tools/os88pkg.py
 	@mkdir -p $(dir $@)
 	python3 tools/os88deskcfg.py -o $@ --adapter $* \
-		--glyph-from $(BUILD)/video.o88 $(sort $(filter %.V88,$^))
+		--glyph V88=$(BUILD)/video.o88 --glyph TXT=$(BUILD)/notepad.o88 \
+		$(filter %/00-VIDS.TXT,$^) $(sort $(filter %.V88,$^))
 
 $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \

@@ -2,10 +2,11 @@
 """os88deskcfg - a SYSTEM.CFG that carries DESKTOP SHORTCUTS and no setting.
 
     python3 tools/os88deskcfg.py -o OUT --adapter vga|cga|herc \\
-        --glyph-from build/video.o88 [--vol 2] [--folder MEDIA] FILE...
+        --glyph V88=build/video.o88 --glyph TXT=build/notepad.o88 \
+        [--vol 2] [--folder MEDIA] FILE...
 
 The Video Player's demo disks (SPEC.md 98.5) put a shortcut on the desktop
-for every demo video, in the owner's layout, and a desktop shortcut lives in
+for the guide to the videos and for every demo video, in the owner's layout, and a desktop shortcut lives in
 nowhere but SYSTEM.CFG's trailer (SPEC.md 26.8.6). Those disks carry no
 SETTING, so this writes the trailer behind a settings head of exactly one
 record:
@@ -21,7 +22,9 @@ record:
 EACH ROW IS WHAT A DRAG OUT OF THE FOLDER'S DISK WINDOW WRITES (SPEC.md
 26.8.1, 26.8.4): kind 0 (a document), +3 the '\\' sc_m_new leaves there, the
 path below the root, the full 8.3 name as the caption, and the Disk window's
-own 16x16 picture - SPEC.md 54.3's page with the owning package's 8x8 glyph
+own 16x16 picture - SPEC.md 54.3's page with the 8x8 glyph of the package
+that opens the file's extension (each --glyph EXT=PACKAGE: the association
+the disk's own ASSOC.DAT and the kernel's defaults make)
 inset at x=4..11, y=5..12: the glyph it SHIPS (54.3.2) or its icon reduced
 (os88mini.reduce8, the kernel's assoc_reduce). Every row is PLACED
 (DSL_PIN), on a cell of the adapter's grid (26.9.1).
@@ -164,17 +167,27 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--adapter", required=True, choices=sorted(GRIDS))
-    ap.add_argument("--glyph-from", required=True,
-                    help="the package that opens the files, for its glyph")
+    ap.add_argument("--glyph", action="append", required=True,
+                    metavar="EXT=PACKAGE",
+                    help="the package that opens files of EXT, for its glyph")
     ap.add_argument("--vol", type=int, default=2, help="the volume (2 = C:)")
     ap.add_argument("--folder", default="MEDIA")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
     rows, cols = GRIDS[a.adapter]
+    pics = {}
+    for g in a.glyph:
+        ext, _, path = g.partition("=")
+        if not path:
+            fail("--glyph %s: want EXT=PACKAGE" % g)
+        pics[ext.upper()] = doc_picture(package_glyph(path))
     names = [os.path.basename(f).upper() for f in a.files]
-    pic = doc_picture(package_glyph(a.glyph_from))
+    for n in names:
+        if n.rpartition(".")[2] not in pics:
+            fail("%s: no --glyph for its extension" % n)
     out = [sc_row(a.vol, cell, SC_KIND_DOC, ord("\\"),
-                  a.folder + "\\" + name, name, pic)
+                  a.folder + "\\" + name, name,
+                  pics[name.rpartition(".")[2]])
            for name, cell in zip(names, cells(len(names), rows, cols))]
     data = head_unanswered() + trailer(out)
     if len(data) >= 4096:
