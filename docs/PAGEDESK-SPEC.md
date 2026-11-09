@@ -4507,3 +4507,77 @@ Primary 50,568 + 6,327 = 56,895 (was 56,535: +360, D24's polish share was
 `ovl_render_rest` live there, being a cancel's and a popover's, not a
 keystroke's); PDREND 60,304 (was 59,878; D20's cap 61,440); `pdstk` unchanged
 at 366 on `cc_onkey`.
+
+### 20.20 Corrections found while documenting the behaviour (`docs`, final pass, PD-30)
+
+Written from the agents' reports, the code at `feat/pagedesk` 8e00bef0d and
+the PageDesk guide (`docs/PAGEDESK-GUIDE.md`). Each item says what an earlier
+section states, what the code does, and which is right. Nothing here changes
+behaviour: every segment is full, so a code defect found is listed for the
+lead, not fixed. A section named below is not edited; this one overrides it.
+
+**20.20.1 Text that describes a state of the build that has passed.**
+
+| where | says | is |
+|---|---|---|
+| 20.6.1 | `PD_ENG_MOD`, `PD_REND_MOD` and `PD_WRT_MOD` "default to the stand-ins" until the lead flips them | the Makefile defaults to the real `PDENG.MOD`, `PDREND.MOD` and `PDWRT.MOD`; `PD_REND_MOD=$(PDSTUBDIR)/PDREND.MOD` selects the stand-in |
+| 20.6.2 ("The document's folder") | Save As writes beside the document only; another folder is refused with `Save As writes beside the document in this build.` | D14 and 20.11.3 replaced it: Save As may name another folder (the writer reads from the source's and writes to the target's), and the string no longer exists. The one remaining refusal is naming the open file itself: `Save As writes a new file: choose another name.` |
+| 20.11.5 | "Insert from another PDF has no row until it is built" | built (20.16): File row 9, `Insert from PDF...` |
+| 20.2.5, 20.2.7 | `FlateDecode` is `PDE_FLATE` | only when PDENG holds no Flate claim (20.13): with a slot it is decoded. The sentence the user sees is `No Flate cache (low RAM, or set Off).` |
+| 16.1, 16.2 | planning rows: primary 56 KiB, PDENG and PDREND 40 KiB, PDWRT 46 KiB, overlay 48, display list 22 + 7 KiB, glyph cache 12 KiB, a 176 KiB idle ceiling | the built figures (image + bss): primary 59,235 of 59,392 (D24), overlay 48,318 of 49,152, PDENG 47,074 of 47,104, PDREND 60,304 of 61,440 (D20), PDWRT 47,724 of 49,152 (D24); display list and workspace 29 KiB (D13), glyph cache 24 KiB (20.3); claim B 63 KiB on VGA and EGA, 60 KiB on CGA and Hercules; a Flate slot 43 KiB, one or two. The 176 KiB idle ceiling is exceeded by the module parts alone (D24); the PD-29 matrix is where the justified figure belongs |
+| 1.3, streams row | `FlateDecode` "on the XT build" is refused | correct for a machine without room for a slot or with Preferences > Flate cache = Off; the gate is free RAM, not the CPU (D17) |
+| 1.3, XObjects row | inline images "beyond 4 KiB" are refused | 20.12.5: an inline image is read by its exact length and drawn when its raw row fits 1,024 bytes and its stored form 6,144 bytes; the refused cases (CMYK, a filter, a colour-space name, a width over 4,096) are listed there |
+| 17.5 | `Ctrl++` / `Ctrl+-` zoom | the zoom keys are the plain `+`, `=` and `-` (and `Ctrl+-`); `Ctrl++` is not a separate binding |
+| 17.2 | Mode bar and file bar as drawn | COMPACT also lacks the Open button (File menu, Ctrl+O), recorded in 20.6 |
+| 13.1 | 256 records and a swap file | 128 records, no swap file (20.8.1, edit-verify 1); the heaps share 10 KiB |
+
+**20.20.2 Behaviour the contract promises that the build does not do.**
+
+1. **10.6 and PD-07: greying operations that depend on skipped content.** The
+   spec says that "cover" and extraction of an Incomplete page are greyed with
+   a reason. They are not. `pdu_why` (`pducmd.c`) greys tools only for a signed
+   document, and no `pdu_inc` test exists in any `pdu*.c` or `pdovl*.c` file
+   other than the status line and Document info. The user is told the page is
+   Incomplete; nothing is refused. This is a defect against the contract, not a
+   documentation error, and there is no byte to fix it in (the primary has
+   157). The guide lists it under Known issues.
+2. **14.7, PD-20: Save / Discard / Cancel at New, Open and Close document.**
+   Only closing the window asks (20.17.8). The journal keeps the marks, so
+   nothing is lost, but the contract's wording ("closing a document") is wider
+   than the build.
+3. **PD-11, links:** a name tree of a modern file is not read (20.10.2); only
+   `/Dests` of PDF 1.1 and direct destinations. Links in such files do nothing
+   and say so.
+4. **PD-12:** source annotations are listed (8 of the first 32) and jumped to,
+   not text-edited, and the Changes filter has none (20.9.1). A source
+   `/Popup` is dropped when PageDesk rewrites that annotation (20.5).
+
+**20.20.3 User-visible wording that is stale (a code change for the lead).**
+
+- Help > *The XT PDF profile* (`pdovl.c`, `pdu_hprof`) reads `Refuses, saying
+  why: Flate on the XT, xref streams, encryption, JPEG.` It predates 20.13.
+  Flate is refused only when memory has no slot or the setting is Off. A line
+  such as `Flate: needs a free 43KB slot.` would be true. The card strings are
+  resident literals, so the edit costs the primary a few bytes it does not
+  have to spare; the lead decides.
+- The on-disk `README.TXT` described a first build with stand-in modules; it is
+  rewritten for the shipped behaviour and checked by `tools/checkreadme.py`
+  (27 columns, 4.5 KB on disk).
+
+**20.20.4 Facts the documentation pinned that the contract did not state.**
+
+- The Preferences defaults: view Fit width, Full panels Both, Mid panels None,
+  marks Line+frame, Flate Auto (20.18.1 gives them in prose; the dialog row
+  values are None / Pages / Notes / Both).
+- Zoom steps by `+` and `-`: 25, 33, 50, 67, 75, 100, 125, 150, 200, 300, 400
+  (9.1), the zoom pop-up: Fit width, Fit page, 50, 75, 100, 150, 200, 400.
+- Esc has a fixed order and the first that applies wins: a held tool gesture
+  (undone), a running job (cancelled), a popover, the page field, an open text
+  box (typing ends), the selected mark, the keyboard focus, the text selection,
+  and last the return to the Select tool (`os88_onkey`, `pducmd.c`).
+- After a successful Save As the new file is the open document, on the same
+  page; after a failed or cancelled save, or an Extract, the source is reopened
+  (20.11.5).
+- Which checks have **not** been run on anything but the host or QEMU, with
+  what that does and does not show, is the guide's section 17; the contract's
+  timing budgets (15.2) and memory ceilings (16.1) are PD-29's to state.
