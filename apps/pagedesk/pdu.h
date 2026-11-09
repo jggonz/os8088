@@ -421,5 +421,29 @@ static void ovl_pf_load(void);
 static void ovl_pf_wake(void);
 #endif
 /* ---- end prefs ---- */
+/* ---- recov ---- */
+/* the recovery journal (PAGEDESK-SPEC 20.17): pdurecov.c's resident part */
+void     pdu_rc_cmd(void);              /* a command completed (pdu_undo_end) */
+void     pdu_rc_wake(void);             /* the wake: write, check, answer */
+int      pdu_rc_key(int ascii);         /* a prompt owns the keys */
+void     pdu_rc_begin(void);            /* a document is being opened */
+void     pdu_rc_fin(void);              /* a save is about to replace its target */
+int      pdu_rc_close(void);            /* the close negotiator's question */
+/* the two hooks in files the host tests compile unchanged (pduundo.c,
+ * pduedit.c) are no-ops there unless a test defines them first */
+#ifdef PD_HOST
+#ifndef PDU_RC_CMD
+#define PDU_RC_CMD() ((void)0)
+#define PDU_RC_SEED() 0
+#endif
+#else
+#define PDU_RC_CMD() pdu_rc_cmd()
+/* the /NM counter's first value (20.17.7): the tick's low ten bits (a
+ * 56-second wheel - PDWRT's nonce already tells sources apart), a multiple
+ * of 16 below 0x4000, so 128 records stay under 0x8000: PDWRT's
+ * duplicated-page /NM (0x8000 + page + k, pdwpg.c) owns the top half */
+#define PDU_RC_SEED() ((os88_ticks() << 4) & 0x3FF0u)
+#endif
+/* ---- end recov ---- */
 
 #endif /* PDU_H */

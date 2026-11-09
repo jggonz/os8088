@@ -1522,6 +1522,13 @@ FAST = [
         "controls always run; the real tree SKIPs, by name, until `make "
         "pagedesk` has built it",
         ),
+    Row("pdjr", "fast", py("tests/unit/t_pdjr.py"), 2.0,
+        "PAGEDESK-SPEC 20.17 (PD-20): PageDesk's recovery journal on the host - "
+        "the whole-store rewrite and its debounce, recovery through the 20.8 "
+        "edit-store API, a stale fingerprint, a torn or corrupt journal, a "
+        "read-only volume, the 8 KiB limit, the interrupted-save note and "
+        "its retirement on Save, and the /NM seed",
+        needs=()),
     Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
         "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
         ">64 KiB stream, 64 pages, 10,000 sparse objects within "

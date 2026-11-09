@@ -276,8 +276,10 @@ void pdu_undo_begin(int label)
 
 void pdu_undo_end(void)
 {
-    if (ud_depth > 0 && --ud_depth == 0)
+    if (ud_depth > 0 && --ud_depth == 0) {
         ovl_pdu_ed_flush();
+        PDU_RC_CMD();                   /* recov: a command completed (20.17.3) */
+    }
 }
 
 /* ---- applying one entry (ud_en) -------------------------------------------- */

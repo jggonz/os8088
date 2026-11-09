@@ -17553,7 +17553,7 @@ $(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
 # the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
 # so every one of them is a prerequisite or an edit rebuilds nothing
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
-          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h   # pages
+          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h $(PDDIR)/pdovlrecov.c   # pages, recov
 PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \

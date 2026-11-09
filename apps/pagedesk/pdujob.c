@@ -204,6 +204,7 @@ static int pdu_opfirst;                 /* the open's first slice is ours */
 static void pdu_open_begin(const char *name)
 {
     pdu_job_abort();
+    pdu_rc_begin();                     /* recov */
     if (pdu_doc == D_OPEN || pdu_doc == D_OPENING)
         pdu_doc_release();
     pdu_rwant = 0;
@@ -523,6 +524,7 @@ static void pdu_reopen_begin(void)
 static void pdu_save_step(void)
 {
     unsigned r;
+    pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));
     pd_fcopy_out(&pdu_xsave, pdu_xb, 0, sizeof(pdu_xsave));
@@ -658,6 +660,7 @@ void os88_onwake(void *win)
     if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
         pdu_nt_idle();
 
+    pdu_rc_wake();                      /* recov */
     if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
         pdu_kick();
 }
@@ -673,6 +676,8 @@ int os88_onclose(void *win)
 {
     if (win != pdu_win)
         return 1;
+    if (!pdu_rc_close())                /* recov: Save / Discard / Cancel (20.17.8) */
+        return 0;
     if (pdu_job == J_SAVE || pdu_pk == PK_REPLACE) {         /* pages: a parked replace too */
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_fsop_end();
