@@ -3582,7 +3582,7 @@ check; LZW and every other filter (still `PDE_FILTER`); inline-image Flate
 stream was not looked at on screen: the package still ships the stand-in
 PDREND (`PD_REND_MOD`, the lead's hold), which reads no stream, and the
 primary carves the flate claim at claim B's tail (`pdumod.c`, `pdu_doc_claim`):
-two slots when the largest free run holds B, both slots and the 32 KiB reserve,
+two slots when the largest free run holds B, both slots and the reserve (32 KiB plus a save's 48 KiB peak, D28),
 one when one fits, none otherwise. On a kernel whose second slot's selector is
 not `flate_seg + 2752` (kern_mega), one slot. The Control Panel low-memory
 setting D17 names is not built; until it is, the rule is by RAM alone.

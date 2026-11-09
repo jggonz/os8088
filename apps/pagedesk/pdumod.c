@@ -361,10 +361,13 @@ static unsigned pdu_needkb;
 static unsigned pdu_dcpara[PDU_NDC];    /* each row's size in paragraphs */
 /* D17 / PAGEDESK-SPEC 20.13.3: the Flate slots, 43 KiB (2,752 paragraphs)
  * each, at claim B's tail. Chosen by RAM, never by CPU: two when the largest
- * free run holds B, both slots and PD-29's 32 KiB reserve, one when one fits,
- * none otherwise (PDENG then refuses Flate with PDE_FLATE, as before) */
+ * free run holds B, both slots and the reserve, one when one fits, none
+ * otherwise (PDENG then refuses Flate with PDE_FLATE, as before). The reserve
+ * is PD-29's 32 KiB PLUS a save's peak: PDWRT and its buffers measured 47.5
+ * KiB on a 640 KiB XT (pagedeskxt, D28). With 32 KiB alone, a Save As on that
+ * machine left 5.5 KiB unclaimed */
 #define PDU_FL_PARA   2752
-#define PDU_FL_RESV   2048              /* 32 KiB, in paragraphs */
+#define PDU_FL_RESV   5120              /* 32 + 48 KiB, in paragraphs */
 static int pdu_doc_claim(void)
 {
     int i, c, first, last;
