@@ -419,6 +419,12 @@ kind = "program"
 summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove. Also checks, repairs and defragments any disk, with FSCHECK.DRV."
 short = "Installed system checker"
 
+["SNDDIAG.O88"]
+title = "Sound Debug"
+kind = "program"
+summary = "Shows what the sound driver found on this machine - where each card answered, its version, its interrupt, its mixer - and plays a ten-second tone, a line a second, to show whether the card keeps playing. On the sound debug disk, for photographing and sending to the project."
+short = "Sound card report"
+
 ["TASKMGR.O88"]
 title = "Task Manager"
 kind = "program"
@@ -693,6 +699,18 @@ title = "Read Me"
 kind = "document"
 summary = "Notes on what is on this disk and how to use it. On the system disk it is the whole os8088 manual. Double-click to read it in Note Pad."
 short = "Read this first"
+
+["SNDDEBUG.TXT"]
+title = "Sound debug notes"
+kind = "document"
+summary = "What the sound debug disk is for, what its three pages show, and the photographs to send when sound does not work. Opens in Note Pad."
+short = "How to use the sound debug disk"
+
+["SNDDIAG.LNK"]
+title = "Sound Debug startup link"
+kind = "data"
+summary = "The link in the sound debug disk's startup folder that opens Sound Debug as soon as the machine has started."
+short = "Opens Sound Debug at startup"
 
 ["WELCOME.TXT"]
 title = "Welcome note"

@@ -1033,6 +1033,14 @@
   "strings": "130e89fbca526ee9",
   "why": "Instructions line names no speed (the prompt computes it per aeroplane); ALT reads 0 below ground - page unchanged"
  },
+ "SNDDIAG_O88": {
+  "sources": [
+   "apps/snddiag"
+  ],
+  "stamped": "7e798409c",
+  "strings": "5a86ccfd83267560",
+  "why": "written from apps/snddiag/snddiag.asm and sdtext.inc: pages, keys, rates, the D8h column's na/--, the autostart and the debug driver"
+ },
  "SOLITAIR_O88": {
   "sources": [
    "apps/solitaire"
@@ -1045,9 +1053,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "44f73b32",
-  "strings": "d5ccec072faf56ae",
-  "why": "kernel size pass 15: the page's memory figures follow the new keeps, 6K and 9K (SPEC.md 34.15.1)"
+  "stamped": "7e798409c",
+  "strings": "f777e5d5ed2b7bd2",
+  "why": "drivers/sound gained snddiag.inc and SDG_* hooks that expand to nothing in the shipped build: SOUND.DRV is byte-identical (t_debugdisk), so nothing a user reads changed"
  },
  "SPACEJAM_MID": {
   "sources": [],

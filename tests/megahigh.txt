@@ -50,3 +50,8 @@ highmem apps/waverack/waverack.asm   # A CLAIM STEPPED BY PARAGRAPH: wt_hoff
     # Never run on kern_mega (kern_big only, SPEC.md 123.13). Retired by
     # OSAPI_MEM_HUGE's step for the hold (KERN-MEGA-PLAN 14.67) and a run on
     # kern_mega.
+high apps/snddiag/snddiag.asm   # NEVER LOADED BY kern_mega: Sound Debug ships
+    # only on the debug-sound disks, whose kernel is kern_big (SPEC.md 127.2),
+    # and it reads a record only that disk's -DSNDDIAG SOUND.DRV keeps. A
+    # kern_mega debug disk would settle it, run under Bochs (docs/BOCHS.md)
+highmem apps/snddiag/snddiag.asm   # NEVER LOADED BY kern_mega: the debug-sound disks are kern_big, as for high
