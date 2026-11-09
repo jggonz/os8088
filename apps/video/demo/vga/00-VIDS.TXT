@@ -79,7 +79,7 @@ Double-click one to open it, then press Space or click Play. Space pauses, Esc s
   PCM 22 kHz sound
   25 fps, 0:52, 20.1 MB
 
-08 plays on a NARROW screen: the VGA's sixteen colours at 320 pixels across, each row of the screen packed into half the memory a 640-wide row takes. Its tall picture takes the screen's whole height, page flipped against its own page as 07 is, with a palette for each of its 4 scenes.
+08 plays on a NARROW screen: the VGA's sixteen colours at 320 x 240, its rows packed 40 bytes apart in video memory, where the usual layout spaces them 80 apart. A screen page is half the size of the usual one, and half that of the 256-colour Mode X screen at the same size, so video memory holds six pages of it where they hold three. 08 flips between two of them, against its own page as 07 does; its tall picture takes the screen's whole height, with a palette for each of its 4 scenes.
 
 09-CATCH.V88
   Catch Catch
@@ -88,7 +88,7 @@ Double-click one to open it, then press Space or click Play. Space pauses, Esc s
   PCM 22 kHz sound
   24 fps, 1:18, 33.7 MB
 
-09 has NOTHING DEGRADED: every frame is the whole picture, in its scene's own sixteen colours, at the full frame rate. A video that does not fit steps down a DEGRADE LADDER in its busy stretches - the picture runs a little behind the sound, a scene takes fewer colours, coarse cells, a small cut, and last a slower frame rate - and 09 takes none of those steps. It is on the narrow screen, page flipped against its own page as 08 is, with a palette for each of its 49 scenes, and its sound is stored ahead as 02's is.
+09 has NOTHING DEGRADED: every frame is the whole picture, in its scene's own sixteen colours, at the full frame rate. A video that does not fit steps down a DEGRADE LADDER in its busy stretches - the picture runs a little behind the sound, a scene takes fewer colours, coarse cells, a small cut, and last a slower frame rate - and 09 takes none of those steps. It is on the narrow screen at 320 x 200, which holds eight pages where the usual layout holds four, page flipped against its own page as 08 is, with a palette for each of its 49 scenes, and its sound is stored ahead as 02's is.
 
 10-WILLY.V88
   Steamboat Willie
