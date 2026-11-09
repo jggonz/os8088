@@ -306,7 +306,7 @@ static void pdu_open_step(void)
         return;
     }
     if (pdu_reopening) {                /* pages: PDENG has its document back (20.11.5) */
-        pdu_reopening = 0;
+        pdu_reopening = 2;              /* verify-insert: the reload below keeps the save's line */
         pdu_pgwant = pdu_page + 1;
         pdu_kick();
         return;
@@ -579,7 +579,10 @@ void os88_onwake(void *win)
         if (r)
             pdu_tell(pdu_errtext(r));
         else {
-            pdu_say("");
+            if (pdu_reopening)          /* verify-insert */
+                pdu_reopening = 0;
+            else
+                pdu_say("");
             pdu_canvas_full();
             pdu_side_page(old);         /* two cells, or a new list */
             pdu_notes_page();           /* the one line that can change */
