@@ -246409,7 +246409,21 @@ clip whose stream runs past the file's length (header 52) or whose entries
 outrun it, more than 16 anchors, a pool of more than 7 clips, or an action
 naming a pool past the pools is refused as *NAME.VBT is damaged*
 (`vb_vcheck`): each was a play that waited for ever on a head no read
-could bring. Every refusal names the file it was about - the document,
+could bring. So is a clip a pool or an ending (victory, defeat) names with
+no anchor to enter at - an anchor whose frame is past the idle loop is
+passed over (`vb_anchor`) - and every INDEX the rules hold that is past its
+table: an action's pools, its own five and each character's five (40..44
+and 48..67); an effect's stat past 3 (BOOST, LOWER), attack past 2
+(DAMAGE) or stance past the stances (STANCE); the starting stance; a
+stance with other than 1 to 6 moves, a move of weight 0, more than 2
+responses, or a move, response, return or change's action (FFh none, for
+the last two) or change's stance past its table; a menu of more than 8
+items, or any of its 8 slots an action or a sub-menu past its table (an
+empty menu's cursor stands on its first); a character's top menu, or side
+menu (FFh none), past the menus; a follow-up's next action. Each indexed a
+record past its table, and from there wrote the stat or the clip tables it
+sizes (`vb_effect`'s `vb_mods`; `vb_cget`'s `vb_cx`, which refuses a clip
+past the table as well). Every refusal names the file it was about - the document,
 its rendition beside it, or the game's own `.O88` (`vb_errname`) - and a
 file shorter than a header *is not a VBT1 file*, not *not found*; the
 text window's fourth line is the file it plays (*Plays MYFIGHT.VBT*).
@@ -247130,7 +247144,11 @@ revolution, **and as much as the ring has room for, up to 32 KB
 (`VB_SPIECE`), while no menu is up**: an eighth of the calls. A piece is
 cut to its clip's last 4 KB: the last clip in the bundle ends at the file's
 end, and a read past it fails every time the reader asks again (the
-victory clip hung on it).
+victory clip hung on it). **A read that fails mid-play ends the play** with
+*NAME.VBT: a read failed* (`vb_reader`'s `.rerr`), as one at the load does:
+asked again it was a failed BIOS read every pass, on a frozen frame. The
+one that does not is the copying hold's fill (`vb_hstep`), which drops the
+hold, and the disk serves.
 
 **A clip far bigger than memory streams.** The demo's Limit is 250 KB
 (118 frames, 7.8 s, 31 KB/s with its sound), about five rings. Measured on
@@ -247194,7 +247212,11 @@ unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
   off), from a 386 XMS first. A run of the board's pages and the frame's
   quarters 0 and 1, a 32 KB window: a fill maps the pages it lands in and
   the disk reads straight INTO the window - no bounce, no copy up - and a
-  read maps them and copies out with `rep movsb`. So an 8088 with a board
+  read maps them and copies out with `rep movsb`. The hold given back
+  (`vb_hfree`, or an open refused after the frame) gives back the pages
+  AND the quarters (EMSV_FREE, then EMSV_UNFRAME, Video Player's): held to
+  the window's close, they refused the next battle's hold and Video
+  Player's frame. So an 8088 with a board
   holds a whole battle (a 2 MB Lo-tech holds the Hercules demo's 700 KB),
   and an action never waits for the disk. Once the hold is whole the
   rings are read IN PLACE (126.4.2) and nothing is copied at all.

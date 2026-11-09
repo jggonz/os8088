@@ -147,6 +147,9 @@ vb_hfree:
     mov ax, [vb_ehnd]
     mov bl, EMSV_FREE
     call vb_ems
+    mov al, [vb_eq]                 ; ...and the frame's quarters (Video
+    mov bl, EMSV_UNFRAME            ; Player's: the next open, or another
+    call vb_ems                     ; instance's, may want them now)
     mov byte [vb_eq], 0
 .z:
     mov byte [vb_hon], 0
@@ -353,6 +356,8 @@ vb_cget:
     push si
     push di
     xor ah, ah
+    cmp ax, [vb_meta+VH_NCLIPS]     ; (a clip the table has not got: none -
+    jae .no                         ; DI would index past vb_cx)
     mov di, ax
     shl di, 1                       ; DI: the clip's word
     cmp word [vb_cx+di], 0xFFFF

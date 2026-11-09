@@ -1316,7 +1316,7 @@ vb_effect:
     neg ah
 .m1:
     mov cl, [si+AC_EFF+EF_A]        ; the stat
-    xor ch, ch
+    and cx, 3                       ; (0..3, vb_vcheck's: the tables' 4)
     mov dl, [si+AC_EFF+EF_C]        ; the turns
     cmp bl, ENEMY
     jne .mc

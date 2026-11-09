@@ -347,6 +347,9 @@ vb_eopen:
     mov byte [vb_htype], 2
     jmp vb_hon1
 .nof:
+    mov al, [vb_eq]                 ; the quarters given back (none taken:
+    mov bl, EMSV_UNFRAME            ; the driver gives back only its
+    call vb_ems                     ; caller's)
     mov byte [vb_eq], 0
     mov ax, [vb_ehnd]
     mov bl, EMSV_FREE
@@ -696,7 +699,7 @@ vb_hstep:
 .fail:
     cmp byte [vb_cmode], 0          ; (the cache keeps its hold: the idle
     jne .f1                         ; loop lives there - a failed read is
-    mov byte [vb_hon], 0            ; the reader's, tried again) the disk
+    mov byte [vb_hon], 0            ; the reader's, and ends the play) the disk
 .f1:                                ; serves from here
     stc
     ret
