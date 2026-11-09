@@ -246141,6 +246141,12 @@ the window to the picture and plays it, Enter after Esc plays it again
 with the window still holding what it draws, and opening it again after
 a play does the same; broken on purpose (the answer leaving
 the window without a battle) the play never comes.
+**The About card** (SPEC.md 12.2, 20.5.1.1): `vb_about`, registered with
+`OSAPI_ABOUT_SET` beside the menu bar, puts up `os88ui.inc`'s standard
+card (`vb_ablines`, ending *Contributed by Elendilon*); `vb_paint` draws
+the window's face (`vb_face`) and then the card while `[vb_abon]` is set,
+and the first key or click after takes it down (`vb_abdismiss`) and is
+spent on it - Enter does not also start a play.
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
 
