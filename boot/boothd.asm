@@ -464,13 +464,16 @@ boot_drive:  db 0x80
 ; done with them before the blob runs anyway (load_all is over by KZ_HD).
 ; boot_drive stays in the sector: it is read AFTER the blob has run.
 ;
-; THEY WERE AT 0600h, AND THAT WAS BELOW THE PACKED KERNEL'S READ. .nomem
+; THEY WERE AT 0600h, AND THAT WAS INSIDE THE PACKED KERNEL'S READ. .nomem
 ; proves the read ends BOOT_STACK below the segment's BASE, counting the file
 ; as if it landed at KERNEL_SEG - but a packed one lands KZ_RPARA paragraphs
 ; higher (pass 2 above), so on a 128..131KB machine the read ran through
 ; 0600h, overwrote [spt] mid-pass, and the sector stopped on 'G'. The two
 ; asserts below are that arithmetic, so the next kernel to outgrow it fails
 ; the build instead.
+; KZ_SECS is the sectors PAST the blob, where .nomem's [ksecs] is the whole
+; file, so the second assert models a .nomem floor BOOT2_SECS sectors lower
+; than the real one: conservative, and it understates its own slack.
 VARS_AT     equ STACK_TOP - BOOT_STACK
 %ifdef KZIP
  ; the packed read's top, against what .nomem guarantees: R less the blob

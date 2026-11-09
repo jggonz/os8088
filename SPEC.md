@@ -107732,20 +107732,29 @@ working variables **out of the sector**: every one is written before it is
 read, so none needed an initialiser, and they live at `7400h` in the segment
 the sector relocated to - the BOTTOM of the sector's own `BOOT_STACK`
 reservation below `7C00h`, which the stack (a few hundred bytes at most) never
-reaches and which is above everything the sector reads. `boot_drive` stays in
+reaches and which, on any machine the kernel's floor admits, is above
+everything the sector reads. `boot_drive` stays in
 the sector, being read after the blob has run. Seven bytes are still spare.
 
 **They were at `0600h` until 2026-11-09, and that broke the 128KB machine.**
 `.nomem` proves the kernel's read ends `BOOT_STACK` below the segment's BASE,
 counting the file as if it landed at `KERNEL_SEG`; a packed kernel lands
-`KZ_RPARA` paragraphs higher (§2.9.13.5), so on kern_big the read climbed
-21,504 bytes past what `.nomem` counted and ran through `0600h` - linear
+`KZ_RPARA` paragraphs higher (§2.9.13.5), so on kern_big the read's top
+climbed 17,920 bytes (R, 21,504, less the 3,584-byte blob pass 1 took off the
+front) past what `.nomem` counted and ran through `0600h` - linear
 `int12*1024 - 7800h`. Below 132KB the read overwrote `[spt]` and its
 neighbours mid-pass and the sector stopped on `G`, a hard-disk boot floor four
 kilobytes above the floppy's. At `7400h` the same arithmetic leaves
 `BOOT_STACK + 7400h` = 31,744 bytes for `KZ_RPARA*16` less the blob, and
-`boot/boothd.asm` asserts that at build time, with the blob's end against the
-same line, so a kernel that outgrows it fails `make` rather than a machine.
+`boot/boothd.asm` asserts that at build time - and, for a kernel guard 5 holds
+to 128KB, that the blob ends below the variables on the least RAM `.nomem`
+admits (modelled conservatively, with `KZ_SECS`, the sectors past the blob) -
+so a kernel that outgrows it fails `make` rather than a machine. Measured on
+MartyPC: kern_big boots from an XT-IDE disk on a real 128KB machine and with
+int 12h forced to 128, 129, 131 and 132KB, where it stopped on `G` below 132
+before. By arithmetic `.nomem` is now the binding floor, at 118KB. kern_mega's
+`.nomem` admits 150KB while its blob clears the variables only from 152KB; no
+286 has that configuration and its own floor is `MEGA_BOOT_KB`.
 The move is the same bytes: every reference was already a 16-bit absolute.
 
 **The run is arranged with nothing but the file API.** `dskw_alloc` is
