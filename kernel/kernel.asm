@@ -1985,8 +1985,26 @@ B3_END      equ B3_RAM * 16 + B3_EXT + B3_RES ; (B3_EXT: `.boot3` and
 B3_LIFT_RD  equ ((B3_RAM * 16 + B3_EXT + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
                                 ; `.boot3m` after it, boot3.inc)
 B3_LIFT_RS  equ ((B3_END + 511) & ~511) / 16 - HEAP_SEG
+; ...AND STAGE 2'S DMA BOUNCE (SPEC.md 2.9.13.7): a run the 64KB page would cut
+; is read whole to that page's start P and copied down, so up to B2_BMAXSEC
+; sectors from the HIGHEST page boundary the read crosses are written - past
+; the read's own end when the last page falls near it. The blob may not be
+; there. This term is that bounce's end, from the same estimate of the read's
+; end as B3_LIFT_RD and only when the read crosses a page at all; it is 0 on
+; kern_big, kern_emu and kern_small at this build (their bounce, if any, ends
+; far inside the read) and lifts kern_mega's blob, whose read ends 14,848
+; bytes past 0x20000 - inside MEGA_BOOT_KB. boot2.asm's guard is the exact
+; check, on the read's real numbers.
+B2_BMAXSEC  equ 36              ; the longest run read_run can make: the
+                                ; largest CYLINDER a system disk is built in,
+                                ; 1.44MB's 18 x 2 (bound 1). t_canary holds
+                                ; every shipped disk's BPB to it
+B3_RD_END   equ (B3_RAM * 16 + B3_EXT + KZ_MARGIN_K + 1022 + 511) & ~511
+B3_PG_HI    equ ((B3_RD_END - 1) >> 16) << 16
+B3_LIFT_BN  equ ((B3_PG_HI + B2_BMAXSEC * 512) / 16 - HEAP_SEG) * (B3_PG_HI > KERNEL_SEG * 16)
 B3_LIFT_F   equ 96 + (B3_LIFT_RD - 96) * (B3_LIFT_RD > 96)
-B3_LIFT_0   equ B3_LIFT_F + (B3_LIFT_RS - B3_LIFT_F) * (B3_LIFT_RS > B3_LIFT_F)
+B3_LIFT_F2  equ B3_LIFT_F + (B3_LIFT_BN - B3_LIFT_F) * (B3_LIFT_BN > B3_LIFT_F)
+B3_LIFT_0   equ B3_LIFT_F2 + (B3_LIFT_RS - B3_LIFT_F2) * (B3_LIFT_RS > B3_LIFT_F2)
 ; ...AND OFF THE 64KB DMA PAGE (BOOT3-PLAN 3.3's page term, wave 4). Stage 1
 ; bounds every run at the destination's page (boot.asm's second bound), so a
 ; blob that straddles one costs an int 13h call BEFORE THE BAR for nothing: a

@@ -3579,14 +3579,18 @@ leaves a segment and needs none of §20.14.5's crossing machinery. Measured:
 one stream is 73,832 bytes and two blocks are 74,908, so that simplification
 costs **1,076 bytes — two sectors of the forty it saves**. Machine code
 matches locally; the same split costs 44% on a MOD
-(docs/plans/O88-COMPRESSION-PLAN.md 13.4).
+(docs/plans/O88-COMPRESSION-PLAN.md 13.4). Since BOOT3-PLAN 16.18 a block
+after the first reaches back into the blocks before it (§2.9.13.6), which
+buys most of that back.
 
 **`R` IS ROUNDED TO A SECTOR AND NOT A PARAGRAPH.** The packed tail is read
 `R` bytes above where it expands to, exactly as §20.13 does it — and
-`read_run`'s third bound divides the destination's physical address by 512 to
+`read_run`'s third bound divided the destination's physical address by 512 to
 find the DMA page's end, resting on every destination being 512-aligned. A
-paragraph-aligned `R` makes that shift truncate, and a run of **zero** sectors
-is an infinite loop rather than a wrong picture. It cost a boot to find.
+paragraph-aligned `R` made that shift truncate, and a run of **zero** sectors
+was an infinite loop rather than a wrong picture. It cost a boot to find. The
+third bound is a bounce now and asks in paragraphs (§2.9.13.7), and `R` stays a
+sector for the reasons that section gives.
 
 **The head is read at the TRACK bound, whatever §18.93.2's gate chose** (the
 big review's BR-1, part 2, 2026-11-08). The splash's first tick runs code out
@@ -3643,8 +3647,9 @@ of `kernel/lz.inc`'s LZ4 arm minus those, and **the copy is the point** —
 
 §18.93.1's probe has to be read after a head flip, inside a run that began
 before it — and under the packed kernel stage 2 decides where runs begin, not
-the geometry. `read_run` cuts at the cylinder and at the 64KB DMA page of the
-destination, and the load restarts twice more: at `.text`, where the plain
+the geometry. `read_run` cuts at the cylinder (and cut at the 64KB DMA page of
+the destination too, until §2.9.13.7 met the page with a bounce), and the load
+restarts twice more: at `.text`, where the plain
 head is read in runs of its own (at the **track** bound, §2.9.13.1), and at
 `.text + KZ_HEADSEC`, where the packed tail starts afresh `R` paragraphs up.
 
@@ -3731,8 +3736,10 @@ The floppy reads the head to `KERNEL_SEG` and the blocks to `KERNEL_SEG +
 head/16 + R`. The hard disk reads *one run* to `KERNEL_SEG + R`, which puts
 the head at the bottom of it and the blocks at `KERNEL_SEG + R + head/16` —
 **the same place**. So the whole of the difference is moving the head down,
-which cannot overlap (R is 20,992 and the head 4,608), and the block loop is
-then the identical call on identical addresses.
+which cannot overlap (R is 21,504 and the head 2,560 on kern_big at
+BOOT3-PLAN 16.18), and the block loop is then the identical call on identical
+addresses - dictionaries included (§2.9.13.6), which reach only into blocks
+already expanded.
 
 So the VBR's packed arm is `mov dx, KERNEL_SEG + KZ_RPARA` in place of
 `mov dx, KERNEL_SEG`, and a far `call BLOB_SEG:KZ_HD`. `kz_hd` lives in the
@@ -3752,6 +3759,180 @@ just wrote, which is the packed one.
 **The live media inherits all of it** (§80.1): `build/os8088-usb.img` is this
 VBR over a FAT16 partition, so the CD and the stick boot a packed kernel by
 the same five bytes.
+
+##### 2.9.13.6 Each block has a DICTIONARY
+
+**A block's matches may reach back into output that is already final** (BOOT3-PLAN
+16.18, 2026-11-09). Cutting the tail into `KZ_BLK` blocks cost 1,076 bytes
+because every block began on an empty window (§2.9.13.1); a DICTIONARY gives a
+later block that window back. The block header grows from 4 bytes to six:
+
+```
+    +0  word  the stream's length
+    +2  word  D + the block's unpacked length   (where DI stops: DX)
+    +4  word  D / 16                            (the dictionary, in paragraphs)
+    +6        the stream, then 0xE5 to the next paragraph
+```
+
+`kz_all` points `ES` D bytes below the block's landing and starts `DI` at D,
+so a match reaching D bytes back is still at a non-negative offset in the one
+segment `kz_expand` addresses, and `kz_expand` loses its `xor di, di`. D is
+whole paragraphs because `ES` carries it, and `tools/os88kz.py` caps it at
+`0xFFF0` less the block, so `D + unpacked` fits a word and `DI` never wraps.
+That cap is what decides D: a full 61,440-byte block can have 4,080, and the
+LAST block, which is whatever is left, gets the most - **27,488** on kern_big
+(block 1 of 38,020 bytes), 26,880 on kern_emu, and 4,080 and **47,792** on
+kern_mega's blocks 1 and 2. kern_small's tail is one block and gets nothing.
+
+**BLOCK 0'S D IS ZERO, AND NO BLOCK'S DICTIONARY REACHES THE HEAD.** Stage 2
+writes into the plain head before `kz_all` runs: `spl_fseg`'s segment half
+(§2.9.5), the boot timer at +12 (§15.4), `boot_cylrun` at +4 when the canary
+passes (§18.93.1), the first tick's adapter variables, and the splash ISR's
+`spl_live`/`spl_busy`/`spl_quiet` (`.text` bytes at 0x91E..0x921 on kern_big,
+`spl_busy` transiently 1 while a frame draws). The head in memory is not the
+head the compressor saw, so a match into it would copy those writes. The
+design's first prototype gave block 0 the head as its dictionary, and would
+have. A dictionary inside the TAIL is safe because nothing writes there
+before the kernel runs: it is past `SPL_RESIDENT`, a first-tick store past the
+head is already forbidden (§2.9.13.1), and `kz_all` expands the blocks in
+order, so block i's dictionary is blocks 0..i-1's finished output.
+
+**The in-place margin is measured on the stream that ships.** A dictionary
+moves neither pointer the margin is about - its reads are of final bytes BELOW
+the landing, and the race is between the write pointer and the unread source
+above it - so `os88lz.in_place_margin` runs over the dictionary stream as it
+ran over the plain one. What `os88kz.py` requires is now stated exactly: the
+margin must cover each block's measured figure **plus its padding** (at most
+15). The header cancels, being both in the packed size the telescoping counts
+and in front of the stream; the old text said "plus the 4-byte header", which
+was never the reason, and the 64 reserved covered either reading.
+
+**And the host decodes it the way stage 2 will.** `os88kz.py` simulates
+`kz_all` over the file it just wrote, IN PLACE on one array - the head, the
+blocks `R` above it, each block through its own header, `kz_expand`'s loop
+with the `DI >= DX` stop and a byte-at-a-time match copy - **with the head
+scrambled to 0xCC first**, and refuses the build on any difference from the
+image. Broken on purpose: block 0 packed with the head as its dictionary, a
+D written in bytes rather than paragraphs, and `R` one sector short are each
+refused there, on the host.
+
+**What it buys, and costs** (BOOT3-PLAN 16.18, measured off the build):
+
+| kernel | KERNEL.SYS | stage 2 reads | R |
+|---|---|---|---|
+| kern_big | 84,848 → **84,384** (−464) | 159 → **158** sectors | 20,992 → 21,504 |
+| kern_emu | 85,072 → **84,624** (−448) | 160 → **159** | 21,504 → 22,016 |
+| kern_mega | 118,048 → **117,280** (−768) | 224 → **223** | 29,696 → 30,208 |
+| kern_small | 53,568, unchanged (one block) | 98 | 10,752 |
+
+R grows by what the stream saves, rounded up, and the read's end does not move
+(one sector more of R, one less of tail): the "tail top under `BLOB_SEG_AT`"
+guard below `kz_all` keeps its margin on every kernel - 1,024 bytes on
+kern_big, 512 on kern_emu, 3,072 on kern_small, and on kern_mega 3,584, its
+blob having been lifted for §2.9.13.7. The blob pays **4 bytes** of `kz_all`
+for it (the header's third word and `ES` below the landing, less the
+`xor di, di`), on every kernel, transient; the hard disk's door (§2.9.13.5)
+needs nothing, because the dictionaries reach only into blocks `kz_all` has
+already expanded and never into the head `kz_hd` moves.
+
+##### 2.9.13.7 The DMA page is a BOUNCE, not a bound
+
+**`read_run` used to cut a run at the destination's 64KB DMA page** (its
+third bound): the DMA controller answers a straddle with error 09h, so the
+run stopped at the page and the rest of it cost an `int 13h` of its own -
+1-2 revolutions, ~400 ms on the field machine, to move what one call could
+(PERFORMANCE.md Part 2). Every kernel but kern_small reads across 0x10000, and
+kern_mega across 0x20000 too, so it was a call a page boundary, every boot.
+
+**Now a run the page would cut is read WHOLE to the start of the page above,
+P, and copied down** (BOOT3-PLAN 16.18). The test is in paragraphs - the
+segment the run ends at against P = `(ES | 0x0FFF) + 1` - and is the same
+20 bytes as the cut it replaces; `.out` then copies what the BIOS moved to
+`[b2_dest]` with one `rep movsw` (26 bytes). An aligned `ES` names the page
+after it as P, which no run reaches, so it never bounces. A run is at most 36
+sectors, 18KB, so no run straddles a page from P.
+
+**THE BOUNCE IS INSIDE THE LOAD, so the boot floor does not move.** The run is
+`[dest, dest + n·512)` with `dest < P` and P inside it, so `[P, P + n·512)` is
+the run's own top half plus at most n−1 sectors above the run's end - which is
+the part of the same read not yet read, or, for a run near the read's end, RAM
+past it and under the blob. Nothing there is live at stage 2: the image's
+nobits rungs (`.lowbss`, `.vgabuf`, `.boot3`'s scratch) are the kernel's and
+the kernel has not started; the IVT, the BIOS data area and the 0x580 DPT copy
+(§2.9.8) are under `KERNEL_SEG`, below every P; the head is below the tail;
+stage 1's sector and stack are above the blob. The copy runs up the address
+space with the source above the destination, which is the direction a forward
+`rep movsw` handles an overlap in. The later runs of the same read overwrite
+whatever the bounce left above the run. The prototype put an 18KB buffer
+ABOVE the blob instead, which costs up to 18,432 bytes of floor - kern_big's
+blob end 0x1A800 to 0x1F000, 1,536 bytes under 128KB's limit, kern_emu's
+1,024 - and stage 1's `MEMFIT` (§2.7.1) would have had to count it too.
+
+**Its guards are build-time, on every kernel.** `B2_BMAXSEC` (kernel.asm,
+36) is the longest run `read_run` can make, the largest CYLINDER a system
+disk is built in (1.44MB's 18 × 2, bound 1); `tests/unit/t_canary.py` reads
+it out of each kernel's map and refuses a shipped disk whose BPB says more.
+`boot2.asm` asserts, per read - the plain head, the packed tail, or NOKZIP's
+plain read - that from the HIGHEST page boundary the read crosses,
+`P + B2_BMAXSEC·512 <= BLOB_SEG_AT·16`; a read that crosses no page asserts
+nothing. `BLOB_LIFT` carries the same term (`B3_LIFT_BN`, §2.9.15.3), off
+the same estimate of the read's end as its read term, so the guard holds by
+construction and `boot2.asm`'s is the exact check on pass 2's numbers. It is
+0 on kern_big, kern_emu and kern_small and lifts **kern_mega's** blob 3,072
+bytes, 0x23C00 → 0x24800: its tail ends 14,848 bytes past 0x20000, so a
+36-sector run straddling that page could bounce to 0x24800, past where the
+blob sat - inside `MEGA_BOOT_KB` by 499,712 bytes. Broken on purpose: the term
+zeroed, kern_mega's pass 2 fails at `boot2.asm`'s tail guard.
+
+**The floor, computed from each kernel's `kernel.map` and `kernel.kz.json`**
+(`BLOB_SEG_AT`, `BOOT2_PAD`, `B2_BNEND`, `KZ_*`; linear addresses):
+
+| kernel | blob | bounce, worst case | highest live byte | under 128KB's 128,512 | R | tail top under `BLOB_SEG_AT` |
+|---|---|---|---|---|---|---|
+| kern_big | 0x19A00..0x1A800 | 0x10000..0x14800 | 0x1A7FF | **19,968**, unchanged | 21,504 | 1,024 |
+| kern_emu | 0x19C00..0x1AA00 | 0x10000..0x14800 | 0x1A9FF | **19,456**, unchanged | 22,016 | 512 |
+| kern_small | 0x10000..0x10E00 | none (the read ends at 0xF400) | 0x10DFF | **59,392**, unchanged | 10,752 | 3,072 |
+| kern_mega | 0x24800..0x25600 (was 0x23C00..0x24A00) | 0x20000..0x24800 | 0x255FF | (640KB: 499,712 under `MEGA_BOOT_KB`'s 652,800, was 502,784) | 30,208 | 3,584 |
+
+**`MIN_RAM_KB` does not move**: kern_small and kern_big still boot on 128KB,
+by the margins above, which are the same as before the change.
+
+**And it gives a call back where a page cut a run.** `int 13h` calls in stage
+2's read on an 8088 (the cylinder bound), and on a 286 (§18.93.2's track
+bound), `t_blobruns`' walk with and without the page cut:
+
+| disk | before | after | after, 286 |
+|---|---|---|---|
+| os8088-360, -720 | 11 | **10** | 20 → 19 |
+| os8088-120 | 7 | **7** | 12 → 12 |
+| os8088 (1.44MB) | 7 | **6** | 12 → 10 |
+| small360, small720 | 7 | **7** | 12 → 12 |
+| emu.img | 7 | **6** | 12 → 11 |
+| mega.img | 10 | **8** | 16 → 14 |
+| mega120.img | 11 | **9** | 19 → 17 |
+
+PREDICTED, until `os88boot` counts the FDC's READ commands in the final pass.
+The dictionary ALONE would have cost the 1.2MB disk a call (7 → 8: a larger R
+moved the page cut into a run); with the bounce no page decides where a run
+starts, so R can no longer move a call by moving the tail.
+
+**The arms.** `FLOPPY1=1` reads one sector a call and skips the test: one
+512-aligned sector straddles no page. `DISKAL=1` copies the AL sectors the
+BIOS said it moved, which is the count `.out` advances by. `TRACKRUN=1`'s runs
+bounce the same way. A retry re-reads to the same P (int 13h's reset keeps
+`ES`), and `.rerun` re-establishes everything. The copy takes `DF` = 0 after
+an `int 13h`, which `kz_expand`'s `rep movsb` already does. **The hard disk is
+untouched**: `boot/boothd.asm` has a reader of its own (§2.9.9) and its
+transfers are its own business.
+
+**`R` is still rounded to a sector**, though the reason §2.9.13.1 gives is
+gone: the new test does not divide by 512, so a paragraph-aligned R would no
+longer hang it. It stays a sector for §1's rule that every disk-visible base
+is 512-aligned, for `BLOB_LIFT`'s read term, which assumes the rounding, and
+for the canary's sector, which `tools/os88ksig.py` and `t_canary` locate by
+whole sectors. The canary walks lose the page: a run is the cylinder and what
+is left, wherever it lands, and both chose the same `KSIG_OFF` on every kernel
+before and after (7,168; 4,096 on kern_small).
 
 #### 2.9.14 The blob is ONE section: the overlay's blob half is `.boot2`
 
@@ -3816,8 +3997,9 @@ whole blob.
 `int 13h` calls on all four geometries up to 13 sectors — but a blob sector
 also moves every kernel sector behind it, and stage 2's read is
 cylinder-bounded (§18.91.1). `tests/unit/t_blobruns.py` walks that read the
-way `read_run` does — cylinder, sectors left and the destination's 64KB DMA
-page, the plain head and then the packed tail — and ratchets it per geometry:
+way `read_run` does — cylinder, sectors left and (until §2.9.13.7 made it a
+bounce) the destination's 64KB DMA page, the plain head and then the packed
+tail — and ratchets it per geometry:
 **11 / 11 / 8 / 7** calls on 360KB / 720KB / 1.2MB / 1.44MB at ten sectors,
 checked against MartyPC's FDC (165 sectors in 13 READ commands on the 360KB
 disk, two of them the blob's). An eleventh blob sector is free on every
@@ -3827,7 +4009,8 @@ the big review's BR-1 (2026-11-08) the plain head is read at the track bound**
 kern_small disks, one call more wherever the head crosses a track (PREDICTED
 until `os88boot` measures it). **Since BOOT3-PLAN wave 4 (§2.9.14.2) it is
 11 / 11 / 7 / 7, and 7 on both kern_small disks**, with stage 1 two calls on
-all six.
+all six. **Since BOOT3-PLAN 16.18 (§2.9.13.6, §2.9.13.7) it is 10 / 10 / 7 /
+6**, the small disks still 7.
 
 ##### 2.9.14.1 …and the window half takes the name `.ovl` back
 
@@ -4111,8 +4294,11 @@ they went then, and a `B3SECT` body is in `.boot3` everywhere.
 
 ```
 CEIL512(x) = (x + 511) & ~511
+RD_END     = CEIL512(B3_RAM*16 + B3_EXT + KZ_MARGIN + 1022)
+PG_HI      = the highest 64KB boundary below RD_END
 LIFT0      = max(96,
-                 CEIL512(B3_RAM*16 + B3_EXT + KZ_MARGIN + 1022)/16 - HEAP_SEG,
+                 RD_END/16                                        - HEAP_SEG,
+                 (PG_HI + B2_BMAXSEC*512)/16 - HEAP_SEG, if PG_HI is above KERNEL_SEG,
                  CEIL512(B3_RAM*16 + B3_EXT + B3_RES)/16          - HEAP_SEG)
              (B3_EXT: `.boot3` and `.boot3m` after it, wave 5)
 BLOB_LIFT  = LIFT0, or - when [blob, blob + BOOT2_PAD) at LIFT0 would cross
@@ -4127,6 +4313,12 @@ read 4 + 2 + 1, and the page term puts it at 0x10000, read 6 + 1 - at
 most `BOOT2_PAD` of boot RAM and 0 resident; on kern_big, kern_emu and
 kern_mega it is 0. A foot guard (5a, kernel.asm) refuses a blob that crosses a
 page anyway.
+
+**The bounce term** (BOOT3-PLAN 16.18) is §2.9.13.7's: a run straddling the
+read's highest page is read to that page's start, so the blob may not begin
+under `B2_BMAXSEC` sectors of it. It binds on kern_mega alone, 448 → **640**
+(the blob 0x23C00 → 0x24800); on kern_big, kern_emu and kern_small it is 0 or
+below the read's term.
 
 The 1,022 is R's sector rounding and the tail's own (511 each); a last block
 that GROWS adds to R past this bound, so boot2.asm's `KZIP` guard stays the
@@ -39705,7 +39897,8 @@ still scrambled.
 
 **AND THE RUN HAS TO HAVE BEGUN BEFORE THE FLIP, which is the loader's fact
 and not the geometry's.** A run is cut where `read_run` cuts it - the cylinder,
-the 64KB DMA page of its destination, the end of what is wanted - and stage 2
+the end of what is wanted, and until §2.9.13.7 the 64KB DMA page of its
+destination, which is a bounce now and cuts nothing - and stage 2
 restarts runs where the load does: at `.text` (the blob is in front of it,
 §2.9), and under the packed kernel again at `.text + KZ_HEADSEC`, where the
 tail starts afresh `R` paragraphs up (§2.9.13.3). A sector after a flip in a
@@ -39736,8 +39929,8 @@ the `canary` row red, and the answer is a re-walked band and a moved
 `BOOT2_SECS`, against the set of geometries, against the size of `.text`,
 against where KZIP restarted runs - and BOOT3-PLAN wave 4 moves every blob
 length at once. `tools/os88ksig.py` is the generator: per build ARM, between
-the two KZIP passes, it walks `read_run`'s cuts (cylinder, DMA page, what is
-wanted; the plain head at the track, the tail restarting behind it `R` up) on
+the two KZIP passes, it walks `read_run`'s cuts (cylinder and what is
+wanted - the DMA page left the walk with §2.9.13.7; the plain head at the track, the tail restarting behind it `R` up) on
 every shipped system disk of that arm - the Makefile's `KSIGGEOM`, each written
 as its `os88disk.py` line builds it (`360:spc=1 720 1200 1440` on kern_big and
 every knob, `360:fatcap=2 720:fatcap=2` on kern_small, `1440` on kern_emu,

@@ -826,6 +826,41 @@ no fixed ceiling on the footprint; guard 5 is a statement about `MIN_RAM_KB`
 instead, and the sector itself refuses (`RAM`) any machine where the read
 would reach it (`MEMFIT`, §2.7.1).
 
+### What is live while stage 2 reads, and where the DMA bounce goes
+
+The boot floor is the highest byte live at the one instant everything is: stage
+2 reading the kernel, with stage 1's sector and stack still at the ceiling.
+kern_big at BOOT3-PLAN 16.18, linear addresses:
+
+```
+  0x00000  IVT, BIOS data area, 0x580 the DPT copy (SPEC.md §2.9.8)     live
+  0x00600  KERNEL_SEG: the plain head, 5 sectors (spl_tick runs it)      live
+  0x01000  ...the packed tail's landing: what kz_all will expand into
+  0x06400  the packed tail, read here, R = 21,504 up                     filling
+  0x10000  ┐ THE DMA BOUNCE (SPEC.md §2.9.13.7): a run the 64KB page
+  0x14800  ┘ would cut is read whole to the page's start and copied
+             down - inside the read itself, never above it
+  0x19600  the tail's last sector ends
+  0x19A00  BLOB_SEG_AT: stage 2's blob, 7 sectors                        live
+  0x1A800  ...its end: the highest live byte below the ceiling
+     ...   free - 19,968 bytes of it on a 128KB machine
+  top-2560 stage 1's relocated sector and its 2,048-byte stack           live
+```
+
+**The bounce adds nothing to guard 5**, on any kernel, and that is the design
+rather than luck: the region a bounced run writes is the run's own top half
+plus at most 35 sectors above its end, which is either the same read's
+not-yet-read remainder or RAM past the read's end and **under the blob**.
+`boot/boot2.asm` asserts that per read (`P + B2_BMAXSEC*512 <= BLOB_SEG_AT*16`
+from the highest page boundary the read crosses) and `BLOB_LIFT` carries the
+same term, so the blob's end stays the highest live byte and guard 5's sum
+needs no new term. It lifted one kernel: **kern_mega's** blob, 3,072 bytes
+(0x23C00 → 0x24800), whose read ends 14,848 bytes past 0x20000 - against a
+640KB floor. kern_small reads nothing past its blob at 0x10000, so its bounce
+never fires. The margins under 128KB's 128,512 (the top less 2,560) are
+**19,968** on kern_big, **19,456** on kern_emu and **59,392** on kern_small,
+all unchanged by it; `kernsize`'s `boot` line is the same figure.
+
 `KERNEL_SEG` is the only constant `boot/boot.asm` and `kernel/kernel.asm`
 share. `apps/os88api.inc` carries a third copy, baked into every package's
 far-call targets — **a kernel move means rebuilding every `.o88`** —

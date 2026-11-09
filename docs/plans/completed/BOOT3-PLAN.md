@@ -3260,3 +3260,112 @@ form), `small128` and `bootfloor` (the blob lift moved on kern_emu and
 kern_mega in 16.16, and kern_small's `.boot3` moves back here); and for
 `bvs_apply`'s far return, `dispcheck` (`vid_disp_init`'s `bvs` arm at boot)
 and `dispprefer` (the boot's adapter switch, VSW_SWITCH's).
+
+### 16.18 The KZ block dictionary and stage 2's DMA bounce (2026-11-09)
+
+**Why.** Two things the scouts found on the packed kernel's read, taken as one
+change because each moves what the other measures. Cutting the tail into
+61,440-byte blocks started every block on an empty LZ4 window, and
+`read_run`'s third bound cut a run at the destination's 64KB DMA page, which
+costs a whole `int 13h` (1-2 revolutions) for the run's remainder. The owner
+approved the direction and asked one question first: **how much does it raise
+the RAM boot floor?** kern_small must boot on 128KB, kern_big ideally too
+(192KB would have been the owner's decision). **Answer: by nothing, on
+kern_big, kern_emu and kern_small; kern_mega's blob moves 3,072 bytes up its
+640KB machine. `MIN_RAM_KB` is unchanged.**
+
+**What** (SPEC.md 2.9.13.6, 2.9.13.7, 2.9.15.3).
+
+1. **The dictionary.** The block header is `packed, D + unpacked, D/16` (six
+   bytes); `kz_all` puts `ES` D below the landing and `DI` at D, and
+   `kz_expand` loses its `xor di, di`. `tools/os88lz.py`'s `lz4_compress` and
+   `lz4_decompress` take a `prefix` (the dictionary; the classic block only),
+   so the prototype's `tools/kzdictlz.py`, which `exec`'d a patched copy of the
+   encoder's source, is not adopted. **The prototype's bug is fixed**: it
+   gave block 0 the plain head as its dictionary, and stage 2 writes into the
+   head before `kz_all` (`spl_fseg`, +4, +12, the first tick's adapter
+   variables, the splash ISR's flags) - block 0's D is 0, and `os88kz.py`
+   caps every D at the block's own offset in the tail, so no dictionary
+   reaches the head. `os88kz.py` now simulates `kz_all` in place over the
+   file it wrote, with the head scrambled to 0xCC, and refuses any
+   difference: block 0 packed against the head, D written in bytes, and R a
+   sector short are each refused (`kzbreak.py`, scratch). The margin check is
+   restated exactly - each block's measured figure plus its padding.
+2. **The bounce.** A run the page would cut is read whole to the page's start
+   P and copied down with one `rep movsw` at `.out`. **Not** the prototype's
+   18KB buffer above the blob (`BLOB_SEG_AT + BOOT2_PAD/16`), which would have
+   put kern_big's highest live byte at 0x1F000 - 1,536 bytes under the 128KB
+   limit, 1,024 on kern_emu - and needed stage 1's `MEMFIT` to count it: at P
+   the bounce is inside the read itself, the run's own top half plus at most
+   35 sectors of the not-yet-read remainder or of the RAM under the blob.
+   `B2_BMAXSEC` (36, kernel.asm) is the longest run; `boot2.asm` asserts per
+   read that `P_hi + B2_BMAXSEC*512 <= BLOB_SEG_AT*16`, `BLOB_LIFT` gained the
+   same term (`B3_LIFT_BN`) and `t_canary` refuses a shipped disk whose BPB
+   cylinder exceeds `B2_BMAXSEC`. The prototype's dead `mov di, ax` is gone
+   with the old cut. `FLOPPY1=1` skips the test; `DISKAL=1` copies the AL
+   sectors; `boot/boothd.asm` is untouched.
+3. **Every reader moved in the same diff**: `tools/os88ksig.py` and
+   `t_canary.py`'s run walks lose the page bound (both still choose
+   `KSIG_OFF` 7,168, and 4,096 on kern_small); `t_blobruns.py`'s stage-2 walk
+   loses it and its ratchet tightens to 10 / 10 / 7 / 6, small 7 / 7;
+   `kernel.kz.json` gains `dicts`. `tools/os88romfix.py`'s packing is a
+   per-section size REPORT, not a copy of the stream, and is left alone;
+   `os88sym`, `os88rom`, `os88ladder` and `kzboot.py` read only the json's
+   unchanged keys.
+
+**The floor**, from each tree's `kernel.map` (`BLOB_SEG_AT`, `BOOT2_PAD`,
+`B2_BNEND`, `BLOB_LIFT`) and `kernel.kz.json` (`headsecs`, `rpara`, `ksecs`)
+by a host script over the four trees - the bounce's worst end is the highest
+64KB boundary below the tail's end plus `B2_BMAXSEC*512`:
+
+| kernel | blob | bounce (worst) | highest live | under 128KB (128,512) | R | tail top under the blob |
+|---|---|---|---|---|---|---|
+| kern_big | 0x19A00..0x1A800 | 0x10000..0x14800 | 0x1A7FF | 19,968 (=) | 20,992 -> 21,504 | 1,024 (=) |
+| kern_emu | 0x19C00..0x1AA00 | 0x10000..0x14800 | 0x1A9FF | 19,456 (=) | 21,504 -> 22,016 | 512 (=) |
+| kern_small | 0x10000..0x10E00 | none | 0x10DFF | 59,392 (=) | 10,752 (=) | 3,072 (=) |
+| kern_mega | 0x23C00 -> **0x24800**..0x25600 | 0x20000..0x24800 | 0x255FF | 640KB: 502,784 -> 499,712 | 29,696 -> 30,208 | 512 -> 3,584 |
+
+**MEASURED, host side** (against `ff3b9b85`, same commit count):
+
+| kernel | KERNEL.SYS | stage 2 reads | `.boot2` KZIP (of 3,584) | stage-2 calls, 8088 |
+|---|---|---|---|---|
+| kern_big | 84,848 -> **84,384** | 159 -> 158 | 3,530 -> **3,560** (24 free) | 11 / 11 / 7 / 7 -> **10 / 10 / 7 / 6** |
+| kern_emu | 85,072 -> **84,624** | 160 -> 159 | 3,545 -> **3,575** (9 free) | emu.img 7 -> **6** |
+| kern_mega | 118,048 -> **117,280** | 224 -> 223 | 3,449 -> **3,479** (105 free) | mega.img 10 -> **8**, mega120 11 -> **9** |
+| kern_small | 53,568 (=, one block) | 98 | 3,104 -> **3,134** (450 free) | 7 / 7 (=) |
+
+`.boot2` grows 30 bytes on every kernel (26 the copy, 4 `kz_all`; the page
+test is the 20 bytes it replaces) and 26 on the NOKZIP arm `kernsize` prints;
+none of it resident. `KERN_SIZE` 96,256 / 58,368 / 96,768 and
+`MEGA_RESIDENT` 62,464 unchanged: `make budget-check` passes on all four.
+**kern_emu has 9 bytes of blob left**, so its next blob byte past them is a
+sector of BOOT RAM and a stage-1 call to price (`t_blobruns --sectors 8`).
+`make`, `make emu`, `make mega`, `make rom`, `make budget-check`,
+`os88ksig.py verify` on all four trees and `os88ovlchk.py` pass; the fast tier
+76 passed. Broken on purpose: `B3_LIFT_BN` zeroed fails kern_mega's pass 2 at
+`boot2.asm`'s tail guard; `B2_BMAXSEC` read as 30 fails `t_canary` on the
+three 1.44MB disks. The call counts are `t_blobruns`' model - **PREDICTED**
+until `os88boot` counts the FDC's READ commands.
+
+**And the real loader, run on the host.** A scratch harness
+(`boot_uc.py`, not a suite row) ran stage 1 and stage 2 of the built disks
+under unicorn with RAM above the machine's size UNMAPPED, an `int 13h` that
+answers a DMA straddle with AH=09h as the controller does, and compared what
+landed at `KERNEL_SEG` with `kernel.bin`'s image at the handoff: every byte
+past the head matched, no straddle was asked for and nothing touched RAM past
+the machine, on kern_big's four disks (cylinder and track bounds), at 128KB
+and at **112KB**; kern_emu at 128KB and 112KB; kern_small's two at 72KB;
+kern_mega's two at 640KB and at **152KB**, the least its stage 1 accepts,
+with both of its bounces (0x10000 and 0x20000); and the `NOKZIP`, `FLOPPY1`
+and `DISKAL` arms (the last with a BIOS that moves half the run and says so)
+in private trees. It found one bug the build could not: `.out` loaded `ES`
+from `[b2_dest]` AFTER pointing `DS` at P, so the copy's destination came out
+of the bounce buffer. `ES` is loaded first now.
+
+**Rows** (none run here): `kzboot` (the byte comparison - the dictionary's
+real test on the glass) and `kzboot-off` (NOKZIP's plain read crosses
+0x10000 and bounces too), `hdboot` (`kz_hd` over dictionary blocks), `cylrun`,
+`kdcylrun` and `megacz` (the canary and `.rerun` over bounced runs),
+`small128`, `kernresident`, `bootfloor` and `bootfloor-ab` (kern_mega's blob
+moved), and `buildmatrix` for the `FLOPPY1`, `DISKAL` and `TRACKRUN` arms;
+`os88boot` on the 360KB and 1.44MB disks for the calls.
