@@ -6082,7 +6082,7 @@ KGO_PAIR b3                     ; ovlchk: B3 hand-down - the far return's CS (`m
 ; callers (drv_boot_x, kmain_o, vx_boot_x) since BOOT3-PLAN wave 4 - the blob's
 ; before, with a pair of its own, KGO_PAIR bvs - so the hop is `.boot3`'s b3_
 ; pair above and the blob's pair is gone. The one body it reaches that stays
-; in the blob is bvs_apply, the splash's first tick's (B2CALL bvs_apply_f).
+; in the blob is bvs_apply, the splash's first tick's (B2CALL bvs_apply; it ends in retf, BOOT3-PLAN 16.17).
 %define BSW_GO b3_kgo           ; KSWK's and KSWC's shape through `.boot3`'s
 %define BSW_CGO b3_cgo          ; own pair (KGO_PAIR b3, above)
 %macro BSWK 1
