@@ -217,7 +217,7 @@ static pdw lx_strpiece(void)
 
 static pdw lx_token(void)
 {
-    int c, d, h, h2;
+    int c, h, h2;
     pdw n, total;
     tk.more = 0; tk.len = 0; tk.neg = 0; tk.real = 0; tk.range = 0; tk.fxr = 0;
     tk.text[0] = 0;
@@ -360,7 +360,7 @@ static pdw ob_value(void)
         save_i = L->i; save_gen = L->gen;
         lx_tell(&ob_pos);
         k = (pdw)lx_next();
-        if (k >= '0' && k <= '9') {
+        if ((k >= '0' && k <= '9') || k == '+') {      /* verify-perf: "2 +0 R" is one (qpdf, MuPDF) */
             rc = lx_token();
             if (rc == 0 && tk.kind == PDT_NUM && !tk.neg && !tk.real && !tk.range && tk.iv.hi == 0) {
                 k = tk.iv.lo;

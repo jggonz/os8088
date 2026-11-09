@@ -241,8 +241,7 @@ static pdw v_dict_get(void)
         rc = 1;
         if (dg.objnum == dk_obj && dg.gen == dk_gen && dg.key[0][0]) {
             for (j = 0; dg.key[0][j]; j++) ;
-            L = &fobj;
-            u32_cp(&dc_a, &dk_pos);
+            u32_cp(&dc_a, &dk_pos);                     /* L is fobj: pde_verb set it */
             u32_sub16(&dc_a, (pdw)(j + 1));
             lx_seek(&dc_a);
             if (lx_token() == 0 && tk.kind == PDT_NAME && str_eq(tk.text, dg.key[0])) {
@@ -609,7 +608,11 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             }
         }
     }
-    if (rc != PDE_BUSY && pde_ioerr) rc = PDE_IO;          /* a failed read is the truth, whatever the parser made of the gap */
+    /* a failed read is the truth, whatever the parser made of the gap - and
+     * the gap is not kept: a token cut short by it may have set dict_get's
+     * array cursor mid-number (verify-perf), so the cursor, the key cache and
+     * the file cache all go */
+    if (rc != PDE_BUSY && pde_ioerr) { rc = PDE_IO; fl_invalidate(); }
     if (rc == PDE_BUSY) { pde_fail = 0; return PDE_BUSY; }  /* D11: more to do is not a failure - CF = 0, AX = PDE_BUSY */
     pde_fail = rc;
     return rc ? rc : pde_ax;

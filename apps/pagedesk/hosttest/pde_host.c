@@ -4,7 +4,8 @@
  * the offset must be cluster multiples, a short answer means the end, the
  * cursor advances by what was delivered. A call that breaks the contract
  * aborts the run loudly - the target would answer FERR_NAME or read the wrong
- * bytes. Fault injection: pdh_failat fails the Nth read; pdh_budget aborts a
+ * bytes. Fault injection: pdh_failat fails the Nth read (and every read up to
+ * pdh_failto when that is later: a disk that stays out); pdh_budget aborts a
  * run that makes more reads than a verb sequence can need (a hang guard). */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@ unsigned char *pdh_file;
 unsigned long pdh_size;
 char pdh_name[14] = "DOC.PDF";
 int pdh_cluster = 1;                    /* sectors per cluster */
-unsigned long pdh_reads, pdh_failat, pdh_budget;
+unsigned long pdh_reads, pdh_failat, pdh_failto, pdh_budget;
 unsigned long pdh_bytes;
 static int ferr;
 
@@ -54,7 +55,7 @@ pdw os88_file_read_seq(const char *name, pdw seg, pdw off, pdw cap, pdw *cur)
     pdh_reads++;
     if (pdh_budget && pdh_reads > pdh_budget) { fprintf(stderr, "STEP LIMIT: %lu reads\n", pdh_reads); exit(97); }
     if (strcmp(name, pdh_name)) { fprintf(stderr, "READ_SEQ: wrong name %s\n", name); exit(98); }
-    if (pdh_failat && pdh_reads == pdh_failat) { ferr = 5; return 0; }
+    if (pdh_failat && (pdh_reads == pdh_failat || (pdh_reads > pdh_failat && pdh_reads <= pdh_failto))) { ferr = 5; return 0; }
     o = (unsigned long)cur[6] | ((unsigned long)cur[7] << 16);
     if (cap == 0 || cap % cb || o % cb) {
         fprintf(stderr, "READ_SEQ CONTRACT: cap=%u off=%lu cluster=%lu\n", cap, o, cb); exit(99);

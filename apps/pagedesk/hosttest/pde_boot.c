@@ -139,8 +139,13 @@ static void show_dg(unsigned r)
     pdm_u32_mul16(&u1, dg.num.lo, 3125);
     pdm_u32_shr(&u1, &u1, 11);
     pf("GET rc=%u kind=%u num=%d.", r, dg.kind, (unsigned)dg.num.hi, 0, 0, 0, 0, 0, 0, 0);
-    { /* %05u of the fraction */
-        unsigned f = u1.lo, d = 10000;
+    { /* %05u of the fraction. It reaches 99,998 - 17 bits - so the first
+       * digit is a 32-bit division: u1.lo alone printed every fraction of
+       * 0.6554 or more wrong (verify-perf: 32767.99998 came out 32767.34462,
+       * which the perf report took for a pdmath disagreement) */
+        unsigned f, d = 1000;
+        f = pdm_u32_divmod16(&u1, &u1, 10000);
+        pdb_putc('0' + u1.lo);
         while (d) { pdb_putc('0' + f / d); f %= d; d /= 10; }
     }
     pf(" ref=%u,%u len=%u count=%u text=%s\n", dg.refnum, dg.refgen, dg.len, dg.count, (unsigned)dg.text, 0, 0, 0, 0, 0);

@@ -21,6 +21,10 @@
  *   pde_test multi FILE...                            open each in turn on one engine (re-INIT, reuse)
  *   pde_test fpchange FILE -- FILE2                   FINGERPRINT, then the same name holds FILE2's
  *                                                     bytes (another program saved it): FINGERPRINT again
+ *   pde_test seq FILE -- Q...                         DICT_GET after DICT_GET on ONE open engine, so
+ *                                                     dict_get's array cursor and key cache live across
+ *                                                     them: Q = OBJ/GEN[/KEY[/KEY[/KEY]]], or Fa-b (reads
+ *                                                     a..b from now fail: a disk taken out), or O (back)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +35,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
 extern unsigned pde_fail;
 extern int pdh_load(const char *path);
 extern int pdh_cluster;
-extern unsigned long pdh_reads, pdh_failat, pdh_budget, pdh_bytes;
+extern unsigned long pdh_reads, pdh_failat, pdh_failto, pdh_budget, pdh_bytes;
 
 #define SEG_XB    0x2000
 #define SEG_CACHE 0x3000
@@ -346,6 +350,32 @@ static void sig(void)
     }
     printf("SIG pages=%u hash=%08x\n", n, h);
 }
+/* verify-perf: one engine, many DICT_GETs, reads failing in a window */
+static void cmd_seq(int argc, char **argv)
+{
+    int i, k;
+    char buf[200], *t;
+    struct pdxb_dictget g;
+    unsigned r;
+    for (i = 0; i < argc; i++) {
+        if (argv[i][0] == 'F') {
+            pdh_failat = pdh_reads + strtoul(argv[i] + 1, &t, 10);
+            pdh_failto = pdh_reads + strtoul(t + 1, 0, 10);
+            continue;
+        }
+        if (argv[i][0] == 'O') { pdh_failat = 0; pdh_failto = 0; continue; }
+        memset(&g, 0, sizeof g);
+        strncpy(buf, argv[i], sizeof buf - 1); buf[sizeof buf - 1] = 0;
+        t = strtok(buf, "/"); g.objnum = (pdw)cmd_arg(t);
+        t = strtok(0, "/"); g.gen = t ? (pdw)cmd_arg(t) : 0;
+        for (k = 0; k < 3 && (t = strtok(0, "/")); k++) strncpy(g.key[k], t, 31);
+        xb_put(&g, sizeof g);
+        r = call(PDV_ENG_DICT_GET, 0, 0, 0);
+        xb_get(&g, sizeof g);
+        printf("%s ", argv[i]);
+        show_dg(&g, cf ? r : 0);
+    }
+}
 static void cmd_faults(const char *file)
 {
     unsigned long n, total;
@@ -418,6 +448,7 @@ int main(int argc, char **argv)
         if (!strcmp(cmd, "dump")) dump();
         else if (!strcmp(cmd, "objs")) objs();
         else if (!strcmp(cmd, "get") && ex >= 2) cmd_get(ex, ap);
+        else if (!strcmp(cmd, "seq")) cmd_seq(ex, ap);
         else if (!strcmp(cmd, "res") && ex >= 3) cmd_res(0, ex, ap);
         else if (!strcmp(cmd, "resobj") && ex >= 4) cmd_res(1, ex, ap);
         else if (!strcmp(cmd, "outline")) cmd_outline();

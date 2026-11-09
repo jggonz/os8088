@@ -455,10 +455,62 @@ def build(d):
     p.xref(1, extra=b" /XRefStm 99999")
     save("hybrid.pdf", p)
 
+    # ---- verify-perf: what dict_get's array cursor and the lexer's asm must keep
+    # arrcut<s>.pdf: /Widths element 644 (12345) straddles the 4,096-byte block
+    # boundary, cut s digits in; 15 KiB of comment keeps the xref's blocks apart,
+    # so with an 8 KiB cache a read of that block can be made to fail
+    for s in (0, 2):
+        p = P()
+        p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+        p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        p.put(3, b"<< /Type /Page /Parent 2 0 R >>")
+        head = b"5 0 obj\n<< /FirstChar 32 /Widths ["
+        at = len(p.b) + len(head)
+        body = bytearray(head[len(b"5 0 obj\n"):])
+        nums, cut = [], 4096 - 2 - s
+        while at + 12 < cut:
+            v = b"%d " % (10000 + len(nums)); nums.append(v); body += v; at += len(v)
+        body += b" " * (cut - at)
+        body += b"12345 " + b"".join(b"%d " % (20000 + j) for j in range(40)) + b"] /Tail 7 >>"
+        p.put(5, bytes(body))
+        p.b += (b"%" + b"p" * 78 + b"\n") * 200
+        p.xref(1)
+        save("arrcut%d.pdf" % s, p)
+        exp["arrcut%d.pdf" % s] = len(nums)
+    # plusref.pdf: "2 +0 R" is a reference (qpdf and MuPDF open it; perf's
+    # lexer look-ahead took a digit only and refused the file)
+    p = P()
+    p.put(1, b"<< /Type /Catalog /Pages 2 +0 R >>")
+    p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+    p.put(3, b"<< /Type /Page /Parent 2 0 R >>")
+    p.xref(1)
+    save("plusref.pdf", p)
+    # lexedge.pdf: one value an object, each straddling the lexer's 256-byte
+    # refill (objects 10..), for the asm word scan and number converter
+    p = P()
+    p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+    p.put(3, b"<< /Type /Page /Parent 2 0 R >>")
+    for i, v in enumerate(LEXEDGE):
+        n = 10 + i
+        pad = 256 - len(b"%d 0 obj\n" % n) - min(1 + i % 3, max(len(v) - 1, 0))
+        p.put(n, b" " * pad + v)
+        p.b += (b"%" + b"q" * 70 + b"\n") * 8
+    p.xref(1)
+    save("lexedge.pdf", p)
+
     for name, data in files.items():
         with open(os.path.join(d, name), "wb") as f:
             f.write(data)
     return exp
+
+
+# lexedge.pdf's values, object 10 onwards, and what DICT_GET answers for each
+# (the engine before the asm lexer answered the same, verify-perf)
+LEXEDGE = [b"2147483647", b"2147483648", b"4294967296", b"-2147483648", b"+17", b"-0", b"007",
+           b"32767", b"32768", b"1.75", b"0.99999", b"-.5", b"1.2.3", b"--5", b"/A#42C", b"/ab#2Fcd",
+           b"/" + b"x" * 127, b"/" + b"y" * 128, b"5 +0 R", b"5\n%c\n0 R", b"5 0 %c\nR", b"5 0 RG",
+           b"70000 0 R", b"(lit (nested) \\) str)", b"<48656C6C6F>", b"0000000000000000000001", b".12345678901"]
 
 
 if __name__ == "__main__":

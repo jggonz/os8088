@@ -522,7 +522,55 @@ def own(pde, work):
             l = first_of(pde, P("filters.pdf"), ("-c", str(c), "-k", str(k)))
             ok = l.startswith("OPEN ok") or (c * 512 * 2 > k * 1024 and l.startswith("OPEN rc=34"))
             expect(ok, "cluster %d sectors, cache %d KiB: %s" % (c, k, l))
+    perf_checks(pde, P, exp)
     print("own fixtures done")
+
+
+# lexedge.pdf, object 10 + i: what a key-less DICT_GET answers (pde_fixtures.LEXEDGE)
+LEXEDGE_WANT = ["rc=32 kind=2 num=32767.99998", "rc=32 kind=2 num=32767.99998", "rc=32 kind=2 num=32767.99998",
+                "rc=32 kind=2 num=-32768.00001", "rc=0 kind=2 num=17.00000", "rc=0 kind=2 num=0.00000",
+                "rc=0 kind=2 num=7.00000", "rc=0 kind=2 num=32767.00000", "rc=32 kind=2 num=32767.99998",
+                "rc=0 kind=3 num=1.75000", "rc=0 kind=3 num=0.99998", "rc=0 kind=3 num=-1.50000", "rc=1 kind=0",
+                "rc=1 kind=0", "rc=0 kind=5 num=0.00000 ref=0,0 len=3 count=0 text=ABC",
+                "rc=0 kind=5 num=0.00000 ref=0,0 len=5 count=0 text=ab/cd",
+                "rc=0 kind=5 num=0.00000 ref=0,0 len=127 count=0 text=" + "x" * 127, "rc=33 kind=0",
+                "rc=0 kind=9 num=0.00000 ref=5,0", "rc=0 kind=9 num=0.00000 ref=5,0", "rc=0 kind=9 num=0.00000 ref=5,0",
+                "rc=0 kind=2 num=5.00000", "rc=33 kind=0", "rc=0 kind=4 num=0.00000 ref=0,0 len=18 count=0 text=lit (nested) ) str",
+                "rc=0 kind=4 num=0.00000 ref=0,0 len=5 count=0 text=Hello", "rc=0 kind=2 num=1.00000",
+                "rc=0 kind=3 num=0.12345"]
+
+
+def perf_checks(pde, P, exp):
+    """verify-perf: the asm lexer's edges, "n +g R", and dict_get's array
+    cursor after a read that failed in the middle of an element"""
+    for c in (1, 8):
+        for i, want in enumerate(LEXEDGE_WANT):
+            g = lines(pde, "get", P("lexedge.pdf"), (10 + i, 0), ("-c", str(c)))[-1]
+            expect(g.startswith("GET " + want), "lexedge obj %d c=%d: %s, want %s" % (10 + i, c, g, want))
+    g = lines(pde, "get", P("plusref.pdf"), (1, 0, "Pages"))
+    expect(g[0].startswith("OPEN ok pages=1") and g[-1].startswith("GET rc=0 kind=9 num=0.00000 ref=2,0"),
+           "plusref: \"2 +0 R\" is a reference: %s" % g)
+    # a read failing while the element that straddles a block is lexed cuts it
+    # short ("12" of 12345); the answers after the disk is back must be what a
+    # fresh engine answers, never the cursor resuming in the middle of it
+    n_case = n_bad = 0
+    for s in (0, 2):
+        name, k = "arrcut%d.pdf" % s, exp["arrcut%d.pdf" % s]
+        tail = ["5/0/Widths/[%d]" % (k + 1), "5/0/Widths/[%d]" % (k + 2), "5/0/Widths/[%d]" % (k + 30), "5/0/Tail"]
+        fresh = [lines(pde, "get", P(name), q.split("/"), ("-k", "8"))[-1] for q in tail]
+        for b in range(k - 160, k, 8):
+            for a in (1, 2, 3):
+                for ln in (0, 8):
+                    q = ["5/0/Widths/[%d]" % b, "F%d-%d" % (a, a + ln), "5/0/Widths/[%d]" % k, "O"] + tail
+                    got = lines(pde, "seq", P(name), q, ("-k", "8"))[-4:]
+                    got = [l.split(" ", 1)[1] if " " in l else l for l in got]
+                    n_case += 1
+                    if got != fresh:
+                        n_bad += 1
+                        if n_bad <= 3:
+                            fail("arrcut s=%d [%d] F%d-%d: after the read came back %s, a fresh engine %s" % (s, b, a, a + ln, got, fresh))
+    expect(n_case and not n_bad, "arrcut: %d of %d fault cases left the cursor wrong" % (n_bad, n_case))
+    print("ok   verify-perf: lexedge %d values x2 clusters, plusref, arrcut %d fault cases" % (len(LEXEDGE_WANT), n_case))
 
 
 CONTENT_SPARSE = pde_fixtures.CONTENT % b"sparse"
