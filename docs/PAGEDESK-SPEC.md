@@ -621,7 +621,8 @@ PDWRT answered `PDE_RANGE`, its "nothing to save", on MARKUP.PDF - wave 2).
 filesystem has no atomic replace (SPEC.md 18.4), so the documented guarantee
 is: a failure before the delete leaves the target untouched; a failure
 between delete and rename leaves the complete new file as `PDSAVE.$$$`, which
-PageDesk offers to finish renaming at the next launch. Disk full, write
+PageDesk offers to finish renaming at the first document open of the next
+session (20.17.6). Disk full, write
 protect and short writes are caught on every write; the temp file is deleted
 on failure and the document stays dirty.
 
@@ -643,11 +644,15 @@ annotations, classic xref, trailer with a new `/ID`.
 
 ### 14.7 Recovery journal
 
-`SYSTEM/APPDATA/PAGEDESK.JRN` (when the boot volume is writable): a header
-with the source's name and fingerprint, then append-only records (one per
-completed command, CRC-16 each). Recovery is offered at open only when the
-named source's fingerprint matches; replay stops at the first bad record.
-A read-only volume disables the journal with a status-line note.
+`SYSTEM/APPDATA/PAGEDESK.JRN` on the boot volume (when it is writable): a
+header with the source's name and fingerprint, then the edit store's records
+as they stand after the last burst of commands, CRC-16 each. The file is
+rewritten whole half a second after the last command, not appended to
+(20.17.2 says why and what it costs). Recovery is offered at open only when
+the open source's fingerprint matches; replay stops at the first bad record.
+Page operations are not journaled (20.17.1). A read-only volume disables the
+journal with a status-line note. Closing a window with unsaved changes asks
+Save / Discard / Cancel (20.17.8).
 
 ## 15. Responsiveness
 
@@ -3959,7 +3964,12 @@ restores marks on the source's own pages only.
 #### 20.17.2 Where, and the file
 
 `SYSTEM/APPDATA/PAGEDESK.JRN` on the **boot volume** (`os88_vol_sys()`, 14.7;
-the instance stands there by `OSAPI_FILE_GOTO_QM` and goes back, 19.9). One
+the instance stands there by `OSAPI_FILE_GOTO_QM` and goes back, 19.9). The
+folder is **walked from the root on every visit and never banked**: every
+visit may write, and SPEC.md 19.9.1's rule is that a banked visit never
+creates - on a boot floppy swapped since the last visit the banked cluster is
+a cluster of somebody else's disk, and a full `OSAPI_FILE_WRITE` there writes
+a directory entry into that disk's data (verify-recov). One
 file serves the whole machine: it belongs to the most recent session that
 wrote it, and the offer is only ever for the journal that is there at open.
 
@@ -3993,42 +4003,65 @@ which input queues; a hard disk ~0.2-0.4 s. A command that changes nothing
 the store holds (a selection, a scroll, a mode) never reaches the hook and
 writes nothing. The staging buffer is a transient 8 KiB claim taken
 and freed inside the write, so the claim count (16.2) is untouched; a refused
-claim skips that write, once, and the next command retries.
+claim skips that write, once, and the next command retries. The header's
+fingerprint is asked of PDENG **once per document**, at its first write:
+`PDV_ENG_FINGERPRINT` re-reads the first and last KiB of the source and drops
+PDENG's block cache, which per write was two more `int 13h` calls on the
+source's disk and a cold cache for the next render.
 
 An unrecoverable write (read-only, full, any `FERR`) turns the journal **off
-for the session** and says `Recovery journal off.` once.
+for the session** and says `Recovery off.` once. The file already on the disk
+stays: an older state of the same document, which the offer names by its
+count.
 A volume with no `SYSTEM/APPDATA` says it at the first write too. The
 document is never affected.
 
 #### 20.17.4 Retiring it
 
-The journal is deleted when: a Save As / New completes (20.11.5: the output
-is the document now and holds the marks); the user opens another document or
-closes the window (a decision to discard); the offer is declined. It is
-**not** deleted by Extract, by a failed save, or by a document that has no
-edits. A normal quit with nothing journaled has no file at all.
+The journal is deleted when: a **Save As** completes (20.11.5: the output is
+the document now and holds the marks); the offer is declined; the close
+question is answered `D` (20.17.8); an interrupted-save offer is answered
+(20.17.6: the marks are in the temporary file). It is **not** deleted by New
+(which also reopens with `pdu_pgsaved`, so the first build deleted the last
+document's unsaved marks at File > New), by opening another document, by
+Close document, by Extract, by a failed save, or by a document that has no
+edits: those leave it as that document's unsaved work, and **every later
+open looks at it again**, so opening the source in the same session or the
+next offers it. A window closed with nothing unsaved has nothing in the
+journal that is not in a file. There is one journal per machine: the first
+command in another document replaces it.
 
 #### 20.17.5 The recovery offer
 
-When an open completes (`pdu_doc` becomes `D_OPEN`), the wake looks for the
-journal. It is offered only if every one of these holds: the header and its
-CRC are valid; its name equals the opened file's; **its fingerprint equals the
+When an open completes, the wake looks for the journal (`pdu_rc_begin` sets
+the look as the open starts; the wake waits for the job). It is offered only
+if every one of these holds: the header and its CRC are valid; **its fingerprint equals the
 fingerprint the engine just computed** (a source that changed since - PD-20's
 "present and verified" - is silently ignored and left alone); at least one `R`
 record is valid. The status line then reads
-`Recover N unsaved marks? Enter recovers, Esc discards.` and **every key is the
-prompt's** (the same rule as 20.11's prompts), on every adapter, because it is
-a line of text and not a dialog. Enter: the file is read into a claim and its records are counted (replay stops at the
+`Recover N marks? Enter yes, Esc no.` (N counts the records, deleted
+placeholders included) and **every key is the prompt's** (the same rule as
+20.11's prompts) **except while a job runs**: a render started under the
+prompt says `Esc cancels`, and that Esc is the job's, not a discard of the
+journal. It is a line of text and not a dialog, so it is the same on every
+adapter. Enter: the file is read into a claim and its records are counted (replay stops at the
 first bad one: a bad CRC, a length that does not fit, a torn tail); Enter makes
 the records in index order through `pdu_ed_new` inside ONE `pdu_undo_begin/end`
 (so Undo takes the recovery back as one step), then restores each record's
 `id` and the id counter (a note's reply still points at its note), and the
-document is dirty. The journal stays and the session's next write replaces it. Esc deletes it. If marks
-were made meanwhile, or the claim is refused: `Could not recover.` and the
-journal is kept. The name in the header is informational: the match is the
-fingerprint, so a renamed copy of the same bytes is the same source. The
-check runs at the first idle wake of a launch and, while a journal is known
-to be on the disk, at each open; it costs the reader the overlay fetch once.
+document is dirty. The replay holds the gfx lock (the store's flush paints
+Undo and Redo, and this is the wake). A record whose `pts_n` exceeds
+`ED_PMAX` stops it: `pts_n << 2` wraps in 16 bits and would pass the room
+test with a 64 KiB copy behind it. The journal stays and the session's next
+write replaces it. Esc deletes it. If marks were made meanwhile, or the claim
+is refused: `Not recovered.` and the journal is kept. The name in the header
+is informational: the match is the fingerprint, so a renamed copy of the same
+bytes is the same source; and the fingerprint is 6.2's (size, first and last
+KiB), so a same-size change in the middle of the source is not seen - the
+same limit as 14.4's `PDE_CHANGED`. The check runs at the **first document
+open** of a session and, while a journal is known to be on the disk, at each
+open - never at a bare launch, which would fetch the overlay every time (D26's
+reason for prefs).
 
 #### 20.17.6 The interrupted save (14.3)
 
@@ -4037,14 +4070,34 @@ the shell writes `PDSAVE.TGT` beside the journal: the target's volume, folder
 cluster and name, 18 bytes. It is the only moment in a save at which a failure
 can leave the complete new file as `PDSAVE.$$$` with the old target gone, and
 the writer has verified the temp file by then (14.2 step 4). It does not
-depend on there being any marks. At the **next launch** the first wake reads
+depend on there being any marks. **Each** save that reaches `REPLACE` writes
+its own note (the first build wrote one per session once a replace had
+failed, so a later replace's note named the earlier target). At the **first
+document open of the next session** (20.17.5's look) the wake reads
 the note, goes to that folder and: the target is there, or the temp file is
 not - the note is stale and is deleted; the target is absent and `PDSAVE.$$$`
-is there - the line reads `Finish save of NAME? Enter: yes, Esc: no.`; Enter
+is there - the line reads `Finish save of NAME? Enter yes, Esc no.`; Enter
 renames it and says `Saved NAME`, Esc leaves the file where it is. Either way
-the note is deleted. A completed Save retires the note and the journal. The
-temp file is not re-verified at launch (it was, before the note was written);
-a later save that died mid-copy would have deleted it (14.3).
+the note **and the journal** are deleted (the marks are in the temporary
+file); a rename that fails keeps both and says `Not recovered.`. A note whose
+folder cannot be reached (the target's floppy is not in the drive) is
+deleted as stale, and `PDSAVE.$$$` stays for the user to rename. A completed
+Save retires the note and the journal.
+
+What it can touch: it deletes only `PAGEDESK.JRN` and `PDSAVE.TGT`, in
+`SYSTEM/APPDATA` reached by a walk; it renames only `PDSAVE.$$$` in the noted
+folder, only to the noted name, and only when that name is absent, so it
+never overwrites or deletes a document. The note carries no volume serial: a
+different floppy in the noted drive answers for the noted cluster, and the
+rename happens there only if that disk holds a `PDSAVE.$$$` in a directory at
+that cluster and lacks the name - a copy of the same disk, where it is the
+same act. The temporary file is not re-verified (it was, before the note was
+written). One window is open: the offer is on the status line and the mouse
+is not its, so a user who ignores it and saves into the same folder replaces
+`PDSAVE.$$$` (PDWRT writes its temp file there); if that save then dies
+mid-copy, the next session offers the partial file under the old target's
+name. Closing it needs a check at save start the D25 share has no bytes for
+(verify-recov, still open).
 
 #### 20.17.7 `/NM`, deviations and limits
 
@@ -4052,15 +4105,67 @@ a later save that died mid-copy would have deleted it (14.3).
 a CRC of the *source's* head and tail and size (an incremental save) or of the
 save's date, so two sessions on **different** sources never repeat a pair, and a
 saved file is a different source from the one it came from. The id alone
-restarted at 1. `pdu_ed_init` now seeds the counter with a number made from the
-clock and the tick (multiple of 16, below 0x7FF0, so 128 records cannot wrap
-it): two sessions on the same source cannot repeat an id, and a recovered
-record keeps the id it had.
+restarted at 1. `pdu_ed_init` now seeds the counter with `PDU_RC_SEED()`
+(pdu.h): the tick's low ten bits times 16, a multiple of 16 **below 0x4000**,
+so 128 records stay below 0x8000 - the top half is PDWRT's, whose duplicated
+pages' annotations are `0x8000 + page + k` under the same nonce (pdwpg.c); the
+first build's 0x7FF0 bound let a record id reach 0x8060. Two sessions on the
+same source repeat an id only when their ticks fall within a few units of each
+other on a 56-second wheel, and their outputs are different files whose later
+merge (Insert, 20.16) gives copied annotations a new `/NM` anyway. A
+recovered record keeps the id it had, and the counter continues above the
+largest.
 
-Deviations from 14.7: the volume is the boot volume as 14.7 says, but the file
-is padded and compacted (20.17.2); records are record states, not "one per
-command" (20.17.1); the debounce means a crash inside the half second, or
-inside a typing run, loses that run. Limits: 128 records (the store's), 3 KiB
-per record (a record of more is not journaled and the journal turns off, said),
-cluster at most 4 KiB, one journal per machine. Not built: page-operation
-replay, a journal per document, recovery without opening the source first.
+Deviations from 14.7, judged against PD-20's acceptance (verify-recov):
+
+1. **A whole-store rewrite, not an append** (20.17.2). Accepted: PD-20 asks
+   for incremental writes "without rendering snapshots", and a burst of
+   commands is one write of the store's records, which is incremental in time
+   and holds no picture; an append would cost about the same calls a write
+   (a cluster, both FATs, the entry) plus the padding, compaction and
+   last-wins replay 20.17.2 prices. What it gives up is one window of one
+   call in which a crash leaves no journal, and a store over 8 KiB of journal
+   (heavy ink) turns the journal off, said.
+2. **Page operations are not journaled** (20.17.1). Accepted: PD-20 says
+   "recover supported changes"; marks on the source's own pages come back on
+   the pages they were on (their `page` is a source page id, not a view
+   index), and marks on created pages come back as nothing. Rotations,
+   moves, deletes, duplicates and blanks are lost with the session.
+3. **The match is the fingerprint, not the name** (20.17.5). Accepted: "a
+   stale journal is not applied to a different or externally modified PDF"
+   holds to 6.2's resolution, and the same bytes under another name are the
+   same source.
+4. `PDSAVE.TGT` instead of an `F` record, read at the first open, not at
+   launch (20.17.6).
+
+The debounce means a crash inside the half second, or inside a typing run,
+loses that run. Limits: 128 records (the store's), 8 KiB of journal (more and
+the journal turns off, said), one journal per machine. Not built:
+page-operation replay, a journal per document, recovery without opening the
+source first.
+
+#### 20.17.8 Closing with unsaved changes (PD-20: Save / Discard / Cancel)
+
+`os88_onclose` asks `pdu_rc_close()` first. A document that is open and
+dirty (20.8's save point, `pdu_dirty()`) **refuses the close** (SPEC.md 75.1)
+and the status line reads `Unsaved: S saves, D discards, Esc keeps`; every
+key is the question's until one of the three. `S` opens Save As; once the
+save has completed the document is clean and the next close asks nothing.
+`Esc` keeps the window and the edits. `D` sets a flag the wake spends: the
+journal of this document is retired, then `os88_wm_close` (75.2), which
+retires the negotiator and closes at the UI's next pass. No job runs then -
+the key waits while one does - so there is no temporary file to remove, and
+the instance's death frees every claim. It costs the primary about 200 bytes
+of D25's share and no overlay byte.
+
+Not asked: **New, Open and Close document** replace the document without a
+question. What happens to the unsaved marks there, precisely: the store is
+re-initialised and the marks are gone from memory, but the journal holds
+them as of the last write - everything but the last half second of commands
+and an open typing run, and none of the page operations - and it is kept
+(20.17.4), so opening the same source again, in the same session or a later
+one, offers `Recover N marks?`. They are lost only if a command is made in
+another document first (one journal per machine), or if the journal was off.
+A question at those three is the shell's (`pducmd.c`, `pdovlpage.c`) and
+did not fit D25's primary share after the close's (verify-recov, still
+open).

@@ -28,7 +28,8 @@ static void pdu_saveas_dlg(void);       /* pducmd.c */
 
 static unsigned rc_f = RCF_JRN;        /* the first OPEN looks (not the launch:
                                          * the overlay fetch, D26's reason) */
-static int rc_pk;                       /* the prompt: 1 recover, 2 finish */
+static int rc_pk;                       /* the prompt: 1 recover, 2 finish,
+                                         * 3 the close's question */
 static unsigned rc_t;                   /* the tick of the last command */
 static unsigned rc_fp[4];               /* the document's fingerprint (6.2) */
 
@@ -96,8 +97,8 @@ int pdu_rc_key(int ascii)
 }
 
 /* the wake: nothing while a job, a popover or a typing session has the
- * screen or pdu_tbuf (20.17.3); the launch and every open look for something
- * to offer WITHOUT the overlay, which is fetched only if there is */
+ * screen or pdu_tbuf (20.17.3). The overlay is reached only when there is
+ * work: a write, a look after an open (never a bare launch), an answer */
 void pdu_rc_wake(void)
 {
     if (!(rc_f & (RCF_DIRTY | RCF_CHECK | RCF_RETIRE | RCF_ANS | RCF_BYE))
