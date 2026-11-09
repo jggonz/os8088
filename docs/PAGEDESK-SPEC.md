@@ -3953,9 +3953,10 @@ undo, redo, move, resize and typing cost nothing extra to journal - each is
 just "this record is now that" - and it means replay never needs the undo
 history, only 20.8's creation call. A store that shrank (an undone creation)
 is one `T` record. **Page operations are not replayed** (20.11 keeps them in
-the page map, which needs the history to rebuild in order): the first one
-writes a `G` record, and recovery says so. A record on a page created by a
-page operation (id with bit 15) is not journaled, for the same reason.
+the page map, which needs the history to rebuild in order). A record on a page
+created by a page operation (id with bit 15) is not journaled, and recovery
+leaves a deleted placeholder at its index so the others keep theirs. Recovery
+restores marks on the source's own pages only.
 
 #### 20.17.2 Where, and the file
 
@@ -3976,16 +3977,14 @@ type and body). A `len` of 0 is padding to the end of the cluster.
 |---|---|
 | `R` | record index (2), the 48-byte `pd_edit`, its text (`text_len` bytes), its points (4 x `pts_n`) |
 | `T` | the store's new count (2) |
-| `G` | empty: a page operation happened |
-| `F` | the target's volume (1), folder cluster (2), 8.3 name (14): a save is about to delete it |
 
 **Appends are padded to the cluster.** `OSAPI_FILE_APPEND` and `WRITE_SEQ`
 refuse a file whose size is not a whole number of clusters (18.4.4), so each
 write ends in zeros up to the cluster boundary (one cluster is 512 bytes to 4
 KiB; larger refuses the journal). Reading skips the zeros: that is the `len`
-of 0 above. When the file passes 8 KiB the next write is a **compaction**: a
-fresh header and one `R` per live record, replacing the file (`WRITE`
-replaces; the window in which the old journal is gone is one call).
+of 0 above. When the file passes 8 KiB, or the store shrinks, the next write is a fresh
+file: a header and one `R` per live record (`WRITE` replaces; the window in
+which the old journal is gone is one call).
 
 #### 20.17.3 When it is written
 
@@ -4033,25 +4032,29 @@ one: a bad CRC, a length that does not fit, a torn tail); pass 2 makes the
 records in index order through `pdu_ed_new` inside ONE `pdu_undo_begin/end`
 (so Undo takes the recovery back as one step), then restores each record's
 `id` and the id counter (a note's reply still points at its note), and the
-document is dirty. If the journal had a `G` the line adds `Page changes were
-not recovered.` The journal stays and the session continues it (compaction
-first, since the old tail may be torn). Esc deletes it. Not enough memory
-for the claim: `Not enough memory to recover.` and the journal is kept.
+document is dirty. The journal stays and the session continues it with a fresh
+file at its next write (the old tail may be torn). Esc deletes it. If marks
+were made meanwhile, or the claim is refused: `Could not recover.` and the
+journal is kept. The name in the header is informational: the match is the
+fingerprint, so a renamed copy of the same bytes is the same source. The
+check runs at the first idle wake of a launch and, while a journal is known
+to be on the disk, at each open; it costs the reader the overlay fetch once.
 
 #### 20.17.6 The interrupted save (14.3)
 
 Before the writer is told to replace an existing target (Enter at `... exists`)
-the shell writes an `F` record (and the header, if this session had none) -
-the only moment in a save at which a failure can leave the complete new file
-as `PDSAVE.$$$` with the old target gone, and the writer has verified the temp
-file by then (14.2 step 4). At the **next launch** the first wake reads the
-journal, finds an `F`, goes to its folder and: the target is there - the
-delete never happened; `F` is dropped (the journal is deleted); the target is
-absent and `PDSAVE.$$$` is there, starts with `%PDF-` and ends within its last
-KiB with `%%EOF` - the line reads `Finish the interrupted save as NAME?
-Enter finishes it, Esc keeps the file.`; Enter renames it and says `Saved
-NAME`, Esc leaves the file where it is. Either way the journal is deleted
-(its marks are in that file).
+the shell writes `PDSAVE.TGT` beside the journal: the target's volume, folder
+cluster and name, 18 bytes. It is the only moment in a save at which a failure
+can leave the complete new file as `PDSAVE.$$$` with the old target gone, and
+the writer has verified the temp file by then (14.2 step 4). It does not
+depend on there being any marks. At the **next launch** the first wake reads
+the note, goes to that folder and: the target is there, or the temp file is
+not - the note is stale and is deleted; the target is absent and `PDSAVE.$$$`
+is there - the line reads `Finish save of NAME? Enter: yes, Esc: no.`; Enter
+renames it and says `Saved NAME`, Esc leaves the file where it is. Either way
+the note is deleted. A completed Save retires the note and the journal. The
+temp file is not re-verified at launch (it was, before the note was written);
+a later save that died mid-copy would have deleted it (14.3).
 
 #### 20.17.7 `/NM`, deviations and limits
 

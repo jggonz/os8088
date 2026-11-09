@@ -22,7 +22,7 @@
 #define RC_CAP    8192                  /* a fresh file past this (20.17.2) */
 
 static unsigned rc_ss, rc_su, rc_st, rc_tok;
-static unsigned rc_js, rc_jl, rc_cnt, rc_new, rc_gg;
+static unsigned rc_js, rc_jl, rc_cnt, rc_new;
 
 /* the journal in its claim, and the CRC table in the undo claim's tail */
 static unsigned ovl_rc_w(unsigned o) { return pd_fpeekw(rc_js, o); }
@@ -35,6 +35,57 @@ static void ovl_rc_tabset(unsigned k, unsigned v)
     pd_fpokew(pdu_dcseg(PDU_DC_UNDO), RC_TAB + 2 * k, v);
 }
 
+/* the folder `nm` where we stand: its cluster in rc_fclus */
+static int ovl_rc_find(const char *nm)
+{
+    int ord, i;
+    ord = 0;
+    while ((ord = os88_file_find(ord, rc_ff)) >= 0) {
+        if (rc_ff->type != OS88_FT_DIR)
+            continue;
+        for (i = 0; i < 13 && rc_ff->name[i] == nm[i] && nm[i]; i++)
+            ;
+        if (rc_ff->name[i] == nm[i]) {
+            rc_fclus = rc_ff->clus;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* is there a file of that name here? (a one-byte read says FERR_BIG for a
+ * file and FERR_NOENT for none) */
+static int ovl_rc_has(const char *nm)
+{
+    os88_file_read(nm, &ed_v, 1);
+    return os88_ferr() != OS88_FERR_NOENT;
+}
+
+static void ovl_rc_leave(void)
+{
+    os88_file_goto_q_mark(rc_here.clus, rc_here.vol);
+}
+
+/* stand there; 0 = there is no SYSTEM/APPDATA. rc_cl is its cluster in bytes */
+static int ovl_rc_enter(void)
+{
+    os88_file_here(&rc_here);
+    rc_cl = (unsigned)os88_disk_cluster_sectors() << 9;
+    rc_k = os88_vol_sys();
+    if (rc_dclus && os88_file_goto_q_mark(rc_dclus, rc_k) == 0)
+        return 1;
+    if (os88_file_goto_q_mark(0, rc_k) == 0
+        && ovl_rc_find("SYSTEM")
+        && os88_file_goto_q_mark(rc_fclus, rc_k) == 0
+        && ovl_rc_find("APPDATA")
+        && os88_file_goto_q_mark(rc_fclus, rc_k) == 0) {
+        rc_dclus = rc_fclus;
+        return 1;
+    }
+    ovl_rc_leave();
+    return 0;
+}
+
 /* ---- writing ------------------------------------------------------------ */
 /* the staging claim (8 KiB, taken for the write), APPDATA and, for a fresh
  * file, the header. 0; 1 = no memory (try again); -1 = no journal here */
@@ -44,7 +95,7 @@ static int ovl_rc_open(void)
     if (!rc_ss)
         return 1;
     rc_su = 0;
-    if (!pdu_rc_enter() || rc_cl > 4096)
+    if (!ovl_rc_enter() || rc_cl > 4096)
         return -1;
     if (rc_new) {
         pd_ffill(rc_ss, 0, 0, RC_HDR);
@@ -98,7 +149,7 @@ static unsigned ovl_rc_crc(int i)
     return pdm_crc16_far(c, ed_seg(), ed_v.pts_off, ed_v.pts_n << 2);
 }
 
-/* T (the new count) or G (a page operation) */
+/* T: the store's new count */
 static int ovl_rc_small(int type)
 {
     int r;
@@ -114,7 +165,7 @@ static int ovl_rc_small(int type)
 }
 
 /* One write, if anything changed: the records whose CRC moved (all of them in
- * a fresh file), a T for a store that shrank, a G once for a page operation
+ * a fresh file), a T for a store that shrank,
  * (20.17.1). */
 static void ovl_rc_flush(void)
 {
@@ -128,7 +179,6 @@ static void ovl_rc_flush(void)
     for (i = 0; i < n && !r; i++) {
         c = ovl_rc_crc(i);                      /* leaves record i in ed_v */
         if (ed_v.page & 0x8000u) {
-            rc_f |= RCF_PGS;                    /* a page the journal cannot rebuild */
             continue;
         }
         if (!rc_new && (unsigned)i < rc_n && c == ovl_rc_tab(i))
@@ -148,10 +198,6 @@ static void ovl_rc_flush(void)
     }
     if (!r && !rc_new && (unsigned)n < rc_n)
         r = ovl_rc_small('T');
-    if (!r && (rc_f & RCF_PGS || pdu_pgmap) && (rc_new || !(rc_f & RCF_G))) {
-        r = ovl_rc_small('G');
-        rc_f |= RCF_G;
-    }
     if (!r && rc_ss) {                          /* padded to the cluster, and two zeros more */
         i = (rc_su + 2 + rc_cl - 1) / rc_cl * rc_cl;
         pd_ffill(rc_ss, rc_su, 0, i - rc_su);
@@ -166,7 +212,7 @@ static void ovl_rc_flush(void)
     }
     if (rc_ss) {
         os88_mem_free(rc_ss);
-        pdu_rc_leave();
+        ovl_rc_leave();
     }
     if (r > 0) {                                /* no memory: soon, again */
         rc_f |= RCF_DIRTY;
@@ -183,12 +229,12 @@ static void ovl_rc_flush(void)
 /* ---- reading ------------------------------------------------------------ */
 static void ovl_rc_retire(void)
 {
-    if (pdu_rc_enter()) {
+    if (ovl_rc_enter()) {
         os88_file_delete(RC_JRN);
         os88_file_delete(RC_TGT);
-        pdu_rc_leave();
+        ovl_rc_leave();
     }
-    rc_f &= ~(RCF_LIVE | RCF_G | RCF_FIN);
+    rc_f &= ~(RCF_LIVE | RCF_FIN);
     rc_n = rc_sz = 0;
 }
 
@@ -202,9 +248,9 @@ static void ovl_rc_free(void)
 static int ovl_rc_load(void)
 {
     rc_js = 0;
-    if (!pdu_rc_enter())
+    if (!ovl_rc_enter())
         return 0;
-    if (pdu_rc_has(RC_JRN)) {
+    if (ovl_rc_has(RC_JRN)) {
         rc_js = os88_mem_claim_p(1024);                 /* 16 KiB: a journal is never more */
         if (rc_js) {
             rc_jl = os88_file_read_seg(RC_JRN, rc_js, 16384);
@@ -213,13 +259,13 @@ static int ovl_rc_load(void)
                 ovl_rc_free();
         }
     }
-    pdu_rc_leave();
+    ovl_rc_leave();
     return rc_js != 0;
 }
 
 /* Walk the records, stopping at the first bad one. The table gets, per index,
  * where the LAST valid R's body is; rc_cnt is the store's count after the last
- * T or R, rc_gg whether a G came. Returns the live
+ * T or R. Returns the live
  * R count. */
 static int ovl_rc_scan(void)
 {
@@ -228,7 +274,7 @@ static int ovl_rc_scan(void)
 
     for (k = 0; k < ED_MAX; k++)
         ovl_rc_tabset(k, 0);
-    rc_cnt = rc_gg = 0;
+    rc_cnt = 0;
     for (o = RC_HDR; o + 4 <= rc_jl; o += 4 + l) {
         l = ovl_rc_w(o);
         if (l == 0) {                           /* the padding: on to the cluster's end */
@@ -250,8 +296,7 @@ static int ovl_rc_scan(void)
         } else if (t == 'T') {
             for (rc_cnt = k; k < ED_MAX; k++)
                 ovl_rc_tabset(k, 0);
-        } else if (t == 'G')
-            rc_gg = 1;
+        }
     }
     v = 0;
     for (k = 0; k < rc_cnt; k++)
@@ -268,16 +313,16 @@ static int ovl_rc_ftemp(void)
 {
     int k;
     k = 0;
-    if (pdu_rc_enter()) {
+    if (ovl_rc_enter()) {
         if (os88_file_read(RC_TGT, pdu_tbuf, 32) == 18
-            && os88_file_goto_q_mark(((unsigned *)pdu_tbuf)[1],
-                                     ((unsigned *)pdu_tbuf)[0]) == 0)
-            k = pdu_rc_has("PDSAVE.$$$") && !pdu_rc_has(pdu_tbuf + 4);
+            && os88_file_goto_q_mark(((pdw *)pdu_tbuf)[1],
+                                     ((pdw *)pdu_tbuf)[0]) == 0)
+            k = ovl_rc_has("PDSAVE.$$$") && !ovl_rc_has(pdu_tbuf + 4);
         if (!k) {
-            pdu_rc_leave();
-            if (pdu_rc_enter())
+            ovl_rc_leave();
+            if (ovl_rc_enter())
                 os88_file_delete(RC_TGT);
-            pdu_rc_leave();
+            ovl_rc_leave();
         }
     }
     return k;
@@ -305,10 +350,18 @@ static void ovl_rc_check(void)
 {
     int v;
 
+    rc_f &= ~RCF_JRN;
+    if (ovl_rc_enter()) {
+        v = ovl_rc_has(RC_JRN);
+        ovl_rc_leave();
+        if (v)
+            rc_f |= RCF_JRN;
+    }
+
     if (ovl_rc_ftemp()) {
         pdu_say2("Finish save of ", pdu_tbuf + 4);
         rc_pk = 2;
-        pdu_rc_leave();
+        ovl_rc_leave();
     } else if (ovl_rc_load()) {
         v = ovl_rc_scan();
         if (v && ovl_rc_match()) {
@@ -384,13 +437,11 @@ static void ovl_rc_answer(int yes)
                 pdu_say2("Saved ", pdu_tbuf + 4);
                 keep = 0;
             }
-            pdu_rc_leave();
+            ovl_rc_leave();
         } else if (!pdu_ed_n && ovl_rc_load()) {        /* marks made meanwhile: not now */
             ovl_rc_scan();
             if (ovl_rc_replay() == 0) {
                 pdu_say("Recovered.");
-                if (rc_gg)
-                    pdu_cat(pdu_msg, " Page changes were not.", sizeof(pdu_msg));
                 rc_f &= ~RCF_LIVE;              /* the next write is a fresh file */
             }
             ovl_rc_free();
@@ -409,12 +460,12 @@ static void ovl_rc_fin(void)
     if (rc_f & RCF_FIN)
         return;
     rc_f |= RCF_FIN;
-    if (pdu_rc_enter()) {
-        ((unsigned *)pdu_tbuf)[0] = pdu_tgtplace.vol;
-        ((unsigned *)pdu_tbuf)[1] = pdu_tgtplace.clus;
+    if (ovl_rc_enter()) {
+        ((pdw *)pdu_tbuf)[0] = pdu_tgtplace.vol;
+        ((pdw *)pdu_tbuf)[1] = pdu_tgtplace.clus;
         os88_strcpy(pdu_tbuf + 4, pdu_target, 14);
         os88_file_write(RC_TGT, pdu_tbuf, 18);
-        pdu_rc_leave();
+        ovl_rc_leave();
     }
 }
 
