@@ -25,6 +25,21 @@ static unsigned ovl_pg_entry(unsigned v)
     return pdu_pgmap ? pdu_pgw(v) : PDM_MK(PDM_SRC, 0, v);
 }
 
+/* pdu_pg_id's inverse for the notes panel (verify-insert): the view page that
+ * shows source page `id` and owns its records, pdu_npages = none does */
+static int ovl_pg_view(unsigned id)
+{
+    unsigned v, e;
+    if (!pdu_pgmap)
+        return (int)id;
+    for (v = 0; v < pdu_npages; v++) {
+        e = pdu_pgw(v);
+        if (PDM_KIND(e) == PDM_SRC && PDM_IDX(e) == id)
+            break;
+    }
+    return (int)v;
+}
+
 /* the page a command is for: the current one, or the Pages panel's selection */
 static unsigned ovl_pg_tgt(void)
 {
@@ -174,13 +189,20 @@ static char pdu_insq[56];               /* the prompt, with the file's name in i
 static int pdu_inslot;                  /* the slot the chosen file has in the row */
 
 /* the slot a file takes: the one that already names it, else the lowest no
- * map entry uses; -1 = three files are in use */
+ * map entry uses and the undo history cannot bring back; -1 = three files
+ * are in use. A slot is reserved from the moment it is named until the
+ * history starts again (pdu_insmask, cleared by ud_init): an Undo of a Delete
+ * page or a Redo of an Insert puts back map entries that name the slot by
+ * number, so renaming it to another file would save that file's pages in
+ * their place, without a word */
 static int ovl_ins_slot(const char *name)
 {
     unsigned seg, i, e, used, k, same;
     char c;
     seg = pdu_dcseg(PDU_DC_PAGES);
-    used = 0;
+    if (!pdu_undo_can() && !pdu_redo_can())
+        pdu_insmask = 0;                /* no history: only the map can name a slot */
+    used = pdu_insmask;
     for (i = 0; i < pdu_npages; i++) {
         e = pdu_pgw(i);
         if (PDM_KIND(e) == PDM_FOREIGN)
@@ -224,6 +246,7 @@ static int ovl_ins_file(const char *name)
     pd_fcopy_out(name, seg, PDM_NAMES + 14 * k, os88_strlen(name) + 1);
     pd_fpokew(seg, 1002 + 4 * k, pdu_tgtplace.clus);
     pd_fpokew(seg, 1004 + 4 * k, pdu_tgtplace.vol + 1u);
+    pdu_insmask |= 1u << k;             /* named: kept while the history can name it */
     pdu_inslot = k;
     os88_strcpy(pdu_insq, "Insert pages of ", sizeof(pdu_insq));
     pdu_cat(pdu_insq, name, sizeof(pdu_insq));
@@ -307,10 +330,14 @@ static int ovl_pg_cmd(int id)
         pdu_tell(pdu_line);
         break;
     case PGC_DUP:
+        if (PDM_KIND(pdu_pgw(t)) == PDM_FOREIGN) {     /* verify-insert: the writer takes a file page once (15) */
+            pdu_tell("Save first, then duplicate it.");
+            break;
+        }
         ovl_pg_do(3, t + 1, 0, pdu_pgw(t));
         break;
-    case C_P_BLANK:
-        e = PDM_MK(PDM_BLANK, 0, PDM_IDX(pdu_pgw(t)));
+    case C_P_BLANK:                     /* the size of the page's id: an inserted page's is 0 (verify-insert) */
+        e = PDM_MK(PDM_BLANK, 0, pdu_pg_id(t));
         ovl_pg_do(3, t + 1, 0, e);
         break;
     case PGC_UP:

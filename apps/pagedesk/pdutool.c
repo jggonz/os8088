@@ -454,6 +454,16 @@ static int ovl_select_click(int x, int y)
  * ==========================================================================*/
 /* a click on the canvas. 1 = the tool took it. Every creation gesture ends
  * at the release and converts ONCE, screen to page (5.1). */
+/* verify-insert: a blank, an inserted page (20.16.2) or a duplicate (13.7)
+ * owns no edit records - the writer saves a mark on the page id's original,
+ * and an inserted page has no id here at all - so a new mark is refused in
+ * words rather than saved somewhere else or not at all */
+static int ovl_tool_nomark(void)
+{
+    pdu_tell("Save first, then mark this page.");
+    return 1;
+}
+
 int ovl_tool_click(int x, int y)
 {
     int t, i, k;
@@ -467,6 +477,8 @@ int ovl_tool_click(int x, int y)
             return 1;
         pdu_tx_end();
     }
+    if (pdu_pg_isdup(pdu_page))         /* verify-insert: owns no marks */
+        return t == C_T_SELECT || t == C_T_HILITE ? 0 : ovl_tool_nomark();
     pdu_ed_xoff_l();
     ot_sx = ot_ax = x;
     ot_sy = ot_ay = y;
@@ -577,6 +589,8 @@ int ovl_tool_click(int x, int y)
 int ovl_tool_hilite(void)
 {
     int nq;                             /* the text selection becomes quads */
+    if (pdu_pg_isdup(pdu_page))         /* verify-insert */
+        return !ovl_tool_nomark();
     nq = pdu_sel_quads(ot_pts, 12);
     if (nq <= 0) {
         pdu_tell("Select text first.");

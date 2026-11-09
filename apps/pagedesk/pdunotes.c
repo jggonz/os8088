@@ -36,8 +36,14 @@ typedef char pdu_nt_ahead_ok[sizeof(struct pdxb_annot) == PDU_NT_AHEAD + 160
 #define PDU_NT_PANEL() (pdu_L.notes.x1 <= pdu_L.notes.x2)
 #define PDU_NT_ISREPLY(e) ((e)->kind == PDA_NOTE \
                            && ((e)->irt != 0 || ((e)->flags & PDEF_IRTSRC)))
-#define PDU_NT_VPAGE(id) ((int)(id))    /* pdu_pg_id's inverse once `pages` lands */
-#define PDU_NT_PGID(v)   (v)            /* ...and pdu_pg_id itself */
+#ifdef PD_HOST                          /* the host test has no page map */
+#define PDU_NT_VPAGE(id) ((int)(id))
+#define PDU_NT_PGID(v)   (v)
+#else                                   /* verify-insert: a record holds the page ID (20.11.1) */
+static int ovl_pg_view(unsigned id);    /* pdovlpage.c: pdu_pg_id's inverse */
+#define PDU_NT_VPAGE(id) ovl_pg_view(id)
+#define PDU_NT_PGID(v)   pdu_pg_id(v)
+#endif
 
 /* ---- the source cache ------------------------------------------------------ */
 static unsigned pdu_nt_so[PDU_NT_SRC];  /* object number */

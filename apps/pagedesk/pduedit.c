@@ -95,9 +95,15 @@ static int ovl_ud_trimok(int i);
 
 #define ed_seg() pdu_dcseg(PDU_DC_EDITS)  /* a macro: no thunk from the overlay */
 
-/* the page id of the page on the glass. The pages agent's view map
- * (pdu_pg_id) replaces this one line; until then a view index IS the id. */
+/* the page id of the page on the glass: the view map's (20.11.1), which the
+ * renderer draws by and the writer saves by. A view index is NOT the id once
+ * a page is inserted, duplicated, moved or deleted (verify-insert). The host
+ * test has no map. */
+#ifdef PD_HOST
 #define pdu_ed_pg() pdu_page
+#else
+#define pdu_ed_pg() pdu_pg_id(pdu_page)
+#endif
 
 static int ovl_ed_rd(int i, struct pd_edit *e)
 {

@@ -310,7 +310,7 @@ int main(int argc, char **argv)
         ins_slot(0, "NOSUCH.PDF", 0, 1); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 0)); map_set(map, 9); ins_slot(0, "NOSUCH.PDF", 0, 1);
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
         r = save("I2.PDF");
-        CK(r != PDE_OK && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0, "a missing foreign file is refused with %u and writes nothing", r);
+        CK(r != PDE_OK && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && g_lastdetail == 20, "a missing foreign file is refused with %u, names the file (detail %u) and writes nothing", r, g_lastdetail);
         cp("../../apps/pagedesk/samples/ACROFORM.PDF", "FORM.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); map_set(map, 9); ins_slot(0, "FORM.PDF", 0, 1); wrt_init();
         r = save("I2.PDF");
@@ -330,6 +330,36 @@ int main(int argc, char **argv)
             CK(r == PDE_BUSY, "an insert is still running after %d slices", g);
             pdw_verb(PDV_WRT_ABORT, SEG_XB, 0, 0);
             CK(access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0, "Esc removes the temp file and writes no target");
+        }
+        /* verify-insert: the two above stop in PH_COPY, before PDENG leaves the source. Stop INSIDE a
+           foreign window (PDENG holds the foreign file): Esc, then a full disk, on I1's map */
+        {   struct pdxb_save sv; int g = 0, inwin; long b; pdw ph;
+            map[0] = PDM_MK(PDM_SRC, 0, 0); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)); map[2] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 3));
+            map[3] = PDM_MK(PDM_SRC, 0, 1); map[4] = PDM_MK(PDM_FOREIGN, 1, PDM_FORE(1, 2)); map[5] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 0));
+            for (j = 6; j < 12; j++) map[j] = PDM_MK(PDM_SRC, 0, j - 4);
+            map_set(map, 12); ins_slot(0, "FOREIGN.PDF", 0, 1); ins_slot(1, "FOREIGN2.PDF", 1, 1);
+            CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
+            memset(&sv, 0, sizeof sv); sv.pages_seg = SEG_MAP; sv.pages_count = 12; strcpy(sv.target, "I2.PDF"); strcpy(sv.source, "DOC.PDF");
+            sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = 0;
+            pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
+            inwin = 0;
+            do { r = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); g++;
+                 if (sv.mode & PDW_OUT_REOPEN) inwin++; } while (r == PDE_BUSY && inwin < 4 && g < 4000);
+            ph = sv_lastph;
+            CK(r == PDE_BUSY && (ph == PH_FOPEN || ph == PH_XROOT || ph == PH_XDISC || ph == PH_XCOPY || ph == PH_FROOTS),
+               "an insert stopped inside a foreign window (phase %u, after %d slices)", ph, g);
+            pdw_verb(PDV_WRT_ABORT, SEG_XB, 0, 0);
+            CK(access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && (sv.mode & PDW_OUT_REOPEN) != 0,
+               "Esc inside a window removes the temp file, writes no target and leaves the re-open to the primary");
+            for (b = 6321, ph = 0; b < 9800 && !(ph >= PH_XROOT && ph != PH_XHEAD && ph != PH_XBLANK && ph != PH_VFY); b += 64) {
+                if (eng_open("DOC.PDF")) break;
+                wrt_init();
+                pdw_host_budget = b; r = save("I2.PDF"); pdw_host_budget = -1;
+                ph = r == PDE_DISKFULL ? sv_lastph : 0;
+            }
+            CK(ph >= PH_XROOT && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && (g_lastmode & PDW_OUT_REOPEN) != 0
+               && g_lastdetail < 20, "a full disk inside a window (phase %u) removes the temp file, leaves the re-open to the primary "
+               "and does not blame the foreign file (detail %u)", ph, g_lastdetail);
         }
         g_big = 0; map_set(0, 0);
     }

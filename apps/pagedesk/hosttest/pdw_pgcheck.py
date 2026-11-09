@@ -239,6 +239,13 @@ if os.path.exists(i1) and os.path.exists(fsrc) and check(i1):
             fail("I1: the inserted page's note and popup do not point at each other and the page")
         else:
             print("ok   I1: /P, /Popup and /Parent (the copy's cycles) are rewritten to the new objects")
+        # an inserted page sits under the SOURCE's root /Pages: it must carry its own /CropBox and
+        # /Resources, or it would take up the source root's inheritable ones (verify-insert)
+        own = [objs["obj:%s" % pgs[i]]["value"] for i, (f, k, q) in enumerate(want) if f == fsrc]
+        if not all("/CropBox" in p and "/Resources" in p and "/MediaBox" in p for p in own):
+            fail("I1: an inserted page leans on the source root's inheritable boxes or resources: %s" % own)
+        else:
+            print("ok   I1: every inserted page carries its own /MediaBox, /CropBox and /Resources")
         # object numbers: no number of the source is reused (the source's own bytes are the prefix of the output)
         raw = open(i1, "rb").read()
         sraw = open(src, "rb").read()

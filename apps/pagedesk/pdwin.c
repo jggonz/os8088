@@ -118,8 +118,13 @@ static pdw fw_roots(void)
     pw_obj(tg(T_PMNUM, sv_i), 0);
     r = dk_copy(ds, PGK_PARENT | PGK_ROTATE, 1); if (r) return r;
     pb_s(" /Parent "); pb_u(pm_root); pb_s(" 0 R /Rotate "); pb_u(pm_rotfinal(PDM_ROT(e)));
+    /* the page now sits under the SOURCE's root /Pages, whose own inheritable
+       /CropBox and /Resources it must not take up: both are always written
+       (verify-insert) - pg_geo writes a CropBox only where it differs */
+    if (!pf_hascrop) { pb_s(" /CropBox "); pb_rect(&g_pi.crop); pf_hascrop = 1; }
     pg_geo();
     if (ih_a) { pb_s(" /Resources "); rs_walk(ih_a, ih_b, 1); }
+    else if (!pf_hasres) pb_s(" /Resources << >>");
     pb_s(" >>\n"); pw_endobj();
     sv_i++;
     return PDE_OK;

@@ -485,7 +485,8 @@ static void job_clear(void)
 }
 static pdw job_fail(pdw err)
 {
-    if (gc_ins && !g_sv.err_detail) g_sv.err_detail = (pdw)(20 + gc_slot);       /* Insert: which file */
+    if (gc_ins && !g_sv.err_detail && err != PDE_DISKFULL && err != PDE_WPROT)
+        g_sv.err_detail = (pdw)(20 + gc_slot);          /* Insert: which file (not the target's disk - verify-insert) */
     if (g_created || sv_active) pdw_io_delete(g_tmp);
     job_clear();
     return err;
