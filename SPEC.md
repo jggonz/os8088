@@ -75308,6 +75308,22 @@ cleared first so a bidirectional port is reading its latch and not its pins,
 and both registers put back. Nothing is strobed, so a printer on the same
 port prints nothing.
 
+**"Put back" means direction = OUT, never bit 5 as read.** The control
+register's bit 5 is the direction of a bidirectional port and is not built
+on a plain one, where it - with bits 6 and 7 - READS AS 1 (the DOS machine's
+DIO-500 answered `EC` for a port the BIOS had left at `0C`). So restoring the
+value read writes bit 5 SET, which a bidirectional latch obeys: the port is
+left in INPUT mode, its data register reads the pins, and the next POST's own
+AAh read-back finds no LPT1. On kern_big that was invisible - Restart is
+`int 19h`, no POST, and the BDA keeps its table - but kern_mega's Restart is
+a warm POST (the 8042's reset line, §18.100), and the fork owner's mr286
+(MR BIOS 1.65, 86Box) came back from every one with LPT1 gone and *Parallel
+Port Configuration Change*, until a power cycle. Both probes (`cvx_probe`,
+`lp_latch`) and NET.DRV's `lp_init`/`lp_restore` therefore save the control
+byte AFTER clearing bit 5: the low nibble (STROBE, AUTOFEED, INIT, SELECT)
+and bit 4 (IRQ enable) go back exactly as found, the direction goes back as
+OUT - the POST's state, and the one every printer driver assumes.
+
 **The BIOS's numbering, because it is the user's.** The first build took
 "the first port that answers", and the first run on MartyPC's Covox machine
 said why that is wrong: a **Hercules carries its own printer port at 3BCh**,
