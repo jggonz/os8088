@@ -1,0 +1,50 @@
+# A pull request that changes what the machine draws carries screenshots of
+# the change (CLAUDE.md / AGENTS.md "Pull requests show the change",
+# CONTRIBUTING.md section 7). This check fails a PR that touches apps/,
+# kernel/, drivers/, faces/ or boot/ when its description has no image and no
+# "No visible change: <why>" line. Editing the description re-runs it.
+name: PR screenshots
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require screenshots for a visible change
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          visible=$(printf '%s\n' "$files" \
+            | grep -E '^(apps|kernel|drivers|faces|boot)/' \
+            | grep -viE '\.(md|txt)$' || true)
+          if [ -z "$visible" ]; then
+            echo "Nothing under apps/, kernel/, drivers/, faces/ or boot/ changed: no screenshot required."
+            exit 0
+          fi
+          # an image: markdown ![..](..), an <img src=..>, or a GitHub upload
+          if printf '%s' "$BODY" | grep -qiE '!\[[^]]*\]\([^)]+\)|<img[^>]+src=|github\.com/user-attachments/'; then
+            echo "The description carries screenshots."
+            exit 0
+          fi
+          # outside the template's comment, a line that gives a reason
+          stripped=$(printf '%s' "$BODY" | perl -0pe 's/<!--.*?-->//gs')
+          if printf '%s\n' "$stripped" | grep -qiE '^[[:space:]>*-]*No visible change:[[:space:]]*[^[:space:]].{2,}'; then
+            echo "The description declares no visible change, with a reason."
+            exit 0
+          fi
+          echo "::error title=Screenshots required::This pull request changes files that draw, and its description has no screenshot and no 'No visible change: <why>' line. See CONTRIBUTING.md section 7."
+          echo "Files that need a screenshot (first 20):"
+          printf '%s\n' "$visible" | head -20
+          exit 1
