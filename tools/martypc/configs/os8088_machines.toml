@@ -1957,6 +1957,41 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+# os8088_5150_cga_lpt_ems - the cable machine above with a Lo-tech 2 MB EMS
+# board (260h, frame E000h) and 256 KB of conventional memory: the one machine
+# here with a NETWORK and EXPANDED MEMORY at once. A page fetched over the cable
+# outgrows the Browser's conventional reserve and spills its source and its
+# document into EMS, where they share the frame (SPEC.md 71.18) - which is
+# what tests/brems.py needs and no other machine could give it: the EMS board
+# machine has no wire, and only a network fetch puts a source in EMS.
+[[machine]]
+name = "os8088_5150_cga_lpt_ems"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "parallel_port",
+]
+
+    [machine.memory]
+    conventional.size = 0x40000
+    conventional.wait_states = 0
+
+    [machine.ems]
+    ems_type = "LoTech2MB"
+    window = 0xE000
+    io_base = 0x260
+    size = 0x200000
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
 # --- THE 1.44MB MACHINE, and it is an ANACHRONISM ON PURPOSE ----------------
 # `make combo144` builds a 1.44MB disk and nothing in this file could read one:
 # every machine above takes `pcxt_2_360k_floppies`, so a 1.44MB image could be

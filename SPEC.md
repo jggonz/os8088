@@ -130932,6 +130932,52 @@ the existing shared clipboard owns the copied text. Selection rendering is
 limited to the rows whose contents changed, and the normal page paint path pays
 no selection cost.
 
+#### 71.19.1 Selection, Copy and Tab across the whole document
+
+The page selection and the link focus are **document offsets, held as
+dwords**: `br_selanch`, `br_selend`, `br_seloldend`, `br_selcur`, and the
+focused link's `br_tstart` and `br_tend`. A formatted document past 64 KiB
+is selected, copied and tabbed through like a small one, in conventional
+memory, in EMS and under kern_mega. They held low words until this section,
+so on such a document a press past the seam started no selection, Select
+All and Copy were refused, and Tab did not focus links.
+
+- **One span is drawn.** `br_selspan` puts the anchor and the end in order
+  as `[br_spanlo, br_spanhi)`. A forward drag is `[anchor, end)`. A reverse
+  one is `[end, anchor + 1)`, because it includes the anchor cell. Whatever
+  moves the anchor or the end recomputes it. `br_build` marks a cell when
+  its 32-bit offset is in that span (`br_cmpdx`). The row repaint
+  (`br_selpaint`) repaints a line when it crosses the old span or the new
+  one (`br_spanline`), and the focus repaint does the same for
+  `[br_tstart, br_tend)`.
+- **Copy reads what is drawn.** It walks the span through `br_docmap` a
+  16 KiB page at a time, from part 0 through the `br_dl_r_docmap` vector
+  (71.20.5). The walk is the same in every arm: the conventional sum, EMS's
+  page maps, kern_mega's window. Copy used to read `[br_docseg]` directly,
+  which is a selector on kern_mega. A marker's payload is skipped: the three
+  `D_LNK1` index nibbles, `D_CMETA`'s span and `D_HEAD`'s level (a level of 1
+  or 2 used to read as a line break). The 32 KiB `OSAPI_CLIP_PUT` ceiling
+  still refuses a longer copy, leaving the clipboard as it was.
+- **Tab walks the document from the focus.** `br_tabfind` reads the stream
+  with `br_docnext`, a cursor that asks `br_docmap` once per 16 KiB page. It
+  starts from the focused link's end, or from the top, to the next
+  `D_LNK1`. A Tab costs the distance to the next link. It used to cost a
+  walk from byte 0 per link before it, which is O(links × document): about
+  half a second a Tab on a 48 KB page on the XT. The order is the document's,
+  which is the order the reader sees, frames included. A link index with no
+  marker (a frameset's hidden source) is never reached.
+- **A click past the seam hits the right cell.** `br_hitofs` clears both
+  words of `br_hofs` before its walk. It tests the answer for zero in a
+  register of its own. It used to OR the high word into the low word it
+  returned, which moved every hit past the seam, and to leave a stale high
+  word from the last click.
+
+`tests/brarena.py` drags from below its wide fixture's seam onto the line
+past it. It requires the end there and Ctrl+C to copy exactly the visible
+text of both sides, then Tabs to the link past the seam. `tests/brmega.py`
+does the same on the page's last rows under kern_mega, where the document
+claim is a selector.
+
 The Browser menu includes a Keyboard Shortcuts reference listing only actions
 the current build implements: Tab focus traversal, Enter, page scrolling and
 Home/End, Escape to leave the address bar, and the implemented Ctrl shortcuts.
@@ -130951,6 +130997,153 @@ per-instance cache and records any status/star redraw for the next locked paint
 or input callback. Navigation also requests a wake refresh so the current page's
 star reflects changes made by another Browser instance. The bookmark menu is
 rebuilt from that per-instance cache after each refresh.
+
+### 71.23 Browser 1.7 preparation — the claims table and the URL store
+
+`MEM_OWNER_MAX` is 8 claims per owner word (§50, §20.12.4), and every
+Browser claim is the instance's. Inline images (1.7,
+docs/plans/BROWSER-IMAGES-PLAN.md) need two claims of their own, so the
+Browser's claims are decided here as one table, before any image code. A
+claim nobody planned is the one that refuses on a machine where every other
+claim is live, which is never the machine it was tested on.
+
+**The table.** kern_mega allows twelve (§50), but the table is cut against
+eight, the limit on every real-mode kernel.
+
+| slot | claim | taken by | held | moves (§66) |
+|---|---|---|---|---|
+| 1 | page source | `br_load`, `br_srcgrow` | while a page is | yes |
+| 2 | formatted document | `br_claimrest` | while a page is | yes |
+| 3 | line table | `br_claimrest` | while a page is | yes |
+| 4 | link arena | `br_linkensure` | while a page is | yes |
+| 5 | URL store, with a transfer's buffer and a Copy's text carved after it | `br_urlneed`, `br_urlgrow` | from first use to the close | yes |
+| 6 | part 0 (§71.20.5, §71.24): the Download Manager and the rarely used UI | `op_fetch` in `br_dl_partload` | while the manager, a transfer, an open context menu or a rare action needs it | no: its code is far-called |
+| 7 | 1.7: the image arena (compressed bytes, then the per-image records and the one decoded row at its head) | 1.7 | while a page with images is | yes |
+| 8 | 1.7: the image decoder part | 1.7, `op_fetch` | while the arena has an image to draw | no |
+
+Rules that keep it true:
+
+- **A transient claim is a row too.** Copy's text used to be a claim of its
+  own for one callback. That is a ninth claim on a page with images during a
+  download. It is carved in the URL store now.
+- **An EMS page frame is not a claim.** `[br_emsseg]` is the driver's frame.
+- **A new claim needs a row here first.** If the table is full, the new
+  thing carves into an existing row, as the transfer's buffer and Copy do.
+  Otherwise, what it shares with must be stated, and the second use refused
+  in words when both are wanted.
+- **Part 0 is one claim** whatever it carries (§71.24). The rare UI went
+  into it rather than into a part of its own for that reason.
+- **The EMS code stays resident** (`br_srcems_ensure`, `br_docems_ensure`,
+  `br_lineems_ensure`, `br_docems_release`, `br_savesourceems`, 1,779 bytes).
+  A page goes to EMS only when the conventional reserve refuses to grow
+  (§71.18), so a part read at that moment needs the conventional memory EMS
+  was there to spare. The page would be cut where it used to spill. A part of
+  their own, fetched while EMS.DRV answers, would be a ninth claim once 1.7's
+  two are in. Releasing a handle must not depend on a disk read either. This
+  was roadmap step S4, and it is not done for these reasons.
+
+**The URL store** (`[br_urlseg]`) is one movable claim. It holds what the
+segment used to carry for URLs that are read only when navigating or saving:
+
+| offset | bytes | what |
+|---|---|---|
+| `BR_URLHIST` = 0 | 1,280 | the Back stack's eight 160-byte URLs (`br_hslot`) |
+| `BR_URLBM` = 1,280 | 1,477 | the bookmark file's image, `BM01`, the count and eight records |
+| `BR_URLDL` = 3,072 | a cluster | a transfer's buffer, from `br_dl_claim` to `br_dl_freebuf` |
+| `BR_URLDL` + that | up to 32 KiB | one Copy's text, for the callback |
+
+`BR_URLSTORE` (2,768) is the first two rows, to a paragraph, and is what the
+store holds between uses. The transfer's buffer starts on the next 512-byte
+boundary because a cluster is written to the disk from there, and every
+disk-visible base is 512-aligned (§1). The claim's base is a heap granule.
+
+- **The store is claimed the first time it is needed**: a page pushed on the
+  Back stack, the first bookmark refresh, a transfer or a Copy. The kernel
+  frees it at the close. `br_entry` still claims nothing (BROWSER-PLAN 3.4).
+  If it is refused, nothing breaks. That page is not remembered, the
+  Bookmarks menu reads `(empty)` and refuses to save, and a download or a
+  Copy is refused as it would be without the room.
+- **`br_urlgrow AX`** carves AX bytes at `BR_URLDL`. `AX = 0` gives them
+  back, and a shrink succeeds in place. A grow may move the store, and
+  `br_reloc` follows it. A transfer carves its cluster. A Copy during a
+  transfer carves the cluster plus its text, and gives back only the text.
+- **Copy's text is bounded by the store's 64 KiB.** Behind a 32 KiB cluster
+  buffer, a long selection is cut to what is left (29,680 bytes), and a
+  selection that does not fit is refused as a full one always was.
+- **The store moves**, so a file call or `OSAPI_CLIP_PUT` whose ES:BX or
+  ES:SI is in it pins it for the call (`br_pagepin`, §66.3 rule 5), as every
+  page claim is pinned. The worker writes a cluster through `[br_urlseg]`,
+  which it loads each pass, so it follows a move as it did the buffer's own
+  word (§71.20).
+- **The bookmark menu reads a copy of each title** in the segment
+  (`br_bmtitles`), because a menu item is a near pointer. `br_bmmenuset`
+  rebuilds it after every change to the records.
+- **`br_bmfindurl` compares each record from the query's start.** It used to
+  leave SI where the previous record's mismatch was, so only record 0 could
+  be found. With two or more bookmarks, Ctrl+D added a duplicate and the
+  star could not remove the second.
+
+The store took the buffer's and Copy's claims out of the table, and image +
+BSS went from 56,805 to 54,425 bytes (the code grew by 288).
+
+### 71.24 Part 0 carries the rarely used UI too
+
+Four things the Browser does only when the user asks are in part 0 with the
+Download Manager (`apps/browser/brcold.inc`):
+
+- the right-button context menu: shown, drawn, clicked, erased, and Copy Link;
+- View Source and Close Source;
+- a form's submit, with the resolution of its action;
+- a bookmark's commit: adding or removing the record, then writing the file.
+
+This is roadmap step S3. The primary segment went from 43,306 to 41,251
+bytes, and image + BSS from 54,425 to 52,396. Each costs a disk read the
+first time it is used after the part was dropped, and the package disk must
+be in the drive. That is the same rule the Download Manager already follows,
+and an action the user asked for can wait for it.
+
+**What stayed resident**, because it runs on every page or every wake:
+
+- the bookmark file's refresh, its menu and `br_bmfindurl`. A navigation
+  re-reads the file, and a part read on top of every navigation would cost
+  more than the bytes it saves;
+- the menu's strings, which the kernel reads through DS;
+- the star, the status line and the request path a click takes.
+
+**The thunks** keep the names the Browser always called (`br_ctxshow`,
+`br_ctxclick`, `br_sourcetoggle`, `br_submit`, `br_bmcommit`). Each one names
+its `BRDL_*` entry and goes through `br_dl_cold`. That loads the part, calls
+the entry far, and leaves through `br_dl_after`. If the part cannot be read,
+the status line says `Browser part unavailable`. A bookmark commit then
+reports the save as failed, as any other failed save is reported.
+
+**Two more reasons to keep the part**, added to `br_dl_after`'s rule
+(§71.20.5):
+
+- `br_dl_depth` counts the cold calls that are inside the part. The context
+  menu's Save Page As opens a dialog whose callbacks can repaint (`br_paint`).
+  Its Save Link As runs the Download Manager's link entry. Either can reach
+  `br_dl_after` while the menu's click handler is still running in the part.
+- `[br_ctxopen]` keeps the part while the menu is on the glass, because the
+  next click is the part's. A full repaint closes the menu, and `br_paint`
+  then asks `br_dl_after` whether the part can go.
+
+**View Source reads and writes through the accessors now.** It used to read
+`[br_srcseg]:SI` and write `[br_docseg]:DI` with 16-bit offsets. It sized the
+document as `[br_dockb] << 10`, which wraps at 64 KiB, and ignored the
+source's high word. A page past 64 KiB, in EMS or under kern_mega was
+therefore projected from and into the wrong bytes.
+
+- It reads the source through `br_srcptr`, a chunk of at most 248 bytes at a
+  time.
+- It writes the document into `br_obuf` and empties it with `br_flushbuf`
+  before each chunk. The source and the document share EMS's frame, and
+  `br_obuf` takes 250 bytes before it would flush, so nothing remaps the frame
+  under the chunk (§71.18).
+- The document grows through `br_docensure` like a parse's. A source larger
+  than the document's ceiling is truncated and says so.
+- CR LF, a lone CR and a lone LF are each one `D_BR`. A tab is a space, and
+  any other control or high byte is `?`, as before.
 
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 
@@ -131385,6 +131578,104 @@ show a measured reduction in conventional pressure before it is enabled by
 default. EMS/XMS capacity does not relax the 16-bit per-store limits above.
 No kernel or driver change is implied by this package contract.
 
+**The source and the document share ONE EMS frame.** `br_srcems_map` and
+`br_docmap` each map their pages into the same four quarters. So a pointer
+into the source is stale after any `br_docmap`, and the reverse holds too.
+The rule follows from that:
+
+- **The parser** copies each source slice into `br_rxb` before it emits
+  output.
+- **A `<select>` in the parse** walks its options with `br_srcptr`, which maps
+  the frame and not a slice. Two things follow:
+  - the shown option's text is gathered into `br_fval` before the field's
+    first `br_fput`;
+  - after `br_skipelem`, the parse goes back to a staged slice at SI
+    (`br_srcabs`, then `br_srcmap`).
+
+  Until both, a page with a select re-parsed with its document in EMS (Close
+  Source) read the document's own bytes as source from the select on. Bytes
+  went missing, and the read jumped 16 KiB a page later. The first parse
+  never showed it, because its document was still conventional at the select.
+- **An event-time form operation** gathers what it needs from the source
+  before it maps the document. This covers Reset of a text field, Reset of a
+  select, and a select's next option. They share one helper,
+  `br_fsetval`, which copies the value into `br_fval` first. Until it did,
+  each of the three read the source after `br_docmap`, and on a page whose
+  source and document were both in EMS it filled the field with the
+  document's bytes.
+- **A receive stays inside one EMS page.** `br_take` maps the page a chunk
+  starts in and masks every offset to it. `br_nstep` bounded only a short
+  receive to that page, so a full 512-byte chunk that crossed a 16 KiB
+  boundary wrapped onto its own page's start and left the next page's start
+  unwritten. Every receive is bounded now. This was found by reading the
+  code, and no row reproduced it.
+- **`br_flushbuf` keeps DX.** It wrote the document's high word there, and
+  View Source's walk (§71.24) held its source position in DX. Past 64 KiB of
+  output it read the source from its start again.
+- **The layout gets its document window back after every line record.** Once
+  the line table moves to its four EMS pages (`br_lineems_ensure`, when
+  conventional growth would eat the reserve), `br_laddr` maps all four frame
+  quarters to them. The layout walk holds ES:SI into the document across
+  `br_emitline`, `br_blank` and `br_emitrule`, so it then read line records,
+  whose zero bytes are `D_END`, and ended. `br_ldocback` maps `[br_docbase]`
+  again when both the table and the document are in EMS; anything
+  conventional costs two compares. Before it, View Source of a 300 KB page
+  moved the table to EMS and lost about 90 lines, and Close Source then laid
+  out two lines of thirteen, the heading and nothing under it. A page long
+  enough in LINES to move the table could lose its text on first load too.
+  `tests/brems.py --pre --kb 300` (a 300 KB one-`<pre>` page) reproduces it.
+- **The EMS arenas grow in chunks, and the board is their ceiling.** The
+  source, the formatted document and the line records each live in EMS as
+  up to eight handles (`br_ar_*`, `AR_MAX`), one logical run of pages across
+  them. Growth adds a handle and copies nothing; only the first spill copies
+  the conventional bytes in. 1.6c grew each arena by allocating a larger
+  handle, copying, then freeing the old one, so it needed the old run and the
+  new run at once, each CONTIGUOUS (`EMSV_ALLOC`). A 2 MB board refused a
+  768 KiB page's source at 512 KiB and View Source's document at 512 KiB,
+  with most of its pages free. A chunk is half what the arena already holds,
+  never less than what is missing and never less than an eighth of the
+  board's free pages (4 to 16, `br_armin`, so a 512 KB board is not handed
+  out 256 KB at a time); a run the board refuses is asked again at half its
+  size. **The slack goes back once the page stands still**: the worker's
+  last paint sets `br_trimdue` and the UI task's wake cuts each arena to
+  what it holds (`br_trimall`, `br_ar_trim`) - a chunk wholly past it is
+  freed, a last chunk with four or more spare pages is replaced by one of
+  its used length, a copy of one chunk at the most, kept as it was when the
+  board has no such run. Growth can then be generous (few handles) without
+  the board paying for it after the load.
+- **A page whose server says its length is held whole at once.**
+  `Content-Length` is read a byte at a time beside `Content-Type`
+  (`br_clbyte`); an empty, non-numeric or 32-bit-overflowing value leaves
+  the length unknown. Known, the source's first growth asks for all of it
+  (`br_srcgrow`), so a page that fits is one conventional claim or one EMS
+  run instead of a regrow every 4 KiB - each of which may copy the whole
+  claim - and a refused whole length falls back to the 4 KiB step. A full
+  buffer holding every announced byte is the page's end, not a growth; a
+  body that ends short of its length is `Page truncated`. Without the field
+  nothing changes. This is the conventional path's gain as much as EMS's. None of the three has a
+  page ceiling of its own any more: the source's 1 MiB cap, the document's
+  1 MiB (`br_docensure`) and the line table's 62 KiB in EMS (6,348 lines;
+  a record is now a 32-bit offset, DX:AX) are gone. What stops a page is
+  the board (`EMSV_ALLOC`, eight handles on the machine) or 65,535 lines.
+  Without EMS nothing changes: the conventional reserve still cuts a page
+  and says `Page truncated`. Arenas a later feature needs (images, a script
+  heap) take the same `br_ar_*` routines.
+- **A broken connection is a cut page.** A socket that ends `NSK_FAILED`
+  rather than closing sets `br_trunc`, so the status says `Page truncated`
+  instead of presenting the bytes that arrived as the whole page. Pages
+  carry no `Content-Length` check (HTTP/1.0), so this is the only signal.
+
+`tests/brems.py` is the row, on `os8088_5150_cga_lpt_ems`: MartyPC's cable
+machine with a Lo-tech 2 MB board and 256 KB of conventional memory. It is
+the one machine with a network and EMS at once, and only a network fetch puts
+a source in EMS. An 80 KB page is fetched over the cable, and its source and
+document are both in EMS. The row then checks three things:
+
+- a select's next option, read out of the frame at `br_fsetval`'s last
+  instruction;
+- View Source against the source, byte for byte, past the 64 KiB seam;
+- Close Source's document and line count against the first parse's.
+
 The acceptance fixture is a deterministic 40 KB response over QEMU's NE2000
 path, plus a second launchable app. It checks the exact retained source length,
 truncation/capacity verdict, formatted bytes and lines, the grown document
@@ -131500,10 +131791,10 @@ socket handle, stream token, transfer state, and a 32-bit received-byte count.
 The record distinguishes connecting, receiving, complete, failed, and
 cancelled. The window shows the name, current state, and byte count; when a
 valid Content-Length is present it also shows the total. Cancel closes the
-socket and closes the file stream, committing the complete clusters already
-received. The partial file remains on disk with its current byte count shown;
-the Browser never launches it automatically. A second transfer starts only
-after the current one is terminal.
+socket and closes the file stream, then deletes the partial, which was
+written under a temporary name (71.20.3), so a file the user chose to replace
+is still there. The Browser never launches a download automatically. A
+second transfer starts only after the current one is terminal.
 
 The network worker owns socket calls and receives body data into a temporary
 buffer sized to one destination cluster. It parses and discards HTTP headers,
@@ -131561,8 +131852,8 @@ There is no Pause button in 1.6b: neither the socket driver nor the Browser's
 transfer state provides a safe pause contract. The active control is Cancel;
 after completion, cancellation or failure it becomes Close. Cancel is a
 request/acknowledge handshake with the network worker, so the UI never frees a
-buffer the worker may still be using. It commits a final partial cluster when
-possible and leaves a valid partial file on failure. Closing the manager hides
+buffer the worker may still be using. A failed or cancelled transfer deletes
+its temporary file and leaves the destination as it was (71.20.3). Closing the manager hides
 its secondary window; `File > Downloads` reopens it and the active transfer
 continues. Closing the Browser itself first completes any active page-fetch
 cancellation through the Browser's generation handshake, so the navigation
@@ -131594,13 +131885,16 @@ For an ordinary GET navigation, the Browser sends a URL whose final path
 component has an extension it does not render to the same Save dialog and
 Download Manager automatically. This applies to typed addresses and followed
 links. The final suffix is case-insensitive; a query or fragment is not part
-of it. `.htm`, `.html`, `.cgi`, and common server-rendered page suffixes
-(`.php`, `.phtml`, `.shtml`, `.asp`, `.aspx`, `.jsp`) remain Browser
-navigations. An extensionless URL also remains a Browser navigation because
-many sites serve their home page that way. Form submissions remain page
-navigations. The Browser does not infer file type from `Content-Type`; the
-existing response parser does not retain that header, and adding a second
-classification path would make link behavior depend on response timing.
+of it, and a dot in a directory name is ignored. `.htm`, `.html`, `.xhtml`,
+`.cgi`, and common server-rendered page suffixes (`.php`, `.phtml`, `.shtml`,
+`.asp`, `.aspx`, `.jsp`, and the period's Perl CGI `.pl` and ColdFusion
+`.cfm`) remain Browser navigations. An extensionless URL also remains a
+Browser navigation because many sites serve their home page that way.
+`tests/unit/t_brautosave.py` (fast) runs `br_dl_autosave` out of the built
+image under unicorn on 39 paths, and holds it to preserving every register. Form submissions remain page
+navigations. The suffix decides BEFORE a fetch. A page navigation whose
+response turns out not to be a page is the second route (71.20.4), decided at
+the headers by `Content-Type`.
 
 A non-rendered resource is a download action, not a page navigation. Opening
 the Save dialog and completing or cancelling the transfer must leave the
@@ -131611,14 +131905,144 @@ therefore continue to refer to the displayed page rather than the file URL.
 The `brdownload` and `brdownload-length` soak rows use a deterministic NE2000
 HTTP server to serve a binary body larger than the Browser page cap, once
 without `Content-Length` and once with it. They verify the reported total and
-compare the saved FAT file byte-for-byte. The current automated pair does not
-yet exercise redirect, cancellation, disk-full, busy refusal or repeated
-downloads; these remain acceptance checks for follow-up coverage. The
+compare the saved FAT file byte-for-byte. Cancellation and a failed transfer
+have rows of their own (71.20.3). Redirect, disk-full, busy refusal and
+repeated downloads are not exercised yet and remain acceptance checks for
+follow-up coverage. The
 `brdownload --automatic` row also checks that the location buffer and history
 remain on the displayed page through completion, then closes the manager and
 uses Reload to verify that the page is fetched again instead of reopening the
 download dialog. A later launch should open the downloaded file through the
 existing file association to verify exact bytes independently.
+
+#### 71.20.3 A download replaces the chosen file only when it completes
+
+The Save dialog never asks before replacing (§38): the name it returns is
+written over. A transfer is therefore **written under a temporary name** in
+the destination folder and renamed onto the chosen one only once it has
+completed. Before this, the transfer's first act was an empty
+`OSAPI_FILE_WRITE` of the chosen name, so an existing file was truncated
+before the first byte arrived. A failure then deleted what was left: the user
+lost the old file and got no new one.
+
+- **The name** (`br_dl_tmpmake`): the chosen base with the extension `$$$`,
+  or `$$1` to `$$9` when that one exists or *is* the chosen name.
+  - Existence is probed with a zero-capacity `OSAPI_FILE_READ`, which
+    answers from the directory entry and reads no data; `FERR_NOENT` means
+    free.
+  - With no free name, or a disk error, the transfer refuses as
+    `No writable destination` before connecting.
+- **Every write goes to it**: the creating write, every
+  `OSAPI_FILE_WRITE_SEQ` and `OSAPI_FILE_APPEND` call, and the stream's
+  close.
+- **On completion** (`br_dl_commit`, in the destination folder, bracketed
+  by `OSAPI_FILE_GOTO` as the partial delete is):
+  - it deletes the chosen name (`FERR_NOENT` is not an error), then
+    `OSAPI_FILE_RENAME`s the temporary file onto it;
+  - rename refuses an existing name, hence the delete first.
+  - If either step fails, the temporary file **stays**: from the delete on,
+    it may be the only copy. The manager says
+    `Saved as .$$$; could not rename`, and clears any pending cancel so no
+    cancel path deletes it.
+- **On failure or cancel**, only the temporary file is deleted. The chosen
+  name is never touched.
+
+**A settled download stays settled.** `DL_DONE`, `DL_FAIL` and `DL_CANCEL`
+are terminal:
+
+- The worker's `br_dl_step` acts only from `DL_OPEN` up to, but not
+  including, `DL_DONE`. A cancel request is not cleared when it completes.
+  Before this rule the worker read the request every tick and turned
+  `DL_CANCEL` back into `DL_CANCELREADY`. The UI then deleted the partial
+  that was already gone, failed, and the loop repeated for as long as the
+  Browser ran.
+- Exit on a terminal state only dismisses the manager. On `DL_FAIL` it used
+  to fall through to a cancel request, which re-deleted the gone partial and
+  stayed on `Could not delete partial file`. Under `Saved as .$$$` it would
+  have deleted the only copy.
+- The title-bar close on a settled manager dismisses it too (`br_dl_mgr_close_after`
+  = 2). It used to re-enter the raced-cancel path that keeps an error on the
+  glass, so a failed download's manager could not be closed.
+
+`tests/brdownload.py` puts a `DOWNLOAD.BIN` on its disk first. A completed
+transfer must replace it with the exact payload and leave no `.$$`*x* file.
+These legs must leave the file byte for byte, leave no temporary file, close
+the manager, and then hold the download's state for four seconds:
+
+- `--cancel-active` (`brdownload-cancel`) and `--close-active`
+  (`brdownload-close`) hold `DL_CANCEL`;
+- `--fail-exit` and `--fail-close` (`brdownload-failexit`,
+  `brdownload-failclose`) serve half of an announced body and hold
+  `DL_FAIL`.
+
+#### 71.20.4 A page fetch that answers a file becomes a download
+
+A link whose suffix is a page's, such as `download.php?id=5`, `get.cgi?f=x`,
+or one with no suffix, navigates (71.20). The period's sites serve files
+exactly that way. Such a fetch used to drain the whole body and discard it,
+then say `Response is not HTML`, so a click could not fetch the file at all.
+
+**At the headers, the worker hands the fetch to the Download Manager.** In
+`br_nstep`, on the first receive after `br_ctfinish` has set `[br_nonhtml]`,
+the worker:
+
+- checks that the status is 200, that the fetch is the top-level page (not a
+  frame child), that it is not a POST (which a GET cannot repeat), and that it
+  is still this fetch's (`br_gchk`);
+- if all hold, sets `[br_fin]` = 11, wakes the UI task, and fails the fetch
+  through `.fail` with `Not a page: saving it`. That closes the socket at
+  once instead of after the whole file.
+
+Any other status, a frame child or a POST keeps the old message.
+
+**The UI task does the rest** (`br_onwake`), only when `[br_fin]` = 11 and
+`[br_nstate]` = `BN_ERR`. A newer navigation resets both, so a stale wake
+does nothing.
+
+- It calls `br_dl_link` with `AX` = `FFFFh` on `br_ubuf`, the URL this
+  fetch was for after any redirect. That is the route a `.zip` link takes in
+  `br_go`: the Save dialog, then the Download Manager's own GET.
+- `br_go` had pushed the URL to the history and released the page before
+  it, so the entry is dropped and `br_hgo` brings the page back the way Back
+  does: bar resynced, no push. The page fetch and the download then run on
+  their own sockets.
+- With nothing before it in the history, the window stays empty with the
+  status said.
+
+The file is fetched twice, once cut at the headers, because the page fetch's
+receive claim is the page's and the Download Manager streams to disk with a
+buffer of its own. Handing a socket from one to the other would be a second
+transfer path. 146 bytes of the primary image.
+
+**The suggested name is the server's when it can be.** These URLs end in
+`get.cgi` or `download.php`, which is no name for a file. While the page
+fetch parses its headers, `br_cdbyte` watches every header line for
+`filename=` (folded; only `Content-Disposition` carries it):
+
+- it keeps the value, quoted or not, up to `"`, `;` or the line's end;
+- it drops the value when it is over 12 characters, empty, or holds any of
+  `/ \ : * ? < > |`. A path is never a name, and `../../AUTOEXEC.BAT` names
+  nothing. RFC 5987's `filename*=` does not match the key;
+- its state lives in `br_cdstate`, `br_cdlen` and `br_cdname`, and is
+  cleared at the top of every `br_go` and on every redirect.
+
+`br_dl_defaultname` offers that name only when `br_dl_index` = `FFFFh` (this
+route). A `.zip` link's `br_go` cleared it first, and a link index never
+reads it. Otherwise the name is the URL's last component, else
+`DOWNLOAD.BIN`. 213 bytes: `.text` 198 and `.bss` 15.
+`tests/unit/t_brautosave.py` feeds whole header blocks through `br_hdrb`
+under unicorn and asks `br_dl_defaultname` on 11 cases.
+
+`brdownload-ctype` (`tests/brdownload.py --content-type`) clicks
+`get.cgi?id=7`, served as `application/octet-stream` with
+`filename="DOWNLOAD.BIN"`. It requires:
+
+- the Save dialog;
+- the page URL and the history count unchanged;
+- a byte-exact file under the header's name, where the URL would have
+  suggested `get.cgi`;
+- two GETs of the link at the server. One GET would be the suffix's route,
+  not this one.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 
@@ -131671,6 +132095,57 @@ unsupported controls; a local HTTP test checks the POST request line, headers,
 exact length and body. Existing GET, formatting and frame-navigation behavior
 remains covered.
 
+#### 71.20.5 The Download Manager is part 0
+
+The Download Manager is in the Browser's lazy part 0 (§20.12): its window,
+the Save dialog's answer, the disk writes and the transfer engine
+(`apps/browser/brdownload_engine.inc`), with the painter and icons that were
+already there. A Browser that never downloads never reads it.
+
+The primary segment went from 48,189 to 43,105 bytes. Part 0 went from 3,342
+to 9,221 bytes (6,886 packed), and is claimed only while it is in. This is
+roadmap step S2 (docs/plans/BROWSER-1.7-ROADMAP.md).
+
+**What stays resident** (`brdownload.inc`) is what must answer while the part
+is out, plus what the part reads:
+
+- the strings and tables, read through DS;
+- `br_dl_autosave`, the suffix test every link click asks;
+- the button's layout proc (`br_dl_btplace`, an `os88ui` slot);
+- one **thunk** per entry the kernel or the Browser calls. A callback's
+  address is an offset in the primary's code segment, so a far call into the
+  part has to start there. The vectors are `br_dl_vec`, in the order of
+  `BRDL_*` in `brdownload_const.inc`. The part leads with its table of
+  offsets, and `br_dl_partload` sets each vector's segment from `op_cseg`;
+- `br_dl_rtab`, one far vector per primary routine the part calls back, onto
+  a `call`/`retf` shim. A near call from the part would land in the part's
+  own segment. `tools/brdlsyms.py`, which exports the primary's offsets to
+  the part, refuses a near `call` or `jmp` to an imported name.
+
+**When the part is dropped** is decided in one place, `br_dl_after`. Every
+thunk returns through it. The part is dropped when there is no manager window
+and no download between the Save dialog and its end (`DL_PICK` up to
+`DL_DONE`). The part never drops itself, because the code after an `op_drop`
+would run in freed memory. Copy of a page selection loads the part, uses it
+and is dropped the same way, where it used to stay in until a download ended.
+
+**The worker is never inside a dropped part:**
+
+- The worker enters the part only from `br_dl_step` (resident), and only in
+  `DL_OPEN` to `DL_BODY` with nothing pending and no cancel request.
+- The pending re-wake and the cancel acknowledgement (`DL_CANCELREADY`) are
+  resident.
+- Where the engine hands the UI a cluster (`DL_PENDING`) or the transfer's
+  end (`DL_ENDWAIT`), it sets `br_dl_publish` and returns. `br_dl_step`
+  stores the state and wakes the UI only after the far call is back.
+- The UI moves a transfer to an end only from a state the worker published
+  (`DL_ENDWAIT`, `DL_CANCELREADY`). It moves `DL_OPEN` to `DL_BODY` only to
+  `DL_CANCELREQ`, which still holds the part.
+
+**A link to save loads the part first**, before the Save dialog opens. If it
+cannot be read (no room, or `BROWSER.O88` is gone), the status line says
+`Download Manager unavailable` and no dialog opens.
+
 ### 71.21 Browser 1.6c — incremental HTML and classic navigation
 
 This section is the 1.6c acceptance contract, not a claim that every item has
@@ -131688,7 +132163,8 @@ Browser's other page arenas. Source growth and each worker write remain
 bounded by the allocated capacity; the worker is parked while the UI grows or
 migrates the source. Without EMS, the existing conventional-memory ceiling
 still produces a visible source cutoff. EMS source capacity grows in 256 KiB
-groups and is capped at 1 MiB by the Browser's logical source representation.
+groups, and its ceiling is the board's: the 1 MiB cap 1.6c shipped is
+withdrawn (71.18, *The EMS arenas grow in chunks*).
 The parser consumes only the newly
 available source range and retains a logical source cursor plus its compact
 semantic state between worker passes. An incomplete tag, quoted attribute or

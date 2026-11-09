@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "3ef633c9",
-  "strings": "4d794c0f80cf14d9",
-  "why": "Checked against Browser 1.5-1.6c source: added the Ctrl keys and Keyboard Shortcuts, bookmarks (BROWSE.DAT, eight), the right-button menu and View Source, the Downloads window, password fields, and the new page/link/form limits."
+  "stamped": "f6151199",
+  "strings": "912b9f2b366ab844",
+  "why": "1.7 preparation: checked Good to know against the EMS arenas (board-limited), Content-Length sizing and cut detection, and the right-click-during-layout fix; added the EMS and short-body clauses, the rest unchanged"
  },
  "C64": {
   "sources": [],

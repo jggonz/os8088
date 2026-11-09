@@ -10355,7 +10355,10 @@ SOAK = [
         wants=("build/brtest360.img",)),
     Row("brarena", "soak", py("tests/brarena.py"), 180.0,
         "BROWSER-MEMORY-ROADMAP: a local 3,000-line page grows the Browser's "
-        "line-index arena past 16 KiB in QEMU, without NE2000 traffic",
+        "line-index arena past 16 KiB in QEMU, without NE2000 traffic; then "
+        "SPEC.md 71.19.1 on the wide page - a drag from below the 64 KiB seam "
+        "ends past it, Ctrl+C copies exactly both sides' visible text, Tab "
+        "focuses the link past the seam",
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img",)),
     Row("brcapacity", "soak", py("tests/brcapacity.py"), 45.0,
@@ -10413,6 +10416,17 @@ SOAK = [
         "server this row runs on the host, and the reply renders",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("brems", "soak", py("tests/brems.py"), 300.0,
+        "SPEC.md 71.18, 71.24: a page fetched over the cable into a 256 KB "
+        "machine with a Lo-tech EMS board (os8088_5150_cga_lpt_ems), so its "
+        "source AND its document are in EMS and share the frame. A select's "
+        "next option (br_fsetval) must put the option's text in the field's "
+        "cells, read out of the frame at br_frepaint - the document's own "
+        "bytes went in while the value was read after br_docmap; View Source "
+        "must project exactly the source's length past the 64 KiB seam, and "
+        "Close Source give the page back",
+        needs=("marty",), serial=True,
+        wants=("build/brtest360.img", "build/emstest.img")),
     Row("brrace", "soak", py("tests/brrace.py"), 90.0,
         "SPEC.md 71.14: a Reload clicked while the worker is inside br_parse "
         "must neither write through a freed buffer (the interrupt vector "
@@ -21854,6 +21868,53 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/browser.o88", "build/ether360.img"),
         locks=("port:8090",)),
+    Row("brdownload-ctype", "soak",
+        py("tests/brdownload.py", "--content-type"), 180.0,
+        "SPEC.md 71.20.4: a link with a PAGE suffix (.cgi) whose 200 answers "
+        "application/octet-stream and filename=\"DOWNLOAD.BIN\" navigates, and the Browser turns the fetch "
+        "into a download at the headers - the Save dialog opens, the page and "
+        "history come back as they were, the file is byte-exact under the "
+        "header's name (the URL would say GET.CGI), and the "
+        "server sees the link fetched twice (the cut page fetch, then the "
+        "Download Manager's). Where it said `Response is not HTML` after "
+        "draining the whole file and throwing it away.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-cancel", "soak",
+        py("tests/brdownload.py", "--cancel-active"), 180.0,
+        "SPEC.md 71.20.3: Cancel during a transfer deletes only the temporary "
+        "file, leaves the old DOWNLOAD.BIN byte for byte, closes the manager, "
+        "and the download then STAYS DL_CANCEL - where a cancel request left "
+        "standing turned it back into CANCELREADY every tick, the UI deleted "
+        "the gone partial again and failed, for as long as the Browser ran.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-close", "soak",
+        py("tests/brdownload.py", "--close-active"), 180.0,
+        "SPEC.md 71.20.3: the title-bar close during a transfer is a cancel "
+        "request, with brdownload-cancel's checks.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-failexit", "soak",
+        py("tests/brdownload.py", "--fail-exit"), 180.0,
+        "SPEC.md 71.20.3: a body cut short ends in DL_FAIL with no file left, "
+        "and Exit then dismisses the manager. It fell through to a cancel "
+        "request, re-deleted the gone partial and stayed on `Could not delete "
+        "partial file` - and under `Saved as .$$$` would delete the only copy.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-failclose", "soak",
+        py("tests/brdownload.py", "--fail-close"), 180.0,
+        "SPEC.md 71.20.3: the same failed transfer, dismissed by the title-bar "
+        "close box, which did nothing: it re-entered the raced-cancel path "
+        "that keeps an error on the glass.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
     Row("brnav", "soak", py("tests/brnav.py"), 215.0,
         "SPEC.md 71.8 (BROWSER-PLAN 5): Back, Forward, Reload and Save As "
         "over the NE2000 against pages the row serves on :8091 - a navigation "
@@ -21900,6 +21961,9 @@ SOAK = [
         "page whose claims all sit above 1MB (OS88_HIGH/OS88_HIGHMEM, the "
         "region too) - the stream's tail and the line table read out by "
         "their descriptors, End painting the last lines, no CLOSED/FAULT. "
+        "On the last rows a drag selects past the seam, Ctrl+C copies its "
+        "visible text and Tab reaches the last link (SPEC.md 71.19.1); a "
+        ".zip downloads through part 0 (71.20.5). "
         "Red with br_docmap taking the sum (CLOSED BROWSER 0D) - as the "
         "pre-MC7 Browser is - and with br_take's (leg 2). 48s measured",
         needs=("bochs", "nasm"),
@@ -21911,6 +21975,30 @@ SOAK = [
         "sizes and counts the Browser capacity gate expects. builds=True only "
         "because the registry reads tests/brcapacity.py for `make`; the "
         "--fixtures mode runs no make and no QEMU.", builds=True),
+    Row("brautosave", "fast", py("tests/unit/t_brautosave.py"), 0.5,
+        "SPEC.md 71.20: which link the Browser opens as a PAGE and which it "
+        "hands to DOWNLOADS, decided by the last path component's suffix "
+        "(.htm .html .cgi .php .phtml .shtml .asp .aspx .jsp .pl .cfm "
+        ".xhtml navigate; any other suffix downloads; none navigates; the "
+        "query and fragment are not part of it). br_dl_autosave AS IT SHIPS, "
+        "out of build/browser.bin under unicorn, on 39 paths - and every "
+        "register but the flags must come back as it went in, which DX did "
+        "not until this row. Then the NAME a download suggests (SPEC.md 71.20.4): "
+        "whole header blocks through br_hdrb, Content-Disposition filename= "
+        "kept or refused, br_dl_defaultname asked on 11 cases - out of "
+        "build/browser.part.bin, where it lives since SPEC.md 71.20.5, with "
+        "CS the part's and DS the primary's", needs=("unicorn",)),
+    Row("brbookmarks", "fast", py("tests/unit/t_brbookmarks.py"), 0.5,
+        "SPEC.md 71.23: the bookmark records in the URL store, a claim of "
+        "their own, as they ship - build/browser.bin under unicorn with a "
+        "three-record store. br_bmfindurl finds EVERY record (it compared "
+        "record n with the query's tail past record n-1's mismatch, so only "
+        "record 0 could be found and Ctrl+D added duplicates), ignores case, "
+        "misses a prefix and keeps every register but AX; br_bmmenuset "
+        "copies each title into br_bmtitles and points the menu at the "
+        "copies; br_bmurlget copies a record's URL into br_ubuf and refuses "
+        "past the count; and with no store all three miss, show `(empty)` "
+        "and refuse rather than read segment 0", needs=("unicorn",)),
     Row("netcoexist", "soak", py("tests/netcoexist.py"), 20.0,
         "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
         "machine. The field lost its network the moment an MPU was added: "

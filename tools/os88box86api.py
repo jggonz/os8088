@@ -63,6 +63,10 @@ and on any of them, what the name says is added:
                   for an SB16 instead (an AT only)
     _ne2k         an NE2000 at 300h on IRQ 10 on an AT, an NE1000 at 300h on
                   IRQ 3 on an XT, on slirp ($OS88_BOCHS_NE2K too)
+    _ne1k         the XT's NE1000 alone: a network card WITHOUT taking the AT
+                  (`_ne2k` picks the AT, its card being 16-bit)
+    _ems          a Lo-tech 2 MB EMS board at 260h, frame E000h - MartyPC's
+                  os8088_5150_cga_lpt_ems board, which EMS.DRV finds first
     _hdd          the row's own fixed disk: on the AT's IDE controller, on an
                   XT behind an XT-IDE (row_disk)
 
@@ -275,7 +279,12 @@ def machine_config(machine, mega=False, images=()):
                  (sec, "dma", "1")]
         if kind == "sb16":
             sets.append((sec, "dma16", "5"))
-    if "_ne2k" in n or os.environ.get("OS88_BOCHS_NE2K"):
+    if "_ems" in n:
+        sets += [("Other peripherals", "isamem0_type", "lotechems"),
+                 ("Lo-tech EMS Board #1", "base", "0260"),
+                 ("Lo-tech EMS Board #1", "frame", "E0000"),
+                 ("Lo-tech EMS Board #1", "size", "2048")]
+    if "_ne2k" in n or "_ne1k" in n or os.environ.get("OS88_BOCHS_NE2K"):
         if at:
             sets += [("Network", "net_01_card", "ne2k"),
                      ("Network", "net_01_net_type", "slirp"),

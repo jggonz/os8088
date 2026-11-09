@@ -1,160 +1,165 @@
-﻿# Browser images — integration plan
+﻿# Browser images — the 1.7 plan
 
-This is the 1.7 starting contract for inline images in the windowed Browser. It uses PiXEL and Video Player as implementation references, while keeping the Browser's network, memory and redraw behavior page-specific. No operating system or driver changes are part of this plan. The 1.6 storage work remains a prerequisite: the current Browser uses 16-bit byte offsets and cannot retain a 96 KiB logical source or formatted document until that representation is implemented and tested.
+Inline images in the windowed Browser: `<img>` laid out, fetched, decoded,
+kept and drawn, on every adapter, with or without EMS. This replaces the
+2026-10-17 audit plan (kept in git history at `ca2e1917`); its audit table
+still holds and is summarised in section 1. SPEC.md 71 gets the contract
+before any code (section 6).
 
-## Audit result: existing behavior versus Browser gaps
+The owner's target for the Browser is the early web as Netscape 2 or IE 3
+showed it - images, colours, JavaScript 1.2, no plugins - on this OS and its
+machines, the 4.77 MHz 8088 included. Images are the first step. Every
+decision below is priced against the Browser's one hard limit: image + BSS
+at most 65,024 bytes (SPEC.md 20.1.1), with 12,404 free at the start of 1.7
+(BROWSER-1.7-ROADMAP.md).
 
-| Need | Already provided by os8088 | Still missing in Browser |
+## 1. What the OS and PiXEL already give
+
+| Need | Already there | Where |
 |---|---|---|
-| VGA/EGA colour drawing | `OSAPI_GFX_BLIT4` and the kernel's four-plane renderer; EGA is the same planar path with its own geometry/mode | Decode and quantize image rows to the os8088 16-colour palette, then call the API |
-| Hercules/CGA monochrome fallback | The same `OSAPI_GFX_BLIT4` dispatches through the 1bpp renderer, whose §39.4 palette reduction applies black, 50% dither or white | Nothing adapter-specific; do not add a Browser grayscale converter or probe |
-| Window clipping | `BLIT4` honors the window clip and display dispatch | Limit each submitted image band to the image box and use the package's ordinary window clip |
-| Static BMP/PCX/PIX decode | Caller-owned `apps/os88img.inc` with signature/header checks and 16-colour palette mapping | It currently requires a whole decoded destination and has no web-resource fetch or Browser image records |
-| GIF/JPEG/PNG decode | PiXEL's lazy decode parts; GIF supports static image data, and JPEG/PNG have their own row decoders | No stable Browser-facing decoder ABI; PiXEL parts depend on PiXEL context and service callbacks |
-| Fetching inline resources | Browser's HTTP worker fetches one page response, with generation checks and bounded redirects | Separate image/resource transfer ownership, source URL resolution, cancellation, bounded compressed storage and response dispatch |
-| Repaint after scroll/occlusion | Normal Browser invalidation and clipping | Durable compressed source plus a deterministic way to restart/redecode rows; no full decoded bitmap per image |
+| Draw a colour band, clipped | `OSAPI_GFX_BLITP` (planes), `OSAPI_GFX_BLIT4` (packed), the window clip | SPEC.md 5.4 |
+| Draw a mono band, clipped | `OSAPI_GFX_BLIT1` | SPEC.md 5.4.2 |
+| GIF's LZW, hostile-input safe | `apps/os88lzw.inc`, shared source, input by `LZW_FILL`, strings to `LZW_RUN` | SPEC.md 106.18 |
+| JPEG (baseline, scaled DCT) | PiXEL's part `apps/pixel/pxjpeg.asm`, 19,101 bytes | SPEC.md 106.19, 106.22 |
+| PNG (inflate, filters, Adam7) | PiXEL's part `apps/pixel/pxpng.asm`, 12,018 bytes | SPEC.md 106.18, 106.26 |
+| Truecolour to 256 entries | PiXEL's CUBE (6x7x6 + 4 greys), ordered blue-noise dither, 139 cycles a pixel on an 8088 | SPEC.md 106.8 |
+| 256 entries to the screen | PiXEL's mixing PLANS `(c1, c2, t)` through an 8x8 Bayer; a luma threshold on 1bpp; the CUBE's and GREY's plans shipped as tables (`pxplans.inc`) | SPEC.md 106.11 |
+| TIFF, ICO, IFF, MacPaint | PiXEL's part `apps/pixel/pxextra.asm`, 20,696 bytes | SPEC.md 106.25 |
+| GIF animation rules | `gif_anim` in `tools/pixelsim.py`: delays, NETSCAPE2.0 loops, transparency, disposal 2/3, local tables, the dirty rect | SPEC.md 106.25 |
+| Decode on a worker | PiXEL's pipeline: the UI task reads and claims, the worker only computes | SPEC.md 106.9, 20.6 rule 7 |
+| Write/read a file by offset | `OSAPI_FILE_WRITE_AT`, `OSAPI_FILE_READ_AT`; `OSAPI_VOL_KIND` says floppy, fixed or RAM | docs/INDEX.md |
+| EMS arenas that grow | the Browser's `br_ar_*` (SPEC.md 71.18), board-limited | browser.asm |
 
-This audit is why image output will be 4bpp regardless of the display: the OS
-already provides the adapter conversion. The Browser's job is HTTP resource
-ownership, format validation, conversion from source colors into the native
-16-colour palette, and bounded redraw. Avoiding duplicate display code reduces
-both package size and adapter-specific correctness risk.
+What an 8088 pays (PERFORMANCE.md, SPEC.md 106.17/106.22, measured on the
+5150): a 640x480 baseline JPEG decodes in about 47 s at 1/2 scale; a
+dithered full-canvas blit is about 1.1 s on VGA; a 96x72 animated GIF frame
+is 3-5 drawing calls. **Decoding again on every scroll is therefore not an
+option**, which is the main change from the 2026-10-17 plan.
 
-## What the OS already adapts
+## 2. Decisions
 
-The Browser does not need an adapter probe or a private VGA/EGA/Hercules
-renderer. `OSAPI_GFX_BLIT4` is the existing windowed image path. It takes
-packed 4bpp pixels, clips them to the window, and dispatches by the display:
-VGA and EGA use the four-plane colour renderer; Hercules and CGA reduce each
-os8088 palette colour through the kernel's existing ink table, including its
-black / 50%-dither / white mapping. This adapter choice is automatic in the
-kernel. Use `OSAPI_WM_DISPLAY` when a package genuinely needs display geometry;
-do not guess from the primary adapter with `OSAPI_VIDEO`, and do not access
-VRAM or use the full-screen page API from this ordinary window.
+Each with what it was weighed against.
 
-That means the Browser's image pipeline should produce the same packed
-4bpp palette indices on every display and send them through `BLIT4`. EGA gets
-the colour image through the same planar path as VGA; Hercules gets the
-kernel's monochrome reduction without a second image converter. A Browser-side
-1bpp/grayscale pass would duplicate and diverge from §39.4, so it is not part
-of the design. JPEG and true-colour PNG still need a Browser/PiXEL-compatible
-conversion into the 16 os8088 colours before `BLIT4`; the kernel only adapts
-those 16 colours to the active display.
+| # | Decision | Against | Why |
+|---|---|---|---|
+| D1 | **Decode once, keep the image READY TO DRAW**: on VGA/EGA the four planes `OSAPI_GFX_BLITP` takes, on CGA/Hercules 1bpp for `OSAPI_GFX_BLIT1`. Scrolling is a blit per band | decode again on every repaint (the old plan); keep an 8bpp master and compose at draw time (PiXEL's way) | Re-decoding costs seconds to tens of seconds a picture on an XT. PiXEL's composer (zoom, pan) is too large to sit in the Browser's resident image, and a page never zooms. A 1bpp copy is an eighth of an 8bpp one |
+| D2 | **The ready copy goes to the best tier there is**: conventional memory inside the Browser's 20% reserve, then EMS, then a cache file on a FIXED or RAM volume, then the alt box | EMS required; disk always | EMS must never be required (owner). Most early-web images are small (a 200x60 logo is 6 KB in planes), so conventional memory carries a typical page on a 640 KB machine. A hard disk returns a picture in one or two `int 13h` calls (~0.4 s each), far below a re-decode |
+| D3 | **No floppy cache.** A machine whose only writable volume is a floppy keeps what fits in memory and shows the rest as alt boxes (a small GIF may be re-decoded instead, section 4.4) | a cache file on A:/B: | Slow, often write-protected, a 360 KB disk fills, and the user swaps disks while browsing |
+| D4 | **JPEG and PNG reuse PiXEL's decoder PARTS, by source**: `pxjpeg.asm` and `pxpng.asm` assembled a second time as parts of BROWSER.O88, against a link file generated from `browser.bin` (`tools/pxlink.py`'s output, with `-I` putting the Browser's first), and the seven `PXS_*` services implemented by the Browser | a Browser JPEG/PNG of its own; picojpeg | 31 KB of tuned, tested, hostile-input-safe decoder for about 1.6 KB of resident BSS (`px_spal` 768, `px_plan` 768, `px_cur` 52, a few flags) and the service thunks. Nothing is copied (WEAVE-SPEC 1.2's rule). **PiXEL is not edited** and keeps building and running standalone |
+| D5 | **GIF is a Browser part of its own**, on `apps/os88lzw.inc`, following `pixelsim`'s `gif_anim` rules frame for frame, static and ANIMATED | PiXEL's `pxgif.asm` linked the same way | `pxgif` is fused to PiXEL's model: 40-odd linked variables (`px_an*`, the master's windows, the view) and a UI renderer service. Carrying that state would cost more resident BSS than the whole GIF part costs on disk (estimated 3-4 KB, lazy, 0 resident). `pixelsim` is the reference implementation the tests hold it to |
+| D6 | **Animated GIFs play**, the visible ones, one frame at a time on the one worker; paused when scrolled off, when another window is in front, when minimised | first frame only | Owner. PiXEL already shows the engine works on an XT. With many animations a page plays slower than the file's delays, never with the UI blocked |
+| D7 | **Every format's colours go through one shared conversion**: source row -> palette index (PAL as is, truecolour through the CUBE's dither) -> the display's plans -> planes or 1bpp, in the image part | per-decoder conversion | One tested path, the plans PiXEL already ships |
+| D8 | **One resource fetch at a time**, after the page, in document order, visible images first; its own generation, URL and staging; never the page's source claim | one socket per `<img>` | The single-socket discipline and SPEC.md 71's ownership rules; View Source and Save Page As keep the page source intact |
+| D10 | **The older formats the web carried until about 2000 are read too.** TIFF, ICO (favicons), IFF and MacPaint through PiXEL's part `pxextra.asm`, by source as D4 (it links `px_spal`, `px_plan`, `px_cur` and the ring's six words, all of which the Browser's services hold anyway). BMP (1/4/8/16/24/32 bpp, RLE4/RLE8), XBM (the X bitmap Netscape showed inline) and PCX/TGA in a small Browser part of its own | PiXEL's `pxsimp.asm` | `pxsimp` is linked into PiXEL's resident reader: it calls the package's own routines (`px_emit`, `px_tokget`, 60-odd symbols), so a second host would carry PiXEL's reader. Uncompressed and RLE formats are a few hundred bytes each of their own; XBM is not in PiXEL at all |
+| D9 | **Without memory for an image, the page still lays out**: the box at its declared or header size with the alt text and a status line. One bad image never fails a page | refuse the page | The old plan's rule, kept |
 
-## Reuse from PiXEL and Video Player
+## 3. Memory
 
-PiXEL recognizes GIF, PNG, JPEG, BMP, PCX, TGA, PNM and PIX (`apps/pixel/pixel.asm`, `apps/pixel/pxsimple.inc`, and its lazy decoder parts). Reusable lessons include bounded input heads, decoder work claims acquired per operation, row-oriented output, and optional XMS with a conventional-memory fallback. The decoders are coupled to PiXEL package state and its part protocol. Share source only after defining a shared interface; do not fork or copy decoder files into Browser. See SPEC.md section 106.
+The claims the Browser holds (MEM_OWNER_MAX = 8, BROWSER-1.7-ROADMAP.md 5)
+grow by these, and the claims table in SPEC.md 71.23 is updated first:
 
-The existing `apps/os88img.inc` (SPEC.md §94, indexed in `docs/INDEX.md`) is
-already a clean, caller-owned include for `.PIX`, uncompressed 1/4bpp BMP and
-1/4-plane PCX. It maps a file palette to the os8088 16-colour palette and
-outputs packed 4bpp. Its current contract decodes the *whole* image into a
-destination segment and refuses output above one 64 KiB segment; it is not a
-row-streaming web decoder and it does not cover GIF, JPEG or PNG. Use it as a
-reference and do not silently turn its full-bitmap allocation into the
-Browser's image store. The Browser's required web formats need a shared
-row-oriented decoder contract with caller-owned state and bounded compressed
-input.
+| claim | when | size |
+|---|---|---|
+| image store (conventional) | while a page with images is shown | ONE movable claim for every image of the page, grown by the UI task within the reserve and carved per image; while a decode runs, its scratch is carved off the store's end (PiXEL's `PXK_DSC` per scale; the LZW's 18 KB) and given back after (SPEC.md 20.12, *One claim, carved*) |
+| image part (a decoder, with the host code) | while decoding or animating | lazy part, dropped after |
 
-Video Player's EMS/XMS rings and VRAM renderers solve a different job. They show bounded staging and adapter-specific output, but a normal Browser window draws through clipped graphics APIs. It cannot keep a raw framebuffer pointer or use fullscreen page flipping. Displayed pixels are transient: the Browser must redraw images after exposure, scrolling, resizing and repaint. See SPEC.md section 98 and docs/plans/VIDEO-XMS-PLAN.md.
+The limit is a COUNT, not a size: MEM_OWNER_MAX is eight claims an owner
+(SPEC.md 50.2), and a claim is rounded to 512 bytes, so a claim costs at
+most a few hundred bytes more than it holds. EMS adds handles, not claims
+(`br_ar_*`, eight on the machine), and the disk cache adds a file. At the
+worst moment the Browser holds source, document, line table, links, URL
+store, image store and image part: **seven**, so part 0 (Download Manager,
+cold UI) still fits and neither waits for the other.
 
-## Staged format support
+The disk cache: one file, `SYSTEM\APPDATA\BROWSER\IMGCACHE.TMP` on the
+first fixed or RAM volume, written cluster-aligned with `OSAPI_FILE_WRITE_AT`,
+emptied at navigation and at close. UI task only (SPEC.md 20.6 rule 7).
 
-1. Start with static GIF and baseline JPEG, decoded one row at a time. Freeze GIF on its first frame initially. These exercise indexed and continuous-tone sources without committing the first browser image release to every PiXEL format.
-2. Add PNG after row-memory and transparency behavior are measured. Keep alpha handling bounded and define the background-composition rule.
-3. Evaluate BMP and PCX as compatibility formats using existing PiXEL decoders; add them only if network and adapter tests show meaningful early-Web coverage. Defer TGA, PNM and PIX unless a real page corpus motivates them.
-4. Keep animated GIF, interlacing edge cases, progressive JPEG presentation, and image saving out of the first static-image milestone. The download manager owns Save Image As and binary persistence.
+## 4. Deliveries
 
-An extension is not authoritative. The response media type may guide dispatch, but a decoder validates the signature and refuses malformed or unsupported data with a small placeholder/status, never an unbounded read. Resolve relative image URLs against the page URL and use the Browser's redirect, cancellation and navigation-generation rules. One failed image must not fail the surrounding document.
+One reviewable commit each, on a branch of its own after the 1.7 preparation
+PR. Rows are named per delivery; the soak union and `test-full` run once at
+the end (CLAUDE.md, Testing).
 
-## Memory and rendering
+### 4.1 Image boxes and alt text
 
-The page response and image resources must have different owners. The page
-source stays available for View Source, Save Page As and form controls; an
-image response must never borrow or replace `br_srcseg`. Add one sequential
-resource job with its own generation, URL, bounded compressed store and
-decoder state. Serial fetches keep the existing single-socket discipline and
-avoid one socket, input ring and decoder claim per `<img>`. A navigation or
-close invalidates the resource generation before releasing any image claim.
+`<img>` in the parser and layout: `width`/`height` attributes, `alt`, `align`
+left/right/middle at the level early pages use, `border`, an image inside a
+link is clickable over its whole box. With no attributes, a box of a fixed
+placeholder size until 4.2 reads headers. Drawing: a frame and the alt text.
 
-Do not allocate a decoded full-image bitmap. Keep compressed bytes in a
-bounded image arena subject to the same fresh free-heap reserve check as page
-growth, then decode rows into one reusable packed-4bpp row. Store each image's
-URL/body range, checked dimensions, native-palette mapping and document
-placement in bounded records. Repaint starts the decoder from the retained
-compressed range and emits only rows intersecting the viewport; slower replay
-is acceptable here because it avoids a full decoded copy and gives deterministic
-repaint after occlusion. If an image or decoder claim cannot fit above the
-reserve, keep the page and its `alt` text, skip that image, and show a bounded
-status. Never make a page fail because one image is large or malformed.
+Verification: a fixture page through `tools/htmsim.py` (its reference layout
+grows the same rule) and the brtest/brlink rows; the line records stay valid.
 
-The UI task alone claims, grows and frees page/image storage. Network code
-receives into a fixed staging window, parks at the existing wake boundary, and
-lets the UI append into the image arena only after checking the navigation and
-resource generations. Decoder code sees only validated segment ranges and
-caller-owned scratch. Optional EMS/XMS may be considered only through
-documented ownership and transfer APIs; conventional memory remains the
-complete fallback within the page's free-heap reserve.
+### 4.2 Static GIF
 
-Use the windowed graphics API. Convert decoded rows into packed 4bpp indices in
-the os8088 palette, then call `OSAPI_GFX_BLIT4` under the normal graphics lock
-and Browser clip. The kernel already selects the VGA/EGA colour path or the
-Hercules/CGA 1bpp path, including §39.4's deterministic grayscale reduction
-and 50% dither. Do not add an adapter-specific Browser branch or duplicate
-that dither. For continuous-tone sources, use a deterministic, bounded
-conversion into the 16-colour palette; prefer PiXEL's tested palette/dither
-method where its cost and code size fit, otherwise document and test the
-smaller Browser-specific mapping. Preserve clipping and never draw outside
-Browser content. Measure conversion on an 8088-speed emulator; QEMU validates
-bytes and control flow, not speed.
+The resource fetch (D8), header-first sizing (a box re-laid when its header
+arrives), the GIF part, the shared colour conversion (D7), the conventional
+and EMS tiers of the store (D2), the blit on paint and scroll.
 
-Reserve the declared image box before painting when dimensions are known.
-Unknown dimensions require a bounded format-header read before layout is
-published; malformed dimensions use the alt text and a small fixed placeholder.
-An image inside an anchor remains clickable across the complete image box.
-Re-decode on repaint rather than retaining a full bitmap until measurements
-justify a row cache. Any cache must be bounded and reconstructible, and must
-not violate the document/free-heap reserve.
+Verification: `tests/brcapacity.py --serve` serves the corpus; a row compares
+the ready copy's bytes against `pixelsim` plus the plans, on VGA, EGA, CGA
+and Hercules; malformed, cut short, interlaced, 1x1, local tables,
+transparency; navigation during a fetch; low memory leaves alt boxes and
+another app launchable.
 
-## Fixtures and acceptance
+### 4.3 The disk tier
 
-`tests/brcapacity.py --serve` exposes `/images.htm` and committed PiXEL samples under `/assets/`: indexed and animated GIF, PNG, JPEG, BMP and PCX. From QEMU/slirp, the index is `http://10.0.2.2:8097/`. Keep the corpus deterministic and add fixtures only for decoder features or failure boundaries.
+The cache file on a fixed or RAM volume (D2, D3); eviction when conventional
+memory is wanted back; the floppy-only machine keeps what fits.
 
-For each supported format, test known packed-4bpp rows on VGA, EGA, CGA and
-Hercules. Assert color output on VGA/EGA and the kernel's existing monochrome
-reduction on CGA/Hercules; use the same known pixels across adapters so the
-Browser conversion is proven adapter-independent. Also test clipping at all
-content edges, scroll away/back, repaint after window occlusion, resize,
-malformed/truncated data, duplicate URLs, cancellation during fetch and
-low-memory refusal while another app remains launchable. Record compressed
-bytes, peak conventional claim, decoder-work claim, row-buffer size and
-retained cache separately. Add 8088 timing only after byte/pixel correctness
-passes.
+Verification: QEMU with `TESTHD=` (a fixed disk) and without; MartyPC's
+XT-IDE for timing in the final pass.
 
-Before 1.7 implementation, close the 1.6 capacity gap in the Browser source/document/line representation and add exact decoder/graphics contracts to SPEC.md. This avoids building image offsets and fetches on a page store that cannot yet represent the requested page sizes.
+### 4.4 Animated GIF
 
-## Audit log — 2026-10-17
+The frame engine (D5, D6) on the worker, its 8bpp logical screen in the
+store's tiers, the dirty rect converted and blitted, pause and resume rules.
+A small GIF that cannot keep its ready copy may be re-decoded on exposure
+instead of showing alt (its cost is measured first).
 
-1. Read `docs/INDEX.md`, SPEC.md §§5.4, 39.4, 39.24, 71 and 94, the
-   Browser's receive/parser path, `apps/os88img.inc`, and PiXEL's decoder
-   contracts in `apps/pixel/pxpart.inc`, `pxrec.inc` and `pxgif.asm`.
-2. Confirmed colour and monochrome adapter selection is already automatic in
-   `OSAPI_GFX_BLIT4`. Therefore the Browser output contract is native packed
-   4bpp; adding an app-side Hercules/EGA probe or grayscale converter would
-   duplicate the kernel and create mismatched clipping/palette behavior.
-3. Confirmed `os88img.inc` is reusable code for BMP/PCX/PIX but its all-image
-   destination is too expensive for the Browser's repaint path and does not
-   implement the target web formats. PiXEL's mature GIF/JPEG/PNG parts cannot
-   be called directly because their state, package links and seven row
-   services belong to PiXEL. The next code step is a caller-owned row-decoder
-   interface, reusing shared format primitives rather than copying the parts.
-4. Confirmed the Browser's existing HTTP state machine writes into the page
-   source claim. Inline image fetches therefore need a separate bounded arena
-   and resource generation; reusing the page claim would break View Source,
-   Save Page As and form controls. The design uses one sequential resource
-   request, UI-owned memory growth, retained compressed ranges and row replay
-   for repaint. Reserve refusal degrades only that image to `alt` text.
-5. No kernel, driver, or Browser rendering behavior changed in this audit
-   pass. Baseline checks passed: `brcapacity.py --check`, `brtest.py`,
-   `br14.py`, `brtable.py`, and `brclick.py` in WSL/QEMU. These verify the
-   current Browser remains healthy; they do not claim image rendering works.
+Verification: frame by frame against `gif_anim` (as PiXEL's `pxanim` rows
+do); several animations on one page; scroll away and back; MartyPC frame
+rate in the final pass.
+
+### 4.5 JPEG and PNG
+
+`pxjpeg.asm` and `pxpng.asm` as Browser parts (D4), the link file, the
+services, the scale chosen to the box (JPEG's DCT scaling lands near the
+page's size for free).
+
+Verification: PiXEL's committed fixtures; the parts' bytes identical to
+PiXEL's own build where the link file does not reach; PiXEL's own rows still
+pass unchanged.
+
+### 4.6 The older formats
+
+D10: `pxextra.asm` as a Browser part (TIFF, ICO, IFF, MacPaint), and the
+Browser's own simple part (BMP, XBM, PCX, TGA). The media type guides, the
+signature decides (XBM has none: `#define name_width` is its text).
+
+Verification: PiXEL's generated corpus (`tools/pixcorpus.py`) for every
+format PiXEL reads, its bytes against `pixelsim`; XBM fixtures of its own,
+`pixelsim` grown a reader for it.
+
+### 4.7 Later
+
+Save Image As through the Download Manager; image maps; colours and
+backgrounds (`bgcolor`, `<font color>`) are their own plan.
+
+## 5. Measurements to take
+
+Resident bytes before and after each delivery (`tools/os88pkgsize.py`,
+the roadmap's size table); conventional, EMS and disk bytes per image; first
+pixels and whole-image time on MartyPC's 5150 for one GIF, one JPEG and one
+animated GIF; drawing calls per scroll step.
+
+## 6. Before code
+
+1. SPEC.md 71: the `<img>` layout rules, the resource fetch's ownership, the
+   store's tiers, the image part's interface, the claims table.
+2. The image store's carving: how a decode's scratch comes off its end
+   and goes back while images are being added (section 3).
+3. The link-file generator for a second host (`tools/pxlink.py`), and a
+   build check that the Browser's JPEG/PNG parts and PiXEL's come from one
+   source.

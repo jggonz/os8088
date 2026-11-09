@@ -5605,6 +5605,32 @@ emstest: $(BUILD)/emstest.img
 	@echo "emstest: build/emstest.img - EMS.DRV wanted, EMSTEST.O88 at the root"
 	@echo "              Run: python3 tests/ems.py, python3 tests/videms.py"
 
+# ETHEREMSTEST - ETHER.DRV (bit 4) AND EMS.DRV (bit 7) wanted on one 360KB
+# system disk: the Browser's EMS legs over a network card rather than
+# MartyPC's LPT cable, on 86Box (`OS88_EMU=86box python3 tests/brems.py
+# --net`, an XT with an NE1000 and a Lo-tech board, os88box86api's
+# `_ne1k_ems`). The cable fetches a 768 KiB page in tens of emulated minutes,
+# the card in seconds; the row asks "does it work", MartyPC keeps the timing
+$(BUILD)/etheremscfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/etheremscfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 7)).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/etherems360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS360) \
+            $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) \
+            $(BUILD)/etheremscfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/etheremscfg/system.cfg \
+		$(APPDATAFOLDER)
+
+.PHONY: etheremstest
+etheremstest: $(BUILD)/etherems360.img
+	@echo "etheremstest: build/etherems360.img - ETHER.DRV and EMS.DRV wanted"
+	@echo "              Run: OS88_EMU=86box python3 tests/brems.py --net"
+
 # CDROMTEST - SPEC.md 119.7's gate: the 1.44MB system disk with a SYSTEM.CFG
 # that wants CDROM.DRV (bit 8), and build/cdfix.iso, the disc tests/cdrom.py
 # puts in QEMU's secondary master. The ISO is tools/os88cdiso.py's, whose
@@ -7688,7 +7714,6 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
-                      apps/browser/assets/brdownload_icons.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
@@ -8813,23 +8838,43 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
+# The primary's CONSTANTS the rarely used UI (apps/browser/brcold.inc, SPEC.md
+# 71.24) reads: a part is assembled alone, and these are the primary's equs
+BRCOLDK := BN_ERR BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
+           BR_BMRECSZ BR_BMTITLE BR_BMURL BR_BMURLBASE BR_CTXGAP BR_CTXH \
+           BR_CTXH_COPY BR_CTXH_LINK BR_CTXPAD BR_HIDMAX BR_SUBSZ BR_URLBM \
+           FLD_FORM FLD_LEN FLD_NAME FLD_OFS FLD_TYPE FLD_VALUE SUB_AEND SUB_ASTART
+
 # The part's symbols are the browser's OWN tree's (-I $(BUILD)/): a BUILD=
 # tree read build/'s copy until 2026-11-04, a stale map's or none at all
 $(BUILD)/brdownload_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
-                           apps/browser/brcopyselection.inc tools/brdlsyms.py | $(BUILD)
+                           apps/browser/brdownload_engine.inc \
+                           apps/browser/brcopyselection.inc \
+                           apps/browser/brcold.inc \
+                           apps/browser/assets/brdownload_icons.inc \
+                           tools/brdlsyms.py | $(BUILD)
 	python3 tools/brdlsyms.py $(BUILD)/browser.map \
-	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
-	        -o $@
+	        apps/browser/brdownload_part.asm \
+	        apps/browser/brdownload_paint.inc apps/browser/brdownload_engine.inc \
+	        apps/browser/brcopyselection.inc apps/browser/brcold.inc \
+	        apps/browser/assets/brdownload_icons.inc \
+	        --also net_cls BN_SEND BR_CHUNK $(BRCOLDK) -o $@
 
 $(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols.inc \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
+                           apps/browser/brdownload_engine.inc \
                            apps/browser/brdownload_const.inc \
                            apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
+                           apps/browser/brcold.inc \
+                           apps/browser/assets/brdownload_icons.inc \
+                           drivers/net/netpkg.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ \
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I drivers/net/ -I $(BUILD)/ \
+	        --before "[map all $(@:.bin=.map)]" \
 	        -o $@ apps/browser/brdownload_part.asm
 	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
 

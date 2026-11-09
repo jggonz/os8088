@@ -876,8 +876,11 @@ def main():
                     rw("br_port"),
                     bytes(m.readseg(pseg, sy["br_path"], 96)).split(b"\0", 1)[0])
         base0 = url_base()
-        bm = sy["br_bmdata"]
-        bm_count = lambda: m.readseg(pseg, bm + 4, 1)[0]  # noqa: E731
+        # The bookmark file's image is in the URL store (SPEC.md 71.23), a
+        # claim of its own: [br_urlseg], at BR_URLBM = 1280
+        bm = 1280
+        bm_count = lambda: (m.readseg(rw("br_urlseg"), bm + 4, 1)[0]  # noqa: E731
+                            if rw("br_urlseg") else 0)
         sx, sy0 = rw("br_starx1") + 7, rw("br_stary1") + 5
         try:
             mo.click(sx, sy0)

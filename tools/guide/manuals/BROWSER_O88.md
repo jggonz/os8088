@@ -138,7 +138,9 @@ A link to something the Browser cannot show as a page, such as a text file, a
 picture or an archive, opens the **Downloads** window instead of a page. It
 asks where to save the file, then shows the file's name and address, how much
 has arrived, a progress bar, the speed and the time left. **Cancel** stops the
-transfer and removes the part that arrived. When the file is complete, **Close**
+transfer and removes the part that arrived. A file already saved under the
+same name is replaced only when the new one is complete, so a cancelled or
+failed transfer leaves it as it was. When the file is complete, **Close**
 closes the window and the file stays where you saved it. **File > Downloads**
 opens the window again.
 
@@ -216,8 +218,10 @@ The toolbar says **Saved**, or **Save failed**. With no page loaded it says
 
 ## Good to know
 
-- A long page is kept for as long as the machine has memory to spare, and
-  then cut off, with **Page truncated** in the toolbar. Past 400 links it says
+- A long page is kept for as long as the machine has memory to spare,
+  expanded memory (EMS) included when the machine has a board, and then cut
+  off, with **Page truncated** in the toolbar. So is a page whose connection
+  breaks, or that ends short of the length its server announced. Past 400 links it says
   **Links limited**. A table shows at most eight columns, and a page at most
   eight forms.
 - An address can be up to 159 characters long. A longer one answers **URL
