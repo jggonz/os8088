@@ -1332,7 +1332,18 @@ zoom 25-400 and the four adapter aspects, on a box with a nonzero origin). A pix
 is painted when its sample point is inside the shape (nonzero or even-odd);
 axis-aligned rectangles round the same way and a rectangle that would cover no
 sample point but has area is **widened to one pixel**, so a 0.5 pt table rule never
-vanishes. Beziers are flattened by de Casteljau subdivision until both second
+vanishes. A **rectangular clip** (`W`/`W*` of an axis-aligned rectangle, and a
+form's `/BBox`) keeps every pixel it TOUCHES, which is PDF's own rule for a clip,
+not its sample points. A widened shape's pixel can have its centre outside a clip
+that its centre line is inside. The case is a 1 pt stroke half a point inside a
+`/BBox`, which is PageDesk's own saved mark (20.5.5): with sample points two of its
+edges were lost at 50%. The price is that a shape LARGER than the clip can gain the
+touched pixel, up to one along each clipped side. A form's `/BBox` also gives back
+the rounding to qpx on its low sides (1 qpx), because there the stroke and the edge
+can round to the same pixel boundary at small scales (25-33% on VGA, Hercules' and
+CGA's y axis below about 80% and 120%). A rectangle with no area clips everything.
+A polygon clip stays on sample points. (square, verify-square; `pdr_annot`'s "an
+appearance stroking at its BBox edge".) Beziers are flattened by de Casteljau subdivision until both second
 differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
 curve), depth 6 (64 pieces) - the operation limit. Arithmetic is `pdmath`
 (16.16) for everything that is user space; a transform that overflows sets

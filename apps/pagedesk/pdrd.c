@@ -230,19 +230,26 @@ static void fill_path(pdw rule)
 static struct pdr_clip { pdi x0, y0, x1, y1; pdw e0, ne, rule, parent; } g_cl[PDR_NCLIP];
 static pdw g_cetop, g_ncl;          /* edges and entries used this pass (pass_begin) */
 
+/* rule: bit 0 even-odd; bit 1 (rect_clip_user) a form's /BBox, see below */
 static void clip_apply(pdw rule)
 {
-    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v;
+    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v, g = (pdi)(rule >> 1);
     pdw s, e, i, j, ne, ci, ok;
     if (g_nv < 2) { GS.cx1 = GS.cx0 - 1; return; }
     if (path_is_rect()) {
-        /* OUTWARD: every pixel the rectangle touches. A shape's own pixels are chosen by the
-         * sample-point rule, but a thin one is widened to one pixel (20.3.2), and that pixel
-         * can sit across the clip's edge while its centre line is inside it - a 1 pt stroke on
-         * a form's BBox edge. The sample-point clip dropped it: two edges of a saved /Square */
-        v = (pdi)(g_rqx0 >> 2); if (v > GS.cx0) GS.cx0 = v;
+        /* OUTWARD (20.3.2): every pixel the rectangle touches, PDF's own rule for a clip. A
+         * thin shape is widened to one pixel whose centre can lie outside a clip its centre
+         * line is inside - a 1 pt stroke half a point inside a form's BBox, which is how
+         * PageDesk saves a mark: the sample-point clip dropped two edges of a saved /Square.
+         * A shape LARGER than the clip can gain the touched pixel too (up to one a side).
+         * A BBox's low sides also give back the rounding to qpx (g = 1): the stroke and the
+         * edge can round to the same qpx, a pixel boundary, and the stroke's pixel is then
+         * the one below it (25-33% on VGA, the y axis of Hercules and CGA below ~80/120%).
+         * A rectangle with no area clips everything, as the sample-point rule did. */
+        if (g_rqx0 == g_rqx1 || g_rqy0 == g_rqy1) { GS.cx1 = GS.cx0 - 1; return; }
+        v = (pdi)((g_rqx0 - g) >> 2); if (v > GS.cx0) GS.cx0 = v;
         v = (pdi)(((g_rqx1 + 3) >> 2) - 1); if (v < GS.cx1) GS.cx1 = v;
-        v = (pdi)(g_rqy0 >> 2); if (v > GS.cy0) GS.cy0 = v;
+        v = (pdi)((g_rqy0 - g) >> 2); if (v > GS.cy0) GS.cy0 = v;
         v = (pdi)(((g_rqy1 + 3) >> 2) - 1); if (v < GS.cy1) GS.cy1 = v;
         return;
     }
@@ -272,7 +279,7 @@ static void clip_apply(pdw rule)
     if (!ok) return;
     ci = g_ncl++;
     g_cl[ci].e0 = g_cetop; g_cl[ci].ne = ne - g_cetop; g_cetop = ne;
-    g_cl[ci].rule = rule; g_cl[ci].parent = GS.clid;
+    g_cl[ci].rule = rule & 1; g_cl[ci].parent = GS.clid;
     GS.clid = (pdb)ci;
 }
 

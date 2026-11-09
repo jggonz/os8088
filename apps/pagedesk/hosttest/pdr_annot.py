@@ -546,25 +546,32 @@ check('the same page on Hercules (dithered 1bpp) renders', rc == 0 and inc(st) =
 # a Square whose saved appearance strokes ON the BBox's maximum edges (PageDesk's own Save As shape): all four
 # edges must be drawn at every zoom, a stroke whose centre is inside the clip draws
 print('-- an appearance stroking at its BBox edge')
-EXS = []
-EXS.append(strm('/Type /XObject /Subtype /Form /BBox [0 0 123.875 140.3125]', b'1 0.333 0.333 RG 1 w 0.5 0.5 122.875 139.3125 re S'))
-sqa = '<< /Type /Annot /Subtype /Square /F 4 /Rect [109 526.3125 232.875 666.625] /AP << /N 6 0 R >> >>'
-pdfs = writepdf('sqedge.pdf', page_pdf(b'', [sqa], EXS, mb='0 0 400 700'))
-for zm in (25, 33, 50, 60, 73, 87, 100, 125, 150, 200):
-    rc, im, st, err = render(pdfs, flags=1, H=700, zoom=zm)
-    if rc != 0: check('square edge zoom %d renders' % zm, False, err[:80]); continue
-    pi = pidx(im); ink = (pi == 12) | (pi == 4)
-    ys, xs = np.nonzero(ink)
-    if not len(ys): check('square edge zoom %d: drawn at all' % zm, False); continue
-    y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
-    bw = x1 - x0 + 1; bh = y1 - y0 + 1
-    cov = lambda a: float(a.mean())
-    t = cov(ink[y0:y0+1, x0:x1+1]) + cov(ink[y0+1:y0+2, x0:x1+1]) * 0   # row 0 of the box
-    edges = {'top': ink[y0:y0+2, x0:x1+1].any(axis=0).mean(), 'bottom': ink[y1-1:y1+1, x0:x1+1].any(axis=0).mean(),
-             'left': ink[y0:y1+1, x0:x0+2].any(axis=1).mean(), 'right': ink[y0:y1+1, x1-1:x1+1].any(axis=1).mean()}
-    exp_w = round(123.875 * zm / 100); exp_h = round(140.3125 * zm / 100)
-    check('square edge zoom %d%%: all four edges drawn %s, box %dx%d (want ~%dx%d)' % (zm, {k: round(v, 2) for k, v in edges.items()}, bw, bh, exp_w, exp_h),
-          min(edges.values()) > 0.95 and abs(bw - exp_w) <= 2 and abs(bh - exp_h) <= 2)
+# (Rect origin, BBox size, MediaBox, zooms): QEMU's saved mark (rows-report 2: 50% lost two edges), then three
+# marks where the stroke and the BBox's LOW edge round to the same qpx at 25/33% (verify-square: the outward
+# clip alone still lost the top or left edge; a BBox's low sides give back the rounding, pdrd.c clip_apply)
+def fxs(v): return ('%.4f' % v).rstrip('0').rstrip('.')
+for (rx, ry, bw0, bh0), mb, zooms in (((109, 526.3125, 123.875, 140.3125), '0 0 400 700', (25, 33, 50, 60, 73, 87, 100, 125, 150, 200)),
+                                      ((288.875, 553.4375, 107.875, 134.875), '0 0 612 792', (25,)),
+                                      ((51.625, 595.4375, 169.875, 121.5), '0 0 612 792', (25,)),
+                                      ((49.6875, 559.75, 74.9375, 29.5625), '0 0 612 792', (33,))):
+    EXS = [strm('/Type /XObject /Subtype /Form /BBox [0 0 %s %s]' % (fxs(bw0), fxs(bh0)),
+                ('1 0.333 0.333 RG 1 w 0.5 0.5 %s %s re S' % (fxs(bw0 - 1), fxs(bh0 - 1))).encode())]
+    sqa = '<< /Type /Annot /Subtype /Square /F 4 /Rect [%s %s %s %s] /AP << /N 6 0 R >> >>' % (fxs(rx), fxs(ry), fxs(rx + bw0), fxs(ry + bh0))
+    pdfs = writepdf('sqedge.pdf', page_pdf(b'', [sqa], EXS, mb=mb))
+    for zm in zooms:
+        nm = 'square edge %s at %d%%' % (fxs(rx), zm)
+        rc, im, st, err = render(pdfs, flags=1, H=800, zoom=zm)
+        if rc != 0: check(nm + ' renders', False, err[:80]); continue
+        pi = pidx(im); ink = (pi == 12) | (pi == 4)
+        ys, xs = np.nonzero(ink)
+        if not len(ys): check(nm + ': drawn at all', False); continue
+        y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+        bw = x1 - x0 + 1; bh = y1 - y0 + 1
+        edges = {'top': ink[y0:y0+2, x0:x1+1].any(axis=0).mean(), 'bottom': ink[y1-1:y1+1, x0:x1+1].any(axis=0).mean(),
+                 'left': ink[y0:y1+1, x0:x0+2].any(axis=1).mean(), 'right': ink[y0:y1+1, x1-1:x1+1].any(axis=1).mean()}
+        exp_w = round(bw0 * zm / 100); exp_h = round(bh0 * zm / 100)
+        check('%s: all four edges drawn %s, box %dx%d (want ~%dx%d)' % (nm, {k: round(float(v), 2) for k, v in edges.items()}, bw, bh, exp_w, exp_h),
+              min(edges.values()) > 0.95 and abs(bw - exp_w) <= 2 and abs(bh - exp_h) <= 2)
 
 print('pdr_annot: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAIL ' + f)
