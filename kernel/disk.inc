@@ -1971,14 +1971,10 @@ dsk_xfer:
     cmp al, [dsk_pmhd]          ; most DSK_PMRUN sectors a call, IRQ0 masked
     jb .nopm                    ; for it, so no timer hook lands inside the
     cmp bp, DSK_PMRUN           ; card's copy wait - where its sound goes
-    jbe .pmrun                  ; silent - and the hook is held off a few ms
+    jbe .nopm                   ; silent - and the hook is held off a few ms
     mov bp, DSK_PMRUN           ; at most. AX is the run the track allowed,
-.pmrun:                         ; spent by now (the head is popped over it
-    in al, 0x21                 ; below). Taken off again after the int 13h
-    or al, 1
-    out 0x21, al
-.nopm:
-%endif
+.nopm:                          ; spent by now (the head is popped over it
+%endif                          ; below). The mask is at .attempt, per call
     mov [dsk_run], bp
 %ifdef DISK_COUNTERS
     add [dsk_dbg_sec], bp
@@ -2032,6 +2028,17 @@ dsk_xfer:
                                 ; volume's real spt goes in before every call,
                                 ; because the table is one and the mounted
                                 ; volume is not
+%ifdef DSK_PMHD
+    cmp dl, [dsk_pmhd]          ; ...and IRQ0 masked on the card's disk for
+    jb .nopmm                   ; EVERY call, a retry's as well (SPEC.md
+    pushf                       ; 18.91.7): DL is the row's drive here on
+    cli                         ; every pass, and the unmask below runs after
+    in al, 0x21                 ; each one
+    or al, 1
+    out 0x21, al
+    popf
+.nopmm:
+%endif
     mov ax, [dsk_run]           ; AL = the run (<= 128, so AH is 0)...
     mov ah, [dsk_op]            ; ...AH = 02 read / 03 write
     CURXFER_ON                   ; **THE ARROW MAY MOVE FROM HERE TO THE `iret`**
@@ -2059,6 +2066,7 @@ dsk_xfer:
     mov al, [dsk_unit]          ; (SPEC.md 18.91.7). AL only: a failure's
     cmp al, [dsk_pmhd]          ; status is AH, and a success's AL is never
     jb .nopu                    ; read (.ok below says why)
+    cli                         ; (the popf below gives IF back)
     in al, 0x21
     and al, 0xFE
     out 0x21, al
@@ -2577,8 +2585,10 @@ dsk_xfer:
     nop                         ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
-                                ; (t_hotpar.py). DSK_PMHD's 40 bytes in
-                                ; dsk_xfer are even, so it stays there too
+                                ; (t_hotpar.py). DSK_PMHD's bytes in dsk_xfer
+%ifdef DSK_PMHD                 ; are 51 since its mask moved to .attempt -
+    nop                         ; odd, the `jmp .attempt` relaxing to near
+%endif                          ; among them - so they bring a second
 
 
 

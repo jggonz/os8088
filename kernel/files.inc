@@ -7349,6 +7349,11 @@ fm_paste_res:
     mov [si+6], dx
 .nopix:
     pop si
+%ifndef KERN_SMALL
+    push word [fm_vinst]        ; THIS window acts for the re-list: kern_big's
+    mov [fm_vinst], si          ; fmv_owner reads it, and a grow of another
+%endif                          ; instance's claim is refused (a drop acts as
+                                ; the SOURCE, and the destination is owed)
     call fmv_hload              ; resets FS_SEL/FS_SCRL, which is honest:
     mov byte [di+FS_DIRTY], 0   ; every index into the old listing is
                                 ; meaningless now. The refresh debt (22.8)
@@ -7357,6 +7362,9 @@ fm_paste_res:
                                 ; window's pixels where its cache now is.
                                 ; NO inner bank: fmv_load pushes AX, BX, CX,
                                 ; DX, SI and DI and pops all six
+%ifndef KERN_SMALL
+    pop word [fm_vinst]         ; ...and the acting window back
+%endif
 .next:
     call fmv_inext
     jnc .scan

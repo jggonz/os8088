@@ -3471,11 +3471,14 @@ dskw_read_at_x:
     mov al, [disk_drive]
     cmp al, [dwr_c+RSQ_VOL]
     jne .dwname
+    mov ax, [dwr_off+2]         ; (an offset whose index does not fit a word
+    cmp ax, [dwr_clb]           ; would overflow the `div` - INT 0, and none
+    jae .dwname                 ; is hooked: past the end, the name says so)
     call dwr_cidx               ; HOT, and FORWARD (18.4.8.2): the links from
                                 ; +6 are the offset's cluster index less +4's,
                                 ; plus one - ONE when the caller left +12
     sub ax, [dwr_c+RSQ_IDX]     ; where the last call put it, more when it
-    js .dwname                  ; moved it on. Back past +6: from the name, as
+    jc .dwname                  ; moved it on. Back past +6: from the name, as
     inc ax                      ; a cold cursor is (a misaligned offset is
     xchg di, ax                 ; refused below either way). DI = the links
     mov bx, [dwr_c+RSQ_CUR]

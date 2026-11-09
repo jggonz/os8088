@@ -1388,14 +1388,17 @@ mou_hotplug:
                                 ; back up on every port FIRST...
     call mou_lockon             ; ...and only then retire the ports the mouse
                                 ; did not speak on.
+.kbmwait:
     call task_yield             ; THE KEYBOARD MOUSE'S POINTER HALF GOES BACK
-.kbmdrop:                       ; (SPEC.md 9.6.7) - but first ONE ROUND of the
-    call COLD_SEG:kbm_dropf     ; round-robin (SPEC.md 8): OSAPI_MOUSE is worker-
-                                ; legal (20.6), so a worker can be inside the
-                                ; image, preempted, as [mou_ptr] lands - and a
-                                ; yield from task 0 runs every ready task once
-                                ; before task 0 again, which is the slice it
-                                ; leaves on (BOOT3-PLAN R16). A machine that
+    cmp byte [kbm_in], 0        ; (SPEC.md 9.6.7) - but first EVERY task out
+    jne .kbmwait                ; of it: OSAPI_MOUSE is worker-legal (20.6),
+.kbmdrop:                       ; so a worker can be inside the image,
+    call COLD_SEG:kbm_dropf     ; preempted, as [mou_ptr] lands, and one round
+                                ; of the round-robin (SPEC.md 8) may give it
+                                ; only the rest of a tick - so kbm_poll0
+                                ; counts who is in, and task 0 yields until
+                                ; none is. Its path makes no blocking call, so
+                                ; the wait is a slice or two. A machine that
                                 ; never adopted pays the yield and an empty
                                 ; drop, once. `.kbmdrop` is tests/kbmadopt.py's
                                 ; red arm, and its keep for the two rows that
@@ -1406,6 +1409,11 @@ mou_hotplug:
                                 ; BOTH kernels since kernel size pass 18: its
                                 ; -1 evens mou_lockon's -5 on kern_small, as
                                 ; it evened mou_claim's move on kern_big in 17)
+kbm_in      db 0                ; tasks inside the pointer half's image now
+                                ; (kbm_poll0's count) - HERE, never executed,
+                                ; as the PARITY PAD the wait above's 7 bytes
+                                ; need: mou_p2_isr and kbm_isr keep the parity
+                                ; they were measured at (t_hotpar.py)
 
 ; -----------------------------------------------------------------------------
 ; mouse_unhook - silence every UART we programmed (IER=0), mask its IRQ again,
@@ -3229,7 +3237,8 @@ kbm_poll:
     xor al, al                  ; - three bytes where an immediate store is five,
 kbm_poll0:                      ; and kbm_pollm's own bank is the same push
     mov [kbm_eat], al           ; (kernel size pass 18, -2)
-    mov ah, 0x01
+    inc byte [kbm_in]           ; IN the image from here (mou_hotplug's drop
+    mov ah, 0x01                ; waits for 0: one instruction, so atomic)
     int 0x16
     jz .p5                      ; nothing waiting
     call far [KBFP + KBM_E_KEY] ; the pointer half's kbm_key (SPEC.md 9.6.7)
@@ -3246,6 +3255,7 @@ kbm_poll0:                      ; and kbm_pollm's own bank is the same push
                                 ; BIOS that delivers keypad 5 the call above
                                 ; has already claimed it and cleared the flag
                                 ; (SPEC.md 9.6.4), and this finds nothing
+    dec byte [kbm_in]           ; ...and out of it
     pop ax                      ; ...and a modal loop is exactly where the
     jmp kbd_ovspend             ; buffer overruns unheard otherwise: ui_task's
                                 ; ladder is not running (SPEC.md 9.8). A TAIL

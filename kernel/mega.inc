@@ -13688,16 +13688,27 @@ mega_seglow:
     jb .ok                          ; conventional already
     or bl, 0x80
     mov ax, es
-    call mega_rgnblk                ; SI = its pool entry, DX:AX its base,
-    jc .not                         ; CX its KB
+    call mega_rgnblk                ; CX = its KB (its entry and base are
+    jc .not                         ; read again under the lock, below)
     and bx, 0x1F                    ; BX = the slot: the claim's owner
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov [bp-4], si                  ; the pool entry
     mov [bp-6], cx                  ; its KB
     mov ax, cx
     call COLD_SEG:mmf_mem_claim_hi  ; DX = the claim's data selector
     jc .room
+    inc byte [sch_lock]             ; THE BLOCK STAYS PUT from here: the
+    push dx                         ; claim may have let a task pack the pool
+    push bx                         ; (mx_canmove: a region moves), so its
+    or bl, 0x80                     ; entry and base are read again under the
+    mov ax, [bp+0]                  ; lock (mega_claimhf's order, 14.37)
+    call mega_rgnblk                ; SI = its pool entry, DX:AX its base,
+    pop bx                          ; CX its KB
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    pop dx                          ; DX = the claim (pop and mov keep CF)
+    jc .back
+    cmp cx, [bp-6]
+    jne .back                       ; (not the block the claim was sized for)
+    mov [bp-4], si                  ; the pool entry
     mov ax, dx
     push dx
     call mega_selbase               ; DX:AX = its base
@@ -13708,6 +13719,7 @@ mega_seglow:
     cmp byte [mega_xdst+2], MEGA_XPOOL >> 16
     jb .got                         ; below 1MB: the answer
 .back:
+    dec byte [sch_lock]
     call COLD_SEG:mmf_mem_free      ; (a base it cannot use: back - BX the
 .room:                              ; slot, DX the claim)
     mov word [bp+16], 1             ; no conventional room
@@ -13735,6 +13747,7 @@ mega_seglow:
 .rx:                                ; (ES = the tables' tail: mega_mselset's)
     mov si, [bp-4]
     mov word [es:si+MX_KB], 0       ; ...and the pool block
+    dec byte [sch_lock]
 .ok:
     pop ax
     pop ax
@@ -13863,20 +13876,27 @@ mega_drvlow:
     mov bp, dx                      ; BP = the driver's selector
     mov ax, dx
     mov bl, MX_KDRV
-    call mega_rgnblk                ; SI = its entry, DX:AX its base, CX KB
-    jc .no
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    push si
+    call mega_rgnblk                ; CX = its KB (the base is read again
+    jc .no                          ; under the lock, below)
     push cx
     mov ax, cx
     mov bx, MEM_K_DRV
     call COLD_SEG:mmf_mem_claim     ; DX = the claim's (fresh) data selector:
-    pop cx                          ; conventional (no kernel cache's tag),
-    pop si                          ; bottom-up first fit as drv_load's was
-    jc .no
-    mov di, dx                      ; DI = the claim
-    mov ax, dx
+    pop bx                          ; conventional (no kernel cache's tag),
+    jc .no                          ; bottom-up first fit as drv_load's was
+    mov di, dx                      ; DI = the claim, BX its KB
+    inc byte [sch_lock]             ; THE BLOCK STAYS PUT from here: a pool
+    mov ax, bp                      ; block moves (mx_canmove), and the claim
+    push bx                         ; may have let a task pack the pool - so
+    mov bl, MX_KDRV                 ; its entry and base are read again under
+    call mega_rgnblk                ; the lock (mega_claimhf's order, 14.37):
+    pop bx                          ; SI = its entry, DX:AX its base, CX KB
+    jc .back
+    cmp cx, bx
+    jne .back                       ; (not the block the claim was sized for)
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    mov ax, di
     call mega_selbase               ; DX:AX = its base
     mov [mega_xdst], ax
     mov [mega_xdst+2], dx
@@ -13892,10 +13912,12 @@ mega_drvlow:
     mov si, cx
     mov word [es:si+MX_KB], 0       ; ...and the pool block free
     pop es
+    dec byte [sch_lock]
     popa
     clc
     ret
 .back:
+    dec byte [sch_lock]
     mov dx, di
     mov bx, MEM_K_DRV
     call COLD_SEG:mmf_mem_free

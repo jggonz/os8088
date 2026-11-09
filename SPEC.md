@@ -2353,15 +2353,19 @@ test (§9.6.1.1).
 **The drop belongs to the first pointer.** `[mou_ptr]` is set in interrupt
 or worker context (§9.6.6), where nothing may free a claim, so the drop is
 `mou_hotplug`'s `.have` arm, which runs once, on the UI task, on the first
-pass after any backend settles: one `task_yield`, then `call
-COLD_SEG:kbm_dropf`, a 6-byte `.cold` door to `mod_drop`. **The yield is
-R16's answer**: `OSAPI_MOUSE` is on §20.6's worker-legal list (Cyclone's
+pass after any backend settles: `task_yield` until `[kbm_in]` is 0, then
+`call COLD_SEG:kbm_dropf`, a 6-byte `.cold` door to `mod_drop`. **The wait
+is R16's answer**: `OSAPI_MOUSE` is on §20.6's worker-legal list (Cyclone's
 worker polls it every frame, §67.11.3), so a worker can be inside the image,
-preempted, at the instant `[mou_ptr]` lands; a yield from task 0 runs every
+preempted, at the instant `[mou_ptr]` lands. A yield from task 0 runs every
 ready task once before task 0 again (§8's round-robin scans `cur+1` upward
-and wraps), and nothing on the image's path blocks, so that slice is the one
-it leaves on. `mod_free_row` disarms before it frees, and an empty row is its
-no-op, so a machine that never adopted pays one yield and one call, once.
+and wraps), but a slice entered by a voluntary yield is only what is left of
+the tick, so ONE round does not prove the worker left: `kbm_poll0` counts
+the tasks inside it (`inc`/`dec byte [kbm_in]` around the two far calls,
+one instruction each, so atomic), and nothing on the image's path blocks,
+so the wait is a slice or two. `mod_free_row` disarms before it frees, and
+an empty row is its no-op, so a machine that never adopted pays one yield
+and one call, once.
 **Nothing re-adopts**: unplugging the mouse does not bring the keyboard mouse
 back (§9.6.1.1).
 
@@ -16660,7 +16664,7 @@ round). Split on WHO runs each part:
 
 | half | what | where | why there |
 |---|---|---|---|
-| resident | `kbm_isr`/`kbm_i15` and `KBM_SCAN`, `kbm_shf`, `mou_clamp`, `kbm_pollm`/`kbm_poll`/`kbm_poll0`, `mou_evfill`, the state (`kbm_p5`, `kbm_step`/`kbm_lastk`, `kbm_last`, `kbm_btick`, `kbm_slast`, `kbm_eat`, `kbm_ev`, `kbm_old9`, `kbd_*`) | `.text` | IRQ1's handler is every machine's (it wakes the UI task and guards the BIOS buffer, §9.8); the modal polls eat the keys a menu, drag or grow would leave wedged on every machine; `kbm_ev` must be DS:SI for `mou_evfill`; and a kern_mega code half above 1MB cannot be written |
+| resident | `kbm_isr`/`kbm_i15` and `KBM_SCAN`, `kbm_shf`, `mou_clamp`, `kbm_pollm`/`kbm_poll`/`kbm_poll0`, `mou_evfill`, the state (`kbm_p5`, `kbm_step`/`kbm_lastk`, `kbm_last`, `kbm_btick`, `kbm_slast`, `kbm_eat`, `kbm_in`, `kbm_ev`, `kbm_old9`, `kbd_*`) | `.text` | IRQ1's handler is every machine's (it wakes the UI task and guards the BIOS buffer, §9.8); the modal polls eat the keys a menu, drag or grow would leave wedged on every machine; `kbm_ev` must be DS:SI for `mou_evfill`; and a kern_mega code half above 1MB cannot be written |
 | pointer | `kbm_tab`, `kbm_key`, `kbm_btn`, `kbm_rclick`, `kbm_move`, `kbm_p5spend`, `kbm_ui`, `kbm_post`, and `kbmi_shf` (its own copy of `kbm_shf`) | `.boot3m`, adopted into a `MEM_K_MOD` claim (§2.8.8) | reached only in task context, from `ui_task` and `kbm_poll0` - never from an ISR |
 
 The pointer half is reached through three far slots, `KBFP` (`KBM_E_KEY`,
@@ -16668,7 +16672,8 @@ The pointer half is reached through three far slots, `KBFP` (`KBM_E_KEY`,
 slot's `mod_gone` (CF = 1) is "not mine" and every key passes - which is what
 a machine with a mouse, and a machine whose half was dropped, both need
 (§2.8.8). The adoption is `kbm_adopt` at `kmain_o`'s end, on `[mou_ptr]` =
-0; the drop is `mou_hotplug`'s `.have`, after one `task_yield` (§2.8.8, R16).
+0; the drop is `mou_hotplug`'s `.have`, after `task_yield` until no task is
+inside the image (`[kbm_in]`, §2.8.8, R16).
 A machine whose serial mouse is not touched by the end of the boot holds the
 claim until its first packet, a few seconds.
 
@@ -38352,7 +38357,10 @@ So the transfer loop reads such a disk that way:
   cost.
 - **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, cuts the run to
   **`DSK_PMRUN` = 8** sectors at most and sets IRQ0's bit in the 8259's mask
-  before the int 13h, clearing it after. The card's disks follow the PC's
+  before EVERY int 13h of the transfer - at `.attempt`, so a retry and the
+  one-sector fallback are masked as the first call is - clearing it after
+  each, both read-modify-writes of port 21h inside `pushf`/`cli` ...
+  `popf`. The controller reset between retries is left open. The card's disks follow the PC's
   own (an ST-225 is 80h, the card's first image 81h), so a real disk below
   them keeps its runs. An IRQ0 that falls in the masked call waits in the
   IRR: eight sectors are ~12-13 ms on the field machine, just under Video
@@ -38377,7 +38385,7 @@ So the transfer loop reads such a disk that way:
   78-82 KB/s - so EIGHT is the next try. Its own rate is VIDDISK R's to
   measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
   of it until then.
-- Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
+- Resident: **52 bytes of `.cold`** in `dsk_xfer` (the `jmp .attempt` it relaxes to near and its parity pad among them) and the byte in `.text`.
   18.95.12's no-fill test is 10 more of `.cold`.
   The probe is window-half code and costs no resident byte - but the window
   half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
@@ -38945,8 +38953,12 @@ cluster index of `+12`'s offset** (`RSQ_IDX`), written by every call that
 read. On a valid cursor, `dwr_stat` walks **`(+12 / cluster) - [+4] + 1`
 links from `+6`**: one when the caller left `+12` where the last call put it
 (the stream, as before), more when the caller moved it FORWARD. Moved BACK
-past `+6`, it goes from the name, as a cold cursor does. A misaligned `+12`
-is refused as before. 34 bytes of `.cold`.
+past `+6` - the subtraction's BORROW, not its sign: both indexes are
+unsigned, and a FAT16 file passes 32,768 clusters - it goes from the name,
+as a cold cursor does, and so does a `+12` whose cluster index does not fit
+a word, which is past the end of any FAT file and would overflow the `div`
+(INT 0, which nothing hooks): the name's end test answers it 0 bytes. A
+misaligned `+12` is refused as before. 43 bytes of `.cold`.
 
 What that gives a caller, with no new slot and nothing changed for one that
 zeroes its cursor as before:
@@ -55284,7 +55296,13 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
 - **A grow refused keeps the listing that fit** (§50.3: memory is a
   performance input). `mem_regrow` does not call the relocation proc
   (§66.7), so `fmv_load` writes `FS_VSEG` itself and its re-list's `fmv_fit`
-  republishes the `[fm_vseg]` mirror. (The capacity, the need and the resize
+  republishes the `[fm_vseg]` mirror. The grow names its claim's OWNER, and
+  `fmv_owner` answers it on `kern_big` from `[fm_vinst]`, the acting window,
+  where `mem_regrow` refuses another instance's claim - so the one pass that
+  re-lists a window that is NOT acting, `fm_paste_res`'s coherence loop (a
+  drop acts as the SOURCE and re-lists the destination), publishes each
+  window it re-lists as `[fm_vinst]` for that call and puts the acting one
+  back. (The capacity, the need and the resize
   were `fmv_cap`, `fmv_need` and `fmv_rsz` until kernel size pass 18 wrote
   each at its one call in `fmv_load`.)
 

@@ -340,8 +340,8 @@ had added.
   "big": {
     "b2res": 3584,
     "b3m": 452,
-    "b3ram": 6088,
-    "b3res": 892,
+    "b3ram": 6090,
+    "b3res": 860,
     "blift": 448,
     "blobseg": 6560,
     "boot2": 3362,
@@ -350,8 +350,8 @@ had added.
     "bss": 5378,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37788,
-    "coldpara": 2362,
+    "cold": 37821,
+    "coldpara": 2364,
     "colds": 3726,
     "fatpara": 288,
     "fats": 2944,
@@ -366,19 +366,19 @@ had added.
     "minramkb": 128,
     "ovl": 3160,
     "stk0": 512,
-    "text": 39962,
+    "text": 39978,
     "toppara": 2880,
     "vga": 2030,
     "vgabuf": 336,
     "vgabufpara": 21,
     "vgars": 3599,
-    "vgas": 6088
+    "vgas": 6090
   },
   "emu": {
     "b2res": 3584,
     "b3m": 452,
-    "b3ram": 6120,
-    "b3res": 796,
+    "b3ram": 6122,
+    "b3res": 764,
     "blift": 448,
     "blobseg": 6592,
     "boot2": 3377,
@@ -387,8 +387,8 @@ had added.
     "bss": 5378,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37788,
-    "coldpara": 2362,
+    "cold": 37821,
+    "coldpara": 2364,
     "colds": 3758,
     "fatpara": 288,
     "fats": 2976,
@@ -403,13 +403,13 @@ had added.
     "minramkb": 128,
     "ovl": 3160,
     "stk0": 512,
-    "text": 40208,
+    "text": 40224,
     "toppara": 2880,
     "vga": 2030,
     "vgabuf": 336,
     "vgabufpara": 21,
     "vgars": 3631,
-    "vgas": 6120
+    "vgas": 6122
   },
   "mega": {
     "b2res": 3584,
@@ -424,7 +424,7 @@ had added.
     "bss": 5416,
     "budget": 68096,
     "codemax": 65536,
-    "cold": 48562,
+    "cold": 48583,
     "coldpara": 3040,
     "colds": 3968,
     "fatpara": 288,
@@ -437,7 +437,7 @@ had added.
     "lowbss": 5600,
     "lowpara": 384,
     "lows": 3584,
-    "mega": 24656,
+    "mega": 24704,
     "megapara": 1664,
     "megas": 7008,
     "minramkb": 640,
@@ -445,7 +445,7 @@ had added.
     "mscr": 1510,
     "ovl": 3156,
     "stk0": 512,
-    "text": 45714,
+    "text": 45730,
     "toppara": 0,
     "vga": 0,
     "vgabuf": 336,
@@ -482,7 +482,7 @@ had added.
     "minramkb": 128,
     "ovl": 1474,
     "stk0": 512,
-    "text": 29665,
+    "text": 29681,
     "toppara": 1536,
     "vga": 0,
     "vgabuf": 0,
@@ -915,26 +915,26 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,752 | 38.3% |
+| the file system, end to end | 29,785 | 38.3% |
 | the window system and its furniture | 22,461 | 28.9% |
 | drawing: adapters, primitives, glyphs, icons | 10,602 | 13.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,370 | 9.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,386 | 9.5% |
 | the kernel proper: API table, heap, scheduler, events | 6,985 | 9.0% |
 | the Control Panel | 292 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 288 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **77,750** | |
+| **total** | **77,799** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 1,164 | 7,850 | **9,014** | 533 | — | — |
+| `files.inc` — the Disk window (§22) | 1,164 | 7,862 | **9,026** | 533 | — | — |
 | `wm.inc` — the window manager (§11) | 8,591 | 154 | **8,745** | 1,144 | — | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 407 | 6,846 | **7,253** | 420 | — | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,059 | **5,083** | 180 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 407 | 6,858 | **7,265** | 420 | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,068 | **5,092** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,513 | 1,406 | **4,919** | 38 | 526 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,322 | 6 | **3,328** | 111 | 824 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,338 | 6 | **3,344** | 111 | 824 | — |
 | `memory.inc` — the claim heap (§50) | 280 | 2,685 | **2,965** | 26 | 324 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,879 | 9 | **2,888** | 54 | — | — |
 | `assoc.inc` — file type associations (§54) | 504 | 2,029 | **2,533** | 31 | — | — |
@@ -991,7 +991,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | — | — | **0** | — | — | 3 |
-| **total** | **39,962** | **37,788** | **77,750** | **5,378** | **5,358** | **3,362** |
+| **total** | **39,978** | **37,821** | **77,799** | **5,378** | **5,358** | **3,362** |
 <!-- END generated table -->
 
 ### Reading it
