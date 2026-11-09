@@ -308,10 +308,13 @@ THEMES = (
     # should move when it is compiled in. stkdiag.inc
     # (docs/plans/completed/STACK-SLOTS-PLAN.md 10) is here for both halves of that: what it
     # measures is sch_isr's own chain to the ROM, and `make STKDIAG=1` is the
-    # only build that has it.
+    # only build that has it. boot3.inc (SPEC.md 2.9.15) is here because it is
+    # kernel.asm's own boot ladder moved into `.boot3`: what it leaves in the
+    # resident sections is the frame round bodies kernel.asm used to hold, and
+    # the two trade bytes with each other on every BOOT3 change.
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
-      "bootprof.inc", "stkdiag.inc")),
+      "bootprof.inc", "stkdiag.inc", "boot3.inc")),
     ("the Control Panel", ("ctrl.inc",)),
     # mega.inc is 0 in every variant but kern_mega's, where it is the whole of
     # what that kernel adds (megados.inc, the DOS park, is %include'd from it
@@ -501,7 +504,7 @@ def measure_modules(nasm_args=()):
             # one is measuring something else.
             return None, ("THE MARKERS CHANGED THE BINARY - refusing to "
                           "report (nothing was written to kernel.asm)")
-        per = {}
+        per, seen = {}, set()
         for line in r_inst.stderr.splitlines():
             m = re.search(r"\bkm: (\d+) (.*?)(?: \[|$)", line)
             if not m:
@@ -510,9 +513,15 @@ def measure_modules(nasm_args=()):
             for pair in m.group(2).split():
                 k, _, v = pair.partition("=")
                 vals[k] = int(v)
-            per[mods[int(m.group(1))]] = vals
-        if len(per) != len(mods):
-            return None, f"{len(per)} of {len(mods)} modules reported"
+            # A file %included more than once (boot3.inc: BOOT3's head and
+            # its declarations, BOOT3-PLAN wave 1) is ONE row: its marker
+            # pairs are summed, so the table still adds up to the sections
+            seen.add(int(m.group(1)))
+            row = per.setdefault(mods[int(m.group(1))], {})
+            for kk, vv in vals.items():
+                row[kk] = row.get(kk, 0) + vv
+        if len(seen) != len(mods):
+            return None, f"{len(seen)} of {len(mods)} includes reported"
         return per, None
     finally:
         for f in os.listdir(tmp):
