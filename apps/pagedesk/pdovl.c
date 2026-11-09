@@ -79,6 +79,10 @@ static const char **ovl_card_lines(int which)
     os88_strcpy(pdu_iline[k], pdu_rdonly ? "Access:   read-only (signed)"
                                          : "Access:   annotations allowed", 40);
     pdu_hinfo[k] = pdu_iline[k]; k++;
+    if (pdu_xopen.flags & PDO_ACROFORM) {       /* prefs: PD-26 */
+        os88_strcpy(pdu_iline[k], "Forms:    as printed, not fillable", 40);
+        pdu_hinfo[k] = pdu_iline[k]; k++;
+    }
     os88_strcpy(pdu_iline[k], "Page:     ", 40);
     pdu_cat(pdu_iline[k], pdu_inc ? "incomplete rendering" : "fully drawn",
             40);
@@ -193,4 +197,5 @@ static int ovl_card_more(int which)
 #include "pdovlnav.c"             /* nav: the outline (20.10.4) */
 #include "pdovlnotes.c"         /* notes: the cards, the popover, the inspector */
 #include "pdutool.c"            /* the annotation tools (edit) */
+#include "pdovlpref.c"          /* prefs: the Preferences dialog (20.18) */
 #include "pdovlpage.c"          /* pages: the page-operation commands and prompts */

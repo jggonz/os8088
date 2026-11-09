@@ -15,7 +15,7 @@ static const char *pdu_errtext(int code)
     case PDE_TRUNC:    return "The file is truncated.";
     case PDE_CYCLE:    return "The file's page or resource tree loops.";
     case PDE_DEPTH:    return "The file nests objects deeper than PageDesk reads.";
-    case PDE_FLATE:    return "Compressed (Flate) content is not in the XT profile.";
+    case PDE_FLATE:    return "No Flate cache (low RAM, or set Off).";   /* prefs: D17's two causes */
     case PDE_FILTER:   return "It uses a stream filter PageDesk cannot decode.";
     case PDE_FONT:     return "It uses a font PageDesk cannot draw.";
     case PDE_GRAPHICS: return "It uses graphics outside the XT profile.";

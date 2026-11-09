@@ -3934,6 +3934,99 @@ re-armed stack. Not run: kern_mega and kern_small, MartyPC (the no-preemption
 window), Hercules and EGA. The final pass re-takes both water marks with
 `tools/stkwater.py` / `tests/stk0water.py` on every adapter.
 
+### 20.18 Preferences and the forms baseline (`prefs`, wave 3, PD-23, PD-26)
+
+`pdupref.c` (resident: the settings, their load and their application),
+`pdovlpref.c` (the dialog's body, an overlay tenant included from `pdovl.c`).
+
+#### 20.18.1 The settings
+
+One file, `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched
+from (`pdu_home.vol`, SPEC.md 19.9: found by walking, never assumed;
+`os88_file_goto_q_mark` there and back, so the instance is left where it was).
+Not the volume the instance stands on: a load or a save runs while it stands
+in the open document's folder (`pdu_at_doc`), which may be another disk. Ten bytes:
+
+| offset | meaning |
+|---|---|
+| 0-3 | `PDCF` |
+| 4 | format version, 1 |
+| 5 | **default view** of a newly opened document: 0 Fit width, 1 Fit page, 2 100% |
+| 6 | **panels at the FULL layout**: bit 0 Pages panel, bit 1 Notes panel (0-3) |
+| 7 | **panels at the MID layout**, same bits |
+| 8 | **monochrome mark style** (17.4), passed as `pdxb_render.mono_mark`: 0 underline and dotted frame, 1 underline, 2 frame, 3 hatch |
+| 9 | **Flate cache**: 0 Auto, 1 Off (D17's low-memory switch) |
+
+COMPACT has no docked panels (17.1), so it has no setting. A file that is
+missing, short, long, of another version, or holds a value out of range is
+IGNORED AS A WHOLE and every default applies (view 0, FULL 3, MID 0, marks 0,
+Flate 0): a bad file never half-applies and is never an error. The defaults
+are what PageDesk did before the dialog existed.
+
+**Read** once, by the first document open's first slice (before its claims,
+which the Flate rule needs) or by the dialog's first paint, whichever comes
+first: the reading is an overlay body, and a launch to the empty view does not
+load the overlay for it, so the empty view shows the defaults (both panels at
+FULL) until the first open. **Applied** at every document open (the view; the
+panels, by the layout that follows; the Flate slot rule of 20.13.3, where Off
+takes the same path as "too little RAM": no slots, `PDXI_FLATE` clear, Flate
+streams refused with PDE_FLATE) and on every render (marks). A change in the dialog applies to the session at once where it
+can: panels at the dialog's close, marks by repainting the page; the view and
+the Flate slots wait for the next open, which the dialog says.
+
+#### 20.18.2 The dialog
+
+View > Preferences... opens a popover (P_PREFS, `pdu_pop_open`'s own mechanism:
+placed in the canvas, one at a time, Esc closes it before the document sees
+the key) of eight text rows: a title, the five settings, the line `View, Flate: next
+open` and the key line (`Arrows  Enter  Esc`). The panel values are None,
+Pages, Notes, Both. 28 columns, so it fits COMPACT's
+640x200 canvas (92-104 px) as well as FULL.
+
+| key | effect |
+|---|---|
+| Up / Down, Tab | select the previous / next setting |
+| Right, Enter, Space | next value (wraps) |
+| Left | previous value |
+| Esc, a click outside | close; the changes are saved |
+| a click on a setting row | select it and take its next value |
+
+The dialog works with the keyboard alone. Its paints (a value changing, the
+popover appearing) run at the wake like every popover paint (`pdu_popown`,
+20.6.5), because the key chain has no room for them (t_pdstk).
+
+#### 20.18.3 Saving, and read-only media
+
+The save is OWED to the wake (`pdp_owe`, paid by `ovl_pf_save`), not done in the key chain: closing
+the dialog with something changed sets the debt, and the wake writes the
+file. It is a full replace of ten bytes. When it cannot - no `SYSTEM/APPDATA`
+on the disk (a user's own volume), a write-protected or full disk, no disk -
+the SESSION KEEPS THE CHOICES and the status line says why in the kernel's
+words: `Not saved: <reason>. Session only.` Nothing else fails: a
+run on a CD or a write-protected floppy launches, applies whatever it could
+read and lets the dialog change the session.
+
+#### 20.18.4 Forms (PD-26, the baseline)
+
+PageDesk does not fill or change AcroForm fields (D24: filling is not selected
+this round). When the open completes for a document whose
+`pdu_xopen.flags & PDO_ACROFORM`, the status line says `Form fields are shown
+as printed; filling is not supported.` (instead of "Opened X", and again when
+the open's first render ends, whatever its length, since a long render's "Page
+drawn." or a slow one's progress line would bury it; a signed file's read-only
+line and a save's outcome keep precedence, and then the note is not said at
+all), and Help > Document info gains a line `Forms:    as printed, not
+fillable`. A form's pages still render, annotate and save: nothing is hidden,
+and no field value is written or changed.
+
+#### 20.18.5 Hooks and sizes
+
+Marked `/* prefs */` lines: `pducmd.c` (the View > Preferences item, the
+popover's rows, paint, key, click and its close), `pdumod.c` (the Flate slot
+rule), `pdujob.c` (the view at open, `mono_mark`, the forms note, the wake's
+`pdp_wake`), `pdovl.c` (the include and the info line), `pagedesk.c` (the
+include). There is no launch load (D26). Sizes: see the wave-3 report.
+
 ### 20.19 Polish: the carried defects (`polish`, wave 3)
 
 Five defects carried out of wave 2's verifications, fixed in the shell and in

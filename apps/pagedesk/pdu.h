@@ -399,4 +399,27 @@ static void pdu_wsay(const char *s);
 #endif
 /* ---- end deepstk ---- */
 
+/* ---- prefs ---- (PAGEDESK-SPEC 20.18; pdupref.c, pdovlpref.c) */
+#define P_PREFS  8              /* the Preferences popover */
+#ifndef PD_HOST
+/* the settings: 'PDCF', version 1, view, FULL panels, MID panels, mono
+ * marks, Flate cache. The file is exactly these ten bytes (20.18.1) */
+static char pdp_cfg[10] = { 'P', 'D', 'C', 'F', 1, 0, 3, 0, 0, 0 };
+static const char pdp_formmsg[] =
+    "Form fields are shown as printed; filling is not supported.";
+static char pdp_form;                   /* the open document has an AcroForm */
+static const char *pdp_done(void);
+static void pdp_load(void);
+static void pdp_view(void);
+static void pdp_closed(void);
+static void pdp_wake(void);
+static void ovl_pf_paint(void);
+static void ovl_pf_key(int ascii, int scan);
+static void ovl_pf_click(int x, int y);
+static void ovl_pf_save(void);
+static void ovl_pf_load(void);
+static void ovl_pf_wake(void);
+#endif
+/* ---- end prefs ---- */
+
 #endif /* PDU_H */

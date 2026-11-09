@@ -235,6 +235,7 @@ static int pdu_open_first(void)
 {
     int r;
     pdu_opfirst = 0;
+    pdp_load();                         /* prefs: SYSTEM/APPDATA/PAGEDESK.CFG, before the Flate rule */
     pdu_bank_load();                    /* a missing bank is not fatal */
     r = pdu_doc_claim();
     if (r == 0) {
@@ -317,7 +318,7 @@ static void pdu_open_step(void)
     pdu_srcn = pdu_npages;              /* pages */
     pdu_rdonly = (pdu_xopen.flags & PDO_READONLY) != 0;
     pdu_sidetop = 0;
-    pdu_fit = 1;
+    pdp_view();                         /* prefs: the default view (was pdu_fit = 1) */
     r = pdu_page_load(pdu_resume && pdu_resume <= pdu_npages ? pdu_resume - 1 : 0);   /* pages */
     pdu_resume = 0;
     if (r) {
@@ -329,11 +330,15 @@ static void pdu_open_step(void)
         return;
     }
     pdu_doc = D_OPEN;
+    pdp_form = 0;                       /* prefs: set where the note is said */
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
     else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
         pdu_say2("Saved ", pdu_target);
         pdu_pgsaved = 0;
+    } else if (pdu_xopen.flags & PDO_ACROFORM) {  /* prefs: PD-26 */
+        pdp_form = 1;
+        pdu_say(pdp_formmsg);
     } else {
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
@@ -399,7 +404,7 @@ static int pdu_render_begin(void)
     pdu_xrend.view.clip_y1 = pdu_rrun.y2;
     pdu_xrend.page = pdu_pg_id(pdu_page);                           /* pages */
     pdu_xrend.win_off = (unsigned)pdu_win;
-    pdu_xrend.mono_mark = 0;
+    pdu_xrend.mono_mark = pdp_cfg[8];               /* prefs (17.4) */
     pdu_xrend.edits_seg = pdu_ed_seg();             /* edit (D15) */
     pdu_xrend.edits_count = pdu_ed_count();
     pdu_xrend.rflags = PDRF_ANNOTS | PDRF_EDITS;
@@ -455,8 +460,8 @@ static void pdu_render_step(void)
             pdu_say2("Incomplete rendering - ", pdu_incwhy);
             pdu_wsay(pdu_msg);
         }
-    } else if (pdu_jslices > 8 || pdu_pshown)  /* polish: never leave "Esc cancels" */
-        pdu_wsay("Page drawn.");
+    } else if (pdp_form || pdu_jslices > 8 || pdu_pshown) /* prefs: a form's note; polish: never leave "Esc cancels" */
+        pdu_wsay(pdp_done());
 }
 
 /* ---------------------------------------------------------------------------
@@ -580,6 +585,7 @@ void os88_onwake(void *win)
             os88_gfx_unlock();
         }
     }
+    pdp_wake();                         /* prefs: the dialog's debts */
     if (pdu_jcancel) {
         int was;
         was = pdu_job;
