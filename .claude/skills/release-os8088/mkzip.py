@@ -186,6 +186,16 @@ machine VMSYS144.IMG runs like OS88-144.IMG and uses the serial mouse, and a
 real PC/XT cannot read a 1.44MB disk anyway, so for real hardware use the
 pairs above."""),
 
+    ("debug", "Debug disks: when something does not work on your machine", """\
+The DEBUG folder holds disks that boot os8088 straight into a report on one
+part of the system: what its driver found on your machine, and what it did
+when it was exercised. They are for sending us. If something does not work
+the way it should, boot the debug disk for that part in drive A, wait for it
+to finish, photograph each page (the keys 1, 2 and 3 change page) and send
+the photographs with what you saw and heard. Each disk has a text file at its
+root that says the same thing. Use the size your drive takes; the four are
+the same disk."""),
+
     # THE LIVE GROUP IS THE LIVE ZIP'S, not this one's: its files go to
     # os8088-<version>-live.zip and its text heads that zip's README. It stays
     # in GROUPS because tools/os88guide.py lists the live media from here.
@@ -304,6 +314,14 @@ ITEMS = [
      "cable link and the split-file tool, OS88NET.COM and OS88CZ.COM, in "
      "SYSTEM\\DOS.",
      [("util360.img", "360KB", "")]),
+
+    ("debug", "Sound debug disk", True,
+     "Sound Blaster, AdLib, MPU-401 and Covox: where each card answered, "
+     "its version, how its interrupt was found, its mixer and, on an ESS "
+     "chip, the chip's own name - then a ten-second tone with one line a "
+     "second showing whether the card kept playing.",
+     [("debug-sound.img", "1.44MB", ""), ("debug-sound-120.img", "1.2MB", ""),
+      ("debug-sound-720.img", "720KB", ""), ("debug-sound-360.img", "360KB", "")]),
 
     ("small", "128KB system disk", True,
      "The small kernel with every program that fits a 128KB machine.",
@@ -522,6 +540,11 @@ DEST = {
     "megaapps120.img": "1200K/286-PLUS/APPS-120.IMG",
     "megaxtmp3-120.img": "1200K/286-PLUS/PROGRAMS/XTMP3/XTMP3120.IMG",
     "megawin16-120.img": "1200K/286-PLUS/PROGRAMS/WIN16/WIN16120.IMG",
+    # the debug disks (SPEC.md 127): one folder, the size in the name
+    "debug-sound.img": "DEBUG/SOUND144.IMG",
+    "debug-sound-120.img": "DEBUG/SOUND120.IMG",
+    "debug-sound-720.img": "DEBUG/SOUND720.IMG",
+    "debug-sound-360.img": "DEBUG/SOUND360.IMG",
     # the live zip's, which has no folders
     "os8088-usb.img": "LIVEUSB.IMG",
     "os8088.iso": "OS8088.ISO",

@@ -61,7 +61,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
 | **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | touching PageDesk (`apps/pagedesk/`, the PDF viewer/editor: the primary, its overlay and the `PDENG`/`PDREND`/`PDWRT` C modules) — its binding contract, cited as `PAGEDESK-SPEC §N`. `docs/plans/PAGEDESK-PLAN.md` is the story list and `docs/PAGEDESK-GUIDE.md` the user guide. **Every segment is at its cap** (PAGEDESK-SPEC 20.20.1), and two fast gates guard what breaks silently. `pdstk` statically bounds every call chain, because the UI task's stack is 512 bytes and a module verb runs on the private stack of 20.15. `pdkgate` checks that every kernel call a module makes is a gate slot |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
-| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | anything in PageDesk (§127, `apps/pagedesk/`, `PAGEDESK.O88`) — the binding contract, outside SPEC.md on the WEAVE-SPEC precedent, cited as `PAGEDESK-SPEC §N`: the XT PDF profile, the three C modules and their exchange-block ABI (`apps/pagedesk/pdabi.h` is its C side and is the lead's), 16.16/pt16 numbers and the ONE view transform in `pdmath`, the annotation representations and the incremental writer. **[docs/plans/PAGEDESK-PLAN.md](docs/plans/PAGEDESK-PLAN.md)** is the story list PD-01 to PD-30 and the capability matrix |
+| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | anything in PageDesk (§128, `apps/pagedesk/`, `PAGEDESK.O88`) — the binding contract, outside SPEC.md on the WEAVE-SPEC precedent, cited as `PAGEDESK-SPEC §N`: the XT PDF profile, the three C modules and their exchange-block ABI (`apps/pagedesk/pdabi.h` is its C side and is the lead's), 16.16/pt16 numbers and the ONE view transform in `pdmath`, the annotation representations and the incremental writer. **[docs/plans/PAGEDESK-PLAN.md](docs/plans/PAGEDESK-PLAN.md)** is the story list PD-01 to PD-30 and the capability matrix |
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 | **[docs/plans/VESA-PLAN.md](docs/plans/VESA-PLAN.md)** | anything in the VESA display (§120, `drivers/vesa/`, `kernel/vidext.inc`'s `VIDEXT` hook, the `DRVC_VIDEO` class) — the story list with what each wave actually shipped, the decisions taken against their judged alternatives (hooks in `kern_big` against a fourth kernel; a 16-colour desktop at any depth; banked window A against the linear framebuffer), and `docs/HOW-VESA-WAS-BUILT.md` is its diary. SPEC.md §120 is the contract and says per story whether it is pinned or shipped |
@@ -218,6 +218,16 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # BIOS answering CF=0 for a transfer it did not make).
               # BOOTDIAG.COM rides on all six for a machine that boots DOS
               # but not this. Nothing here ever writes to a disk
+make debugdisks # THE DEBUG DISKS (SPEC.md 128): a system disk that boots
+              # straight into a report on one subsystem, for a user with a
+              # camera and no debugger - bootdiag's sibling for a machine
+              # that DOES boot. debug-sound{,-120,-720,-360}.img (in `all`
+              # and the release zip's DEBUG/): SOUND.DRV built from the
+              # shipped source with -DSNDDIAG (drivers/sound/snddiag.inc,
+              # every hook empty without it - t_debugdisk holds the shipped
+              # driver byte-identical), and \AUTOSTRT opening SNDDIAG.O88:
+              # the probes, a ten-second tone a row a second, the registers.
+              # A probe added to a driver is a line added to its debug disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). fast (host-side, run by every `make`)
 make test-soak   #   and full (did you obviously break the OS?) fail over a
@@ -782,7 +792,7 @@ the eight `286-525-*` application machines (`-z`, `-word`,
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `pentium-ess` (`pentium` with an ESS ES1868 in place of its SB16, booting the sound debug disk - SPEC.md §127; 86Box's ESS treats `D1h`/`D3h` as no-ops), `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,

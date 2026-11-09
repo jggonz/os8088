@@ -1,6 +1,6 @@
 # How PageDesk was built
 
-The build diary for PageDesk (SPEC.md 127), written for later reuse on the
+The build diary for PageDesk (SPEC.md 128), written for later reuse on the
 website. CLAUDE.md, *Building an app or game in waves*, item 6, is the rule
 that asks for it. It is written the day the last integration landed, from the
 agents' own reports (`*-report.md`, `*-verify.md`), the lead's `DECISIONS.md`

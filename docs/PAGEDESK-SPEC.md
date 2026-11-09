@@ -5,7 +5,7 @@ PageDesk is a PDF reader and annotator for os8088 that runs natively on the
 its binding contract, outside SPEC.md on the C64-SPEC/WEAVE-SPEC precedent:
 the profile, the module ABI, the numeric and geometry formats and the on-disk
 representations are pinned here **before** product code, and a change to any
-of them is a change to this file first. SPEC.md 127 is the anchor that points
+of them is a change to this file first. SPEC.md 128 is the anchor that points
 here. A bare section number in this file means a section of this file.
 `docs/plans/PAGEDESK-PLAN.md` is the story list, the platform record and the
 capability matrix; this file is the contract those stories build against.

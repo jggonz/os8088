@@ -1,6 +1,6 @@
 # PageDesk user guide
 
-PageDesk is a native PDF viewer and editor for os8088 (SPEC.md 127,
+PageDesk is a native PDF viewer and editor for os8088 (SPEC.md 128,
 `docs/PAGEDESK-SPEC.md`, `docs/plans/PAGEDESK-PLAN.md`). It runs on an IBM
 PC/XT (8088, 4.77 MHz, 640 KiB, no FPU, no extended memory) in VGA, CGA and
 Hercules, offline. This is the reader's guide. The contract is

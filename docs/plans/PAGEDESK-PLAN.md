@@ -1,6 +1,6 @@
 # PAGEDESK-PLAN - building PageDesk
 
-The living plan for PageDesk (SPEC.md 127). **docs/PAGEDESK-SPEC.md is the
+The living plan for PageDesk (SPEC.md 128). **docs/PAGEDESK-SPEC.md is the
 contract**; this file is the story list, the platform record it was written
 against, who builds what, and the capability matrix. A story is ticked only
 when it was SEEN working (a host check, a look on the glass, a number), never

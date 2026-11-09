@@ -98,6 +98,11 @@ LOCAL_EXEMPT = {
     "m6502": "the fast 6502 core's GENERATOR (APPLE2-SPEC 4.6) - a host tool "
              "whose output is a part of APPLE2.O88, which is checked below "
              "as apple2/",
+    "snddiag": "the sound DEBUG disk's program (SPEC.md 127): it reads a "
+               "record only the -DSNDDIAG SOUND.DRV keeps, so it ships on "
+               "the debug disks with that driver and nowhere else - beside "
+               "the live media's shipped SOUND.DRV it could only say it has "
+               "nothing to show",
 }
 
 

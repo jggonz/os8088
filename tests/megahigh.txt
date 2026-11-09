@@ -32,9 +32,11 @@
 
 # --- high --------------------------------------------------------------------
 
-# (none: WaveRack's, the last, retired by KERN-MEGA-PLAN 14.159)
+high apps/snddiag/snddiag.asm   # NEVER LOADED BY kern_mega: Sound Debug ships
+    # only on the debug-sound disks, whose kernel is kern_big (SPEC.md 127.2),
+    # and it reads a record only that disk's -DSNDDIAG SOUND.DRV keeps. A
+    # kern_mega debug disk would settle it, run under Bochs (docs/BOCHS.md)
 
 # --- highmem -----------------------------------------------------------------
 
-# (none: WaveRack's, the last, retired by KERN-MEGA-PLAN 14.159)
-
+highmem apps/snddiag/snddiag.asm   # NEVER LOADED BY kern_mega: the debug-sound disks are kern_big, as for high

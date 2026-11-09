@@ -149,12 +149,12 @@ def measure(kern, a):
     import heapmap
     import os88box86api
     if kern == "big" and not getattr(os88box86api, "_megapar", None):
-        os88box86api._megapar = os88box86api.launch
+        os88box86api._megapar = os88box86api.launch  # gitleaks:allow (attribute names, not a key)
     if kern == "big":
         os88box86api.launch = functools.partial(os88box86api._megapar,
                                                 megs=a.megs)
     elif getattr(os88box86api, "_megapar", None):
-        os88box86api.launch = os88box86api._megapar
+        os88box86api.launch = os88box86api._megapar  # gitleaks:allow (attribute names, not a key)
     vhd = os.path.join(a.tmp, "c-%s.vhd" % kern)
     if a.prog == "vb":
         from cycweb import pkg_syms

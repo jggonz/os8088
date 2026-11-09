@@ -232,9 +232,11 @@ sbl_dsp_wr:
     test al, 0x80               ; bit 7 clear = ready for a write
     jz .ok
     loop .poll
-    stc
+    SDG_DSPHOOK 1               ; snddiag.inc: the debug disk's log (nothing
+    stc                         ; in a shipped build)
     jmp .out
 .ok:                            ; (CF = 0: the TEST cleared it)
+    SDG_DSPHOOK 0
     mov al, ah
     out dx, al                  ; 2xCh is also the write port
 .out:
@@ -786,7 +788,7 @@ sbl_isr:
     je .spur
     mov dx, [sbl_ackp]          ; 2xEh, or 2xFh while a 16-bit stream is open
     in al, dx                   ; (SPEC.md 34.5.5) - the mandatory ACK, and
-                                ; ONLY that:
+    SDG_ISRHOOK                 ; ONLY that (snddiag.inc counts it):
                                 ; bit 7 is "response byte waiting", which a
                                 ; block IRQ never sets on real DSPs/86Box
                                 ; (SPEC.md 34.5; gating on it wedged every
@@ -934,6 +936,7 @@ sbl_isr:
     jmp .eoi                    ; back up: .eoi sits after .input
 
 .spur:
+    SDG_SPURHOOK
     cmp byte [sbl_irq], 7       ; line 7: real or spurious? only the 8259
     jne .prime                  ; knows - a REAL IRQ 7 (the SB's factory
     mov al, 0x0B                ; default line) sets ISR bit 7. OCW3: the
@@ -1589,6 +1592,7 @@ sbl_v_open:
     inc byte [sbl_ackp]         ; 2xFh for the 16-bit side
 .ack8:
     mov byte [sbl_expect], 1    ; arm BEFORE the hardware starts (the
+    SDG_OPENHOOK
     call sbl_hw_start           ; sbl_refill resume order): if the opener
                                 ; is preempted right after 1Ch and stays
                                 ; off-CPU a whole block period, the first
@@ -2584,6 +2588,7 @@ sbl_tick:
 %endif                          ; (SPEC.md 34.10.5)
     dec word [sbl_wd]
     jnz .out
+    SDG_WDOGHOOK
     call sbl_halt               ; the IRQ never came: stop the stream
     mov byte [sbl_expect], 0
     mov byte [sbl_str_state], SBL_ST_END
@@ -3477,12 +3482,14 @@ sbl_f_probe:
     mov [sbl_base], ax
     mov cx, 2000                ; ~10ms of ISA status reads per base
     call sbl_f_reset
+    SDG_SCANHOOK
     jnc .found
     jmp .base
 .retry:
     mov word [sbl_base], 0x220
     xor cx, cx                  ; 65536 polls: the ~100ms slow-DSP allowance
     call sbl_f_reset
+    SDG_SCANHOOK
     jc .no
 .found:
     mov al, 0xE1                ; DSP version: the auto-init strategy gate
@@ -3561,6 +3568,7 @@ sbl_f_irqdisc:
     mov bl, 7                   ; probe below would swap the card's own
     sub bl, [pm_irq]            ; multiplexer vector for a stub and take its
     shr bl, 1                   ; request as the SB's - so no probe at all.
+    SDG_SET sdg_imeth, 1
     jmp short .mwin             ; [pm_irq] is 7, 5 or 3 (picomem.inc's
 .nopm:                          ; pm_irqs), candidates 0, 1 and 2 of {7,5,3,2}
 %endif                          ; - so (7 - n) / 2 is the index outright
@@ -3572,6 +3580,8 @@ sbl_f_irqdisc:
     out dx, al                  ; Deterministic: no F2h, nothing hooked or
     inc dx                      ; unmasked until the winner is.
     in al, dx
+    SDG_SET sdg_m80, al
+    SDG_SET sdg_imeth, 2
     mov bl, 3                   ; IRQ2 -> candidate 3 of {7,5,3,2}
     cmp al, 1
     je .mwin
@@ -3584,6 +3594,7 @@ sbl_f_irqdisc:
 .mwin:                          ; to the firing probe below
     jmp .win                    ; (one long jump for the three short ones)
 .probe:
+    SDG_SET sdg_imeth, 3
     xor si, si                  ; hook the 4 candidates onto the stubs: the
 .cs:                            ; stubs are OURS, not the kernel's, and this
     mov [sbl_dsc_t+si+4], cs    ; image may have moved since the last time
@@ -3598,6 +3609,9 @@ sbl_f_irqdisc:
     mov byte [sbl_dsc_fired], 0xFF
     mov cx, 2                   ; F2h, retried once (SPEC.md 34.5)
 .try:
+%ifdef SNDDIAG
+    inc byte [sdg_ftry]
+%endif
     mov al, 0xF2                ; trigger 8-bit IRQ
     call sbl_dsp_wr
     jc .settle                  ; DSP wedged: nothing will fire
@@ -3621,6 +3635,7 @@ sbl_f_irqdisc:
 .win:
     xor bh, bh                  ; the winner: BX = candidate index
     mov al, [sbl_dsc_irqn+bx]
+    SDG_SET sdg_iwin, al
     cmp al, 5                   ; IRQ 5 on an XT whose fixed disk (or any
     jne .free                   ; other ROM or driver) already owns it is
     call sbl_irq5_taken         ; REFUSED (SPEC.md 34.5.6): the card would
@@ -3680,6 +3695,12 @@ sbl_irq5_taken:
     call OSAPI_CPU_INFO         ; AL = the tier; every register but AX kept
     cmp al, CPU_8086
     jne .free                   ; a 286 or better: an AT, the disk on 14
+%ifdef SNDDIAG
+    push ax
+    mov ax, [es:0x0D * 4 + 2]
+    mov [sdg_i5seg], ax
+    pop ax
+%endif
     cmp word [es:0x0D * 4 + 2], 0xE000
     jae .free                   ; still the system ROM's: nobody claimed it
     stc
