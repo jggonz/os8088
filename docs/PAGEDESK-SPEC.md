@@ -4030,6 +4030,8 @@ Esc and is a design change for a later wave, not polish.
 
 #### 20.19.6 Sizes
 
-Primary 50,428 + 6,315 = 56,743 (was 56,535); overlay part 41,352 (was
-41,257); PDREND 60,252 (was 59,878; D20's cap 61,440); `pdstk` unchanged at
-366 on `cc_onkey`.
+Primary 50,568 + 6,327 = 56,895 (was 56,535: +360, D24's polish share was
++300); overlay part 41,604 (was 41,257: +347, share +200 - `ovl_ground` and
+`ovl_render_rest` live there, being a cancel's and a popover's, not a
+keystroke's); PDREND 60,304 (was 59,878; D20's cap 61,440); `pdstk` unchanged
+at 366 on `cc_onkey`.
