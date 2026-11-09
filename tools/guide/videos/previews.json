@@ -259,54 +259,74 @@
   "title": "Snow Holo - 320*149*256",
   "kb": 401
  },
- "0d741191a27e7317916238966b9b668367ea54ac156476ca1602789f3a18dde0": {
-  "src": "apps/video/demo/vga/07-GAS.V88",
-  "mp4": "vga/07-gas.mp4",
-  "poster": "vga/07-gas.jpg",
-  "w": 533,
-  "h": 300,
-  "secs": 70.7,
-  "title": "Gas Gas Gas - 640*300*16",
-  "kb": 801
+ "2f3d249bcc3ce6dc2f3e4afd5fa464595cc82e9b852f9c9b64faecb949578545": {
+  "src": "apps/video/demo/vga/07-MIKU.V88",
+  "mp4": "vga/07-miku.mp4",
+  "poster": "vga/07-miku.jpg",
+  "w": 467,
+  "h": 276,
+  "secs": 60.8,
+  "title": "Miku Miku - Palette Swap",
+  "kb": 961
  },
- "2d20e4776daa6902d2a19e89c2cb4fcf8cc49ab26a9a8edc054381704af337a9": {
-  "src": "apps/video/demo/vga/08-WILLY.V88",
-  "mp4": "vga/08-willy.mp4",
-  "poster": "vga/08-willy.png",
+ "4d749d8cae048a3a7a560bc07b795be35571c63040f1aea1508773af56859dff": {
+  "src": "apps/video/demo/vga/08-IKARU.V88",
+  "mp4": "vga/08-ikaru.mp4",
+  "poster": "vga/08-ikaru.jpg",
+  "w": 352,
+  "h": 480,
+  "secs": 52.0,
+  "title": "Ikaruga - Page Flipped",
+  "kb": 1259
+ },
+ "84491c20e04f4c0e7e4a37acfe0869cfa95326f2b2520514c26f2a5a4eddf63c": {
+  "src": "apps/video/demo/vga/09-CATCH.V88",
+  "mp4": "vga/09-catch.mp4",
+  "poster": "vga/09-catch.jpg",
+  "w": 533,
+  "h": 400,
+  "secs": 78.0,
+  "title": "Catch Catch - Nothing Degraded",
+  "kb": 2516
+ },
+ "6e4882e1192df2c0ee7513988aa9798200f05c72c8acbd476fe713f10e38bfaa": {
+  "src": "apps/video/demo/vga/10-WILLY.V88",
+  "mp4": "vga/10-willy.mp4",
+  "poster": "vga/10-willy.png",
   "w": 264,
   "h": 200,
   "secs": 27.0,
-  "title": "Steamboat Willie - Live",
+  "title": "Steamboat Willy - Live Desktop",
   "kb": 586
  },
  "ae8b035f4bed008d462fcd15a0c712261389f44ad5b958f04851e5238a4fd6f9": {
-  "src": "apps/video/demo/vga/09-TRACK.V88",
-  "mp4": "vga/09-track.mp4",
-  "poster": "vga/09-track.jpg",
+  "src": "apps/video/demo/vga/11-TRACK.V88",
+  "mp4": "vga/11-track.mp4",
+  "poster": "vga/11-track.jpg",
   "w": 400,
   "h": 224,
   "secs": 25.0,
   "title": "Trackmania A01 - Live",
   "kb": 1570
  },
- "5fdde11708fc4811dc89cdaab5da986b7edf4719e86e83b310bcc568687a79ca": {
-  "src": "apps/video/demo/vga/10-LX486.V88",
-  "mp4": "vga/10-lx486.mp4",
-  "poster": "vga/10-lx486.jpg",
+ "384eb5283ae3baed3695b1c30104f32487f049aab9196c5548cc85bb5d63fce3": {
+  "src": "apps/video/demo/vga/12-LX486.V88",
+  "mp4": "vga/12-lx486.mp4",
+  "poster": "vga/12-lx486.jpg",
   "w": 640,
   "h": 360,
   "secs": 92.5,
-  "title": "Last Exile - 486 - 320*180*256",
+  "title": "Last Exile - 320*180*256",
   "kb": 1919
  },
- "04f5fc2e247709f6145174269bad823593e081d1c70c022c1723335cda4d11a8": {
-  "src": "apps/video/demo/vga/11-GS486.V88",
-  "mp4": "vga/11-gs486.mp4",
-  "poster": "vga/11-gs486.jpg",
+ "dbbee910d59710a37504f2b07faae33f08534204d679f17015c90334ccf08ac7": {
+  "src": "apps/video/demo/vga/13-GS486.V88",
+  "mp4": "vga/13-gs486.mp4",
+  "poster": "vga/13-gs486.jpg",
   "w": 533,
   "h": 300,
   "secs": 70.7,
-  "title": "Gas Gas Gas - 486 - 640*300*16",
+  "title": "Gas Gas Gas - 640*300*16",
   "kb": 791
  }
 }

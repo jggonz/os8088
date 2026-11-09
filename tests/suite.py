@@ -19865,7 +19865,7 @@ SOAK = [
     Row("megaparvp", "soak", py("tests/megapar.py", "--prog", "vp"), 30.0,
         "KERN-MEGA-PLAN 14.178, SPEC.md 98.3.24.3: the Video Player's bank "
         "on kern_big AND kern_mega's arm on the same 86Box machine "
-        "(at286_vga_sb_hdd, 640K + 384K, 08-WILLY.V88 on C:, read in the "
+        "(at286_vga_sb_hdd, 640K + 384K, 10-WILLY.V88 on C:, read in the "
         "play): legs 1-5 as megaparvb's at a 32 KB slot's granule, and the "
         "door answered FSXF_PREP ([vp_rbkb], 14.180). RED on mega-release "
         "at 14.178's base: the arm's 64 KB region in the pool, the bank 6 "
@@ -19893,8 +19893,8 @@ SOAK = [
     Row("megasndword", "soak", py("tests/megasndword.py"), 30.0,
         "KERN-MEGA-PLAN 14.182, SPEC.md 34.5.3/53.2.3: a closed stream "
         "leaves SOUND.DRV no segment word. 86Box's vm/viddemo-vga (MR 286, "
-        "SB16 on IRQ 5), kern_mega, the Video Player's arm with 08-WILLY "
-        "and 09-TRACK in C:'s MEDIA, each played full screen in its own "
+        "SB16 on IRQ 5), kern_mega, the Video Player's arm with 10-WILLY "
+        "and 11-TRACK in C:'s MEDIA, each played full screen in its own "
         "window and closed: both in a real-mode bracket ([fsx_rwhy] "
         "FSXR_REAL), and between them [sbl_rseg] and [sbl_extctl+2] 0 with "
         "no SNDV_RMODE word naming a freed LDT entry. RED on mega-release: "

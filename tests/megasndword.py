@@ -19,19 +19,19 @@ existed.
 86Box's vm/viddemo-vga (the demo videos' machine: a Micronics MR 286 at 16
 MHz, 4 MB, an OTI-067, an SB16 on IRQ 5, an IDE disk), kern_mega off
 build/mega.img, C: a 128/16/63 disk holding the Video Player's arm at its
-root and apps/video/demo/vga/08-WILLY.V88 and 09-TRACK.V88 in MEDIA, as
+root and apps/video/demo/vga/10-WILLY.V88 and 11-TRACK.V88 in MEDIA, as
 the demo disk has them. Each clip opened in its own window, F, Space, the
 door's verdict read a guest second into the play, Esc, the window closed:
 
-  1. 08's play in a real-mode bracket ([fsx_rwhy] FSXR_REAL, [fsx_rmode]
+  1. 10's play in a real-mode bracket ([fsx_rwhy] FSXR_REAL, [fsx_rmode]
      1) - the positive control;
   2. after its close, with no stream open ([sbl_str_act] 0), SOUND.DRV's
      ring and control-word segments are 0, and every SNDV_RMODE word is 0
      or a present descriptor (the stale ones named a freed LDT entry);
-  3. 09's play in a real-mode bracket too.
+  3. 11's play in a real-mode bracket too.
 
 RED on mega-release (this file run against its build): 2 - [sbl_rseg] and
-[sbl_extctl+2] both 1304h, a freed entry - and 3 - 09's door answered
+[sbl_extctl+2] both 1304h, a freed entry - and 3 - 11's door answered
 FSXR_DRV (8) and the play ran protected. Green with sbl_stop_stream's two
 stores (SOUND.DRV +6 bytes), the whole of the difference between the trees.
 """
@@ -58,7 +58,7 @@ import os88sym      # noqa: E402
 import os88ui       # noqa: E402
 
 DEMO = os.path.join(ROOT, "apps", "video", "demo", "vga")
-CLIPS = ("08-WILLY.V88", "09-TRACK.V88")
+CLIPS = ("10-WILLY.V88", "11-TRACK.V88")
 FSXR_REAL = 0
 fails = []
 

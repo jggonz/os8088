@@ -1,11 +1,11 @@
 VGA DEMO VIDEOS
 ===============
 
-Eleven videos made for the Video Player on a VGA card, each to show off something the player can do.
+Thirteen videos made for the Video Player on a VGA card, each to show off something the player can do.
 
-Unlike the CGA and Hercules demo videos, these were not made for the IBM PC. They were encoded to push one real machine as far as it would go: a 16 MHz 286 with 3 MB of XMS memory. On a machine with a slower processor, more bus wait states or a slower hard disk they will not play smoothly. A 16 MHz 286 in 86Box with a 5400 RPM hard disk is faster than that machine and plays them.
+Unlike the CGA and Hercules demo videos, these are not made for the IBM PC. They are encoded to push one real machine as far as it goes: a 16 MHz 286 with 3 MB of XMS memory. On a machine with a slower processor, more bus wait states or a slower hard disk they do not play smoothly. A 16 MHz 286 in 86Box with a 5400 RPM hard disk is faster than that machine and plays them.
 
-10 and 11 are the exception, on purpose, as the 486 in their names says: they were made for a 66 MHz 486DX2 with 7 MB of XMS memory, to show what the player does with a more powerful machine. A 286 cannot keep up with them.
+12 and 13 are the exception, on purpose, as the 486 in their names says: they are made for a 66 MHz 486DX2 with 7 MB of XMS memory, to show what the player does with a more powerful machine. A 286 cannot keep up with them.
 
 Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. Sound wants a Sound Blaster.
 
@@ -63,46 +63,66 @@ Double-click one to open it, then press Space or click Play. Space pauses, Esc s
 
 06 has every pixel at the full 320 width, in the VGA's plain 256-colour mode 13h. That mode lays the screen out as one long line, a byte a pixel, so a frame's changes are written in long straight runs; that is what lets a 286 keep up with every pixel here, where 05 above stores half of them. Its sound is stored ahead as 02's is.
 
-07-GAS.V88
-  Gas Gas Gas
-  640 x 300, 16 colours
+07-MIKU.V88
+  Miku Miku
+  640 x 276, 16 colours
   Full screen
   PCM 22 kHz sound
-  24 fps, 1:11, 22.0 MB
+  30 fps, 1:01, 14.9 MB
 
-07 has a PALETTE A SCENE: each of its 34 scenes has sixteen colours of its own, switched as the scene changes. Where a stretch will not fit, it steps down a DEGRADE LADDER: the picture runs a little behind the sound, a scene takes fewer colours, coarse cells, a small cut, and last a slower frame rate. Scene changes use page-ahead as 03's do.
+07 has a PALETTE A SCENE: each of its 19 scenes has sixteen colours of its own, switched as the scene changes. It is page flipped as 01 is, at the VGA's full width, and each frame is drawn AGAINST ITS OWN PAGE: it is stored as its changes from the picture already on the page it is drawn on, so nothing has to be copied onto that page first.
 
-08-WILLY.V88
+08-IKARU.V88
+  Ikaruga
+  176 x 240, 16 colours
+  Full screen, 320 x 240
+  PCM 22 kHz sound
+  25 fps, 0:52, 20.1 MB
+
+08 plays on a NARROW screen: the VGA's sixteen colours at 320 pixels across, each row of the screen packed into half the memory a 640-wide row takes. Its tall picture takes the screen's whole height, page flipped against its own page as 07 is, with a palette for each of its 4 scenes.
+
+09-CATCH.V88
+  Catch Catch
+  320 x 200, 16 colours
+  Full screen, 320 x 200
+  PCM 22 kHz sound
+  24 fps, 1:18, 33.7 MB
+
+09 has NOTHING DEGRADED: every frame is the whole picture, in its scene's own sixteen colours, at the full frame rate. A video that does not fit steps down a DEGRADE LADDER in its busy stretches - the picture runs a little behind the sound, a scene takes fewer colours, coarse cells, a small cut, and last a slower frame rate - and 09 takes none of those steps. It is on the narrow screen, page flipped against its own page as 08 is, with a palette for each of its 49 scenes, and its sound is stored ahead as 02's is.
+
+10-WILLY.V88
   Steamboat Willie
   264 x 200, black & white
   Live, on the desktop
   PCM 11 kHz sound
   30 fps, 0:27, 1.5 MB
 
-09-TRACK.V88
+11-TRACK.V88
   Trackmania: A01
   200 x 112, 16 colours
   Live, on the desktop
   ADPCM 5.5 kHz sound
   20 fps, 0:25, 2.8 MB
 
-08 and 09 play LIVE: on the desktop itself, so the machine stays usable while they play - open a window, drag it, type. Each is loaded into XMS memory whole before it starts, and loops until you stop it. 09 is live in colour, and its sound is ADPCM: it needs a Sound Blaster that plays ADPCM sound, and on one that does not it plays silent.
+10 and 11 play LIVE: on the desktop itself, so the machine stays usable while they play - open a window, drag it, type. Each is loaded into XMS memory whole before it starts, and loops until you stop it. 11 is live in colour, and its sound is ADPCM: it needs a Sound Blaster that plays ADPCM sound, and on one that does not it plays silent.
 
-10-LX486.V88
+12-LX486.V88
   Last Exile, for a 486
   320 x 180, 256 colours
   Full screen, Mode X
   PCM 22 kHz sound
   22 fps, 1:32, 70.5 MB
 
-11-GS486.V88
+13-GS486.V88
   Gas Gas Gas, for a 486
   640 x 300, 16 colours
   Full screen
   PCM 22 kHz sound
   24 fps, 1:11, 22.0 MB
 
-10 and 11 are 05 and 07 again, made for the 486. 10 has every pixel rather than half, bigger frames, and builds each new scene ahead on three screen pages rather than two. 11 has frames half as big again as 07's, so where 07 has to give way in a busy stretch, 11 keeps the whole picture and never slows down.
+12 is 05 again, made for the 486: it has every pixel rather than half, bigger frames, and builds each new scene ahead on three screen pages rather than two.
+
+13 has a palette a scene as 07 does, one for each of its 34 scenes, and builds each new scene ahead with page-ahead as 03 does. Its frames are allowed to be half as big again as the usual size, so even its busiest stretches keep the whole picture and never slow down.
 
 ALSO IN THIS FOLDER
 ===================

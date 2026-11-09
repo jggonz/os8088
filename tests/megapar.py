@@ -21,7 +21,7 @@ capped by memory and not by the file:
       hold has filled. Read: the hold's block ([vb_hblk] 4 KBs), the pool it
       was sized from ([vb_cpool]), the two rings ([vb_rkb], [vb_rkb2]).
   vp  the Video Player (kern_mega: its arm) and apps/video/demo/vga/
-      08-WILLY.V88 (1.5 MB, banked on both kernels at 1.375). Opened, Space:
+      10-WILLY.V88 (1.5 MB, banked on both kernels at 1.375). Opened, Space:
       read during the play. The bank ([vp_xbn] 32 KB slots).
 
 On kern_mega, read inside the play: the kernel's own POOL blocks (mx_tab: a
@@ -295,10 +295,10 @@ def main():
     ap.add_argument("--prog", choices=("vb", "vp"), default="vb")
     ap.add_argument("--megs", default="1.375")
     ap.add_argument("--kern", choices=("both", "big", "mega"), default="both")
-    ap.add_argument("--clip", default="08-WILLY.V88",
+    ap.add_argument("--clip", default="10-WILLY.V88",
                     help="vp: the demo clip (apps/video/demo/vga/) - "
                     "05-LASTX.V88 (37 MB) is banked at 4 MB too, where "
-                    "08-WILLY.V88 is held whole")
+                    "10-WILLY.V88 is held whole")
     ap.add_argument("--map", action="store_true",
                     help="print each kernel's conventional heap in the play")
     a = ap.parse_args()

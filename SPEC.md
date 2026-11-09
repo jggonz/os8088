@@ -211292,15 +211292,17 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   (360 x 84 at 23 fps, the speaker at 8 kHz), still the whole of Bad
   Carrot: that disk has less room to trade. Its text had named 02 and
   03 "Bad Apple"; 02 is Bad Carrot and 03, by its frames, Trackmania.
-- **The VGA set is a 286's, on a 504 MB IDE disk** (2026-10-19): eleven
-  videos, 290 MB, encoded to push the owner's 16 MHz 286 with 3 MB of XMS
-  (`286-picomem1`, the bank 2,944 KB) - and two, `10-LX486` and `11-GS486`,
-  for a 486DX2-66 on purpose (`486-dx2-66`, a 7,040 KB bank), as their
-  names say. Each is there to show one thing off - page flipping,
-  page-ahead on two and three pages, a layer, sound ahead, big records,
-  every pixel in mode 13h's straight line, pixels doubled sideways, a
-  palette a scene and the degrade ladder, Live
-  in black and white and in colour - and `00-VIDS.TXT` says which. The disk is `1024/16/63`, the most a BIOS's CHS reaches without
+- **The VGA set is a 286's, on a 504 MB IDE disk** (2026-10-19, re-cut
+  2026-11-09): thirteen videos, 339 MB, encoded to push the owner's 16 MHz
+  286 with 3 MB of XMS (`286-picomem1`, the bank 2,944 KB) - and two,
+  `12-LX486` and `13-GS486`, for a 486DX2-66 on purpose (`486-dx2-66`, a
+  7,040 KB bank), as their names say. Each is there to show one thing
+  off - page flipping, page-ahead on two and three pages, a layer, sound
+  ahead, big records, every pixel in mode 13h's straight line, pixels
+  doubled sideways, a palette a scene, a flip against its own page
+  (98.1.3.10), the NARROW screens (98.1.3.2.5), a clip with nothing
+  degraded, Live in black and white and in colour - and `00-VIDS.TXT` says
+  which. The disk is `1024/16/63`, the most a BIOS's CHS reaches without
   LBA (`VIDDEMO_IDE` in the Makefile picks the adapters that take it):
   `os88disk.py --hdd --geometry` lays ONE BIG VOLUME, 1,032,129 sectors
   from LBA 63, FAT16 in 8 KB clusters with TotSec32 and partition type
@@ -211309,6 +211311,13 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   `os88hdd.py --wrap` without `--st11` adds the VHD footer and nothing
   else. Booted on QEMU's IDE: C: is the boot volume and `MEDIA` lists the
   eleven, with about 227 MB of the volume free.
+- **The VGA set was re-cut on 2026-11-09**: `07-GAS` (Gas Gas Gas on the
+  286) was dropped, so Gas Gas Gas is a 486 clip alone; `07-MIKU`,
+  `08-IKARU` and `09-CATCH` are new - a palette a scene flipped against
+  its own page at 640 x 350, and the two NARROW screens, 320 x 240 and
+  320 x 200, the last with nothing degraded - and the rest moved up two
+  (`10-WILLY`, `11-TRACK`, `12-LX486`, `13-GS486`), Willy and the 486
+  pair with new titles and the same frames.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
