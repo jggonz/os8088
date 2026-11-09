@@ -541,6 +541,7 @@ static int ovl_save_begin(const char *name, int kind)
     if (kind != 1 && pdu_doc != D_OPEN)
         return 1;
     os88_strcpy(pdu_target, name, sizeof(pdu_target));
+    ovl_rc_drop();                      /* recov: an unanswered finish offer's note */
     os88_file_here(&pdu_tgtplace);
     if (kind == 0) {                    /* 14.4: the file on the disk is the one we opened */
         pdu_at_doc();

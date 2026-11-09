@@ -320,6 +320,22 @@ static void ovl_rc_answer(int yes)
     pdu_wsay(pdu_msg);
 }
 
+/* a save is starting, and the finish offer is still up, unanswered: its note
+ * goes. This save is about to write PDSAVE.$$$ in its own folder, and if it
+ * died mid-copy, the next launch would otherwise offer the PARTIAL file under
+ * the old note's name (recov-verify 5). The old temp file stays on the disk;
+ * only the offer goes */
+static void ovl_rc_drop(void)
+{
+    if (rc_pk != 2)
+        return;
+    rc_pk = 0;
+    if (ovl_rc_enter()) {               /* it leaves by itself when it fails */
+        os88_file_delete(RC_TGT);
+        ovl_rc_leave();
+    }
+}
+
 /* a save is about to delete its target: the note that lets the next launch
  * finish it (20.17.6). Not a flush - a folder and a name, and it must not
  * depend on there being any marks */

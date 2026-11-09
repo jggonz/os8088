@@ -4232,12 +4232,14 @@ different floppy in the noted drive answers for the noted cluster, and the
 rename happens there only if that disk holds a `PDSAVE.$$$` in a directory at
 that cluster and lacks the name - a copy of the same disk, where it is the
 same act. The temporary file is not re-verified (it was, before the note was
-written). One window is open: the offer is on the status line and the mouse
-is not its, so a user who ignores it and saves into the same folder replaces
-`PDSAVE.$$$` (PDWRT writes its temp file there); if that save then dies
-mid-copy, the next session offers the partial file under the old target's
-name. Closing it needs a check at save start the D25 share has no bytes for
-(verify-recov, still open).
+written). The offer is on the status line and the mouse is not its, so a
+user can ignore it and save: that save's start (`ovl_save_begin` calling
+`ovl_rc_drop`) deletes the unanswered offer's note, because the save is about
+to write a `PDSAVE.$$$` of its own and, if it died mid-copy, the next session
+would offer that PARTIAL file under the old target's name. The old temporary
+file stays on the disk; only the offer goes. Each save's own note is written
+only on the `PDW_ST_REPLACE` call, after the temp file has been verified, so
+a save that dies earlier leaves no note and its partial file is never offered.
 
 #### 20.17.7 `/NM`, deviations and limits
 

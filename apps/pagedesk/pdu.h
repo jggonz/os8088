@@ -429,6 +429,9 @@ int      pdu_rc_key(int ascii);         /* a prompt owns the keys */
 void     pdu_rc_begin(void);            /* a document is being opened */
 void     pdu_rc_fin(void);              /* a save is about to replace its target */
 int      pdu_rc_close(void);            /* the close negotiator's question */
+#ifndef PD_HOST
+static void ovl_rc_drop(void);          /* a save starts: an unanswered finish offer goes */
+#endif
 /* the two hooks in files the host tests compile unchanged (pduundo.c,
  * pduedit.c) are no-ops there unless a test defines them first */
 #ifdef PD_HOST
