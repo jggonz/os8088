@@ -107729,11 +107729,24 @@ below `BOOTHD_KSECS`: the kernel's first sector as an offset into the data
 area. A format leaves it 0 and the sector reads cluster 2 exactly as before.
 The eight bytes of code and four of data were paid for by moving the loader's
 working variables **out of the sector**: every one is written before it is
-read, so none needed an initialiser, and they live at `0600h` in the segment
-the sector relocated to — which `.nomem` already proves is clear of the
-kernel's read, with the stack at `7C00h` and the blob at the heap floor below
-both. `boot_drive` stays in the sector, being read after the blob has run.
-Seven bytes are still spare.
+read, so none needed an initialiser, and they live at `7400h` in the segment
+the sector relocated to - the BOTTOM of the sector's own `BOOT_STACK`
+reservation below `7C00h`, which the stack (a few hundred bytes at most) never
+reaches and which is above everything the sector reads. `boot_drive` stays in
+the sector, being read after the blob has run. Seven bytes are still spare.
+
+**They were at `0600h` until 2026-11-09, and that broke the 128KB machine.**
+`.nomem` proves the kernel's read ends `BOOT_STACK` below the segment's BASE,
+counting the file as if it landed at `KERNEL_SEG`; a packed kernel lands
+`KZ_RPARA` paragraphs higher (§2.9.13.5), so on kern_big the read climbed
+21,504 bytes past what `.nomem` counted and ran through `0600h` - linear
+`int12*1024 - 7800h`. Below 132KB the read overwrote `[spt]` and its
+neighbours mid-pass and the sector stopped on `G`, a hard-disk boot floor four
+kilobytes above the floppy's. At `7400h` the same arithmetic leaves
+`BOOT_STACK + 7400h` = 31,744 bytes for `KZ_RPARA*16` less the blob, and
+`boot/boothd.asm` asserts that at build time, with the blob's end against the
+same line, so a kernel that outgrows it fails `make` rather than a machine.
+The move is the same bytes: every reference was already a 16-bit absolute.
 
 **The run is arranged with nothing but the file API.** `dskw_alloc` is
 next-fit from `[dsk_rover]`, and `disk_mount` puts the rover back at cluster 2

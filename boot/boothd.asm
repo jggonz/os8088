@@ -458,12 +458,39 @@ boot_drive:  db 0x80
 
 ; THE WORKING VARIABLES ARE NOT IN THE SECTOR (SPEC.md 52.10.15). Every one is
 ; written before it is read, so none needs an initialiser, and the seventeen
-; bytes they took are what paid for [kofs]. They live 0600h into the segment
-; the sector relocated to: .nomem above proves the kernel's own read ends
-; BOOT_STACK below that segment's base, the stack is at 7C00h and grows down
-; into a few hundred bytes at most, and the blob is at the heap floor, below
-; both. boot_drive stays in the sector: it is read AFTER the blob has run.
-absolute 0x0600
+; bytes they took are what paid for [kofs]. They live at the BOTTOM of the
+; sector's own BOOT_STACK reservation, VARS_AT into the segment it relocated
+; to: the stack grows down from 7C00h into a few hundred bytes at most, and is
+; done with them before the blob runs anyway (load_all is over by KZ_HD).
+; boot_drive stays in the sector: it is read AFTER the blob has run.
+;
+; THEY WERE AT 0600h, AND THAT WAS BELOW THE PACKED KERNEL'S READ. .nomem
+; proves the read ends BOOT_STACK below the segment's BASE, counting the file
+; as if it landed at KERNEL_SEG - but a packed one lands KZ_RPARA paragraphs
+; higher (pass 2 above), so on a 128..131KB machine the read ran through
+; 0600h, overwrote [spt] mid-pass, and the sector stopped on 'G'. The two
+; asserts below are that arithmetic, so the next kernel to outgrow it fails
+; the build instead.
+VARS_AT     equ STACK_TOP - BOOT_STACK
+%ifdef KZIP
+ ; the packed read's top, against what .nomem guarantees: R less the blob
+ ; that pass 1 took off the front of the file
+ %if KZ_RPARA*16 - BOOT2_SECS*512 > BOOT_STACK + VARS_AT
+  %error "the packed kernel's read reaches the VBR's variables - SPEC.md 52.10.15"
+ %endif
+ ; ...and the blob's end, on the smallest machine .nomem lets through. At
+ ; and above the kernel's own floor this is guard 5's line exactly (VARS_AT is
+ ; BOOT_SECT + BOOT_STACK under the top of RAM), so what is left to prove is
+ ; the band between .nomem's floor and 128KB - for a kernel guard 5 holds to
+ ; 128KB. kern_mega's blob is above that line and its floor is MEGA_BOOT_KB,
+ ; guard 5's mega arm, on a 286 that has no 150KB configuration.
+ %if BLOB_SEG*16 + BOOT2_SECS*512 + 512 + BOOT_STACK <= 128*1024
+  %if BLOB_SEG*16 + BOOT2_SECS*512 > KERNEL_SEG*16 + KZ_SECS*512 + BOOT_STACK + VARS_AT
+   %error "the blob reaches the VBR's variables on the least RAM .nomem allows - SPEC.md 52.10.15"
+  %endif
+ %endif
+%endif
+absolute VARS_AT
 dest_seg:    resw 1
 lba:         resd 1
 left:        resw 1
