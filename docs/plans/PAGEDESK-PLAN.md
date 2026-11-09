@@ -6,6 +6,10 @@ against, who builds what, and the capability matrix. A story is ticked only
 when it was SEEN working (a host check, a look on the glass, a number), never
 because it was built.
 
+The reader's guide is `docs/PAGEDESK-GUIDE.md`; how it was built, wave by
+wave, with the decisions and the discoveries, is
+`docs/HOW-PAGEDESK-WAS-BUILT.md`.
+
 ## 1. The goal
 
 In the owner's words: *"Build out PageDesk. There may be existing PDF
