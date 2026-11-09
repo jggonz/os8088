@@ -20761,13 +20761,12 @@ SOAK = [
         "floppy read back on the host: qpdf --check exit 0, 13 pages, one "
         "/Square and one /Text on page 12, XTGUIDE's 7 /Link kept, the CFG's "
         "Flate byte 1. Without qpdf the PDF half SKIPs, never passes. On "
-        "VGA, back on page 12 the re-opened mark must draw all four edges: "
-        "RED at 8e00bef0d - PageDesk draws the saved /Square's left and "
-        "bottom only (top 1%, right 1%) where mutool draws all four "
-        "(rows-report, PDREND). Measured 122s VGA + 176s CGA with the knob "
-        "tree built cold",
+        "VGA, back on page 12 the re-opened mark must draw all four edges "
+        "(it drew two before PAGEDESK-SPEC 20.3.2's outward BBox clip). "
+        "Measured 122s VGA + 176s CGA with the knob tree built cold",
         needs=("qemu", "nasm", "cc"), serial=True, timeout=1200,
-        wants=("build/pagedesk.img", "build/pagedesk.bin")),
+        wants=("build/os8088.img", "build/pagedesk.img",
+               "build/pagedesk.bin")),
     Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
         "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
         "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "

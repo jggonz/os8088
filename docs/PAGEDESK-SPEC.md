@@ -698,6 +698,34 @@ kern_big about 534 KiB of heap is free (docs/KERNEL-MEMORY.md), so the peak
 leaves well over the required 32 KiB unclaimed. PD-29 measures it; a change
 that exceeds a row is a change to this table first.
 
+**Measured (PD-29, `pagedeskxt` on MartyPC, 640 KiB, 2026-11-09 at
+bbc92e127): the 176 KiB planning ceiling is NOT met.** PageDesk idles at
+about 315-358 KiB of its own claims plus its 58 KiB instance:
+
+- the two parts PDENG and PDREND, 107 KiB top-down;
+- the overlay, 47.5 KiB;
+- the writer's segment, 47 KiB;
+- 9 KiB of workspace;
+- the document block of 103-146 KiB. This holds the 16 KiB block cache, the
+  arena and tables, the display list, the edit store and the Flate slots D17
+  carves from what RAM is left.
+
+After the session the desktop has 95.5 KiB free on VGA, 82.0 on CGA and 123.0
+on Hercules. The 32 KiB reserve is held after every step on all three. During
+Save As the lowest unclaimed figure falls below it:
+
+| adapter | lowest unclaimed during Save As | with the purgeable caches shed |
+|---|---|---|
+| VGA | 30.5 KiB | 101.5 KiB |
+| CGA | 17.0 KiB | 64.0 KiB |
+| Hercules | 58.0 KiB | 107.0 KiB |
+
+The kernel sheds those purgeable caches before it refuses a claim, so the row
+asserts the reserve after each step, and during a step only with the caches
+shed. D28 raised VGA's in-save trough from 5.5 KiB. The rows below are the
+design budget; the claims as measured are the row's printout
+(`python3 tools/os88test.py soak -v -k pagedeskxt`).
+
 ### 16.2 Claims
 
 | claim | owner | size | when |
@@ -3157,27 +3185,17 @@ made from the primary, which is why it is not built.
 
 #### 20.11.7 Not built, and deviations
 
-1. **Insert from another PDF** (13.8) is a greyed-in-words command: the map has
-   the `PDM_FOREIGN` kind and the writer refuses it (`err_detail` 14). Design: a
-   merge job that runs the Extract pipeline once per source document, numbering
-   from the previous round and writing the page tree last; it needs PDENG to
-   switch documents inside the job and so the 20.11.6 restructuring.
-2. **The recovery journal and the `PDSAVE.$$$` offer** (14.7, 14.3) are not built.
+Items 1, 2, 4 and 5 recorded the state when pages landed; later waves
+superseded them.
+
+1. Insert from another PDF: built, see 20.16.
+2. The recovery journal and the `PDSAVE.$$$` offer: built, see 20.17.
 3. Undo/redo of a page operation needs edit (20.11.1); the dirty flag is
    `pdu_changes`.
-4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
-   is the current one until nav lands.
-5. Sizes at this writing: PDWRT 45,194 bytes (44.1 KiB; D18's cap is 46 KiB,
-   `PDW_CAP` = 47,104, target 44: the page-op, edit and map tables went to the
-   claim's tail, the Extract bit maps are sized from `/Size` inside the claim,
-   the inherited-resources buffer shares the annotation text buffer and the
-   verify scratch the kept-identity buffer). The primary 42,484 + 4,057 = 46,541
-   against the wave-1 shell's 44,623: +1,918 against a +1.5 KiB share. What is
-   left is the overlay's cost, not the commands: ~280 bytes of shims and vectors
-   for the resident routines the overlay calls (shared with any later overlay
-   tenant), the overlay's literals (which stay resident, 73.14), the nine-row menu
-   table and the resident lookups. The overlay holds every command body: 6,171
-   bytes, pages' share about +3.9 KiB.
+4. `ovl_pg_tgt` takes the Pages sidebar's selection (`pdu_side_sel()`) since nav
+   landed.
+5. Sizes at pages' merge are no longer current; PAGEDESK-PLAN 7.1 carries the
+   measured sizes.
 6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
    cost two uncached reads at every open.
 7. A foreign-folder Save As stands the primary in the target's folder, so

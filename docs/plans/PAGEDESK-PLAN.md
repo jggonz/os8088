@@ -88,7 +88,7 @@ Exploratory.
 | PD-05 | self-contained fonts and graphics | XT | 1 | fonts | S | PDRES fonts and art: fonts-report |
 | PD-06 | open real PDFs, bounded | XT | 1 | eng | S | classic xref, incremental chains, bounded tables: eng-report, eng-verify |
 | PD-07 | render text, vectors, images | XT | 1 | rend | S | text, vectors, images, annotation appearances: rend, rendfix, annotr |
-| PD-08 | responsive and bounded rendering | XT | 1-2 | rend, shell | P | banded, cancellable, sliced (seen); the XT timings are PD-29's MartyPC pass |
+| PD-08 | responsive and bounded rendering | XT | 1-2 | rend, shell | P | banded, cancellable, sliced (seen). XT timings in 7.1: a page is 20-58 guest s, not 10 s of CPU; the per-slice and cancel latencies are not measured |
 | PD-09 | navigate and scale | XT | 2 | | S | zoom/fit/go-to/history/scroll drag: nav-verify |
 | PD-10 | select, copy, find | XT | 2 | | S | selection, Copy, Find next/previous: nav-verify (VGA + CGA) |
 | PD-11 | thumbnails, outlines, links | XT | 2 | | S | thumbnails, outline, links: nav-verify (VGA) |
@@ -108,8 +108,8 @@ Exploratory.
 | PD-25 | more RAM, Flate | E | 3 | | P | Flate + predictors decoded when RAM holds a slot (D17), seen on VGA; Preferences turns it Off; XMEM caches not built |
 | PD-26 | AcroForm filling | E | 3 | | P | forms shown as printed and the not-supported note (20.18), seen on VGA; FILLING not built (D24, Enhanced, not selected) |
 | PD-27 | protected-mode decision/spike | X | 3 | | I | docs/plans/PAGEDESK-PM-ADR.md: host-report |
-| PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | P | malformed input: eng fuzz, tests/pdfneg, pdefuzz; failing storage: wrt/pages refusals; the final pass runs the rows |
-| PD-29 | hardware, memory, responsiveness proof | XT | final | lead | - | |
+| PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | P | malformed input: eng fuzz, tests/pdfneg, pdefuzz (green in the final pass); a failed read mid-token: pde_check's 240 fault cases and pdr_cache (verify-perf); failing storage: wrt/pages refusals, not driven on a real failing disk |
+| PD-29 | hardware, memory, responsiveness proof | XT | final | lead, rows, perf | P | `pagedeskxt` on MartyPC (VGA, CGA, Hercules at 640 KiB) and `pagedesk` on QEMU, green at bbc92e127 (7.1). Missed: 176 KiB ceiling (about 375-415 KiB measured), 10 s first page (40-43 s), 32 KiB raw during Save As on VGA and CGA. Not run: repeat-loop stability, a second app alongside, physical hardware |
 | PD-30 | documented working behaviour | XT | final | lead | I | README.TXT, docs/PAGEDESK-GUIDE.md, docs/HOW-PAGEDESK-WAS-BUILT.md, PAGEDESK-SPEC 20.20 (docs-report) |
 
 ## 4. Waves
@@ -153,19 +153,21 @@ freed" lives.
 
 ## 6. Capability matrix
 
-Filled in as stories are SEEN; `planned` until then.
+XT means seen on the 8088 path, on MartyPC or by the target-vs-host A/B. On
+286/386 the same 8086 code runs, but no 286/386 machine has been run (PD-25's
+XMEM caches are not built).
 
 | capability | XT | 286/386 | host-prepared |
 |---|---|---|---|
-| classic xref, incremental chains | planned | planned | - |
-| ASCIIHex, RunLength | planned | planned | - |
+| classic xref, incremental chains | yes (PD-06; pde_boot target == host on 145 files) | same code, not run | - |
+| ASCIIHex, RunLength | yes (eng fixtures) | same code, not run | - |
 | Flate | decoded when RAM holds a 43 KiB slot (D17, by RAM never by CPU), else refused `PDE_FLATE` | same | normalised by PD-22 |
-| base-14 Latin text | planned | planned | - |
+| base-14 Latin text | yes (HELLO, XTGUIDE on MartyPC) | same code, not run | - |
 | other fonts | substituted, Incomplete | substituted | rasterised by PD-22 |
-| 1/8-bit grey images | planned | planned | - |
+| 1/8-bit grey images | yes (rend fixtures, pdrend-real) | same code, not run | - |
 | JPEG, CCITT, JBIG2, JPX | refused | refused | rasterised by PD-22 |
-| annotations: Text, Highlight, Square, Circle, Line, Ink, FreeText | planned | planned | - |
-| AcroForm | read-only appearance | planned (PD-26) | - |
+| annotations: Text, Highlight, Square, Circle, Line, Ink, FreeText | yes (annotr; a saved /Square re-opens with all four edges, `pagedesk`) | same code, not run | - |
+| AcroForm | read-only appearance | read-only appearance; filling not built (D24) | - |
 | encryption | refused | refused | - |
 
 ## 7. Evidence
@@ -176,10 +178,80 @@ and screenshots in the lead's log directory (`~/Repos/pagedesk-logs/`,
 `*-report.md`, `*-verify.md`, `shots/<key>/`); the PR body carries the
 selection that ships with the merge.
 
+### 7.1 PD-29: the final pass (bbc92e127, 2026-11-09)
+
+The soak union ran 17 rows, all green after one declaration fix to the
+`pagedesk` row. `pagedeskxt` and `pagedesk` were re-run verbosely for these
+tables. Each step is in guest seconds on a 4.77 MHz 8088 with 640 KiB, on
+MartyPC. These are emulated and cycle-modelled, not physically run; floppy
+time is the emulator's.
+
+| step | VGA (5160) | CGA (5150) | Hercules (5150) | VGA before perf |
+|---|---|---|---|---|
+| HELLO: double-click to first page | 43.2 | 40.4 | 40.6 | 139.7 |
+| XTGUIDE: chooser to first page | 40.1 | 30.6 | 32.5 | 111.9 (a) |
+| page turn (PgDn) | 35.5 | 23.8 | 32.0 | 155.0 |
+| zoom in | 21.4 | 16.1 | 18.0 | 138.5 |
+| Find 'Index' across XTGUIDE's 12 pages | 87.6 | 87.1 | 87.2 | 1,427.8 |
+| area mark drawn | 12.1 | 11.3 | 12.3 | 99.3 |
+| Save As XTMARK.PDF | 32.0 | 32.1 | 32.4 | 36.3 (a) |
+| re-open after Save As | 58.4 | 50.0 | 54.3 | 143.0 |
+| free after the session (KiB) | 95.5 | 82.0 | 123.0 | 83.0 (a) |
+| lowest unclaimed during Save As (KiB, raw / caches shed) | 30.5 / 101.5 | 17.0 / 64.0 | 58.0 / 107.0 | 31.0 / - (5.5 / 76.5 before D28 (a)) |
+| task 0 stack (D22 bound 384) | 322 | 320 | 322 | 320 (a) |
+| private module stack (D23 bound 1792) | 316-328 | 322 | 322 | 354-372 (a) |
+
+The "before" column is perf's clean build of dcd0b85e0. Cells marked (a) come
+from the rows agent's run at 8e00bef0d, before D28.
+
+Every saved XTMARK.PDF passes `qpdf --check` (exit 0) with its /Square and
+XTGUIDE's 7 /Link. On QEMU, `pagedesk` drives Insert from PDF, Notes,
+Preferences and Save As on VGA and CGA. The re-opened mark draws 100% of all
+four edges.
+
+What closed the gap: perf found the lexer re-reading a font's `/Widths` from
+element 0 for every glyph, which was 92% of all tokens. It added dict_get's
+array cursor, the lexer's inner loops in assembly, a one-walk widths fill and
+per-document font caches. verify-perf's Tf-cache fix took XTGUIDE's
+RES_LOOKUPs from 314 to 43, so Find went from 144 to 87 s. The 20 KiB glyph
+cache was measured (about 4% faster, 8 KiB less heap) and declined.
+
+### 7.2 Open items
+
+- **Performance:**
+  - PD-29's 10-second first page is missed by about 4x. Where the time goes:
+    PDENG `lx_token` (needs bytes PDENG doesn't have: 6 free), floppy reads
+    (18-20% of a draw), the kernel's VGA drawing (about 12%), and multi-pass
+    pages re-lexing their content.
+  - Per-slice (100 ms) and cancel (250 ms) latencies are not measured.
+- **Memory:**
+  - The SPEC 16.1 176 KiB ceiling is not met (16.1 Measured).
+  - Save As dips under 32 KiB raw on VGA and CGA; it is held with the
+    purgeable caches shed.
+- **PD-29 not run:** repeat open/edit/save/close loops, a second application
+  alongside, physical hardware.
+- **Enhanced:** PD-25's XMEM caches and PD-26's form filling are not built.
+- **Behaviour:**
+  - New, Open and Close document don't ask Save or Discard (only the window
+    close does).
+  - The forms/scripts refusal misses /JS placed directly in an annotation
+    dict.
+  - Thumbnails index by view position, not page id.
+  - Name-tree link targets are not followed.
+  - A normal redraw shows old pixels until the first band.
+  - A rotated or skewed form BBox still clips by pixel centres.
+  - A font whose load fails a read can keep a fallback width, and its page
+    draws without the Incomplete flag.
+- **Platform:**
+  - kern_mega's option-ROM IRQ on the private module stack is unexamined.
+  - CC_HAS_ONDRAG in crt0 is deferred.
+  - Copy's transient claim has no 16.2 row.
+
 ## 8. Log
 
 - 2026-11-05: contract and plan written; wave 1 launched.
 - 2026-11-05: wave 1 integrated (eng, wrt, math, fonts, fix, shell, rend); wave 2 launched.
 - 2026-11-05: wave 2 integrated (edit, notes, nav, pages, annotr, flate, host) with D23's private module stack (20.15) and the static stack gate (`pdstk`).
 - 2026-11-06: wave 3 launched: insert (PD-19), recov (PD-20), prefs (PD-23, PD-26's baseline), polish (carried defects). D24 budgets.
-- 2026-11-09: wave 3 integrated after a usage-limit pause; every segment at its cap (primary 59,235 of 59,392). PD-30's docs merged. The final pass's rows (rows agent) and PD-29's MartyPC proof are being written.
+- 2026-11-09: wave 3 integrated after a usage-limit pause; every segment at its cap (primary 59,235 of 59,392). PD-30's docs merged.
+- 2026-11-09: final round. The rows agent added 14 host rows plus `pagedesk` (QEMU) and `pagedeskxt` (MartyPC). square fixed the re-opened /Square's lost edges (outward BBox clip). perf and verify-perf made the XT session 5.7x faster. D28 reserves room for a save beside the Flate slots. The final soak union was green; see 7.1.
