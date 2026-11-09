@@ -236,10 +236,14 @@ static void clip_apply(pdw rule)
     pdw s, e, i, j, ne, ci, ok;
     if (g_nv < 2) { GS.cx1 = GS.cx0 - 1; return; }
     if (path_is_rect()) {
-        v = q_lo(g_rqx0); if (v > GS.cx0) GS.cx0 = v;
-        v = q_hi(g_rqx1); if (v < GS.cx1) GS.cx1 = v;
-        v = q_lo(g_rqy0); if (v > GS.cy0) GS.cy0 = v;
-        v = q_hi(g_rqy1); if (v < GS.cy1) GS.cy1 = v;
+        /* OUTWARD: every pixel the rectangle touches. A shape's own pixels are chosen by the
+         * sample-point rule, but a thin one is widened to one pixel (20.3.2), and that pixel
+         * can sit across the clip's edge while its centre line is inside it - a 1 pt stroke on
+         * a form's BBox edge. The sample-point clip dropped it: two edges of a saved /Square */
+        v = (pdi)(g_rqx0 >> 2); if (v > GS.cx0) GS.cx0 = v;
+        v = (pdi)(((g_rqx1 + 3) >> 2) - 1); if (v < GS.cx1) GS.cx1 = v;
+        v = (pdi)(g_rqy0 >> 2); if (v > GS.cy0) GS.cy0 = v;
+        v = (pdi)(((g_rqy1 + 3) >> 2) - 1); if (v < GS.cy1) GS.cy1 = v;
         return;
     }
     ok = g_ncl < PDR_NCLIP;

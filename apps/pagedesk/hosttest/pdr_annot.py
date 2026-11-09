@@ -542,6 +542,30 @@ if rc == 0:
 rc, im, st, err = render(pdfi, H=300, W=400, adapter='herc', zoom=100)
 check('the same page on Hercules (dithered 1bpp) renders', rc == 0 and inc(st) == 0)
 
+
+# a Square whose saved appearance strokes ON the BBox's maximum edges (PageDesk's own Save As shape): all four
+# edges must be drawn at every zoom, a stroke whose centre is inside the clip draws
+print('-- an appearance stroking at its BBox edge')
+EXS = []
+EXS.append(strm('/Type /XObject /Subtype /Form /BBox [0 0 123.875 140.3125]', b'1 0.333 0.333 RG 1 w 0.5 0.5 122.875 139.3125 re S'))
+sqa = '<< /Type /Annot /Subtype /Square /F 4 /Rect [109 526.3125 232.875 666.625] /AP << /N 6 0 R >> >>'
+pdfs = writepdf('sqedge.pdf', page_pdf(b'', [sqa], EXS, mb='0 0 400 700'))
+for zm in (25, 33, 50, 60, 73, 87, 100, 125, 150, 200):
+    rc, im, st, err = render(pdfs, flags=1, H=700, zoom=zm)
+    if rc != 0: check('square edge zoom %d renders' % zm, False, err[:80]); continue
+    pi = pidx(im); ink = (pi == 12) | (pi == 4)
+    ys, xs = np.nonzero(ink)
+    if not len(ys): check('square edge zoom %d: drawn at all' % zm, False); continue
+    y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+    bw = x1 - x0 + 1; bh = y1 - y0 + 1
+    cov = lambda a: float(a.mean())
+    t = cov(ink[y0:y0+1, x0:x1+1]) + cov(ink[y0+1:y0+2, x0:x1+1]) * 0   # row 0 of the box
+    edges = {'top': ink[y0:y0+2, x0:x1+1].any(axis=0).mean(), 'bottom': ink[y1-1:y1+1, x0:x1+1].any(axis=0).mean(),
+             'left': ink[y0:y1+1, x0:x0+2].any(axis=1).mean(), 'right': ink[y0:y1+1, x1-1:x1+1].any(axis=1).mean()}
+    exp_w = round(123.875 * zm / 100); exp_h = round(140.3125 * zm / 100)
+    check('square edge zoom %d%%: all four edges drawn %s, box %dx%d (want ~%dx%d)' % (zm, {k: round(v, 2) for k, v in edges.items()}, bw, bh, exp_w, exp_h),
+          min(edges.values()) > 0.95 and abs(bw - exp_w) <= 2 and abs(bh - exp_h) <= 2)
+
 print('pdr_annot: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAIL ' + f)
 sys.exit(1 if fails else 0)
