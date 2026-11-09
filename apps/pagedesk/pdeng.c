@@ -114,6 +114,7 @@ static void u32_sub16(struct pd_u32 *r, pdw n)
 }
 static pdw u32_is0(const struct pd_u32 *a) { return a->lo == 0 && a->hi == 0; }
 
+#ifdef PD_HOST
 static int str_eq(const pdb *a, const char *b)
 {
     while (*a && *b) {
@@ -122,6 +123,9 @@ static int str_eq(const pdb *a, const char *b)
     }
     return *a == 0 && *b == 0;
 }
+#else
+int str_eq(const pdb *a, const char *b);    /* pdelex.inc (perf) */
+#endif
 static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 
 #include "pdefile.c"

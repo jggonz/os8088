@@ -48,6 +48,7 @@ static pdw g_inc;                   /* PDF_INC_* seen                        */
 static char g_incname[32];
 static pdw g_ops, g_passes;
 
+#ifdef PD_HOST
 static void pdr_cpy(void *d, const void *s, pdw n)
 {
     pdb *a = (pdb *)d; const pdb *b = (const pdb *)s;
@@ -58,6 +59,10 @@ static void pdr_zero(void *d, pdw n)
     pdb *a = (pdb *)d;
     while (n--) *a++ = 0;
 }
+#else
+void pdr_cpy(void *d, const void *s, pdw n);     /* pdrprim.inc (perf) */
+void pdr_zero(void *d, pdw n);
+#endif
 static pdw pdr_memeq(const pdb *a, const pdb *b, pdw n)
 {
     while (n--) if (*a++ != *b++) return 0;
@@ -74,9 +79,11 @@ static pdi pdr_clampq(pdi v)
 }
 
 /* record an incomplete-rendering feature (10.6): the bit and, once, a name */
+static const char *g_fnote;            /* perf: font_get's first font note */
 static void inc_note(pdw bit, const char *name)
 {
     pdw i;
+    if (bit == PDF_INC_FONT && !g_fnote) g_fnote = name;
     if (!g_inc) {
         for (i = 0; i < 31 && name[i]; i++) g_incname[i] = name[i];
         g_incname[i] = 0;

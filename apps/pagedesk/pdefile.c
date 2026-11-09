@@ -10,9 +10,20 @@
  * The whole file is never resident; offsets are pd_u32.
  * ==========================================================================*/
 
+/* perf: v_dict_get's array cursor (pdeverb.c): the array (its first item's
+ * offset, 0 = none), the element last answered and the offset after it */
+static struct pd_u32 dc_arr, dc_pos, dc_a;
+static pdw dc_idx;
+/* ...and its key cache: the object whose top-level key[0] was found last,
+ * and the offset just after that name (dk_obj 0 = none) */
+static struct pd_u32 dk_pos;
+static pdw dk_obj, dk_gen;
+
 static void fl_invalidate(void)
 {
     pdw i;
+    u32_zero(&dc_arr);
+    dk_obj = 0;
     for (i = 0; i < PDE_MAXBLK; i++) { fl_valid[i] = 0; fl_stamp[i] = 0; }
     fl_clock = 0;
     for (i = 0; i < 8; i++) fl_cur[i] = 0;

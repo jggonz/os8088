@@ -20553,6 +20553,10 @@ PDFL_SRC := $(PDE_SRC) apps/pagedesk/pdeflate.h apps/pagedesk/pdeflate.c
 # pdeflate.inc, so without these an edit to either left PDENG.MOD stale.
 $(BUILD)/pdeng.raw.asm $(BUILD)/pde_test $(BUILD)/pde_fuzz: apps/pagedesk/pdeflate.h
 $(BUILD)/PDENG.MOD: apps/pagedesk/pdeflate.inc
+# ---- PageDesk: perf ----
+# the lexer's classes, word scan and buffer moves in assembly (pdelex.inc)
+$(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdelex.inc
+# ---- end PageDesk: perf ----
 $(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
                       apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
 	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \

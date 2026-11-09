@@ -882,3 +882,39 @@ _pdr_fcopy:
 ; ---- tables and the primitives' private state ------------------------------
 gi_bayer: db 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
 gi_pal:   db 0, 8, 7, 15
+
+; -----------------------------------------------------------------------------
+; perf: pdrg.c's near zero and copy, which were a byte loop of C apiece - a
+; dict_get zeroed its 238-byte block that way, 14% of drawing HELLO.PDF on
+; the 5150. pdrg.c keeps the C as their twins for the host harnesses.
+;   void pdr_zero(void *d, pdw n)
+;   void pdr_cpy(void *d, const void *s, pdw n)
+; -----------------------------------------------------------------------------
+_pdr_zero:
+    push bp
+    mov bp, sp
+    push es
+    push ds
+    pop es
+    mov di, [bp+4]
+    mov cx, [bp+6]
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop bp
+    ret
+_pdr_cpy:
+    push bp
+    mov bp, sp
+    push es
+    push ds
+    pop es
+    mov di, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    cld
+    rep movsb
+    pop es
+    pop bp
+    ret

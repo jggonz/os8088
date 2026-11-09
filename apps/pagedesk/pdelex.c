@@ -8,12 +8,51 @@
  * the "arena" is not where objects live (see 20.2).
  * ==========================================================================*/
 
+/* The classes and the word scan are pdelex.inc's on the target (8086, a
+ * table read apiece); these are their twins, which the host harnesses run. */
+#ifdef PD_HOST
 static int is_ws(int c) { return c == 32 || c == 10 || c == 13 || c == 9 || c == 12 || c == 0; }
 static int is_delim(int c)
 {
     return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' || c == ']' ||
            c == '{' || c == '}' || c == '/' || c == '%';
 }
+static pdw lx_run(const pdb *src, pdw left, pdb *dst, pdw cap, pdw stop)
+{
+    pdw k = 0;
+    while (k < left && !is_ws(src[k]) && !is_delim(src[k]) && src[k] != stop) {
+        if (k < cap) dst[k] = src[k];
+        k++;
+    }
+    return k;
+}
+static void iv_acc(struct pd_u32 *iv, pdw *f, int d);
+/* t[0..n) as a PDF number: 0 = it is not one, else 1 | 2 (a '.') | 4 (the
+ * integer part is 2^31 or more: *iv saturates at 0xFFFFFFFF); *iv is the
+ * integer part, written only for a number */
+static pdw lx_num(const pdb *t, pdw n, struct pd_u32 *iv)
+{
+    static struct pd_u32 a;
+    pdw i = 0, f = 0;
+    u32_zero(&a);
+    if (n && (t[0] == '+' || t[0] == '-')) i = 1;
+    for (; i < n; i++) {
+        if (t[i] == '.') { if (f & 2) return 0; f |= 2; }
+        else if (t[i] < '0' || t[i] > '9') return 0;
+        else { f |= 1; if (!(f & 6)) iv_acc(&a, &f, t[i] - '0'); }
+    }
+    if (!(f & 1)) return 0;
+    if (a.hi >= 0x8000) f |= 4;
+    u32_cp(iv, &a);
+    return f;
+}
+#else
+int is_ws(int c);
+int is_delim(int c);
+pdw lx_run(const pdb *src, pdw left, pdb *dst, pdw cap, pdw stop);
+pdw lx_num(const pdb *t, pdw n, struct pd_u32 *iv);
+#endif
+#ifdef PD_HOST
 static int hexv(int c)
 {
     if (c >= '0' && c <= '9') return c - '0';
@@ -21,6 +60,13 @@ static int hexv(int c)
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
 }
+#else
+int hexv(int c);
+int lx_getc(void);
+int lx_peek(void);
+void lx_skipws(void);
+void lx_tell(struct pd_u32 *out);
+#endif
 
 static pdw st_decode(struct sctx *c);          /* pdestrm.c */
 
@@ -36,6 +82,7 @@ static pdw lx_fill(void)
     L->i = 0;
     return L->n;
 }
+#ifdef PD_HOST
 static int lx_getc(void)
 {
     if (L->i >= L->n && !lx_fill()) return -1;
@@ -73,32 +120,28 @@ static void lx_seek(const struct pd_u32 *pos)
     L->n = 0; L->i = 0;
     L->smode = 0;
 }
+/* the next byte that is not blank or a comment, -1 at the end */
+static int lx_next(void) { lx_skipws(); return lx_peek(); }
+#else
+void lx_seek(const struct pd_u32 *pos);
+void ov_clear(void);
+int lx_next(void);
+#endif
 
-/* tk.iv = tk.iv * 10 + d, saturating; sets tk.range at 2^31 */
-static void iv_acc(int d)
+#ifdef PD_HOST
+/* *iv = *iv * 10 + d, saturating at 0xFFFFFFFF with 4 in *f (lx_num's twin) */
+static void iv_acc(struct pd_u32 *iv, pdw *f, int d)
 {
     pdm_ovf_clear();
-    pdm_u32_mul16(&m_a, tk.iv.lo, 10);
-    pdm_u32_mul16(&m_b, tk.iv.hi, 10);
-    if (m_b.hi) { tk.range = 1; pdm_u32_set(&tk.iv, 0xFFFF, 0xFFFF); return; }
+    pdm_u32_mul16(&m_a, iv->lo, 10);
+    pdm_u32_mul16(&m_b, iv->hi, 10);
+    if (m_b.hi) { *f |= 4; pdm_u32_set(iv, 0xFFFF, 0xFFFF); return; }
     pdm_u32_set(&m_c, m_b.lo, 0);
-    pdm_u32_add(&tk.iv, &m_a, &m_c);
-    pdm_u32_add16(&tk.iv, (pdw)d);
-    if (pdm_ovf()) { tk.range = 1; pdm_u32_set(&tk.iv, 0xFFFF, 0xFFFF); }
+    pdm_u32_add(iv, &m_a, &m_c);
+    pdm_u32_add16(iv, (pdw)d);
+    if (pdm_ovf()) { *f |= 4; pdm_u32_set(iv, 0xFFFF, 0xFFFF); }
 }
-
-static int is_number(const pdb *t, pdw len)
-{
-    pdw i = 0, digits = 0, dots = 0;
-    if (len == 0) return 0;
-    if (t[0] == '+' || t[0] == '-') i = 1;
-    for (; i < len; i++) {
-        if (t[i] >= '0' && t[i] <= '9') digits++;
-        else if (t[i] == '.') dots++;
-        else return 0;
-    }
-    return digits > 0 && dots <= 1;
-}
+#endif
 
 /* A literal or hex string, one piece (<= 255 bytes) per call. */
 static pdw lx_strpiece(void)
@@ -203,45 +246,50 @@ static pdw lx_token(void)
     case '/':
         n = 0;
         for (;;) {
-            d = lx_peek();
-            if (d < 0 || is_ws(d) || is_delim(d)) break;
+            /* perf: the buffer's run of the name in one lx_run, which stops
+             * at a '#' too; a name of PD_MAXNAME bytes or more is refused */
+            if (L->i >= L->n && !lx_fill()) break;
+            h = (int)lx_run(L->buf + L->i, (pdw)(L->n - L->i), tk.text + n, (pdw)(PD_MAXNAME + 1 - n), '#');
+            L->i = (pdw)(L->i + h);
+            n = (pdw)(n + h);
+            if (n > PD_MAXNAME) return PDE_LIMIT;
+            if (L->i >= L->n) continue;                 /* the buffer ended: refill */
+            if (L->buf[L->i] != '#') break;             /* it ended at a class */
             L->i++;
-            if (d == '#') {
-                h = lx_getc(); h2 = lx_getc();
-                if (hexv(h) < 0 || hexv(h2) < 0) return PDE_SYNTAX;
-                d = hexv(h) * 16 + hexv(h2);
-            }
+            h = lx_getc(); h2 = lx_getc();
+            if (hexv(h) < 0 || hexv(h2) < 0) return PDE_SYNTAX;
             if (n >= PD_MAXNAME) return PDE_LIMIT;
-            tk.text[n++] = (pdb)d;
+            tk.text[n++] = (pdb)(hexv(h) * 16 + hexv(h2));
         }
         tk.text[n] = 0; tk.len = n; tk.kind = PDT_NAME;
         return PDE_OK;
     }
-    /* a word: a number, a keyword or an operator */
-    n = 0; total = 0;
-    tk.text[n++] = (pdb)c; total = 1;
+    /* a word: a number, a keyword or an operator. pdelex.inc's lx_run
+     * takes the buffer's run of it in one call (perf) */
+    tk.text[0] = (pdb)c; n = 1; total = 1;
     for (;;) {
-        d = lx_peek();
-        if (d < 0 || is_ws(d) || is_delim(d)) break;
-        L->i++;
-        total++;
+        if (L->i >= L->n && !lx_fill()) break;
+        h = (int)lx_run(L->buf + L->i, (pdw)(L->n - L->i), tk.text + n, (pdw)(255 - n), 0);
+        L->i = (pdw)(L->i + h);
+        total = (pdw)(total + h);
         if (total >= PD_MAXTOK) return PDE_LIMIT;
-        if (n < 255) tk.text[n++] = (pdb)d;
+        n = (pdw)(n + ((pdw)h < (pdw)(255 - n) ? (pdw)h : (pdw)(255 - n)));
+        if (L->i < L->n) break;                         /* it ended at a class */
     }
     tk.text[n] = 0; tk.len = n;
-    if (is_number(tk.text, n)) {
-        pdw i = 0, real = 0;
+    /* a number: [+-] digits, one '.' at most, a digit somewhere - checked
+     * and converted in one walk, pdelex.inc's lx_num (perf: it was a walk,
+     * a second walk calling the u32 library per digit, and a full 16.16
+     * parse of every integer) */
+    h = (int)lx_num(tk.text, n, &tk.iv);
+    if (h) {
         tk.kind = PDT_NUM;
-        u32_zero(&tk.iv);
-        if (tk.text[0] == '-') { tk.neg = 1; i = 1; }
-        else if (tk.text[0] == '+') i = 1;
-        for (; i < n; i++) {
-            if (tk.text[i] == '.') real = 1;
-            else if (!real) iv_acc(tk.text[i] - '0');
-        }
-        tk.real = real;
-        if (tk.iv.hi >= 0x8000) tk.range = 1;          /* >= 2^31 */
-        if (pdm_fx_parse(&tk.fx, (const char *)tk.text, n) != PDE_OK) tk.fxr = 1;
+        tk.neg = c == '-';
+        tk.real = (pdw)((h >> 1) & 1);
+        tk.range = (pdw)((h >> 2) & 1);                     /* >= 2^31 */
+        if (h == 1 && tk.iv.hi == 0 && tk.iv.lo < 0x8000)
+            pdm_fx_int(&tk.fx, tk.neg ? -(pdi)tk.iv.lo : (pdi)tk.iv.lo);
+        else if (pdm_fx_parse(&tk.fx, (const char *)tk.text, n) != PDE_OK) tk.fxr = 1;
         return PDE_OK;
     }
     if (str_eq(tk.text, "true")) { tk.kind = PDT_TRUE; return PDE_OK; }
@@ -253,6 +301,7 @@ static pdw lx_token(void)
 
 /* ---- the object parser, in place ---------------------------------------- */
 
+#ifdef PD_HOST
 static void ov_clear(void)
 {
     ov.kind = PDK_NULL; ov.neg = 0; ov.range = 0; ov.fxr = 0; ov.rnum = 0; ov.rgen = 0; ov.len = 0;
@@ -260,6 +309,7 @@ static void ov_clear(void)
     pdm_fx_int(&ov.fx, 0);
     u32_zero(&ov.iv);
 }
+#endif
 
 /* The head of the next value: a scalar whole, an array or dictionary as its
  * opener (the lexer is left just inside), a reference "n g R" as one value. */
@@ -302,18 +352,26 @@ static pdw ob_value(void)
         if (tk.real) { ov.kind = PDK_REAL; return PDE_OK; }
         ov.kind = PDK_INT;
         if (tk.neg || tk.range) return PDE_OK;
-        /* "n g R" ? look two tokens ahead and put them back if it is not */
+        /* "n g R" ? look two tokens ahead and put them back if it is not.
+         * perf: a token is lexed only where the next byte can begin one of
+         * the reference - a digit, then an 'R' - so the number in "[278 333
+         * 474" costs two tokens, not three, and one before a name costs one */
         g = tk.iv.lo; big = tk.iv.hi;
         save_i = L->i; save_gen = L->gen;
         lx_tell(&ob_pos);
-        rc = lx_token();
-        if (rc == 0 && tk.kind == PDT_NUM && !tk.neg && !tk.real && !tk.range && tk.iv.hi == 0) {
-            k = tk.iv.lo;
+        k = (pdw)lx_next();
+        if (k >= '0' && k <= '9') {
             rc = lx_token();
-            if (rc == 0 && tk.kind == PDT_OP && tk.len == 1 && tk.text[0] == 'R') {
-                if (big) return PDE_LIMIT;              /* an object number over 65535 */
-                ov.kind = PDK_REF; ov.rnum = g; ov.rgen = k;
-                return PDE_OK;
+            if (rc == 0 && tk.kind == PDT_NUM && !tk.neg && !tk.real && !tk.range && tk.iv.hi == 0) {
+                k = tk.iv.lo;
+                if (lx_next() == 'R') {
+                    rc = lx_token();
+                    if (rc == 0 && tk.kind == PDT_OP && tk.len == 1 && tk.text[0] == 'R') {
+                        if (big) return PDE_LIMIT;      /* an object number over 65535 */
+                        ov.kind = PDK_REF; ov.rnum = g; ov.rgen = k;
+                        return PDE_OK;
+                    }
+                }
             }
         }
         if (L->gen == save_gen) L->i = save_i; else lx_seek(&ob_pos);

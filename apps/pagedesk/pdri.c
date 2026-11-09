@@ -74,6 +74,29 @@ static pdw res_lookup(const char *cat, const char *name)
     return eng_call(PDV_ENG_RES_LOOKUP, &g_rl, sizeof g_rl, 0, 0, 0);
 }
 
+/* perf: Tf's font resources, name -> object, for the length of a request.
+ * A Tf was a RES_LOOKUP each - the page, its /Parent, /Resources, /Font -
+ * on every Tf of every pass. Keyed by the resource context and the name
+ * (names of 8 bytes or more are looked up every time) */
+#define PDR_NRC 8
+static struct { pdw resp, reso, resg, obj, gen; char name[8]; } g_rc[PDR_NRC];
+static pdw g_rcn;
+static pdw font_res(void)
+{
+    pdw i;
+    for (i = 0; i < g_rcn; i++)
+        if (g_rc[i].resp == g_resp && g_rc[i].reso == g_reso && g_rc[i].resg == g_resg && pdr_seq(g_rc[i].name, g_name))
+            return font_get(g_rc[i].obj, g_rc[i].gen);
+    if (res_lookup("Font", g_name) || !g_rl.objnum) return 0xFF;
+    if (g_rcn < PDR_NRC && pdr_slen(g_name) < 8) {
+        i = g_rcn++;
+        g_rc[i].resp = g_resp; g_rc[i].reso = g_reso; g_rc[i].resg = g_resg;
+        g_rc[i].obj = g_rl.objnum; g_rc[i].gen = g_rl.gen;
+        pdr_scpy(g_rc[i].name, g_name, 8);
+    }
+    return font_get(g_rl.objnum, g_rl.gen);
+}
+
 /* ---- colour --------------------------------------------------------------- */
 static void col_set(pdw stroke, pdw r, pdw g, pdw b)
 {
@@ -727,8 +750,7 @@ static void exec_op(const char *s, pdw n)
         case 'T' | ('f' << 8): {
             pdw fi = 0xFF;
             setfx(&GS.fs, 1);
-            if (g_havename && res_lookup("Font", g_name) == 0 && g_rl.objnum) fi = font_get(g_rl.objnum, g_rl.gen);
-            else inc_note(PDF_INC_FONT, "missing font resource");
+            if (!g_havename || (fi = font_res()) == 0xFF) inc_note(PDF_INC_FONT, "missing font resource");
             if (fi == 0xFF) fi = font_get(0, 0);
             GS.font = (pdb)fi;
             fs_changed();
@@ -1104,7 +1126,10 @@ static pdw interp_start(pdw page)
     g_page = page;
     g_ops = 0;
     g_rn = 0; g_ropen = 0;
-    g_cok = 0; g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0;
+    g_cok = 0;
+    /* perf: the font cache (and the widths in it) and the Tf resource cache
+     * live for the document - verb_init empties them at each open. Every
+     * pass of every page used to fetch every font and width again */
     g_pkfam = 0xFF;
     g_pgopen = 0; g_aph = 0; g_aidx = 0; g_await = 0;
     text_ident();

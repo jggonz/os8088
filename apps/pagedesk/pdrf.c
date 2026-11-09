@@ -149,7 +149,9 @@ struct pdr_font {
 };
 /* the cache's 4 entries live in the workspace (WS_FN); one is resident at a time */
 static struct pdr_font g_fw;
-static struct { pdw objnum, gen; pdb used; } g_fk[PDR_NFONT];
+/* note: the first PDF_INC_FONT note its load made, replayed when a later
+ * page finds it cached (perf: the cache outlives the page) */
+static struct { pdw objnum, gen; pdb used; const char *note; } g_fk[PDR_NFONT];
 static pdw g_fwi = 0xFF, g_fwdirty;
 static pdw g_fnnext;
 static void font_flush(void)
@@ -264,8 +266,12 @@ static pdw font_get(pdw obj, pdw gen)
     pdw i, slot;
     struct pdr_font *f;
     for (i = 0; i < PDR_NFONT; i++)
-        if (g_fk[i].used && g_fk[i].objnum == obj && g_fk[i].gen == gen && obj) return i;
+        if (g_fk[i].used && g_fk[i].objnum == obj && g_fk[i].gen == gen && obj) {
+            if (g_fk[i].note) inc_note(PDF_INC_FONT, g_fk[i].note);
+            return i;
+        }
     slot = g_fnnext; g_fnnext = (g_fnnext + 1) % PDR_NFONT;
+    g_fnote = 0;
     font_flush();
     g_fwi = slot; g_fwdirty = 1;
     g_fk[slot].used = 1; g_fk[slot].objnum = obj; g_fk[slot].gen = gen;
@@ -287,9 +293,22 @@ static pdw font_get(pdw obj, pdw gen)
         if (ci_has(base, "symbol") || ci_has(base, "dingbat")) inc_note(PDF_INC_FONT, "Symbol font");
         font_encoding(f, obj, gen);
         if (dict_get(obj, gen, "FirstChar", 0, 0) == 0) f->first = (pdw)pdm_fx_floor(&g_dg.num);
-        if (dict_get(obj, gen, "Widths", 0, 0) == 0 && g_dg.kind == PDK_ARR) f->nw = g_dg.count;
+        if (dict_get(obj, gen, "Widths", 0, 0) == 0 && g_dg.kind == PDK_ARR) {
+            f->nw = g_dg.count;
+            /* perf: every width in one walk, [0], [1]... - PDENG's array
+             * cursor makes each the next item, not a re-read from [0] */
+            for (i = 0; i < f->nw; i++) {
+                pdw c = (pdw)(f->first + i);
+                if (c > 255 || dict_get(obj, gen, "Widths", idx_key(i), 0)) break;
+                if (c >= 32 && (g_dg.kind == PDK_INT || g_dg.kind == PDK_REAL)) {
+                    pdi v = pdm_fx_round(&g_dg.num);
+                    f->wid[c - 32] = v < 0 ? 0 : (pdw)v;
+                }
+            }
+        }
     }
     if (!obj) { for (i = 0; i < 224; i++) f->enc[i] = (pdb)(i + 32); }
+    g_fk[slot].note = g_fnote;
     return slot;
 }
 

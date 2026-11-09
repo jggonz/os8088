@@ -44,6 +44,8 @@
 #define PDF_K_HEX       1
 #define PDF_K_RLE       2
 
+/* buf, n, i and fpos are at +0, +2, +4 and +8 on the target, and
+ * pdelex.inc reads them there (LXS_*): move none of them */
 struct lxs {
     pdb *buf;               /* near buffer of PDE_IB bytes                */
     pdw n, i;
@@ -83,6 +85,7 @@ struct pde_tok {
     pdb text[256];
 };
 
+/* text[] is at +22 on the target and pdelex.inc's ov_clear zeroes up to it */
 struct pde_val {
     pdw kind;               /* PDK_*                                      */
     struct pd_fx fx;

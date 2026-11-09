@@ -116,6 +116,7 @@ section .text
 ; THE COMPILED C
 ; =============================================================================
 %include "pdeng.gen.asm"            ; found through -I build/
+%include "pagedesk/pdelex.inc"      ; the lexer's classes and word scan (perf)
 %ifndef FL_NOASM
 %include "pagedesk/pdeflate.inc"    ; FlateDecode's symbol loop (PAGEDESK-SPEC 20.13)
 %endif

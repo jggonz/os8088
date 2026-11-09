@@ -227,24 +227,51 @@ static pdw v_dict_get(void)
     dg.kind = PDK_NULL; dg.refnum = 0; dg.refgen = 0; dg.len = 0; dg.count = 0; dg.text[0] = 0;
     dg.num.lo = 0; dg.num.hi = 0;
     dg.key[0][31] = 0; dg.key[1][31] = 0; dg.key[2][31] = 0;
+    k = 0;
     if (dg.objnum == 0 && dg.gen == 0) {
         L = &fobj;
         lx_seek(&tr_dict);
         ov_clear(); ov.kind = PDK_DICT;
     } else {
-        rc = ob_enter(dg.objnum, dg.gen);
-        if (rc) return rc;
-        if (ob_null) return PDE_NOTFOUND;
-        rc = ob_value();
-        if (rc) return rc;
+        /* perf: the same object's same first key as a call before - a font's
+         * /Widths asked for [0], [1], [2]... - is found where it was: the
+         * name is read back at that offset and must end exactly there, so a
+         * different key or a moved one cannot match (and the file does not
+         * change while it is open; fl_invalidate forgets the offset) */
+        rc = 1;
+        if (dg.objnum == dk_obj && dg.gen == dk_gen && dg.key[0][0]) {
+            for (j = 0; dg.key[0][j]; j++) ;
+            L = &fobj;
+            u32_cp(&dc_a, &dk_pos);
+            u32_sub16(&dc_a, (pdw)(j + 1));
+            lx_seek(&dc_a);
+            if (lx_token() == 0 && tk.kind == PDT_NAME && str_eq(tk.text, dg.key[0])) {
+                lx_tell(&dc_a);
+                if (pdm_u32_cmp(&dc_a, &dk_pos) == 0 && ob_value() == 0) { rc = 0; k = 1; }
+            }
+        }
+        if (rc) {
+            rc = ob_enter(dg.objnum, dg.gen);
+            if (rc) return rc;
+            if (ob_null) return PDE_NOTFOUND;
+            rc = ob_value();
+            if (rc) return rc;
+        }
     }
-    for (k = 0; k < 3 && dg.key[k][0]; k++) {
+    for (; k < 3 && dg.key[k][0]; k++) {
         rc = ob_follow();
         if (rc) return rc;
         idx = key_index(dg.key[k]);
         if (idx >= 0) {
             if (ov.kind != PDK_ARR) return PDE_NOTFOUND;
-            for (j = 0; j < (pdw)idx; j++) {
+            /* perf: the array cursor. The array is named by the file offset
+             * of its first item, so element n+1 after element n of the SAME
+             * array resumes where n ended instead of re-reading 0..n: a
+             * /Widths walked [0], [1], [2]... is linear, not quadratic */
+            lx_tell(&dc_a);
+            j = 0;
+            if ((pdw)idx > dc_idx && pdm_u32_cmp(&dc_a, &dc_arr) == 0) { lx_seek(&dc_pos); j = (pdw)(dc_idx + 1); }
+            for (; j < (pdw)idx; j++) {
                 rc = ob_value();
                 if (rc) return rc;
                 if (ov.kind == PDK_CLOSE) return PDE_NOTFOUND;
@@ -253,10 +280,12 @@ static pdw v_dict_get(void)
             rc = ob_value();
             if (rc) return rc;
             if (ov.kind == PDK_CLOSE) return PDE_NOTFOUND;
+            if (ov.kind != PDK_ARR && ov.kind != PDK_DICT) { u32_cp(&dc_arr, &dc_a); dc_idx = (pdw)idx; lx_tell(&dc_pos); }
         } else {
             if (ov.kind != PDK_DICT) return PDE_NOTFOUND;
             rc = ob_dict_find(dg.key[k]);
             if (rc) return rc;
+            if (k == 0 && dg.objnum) { dk_obj = dg.objnum; dk_gen = dg.gen; lx_tell(&dk_pos); }
             rc = ob_value();
             if (rc) return rc;
         }

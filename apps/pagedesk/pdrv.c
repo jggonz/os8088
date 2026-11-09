@@ -413,6 +413,8 @@ static pdw verb_init(pdw xbseg)
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
+    /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
+    g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;
     return PDE_OK;
 }
 
