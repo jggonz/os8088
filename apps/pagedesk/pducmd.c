@@ -375,6 +375,8 @@ static void pdu_pop_open(int kind, int src)
     }                                   /* is not charged both paints (pdstk) */
     pdu_job_abort_render();
     pdu_ed_xoff_l();                    /* polish: off BEFORE the popover covers it */
+    if (pdu_rwant && !sw)               /* polish: owed, held behind it: paper */
+        ovl_ground(&pdu_rr, pdu_rr.y1);
     pdu_pop = kind;
     pdu_popsrc = src;
     rows = pdu_pop_rows();
@@ -696,6 +698,8 @@ void os88_about(void *win)
     pdu_pop_close();
     pdu_job_abort_render();
     pdu_ed_xoff_l();                    /* polish: off BEFORE the card covers it */
+    if (pdu_rwant)                      /* polish: owed, held behind it: paper */
+        ovl_ground(&pdu_rr, pdu_rr.y1);
     pdu_about = 1;
     os88_about_card(win, pdu_abtext);
 }

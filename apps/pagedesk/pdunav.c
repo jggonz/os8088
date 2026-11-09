@@ -299,9 +299,12 @@ static void ovl_gcancel(void)
     int g;
     g = pdu_gs;
     pdu_gs = 0;
-    if (g == 1)
-        pdu_sbdrop(pdu_sb);             /* the thumb lets go where it is */
-    else if (pdu_gband && os88_wm_clip_set(pdu_win) == 0)
+    if (g == 1) {                       /* the thumb goes back to the view: */
+        pdu_sbdrop(pdu_sb);             /* the hand may have moved it further */
+        g = pdu_sb[6];                  /* than the view went (os88ui's rate) */
+        pdu_sb_fill();
+        pdu_sbmove(pdu_sb, g);
+    } else if (pdu_gband && os88_wm_clip_set(pdu_win) == 0)
         ovl_band(pdu_gx, pdu_gy, pdu_gmx, pdu_gmy);
     pdu_gband = 0;
     pdu_kick();                         /* the render the gesture held back */

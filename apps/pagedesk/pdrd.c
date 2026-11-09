@@ -300,11 +300,14 @@ static void mask_span(pdw m, pdi xa, pdi xb)
 }
 
 /* 20.19.2: a span of the checker g_sc4 / g_spat[0]-1 (band-relative x; the
- * band starts on a multiple of 8, so x parity is absolute parity) */
+ * band starts on a multiple of 8, so x parity is absolute parity). The ROW
+ * parity is the page's, not the screen's: a scroll moves the pixels by dy and
+ * renders only the strip it exposes, so a screen-parity checker would flip
+ * phase at that seam after every odd scroll (verify-polish) */
 static void fill4_mix(pdw rowoff, pdi xa, pdi xb, pdi y)
 {
     pdw ca = g_sc4, cb = (pdw)(g_spat[0] - 1), ce, co;
-    if (y & 1) { ce = cb; co = ca; } else { ce = ca; co = cb; }
+    if ((y - g_pgy0) & 1) { ce = cb; co = ca; } else { ce = ca; co = cb; }
     if (xa & 1) { pdr_fill4(g_bseg, rowoff, xa, xa, co); xa++; }
     if (xb >= xa && !(xb & 1)) { pdr_fill4(g_bseg, rowoff, xb, xb, ce); xb--; }
     if (xb > xa) pd_ffill(g_bseg, (pdw)(rowoff + (xa >> 1)), (pdb)((ce << 4) | co), (pdw)((xb - xa + 1) >> 1));
@@ -780,6 +783,7 @@ static void walk_band(pdi ry0, pdi ry1)
 
 /* ---- one band: compose, then lock / clip / blit / unlock ----------------- */
 static pdw g_winoff;
+static pdi g_ydone;                 /* 20.19.1: the first row not yet blitted */
 static pdw g_thumb;                 /* drawing into a thumbnail cell          */
 static pdw g_tdseg, g_tdoff, g_tstride; /* the cell                           */
 
@@ -810,7 +814,7 @@ static void band_init(void)
         y = (pdi)(g_by0 + r);
         if (g_deskwhite) pd_ffill(g_bseg, rowoff, g_bpp == 1 ? 0xFF : 0xFF, g_bstride);
         else if (g_bpp == 1) pd_ffill(g_bseg, rowoff, (y & 1) ? 0x55 : 0xAA, g_bstride);
-        else pd_ffill(g_bseg, rowoff, 0x77, g_bstride);
+        else pd_ffill(g_bseg, rowoff, 0x88, g_bstride);   /* the shell's desk, 8 */
         if (y >= g_pgy0 && y <= g_pgy1) {
             xa = g_pgx0 < g_bx0 ? g_bx0 : g_pgx0;
             xb = g_pgx1 > (pdi)(g_bx0 + g_bw - 1) ? (pdi)(g_bx0 + g_bw - 1) : g_pgx1;
@@ -835,6 +839,7 @@ static void band_present(void)
         }
         return;
     }
+    g_ydone = (pdi)(g_by0 + g_brows);   /* 20.19.1: ABORT's CX=1 answer */
     os88_gfx_lock();
     if (os88_wm_clip_set((void *)(unsigned)g_winoff) == 0)
         pdr_blit(g_bpp == 1 ? 1 : 4, g_bseg, g_bstride, g_bx0, g_by0, (pdw)g_bw, g_brows);

@@ -374,13 +374,17 @@ static void pdu_status_full(void)
 
 /* say s on the status line - the one place a reason, a result or an error
  * goes (PD-02: a greyed control explains itself here) */
+static int pdu_pshown;                  /* polish: the status line shows a job's
+                                         * "- Esc cancels" line (pdu_progress) */
 static void pdu_say(const char *s)
 {
+    pdu_pshown = 0;
     os88_strcpy(pdu_msg, s, sizeof(pdu_msg));
 }
 
 static void pdu_say2(const char *a, const char *b)
 {
+    pdu_pshown = 0;
     os88_strcpy(pdu_msg, a, sizeof(pdu_msg));
     pdu_cat(pdu_msg, b, sizeof(pdu_msg));
 }
@@ -484,10 +488,11 @@ static void pdu_empty_paint(struct os88_rect *clip)
  * waits its turn and must not show what lay under it). Everywhere else the
  * strip gets its ground exactly once, from PDREND. */
 static unsigned pdu_pg_kind(unsigned i);
+static int pdu_pfill;                   /* verify-polish: a scroll's exposed strip */
 static int pdu_prefill(void)
 {
     return pdu_pg_kind(pdu_page) != PDM_SRC || pdu_pop != P_NONE || pdu_about
-           || pdu_gs == 2 || pdu_job != J_NONE;
+           || pdu_gs == 2 || pdu_job != J_NONE || pdu_pfill;
 }
 static void pdu_canvas_paint(struct os88_rect *clip)
 {

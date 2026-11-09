@@ -159,23 +159,6 @@ static void pdu_sel_after(struct os88_rect *r)
     }
 }
 
-/* polish (20.19.4): a render of r was CANCELLED. Part of r is fresh page,
- * part still holds the old pixels with the selection XORed into them, so
- * no XOR can be trusted there: a later hide would invert the fresh bands.
- * The selection is let go (the page says it is incomplete) rather than
- * left for an inversion that lights the wrong pixels. */
-static void pdu_sel_cancelled(struct os88_rect *r)
-{
-    (void)r;
-    if (pdu_selvis && pdu_selpg == (int)pdu_page) {
-        pdu_selvis = 0;
-        pdu_selshow = 0;
-        pdu_selpg = -1;
-        pdu_selq = 0;
-        pdu_menusync();
-    }
-}
-
 /* the names `edit` calls (COMMON.md's interface, pdu.h's edit block); the
  * work is the overlay's. `cap` counts QUADS for pdu_sel_quads (20.10.3) */
 int pdu_sel_quads(pd_pt *dst, unsigned cap) { return ovl_sel_quads(dst, cap); }

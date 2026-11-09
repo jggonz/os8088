@@ -144,13 +144,11 @@ static void pdu_job_abort(void)
         pdu_reopen_begin();             /* pages: PDENG was left on the output (20.11.5) */
 }
 
-static int pdu_pshown;                  /* polish: a progress line was drawn */
 static void pdu_job_start(int kind)
 {
     pdu_job = kind;
     pdu_jcancel = 0;
     pdu_jslices = 0;
-    pdu_pshown = 0;
     pdu_jt0 = os88_ticks();
     pdu_kick();
 }
@@ -179,6 +177,7 @@ static void pdu_progress(const char *verb, const char *what)
     pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
     pdu_cat(pdu_line, " - Esc cancels", sizeof(pdu_line));
     pdu_wsay(pdu_line);
+    pdu_pshown = 1;                     /* polish: after the say, which clears it */
 }
 
 /* ---------------------------------------------------------------------------
@@ -346,6 +345,44 @@ static void pdu_open_step(void)
 /* ---------------------------------------------------------------------------
  * RENDER
  * -------------------------------------------------------------------------*/
+/* polish (20.19.1): what a render owes and will not draw now - cancelled,
+ * failed, or held behind a popover or the About card - becomes white paper
+ * from row y down, never the pixels that lay there: since the canvas lays no
+ * white ahead of PDREND, those are the last page, the last zoom or a closed
+ * dialog. Only the page part: the desk around it is the canvas paint's, and
+ * fresh. Lock held; sets the clip itself. */
+static struct os88_rect pdu_gr;
+static int pdu_ry;
+static void ovl_ground(struct os88_rect *r, int y)
+{
+    if (!pdu_isect(r, &pdu_L.canvas, &pdu_gr))
+        return;
+    if (y > pdu_gr.y1)
+        pdu_gr.y1 = y;
+    pdu_page_rect(&pdu_pr);
+    if (pdu_isect(&pdu_gr, &pdu_pr, &pdu_gr) && os88_wm_clip_set(pdu_win) == 0)
+        pdu_fill(pdu_gr.x1, pdu_gr.y1, pdu_gr.x2, pdu_gr.y2, OS88_WHITE);
+}
+
+/* a render of pdu_rrun stopped short (Esc, or PDREND failed): paper below
+ * the last band it blitted (`ask`: PDREND says which, ABORT CX=1), and then
+ * every pixel of pdu_rrun is fresh, so nav's selection goes back on over the
+ * whole of it and edit's outline with it - the XOR invariant holds */
+static void ovl_render_rest(int ask)
+{
+    pdu_ry = pdu_rrun.y1;
+    if (ask) {
+        pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 1, 0);
+        if (!pdu_mcf)
+            pd_fcopy_in(pdu_xb, 0, &pdu_ry, 2);
+    }
+    os88_gfx_lock();
+    ovl_ground(&pdu_rrun, pdu_ry);
+    os88_gfx_unlock();
+    pdu_sel_after(&pdu_rrun);
+    pdu_ed_xon();
+}
+
 static int pdu_render_begin(void)
 {
     unsigned r;
@@ -376,6 +413,7 @@ static int pdu_render_begin(void)
         os88_gfx_lock();
         pdu_status_paint();
         os88_gfx_unlock();
+        ovl_render_rest(0);             /* polish: none of it drawn */
         return 0;
     }
     pdu_job_start(J_RENDER);
@@ -394,6 +432,7 @@ static void pdu_render_step(void)
     pdu_job = J_NONE;
     if (pdu_mcf) {
         pdu_wsay(pdu_errtext(r));
+        ovl_render_rest(1);             /* polish: paper below its last band */
         return;
     }
     pdu_sel_after(&pdu_rrun);           /* nav: the selection back on the page */
@@ -547,8 +586,7 @@ void os88_onwake(void *win)
         pdu_job_abort();
         if (was == J_RENDER) {
             pdu_rwant = 0;              /* cancelled: the page stays partial */
-            pdu_sel_cancelled(&pdu_rrun);   /* polish: no XOR to trust there */
-            pdu_ed_xon();                   /* polish: the outline, back on */
+            ovl_render_rest(1);         /* polish: paper, not old pixels, below */
         }
         pdu_wsay(was == J_RENDER ? "Drawing cancelled - the page is incomplete."
                                  : pdu_errtext(PDE_CANCEL));
