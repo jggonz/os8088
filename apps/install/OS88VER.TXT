@@ -1,5 +1,5 @@
-20261106
-* Claim your WireChat nickname
-* Manage WireChat nickname codes
-* One active sign-in per nickname
-* Fix Pravetz freeze during boot
+20261109
+* ARCADE plays Space Invaders and more
+* Video Battle: a battle told in video
+* 286+ kernel ships on its own disks
+* Sound debug disk for field reports
