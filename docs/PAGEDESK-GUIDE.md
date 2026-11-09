@@ -622,10 +622,20 @@ Preferences on VGA and CGA; Flate on VGA; the page-3 stack overrun fixed. VGA
 and CGA were looked at in every wave; Hercules (QEMU with the RAM framebuffer
 harness) in waves 1 and 2 for the shell and the renderer.
 
-**Not verified at the time of writing**, and left to the final pass or
-hardware: any speed figure on an 8088 (MartyPC cycles, the no-pre-emption
-window of the private stack, keystroke latency of text-box typing, the cost of
-Find and Copy); Hercules on MartyPC's real MDA/Hercules model; EGA; kern_small
+**Measured in the final pass** (PAGEDESK-PLAN 7.1, MartyPC at 4.77 MHz with
+640 KiB):
+
+- **Speed.** A first page takes 38-41 guest seconds, a page turn 24-36 and
+  Find across XTGUIDE's 12 pages 87.
+- **Adapters.** The whole open, page, zoom, Find, mark, Save As and reopen
+  session runs on VGA, CGA and Hercules on MartyPC's real Hercules model.
+- **Memory.** 81-97 KiB is free after a session.
+
+**Still not verified**, and left to hardware or later work:
+
+- the no-pre-emption window of the private stack, keystroke latency of
+  text-box typing, and the cost of Copy;
+- EGA, kern_small
 and kern_mega; the 360 KB, 720 KB and 1.2 MB disks booted (all four images pass
 `os88disk.py --verify`); the interrupted-save offer on the glass; a mouse
 click on a Preferences row; the Flate Off refusal on the glass; the clipboard's

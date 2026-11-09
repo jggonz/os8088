@@ -109,7 +109,7 @@ Exploratory.
 | PD-26 | AcroForm filling | E | 3 | | P | forms shown as printed and the not-supported note (20.18), seen on VGA; FILLING not built (D24, Enhanced, not selected) |
 | PD-27 | protected-mode decision/spike | X | 3 | | I | docs/plans/PAGEDESK-PM-ADR.md: host-report |
 | PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | P | malformed input: eng fuzz, tests/pdfneg, pdefuzz (green in the final pass); a failed read mid-token: pde_check's 240 fault cases and pdr_cache (verify-perf); failing storage: wrt/pages refusals, not driven on a real failing disk |
-| PD-29 | hardware, memory, responsiveness proof | XT | final | lead, rows, perf | P | `pagedeskxt` on MartyPC (VGA, CGA, Hercules at 640 KiB) and `pagedesk` on QEMU, green at bbc92e127 (7.1). Missed: 176 KiB ceiling (about 375-415 KiB measured), 10 s first page (40-43 s), 32 KiB raw during Save As on VGA and CGA. Not run: repeat-loop stability, a second app alongside, physical hardware |
+| PD-29 | hardware, memory, responsiveness proof | XT | final | lead, rows, perf | P | `pagedeskxt` on MartyPC (VGA, CGA, Hercules at 640 KiB) and `pagedesk` on QEMU, green at fef1fcbd0 (7.1). Missed: 176 KiB ceiling (375-415 KiB measured), 10 s first page (38-41 s), 32 KiB raw during Save As on CGA and Hercules (16-18 KiB; 65 with the caches shed). Not run: repeat-loop stability, a second app alongside, physical hardware |
 | PD-30 | documented working behaviour | XT | final | lead | I | README.TXT, docs/PAGEDESK-GUIDE.md, docs/HOW-PAGEDESK-WAS-BUILT.md, PAGEDESK-SPEC 20.20 (docs-report) |
 
 ## 4. Waves
@@ -178,31 +178,35 @@ and screenshots in the lead's log directory (`~/Repos/pagedesk-logs/`,
 `*-report.md`, `*-verify.md`, `shots/<key>/`); the PR body carries the
 selection that ships with the merge.
 
-### 7.1 PD-29: the final pass (bbc92e127, 2026-11-09)
+### 7.1 PD-29: the final pass (fef1fcbd0, 2026-11-09)
 
-The soak union ran 17 rows, all green after one declaration fix to the
-`pagedesk` row. `pagedeskxt` and `pagedesk` were re-run verbosely for these
-tables. Each step is in guest seconds on a 4.77 MHz 8088 with 640 KiB, on
+The soak union ran 17 rows on the merged tree, all green. It needed one
+declaration fix to the `pagedesk` row. The renderer and end-to-end rows were
+re-run after the mono stroke fix (20.19), and `make test-full` was 101/0
+alone. Each step is in guest seconds on a 4.77 MHz 8088 with 640 KiB, on
 MartyPC. These are emulated and cycle-modelled, not physically run; floppy
 time is the emulator's.
 
 | step | VGA (5160) | CGA (5150) | Hercules (5150) | VGA before perf |
 |---|---|---|---|---|
-| HELLO: double-click to first page | 43.2 | 40.4 | 40.6 | 139.7 |
-| XTGUIDE: chooser to first page | 40.1 | 30.6 | 32.5 | 111.9 (a) |
-| page turn (PgDn) | 35.5 | 23.8 | 32.0 | 155.0 |
-| zoom in | 21.4 | 16.1 | 18.0 | 138.5 |
-| Find 'Index' across XTGUIDE's 12 pages | 87.6 | 87.1 | 87.2 | 1,427.8 |
-| area mark drawn | 12.1 | 11.3 | 12.3 | 99.3 |
-| Save As XTMARK.PDF | 32.0 | 32.1 | 32.4 | 36.3 (a) |
-| re-open after Save As | 58.4 | 50.0 | 54.3 | 143.0 |
-| free after the session (KiB) | 95.5 | 82.0 | 123.0 | 83.0 (a) |
-| lowest unclaimed during Save As (KiB, raw / caches shed) | 30.5 / 101.5 | 17.0 / 64.0 | 58.0 / 107.0 | 31.0 / - (5.5 / 76.5 before D28 (a)) |
-| task 0 stack (D22 bound 384) | 322 | 320 | 322 | 320 (a) |
-| private module stack (D23 bound 1792) | 316-328 | 322 | 322 | 354-372 (a) |
+| HELLO: double-click to first page | 40.8 | 38.3 | 38.4 | 139.7 |
+| XTGUIDE: chooser to first page | 39.5 | 30.6 | 31.9 | 111.9 (a) |
+| page turn (PgDn) | 35.5 | 23.5 | 31.1 | 155.0 |
+| zoom in | 21.5 | 16.0 | 17.4 | 138.5 |
+| Find 'Index' across XTGUIDE's 12 pages | 87.4 | 87.0 | 86.8 | 1,427.8 |
+| area mark drawn | 13.2 | 11.5 | 12.5 | 99.3 |
+| Save As XTMARK.PDF | 31.5 | 31.6 | 31.8 | 36.3 (a) |
+| re-open after Save As | 58.3 | 50.3 | 53.7 | 143.0 |
+| free after the session (KiB) | 97.0 | 83.0 | 81.0 | 83.0 (a) |
+| lowest unclaimed during Save As (KiB, raw / caches shed) | 32.0 / 103.0 | 18.0 / 65.0 | 16.0 / 65.0 | 31.0 / - (5.5 / 76.5 before D28 (a)) |
+| PageDesk's own claims + its instance (KiB) | 317.5 + 58 | 357.5 + 58 | 357.5 + 58 | - |
+| task 0 stack (D22 bound 384) | 320 | 320 | 320 | 320 (a) |
+| private module stack (D23 bound 1792) | 322 | 322 | 342 | 354-372 (a) |
 
 The "before" column is perf's clean build of dcd0b85e0. Cells marked (a) come
-from the rows agent's run at 8e00bef0d, before D28.
+from the rows agent's run at 8e00bef0d, before D28. CGA and Hercules carve
+two Flate slots (the 146 KiB document block) where VGA carves one (106 KiB);
+that is D17 choosing by RAM.
 
 Every saved XTMARK.PDF passes `qpdf --check` (exit 0) with its /Square and
 XTGUIDE's 7 /Link. On QEMU, `pagedesk` drives Insert from PDF, Notes,
@@ -226,8 +230,8 @@ cache was measured (about 4% faster, 8 KiB less heap) and declined.
   - Per-slice (100 ms) and cancel (250 ms) latencies are not measured.
 - **Memory:**
   - The SPEC 16.1 176 KiB ceiling is not met (16.1 Measured).
-  - Save As dips under 32 KiB raw on VGA and CGA; it is held with the
-    purgeable caches shed.
+  - Save As dips under 32 KiB raw on CGA and Hercules (16-18 KiB); it is
+    held with the purgeable caches shed (65 KiB).
 - **PD-29 not run:** repeat open/edit/save/close loops, a second application
   alongside, physical hardware.
 - **Enhanced:** PD-25's XMEM caches and PD-26's form filling are not built.

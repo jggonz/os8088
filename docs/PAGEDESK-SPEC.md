@@ -701,26 +701,27 @@ leaves well over the required 32 KiB unclaimed. PD-29 measures it; a change
 that exceeds a row is a change to this table first.
 
 **Measured (PD-29, `pagedeskxt` on MartyPC, 640 KiB, 2026-11-09 at
-bbc92e127): the 176 KiB planning ceiling is NOT met.** PageDesk idles at
-about 315-358 KiB of its own claims plus its 58 KiB instance:
+fef1fcbd0): the 176 KiB planning ceiling is NOT met.** PageDesk idles at
+317.5 KiB of its own claims on VGA, and 357.5 KiB on CGA and Hercules, plus its
+58 KiB instance:
 
 - the two parts PDENG and PDREND, 107 KiB top-down;
 - the overlay, 47.5 KiB;
 - the writer's segment, 47 KiB;
 - 9 KiB of workspace;
-- the document block of 103-146 KiB. This holds the 16 KiB block cache, the
-  arena and tables, the display list, the edit store and the Flate slots D17
-  carves from what RAM is left.
+- the document block of 106 or 146 KiB. This holds the 16 KiB block cache,
+  the arena and tables, the display list, the edit store and the one or two
+  Flate slots D17 carves from what RAM is left.
 
-After the session the desktop has 95.5 KiB free on VGA, 82.0 on CGA and 123.0
+After the session the desktop has 97.0 KiB free on VGA, 83.0 on CGA and 81.0
 on Hercules. The 32 KiB reserve is held after every step on all three. During
-Save As the lowest unclaimed figure falls below it:
+Save As the lowest unclaimed figure falls below it on two of them:
 
 | adapter | lowest unclaimed during Save As | with the purgeable caches shed |
 |---|---|---|
-| VGA | 30.5 KiB | 101.5 KiB |
-| CGA | 17.0 KiB | 64.0 KiB |
-| Hercules | 58.0 KiB | 107.0 KiB |
+| VGA | 32.0 KiB | 103.0 KiB |
+| CGA | 18.0 KiB | 65.0 KiB |
+| Hercules | 16.0 KiB | 65.0 KiB |
 
 The kernel sheds those purgeable caches before it refuses a claim, so the row
 asserts the reserve after each step, and during a step only with the caches

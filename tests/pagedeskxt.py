@@ -69,6 +69,11 @@ WHAT IT ASSERTS, and only this (PD-29: timings are a measurement, not a gate):
 
 Break it: drop `pdu_dckb`'s DSTK row to 1 KiB and the deep-stack assertion
 goes red on XTGUIDE; claim 600 KiB in pdumod.c and the heap one does.
+
+PAGEDESK_SHOTS=<dir> keeps a picture after every timed step, decoded from
+VRAM on CGA and Hercules - a pull request's screenshots of the head
+(CLAUDE.md, "Pull requests show the change"). tests/pagedesk.py takes the
+same variable for its QEMU legs.
 """
 import argparse
 import collections
@@ -363,7 +368,27 @@ class Leg(object):
                               % (what, lo_shed, RESERVE))
         secs = (box["c"] - c0) / HZ
         self.rows.append((what, secs, free, big, lo, lo_shed))
+        self.stepshot(what)
         return box["s"], secs
+
+    def stepshot(self, what):
+        """PAGEDESK_SHOTS=<dir>: the screen after every timed step, as the
+        guest drew it - a pull request's screenshots of the head (CLAUDE.md,
+        "Pull requests show the change"). Off unless asked: a picture is
+        host time, never guest time, so no step's figure moves."""
+        d = os.environ.get("PAGEDESK_SHOTS")
+        if not d:
+            return
+        os.makedirs(d, exist_ok=True)
+        self.nshot = getattr(self, "nshot", 0) + 1
+        slug = "".join(c if c.isalnum() else "-" for c in what.lower())
+        slug = "-".join(t for t in slug.split("-") if t)[:48]
+        tool = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+        try:
+            self.picture(os.path.join(d, "%s-%s-%02d-%s.png"
+                                      % (tool, self.name, self.nshot, slug)))
+        except Exception as e:                      # noqa: BLE001
+            print("   (no step picture for %r: %s)" % (what, e))
 
     def deep_water(self, doc):
         """The private module stack's deepest use for this document - read

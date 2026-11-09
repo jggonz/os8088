@@ -384,8 +384,8 @@ EGA and 60 KiB on CGA and Hercules.
 
 ## 9. What was measured
 
-All figures are the reports'. Nothing is from a real 8088; nothing is from
-MartyPC yet.
+All figures are the reports'. Nothing is from a real 8088. The MartyPC
+figures are in the final pass at the end of this section.
 
 **Correctness against independent tools (host).**
 
@@ -430,11 +430,33 @@ MartyPC yet.
   8088-clock figures for the math routines (`fx_mul` 288 us, `view_fwd` 814 us)
   are computed from instruction counts and the 8088 fetch floor, not measured.
 
-**Final pass (PD-29).** The `rows` agent's report (`rows-report.md`) is where
-the MartyPC cycle counts, the 640 KiB matrix on VGA, CGA and Hercules, and the
-final soak union will be; at the time this diary was written it had not been
-delivered. Whoever adds it should add a section here and in section 17 of the
-guide, not edit the figures above.
+**Final pass (PD-29), 2026-11-09.** The `rows` agent added `pagedeskxt`, PageDesk's
+whole session on MartyPC at 4.77 MHz with 640 KiB on VGA, CGA and Hercules. Its
+first numbers were a first page in 139.7 guest seconds and Find in 1,427.8. The
+`perf` agent profiled MartyPC's instruction pointer and found 92% of all tokens
+coming from PDREND asking PDENG for each `/Widths` entry. Each ask re-lexed the
+array from element 0, and the font cache was emptied every pass. The fixes
+were these:
+
+- a cursor in `dict_get`;
+- the lexer's inner loops in assembly;
+- a one-walk widths fill;
+- per-document font caches.
+
+`verify-perf` then fixed four defects in those fixes, among them a Tf cache
+that stopped caching once full. The result is a first page in 38-41 s and Find
+in 87 s (PAGEDESK-PLAN 7.1 has the table).
+
+Two defects showed up only on the glass:
+
+- **The re-opened /Square.** It lost two edges on VGA to the BBox clip's
+  sample-point rule (`square`, `verify-square`).
+- **The mark on mono screens.** On Hercules and CGA it did not draw at all.
+  The 1bpp rule drew any stroke of luminance 128 or more WHITE, and PageDesk's
+  own red is 136. The cut is now 240 (PAGEDESK-SPEC 20.19).
+
+The second was found by LOOKING at the final pass's Hercules screenshot,
+which no assertion covered.
 
 ## 10. Incidents
 

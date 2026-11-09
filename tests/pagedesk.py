@@ -266,6 +266,10 @@ class QLeg(X.Leg):
     def settle_pd(self, what, guest=300.0):
         return X.Leg.settle_pd(self, what, guest=min(guest, 300.0))
 
+    def picture(self, path):
+        # QEMU's screendump, whatever the adapter (PAGEDESK_SHOTS, stepshot)
+        self.m.shot(path)
+
     def run(self):
         need(SYSIMG)
         need(APPIMG)
