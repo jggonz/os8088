@@ -853,6 +853,8 @@ void os88_onkey(int ascii, int scan, void *win)
     ascii = ascii & 0xFF;
     if (pdu_pg_key(ascii, scan))        /* pages: a prompt owns the keys */
         return;
+    if (pdu_rc_key(ascii))              /* recov: so does the recovery offer */
+        return;
     if (pdu_tx < 0 && pdu_nt_key(ascii, scan))  /* notes: after an open text box */
         return;
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page

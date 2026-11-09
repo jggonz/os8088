@@ -181,6 +181,7 @@ static const char *pdu_abtext[] = {
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
 #include "pduedit.c"            /* 13.1, 20.8: the edit store (edit) */
 #include "pduundo.c"            /* 13.6, 20.8: undo and redo (edit) */
+#include "pdurecov.c"           /* recov: the recovery journal, resident (20.17) */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
 #include "pdunotes.c"           /* 17.3: Notes & edits, the note popover */
 #include "pduinsp.c"            /* 17.3: Text properties */

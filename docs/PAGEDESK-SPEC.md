@@ -3934,3 +3934,140 @@ document closed with the line above, and *Sample guide* reopened it on a
 re-armed stack. Not run: kern_mega and kern_small, MartyPC (the no-preemption
 window), Hercules and EGA. The final pass re-takes both water marks with
 `tools/stkwater.py` / `tests/stk0water.py` on every adapter.
+
+### 20.17 The recovery journal and the interrupted-save offer (`recov`, wave 3, PD-20)
+
+Files: `pdurecov.c` (the resident part: three flags, the hooks' bodies, the
+prompt's key), `pdovlrecov.c` (every body that touches a file or the store, an
+`ovl_*` set in the overlay), marked one-line hooks in `pduundo.c`,
+`pdujob.c`, `pduedit.c`, `pducmd.c`; `hosttest/pdu_jr_test.c` is the host test
+(`tests/unit/t_pdjr.py`). It refines 14.7 and 14.3; where it differs the
+differences are listed in 20.17.7.
+
+#### 20.17.1 What is journaled, and what is not
+
+The journal is a log of **record states**, not of commands: after a command
+completes, every edit-store record whose content changed since the last write
+is written whole (its 48 bytes, its text, its points). This is what makes
+undo, redo, move, resize and typing cost nothing extra to journal - each is
+just "this record is now that" - and it means replay never needs the undo
+history, only 20.8's creation call. A store that shrank (an undone creation)
+is one `T` record. **Page operations are not replayed** (20.11 keeps them in
+the page map, which needs the history to rebuild in order): the first one
+writes a `G` record, and recovery says so. A record on a page created by a
+page operation (id with bit 15) is not journaled, for the same reason.
+
+#### 20.17.2 Where, and the file
+
+`SYSTEM/APPDATA/PAGEDESK.JRN` on the **boot volume** (`os88_vol_sys()`, 14.7;
+the instance stands there by `OSAPI_FILE_GOTO_QM` and goes back, 19.9). One
+file serves the whole machine: it belongs to the most recent session that
+wrote it. A session that writes while another document's journal is there
+replaces it; the offer is only ever for the journal that is there at open.
+
+All words little-endian. Header, 36 bytes: `PDJ1`, the source's 8.3 name (16,
+NUL padded), the 8 bytes of the engine's fingerprint (6.2: size, CRC of the
+first and last KiB, `pdxb_fingerprint`), the session's `/NM` seed (2), 4
+reserved, CRC-16 of the first 34 bytes. Then records:
+`len` (2: the bytes of type and body) `type` (1) `body` `crc` (2: CRC-16 of
+type and body). A `len` of 0 is padding to the end of the cluster.
+
+| type | body |
+|---|---|
+| `R` | record index (2), the 48-byte `pd_edit`, its text (`text_len` bytes), its points (4 x `pts_n`) |
+| `T` | the store's new count (2) |
+| `G` | empty: a page operation happened |
+| `F` | the target's volume (1), folder cluster (2), 8.3 name (14): a save is about to delete it |
+
+**Appends are padded to the cluster.** `OSAPI_FILE_APPEND` and `WRITE_SEQ`
+refuse a file whose size is not a whole number of clusters (18.4.4), so each
+write ends in zeros up to the cluster boundary (one cluster is 512 bytes to 4
+KiB; larger refuses the journal). Reading skips the zeros: that is the `len`
+of 0 above. When the file passes 8 KiB the next write is a **compaction**: a
+fresh header and one `R` per live record, replacing the file (`WRITE`
+replaces; the window in which the old journal is gone is one call).
+
+#### 20.17.3 When it is written
+
+Never inside a callback, never per keystroke, never during a render, a job, a
+popover or a typing session. `pdu_undo_end` (outermost) calls `pdu_rc_cmd`,
+which records the tick; the wake handler (`pdu_rc_wake`) writes when the
+document is open, no job runs and **half a second has passed with no further
+command** - so a typing run, a drag or a burst of undo is one write. Cost on
+the 4.77 MHz XT: a CRC of every record to find what changed (about the time
+of one tick per 40 records), then one `int 13h`-class file write: on a floppy
+the data sector, both FAT copies and the directory entry, i.e. ~1.2 s of the
+UI task in which input queues (it is one `WRITE_SEQ`, 15.2's single transfer);
+a hard disk ~0.2 s. A first write, or a compaction, adds the replace and is
+~2 s. A command that changes nothing the store holds (a selection, a scroll,
+a mode) writes nothing. The staging buffer is a transient 8 KiB claim taken
+and freed inside the write, so the claim count (16.2) is untouched; a refused
+claim skips that write, once, and the next command retries.
+
+An unrecoverable write (read-only, full, any `FERR`) turns the journal **off
+for the session** and says `Recovery journal off: the disk refused it.` once.
+A volume with no `SYSTEM/APPDATA` says it at the first write too. The
+document is never affected.
+
+#### 20.17.4 Retiring it
+
+The journal is deleted when: a Save As / New completes (20.11.5: the output
+is the document now and holds the marks); the user opens another document or
+closes the window (a decision to discard); the offer is declined. It is
+**not** deleted by Extract, by a failed save, or by a document that has no
+edits. A normal quit with nothing journaled has no file at all.
+
+#### 20.17.5 The recovery offer
+
+When an open completes (`pdu_doc` becomes `D_OPEN`), the wake looks for the
+journal. It is offered only if every one of these holds: the header and its
+CRC are valid; its name equals the opened file's; **its fingerprint equals the
+fingerprint the engine just computed** (a source that changed since - PD-20's
+"present and verified" - is silently ignored and left alone); at least one `R`
+record is valid. The status line then reads
+`Recover N unsaved marks? Enter recovers, Esc discards.` and **every key is the
+prompt's** (the same rule as 20.11's prompts), on every adapter, because it is
+a line of text and not a dialog. Enter: pass 1 reads the file into a claim and
+finds, for each index, the **last valid** record (replay stops at the first bad
+one: a bad CRC, a length that does not fit, a torn tail); pass 2 makes the
+records in index order through `pdu_ed_new` inside ONE `pdu_undo_begin/end`
+(so Undo takes the recovery back as one step), then restores each record's
+`id` and the id counter (a note's reply still points at its note), and the
+document is dirty. If the journal had a `G` the line adds `Page changes were
+not recovered.` The journal stays and the session continues it (compaction
+first, since the old tail may be torn). Esc deletes it. Not enough memory
+for the claim: `Not enough memory to recover.` and the journal is kept.
+
+#### 20.17.6 The interrupted save (14.3)
+
+Before the writer is told to replace an existing target (Enter at `... exists`)
+the shell writes an `F` record (and the header, if this session had none) -
+the only moment in a save at which a failure can leave the complete new file
+as `PDSAVE.$$$` with the old target gone, and the writer has verified the temp
+file by then (14.2 step 4). At the **next launch** the first wake reads the
+journal, finds an `F`, goes to its folder and: the target is there - the
+delete never happened; `F` is dropped (the journal is deleted); the target is
+absent and `PDSAVE.$$$` is there, starts with `%PDF-` and ends within its last
+KiB with `%%EOF` - the line reads `Finish the interrupted save as NAME?
+Enter finishes it, Esc keeps the file.`; Enter renames it and says `Saved
+NAME`, Esc leaves the file where it is. Either way the journal is deleted
+(its marks are in that file).
+
+#### 20.17.7 `/NM`, deviations and limits
+
+**`/NM`.** PDWRT writes `PD-<nonce hi><nonce lo>-<id>` (20.5.2), the nonce being
+a CRC of the *source's* head and tail and size (an incremental save) or of the
+save's date, so two sessions on **different** sources never repeat a pair, and a
+saved file is a different source from the one it came from. The id alone
+restarted at 1. `pdu_ed_init` now seeds the counter with a number made from the
+clock and the tick (multiple of 16, below 0x7FF0, so 128 records cannot wrap
+it): two sessions on the same source cannot repeat an id, and a recovered
+record keeps the id it had.
+
+Deviations from 14.7: the volume is the boot volume as 14.7 says, but the file
+is padded and compacted (20.17.2); records are record states, not "one per
+command" (20.17.1); the debounce means a crash inside the half second, or
+inside a typing run, loses that run. Limits: 128 records (the store's), 3 KiB
+per record (a record of more is not journaled and the journal turns off, said),
+cluster at most 4 KiB, one journal per machine. Not built: page-operation
+replay, a journal per document, recovery without opening the source first.

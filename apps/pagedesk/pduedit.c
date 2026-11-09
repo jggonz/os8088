@@ -118,7 +118,7 @@ void pdu_ed_init(void)
     pdu_ed_n = 0;
     pdu_ed_tt = ED_TEXT0;
     pdu_ed_pt = ED_END;
-    pdu_ed_idc = 0;
+    pdu_ed_idc = PDU_RC_SEED();         /* recov: /NM unique across sessions (20.17.7) */
     pdu_ed_err = 0;
     pdu_ed_genv++;                      /* a new store: every reader refreshes */
     ud_init();

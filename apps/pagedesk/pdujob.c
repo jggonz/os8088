@@ -202,6 +202,7 @@ static int pdu_opfirst;                 /* the open's first slice is ours */
 static void pdu_open_begin(const char *name)
 {
     pdu_job_abort();
+    pdu_rc_begin();                     /* recov */
     if (pdu_doc == D_OPEN || pdu_doc == D_OPENING)
         pdu_doc_release();
     pdu_rwant = 0;
@@ -327,6 +328,7 @@ static void pdu_open_step(void)
         return;
     }
     pdu_doc = D_OPEN;
+    pdu_rc_open();                      /* recov */
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
     else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
@@ -476,6 +478,7 @@ static void pdu_reopen_begin(void)
 static void pdu_save_step(void)
 {
     unsigned r;
+    pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));
     pd_fcopy_out(&pdu_xsave, pdu_xb, 0, sizeof(pdu_xsave));
@@ -608,6 +611,7 @@ void os88_onwake(void *win)
     if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
         pdu_nt_idle();
 
+    pdu_rc_wake();                      /* recov */
     if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
         pdu_kick();
 }

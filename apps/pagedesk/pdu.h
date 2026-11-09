@@ -399,4 +399,26 @@ static void pdu_wsay(const char *s);
 #endif
 /* ---- end deepstk ---- */
 
+/* ---- recov ---- */
+/* the recovery journal (PAGEDESK-SPEC 20.17): pdurecov.c's resident part */
+void     pdu_rc_cmd(void);              /* a command completed (pdu_undo_end) */
+void     pdu_rc_wake(void);             /* the wake: write, check, answer */
+int      pdu_rc_key(int ascii);         /* a prompt owns the keys */
+void     pdu_rc_open(void);             /* an open completed */
+void     pdu_rc_begin(void);            /* a document is being opened */
+void     pdu_rc_fin(void);              /* a save is about to replace its target */
+unsigned pdu_rc_seed(void);             /* the /NM counter's first value */
+/* the two hooks in files the host tests compile unchanged (pduundo.c,
+ * pduedit.c) are no-ops there unless a test defines them first */
+#ifdef PD_HOST
+#ifndef PDU_RC_CMD
+#define PDU_RC_CMD() ((void)0)
+#define PDU_RC_SEED() 0
+#endif
+#else
+#define PDU_RC_CMD() pdu_rc_cmd()
+#define PDU_RC_SEED() pdu_rc_seed()
+#endif
+/* ---- end recov ---- */
+
 #endif /* PDU_H */
