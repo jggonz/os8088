@@ -2198,7 +2198,7 @@ beside them.
 row (magic, `PDM_ABI`, image + bss == the row's length) and bind its far vector
 (`pdu_mbind`, `OS88_CODESEL`); claim the 1 KiB XB; INIT `PDENG` and `PDREND`
 with `pdxb_init` carrying the XB, the vectors, adapter and bpp and **no**
-document claims (D2). A refused header toasts `<MODULE> is the wrong version.`
+document claims (D2). A refused header toasts `<MODULE>: wrong version` (21 characters at most, TOAST_MAX)
 and the launch is refused; nothing is left claimed.
 
 **Open** (first slice of `J_OPEN`): read the `PDRES` INDEX once per instance

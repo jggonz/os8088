@@ -130,7 +130,7 @@ static int pdu_mcheck(int m, unsigned seg)
     return 0;
 bad:
     os88_strcpy(pdu_mmsg, pdu_modname[m], sizeof(pdu_mmsg));
-    pdu_cat(pdu_mmsg, " is the wrong version.", sizeof(pdu_mmsg));
+    pdu_cat(pdu_mmsg, ": wrong version", sizeof(pdu_mmsg));  /* <= 21: a 6-letter name + 15 (TOAST_MAX 24) */
     os88_toast(pdu_mmsg, 0);
     return PDE_LIMIT;
 }
@@ -175,14 +175,14 @@ static int pdu_mod_launch(void)
             return -1;
     pdu_xb = os88_mem_claim_p(PD_XB_BYTES / 16);
     if (pdu_xb == 0) {
-        os88_toast("PageDesk: no memory for its exchange block.", 0);
+        os88_toast("No memory for PageDesk", 0);
         return -1;
     }
     os88_memset(&pdu_xinit, 0, sizeof(pdu_xinit));
     pdu_xinit.adapter = pdu_adapter;
     pdu_xinit.bpp = pdu_bpp >= 4 ? 4 : 1;
     if (pdu_minit(PDU_M_ENG) != 0 || pdu_minit(PDU_M_REND) != 0) {
-        os88_toast("PageDesk: a module refused to start.", 0);
+        os88_toast("A PageDesk module failed", 0);
         pdu_mod_quit();
         return -1;
     }
