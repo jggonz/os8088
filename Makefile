@@ -20465,6 +20465,7 @@ $(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 .PHONY: pdrend-real
 pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
+	python3 $(PDR_DIR)/hosttest/pdr_cache.py $(PDR_REALBIN) $(BUILD)/pdrcache $(BUILD) $(PDR_DIR)/samples
 # ---- annotr (wave 2, PAGEDESK-SPEC 20.12): annotations on screen ------------------------------
 # `make pdrend-annot`: hosttest/pdr_mkstore.c builds an edit store through the real writer (PDWRT over
 # the real PDENG) and saves the same marks as a PDF; hosttest/pdr_annot.py draws the ORIGINAL with the
@@ -20556,6 +20557,14 @@ $(BUILD)/PDENG.MOD: apps/pagedesk/pdeflate.inc
 # ---- PageDesk: perf ----
 # the lexer's classes, word scan and buffer moves in assembly (pdelex.inc)
 $(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdelex.inc
+# verify-perf: PDREND's caches live for the document, so `make pdrend-real`
+# also draws page after page in ONE process against a fresh process per page,
+# with a read failed inside a font load (hosttest/pdr_cache.py). PDENG's
+# cursor and lexer edges are pde_check.py's (`make pdeng`)
+pdrend-real: pdrend-cache
+.PHONY: pdrend-cache
+pdrend-cache: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_DIR)/hosttest/pdr_cache.py
+	python3 $(PDR_DIR)/hosttest/pdr_cache.py $(PDR_REALBIN) $(BUILD)/pdrcache $(BUILD) $(PDR_DIR)/samples
 # ---- end PageDesk: perf ----
 $(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
                       apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)

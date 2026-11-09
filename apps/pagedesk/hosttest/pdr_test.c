@@ -4,6 +4,13 @@
  *   pdr_test render <pdf> <page> <zoom> <rot> <bpp> <asp_n/asp_d> <W> <H> <ox> <oy> <out.ppm> <bank> [dlkb]
  *   pdr_test text   <pdf> <page> <bank>
  *   pdr_test thumb  <pdf> <page> <w> <h> <out.pbm> <bank>
+ * PDR_SEQ="FILE:PAGE[:R|:Fn] ..." makes `render` a SESSION (verify-perf): one
+ * process, the pages in turn, writing <out>.<k>.ppm and a status line each.
+ * A new FILE is the primary's open (both modules INIT); the same FILE again
+ * keeps PDREND's per-document caches; :R is the primary's re-open of the same
+ * document after a save (PDENG INIT + OPEN, no PDREND INIT); :Fn (the real
+ * engine only) fails the nth read from there and every read after it until
+ * that render ends - a disk taken out - and the session goes on.
  * Exits non-zero on a harness-level failure; the render checks are made by
  * the python wrapper (hosttest/pdr_check.py) over the files written.
  * ==========================================================================*/
@@ -138,11 +145,46 @@ int main(int argc, char **argv)
         int an = 1, ad = 1, W = atoi(argv[8]), H = atoi(argv[9]), ox = atoi(argv[10]), oy = atoi(argv[11]);
         int dlkb = argc > 14 ? atoi(argv[14]) : 29, kb, steps = 0, np;
         struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e; long esz = 0; static unsigned char ekeep[65536];
+        static char seqbuf[8192], curf[600], outbase[600], outp[700];
+        char *seqp = 0;
+        int seqk = 0;
         sscanf(argv[7], "%d/%d", &an, &ad);
-        np = pdrh_open(argv[2]);
-        if (np <= 0) { fprintf(stderr, "cannot open %s\n", argv[2]); return 2; }
-        kb = load_bank(argv[13]);
-        do_init(bpp, kb, dlkb);
+        if (getenv("PDR_SEQ")) {
+            strncpy(seqbuf, getenv("PDR_SEQ"), sizeof seqbuf - 1); seqp = seqbuf;
+            strncpy(outbase, argv[12], sizeof outbase - 1);
+        }
+    seq_next:
+        if (seqp) {
+            char *ent, *c, *mode;
+            while (*seqp == ' ') seqp++;
+            if (!*seqp) return 0;
+            ent = seqp; while (*seqp && *seqp != ' ') seqp++;
+            if (*seqp) *seqp++ = 0;
+            c = strrchr(ent, ':'); mode = 0;
+            if (c && (c[1] == 'R' || c[1] == 'F')) { mode = c; *c = 0; c = strrchr(ent, ':'); }
+            if (!c) { fprintf(stderr, "PDR_SEQ: %s is not FILE:PAGE\n", ent); return 1; }
+            *c = 0; page = atoi(c + 1);
+            if (strcmp(curf, ent) || (mode && mode[1] == 'R')) {
+                np = pdrh_open(ent);
+                if (np <= 0) { fprintf(stderr, "cannot open %s\n", ent); return 2; }
+                if (!mode || mode[1] != 'R') { kb = load_bank(argv[13]); do_init(bpp, kb, dlkb); }
+                strncpy(curf, ent, sizeof curf - 1);
+            }
+#ifdef PDR_REAL_ENG
+            { extern unsigned long pdh_reads, pdh_failat, pdh_failto;
+              pdh_failat = mode && mode[1] == 'F' ? pdh_reads + (unsigned long)atol(mode + 2) : 0;
+              pdh_failto = pdh_failat ? (unsigned long)-1 : 0; }
+#endif
+            snprintf(outp, sizeof outp, "%s.%d.ppm", outbase, seqk++);
+            argv[12] = outp;
+            pdrh_reads = 0; pdrh_readbytes = 0; pdrh_blits = 0;
+        } else {
+            np = pdrh_open(argv[2]);
+            if (np <= 0) { fprintf(stderr, "cannot open %s\n", argv[2]); return 2; }
+            kb = load_bank(argv[13]);
+            do_init(bpp, kb, dlkb);
+        }
+        steps = 0;
         canary_set(dlkb);
         memset(pdrh_fb, 0, 1024 * 1024);
         /* the engine's page info -> the effective box */
@@ -175,14 +217,17 @@ int main(int argc, char **argv)
         }
         memcpy(MEM(SEG_XB, 0), &rq, sizeof rq);
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
+        if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
         do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
+        if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
         report();
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+        if (seqp) { fflush(stdout); goto seq_next; }
         return 0;
     }
     if (!strcmp(argv[1], "viewchk")) {

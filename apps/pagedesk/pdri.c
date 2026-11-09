@@ -74,10 +74,12 @@ static pdw res_lookup(const char *cat, const char *name)
     return eng_call(PDV_ENG_RES_LOOKUP, &g_rl, sizeof g_rl, 0, 0, 0);
 }
 
-/* perf: Tf's font resources, name -> object, for the length of a request.
- * A Tf was a RES_LOOKUP each - the page, its /Parent, /Resources, /Font -
- * on every Tf of every pass. Keyed by the resource context and the name
- * (names of 8 bytes or more are looked up every time) */
+/* perf: Tf's font resources, name -> object, for the document (verb_init
+ * empties it). A Tf was a RES_LOOKUP each - the page, its /Parent,
+ * /Resources, /Font - on every Tf of every pass. Keyed by the resource
+ * context and the name (names of 8 bytes or more are looked up every time).
+ * verify-perf: a full table starts again, or every page after the first few
+ * of a document would find no room and look every Tf up again */
 #define PDR_NRC 8
 static struct { pdw resp, reso, resg, obj, gen; char name[8]; } g_rc[PDR_NRC];
 static pdw g_rcn;
@@ -88,7 +90,8 @@ static pdw font_res(void)
         if (g_rc[i].resp == g_resp && g_rc[i].reso == g_reso && g_rc[i].resg == g_resg && pdr_seq(g_rc[i].name, g_name))
             return font_get(g_rc[i].obj, g_rc[i].gen);
     if (res_lookup("Font", g_name) || !g_rl.objnum) return 0xFF;
-    if (g_rcn < PDR_NRC && pdr_slen(g_name) < 8) {
+    if (pdr_slen(g_name) < 8) {
+        if (g_rcn >= PDR_NRC) g_rcn = 0;
         i = g_rcn++;
         g_rc[i].resp = g_resp; g_rc[i].reso = g_reso; g_rc[i].resg = g_resg;
         g_rc[i].obj = g_rl.objnum; g_rc[i].gen = g_rl.gen;

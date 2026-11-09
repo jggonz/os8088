@@ -21,12 +21,16 @@ static pdw pdr_seq(const char *a, const char *b)
     return *a == *b;
 }
 
-/* copy a struct to the XB, call a PDENG verb, copy the answer back */
+/* copy a struct to the XB, call a PDENG verb, copy the answer back.
+ * verify-perf: a failed READ is remembered (g_eio) - the font cache lives for
+ * the document, so a font loaded through one must not be kept */
+static pdw g_eio;
 static pdw eng_call(pdw verb, void *st, pdw n, pdw bx, pdw cx, pdw dx)
 {
     pdw err;
     if (n) pd_fcopy_out(st, g_xb, 0, n);
     err = pdr_eng(verb, bx, cx, dx);
+    if (err == PDE_IO) g_eio = 1;
     if (!err && n) pd_fcopy_in(g_xb, 0, st, n);
     return err;
 }
@@ -271,7 +275,7 @@ static pdw font_get(pdw obj, pdw gen)
             return i;
         }
     slot = g_fnnext; g_fnnext = (g_fnnext + 1) % PDR_NFONT;
-    g_fnote = 0;
+    g_fnote = 0; g_eio = 0;
     font_flush();
     g_fwi = slot; g_fwdirty = 1;
     g_fk[slot].used = 1; g_fk[slot].objnum = obj; g_fk[slot].gen = gen;
@@ -309,6 +313,10 @@ static pdw font_get(pdw obj, pdw gen)
     }
     if (!obj) { for (i = 0; i < 224; i++) f->enc[i] = (pdb)(i + 32); }
     g_fk[slot].note = g_fnote;
+    /* verify-perf: a read failed while it loaded (a disk taken out, a bad
+     * sector): this page draws what was had, and the next Tf loads it again
+     * rather than the document keeping the gap (verify-perf's ioab) */
+    if (g_eio) g_fk[slot].used = 0;
     return slot;
 }
 
