@@ -117,6 +117,12 @@ IMAGES = {
                           "rather than across it (6 + 1 + 4 at 11, at "
                           "0xF600, was the third call)"),
     "small720.img":   (2, "6 + 1 at 7, the 360KB small disk's shape"),
+    # the sound debug disk (SPEC.md 127): each geometry's system disk shape,
+    # its kernel at the same LBA, so the same calls
+    "debug-sound-360.img": (2, "os8088-360.img's shape"),
+    "debug-sound-720.img": (2, "os8088-720.img's shape"),
+    "debug-sound-120.img": (2, "os8088-120.img's shape"),
+    "debug-sound.img":     (2, "os8088.img's shape"),
 }
 # ...whose kernel is build/smallk's, so its stage-2 read is priced off that
 # kernel's own packed layout and not the big one's
@@ -310,6 +316,10 @@ STAGE2 = {
     "os8088.img": 6,        # 8 at blob 13 / head 9; 7 until the bounce
     "small360.img": 7,      # kern_small, 98 sectors packed, after its OWN
     "small720.img": 7,      # 7-sector blob; 8 at blob 11
+    "debug-sound-360.img": 10,  # each its system disk's
+    "debug-sound-720.img": 10,
+    "debug-sound-120.img": 7,
+    "debug-sound.img": 6,
 }
 
 

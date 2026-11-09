@@ -1,0 +1,34 @@
+os8088 SOUND DEBUG DISK
+=======================
+
+This disk boots os8088 and opens Sound Debug by itself. It is for when
+sound does not work the way it should on your machine - a card that is not
+found, or one that plays for a moment and then goes quiet.
+
+Its SOUND.DRV is built from the same source as the one on the system disk,
+with a record kept of everything it probes and everything a stream does.
+Sound Debug shows that record on three pages:
+
+  1  DETECT     where the card answered, its DSP version, how its IRQ was
+                found, the mixer, an ESS chip's own identity, OPL, MPU-401,
+                and a BLASTER= line
+  2  PLAY TEST  a tone for ten seconds through the same path music players
+                use, one line a second: bytes played, block interrupts, the
+                DSP's own voice switch, the mixer, the stream's state
+  3  REGISTERS  the mixer's registers, the last bytes sent to the DSP, the
+                stream record and the interrupt controller
+
+WHAT TO SEND US
+---------------
+1. Boot this disk. Page 1 comes up; after two seconds the play test starts
+   on page 2 and you should hear a steady tone for ten seconds.
+2. Note whether the tone played all ten seconds, and when it stopped.
+3. When the test says Done, photograph the screen. Press 1 and photograph
+   page 1, press 3 and photograph page 3.
+4. Send the three photographs, what you heard, and the card's name.
+
+Keys: 1 2 3 pages, P runs the play test again, R changes its rate (22050,
+11025, 8000, 44100 Hz), V turns the D8h voice reading off and on, Esc quits.
+
+If the tone stops when D8h sampling is on and plays through when it is off,
+say so: that is a finding too.

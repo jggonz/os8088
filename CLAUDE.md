@@ -216,6 +216,16 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # BIOS answering CF=0 for a transfer it did not make).
               # BOOTDIAG.COM rides on all six for a machine that boots DOS
               # but not this. Nothing here ever writes to a disk
+make debugdisks # THE DEBUG DISKS (SPEC.md 127): a system disk that boots
+              # straight into a report on one subsystem, for a user with a
+              # camera and no debugger - bootdiag's sibling for a machine
+              # that DOES boot. debug-sound{,-120,-720,-360}.img (in `all`
+              # and the release zip's DEBUG/): SOUND.DRV built from the
+              # shipped source with -DSNDDIAG (drivers/sound/snddiag.inc,
+              # every hook empty without it - t_debugdisk holds the shipped
+              # driver byte-identical), and \AUTOSTRT opening SNDDIAG.O88:
+              # the probes, a ten-second tone a row a second, the registers.
+              # A probe added to a driver is a line added to its debug disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). fast (host-side, run by every `make`)
 make test-soak   #   and full (did you obviously break the OS?) fail over a
@@ -780,7 +790,7 @@ the eight `286-525-*` application machines (`-z`, `-word`,
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6; kern_big's gate disk is `make pcibigtest`), `pentium-ess` (`pentium` with an ESS ES1868 in place of its SB16, booting the sound debug disk - SPEC.md §127; 86Box's ESS treats `D1h`/`D3h` as no-ops), `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,

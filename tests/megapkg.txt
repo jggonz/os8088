@@ -154,3 +154,7 @@ apps/redline/inspmod.inc 3       # THE SHIPPED BUILD STAYING CORRECT, not a
     # CPU_F_PM`) keeps int 15h C0h - whose answer is a real-mode ES:BX - and
     # the IVT read off kern_mega, and ri_cpuf names the bit on the CPU page
     # (SPEC.md 103.7.1). Three lines, no code that runs only there
+apps/snddiag/sdtext.inc 1        # A LABEL, not a kern_mega arm: Sound Debug's
+    # Detect page prints ", kern_mega protected mode" after the CPU when
+    # OSAPI_CPU_INFO's CPU_F_PM is set (SPEC.md 127.4), so a photograph says
+    # which kernel it came from. One test, nothing that runs only there
