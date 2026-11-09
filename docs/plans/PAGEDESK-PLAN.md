@@ -99,18 +99,18 @@ Exploratory.
 | PD-16 | changes, undo/redo | XT | 2 | | S | undo/redo incl. page operations: edit-verify, lead look |
 | PD-17 | save a real PDF | XT | 1-2 | wrt | S | fresh + incremental save, D14 cross-folder, verified through PDENG and qpdf: wrt, pages |
 | PD-18 | reorder/rotate/delete/insert pages | XT | 2 | | S | reorder/rotate/delete/duplicate/blank, undo at the wake: pages-verify, lead look |
-| PD-19 | extract / insert from another PDF | XT | 2-3 | | P | Extract built and checked (pages-verify); Insert from another PDF is wave 3 (`insert`, 20.16) |
-| PD-20 | new document, recovery | XT | 2 | | P | File > New built; the recovery journal and PDSAVE.$$$ offer are wave 3 (`recov`, 20.17) |
+| PD-19 | extract / insert from another PDF | XT | 2-3 | | S | Extract (pages-verify) and Insert from PDF (20.16): colliding object numbers and font names, qpdf --check, pixels equal to the source pages, seen on VGA and CGA (insert-report, insert-verify) |
+| PD-20 | new document, recovery | XT | 2 | | S | New; the recovery journal, the finish-save offer and the window close ask (20.17), seen on VGA and CGA (recov-verify). New/Open/Close document do not ask (20.20.2) |
 | PD-21 | reproducible samples | XT | 1 | fix | I | tools/os88pdfgen.py, samples/, MANIFEST: fix-report |
 | PD-22 | host preparation of complex PDFs | H | 3 | | I | tools/os88pdprep.py, row pdprep: host-report |
-| PD-23 | keyboard and file workflows | XT | 1-2 | shell | P | keys and menus built; Preferences is wave 3 (`prefs`, 20.18) |
+| PD-23 | keyboard and file workflows | XT | 1-2 | shell | S | keys, menus and Preferences (20.18): settings on the launch disk, read-only media handled, seen on VGA and CGA (prefs-verify) |
 | PD-24 | package and disk images | XT | 1 | shell | I | PAGEDESK.O88 + parts, `make pagedeskdisk` in four geometries |
-| PD-25 | more RAM, Flate | E | 3 | | P | Flate + predictors drawn on the target with the D17 carve (lead look, flate-on-target.png); XMEM caches not built |
-| PD-26 | AcroForm filling | E | 3 | | P | read-only appearance via annotr; the forms-not-supported note is wave 3 (`prefs`); FILLING not selected this round (D24) |
+| PD-25 | more RAM, Flate | E | 3 | | P | Flate + predictors decoded when RAM holds a slot (D17), seen on VGA; Preferences turns it Off; XMEM caches not built |
+| PD-26 | AcroForm filling | E | 3 | | P | forms shown as printed and the not-supported note (20.18), seen on VGA; FILLING not built (D24, Enhanced, not selected) |
 | PD-27 | protected-mode decision/spike | X | 3 | | I | docs/plans/PAGEDESK-PM-ADR.md: host-report |
 | PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | P | malformed input: eng fuzz, tests/pdfneg, pdefuzz; failing storage: wrt/pages refusals; the final pass runs the rows |
 | PD-29 | hardware, memory, responsiveness proof | XT | final | lead | - | |
-| PD-30 | documented working behaviour | XT | final | lead | - | |
+| PD-30 | documented working behaviour | XT | final | lead | I | README.TXT, docs/PAGEDESK-GUIDE.md, docs/HOW-PAGEDESK-WAS-BUILT.md, PAGEDESK-SPEC 20.20 (docs-report) |
 
 ## 4. Waves
 
@@ -182,3 +182,4 @@ selection that ships with the merge.
 - 2026-11-05: wave 1 integrated (eng, wrt, math, fonts, fix, shell, rend); wave 2 launched.
 - 2026-11-05: wave 2 integrated (edit, notes, nav, pages, annotr, flate, host) with D23's private module stack (20.15) and the static stack gate (`pdstk`).
 - 2026-11-06: wave 3 launched: insert (PD-19), recov (PD-20), prefs (PD-23, PD-26's baseline), polish (carried defects). D24 budgets.
+- 2026-11-09: wave 3 integrated after a usage-limit pause; every segment at its cap (primary 59,235 of 59,392). PD-30's docs merged. The final pass's rows (rows agent) and PD-29's MartyPC proof are being written.
