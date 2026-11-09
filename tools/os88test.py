@@ -330,6 +330,11 @@ def capabilities():
     # row as a traceback and a FAIL instead of a skip.
     if os88build.have_pil():
         caps.add("pil")
+    # A WINDOW for the builder (tests/vbtguiwin.py): a python whose tkinter
+    # imports - not always this one, a container's newest python3 having no
+    # Tk where its python3.12 does - and xvfb-run to give it a display
+    if os88build.tk_python():
+        caps.add("tk")
     # unicorn, for the one row that runs driver code against a MODEL of a
     # card no emulator here carries - the PicoMEM (tests/picomem.py).
     if os88build.have_unicorn():

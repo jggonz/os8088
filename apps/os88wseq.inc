@@ -37,10 +37,14 @@
 ; that is itself a cluster multiple never moves a byte. A buffer smaller
 ; than one cluster is refused at the open, FERR_NAME.
 ;
-; ON kern_small, whose WRITE_SEQ answers FERR_NAME, each chunk goes through
-; OSAPI_FILE_APPEND instead - the same rule, the same chunks, a lookup and a
-; walk a call. The stream is PLAIN (not WSEQF_HELD): every flush is
-; committed, so nothing is held across the caller's callbacks.
+; ON kern_small THE OPEN IS REFUSED, and no chunk is reached: OSAPI_VOL_STAT
+; is a bare `stc` there (kernel.asm's osapi_vol_stat), so os88_wseq_open
+; answers CF=1 with AX = 0, which is no FERR_* code. The APPEND arm in
+; os88_wseq_out was written for that kernel's FERR_NAME WRITE_SEQ - the same
+; rule, the same chunks, a lookup and a walk a call - and on kern_big it only
+; repeats WRITE_SEQ's refusal of a misaligned chunk. The stream is PLAIN (not
+; WSEQF_HELD): every flush is committed, so nothing is held across the
+; caller's callbacks.
 ;
 ; UI TASK ONLY - every call is a file slot (SPEC.md 20.6 rule 7).
 ; =============================================================================

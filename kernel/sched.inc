@@ -14,10 +14,11 @@
 ;
 ; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
 ; the task-0 stack (SS:STK0_TOP) — it owns no slice of sch_stacks. Slots
-; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with an
-; SCH_STACK-byte stack in .lowbss.
+; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a stack
+; from SCH_PARTITION's fixed list (128..SCH_STACK bytes) in .lowbss.
 ;
-; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
+; All tasks run SS = LOW_SEG (SPEC.md 1/2.1), and CS = DS = KERNEL_SEG except
+; a package's worker, whose CS = DS is its own segment (SPEC.md 20.6). The
 ; stacks live in low memory, outside the kernel's 64KB window, and a context
 ; switch is still nothing more than swapping SP because every task shares the
 ; one SS. SS is therefore NOT saved in the frame below and never changes
@@ -101,19 +102,19 @@ SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; them - left its deepest mark 142 bytes down,
                                 ; and Tracker's streaming worker feeding a
                                 ; Sound Blaster through its own IRQ reached
-                                ; the same 142. 256 is 1.8x that, which is
-                                ; thinner than this project usually runs, so
+                                ; the same 142. 256 was 1.8x that and 384 is
+                                ; 2.7x - thinner than this project usually runs, so
                                 ; SCH_MAGIC below makes an overrun a CAUGHT
                                 ; failure instead of a silent one.
                                 ;
                                 ; **IT IS A CONSTANT AND A REBUILD.** It used
                                 ; to have to be 256 exactly, because
                                 ; sch_switch turned the slot index into the
-                                ; slice's base with a byte swap; that path is
-                                ; still there for 256 and there is a general
-                                ; one beside it for any multiple of 128, so
-                                ; changing this and MAX_TASKS is the whole of
-                                ; the change (docs/KERNEL-MEMORY.md, "Task
+                                ; slice's base with a byte swap. The base is
+                                ; a lookup in sch_stkbase now (SPEC.md 8.6),
+                                ; so changing SCH_PARTITION and MAX_TASKS is
+                                ; the whole of the change
+                                ; (docs/KERNEL-MEMORY.md, "Task
                                 ; stacks"). apps/taskmgr's bss map used to be
                                 ; hand-chained literals and was the other half
                                 ; of why nobody could; it derives now
@@ -173,7 +174,7 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 ; -----------------------------------------------------------------------------
 %ifdef KERN_SMALL
 ; --- kern_small's FOUR (docs/plans/KERN-SMALL-CUT-PLAN.md D1) ----------------------
-; 832 bytes against kern_big's 2,816. The COUNT is the owner's; what is
+; 960 bytes against kern_big's 2,816. The COUNT is the owner's; what is
 ; chosen here is WHICH FOUR, off the same survey (docs/plans/completed/STACK-SLOTS-PLAN.md 12.1)
 ; read against what SPEC.md 24.5 actually puts on the small disks:
 ;
@@ -284,8 +285,9 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ; clobbers: flags
 ;
 ; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/plans/LAST-DROP-BYTES.md row 3), which
-; is 166 bytes of `.text` that stop existing when kmain gives the blob back.
-; kmain:4170 is its ONE caller and there is no second entry: nothing
+; is 166 bytes that stop existing once the boot is done: kern_small's go back
+; with the blob, and kern_big's are FAT_SEG's, which the first mount takes.
+; kmain's OVBCALL is its ONE caller and there is no second entry: nothing
 ; re-initialises the scheduler, the reboot path is sched_unhook - which RESTORES
 ; the old vector and is a different routine - and sch_fast_on/sch_fast_off
 ; re-programme the PIT without coming near this body. Zero outbound calls, so
@@ -293,16 +295,19 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ;
 ; The vector store below is what makes it safe to be here and is worth reading
 ; before anything is added: `mov word [es:0x22], KERNEL_SEG` names the segment
-; as a CONSTANT. In `.boot2` CS is the BLOB's, and the blob is about to become
-; somebody's heap claim, so `mov [es:0x22], cs` would install a vector into
-; freed memory and the machine would die later at an address with no connection
-; to this file. tools/os88ovlchk.py rule 2b refuses that spelling outright now.
+; as a CONSTANT. On kern_big this body is `.ovl` and CS is FAT_SEG, whose bytes
+; the first mount takes (SPEC.md 2.5); on kern_small it is `.boot2` and CS is
+; the BLOB's, which is about to become somebody's heap claim. Either way
+; `mov [es:0x22], cs` would install a vector into freed memory and the machine
+; would die later at an address with no connection to this file.
+; tools/os88ovlchk.py rule 2b refuses that spelling outright now.
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
 section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
                                 ; whose window has room to spare
 %else
-section .boot2                    ; ...and kern_small: the BLOB half instead
+B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
+                                ; it was the BLOB half until then)
                                 ; (SPEC.md 2.5.3.2, mouse_init's shape). The
                                 ; deadline is the same either way - kmain runs
                                 ; this long before drv_boot - so the choice is
@@ -313,7 +318,7 @@ section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; 800 bytes it gave back are only 288 of heap
                                 ; while the overlay still needs the rest, so
                                 ; every body moved here turns one more of them
-                                ; into heap. `.boot2` is written LAST on
+                                ; into heap. `B3SECT` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE
                                 ; and cannot evaluate the %ifdef, so it files
                                 ; this block by the arm below - which is the
@@ -325,12 +330,22 @@ sched_init:
     push cx
     push es
 
+    ; (ON A DSK_PMHD BUILD THESE ZERO STORES ARE GONE - this one, .zcyc's,
+    ; sch_wd_hits' and sch_pit_last's high word - for the window half's room,
+    ; SPEC.md 18.91.7. They wrote zero over zero: `.bss` (9D94h-B28Ah of
+    ; KERNEL_SEG on kern_big) lies wholly in the file's gap between `.text`'s
+    ; end and `.ovl`'s start, emitted as zero bytes, and stage 2's one
+    ; contiguous read lands them before this runs - SPEC.md 10's evq_init went
+    ; on the same fact. The comments below that say nothing clears .bss are
+    ; about RAM at power-on, which the load writes over)
+%ifndef DSK_PMHD
     mov bx, sch_tasks           ; mark every slot free
     mov cx, MAX_TASKS
 .clear:
     mov byte [bx+T_STATE], 0
     add bx, T_SIZE
     loop .clear
+%endif
 
     mov byte [sch_cur], 0
 %ifdef KERN_BIG
@@ -338,28 +353,36 @@ sched_init:
 %else                           ; beside it (53.2.2) in one word: sch_rhook
     mov byte [sch_lock], 0      ; balances it from here on, so fsx_run need
 %endif                          ; not
-    mov word [ticks], 0         ; .bss: nothing else zeroes it, and the stamp
+    mov word [ticks], 0         ; .bss arrives zero (SPEC.md 8); stored, as the stamp
                                 ; seeded below assumes it (high word = 0).
                                 ; Kernel size pass 5 folded this line into
-                                ; the comment above by accident, which only a
-                                ; machine whose RAM is not zero at power-on
-                                ; could show
+                                ; the comment above by accident, and no
+                                ; machine could show it: the load's zero
+                                ; padding lands on [ticks] whatever RAM held
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], SCH_WD_TICKS
                                 ; otherwise (SPEC.md 8.2). All three are
-    mov byte [sch_idleslot], 0xFF ; NO idle task yet, and this is exactly why
+    mov word [sch_idleslot], 0x01FF ; NO idle task yet, and this is exactly why
                                 ; it is 0xFF rather than 0 - nothing clears
                                 ; .bss, and a zero here names slot 0, the UI
                                 ; task, which sch_switch's scan would then
-                                ; skip for ever
+                                ; skip for ever. The HIGH byte is [sch_top]
+                                ; = 1: only slot 0 is live (SPEC.md 8.1.3),
+                                ; one word store for the two (the %if at the
+                                ; foot of this file keeps them adjacent)
+%ifndef DSK_PMHD
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand, like the four bytes
-                                ; above it: nothing clears .bss at boot, so
-                                ; every one of these has to be stored rather
+                                ; above it: .bss arrives as the image's zero
+                                ; padding (SPEC.md 12.8.5.1, checked on the
+                                ; kern_big binary), but sched_init is boot-
+                                ; overlay code, so storing these costs no
+                                ; resident byte and they are stored rather
                                 ; than assumed. (This comment used to explain
                                 ; sch_coop, which is set three lines up - and
                                 ; a store whose comment justifies a DIFFERENT
                                 ; store is a store somebody deletes)
+%endif
     push es                     ; TASK 0 HAS A CANARY NOW, and it is checked on
     push ax                     ; every switch like everybody else's - see
     mov ax, LOW_SEG             ; sch_stkbase, whose slot-0 entry is this word.
@@ -391,6 +414,7 @@ sched_init:
     out 0x40, al
     out 0x40, al
 
+%ifndef DSK_PMHD
     mov bx, sch_cycles          ; zero the per-task cycle counters
     mov cx, MAX_TASKS * 2
 .zcyc:
@@ -398,6 +422,7 @@ sched_init:
     inc bx
     inc bx
     loop .zcyc
+%endif
 
     mov al, 0x00                ; seed sch_pit_last with a coherent stamp:
     out 0x43, al                ; high word = [ticks] = 0, low word = the
@@ -407,7 +432,9 @@ sched_init:
     mov ch, al
     neg cx
     mov [sch_pit_last], cx
+%ifndef DSK_PMHD
     mov word [sch_pit_last+2], 0
+%endif
 
     xor ax, ax                  ; vector table segment
     mov es, ax
@@ -471,7 +498,8 @@ section .text
 ; (which this replaces outright - it WAS this routine, in the wrong module),
 ; and in snd.inc's PCM deadline prime.  Two copies are deliberately NOT
 ; converted:
-;   * sched_init's seed at the top of this file is `.ovl`, the boot overlay,
+;   * sched_init's seed at the top of this file is boot-overlay code (`.ovl`
+;     on kern_big, `.boot2` on kern_small),
 ;     and a near call from there to `.text` would assemble cleanly and run
 ;     wrong;
 ;   * sch_account's is on the IRQ0 path and does more (the IRR coherence
@@ -483,21 +511,18 @@ section .text
 ; answer.  This clock is a pace, not an accounting.
 ; -----------------------------------------------------------------------------
 sch_pit_now:
-    push cx
     pushf
     cli
     mov al, 0x00                ; latch channel 0's count
     out 0x43, al
     in al, 0x40
-    mov cl, al
+    mov ah, al                  ; the LOW byte, parked in AH...
     in al, 0x40
-    mov ch, al
-    mov dx, [ticks]
-    popf
-    neg cx                      ; phase = 65536 - count, counting up from the
-    mov ax, cx                  ; tick
-    pop cx
-    ret
+    xchg al, ah                 ; ...and the pair put the right way round:
+    mov dx, [ticks]             ; the count is built in AX itself, so CX is
+    popf                        ; never borrowed (kernel size pass 18, -4,
+    neg ax                      ; and ~27 cycles a read faster). Phase =
+    ret                         ; 65536 - count, counting up from the tick
 
 ; -----------------------------------------------------------------------------
 sch_fast_on:
@@ -637,9 +662,7 @@ sch_rhook:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 sched_stop:
-    push ax
-    push si
-    push di
+    call kent_bp                ; KENT: push ax..bp (kernel size pass 18, -2)
     push es
 
 %ifdef KERN_MEGA
@@ -654,19 +677,14 @@ sched_stop:
     cli
     movsw
     movsw
-    popf
-
-    call mouse_unhook           ; restores int 0Ch, masks IRQ4
-    call snd_unhook             ; 61h bits 0-1 back to their boot state,
-                                ; ch2 quiescent (SPEC.md 34.7)
 
     ; PIT ch0 back to the BIOS default (mode 3, square wave, divisor
-    ; 65536). The vector is already restored so sch_isr can no longer read
-    ; the PIT mid-sequence, but keep the three OUTs atomic anyway - an
-    ; interleaved counter read between the two count-byte writes is
-    ; undefined on a real 8253 (SPEC.md 8.1).
-    pushf
-    cli
+    ; 65536), in the SAME window as the vector: the vector is restored so
+    ; sch_isr can no longer read the PIT mid-sequence, and the three OUTs
+    ; stay atomic anyway - an interleaved counter read between the two
+    ; count-byte writes is undefined on a real 8253 (SPEC.md 8.1). It was a
+    ; second window after the two unhooks, which touch neither channel 0 nor
+    ; its vector (kernel size pass 18, -3)
     mov al, 0x36
     out 0x43, al
     xor al, al
@@ -674,11 +692,10 @@ sched_stop:
     out 0x40, al
     popf
 
-    pop es
-    pop di
-    pop si
-    pop ax
-    ret
+    call mouse_unhook           ; restores int 0Ch, masks IRQ4
+    call snd_unhook             ; 61h bits 0-1 back to their boot state,
+                                ; ch2 quiescent (SPEC.md 34.7)
+    jmp kret_es
 
 sched_unhook:
     call sched_stop
@@ -691,6 +708,11 @@ sched_unhook:
                                 ; and neither has an instruction after it, so
                                 ; AX/SI/DI/ES need not come back either
 %endif
+                                ; (The PARITY `nop` sys put here for
+                                ; sch_pit_now -4 and sched_stop -5 went with
+                                ; sch_account's odd -7 below: kernel size
+                                ; pass 18, sweep3. sch_isr / sch_switch keep
+                                ; their measured parity, tests/unit/t_hotpar.py)
 
 ; -----------------------------------------------------------------------------
 ; sch_wake_ui - make the UI task ready (PROBE, docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
@@ -759,10 +781,31 @@ sch_idle_body:
     pushf
     cli                         ; the guard: nothing may be posted between the
     cmp byte [sch_idlewake], 0  ; test and the halt...
-    jne .rearm                  ; a wake landed since the last pass: go round
+    jne .woke                   ; a wake landed since the last pass: go round
     sti                         ; ...and sti's shadow covers the hlt, so an
     hlt                         ; interrupt taken here ENDS it rather than
-.rearm:                         ; preceding it
+.rearm:                         ; preceding it. (tools/os88hot.py finds the
+                                ; hlt as THIS label less one: keep them so)
+%ifndef KERN_EMU
+    popf                        ; ...and A HALT NO WAKE ENDED IS HALTED AGAIN
+    jmp short .loop             ; (SPEC.md 8.1.2.5): round to the guard,
+                                ; rather than into a yield. Every READY-
+                                ; making event posts the byte now -
+                                ; sch_wake_ui, the tick's wake loop - and
+                                ; sch_switch's "nothing ready" fallback spends
+                                ; it, so a clear byte means nothing became
+                                ; ready since the scheduler last looked, and
+                                ; the yield below would resume this task. It
+                                ; was one switch per serial BYTE and one per
+                                ; tick. Through .loop and not straight to the
+                                ; test, so the idle loop's head is still
+                                ; passed after every interrupt (tests/
+                                ; dskwstage.py stops there). kern_emu keeps
+                                ; the yield: its VMware pointer is POLLED in
+                                ; task_yield, and an interrupt is how a moving
+                                ; absolute pointer gets there
+%endif
+.woke:
     mov byte [sch_idlewake], 0  ; spent BEFORE the yield, so a wake posted
     popf                        ; after this is one the next pass sees
 .spin:
@@ -775,23 +818,32 @@ sch_idle_body:
                                 ; made ready waits for the next TICK, so the
                                 ; wake byte on its own buys nothing and input
                                 ; still lands up to 55 ms late. Costs one
-                                ; switch per interrupt taken
-                                ; while idle, which is what being idle is for
+                                ; switch per WAKE taken while idle (8.1.2.5).
+                                ; (The halt-again arm is 3 bytes; its parity
+                                ; pad went when task_spawn below came down by
+                                ; one: kernel size pass 18. kern_emu has
+                                ; neither, and t_hotpar does not pin it)
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
 ;
-; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
-; and the idle task it spawns outlives it by construction - a task's code is
+; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain's
+; OVSCALL, and the idle task it spawns outlives it by construction - a task's code is
 ; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
-; of a `.text` label from `.boot2` is correct and taking the address of an `.boot2`
-; one would not be: `.text` has vstart=0 and the consumer supplies KERNEL_SEG.
+; of a `.text` label from a boot-only home is correct and taking the address of
+; one of ITS labels would not be: `.text` has vstart=0 and the consumer supplies
+; KERNEL_SEG. `.boot3` since BOOT3-PLAN wave 3 (`.ovl` until then), and still
+; `.ovl` on kern_small - OVSCALL's two arms (SPEC.md 2.5.3.2).
 ;
 ; **kmain does not read the CF this answers with**, which is what lets the site
 ; use the flag-banking gate rather than SPLCALLC. If a caller ever does, the
 ; call has to change with it.
 ; -----------------------------------------------------------------------------
-section .ovl
+%ifndef KERN_SMALL
+B3SECT                          ; BOOT3-PLAN wave 3 (SPEC.md 2.9.15)
+%else
+section .ovl                    ; kern_small: the window half, written LAST
+%endif                          ; (tools/os88ovlchk.py models kern_small)
 sch_idle_start:
     push bx
     push cx
@@ -833,7 +885,8 @@ section .text
 ; task_spawn - create a task that iret-launches into a near entry point
 ;
 ; Builds a complete saved frame at the top of the slot's stack: DX = the
-; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
+; spawn argument, other GP regs zero, DS = CS = the segment in BX (KERNEL_SEG
+; when BX = 0), ES = KERNEL_SEG,
 ; IP = entry, FLAGS with IF=1. The slot's sch_cycles counter is zeroed
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
@@ -858,8 +911,9 @@ section .text
 ; drives the repaint). Pre-empted between the scan and the publish, the
 ; second spawner would overwrite the first's T_SP/T_INST and both callers
 ; would be handed the same slot number - one task lost, one instance record
-; leaked for the session. The window is ~30 stores with no I/O, shorter than
-; task_exit's.
+; leaked for the session. The window is the slice's 0xCC fill - one `rep
+; stosw` of the whole slice, ~0.7 ms on a 384-byte one at PERFORMANCE.md's
+; 1.76 us a byte - plus ~30 stores, no I/O.
 ;
 ; The frame is built through ES, not DS: sch_stacks is in LOW_SEG (.lowbss),
 ; which DS does not address. The task record itself is ordinary kernel .bss
@@ -949,7 +1003,7 @@ task_spawn:
     ; meant the only kernel whose margin could be measured was one nobody runs -
     ; and the margin is the thing this project has just spent a week being
     ; wrong about (docs/FIELD-NOTES.md 29.6). It costs ONE `rep stosw` of the
-    ; slice per SPAWN - a few hundred microseconds, once, against a launch that
+    ; slice per SPAWN - ~0.7 ms on a 384-byte slice, once, against a launch that
     ; has already been through int 13h - and it turns tests/stackprobe from a
     ; probe of its own slice into one that can read EVERY task's high water on
     ; the shipping kernel, on the real machine, while the thing under suspicion
@@ -966,7 +1020,7 @@ task_spawn:
     mov ax, 0xCCCC
     cld
     rep stosw                   ; ES:DI = the slice base, upwards - words,
-                                ; 12.5 clocks a byte against stosb's 17, and
+                                ; 1.76 us a byte measured (PERFORMANCE.md), and
                                 ; this whole fill runs inside the spawn's cli
     pop ax                      ; the size...
     pop di                      ; ...the base...
@@ -1013,8 +1067,17 @@ task_spawn:
                                 ; BP - which is the addressing this already
                                 ; used
 
+    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1), the
+                                ; answer - and CH is 0, so AX is the slot
+    cmp al, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
+    jb .intop                   ; 8.1.3): the scan stops at [sch_top], so a
+    inc ax                      ; slot made ready above it would never run:
+    mov [sch_top], al           ; slot + 1, and AL back to the slot. Still
+    dec ax                      ; IF=0 - the ISR cannot look between this
+.intop:                         ; store and the one below. (Off the answer's
+                                ; own load, a byte under its own `mov al, cl`:
+                                ; kernel size pass 18)
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
-    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
 
 .done:
     popf                        ; IF back - and the caller's CF with it, so
@@ -1166,7 +1229,23 @@ task_exit:
 .norel:
     call sch_currec             ; free our own task record
     mov byte [bx+sch_tasks+T_STATE], 0
-    jmp sch_switch              ; explicit jump - placement-safe
+    mov al, [sch_top]           ; ...and LOWER THE BOUND past every free slot
+    cbw                         ; at the top (SPEC.md 8.1.3), so a closed app
+    mov bx, ax                  ; stops costing the wake loop and the scan.
+    mov cl, 3                   ; [sch_top] <= MAX_TASKS < 80h, so cbw makes
+    shl bx, cl                  ; AH = 0, and BX = [sch_top] * T_SIZE. The
+.lower:                         ; walk stops at slot 0 at the latest: the UI
+    dec ax                      ; task never exits, so its T_STATE is never 0.
+    sub bx, T_SIZE              ; IF=0 since the cli above, so nothing spawns
+    cmp byte [bx+sch_tasks+T_STATE], 0  ; under it; AX, BX and CX are dead -
+    je .lower                   ; sch_switch re-derives all three
+    inc ax
+    mov [sch_top], al
+    jmp sch_switch              ; explicit jump - placement-safe. (The bound
+                                ; above is 25 bytes, and its parity pad went
+                                ; when cur_move_mono, above it, came down by
+                                ; an odd 7: kernel size pass 18. sch_isr is
+                                ; at its measured parity - t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_account - charge the PIT cycles since the last measure point to the
@@ -1200,7 +1279,10 @@ task_exit:
 ;           which charges nothing but still answers the question. task_cycles
 ;           and task_debit used to re-derive this from the same [sch_cur]
 ;           under the same cli; now they do not.
-; clobbers: AX, BX, CX, DX, SI - on BOTH arms now; the early-out used to
+; clobbers: AX and SI on both arms; BX, CX and DX on the charging arm only
+;           (CX:DX the PREVIOUS stamp there; the early-out jumps past the
+;           latch and touches none of the three, since pass 18 - nothing
+;           reads either); the early-out used to
 ;           clobber nothing. Every call site already tolerated the list:
 ;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
 ;           task_exit banks the record pointer in DI first, task_cycles and
@@ -1222,13 +1304,16 @@ task_exit:
 ; that 0.02%, and the bytes win.
 ; -----------------------------------------------------------------------------
 sch_account:
-    mov bl, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
-    xor bh, bh                  ; is computed before the early-out below and
-    shl bx, 1                   ; not after the charge. In BX, because CX
-    shl bx, 1                   ; carries the latched phase further down; and
-    mov si, bx                  ; hoisting it above the latch cannot change
-                                ; the reading, because nothing before the
-                                ; `out 0x43` affects it
+    mov al, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
+    cbw                         ; is computed before the early-out below and
+    shl ax, 1                   ; not after the charge. Through AX, which the
+    shl ax, 1                   ; latch spends next anyway: `mov al, [mem]` is
+    xchg si, ax                 ; the accumulator form and [sch_cur] < 128, so
+                                ; cbw is the zero high byte - 10 bytes and
+                                ; faster where BX took 12 (kernel size pass
+                                ; 18, -3); hoisting it above the latch cannot
+                                ; change the reading, because nothing before
+                                ; the `out 0x43` affects it
     cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1) divides the
     jne .idle                   ; very period this arithmetic is built on, so
                                 ; accounting PAUSES for the bracket - here
@@ -1252,12 +1337,17 @@ sch_account:
     js .cohere                  ; latch - keep ticks
     inc dx                      ; reload before the latch: tick not yet in
 .cohere:
-    mov ax, cx                  ; elapsed = now - last, 32-bit
-    sub ax, [sch_pit_last]
-    mov bx, dx
-    sbb bx, [sch_pit_last+2]
-    mov [sch_pit_last], cx
-    mov [sch_pit_last+2], dx
+    mov ax, cx                  ; elapsed = now - last, 32-bit. The stamp is
+    xchg cx, [sch_pit_last]     ; stored and the old one read in ONE xchg a
+    sub ax, cx                  ; word, so CX/DX come back holding the LAST
+    mov bx, dx                  ; stamp rather than this one (clobbers either
+    xchg dx, [sch_pit_last+2]   ; way; no caller reads them) - 16 bytes where
+    sbb bx, dx                  ; six moves were 20, and 4 fewer clocks a word
+                                ; on the 8088 (xchg r,m 25+EA and sub r,r 3,
+                                ; against sub r,m and mov m,r at 13+EA each,
+                                ; EA 6): kernel size pass 18, -4, and 8
+                                ; clocks plus 16 of fetch floor off every
+                                ; tick's charge (H2)
     add [si+sch_cycles], ax     ; sch_cycles[sch_cur] += elapsed, at the SI
     adc [si+sch_cycles+2], bx
 .idle:
@@ -1314,7 +1404,7 @@ task_cycles:
 ;
 ; sch_lock is deliberately NOT reused as the "don't switch" flag even though
 ; it looks like one: task_yield tests it too and self-resumes when it is set
-; (see task_yield above), so raising sch_lock would not make multitasking
+; (see task_yield below), so raising sch_lock would not make multitasking
 ; cooperative - it would stop multitasking altogether and freeze every Timer
 ; and Bounce instance forever, their task_sleep never handing the CPU on.
 ; Cooperative mode must leave the VOLUNTARY path fully working and suppress
@@ -1376,7 +1466,10 @@ sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
 ; EOI - we must not), then bumps [ticks], wakes due sleepers, and switches
 ; round-robin if the tail's two tests allow it: sch_lock must be clear, and
 ; in cooperative mode only the watchdog switches (SPEC.md 8.2). Runs with
-; IF=0 throughout; calls no BIOS service beyond the chain; never sti.
+; IF=0 throughout, except inside the ROM's int 08h on the chain, which sti's
+; (SPEC.md 8.5.1), and inside sch_rhook on kern_big while a sample ISR is
+; open (SPEC.md 34.11), where the hook runs at IF=1; calls no BIOS service
+; beyond the chain, and sch_isr itself never sti's.
 ;
 ; Decision order is binding: accounting and the wake scan run BEFORE both
 ; tests, so cycle accounting and task_sleep deadlines keep working every tick
@@ -1456,7 +1549,7 @@ khb_dipl:   db 0                ; to disagree: cutting 32 bytes off the
                                 ; is aimed at the chain the machine is actually
                                 ; in. Depth, not SP, because the answer has to
                                 ; compare across slots - and it is derived from
-                                ; sch_stacks + slot * SCH_STACK, never from
+                                ; sch_stkbase[slot] + sch_stksize[slot], never from
                                 ; SP's low bits: at 384 a slice is 128-aligned
                                 ; and the `neg al` that read 256-aligned ones
                                 ; produced garbage (the switch path below says
@@ -1761,7 +1854,7 @@ task_yield:
     ; here too).
     ;
     ; **WRITTEN OUT RATHER THAN VMM_POLL, and the difference is DS.** The macro
-    ; is for ui_task and menu_drop, which already hold the kernel's; this site
+    ; is for ui_task, which already holds the kernel's; this site
     ; does not - task_yield is an OSAPI slot, so the caller may be a package
     ; with its own DS. The GATE is still the macro's cs-relative compare, and
     ; the segment load moves INSIDE the branch: a machine with no backdoor pays
@@ -2128,9 +2221,10 @@ sch_isr:
     ; Registers are already saved here, so unlike SPEC.md 9.10's swap this one
     ; needs no `cs:` override and a plain byte flag will do.
 %ifndef NO_CHAINPRIV
-    cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM sends its EOI
-    jne .chskip                 ; and then stis, so a second IRQ0 can re-enter
-                                ; this ISR - and that one may not chain again
+    cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM stis and runs
+    jne .chskip                 ; int 1Ch before its EOI, and a second IRQ0 can
+                                ; re-enter this ISR after that EOI - and that
+                                ; one may not chain again
                                 ; on the private stack (the saved SP is one
                                 ; register), and it is ALREADY on that stack, so
                                 ; the switch below is refused for it too: a
@@ -2301,7 +2395,8 @@ sch_isr:
 
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
-    mov cx, MAX_TASKS
+    mov cl, [sch_top]           ; ...among the slots that can be live: every
+    xor ch, ch                  ; one at or above [sch_top] is free (8.1.3)
 .wake:
     cmp byte [bx+T_STATE], 2
     jne .next
@@ -2310,6 +2405,13 @@ sch_isr:
                                 ; ax, dx / sub`: the same SF, 2 bytes and ~8
                                 ; cycles less per sleeper (size pass 9)
     mov byte [bx+T_STATE], 1
+%ifndef KERN_EMU
+    mov [sch_idlewake], cl      ; ...and SAY SO to the idle task (8.1.2.5): a
+                                ; tick that cannot switch - locked, nested,
+                                ; cooperative - leaves the woken task to the
+                                ; idle task's yield. CL is the loop count,
+                                ; 1..[sch_top], so never 0
+%endif
 .next:
     add bx, T_SIZE
     loop .wake
@@ -2332,6 +2434,9 @@ sch_isr:
                                 ; sch_switch re-arms the budget
 .tres:                          ; ONE near jump for the refusals above and
     jmp sch_resume              ; sch_switch's own: a `jne` that far is five
+    nop                         ; PARITY PAD, never executed: the wake loop's
+                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
+                                ; keeps sch_switch at its measured parity
                                 ; bytes, a short one to here two - and the
                                 ; common tick (no lock, no coop) now takes no
                                 ; branch at all until .sw
@@ -2366,6 +2471,9 @@ sch_switch:
     xor bh, bh                  ; were two (-2 bytes, ~8 cycles; size pass 9)
     mov cl, 3                   ; T_SIZE = 8: ***CL = 3 FROM HERE TO .pick***
     shl bx, cl                  ; (see below)
+    mov ch, [sch_top]           ; ...and CH = [sch_top], the scan's modulus
+                                ; and its count (SPEC.md 8.1.3), live to .pick
+                                ; with CL
     mov [bx+sch_tasks+T_SP], sp
 
     ; --- the outgoing task's canary (SPEC.md 8), through sch_stkbase above.
@@ -2395,24 +2503,34 @@ sch_switch:
                                 ; .pick, `call sch_account` clobbers CX and
                                 ; nothing reads CL again. DL = [sch_cur] from
                                 ; the park, and nothing between writes DX
-    mov dh, MAX_TASKS           ; scan cur+1, cur+2, ... (cur itself last)
-.scan:
-    inc dl
-    cmp dl, MAX_TASKS
-    jne .nowrap
-    xor dl, dl
-.nowrap:
+    mov dh, ch                  ; scan cur+1, cur+2, ... (cur itself last)
+    xor bh, bh                  ; BH = 0 ONCE: a slot * 8 is under 256, so
+                                ; every `shl` below leaves it 0, and the
+                                ; fallback's index after the loop too (kernel
+                                ; size pass 18: out of the loop, -2 bytes and
+                                ; 3 clocks a slot scanned)
+%if MAX_TASKS * T_SIZE > 256
+  %error "sch_switch zeroes BH once for the scan: a slot's record offset must stay under 256"
+%endif
+.scan:                          ; over the [sch_top] slots that can be live,
+    inc dl                      ; not MAX_TASKS (SPEC.md 8.1.3): the ones above
+    cmp dl, ch                  ; are free, and a free slot was never picked.
+    jb .nowrap                  ; `jb`, not `jne`: a task_exit that lowered
+    xor dl, dl                  ; the bound under its OWN slot arrives with
+.nowrap:                        ; DL >= CH, and wraps to 0 on the first step
     mov bl, dl
-    xor bh, bh
     shl bx, cl                  ; CL = 3, set once above the scan
     cmp byte [bx+sch_tasks+T_STATE], 1
     jne .skip
     cmp dl, [sch_idleslot]      ; the idle task is picked at the fallback
     je .skip                    ; below and never by the scan (6.2)
-    cmp byte [fsx_task], 0xFF   ; the fsx freeze (SPEC.md 53.2): off means
-    je .pick                    ; every ready task is eligible; armed, only
-    cmp dl, [fsx_task]          ; the exclusive task itself...
-    je .pick
+    mov al, [fsx_task]          ; the fsx freeze (SPEC.md 53.2): off means
+    cmp al, 0xFF                ; every ready task is eligible; armed, only
+    je .pick                    ; the exclusive task itself... (through AL,
+    cmp dl, al                  ; which is free here: the same five bytes
+    je .pick                    ; and two clocks less than the immediate
+                                ; compare, and the second compare a register
+                                ; one - kernel size pass 18, -2)
     cmp dl, [fsx_worker]        ; ...its kept worker (FSXF_KEEPWORKER)...
     je .pick
     test byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
@@ -2420,13 +2538,19 @@ sch_switch:
 .skip:
     dec dh
     jnz .scan
+%ifndef KERN_EMU
+    mov [sch_idlewake], dh      ; NOTHING IS READY, so every wake posted before
+                                ; this look is spent (8.1.2.5): DH is 0 from
+                                ; the loop. IF = 0 since the switch began, so
+                                ; nothing can be posted between the scan and
+                                ; this store
+%endif
     mov dl, [sch_idleslot]      ; nothing ready: the idle task, if there is
     cmp dl, 0xFF                ; one (6.2). Without it - and before boot
     jne .idlepick               ; starts it - the old behaviour stands, which
     mov dl, [sch_cur]           ; is to resume the outgoing task
 .idlepick:
-    mov bl, dl
-    xor bh, bh
+    mov bl, dl                  ; (BH = 0, the scan's: see above it)
     shl bx, cl                  ; CL = 3, set once above the scan
 .pick:
     ; --- charge the OUTGOING task, and ONLY on a real change (SPEC.md 8.1.1)
@@ -2471,6 +2595,10 @@ sch_resume:
     pop cx
     pop ax
     iret
+    nop                         ; PARITY PAD, never executed: the scan's
+                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
+                                ; keeps everything after it at the parity it
+                                ; was measured at (t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_stkdie - a task overran its stack slice (SPEC.md 8)
@@ -2498,7 +2626,8 @@ sch_resume:
 sch_stkdie:
 %ifdef KFZTRACE
     ; --- SAY SO (KFZ only) ---------------------------------------------------
-    ; This is the only cli+hlt in the kernel, so it is the only thing that can
+    ; This is the only cli+hlt in kern_big and kern_small (SPEC.md 8.8 names
+    ; kern_mega's and the knobs' own), so it is the only thing that can
     ; stop the heartbeat - and a stopped heartbeat is exactly what the field
     ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
     ; and a task number turn it into a diagnosis a photograph can carry.
@@ -2781,9 +2910,9 @@ sch_stksize:
 ; -----------------------------------------------------------------------------
 sch_clsbytes:
     dw SCH_STACK                ; 0: unspecified - the largest class
-    dw 128                      ; 1: a sleeper. The idle task, a C package
-    dw 192                      ;    whose worker only sleeps, a Timer, a
-    dw 256                      ;    Bounce, a driver's stream task
+    dw 128                      ; 1: a sleeper - the idle task, Bounce
+    dw 192                      ; 2: most workers, the modal class
+    dw 256                      ; 3: a worker that draws through a deep chain
     dw SCH_STACK                ; 4: the largest, asked for on purpose
 SCH_NCLASS  equ ($ - sch_clsbytes) / 2
 %if SCH_NCLASS > 0x3F
@@ -2795,18 +2924,20 @@ SCH_NCLASS  equ ($ - sch_clsbytes) / 2
 ;
 ; Entered with IF=0, DS=KERNEL_SEG and a complete saved frame on the current
 ; stack (from sch_isr or task_yield's save stub). Parks SP in the current
-; record, picks the next ready task round-robin (falling back to the current
-; task if nothing is ready), and resumes it.
+; record, picks the next ready task round-robin (falling back to the idle task
+; if nothing is ready - or, before sch_idle_start, to the outgoing one), and
+; resumes it. (This header describes sch_switch:, which is above, after
+; sch_isr - not sch_clsbytes, which it follows.)
 ;
-; RE-ARMING sch_hold is the FIRST thing done here, and deliberately on the
-; routine's single entry point rather than at each caller: the counter means
-; "ticks of watchdog budget left since the running task last reached the switch
-; path", so every one of the three ways in - fall-through from sch_isr, the
-; explicit jmp from task_yield's save path, the explicit jmp from task_exit -
-; must re-arm it (SPEC.md 8.2). Hence a task that yields voluntarily can never
-; trip the watchdog however long it runs in total; the "nothing ready, resume
-; the outgoing task" fallback below re-arms it too, so an idle single-task
-; system manufactures no watchdog hits; and a dying task re-arms it for its
+; RE-ARMING sch_hold is the first thing done once SS is known to be ours, and
+; deliberately on the routine's single entry point rather than at each caller:
+; the counter means "ticks of watchdog budget left since the running task last
+; reached the switch path", so every one of the three ways in - fall-through
+; from sch_isr, the explicit jmp from task_yield's save path, the explicit jmp
+; from task_exit - must re-arm it (SPEC.md 8.2). Hence a task that yields
+; voluntarily can never trip the watchdog however long it runs in total; the
+; "nothing ready" fallback re-arms it too, so an idle single-task system
+; manufactures no watchdog hits; and a dying task re-arms it for its
 ; successor.
 
 ; -----------------------------------------------------------------------------
@@ -2827,7 +2958,7 @@ resb ($-$$) % 2                         ; keep the BLOCK on a WORD boundary,
                                         ; anyway, so nothing may derive a
                                         ; slice base from SP's low bits, and
                                         ; every consumer works from
-                                        ; sch_stacks + slot * SCH_STACK -
+                                        ; sch_stkbase[n] and sch_stksize[n] -
                                         ; sch_switch's canary arm, task_spawn's
                                         ; fill, tests/stackprobe (whose own
                                         ; comment records that the high-byte
@@ -2859,9 +2990,8 @@ sch_stacks: resb SCH_STK_TOTAL          ; slots 1..MAX_TASKS-1, one slice per
                                         ; order; a slice's bottom is
                                         ; sch_stkbase[n] and its size
                                         ; sch_stksize[n] - nothing derives
-                                        ; either (SPEC.md 8.6)
-                                        ; of .lowbss (font_glyphs precedes
-                                        ; it). Slot 0 = the UI task runs on
+                                        ; either (SPEC.md 8.6).
+                                        ; Slot 0 = the UI task runs on
                                         ; the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
                                         ; section - it needs no reservation
@@ -2978,6 +3108,13 @@ sch_idleslot: resb 1                    ; the idle task's slot, or 0xFF for
                                         ; none - sched_init sets it, because
                                         ; a zero here names slot 0, the UI
                                         ; task, and the scan would skip it
+sch_top:    resb 1                      ; ONE PAST the highest slot that can
+                                        ; be live (SPEC.md 8.1.3): every slot
+                                        ; at or above it is free, so the wake
+                                        ; loop and sch_switch's scan stop here
+                                        ; instead of at MAX_TASKS. Raised by
+                                        ; task_spawn before the publish,
+                                        ; lowered by task_exit after the free
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
                                         ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset
@@ -2985,6 +3122,9 @@ sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
 ; sch_wake_ui sets BOTH wake bytes with one `mov word [sch_uiwake], 0x0101`.
 ; The labels cannot be folded at the store's own line, so the guard lives here,
 ; after the declarations.
+%if sch_top - sch_idleslot != 1
+  %error "the boot seed writes [sch_idleslot] = 0xFF and [sch_top] = 1 as ONE word store - keep sch_top directly after sch_idleslot"
+%endif
 %if sch_idlewake - sch_uiwake != 1
   %error "sch_wake_ui sets both wake bytes with ONE word store (SPEC.md 8.1.2) - keep sch_uiwake and sch_idlewake adjacent, in that order"
 %endif

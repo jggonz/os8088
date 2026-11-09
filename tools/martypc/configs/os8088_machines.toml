@@ -2650,3 +2650,32 @@ overlays = [
     type = "MDA"
     subtype = "Hercules"
     clock_mode = "Dynamic"
+# os8088_5150_pm2_gla - the same 2.x on a CGA: 5150 #1 as it stood on
+# 2026-11-07, the PicoMEM 2 in, its Hercules and ST-225 out, for Video
+# Battle's CGA bundles (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
+[[machine]]
+name = "os8088_5150_pm2_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.picomem]
+    irq = 7
+    irq_lines = 0x80
+    dma = 1
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+

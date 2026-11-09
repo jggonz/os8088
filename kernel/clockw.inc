@@ -55,13 +55,13 @@
 
 ; -----------------------------------------------------------------------------
 ; clk_rtc_write - push the live time back to the hardware RTC
-; in:  nothing; NO gfx lock held (SPEC.md 13/31.1)
+; in:  nothing; the gfx lock HELD - cp_flush_close_x, at the panel's close, is
+;      the only caller (SPEC.md 37.94)
 ; out: nothing (all registers preserved)
 ;
-; A machine without an RTC returns immediately: the clock is the PIT's. The
-; "outside the gfx lock" rule predates the ladder - only rung 4 calls BIOS
-; now - but it stays, because the caller cannot know which rung answered and
-; ui_task step 3 is a perfectly good place to drain [clk_dirty] from.
+; A machine without an RTC returns immediately: the clock is the PIT's. Rung 4
+; calls BIOS with the lock held, which is fine from teardown (this file's
+; banner, "BIOS FROM HERE IS FINE").
 ; -----------------------------------------------------------------------------
 clk_rtc_write:
     push ax
@@ -73,7 +73,7 @@ clk_rtc_write:
     dec bx                      ; this replaces was four `cmp al,CLK_T_X / jne
     shl bx, 1                   ; / call / jmp short` blocks, 9 bytes a rung
     cmp bx, 8                   ; belt as well as braces: [clk_rtc] already
-    jae .out                    ; says a rung claimed, and .bss is not zeroed
+    jae .out                    ; says a rung claimed, which set [clk_tier]
     call [cs:clk_wtab+bx]       ; THROUGH CS: this is a module (SPEC.md 2.8.6)
 .out:                           ; and its data may not be reached through DS,
     pop bx                      ; exactly as clk_dowt below is read
@@ -337,8 +337,9 @@ clk_ns_write:
 ; -----------------------------------------------------------------------------
 ; clk_rp_put - write BCD digit AH to RP5C01 port AL
 ; in:  AL = port 00h..0Fh, AH = the digit; out: nothing (all preserved)
-; The read half, clk_rp_get, is resident (the probe needs it) and far-called;
-; this one only ever writes, so it came here with the rest of rung 3.
+; The read half is CLK_RP_GET_BODY, assembled into the boot overlay for the
+; probe (clk_rp_get) and into this image (clkw_rp_get); this one only ever
+; writes, so it came here with the rest of rung 3.
 ; -----------------------------------------------------------------------------
 clk_rp_put:
     push ax

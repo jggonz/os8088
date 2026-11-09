@@ -3,12 +3,13 @@
 
     make && python3 tests/tickzero.py
 
-`ticks` is `.bss`, and nothing clears `.bss`: `sched_init`'s
-`mov word [ticks], 0` is the whole of what makes the count start at 0, and
+`ticks` is `.bss`, which the load lands as the image's zero padding
+(SPEC.md 10); `sched_init`'s `mov word [ticks], 0` repeats that zero, and
 `sched_init` seeds `[sch_pit_last]` on exactly that assumption (high word =
 [ticks] = 0). Kernel size pass 5 folded that one instruction into the end of
-the comment above it, and no row noticed, because every emulator here powers
-on with ZEROED RAM - the defect needs a machine whose memory is not.
+the comment above it, and no row noticed - nor could any machine, because
+the load's padding lands on [ticks] whatever RAM held; the store matters only
+if something writes [ticks] between kz_all and sched_init, which nothing does.
 
 So this row MAKES the RAM dirty where it matters. It stops the boot on
 `sched_init`'s entry, writes 0x8000 into `[ticks]`, lets the boot finish and

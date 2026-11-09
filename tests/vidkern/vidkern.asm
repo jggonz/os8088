@@ -407,6 +407,122 @@ vk_seq:
     jnc .e
     mov [vk_res+30], ax             ; AX = FERR_* when refused (else 0)
 .e:
+
+    ; G: A CURSOR MOVED, NOT ZEROED (SPEC.md 18.4.8.2). Hot at 1 MB, then
+    ; +12 moved FORWARD to 3 MB, a chunk skipped, and BACK to 2 MB (the
+    ; kernel goes cold by itself) - every byte checked. Then a BOOKMARK: the
+    ; cursor as it stands at 12 MB, copied out; a read at 0 between; copied
+    ; back and read, timed and its low-cylinder int 13h calls counted - one
+    ; FAT link from where the bookmark stood, not the 12 MB walk
+    mov ax, [vk_res+24]
+    mov [vk_gbad0], ax
+    xor ax, ax
+    mov dx, 16                      ; 1 MB
+    call vk_seek
+    call vk_seq1
+    cmp word [es:VK_CUR+4], 0       ; +4: the cluster index this kernel
+    je .g4                          ; keeps - its sign it seeks forward
+    mov word [vk_res+56], 1
+.g4:
+    mov word [es:VK_CUR+FSEQ_OFF], 0
+    mov word [es:VK_CUR+FSEQ_OFF+2], 48     ; 3 MB, forward
+    call vk_seq1
+    add word [es:VK_CUR+FSEQ_OFF], VK_CAP   ; a chunk skipped, forward
+    adc word [es:VK_CUR+FSEQ_OFF+2], 0
+    call vk_seq1
+    mov word [es:VK_CUR+FSEQ_OFF], 0
+    mov word [es:VK_CUR+FSEQ_OFF+2], 32     ; 2 MB, BACK
+    call vk_seq1
+    mov ax, -VK_CAP                 ; the bookmark: a chunk read up to 12 MB
+    mov dx, 12 * 16 - 1             ; (12 MB - 32 KB) leaves the cursor
+    call vk_seek                    ; standing AT 12 MB
+    call vk_seq1
+    mov bx, 0
+.gsv:
+    mov ax, [es:VK_CUR+bx]
+    mov [vk_bm+bx], ax
+    add bx, 2
+    cmp bx, FSEQ_SIZE
+    jb .gsv
+    xor ax, ax                      ; somewhere else entirely
+    xor dx, dx
+    call vk_seek
+    call vk_seq1
+    mov bx, 0
+.grs:
+    mov ax, [vk_bm+bx]
+    mov [es:VK_CUR+bx], ax
+    add bx, 2
+    cmp bx, FSEQ_SIZE
+    jb .grs
+    call vk_i13on
+    call vk_i13zero
+    call OSAPI_GET_TICKS
+    push ax
+    call vk_seq1                    ; checked: the 32 KB at 12 MB
+    call OSAPI_GET_TICKS
+    pop dx
+    sub ax, dx
+    mov [vk_res+58], ax
+    mov ax, [vk_i13lo]
+    mov [vk_res+60], ax
+    call vk_i13off
+    mov ax, [vk_res+24]
+    sub ax, [vk_gbad0]
+    mov [vk_res+54], ax
+    mov word [vk_res+52], 1         ; G ran
+
+    ; H: THE MAP AND A RUN (SPEC.md 18.4.8.3). The stream mapped (4 runs at
+    ; most); then a COLD seek to 12 MB handed run 0 and two chunks read,
+    ; every byte checked, timed and their low-cylinder int 13h calls counted:
+    ; with the run the walk and the reads touch no FAT
+    mov ax, [vk_res+24]
+    mov [vk_gbad0], ax
+    xor ax, ax
+    xor dx, dx
+    call vk_seek
+    mov byte [es:VK_CUR+FSEQ_FLG], FSEQF_MAP
+    mov dx, ds
+    mov bx, vk_runs
+    mov cx, 4
+    mov si, vk_f_stream
+    mov di, VK_CUR
+    call OSAPI_FILE_READ_SEQ
+    mov byte [es:VK_CUR+FSEQ_FLG], 0
+    jnc .hm
+    mov ax, 0xFFFF
+.hm:
+    mov [vk_res+62], ax             ; the runs (FFFFh refused)
+    jc .out
+    mov [vk_hgen], dx
+    xor ax, ax
+    mov dx, 12 * 16                 ; 12 MB, cold
+    call vk_seek
+    mov ax, [vk_runs]
+    mov [es:VK_CUR+FSEQ_RUN], ax
+    mov ax, [vk_runs+2]
+    mov [es:VK_CUR+FSEQ_RUN+2], ax
+    mov ax, [vk_hgen]
+    mov [es:VK_CUR+FSEQ_RGEN], ax
+    mov byte [es:VK_CUR+FSEQ_FLG], FSEQF_RUN
+    call vk_i13on
+    call vk_i13zero
+    call OSAPI_GET_TICKS
+    push ax
+    call vk_seq1
+    call vk_seq1
+    call OSAPI_GET_TICKS
+    pop dx
+    sub ax, dx
+    mov [vk_res+64], ax
+    mov ax, [vk_i13lo]
+    mov [vk_res+66], ax
+    call vk_i13off
+    mov byte [es:VK_CUR+FSEQ_FLG], 0
+    mov ax, [vk_res+24]
+    sub ax, [vk_gbad0]
+    mov [vk_res+68], ax
+    mov word [vk_res+70], 1         ; H ran
 .out:
     mov word [vk_sdone], 1
     ret
@@ -696,6 +812,18 @@ vk_all:
     mov ax, [vk_res+34]
     mov si, vk_r_err
     call vk_kv0
+    mov ax, [vk_res+54]
+    mov si, vk_r_gbad
+    call vk_kv0
+    mov ax, [vk_res+56]
+    mov si, vk_r_gfwd
+    call vk_kv0
+    mov ax, [vk_res+58]
+    mov si, vk_r_gbm
+    call vk_kv0
+    mov ax, [vk_res+60]
+    mov si, vk_r_gbml
+    call vk_kv0
 .save:
     push ds
     pop es
@@ -769,6 +897,14 @@ vk_r_tail:    db 'tail bytes', 0
 vk_r_end:     db 'bytes past the end', 0
 vk_r_eref:    db 'odd capacity refusal', 0
 vk_r_err:     db 'errors', 0
+vk_r_gbad:    db 'G: moved-cursor bad chunks', 0
+vk_r_gfwd:    db 'G: kernel seeks forward', 0
+vk_r_gbm:     db 'G: bookmark read (ticks)', 0
+vk_r_gbml:    db 'G: ...its FAT-area calls', 0
+vk_gbad0:     dw 0
+vk_bm:        times 16 db 0
+vk_runs:      times 16 db 0       ; H's map: four runs
+vk_hgen:      dw 0                ; ...and the generation it answered
 
 vk_win:       dw 0
 vk_seg:       dw 0
@@ -787,7 +923,7 @@ vk_i13lo:     dw 0
 vk_rdone:     dw 0
 vk_fdone:     dw 0
 vk_sdone:     dw 0
-vk_res:       times 28 dw 0
+vk_res:       times 36 dw 0
 
     OS88_BSS BL_BSS_SIZE
     align 512

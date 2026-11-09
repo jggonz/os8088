@@ -136,7 +136,7 @@ dependency (§1.3).
 
 | surface | source |
 |---|---|
-| menu bar: File / Edit / Snapshot / Preferences / Help (Debug is `#ifdef DEBUG` in VICE and absent here by VICE's own rule) and every item string under them, submenus folded into their head item; Help > About VICE... is the live item and the kernel's name pull-down About opens the same panel; the menu-set `AM_NAME` is `VICE` | `src/arch/gtk3/uimachinemenu.c` (`ui_machine_menu_bar_create`, the `.label` fields) |
+| menu bar: File / Edit / Preferences / Help (Debug is `#ifdef DEBUG` in VICE and absent here by VICE's own rule; Snapshot and every item this build can never enable are absent, §11.1 rule 1) and every item string under them; Help > About VICE... is the live item and the kernel's name pull-down About opens the same panel; the menu-set `AM_NAME` is `VICE` | `src/arch/gtk3/uimachinemenu.c` (`ui_machine_menu_bar_create`, the `.label` fields) |
 | hotkey captions on every item, live or greyed — every binding in `hotkeys.vhk` and its `!include`s, transcribed, so a greyed item is never captioned from memory | `data/hotkeys/hotkeys.vhk` + every `!include`'d `hotkeys-*.vhk` |
 | keyboard map: PC key → (row, col, shiftflag) of the 8×8 matrix, the `!LSHIFT`/`!RSHIFT`/`!LCBM`/`!LCTRL` positions, RESTORE on Page_Up, Tab = C=, Escape = RUN/STOP | `data/C64/gtk3_sym.vkm` (152 entries) |
 | the keyboard's LEVEL model: a key is in the matrix while it is down | `src/keyboard.c` (`keyboard_key_pressed`/`keyboard_key_released`, `keyboard_latch_modifier_states`); os8088 side: SPEC.md §9.7 `OSAPI_KEY_DOWN`, `kbd_track` in `kernel/mouse.inc` |
@@ -328,13 +328,22 @@ call, and not hot.
 
 That address is chosen because the KERNAL's vectors sit there **in ROM** in
 every map that runs KERNAL code, and nothing in the KERNAL or BASIC uses the
-RAM under them. Two stated deviations follow, and the CPU harness (§4.6)
-holds a case for each:
-
-- **A read of `$FFC0-$FFF9` in an all-RAM map reads the scratch**, not the
-  RAM the emulated machine wrote.
-- **A write to `$FFC0-$FFF9` is dropped.** The write path already tests the
-  high byte; only the `$E0-$FF` branch pays the extra compare.
+RAM under them. **But a program that banks the KERNAL out may use it, and
+those 58 bytes are the program's** (2026-11): the cores' scratch stays where
+it is, and the program's own `$FFC0-$FFF9` is `c64_hiram` in `c64io.c`.
+A read there with the KERNAL banked out, and every write there, goes through
+the I/O door (`c64_io_rd`/`c64_io_wr`) - in the accurate core (`c64_rd_bx`,
+`c64_wr_bx`), the fast core's `rd_hi`/`wr_hi`, and so the recompiler's
+prelude and the translated ROM, which are built from the same handlers; the
+host's own `c64_rd`/`c64_wr` and the `.PRG` loader keep to it as well, and
+the power-on pattern fills it. Only reads at `$E000` and up with the KERNAL
+out, and writes at `$E000` and up, pay a compare. CHRISTMAS DEMO's unpacker
+(FNS, 1989) keeps a table at `$FF00`: it jammed on the fast core, whose
+scratch fills more of those bytes than the accurate core's, and runs to its
+title screen now. The CPU harness's **row 21** writes the 58 bytes with
+`STA abs,X` in an all-RAM map and reads them back with `CMP abs,X`, on every
+leg; red with the write dropped again, and its control drops it. What
+remains is code EXECUTED from `$FFC0-$FFF9`, which fetches the scratch.
 
 **Anything that loads a whole 64KB image into the claim lands ON TOP of the
 scratch** and has to clear it afterwards: `os88_main` does
@@ -480,9 +489,14 @@ event, service it, compute the next one.** There is no fixed quantum
 anywhere in this machine.
 
 **The alarm.** Before each run, `c64_alarm_next()` (`c64io.c`) computes
-*cycles to the next event* as the minimum of: the end of the frame, the TOD's
-50 Hz tick, CIA1 and CIA2 timer A and timer B underflow, and the VIC raster
-compare. The core runs exactly that far and RETURNS; `c64_advance(ran)` then
+*cycles to the next event* as the minimum of: the display latch's line (9.9,
+always armed, which is what bounds a run to one frame), the TOD's 50 Hz tick
+that ENDS A TENTH (the four between move only a divider nothing can read,
+so they are not alarms), CIA1 and CIA2 timer A and timer B underflow, and
+the VIC raster compare. The frame END is not an alarm: `$D011`/`$D012` are
+the beam's line however a run ends, and `c64_advance` wraps the frame
+wherever a run crosses it (with the reset's raster compare at line 0, a run
+still ends there). The core runs exactly that far and RETURNS; `c64_advance(ran)` then
 moves every device phase by what actually ran, and the loop computes the next
 deadline. `os88_onwake` is that loop (§13.1). Two points that are deliberate:
 
@@ -491,8 +505,8 @@ deadline. `os88_onwake` is that loop (§13.1). Two points that are deliberate:
   every one of them, which is the same work as the entry/exit shell.
 - *The end of a raster LINE is not an alarm.* `$D012` is computed from the
   cycle counter when it is READ; a per-line alarm would end the run 312 times
-  a frame for a register most programs never touch. The raster COMPARE and
-  the frame end are alarms, so a raster interrupt still fires on the line it
+  a frame for a register most programs never touch. The raster COMPARE is
+  an alarm, so a raster interrupt still fires on the line it
   was armed for and in the right order against every CIA interrupt.
 
 **Interrupts are taken between instructions, and the cost of that is zero
@@ -524,7 +538,7 @@ BRK and an IRQ entry so a double charge cannot come back.
 (SPEC.md §74.1):
 
 - seeded from `os88_cpu()` (`OSAPI_CPU_INFO`) — `512 << os88_cpu()`, clamped
-  into the range below (`c64_tier_init`, `c64scr.c`);
+  into the range below (`ovl_tier_init`, `c64scr.c`);
 - **`C64_SLICE_MIN` = 256 to `C64_SLICE_MAX` = 16,384 cycles**, doubled when
   four consecutive slices each finish inside one host tick, halved when one
   slice spans two tick boundaries;
@@ -539,10 +553,8 @@ BRK and an IRQ entry so a double charge cannot come back.
   second of stalled UI task.
 
 **Warp mode is this ceiling raised, and the flush rate capped — and nothing
-else** (Alt+W, §11.1). Nothing in this port paces the machine against a wall
-clock (SPEC.md §74.4's posture, and why §11.2 greys VICE's Emulation speed
-section), so the only throttle between the 6510 and the host is how many
-cycles a wake may run. Warp raises the ceiling from 16,384 to
+else** (Alt+W, §11.1) - and since §4.4.1 it also lifts the throttle that
+holds the machine to a PAL C64's speed. Warp raises the ceiling from 16,384 to
 **`C64_SLICE_WARP` = 30,000** — not 32,767, because `c64_m.cnt` is a signed
 word and the alarm model may round a budget UP by the instruction in
 progress. The other half is VICE's too: `vsync.c` limits rendering to 10 fps
@@ -586,6 +598,21 @@ than 19,656 cycles away, so a counter above `$7FFF` can never be the nearest
 alarm. Neither defect shows on the host (`int` is 32 bits there) or in the
 core's gate; `hosttest/c64uitest.c` models the target's widths with
 `short`/`unsigned short` as the negative control.
+
+#### 4.4.1 The throttle: a PAL C64's 985,248 Hz, unless warp
+
+APPLE2-SPEC 4.3.3's throttle one machine along (`c64_th_allow`,
+`c64_th_spend`): every host tick pays 845.5 units of 64 cycles (13,529
+sixteenths, carried) into what the machine is owed, a wake's budget is never
+more than is owed, the debt stops at three ticks, and warp bypasses it. It
+binds only where the machine can pass 100% - on the 286 the fast core reads
+40-47% and is not held. `hosttest/c64uitest.c` holds 64 ticks to 3,463,354
+cycles within 0.06%, a stall not paid back and warp not held, and then turns
+it off (`c64_th_off`) for every other case. It was decided when the fast core
+(§4.7) made a 386 able to outrun the machine; until then nothing in this
+port paced it against a wall clock, which is why §11.2 greys VICE's Emulation
+speed section - that section still has nothing to offer here but the one
+speed and warp.
 
 ### 4.5 What `_c64_run` answers
 
@@ -641,19 +668,662 @@ harness CLEARS the bytes a row reads before it runs — a control that read
 the value the positive run had left at the same address passed, which is a
 control proving nothing.
 
+### 4.7 The fast core (docs/plans/completed/FAST6502-PLAN.md)
+
+**C64.O88's part 2 is a second 6510 core**, written by `apps/m6502/m65gen.py
+--machine c64` and far-called through `apps/c64/c64fast.inc`. It is
+APPLE2-SPEC 4.6's core one machine along - the same generator, the same
+handlers, the same frame and hand-back protocol - and this section says only
+what the C64 does differently. It runs the machine on the same `_c64_m` and
+the same scratch as the accurate core above, which stays the oracle and the
+fallback when the part cannot be had.
+
+**Measured, 86Box `286-victory` (16 MHz 286), at the commit that lands this:**
+
+| | accurate core | fast core |
+|---|---|---|
+| idle at `READY.` | 11.6% | 40% |
+| `FOR I=1 TO 30000:NEXT` | 13% | 47% |
+
+**The part is the table's LAST row**, after the overlay: the overlay is
+eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
+build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
+so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
+`ovl_fast_init` runs in `os88_main`: the 64KB code claim (`c64f_claimcode`,
+`OSAPI_MEM_P` with `MEMP_CONV` - conventional on every kernel, because C64 is
+`OS88_HIGHMEM` and on kern_mega a KB-door claim lands above 1MB as a lone
+data selector `OSAPI_MEM_CODESEL` refuses, which left the fast core and both
+translated ROMs off there), the part copied in
+(`c64f_core`), the part dropped, and the far call through
+`OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
+by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:
+there is no image to build, because the ROMs are not copied in.
+
+**PC is fetched through ES**, chosen at every jump, call, return, branch
+across a page and entry from the bank map: below `$A000` and at
+`$C000-$CFFF` the RAM; at `$A000-$BFFF` and `$E000-$FFFF` the ROM bank's
+segment (`c64_rbset`'s, the same windows the accurate core fetches through)
+or the RAM; at `$D000-$DFFF` the RAM, or a hand-back of the region when I/O
+or the CHARGEN is mapped there. `c64fast.inc` pushes the five segments into
+the frame per call, from MAPA/MAPD/MAPE - only a hand-back can change the
+map. `$FFFE` and up are handed back too: RAM there can hold a three-byte
+instruction whose operand word would wrap the segment, which faults a 286.
+
+**Memory.** Data goes through DS, the RAM. Reads below `$A000` are one
+compare and one `mov`; at `$A000` and up `rd_hi` answers by the map - RAM, a
+ROM bank through its segment, I/O through the read door, the CHARGEN.
+Writes below `$D000` store and mark; at `$D000` and up `wr_hi` calls I/O out,
+drops `$FFC0-$FFF9` (the scratch, as the accurate core does) and stores the
+rest. **Every RAM write outside zero page and the stack marks damage** - the
+page bit, the wrote byte and the window of section 9.2 - because the VIC can
+fetch from anywhere. **A read-modify-write is the core's own at every
+address but I/O and `$00/$01`**: at `$A000` and up it reads through `rd_hi`,
+so under a ROM it reads the ROM and writes the RAM beneath - the 6510's rule
+- and only `$D000-$DFFF` with I/O mapped, whose unmodified dummy write is a
+real access (`DEC $D019`), is handed back. It handed back the whole of
+`$A000-$FFFF` until a program kept its delay counters at `$C333`: the
+Portland Commodore Users Group's Christmas demo's `DEC $C333 / BNE` loop
+ran one instruction a hand-back, at **3%** on 86Box `286-victory`, and runs
+at **20-26%** in the core. `c64cputest` row 13 pins the three cases on both
+cores, with a control that lies about the BASIC map.
+
+**`$00/$01`.** While the fast core runs, `c64fast.inc` puts the port's
+read-back in RAM `$0000/$0001` - `c64_pp_rb`, which `c64io.c` recomputes
+on every port write with `c64_pp_read`'s own formula, rather than two calls
+of `c64_io_rd` a run - and keeps the RAM bytes aside, so a zero-page read is
+a `mov`; they go back the moment the
+core returns, so the accurate core and the C never see the difference. A
+write there, by any mode, is handed back (the accurate core re-banks), and
+so is an indirect pointer at `$FF`, `$00` or `$01`.
+
+**The flag byte is `$FFF9`**, the one spare byte of section 3.5's scratch,
+which a guest write already drops: V, B, D and I in bits 2-6 as on the Apple
+II, and the wrapper's two flags in bits 0 (CUTF, which `c64_cut` sets)
+and 1 (HBK, which `c64_hbk` at `c64_rebias.go` reads).
+
+**THE STATED DEVIATIONS**, each exact on the accurate core:
+- **A fetch that FALLS THROUGH a region boundary** - `$9FFF` into `$A000`,
+  `$BFFF` into `$C000`, `$CFFF` into `$D000`, `$DFFF` into `$E000`, an
+  operand straddling one - is fetched through the segment chosen at the last
+  jump. Section 4.6's row 4 asks exactly this and is the accurate core's
+  alone; no shipped program is known to run off the end of a ROM bank.
+- **Zero-page and stack writes mark no damage.** A VIC screen, charset or
+  sprite in pages `$00`-`$01` is not redrawn by them.
+
+**The gate** is `make c64cputest`'s fast leg: every row but 4 and 6 (the
+accurate core's fetch ES), and Dormann's functional test in the all-RAM map,
+each control made in the core that runs it (`C64CPU_ONLY=fast`).
+
+**Seen once and not yet explained**: typed through 86Box with each key held
+40 ms, a line lost and substituted characters on the fast core and not on
+the accurate one; held 150 ms, both type and answer identically (`PRINT
+6*7, SQR(2)` -> `42  1.41421356`). Section 7.2's level keyboard is sampled
+once a wake, and the faster core changes how much machine runs between two
+samples. A field check on real keys is owed.
+
+#### 4.7.1 The raster wait, in whole passes
+
+**`$D019` is constant for a whole run, and `$D011`/`$D012` were too** until
+section 9.10 made them read the live line (`c64_line_now`). So a program
+polling one of them - the commonest loop a game or demo has - left at the
+first read or spun until the budget ended. On a
+16 MHz 286 one pass costs several times the 9-11 us it takes a real C64,
+nearly all of it the call-out: the Bright Pixel Christmas demo (MIT,
+`celso/c64`), which waits for line `$32` with `LDA $D012 / CMP #$32 / BEQ /
+JMP`, ran at **12%**.
+
+`c64f_iord` hands `c64_io_rd` the fast core's PC (`c64_fpc`) - only when the
+caller's CS is the core's own, since SI is something else in a translation
+and in the accurate core - and when the bytes after the read, in RAM below
+`$A000`, are one of these loops and the value just read keeps it spinning,
+`c64_poll_skip` takes every whole pass that leaves the countdown above zero
+out of `DEAD`, `c64_cut`'s door:
+
+| loop | a pass |
+|---|---|
+| `LDA reg / CMP #n / BNE`, `BEQ`, `BCC` or `BCS` back | 9 cycles (+1 across a page) |
+| `LDA reg / AND #m / BNE` or `BEQ` back | 9 (+1) |
+| `LDA reg / CMP #n / BEQ +3 / JMP back` | 11 |
+| `LDA reg / BNE`, `BEQ`, `BPL` or `BMI` back; `BIT reg / BPL`, `BMI`, `BVC` or `BVS` back | 7 (+1) |
+
+**The skip stops where the value would change** (`c64_poll_lim`): `$D012`
+waited on for EQUALITY (`CMP #n` going on while it differs) to the line
+whose low byte is n, any other `$D012` test to the end of its line, `$D011`
+to bit 8's next turn, and only `$D019` to the run's end. When `$D012` became
+live and the skip still ran to the end of the run, the Bright Pixel card's
+wait for line 50 saw it only when a run boundary fell there, and its snow
+fell two pixels a second; `c64uitest` now asserts the skip from line 40
+stops at 49 or 50.
+
+The core then makes the read again at the same point of the loop, with the
+clock where those passes would have put it, and ends the run on the same
+instruction as before - so the run's length and the cycle the next alarm
+lands on are unchanged. The demo runs at **114%** under warp (179% with section
+4.8's later work), and at 96.6% without it once the screen is drawn from
+section 9.9's display latch. `c64uitest` asserts both loop forms, the value that leaves, and that a
+caller with no PC is charged nothing.
+
+#### 4.7.2 Self-loops in one step, and the mark that already marked
+
+**`DEC abs`, `DEX` or `DEY` followed by a `BNE` back onto itself runs as one
+step** when the budget holds the whole loop (`m65gen.py`'s `loop_collapse`):
+n passes of the counter (0 is 256), 9 cycles a pass for `DEC abs` and 5 for
+`DEX`/`DEY`, less the 1 the last, untaken `BNE` saves. The counter becomes
+0, Z set and N clear (C as `DEC` leaves it), and `BP` is charged exactly
+that - the same cycle, registers and flags as running it, which is why it
+is not a deviation. `DEC abs` only on plain RAM (below `$A000`, or
+`$C000-$CFFF`), and its page is marked once. `c64cputest` row 14 runs all
+three on both cores and asserts the counters, the flags and the run's exact
+length (1,433 cycles to the `KIL`); it went red on a fast core charging one
+cycle a loop too many, and its control (X from `$11`) costs five more.
+
+**Short of budget, as many WHOLE passes as fit** run as one step:
+k = (BP - 1) / per - `div` by 5 or 9 - leaves the countdown above 0 after
+each, as running them would, and k < n because the whole did not fit; the
+counter goes down by k, BP by k x per, and the next pass is the ordinary
+handler's, which recomputes N and Z. It was a pass at a time, and a run's
+budget is usually a raster line or two - far less than a 256-pass loop -
+so the collapse almost never fired where it was needed: the Portland CUG
+first scene's nested `DEC $C333 / BNE` delay was 12.6% of a 286 a pass at a
+time and is 0.9% now. Row 18 runs row 14's program in 97-cycle runs to its
+`KIL`: the same 1,433 cycles and counters (red with the partial charge one
+cycle short).
+
+**A write to the page this core marked last is not marked again**
+(`c64_mark`): while `ANY` is 2 - written only by the fast core's mark, the
+accurate core and the package writing 1 and the flush's take 0 - the page in
+`C64_SCR_LASTPG` (`$31`) already has its bit, and only the write window is
+left to do. Row 13 marks a page, takes the set and runs again, and the page
+must be marked afresh (red with the `ANY` test removed).
+
+**A taken branch into `$C000-$CFFF` fetches inline** instead of going to
+`ct_rom` to find `ES = DS`: that range is RAM under every bank map (§4.8).
+
+Measured on 86Box `286-victory`, the Portland CUG Christmas demo's first
+scene (a `DEC $C333 / BNE` delay and a character scroller): 25.5% -> 29.2%
+with the mark, the `DEC` slot from 13% of the host to 3% with the collapse;
+what is left is its scroller and the redraw.
+
+### 4.8 BASIC and the KERNAL translated ahead of time (docs/plans/completed/FAST6502-PLAN.md wave 2b)
+
+**C64.O88's parts 3, 4 and 5 are the two ROM banks as 8086 code**:
+`apps/m6502/m65aot.py --machine c64` translates BASIC (`$A000-$BFFF`, part
+3) and the KERNAL (`$E000-$FFFF`, part 4) into **a segment each**, and part
+5 is their PC table, a word per PC, BASIC's 8K and then the KERNAL's (32,768
+bytes). This is APPLE2-SPEC 4.7's translation one machine along, and this
+section says only what the C64 does differently. Programs in RAM stay the
+fast core's.
+
+**Measured, 86Box `286-victory`, at the commit that lands this:**
+
+| | fast core (4.7) | translated |
+|---|---|---|
+| idle at `READY.`, throttled | 40% | **99.8%** (104.6% under warp) |
+| `10 I=I+1 / 20 GOTO 10` | 47% | **107.8%** under warp (81% at the first cut) |
+| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **104.0%** (76% at the first cut) |
+
+The rest of the way from the first cut: `PLP`/`CLI`/`SEI`/`RTI` inline, no
+decimal tests, dead V, inline `JSR` and ROM-table reads (87.5%); one
+subtract a straight run (APPLE2-SPEC 4.7's groups); a return that tests the
+bank map only from the KERNAL into BASIC; the `BIT` skip followed inside the
+translation; and `JMP $0073` - the comma test's tail call - into the native
+CHRGET (98.8% and 97.2%); then CHRGET's signature checked once rather than
+at every call, `PHP`/`PLP` through tables, the TOD's alarm only at a tenth,
+and the port's read-back published rather than asked for each run. Of what
+is left, about 6% is the fast core, 16% the package's devices and run loop,
+and 6.5% the shared `RTS` lookup - which is already about fourteen
+instructions, and inline at each `RTS` would cost ~10KB for the `jmp` into it.
+
+**The second pass (2026-11), from a profile by instruction class.** Under
+warp, with BASIC's floating point dominating (`A=I*2.5/3`), the translation
+was 75% of the machine and its own work 26% of it: the countdown 16%, the
+flags 13%, jumps 12%. Five changes, each held by the AOT leg below:
+- **an immediate load's N and Z are constants** (`nz_const`): one or two ALU
+  ops into AH's SF/ZF for `sahf/inc/dec/lahf`;
+- **a `zp`/`zp,X` read-modify-write takes its N and Z by liveness** - they
+  were computed always - and a `ROL`/`ROR zp` whose N and Z are dead rotates
+  the byte where it lies;
+- **`PHP`, `PLP` and `RTI` work in DH**, not DL (which is 0 between
+  instructions, so using it owed an `xor dl, dl`), and `PLP` merges V/B/D/I
+  into PV in a register: one read and one write for two read-modify-writes,
+  and the decimal test on the register;
+- **the CHRGET guard is once a group**: the first store that may hit the
+  routine clears PV's "checked" bit for the rest of the straight run, which
+  is entered only at its top - clearing it early only makes the next
+  CHRGET check again;
+- **N and Z DEFERRED to the next instruction's bail** (`liveness()`'s "D",
+  `nz_reg`): before a `zp,X` read-modify-write, whose only way out is its
+  address test - before it writes N and Z or touches the register the one
+  before left its result in - that one need not work them out; the bail
+  stub does, from that register. Only an interrupt taken at that bail could
+  see them, and Dormann's test never sends a `zp,X` address to `$00/$01`, so
+  that stub is correct by construction rather than by a row.
+Measured under warp on `286-victory`, three loops: floating point 106.6% ->
+110.2%, strings (`STR$`, `LEN`, `MID$`) 100.6% -> 102.2%, `PEEK`/`POKE`
+106.0% -> 109.4%.
+
+**Two segments, because one does not hold both**: 5,436 PCs come to 49,247
+bytes of BASIC and 30,006 of KERNAL (2,379 entries, APPLE2-SPEC 4.7's
+groups), and a part stops at 65,024. Within a
+bank, control moves by near jumps. A static call into the other bank
+(BASIC calling `CHROUT`, the stop-key test that runs every statement) goes
+through `a_far`, which looks the target up in the table and far-jumps into the other
+segment.
+
+**Which PCs.** `tools/c64trace.py` is `tools/a2trace.py` for the C64. It
+boots the KERNAL on `tools/py6502.py` with the processor port's eight
+banking cases, a raster counter for `CINT`'s PAL test, and CIA 1's 1/60 s
+interrupt, so that the clock, the cursor and the keyboard scan run. It types
+BASIC into the keyboard buffer at the editor's wait loop (`$E5CD`). On the
+build of this commit it records 4,184 PCs, and a static walk from them
+reaches 5,436.
+
+**A TRANSLATION IS VALID ONLY WHILE ITS BANK IS MAPPED IN**, and the bank map
+is the one thing translated code must never get wrong:
+- the core enters through `ct_rom` only when `c64_fes` chose a ROM bank's
+  segment for that PC. RAM under the ROM always runs on the core;
+- a write to `$00/$01`, the only thing that changes the map, always leaves
+  for the core at that instruction (statically or on the address), and the
+  core hands it back as in 4.7;
+- a return or a jump through a pointer into a bank checks MAPA (BASIC) or
+  MAPE (the KERNAL) before it uses the table;
+- a static call from the KERNAL into BASIC checks MAPA. The other way needs
+  no test: in `c64io.c`'s map, BASIC in means the KERNAL in.
+
+**Reads** below `$A000` and at `$C000-$CFFF` are a `mov`. A ROM byte at a
+fixed address in the running bank, or in the KERNAL when the code is BASIC's,
+is folded to a constant. Everything else goes through the core's own `rd_hi`
+and `wr_hi`, called at the depth a handler calls them. **Writes** below `$D000` mark
+damage as the core does. At a fixed address the page bit is set inline, and
+`c64_mark` is called only inside the watch window: the KERNAL's keyboard
+wait stores to `$0292` on every pass, which is what took idle from 69% to 99.8%.
+
+**THE RUN ENDS EXACTLY WHERE THE CORE'S WOULD** - unlike the Apple II's
+translation, because here interrupts are due at exact cycles (section 4.4's
+alarms). The translation is cut into blocks.
+- Each block a STATIC jump enters (`JMP`, `JSR`, a backward branch, a
+  forward branch out of its block) and each block that the one before
+  falls into past `MAXBLK` (120 cycles) starts with a test: the block's
+  worst-case cost, compared with the countdown. A block the budget
+  cannot cover is the core's, and the core ends the run after the
+  instruction that spends it, exactly as section 4.5 says.
+- Any other entry (from `ct_rom`, `RTS` or `JMP (ind)`) is taken only with
+  more than `MAXBLK` left - and only at a group's start, the one place a
+  group's subtract is not already paid.
+- A write that calls out and is cut (`c64_cut`, an interrupt raised by
+  the write) leaves after that instruction, as the core does.
+
+So `ran = asked - cnt` stays exact, and so does the cycle an interrupt is
+taken at. CHRGET (`$0073`) runs natively as on the Apple II, and only with
+40 cycles in hand, its worst path being 38.
+
+**What it leaves to the core** is APPLE2-SPEC 4.7's list - `BRK`, `SED`,
+any decimal-mode stretch, and `CLI`, `SEI`, `PLP` or `RTI` while the
+interrupt byte is up - and a read-modify-write of I/O or `$00/$01`, a
+pointer in `$FF/$00/$01`, `JMP (ind)` through a pointer at `$A000` and up.
+
+**ROM tables are read through their bank's segment, inline**, wherever the
+running bank says it is mapped: `LDA $A09E,Y` in BASIC is a `push es / mov
+es, [frame] / mov al, [es:bx] / pop es`, and a read whose address the code
+cannot bound goes through `rd_ctx`, which knows the same. **`JSR` pushes its
+return address inline.**
+
+**The frame** grows by four words (`c64fast.inc`): BASIC's code selector
+(F+34, 0 = no translation), the table (F+36), the core's own selector for
+the way back (F+38), and the KERNAL's code selector (F+40). `ovl_fast_init`
+fetches the three parts after the core, all or none, as claims of their
+own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768), and
+declares each MOVABLE (`os88_part_movable`, SPEC.md 73.14.2.1): a run builds
+its frame from `c64_faot`, `c64_fakb` and `c64_ftab` at its door, and
+`os88_onmove` re-reads them, a selector re-derived only when its part moved.
+
+**The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
+Apple II's leg one machine along: Dormann's functional test in four parts
+(`--range`) with a core built for each, slices of 997 cycles, and every
+translated `ADC` and `CMP` broken as the control.
+**Charged ahead** (2026-11, `chains()`): a group a conditional branch falls
+into is paid for with the branch's own group, so the not-taken path runs no
+subtract of its own; the taken path makes the one adjustment it made anyway
+- its penalty, less what was charged ahead for the groups it skips, plus the
+target's own charge when it enters past the target's subtract (`pb_` labels).
+Any other entry into a group charged ahead goes through an out-of-line stub
+at its `p_` label, which the PC table names. A group charged ahead tests no
+countdown and starts with nothing that leaves, so the only readers of the
+countdown inside a chain - an I/O access, which always ends one - see what
+they saw before. A bail gives back its group's rest and what was charged
+ahead after it. +1 point on each BASIC loop under warp (110.2 -> 111.2,
+102.2 -> 103.2, 109.4 -> 110.4); the slice hash below is the reference's.
+**A block test falls through** when the budget covers the block - the
+case that matters - its exit out of line (`cmp bp, W / jle`): a not-taken
+jump where the taken `jg` over the exit was, +1 point again (111.0 -> 112.0,
+103.2 -> 103.6, 110.4 -> 111.4) and the slice hash unchanged.
+**The inexact alternative was measured and not taken**: testing the
+countdown only at loop heads (a backward branch's or JMP's target) gave
+116.0%, 107.8% and 116.8% - five points more - at the price of runs that
+end past the cycle an interrupt is due, by as much as a loop-free stretch
+of ROM takes. **Tried on real programs and dropped** (2026-11-05): on the
+Bright Pixel card and on CHRISTMAS DEMO (FNS, 1989) - which spend their
+time in RAM code, the drawing and the SID - it measured 48.5% against 48.7%
+and 51.7% against 51.8%, nothing a second 85KB translation on the disk
+would buy; the patched variant (block tests jumped over at run time) gained
+about a point over the falling-through tests below and was not kept either.
+
+**And the gate checks the cycles** (2026-11): the fast core alone runs
+Dormann in the same 997-cycle slices first, hashing where every slice ENDED -
+its PC and the countdown it left - and each translated leg must hash the
+same. A translation that charges one cycle more or less anywhere it runs ends
+some slice on another instruction. Red with every translated instruction
+charged a cycle more (`$39F7` against the reference's `$F7DC`).
+`tests/c64part.py` checks that the three parts unpack to their files and that
+each fetched claim holds its file's first bytes.
+
+### 4.9 The dynamic recompiler — IN PROGRESS (docs/plans/completed/C64-RECOMPILER-PLAN.md)
+
+**Built, all five waves** - the templates (4.9.1), the translator and its
+door (4.9.2), invalidation (4.9.3), chaining, batching and the claim (4.9.4),
+and the menu and the measurements (4.9.5). The kern_mega arm is the work
+still open (SPEC.md 20.18).
+
+- **RAM code only.** The ROMs are translated ahead of time (§4.8); the
+  recompiler takes PCs below `$A000`, in `$C000-$CFFF`, and under a ROM only
+  while the bank map shows RAM there.
+- **Templates are the fast core's handlers** (§4.7), the dispatch removed
+  and operands made immediates, so a translated block computes exactly what
+  the fast core would. Every gate the fast core passes, the recompiler passes
+  with it forced on.
+- **Blocks** are straight-line code to the first control transfer, at most
+  32 instructions, translated on their 64th entry into a heap code cache,
+  found by a direct-mapped table keyed by PC. Cycles stay `BP`.
+- **A write to a page holding code invalidates the blocks** (the fast
+  core's `c64_mark` tests a 256-bit CODE map) - ALL of them, at the next
+  lookup (4.9.3) - and a write into the running block leaves it at the next
+  instruction. A page that asks too often is VOLATILE and stays with the
+  fast core.
+- **It is a part**, lazy and compressed; with no memory for it the fast core
+  runs alone. The resident glue is all the package's segment pays.
+
+#### 4.9.1 The templates (`apps/m6502/m65tmpl.py`) — BUILT
+
+Every legal opcode is one of three things, and `--check` fails the build
+otherwise:
+
+| kind | opcodes | what the translator does |
+|---|---|---|
+| IN LINE | 137 | copies its template and goes on to the next instruction |
+| ENDS A BLOCK | 11: the eight branches, `JMP abs`, `JSR`, `RTS` | copies its template, which leaves through `xa_go` with SI the 6502's next PC |
+| THE CORE'S | 3: `BRK`, `RTI`, `JMP (ind)` | ends the block before it with `XCORE`, which resumes the core there |
+
+A template is the fast core's handler (§4.7) with three changes, and nothing
+else: an operand the handler fetched through `ES:SI` is an immediate; the
+dispatch is gone, so the next template follows in line; and every hand-back
+is an exit that resumes the core AT THIS INSTRUCTION with its cycles untaken,
+so the core runs it exactly as it always has - the accurate core's
+instruction, the interrupt flag's short run, decimal mode, `$00/$01`. A
+template that may have called a device (`rd_hi`, `wr_hi`) tests the countdown
+after it, as the handler's `next()` does, because `c64_cut()` may have ended
+the run.
+
+**Two variants where the operand decides.** Variant 0 is right for any
+operand; variant 1 is taken only where the operand alone proves the fast
+path, by `variant()`'s rule: an absolute read of RAM (below `$A000`, or
+`$C000-$CFFF`) is `mov al,[nnnn]`; a store below `$D000` and not to
+`$00/$01` is a `mov` and the mark; an indexed access whose whole 256-byte
+reach is such RAM; a zero-page store or read-modify-write not to `$00/$01`;
+`(zp),Y` through a pointer that is not `$FF`, `$00` or `$01`. 62 opcodes
+have one. **Variant 2** is variant 0 with its operand READ, from the byte or
+word it was translated from, rather than an immediate: what the translator
+copies for an instruction whose operand the program rewrites (4.9.3). Every
+instruction with an operand has one, but the branches, whose offset stays the
+core's. 326 templates in all, 1,080 sites.
+
+**Patch sites are found, never written down.** The templates are assembled
+twice - at origin 0 with one set of sentinel values, at `$1111` with another
+- and every byte that differs is a site: the operand byte or word, this PC,
+the next PC, the target, `JSR`'s return word, a taken branch's cycles (3, or
+4 across a page), the block's worst-case cost, the operand's own address
+(variant 2), or a near jump or call into
+the prelude (the word moved by exactly `-$1111`, stored as if the template
+began at offset 0, so the translator subtracts where it put it). A
+difference no site explains, or a template whose length moved, fails the
+build. `--selftest` then patches every template for random values at three
+cache offsets and compares the result with nasm's own assembly there.
+
+**Time.** Each template takes its own cycles off BP, at its end - or just
+before the damage mark where it stores - and `HEAD`, the block's first
+bytes, tests the block's worst case (each instruction's cycles, a page
+crossed, a branch taken across one) before it runs. A budget that cannot
+cover it resumes the core at the block's PC, which runs it an instruction
+at a time - so the run ends exactly where the core's would.
+
+**The prelude** is code every block shares, at `JC_PRE` in the cache
+segment: `xa_resume` and `xa_slice` (the far doors back into the core, through
+the frame's word for its segment, F+38 - §4.8's), `xa_go` (a control
+transfer's door: the run's end, or wave 2's lookup), the core's own `rd_hi`
+and `wr_hi`, `getp`/`setp`, and `jm_mark` - the core's damage mark, the same
+bits, plus the CODE test: a store into a page whose bit is set (the CODE map,
+32 bytes at `JC_CODE`) sets `JC_FLUSH` and leaves the block at the next
+instruction, the store and the mark done. Every store template loads SI with
+the next PC before the mark for that reason.
+
+**The part** is `build/c64/c64tmpl.bin`: a header, the prelude, a table of
+256 sixteen-byte rows (the instruction's length, its kind, its variant rule,
+its worst-case cycles, its three templates) and the template records (bytes,
+then the sites as offset-and-kind pairs; bit 7 of the count marks a pure
+template, 4.9.4). 19,725 bytes. `build/c64/c64tmpl.inc` is the
+translator's equates for all of it, and `apps/c64/c64jit.asm` carries the
+whole part inside its own (4.9.2).
+
+#### 4.9.2 The translator, and the core's door — BUILT
+
+**Part 6 of C64.O88** (`OP_SEG | OP_LAZY | OP_COMP`) is `apps/c64/c64jit.asm`:
+the variables, two vectors at `$00F0` (`JIT_HOOK`, the core's door, and
+`jl_init`, the package's far call), the prelude at `$0100`, the lookup and the
+translator, and the templates' part - a 22KB image, 8.6KB packed. `ovl_jit_init` fetches it
+after the fast core, copies it into a 64KB claim of its own (`c64j_setup`,
+which far-calls `jl_init` with the core's segment), and gives the part back;
+that claim holds, past the image at `$5800`, the lookup table (1,024 rows of
+PC and value: a count below `$0100`, `$0100` for "never", else the block),
+`JPG` and `FC` (a byte a page each), the byte map and the PATCHED map (a bit a
+guest byte to `$CFFF`, 6.5KB each, 4.9.3), and the code cache from `$9E00`
+to `$FF00`. It is
+movable - nothing in it names its own segment, and the frame carries it in
+each run. **A refusal anywhere leaves the fast core alone, as before.** On
+kern_mega, where a claim's code selector is not its segment, there is no
+recompiler (the mega arm is its own wave, SPEC.md 20.18).
+
+**The frame gains F+42**, the recompiler's segment (0: none), pushed first by
+`c64fast.inc`; the core's `retf` takes it off with the rest.
+
+**The core's door.** At a control transfer to a RAM PC - `JMP`, `JSR`, `RTS`,
+`RTI`, a backward branch, a branch across a page, and the run's entry, but
+not a forward branch inside its page - the core reads a byte for the page
+from `PGMAP`, at `$FF10` in its OWN segment (past the `$FF` slot; `c64f_core`
+zeroes it, the recompiler writes it): 0, nothing; `$80`, blocks start on this
+page, so look every time; 1, look one transfer in 32, when the countdown's
+low five bits are 0 - a sample, weighted 16, so hot code is found without
+paying the recompiler's far round trip on cold code. The common path costs
+the core 18 bytes a site and six instructions.
+
+**The lookup** (`jl_hook`, and `jl_go` behind the prelude's `xa_go` for a
+block's own transfers): a pending flush first; then the row for PC - its
+block, entered; or its count, raised by the weight, and at 64 (1 when
+forced) the block made and entered; or the core, through `xa_resume`, which
+never looks again before the next transfer.
+
+**A block** (`jt_trans`) is `HEAD` and then a template an instruction, until
+one ends the block (`KD_TERM`), one is the core's (`XCORE`), an instruction
+lies on a page `JPG` refuses, or 32 instructions (`XGO`). Two more stay the
+core's by policy: an absolute read of `$D011`, `$D012` or `$D019` (the raster
+wait it runs in whole passes, 4.7.1) and a `DEX`, `DEY` or `DEC abs` with a
+`BNE` back onto itself (the loop it runs in one step, 4.7.2). A block whose
+first instruction is the core's is "never". When it is made, every page its
+bytes cover goes into the CODE map, its first page's `PGMAP` byte becomes
+`$80`, and the scratch's `ANY` byte becomes 1 so the next mark takes the path
+that tests the CODE map.
+
+**Its pages** (`JPG`) are `$0400-$9FFF` and `$C000-$CFFF`: RAM under every
+bank map. Pages 0 and 1 are the zero page and the stack; pages 2 and 3 are
+where the translated ROM's stores to a CONSTANT address land (§4.8's
+`mark_const`, which marks inline and tests no CODE map - `m65aot.py` refuses
+to emit one into a page of `JPG`'s). RAM under a ROM is a later wave's.
+
+#### 4.9.3 Invalidation — a full flush, and volatile pages — BUILT
+
+**Every path that writes the guest's RAM tests the CODE map**: the fast
+core's `c64_mark` and its copies in the translated ROM (`m65gen.py`, on the
+path a page change takes - the same-page short cut is safe because making a
+block breaks it), the prelude's `jm_mark`, the accurate core's `c64_wr_bx`,
+and `c64_wr`; the bulk movers (`c64_zcopy_in`, `c64_zzcopy_in`) ask for a
+flush unconditionally (`c64_jtouch`). **A code page is not a hit by
+itself**: the byte map, a bit under every byte a block was made from,
+decides - demos keep their variables between their instructions, and the
+first CUG scene stores into twenty-odd of them on two code pages. Every mark
+keeps a same-page short cut of its own while the page holds code - `ANY` 3,
+which the slow path leaves for a code page - and that short cut goes
+straight to the byte test rather than skipping it, so each write there is
+still tested but not through the whole slow path (the scene's inline
+counters cost the marks 11% of a 286 through it). Row 19 stores to a data
+byte on its own code page and then rewrites its own operand on that page:
+the second comes through the short cut and must leave the block (red with
+the short cut skipping the test). A hit writes the address into `JC_HITA`, its page
+into `JC_FLUSH` and 1 into `JC_FLUSH+1` (2 when no byte is to blame). **A store from a block
+into a page holding code leaves that block at the next instruction**, the
+store and the mark done: every storing template loads SI with the next PC
+before its mark, for that reason.
+
+**The flush** comes at the next lookup, before any row is read: the lookup
+table, the CODE map, the byte map (32 bytes for each page that held code) and
+the cache pointer are cleared and `PGMAP` is rebuilt from `JPG`. **The byte
+hit is PATCHED from then on**, in a map no flush clears: an instruction
+whose operand it is gets variant 2, which reads the operand where it lies,
+and those operand bytes stay out of the byte map - so the next write there
+changes nothing translated and flushes nothing. A patched opcode byte keeps
+its instruction the core's. Each patched byte costs one flush, once. The page
+blamed counts one more in `FC`; at 16 it is **VOLATILE** - `JPG` and `PGMAP`
+0, the core's for the rest of the session - so code that keeps rewriting
+itself in ways a read-in-place operand cannot follow runs interpreted, as
+before the recompiler, rather than being translated and flushed forever. A
+full cache flushes too, blaming nothing.
+
+**The gate** is `c64cputest`'s recompiler leg (`C64CPU_ONLY=jit`): the rows
+and Dormann with the recompiler set up FORCED (every RAM page looked at on
+every transfer, every block made on its first entry, and a fresh recompiler
+for every run), every control that breaks a core handler breaking the
+recompiler's table row too, and row 15 - a loop whose `INC` rewrites the
+`LDA #` operand of the block it is running in, which must store $11 $12 $13
+$14; its control NOPs `jm_mark`'s CODE test and the loop stores stale bytes.
+Row 17 runs it again and counts the flushes: two at most - the program's
+own load and the first INC, which marks its operand PATCHED - where the
+control, a flush that marks nothing, flushes on every pass.
+
+**Why the whole cache and not the page** (the plan's wave 3 said "by page"):
+a block's exits jump STRAIGHT into the blocks they reach (4.9.4), and those
+jumps are only safe while every block dies together - invalidating one page
+would leave other blocks' jumps pointing into freed or rewritten cache. The
+volatile rule does what per-page invalidation was for: the page that keeps
+writing its own code is taken out of the recompiler after sixteen flushes, and
+the rest is translated again once and stays.
+
+#### 4.9.4 Chaining, batching, and the claim — BUILT
+
+**Chaining.** When a block ends in a jump, a call or a branch, each of its
+ways out whose target already has a block - or is this block's own start -
+is made a near jump straight to that block's entry, past `xa_go` and the
+lookup. A chained jump arrives without `xa_go`'s test of the countdown, so
+**HEAD's exit comes first and the block is entered after it** (`HENTRY`,
+13 bytes in): `cmp bp, COST / jle` back to an exit that ends the run when
+nothing is left (`xa_slice`) and otherwise hands the PC to the core. A test
+that passes falls through rather than jumping. A flush clears every block
+and so every chain with them; nothing else unmakes a block.
+
+**An exit whose target has no block yet WAITS for one** (`jt_chain`'s
+`.pend`, `jt_link`). It goes into a ring of 256 `[PC, site]` rows - 1KB
+taken from under `jv_end` at set-up, emptied by every flush - and when a
+block is made for that PC, every site waiting for it is made the same near
+jump `jt_chain` would have made had the block existed first. Without it a
+loop whose blocks happened to be made in the wrong order went through the
+lookup at every pass for good: PCUG's snow shift, a 40-cell inner loop of
+five blocks, spent **8.2% of a 286 in `jl_go`**, and after it 0.5%
+(`286-victory`; a fixed window of a timed demo is not a fixed workload, so
+the speed figures either side are not compared). A ring that
+wraps forgets the oldest wait, which costs that exit the lookup and nothing
+else.
+
+**Batching.** A template that ends `sub bp, n` and can neither leave, call
+nor branch out is PURE (m65tmpl.py's `pure()`, 79 of 210, bit 7 of its site
+count): the translator copies it without those three bytes and adds `n` to a
+sum, paid as one `sub bp, n` before the next template that is not pure.
+Nothing between can read the countdown, and HEAD has already proved the
+whole block fits, so the run's end is unchanged.
+
+**The claim, by tier.** `ovl_jit_init` claims 64KB, else 48; the cache ends
+where the claim does (`jv_end`). It is set up after every other part, beside
+the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
+the recompiler GIVES WAY: `ovl_jit_drop` zeroes the core's page map, frees
+the claim, and the attach claims again (a disk already on drive 8 whose
+sector slots were in that claim keeps them in a 512-byte claim of its own,
+§11.5.1, so the drive holds its disk until the new one is whole); after the attach the recompiler is
+set up again in whatever is left. A smaller machine gets a smaller cache,
+never a refused disk. **Where there is extended memory the D64 goes there
+and the two fit together** (§11.5.1); the giving way is for a machine
+without it.
+
+**The gate** adds row 16 to the recompiler leg: `L: INX / JMP L`, one block
+chained into itself, run on budgets of 200 (40 passes exactly: X = 40, PC =
+L, nothing left) and 201 (the 41st INX takes the budget past 0: X = 41, PC
+the JMP). Both last passes are HEAD's to hand to the core; a HEAD that ended
+the run there instead stops 201 an INX short, which was checked. Rows 9 and
+14 keep every cycle total with chaining and batching on. **Row 20** runs a
+loop whose BNE's taken exit, fall-through and back-jump all point at blocks
+made after it, and asserts that afterwards no site in the ring still waits
+for a PC that has a block; its control makes `jt_link` return at once.
+
+#### 4.9.5 Preferences > Recompiler, and what it measured — BUILT
+
+**The menu item is in VICE's `Emulation speed` place**, item 4 of
+Preferences: that item could never be enabled in this port (§11.2). It is a
+CHECK (§11.1
+rule 4), ON from launch whenever there is a recompiler; OFF zeroes the core's
+page map (`c64j_off`) so no transfer looks for a block, and ON again sets
+the recompiler up afresh in the claim it kept (`c64j_setup` with nothing to
+copy). It is GREYED when there is no recompiler - no 48KB for it, a D64 that
+took its memory (the status row said `Disk on drive 8; no room for
+recompiler.` as it happened), or kern_mega - and it is a fact, not a guess,
+that greys it (SPEC.md 47).
+
+**Measured** on 86Box's `286-victory`, second half of a 50-second window:
+
+| program | fast core alone | with the recompiler |
+|---|---|---|
+| BASIC `10 i=i+1:goto 10` (warp) | 107.0% | 107.0% - the ROMs are §4.8's, untouched |
+| Portland CUG Christmas, first scene (its three parts poked in, run) | 23.1% | 25.8% |
+| ...after 4.7.2's partial collapse and the code page's short cut | 28.0% | 48.0% |
+| Bright Pixel's Christmas card (`card.prg`, run) | 45.2% | 47.0% - its time is the drawing (§9.13) |
+
+The first scene's gain is the byte map and the read-in-place operands
+together: per page alone, its two code pages went volatile on stores to
+its inline variables and to its own operands, and it ran at the fast
+core's speed. docs/plans/completed/C64-RECOMPILER-PLAN.md section 4.1 is the account.
+
 ---
 
 ## 5. The VIC-II
 
 ### 5.1 What is modelled
 
-- **Standard text mode is composed** — glyphs from the CHARGEN ROM or the
-  RAM character set the VIC is pointed at, resolved to 1bpp by luminance
-  (§9.6). The mode is read from `$D011` bits 5–6 (ECM, BMM) and `$D016`
-  bit 4 (MCM); **any mode other than standard text fills the span with the
-  background's luminance level** (`c64_band1`'s `mode != 0` arm). There is
-  no bitmap, multicolour or extended-background composer, and no sprite
-  drawing: the sprite registers are stored and nothing reads them.
+- **Every display mode is composed, per character row** (§9.10). Standard
+  text is `c64_band1`'s, as it always was — glyphs from the CHARGEN ROM or
+  the RAM character set the VIC is pointed at, resolved to 1bpp by
+  luminance (§9.6). The mode is read from `$D011` bits 5–6 (ECM, BMM) and
+  `$D016` bit 4 (MCM), and the other four legal modes are `c64_bandx`'s:
+  hires and multicolour bitmap, multicolour text and extended background
+  colour. A picture made of more than two colours a cell is ORDERED-DITHERED
+  by luminance on a 4×4 Bayer matrix (`c64_dmask`); a cell of one ink on one
+  paper keeps §9.6's crisp rule. The three illegal modes (5–7) are black,
+  as the VIC shows them.
+- **The sprites are drawn** (§9.11), from each row's own sprite registers,
+  lit or dark against that row's paper by luminance. Expanded X and Y and
+  multicolour sprites are honoured.
 - Screen base and character base from `$D018` **and** the CIA2 `$DD00` bank
   bits (§6.2).
 - Border and background `$D020`/`$D021`. A `$D020` write costs a fill only
@@ -667,8 +1337,8 @@ control proving nothing.
   disabled — the commonest raster wait there is — sees the bit, and bit 7
   drops when the flag is acknowledged. The compare is an alarm on every frame.
 - **Not honoured, silently**: the 25/24-row and 40/38-column flags and the
-  fine scroll bits of `$D011`/`$D016`. A program that uses them draws the
-  same picture as one that does not.
+  fine scroll bits of `$D011`/`$D016`, and the display-enable bit. A program
+  that uses them draws the same picture as one that does not.
 
 ### 5.2 Timing — the PAL frame, off the cycle clock
 
@@ -686,17 +1356,83 @@ line takes effect from that line.
 
 ### 5.3 What does not carry
 
-- **Sprites** — not drawn at all (§5.1).
-- **Sprite–sprite and sprite–background collision:** `$D01E` and `$D01F`
-  **answer 0.**
-- **Bitmap, multicolour and extended-background modes** — filled with the
-  background level (§5.1).
+- **Raster splits finer than a character row** (§9.10): a register written
+  part-way down a row takes effect from the next row. A rasterbar is a
+  border or paper colour per ROW, never per line.
 - **Cycle-exact raster effects** — mid-line colour changes, bad-line timing,
-  FLD, FLI, sprite stretching, opening the border, fine scroll.
-- **Colour.** §9.6.
+  FLD, FLI, sprite stretching, opening the border, fine scroll, and a sprite
+  multiplexed twice within one row.
+- **Colour in the window.** §9.6: the windowed path is 1bpp on every
+  adapter. Colour is FULLSCREEN, on a VGA-class display (§9.12).
 
-Text, BASIC, the KERNAL and text-mode programs are unaffected; games and
-demos mostly are not text-mode programs.
+Text, BASIC, the KERNAL and text-mode programs are unaffected. A game or
+demo that splits the screen by character row, draws in bitmap or
+multicolour, or moves sprites is drawn; one that depends on the cycle-exact
+VIC is not.
+
+#### 5.3.1 Sprite collisions — `$D01E` and `$D01F`, scanned when READ
+
+`$D01E` (sprite with sprite) and `$D01F` (sprite with foreground) answer the
+collisions of the sprites as the registers stand, **worked out when the
+program reads one and only then**: once a frame each (`c64_col_frs`,
+`c64_col_frb`), ORed into a latch that the read clears, so a second read in
+the frame finds it clear — on the machine the bits come back only as the
+beam passes the sprites again. With `$D01A` enabling a collision IRQ
+(bits 1 and 2), the frame is scanned at its start (`c64_advance` raises
+`c64_col_irq`; `ovl_col_tick`) and the IRQ source set when the latch was
+empty and is not, as `vicii.c` sets it. **A program that never reads them
+pays nothing**: the cost is one test in the `$D019`-`$D01F` arm of
+`c64_io_rd`.
+
+- **Opaque** is a set bit in hires and a pair other than `00` in
+  multicolour; **foreground** is a set bit, and in multicolour (text cells
+  whose colour has bit 3, or a multicolour bitmap) a pair `10` or `11` —
+  `01` is background, as on the VIC.
+- **From the registers at the read**: positions, expansion, multicolour and
+  the pointers as the program has them — what a game reading in its
+  interrupt has just drawn — and the foreground under them from the display
+  latch's row sets (§9.10), with the fine scroll. A multiplexer's other
+  instances (§9.11) are not seen: only the eight sprites as they stand.
+  Sprites anywhere on the raster collide with each other; the foreground is
+  the 320×200 display.
+- **The scan** (`ovl_col_*`, `c64scr.c`, in the overlay): the sprites'
+  geometry once a frame; for `$D01E`, each pair whose boxes overlap tested
+  line by line from their raw data until one line meets (`c64_colpair`);
+  for `$D01F`, each sprite's character rows in turn — a row whose codes are
+  all **blank glyphs** is skipped by its codes alone (`c64_colblank`, each
+  code's glyph tested once a scan), any other row's foreground fetched
+  (`c64_c8glyph`, or the bitmap) and tested a row at a time
+  (`c64_colrows`), the sprite's 21 masks made once (`c64_sprmasks`). The
+  line tests are `c64band.inc`'s, resident; their scratch is the band
+  buffers `c64_bx2` and `c64_bnd`, which only a flush uses.
+
+**It costs a program that reads them milliseconds a frame on a 286**, so
+**Preferences > Sprite collisions** is a CHECK, on, which a program that
+reads the registers only to clear them can turn off: then both read 0 and
+nothing is scanned. Measured, 86Box `286-victory`, warp, a machine-code loop
+that reads both registers once a frame and polls no I/O, against the same
+loop reading `$D020`/`$D021` (405%, 4.9 ms of host a frame):
+
+| sprites over text | first draft | now | the scans, a frame |
+|---|---|---|---|
+| 4, unexpanded, apart | — | 209.7% | ~4.6 ms |
+| 8, X and Y expanded, neighbours overlapping | 48.7% | 128.7% | ~10.6 ms |
+
+What took it from the first draft: rows skipped by their codes rather than
+their fetched pixels, the masks made by one call a sprite rather than one a
+line, a pair converted only as far as the line where it meets, the
+geometry once a frame for both registers, and the geometry in real arrays —
+SmallerC computes a cast's address at every access. The rest is the C of
+the scan itself, at ~0.4 µs an instruction on that machine; a 20 ms frame is
+~46,000 of them.
+
+`c64uitest` holds the semantics (transparent pixels, a one-pixel overlap at
+a shift of 7, the read clearing, the next frame finding it again, multicolour
+`01` against `10`, a Y-expanded sprite's half-lines inside a row and at its
+first line, a sprite half off the left edge, the IRQ, and the menu item
+off); `c64memtest` runs `c64_colrow`, `c64_colrows`, `c64_colpair`,
+`c64_colblank` and `c64_sprmasks` on x86 against the same cases. Each was
+verified red by breaking it.
 
 ---
 
@@ -766,6 +1502,15 @@ One clock, three phases, none derived from another:
 | the VIC raster | 63 cycles a line, 19,656 a frame ≈ 50.123 Hz | `$D012`, raster IRQs, the frame counter the status bar prints (§10.2) |
 | the CIA TOD | `C64_TOD_PERIOD` = 19,705 cycles — a **50 Hz** mains tick off the cycle clock | the TOD registers |
 
+**Every clock READS LIVE** (`c64_run_el`): the devices advance only between
+runs (§4.4), so a register that is a clock adds what the run in progress has
+spent when it is read - `$D011`/`$D012` (§9.10), the CIA timers
+(`c64_tlive`, reloading from the latch across an underflow a run may cross,
+since a counter at `$7FFF` or above is not an alarm), and SID voice 3
+(§11.4.1). The timers answered the run's start until the Bright Pixel card's
+`LDA $D012 / EOR $DC04 / SBC $DC05` came out the same every frame and its
+eight snowflakes fell in step.
+
 ---
 
 ## 7. The keyboard — a level model
@@ -820,6 +1565,38 @@ Four rules, each of which exists because getting it wrong is silent:
    program that never scans the matrix cannot make a key stick; the harness
    asserts a press whose host key is already up survives polls at 4,000
    cycles and is gone one poll after 20,001.
+5. **Taps are taken ONE AT A TIME** (`c64_kbd_busy`). While a press whose
+   host key is already up is still inside its fresh window, the next press
+   waits in the ring; and a second tap of the key that just left waits until
+   the matrix has shown it up for `C64K_FRESH_CYC`. Rule 4 makes every tap
+   20,000 emulated cycles long, so on a machine running below about half a
+   C64's speed taps typed 40 ms apart overlap in the matrix, and the KERNAL's
+   scan reads two keys down as one of them or neither - measured on 86Box,
+   `PRINT` typed at 12% came out `PRIT`. A key HELD on the host never waits
+   and never blocks, so chords and game keys go in together as they are.
+6. **A tap keeps the Shift it was typed with.** Rules 4 and 5 keep a tap in
+   the matrix, or waiting in the ring, for a fifth of a second of the user's
+   time on a slow machine, and by then the host's Shift belongs to the NEXT
+   key: `4+` typed at speed came out `$+` (MartyPC, the VGA XT - the 4 still
+   fresh when the hand went to Shift for the `+`), and a shifted key whose
+   Shift was let go before its turn came out unshifted. So a down-list
+   entry whose host key is UP brings its OWN Shift to the matrix, never the
+   live one, and while a tap typed without Shift is shown the live Shift
+   waits. Its own Shift is the ASCII's where the ASCII can say: the BIOS
+   made `4` or `$`, `e` or `E` with the Shift as it stood at the make, so
+   a key whose entry is not optionally shifted (a number, a sign) and a
+   lower-case letter take none. Only the rest (an upper-case letter,
+   space, the scan-mapped keys) use the Shift `c64_key_push` recorded with
+   the press, in bit 7 of the ring's scan code (so a scan of $80 or above -
+   Alt+0, F11, Ctrl+PgUp, an enhanced Ctrl or Alt cursor key, none of them
+   a matrix key - is dropped at the push rather than read back as a Shift
+   on its low seven bits: Alt+0 was SHIFT+RUN/STOP) - not alone, because
+   `os88_onkey` can arrive late, after the hand has gone to Shift for the
+   next key (measured: `e+` pushed the `e` with the `+`'s Shift down). A
+   key HELD on the host still takes the live Shift, so
+   SHIFT+letter held, and a bare Shift as a game's second button, are as
+   before. `c64uitest` holds both halves, red with the live Shift
+   unconditional.
 
 The **down-list is `C64K_DOWNMAX` = 16 entries** and its overflow path is
 bounded: the 17th simultaneous key is dropped, not written past the end. The
@@ -1063,8 +1840,8 @@ stub casts through `short` so the host's 32-bit `int` cannot hide it.
 - **Port 2** is the cursor/numpad arrows with **Ctrl as fire**. This is
   **this port's choice**, and it is stated: VICE's `JoyDevice2` default is
   `JOYDEV_NONE`, but a keyset is the only joystick source this machine has,
-  so `KeySetEnable=1` is the shipped state and Preferences > Allow keyset
-  joysticks is shown **checked and disabled**.
+  so `KeySetEnable=1` is the shipped state, and Preferences has no Allow
+  keyset joysticks item (§11.2: it could never be switched off).
 - **Port 1** is empty.
 - Read from the once-per-wake cached key state (§7.2) and presented as
   `$DC00`/`$DC01` bits 0–4 **active low** (up, down, left, right, fire).
@@ -1273,6 +2050,107 @@ last one, so the shift test is not the one-row test:
 `FOR`-loop of `PRINT`s that scrolls nine lines between two ticks is one scroll
 of nine rows.
 
+### 9.4.1 Bands, both directions, and the source proof
+
+**The shift test finds a BAND** (`c64band.inc`'s `c64_bandfind`, called by
+`c64_shift_test`): for k = ±1..±`C64_SHKMAX` (12), the longest run of rows
+whose signature is the shadow's k rows away, scored by how many of them
+CHANGED - blank rows match every k and score nothing - and three at least.
+The whole-screen scroll is the run of every row; a demo that scrolls the top
+half of its screen down is a run of half of them. It is asked once a quarter
+of the rows on the glass are dirty (it was four fifths). **The band's rect
+scrolls** (`os88_gfx_scroll`'s `dy` is signed: up for k > 0, down for k < 0),
+the shadow, the signatures and the source record (below) slide a row at a
+time in the order that never reads an overwritten row (`c64_row_slide`),
+and the vacated rows are forced. A slid row is examined whole (`c64_rowd`
+8).
+
+**No scroll under a sprite.** A band any of whose rows has a sprite on it
+NOW (`c64_spsig`) or had one on the GLASS at the last draw (`c64_sglass`,
+which slides with the row) is not scrolled: the blit would carry the
+sprite's pixels down with the text, and the redraw that puts them back is a
+later call - on the glass that is a sprite jumping a band's height for one
+frame and back. PCUG's snow scene did exactly that to its Commodore logo:
+the falling snow is a whole-band shift, the logo a sprite in the band.
+Measured on `286-victory` across 300 frames 20 ms apart, `glitch.py`'s
+one-frame reversions over 40 px in the screen: 19 at the logo with the
+recompiler (and the bottom snow rows without it) -> 0. Such a band is
+composed and compared instead, which is what it was before bands existed.
+**And the test backs off under one** (`c64_bf_miss`, `c64_bf_wait`): two
+tests in a row that FOUND a band and refused it for a sprite, and the next
+three eligible flushes do not ask - the signature pass and the search were
+~9% of a 286 in the snow scene, spent on a refusal. A test that finds no band
+does not count, because typing and scrolling alternate and the scroll is what
+the test is for; a refused band scroll is drawn anyway, so a skip costs time
+and never a picture. `c64uitest`: the sprite fixture now expects NO scroll
+(red with the refusal removed), and six shifts under a live sprite are
+tested three times (red with the backoff never set: six).
+
+**A matrix-only row is composed by CELLS** (`c64_mono_runs`). Where the
+source proof fails - the row's sources differ from a whole record, nothing
+forced, no sprite on it now or on the glass - the record still names WHICH
+cells moved: only those are composed, in runs with gaps of two or fewer
+folded in, and a gap between runs is filled in the band from the pixel
+shadow, which the record proves is those cells' picture. The compare and the
+one blit over first..last are as before. Falling snow is a cell or two per
+row, far apart, and the composer was the whole first-to-last span.
+The run search is `c64band.inc`'s `c64_runfind(a, b, from)` - the next run
+in two 80-byte records, `(first << 8) | last` or -1 - because SmallerC's
+byte loop cost the 286 more than the cells it saved (10.8% against 6.9%).
+**A row under a sprite that stayed put qualifies too**: `c64_rowd` 1 says
+only its text moved - a sprite that moved, or whose data or colours did, has
+its cells marked by `c64_spr_dirty` - so the record is of the TEXT, kept for
+any standard-text row composed whole, sprites or not, and the sprites are
+drawn once over first..last after the runs (a sprite pixel is SET, so the
+gaps, which are the glass's own pixels, come out the same). The proof
+refuses a row with a sprite now or on the glass. PCUG's logo rows were
+whole spans every frame for the snow under them. `c64uitest`: two pokes 35
+cells apart in one recorded row compose 2 cells, not 36, in one blit (red
+with the runs disabled: 36); the same under a sprite, and the row equals
+what a whole repaint composes (red with the sprite not drawn over the runs).
+Measured on `286-victory`, PCUG's snow scene windowed: 42-47% -> 50.0% at
+50 s, and still no one-frame reversion in 300 frames.
+
+**THE SOURCE PROOF.** A row composed in standard text with no sprite over it
+records what it was drawn from - its 40 matrix bytes and 40 colour nibbles
+(`c64_srcsh`, 2,000 bytes of bss, `c64_srcok` while the record is the whole
+row's). A row dirty only through its matrix (`c64_rowd` 1, or 8 when slid),
+nothing forced, whose sources read the same as its record is **the same
+picture, proved** - its character set and registers would have made it
+`c64_rowd` 2 - so it is neither composed nor compared (`c64_neq`). After a
+scroll the record slides with the shadow, and that is what makes a moved row
+free: §9.4's rule that the signature is a hint stands, because the proof is
+the bytes and not the signature. A row composed under a sprite records
+`c64_srcok` 0, which slides too, so one that inherited sprite pixels is never
+proved. `c64uitest`: a k = 9 shift composes its 9 vacated rows and proves the
+16 slid ones (it was 25 composes); the collision fixture (§9.4) now moves
+rows 2-6 behind the colliding row, scrolls, and row 0 is recomposed because
+its BYTES differ; a partial scroll DOWN is one scroll, one composed row and
+twelve proved; a band under a sprite switched off in the same frame leaves no
+sprite pixel (red with the proof trusting a record made under a sprite).
+Measured on `286-victory`: a BASIC loop printing and scrolling, in warp,
+28.0% -> 30.8%. On the 286 the composer is the cost; on an 8088 the blits a
+scroll saves are.
+
+#### 9.4.2 The 2026-11 profile round
+
+A profile of the PCUG demo's snow scene and BASIC's three benchmarks on
+86Box `286-victory`, in warp, each change measured against the commit before
+it rebuilt on the same machine:
+
+| change | where | PCUG snow, warp | BASIC B1 / B2 / B3 |
+|---|---|---|---|
+| (before) | | 59.7% | 111.8% / 103.4% / 111.2% |
+| the damage mark's write window tested inside-first: two compares for a store already inside it, where the watch range was tested first (the same answer in every reachable state, checked exhaustively) | `jm_mark` (`m65tmpl.py`), `c64_mark`/`vid_mark` (`m65gen.py`) | 62.5% | |
+| a scrolled row's shadows moved by words (`c64_wmove`), ~150 rows a second under the demo | `c64_row_slide` | 62.8% | |
+| `$DC00`/`$DC01` reads skip the matrix walk with no key down (`c64_mat_any`) | `c64_kbd_pa`/`pb` | | 112.4% / 104.3% / 112.1% |
+| §9.4.1's band search walks only the rows whose partner exists, by pointer | `c64_bandfind` | 63.0% (warp draws 10 a second); at normal speed 56% -> 58% | |
+
+What the profile left, in order: the recompiler's `jm_mark` itself (~13%
+in the snow, most of it the call and the fast-path tests), the kernel's
+blits, the composers, voice 3's noise (`c64_osc3`, ~2%, already clocked
+eight bits at a time) and `c64_rowsig`.
+
 ### 9.5 The composers
 
 `apps/c64/c64band.inc` — `rcband.inc`'s shape, **1bpp only**, every entry
@@ -1282,7 +2160,11 @@ constants and the eight rows are unrolled (PERFORMANCE.md Set 64):
 
 | routine | does |
 |---|---|
-| `c64_band1(dst, first, last, mseg, moff, col, gseg, goff, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band: text by glyph through the 16 `{and, xor}` pairs `c64_lum_update` builds (§9.6); **`mode != 0` fills the span with the background's level** (§5.1) |
+| `c64_band1(dst, first, last, mseg, moff, col, gseg, goff, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band: text by glyph through the 16 `{and, xor}` pairs `c64_cmask_for` builds for the row's paper (§9.6). The flush hands it standard-text rows only; `mode != 0` still fills with the background's level, a fallback nothing calls |
+| `c64_bandbm(dst, xm, xb, col, n, mc, bg)` | `n` cells of a BITMAP row (§9.10), hires or multicolour, from near copies of the cells' matrix and bitmap bytes: each colour is its 4×4 Bayer pattern out of `c64_dmask`, and a multicolour byte is split into its four pair-value masks in seven ALU ops — no per-pair loop and no shift by a count. It replaced C that was 73% of a 286 under a bitmap demo |
+| `c64_sprrow(dst, on, lit, n, cell, sh, f, l)` | one line of a sprite onto one band line (§9.11): `n` bytes of set and lit pixels, shifted `sh` right from `cell`, clipped to cells `f..l`; each byte goes into both its cells through one `shr ax, cl` |
+| `c64_sprconv(sd, on, lit, mode, xexp)` | one sprite line's three data bytes as `c64_sprrow`'s ON and LIT masks: `mode` bit 0 multicolour (pairs split as `c64_bandbm` splits a bitmap byte), bit 1 X-expanded through the doubled-word table, bits 2-4 whether `$D025`, the sprite's colour and `$D026` are brighter than the paper. It was `c64_spr_draw`'s C a line at a time - 11.6% of a 286 under PCUG's logo in the window, 2.9% + 5.2% after; `c64memtest` checks three modes against the C model |
+| `c64_rvdiff(a, b)` | whether two 48-byte display-register sets differ (§9.10), `repe cmpsw` |
 | `c64_rowspan(a, b, n)` | compares a composed band against the frame shadow — eight pixel rows of `n` bytes at stride 40, both in the package's own segment — and answers `(first << 8) \| last`, the differing CELL columns, or −1 for "same". Both scans are `repe cmpsb` and the second sets `DF` on purpose, which is why §3.6's harness covers this file |
 | `c64_rowcopy(dst, src, n)` | brings the shadow up to date with what was drawn |
 | `c64_rowsig(mseg, moff, col, n)` | §9.4's shift test: a 16-bit signature of one row's SOURCES |
@@ -1339,7 +2221,8 @@ composer was priced out before it was written.
 
 The kernel now publishes `OSAPI_GFX_BLIT1_PEN` (SPEC.md §5.4.2.2) — an ink
 and a paper for the next `OSAPI_GFX_BLIT1`, on colour adapters only. This
-port does not use it: colour stays greyed with this section's fact (§11.2),
+port does not use it in the window: colour there stays greyed with this
+section's fact (§11.2) — FULLSCREEN is in colour, in a mode of its own (§9.12) —
 and the EGA-16 map `c64_ega[16]` is kept in `c64scr.c` for the day a colour
 composer is written against that slot (§15.3).
 
@@ -1469,7 +2352,7 @@ says so; a flush has no such answer.
 
 | adapter / tier | fullscreen |
 |---|---|
-| VGA 640×480 | **2× on both axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep |
+| VGA 640×480 | **COLOUR, §9.12** — the `FSXM_VGA13` bracket, whenever the display offers it. The 2× monochrome window (**2× on both axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep) is what a VGA display WITHOUT that mode gets |
 | CGA 640×200 | **2× horizontal only**, 640 wide exactly (a CGA pixel is 2:1, so 1:1 there is half as wide as it should be) — and §9.1's clamp gives **21 of the 25 rows** above the status row |
 | Hercules 720×348 | 2× horizontal, 640×200 centred, all 25 rows, 1× vertical |
 | the `CPU_8086` tier (`c64_can2x` = 0) | **1:1 centred**, whatever the adapter — §9.7's 892 ms against 306 |
@@ -1518,6 +2401,279 @@ of the magnified glass asserted uniform, the `k = 3` scroll's `dy` asserted
 refused `blit1` must come down to 1:1.
 
 ---
+
+### 9.9 The display latch — the frame registers once a frame, at line 51
+
+**The screen is drawn from a LATCH, not from the live registers.** `$D011`,
+`$D016`, `$D018`, `$D020`, `$D021` and `$DD00`'s bank bits are copied once a
+frame, at the first line of the 25-row display window (`C64_LATCH_LINE` =
+51), into a register set PER CHARACTER ROW (§9.10), and `c64_frame_regs`,
+`c64_lum_update` and the composers read those. The 6510 still reads and
+writes the live registers.
+
+Before the latch, each write to those registers re-read the frame and
+dirtied every row from `c64_io_wr`. A program that splits the screen with raster
+interrupts writes them twice a frame: a bitmap above a text scroller, or
+rasterbars in `$D020`. So every frame was a full repaint, and the flush showed
+whichever half of the split it happened to follow. That flickered between the two
+and was the most expensive flush there is. The Bright Pixel Christmas demo (section
+4.7.1) spent 47% of a 286's time in the composer. The latch is the same every frame for any such program, so only a REAL
+change costs a repaint. `c64_latch` does what `c64_io_wr` used to do, and
+only for what moved: `c64_frame_regs` and `c64_dirty_all` for the mode or
+matrix, `c64_lum_update` for the colours, with `$D020`'s border-level rule.
+
+**It is taken AT its line**: `c64_alarm_next` arms line 51 as an alarm,
+like the frame end, so the run that crosses it ends there, and
+`c64_advance` latches when a run crosses it. That is one more run boundary
+a frame. A reset copies the latch without acting (`c64_latch(1)`), because
+its callers rebuild the screen state from it themselves.
+
+**What it costs a program that does not split the screen** is up to one
+frame (20 ms) between a register write and the screen showing it — two since
+§9.10, for a write below the display.
+
+**Measured, 86Box `286-victory`**: the demo runs at **96.6%** without warp,
+from 61-80%. `c64uitest` asserts that a write does not reach the screen
+before line 51, that crossing line 51 latches, and that a split which is
+bitmap at line 51 stays bitmap. The row is red without the latch.
+
+### 9.10 Per-row display registers — a raster split, by character row
+
+**The latch takes a register set for EACH of the 25 rows**, not one for
+the frame. `c64_io_wr` appends every display-register write that CHANGES a
+value — VIC `$D000`–`$D02E` less the raster, IRQ and collision registers,
+and `$DD00`'s bank bits as index `$2F` (`C64_RV_DD`) — to a 128-entry log
+(`C64_DLOG`), stamped with its raster line relative to line 51
+(`c64_line_rel`). Inside a run the line is the cycle clock plus the run's
+elapsed cycles: `c64_run_n` less the core's DEAD countdown, less
+`c64f_adj` while the fast core has handed a short run to the accurate one.
+
+At the latch, row *r* is the previous frame's top state plus every logged
+write at a relative line ≤ 8*r* + 3 — **a write in a row's first half is
+that row's**, being on most of its lines. (It was ≤ 8*r*, and the Christmas
+demo's bitmap-on write, which lands at line 52 on some frames and in the top
+border on others, flipped row 0 between text and bitmap: a whole-row
+recompose twice a second and a wrong row in between.) What was written below the display goes into `c64_rv0`, the next
+frame's top, and carries a flag so that the NEXT latch applies it even if
+nothing more is written (`c64_dl_tail`). The rows composed are therefore
+the frame that has just been displayed, one frame after it was displayed —
+which is the same 20 ms §9.9 already spends.
+
+**Only the bits the composer draws from count as a change**: `$D011`'s BMM
+and ECM, `$D016`'s MCM, and the rest of the set whole. The fine scroll, the
+24/25-row and 38/40-column flags and the display enable are not honoured
+(§5.1), and the Portland CUG demo's snow, smooth-scrolled by writing `$D011`
+every frame, recomposed every row every frame until the test was masked.
+
+A row whose display registers changed is marked WHOLE (`c64_row_whole`) —
+its sources moved without its matrix cells moving, so the write-window span
+would answer *nothing* — and recomposed, then compared against the shadow,
+so a split that is the same every frame costs a compare and no drawing. A
+row with no write landing on it, unchanged above and the same as the row
+above last frame (`c64_rsame`), is not even compared: a split that repeats
+compares only the rows its writes land on. **A bitmap write narrows**: a
+dirty 256-byte page is 32 cells of a bitmap row, and those cells
+(`c64_row_gspan`, `c64_gf`/`c64_gl`, bit 2 of `c64_rowd`) are what is
+recomposed — not the row's forty.
+
+**Two timing faults this exposed, both fixed here, both general.** `$D012`
+read the line the RUN started on, so a program polling it for a line saw it
+only at the next run boundary; it now adds what the run has spent
+(`c64_line_now`, the same arithmetic as the log's stamp, CARRY included).
+And a write that MOVES the raster compare (`$D012`, or `$D011` bit 7) now
+ends the run (`c64_cut`), because the run was sized to the old compare line:
+an IRQ handler that set up the next line ran on to the latch and took that
+interrupt late. The Christmas demo's IRQs at lines 240 and 10 were landing
+at 52 and 53 every few frames, flipping its whole picture to text and back.
+
+**What it costs where nobody uses it**: nothing a text program pays for. No
+display register written, nothing split and no tail → `c64_latch` returns at
+its first test. A write is one log append. The scroll test (§9.4) still runs
+only on an unsplit standard-text screen with no sprite; a split or a
+graphics mode makes every changed row a whole-row recompose instead, which
+is the price of drawing it at all. **A log that overflows** (more than 128
+changing writes a frame — a rasterbar per line) makes the frame the live
+registers, un-split, rather than dropping writes.
+
+### 9.11 Sprites — over each row, from that row's registers
+
+`c64_spr_draw` lays the eight sprites over a composed row after the
+composer, from that row's register set — so a multiplexer that reuses its
+eight sprites further down the screen shows each instance where it stood.
+The data pointer is the row's matrix + `$3F8 + k`, in the row's bank. Each
+pixel is lit or dark against the row's paper by luminance; sprite 0 is
+drawn last, on top.
+
+**The eight sprites' geometry is worked out once a register SET**, not once
+a row and a sprite (`c64_sg_fill`): a program that sets its sprites above
+the display gives every row one set, and a row the latch marks as repeating
+the row above (`c64_rsame`) is a hit with no compare. The cache is dropped at
+each flush's sprite pass, because the pointers are RAM. It was 16% of a 286
+under the Bright Pixel card, a pointer read through a call per row and sprite.
+
+**A sprite BEHIND the foreground** (`$D01B`'s bit) keeps its pixels off the
+foreground's: in the window `ovl_spr_fg` fetches the foreground of the seven
+cells under it once a row (the collision scan's `ovl_col_bgrow`, §5.3.1 -
+a set bit, and in multicolour a pair `10` or `11`), and `c64_sprbehind`
+takes those pixels out of each line's ON before `c64_sprrow` draws it; in
+fullscreen colour the line's pixels under it are kept, it is drawn, and the
+foreground's put back. Its scratch is `c64_bx2`'s, free until the
+magnified band is made after the sprites. The bit is in the row's
+signature, so setting it redraws. Only a sprite behind pays any of it;
+sprite against sprite stays sprite 0 over 7, as on the VIC.
+
+**What a row's sprites look like is a signature**, `c64_spsig[r]`: per
+sprite on the row, its position, size, colours, multicolour bit and data
+pointer, and a nonzero bit for *a sprite is here*. `c64_spr_dirty` takes it
+once a flush, at the end of `c64_dirty_scan`. A row whose signature changed,
+or whose sprite data's page was written, recomposes the CELLS its sprites
+were over and are over now (`c64_sxf`/`c64_sxl`), not the row. It is not
+looked at all when the latch did not move the row's registers
+(`c64_rchg`) and none of its sprites' data pages (`c64_spg0..1`) or its
+pointer page was written. A screen that has never had a sprite on pays one
+OR over 25 bytes a flush. A sprite-register change raises the wake's flush
+gate itself: a machine that only moves a sprite writes no RAM, and nothing
+else would.
+
+**Measured, 86Box `286-victory`** (C64-SPEC 4.7.1's demo and two BASIC
+loops; text-mode programs are unchanged):
+
+| program | before | now |
+|---|---|---|
+| `10 i=i+1:goto 10`, warp | 107.8% | 107.0% |
+| the floating-point loop, warp | 104.0% | 104.0% |
+| the Christmas demo, multicolour bitmap + text scroller + sprites | ~97%, the bitmap a background fill | 91.5–97.8%, drawn - but with its snow barely moving (§4.7.1); with the snow right, 31-33% (§9.13) |
+| ...in warp | 179% | 125% |
+| BASIC moving two sprites, X and Y expanded, `POKE 53248,X` in a loop | (not drawn) | 45% |
+
+The last row is the adversarial case: BASIC rewrites the sprite X registers
+about twenty times a frame, each landing on a different row, so every row is
+a split with its own sprite positions to derive and draw. A game sets them
+once a frame, in an interrupt below the display.
+
+`c64uitest` composes a hires and a multicolour bitmap byte, a sprite over
+text, a write to its data and switching it off, each read back off the
+shadow; each was verified red by breaking the arm it tests.
+
+### 9.13 Frame skip — the flush's share of the host, held near half
+
+A screen that changes everywhere every frame can cost more to draw than a
+host tick, and the machine gets what is left - the Bright Pixel card, its
+snow moving every frame once §4.7.1's skip was bounded, played its music at
+a fifth of its tempo because the flush took four fifths of a 286. **VICE
+skips frames to hold the emulation at speed, and so does this**
+(`c64_fs_adapt`): each flush's host ticks are summed, and once a second (18
+ticks) a share over half adds a tick between flushes and one under a quarter
+takes one away, between 0 and `C64_FS_MAX` = 8. The colour bracket (§9.12)
+uses the same count. `c64uitest` drives the controller across both
+thresholds and the cap.
+
+Measured on `286-victory`, the card: 19.8% with every frame drawn, 31-33%
+with frame skip holding one tick between flushes (16-18 fps). Its earlier
+91.5-97.8% (§9.11's table) was a demo whose snow barely moved.
+
+**The policy is the user's** (Preferences, three radio items, `c64_fs_mode`):
+a music player can skip almost every frame and a game would rather run
+slowly than jerkily, so no one answer is right for every program. **Draw
+every frame** (0) holds the skip at 0 - every host tick with a change is
+drawn and the emulation slows instead; **Skip frames as needed** (1, the
+default) is the controller above; **Skip most frames** (2) holds it at
+`C64_FS_MAX`, two pictures a second, and gives the rest to the machine.
+`c64uitest` picks each and drives the controller past its threshold (red
+with the mode ignored).
+
+### 9.12 Colour — fullscreen, in a VGA mode of its own (`FSXM_VGA13`)
+
+**The C64 is in colour on a VGA-class machine, fullscreen.** SPEC.md §53's
+exclusive bracket in `FSXM_VGA13`, 320×200×256, which is the C64's display
+window EXACTLY: one C64 pixel is one byte of the framebuffer, with no
+scaling, no dithering and no luminance rule. It is APPLE2-SPEC §13's shape,
+one machine along, and §9.6's fact still stands for the window: the
+windowed path is 1bpp on every adapter.
+
+**The door is Preferences > Fullscreen (Alt+D)**, which on a display whose
+`os88_fsx_caps` offers `FSXM_VGA13` enters the bracket rather than §9.8's 2×
+monochrome window. VICE's fullscreen is in colour, and this is VICE's own
+item rather than a second one. On CGA and Hercules — no `FSXM_VGA13` — Alt+D is
+§9.8's, unchanged. **Alt+D or Alt+Enter leaves**; every other key goes to
+the machine through `c64_key_push`, exactly as `os88_onkey` would hand it.
+The menu chords do not run inside: some open a dialog, and no drawing slot
+is legal after the mode set (SPEC.md §53.7).
+
+**There is no pixel shadow, but there is the source record.** The windowed
+flush compares against a frame shadow because a BLIT is a priced call
+(§9.7); here the framebuffer is plain memory, and the dirty set (§9.2,
+§9.10's row and cell spans, §9.11's sprite cells) is close to exact. A frame
+composes each dirty row's span into an 8bpp band — 8 lines × 320 bytes,
+`c64_b8` — and copies it into the framebuffer with `rep movsw`. The first
+frame of a session is all 25 rows.
+
+**A matrix-only row goes down by CELLS** (`ovl_fsx_cells`). A row dirty only
+through its matrix (`c64_rowd` 1), in standard text, with no sprite on it now
+or on the glass, and a whole §9.4.1 source record, is compared cell by cell
+against that record; each run of changed cells (gaps of two or fewer folded
+in) is composed and put, and the record updated. VRAM is the expensive
+memory on a real VGA - an ISA card's wait states make a write several times
+a RAM write - and a span is first-to-last changed cell, so falling snow (a
+few cells changed per row, far apart) was a whole 320-byte line ×8 per row,
+~64KB a frame. A whole-span put keeps the record (`c64_srcok` when the span
+was the whole row and nothing was a sprite), so the next frame can be by
+cells. `c64uitest`: six keys then a poke of two cells 37 apart puts 128
+bytes rather than ≥ 2,368, and cell 38 is the glyph in its colour on its
+paper (red with the cell path bypassed). **A row under a sprite that stayed
+put is put by cells too**, on the same reasoning as §9.4.1's: the runs are
+composed, the sprites drawn ONCE over first..last (what lands between the
+runs is never put), then the runs put. `c64uitest`: the same two cells under
+a sprite are two cells put, and cell 38 is the sprite over its new glyph
+(red with sprite rows refused).
+
+**`c64_c8spr` takes a sprite byte whole**: a transparent byte, or one left
+of the clip, only moves the pixel on; one at the clip's right edge ends the
+line; one wholly inside is written with no test a pixel; only a byte
+across an edge takes the per-pixel clip, which used to be every pixel.
+`c64memtest` covers the three whole-byte paths (hires, hires X-expanded,
+multicolour) beside the edge cases.
+
+Measured on a copy of the owner's machine (`mr286`, OTI-067, SB16) in PCUG's
+snow scene: the frame skip (§9.13) climbed to 4 or 5 ticks in fullscreen -
+a picture every quarter second - where the window sat at 1-3, and the
+logo's rows were most of it: the sprite compositor alone was 15% of the 286.
+After the four changes above, 53% -> 68% of a C64 over the run's second
+half, and the skip settles lower.
+
+| routine (`c64fsx.inc`) | does |
+|---|---|
+| `c64_c8glyph(gb, xm, n, gseg, goff, mask)` | gathers `n` cells' eight glyph bytes, `code & mask` (`$3F` for ECM), from the character generator, into the near layout the bitmap copy already has |
+| `c64_c8row(dst, gb, k0, k1, k2, k3, mc, n)` | `n` cells into the band: a hires cell is `k1` where a bit is set and `k0` where it is not; a multicolour cell takes pairs 00..11 as `k0..k3`. Every mode is this one routine with per-cell colours `c64_fsx_compose` fills: text (paper, colour RAM), ECM (`$D021+code>>6`), multicolour text (`$D022`/`$D023`, a cell hires unless its colour has bit 3), hires bitmap (high nibble, low nibble), multicolour bitmap (paper, high, low, colour RAM), and the three illegal modes black |
+| `c64_c8spr(dst, data, x, lo, hi, cols, mc, xs)` | one sprite line over one band line, clipped to `lo..hi`: hires bits in the sprite's colour, multicolour pairs 01/10/11 in `$D025`/the sprite's/`$D026`, each pixel doubled when X-expanded |
+| `c64_fsx_put(seg, off, src, n)` | `n` bytes to the framebuffer |
+| `c64_fsx_key()` | `int 16h`, polled (SPEC.md §53.1) — `0xFFFF` when nothing waits |
+| `c64_fsx_dac()`, `c64_fsx_border(c)` | the 16 colours into DAC 0..15, and the BORDER into the attribute controller's overscan register (index `$11`, with bit 5 kept so the display stays on) |
+
+**The border is the VGA's overscan colour**, row 0's `$D020` — mode 13h has
+no pixels outside the 320×200 picture, and the overscan register is the
+border a real VGA draws around it. A border split mid-frame shows row 0's.
+
+**The palette is Pepto's PAL palette** (Philip Timmermann's 2001
+measurement), as 6-bit DAC values. It is NOT VICE's generated 6569R5
+palette: VICE builds its colours at run time from the luminance/angle table
+§9.6 transcribes, through its CRT emulation's saturation, contrast and gamma,
+and that generator is not carried. Pepto's is the reference most emulators
+and most C64 graphics tools ship, and it agrees with §9.6's luminance order.
+
+**The machine runs exactly as in the window.** `c64_tick` is the machine
+half of `os88_onwake` — the keyboard poll, Paste, the throttled slice, the
+SID voice — and both call it. The loop slices while the throttle owes cycles
+and calls `os88_fsx_wait(OS88_FSXW_TICK)` only when it owes none (or the
+machine is paused or jammed); a frame is drawn at most once a host tick, and
+only when something is dirty. **`c64_say` and `c64_jam` do not toast inside
+the bracket** (`c64_fsx_up`): a toast draws. The message stays on the
+status row for the frame after the exit.
+
+**The exit owes the window a repaint and the kernel does it**: SPEC.md §53.6
+repaints the desktop before `fsx_run` returns, and the shadow was
+invalidated right after the mode set (`c64_sh_inval`), so that paint
+redraws all 25 rows once.
 
 ## 10. The status bar
 
@@ -1641,8 +2797,8 @@ differing from what is on the glass is a reason to flush, because
 none — the figures froze exactly when somebody was looking at them.
 
 - **cpu %** = emulated 6510 cycles delivered per second ÷ 985,248. 100 % is
-  a real C64. Nothing throttles, so this number is the machine's honest
-  output and the reason Preferences > Emulation speed is greyed (§11.2). On
+  a real C64. The machine is held to 100% (§4.4.1) and below that this number
+  is its honest output - and the reason VICE's Preferences > Emulation speed is not carried (§11.2). On
   a 4.77 MHz 8088 (MartyPC, the 360KB disk on a CGA desktop) the row reads
   **`1% cpu`**, and the KERNAL takes about 1.3 billion host cycles — some
   280 s of guest time — to reach `READY.`
@@ -1724,84 +2880,65 @@ arithmetic (§10.2).
 
 ### 11.1 The set, and what is live
 
-**Exactly five** — the kernel's `MENU_APPMAX` — with `AM_NAME` = **`VICE`**:
-**File (10 items), Edit (2), Snapshot (8), Preferences (11), Help (5)**.
-VICE's Debug menu is `#ifdef DEBUG` in `uimachinemenu.c` and is **absent here
-by VICE's own rule**, not greyed. Every item string is `uimachinemenu.c`'s
-and every hotkey caption is a `hotkeys*.vhk` line, transcribed (§2); the VICE
-line each string comes from is a comment beside it in `c64menu.c`.
+**Four menus**, with `AM_NAME` = **`VICE`**: **File (5 items), Edit (2),
+Preferences (10), Help (1)**. Every item string is `uimachinemenu.c`'s and
+every hotkey caption a `hotkeys*.vhk` line, transcribed (§2), except the
+three frame-skip items (§9.13) and Sprite collisions (§5.3.1), which are
+this port's; the VICE line each
+string comes from is a comment beside it in `c64menu.c`.
 
 **Two kernel limits shape every line of `c64menu.c`**: a pull-down is at most
 `MENU_POPMAX` = **11 items** and each item is truncated to `MENU_MAXCH` =
 **24 glyphs** (`kernel/menu.inc`; SPEC.md §39.2 — 11 is what a 200-line CGA
 gives). Four rules follow:
 
-1. **A section that is ENTIRELY unavailable folds into ONE item, and that
-   item is the section's FIRST** — its submenu head label where it has one,
-   otherwise the first item of the section, which is the action the section
-   exists for. Never a word invented to summarise it, and never the section's
-   last item (a greyed *Datasette controls* tells a reader looking for tape
-   support nothing). A section with a LIVE item in it is not folded, which is
-   why `reset_submenu` contributes three of File's ten slots. **The fold is
-   per SECTION, taken to its end**: File's disk section (Attach disk image,
-   Create and attach..., Detach disk image, Flip list) is ONE item, and
-   Snapshot's six-item event section is ONE item. **The one exception, taken
-   twice**: where the section's first item does not fit `MENU_MAXCH` the fold
-   lands on the first that does — `Attach datasette image...` and `Attach
-   cartridge image...` are 25 glyphs, so the tape section folds onto `Detach
-   datasette image` and the cartridge section onto `Cartridge freeze`.
+1. **An item this build can never enable is ABSENT, not greyed** (the
+   owner's rule, 2026-11). A greyed item that nothing can ungrey spends a
+   slot telling the user about a feature they cannot have. It replaced a
+   rule that kept every VICE item and folded unavailable sections into one
+   greyed item each; §11.2 lists what went and the fact that removed it.
+   VICE's Snapshot menu went whole, and its Debug menu is absent by VICE's
+   own `#ifdef DEBUG`.
 2. **The label is VICE's and is never shortened.** Where the label plus its
    `.vhk` caption passes 24 glyphs the CAPTION is dropped and the label
-   stands alone; the chord is then in §11.2's table. `Power cycle machine`,
-   `Load`/`Save snapshot image...`, `Quickload`/`Quicksave snapshot`,
-   `Advance frame` and `Datasette controls` are the items this costs a
-   caption. **One exception**: where dropping the caption would take away the
-   only chord a LIVE item has, the SEPARATOR gives instead — `Reset machine
-   CPU Alt+F9` is 24 glyphs with one space and 25 with two. **A caption is
-   only taken from an item that has one**: a `UI_MENU_TYPE_SUBMENU` entry has
-   no `.action`, so VICE prints no chord on it — `Attach disk image`, `Flip
-   list` and `Printer/plotter` carry the label alone, not the Alt+8 / Alt+I /
-   Alt+4 that belong to items inside them.
-3. **A present-but-impossible item wears `OS88_MENU_DIS` and the fact that
-   greys it is in a comment beside the string** (§11.2, SPEC.md §47) — and
-   **nothing is LIVE that only toasts a refusal.** A greying is retired the
-   moment its fact is.
-4. **A CHECK item's state is a `*` in the label**, and the item pointer is
-   swapped between the two spellings (`c64_menu_state`). Eight items are
-   `UI_MENU_TYPE_ITEM_CHECK` in `uimachinemenu.c`: Fullscreen, Show
-   menu/status in fullscreen, Warp mode, Pause emulation, Show status bar,
-   Mouse grab, Swap joysticks, Allow keyset joysticks. This kernel's menu has
-   no check mark and its face has no glyph for one; the `*` is
-   `apps/tracker`'s idiom and not `apps/solitaire`'s `MENU_DIS` twin, because
-   `MENU_DIS` is §47's *"you cannot have this"* and greying the item that is
-   ON would make it impossible to turn off. A CHECK that is ON and cannot be
-   turned off — `Show status bar`, `Allow keyset joysticks` — wears the `*`
-   AND `MENU_DIS` together. The marker is two glyphs so both spellings are
-   the same width; the longest, `* Pause emulation  Alt+P`, is exactly 24.
-   **Every other item on a menu that carries check items starts with the OFF
-   marker's two blanks as well**, so the labels form one column - Preferences'
-   `Restore display state`, `Advance frame`, `Emulation speed`, `Mouse grab`
-   and `Settings...` once started two cells left of the rest.
-   The kernel reads the item strings through the set's `items` pointer at
-   draw time, so swapping a pointer is enough and `os88_menu_set` is not
+   stands alone; the chord is then in the table below. `Power cycle machine`
+   and `Advance frame` are the items this costs a caption. **One
+   exception**: where dropping the caption would take away the only chord an
+   item has, the SEPARATOR gives instead — `Reset machine CPU Alt+F9` is 24
+   glyphs with one space and 25 with two. `Attach disk image` is a
+   `UI_MENU_TYPE_SUBMENU` in VICE, with no `.action`, so it carries no chord.
+3. **Greyed means NOT NOW**: an item greyed by STATE wears `OS88_MENU_DIS`
+   and the fact that greys it is in a comment beside the string (§11.2's
+   second table, SPEC.md §47) — and **nothing is LIVE that only toasts a
+   refusal.** `c64uitest` fails if any item is greyed on a running, unpaused
+   machine, the Recompiler with no memory for it excepted (red with a greyed
+   item put back).
+4. **A CHECK item's state is a `*` in the label**, written into the label's
+   first byte (`c64_menu_state`). Fullscreen, Warp mode, Pause emulation,
+   Swap joysticks, the Recompiler, Sprite collisions and the three
+   frame-skip RADIO items carry it. This kernel's menu has no check mark and its face has no glyph for
+   one; the `*` is `apps/tracker`'s idiom and not `apps/solitaire`'s
+   `MENU_DIS` twin, because `MENU_DIS` is §47's *"you cannot have this"*
+   and greying the item that is ON would make it impossible to turn off. The
+   marker is two glyphs so both spellings are the same width; the longest,
+   `* Pause emulation  Alt+P`, is exactly 24. **Every other item on a menu
+   that carries check items starts with the OFF marker's two blanks as
+   well**, so the labels form one column. The kernel reads the item strings
+   through the set's `items` pointer at draw time, so `os88_menu_set` is not
    called again.
 
-**The order inside a menu is `ui_machine_menu_bar_create`'s.** Preferences is
-`Fullscreen`, `Restore display state`, `Show status bar`, `Warp mode`,
-`Pause emulation`, `Advance frame`, `Emulation speed`, `Mouse grab`, `Swap
-joysticks`, `Allow keyset joysticks`, `Settings...` — 11, which is
-`MENU_POPMAX` exactly, and why `Show menu/status in fullscreen` is folded onto
-`Restore display state` even though that section has a live item in it: both
-are greyed display-state items the kernel owns, and carrying it would make
-12.
+**The order inside a menu is `ui_machine_menu_bar_create`'s**, less what
+rule 1 took: Preferences is `Fullscreen`, `Warp mode`, `Pause emulation`,
+`Advance frame`, `Recompiler` (VICE's `Emulation speed` place, §4.9.5),
+`Swap joysticks`, then the frame skip's three and `Sprite collisions`.
 
 Live items:
 
 | item | caption | note |
 |---|---|---|
-| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3) |
-| File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
-| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
+| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3); what it attached is started (§11.3.2) |
+| File > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
+| File > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
 | File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is a latch and nothing else; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
 | Edit > Copy | Alt+Delete | §7.7. Where a BIOS passes the chord, `os88_onkey` dispatches scan `0xA3` — a code no unmodified key produces, so it cannot be confused with the C64's own Del (`0x53`) |
 | Edit > Paste | Alt+Insert | §7.7. The chord is scan `0xA2`, against the C64's own Ins (`0x52`) |
@@ -1810,35 +2947,43 @@ Live items:
 | Preferences > Pause emulation | Alt+P | `c64_pause` toggles, `c64_sound_stop()` both ways, `Paused.` / `Running.`. CHECK: rule 4's `*`, and §10.2's `P` lamp |
 | Preferences > Advance frame | Alt+Shift+P | **VICE's action, not this port's idea of one** (`src/arch/gtk3/actions-speed.c`): `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — from a RUNNING machine the item only PAUSES; from a paused one it runs to the next VIC frame end (§6.3) and stops, saying `Advanced one frame.`. The command raises a request; the slice driver serves it in the wall slices it already sizes and re-posts while it is outstanding. Greyed on a JAM (§11.2). **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` — without that the chord RESUMED a paused machine, the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*` |
+| Preferences > Draw every frame / Skip frames as needed / Skip most frames | | §9.13. RADIO: the `*` is on the policy in force; as needed is the default |
+| Preferences > Sprite collisions | | §5.3.1. CHECK, on: `$D01E`/`$D01F` scanned when read. Off, both read 0 and nothing is scanned; `Sprite collisions off.` / `on.` |
 | Help > About VICE... | | the kernel's name pull-down About opens the same panel (§12) |
 
-### 11.2 Present and greyed — the fact that greys it (SPEC.md §47)
+### 11.2 Absent, and greyed — the fact behind each (SPEC.md §47)
 
-| item | the fact |
+**Absent** (rule 1) — each was a greyed item in VICE's place until the
+owner's rule, and each fact still stands:
+
+| VICE's item | the fact |
 |---|---|
-| File > Attach disk image (ONE item: the whole disk section folds into it, §11.1 rule 1; no caption — Alt+8/9/0/1 and Alt+I/K/N belong to items inside the submenus) | no 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only |
-| File > Detach datasette image (the tape section; Alt+T captions kept) | no tape emulation: T64/TAP are not read |
-| File > Cartridge freeze (the cartridge section; Alt+C / Alt+Z captions kept) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
-| File > Printer/plotter (no caption; Alt+3/4/5/6 are the `printer-formfeed-*` actions inside it) | no printer path in this OS |
-| File > Activate monitor (Alt+H) | no monitor: VICE's is 30,000 lines of host C |
+| File > the disk submenu's Create, Detach, Flip list | drive 8 is a LOAD trap serving one D64 (§11.5), not a 1541 |
+| File > the tape section (Attach/Detach datasette image, Datasette controls) | no datasette: a `.T64` is read by Smart attach, its first file loaded where it says (§11.3.1); a `.TAP` (a recording of pulses) is not read |
+| File > the cartridge section (Attach/Detach cartridge image, Cartridge freeze) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
+| File > Printer/plotter | no printer path in this OS |
+| File > Activate monitor | no monitor: VICE's is 30,000 lines of host C |
 | File > Reset drive #8 | no drives |
-| Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, the event section folded onto `Start recording events` including the milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
-| Preferences > Restore display state (Alt+R), Show menu/status in fullscreen | the window is os8088's: the kernel places it, and the bar is under a fullscreen window (SPEC.md §11.2) |
-| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | nothing throttles here: the machine delivers what the CPU can and the status bar prints it (§10.2; SPEC.md §74.4) |
-| Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: `*` AND `MENU_DIS` (§11.1 rule 4) |
-| Preferences > Mouse grab (Alt+M) | no 1351 mouse: the pointer is the desktop's |
-| Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here; `*` AND `MENU_DIS` (§8) |
-| Preferences > Settings... (Alt+O) | no resources file: every setting this port has is on the Preferences menu itself |
+| the Snapshot menu, every item | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
+| Preferences > Restore display state, Show menu/status in fullscreen, Show status bar | the window is os8088's, and the status row is its bottom row, always drawn |
+| Preferences > Emulation speed's percentages, Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1). Its place is the Recompiler's |
+| Preferences > Mouse grab | no 1351 mouse: the pointer is the desktop's |
+| Preferences > Allow keyset joysticks | the keyset **is** the joystick here (§8): always on |
+| Preferences > Settings... and Load/Save/Restore settings | no resources file: every setting is on the Preferences menu |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
+
+**Not a menu item, and not modelled:**
+
+| what | the fact |
+|---|---|
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
-| SID voices 2–3, waveforms other than the gate, ADSR, filters, `$D41B`/`$D41C` | the PC speaker is one square wave, and the sound driver's FM path is not wrapped for C (§11.4) |
-| Colour on the glass, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band |
-| Bitmap and multicolour modes, sprites, collision registers | §5.1, §5.3 — the composer draws standard text; `$D01E`/`$D01F` answer 0 |
+| On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
+| Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
 
-**Two items are greyed by STATE rather than by the build**: the fact that
+**Three items are greyed by STATE** (rule 3): the fact that
 greys them is on the status row and it can stop being true, so
 `c64_menu_state()` re-runs on every path that changes the state.
 
@@ -1846,6 +2991,7 @@ greys them is on the status row and it can stop being true, so
 |---|---|---|
 | Preferences > Advance frame | `C64_ST_JAM` | §4.5's permanent line: `ovl_advance_frame` answers a jam by doing nothing, and a live item that is a silent no-op is the shape SPEC.md §47 forbids |
 | Edit > Paste | `C64_ST_JAM` **or `c64_pause`** | in either, nothing would ever drain the queue (§7.7). **The paused case is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, here `c64_paste_feed` runs only in the RUNNING arm of `os88_onwake`. The pause's fact is not a message (`Paused.` expires) but §10.2's `P` lamp and the check beside Pause emulation |
+| Preferences > Recompiler | no recompiler segment | §4.9.5: no 48KB the heap could give it, or a D64 took its memory without extended memory, which the status row says as it happens |
 | Edit > Copy | *nothing* | the frozen screen of a paused or jammed machine is real, and the body runs from the wake whatever the state |
 
 **The chords are guarded with them.** `os88_onkey` dispatches Alt+Shift+P,
@@ -1864,41 +3010,135 @@ greyed until a row is selected).
 and that is said — `A file dialog is already open.` — rather than swallowed.
 
 `os88_onfile` — **resident**, because the runtime reaches a callback by a
-near offset (§13.1) — refuses by size before touching the disk (`PRG over
-65533 bytes.`; the ceiling is 65,533 because two bytes are the load address
-and the rest must fit `$FFFF`), then calls the already-loaded `ovl_load_prg`
-(`c64load.c`), which:
+near offset (§13.1) — sends a D64 by its size to §11.5 and anything else to
+the overlay's `ovl_attach` (`c64load.c`), which sends a name ending `.T64`
+(either case) to §11.3.1 and refuses any other file by size before touching
+the disk (`PRG over 65533 bytes.`; the ceiling is 65,533 because two bytes
+are the load address and the rest must fit `$FFFF`). `ovl_load_prg`:
 
 1. refuses a file under 3 bytes (`PRG too short.`);
-2. takes a transient claim of `ceil(size / 1KB)` — computed as
-   `(size >> 10) + ((size & 1023) != 0)`, because `(size + 1023) >> 10`
-   wraps in 16 bits for a file over 64,512 bytes — or says
+2. takes **the buffer a load is read through** (below) or says
    `PRG: no heap for it.`;
-3. `os88_file_read_seg` into it (`PRG: cannot read it.` on a short read) —
-   a `.PRG` lands at any address, and `os88_file_read_seg` needs a
-   512-aligned base (SPEC.md §2.1.1), which is why there is a claim;
-4. reads the 2-byte load address and refuses a file whose LAST byte would
-   pass `$FFFF` (`PRG runs past $FFFF.`) — the test is
-   `n − 1 > $FFFF − load`, exact in 16 bits, and a file ending exactly at
-   `$FFFF` is legal;
-5. `c64_zzcopy_in` into the RAM claim at the load address, frees the claim,
-   dirties every page (`c64_dirty_all`), and says `Loaded <name>`.
+3. reads the file's first chunk into it (`PRG: cannot read it.` on a short
+   read, here and at every later chunk) and takes the 2-byte load address;
+4. refuses a file whose LAST byte would pass `$FFFF`
+   (`PRG runs past $FFFF.`) — the test is `n − 1 > $FFFF − load`, exact in
+   16 bits, and a file ending exactly at `$FFFF` is legal;
+5. streams the body into the RAM claim at the load address (`c64_zzcopy_in`
+   a chunk at a time; `$FFC0`–`$FFF9` through `c64_wr`, which keeps the
+   program's own copy of the core's scratch, §3.5), dirties every page
+   (`c64_dirty_all`);
+6. leaves **BASIC's LOAD pointers** where a direct-mode `LOAD` leaves them —
+   the KERNAL's end of load at `$AE/$AF`, and end of program, start of
+   arrays and end of arrays at `$2D`–`$32`, all at the end of the file
+   (`$2B/$2C`, the start of BASIC, is untouched, as `LOAD` leaves it). A BASIC
+   program injected without them has its variables written over its own
+   text;
+7. gives the buffer back and says `Loaded <name>`.
 
-**That is all it does.** There is no autostart: no reset, no `READY.` wait,
-no `mem_set_basic_text`, no `RUN`. The bytes are in the C64's RAM at the
-address the file names, and the user types `RUN` (for a `$0801` BASIC
-program) or `SYS`. The plan's wave 4 specified VICE's RAM-injection autostart
-(`AutostartPrgMode=1`, `autostart-prg.c`) and it was never built.
-(`OSAPI_FILE_READ_AT` exists unwrapped and offers nothing this needs — no new
-slot, §15.2.)
+**The buffer a load is read through is not a claim the size of the file.**
+A package holds at most eight claims (SPEC.md 50.3, `MEM_OWNER_MAX`) and with
+the recompiler (§4.9) the C64 holds all eight, so a load that claimed failed
+on exactly the machine that runs programs fastest: every PRG and T64 attach
+said `no heap for it` there. The file is streamed instead, through
+`c64_read_at` (`OSAPI_FILE_READ_AT`, whose offset and length are whole
+clusters) a chunk at a time, each chunk's share landed at once. With the
+recompiler the buffer is its cache, 4KB, and every translation is thrown away
+after by a flush request — §11.5.1's way; without it, a claim of 8KB, or down
+to one 512-byte sector. The chunk last read is remembered, so the header a
+load inspects first is not read again when its data begins in the same
+chunk.
 
-**`LOAD"*",8` answers with the KERNAL's `?DEVICE NOT PRESENT  ERROR`.** That
-is the honest machine with no drive, written here so nobody files it as a
-defect. The ROM is the authority; transcribed from the machine, here and in
-`README.TXT`:
+**From Smart attach, the load is the autostart's** (§11.3.2), which runs it
+at the `READY.` prompt and types `RUN`. **File > Attach disk image...** is the
+load alone: the same routing and the same loaders, nothing reset and nothing
+typed, and the user types `RUN` or `SYS`.
+
+#### 11.3.1 A tape image — `.T64`
+
+There is no datasette (§11.2), so a tape image is not MOUNTED: Smart attach
+loads its **first file** where the file says, as VICE's autostart of a tape
+image loads it, and leaves the same LOAD pointers as a PRG (§11.3 step 6).
+`RUN` or `SYS` is the user's, as for a PRG. The format is the one VICE reads
+in `src/tape/t64.c`:
+
+| offset | what |
+|---|---|
+| `$00` | the magic: `C64` (VICE accepts both `C64 tape image file` and `C64S tape file` by these three bytes) |
+| `$24` | the used-entry count |
+| `$40` + 32·i | entry i: `[0]` entry type (0 = free), `[1]` C64 file type, `[2..3]` start address, `[4..5]` end address, `[8..11]` offset of its data in the image, `[16..31]` its name (PETSCII, `$A0`-padded) |
+
+**The end address is not trusted.** Many images in circulation carry a wrong
+one (VICE's `t64.c` repairs it): the length is the distance from this file's
+data to the NEAREST data after it — another entry's offset, or the image's
+end — and the end field only narrows it, when it is above the start and
+shorter. A length that would pass `$FFFF` is cut at `$FFFF`.
+
+The directory is the load buffer's first chunk (§11.3): 4KB, 126 entries,
+with the recompiler; as few as 14 when the heap gave only a sector, whose
+bound on the length is then the image's end and the end field. Refusals, on
+the status row: `Not a T64 tape image.` (short, or no magic),
+`T64: no program in it.` (no entry in use, or one with no data),
+`T64: no heap for it.`, `T64: cannot read it.`; success says
+`Loaded <the entry's name>`, its trailing padding trimmed and anything
+outside PETSCII's printable half shown as `?`.
+
+#### 11.3.2 Autostart
+
+**Smart attach starts what it attached**, as VICE's does in its
+RAM-injection mode (`src/autostart.c`, `AutostartPrgMode` 1): a `.PRG` or a
+tape's first file is loaded at the `READY.` prompt and `RUN` typed; a D64 is
+mounted (§11.5) and `LOAD"*",8,1` typed, then `RUN` once the load has said
+`READY.` again. `RUN` on a program that is not BASIC finds no program text
+and answers `READY.`, as on VICE. `ovl_open` (`c64disk.c`) is the routing and
+`ovl_auto_*` (`c64load.c`) the stages, stepped once a wake before the slice,
+in the running arm only.
+
+| stage | waits for | then |
+|---|---|---|
+| `C64_AU_WAIT` | the prompt | a PRG or tape: the load (§11.3, §11.3.1), and `RUN`; a D64: `LOAD"*",8,1` |
+| `C64_AU_LOAD` | its line typed, then the prompt | `RUN` |
+| `C64_AU_RUN` | its line typed | done |
+
+- **The prompt** is VICE's own test (`autostart.c`'s `check()`): the cursor
+  at column 0 (`$D3`), nothing in the keyboard buffer (`$C6`), and `READY.`
+  in screen codes on the line above the cursor (`$D6`), on the screen the
+  KERNAL writes (`$0288`).
+- **A machine not at the prompt is reset first** — File > Reset machine
+  CPU's reset, RAM kept, as VICE's autostart resets — and the wait runs in
+  **warp**, VICE's `AutostartWarp`, so the KERNAL's RAM test is a moment
+  rather than three seconds; warp is left at the prompt unless the user had
+  it on already. **The load waits for the prompt**, never runs before the
+  reset: BASIC's cold start writes the first program link at `$0801`. The
+  first five frames are not looked at, because until RAMTAS clears it zero
+  page still describes the machine before the reset. A machine at the prompt
+  is not reset, and that is the common case — the machine a user has just
+  opened.
+- **Typing** is the KERNAL's own buffer: up to ten bytes at `$0277` with the
+  count at `$C6`, put only when `$C6` is 0, as VICE's `kbdbuf` feeds it.
+  `LOAD"*",8,1` and its RETURN are twelve, so they go in two wakes. A paste
+  in progress is stopped (the buffer is the autostart's).
+- **It gives up** after 1,000 emulated frames (20 s) at any one stage,
+  saying `Autostart: no READY. prompt.`; a refusal from the load ends it
+  with that refusal on the row. While it waits off the prompt the row says
+  `Autostarting...`. A new attach replaces an autostart in progress.
+- **Refusals by size come first** (`PRG over 65533 bytes.`, `PRG too
+  short.`): a file that cannot load does not reset the machine.
+
+The cost is a wake's step while it runs and nothing otherwise: one test of
+`c64_auto` in the running arm. `c64uitest` holds the prompt case (loaded at
+once, `RUN` in the buffer), the reset case (reset requested, warp on,
+nothing loaded until the prompt, the first frames ignored) and a D64's two
+lines; each was verified red by breaking it.
+
+**Any device but 8 answers `LOAD"*",9` with the KERNAL's
+`?DEVICE NOT PRESENT  ERROR`** - the honest machine with nothing on that
+part of the bus, written here so nobody files it as a defect. Drive 8 is
+always answered: by its D64 (§11.5) or, with none, by the folder (§11.5.2).
+The ROM is the authority; transcribed from the machine:
 
 ```
-LOAD"*",8
+LOAD"*",9
 
 SEARCHING FOR *
 ?DEVICE NOT PRESENT  ERROR
@@ -1910,11 +3150,168 @@ CIA2 PRA modelled and not stored (§6.2): with the raw register answered, DATA
 IN reads low — a device answering — and the KERNAL waits at `SEARCHING FOR *`
 for ever.
 
+### 11.5 Drive 8 - a D64, and the KERNAL's LOAD served from it
+
+**File > Attach disk image...** - and Smart attach, which shares its Standard
+File dialog - puts a `.D64` on drive 8. `os88_onfile` tells a D64 from a
+`.PRG` by its SIZE (the dialog does not filter by extension, and a PRG over
+64KB is refused anyway): 174,848 bytes (35 tracks) or 196,608 (40), each with
+or without its error bytes. Anything else in that size range is `Not a D64
+image.` The image is held WHOLE, in one claim (683 or 768 sectors, plus 512
+bytes for the last read's sector rounding - 768 for 35 tracks, whose last
+read reaches into the error bytes and ends on the sector after them, at
+175,616), read once in 32KB chunks through
+`c64_read_at` - `OSAPI_FILE_READ_AT` into a far buffer, a package-local shim
+in `c64.asm` - and given back when another image is attached. `D64: no heap
+for it.` and `D64: cannot read it.` leave the drive as it was;
+`Disk on drive 8.` says it took.
+
+**IT IS NOT A 1541.** There is no drive CPU, no GCR, no serial bus. The
+KERNAL's own `LOAD` is trapped where its serial half begins: `$F4C4`, the
+`LDA #$60` just after `JSR $F5AF` has printed `SEARCHING FOR`, is patched to
+a JAM byte (`$02`) in the package's copy of the ROM (`os88_main`, never the
+file), and `c64_slice` meets the JAM there and calls `ovl_d64_trap`
+(`c64disk.c`):
+
+- **device 8 with a disk**: the name at `($BB)`, `$B7` long (`0:` and `:`
+  prefixes dropped, `?` one character, `*` the rest) is found among the
+  image's closed or open PRGs, its sector chain followed, and its bytes
+  copied into RAM - at its own load address with a secondary address, at
+  `$C3/$C4` (BASIC's `$0801`) without - or compared, for `VERIFY`. `"$"` is
+  the directory as the BASIC program a 1541 sends (the header reversed, one
+  line a file with its blocks, name, type and `*`/`<` marks, `BLOCKS FREE.`
+  out of the BAM). `$AE/$AF` take the end and `$90` the end-of-file status
+  (`$10` with it on a VERIFY that differed), and the trap returns through the
+  KERNAL's own `LOADING`/`VERIFYING` message at `$F5D2`, off a return
+  address pushed for its exit at `$F5A9` (`CLC / LDX $AE / LDY $AF / RTS`) -
+  so BASIC and any caller see exactly what a load from drive 8 leaves;
+- **a name the disk has not got** is looked for in the folder behind it
+  (§11.5.2), where SAVE writes, before `?FILE NOT FOUND`;
+- **no disk**: the folder (§11.5.2);
+- **any other device**: the `LDA #$60` the byte replaced, and the KERNAL
+  goes on to its serial bus as it always did.
+
+Typed at this machine, with Edge of Disgrace's side 0 attached:
+
+```
+LOAD"$",8
+
+SEARCHING FOR $
+LOADING
+READY.
+```
+
+**What it cannot run** is anything that talks to the drive rather than
+through `LOAD`: a fast loader (which uploads code into the drive), `OPEN` of
+a drive channel, a program reading its disk by sector. Those see the bus they
+always saw - nothing on it. A program that replaces the `$0330` vector
+bypasses the trap the same way, as it would bypass a real KERNAL's. **The
+JAM byte is visible** to a program that reads the KERNAL at `$F4C4` (a ROM
+checksum, a copy of the KERNAL into RAM): the stated deviation. The
+translation leaves `$F4C4` to the core (`m65aot.py`), so the byte is always
+met. **It costs nothing until a LOAD reaches it.**
+
+`c64uitest` builds a D64 in memory and asserts the four answers - the file
+(its bytes across two sectors, its end, the status, the return through
+`LOADING`), a pattern at `$0801`, the directory's header line, `FILE NOT
+FOUND` - and that device 9 runs the replaced instruction; red with the
+file's chain cut.
+
+#### 11.5.2 The folder - SAVE, and drive 8 with no disk
+
+**Drive 8 with no D64 is the folder the program stands in** - the one Smart
+attach last picked from, or the one it was started from - as VICE's
+file-system device is a host directory. `ovl_fs_*` (`c64disk.c`):
+
+- **`SAVE"NAME",8`** writes `NAME.PRG`: the two-byte address, then the bytes
+  from `($C1)` up to `($AE)` **as the CPU sees them** - ROM where ROM is in,
+  as the KERNAL's own `LDA ($AC),Y` reads them; RAM below `$A000` is copied
+  as it lies. It goes out through the screen shadow, 8,000 bytes a write
+  (`os88_file_write`, then `os88_file_append`), and the shadow is redrawn
+  after - so it works with the recompiler holding every claim. A name that
+  is there already is refused as a 1541 refuses it (`63, FILE EXISTS`):
+  nothing written, `Exists: NAME.PRG` on the status row; `SAVE"@0:NAME",8`
+  replaces it. `Saved NAME.PRG` or `Not saved: NAME.PRG` says how it went.
+  The KERNAL's SAVE is trapped where its serial half begins: `$F605`, its
+  `JSR $F3D5`, patched to a JAM byte as `$F4C4` is for LOAD, and left to the
+  core by the ROM translation (`m65aot.py`). The trap leaves through the
+  KERNAL's `SAVING NAME` at `$F68F` into the exit at `$F5A9`. Any device but
+  8 runs the `JSR` the byte replaced.
+- **SAVE writes the folder even with a D64 attached**: the image is not
+  written (writing one back is the whole 171KB file), and **LOAD looks in
+  the folder for a name the disk has not got**, so what was saved loads
+  either way. `LOAD"$",8` lists the disk while one is attached.
+- **`LOAD"NAME",8`** reads `NAME.PRG` through Smart attach's buffer (§11.3)
+  - at `$0801`, or its own address with a secondary address - and `*`, `?`
+  match as on a 1541, against the name's stem. `VERIFY` compares and sets
+  `$90`'s `$10` where a byte differs.
+- **`LOAD"$",8`** is the folder's `.PRG` files as a 1541's listing:
+  `"OS8088 FOLDER" 88 2A`, a line a file with its blocks of 254, and
+  `BLOCKS FREE.` from the free kilobytes.
+- **A C64 name becomes an 8.3 name**: letters and digits kept (a shifted
+  letter is its letter), anything else `_`, eight at most, `.PRG` after.
+  `*` and `?` are kept for LOAD's matching, so a SAVE name holding one is
+  refused (`Not saved: NAME*.PRG`, nothing written - a 1541's `33,
+  SYNTAX ERROR`): FAT would take the character and nothing could name the
+  file.
+
+`c64uitest` keeps a folder in memory and holds: a 10,000-byte SAVE across
+the staging's chunks with its address, the exists refusal, `@0:`, LOAD by
+a wildcard at `$0801`, VERIFY of a changed byte, a stem that only starts
+the same not matching, the listing, and device 9's `JSR`; red with the
+chunk offset dropped or the stem test loosened. On 86Box: `10 PRINT"HI"`,
+`SAVE"HELLO",8`, `NEW`, `LOAD"HELLO",8`, `LIST` answers `10 PRINT"HI"`, and
+`LOAD"$",8` lists it.
+
+#### 11.5.1 The image in extended memory
+
+**A D64 is 171KB, and on a 640KB machine it does not fit beside the
+recompiler** (§4.9.4) - nor, at 8 claims a package (SPEC.md 50.3,
+`MEM_OWNER_MAX`), would any claim at all: with the recompiler the C64 holds
+all eight. So where the extended pool has room (`OSAPI_XMEM_CAPS`: 176KB for
+35 tracks, 192 for 40) the image goes there, and only a sector is ever in
+conventional memory:
+
+- **The block** is whole 8KBs (`OSAPI_XMEM_ALLOC`), read from the file a
+  chunk at a time through a buffer and `OSAPI_XMEM_COPY`, stopping where the
+  sectors do (a read past the file's end answers nothing).
+- **Two 256-byte slots** take a sector on demand (`ovl_d64_para`, copied
+  in when the slot holds another): one for the BAM (18,0), one for every
+  other - the directory listing reads the BAM after its directory sectors,
+  and every other reader holds one sector at a time.
+- **Where the slots and the buffer live**: with a recompiler, in ITS segment
+  - the slots are the claim's last 512 bytes, which the cache stops short of
+  (`CACHE_END` `$FD00`, `jv_end` 768 bytes under the claim's end), and the
+  image is read 4KB at a time through the cache, which is then flushed
+  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`), and when it
+  is dropped for an attach they move into a 512-byte claim of their own
+  (`ovl_jit_drop`: only a cache of the image, so nothing is copied) - the
+  disk stays on drive 8 until the new one is whole. Without one, a 512-byte claim for the slots and an 8KB
+  buffer, or down to 512 bytes, given back after.
+- **The four OSAPI_XMEM_* calls** are `c64fast.inc`'s `c64x_*` shims; the
+  token is two words the C never adds to (`c64x_copy` adds the offset), so it
+  is right on kern_mega, where a token is no address.
+
+No pool, or no room in it - an 8088, or a 286 without `XMEM.DRV` - and the
+image takes one conventional claim as before, the recompiler giving way for
+it if it must. `c64uitest` runs §11.5's D64 test three times: conventional;
+extended through claims; extended beside a recompiler segment, asserting the
+slots are its last 512 bytes and its flush was asked for. Red with the BAM's
+slot made the other one's: BLOCKS FREE reads 0.
+
+**Both claims MOVE** (SPEC.md 66): the conventional image and the two
+extended-memory slots are declared movable once the attach's reads are done,
+and `os88_onmove` follows `c64_d64_seg` (slots inside the recompiler's
+segment move with it, as before). The read-through buffer is pinned and
+freed inside the one Attach command (`tests/pins.txt`, bucket C).
+
 ### 11.4 Sound
 
-**SID voice 1's frequency and gate** go to `os88_snd_tone` (`OSAPI_SND_TONE`)
-once per wake, and only when they changed (`c64_sid_dirty`, raised by a write
-to `$D400-$D41C`) — one far call.
+**On an FM chip, all three voices** (§11.4.3). **Otherwise one voice on the
+PC speaker** — the one whose note started last (§11.4.2) — whose frequency
+and gate go to `os88_snd_tone` (`OSAPI_SND_TONE`) once per wake, and only
+when the SID changed (`c64_sid_dirty`, raised by a write to `$D400-$D41C`) —
+one far call.
 
 **The hertz is one rounding, not two.** A 6581 at the PAL dot clock sounds
 `Fn × 985248 / 2^24` Hz — 0.0587257 Hz a step. It is
@@ -1948,9 +3345,77 @@ instance holds the speaker (SPEC.md §34.3). The latch is cleared only when the
 grant takes; the retry is **bounded at `C64_SID_TRIES` = 8 wakes** and then
 dropped, and the next SID register write re-arms it. The give-up is said once
 a session, on the row and in a toast: `The speaker is busy - no SID sound.`
-Voices 2 and 3, every waveform beyond the gate, ADSR and the filters are
-greyed with §11.2's fact: `OSAPI_SND_FM` and the streaming path are driver
-verb protocols not wrapped for C.
+On the speaker, the waveforms, the ADSR, the filters and the other two
+voices are §11.2's fact: one square wave. The filters are not modelled on the
+FM chip either (§11.4.3).
+
+### 11.4.2 Which voice the speaker plays
+
+It played voice 1 and nothing else, and a tune that holds voice 1 as a pad or
+a bass while the melody moves on voices 2 and 3 — both Christmas demos — was
+one continuous tone. **The speaker plays the voice whose note STARTED most
+recently** while it is still sounding (`c64_sid_last`, set in `c64_io_wr`
+when a write OPENS a gate), and otherwise any sounding voice, voice 1 first.
+A voice sounds when its gate is open, TEST is off and it has a tonal
+waveform (triangle, sawtooth or pulse): noise alone is a drum, which a
+square wave cannot say. **`$D418`'s volume at 0 is silence**, as it is on the
+chip. `c64uitest` holds voice 1 and starts a note on voice 2, and asserts the
+speaker follows voice 2 and goes back to voice 1 when voice 2's gate closes
+(red with voice 1 alone).
+
+### 11.4.3 All three voices on an FM chip
+
+**When `SOUND.DRV` has an OPL** — it loads when the Control Panel enables
+the sound card (`drv_tab`'s row 0 is off by default) — `os88_main` claims
+the chip, MIDIRack's order (`SNDV_IDENT`, `SND_FM_INFO`, `SND_FM_CLAIM` in
+OPL2 mode; `c64_opl_open` in `c64.asm`), and the three voices go to channels
+0, 1 and 2, RealDMG's shape (`rwfm.inc`). The claim is the instance's and
+`SOUND.DRV` gives it back when the instance dies.
+
+| SID | OPL |
+|---|---|
+| waveform | a patch, loaded when it changes: pulse a modulator at twice the carrier (odd harmonics), sawtooth x1 with feedback 5, triangle the modulator silent (near a sine), noise x15 at full feedback |
+| frequency | block and F-number: `F × 985248 / 2^24` Hz is `fnum × 49716 / 2^(20−b)`, so `fnum = (F × 0.61928) >> (b−1)`, through `c64_muldiv` |
+| gate | the key; a gate that OPENED since the last batch re-keys (off then on in one batch), restarting the envelope |
+| attack, decay, sustain, release | the carrier's AR/DR/SL/RR by table (the SID's 2 ms .. 8 s against the OPL's halving steps). **Sustain is a level, not a time**: the SID's is LINEAR (s/15) and the OPL's SL is 3 dB a step, so `c64_fmsl` is `round(-20 log10(s/15) / 3)`. It was `15 - s`, which played a sustain of 8 at -21 dB where the SID holds -5.5 - the owner heard the C64 as far softer than everything else on the machine |
+| `$D418` volume | the carrier's attenuation, 0.75 dB a step |
+| filters, ring, sync | not modelled |
+
+**A batch a wake, of what changed** (`ovl_fm_update`, in the overlay: at
+most once a wake), against a shadow of each channel's registers. `c64uitest`
+puts 440 Hz on voice 2 and asserts channel 1's block 4 / F-number 580, the
+pulse patch and the mapped ADSR, and the key off at the gate's close (red
+with the F-number a block out). **Measured on MartyPC's
+`os8088_xt_vga_sb`**: `POKE`d to 440 Hz pulse with full sustain, channel 1
+reads `B0h = $32`, `A0h = $44`, `SOUND.DRV`'s own `opl_b0` agrees, and the
+card's capture peaks at **440.0 Hz** with 1,320 and 2,200 Hz above it — a
+square's odd harmonics.
+
+### 11.4.1 Voice 3, readable — `$D41B` and `$D41C`
+
+**`$D41B` is voice 3's waveform output, computed when it is read**
+(`c64sid.inc`'s `c64_osc3`, from `c64_osc3_now`): the 24-bit phase
+accumulator advanced by `$D40E/$D40F` × the cycles since the last read, the
+23-bit noise LFSR clocked on each rise of accumulator bit 19 with feedback
+bit 22 ^ bit 17, and the output by `$D412`'s waveform bits - noise through
+its eight taps (22 20 16 13 11 7 4 2), sawtooth as bits 23-16, triangle as
+bits 22-15 folded by bit 23, pulse against `$D410/$D411`'s width; several
+waveforms AND. TEST holds the accumulator at 0 and the LFSR at all ones, and
+a SID reset goes through TEST, because a zero LFSR shifts in zeros for ever.
+A write to `$D40E-$D412` first brings the oscillator up to now at the old
+settings. **The LFSR clocks eight at a time** while eight remain: a new bit
+feeds back only 17 clocks later, so the next eight feedback bits are all old
+ones - `((lfsr >> 15) ^ (lfsr >> 10)) & $FF` - and the register shifts a
+byte; `c64memtest` checks 64 and 77 clocks against a single-clock model. **This is the C64's random number generator** - voice 3 on noise,
+read at `$D41B` - and the Portland Commodore Users Group's Christmas demo
+places its snow with it: answering the stored byte, every flake fell in
+column 0. **`$D41C`** is the sustain level while voice 3's gate is open and
+0 once it closes; the ADSR's shape is not modelled. Ring modulation and
+sync do not reach the output.
+
+`c64uitest` asserts a spread of values on noise; `c64memtest` runs the
+shipping routine against hand-computed bytes (TEST, a sawtooth's top byte,
+the noise output after one and then six LFSR clocks).
 
 ---
 
@@ -2061,7 +3526,7 @@ the timer step and the flush were allowed to take it. The rest is data:
 one string per menu check item with its mark byte written in place, the
 greyed and live spellings of an item sharing one literal (live = `+ 1`),
 one `Unable to load C64.OVL.` literal (since gone with the file, §13.3),
-`c64_kbd_init` harness-only (it
+`ovl_kbd_init` harness-only (it
 stored zero over loader-zeroed bss), and the RAM-pattern page built in the
 composer's band. `hosttest/c64uitest.c` prints a byte-identical report
 before and after.
@@ -2114,7 +3579,14 @@ staging in transient claims instead (§7.7).
 ### 13.3 The overlay rules that bind here
 
 - **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
-  stays resident, a menu command's goes out.
+  stays resident, a menu command's goes out. **And at most once a flush or a
+  frame goes out too, once the segment is tight**: at 62,834 of 65,024
+  (image + bss) after FM sound, `ovl_status` (the status row, once a flush),
+  `ovl_fsx_frame`/`ovl_fsx_compose`/`ovl_fsx_sprites` (the colour screen, a
+  frame and its dirty rows), `ovl_reset_regs` and `ovl_tod_tick` (a tenth of
+  a second) moved out: **3,118 image bytes, 59,722 in all**, for one far call
+  each on paths that already cost milliseconds. The per-instruction and
+  per-write paths, the latch and the 1bpp composers stay resident.
 - **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
   `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
   runtime reaches one by a near offset. A callback that needs overlay code
@@ -2162,7 +3634,14 @@ staging in transient claims instead (§7.7).
   the ROM at the ceiling: one claim fewer against `MEM_OWNER_MAX`, measured
   23.0K for both parts.
 - **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
-  stays resident, a menu command's goes out.
+  stays resident, a menu command's goes out. **And at most once a flush or a
+  frame goes out too, once the segment is tight**: at 62,834 of 65,024
+  (image + bss) after FM sound, `ovl_status` (the status row, once a flush),
+  `ovl_fsx_frame`/`ovl_fsx_compose`/`ovl_fsx_sprites` (the colour screen, a
+  frame and its dirty rows), `ovl_reset_regs` and `ovl_tod_tick` (a tenth of
+  a second) moved out: **3,118 image bytes, 59,722 in all**, for one far call
+  each on paths that already cost milliseconds. The per-instruction and
+  per-write paths, the latch and the 1bpp composers stay resident.
 - **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
   `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
   runtime reaches one by a near offset. A callback that needs overlay code
@@ -2310,8 +3789,6 @@ already publishes.
 **Colour.** The kernel has since published `OSAPI_GFX_BLIT1_PEN` (SPEC.md
 §5.4.2.2), an ink and a paper for a 1bpp band on a colour adapter, so the
 slot this section once said did not exist now does. This port does not use
-it: a colour C64 composer is a per-row colour decision the composer does not
-make yet, and the speed case on the target is unmeasured. The feature stays
-greyed with §9.6's fact, and the EGA-16 map and per-row colour record are
-kept in `c64scr.c` so that a composer against that slot drops in without
-re-planning.
+it in the window: two colours a band is not a C64 cell's four, and colour
+is fullscreen instead, in `FSXM_VGA13` through the existing `OSAPI_FSX_*`
+slots (§9.12) - which needs no slot this section would have to add.

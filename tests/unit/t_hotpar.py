@@ -59,6 +59,12 @@ HOT = {
         "mou_p2_isr": 0, "kbm_isr": 1, "cur_move": 0, "cur_move_1": 1,
         "sch_isr": 1, "sch_switch": 1, "ui_task": 0, "dsk_xfer": 1,
         "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
+        # the VGA rung's busiest bodies, pinned where kernel hot-paths pass 1
+        # measured them (docs/plans/khp1/vga.md). The rung starts on a
+        # paragraph, so only `.vga` bytes above them can move these
+        "vga_solid_rect_v": 0, "gfx_fill_gray_raw_v": 1,
+        "vga_save_vram_v": 0, "vga_restore_vram_v": 1,
+        "vga_blit_span": 0, "gfx_blitp_v": 0,
     },
     "small": {
         "gfx_blit1_x": 0, "gfx_blit4": 0, "font_run": 0, "font_run_x": 0,

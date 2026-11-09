@@ -21,12 +21,12 @@ start. Fails on:
     a `kern_mega FAULT` (the kernel's own);
   - a package MEGARUN could not start (`MEGARUN: no NN`) or never reached.
 
-THE ONE PACKAGE THAT MUST REFUSE is WIN16 (REFUSES below): the owner's D6
-(SPEC.md 124.1, docs/plans/WIN16-PLAN.md) has it decline protected mode at
-entry with *WIN16 needs real mode*, so it rides the shipped disks this sweeps
-and is never on kern_mega's own. Its refusal is REQUIRED rather than allowed -
-LD_EABORT (04), its entry's CF=1 - so the row stays red if the check is lost
-and WIN16 starts here, or if it refuses some other way.
+NO PACKAGE MAY REFUSE ANY MORE. WIN16 did - the owner's D6 (SPEC.md 124.1)
+had it decline protected mode at entry - until SPEC.md 124.31 gave it a
+kern_mega ARM (`megak/apps/win16.o88`), which is what this sweep substitutes
+for the shipped build wherever `make mega` builds one, and which must START.
+REFUSES stays as the mechanism for a refusal that is an owner's decision;
+it is empty because no such decision stands.
 
 It asserts that a package OPENS and survives LINGER seconds of its own loop,
 not that it works: a package whose arithmetic is wrong only when it loads a
@@ -58,15 +58,15 @@ BATCH = 9
 
 # package stem -> the MEGARUN refusal code it must give, and why. A decision
 # of the owner's and nothing else: a refusal that is a DEFECT is a failure.
-REFUSES = {
-    "win16": ("04", "SPEC.md 124.1 D6: WIN16 needs real mode"),
-}
+REFUSES = {}
 LINGER = 10
 # The shipped disks whose packages are swept: the 1.44MB apps disk and the
 # five 360KB category disks, which between them carry every package `all`
-# ships (the system disk's SYSTEM/ ones are on kern_mega's own disk too).
+# ships (the system disk's SYSTEM/ ones are on kern_mega's own disk too) -
+# and ARCADE's release floppy, the one package on a disk of its own (its
+# arm is kern_mega's twin of it, ARCADE-SPEC 14)
 DISKS = ("apps.img", "office360.img", "network360.img", "games360.img",
-         "emu360.img", "util360.img", "os8088.img")
+         "emu360.img", "util360.img", "os8088.img", "arcrel.img")
 # Not a package a user opens: the installer wants a blank C: of its own
 SKIP = {"install", "rlapply"}
 

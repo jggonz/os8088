@@ -36,9 +36,17 @@
 ; same reason. Nothing that uses this holds interrupts off for anything like
 ; it, and it is written down because the failure would otherwise be silent.
 ;
-; ONE BODY, TWO USERS: ETHER.DRV's stage profiler (SPEC.md 72.15) and the FTP
-; server's own split (SPEC.md 77.32). Two clocks that were copy-pasted cannot
-; disagree, which is exactly what makes a disagreement between them useless -
+; NOT INSIDE AN ARMED FSXF_FASTTICK OR FSXF_RATE BRACKET. Channel 0 then
+; reloads at 65536/N or at the caller's divisor while 006C keeps its 18.2 Hz
+; (SPEC.md 53.2.1, 53.2.2), so the low half laps several times a tick and a
+; span read across a lap goes backwards. Time a bracket by its hook's periods
+; or by the tick, as isoTron and RealDMG do.
+;
+; ONE BODY, MANY USERS: ETHER.DRV's stage profiler (SPEC.md 72.15) and the FTP
+; server's own split (SPEC.md 77.32) were the first two; ARCADE, isoTron,
+; MIDIRACK, PIXELSTEIN, RealDMG and XTMP3 include it too. Two clocks that
+; were copy-pasted cannot disagree, which is exactly what makes a
+; disagreement between them useless -
 ; and this project has found three sizing bugs by making two harnesses argue
 ; (PERFORMANCE.md Part 6 rule 7). They argue about STAGES here, over one
 ; clock.

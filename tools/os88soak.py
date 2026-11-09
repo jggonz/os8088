@@ -913,6 +913,23 @@ def _done_rows(d):
     return out
 
 
+def _snapshot_src(tree):
+    """Copy what os88sym assembles the kernel from into `tree`/src: kernel/,
+    boot/, drivers/ and apps/*.inc, as they are now - the moment the tree
+    was built from them. Replaced whole, so a resumed run takes its own."""
+    import shutil
+    dst = os.path.join(tree, "src")
+    shutil.rmtree(dst, ignore_errors=True)
+    for d in ("kernel", "boot", "drivers"):
+        shutil.copytree(os.path.join(ROOT, d), os.path.join(dst, d))
+    os.makedirs(os.path.join(dst, "apps"))
+    for n in os.listdir(os.path.join(ROOT, "apps")):
+        if n.endswith(".inc"):
+            shutil.copy2(os.path.join(ROOT, "apps", n),
+                         os.path.join(dst, "apps", n))
+    return dst
+
+
 def _frozen_targets(a):
     """What the run's own tree has to contain: the shipped set, plus every
     artefact the selected rows DECLARE.
@@ -957,7 +974,8 @@ def _frozen_targets(a):
                 "network360.img", "games360.img", "emu360.img", "util360.img",
                 "more720.img", "small360.img", "small720.img",
                 "win16.img", "win16-120.img", "win16-720.img",
-                "win16-360.img")
+                "win16-360.img", "arcrel.img", "arcrel120.img", "arcrel720.img",
+                "arcrel360.img")
     shipped = imgs + ("wire.o88",)
     # THE WIN16 FIXTURES, where this box has opted in. `win16fixtures` is a
     # CAPABILITY and not a `wants=`, because building it fetches a compiler
@@ -1150,6 +1168,11 @@ def start(a):
         # `build/smallk`, and five rows died on a missing image the tree had.
         env["OS88_BUILD"] = frozen.dir
         env["OS88_TREE"] = frozen.dir
+        # ...and the kernel SOURCE that tree was built from (os88sym's
+        # `_src`): the symbol reader re-assembles kernel.asm to prove its map,
+        # and reading the live checkout made one mid-run commit to kernel/
+        # fail every emulator row after it.
+        env["OS88_SRC"] = _snapshot_src(frozen.dir)
         # ...and the BUILD NUMBER it froze at (tools/buildnum.py): a row that
         # rebuilds a declared artefact in the tree later would otherwise take
         # the live checkout's commit count, and one commit mid-run put the

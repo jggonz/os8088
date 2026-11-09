@@ -1,0 +1,376 @@
+{
+ "area": "gap-mouse-cursor-half",
+ "title": "kernel/mouse.inc's cursor half (cur_*): save-under, lazy cursor, shapes, busy cursor, multi-display move",
+ "summary": "The 1bpp cursor (cur_move_mono, cur_put_mono/cur_get_mono, cur_geom) is excellent: one write a byte, geometry banked once, shape tables asserted at build time. The lazy-hide protocol is safe in every shipped arm, but it is opt-out and its proof instrument was never committed (mc-9). Verified findings: kern_big's VGA pointer is 21,450 cycles a packet and erase-then-draw, already queued as KHP_VGASAVE (mc-3). The SDK, vga12 and SPEC 7 still say gfx_lock hides the cursor, and raw framebuffer writers have no way to spend the promise (mc-5). [cur_dirty] is write-only (-~28 bytes, mc-1). kbm_move's gate lacks FPG_ARMED (mc-2). The rows=0 guards are dead (-24; the borrow framing was corrected, since it is equally unreachable, mc-4). The volume popup double-writes on a move (mc-6). A dead `mov si, bx` (mc-7). 21 doc fixes were confirmed. Withheld: the os88api.inc fix (abilock fingerprint), the cur_dirty SPEC lines (accurate until mc-1 lands) and two items the doc pass had already applied.",
+ "strengths": [
+  {
+   "title": "Each byte written once on 1bpp, decided once a move",
+   "why": "The overlap is reduced to one row run and a 6-bit code before either walk, so neither walk tests per byte. Two save buffers are swapped arithmetically. Equivalence was proved over 36,000 random moves.",
+   "evidence": "kernel/mouse.inc:5643-5870; SPEC.md 7.1.2"
+  },
+  {
+   "title": "One place turns a position into an address",
+   "why": "cur_geom alone subtracts the display origin and the hot spot. Restores replay the banked [cur_off]/[cur_rows]/[cur_b1ok], so a save and its restore cannot disagree.",
+   "evidence": "kernel/mouse.inc:4866-4930, 4700-4724"
+  },
+  {
+   "title": "Shape tables assert their own invariants",
+   "why": "CUR_ROW/CUR_SHAPE_END fail the build on width, height, or a black bit outside its white row. Each of these defects is otherwise invisible except on the glass.",
+   "evidence": "kernel/mouse.inc:5970-6170"
+  },
+  {
+   "title": "A cheap one-way promise",
+   "why": "CURUNLAZY inlines the already-spent test at 19 sites, so a hide that is not owed costs one compare.",
+   "evidence": "kernel/kernel.asm (CURUNLAZY)"
+  },
+  {
+   "title": "Busy clock tied to the hold",
+   "why": "gfx_unlock is the single exit, so no caller can leave a clock on screen. The three pointer states each get an explicit arm.",
+   "evidence": "kernel/vga12.inc:5245-5270; kernel/mouse.inc:5395-5500"
+  },
+  {
+   "title": "Multi-display by not straddling",
+   "why": "The arrow leaves one card whole and arrives on the other whole, so the fused loop never meets a seam. mou_clamp keeps the point inside some display.",
+   "evidence": "kernel/mouse.inc:5578-5615"
+  },
+  {
+   "title": "cur_lazyrect is already per-output exclusion",
+   "why": "Bands and damage fills ask about their own rect, which is the Win 3.x / ShieldCursor model, so R1 is an extension rather than a redesign.",
+   "evidence": "kernel/mouse.inc:5174; kernel/vga12.inc:6003"
+  }
+ ],
+ "findings": [
+  {
+   "id": "mc-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "kern_big moves a VGA pointer through the generic rect machinery at IF=0: 21,450 cycles (about 4.5 ms) a packet, erase-then-draw",
+   "detail": "KHP_VGASAVE is defined only under KERN_MEGA (kernel.asm 293-294). On kern_big, cur_restoreu/cur_saveu are cur_rect + vga_restore_vram/vga_save_vram, called from the serial ISR before the EOI. LAST-DROP-PERF 7.1 row 3 measured cur_move at 21,450 cycles, against 15,100 with the knob. PERFORMANCE Part 5 quotes 15,100 without naming the kernel (SPEC 7.1.2 does name it). cur_move_1's planar arm is restore, then save, then draw, so overlap bytes show background between the passes (PREDICTED; never measured with m.flicker). About 20% of the CPU goes to the pointer during a sweep (PREDICTED; SPEC 7.1.2 measured 21.5% on the XT VGA).",
+   "evidence": [
+    "kernel/kernel.asm:265-294",
+    "kernel/mouse.inc:5618-5641",
+    "docs/plans/LAST-DROP-PERF.md:590",
+    "PERFORMANCE.md:1355",
+    "SPEC.md:10965-10978"
+   ],
+   "recommendation": "Now: take KHP_VGASAVE on kern_big (+122 .vga, resident only on VGA/EGA machines; -6,350 cycles a packet). Take one m.flicker() pointer-sweep reading on os8088_xt_vga. Structural: rethink R2.",
+   "phase": "now",
+   "bytes_est": "+122 (.vga, VGA/EGA machines only)",
+   "listed_as": "docs/plans/LAST-DROP-PERF.md 7.1 row 3 (KHP_VGASAVE)",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: KHP_VGASAVE sits inside %ifdef KERN_MEGA only; cur_move_1's GFX_VGA arm is cur_restoreu -> cur_geom -> cur_saveu -> cur_draw (erase-then-draw, its own comment says so). The finding is already queued as LAST-DROP-PERF row 3, so it is not new work. SPEC 7.1.2 measured the ISR's share as 21.5% (kern_big) -> 16.4%, which supports the ~20% prediction. The PERFORMANCE doc fix names the kernel; 11,500 against 12,000 is left alone (open question 2)."
+  },
+  {
+   "id": "mc-5",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The SDK and SPEC 7 say OSAPI_GFX_LOCK hides the cursor; since 7.1.4 it only promises to, and raw framebuffer writers have no way to make it happen",
+   "detail": "os88api.inc 220-221, the vga12.inc headers and SPEC.md 7's first bullet describe gfx_lock calling cursor_hide. The code only stores [cur_lazy]=1. Kernel primitives spend the promise. A package that writes the framebuffer itself inside the lock (outside FSX) has no API cell that spends it (cw_cur_unlazy and cw_cur_lazyrect are kernel-internal far shims, not OSAPI cells). Its writes then land under a lit arrow, and the next restore smears them. This is a contract defect, not a known live bug.",
+   "evidence": [
+    "apps/os88api.inc:220-221",
+    "kernel/vga12.inc:5083, 5139, 5146, 5262-5268",
+    "SPEC.md:10682-10686",
+    "kernel/kernel.asm:7843-7847"
+   ],
+   "recommendation": "Now: correct the texts. vga12.inc and SPEC are in doc_fixes. os88api.inc's OSAPI_GFX_LOCK/UNLOCK comment is part of tools/abilock.py's fingerprint (an OSAPI %define's trailing comment is hashed), so that edit must land with `abilock.py --update` and no bump. It is NOT in doc_fixes, because applying it unchecked fails make. Record: an appended OSAPI_CUR_EXCLUDE(rect) cell that is cw_cur_lazyrect (INT 33h fn 10h / ShieldCursor).",
+   "phase": "now",
+   "bytes_est": "0 now (docs); +5..+8 for the optional appended slot (record)",
+   "prior_art": "DOS INT 33h fn 10h conditional off; Mac ShieldCursor",
+   "verdict": "confirmed",
+   "verify_note": "gfx_lock .take ends with `mov byte [cur_lazy], 1` and no hide. gfx_unlock compares [cur_lazy] and either shows or calls cur_lazyend. grep of os88api.inc finds no unlazy or exclude cell. The os88api.inc fix was withheld from doc_fixes because abilock's surface() hashes the OSAPI_* define's comment (tools/abilock.py:85-91)."
+  },
+  {
+   "id": "mc-9",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The lazy-hide protocol is opt-out, and the instrument that proved it is not in the tree",
+   "detail": "SPEC 7.1.4's safety argument is a debug-build cell snapshot, and 7.1.1 calls that instrumentation never committed. GFXAUDIT counts unlocked draws and collisions, but not a cell written under a kept promise. CURLOG records events, but nothing in tools/ or tests/ reads cur_log. The defect class has recurred several times (7.1.5, the gfx_xor_rect and one-plane arms), each one found on the glass.",
+   "evidence": [
+    "SPEC.md:10841-10847, 11073-11078",
+    "kernel/mouse.inc:4376-4400 (cur_logput)",
+    "grep -ri cur_log tools tests: no reader"
+   ],
+   "recommendation": "Under GFXAUDIT only: before a restore, recompute (save|white)&~black for each banked byte and compare it with VRAM. Log a mismatch to CURLOG with the tick and the interrupted CS:IP. Do it on 1bpp. Add a soak row that fails on a non-zero count.",
+   "phase": "now",
+   "bytes_est": "0 shipped; ~+40 GFXAUDIT build",
+   "verdict": "confirmed",
+   "verify_note": "SPEC 10847 does say '(instrumentation, never committed)'. The grep for cur_log/CURLOG over tools and tests hits only an unrelated win16spec file. The CURLOG_N comment's 'the CURLOG readers need no change' therefore names readers that do not exist."
+  },
+  {
+   "id": "mc-1",
+   "kind": "size",
+   "severity": "low",
+   "title": "[cur_dirty] is written in six places and read in none",
+   "detail": "Stores: mou_apply .go (`mov byte [cur_dirty],0`) and .dirty (`,1`), cur_vis (`,0`), cur_lazyend (`,0`), kbm_move .pset (`mov [cur_dirty],al` plus its `mov al,1`/`mov al,0`). Nothing in kernel/, drivers/, apps/, tools/ or tests/ loads or compares it. The catch-up is position-based.",
+   "evidence": [
+    "kernel/mouse.inc:4354, 4364, 4450, 5291, 2691-2709, 6266"
+   ],
+   "recommendation": "Delete the variable and its stores. .go becomes `jmp cur_move`, .dirty's jumps retarget to .out, and kbm_move drops its AL loads and store. Re-check t_hotpar parity. The SPEC 7, 9.6 and 12.8.4 text then changes with it.",
+   "phase": "now",
+   "bytes_est": "~-27..-29 resident (kern_big and kern_small, ESTIMATED from encodings)",
+   "verdict": "confirmed",
+   "verify_note": "grep -n cur_dirty over the tree shows stores only; nothing reads it as a word through a neighbour either (cur_drawn_x follows it and is read by name). Encodings: four 5-byte immediate stores, one 3-byte AL store, two 2-byte AL loads, the 1-byte variable, plus call+ret -> jmp at .go: about 28. SPEC 10691/13745/27726 say it is SET, which is true of the code, so those lines were NOT changed as doc mismatches. They change with the deletion."
+  },
+  {
+   "id": "mc-2",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "kbm_move's draw gate is the pre-12.8.4 two-condition gate (no FPG_ARMED)",
+   "detail": "mou_apply refuses to draw while the progress widget is armed (FIELD-NOTES 34). kbm_move.paint tests only [gfx_lock_flag] and [cur_level], then calls cur_move, whose working set is in the primitive union gfx_u. fpg_arm's own comment (fprog.inc 771-790) states that the bar can be composed with the mutex unheld, by a non-UI task (dsk_xfer from a wm_wake_disp dispatch), and that only IRQ4 needs shutting out. kbm_move is a second lock-free painter that comment does not count. It runs from osapi_mouse when [mou_ptr]=0 and from the UI task's own keypad path.",
+   "evidence": [
+    "kernel/mouse.inc:4285-4300 (ISR gate)",
+    "kernel/mouse.inc:2689-2709 (kbm_move.paint)",
+    "kernel/mouse.inc:1554-1612 (osapi_mouse -> kbm_poll)",
+    "kernel/fprog.inc:771-790",
+    "kernel/mouse.inc:6685-6695 (mv_* in gfx_u)"
+   ],
+   "recommendation": "Add FPG_ARMED to kbm_move.paint (+7), or factor one gate shared with mou_apply so the next condition lands once.",
+   "phase": "now",
+   "bytes_est": "+7 resident (cmp byte [fpg_on],0 + jne)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed in code. The window is narrow: it needs a mouseless machine, the keypad pointer, and a lock-free fpg arm pre-empted mid-fill. The UI task's own kbm path is a likelier way in than the worker the reviewer names. FPG_ARMED is 5 bytes plus a 2-byte jne = +7; the shared-gate figure was not costed. Not in any byte or ABI queue."
+  },
+  {
+   "id": "mc-4",
+   "kind": "size",
+   "severity": "low",
+   "title": "The cur_rows=0 guards protect a value cur_geom cannot produce",
+   "detail": "vid_apply homes the pointer, mou_clamp keeps it on a display, and cur_move_multi/cur_vis activate that display. So [cur_celly] < [vid_ch], and cur_geom's rows are always >= 1, as its own comment says (its out: line says 0..CUR_GH). Six walks still open with `or ch,ch / jz` (24 bytes shipped, +8 more in the KHP_VGASAVE arm). A borrow would clamp to 12 rows and write past the display, but the same invariants exclude it, so neither the zero case nor the borrow is reachable.",
+   "evidence": [
+    "kernel/mouse.inc:4917-4928",
+    "kernel/mouse.inc:4547, 4702, 5683, 5785, 5836, 5893 (shipped); 4631, 4750 (KHP)"
+   ],
+   "recommendation": "Delete the six guards (-24) and fix cur_geom's 'out: 0..CUR_GH'. Optionally clamp [cur_celly] to [vid_ch]-1 (~+10) as defence in depth. Net -14 with the clamp, -24 without.",
+   "phase": "now",
+   "bytes_est": "-24 resident without the clamp, ~-14 with it (ESTIMATED)",
+   "verdict": "corrected",
+   "verify_note": "The six shipped guards and the two KHP guards are as stated, at 4 bytes each. Corrected the framing: the 'dangerous borrow' is excluded by the same vid_apply/mou_clamp invariant that excludes rows=0, and vid_ch is the active display's extent, which cur_move_multi/cur_vis activate. So this is a size item, not a hazard. The clamp is optional hardening, not a fix. Note: cur_move_mono's comment at 5762 leans on CH being 0 after the background walk, which holds without the guard (dec ch to 0)."
+  },
+  {
+   "id": "mc-6",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "ui_volume_service moves the pointer as cursor_hide + cursor_show (the pre-7.1.2 double write)",
+   "detail": "The volume popup's AL=2 poll moves the arrow with .move: cursor_hide, then .show: cursor_show. Two walks means the overlap bytes are written as background and then as arrow, on every adapter: FIELD-NOTES 6's wash-out, for the length of the popup.",
+   "evidence": [
+    "kernel/ui.inc:3359-3373"
+   ],
+   "recommendation": "Move it through cur_move under pushf/cli, as kbm_move does, so it is one fused walk.",
+   "phase": "now",
+   "bytes_est": "~0",
+   "verdict": "confirmed",
+   "verify_note": "ui.inc .poll -> .move: call cursor_hide; jmp .show -> call cursor_show. The reviewer's suggestion to call into cur_lazyend's tail was not checked against that routine's preconditions. A pushf/cli + cur_move pair is the shape kbm_move already uses."
+  },
+  {
+   "id": "mc-7",
+   "kind": "size",
+   "severity": "low",
+   "title": "`mov si, bx` before cur_lazyck in wm_clip_set is dead",
+   "detail": "Neither arm of cur_lazyck reads SI on entry: the default loads [wm_clipwin], and CURFIX walks wm_clip_tab. wm_clip_set exits through kret_si anyway.",
+   "evidence": [
+    "kernel/wm.inc:6126-6127",
+    "kernel/mouse.inc:5012-5060"
+   ],
+   "recommendation": "Delete it. SPEC 7.1.4's 'It takes the window in SI' is in doc_fixes.",
+   "phase": "now",
+   "bytes_est": "-2 resident",
+   "verdict": "confirmed",
+   "verify_note": "The default arm pushes SI and then does `mov si, [wm_clipwin]`. The CURFIX arm reads wm_clip_tab/[wm_clip_n]. Not in KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "mc-8",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The multi-display cursor pays full context swaps from the ISR",
+   "detail": "cur_move_multi calls vid_ctx_act twice per packet (three times on a seam jump), and cur_vis does the same pair on every show. vid_ctx_act short-circuits only when the display is already current. A swap is a 16-word copy plus its tail. About +1,000-1,500 cycles at IF=0 per packet, PREDICTED.",
+   "evidence": [
+    "kernel/mouse.inc:5578-5615, 4470-4478",
+    "kernel/vidsel.inc:1558-1580"
+   ],
+   "recommendation": "None now; recorded.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: vid_ctx_act opens with `cmp al, [vid_cur] / je .out`, so the cost is paid only when the last primitive left the other display current, as stated."
+  },
+  {
+   "id": "mc-R1",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Per-output rect exclusion at the unclipped entries (Win 3.x driver exclusion / QuickDraw ShieldCursor)",
+   "detail": "Any unclipped foreground primitive spends the hide wherever the arrow is. cur_lazyrect already takes an inclusive rect and preserves registers. A rect test at the GFXCLIP unclipped entries keeps one hide/show per hold. The deciding constraint is SPEC 7.1.4.3/7.1.4.4: a kept promise with a moving hand freezes the arrow, so CURFIX's motion gate must come with it.",
+   "evidence": [
+    "kernel/mouse.inc:5174-5247",
+    "SPEC.md 7.1.4.4, 7.1.4.5.1"
+   ],
+   "recommendation": "Record as the 7.1.4.5.1 'change worth costing', with the CURFIX dependency and the owner's eye test stated.",
+   "phase": "record",
+   "bytes_est": "+20..+30 kern_big (ESTIMATED)",
+   "prior_art": "Windows 3.x display-driver cursor exclusion; Mac QuickDraw ShieldCursor",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check: cur_lazyrect exists with a rect contract, and 7.1.4.4 does make CURFIX off by default on the owner's eye test. Plausible as a record. The byte figure is unverified."
+  },
+  {
+   "id": "mc-R2",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Planar save-under in off-screen VRAM, moved by write-mode-1 latch copies",
+   "detail": "Mode 12h leaves 27,136 bytes a plane off-screen (65,536 - 38,400). A latch-based save, patch and compose would write each screen byte once with all four planes in one store, removing the erase-then-draw window. About 6,500 cycles, PREDICTED.",
+   "evidence": [
+    "kernel/mouse.inc:4628-4830, 5888-5935"
+   ],
+   "recommendation": "Record. First audit off-screen VRAM users (menu save-under, hibernate, themes) and the EGA memory probe.",
+   "phase": "record",
+   "bytes_est": "~0 net (ESTIMATED)",
+   "prior_art": "Windows 3.x EGA/VGA driver off-screen pointer save area",
+   "verdict": "confirmed",
+   "verify_note": "The arithmetic checks. Record only; the cycle and byte figures are unverified predictions."
+  },
+  {
+   "id": "mc-R3",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Draw the cursor after the EOI, coalesced (the Mac VBL cursor task)",
+   "detail": "Fold into isr-7 R: re-read the position until it is stable, and state the gfx_u rule as 'no primitive in flight' rather than 'lock free'.",
+   "evidence": [
+    "kernel/mouse.inc:4344",
+    "kernel/mouse.inc:6685-6695"
+   ],
+   "recommendation": "Fold into isr-7 R.",
+   "phase": "record",
+   "bytes_est": "0 beyond isr-7 R",
+   "listed_as": "isr.md isr-7 R",
+   "prior_art": "Mac System VBL cursor task",
+   "verdict": "confirmed",
+   "verify_note": "Not re-derived. It is already carried by isr-7 R. The gfx_u comment fix in doc_fixes states the inxfer exception."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; cursor itself only when the gfx lock is free and the cursor is\n; refcount-visible (SPEC 7); otherwise it just sets cur_dirty.",
+   "new_text": "; cursor itself only when nothing can be drawing under it - the gfx lock\n; free and no progress widget armed (SPEC.md 7, 12.8.4), or this task parked\n; in int 13h (SPEC.md 7.4) - and the cursor refcount-visible; otherwise the\n; next cursor_show or cur_lazyend catches up from the position.",
+   "why": "mou_apply's gate also refuses an armed fprog widget (FPG_ARMED) and has the cur_inxfer arm that draws with the lock held; [cur_dirty] is stored but read nowhere, so the catch-up is position-based."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; pushf/cli ... popf so the ISR never sees a half-drawn cursor. Both are\n; called with the gfx lock held (from gfx_lock/gfx_unlock) or at boot.",
+   "new_text": "; pushf/cli ... popf so the ISR never sees a half-drawn cursor. gfx_lock\n; calls neither: the hide is reached through cur_unlazy (its deferred hide,\n; SPEC.md 7.1.4) and the show from gfx_unlock - and both from the lock-free\n; owners of the glass too (fprog's bar, the screen saver, the busy clock).",
+   "why": "gfx_lock only sets [cur_lazy]; fpg_arm (fprog.inc 733), blank.inc 957 (after its unlock) and cur_busy_on's LIT arm call cursor_hide/show with the lock free."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; The hotspot is the drawn position (0,0 of the cell); at the right and\n; bottom screen edges the cell is clipped, never shifted;",
+   "new_text": "; The hot spot is the shape's own (SPEC.md 7.2.2): cur_geom places the cell\n; off it, clamped at the display's top and left edges and clipped at its\n; right and bottom;",
+   "why": "cur_geom subtracts [cur_hx]/[cur_hy] per shape and clamps the cell at the origin (a shift), so neither 'the drawn position (0,0 of the cell)' nor 'never shifted' holds for the crosshair or the clock."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; public: cursor position, 0..639",
+   "new_text": "; public: cursor position, 0..[vid_wm1]",
+   "why": "mou_clamp bounds it by [vid_wm1] (the union of both displays on a two-display kern_big), not 639; the file header already says so."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; public: 0..479",
+   "new_text": "; public: 0..[vid_hm1]",
+   "why": "mou_clamp bounds it by [vid_hm1], not 479 (350 on EGA, 348 on Hercules, 200 on CGA)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; reached from gfx_lock's deferred hide AND from the mouse ISR - neither of\n; which is inside a 39.14 drawing hook,",
+   "new_text": "; reached from gfx_lock's deferred hide AND from the lock-free owners of the\n; glass (fprog, the saver) - none of which is inside a 39.14 drawing hook,",
+   "why": "No ISR calls cursor_hide/cursor_show: the ISR reaches cur_move, and cur_move_multi owns its own display bracket."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; [cur_off], [cur_shift], [cur_rows] and [cur_b1ok] are not recomputed: the",
+   "new_text": "; [cur_off], [cur_rows] and [cur_b1ok] are not recomputed: the",
+   "why": "There is no [cur_shift] anywhere in the tree, and cur_get_mono uses no shift."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; THE TEST IS THE REGION, NOT THE WINDOW'S FRAME, and that distinction is the\n; whole of SPEC.md 7.1.4.2.",
+   "new_text": "; UNDER CURFIX=1 (SPEC.md 7.1.4.4) - a default build tests the window's FRAME\n; instead, through cur_lazyrect's test, the behaviour that shipped for years.\n;\n; THE TEST IS THE REGION, NOT THE WINDOW'S FRAME, and that distinction is the\n; whole of SPEC.md 7.1.4.2.",
+   "why": "The region walk is the %else of %ifndef CURFIX; the default build runs wm_win_rect and cur_lazyrect.test (kern_small inline), and SPEC.md 7.1.4.4 says the default is the frame."
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "    ; The region and not the window: the fragments are the content rect minus\n    ; the windows ON TOP of it, so a pointer over the window in FRONT of this\n    ; one is unreachable while the frame this used to test says otherwise\n    ; (SPEC.md 7.1.4.2).",
+   "new_text": "    ; Under CURFIX=1 the region and not the window: the fragments are the\n    ; content rect minus the windows ON TOP of it, so a pointer over the\n    ; window in FRONT of this one is unreachable while the frame says\n    ; otherwise (SPEC.md 7.1.4.2). A default build still asks about the\n    ; window's FRAME, read from [wm_clipwin] (SPEC.md 7.1.4.4).",
+   "why": "Without CURFIX, cur_lazyck tests the frame from [wm_clipwin] via wm_win_rect; the region walk is CURFIX=1's."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; in:  AL = CUR_*SH; the gfx lock held by the caller",
+   "new_text": "; in:  AL = CUR_*SH; the gfx lock held by the caller, or the arrow already\n;      hidden (cur_busy_on's lock-free LIT arm)",
+   "why": "cur_busy_on's .lit arm calls cursor_hide then cur_shape_set with the lock possibly free (the two lock-free arms SPEC.md 7.5.3 measures)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": ";            white pass with the cur_and outline mask, black pass with the\n;            cur_data body. Set/Reset supplies the color; the Bit Mask register\n;            carries the row bits, shifted across the cell's two VRAM bytes; a\n;            read of each target byte loads the latches before the masked\n;            write.",
+   "new_text": ";            ONE masked store a byte. The Bit Mask carries the live shape's\n;            white row, shifted across the cell's two VRAM bytes, and the CPU\n;            data is white & ~black with Set/Reset off, so outline pixels land\n;            15 and body pixels 0; a read of each target byte loads the\n;            latches before the masked write.",
+   "why": "The body below writes once per byte with BX = white & ~black as plane data and never programs Set/Reset; SPEC.md 9.7 already describes the single store."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": ";          is four planes through Read Map Select and the draw is Set/Reset\n;          through the Bit Mask, so there is no single byte to fuse.",
+   "new_text": ";          is four planes through Read Map Select and the draw is one masked\n;          store through the Bit Mask, so there is no single byte to fuse.",
+   "why": "Same drift as cur_draw's header: the planar draw is one store a byte with Set/Reset off (verifier addition)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "CURLOG_N    equ 64              ; a WRAPPING ring of cursor events, for the",
+   "new_text": "CURLOG_N    equ 64              ; a log that STOPS when full, for the",
+   "why": "cur_logput's `jae .out` stops at CURLOG_N entries and its own comment says it does not wrap."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "                                ; pass 9). cur_move runs from the mouse ISR and\n                                ; kbm_move only with the gfx lock FREE, and",
+   "new_text": "                                ; pass 9). cur_move runs from the mouse ISR and\n                                ; kbm_move only with the gfx lock FREE (or, in\n                                ; the ISR, held by the task parked in int 13h,\n                                ; SPEC.md 7.4), and",
+   "why": "mou_apply's cur_inxfer arm calls cur_move with [gfx_lock_flag] set when [sch_cur] owns it."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; dark one the bezel disappears into the ground and the white FACE reads - the\n; same clock either way, and no ground it can vanish into. Twelve of the\n; cell's ninety-six pixels are left transparent and the table is still 24\n; bytes.",
+   "new_text": "; dark one the bezel disappears into the ground and the white FACE reads - the\n; same clock either way, and no ground it can vanish into. The twelve pixels\n; round the dial's corners are left transparent - forty-four of the cell's\n; ninety-six, with the four empty rows below it - and the table is still 24\n; bytes.",
+   "why": "CUR_BUSY's white rows (3C,7E,FF x4,7E,3C, then four zero rows) set 52 of 96 pixels: 12 transparent in the dial's 8x8, 32 in the empty rows."
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; gfx_lock - acquire the drawing mutex, then hide the cursor (SPEC.md 7)",
+   "new_text": "; gfx_lock - acquire the drawing mutex, then PROMISE the hide (SPEC.md 7.1.4)",
+   "why": "gfx_lock only stores [cur_lazy] = 1; the hide is spent later by cur_unlazy/cur_lazyck."
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; gfx_unlock - show the cursor, then release the mutex (SPEC.md 7)",
+   "new_text": "; gfx_unlock - put the cursor back, then release the mutex (SPEC.md 7.1.4): a\n;              show if the hide was spent, cur_lazyend's catch-up move if not",
+   "why": "The body compares [cur_lazy] and calls cursor_show only when the promise was spent, else cur_lazyend."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  `cli`; if flag set → `sti`, `call task_yield`, retry; else set flag, `sti`,\n  then `call cursor_hide`. `gfx_unlock`: `call cursor_show`, then clear the\n  flag.",
+   "new_text": "  `cli`; if flag set → `sti`, `call task_yield`, retry; else set flag, `sti`,\n  and PROMISE the hide in `[cur_lazy]` (§7.1.4). `gfx_unlock`: `cursor_show`\n  if the promise was spent, `cur_lazyend`'s catch-up move if it survived,\n  then clear the flag.",
+   "why": "vga12.inc gfx_lock/gfx_unlock: the hide is deferred since 7.1.4; the order rule that follows still holds."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "fragment, and one rect test is far cheaper than sixteen. It takes the window in\n**SI**, which is `wm_win_rect`'s own register, so it cannot be called with the\nwindow in the wrong one - and `wm_clip_set` banks it in `[wm_clipwin]` at entry\nbecause **BX does not survive the fragment loop**.",
+   "new_text": "fragment, and one rect test is far cheaper than sixteen. It reads the window\nfrom `[wm_clipwin]`, where `wm_clip_set` banks it at entry because **BX does\nnot survive the fragment loop**, and hands it to `wm_win_rect` in **SI**.",
+   "why": "cur_lazyck does `mov si, [wm_clipwin]` itself; the SI that wm_clip_set loads before the call is never read (mc-7)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Twelve of the cell's ninety-six pixels are left transparent and the table is\nstill **24 bytes**;",
+   "new_text": "The twelve pixels round the dial's corners are left transparent - forty-four of\nthe cell's ninety-six, with the four empty rows below it - and the table is\nstill **24 bytes**;",
+   "why": "CUR_BUSY sets 52 white pixels of 96: 12 transparent corners in the 8x8 dial plus 32 in the four empty rows."
+  },
+  {
+   "file": "PERFORMANCE.md",
+   "old_text": "and the planar save/restore the cell's own walks, **21,450 -> 15,100** on the XT's VGA |",
+   "new_text": "and, on kern_mega (`KHP_VGASAVE`), the planar save/restore the cell's own walks, **21,450 -> 15,100** on the XT's VGA - kern_big's VGA move is still the 21,450 |",
+   "why": "KHP_VGASAVE is defined under KERN_MEGA only (kernel.asm 293-294); SPEC.md 7.1.2 already says kern_big and kern_small still save through the shared routine."
+  }
+ ]
+}

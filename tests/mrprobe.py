@@ -21,7 +21,7 @@ SRC = os.path.join(ROOT, 'apps', 'midirack', 'midirack.asm')
 INCS = ('apps/', 'apps/midirack/', 'drivers/sound/', 'drivers/')
 
 
-def syms():
+def syms(src=SRC, incs=INCS):
     """Every label AND every bss equ (MRB/MRW/MRBUF are equs off
     os88_image_end), from a map of a re-assembly - NASM lists both. On
     kern_mega (OS88_MEGA, tests/megaport.txt) the package is the ARM,
@@ -30,9 +30,9 @@ def syms():
     with tempfile.TemporaryDirectory() as d:
         cp = os.path.join(d, 'p.asm')
         mp = os.path.join(d, 'p.map')
-        open(cp, 'w').write(open(SRC).read() + '\n[map symbols %s]\n' % mp)
+        open(cp, 'w').write(open(src).read() + '\n[map symbols %s]\n' % mp)
         subprocess.run(['nasm', '-f', 'bin', '-w+error']
-                       + sum([['-I', os.path.join(ROOT, i)] for i in INCS], [])
+                       + sum([['-I', os.path.join(ROOT, i)] for i in incs], [])
                        + mega + ['-o', os.path.join(d, 'p.bin'), cp], check=True,
                        cwd=ROOT)
         out = {}
@@ -85,3 +85,13 @@ def seg_of(m, title='MIDIRack'):
 
 def attach(ui, title='MIDIRack'):
     return Probe(ui.m, seg_of(ui.m, title), syms())
+
+
+FILLER = os.path.join(ROOT, 'tests', 'filler', 'filler.asm')
+
+
+def attach_filler(ui):
+    """tests/filler's bss by name (fl_run, fl_tot, fl_nround), for
+    midirack.py's sbmem leg. The filler is not a MIDIRack, but its map is
+    read the same way and needs only the SDK"""
+    return Probe(ui.m, seg_of(ui.m, 'Filler'), syms(FILLER, ('apps/',)))

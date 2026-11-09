@@ -47,6 +47,16 @@ import os88marty, os88mouse, os88sym, os88geom, dispcp
 from os88fixture import need
 
 KERNEL_SEG = 0x0060
+HF_BSS = 188            # heapfrag.asm's HF_BSS_TOTAL
+DMA_WHY = {1: "no big claim, or no room to say anything",
+           2: "the plug and spacer did not stand at the big claim's base",
+           3: "the roof was refused", 4: "the block was refused",
+           5: "the block did not land at D (first fit found a lower place, "
+              "or the top door took it)",
+           6: "the big claim did not shrink back to F",
+           7: "moving the block buys nothing (the fixture's premise)",
+           8: "the ask was refused", 9: "the contents did not come with it",
+           10: "it did not move", 11: "it landed with its head ACROSS a page"}
 MC_SIZE = os88geom.MC_SIZE
 MEM_MAX = 32
 # every window-record offset comes from os88geom, which checks itself
@@ -124,27 +134,45 @@ def both_passes(cl, base, top):
     merely safe, which is what lets the region arm keep asserting equality
     instead of being weakened to an inequality that would no longer catch the
     27KB-short error it was written for."""
-    MC_DMA_HI = 0x8000
+    MC_DMA_HI, MC_DMA_HEAD = 0x8000, 0x3FFF
     MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE
     live = sorted(c for c in cl
                   if not (MEM_PG_MIN <= (c[2] >> 8) <= MEM_PG_MAX))
     def ceilmover(c):
         return c[4] != 0 and (c[3] & MC_DMA_HI)
+    def head(c):
+        return c[3] & MC_DMA_HEAD
+    def landing(fill, c):
+        # SPEC.md 66.4.2, written again here from the spec: a head that would
+        # cross a 64KB page at the fill point goes to the next page's floor,
+        # or stays where it is if that is past its own base
+        h = head(c)
+        if not h or not ((fill ^ (fill + h - 1)) & 0xF000):
+            return fill
+        nxt = (fill & 0xF000) + 0x1000
+        return nxt if nxt <= c[0] else c[0]
     def newbase(c):
+        # ...and a ceiling mover with a head is charged the head as well: the
+        # descending pass bumps it DOWN by less than that (SPEC.md 66.4.3.1,
+        # KERN-MEGA-PLAN 14.185), so this is the most the run can occupy
         B = top
         for d in live:
             if d[0] > c[0] and not ceilmover(d) and d[0] < B:
                 B = d[0]
-        return B - sum(d[1] for d in live if ceilmover(d) and c[0] <= d[0] < B)
+        return B - sum(d[1] + head(d) for d in live
+                       if ceilmover(d) and c[0] <= d[0] < B)
     best, fill = 0, base
     for c in live:
         if c[4] != 0 and not (c[3] & MC_DMA_HI):
-            fill += c[1]                        # a bottom-up mover packs down
+            # a bottom-up mover packs down - where the run will put it, and
+            # the gap a page bump opens is not a run (the compactor's own
+            # walk does not count it, so mem_claim does not compact for it)
+            fill = landing(fill, c) + c[1]
             continue
         at = newbase(c) if ceilmover(c) else c[0]
         if at > fill:
             best = max(best, at - fill)
-        fill = at + c[1]
+        fill = at + c[1] + (head(c) if ceilmover(c) else 0)
     return max(best, top - fill if top > fill else 0)
 
 
@@ -234,7 +262,7 @@ def main():
                 if now is None:
                     return None
                 return bytes(m.read(LIN(m, now, u16(m.read(LIN(m, now, 8), 2))),
-                                    176))
+                                    HF_BSS))
             except Exception:
                 return None
         try:
@@ -260,7 +288,7 @@ def main():
 
         # its bss, at the offsets heapfrag.asm's own table declares
         img = u16(m.read(LIN(m, seg, 8), 2))       # +8 = image size (the header)
-        b = m.read(LIN(m, seg, img), 176)
+        b = m.read(LIN(m, seg, img), HF_BSS)
         n = u16(b, 0)
         res = b[128:128 + n]
         nmoved, nrel, nbad = u16(b, 20), u16(b, 16), u16(b, 18)
@@ -270,7 +298,40 @@ def main():
             print("   block %d  %04x -> %04x%s"
                   % (i, u16(b, 72 + i * 2), u16(b, 56 + i * 2),
                      "   (freed)" if u16(b, 56 + i * 2) == 0 else ""))
-        print("dma landed at page offset %d paragraphs" % u16(b, 114))
+        # check 14's fixture (heapfrag.asm, KERN-MEGA-PLAN 14.184): the
+        # block is claimed at D over a hole whose floor F no block over 4KB
+        # may start at, so its only legal landing is the next page's floor
+        why = b[184]
+        print("dma: %dKB, F=%04x D=%04x, claimed at D: %s, now %04x "
+              "(page offset %03xh), avail %dK pinned / %dK with it movable%s"
+              % (u16(b, 112), u16(b, 178), u16(b, 180),
+                 "yes" if u16(b, 108) == u16(b, 180) else "NO (%04x)" % u16(b, 108),
+                 u16(b, 182), u16(b, 114), u16(b, 174), u16(b, 176),
+                 "" if not why else "  - stopped at stage %d: %s"
+                 % (why, DMA_WHY.get(why, "?"))))
+        # ...AND mem_avail's ANSWER WITH THE BLOCK MOVABLE, CLAIMED (SPEC.md
+        # 66.4.3.1, KERN-MEGA-PLAN 14.185). heapfrag asks it and claims
+        # exactly that before check 14's own ask: until 14.185 the plan had
+        # no page bump and promised the block at F, and the claim was refused
+        # on both kernels - an over-report, the dangerous direction. GRANTED
+        # is the assertion; and with the compactor in, the answer must also
+        # see the move (more than the pinned answer), or a plan that pinned
+        # the block would pass it by under-reporting.
+        dmaap, dmaaw, dmaag = u16(b, 174), u16(b, 176), b[185]
+        dbad = 0
+        if dmaag == 0:
+            print("  14b mem_avail with the block movable: never asked "
+                  "(check 14 stopped first)")
+            dbad = 1
+        else:
+            granted = dmaag == 1
+            sees = dmaaw > dmaap or bool(expect_fail)
+            print("  14b mem_avail with the block movable %dK (pinned %dK): "
+                  "claim of it %s%s   %s"
+                  % (dmaaw, dmaap, "GRANTED" if granted else "REFUSED",
+                     "" if sees else ", and it does not see the move",
+                     "PASS" if granted and sees else "FAIL"))
+            dbad = not (granted and sees)
         print("L0=%dK S=%dK L1=%dK want=%dK  moved=%d told=%d stranger=%d"
               % (u16(b, 6), u16(b, 4), u16(b, 8), u16(b, 10),
                  nmoved, nrel, nbad))
@@ -353,7 +414,7 @@ def main():
                                     + os88geom.W_SEG, 2))
                     if sg:
                         now = sg
-                return now, m.read(LIN(m, now, img), 176)
+                return now, m.read(LIN(m, now, img), HF_BSS)
             try:                # ...on the GUEST's clock
                 os88marty.until(m, lambda _: u16(rbss()[1], 152)
                                 >= len(RLABELS),
@@ -408,7 +469,7 @@ def main():
             print("  PAINT never opened - the region rows cannot be asked")
             rbad += 1
 
-        bad = over + rbad
+        bad = over + rbad + dbad
         for i, r in enumerate(res):
             want_fail = i in expect_fail
             ok = (r != 0) if want_fail else (r == 0)

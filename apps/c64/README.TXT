@@ -35,20 +35,29 @@ distributes them.
 
 WHAT THIS MACHINE IS NOT
 ------------------------
-There is no 1541, no datasette and no cartridge port, so a LOAD from drive 8
-answers the way a C64 with nothing plugged into the serial port answers -
-which is the honest machine, not a defect. Typed at this machine, verbatim:
+There is no 1541, no datasette and no cartridge port. File > Attach disk
+image... puts a .D64 on drive 8, and the KERNAL's LOAD is served from it:
+LOAD"$",8 lists it, LOAD"NAME",8 and LOAD"*",8,1 load from it. That is not a
+real drive - a program with its own fast loader, or one that talks to the
+drive directly, finds nothing there. With no disk, drive 8 is the folder
+the C64 stands in: SAVE"NAME",8 writes NAME.PRG there, LOAD"NAME",8 reads
+it back and LOAD"$",8 lists the folder's .PRG files. SAVE goes to the
+folder even with a disk attached, and LOAD looks there for a name the disk
+has not got. Any other device answers as nothing on the serial port does:
 
-    LOAD"*",8
+    LOAD"*",9
 
     SEARCHING FOR *
     ?DEVICE NOT PRESENT  ERROR
     READY.
 
-Programs are loaded with File > Smart attach... from a .PRG file. The screen
-is monochrome on every adapter, VGA included, resolved from the C64's 16
-colours by luminance. Every menu item that cannot work in this build is
-present, greyed, and names the fact that greys it.
+Programs are loaded with File > Smart attach... from a .PRG file. On a VGA
+display, Preferences > Fullscreen (Alt+D) is the C64 in colour, 320x200 in
+VGA mode 13h; Alt+D again comes back. The WINDOW is monochrome on every
+adapter, VGA included, resolved from the C64's 16 colours by luminance: text crisply, bitmap and multicolour pictures as a
+dither, sprites lit or dark against the paper. A split screen is drawn split
+by character row. Sprites collide (Preferences > Sprite collisions) and can
+be behind the picture.
 
 COPY AND PASTE
 --------------

@@ -580,7 +580,7 @@ measured paragraph. What it learned that CWORD had not, one line each:
 
 `apps/apple2` is a 48K Apple II Plus (`docs/APPLE2-SPEC.md`), ported across
 seven waves by the skill this file belongs to;
-`docs/APPLE2-PORT-PLAN.md`'s "What shipped" carries each wave's measured
+`docs/plans/completed/APPLE2-PORT-PLAN.md`'s "What shipped" carries each wave's measured
 paragraph. What it learned that CWORD and RUNCPM had not, one line each:
 
 - **A CHARACTER CELL THAT IS NOT EIGHT PIXELS HAS NO CHEAP PATH ANYWHERE.**

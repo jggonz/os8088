@@ -2,8 +2,8 @@
 """SPEC.md 22.27: MULTI-SELECT in a Disk window, and the operations on a set.
 
 Driven on MartyPC in B:\\APPS and B:\\ (kern_big, the 360KB pair). Every
-selection check reads the window's OWN state block - FS_MSEL, the bitmap, and
-FS_SEL, the focus - and then the GLASS: which visible rows are inverted, so a
+selection check reads the window's OWN state - the bitmap at the head of its
+listing claim (SPEC.md 22.6.4), and FS_SEL, the focus - and then the GLASS: which visible rows are inverted, so a
 band left behind or drawn twice is caught as well as a wrong bit.
 
   1. a click selects one row; Ctrl+click adds a second, Ctrl+click on the first
@@ -41,9 +41,12 @@ import os88ui                                               # noqa: E402
 
 fails = []
 
-# kern_big's FS_MSEL; an MSELOFF kernel has none, and then the red run reads
-# whatever sits there - which is what makes it red
-FS_MSEL = os88sym.equates().get("FS_MSEL", 61)
+# THE BITMAP IS IN THE WINDOW'S LISTING CLAIM (SPEC.md 22.6.4): FM_MSELB
+# bytes at offset 0 of FS_VSEG, and the entries past it at FV_DOFF. An
+# MSELOFF kernel has none, and then the red run reads the first entry's name
+# bytes as bits - which is what makes it red
+_EQ = os88sym.equates()
+FV_DOFF = _EQ.get("FV_DOFF", 0)
 BUILD = os.environ.get("OS88_BUILD", "build")
 NAMEX = 120
 
@@ -59,7 +62,13 @@ def word(ui, blk, off):
 
 
 def bits(ui, blk):
-    b = ui.m.read(blk + FS_MSEL, 8)
+    vseg = word(ui, blk, geom.FS_VSEG)
+    if not vseg:
+        return []
+    # through the machine's own resolver: under kern_mega FS_VSEG is an LDT
+    # SELECTOR, and `vseg << 4` reads some unrelated paragraph there
+    lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
+    b = ui.m.read(lin(vseg, 0), 8)       # every row this test touches is < 64
     return sorted(i for i in range(64) if b[i >> 3] & (1 << (i & 7)))
 
 
@@ -196,8 +205,9 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     sizes = []
     for i, (nm, ty) in enumerate(rows[:fit]):
         if ty in (0, 1):
-            sz = int.from_bytes(m.read(lin(vseg, i * geom.DSK_DE_STRIDE
-                                           + 20), 4), "little")
+            sz = int.from_bytes(m.read(lin(vseg, FV_DOFF + i
+                                           * geom.DSK_DE_STRIDE + 20), 4),
+                                "little")
             sizes.append((sz, i, nm))
     sizes.sort()
     (_s1, i1, n1), (_s2, i2, n2) = sizes[0], sizes[1]

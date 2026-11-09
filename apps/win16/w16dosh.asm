@@ -49,10 +49,20 @@ w16dh_tab_done:
 ; -----------------------------------------------------------------------------
 w16dh_i21:
     push ax
+%ifdef PKG_MEGA                     ; the arm: through the block's data half
+    push ds                         ;   (the core's dos_csel), not a #GP the
+    mov ds, [cs:W16_DOSCSEL]        ;   kernel completes a store (KERN-MEGA-
+    mov ax, [W16DH_HSS]             ;   PLAN 14.164)
+    mov [dos_sv_ss], ax
+    mov ax, [W16DH_HSP]
+    mov [dos_dstk], ax
+    pop ds
+%else
     mov ax, [cs:W16DH_HSS]
     mov [cs:dos_sv_ss], ax
     mov ax, [cs:W16DH_HSP]
     mov [cs:dos_dstk], ax
+%endif
     pop ax
     jmp W16_DOSINT21
 
@@ -65,8 +75,17 @@ w16dh_i21:
 w16dh_init:
     push ds
     push ax
+%ifdef PKG_MEGA
+    mov ax, cs                      ; the arm: DS = the block's DATA half,
+    add ax, 8                       ;   w16_pcode's pair (SPEC.md 124.31.5) -
+    mov ds, ax                      ;   CS is read-only there - and the core's
+    mov [W16_DOSCSEL], ax           ;   gate is told it (DOS_PMGATE's dos_csel)
+    pop ax
+    push ax
+%else
     push cs
     pop ds
+%endif
     call dos_be_bind                ; the doors, as addresses
     mov byte [dos_onprog], 0        ; a call is never on the program's stack
     mov byte [dos_pvol], 0xFF       ; standing nowhere yet (SPEC.md 96.6.3)

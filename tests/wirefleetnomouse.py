@@ -44,7 +44,9 @@ def main():
     with os88ui.boot(artifact('os8088-360.img'), apps=artifact('wireflet360.img'),
                      machine='os8088_5150_cga_gla', quick=True) as ui:
         m = ui.m
-        w = ui.path('B:/WIREFLET.O88')
+        os88ui.keep_kbmouse(m)          # SPEC.md 9.6.7: the half survives the
+        w = ui.path('B:/WIREFLET.O88')  # mouse moving here, as on a machine
+                                        # whose mouse never spoke
         M.ui_passed(m)
 
         def val(name, n=1):

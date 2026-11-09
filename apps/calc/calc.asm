@@ -3169,13 +3169,13 @@ cal_ab4:      db 'Contributed by Elendilon', 0
 %endif
 
 cal_s_error:  db 'Error', 0
-cal_s_copied: db 'Copied', 0
+TOASTSTR cal_s_copied, 'Copied'
 %ifdef CALF_HIST                    ; the unary keys' history lines
 cal_s_sqrt:   db 'sqrt(', 0
 cal_s_rparen: db ')', 0
 cal_s_recip:  db '1/', 0
 %endif
-cal_s_nocopy: db 'Clipboard full', 0
+TOASTSTR cal_s_nocopy, 'Clipboard full'
 
 ; Twenty-six spaces and a NUL: the blank a history row past the end of the
 ; ring draws, and the blank the context field falls back to. One string for

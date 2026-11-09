@@ -434,9 +434,9 @@ pxf_getpal:
     rcr ax, 1
     loop .p
     add ax, 7                       ; ...up to a multiple of 8, px_htail's
-    and al, 0xF8                    ; layout - and a SEG_SUB there (MC7: the
-    mov dx, [bx + PXR_MSEG]         ; sum on a real-mode kernel)
-    PXSUB
+    PX_ADC                          ; layout - and a SEG_SUB there (MC7: the
+    and al, 0xF8                    ; sum on a real-mode kernel)
+    PX_TAILAT [bx + PXR_MSEG]
     mov ds, dx
     xor si, si
     mov di, pxf_cnt

@@ -238,13 +238,14 @@ clip_size:
 
 ; -----------------------------------------------------------------------------
 ; clip_drop - give the block back and forget it (module-internal)
-; in:  nothing; out: CF = 0 (every register preserved; the other flags are
-;      not - see the `ret` below, which is where the two call sites are
-;      audited)
+; in:  nothing; out: CF = 0 (every register preserved but BX; the other flags
+;      are not - see the `ret` below, which is where the two call sites are
+;      audited). BX is not banked: clip_put's first call loads BX itself next
+;      and its second (.empty) leaves through kret_bp, which pops it (kernel
+;      hot-paths pass 1, size: -2)
 ; -----------------------------------------------------------------------------
 clip_drop:
     push ax
-    push bx
     push dx
     mov dx, [clip_seg]          ; loaded ONCE and tested, where the old code
     or dx, dx                   ; compared the word in memory and then loaded
@@ -266,7 +267,6 @@ clip_drop:
                                 ; here, and `je .room` needs [clip_kb] == AL
                                 ; >= 1 which needs a live clip_seg
     pop dx
-    pop bx
     pop ax
     ret                         ; no pushf/popf: both call sites are in
                                 ; clip_put and neither reads the flags - the
@@ -309,10 +309,11 @@ clip_reloc:
                                 ; that
 %else
 clip_reloc  equ mem_rr_none
-    db 0                        ; PARITY PAD, never executed or read (kernel
-                                ; size pass 15): the five bytes that went
-                                ; leave ui_task, the one hot `.text` routine
-                                ; after this, at an odd shift otherwise
+                                ; (the PARITY PAD that stood here - a `db 0`,
+                                ; kernel size pass 15 - went in kernel size
+                                ; pass 18: wm_an_open's -8 and inst_park_req's
+                                ; -1 are that pass's kern_big-only bytes ahead
+                                ; of ui_task, an odd count this byte pairs)
 %endif
 %endif                          ; OS88_COMPACT
 

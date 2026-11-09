@@ -310,7 +310,10 @@ CT_W equ -18                        ; a WORD temporary (the branch's old PC)
 ; spent (negative by up to one instruction's cost), so the caller's
 ; `ran = cycles - cnt` is exact.
 ; =============================================================================
-_a2_run:
+%ifndef A2_FAST
+_a2_run:                            ; ...with the fast core, a2fast.inc's
+%endif                              ; _a2_run is the door and calls this one
+a2_arun:
     push bp
     mov bp, sp
     push si                         ; [bp-2]
@@ -414,11 +417,17 @@ a2_rebias_go:
     ; fetched through the ROM's bias.
     mov word [A2_SCR_BASE + A2_SCR_BLO], A2_ROM_BASE
     mov word [A2_SCR_BASE + A2_SCR_BOUND], 0xFFFF
+%ifdef A2_FAST
+    call a2_hbk                     ; PC has left $C000-$CFFF
+%endif
     ROMBIAS a2_rbm
 .low:
     mov word [A2_SCR_BASE + A2_SCR_BLO], 0
     mov word [A2_SCR_BASE + A2_SCR_BOUND], A2_IO_BASE
     mov es, [cs:_a2_m+AM_RAMSEG]
+%ifdef A2_FAST
+    call a2_hbk
+%endif
 .go:
     mov [A2_SCR_BASE + A2_SCR_FES], es
     mov dh, [es:si]
@@ -436,6 +445,24 @@ a2_rebias_go:
     pop bx
     inc si
     ret
+
+%ifdef A2_FAST
+; a2_hbk - THE FAST CORE'S REGION HAND-BACK ENDS HERE (APPLE2-SPEC section
+; 4.6): a2fast.inc runs this core with HBK set while PC is in $C000-$CFFF, and
+; the first re-bias OUT of that region ends the run - the countdown taken to
+; zero, what it held put in CARRY, a2_cut()'s own arithmetic - so the
+; instruction being fetched still runs and `ran = asked - cnt` stays exact.
+a2_hbk:
+    cmp byte [A2_SCR_BASE + 0x3A], 0
+    je .out
+    push bx
+    mov bx, [A2_SCR_BASE + A2_SCR_DEAD]
+    add [A2_SCR_BASE + A2_SCR_CARRY], bx
+    mov word [A2_SCR_BASE + A2_SCR_DEAD], 0
+    pop bx
+.out:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; THE EXITS
@@ -2212,6 +2239,9 @@ _a2_cut:
     inc bx
     add [A2_SCR_BASE + A2_SCR_CARRY], bx
     mov word [A2_SCR_BASE + A2_SCR_DEAD], -1
+%ifdef A2_FAST
+    mov byte [A2_SCR_BASE + 0x3B], 1    ; ...and the fast core's wrapper ends
+%endif                                  ; its loop too (a2fast.inc, CUTF)
     pop bx
     pop ds
     ret

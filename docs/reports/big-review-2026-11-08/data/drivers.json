@@ -1,0 +1,639 @@
+{
+ "area": "drivers",
+ "title": "Loadable drivers and the sound core",
+ "summary": "The driver layer is one of the most carefully built parts of the kernel. A header matches a package header, each class has its own publication slot, the service table is copied so IRQ0 reads it with no segment load, and a length byte makes short tables safe. The attach half and the SYSTEM.CFG parser live in images (the blob, CTRL.DRV, HIBER.DRV), so very little is resident, and each register and stamp rule came from a field bug. The weak point is LIFETIME. Nothing counts who is inside a driver, and one global worker count (drv_wcnt) stands in for per-driver worker counts. That was safe while SOUND.DRV was the only driver with a worker. USBMOUSE.DRV now keeps a worker for its whole life, so unloading any other driver stalls about 5 s and then leaves that driver detached but still published (drivers-1). Three smaller defects: OSAPI_DRV_CLASSK reports a driver loaded into the HMA as not loaded on kern_big (drivers-3); snd_release_inst calls into SOUND.DRV with interrupts off, and that teardown makes kernel calls and, in high-speed mode, DSP resets (drivers-4); and the kernel never checks that a detached driver unhooked its IRQ vectors (drivers-6). The documentation debt is heavy: snd.inc's banner still describes a speaker-only kernel, and over thirty comment, SDK and SPEC lines describe retired designs (all confirmed; the fixes are below). The systemic lessons from the peers are reference counting (GEOS, AmigaOS, MMSYSTEM) and a kernel-owned IRQ registry (OS/2 DevHlp_SetIRQ, Amiga resources). Both are cheap. The flag-day size win is a common-prefix service table (about -98 bytes of resident .bss), to batch with D1.",
+ "strengths": [
+  {
+   "title": "Per-class copied service table, read by IRQ0 with no segment load",
+   "evidence": "kernel/driver.inc:4040-4126 (%1_publish), :6173 (drv_svc); kernel/snd.inc:441-443 (snd_tick)",
+   "why": "The ISR decides whether it has work with one near compare: no mov es, no far-pointer load. This is the model to copy wherever an ISR reads state owned by a loadable image."
+  },
+  {
+   "title": "The service table carries its own length (DRV_H_DSV at +15, DRV_H_FSV at +10), and cells past it read as 0",
+   "evidence": "kernel/driver.inc:4060-4107, :2968-3003 (drv_fs_has)",
+   "why": "Like Win32's cbSize: the table can grow in either direction without a DRV_VER bump, and a missing cell is refused by the or bp,bp test every consumer already makes, so it is never far-called."
+  },
+  {
+   "title": "The dispatcher consumes no general register; the segment travels on the stack",
+   "evidence": "kernel/driver.inc:2495-2519 (drv_stamped), :2537-2570 (drv_svc_call_x)",
+   "why": "It is re-entrant per task, and the stamp is restored after pop ds (51.2.4). Each of these rules came from a field bug and they are correct."
+  },
+  {
+   "title": "drv_call refuses a stray or unloaded row before it trusts DS",
+   "evidence": "kernel/driver.inc:2399-2470",
+   "why": "A bad BX or an unloaded row gets CF=1, AX=0, the same answer every other door gives, instead of a far call into zeros."
+  },
+  {
+   "title": "The attach half and the settings parser are not resident",
+   "evidence": "kernel/driver.inc:3790-4135 (DRV_ATTACH), :4789-5368 (CFG_* macros)",
+   "why": "One macro, expanded in each image that needs it. It is DOS's discard-INIT idea applied to the kernel's own driver code, and resident memory pays only for load, check and release."
+  },
+  {
+   "title": "DRV_H_KEEP is DOS's INIT break address, on a header word that must already be zero",
+   "evidence": "kernel/driver.inc:3834-3859",
+   "why": "An old driver or an old kernel cannot trigger it by accident, and it costs no resident byte."
+  },
+  {
+   "title": "Attach is separate from READY: no fence answers during attach",
+   "evidence": "SPEC.md 51.2.2; kernel/driver.inc:3863-3880",
+   "why": "A refused attach cannot leave behind a worker or a volume. Among the peers, only GEOS and OS/2 draw this line as cleanly."
+  },
+  {
+   "title": "Load failures are banked in the row and reported after the first paint",
+   "evidence": "kernel/driver.inc:5784-5993 (drv_boot_x), :6074 (drv_notice_x)",
+   "why": "The boot never stops on a driver, and the boot notice and the row's caption come from one string source."
+  },
+  {
+   "title": "The kernel relocates driver images; drivers declare nothing",
+   "evidence": "kernel/driver.inc:3533-3549 (mem_movable_x with mem_region_reloc)",
+   "why": "Classic Mac OS needed dNeedLock and handles for this. Here the kernel owns every word that names an image, which is more robust."
+  },
+  {
+   "title": "SYSTEM.CFG is a list of keyed records with a version per key, and the reader is bounded",
+   "evidence": "kernel/driver.inc:690-860, :5060-5135 (_deser)",
+   "why": "If a key's meaning changes, old records stop matching instead of being misread. A truncated or hostile file costs only the settings it did not carry."
+  },
+  {
+   "title": "The tone router's grant, steal and release each happen in one cli window, behind a boot gate",
+   "evidence": "kernel/snd.inc:290-346 (snd_tone_req), :26-36",
+   "why": "A tick can never retire a newer owner's tone, and nothing reads .bss before snd_init has written it."
+  },
+  {
+   "title": "OSAPI_DRV_CALL's fence is a published cell (DSV_PKGCALL)",
+   "evidence": "kernel/driver.inc:6575-6609",
+   "why": "A package can reach HDD.DRV's two door verbs but never its DSV_BLK sector transport."
+  }
+ ],
+ "findings": [
+  {
+   "id": "drivers-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "One global drv_wcnt makes every driver's unload wait on every driver's workers",
+   "detail": "drv_wcnt is a single byte. drv_unload_x sends DETACH and waits up to 91 ticks for drv_wcnt to reach 0. On timeout it jumps to .out and skips drv_release, so the row stays loaded, its image stays claimed and its class stays PUBLISHED, although the driver is already detached. USBMOUSE.DRV spawns a worker at READY that lives as long as the driver. With it loaded: (1) unticking any other attached driver stalls the click about 5 s and leaves a detached-but-published driver, so snd_tick still far-calls a detached SOUND.DRV's DSV_TICK; (2) ctrl.inc then sets WANT=0 and ERR=OK whatever happened, so the page shows a loaded row unticked; (3) clicking the row again sends a SECOND DETACH, and a driver that restores saved vectors restores stale ones; (4) drv_shutdown unloads rows in order, so every attached row before the USB mouse's (rows 0-4 on kern_big) waits the full 5 s at reboot. The global count also pins every driver image and every MC_DMA head for the compactor. NO-PINNING-PLAN K1b deferred the per-row count until a second driver spawns a worker, and one now does.",
+   "evidence": [
+    "kernel/driver.inc:6139 drv_wcnt resb 1",
+    "kernel/driver.inc:4171-4189 wait loop; jmp short .out skips drv_release",
+    "kernel/driver.inc:4599/4616/4624 global inc/dec",
+    "drivers/usbmouse/usbmouse.asm:139-149 worker spawned at READY; :162-167 detach only raises the stop byte",
+    "kernel/ctrl.inc:7140-7146 .off clears WANT/ERR after the unload regardless of outcome",
+    "kernel/driver.inc:4208-4222 drv_shutdown walks every row",
+    "kernel/memory.inc:2127 any drv_wcnt pins every driver image",
+    "docs/plans/NO-PINNING-PLAN.md:177 K1b deferred on 'only SOUND.DRV spawns'"
+   ],
+   "recommendation": "Count workers per drv_tab row: a DRV_MAX-byte table in .bss. At spawn, drv_pub_seg already has the segment and drv_row_ix_of turns it into a row; exit already calls drv_owns_seg_x. drv_unload_x and memory.inc's image pin test the row's byte. On timeout, also clear the class's publication so a detached driver is never dispatched. Keep or delete the global count for the MC_DMA pin per K1a.",
+   "phase": "now",
+   "bytes_est": "+~25 .cold, +DRV_MAX (11 on kern_big) .bss resident",
+   "listed_as": "NO-PINNING-PLAN.md K1b (deferred; its precondition 'a second driver spawns' is now met)",
+   "prior_art": "GEOS counts per geode and AmigaOS per device; neither counts workers globally.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read drv_unload_x (driver.inc:4154-4192): the 91-tick wait tests the global byte and a timeout skips drv_release. um_ready (usbmouse.asm:139-149) spawns at READY and um_detach only bumps um_stop, so its worker outlives every other row's DETACH wait. ctrl.inc:7140-7146 jumps to .off after drv_unload_x unconditionally. usbm_row is row 5 on kern_big, after rows 0-4, so drv_shutdown's in-order walk pays the wait for each attached earlier row. memory.inc:2127 pins every image on any non-zero count. Not fixed; K1b's deferral reason is stale."
+  },
+  {
+   "id": "drivers-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "A driver can be unloaded while another task is inside it, or about to enter it",
+   "detail": "drv_pkg_call_x is documented as worker-safe, and stream verbs 1/3/5/6/7 are any-task. drv_svc_call_x tests [drv_fseg] and then loads it with no IF=0 window between. A UI task that runs drv_release between those two instructions sends the worker to a far call through segment 0. More likely, a package worker is preempted inside a socket or stream verb while the user unticks the driver: DETACH and the free then run under the worker's CS. The nest frames already count non-UI calls into images (wm_tcnt, under OS88_COMPACT, which kern_big has), but drv_unload_x never looks at them.",
+   "evidence": [
+    "kernel/driver.inc:6619-6631 drv_pkg_call_x is 'legal from a worker'",
+    "apps/os88api.inc:567-579 stream verbs any-task",
+    "kernel/driver.inc:2537-2543 test-then-load of [drv_fseg]",
+    "kernel/wm.inc:11737-11771 wm_tcnt counts other tasks' in-calls",
+    "kernel/driver.inc:4154-4192 drv_unload_x checks only drv_wcnt"
+   ],
+   "recommendation": "Before DETACH, wait (bounded) for [wm_tcnt]==0, and refuse the unload with DRVE_BUSY if it does not drain. The exact form is a per-image entry count (about 15 bytes a site per HEAP-UNPIN-PLAN). The coarse wm_tcnt form is cheap and safe.",
+   "phase": "now",
+   "bytes_est": "+~12 .cold (coarse form)",
+   "listed_as": "",
+   "prior_art": "GEOS GeodeUseDriver/GeodeFreeDriver, AmigaOS OpenDevice/CloseDevice with Expunge only at a zero count, and Windows 3.1 MMSYSTEM DRV_OPEN/DRV_CLOSE all reference-count. os8088 has no open count at all.",
+   "verdict": "confirmed",
+   "verify_note": "drv_svc_call_x (driver.inc:2537-2555) is cmp [drv_fseg],0 / ... / mov ds,[es:drv_fseg] / call far [es:drv_fptr] with no cli; drv_pkg_call_x's own comment says the cell takes no lock and is legal from a worker. wm_nest_pushd counts another task's in-call in wm_tcnt (wm.inc:11744-11755) and instance.inc:701 already uses it as a pin, but drv_unload_x does not. A race, not reproduced."
+  },
+  {
+   "id": "drivers-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "OSAPI_DRV_CLASSK reports a driver in the HMA as not loaded on kern_big",
+   "detail": "With HMA_DRV (defined on kern_big whenever ROM_COLD is, which is the default) and .cold actually placed in the HMA by COLDHMA.SYS on a 286+, %1_hma moves SOUND.DRV, HDD.DRV or NET.DRV into the HMA pool and zeroes DRVR_PARA. The non-mega arm of the slot derives 'loaded' from the KB figure (cmp ax,1). An HMA driver with no heap claim sums to 63 paragraphs, which is 0 KB, so CF=1: 'nothing of that class is loaded'. HDD.DRV claims nothing while it works, and an idle sound card holds only its image. Consequences: INSTALL's in_todrive takes DRVU_UP, which reads CTRL.DRV off the floppy, for a driver that is already up; DOS's Memory page greys the Sound or Hard-drive box. kern_mega had exactly this bug and fixed it by counting rows (KERN-MEGA-PLAN 14.88); kern_big never got the fix.",
+   "evidence": [
+    "kernel/driver.inc:3941 and word [bx+DRVR_PARA], 0 (HMA placement)",
+    "kernel/driver.inc:2216 cmp ax, 1 predicate on non-mega",
+    "kernel/driver.inc:2206-2214 kern_mega's row-count fix and its reason",
+    "kernel/kernel.asm:1121-1123, 1167-1175 ROM_COLD default, HMA_DRV on kern_big",
+    "Makefile:4546 HMADRV := sound hdd net",
+    "apps/install/install.asm:1605 in_todrive, :1443 in_netmount",
+    "apps/dos/dosset.inc:589-641 greying from CF"
+   ],
+   "recommendation": "Use the row count (inc cx / cmp cx,1) on every OS88_DRIVERS build, not only kern_mega. Then fix SPEC 51.12.3's predicate sentences and the slot header's 'drv_load writes DRVR_SEG and DRVR_PARA together' (both describe the arm being fixed, so they are left for the fix, not the doc pass).",
+   "phase": "now",
+   "bytes_est": "+5 .cold on kern_big/kern_emu",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "osapi_drv_classk_x (driver.inc:2171-2223): add ax,63 then mem_owned_kba sums paragraphs before one shift (memory.inc:5063-5076), so DRVR_PARA 0 with no owned claim yields AX=0 and cmp ax,1 sets CF. %1_hma zeroes DRVR_PARA (:3941). Only on a machine where api_coldseg is HMA_SEG and ROMF_HPLACE succeeds."
+  },
+  {
+   "id": "drivers-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "snd_release_inst calls DSV_RELINST at IF=0 into code that makes kernel calls",
+   "detail": "snd_release_inst opens pushf/cli and calls drv_svc_call(DSV_RELINST) inside that window. SOUND.DRV's snd_release_both reaches sbl_release_inst, then sbl_stop_stream (whose sbl_unpin is OSAPI_MEM_MOVABLE or a free) and sbl_pool_put (OSAPI_MEM_FREE). In high-speed mode sbl_stop_stream also runs up to two DSP resets bounded at SBL_POLLS (4,096 ISA reads) each. The driver's own comment says sbl_unpin runs 'Outside every cli window: both are kernel calls'. A teardown that held a stream therefore runs its whole teardown with interrupts off - normally well under a millisecond, but up to several ms on a high-speed DSP that is slow to reset, long enough to overrun a serial mouse byte. fsx.inc's bracket entry calls the same routine once per other live instance.",
+   "evidence": [
+    "kernel/snd.inc:478-497 pushf/cli then drv_svc_call DSV_RELINST",
+    "kernel/instance.inc:860-864 and kernel/fsx.inc:399 callers",
+    "drivers/sound/sound.asm:1214-1224 snd_release_both",
+    "drivers/sound/sb.inc:2597-2622, 1897-1955, 1966 'Outside every cli window', 3001-3023",
+    "drivers/sound/sb.inc:205 SBL_POLLS 4096"
+   ],
+   "recommendation": "Move the OS88_DRIVERS block above the pushf/cli. drv_svc_call already refuses when nothing is published, and drv_fseg is .text initialised to 0, so no snd_live gate is needed. Only the speaker half needs the window (SPEC 34.3).",
+   "phase": "now",
+   "bytes_est": "0 (reorder)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Read snd.inc:478-510: the drv_svc_call sits between cli and popf. sbl_stop_stream (sb.inc:1897-1955) restores flags with popf after its own window, which returns to the CALLER's IF=0, then calls sbl_unpin and, high-speed only, sbl_f_reset twice. sbl_pool_put calls OSAPI_MEM_FREE. The reviewer's 'tens of milliseconds' is a worst case of the poll bound; corrected to 'several ms' in the detail."
+  },
+  {
+   "id": "drivers-5",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "'PRESERVE BX' is a driver rule the kernel could enforce at almost no resident cost",
+   "detail": "%1_att reads the row through BX right after its ATTACH and READY calls, and drv_call saves nothing. USBMOUSE.DRV was already bitten: an attach that spent BL wrote DRVE_BUSY through a garbage row pointer. drv_cp_closed's THMPAL leg (drv_call_ent, then drv_release with BX) and drv_unload_x (drv_call_ent, then drv_release on the post-call BX after the wait) rely on the same rule; blank.inc's ss_call banks BX itself.",
+   "evidence": [
+    "SPEC.md 51.2 'PRESERVE BX: drv_attach reads the row through it on return'",
+    "kernel/driver.inc:3834, 3878 BX used after the driver call",
+    "kernel/driver.inc:4130-4134 %1_call saves nothing",
+    "kernel/driver.inc:4168-4190 drv_unload_x uses BX after drv_call_ent",
+    "drivers/usbmouse/usbmouse.asm:115-123 the earlier failure",
+    "kernel/driver.inc:3094-3097 thmv leg"
+   ],
+   "recommendation": "Add push bx/pop bx in %1_call (expanded in three images) and in the two .cold drv_call_ent sites (or once in drv_call_ent), and delete the rule from the driver contract. The boot blob is noted at %1_att as 'full to the byte', so its +2 must be found there.",
+   "phase": "now",
+   "bytes_est": "+2 in each of the blob/CTRL.DRV/HIBER.DRV, +~2-4 .cold resident",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "drv_call (driver.inc:2399-2470) and drv_stamped preserve no BX, confirmed. Corrected: the reviewer missed drv_unload_x as a third relying site, the .cold sites are resident (so not '0 resident'), and the blob is documented as full to the byte (driver.inc:3846-3848). Severity lowered to low: a weakness with one past incident, already guarded by usbmouse's discipline."
+  },
+  {
+   "id": "drivers-6",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "A driver image is freed with no check that its IRQ vectors were unhooked",
+   "detail": "The contracts 'a refusing attach hooks nothing' and 'detach unhooks everything' are trusted, never verified. drv_release frees the image even if IRQ vector 08h-0Fh or 70h-77h still names its segment, and the next claim in that memory then runs as an ISR. No kernel registry of IRQ or port ownership exists, so each driver works out DRVE_BUSY for itself; EMS.DRV, for example, asks OSAPI_DRV_CLASSK whether the USB mouse is up before it probes 260h.",
+   "evidence": [
+    "kernel/driver.inc:4232-4351 drv_release frees with no IVT check",
+    "kernel/driver.inc:4410-4455 drv_hi_ivt already scans the 16 IRQ vectors (kern_mega)",
+    "drivers/os88drv.inc:44-53 the attach/detach contract",
+    "drivers/ems/ems.asm:97-100 ad hoc conflict avoidance"
+   ],
+   "recommendation": "Now: after DETACH or a refused ATTACH, scan the 16 hardware vectors for the image segment. If any matches, leave the image claimed (a leak, not a crash) and bank a code. Flag day: an OSAPI_DRV_IRQ set/unset cell, so the kernel owns the IVT entries, refuses a line already held, force-unhooks at release, and needs no IVT scan to move an image. It is the same contract ABI-BREAK-LIST L3 wants for kern_mega.",
+   "phase": "now",
+   "bytes_est": "+~25 .cold now; the registry cell about +60 resident at a flag day",
+   "listed_as": "ABI-BREAK-LIST L3 (the IRQ-hook-through-a-cell half, kern_mega only)",
+   "prior_art": "OS/2 1.x DevHlp_SetIRQ/UnSetIRQ with sharing, Windows 3.x VPICD, AmigaOS cia.resource and misc.resource.",
+   "verdict": "confirmed",
+   "verify_note": "drv_release has no IVT test; drv_hi_ivt (kern_mega arm) is the existing 16-vector scan shape the recommendation can reuse. L3 is the kern_mega half only, as stated."
+  },
+  {
+   "id": "drivers-7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "drv_vol_bank keeps one static pair, and the bracket is known to nest",
+   "detail": "drv_vol_bank stores one cwd/drive pair on the rule that no two brackets nest. deskmod.inc already works around a case where they do by pushing the outer pair by hand. Any path from inside drv_load_at's bracket to mod_need or to desksc's bracket would leave the machine on the system volume instead of where the user was.",
+   "evidence": [
+    "kernel/drvvol.inc:135-182 drv_vol_bank/drv_vol_back static drv_vol_cwd/drv_vol_drv",
+    "kernel/deskmod.inc:79-100 the nesting workaround",
+    "kernel/driver.inc:3446 drv_load_at's bracket"
+   ],
+   "recommendation": "Make the bank push the pair onto the caller's stack and the back pop it (the kentc idiom), and drop deskmod's workaround.",
+   "phase": "now",
+   "bytes_est": "~0 resident, -~14 in deskmod (unpriced)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "drvvol.inc:181-182 is the single static pair; desk_need saves and restores it around mod_need by hand. Whether a driver bracket can reach another bracket is open (latent, not shown live)."
+  },
+  {
+   "id": "drivers-8",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "kern_mega's drv_fs_hi wraps its buffer offset at 64KB with no selector step",
+   "detail": "add [dfh_buf], cx advances a 16-bit offset inside one pool selector. An FSV_READ whose 32-bit capacity DI:CX runs past the selector's 64KB wraps and overwrites the start of the buffer. Unverified: it depends on a caller passing a selector buffer larger than 64KB.",
+   "evidence": [
+    "kernel/driver.inc:2687-2817 drv_fs_hi; :2786 add [dfh_buf], cx"
+   ],
+   "recommendation": "Clamp the capacity to 10000h - BX on entry, or pin the caller rule in SPEC 62.9.2.4.",
+   "phase": "record",
+   "bytes_est": "+~8 on kern_mega only",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "drv_fs_hi takes DI:CX as a 32-bit remaining count (:2711-2713) and advances [dfh_buf] with a plain 16-bit add; no step or clamp. Whether any caller passes >64KB is unverified, so it stays a record item."
+  },
+  {
+   "id": "drivers-9",
+   "kind": "size",
+   "severity": "medium",
+   "title": "Seven sound-only DSV cells are copied for every class; BLK and FS could share a cell",
+   "detail": "drv_svc is 7 copies of 36 bytes (252 bytes .bss). FM, STREAM, TICK, RELINST, NAME, TONE and TIERS (14 bytes) are read only for class 1. DSV_BLK (disk only) and DSV_FS (file classes only) are never both published. Reorder DSV_* so the common cells come first: CAPS (HDD.DRV uses it for BLKCAP_SEL), BLK/FS, the seven CP cells and PKGCALL, 20 bytes. Sound's extras follow. Class 1's copy is then 34 bytes and the other six 20. drv_svcix already holds per-class offsets, so only its values change, and %1_publish clamps the copy to the slot's length.",
+   "evidence": [
+    "kernel/driver.inc:6173 drv_svc resb DSV_SIZE*(DRVC_MAX-3)",
+    "kernel/driver.inc:1335-1348 drv_svcix",
+    "kernel/driver.inc:468-557 DSV_* layout",
+    "drivers/hdd/hdd.asm:1542-1573, drivers/ether/ethdrv.inc:32-58 non-sound tables full of sound zeros"
+   ],
+   "recommendation": "At the next DRV_VER bump, renumber DSV_* with the common prefix first and batch it with D1's DRVC renumber, which touches the same drv_svcix.",
+   "phase": "flagday",
+   "bytes_est": "-~98 .bss resident, +~6 in each of the three images that expand %1_publish",
+   "listed_as": "related to ABI-BREAK-LIST D1 (which prices only the index)",
+   "verdict": "confirmed",
+   "verify_note": "DSV_SIZE 36, DRVC_MAX 10, so 7 copies = 252 bytes. Sound-only cells at 2..14 are 14 bytes; the common set is 20 bytes; 34 + 6x20 = 154, saving 98. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE (D1 and D2 touch drv_svcix but not the cell layout)."
+  },
+  {
+   "id": "drivers-10",
+   "kind": "size",
+   "severity": "low",
+   "title": "Driver file names are resident although every class-row loader is an image",
+   "detail": "The .DRV names (about 100 bytes of .text) are read only by drv_load_at, and every caller that loads a class row is an image: the blob, CTRL.DRV or HIBER.DRV. Kernel size pass 14 already moved the titles out the same way.",
+   "evidence": [
+    "kernel/driver.inc:1179-1226 drv_f_* strings",
+    "kernel/driver.inc:1172-1176 DRV_TITLES precedent",
+    "kernel/driver.inc:3486 mov si, [bx+DRVR_FILE] / drv_find reads through DS"
+   ],
+   "recommendation": "Make DRVR_FILE an offset into an image-expanded DRV_FILES table, and have the caller stage the name into cp_sbuf (the CFGN_STAGE idiom). The overlay rows keep their own names.",
+   "phase": "now",
+   "bytes_est": "-~95 .text resident, +~100 in each of the blob/CTRL.DRV/HIBER.DRV",
+   "listed_as": "",
+   "verdict": "unchecked",
+   "verify_note": "Not verified beyond the string block: drv_load_at is also reached from blank.inc:683 and xmem.inc:285 for overlay rows, and the name block interleaves fdlg_s_drive and shares PCIETHER's tail with ETHER, so the saving needs pricing."
+  },
+  {
+   "id": "drivers-11",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Dead %else arms and kern_small prose inside the OS88_DRIVERS gate",
+   "detail": "OS88_DRIVERS implies KERN_BIG, which implies DRV_PCIETH. So drv_cls_svc_x's %else (a retired compacted-index scheme), DRV_CALLMAX's %else, drv_load_at's DRVE_TWICE arm and the nested KERN_BIG/OS88_DRIVERS tests never assemble on any build. CFG_DATA's and CFG_NB's kern_small arms are expanded only inside the gate, and the DRV_MAX=4 essay describes a kern_small SYSTEM.CFG bit layout for a kernel that reads no SYSTEM.CFG.",
+   "evidence": [
+    "kernel/driver.inc:1941-1954",
+    "kernel/driver.inc:1635-1637",
+    "kernel/driver.inc:3458-3462",
+    "kernel/driver.inc:1189,1205,1326,1441,1549,3567,3588",
+    "kernel/driver.inc:867-875, 1025-1031, 119-138",
+    "kernel/driver.inc:5394, 6255 the only CFG_DATA expansions"
+   ],
+   "recommendation": "Delete the dead arms and their prose (the prose is corrected in this pass's doc fixes; the arms are a code change for the 'now' phase).",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:979-981 defines OS88_DRIVERS only under KERN_BIG; driver.inc:44-46 defines DRV_PCIETH under KERN_BIG. A nesting walk puts 1941 inside two OS88_DRIVERS blocks, 1635 inside OS88_DRIVERS+KERN_BIG's %else, 3460 inside OS88_DRIVERS+DRV_PCIETH's %else; CFG_DATA expands only at 5394 and 6255, both inside the block opened at 3398."
+  },
+  {
+   "id": "drivers-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "drv_boot_x writes CH and nothing reads it",
+   "detail": "xor ch,ch and mov ch,1 have no reader; every walk uses CL or CX. drv_boot_want's '(CH is 0 in each)' is also false after a successful settings read, as are the 'the one CH carries' and 'CH is the loop's' remarks near them.",
+   "evidence": [
+    "kernel/driver.inc:5799, 5820",
+    "kernel/driver.inc:5812, 5837, 5994"
+   ],
+   "recommendation": "Delete both stores and the comments.",
+   "phase": "now",
+   "bytes_est": "-4 .boot2 (transient)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "grep of drv_boot_x's extent finds CH written at 5799 and 5820 and never read; the count and load walks use CL, the third walk xor cx,cx / inc cx."
+  },
+  {
+   "id": "drivers-13",
+   "kind": "perf",
+   "severity": "low",
+   "title": "Every sound dispatch pays a .text-to-.cold far hop",
+   "detail": "The FM/stream/tone path is: X stub, osapi_snd_fm, snd_req_inst, the .text thunk far into .cold, drv_svc_call_x, wm_nest_pushd, the far call, PKG_DISP's call bp, the driver, wm_nest_pop. Estimated (not measured) at about 300 cycles (about 65 us at 4.77 MHz) per verb, about 4% of an XT for 9-voice note traffic at 30 Hz. DSV_TICK takes the same thunk 18.2 times a second inside IRQ0. drv_svc_call_x is about 40 bytes and could live in .text, which drops one far call and retf (about 50 cycles).",
+   "evidence": [
+    "kernel/kernel.asm:8311-8312 drv_svc_call thunk",
+    "kernel/driver.inc:2537-2570",
+    "kernel/snd.inc:748-759, 441-443"
+   ],
+   "recommendation": "Measure with a counter first (PERFORMANCE.md rule 4). If the figure holds, move drv_svc_call_x to .text and delete the thunk.",
+   "phase": "now",
+   "bytes_est": "-~4 resident, KERN_CODE_MAX +~36",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The thunk exists (kernel.asm:8311) and its own comment prices the far call at ~6 us; the 300-cycle total is the reviewer's estimate and must be measured before acting."
+  },
+  {
+   "id": "drivers-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "OSAPI_FSX_SPK skips the 34.9 stream interlock that its close announces",
+   "detail": "osapi_snd_play asks snd_str_busy with DL=1 before it takes channel 2. osapi_fsx_spk's open does not ask, yet its close (through spk_pcm_idle) tells the driver DL=0. A PCM_BG stream that is already playing is not refused at the bracket's open.",
+   "evidence": [
+    "kernel/snd.inc:933-936",
+    "kernel/snd.inc:1082-1120",
+    "kernel/snd.inc:262-266"
+   ],
+   "recommendation": "Either ask at the open, or state in SPEC 34.11 that the bracket coexists with a stream.",
+   "phase": "now",
+   "bytes_est": "+~8 .text or 0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "osapi_snd_play calls snd_str_busy DL=1 (snd.inc:934-935); osapi_fsx_spk's .open tests sch_fast and snd_pcm_busy only (:1100-1108); spk_pcm_idle calls snd_str_busy DL=0 (:262-265)."
+  },
+  {
+   "id": "drivers-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "A class is both a service type and a single slot, so drivers of one type are mutually exclusive",
+   "detail": "One publication slot per class means one driver per class. File redirection has used up four class numbers (5, 8, 9, 10), each an ABI constant plus a 36-byte drv_svc copy and fptr/owner words resident. ETHER.DRV and PCIETHER.DRV exclude each other (DRVE_CLASS). Volumes already record their class (DV_CLASS). A table of N attached-driver slots, each tagged with a type, would let file drivers coexist with no new constants: volumes would record a slot, and packages would ask for the first slot of a type.",
+   "evidence": [
+    "kernel/driver.inc:147-221 class list",
+    "kernel/driver.inc:3449-3479 one-per-class refusal",
+    "SPEC.md 51.2.1"
+   ],
+   "recommendation": "At the flag day, together with D1 and drivers-9, replace the classes with typed slots.",
+   "phase": "flagday",
+   "bytes_est": "~0 to -40 resident (drv_svcix goes; the arrays are sized by slot count)",
+   "listed_as": "related to ABI-BREAK-LIST D1",
+   "prior_art": "MMSYSTEM device IDs (waveOutGetNumDevs), the Mac Device Manager unit table and the DOS device chain all allow many devices of one type.",
+   "verdict": "confirmed",
+   "verify_note": "drv_load_at (driver.inc:3449-3462) refuses a second row of an owned class; the comment itself names per-volume class resolution as the coexistence route. Design rethink, not a defect."
+  },
+  {
+   "id": "drivers-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The private ABIs (VX/XM/HD) are versioned by hand and are not covered by the ABI lock",
+   "detail": "vxabi.inc exports pointers into kernel state and says 'bump on ANY change'. Nothing fails the build if it changes without a bump. tools/abi.lock.json fingerprints only PKG_FMT and DRV_VER. XMEM's ABI is a pair of mirrors that t_mirror guards for numbers only, whereas vxabi.inc is shared source for both sides, which is the better shape. (t_install checks that HDDTOOL.DRV's header carries HD_ABI_VER, not that a change bumped it.)",
+   "evidence": [
+    "kernel/vxabi.inc:14",
+    "tools/abi.lock.json keys DRV_VER, PKG_FMT",
+    "kernel/xmem.inc:63-97 vs drivers/xmem/xmem.asm:110-143",
+    "tests/unit/t_install.py:100-106"
+   ],
+   "recommendation": "Fingerprint vxabi.inc and the XMEM and HDD ABI blocks in tools/abilock.py against VX_ABI_VER, XM_ABI_VER and HD_ABI_VER, and move XMEM's ABI to a shared include.",
+   "phase": "now",
+   "bytes_est": "0 (host tool)",
+   "listed_as": "ABI-BREAK-LIST P2 (recorded as 'moves freely'; this adds a check that a move bumps the version)",
+   "verdict": "confirmed",
+   "verify_note": "abi.lock.json has keys DRV_VER, PKG_FMT, _, history only; no tool fingerprints VX_ABI_VER/XM_ABI_VER/HD_ABI_VER."
+  },
+  {
+   "id": "drivers-17",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "SYSTEM.CFG drops records it does not know at every save",
+   "detail": "Rule 1 loses newer settings whenever a disk alternates between an older and a newer kernel (an update, live media against a floppy), and also between kern_emu and kern_big for keys only one of them has. Windows INI files and Mac preference resources keep keys they do not understand.",
+   "evidence": [
+    "kernel/driver.inc:704-710 rule 1",
+    "kernel/driver.inc:5216-5276 cpc_ser writes the table only"
+   ],
+   "recommendation": "Record. A copy-through of unknown records in cpc_ser would need the old file re-read at save.",
+   "phase": "record",
+   "bytes_est": "+~40 CTRL.DRV, 0 resident",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Rule 1's drop is stated in the CFG_DATA comments (driver.inc:1029-1031 'an unknown key is DROPPED rather than carried (SPEC.md 51.5 rule 1)'); deliberate, so record-only is right."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; exclusive clips), snd_tick (the one scheduler touch-point), and the three\n; os8088 API slot targets - caps, tone, play.",
+   "new_text": "; exclusive clips), snd_tick (the one scheduler touch-point), and the os8088\n; API slot targets - caps, tone, play, FM and stream (SOUND.DRV's, reached\n; through drv_svc) and the bracket's OSAPI_FSX_SPK.",
+   "why": "snd.inc holds osapi_snd_fm (:748), the stream body (:785) and osapi_fsx_spk (:1082) as well as caps/tone/play."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; THE PC SPEAKER IS THE ONLY SINK. The Sound Blaster and OPL2 drivers, the\n; driver table that chose between them, the per-tier route overrides and the\n; Control Panel page that set them are all gone, and with them the 64KB\n; SND_SEG they needed for DMA buffers, a record ring and a staging pool. What\n; is left needs no buffer at all: osapi_snd_play takes the caller's ES:SI and\n; paces it out of the caller's own memory, which is the shape a future\n; play-a-WAV package wants - the samples are the app's problem, not the\n; kernel's.",
+   "new_text": "; THE PC SPEAKER IS THE ONLY RESIDENT SINK. The card tiers - OPL2, Sound\n; Blaster, MPU-401, Covox - are SOUND.DRV's (SPEC.md 34, 51), and with them\n; went the 64KB SND_SEG the resident cards needed for DMA buffers, a record\n; ring and a staging pool. What stays resident is the tone router, the\n; speaker, the clip and bracket doors, and the places the driver is reached:\n; DSV_CAPS, DSV_FM and DSV_STREAM, DSV_TONE (snd_tone_out), DSV_TICK and\n; DSV_RELINST. The clip needs no buffer at all: osapi_snd_play takes the\n; caller's ES:SI and paces it out of the caller's own memory - the samples\n; are the app's problem, not the kernel's.",
+   "why": "snd_tone_out routes to [drv_svc+DSV_TONE] (snd.inc:135-145), FM/STREAM dispatch to SOUND.DRV (:748-845), snd_tick far-calls DSV_TICK (:441-443); the 'all gone' paragraph describes the pre-driver kernel."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "PIT channel 0 is never touched here at all.",
+   "new_text": "PIT channel 0 is touched only by the\n; bracket door (OSAPI_FSX_SPK, SPEC.md 34.11): it trims the bracket's own\n; divisor at open, and spk_off puts it back and reloads the channel.",
+   "why": "osapi_fsx_spk does sub [sch_rdiv],dx (snd.inc:1118) and spk_off restores [sch_rdiv] and calls sch_pit0 (:1054-1056)."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; reads (nothing clears .bss at boot, SPEC.md 8), runs the probes the driver\n; table declares (the speaker's presence is initialised data; the OPL2 row's\n; probe fully initialises the chip before reporting present, SPEC.md 34.2),\n; and sets snd_live LAST: the publish that arms snd_tick and the public",
+   "new_text": "; reads (nothing clears .bss at boot, SPEC.md 8) - it runs no probe: the\n; card probes are SOUND.DRV's attach (SPEC.md 51) - and sets snd_live LAST:\n; the publish that arms snd_tick and the public",
+   "why": "snd_init (snd.inc:589-610) saves 61h, stores the .bss state and sets snd_live; there is no driver table and no probe in it."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; The three API slot targets (SPEC.md 20.3) - caps, tone and the exclusive\n; clip. There is one sink, so there is nothing to select and nothing to probe.",
+   "new_text": "; The API slot targets (SPEC.md 20.3) - caps, tone and the exclusive clip,\n; FM and stream (live while SOUND.DRV is: drv_svc_call), and the bracket's\n; speaker door OSAPI_FSX_SPK (SPEC.md 34.11). The tier is snd_route's.",
+   "why": "Bodies below are osapi_snd_caps, tone, play (:923), FM (:748), stream (:785) and osapi_fsx_spk (:1082); snd_rt_card/snd_route select the sink, so 'one sink, nothing to select' is false."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "                                ; DRVC_FILE (62.9) to serve a volume. A SECOND\n                                ; block-serving class beside DRVC_DISK, which\n                                ; is what DV_CLASS exists for",
+   "new_text": "                                ; DRVC_FILE (62.9) to serve a volume. It serves\n                                ; SOCKETS through DSV_PKGCALL (SPEC.md 72) and\n                                ; no blocks: its DSV_BLK is 0",
+   "why": "ETHER.DRV and PCIETHER.DRV publish DSV_BLK = 0 and eth_pkg at DSV_PKGCALL (drivers/ether/ethdrv.inc:41,57); DRVC_DISK is the only class with a DSV_BLK."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "dw: -> its display name (.text)",
+   "new_text": "dw: its display name, an OFFSET into DRV_TITLES\n                                ; (the blob's and CTRL.DRV's copies, not resident)",
+   "why": "driver.inc:1172-1176 and the rows (dw drv_f_sound, DRVT_SOUND) make DRVR_TITLE a DRVT_* offset; ctrl.inc:6297 and driver.inc:5923 read it so."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "                                ; drv_bss GROWS when the round-up does not\n                                ; cover the bss, which for the shipped set is\n                                ; four drivers and none of them at boot",
+   "new_text": "                                ; drv_bss REFUSES an image whose bss the claim\n                                ; does not cover: os88drv.py strips the zero\n                                ; run only to the 512-byte rung, so a driver\n                                ; this tree built always fits (SPEC.md 51.1.2)",
+   "why": "drv_bss compares mem_bytes_gp_x(image+bss) with DRVR_PARA and takes ja drv_check.bad (driver.inc:3746-3753); it never resizes the claim."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "                                ; the image. drv_bss GROWS instead, once it\n                                ; knows the figure",
+   "new_text": "                                ; the image. drv_bss checks the bss against\n                                ; this exact claim instead, and refuses one\n                                ; it does not cover (SPEC.md 51.1.2)",
+   "why": "Same code: drv_bss's ja drv_check.bad (driver.inc:3753); its own header says 'IT NO LONGER RESIZES ANYTHING'."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; strips the trailing zero run only as far as the KB boundary the driver's",
+   "new_text": "; strips the trailing zero run only as far as the 512-byte rung the driver's",
+   "why": "tools/os88drv.py:49 DRV_RUNG = 512 ('THE RUNG IS 512 BYTES', :170); the claim is mem_bytes_gp_x (driver.inc:3501)."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "                                ; short of, so the row, its two images and all\n                                ; of the kernel-side support go. Everything\n                                ; after it moves up one - the Ethernet card to\n                                ; row 2 and the parallel link to row 3 - and\n                                ; drv_cfgbit moves with them, so kern_small's\n                                ; SYSTEM.CFG bit for the cable is 2 where\n                                ; kern_big's is 3. THAT DIVERGENCE IS REAL AND\n                                ; IS NOT WHAT drv_cfgbit FIXED: the table\n                                ; decouples the bitmap from the PAGE'S ORDER\n                                ; within one build, and two builds with\n                                ; different row COUNTS cannot share an\n                                ; assignment. It is written down in 62.9.15 and\n                                ; in 31.1's table rather than worked around:\n                                ; the two ship separate disks with separate\n                                ; settings files. DRV_MAX is what everything\n                                ; walks, so this one constant is the whole of\n                                ; it.",
+   "new_text": "                                ; short of. SINCE SPEC.md 51.0 kern_small HAS\n                                ; NO DRIVER LAYER AT ALL: no drv_tab, no\n                                ; drv_cfgbit and no SYSTEM.CFG are assembled\n                                ; (they are OS88_DRIVERS's, which is kern_big's),\n                                ; so the row-move and settings-bit divergence\n                                ; this note used to describe no longer exists.\n                                ; This constant survives only for the few\n                                ; kern_small sites that still name it",
+   "why": "drv_tab, the %1_bit table and the CFG_* tables are all inside %ifdef OS88_DRIVERS (driver.inc:1141, 3398), defined only under KERN_BIG (kernel.asm:979-981); SPEC.md 51.0 and 58990 say kern_small reads no SYSTEM.CFG."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "    db 1, 7, CFG_THMP           ; the preset round-trips there even though\n                                ; this kernel never reads it (SPEC.md 76.14.14)",
+   "new_text": "    db 1, 7, CFG_THMP           ; an arm no build assembles: CFG_DATA is\n                                ; expanded only under OS88_DRIVERS (ovc, cpc),\n                                ; and kern_small reads no SYSTEM.CFG (51.0)",
+   "why": "CFG_DATA's only expansions (driver.inc:5394 ovc, 6255 cpc) sit inside the OS88_DRIVERS block that starts at :3398, so this %else arm is never assembled."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; What a class COULD cost - the ceiling `Hard drives (Up to 32K)` quotes - is",
+   "new_text": "; What a class COULD cost - the ceiling `Hard drives (Up to 4K)` quotes - is",
+   "why": "DRVM_CEIL_DISK equ 4 (driver.inc:1820), so the caption quotes 4K."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; ...ditto, on kern_small (no PCI row)",
+   "new_text": "; ...ditto: ETHER.DRV's row alone (the %if)",
+   "why": "This equ is inside the OS88_DRIVERS block (kern_big only), every build of which has the PCI row; it is ETHER.DRV's ceiling, checked by the %if below it."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "                                ; The strings it hands back (drv_errstr,\n                                ; drv_s_off, drv_e0) STAY in `.text`: it\n                                ; answers an ADDRESS and the caller draws it\n                                ; through DS, so they are not module data and\n                                ; want no `cs:`.",
+   "new_text": "                                ; The strings are this image's own (.modu):\n                                ; drv_errstg reads them `cs:` and STAGES them\n                                ; into cp_sbuf, which is the address it\n                                ; answers (SPEC.md 2.8.6).",
+   "why": "drv_errstr and the TOASTSTRs follow drv_status_x in section .modu (driver.inc:2045); drv_errstg does mov si,[cs:bx+drv_errstr] / call cp_stage (:2091-2092)."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "    add ax, 63                  ; and ROUNDED UP to the KB (EMS.DRV and\n                                ; SERIAL.DRV are under one: truncated, a",
+   "new_text": "    add ax, 63                  ; and ROUNDED UP to the KB (EMS.DRV is\n                                ; under one: truncated, a",
+   "why": "SERIAL.DRV is a lease (ser_row, kernel/serial.inc:12), not a drv_tab row, so this walk never sums it."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "    mov bp, [bx+DRVR_ENT]       ; the ROW and not the entry proc, which is four\n                                ; of the five sites in the tree (drv_attach x2,\n                                ; drv_tier_x and blank.inc's ss_call). It\n                                ; FALLS THROUGH; drv_nostamp above ends in a\n                                ; `ret` and does not reach here. drv_call's own\n                                ; NASM locals are all below its label, so\n                                ; nothing is re-parented, and drvf_drv_call\n                                ; (the far thunk) and :2002 (which passes\n                                ; [drv_dlg_cb] in BP) still enter at drv_call\n                                ; itself. The fifth, drv_unload_x, TESTS the\n                                ; entry first; it does that on the row's own\n                                ; word now and comes here too (kernel size\n                                ; pass 17)",
+   "new_text": "    mov bp, [bx+DRVR_ENT]       ; the ROW and not the entry proc: drv_unload_x,\n                                ; drv_cp_closed's THMPAL leg and blank.inc's\n                                ; ss_call. It FALLS THROUGH; drv_nostamp above\n                                ; ends in a `ret` and does not reach here.\n                                ; drv_call's own NASM locals are all below its\n                                ; label, so nothing is re-parented. DRV_ATTACH's\n                                ; %1_call loads BP itself and enters at drv_call\n                                ; through its image's hop, as do hiber.inc,\n                                ; vidext.inc, vmmouse.inc, xmem.inc and :3327\n                                ; (which passes [drv_dlg_cb] in BP)",
+   "why": "grep: drv_call_ent's callers are driver.inc:3096, :4168 and blank.inc:656; drvf_drv_call is gone (driver.inc:6219), and %1_call (:4130-4134) uses 'dw drv_call'."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; %1_call - drv_call_ent: AL = the verb, BX = the row -> the driver's answer,\n;           through drv_call's far entry",
+   "new_text": "; %1_call - AL = the verb, BX = the row -> the driver's answer: BP from\n;           DRVR_ENT, then drv_call through this image's hop",
+   "why": "%1_call is mov bp,[bx+DRVR_ENT] / call %2 / dw drv_call (driver.inc:4130-4134); it does not go through drv_call_ent."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; The fence is the same SHAPE: the caller's segment must be the segment of the\n; driver whose services are currently published. ES is the caller's DS and a\n; driver's DS is its own segment, so `ES == [drv_fseg]` is an identity test,\n; not an approximation. One consequence to know: a driver cannot spawn from\n; ATTACH, because drv_publish arms [drv_fseg] only after attach returns. Spawn\n; from a service call, which is where a stream opens anyway.",
+   "new_text": "; The fence is the same SHAPE: the caller's segment must be the segment of a\n; driver whose services are currently published, in any class. ES is the\n; caller's DS and a driver's DS is its own segment, so `ES == some class's\n; published segment` (drv_pub_seg) is an identity test, not an\n; approximation. One consequence to know: a driver cannot spawn from ATTACH,\n; because drv_publish arms the class's slot only after attach returns. Spawn\n; from DRVV_READY or a service call, which is where a stream opens anyway.",
+   "why": "drv_task_x's spawn fence is call drv_pub_seg (driver.inc:4582), which walks every class's publication slot (:2002-2018); USBMOUSE.DRV spawns from DRVV_READY (usbmouse.asm:139-149)."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "(84,064 bytes on kern_big)",
+   "new_text": "(over 80KB on kern_big)",
+   "why": "build/kernel.sys is 85,168 bytes in this tree; the dated figure has drifted."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "all three walks above ask (CH is 0 in each).",
+   "new_text": "all three walks above ask (only CL is read).",
+   "why": "drv_boot_x sets CH = 1 after a settings read (driver.inc:5820) and nothing reads CH; drv_boot_want reads CL alone."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; holds nothing and is documented worker-safe, so a shared staging word is one\n; a second task can rewrite between the store and the call - which is why the\n; five sites below name drv_fptr..drv_fptr5 outright.",
+   "new_text": "; holds nothing and is documented worker-safe, so a shared staging word is one\n; a second task can rewrite between the store and the call - which is why the\n; one site below stages nothing: drv_pkg_disp builds the far frame on the\n; caller's own stack from DS, which is per task.",
+   "why": "drv_pkg_call_x has a single far call, KERNEL_SEG:drv_pkg_disp (driver.inc:6645), which pushes DS and PKG_DISP and retf's (:6693-6718); its own later comment says 'THE FIVE SITES ARE ONE'."
+  },
+  {
+   "file": "drivers/os88drv.inc",
+   "old_text": "rounded up to a KB,",
+   "new_text": "rounded up to the heap's\n; 512-byte granule,",
+   "why": "%1_att rounds DRV_H_KEEP with add ax,511 / and ax,-512 (kernel/driver.inc:3838-3842)."
+  },
+  {
+   "file": "drivers/os88drv.inc",
+   "old_text": "                                ; below): the kernel never loads one and\n                                ; drv_check would refuse it, and the number is\n                                ; here so that saying so is a property of the\n                                ; file rather than a comment.",
+   "new_text": "                                ; below): the kernel loads one only into a row\n                                ; that expects DRVC_OVL, and stops after the\n                                ; bss - no publication, no verb: its owner\n                                ; attaches it - and the number is here so\n                                ; that saying so is a property of the file\n                                ; rather than a comment.",
+   "why": "drv_load_at loads DRVC_OVL rows (xm_row, ss_row, thmv_row, vmm_row, vesa_row) and jumps to .ovl after drv_bss (kernel/driver.inc:3567-3571); drv_check accepts the class because it matches the row's."
+  },
+  {
+   "file": "drivers/os88drv.inc",
+   "old_text": ";   1. You cannot spawn from ATTACH - the kernel arms the fence only after\n;      attach returns. Spawn from a service call.\n;   2. YOUR DETACH MUST NOT RETURN UNTIL YOUR WORKER IS GONE. The kernel\n;      frees your image the moment detach returns, and a worker still on the\n;      run queue leaves the scheduler holding a stack frame whose CS points\n;      at memory the next heap claim takes.",
+   "new_text": ";   1. You cannot spawn from ATTACH - the kernel arms the fence only after\n;      attach returns. Spawn from DRVV_READY or a service call.\n;   2. YOUR DETACH MUST TELL YOUR WORKERS TO DIE, and each must exit (AX = 0).\n;      The kernel waits (about 5 s at most) for every driver worker's exit\n;      before it frees your image; a worker that never exits leaves the\n;      image claimed and the row loaded - a leak, never a free under a CS\n;      that still points into it.",
+   "why": "drv_unload_x waits up to 91 ticks on [drv_wcnt] after DETACH and skips drv_release on timeout (kernel/driver.inc:4171-4189); USBMOUSE.DRV's detach only raises um_stop (usbmouse.asm:162-167) and spawns at READY."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "published (`ES == [drv_fseg]`), which is an identity test rather than an",
+   "new_text": "published in any class (`drv_pub_seg`, §51.2.1), which is an identity test rather than an",
+   "why": "drv_task_x's fence is drv_pub_seg (driver.inc:4582), a walk of every class's slot (:2002-2018), not [drv_fseg] (class 1's)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "1. A driver cannot spawn from **attach** — `drv_publish` arms the fence only\n   after attach returns. Spawn from a service call, which is where a stream\n   opens anyway.\n2. **`DRVV_DETACH` must not return until the worker is gone.** `drv_unload`\n   frees the driver's image the moment detach returns, and a worker still on\n   the run queue leaves the scheduler holding a stack frame whose CS points\n   at memory the next heap claim takes. `sbl_detach` is the reference: it\n   stops the stream, then spins on its own liveness byte with\n   `OSAPI_TASK_YIELD` until the worker clears it.",
+   "new_text": "1. A driver cannot spawn from **attach** — `drv_publish` arms the fence only\n   after attach returns. Spawn from `DRVV_READY` (§51.2.2) or a service call,\n   which is where a stream opens anyway.\n2. **`DRVV_DETACH` tells the workers to die, and the kernel waits for the\n   deaths.** `drv_unload` waits, bounded at about five seconds of ticks, for\n   `[drv_wcnt]` — raised inside the spawn's IF=0 window, lowered inside\n   `task_exit`'s — to reach zero before it frees the image, so no task's CS\n   still points into it; a worker that never exits leaves the row loaded and\n   the image claimed, a leak rather than a free under a live CS.\n   `sbl_detach` stops the stream and waits on its own liveness byte as well,\n   but only to order the worker's last card access before its DSP reset;\n   `USBMOUSE.DRV`'s detach only raises its stop byte.",
+   "why": "drv_unload_x (driver.inc:4171-4189) is the wait; sbl_detach's own comment calls its wait 'best-effort ordering... not the survival guarantee' (sb.inc:3048-3056); usbmouse.asm:162-167 spawns at READY and detaches by a stop byte."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`drv_snd_sniff` are `.ovlw`; `drv_boot` is `.ovl`;",
+   "new_text": "`drv_sniff` are `.ovl`; `drv_boot` is `.boot2`;",
+   "why": "The kern_small stubs drv_init_x/drv_sniff are in section .ovl and drv_boot_x in .boot2 (driver.inc:6795-6800, 6858-6864); .ovlw was renamed (kernel.asm:5441)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "bytes and not RAM - the strip stops at the image's KB rung and the claim is\nKB of image + bss wherever a cell sits - so it is for state being written",
+   "new_text": "bytes and not RAM - the strip stops at the image's 512-byte granule and the\nclaim is granules of image + bss wherever a cell sits - so it is for state being written",
+   "why": "os88drv.py strips to DRV_RUNG = 512 and drv_load_at claims mem_bytes_gp_x (driver.inc:3501), as §51.1.2's own title says."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the driver passes one (`HDD.DRV` does: 34, its table stopping before the\n`DSV_PKGCALL` it publishes as 0), so a short table needs no pad out to",
+   "new_text": "the driver passes one (`HDD.DRV` and `EMS.DRV` do - both `DSV_SIZE` today,\n`EMS.DRV`'s a table whose only real cell is `DSV_PKGCALL`), so a short table needs no pad out to",
+   "why": "hdd.asm's table runs through dw hd_pkg at DSV_PKGCALL (hdd.asm:1569-1573) and ems.asm:487 sets em_svc_end to DSV_SIZE; neither is 34."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`SYSTEM.CFG`'s driver bitmap is one bit per row index (§51.5), so inserting a\nclass in the middle would renumber every user's saved settings and turn \"I\nhad the hard disk on\" into \"I had the debug monitor on\". Appending cannot.",
+   "new_text": "`SYSTEM.CFG`'s driver bitmap used to be one bit per row index (§51.5), so\ninserting a class in the middle renumbered every user's saved settings and\nturned \"I had the hard disk on\" into \"I had the debug monitor on\". The bit\nnow goes through `drv_cfgbit`, one byte a row, so a row can move without\nrenumbering anybody's file - but a new row takes a NEW bit, appended and\nnever reused.",
+   "why": "%1_bit (driver.inc:1081-1110) maps each row to its bit (kern_big: 0,1,4,2,3,6,7,8,10,...), decoupling the bitmap from the row index."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "no driver returns it. kern_small, which has no second `DRVC_NET` row, keeps\n`Attached twice (bug)` byte for byte.",
+   "new_text": "no driver returns it. kern_small has no driver layer at all (§51.0), so every\nbuild that assembles this refusal banks `DRVE_CLASS`.",
+   "why": "The DRVE_TWICE arm of drv_load_at's class refusal is %else to %ifdef DRV_PCIETH, which every OS88_DRIVERS build defines (driver.inc:44-46, 3458-3462)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the `Hard drives (Up to 32K)` a caption",
+   "new_text": "the `Hard drives (Up to 4K)` a caption",
+   "why": "DRVM_CEIL_DISK equ 4 (driver.inc:1820; apps/os88api.inc:3535)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "15. **Neither had a reader.** Every call site in the tree goes through DOS's\nown `dos_classk`, which discards `CX` and (until §51.12.2 stopped the\nfigure being `drv_memk`'s) masked bit 15 off again immediately.",
+   "new_text": "15. **Neither had a reader.** Every DOS call site goes through DOS's\nown `dos_classk`, which discards `CX` and (until §51.12.2 stopped the\nfigure being `drv_memk`'s) masked bit 15 off again immediately; the callers\noutside DOS (INSTALL, Redline's inspector, `EMS.DRV`) read `CF` alone.",
+   "why": "OSAPI_DRV_CLASSK is called directly at install.asm:249,1230,1443,1605, redline/inspmod.inc:1125 and ems.asm:98."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the whole tail is `cmp ax, 1`: `CF=1` exactly when `AX=0`, and `AX=0` exactly",
+   "new_text": "the whole tail is `cmp ax, 1` (kern_mega's counts the rows instead, an image\nabove 1MB holding no claim - KERN-MEGA-PLAN 14.88): `CF=1` exactly when `AX=0`, and `AX=0` exactly",
+   "why": "osapi_drv_classk_x's KERN_MEGA arm keeps inc cx / cmp cx,1 (driver.inc:2174-2216)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`EMS.DRV` and `SERIAL.DRV` are under one and truncated they would answer",
+   "new_text": "`EMS.DRV` is under one and truncated it would answer",
+   "why": "SERIAL.DRV is a lease (ser_row, serial.inc:12), not a drv_tab row, so OSAPI_DRV_CLASSK never sums it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The API surface is five §20.3 slots — CAPS, TONE, PLAY resident, FM and",
+   "new_text": "The API surface is six §20.3 slots — CAPS, TONE, PLAY and the bracket's\n`OSAPI_FSX_SPK` (§34.11) resident, FM and",
+   "why": "snd.inc:1082 osapi_fsx_spk is a sixth slot target (OSAPI_FSX_SPK, apps/os88api.inc:748)."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; THE CLAIM IS WHOLE KB, and that is heap and not a rung: drv_load_at claims\n; mem_bytes_kb_x of the file's unpacked size, so image + bss of 1,568 bytes",
+   "new_text": "; THE CLAIM IS WHOLE 512-BYTE GRANULES (SPEC.md 50.2.1; it was whole KB when\n; the figures below were taken), and that is heap and not a rung: drv_load_at\n; claims mem_bytes_gp_x of the file's unpacked size, so image + bss of 1,568 bytes",
+   "why": "drv_load_at calls mem_bytes_gp_x, 'the claim is the file to 512 bytes, where it was to a whole KB' (driver.inc:3501-3503)."
+  },
+  {
+   "file": "drivers/xmem/xmem.asm",
+   "old_text": "; here is a byte of a KB on every 286 and 386.",
+   "new_text": "; here is a byte of a 512-byte granule on every 286 and 386.",
+   "why": "Same: the claim rung is 512 bytes (mem_bytes_gp_x)."
+  },
+  {
+   "file": "docs/plans/NO-PINNING-PLAN.md",
+   "old_text": "Only `SOUND.DRV` spawns a task (`OSAPI_DRV_TASK` has one caller), so this is worth doing only when a second driver does. **Defer**",
+   "new_text": "Only `SOUND.DRV` spawned a task when this was written, so it was worth doing only when a second driver did - and `USBMOUSE.DRV` now does, at `DRVV_READY`, with a worker that lives as long as the driver (big-review 2026-11-08, drivers-1). **Deferred; its condition is now met**",
+   "why": "drivers/usbmouse/usbmouse.asm:144 calls OSAPI_DRV_TASK from um_ready."
+  }
+ ]
+}

@@ -46,7 +46,9 @@
 ; is in the including package's image, through CS - and under kern_mega, whose
 ; CS is a read-only code alias, the parts that WRITE it run a second copy that
 ; writes through our data selector instead (os88spkfx_levp/_emitp, aimed at
-; once by os88spkfx_init: SPEC.md 34.11.1.1). THE FAMILY IS NOT: it is
+; once by os88spkfx_init: SPEC.md 34.11.1.1). os88spkfx_init and
+; os88spkfx_ratchet are called with DS = ours and store through it on every
+; kernel (KERN-MEGA-PLAN 14.150). THE FAMILY IS NOT: it is
 ; read `es xlatb` - DS is the source and ES the ring - so it lives in the
 ; ring's claim and a machine that never shapes never holds its 2,816 bytes
 ; (SPEC.md 34.11.9). `es` costs exactly what `cs` did: one prefix byte, the
@@ -88,9 +90,9 @@ os88spkfx_init:
                                     ; put away. The table it composes with is
                                     ; os88spk's identity, so a row is the gain
                                     ; and the clip on the sample itself
-    mov [cs:os88spkfx_pre], al
-    mov [cs:os88spkfx_idle], ah
-    mov [cs:os88spkfx_fam], di
+    mov [os88spkfx_pre], al
+    mov [os88spkfx_idle], ah
+    mov [os88spkfx_fam], di
     xor ah, ah                      ; THE ROW IS STORED BY WHAT THE LOOP
     mov dx, os88spkfx_en            ; HOLDS: PRE_DIFF's rcr leaves the index
     mov cx, os88spkfx_enz           ; with its top bit flipped (no cmc), so
@@ -100,9 +102,10 @@ os88spkfx_init:
     mov dx, os88spkfx_ed
     mov cx, os88spkfx_edz
 .xm:
-    mov [cs:os88spkfx_xm], ah
-    mov [cs:os88spkfx_et], dx
-    mov [cs:os88spkfx_etz], cx
+    mov [os88spkfx_xm], ah
+    mov [os88spkfx_et], dx
+    mov [os88spkfx_etz], cx
+    push ds                         ; (ours, for the stores after the loop)
     mov ds, [cs:os88spk_rseg]       ; the count table t[]: the ring's,
     mov si, [cs:os88spk_rl]         ; at RL + SND_EXT_TAB
     add si, SND_EXT_TAB
@@ -148,28 +151,30 @@ os88spkfx_init:
     inc bx
     cmp bx, SPKFX_NLEV * 2
     jb .lev
+    pop ds                          ; ours again: the play's state below is
+                                    ; stored through it (KERN-MEGA-PLAN 14.150)
     mov bl, [cs:os88spkfx_xm]       ; c0, the centre: row 0 at i = 128
     xor bl, 0x80
     xor bh, bh
     add bx, [cs:os88spkfx_fam]
     mov al, [es:bx]
-    mov [cs:os88spkfx_c0], al
+    mov [os88spkfx_c0], al
     xor ah, ah
     cmp byte [cs:os88spkfx_idle], 0
     je .noidle
     dec al                          ; a play starts with the carrier away:
     mov ah, al                      ; d = c0 - 1, every count 1
-    mov byte [cs:os88spk_sil], 1    ; ...and a dry ring the same
+    mov byte [os88spk_sil], 1       ; ...and a dry ring the same
 .noidle:
-    mov [cs:os88spkfx_d], ah
-    mov [cs:os88spkfx_h], ah
+    mov [os88spkfx_d], ah
+    mov [os88spkfx_h], ah
     xor ax, ax
-    mov [cs:os88spkfx_lev], al
-    mov [cs:os88spkfx_sub], al
-    mov byte [cs:os88spkfx_gate], 1 ; a play starts as after silence
-    mov [cs:os88spkfx_rat], al      ; ...and levelled, not ratcheted
-    mov [cs:os88spkfx_pk1], ax      ; ...with no peaks held (pk1, pk2)
-    mov byte [cs:os88spkfx_prev], 0x80
+    mov [os88spkfx_lev], al
+    mov [os88spkfx_sub], al
+    mov byte [os88spkfx_gate], 1    ; a play starts as after silence
+    mov [os88spkfx_rat], al         ; ...and levelled, not ratcheted
+    mov [os88spkfx_pk1], ax         ; ...with no peaks held (pk1, pk2)
+    mov byte [os88spkfx_prev], 0x80
     pop es
     pop ds
     pop di
@@ -191,8 +196,8 @@ CURVEMAX equ 128
 ; readable) and hands it back here. Preserves all.
 ; -----------------------------------------------------------------------------
 os88spkfx_ratchet:
-    mov [cs:os88spkfx_lev], al
-    mov byte [cs:os88spkfx_rat], 1
+    mov [os88spkfx_lev], al
+    mov byte [os88spkfx_rat], 1
     ret
 
 ; -----------------------------------------------------------------------------

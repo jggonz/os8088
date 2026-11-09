@@ -669,6 +669,9 @@ wo_slide:
 ;            smaller than it is. A claim that must grow is made again - it
 ;            is a cache, so its window is dropped. out: CF = 1 no memory
 ;            (the old claim, if any, kept). clobbers AX, DX
+;            CONVENTIONAL on every kernel (wo_ioclaim): it is the one claim
+;            the disk transfers into - every read of the document, the
+;            stream's included - and WaveRack is OS88_HIGHMEM
 ; -----------------------------------------------------------------------------
 wo_iofit:
     push cx
@@ -684,7 +687,7 @@ wo_iofit:
     cmp ax, [wo_iokb]
     jbe .ok
     push ax                         ; bigger: the new one first, then the old
-    call OSAPI_MEM_CLAIM            ; one back (refused: kept as it was)
+    call wo_ioclaim                 ; one back (refused: kept as it was)
     pop ax
     jc .out
     push dx
@@ -694,7 +697,7 @@ wo_iofit:
     jmp short .got
 .claim:
     push ax
-    call OSAPI_MEM_CLAIM
+    call wo_ioclaim
     pop ax
     jc .out
 .got:
@@ -705,6 +708,32 @@ wo_iofit:
     clc
 .out:
     pop cx
+    ret
+
+; wo_ioclaim - AX KB claimed CONVENTIONAL (OSAPI_MEM_P, CX = MEMP_CONV): out
+; CF = 0 DX = the claim, CF = 1 refused. WaveRack is OS88_HIGHMEM, so on
+; kern_mega a plain claim of 64KB or less goes to the pool above 1MB. Right
+; for the hold, the look-ahead, the band, the envelopes, the view cache and
+; the history, which only the CPU touches; right for the take's units and
+; the save's staging, written from with seconds in hand (a take's 64KB of
+; units are 5.9 s at 11,025 Hz past its ring); wrong for THIS one, which
+; every read of the document lands in, the stream's against its deadline: a
+; fixed disk's transfer into a pool block is bounced in dsk_xfer, nine
+; sectors a call through the read-ahead's landing, which then reads ahead of
+; nothing (KERN-MEGA-PLAN 10.3 item 85, 14.156). Every other kernel reads
+; MEMP_CONV as CX = 0, the claim it always made. keeps all but DX
+wo_ioclaim:
+    push ax
+    push bx
+    push cx
+    mov cl, 6
+    shl ax, cl                      ; KB -> paragraphs
+    mov cx, MEMP_CONV
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx                          ; (pops keep CF)
+    pop bx
+    pop ax
     ret
 
 ; wo_maxclu - AX = the largest cluster any live source record reads, or AX

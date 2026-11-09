@@ -7700,8 +7700,9 @@ sc_ldscan:
     je .hn                      ; a mark's byte is an index, not attrs
     test byte [bx], SCAT_HID
     jz .hn
-    mov byte [cs:sc_hashid], 1
-    jmp short .hdone
+    pop ds                      ; the package's, then the flag: the same
+    mov byte [sc_hashid], 1     ; eight bytes as a store through CS, which
+    jmp short .out              ; kern_mega made a #GP (14.162)
 .hn:
     inc bx
     loop .h
@@ -19590,7 +19591,7 @@ sc_dp_sb1:
     SCDC SCD_BTN, SCDF_DIS, 376,  46, sc_s_dtabs,  56, 0
     db 0
 
-sc_s_dgpara: db 'Paragraph', 0
+TOASTSTR sc_s_dgpara, 'Paragraph'
 sc_s_dalign: db 'Alignment', 0
 sc_s_dleft:  db 'Left', 0
 sc_s_dcent:  db 'Center', 0
@@ -19609,7 +19610,7 @@ sc_s_d0li:   db '0 li', 0
 sc_s_d1li:   db '1 li', 0
 sc_s_dtabs:  db 'Tabs...', 0
 
-sc_s_dgchar: db 'Character', 0
+TOASTSTR sc_s_dgchar, 'Character'
 sc_s_dbold:  db 'Bold', 0
 sc_s_dital:  db 'Italic', 0
 sc_s_dkaps:  db 'Small Kaps', 0     ; sic - char.des's literal spelling
@@ -19627,7 +19628,7 @@ sc_s_dcsp:   db 'Character Spacing', 0
 sc_s_dexp:   db 'Expanded', 0
 sc_s_dcond:  db 'Condensed', 0
 sc_s_dcanc:  db 'Cancel', 0
-sc_s_dsort:  db 'Sort', 0            ; sort.des
+TOASTSTR sc_s_dsort, 'Sort'          ; sort.des
 sc_s_dorder: db 'Sort Order', 0
 sc_s_dasc:   db 'Ascending', 0
 sc_s_ddes:   db 'Descending', 0
@@ -19642,7 +19643,7 @@ sc_s_dtab:   db 'Tab', 0
 sc_s_dfldn:  db 'Field number:', 0
 sc_s_dscol:  db 'Sort Column Only', 0    ; greyed: draft view has no column
 sc_s_dcase:  db 'Case Sensitive', 0      ; selection to restrict to
-sc_s_drenum: db 'Renumber', 0        ; renum.des
+TOASTSTR sc_s_drenum, 'Renumber'     ; renum.des
 sc_s_drpara: db 'Renumber Paragraphs', 0
 sc_s_dall:   db 'All', 0
 sc_s_dnumd:  db 'Numbered Only', 0
@@ -19652,7 +19653,7 @@ sc_s_dman:   db 'Manual:', 0
 sc_s_dstart: db 'Start at:', 0
 sc_s_dlevels: db 'Show all levels', 0    ; greyed: levels come from the style
 sc_s_dfmt:   db 'Format:', 0             ; sheet, and there is none
-sc_s_dtoc:   db 'Table of Contents', 0   ; toc.des
+TOASTSTR sc_s_dtoc, 'Table of Contents'  ; toc.des
 sc_s_dtocg:  db 'Table Of Contents', 0
 sc_s_dhead:  db 'Use Heading Paragraphs', 0
 sc_s_dtcfld: db 'Use Table Entry Fields', 0
@@ -19794,9 +19795,9 @@ sc_dlgconf:                         ; the confirm strip, pinned to the bottom
     SCDC SCD_BTN, 0,        320,  18, sc_s_dcanc,  56, 2
     db 0
 
-sc_s_dsrch:  db 'Search', 0
-sc_s_drepl:  db 'Replace', 0
-sc_s_dgo:    db 'Go To', 0
+TOASTSTR sc_s_dsrch, 'Search'
+TOASTSTR sc_s_drepl, 'Replace'
+TOASTSTR sc_s_dgo, 'Go To'
 sc_s_dsfor:  db 'Search For:', 0
 sc_s_drwith: db 'Replace With:', 0
 sc_s_dwword: db 'Whole Word', 0
@@ -19811,8 +19812,8 @@ sc_s_dno:    db 'No', 0
 sc_s_dconfq: db 'Replace this occurrence?', 0
 sc_s_askpre: db 'Do you want to save changes to ', 0
 sc_s_askpost: db '?', 0
-sc_m_nfound: db 'Search text not found', 0
-sc_m_baddoc: db 'Bad .DOC file', 0
+TOASTSTR sc_m_nfound, 'Search text not found'
+TOASTSTR sc_m_baddoc, 'Bad .DOC file'
 
 ; =============================================================================
 ; The menu data (SPEC.md 68.2) - verbatim from Opus resource/menus.cmd
@@ -20115,12 +20116,12 @@ sc_s_ovr:   db 'OVR', 0
 sc_s_sp4:   db '    ', 0
 sc_s_sp3:   db '   ', 0
 sc_s_about: db 'Scribe', 0
-sc_s_abou2: db 'os8088 word processor', 0
+TOASTSTR sc_s_abou2, 'os8088 word processor'
 sc_s_abou3: db 'Forked from Word 1.1a for os8088', 0
 sc_s_abou4: db 'Ported by Jorge Gonzalez', 0
 sc_s_abou5: db 'Updated by Koriban', 0
 sc_s_ok:    db 'OK', 0
-sc_m_noclose: db 'Close refused, try again', 0
+TOASTSTR sc_m_noclose, 'Close refused, try again'
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
@@ -20200,12 +20201,12 @@ sc_s_default: db 'DOCUMENT.RTF', 0  ; Word's Document1, folded to 8.3: a 9-char
                                     ; pictures down on the way
 sc_m_saved:   db 'Saved ', 0
 sc_m_loaded:  db 'Loaded ', 0
-sc_m_trunc:   db 'Truncated', 0
-sc_s_nul:     db 0              ; an EMPTY string retires whatever is up
+TOASTSTR sc_m_trunc, 'Truncated'
+TOASTSTR sc_s_nul               ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
-sc_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
+TOASTSTR sc_e_nomem, 'No memory'     ; the staging claim was refused (50.3)
 
 ; Insert > Picture (SPEC.md 95.9). One string per IMG_E_* code, indexed by it
 ; - the include hands back a NUMBER (87.2) and each package says what it means
@@ -20220,19 +20221,19 @@ sc_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 ; the command place one - a success reported as a failure.
 sc_s_pictx:   db 'x', 0
 sc_s_pict2:   db ' placed', 0
-sc_e_pictio:  db 'Cannot read that file', 0
-sc_e_pictbig: db 'That file is too big', 0
-sc_e_pict0:   db 'Not a picture file', 0
-sc_e_pictw:   db 'Not a picture file', 0
-sc_e_picts:   db 'File is too short', 0
-sc_e_pictd:   db 'Bad picture size', 0
-sc_e_pictm:   db 'Picture too big', 0
-sc_e_pictt:   db 'Picture data ends early', 0
-sc_e_pictb:   db 'Convert to 4-bit first', 0
-sc_e_pictc:   db 'Compressed BMP not read', 0
-sc_e_pictn:   db 'No such picture', 0
-sc_e_pictv:   db 'Unknown file version', 0
-sc_e_pictfull: db 'No room for a picture', 0
+TOASTSTR sc_e_pictio, 'Cannot read that file'
+TOASTSTR sc_e_pictbig, 'That file is too big'
+TOASTSTR sc_e_pict0, 'Not a picture file'
+TOASTSTR sc_e_pictw, 'Not a picture file'
+TOASTSTR sc_e_picts, 'File is too short'
+TOASTSTR sc_e_pictd, 'Bad picture size'
+TOASTSTR sc_e_pictm, 'Picture too big'
+TOASTSTR sc_e_pictt, 'Picture data ends early'
+TOASTSTR sc_e_pictb, 'Convert to 4-bit first'
+TOASTSTR sc_e_pictc, 'Compressed BMP not read'
+TOASTSTR sc_e_pictn, 'No such picture'
+TOASTSTR sc_e_pictv, 'Unknown file version'
+TOASTSTR sc_e_pictfull, 'No room for a picture'
 sc_picterrs:
     dw sc_e_pict0                   ; 0 - never used: CF=0 means it worked
     dw sc_e_pictw, sc_e_picts, sc_e_pictd, sc_e_pictm, sc_e_pictt
@@ -20240,24 +20241,24 @@ sc_picterrs:
 SC_PICTERRN equ IMG_E_VER
 
 ; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
-sc_m_nopat:   db 'No search text', 0
+TOASTSTR sc_m_nopat, 'No search text'
 sc_m_repld:   db ' changes', 0       ; sc_saycnt's suffix: 'n changes' is the
                                      ; sweep's answer (SPEC.md 68.7)
-sc_m_noundo:  db 'Nothing to undo', 0
-sc_m_papfull: db 'Too many formats', 0
-sc_m_toobig:  db 'Too complex to save', 0
-sc_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
-sc_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
+TOASTSTR sc_m_noundo, 'Nothing to undo'
+TOASTSTR sc_m_papfull, 'Too many formats'
+TOASTSTR sc_m_toobig, 'Too complex to save'
+TOASTSTR sc_m_noclip, 'The clipboard is empty'      ; ^c with nothing in it
+TOASTSTR sc_m_replong, 'Replacement too long'       ; ...and ^m/^c past
                                      ; SC_FRXMAX (SPEC.md 68.7)
-sc_m_toomanyp: db 'Too many paragraphs', 0          ; past SC_UMAXP (65.9)
-sc_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
+TOASTSTR sc_m_toomanyp, 'Too many paragraphs'       ; past SC_UMAXP (65.9)
+TOASTSTR sc_m_noundo2, 'Too large to undo'          ; the span is bigger than
                                      ; the undo blob, so the command refuses
                                      ; rather than do it unundoably (65.9)
-sc_m_notoc:   db 'No table of contents entries', 0
+TOASTSTR sc_m_notoc, 'No contents entries'
 sc_m_sorted:  db 'Sorted', 0
 sc_m_renumd:  db 'Renumbered', 0   ; more FKP pages than
                                      ; the staging claim holds (SPEC.md 68.4)
-sc_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
+TOASTSTR sc_e_cbig, 'Too big to copy'   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
 ; =============================================================================
@@ -20288,12 +20289,10 @@ sc_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 %macro PKG_CMP 2                    ; cmp %1, [the package's %2]
     cmp %1, [cs:%2]
 %endmacro
-%macro PKG_ST 2                     ; [the package's %1] = %2
-    mov [cs:%1], %2
-%endmacro
-%macro PKG_STB 2                    ; ...and the byte-sized store
-    mov byte [cs:%1], %2
-%endmacro
+; There is no STORE form any more (KERN-MEGA-PLAN 14.162): on kern_mega CS
+; is part 1's CODE selector, read-only, and each `mov [cs:x]` was a completed
+; #GP - one a run and a paragraph on a save. Every store to a package
+; variable is made with DS back on the package, off the stack
 ; =============================================================================
 
 ; --- the search pattern and the Utilities commands (SPEC.md 68.7/68.9) -------

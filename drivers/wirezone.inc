@@ -2,7 +2,7 @@
 ; os8088 - drivers/wirezone.inc
 ;
 ; THE WIRE'S DESKTOP ICON, and every byte of it is the driver's (SPEC.md 26.7,
-; docs/WIRE-PLAN.md §2). The kernel has a generic desktop SERVICE zone a
+; docs/plans/completed/WIRE-PLAN.md §2). The kernel has a generic desktop SERVICE zone a
 ; driver registers through OSAPI_DESK_ITEM and knows nothing else: not the
 ; picture, not the caption, not the file it launches, not the word Wire. Most
 ; XTs have no network card, and a machine without one must not carry a glyph

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""SPEC.md 18.93.1 - the boot sector's canary must sit in a sector that CROSSES
-A HEAD in every shipped geometry.
+"""SPEC.md 18.93.1 - the boot canary must sit in a sector that a transfer run
+reads AFTER A HEAD FLIP, in a run that began BEFORE it, on every shipped
+system disk.
 
 This is the row that exists because the first version of the canary did not.
 Offset 16384 is "past the first head flip" in every geometry and is still in
@@ -9,38 +10,48 @@ on exactly the machine the canary exists to catch. It passed there, and the
 kernel it let through was scrambled.
 
 THE BAND IS AN INTERSECTION, so a NEW GEOMETRY can invalidate an offset that
-nothing touched.  Adding SPEC.md 19's 1.2MB 5.25" disk did exactly that: its
-data area starts at LBA 29 and its runs are 30 sectors, so file sector 36 -
-the middle of the band the other three shared - lands 5 sectors into a FIRST
-half there, and the canary was inert on one shipped disk of four with no
-line of the boot path changed.  This row caught it, and it can only keep
-catching it if every shipped system image is in IMAGES below.
+nothing touched.  Adding SPEC.md 19's 1.2MB 5.25" disk did exactly that, and
+this row caught it - which it can only keep doing if every shipped system image
+is in IMAGES below.
 
-A run transfers correctly up to the head boundary and only goes wrong after it.
-So the test is not "past a flip" but "in a run's second half", re-derived here
-from each image's own BPB the way boot.asm derives it at run time.
+**AND WHERE A RUN BEGINS IS THE LOADER'S BUSINESS, NOT THE GEOMETRY'S** - which
+is what this row did not know for two months (the big review's BR-1,
+2026-11-08). It walked cylinder-aligned runs from the DATA AREA, so it answered
+"crosses" for file sector 21 on every disk. Stage 2 does not read that way.
+Under KZIP (the default since 2026-09-05) it starts at KERNEL.SYS + the blob,
+reads the KZ_HEADSEC plain sectors in runs of their own (at the TRACK bound
+since BR-1's part 2), and starts the packed tail afresh behind them, R
+paragraphs further up - and every run was cut at the 64KB DMA page of its
+destination as well as at the cylinder (until SPEC.md 2.9.13.7 met the page
+with a bounce instead, which takes the page out of the walk: a run is the
+cylinder and what is left, wherever it lands). On a 9-sector disk file sector 21 was
+in the head-1 half of cylinder 1, and every run containing it began after that
+cylinder's flip: the canary was INERT on the 360KB and 720KB disks of both
+shipped kernels while this row passed. So the walk below is the loader's own,
+per kernel - its blob length, KZ_HEADSEC, R and segment out of that kernel's
+kernel.kz.json - and the question is the precise one: is there a head flip
+strictly after the start of the canary's run and at or before the canary?
 
-AND IT IS AN INTERSECTION OVER THE BLOB LENGTHS TOO, for the same reason one
-level along: the file sector is the memory offset plus BOOT2_SECS, so a build
-with a longer stage 2 puts the same offset in a different sector.  There were
-two lengths until SPEC.md 15.3.8.5 retired SPLSTARS', and that intersection is
-four sectors wide where the single-length band is seven - which is how this
-constant came to sit at the top of `.text` with thirty bytes of room.  This row
-reads EVERY `BOOT2_SECS*` equate and requires the offset to cross on all of
-them, so a second length that comes back fails here rather than leaving one
-arm's canary inert.
+It is AN INDEPENDENT READER (the big review's boot-10): since then the BUILD
+CHOOSES the sector - tools/os88ksig.py walks the runs per build arm and writes
+$(BUILD)/ksig.inc - and this row imports nothing from it. It reads the number
+each kernel was really ASSEMBLED with out of that kernel's own map (KSIG_OFF,
+an absolute equ), the signature the build injected out of each disk's own boot
+sector (`mov di, KSIG`), the geometry out of each disk's own BPB, and walks the
+runs with its own code. A generator and a gate that share a model share its
+mistakes; BR-1 was exactly that.
 
-KSIG_OFF IS A MEMORY OFFSET AND THIS IS A QUESTION ABOUT A SECTOR.  Since
-SPEC.md 2.9 put stage 2 in front of the image, the two are BOOT2_SECS apart:
-the Makefile's KSIGDEF2 sums the signature sector out of the file at
-KSIG_OFF + BOOT2_SECS*512, so that is the sector the probe actually lands in
-and the one this row has to ask about.  Asking about KSIG_OFF/512 instead
-validated a sector nothing reads - which is the same failure the file opens
-with, one indirection further along.
+AND IT HOLDS EVERY DISK TO THE DMA BOUNCE (SPEC.md 2.9.13.7): read_run reads a
+run the 64KB page would cut whole to the next page's start, and boot2.asm's
+guards and BLOB_LIFT are sized for B2_BMAXSEC sectors of it - so a shipped disk
+whose BPB gives a longer cylinder fails here, read off that kernel's map.
+Break that on purpose with B2_BMAXSEC read as 30: the three 1.44MB disks fail.
 
-boot/boot2.asm types KSIG_OFF out a second time, and there is no linker here,
-so the two are checked against each other before anything else is asked.
+Break it on purpose: make os88ksig.py's `live()` answer True for every sector
+(so it chooses the first tail sector, file sector 22 on kern_big) and rebuild -
+this row must go red on every system disk.
 """
+import json
 import re
 import struct
 import sys
@@ -48,157 +59,226 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
-IMAGES = ["os8088-360.img", "os8088-720.img", "os8088-120.img",
-          "os8088.img",
-          # the 128KB machine's (SPEC.md 24.5.7): kern_small's KERNEL.SYS
-          # starts at LBA 12 on both, and the band is about the SECTOR, so
-          # they join the same intersection. small.img (1.44MB, on demand)
-          # does NOT cross there and is why it is not shipped as it stands
-          "small360.img", "small720.img",
+# (image, kernel tree under build/) - every SHIPPED system disk. The 128KB
+# machine's (SPEC.md 24.5.7) are kern_small's, so they are walked with that
+# kernel's own blob and packed layout. small.img (1.44MB, on demand) is not
+# shipped and not here
+IMAGES = [("os8088-360.img", ""), ("os8088-720.img", ""),
+          ("os8088-120.img", ""), ("os8088.img", ""),
+          ("small360.img", "smallk"), ("small720.img", "smallk"),
           # the sound debug disk (SPEC.md 127): the system disk's boot and
           # kernel at the system disk's LBA, on all four geometries
-          "debug-sound-360.img", "debug-sound-720.img",
-          "debug-sound-120.img", "debug-sound.img"]
+          ("debug-sound-360.img", ""), ("debug-sound-720.img", ""),
+          ("debug-sound-120.img", ""), ("debug-sound.img", "")]
+# ...and kern_mega's and kern_emu's, which `make mega` and `make emu` build
+# and `all` does not: walked IN FULL when the image carries its tree's
+# current KERNEL.SYS, and named as stale otherwise - a tree that has run
+# `make` since its last `make mega` holds a mega image of an older kernel,
+# and that is not a defect of this one
+OPTIONAL = [("mega.img", "megak"), ("mega120.img", "megak"),
+            ("emu.img", "emuk")]
+KERNEL_SEG = 0x0060
 
 
-def ksig_off():
-    m = re.search(r"^KSIG_OFF\s*:=\s*(\d+)", (ROOT / "Makefile").read_text(), re.M)
+def mapnum(sub, name):
+    """An absolute equ out of build/<sub>/kernel.map's No Section table - the
+    number the kernel was ASSEMBLED with, not what any source says."""
+    p = BUILD / sub / "kernel.map"
+    if not p.exists():
+        sys.exit(f"t_canary: no {p.relative_to(ROOT)} - run make first")
+    m = re.search(r"^([0-9A-F]{8})\s+%s\s*$" % name,
+                  p.read_text(errors="replace"), re.M)
     if not m:
-        sys.exit("t_canary: no KSIG_OFF in the Makefile")
-    off = int(m.group(1))
-    b2 = re.search(r"^KSIG_OFF\s+equ\s+(\d+)",
-                   (ROOT / "boot" / "boot2.asm").read_text(), re.M)
-    if not b2:
-        sys.exit("t_canary: no KSIG_OFF equ in boot/boot2.asm")
-    if int(b2.group(1)) != off:
-        sys.exit(f"t_canary: the Makefile says KSIG_OFF {off} and "
-                 f"boot/boot2.asm says {b2.group(1)} - the build would inject "
-                 f"the word from one offset and the sector compare the other")
-    return off
+        sys.exit(f"t_canary: {p.relative_to(ROOT)} lists no {name}")
+    return int(m.group(1), 16)
 
 
-def boot2_secs():
-    """EVERY stage-2 length the kernel can be built with.
-
-    The offset is a MEMORY one and the file sector is BOOT2_SECS further in,
-    so a build with a longer blob puts the SAME offset in a different sector -
-    and the band is an intersection over the blob lengths as well as over the
-    geometries.  There was a second length here for years (BOOT2_SECS_STARS,
-    SPLSTARS' one-sector-longer blob) and this function found only the first:
-    the "legal for both lengths" rule that pinned KSIG_OFF to file sector 106
-    lived in a Makefile comment and was enforced by nothing, so moving the
-    offset would have passed here while the knob build's canary went inert.
-    It is one length today; the point of returning a LIST is that adding a
-    second one fails this row instead of going quiet.
-    """
-    src = (ROOT / "kernel" / "kernel.asm").read_text()
-    secs = [int(m.group(2))
-            for m in re.finditer(r"^(BOOT2_SECS[A-Z0-9_]*)\s+equ\s+(\d+)",
-                                 src, re.M)]
-    if not secs:
-        sys.exit("t_canary: no BOOT2_SECS in kernel/kernel.asm")
-    return sorted(set(secs))
+def kz(sub):
+    p = BUILD / sub / "kernel.kz.json"
+    return json.loads(p.read_text()) if p.exists() else None
 
 
-def crosses(img, off):
-    """Does file offset `off` land in a sector a transfer run reads AFTER the
-    head boundary?  Mirrors boot.asm read_run's partitioning exactly."""
+def bpb(img):
     d = img.read_bytes()[:512]
     rsvd = struct.unpack_from("<H", d, 14)[0]
     nfat, fatsz = d[16], struct.unpack_from("<H", d, 22)[0]
     rootent = struct.unpack_from("<H", d, 17)[0]
     spt, heads = struct.unpack_from("<H", d, 24)[0], struct.unpack_from("<H", d, 26)[0]
-    data = rsvd + nfat * fatsz + (rootent + 15) // 16
-    run = spt * heads
-    want = data + off // 512                      # the LBA the canary lives at
-    lba = data
-    while lba <= want:
-        s0 = lba % run
-        span = run - s0
-        if lba + span > want:
-            return s0 < spt and (s0 + (want - lba)) >= spt
-        lba += span
-    return False
+    data = rsvd + nfat * fatsz + (rootent + 15) // 16   # boot.asm's derivation
+    return d, data, spt, heads
+
+
+def walk(lba0, spt, heads, k, nokzip_secs=None):
+    """The runs (lba, count, which) stage 2 asks for on an 8088, which takes
+    the CYLINDER bound (boot2.asm's gate): read_run cuts at the first of the
+    run bound and the sectors still wanted - the 64KB DMA page is a BOUNCE
+    there, not a bound (SPEC.md 2.9.13.7), so it cuts nothing. Under KZIP the
+    head is read first at the TRACK (BR-1 part 2) and the tail restarts
+    behind it, R paragraphs further up."""
+    out = []
+
+    def load(lba, left, runmax, which):
+        while left:
+            n = min(runmax - lba % runmax, left)
+            out.append((lba, n, which))
+            lba += n
+            left -= n
+        return lba
+
+    lba = lba0 + k["blob"] // 512 if k else lba0
+    if k is None:
+        load(lba, nokzip_secs, spt * heads, "plain")
+        return out
+    lba = load(lba, k["headsecs"], spt, "head")
+    load(lba, k["ksecs"] - k["headsecs"], spt * heads, "tail")
+    return out
+
+
+def live(runs, c, spt):
+    """Is LBA `c` read after a head flip, inside a run that began before it?
+    A run never crosses a cylinder, so any track boundary in (start, c] is a
+    head flip."""
+    for lba, n, which in runs:
+        if lba <= c < lba + n:
+            return (c // spt != lba // spt), (lba, n, which)
+    return False, None
+
+
+def ssum(b):
+    return sum(int.from_bytes(b[i:i + 2], "little")
+               for i in range(0, 512, 2)) & 0xFFFF
+
+
+def kernel_on(raw, data, kf):
+    """Does the image carry THIS tree's KERNEL.SYS, from the data area on?"""
+    k = kf.read_bytes()
+    return raw[data * 512:data * 512 + len(k)] == k
 
 
 def main():
-    off = ksig_off()                     # the MEMORY offset, from KERNEL_SEG
-    lengths = boot2_secs()               # ...every blob length it must be legal for
-    fileoff = off + lengths[0] * 512     # ...and where those bytes sit in the FILE
-    # THE FILE AND NOT THE IMAGE (SPEC.md 2.9.13.3). What has to be long
-    # enough to hold a canary word is what LANDS ON THE DISK, and under KZIP
-    # that is 40 sectors shorter than the kernel - while the canary's file
-    # offset does not move at all, KSIG_OFF being a memory offset whose
-    # constraint is that its SECTOR crosses a head, which is a property of the
-    # geometry rather than of what is in the sector.
-    kern = BUILD / "kernel.sys"
-    if not kern.exists():
-        sys.exit("t_canary: no build/kernel.sys - run make first")
-    k = kern.read_bytes()
-    if len(k) < fileoff + 512:
-        sys.exit(f"t_canary: KERNEL.SYS is {len(k)} bytes, shorter than the "
-                 f"canary's file offset {fileoff}")
-    if off + 2 > 65536:
-        sys.exit(f"t_canary: KSIG_OFF {off} is outside the 64KB the handoff's ES names")
-
-    # A missing shipped image FAILS, the way t_image's does. This used to
-    # `continue` past one, so a tree that had not built a geometry passed the
-    # canary check for it - and the canary is the one guard that must hold on
-    # every disk (SPEC.md 18.93.1), which is what the fourth geometry taught.
-    missing = [name for name in IMAGES if not (BUILD / name).exists()]
+    missing = [n for n, _ in IMAGES if not (BUILD / n).exists()]
     if missing:
         sys.exit("t_canary: shipped image(s) not built: %s - run make first; "
                  "a geometry this cannot see is a geometry the canary is not "
                  "checked on" % ", ".join(missing))
 
-    bad = []
-    for secs in lengths:
-        fo = off + secs * 512
-        for name in IMAGES:
-            img = BUILD / name
-            if not crosses(img, fo):
-                bad.append(f"{name} (blob {secs} sectors, file sector {fo // 512})")
+    bad, lines, stale, trees = [], [], [], {}
+    for name, sub in IMAGES + [m for m in OPTIONAL if (BUILD / m[0]).exists()]:
+        img = BUILD / name
+        k = kz(sub)
+        kf = BUILD / sub / "kernel.sys"
+        if not kf.exists():
+            if (name, sub) in OPTIONAL:
+                continue
+            sys.exit(f"t_canary: no {kf.relative_to(ROOT)} - run make first")
+        off = mapnum(sub, "KSIG_OFF")       # what the kernel ASSEMBLED
+        blob = mapnum(sub, "BOOT2_PAD") // 512
+        if off % 512:
+            bad.append(f"{name}: KSIG_OFF {off} is not a whole sector")
+            continue
+        fsec = off // 512 + blob
+        trees[sub] = (kf, off, fsec)
+        d, data, spt, heads = bpb(img)
+        raw = img.read_bytes()
+        if not kernel_on(raw, data, kf):
+            if (name, sub) in OPTIONAL:
+                # `make mega`/`make emu` are on demand: a tree that has run
+                # `make` since holds an image of an OLDER kernel, which is not
+                # a defect of this one
+                stale.append(name)
+                continue
+            bad.append(f"{name}: does not carry build/{sub + '/' if sub else ''}"
+                       f"kernel.sys from its data area (LBA {data}) - the walk "
+                       f"below would be about another kernel")
+            continue
+        if heads < 2:
+            bad.append(f"{name}: one head - nothing to cross")
+            continue
+        # ...AND THE BOUNCE HOLDS THIS DISK'S LONGEST RUN (SPEC.md 2.9.13.7).
+        # read_run reads a run the DMA page would cut to that page's start,
+        # and boot2.asm's guards and BLOB_LIFT are sized for B2_BMAXSEC
+        # sectors of it - the cylinder of the largest geometry. A disk whose
+        # BPB says more would bounce past what they proved
+        bmax = mapnum(sub, "B2_BMAXSEC")
+        if spt * heads > bmax:
+            bad.append(f"{name}: a cylinder of {spt * heads} sectors, and "
+                       f"stage 2's DMA bounce is sized for {bmax} "
+                       f"(B2_BMAXSEC, kernel.asm)")
+            continue
+        c = data + fsec
+        # THE SECTOR THE BUILD REALLY ARMED: the boot sector's `mov di, KSIG`
+        # must name this disk's own file sector `fsec`
+        s = ssum(raw[c * 512:c * 512 + 512])
+        hits = [i for i in range(0, 509)
+                if d[i] == 0xBF and d[i + 1] | (d[i + 2] << 8) == s]
+        if len(hits) != 1:
+            bad.append(f"{name}: its boot sector has {len(hits)} `mov di, "
+                       f"0x{s:04X}`, the sum of file sector {fsec} - the "
+                       f"canary the boot sector carries is not the sector the "
+                       f"kernel was assembled to check (KSIG_OFF {off} in the "
+                       f"map against KSIGDEF2's ksig.inc)")
+            continue
+        if k is None:
+            # NOKZIP: one plain read of the rest of the file behind the blob
+            r = walk(data + blob, spt, heads, None,
+                     (kf.stat().st_size + 511) // 512 - blob)
+        else:
+            r = walk(data, spt, heads, k)
+        ok, run = live(r, c, spt)
+        if run is None:
+            bad.append(f"{name}: file sector {fsec} (LBA {c}) is past the end "
+                       f"of stage 2's read")
+            continue
+        lba, n, which = run
+        if which == "head":
+            bad.append(f"{name}: file sector {fsec} (LBA {c}) is in the KZIP "
+                       f"plain head, which is read at the track bound and "
+                       f"crosses nothing")
+            continue
+        lines.append(f"{name} sector {fsec} LBA {c} in {which} "
+                     f"{lba}..{lba + n - 1}")
+        if not ok:
+            bad.append(f"{name} ({sub or 'kern_big'}, blob {blob} sectors): "
+                       f"file sector {fsec} is LBA {c}, in the run "
+                       f"{lba}..{lba + n - 1}, which crosses no head before it")
     if bad:
         sys.exit(
-            f"t_canary: KSIG_OFF {off} does NOT cross a "
-            f"head on {', '.join(bad)} - it would be loaded CORRECTLY on a machine "
-            f"whose FDC cannot flip, and the canary would pass on the one fault it "
-            f"is for (SPEC.md 18.93.1)"
+            "t_canary: the canary is NOT read after a head flip, or is not the "
+            "sector it claims, or the disk's runs outgrow stage 2's DMA bounce "
+            "(SPEC.md 2.9.13.7), on:\n  " + "\n  ".join(bad) + "\n- it would "
+            "be loaded CORRECTLY on a machine whose FDC flips at the wrong "
+            "sector, and the canary would pass on the one fault it is for "
+            "(SPEC.md 18.93.1)"
         )
 
     # ...and it has to be tellable from its neighbours, or a shifted read
-    # matches - in EVERY kernel's file that boots off a floppy, the small
-    # one's and kern_mega's too. The signature is the SECTOR'S SUM (the
-    # Makefile's KSIGDEF2): kern_mega's first WORD there was 0, and so was the
-    # first word of the wrong sector a 286 ROM delivered in its place, which
-    # is how that sector passed the canary (SPEC.md 18.93.1). A neighbour
-    # check cannot see that case - the sum is what closes it - but kern_mega
-    # boots off a floppy too, so its file is asked the neighbour question
-    def ssum(kk, o):
-        return sum(int.from_bytes(kk[i:i + 2], "little")
-                   for i in range(o, o + 512, 2)) & 0xFFFF
-    w = lambda o: ssum(k, o)
-    for kf in (kern, BUILD / "smallk" / "kernel.sys",
-               BUILD / "megak" / "kernel.sys"):
-        if not kf.exists():
-            if kf.parent.name == "megak":
-                continue            # `make mega` is on demand: `all` never
-                                    # builds it, so a fresh tree has none
-            sys.exit(f"t_canary: no {kf.relative_to(ROOT)} - run make first")
+    # matches - in EVERY kernel's file that boots off a floppy. The signature
+    # is the SECTOR'S SUM (the Makefile's KSIGDEF2): kern_mega's first WORD
+    # there was 0, and so was the first word of the wrong sector a 286 ROM
+    # delivered in its place, which is how that sector passed the canary
+    # (SPEC.md 18.93.1)
+    for sub, (kf, off, fsec) in trees.items():
         kk = kf.read_bytes()
+        fileoff = fsec * 512
+        if len(kk) < fileoff + 512:
+            sys.exit(f"t_canary: {kf.relative_to(ROOT)} is {len(kk)} bytes, "
+                     f"shorter than the canary's file offset {fileoff}")
         for step in (-512, 512):
             if 0 <= fileoff + step and fileoff + step + 512 <= len(kk) \
-                    and ssum(kk, fileoff) == ssum(kk, fileoff + step):
+                    and ssum(kk[fileoff:fileoff + 512]) == \
+                    ssum(kk[fileoff + step:fileoff + step + 512]):
                 sys.exit(
                     f"t_canary: {kf.name} under {kf.parent.name}/: the sector "
                     f"at {fileoff} sums the same as the one at "
                     f"{fileoff + step}, so a read shifted by a sector still "
                     f"matches (SPEC.md 18.93.1)"
                 )
-    print(f"canary: memory offset {off}, file sector {fileoff // 512}, crosses a "
-          f"head on {len([n for n in IMAGES if (BUILD / n).exists()])} geometries "
-          f"and {len(lengths)} blob length{'' if len(lengths) == 1 else 's'} "
-          f"{lengths}, sum 0x{w(fileoff):04X} distinct from both neighbours")
-
+    print("canary: read after a head flip on %d system disks (%s), each "
+          "kernel's sector distinct from both neighbours (%s)%s"
+          % (len(lines), "; ".join(lines),
+             ", ".join("%s KSIG_OFF %d" % (sub or "kern_big", o)
+                       for sub, (_k, o, _f) in trees.items()),
+             "" if not stale else "; not walked, holding an older kernel: "
+             + ", ".join(stale)))
 
 main()

@@ -565,6 +565,278 @@ body:
     dw _c64_rowspan
     cmp ax, -1
     jne .f5
+    ; c64_runfind over two equal 80-byte records, then cells 3 (matrix), 6
+    ; (colour) and 20 (matrix) changed: from 0 the run is 3..6 (a gap of two
+    ; folded in), from 7 it is 20..20, from 21 nothing
+    call bandfill
+    mov byte [banda + 3], 0x77
+    mov byte [banda + 40 + 6], 0x77
+    mov byte [banda + 20], 0x77
+    mov word [pushes], 3
+    PUSHI 0
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, 0x0306
+    jne .f5
+    PUSHI 7
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, 0x1414
+    jne .f5
+    PUSHI 21
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, -1
+    jne .f5
+    ; c64_sprconv (9.11): $1B $E4 $00 multicolour, $D025 and $D026 lit
+    mov byte [scsd], 0x1B
+    mov byte [scsd+1], 0xE4
+    mov byte [scsd+2], 0x00
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 21
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw1
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
+    ; c64_sprconv (9.11): $81 $00 $F0 hires X-expanded, its own colour lit
+    mov byte [scsd], 0x81
+    mov byte [scsd+1], 0x00
+    mov byte [scsd+2], 0xF0
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 10
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw2
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
+    ; c64_sprconv (9.11): $6C multicolour X-expanded, its own colour lit
+    mov byte [scsd], 0x6C
+    mov byte [scsd+1], 0x00
+    mov byte [scsd+2], 0x00
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 11
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw3
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
+    ; c64_colrow (C64-SPEC 5.3.1): pixel 0 of M at a shift of 7 meets G's
+    ; bit 0 - a hit; at 6, a miss; and M's second byte, at a shift of 2,
+    ; reaching G[2]
+    mov word [pushes], 4
+    PUSHI crg
+    PUSHI 7
+    PUSHI 1
+    PUSHI crm
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 1
+    jne .f5
+    PUSHI crg
+    PUSHI 6
+    PUSHI 1
+    PUSHI crm
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 0
+    jne .f5
+    PUSHI crg2
+    PUSHI 2
+    PUSHI 2
+    PUSHI crm2
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 1
+    jne .f5
+    PUSHI crg2
+    PUSHI 1
+    PUSHI 2
+    PUSHI crm2
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 0
+    jne .f5
+    ; c64_colrows: the second data line's mask (pixel 0) meets the cell's
+    ; line 2 only when Y-expanded - lines 0,1 the first data line, 2 the
+    ; second; unexpanded, line 2 reads the third, which is clear
+    mov word [pushes], 6
+    PUSHI 1
+    PUSHI 4
+    PUSHI crsg
+    PUSHI 0
+    PUSHI 1
+    PUSHI crsm
+    call disc_call
+    dw _c64_colrows
+    cmp ax, 1
+    jne .f5
+    PUSHI 0
+    PUSHI 4
+    PUSHI crsg
+    PUSHI 0
+    PUSHI 1
+    PUSHI crsm
+    call disc_call
+    dw _c64_colrows
+    cmp ax, 0
+    jne .f5
+    ; c64_colpair, from raw data: A's pixel 23 (byte 2's bit 0) on its data
+    ; line 1 only; B's pixel 0 at D 23 on its line 0 only - they meet only
+    ; if B's line 0 lies over A's line 1: B Y-expanded from its first half
+    ; (ye 4), line 1 is still B's 0 and they meet; unexpanded (ye 0) not
+    mov word [pushes], 9
+    PUSHI cptmp
+    PUSHI scxx
+    PUSHI 0
+    PUSHI 4
+    PUSHI 2
+    PUSHI 23
+    PUSHI 1
+    PUSHI cpb
+    PUSHI cpa
+    call disc_call
+    dw _c64_colpair
+    cmp ax, 1
+    jne .f5
+    PUSHI cptmp
+    PUSHI scxx
+    PUSHI 0
+    PUSHI 0
+    PUSHI 2
+    PUSHI 23
+    PUSHI 1
+    PUSHI cpb
+    PUSHI cpa
+    call disc_call
+    dw _c64_colpair
+    cmp ax, 0
+    jne .f5
+    ; c64_wmove: two words, and the byte after them left alone
+    mov word [pushes], 3
+    PUSHI 2
+    PUSHI wmsrc
+    PUSHI wmdst
+    call disc_call
+    dw _c64_wmove
+    cmp word [wmdst], 0x2211
+    jne .f5
+    cmp word [wmdst+2], 0x4433
+    jne .f5
+    cmp byte [wmdst+4], 0x99
+    jne .f5
+    ; c64_sprbehind: $FF over a glyph byte $18 three pixels left of it
+    ; ($18 << 3 = $C0 under the sprite's first two pixels): $3F
+    mov word [pushes], 4
+    PUSHI sbg
+    PUSHI 3
+    PUSHI 1
+    PUSHI sbon
+    call disc_call
+    dw _c64_sprbehind
+    cmp byte [sbon], 0x3F
+    jne .f5
+    ; c64_colblank: 32 32 blank (1); 32 1 not (0); 32 5 unknown at 1 (3);
+    ; 96 96 under the ECM mask $3F is 32 32 (1)
+    mov word [pushes], 5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx1
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 1
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx2
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 0
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx3
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 3
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0x3F
+    PUSHI 2
+    PUSHI cbx4
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 1
+    jne .f5
+    ; c64_sprmasks: lines 0 and 20 are $81 $00 $F0 hires X-expanded (as
+    ; c64_sprconv's ON, scw2), the rest clear; then $1B multicolour, whose
+    ; pairs 00 01 10 11 are opaque but the first: $3F
+    mov word [pushes], 4
+    PUSHI scxx
+    PUSHI 2
+    PUSHI smmk
+    PUSHI smsd
+    call disc_call
+    dw _c64_sprmasks
+    mov si, scw2
+    mov di, smmk
+    mov cx, 6
+    call .sccmp
+    jne .f5
+    mov si, scw2
+    mov di, smmk + 140
+    mov cx, 6
+    call .sccmp
+    jne .f5
+    mov si, smz
+    mov di, smmk + 6
+    mov cx, 7
+    call .sccmp
+    jne .f5
+    mov byte [smsd], 0x1B
+    PUSHI scxx
+    PUSHI 1
+    PUSHI smmk
+    PUSHI smsd
+    call disc_call
+    dw _c64_sprmasks
+    cmp byte [smmk], 0x3F
+    jne .f5
+    mov word [pushes], 3
     mov al, '.'
     call putc
     jmp .band1
@@ -572,6 +844,15 @@ body:
     mov al, '5'
     call putc
     inc bp
+    jmp .band1
+.sccmp:
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    ret
 
     ; --- (6) c64band.inc's CROSS-SEGMENT pair: the composer and the
     ;         signature. C64-SPEC §3.6 says every cross-segment entry point is
@@ -678,6 +959,504 @@ body:
     cmp ax, [sig1]
     je .f6
     mov byte [colrow+5], 0
+
+    ; c64_bandbm (C64-SPEC 9.10): one cell, multicolour then hires. Colour 1
+    ; is all-lit, 0 all-dark, and 6 - the paper - a different bit on each of
+    ; its four line phases, so a block laid out wrong or a phase that does
+    ; not wrap at four reads as a wrong byte
+    mov word [_c64_dmask+4], 0xFFFF         ; colour 1
+    mov word [_c64_dmask+6], 0xFFFF
+    mov word [_c64_dmask+24], 0x4080        ; colour 6: 0x80, 0x40, 0x20, 0x10
+    mov word [_c64_dmask+26], 0x1020
+    mov byte [bmxm], 0x10                   ; high nibble white, low black
+    mov byte [colrow+0], 1                  ; colour RAM white
+    mov cx, 8
+    mov di, bmxb
+.bmf:
+    mov byte [di], 0x1B                     ; pairs 00 01 10 11
+    inc di
+    loop .bmf
+    mov byte [banda+1], 0xCC
+    mov word [pushes], 7
+    PUSHI 6                                 ; bg
+    PUSHI 1                                 ; mc
+    PUSHI 1                                 ; n
+    PUSHI colrow
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_bandbm
+    ; line y: paper's phase & 0xC0 | white 0x30 | black 0 | white 0x03
+    mov si, bmwant
+    xor di, di
+    mov cx, 8
+.bmc:
+    mov al, [banda+di]
+    cmp al, [si]
+    jne .f6
+    inc si
+    add di, 40
+    loop .bmc
+    cmp byte [banda+1], 0xCC                ; ...and nothing past n
+    jne .f6
+    mov cx, 8
+    mov di, bmxb
+.bmh:
+    mov byte [di], 0xAA
+    inc di
+    loop .bmh
+    PUSHI 6                                 ; ...hires: 1 = white, 0 = black
+    PUSHI 0
+    PUSHI 1
+    PUSHI colrow
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_bandbm
+    cmp byte [banda], 0xAA
+    jne .f6
+    cmp byte [banda+280], 0xAA
+    jne .f6
+    mov byte [colrow+0], 0
+
+    ; c64_sprrow (C64-SPEC 9.11): $FF on, $0F of it lit, at cell 1 shifted
+    ; three right over a band of $AA, cells 1..1 only: cell 1 is the byte's
+    ; top five pixels set, the lit ones bright - (AA & ~1F) | 01 = A1 - and
+    ; cell 2, the spill, is outside F..L and must stay $AA
+    mov byte [banda+1], 0xAA
+    mov byte [banda+2], 0xAA
+    mov byte [bmxm], 0xFF                   ; (on)
+    mov byte [bmxb], 0x0F                   ; (lit)
+    mov word [pushes], 8
+    PUSHI 1                                 ; l
+    PUSHI 1                                 ; f
+    PUSHI 3                                 ; sh
+    PUSHI 1                                 ; cell
+    PUSHI 1                                 ; n
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_sprrow
+    cmp byte [banda+1], 0xA1
+    jne .f6
+    cmp byte [banda+2], 0xAA
+    jne .f6
+
+    ; c64fsx.inc (C64-SPEC 9.12): the colour screen's composers, on the
+    ; shipping text. c64_c8row hires - $A5 in red (2) on blue (6) - then
+    ; multicolour, pairs 00..11 as 6, 1, 2, 5
+    mov cx, 8
+    mov di, bmxb
+.c8f:
+    mov byte [di], 0xA5
+    inc di
+    loop .c8f
+    mov byte [c8k], 6
+    mov byte [c8k+1], 2
+    mov byte [c8k+2], 1
+    mov byte [c8k+3], 5
+    mov byte [c8k+4], 0                     ; mc = 0
+    mov byte [bnd8+8], 0xCC                 ; ...and nothing past cell 0
+    mov word [pushes], 8
+    PUSHI 1                                 ; n
+    PUSHI c8k+4                             ; mc
+    PUSHI c8k+3                             ; k3
+    PUSHI c8k+2                             ; k2
+    PUSHI c8k+1                             ; k1
+    PUSHI c8k                               ; k0
+    PUSHI bmxb                              ; gb
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8row
+    mov si, c8hi
+    mov di, bnd8
+    call .c8cmp
+    jne .f6
+    mov si, c8hi
+    mov di, bnd8 + 7 * 320                  ; line 7, stride 320
+    call .c8cmp
+    jne .f6
+    cmp byte [bnd8+8], 0xCC
+    jne .f6
+    mov cx, 8
+    mov di, bmxb
+.c8m:
+    mov byte [di], 0x1B
+    inc di
+    loop .c8m
+    mov byte [c8k+1], 1
+    mov byte [c8k+2], 2
+    mov byte [c8k+4], 1                     ; mc = 1
+    PUSHI 1
+    PUSHI c8k+4
+    PUSHI c8k+3
+    PUSHI c8k+2
+    PUSHI c8k+1
+    PUSHI c8k
+    PUSHI bmxb
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8row
+    mov si, c8mcw
+    mov di, bnd8 + 3 * 320
+    call .c8cmp
+    jne .f6
+
+    ; c64_c8spr: $FF $00 $81 hires in colour 7 from x = -2, clipped to 0..15
+    mov cx, 32
+    mov di, bnd8
+.c8z:
+    mov byte [di], 0
+    inc di
+    loop .c8z
+    mov byte [c8d], 0xFF
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x81
+    mov byte [c8c], 0
+    mov byte [c8c+1], 3
+    mov byte [c8c+2], 7
+    mov byte [c8c+3], 4
+    PUSHI 0                                 ; xs
+    PUSHI 0                                 ; mc
+    PUSHI c8c
+    PUSHI 16                                ; hi
+    PUSHI 0                                 ; lo
+    PUSHI -2                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8sw
+    mov di, bnd8
+    mov cx, 22
+    call .c8cmpn
+    jne .f6
+    ; ...and $1B multicolour, X-expanded: 4 clear, 4 x 3, 4 x 7, 4 x 4
+    mov cx, 32
+    mov di, bnd8
+.c8y:
+    mov byte [di], 0
+    inc di
+    loop .c8y
+    mov byte [c8d], 0x1B
+    mov byte [c8d+2], 0x00
+    PUSHI 1
+    PUSHI 1
+    PUSHI c8c
+    PUSHI 320
+    PUSHI 0
+    PUSHI 0
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8mw
+    mov di, bnd8
+    mov cx, 17
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $A5 $0F $FF hires from x = 8, the third byte at hi = 24 and not drawn
+    mov cx, 40
+    mov di, bnd8
+.c8fz:
+    mov byte [di], 0
+    inc di
+    loop .c8fz
+    mov byte [c8d], 0xA5
+    mov byte [c8d+1], 0x0F
+    mov byte [c8d+2], 0xFF
+    PUSHI 0                                ; xs
+    PUSHI 0                                ; mc
+    PUSHI c8c
+    PUSHI 24                                ; hi
+    PUSHI 0
+    PUSHI 8                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8fw
+    mov di, bnd8
+    mov cx, 32
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $81 hires X-expanded from x = 0, wholly inside
+    mov cx, 40
+    mov di, bnd8
+.c8xz:
+    mov byte [di], 0
+    inc di
+    loop .c8xz
+    mov byte [c8d], 0x81
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x00
+    PUSHI 1                                ; xs
+    PUSHI 0                                ; mc
+    PUSHI c8c
+    PUSHI 320                                ; hi
+    PUSHI 0
+    PUSHI 0                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8xw
+    mov di, bnd8
+    mov cx, 32
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $1B multicolour from x = 4, not expanded
+    mov cx, 40
+    mov di, bnd8
+.c8nz:
+    mov byte [di], 0
+    inc di
+    loop .c8nz
+    mov byte [c8d], 0x1B
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x00
+    PUSHI 0                                ; xs
+    PUSHI 1                                ; mc
+    PUSHI c8c
+    PUSHI 320                                ; hi
+    PUSHI 0
+    PUSHI 4                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8nw
+    mov di, bnd8
+    mov cx, 32
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8glyph: code $41 & $3F = 1 out of the ROM claim, 0x88..0x8F
+    mov byte [bmxm], 0x41
+    mov word [pushes], 6
+    PUSHI 0x3F
+    PUSHI 0
+    PUSHI SEG_ROM
+    PUSHI 1
+    PUSHI bmxm
+    PUSHI bmxb
+    call disc_call
+    dw _c64_c8glyph
+    cmp byte [bmxb], 0x88
+    jne .f6
+    cmp byte [bmxb+7], 0x8F
+    jne .f6
+
+    ; c64_osc3 (C64-SPEC 11.4.1): TEST resets; a sawtooth at $1000 for $80
+    ; cycles is $080000, its top byte $08; noise from the reset LFSR for one
+    ; bit-19 rise and then five more reads $FF and then $FC (zeros shifted
+    ; in past taps 4 and 2)
+    mov word [pushes], 4
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    or ax, ax
+    jnz .f6
+    PUSHI 0
+    PUSHI 0x20
+    PUSHI 0x1000
+    PUSHI 0x80
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0x08
+    jne .f6
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x100
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xFF
+    jne .f6
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x500
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xFC
+    jne .f6
+    ; ...and the EIGHT-AT-A-TIME path: from TEST, 64 clocks (eight bytes) and
+    ; then 13 (one byte and five singles), against a single-clock model's
+    ; register ($7C03E0 -> $C4, $7C1F1F -> $CB)
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x4000
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xC4
+    jne .f6
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x0D00
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xCB
+    jne .f6
+    ; c64_scr_left: DEAD $1234 + CARRY $0011, out of the claim's scratch
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov word [es:C64_SCR_BASE + C64_SCR_DEAD], 0x1234
+    mov word [es:C64_SCR_BASE + C64_SCR_CARRY], 0x0011
+    pop es
+    mov word [pushes], 0
+    call disc_call
+    dw _c64_scr_left
+    cmp ax, 0x1245
+    jne .f6
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov word [es:C64_SCR_BASE + C64_SCR_DEAD], 0
+    mov word [es:C64_SCR_BASE + C64_SCR_CARRY], 0
+    pop es
+    ; c64_bandfind (C64-SPEC 9.4.1): rows 2-6 of 8 moved DOWN one (sig[i] is
+    ; shsig[i-1], and each differs from its own old row); rows 0, 1 and 7
+    ; stand still. The answer is k = -1 over rows 2..6, five changed
+    mov word [pushes], 4
+    PUSHI 3
+    PUSHI 8
+    PUSHI bf_sh
+    PUSHI bf_sig
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -1
+    jne .f6
+    cmp word [_c64_sb0], 2
+    jne .f6
+    cmp word [_c64_sb1], 6
+    jne .f6
+    cmp word [_c64_bfbest], 5
+    jne .f6
+    ; ...and six random 25-row screens, each a shift of -7..11 with noise,
+    ; their answers out of the C model's arithmetic (the order the runs are
+    ; met in decides a tie, so it is held too)
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh0
+    PUSHI bfr_sig0
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -3
+    jne .f6
+    cmp word [_c64_sb0], 3
+    jne .f6
+    cmp word [_c64_sb1], 16
+    jne .f6
+    cmp word [_c64_bfbest], 13
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh1
+    PUSHI bfr_sig1
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 5
+    jne .f6
+    cmp word [_c64_sb0], 9
+    jne .f6
+    cmp word [_c64_sb1], 15
+    jne .f6
+    cmp word [_c64_bfbest], 6
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh2
+    PUSHI bfr_sig2
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 5
+    jne .f6
+    cmp word [_c64_sb0], 11
+    jne .f6
+    cmp word [_c64_sb1], 19
+    jne .f6
+    cmp word [_c64_bfbest], 7
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh3
+    PUSHI bfr_sig3
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 11
+    jne .f6
+    cmp word [_c64_sb0], 0
+    jne .f6
+    cmp word [_c64_sb1], 13
+    jne .f6
+    cmp word [_c64_bfbest], 13
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh4
+    PUSHI bfr_sig4
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -7
+    jne .f6
+    cmp word [_c64_sb0], 7
+    jne .f6
+    cmp word [_c64_sb1], 18
+    jne .f6
+    cmp word [_c64_bfbest], 9
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh5
+    PUSHI bfr_sig5
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -1
+    jne .f6
+    cmp word [_c64_sb0], 16
+    jne .f6
+    cmp word [_c64_sb1], 20
+    jne .f6
+    cmp word [_c64_bfbest], 5
+    jne .f6
+    jmp .c8done
+; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
+.c8cmp:
+    mov cx, 8
+.c8cmpn:
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    ret
+.c8done:
     mov al, '.'
     call putc
     jmp .x2
@@ -1105,8 +1884,13 @@ hst_seg:
 
 %include "c64cpu.inc"               ; for _c64_m, which c64mem.inc reads the
                                     ; claims from
+section .data
+_c64_hiram: times 0x3A db 0             ; (c64io.c's: the program's $FFC0-$FFF9)
+section .text
 %include "c64mem.inc"
 %include "c64band.inc"
+%include "c64fsx.inc"
+%include "c64sid.inc"
 
 section .text
 
@@ -1114,6 +1898,24 @@ section .text
 ; globals there, so nasm can see the label). Here they stand in for it.
 section .data
 _c64_cmask: times 32 db 0xFF
+_c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): none here
+_c64_dmask: times 64 db 0
+_c64_sb0:   dw 0
+_c64_sb1:   dw 0
+bfr_sig0: dw 4, 4, 0, 3, 4, 2, 2, 1, 1, 0, 2, 4, 3, 4, 0, 2, 4, 3, 0, 3, 1, 3, 3, 0, 0
+bfr_sh0:  dw 3, 4, 2, 2, 1, 1, 0, 2, 4, 3, 4, 0, 2, 4, 4, 0, 3, 1, 3, 3, 1, 1, 1, 0, 0
+bfr_sig1: dw 0, 0, 1, 2, 0, 4, 0, 3, 1, 4, 1, 3, 0, 3, 1, 0, 0, 4, 1, 4, 1, 4, 0, 3, 4
+bfr_sh1:  dw 0, 4, 1, 1, 2, 0, 0, 1, 4, 0, 4, 0, 4, 3, 4, 1, 3, 0, 3, 1, 0, 4, 1, 1, 4
+bfr_sig2: dw 1, 3, 2, 4, 0, 2, 2, 0, 4, 0, 1, 3, 4, 3, 3, 2, 1, 4, 0, 3, 2, 2, 1, 3, 4
+bfr_sh2:  dw 2, 0, 3, 0, 1, 1, 3, 2, 2, 0, 2, 2, 0, 4, 0, 0, 3, 4, 3, 3, 2, 1, 4, 0, 3
+bfr_sig3: dw 3, 4, 1, 2, 4, 4, 3, 2, 0, 0, 2, 4, 1, 1, 4, 4, 3, 4, 2, 4, 4, 4, 0, 4, 4
+bfr_sh3:  dw 2, 1, 0, 4, 2, 0, 0, 3, 3, 1, 4, 3, 4, 1, 2, 4, 4, 3, 2, 0, 0, 2, 4, 1, 1
+bfr_sig4: dw 4, 0, 3, 3, 4, 0, 0, 2, 0, 1, 1, 0, 0, 3, 3, 0, 3, 0, 4, 4, 2, 1, 3, 1, 1
+bfr_sh4:  dw 2, 0, 1, 1, 0, 0, 3, 3, 0, 3, 0, 4, 0, 2, 1, 3, 1, 2, 4, 4, 3, 1, 0, 4, 4
+bfr_sig5: dw 4, 3, 1, 1, 1, 0, 4, 0, 0, 0, 0, 2, 0, 3, 2, 0, 1, 2, 0, 1, 0, 3, 4, 1, 0
+bfr_sh5:  dw 3, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 3, 4, 1, 2, 0, 1, 0, 2, 4, 1, 0, 3
+bf_sig:     dw 10, 30, 11, 22, 23, 24, 25, 17
+bf_sh:      dw 10, 11, 22, 23, 24, 25, 26, 17
 _c64_bgfill: db 0
 ; Edit > Copy's two package globals (c64kbd.c bss on the target). The real
 ; c64_sctab is built by ovl_conv_init from VICE's three transcribed
@@ -1218,7 +2020,71 @@ src:         times 24 db 0
 dst:         times 24 db 0
              times 4 db 0xCC
              times 4 db 0xCC
+bmxm:        db 0
+bmxb:        times 8 db 0
+bmwant:      db 0xB3, 0x73, 0x33, 0x33, 0xB3, 0x73, 0x33, 0x33
 banda:       times 320 db 0
+bnd8:        times 2560 db 0
+c8k:         times 5 db 0
+c8d:         times 3 db 0
+c8c:         times 4 db 0
+c8hi:        db 2, 6, 2, 6, 6, 2, 6, 2
+c8mcw:       db 6, 6, 1, 1, 2, 2, 5, 5
+c8sw:        db 7, 7, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0
+c8mw:        db 0, 0, 0, 0, 3, 3, 3, 3, 7, 7, 7, 7, 4, 4, 4, 4, 0
+c8fw:        db 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 7, 0, 0, 7, 0, 7
+             db 0, 0, 0, 0, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0
+c8xw:        db 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7
+             times 16 db 0
+c8nw:        db 0, 0, 0, 0, 0, 0, 3, 3, 7, 7, 4, 4, 0, 0, 0, 0
+             times 16 db 0
+scsd:        times 3 db 0
+crm:         db 0x80                    ; c64_colrow's cases
+crg:         db 0x01, 0x00
+crm2:        db 0x00, 0x01
+crg2:        db 0x00, 0x00, 0x40
+smsd:        db 0x81, 0x00, 0xF0
+             times 57 db 0
+             db 0x81, 0x00, 0xF0
+smz:         times 7 db 0
+smmk:        times 147 db 0x55
+cpa:         db 0, 0, 0, 0, 0, 1, 0, 0, 0
+cpb:         db 0x80, 0, 0, 0, 0, 0, 0, 0, 0
+cptmp:       times 16 db 0
+wmsrc:       db 0x11, 0x22, 0x33, 0x44, 0x55
+wmdst:       db 0, 0, 0, 0, 0x99
+sbon:        db 0xFF
+sbg:         db 0x18, 0, 0, 0, 0, 0, 0, 0, 0x00
+cbx1:        db 32, 32
+cbx2:        db 32, 1
+cbx3:        db 32, 5
+cbx4:        db 96, 96
+cbbk:        db 0, 2, 2, 2, 2, 0
+             times 26 db 2
+             db 1                       ; 32: blank
+             times 223 db 2
+crsm:        db 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+crsg:        db 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+scon:        times 6 db 0               ; ...and sclit right after: compared
+sclit:       times 6 db 0               ; as one 12-byte run
+scw1:        db 0x3F, 0xFC, 0x00, 0, 0, 0, 0x33, 0xCC, 0x00, 0, 0, 0
+scw2:        db 0xC0, 0x03, 0x00, 0x00, 0xFF, 0x00
+             db 0xC0, 0x03, 0x00, 0x00, 0xFF, 0x00
+scw3:        db 0xFF, 0xF0, 0, 0, 0, 0, 0x0F, 0x00, 0, 0, 0, 0
+scxx:                                   ; c64_xexp: each bit doubled
+%assign c 0
+%rep 256
+%assign m 0
+%assign i 0
+%rep 8
+%if (c >> i) & 1
+%assign m m | (3 << (2 * i))
+%endif
+%assign i i + 1
+%endrep
+             dw m
+%assign c c + 1
+%endrep
              times 4 db 0xCC
 bandb:       times 320 db 0
              times 4 db 0xCC

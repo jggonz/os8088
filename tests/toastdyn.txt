@@ -1,0 +1,94 @@
+# tests/toastdyn.txt - the toast arguments that are BUILT AT RUN TIME
+#
+# Every fixed toast message is a TOASTSTR (or a TOASTRUN..TOASTEND run), and
+# the assembler measures it against TOAST_MAX where it is written (SPEC.md
+# 59.10). tests/unit/t_toast.py follows every toast argument back to where it
+# was made, and fails on anything that is not one of those - unless it is a
+# value only the running program knows: a name the user chose, a number, a
+# line composed in a buffer, a C caller's argument. Those are this file.
+#
+# ONE LINE PER SOURCE: <path> <proc> <what>  # <why>
+#   <proc> is the routine (or, for a buffer, the buffer) t_toast.py names,
+#   <what> the instruction or `buffer`, exactly as its failure message prints
+#   it - copy the suggested line and write the reason.
+# A line `<path> <label> cut  # <why>` stops the walk at a label's entry, for
+# a path no build can take; it needs a reason as good as any other line.
+#
+# The reason says what makes the text and what bounds it. A buffer of 25
+# bytes or fewer is bounded by its own size; a longer one is bounded by what
+# is composed into it, and the toast's own truncation is what the remainder
+# is FOR - the name goes LAST (SPEC.md 59.10), so what is cut is the user's
+# own word and not the program's.
+#
+# A RATCHET: a line no walk reaches any more fails the build. Shorter is
+# better - a fixed string registered here is a string nobody measures.
+
+# --- kernel ---------------------------------------------------------------
+kernel/desksc.inc ovl_sc_load movsi,sp  # 'Autostart' composed on the stack, 18 bytes, a fixed word pushed as immediates
+kernel/files.inc fm_hdrbuf buffer  # 48 bytes: the Disk window's header line, a volume or file name composed in (diskops, files)
+kernel/hiber.inc hbm_dosrec buffer  # the DOS handoff record's own refusal line, written by DOS.O88 into the record (SPEC.md 96.40) and bounded there
+kernel/mega.inc mega_fkmsg buffer  # MEGA_FKMSG = TOAST_MAX + 1 bytes (kernel.asm holds the two equal): the 286 fault line, bounded by its buffer
+
+# --- packages: composed buffers ---------------------------------------------
+apps/arcade/arcade.asm ar_msg buffer  # a ROM file name then the reason (ar_romload .tell): the name first by design, the reason a TOASTSTR
+apps/browser/browser.asm br_url buffer  # the URL being fetched - the user's text
+apps/deskcal/deskcal.asm dc_line buffer  # 32 bytes: a prefix and the event's own words (dc_tick), the user's text last
+apps/deskcal/deskcal.asm dc_rmsg buffer  # the reminder's text, typed by the user
+apps/deskclok/deskclok.asm dk_line buffer  # 24 bytes: an alarm or time line formatted by dk_s* - bounded by its buffer
+apps/dos/dos.asm dos_lbuf buffer  # 'Saved'/'Loaded' and the .LNK's name (dos_hcat), the name last
+apps/notepad/notepad.asm np_tbuf buffer  # 26 bytes: 'Saved '/'Loaded ' + the 8.3 name - bounded by its buffer
+apps/paint/paint.asm pt_ferrbuf buffer  # 16 bytes: the kernel's OSAPI_FERR_TEXT words copied out, which the kernel's TOASTSTRs bound
+apps/pixel/pixel.asm px_cline buffer  # a status line composed with a file name or a number in it
+apps/realdmg/realdmg.asm rw_nbuf buffer  # rw_note's copy of an RW_MI menu item's text, which RW_MI holds to TOAST_MAX
+apps/realdmg/realdmg.asm rw_stmsg buffer  # 25 bytes: rw_stsay's line - bounded by its buffer
+apps/scribe/scribe.asm sc_pbuf buffer  # 32 bytes: a page/paper report with numbers composed in
+apps/scribe/scribe.asm sc_tbuf buffer  # 26 bytes: 'Saved '/'Loaded ' + the 8.3 name - bounded by its buffer
+apps/syscheck/syscheck.asm sc_txt buffer  # the report line being composed - a volume, a count, a date
+apps/thewire/thewire.asm wr_omsg buffer  # a fixed head (wr_ohead) and the catalogue record's title, cut to CX cells by wr_sputn
+apps/win16/w16task.inc w16t_toast buffer  # 26 bytes: w16t_say's words and a program name - bounded by its buffer
+apps/win16/win16.asm w16_l1 buffer  # the window's own first line, composed by the loader's refusal with the program's name
+apps/word/word.asm wd_tbuf buffer  # 26 bytes: 'Saved '/'Loaded ' + the 8.3 name - bounded by its buffer
+
+# --- packages: pointers only the running program knows ---------------------
+apps/os88stik.inc stik_single movsi,[stik_d_isopen]  # the Sticky library's pointer to its own stik_isopen, a TOASTSTR in os88stik.inc/os88stikc.inc
+apps/rlapply/rlapply.asm ra_entry lodsb  # counts AL strings into the run below ra_s_ok, every one of which is a TOASTSTR
+apps/scribe/scribe.asm sc_dgopen movax,[bx+4]  # a dialog record's title (+4); every record's title is a TOASTSTR (sc_s_dg*, sc_s_d*)
+apps/word/word.asm wd_dgopen movax,[bx+4]  # a dialog record's title (+4); every record's title is a TOASTSTR (wd_s_dg*, wd_s_d*)
+apps/cc/os88thunk.asm _os88_toast movsi,[bp+4]  # the C thunk's argument: t_toast.py's C half measures every os88_toast argument at its call
+
+# --- C packages ---------------------------------------------------------------
+apps/apple2/apple2.c a2_jam a2_jamline  # 24 bytes: 'Main CPU: JAM at $xxxx', cut at 18 - bounded by its array
+apps/apple2/apple2.c a2_refuse_kb line  # 26 bytes: a refusal with the KB figures in it - bounded by its array
+apps/c64/c64.c c64_jam c64_jamline  # 24 bytes: 'Main CPU: JAM at $xxxx', cut at 22 - bounded by its array
+apps/c64/c64.c ovl_refuse_kb c64_line  # a refusal with the KB figures in it, C64_MSGMAX; c64uitest sizes every c64_say line
+apps/c64/c64disk.c ovl_fs_save c64_msg  # 'Saved'/'Exists:'/'Not saved:' + the PRG's 8.3 name, which c64uitest sizes at the longest name
+apps/c64/c64load.c ovl_load_prg c64_msg  # the load's outcome with the PRG's name in it, sized by c64uitest's message list
+apps/c64/c64load.c ovl_load_t64 c64_msg  # the same, for a T64
+apps/cword/cwovl.c ovl_conf_next cw_tmp  # a count and ' replaced' / a confirm line composed with a number
+apps/cword/cwovl.c ovl_replace_all cw_tmp  # a count and ' replaced'
+apps/lemmings/lemmings.c ovl_launch lem_str(LEMS_NO_FSX)  # LEMS_* table strings; lemtest.c sizes every one against TOAST_MAX
+apps/lemmings/lemmings.c ovl_launch lem_str(lem_lv_said)  # the same table
+apps/lemmings/lemmings.c ovl_said_load lem_line  # a level file's name and the reason, which lemtest.c sizes (SPEC.md 59, TOAST_MAX)
+apps/lemmings/lemmings.c ovl_said_save lem_str(LEMS_SAV_FAIL)  # the LEMS_* table again
+apps/loom/lmed.c lm_ins lm_line  # a refusal composed with a field or count (lm_refuse)
+apps/loom/lmovl.c ovl_newproj lm_line  # the project's name, typed by the user, in a sentence
+apps/loom/lmprev.c lm_prev_on lm_errtext()  # the compiler's error text for the user's own script
+apps/loom/lmprev.c lm_prev_on lm_pv_why()  # the preview's refusal, chosen at run time
+apps/loom/lmproj.c lm_open_pend lm_line  # a project or file name in a sentence
+apps/loom/lmproj.c lm_pack lm_errtext()  # the compiler's error text for the user's own script
+apps/loom/lmproj.c lm_pack lm_line  # 'Packed N bytes' and the bundle's name
+apps/loom/lmproj.c lm_readslot lm_line  # a slot's file name in a sentence
+apps/loom/lmproj.c lm_save lm_line  # the saved file's name
+apps/loom/lmproj.c lm_short lm_line  # the KB figures of a short heap
+apps/loom/lmproj.c lm_side_click lm_errtext()  # the compiler's error text
+apps/loom/lmproj.c ovl_openproj lm_line  # the opened project's name
+apps/runcpm/rcfs.c rc_dc_want rc_tmsg  # a CP/M drive letter and a file name in a sentence
+apps/runcpm/rcfs.c rc_toast_name rc_tmsg  # a CP/M file name in a sentence, the name last
+apps/runcpm/runcpm.c os88_main rc_tmsg  # the start-up refusal with a figure in it
+apps/runcpm/runcpm.c ovl_dbg_counters rc_tmsg  # the debug counters - numbers
+apps/weave/wevent.c w_scripterr w_line  # 'Script error in fn N.' - 22 at the largest N (WEAVE-SPEC 1.2)
+apps/weave/wload.c w_bad w_line  # WEAVE-SPEC 10.4's sentence, name and field: LONGER THAN THE BAR - the toast keeps the name, w_status keeps the sentence for Bundle Info. A short toast form is owed (ovl_info has one)
+apps/weave/wload.c w_missing w_line  # the bundle's name and ' missing' (WEAVE-SPEC 10.3)
+apps/weave/wload.c w_short w_line  # WEAVE-SPEC 10.1's sentence with both KB figures: LONGER THAN THE BAR, whole in w_status for Bundle Info. A short toast form is owed (ovl_info has one)
+apps/weave/wovl.c ovl_about w_line  # WEAVE-SPEC 4.12's banner with the measured ops/s: LONGER THAN THE BAR (35 at five digits). A short toast form is owed
+apps/weave/wovl.c ovl_info w_line  # the SHORT form 'ask NKB, N sections', 20 at the largest bundle the format allows

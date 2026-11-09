@@ -27,7 +27,7 @@
 ;
 ; WRITTEN ONCE, ASSEMBLED BY EACH CALLER (the os88la.inc shape): the
 ; measurement is a package's, against a block it owns, so it costs no
-; resident byte and no driver byte. XMEM.DRV has 21 bytes of its 2 KB claim
+; resident byte and no driver byte. XMEM.DRV has 7 bytes of its 2 KB claim
 ; left, and a KB more of it is a KB of every 286 and 386's heap.
 ;
 ; CONTEXT: OSAPI_XMEM_COPY's - the UI task. ~40 ms on a 286 (twelve 8 KB
@@ -208,7 +208,7 @@ xg_gaps_end:
 
 ; the caller's data, wherever suits it
 %macro XG_DATA 0
-xg_s0:      dd 0                    ; the block's start, 0 apart from DS:0
+xg_s0:      dd 0                    ; the block's start, 0 apart from ES:0
 xg_t0:      dw 0                    ; the count 0 apart
 xg_bt:      dw 0                    ; the least count
 xg_best:    dw 0                    ; ...and its gap

@@ -13,7 +13,7 @@
 #     make apple2disk            ...and the four floppies
 #
 # **EVERY STEP FAILS RATHER THAN PASSING WHEN ITS SUBJECT IS ABSENT**
-# (docs/APPLE2-PORT-PLAN.md Decision 12). That is why `a2ref.py --check` takes
+# (docs/plans/completed/APPLE2-PORT-PLAN.md Decision 12). That is why `a2ref.py --check` takes
 # an EXPLICIT MODE LIST - wave 1 asks for `text` alone, and the wave that
 # writes the lo-res and hi-res composers adds them - and why the a2_say walk
 # below carries an expected MINIMUM: a corpus of zero literals would otherwise

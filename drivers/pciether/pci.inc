@@ -14,7 +14,7 @@
 ; through it. Nothing here passes a pointer, so DS and ES - which mega_svc
 ; turns into real-mode segments - are not read by the BIOS. On a 386 the
 ; reflection is a CR0.PE clear and set; on a 286 it is a CPU reset through the
-; BIOS, which is why pci_gate asks OSAPI_CPU_INFO first and a 286 never makes
+; BIOS, which is why pci_probe asks OSAPI_CPU_INFO first and a 286 never makes
 ; the call: no 286 board has PCI. It costs a few hundred microseconds a call
 ; and runs at attach only.
 ;
@@ -32,154 +32,43 @@ PCIC_IO         equ 0x0001      ; command: I/O Space
 PCIC_MASTER     equ 0x0004      ; command: Bus Master
 
 ; -----------------------------------------------------------------------------
-; pci_gate - may we ask the PCI BIOS at all? (a 386 or better)
-; out: CF=0 yes, CF=1 no. AX kept.
+; pci_bios - one PCI BIOS call. in: AX = the B1xxh function, and its own
+; registers (SPEC.md 125.3's table). out: CF=0 it answered SUCCESSFUL (AH = 0);
+; CF=1 the BIOS refused - CF set, or AH a non-zero return code. AH is spent,
+; and whatever the function itself writes (B101h: AL, BX, CX, EDX, EDI)
 ; -----------------------------------------------------------------------------
-pci_gate:
-    push ax
-    call OSAPI_CPU_INFO
-    cmp al, CPU_386             ; CF = AL below a 386
-    pop ax                      ; (pop leaves the flags)
-    ret
-
-; -----------------------------------------------------------------------------
-; pci_present - B101h. out: CF=0 the BIOS is there. Every register kept -
-; DI too: a 2.1 BIOS returns EDI = its protected-mode entry point (SeaBIOS
-; does), so B101h is the one call here that writes a register it was not given
-; -----------------------------------------------------------------------------
-pci_present:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov ax, 0xB101
+pci_bios:
     int PCI_INT
-    jc  .no
-    or  ah, ah
-    jnz .no
-    cmp dx, PCI_PCISIG
-    jne .no
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pci_find - B102h. in: DX = vendor, CX = device, SI = index
-; out: CF=0 and BX = bus (BH) / device-function (BL); CF=1 = none
-; -----------------------------------------------------------------------------
-pci_find:
-    push ax
-    mov ax, 0xB102
-    int PCI_INT
-    jc  .no
-    or  ah, ah
-    jnz .no
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; configuration reads and writes: BX = bus/devfn, DI = the register
-; pci_rdb -> CL, pci_rdw -> CX; pci_wrb takes CL, pci_wrw takes CX. CF=1 = the
-; BIOS refused. Everything else kept.
-; -----------------------------------------------------------------------------
-pci_rdb:
-    push ax
-    mov ax, 0xB108
-    jmp short pci_cfg
-pci_rdw:
-    push ax
-    mov ax, 0xB109
-    jmp short pci_cfg
-pci_wrb:
-    push ax
-    mov ax, 0xB10B
-    jmp short pci_cfg
-pci_wrw:
-    push ax
-    mov ax, 0xB10C
-pci_cfg:
-    int PCI_INT
-    jc  .no
-    or  ah, ah
-    jnz .no
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; pci_iobar0 - BX = bus/devfn. out: CF=0 and AX = BAR0's port base; CF=1 = BAR0
-; is not an I/O BAR (bit 0 clear) or the BIOS refused
-; -----------------------------------------------------------------------------
-pci_iobar0:
-    push cx
-    push di
-    mov di, PCI_BAR0
-    call pci_rdw
-    jc  .out
-    test cl, 1
-    jz  .no
-    mov ax, cx
-    and ax, 0xFFFC
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop di
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; pci_enable - BX = bus/devfn: I/O Space and Bus Master on, the rest of the
-; Command register as the BIOS left it. CF=1 = the BIOS refused
-; -----------------------------------------------------------------------------
-pci_enable:
-    push cx
-    push di
-    mov di, PCI_COMMAND
-    call pci_rdw
-    jc  .out
-    or  cx, PCIC_IO | PCIC_MASTER
-    call pci_wrw
-.out:
-    pop di
-    pop cx
+    jc  .r
+    neg ah                      ; CF = (AH != 0): every code but SUCCESSFUL
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
 ; pci_probe - walk pce_tab, take the first card the BIOS finds
 ; out: CF=0 and BX = bus/devfn, AX = its I/O base, SI = the table row;
 ;      CF=1 = none (or not a 386, or no PCI BIOS)
+; clobbers: CX, DI (pce_find's caller, eth_attach, banks both); DX is KEPT
+;
+; THE CPU GATE FIRST: the PCI BIOS is asked only when OSAPI_CPU_INFO answers a
+; 386 or better - no board below one carries PCI, and on kern_mega a 286's
+; reflection of int 1Ah would be a CPU reset through the BIOS (125.8 item 1).
+; Then B101h, whose 'PC' in DX is the BIOS's signature; a 2.1 BIOS also
+; writes EDI there (SeaBIOS does), which is DI and so spent.
 ;
 ; The card is enabled only once a row matched AND its BAR0 is an I/O BAR, so a
 ; device we cannot drive is left exactly as the BIOS set it up.
 ; -----------------------------------------------------------------------------
 pci_probe:
-    push cx
     push dx
-    push di
-    call pci_gate
+    call OSAPI_CPU_INFO         ; AL = the CPU (every other register kept)
+    cmp al, CPU_386
+    jb  .none
+    mov ax, 0xB101              ; present?
+    call pci_bios
     jc  .none
-    call pci_present
-    jc  .none
+    cmp dx, PCI_PCISIG
+    jne .none
     mov di, pce_tab
 .row:
     mov dx, [di]                ; vendor
@@ -187,22 +76,35 @@ pci_probe:
     jz  .none
     mov cx, [di+2]              ; device
     xor si, si                  ; the first of its kind
-    call pci_find
+    mov ax, 0xB102
+    call pci_bios               ; BX = bus/devfn
     jc  .next
-    call pci_iobar0
-    jc  .next
-    call pci_enable
-    jc  .next
-    mov si, di
-    clc
-    jmp short .out
+    mov si, di                  ; the row, banked: DI names a register now
+    mov di, PCI_BAR0
+    mov ax, 0xB109
+    call pci_bios               ; CX = BAR0
+    jc  .back
+    test cl, PCIC_IO            ; bit 0: an I/O BAR (the same bit as the
+    jz  .back                   ; Command register's I/O Space)
+    and cl, 0xFC                ; the base
+    push cx
+    mov di, PCI_COMMAND
+    mov ax, 0xB109
+    call pci_bios               ; CX = the Command register...
+    jc  .base
+    or  cl, PCIC_IO | PCIC_MASTER ; ...I/O Space and Bus Master on, the rest
+    mov ax, 0xB10C              ; as the BIOS left it
+    call pci_bios
+.base:
+    pop ax                      ; AX = the base (POP keeps CF)
+    jnc .out
+.back:
+    mov di, si
 .next:
     add di, PCE_ROW
     jmp short .row
 .none:
     stc
 .out:
-    pop di
     pop dx
-    pop cx
     ret

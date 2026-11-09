@@ -71,15 +71,21 @@
     cbw                         ; AX = dx, signed
 
     ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
-    xor cl, cl
-    test dh, 0x20
-    jz %%nol
-    or  cl, 0x01
-%%nol:
-    test dh, 0x10
-    jz %%nor
-    or  cl, 0x02
-%%nor:
+    ; The pair shifted down to bits 1:0 is RL - the right order's mirror - and
+    ; the mirror of a two-bit value differs from it only when its bits differ,
+    ; which is ODD parity in a byte holding nothing else: so `and` sets PF and
+    ; an odd pair is swapped by `xor 3`. Fourteen bytes and ONE conditional
+    ; jump where the two `test / jz / or` arms were eighteen and two (kernel
+    ; size pass 18, -4): 8088 max(clocks, 4 x bytes) for every button state
+    ; is ~50-58 against ~48-72 plus a second queue flush, and DH is spent
+    ; anyway. All 256 header bytes, CH kept, checked against the old form
+    mov cl, 4
+    shr dh, cl                  ; DH = 0000 xxLR
+    mov cl, dh
+    and cl, 0x03                ; CL = 0000 00LR, PF = even when L = R
+    jpe %%btn                   ; 00 and 11 are their own mirror
+    xor cl, 0x03                ; 01 <-> 10
+%%btn:
 %endmacro
 
 %endif                          ; MOUPROTO_INC

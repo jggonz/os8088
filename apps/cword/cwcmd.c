@@ -40,7 +40,7 @@ static void ovl_copy(void *win)
     for (i = a; i < b && n < CW_RTF_MAX - 1; i++)
         cw_rtf[n++] = cw_buf[i];
     if (os88_clip_put(cw_rtf, (unsigned)n) != 0)
-        cw_toast("The clipboard would not take it.");
+        cw_toast("Clipboard would not take");
 }
 
 static void ovl_cut(void *win)
@@ -92,7 +92,7 @@ static void ovl_paste(void *win)
         put++;
     }
     if (put == 0) {
-        cw_toast("Nothing on the clipboard this document can hold.");
+        cw_toast("Nothing here to paste.");
         return;
     }
     cw_touch();
@@ -246,12 +246,12 @@ static void ovl_font_pick(void *win, int i)
     } else {
         h = cw_ty_open(i);
         if (h == 0) {
-            cw_toast("That typeface would not open.");
+            cw_toast("Typeface would not open.");
             return;
         }
         if (!cw_ty_use(h, 0)) {
             cw_ty_close(h);
-            cw_toast("That typeface has no regular style.");
+            cw_toast("Typeface has no regular");
             return;
         }
         if (cw_face != 0)

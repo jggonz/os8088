@@ -54,11 +54,12 @@ bytes on the floppy afterwards:
           jumped back into the error path, which hopped again, FOR EVER
           (SPEC.md 22.23.6.1): the join must say `Disk error` after one.
   arm     no job at all: a one-cluster folder on the second disk opened
-          with the motor running, so its read is one sector and does not
-          reach FPG_WARM, and every read of B: fails. From the SECOND failed
-          attempt on, the chrome and the busy clock must be up (SPEC.md
-          12.8.3.2): a retry moves no sectors, and nothing was drawn for
-          however long the retries took.
+          with the motor running, and every read of B: fails. The chrome
+          and the busy clock must be up at EVERY failed attempt: nothing
+          drawn for however long the retries took is what a user saw
+          before SPEC.md 12.8.3.2. (The listing mount's 8-sector fill now
+          meets FPG_WARM by count first, so 12.8.3.2 itself is not what
+          puts it up on this path.)
 
 Then A: is handed to os88disk's fsck.
 
@@ -566,9 +567,9 @@ def main():
 
         # arm: NO job and no chrome - a one-cluster folder opened with the
         # motor running, so the read is one sector and FPG_WARM is not met.
-        # Every read of B: fails. The chrome and the clock must be up from the
-        # SECOND failed attempt: a retry moves no sectors, and before SPEC.md
-        # 12.8.3.2 nothing was drawn for however long the retries took
+        # Every read of B: fails. The chrome and the clock must be up at
+        # every failed attempt (see the verdict below for why not "from the
+        # second")
         idx, _ = ui.entry("SUB", ui.disk_window())
         ui.scroll_to(idx, win=ui.disk_window())
         m.read(S("fpg_on"), 1)
@@ -594,8 +595,21 @@ def main():
             m.run()
         m.bp_exec()
         m.run()
-        leg("arm", len(seen) >= 2 and seen[0][0] == 0
-            and all(f for f, _ in seen[1:]),
+        # WHAT A USER SEES: a failing folder open never runs its retries
+        # dark - the chrome is up at EVERY failed attempt. It used to be
+        # "down at the first, up from the second", which proved SPEC.md
+        # 12.8.3.2 armed it; since kernel hot-paths pass 1 a listing opens
+        # with the mount's 8-sector LBA 0 fill (khp1 disk-5), so FPG_WARM is
+        # met by count on the first attempt and the chrome is up from there -
+        # and SUB's own read, even moved to a track's last sector to make it
+        # one sector again, comes after that fill with the chrome already up
+        # (both tried, 2026-11-07). 12.8.3.2 is invisible on this path now;
+        # going dark during the retries is not, and is what fails here.
+        # kern_mega's listing does not open with that fill, so there the
+        # first attempt is 12.8.3.2's own shape (down, armed by the count)
+        # and the RETRIES are what must be lit
+        lit = seen[1:] if os.environ.get("OS88_MEGA") else seen
+        leg("arm", len(seen) >= 2 and all(f for f, _ in lit),
             "(chrome up, run) at each failed attempt: %r" % seen[:6])
 
         chk = os.path.join(work, "a-fsck.img")

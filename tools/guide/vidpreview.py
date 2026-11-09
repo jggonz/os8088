@@ -46,6 +46,15 @@ OUT = os.path.join(HERE, "videos")
 MANIFEST = os.path.join(OUT, "previews.json")
 CRF_MONO = 40                   # H.264 quality: dither is noise to it, and a
 CRF_COLOUR = 38                 # one-bit picture keeps its look at 40
+# THE SOUND IS CODED AT 22,050 Hz, whatever the file's own rate. A .V88's
+# 5,512 Hz came out as AAC at 7,350 Hz (the encoder's nearest), which is in
+# the standard and in Chrome's decoder but NOT in Microsoft's AAC decoder's
+# list - Edge and Firefox on Windows - so os8088.com's CGA 08-11 played as
+# "corrupt" (the owner, 2026-11-09). 22,050 is on every common decoder's
+# list, is the fastest rate a .V88 carries, and above a clip's own rate it
+# changes nothing that can be heard.
+AUDIO_OUT = ["-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "22050",
+             "-shortest"]
 
 
 def sources():
@@ -153,7 +162,7 @@ def encode(src, dst, crf):
                 "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-tune", "animation",
                 "-movflags", "+faststart"]
         if has:
-            cmd += ["-c:a", "aac", "-b:a", "48k", "-ac", "1", "-shortest"]
+            cmd += AUDIO_OUT
         cmd.append(dst)
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         rr = vid.Reader(path)

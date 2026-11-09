@@ -192,7 +192,8 @@ CC_OVDEPTH  equ 32
 ; ...and CC_OVL_PLAIN takes OP_COMP off the row, for a module LZ4 does not
 ; shrink (os88pkg.py refuses an OP_COMP part that grows). Without CC_OVL_PART
 ; nothing below changes by a byte: the <NAME>.OVL file, its stamp and its
-; three refusals are exactly what every unconverted package ships.
+; three refusals are exactly what an unconverted package ships (none in the
+; shipped set; tests/cfsx is the last).
 ;
 ; THE MAKEFILE HAS TO AGREE, and it cannot disagree silently: CC_PACKAGE's
 ; fifth argument `part` appends the cut module as the LAST --part, and
@@ -702,8 +703,8 @@ cc_ontimer:
 ; THE ANSWER RIDES IN CF, which is why this is not a copy of cc_ontimer:
 ; `wm_ask_close` calls us and branches on the carry with nothing in between
 ; that touches the flags (SPEC.md 75.1), so the flags this `ret` leaves ARE
-; the answer. SPEC.md 73.4 pins the shape - "pops, then `or ax, ax`, then
-; stc/clc, then ret", because a `pop` does not write FLAGS and AX is the one
+; the answer. SPEC.md 73.4 pins the shape - "pops, then `cmp ax, 1`, then
+; `ret`", because a `pop` does not write FLAGS and AX is the one
 ; register a thunk deliberately does not save.
 ;
 ; The C returns non-zero to LET IT CLOSE and zero to REFUSE. A refusal now
@@ -1255,10 +1256,11 @@ cc_ovneed:
     mul cx                          ; DX:AX - the claim is under 64KB by
     mov cx, ax                      ; construction (it is a segment), so DX is
     xor dx, dx                      ; 0 and the count is CX alone
-    mov si, cc_ovfile               ; the name resolves in THIS INSTANCE's
-    call OSAPI_FILE_READ            ; directory - the folder it was launched
-    jc .noread                      ; from (SPEC.md 19.2.1), so no visit is
-                                    ; needed and none is made
+    mov si, cc_ovfile               ; the name resolves where THIS INSTANCE
+    call OSAPI_FILE_READ            ; STANDS (SPEC.md 19.2.1), which the file
+    jc .noread                      ; dialog moves: the hole CC_OVL_LAZY's
+                                    ; go-home bracket closes. No shipped
+                                    ; package takes this arm (tests/cfsx)
     mov es, [cc_ovseg]
     cmp word [es:0], cc_modc_end    ; the stamp: the module's size...
     jne .stale
@@ -1546,9 +1548,9 @@ cc_ovbind:                          ; the thunk's retf in step - there is no
 %ifndef CC_OVL_PART                ; ...and a PART has none of the three: its
 section .data                       ; refusals are the parts standard's own
 cc_ovfile:  db CC_PKG_NAME, '.OVL', 0
-cc_ovm_mem: db 'No RAM: ', CC_PKG_NAME, 0
-cc_ovm_gone:db 'No ', CC_PKG_NAME, '.OVL', 0
-cc_ovm_stale: db 'Old ', CC_PKG_NAME, '.OVL', 0
+TOASTSTR cc_ovm_mem, 'No RAM: ', CC_PKG_NAME
+TOASTSTR cc_ovm_gone, 'No ', CC_PKG_NAME, '.OVL'
+TOASTSTR cc_ovm_stale, 'Old ', CC_PKG_NAME, '.OVL'
 section .text
 %endif                              ; (op_s_*, apps/os88partsbody.inc)
 %endif  ; CC_HAS_OVL
@@ -1620,6 +1622,12 @@ cc_regreloc:
 ; kernel's name pointer and nothing later can recover it (SPEC.md 20.2).
 ; =============================================================================
 %define OP_BSS_AT cc_parts_bss
+%ifdef CC_ONMOVE_PARTS
+%define OP_ONMOVE cc_onmove         ; ...and a FETCHED lazy part may move too,
+                                    ; by os88_part_movable() (SPEC.md 73.14.2.1,
+                                    ; 20.12.12): the standard's op_lazymv puts
+                                    ; the row right, then the C re-reads it
+%endif
 %include "os88parts.inc"
 
 ; CC_PARTS_BEGIN n / OS88_PART ... / CC_PARTS_END - the shim's table.
@@ -1814,8 +1822,14 @@ section .text
   %ifndef CC_OVL_ROWED
     %error "CC_OVL_PART: the parts table has no CC_OVL_ROW - write one as its LAST row"
   %else
-    %if CC_OVL_IDX != OS88_PART_N - 1
-      %error "CC_OVL_ROW must be the LAST row of the table: CC_PACKAGE appends the module as the last --part"
+    %ifndef CC_PARTS_AFTER_OVL
+      %assign CC_PARTS_AFTER_OVL 0
+    %endif
+    ; ...or followed by exactly CC_PARTS_AFTER_OVL rows, which CC_PACKAGE's
+    ; sixth argument appends after the module (apps/cc/Makefile.inc) - a lazy
+    ; part after an EAGER overlay, which may not precede it (C64-SPEC 4.7)
+    %if CC_OVL_IDX != OS88_PART_N - 1 - CC_PARTS_AFTER_OVL
+      %error "CC_OVL_ROW must be the LAST row of the table, or followed by CC_PARTS_AFTER_OVL rows: CC_PACKAGE appends the module after its fourth argument's parts and before its sixth's"
     %endif
   %endif
 

@@ -1,0 +1,271 @@
+{
+ "area": "gap-residency-tiers",
+ "title": "Machine-shaped residency, a purgeable tier, and how far to take on-demand modules and shared code, as one memory-tier design",
+ "summary": "Priced together, the residency findings make a smaller and cheaper design than \"a generalised rung plus a purgeable tier\". (1) The purgeable tier is one site, not a pin per thunk. mod_drop re-tags the claim as purgeable and disarms it; mod_need's hit path re-tags it pinned, re-zeroes the module bss and re-arms. The need/drop bracket that t_moddrop already guarantees is then the pin, for about +60..+85 .cold covering every module. HEAP-UNPIN piece B's per-thunk pin was priced on 29 sites; there are 49 today. (2) bytes-3 is overstated. Its fdlg span includes 1,089 bytes of the kernel's os88ui_* copy, which stays resident. The movable part is about -2,500 resident on kern_big. The boot read does not grow, because the bytes are already in KERNEL.SYS as .cold. (3) Do not generalise the rung. Rungs drop only as a suffix under .cold at fixed near offsets, so they serve only nested machine classes. A second rung strands the owner's 8088+VGA 5150 #2, and video-17's mono renderer is complementary to the VGA rung. The tree already has the general mechanism for class code on a cold cadence: the owner-loaded DRVC_OVL overlay, XMEM.DRV's shape. The PS/2 mouse should take it, saving about -220 resident on every kern_big machine with the VGA gauge seeing it. (4) The keyboard mouse is init-lifetime code, since [mou_ptr] is never cleared. Hold it from boot and drop it at settle, rather than loading it at the moment the mouse fails. (5) KERN_BUDGET stays a VGA ceiling, and kernsize should print the per-class figures. (6) Shared package code was measured from the 35 listings: at least 84.0 KB of 942 KB is emitted from apps/os88*.inc source, at least 60.6 KB of it duplicated, median 1.7 KB per package. A library still does not pay on a one-floppy 4.77 MHz machine; parts init-drop and a purgeable decoded-image cache for relaunches do. (7) The refusal of automatic mid-gesture reload stays right, because reload happens only at mod_need entries. A purged FDLG with the system disk out should get the existing swap prompt, which is COMMAND.COM's answer. Net per class (ESTIMATED): about -3.15 to -3.23KB on 8088 mono, about -2.95 to -3.05KB on VGA, about -0.32 to -0.40KB on kern_small. Seven doc/code mismatches were found.",
+ "strengths": [
+  {
+   "title": "The module loader is small and refuses unsafe states",
+   "why": "About 378 .cold + 179 .text + 48 .bss covers 11 rows on kern_big. It disarms before it frees, an unloaded slot is stc/retf rather than a far call to 0:0, and build and layout stamps refuse a module from another configuration.",
+   "evidence": "kernel/mod.inc mod_gone, mod_free_row (909-), mod_check's repe cmpsw against mod_hdrt; build/kernel.map spans mod_need 229, mod_cfix 59, mod_disarm 23"
+  },
+  {
+   "title": "The VGA slide is nearly free resident",
+   "why": "cfx_slide and cfx_tab are transient (.cfx, 530 bytes in the file, none resident). What stays resident is mod_cfix (59, shared with ROM/HMA adoption) and mem_floor_ax's ~20-byte arm. The rung's doors reuse the pre-existing VIDEXTM dispatch rather than adding tests.",
+   "evidence": "kernel/kernel.asm 8723-8870; kernel/memory.inc 727-742; kernel/vidext.inc 71-80; tests/vgarefs.txt; SPEC.md 2.10.9 'It costs no resident byte and no blob sector'"
+  },
+  {
+   "title": "Kernel init code is already discarded",
+   "why": "Boot work lives in .boot2 and .ovl, including mou_p2_init's 327 bytes. The largest resident init/probe symbol is fm_kinit_x, 131 bytes, which runs per window, so hm-11's idea is already done on the kernel side.",
+   "evidence": "build/kernel.map section summary (.boot2 0x19FC, .ovl 0x13FF); span census for init|probe|boot"
+  },
+  {
+   "title": "Class code already leaves the 8088 through owner-loaded overlays",
+   "why": "XMEM.DRV is a DRVC_OVL image that only machines with memory above 1MB load. That is the general mechanism for cold-cadence class code, more general than a rung.",
+   "evidence": "kernel/xmem.inc:1-30 ('was reserving about 1.2KB of kernel image forever for a feature it can never reach')"
+  },
+  {
+   "title": "The resident rule already prices a purgeable tier honestly",
+   "why": "Rule 1 counts every non-purgeable byte, and tests/kernresident.py walks mem_tab, so a cached module costs nothing on the gauge exactly when it really is sheddable.",
+   "evidence": "docs/KERNEL-MEMORY.md 41-50, 100-111"
+  },
+  {
+   "title": "The drop gate makes caching a one-site change",
+   "why": "t_moddrop proves every mod_tab row reaches a mod_drop and tests/moddrop.txt is empty, so every module already has the bracket that rt-1 turns into a pin.",
+   "evidence": "tests/moddrop.txt; SPEC.md 2.8.3"
+  }
+ ],
+ "findings": [
+  {
+   "id": "rt-1",
+   "kind": "rethink",
+   "severity": "high",
+   "title": "Drop to a cache, and let the need/drop bracket be the pin",
+   "detail": "Today mod_drop frees the image and mod_need's hit path is cmp [MODR_SEG],0 / jne .out. Proposed: mod_drop disarms as today, then re-tags the MEM_K_MOD claim as a purgeable module tag. mod_need's hit path re-tags it pinned, re-zeroes the module bss and re-arms the slots from the header's entry table with [MODR_SEG] (correct on kern_mega, where MODR_SEG holds the code selector). Split mod_tab into two word arrays so one mem_pg_own row names every image. mem_pg_forget gains a .mod arm that disarms before it zeroes the word. The span from need to drop is pinned by the tag; per-call modules (FILECP's fcp_load/fcp_fin) and held spans (panel, dialog) already have brackets; the three no-need thunks rest on mod_gone once dropped. The new hazard is stale bss: today every load is a read, so bss is zero by construction. Add a kernel-private MOD_H_BSS header word and zero from it on re-adopt. mod_cfix is idempotent on a re-adopt. This answers shell-2 for every module and is ONDEMAND-PLAN 7.2 with 7.1's pin already supplied.",
+   "evidence": [
+    "kernel/mod.inc:407-408 (hit path), 909-972 (mod_free_row/mod_drop), 650-654 ('NO ZEROING HERE ... every load is a read')",
+    "kernel/memory.inc:1292-1333 (mem_pg_own rows: tag, word-array base, count)",
+    "grep 'call far [XXFP': 49 sites through 14 slot blocks (CPFP 11, HBFP 8, FDFP 6, ...)",
+    "docs/plans/HEAP-UNPIN-PLAN.md piece B: ~215-240 bytes for a per-thunk pin over 29 sites",
+    "kernel/filecp.inc:2262-2291 (fcp_load/fcp_fin bracket)"
+   ],
+   "recommendation": "Build drop-to-cache with the re-adopt bss zeroing and a per-module purge rank (rt-9). Supersede piece B's per-thunk count with it.",
+   "phase": "now",
+   "bytes_est": "+60..+85 .cold (kern_big); +2 header bytes per module image (not resident); the same on kern_small only if the owner trades against the diet",
+   "listed_as": "ONDEMAND-PLAN 7.1/7.2; HEAP-UNPIN-PLAN piece B (superseded); shell-2; module header is kernel-private (ABI-BREAK-LIST P2)",
+   "prior_art": "AmigaOS library expunge at open-count zero; Windows 3.x lock count on DISCARDABLE segments",
+   "verdict": "CORRECTED",
+   "verify_note": "Re-read mod.inc: the hit path is cmp [bx+MODR_SEG],0 / jne .out, there is no bss zeroing ('every load is a read'), and mod_free_row disarms before it frees. mem_pg_own rows are tag/word-array/count with a stride of 2, while mod_tab is MODR_SIZE-strided, so the split is needed. 49 far-call sites through 14 FP blocks, against HEAP-UNPIN's 29. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Corrections: (a) mod_drop's banner and SPEC.md 2.8.3 record the pin as deliberately not built. This overturns a recorded decision, although the heap would purge only a dropped image, which keeps the banner's reason. (b) On kern_mega, mod_hi images above 1MB are freed through mega_hifreef, not mem_free_x, so mem_pg cannot purge them. The cache is conventional-heap only there, or that arm needs a pool purge. (c) 'mod_cfix is idempotent on a re-adopt' is unproven. os88rom's cfix_prove models one pass over an unfixed image, and [api_coldseg] settles at boot. A re-adopt should skip mod_cfix rather than rescan bytes it already wrote. Bytes stay ESTIMATED."
+  },
+  {
+   "id": "rt-2",
+   "kind": "size",
+   "severity": "medium",
+   "title": "FILECP and FDLG on kern_big as modules cached at boot: about -2,500 resident, not -3,600",
+   "detail": "bytes-3's 2,080-byte fdlg span is fdlg_* 987 plus 1,089 bytes of the kernel's os88ui_* copy (button, scroll bar and drag). That copy stays resident for files.inc. The movable part, net of the resident halves kern_small already keeps, is FILECP about 1,657 (1,667 .cold + 152 bss less 94 + 68) and FDLG about 911 (987 + 43 text + 28 bss less 91 + 41 + 15), about -2,568 in all. Keep both images in KERNEL.SYS's contiguous read after .cfx. At mem_unblob claim and check them, then mod_drop them so they are cached under rt-1. Ship FILECP.DRV and FDLG.DRV for a reload after a shed. The boot read does not grow, because the bytes are in KERNEL.SYS today as .cold. Shed these two last (highest rank). For a purged FDLG wanted with the system disk out, use the formatter's existing swap prompt (FS_EDIT mode 6) instead of kern_small's 'opens no chooser'. That is COMMAND.COM's transient-reload answer.",
+   "evidence": [
+    "build/kernel.map fdlg_ref..desk_zs: fdlg_* 987 + os88ui_* 1,089 (= bytes-3's 2,080)",
+    "build/kernel.map fcp_* .cold 1,667 + .bss 152; build/smallk/kernel.map fcp .cold 94 + .bss 68, fdlg .cold 91 + .text 41 + .bss 15",
+    "build/smallk/filecp.drv MOD_H_IMG 1,871; fdlg.drv 1,600",
+    "kernel/kernel.asm:1093-1111 (FCP_MOD/FDLG_MOD only under KERN_SMALL)",
+    "SPEC.md 38.0 ('os88ui.inc stays resident'; kern_small Save As 'opens no chooser')",
+    "docs/plans/completed/ONDEMAND-PLAN.md 1.2, 1.3, 3.3, 7.2"
+   ],
+   "recommendation": "Take it with rt-1 at the highest purge rank, add the swap-prompt fallback for FDLG, and correct bytes-3's figure and boot-time estimate.",
+   "phase": "now",
+   "bytes_est": "about -2,500 resident kern_big/kern_emu where .cold is in conventional RAM (-2,568 movable, +60..100 boot glue and prompt); 0 where a ROM or COLDHMA.SYS adopted .cold, and 0 kern_mega conventional; about +4KB purgeable heap claim; about +4 clusters per kern_big system disk",
+   "listed_as": "bytes-3 (corrected); ONDEMAND-PLAN 1.2/1.3 (refused for on-demand loading; new argument is boot-time caching), 7.2",
+   "prior_art": "MS-DOS COMMAND.COM resident/transient split, reloaded from COMSPEC with a disk prompt",
+   "verdict": "CORRECTED",
+   "verify_note": "Spans re-measured from build/kernel.map. kern_big .cold has fdlg_* 987 + os88ui_* 1,089 = bytes-3's 2,080 (fdlg_ref..desk_zs), plus fdlg .text 38, .bss 28, and fcp_* .cold 1,667 + .bss 152. kern_small keeps fcp 94/68 and fdlg 91 .cold + 36 .text + 15 .bss resident. That gives FILECP 1,657 and FDLG 911, about -2,568 in total. The reviewer's .text figures (43/41) were each 5 high, which cancels. SPEC.md 38.0 confirms that os88ui.inc stays resident. Corrections: (a) On a kernel whose .cold was adopted by a ROM or by COLDHMA.SYS's HMA, these bytes are already off conventional RAM. The saving there is 0, and the boot-time cache claim would be pure cost, so the boot step must skip when [api_coldseg] >= A000h. (b) SPEC.md 38.0 records 'On kern_big the glue is NOT a module, on purpose' (ONDEMAND-PLAN 1). The swap-prompt fallback answers its reason only for a purged image, so this needs the owner's decision, not just a size pass."
+  },
+  {
+   "id": "rt-3",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "The PS/2 runtime as an owner-loaded overlay (XMEM.DRV's shape), not an AT rung",
+   "detail": "The PS/2 runtime is about 265 resident .text bytes on every kern_big machine (mou_p2_byte 114, isr 51, off 32, wr 29, cw/wcmd/dw 25, state 14); its init is already in .ovl. bytes-2's AT rung saves only on an 8088 with neither a VGA nor an EGA. It is 0 on the VGA gauge and 0 on the owner's 8088+VGA 5150 #2, and it needs a second slide delta, an atrefs registry and an ordering that strands a corner (rt-4). The tree already has the right mechanism: a DRVC_OVL image attached by its owner, as XMEM.DRV is, and the OSAPI_MOUSE_FEED apply path. The mouse boot loads PS2MOU.DRV when cpu_tier is 286 or higher and an aux port is reported. The overlay's IRQ12 handler builds the packet and applies it through the feed. What stays resident is mou_p2_off's front and SPEC.md 9.4.4's published state span. The feed's fence needs publication in DRVC_POINT or a kernel-armed far pointer.",
+   "evidence": [
+    "build/kernel.map mou_p2_* .text spans (265 incl. state), .ovl 435",
+    "kernel/xmem.inc:1-30 (DRVC_OVL, 'loaded and attached by its OWNER')",
+    "SPEC.md 9.12, 9.12.1 (DRVC_POINT, OSAPI_MOUSE_FEED, apply under cli on mou_pstack)",
+    "kernel/mouse.inc:1264,1437 (mou_p2_off called unconditionally)",
+    "docs/FIELD-MACHINES.md:163 (5150 #2: PVGA1A, an 8088 with VGA)"
+   ],
+   "recommendation": "Build it in place of bytes-2's AT rung. The gauge moves because the bytes leave every machine.",
+   "phase": "now",
+   "bytes_est": "about -220 resident on every kern_big machine (-265 + ~30-45 of fronts and fence); a 286 with a live PS/2 mouse pays about 0.5-1KB as a heap claim; 0 kern_small",
+   "listed_as": "bytes-2 (supersedes the rung shape); ABI-BREAK-LIST T4 (OSAPI_MOUSE_FEED gains a second caller)",
+   "prior_art": "DOS DEVICE=/MOUSE.COM; Windows MOUSE.DRV",
+   "verdict": "CONFIRMED",
+   "verify_note": "build/kernel.map .text: mou_p2wr 29, cw 8, wcmd 9, dw 8, _off 32, _isr 51, _byte 114 (251), plus state bytes about 14, about 265 in all. Init is in .ovl (mou_p2_init 327). mou_p2_off is called from mouse.inc:1268 and :1435. XMEM.DRV is DRVC_OVL and owner-loaded (xmem.inc:17-23). Caveat: on kern_mega the IRQ12 owner may already be a package (mega.inc:1434), so an overlay ISR is viable there too, but it needs mega's gate handling. Bytes ESTIMATED."
+  },
+  {
+   "id": "rt-4",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Rungs serve nested classes only; video-17's mono renderer is complementary to the VGA rung",
+   "detail": "cfx_slide moves only .cold, down by VGA_PARA. .vga's labels are fixed KERNEL_SEG offsets that .text near-calls, so a rung can be given back only as a contiguous suffix directly under .cold. CPU class and adapter form a lattice, and two rungs serve three of four corners: [AT][VGA][COLD] keeps the AT bytes on 8088+VGA, and [VGA][AT][COLD] keeps the VGA bytes on 286+mono. Mono and VGA are complementary, so whichever is placed lower can never be dropped. The 1bpp path is a direct jb to a fixed address on the target's hottest path, so it cannot become a far table call. A general rung mechanism therefore needs relocation of rel16 displacements, which is a relocating loader. video-17 stays record, and its reason is the lattice. The working split is one rung for planar hot code, DRVC_OVL overlays for class code on a cold cadence, and modules for features.",
+   "evidence": [
+    "kernel/kernel.asm:8768-8800 (cfx_slide: one delta, .cold only), 1679-1686 (VGA_VSTART fixed)",
+    "kernel/vidext.inc:71-75 (VIDEXTM: jb to the mono body)",
+    "docs/FIELD-MACHINES.md:163",
+    "areas/video.md video-17 (CORRECTED)"
+   ],
+   "recommendation": "Write the nesting rule into SPEC.md 2.10.9 and MOVABLE-COLD-PLAN. Price any second-rung proposal against it.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "video-17; bytes.md Rethink 2",
+   "prior_art": "GEOS and Windows DISPLAY.DRV load one renderer, which works only because every primitive was a far call",
+   "verdict": "CONFIRMED",
+   "verify_note": "cfx_slide (kernel.asm:8768-) copies .cold down by one VGA_PARA and fixes cfx_tab's three groups with one delta. VIDEXTM's 1bpp leg is a near jb to a fixed .vga-adjacent body (vidext.inc:71-75). The lattice argument holds. Record only."
+  },
+  {
+   "id": "rt-5",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "KERN_BUDGET is a VGA reading; the target machine's figure is never printed",
+   "detail": "Rule 1 is stated on VGA, the most costly configuration, and tests/kernresident.py boots a VGA desktop. Wins on the 8088 mono target are therefore invisible: the slide's 2,032 bytes, text-7's -185 (which shows as +10) and bytes-2. MOVABLE-COLD-PLAN's 95,232-against-97,280 was computed once, by hand. Keep the gate on VGA as a ceiling. kernsize should print a classes line (VGA, EGA less .vgabuf, mono with the slide less .vga and .vgabuf plus the 512 round-up, and ROM/HMA adoption) from constants it already reads. Add a soak twin of kernresident on a _herc_gla machine. Whether to gate the mono figure is the owner's call.",
+   "evidence": [
+    "docs/KERNEL-MEMORY.md:41-46 ('no drivers, no XMS, on VGA')",
+    "kernel/memory.inc:727-768 (mem_floor_ax's per-class floors)",
+    "docs/plans/MOVABLE-COLD-PLAN.md head (95,232 vs 97,280 at build 474)"
+   ],
+   "recommendation": "Report per-class figures in kernsize and add the mono resident row in the soak tier.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "listed_as": "none",
+   "verdict": "CONFIRMED",
+   "verify_note": "KERNEL-MEMORY.md:52 states rule 1 'no drivers loaded, no XMS, on VGA' (now at line 52, not 41-46). tests/kernresident.py's MACHINE is os8088_xt_vga_128k. It accepts --machine, but suite.py registers only the VGA row. kernsize prints no per-class line. MOVABLE-COLD-PLAN's 95,232/97,280 is quoted at its head."
+  },
+  {
+   "id": "rt-6",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "kern_small's module split as a run-time heap decision on both kernels",
+   "detail": "FCP_MOD and FDLG_MOD exist only under KERN_SMALL, and the split carries build arms: fdk_di as a %define on kern_big, OS88UI_KBTNIMG's double expansion, and mod_r_fdlg under FCP_MOD. With rt-1 and rt-2 both kernels build these as modules from one arm. kern_big always caches them at boot. kern_small could cache them too: the images would ride its KERNEL.SYS read (about 7 sectors packed, 1,538 + 1,696), and the 128KB machine would then open Save As on a data floppy until heap pressure, the case SPEC.md 38.0 says it refuses today. That costs rt-1's +60..85 against kern_small's diet, so it is the owner's trade. small128's no-pinned-claim check holds, because a cached image is purgeable.",
+   "evidence": [
+    "kernel/kernel.asm:1093-1111",
+    "SPEC.md 38.0 (fdk_di %define; KBTNIMG; 'opens no chooser')",
+    "build/smallk/fdlg.drv 1,538 packed, filecp.drv 1,696 packed"
+   ],
+   "recommendation": "Unify the arm with rt-2 on kern_big now. Put kern_small caching to the owner.",
+   "phase": "now",
+   "bytes_est": "kern_big as rt-2; kern_small 0 static, +60..+85 if rt-1 lands there",
+   "listed_as": "bytes.md Rethink 3; ONDEMAND-PLAN 1.2",
+   "verdict": "CONFIRMED",
+   "verify_note": "kernel.asm:1093-1111 gates FCP_MOD/FDLG_MOD on KERN_SMALL. The smallk images are 1,538 (fdlg) and 1,696 (filecp) bytes packed, and 1,600/1,871 unwrapped. SPEC.md 38.0's 'opens no chooser' and the fdk_di %define are as quoted. Inherits rt-2's ROM/HMA caveat."
+  },
+  {
+   "id": "rt-7",
+   "kind": "size",
+   "severity": "medium",
+   "title": "The keyboard mouse is init-lifetime code: hold it from boot and drop it at settle",
+   "detail": "input-12 / input R2 propose loading the keyboard mouse (about 456 bytes) on the first press, and that review's own verification objects that the load needs the system disk at the moment the mouse has failed. But [mou_ptr] is set by every backend's settle and never cleared, and kbm_key's first gate is [mou_ptr], so after any pointer settles the keyboard mouse is dead for the session. Ride the image in KERNEL.SYS (rt-2's mechanism), arm it at boot as a held module, and mod_drop it in mou_settle, the one routine all backends end in. It then becomes a cache under rt-1, or is freed. A machine without a mouse keeps it, as today, and never needs the disk. Caveat: on a pointer-less 128KB machine the claim stays pinned, which tests/small128.py must allow for.",
+   "evidence": [
+    "kernel/mouse.inc:6439-6447 ([mou_ptr] '... never cleared')",
+    "areas/input.md R2 (spans, about 456 bytes) and its verification note",
+    "SPEC.md 9.12.1 (mou_settle, 'the one routine all four backends end it in')",
+    "kernel/mouse.inc:1179-1183 (mou_settle under KERN_BIG), 3931-3933 (kern_small's inline MOU_SETTLE_STORES), kernel/vmmouse.inc:339"
+   ],
+   "recommendation": "Take it instead of the load-on-first-press shape.",
+   "phase": "now",
+   "bytes_est": "-300..-380 static resident on both kernels; heap regains the image seconds after boot on any machine with a mouse",
+   "listed_as": "input-12 (lifetime inverted)",
+   "prior_art": "DOS TSR keep-paragraphs; Windows INIT segment discard",
+   "verdict": "CORRECTED",
+   "verify_note": "mouse.inc:6439-6447 [mou_ptr] is 'never cleared'. No store of 0 exists, and kbm_key's first test is [mou_ptr] (mouse.inc:2463-2465). Correction: mou_settle exists only under KERN_BIG (mouse.inc:1179-1183). kern_small inlines MOU_SETTLE_STORES at mouse.inc:3933, its only settle site, and kern_emu's vmm_boot_x stores [mou_ptr] itself (vmmouse.inc:339). The drop therefore belongs beside every [mou_ptr] store, not in one routine. kbm_* .text is 599 on kern_big and 550 on kern_small, so the -300..-380 net is plausible but ESTIMATED. Hibernate restores [mou_ptr] with the rest of the kernel, so a dropped keyboard mouse stays consistent across a resume."
+  },
+  {
+   "id": "rt-8",
+   "kind": "prior-art",
+   "severity": "medium",
+   "title": "Shared code across packages, measured: real duplication, but no library worth having on the target",
+   "detail": "Host measurement over the 35 build/*.lst listings (each sums to its .bin exactly): 941,780 image bytes, of which at least 83,970 (8.9%) is emitted from apps/os88*.inc source. One copy of each file at its largest variant is 23,374, so at least 60,596 is duplicated; median 1,740 per package. Leaders: os88ui 29,193 over 31 packages (max 3,861), os88partsbody 12,340 over 26 (max 2,213), os88type 6,234 (max 3,055). Telnet is 40.2% shared source. RAM pays only for concurrently running packages, about 3-5KB recoverable in a typical trio. A library costs DS-relative state redesign (the DGROUP problem), 46.7 us far calls against 11 us near on hot paths, and either a disk swap on a one-floppy machine or resident kernel bytes. The levers that pay are hm-11's parts init-drop (0 kernel bytes) and a purgeable decoded-image cache kept by the loader before the entry proc's first write. It serves second instances and relaunches with no ABI change and no author promise. Its key must include a header checksum, because os88disk pins serials and timestamps.",
+   "evidence": [
+    "build/*.lst parse: 35 packages, totals equal .bin sizes; 132,762 macro-substituted bytes unattributed (lower bound)",
+    "areas/loader.md loader-14; areas/histmem.md hm-15, hm-11",
+    "areas/gap-os88ui-kernel-copy.md (the kernel's own os88ui copy)"
+   ],
+   "recommendation": "Do not build a shared-library tier. Take hm-11. Record the image cache until loader-14's relaunch frequency is measured.",
+   "phase": "record",
+   "bytes_est": "library: not recommended; image cache +100..+150 .cold; hm-11 0 kernel, -0.4..-2.2KB per running instance",
+   "listed_as": "loader-14, hm-15 (cheap fraction), hm-11",
+   "prior_art": "OS/2 DLL shared code; Windows MakeProcInstance/DGROUP; GEOS geode libraries (swap-heavy on floppy)",
+   "verdict": "CORRECTED",
+   "verify_note": "There are 35 build/*.lst listings, and build/ holds 60 .o88 packages. The measurement is a sample of the packages that happen to have listings: 941,780 is those 35's total, not 'of 942 KB' of everything shipped. Its lower-bound reading stands, and the recommendation does not depend on it. The per-package figures were not re-derived (spot-check)."
+  },
+  {
+   "id": "rt-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Module purge ranks must be decided per module, not inherited",
+   "detail": "ONDEMAND-PLAN 7.2 puts every module at MEM_PG_LOW. HEAP-UNPIN piece B puts them at MEM_PG_MED and excludes FDLG because a shed broke a live dialog. rt-1's open-to-reap bracket removes the exclusion's cause, but the reload cost to the user still differs. The Control Panel, Format, DISKOPS, HIBER, DESK and STIKMENU are wanted with the system disk at hand, so LOW is right. FILECP and FDLG are wanted with the user's disk in the drive, so they belong at the highest rank. The keyboard mouse is never reloaded.",
+   "evidence": [
+    "docs/plans/completed/ONDEMAND-PLAN.md 7.2",
+    "docs/plans/HEAP-UNPIN-PLAN.md:505-515, 1338"
+   ],
+   "recommendation": "Two purgeable module tags, or a rank field in the mod row.",
+   "phase": "now",
+   "bytes_est": "+4..+8 (inside rt-1's figure)",
+   "listed_as": "ONDEMAND-PLAN 7.2; HEAP-UNPIN piece B",
+   "verdict": "CONFIRMED",
+   "verify_note": "Spot-check: HEAP-UNPIN-PLAN's piece B row (line 1338) names MEM_PG_MED with FDLG.DRV excluded. Its 4.3 cites ONDEMAND-PLAN 7.2's MEM_PG_LOW. Low; inside rt-1's figure."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; wave 2). SEVEN entries, because SPEC.md 13.10.5's thumb drag is kern_big's\n; already and takes fdlg_onup and fdlg_ondrag with it.",
+   "new_text": "; wave 2). FIVE entries (FD_NENT, SPEC.md 38.0): `fdlg_onup` stays resident,\n; and the old dialog's paint, key and click callbacks went with its window.",
+   "why": "fdlg.inc:103 FD_NENT equ 5 and the built FDLG.DRV header says 5. fdlg_ondrag no longer exists anywhere in kernel/. SPEC.md 38.0 lists the five entries and says fdlg_onup stays resident."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The claim is the image rounded up to whole KB, and\n`FDLG.DRV`'s image is 3,243 bytes.)",
+   "new_text": "The claim was the image rounded up to whole KB, and\n`FDLG.DRV`'s image 3,243 bytes, when this was written; the claim is now whole\n512-byte granules (§50.2.1), and the image 1,600 bytes at 2026-11-08.)",
+   "why": "mod_need now rounds through mem_bytes_gp_x to whole granules (MEM_GRAN 32 paragraphs = 512 bytes, §50.2.1). The built FDLG.DRV's unwrapped image is 1,600 bytes (MOD_H_IMG 1,600). The incident's '4KB claim' was correct at the time, so this keeps the history."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "byte, confirms the high byte and an opcode three bytes back that reads FA\n  once OR'd with 70h (9A, EA and six opcodes no module puts there), writes",
+   "new_text": "byte, confirms the high byte and an opcode three bytes back that is\n  exactly 9A (call far) or EA (jmp far), writes",
+   "why": "mod_cfix (mod.inc) tests xor al,9Ah / je / cmp al,9Ah^EAh. Its comment records that the OR-70h test also read 8A and BA, which modules are full of, and that os88rom's proof refused CTRL.DRV over it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`cmz_tsh`, WIN95.DRV's `WN_COLD` token). +52 bytes of kern_big's `.cold`.",
+   "new_text": "`cmz_tsh`, WIN95.DRV's `WN_COLD` token). +52 bytes of kern_big's `.cold`\n  when it landed; `mod_cfix` spans 59 at 2026-11-08, with the exact predicate.",
+   "why": "build/kernel.map: mod_cfix 7C6B to mod_disarm 7CA6 is 59 bytes."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; out: AX = HEAP_SEG, or one VGABUF rung below it on a machine with no VGA",
+   "new_text": "; out: AX = the heap's first paragraph (onto 512 bytes under LADDER_PACK):\n;      past `.vgabuf` on a VGA, under it without one, and with neither a VGA\n;      nor an EGA (COLD_SLIDE) on the VGA rung itself - past `.cold` when it\n;      slid there, at the rung when `.cold` is in a ROM or the HMA",
+   "why": "mem_floor_ax's COLD_SLIDE arm returns VGA_RAM (+COLD_PARA unless [api_coldseg] is at or above A000h), ROM_COLD starts from [rom_vgabw] rather than HEAP_SEG, and LADDER_PACK rounds the result up to 512 bytes."
+  },
+  {
+   "file": "kernel/mod.inc",
+   "old_text": "; not a tidiness choice: in .text it would be ~430 bytes against the 438 this\n; kernel has left under KERN_CODE_MAX, and that guard cannot be raised by",
+   "new_text": "; not a tidiness choice: in .text it would have been ~430 bytes against the\n; 438 the kernel had left under KERN_CODE_MAX when this was written, and that\n; guard cannot be raised by",
+   "why": "kernsize today: .text+.bss 45,694 of KERN_CODE_MAX 65,536, 19,842 left. The 438 was the margin when the comment was written."
+  },
+  {
+   "file": "docs/plans/HEAP-UNPIN-PLAN.md",
+   "old_text": "`resb MOD_MAX` in `.bss` (4 on kern_big, 5 on kern_small),",
+   "new_text": "`resb MOD_MAX` in `.bss` (4 on kern_big, 5 on kern_small when this was priced; 11 and 6 at 2026-11-08),",
+   "why": "build/kernel.map MOD_MAX = 0Bh (MOD_NIMG 10 + MOD_SETS). build/smallk/kernel.map MOD_MAX = 6, since OS88_SHORTCUTS is kern_big's only."
+  },
+  {
+   "file": "docs/plans/HEAP-UNPIN-PLAN.md",
+   "old_text": "each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`) calls after its",
+   "new_text": "each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`; 49 sites over 14 bases at 2026-11-08, so the per-site cost has grown with the modules since) calls after its",
+   "why": "grep -rnE 'call far \\[[A-Z]+FP' kernel/ finds 49 sites through 14 FP blocks (CPFP 11, HBFP 8, FDFP 6, FCPFP 4, FMFP 4, DKDFP 3, SERFP 3, DKFP 2, SETFP 2, SMNFP 2, CLFP, CMZFP, EXFP, WNFP)."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "As blessed (`tools/kernsize.py`, `-DKERN_SMALL` for the second row):",
+   "new_text": "As blessed at an earlier commit and not re-taken since (`tools/kernsize.py`,\n`-DKERN_SMALL` for the second row; the kernsize block below is the latest\nbless, `ksize` 96,768 on kern_big and 59,392 on kern_small):",
+   "why": "The table gives 97,792 and 62,976. The same file's blessed kernsize JSON says big.ksize 96,768 and small.ksize 59,392, and today's kernsize prints 96,768 and 58,880."
+  }
+ ]
+}

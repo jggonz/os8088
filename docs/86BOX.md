@@ -69,7 +69,7 @@ of the CPU model:
   of those faults a second (docs/REALDMG-SPEC.md section 16.2.4). Bochs
   always had the check; `pmoderetf` and `pmodeiret` had it here already.
 
-Three more serve the port backend (*kern_big rows on 86Box* and *kern_mega
+Five more serve the port backend (*kern_big rows on 86Box* and *kern_mega
 rows on 86Box*, below), and each is inert until something asks for it:
 
 - **`04-sb-capture.patch`** - with `OS88_SBWAV=FILE`, the first Sound
@@ -105,8 +105,20 @@ rows on 86Box*, below), and each is inert until something asks for it:
   `-1fd` and `-usbm` twins) is that card as the field 2.x is jumpered, IRQ 7
   and DRQ 1 (docs/plans/completed/PICOMEM-EMU-PLAN.md).
 
-A binary built before these three is refused by the backend, which names
-the rebuild (`python3 tools/os88box.py build`).
+- **`08-automation-mouse-raw.patch`** - the automation socket's `mouse dx
+  dy` is GUEST motion and is never scaled by the window's ratio. Upstream
+  scales it like a host pointer, and `mouse_subtract_y` converts with the X
+  ratio and subtracts with the Y one, so on a VGA a +20 arrived as +19 and
+  the held-back count paid out on a LATER report: a pointer `os88mouse.to`
+  had proven at its target moved one more pixel, and a drag dropped a pixel
+  off (`mega-deskzoom-86box`, "landed at (207,29)" for (207,30)). A host
+  pointer on a visible window is scaled exactly as before.
+
+`build.sh` records the hash of the patches it applied in `86Box.patches`
+beside the binary, and the backend refuses a binary whose record does not
+match this tree's `tools/86box/patches/` (or that has none), naming the
+rebuild (`python3 tools/os88box.py build`). A patch that changes behaviour
+and adds no verb cannot be probed for, which is why the record exists.
 
 ## Use
 
@@ -152,7 +164,12 @@ profile and NOT copied - a `.cue` names its `.bin` relative to itself - and
 `--cd` replaces it; left relative, 86Box looked for it in the run directory
 and dropped the drive without a word (KERN-MEGA-PLAN 14.68).
 `vm/286-mega-cdrom` and `vm/386-mega-cdrom` are kern_mega with a CD-ROM and
-`tests/megacdrom.py` is the row that drives the first.
+`tests/megacdrom.py` is the row that drives the first. `vm/386-mega-cdrom`
+(a Micronics 386DX-25, SB16) carries a seeded CMOS
+(`nvr-seed/micronics386.nvr`, both floppies 1.44MB), so it boots straight
+through rather than stopping in setup, and the kern_mega port takes it as
+`OS88_MEGA_VM=386-mega-cdrom` - `tests/x3live386.py` is its row
+(KERN-MEGA-PLAN 14.150).
 `vm/pentium-pciether` (`make pentium-pciether`, SPEC.md 125.6) is `vm/pentium`'s
 PCI board (`p54tp4xe`, 16 MB) with 86Box's Realtek RTL8139C+ (`net_01_card =
 rtl8139c+`, SLiRP) booting kern_mega's `make pciethertest` disk with
@@ -428,6 +445,7 @@ profile. Whatever the row's MartyPC machine name says is added to it
 | `_sb` | a Sound Blaster 2.0 at 220h, IRQ 7, DMA 1. `$OS88_MEGA_SND=sb16[:irq]` gives an SB16 instead |
 | `_ne2k` | an NE2000 at 300h, IRQ 10, on slirp. The host is 10.0.2.2, as on QEMU |
 | `_hdd` | the row's own fixed disk on the IDE controller, mounted in place |
+| `_ems` | a Lo-tech EMS board at 260h, frame E000h, 2 MB (`vm/286-mega-ems`'s), on the seeded machine - that profile has no CMOS seed of its own and stops in MR BIOS setup under the port. A kern_mega system disk still needs a `SYSTEM.CFG` wanting EMS.DRV (bit 7; `tests/vbtmega.py --arm ems`) |
 
 A floppy drive's type follows its image: a 360KB or 1.2MB image gets a
 5.25" HD drive and anything else a 3.5" one. `$OS88_MEGA_MEGS` sets the RAM.

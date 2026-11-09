@@ -2060,8 +2060,13 @@ w16_ptin:
     push es
     W16SEG es, ax
     W16PMDS s, es                   ; the part told WIN16's data selector,
-    pop es                          ;   at W16S_MYDS in all three parts' headers
+                                    ;   at W16S_MYDS in all three parts' headers
     call w16_pcode                  ; the copy's code half (124.31.5)
+    push ax                         ; ...and told that half's DATA half, at
+    add ax, 8                       ;   W16S_SELF, which its CSDO stores
+    mov [es:W16S_SELF], ax          ;   through (w16pm.inc): no completed #GP
+    pop ax                          ;   a store into its own bytes
+    pop es
 %endif
     mov [si + 4], ax                ; the vector's segment...
     mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in all
@@ -2616,9 +2621,9 @@ w16_tpl:
 
 w16_title:      db 'WIN16', 0
 %ifdef PKG_MEGA
-w16_s_pm:       db 'WIN16 needs kern_mega', 0
+TOASTSTR w16_s_pm, 'WIN16 needs kern_mega'
 %else
-w16_s_pm:       db 'WIN16 needs real mode', 0
+TOASTSTR w16_s_pm, 'WIN16 needs real mode'
 %endif
 w16_s_idle1:    db 'WIN16 runs Windows 3.x programs.', 0
 w16_s_idle2:    db 'Double-click one in a Disk window.', 0

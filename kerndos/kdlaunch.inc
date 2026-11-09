@@ -258,8 +258,9 @@ KDL_PSUM    equ 498             ; dd the distributed sum over the park and the
                                 ;    kernel's high set, taken after the copy
 KDL_PKB     equ 502             ; dw KB of conventional memory parked (from 0)
 KDL_PLOW    equ 504             ; dw the lowest PARAGRAPH left IN PLACE (12.1
-                                ;    item 5's partial park), 0 = all parked:
-                                ;    kern_dos's arena must end below it
+                                ;    item 5's partial park), 0 = all parked.
+                                ;    Nothing here reads it: KDL_CAP, lowered
+                                ;    with it, is what bounds the arena
 KDL_SNAPLIN equ 506             ; dw THE PROGRAM'S LAST SCREEN (KERN-MEGA-PLAN
                                 ;    14.106): DOS.O88 writes its snap record's
                                 ;    OFFSET here, and HIBER.DRV's hbm_dosrun

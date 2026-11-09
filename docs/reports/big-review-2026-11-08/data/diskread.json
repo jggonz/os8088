@@ -1,0 +1,801 @@
+{
+ "area": "diskread",
+ "title": "Floppy I/O and the FAT read side (kernel/disk.inc, kernel/dskwin.inc, kernel/drvvol.inc; SPEC.md 18, 19)",
+ "summary": "The read side is in good shape as a mechanism. dsk_xfer is one transfer routine for both directions and every volume kind. A hostile-BPB table turns every divide that runs under sch_lock into a refusal. One track-to-end sector cache sits under disk_read and is invalidated at the one write choke point. A FAT window is keyed by a signature that os88disk.py now makes unique per shipped image. Batching is measured on the 5150, and so is the fix that stopped trusting AL. Three weaknesses sit at the edges rather than in the core loop. (1) The boot partition is mounted with int 13h AH=08h geometry while boothd and dsk_bpb_check address it with the BPB's, which is FIELD-NOTES 33's disagreement still live in the kernel. (2) Two safety arguments are written down but not enforced: the batch bracket assumes the caller holds the gfx lock, yet a published slot opens it unchecked; and a run past the buffer's 64KB segment wraps silently. (3) The retry ladder treats a speculative read-ahead fill like a real read, so one bad sector at a track's end taxes every access to that track. It also discards status 06h, the one swap signal an AT gives for free. A caller-held FIND cursor is cheap now, because dsk_dscan already resumes from a raw slot. The biggest defect is documentation drift. The file header, the disk_read, disk_mount, dsk_sortdir, dsk_chdir_q and fdd_probe headers, about ten orphaned headers for deleted routines, dskwin.inc's banner, and SPEC 18's intro, symbol tables and 18.3 mount sequence still describe replaced designs: one sector per call, the FAT snapshot, disk_dir and disk_icons, the fixed-address listing, dsk_relist, unit 1 only, the 128KB gate, and byte-identical boot sectors. Verified: 61 doc fixes confirmed (two of the reviewer's refuted as code changes, seven added); of 20 findings 12 confirmed, 4 corrected (dr-8's fix would itself overflow a div, dr-14 must keep clearing the probed unit's bit), none refuted, 4 unchecked.",
+ "strengths": [
+  {
+   "title": "One transfer routine, one retry policy",
+   "why": "Read and write differ by one byte, so CHS, cylinder guard, DMA bounce, EOT write and retries exist once; the cache fill and the mounted-image arm re-enter it and carry no CHS code of their own",
+   "evidence": "kernel/disk.inc:1387-1405, 2458-2532, 7206"
+  },
+  {
+   "title": "Divide safety is arithmetic",
+   "why": "cmp dx,cx / jae before the CHS div and cmp dx,bx / jae before the cluster-count div turn a #DE under sch_lock into a refusal; every derived-layout add is carry-checked",
+   "evidence": "kernel/disk.inc:1761-1767, 5233-5241, 5269-5275"
+  },
+  {
+   "title": "BPB table names the consumer each rule protects",
+   "why": "Hostile-input validation in a documented order; several rules are range tests that are short and also correct at 0",
+   "evidence": "kernel/disk.inc:5091-5217; SPEC.md 18.2"
+  },
+  {
+   "title": "dsk_runcap's 17-bit negation",
+   "why": "DMA-page and BX-wrap caps with no zero test; a 0 result becomes a one-sector bounce through a 512-aligned dsk_secbuf that an %error enforces",
+   "evidence": "kernel/disk.inc:2596-2646, 1880-1939; kernel/dskwin.inc:356"
+  },
+  {
+   "title": "CF=0 is the contract, not AL",
+   "why": "A 5150-measured fix (AL=1 for a 9-sector read) that removed a revolution per sector; the A/B knob is kept",
+   "evidence": "kernel/disk.inc:2075-2106"
+  },
+  {
+   "title": "The cache mirrors the disk",
+   "why": "Invalidation hangs off disk_write so no future write can forget it. It fills from the requested sector to the track's end by measurement, keeps a pollution gate, skips a page-straddling slot, uses a one-sector second chance in place of LRU, and was simulated before it was built",
+   "evidence": "kernel/disk.inc:6654-6713, 6989-7245, 7294-7328"
+  },
+  {
+   "title": "Size-driven chain walk, no EOC constants",
+   "why": "Each pass consumes at least one sector, so a cyclic FAT cannot hang it; runs are kept in clusters, so 32-bit volumes cost the walk nothing; the directory walker has its own sector bound",
+   "evidence": "kernel/disk.inc:8913-9107, 6597"
+  },
+  {
+   "title": "Owned DPT with per-call EOT",
+   "why": "DOS's fix done properly: the table is copied rather than replaced, so this machine's timings stand, and EOT follows the mounted volume's spt",
+   "evidence": "kernel/disk.inc:1291-1332, 1993-1994"
+  },
+  {
+   "title": "The presence probe fails toward keeping a drive",
+   "why": "It retires a drive only on the positive ST0=7x absence shape seen in the field; the asymmetric-cost argument is the model for any destructive probe",
+   "evidence": "kernel/disk.inc:10700-10971"
+  },
+  {
+   "title": "Instruments ship with the design",
+   "why": "The DD block, the (LBA, run) trace, the per-phase counters, the field-labelled failure toast and the fdd ST rows are what made the AL bug, the head-crossing write and ST0 findable off real iron",
+   "evidence": "kernel/disk.inc:593-720, 570-591"
+  },
+  {
+   "title": "Layout couplings are %errors",
+   "why": "Every place that reads two cells as one is asserted, so a reorder breaks the build rather than the machine",
+   "evidence": "kernel/disk.inc:247, 347, 2570, 3252, 6834, 6902"
+  }
+ ],
+ "findings": [
+  {
+   "id": "dr-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Boot partition mounted with AH=08h geometry while the volume is addressed with the BPB's",
+   "detail": "dsk_boot_from_x (.ovl) stores int 13h AH=08h's spt/heads in dsk_bootspt/dsk_boothds. disk_mount_x loads them into disk_spt/disk_heads for a BIOS hard-disk row and so for the one read that fetches the BPB (LBA 0 plus [dsk_vbase]). dsk_bpb_check then switches disk_spt/heads to the BPB's. boothd was changed to BPB geometry because AH=08h was the wrong invariant (FIELD-NOTES 33). When the volume was written with a geometry the drive's ROM does not answer (FN33's 17/4 volume on a 63/16 drive), LBA = base maps to a different CHS under the ROM geometry, the kernel's first read lands elsewhere, the BPB fails, and C: never mounts. dsk_bootspt=0 drops to 9/2, which is worse. Hibernate (hiber.inc) and DSK_HCYLPROBE's dsk_hcyl_probe also read the pair.",
+   "evidence": [
+    "kernel/disk.inc:2796-2807 AH=08h probe",
+    "kernel/disk.inc:4074-4081 used for the BPB fetch",
+    "kernel/disk.inc:5327-5330 BPB geometry replaces it",
+    "boot/boothd.asm:16-31 BPB geometry is the invariant",
+    "boot/boothd.asm:286-288 hand-off passes DL, BX:CX only",
+    "kernel/hiber.inc:1669-1672, 2782-2785 same pair",
+    "kernel/disk.inc:2949-2970 dsk_hcyl_probe uses the pair"
+   ],
+   "recommendation": "Have boothd hand over its BPB spt/heads (it holds [spt] and [bpb_heads]) in SI/DI, with a marker in AX so an older BOOTHD.SYS is detected. dsk_boot_from_x uses them when the marker matches and falls back to AH=08h otherwise; delete the fallback once every boothd carries the marker. Verify on the FN33 dumped images in 86Box first, because this is predicted from reading, not from a run.",
+   "phase": "now",
+   "bytes_est": "+8 boothd; +6 .ovl now, -28 .ovl once AH=08h goes; 0 resident",
+   "listed_as": "",
+   "prior_art": "DOS IO.SYS builds the fixed-disk BDS from one source and uses it for every access; os8088's boot sector and kernel disagree",
+   "verdict": "confirmed",
+   "verify_note": "Re-read 2744-2807, 4074-4081, 5326-5330 and boothd.asm 16-31/286-288: the kernel's BPB fetch uses AH=08h's answer while boothd and dsk_bpb_check use the BPB's. It bites only when the two geometries differ and the base is not 0, which is FN33's shape exactly; FN33 says both images BOOT with the new sector, which does not establish that C: mounts. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "dr-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Batch bracket's 'UI is frozen' assertion is not enforced at a door packages can call",
+   "detail": "dsk_batch_begin_x sets the batch unconditionally. Inside one, a floppy's banked BPB and signature, the banked FAT window and the cache are trusted with no LBA 0 read. The whole safety argument is 'any gfx_unlock ends it', which assumes the caller holds the gfx lock. The door is a published slot (0x02B0, dkf_dsk_batch_begin) with a C thunk, and package file I/O is documented as not holding the mutex. So a package-opened batch survives until the next unlock anywhere, which on an idle desktop can be a long time, and a swapped floppy is then written with the old disk's FAT. No package in this tree calls it; the in-tree callers (compress.inc, drivers/hdd/inst.inc) run under the lock.",
+   "evidence": [
+    "kernel/disk.inc:940-953 no lock test",
+    "kernel/disk.inc:913-919 the argument",
+    "kernel/kernel.asm:3217-3225 published slot",
+    "apps/os88api.inc:6060-6072",
+    "apps/cc/os88thunk.asm:2054",
+    "kernel/fprog.inc:633-646 package file I/O holds no mutex",
+    "kernel/vga12.inc:5191 the one ending store"
+   ],
+   "recommendation": "dsk_batch_begin_x does nothing unless [gfx_lock_flag] is set and [gfx_lock_own] == [sch_cur], using fpg_arm's test (fprog.inc:616-620). A refused begin is only slower. Check drivers/hdd/inst.inc's two begins still pass (they rely on the callback's lock).",
+   "phase": "now",
+   "bytes_est": "~+16 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_batch_begin_x (940-953) has no lock test and the slot is published with a C thunk; gfx_unlock's store at vga12.inc:5191 is the only end. Byte estimate raised from +12: cmp/je/mov/cmp/jne is 16 bytes."
+  },
+  {
+   "id": "dr-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "A failing read-ahead fill runs the full retry ladder, then the direct read runs it again",
+   "detail": "A miss fills to the track's end through disk_read_x and gets 3 attempts at the run, then the single-sector fallback - and after each single sector succeeds, the next pass recomputes a full run and fails three times again, so a bad sector at the track's tail costs a ladder per good sector before it. A bad sector in the speculative tail fails the fill, the slot stays empty, and the direct read retries the wanted sectors. Because nothing was cached, every later read on that track refills and pays the failing tail again: one marginal sector nobody asked for taxes all its good neighbours with resets.",
+   "evidence": [
+    "kernel/disk.inc:7206-7208 fill via disk_read_x",
+    "kernel/disk.inc:2025-2073 retry ladder",
+    "kernel/disk.inc:7023-7029 CF=1 falls to direct read",
+    "kernel/disk.inc:4202-4204 rah_busy also marks the LBA 0 swap-detector read, which needs its ladder"
+   ],
+   "recommendation": "Mark a fill distinctly (for example add/sub 2 on dsk_rah_busy instead of inc/dec; every reader tests it against 0, and 1708 reads it as a word with dsk_lbahi) and have dsk_xfer's failure arm fail a fill at its first error, with no reset and no ladder. Optionally cache the good prefix already read.",
+   "phase": "now",
+   "bytes_est": "+10 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_rah_fill calls disk_read_x with only inc dsk_rah_busy (7206); dsk_xfer's failure arm (2020-2073) has no fill test. The cost is somewhat worse than stated, since a successful single-sector retry returns to full-length runs."
+  },
+  {
+   "id": "dr-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Status 06h (media changed) is retried as a generic error and discarded",
+   "detail": "On AT-class BIOSes the first access after a change-line rise answers AH=06h. dsk_xfer resets and retries, the retry succeeds, and the only hardware swap signal is lost: a write after a fast swap (inside a quiet switch whose motor test passed, or a batch) goes to the new disk with the old FAT. The change line was declined before as a REPLACEMENT for the motor test (AH=16h; XTs have none). This is additive and free, because it arrives on a read already being made.",
+   "evidence": [
+    "kernel/disk.inc:2020-2056 failure arm (only 03h is special)",
+    "kernel/disk.inc:8342-8392 motor-only media test",
+    "docs/FIELD-NOTES.md:63-67 AH=16h declined"
+   ],
+   "recommendation": "On AH=06h with [dsk_mntok]=1 (inside a validated mount), clear [dsk_mntok] so the next operation remounts and the write gate shuts, and fail the transfer with ioerr 06h and no retry. During a mount ([dsk_mntok]=0) keep today's retry, since the mount re-validates anyway.",
+   "phase": "now",
+   "bytes_est": "+16 .cold",
+   "listed_as": "",
+   "prior_art": "DOS 3.2+ 'Invalid disk change' via int 24h; AmigaOS disk-change interrupt to the filesystem",
+   "verdict": "confirmed",
+   "verify_note": "dsk_xfer special-cases 03h alone (2025-2027); 06h takes the reset-and-retry path. Whether a given AT ROM reports 06h with CF=1 to the caller is still the open question the area doc lists."
+  },
+  {
+   "id": "dr-5",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "OSAPI_FILE_FIND stays quadratic though dsk_dscan already resumes from a raw slot",
+   "detail": "dsk_find_x calls dsk_dscan with CX=0 and an ordinal, so N entries cost N(N+1)/2 visits. dsk_dscan already takes a raw slot to start at and answers the next one, and fcp_scan uses it that way. A FILE_FIND_SEQ with READ_SEQ's caller-held 16-byte cursor (folder cluster, raw slot, [dsk_mgen]) is a thin wrapper. Being caller-held, it survives the find/read/write/find loop that dsk_find's header rejected a kernel cursor for. SPEC.md 18.95.2 retired the cursor on I/O grounds only and says what remains is CPU; DISK-CPU-PLAN 3.1 measured that CPU.",
+   "evidence": [
+    "kernel/disk.inc:7886-7974 dsk_dscan resume",
+    "kernel/disk.inc:8034-8038 called from 0",
+    "kernel/disk.inc:7988-7996 why stateless",
+    "SPEC.md 18.95.2 (I/O-only refusal)",
+    "docs/plans/DISK-CPU-PLAN.md 3.1 ~2.5 guest s"
+   ],
+   "recommendation": "Add a FILE_FIND_SEQ cell at the end of the table (kern_big, DSK_DSCAN): check the generation, call dsk_dscan(slot,0), write the next slot back into the cursor.",
+   "phase": "now",
+   "bytes_est": "+45 .cold, +6 cell; no ABI break",
+   "listed_as": "DISK-CPU-PLAN.md 3.1 (new: the body already exists, so the cost is a wrapper)",
+   "prior_art": "DOS FindFirst/FindNext keeps the search state in the caller's DTA",
+   "verdict": "confirmed",
+   "verify_note": "dsk_find_x passes CX=0 and BP=ordinal to dsk_dscan (8034-8038); dsk_dscan takes a raw slot in CX. The design choice in SPEC 19.7.1/18.95.2 is about revolutions, not CPU, so it does not answer this."
+  },
+  {
+   "id": "dr-6",
+   "kind": "perf",
+   "severity": "low",
+   "title": "Fixed overhead on every dsk_xfer, cache hits included",
+   "detail": "Every call pays dsk_media_ok (row lookup and BDA reads), a far call to fpg_busy, a second dsk_vol_row_x, and the vbase and cylmax loads: about 600-700 cycles (about 0.14 ms on the 5150), against a cache hit's 1.6 ms copy. Fill and .img re-entries pay it again. dsk_media_ok is asked only to choose FPG_WARM.",
+   "evidence": [
+    "kernel/disk.inc:1405-1460",
+    "kernel/disk.inc:8342-8392"
+   ],
+   "recommendation": "Skip dsk_media_ok when the widget is already armed (FPG_ARMED), and have it hand back the row so the second lookup goes.",
+   "phase": "now",
+   "bytes_est": "~0; saves ~250 cycles per transfer",
+   "listed_as": "DISK-CPU-PLAN.md 7 (the read path's cycles a KB)",
+   "verdict": "unchecked",
+   "verify_note": "The call sequence at 1405-1460 is as described; the cycle and byte figures were not re-derived."
+  },
+  {
+   "id": "dr-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "A run past the buffer's segment wraps to ES:0000 silently",
+   "detail": "dsk_runcap caps at the BX wrap, but .notched then adds the run to BX (wrapping to 0) with ES unchanged, and the next dsk_runcap at BX=0 answers a full 128-sector cap. 'A transfer is at most 128 sectors' and 'the caller's budget must cover count*512' are prose. Today's callers stay bounded only because they convert a 16-bit byte count.",
+   "evidence": [
+    "kernel/disk.inc:1238-1242",
+    "kernel/disk.inc:2128-2135 .notched",
+    "kernel/disk.inc:2627-2631"
+   ],
+   "recommendation": "At .notched, fail when add bx,ax carries while SI != 0. This runs once per int 13h call, not per sector.",
+   "phase": "now",
+   "bytes_est": "+6 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_runcap's BX arm gives 128 at BX=0 (neg 0 / cmc / rcr / shr 8); .notched's add bx,ax has no carry test."
+  },
+  {
+   "id": "dr-8",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "dsk_rah_fill computes the track phase on the volume-relative LBA, not LBA+base",
+   "detail": "The fill divides DI by spt while the transfer converts DI+[dsk_base]. On a BIOS boot partition not aligned to a track (a foreign FDISK's 1MB alignment), the fill is mis-sized and splits into two int 13h calls or under-fills. The data stays correct. The installer's head-1-sector-1 layout is aligned. Only BIOS rows are affected: dsk_xfer never consults the cache for a DVK_DRV volume (1714-1716).",
+   "evidence": [
+    "kernel/disk.inc:7095-7099",
+    "kernel/disk.inc:1750-1760"
+   ],
+   "recommendation": "Fold the base in without a straight 32/16 div by spt: (base+DI)/spt can exceed a word on a partition past ~65,536 x spt sectors (4M on 63 spt) and would #DE under sch_lock. Either divide by spt*heads first, as dsk_xfer does, and take the remainder mod spt, or bank [dsk_base] mod spt once per transfer and add it to DX after the existing div.",
+   "phase": "now",
+   "bytes_est": "~+14 .cold",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Real, but the recommended 'add the base's low word into the dividend' is wrong twice: the low word alone does not preserve the phase mod spt, and a full 32-bit dividend can overflow the div. Recommendation and byte estimate corrected."
+  },
+  {
+   "id": "dr-9",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "dsk_find returns a redirected volume's name unterminated when the driver's is 13+ bytes",
+   "detail": "osapi_fs_ent forces a NUL at +15 for every listed entry, but dsk_find's FSV_ENUM arm joins .stage, which copies 13 bytes of the driver's staged name with no NUL forced; +13 is the attribute byte.",
+   "evidence": [
+    "kernel/disk.inc:3807",
+    "kernel/disk.inc:8110-8119",
+    "kernel/disk.inc:8193-8199"
+   ],
+   "recommendation": "mov byte [es:di-1],0 after the rep movsb.",
+   "phase": "now",
+   "bytes_est": "+5 .cold",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed at 8193-8199; the store with an ES override is 5 bytes, not 4."
+  },
+  {
+   "id": "dr-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": ".bounce's 'no recursion' safety argument contradicts the fill and .img re-entries",
+   "detail": "The comment refuses a recursive dsk_xfer because fpg_busy 'can wait on a gfx lock'. But fpg_arm refuses rather than waits, and the fill and .img both re-enter dsk_xfer inside sch_lock. What can happen is the first chrome draw landing inside the lock with ES pinned, which the head of dsk_xfer says it avoids: a 1-sector miss below FPG_WARM followed by an inner 9-sector fill that crosses the threshold.",
+   "evidence": [
+    "kernel/disk.inc:1890-1894",
+    "kernel/disk.inc:1449-1453",
+    "kernel/disk.inc:7207, 2516",
+    "kernel/fprog.inc:616-620"
+   ],
+   "recommendation": "State the real reason (the head's no-draw-inside-the-lock rule, which fpg_arm's refusal does not change), and pass CX=0 to the inner fpg_busy for a fill so the rule holds there too.",
+   "phase": "now",
+   "bytes_est": "0 to +3",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "The inconsistency is real. The reviewer's proposed reason ('[dsk_bnc_*] is one set of cells') is not one: the inner transfer would be into 512-aligned dsk_secbuf and could never bounce. The doc fix states the head's rule instead."
+  },
+  {
+   "id": "dr-11",
+   "kind": "perf",
+   "severity": "low",
+   "title": "A listing mount flushes every volume's cached chunks",
+   "detail": "dsk_rah_flush clears all records, so a Refresh or navigation on A: drops B:'s cache although B: has not changed. The .resig loop then stamps every record with the new disk's signature, which is safe only because the cache is empty. B:'s chunks would be safe to keep: each is keyed by its own disk's signature, re-checked at B:'s next mount.",
+   "evidence": [
+    "kernel/disk.inc:4181-4186",
+    "kernel/disk.inc:7259-7272",
+    "kernel/disk.inc:4227-4233"
+   ],
+   "recommendation": "Drop by volume with dsk_rah_wr(AX=0, CX=0FFFFh) (check its range arithmetic at that CX), and make .resig stamp only records whose RAH_VOL is [disk_drive].",
+   "phase": "now",
+   "bytes_est": "+10 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_rah_flush (7259) zeroes every RAH_N; .resig (4227-4233) stamps all DSK_RAH_RUNS records."
+  },
+  {
+   "id": "dr-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The single-sector fallback also runs after a TIMEOUT (80h)",
+   "detail": "A drive-level timeout on a multi-sector run costs 3 attempts plus 3 more at one sector, each with a reset, and on a 5150 each costs seconds. The fallback exists for a bad sector; one sector will not fare better on a timeout. Most no-disk cases hit the mount's 1-sector LBA 0 read, which already stops at 3.",
+   "evidence": [
+    "kernel/disk.inc:2057-2066",
+    "kernel/disk.inc:1820-1834"
+   ],
+   "recommendation": "For 80h, one attempt at the run and then one at a single sector.",
+   "phase": "record",
+   "bytes_est": "+6 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The failure arm tests only 03h before the ladder (2025-2027)."
+  },
+  {
+   "id": "dr-13",
+   "kind": "bug",
+   "severity": "low",
+   "title": "dsk_boot_from's 255-head guard is dead",
+   "detail": "xor ah,ah / inc ax gives AX in 1..256 and never 0, so 'jz .nogeom ; DH = 0FFh is not a geometry' is never taken and 256 heads is accepted (legal CHS anyway).",
+   "evidence": [
+    "kernel/disk.inc:2803-2806"
+   ],
+   "recommendation": "Delete the guard, or use inc al if 256 heads is to be refused. Superseded by dr-1 if the AH=08h arm goes.",
+   "phase": "now",
+   "bytes_est": "-2 .ovl",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "AL=DH, AH=0, inc ax: ZF only on 0FFFFh+1, unreachable. dsk_boot_from_x is in .ovl."
+  },
+  {
+   "id": "dr-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "dsk_fdd_probe clears unit 1's calibrated bit whatever unit it probed",
+   "detail": ".out ANDs 0040:003E with 7Dh ('re-seek unit 1'), but SPEC.md 18.98 made the probe run for units 1..3 (desk.inc:349 probes the externals and ignores their verdict). The probe RECALIBRATEs the unit it asked about, so the bit that should be cleared - forcing the BIOS to recalibrate before trusting its own idea of where the head is - is that unit's, not unit 1's.",
+   "evidence": [
+    "kernel/disk.inc:10962",
+    "kernel/disk.inc:10772",
+    "kernel/desk.inc:349-352"
+   ],
+   "recommendation": "Derive the mask from [fdd_unit]: clear bit [fdd_unit] and bit 7. Do not clear bit 7 only - the probe moves the head, so keeping a re-seek of the probed unit is the conservative half.",
+   "phase": "now",
+   "bytes_est": "~+10 .ovl",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "The wrong-unit mask is real (dsk_fdd_probe is .ovl). The reviewer's 'clear bit 7 only' option is refused: after a recalibrate the BIOS's own cylinder record can be stale, so the probed unit's bit should still be cleared. The comment at 10962 accurately describes the code, so its doc fix is refuted; it changes with the code."
+  },
+  {
+   "id": "dr-15",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "dsk_rah_fill reads [dsk_totsec] before the mount that sets it",
+   "detail": "The listing mount reads LBA 0 through a fill, which clamps against the previous volume's [dsk_totsec], or .bss garbage before the first FAT mount. Benign: the clamp can only shorten the fill (garbage 0 gives a one-sector request with no surplus, so no fill). But it is an unstated .bss read before write.",
+   "evidence": [
+    "kernel/disk.inc:4220-4223",
+    "kernel/disk.inc:7115-7122",
+    "kernel/disk.inc:11325"
+   ],
+   "recommendation": "Comment it, or seed dsk_totsec = 0FFFFh in .text (a word moved from .bss).",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_totsec is resw in .bss (11325) and .vol reads it (7115)."
+  },
+  {
+   "id": "dr-16",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "Documentation drift in this area is a defect of its own",
+   "detail": "About ten orphan contract headers for deleted routines (dsk_vol_kind, osapi_vol_paint, dsk_relist, dsk_copy_low, dsk_copy_out, dsk_put_icon, and dsk_sortdir's selection-sort header). Stale running counts (32 entries, 0..31, 64 on kern_big, the 128KB gate, unit 1). Retired designs described as current (FAT snapshot, one sector per call, disk_icons, disk_dir, dsk_relist, byte-identical boot sectors). SPEC 18 intro, its symbol tables and 18.3 describe the pre-18.91, pre-25.9 mount. checkdocs cannot see any of it.",
+   "evidence": [
+    "see doc_fixes"
+   ],
+   "recommendation": "Do one sweep (the doc_fixes here): fold the orphans into one-line 'lived here' notes, and name constants (DSK_NENT) instead of numbers.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Every quoted text was found exactly; 61 fixes confirmed (including seven the reviewer missed: disk_mount's LBA 0 geometry, SPEC's disk_mount row and cyl<80 gate, 18.3 step 3, dsk_chdir_q's dsk_relist, dskwin's 'disk_dir STAYS' and its 7,936-byte region), 2 refuted."
+  },
+  {
+   "id": "dr-17",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "dsk_up_open writes listing index 0 without consulting [dsk_nmax]",
+   "detail": "The '..' link is stored through dsk_put_dir (which has no bound) before the cap check. That is correct only because every aim supplies at least one entry (FS_VKB*32), and a store-less mount goes quiet before the listing, which is held by prose in another file.",
+   "evidence": [
+    "kernel/disk.inc:5533-5560",
+    "kernel/disk.inc:9502-9510",
+    "kernel/disk.inc:4360-4372",
+    "kernel/files.inc:1696-1701"
+   ],
+   "recommendation": "Leave as is, or skip the link when [dsk_nmax] is 0.",
+   "phase": "record",
+   "bytes_est": "+5",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_put_dir does not check [dsk_nmax]; the zero-capacity case is excluded by the quiet stop at .listing."
+  },
+  {
+   "id": "dr-18",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Mount and listing are one routine with quiet flags",
+   "detail": "disk_mount_x validates the volume, builds the caller's listing and harvests icons, and uses dsk_quiet and a zero dsk_dseg to switch the last two off. DOS, OS/2 and the Mac separate volume validation from directory listing. The code is already split at .listing.",
+   "evidence": [
+    "kernel/disk.inc:4012-5010",
+    "kernel/disk.inc:4334-4347"
+   ],
+   "recommendation": "Make disk_mount steps 1-2b and the scan/sort/harvest a separate routine that fmv_load calls; do it with dr-16's sweep. Needs files.inc's reviewer to agree the seam.",
+   "phase": "now",
+   "bytes_est": "~±10 .cold",
+   "listed_as": "",
+   "prior_art": "DOS media check / BDS against FindFirst/FindNext; Mac VCB against PBGetCatInfo loops owned by the Finder",
+   "verdict": "unchecked",
+   "verify_note": "The .quiet/.listing split at 4334-4347 exists as described; the redesign was not evaluated."
+  },
+  {
+   "id": "dr-19",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Three caches where DOS has one buffer pool",
+   "detail": "The FAT window machinery (per-volume claims, pin, signatures, park/pick/want/evict/demote, dirty range; about 500 bytes .cold) sits beside a sector cache that already serves the window's loads. A unified buffer cache with dirty bits would delete it, but would lose the guaranteed DX/DX+1 residency that FAT12 straddles and dsk_next_clus's direct ES:BX reads rely on.",
+   "evidence": [
+    "kernel/disk.inc:5761-6296",
+    "kernel/disk.inc:6656-6657"
+   ],
+   "recommendation": "Record only: a large write-path rework for maybe -300 bytes.",
+   "phase": "record",
+   "bytes_est": "~-300 .cold (estimate)",
+   "listed_as": "",
+   "prior_art": "DOS BUFFERS= holds FAT, directory and data sectors uniformly with a dirty bit and drive tag",
+   "verdict": "unchecked",
+   "verify_note": "Not checked; the ~500-byte and -300 figures are unverified estimates."
+  },
+  {
+   "id": "dr-20",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "Ask for the volume by name instead of silently dropping owed state",
+   "detail": "On a signature mismatch with state owed (a held WRITE_SEQ, a dirty FAT), the state is dropped silently (dws_hload, a window reload). With derived BS_VolID and a unique label, the kernel could toast 'Put back <label>' and refuse the write.",
+   "evidence": [
+    "kernel/disk.inc:5862-5870",
+    "SPEC.md 18.8.2.1"
+   ],
+   "recommendation": "Record; about +40 bytes plus a toast string if taken.",
+   "phase": "record",
+   "bytes_est": "+40",
+   "listed_as": "",
+   "prior_art": "Mac System 5-7 offline VCBs and 'Please insert the disk: <name>'; C64 GEOS disk name/ID check at OpenDisk",
+   "verdict": "unchecked",
+   "verify_note": "Not checked."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "(SPEC.md 18.2) before any derived number is trusted, the FAT is\n; snapshotted into FAT_SEG at mount, and the root directory is re-shaped",
+   "new_text": "(SPEC.md 18.2) before any derived number is trusted, the FAT is\n; reached through a window of up to DSK_FAT_SECS sectors (SPEC.md 18.8),\n; and the root directory is re-shaped",
+   "why": "dsk_fat_window/dsk_fatw_pick (disk.inc:3947, 5828) load a FAT window into [dsk_fatseg], a per-volume claim or the FAT_SEG pin; nothing snapshots the whole FAT"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; Reads go one sector per int 13h call (AH=02, AL=1) so track boundaries\n; and DMA alignment never matter; each sector gets up to 3 attempts with\n; an AH=00 controller reset between attempts.",
+   "new_text": "; A transfer goes in as few int 13h calls as the track (the cylinder, on\n; kern_big's fixed disks), the 64KB DMA page and the buffer allow (SPEC.md\n; 18.91). Each run gets up to 3 attempts with an AH=00 controller reset\n; between them, and a run that fails all three drops to one sector, which\n; gets three of its own.",
+   "why": "dsk_xfer batches runs capped by dsk_runcap (disk.inc:2596) and drops dsk_run to 1 after 3 failures (2055-2066)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; The three big buffers - the directory, the icon table and the sector\n; scratch - live in .lowbss (LOW_SEG, SPEC.md 2.1), not in the kernel's own\n; 64KB window: 3.5KB the kernel no longer spends on them. int 13h writes\n; through ES:BX and needs no help. Everything that READS them goes through",
+   "new_text": "; The sector scratch, dsk_secbuf, lives in .lowbss (LOW_SEG, SPEC.md 2.1),\n; not in the kernel's own 64KB window; a listing is written into the store its\n; caller supplied through dsk_dest_x, and icon bodies into the machine-wide\n; store (SPEC.md 25.9). int 13h writes through ES:BX and needs no help.\n; Everything that READS a listing goes through",
+   "why": "dskwin.inc:291-354 holds only dsk_secbuf (+ a zero pad); disk_dir and disk_icons are gone (dskwin.inc:303, SPEC.md 25.9)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "snapshot lives in FAT_SEG (SPEC.md 2.1), reached via ES only, never DS;\n; dsk_next_clus is its single reader.",
+   "new_text": "window lives at [dsk_fatseg] - a per-volume claim or the FAT_SEG pin (SPEC.md\n; 18.8) - reached via ES only, never DS. dsk_next_clus is not its only\n; reader: dsk_free_clus and the write side (diskw.inc) reach it the same way.",
+   "why": "dsk_free_clus_x loads ES=[dsk_fatseg] (disk.inc:6406) and diskw.inc reads [dsk_fatseg] three times"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; are VOLUME-RELATIVE and 16-bit, exactly like a floppy's, and the driver adds\n; its own 32-bit partition base. So the whole FAT layer - dsk_clus2lba,\n; dsk_read_chain's run coalescer, dskw_flush - is untouched by capacity, and\n; a volume is capped at 65,535 sectors (31.99MB) by BPB rule 8, which is also\n; the DOS 3.3 partition limit these machines ran.",
+   "new_text": "; are VOLUME-RELATIVE, exactly like a floppy's, and the driver adds its own\n; 32-bit partition base - the one exception being the BIOS boot partition\n; (SPEC.md 52.10.3), whose base is dsk_vbase's and is added in dsk_xfer. So\n; the FAT layer never sees a partition. kern_small's LBAs are 16-bit, which\n; caps a volume at 65,535 sectors (31.99MB), the DOS 3.3 partition limit these\n; machines ran; kern_big's carry a high word (OS88_BIGVOL, SPEC.md 18.7.5).",
+   "why": "OS88_BIGVOL gives kern_big 32-bit LBAs (disk.inc:100-105) and TotSec32 (5067-5076); rule 8 is rule 14's now (5124); dsk_xfer adds [dsk_vbase] (1490-1495, 1759-1760)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "some sector failed all 3 attempts, or",
+   "new_text": "a run failed 3 attempts and then its first sector 3 more, or",
+   "why": "after 3 strikes dsk_xfer retries one sector 3 times before .fail (disk.inc:2055-2066)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; LBA -> CHS with 16-bit div (LBA < 2880 so it never overflows):\n;   cyl = LBA / (spt*heads); rem = LBA % (spt*heads)\n;   head = rem / spt; sector = rem % spt + 1\n; int 13h regs: CH = cyl low 8 (cyl < 80, no high bits), CL = sector,\n; DH = head, DL = drive.",
+   "new_text": "; LBA (plus the row's dsk_vbase, 0 except on a BIOS boot partition) -> CHS\n; with one 32/16 div, refused when the quotient would pass a word or\n; [dsk_cylmax] (80 on a floppy, 1024 on a fixed disk):\n;   cyl = LBA / (spt*heads); rem = LBA % (spt*heads)\n;   head = rem / spt; sector = rem % spt + 1\n; int 13h regs: CH = cyl low 8, CL = sector | cyl bits 9:8 in bits 7:6 (0 on\n; a floppy), DH = head, DL = the row's unit ([dsk_unit]).",
+   "why": "dsk_xfer adds [dsk_base], tests DX against spt*heads before one div and bounds by [dsk_cylmax] (disk.inc:1750-1767, 1555-1560) and packs cyl bits 9:8 into CL (1954-1961)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "straddle) and .success puts the caller's buffer back. NOT a recursive\n    ; dsk_xfer: its head calls fpg_busy, which may draw, and a draw inside\n    ; this sch_lock can wait on a gfx lock another task holds. dsk_secbuf",
+   "new_text": "straddle) and .success puts the caller's buffer back. NOT a recursive\n    ; dsk_xfer: its head calls fpg_busy, which may draw, and the head's own\n    ; rule is that no draw lands inside this sch_lock with ES:BX pinned\n    ; (fpg_arm refuses, rather than waits, when another task holds the gfx\n    ; lock; the read-ahead fill and the .img arm DO re-enter, so that rule is\n    ; not kept everywhere). dsk_secbuf",
+   "why": "fpg_arm refuses when another task owns the lock (fprog.inc:616-620); dsk_rah_fill (7207) and .img (2516) call dsk_xfer from inside the lock"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": ";      and the SPEC.md 18.1 variables loaded, the FAT snapshot in FAT_SEG,\n;      the synthesized directory in disk_dir and the harvested icons in\n;      disk_icons",
+   "new_text": ";      and the SPEC.md 18.1 variables loaded, the FAT window holding FAT\n;      sector 0 (SPEC.md 18.8) and - when the caller aimed one with\n;      dsk_dest_x - the sorted listing and its icon references in the\n;      caller's store; a mount with no destination, or a quiet one, builds\n;      no listing (SPEC.md 22.6.3, 18.9)",
+   "why": "disk_mount_x loads the FAT window (4245-4288), stops at .quiet when [dsk_quiet] or [dsk_dseg]=0 (4334-4346) and writes reference bytes, not bodies (4639-4835)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; click indexes the directory being replaced (SPEC.md 18.3 step 1). LBA 0 is read with the fallback geometry\n; spt=9/heads=2 - that maps to CHS 0/0/1 under any real floppy geometry, so\n; the boot sector is readable before the true geometry is known.",
+   "new_text": "; click indexes the directory being replaced (SPEC.md 18.3 step 1). LBA 0 is read with the fallback geometry\n; spt=9/heads=2 - that maps to CHS 0/0/1 under any real floppy geometry, so\n; the boot sector is readable before the true geometry is known - except on a\n; BIOS boot partition, which takes the boot drive's [dsk_bootspt]/[dsk_boothds].",
+   "why": "disk_mount_x loads disk_spt/heads from dsk_bootspt/dsk_boothds for a BIOS hard-disk row (disk.inc:4074-4081)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "    ; there is no divide and no table. Insertion within a gap only moves an\n    ; entry past a STRICTLY greater one, so equal keys keep their order.",
+   "new_text": "    ; there is no divide and no table. Insertion within a gap only moves an\n    ; entry past a STRICTLY greater one, which keeps equal keys in order\n    ; inside one gap's pass but not across gaps: a Shell sort is not stable,\n    ; and a FAT directory's unique names make that moot.",
+   "why": "the gap loop at disk.inc:4455-4543 is a Shell sort, which is not stable across gaps"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "    cbw                         ; (1 or 2: rule 4 above)",
+   "new_text": "    cbw                         ; (1 or 2: rule 6 above)",
+   "why": "NumFATs is checked by 'rule 6: FAT copies in {1, 2}' (disk.inc:5111-5115); rule 4 is sectors/cluster"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "    ; provably dead after rule 13, kept as reordering insurance)",
+   "new_text": "    ; dead after rule 13 on a floppy, and live on any other volume: rule 13\n    ; bounds a declared one only by its DV_SECS and skips one that declared\n    ; none)",
+   "why": "rule 13 jumps to .r14 when [dsk_vsecs] is 0 (disk.inc:5208-5210); a 65,535-sector volume with spc=1 reaches 65,525+ clusters"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; Selection sort: n <= 32, so at most 31 exchanges of 32 bytes whatever the\n; input, where a bubble sort's worst case is 496. What it spends instead is\n; comparisons - 496 of them at 16 bytes - and those are byte loads out of ES\n; with nothing copied in or out.",
+   "new_text": "; kern_small: a selection sort, n <= DSK_NENT (32), so at most 31 exchanges\n; of DSK_DE_STRIDE bytes whatever the input, where a bubble sort's worst case\n; is 496. What it spends instead is comparisons - 496 of them at 16 bytes -\n; and those are byte loads out of ES with nothing copied in or out. kern_big\n; (DSK_BIGDIR) sorts up to DSK_NENT = 1,024 with a Shell sort (SPEC.md 19.4.1).",
+   "why": "DSK_BIGDIR arm is a Shell sort (disk.inc:4445-4544); entries are DSK_DE_STRIDE=24 (dskwin.inc:46); DSK_NENT 1024/32 (dskwin.inc:235, 257)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; It CANNOT tell two os8088-built disks of the same geometry apart, because\n; tools/os88disk.py pins BS_VolID (0x88000888) and every FAT timestamp to\n; keep image builds reproducible - so their boot sectors are byte-identical.\n; That residual case (swap one os8088 disk for another between two QUIET\n; mounts, then write) is accepted deliberately; a full mount re-validates and\n; is what every navigation costs, so only a background operation is exposed.",
+   "new_text": "; It CANNOT tell apart two disks whose boot sectors still sum alike - a dd'd\n; pair, or two serials that happen to sign the same. It used to be every pair\n; of os8088-built disks of one geometry, while tools/os88disk.py pinned\n; BS_VolID at 0x88000888; os88disk.py now derives the serial from the\n; volume's content and slots every shipped image apart, and this machine's\n; Format, Clone and Write Img stamp a fresh one (SPEC.md 18.8.2.1, 18.8.2.2).",
+   "why": "tools/os88disk.py:620 vol_id derives BS_VolID from content; SPEC.md 18.8.2 says the 'accepted deliberately' ground was never true"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; Gated on 128KB of FREE HEAP, not on the 4.5KB the claim needs: this is a\n; comfort,",
+   "new_text": "; Gated on DSK_FATW_MINK - twice the claim's KB, free at this cache's own\n; rank (SPEC.md 18.8.4; it was 128KB of FREE HEAP): this is a comfort,",
+   "why": "DSK_FATW_MINK = twice the claim's KB (disk.inc:5948), asked via mem_avail_lvl_x at MEM_PG_MED (5973-5975)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; WITHOUT demoting whoever thinks they hold it, and 18.8.2's signature cannot\n; catch that - two os8088-built floppies of one geometry have byte-identical\n; boot sectors by construction.",
+   "new_text": "; WITHOUT demoting whoever thinks they hold it, and 18.8.2's signature cannot\n; be relied on to catch that - two disks of identical content still sign\n; alike (SPEC.md 18.8.2.1).",
+   "why": "serials are content-derived and machine-made disks are stamped (SPEC.md 18.8.2.1); the byte-identical claim is the retired 0x88000888 pin"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; SPEC.md 18.8.2) - which is where the 128KB gate lives.",
+   "new_text": "; SPEC.md 18.8.2) - which is where the gate, DSK_FATW_MINK, lives.",
+   "why": "the gate is DSK_FATW_MINK, twice the claim (disk.inc:5948), not 128KB"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; 22.6 retired the donation, so no listing is ever in a claim and [dsk_dseg] is\n; LOW_SEG for the life of the machine. Both rows are out of mem_rr_tab with it.",
+   "new_text": "; 22.6 retired the donation, so no listing is ever in a DRIVER's claim and its\n; row is out of mem_rr_tab. [dsk_dseg] is 0 at rest and the CALLER's store\n; during a loud mount (SPEC.md 22.6.3), and keeps a MEM_RR_ONE row of its own\n; (memory.inc).",
+   "why": "dsk_dseg is 'dw 0' with zero the default (disk.inc:1115); memory.inc:3369 'MEM_RR_ONE dsk_dseg'"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; visit. 256 sectors is 4,096 entries, past anything real and far past the\n; 32-entry listing cap.",
+   "new_text": "; visit. 256 sectors is 4,096 entries, past anything real and past the\n; listing cap, DSK_NENT, on every build (1,024 on kern_big).",
+   "why": "DSK_NENT is 1024 on kern_big, 64 on kern_dos, 32 on kern_small (dskwin.inc:233-258)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "                                ; at most 128 - so BX is not borrowed and the",
+   "new_text": "                                ; at most 64 (rule 4) - so BX is not borrowed and the",
+   "why": "rule 4 refuses spc above 64 (disk.inc:5102-5103)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; for a different one loses it, and the residual - two os8088 disks of the same\n; geometry, whose boot sectors os88disk.py makes byte-identical - is the one\n; that section already accepts and states.",
+   "new_text": "; for a different one loses it, and the residual - two disks whose boot\n; sectors still sign alike, such as a dd'd pair (SPEC.md 18.8.2.1) - is the\n; one that section states.",
+   "why": "os88disk.py derives BS_VolID from content (tools/os88disk.py:620) and shipped images are slotted apart (SPEC.md 18.8.2.2)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "against a copy that is spending 238 ms a sector\n; moving file data (PERFORMANCE.md).",
+   "new_text": "against a copy that is spending ~24 ms per 512\n; bytes moving file data (PERFORMANCE.md Part 2, Set 24).",
+   "why": "PERFORMANCE.md says 238 ms was the AL bug and gives 24 ms per 512 bytes delivered (Set 24), which SPEC.md 19.7.1 already quotes"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; leaves the global snapshot empty and owed - dsk_relist is the payment, and\n; every path that can return to the event loop must make it.",
+   "new_text": "; leaves the listing empty and stale ([dsk_lstale] = 1); dsk_relist, which\n; paid that debt, is gone, and a loud mount is what clears the flag now.",
+   "why": "disk.inc:4332-4333 'dsk_relist paid it; it is gone, and a loud mount is what clears the flag now'; no dsk_relist label exists"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_vol_kind - what kind of volume is mounted right now?\n; in:  nothing\n; out: AL = DVK_*, or DVK_FREE if [disk_drive] names no live row\n; clobbers: AL (the output), flags\n",
+   "new_text": "; dsk_vol_kind lived here: [dsk_vkind], set at mount, is the byte it answered\n",
+   "why": "no dsk_vol_kind label exists in kernel/; [dsk_vkind] is written by disk_mount_x (disk.inc:4038, 4055)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; osapi_vol_paint - slot 0x0288: repaint the desktop's drive zones\n;\n; It takes the gfx lock ITSELF, so a driver must not call it from a page\n; click that already holds one - the Control Panel's own deferred-repaint\n; idiom ([cp_dirty], SPEC.md 31.2) is the shape to copy.\n",
+   "new_text": "; osapi_vol_paint lived here: slot 0x0288 is dropped (kernel.asm's API table)\n",
+   "why": "kernel.asm:2966 '(dropped) OSAPI_CSLOT osapi_vol_paint_x ; 0x0288'; no such label"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_relist - make the global snapshot a real mount again (SPEC.md 18.9)\n; in:  nothing\n; out: nothing (all registers preserved); CF is NOT propagated, for\n;      dskw_sync's reason - the work already happened\n; clobbers: nothing\n;\n; Cheap and idempotent when nothing is owed, which is what lets the copy\n; engine call it on every exit path without asking whether it switched.\n",
+   "new_text": "; dsk_relist lived here: a loud mount is what clears [dsk_lstale] now\n",
+   "why": "disk.inc:4332-4333 says dsk_relist is gone; no label exists"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_copy_low - copy CX bytes between two LOW_SEG offsets (module-internal)\n;\n; Used by the icon harvest (dsk_secbuf -> disk_icons, both LOW_SEG). Writing\n; disk_dir FROM kernel scratch needs no helper: DS stays kernel, ES = LOW_SEG.\n;\n; in:       SI = source LOW_SEG offset, DI = dest LOW_SEG offset,\n;           CX = byte count (even)\n; out:      nothing\n; clobbers: flags\n",
+   "new_text": "; dsk_copy_low lived here: every copy goes through dsk_copy_seg_x above\n",
+   "why": "no dsk_copy_low label exists; the harvest stores bodies with ico_put (disk.inc:4746)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_copy_out - copy CX bytes from LOW_SEG:SI into an arbitrary segment\n;\n; The file manager's cache filler (SPEC.md 22.1): disk_dir / disk_icons live\n; in LOW_SEG and the per-window slots live in VIEW_SEG, so neither end is\n; addressable through DS and a plain rep movsw will not do.\n;\n; in:       AX = destination segment, SI = LOW_SEG offset, DI = dest offset,\n;           CX = byte count (even)\n; out:      nothing\n; clobbers: flags\n",
+   "new_text": "; dsk_copy_out lived here: every copy goes through dsk_copy_seg_x\n",
+   "why": "no dsk_copy_out label exists in kernel/; disk_dir and disk_icons are retired"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_put_icon / dsk_put_icon_k - one 64-byte icon body -> a listing slot\n; in:       AX = entry index; SI = the body, in LOW_SEG (dsk_put_icon) or in\n;           the kernel segment (dsk_put_icon_k - the built-in folder body)\n; out:      nothing (all registers preserved)\n",
+   "new_text": "; dsk_put_icon / dsk_put_icon_k lived here: a listing holds a reference\n; byte per entry (ico_ref_set) and the bodies are the store's (SPEC.md 25.9)\n",
+   "why": "no dsk_put_icon label exists; ico_ref_set (disk.inc:10233) writes the reference"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; in:       AX = entry index (0..31; the caller validates against disk_nfiles)\n; out:      SI -> dsk_ent, holding that entry's 32 bytes",
+   "new_text": "; in:       AX = entry index (below disk_nfiles, which the caller validates)\n; out:      SI -> dsk_ent, holding that entry's DSK_DE_STRIDE bytes from the\n;           listing at [dsk_dseg]:[dsk_doff] (24..31 left as they were)",
+   "why": "dsk_get_dir_x copies CX=DSK_DE_STRIDE from [dsk_dseg] via dsk_ent_ofs (disk.inc:9458-9476); DSK_NENT is up to 1024"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; in:       AX = entry index (0..31)",
+   "new_text": "; in:       AX = entry index (below disk_nfiles)",
+   "why": "dsk_get_icon_x indexes [dsk_ioff] with no 0..31 bound; DSK_NENT is up to 1024 (dskwin.inc:235)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; dsk_fdd_probe - is unit 1 really there? (SPEC.md 18.97)\n; in:  nothing",
+   "new_text": "; dsk_fdd_probe - is unit AL really there? (SPEC.md 18.97, 18.98)\n; in:  AL = the unit, 1..3",
+   "why": "dsk_fdd_probe stores AL into [fdd_unit] (disk.inc:10772); desk.inc:220 and 349 pass AL=1 and AL=unit"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; and it is only ever asked about unit 1. Unit 0 is where the kernel just came\n; from and is not a question.",
+   "new_text": "; and it is never asked about unit 0, which is where the kernel just came\n; from and is not a question; only unit 1's answer can retire a drive\n; (SPEC.md 18.98.1).",
+   "why": "desk.inc:349 probes the external units too, and ignores their verdict (desk.inc:350-352)"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL. CF = 1: no answer.",
+   "new_text": "; fdd_st3 - SENSE DRIVE STATUS on [fdd_unit] -> AL. CF = 1: no answer.",
+   "why": "fdd_st3 sends 'mov al, [fdd_unit]' as the unit byte (disk.inc:11034)"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "; Three buffers and the four constants that size them. They were the last",
+   "new_text": "; ONE buffer now - dsk_secbuf - and the constants that size the listing;\n; disk_dir and disk_icons were the other two until docs/plans/\n; LISTING-HOME-PLAN.md 13 and SPEC.md 25.9 took them out. They were the last",
+   "why": "dskwin.inc:290-354 declares only dsk_secbuf and the zero-sized dsk_ovlpad; line 303 'AND NO disk_dir AND NO dsk_icoix'"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "; The FAT window and these three come alive at the SAME MOMENT - the first\n; mount - and are untouched before it. Adjacent, they are one contiguous\n; 7,936-byte region that is dead for the whole of `kmain`:\n;\n;     FAT_SEG   4,608   the FAT snapshot, filled at mount\n;     +           512   dsk_secbuf  FIRST: the one int 13h TARGET here, so it\n;                                   takes the rung's 512-aligned base\n;     +           768   disk_dir    \"ALWAYS exactly a mount snapshot\"\n;     +         2,048   disk_icons  \"fully rewritten every mount\"\n;     =         7,936   of which 7,680 is readable (SPEC.md 2.1.2). LOW_SEG is",
+   "new_text": "; The FAT window and this buffer come alive at the SAME MOMENT - the first\n; mount - and are untouched before it. Adjacent, they are one contiguous\n; region, FAT_SEG's bytes plus DSK_WIN_BYTES, that is dead for the whole of\n; `kmain`:\n;\n;     FAT_SEG   DSK_FAT_SECS x 512   the FAT window (SPEC.md 18.8)\n;     +           512   dsk_secbuf  FIRST: the one int 13h TARGET here, so it\n;                                   takes the rung's 512-aligned base\n;     +    DSK_OVLPAD   0 on every shipped build\n;     (disk_dir, 768, and disk_icons, 2,048, sat here and made it 7,936;\n;     both are gone.) LOW_SEG is",
+   "why": "DSK_FAT_SECS is 9 or 2 (kernel.asm:1508, 1554); DSK_OVLPAD is 0 on shipped arms (dskwin.inc:93,151,177); disk_dir/disk_icons removed (303)"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "                                 ; on BOTH kernels because there is one\n                                 ; listing size now: SPEC.md 22.6 retired the\n                                 ; donated claim, so a volume lists into the\n                                 ; `.lowbss` floor whatever mounted it. It was\n                                 ; DSK_VENT here while a hard disk could list\n                                 ; more than a floppy. 64 bytes on kern_big,\n                                 ; against the 4,096 of bodies it replaces",
+   "new_text": "                                 ; on every build: one byte per entry, in the\n                                 ; caller's store beside the entries (SPEC.md\n                                 ; 22.6.3, 25.9) - there is no `.lowbss`\n                                 ; floor any more. It was DSK_VENT here while\n                                 ; a hard disk could list more than a floppy",
+   "why": "the reference index sits in [dsk_dseg] past the entries (disk.inc:8569-8593); DSK_NENT is 1,024 on kern_big; dskwin.inc:303 says the floor is gone"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 64 on kern_big, 32 on\n; kern_small.",
+   "new_text": "; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 1,024 on kern_big (a\n; CEILING since 22.6.4: the listing is sized to its folder), 64 on kern_dos,\n; 32 on kern_small.",
+   "why": "DSK_NENT equ 1024 (KERN_BIG, not KD_BUILD), 64 (KD_BUILD), 32 (KERN_SMALL) at dskwin.inc:233-258"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "; `disk_icons` is **2,048 bytes of `.lowbss`** and step 4 of `disk_mount` is\n; what fills it: a 16x16 body per entry, read with one `int 13h` per type-1\n; file.",
+   "new_text": "; `disk_icons` WAS **2,048 bytes of `.lowbss`** - SPEC.md 25.9 replaced it\n; with a machine-wide store and one reference byte per entry - and step 4 of\n; `disk_mount` is what fills the references: a 16x16 body per new package,\n; read with one `int 13h` each.",
+   "why": "no disk_icons label exists; the harvest calls ico_ref_try/ico_put (disk.inc:4712-4746)"
+  },
+  {
+   "file": "kernel/dskwin.inc",
+   "old_text": "; **`disk_dir` STAYS, and that is a correction.**",
+   "new_text": "; **`disk_dir` STAYED, and that was a correction** - until\n; docs/plans/LISTING-HOME-PLAN.md 13 took the listing out of `.lowbss`\n; altogether (below).",
+   "why": "dskwin.inc:303 'AND NO disk_dir AND NO dsk_icoix'; the listing is the caller's store"
+  },
+  {
+   "file": "kernel/drvvol.inc",
+   "old_text": "; A PURE MOVE. Not a line of the four bodies changed, section directives\n; included - which is what lets `kernsize` say the split cost nothing.",
+   "new_text": "; MOVED, not rewritten: the move changed no line of the four bodies, section\n; directives included - which is what let `kernsize` say the split cost\n; nothing. kern_big's dskw_czsize, drv_find's helper, is a fifth body here.",
+   "why": "dskw_czsize is defined at drvvol.inc:230 under kern_big's arm"
+  },
+  {
+   "file": "kernel/drvvol.inc",
+   "old_text": "; drv_mounted - make drive A: the mounted volume, if it can be",
+   "new_text": "; drv_mounted - make the BOOT volume's root current, if it can be",
+   "why": "drv_mounted loads DL from [dsk_bootvol] (drvvol.inc:48) - A: only on a floppy machine"
+  },
+  {
+   "file": "kernel/drvvol.inc",
+   "old_text": "; A full remount every time, deliberately: the disk can be swapped between\n; two Control Panel clicks, and every other mount in this OS is a full\n; remount for exactly that reason (SPEC.md 18.3). A driver load is not the\n; place to invent a caching rule.",
+   "new_text": "; A QUIET mount (SPEC.md 18.9): every caller reads or writes a file by name,\n; so no listing is built, and when SPEC.md 18.9.1's predicate says we already\n; stand here on media that cannot have changed there is no mount at all.\n; Anything else re-validates the volume as every mount does (SPEC.md 18.3).",
+   "why": "drv_mounted calls dsk_chdir_q_x (drvvol.inc:55), which skips the mount on dsk_mntok/drive/cwd/dsk_media_ok (disk.inc:8275-8291)"
+  },
+  {
+   "file": "kernel/drvvol.inc",
+   "old_text": ";      drive A: already mounted",
+   "new_text": ";      the boot volume already current (drv_mounted)",
+   "why": "drv_mounted makes [dsk_bootvol] current (drvvol.inc:48), which is not A: on an installed machine"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                ; ACCEPTANCE threshold (SPEC.md 18.2 rule 10),\n                                ; not a buffer with slack: a volume claiming\n                                ; more is refused before a byte of it is read,\n                                ; and every FAT16 volume there can be is\n                                ; refused by this number alone (a FAT is only\n                                ; FAT16 with >= 4,085 clusters, i.e. >= 16 FAT\n                                ; sectors)",
+   "new_text": "                                ; ACCEPTANCE threshold for a FLOPPY (SPEC.md\n                                ; 18.2 rule 10): a floppy claiming more is\n                                ; refused before a byte of it is read, and\n                                ; every FAT16 floppy by this number alone (a\n                                ; FAT is only FAT16 with >= 4,085 clusters,\n                                ; i.e. >= 16 FAT sectors). A FIXED volume's\n                                ; FAT has no cap: this is the size of its\n                                ; window (SPEC.md 18.8)",
+   "why": "rule 10 applies the DSK_FAT_SECS cap only when [dsk_vflop] is set (disk.inc:5139-5151); a 32MB FAT16 volume declares 64 sectors and mounts"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Transfers go **one sector per int 13h\ncall** (AL=1) — no multi-sector calls, so track boundaries and DMA\nalignment never matter. Each sector: up to 3 attempts, with AH=00 reset on\nfailure between attempts.",
+   "new_text": "The LBA is volume-relative, plus the row's `dsk_vbase` on a BIOS boot\npartition (§52.10.3). Transfers go in as few int 13h calls as the track (on\n`kern_big`'s fixed disks the cylinder, §18.91.5), the 64KB DMA page and the\nbuffer allow (§18.91). Each run: up to 3 attempts, with an AH=00 reset\nbetween them; a run that fails all three drops to one sector, which gets\nthree of its own.",
+   "why": "dsk_xfer batches runs (disk.inc:1784-1870) and falls back to dsk_run=1 after 3 failures (2055-2066); the table row three lines down already says so"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**No LBA gate of its own beyond `dsk_xfer`'s cyl<80 rule**",
+   "new_text": "**No LBA gate of its own beyond `dsk_xfer`'s cylinder bound (80 on a floppy, 1024 on a fixed disk)**",
+   "why": "dsk_xfer sets [dsk_cylmax] to 80 or 1024 by the unit's bit 7 (disk.inc:1555-1560)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "BPB validation (§18.2), FAT snapshot into `FAT_SEG`, root-directory scan",
+   "new_text": "BPB validation (§18.2), the FAT window's first load (§18.8), root-directory scan",
+   "why": "disk_mount_x step 2 loads a window via dsk_fat_window (disk.inc:4245-4288)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `disk_icons`  | 2048-byte **`.lowbss`** buffer (§2.1): 32 × 64-byte **harvested** icon bodies (§19); entry i belongs to directory entry i, all-zero = no icon. Fully rewritten every mount (the §29.1 I_ICON rule rests on that). Read only via `dsk_get_icon` |",
+   "new_text": "| `disk_icons`  | **RETIRED** (§25.9). It was a 2048-byte `.lowbss` buffer of 32 × 64-byte harvested icon bodies. A listing now holds one reference byte per entry (blanked to `ICO_R_NONE` at every listing mount) into the machine-wide icon store, and `dsk_get_icon` stages the referenced body |",
+   "why": "no disk_icons label exists; disk_mount_x blanks the reference index with 0xFF (disk.inc:4657-4668) and dsk_get_icon_x reads [dsk_dseg]:[dsk_ioff] (10412-10428)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Stages that entry's 32 bytes from `LOW_SEG` into the kernel-segment buffer `dsk_ent`",
+   "new_text": "Stages that entry's `DSK_DE_STRIDE` (24) bytes from the listing at `[dsk_dseg]`:`[dsk_doff]` into the kernel-segment buffer `dsk_ent`",
+   "why": "dsk_get_dir_x copies CX=DSK_DE_STRIDE from DX=[dsk_dseg] (disk.inc:9458-9476)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "With `dsk_copy_low`, one of the two routines that load DS=`LOW_SEG`",
+   "new_text": "A wrapper of `dsk_copy_seg`, the one body that loads a foreign DS",
+   "why": "dsk_copy_in_x calls dsk_copy_seg_x with DX=LOW_SEG (disk.inc:9153-9165); dsk_copy_low does not exist"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `dsk_copy_low`| module-internal. in: SI = source `LOW_SEG` offset, DI = dest `LOW_SEG` offset, CX = even byte count; out: nothing, clobbers flags. DS=ES=`LOW_SEG` for the `rep movsw` — same discipline as `dsk_copy_in` (no kernel variable readable while DS is switched). Used by the icon harvest (`dsk_secbuf` → `disk_icons`, both `LOW_SEG`). Writing `disk_dir` FROM kernel scratch needs no helper: DS stays kernel, ES=`LOW_SEG`, plain `rep movsw` |",
+   "new_text": "| `dsk_copy_low`| **RETIRED**: every cross-segment copy goes through `dsk_copy_seg`, and the icon harvest it served writes the machine-wide store (§25.9) |",
+   "why": "no dsk_copy_low label exists in kernel/; disk_icons and disk_dir are retired"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`.text` — disk code stays hot and near `disk_read`):",
+   "new_text": "`.cold` (§2.6) — resident, in the segment `disk_read` is in):",
+   "why": "disk_read_x, dsk_bpb_check, dsk_clus2lba_x, dsk_next_clus_x and dsk_read_chain_x are all after 'section .cold' (disk.inc:1232 ff.)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Clobbers CF only (internally saves AX,BX,CX,DX,SI,DI). Rule 1 runs via one es: word compare against `dsk_secbuf`+510; the boot sector's first 64 bytes are then staged into `dsk_bpb` via `dsk_copy_in`, and rules 2–16 run on plain DS reads",
+   "new_text": "Clobbers AX..DI, ES and flags (its one caller, `disk_mount`, carries none of them across it). Rules 1 and 2 run via es: reads of `dsk_secbuf` (+510 and +0); the BPB's bytes 11..28 (`DSK_BPB_SZ`) are then staged into `dsk_bpbh` via `dsk_copy_in`, and rules 3–16 run on plain DS reads; a head banked by §18.9.2 skips rules 1–2 and the staging",
+   "why": "dsk_bpb_check header 'clobbers: AX..DI, ES and flags' (disk.inc:5019); stages DSK_BPB_SZ=18 from dsk_secbuf+11 (5063-5066); rule 2 reads the sector (5052)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "16-bit mul; cannot wrap (AX ≤ maxclus ⇒ (AX−2)×spc ≤ TotSec16 − datalba, §18.2 rules 14/15); DX≠0 after the mul is treated as CF=1 anyway (belt and braces).",
+   "new_text": "on `kern_big` in 32 bits (§18.7.5), the high word to `[dsk_c2hi]` and copied to `[dsk_lbahi]` only when the sector moves; on `kern_small` a 16-bit mul that cannot wrap (AX ≤ maxclus ⇒ (AX−2)×spc ≤ TotSec16 − datalba, §18.2 rules 14/15), DX≠0 after it treated as CF=1 anyway (belt and braces).",
+   "why": "dsk_clus2lba_x's OS88_BIGVOL arm stores DX to [dsk_c2hi] (disk.inc:5706-5709); the kern_small arm refuses DX!=0"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The **single reader of `FAT_SEG`** (§2.1): push ES; ES = `FAT_SEG`.",
+   "new_text": "A reader of the FAT window (§18.8): `dsk_fat_ofs` brings the sector holding the entry, and the one after it, into the window and answers the offset inside it; push ES; ES = `[dsk_fatseg]`.",
+   "why": "dsk_next_clus_x calls dsk_fat_ofs_x then 'mov es, [dsk_fatseg]' (disk.inc:6545-6548); dsk_free_clus also reads the window"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "2. **FAT snapshot.** Read `dsk_fatsz` sectors from `dsk_fatlba` into\n   `FAT_SEG`:0 (ES=`FAT_SEG`, one `disk_read` call). On failure and\n   `dsk_nfats`==2, retry once from FAT2 (`dsk_fatlba` + `dsk_fatsz`);\n   both fail → mount fails. (FAT2 is the one redundancy FAT gives for\n   free.)",
+   "new_text": "2. **The FAT window** (§18.8). This volume's own window is reused on a\n   quiet switch back to it whose boot-sector signature matches (§18.8.1,\n   §18.8.2); otherwise the window is loaded at FAT sector 0 into\n   `[dsk_fatseg]`, and on failure with `dsk_nfats`==2 retried once from\n   FAT2; both fail → mount fails. (FAT2 is the one redundancy FAT gives for\n   free.) Later windows fault in, with the same fallback.\n   2a. A kept current directory (`dsk_chdir`) whose cluster is no longer\n   allocated falls back to the root (§19.2).\n   2b. A QUIET mount, or one with no destination (§22.6.3), stops here:\n   `disk_nfiles` = 0 and the listing is marked stale.",
+   "why": "disk_mount_x: dsk_fatw_want/pick then dsk_fat_window (4276-4288); .cwd_lost zeroes [dsk_cwd] (4300-4310); .quiet when [dsk_quiet] or [dsk_dseg]=0 (4334-4346)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "then `rep movsw` it\n   out to `disk_dir` + accepted×`DSK_DE_STRIDE` (ES=`LOW_SEG`). Stop when\n   `DSK_NENT` entries\n   are accepted (§19 cap).",
+   "new_text": "then copy it\n   out through `dsk_put_dir` to `[dsk_dseg]`:`[dsk_doff]` +\n   accepted×`DSK_DE_STRIDE`. Stop when `[dsk_nmax]` entries\n   are accepted (§19 cap; on `kern_big` the caller's claim, §22.6.4).",
+   "why": "dsk_put_dir copies to [dsk_dseg] via dsk_ent_ofs (disk.inc:9502-9510); the scan caps at [dsk_nmax] (4410, 4422)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "4. **Icon harvest.** For each accepted entry i: type≠1 → zero the 64-byte\n   slot `disk_icons` + i×64 (ES=`LOW_SEG` `rep stosw`) — the generic-icon\n   sentinel. Type=1 (cluster already validated, §19): `dsk_clus2lba`,\n   `disk_read` 1 sector into `dsk_secbuf`; stage the 32 header bytes into\n   `dsk_ent` via `dsk_copy_in`; if magic word @0 == 0x384F, version byte\n   == 2 and flags bit 0 set, `dsk_copy_low` bytes 32..95 of `dsk_secbuf`\n   → `disk_icons` + i×64; in every other case (read failure included)\n   zero the slot. **Harvest failures are non-fatal** — the entry stays\n   listed; a later load attempt reports the real error. `disk_icons` is\n   fully rewritten every mount (preserves §29.1's rule that I_ICON may\n   never point at it).",
+   "new_text": "4. **Icon references** (§25.9). The listing's reference index is blanked\n   to `ICO_R_NONE` (0xFF); then, per entry, `ico_ref_try` answers a folder\n   or a body the machine-wide store already holds at no I/O, and only a\n   miss on a type-1 package peeks its header (`dsk_peek`, through §18.95's\n   cache): magic 0x384F, version == `PKG_FMT` and flags bit 0 set store\n   bytes 32..95 as a body (`ico_put`). On `kern_big` at most\n   `DSK_HARV_MAX` peeks per listing (§22.6.4), after the volume's\n   `ASSOC.DAT` (§54.7) has been consulted. **Harvest failures are\n   non-fatal** — the entry stays listed with the generic icon; a later load\n   attempt reports the real error. `kern_dos` has no Disk window and no\n   step 4 (§96.44.7).",
+   "why": "disk_mount_x blanks with 0xFF (4657-4668), calls asc_use_x, ico_ref_try, a DSK_HARV_MAX budget, dsk_peek_x and tests PKG_FMT (4700-4746); DSK_WANT_ICONS is off on KD_BUILD (dskwin.inc:283)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Mount I/O budget, honest numbers: sectors read = 1 + FATSz (2..32) + root",
+   "new_text": "Mount I/O budget **as first designed** — the FAT window (§18.8), §18.95's\ncache, the banked BPB (§18.9.2) and `ASSOC.DAT` (§54.7) have since changed\nevery term, and §18.8.2's table is the measurement: sectors read = 1 + FATSz (2..32) + root",
+   "why": "the formula predates the window, cache and ASSOC.DAT; SPEC.md 18.8.2 carries the measured mount table"
+  }
+ ]
+}

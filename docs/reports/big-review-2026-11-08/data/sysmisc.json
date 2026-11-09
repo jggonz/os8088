@@ -1,0 +1,795 @@
+{
+ "area": "sysmisc",
+ "title": "Control Panel, clock, screen blanker (kernel/ctrl.inc, clock.inc, clockw.inc, blank.inc; SPEC.md 31, 37, 64, 76, 79)",
+ "summary": "The area is structurally sound and mostly costs no resident memory. The Control Panel is the on-demand CTRL.DRV (15,405 bytes on kern_big today) behind small resident gates, the RTC ladder runs in the boot overlay, its write half ships in the module, and the blanker gates the video signal with the animated saver falling back to it on every failure. The main real defect is that the clock gains about 31 s/day: clk_tick divides by 18.2 where the rate is 18.2065, and the fix (x625/11379) costs 0 bytes. Two narrower defects: a hostile SYSTEM.CFG 'CH' byte above 1 lets the Date/Time page step a kernel .bss byte 254 past clk_sec (a 5-byte overlay fix), and the time the user sets never reaches 40:6C, so the kernel's DOS shows a different time and date from the menu bar on an XT (WIN16 already reads OSAPI_CLK_GET and agrees). The biggest weakness is prose drift: SPEC.md 31/37/64/76/79 and several file headers still describe retired designs (140px panel with no KD_INIT and no .bss, a 32-byte file, caption-reported save errors, a month table and a month mask, an RTC drained by ui_task, unpersisted display settings, kern_small carrying saver bytes); the verified fixes are in doc_fixes. Two rethinks are worth the owner's time: R1, derive time of day from the BIOS count at 40:6C as DOS does (one clock, no drift, no 59-minute saver ceiling, roughly neutral bytes, no ABI), and R2, declarative page tables driven by one engine (Mac DITL / Windows DLGTEMPLATE / GEOS generic UI), an unprototyped 1.5-3 KB off CTRL.DRV with 0 resident cost. KHP_RELIT on kern_big (sysmisc-9) is already measured and queued in docs/plans/LAST-DROP-PERF.md.",
+ "strengths": [
+  {
+   "title": "RTC ladder ordered so no rung writes a chip a later rung might identify differently",
+   "evidence": "kernel/clock.inc:266-394, 1006-1019, 1455-1494",
+   "why": "Read-only probes run first, the RP5C01 is claimed only on agreement with the BIOS, and the MM58167 probe has a 4-bit veto before its single scratch write. It finds XT clock cards that DOS needed ASTCLOCK-style drivers for, and the probe discipline is worth copying."
+  },
+  {
+   "title": "Hybrid UIP + seconds guard on the AT read; the write half obeys the machine's own conventions",
+   "evidence": "kernel/clock.inc:539-605; clockw.inc:185-189, 241-250, 441-446",
+   "why": "This is Linux's converged read guard, with a DM-bit fallback. The write never forces DM or 24/12, preserves the RP5C01 alarm bit, and invents no century byte."
+  },
+  {
+   "title": "Snapshot discipline for the clock",
+   "evidence": "kernel/clock.inc:1743-1805, 1851-1866; ctrl.inc:5190-5257",
+   "why": "Each carrying write is one cli section per second, and readers format from one snapshot. An hour of catch-up never holds interrupts off for long."
+  },
+  {
+   "title": "Resident gates in front of the module",
+   "evidence": "kernel/ctrl.inc:1229-1247 (cp_tick_due_x), 7765-7796",
+   "why": "Once-a-second and every-close questions are answered from resident bytes, so CTRL.DRV is never read off a floppy to learn that nothing is showing."
+  },
+  {
+   "title": "One page ladder serves as hit test and action (cp_probe 0/1/2), with id-0 selecting sites",
+   "evidence": "kernel/ctrl.inc:440-449, 2099-2113",
+   "why": "There is no second copy of any page's geometry, and safe prefix actions keep the press per SPEC.md 13.6."
+  },
+  {
+   "title": "Record vs ordinal separation in the item list",
+   "evidence": "kernel/ctrl.inc:1771-1890 (cp_v2r/cp_r2v)",
+   "why": "A hidden row can sit anywhere, and [cp_sel] names something durable while ordinals are derived."
+  },
+  {
+   "title": "Deferred single SYSTEM.CFG write, with retry on failure",
+   "evidence": "kernel/ctrl.inc:349-370, 5427-5436",
+   "why": "The effect is immediate and the record waits for the close. That fits a machine where one write is about 2 s of frozen UI."
+  },
+  {
+   "title": "Signal-gated blank, the always-available fallback",
+   "evidence": "kernel/blank.inc:27-36, 431-486; SPEC.md 64.3",
+   "why": "Wake is instant and exact, no drawing path carries a test, and background tasks keep drawing. Windows savers paint and pay a full repaint on wake."
+  },
+  {
+   "title": "Wake input consumed; the ring drained, not reset",
+   "evidence": "kernel/blank.inc:250-271, 340-371",
+   "why": "Treated as a safety rule. EVT_WAKE records are owed rather than lost."
+  },
+  {
+   "title": "SAVER.DRV reuses the driver loader via a row-shaped record; the overlay is asked, never volunteers",
+   "evidence": "kernel/blank.inc:196-208, 808-830",
+   "why": "There is no second loader, and freeing code that still has to return is impossible by construction."
+  },
+  {
+   "title": "WF_QUIET chooses blank-instead-of-saver, never none",
+   "evidence": "kernel/blank.inc:925-946; SPEC.md 79.10",
+   "why": "A leaked flag leaves the monitor dark, not lit. This is the correct inversion of Windows' SC_SCREENSAVE veto."
+  },
+  {
+   "title": "Mirrored constants and offsets are gated",
+   "evidence": "kernel/blank.inc:68-75, 161-165; drivers/saver/svcfg.inc:741-748",
+   "why": "t_mirror and the SS_IDLE_AT assert turn a no-linker interface into a build failure."
+  }
+ ],
+ "findings": [
+  {
+   "id": "sysmisc-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "System clock gains ~31 s/day: clk_tick divides by 18.2 Hz instead of 18.2065",
+   "detail": "clk_tick computes seconds as delta*10/182, but [ticks] runs at 1193182/65536 = 18.20648 Hz (the BIOS day is 1,573,040 ticks). Each counted second is 0.99964 s of wall time: +0.0356%, about +30.8 s/day or 3.6 min/week. Nothing corrects it (no RTC re-read after boot; no RTC at all on a 5150). The Timer app's stopwatch has the same constant. kerndos does not accumulate the error because it re-derives the time of day from 40:6C on every call (its 32,772 half-ticks an hour costs at most about a second within the hour).",
+   "evidence": [
+    "kernel/clock.inc:1686-1692 mov dx,10 / mov cx,182",
+    "kernel/clock.inc:1663-1667 'what makes 18.2 Hz add up to real seconds'",
+    "SPEC.md 64.1 '[ticks], the BIOS counter at 18.2065 Hz'",
+    "kernel/hiber.inc:4652-4676 catch-up passes of 32768 ticks",
+    "apps/timer/timer.asm:208 mov cx,182"
+   ],
+   "recommendation": "Use mov dx,625 / mov cx,11379 (11379/625 = 18.20640, error 4.5e-6, about 0.4 s/day). Same encoding sizes. Overflow: 65535*625+11378 < 2^32 and the quotient is at most 3600; hibernation's 32768-tick passes stay in range. Update clk_acc's comment (a 1/625-tick remainder) and SPEC.md 37 Advancing. Apply the same fix to the Timer package.",
+   "phase": "now",
+   "bytes_est": "0 resident (two immediates change)",
+   "prior_art": "DOS derives time of day from the BIOS tick count and so inherits the BIOS's exact day.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read clk_tick (clock.inc:1678-1693): mul 10 / div 182 against [ticks], which every IRQ0 path bumps at the BIOS rate (sched.inc:2262; fsx.inc:1397-1409 keeps [ticks] and 40:6C exact under FSXF_RATE). Arithmetic checked: +30.8 s/day; 625/11379 gives 0.39 s/day, both immediates are imm16 so 0 bytes, worst case 65535*625+11378 = 40,970,753 fits DX:AX with quotient 3600. Not in ABI-BREAK-LIST, KERNEL-BYTE-QUEUE or FIELD-NOTES. Predicted, not measured on a 5150."
+  },
+  {
+   "id": "sysmisc-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "Hostile SYSTEM.CFG 'CH' byte > 1 lets the Date/Time page step a .bss byte 254 past clk_sec",
+   "detail": "The unpack copies mapped bytes raw. Every reader of clk_h12 outside the page tests for zero, but the page uses it as a COUNT. cp_time_rows draws fields 0..5+h12, so 2 draws an 8th field with x/w/y read from bytes past cp_tflds' seven records. cp_time_pick can hit-test that field, so cp_tsel becomes 7. clk_fld_adj(7) then computes bl=5-7=0FEh, reads its range from [cs:0x1FC+clk_frng], and steps [clk_sec+254]: kernel .bss corruption from a floppy plus a click. xor 1 does not repair it (2 becomes 3). kern_big only: kern_small reads no SYSTEM.CFG.",
+   "evidence": [
+    "kernel/driver.inc:4964-4972 unpack copies raw bytes",
+    "kernel/driver.inc:906-907 CFG_H12 -> clk_h12",
+    "kernel/ctrl.inc:4859-4866 add ah,[clk_h12]",
+    "kernel/ctrl.inc:4984-4987 add bl,[clk_h12]",
+    "kernel/ctrl.inc:5195-5219 clk_fld_adj field index arithmetic",
+    "kernel/clock.inc:2343-2344 osapi_clk_get_x already masks bit 0 for this reason"
+   ],
+   "recommendation": "Normalise at the unpack: and byte [clk_h12],1 after the map loop (5 bytes). Optionally give CFG_MAP a per-key mask for the boolean keys.",
+   "phase": "now",
+   "bytes_est": "+5 .ovl, 0 CTRL.DRV, 0 resident",
+   "verdict": "corrected",
+   "verify_note": "Traced clk_fld_adj with AL=7: cmp al,6 fails, inc bx gives BL=5, sub gives 0FEh, shl/shr index clk_frng+0x1FC and [clk_sec+0FEh] - exactly as described; _deser/_unpack do no range check. Correction: _unpack is in the CFG_BOOT macro, instantiated for the overlay only (driver.inc:4910, 5403; CTRL.DRV gets CFG_SHARED/CFG_SAVE, 6257-6258), so the fix is one 5-byte store in .ovl, not two."
+  },
+  {
+   "id": "sysmisc-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The user's clock setting never reaches 40:6C, so the kernel's DOS disagrees with the menu bar",
+   "detail": "clock.inc promises 'one date + time of day for the whole system'. kerndos takes the time of day from 0040:006C and the date from int 1Ah AH=04h (CLK_DEF fallback). The kernel never writes 40:6C, and clk_rtc_write is its only outward push. On a 5150 with no clock card, a time set in the Control Panel is invisible to DOS: TIME reads time since power-on and DATE reads 4 July 2026. On an AT, DOS's time stays at the POST value plus uptime until the next boot. (WIN16 is not affected: its int 21h 2Ah/2Ch answer off OSAPI_CLK_GET, SPEC.md 124.17.3.)",
+   "evidence": [
+    "kernel/clock.inc:4-5 'one date + time of day for the whole system'",
+    "apps/dos/dos.asm:13878-13887 dos_ticks reads 40:6C",
+    "apps/dos/dos.asm:14098-14135 dos_time_now from the tick count",
+    "apps/dos/dos.asm:13895-13906 dos_date_init uses int 1Ah AH=04h",
+    "kernel/ctrl.inc:5485-5496 cp_flush_close_x writes only the RTC",
+    "grep: no write to 0x046C in kernel/ outside mega.inc's PM tick maintenance"
+   ],
+   "recommendation": "In cp_flush_close_x, when [clk_dirty], set the BIOS count with int 1Ah AH=01h (every PC BIOS, the 5150's included) from h:m:s x 18.2065, regardless of [clk_rtc], and clear 40:70. For the date, kerndos should ask OSAPI_CLK_GET (DOS area), as WIN16 already does. R1 (sysmisc-14) fixes this by construction.",
+   "phase": "now",
+   "bytes_est": "+~40-60 CTRL.DRV (a 32-bit h*65543 + m*1092 + s*18.2 sum and the int 1Ah call), 0 resident",
+   "prior_art": "DOS: one clock, the BIOS count, for every consumer.",
+   "verdict": "corrected",
+   "verify_note": "Confirmed: dos_time_now/dos_ticks read 40:6C and dos_date_init asks int 1Ah AH=04h; cp_flush_close_x only calls clk_rtc_write; no kernel write to 46Ch. Correction: the byte estimate (~35) is low for a 32-bit tick count built from three fields; WIN16 already takes OSAPI_CLK_GET, which is the precedent for the kerndos date half."
+  },
+  {
+   "id": "sysmisc-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "MM58167 New-Year shadow refreshed only on a Set or a roll, not on each boot",
+   "detail": "The last-month shadow at 09h is written only by clk_ns_write or when clk_ns_roll fires. Example: set in March, so the shadow is 3. Booted in December: no roll, correct. Off until the next April: 4 is not below 3, so no roll and the year reads one low. Refreshing the shadow at the December boot (to 12) would have caught it. The failure window should be 'off 12+ months', not 'any later month after the last Set'.",
+   "evidence": [
+    "kernel/clock.inc:1090-1105 clk_ns_read stamps only when [clk_nsrol]",
+    "kernel/clock.inc:1203-1218 clk_ns_roll",
+    "kernel/clockw.inc:322-327 the Set's stamp"
+   ],
+   "recommendation": "In clk_ns_read, call clk_ns_stamp whenever the shadow (decoded) differs from [clk_tb_mo], not only on a roll. The chip is already identified when this runs.",
+   "phase": "now",
+   "bytes_est": "+~8 .ovl, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "clk_ns_read stamps only when [clk_nsrol]; clk_ns_roll rolls only when the shadow is above the current month. The March-set, April-next-year case misses as described. SPEC.md 37.90 promises 'a machine switched off over New Year come back right', which holds only within a year of the last Set."
+  },
+  {
+   "id": "sysmisc-5",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "RP5C01 claimed or refused depending on the time of day when the chip runs 12-hour",
+   "detail": "The probe joins the 10-hour digit with its PM bit, so afternoon hours read 20..39 and the 12 o'clock hours 12 and 32, never equal to the BIOS's 0 or 12..23. The same machine is rung 3 in the morning and falls to the BIOS rung in the afternoon, and the Date/Time caption and the write path change with it.",
+   "evidence": [
+    "kernel/clock.inc:1305-1315 comment admits PM never matches",
+    "kernel/clock.inc:1463-1465 hour compare",
+    "kernel/ctrl.inc:4635-4642 caption from [clk_tier]"
+   ],
+   "recommendation": "When the raw hour is above 23, also compare the 12-hour decode ((tens&1)*10+units, 12->0, +12 if PM bit). No page switch and no write, so the read-only promise holds.",
+   "phase": "now",
+   "bytes_est": "+~16 .ovl, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "clk_rp_probe compares the joined hour to [clk_rf_h] with no 12-hour decode; the comment calls the refusal deliberate but does not note that morning readings match, so the verdict depends on the hour. Only a chip left in 12-hour mode is affected."
+  },
+  {
+   "id": "sysmisc-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Screen Saver settings window outlives the Control Panel; its Customize sibling does not",
+   "detail": "THMPAL.DRV's window is closed and released in drv_cp_closed_x at every panel close. SAVER.DRV's window is unowned and reaped only through ss_post_x. With the panel closed, its Ok sets [cp_wdirty] with nobody to spend it; the save waits for the next panel close or reboot and a power-off loses it. This contradicts SPEC.md 79.7's 'the Control Panel's own close is what writes SYSTEM.CFG', and two buttons on one page behave differently.",
+   "evidence": [
+    "kernel/driver.inc:3083-3097 THMPAL reaped at panel close",
+    "kernel/blank.inc:844-861 ss_post_x sets cp_wdirty",
+    "kernel/ctrl.inc:3142-3161 the button"
+   ],
+   "recommendation": "Close the saver window from the panel's teardown with a new SSV_* verb (mirrored, t_mirror-gated; DRVC_OVL is kernel-private, so no package ABI). Or let ss_post_x flush when cp_live finds no panel open.",
+   "phase": "now",
+   "bytes_est": "+~12 .cold resident, +~15 SAVER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "grep finds no SSV_* or ss_reap_x call on the panel-close path; drv_cp_closed_x reaps only thmv_row. ss_post_x sets [cp_wdirty] unconditionally."
+  },
+  {
+   "id": "sysmisc-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Unloading VESA.DRV redraws the Drivers pane at a stale origin after vid_switch",
+   "detail": "cp_vid_click calls it load-bearing that nothing is redrawn after a switch, because DI/BP may describe a rectangle that no longer exists. The Drivers page's VID_EXT unload arm (default kern_big) switches to VGA and then runs cp_list, cp_drv_box1 and cp_drv_line1 at the pre-switch origin before cp_repost's full repaint. The result is a transient double-draw at old-mode coordinates.",
+   "evidence": [
+    "kernel/ctrl.inc:4390-4396 the rule",
+    "kernel/ctrl.inc:7131-7138 vid_switch in cp_drv_click",
+    "kernel/ctrl.inc:7161-7179 cp_list / cp_drv_box1 / cp_drv_line1 at stale DI/BP",
+    "kernel/kernel.asm:858-861 VID_EXT on by default on kern_big"
+   ],
+   "recommendation": "After the vesa_row switch, record the unload and want/answer and cp_wdset, then jmp .done past the redraw.",
+   "phase": "now",
+   "bytes_est": "-1 to +2 CTRL.DRV",
+   "verdict": "confirmed",
+   "verify_note": "The .novx path falls into drv_unload_x, .off, .save and then cp_list/cp_drv_box1/cp_drv_line1 with the DI/BP computed before CPXF vid_switch. Transient only - cp_repost's repaint follows."
+  },
+  {
+   "id": "sysmisc-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "'cp_ctl before any side effect' and 'painter id = click id' are held by prose",
+   "detail": "Static page clicks run up to three times per gesture (act / identify / press). They are correct only if every action site reaches cp_ctl/cp_ctli before writing anything, and if each painter's BH id equals the click's id. All 25 sites read correctly today, but two once shipped without the call and no gate checks either property.",
+   "evidence": [
+    "kernel/ctrl.inc:2058-2061 two sites shipped with no cp_ctl",
+    "kernel/ctrl.inc:3287-3292 id agreement by prose",
+    "kernel/ctrl.inc:4237-4240"
+   ],
+   "recommendation": "R2 removes both invariants. Short of it, add an os88ovlchk-style flow check: the first DS store in each CPITEM click proc is dominated by a cp_ctl* call.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-walked across all 25 sites."
+  },
+  {
+   "id": "sysmisc-9",
+   "kind": "perf",
+   "severity": "low",
+   "title": "kern_big's saver wake and fsx exit relight is a full wm_paint_all; the damage-pass version is kern_mega-only",
+   "detail": "blk_relit takes the damage pass only under KHP_RELIT, which only kern_mega defines. The XT build pays SPEC.md 11.91.7's 7-8x overdraw on every saver wake and every fullscreen exit. This is already priced: docs/plans/LAST-DROP-PERF.md row 2 measured KHP_RELIT at +32 bytes for CGA 781 -> 629 ms, Hercules 984 -> 727 and VGA 1,203 -> 706 per relight, and left it out of that round only to keep the round near 100 bytes.",
+   "evidence": [
+    "kernel/blank.inc:540-582",
+    "kernel/kernel.asm:285-292 KHP_RELIT inside %ifdef KERN_MEGA",
+    "kernel/fsx.inc:500 call blk_relit",
+    "docs/plans/LAST-DROP-PERF.md:589 KHP_RELIT row"
+   ],
+   "recommendation": "Take LAST-DROP-PERF.md's row 2 as it stands: +32 resident bytes on kern_big for 150-500 ms per relight. Decide on bytes, not rungs.",
+   "phase": "now",
+   "bytes_est": "+32 .text resident (measured, LAST-DROP-PERF.md)",
+   "verdict": "corrected",
+   "verify_note": "The code is as described, but the finding's 'not measured here' and '~22 bytes' are superseded: LAST-DROP-PERF.md:589 already records +32 bytes and the per-adapter relight times. The item is queued there; this is a reminder, not a new finding."
+  },
+  {
+   "id": "sysmisc-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Dead boot-overlay stores and comments resting on a false '.bss is not zeroed'",
+   "detail": "clk_probe zeroes [clk_tier], [clk_cent] and [clk_ref] 'because .bss is not zeroed'. Kernel .bss arrives zeroed (SPEC.md 2.5, kernel.asm:5894-5896), clk_probe runs once (from clk_init), and clk_ref lives in clk_str, which is unwritten before the probe. The same false premise is repeated in clockw.inc and ctrl.inc (three places), contradicting blank.inc:121-123 which has it right.",
+   "evidence": [
+    "kernel/clock.inc:303-305, 381-383",
+    "kernel/clockw.inc:75-76",
+    "kernel/ctrl.inc:369-370",
+    "kernel/ctrl.inc:5575-5577",
+    "kernel/kernel.asm:5894-5896 '.bss is zero at boot'"
+   ],
+   "recommendation": "Drop the three stores (or keep them and fix the comment), and correct the comments so they distinguish kernel .bss (zeroed) from a module image's data. The comment half is in doc_fixes.",
+   "phase": "now",
+   "bytes_est": "-15 .ovl, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "clk_tier/clk_cent are outside clk_init's zeroed run (clock.inc:2233-2235) but .bss boots zero; the only clk_probe call is clock.inc:250. ctrl.inc's flagged bytes are resident .text (section .text at :277 and :5572), so the '-f bin zeroes nothing' reason is wrong for them too."
+  },
+  {
+   "id": "sysmisc-11",
+   "kind": "size",
+   "severity": "low",
+   "title": "Saver idle period capped at 59 minutes by the 16-bit tick compare",
+   "detail": "[ss_idle] is a word of ticks against the 16-bit [ticks], hence SS_MAXMIN 59, mirrored into the overlay's field. Windows 3.1 offered 1-99. Nothing needs more today.",
+   "evidence": [
+    "kernel/blank.inc:316-320, 609",
+    "drivers/saver/svcfg.inc:741-748"
+   ],
+   "recommendation": "Leave it unless R1 lands, which provides a 32-bit count for free.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "SS_MAXMIN equ 59 and the clamp in ss_mins2idle (blank.inc:609-631) as described."
+  },
+  {
+   "id": "sysmisc-12",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "W_FLAGS 'visible' bit is the literal 2 at about thirty sites",
+   "detail": "wm.inc names every other W_FLAGS bit but not bit 1, so 'visible' tests are ungreppable.",
+   "evidence": [
+    "kernel/ctrl.inc:1240, 4813",
+    "kernel/files.inc:2819, 7329; menu.inc:851; ui.inc:364, 1343, 1418, 2555; stikmenu.inc:535, 1877; deskmod.inc:327",
+    "kernel/wm.inc:3077, 3382, 3385, 3436, 4392, 4615, 4657, 5354 and more",
+    "kernel/wm.inc:192-240 the named bits"
+   ],
+   "recommendation": "Add WF_VIS equ 2 and use it.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Real, but the count is about thirty (grep for `W_FLAGS], 2` returns 31 lines in kernel/, wm.inc itself carrying most), not eleven. No WF_VIS exists."
+  },
+  {
+   "id": "sysmisc-13",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "A newly selected list row's name blinks into its bar",
+   "detail": "cp_listrow fills the 12px bar and then letters the name over it, so on the row gaining the selection the name vanishes into black for the fill-to-font_run gap. That is PERFORMANCE.md rule 2 at row scale. The cheap fixes cost more calls than they save.",
+   "evidence": [
+    "kernel/ctrl.inc:2454-2507"
+   ],
+   "recommendation": "Record only. A font_run variant with a vertical pad would be the right fix if one is ever wanted elsewhere.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "cp_listrow: .bar's cp_fill then .name's cw_font_run on the selected row; the skip applies only to an unselected row under cp_lfull."
+  },
+  {
+   "id": "sysmisc-14",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "R1: one clock - derive the time of day from 0040:006C",
+   "detail": "The kernel integrates its own clock (clk_last, clk_acc, a per-second carry, and a hibernation catch-up walking clk_last back 32768 ticks a pass). DOS, kerndos and the BIOS use 40:6C, which sch_isr keeps by chaining the ROM every tick and mega.inc maintains in PM. Keep only the date plus the last 40:6C seen, derive h:m:s on format (once a minute or second), detect midnight as count < last, and write the count via int 1Ah AH=01h. This removes sysmisc-1, sysmisc-3 and sysmisc-11, the accumulator, and hiber.inc's catch-up loop. Caveats for the prototype: a nested tick skips the ROM chain (sch_chskip, SPEC.md 8.5.1), so 40:6C can trail [ticks] by the skips; a DOS program's AH=01h/2Dh would then set the desktop's clock too; and the BIOS's midnight flag at 40:70 has two readers to coordinate.",
+   "evidence": [
+    "kernel/clock.inc:1674-1805",
+    "kernel/hiber.inc:4620-4676",
+    "kernel/mega.inc:1362-1369",
+    "kernel/sched.inc:2226-2232 and fsx.inc:1439-1442 the nested-tick skip",
+    "apps/dos/dos.asm:14098-14135 the three-divide breakdown already exists"
+   ],
+   "recommendation": "Prototype: a ~45-byte breakdown shared by clk_fmt and osapi_clk_get_x replaces ~55 bytes of accumulator and sec/min/hour carry. OSAPI_CLK_GET's outputs are unchanged; KDL_CLK is internal. Count sch_chskip on the target before relying on the ROM's count.",
+   "phase": "now",
+   "bytes_est": "-10 to +10 resident (ESTIMATED); the AH=01h writer in CTRL.DRV",
+   "prior_art": "DOS (time = BIOS count); Mac (one 32-bit seconds counter, Secs2Date on demand); OS/2 1.x (time in the global info segment, read without a call).",
+   "verdict": "confirmed",
+   "verify_note": "Sound as a proposal; the ROM is chained every tick on both ISRs and hiber.inc relies on that. Added the nested-tick skip caveat (sched.inc .tskip / fsx.inc .tskip skip the ROM chain but still bump [ticks])."
+  },
+  {
+   "id": "sysmisc-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "R2: declarative Control Panel pages driven by one engine",
+   "detail": "Static pages are about 150 hand-placed equates, a paint and a click ladder each, per-page control painters, and three prose-held invariants (probe-before-act, painter id = click id, one greying predicate). Every page uses the same five species (radio group, check, button, drop-down, labelled value). A {species, rect, id, getter, setter, predicate} table per page plus one engine of roughly 500-700 bytes would paint, hit-test, press/drag/release and grey from one description. Bespoke parts (Display slot compaction, Covox ports, the memory column) keep a callback hook. CTRL.DRV is 15,405 bytes on kern_big today (build/ctrl.drv); SPEC.md 2.8's 11,119 is a figure from an earlier size pass.",
+   "evidence": [
+    "kernel/ctrl.inc:115-235, 577-690, 786-901 layout equates",
+    "kernel/ctrl.inc:1598-1631 per-page control painters",
+    "kernel/ctrl.inc:440-449, 2099-2113 probe machinery",
+    "build/ctrl.drv: 15,405 bytes"
+   ],
+   "recommendation": "Do the static pages now: they are module-internal, with no ABI. Consider the driver-page ABI (DSV_CPPAINT/DSV_CPCLICK -> tables) for the flag-day list only once the engine has proven itself.",
+   "phase": "now",
+   "bytes_est": "-1500 to -3000 CTRL.DRV (ESTIMATED, unprototyped), 0 resident",
+   "prior_art": "Mac DITL plus the Dialog Manager; Windows DLGTEMPLATE plus CheckRadioButton; PC/GEOS declarative UI compiled to generic objects (the closest 8088 peer).",
+   "verdict": "corrected",
+   "verify_note": "The idea stands; the size evidence was stale. build/ctrl.drv is 15,405 bytes now, so the saving is a smaller share than the finding implied, and the estimate has no prototype behind it."
+  },
+  {
+   "id": "sysmisc-16",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "A setting change reaches packages only as a world repaint",
+   "detail": "cp_repost sets [cp_dirty], and ui_task does wm_paint_all. A package caching derived state (OSAPI_CLK_GET's 12-hour bit, theme pens, the dock edge) has no notice beyond the repaint. Windows broadcast WM_WININICHANGE/WM_SYSCOLORCHANGE.",
+   "evidence": [
+    "kernel/ctrl.inc:2866-2869",
+    "kernel/ui.inc:962"
+   ],
+   "recommendation": "Record. If a package ever caches a setting, add an additive EVT_SETTING record posted by cp_repost.",
+   "phase": "record",
+   "bytes_est": "+~15 resident if adopted",
+   "prior_art": "Windows 3.x SystemParametersInfo with SPIF_SENDWININICHANGE.",
+   "verdict": "confirmed",
+   "verify_note": "cp_repost is a word store plus inc [ui_post] and nothing else (ctrl.inc:2866-2869)."
+  },
+  {
+   "id": "sysmisc-17",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "Core settings in battery-backed CMOS (Mac PRAM model) - considered, not recommended",
+   "detail": "The Mac kept core settings in 20 bytes of PRAM, written immediately. AT CMOS has bytes outside the checksum (often 34h-3Fh), but they are vendor-specific and the XT target has no CMOS.",
+   "evidence": [
+    "kernel/clockw.inc:241-250 (the only CMOS writes today)"
+   ],
+   "recommendation": "Do not adopt. Recorded so it is not re-derived.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Prior-art record; nothing to verify in code."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; the lock held; ui.inc no longer drains [clk_dirty] at all, and [clk_dirty]\n; itself went with the move. clockw.inc's own banner has the live version -",
+   "new_text": "; the lock held; ui.inc no longer drains [clk_dirty] at all. The byte itself\n; stays resident: clk_fld_adj sets it and cp_flush_close_x spends it at the\n; panel's close. clockw.inc's own banner has the live version -",
+   "why": "clk_dirty is still a resident .bss byte (clock.inc:2180), set by clk_fld_adj (ctrl.inc:5257) and spent by cp_flush_close_x (ctrl.inc:5487-5490)."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; used to sit here with exactly one reader, and clk_mlen carries the eleven\n; non-February answers as a 16-bit mask instead (0x15AA, derived at the\n; routine). February was always the branch and still is.",
+   "new_text": "; used to sit here with exactly one reader, and clk_mlen derives the eleven\n; non-February answers from the month's parity about August instead (kernel\n; size pass 17, at the routine). February was always the branch and still is.",
+   "why": "clk_mlen.mask is `cmp al, 8 / adc al, 0 / and al, 1 / xor al, 31` (clock.inc:1816-1820); there is no 0x15AA mask."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; --- display settings (SPEC.md 37): runtime state, boot defaults in\n; --- clk_init, nowhere to persist them (the kernel never writes the data disk)",
+   "new_text": "; --- display settings (SPEC.md 37): boot defaults in clk_init; on kern_big\n; --- SYSTEM.CFG's 'CH' and 'CS' records persist them (SPEC.md 51.5)",
+   "why": "CFG_MAP maps CFG_H12 -> clk_h12 and CFG_SEC -> clk_secs (driver.inc:906-909) and CFG_DATA carries keys 'CH'/'CS' (driver.inc:950-953)."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "which it needs because .bss is not zeroed",
+   "new_text": "which only restates the zero .bss boots with",
+   "why": "Kernel .bss arrives zeroed (kernel.asm:5894-5896, blank.inc:121-123) and clk_probe runs once, from clk_init (clock.inc:250)."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; tests share (see clk_rp_dgno above for why one near jump beats four inverted\n; pairs, and why this is a global rather than a `.local`): -9.  Cold by\n; construction - a field out of range means the byte did not decode in the\n; mode Register B claims, and clk_at_probe then tries the other mode once and\n; gives the tier up.",
+   "new_text": "; tests share - one near jump where four inverted Jcc/jmp pairs would stand,\n; and a global because the tests reach it from outside a `.local`'s scope: -9.\n; Cold by construction - a field out of range means the byte did not decode in\n; the mode Register B claims, and clk_at_read then tries the other mode once\n; and gives the tier up.",
+   "why": "clk_rp_dgno is retired (clock.inc:1276-1280 says so); the other-mode retry is clk_at_read's (clock.inc:589-596), not clk_at_probe's."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; validations share (see clk_rp_dgno above): -9.",
+   "new_text": "; validations share (clk_at_dcno's shape, above): -9.",
+   "why": "clk_rp_dgno no longer exists (clock.inc:1276-1280); clk_at_dcno at :631 is the live instance of the same trampoline."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; out: SI = clk_str, 18..24 glyphs + NUL, in the live display form:",
+   "new_text": "; out: SI = clk_str, CX = its length; 18..24 glyphs + NUL, in the live form:",
+   "why": "clk_fmt's .end computes CX = BX - clk_str (clock.inc:1945-1949) and SPEC.md 37's clk_fmt row lists CX as an output."
+  },
+  {
+   "file": "kernel/clock.inc",
+   "old_text": "; format. The UI task is the clock's only writer, so from the UI task this is\n; consistent; a worker accepts a torn read across a rollover. Two word reads",
+   "new_text": "; format. The UI task is the clock's only writer, so from the UI task this is\n; consistent - and from a worker too: every writer carries a whole second or a\n; whole edit under cli, so a worker is at worst a catch-up behind. Two word reads",
+   "why": "clk_inc_sec (clock.inc:1745-1805) and clk_fld_adj (ctrl.inc:5195-5260) each mutate under pushf/cli and this body reads under cli (clock.inc:2333-2347)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "A worker may call it and must accept a torn read across a\n  rollover.",
+   "new_text": "A worker may call it too: every writer carries a whole second or a whole\n  edit under `cli` and the read is under `cli`, so its answer is one\n  consistent instant - at worst a catch-up behind, since only the UI task's\n  `clk_tick` advances the clock.",
+   "why": "osapi_clk_get_x reads under cli (clock.inc:2333-2347); clk_inc_sec and clk_fld_adj write under pushf/cli."
+  },
+  {
+   "file": "kernel/clockw.inc",
+   "old_text": "; in:  nothing; NO gfx lock held (SPEC.md 13/31.1)\n; out: nothing (all registers preserved)\n;\n; A machine without an RTC returns immediately: the clock is the PIT's. The\n; \"outside the gfx lock\" rule predates the ladder - only rung 4 calls BIOS\n; now - but it stays, because the caller cannot know which rung answered and\n; ui_task step 3 is a perfectly good place to drain [clk_dirty] from.",
+   "new_text": "; in:  nothing; the gfx lock HELD - cp_flush_close_x, at the panel's close, is\n;      the only caller (SPEC.md 37.94)\n; out: nothing (all registers preserved)\n;\n; A machine without an RTC returns immediately: the clock is the PIT's. Rung 4\n; calls BIOS with the lock held, which is fine from teardown (this file's\n; banner, \"BIOS FROM HERE IS FINE\").",
+   "why": "cp_flush_close_x is the sole caller and runs with the lock held (ctrl.inc:5485-5490; clockw.inc:42-48; clock.inc:20-24); ui.inc no longer drains [clk_dirty]."
+  },
+  {
+   "file": "kernel/clockw.inc",
+   "old_text": "; says a rung claimed, and .bss is not zeroed",
+   "new_text": "; says a rung claimed, which set [clk_tier]",
+   "why": "Kernel .bss is zeroed at boot (kernel.asm:5894-5896); [clk_tier] is written by clk_probe (clock.inc:303, 377)."
+  },
+  {
+   "file": "kernel/clockw.inc",
+   "old_text": "; The read half, clk_rp_get, is resident (the probe needs it) and far-called;\n; this one only ever writes, so it came here with the rest of rung 3.",
+   "new_text": "; The read half is CLK_RP_GET_BODY, assembled into the boot overlay for the\n; probe (clk_rp_get) and into this image (clkw_rp_get); this one only ever\n; writes, so it came here with the rest of rung 3.",
+   "why": "clk_rp_get sits in clock.inc's .ovl section (clock.inc:832-1642, the label at :1237) and clkw_rp_get is this image's copy (clockw.inc:645-646); neither is resident."
+  },
+  {
+   "file": "kernel/blank.inc",
+   "old_text": "; The settings (SPEC.md 79.4), and they are in EVERY BUILD.",
+   "new_text": "; The settings (SPEC.md 79.4). THEY ARE kern_big's ALONE NOW: the next two\n; paragraphs are the argument that once carried them on kern_small too, and\n; the note after them is why it no longer does.",
+   "why": "ss_pub..ss_post are inside %ifdef KERN_BIG; kern_small keeps one parity byte (blank.inc:153-165)."
+  },
+  {
+   "file": "kernel/blank.inc",
+   "old_text": "; (through wm_cbd), ss_set_x and the blanker's wake - are all kern_big's,",
+   "new_text": "; (through wm_cbd), ss_post_x and ssf_set's blanker wake - are all kern_big's,",
+   "why": "The callers are driver.inc:5003 (wm_cbd), blank.inc:858 (ss_post_x) and blank.inc:908 (ssf_set); ss_set_x was folded into ssf_set (blank.inc:890-894)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; one 8-byte record per item holding its list name and its page's paint and\n; click procs.",
+   "new_text": "; one CP_ISTRIDE-byte record per item (8 on kern_big, 6 on kern_small)\n; holding its list name and its page's paint and click procs.",
+   "why": "CP_ISTRIDE is 8 on kern_big and 6 on kern_small (ctrl.inc:460-462)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; Structurally still the simplest kind in the tree (SPEC.md 29): task-less,\n; no KD_INIT, no pool, no .bss.",
+   "new_text": "; Structurally still a simple kind (SPEC.md 29): task-less and pool-less,\n; with a KD_INIT (cp_kinit, the release and drag edges) and one .bss buffer\n; (cp_sbuf, cp_stage's landing ground).",
+   "why": "cp_kinit is the KD_INIT (ctrl.inc:298-330) and cp_sbuf is `resb CP_SBUF` in section .bss (ctrl.inc:6970-6974)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; only what changed: a new selection redraws the two panes (each erases its\n; own rectangle first), a mode flip redraws just the two 12x12 glyph boxes.",
+   "new_text": "; only what changed: a new selection redraws the two list rows that changed\n; and swaps the page (SPEC.md 31.1.4), a mode flip redraws just the two 12x12\n; glyph boxes.",
+   "why": "cp_onclick moves the bar with two cp_listrow calls, then cp_page (ctrl.inc:1351-1377)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "CP_CH (121) with room to spare",
+   "new_text": "CP_CH (132) with room to spare",
+   "why": "CP_CH equ 132 (ctrl.inc:51). Comment text only (the line is a continuation comment)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "CPH_A0Y1  equ CPH_A0Y - 4                   ; 78: anim row 0 top\nCPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 79: ...bottom\nCPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 95: anim row 1 bottom",
+   "new_text": "CPH_A0Y1  equ CPH_A0Y - 4                   ; 94 (kern_small 76): anim row 0 top\nCPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 111 (93): ...bottom\nCPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 127 (109): anim row 1 bottom",
+   "why": "CPH_A0Y is 98 / CPH_A1Y 114 on kern_big and 80 / 96 on kern_small (ctrl.inc:170-176), with CP_GW 12 (CPH_B0Y2 = 18 + 12 + 1 = 31)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "                                ; .text and not .bss, like everything else\n                                ; here: nothing zeroes .bss (-f bin)",
+   "new_text": "                                ; .text and not .bss, like everything else\n                                ; here: the initialiser is the boot answer,\n                                ; written down as a decision",
+   "why": "Kernel .bss arrives zeroed (kernel.asm:5894-5896; blank.inc:121-123); these bytes are resident .text (section .text at ctrl.inc:277)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; - what the last load attempt actually answered. The click loads or unloads\n; ON THE SPOT and then writes SYSTEM.CFG, so the box is never a promise about\n; the next boot: what it shows is what is running right now.",
+   "new_text": "; - what the last load attempt actually answered. The click loads or unloads\n; ON THE SPOT and marks SYSTEM.CFG owed for the panel's close (SPEC.md 31.8),\n; so the box is never a promise about the next boot: what it shows is what is\n; running right now.",
+   "why": "cp_drv_click's .save only calls cp_wdset (ctrl.inc:7160); cp_flush_close_x writes the file at the close."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; SPEC.md 31.5.1: is this draw a FULL one, or the once-a-second refresh? The\n; tick changes digits and nothing else - the band's gaps, the two ':' and the\n; selected field's black surround are all still on the glass from the last\n; full draw - so an incremental pass draws seven opaque runs and NOTHING else.\n; A byte rather than a register because cp_time_fld's AL and AH are already\n; the field index and the field count.\n; cp_list has JUST laid",
+   "new_text": "; cp_list has JUST laid",
+   "why": "First half of a comment move: the paragraph describes [cp_tfull] (declared at ctrl.inc:871) but sits above cp_lfull. Apply with the next fix; no code line changes."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "CPT_FBOX  equ 2                 ; [cp_tfull]'s third value: draw MY OWN box,",
+   "new_text": "; SPEC.md 31.5.1: is this draw a FULL one, or the once-a-second refresh? The\n; tick changes digits and nothing else - the band's gaps, the two ':' and the\n; selected field's black surround are all still on the glass from the last\n; full draw - so an incremental pass draws seven opaque runs and NOTHING else.\n; A byte rather than a register because cp_time_fld's AL and AH are already\n; the field index and the field count.\nCPT_FBOX  equ 2                 ; [cp_tfull]'s third value: draw MY OWN box,",
+   "why": "Second half of the move: the [cp_tfull] paragraph lands above its own declaration (ctrl.inc:869-871); no code line changes."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; the hardware RTC is ui_task's job, off the [clk_dirty] flag (SPEC.md 13).",
+   "new_text": "; the hardware RTC is cp_flush_close_x's job at the panel's close, off the\n; [clk_dirty] flag (SPEC.md 37.94).",
+   "why": "cp_flush_close_x spends [clk_dirty] with clk_rtc_write (ctrl.inc:5485-5490); ui_task no longer does."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; [clk_dirty] and [clk_barq] - so the hardware RTC is written by ui_task,\n; outside this held lock, never from here.",
+   "new_text": "; [clk_dirty] and [clk_barq] - so the hardware RTC is written at the panel's\n; close (cp_flush_close_x, SPEC.md 37.94), never from here.",
+   "why": "cp_flush_close_x writes the RTC at teardown, with the lock held (ctrl.inc:5485-5490; clock.inc:20-24)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; [clk_dirty] so ui_task writes the hardware RTC outside the lock, and posts",
+   "new_text": "; [clk_dirty], which the panel's close spends on the RTC (SPEC.md 37.94), and posts",
+   "why": "cp_flush_close_x spends [clk_dirty] (ctrl.inc:5485-5490)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "    mov byte [clk_dirty], 1     ; ui_task step 3 writes the RTC (SPEC.md 13)",
+   "new_text": "    mov byte [clk_dirty], 1     ; the panel's close writes the RTC (SPEC.md 37.94)",
+   "why": "cp_flush_close_x spends the flag (ctrl.inc:5485-5490); ui_task step 3 no longer does. Comment only."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; the flag's own comment for why that is a rule rather than a default). It is\n; a near call inside .cold with no .text thunk in front of it, so a page, a",
+   "new_text": "; the flag's own comment for why that is a rule rather than a default). It is\n; a near call inside the module's core (.modc) with no .text thunk in front of\n; it, so a page, a",
+   "why": "cp_flush_x sits under `section .modc` (ctrl.inc:5298), not .cold."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; It is one write of one 32-byte\n; file, and the file carries the whole panel - the driver list, the sound\n; route, the clock options and the scheduler mode - so there",
+   "new_text": "; It is one write of one small file (CFG_FBUF bytes, every key in\n; driver.inc's CFG_DATA), and the file carries the whole panel - the driver\n; list, the sound route, the clock options, the scheduler mode, the theme and\n; the rest - so there",
+   "why": "CFG_FBUF = CFG_REC0 + CFG_NKEY*CFR_HDR + CFG_NB + 2 with CFG_NKEY 16 on kern_big (driver.inc:1024, 1043)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; notice line is blank). .text and not .bss for the reason everything else\n; here is: -f bin zeroes nothing.",
+   "new_text": "; notice line is blank). .text with an initialiser, like everything else\n; here: the value is the boot answer, written down as a decision.",
+   "why": "Kernel .bss is zeroed at boot (kernel.asm:5894-5896); cp_snd_err is in section .text (ctrl.inc:5572)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "; under it. A settings write that cannot reach the disk says so in this\n; page's caption - the next time the panel is opened, because by then this\n; page is gone - while the driver it loaded stays loaded, which is the honest\n; split: the two are genuinely separate outcomes.",
+   "new_text": "; under it. A settings write that cannot reach the disk is said as a toast\n; when the panel closes (SPEC.md 59.6) - while the driver it loaded stays\n; loaded, which is the honest split: the two are genuinely separate outcomes.",
+   "why": "cp_flush_x toasts a failed save (ctrl.inc:5331-5340) and cp_drv_paint draws no save caption (ctrl.inc:6331-6334)."
+  },
+  {
+   "file": "kernel/ctrl.inc",
+   "old_text": "                                ; move. The save caption is not redrawn either:\n                                ; only cp_flush_x writes [cp_dsave] and that\n                                ; runs at the CLOSE, so it cannot change while\n                                ; this page is on screen",
+   "new_text": "                                ; move. (There is no save caption to redraw:\n                                ; a failed write is a toast at the close,\n                                ; SPEC.md 59.6.)",
+   "why": "Found while verifying: the page has no save caption at all (ctrl.inc:6331-6334); a failed save is cp_flush_x's toast."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Built-in singleton app kind (KIND_CTRL = 5, cap 1), window \"Control Panel\",\n**320×140** at (160,130).",
+   "new_text": "Built-in singleton app kind (KIND_CTRL = 5, cap 1), window \"Control Panel\",\n**320×151** at (160,130).",
+   "why": "cp_tpl is `dw 160, 130, 320, 151, ...` on both kernels (ctrl.inc:288, 295); CP_CH 132 = frame 151 less border and title (ctrl.inc:51)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Structurally it is still the simplest kind in the tree — **task-less, no\nKD_INIT, no pool, no .bss**:",
+   "new_text": "Structurally it is still a simple kind — **task-less and pool-less**, with a\nKD_INIT (`cp_kinit`, which installs the release and drag edges, §13.8) and one\n`.bss` buffer (`cp_sbuf`, `cp_stage`'s landing ground):",
+   "why": "cp_kinit is the panel's KD_INIT (ctrl.inc:298-330); cp_sbuf is `resb CP_SBUF` in .bss (ctrl.inc:6970-6974)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "cp_tpl:  dw 160, 130, 320, 140, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick",
+   "new_text": "cp_tpl:  dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick",
+   "why": "kern_big's template (ctrl.inc:288); kern_small's has 0 for the onkey (ctrl.inc:295)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "No onkey (the panel is mouse-only),",
+   "new_text": "No onkey on `kern_small`, and on `kern_big` only for a driver page's typed field (§31.9.2),",
+   "why": "cp_tpl carries cpf_cp_onkey on kern_big and 0 on kern_small (ctrl.inc:282-296)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "out SI = the record's OFFSET, `6*AL`,",
+   "new_text": "out SI = the record's OFFSET, `CP_ISTRIDE*AL` (8 on `kern_big`, 6 on `kern_small`),",
+   "why": "cp_entry multiplies by CP_ISTRIDE (ctrl.inc:1722-1728); CP_ISTRIDE is 8 / 6 (ctrl.inc:460-462)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "a hit on a different item stores it in `cp_sel` and redraws both panes (`cp_list` + `cp_page`);",
+   "new_text": "a hit on a different item stores it in `cp_sel`, redraws the two list rows that changed (`cp_listrow`, §31.1.4) and swaps the page (`cp_page`);",
+   "why": "cp_onclick moves the bar with two cp_listrow calls and then cp_page (ctrl.inc:1351-1377)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "White-fills the whole left pane, then draws every item name with the `cp_sel` row barred — so it doubles as the redraw path when the selection moves.",
+   "new_text": "White-fills the whole left pane, then draws every item name with the `cp_sel` row barred — the whole-pane paint, for when every row moved; a moved selection redraws two rows instead (§31.1.4).",
+   "why": "The selection path no longer calls cp_list (ctrl.inc:1351-1356 says so)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Written only by `cp_onclick`, and only to an index `< CP_ITEMS`.",
+   "new_text": "Written by `cp_onclick`, by the menu bar's clock click (`CP_ITIME`, ui.inc), by `drv_notice` (`CP_IDRV`) and by `cp_drv_gone_x`, which puts it back to 0 when a driver's page goes; it names a RECORD, so a driver's page is `CP_ITEMS` + its class (§31.9).",
+   "why": "Writers at ui.inc:523/3403, driver.inc:6084, ctrl.inc:1279 and 1369; cp_drv_gone_x treats values >= CP_ITEMS as driver classes (ctrl.inc:1272-1279)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Set to 1 by `cp_sched_click` only when the mode actually changed;",
+   "new_text": "Set to 1 (with `[cp_wdirty]`, one word store) by `cp_repost`, which a page calls when a setting changes the world;",
+   "why": "cp_repost stores 0x0101 over cp_dirty/cp_wdirty (ctrl.inc:2866-2869); it is the setter for every page, not only the Scheduler's."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`CP_IDRV` is **2** and\n`CP_ISND` **3**.",
+   "new_text": "`CP_IDRV` **2**,\n`CP_IVID` **3** and `CP_ISND` **4** on `kern_big` (on `kern_small`, which has no\nDrivers row, `CP_IVID` is 2 and `CP_ISND` 3).",
+   "why": "ctrl.inc:483-508: CP_IDRV 2, CP_IVID 3, CP_ISND 4 under OS88_DRIVERS; CP_IVID 2, CP_ISND 3 otherwise."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the numbers are the ones §31.3 states — `CP_ITIME` 1, `CP_IDRV` 2,\n`CP_ISND` 3.",
+   "new_text": "the numbers are the ones §31.3 states — `CP_ITIME` 1, `CP_IDRV` 2,\n`CP_IVID` 3, `CP_ISND` 4 on `kern_big`.",
+   "why": "ctrl.inc:474-499."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "caption explains, click ignored) is not retired with it: §31.3's Buffer\npage still uses it, and §50.5 extends it to \"Not Enough Ram\".",
+   "new_text": "caption explains, click ignored) is not retired with it: it is §47's rule\n3, and §50.5 extends it to \"Not Enough Ram\" (§31.3).",
+   "why": "Found while verifying: §31.3 says the Buffer page is itself retired, so it cannot 'still use' the idiom."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Each page calls `cp_flush` after it changes anything, and `cp_flush` writes\n`SYSTEM.CFG` (§51.5) — one 32-byte file carrying the whole panel: the driver\nlist, the sound route, the clock options, the scheduler mode and the back\nbuffer.",
+   "new_text": "Each page marks `[cp_wdirty]` when it changes anything, and the panel's close\nwrites `SYSTEM.CFG` (§51.5) through `cp_flush` — one small file (`CFG_FBUF`\nbytes, every key in `CFG_DATA`) carrying the whole panel: the driver list, the\nsound route, the clock options, the scheduler mode, the theme and the rest.",
+   "why": "Pages call cp_wdset/cp_repost (ctrl.inc:349-370, 7160); CFG_FBUF is derived from CFG_NKEY = 16 keys (driver.inc:1024, 1043); §32's back buffer is gone."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`cp_flush_x` is a near\ncall inside the cold segment and `cp_flush_close_x` is its only caller,",
+   "new_text": "`cp_flush_x` is a near\ncall inside `CTRL.DRV`'s core (`.modc`) and `cp_flush_close_x` is its only caller,",
+   "why": "cp_flush_x is under `section .modc` (ctrl.inc:5298)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It is reported in the Drivers page's caption, the\none page with room to say it, which means the *next* time the panel is opened:\nby the time the write happens the page it would be reported on is already\ngone. **`cp_drv_cap` is why that is now true rather than merely intended** —\nthe caption used to be drawn only by the click path's status-line redraw,\nwhich runs when a row is TICKED, so the report appeared only if the user\nhappened to tick something after a failed save in the same session, and\n`cp_drv_paint` drew everything on the page except this. `cp_drv_paint` calls\nit now, and the click path deliberately does **not**: `[cp_dsave]` is written\nonly by `cp_flush_x`, at the close, so the caption cannot change while the\npage is on screen and re-lettering it per click erases and redraws text that\ndid not move (§31.6.1). Its two strings are §51.5.1's.",
+   "new_text": "It is said as a toast at the close, when it happens (§59.6); `[cp_dsave]`\nsurvives only to keep `[cp_wdirty]` set for that retry. (It used to be\nreported in the Drivers page's caption the next time the panel was opened.)",
+   "why": "cp_flush_x toasts the verdict (ctrl.inc:5331-5340, 5363-5406) and cp_drv_paint draws no save caption (ctrl.inc:6331-6334)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "All code is near `.text`: it is called from\nthe UI task's inner loop and from the Control\nPanel's far page (§31.5).",
+   "new_text": "The software clock and the bar's formatter are near `.text`, called from the\nUI task's inner loop; the RTC probe is the boot overlay's, `OSAPI_CLK_GET` is\n`.cold`, and the field editor and the RTC write half ship in `CTRL.DRV`\n(§37.93, §37.94).",
+   "why": "clk_probe is in .ovl (clock.inc:217), osapi_clk_get_x in .cold (clock.inc:2319), clk_fld_adj in CTRL.DRV (ctrl.inc:5106-5195), clk_rtc_write in clockw.inc."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**The two display settings** are runtime state like every other Control\nPanel setting (the scheduler mode, the tone route): they\nreturn to their defaults at boot. Since §18.4 the kernel *can* write the\ndata disk, so a settings file is now buildable — it is deliberately not\nbuilt: it would tie a machine's UI state to whichever floppy happens to sit\nin B:, and the settings would silently change when the disk did. Persisting\nthem wants a home the kernel owns, which this OS does not yet have.",
+   "new_text": "**The two display settings** are persisted in `SYSTEM.CFG` (§51.5, keys\n`'CH'` and `'CS'`) with every other Control Panel setting on `kern_big`, and\nstart at their defaults - 24-hour, no seconds - when the file does not carry\nthem; `kern_small` reads no `SYSTEM.CFG` and keeps the defaults.",
+   "why": "CFG_MAP maps CFG_H12/CFG_SEC to clk_h12/clk_secs (driver.inc:906-909) and CFG_DATA carries 'CH'/'CS' (driver.inc:950-953); the file lives on the system disk (§51.5.1)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "month → year, with month lengths from a 12-byte table and February 29 in a\nleap year",
+   "new_text": "month → year, with month lengths from `clk_mlen` (below) and February 29 in a\nleap year",
+   "why": "clk_mlen has no table (clock.inc:1807-1837)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Month LENGTHS are not a table.** `clk_mlen` carries the eleven non-February\nanswers as one 16-bit mask — bit *m* set means month *m* has 31 days, *m* =\n1..12, so bit 0 is unused and bit 2 is clear because February is the branch\nunder it. That is three bytes less than the `db 31,28,31,…` it replaced and\none review problem more, so `tests/unit/t_mlen.py` (fast tier) reads the\nimmediate back out of `build/kernel.bin` and asserts all twelve lengths —",
+   "new_text": "**Month LENGTHS are not a table.** `clk_mlen` derives the eleven non-February\nanswers from the month's parity about August (kernel size pass 17): a month\nhas 31 days when it is odd below August and even from August on, so `cmp al,\n8 / adc al, 0 / and al, 1 / xor al, 31`. February is the branch in front of\nit. That replaced a 16-bit mask, which replaced the `db 31,28,31,…`, and each\nstep was one review problem more, so `tests/unit/t_mlen.py` (fast tier) reads\nthe routine back out of `build/kernel.bin` and asserts all twelve lengths —",
+   "why": "clock.inc:1816-1820 is the parity form; tests/unit/t_mlen.py:9-14 documents both rewrites."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "so the\n3-bytes-cheaper `mov ax, mask / shr ax, cl` form breaks the Date/Time ±\nbutton and nothing here would see it.",
+   "new_text": "so a form\nthat spent AH (the mask's `mov ax, mask / shr ax, cl` was one) breaks the\nDate/Time ± button and nothing here would see it.",
+   "why": "The mask form is gone (clock.inc:1816-1837); the AH rule still binds (clock.inc:1826-1833)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Out: CX = its length, NUL excluded. SI and every other register preserved.",
+   "new_text": "Out: CX = its length, NUL excluded; SI one past the NUL; every other register preserved.",
+   "why": "str_len's header says SI ONE PAST THE NUL (clock.inc:1955-1958)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "five minutes is 5,461.95 of them and `BLK_IDLE` is **5462**.",
+   "new_text": "five minutes is 5,461.95 of them; `BLK_IDLE` is `SS_MINS × SS_TPM` =\n**5,460**, the minute rounded down to 1,092 ticks.",
+   "why": "blank.inc:57-59: SS_TPM 1092, SS_MINS 5, BLK_IDLE = SS_MINS * SS_TPM."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Two compares per UI pass, and one byte store per mouse packet.",
+   "new_text": "Three compares per UI pass on `kern_big` (§79.7's `[ss_post]` is the extra one)\nand two on `kern_small`, and one byte store per mouse packet.",
+   "why": "blk_pass's header and code: [ss_post] is tested first on kern_big only (blank.inc:280-284, 307-310)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The verdict is banked\n  across the `int 16h` in `pushf`/`popf`, because the flags a BIOS service\n  returns are its own business and not a value this loop may read.",
+   "new_text": "The key is fetched\n  first and `blk_wake` decides after it, so there is no verdict to carry\n  across the `int 16h` - the `pushf`/`popf` that once banked it is gone.",
+   "why": "ui.inc:178-191: int 16h AH=00h runs ahead of blk_wake and the comment records the deleted pushf/popf."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "fullscreen bracket, and §64.4 already covers that.\n\n**No fade,",
+   "new_text": "fullscreen bracket, and §64.4 already covers that. §79.10's\n`OSAPI_WM_QUIET` is not that slot: it chooses which answer a session gets,\nnever whether there is one.\n\n**No fade,",
+   "why": "OSAPI_WM_QUIET exists (blank.inc:925-946, SPEC.md 79.10); 64.5 should say why it is not the refused slot, as 79.9 does."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "blk_set(1)  ->  ss_set_x  ->  ss_start_x   CF = 0: the OVERLAY has the screen",
+   "new_text": "blk_set(1)  ->  ssf_set's .start arm      CF = 0: the OVERLAY has the screen",
+   "why": "ss_set_x and ss_start_x were written into ssf_set (blank.inc:890-894, 902-960)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "blk_set(0)  ->  ss_set_x  ->  ss_stop_x    a session ends: repaint the desktop",
+   "new_text": "blk_set(0)  ->  ssf_set   ->  ss_stop_x   a session ends: repaint the desktop",
+   "why": "ssf_set's .stop arm calls ss_stop_x (blank.inc:918-922)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`ss_set_x` brackets the session with\n`cursor_hide` / `cursor_show`,",
+   "new_text": "`ssf_set` brackets the session with\n`cursor_hide` / `cursor_show`,",
+   "why": "cw_cursor_hide/show are called from ssf_set (blank.inc:921, 953)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Five bytes in the kernel's `.text`, four of which the overlay is handed a\npointer to:",
+   "new_text": "Six bytes in the kernel's `.text` (five fields, `ss_idle` a word), handed to\nthe overlay as one block - its `Test` writes `SS_P_IDLE`, +4:",
+   "why": "ss_pub..ss_idle are four bytes and a word (blank.inc:154-169); the overlay writes +4 (SPEC.md 79.4's own SS_P_IDLE paragraph)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**All three bytes are carried in EVERY build**, `kern_small` included, exactly\nas `CFG_ANIM` is (§76.11). A floppy moves between machines and between\nkernels, and a setting silently dropped by the build that cannot use it comes\nback as a *different* setting on the build that can.",
+   "new_text": "**The three bytes are `kern_big`'s** (kernel size pass 13): `kern_small` reads\nand writes no `SYSTEM.CFG` (§51.5) and has no saver page, so nothing there\nnames them and its `[ss_idle]` stays at `BLK_IDLE`. They used to be carried in\nevery build, on the argument that a setting silently dropped by the build\nthat cannot use it comes back as a *different* setting on the build that can;\na build that reads no file drops nothing.",
+   "why": "ss_pub..ss_post are inside %ifdef KERN_BIG; kern_small keeps one parity byte (blank.inc:150-165)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "gains a `Screen Saver` button under\nits two radio groups, at pane-relative y 114.",
+   "new_text": "gains a `Screen Saver` button in\nthe pane's bottom-right corner, at pane-relative (112,110) (§76.4).",
+   "why": "CPH_BTX 112, CPH_BTY 110 (ctrl.inc:212-217); 76.4 already records the move."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(§2.8), whose data stays in the kernel's `.text`; eleven labels, four of them\nsixteen characters, is about 150 bytes of that rung.",
+   "new_text": "(§2.8), whose data was then resident in the kernel's `.text`; eleven labels,\nfour of them sixteen characters, was about 150 bytes of that rung. The page\nstrings are `CTRL.DRV`'s own since kernel size pass 8 (§2.8.6), so a label\nwould now cost the module rather than the kernel.",
+   "why": "The page strings are in CTRL.DRV's image (ctrl.inc:7300-7315, section .modu)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "which is the point — `ctrl`'s strings are `.text` and resident (§2.8) where its\ncode is not, so a fourth message here would be a resident byte spent on a case",
+   "new_text": "which is the point — `ctrl`'s strings were `.text` and resident (§2.8) where its\ncode was not when this was written, and are `CTRL.DRV`'s own now (§2.8.6), so a\nfourth message here would still be a byte spent on a case",
+   "why": "Page strings moved into CTRL.DRV in kernel size pass 8 (ctrl.inc:7300-7315)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It keeps §64's blanker and honours `[ss_mins]`, including the\nzero that turns the feature off.",
+   "new_text": "It keeps §64's blanker at the fixed `BLK_IDLE`, five minutes: it reads\nno `SYSTEM.CFG` (§51.5), so it has no `[ss_mins]` and no setting that turns\nthe feature off.",
+   "why": "ss_mins is inside %ifdef KERN_BIG (blank.inc:154-165) and ss_mins2idle is kern_big's alone (blank.inc:604-640)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "their eleven\nlabels would be 150 bytes of the kernel's `.text`, where a page's strings have\nto live (§2.8.1).",
+   "new_text": "their eleven\nlabels would then have been 150 bytes of the kernel's `.text`, where a page's\nstrings had to live (§2.8.1); they are `CTRL.DRV`'s own since kernel size pass\n8 (§2.8.6).",
+   "why": "Page strings and cp_items are in CTRL.DRV's image (ctrl.inc:7300-7315, 7341)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "and six static\nrows is exactly nine. A seventh static row, or a fourth driver page, wants\n§31.1.1's scrolling list rather than another `%error`.",
+   "new_text": "and six static\nrows was exactly nine. A seventh static row, or a fourth driver page, wanted\n§31.1.1's scrolling list rather than another `%error` - and got it: `kern_big`\nhas eight static rows, and the item list scrolls (§31.1.5).",
+   "why": "CP_ITEMS is 8 on kern_big (ctrl.inc:7341-7365) and §31.1.5 is the scrolling item list."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "What lands in the kernel is the\nstrings and the `cp_items` row",
+   "new_text": "What landed in the kernel then was\nthe strings and the `cp_items` row (both `CTRL.DRV`'s own since kernel size\npass 8, §2.8.6)",
+   "why": "cp_items is in the image (ctrl.inc:7341)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "A `'TH'` key, one byte, in the table that already drives the reader and the\nwriter both (§51.5) — five bytes of `drv_cfg_keys` and three of\n`drv_cfg_map`. The map stores `[thm_dark]` like any plain setting; the unpack\nthen re-resolves the two pens from it, because that is not a store.",
+   "new_text": "A `'TH'` key, ver 3 and five bytes (the theme, §11.99's zoom and §79.4's\nthree), in the table that already drives the reader and the writer both\n(§51.5) — five bytes of `drv_cfg_keys` and three of `drv_cfg_map`. The map\nstores `[thm_kind]` like any plain setting; the unpack then calls `thm_set`,\nwhich resolves the pens and owns both refusals — an unknown kind and Color\nwithout colour (§76.12.1).",
+   "why": "driver.inc:971-972 `dw 'TH' / db 3, 5, CFG_THM`; the map stores thm_kind (driver.inc:910-911) and the unpack calls thm_set (driver.inc:4974-4984)."
+  }
+ ]
+}

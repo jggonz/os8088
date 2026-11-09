@@ -1,0 +1,57 @@
+# tests/blobbodies.txt - every label `.boot2` holds, and what it is FOR.
+# Enforced by tests/unit/t_blobbodies.py (fast tier, the `blobbodies` row).
+#
+# `.boot2` is the blob stage 1 reads before the loading screen's bar shows
+# (SPEC.md 2.9.14). Since BOOT3-PLAN wave 4 (2026-11-08) it holds four things
+# on every kernel, and they are the kinds below:
+#
+#   loader   boot/boot2.asm: stage 2, its read loop, the packed head and
+#            tail, the canary - what reads KERNEL.SYS at all
+#   splash   kernel/splash.inc: the loading screen, its first tick, its IRQ0
+#            frames and the entries kmain_o and dsk_xfer tick it through
+#   probe    the first tick's adapter probe: the splash calls vid_detect and
+#            bvs_apply BEFORE kz_all has expanded anything past the plain
+#            head, so they cannot be anywhere else (BOOT3-PLAN 2: bvs_apply
+#            "looks like display, not splash" and is not); vid_init is
+#            kmain_o's re-run of the same pair
+#   status   the status line (SPEC.md 15.6): its captions and the driver
+#            titles, which spl_mcs reads through the blob's OWN CS - so a
+#            title moved to `.boot3` would be read at the right offset in the
+#            wrong segment (BOOT3-PLAN 8, wave 2's "what does NOT move")
+#
+# Everything else is RESIDUE: a body that is in the blob for a reason of its
+# own, one row per label, with the reason. The count per kernel is held to
+# t_blobbodies.py's RESIDUE_MAX, which only goes down. Everything that was
+# residue before wave 4 - kmain_o, the boot's adapter switch (KSW_SECT's
+# `bvs_` and `bvw_`/`bdk_` expansions and their KGO pair), xm_boot_x,
+# vx_boot_x and vx_blk, vmm_boot_x, ovl_dock_geom/ovd_geom, kern_small's
+# DESK_ROWCALC copy and its drv_boot_x rung - is `.boot3`'s now.
+#
+# FORMAT: <kernels> <label or glob> <kind> <why>
+#   kernels: * or a comma list of big, small, mega, emu
+#   a glob is allowed for the four purposes, never for residue
+
+# --- loader (boot/boot2.asm) -------------------------------------------------
+*       boot2_entry      loader   stage 2's entry, offset 0 by the `jmp` the section opens with
+*       boot2_end        loader   the blob's length marker (kbld_blob, BOOT2_PAD's guard)
+*       read_run         loader   the bounded int 13h read, both stages' runs
+*       kz_*             loader   the packed tail's expander and its two callers (SPEC.md 2.9.13)
+*       b2_*             loader   the loader's own state, message and geometry
+
+# --- splash (kernel/splash.inc) ----------------------------------------------
+*       spl_*            splash   the loading screen and the status line's machinery (one module prefix)
+*       splf_*           splash   its far entries for kmain_o and dsk_xfer's per-sector tick
+
+# --- probe: what the first tick runs before anything else is expanded --------
+*       vid_detect       probe    the adapter probe the splash's first tick makes (splash.inc)
+*       bvs_apply        probe    VID_APPLY's boot copy: the first tick's geometry publish
+*       bvs_vtab         probe    bvs_apply's own table (VID_APPLY's expansion)
+*       vid_init         probe    kmain_o's re-run of vid_detect + bvs_apply, B2CALL from `.boot3`; it near-calls both, so it lives beside them
+
+# --- status: read through the blob's CS by spl_mcs ----------------------------
+*       ovl_spl_*        status   the status line's caption entries (SPEC.md 15.6), B2CALL from kmain_o and drv_boot_x
+big,mega,emu bdt_*       status   DRV_TITLES' boot copy: drv_boot_x hands spl_mcs a BLOB offset (bdt_base)
+
+# --- residue -----------------------------------------------------------------
+big,mega,emu ovl_fdd_cylok residue the loader's b2_cylok read through the blob's CS for `.boot3`'s ovl_fdd_apply (driver.inc): a label past boot2_entry, which `.boot3` may not name (rule B6, SPEC.md 2.9.13.4)
+big,mega,emu font_init  residue  the ROM font pick (SPEC.md 6.0.1), kmain_o's B2CALL before spl_finish: back from `.boot3` in BOOT3-PLAN 16.16 because `.boot3` rides the PACKED KERNEL.SYS and the blob does not - 208 bytes off the file took the 360KB/720KB stage 2 from 12 int 13h calls back to 11 after the elendilon merge, inside the blob's fixed seven sectors (no blob call added). Its clock (FONT_TIMERS .fi) is local to it. It took the place of bvs_apply_f, the 4-byte far door BOOT3-PLAN 16.17 retired by making bvs_apply far itself, so RESIDUE_MAX did not move. kern_small keeps it in `.boot3` (its disks read 7 calls either way). Out again, and RESIDUE_MAX down, when the file has the room

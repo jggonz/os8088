@@ -1424,8 +1424,10 @@ def leg_xtclu():
 # -----------------------------------------------------------------------------
 def patch_file_in_image(img, src, at, xor=0xFF):
     """flip one byte AT bytes into the file whose first 512 bytes are SRC's,
-    in the image on the host - under a running guest, which reads it next
-    time through int 13h (QEMU caches nothing of a raw image)"""
+    in the image on the host. QEMU caches nothing of a raw image, but the
+    GUEST does: SPEC.md 18.95's sector cache holds what the fingerprint read,
+    so a byte changed here is not seen until that copy goes - which is what
+    `change_under` is for"""
     with open(img, "r+b") as f:
         data = f.read()
         o = data.find(src[:512])
@@ -1435,6 +1437,43 @@ def patch_file_in_image(img, src, at, xor=0xFF):
         b = data[o + at]
         f.write(bytes([b ^ xor]))
     return True
+
+
+def change_under(r, patch, tries=20):
+    """change the medium under a running CONVERSION, at a guest-state point
+    rather than a host moment: the guest is STOPPED, the job is confirmed
+    still converting with room to go (`pct` under 90, no cache fill in
+    flight), the image is patched on the host, and SPEC.md 18.95's sector
+    cache is dropped - all of it - as a full mount would drop it (18.95's
+    third rule), since a change no disk_write made is one dsk_rah_wr never
+    hears of. Without the drop the fingerprint's re-read at finalisation is
+    answered from the chunk the FIRST read cached, the source reads
+    unchanged and the job finishes - which is not XTMP3's defect: every
+    change the machine itself can make to a cached volume is a write, and
+    every write invalidates. Then the guest runs on (os88qemu.poke's detach
+    resumes it). out: (ok, why) - why '' when the change landed"""
+    tab = S("dsk_rah_tab")
+    n = S("dsk_rah_next") - tab         # the table, however many slots it has
+    busy = S("dsk_rah_busy")
+    for _ in range(tries):
+        r.hmp("stop")
+        try:
+            s = r.st()
+            if s["md"] != MD_CONV or s["state"] != ST_DECODE:
+                return False, "state %d md %d pct %d before the change" % (
+                    s["state"], s["md"], s["pct"])
+            if s["pct"] >= 90:
+                return False, "pct %d: too near the end to change it" % (
+                    s["pct"])
+            if not r.read(busy, 1)[0]:      # (else a fill between its read
+                if not patch():             # and its record: let it land)
+                    return False, "the source is not in the image"
+                os88qemu.poke(r.hmp, tab, bytes(n))     # (resumes the guest)
+                return True, ""
+        finally:
+            r.hmp("cont")
+        gpace(0.05)
+    return False, "a cache fill was in flight at every try"
 
 
 def leg_chgsrc():
@@ -1457,9 +1496,11 @@ def leg_chgsrc():
         r.until(lambda: r.st()["md"] == MD_CONV and r.st()["pct"] > 10,
                 "the conversion under way", 90)
         check(leg, "it converts", r.st()["state"] == ST_DECODE)
+        ok, why = change_under(r, lambda: patch_file_in_image(
+            os.path.join(r.tmp, "b.img"), src, 600))
         check(leg, "the source changed under it (a byte of its first 16 KB, "
-              "on the host)", patch_file_in_image(
-                  os.path.join(r.tmp, "b.img"), src, 600))
+              "on the host, the guest stopped mid-conversion and its sector "
+              "cache dropped)", ok, why)
         r.until(lambda: r.st()["md"] != MD_CONV, "the end of the job", 300,
                 0.5)
         s = r.st()

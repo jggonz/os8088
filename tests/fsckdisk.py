@@ -631,21 +631,48 @@ def leg3(work, fails):
         flush = os88flush.Flush(marty=m)
         gen = m.sym("dsk_wgen") + 1                     # B:'s
         ui.path("B:/SYSCHECK.O88")
-        m.key("ArrowDown")
-        os88marty.guest_sleep(m, 0.5)
-        m.key("Digit2")                                 # Check the disk
-        os88marty.guest_sleep(m, 0.5)
+        # EACH KEY TAKEN before the next, the guest's word for it rather
+        # than a half-second guess: under a soak's load this leg wrote no
+        # report at all - the run was never started (2026-11-07)
+        os88marty.ui_done(m, "System Check's chooser")
+        for k in ("ArrowDown", "Digit2"):               # B:, Check the disk
+            os88marty.key_taken(m, k)
+        # "SOMEBODY WROTE B:" AT A STEP BOUNDARY, EXACTLY. fsk_step compares
+        # the generation against the one the LAST step ended on, so a bump
+        # that lands while a step is running is absorbed into that step's
+        # record and only one in the gap between two steps is seen. This
+        # leg bumped on a clock - sixteen times a quarter guest second apart,
+        # then on and on - and lost that race 1 run in 2 with four copies at
+        # once (a whole-tier soak, 2026-11-07): the run said `No problems
+        # found`. So the bump is made at the cell itself, stopped at
+        # osapi_vol_check with AL = FSK_STEP: BEGIN has recorded the
+        # generation, and this step's first act is to compare it.
+        cell = m.sym("osapi_vol_check")
+        m.bp_exec(cell)
         m.key("Enter")
-        for _ in range(16):                             # "somebody wrote B:",
-            os88marty.guest_sleep(m, 0.25)              # again and again: one
-            g = m.read(gen, 1)[0]                       # before the run's
-            m.write(gen, bytes([(g + 1) & 0xFF]))       # BEGIN is harmless,
-        before = m.read(gen, 1)[0]                      # one inside it is not
+        bumped = False
+        for _ in range(400):
+            if m.wait_stop(limit=30.0) != "breakpoint":
+                break
+            if m.regs()["ax"] & 0xFF == 2:              # FSK_STEP
+                g = m.read(gen, 1)[0]
+                m.write(gen, bytes([(g + 1) & 0xFF]))
+                bumped = True
+                break
+            m.run()
+        m.bp_exec()
+        m.run()
+        if not bumped:
+            fails.append("a write mid-run: no FSK_STEP reached "
+                         "osapi_vol_check, so nothing was bumped")
         text = run_task_wait(ui, flush, "Check the disk", fails,
                              also="the disk changed")
         print(text)
         need(fails, text, ["the disk changed - scan again"],
              "a write mid-run")
+        before = m.read(gen, 1)[0]                      # no more bumps: one
+        m.key("KeyR")                                   # more Save Report is
+        os88marty.guest_sleep(m, 3.0)                   # the only writer now
         if m.read(gen, 1)[0] == before:
             fails.append("saving SYSCHECK.TXT onto B: did not move B:'s write "
                          "generation - disk_write_x does not bump it")
@@ -757,6 +784,14 @@ def run_task_wait(ui, flush, task, fails, also=None, limit=300.0):
         if "Task: " + task in text and (also is None or also in text):
             return text
     fails.append("the %s run never wrote its report" % task)
+    try:                                # what the machine was showing
+        shot = os.path.join(ROOT, "build", "fsckdisk-%d-%s.png"
+                            % (os.getpid(), task.replace(" ", "-")))
+        w, h, px = m.fbuf()
+        os88marty.write_png_rgb(shot, w, h, px)
+        fails.append("(its screen: %s)" % shot)
+    except Exception:                   # noqa: BLE001 - a diagnostic only
+        pass
     return ""
 
 

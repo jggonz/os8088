@@ -170,10 +170,16 @@ docs/plans/completed/WEAVE-PLAN.md §2.9.
   unload, no re-read, no refusal after open. That is the whole difference
   from an overlay and it is what makes the module callable from the worker.
 - **DS is the caller's on entry and the module never changes it for the
-  caller.** Inside a call the module switches DS to the canvas claim for the
-  body's duration and restores it — `wvm.inc`'s own idiom (§4.12) — and its
-  own constants are reached `cs:`-relative. It holds **no** package-DS
-  pointer across a call.
+  caller.** Inside a call the module switches DS to its OWN DATA SEGMENT for
+  the body's duration and restores it: the word at `WSS_MYDS` in its state
+  block, which the package stamps (`wcv_bindmod`) before the first verb and
+  again whenever the claim moves. That is the claim's segment - CS's value on
+  a real-mode kernel - and on kern_mega the claim's DATA selector, where CS
+  is a read-only code alias: the module took DS from CS (`push cs / pop ds`,
+  and a `cs:` store) until ABI 3, two completed #GP fixups a verb and ~110
+  verbs a second of PONG (docs/plans/KERN-MEGA-PLAN.md 14.163). ES = its
+  own data is `push ds / pop es` for the same reason. It holds **no**
+  package-DS pointer across a call.
 
 **The layout.** The module begins with an 8-byte header, and the entry point
 is at a fixed offset so the package can far-call it with a dword it assembles
@@ -182,7 +188,7 @@ itself:
 | offset | size | field |
 |---|---|---|
 | +0 | 2 | magic `0x5357` (`'W','S'` little-endian) |
-| +2 | 2 | ABI number — `WSM_ABI` (currently 2), from `apps/weave/wsmabi.inc`, which BOTH assemblies `%include`. Bumped for ANY change to a verb, a register contract or a layout in §6.10.3–§6.10.4 |
+| +2 | 2 | ABI number — `WSM_ABI` (currently 3: `WSS_MYDS`, above), from `apps/weave/wsmabi.inc`, which BOTH assemblies `%include`. Bumped for ANY change to a verb, a register contract or a layout in §6.10.3–§6.10.4 |
 | +4 | 2 | the module's own size in bytes, from its last label |
 | +6 | 2 | the byte offset of the module's STATE BLOCK (§6.10.4) within the module image |
 | +8 | — | **the entry**: `WSM_ENTRY` = 8, far-called, `AL` = verb (§6.10.3) |
@@ -450,7 +456,7 @@ which are simply right again.
 | the VM claim (§4.7) | `w_vmseg`; `wvm_vmseg` | from the end of the open |
 | the grid claim (§5.6) | `w_gseg`; the FX VM's `wfx_gseg` | from the end of the open |
 | the canvas claim (§6.10.4) | `w_cseg`; the core's `WSS_CVSEG` | from the end of the open |
-| the canvas core, part 0 (§1.2.2) | `w_cmseg`; the parts row's `zkb` (`os88_part_seg`'s answer, `w_partmv`); `wcv_vec` (its CODE selector, re-derived from crt0's banked `cc_cpuf`, since a proc may not call the kernel) | until the worker is hired - then **pinned, bucket C**, for the rest of the instance |
+| the canvas core, part 0 (§1.2.2) | `w_cmseg`; the parts row's `zkb` (`os88_part_seg`'s answer, `w_partmv`); `wcv_vec` (its CODE selector, re-derived from crt0's banked `cc_cpuf`, since a proc may not call the kernel); the core's own `WSS_MYDS`, its data segment, which `wcv_bindmod` stamps in the same call | until the worker is hired - then **pinned, bucket C**, for the rest of the instance |
 | the region | `wvm_ourds`, the DS a slice hands a native - **`CC_ONMOVE_REGION`** (SPEC.md §73.14.2.1) has the region's proc call `os88_onmove` too | always (crt0 declares it; the worker is restartable, `w_chire`) |
 | the overlay, part 1 | crt0's `cc_ovreloc` (§73.14.2.1) | always |
 | `saveState`/`loadState`'s 8KB | - | **pinned, bucket C**: claimed, filled, written (or read) and freed inside one native |
@@ -1700,6 +1706,16 @@ Eval-stack overflow (64 cells, locals included) and frame overflow (call
 depth 16) stop the handler with §10.6's sentence. The CPU stacks (1,024
 UI / 384 worker) never carry VM state.
 
+**A refusal leaves at the slice's own depth.** Every refusal funnels through
+`wvm_exit` to the slice's return, and some are taken inside a helper - an
+eval-stack overflow is `wvm_pushv`'s, inside CALL's fill of the locals with a
+word of CALL's pushed above its return address - so `_wvm_slice` puts SP
+back to the depth its entry banked (`wvm_ssp`, not BP, which a native may
+lose) before it pops what it banked. Until it did, that
+overflow returned to C through a saved register; `vmcorpus/12errstk.wjs` is
+the case (a frame of an argument and five locals: some ten calls deep it
+overflows), and the base hangs on it.
+
 **The 128 bytes at 0x0800 are reserved, not the FX eval stack.** The FX
 VM's hot memory is the GRID claim — every `FCELL` and every aggregate reads
 it — and an 8086 has two data segment registers, one of which is the RPN
@@ -1949,6 +1965,18 @@ figure derived from the two shipped interpreter cores' slice arithmetic,
 performance claim ships on emulator evidence alone (docs/TESTING.md,
 docs/FIELD-MACHINES.md). The runtime measures itself: WEAVE's About panel
 and Bundle Info banner `WVM: <n> ops/s (measured)`.
+
+**The VM's own variables are READ through `cs:` and WRITTEN through a data
+segment** - DS-relative in a C entry, where DS is ours, and inside a slice
+through ES = our segment (`[cs:wvm_ourds]`), the bundle put back in ES
+before the next fetch. A store through CS is free in real mode and is a
+completed #GP on kern_mega, whose CS is a read-only code alias: ~880 clocks
+on a 286, and the VM paid it per staging word of every native call, per
+CALL and RET, per string descriptor and per slice - ~1,660 a second of
+PONG.WAB (docs/plans/KERN-MEGA-PLAN.md 14.163). The dispatch loop above
+is untouched; the ES load costs an 8088 ~20 clocks only where no store it
+replaces pays for it, on paths that are already a native call, a CALL/RET,
+a string or a slice's end.
 
 **How the banner is measured, pinned.** Only **exhausted** slices are
 counted, which is §4.10's own rule and the only honest window: a slice that

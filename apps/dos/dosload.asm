@@ -431,7 +431,7 @@ dsl_entry:
     pop es
     stc
     ret
-dsl_s_notpm: db "DOS.O88 is kern_mega's", 0
+TOASTSTR dsl_s_notpm, "DOS.O88 is kern_mega's"
 dsl_pmok:
 %endif
 %ifdef DOS_WIN16
@@ -453,7 +453,8 @@ dsl_pmok:
     ; bar. op_load's and op_fetch's own begins are refused as nesting. A
     ; document's probe (dsl_w16) has begun it already, with its cluster in it;
     ; .out, the one exit, ends it
-%ifndef DOS_MEGA
+%ifdef DOS_WIN16                ; (headless needs a LINK, and only the WIN16 arm reads one -
+%ifndef DOS_MEGA                ; and never kern_mega's, whose DOS has no window part)
     ; **HEADLESS: THE WINDOW IS NEVER CLAIMED** (SPEC.md 96.44.20). The table
     ; is this image's, which is per-instance RAM, and op_size sizes the carve
     ; from the EAGER rows alone - so one bit makes part 1 a lazy row nobody
@@ -465,6 +466,7 @@ dsl_pmok:
     or byte [op_table + OP_T_ROWS + DOS_PART_WIN * OP_ROW + OP_R_FLAG], OP_LAZY
     call dsl_opend                  ; the probe's bar counted the window it
 .win:                               ; will not read: begun again, below
+%endif
 %endif
 %ifdef DOS_WIN16
     cmp byte [dsl_opok], 0
@@ -508,6 +510,15 @@ dsl_pmok:
     add di, DSLH_COREROW            ; **AND THE CORE'S**, because the stub reads
     mov si, dsl_crow                ; BOTH on the way to arm 3 (SPEC.md
     call dsl_cpy                    ; 96.44.5.4): kern_dos's image has a hole
+%ifdef DOS_MEGA
+    mov di, [es:LD_H_IMG]
+    add di, DSLH_KDLROW             ; ...and the LOW kern_dos's, which the DOS
+    mov al, DOS_PART_KDL            ; posts instead of part 2's when its HMA
+    call dsl_row                    ; box is unticked (SPEC.md 96.40.9.2).
+                                    ; BEFORE the document: DSLH_DOC follows
+                                    ; this row on kern_mega, and the copy
+                                    ; below writes at DI, which is left here
+%endif
 %ifdef DOS_WIN16
     mov si, dsl_doc                 ; ...AND THE DOCUMENT, which dsl_w16 took
     call dsl_cpy                    ; with OSAPI_ARG_FILE - read-and-clear, so
@@ -515,12 +526,6 @@ dsl_pmok:
     mov al, [si]                    ; 124.3.1): the 16-byte locator, name[0]
     mov [es:di], al                 ; 0 = launched empty, then the byte that
 %endif                              ; says it was read and is no NE
-%ifdef DOS_MEGA
-    mov di, [es:LD_H_IMG]
-    add di, DSLH_KDLROW             ; ...and the LOW kern_dos's, which the DOS
-    mov al, DOS_PART_KDL            ; posts instead of part 2's when its HMA
-    call dsl_row                    ; box is unticked (SPEC.md 96.40.9.2)
-%endif
     mov di, [es:LD_H_IMG]
     add di, DSLH_HLPROW             ; ...and HELP's text's row, which the host
     mov al, DOS_PART_HELP           ; reads for itself after we are gone
@@ -545,7 +550,11 @@ dsl_pmok:
     call dsl_row                    ; 96.54.9), DI there again, the same way
     mov al, [op_table + OP_T_FMT]
     mov [es:di - OP_ROW], al
+%ifdef DOS_WIN16
     mov al, [dsl_head]              ; ...and LAST, the byte that says this
+%else                               ; (no WIN16, no link probe: never headless)
+    xor al, al
+%endif
     mov [es:di], al                 ; region has no window (DSLH_HEAD, the
 %endif                              ; host's [dos_head], SPEC.md 96.44.20)
 ; --- end DOS_PART_DVW's row ---------------------------------------------------
@@ -588,12 +597,14 @@ dsl_opsz:
     xor dx, dx
     add cx, [op_table + OP_T_ROWS + DOS_PART_CORE * OP_ROW + OP_R_ZKB]
     adc dx, dx
-%ifndef DOS_MEGA
+%ifdef DOS_WIN16
+%ifndef DOS_MEGA                    ; (kern_mega's DOS has no window part)
     cmp byte [dsl_head], 0
     jne .r                          ; ...so the bar counts only a window it
     add cx, [op_table + OP_T_ROWS + DOS_PART_WIN * OP_ROW + OP_R_ZKB]
     adc dx, 0                       ; will claim, read in the same run
 .r:
+%endif
 %endif
     ret
 dsl_opgo:

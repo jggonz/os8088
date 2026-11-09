@@ -608,18 +608,18 @@ static void a2_menu_state(void)
      * monochrome"), not of a flag some later wave sets, so there is nothing
      * for a rewrite to read. `Fast: 3.5MHz` USED TO SAY "this machine runs at
      * 1.02 MHz", which is a claim about the MACHINE that the status row's own
-     * measured figure refutes by 3.8x on the host this is developed on: there
-     * is no throttle here at all, and a2_slice simply runs a2_budget cycles a
-     * wake.
+     * measured figure refuted by 3.8x on the host this is developed on, when
+     * the port had no throttle (it is held to 1.02 MHz since section 4.3.3,
+     * and is still below it on an XT).
      * What they DID need is the two-glyph column, which rule 5 above has, and
      * they carry it in the literal. Mute is the opposite case and is
      * rewritten below, because a2_have_snd is exactly such a flag. */
     /* `Normal: 1MHz` IS MARKED FROM THE MEASUREMENT, which is MII's own rule
      * (mii_mui_menus.c:165-170: the mark goes on only while the measured speed
-     * is between 0.9 and 1.1). There is no throttle in this build, so on the
-     * host this is developed on the row is UNMARKED and the status row's
-     * figure is why; on the 4.77 MHz XT the port targets it will be unmarked
-     * the other way. Ticking it unconditionally asserted a speed the same
+     * is between 0.9 and 1.1). The machine is throttled to 1.02 MHz (section
+     * 4.3.3), so where it can keep up the row is marked; on a 4.77 MHz XT,
+     * and on a 286 running a program, it is unmarked the slow way and the
+     * status row's figure is why. Ticking it unconditionally asserted a speed the same
      * screen refuted. a2_speed_fold calls this routine when a2_pct moves. */
     m = 0;
     if (a2_pct >= 90)

@@ -1,0 +1,332 @@
+{
+ "area": "gap-os88ui-kernel-copy",
+ "title": "apps/os88ui.inc: the standard controls the KERNEL assembles into itself (OS88UI_KERNEL)",
+ "summary": "The kernel's copy of os88ui.inc is not one .cold blob: kern_big/kern_mega put 1,089 bytes in .cold, 278 in CTRL.DRV's .modu (the glyph) and 56 in .bss; kern_small puts only the 459-byte scroll bar in .cold, with the button in CTRL.DRV and FDLG.DRV and 42 bytes of .bss; nothing lands in .text. The design and the single-scratch invariant hold. Verified problems: the button fills its interior and letters the caption one or two frame calls later (SPEC 13.14.6 rule 1); os88ovlchk cannot see `%1:` bodies or `section OS88UI_KGLYPH`, so the KBTNIMG/KGLYPH split is safe by inspection only; about 35 resident bytes are free on kern_big with no ABI change (constant kbtn record, the arm_f shim, the dead OS88UI_FILL loads - one of which needs hoisting); and the commentary about the kernel copy was stale in some twenty places, corrected here.",
+ "strengths": [
+  {
+   "title": "One source, two worlds, through a macro layer rather than a fork",
+   "why": "The kernel arm is cheaper than the package arm (UI_ISMONO one cmp; UI_INK a store), the body stays one source, and OS88UI_KFAR gives a block in a module image far primitives without a second body",
+   "evidence": "apps/os88ui.inc:113-274"
+  },
+  {
+   "title": "kern_small pays nothing resident for a button",
+   "why": "OS88UI_KBTNIMG expands the button into the only two images that draw one; resident .cold on kern_small holds the scroll bar alone",
+   "evidence": "kernel/fdlg.inc:1281-1300; build/smallk/kernel.map .cold 4AF0-4CBB"
+  },
+  {
+   "title": "The .bss rule for kernel scratch is recorded at the point it bites",
+   "why": "os88ui_krect's comment carries the sch_isr incident, and every later scratch follows it",
+   "evidence": "apps/os88ui.inc:6531-6597"
+  },
+  {
+   "title": "The scroll bar is geometry, not policy, with Control-Manager part codes",
+   "why": "sbhit returns part codes and leaves action to the caller; the thumb is bordered before it is filled (13.10.5.9)",
+   "evidence": "apps/os88ui.inc:2333-2380; SPEC.md 13.10.5.9"
+  },
+  {
+   "title": "Meaningless option combinations do not assemble",
+   "why": "BIMG, BOWN, NOGLYPH, KGLYPH and others %error in the wrong world",
+   "evidence": "apps/os88ui.inc:434-449, 1326-1332"
+  },
+  {
+   "title": "Text is only ever the opaque run",
+   "why": "UI_RUN is the only text macro either arm defines; textsites went 3 -> 0 for this file",
+   "evidence": "apps/os88ui.inc:137-143; SPEC.md 20.5.1.3.1"
+  },
+  {
+   "title": "The single-scratch invariant holds by census",
+   "why": "Every writer of os88ui_krect/krec/ksb/armw is a UI-task painter or callback, followed at once by its one consumer",
+   "evidence": "kernel/fdlg.inc, files.inc, ctrl.inc, shutdown.inc, hiber.inc (census re-checked by grep)"
+  }
+ ],
+ "findings": [
+  {
+   "id": "F1",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The kernel's standard button fills its interior, frames it, and letters the caption afterwards",
+   "detail": "OS88UI_BTN_BODY: UI_INK, UI_FILL of the interior, UI_PEN, UI_FRAME, a second UI_FRAME for the default ring, UI_WIDTH, then UI_RUN. Every caption cell is written twice with one or two gfx_frame calls (plus a pen call) between the writes - SPEC.md 13.14.6 rule 1 and the file's own DRAWING RULE 1; os88ui_sbthdraw was reordered for this same interval (13.10.5.9) and the button never was. It runs on every kernel button draw and in every package copy not built OS88UI_BIMG.",
+   "evidence": [
+    "apps/os88ui.inc:806-911",
+    "apps/os88ui.inc:66-72",
+    "apps/os88ui.inc:2333-2380",
+    "SPEC.md 13.14.6, 13.10.5.9, 20.5.1.3.1"
+   ],
+   "recommendation": "Pen, frame and ring first; measure and centre the label; then fill the interior and run the caption at once. The kernel arm must bank the [gfx_color] caption ink before the fill's ink store, and CX/DX across the fill. Prove with a fill/run call recorder or m.flicker() on a Disk window header press. Rows: tests/btnall.py, disp*.",
+   "phase": "now",
+   "bytes_est": "+8 to +12 per copy (kern_big/kern_mega .cold resident; kern_small module copies; each package); 0 calls",
+   "verdict": "confirmed",
+   "verify_note": "Re-read os88ui.inc:806-911: fill (UI_FILL) precedes UI_PEN, UI_FRAME, the DEF ring UI_FRAME and UI_WIDTH, and UI_RUN comes last; the fill covers the caption cells. Not listed in ABI-BREAK-LIST/KERNEL-BYTE-QUEUE (no os88ui rows); SPEC 20.5.1.3.1 makes the fill unconditional but says nothing about its order, so it is not a deliberate choice. Note the reorder shrinks the interval to zero drawing calls but still writes the caption cells twice (fill then opaque run)."
+  },
+  {
+   "id": "F2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "os88ovlchk cannot see the KBTNIMG/KGLYPH split it is cited as guarding",
+   "detail": "(a) OS88UI_BTN_BODY/KBTN_BODY/BHIT_BODY define their routine as a bare `%1:`; LABEL needs a letter first and TLABEL needs `%1 %+ suffix:`, so os88ui_btn/kbtn/bhit and fdb_* never enter the label map and calls to them go untested - on kern_small a resident near call to os88ui_kbtn would pass make. (b) SECT requires `section .\\w+`, so `section OS88UI_KGLYPH` is not read and the glyph block is filed under EXTRA's .cold; CPXN hides the panel's legal call. (c) UI_HLINE (`call ct_cw_gfx_hline`, near) has no OS88UI_KFAR arm.",
+   "evidence": [
+    "tools/os88ovlchk.py:116 (EXTRA), 152 (SECT), 164 (LABEL), 189 (TLABEL)",
+    "apps/os88ui.inc:644, 1281, 6620 (`%1:`), 1330 (section OS88UI_KGLYPH)",
+    "kernel/ctrl.inc:267-273 (CPXN)",
+    "apps/os88ui.inc:177-179 (UI_HLINE)"
+   ],
+   "recommendation": "Tooling only: let TLABEL accept a bare `%1:`; resolve `section <macro>` through the includer's %define (or a marker) and retire CPXN; give UI_HLINE a KFAR arm or %error it under OS88UI_KFAR. Prove by planting a resident `call os88ui_kbtn` under KERN_SMALL and watching make go red.",
+   "phase": "now",
+   "bytes_est": "0 shipped bytes",
+   "verdict": "corrected",
+   "verify_note": "(a) and (b) confirmed against the regexes at os88ovlchk.py:152/164/189 and the three `%1:` bodies at os88ui.inc:644/1281/6620; ctrl.inc:267-270 itself says CPXN exists because the scan files the glyph as .cold. (c) is half wrong: UI_GRAY is already `call KERNEL_SEG:cw_gfx_fill_gray`, an absolute far call that is correct from any image, so it needs no KFAR arm; only UI_HLINE (near ct_cw_gfx_hline) is a hazard."
+  },
+  {
+   "id": "F3",
+   "kind": "size",
+   "severity": "low",
+   "title": "os88ui_kbtn rebuilds a fully constant one-button record on every call",
+   "detail": "KBTN_BODY stores BT_RECTS=BX, BT_LABELS, BT_FLAGS, BT_N=1 and BT_DOWN=0 each call; every caller passes BX=os88ui_krect, so all are constant. An initialised record replaces the stores.",
+   "evidence": [
+    "apps/os88ui.inc:6619-6636",
+    "apps/os88ui.inc:6550-6553",
+    "kernel/files.inc:3369-3370; kernel/fdlg.inc:1108-1112; kernel/ctrl.inc:2832; kernel/shutdown.inc:237; kernel/hiber.inc:1109",
+    "build/kernel.map os88ui_kbtn (49 bytes)"
+   ],
+   "recommendation": "Make os88ui_krec an initialised .text record {os88ui_krect, os88ui_krlbl, os88ui_krflg, 1, 0, 0}, change kbtn's contract to 'the rect is os88ui_krect', drop the callers' dead `mov bx, os88ui_krect`.",
+   "phase": "now",
+   "bytes_est": "about -28 resident kern_big/kern_mega; kern_small about -4 resident and about -24 in each of CTRL.DRV and FDLG.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Every caller's BX is os88ui_krect (fdlg 1108, files 3369, cp_krect 2832 into cp_bemit, sd_rect 237, hbm_btnrect 1109); nothing else writes os88ui_krec; os88ui_btn only reads BT_DOWN. Not in either byte list."
+  },
+  {
+   "id": "F4",
+   "kind": "size",
+   "severity": "low",
+   "title": "os88ui_arm_f is a 4-byte resident .cold shim both callers can do without",
+   "detail": "Callers are cp_kinit (.text) and the panel's press in CTRL.DRV; both run with DS=KERNEL_SEG and os88ui_armw is .bss, so `mov [os88ui_armw], ax` (3 bytes) replaces `call COLD_SEG:os88ui_arm_f` (5 bytes), as files.inc already writes the word directly.",
+   "evidence": [
+    "apps/os88ui.inc:6665-6671",
+    "kernel/ctrl.inc:330, 1399",
+    "kernel/files.inc:3866",
+    "build/kernel.map cp_kinit AC9B (.text), os88ui_arm_f DFC1"
+   ],
+   "recommendation": "Replace both far calls with the store and delete os88ui_arm_f.",
+   "phase": "now",
+   "bytes_est": "-4 .cold, -2 .text, -2 CTRL.DRV (kern_big/kern_mega); 0 kern_small",
+   "verdict": "confirmed",
+   "verify_note": "os88ui_arm is `mov [os88ui_armw], ax / ret` (os88ui.inc:1804-1806); AX is the value at both sites (xor ax,ax at 329; the press index at 1398); the cp_kinit site is %ifdef KERN_BIG. Byte arithmetic checks."
+  },
+  {
+   "id": "F5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The scroll-bar drag identity (x1,y1) assumes bars cannot share a corner; Disk windows can",
+   "detail": "os88ui_sbmine identifies the drag's bar by (x1,y1). fm_sbset fills the one block for every Disk window; two with the same right edge and content top share x1,y1 while one hides the other's corner, and a damage repaint of the hidden one mid-drag would run sbfix and draw its thumb at the dragged pos where it is visible.",
+   "evidence": [
+    "apps/os88ui.inc:2868-2904",
+    "kernel/files.inc:3412-3452, 3356-3361",
+    "SPEC.md 13.10.5.10"
+   ],
+   "recommendation": "Bank [fm_vp] at the grab and call os88ui_sbfix in fm_sbset only when it matches, or add y2 to the identity.",
+   "phase": "now",
+   "bytes_est": "about +8 .cold kern_big; 0 kern_small (no drag)",
+   "verdict": "confirmed",
+   "verify_note": "Low and geometric coincidence only, but reachable: files.inc:3356-3361 itself says a damage repaint behind a drag reaches other Disk windows, which is why fm_btn1 tests window identity. SPEC 13.10.5.10's 'cannot share a top-left corner' holds only for two VISIBLE bars."
+  },
+  {
+   "id": "F6",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "OS88UI_FILL is a dead flag that seven kernel sites still load",
+   "detail": "The body fills unconditionally; the kernel loads `mov di, OS88UI_FILL` (3 bytes) at seven sites where `xor di, di` (2) would do; fdlg.inc %errors on arithmetic nothing reads; the equ's comment describes it as live.",
+   "evidence": [
+    "apps/os88ui.inc:276-294, 671-698",
+    "kernel/ctrl.inc:3015, 4302, 5806; kernel/fdlg.inc:1073, 1276-1277; kernel/files.inc:3348; kernel/hiber.inc:1147; kernel/shutdown.inc:257"
+   ],
+   "recommendation": "xor di,di at the sites (hoisting the one at ctrl.inc:4302 above `call cpf_vidok`), drop FILL from fdlg.inc's %error, mark the equ historical.",
+   "phase": "now",
+   "bytes_est": "-7 kern_big (2 .cold, 4 CTRL.DRV, 1 HIBER.DRV); -5 kern_small",
+   "verdict": "corrected",
+   "verify_note": "Confirmed dead, but not a blind substitution: at ctrl.inc:4302 the load sits between `call cpf_vidok` (returns CF) and `jnc .live`, and `xor di, di` would clobber that CF - that site must move the clear above the call (if cpf_vidok preserves DI) or keep the mov. fdlg_blabel's `inc di` arithmetic still works from 0 (DIS=1, DEF=2). The equ comment is fixed below as a doc fix."
+  },
+  {
+   "id": "F7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "28 bytes of kern_small resident .bss serve only CTRL.DRV and FDLG.DRV",
+   "detail": "os88ui_krect/krlbl/krflg/krec stay resident on kern_small because the KFAR body reads them through DS=KERNEL_SEG.",
+   "evidence": [
+    "build/smallk/kernel.map 7ECF-7EF9",
+    "kernel/fdlg.inc:1289-1291"
+   ],
+   "recommendation": "Record only.",
+   "phase": "record",
+   "bytes_est": "-28 resident kern_small if ever done; not proposed",
+   "verdict": "confirmed",
+   "verify_note": "fdlg.inc:1289-1291 states the record stays in .bss and is read through DS; spans not re-measured."
+  },
+  {
+   "id": "F8",
+   "kind": "perf",
+   "severity": "low",
+   "title": "A full scroll-bar paint greys the track under the thumb before drawing the thumb",
+   "detail": "os88ui_sbar lays UI_GRAY over the whole track then calls sbthdraw; sub-call interval, and splitting would add a call.",
+   "evidence": [
+    "apps/os88ui.inc:2287-2302"
+   ],
+   "recommendation": "Record; do not change.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: UI_GRAY over the whole track, then sbthumb and sbthdraw."
+  },
+  {
+   "id": "R1",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Export the scroll bar (not the button) as appended API cells",
+   "detail": "The scroll bar is pure geometry over a 7-word block, resident on all three kernels, calling no package code; an appended X-cell family needs no PKG_FMT bump and would save about 500-840 image bytes per bar-using package against about +60 resident per kernel. The button is not a candidate (its gesture calls package near procs).",
+   "evidence": [
+    "apps/os88ui.inc:2123-3015",
+    "build/*.map os88ui_sb* spans",
+    "docs/plans/ABI-BREAK-LIST.md section A"
+   ],
+   "recommendation": "Add as an A-section candidate row so a future 360KB squeeze need not re-derive it; do not take it today.",
+   "phase": "record",
+   "bytes_est": "about +60 resident per kernel; about -500 to -840 per bar-using package image",
+   "listed_as": "not listed",
+   "verdict": "plausible",
+   "verify_note": "Not listed in ABI-BREAK-LIST.md or KERNEL-BYTE-QUEUE.md (grep for os88ui/kbtn/krect/arm_f: none). Package span figures and the +60 estimate were not re-measured."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; Included ONCE, into `.cold`, with OS88UI_KERNEL defined. Cold because that\n; is where its callers are (fdlg.inc and ctrl.inc are cold in their entirety);\n; .text reaches it through the one far entry at the bottom of this file, which\n; is the fdf_/cpf_ pattern. DS is KERNEL_SEG in both worlds, so the data word\n; below needs no override either way.",
+   "new_text": "; Included ONCE, from fdlg.inc, with OS88UI_KERNEL defined, and most of it\n; lands in `.cold`: the button, its hit test and the arm on kern_big, and the\n; scroll bar on both kernels. The check-box and radio glyph goes into CTRL.DRV's\n; image instead (OS88UI_KGLYPH = .modu) on both, and on kern_small the button\n; is expanded into CTRL.DRV and FDLG.DRV (OS88UI_KBTNIMG) and is not resident\n; at all. On-demand images reach the `.cold` bodies through their own far hops\n; (CPXC, HBGC); os88ui_arm_f, the one far entry at the bottom of this file, is\n; the Control Panel's. DS is KERNEL_SEG in both worlds, so the data word below\n; needs no override either way.",
+   "why": "ctrl.inc is CTRL.DRV (an on-demand module), not cold; the glyph is in CTRL.DRV's .modu (fdlg.inc OS88UI_KGLYPH = .modu); kern_small expands the button into CTRL.DRV/FDLG.DRV (fdlg.inc:1281-1296) and resident .cold holds only the scroll bar (smallk map 4AF0-4CBB); .text reaches nothing here (no apps.inc caller); os88ui_arm_f is reached from cp_kinit and CTRL.DRV."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; Every kernel caller builds its rect here and calls straight into os88ui_btn,\n; which only READS it - so one scratch serves the file dialog, both Control\n; Panel pages and the Timer.",
+   "new_text": "; Every kernel caller builds its rect here and draws it through os88ui_kbtn,\n; or hit-tests it, and neither writes it - so one scratch serves the file\n; dialog, the Disk window's header buttons, every Control Panel page and the\n; shutdown card, and the hibernate dialog.",
+   "why": "Callers go through os88ui_kbtn (files.inc:3369-3370, fdlg.inc:1108-1112, ctrl.inc cp_bemit, shutdown.inc:269-271, hiber.inc:1163) and hit-test the same rect; the Timer is a package and kernel/apps.inc has no os88ui reference."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; os88ui_btn_f / os88ui_glyph_f - the far entries (SPEC.md 2.6)\n;\n; The bodies above are near procs in .cold, which is where MOST of their\n; callers are - fdlg.inc is cold in its entirety. Two kinds of caller are\n; not, and both reach them through here, the same fdf_/cpf_ shape every other\n; crossing in this kernel uses: apps.inc, which is .text (the Timer's button),\n; and ctrl.inc, which is an ON-DEMAND MODULE now (SPEC.md 2.8) and so runs\n; from a heap claim with a CS of its own.\n;\n; The Control Panel is why the glyph entry exists. Its eleven near calls to\n; os88ui_glyph and os88ui_btn were legal for as long as ctrl.inc was cold and\n; became a jump into its own image the day it stopped being - which\n; tools/os88ovlchk.py could not see, because it globbed kernel/*.inc and this\n; file is not one. It scans this file now; that is the more important half of\n; the fix, and the EXTRA table there is where a third such file goes.\n;\n; Packages never see either: both are inside %ifdef OS88UI_KERNEL.",
+   "new_text": "; the far entries (SPEC.md 2.6) - and of the three this block once held, only\n; os88ui_arm_f below is left\n;\n; os88ui_btn_f and os88ui_glyph_f served the callers that are not in `.cold`:\n; apps.inc's Timer button, which is a package now, and ctrl.inc once it became\n; an ON-DEMAND MODULE (SPEC.md 2.8) with a CS of its own. The Control Panel's\n; near calls to os88ui_glyph and os88ui_btn were legal for as long as ctrl.inc\n; was cold and became a jump into its own image the day it stopped being -\n; which tools/os88ovlchk.py could not see, because it globbed kernel/*.inc and\n; this file is not one. It scans this file now, and the EXTRA table there is\n; where a third such file goes.\n;\n; Packages never see any of it: it is all inside %ifdef OS88UI_KERNEL.",
+   "why": "Neither os88ui_btn_f nor os88ui_glyph_f exists (the same block says so at os88ui.inc:6659-6663 and 6673-6675) and kernel/apps.inc has no os88ui reference; os88ui_arm_f is the only far entry left."
+  },
+  {
+   "file": "kernel/fdlg.inc",
+   "old_text": "; Its kernel copy is SHARED: apps.inc stages os88ui_krect, files.inc and\n; ctrl.inc draw with it, and os88ui_btn / _arm / _armed / _fire / _krect are\n; used by five other files between them. Moving it into FDLG.DRV would take\n; the standard controls off every one of them, so it stays here, the image\n; far-calls in through fdx_go (and os88ui_btn_f), and tools/os88ovlchk.py's own\n; `EXTRA` table - which files this include as `.cold` - stays true.",
+   "new_text": "; Its kernel copy is SHARED: files.inc, ctrl.inc, shutdown.inc and hiber.inc\n; stage os88ui_krect and draw through os88ui_kbtn, and files.inc, ctrl.inc and\n; this file use os88ui_bhit / _arm / _armed / _fire between them (files.inc the\n; scroll bar too). Moving it into FDLG.DRV would take the standard controls off\n; every one of them, so it stays here - on kern_small the button is expanded\n; into CTRL.DRV and this image instead (below) - and tools/os88ovlchk.py's own\n; `EXTRA` table, which files this include as `.cold`, stays true for every\n; block but the glyph (OS88UI_KGLYPH).",
+   "why": "kernel/apps.inc has no os88ui reference; os88ui_krect is data, not a routine; os88ui_btn_f is gone (fdlg.inc:1114 says so); the users are files/ctrl/shutdown/hiber.inc; the glyph block is .modu while os88ovlchk files the whole include as .cold."
+  },
+  {
+   "file": "kernel/fdlg.inc",
+   "old_text": "; **MEASURING THIS FILE: `kernsize --modules` OVERSTATES IT BY ~1,600 BYTES.**",
+   "new_text": "; **MEASURING THIS FILE: `kernsize --modules` OVERSTATES IT BY ~1,400 BYTES**\n; (kern_big; ~1,100 on kern_small).",
+   "why": "Measured spans of os88ui.inc's kernel copy: kern_big 1,089 .cold + 278 .modu + 56 .bss = 1,423; kern_small 459 .cold + 563 .modu + 42 .bss = 1,064 (build/kernel.map DB84-DFC5, F84-109A, ADBC-ADF4; build/smallk/kernel.map 4AF0-4CBB, 312-545, 7ECF-7EF9)."
+  },
+  {
+   "file": "kernel/fdlg.inc",
+   "old_text": "; the shared control, resident on BOTH kernels, and files.inc, ctrl.inc and\n; apps.inc reach it as well.",
+   "new_text": "; the shared control - its button and scroll bar resident in `.cold` on\n; kern_big, its scroll bar alone on kern_small, its glyph in CTRL.DRV on both -\n; and files.inc, ctrl.inc, shutdown.inc and hiber.inc reach it as well.",
+   "why": "The glyph is resident on neither kernel (CTRL.DRV .modu) and the button is not resident on kern_small (OS88UI_KBTNIMG); apps.inc has no os88ui reference."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`OS88UI_KERNEL` before including it and its six primitive calls become the\nkernel's own cold-to-text far calls (`cw_gfx_frame`, `cw_gfx_fill`,\n`cw_font_str`, `cw_gfx_pen_cf`, a direct `[gfx_color]` store — and\n`font_width` itself, whose shim went in size pass 2 under §2.6.1 because the\nbody had no near caller of its own); leave it\nundefined and they become `OSAPI_GFX_FRAME`, `OSAPI_GFX_FILL`,\n`OSAPI_FONT_STR`, `OSAPI_FONT_WIDTH`, `OSAPI_GFX_PEN` and `OSAPI_SET_COLOR`.\nNothing else differs. The kernel includes it **once, into `.cold`**, from\n`fdlg.inc`; `ctrl.inc` is cold too and calls it directly, and `apps.inc` is\n`.text` and crosses through `os88ui_btn_f`, a `call`/`retf` shim — the\n`fdf_`/`cpf_` pattern of §2.6.",
+   "new_text": "`OS88UI_KERNEL` before including it and the button's six primitive calls\nbecome the kernel's own (`ct_cw_gfx_frame`, `ct_cw_gfx_fill`,\n`ct_cw_font_run`, `ct_font_width`, `ct_cw_gfx_pen_cf` and a direct\n`[gfx_color]` store, or far calls to `KERNEL_SEG:cw_*` and\n`KERNEL_SEG:font_width` in a block assembled into an on-demand image); leave\nit undefined and they become `OSAPI_GFX_FRAME`, `OSAPI_GFX_FILL`,\n`OSAPI_FONT_RUN`, `OSAPI_FONT_WIDTH`, `OSAPI_GFX_PEN` and `OSAPI_SET_COLOR`.\nThe kernel includes it **once**, from `fdlg.inc`: the button and the scroll\nbar land in `.cold`, the glyph in CTRL.DRV's image, and on `kern_small` the\nbutton is expanded into CTRL.DRV and FDLG.DRV instead (§38.0). CTRL.DRV and\nHIBER.DRV reach the `.cold` bodies through their own far hops (`CPXC`,\n`HBGC`); `os88ui_btn_f`, the `call`/`retf` shim `.text` once crossed through,\nwent in kernel size pass 15.",
+   "why": "The only text primitive is the opaque run (UI_RUN = ct_cw_font_run / OSAPI_FONT_RUN, os88ui.inc:137-143); the kernel arm uses ct_* trampolines (kernel.asm:8098-8108) or KERNEL_SEG far forms under OS88UI_KFAR; the glyph is CTRL.DRV's; ctrl.inc is CTRL.DRV and reaches the bodies through CPXC; apps.inc has no caller and os88ui_btn_f is gone (os88ui.inc:6659-6663)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Draws ONE button of the group: optional white interior, frame, optional default ring 2px out",
+   "new_text": "Draws ONE button of the group: its interior (always: white, or black pressed), frame, optional default ring 2px out",
+   "why": "The interior fill is unconditional and OS88UI_FILL is no longer read (os88ui.inc:806-829; SPEC.md 20.5.1.3.1 'the bit is no longer read at all')."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**§13.15 does not follow rule 1** — it fills its whole rect white and then draws\nframe, mark and label over it. It is named here rather than quietly changed\nbecause it is the file's most-copied routine and the next author will copy it\ntoo; **§13.17 is the one to follow.**",
+   "new_text": "**§13.15 did not follow rule 1 for years** — it filled its whole rect white\nand then drew frame, mark and label over it — and it does now (§13.15.2). It is\nnamed here because it is the file's most-copied routine and the next author\nwill copy it too; **§13.17 is the one to follow.**",
+   "why": "SPEC.md 13.15.2 says os88ui_chk no longer fills its rect (opaque font_run label, the glyph's own 12x12 box); os88ui.inc:86-92 already says so."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "PERFORMANCE.md Part 1 is why. A\ndouble-draw flash and a visible redraw are two of the three things an emulator\ncannot show, and this project has paid for both repeatedly.",
+   "new_text": "PERFORMANCE.md Part 1 is why. A\ndouble-draw flash and a visible redraw never reach a screendump, though on\nMartyPC both are measurable with `m.flicker()` (PERFORMANCE.md Part 3.1), and\nthis project has paid for both repeatedly.",
+   "why": "CLAUDE.md's Performance section and PERFORMANCE.md Part 3.1 retired 'an emulator cannot show': MartyPC's front/back buffer and m.flicker()/m.pace() measure both defects."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "PERFORMANCE.md Part 1 is why: a double-draw\n; flash and a visible redraw are two of the three things an emulator cannot\n; show, and this project has paid for both repeatedly.",
+   "new_text": "PERFORMANCE.md Part 1 is why: a double-draw\n; flash and a visible redraw never reach a screendump, though on MartyPC both\n; are measurable with m.flicker() (PERFORMANCE.md Part 3.1), and this project\n; has paid for both repeatedly.",
+   "why": "The same retired claim as SPEC.md 13.14.6 (CLAUDE.md Performance section; PERFORMANCE.md Part 3.1)."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; build, because kern_small's dialogs still fire on the press (SPEC.md 13.8.3\n; is kern_big's, docs/plans/completed/UIHELPERS-PLAN.md 18) and 40 bytes of .cold plus two of",
+   "new_text": "; build. kern_small's dialogs fire on the release too, but each through a byte\n; of its own - the file dialog's fdlg_down, the panel's DSV_CPUP forward - so\n; the shared arm (SPEC.md 13.8.3 is kern_big's, docs/plans/completed/UIHELPERS-PLAN.md 18)\n; is not needed there, and 40 bytes of .cold plus two of",
+   "why": "kern_small's file dialog arms on the press and fires on the release with fdlg_down (fdlg.inc:1135-1199), and ctrl.inc:311-317 says both kernels install the release, kern_small's forwarding DSV_CPUP; what kern_small lacks is the shared os88ui_armw."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; SPEC.md 13.10.5.10. There is one gesture record and there are two kernel\n; bars, so \"a drag is live\" and \"a drag is live ON THIS BAR\" stopped being the\n; same question the moment the file dialog was wired. Without this,\n; os88ui_sbfix would fix the Disk window's dragged pos into the DIALOG's block\n; - a thumb drawn where nothing is, and a hit test that agrees with it.\n;\n; The identity is (x1, y1), which is enough: two bars on screen at the same\n; time cannot share a top-left corner.",
+   "new_text": "; SPEC.md 13.10.5.10. There is one gesture record and one block, and fm_sbset\n; fills that block for whichever Disk window is being painted - the file\n; dialog's chooser among them - so \"a drag is live\" and \"a drag is live ON THIS\n; BAR\" are different questions. Without this, os88ui_sbfix would fix the\n; dragged window's pos into another window's block - a thumb drawn where\n; nothing is, and a hit test that agrees with it.\n;\n; The identity is (x1, y1): two bars VISIBLE at once cannot share a top-left\n; corner. Two Disk windows with the same right edge and content top can, while\n; one hides the other's corner, and a damage repaint of the hidden one during\n; the drag then takes the dragged pos; the window identity fm_btn1 uses for\n; its pressed button would close that.",
+   "why": "kernel/fdlg.inc draws no scroll bar (no os88ui_sb reference); fm_sbset (files.inc:3412-3452) is the one setter for every Disk window, two of which can share x1,y1; files.inc:3356-3361 already notes a damage repaint behind a drag reaching another window."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "OS88UI_FILL equ 4               ; ERASE THE INTERIOR FIRST - and the question",
+   "new_text": "OS88UI_FILL equ 4               ; HISTORICAL: os88ui_btn erases its interior\n                                ; unconditionally and no longer reads this bit\n                                ; (SPEC.md 20.5.1.3.1); it survives as a flag an\n                                ; OS88UI_OWN painter is handed. What it meant\n                                ; was ERASE THE INTERIOR FIRST - and the question",
+   "why": "os88ui_btn fills unconditionally and never tests the bit; only OS88UI_BOWN ORs it in (os88ui.inc:671-698; SPEC.md 20.5.1.3.1 'the bit is no longer read at all')."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "Set it unless\n                                ; the caller white-fills its content first.",
+   "new_text": "It was set\n                                ; unless the caller white-filled its content first.",
+   "why": "The same: the body ignores OS88UI_FILL, so 'set it unless' is advice nothing reads."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "THE WHITE BOX IS UNCONDITIONAL, where the button's is a flag.",
+   "new_text": "THE WHITE BOX IS UNCONDITIONAL, as the button's interior is now.",
+   "why": "The button's interior fill is unconditional too (os88ui.inc:806-829)."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; ...and the size os88ui_glyph's masked-sprite pass is allowed to be. The\n; record it hands the kernel is `db 1, OS88UI_GW`, and icon_draw_x refuses",
+   "new_text": "; ...and the size os88ui_glyph's masked-sprite pass was allowed to be, when it\n; had one: it draws with fills now (SPEC.md 13.15.1), so this guards only a\n; glyph moved back onto that pass. The record it handed the kernel was\n; `db 1, OS88UI_GW`, and icon_draw_x refuses",
+   "why": "os88ui_glyph calls no icon routine (no UI_ICON/UI_IPEN in the glyph block, os88ui.inc:1330-1692; SPEC.md 13.15.1)."
+  },
+  {
+   "file": "kernel/icons.inc",
+   "old_text": "; os88ui_glyph hands icon_draw_x the constant record `db 1, OS88UI_GW` and has\n; NO fallback",
+   "new_text": "; os88ui_glyph used to hand icon_draw_x the constant record `db 1, OS88UI_GW`;\n; it draws with fills now (SPEC.md 13.15.1) and reaches no icon routine, so the\n; guard below holds only for a glyph moved back onto the sprite pass. It had\n; NO fallback",
+   "why": "os88ui_glyph draws with fills and frames (SPEC.md 13.15.1) and calls no icon routine."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "(the kernel's .cold and\n; twenty-two package images)",
+   "new_text": "(the kernel's CTRL.DRV\n; image and twenty-two package images)",
+   "why": "The kernel's glyph is assembled into CTRL.DRV's .modu (fdlg.inc OS88UI_KGLYPH = .modu; build/kernel.map os88ui_glyph at .modu 1019)."
+  },
+  {
+   "file": "apps/os88ui.inc",
+   "old_text": "; the kernel walks its own rects (fdlg_bhit, fm_bhit)",
+   "new_text": "; the kernel walks its own rects (fm_bhit, fdb_bhit)",
+   "why": "There is no fdlg_bhit anywhere in the tree; kern_small's dialog uses its own expansion fdb_bhit (fdlg.inc:1145, 1300) and kern_big's column is files.inc's fm_bhit."
+  },
+  {
+   "file": "tests/btnsites.txt",
+   "old_text": "(SPEC.md 38) - kern_small's image, which\n                                   # far-calls os88ui_btn_f (os88ui_kbtn's own\n                                   # far entry) since its xd_ thunk went.",
+   "new_text": "(SPEC.md 38) - on kern_small FDLG.DRV draws\n                                   # through its own expansion, fdb_kbtn\n                                   # (OS88UI_KBTNIMG); on kern_big the .cold\n                                   # dialog near-calls os88ui_kbtn.",
+   "why": "FDLG.DRV calls its own fdb_kbtn and kern_big's .cold dialog near-calls os88ui_kbtn (fdlg.inc:1108-1112); os88ui_btn_f exists on no kernel."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`os88ui_btn_f` does not exist on `kern_small`;",
+   "new_text": "`os88ui_btn_f` does not exist on any kernel now (kernel size pass 15 removed\n`kern_big`'s too);",
+   "why": "os88ui_btn_f went in kernel size pass 15 on kern_big as well (os88ui.inc:6659-6663)."
+  }
+ ]
+}

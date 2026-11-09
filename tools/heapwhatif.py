@@ -44,10 +44,13 @@ PARA = 64                                   # paragraphs per KB
 
 
 class C(object):
-    def __init__(self, seg, kb, hi, movable, purge=False):
+    def __init__(self, seg, kb, hi, movable, purge=False, dma=0):
         self.seg, self.para, self.hi = seg, kb * PARA, hi
         self.rloc = 160 if movable else 0
-        self.purgeable, self.own, self.dma = purge, 3, 0
+        # dma = the MC_DMA head in KB; `dma=-1` is the whole block, the shape
+        # heapfrag's check 14 claims (KERN-MEGA-PLAN 14.184)
+        self.purgeable, self.own = purge, 3
+        self.dma = self.para if dma < 0 else dma * PARA
     @property
     def end(self): return self.seg + self.para
     @property
@@ -73,9 +76,9 @@ def true_combined(m):
             continue
         if c.pinned or not c.hi:
             at = c.seg                      # a barrier: the fill point resumes
-        else:
-            at -= c.para
-            c.seg = at                      # ...and it MOVES there
+        else:                               # ...and it MOVES there, off any
+            at = heapmap.page_dest(at - c.para, c.dma, c.seg, False)
+            c.seg = at                      # page its head would straddle
     s.claims.sort(key=lambda c: c.seg)
     return max((p for _, p in s.compacted(up=False)), default=0) / PARA
 
@@ -107,7 +110,7 @@ def after_the_pass(m, me):
         if c.pinned or not c.hi:
             at = c.seg
         else:
-            at -= c.para
+            at = heapmap.page_dest(at - c.para, c.dma, c.seg, False)
             c.seg = at
     s.claims.sort(key=lambda c: c.seg)
     at = s.base                             # ...and the ascending pass, RUN
@@ -117,7 +120,7 @@ def after_the_pass(m, me):
         if c.pinned or c.hi:
             at = c.end
         else:
-            c.seg = at
+            c.seg = heapmap.page_dest(at, c.dma, c.seg, True)
             at = c.end
     s.claims.sort(key=lambda c: c.seg)
     # ...then PLAIN mem_avail: the ascending PLAN over the packed heap.
@@ -173,7 +176,16 @@ def exact2(m, me):
     size to the fill point and raises a flag, and the next floor mover or
     pinned claim is where the run stops and the hole is measured.  Modelled
     here with a position map in the look-ahead form on purpose, so the two
-    spellings check each other - it is the same arithmetic either way."""
+    spellings check each other - it is the same arithmetic either way.
+
+    **AND THE PAGE BUMP** (KERN-MEGA-PLAN 14.185, SPEC.md 66.4.3.1). A floor
+    mover lands where mem_cp_dest puts it - the next page's floor when an
+    MC_DMA head would straddle - and the gap that opens is not a run, as the
+    compactor's own walk does not count it. A CEILING mover with a head is
+    charged its size PLUS the head: the descending pass bumps it down by less
+    than that, so the hole under the run is never planned larger than the
+    pass leaves - a bounded under-report, where planning the bump exactly
+    would need the barrier above, which the deferred sum does not yet know."""
     live = [c for c in m.claims if not c.purgeable]
     def movable(c):
         return (not c.pinned) or c.seg == me
@@ -191,7 +203,7 @@ def exact2(m, me):
         for d in live:
             if d.seg > c.seg and not ceilmover(d) and d.seg < B:
                 B = d.seg
-        S = sum(d.para for d in live
+        S = sum(d.para + d.dma for d in live
                 if ceilmover(d) and c.seg <= d.seg < B)
         return B - S
 
@@ -202,11 +214,11 @@ def exact2(m, me):
     for c in sorted(live, key=lambda c: pos[id(c)]):    # ...then the ascending
         b = pos[id(c)]
         if movable(c) and not c.hi:
-            lo += c.para
+            lo = heapmap.page_dest(lo, c.dma, c.seg, True) + c.para
         else:
             if b > lo:
                 runs.append(b - lo)
-            lo = b + c.para
+            lo = b + c.para + (c.dma if ceilmover(c) else 0)
     if m.top > lo:
         runs.append(m.top - lo)
     return max(runs, default=0) / PARA
@@ -275,3 +287,32 @@ case("INTERLEAVED, the lo claim PINNED", B, T,
 case("big floor barrier (pinned cache)", B, T,
      [C(0x1B20, 3, False, True), C(0x4000, 40, False, False),
       C(0x2FC0, 3, False, True)] + [C(0x9900, 20, True, False)], 0x9900)
+
+# --- MC_DMA movers (KERN-MEGA-PLAN 14.185): the page bump is in the plan -------
+# heapfrag's check 14, as built: a pinned claim ending at F (page offset F00h),
+# a 42KB all-head block above it that cannot start at F and lands at G, the next
+# page's floor, a pinned roof over it. Before 14.185 the plan put it AT F and
+# read 3K over; now it reads the run exactly.
+case("DMA floor mover bumped to the page", B, T,
+     [C(0x1B20, 208, False, False),          # pinned, ends at F = 4F20h
+      C(0x5060, 42, False, True, dma=-1),     # D: slides only as far as G
+      C(0x9580, 42, True, False)], None)      # the roof
+# ...and a CEILING mover with a head: charged its head, which reads UNDER
+# by at most that - the safe direction - where planning it at the barrier
+# without the bump (or as a pinned barrier) can read OVER
+case("DMA ceiling mover (charged its head)", B, T,
+     base_lo + [C(0x6F80, 42, True, True, dma=-1),
+                C(0x9900, 20, True, False)], 0x9900)
+OVER = base_lo + [C(0x3000, 8, True, True, dma=-1), C(0x3800, 8, False, True),
+                  C(0x9900, 20, True, False)]
+case("DMA ceiling mover, floor mover over it", B, T, OVER, None)
+# ...and that layout planned the OBVIOUS safe way, the ceiling mover as a
+# BARRIER: it reads OVER, because the run slides the block up under the floor
+# mover, which then cannot come down through the gap the plan packed it into
+_m = M(B, T, OVER)
+_b = copy.deepcopy(_m)
+_b.claims[3].rloc = 0
+print("  %-35s barrier spelling %6.1f against the pass's %6.1f  %s"
+      % ("  (the same, as a barrier)", exact2(_b, None), true_combined(_m),
+         "OVER - why it is charged its head instead"
+         if exact2(_b, None) > true_combined(_m) else "ok"))

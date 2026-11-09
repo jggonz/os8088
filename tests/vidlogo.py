@@ -8,7 +8,8 @@ by hand: it needs numpy and the build does not), on the screen named:
 1. THE FILE IS WHAT THE GENERATOR SAYS: resident, live, three renditions
    each naming its screen, keys at 0 and LOOP with the second the poster,
    the seam back to LOOP, Repeat on, and under the
-   owner's budget (120 KB, VIDEO-PLAN 14.7).
+   owner's budget (112 KB: 105 until the owner took the transparent,
+   lifted digits at 109,056, the disks that carry it having room).
 2. THE SCREEN'S OWN RENDITION PLAYS LIVE: at its own size, so the box shows
    it whole (vp_ps 1) - the one thing a file can be refused Live for.
    And the status line says READY: a rendition made for this screen is
@@ -45,7 +46,7 @@ import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E
 from cycweb import pkg_syms                                   # noqa: E402
 
 LOGO = "apps/video/os8088.v88"
-NF, L, BUDGET = 105, 57, 120 * 1024     # tools/os88logovid.py's NFRAMES, LOOP
+NF, L, BUDGET = 105, 57, 112 * 1024     # tools/os88logovid.py's NFRAMES, LOOP
 ORDER = ("vga", "herc", "cga")          # the file's renditions
 SCREEN = {"herc": ("os8088_5150_herc_gla", 0xB0000, "herc", 348, 90),
           "cga": ("os8088_5150_cga_gla", 0xB8000, "cga", 200, 80),

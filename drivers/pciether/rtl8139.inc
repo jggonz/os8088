@@ -113,33 +113,32 @@ rt_ind:
     ret
 
 ; -----------------------------------------------------------------------------
-; rt_port - DX = [eth_base] + AX. Everything else kept.
+; rt_port - DX = [eth_base] + AL, the register's offset (every RT_* is below
+; 80h, so `cbw` is its zero AH). AH = 0 after; everything else kept. A byte
+; load at each of the eighteen calls where a word load was (size pass 18)
 ; -----------------------------------------------------------------------------
 rt_port:
+    cbw
     mov dx, [eth_base]
     add dx, ax
     ret
 
 ; -----------------------------------------------------------------------------
-; rt_rstwait - DX = the CR port: wait, bounded, for RST to clear
+; rt_rstwait - DX = the CR port: wait, bounded, for RST to clear. Spends AL
+; and CX: rt_init and rt_stop, its two callers, load both afresh after it
 ; -----------------------------------------------------------------------------
 rt_rstwait:
-    push ax
-    push cx
     mov cx, RT_SPIN
 .w:
     in  al, dx
     test al, RTC_RST
-    jz  .out
-    loop .w
-.out:
-    pop cx
-    pop ax
+    loopnz .w                   ; ...until RST reads clear, or the bound
     ret
 
 ; -----------------------------------------------------------------------------
 ; rt_claim - the receive ring and the transmit buffer: ONE pinned claim
 ; out: CF=1 = no heap for it. [rt_seg] and the linear base [rt_lin] on success.
+; Spends AX, BX, CX (PCEV_CLAIM's one caller, pce_find, may); DX is kept.
 ;
 ; Pinned (SPEC.md 66: a claim is born unmovable) and CONVENTIONAL - MEMP_CONV,
 ; because this image is OS88_DRV_HICLAIM and a claim with no head would
@@ -150,9 +149,6 @@ rt_rstwait:
 ; physical - and [rt_par] is that as a paragraph, for rt_es.
 ; -----------------------------------------------------------------------------
 rt_claim:
-    push ax
-    push bx
-    push cx
     push dx
     mov ax, OS88_BYTES_PARA(RT_CLAIM)
     mov cx, MEMP_CONV           ; no head, and below 1MB
@@ -174,16 +170,14 @@ rt_claim:
     clc
 .out:
     pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rt_es - ES = the ring's claim, as the mode we are running in names it
 ; out: CF=0 and ES; CF=1 = kern_mega had no window to give (its LDT full) -
 ;      the caller treats it as a ring with nothing in it / a send that failed.
-;      Every other register kept.
+;      Spends AX, BX and DX - rt_rx and rt_tx, its two callers, bank them and
+;      load all three afresh after it; CX (rt_tx's length) is kept.
 ;
 ; A BOOT ATTACH CLAIMS IN REAL MODE (SYSTEM.CFG's drivers load before
 ; mega_enter), so [rt_seg] is a PARAGRAPH - and the claim is pinned, so
@@ -196,52 +190,43 @@ rt_claim:
 ; gives it back; drv_release would anyway).
 ; -----------------------------------------------------------------------------
 rt_es:
-    push dx
     mov dx, [rt_win]
     or  dx, dx
     jnz .have                   ; (CF = 0: the `or`)
-    push ax
-    push bx
     push cx
     mov dx, [rt_par]
     xor ax, ax                  ; a new window
     mov cx, RT_CLAIM
     mov bl, SEG_WIN
     call OSAPI_SEG
-    jc  .no
-    cmp dx, [rt_par]            ; (a window is an LDT selector, bit 2 set,
-    je  .real                   ; and a claim's paragraph is a multiple of
-                                ; 16, so the two can never be equal) real
-                                ; mode: the paragraph is the answer
-    mov [rt_win], dx            ; protected mode: a window, ours for good
-.real:
-    clc
-.no:
-    pop cx
-    pop bx
-    pop ax
+    pop cx                      ; (POP keeps CF)
     jc  .out
+    cmp dx, [rt_par]            ; (a window is an LDT selector, bit 2 set,
+    je  .have                   ; and a claim's paragraph is a multiple of
+                                ; 16, so the two can never be equal) real
+                                ; mode: the paragraph is the answer, CF = 0
+    mov [rt_win], dx            ; protected mode: a window, ours for good
+    clc
 .have:
     mov es, dx
 .out:
-    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
 ; rt_init - bring the card up and start receiving (nic_init; cannot fail)
 ; in:  [eth_base] and the claim
 ; out: [eth_mac], [eth_word] = 1, the receiver and transmitter on, IMR = 0
+; Spends AX, BX, CX and SI - eth_attach, nic_init's one caller, banks or
+; reloads all four (ethdrv.inc's seam header); DX is kept, the attach's
+; caller holding it
 ; -----------------------------------------------------------------------------
 rt_init:
-    push ax
-    push cx
     push dx
-    push si
-    mov ax, RT_CONFIG1
+    mov al, RT_CONFIG1
     call rt_port
     xor al, al
     out dx, al                  ; CONFIG1 = 0: powered on
-    mov ax, RT_CR
+    mov al, RT_CR
     call rt_port
     mov al, RTC_RST
     out dx, al
@@ -255,7 +240,7 @@ rt_init:
     inc si
     inc dx
     loop .mac
-    mov ax, RT_MAR0
+    mov al, RT_MAR0
     call rt_port
     mov cx, 8
     xor al, al
@@ -266,69 +251,60 @@ rt_init:
     mov byte [eth_word], 1      ; (the ring ladder's "wide" arm: nic ring sizes)
     mov byte [rt_txn], 0
     call rt_start
-    pop si
     pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rt_start - point the card at the ring and turn the receiver and transmitter
-; on. Shared by rt_init and the overflow recovery. Every register kept.
+; on. Shared by rt_init and the overflow recovery. Spends AX, BX and DX: both
+; callers bank all three (rt_init DX, its caller the rest; rt_rx all three).
 ;
 ; The ORDER is Linux 8139too's: RCR and TCR only AFTER CR = RE|TE, because the
 ; chip ignores their thresholds while the receiver and transmitter are off.
 ; -----------------------------------------------------------------------------
 rt_start:
-    push ax
-    push bx
-    push dx
-    mov ax, RT_RBSTART
+    mov al, RT_RBSTART
     call rt_port
     mov ax, [rt_lin]
     mov bx, [rt_lin+2]
     call rt_outd                ; RBSTART = the ring
-    mov ax, RT_IMR
+    mov al, RT_IMR
     call rt_port
     xor ax, ax
     out dx, ax                  ; IMR = 0: we poll
-    mov ax, RT_ISR
+    mov al, RT_ISR
     call rt_port
     mov ax, 0xFFFF
     out dx, ax                  ; every cause cleared (write-one-to-clear)
-    mov ax, RT_CR
+    mov al, RT_CR
     call rt_port
     mov al, RTC_RE | RTC_TE
     out dx, al
-    mov ax, RT_RCR
+    mov al, RT_RCR
     call rt_port
     xor bx, bx
     mov ax, RT_RCR_VAL
     call rt_outd
-    mov ax, RT_TCR
+    mov al, RT_TCR
     call rt_port
     mov bx, RT_TCR_HI
     mov ax, RT_TCR_LO
     call rt_outd
-    mov ax, RT_CAPR
+    mov al, RT_CAPR
     call rt_port
     mov ax, RT_CAPR0
     out dx, ax                  ; CAPR = 0 - 16: the ring is empty
     mov word [rt_off], 0
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; rt_rxreset - throw the ring away and start the receiver again (SPEC.md 72.2's
-; overflow rule). The transmitter is left on. Every register kept.
+; overflow rule). The transmitter is left on. Spends AX, BX and DX (rt_rx,
+; its one caller, banks them); CX is kept, being rt_rx's.
 ; -----------------------------------------------------------------------------
 rt_rxreset:
-    push ax
     push cx
-    push dx
-    mov ax, RT_CR
+    mov al, RT_CR
     call rt_port
     mov al, RTC_TE              ; receiver off...
     out dx, al
@@ -339,33 +315,28 @@ rt_rxreset:
     jz  .go
     loop .off
 .go:
-    call rt_start               ; ...and on again at the top of the ring
-    pop dx
     pop cx
-    pop ax
-    ret
+    jmp rt_start                ; ...and on again at the top of the ring
 
 ; -----------------------------------------------------------------------------
 ; rt_stop - silence the card, then give the claim back (nic_stop; cannot fail)
 ;
 ; The DMA stops BEFORE the memory is freed: a card left running writes into
-; whatever the heap gives that memory to next.
+; whatever the heap gives that memory to next. Spends AX, BX, CX and DX:
+; eth_detach, nic_stop's one caller, has banked everything (os88_ent)
 ; -----------------------------------------------------------------------------
 rt_stop:
-    push ax
-    push dx
-    mov ax, RT_IMR
+    mov al, RT_IMR
     call rt_port
     xor ax, ax
     out dx, ax
-    mov ax, RT_CR
+    mov al, RT_CR
     call rt_port
     xor al, al
     out dx, al                  ; receiver and transmitter off
     mov al, RTC_RST
     out dx, al                  ; ...and the chip reset
     call rt_rstwait
-    push bx
     mov dx, [rt_win]            ; rt_es's window, if protected mode made one
     or  dx, dx
     jz  .nowin
@@ -373,7 +344,6 @@ rt_stop:
     mov bl, SEG_FREE
     call OSAPI_SEG
 .nowin:
-    pop bx
     mov dx, [rt_seg]
     or  dx, dx
     jz  .out
@@ -385,8 +355,6 @@ rt_stop:
                                 ; driver owns frees it a moment later, and the
                                 ; card was silenced above, so nothing writes it
 .out:
-    pop dx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -402,7 +370,7 @@ rt_rx:
     push si
     push di
     push es
-    mov ax, RT_ISR
+    mov al, RT_ISR
     call rt_port
     in  ax, dx
     test ax, RTI_OVW
@@ -411,7 +379,7 @@ rt_rx:
     out dx, ax                  ; the ring is not to be trusted after an
     jmp short .reset            ; overrun, and every frame in it is lost
 .nov:
-    mov ax, RT_CR
+    mov al, RT_CR
     call rt_port
     in  al, dx
     test al, RTC_BUFE
@@ -438,10 +406,9 @@ rt_rx:
     push ds
     pop es                      ; ES = ours
     mov ds, ax                  ; DS = the claim
+    mov cx, si                  ; the frame's length, as tested above
     lea si, [bx+4]              ; the frame follows its header, and the
     mov di, eth_rxb             ; overrun area means it is never split
-    mov cx, dx
-    sub cx, 4
     push cx
     inc cx
     shr cx, 1
@@ -472,24 +439,19 @@ rt_rx:
 ; -----------------------------------------------------------------------------
 ; rt_consume - BX = this packet's offset, DX = its header length: step past it
 ; and tell the chip. The next packet is at (off + len + 4 + 3) AND NOT 3, modulo
-; the ring, and CAPR is that minus 16, the chip's documented bias.
+; the ring, and CAPR is that minus 16, the chip's documented bias. Spends AX,
+; BX and DX: rt_rx, its one caller, banks all three and keeps CX, the length
 ; -----------------------------------------------------------------------------
 rt_consume:
-    push ax
-    push bx
-    push dx
     add bx, dx
     add bx, 4 + 3
     and bx, RT_RINGMASK
     mov [rt_off], bx
     sub bx, 16
-    mov ax, RT_CAPR
+    mov al, RT_CAPR
     call rt_port
     mov ax, bx
     out dx, ax
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -511,17 +473,13 @@ rt_tx:
     push es
     cmp cx, RT_MINFRAME
     jae .len
-    mov si, eth_txb             ; pad with zeros, not with what was there
-    add si, cx
-    mov ax, cx
-    mov cx, RT_MINFRAME
-    sub cx, ax
-    xor al, al
+    mov si, cx                  ; pad with zeros, not with what was there
 .pad:
-    mov [si], al
+    mov byte [eth_txb+si], 0
     inc si
-    loop .pad
-    mov cx, RT_MINFRAME
+    cmp si, RT_MINFRAME
+    jb  .pad
+    mov cx, si                  ; = RT_MINFRAME
 .len:
     call rt_es
     jc  .fail                   ; no window to write it through
@@ -546,12 +504,12 @@ rt_tx:
     add ax, RT_TXOFF
     adc bx, 0
     push ax
-    mov ax, RT_TSAD0
+    mov al, RT_TSAD0
     call rt_port
     add dx, si
     pop ax
     call rt_outd
-    mov ax, RT_TSD0             ; TSD[n] = ERTXTH and the size, ONE write:
+    mov al, RT_TSD0             ; TSD[n] = ERTXTH and the size, ONE write:
     call rt_port                ; OWN clear in it is what starts the send
     add dx, si
     mov bx, RT_ERTXTH

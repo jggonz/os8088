@@ -75,6 +75,12 @@
                                     ; against the lazy arm: 768 image bytes
                                     ; and 1,023 file bytes smaller, and one
                                     ; cluster fewer on every c64disk geometry
+%define CC_HAS_FSX                  ; THE EXCLUSIVE BRACKET (SPEC.md 53): on a
+                                    ; display with FSXM_VGA13, Preferences >
+                                    ; Fullscreen is the C64 in COLOUR, its
+                                    ; 320x200 window one byte a pixel
+                                    ; (C64-SPEC 9.12) - the four os88_fsx_*
+                                    ; thunks, APPLE2's idiom
 %define CC_ICON "c64/icon.inc"      ; the 16x16 breadbin, drawn for this port
 
 %define CC_HAS_PARTS                ; THE ROM IS IN THE PACKAGE (C64-SPEC 1.4,
@@ -94,6 +100,7 @@
                                     ; re-reads c64_m.romseg through
                                     ; os88_part_seg, so crt0 declares it
 
+%define CC_PARTS_AFTER_OVL 5        ; the fast core's rows follow the overlay
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
                                     ; whole API bridge
@@ -120,9 +127,23 @@
 ; 73.14.2.1). It is claimed top-down
 ; (SPEC.md 20.12.10.8), so the ~2KB of module that used to sit in a movable
 ; claim of its own now sits beside the ROM at the ceiling, not mid-arena.
-    CC_PARTS_BEGIN 2
+    CC_PARTS_BEGIN 7
       OS88_PART OP_ASSET, OP_COMP
       CC_OVL_ROW
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 2 THE FAST 6510 CORE (C64-SPEC
+                                    ; 4.7): apps/m6502/m65gen.py's, fetched
+                                    ; in os88_main and far-called; without it
+                                    ; the accurate core runs the machine alone.
+                                    ; AFTER the overlay because that one is
+                                    ; eager, and every lazy row follows every
+                                    ; eager one (the Makefile's sixth argument)
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 3 BASIC TRANSLATED AHEAD OF TIME
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 4 ...the KERNAL (C64-SPEC 4.8:
+                                    ; apps/m6502/m65aot.py's, a segment each)
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 5 ...and their PC table
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 6 THE RECOMPILER (C64-SPEC 4.9):
+                                    ; apps/c64/c64jit.asm and m65tmpl.py's
+                                    ; templates, copied into a claim of its own
     CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/
@@ -136,12 +157,106 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
                                     ; V30, a 286), where an 8088 does not care
                                     ; (PERFORMANCE.md Part 7, os88rdiff.py)
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is assembly):
+%define C64_FAST                    ; the accurate core's hand-back hooks
 %include "c64/c64cpu.inc"           ; the 6510 core - _c64_run(cycles). Wave 1
+%include "c64/c64fast.inc"          ; ...and the fast core's door (C64-SPEC 4.7)
                                     ; is the register file, the 256-entry
                                     ; dispatch table and the entry/exit shell
 %include "c64/c64mem.inc"           ; the RAM/ROM claim accessors and movers,
                                     ; and the core's scratch (C64-SPEC 3.5/3.6)
 %include "c64/c64band.inc"          ; the 1bpp composers, the span compare and
                                     ; the row signature (C64-SPEC 9.5)
+%include "c64/c64sid.inc"           ; SID voice 3's oscillator (11.4.1)
+%include "c64/c64fsx.inc"           ; ...and the colour screen's 8bpp ones,
+                                    ; inside the FSXM_VGA13 bracket (C64-SPEC 9.12)
+
+; -----------------------------------------------------------------------------
+; unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+;                      unsigned off_lo, unsigned off_hi)
+; os88_file_read_at() into a FAR buffer at seg:0 - drive 8's image is a claim
+; of 171KB and read into it 32KB at a time (C64-SPEC 11.5). The same contract:
+; the offset and the capacity a whole number of clusters, the answer the bytes
+; delivered, 0 at the end or refused.
+; -----------------------------------------------------------------------------
+_c64_read_at:
+    push bp
+    mov bp, sp
+    push si
+    push es
+    mov si, [bp+4]
+    mov es, [bp+6]
+    xor bx, bx
+    mov cx, [bp+8]
+    mov ax, [bp+10]
+    mov dx, [bp+12]
+    call OSAPI_FILE_READ_AT
+    jnc .ok
+    xor ax, ax
+.ok:
+    pop es
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; THE FM CHIP (C64-SPEC 11.4.3): SOUND.DRV's two doors, MIDIRack's order
+; (apps/midirack/mrfm.inc) - identify the driver, ask SND_FM_INFO whether it
+; has a chip, and CLAIM it, OPL2 mode. On the UI task only: the claim is
+; stamped with the caller's instance (SPEC.md 34.12), and the driver gives
+; it back when that instance dies.
+; -----------------------------------------------------------------------------
+%include "drivers/sound/sndpkg.inc"
+
+; int c64_opl_open(void) - 1 when the chip is ours, 0 when there is none
+_c64_opl_open:
+    push si
+    push di
+    push es
+    mov bh, DRVC_SOUND
+    mov bl, SNDV_IDENT
+    call OSAPI_DRV_CALL
+    jc .no
+    cmp ax, SND_SIG
+    jne .no
+    mov al, SND_FM_INFO
+    call OSAPI_SND_FM
+    jc .no
+    mov al, SND_FM_CLAIM
+    xor cl, cl                      ; OPL2 mode: channels 0-7
+    call OSAPI_SND_FM
+    jc .no
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; int c64_opl_send(const unsigned char *pairs, int n) - N register/value
+; pairs to the chip in one SNDV_OPLW call; the pairs written, -1 refused
+_c64_opl_send:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; the batch is ours: ES:SI
+    mov si, [bp+4]
+    mov cx, [bp+6]
+    mov bh, DRVC_SOUND
+    mov bl, SNDV_OPLW
+    call OSAPI_DRV_CALL
+    jnc .out
+    mov ax, -1
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
 
     CC_IMAGE_END                    ; cc_bss_end and cc_image_end

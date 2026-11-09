@@ -158,7 +158,7 @@ void os88_oncmd(int item, int menu, void *win)
 
 void os88_about(void *win)
 {
-    os88_toast("CCSMOKE - the C toolchain's smoke test", 0);
+    os88_toast("CCSMOKE: C smoke test", 0);
     sm_draw(win);
 }
 

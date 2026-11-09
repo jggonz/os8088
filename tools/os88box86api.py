@@ -43,6 +43,7 @@ THE MACHINE a row's MartyPC name describes (`machine_config`):
                   BIOS drives neither) and for `_ne2k` (a 16-bit card)
     _NNNk         the XT's RAM (128k, 256k, 512k ...)
   kern_mega - always vm/at286-port, as before.
+  `_ems` adds a Lo-tech EMS board (260h, frame E000h, 2 MB) to it.
   $OS88_86BOX_VM (kern_mega: $OS88_MEGA_VM) names any other vm/ profile.
   A name for a machine only 86Box has carries NO `os8088_` prefix - that is
   MartyPC's namespace, which tests/unit/t_machines.py holds to its machine
@@ -115,6 +116,7 @@ its desktop is up (`_poker`).
 """
 import atexit
 import json
+import hashlib
 import os
 import queue
 import re
@@ -285,6 +287,15 @@ def machine_config(machine, mega=False, images=()):
                      ("Network", "net_01_link", "0"),
                      ("Novell NE1000 #1", "base", "0300"),
                      ("Novell NE1000 #1", "irq", "3")]
+    if "_ems" in n:
+        # A LO-TECH EMS BOARD, vm/286-mega-ems's (260h, frame E000h, 2 MB),
+        # added to the machine the name picks - the kern_mega port's seeded
+        # mr286 included, which that profile (no CMOS seed) cannot be booted
+        # through the port as (tests/vbtmega.py's ems arm)
+        sec = "Lo-tech EMS Board #1"
+        sets += [("Other peripherals", "isamem0_type", "lotechems"),
+                 (sec, "base", "0260"), (sec, "frame", "E0000"),
+                 (sec, "size", "2048")]
     if not mega:
         # THE MOUSE the name asks for (the 386's profile carries a PS/2 one)
         # and the XT's RAM; kern_mega's machine keeps its profile's own
@@ -617,6 +628,32 @@ class Gdb(object):
                                 % (body, r))
         return r
 
+    def go(self, verb="c"):
+        """`c` or `s`, and RETURN ONLY ONCE THE STUB HAS TAKEN IT. Neither
+        has a reply of its own (the stop is its answer), so a bare send left
+        the resume in flight while the caller went on to the automation
+        socket's `step` - a second connection, served by the same emulation
+        thread in whatever order the two sockets' bytes reach it. Under host
+        load the `c` was taken AFTER the step had already run the CPU to the
+        breakpoint it was for: the late `c` then RESUMED the CPU from that
+        stop (a second, stale stop at the same address when the breakpoint
+        was still armed; the CPU loose with nobody waiting when it had been
+        lifted, so the stub's CS:IP was written into a running machine and
+        the stub never ran - box-dtwrite's "the port stub never stopped",
+        `stub set` reading F000:F968). The stub takes one client's packets
+        strictly in order, each processed before the next is read, so the
+        reply to a one-byte memory read sent straight after is the proof the
+        resume is in force: an ordering fence on the stub's own queue, with
+        no host clock in it. Its reply is hex (or an E code), never a stop's
+        T/S, and either one is the proof - so neither is refused here"""
+        self.send(verb)
+        self.send("m0,1")
+        try:
+            self.replies.get(timeout=15.0)
+        except queue.Empty:
+            raise om.MartyError("os88box86api: the GDB stub never answered "
+                                "the fence after %r" % verb)
+
     def close(self):
         try:
             self.s.close()
@@ -732,7 +769,7 @@ class Api86Box(om.Marty):
                 if was == "running":
                     self.b.cmd("hold")
                 self._gdb = Gdb(self._gdbport, self._on_stop)
-                self._gdb.send("c")
+                self._gdb.go()
                 if was == "running":
                     self.b.cmd("release")
         return self._gdb
@@ -766,11 +803,24 @@ class Api86Box(om.Marty):
         return r
 
     def _status(self):
-        if self._state == "running":
-            self._a("status")
-        cs, ip, flat = self._at
-        return {"state": self._state, "cycles": self._cycles(),
-                "stops": self._stops, "cs": cs, "ip": ip, "flat_ip": flat}
+        # UNDER THE LOCK, because a stop is published by ANOTHER THREAD:
+        # `_hit` (the GDB reader's) sets the state and the count and THEN
+        # reads the registers, a round trip to 86Box, all inside the lock.
+        # A status taken in that window without it answered "breakpoint",
+        # the new count - and the PREVIOUS stop's CS:IP. MegaMixin.wait_stop
+        # asks that CS:IP whether the stop is the kernel's real-mode landing
+        # (fsx_rland) to re-arm a row's breakpoint on the bracket's copy;
+        # told the idle loop's, it handed the landing to the row as the
+        # row's own hit, the copy was never armed, and vidpreview's play
+        # ran to its end past a breakpoint nobody had set (mega-vidpreview,
+        # 4 runs in 15 four at a time)
+        with self._lock:
+            if self._state == "running":
+                self._a("status")
+            cs, ip, flat = self._at
+            return {"state": self._state, "cycles": self._cycles(),
+                    "stops": self._stops, "cs": cs, "ip": ip,
+                    "flat_ip": flat}
 
     def _c_ping(self, **_):
         return {"pipeline": False}
@@ -787,7 +837,7 @@ class Api86Box(om.Marty):
     def _c_run(self, **_):
         frm = self._stops
         if self._state == "breakpoint":
-            self.gdb().send("c")        # the stop just left is not re-hit
+            self.gdb().go()             # the stop just left is not re-hit
         if self._state != "running":
             self._release()
         st = self._status()
@@ -838,11 +888,11 @@ class Api86Box(om.Marty):
                 for _ in range(n):
                     was = self._where()
                     for _try in range(4):
-                        g.send("s")
+                        g.go("s")
                         self._gdb_stop("a single step")
                         if self._where() != was:
                             break
-                g.send("c")             # ...and the stub back to running,
+                g.go()                  # ...and the stub back to running,
             finally:                    # the machine still held
                 self._stepq = None
             self._state = "paused"
@@ -854,7 +904,7 @@ class Api86Box(om.Marty):
         ms = (cycles * 1000.0 / GUEST_HZ if cycles is not None else
               (frames or 1) * 1000.0 / 60.0)
         if self._state == "breakpoint":
-            self.gdb().send("c")
+            self.gdb().go()
         with self._lock:
             self.b.cmd("hold")
             self._state = "running"
@@ -1180,7 +1230,7 @@ class Api86Box(om.Marty):
         try:
             t0 = self.b.ms()
             while True:
-                g.send("c")
+                g.go()
                 left = max_ms - (self.b.ms() - t0)
                 if left <= 0:
                     raise om.MartyError("%s: %s was not reached in %d "
@@ -1212,6 +1262,12 @@ class Api86Box(om.Marty):
         interrupt gate, with IF clear, where the stub then runs and from
         which the handler carries on as if nothing had happened."""
         end = self._STUB_AT + len(code)
+        # CONNECTED FIRST, outside the hold below: a first connect on a
+        # RUNNING machine holds it, connects and RELEASES it - which, made
+        # under this proc's own hold, ran the whole stub on a free machine
+        # (every step answering `held: False`, emulated time going by
+        # between the IRQ0 stop and the stub's CS:IP write)
+        self.gdb()
         with self._lock:
             was = self._state
             if was == "running":
@@ -1249,7 +1305,7 @@ class Api86Box(om.Marty):
                     self._setregs(back)
                 for a in rows:
                     g.req("Z1,%x,1" % a)
-                g.send("c")             # the stub running, the machine held
+                g.go()                  # the stub running, the machine held
                 self._stepq = None
                 self._regs_at()
                 if was == "running":
@@ -1309,6 +1365,35 @@ def kernel_map():
     if not os.path.isabs(bdir):
         bdir = os.path.join(ROOT, bdir)
     return os.path.join(bdir, "kernel.map")
+
+
+def patches_sha():
+    """tools/86box/build.sh's stamp: sha256 of every patch, in name order."""
+    pdir = os.path.join(ob.ROOT, "tools", "86box", "patches")
+    h = hashlib.sha256()
+    for n in sorted(os.listdir(pdir)):
+        if n.endswith(".patch"):
+            with open(os.path.join(pdir, n), "rb") as f:
+                h.update(f.read())
+    return h.hexdigest()
+
+
+def _patched_or_refuse():
+    """THE BINARY CARRIES THIS TREE'S PATCHES, or the row stops here. A patch
+    that changes behaviour and no verb - 08's exact automation mouse - is
+    invisible to the `fdc` probe, and the old binary then runs every row on
+    the defect the patch fixed (mega-deskzoom-86box: a pointer proven at its
+    target moved one more pixel, so a drag landed a pixel off)."""
+    try:
+        with open(ob.BIN + ".patches") as f:
+            have = f.read().strip()
+    except OSError:
+        have = None
+    if have != patches_sha():
+        raise om.MartyError(
+            "%s: %s was built %s tools/86box/patches/ as they are now - "
+            "rebuild it: python3 tools/os88box.py build"
+            % (TAG, ob.BIN, "against other" if have else "with no record of"))
 
 
 def boot_machine(cls, a, b, machine, boot=True, label=None, cimg=None,
@@ -1387,6 +1472,7 @@ def boot_machine(cls, a, b, machine, boot=True, label=None, cimg=None,
             raise om.MartyError(        # "unknown command"
                 "%s: %s predates tools/86box/patches/04-06 - rebuild it: "
                 "python3 tools/os88box.py build" % (TAG, ob.BIN))
+        _patched_or_refuse()
         m._a("ff on")
         if cimg and a and not info["at"]:
             _xub_floppy(box)

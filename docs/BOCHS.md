@@ -311,6 +311,7 @@ between its two presses.
 | `m.fbuf()` (os88megabochs) | the same window, after `GLASS` only while the guest RUNS: a stopped Bochs paints nothing, and before the clock preload (*The clock*) every host second spent stopped was run back as a guest sprint on the resume, so a sleep there only handed the guest time (`mega-vidfskeysvga4` looked at its toast 4 times instead of 11) |
 | `box.xd(...)`, `box.key(...)`, `box.type(...)` | xdotool on THIS machine's display - one call at a time (a thread wiggling the mouse beside a click is safe) |
 | `box.at_prompt(cmds)` | the machine is ALREADY stopped (an `lb` breakpoint hit): run CMDS and continue, on the prompts |
+| `box.watch_write(label, spans)` / `box.unwatch()` | state the guest OVERWRITES on its own clock (a single-slot record such as `mega_fkmsg`): a write watchpoint freezes the guest at each write and every later stop of the Box reads SPANS into `box.watched`, so no write falls in a host stall (tests/megaflt.py). Any stop - `dbg`, `session` - takes an unanswered prompt rather than signalling into it |
 | text screen | `box.read(0xB8000, n)[0::2]` is the characters - how a hibernate's `os8088 has hibernated` is waited for, it having no E9 line |
 
 **SEVERAL MACHINES IN ONE PROCESS.** `Box(..., display=os88bochs.take_display(),
@@ -452,7 +453,15 @@ it maps:
 - **selectors** - `m.lin(seg, off)` reads the LDT or the GDT. kern_mega's
   GDT is an identity map except the kernel's DATA (0010, based at
   KERNEL_SEG x 16; KERNEL_SEG's own 0060 is its read-only CODE) and
-  COLD_SEG, whose base is `.cold`'s copy above 1MB (tests/tnest.py).
+  COLD_SEG, whose base is `.cold`'s copy above 1MB (tests/tnest.py) - and
+  it STOPS at COLD_SEG: the entries past it are zero padding and the
+  scratches, so a made-up "segment" there is no selector at all.
+- **segment registers** - `setreg("ds", v)` in protected mode loads the
+  descriptor, and Bochs REFUSES a selector it cannot load (a zero entry
+  prints "points to a system descriptor") and leaves the register as it
+  was. The shim reads every segment register back and raises when the set
+  did not take: tests/tnest.py's leg 7 once read the previous DS, 0010,
+  back as the fake image it had picked past the identity map.
 - **the mouse and keys** - `launch(..., wheel=True)` is an IntelliMouse and
   `m.wheel()` turns it (Bochs 2.7 never clears its last Z, so the shim
   follows each turn with a zero-sum motion, or the next stop sends one more
@@ -582,8 +591,11 @@ beside it (`irqgrab OS88_BOCHS_MOUSE=serial`).
   after it. Both have produced plausible wrong numbers here.
 * **A fault's CS:IP**: CS 0060 is `.text`, CS `COLD_SEG` (`kernel.asm`'s
   `COLD_HOME`) is `.cold` at its vstart, 80h on kern_mega since KERN-MEGA-PLAN
-  14.45 (4000h before it), and CS `FFD8` is `.mega` at 0. A CS with bit 2 set is an LDT
-  code alias, whose image is segment `(CS & ~7) << 2`. Resolve its IP against
+  14.45 (4000h before it), and CS `MEGA_SEL_CODE` (`(MEGA_GDT_SCR + 8) * 8`, 1058h on the
+  2026-11-08 layout - take it off the same build's `kernel.map`) is `.mega` at 0.
+  A CS with bit 2 set is an LDT code selector, a pair's code half (its data half
+  is CS + 8) at any base, so read that base off the descriptor (`dbg "info ldt"`)
+  rather than computing it. Resolve its IP against
   that image's own `nasm -l` listing, assembled with the same defines as the
   shipped one (SOUND.DRV, for instance, is `-DPICOMEM`).
 

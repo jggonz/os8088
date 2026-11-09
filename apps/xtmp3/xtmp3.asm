@@ -1731,8 +1731,8 @@ x3_s_under:   db ' underruns  ', 0
 x3_s_dot:     db '.', 0
 x3_s_x:       db 'x', 0
 x3_s_pct:     db '%', 0
-x3_s_notmp3:  db 'XTMP3 plays .MP3 files', 0
-x3_s_qfull:   db 'The queue is full', 0
+TOASTSTR x3_s_notmp3, 'XTMP3 plays .MP3 files'
+TOASTSTR x3_s_qfull, 'The queue is full'
 
 x3_qnames:  dw x3_q_auto, x3_q_orig, x3_q_half, x3_q_quart, x3_q_xtstd
             dw x3_q_xtfast, x3_q_xtturbo, x3_q_xtspch

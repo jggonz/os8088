@@ -3,15 +3,19 @@
 ;
 ; The volume boot record of an installed partition. The MBR (boot/mbr.asm)
 ; chain-loads it to 0000:7C00 with DL = the BIOS drive; from there its job is
-; boot/boot.asm's job exactly - pull KERNEL.SYS off the volume into
-; 0060:0000, ticking the splash, and jump to it.
+; stage 1's and stage 2's together - pull KERNEL.SYS off the volume (the blob
+; to BLOB_SEG, `.text` to 0060:0000), publish [spl_fseg] and jump; the kernel
+; starts its own loading screen (SPEC.md 2.9.9).
 ;
 ; **THIS IS A SECOND SECTOR AND NOT A KNOB, AND THAT IS MEASURED.** The floppy
-; sector's last non-zero byte is at offset 492, so there are seventeen bytes
-; between it and the signature, and what a hard disk needs does not fit in
-; seventeen bytes. SPEC.md 52.9 predicted a second variant and this is it.
+; sector's last non-zero byte was at offset 492 when this was decided, so there
+; were seventeen bytes between it and the signature (472 and thirty-seven
+; today), and what a hard disk needs does not fit in either. SPEC.md 52.9 predicted a second variant and this is it.
 ;
-; Three things differ from boot/boot.asm and NOTHING ELSE does:
+; It is a second LOADER as well as a second sector: it does stage 1's AND stage 2's job
+; for a hard disk (SPEC.md 2.9.9), with no canary, no blob sum and no video
+; setup, and it never enters stage 2. Three things differ in the ARITHMETIC
+; it shares with boot/boot.asm:
 ;
 ;   1. THE GEOMETRY COMES FROM THE BPB, not from -DSPT/-DHEADS. A floppy build
 ;      knows its geometry because the Makefile builds one image per geometry;
@@ -49,15 +53,18 @@
 ; BPB_RootEntCnt rather than from a format. A FAT16 partition needs no new
 ; code in it at all.
 ;
-; And KERNEL.SYS must still be FIRST and CONTIGUOUS from cluster 2, because
+; And KERNEL.SYS must still be CONTIGUOUS - from cluster 2, or from the data
+; offset in [kofs] - because
 ; this reads it as a flat run rather than walking a cluster chain - which is
 ; what makes it fit in 512 bytes (SPEC.md 19.3). os88disk.py guarantees that
-; on a floppy at image-build time; the installer guarantees it here by
+; on a floppy at image-build time; the installer guarantees it here, by
 ; formatting the partition and writing KERNEL.SYS before anything else
-; (SPEC.md 52.10.4).
+; (SPEC.md 52.10.4) or by putting it in the first free run long enough
+; (SPEC.md 52.10.15).
 ;
-; Assembled with -DKERNEL_SECTORS=<n> by the Makefile, exactly as the floppy
-; sector is.
+; Assembled with BOOT2_SECS, BLOB_SEG and SPL_FSEG (and KZ_HD/KZ_RPARA under
+; KZIP) from the kernel's own build; the kernel's length and start are the
+; installer's patch words at BOOTHD_KSECS/BOOTHD_KOFS below.
 ; =============================================================================
 cpu 8086                        ; SPEC.md 1: an 8088 runs this before
                                 ; anything has probed anything.
@@ -151,13 +158,13 @@ entry:
                                 ; before its own first read (SPEC.md 2.9.11) -
                                 ; so a ROM that never set DL is already dealt
                                 ; with by the time we are running, and this
-                                ; sector spends none of its 25 spare bytes on
+                                ; sector spends none of its few spare bytes on
                                 ; asking the question twice
 
-    ; NO VIDEO SETUP, which the floppy sector can afford and this one cannot.
-    ; boot/boot.asm reads the equipment word and sets mode 3 or mode 7 for a
-    ; clean, cursorless screen while the kernel lands; that costs fifteen
-    ; bytes, and every one of them is spent here on the geometry probe and
+    ; NO VIDEO SETUP, which the floppy's loader can afford and this one cannot.
+    ; Stage 2 (boot/boot2.asm) reads the equipment word and sets mode 3 or
+    ; mode 7 for a clean, cursorless screen while the kernel lands; that costs
+    ; fifteen bytes, and this sector spends them on the BPB checks and the
     ; 32-bit arithmetic a hard disk needs.
     ;
     ; Nothing is lost but tidiness. The BIOS has just run POST and left a text
@@ -241,7 +248,7 @@ entry:
     ; ...OR R PARAGRAPHS ABOVE IT, when the kernel is PACKED (SPEC.md
     ; 2.9.13.5). This sector has its own reader and never enters stage 2, so a
     ; compressed KERNEL.SYS read to KERNEL_SEG would simply be JUMPED INTO -
-    ; and there are 23 spare bytes here to do something about that in. Five is
+    ; and there were spare bytes here to do something about that in. Five is
     ; what it takes, because the two loaders' arithmetic agrees: one run to
     ; KERNEL_SEG + R puts the plain head at the bottom of it and the packed
     ; blocks at KERNEL_SEG + R + head/16, which is exactly where the floppy's
@@ -425,9 +432,10 @@ chs:
 ; fail - print AL and stop. Three ways to get here and each names itself with
 ; ONE LETTER, because a dark screen is what the MBR's old stub existed to
 ; prevent and because three words do not fit - this sector has 512 bytes and
-; a hard disk's geometry probe and 32-bit arithmetic to pay for out of them.
-; The same trade BOOTDIAG=1 makes on the floppy side, which spends its four
-; spare bytes on two hex digits (SPEC.md 18.94):
+; a hard disk's BPB geometry checks and 32-bit arithmetic to pay for out of
+; them.
+; The same trade BOOTDIAG=1 made in the floppy sector before stage 2 took its
+; two status digits (SPEC.md 2.9.10):
 ;
 ;   R  int 12h says this machine has too little RAM to hold the kernel
 ;      clear of this sector's own relocated stack (SPEC.md 2.7)
@@ -441,7 +449,7 @@ chs:
 fail:
     mov ah, 0x0E
     xor bx, bx                  ; page 0; BL is the colour in graphics modes
-    int 0x10                    ; only, and we set a text mode above
+    int 0x10                    ; only, and POST left a text mode
 .halt:
     hlt                         ; not `jmp $`: a stray IRQ should not turn a
     jmp short .halt             ; halted machine into a spinning one
@@ -450,12 +458,42 @@ boot_drive:  db 0x80
 
 ; THE WORKING VARIABLES ARE NOT IN THE SECTOR (SPEC.md 52.10.15). Every one is
 ; written before it is read, so none needs an initialiser, and the seventeen
-; bytes they took are what paid for [kofs]. They live 0600h into the segment
-; the sector relocated to: .nomem above proves the kernel's own read ends
-; BOOT_STACK below that segment's base, the stack is at 7C00h and grows down
-; into a few hundred bytes at most, and the blob is at the heap floor, below
-; both. boot_drive stays in the sector: it is read AFTER the blob has run.
-absolute 0x0600
+; bytes they took are what paid for [kofs]. They live at the BOTTOM of the
+; sector's own BOOT_STACK reservation, VARS_AT into the segment it relocated
+; to: the stack grows down from 7C00h into a few hundred bytes at most, and is
+; done with them before the blob runs anyway (load_all is over by KZ_HD).
+; boot_drive stays in the sector: it is read AFTER the blob has run.
+;
+; THEY WERE AT 0600h, AND THAT WAS INSIDE THE PACKED KERNEL'S READ. .nomem
+; proves the read ends BOOT_STACK below the segment's BASE, counting the file
+; as if it landed at KERNEL_SEG - but a packed one lands KZ_RPARA paragraphs
+; higher (pass 2 above), so on a 128..131KB machine the read ran through
+; 0600h, overwrote [spt] mid-pass, and the sector stopped on 'G'. The two
+; asserts below are that arithmetic, so the next kernel to outgrow it fails
+; the build instead.
+; KZ_SECS is the sectors PAST the blob, where .nomem's [ksecs] is the whole
+; file, so the second assert models a .nomem floor BOOT2_SECS sectors lower
+; than the real one: conservative, and it understates its own slack.
+VARS_AT     equ STACK_TOP - BOOT_STACK
+%ifdef KZIP
+ ; the packed read's top, against what .nomem guarantees: R less the blob
+ ; that pass 1 took off the front of the file
+ %if KZ_RPARA*16 - BOOT2_SECS*512 > BOOT_STACK + VARS_AT
+  %error "the packed kernel's read reaches the VBR's variables - SPEC.md 52.10.15"
+ %endif
+ ; ...and the blob's end, on the smallest machine .nomem lets through. At
+ ; and above the kernel's own floor this is guard 5's line exactly (VARS_AT is
+ ; BOOT_SECT + BOOT_STACK under the top of RAM), so what is left to prove is
+ ; the band between .nomem's floor and 128KB - for a kernel guard 5 holds to
+ ; 128KB. kern_mega's blob is above that line and its floor is MEGA_BOOT_KB,
+ ; guard 5's mega arm, on a 286 that has no 150KB configuration.
+ %if BLOB_SEG*16 + BOOT2_SECS*512 + 512 + BOOT_STACK <= 128*1024
+  %if BLOB_SEG*16 + BOOT2_SECS*512 > KERNEL_SEG*16 + KZ_SECS*512 + BOOT_STACK + VARS_AT
+   %error "the blob reaches the VBR's variables on the least RAM .nomem allows - SPEC.md 52.10.15"
+  %endif
+ %endif
+%endif
+absolute VARS_AT
 dest_seg:    resw 1
 lba:         resd 1
 left:        resw 1
@@ -470,10 +508,10 @@ section .text
 ; --- the one word the INSTALLER patches, at a FIXED offset ---------------------
 ; The floppy sector takes KERNEL_SECTORS as a -D at build time, because the
 ; Makefile measures the kernel it is about to put on the image. This sector is
-; built long before it knows which kernel it will boot - it ships inside
-; HDD.DRV - so the count is a word the installer writes when it writes the
-; VBR, having just written KERNEL.SYS and knowing exactly how big it was
-; (SPEC.md 52.10.4).
+; built long before it knows which KERNEL.SYS it will boot - it ships as
+; BOOTHD.SYS on the system disk (SPEC.md 52.10.16) - so the count is a word
+; the installer writes when it writes the VBR, having just written KERNEL.SYS
+; and knowing exactly how big it was (SPEC.md 52.10.4).
 ;
 ; PINNED AT OFFSET 508, immediately below the signature, and that is the whole
 ; reason it is placed by hand rather than left with the other variables: a

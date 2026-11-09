@@ -37,15 +37,17 @@
 ; port across it (a real-mode IVT is not a protected-mode IDT, so an NMI
 ; taken with PE set would be a triple fault), no far jump (CS keeps its
 ; real-mode cache, which is what keeps the next instruction reachable, and
-; the CPL is 0 throughout), the GDT's linear base computed from CS at every
+; the CPL is 0 throughout), the GDT's linear base computed from DS at every
 ; call because a package region and a driver image both MOVE (SPEC.md 66).
 ; About 6 us on a 16 MHz 386SX, most of it the four CMOS port accesses:
 ; against ~150 us for a LOADALL borrow on the Victory 286.
 ;
 ; A20 MUST BE OPEN, as for LOADALL: the base goes out on the bus as it is,
 ; and a shut gate aliases it 1 MB down without a fault. XMEM.DRV opens the
-; gate at attach and no tier-2 path ever calls the BIOS's block move, which
-; is the only thing in the tree that might close it.
+; gate at attach and no tier-2 path of ours calls the BIOS's block move; a
+; DOS program can still shut it (AH=87h, AH=24h, port 92h or the 8042 -
+; docs/plans/HMA-PLAN.md 3), and kern_dos's kd_a20shut does for a program
+; that wants the wrap. Nothing on the tier-2 path re-proves the gate.
 ;
 ; THE GDT IS 24 BYTES THE CALLER PLACES: UB_DATA lays it out, initialised,
 ; wherever the caller puts the macro - in its image, because ub_set writes

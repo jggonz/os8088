@@ -1,0 +1,496 @@
+{
+ "area": "histsys",
+ "title": "LENS: systemic comparison - events, drawing, windows, scheduling, drivers, files, errors",
+ "summary": "At the level of the model os8088 is Mac System 6's single UI event loop grafted onto an AmigaOS-style pre-emptive round-robin task table, with one global drawing mutex standing where Windows had DCs and QuickDraw had GrafPorts, and DOS's FAT reached by name with no handle table. Several pieces are better than every peer: the lost-wakeup-proof blocking UI task (97% halted idle), the drop-oldest event ring with its explicit sample/promise rule for wakes, the self-healing posted-work byte, the deferred close, the motor-timeout media check and stateless file calls that leak nothing at app death. The systemic weak spots are mechanisms running on the WRONG CONTEXT: a dying worker tears down and repaints other packages' windows on its own 128/192-byte slice (histsys-1, a plausible canary trip at close), every repaint runs other packages' paint procs synchronously and nested inside whoever caused the damage, every int 13h freezes every task, and the UI task has no scheduling preference so input waits a full round of workers (SPEC 7.3 found this inside the noise with one worker). The error model has one fatal panel (stack overflow) and no int 0 handler, so a package divide fault kills an IBM-ROM XT outright (the ROM stub masks the 8259) and hangs a 286+ running kern_big. The kernel-driver ABI is the area a flag day improves most: a register-only verb ABI produced three dispatch bodies and seven 36-byte union service-table copies that a DOS request header / Mac parameter block and in-place reads would collapse (~-90 to -140 now, ESTIMATED, more at DRV_VER). All recommendations are small (largest growth ~+40 bytes); four save 150-300 resident bytes, mostly behind an ABI break. 31 doc/code mismatches recorded, including SPEC 8's MAX_TASKS and canary text, SPEC 7's 'exactly two' sch_lock raisers, SPEC 18's one-sector-per-call claim, and the DFREE 'no disk I/O' claim that is false on FAT16 partitions.",
+ "strengths": [
+  {
+   "title": "The UI task blocks, and the lost wakeup is closed by construction",
+   "evidence": "kernel/ui.inc:1156-1184, kernel/sched.inc:700-723, :750-800",
+   "why": "Test of [sch_uiwake] and task_sleep's state store are one IF=0 window; idle halt is guarded with sti's shadow over hlt. Better idle story than Win3.x (spin + WIN386 int 2Fh 1680h) or Mac WaitNextEvent on an 8088."
+  },
+  {
+   "title": "The event ring distinguishes samples from promises",
+   "evidence": "kernel/events.inc:95-116, :223-243; kernel/wm.inc:2343-2370",
+   "why": "Drop-oldest for input, never-drop coalesced EVT_WAKE, three-state WKQ flag so a drain owes back what it ate, bounded drain per pass. The same idea as Windows' synthesised WM_PAINT/WM_TIMER, but stated and enforced. Copy it to any mixed ring."
+  },
+  {
+   "title": "Posted work behind one byte that over-sets for free",
+   "evidence": "kernel/ui.inc:730-752, :1060-1066",
+   "why": "Twenty-odd deferred requests cost one compare; a forgotten post is 55 ms late (tick sweep), never lost - a failure direction Windows' PostMessage never had."
+  },
+  {
+   "title": "Callbacks enter through the package's own 3-byte dispatcher",
+   "evidence": "kernel/wm.inc:396-505; kernel/driver.inc:2495-2517",
+   "why": "No retf in package code, re-entrant because the far pointer is in the record, one path for packages and drivers. Win16 needed MakeProcInstance thunks for the same problem."
+  },
+  {
+   "title": "Deferred close with none of the package's code on the stack",
+   "evidence": "kernel/ui.inc:869-897; kernel/wm.inc wm_destroy clears the slot's wm_clreq bit",
+   "why": "PostMessage(WM_CLOSE) done right, slot-reuse safe. The pattern histsys-1 should extend to worker death."
+  },
+  {
+   "title": "Rect-list visRgn and covered-window skip",
+   "evidence": "kernel/wm.inc:5181-5340, :6044-6175",
+   "why": "QuickDraw's visRgn without a region allocator; degrade direction chosen per caller. The 8088-shaped subset of Mac regions."
+  },
+  {
+   "title": "gfx_lock fairness debt",
+   "evidence": "kernel/vga12.inc:5082-5136; SPEC.md 7.3",
+   "why": "One byte and one compare turned 1.4-14.7 s menu latency under a drawing worker into 37-70 ms."
+  },
+  {
+   "title": "drv_call refuses instead of far-calling into zeros",
+   "evidence": "kernel/driver.inc:2399-2493",
+   "why": "BX range-fenced before DS is trusted; DRVR_SEG=0 is a refusal. DOS chains and the Mac unit table jumped through stale entries."
+  },
+  {
+   "title": "Media change read off the spindle, not guessed",
+   "evidence": "SPEC.md 18.9.1 (0040:0040 motor countdown)",
+   "why": "Better than DOS's two-seconds-since-last-access heuristic, and free."
+  },
+  {
+   "title": "Stateless, name-based file calls",
+   "evidence": "kernel/diskw.inc:394-423; OSAPI_FILE_READ_SEQ caller-owned cursor",
+   "why": "Nothing to reclaim at app death (DOS leaked SFT entries, Win3 tied handles to the task); a stale cursor is never an error."
+  },
+  {
+   "title": "Stacks checked, measured and diagnosed",
+   "evidence": "kernel/sched.inc:984-1006, :2447-2449, :2588-2720",
+   "why": "Unconditional 0xCC fill, canary on every slice including task 0, a panel that moves SP first and names the task."
+  },
+  {
+   "title": "Toast treats its input as hostile",
+   "evidence": "kernel/toast.inc:197-311",
+   "why": "Bounded scan under cli, printable ASCII only, TTL clamped to the signed range the expiry compare can read."
+  }
+ ],
+ "findings": [
+  {
+   "id": "histsys-1",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "A dying worker tears down and repaints other windows on its own 128/192-byte stack slice",
+   "detail": "inst_pkg_alive .die jumps to inst_task_die on the WORKER's task, which takes gfx_lock and runs inst_unwin -> wm_destroy -> wm_paint_dmg -> wm_dmg_wins -> wm_draw_win -> wm_pkgcall -> another package's W_PAINT, plus wm_destroy_seg for the package's other (still visible) windows and desk_drop_x on kern_big. STACK-SLOTS-PLAN 12.4's rule 'a slice is sized by what lands on it' sized CWORD/RUNCPM at 256 for exactly this path, but Bounce (128) and the eight 192-class packages die the same way and t_stkclass only checks the worker's own static depth. The close box hides the window on the UI task first, so the common case takes wm_paint_dmg's empty-rect .chrome arm (wm_dock_under + menu_draw_bar, font_run) - still on 128 bytes minus a 64-byte interrupt floor; a second visible window or the dock under it takes the full paint chain. Failure: sch_stkdie on task_exit's canary check - STACK OVERFLOW panel at close. PLAUSIBLE, unmeasured.",
+   "evidence": [
+    "kernel/instance.inc:2196-2210 .die -> inst_task_die on the worker",
+    "kernel/instance.inc:1921-1947 inst_task_die: gfx_lock, inst_unwin, desk_drop_x",
+    "kernel/wm.inc:3071-3170 wm_destroy repaints via wm_paint_dmg",
+    "kernel/wm.inc:5304-5309 empty-rect .chrome arm draws bar and dock",
+    "apps/bounce/bounce.asm:32 OS88_STACK_128",
+    "docs/plans/completed/STACK-SLOTS-PLAN.md 12.4 CWORD/RUNCPM sized 256 for this path",
+    "kernel/sched.inc:2447-2449 canary check on task_exit's switch"
+   ],
+   "recommendation": "Do the teardown on the UI task: inst_task_die sets I_TASK=0xFF, posts the window's wm_clreq bit (or a reap byte for a windowless record) and task_exits with BX=0; ui_task's .cl_slot then reaches app_close_win's task-less arm on the 1KB stack. Add a stkwater reading of Bounce closed over a second window.",
+   "phase": "now",
+   "bytes_est": "+15 to +30 .text/.cold",
+   "prior_art": "Windows and the Mac always destroyed and painted on the owner's thread/event loop; os8088's own deferred close (SPEC 75.2) is the in-tree model.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: app_close_win (instance.inc:1648-1735) hides the window on the UI task and only sets the die flag for a tasked instance; the worker's OSAPI_TASK_ALIVE then runs inst_task_die (instance.inc:1921-1947) on its OWN slice: gfx_lock, wm_destroy (empty rect -> wm_paint_dmg .chrome: wm_dock_under + menu_draw_bar, both drawing text), wm_destroy_seg, desk_drop_x far call, gfx_unlock. SPEC 8.7.4 measured a covered Timer's font_run chain at ~90 bytes plus a 32-64 byte floor, so a 128 slice (Bounce, bounce.asm:32) is plausibly over. STACK-SLOTS-PLAN 12.4.3 named exactly this path for CWORD/RUNCPM. Unmeasured, as the reviewer says. Minor: it is eight 192-class packages (thewire, notepad, arkanoid, artful, fractal, wire, isotron, weave), not nine, and not all of them spawn a worker."
+  },
+  {
+   "id": "histsys-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "No int 0 (divide fault) handler on kern_big/kern_small: a 286+ hangs, an 8088 continues with garbage",
+   "detail": "Nothing installs int 0 outside kern_mega. On the IBM 5150/5160 ROM the vector is the BIOS stub that masks the 8259, so one divide overflow is a dead machine (docs/TESTING.md, tests/int0sweep.py); GLaBIOS's stub returns and the code continues with a garbage quotient; on a 286/386 running kern_big the pushed IP is the faulting div, so it re-executes for ever - a hang that reads as 'froze'. A shipped ctrl.inc bug reached it; package code dividing hostile data reaches it.",
+   "evidence": [
+    "SPEC.md:195770 'INT 0, which the kernel does not'",
+    "kernel/ctrl.inc:5975 'INT 0, and no handler for it'",
+    "kernel/instance.inc:1975-1978 wm_ptr2idx div cl faults",
+    "kernel/sched.inc:2686-2720 sch_diepanel, the only fatal panel"
+   ],
+   "recommendation": "Generalise sch_diepanel into a system-error panel taking a message pointer; point int 0 at a ~10-byte stub (install from the boot overlay). Later, kill the instance when CS is a package segment on a worker (kern_mega's mega_fkill shape).",
+   "phase": "now",
+   "bytes_est": "~+30 resident, 0 boot overlay",
+   "prior_art": "Mac SysError bomb box with an ID, Windows 3.0 UAE box, OS/2 trap screen - one fatal path that names what died.",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "No int 0 vector is installed outside kern_mega's IDT (grep; instance.inc:1976 and ctrl.inc:5975 both say so). Correction to the 8088 half: on the IBM 5150/5160 ROM the int 0 vector is the BIOS stub that masks the 8259, so one divide overflow is a DEAD machine (docs/TESTING.md:187, tests/int0sweep.py header); only GLaBIOS 'continues with garbage'. The 286+ re-execute hang stands (a fault pushes the faulting div's IP). The int0sweep soak row exists as a detector, not a handler. Not in either queue."
+  },
+  {
+   "id": "histsys-3",
+   "kind": "perf",
+   "severity": "medium",
+   "title": "The free-cluster count is recomputed (and on FAT16 re-read) on every DFREE, VOL_STAT and mount",
+   "detail": "dsk_free_clus_x walks the whole FAT every call: ~105 ms CPU on a 20MB disk (SPEC 18.4.5) and, on a FAT16 partition whose ~64-sector FAT sits behind a 9-sector window, FAT re-reads through dsk_fat_ofs_x. FTPD spent 44% of an upload here.",
+   "evidence": [
+    "kernel/disk.inc:6337-6470 dsk_free_clus_x",
+    "kernel/disk.inc:6454-6462 .f16: 'dsk_fat_ofs_x, which does disk I/O'",
+    "kernel/diskw.inc:485-509 dskw_dfree_x",
+    "kernel/diskw.inc:4845 dskw_setfat, the single FAT writer"
+   ],
+   "recommendation": "Cache [dsk_nfree]: 0xFFFF at mount, filled by the first walk, adjusted in dskw_setfat on a 0<->non-0 transition; kept across remounts of a fixed disk (DVK_DRV).",
+   "phase": "now",
+   "bytes_est": "~+20 resident",
+   "prior_art": "DOS DPB free-cluster count (0xFFFF = unknown, maintained by the allocator); FAT32 FSInfo.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dsk_free_clus_x (disk.inc:6337-6470) walks every entry on every call; its FAT16 arm calls dsk_fat_ofs_x once per FAT sector, which faults the window in, and the window is capped at DSK_FAT_SECS (disk.inc:5316-5324). No cached count exists (grep nfree). FTPD's 44% (SPEC 18.4.5) was fixed on the caller's side; the kernel cost stands. Byte estimate plausible; the cache must also be dropped on remount/refat and on a redirected volume (FSV_DFREE path)."
+  },
+  {
+   "id": "histsys-4",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "No scheduling preference for the UI task: input waits up to N worker quanta",
+   "detail": "sch_switch is pure round-robin from cur+1; sch_wake_ui marks task 0 READY but does not move it up, so with N busy workers a press waits up to N x 55 ms before ui_task runs. SPEC 7.3 fixed the lock half of FIELD-NOTES 27 and names this CPU half as untouched. SPEC 7.3 measured QUANTUM= on top of the lock fairness at 16-61 ms vs 37-70 - inside the noise for one drawing worker; the N-worker case is unmeasured.",
+   "evidence": [
+    "kernel/sched.inc:2477-2502 .scan round-robin",
+    "kernel/sched.inc:700-723 sch_wake_ui",
+    "kernel/ui.inc:1182-1184 [sch_uiwake] spent each pass",
+    "SPEC.md 7.3 'does not make the UI task run more often'"
+   ],
+   "recommendation": "Before the scan: if [sch_uiwake] set, task 0 READY and [fsx_task] = 0xFF, pick slot 0. The boost lasts one pass by construction. Mind t_hotpar.",
+   "phase": "now",
+   "bytes_est": "~+10 .text (switch path)",
+   "prior_art": "OS/2 1.x foreground/input thread boost; AmigaOS input.device at priority 20; VMS I/O-completion boost.",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Mechanism confirmed: sch_switch's .scan is pure round-robin from cur+1 (sched.inc:2477-2502) and sch_wake_ui only sets READY (sched.inc:700-723). Severity lowered to LOW: SPEC.md 7.3 already measured the quantum half - QUANTUM= gave 16-61 ms against 37-70 'inside the noise, because with the handover in place the UI task no longer needs more passes'. The case left is N>1 busy workers, unmeasured. The quote 'does not make the UI task run more often' is SPEC.md:18270 (10.2), and 7.3 says the same in its own words."
+  },
+  {
+   "id": "histsys-5",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Every int 13h freezes every task for ~400 ms",
+   "detail": "dsk_xfer raises [sch_lock] across every BIOS transfer, so no worker (drawing, network, the sound driver's refill/drain TASKS) runs during file I/O. Only the UI task calls int 13h, mem_pinseg pins the buffer, compaction is UI-only and sch_switch already refuses a foreign SS (SeaBIOS hop). The XT BIOS polls IRQ6 with IF=1; the AT BIOS calls int 15h AH=90h/91h. Hazards before doing it: [cur_inxfer] lets the mouse ISR draw while the transferring task owns the screen, so a worker taking gfx_lock must clear it; the retry path's dec/inc of sch_lock becomes redundant.",
+   "evidence": [
+    "kernel/disk.inc:1462 inc sch_lock across int 13h",
+    "kernel/disk.inc:2000 CURXFER_ON; kernel/mouse.inc:55",
+    "kernel/disk.inc:2030-2035 retry path drops/retakes the lock",
+    "kernel/sched.inc:2411-2419 sch_switch refuses non-LOW_SEG SS",
+    "SPEC.md:34302-34306 the rule, no failure named"
+   ],
+   "recommendation": "Release the switch lock across the BIOS floppy int 13h on the UI task (keep it for drivers, hibernate, kern_mega, the debug door); on an AT hook int 15h AH=90h to task_sleep the UI task until AH=91h. Take one MartyPC number first (a worker's fps during a 16KB read).",
+   "phase": "now",
+   "bytes_est": "+20 to +40 .text (+~25 for the AT hook)",
+   "prior_art": "OS/2 1.x and NetWare hooked int 15h 90h/91h; WIN386 likewise.",
+   "listed_as": "DISK-CPU-PLAN.md 7.2 (an aside, not a row)",
+   "verdict": "confirmed",
+   "verify_note": "dsk_xfer raises sch_lock across int 13h (disk.inc:1462) and the retry path drops/retakes it around fpg_busy (disk.inc:2030-2036); CURXFER_ON/OFF bracket the int (disk.inc:2000-2017). SPEC 18 states the rule ('task switching is paused') with no failure it prevents beyond the BIOS-rule extension. Not a row in DISK-CPU-PLAN (7.2 is a candidates list). Rethink-grade; the reviewer's hazards list (cur_inxfer, retry lock dance, mega/hibernate keeping the lock) is the right one; also note diskw.inc:6347's second int 13h site."
+  },
+  {
+   "id": "histsys-6",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Keyboard is polled outside the event ring, so key/mouse order is lost across a pass",
+   "detail": "ui_task takes one int 16h key per pass, then drains the whole mouse ring. Under starvation a click on window B followed by typing sends the first key to window A. SPEC 10 states the polling as a fact, not a decision.",
+   "evidence": [
+    "kernel/ui.inc:120-245 (.typed at :177) one key per pass",
+    "kernel/ui.inc:224-233, :408 the ring drain",
+    "kernel/kbddiag.inc:181 kbm_isr runs after the ROM's int 09h"
+   ],
+   "recommendation": "kbm_isr pushes a payload-less EVT_KEY marker when the BIOS tail moved; the drain fetches int 16h at the marker's position. Keep the poll as fallback for a key with no marker. Kernel-internal, no ABI.",
+   "phase": "now",
+   "bytes_est": "~+25 .text",
+   "prior_art": "Mac Event Manager queued keyDown beside mouseDown; Windows 3.x system queue held both in order.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: ui_task takes one int 16h key per pass (.typed, ui.inc:177) before the ring drain armed at ui.inc:300 (ui_drain = EVQ_CAP+1). Ordering loss across a pass is real; low."
+  },
+  {
+   "id": "histsys-7",
+   "kind": "size",
+   "severity": "medium",
+   "title": "Seven 36-byte copies of a union driver service table in resident .bss",
+   "detail": "drv_svc is DSV_SIZE*(DRVC_MAX-3) = 252 bytes on kern_big. DSV_* is the union of every class's services, so most of each copy is zeros. Only the SOUND copy is read by name on a hot path (20 sites, all CAPS/FM/RELINST/STREAM/TICK/TIERS/TONE); the others go through drv_cls_svc_x (~14 callers). DSV_FS is already read through the driver's segment, which proves the shape. drv_publish zeroes every cell and copies only as far as the driver's DRV_H_DSV, so a short (older) table reads 0; an in-place read must keep that refusal.",
+   "evidence": [
+    "kernel/driver.inc:6173 drv_svc resb DSV_SIZE*(DRVC_MAX-3)",
+    "drivers/os88drv.inc:294-410 DSV_* union, DSV_SIZE 36",
+    "kernel/driver.inc:1929-1958 drv_cls_svc_x",
+    "kernel/driver.inc:2832 drv_fs_call reads DSV_FS through the segment"
+   ],
+   "recommendation": "Keep class 1's copy; for every other class keep the SI that DRVV_ATTACH returned and read [es:di+DSV_*] with ES = the published segment. No driver change. Works for HMA (FFFF) and kern_mega selectors.",
+   "phase": "now",
+   "bytes_est": "-216 .bss +50..110 .text/.cold (each in-place read needs a DRV_H_DSV length test, or a minimum-length rule at DRV_VER), net ~-90 to -140 resident kern_big (ESTIMATED); ~-36 kern_small",
+   "prior_art": "Mac unit table holds a DCE handle and reads the driver header in place; DOS reads the device header in place.",
+   "listed_as": "ABI-BREAK-LIST D1 (renumber) / D2 (superseded) - this needs no renumber",
+   "verdict": "corrected",
+   "verify_note": "drv_svc is DSV_SIZE*(DRVC_MAX-3) = 36*7 = 252 bytes on kern_big (driver.inc:6173; DRVC_MAX 10) and 72 on kern_small (DRVC_MAX 5, no drivers at all). Correction the reviewer missed: drv_publish (driver.inc:4040-4100) does not just copy - it ZEROES all DSV_SIZE cells first and copies only as far as the driver's DRV_H_DSV length, so a cell an older/shorter driver lacks reads 0 and is refused. Reading in place would read past a short table into the driver's name string unless every non-sound read is length-checked against DRV_H_DSV (or a minimum table length is made a DRV_VER rule). The copy is also a snapshot at publish, where in-place reads see later driver writes. Net saving is therefore smaller than ~-150: re-estimate ~-90 to -140 kern_big, ESTIMATED; kern_small ~-36 (one 36-byte copy, nothing ever published there)."
+  },
+  {
+   "id": "histsys-8",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Kernel-driver block/file ABI wants a request block, not registers",
+   "detail": "Three dispatch bodies (drv_svc_call_x, drv_blk_call_x, drv_fs_call, plus drv_fs_hi on kern_mega) exist because every register is a verb argument: the class arrives in [drv_blkcls], the far pointer is staged in [drv_blkfp]/[drv_blkseg], and the sound path lost two arguments to the dispatcher before gates caught it. Errors return as CF+AX in per-verb code spaces.",
+   "evidence": [
+    "kernel/driver.inc:2577-2581 'no register left to say which class'",
+    "kernel/driver.inc:2525-2535 history of eaten arguments",
+    "kernel/driver.inc:2583-2617 drv_blk_call_x staging",
+    "kernel/driver.inc:2687-2760 drv_fs_hi (kern_mega)"
+   ],
+   "recommendation": "At the next DRV_VER bump (drivers only, not PKG_FMT): DSV_BLK and FSV_* take ES:BX -> {verb, class/unit, status, LBA/count or name/offset, buffer far ptr, completion word = 0}. One dispatcher, one status channel, an async door left open. OSAPI_FILE_* registers unchanged.",
+   "phase": "flagday",
+   "bytes_est": "kernel ~-60 to -120 resident (ESTIMATED); drivers + on their own disks",
+   "prior_art": "DOS request header at ES:BX; Mac ParamBlockRec with ioResult and ioCompletion (how the Mac got async I/O); Amiga IORequest.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Cited comments verified (driver.inc:2525-2535, 2570-2581, drv_blk_call_x 2583-2640 staging [drv_blkcls]/[drv_blkfp]/[drv_blkseg]). Flag-day rethink; byte estimate unverifiable and marked ESTIMATED."
+  },
+  {
+   "id": "histsys-9",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Thirteen callback words per window record; the storage need not be in the kernel",
+   "detail": "kern_big's W_PAINT..W_ONWH are 26 bytes x MAX_WIN 12 = 312 bytes .bss, nearly constant per window, each with a setter cell. K17-3 folds the setters; the deeper cut is a single W_CLASS near pointer into the package image to a handler table read at dispatch as [W_SEG:W_CLASS+n*2]. W_ONCL's runtime retirement becomes a flag bit; kernel windows get .cold tables.",
+   "evidence": [
+    "kernel/wm.inc:24-131 handler words and WIN_SIZE 74/65",
+    "kernel/ui.inc:886-893 W_ONCL retired at .cl_slot",
+    "kernel/wm.inc:396-505 wm_pkgcall already dispatches by BP"
+   ],
+   "recommendation": "Decide together with K17-2/K17-3: one class pointer per record, one setter cell. Survey packages that change a handler after WM_CREATE first.",
+   "phase": "flagday",
+   "bytes_est": "-264 .bss kern_big (-108 kern_small: 10 words x 6 windows), ~-60 cells, +150..180 .cold tables, +~8 dispatch: net ~-150 to -250 resident kern_big (ESTIMATED)",
+   "prior_art": "Windows 3.x WNDCLASS lpfnWndProc + message number; GEOS class method tables.",
+   "listed_as": "ABI-BREAK-LIST K17-2, K17-3",
+   "verdict": "corrected",
+   "verify_note": "Handler words verified: kern_big W_PAINT, ONKEY, ONCLICK, ONSIZE, ONMOUSEUP, ONDRAG, ONTIMER, ONSZ, ONWK, ONCL, ONRC, ABOUT, ONWH = 13 words x MAX_WIN 12 = 312 bytes (wm.inc:21-118, 162). kern_small has 10 (no ONDRAG/ONTIMER/ONWH) x MAX_WIN 6 (wm.inc:147) = 120 bytes, so replacing them by one class word saves ~-108 .bss there, not -180. Pairs with K17-2/K17-3 as stated."
+  },
+  {
+   "id": "histsys-10",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Repaint is synchronous and nested inside whoever caused the damage",
+   "detail": "wm_hide/destroy/show/resize call wm_paint_dmg immediately, running every uncovered window's W_PAINT inside the caller's callback on any task's stack; WM_PKGD_MAX exists only so the compactor knows which regions have frames standing; two damages in one handler are two passes; histsys-1 is this on a worker.",
+   "evidence": [
+    "kernel/wm.inc:3162-3168 wm_destroy -> wm_paint_dmg",
+    "kernel/wm.inc:389-394 re-entrancy 'by construction'",
+    "kernel/wm.inc:178-186 WM_PKGD_MAX"
+   ],
+   "recommendation": "Not now (callers that WM_SHOW then draw expect the paint). At a flag day accumulate damage into a short rect list (wm_clip_tab's split/add machinery) and paint at the top of the UI pass. histsys-1 is the no-ABI subset.",
+   "phase": "flagday",
+   "bytes_est": "+60 to +120 (ESTIMATED, unmeasured)",
+   "prior_art": "Mac updateRgn + update event when nothing else pending; Windows update region + WM_PAINT synthesised on an empty queue.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "wm_destroy ends in wm_paint_dmg on the vacated rect (wm.inc:3162-3167) and wm_pkgcall's header states the re-entrancy (wm.inc:389-394). Flag-day rethink; bytes ESTIMATED. (The WM_PKGD_MAX evidence line numbers are stale; the mechanism stands.)"
+  },
+  {
+   "id": "histsys-11",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "OSAPI_WM_WAKE writes through an unvalidated BX from ISR and worker context",
+   "detail": "wm_wake stores [bx+W_WKQ] and queues BX; evq_mup and wm_wake_disp write through it again. The SDK says 'BX is trusted' (MEMC_POST). A stale pointer from a worker scribbles kernel DS with no lock held.",
+   "evidence": [
+    "kernel/wm.inc:2343-2369 wm_wake",
+    "kernel/events.inc:231-236 evq_mup writes [bx+W_WKQ]",
+    "apps/os88api.inc:1726 'BX is trusted'",
+    "kernel/wm.inc:11672-11678 wm_isrec"
+   ],
+   "recommendation": "Call wm_isrec at wm_wake's entry and at MEMC_POST, refusing CF=1 - confines a bad BX to the window table.",
+   "phase": "now",
+   "bytes_est": "+6 to +12 .text",
+   "prior_art": "Windows 3.1's parameter validation at the USER/GDI door after 3.0's UAEs.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "wm_wake (wm.inc:2343-2367) writes [bx+W_WKQ] and queues BX with no range test; wm_isrec (wm.inc:11672-11678) is the 7-byte range test that would confine it (range, not alignment). os88api.inc:1726 says 'BX is trusted'. Low."
+  },
+  {
+   "id": "histsys-12",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The set of drivers is compiled into the kernel",
+   "detail": "drv_tab rows (16 bytes), filename strings, titles instantiated twice (DRV_TITLES) and a SYSTEM.CFG bit per row make a new driver a kernel change; the rows' comments are a history of indices that cannot move.",
+   "evidence": [
+    "kernel/driver.inc:1379-1600 drv_tab",
+    "kernel/driver.inc:1179-1226 driver filenames",
+    "kernel/driver.inc:1237-1257 DRV_TITLES"
+   ],
+   "recommendation": "At a DRV_VER + SYSTEM.CFG flag day: boot overlay scans SYSTEM\\*.DRV, class and title come from the header, SYSTEM.CFG keyed by name; resident keeps only the DRVC_MAX publication slots. The Drivers page (CTRL.DRV) reads titles from the files.",
+   "phase": "flagday",
+   "bytes_est": "~-200 to -350 resident, +~120 boot overlay (ESTIMATED)",
+   "prior_art": "DOS DEVICE= chain; Mac unit table - both open-ended.",
+   "listed_as": "",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, flag-day rethink)."
+  },
+  {
+   "id": "histsys-13",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Three representations of a position in a file, with opposite buffer conventions",
+   "detail": "Whole-file calls take a name; READ_SEQ takes name + 16-byte caller cursor at ES:DI and the buffer at DX:BX; WRITE_SEQ takes name + a token in DI and the buffer at ES:BX.",
+   "evidence": [
+    "apps/os88api.inc:6104-6160 READ_SEQ / WRITE_SEQ contracts"
+   ],
+   "recommendation": "With C2-C4: the write stream takes the same caller cursor (token as a field) and the same buffer pair.",
+   "phase": "flagday",
+   "bytes_est": "~0 to -30, unmeasured",
+   "prior_art": "Mac File Manager: one ParamBlock shape (ioRefNum, ioPosOffset) for both directions.",
+   "listed_as": "ABI-BREAK-LIST C2-C4 (neighbour)",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, record-grade)."
+  },
+  {
+   "id": "histsys-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Four error-code spaces and one text door",
+   "detail": "FERR_* 0..10, DRVE_* 0..9 with its own string table, loader LD_* codes, and verb-local codes in FSV/sound; OSAPI_FERR_TEXT answers only FERR.",
+   "evidence": [
+    "kernel/diskw.inc:58-68 FERR_*",
+    "kernel/driver.inc:2104-2125 drv_errstr",
+    "kernel/toast.inc:314-345 toast_say's verdict tables"
+   ],
+   "recommendation": "Record only; histsys-8's status field is where one space would naturally be born.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "Mac single OSErr space; DOS 3+ extended error with class and suggested action (int 21h AH=59h).",
+   "listed_as": "",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (record only)."
+  },
+  {
+   "id": "histsys-15",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_TASK_SLEEP with AX >= 0x8002 returns at the next tick",
+   "detail": "task_sleep stores ticks+AX and the wake scan (after sch_isr's inc of [ticks]) decides by the sign of ticks-T_WAKE, so a sleep of 32,770 ticks (~30 min) or more wakes at the first tick. The SDK promises 'AX = ticks to sleep' with no bound; toast_show clamps the same signed-compare case for its TTL.",
+   "evidence": [
+    "kernel/sched.inc:1155-1159 task_sleep",
+    "kernel/sched.inc:2362-2370 .wake signed compare",
+    "apps/os88api.inc:344 OSAPI_TASK_SLEEP",
+    "kernel/toast.inc:216-224 the same clamp"
+   ],
+   "recommendation": "Document the 32,767-tick ceiling in the SDK line, or clamp in task_sleep.",
+   "phase": "now",
+   "bytes_est": "0 (doc) or +5",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Mechanism confirmed: task_sleep stores ticks+AX (sched.inc:1157-1158), sch_isr increments [ticks] (sched.inc:2262) before the signed wake test (sched.inc:2362-2364). Because the first scan sees ticks+1, AX = 0x8001 still sleeps its full length; AX >= 0x8002 (a request over 32,769 ticks, ~30 min) wakes at the next tick. The SDK line (os88api.inc:344) states no bound. Same conclusion, boundary off by one."
+  },
+  {
+   "id": "histsys-16",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Two contradictory rules about .bss at boot",
+   "detail": "events.inc deleted evq_init because .bss arrives zeroed (padding), t_bsssentinel and SPEC 12.8.5.1 agree, vga12.inc says it arrives zeroed; sched_init, SPEC 8 and a dozen modules say nothing clears .bss. The ambiguity costs defensive resident zero-stores and caused fsx_cur.",
+   "evidence": [
+    "kernel/events.inc:61-65",
+    "kernel/sched.inc:341-363",
+    "kernel/vga12.inc:304-306",
+    "SPEC.md:12400",
+    "tests/unit/t_bsssentinel.py"
+   ],
+   "recommendation": "Adopt the zeroed rule and gate it: extend t_bsssentinel to assert the .bss span is all-zero in kernel.bin on all four budgeted kernels; then drop resident zero-stores (boot-overlay ones are free and may stay).",
+   "phase": "now",
+   "bytes_est": "0 to ~-20 resident",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "events.inc:61-65 and vga12.inc:304-306 say .bss arrives zeroed; t_bsssentinel.py and SPEC 12.8.5.1 gate on it; sched.inc:349-363 and SPEC 8 say nothing clears it. ticks/sch_* are in .bss (sched.inc:2962+), sched_init is boot-overlay code (sched.inc:302-322). The doc side is fixed by sched.json (SPEC 8) and here (sched.inc:360)."
+  },
+  {
+   "id": "histsys-17",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The implicit display context is eight scattered bytes reset one by one",
+   "detail": "gfx_unlock kills the clip list, blit pen and polarity, gfx_mono1, gfx_dis, dsk_batch, the display context, the widget and the busy pointer with separate stores; wm_pkgcall banks two of them per callback. That list is a DC bound to the lock hold.",
+   "evidence": [
+    "kernel/vga12.inc:5149-5268 gfx_unlock",
+    "kernel/wm.inc:397-417 wm_pkgcall banks gfx_b1ink and gfx_mono1"
+   ],
+   "recommendation": "Make the zero-reset fields adjacent and clear them with two or three word stores; name the block gfx_dc so R6 has a home.",
+   "phase": "now",
+   "bytes_est": "~-4 to -8",
+   "prior_art": "Windows DC per GetDC; QuickDraw GrafPort per window; Amiga RastPort.",
+   "listed_as": "ABI-BREAK-LIST R6",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: gfx_unlock (vga12.inc:5149-5262) resets wm_clip_n, gfx_b1ink, gfx_b1adp, gfx_mono1, gfx_dis, dsk_batch and the lock word as separate stores; wm_pkgcall banks gfx_b1ink and gfx_mono1. Low; ABI-BREAK-LIST R6 neighbour as listed."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; evq_push DROPS silently when the ring is full (16 records), and ui_drag,",
+   "new_text": "; a full ring (16 records) loses its OLDEST input (SPEC.md 10.1), so a\n; release can still be lost, and ui_drag,",
+   "why": "evq_push (events.inc:95-116) advances evq_head over the oldest record when evq_count = EVQ_CAP; it no longer refuses the newest."
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "    jae .full                   ; is banked at entry and dead on both arms -\n                                ; .full goes popf/stc/.out: pop si/pop ax/ret.\n                                ; evq_push would drop it silently; say so",
+   "new_text": "    jae .full                   ; is written on neither arm -\n                                ; .full goes popf/stc/.out: pop si/ret.\n                                ; evq_push would drop a record (SPEC.md\n                                ; 10.1); refuse instead, and say so",
+   "why": "wm_wake (wm.inc:2343-2367) pushes only SI and pushf; .out is pop si / ret, no AX bank; evq_push drops the oldest, not 'silently' this one."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "                                ; Torn reads cannot lie either: gfx_lock writes\n                                ; flag then owner inside its own cli window and\n                                ; gfx_unlock writes owner FIRST then flag, so\n                                ; the only interleaving visible is (1, 0xFF) =\n                                ; 0xFF01, which this refuses exactly as the two\n                                ; byte compares did; and an 8086 takes",
+   "new_text": "                                ; Torn reads cannot happen either: gfx_lock's\n                                ; .take and gfx_unlock each write flag and\n                                ; owner in ONE word store (vga12.inc), so no\n                                ; half-written pair is ever visible; and an 8086 takes",
+   "why": "vga12.inc:5124 `mov [gfx_lock_flag], ax` (flag 1 + owner) and :5262 `mov word [gfx_lock_flag], 0xFF00` - both one word store."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                ; the same 142. 256 is 1.8x that, which is\n                                ; thinner than this project usually runs, so",
+   "new_text": "                                ; the same 142. 256 was 1.8x that and 384 is\n                                ; 2.7x - thinner than this project usually runs, so",
+   "why": "SCH_STACK equ 384 (sched.inc:94); 256 was the size this probe was quoted against."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                ; above it: nothing clears .bss at boot, so\n                                ; every one of these has to be stored rather\n                                ; than assumed.",
+   "new_text": "                                ; above it: .bss arrives as the image's zero\n                                ; padding (SPEC.md 12.8.5.1, checked on the\n                                ; kern_big binary), but sched_init is boot-\n                                ; overlay code, so storing these costs no\n                                ; resident byte and they are stored rather\n                                ; than assumed.",
+   "why": "sched_init sits in .ovl/.boot2 (sched.inc:302-322); events.inc:61-65, SPEC 12.8.5.1 and t_bsssentinel.py all rest on .bss arriving zeroed."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "; Answered entirely from the resident FAT snapshot - NO DISK I/O, WHICH IS NOT\n; THE SAME AS CHEAP. dsk_free_clus_x counts every entry in that snapshot, so",
+   "new_text": "; Answered by counting the FAT - no disk I/O on a floppy, whose FAT is wholly\n; resident, but FAT re-reads through the window on a FAT16 partition (SPEC.md\n; 18.8) - AND NEITHER IS CHEAP. dsk_free_clus_x counts every entry, so",
+   "why": "dsk_free_clus_x's .f16 arm (disk.inc:6447-6462) calls dsk_fat_ofs_x per FAT sector, 'which does disk I/O'; [dsk_fatwn] is capped at DSK_FAT_SECS (disk.inc:5316-5324)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; NO DISK I/O - AND THAT IS NOT THE SAME AS\n                                 ; CHEAP (SPEC.md 18.4.5). It is answered from\n                                 ; the resident FAT snapshot by COUNTING EVERY\n                                 ; ENTRY IN IT, so the cost is O(clusters) of",
+   "new_text": "                                 ; NO DISK I/O ON A FLOPPY, FAT RE-READS ON A\n                                 ; HARD DISK'S FAT16 WINDOW - AND NEITHER IS\n                                 ; CHEAP (SPEC.md 18.4.5). It is answered by\n                                 ; COUNTING EVERY FAT ENTRY, so the cost is O(clusters) of",
+   "why": "disk.inc:6447-6462 re-reads FAT16 sectors through the window. NOTE: these are OSAPI contract lines in tools/abilock.py's fingerprint - apply with `python3 tools/abilock.py --update \"OSAPI_FILE_DFREE cost note corrected\"` (no PKG_FMT bump: a comment fix)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "FERR_DIRFULL equ 7               ; the root directory is full",
+   "new_text": "FERR_DIRFULL equ 7               ; the current directory has no free slot",
+   "why": "The kernel's own definition (diskw.inc:65) says 'the current directory has no free slot'; subdirectories exist (SPEC.md 19). Trailing equ comment: outside the abilock fingerprint."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The slot has always said \"no disk I/O\", and `dskw_dfree` has always been\nhonest: the answer comes out of the resident FAT snapshot and no sector is\nread.",
+   "new_text": "The slot has always said \"no disk I/O\", and on a floppy that is true: the\nanswer comes out of the resident FAT and no sector is read. On a FAT16\npartition the FAT is a window (§18.8), and the count re-reads FAT sectors\nthrough it as it goes.",
+   "why": "dsk_free_clus_x .f16 (disk.inc:6447-6462) calls dsk_fat_ofs_x, which loads the window, once per FAT sector; the floppy window is the whole FAT (disk.inc:5316-5324)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(kernel/sched.inc:422–423 and :434)",
+   "new_text": "(`sch_frame`, kernel/sched.inc)",
+   "why": "The DS/ES stosw pair is in sch_frame (sched.inc:1075-1092); the cited line numbers point elsewhere."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**This does not make the UI task run more often** — that is `gfx_lock`\nfairness (§7), still open — but",
+   "new_text": "**This does not make the UI task run more often** — that is the round-robin\nquantum (§7.3 closed the `gfx_lock` fairness half) — but",
+   "why": "gfx_lock_want/gfx_lock_last landed (vga12.inc:5082-5125, SPEC.md 7.3), and 7.3 itself names the quantum as the part that does not make the UI task run more often."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "## 76. The theme — Bright and Dark (`kernel/vga12.inc`, `kernel/ctrl.inc`)\n\n**Two themes, and the boundary is CHROME against CONTENT.** Bright is what\nthis OS has always looked like: §26's 50% dithered desktop, a white menu bar,\na white dock strip and white window title bars, all lettered in black. Dark\ninverts exactly those four and nothing else — the desktop becomes solid black,\nand the bar, the strip and every title bar become black lettered in white. A\nwindow's **content** is not themed in either: a Disk window's listing, Note\nPad's page, Paint's canvas and every package's face stay black-on-white,\nbecause content belongs to the application and the chrome belongs to the\nmachine.\n\nThat line is what keeps the feature small. It is also what keeps it honest:\na package cannot be asked to have a dark mode, and none is.\n\n**Three bytes are the whole mechanism.** `[thm_dark]` is the SETTING and\n`[thm_bgc]`/`[thm_inkc]` are what it MEANS — the chrome's ground and the\nchrome's ink, resolved once by `thm_set` at the switch, so every chrome site\nis a load rather than a branch. `thm_bg` and `thm_ink` set `[gfx_color]` from\nthem; `thm_pair`/`thm_rpair` answer the ink/background pair `font_run` takes,\n`thm_rpair` being the inverse for §59's toast strip and anything else that\nwants inverse video against the bar.\n\n**The substitution PAYS FOR ITSELF, which is why the pens are routines and\nnot a macro.** `mov byte [gfx_color], CWHITE` is five bytes and `call thm_bg`\nis three, so each of the ~30 chrome sites gives back two — more than the five\nroutines cost. Measured: the whole of the chrome plumbing is **+49 bytes of\n`.text`**, and theming §12.8's progress widget afterwards took `.text`\n**down** by 12.\n\nBoth pens preserve FLAGS. Several chrome sites set the pen between a\nCF-setting call and the branch that reads it — `wm_draw_title` calls\n`wm_flush` and branches on CF to decide whether a snapped window has a left\nborder (§11.95.2) — so a pen that clobbered flags would move the title bar one\npixel on exactly the windows that are flush with the screen edge.\n\n#### 75.3.3 `OS88UI_ADANGER` — Cancel / Proceed, and the ORDER is the whole of it",
+   "new_text": "#### 75.3.3 `OS88UI_ADANGER` — Cancel / Proceed, and the ORDER is the whole of it",
+   "why": "STRUCTURAL, half 1 of 2 (pairs with the next fix): #### 75.3.3 sat after the ## 76 heading and intro (SPEC.md:134585 vs :134621); this takes the heading and intro out from above it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 76.1. What is chrome",
+   "new_text": "## 76. The theme — Bright and Dark (`kernel/vga12.inc`, `kernel/ctrl.inc`)\n\n**Two themes, and the boundary is CHROME against CONTENT.** Bright is what\nthis OS has always looked like: §26's 50% dithered desktop, a white menu bar,\na white dock strip and white window title bars, all lettered in black. Dark\ninverts exactly those four and nothing else — the desktop becomes solid black,\nand the bar, the strip and every title bar become black lettered in white. A\nwindow's **content** is not themed in either: a Disk window's listing, Note\nPad's page, Paint's canvas and every package's face stay black-on-white,\nbecause content belongs to the application and the chrome belongs to the\nmachine.\n\nThat line is what keeps the feature small. It is also what keeps it honest:\na package cannot be asked to have a dark mode, and none is.\n\n**Three bytes are the whole mechanism.** `[thm_dark]` is the SETTING and\n`[thm_bgc]`/`[thm_inkc]` are what it MEANS — the chrome's ground and the\nchrome's ink, resolved once by `thm_set` at the switch, so every chrome site\nis a load rather than a branch. `thm_bg` and `thm_ink` set `[gfx_color]` from\nthem; `thm_pair`/`thm_rpair` answer the ink/background pair `font_run` takes,\n`thm_rpair` being the inverse for §59's toast strip and anything else that\nwants inverse video against the bar.\n\n**The substitution PAYS FOR ITSELF, which is why the pens are routines and\nnot a macro.** `mov byte [gfx_color], CWHITE` is five bytes and `call thm_bg`\nis three, so each of the ~30 chrome sites gives back two — more than the five\nroutines cost. Measured: the whole of the chrome plumbing is **+49 bytes of\n`.text`**, and theming §12.8's progress widget afterwards took `.text`\n**down** by 12.\n\nBoth pens preserve FLAGS. Several chrome sites set the pen between a\nCF-setting call and the branch that reads it — `wm_draw_title` calls\n`wm_flush` and branches on CF to decide whether a snapped window has a left\nborder (§11.95.2) — so a pen that clobbered flags would move the title bar one\npixel on exactly the windows that are flush with the screen edge.\n\n### 76.1. What is chrome",
+   "why": "STRUCTURAL, half 2 of 2: puts the ## 76 heading and its intro back after §75.3.3, directly above ### 76.1."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "## 51. driver.inc — loadable drivers\n\nThe kernel carries what every machine has. What only *some* machines have is\na **driver**: an ordinary file on the system disk, loaded into the heap on\ndemand, publishing a small table of services the kernel dispatches to. The\nfirst one is sound (§51.4) — the OPL2 and Sound Blaster tiers whose code\nwould otherwise be resident on a 128KB machine that has neither card.\n\nThe whole subsystem rests on one enabling change: **the system disk is a\nFAT12 volume now** (§19.3). A driver is a file on it, the settings that say\nwhich drivers load are a file on it, and both are reached through the file\nAPI that already existed.\n\n#### 50.6.5 `MEM_P_VIEW` — the Disk window's listing cache is a CACHE on `kern_small`",
+   "new_text": "#### 50.6.5 `MEM_P_VIEW` — the Disk window's listing cache is a CACHE on `kern_small`",
+   "why": "STRUCTURAL, half 1 of 2 (pairs with the next fix): #### 50.6.5 through #### 50.6.12 (SPEC.md:100209-100941) sat under the ## 51 heading and intro (:100196); this takes the heading and intro out from above them."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "### 51.0 NOT ON `kern_small` — the whole mechanism is `kern_big`'s",
+   "new_text": "## 51. driver.inc — loadable drivers\n\nThe kernel carries what every machine has. What only *some* machines have is\na **driver**: an ordinary file on the system disk, loaded into the heap on\ndemand, publishing a small table of services the kernel dispatches to. The\nfirst one is sound (§51.4) — the OPL2 and Sound Blaster tiers whose code\nwould otherwise be resident on a 128KB machine that has neither card.\n\nThe whole subsystem rests on one enabling change: **the system disk is a\nFAT12 volume now** (§19.3). A driver is a file on it, the settings that say\nwhich drivers load are a file on it, and both are reached through the file\nAPI that already existed.\n\n### 51.0 NOT ON `kern_small` — the whole mechanism is `kern_big`'s",
+   "why": "STRUCTURAL, half 2 of 2: puts the ## 51 heading and its intro back above ### 51.0, after the last §50.6 subsection."
+  }
+ ]
+}

@@ -171,6 +171,10 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 # the UNPACKED size. A disk recipe names $(CC_OVLZ)/<NAME>.OVL, never
 # $(BUILD)/<NAME>.OVL - tests/unit/t_pkgzrules.py fails the build otherwise.
 #
+# $(6) is parts that FOLLOW the overlay part, in table order: a LAZY part
+# after an EAGER overlay (os88pkg.py refuses an eager part after a lazy one),
+# which is C64's fast core (C64-SPEC 4.7). Empty for every other package.
+#
 # $(5) = `part` PUTS THE OVERLAY INSIDE THE PACKAGE (SPEC.md 73.14.2): the cut
 # module is appended as the LAST --part, after $(4), and no $(CC_OVLZ) copy is
 # made - there is no file to ship. It pairs with `%define CC_OVL_PART` in the
@@ -181,8 +185,8 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 CC_PARTZ := --part-compress $(if $(CCPARTZ),$(CCPARTZ),lz4)
 $(if $(filter-out part,$(5)),$(error CC_PACKAGE $(1): the fifth argument is `part` or nothing, not `$(5)`))
 $(if $(5),$(if $(3),,$(error CC_PACKAGE $(1): `part` names the overlay in the third argument, and there is none)))
-$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4) $(PKGZSTAMP)
-	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4) $(if $(5),$(BUILD)/$(3))),python3 tools/os88pkg.py $(PKGZARG) $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)))
+$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4) $(6) $(PKGZSTAMP)
+	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4) $(if $(5),$(BUILD)/$(3)) $(6)),python3 tools/os88pkg.py $(PKGZARG) $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4) $(6)))
 
 # The overlay is also a direct prerequisite of the all-apps/live images.
 # Declare its producer for fresh builds; recover it if only it was deleted.
@@ -257,6 +261,7 @@ $(BUILD)/ccsmoke.img: $(BUILD)/ccsmoke.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/ccsmoke.o88
 	@python3 tools/os88disk.py --verify $@
 
+#> [Applications] cc-smoke :: the C toolchain's smoke test package (tools/setup-cc.sh fetches SmallerC first)
 .PHONY: cc-smoke
 cc-smoke: $(BUILD)/ccsmoke.img
 

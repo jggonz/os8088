@@ -590,9 +590,9 @@ sc_o_note:     db 'NOTE     ', 0
 sc_o_more:     db '(', 0
 sc_o_more2:    db ' more findings were not kept)', 0
 ; the toasts - each fits SPEC.md 59.10's 24 characters
-sc_t_saved:    db 'Saved ?:\SYSCHECK.TXT', 0
-sc_t_notsaved: db 'Report not saved', 0
-sc_t_nomem:    db 'Not enough memory', 0
+TOASTSTR sc_t_saved, 'Saved ?:\SYSCHECK.TXT'
+TOASTSTR sc_t_notsaved, 'Report not saved'
+TOASTSTR sc_t_nomem, 'Not enough memory'
 sc_t_removed:  db 'Removed ', 0
 sc_t_files:    db ' files', 0
 ; the question - at most OS88UI_AMAX (34) characters

@@ -2,16 +2,18 @@
 ; os8088 - ui.inc
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
-; keyboard, drains one event from the system queue, runs any deferred
-; instance launch, any pending package load, any deferred kernel menu command
-; and any posted full repaint (all outside the gfx lock - app_launch,
-; loader_run and ui_cmd manage their own locking), and yields.
+; keyboard, drains the system event ring (up to EVQ_CAP records a pass,
+; SPEC.md 10.2), runs any deferred instance launch, any pending package load,
+; any deferred kernel menu command and any posted full repaint (all outside
+; the gfx lock - app_launch, loader_run and ui_cmd manage their own locking),
+; and yields.
 ;
 ; That deferral channel is what lets a handler running UNDER the gfx lock
-; ask for work that needs the lock: inst_launch_post for launches,
-; ui_post_cmd for the kernel's own CMD_* (SPEC.md 13). The lock is a
-; non-recursive spin only this task releases, so the alternative is a hang.
-; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap
+; ask for work that needs the lock: inst_launch_post for launches, a
+; [ui_pcmd] store and a [ui_post] bump for the kernel's own CMD_*
+; (SPEC.md 13). The lock is a non-recursive spin only this task releases, so
+; the alternative is a hang. Step 4 is the system clock (SPEC.md 37):
+; clk_tick on every pass that sees [ticks] move (SPEC.md 13.12) - it is cheap
 ; and keeps time whether or not anything is drawn - and, on the second, one
 ; gfx_lock around the menu bar's clock cell plus any open Date/Time page.
 ; Mouse-downs in the menu bar run menu_track and route the returned
@@ -23,14 +25,17 @@
 ; the owning instance exactly like W_ONCLICK.
 ; A RIGHT mouse-down takes none of that ladder: ui_rdown swallows the bar
 ; and the desktop, raises a background window without opening anything, and
-; pops a context menu (SPEC.md 12.4) on two things only - the frontmost
-; file-manager window's content, and a DOCK TILE, whose one item is Close
-; (SPEC.md 30.2). It never stamps [ui_click_t], which is what keeps a
+; hands the press whole to a front window that installed W_ONRC (SPEC.md
+; 13.11), and otherwise pops a context menu (SPEC.md 12.4) on the frontmost
+; file-manager window's content, a DOCK TILE, whose one item is Close
+; (SPEC.md 30.2), and with OS88_SHORTCUTS a desktop shortcut (SPEC.md
+; 26.8.5). It never stamps [ui_click_t], which is what keeps a
 ; right-click from composing with the next left click into a double-click.
 ; Mouse-downs on windows also hand the clicked window the menu bar
 ; (SPEC.md 12 - the raise paths repaint anyway, but a click on the window
-; that is already frontmost never reaches wm_front), and QUIT (close box ->
-; app_close_win: window, task and state freed), raise, or drag them;
+; that is already frontmost never reaches wm_front), raise or drag them, and
+; ARM the chrome boxes, whose matching release QUITs (close box ->
+; app_close_win: window, task and state freed; SPEC.md 13.5);
 ; content clicks on the front window feed its W_ONCLICK under the lock.
 ; Every wm_* call that repaints is made under the gfx lock, and the drag
 ; loop's binding rule is honored: the lock is only ever released while the
@@ -206,10 +211,14 @@ ui_task:
                                 ; judge: a BIOS reports an Alt+numpad character
                                 ; with AH = 0, which equals an empty latch
 .notae:
-    call kbm_key                ; with no mouse on the machine, the arrows ARE
-    jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
-                                ; the application's. One compare per keystroke
-                                ; on a machine that has one. 0x1C is not in
+    call far [KBFP + KBM_E_KEY] ; with no mouse on the machine, the arrows ARE
+.kbmk:                          ; the mouse (SPEC.md 9.6) and this key is not
+    jnc .events                 ; the application's: CF = 0, the pointer half
+                                ; took it. Its SLOT is the gate (9.6.7): on a
+                                ; machine that has a mouse, or once the half is
+                                ; dropped, it is mod_gone's CF = 1 - a far call
+                                ; per keystroke, and the key passes. (`.kbmk`
+                                ; is tests/kbmadopt.py's red arm.) 0x1C is not in
                                 ; kbm_tab and AL = 0 is not Space, so the
                                 ; synthesised key passes through untouched
     KFZ 4                       ; 4: kbm_key passed it through (SPEC.md 9.6)
@@ -297,13 +306,23 @@ ui_task:
                                 ; pass is dispatched by this pass - and ONCE
                                 ; per pass, so it belongs above .evloop rather
                                 ; than inside SPEC.md 10.2's drain
-    mov word [ui_drain], EVQ_CAP    ; SPEC.md 10.2: this pass will empty the
-                                ; ring, not sip one record from it - bounded
-                                ; at the ring's own size, because the mouse
-                                ; ISR can push while we dispatch and an
+    mov byte [ui_drain], EVQ_CAP + 1 ; SPEC.md 10.2: this pass will empty
+                                ; the ring, not sip one record from it -
+                                ; bounded at the ring's own size, because the
+                                ; mouse ISR can push while we dispatch and an
                                 ; unbounded drain would starve .tail's ladder
-    jmp short .evloop           ; over the handlers that sit ABOVE the
-                                ; dispatch, in short reach of its `jz`s
+    jmp .yield                  ; ...and the FIRST look goes through .yield's
+                                ; byte compare too, not through evq_pop: the
+                                ; queue is empty on nearly every pass, and an
+                                ; evq_pop that finds it so is ~200 cycles of
+                                ; pushes and pops where the compare is ~30
+                                ; (kernel hot-paths pass 1, sched-2). The +1
+                                ; above is the dec .yield takes on the way
+                                ; in, so the drain still allows EVQ_CAP pops.
+                                ; A BYTE store and a byte `dec` (the count is
+                                ; at most EVQ_CAP + 1, and the word's high
+                                ; byte is never read): the near jump's extra
+                                ; byte is paid by the store's immediate
 
 .mup:
     ; The release. Two species, and they differ in exactly one way:
@@ -695,7 +714,7 @@ ui_task:
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:                         ; SPEC.md 10.2 - every dispatch above lands here,
-    dec word [ui_drain]         ; and the ring is asked again before the tail
+    dec byte [ui_drain]         ; and the ring is asked again before the tail
     jz .tail                    ; runs. Two words of work when the queue is
     cmp byte [evq_count], 0     ; empty, which is nearly every pass. A
                                 ; BYTE (events.inc's .bss): the word form read
@@ -704,7 +723,7 @@ ui_task:
 .tail:
     cmp byte [mou_ptr], 0       ; the keyboard mouse's end-of-pass service
     jne .kbm_done               ; (SPEC.md 9.6.1): a press held the button so
-    call kbm_ui                 ; that whatever this pass dispatched could
+    call far [KBFP + KBM_E_UI]  ; that whatever this pass dispatched could
 .kbm_done:                      ; track it, and if nothing did, this is where
                                 ; the press becomes a click.
                                 ;
@@ -907,9 +926,13 @@ ui_task:
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
     xor ax, ax                  ; set by files.inc's click handler, stored as
-    xchg al, [ld_pending]       ; directory index + 1, consumed before running
-    or al, al                   ; - a BYTE now, and the xor above leaves AH 0
-                                ; so `dec ax` and the call below are untouched
+%ifdef DSK_BIGDIR               ; directory index + 1, consumed before running
+    xchg ax, [ld_pending]       ; - a WORD on this build (SPEC.md 22.6.4)
+    or ax, ax
+%else
+    xchg al, [ld_pending]       ; - a BYTE here, and the xor above leaves AH 0
+    or al, al                   ; so `dec ax` and the call below are untouched
+%endif
     jz .chk_assoc               ; ...and NOT .chk_pcmd: a document open posts
                                 ; no package index, so skipping past the step
                                 ; below on "no package pending" is skipping
@@ -1185,7 +1208,7 @@ ui_task:
 ; instance, with the dispatched instance stamped for sound grants
 ; (SPEC.md 34.3) - and differ only in which registers carry the payload. So
 ; this is the one body rather than three that have to be kept in step; it was
-; ui_bill, which was already two of them.
+; ui_ptcall, which was already two of them.
 ;
 ; THE PAYLOAD IS BANKED ON THE STACK AND READ BACK THROUGH BP, because
 ; task_cycles answers in DX:AX and inst_win_owner takes BX. `[bp+n]` addresses
@@ -1199,8 +1222,8 @@ ui_task:
 ; what wm_pkgcall wants and what the record already holds.
 ;
 ; Stack: +4 bytes deeper at the moment a package callback runs, against
-; STK0_SIZE 1,024 and a measured 274-byte watermark - it was +8 until the
-; start stamp took over the payload's own slots (kernel size pass 10).
+; STK0_SIZE 512 and SPEC.md 2.1's measured 246-byte watermark - it was +8
+; until the start stamp took over the payload's own slots (kernel size pass 10).
 ; -----------------------------------------------------------------------------
 ui_bill:
     push bp                     ; the handler...
@@ -1238,7 +1261,8 @@ ui_bill:
 ;      ui_arm_trk both), so this body does not
 ; out: nothing (all registers preserved; flags clobbered)
 ;
-; evq_push DROPS silently when the ring is full (16 records), and ui_drag,
+; A full ring (16 records) loses its OLDEST input (SPEC.md 10.1), so a
+; release can still be lost, and ui_drag,
 ; ui_grow and fm_drag each carry the same fallback in as many words - "the
 ; EVT_MUP was dropped (queue full) - the level still says so". Here the failure
 ; is worse than a stuck drag: an arm nobody spends would be fired by the NEXT
@@ -1357,9 +1381,9 @@ ui_arm_trk:                     ; ui_task tests [ui_armw] before calling
 .fall:
 
 ; -----------------------------------------------------------------------------
-; ui_lit_on / ui_lit_off / ui_lit_set - draw or un-draw the held box
-; in:  AL = the wanted state (0 or 1) for ui_lit_set; the named entries carry
-;      their own, which is what keeps AL free at the four call sites
+; ui_lit_on / ui_lit_off - draw or un-draw the held box (body: ui_lit_go)
+; in:  nothing - each entry pushes AX and loads its own state (0 or 1) into AL
+;      for ui_lit_go, which is what keeps AL free at the four call sites
 ; out: nothing; all registers preserved (flags clobbered)
 ;
 ; DRAWS ONLY WHEN THE STATE CHANGES, which is what makes ui_arm_trk affordable:
@@ -1639,7 +1663,9 @@ section .text
 ;
 ; A window pointer is never 0, so 0 is the "nothing recorded" sentinel - and
 ; .bss arrives zeroed (the overlay note in kernel.asm), so the machine's very
-; first title-bar press takes .first like any other.
+; first title-bar press takes .first like any other. A SPENT pair stores the
+; delta it measured instead, which is below UI_TDBLT and so no more a window
+; pointer than 0 is: every value below wm_wins reads "nothing recorded".
 ; -----------------------------------------------------------------------------
 ui_tdbl:
     mov ax, [ui_click_t]
@@ -1648,8 +1674,10 @@ ui_tdbl:
     sub ax, [ui_tclkt]          ; wrap-safe - the difference is what matters
     cmp ax, UI_TDBLT
     jae .first                  ; too slow: it restarts the pair below
-    mov word [ui_tclkw], 0
-    ret
+    mov [ui_tclkw], ax          ; SPENT: the delta, below UI_TDBLT, and so no
+    ret                         ; window's pointer - a 3-byte accumulator store
+                                ; for the 6-byte immediate 0 (kernel size pass
+                                ; 18, -3). CF = 1 is still the `cmp`'s
 .first:
     mov ax, [ui_click_t]
     mov [ui_tclkt], ax
@@ -1662,8 +1690,9 @@ ui_tdbl:
 ;           release (SPEC.md 13 - the ordering below is binding)
 ; in:  BX = window ptr, CX = mousedown x, DX = mousedown y
 ; out: nothing; window's W_X/W_Y updated (clamped: title bar fully on screen),
-;      and a full repaint IF it moved
-; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
+;      and the union of the old and new rects repainted (wm_paint_dmg) IF it
+;      moved
+; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
 ;
 ; The gfx lock is only released while the outline is erased: XOR draw/erase is
 ; self-inverting only if nothing touches the covered pixels in between, and
@@ -1712,8 +1741,9 @@ ui_track:
 
     call gfx_lock
     call ui_drag_xor            ; draw the outline (VRAM-direct, SPEC.md 32:
-                                ; a transient overlay never enters the back
-                                ; buffer, so no flush is needed here)
+                                ; a transient overlay, XOR-erased before
+                                ; the lock drops - SPEC.md 32 has no back
+                                ; buffer any more)
 .track:
     ; The linger below stretches each pass to a whole tick, so the button is
     ; tracked by EDGE, not level: the ISR queues every press/release, and a
@@ -1994,9 +2024,8 @@ ui_drag:
     mov bx, [ui_origy]
     mov dx, bx
     add dx, [ui_dragh]
-    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover's banner says it
-                                ; preserves every register, and its
-                                ; wm_rz_precover spends SI (tests/dockmark.py
+    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover spends SI, AX,
+                                ; BX and CX (its banner; tests/dockmark.py
                                 ; went red on a straddle without this reload)
     call wm_dmg_vacate          ; WHERE IT WAS is the whole of what can have
                                 ; gone stale (SPEC.md 11.91.2) - recorded
@@ -2119,9 +2148,7 @@ ui_drag_xor:
                                 ; transient overlay like the cursor - it is
                                 ; always XOR-erased before the lock drops, so
                                 ; the overlay is always erased before
-                                ; anyone else can draw. Going through the back
-                                ; buffer instead would dirty the whole window
-                                ; rect and flush it twice per pass.
+                                ; anyone else can draw.
                                 ; A TAIL CALL, both ends `.text`
 
 ; -----------------------------------------------------------------------------
@@ -2199,8 +2226,9 @@ ui_grow:
     xor di, di                  ; DI = 0, the width...
     call ui_grow_clamp
     push cx                     ; the width is settled and CX is the only
-    mov di, 2                   ; register free to hold it across the call
-    call ui_grow_clamp          ; ...DI = 2, the height
+    inc di                      ; register free to hold it across the call
+    inc di                      ; ...DI = 2, the height: ui_grow_clamp and
+    call ui_grow_clamp          ; wm_min_axd keep DI (kernel size pass 18, -1)
     mov dx, cx
     pop cx
 
@@ -2290,7 +2318,8 @@ ui_grow:
     ; window and before the union arithmetic below spends it; AX is the old
     ; last row and that comparison is still to come.
     push ax
-    mov word [wm_dmg_rzwin], 0
+    xor ax, ax                  ; (AX is banked and reloaded next: a 3-byte
+    mov [wm_dmg_rzwin], ax      ; accumulator store, kernel size pass 18, -1)
     mov ax, [bx + W_X]
     cmp ax, [ui_rzx]
     jne .norz                   ; the origin moved: the content went with it
@@ -2347,15 +2376,18 @@ ui_grow:
 .uw:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
-    mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
-    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
+    and word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
+    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7).
+                                ; (`and`, -1: gfx_unlock's first act on every
+                                ; kernel is a compare, so no flag left here is
+                                ; read - kernel size pass 18)
 
 .nodmg:                         ; nothing moved and nothing changed size, so
     pop ax                      ; no window owes a pixel - this one included,
                                 ; which wm_dmg_wins would have marked by
                                 ; POINTER whatever the rect said (11.91.2).
                                 ; The AX the rz block pushed is still owed
-    mov word [wm_dmg_stwin], 0  ; ...and the vacated rect is a one-shot whose
+    and word [wm_dmg_stwin], 0  ; ...and the vacated rect is a one-shot whose
                                 ; keeper is wm_dmg_wins, which this path is the
                                 ; first to arm and never reach: left set it
                                 ; would describe a window to the NEXT damage
@@ -2412,7 +2444,10 @@ ui_grow_clamp:
 ; ui_loc_gate - point Locator's conditional items at their live or disabled
 ;               string, just before a menu can be dropped (SPEC.md 47 rule 5)
 ; in:  nothing
-; out: nothing (all registers preserved)
+; out: nothing; clobbers AX, BX and the flags - and NOTHING ELSE: its one
+;      caller is ui_task's press arm holding x and y in CX/DX for menu_track,
+;      which writes AX and BX before it reads them, as fm_bar_gate_x and
+;      ui_dispatch do (kernel size pass 18: the AX/BX bank was -4)
 ;
 ; 'Close Window' with nothing open used to be a live item that answered with a
 ; beep. Whether a window is there is a stable, cheap fact - `wm_top` - so it is
@@ -2427,7 +2462,7 @@ ui_grow_clamp:
 ;
 ; NOT called before a popup (§12.4) or from menu_relayout: this list is only
 ; ever read while a menu is dropping, and one call site is one thing to keep
-; right. The tables-full refusals below (Timer and Bounce at their cap of ten)
+; right. Launches refused at a kind's cap (ui_cmd's beep, SPEC.md 29.4.1)
 ; stay beeps rather than greying, because the predicate is per-kind rather than
 ; one word - and they ARE beeps now, which is a correction to what this
 ; paragraph used to assert. app_launch fronted an existing instance at ANY cap
@@ -2438,8 +2473,6 @@ ui_grow_clamp:
 ; Disk is not in the list - fm_choose counts FM_MAXWIN itself (§22.1).
 ; -----------------------------------------------------------------------------
 ui_loc_gate:
-    push ax
-    push bx
     mov ax, menu_s_close        ; live: the plain string
     call wm_top                 ; BX = frontmost visible, 0 = nothing to close
     or bx, bx
@@ -2459,8 +2492,6 @@ ui_loc_gate:
                                 ; the only reader its answer ever had, and the
                                 ; three movs are .cold bytes there
 %endif
-    pop bx
-    pop ax
     ret
 
 ui_dispatch:
@@ -2510,8 +2541,8 @@ ui_dispatch:
     jae .ret                    ; kern_small, SPEC.md 14.6); a set with more
                                 ; cells must have had a handler
     shl bx, 1
-    xor ah, ah
-    add ax, [ui_loc_base + bx]
+    cbw                         ; AH = 0: AL is an item index, below the
+    add ax, [ui_loc_base + bx]  ; 16 a popup holds (kernel size pass 18, -1)
     jmp ui_cmd
 .ret:
     ret
@@ -2520,11 +2551,13 @@ ui_dispatch:
     ; The menu handler is a window callback reached through the bar, so it
     ; gets the W_ONCLICK treatment verbatim (SPEC.md 12.2): gfx lock, the
     ; owning instance stamped for sound grants (SPEC.md 34.3) and billed
-    ; for the cycles it spends (SPEC.md 8.1). The selection parks in .bss
-    ; rather than on the stack because task_cycles answers in DX:AX and
-    ; the UI task is the only thing that can ever be in here.
+    ; for the cycles it spends (SPEC.md 8.1). The selection STAYS IN AX:
+    ; it parked in .bss (ui_menusel) while task_cycles, which answers in
+    ; DX:AX, was called here - it is ui_bill's now, and ui_bill banks AX
+    ; round it. Nothing below writes AX: gfx_lock's clobber is the flags,
+    ; and wm_strseg's KES is push cs / pop es (kernel size pass 18: the
+    ; store, the reload and the word, -6 .text -2 .bss)
     dec ah                      ; cell -> the app's own 0-based menu index
-    mov [ui_menusel], ax
     call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
@@ -2549,8 +2582,8 @@ ui_dispatch:
     ; SPEC.md 13 reached from the bar, and the same routine answers both.
     ; It runs inline rather than through ui_post_cmd because ui_dispatch is
     ; reached with NO lock held - menu_track's was released before the call -
-    ; which is exactly why .close_box can take its own lock too. The guard
-    ; above is the one it always made, for the same reasons.
+    ; which is exactly why the close box's release (.mup) takes its own lock
+    ; too. The guard above is the one it always made, for the same reasons.
     call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
                                 ; Unbilled, like the close box - and here it
                                 ; could not be billed anyway: the record the
@@ -2575,7 +2608,7 @@ ui_dispatch:
     pop es                      ; DI is ui_bill's to clobber below (kernel
 .cbok:                          ; size pass 10, -3)
     jcxz .app_done              ; a handler withdrawn while the lock was down
-    mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
+                                ; (wm_about_set 0 / MENU_SET in the gap) must
     mov bp, cx                  ; not be called at offset 0 (SPEC.md 12.2).
     call ui_bill                ; The resolution above is OUTSIDE the billing
                                 ; bracket now, so a withdrawn handler is
@@ -2593,9 +2626,9 @@ ui_loc_base:
 UI_LOC_N equ 2
 
 ; -----------------------------------------------------------------------------
-; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)
-; in:  AX = CMD_*
-; out: nothing (all registers preserved)
+; [ui_pcmd] - one of the kernel's own menu commands, DEFERRED (SPEC.md 13)
+; a poster stores the CMD_* in [ui_pcmd] and bumps [ui_post]; ui_task step 3
+; spends it (there is no ui_post_cmd routine any more - see the note below)
 ;
 ; inst_launch_post's counterpart for the commands that are not launches, and
 ; it is load-bearing rather than stylistic. gfx_lock is a NON-RECURSIVE spin
@@ -2611,8 +2644,8 @@ UI_LOC_N equ 2
 ; is the first menu command that can free that very record, so running it
 ; inline would write cycles into a slot that had just been released.
 ;
-; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass and
-; -f bin gives .bss no image bytes (the dsk_cwd lesson, SPEC.md 1).
+; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass,
+; though .bss would read 0 there too (SPEC.md 10: the image's zero padding).
 ; -----------------------------------------------------------------------------
 ; (ui_post_cmd's one caller was STIKMENU.DRV's stm_pick, which writes its two
 ; stores out now - kernel size pass 14. The contract above is unchanged: one
@@ -2669,7 +2702,8 @@ menu_dropd  db 0                ; a pull-down is on the screen (SPEC.md 9.6.3).
 ; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
 ; you like - that is the package rule, and this is the menu item's rule.
 ; =============================================================================
-ui_s_nofile: db 'Not in '        ; ONE 'SYSTEM',0 serves both the
+TOASTRUN ui_s_nofile
+             db 'Not in '        ; ONE 'SYSTEM',0 serves both the
 ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; says the file is not in it - two labels
                                  ; over one `db`, so nothing may be inserted
@@ -2677,10 +2711,10 @@ ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; lives in (SPEC.md 28.3), on the system disk
                                  ; and the apps disk alike - the menu cannot
                                  ; know which is in the drive. The message
-                                 ; fits the 288px notice window, which a path
-                                 ; spelled out in full would not:
-                                 ; app_about_center centres it and font_str
-                                 ; stops at the SCREEN edge, not the window's
+                                 ; is a toast, which TOASTRUN holds to
+                                 ; TOAST_MAX - and a path spelled out in
+                                 ; full would not fit it
+TOASTEND
 ui_s_tmfile: db 'TASKMGR.O88', 0
 ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
                                  ; copied into the record - what identifies
@@ -2771,21 +2805,22 @@ ui_sys_open:
     ; (kernel size pass 17). kent_bp banked every register it writes.
     mov bx, [ui_desc]           ; BX = the name to match, hoisted out of the
     mov bx, [bx+UO_NAME]        ; scan: nothing in the loop writes it
-    mov di, inst_tab
-    mov cx, INST_MAX
-.scan:
+    mov di, inst_tab - I_RECSZ  ; ...over inst_next, the table's own walk: off
+    cld                         ; (the name compare's lodsb, below)
+.scan:                          ; the end is CF = 1, none open, the load
+    call inst_next              ; (kernel size pass 18, -1 against the CX
+    jc .load                    ; count and the `add` / `loop` tail)
     cmp byte [di+I_STATE], 1
-    jne .next
+    jne .scan
     test byte [di+I_KIND], KIND_PKG
-    jz .next
+    jz .scan
     push di
     mov si, bx
     add di, I_NAME
 .cmp:
-    mov al, [si]
-    cmp al, [di]
-    jne .nomatch
-    inc si
+    lodsb                       ; DS:SI, the kernel's name (kernel size pass
+    cmp al, [di]                ; 18: `mov al, [si]` and its `inc si` were a
+    jne .nomatch                ; byte more than this and the `cld` above)
     inc di
     or al, al
     jnz .cmp
@@ -2797,9 +2832,7 @@ ui_sys_open:
                                 ; below is what can push it past 127)
 .nomatch:
     pop di
-.next:
-    add di, I_RECSZ
-    loop .scan                  ; ...and none open falls into the load
+    jmp short .scan
 .load:
 %ifdef ROM_PKG
     ; THE ROM'S COPY FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a
@@ -2825,11 +2858,15 @@ ui_sys_open:
     jnc .out                    ; may inherit the ES a failure leaves)
 .disk:
 %endif
-    call osapi_file_here        ; bank where the user was: DX = the directory
-    mov [ui_tm_cwd], dx         ; cluster, BL = the drive. Two module words
-    mov [ui_tm_drv], bl         ; rather than the stack, because this is
+    call inst_where             ; bank where the user was: AX = the directory
+    mov [ui_tm_cwd], ax         ; cluster, DL = the drive. Two module words
+    mov [ui_tm_drv], dl         ; rather than the stack, because this is
                                 ; UI-task-only and one load at a time, like
-                                ; ld_fp
+                                ; ld_fp. (inst_where is osapi_file_here's own
+                                ; question, without the slot's register
+                                ; shuffle: kernel size pass 18, -1. DH is the
+                                ; caller's instance after it, and nothing
+                                ; below reads DH)
 
     mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
                                 ; machine, where this byte is 0 and this is
@@ -2883,7 +2920,7 @@ ui_sys_open:
                                 ; into SYSTEM's cluster on the FLOPPY
     mov bx, [ui_desc]
 
-    mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
+    and word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
     mov si, [bx+UO_FILE]        ; and so not loader_run either - there is no
     call COLD_SEG:ldf_ld_run_name ; BY NAME (SPEC.md 21.4): no listing to build
                                 ; and none to refresh, and no status line to
@@ -2912,11 +2949,13 @@ ui_sys_open:
                                 ; the sector ld_res_name has just read.
 .code:                          ; dwf_dskw_stat is a far call and answers in
     pop ax                      ; BX, so the descriptor is re-read after it
-    xor ah, ah                  ; SPEC.md 20.12.4: the entry proc's own toast
+    cbw                         ; SPEC.md 20.12.4: the entry proc's own toast
     xchg ah, [ld_said]          ; is up and names the reason better - say
     or ah, ah                   ; nothing, as ld_say_status does for a Disk
     jnz .back                   ; window's load. Read-and-clear in one, and
                                 ; it leaves AH = 0 for the index below
+                                ; (`cbw` for the zero: AL is an LD_E* code,
+                                ; 1..6 - kernel size pass 18, -1)
     mov bx, ax
     shl bx, 1
     mov si, [bx+fm_stattab]     ; the Disk window's verdicts (SPEC.md 21)
@@ -2955,11 +2994,12 @@ ui_tm_back:
                                 ; tail jump: CF is nobody's question here
 
 ui_tm_cwd:  dw 0                ; the directory and drive to go back to. In
-ui_tm_drv:  db 0                ; .text: -f bin zeroes no .bss, and A:'s root
+ui_tm_drv:  db 0                ; .text, though .bss would give the same 0: A:'s root
                                 ; is the right answer before the first load
 
 ui_s_tmttl:  db 'Task Manager', 0
-ui_s_nodisk: db 'No system disk in '
+TOASTRUN ui_s_nodisk
+             db 'No system disk in '
 ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; (SPEC.md 52.10.3) - a label rather than an
                                 ; offset, so rewording the message cannot
@@ -2968,6 +3008,7 @@ ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; `equ` this, the formatter's swap prompt
                                 ; being the only standalone 'A:' of the six.
                                 ; Reword the message; do not delete the label
+TOASTEND
 
 ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
                                 ; hand. In .text with a resting value for the
@@ -2989,7 +3030,7 @@ ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
 ; -----------------------------------------------------------------------------
 ui_cmd:
     dec ax                      ; CMD_ABOUT = 1 .. CMD_LAST (8 on small;
-    cmp ax, CMD_LAST            ; 11 or 12 on big with shortcuts) are CONTIGUOUS
+    cmp ax, CMD_LAST            ; 10 on big, 11 with shortcuts) are CONTIGUOUS
     jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
     mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
     shl bx, 1                   ; to 0xFFFF and the same unsigned compare
@@ -3005,12 +3046,14 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
+    dw .about, .ctrl, ui_tm_open, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
 %elifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
+    dw .about, .ctrl, ui_tm_open, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
 %else
-    dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
-%endif
+    dw .about, .ctrl, ui_tm_open, .done, .reboot, .shutdown, .close, .files
+%endif                          ; (Task Manager is ui_tm_open itself: a package
+                                ; on the system disk now, SPEC.md 28 - its
+                                ; `.tasks: jmp` went, kernel size pass 18, -3)
 
 %ifdef KERN_BIG
 .hiber:
@@ -3037,9 +3080,6 @@ ui_cmd:
                                 ; retf and ui_cmd does not, so the retf would
                                 ; pop a NEAR frame as CS:IP - a wild jump, and
                                 ; os88ovlchk refuses it
-.tasks:
-    jmp ui_tm_open              ; not a kind any more: it is a package on the
-                                ; system disk (SPEC.md 28)
 .about:                         ; THE ONE KIND ui_cmd LAUNCHES - Timer and
                                 ; Bounce are packages on the apps disk (SPEC.md
                                 ; 14.8) - and AL is ALREADY it: CMD_ABOUT - 1,
@@ -3203,8 +3243,6 @@ ui_rebootq: resb 1              ; 0 = nothing owed, else UI_RBQ_* - a restart
                                 ; the way out (SPEC.md 20.10)
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
-ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
-                                ; held across the billing calls (SPEC 12.2)
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)
@@ -3214,8 +3252,8 @@ ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
 ui_post:    resb 1              ; SPEC.md 13.13: HAS ANYTHING BEEN POSTED? The
                                 ; OR of the fifteen deferred-work flags, set
                                 ; beside each of them and cleared before the
-                                ; walk. -f bin zeroes no .bss and it does not
-                                ; matter: garbage here costs one walk. A
+                                ; walk. It arrives 0 (SPEC.md 10), and a
+                                ; stray non-zero would cost one walk. A
                                 ; setter may `inc` it (four bytes against the
                                 ; store's five): only NON-ZERO is read, and the
                                 ; one way inc misses - exactly 256 posts
@@ -3241,7 +3279,9 @@ ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
                                 ; is never 0, so 0 is the sentinel and .bss
                                 ; arrives zeroed (kernel.asm) - ui_tclkw's
                                 ; convention exactly
-ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass
+ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass -
+                                ; read and written as its LOW BYTE only (a
+                                ; word for ui_dragx's alignment below)
 %ifdef KERN_BIG
 ui_dragx:   resw 1              ; SPEC.md 13.8.2: the point W_ONDRAG was last
 ui_dragy:   resw 1              ; delivered at, seeded at the press with the
@@ -3259,8 +3299,9 @@ ui_armlit:  resb 1              ; SPEC.md 13.8.1: is that box currently DRAWN
                                 ; down? THE GLASS ALWAYS SHOWS THIS BYTE - that
                                 ; is the invariant the whole feature rests on,
                                 ; and wm_chrome_relit is what keeps it true
-                                ; across a repaint. ui_lit_set is the only
-                                ; writer that also draws
+                                ; across a repaint. ui_lit_go, the body of
+                                ; ui_lit_on/off, is the only writer that
+                                ; also draws
 %endif                          ; KERN_BIG
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)

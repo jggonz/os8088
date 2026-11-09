@@ -58,9 +58,11 @@ HS_STACK    equ 0x3FF0          ; the stub's stack top: under a CGA's 16KB
 ; the hibernate MODULE's CS (`HBP_WAKE + 2` is written from it) and not the
 ; kernel's.
 HS_KSEG     equ 0x0442          ; dw the resumed kernel's KERNEL_SEG. Above
-                                ; every KDS_* cell (0x0430..0x0441) so the two
-                                ; stubs' maps do not alias, though they never
-                                ; coexist
+                                ; KDS_* 0x0430..0x0441, though KDS_CHEAD,
+                                ; KDS_FMT and kern_mega's KDS_KSEG/KORG sit
+                                ; higher, and HS_DOSCODE IS KDS_CPLEN's low
+                                ; word: harmless only because the two stubs'
+                                ; cells are never staged together
 HS_DOSAKB   equ 0x0444          ; dw the ARENA the DOS program was given, in
                                 ; KB, on a handoff return (SPEC.md 96.41.1).
                                 ; HS_DOSCODE's companion and staged by whoever

@@ -16,7 +16,7 @@
 ; takes HDDTOOL.DRV's shape (SPEC.md 52.11): a driver-format image with class
 ; DRVC_OVL, no row in drv_tab, no publication slot and no Control Panel page,
 ; loaded and attached by its OWNER - which for HDDTOOL is HDD.DRV and here is
-; the kernel. DRV_MAX is still 4 and DRVC_MAX is still 5.
+; the kernel. Neither DRV_MAX nor DRVC_MAX counts it.
 ;
 ; WHAT IT BOUGHT, and it is the whole reason: a machine with no XMS - which is
 ; every 8088, and the machine this project is calibrated against - was
@@ -260,8 +260,9 @@ section .cold                   ; xm_boot is COLD, and that is not a saving:
 ; published - the snd_live ordering of SPEC.md 34.7. Every cell below tests
 ; that one word, so it must not be visible before what it gates.
 ; -----------------------------------------------------------------------------
-section .boot2                   ; THE BOOT OVERLAY (SPEC.md 2.5.2,
-                                ; docs/plans/LAST-DROP-BYTES.md row 5): kmain calls
+B3SECT                          ; `.boot3` (BOOT3-PLAN wave 4; the blob,
+                                ; docs/plans/LAST-DROP-BYTES.md row 5, before
+                                ; it): drv_boot_x calls
                                 ; this once, right at the end, and the XMS
                                 ; driver it attaches outlives it - what does not
                                 ; is the attaching. The three drv_* edges below
@@ -281,13 +282,13 @@ xm_boot_x:
     cmp byte [xm_row+DRVR_WANT], 0
     je .out                     ; no store on this machine: not one sector
     mov bx, xm_row
-    call bvs_cgo                ; loaded and validated, NOT attached
+    call b3_cgo                ; loaded and validated, NOT attached
     dw drv_load_at
     jc .out
     mov bp, [bx+DRVR_ENT]
     mov al, DRVV_ATTACH
     mov ah, XM_ABI_VER          ; ...which the image checks against its own
-    call bvs_cgo                ; out: SI = the XMV table, AX = KB, DL = the
+    call b3_cgo                ; out: SI = the XMV table, AX = KB, DL = the
     dw drv_call
     jc .refuse                  ; CPU_F_* that actually verified
     push ax
@@ -350,7 +351,10 @@ xm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this through SPLGATE1
+    retf                        ; FAR: drv_boot_x reaches this by B3CALL,
+                                ; both in `.boot3` since BOOT3-PLAN wave 4
+                                ; (SPLGATE1 from kmain, BLOBCALL, then B2CALL
+                                ; before it)
 .refuse:
     mov bx, xm_row              ; ...and here too, for the same reason. This
                                 ; path worked BY LUCK on the machine it was
@@ -368,13 +372,14 @@ xm_boot_x:
                                 ; but a debugger reading the row should find
                                 ; the truth rather than the DRVE_OK the load
                                 ; stamped on its way past
-    call bvs_cgo            ; BX = the row; the claim goes back and
-    dw drv_release              ; (the blob's hop: drvf_drv_release went)
+    call b3_cgo            ; BX = the row; the claim goes back and
+    dw drv_release              ; (`.boot3`'s hop: drvf_drv_release went)
     jmp short .out              ; nothing was hooked
 %endif
 
 ; The far entry kmain used to reach xm_boot through is GONE with the move: the
-; body is in the blob and SPLGATE1 is the crossing now (SPEC.md 2.5.2).
+; body is in `.boot3` and drv_boot_x's B3CALL is the crossing now (SPEC.md
+; 2.5.2, 2.9.15).
 
 section .text
 
@@ -685,7 +690,7 @@ xm_copy:
 ; instance.inc's inst_rel_rec does the record -> slot conversion once for the
 ; sound release and this one together and TAIL-JUMPS in, so this entry is
 ; reached at the same depth it always was. The fourth is ld_unreserve
-; (loader.inc:157), SPEC.md 41.5.1's abort sweep, which owes the blocks and
+; (loader.inc), SPEC.md 41.5.1's abort sweep, which owes the blocks and
 ; not a sound grant and comes in far through cw_xm_release_rec.
 ;
 ; That fourth caller is why the two releases are not simply one body: it is in
@@ -701,11 +706,10 @@ xm_copy:
 ; build. tests/xmtest + tests/xmcheck.py is the gate that makes the next such
 ; loss loud, and it is verified to FAIL with the three calls removed.
 ;
-; ONE TRAP, and it is not this routine's: a block claimed in a package's ENTRY
-; PROC is stamped 0xFF (the kernel), not the instance, because inst_caller
-; answers with the running task's T_INST when no callback is being dispatched
-; - and the loader far-calls the entry on the UI task. Such a block matches no
-; slot and this will never free it. Claim from a callback (SPEC.md 41.5.1).
+; A block claimed in a package's ENTRY PROC is stamped with its instance like
+; any other: loader_run step 8 brackets the entry as a stamped dispatch, so
+; inst_caller answers the instance there too (SPEC.md 41.5.1), and this
+; releases it.
 ; -----------------------------------------------------------------------------
 xm_release_rec:
     call kent_bp                ; KENT: push ax..bp (the teardown's, once per

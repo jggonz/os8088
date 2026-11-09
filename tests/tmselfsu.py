@@ -87,9 +87,9 @@ class MegaOwn(object):
     interval paint has exactly one door, `tm_update` (the worker's, after
     tm_quiet said the page moved), so a stop there IS the page drawing
     cells, and a page that did not enter it drew none. `cells` counts those
-    entries; wm_su_try.occl/take/drop are the kernel's same three. The
-    waits are GUEST seconds, capped at six memory-page paints (TM_INT x
-    TM_SLOW is 2 s) where a pump of N frames would be N/60 of them."""
+    entries; wm_su_try.occl/take/drop are the kernel's same three. The waits are
+    GUEST seconds, capped at six memory-page paints (TM_INT x TM_SLOW is 2 s)
+    where a pump of N frames would be N/60 of them."""
 
     def __init__(self, m, mo, upd):
         self.m, self.mo, self.upd = m, mo, upd

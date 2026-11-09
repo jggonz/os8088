@@ -117,9 +117,18 @@ ap_upcase:
 ap_ensure_bufs:
     cmp word [ap_la_seg], 0
     jne ap_rpin
+    push cx
     mov ax, 32                     ; AP_LA_SZ / 1024
-    call OSAPI_MEM_CLAIM           ; out CF, DX = base segment
-    jc .fail
+    mov cx, 32                     ; ALL OF IT PAGE-SAFE: the floppy's 8237
+    call OSAPI_MEM_CLAIM_DMA       ; writes every gulp straight into it, and
+    jnc .got                       ; a run across a 64KB page is split there,
+    call OSAPI_MEM_CLAIM           ; a revolution lost a pass (KERN-MEGA-PLAN
+.got:                              ; 14.160: on kern_mega a pool block). No
+    pop cx                         ; page-safe run: the plain claim, as before
+    jc .fail                       ; (out CF, DX = base segment; `mov cx, 32`
+                                   ; and not `mov cx, ax`: an EVEN +12, so
+                                   ; the player's code after it keeps its
+                                   ; word parity on a 16-bit bus)
     mov [ap_la_seg], dx
     jmp short ap_rpin              ; (born pinned; the speaker ring may not be)
 .fail:
@@ -223,6 +232,10 @@ ap_free_ring:
 .out:
     ret
 
+%ifdef PKG_MEGA                     ; kern_mega's arm: a gulp of a file
+%define AP_RSEQ aph_rseq            ; HELD WHOLE is a copy out of the hold,
+%endif                              ; any other the disk's - and a filling
+                                    ; file's copied in (aphold.inc)
 %define APLOOK_REFILL               ; ap_refill_chunk
 %include "aplook.inc"
 %undef APLOOK_REFILL
@@ -266,6 +279,9 @@ ap_open_track:
     mov word [ap_msg], ap_s_opening
 
     call ap_stream_close          ; a clean slate (drains the worker)
+%ifdef PKG_MEGA
+    call aph_begin                ; kern_mega's arm: the hold kept, or claimed
+%endif                            ; for the stream to fill (aphold.inc)
     call ap_prep_track            ; the file parsed and the look-ahead primed
     jc .refuse                    ; (ap_msg says why)
     call OSAPI_SND_CAPS           ; THE TIER NOW, not at launch: the
@@ -735,6 +751,9 @@ ap_cmd_stop:
     call ap_stream_close
     mov ax, ap_s_stopped
 ap_stop_msg:                      ; AX = what the status line says
+%ifdef PKG_MEGA
+    call aph_free                 ; Stop, and the list's end: the hold back
+%endif
     mov [ap_msg], ax
     mov byte [ap_state], AP_ST_STOP ; (the clock and the bar: ap_stream_close)
     ret

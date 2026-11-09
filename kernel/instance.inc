@@ -4,8 +4,8 @@
 ; The instance table (SPEC.md 29): one record per running application
 ; instance, built-in kind or loaded package. The table is the single source
 ; of truth for "what is running" - the dock renders from it, the Task
-; Manager names tasks through it, and the package-region allocator derives
-; occupancy from it.
+; Manager names tasks through it. (A package region is a heap claim owned by
+; its record's slot, SPEC.md 20.1/50.3 - nothing derives occupancy from here.)
 ;
 ; Concurrency (SPEC.md 29.2, binding): records publish with an I_STATE=1
 ; byte store as the LAST write (task_spawn precedent); task-less instances
@@ -19,7 +19,8 @@
 ; A package instance can be on EITHER side of that split since SPEC.md 20.6:
 ; it is born task-less, and a window callback may claim it one worker task
 ; through inst_pkg_spawn. Once it has one, its region is freed by
-; task_exit's release byte from the worker, not by the UI task.
+; mem_free_rec on the worker, in inst_task_die, and the record by task_exit's
+; release byte - not by the UI task.
 ; =============================================================================
 
 ; --- instance record, 32 bytes (SPEC.md 29.1) ---------------------------------
@@ -41,17 +42,18 @@ IF_FSMIN equ 2                  ; I_FLAGS bit1: ...and it went down from
                                 ; going that is not kept
 IF_DESK  equ 4                  ; I_FLAGS bit2: this instance's window is a
                                 ; DESK window (SPEC.md 11.103), so it has NO
-                                ; dock tile (SPEC.md 30). Set by OSAPI_WM_DESK's
-                                ; MAKE on the CALLER's record - in the entry
-                                ; proc, before the loader's step 9 publishes it
-                                ; (which writes no I_FLAGS) - and zeroed with
-                                ; the record by inst_alloc
+                                ; dock tile (SPEC.md 30). Set by ld_alloc for an
+                                ; OS88_F_DESK launch while the record is still
+                                ; unpublished, then set or cleared by the
+                                ; loader's step 9 off the window the entry proc
+                                ; returned (desk_drop_x clears it), and zeroed
+                                ; with the record by inst_alloc
 I_KIND   equ 2                  ; byte: KIND_*; bit 7 = package
 I_TASK   equ 3                  ; byte: task slot (SPEC.md 8), 0xFF = none
 I_WIN    equ 4                  ; word: window record ptr
 I_SPTR   equ 6                  ; word: builtin state ptr / package base
 I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins,
-                                ; 0xFFFF for a 64KB region (SPEC.md 20.1.1)
+                                ; at most APP_MAX_SIZE = 0xFE00 (SPEC.md 20.1.1)
 I_ICO_PKG equ 1                 ; the I_ICON value meaning "in this
                                 ; instance's own region, at LD_HDR_SIZE": 1
                                 ; can never be a real .text body pointer, the
@@ -150,7 +152,7 @@ SSI_TASK   equ 3                ; byte: the task slot, 0xFF = none
 SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record
 SSI_SEG    equ 6                ; word: the region's base segment
 SSI_SIZE   equ 8                ; word: region BYTES, 0 for a built-in
-                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)
+                                ; and at most 0xFE00 (SPEC.md 20.1.1)
 SSI_KB     equ 10               ; word: KB this instance holds off the heap -
                                 ; the ONE field filled outside the cli window,
                                 ; and the one that is not the record's own
@@ -366,7 +368,8 @@ inst_next:
 ; -----------------------------------------------------------------------------
 ; inst_of_seg - which live package instance is running at this segment?
 ; in:  BX = a segment
-; out: CF = 0, DI = the first live KIND_PKG record whose I_SPTR matches;
+; out: CF = 0, DI = the first KIND_PKG record, live or dying, whose I_SPTR
+;      matches;
 ;      CF = 1 = none does (DI = one past the table)
 ; clobbers: DI (the output), flags - and nothing else.
 ;
@@ -521,16 +524,14 @@ inst_park_mk:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 inst_parksafe_set:
-    push ax
-    push bx
-    push di
-    call inst_es_slot           ; BX = the caller's slot, CF = 0 - or CF = 1
-    jc .no                      ; (the scan and the index, said once)
+    push bx                     ; ...and NOT AX: nothing here writes it, and
+    push di                     ; inst_es_slot keeps it (inst_of_seg walks DI,
+    call inst_es_slot           ; inst_fhome_idx banks AX round inst_idx) -
+    jc .no                      ; kernel size pass 18, -2 for the pair
     mov [bx+inst_parksafe], al  ; ...and CF is still inst_es_slot's 0
 .no:                            ; ...and the CF=1 arm arrives carrying its own
     pop di
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -552,15 +553,14 @@ inst_parksafe_set:
 ; it can: that the caller owns the instance whose worker it is arming.
 ; -----------------------------------------------------------------------------
 inst_restart_set:
-    push ax
-    push bx
+    push bx                     ; (AX read, never written: as above)
     push di
     call inst_es_slot
     jc .no
     shl bx, 1                   ; doubled here alone, this being the only WORD
     mov [bx+inst_restart], ax   ; table among them - and CF = 0 is the shl's:
 .no:                            ; BX < INST_MAX has a clear top bit
-    jmp short inst_parksafe_set.no  ; the same three pops, one routine up
+    jmp short inst_parksafe_set.no  ; the same two pops, one routine up
 
 ; -----------------------------------------------------------------------------
 ; inst_park_req - ask every package worker to stand still, and wait for them
@@ -593,9 +593,9 @@ inst_park_req:                  ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
     push dx                     ; and NOT CX: this body never writes it, and
     push di                     ; task_yield banks it through the whole frame
     mov byte [inst_parkreq], 1
-    mov ax, [ticks]
-    add ax, INST_PARKW
-    mov dx, ax                  ; DX = the deadline
+    mov dx, [ticks]             ; DX = the deadline, built in DX itself (AX
+    add dx, INST_PARKW          ; is not read before .wait's reload: kernel
+                                ; size pass 18, -1)
 .wait:
     ; HAS EVERY LIVE PACKAGE WORKER PARKED? (this walk was inst_park_all, a
     ; routine with this one caller - inline since size pass 9). Off the end
@@ -646,8 +646,10 @@ inst_wk_parked:
 ; clobbers: flags
 ;
 ; mem_can_move's question, asked of instance.inc because inst_tab is this
-; module's (SPEC.md 29). A segment that matches no instance answers CF = 1:
-; a driver's image matches none, and "I cannot tell" has to mean "it is busy".
+; module's (SPEC.md 29). A segment that matches no instance is a driver's
+; image, and answers for the driver's TF_SERVICE tasks: CF = 0 only once every
+; one of them has parked (the .drv arm below), all or nothing, since a task
+; cannot say which driver it runs in.
 ;
 ; Like inst_park_req's walk above, it keeps "clobbers: flags" by writing only
 ; DI and BX, both banked: the [mem_cp_pl] arm's arithmetic and its exhaust
@@ -656,22 +658,23 @@ inst_wk_parked:
 ; -----------------------------------------------------------------------------
 inst_seg_parked:
     push di
-    call inst_of_seg
-    jc .drv
+    push bx                     ; ONE bank for both arms: the .drv walk and the
+    call inst_of_seg            ; [mem_cp_pl] arm's arithmetic both write BX, and
+    jc .drv                     ; the two answers below were .drv's tail anyway
     cmp byte [di+I_TASK], 0xFF
-    je .free                    ; no worker at all
+    je .svcok                   ; no worker at all
     call inst_wk_parked
-    jne .free                   ; parked: it is standing at the top of its own
+    jne .svcok                  ; parked: it is standing at the top of its own
                                 ; loop and holds nothing derived
     cmp byte [mem_cp_pl], 0     ; ...OR mem_avail IS PLANNING (SPEC.md 66.4.3.5):
-    je .busy                    ; the claim it answers for parks every package
+    je .svcbusy                 ; the claim it answers for parks every package
                                 ; worker before it moves anything (mem_compact
                                 ; .nowt, inst_park_req), so a worker merely
                                 ; RUNNING now is one that claim will find
                                 ; standing. Never true inside mem_compact's
                                 ; own plan, whose answer is followed by moves. A
                                 ; driver's task is not asked about here
-    push bx                     ; ...and NOT AX: DI is spent once the slot is
+                                ; ...and NOT AX: DI is spent once the slot is
     mov bl, [di+I_TASK]         ; read, so the arithmetic below takes it
     xor bh, bh
     shl bx, 1
@@ -686,11 +689,11 @@ inst_seg_parked:
                                 ; worker sleeps 9): inst_park_req wakes nobody,
                                 ; so the claim will find it where it is now
     jmp short .svcok            ; ...not asleep: it reaches ALIVE in the park.
-                                ; Both answers are .drv's own tail below, which
-                                ; pops the same BX (size pass 10)
-.free:
-    CLC_OR_STC .busy            ; CF = 0 free, or (.busy) CF = 1
-    jmp short .cf
+                                ; Every answer is .drv's own tail below, which
+                                ; pops the BX the entry banked (size pass 10;
+                                ; the instance arm's own .free/.busy pair and
+                                ; its second `push bx` went in kernel size pass
+                                ; 18, -5)
 .drv:
     ; NO INSTANCE OWNS IT, so it is a DRIVER image (SPEC.md 51.3) - and a
     ; driver's workers are the TF_SERVICE tasks (SPEC.md 66.5.5). Has every
@@ -698,8 +701,7 @@ inst_seg_parked:
     ; had this one caller and is inline since size pass 9, walking the record
     ; and the sch_parked byte side by side instead of re-deriving one from a
     ; slot count. The byte walks in DI, which inst_of_seg's refusal left as
-    ; nothing and the `pop di` below puts back.)
-    push bx
+    ; nothing and the `pop di` below puts back. BX was banked at the entry.)
 %ifdef OS88_COMPACT
     cmp byte [wm_tcnt], 0       ; A PACKAGE WORKER INSIDE A DRIVER VERB (K9):
     jne .svcbusy                ; ETHER.DRV's run on FTPD's, Telnet's and the
@@ -721,7 +723,6 @@ inst_seg_parked:
 .svcok:
     CLC_OR_STC .svcbusy         ; CF = 0 all parked, or (.svcbusy) CF = 1
     pop bx
-.cf:
     pop di
     retf
 %ifdef KERN_MEGA
@@ -930,29 +931,32 @@ inst_find_kind:
 ; dock_paint, the snapshot - skips a free row, and both callers write
 ; I_TASK = 0xFF before the record publishes.
 ; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-; inst_alloc_di - inst_alloc's zeroing tail on a record the CALLER chose
-; in: DI = a FREE record (I_STATE = 0); out: inst_alloc's, CF = 0
-; The loader's top-down pick for a package with header flag OS88_F_DESK
-; (SPEC.md 11.103.9, 30): the widget takes the LAST free slot, so its empty
-; tile position is at the strip's far end. Three bytes: the scan is the
-; caller's, and everything a reused record must lose is this tail's.
-inst_alloc_di:
-    push cx
-    jmp short inst_alloc.hit
-%endif
 inst_alloc:
     push cx
     mov di, inst_tab
     mov cx, INST_MAX
 .scan:
     cmp byte [di+I_STATE], 0
-    je .hit
+    je inst_alloc.hit
     add di, I_RECSZ
     loop .scan
     stc
-    jmp .out
-.hit:
+    pop cx                      ; (.out's two, written here: the tail below
+    ret                         ; is inst_alloc_di's scope from its label on)
+%ifdef KERN_BIG
+; inst_alloc_di - inst_alloc's zeroing tail on a record the CALLER chose
+; in: DI = a FREE record (I_STATE = 0); out: inst_alloc's, CF = 0
+; The loader's top-down pick for a package with header flag OS88_F_DESK
+; (SPEC.md 11.103.9, 30): the widget takes the LAST free slot, so its empty
+; tile position is at the strip's far end. ONE byte: the scan is the caller's,
+; and everything a reused record must lose is this tail's, which it FALLS INTO
+; - it sits between the scan's refusal and the tail, where its `jmp short
+; inst_alloc.hit` was two bytes (kernel size pass 18, -2). The tail's label
+; is spelled in full because this global ends inst_alloc's scope.
+inst_alloc_di:
+    push cx
+%endif
+inst_alloc.hit:
     push ax                     ; a reused record never inherits a dead
     push bx                     ; instance's CPU tally (SPEC.md 8.1), nor
     push si                     ; anything else it left: the whole 32 bytes
@@ -988,7 +992,6 @@ inst_alloc:
     pop bx
     pop ax
     clc
-.out:
     pop cx
     ret
 
@@ -1227,7 +1230,7 @@ inst_fhome_idx:
 ; in:  DI = record, SI = source: NUL-terminated OR NUL-padded (a package
 ;      header's 16-byte name field is safe); at most 15 chars are taken
 ; out: nothing (all registers preserved); byte I_NAME+15 is always 0, written
-;      before the copy rather than by a zero-fill before it
+;      after the copy rather than by a zero-fill before it
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; inst_set_name_x - inst_set_name with the source at ES:SI (SPEC.md 20.1)
@@ -1241,9 +1244,8 @@ inst_fhome_idx:
 inst_set_name_x:
     call kent_di                ; (kernel size pass 15)
     add di, I_NAME
-    mov byte [di+15], 0         ; the terminator FIRST, so a 16-byte source
-    mov cx, 15                  ; with no room for a NUL still terminates
-.copy:                          ; ...and then ONE loop rather than a zero-fill
+    mov cx, 15                  ; 15 characters, and the terminator after them
+.copy:                          ; ONE loop rather than a zero-fill
     mov al, [es:si]             ; and a copy: once AL reads 0 the source stops
     or al, al                   ; advancing and the same loop NUL-pads the
     jz .pad                     ; tail. It always runs 15 (~95us at launch
@@ -1252,7 +1254,13 @@ inst_set_name_x:
     mov [di], al
     inc di
     loop .copy
-    jmp kret_di
+    mov [di], cl                ; ...I_NAME+15 = 0, so a 16-byte source with no
+    jmp kret_di                 ; room for a NUL still terminates: CL is the
+                                ; spent `loop` count's 0, a 2-byte store where
+                                ; the 4-byte immediate one stood first (kernel
+                                ; size pass 18, -2). The record is not
+                                ; published yet (I_STATE), so the order of the
+                                ; two writes is nobody's to see
 
 ; -----------------------------------------------------------------------------
 ; inst_bind_win - attach a window to a record and claim wm_owner
@@ -1434,13 +1442,17 @@ inst_charge:
 
 ; inst_lkhd - 1 while fdlg_open launches the chooser: app_launch's caller
 ; holds the gfx lock already (SPEC.md 38.6). In .text with an initialiser,
-; because .bss is not zeroed at boot and app_launch reads it on every launch.
+; though .bss would arrive 0 too (SPEC.md 10); app_launch reads it on every launch.
 inst_lkhd:  db 0
 
 ; -----------------------------------------------------------------------------
 ; app_launch - launch (or front) a built-in app kind (SPEC.md 29.4)
-; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)
-; out: CF = 1 launch failed (instance/window/task table full), CF = 0 done
+; in:  AL = kind (KIND_ABOUT..KIND_CTRL, or KIND_HIBER on kern_big); UI task
+;      only, gfx lock NOT held (takes its own) - unless [inst_lkhd] is set,
+;      when the caller (fdlg_open) holds it and the show runs under that hold
+;      (SPEC.md 38.6)
+; out: CF = 1 launch failed (instance or window table full, the kind at its
+;      cap, or a singleton with only dying instances), CF = 0 done
 ; clobbers: nothing else (flags only)
 ;
 ; At the kind's cap, "launch" fronts + un-minimizes the existing live
@@ -1449,8 +1461,8 @@ inst_lkhd:  db 0
 ; the first free state-pool slot (a slot is held iff a same-kind record
 ; with I_STATE != 0 points at it), create the window from the kind's
 ; template cascaded (+16,+16) per pool slot, fill + bind + init, publish
-; I_STATE=1 (LAST record write), spawn the kind's task (rollback on a full
-; task table: unpublish, destroy the window), then show the window.
+; I_STATE=1 (LAST record write), then show the window. There is no task
+; arm since SPEC.md 14.8 (the NO TASK ARM note below).
 ; -----------------------------------------------------------------------------
 app_launch:
     call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
@@ -1637,10 +1649,11 @@ app_launch:
 ; synchronous teardown under the held lock - destroy the window, free the
 ; record. Task-owned instance: set the die flag and hide for instant
 ; feedback; the task notices at its next wake and tears itself down via
-; inst_task_die. For a PACKAGE instance the record store frees its region
-; too (SPEC.md 29.2 rule 7) - on either branch: a package that took a
-; worker (SPEC.md 20.6) reaches the second one, and there the freeing store
-; is task_exit's release byte instead.
+; inst_task_die. For a PACKAGE instance the region goes with the record
+; (SPEC.md 29.2 rule 7) on either branch: mem_free_rec frees it, and every
+; claim, just before the record is freed - here, or for a package that took
+; a worker (SPEC.md 20.6) in inst_task_die on that worker, before
+; task_exit's release byte.
 ; -----------------------------------------------------------------------------
 app_close_win:
     push di
@@ -1970,10 +1983,13 @@ inst_task_die:
 ;
 ; The two routines below are the first API slots that hand a package-supplied
 ; pointer to inst_of_win, and inst_of_win is not defensive: wm_ptr2idx's
-; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins exceeds
-; 255*WIN_SIZE, and the `wm_owner+si` load that follows is unbounded. The
-; loader already refuses to wm_destroy an aborting entry's BX without exactly
-; this test (SPEC.md 21 step 9) - this is that test, factored out.
+; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins reaches
+; 256*WIN_SIZE, taken unsigned, so a BX below the table faults too (its
+; clamp bounds the index it returns, so the `wm_owner+si` load is bounded;
+; the fault is not), and a pointer that is in range but not a window names
+; the last one. This is that test. The loader does not need
+; it on an aborting entry - its abort path never consults BX, sweeping by
+; W_SEG instead (SPEC.md 20.2).
 ; -----------------------------------------------------------------------------
 inst_wchk:
     push ax
@@ -2029,8 +2045,8 @@ inst_pkg_fence:
 ; -----------------------------------------------------------------------------
 ; inst_pkg_spawn - give a package instance its one worker task (SPEC.md 20.6)
 ;
-; in:  AX = near entry point inside the package image (a whole-word package
-;           address, relocated as class 0 by os88pkg.py, SPEC.md 20.2)
+; in:  AX = near entry point inside the package image (a plain offset in the
+;           package's own segment - v3 has no relocation, SPEC.md 20.1/20.2)
 ;      BX = the package's own window ptr (what OSAPI_WM_CREATE returned)
 ; out: CF = 1 refused, nothing created; CF = 0 and AL = the task slot
 ; clobbers: AL (an output) and the flags - every other register preserved,
@@ -2133,9 +2149,9 @@ inst_pkg_spawn:
 ; in:  BX = the package's own window ptr; the gfx lock must NOT be held
 ; out: returns with EVERY register AND the flags preserved if the instance
 ;      is still live - otherwise NEVER RETURNS: it tears the instance down
-;      through inst_task_die (gfx_lock, wm_destroy, gfx_unlock, task_exit
-;      with BX = the record, which frees the record and with it the package
-;      region inside one IF=0 window)
+;      through inst_task_die (gfx_lock, inst_unwin, gfx_unlock, mem_free_rec
+;      - the region and every claim - then task_exit with BX = the record,
+;      which frees the record and the task slot inside one IF=0 window)
 ;
 ; Called by the worker at least once per outer-loop iteration. gfx_lock is
 ; NOT reentrant, and inst_task_die takes it - calling this while holding the
@@ -2483,10 +2499,9 @@ inst_knd:    resb 1             ; app_launch scratch: kind being launched
                                 ; was 16 bytes here until kernel size pass 17:
                                 ; app_launch cascades the template in place.
                                 ; inst_icon_ptr's staging slot was 64 bytes
-                                ; HERE before that and is now dsk_ico itself -
-                                ; the dsk_get_icon idiom taken the whole way,
-                                ; SPEC.md 25/30. The tenancy is stated at
-                                ; assoc_docicon_x)
+                                ; HERE before that, then dsk_ico itself, and
+                                ; is inst_icobuf above since the worker-
+                                ; teardown race - its declaration says why)
 
 
 section .text

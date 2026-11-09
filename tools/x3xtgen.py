@@ -565,7 +565,7 @@ def win_asm(profile, div, label):
         L.append('    jmp short .p%dx' % p)
         for k, ((m, tl), r) in enumerate(zip(outs, accs)):
             lab = '.p%do%d' % (p, k)
-            L += ['%sc:' % lab, '    inc word [cs:x3x_clips]', '    mov al,0',
+            L += ['%sc:' % lab, '    CSDO inc word [CSEG x3x_clips]', '    mov al,0',
                   '    jc %sw' % lab, '    dec ax', '    jmp short %sw' % lab]
         L.append('.p%dx:' % p)
     L.append('    ret')
@@ -813,10 +813,21 @@ def kernel_lines():
     return out
 
 
-def kernel_sizes(kern):
+# x3xt.asm's CSDO (a clip's count, the one store a kernel makes into the
+# part): `cs:` on the shipped build, a DS switch to the part's data selector
+# in kern_mega's arm (PKG_MEGA) - so a kernel's size is the ARM's, and
+# X3X_KSLOT is emitted for each
+CSDO_PRE = {False: '%define CSEG cs:\n%macro CSDO 1+\n    %1\n%endmacro\n',
+            True: '%define CSEG ds:\n%macro CSDO 1+\n    push ds\n'
+                  '    mov ds, [cs:x3x_dsel]\n    %1\n    pop ds\n'
+                  '%endmacro\n'}
+
+
+def kernel_sizes(kern, mega=False):
     """Each kernel's assembled bytes, measured by assembling it alone (its
     only outside references are absolute [cs:disp16] words, whose encoding
-    is the same wherever they land)."""
+    is the same wherever they land) - for the shipped build, or kern_mega's
+    arm with MEGA (CSDO_PRE)."""
     import subprocess
     import tempfile
     nasm = os.environ.get('NASM', 'nasm').split()[0]
@@ -827,7 +838,8 @@ def kernel_sizes(kern):
             out = os.path.join(d, 'k.bin')
             with open(src, 'w') as f:
                 f.write('cpu 8086\nbits 16\norg 0\n'
-                        'x3x_wseg equ 1000h\nx3x_clips equ 1000h\nx3x_vslowp equ 1000h\n')
+                        'x3x_wseg equ 1000h\nx3x_clips equ 1000h\nx3x_vslowp equ 1000h\n'
+                        'x3x_dsel equ 1000h\n' + CSDO_PRE[mega])
                 f.write('\n'.join(lines) + '\n')
             subprocess.run([nasm, '-f', 'bin', '-w+error', '-o', out, src], check=True)
             sizes[name] = os.path.getsize(out)
@@ -863,10 +875,16 @@ def emit(path):
           'X3X_RING equ %d' % RING, '']
     kern = kernel_lines()
     ks = kernel_sizes(kern)
+    km = kernel_sizes(kern, mega=True)
     for name, size in ks.items():
         L.append('X3X_K_%s equ %d' % (name.upper(), size))
+    L.append('%ifdef PKG_MEGA')
+    L.append('X3X_KSLOT equ %d     ; ...in kern_mega\'s arm, whose clips count through CSDO'
+             % max(km[w] + km[l] for _, w, l in PAIRING))
+    L.append('%else')
     L.append('X3X_KSLOT equ %d     ; the largest window + Lee pair a profile copies in'
              % max(ks[w] + ks[l] for _, w, l in PAIRING))
+    L.append('%endif')
     L.append('%elifndef X3XTK_TAIL')
     L.append('; ---- RESIDENT: profile descriptors')
     for p in PNAMES:

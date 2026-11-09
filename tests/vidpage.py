@@ -67,6 +67,16 @@ of each play, 8Fh at 320 x 200 and DFh at 320 x 240: MartyPC scans Mode X's
 480 lines into 400, so the glass alone cannot tell the two heights apart,
 and with the 400-line table left out at 320 x 200 it FAILS on that read.
 
+--xip plays IN PLACE (98.3.18.11, 98.3.18.19) on 86Box's 16 MHz 286
+(`at286_vga`, booted off the 1.44 MB system disk, whose XMEM.DRV gives the
+pool): each Play waits for the file to be held whole in XMS, and after each
+play the card's bank line must be 7 - decoded in place through LOADALL's
+borrows, where DX is a HANDLE rather than a segment. Every other check is
+the leg's own. With --pages 3 (`vidpage3xip`), broken on purpose - vp_pghid's
+chain walk reading the hidden record's header through a plain `mov ds, dx`,
+as it did until 98.3.18.19 - every play FAILS: the walk read the HMA as the
+chain (the owner's 10-LX486.V88 hung the machine there).
+
 --layer is PAGE-AHEAD WITH A LAYER (98.2.1.8.3): the same clip with a layer
 drawing a box over the page shown every frame but key 0's, which a
 page-ahead play never draws. Leg 2 only, every hold against the LAYERED
@@ -521,6 +531,11 @@ def main():
                     help="with --fpage: every record BUILT, drawn against its "
                     "own page as it stands, and every key carrying the back "
                     "page (--flip-own, VIDEO-SEEN-PLAN 3b)")
+    ap.add_argument("--xip", action="store_true",
+                    help="on 86Box's 286 (at286_vga): every play IN PLACE, "
+                    "the file held whole in XMS and read through LOADALL's "
+                    "borrows (98.3.18.11) - each Play waits for the hold, "
+                    "and the card's bank line must say so")
     ap.add_argument("--refused", action="store_true",
                     help="herc: on a machine with a colour card beside the "
                     "Hercules, the play must REFUSE (98.3.8.3)")
@@ -531,6 +546,10 @@ def main():
     lay = vid.LAYOUT_BY_NAME[a.layout]
     modex = lay == vid.LAY_MODEX
     herc = lay == vid.LAY_HERC
+    if a.xip:                           # (86Box: the one machine here whose
+        os.environ["OS88_EMU"] = "86box"    # 286 runs LOADALL)
+        if a.machine is None:
+            a.machine = "at286_vga"
     if a.machine is None:
         a.machine = ("os8088_5150_both_gla_mono" if a.refused else
                      "os8088_5150_herc_gla") if herc else "os8088_xt_vga"
@@ -651,7 +670,10 @@ def main():
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                         "--size", "360", pkg, v88, lp, nk], check=True,
                        capture_output=True)
-        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+        # (--xip: the 1.44 MB system disk, whose XMEM.DRV gives the pool -
+        # the 360 KB one carries none)
+        sysimg = "build/os8088.img" if a.xip else "build/os8088-360.img"
+        with os88ui.boot(os88build.at(sysimg), apps=disk,
                          machine=a.machine, quick=True) as ui:
             m = ui.m
             # --- 0: THE ONE THE PLAYER MUST REFUSE, at its open
@@ -809,6 +831,9 @@ def main():
                                "pixels" % (what, n, wrong))
 
             def play(stops, what):
+                if a.xip:               # THE HOLD WHOLE (98.3.18.11): the
+                    until(lambda mm: rb("vp_xfull") == 1,   # window's timer
+                          "the file held whole in XMS", 120.0)  # loads it
                 ww("vp_stopat", stops[0])
                 m.write(base + syms["vp_played"], b"\0")
                 m.write(base + syms["vp_nowin"], b"\1")
@@ -850,6 +875,12 @@ def main():
                       120.0)
                 if rb("vp_err"):
                     bad.append("%s: the play ended in an error" % what)
+                if a.xip:               # (the card's bank line: 7, the hold
+                    print("   %s: the bank line %d (7 is in place)"  # in
+                          % (what, rb("vp_lbk")))   # place by LOADALL)
+                    if rb("vp_lbk") != 7:
+                        bad.append("%s: not played in place (bank line %d)"
+                                   % (what, rb("vp_lbk")))
             if a.refused:               # --- a colour card beside it
                 ww("vp_stopat", 0xFFFF)
                 m.write(base + syms["vp_played"], b"\0")

@@ -74,6 +74,24 @@ that C's refusal belongs to NOT HAVING A FILE and not to the slot:
      same code as `that file is not a package`, because dskw_stat fails first
      and the two arrive as one (SPEC.md 21.4).
 
+AND ONE ABOUT WHAT THE IMAGE IS (SPEC.md 21.5.1.2):
+
+  G  MINES.O88 - the SHIPPED one, which is LZ4-packed as every release
+     package is (PKGZ=lz4, SPEC.md 20.13.5), where HELLO.O88 is too small to
+     gain and ships plain - goes through the IMAGE form and RUNS: CF=0 AL=0,
+     a live instance named MINES, and its region byte for byte the UNPACKED
+     image (os88pkg.image_unwrap), header byte 3 aside, because the clear
+     prefix comes down with the file's flags in it. The slot used to copy the
+     image's length to offset 0 out of a buffer holding the shorter file:
+     kern_mega faulted on the copy, kern_big far-called LZ4 bytes as code,
+     and The Wire's Load Program crashed on every release package while
+     tests/thewire.py loaded HELLO and passed. A fixture that is NOT packed
+     (a PKGZ= build) is a failure here, not a pass: the assertion would be
+     about nothing.
+     VERIFIED RED: with kernel/loader.inc's image arm put back to its
+     `mov cx, [ld_img]` / offset-0 copy, this row fails at G (the run is
+     recorded in tests/suite.py's row text).
+
 B and C also say something A cannot: the region and the instance record a
 refused load reserved were given back. Three loads happen in this session and
 the heap is small; a leak of either shows up as C failing with LD_ENOMEM.
@@ -96,6 +114,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88build                                             # noqa: E402
 import os88marty                                             # noqa: E402
 import os88parts                                             # noqa: E402
+import os88pkg                                               # noqa: E402
 import os88ui                                                # noqa: E402
 
 # THE GLaBIOS TWIN BY NAME, which is what t_machines requires: the period
@@ -107,7 +126,7 @@ MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 I_STATE, I_SPTR, I_NAME, I_RECSZ, INST_MAX = 0, 6, 12, 32, 12
 
 PR_OFF = 32                     # the verdict block, at the head of the image
-PR_LEN = 25
+PR_LEN = 28
 LD_EBAD = 2                     # SPEC.md 21.4
 # HOW MANY PARTS MSEG HAS IS MSEG'S OWN ANSWER, read out of the .o88's part
 # table (tools/os88parts.py), which is what tests/multiseg.py does and for the
@@ -254,7 +273,7 @@ def main():
             return bool(seg) and bool(ui.m.read(_lin(ui.m, seg, PR_OFF), 3)[2])
 
         os88marty.until(ui.m, lambda _: done(),
-                        "PKGRUN to finish its six checks", limit=180.0)
+                        "PKGRUN to finish its seven checks", limit=180.0)
 
         # --- what the KERNEL says -------------------------------------------
         live = instances(ui)
@@ -291,6 +310,34 @@ def main():
                              "arrive, which is the whole of what this door "
                              "exists to do (SPEC.md 21.5, 20.12)"
                              % (title, want))
+        # --- G: the PACKED image ran, and it ran EXPANDED ----------------------
+        mfile = open(os88build.at("build/mines.o88"), "rb").read()
+        if not mfile[3] & 0x18:
+            fails.append("G: build/mines.o88 is NOT compressed (header flags "
+                         "%02X) - a PKGZ= build? The assertion is about a "
+                         "packed image, so on this fixture it says nothing"
+                         % mfile[3])
+        elif "MINES" not in names:
+            fails.append("G: no live instance named MINES - the image form "
+                         "did not run a COMPRESSED package (SPEC.md 21.5.1.2). "
+                         "It must expand it as the disk path's step 6a does; "
+                         "copying [ld_img] bytes of a shorter file is what "
+                         "crashed The Wire's Load Program")
+        else:
+            mimg = os88pkg.image_unwrap(mfile)
+            mseg_ = dict(live)["MINES"]
+            got = bytes(ui.m.read(_lin(ui.m, mseg_), len(mimg)))
+            bad = [i for i in range(len(mimg))
+                   if i != 3 and got[i] != mimg[i]]
+            say("G: MINES region %d bytes against the unpacked image (file "
+                "%d bytes): %d differ" % (len(mimg), len(mfile), len(bad)))
+            if bad:
+                n = bad[0]
+                fails.append("G: MINES's region differs from the UNPACKED "
+                             "image at %d byte(s), first at %d (%02X, want "
+                             "%02X) - the image form copied the packed file "
+                             "rather than expanding it (SPEC.md 21.5.1.2)"
+                             % (len(bad), n, got[n], mimg[n]))
         if "HELLO" in names:
             # --- AND THE COPY LANDED, byte for byte -------------------------
             # An instance existing says the slot returned; it does not say it
@@ -329,13 +376,15 @@ def main():
                 ald, ale, alf = b[17], b[18], b[19]
                 cfe1, ale1 = b[20], b[21]
                 ferr2, ln2 = b[22], b[23] | (b[24] << 8)
+                cfg, alg, ferr3 = b[25], b[26], b[27]
                 say("pkgrun: done %d ok %02X  A cf%d al%d  B cf%d al%d  "
                     "C cf%d al%d  ferr %d len %d entries %d"
                     % (done_n, ok, cfa, ala, cfb, alb, cfc, alc, ferr, ln,
                        ent))
                 say("pkgopen: D cf%d al%d  E run cf%d al%d / open cf%d al%d  "
-                    "F cf%d al%d  ferr %d len %d"
-                    % (cfd, ald, cfe1, ale1, cfe, ale, cff, alf, ferr2, ln2))
+                    "F cf%d al%d  ferr %d len %d  G cf%d al%d ferr %d"
+                    % (cfd, ald, cfe1, ale1, cfe, ale, cff, alf, ferr2, ln2,
+                       cfg, alg, ferr3))
                 if ent != 1:
                     # REPORTED, NOT FAILED. More than one wake per post is the
                     # kernel putting one back that a drag or a launch ate
@@ -392,6 +441,14 @@ def main():
                                      "reads the FILE here, so a package "
                                      "carrying parts has one to read them "
                                      "out of (SPEC.md 21.5)" % (cfe, ale))
+                    if ferr3:
+                        fails.append("G: OSAPI_FILE_READ of MINES.O88 "
+                                     "answered FERR %d, so G never ran"
+                                     % ferr3)
+                    elif (cfg, alg) != (0, 0):
+                        fails.append("G: the IMAGE form answered CF=%d AL=%d "
+                                     "for the PACKED MINES.O88, want CF=0 "
+                                     "AL=0 (SPEC.md 21.5.1.2)" % (cfg, alg))
                     if (cff, alf) != (1, LD_EBAD):
                         fails.append("F: a name that is not there answered "
                                      "CF=%d AL=%d, want CF=1 AL=%d"
@@ -408,7 +465,7 @@ def main():
 
     for f in fails:
         print("FAIL " + f)
-    print("pkgrun: %s" % ("OK - the image form ran one and refused two; the by-name form ran two more, one of them the very file "
+    print("pkgrun: %s" % ("OK - the image form ran one plain and one PACKED and refused two; the by-name form ran two more, one of them the very file "
                           "the back half refused"
                           if not fails
                           else "%d assertion(s) failed" % len(fails)))

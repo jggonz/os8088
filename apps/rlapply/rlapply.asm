@@ -132,13 +132,13 @@ ra_ret:
 
 ; One line per CSA_* (csapply.inc), IN CSA_* ORDER - ra_entry counts its way
 ; to one - and 24 characters at most (SPEC.md 59.10)
-ra_s_ok:     db 'Chipset setting applied', 0
-ra_s_nofile: db 'No REDLINE.CFG to apply', 0
-ra_s_bad:    db 'REDLINE.CFG is damaged', 0
-ra_s_board:  db 'REDLINE.CFG: other BIOS', 0
-ra_s_row:    db 'REDLINE.CFG: no such row', 0
-ra_s_cpu:    db 'RLAPPLY: XT, nothing set', 0
-ra_s_knob:   db 'REDLINE.CFG: bad setting', 0
+TOASTSTR ra_s_ok, 'Chipset setting applied'
+TOASTSTR ra_s_nofile, 'No REDLINE.CFG to apply'
+TOASTSTR ra_s_bad, 'REDLINE.CFG is damaged'
+TOASTSTR ra_s_board, 'REDLINE.CFG: other BIOS'
+TOASTSTR ra_s_row, 'REDLINE.CFG: no such row'
+TOASTSTR ra_s_cpu, 'RLAPPLY: XT, nothing set'
+TOASTSTR ra_s_knob, 'REDLINE.CFG: bad setting'
 
 %include "os88data.inc"
 %include "redline/csrows.inc"

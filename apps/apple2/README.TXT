@@ -142,7 +142,7 @@ F1 and F2 are the game buttons PB0 and PB1. On a machine with NO MOUSE the
 system takes the arrow keys and the space bar for its pointer, and the status
 row says `ScrollLock: arrows, Space.` once - ScrollLock hands them back.
 
-Still to come, and docs/APPLE2-PORT-PLAN.md in the source tree says which
+Still to come, and docs/plans/completed/APPLE2-PORT-PLAN.md in the source tree says which
 wave has which:
 
     the paddles, which answer centre

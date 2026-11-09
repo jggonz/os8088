@@ -58,12 +58,14 @@
 ; menu_inval, and no drawing routine at all.
 ;
 ; TWO ENTRY POINTS FOR CALLERS and they are on opposite sides of a lock:
-; toast_show STAGES and never draws, toast_pass (the UI task's idle pass)
-; draws. That is what makes the context rule `any` - a window callback holds
-; the gfx lock, a worker holds nothing, kernel file code holds it too, and
-; gfx_lock is not reentrant. Deferring gives ONE drawing site, which is also
-; the ONE expiry site, and puts it where this tree already spends deferred
-; flags ([fm_fchk], [cp_dirty], [desk_zdirty]). The cost is up to one pass of
+; toast_show STAGES, and draws on the spot only for a caller that provably
+; holds the lock (toast_now, SPEC.md 59.4); toast_pass (the UI task's idle
+; pass) draws the rest. That is what makes the context rule `any` - a window
+; callback holds the gfx lock, a worker holds nothing, kernel file code holds
+; it too, and gfx_lock is not reentrant. Deferring gives ONE expiry site,
+; which is also the drawing site for every caller that does not hold the
+; lock, and puts it where this tree already spends deferred flags
+; ([fm_fchk], [cp_dirty], [desk_zdirty]). The cost is up to one pass of
 ; latency - a tick - on a three-second message.
 ;
 ; The string is COPIED. Not an optimisation: a toast outlives the operation
@@ -82,7 +84,7 @@
 
 section .text
 
-TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
+; TOAST_MAX = 24 (kernel.asm, beside TOASTSTR) characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 59.8). The clock's field is ([vid_wm8] -
                                 ; [vid_clk_hx]) / 8 = 200/8 = 25 cells on
                                 ; every screen this runs on - 640 and 720 both
@@ -103,16 +105,19 @@ TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; - and the sweep behind it found TWENTY-ONE
                                 ; over the cap in six files, ten of them in
                                 ; `HIBER.DRV`, which is a MODULE and was never
-                                ; walked. `tests/unit/t_toast.py` is the gate
-                                ; now: it reads this very `equ` rather than
-                                ; carrying a copy, and `tests/toastlong.txt`
-                                ; is the ratchet its false positives live in
+                                ; walked. Inferring which strings were toasts
+                                ; missed a shape every round after that, so
+                                ; the length is now the ASSEMBLER's: a fixed
+                                ; message is a TOASTSTR (kernel.asm), which
+                                ; fails the build at its own line when it is
+                                ; long, and tests/unit/t_toast.py proves every
+                                ; toast argument is one
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture
 TOAST_SCAN  equ 256             ; bytes of the caller's string examined before
                                 ; the copy gives up. Generous against any real
-                                ; message (the buffer keeps 23) and the whole
+                                ; message (the buffer keeps TOAST_MAX) and the whole
                                 ; of the defence: the scan runs interrupts-off
                                 ; through a package-supplied pointer, and
                                 ; without a byte bound a segment holding no
@@ -188,8 +193,9 @@ toast_scov:  db 0               ; and 1 = it is over the CLOCK and hides the
 ; property of where the strip happens to live.
 ;
 ; The stage runs with interrupts off: a worker task and the UI task can both
-; raise, and a half-copied buffer would letter as garbage. 23 bytes of
-; rep-less movsb is ~475 clocks, ~100 us against a 55 ms tick.
+; raise, and a half-copied buffer would letter as garbage. Up to 24 kept bytes
+; of the filtered `es lodsb` loop is ~2,000 clocks, ~0.5 ms, and a hostile
+; 256-byte scan ~14,000, ~3 ms (estimated), against a 55 ms tick.
 ; -----------------------------------------------------------------------------
 toast_show:
     call kent_di                ; = push ax/bx/cx/dx/si/di. BX is not spent
@@ -311,7 +317,8 @@ toast_show:
 ; toast_say - say entry AL of a word table of NUL strings
 ; in:       AL = index (0 = nothing to report, which is how every one of these
 ;           tables spells it), BX = the table, CX = its length in entries
-; out:      nothing - all registers AND the flags preserved
+; out:      nothing - all registers AND the flags preserved. FAR: it ends in
+;           retf, so .cold reaches it through ct_toast_say
 ;
 ; The kernel's own verdict tables (`fm_errtab`, `fm_stattab`) are arrays of
 ; string pointers indexed by a FERR_*/LD_* code, and every caller of this was
@@ -364,7 +371,9 @@ toast_say:
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds
 ;             the gfx lock (SPEC.md 59.4)
 ; in:       a toast staged; called from toast_show only
-; out:      nothing (all registers preserved)
+; out:      nothing; AX and BX are SPENT - toast_show leaves by kret_di
+;           straight after, which puts them back (kernel hot-paths pass 1,
+;           size: -2; kernel size pass 18, BX, -2)
 ;
 ; A message put up BEFORE a long operation has to be on the glass before the
 ; machine goes quiet - Paint says `Encoding...` and then spends seconds on
@@ -385,19 +394,16 @@ toast_say:
 ; tick late, which is right for a background job and costs nothing.
 ; -----------------------------------------------------------------------------
 toast_now:
-    push ax
     cmp word [gfx_lock_flag], 1 ; HELD (flag = 1) **and owned by task 0** (own
     jne .outa                   ; = 0) in ONE word read: the two bytes are
                                 ; declared adjacent in vga12.inc and a 0-byte
                                 ; %if there holds them to it. The flag is
                                 ; strictly 0 or 1 - every writer was read, and
                                 ; the comment beside the declaration says so.
-                                ; Torn reads cannot lie either: gfx_lock writes
-                                ; flag then owner inside its own cli window and
-                                ; gfx_unlock writes owner FIRST then flag, so
-                                ; the only interleaving visible is (1, 0xFF) =
-                                ; 0xFF01, which this refuses exactly as the two
-                                ; byte compares did; and an 8086 takes
+                                ; Torn reads cannot happen either: gfx_lock's
+                                ; .take and gfx_unlock each write flag and
+                                ; owner in ONE word store (vga12.inc), so no
+                                ; half-written pair is ever visible; and an 8086 takes
                                 ; interrupts only at instruction boundaries, so
                                 ; the word read is atomic
     cmp byte [sch_cur], 0       ; ...and task 0 - ui_task (kernel.asm's kmain
@@ -406,7 +412,7 @@ toast_now:
                                 ; glass
     mov al, [gfx_color]         ; the caller is mid-callback: its pen and its
     push ax                     ; clip region are ITS, and the bar is inside
-    push bx                     ; no window's region ever - drawn through an
+                                ; no window's region ever - drawn through an
     call fpg_bare               ; armed one the strip's cells would be dropped
     dw toast_ad                 ; on the glass while menu_bcell records them
                                 ; composed, and no later pass would repair it.
@@ -415,14 +421,16 @@ toast_now:
                                 ; steps this wrote out itself (kernel size
                                 ; pass 14: 6 bytes; fpg_bare spends BX).
                                 ; Done now because the idle pass that would
-                                ; carry it to VRAM does not come until the
+                                ; draw it does not come until the
                                 ; operation this announces is over (SPEC.md
-                                ; 32) - fpg_begin's reasoning exactly
-    pop bx
+                                ; 59.4) - fpg_begin's reasoning exactly.
+                                ; BX, which fpg_bare spends, is NOT banked:
+                                ; toast_show leaves by kret_di straight after,
+                                ; which puts it back as it does AX (kernel
+                                ; size pass 18, -2)
     pop ax
     mov [gfx_color], al
 .outa:
-    pop ax
     ret
 
 toast_ad:                       ; toast_now's painter: arm, then the bar
@@ -624,7 +632,8 @@ toast_pass:
 .out:                           ; bar rather than straight to the field is
                                 ; what keeps wm_fs_vis's guard in front of it:
                                 ; a fullscreen window is over these pixels and
-                                ; the message waits for it to end
+                                ; the strip is not drawn while it is covered,
+                                ; and its seconds still run
     pop ax
     ret
 
@@ -643,8 +652,8 @@ toast_pass:
 ; in:       anything, lock held or not
 ; out:      nothing - all registers AND THE FLAGS preserved
 ;
-; Does not draw. Two of its three callers hold the gfx lock (fpg_begin,
-; inst_free's teardown) and one is inside toast_show's cli window; the pixels
+; Does not draw. Its callers are toast_show's retire (inside its cli window)
+; and toast_owner_gone (instance teardown, lock held or not); the pixels
 ; go back on toast_pass's next look, which is a tick away at worst.
 ; -----------------------------------------------------------------------------
 toast_kill:

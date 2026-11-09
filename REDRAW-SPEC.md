@@ -34,10 +34,12 @@ PERFORMANCE.md §1 on why the distinction is worth keeping.)
 ### Why — two facts, neither of them the app's choice
 
 1. **The kernel erases before every paint.** `wm_draw_win` fills the whole
-   content area with white and *then* calls `W_PAINT`. This is
-   unconditional, for every window, and there is no "do not erase me" flag.
-   By the time the app is asked to paint, its pixels are already gone. This
-   is still true — Part 1 did not change it.
+   content area with white and *then* calls `W_PAINT`. This was
+   unconditional, for every window, and there was no "do not erase me" flag.
+   By the time the app was asked to paint, its pixels were already gone.
+   Part 1 did not change it; SPEC.md §11.90.1's `WF_OWNBG` has since made the
+   fill opt-out, and §11.90.2's `OSAPI_WM_DAMAGE` tells such a window which
+   rect it owes.
 2. **The app had nothing to restore from.** It kept no frame buffer, so the
    only way to put pixels back was to compute them again.
 
@@ -143,7 +145,8 @@ The normal repaint path does not need clipping: `wm_paint_all` draws visible
 windows **back to front**, so the painter's algorithm resolves overlap for
 free. Clipping is needed only for *asynchronous, single-window* drawing.
 That narrowed the change considerably, and **the repaint path is still
-unclipped** — SPEC.md §11.3 rule 3.
+unclipped** outside its own two brackets — SPEC.md §11.3 rule 3 (§11.3.3's
+cull, §11.97's chrome clip).
 
 ### What shipped
 
@@ -396,7 +399,8 @@ edge). Neither says *"here is the rect you owe"*.
 #### What consumer 2 is actually blocked on, measured
 
 **`wm_draw_win` white-fills the whole content before every `W_PAINT`** — Part
-1's point 1, still true, no opt-out flag, and `apps/paint`'s own `pt_fsbed`
+1's point 1, true when this was measured (SPEC.md §11.90.1's `WF_OWNBG` has
+been the opt-out since), and `apps/paint`'s own `pt_fsbed`
 comment documents it. So a slot that tells Paint which rect it owes achieves
 **nothing** until the kernel stops erasing the rest, and that is a change to the
 kernel's erase contract rather than an optimisation: every application depends

@@ -507,7 +507,7 @@ is the host's, never quoted.
 
 **The os8088.com Wire entry, a follow-up**: THE WIRE (§92) lists what the
 catalog carries, and the catalog lives in the website's repository, which
-this branch does not touch (`docs/WIRE-PLAN.md` has the catalog's format
+this branch does not touch (`docs/plans/completed/WIRE-PLAN.md` has the catalog's format
 as it was pinned). The entry wants the package (50,476 bytes packed),
 a picture made through `make_picture`'s 1bpp threshold from a CGA or
 Hercules screendump (the CGA 320×200×4 bracket at scene C reads best), the

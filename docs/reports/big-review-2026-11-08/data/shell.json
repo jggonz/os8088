@@ -1,0 +1,597 @@
+{
+ "area": "shell",
+ "title": "Desktop shell: desk, dock, extended desktop, Windows theme, Sticky Apps",
+ "summary": "The desktop shell is among the most carefully engineered parts of the tree: one byte per desktop item ([desk_zslot]) reconciled by one liveness-only routine (desk_reflow), a cell drawn exactly once into the damage region by composed 1bpp bands, a dock that diffs tile keys and XORs self-inverse marks, and five on-demand modules (DOCK, WIN95, EXTD, STIKMENU and DESK) that keep decision code on disk with two principled hook shapes and a zero-resident-shim far-frame trick. Hostile input (SYSTEM.CFG trailer, .LNK, package link records) is bounded at each door. The weak spots are lifetime and target cost rather than drawing correctness: the Sticky App library's lifetime is keyed on a proxy (IF_DESK) instead of on who bound it, which is a latent use-after-free; every desktop gesture and every Sticky Apps menu press loads and drops a module, which the shell's own comments call too slow elsewhere; OSAPI_DESK_ITEM's remove is keyed by a zone that is not an identity, forcing WIN16 to probe; and the dock painter exists twice in source (and the two copies have already diverged beyond their geometry). Nothing needs an ABI break; the one ABI-shaped weakness has an additive fix. A long tail of comments and SPEC text still describes designs from before kernel size passes 12-14 and before SPEC 110.15 (held-until-restart, 1 KB claims, dkf_apply, wm_land_fit, desk_svflag), recorded below. [Verified 2026-11-08: 10 findings confirmed, 4 corrected, none refuted, 1 low left unchecked; 34 of the 39 structured doc mismatches confirmed, 4 more fixes added.]",
+ "strengths": [
+  {
+   "title": "One table, one reconciler for every desktop item",
+   "why": "desk_reflow is told nothing about events and recomputes placement from liveness, posting exactly the cells that changed; mount, unmount, driver attach, shape change and a damaged SYSTEM.CFG pin block are all one call. The model to copy for any other placement problem.",
+   "evidence": "kernel/desk.inc:853-948 (desk_reflow), :690-721 (desk_live)"
+  },
+  {
+   "title": "Every pixel once, by construction",
+   "why": "desk_col/desk_cap compose picture column and caption in RAM and put each down with one gfx_blit1, ground drawn round them; desk_zones_r_x draws cells into wm_dmg_gray's region with a counted overflow bound rather than an optimistic subtraction.",
+   "evidence": "kernel/desk.inc:1673-1973, :2008-2087"
+  },
+  {
+   "title": "Dock tile key diff with self-inverse marks and a race-proof damage span",
+   "why": "A focus change costs one gfx_xor_rect, never an erase-and-rebuild; the span is its own flag via the 07FFFh..08000h sentinel and the exchange is bracketed pushf/cli/popf so a concurrent force cannot be lost.",
+   "evidence": "kernel/dock.inc:576-580, :660-730"
+  },
+  {
+   "title": "Two principled module hook shapes",
+   "why": "Where the absent answer is a kernel body, a vector table rests on it and the module writes both halves (dkv, thv); where it is a refusal, calls go straight at mod_fp slots resting on mod_gone (EXTD, DESK, STIKMENU). No dispatcher, no resident second copy; EXTD's [vid_ndisp]>1-only-while-mounted invariant is kept by construction in EXF_SYNC.",
+   "evidence": "kernel/dock.inc:366-383, kernel/winmod.inc:69-79, kernel/extmod.inc:22-29, :66-91"
+  },
+  {
+   "title": "Hand-built far frame onto cw_kretf",
+   "why": "A module reaches any near kernel routine with zero resident shim (dkk_*, EXK/WNK/SMK); Mac trap glue and Win16 thunks needed a resident stub per entry.",
+   "evidence": "kernel/dockmod.inc:1663-1694, kernel/extmod.inc:1595-1612"
+  },
+  {
+   "title": "Hostile bytes bounded at the door",
+   "why": "ovl_sc_load terminates every string and frees rows with impossible kinds/volumes; sc_m_add re-stamps the picture header and forbids a forged Sticky mark; lnk_open bounds the volume, forces the NUL and bounds link chains by remaining stack.",
+   "evidence": "kernel/desksc.inc:1752-1872, :837-904, :335-403"
+  },
+  {
+   "title": "Lifetime details that are easy to get wrong, got right",
+   "why": "desk_need saves the outer drv_vol pair across a nested bracket; desk_drop_x counts unpublished records; stik_boot re-reads [sc_seg] after a load may compact.",
+   "evidence": "kernel/deskmod.inc:89-100, :110-134, kernel/desksc.inc:287"
+  },
+  {
+   "title": "Layouts asserted rather than trusted",
+   "why": "DSV_R_SIZE, SC record tiling, ICO_BSTR, DKXPAD pad positions, stm_ctab/stm_atab order and the dword zone mask all fail the build if they drift.",
+   "evidence": "kernel/desk.inc:1257-1259, :2386-2388, kernel/desksc.inc:69-80, kernel/dockmod.inc:127-154"
+  }
+ ],
+ "findings": [
+  {
+   "id": "shell-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The Sticky App library can be freed under a widget that has bound it",
+   "detail": "DESK.DRV (which carries the shared Sticky App library) is dropped when no inst_tab record carries IF_DESK. Loader step 9 calls desk_drop_x (which clears the record's IF_DESK) for any launch whose returned window is not WF_DESK. A STIK_LIB widget has already bound the library by then: stik_load asks LIB and writes the library segment into every far pointer of stik_le. The library is built STIK_DESKONLY, under which stik_made issues MAKE and ignores its CF. So any MAKE refusal returns a titled window, step 9 drops DESK.DRV (if this is the only widget), and the next call far [stik_le+...] jumps into a freed heap claim. Every MAKE precondition holds for a correct package today, so it is latent, but the failure mode is a wild far call. The drop rule uses 'has a desk window' as a proxy for 'holds pointers into the library'.",
+   "evidence": [
+    "kernel/deskmod.inc:118-134 desk_drop_x scans IF_DESK only",
+    "kernel/loader.inc:1458-1466 step 9 drops for a non-WF_DESK window",
+    "apps/os88stikc.inc:152-176 stik_load binds LIB into stik_le",
+    "apps/stiklib.asm:28 STIK_DESKONLY forced in the library",
+    "apps/os88stik.inc:962-966 MAKE's CF ignored under STIK_DESKONLY",
+    "kernel/deskmod.inc:239-258 MAKE's six refusal tests"
+   ],
+   "recommendation": "Cheapest: the library's stik_made refuses the launch when MAKE refuses (module bytes only). Right model: the LIB verb sets an IF_LIB bit (I_FLAGS bit 3 is free) on [ld_rec], desk_drop_x's scan tests IF_DESK|IF_LIB, and only the record's free (inst_alloc zeroes it) clears it - library lifetime by binder, as AmigaOS OpenLibrary/CloseLibrary.",
+   "phase": "now",
+   "bytes_est": "(a) +4..+6 DESK.DRV, 0 resident; (b) 0 resident .cold (the test immediate changes), +6 DESK.DRV",
+   "prior_art": "AmigaOS libraries: lib_OpenCnt governs expunge; a library is never freed on a proxy condition.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: desk_drop_x clears the passed record's IF_DESK and drops MOD_DESK when no record has it; step 9 calls it for any non-WF_DESK window; stik_load binds DX into every stik_le far pointer before STKE_LOAD; under STIK_DESKONLY stik_made's MAKE has no jnc/CF handling (os88stik.inc:962-966); MAKE refuses on six tests (deskmod.inc:239-258). Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. The library banner (deskmod.inc:369-375) and SPEC 110.15 still say 'held until the restart ... never freed under a caller', which is what the drop rule broke; those comments are fixed below."
+  },
+  {
+   "id": "shell-2",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Interactive shell paths load and drop modules the shell itself calls too slow",
+   "detail": "desksc.inc moved the shortcut popup resident because 'an XT pays 2-3 s to load an image, which is a menu that does not come up', yet sc_modcall loads and drops MOD_SETS (CTRL.DRV's 3,180-byte settings core, MODS_SIZE) for every drag, delete, new shortcut and package link unless a Control Panel is already open; every press of the Sticky Apps cell loads STIKMENU.DRV (7,876-byte image, an 8 KB claim) and rescans STIKAPPS\\ then drops it; and WIN16's DeleteGroup probes up to W16PG_SCN (15) zones with OSAPI_DESK_ITEM remove, each probe a sc_modcall load and drop. SPEC 110.12 prices the menu's load at ~2-3 calls, about a second, before the panel is drawn.",
+   "evidence": [
+    "kernel/desksc.inc:13-15 the popup-resident rationale",
+    "kernel/desksc.inc:437-462 sc_modcall need/drop per gesture",
+    "kernel/stikmenu.inc:60-88 need/drop per menu press",
+    "build/kernel.map mods_end 0xC6C (MOD_SETS core), modn_end 0x1EC4",
+    "apps/win16/w16progm.inc:721-734 zone probe loop"
+   ],
+   "recommendation": "Give the interactive modules a third lifetime: DISCARDABLE - kept after use as a low-priority purgeable claim and shed by mem_claim's shed-and-retry. Start with MOD_SETS and MOD_STIKM, both entered only from the UI task with no re-entry, so the per-module nesting count of ONDEMAND-PLAN 7.1 reduces to the existing loaded row plus a purge tag. A second visit on a roomy machine then costs no disk.",
+   "phase": "now",
+   "bytes_est": "+40..+80 resident (mod_drop's discard arm, the purge tag) for the two; the full HEAP-UNPIN piece B is +215..+240 resident",
+   "prior_art": "Windows 3.0/3.1 DISCARDABLE code segments (reloaded from the EXE only when actually discarded); Mac Resource Manager purgeable resources.",
+   "listed_as": "docs/plans/completed/ONDEMAND-PLAN.md 7.2; docs/plans/HEAP-UNPIN-PLAN.md piece B; SPEC 110.12 'No cache of the scan'",
+   "verdict": "corrected",
+   "verify_note": "Real. Corrected the MOD_SETS size: MODS_SIZE = mods_end - $$ = 0xC6C = 3,180 bytes (build/kernel.map), not 2,206; and SPEC 110.12's price is '~2-3 calls, about a second, before the panel is drawn' (the load), not a 'drop'. sc_modcall uses the open panel's copy when MOD_CTRL is live (desksc.inc:437-458). Both plan listings exist (ONDEMAND-PLAN 7.2, HEAP-UNPIN piece B at ~215-240)."
+  },
+  {
+   "id": "shell-3",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "OSAPI_DESK_ITEM remove is keyed by a zone that the API says is not an identity",
+   "detail": "A package removes 'the link in zone AH, ES:SI = the record it added', and sc_m_pdel must re-verify volume and path because zones are reused and renumbered at boot. A caller that did not keep the zone must probe, which WIN16 does over every shortcut zone, each probe a module load. The Sticky App row already has the right shape: AH = 0xFF finds by name.",
+   "evidence": [
+    "apps/os88api.inc:1441-1444 remove contract",
+    "kernel/desksc.inc:1449-1468 sc_m_pdel re-verifies",
+    "kernel/desksc.inc:935-973 sc_m_dfind by-name walk",
+    "kernel/desksc.inc:978-1002 sc_m_same",
+    "apps/win16/w16progm.inc:721-734"
+   ],
+   "recommendation": "Additive now: AH = 0FEh 'the row whose volume and path are this record's', walking rows with sc_m_same; WIN16 makes one call. At the next flag day, re-contract remove to be by record always and drop the zone argument.",
+   "phase": "now",
+   "bytes_est": "+~12 CTRL.DRV (.modc), 0 resident; WIN16 -~12 package; flag-day follow-on -~6 resident .cold (desk.inc:2283-2284)",
+   "prior_art": "Win95 shell links and Mac aliases identify by path/ID, never by a screen slot.",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "osapi_desk_item_x .pdel passes any AH >= DESK_SC0 (0FFh included) straight to sc_modcall (desk.inc:2275-2284); sc_m_dfind only matches SC_STIK rows, so WIN16's group link cannot use 0FFh; w16pg_delgrp loops W16PG_SC0..+15 with a module load per probe. sc_m_same already exists to reuse. Not listed in the ABI or byte queues."
+  },
+  {
+   "id": "shell-4",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The dock painter is hand-copied into DOCK.DRV",
+   "detail": "db_paint/db_key/db_tile_rect/db_draw_tile/db_click/db_rclick and dkx_paint/dkx_key/dkx_tile_rect/dkx_draw_tile/dkx_click/dkx_rclick are the same algorithm written twice, prose invariants included (one-exit, dock_drew wrap, the xchg bracket). The copies have already diverged beyond their geometry source - dkx_paint banks gfx_hole/wm_clip_n round the paint and clears dock_drew while the strip is open, and the two push their registers differently (kent_di vs six pushes) - and the comments drifted together ('the five pops at the bottom' in both, where the exits pop seven and nine). The tree's own idiom for this is a macro assembled per image (DESK_ROWCALC, DOCK_GEOM, DOCK_APPLY, EXF_SYNC).",
+   "evidence": [
+    "kernel/dock.inc:499-1271",
+    "kernel/dockmod.inc:505-1297",
+    "kernel/dock.inc:521 and kernel/dockmod.inc:539",
+    "kernel/dockmod.inc:524-533, :746-751 (the module-only hole/region and dock_up arms)"
+   ],
+   "recommendation": "One DOCK_PAINT macro parameterised on the geometry source (immediates DOCK_X0/DOCK_STEP for the basic strip, [cs:dock_a0]/[cs:dock_astep] and dkx_swap_side in the module) plus %if arms for the module-only hole/region bank and the open-strip CF, so a fix lands once.",
+   "phase": "now",
+   "bytes_est": "0 if each expansion keeps today's instructions (the arms must reproduce the divergences)",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Real duplication, but the reviewer understated the divergence: dkx_paint has a hole/region bank and an open-strip CF clear that db_paint lacks, and different prologue encodings, so a single macro needs several %if arms, and '0 bytes' holds only if those reproduce today's code. Severity medium -> low: a maintenance risk, no defect."
+  },
+  {
+   "id": "shell-5",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Three textual copies of the far-frame helper",
+   "detail": "exk_go, wnk_go and smk_go are the same 17 source lines (16 instructions and the PUSH_KCODE macro), instruction for instruction; dockmod's dkk_* is the per-routine form. Each image must carry its own, but they should share source.",
+   "evidence": [
+    "kernel/extmod.inc:1595-1612",
+    "kernel/winmod.inc:902-919",
+    "kernel/stikmenu.inc:1973-1990"
+   ],
+   "recommendation": "One %macro MODK_GO in kernel/mod.inc, expanded per image.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The three bodies are identical (wnk_go and smk_go's banners say so). Count is 17 source lines, not '19 instructions' - detail adjusted."
+  },
+  {
+   "id": "shell-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Locator File menu item 1 is poked by raw offset from five sites",
+   "detail": "desk_select, desk_unsel_x, sc_rclick_x (twice) and sc_m_del address the Remove Shortcut item as menu_items_file+2; the table's own comment names the wrong writer (ui_loc_gate, which writes item 0).",
+   "evidence": [
+    "kernel/desk.inc:1406, :1452",
+    "kernel/desksc.inc:517, :541, :1492",
+    "kernel/menu.inc:2576",
+    "kernel/ui.inc:2472-2476"
+   ],
+   "recommendation": "MENU_FILE_REM equ menu_items_file + 2 beside the table with an %if MENU_FILE_N != 2 guard, used at every site; fix the comment.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Five sites confirmed (desk_select, desk_unsel_x, sc_rclick_x x2, sc_m_del); ui_loc_gate writes [menu_items_file] (item 0). Comment fixed below."
+  },
+  {
+   "id": "shell-7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "STIKMENU.DRV writes the kernel's service-item record",
+   "detail": "With no driver registered, More Sticky Apps copies THEWIRE.O88 and The Wire into desk_svc_file/desk_svc_name so ui_svc_open can be reused, leaving a half-written service record in resident .bss for the session and making desk_svc_rec a two-writer structure whose second writer is a module.",
+   "evidence": [
+    "kernel/stikmenu.inc:1844-1864",
+    "kernel/desk.inc:2376-2388"
+   ],
+   "recommendation": "Hand ui_svc_open the file and name as inputs, or launch by name from the module as stm_a_launch already does.",
+   "phase": "now",
+   "bytes_est": "0..+4 resident",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "stm_a_more copies DSV_FILEMAX and DSV_NAMEMAX bytes into desk_svc_file/desk_svc_name when [desk_svc_seg] = 0, then calls cw_ui_svc_open. Harmless while desk_svc_seg stays 0 (nothing else reads the strings then), so low is right."
+  },
+  {
+   "id": "shell-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Boot reader keeps up to 1 KB more shortcut claim than the rows need",
+   "detail": "ovl_sc_load claims the whole SYSTEM.CFG (head + rows + placed cells + footer) in KB as the shortcut table and moves rows to its base but never shrinks it; the claim stays file-sized until the first add or delete regrows it through sc_m_kb. With CFG_FBUF about 140 bytes, 7, 8 or 15 rows cross a KB boundary: 2 KB for 1 KB of rows, 3 for 2. Movable, so not a wall, but heap held for the session.",
+   "evidence": [
+    "kernel/desksc.inc:1768-1846",
+    "kernel/desksc.inc:1227-1272 sc_m_kb is the only resize",
+    "kernel/driver.inc:1043 CFG_FBUF"
+   ],
+   "recommendation": "mem_regrow to ceil(rows/8) KB after the row move, in .boot2 (or .cfx if the blob has no room).",
+   "phase": "now",
+   "bytes_est": "+~10 .boot2, 0 resident",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Behaviour confirmed (claim = ceil(file/1024) KB at desksc.inc:1767-1771; nothing in ovl_sc_load resizes; sc_m_row/sc_m_kb are the only resizes). Kind bug -> weakness: nothing malfunctions, it is heap held; the claim is MOVABLE (sc_reloc). ovl_sc_load is in .boot2 (desksc.inc:1706)."
+  },
+  {
+   "id": "shell-9",
+   "kind": "perf",
+   "severity": "low",
+   "title": "Every damage pass recomputes every shown cell's rect with div and two muls",
+   "detail": "desk_dmg_zones_x calls desk_cell_rect -> desk_cell_xy (cbw/cwd/div word, mul bx, mul word) and a far cw_wm_dmg_hit for every shown zone on every window move, close or raise: ~700 cycles (~150 us) per shown zone, ~0.9 ms for six, though most damage never reaches the cell columns.",
+   "evidence": [
+    "kernel/desk.inc:1260-1302",
+    "kernel/desk.inc:1005-1024"
+   ],
+   "recommendation": "One early-out of the damage rect against the grid's x extent, a word derived in DESK_GRID, before the walk.",
+   "phase": "now",
+   "bytes_est": "+2 .bss, +~6 per DESK_GRID expansion (CTRL.DRV, blob/.cfx), +~8 resident .cold",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "desk_cell_xy is div word + two muls (8088: ~150 + 2x~120 cycles) plus calls and the far dmg_hit; the per-zone estimate is plausible. Predicted, not measured."
+  },
+  {
+   "id": "shell-10",
+   "kind": "perf",
+   "severity": "low",
+   "title": "WIN95.DRV phases button art one bit at a time",
+   "detail": "wn_blit shifts each 16-bit art row into three bytes with shr ax,1/rcr bp,1/loop per bit: up to 7 x ~21 cycles per row, 13 rows, three buttons and the grip - about 0.5-1 ms CPU per title bar on the 8088 under the Windows theme.",
+   "evidence": [
+    "kernel/winmod.inc:456-507"
+   ],
+   "recommendation": "shr ax,cl for the two bytes and a shl by 8-cl of a copy of the low byte for the spill.",
+   "phase": "now",
+   "bytes_est": "+~6 WIN95.DRV, 0 resident",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "The per-bit loop is at winmod.inc:472-475; arithmetic is plausible (predicted)."
+  },
+  {
+   "id": "shell-11",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Basic dock_geom only works at boot or with CTRL.DRV loaded",
+   "detail": "dkb_geom runs the blob's copy while [spl_fseg] is set and otherwise far-calls CTRL.DRV's CPE_DOCK_GEOM. Every caller today is the boot, DOCK_APPLY or the Display page, so it holds; a future caller outside the panel gets mod_gone's CF=1 and no geometry, silently.",
+   "evidence": [
+    "kernel/dock.inc:213-220",
+    "kernel/vidsel.inc:1047, :2121",
+    "kernel/viddet.inc:1547"
+   ],
+   "recommendation": "State the invariant in dkb_geom's banner, or fall back to dkb_band on CF=1.",
+   "phase": "now",
+   "bytes_est": "0 (comment) or +3 resident .text",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "dkb_geom: `cmp [spl_fseg],0 / je .panel / SPLGATE1 ovl_dock_geom` else `call far [CPFP+CPE_DOCK_GEOM*4]`; callers are the VSW_SWITCH/VSW_DISP expansions (blob, CTRL.DRV), DOCK_APPLY's reflow and vid_init. With DOCK.DRV mounted the slot is dkx_geom, so only the basic arm is exposed."
+  },
+  {
+   "id": "shell-12",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "A driver's service record is half-sanitised",
+   "detail": "osapi_desk_item_x force-terminates only the caption; the 13-byte launch file and 12-byte header name are copied as given and later read as NUL strings. Drivers are trusted and the SDK marks both fields 'NUL' (the driver's obligation); the SDK's 'Both strings are terminated by the kernel' sits in the package's paragraph and means the package record's path and caption, which sc_m_add does terminate.",
+   "evidence": [
+    "kernel/desk.inc:2236-2251",
+    "apps/os88api.inc:1407-1421 (the driver record)",
+    "kernel/desksc.inc:870-872"
+   ],
+   "recommendation": "Optional: terminate the file and name too, for symmetry with the caption.",
+   "phase": "now",
+   "bytes_est": "0, or +10 resident .cold",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "The code half is confirmed (only desk_svc_cap+DSV_CAPMAX-1 is forced). The SDK-contradiction half is refuted: 'Both strings' follows the package record and its remove clause (two strings: path, caption) and the driver's three are each documented NUL. Recommendation reduced; the proposed os88api.inc:1446 doc fix is dropped."
+  },
+  {
+   "id": "shell-13",
+   "kind": "perf",
+   "severity": "low",
+   "title": "desk_reflow is O(cells x zones) per placement",
+   "detail": "desk_free calls desk_owner (a 24-entry scan) for each cell from 0, and pass 2 calls it per item; a screen-shape reflow re-places every flowing item. Tens of ms on the XT at worst, once per display switch.",
+   "evidence": [
+    "kernel/desk.inc:731-773",
+    "kernel/desk.inc:891-947"
+   ],
+   "recommendation": "An occupancy bitmap built once per reflow (desk_cdirty's shape) would make it linear; not worth ~30 resident bytes for a mount-rate path.",
+   "phase": "record",
+   "bytes_est": "+~30 resident if taken",
+   "prior_art": "",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: desk_free loops cells calling desk_owner, which scans DESK_NZ bytes."
+  },
+  {
+   "id": "shell-14",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "kern_small still draws a desktop cell two and three times",
+   "detail": "kern_small's desk_draw_zone fills the whole zone with ground, draws the icon over it, fills a white caption rect over the ground and then an opaque font_run over the white: caption band written three times, picture twice, on the slowest machine. SPEC 26.9.9 records kern_big's fix as kern_big-only by design.",
+   "evidence": [
+    "kernel/desk.inc:2090-2137",
+    "SPEC.md 26.9.9 'kern_small is byte-identical'"
+   ],
+   "recommendation": "A cheaper partial (ground above the caption band and two side strips) costs ~+2 primitive calls and ~+20 resident bytes; take a flicker measurement before deciding.",
+   "phase": "record",
+   "bytes_est": "+~20 resident kern_small if taken",
+   "prior_art": "",
+   "listed_as": "SPEC 26.9.9 (kern_big only)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: cw_thm_desk over desk_rect_ax, cw_icon_draw_ix, ct_cw_gfx_fill white, then font_run_x."
+  },
+  {
+   "id": "shell-15",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Windows title bar ground is filled under its buttons and caption",
+   "detail": "wn_title fills the whole bar and then the button bands and opaque caption land on it, writing ~3x15x13 button pixels and the caption cells twice per title paint. SPEC 76.14.3 records the decision; logged against PERFORMANCE rule 2.",
+   "evidence": [
+    "kernel/winmod.inc:276-281, :284, :326"
+   ],
+   "recommendation": "If the theme ever becomes a default, compose the bar into one band (the composed-bar knob) instead of splitting fills.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "",
+   "listed_as": "SPEC 76.14.3",
+   "verdict": "unchecked",
+   "verify_note": "Low, recorded decision; only the fill/buttons/font_run order was glanced at, not the SPEC 76.14.3 reasoning."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/desk.inc",
+   "old_text": "one compare in desk_svflag is the whole of what",
+   "new_text": "one compare in desk_live (its .svc arm) is the whole of what",
+   "why": "No routine desk_svflag exists; the compare is desk_live's .svc arm, `cmp word [desk_svc_seg], 0` (desk.inc:699-701)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`desk_svflag`.",
+   "new_text": "`desk_live`'s service-item arm.",
+   "why": "No desk_svflag in the tree; desk_live's .svc arm (kernel/desk.inc:699-701) is the one compare."
+  },
+  {
+   "file": "kernel/desk.inc",
+   "old_text": "BYTE, because DESK_NZ bounds it at 8 and",
+   "new_text": "BYTE, because DESK_NZ bounds it (24, 4 on kern_small) and",
+   "why": "DESK_NZ is DESK_SC0 + SC_MAX = 24 on kern_big (desk.inc:107) and DVOL_MAX = 4 on kern_small (desk.inc:133, disk.inc:204)."
+  },
+  {
+   "file": "kernel/deskmod.inc",
+   "old_text": "; 0 the layer is resident from here until restart, CF = 1 it is not (no",
+   "new_text": "; 0 the layer is resident from here until the last widget goes (desk_drop_x),\n; CF = 1 it is not (no",
+   "why": "desk_drop_x (deskmod.inc:118-134) drops MOD_DESK once no inst_tab record carries IF_DESK; it is not held until restart."
+  },
+  {
+   "file": "kernel/deskmod.inc",
+   "old_text": "so the 1 KB\n; pinned claim",
+   "new_text": "so the ~5 KB\n; pinned claim",
+   "why": "DESK.DRV's image is 4,520 bytes (build/kernel.map modj_end 0x11A8) since the Sticky App library rides it (deskmod.inc:384-386); SPEC 11.103.10 calls the claim 5 KB."
+  },
+  {
+   "file": "kernel/deskmod.inc",
+   "old_text": "; load point. Nothing else loads it: DRAG and RELEASE only follow a MAKE that",
+   "new_text": "; load point - or the loader's step 5 just before it, for an OS88_F_DESK\n; package being read off a disk anyway (desk_need's second caller). No verb\n; loads it: DRAG and RELEASE only follow a MAKE that",
+   "why": "desk_need's own banner (deskmod.inc:72-77) names the loader's step 5 as its second caller, so QUERY is not the only load."
+  },
+  {
+   "file": "kernel/deskmod.inc",
+   "old_text": "; QUERY (or the loader's step 5 for it), pinned, held until the restart. No",
+   "new_text": "; QUERY (or the loader's step 5 for it), pinned, held until the last widget\n; goes (desk_drop_x). No",
+   "why": "The image, and the library in it, is dropped by desk_drop_x when no record carries IF_DESK (deskmod.inc:118-134)."
+  },
+  {
+   "file": "apps/stiklib.asm",
+   "old_text": "; desk layer's claim, held from the first QUERY to the restart - and every",
+   "new_text": "; desk layer's claim, held from the first QUERY until the last widget goes\n; (SPEC.md 11.103.10's drop rule) - and every",
+   "why": "DESK.DRV, which carries this library, is dropped by desk_drop_x once no record carries IF_DESK (kernel/deskmod.inc:118-134). [verifier-added]"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; (a find and a read) and holds a 1 KB claim\n                                 ; until restart, unless the loader already",
+   "new_text": "                                 ; (a find and a read) and holds a ~5 KB claim\n                                 ; until the last widget goes, unless the loader already",
+   "why": "DESK.DRV is 4,520 bytes (modj_end 0x11A8) and is dropped by desk_drop_x with the last IF_DESK record. NOTE: this comment is inside OSAPI_WM_DESK's contract, so tools/abilock.py fingerprints it - run `python3 tools/abilock.py --update \"OSAPI_WM_DESK contract comment fixed\"` (no PKG_FMT bump) with the edit."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**and `DESK.DRV` is now loaded and held until restart** (§11.103.10) - QUERY is the module's load point, so ask it in your ENTRY PROC, where the system disk is already required. CF = 1: no layer - kern_small (whose every verb refuses), or `DESK.DRV` missing, no heap for its 1 KB claim",
+   "new_text": "**and `DESK.DRV` is now loaded and held until the last widget goes** (§11.103.10) - QUERY is the module's load point, so ask it in your ENTRY PROC, where the system disk is already required. CF = 1: no layer - kern_small (whose every verb refuses), or `DESK.DRV` missing, no heap for its 5 KB claim",
+   "why": "§11.103.10's own lifetime paragraph and desk_drop_x (kernel/deskmod.inc:118-134) drop it with the last IF_DESK record; the image is 4,520 bytes (modj_end 0x11A8)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "and it is pinned and held until the restart - so the library is",
+   "new_text": "and it is pinned and held until the last widget goes (§11.103.10's drop rule) - so the library is",
+   "why": "desk_drop_x (kernel/deskmod.inc:118-134) drops DESK.DRV, library included, once no record carries IF_DESK."
+  },
+  {
+   "file": "kernel/instance.inc",
+   "old_text": "; dock tile (SPEC.md 30). Set by OSAPI_WM_DESK's\n                                ; MAKE on the CALLER's record - in the entry\n                                ; proc, before the loader's step 9 publishes it\n                                ; (which writes no I_FLAGS) - and zeroed with\n                                ; the record by inst_alloc",
+   "new_text": "; dock tile (SPEC.md 30). Set by ld_alloc for an\n                                ; OS88_F_DESK launch while the record is still\n                                ; unpublished, then set or cleared by the\n                                ; loader's step 9 off the window the entry proc\n                                ; returned (desk_drop_x clears it), and zeroed\n                                ; with the record by inst_alloc",
+   "why": "MAKE writes only W_FLAGS (deskmod.inc:234-271); ld_alloc sets IF_DESK (loader.inc:1228-1232) and step 9 sets it or calls desk_drop_x, which clears it (loader.inc:1458-1466)."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "; kmain:4525.",
+   "new_text": "; kmain (its `OVLCALL dock_init`).",
+   "why": "The one call is `OVLCALL dock_init` at kernel/kernel.asm:5890; line 4525 is something else."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "; A SLOT'S BASIC BODY IS THE WHOLE GUARD. Four operations exist only while a",
+   "new_text": "; A SLOT'S BASIC BODY IS THE WHOLE GUARD. Five operations exist only while a",
+   "why": "Five dkv slots rest on dkb_ret/dkb_clc: DKI_DROP, DKI_PASS, DKI_HOLE_ARM, DKI_HOLE_SUB, DKI_HOLE_WIN (dock.inc:376-380)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Four operations exist only while a",
+   "new_text": "Five operations exist only while a",
+   "why": "Five dkv slots rest on dkb_ret/dkb_clc (kernel/dock.inc:376-380): DROP, PASS and the three hole slots."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "(SPEC.md 30.5), and dkf_apply is their only",
+   "new_text": "(SPEC.md 30.5), and DOCK_APPLY (dock_apply, bdk_apply) is their only",
+   "why": "dkf_apply was renamed in kernel size pass 13; the callers are the DOCK_APPLY expansions dock_apply (dock.inc:340, CTRL.DRV) and bdk_apply (driver.inc:6047, the blob)."
+  },
+  {
+   "file": "kernel/dockmod.inc",
+   "old_text": "held by dkf_apply's caller, so no",
+   "new_text": "held by dock_apply's caller (bdk_apply's is the boot), so no",
+   "why": "The only callers of dkx_hook/dkx_unhook are DOCK_APPLY's expansions (dock.inc:303-340, driver.inc:6047); dkf_apply no longer exists."
+  },
+  {
+   "file": "kernel/winmod.inc",
+   "old_text": "; dkf_apply's shape. Idempotent",
+   "new_text": "; dock_apply's shape (DOCK_APPLY). Idempotent",
+   "why": "dkf_apply was renamed dock_apply (the DOCK_APPLY macro, dock.inc:303-340); SPEC.md 68594 records the rename."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`dkf_apply`'s shape: Extend",
+   "new_text": "`dock_apply`'s shape: Extend",
+   "why": "Renamed in kernel size pass 13 (SPEC.md 68594); the routine is DOCK_APPLY's dock_apply (kernel/dock.inc:303-340)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`dkf_apply`'s shape (§30.5) in one slot rather than two",
+   "new_text": "`dock_apply`'s shape (§30.5) in one slot rather than two",
+   "why": "Renamed in kernel size pass 13 (SPEC.md 68594); kernel/dock.inc:303-340."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "it calls `dkf_apply` and `exf_sync`, with the boot volume mounted.",
+   "new_text": "it calls `bdk_apply` and `bxf_sync` (the blob's `DOCK_APPLY` and `EXF_SYNC`), with the boot volume mounted.",
+   "why": "The boot reader calls BLOBCALL bdk_apply (kernel/driver.inc:4995) and bxf_sync (driver.inc:5867), expanded at driver.inc:6047-6049."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "; key (dock_key: its icon in the high bits",
+   "new_text": "; key (db_key, DOCK.DRV's dkx_key: its icon in the high bits",
+   "why": "No dock_key routine exists; the key is built by db_key (dock.inc:865) and dkx_key (dockmod.inc:886)."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "; what each tile was last DRAWN as (dock_key)",
+   "new_text": "; what each tile was last DRAWN as (db_key)",
+   "why": "No dock_key routine exists; db_key (dock.inc:865) / dkx_key (dockmod.inc:886) make the key. [in the area report's item 17, not its structured list]"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Each tile carries a **key** (`dock_key`)",
+   "new_text": "Each tile carries a **key** (`db_key`, and `dkx_key` in `DOCK.DRV`)",
+   "why": "No dock_key in the tree; kernel/dock.inc:865 db_key and kernel/dockmod.inc:886 dkx_key."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "I_ICO_PKG (loader.inc:265) or 0 (:261), so",
+   "new_text": "I_ICO_PKG or 0 (loader step 9's one store), so",
+   "why": "loader.inc:261-265 is ld_hdr_ok's neighbourhood; the one I_ICON store is step 9's `and ax, 1` / `mov [di+I_ICON], ax` (loader.inc:1453-1457)."
+  },
+  {
+   "file": "kernel/dockmod.inc",
+   "old_text": "I_ICO_PKG (loader.inc:265) or 0 (:261), so",
+   "new_text": "I_ICO_PKG or 0 (loader step 9's one store), so",
+   "why": "Same as dock.inc: the single I_ICON store is loader.inc:1453-1457."
+  },
+  {
+   "file": "kernel/dock.inc",
+   "old_text": "; below `.go` - the five pops at the bottom.",
+   "new_text": "; below `.go` - the pen's `pop` and kret_di's six at the bottom.",
+   "why": "db_paint's exit is `pop ax` (the pen) then `jmp kret_di`, which pops six registers (dock.inc:732-744, kernel.asm:8478)."
+  },
+  {
+   "file": "kernel/dockmod.inc",
+   "old_text": "; below `.go` - the five pops at the bottom.",
+   "new_text": "; below `.go` - the pen's, the region's and the hole's pops and\n                                ; dkx_ret_di's six at the bottom.",
+   "why": "dkx_paint's exit pops the pen, wm_clip_n and gfx_hole, then jumps to dkx_ret_di, which pops six (dockmod.inc:743-762, 1626-1632)."
+  },
+  {
+   "file": "kernel/dockmod.inc",
+   "old_text": "; dock_apply - the SETTING moved: geometry, drive column, windows, strip\n; in:  [dock_cfg] already written; gfx lock held by the caller, or at boot\n; out: nothing (all registers preserved). THE CALLER OWES THE REPAINT, which\n;      is vid_switch's own contract: the Control Panel posts [cp_dirty]\n;\n; SPEC.md 30.5. wm_refit moves every window back inside the new band, and the\n; raise caches go because a window that did not move can have had the strip\n; stand up or lie down behind it.\n",
+   "new_text": "; dkx_paint - db_paint (dock.inc) on any edge: the rule and white field when\n;             the damage span says they are owed, then every tile whose key moved\n; in:  nothing (caller holds the gfx lock)\n; out: CF = 1 if any pixel was drawn, CF = 0 if the strip was already right -\n;      and CF = 0 while the strip is OPEN, which damages no window. All\n;      registers preserved; [gfx_color], [gfx_hole] and [wm_clip_n] restored.\n",
+   "why": "The banner over dkx_paint (dockmod.inc:505) is a stale copy of dock_apply's; DOCK_APPLY lives in dock.inc:287-340 and answers CF. dkx_paint's CF and the dock_up clear are at dockmod.inc:743-762."
+  },
+  {
+   "file": "kernel/extmod.inc",
+   "old_text": "; which there IS ye. Two displays",
+   "new_text": "; which there is that display's own bottom (VY + CH). Two displays",
+   "why": "Truncated sentence; the secondary arm returns DX = VY + CH of display 1 (extmod.inc:1098-1101)."
+  },
+  {
+   "file": "kernel/extmod.inc",
+   "old_text": "; wm_land_fit asks wm_disp_now ONCE",
+   "new_text": "; ui_drag_size asks wm_disp_now ONCE",
+   "why": "wm_land_fit was folded into ui_drag_size (extmod.inc:611), which calls wm_disp_now and arms wm_lf_disp (extmod.inc:679-683)."
+  },
+  {
+   "file": "kernel/extmod.inc",
+   "old_text": "                                ; then vid_ctx_ptr, which takes its index in\n                                ; AL and does `mul dl`, so AH is that\n                                ; instruction's OUTPUT and not an input",
+   "new_text": "                                ; then ext_ctx_ptr, which takes its index in\n                                ; AL (a branch: no `mul`), and the load after\n                                ; it overwrites AX whole, so AH is no input",
+   "why": "The call is ext_ctx_ptr (extmod.inc:1363), a branch with no multiply that keeps AX (extmod.inc:503-509); AX is then reloaded from [di+VID_CTX_VX]."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**What an Extend user pays**: a 1KB heap claim (the image rounded to whole KB\nby `mem_bytes_kb_x`), pinned and top-down like every module — so an exclusive\nfullscreen program on an Extend machine sees a 1KB smaller arena;",
+   "new_text": "**What an Extend user pays**: a 2KB heap claim (the 1,955-byte image rounded to\nwhole 512-byte granules by `mem_bytes_gp_x`, §50.2.1), pinned and top-down like\nevery module — so an exclusive fullscreen program on an Extend machine sees a\n2KB smaller arena;",
+   "why": "EXTD.DRV is 1,955 bytes (build/kernel.map modx_end 0x7A3); mod_need claims by mem_bytes_gp_x, whole granules (kernel/mod.inc:452-456), not mem_bytes_kb_x."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the second wave below, 1,069 after its own size pass and **1,023** since the\nsecond one, which took the claim from 2 KB to 1 KB (§39.19.6.2).",
+   "new_text": "the second wave below, 1,069 after its own size pass and 1,023 after the\nsecond one, which took the claim from 2 KB to 1 KB (§39.19.6.2); kernel size\npass 13's seam cuts (below) took it back over the KB, and it is **1,955** bytes\nand a 2 KB claim today.",
+   "why": "EXTD.DRV's image is 1,955 bytes (modx_end 0x7A3), not 1,023; the same section's seam-cut paragraph already says 'inside the 2 KB claim'. [verifier's replacement for the proposed §39.19.6.2 heading edit]"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`wn_title`, home by `jmp KERNEL_SEG:kret_ret`",
+   "new_text": "`wn_title`, home by `jmp KERNEL_SEG:kret_es`",
+   "why": "wn_title leaves by `jmp KERNEL_SEG:kret_es` (kernel/winmod.inc:348)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "module body goes home to `kret_ret` because",
+   "new_text": "module body goes home to `kret_es` (the ladder down to `kret_ret`) because",
+   "why": "kernel/winmod.inc:348 jumps to kret_es, which pops ES and the rest of the ladder before kret_ret's `ret` (kernel.asm:8476-8484). [in the area report's item 26, not its structured list]"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "; item 1, swapped by ui_loc_gate (SPEC.md 26.8.5)",
+   "new_text": "; item 1, swapped by desk_select / desk_unsel_x / sc_m_del (SPEC.md 26.8.5)",
+   "why": "ui_loc_gate writes item 0 (ui.inc:2472); item 1 is written by desk_select (desk.inc:1406), desk_unsel_x (desk.inc:1452) and sc_m_del (desksc.inc:1492)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "anything else is a no-op (§26.8.5) |",
+   "new_text": "anything else is a no-op (§26.8.5), but a right-click on a mounted image's drive offers Unmount Image (§18.101.5) |",
+   "why": "sc_rclick_x pops Unmount Image for a DRVC_IMG volume's zone (kernel/desksc.inc:516-555, OS88_IMG on kern_big)."
+  }
+ ],
+ "refuted_doc_mismatches": [
+  {
+   "file": "kernel/desk.inc",
+   "line": 2387,
+   "current_text": "osapi_desk_svc copies DSV_R_SIZE bytes into it",
+   "note": "Stale name is real (the copier is osapi_desk_item_x), but the text is inside an %error string, which is code, not a ';' comment - out of scope for a comment-only fix."
+  },
+  {
+   "file": "SPEC.md",
+   "line": 221361,
+   "current_text": "a 1 KB claim from a Sticky App's first QUERY until restart",
+   "note": "A row of a dated MEASURED table (the 2026-10-15 cut: '235 bytes ... 4 entries'); accurate for the build it measured. The current lifetime is §11.103.10's, fixed elsewhere."
+  },
+  {
+   "file": "SPEC.md",
+   "line": 80196,
+   "current_text": "##### 39.19.6.2 The size passes: 1,566 -> 1,069 -> 1,023 bytes, a 1 KB claim",
+   "note": "A pass-history heading; appending today's size to a heading is the wrong place. The verifier fixed the summary sentence at SPEC.md:80007-80009 ('**1,023** since the second one') instead."
+  },
+  {
+   "file": "SPEC.md",
+   "line": 80013,
+   "current_text": "the landing and the straddle fit (`wm_land_fit` and the",
+   "note": "Part of '**What moved**' - the list of what went into EXTD.DRV when it landed, which is history and accurate; the proposed replacement also duplicated ui_drag_size in the list."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "line": 1446,
+   "current_text": "Both strings are terminated by the kernel",
+   "note": "The sentence closes the PACKAGE record's paragraph (two strings: path and caption, both terminated by sc_m_add, desksc.inc:870-872); the driver record's three strings are each documented 'NUL'. Not a mismatch."
+  }
+ ]
+}

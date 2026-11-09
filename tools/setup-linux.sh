@@ -82,6 +82,9 @@ fi
 
 have_libudev() { pkg-config --exists libudev 2>/dev/null; }
 have_pil() { python3 -c 'from PIL import Image' >/dev/null 2>&1; }
+have_unicorn() {
+    python3 -c 'from unicorn import Uc, UC_ARCH_X86, UC_MODE_16' >/dev/null 2>&1
+}
 # 3.11, not merely "a python3": tools/guidelock.py, which every `make` runs,
 # and tools/os88guide.py import tomllib, which entered the stdlib in 3.11.
 have_py() {
@@ -110,6 +113,15 @@ missing_list() {
     # `PIL.Image` and not `PIL`: the package imports on an interpreter its C
     # extension was not built for, and only the extension says so.
     have_pil || echo python3-pil
+    # mtools. Every QEMU WIN16 row (tests/win16*.py) writes its B: disk with
+    # mcopy, and the win16-reference skill partitions and reads its machines
+    # with it; `needs=("mtools")` SKIPS those rows without it, and a skip is a
+    # soak failure. Small and packaged, so installed like inform6.
+    command -v mcopy >/dev/null 2>&1 || echo mtools
+    # unicorn. The fast tier's w16fp and w16cens run WIN16's FP emulator and
+    # census under it and SKIP without it. pip's, not the archive's: no apt
+    # package carries the Python binding for the python3 on PATH.
+    have_unicorn || echo unicorn
     have_py || echo python3
 }
 
@@ -298,6 +310,11 @@ for pkg in $MISSING; do
             >/dev/null 2>&1 || :
         have_pil || warn "setup-linux.sh: Pillow would not install; only the pxsshots row needs it"
         ;;
+    unicorn)
+        say "==> installing unicorn  (w16fp and w16cens, fast tier)"
+        python3 -m pip install -q unicorn >/dev/null 2>&1 || :
+        have_unicorn || warn "setup-linux.sh: unicorn would not install; w16fp and w16cens SKIP without it"
+        ;;
     *)
         say "==> installing $pkg"
         apt_install "$pkg" || { warn "setup-linux.sh: $pkg would not install"; exit 1; }
@@ -308,7 +325,8 @@ done
 say ""
 status
 
-STILL=$(missing_list || true)
+# unicorn has already warned and is two fast-tier SKIPS, not a broken box
+STILL=$(missing_list | grep -vx unicorn || true)
 if [ -n "$STILL" ]; then
     warn ""
     warn "STILL MISSING: $(echo $STILL)"

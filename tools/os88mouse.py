@@ -466,6 +466,38 @@ class Mouse:
         self._edge(False)
         _wait(self.m, settle, "click", 1.5)
 
+    def tap(self, x, y, settle=None):
+        """A click whose PRESS LENGTH is guest time, not host time.
+
+        `click` holds the button at least HOLD_TICKS and then RELEASES ON A
+        RUNNING GUEST, so how long the guest sees it down is HOLD_TICKS plus
+        however long the host takes to get the release through - a quantity
+        of the BOX. For most targets that is harmless: a click is an edge.
+        For a target that REPEATS while the button is held (Cyclone's gun,
+        SPEC.md 67.11.3) it is the answer itself: cycfire read 2 shots from
+        one click at a soak's load and 1 alone. So here the guest is paused
+        and the gesture stepped as dblclick's is - press decoded, HOLD_TICKS
+        of cycles, release decoded - and the press is the same length
+        whatever the host is doing. MartyPC only; elsewhere it is `click`.
+        """
+        if getattr(self.m, "bochs", False) or not hasattr(self.m, "advance"):
+            return self.click(x, y, settle)
+        self.to(x, y)
+        if self.where()[2] & 1:
+            self._edge(False)
+        self._sep()
+        was = self.m.status().get("state")
+        self.m.pause()
+        try:
+            self._gedge(True)
+            self.m.advance(cycles=int(self.HOLD_TICKS * os88marty.GUEST_HZ
+                                      / 18.2065))
+            self._gedge(False)
+        finally:
+            if was == "running":
+                self.m.go()
+        _wait(self.m, settle, "click", 1.5)
+
     # --- clicking that PROVES itself ---------------------------------------
     def ticks(self):
         """The guest's own 18.2 Hz tick count (0040:006C)."""

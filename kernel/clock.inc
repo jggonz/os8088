@@ -20,8 +20,9 @@
 ; The one BIOS caller is clk_rtc_write, and it is NOT IN THIS FILE and does
 ; NOT run outside the gfx lock. SPEC.md 37.94 moved it into CTRL.DRV
 ; (kernel/clockw.inc) and its only caller is cp_flush_close_x, which runs WITH
-; the lock held; ui.inc no longer drains [clk_dirty] at all, and [clk_dirty]
-; itself went with the move. clockw.inc's own banner has the live version -
+; the lock held; ui.inc no longer drains [clk_dirty] at all. The byte itself
+; stays resident: clk_fld_adj sets it and cp_flush_close_x spends it at the
+; panel's close. clockw.inc's own banner has the live version -
 ; "BIOS FROM HERE IS FINE" - and states the reason: SPEC.md 31.1's "must not
 ; call BIOS" binds cp_paint and cp_onclick, which are page callbacks, and
 ; teardown is not one. (Three sentences describing the replaced design stood
@@ -155,9 +156,9 @@ CLK_YMAX    equ 2099            ; also the range the leap rule below is exact
 ; clk_fmt and the Date/Time page's month field.
 ;
 ; THE MONTH LENGTHS ARE NOT A TABLE any more: a `clk_mdays db 31,28,...`
-; used to sit here with exactly one reader, and clk_mlen carries the eleven
-; non-February answers as a 16-bit mask instead (0x15AA, derived at the
-; routine). February was always the branch and still is.
+; used to sit here with exactly one reader, and clk_mlen derives the eleven
+; non-February answers from the month's parity about August instead (kernel
+; size pass 17, at the routine). February was always the branch and still is.
 clk_mnames: db 'JanFebMarAprMayJunJulAugSepOctNovDec'
 
 
@@ -214,7 +215,24 @@ CLK_RETRY   equ 10              ; bounded coherent-read retries
 %define CLK_TRY(n) 0            ; SPEC.md 37.0.1: no rung is reachable on this
 %endif                          ; build, so clk_probe walks nothing and every
                                 ; rung's body is out of the assembly too
-section .ovl                  ; boot overlay (SPEC.md 2.5)
+%ifndef KERN_SMALL
+B3SECT                          ; THE CLOCK LADDER, WHOLE - clk_init to clk_bcd,
+                                ; every rung's probe and read - is boot-only:
+                                ; `.boot3` (SPEC.md 2.9.15) since BOOT3-PLAN
+                                ; wave 3, which took it out of `.ovl` to give
+                                ; the window half its room back. kmain_o is
+                                ; its one caller (OVSCALL clk_init, MARK 6),
+                                ; before the mount and long before the drop.
+                                ; Its tables are read through CS here as they
+                                ; were there, and the RTC's WRITE half is
+                                ; CTRL.DRV's own copy (clockw.inc), which names
+                                ; nothing below
+%else
+section .ovl                    ; ...and kern_small keeps it in the window half
+                                ; (BOOT3-PLAN 5.1: that `.ovl` has room and no
+                                ; want named). Written LAST: tools/os88ovlchk.py
+                                ; models kern_small (SPEC.md 2.5.3.2)
+%endif
 
 
 ; -----------------------------------------------------------------------------
@@ -380,7 +398,7 @@ clk_probe:
                                 ; AL is still the tier for SPEC.md 37.92's
                                 ; publication. `.none` never arrives here and
                                 ; keeps its own CLK_T_NONE store at the top,
-                                ; which it needs because .bss is not zeroed
+                                ; which only restates the zero .bss boots with
     pop ax
     clc
     ret
@@ -418,7 +436,6 @@ clk_commit:
     mov [clk_day], al
     pop ax
     ret
-section .text
 %ifdef OS88_RTC                 ; SPEC.md 37.0.1: the four RTC rungs, whole.
                                 ; Everything above is the ladder's dispatch
                                 ; and everything below is the SOFTWARE clock -
@@ -442,7 +459,6 @@ section .text
 ; burst by parking the index at 0Dh - read-only, so a stray later write to
 ; 71h cannot corrupt anything - with the NMI bit CLEAR, which is the state
 ; the BIOS leaves after POST.
-section .ovl                  ; boot overlay (SPEC.md 2.5)
 clk_at_get:                     ; the overlay's copy (CLK_AT_GET_BODY above)
     CLK_AT_GET_BODY
 
@@ -531,8 +547,9 @@ clk_at_regs: db 0x02, 0x04, 0x07, 0x08, 0x09, 0x32
                                 ; the six CMOS registers the burst below reads
                                 ; back to back, in order, into clk_rr+1..+6:
                                 ; minute, hour, day, month, year, century. IT
-                                ; IS .ovl DATA, so it is read CS-RELATIVE -
-                                ; the overlay lands on FAT_SEG and DS is
+                                ; IS THE LADDER'S DATA, so it is read
+                                ; CS-RELATIVE - the ladder runs at B3_SEG
+                                ; (FAT_SEG on kern_small) and DS is
                                 ; KERNEL_SEG, so `[si]` would read six bytes of
                                 ; the kernel image instead (SPEC.md 2.5, and
                                 ; the idiom drvp_sbbase already uses)
@@ -629,11 +646,11 @@ clk_at_num:
     ret
 
 ; clk_at_dcno - the refusal trampoline the first four of clk_at_dec's range
-; tests share (see clk_rp_dgno above for why one near jump beats four inverted
-; pairs, and why this is a global rather than a `.local`): -9.  Cold by
-; construction - a field out of range means the byte did not decode in the
-; mode Register B claims, and clk_at_probe then tries the other mode once and
-; gives the tier up.
+; tests share - one near jump where four inverted Jcc/jmp pairs would stand,
+; and a global because the tests reach it from outside a `.local`'s scope: -9.
+; Cold by construction - a field out of range means the byte did not decode in
+; the mode Register B claims, and clk_at_read then tries the other mode once
+; and gives the tier up.
 ; -----------------------------------------------------------------------------
 clk_at_dcno:
     jmp clk_at_dec.no
@@ -807,7 +824,6 @@ clk_yr_join:
 .out:
     pop cx
     ret
-section .text
 
 ; =============================================================================
 ; Tier CLK_T_NS (2): the National MM58167 at 2C0h - AST SixPakPlus and clones
@@ -829,7 +845,6 @@ CLK_NS_SIG  equ 0x0D            ; RAM: no HIGH nibble - the first signature
 CLK_NS_YRB  equ 0x0E            ; RAM: year - 1980, what 86Box's cards use
 CLK_NS_STAT equ 0x14            ; D0 = a counter rolled during the read
 CLK_NS_MAGIC equ 222
-section .ovl                  ; boot overlay (SPEC.md 2.5)
 
 
 ; -----------------------------------------------------------------------------
@@ -884,8 +899,9 @@ clk_ns_put:                     ; the overlay's copy (CLK_NS_PUT_BODY above)
 ; textually first failure" to "the table's order", which is the same order,
 ; and the observable answer (CF = 1, nothing usable) is identical either way.
 ;
-; THE TABLE IS .ovl DATA AND IS READ CS-RELATIVE. The overlay lands on
-; FAT_SEG while DS is KERNEL_SEG, so a plain `[si]` would read six rows out of
+; THE TABLE IS THE LADDER'S DATA AND IS READ CS-RELATIVE. The ladder runs at
+; B3_SEG (FAT_SEG on kern_small) while DS is KERNEL_SEG, so a plain `[si]`
+; would read six rows out of
 ; the kernel image instead - the trap SPEC.md 2.5 names and drvp_sbbase's own
 ; comment repeats. NASM will not warn about it.
 ; -----------------------------------------------------------------------------
@@ -1520,9 +1536,9 @@ clk_rp_year:
 
 ; -----------------------------------------------------------------------------
 ; clk_bios_dnone - the refusal trampoline the first four of clk_bios_read's
-; validations share (see clk_rp_dgno above): -9.  Cold by construction - a BIOS
-; that answers int 1Ah at all passes every one of them, and one that does not
-; costs the tier, not a redraw.
+; validations share (clk_at_dcno's shape, above): -9.  Cold by construction -
+; a BIOS that answers int 1Ah at all passes every one of them, and one that
+; does not costs the tier, not a redraw.
 ; -----------------------------------------------------------------------------
 clk_bios_dnone:
     jmp clk_bios_read.none
@@ -1639,6 +1655,38 @@ clk_bios_read:
     pop ax
     ret
 %endif                          ; OS88_RTC
+
+
+; -----------------------------------------------------------------------------
+; clk_bcd - packed BCD byte to binary
+; in:  AL = BCD
+; out: AL = value, CF = 1 if either nibble is not a decimal digit
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+clk_bcd:
+    push cx
+    mov ch, al
+    and al, 0x0F
+    cmp al, 10
+    jae .bad
+    mov cl, 4
+    shr ch, cl
+    cmp ch, 10
+    jae .bad
+    mov cl, ch                  ; AL += CH * 10
+    add ch, ch
+    add ch, ch
+    add ch, ch                  ; CH * 8
+    add ch, cl
+    add ch, cl                  ; + CH * 2
+    add al, ch
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop cx
+    ret
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -1691,10 +1739,12 @@ clk_tick:
     mov cx, 182
     div cx                      ; AX = whole seconds owed, DX = leftover
     mov [clk_acc], dx
-    mov cx, ax
-    xor ax, ax                  ; AL = the mask being built, AH = the minute
+    xchg cx, ax                 ; CX = the seconds (one byte: AX is zeroed
+    xor ax, ax                  ; next anyway - kernel size pass 18, -1);
+                                ; AL = the mask being built, AH = the minute
     jcxz .pend
-    or al, 1                    ; a second passed
+    inc ax                      ; a second passed (AX was 0: `inc ax` is the
+                                ; `or al, 1` in one byte, kernel size pass 18)
     mov ah, [clk_min]           ; the minute to compare against afterwards
     cmp cx, 60
     jb .adv
@@ -1865,7 +1915,7 @@ clk_snapshot:
 ; -----------------------------------------------------------------------------
 ; clk_fmt - format the whole clock for the menu bar (SPEC.md 12.1)
 ; in:  nothing
-; out: SI = clk_str, 18..24 glyphs + NUL, in the live display form:
+; out: SI = clk_str, CX = its length; 18..24 glyphs + NUL, in the live form:
 ;      'Mmm DD YYYY  HH:MM', plus ':SS' if [clk_secs], and in 12-hour mode
 ;      the hour 1..12 with NO leading zero and a trailing ' AM'/' PM'
 ; clobbers: nothing else
@@ -1879,8 +1929,9 @@ clk_fmt:
                                 ; it. (CX is not banked either - the length is
                                 ; an OUTPUT now)
     call clk_snapshot
-    mov si, clk_str             ; SI is an OUTPUT anyway, and clk_put_mon -
-    mov bx, si                  ; the only callee that touches it - banks it
+    mov bx, clk_str             ; SI is an OUTPUT, loaded at .end: clk_put_mon
+                                ; spends it, and so needs no bank of its own
+                                ; (kernel size pass 18, -1 net)
     mov al, [clk_sn_mon]
     call clk_put_mon
     mov byte [bx], ' '
@@ -1939,8 +1990,8 @@ clk_fmt:
 .end:
     mov byte [bx], 0
     mov cx, bx                  ; ...and the LENGTH, which is free here: BX is
-    sub cx, si                  ; the pointer the NUL just went through, and
-                                ; both callers walked the string again for it
+    mov si, clk_str             ; the pointer the NUL just went through, and
+    sub cx, si                  ; both callers walked the string again for it
     pop bx
     pop ax
     ret
@@ -1948,7 +1999,9 @@ clk_fmt:
 ; -----------------------------------------------------------------------------
 ; str_len - the length of an ASCIIZ string in the kernel segment
 ; in:  SI = the string
-; out: CX = its length, NUL excluded; SI and everything else preserved
+; out: CX = its length, NUL excluded; SI ONE PAST THE NUL; everything else
+;      preserved. Its one caller, toast_place, loads SI itself and reads it
+;      no further, so the bank that kept it went (kernel size pass 18, -1)
 ;
 ; The kernel's only strlen, and it is here rather than anywhere else because
 ; clk_fmt above is what created it. `.text` sites ONLY: a caller in `.modc` or
@@ -1956,16 +2009,13 @@ clk_fmt:
 ; the six-instruction loop it would be replacing.
 ; -----------------------------------------------------------------------------
 str_len:
-    push si
-    xor cx, cx
+    mov cx, si
+    not cx                      ; CX = -SI - 1...
 .l:
-    cmp byte [si], 0
-    je .d
-    inc si
-    inc cx
-    jmp short .l
-.d:
-    pop si
+    cmp byte [si], 1            ; CF = 1 on the NUL alone
+    inc si                      ; (`inc` leaves CF alone)
+    jnc .l
+    add cx, si                  ; ...+ (the NUL's address + 1) = the length
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2016,10 +2066,11 @@ clk_ampm:
 ; in:  AL = month 1..12, BX = destination
 ; out: BX advanced by 3
 ; clobbers: AX (kernel size pass 17: neither caller reads it after -
-;           clk_fmt loads AL afresh and clk_fld_str pops its own)
+;           clk_fmt loads AL afresh and clk_fld_str pops its own) and SI
+;           (pass 18: clk_fmt loads its SI output afterwards and CTRL.DRV's
+;           clk_fld_str reloads its at .done - the bank was nobody's)
 ; -----------------------------------------------------------------------------
 clk_put_mon:
-    push si
     mov ah, 3                   ; ONE CONSTANT, TWICE: the multiply's and the
     mul ah                      ; loop count's. AX = month * 3 (AH = 0, the
     xchg si, ax                 ; month being 1..12) - one cell PAST the one
@@ -2033,7 +2084,6 @@ clk_put_mon:
     jnz .c                      ; address is only ever formed with SI >= 3,
                                 ; and a month of 0 reads the same three bytes
                                 ; before the table that the old `dec al` did
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2084,40 +2134,6 @@ clk_put4:
     call clk_put2               ; nothing else"), so AH is still the remainder
     pop ax
     ret
-section .ovl                  ; boot overlay (SPEC.md 2.5)
-
-
-; -----------------------------------------------------------------------------
-; clk_bcd - packed BCD byte to binary
-; in:  AL = BCD
-; out: AL = value, CF = 1 if either nibble is not a decimal digit
-; clobbers: nothing else
-; -----------------------------------------------------------------------------
-clk_bcd:
-    push cx
-    mov ch, al
-    and al, 0x0F
-    cmp al, 10
-    jae .bad
-    mov cl, 4
-    shr ch, cl
-    cmp ch, 10
-    jae .bad
-    mov cl, ch                  ; AL += CH * 10
-    add ch, ch
-    add ch, ch
-    add ch, ch                  ; CH * 8
-    add ch, cl
-    add ch, cl                  ; + CH * 2
-    add al, ch
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop cx
-    ret
-section .text
 
 
 ; =============================================================================
@@ -2188,8 +2204,8 @@ clk_year:   resw 1              ; CLK_YMIN..CLK_YMAX. NO PAD ABOVE IT: the one
                                 ; is clk_snapshot's `[clk_hour]`, which is
                                 ; hour+day and stops three bytes short
 
-; --- display settings (SPEC.md 37): runtime state, boot defaults in
-; --- clk_init, nowhere to persist them (the kernel never writes the data disk)
+; --- display settings (SPEC.md 37): boot defaults in clk_init; on kern_big
+; --- SYSTEM.CFG's 'CH' and 'CS' records persist them (SPEC.md 51.5)
 clk_h12:    resb 1              ; 0 = 24-hour, 1 = 12-hour + AM/PM
 clk_secs:   resb 1              ; 0 = the menu bar hides seconds, 1 = shows
 clk_barq:   resb 1              ; sticky: the bar's text is stale (an edit or a
@@ -2324,7 +2340,8 @@ section .cold
 ; THE LIVE FIELDS, under cli, and NOT clk_snapshot: the clk_sn_* copy is the
 ; menu bar's formatters', and a package refreshing it would race their next
 ; format. The UI task is the clock's only writer, so from the UI task this is
-; consistent; a worker accepts a torn read across a rollover. Two word reads
+; consistent - and from a worker too: every writer carries a whole second or a
+; whole edit under cli, so a worker is at worst a catch-up behind. Two word reads
 ; ride the field order the first assertion beside the fields pins.
 ; -----------------------------------------------------------------------------
 osapi_clk_get_x:

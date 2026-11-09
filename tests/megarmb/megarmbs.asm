@@ -209,10 +209,11 @@ ms_tick:
 ; ms_ringc - BX = a ring word: a conventional, page-safe claim of the ring
 ; and its words, filled with the sawtooth. out DX the claim, CF
 ms_ringc:
-    mov ax, (MS_RL + 1024) / 1024   ; the ring and its words, conventional
-    mov cx, ax                      ; and all of it page-safe (the DMA door)
-    push bx
-    call OSAPI_MEM_CLAIM_DMA
+    mov ax, (MS_RL + 1024) / 1024 * 64 ; the ring and its words, all of it
+    mov cx, ax                      ; page-safe and CONVENTIONAL: the paragraph
+    push bx                         ; door with a head (the KB DMA door gives an
+    mov bl, MEMP_CLAIM              ; OS88_HIGHMEM package a pool block for a
+    call OSAPI_MEM_P                ; head, KERN-MEGA-PLAN 14.160)
     pop bx
     jc .o
     mov [bx], dx

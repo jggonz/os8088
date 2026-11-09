@@ -15,6 +15,9 @@ THE MAIN ZIP IS LAID OUT BY DISK SIZE (approved for v1.0.20261026):
     360K/             OS88-360 APPS-360 MEDIA360 OFFIC360 NETWK360 GAMES360
                       EMU360 UTIL360
     360K/128K-RAM/    OS88-360 (small360.img)
+    1440K/286-PLUS/   OS88-144 APPS-144 (mega.img, megaapps.img), and in
+                      PROGRAMS/XTMP3 and PROGRAMS/WIN16 their own disks
+    1200K/286-PLUS/   the same at 1.2MB (mega120.img, megaapps120.img ...)
     PROGRAMS/<APP>/   one larger program per folder, the size in the name
                       (WORD-144.IMG, SCRIB120.IMG, CPM-360.IMG ...), and its
                       licence beside it when it is not the project's own;
@@ -147,6 +150,17 @@ the system disk for your size. The 720KB disk is formatted with larger
 clusters than a standard one, because the small kernel reads only a
 two-sector FAT; for the same reason a machine running it reads standard 360KB
 disks but no other 720KB disk."""),
+
+    ("mega", "A 286 or later: the protected-mode system", """\
+The 286-PLUS folders inside 1440K and 1200K hold a system disk for a PC with a
+286 or later processor and at least 1MB of memory. It runs in the processor's
+protected mode, so its programs can use all of the machine's memory rather
+than the first 640KB. Boot OS88-144.IMG or OS88-120.IMG from that folder in
+drive A and put the APPS disk beside it in drive B. XTMP3 and WIN16 each have
+a disk of their own in that folder's PROGRAMS. Use the software disks from
+the 286-PLUS folder with this system: they carry the builds of the programs
+made for it, and the other disks in this zip are for the system disks
+above."""),
 
     ("emu", "In an emulator or virtual machine: the pointer without a grab", """\
 1440K/VMSYS144.IMG is a system disk for running os8088 in an emulator or a
@@ -313,6 +327,21 @@ ITEMS = [
      "The small kernel with every program that fits a 128KB machine.",
      [("small360.img", "360KB", ""), ("small720.img", "720KB", "")]),
 
+    # kern_mega (SPEC.md 20.18): required, and built by `make mega` - the
+    # emulator system disk's precedent, `make emu` - rather than by `all`
+    ("mega", "286 system and software disks", True,
+     "The protected-mode kernel and the programs built for it, at 1.44MB "
+     "and 1.2MB. Word and the video player are on the software disk.",
+     [("mega.img", "1.44MB", ""), ("megaapps.img", "1.44MB", ""),
+      ("mega120.img", "1.2MB", ""), ("megaapps120.img", "1.2MB", "")]),
+    ("mega", "286 XTMP3 disk", True,
+     "The MP3 player built for the 286 system, with its three songs.",
+     [("megaxtmp3.img", "1.44MB", ""), ("megaxtmp3-120.img", "1.2MB", "")]),
+    ("mega", "286 WIN16 disk", True,
+     "WIN16 built for the 286 system, with room for the Windows programs you "
+     "copy onto it.",
+     [("megawin16.img", "1.44MB", ""), ("megawin16-120.img", "1.2MB", "")]),
+
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
@@ -440,6 +469,36 @@ ITEMS = [
      "included. WIN16 is on the 360KB emulators disk too.",
      [("win16.img", "1.44MB", ""), ("win16-120.img", "1.2MB", ""),
       ("win16-720.img", "720KB", ""), ("win16-360.img", "360KB", "")]),
+    ("progs", "ARCADE", True,
+     "Seven arcade games played on their boards' own programs: Space "
+     "Invaders, Space Invaders Part II, Lunar Rescue, Gun Fight, Sea Wolf, "
+     "Q*bert and Pac-Man, in a cabinet of their own. No game's ROM is "
+     "included: add the MAME sets you own with Game > Add ROM sets..., and "
+     "they are written to the disk you choose.",
+     [("arcrel.img", "1.44MB", ""), ("arcrel120.img", "1.2MB", ""),
+      ("arcrel720.img", "720KB", ""), ("arcrel360.img", "360KB", "")]),
+    ("progs", "Video Battle", False,
+     "A turn-based battle whose picture is video: a loop plays while you "
+     "choose a command from the menu under it, and each command's clip "
+     "joins the loop and returns to it, over the battle's music. Each disk "
+     "carries the program and an original demo battle, drawn and scored for "
+     "this project, for CGA; the 720KB and 360KB disks carry a shorter "
+     "battle, without its longest clip and with two bars of its music. A "
+     "hard disk plays a battle best: copy the program and the battle onto "
+     "one. The battle builder in the tools zip makes a battle out of your "
+     "own footage.",
+     [("vbattle.img", "1.44MB", ""), ("vbattle120.img", "1.2MB", ""),
+      ("vbattle720.img", "720KB", ""), ("vbattle360.img", "360KB", "")]),
+    ("progs", "Video Battle for VGA", False,
+     "The demo battle in VGA colours, with the program, on one 1.44MB disk. "
+     "It also carries VBATTLED.O88, the program that writes a record of "
+     "each play, for finding out why a machine stutters; the battle "
+     "builder's vbtprof.py reads it.",
+     [("vbattlev.img", "1.44MB", "")]),
+    ("progs", "Video Battle for Hercules", False,
+     "The demo battle for a Hercules card, with the program, on one 1.44MB "
+     "disk.",
+     [("vbattleh.img", "1.44MB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
@@ -473,6 +532,14 @@ DEST = {
     "emu360.img": "360K/EMU360.IMG",
     "util360.img": "360K/UTIL360.IMG",
     "small360.img": "360K/128K-RAM/OS88-360.IMG",
+    "mega.img": "1440K/286-PLUS/OS88-144.IMG",
+    "megaapps.img": "1440K/286-PLUS/APPS-144.IMG",
+    "megaxtmp3.img": "1440K/286-PLUS/PROGRAMS/XTMP3/XTMP3144.IMG",
+    "megawin16.img": "1440K/286-PLUS/PROGRAMS/WIN16/WIN16144.IMG",
+    "mega120.img": "1200K/286-PLUS/OS88-120.IMG",
+    "megaapps120.img": "1200K/286-PLUS/APPS-120.IMG",
+    "megaxtmp3-120.img": "1200K/286-PLUS/PROGRAMS/XTMP3/XTMP3120.IMG",
+    "megawin16-120.img": "1200K/286-PLUS/PROGRAMS/WIN16/WIN16120.IMG",
     # the debug disks (SPEC.md 127): one folder, the size in the name
     "debug-sound.img": "DEBUG/SOUND144.IMG",
     "debug-sound-120.img": "DEBUG/SOUND120.IMG",
@@ -481,6 +548,10 @@ DEST = {
     # the live zip's, which has no folders
     "os8088-usb.img": "LIVEUSB.IMG",
     "os8088.iso": "OS8088.ISO",
+    # Video Battle's VGA and Hercules demos: 1.44MB like its CGA disk, so
+    # the size alone cannot name them
+    "vbattlev.img": "PROGRAMS/VBATTLE/VBATV144.IMG",
+    "vbattleh.img": "PROGRAMS/VBATTLE/VBATH144.IMG",
 }
 
 # The everything sets: disk N of a list goes in the folder of its size.
@@ -504,7 +575,9 @@ PROGRAMS = {
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
     "Weave": ("WEAVE", "WEAVE"),
+    "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),
+    "ARCADE": ("ARCADE", "ARCAD"),
 }
 SIZE_TAG = {"1.44MB": "144", "1.2MB": "120", "720KB": "720", "360KB": "360"}
 
@@ -599,8 +672,9 @@ BESIDE = {
     "videos": "three ready-to-run 86Box machines with the video demos on "
               "their hard disks",
     "tools": "the firmware and the utilities: the PicoMEM firmware, the "
-             "kernel ROMs for an IBM PC, the video encoder, the Game Boy "
-             "precompiler, the file splitter, the Browser's proxy and the DOS "
+             "kernel ROMs for an IBM PC, the video encoder, the Video "
+             "Battle builder, the Game Boy precompiler, the file splitter, "
+             "the Browser's proxy and the DOS "
              "tools",
 }
 
@@ -894,13 +968,29 @@ def main():
             packed.append((item, found))
 
     if missing:
-        print("mkzip: these are built by `make` and `make emu` and are not in "
-              "%s:" % bd, file=sys.stderr)
+        print("mkzip: these are built by `make`, `make emu` and `make mega` and "
+              "are not in %s:" % bd, file=sys.stderr)
         for m in missing:
             print("  %s" % m, file=sys.stderr)
-        print("mkzip: run `make && make emu` and try again -- refusing to pack "
-              "a partial release.", file=sys.stderr)
+        print("mkzip: run `make && make emu && make mega` and try again -- "
+              "refusing to pack a partial release.", file=sys.stderr)
         return 1
+
+    # kern_mega's SYSTEM disks carry ITS kernel, build/megak/kernel.sys: that
+    # must be this tree's (no older than kern_big's), and each system disk no
+    # older than it. Its software disks carry no kernel, as APPS-144 does not
+    mkern = os.path.join(bd, "megak", KERNFILE)
+    megas = [os.path.join(bd, n) for it, fs in packed if it[0] == "mega"
+             for _, n, _, _ in fs if n in ("mega.img", "mega120.img")]
+    if megas:
+        if not os.path.isfile(mkern) or stale(mkern, "make mega"):
+            return 1
+        mk_t = os.path.getmtime(mkern)
+        for p in megas:
+            if os.path.getmtime(p) < mk_t:
+                print("mkzip: %s is older than %s -- run `make mega` again."
+                      % (p, mkern), file=sys.stderr)
+                return 1
 
     # An extra rides only when the image it belongs to did. A licence for a
     # program that is not in the zip is noise; a program in the zip without

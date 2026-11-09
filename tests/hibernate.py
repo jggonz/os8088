@@ -146,15 +146,25 @@ def button1(m):
 KERNEL = "build/kernel.sys"
 
 
+def _k(path):
+    """A KERNEL'S file - kernel.sys, its boot sector, a module: kern_mega's
+    own out of megak/ under $OS88_MEGA (tests/megaport.txt), where the BIOS
+    boots C: with A: empty and the row would otherwise hand Bochs kern_big;
+    a driver or a package (HDD.DRV, MINES.O88) is the same file on both"""
+    if os.environ.get("OS88_MEGA"):
+        return os.path.join(_B.mega_build(), "megak", os.path.basename(path))
+    return _B.at(path)
+
+
 def fixture():
     """The VHD, rebuilt from the tree every run: KERNEL.SYS plus the three
     modules and the driver the boot volume must carry (SPEC.md 2.8.4)."""
     subprocess.check_call(
         ["python3", "tools/os88hdd.py", "--template", TEMPLATE, "--out", VHD,
-         "--kernel", _B.at(KERNEL), "--vbr", _B.at("build/boothd.bin"),
+         "--kernel", _k(KERNEL), "--vbr", _k("build/boothd.bin"),
          "--mbr", _B.at("build/mbr.bin"),
-         "--file", "HIBER.DRV=" + _B.at("build/hiber.drv"),
-         "--file", "CTRL.DRV=" + _B.at("build/ctrl.drv"),
+         "--file", "HIBER.DRV=" + _k("build/hiber.drv"),
+         "--file", "CTRL.DRV=" + _k("build/ctrl.drv"),
          "--file", "HDD.DRV=" + _B.at("build/hdd.drv"),
          "--file", "MINES.O88=" + _B.at("build/mines.o88")])
 
@@ -322,7 +332,7 @@ def _diag(m, mo):
         print("      pointer now %s, mouse_btn=%02x"
               % (mo.where()[:2], mo.where()[2]))
         t0 = mo.ticks()
-        time.sleep(1.0)
+        time.sleep(1.0)   # host: the diagnostic IS ticks per host second
         print("      BIOS ticks +%d in a host second (0 = the machine is "
               "stopped)" % (mo.ticks() - t0))
         for n in ("sch_lock", "gfx_lock_flag", "gfx_lock_own",
@@ -577,6 +587,24 @@ def pkg_seg(m):
     return None
 
 
+def image_offset(want):
+    """Where in HIBERNAT.IMG the bytes WANT are, read off the VHD with the
+    same FAT reader damage_image uses - once, or the aim is ambiguous"""
+    import instdeep
+    blob = open(VHD, "rb").read()
+    base = int.from_bytes(blob[446 + 8:446 + 12], "little") * 512
+    vol = instdeep.Vol(bytes(blob[base:]))
+    ent = [e for e in vol.entries(0) if e[0] == "HIBERNAT.IMG"][0]
+    clus = vol.bps * vol.spc
+    img = b"".join(blob[base + (vol.data_lba + (c - 2) * vol.spc) * vol.bps:]
+                   [:clus] for c in vol.chain(ent[2]))[:ent[3]]
+    at = img.find(want)
+    check(at >= 0 and img.find(want, at + 1) < 0,
+          "the region's bytes are in HIBERNAT.IMG once",
+          got=(at, img.count(want)))
+    return at
+
+
 def damage_image(linear, n):
     """Flip N bytes of HIBERNAT.IMG at file offset LINEAR, in the VHD on the
     host - the image is memory from linear 0 - so a resume reads somebody
@@ -618,11 +646,23 @@ def pass_sum(driver, damage):
         ui.path("C:/MINES.O88")
         seg = pkg_seg(m)
         check(seg is not None, "Mines is open before hibernating", got=seg)
+        # the region's LINEAR address: an LDT selector's base on kern_mega
+        # (docs/BOCHS.md), whose 1MB machine keeps it conventional - in the
+        # image's picture of memory from linear 0 - as kern_big's does
+        at = (m.lin(seg, 0x20) if getattr(m, "bochs", False) and seg
+              else (seg or 0) * 16 + 0x20)
+        # ...and on kern_mega a region is a POOL block above 1MB, carried in
+        # the image's EXTENDED SECTION after the conventional picture
+        # (hiber.inc's hbm_xwrite) rather than at its linear address, so the
+        # damage is aimed by the region's own bytes, found in the file
+        near = m.read(at, 1024) if at >= 0x100000 else None
         hibernate(m, mo, mouse=True)
     ok, have = wrote(["HIBERNAT.PTR", "HIBERNAT.IMG"])
     check(ok, "both files are on the disk after power-off", got=have)
     if damage:
-        damage_image(seg * 16 + 0x20, 1024)     # four sampled lines, and
+        if near is not None:
+            at = image_offset(near)
+        damage_image(at, 1024)                  # four sampled lines, and
                                                 # inside a region at the top
     with boot(driver) as m:
         mo = Mouse(marty=m)
@@ -638,9 +678,15 @@ def pass_sum(driver, damage):
             check(byte(m, "sch_lock") == 0, "sch_lock is down again",
                   got=byte(m, "sch_lock"), want=0)
             return
+        # ...the programs' sum's sentence (hbm_wake 3a) - or, for a region
+        # damaged in kern_mega's EXTENDED SECTION, that section's own
+        # Fletcher sum, which the streaming resume checks before anything is
+        # in place (kernel/megares.inc's mrs_s_fail)
+        said = ("Resume failed: the image could not be read back"
+                if near is not None else "Resume failed: the programs")
         answer(m, mo, "the refusal's sentence",
                lambda mm: M.video_is_text(mm.video())
-               and "Resume failed: the programs" in text_screen(mm))
+               and said in text_screen(mm))
         check(word(m, "hb_resumes") == 0, "nothing was resumed",
               got=word(m, "hb_resumes"), want=0)
         m.key("Space")

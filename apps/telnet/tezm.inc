@@ -3,7 +3,7 @@
 ;
 ; ZMODEM RECEIVE (SPEC.md 70.11)
 ;
-; Receive only. Uploads are out of scope and docs/TELNET-PLAN.md carries the
+; Receive only. Uploads are out of scope and docs/plans/completed/TELNET-PLAN.md carries the
 ; arithmetic. The transfer is started by SPEC.md 70.9.6's auto-start - the six
 ; bytes `**\x18B00` in GROUND, which is a hex ZRQINIT header's opening - or by
 ; Session > Receive File (Zmodem), which sends a ZRINIT and waits.

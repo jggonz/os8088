@@ -193,19 +193,19 @@ vx_b1:
 ; vmm_boot_x's shape (SPEC.md 9.11.2): drv_boot_x has already read the row if
 ; SYSTEM.CFG asked for it - a DRVC_OVL row stops at drv_check with DRVR_SEG
 ; and DRVR_ENT live and nothing called - and this is the owner that attaches
-; it. Called by kmain between kmain_o's return and mem_unblob_x, so the
-; loading screen is already down when the mode changes, the blob's vid_switch
-; is still aboard, and the desktop's first paint - kmain's next act - is the
-; first thing drawn in the new mode.
+; it. Called at kmain_o's end, after spl_finish and before mem_unblob_x, so
+; the loading screen is already down when the mode changes, the boot's own
+; vid_switch (`.boot3`'s, beside this) is still aboard, and the desktop's
+; first paint - kmain's next act - is the first thing drawn in the new mode.
 ;
-; **IN THE BLOB (`.boot2`), beside vmm_boot_x**, where it was first written:
-; it was resident `.cold` while the blob had two bytes of room, and kernel
-; size pass 14 gave the blob its thirteenth sector to take it and vx_blk back
-; out of resident memory (docs/plans/completed/ksp14/vesa.md).
+; **IN `.boot3`, beside vmm_boot_x** (BOOT3-PLAN wave 4). It was resident
+; `.cold` while the blob had two bytes of room; kernel size pass 14 gave the
+; blob its thirteenth sector to take it and vx_blk back out of resident memory
+; (docs/plans/completed/ksp14/vesa.md), and wave 4 gave the sector back.
 ;
-; CS IS THE BLOB'S here, so every edge out is far; DS is the kernel's.
+; CS IS `.boot3`'s here, so every edge out is far; DS is the kernel's.
 ; -----------------------------------------------------------------------------
-section .boot2
+B3SECT
 vx_boot_x:
     push ax
     push bx
@@ -224,7 +224,7 @@ vx_boot_x:
                                 ; 120.2.3), 0 = Auto, which a fresh file
                                 ; carries
     mov ax, (VX_ABI_VER << 8) | DRVV_ATTACH ; AH: the ABI the image checks
-    call bvs_cgo                ; SI = the VXS_* table in the driver's segment
+    call b3_cgo                 ; SI = the VXS_* table in the driver's segment
     dw drv_call
     jc .refuse
     mov bx, vesa_row            ; RE-ESTABLISHED, vmm_boot_x's reason: the
@@ -243,9 +243,9 @@ vx_boot_x:
                                 ; and the line above pointed it at the image
     mov bp, [bx+DRVR_ENT]
     mov si, vx_blk
-    mov dx, cs                  ; ...the block is HERE, in the blob
+    mov dx, cs                  ; ovlchk: B3 hand-down - VXV_INIT copies the block's words before it returns (vx_blk's header), so B3_SEG outlives nothing
     mov al, VXV_INIT
-    call bvs_cgo                ; the driver banks the block and fills row 4
+    call b3_cgo                 ; the driver banks the block and fills row 4
     dw drv_call
     jc .refuse
 %ifdef KERN_MEGA
@@ -253,13 +253,13 @@ vx_boot_x:
     mov bp, [bx+DRVR_ENT]       ; the end of kmain, and mega_vxpm hands the
     xor dx, dx                  ; image its selectors there (KERN-MEGA-PLAN
     mov al, VXV_PM              ; 14.115): an image that cannot take them
-    call bvs_cgo                ; refuses this QUESTION, here, while the
+    call b3_cgo                 ; refuses this QUESTION, here, while the
     dw drv_call
     jc .refuse                  ; desktop is still the VGA's
 %endif
     or byte [vid_avail], VID_A_VESA
     mov al, VID_VESA
-    BLOBCALL bvs_switch         ; the blob's own vid_switch (KSW_SECT); the
+    B3CALL bvs_switch           ; the boot's own vid_switch (KSW_SECT); the
                                 ; caller owes the repaint and kmain makes it
     jmp short .out
 .refuse:
@@ -269,8 +269,8 @@ vx_boot_x:
     cmp word [bx+DRVR_SEG], 0
     je .out
 %ifndef VX_DEBUG_KEEP           ; a debugging define, never a build knob: with
-    call bvs_cgo  ; it the refused image stays loaded, so its
-    dw drv_release              ; (the blob's hop: drvf_drv_release went)
+    call b3_cgo   ; it the refused image stays loaded, so its
+    dw drv_release              ; (`.boot3`'s hop: drvf_drv_release went)
 %endif                          ; probe buffers and mode table can be read out
                                 ; of the guest (how the BX contract was caught)
 .out:
@@ -286,14 +286,14 @@ vx_boot_x:
 ; -----------------------------------------------------------------------------
 ; vx_blk - the kernel's state, by POINTER (SPEC.md 120.3.2, vxabi.inc's VXB_*)
 ;
-; IN THE BOOT BLOB, beside its one reader: VXV_INIT is sent once, by vx_boot_x
-; below, and the driver COPIES the words - so the table is dead the moment
-; that call returns, and mem_unblob gives it back with the rest of `.boot2`.
-; It reaches the driver as DX:SI, DX being the blob's segment (CS here).
+; IN `.boot3`, beside its one reader: VXV_INIT is sent once, by vx_boot_x
+; above, and the driver COPIES the words - so the table is dead the moment
+; that call returns, and mem_unblob gives it back with the rest of `.boot3`.
+; It reaches the driver as DX:SI, DX being B3_SEG (CS there).
 ; -----------------------------------------------------------------------------
 vx_blk:
     dw VX_ABI_VER                   ; VXB_VER
-    dw vid_tab + VID_VESA * VID_REC ; VXB_TABROW
+    dw vid_vxrow                    ; VXB_TABROW (viddet.inc: vid_tab's row 4)
     dw vx_ep                        ; VXB_EP (vx_bpp follows it)
     dw vid_avail                    ; VXB_AVAIL
     dw gfx_color                    ; VXB_COLOR

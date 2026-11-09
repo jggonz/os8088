@@ -152,7 +152,8 @@ FDLG_SAVE equ 1
 ; back before the callback returns (ct_stage), and an export needs no staging
 ; at all (ct_expdlg) - so an open Chart holds 19KB of heap where it held 51.
 ; The bss is loader-zeroed (SPEC.md 21 step 5), so nothing here clears the
-; value count or the name.
+; value count or the name - but a CLAIM is not, so the canvas's pixels are
+; cleared here (SPEC.md 82.14.2).
 ; -----------------------------------------------------------------------------
 ct_entry:
     push ax
@@ -179,6 +180,18 @@ ct_entry:
     mov cx, CH_HDRSZ                    ; it, and the export writes it as it
     cld                                 ; stands
     rep movsb
+    mov cx, CH_STRIDE * CH_H            ; ...AND THE PIXELS, WHITE: DI is
+    mov al, 0xFF                        ; CH_PXOFF now. Until a file is opened
+    rep stosb                           ; nothing renders, and ct_paint blitted
+                                        ; whatever the heap last held under the
+                                        ; claim - noise, on every adapter
+                                        ; (SPEC.md 82.14.2). White is what
+                                        ; ch_prep clears to for a chart with
+                                        ; no values, so the first file's
+                                        ; render changes only what it draws
+%if CH_PXOFF != CH_HDRSZ
+  %error "ct_entry clears the pixels from where the header copy leaves DI"
+%endif
     mov si, ct_tpl
     call OSAPI_WM_CREATE                ; BX = window ptr, CF on table full
     jc .fail
@@ -2101,7 +2114,7 @@ ct_i_data:   dw ct_it_auto
              dw ct_labels + 7 * (CT_NAME_MAX + 1)
 ct_it_auto:  db 'Automatic', 0
 ct_s_columnsp: db 'Column ', 0
-ct_s_nocol:  db 'No data in that column.', 0
+TOASTSTR ct_s_nocol, 'No data in that column.'
 
 ct_m_file:   db 'File', 0
 ct_i_file:   dw ct_it_open, ct_it_exp
@@ -2134,12 +2147,12 @@ ct_ab2:        db 'Charts a column of a sheet', 0
 ct_ab3:        db 0
 ct_ab4:        db 'Contributed by Koriban', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
-ct_s_noexp:    db 'No chart to export.', 0
-ct_s_experr:   db 'Chart export failed.', 0
-ct_s_exported: db 'Chart exported.', 0
-ct_s_readerr:  db 'Could not read that file', 0
-ct_s_nomem:    db 'Not enough memory.', 0
-ct_s_noval:    db 'No numeric data found.', 0
+TOASTSTR ct_s_noexp, 'No chart to export.'
+TOASTSTR ct_s_experr, 'Chart export failed.'
+TOASTSTR ct_s_exported, 'Chart exported.'
+TOASTSTR ct_s_readerr, 'Could not read that file'
+TOASTSTR ct_s_nomem, 'Not enough memory.'
+TOASTSTR ct_s_noval, 'No numeric data found.'
 
 ; stage: shared rasterizer + BMP writer - see that file's own header
 ; comment for the CH_* constants and ch_* bss words it requires, both
