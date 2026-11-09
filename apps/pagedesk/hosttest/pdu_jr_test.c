@@ -19,8 +19,13 @@
  *   - the file stays bounded (a fresh file past 8 KiB) and still recovers
  *   - the interrupted save: offered with the target absent and the temp file
  *     there, silently dropped with the target present, renamed on Enter
- *   - /NM: the seed is a multiple of 16 below 0x7FF0 and a recovered record
- *     keeps its id while new ids continue above it
+ *   - /NM: the seed is a multiple of 16 below 0x4000 (128 records stay under
+ *     0x8000) and a recovered record keeps its id while new ids continue
+ *     above it
+ *   - (verify) another document or New leaves the journal and a later open
+ *     of the source offers it; the fingerprint is read once per document; a
+ *     hostile pts_n stops replay; each REPLACE writes its own note; Esc
+ *     during a job is the job's; the close question's S / D / Esc
  *
  *   cc -DPD_HOST -I apps/pagedesk -o build/pdu_jr apps/pagedesk/hosttest/pdu_jr_test.c \
  *      apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
@@ -39,7 +44,7 @@ struct os88_find { char name[13]; unsigned char attr; unsigned type; unsigned cl
 #define OS88_FERR_NOENT 4
 #define OS88_FERR_BIG 10
 #define PDU_RC_CMD() pdu_rc_cmd()
-#define PDU_RC_SEED() pdu_rc_seed()
+#define PDU_RC_SEED() ((os88_ticks() << 4) & 0x3FF0u)
 #include "../pdu.h"
 #include "../pdmath.h"
 
@@ -63,7 +68,10 @@ static int pdu_tool, pdu_mode, pdu_rdonly, pdu_gs, pdu_pgmap, pdu_pgsaved;
 static char pdu_line[96], pdu_msg[72], pdu_num[8], pdu_name[14], pdu_target[14];
 static struct os88_place pdu_tgtplace;
 static struct { unsigned state; } pdu_xsave;
-static unsigned pdu_xb = 0x7000, pdu_mcf;
+static unsigned pdu_xb = 0x7000, pdu_mcf, nfp;
+static int pdu_savekind, nsaveas, nclose;
+static void pdu_saveas_dlg(void) { nsaveas++; }
+static void os88_wm_close(void *w) { nclose++; }
 static unsigned pdu_clkw[4];
 static unsigned now_ticks, nkick;
 static int nsaid;
@@ -106,6 +114,7 @@ static unsigned pdu_mcall(int m, unsigned verb, unsigned a, unsigned b, unsigned
 {
     memcpy(&pd_host_mem[pdu_xb * 16], fpr, 8);
     pdu_mcf = 0;
+    nfp++;
     return 0;
 }
 
@@ -262,7 +271,7 @@ static void fresh(void)
     cur_clus = 20; cl_sect = 1; fail_write = 0; nwrites = 0; nsaid = 0; said[0] = 0;
     now_ticks = 100;
     strcpy(pdu_name, "TEST.PDF");
-    rc_f = RCF_CHECK; rc_pk = 0; rc_dclus = 0;
+    rc_f = RCF_JRN; rc_pk = 0; pdu_job = 0; pdu_savekind = 0;
     pdu_pgmap = 0; pdu_pgsaved = 0; pdu_doc = D_OPEN;
     pdu_ed_init();
     pdu_page = 0;
@@ -273,7 +282,7 @@ static void session(void)
     memset(&pd_host_mem[0x2000 * 16], 0xA5, 16384);
     memset(&pd_host_mem[0x3000 * 16], 0xA5, 4096);
     claim_next = 0x8000; nclaims = 0; cur_clus = 20;
-    rc_f = RCF_CHECK; rc_pk = 0; rc_dclus = 0; nsaid = 0; said[0] = 0; pdu_msg[0] = 0;
+    rc_f = RCF_JRN; rc_pk = 0; nsaid = 0; said[0] = 0; pdu_msg[0] = 0;
     pdu_ed_init();
 }
 #define TR(x) do { if (getenv("JRV")) printf("  %s:%d\n", x, __LINE__); } while (0)
@@ -343,8 +352,7 @@ static void put_jrn(const unsigned char *d, unsigned n)
 /* a launch + open: look, answer the prompt Enter, and say what happened */
 static int recover(int yes)
 {
-    pdu_rc_begin();
-    pdu_rc_open();
+    pdu_rc_begin();                     /* an open: the check waits for it */
     wake();
     if (!rc_pk) return 0;
     CHECK(pdu_rc_key(yes ? 13 : 27) == 1, "the prompt owns the keys");
@@ -515,7 +523,7 @@ static void test_readonly(void)
     mk(PDA_RECT, 0, 1, 1, 90, 90);
     pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
     idle();
-    CHECK((rc_f & RCF_OFF) && strstr(said, "journal off"), "a refused write turns the journal off, said (%s)", said);
+    CHECK((rc_f & RCF_OFF) && strstr(said, "Recovery off"), "a refused write turns the journal off, said (%s)", said);
     w = nwrites;
     mk(PDA_RECT, 0, 2, 2, 90, 90);
     pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
@@ -681,10 +689,121 @@ static void test_retire(void)
 static void test_seed(void)
 {
     unsigned a, b;
-    now_ticks = 1000; a = pdu_rc_seed();
-    now_ticks = 1337; b = pdu_rc_seed();
-    CHECK((a & 15) == 0 && a < 0x7FF0u + 1 && (b & 15) == 0 && b <= 0x7FF0u && a != b,
-          "the /NM seed: a multiple of 16, below 0x7FF0, not the same twice (%u %u)", a, b);
+    unsigned t;
+    now_ticks = 1000; a = PDU_RC_SEED();
+    now_ticks = 1337; b = PDU_RC_SEED();
+    CHECK((a & 15) == 0 && a < 0x4000u && (b & 15) == 0 && b < 0x4000u && a != b,
+          "the /NM seed: a multiple of 16, below 0x4000, not the same twice (%u %u)", a, b);
+    for (t = 0; t < 2048; t++) {
+        now_ticks = t;
+        if (PDU_RC_SEED() + 128 >= 0x8000u) break;
+    }
+    CHECK(t == 2048, "128 records from any seed stay below PDWRT's 0x8000 + page ids");
+}
+
+/* ---- verify-recov's additions ------------------------------------------------ */
+static void test_other(void)
+{
+    struct hf *f;
+    unsigned w;
+    int i;
+    /* another document: the journal is kept, and opening the source again in
+     * the same session offers it */
+    fresh();
+    mk(PDA_RECT, 0, 1, 1, 90, 90);
+    pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+    idle();
+    keep();
+    pdu_pgsaved = 0;
+    fpr[0] ^= 1;                                /* another document */
+    pdu_rc_begin(); pdu_ed_init(); wake();
+    CHECK(jrn() != 0 && !rc_pk, "another document: kept, not offered for it");
+    fpr[0] ^= 1;                                /* the source again */
+    pdu_rc_begin(); pdu_ed_init();
+    CHECK(recover(1) == 1 && pdu_ed_count() == 1 && same_snap(0),
+          "...and reopening the source offers it (%d)", pdu_ed_count());
+    vfree();
+    /* New (a save of kind 1 that reopens with pdu_pgsaved) is not a Save As */
+    fresh();
+    mk(PDA_RECT, 0, 1, 1, 90, 90);
+    pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+    idle();
+    pdu_pgsaved = 1; pdu_savekind = 1;
+    pdu_rc_begin(); wake();
+    CHECK(jrn() != 0, "File > New does not retire the last document's journal");
+    pdu_savekind = 0; pdu_pgsaved = 0;
+    /* the fingerprint is read once per document, not per write */
+    fresh();
+    nfp = 0;
+    for (i = 0; i < 4; i++) {
+        mk(PDA_RECT, 0, i, 1, 90, 90);
+        pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+        idle();
+    }
+    CHECK(nfp == 1, "four writes, one fingerprint (%u)", nfp);
+    /* a CRC-valid record whose pts_n wraps np << 2 on the 8086 (here, with
+     * 32-bit ints, the length test alone refuses it; np > ED_PMAX is the
+     * guard the target relies on): replay stops, nothing written */
+    fresh();
+    mk(PDA_INK, 0, 1, 1, 90, 90);
+    for (i = 0; i < 4; i++) P[i] = (pd_pt)i;
+    pdu_ed_new(&E, "", 0, P, 1);
+    idle();
+    f = jrn();
+    {
+        unsigned char *d = f->d + 36;
+        unsigned np = 0xFFFF, l, c;
+        d[2 + 46] = (unsigned char)np; d[2 + 47] = (unsigned char)(np >> 8);   /* pts_n at +46 */
+        d[2 + 34] = 4; d[2 + 35] = 0;           /* text_len 4 */
+        l = (pdw)(48 + 4 + (np << 2));          /* = 48 on the 8086: 16-bit wrap */
+        d[0] = (unsigned char)l; d[1] = (unsigned char)(l >> 8);
+        c = pdm_crc16(0xFFFF, d + 2, l);
+        d[2 + l] = (unsigned char)c; d[3 + l] = (unsigned char)(c >> 8);
+        f->n = 36 + 4 + l;
+    }
+    session();
+    w = recover(1);
+    CHECK(pdu_ed_count() == 0, "a wrapping pts_n is refused (offered %u, %d records)", w, pdu_ed_count());
+    /* each REPLACE writes its own note: a failed save leaves FIN set */
+    fresh();
+    strcpy(pdu_target, "ONE.PDF"); pdu_tgtplace.clus = 20;
+    pdu_xsave.state = PDW_ST_REPLACE; pdu_rc_fin();
+    pdu_xsave.state = 0; pdu_rc_fin();          /* the next save's first slice */
+    strcpy(pdu_target, "TWO.PDF");
+    pdu_xsave.state = PDW_ST_REPLACE; pdu_rc_fin();
+    cur_clus = 11; f = fget("PDSAVE.TGT", 0); cur_clus = 20;
+    CHECK(f && strcmp((char *)f->d + 4, "TWO.PDF") == 0, "the second save's note names its own target");
+    /* Esc during a job is the job's, not the prompt's */
+    fresh();
+    rc_pk = 1; pdu_job = 1;
+    CHECK(pdu_rc_key(27) == 0 && !(rc_f & RCF_ANS), "Esc while a job runs: not the prompt's");
+    pdu_job = 0; rc_pk = 0;
+}
+
+static void test_close(void)
+{
+    fresh();
+    CHECK(pdu_rc_close() == 1, "a clean document closes");
+    mk(PDA_RECT, 0, 1, 1, 90, 90);
+    pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+    idle();
+    CHECK(jrn() != 0, "written");
+    CHECK(pdu_rc_close() == 0 && rc_pk == 3, "unsaved: the close is refused and asked");
+    CHECK(pdu_rc_key('x') == 1 && rc_pk == 3, "...other keys are the question's");
+    CHECK(pdu_rc_key(27) == 1 && rc_pk == 0 && nclose == 0, "Esc: stays open");
+    pdu_rc_close();
+    nsaveas = 0;
+    CHECK(pdu_rc_key('S') == 1 && nsaveas == 1 && rc_pk == 0, "S: Save As");
+    pdu_rc_close();
+    nclose = 0;
+    pdu_rc_key('d');
+    wake();
+    CHECK(nclose == 1 && jrn() == 0, "D: the window closes and the journal goes");
+    wake();
+    CHECK(nclose == 1, "...once");
+    pdu_doc = D_EMPTY;
+    rc_f = RCF_JRN;
+    CHECK(pdu_rc_close() == 1, "no document: closes");
 }
 
 int main(void)
@@ -705,6 +824,8 @@ int main(void)
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "fin")) test_fin();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "retire")) test_retire();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "seed")) test_seed();
+    if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "other")) test_other();
+    if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "close")) test_close();
     for (s = 1; s <= 24 && !getenv("JRONLY"); s++)
         test_walk(s, s & 1 ? 1 : 2);
     printf("%d checks, %d failed\n", checks, fails);

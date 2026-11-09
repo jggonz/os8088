@@ -328,7 +328,6 @@ static void pdu_open_step(void)
         return;
     }
     pdu_doc = D_OPEN;
-    pdu_rc_open();                      /* recov */
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
     else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
@@ -627,6 +626,8 @@ int os88_onclose(void *win)
 {
     if (win != pdu_win)
         return 1;
+    if (!pdu_rc_close())                /* recov: Save / Discard / Cancel (20.17.8) */
+        return 0;
     if (pdu_job == J_SAVE || pdu_pk == PK_REPLACE) {         /* pages: a parked replace too */
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_fsop_end();

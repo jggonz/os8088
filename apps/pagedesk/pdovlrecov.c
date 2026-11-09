@@ -17,7 +17,9 @@
 #define EO_ID     16                    /* pd_edit.id */
 #define RC_HDR    36
 
-static unsigned rc_ss, rc_su, rc_js, rc_jl;
+static unsigned rc_js, rc_jl;           /* the journal's claim and length... */
+#define rc_ss rc_js                     /* ...and the staging claim's: a flush */
+#define rc_su rc_jl                     /* and a load never overlap */
 
 static unsigned ovl_rc_w(unsigned o) { return pd_fpeekw(rc_js, o); }
 
@@ -52,21 +54,20 @@ static void ovl_rc_leave(void)
     os88_file_goto_q_mark(rc_here.clus, rc_here.vol);
 }
 
-/* stand there; 0 = there is no SYSTEM/APPDATA. rc_cl is its cluster in bytes */
+/* stand there; 0 = there is no SYSTEM/APPDATA. WALKED every time, never
+ * banked: this visit WRITES, and a banked cluster on a boot floppy that was
+ * swapped since is a cluster of somebody else's disk (SPEC.md 19.9.1: "a
+ * banked visit never creates") */
 static int ovl_rc_enter(void)
 {
     os88_file_here(&rc_here);
     rc_k = os88_vol_sys();
-    if (rc_dclus && os88_file_goto_q_mark(rc_dclus, rc_k) == 0)
-        return 1;
     if (os88_file_goto_q_mark(0, rc_k) == 0
         && ovl_rc_find("SYSTEM")
         && os88_file_goto_q_mark(rc_fclus, rc_k) == 0
         && ovl_rc_find("APPDATA")
-        && os88_file_goto_q_mark(rc_fclus, rc_k) == 0) {
-        rc_dclus = rc_fclus;
+        && os88_file_goto_q_mark(rc_fclus, rc_k) == 0)
         return 1;
-    }
     ovl_rc_leave();
     return 0;
 }
@@ -93,9 +94,14 @@ static void ovl_rc_flush(void)
     pd_fpokew(rc_ss, 0, 0x4450);                /* "PD" "J1" */
     pd_fpokew(rc_ss, 2, 0x314A);
     pd_fcopy_out(pdu_name, rc_ss, 4, 14);
-    pdu_mcall(PDU_M_ENG, PDV_ENG_FINGERPRINT, 0, 0, 0);
-    if (!pdu_mcf && ovl_rc_enter()) {
-        pd_fcopy(rc_ss, 20, pdu_xb, 0, 8);
+    i = 0;
+    if (!(rc_f & RCF_LIVE)) {                   /* the document's identity, ONCE: */
+        pdu_mcall(PDU_M_ENG, PDV_ENG_FINGERPRINT, 0, 0, 0); /* it re-reads 2 KiB */
+        i = pdu_mcf;                            /* and drops PDENG's cache */
+        pd_fcopy_in(pdu_xb, 0, rc_fp, 8);
+    }
+    if (!i && ovl_rc_enter()) {
+        pd_fcopy_out(rc_fp, rc_ss, 20, 8);
         pd_fpokew(rc_ss, 34, pdm_crc16_far(0xFFFF, rc_ss, 0, 34));
         rc_su = RC_HDR;
         r = 0;
@@ -128,7 +134,7 @@ static void ovl_rc_flush(void)
     os88_mem_free(rc_ss);
     if (r) {
         rc_f |= RCF_OFF;
-        pdu_wsay("Recovery journal off.");
+        pdu_wsay("Recovery off.");
     } else
         rc_f |= RCF_LIVE;
 }
@@ -190,8 +196,8 @@ static int ovl_rc_walk(int apply)
         pd_fcopy_in(rc_js, o + 2, &ed_v, ED_REC);
         tl = ed_v.text_len;
         np = ed_v.pts_n;
-        if (tl > ED_TMAX || l != ED_REC + tl + (np << 2))
-            break;
+        if (tl > ED_TMAX || np > ED_PMAX || l != ED_REC + tl + (np << 2))
+            break;                      /* np << 2 must not wrap (hostile file) */
         if (apply) {
             if (!ovl_ed_room(tl, np << 2))
                 break;
@@ -224,6 +230,7 @@ static int ovl_rc_ftemp(void)
     k = 0;
     if (ovl_rc_enter()) {
         if (os88_file_read(RC_TGT, pdu_tbuf, 32) == 18
+            && !(pdu_tbuf[17] = 0)      /* a name, whatever the file says */
             && os88_file_goto_q_mark(((pdw *)pdu_tbuf)[1],
                                      ((pdw *)pdu_tbuf)[0]) == 0)
             k = ovl_rc_has("PDSAVE.$$$") && !ovl_rc_has(pdu_tbuf + 4);
@@ -259,19 +266,15 @@ static void ovl_rc_check(void)
 {
     int v;
 
-    rc_f &= ~RCF_JRN;
-    if (ovl_rc_enter()) {
-        v = ovl_rc_has(RC_JRN);
-        ovl_rc_leave();
-        if (v)
-            rc_f |= RCF_JRN;
-    }
-
+    rc_f &= ~RCF_JRN;                   /* set again below while there is
+                                         * something a later open may want */
     if (ovl_rc_ftemp()) {
         pdu_say2("Finish save of ", pdu_tbuf + 4);
         rc_pk = 2;
+        rc_f |= RCF_JRN;
         ovl_rc_leave();
     } else if (ovl_rc_load()) {
+        rc_f |= RCF_JRN;                /* perhaps another document's */
         v = ovl_rc_walk(0);
         if (v && ovl_rc_match()) {
             os88_utoa(v, pdu_num);
@@ -282,7 +285,7 @@ static void ovl_rc_check(void)
         ovl_rc_free();
     }
     if (rc_pk) {
-        pdu_cat(pdu_msg, "? Enter: yes, Esc: no.", sizeof(pdu_msg));
+        pdu_cat(pdu_msg, "? Enter yes, Esc no.", sizeof(pdu_msg));
         pdu_wsay(pdu_msg);
     }
 }
@@ -294,10 +297,10 @@ static void ovl_rc_answer(int yes)
     int keep;
 
     keep = 0;
-    pdu_say("");
+    pdu_say("");                        /* Esc: the prompt goes */
     if (yes) {
         keep = 1;
-        pdu_say("Could not recover.");
+        pdu_say("Not recovered.");
         if (rc_pk == 2) {
             if (ovl_rc_ftemp() && os88_file_rename("PDSAVE.$$$", pdu_tbuf + 4) == 0) {
                 pdu_say2("Saved ", pdu_tbuf + 4);
@@ -305,8 +308,10 @@ static void ovl_rc_answer(int yes)
             }
             ovl_rc_leave();
         } else if (!pdu_ed_n && ovl_rc_load()) {        /* marks made meanwhile: not now */
+            os88_gfx_lock();            /* the store's flush paints Undo: the wake's paints take it */
             if (ovl_rc_walk(1))
                 pdu_say("Recovered.");
+            os88_gfx_unlock();
             ovl_rc_free();
         }
     }
