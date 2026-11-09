@@ -7,7 +7,7 @@
   "h": 200,
   "secs": 34.0,
   "title": "Sonic 2 - Color Text",
-  "kb": 1681
+  "kb": 1665
  },
  "fe4683ef4a71f393f59a65ba8fdeddea15fa90462328bf08d340921ff35791a4": {
   "src": "apps/video/demo/cga/02-BADPC.V88",
@@ -37,7 +37,7 @@
   "h": 400,
   "secs": 60.8,
   "title": "Miku Miku - CGA 4 Color",
-  "kb": 1980
+  "kb": 1964
  },
  "62f29814f03609397fef4aea3c2018017daf5f56f6def97da6562845e4cae9df": {
   "src": "apps/video/demo/cga/05-STARW.V88",
@@ -46,7 +46,7 @@
   "h": 114,
   "secs": 38.2,
   "title": "640*114 Black and White",
-  "kb": 1160,
+  "kb": 1145,
   "poster": "cga/05-starw.png"
  },
  "42be48ddf8e6982f6a5451dac0fd80b906d4ac1802a2eb1e39b14a792912ddce": {
@@ -57,7 +57,7 @@
   "h": 200,
   "secs": 40.3,
   "title": "Take On Me - 640*200 PCM11",
-  "kb": 1729
+  "kb": 1713
  },
  "15392bf3088985a8216bfdbb140108439ef7797d6c4ad3742aca2983567fd52c": {
   "src": "apps/video/demo/cga/07-KPROJ.V88",
@@ -67,7 +67,7 @@
   "h": 150,
   "secs": 71.1,
   "title": "KProject - 640*150 ADPCM4 11Khz",
-  "kb": 2183
+  "kb": 2172
  },
  "c7d1987a83946005a4cc065d78ad7b43c3926b0c50d2bbad94d3d292bf03d1e3": {
   "src": "apps/video/demo/cga/08-A01C.V88",
@@ -76,7 +76,7 @@
   "h": 150,
   "secs": 25.0,
   "title": "Composite 16 Color 320*200",
-  "kb": 1470,
+  "kb": 1502,
   "poster": "cga/08-a01c.jpg"
  },
  "96f6dd11d197e9d40db5f0781ebc58907109894b77ff3bebdca19cf710fb30b6": {
@@ -86,7 +86,7 @@
   "h": 150,
   "secs": 25.0,
   "title": "Composite 512 Color 160*100 OldStyle",
-  "kb": 261,
+  "kb": 296,
   "poster": "cga/09-a01o.jpg"
  },
  "537ecbf4475c34c0372600a6dc49f209f32232366f40251511d3c0ecae802164": {
@@ -96,7 +96,7 @@
   "h": 150,
   "secs": 25.0,
   "title": "Composite 512 Color 160*100 NewStyle",
-  "kb": 268,
+  "kb": 303,
   "poster": "cga/10-a01n.jpg"
  },
  "5c07d45e564bc3be4575339f59dfd880148cf9eb1dedf913223a9108128bf6a2": {
@@ -106,7 +106,7 @@
   "h": 100,
   "secs": 15.0,
   "title": "CGA Live Desktop",
-  "kb": 230,
+  "kb": 248,
   "poster": "cga/11-willy.png"
  },
  "0cad59c0641d70c9b3e181bdf7d6ef0d1f30259a31ec1358a719fd5fb30e297d": {
@@ -116,7 +116,7 @@
   "h": 304,
   "secs": 48.8,
   "title": "Text Mode ASCII Blocks",
-  "kb": 1159,
+  "kb": 1171,
   "poster": "herc/01-matrx.jpg"
  },
  "540c8d009436f43b96b689adf46f63a853c03d67b023b492b3b0217933fe27a4": {
@@ -137,7 +137,7 @@
   "h": 262,
   "secs": 216.0,
   "title": "Bad Carrot - 720*261 Fullscreen",
-  "kb": 4783
+  "kb": 4705
  },
  "50dfa91ad7016423003d12ac1a69c3b9b29439e8beb5bf9c0480ec425006f307": {
   "src": "apps/video/demo/herc/04-STARW.V88",
@@ -146,7 +146,7 @@
   "h": 166,
   "secs": 38.2,
   "title": "ADPCM 5Khz Audio",
-  "kb": 1389,
+  "kb": 1433,
   "poster": "herc/04-starw.png"
  },
  "55dbe8b60a4935c64bd3bc051c173fcc76277b4eea97e4bd385355368eddbd46": {
@@ -157,7 +157,7 @@
   "h": 218,
   "secs": 25.0,
   "title": "Trackmania A01 - 600*218 ADPCM",
-  "kb": 1200
+  "kb": 1232
  },
  "285402be86f44d50bb2409c0080e8e0e0607b1fbb6492966eceb96f5ab5d7980": {
   "src": "apps/video/demo/herc/06-TAKON.V88",
@@ -167,7 +167,7 @@
   "h": 310,
   "secs": 40.3,
   "title": "Take On Me - 640x309 PCM11Khz",
-  "kb": 2315
+  "kb": 2299
  },
  "01b220562a0c9e0e43cb244780814408b160ae7d4347e5c0b78e8a9ae6f24053": {
   "src": "apps/video/demo/herc/07-WILLY.V88",
@@ -176,7 +176,7 @@
   "h": 120,
   "secs": 15.0,
   "title": "Live Desktop",
-  "kb": 217,
+  "kb": 233,
   "poster": "herc/07-willy.png"
  },
  "434a92eca36576b64db1272278cb32a38fc9d43fa5721015f562ecc790d05cef": {
@@ -287,7 +287,7 @@
   "h": 200,
   "secs": 27.0,
   "title": "Steamboat Willy - Live Desktop",
-  "kb": 586
+  "kb": 579
  },
  "ae8b035f4bed008d462fcd15a0c712261389f44ad5b958f04851e5238a4fd6f9": {
   "src": "apps/video/demo/vga/11-TRACK.V88",
@@ -297,7 +297,7 @@
   "h": 224,
   "secs": 25.0,
   "title": "Trackmania A01 - Live",
-  "kb": 1570
+  "kb": 1601
  },
  "384eb5283ae3baed3695b1c30104f32487f049aab9196c5548cc85bb5d63fce3": {
   "src": "apps/video/demo/vga/12-LX486.V88",
