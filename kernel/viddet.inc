@@ -1094,7 +1094,11 @@ vid_depth_set:
     pop cx
     pop bx
     pop ax
+%ifidn %1, bvs                  ; the BOOT's copy is FAR (BOOT3-PLAN 16.17):
+    retf                        ; `.boot3`'s adapter switch B2CALLs it and the
+%else                           ; blob's two callers BLOBCALL it, so no door
     ret
+%endif
 %ifndef VID_TAB_RES             ; ...and this image's copy of the four rows that
 %ifdef GFX_VGA                  ; never change (see vid_tab's header, above),
 %1 %+ _vtab:                    ; indexed as vid_tab is: from its first row on
@@ -1543,7 +1547,7 @@ vid_init:                       ; the spw_near door the splash already needs
     BLOBCALL vid_detect
     push bp                     ; BP names the routine to spw_near, and this
                                 ; routine clobbers only flags
-    call bvs_apply              ; (the blob's own copy: VID_APPLY, below)
+    BLOBCALL bvs_apply          ; (the blob's own copy: VID_APPLY, below - FAR)
 %ifdef DOCK_OPT
     mov bp, dock_geom           ; (BP is banked above for spw_near already)
     call KERNEL_SEG:spw_near    ; ...and the strip where the user put it
@@ -1566,13 +1570,12 @@ vid_init:                       ; the spw_near door the splash already needs
     call KERNEL_SEG:spw_near
     pop bp
 %endmacro
-VID_APPLY bvs, BSPW             ; bvs_apply: the splash, vid_init, and the
-                                ; boot's vid_switch/vid_disp_init (driver.inc)
-%ifdef KERN_BIG
-bvs_apply_f:                    ; ...whose FAR door that is: they are `.boot3`'s
-    call bvs_apply              ; since BOOT3-PLAN wave 4 and B2CALL it, while
-    retf                        ; the splash and vid_init call it NEAR
-%endif
+VID_APPLY bvs, BSPW             ; bvs_apply, FAR: the splash and vid_init
+                                ; (BLOBCALL) and, on kern_big, the boot's
+                                ; vid_switch/vid_disp_init (`.boot3`'s since
+                                ; BOOT3-PLAN wave 4, B2CALL). It had a 4-byte
+                                ; far door, bvs_apply_f, for those two until
+                                ; BOOT3-PLAN 16.17 made the body far itself
 section .text
 
 ; -----------------------------------------------------------------------------

@@ -50,17 +50,16 @@ KINDS = ("loader", "splash", "probe", "status", "residue")
 # lowering it is the point of a change that takes a body out of the blob, and
 # raising it is a decision with a reason in the commit that does it - never a
 # way to make a red row green. At BOOT3-PLAN wave 4 (2026-11-08) kern_big,
-# kern_emu and kern_mega keep two doors (bvs_apply_f, the probe's VID_APPLY
+# kern_emu and kern_mega kept two doors (bvs_apply_f, the probe's VID_APPLY
 # for `.boot3`'s adapter switch; ovl_fdd_cylok, the loader's b2_cylok for
 # `.boot3`'s ovl_fdd_apply) and kern_small none.
-# RAISED BY ONE ON ALL FOUR in BOOT3-PLAN 16.16 (2026-11-09), a decision and
-# not a repair: font_init went back into the blob, because `.boot3` is inside
-# the packed KERNEL.SYS and the elendilon merge had put that file 80 bytes
-# past 166 sectors - one more int 13h call on every 360KB and 720KB boot. The
-# blob's seven sectors are read whole either way, so the body costs no call
-# there; it costs blob slack (52 bytes left on kern_big, 37 on kern_emu).
-# It comes down again with the body.
-RESIDUE_MAX = {"big": 3, "emu": 3, "mega": 3, "small": 1}
+# BOOT3-PLAN 16.16/16.17 (2026-11-09) changed WHICH two, not how many:
+# font_init went back into the blob on kern_big, kern_emu and kern_mega
+# (`.boot3` rides the packed KERNEL.SYS, which the elendilon merge had put 80
+# bytes past 166 sectors), and bvs_apply_f went - bvs_apply is FAR itself now,
+# so `.boot3` B2CALLs the probe directly. kern_small keeps font_init in
+# `.boot3` and the blob there still holds none.
+RESIDUE_MAX = {"big": 2, "emu": 2, "mega": 2, "small": 0}
 
 
 def boot2_labels(path):

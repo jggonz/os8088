@@ -497,7 +497,7 @@ spl_chrome:
     BLOBCALL vid_detect         ; the adapter probe happens HERE, before any
                                 ; other kernel module is even resident: the
                                 ; splash owns the first mode set, and kmain's
-    call bvs_apply              ; (the blob's own copy, viddet.inc's VID_APPLY)
+    BLOBCALL bvs_apply          ; (the blob's own copy, viddet.inc's VID_APPLY: FAR)
     mov bp, vid_setmode         ; vid_init later re-runs all three (SPEC 39.1).
     call KERNEL_SEG:spw_near    ; BP names the routine (viddet.inc's door)
 

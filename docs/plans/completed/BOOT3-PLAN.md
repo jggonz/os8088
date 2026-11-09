@@ -3105,8 +3105,10 @@ like it making every boot take longer."*
    `spl_finish`; `tests/ovlrefs.txt` registers it). Its clock is local now
    (`FONT_TIMERS .fi`: `font_init.fi_time`, `.fi_pit`), so the blob register
    files one body. It is a RESIDUE row in `tests/blobbodies.txt`, and
-   `RESIDUE_MAX` went up by one on all four (3 / 3 / 3 / 1) - the one raise
-   that ratchet has had, written down there and in SPEC.md 2.9.14.2. The
+   `RESIDUE_MAX` went up by one on all four (3 / 3 / 3 / 1) - **a raise an
+   independent verifier rejected as a loosened gate; 16.17 undid it** (the
+   ratchet is 2 / 2 / 2 / 0 again, kern_small keeps `font_init` in `.boot3`,
+   and the `bvs_apply_f` door is gone to make the room). The
    blob is read whole at seven sectors whatever it holds, so the move costs
    no stage-1 call on any disk; it takes 236 unpacked (208 packed) bytes out
    of the file. Behaviour is unchanged: the same body, the same caller, the
@@ -3193,3 +3195,68 @@ pick and the `FONTSLOW=1` copy, in its own private tree) and `megafont`
 `pmbox2` and `emscard2` (`drv_sniff`'s PicoMEM 2.x `DSK_PMHD` branch);
 `rombig` and `romsmall` (the moved `COLD_SEG` site); and one 360KB boot
 under MartyPC (`os88boot`) to confirm 2 + 11 disk calls.
+
+### 16.17 The ratchet held: `bvs_apply_f` retired, kern_small's `font_init` left in `.boot3` (2026-11-09)
+
+**Why.** 16.16 bought the 360KB/720KB call back by raising
+`t_blobbodies`' `RESIDUE_MAX` by one on all four kernels. That ratchet only
+goes down, and the verifier rejected the commit for it: `font_init` is not
+one of the blob's four purposes (it is no `probe` - nothing in the first tick
+calls it), so it is honestly a residue, and the only way to keep the gate
+where it was is to take another residue out.
+
+**What.**
+
+1. **`bvs_apply_f` is gone on kern_big, kern_emu and kern_mega.** It was a
+   4-byte blob door (`call bvs_apply` / `retf`) so `.boot3`'s adapter switch
+   (VSW_SWITCH's and VSW_DISP's `bvs` arms) could far-call the probe's
+   `VID_APPLY` copy. Now that copy ends in `retf` itself (`%ifidn %1, bvs` at
+   the macro's foot; CTRL.DRV's `vid_apply` and EXTD.DRV's `ext_apply` keep
+   `ret`), its two blob callers - the splash's `spl_chrome` and `vid_init` -
+   `BLOBCALL` it (`push cs` + the same near call), and the two `bvs` arms
+   `B2CALL bvs_apply`. Same body, same register contract, same return
+   address on every path; -4 + 2 = **-2 blob bytes** on the three kernels,
+   +2 on kern_small (its two callers, no door to lose). os88ovlchk's
+   return-kind rule (`every blob entry ends in retf`, `every return kind
+   matches how the routine is called`) passes on the pasted expansion.
+2. **`font_init` stays in `.boot3` on kern_small** (`%ifndef KERN_SMALL` /
+   `section .boot2` / `%else` / `B3SECT`, and `B2CALL` / `B3CALL` at the
+   site, the kern_small arm last - the model os88ovlchk reads). Its 360KB
+   and 720KB disks read 7 stage-2 calls with the body in either section, so
+   16.16 bought it nothing; kern_small is byte-for-byte its pre-16.16 file
+   (KERNEL.SYS 53,568) but for the two `push cs`.
+3. **os88ovlchk rule B8** had no shape for a body that is the blob's on three
+   kernels and `.boot3`'s on the model: a `B2CALL` was judged by the model's
+   section alone. `_walk_big` records the lines inside a `%if(n)def
+   KERN_SMALL` block's non-small arm, and a `B2CALL` there is legal when the
+   target's non-small arm is the blob (`altw`). A positive control
+   (`kernel/f.inc` in `B3_OKTREE`) and two crossed fixtures (the `B2CALL` in
+   the kern_small arm; the target `.boot3` on every kernel) hold it; with
+   the exception removed the control fails, so the fixture is live.
+
+The residue rows are now `ovl_fdd_cylok` and `font_init` on kern_big,
+kern_emu and kern_mega and none on kern_small: **`RESIDUE_MAX` 2 / 2 / 2 /
+0, as at wave 4.** `tests/ovlrefs.txt` names `bvs_apply` where it named the
+door, and `font_init`'s row says which kernels B2CALL it.
+
+**MEASURED** (against 16.16's `adf3a74a`, same commit count):
+
+| kernel | KERNEL.SYS | R | `.boot2` (of 3,584) | stage 2 |
+|---|---|---:|---|---|
+| kern_big | 84,848 (unchanged; blocks (42,804, 61,440) (35,876, 38,020)) | 20,992 | 3,532 -> **3,530** (54 free) | 11 / 11 / 7 / 7 |
+| kern_emu | 85,072 (unchanged) | 21,504 | 3,547 -> **3,545** (39 free) | emu.img 7 |
+| kern_mega | 118,048 (unchanged) | 29,696 | 3,451 -> **3,449** (135 free) | mega.img 10, mega120.img 11 |
+| kern_small | 53,360 -> **53,568** (= `bfe5cf7a`; one block (47,407, 58,052)) | 10,752 | 3,338 -> **3,104** (480 free) | 7 / 7 |
+
+`KERN_SIZE` 96,256 / 58,368 / 96,768 and `MEGA_RESIDENT` 62,464 unchanged;
+`make budget-check` passes on all four (4,608 / 5,632 / 4,096 / 5,632
+spare); `make rom` builds both ROMs (kern_small's `font_init` site back in
+`rt_b3`). `make` (fast tier) 76 passed, `w16cens` skipped for its fixtures.
+
+**Rows** (none run here): those 16.16 names, plus - for the READ_SEQ golf's
+reach, which the verifier found short - `viddiskcpu`, `vidrmbfrag` and
+`vidbigclus` (READ_SEQ on large clusters, where the mid-cluster test changed
+form), `small128` and `bootfloor` (the blob lift moved on kern_emu and
+kern_mega in 16.16, and kern_small's `.boot3` moves back here); and for
+`bvs_apply`'s far return, `dispcheck` (`vid_disp_init`'s `bvs` arm at boot)
+and `dispprefer` (the boot's adapter switch, VSW_SWITCH's).

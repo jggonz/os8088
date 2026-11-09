@@ -5937,9 +5937,14 @@ kmain_o:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
+%ifndef KERN_SMALL
     B2CALL    font_init          ; needs int 10h, so after the mode is set;
-                                ; in `.boot2` on every kernel (SPEC.md 6.0.1,
-                                ; 2.9.15), so before spl_finish
+                                ; `.boot2` on kern_big, kern_emu and kern_mega
+                                ; (SPEC.md 6.0.1, 2.9.15), before spl_finish
+%else
+    B3CALL    font_init          ; ...and `.boot3` on kern_small (BOOT3-PLAN
+                                ; 16.17; the kern_small arm LAST, the model's)
+%endif
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface

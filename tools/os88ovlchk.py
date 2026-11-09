@@ -276,12 +276,23 @@ def _walk_alt(path):
     return _WALK[(path, 'alt')]
 
 
+def _walk_big(path):
+    """{line-number} for the lines inside the NON-kern_small arm of a
+    `%if(n)def KERN_SMALL` block - assembled on every kernel but the model.
+    Only B2CALL's check reads it (rule B8): font_init is `.boot2` on kern_big,
+    kern_emu and kern_mega and `.boot3` on kern_small (BOOT3-PLAN 16.17), so
+    its B2CALL is legal exactly where that arm is the one assembled."""
+    _walk(path)
+    return _WALK[(path, 'big')]
+
+
 def _walk(path):
     """[(section, line-number, stripped-line, raw-line)] for the whole file."""
     got = _WALK.get(path)
     if got is None:
         got = []
         alt = {}                        # line -> the non-small arm's section
+        big = set()                     # lines inside a KERN_SMALL big arm
         altcur = None
         frames = []                     # per %if: [ks?, in-the-big-arm?, sect]
         cur = EXTRA.get(path, '.text')
@@ -333,9 +344,12 @@ def _walk(path):
                 continue
             if altcur is not None:
                 alt[n] = altcur
+            if any(fr[0] and fr[1] for fr in frames):
+                big.add(n)              # assembled on every kernel BUT the model
             got.append((cur, n, _toastline(line), raw))
         _WALK[path] = got
         _WALK[(path, 'alt')] = alt
+        _WALK[(path, 'big')] = big
     return got
 
 
@@ -2438,7 +2452,13 @@ def boot3_rules(kfiles, root='.'):
                 if sect != '.boot3':
                     bad.append(('B8', f, n, "B2CALL outside `.boot3`%s"
                                 % inmac))
-                elif where.get(m.group(1)) not in blobish:
+                elif where.get(m.group(1)) not in blobish and not (
+                        n in _walk_big(f) and
+                        altw.get(m.group(1)) in blobish):
+                    # (the one exception: a B2CALL written in a non-kern_small
+                    # arm, to a body whose non-kern_small arm places it in the
+                    # blob - font_init's shape, BOOT3-PLAN 16.17. The model,
+                    # kern_small, assembles neither half of that pair)
                     bad.append(('B8', f, n, "B2CALL %s, but it is not in the "
                                 "blob%s" % (m.group(1), inmac)))
             if not f.startswith('kernel/') and \
@@ -2552,6 +2572,13 @@ B3_OKTREE = {
                     "    retf\n%ifndef KERN_SMALL\nB3SECT\n%else\n"
                     "section .ovl\n%endif\novl_o:\n    retf\n"
                     "section .text\n",
+    # ...and font_init's (BOOT3-PLAN 16.17): the blob on every kernel but
+    # kern_small, `.boot3` there - the kern_small arm LAST in both the body
+    # and the call, so B2CALL is legal only in the non-small arm
+    'kernel/f.inc': "B3SECT\nb3_f:\n%ifndef KERN_SMALL\n    B2CALL f_i\n"
+                    "%else\n    B3CALL f_i\n%endif\n    retf\n"
+                    "%ifndef KERN_SMALL\nsection .boot2\n%else\nB3SECT\n"
+                    "%endif\nf_i:\n    retf\nsection .text\n",
     # ...and `.boot3m`'s shape (BOOT3-PLAN wave 5): an image whose own
     # entries jump and call INSIDE it, and a `.boot3` adopter that names an
     # entry as an IMMEDIATE (the slot it arms) - neither a transfer into it
@@ -2595,6 +2622,17 @@ B3_FIXTURES = [
     ('B8', {'kernel/m.inc': "%macro M_B8 0\n    B3CALL blob_e\n"
                             "%endmacro\nsection .boot2\nb_m:\n    M_B8\n"
                             "    retf\nsection .text\n"}),
+    # font_init's shape with the arms CROSSED: B2CALL where kern_small
+    # assembles it, to the body that is `.boot3` there
+    ('B8', {'kernel/f.inc': "B3SECT\nb3_f:\n%ifdef KERN_SMALL\n"
+                            "    B2CALL f_i\n%endif\n    retf\n"
+                            "%ifndef KERN_SMALL\nsection .boot2\n%else\n"
+                            "B3SECT\n%endif\nf_i:\n    retf\n"
+                            "section .text\n"}),
+    # ...and a B2CALL in the big arm to a body that is `.boot3` on EVERY kernel
+    ('B8', {'kernel/f.inc': "B3SECT\nb3_f:\n%ifndef KERN_SMALL\n"
+                            "    B2CALL f_i\n%endif\n    retf\n"
+                            "B3SECT\nf_i:\n    retf\nsection .text\n"}),
     # OVSCALL at a body that is `.ovl` on EVERY kernel: right on kern_small,
     # and `call B3_SEG:` carrying a window offset on all the others
     ('B8', {'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n"
