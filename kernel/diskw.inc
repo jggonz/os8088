@@ -3352,7 +3352,9 @@ dskw_clbytes:
 ;      DX:AX = the offset into the file to read from
 ; out: CF=0 with DX:AX = the bytes delivered, 0 meaning the offset is at or
 ;      past the end; CF=1 with AX = FERR_*
-; clobbers: AX, DX (the outputs), CF
+; clobbers: AX, DX (the outputs), CF - and NOTHING ELSE, DI included:
+;      dwf_dskw_read_seq addresses its cursor copy off DI across the call
+;      (DWC, below), so a body that spent DI unbanked would corrupt it
 ;
 ; The read half of what SPEC.md 22.5's copy has had internally since it was
 ; written, and what OSAPI_FILE_READ could never express: that call reads a
@@ -3469,9 +3471,9 @@ dskw_read_at_x:
     mov al, [disk_drive]
     cmp al, [dwr_c+RSQ_VOL]
     jne .dwname
-    mov ax, [dwr_off]           ; HOT, and FORWARD (18.4.8.2): the links from
-    mov dx, [dwr_off+2]         ; +6 are the offset's cluster index less +4's,
-    div word [dwr_clb]          ; plus one - ONE when the caller left +12
+    call dwr_cidx               ; HOT, and FORWARD (18.4.8.2): the links from
+                                ; +6 are the offset's cluster index less +4's,
+                                ; plus one - ONE when the caller left +12
     sub ax, [dwr_c+RSQ_IDX]     ; where the last call put it, more when it
     js .dwname                  ; moved it on. Back past +6: from the name, as
     inc ax                      ; a cold cursor is (a misaligned offset is
@@ -3649,6 +3651,27 @@ FSEQ_XSIZE  equ 22
 ; IT IS ITS OWN FAR ENTRY (SPEC.md 2.6): nothing near-calls it, so the cell
 ; reaches it by name and it ends in `retf` - the `call`/`retf` pair a separate
 ; dwf_ stub would add is four bytes that buy nothing.
+;
+; DWC(n) IS [dwr_c+n] OFF DI, a byte shorter an access than the absolute
+; form: the copy-in's `rep movsw` leaves DI one copy past dwr_c, and nothing
+; from there to .out moves it (dskw_read_at_x keeps it; BOOT3-PLAN 16.16).
+%ifdef DSK_RUN
+%define DWC(n) di+(n)-FSEQ_XSIZE
+%else
+%define DWC(n) di+(n)-FSEQ_SIZE
+%endif
+
+; dwr_cidx - AX = the cluster INDEX of the cursor's +12 offset (18.4.8.2),
+; DX = the bytes past that cluster's start; clobbers AX, DX, flags. The one
+; division READ_AT's forward seek and the wrapper's bookkeeping both make
+; ([dwr_off] IS [dwr_c+FSEQ_OFF] under DSK_STREAM, the only build with
+; either). DX is the remainder of a power-of-two cluster size, so DX = 0 is
+; exactly the old `test` of the offset against [dwr_clb]-1
+dwr_cidx:
+    mov ax, [dwr_off]
+    mov dx, [dwr_off+2]
+    div word [dwr_clb]
+    ret
 dwf_dskw_read_seq:
     push bx
     push cx
@@ -3670,35 +3693,35 @@ dwf_dskw_read_seq:
     mov cx, FSEQ_SIZE / 2
 %endif
     cld
-    rep movsw
+    rep movsw                   ; DI = dwr_c + the copy: [DWC(n)] is +n
     push es
     pop ds                      ; DS = KERNEL_SEG again
     pop cx
     pop si
 %ifdef DSK_RUN
-    test byte [dwr_c+FSEQ_FLG], FSEQF_RUN ; THE CALLER'S RUN (18.4.8.3), held
+    test byte [DWC(FSEQ_FLG)], FSEQF_RUN ; THE CALLER'S RUN (18.4.8.3), held
     jz .norun                   ; only under the map's own snapshot, on the
     mov ax, [dsk_mgen]          ; cursor's own volume: anything else and the
-    cmp ax, [dwr_c+FSEQ_RGEN]   ; kernel's +18 is 0, which dsk_next_clus
+    cmp ax, [DWC(FSEQ_RGEN)]    ; kernel's +18 is 0, which dsk_next_clus
     jne .norun                  ; never matches
     mov al, [disk_drive]
-    cmp al, [dwr_c+RSQ_VOL]
+    cmp al, [DWC(RSQ_VOL)]
     je .run
-    cmp word [dwr_c+RSQ_GEN], 0     ; ...or a COLD cursor, which stats the name
+    cmp word [DWC(RSQ_GEN)], 0      ; ...or a COLD cursor, which stats the name
     je .run                         ; on the current volume: a seek's walk is
 .norun:                             ; where a run saves the most
-    and word [dwr_c+FSEQ_RUN+2], 0
+    and word [DWC(FSEQ_RUN+2)], 0
 .run:
-    test byte [dwr_c+FSEQ_FLG], FSEQF_MAP
+    test byte [DWC(FSEQ_FLG)], FSEQF_MAP
     jnz .map
 %endif
     mov es, dx                  ; ES:BX = the caller's DX:BX buffer
-    mov ax, [dwr_c+FSEQ_OFF]
-    mov dx, [dwr_c+FSEQ_OFF+2]
+    mov ax, [DWC(FSEQ_OFF)]
+    mov dx, [DWC(FSEQ_OFF+2)]
     call dskw_read_at_x         ; DX:AX = the bytes, or CF and FERR_*
     jc .out
-    add [dwr_c+FSEQ_OFF], ax    ; the cursor moves only when bytes arrived
-    adc [dwr_c+FSEQ_OFF+2], dx
+    add [DWC(FSEQ_OFF)], ax     ; the cursor moves only when bytes arrived
+    adc [DWC(FSEQ_OFF+2)], dx
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
     cmp byte [dsk_vkind], DVK_FILE
     je .out                     ; a REDIRECTED volume (SPEC.md 62.9) serves
@@ -3706,27 +3729,23 @@ dwf_dskw_read_seq:
                                 ; the compare having been equal
 %endif
     push ax                     ; ...otherwise it is trusted under THIS
-    mov ax, [dsk_chain_end]     ; snapshot, on this volume: the LAST cluster
-    mov [dwr_c+RSQ_CUR], ax     ; read, whose one FAT link is the next call's
-    mov ax, [dwr_clb]           ; whole walk (READ_AT's own, above) - unless
-    dec ax                      ; the read ENDED MID-CLUSTER, which a whole
-    test [dwr_c+FSEQ_OFF], ax   ; sector allows (18.4.4.2): the next offset
-    mov ax, 0                   ; is still in that cluster, so the cursor is
-    jnz .cold                   ; left cold and the next call walks from the
-    mov ax, [dsk_mgen]          ; name. The size
-.cold:
-    mov [dwr_c+RSQ_GEN], ax     ; is already in the cursor: [dwr_sz] IS its
-    mov al, [disk_drive]        ; field on kern_big, stored by READ_AT from
-    mov [dwr_c+RSQ_VOL], al     ; the stat, whichever way it answered. After a
-    push dx                     ; ...and +4, the cluster INDEX of +12's
-    mov ax, [dwr_c+FSEQ_OFF]    ; offset, which dwr_stat measures a forward
-    mov dx, [dwr_c+FSEQ_OFF+2]  ; seek from (18.4.8.2). Non-zero after any
-    div word [dwr_clb]          ; read that moved a cluster: a caller's sign
-    mov [dwr_c+RSQ_IDX], ax     ; that this kernel walks forward
+    push dx                     ; snapshot, on this volume: the LAST cluster
+    mov ax, [dsk_chain_end]     ; read, whose one FAT link is the next call's
+    mov [DWC(RSQ_CUR)], ax      ; whole walk; +4 the cluster INDEX of +12's
+    call dwr_cidx               ; offset (18.4.8.2), DX what is past it -
+    mov [DWC(RSQ_IDX)], ax      ; and non-zero DX is a read that ENDED
+    xor ax, ax                  ; MID-CLUSTER (18.4.4.2): the cursor is left
+    or dx, dx                   ; cold and the next call walks from the name
+    jnz .cold                   ; (`xor` then `or`: AX = 0, ZF = DX's).
+    mov ax, [dsk_mgen]          ; The size is already in the cursor:
+.cold:                          ; [dwr_sz] IS its field on kern_big, stored
+    mov [DWC(RSQ_GEN)], ax      ; by READ_AT from the stat, whichever way it
+    mov al, [disk_drive]        ; answered
+    mov [DWC(RSQ_VOL)], al
     pop dx
-    pop ax                      ; call that delivered nothing the cluster is
-    clc                         ; stale and unread: READ_AT answers the end
-.out:                           ; before it walks
+    pop ax                      ; After a call that delivered nothing the
+    clc                         ; cluster is stale and unread: READ_AT
+.out:                           ; answers the end before it walks
     pop es                      ; ...and the cursor goes back where it came
     pop di                      ; from, success or not - to the caller's own
     push di                     ; ES:DI, banked at the door. No flag is
@@ -3735,9 +3754,9 @@ dwf_dskw_read_seq:
     cld                         ; none: the run is the caller's, unchanged
     rep movsw
 %ifdef DSK_RUN
-    mov [dwr_c+FSEQ_RUN+2], cx  ; ...no run outside the call (18.4.8.3)...
-%endif
-    mov [dwr_c+RSQ_GEN], cx     ; ...and the KERNEL's copy is left invalid
+    mov [si+FSEQ_RUN+2-FSEQ_SIZE], cx ; ...no run outside the call (18.4.8.3)
+%endif                          ; (SI = dwr_c + 16, one copy-out past it)...
+    mov [si+RSQ_GEN-FSEQ_SIZE], cx ; ...and the KERNEL's copy is left invalid
     pop di                      ; (CX = 0 after the rep): dwr_stat consults
     pop si                      ; it on EVERY READ_AT, and a plain one must
     pop cx                      ; find no cursor there
@@ -3761,11 +3780,11 @@ dwf_dskw_read_seq:
     push bx
     push cx                     ; how many runs it holds
     call dskw_stat_x            ; BX = the first cluster
-    jc .mstat
-    xchg ax, bx
     pop bp                      ; BP = the runs the buffer holds
     pop di
-    pop es                      ; ES:DI = the buffer
+    pop es                      ; ES:DI = the buffer (pops keep CF)
+    jc .mout
+    xchg ax, bx
     xor dx, dx                  ; DX = the runs written
 .mrun:
     call dskw_clok              ; a run starts at a cluster there is: the end
@@ -3781,10 +3800,9 @@ dwf_dskw_read_seq:
     dec si
     xchg ax, bx                 ; BX..SI is a run
     stosw
-    xchg ax, bx
     xchg ax, si
     stosw
-    xchg ax, si
+    xchg ax, bx                 ; AX = the next again
     inc dx
     dec bp
     jnz .mrun                   ; ...and the buffer full is the end too
@@ -3795,9 +3813,6 @@ dwf_dskw_read_seq:
 .mout:
     pop bp
     jmp .out
-.mstat:
-    add sp, 6                   ; (the buffer and its count, unread)
-    jmp short .mout
 .mbad:
     mov ax, FERR_IO
     stc

@@ -161,7 +161,8 @@ SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
 ; -----------------------------------------------------------------------------
 ; FONT_PICK - which ROM 8x8 table to read, TIMED (SPEC.md 6.0.1)
 ;
-; in:       %1 = the label prefix of a FONT_TIMERS expansion in reach
+; in:       %1 = the label prefix of a FONT_TIMERS expansion in reach (a
+;           `.local` prefix keeps the pair inside its caller's body)
 ; out:      DX:BP = glyph FONT_FIRST of the ROM table to read - the planar
 ;           one unless the BIOS's answer is an eighth faster -
 ;           BX = its PIT count, CX = RAM's for the same read; the three
@@ -327,11 +328,14 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN `.boot3`, THE THIRD BOOT-ONLY HOME, ON EVERY KERNEL (SPEC.md 2.9.15),
-; reached by B3CALL: it was the blob's (SPEC.md 6.0.1 grew the blob to ten
-; sectors for exactly this body) until BOOT3-PLAN wave 1 gave those bytes back.
-; It costs no resident byte, no window byte and no blob byte. One caller,
-; kmain_o, after kz_all.
+; IN `.boot2`, THE BLOB, ON EVERY KERNEL (SPEC.md 6.0.1, 2.9.15), reached by
+; B2CALL from kmain_o before spl_finish - its one caller. It was the blob's
+; (SPEC.md 6.0.1 grew the blob to ten sectors for exactly this body), went to
+; `.boot3` in BOOT3-PLAN wave 1, and came BACK in BOOT3-PLAN 16.16: `.boot3`
+; is inside the packed KERNEL.SYS and the blob is not, so the move took 208
+; bytes off the file and kept the 360KB/720KB stage 2 at 11 int 13h calls
+; after the elendilon merge. It costs no resident byte and no window byte;
+; the blob's slack pays for it (52 bytes left on kern_big, 37 on kern_emu).
 ;
 ; THE TABLE IS READ IN PLACE (SPEC.md 6) - unless even the fastest candidate
 ; FONT_PICK timed is slower than RAM by more than a quarter. Then the 760
@@ -351,7 +355,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
 ; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-B3SECT
+section .boot2
 font_init:
     push ax
     push bx
@@ -361,7 +365,7 @@ font_init:
     push di
     push bp
     push es
-    FONT_PICK fi                ; DX:BP = the table, BX = its count, CX = RAM's
+    FONT_PICK .fi               ; DX:BP = the table, BX = its count, CX = RAM's
 %ifndef FONTSLOW
     mov ax, cx
     shr ax, 1
@@ -403,8 +407,10 @@ font_init:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain_o reaches this through B3CALL
-    FONT_TIMERS fi
+    retf                        ; FAR: kmain_o reaches this through B2CALL
+    FONT_TIMERS .fi             ; LOCAL (font_init.fi_time, .fi_pit): the
+                                ; body's own clock, so the blob's register
+                                ; (tests/blobbodies.txt) files ONE body
 section .text
 %endif
 

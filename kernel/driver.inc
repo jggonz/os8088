@@ -5660,9 +5660,7 @@ drv_sniff:
     push es                     ; (dsk_fdd_pmemu spends ES, BX, CX, DX, AH)
     mov al, 2
 .pms:
-    push ax
-    call dsk_fdd_pmemu          ; near: both are the window half
-    pop ax
+    call dsk_fdd_pmemu          ; near: both are the window half; AL kept
     jnc .pmy
     inc ax
     cmp al, 6

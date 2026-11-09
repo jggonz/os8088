@@ -3897,6 +3897,25 @@ reason, held to a per-kernel `RESIDUE_MAX` that only goes down (2 on kern_big,
 kern_emu and kern_mega: the two doors; 0 on kern_small). A body left in the
 blob for convenience fails `make` until somebody writes down why.
 
+**...and it was raised once, by one, on all four (BOOT3-PLAN 16.16,
+2026-11-09): `font_init` is back in the blob** (§6.0.1), a residue row with
+its reason, `RESIDUE_MAX` 3 / 3 / 3 / 1. The elendilon merge's kern_mega
+work added 240 bytes of kern_big `.cold` (READ_SEQ's run and map,
+§18.4.8.3), and `.cold` rides the PACKED KERNEL.SYS: the file went from
+84,864 bytes to 85,072, 80 past 166 sectors, and the 360KB and 720KB stage
+2 from 11 `int 13h` calls to 12 - one more call, ~0.4 s, on every boot of
+those disks. `.boot3` is packed too and the blob is not, and the blob's seven
+sectors are read whole however much of them is used, so the 236 bytes of
+`font_init` (its clock now local to it, `font_init.fi_time` and `.fi_pit`)
+moved out of the file for no stage-1 call: KERNEL.SYS **84,848** on kern_big
+(166 sectors, 144 bytes under the 167th), 85,072 on kern_emu, 118,048 on
+kern_mega, 53,360 on kern_small, and stage 2 **11 / 11 / 7 / 7 / 7 / 7**
+again (kern_emu's 1.44MB `emu.img` 7). The price is the blob's slack:
+`.boot2` is **3,532** of 3,584 bytes on kern_big (52 free), 3,547 on kern_emu
+(37), 3,451 on kern_mega (133) and 3,338 on kern_small (246) - so the next
+body wanted in the blob either takes `font_init` (or a `hb_probe_x`-sized
+piece) back out, or costs a blob sector.
+
 #### 2.9.15 `.boot3`: the boot's third home
 
 **The contract for docs/plans/completed/BOOT3-PLAN.md.** The boot has three boot-only
@@ -3933,7 +3952,7 @@ called by `B3CALL` from `kmain_o`:
 
 | kernel | bodies |
 |---|---|
-| all four | `font_init` with `fi_time` and `fi_pit` (§6.0.1) |
+| all four | `font_init` with `fi_time` and `fi_pit` (§6.0.1) - **back in the blob since BOOT3-PLAN 16.16** (§2.9.14.2), its clock local to it |
 | kern_big, kern_emu, kern_mega | `hb_probe_x` (§87.5); `cfx_grid`, `cfx_ctxcap`, `cfx_cfgname` (kern_mega's were the blob's `bvw_rowcalc` instance, `bvs_ctxcap` and `ovc_cfgname` until its `.boot3` came on) |
 | kern_big, kern_emu | the slide prefix (`cfx_slide`, `cfx_grp`, `cfx_tab`); `as_boot` with `as_s_dir`, `as_s_skip`, `as_find` (§26.10.5) |
 | kern_mega | `mega_wrprobe`, `mega_gateb`, `mega_gwset` |
@@ -4364,7 +4383,8 @@ CF = 1 and an untouched kernel, so a wrong ROM is no ROM.
 (the blob at `[spl_fseg]`) and `rt_b3` at `RT_B3SEG`, `.boot3`'s (§2.9.15) -
 walked by BOTH kinds, `.boot3` outliving the mount. kern_small's ROM walks it
 too since BOOT3-PLAN wave 1 (`RT_HASB3`, which is 0 only for a kernel with
-no `.boot3`): `font_init`'s and the OVBCALL bodies' `call COLD_SEG:` words.
+no `.boot3`): the OVBCALL bodies' `call COLD_SEG:` words (`font_init`'s was
+`.boot3`'s from wave 1 and is `rt_blob`'s again since BOOT3-PLAN 16.16).
 `os88rom.py` compares `.boot3` with `cfx_tab` blanked (`os88cfx.blank`)
 rather than skipping it: the list is stamped after the assembly, and the
 rest of the section is code the ROM re-points.
@@ -4675,7 +4695,8 @@ gives the kernel its own, so it can move `.cold` itself.
   kept its labels' names). The words in `.text`, the window half, the blob
   and `.boot3` itself that name `.cold`'s segment (93 + 3 + 25 + 0 at wave
   0, 195 of the table's 256 bytes; 93 + 3 + 14 + 11, 197 bytes, once wave 1
-  moved `hb_probe_x`, `as_boot` and `font_init` there) are stamped by `tools/os88cfx.py` into
+  moved `hb_probe_x`, `as_boot` and `font_init` there; os88cfx's 93+2+1+25
+  once BOOT3-PLAN 16.16 took `font_init` back to the blob) are stamped by `tools/os88cfx.py` into
   `cfx_tab`, `CFX_MAX` (256) bytes of zeros in the section straight after
   `.cold` in the FILE. The tool re-assembles with kernel.asm's `COLD_CS`
   hook at two values and diffs, as os88rom.py does, after each of the
@@ -9463,9 +9484,12 @@ BIOS's answer. It TIMES the candidates, with the macro `FONT_PICK`:
 **What it costs.** **Zero resident bytes** on both kernels (kern_big 97,384,
 kern_small 65,398, both unchanged). `font_init`, the timers and the claim
 are in the BLOB half of the boot overlay on BOTH kernels now, reached by
-`BLOBCALL`, and the blob grew one sector to hold them (**since BOOT3-PLAN
-wave 1 they are `.boot3`'s on every kernel**, §2.9.15, reached by `B3CALL`,
-and that sector's bytes are the blob's slack): **`BOOT2_SECS` 9 ->
+`BLOBCALL`, and the blob grew one sector to hold them (**BOOT3-PLAN wave 1
+made them `.boot3`'s on every kernel**, §2.9.15, reached by `B3CALL`, and
+that sector's bytes the blob's slack; **BOOT3-PLAN 16.16 put them BACK in
+`.boot2`**, reached by `B2CALL` from `kmain_o` before `spl_finish`, because
+`.boot3` is inside the packed KERNEL.SYS and the blob is not - 208 bytes off
+the file, which kept 360KB and 720KB at 11 stage-2 calls, §2.9.14.2): **`BOOT2_SECS` 9 ->
 10**, `.ovl` 1,953 -> 2,178 of 2,496 on kern_big (and `.ovlw` 5,092 -> 4,968,
 the body having left it) and 1,969 -> 2,071 of 2,496 on kern_small.
 `KSIG_OFF` moved one memory sector down with it (6144 -> 5632) so the canary
@@ -10494,8 +10518,8 @@ a baked one still copies its face into `font_glyphs`/`font_zero` in
 `.lowbss`, measured +768 of `.lowbss` against the same knob build unbaked on
 both kernels (plus the face in the overlay, which is not resident). On
 **kern_small** the face and `ovl_font_init` are in the BLOB half (`.ovl`,
-§2.5.3.2; `.boot3` since BOOT3-PLAN wave 1, §2.9.15), `font_init`'s own
-placement, reached through `OVBCALL`: in the
+§2.5.3.2; `.boot3` since BOOT3-PLAN wave 1, §2.9.15), where `font_init`
+was too until BOOT3-PLAN 16.16 put it back in `.boot2`, reached through `OVBCALL`: in the
 window half they overran kern_small's `.ovlw` guard, so until kernel size
 pass 8 `FONT=` did not build on kern_small at all.
 

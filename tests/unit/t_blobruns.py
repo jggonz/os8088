@@ -284,6 +284,17 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
 # small disks 5). That is where cylinders fall, not slack anybody spent; a
 # head of 8 or 9 would buy 17 sectors of it for two calls more. PREDICTED,
 # like the rest of this table, until os88boot measures it in the final pass.
+#
+# **THE ELENDILON MERGE SPENT THAT SECTOR AND BOOT3-PLAN 16.16 GOT IT BACK**
+# (2026-11-09). 240 bytes of kern_big `.cold` (READ_SEQ's run and map) took
+# KERNEL.SYS from 84,864 to 85,072, 80 past 166 sectors, and these two rows
+# to 12; font_init back in the blob (its 236 bytes out of the packed file)
+# and a 28-byte golf of the READ_SEQ wrapper put it at 84,848 - 166 sectors,
+# 144 bytes under the 167th - and both rows at 11 again, still 0 sectors
+# free. The 1.2MB and 1.44MB spares (15, 17) hold R FIXED, and R is fixed
+# only while the tail's unpacked-less-packed + 64 stays in (20,480, 20,992]
+# (20,820 at 16.16: 172 bytes of growth, 340 of shrink) - and 1.2MB reads 8
+# at R 20,480 and at 21,504 alike, so its spare is not the 15 it looks.
 STAGE2 = {
     "os8088-360.img": 11,   # head 5 at LBA 21..25, the tail 26..180: 0 free
     "os8088-720.img": 11,   # (the 360KB disk's shape)

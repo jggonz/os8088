@@ -53,7 +53,14 @@ KINDS = ("loader", "splash", "probe", "status", "residue")
 # kern_emu and kern_mega keep two doors (bvs_apply_f, the probe's VID_APPLY
 # for `.boot3`'s adapter switch; ovl_fdd_cylok, the loader's b2_cylok for
 # `.boot3`'s ovl_fdd_apply) and kern_small none.
-RESIDUE_MAX = {"big": 2, "emu": 2, "mega": 2, "small": 0}
+# RAISED BY ONE ON ALL FOUR in BOOT3-PLAN 16.16 (2026-11-09), a decision and
+# not a repair: font_init went back into the blob, because `.boot3` is inside
+# the packed KERNEL.SYS and the elendilon merge had put that file 80 bytes
+# past 166 sectors - one more int 13h call on every 360KB and 720KB boot. The
+# blob's seven sectors are read whole either way, so the body costs no call
+# there; it costs blob slack (52 bytes left on kern_big, 37 on kern_emu).
+# It comes down again with the body.
+RESIDUE_MAX = {"big": 3, "emu": 3, "mega": 3, "small": 1}
 
 
 def boot2_labels(path):

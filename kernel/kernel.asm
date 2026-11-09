@@ -2115,7 +2115,8 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; KSIG_OFF moved one memory sector down again (5632 -> 5120), file sector 21.
 ; TEN since SPEC.md 6.0.1: the tenth sector is `.boot2`'s, for the timed font
 ; pick (font_init in the blob on both kernels, then - BOOT3-PLAN wave 1 - in
-; `.boot3`, the sector left as slack), and KSIG_OFF moved one memory
+; `.boot3`, the sector left as slack, and since BOOT3-PLAN 16.16 in the blob
+; again, inside wave 4's seven sectors), and KSIG_OFF moved one memory
 ; sector down with it (6144 -> 5632) so the FILE sector is still 21. It sits
 ; inside the same int 13h run on all four geometries (tests/unit/t_blobruns.py).
 ; ELEVEN ON A KNOB BUILD (SPEC.md 2.5.3.3): a knob kernel ships nowhere, so its
@@ -5936,9 +5937,9 @@ kmain_o:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-    B3CALL    font_init          ; needs int 10h, so after the mode is set;
-                                ; in `.boot3` on every kernel (SPEC.md 6.0.1,
-                                ; 2.9.15)
+    B2CALL    font_init          ; needs int 10h, so after the mode is set;
+                                ; in `.boot2` on every kernel (SPEC.md 6.0.1,
+                                ; 2.9.15), so before spl_finish
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface

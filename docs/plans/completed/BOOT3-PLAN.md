@@ -545,6 +545,10 @@ one commit.
 | `font_init` + `fi_time` + `fi_pit` (font.inc) | 200 + 23 + 13 = **236** | none (FONT_PICK's own expansion) | 1 | `BLOBCALL`, MARK 13 → `B3CALL` (+1) |
 | **total** | **507** | | **11** | **+3** |
 
+*(`font_init` and its clock went BACK to `.boot2` in 16.16, on every
+kernel, after the elendilon merge: `.boot3` rides the packed KERNEL.SYS and
+the blob does not.)*
+
 The blob frees **504 net**. `.boot3` gains 507. That puts its end at about
 0x181B3, 15 bytes inside the lift's certain bound of 0x181C2
 (0x18600 − 64 − 1,022), so the lift stays 96. If the crossings or wave 0's
@@ -2694,10 +2698,18 @@ count):
 
 | kernel | `.text` / `.bss` / `.cold` | static resident | a mouseless machine | `.boot3` + `.boot3m` (image) | lift (para) | boot arena | KERNEL.SYS | stage-2 calls (spare sectors) |
 |---|---|---|---|---|---:|---|---|---|
-| kern_big | −364 / +12 / +6 | **−346**: `KERN_SIZE` 96,768 → **96,256** | 512 claim, **+166** net | 5,847 → 6,372 (452) | 416 → 448 | 22,528 (unchanged: `HEAP_SEG` fell 32) | 84,704 → 84,864, **166 sectors either way** | 360KB/720KB 11 (0 spare, before and after), 1.2MB 7 (15), 1.44MB 7 (17) |
+| kern_big | −364 / +12 / +6 | **−346**: `KERN_SIZE` 96,768 → **96,256** | 512 claim, **+166** net | 5,847 → 6,372 (452) | 416 → 448 | 22,528 (unchanged: `HEAP_SEG` fell 32) | 84,704 → 84,864, **166 sectors either way** | 360KB/720KB 11 (0 spare, before and after), 1.2MB 7 (15\*), 1.44MB 7 (17\*) |
 | kern_emu | −364 / +12 / +6 | −346, no rung (96,768; the image rung's spare 150 → 502) | +166 | 5,949 → 6,484 | 416 → 448 | 22,528 → 22,016 | 84,912 → 85,088 (166 → **167**) | emu.img 7 either way (17 → 16 spare) |
 | kern_mega | −364 / +12 / +6 (`.cold` above 1MB) | **−352 conventional**: `MEGA_RESIDENT` 62,976 → **62,464** | 512 until `mega_enter`, then above 1MB | 5,637 → 6,165 (453) | 448 → 480 | 508,416 (unchanged) | 115,360 → 115,536, 226 sectors | mega.img 10, mega120.img 11 (cylinder model) either way |
 | kern_small | −364 / +12 / +6 | **−346**: `KERN_SIZE` 58,880 → **58,368** | 512, **+166** on the 128KB machine | 1,803 → 2,388 (452; + the 56-byte KGO pair) | 320 → 352 | 61,952 (unchanged) | 53,424 → 53,568, 105 sectors | small360/720 7 (5 → 6 spare) |
+
+\* *Corrected in 16.16*: a spare counted in packed sectors holds the
+tail's position R FIXED, and R (`kernel.kz.json`'s `r`, 20,992 here) is
+fixed only while the tail's unpacked-less-packed + 64 stays in (20,480,
+20,992] - `body >= tail + 64 - 20992`. 1.2MB reads 8 at R 20,480 and at
+21,504 alike, so a change that moves the unpacked and packed sizes apart by
+more than that window costs the 1.2MB disk a call with all "15" sectors
+still unspent: the 15 is overstated whenever R can move.
 
 `.boot2` and `.ovl` are unchanged on every kernel (3,102 / 3,161 on
 kern_big, 2,908 / 1,474 on kern_small, 3,019 / 3,160 on kern_mega, kernsize's
@@ -3073,3 +3085,111 @@ none skipped), then `test-full` once.
 window guard; that failure predates this plan (16.5, deviation 6) and the knob
 is in no row's roster.
 
+### 16.16 `font_init` back in the blob, after the elendilon merge (2026-11-09)
+
+**Why.** Merging `origin/elendilon` (83 commits of kern_mega work) into this
+branch added 240 bytes of kern_big `.cold` - `dwf_dskw_read_seq` +140 (the
+caller-held run and the map, `DSK_RUN`, SPEC.md 18.4.8.3), `dsk_xfer` +40,
+`dskw_read_at_x` +18, `dsk_next_clus_x` +15, `dsk_rah_fill` +13,
+`mem_avail_lvl_p` +18 - and `.cold` rides the packed KERNEL.SYS. The file went
+84,864 -> **85,072**, 80 bytes past 166 sectors, so `t_blobruns` read 12
+stage-2 calls on os8088-360.img and os8088-720.img against 11: the merged tree
+booted those disks in 2 + 12 `int 13h` against elendilon's 2 + 11, one call
+(~0.4 s on an XT) slower than either parent. The owner on boot time: *"I don't
+like it making every boot take longer."*
+
+**What.** Two changes, judged together, nothing else:
+
+1. **`font_init` back to `.boot2` on every kernel** (`section .boot2` above
+   it, `B2CALL font_init` in `kmain_o` between MARKW 13 and 14, before
+   `spl_finish`; `tests/ovlrefs.txt` registers it). Its clock is local now
+   (`FONT_TIMERS .fi`: `font_init.fi_time`, `.fi_pit`), so the blob register
+   files one body. It is a RESIDUE row in `tests/blobbodies.txt`, and
+   `RESIDUE_MAX` went up by one on all four (3 / 3 / 3 / 1) - the one raise
+   that ratchet has had, written down there and in SPEC.md 2.9.14.2. The
+   blob is read whole at seven sectors whatever it holds, so the move costs
+   no stage-1 call on any disk; it takes 236 unpacked (208 packed) bytes out
+   of the file. Behaviour is unchanged: the same body, the same caller, the
+   same point in the boot (it ran there until wave 1), the far frame now
+   `call BLOB_SEG_AT:` rather than `push cs` + near call (`kmain_o` +1
+   byte); its one `call COLD_SEG:wm_cbd` word moved from `rt_b3` to
+   `rt_blob` (os88cfx 93+2+0+26 -> 93+2+1+25; `make rom` builds both ROMs).
+2. **A golf of elendilon's READ_SEQ wrapper** (diskw.inc, driver.inc):
+   `dwr_cidx`, the one 32-by-16 division READ_AT's forward seek and the
+   wrapper's bookkeeping both make; the cursor copy addressed off DI after
+   the copy-in (`DWC(n)`, a byte shorter an access - `dskw_read_at_x` keeps
+   DI, now said in its header) and off SI after the copy-out; the
+   mid-cluster test read off the division's remainder (`xor ax, ax` /
+   `or dx, dx`: AX = 0 exactly as the old `mov ax, 0`, and DX = 0 exactly
+   when the old `test` of the offset against `[dwr_clb]` - 1 was zero, the
+   cluster size being a power of two); the map's stat refusal popping its
+   three words and testing CF after (pops keep flags), so `.mstat` went; one
+   `xchg` fewer per run in the map (AX = the next cluster again, BX and SI
+   rewritten before they are read); and `drv_sniff`'s `.pms` loop without
+   its `push ax`/`pop ax`, `dsk_fdd_pmemu` handing AL back on every exit
+   (the ramp's `.noramp`, the AA55 miss, the attribute test) and AH being
+   read by nothing after. No contract moved, so SPEC.md 18.4.8.3 is as it
+   was. `.cold` -28, `.ovl` -2 on kern_big and kern_emu (and `.cold` -28 on
+   kern_mega); `.text` and `.bss` identical on all four.
+
+**MEASURED** (the shipped KZIP builds, against `bfe5cf7a` built in a worktree
+at the same commit count; `os88rdiff kernel HEAD .`: 7 changed - `font_init`
+200 -> 236 with its locals, `kmain_o` +1, `dskw_read_at_x` 298 -> 290,
+`dwf_dskw_read_seq` 250 -> 218, `drv_sniff` 153 -> 151, and the layout words
+in `cfx_slide` and `kbld_cold` - 1 new, `dwr_cidx` 12, 2 gone, `fi_time` and
+`fi_pit`, now locals):
+
+| kernel | KERNEL.SYS | blocks (packed, unpacked) | R | `.boot2` (blob, of 3,584) | `.boot3` + `.boot3m` (kernsize) | `.cold` | stage-2 calls |
+|---|---|---|---:|---|---|---|---|
+| kern_big | 85,072 -> **84,848** (166 sectors, 144 under the 167th) | (42,807, 61,440) (36,104, 38,276) -> (42,804, 61,440) (35,876, 38,020) | 20,992 | 3,296 -> **3,532** (52 free) | 6,372 -> 6,148 | 37,816 -> **37,788** | 360 12 -> **11**, 720 12 -> **11**, 1.2MB 7, 1.44MB 7 |
+| kern_emu | 85,312 -> **85,072** | (42,457, 61,440) (36,687, 38,900) -> (42,454, 61,440) (36,457, 38,628) | 21,504 | 3,311 -> **3,547** (37 free) | 6,484 -> 6,244 | 37,816 -> **37,788** | emu.img 7 (16 spare) either way |
+| kern_mega | 118,272 -> **118,048** | 3 blocks, the last 14,211 -> 13,996 packed | 29,696 | 3,213 -> **3,451** (133 free) | 6,165 -> 5,941 | 48,590 -> **48,562** | mega.img 10, mega120.img 11, either way |
+| kern_small | 53,568 -> **53,360** (105 sectors) | (47,407, 58,052) -> (47,206, 57,828) | 10,752 | 3,102 -> **3,338** (246 free) | 2,388 -> 2,164 | 21,037 | small360/720 7 either way |
+
+Resident: `KERN_SIZE` 96,256 / 58,368 / 96,768 and `MEGA_RESIDENT` 62,464,
+unchanged; `make budget-check` passes on all four (4,608 / 5,632 / 4,096 /
+5,632 spare). The resident change is the golf's -28 of `.cold` (-30 with
+`.ovl`'s 2, which is boot-only); no resident byte was added anywhere. The
+blob lift fell a step on kern_emu (7,680 -> 7,168 bytes: the 128KB arena
+21,504 -> 22,016) and on kern_mega (480 -> 448 paragraphs), and `.boot3b`'s
+nobits grew 636 -> 892 on kern_big only because it starts on the next 512
+boundary past a shorter `.boot3m`. `KSIG_OFF` stayed 7,168 / 4,096 (file
+sector 21 / 15). `t_blobruns`: blob 2 calls on all six, stage 2
+**11 / 11 / 7 / 7 / 7 / 7**, the ratchet's own figures - nothing to tighten,
+and 360KB/720KB still 0 sectors free. R's window: the tail's unpacked less
+packed + 64 is 20,820, so R stays 20,992 for 172 bytes of growth in that
+difference (140 before) and 340 of shrink; 1.2MB reads 8 on either side.
+
+**The trade, for the owner.** The blob is nearly full again: 52 bytes free
+on kern_big and **37 on kern_emu**. The blob wants queued in the big review
+(BR-1, BR-6, BR-56/147/155, shell-8, drivers-5: about +66..78 bytes) no
+longer fit in seven sectors. The next of them either takes `font_init` (or
+the `hb_probe_x`/`vid_ctx_init`-sized pieces) back out of the blob, or costs
+a blob sector - which is free for stage 1 on every geometry up to 13 sectors
+but moves every kernel sector after it.
+
+**Rejected for this change**, and why (the scouts measured each): the lz
+dictionary and its block-1 variant and the DMA bounce change the stream
+format and the boot path on every machine, and the dictionary alone takes
+1.2MB 7 -> 8; BCJ adds ~0.3 s to every boot; `hb_probe_x` + `vid_ctx_init`
+into the blob buys only 16 bytes of margin; `KZ_MARGIN` 64 -> 8 saves no file
+byte and eats R's downside headroom; `cfx_tab`, a 4-sector head, a block split
+and gap squeezing are noise; an XOR-mask toggle breaks the retry path and a
+`mem_avail` reorder is +4 packed. **Follow-ups, not done here**: teach
+`t_blobruns` to print each geometry's distance to the next R step and DMA-page
+coincidence, so the 1.2MB cliff is visible; and the dictionary + DMA bounce
+pair (360KB/720KB at 10 calls, 1.44MB at 6, the cliff gone) as an
+owner-decision change of its own, booted on every geometry - and if it is
+ever built, the dictionary must not start block 0 from the plain head, which
+stage 2 writes into before `kz_all` (`spl_tick`).
+
+**Rows** (host checks only here; nothing was booted, no soak row run): fast -
+`blobruns`, `blobbodies`, `bootfence`, `canary`, `image`, `diskverify`,
+`hotpar`, all green in `make`. For the final pass, scoped (`-k`), once:
+`kzboot`, `b3poison` (the blob's and `.boot3`'s boot path), `fontpick` (the
+pick and the `FONTSLOW=1` copy, in its own private tree) and `megafont`
+(FONTSLOW kern_mega); `vidkern`, `viddisk`, `viddiskfd`, `megarsq`,
+`vbtengine` and `vbtgame` (READ_SEQ: the forward seek, the run and the map);
+`pmbox2` and `emscard2` (`drv_sniff`'s PicoMEM 2.x `DSK_PMHD` branch);
+`rombig` and `romsmall` (the moved `COLD_SEG` site); and one 360KB boot
+under MartyPC (`os88boot`) to confirm 2 + 11 disk calls.
