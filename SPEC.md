@@ -101354,9 +101354,12 @@ in four steps:
    refusal.
 
 The caller declares the conventional part movable when CX says it is there
-(a `ret` its proc, §50.3.5), and decides what it does not hold for itself -
-XTMP3 gives a paragraph step back (kern_mega in real mode, where its old
-ladder stands) and the Audio Player keeps one. `tests/os88huge.py` runs it
+(a `ret` its proc, §50.3.5) **on a selector step only**: the selectors follow
+a move, while a paragraph step (`HW_STEP` = 1000h, kern_mega in real mode) is
+a plain segment that a `ret` would leave naming the old paragraphs. It
+decides what it does not hold for itself - XTMP3 gives a paragraph step back
+(where its old ladder stands), and the Audio Player and WaveRack keep one,
+PINNED. `tests/os88huge.py` runs it
 against a model of that placement with the three cells; `x3huge`,
 `waverackhuge`, `audhuge` and `megasbhold` are its rows in the guest.
 
@@ -160274,7 +160277,9 @@ precedent (§121.6.1) and the walker its.
   (`hw_claimfit`), so a file too big to hold costs no claim and no pack.
   Conventional memory in the hold is declared MOVABLE, a `ret` its proc
   (§50.3.5: its windows follow a move); a copy in or out yields nowhere,
-  so nothing pins it.
+  so nothing pins it. A paragraph step (kern_mega in real mode) is the
+  exception and stays PINNED (§50.3.8): a plain segment does not follow a
+  move, and `[aph_base]` would go on naming the old paragraphs.
 - **What streams still streams.** A file the machine cannot hold, a fill
   abandoned, and every file on a real-mode kernel go through the 14.160
   look-ahead and nothing more; `[aph_off]` = 1 makes the arm do so for

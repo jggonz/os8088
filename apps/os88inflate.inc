@@ -53,7 +53,8 @@ INF_PREV    equ 1070                ; the last code length, for code 16
 INF_SSEG    equ 1072                ; INF_DSWS: the stream's segment
 INF_INN     equ 1074                ; bytes the stream may still give (0:
 INF_INNH    equ 1076                ;   65,536), its high word
-INF_WS_SZ   equ 1078
+INF_DST     equ 1078                ; DI at entry: a distance reaches no
+INF_WS_SZ   equ 1080                ;   further back than it
 
 %ifdef INF_DSWS
 %define INF(x) ds:INF_WS+(x)
@@ -67,6 +68,7 @@ inflate:
     push si
     push di
     mov [INF(INF_SP)], sp
+    mov [INF(INF_DST)], di
 %ifdef INF_DSWS
     mov [INF(INF_SSEG)], ax
 %endif
@@ -336,6 +338,7 @@ inf_dynamic:
     call inf_bits
     add ax, 3
 .fill:
+    mov [INF(INF_PREV)], dl         ; (a 17/18's zero is the last length too)
     pop cx
     push cx
     sub cx, bx                      ; no run past the end
@@ -517,6 +520,10 @@ inf_codes:
     pop cx                          ; CX = the length
     mov ax, cx
     call inf_out
+    mov ax, di                      ; no further back than the output made
+    sub ax, [INF(INF_DST)]          ; (inf_out bounds it to 65,536, so this
+    cmp dx, ax                      ; is exact wherever a copy can follow)
+    ja inf_bad
     push si                         ; from ES:DI - distance, forward, so an
     push ds                         ;   overlap repeats as it should
     mov ax, es

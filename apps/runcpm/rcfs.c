@@ -943,10 +943,11 @@ static int rc_oft_tohuge(struct rc_ofile *o, unsigned nrec)
     return 0;
 }
 
-/* rc_oft_grow - room for NREC records in entry o (regrow, moving if it
+/* rc_oft_grow1 - room for NREC records in entry o (regrow, moving if it
  * must; clean entries evicted for the room); 0 = ok, -1 = refused. Past 511
- * records (65,408 bytes) the entry is a huge claim from then on */
-static int rc_oft_grow(struct rc_ofile *o, unsigned nrec)
+ * records (65,408 bytes) the entry is a huge claim from then on. Called
+ * only through rc_oft_grow, which keeps o itself off the evictions */
+static int rc_oft_grow1(struct rc_ofile *o, unsigned nrec)
 {
     unsigned s, para, need, kb;
     if (!o->huge) {
@@ -980,6 +981,21 @@ static int rc_oft_grow(struct rc_ofile *o, unsigned nrec)
     o->seg = s;
     o->para = kb;
     return 0;
+}
+
+/* rc_oft_grow - rc_oft_grow1 with o marked dirty for the length of it, so
+ * a clean o (opened, or just flushed) is never the entry evicted for its
+ * own room: that freed o's claim under it and the write landed nowhere.
+ * Its own flag is put back either way */
+static int rc_oft_grow(struct rc_ofile *o, unsigned nrec)
+{
+    unsigned char d;
+    int r;
+    d = o->dirty;
+    o->dirty = 1;
+    r = rc_oft_grow1(o, nrec);
+    o->dirty = d;
+    return r;
 }
 
 /* rc_oft_get - the entry for (d,u,name), loading the file when the table

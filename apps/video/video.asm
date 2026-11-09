@@ -1067,6 +1067,8 @@ vp_open:
     mov di, vp_rdcur                ; ...and vp_rdat's cursor, which names no
     call os88_rseq_new              ; file and would trust the last one's
     call vp_bmclear                 ; ...and every bookmark, no file's either
+    mov di, vp_cur                  ; ...and the stream's cursor, which
+    call os88_rseq_new              ; vp_curseek would keep as the new file's
     call vp_rmap                    ; ...and the file's first run, mapped
     pop di
     xor ax, ax
@@ -18710,7 +18712,7 @@ vp_tfill:
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ
+    call vp_rseqr                   ; (the map's run in it: 18.4.8.3)
 %ifdef VP_RDTIME
     call vp_rte
 %endif
@@ -18966,7 +18968,7 @@ vp_fillb:                           ; (TWO TIERS: a jmp to vp_tfill here, for
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ
+    call vp_rseqr                   ; (the map's run in it: 18.4.8.3)
 %ifdef VP_RDTIME
     call vp_rte
 %endif

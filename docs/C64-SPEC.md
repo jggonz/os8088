@@ -1587,7 +1587,10 @@ Four rules, each of which exists because getting it wrong is silent:
    a key whose entry is not optionally shifted (a number, a sign) and a
    lower-case letter take none. Only the rest (an upper-case letter,
    space, the scan-mapped keys) use the Shift `c64_key_push` recorded with
-   the press, in bit 7 of the ring's scan code - not alone, because
+   the press, in bit 7 of the ring's scan code (so a scan of $80 or above -
+   Alt+0, F11, Ctrl+PgUp, an enhanced Ctrl or Alt cursor key, none of them
+   a matrix key - is dropped at the push rather than read back as a Shift
+   on its low seven bits: Alt+0 was SHIFT+RUN/STOP) - not alone, because
    `os88_onkey` can arrive late, after the hand has gone to Shift for the
    next key (measured: `e+` pushed the `e` with the `+`'s Shift down). A
    key HELD on the host still takes the live Shift, so

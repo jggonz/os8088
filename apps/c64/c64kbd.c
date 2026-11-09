@@ -435,6 +435,11 @@ static void c64_key_push(int ascii, int scan)
                                              * cannot start to, so this latch
                                              * is one way */
     }
+    if (scan & 0x80)
+        return;                             /* Alt+0, F11, Ctrl+PgUp...: no
+                                             * matrix key, and bit 7 is rule
+                                             * 6's Shift - kept, it would be
+                                             * read as Shift on scan & $7F */
     if (n == c64_ring_h)
         return;                             /* the ring is full: the key is
                                              * dropped, not written past it */

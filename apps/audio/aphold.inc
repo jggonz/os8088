@@ -158,8 +158,8 @@ aph_same:
 ; heap's largest run - a bridge, its conventional piece the smaller by the
 ; pool's. The conventional part MOVABLE, a `ret` its proc (its windows
 ; follow a move; a copy in or out yields nowhere, so nothing pins it). A
-; paragraph step - kern_mega in real mode - is held too: the walker is the
-; same. out: CF = 0 [aph_base], aph_hw; CF = 1 none. clobbers AX, BX, CX,
+; paragraph step - kern_mega in real mode - is held too, PINNED: it is a
+; plain segment, which a move would leave [aph_base] behind. out: CF = 0 [aph_base], aph_hw; CF = 1 none. clobbers AX, BX, CX,
 ; DX (aph_begin's: it keeps none of them)
 ; -----------------------------------------------------------------------------
 aph_claim:
@@ -169,6 +169,8 @@ aph_claim:
     call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
     jc .o                           ; memory in it
     mov [aph_base], dx
+    test byte [aph_hw+HW_STEP+1], 0x10
+    jnz .o                          ; a paragraph step: PINNED (CF = 0)
     jcxz .o                         ; the pool holds it all (CF = 0)
     mov ax, ap_reap.out             ; (a bare `ret`)
     call OSAPI_MEM_MOVABLE

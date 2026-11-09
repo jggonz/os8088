@@ -1542,7 +1542,8 @@ wt_rd1:
 ; conventional piece the smaller by the pool's (the hold then longer than
 ; the region, which nothing reads past). Conventional memory in it is
 ; declared MOVABLE, a `ret` its proc (its windows follow a move; nothing
-; holds a window across a call that can move it).
+; holds a window across a call that can move it) - on a selector step: a
+; paragraph step (kern_mega in real mode) is a plain segment, kept PINNED.
 ; out: CF = 0 [wt_hseg] = the claim, wt_hw its record; CF = 1 nothing claimed.
 ; clobbers AX, BX, CX, DX (wt_plan, its one caller, clobbers them all)
 wt_hhuge:
@@ -1556,6 +1557,8 @@ wt_hhuge:
     call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
     jc .o                           ; memory in it
     mov [wt_hseg], dx
+    test byte [wt_hw+HW_STEP+1], 0x10
+    jnz .o                          ; a paragraph step stays PINNED (CF = 0)
     jcxz .o                         ; ...that piece movable (SPEC.md 50.3.5)
     mov ax, wr_ret
     call OSAPI_MEM_MOVABLE

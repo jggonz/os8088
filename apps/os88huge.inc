@@ -101,7 +101,10 @@ HW_SIZE     equ 14
 ; out: CF = 0 held: the record filled (hw_claim's), DX = the claim, AX = its
 ;      KB, CX = 0FFFFh when conventional memory is in it (the heap fell),
 ;      which the caller declares MOVABLE (OSAPI_MEM_MOVABLE, a `ret` its
-;      proc: its windows follow a move), 0 when the pool holds all of it
+;      proc) on a SELECTOR step only - its windows follow a move; a
+;      paragraph step (HW_STEP = 1000h, kern_mega in real mode) is a plain
+;      segment that does not, so it is kept pinned or given back - 0 when
+;      the pool holds all of it
 ;      CF = 1 nothing held: AX CX DX and the record undefined
 ; keeps BX, SI, DI, BP, DS, ES
 ; -----------------------------------------------------------------------------
@@ -155,6 +158,8 @@ hw_claimfit:
     shr ax, cl
     add ax, 32                      ; ...past it, the next 32 KB
     and al, 0xE0
+    cmp ax, si                      ; no more than this try: the retry was
+    jbe .no                         ; it (freed already) - once, not a loop
     xchg si, ax
     jmp short .claim                ; once more: a bridge, or refused
 .back:
