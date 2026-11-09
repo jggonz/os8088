@@ -969,6 +969,10 @@ ar_paint:
 
 ar_onkey:                           ; AX = the key, SI = the window
     push si
+    push ax                         ; the About card takes the key that
+    call ar_abdismiss               ;   dismisses it: Enter must not also
+    pop ax                          ;   play, an arrow not also move the
+    jc .out                         ;   list under it (as ar_onclick)
     cmp byte [af_setm], 0           ; the card is SETTINGS: its keys first
     je .list
     push ax
