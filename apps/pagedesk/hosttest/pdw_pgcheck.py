@@ -177,5 +177,81 @@ if os.path.exists(x2) and check(x2):
     else:
         raw = open(x2, "rb").read()
         print("ok   X2: D and B extracted from the nested tree, %d bytes, inherited attributes materialised" % len(raw))
+
+# ---- I1: Insert from other PDFs whose object numbers and font names collide (20.16) ----
+src = os.path.join(samples, "PAGES.PDF")
+fsrc = os.path.join(d, "FOREIGN.PDF")
+i1 = os.path.join(d, "I1.PDF")
+if os.path.exists(i1) and os.path.exists(fsrc) and check(i1):
+    import json
+    # (file, 0-based page, quarter turns added); None = a page of PAGES.PDF
+    want = [(src, 0, 0), (fsrc, 1, 0), (fsrc, 3, 0), (src, 1, 0), (fsrc, 2, 1), (fsrc, 0, 0)] + [(src, k, 0) for k in range(2, 8)]
+    if npages(i1) != len(want):
+        fail("I1: %d pages, want %d" % (npages(i1), len(want)))
+    else:
+        txt = {}
+        def pt(f):
+            if f not in txt:
+                txt[f] = pages_text(f)
+            return txt[f]
+        bad = 0
+        out_t, out_r = pages_text(i1), rots(i1)
+        for i, (f, k, q) in enumerate(want):
+            if sorted(out_t[i].split()) != sorted(pt(f)[k].split()):
+                bad += 1
+                print("     I1 page %d text %r want %r" % (i + 1, out_t[i][:40], pt(f)[k][:40]))
+            if out_r[i] != (rots(f)[k] + 90 * q) % 360:
+                bad += 1
+                print("     I1 page %d rotate %d want %d" % (i + 1, out_r[i], (rots(f)[k] + 90 * q) % 360))
+            if q == 0 and pix(i1, i + 1) != pix(f, k + 1):
+                bad += 1
+                print("     I1 page %d draws differently from %s page %d" % (i + 1, os.path.basename(f), k + 1))
+        if bad:
+            fail("I1: %d page checks failed" % bad)
+        else:
+            print("ok   I1: 12 pages - text, rotation and pixels equal the source pages (inherited MediaBox/Resources/Rotate kept)")
+        # shared resources: one copy per foreign FILE, never one per page
+        q = run("qpdf", "--qdf", "--object-streams=disable", "--stream-data=uncompress", i1, "-").stdout
+        n_cb, n_tr = q.count(b"/BaseFont /Courier-Bold"), q.count(b"/BaseFont /Times-Roman")
+        n_form = q.count(b"/Subtype /Form")
+        if (n_cb, n_tr, n_form) != (2, 2, 2):
+            fail("I1: Courier-Bold x%d, Times-Roman x%d, form x%d - want 2 each (one copy per inserted file, not per page)" % (n_cb, n_tr, n_form))
+        else:
+            print("ok   I1: the font and the form used by three pages are copied once for that file (2 files -> 2 copies)")
+        # references rewritten: the Link's /Dest names the output page that is FOREIGN page 4, its URI action survives
+        j = json.loads(run("qpdf", "--json=2", "--json-key=qpdf", "--json-key=pages", i1).stdout.decode())
+        objs = j["qpdf"][1]
+        pgs = [p["object"] for p in j["pages"]]
+        page2 = objs["obj:%s" % pgs[1]]["value"]
+        links = [objs["obj:%s" % r]["value"] for r in page2.get("/Annots", [])]
+        links = [a for a in links if a.get("/Subtype") == "/Link"]
+        if len(links) != 1 or links[0].get("/Dest", [None])[0] != pgs[2] or "example.com" not in json.dumps(links[0].get("/A", {})):
+            fail("I1: the link's /Dest %s does not name page 3's object %s, or lost its action: %s" % (links and links[0].get("/Dest"), pgs[2], links))
+        else:
+            print("ok   I1: the link's destination follows its page to the new number, the URI action is kept")
+        # the note and its popup point at each other and at their page (cycles survive the copy)
+        notes = [a for a in links or [] ]
+        ann = [objs["obj:%s" % r]["value"] for r in page2.get("/Annots", [])]
+        tx = [a for a in ann if a.get("/Subtype") == "/Text"]
+        po = [a for a in ann if a.get("/Subtype") == "/Popup"]
+        refs = page2.get("/Annots", [])
+        if not (tx and po and tx[0].get("/P") == pgs[1] and tx[0].get("/Popup") == refs[ann.index(po[0])] and po[0].get("/Parent") == refs[ann.index(tx[0])]):
+            fail("I1: the inserted page's note and popup do not point at each other and the page")
+        else:
+            print("ok   I1: /P, /Popup and /Parent (the copy's cycles) are rewritten to the new objects")
+        # an inserted page sits under the SOURCE's root /Pages: it must carry its own /CropBox and
+        # /Resources, or it would take up the source root's inheritable ones (verify-insert)
+        own = [objs["obj:%s" % pgs[i]]["value"] for i, (f, k, q) in enumerate(want) if f == fsrc]
+        if not all("/CropBox" in p and "/Resources" in p and "/MediaBox" in p for p in own):
+            fail("I1: an inserted page leans on the source root's inheritable boxes or resources: %s" % own)
+        else:
+            print("ok   I1: every inserted page carries its own /MediaBox, /CropBox and /Resources")
+        # object numbers: no number of the source is reused (the source's own bytes are the prefix of the output)
+        raw = open(i1, "rb").read()
+        sraw = open(src, "rb").read()
+        if not raw.startswith(sraw.rstrip(b"\n")[:len(sraw) - 64]):
+            fail("I1: the source's bytes are not the output's prefix")
+        else:
+            print("ok   I1: the source file is the output's prefix (an incremental update); %d bytes added" % (len(raw) - len(sraw)))
 print("pgcheck: %d failure(s)" % fails)
 sys.exit(1 if fails else 0)

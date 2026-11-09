@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
 extern unsigned pde_fail;
@@ -27,7 +28,7 @@ extern int pdh_cluster;
 #define SEG_WBUF  0x7000
 #define SEG_EDS   0x8000
 #define SEG_MAP   0x9800
-static pdw g_mapn, g_extract, g_lastmode;
+static pdw g_mapn, g_extract, g_lastmode, g_big, g_lastdetail;
 static int fails;
 #define CK(c, ...) do { if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); } else { printf("ok   "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
@@ -67,7 +68,7 @@ static int eng_open(const char *file)
 static void wrt_init(void)
 {
     struct pdxb_init in; memset(&in, 0, sizeof in);
-    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = g_extract ? 40 : 18;
+    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = (g_extract || g_big) ? 40 : 18;
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0);
 }
@@ -100,7 +101,7 @@ static pdw save(const char *dst)
     sv.mode = g_extract ? PDSV_EXTRACT : PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = nE;
     pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
     do { r = (pdw)pdw_verb(g_extract ? PDV_WRT_EXTRACT : PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); } while (r == PDE_BUSY && ++g < 20000);
-    g_lastmode = sv.mode;
+    g_lastmode = sv.mode; g_lastdetail = sv.err_detail;
     if (r) printf("     save %s -> %u detail %u (phase %u item %u)\n", dst, r, sv.err_detail, sv_lastph, sv_lasti);
     return r;
 }
@@ -114,13 +115,19 @@ static int annots(pdw page, struct pdxb_annot *out, int max)
     }
     return i;
 }
+static void ins_slot(int k, const char *name, pdw clus, pdw vol1)
+{
+    pd_ffill(SEG_MAP, (pdw)(PDM_NAMES + 14 * k), 0, 14);
+    pd_fcopy_out(name, SEG_MAP, (pdw)(PDM_NAMES + 14 * k), (pdw)(strlen(name) + 1));
+    pd_fpokew(SEG_MAP, (pdw)(1002 + 4 * k), clus); pd_fpokew(SEG_MAP, (pdw)(1004 + 4 * k), vol1);
+}
 static void cp(const char *a, const char *b) { char c[256]; snprintf(c, sizeof c, "cp '%s' '%s'", a, b); system(c); }
 
 int main(int argc, char **argv)
 {
     static struct pdxb_annot an[32]; int n, i, k; pdw r, noteobj = 0, hlobj = 0, hlgen = 0, notegen = 0;
     pdh_cluster = 1; pdw_host_clu = 512;
-    remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("P2.PDF"); remove("X2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
+    remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("P2.PDF"); remove("X2.PDF"); remove("I1.PDF"); remove("I2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
     cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
     if (system("python3 ../../apps/pagedesk/hosttest/pdw_nest.py NEST.PDF")) { printf("FAIL: pdw_nest.py\n"); return 2; }
     /* round A: four new marks on a real sample */
@@ -259,6 +266,102 @@ int main(int argc, char **argv)
         CK(r == PDE_OK, "nested tree: Extract answers %u", r);
         g_extract = 0; map_set(0, 0);
         printf("PDW-NEST X2.PDF\n");
+    }
+
+    /* ---- Insert (PAGEDESK-SPEC 20.16): pages of two other PDFs whose object numbers and font names
+       COLLIDE with PAGES.PDF's, one of them in another folder; the refusals; the rollbacks ---- */
+    {   unsigned map[12]; static struct pdxb_pageinfo q; int j; char cwd[200];
+        static const int hasf[1] = { 0 };
+        (void)hasf;
+        if (system("python3 ../../apps/pagedesk/hosttest/pdw_foreign.py FOREIGN.PDF && mkdir -p FD && cp FOREIGN.PDF FD/FOREIGN2.PDF")) { printf("FAIL: pdw_foreign.py\n"); return 2; }
+        if (!getcwd(cwd, sizeof cwd)) return 2;
+        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        cp("DOC.PDF", "DOCKEEP.PDF"); cp("FOREIGN.PDF", "FOREIGNKEEP.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF for Insert");
+        /* S0, F(0):1, F(0):3, S1, F(1):2 turned, F(0):0, S2..S7 */
+        map[0] = PDM_MK(PDM_SRC, 0, 0); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)); map[2] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 3));
+        map[3] = PDM_MK(PDM_SRC, 0, 1); map[4] = PDM_MK(PDM_FOREIGN, 1, PDM_FORE(1, 2)); map[5] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 0));
+        for (j = 6; j < 12; j++) map[j] = PDM_MK(PDM_SRC, 0, j - 4);
+        map_set(map, 12);
+        ins_slot(0, "FOREIGN.PDF", 0, 1); ins_slot(1, "FOREIGN2.PDF", 1, 1);
+        snprintf(pdw_host_fdir[1], 128, "%s/FD", cwd); snprintf(pdw_host_tgtdir, 128, "%s", cwd);
+        g_big = 1; wrt_init(); es_reset();
+        r = save("I1.PDF");
+        CK(r == PDE_OK, "Insert: three pages of FOREIGN.PDF and one of a file in another folder answer %u", r);
+        CK((g_lastmode & PDW_OUT_REOPEN) != 0, "the writer says PDENG was left away from the source (re-open)");
+        CK(pdw_host_swaps > 0, "the foreign file in the other folder was read from it (%u folder switches)", (unsigned)pdw_host_swaps);
+        CK(system("cmp -s DOC.PDF DOCKEEP.PDF && cmp -s FOREIGN.PDF FOREIGNKEEP.PDF && cmp -s FD/FOREIGN2.PDF FOREIGNKEEP.PDF") == 0, "the source and both foreign files are byte for byte as they were");
+        cp("I1.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the result");
+        pde_verb(PDV_ENG_PAGEINFO, 12, 0, 0);
+        CK(pde_fail != 0, "exactly 12 pages");
+        for (j = 0; j < 12; j++) { pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
+            printf("     page %d: obj %u rotate %u media %d x %d\n", j, q.objnum, q.rotate, q.media.x1 / 16, q.media.y1 / 16); }
+        printf("PDW-INSERT I1.PDF PAGES.PDF FOREIGN.PDF\n");
+        /* the refusals and rollbacks: each leaves no PDSAVE.$$$ and PDENG to be re-opened */
+        cp("DOCKEEP.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF again");
+        map[0] = PDM_MK(PDM_SRC, 0, 0); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 9)); for (j = 2; j < 9; j++) map[j] = PDM_MK(PDM_SRC, 0, j - 1);
+        map_set(map, 9); ins_slot(0, "FOREIGN.PDF", 0, 1); wrt_init();
+        r = save("I2.PDF");
+        CK(r == PDE_RANGE && g_lastdetail == 17, "a page past the end of the inserted file is refused (%u, detail %u)", r, g_lastdetail);
+        CK(access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0, "...and nothing is left behind");
+        CK((g_lastmode & PDW_OUT_REOPEN) != 0, "...the primary is told to re-open the source");
+        ins_slot(0, "NOSUCH.PDF", 0, 1); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 0)); map_set(map, 9); ins_slot(0, "NOSUCH.PDF", 0, 1);
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
+        r = save("I2.PDF");
+        CK(r != PDE_OK && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && g_lastdetail == 20, "a missing foreign file is refused with %u, names the file (detail %u) and writes nothing", r, g_lastdetail);
+        cp("../../apps/pagedesk/samples/ACROFORM.PDF", "FORM.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); map_set(map, 9); ins_slot(0, "FORM.PDF", 0, 1); wrt_init();
+        r = save("I2.PDF");
+        CK(r == PDE_LIMIT && g_lastdetail == 18 && access(PDW_TEMPNAME, F_OK) != 0, "a page with form fields is refused (%u, detail %u)", r, g_lastdetail);
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); map_set(map, 9); ins_slot(0, "FOREIGN.PDF", 0, 1); wrt_init();
+        pdw_host_budget = 6000;
+        r = save("I2.PDF");
+        pdw_host_budget = -1;
+        CK(r == PDE_DISKFULL && access(PDW_TEMPNAME, F_OK) != 0, "a full disk in the middle of an insert answers %u and removes the temp file", r);
+        /* Esc: abort after a few slices */
+        {   struct pdxb_save sv; int g = 0;
+            CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
+            memset(&sv, 0, sizeof sv); sv.pages_seg = SEG_MAP; sv.pages_count = 9; strcpy(sv.target, "I2.PDF"); strcpy(sv.source, "DOC.PDF");
+            sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = 0;
+            pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
+            do { r = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); g++; } while (r == PDE_BUSY && g < 6);
+            CK(r == PDE_BUSY, "an insert is still running after %d slices", g);
+            pdw_verb(PDV_WRT_ABORT, SEG_XB, 0, 0);
+            CK(access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0, "Esc removes the temp file and writes no target");
+        }
+        /* verify-insert: the two above stop in PH_COPY, before PDENG leaves the source. Stop INSIDE a
+           foreign window (PDENG holds the foreign file): Esc, then a full disk, on I1's map */
+        {   struct pdxb_save sv; int g = 0, inwin; long b; pdw ph;
+            map[0] = PDM_MK(PDM_SRC, 0, 0); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)); map[2] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 3));
+            map[3] = PDM_MK(PDM_SRC, 0, 1); map[4] = PDM_MK(PDM_FOREIGN, 1, PDM_FORE(1, 2)); map[5] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 0));
+            for (j = 6; j < 12; j++) map[j] = PDM_MK(PDM_SRC, 0, j - 4);
+            map_set(map, 12); ins_slot(0, "FOREIGN.PDF", 0, 1); ins_slot(1, "FOREIGN2.PDF", 1, 1);
+            CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
+            memset(&sv, 0, sizeof sv); sv.pages_seg = SEG_MAP; sv.pages_count = 12; strcpy(sv.target, "I2.PDF"); strcpy(sv.source, "DOC.PDF");
+            sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = 0;
+            pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
+            inwin = 0;
+            do { r = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); g++;
+                 if (sv.mode & PDW_OUT_REOPEN) inwin++; } while (r == PDE_BUSY && inwin < 4 && g < 4000);
+            ph = sv_lastph;
+            CK(r == PDE_BUSY && (ph == PH_FOPEN || ph == PH_XROOT || ph == PH_XDISC || ph == PH_XCOPY || ph == PH_FROOTS),
+               "an insert stopped inside a foreign window (phase %u, after %d slices)", ph, g);
+            pdw_verb(PDV_WRT_ABORT, SEG_XB, 0, 0);
+            CK(access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && (sv.mode & PDW_OUT_REOPEN) != 0,
+               "Esc inside a window removes the temp file, writes no target and leaves the re-open to the primary");
+            for (b = 6321, ph = 0; b < 9800 && !(ph >= PH_XROOT && ph != PH_XHEAD && ph != PH_XBLANK && ph != PH_VFY); b += 64) {
+                if (eng_open("DOC.PDF")) break;
+                wrt_init();
+                pdw_host_budget = b; r = save("I2.PDF"); pdw_host_budget = -1;
+                ph = r == PDE_DISKFULL ? sv_lastph : 0;
+            }
+            CK(ph >= PH_XROOT && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && (g_lastmode & PDW_OUT_REOPEN) != 0
+               && g_lastdetail < 20, "a full disk inside a window (phase %u) removes the temp file, leaves the re-open to the primary "
+               "and does not blame the foreign file (detail %u)", ph, g_lastdetail);
+        }
+        g_big = 0; map_set(0, 0);
     }
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails;

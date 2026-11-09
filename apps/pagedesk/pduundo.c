@@ -81,8 +81,10 @@ static pdw ud_ei;                       /* the entry being applied */
 void pdu_pg_apply(const void *delta, unsigned len, int undo) { }
 #endif
 
+unsigned pdu_insmask;                   /* insert (20.16.2): slots the history may name - verify-insert */
 static void ud_init(void)
 {
+    pdu_insmask = 0;                    /* verify-insert */
     ud_c0 = ud_n = ud_cur = ud_ntot = 0;
     ud_depth = ud_open = ud_dead = 0;
     ud_trunc = ud_lost = ud_told = 0;

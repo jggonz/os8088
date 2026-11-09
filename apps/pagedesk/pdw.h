@@ -55,6 +55,7 @@ void pdw_cross(pdw clus, pdw vol);              /* job start: remember "here" as
                                                    0,0 = one folder, the calls below do nothing   */
 void pdw_in_src(void);                          /* stand in the source's folder (PDENG, source reads) */
 void pdw_in_tgt(void);                          /* ...and back in the target's                    */
+void pdw_src_dir(pdw clus, pdw vol1);           /* Insert (20.16): the "source" folder is now (clus, volume + 1) */
 
 /* ---- the date and the author (set by the primary, 20.5.10) -------------- */
 extern char pdw_date[24];                       /* "D:YYYYMMDDHHmmSS", "" = omit */

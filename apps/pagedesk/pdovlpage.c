@@ -25,6 +25,21 @@ static unsigned ovl_pg_entry(unsigned v)
     return pdu_pgmap ? pdu_pgw(v) : PDM_MK(PDM_SRC, 0, v);
 }
 
+/* pdu_pg_id's inverse for the notes panel (verify-insert): the view page that
+ * shows source page `id` and owns its records, pdu_npages = none does */
+static int ovl_pg_view(unsigned id)
+{
+    unsigned v, e;
+    if (!pdu_pgmap)
+        return (int)id;
+    for (v = 0; v < pdu_npages; v++) {
+        e = pdu_pgw(v);
+        if (PDM_KIND(e) == PDM_SRC && PDM_IDX(e) == id)
+            break;
+    }
+    return (int)v;
+}
+
 /* the page a command is for: the current one, or the Pages panel's selection */
 static unsigned ovl_pg_tgt(void)
 {
@@ -78,7 +93,7 @@ static unsigned ovl_pg_del(unsigned at)
 /* apply (undo = 0) or revert (undo = 1) a delta (20.11.1) */
 static int ovl_pg_apply(const unsigned *d, int undo)
 {
-    unsigned op, a, b, e, e2, n;
+    unsigned op, a, b, e, e2, n, k;
     if (!ovl_pg_ready())
         return 0;
     op = d[0]; a = d[1]; b = d[2]; e = d[3];
@@ -94,6 +109,14 @@ static int ovl_pg_apply(const unsigned *d, int undo)
             n = a < pdu_npages ? a : pdu_npages - 1;
         } else
             ovl_pg_ins(a, e);
+    } else if (op == 5) {                               /* b pages of another file, entries e, e+1.. (20.16) */
+        if (undo) {
+            for (k = 0; k < b; k++)
+                ovl_pg_del(a);
+            n = a < pdu_npages ? a : pdu_npages - 1;
+        } else
+            for (k = 0; k < b; k++)
+                ovl_pg_ins(a + k, e + k);
     } else if (op == 4) {
         if (undo) { e = ovl_pg_del(b); ovl_pg_ins(a, e); }
         else { e = ovl_pg_del(a); ovl_pg_ins(b, e); n = b; }
@@ -160,12 +183,127 @@ static void ovl_pg_prompt(int kind, const char *what, int seed)
     ovl_pg_ask(what);
 }
 
+
+/* ---- Insert from PDF (20.16): the file, then its pages ---- */
+static char pdu_insq[56];               /* the prompt, with the file's name in it */
+static int pdu_inslot;                  /* the slot the chosen file has in the row */
+
+/* the slot a file takes: the one that already names it, else the lowest no
+ * map entry uses and the undo history cannot bring back; -1 = three files
+ * are in use. A slot is reserved from the moment it is named until the
+ * history starts again (pdu_insmask, cleared by ud_init): an Undo of a Delete
+ * page or a Redo of an Insert puts back map entries that name the slot by
+ * number, so renaming it to another file would save that file's pages in
+ * their place, without a word */
+static int ovl_ins_slot(const char *name)
+{
+    unsigned seg, i, e, used, k, same;
+    char c;
+    seg = pdu_dcseg(PDU_DC_PAGES);
+    if (!pdu_undo_can() && !pdu_redo_can())
+        pdu_insmask = 0;                /* no history: only the map can name a slot */
+    used = pdu_insmask;
+    for (i = 0; i < pdu_npages; i++) {
+        e = pdu_pgw(i);
+        if (PDM_KIND(e) == PDM_FOREIGN)
+            used |= 1u << ((PDM_IDX(e) >> 10) & 3);
+    }
+    for (k = 0; k < PDM_NSLOT; k++) {
+        if (!(used & (1u << k)))
+            continue;
+        same = pd_fpeekw(seg, 1002 + 4 * k) == pdu_tgtplace.clus
+               && pd_fpeekw(seg, 1004 + 4 * k) == pdu_tgtplace.vol + 1u;
+        for (i = 0; same && i < 14; i++) {
+            c = pd_fpeekb(seg, PDM_NAMES + 14 * k + i);
+            if (c != name[i])
+                same = 0;
+            if (!c)
+                break;
+        }
+        if (same)
+            return k;
+    }
+    for (k = 0; k < PDM_NSLOT; k++)
+        if (!(used & (1u << k)))
+            return k;
+    return -1;
+}
+
+/* the dialog named the file; the instance stands in its folder */
+static int ovl_ins_file(const char *name)
+{
+    unsigned seg;
+    int k;
+    if (!ovl_pg_ready())
+        return 1;
+    os88_file_here(&pdu_tgtplace);
+    k = ovl_ins_slot(name);
+    if (k < 0) {
+        pdu_tell("Three files at most.");
+        return 1;
+    }
+    seg = pdu_dcseg(PDU_DC_PAGES);
+    pd_fcopy_out(name, seg, PDM_NAMES + 14 * k, os88_strlen(name) + 1);
+    pd_fpokew(seg, 1002 + 4 * k, pdu_tgtplace.clus);
+    pd_fpokew(seg, 1004 + 4 * k, pdu_tgtplace.vol + 1u);
+    pdu_insmask |= 1u << k;             /* named: kept while the history can name it */
+    pdu_inslot = k;
+    os88_strcpy(pdu_insq, "Insert pages of ", sizeof(pdu_insq));
+    pdu_cat(pdu_insq, name, sizeof(pdu_insq));
+    pdu_cat(pdu_insq, " (3 or 2-4): ", sizeof(pdu_insq));
+    ovl_pg_prompt(PK_INSERT, pdu_insq, 0);
+    return 1;
+}
+
+/* Enter on the page range: one page operation, so one Undo */
+static void ovl_ins_go(void)
+{
+    unsigned i, lo, hi, n, e, v;
+    lo = hi = 0;
+    i = 0;
+    while (pdu_pkbuf[i] >= '0' && pdu_pkbuf[i] <= '9')
+        lo = lo * 10 + (pdu_pkbuf[i++] - '0');
+    hi = lo;
+    if (pdu_pkbuf[i] == '-') {
+        hi = 0;
+        i++;
+        while (pdu_pkbuf[i] >= '0' && pdu_pkbuf[i] <= '9')
+            hi = hi * 10 + (pdu_pkbuf[i++] - '0');
+    }
+    if (pdu_pkbuf[i] || lo < 1 || hi < lo || hi > PD_MAXPAGES) {
+        pdu_tell("Use a page like 3 or 2-4.");
+        return;
+    }
+    n = hi - lo + 1;
+    if (pdu_npages + n > PDM_MAXMAP) {
+        pdu_tell("Page operations handle up to 240 pages.");
+        return;
+    }
+    for (v = 0; v < pdu_npages; v++) {
+        e = pdu_pgw(v);
+        if (PDM_KIND(e) == PDM_FOREIGN && (int)((PDM_IDX(e) >> 10) & 3) == pdu_inslot
+            && (PDM_IDX(e) & 1023u) + 1 >= lo && (PDM_IDX(e) & 1023u) < hi) {
+            pdu_tell("Those pages are already in.");
+            return;
+        }
+    }
+    pdu_pk = PK_NONE;
+    ovl_pg_do(5, ovl_pg_tgt() + 1, n, PDM_MK(PDM_FOREIGN, 0, PDM_FORE(pdu_inslot, lo - 1)));
+    pdu_tell("Inserted; Save As draws them.");
+}
+
 static int ovl_pg_cmd(int id)
 {
     unsigned t, e;
     if (id == PGC_NEW) {
         pdu_pk = PK_NEWSIZE;
         pdu_tell("New page: 1 Letter, 2 A4, 3 Letter wide, 4 A4 wide");
+        return 1;
+    }
+    if (id == PGC_INSERT) {             /* 20.16: the file first, then which of its pages */
+        pdu_pgfd = 3;
+        if (os88_file_dlg(OS88_FDLG_OPEN, pdu_win, 0) != 0)
+            pdu_tell("The file dialog is already open.");
         return 1;
     }
     if (id == C_P_EXTRACT) {
@@ -192,10 +330,14 @@ static int ovl_pg_cmd(int id)
         pdu_tell(pdu_line);
         break;
     case PGC_DUP:
+        if (PDM_KIND(pdu_pgw(t)) == PDM_FOREIGN) {     /* verify-insert: the writer takes a file page once (15) */
+            pdu_tell(pdu_svfirst);
+            break;
+        }
         ovl_pg_do(3, t + 1, 0, pdu_pgw(t));
         break;
-    case C_P_BLANK:
-        e = PDM_MK(PDM_BLANK, 0, PDM_IDX(pdu_pgw(t)));
+    case C_P_BLANK:                     /* the size of the page's id: an inserted page's is 0 (verify-insert) */
+        e = PDM_MK(PDM_BLANK, 0, pdu_pg_id(t));
         ovl_pg_do(3, t + 1, 0, e);
         break;
     case PGC_UP:
@@ -245,6 +387,8 @@ static int ovl_pg_list(void)
             return -1;
         for (v = lo - 1; v < hi; v++) {
             e = ovl_pg_entry(v);
+            if (PDM_KIND(e) == PDM_FOREIGN)     /* the extract pipeline reads one document */
+                return -3;
             dup = 0;
             for (k = 0; k < pdu_xtn; k++)       /* a source page twice would be two page objects */
                 if (PDM_KIND(e) == PDM_SRC && pd_fpeekw(seg, (unsigned)(2 * k)) == e)
@@ -321,7 +465,7 @@ static int ovl_pg_key(int ascii, int scan)
         if (pdu_pk == PK_EXTRACT) {
             n = ovl_pg_list();
             if (n < 0) {
-                pdu_tell(n == -1 ? "Use a list like 1,3-5." : "Page operations handle up to 240 pages.");
+                pdu_tell(n == -1 ? "Use a list like 1,3-5." : n == -3 ? pdu_svfirst : "Page operations handle up to 240 pages.");
                 return 1;
             }
             if (n == 0)
@@ -330,6 +474,10 @@ static int ovl_pg_key(int ascii, int scan)
             pdu_pgfd = 2;
             if (os88_file_dlg(OS88_FDLG_SAVE, pdu_win, "EXTRACT.PDF") != 0)
                 pdu_tell("The file dialog is already open.");
+            return 1;
+        }
+        if (pdu_pk == PK_INSERT) {
+            ovl_ins_go();
             return 1;
         }
         n = 0;                          /* PK_MOVE: a position */
@@ -344,12 +492,13 @@ static int ovl_pg_key(int ascii, int scan)
         if ((unsigned)(n - 1) != v)
             ovl_pg_do(4, v, n - 1, 0);
         return 1;
-    } else if (((ascii >= '0' && ascii <= '9') || (pdu_pk == PK_EXTRACT && (ascii == ',' || ascii == '-')))
+    } else if (((ascii >= '0' && ascii <= '9') || (pdu_pk == PK_EXTRACT && ascii == ',')
+                || (pdu_pk != PK_MOVE && ascii == '-'))
                && pdu_pklen < 20) {
         pdu_pkbuf[pdu_pklen++] = ascii;
         pdu_pkbuf[pdu_pklen] = 0;
     }
-    ovl_pg_ask(pdu_pk == PK_EXTRACT ? "Extract pages (e.g. 1,3-5): " : "Move page to position: ");
+    ovl_pg_ask(pdu_pk == PK_EXTRACT ? "Extract pages (e.g. 1,3-5): " : pdu_pk == PK_INSERT ? pdu_insq : "Move page to position: ");
     return 1;
 }
 
@@ -359,6 +508,8 @@ static int ovl_pg_onfile(const char *name)
     int kind, i, same;
     kind = pdu_pgfd;
     pdu_pgfd = 0;
+    if (kind == 3)
+        return ovl_ins_file(name);
     if (kind == 2) {                    /* never over the document being read */
         os88_file_here(&pdu_tgtplace);
         same = pdu_tgtplace.clus == pdu_docplace.clus && pdu_tgtplace.vol == pdu_docplace.vol;
@@ -407,6 +558,10 @@ static int ovl_save_begin(const char *name, int kind)
         os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
     }
     pdu_wkb = PDU_WBUF_KB;
+    if (kind == 0 && pdu_pgmap)         /* 20.16: a foreign window carves its bit maps from a big claim */
+        for (r = 0; r < (int)pdu_npages; r++)
+            if (pdu_pg_kind(r) == PDM_FOREIGN)
+                pdu_wkb = 40;
     if (kind == 2) {                    /* 20.11.4: Extract's buffer follows the source's /Size */
         pdu_mcall(PDU_M_ENG, PDV_ENG_TRAILER, 0, 0, 0);
         r = pd_fpeekw(pdu_xb, 0);       /* pdxb_trailer's /Size, its first word */
@@ -462,14 +617,29 @@ static int ovl_save_begin(const char *name, int kind)
  * document (20.11.5) - the writer closed it to read the output through */
 static int ovl_save_done(unsigned err)
 {
-    int reopen;
+    int reopen, r;
+    unsigned err_d;
+    static char err_n[14];
     reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;
     pdu_wrt_out();                      /* 16.2: the writer is freed after */
     if (err) {
         os88_strcpy(pdu_line, "Could not save ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_target, sizeof(pdu_line));
         pdu_cat(pdu_line, ": ", sizeof(pdu_line));
-        pdu_cat(pdu_line, pdu_errtext(err), sizeof(pdu_line));
+        err_d = pdu_xsave.err_detail;
+        if (err != PDE_NOMEM && err_d >= 20 && err_d < 20 + PDM_NSLOT) {     /* 20.16: the foreign file at fault */
+            for (r = 0; r < 13; r++) {
+                err_n[r] = pd_fpeekb(pdu_dcseg(PDU_DC_PAGES), PDM_NAMES + 14 * (err_d - 20) + r);
+                if (!err_n[r])
+                    break;
+            }
+            err_n[r] = 0;
+            pdu_cat(pdu_line, err_n, sizeof(pdu_line));
+            pdu_cat(pdu_line, ": ", sizeof(pdu_line));
+        }
+        pdu_cat(pdu_line, err == PDE_RANGE && err_d == 17 ? "page past the file's end."
+                : err == PDE_LIMIT && err_d == 18 ? "form fields or scripts."
+                : pdu_errtext(err), sizeof(pdu_line));
         pdu_wsay(pdu_line);
         if (reopen)
             pdu_reopen_begin();

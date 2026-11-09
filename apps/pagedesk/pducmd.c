@@ -29,7 +29,7 @@ static int pdu_hpage;
 #define MI_BLANK   6
 #define MI_DUP     7
 #define MI_DELPG   8
-static const char *pdu_mfile[9];
+static const char *pdu_mfile[10];                 /* insert: File row 9 */
 #define ME_UNDO    0
 #define ME_REDO    1
 #define ME_DEL     2
@@ -69,7 +69,7 @@ static const char *pdu_mhelp[3];
 
 static struct os88_menuset pdu_menus = {
     "PageDesk", 0, 5,
-    { { "File", pdu_mfile, 9 },
+    { { "File", pdu_mfile, 10 },                                     /* insert */
       { "Edit", pdu_medit, 11 },
       { "View", pdu_mview, 8 },
       { "Document", pdu_mdoc, 11 },
@@ -732,6 +732,10 @@ static struct os88_place pdu_hereplace;
 void os88_onfile(int mode, const char *name, unsigned size_lo,
                  unsigned size_hi, void *win)
 {
+    if (pdu_pgfd == 3) {                /* insert: a file to take pages from, not to open */
+        ovl_pg_onfile(name);
+        return;
+    }
     if (mode == OS88_FDLG_OPEN) {
         pdu_open_begin(name);
         return;

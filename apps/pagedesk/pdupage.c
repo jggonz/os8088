@@ -29,11 +29,12 @@
 #define PK_MOVE     3
 #define PK_NEWSIZE  4
 #define PK_REPLACE  5
+#define PK_INSERT   6
 
 static int pdu_pgmap;           /* the view is a page map, not the source's order */
 static unsigned pdu_srcn;       /* pages in the source document */
 static int pdu_pk;              /* PK_* */
-static int pdu_pgfd;            /* the file dialog was raised for 1 New or 2 Extract */
+static int pdu_pgfd;            /* the file dialog was raised for 1 New, 2 Extract or 3 Insert */
 static int pdu_savekind;        /* the running job: 0 Save As, 1 New, 2 Extract */
 static char pdu_pkbuf[24];
 static int pdu_pklen;
@@ -65,9 +66,10 @@ unsigned pdu_pg_count(void)
     return pdu_npages;
 }
 
+static unsigned pdu_pg_kind(unsigned i);
 unsigned pdu_pg_id(unsigned i)
 {
-    return pdu_pgmap ? PDM_IDX(pdu_pgw(i)) : i;
+    return pdu_pgmap ? (pdu_pg_kind(i) == PDM_FOREIGN ? 0 : PDM_IDX(pdu_pgw(i))) : i;   /* insert: paper the size of page 1 */
 }
 
 static unsigned pdu_pg_kind(unsigned i)
@@ -135,7 +137,7 @@ static const char *pdu_pg_why(int id)
         return "This document is signed: it opens read-only.";
     /* the map and the Extract list are 240 entries each (pdwmap.h) */
     if (id != C_P_EXTRACT && (pdu_npages > PDM_MAXMAP
-        || (pdu_npages == PDM_MAXMAP && (id == PGC_DUP || id == C_P_BLANK))))
+        || (pdu_npages == PDM_MAXMAP && (id == PGC_DUP || id == C_P_BLANK || id == PGC_INSERT))))
         return "Page operations handle up to 240 pages.";
     if (id == C_P_DELETE && pdu_npages < 2)
         return "The last page cannot be deleted.";
@@ -149,19 +151,19 @@ static const char *pdu_pg_why(int id)
 /* the page commands' menu rows (12.4): menu << 4 | item, the command, the
  * text - ONE table for both the sync and the dispatch. The items follow
  * pducmd.c's: File 5-8 after Close, Edit 8-10 after Select all, Document
- * 9-10 after Forward (a pull-down holds 11). Insert from another PDF
- * (PGC_INSERT, 20.11.7) has no row until it is built. */
-#define PDU_PGMN 9
+ * 9-10 after Forward (a pull-down holds 11); File 9 is Insert from PDF
+ * (PGC_INSERT, 20.16). */
+#define PDU_PGMN 10
 static const unsigned char pdu_pgmrow[PDU_PGMN] = {
-    0x05, 0x06, 0x18, 0x19, 0x1A, 0x07, 0x08, 0x39, 0x3A };
+    0x05, 0x06, 0x18, 0x19, 0x1A, 0x07, 0x08, 0x39, 0x3A, 0x09 };
 static const unsigned char pdu_pgmcmd[PDU_PGMN] = {
     C_P_EXTRACT, C_P_BLANK, PGC_UP, PGC_DOWN, PGC_MOVE, PGC_DUP,
-    C_P_DELETE, C_P_ROTL, C_P_ROTR };
+    C_P_DELETE, C_P_ROTL, C_P_ROTR, PGC_INSERT };
 static const char *const pdu_pgmtxt[PDU_PGMN] = {
     "\001Extract pages...", "\001Insert blank page",
     "\001Move page earlier", "\001Move page later", "\001Move page to...",
     "\001Duplicate page", "\001Delete page", "\001Rotate page left",
-    "\001Rotate page right" };
+    "\001Rotate page right", "\001Insert from PDF..." };
 
 static const char *pdu_why(int id);
 static void pdu_pg_msync(const char **mf, const char **me, const char **md)

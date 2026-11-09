@@ -31,6 +31,7 @@ pdw pdw_engvec[2];                      /* PDENG's door, offset then segment  */
 #include "pdwsave.c"
 #include "pdwpg.c"
 #include "pdwgc.c"
+#include "pdwin.c"
 
 /* ---- the verbs ------------------------------------------------------------ */
 static pdw v_init(pdw bx)
