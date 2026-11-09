@@ -85,6 +85,13 @@ scores are kept too, and come back when the game is next switched on.
 | Add ROM sets... | adds a ROM set |
 | a game's name | chooses that game and plays it |
 
+## The Arcade menu
+
+| Item | What it does |
+|---|---|
+| About Arcade | Shows who made it |
+| Close | Closes ARCADE |
+
 ## Sound
 
 With a Sound Blaster every sound plays mixed. Q*bert's sound board runs
