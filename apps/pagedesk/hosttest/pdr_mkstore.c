@@ -24,6 +24,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
 extern unsigned pde_fail;
 extern int pdh_load(const char *path);
 extern int pdh_cluster;
+extern char pdh_name[14];
 
 #define SEG_XB    0x2000
 #define SEG_CACHE 0x3000
@@ -35,7 +36,10 @@ static int fails;
 
 pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
 {
-    pdw r = (pdw)pde_verb(verb, bx, cx, dx);
+    pdw r;
+    if (verb == PDV_ENG_OPEN) { struct pdxb_open op; pd_fcopy_in(SEG_XB, 0, &op, sizeof op);
+        if (op.state == 0 && strcmp(op.name, pdh_name) && !pdh_load(op.name)) strcpy(pdh_name, op.name); }
+    r = (pdw)pde_verb(verb, bx, cx, dx);
     pdw_engcf = pde_fail != 0;
     return r;
 }
@@ -43,6 +47,7 @@ static int eng_open(const char *file)
 {
     struct pdxb_init in; struct pdxb_open op; unsigned r; int n = 0;
     if (pdh_load(file)) return -1;
+    strcpy(pdh_name, "DOC.PDF");
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = 16;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
