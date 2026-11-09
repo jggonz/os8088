@@ -47,6 +47,7 @@ STUB = """
     mov ds, ax
 %endif
     xor si, si
+    xor dx, dx                      ; the stream may take all 64KB of 2000h
     call inflate
     mov ax, 0
     adc ax, 0

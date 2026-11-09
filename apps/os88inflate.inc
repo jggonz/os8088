@@ -14,10 +14,11 @@
 ; is decoded once.
 ;
 ;   inflate   in   DS:SI = the stream, ES:DI = where its bytes go, CX = how
-;                  many bytes it must make (0 = 65,536)
+;                  many bytes it must make (0 = 65,536), DX = how many the
+;                  stream may take (0 = 65,536): no byte past them is read
 ;             out  CF=0: exactly CX bytes made, DI past them, SI past the
-;                  stream; CF=1: the stream is bad, or makes more or fewer.
-;                  Clobbers AX, BX, CX, DX, BP; DS, ES kept.
+;                  stream; CF=1: the stream is bad, makes more or fewer, or
+;                  runs past DX. Clobbers AX, BX, CX, DX, BP; DS, ES kept.
 ;
 ; THE INCLUDER defines INF_WS, a label of INF_WS_SZ bytes in its own segment
 ; (bss), reached through CS - the stream's segment is DS. Interrupts may come
@@ -27,7 +28,7 @@
 ; CS as a code selector that faults a store, ~77 us each, and the work space
 ; is written several times a BIT (docs/plans/ARCADE-MEGA-PLAN.md M2). Then
 ;   inflate   in   DS = the includer's own segment (INF_WS's), AX:SI = the
-;                  stream, ES:DI and CX as above; out as above, DS kept.
+;                  stream, ES:DI, CX and DX as above; out as above, DS kept.
 ; The stream's segment is banked and loaded into DS for a byte's refill and
 ; a stored block's copy only - a segment load every 8 bits, the price.
 ; =============================================================================
@@ -50,7 +51,9 @@ INF_TMP     equ 1066                ; inf_decode's length, as an offset
 INF_HSYM    equ 1068                ;   ...and the symbols it decodes to
 INF_PREV    equ 1070                ; the last code length, for code 16
 INF_SSEG    equ 1072                ; INF_DSWS: the stream's segment
-INF_WS_SZ   equ 1074
+INF_INN     equ 1074                ; bytes the stream may still give (0:
+INF_INNH    equ 1076                ;   65,536), its high word
+INF_WS_SZ   equ 1078
 
 %ifdef INF_DSWS
 %define INF(x) ds:INF_WS+(x)
@@ -73,6 +76,12 @@ inflate:
     jnz .sized
     inc word [INF(INF_LEFTH)]       ; 65,536
 .sized:
+    mov word [INF(INF_INN)], dx
+    mov word [INF(INF_INNH)], 0
+    or dx, dx
+    jnz .bound
+    inc word [INF(INF_INNH)]        ; 65,536
+.bound:
     mov byte [INF(INF_BITN)], 0
     cld
 .block:
@@ -128,6 +137,8 @@ inf_bit:
     jns .have
     mov byte [INF(INF_BITN)], 7
     push ax
+    mov ax, 1
+    call inf_in
 %ifdef INF_DSWS
     push ds
     mov ds, [INF(INF_SSEG)]
@@ -171,9 +182,18 @@ inf_out:
     jc inf_bad
     ret
 
+; inf_in - AX = bytes about to be read from the stream: past DX is an error
+inf_in:
+    sub [INF(INF_INN)], ax
+    sbb word [INF(INF_INNH)], 0
+    jc inf_bad
+    ret
+
 ; inf_stored - a stored block: to the byte, LEN and its complement, LEN bytes
 inf_stored:
     mov byte [INF(INF_BITN)], 0     ; the rest of this byte is padding
+    mov ax, 4
+    call inf_in
 %ifdef INF_DSWS
     push ds
     mov ds, [INF(INF_SSEG)]
@@ -189,6 +209,7 @@ inf_stored:
     jne inf_bad
     mov ax, cx
     call inf_out
+    call inf_in
 %ifdef INF_DSWS
     push ds
     mov ds, [INF(INF_SSEG)]

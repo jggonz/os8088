@@ -90,7 +90,7 @@ def stamp(dst):
     print('arcprebuilt: the committed parts are the inputs\' (%d files)' % len(INPUTS))
 
 
-def compare(src, dst):
+def compare(src, dst, romdir=os.path.join(ROOT, 'build', 'arcade-rom')):
     bad = []
     for p in PARTS:
         mine = open(os.path.join(src, p), 'rb').read()
@@ -98,7 +98,7 @@ def compare(src, dst):
         if mine != ref:
             bad.append('%s differs from the committed one' % p)
     for k, r in ROMS.items():
-        rom = open(os.path.join(ROOT, 'build', 'arcade-rom', r + '.ROM'), 'rb').read()
+        rom = open(os.path.join(romdir, r + '.ROM'), 'rb').read()
         grams = set(rom[i:i + 8] for i in range(len(rom) - 7) if len(set(rom[i:i + 8])) > 2)
         for p in ('%scode.rcp' % k, '%saux.bin' % k):
             d = gzip.open(os.path.join(dst, p + '.gz')).read()

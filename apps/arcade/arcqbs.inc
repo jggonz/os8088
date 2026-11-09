@@ -35,11 +35,12 @@ QBS_CHIPAT  equ QB_ROMKB * 1024     ;   kept at the ROM part's end: the image
                                     ;   before the first play's qbs_prep
 
 ; -----------------------------------------------------------------------------
-; qbs_want - qb_build's, before the ROM part is claimed: AX = its KB, plus
-; QBS_CHIPKB and [qbs_chips] = 1 when the board can be heard here (a 386 or
-; better) and the image carries the chips (its header's length past 64KB).
-; The board's own 32KB is NOT claimed here: with the image still held that
-; would be ARCADE's ninth claim, over MEM_OWNER_MAX. Kept: all but AX
+; qbs_want - qb_on's, the image just read: AX plus QBS_CHIPKB and
+; [qbs_chips] = 1 when the board can be heard here (a 386 or better) and the
+; image carries the chips (its header's length past 64KB). Then qb_on claims
+; the board's own 32KB past the shadow, in the shadow's claim, and qb_build
+; the ROM part 4KB larger: a claim of its own would be ARCADE's ninth at the
+; play (the ring's), over MEM_OWNER_MAX. Kept: all but AX
 ; -----------------------------------------------------------------------------
 qbs_want:
     mov byte [qbs_chips], 0
@@ -62,7 +63,7 @@ qbs_want:
     ret
 
 ; qbs_keep - qb_build's, the image and the ROM part both in: the chips
-; copied to the ROM part's QBS_CHIPAT, if qbs_want made room. Kept: BX, DS
+; copied to the ROM part's QBS_CHIPAT, if qb_build made room. Kept: BX, DS
 qbs_keep:
     cmp byte [qbs_chips], 0
     je .r
@@ -86,7 +87,8 @@ qbs_keep:
 ; -----------------------------------------------------------------------------
 ; qbs_prep - BD_SBPREP, on the desktop: the board can be heard here - a 386
 ; or better, and a QBERT.ROM with the sound chips - and is ready: its memory
-; claimed, its ROM in, powered on once (kept across entries). CF=1 not here
+; (the pick's, past the shadow: qb_on) filled, its ROM in, powered on once
+; (kept across entries). CF=1 not here
 ; -----------------------------------------------------------------------------
 qbs_prep:
     call OSAPI_CPU_INFO             ; AL = the tier: a 386 at least (13.1:
@@ -97,13 +99,8 @@ qbs_prep:
     je .yes
     cmp byte [qbs_chips], 0         ; the chips, kept by the pick (qbs_keep)
     je .no
-    cmp word [qbs_seg], 0
-    jne .have
-    mov ax, QBS_KB
-    call OSAPI_MEM_CLAIM
-    jc .no
-    mov [qbs_seg], dx
-.have:
+    cmp word [qbs_seg], 0           ; ...and its memory (qb_on)
+    je .no
     mov ax, [qbs_seg]               ; the memory: zero, then the two chips
     mov [m6_seg], ax                ;   at 7000h
     push ds
@@ -121,9 +118,6 @@ qbs_prep:
     rep movsw
     pop es
     pop ds
-    mov dx, [qbs_seg]               ; filled: MOVABLE between plays (a play
-    mov ax, qbs_mv                  ;   claims nothing, SPEC.md 66.3.1)
-    call OSAPI_MEM_MOVABLE
     call qr_reset
     call m6_reset
     mov word [qbs_left], QBS_BOOT & 0xFFFF   ; its own power-on, quietly
@@ -145,21 +139,10 @@ qbs_prep:
     stc
     ret
 
-; qbs_off - the board's memory given back (qb_off's)
-; qbs_mv - the sound board's memory moved (SPEC.md 66): BX = was, DX = now.
-; The 6503's memory is m6_seg, read at each m6_run
-qbs_mv:
-    mov [qbs_seg], dx
-    mov [m6_seg], dx
-    ret
-
+; qbs_off - the board off (qb_off's): its memory is the shadow's claim's,
+; which qb_off gives back
 qbs_off:
-    xor dx, dx
-    xchg dx, [qbs_seg]
-    or dx, dx
-    jz .r
-    call OSAPI_MEM_FREE
-.r:
+    mov word [qbs_seg], 0
     mov word [qbs_on], 0
     ret
 

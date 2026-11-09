@@ -4955,7 +4955,10 @@ SOAK = [
         "the pinned ROMs (ARCFROM=rom), all 14 byte for byte the ones in "
         "apps/arcade/prebuilt/, and none holding a run of 8 of a ROM's bytes. Red "
         "with one bit of one committed recipe flipped",
-        wants=("build/arcade-rom/INVADERS.ROM", "build/arcade-rom/PACMAN.ROM")),
+        wants=("build/arcade-rom/INVADERS.ROM", "build/arcade-rom/INVADPT2.ROM",
+               "build/arcade-rom/LRESCUE.ROM", "build/arcade-rom/GUNFIGHT.ROM",
+               "build/arcade-rom/SEAWOLF.ROM", "build/arcade-rom/QBERT.ROM",
+               "build/arcade-rom/PACMAN.ROM")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "

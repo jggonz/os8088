@@ -8,10 +8,11 @@
 ; Not shipped software. The image sits at offset 0 of a segment that is CS =
 ; DS; the harness lays out the rest of the machine (the .ROM's claim, the
 ; game's segment, the 6503's memory, the stream's ring) and finds everything
-; through the HEADER at offset 0. The OS calls arcqbs.inc makes are stubs
-; here: a 386 (CPU_INFO), a claim at a segment the harness names, and a
-; MOVABLE declaration that does nothing - and arcade.asm's ar_sub is the
-; shipped build's, the sum (ARCADE-MEGA-PLAN M1).
+; through the HEADER at offset 0. The one OS call arcqbs.inc makes is a stub
+; here: a 386 (CPU_INFO). The 6503's memory, which the package derives past
+; the shadow's claim at the pick (arcqb.inc's qb_on, ARCADE-SPEC 13.3), is a
+; segment the harness names - and arcade.asm's ar_sub is the shipped
+; build's, the sum (ARCADE-MEGA-PLAN M1).
 ; =============================================================================
     cpu 8086
     bits 16
@@ -23,9 +24,6 @@ QB_ROMKB    equ 35                  ; arcqb.inc's: the ROM part, before the chip
 QT_RCLAIM   equ 0x9000              ; the ROM part qb_build would claim (free
                                     ;   in tests/qbsmix.py's map)
 %define OSAPI_CPU_INFO  qt_cpu
-%define OSAPI_MEM_CLAIM qt_claim
-%define OSAPI_MEM_FREE  qt_free
-%define OSAPI_MEM_MOVABLE qt_movable
 
 qt_hdr:
     db 'QBS1'                       ; +0  the signature
@@ -34,17 +32,19 @@ qt_hdr:
     dw qt_mix                       ; +8  qbs_mix: CX samples to ES:DI
     dw qt_stop                      ; +10 where all three stop
     dw ar_rimgc, ar_rimg, qb_gseg   ; +12 the cells the harness fills
-    dw qt_seg                       ; +18 the segment a claim answers
+    dw qt_seg                       ; +18 the 6503's memory (qb_on's)
     dw qt_cf                        ; +20 qbs_prep's CF
     dw m6_cyc, qbs_dac, m6_bad      ; +22
 
-qt_prep:                            ; the PACKAGE's order (qb_build, then a
-    mov word [qb_rclaim], QT_RCLAIM ;   play): the ROM part claimed with room
-    mov ax, QB_ROMKB                ;   for the chips, the chips kept there,
-    call qbs_want                   ;   the image FREED - and only then the
-    call qbs_keep                   ;   board powered on. Run against the
-    mov word [ar_rimgc], 0          ;   image still held, this passed while
-    mov word [ar_rimg], 0           ;   the package never heard the board
+qt_prep:                            ; the PACKAGE's order (qb_on, qb_build,
+    xor ax, ax                      ;   then a play): the 6503's memory past
+    call qbs_want                   ;   the shadow, the ROM part claimed with
+    mov ax, [qt_seg]                ;   room for the chips, the chips kept
+    mov [qbs_seg], ax               ;   there, the image FREED - and only
+    mov word [qb_rclaim], QT_RCLAIM ;   then the board powered on. Run
+    call qbs_keep                   ;   against the image still held, this
+    mov word [ar_rimgc], 0          ;   passed while the package never heard
+    mov word [ar_rimg], 0           ;   the board
     call qbs_prep
     mov byte [qt_cf], 0
     jnc qt_stop
@@ -60,15 +60,6 @@ qt_stop:
 
 qt_cpu:
     mov al, CPU_386
-    ret
-qt_claim:
-    mov dx, [qt_seg]
-    clc
-    ret
-qt_free:
-    ret
-qt_movable:
-    clc
     ret
 ar_sub:                             ; (arcade.asm's, the shipped build: the sum)
     add dx, ax

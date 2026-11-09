@@ -296,12 +296,11 @@ ar_zswap:
     push cx
     push si
     mov si, ar_zsize
-    mov cx, 8
-.w:
-    mov ax, [si]
-    xchg ax, [si + ar_z2 - ar_zsize]
-    mov [si], ax
-    inc si
+    mov cx, AR_ZREC                 ; (bytes: ar_zrun makes it odd on
+.w:                                 ;   kern_mega)
+    mov al, [si]
+    xchg al, [si + ar_z2 - ar_zsize]
+    mov [si], al
     inc si
     loop .w
     xor byte [ar_zon], 1
@@ -727,8 +726,11 @@ ar_impmake:
     mov dx, [es:bx+44]
     mov cx, [es:bx+10]
     mov [ar_imeth], cx
-    mov cx, [es:bx+20]              ; the packed size, for the bounds
-    mov [ar_ipack], cx
+    mov cx, [es:bx+20]              ; the packed size, for the bounds:
+    mov [ar_ipack], cx              ;   1 to 32KB (ar_zat's reach past BX)
+    dec cx
+    cmp cx, 0x7FFF
+    ja .fail
     call ar_zat
     jc .fail
     cmp word [es:bx], 'PK'
@@ -765,6 +767,9 @@ ar_impmake:
     xor di, di
     cmp word [ar_imeth], 8
     je .inf
+    cmp cx, [ar_ipack]              ; stored: exactly the chip, or a short
+    stc                             ;   packed size copied past its bound
+    jne .made
     push ds
     mov ds, ax
     rep movsb
@@ -772,6 +777,7 @@ ar_impmake:
     clc
     jmp short .made
 .inf:
+    mov dx, [ar_ipack]              ; (no byte read past the packed size)
     call inflate                    ; (INF_DSWS: the work space through DS)
 .made:
     pop si

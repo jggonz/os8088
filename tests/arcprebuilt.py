@@ -20,4 +20,5 @@ bdir = os88build.at('build')
 subprocess.run(['make', '-s', 'ARCFROM=rom', 'BUILD=' + bdir] +
                [os.path.join(bdir, 'arcade', p) for p in arcprebuilt.PARTS], check=True)
 sys.exit(arcprebuilt.compare(os.path.join(bdir, 'arcade'),
-                             os.path.join(ROOT, 'apps', 'arcade', 'prebuilt')))
+                             os.path.join(ROOT, 'apps', 'arcade', 'prebuilt'),
+                             os.path.join(bdir, 'arcade-rom')))

@@ -97,7 +97,8 @@ With every board it is 184KB on the disk (MEASURED), against 261KB when it
 carried the ROMs. What a pick builds from the `.ROM` - Pac-Man's turned
 tables (section 7.7), Q\*bert's patched program and turned tiles and sprites
 (section 10.4) - are claims `BD_BUILD` makes and `BD_OFF` frees, like
-Pac-Man's 64KB and Q\*bert's 94KB of shadow and segment.
+Pac-Man's 64KB and Q\*bert's 94KB of shadow and segment (126KB with its
+sound board's memory, section 13.3).
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): kern_mega's disk carries the ARM instead, built with
@@ -160,7 +161,8 @@ or INFLATED (`apps/os88inflate.inc`: zlib's `puff` in 8086, the output its
 own window, 1KB of work space) into the image, its CRC-32 taken again as it
 comes out, and the image written with its header as `<SET>.ROM` **in the
 folder the zip is in**. Every offset and length a zip gives is checked
-against the file before it is used.
+against the file before it is used - a chip's packed size too: 1 to 32KB, a
+stored chip's exactly its size, and the inflater reads no byte past it.
 
 **Loose chips**: each set's chips are read as files of their MAME names from
 the folder the picked file is in, each at its exact size and checked against
@@ -906,7 +908,8 @@ filter for the shot, a triangle swept by a slow triangle for the saucer -
 into a lazy part (`OP_LAZY | OP_COMP`, the last part, as every lazy one must
 be) fetched on the desktop before the first bracket whose stream could open -
 `op_fetch` may toast, which a bracket in a foreign mode may not - and kept
-until the package ends. 8,000 Hz, signed 8-bit, peaks within +-42, so the
+while an 8080 board is picked: picking Q\*bert or Pac-Man drops it
+(`ar_select`), its claim being one Q\*bert's pick cannot spare (13.3). 8,000 Hz, signed 8-bit, peaks within +-42, so the
 three that may sound at once cannot wrap. **An 8086-class machine plays every
 other sample, at 4,000 Hz** (`OSAPI_CPU_INFO`): at 8,000 the clips cost the
 5150 a half frame dropped every second and a half of play.
@@ -1431,8 +1434,8 @@ page wrap, the cycle counts with page-cross and taken-branch penalties.
 Every 6502 register lives in an 8086 register for the whole of `m6_run`,
 and an opcode is one masked fetch and one `jmp [bx+m6_tab]`. The board
 decodes A0-A14 only, so A15 is masked off every access; 0000-01FF and
-6000-7FFF are plain bytes in the board's memory (32KB, claimed at the
-first play), everything else is I/O through the includer's `m6_ior` and
+6000-7FFF are plain bytes in the board's memory (32KB, claimed with the
+shadow at the pick), everything else is I/O through the includer's `m6_ior` and
 `m6_iow`. `m6_run` runs a cycle budget and carries its overrun as a debt
 into the next call, so many short runs end where one long one would.
 Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
@@ -1453,14 +1456,22 @@ Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
   constant 165, as Pac-Man's), each sample is the DAC after the 6503 has
   run 81 cycles and a fraction of 28,490/65,536 more - 894,886 / 10,989
   exactly, so the pitch is the board's.
-- **The chips are kept at the pick** (`qbs_want`, `qbs_keep`, in
-  `qb_build`): the `.ROM` image is freed when the board is built, long before
-  the first play, so on a 386 or better with a `QBERT.ROM` that carries them
-  the ROM part is claimed 4KB larger and the two chips copied to its end
-  (`QBS_CHIPAT`, 8C00h). Not the board's own 32KB there: with the image
-  still held that would be ARCADE's ninth claim, over `MEM_OWNER_MAX`.
+- **The board's memory and chips are kept at the pick** (`qbs_want` in
+  `qb_on`, `qbs_keep` in `qb_build`): on a 386 or better with a `QBERT.ROM`
+  that carries the chips, the shadow of the glass is claimed 32KB larger
+  and the 6503's memory is its last 32KB, at 780h paragraphs (`ar_sub`, a
+  selector of its own on kern_mega; `qb_shmv` derives it again when the
+  shadow moves). The `.ROM` image is freed when the board is built, long
+  before the first play, so the ROM part is claimed 4KB larger and the two
+  chips copied to its end (`QBS_CHIPAT`, 8C00h). Neither is a claim of its
+  own because of `MEM_OWNER_MAX`, eight on kern_big: the carve, the
+  pictures, the N88 part, G, the shadow, the ROM part and the sprites are
+  seven, and the play's Sound Blaster ring is the eighth (at the pick the
+  `.ROM` image is held in the ring's place). That also makes the 8080
+  boards' sound part one claim too many: a pick of Q\*bert drops it (8.3). A shadow that cannot be claimed 32KB larger is
+  claimed as it is, and the board plays silent.
 - **Power-on** (`qbs_prep`, `BD_SBPREP`, on the desktop at the first play):
-  the memory claimed, the chips copied from the ROM part to 7000h, the RIOT
+  the memory zeroed, the chips copied from the ROM part to 7000h, the RIOT
   and the 6503 reset, and 0.2 s of the board's own start-up run. It stays on
   between plays, and goes with the board (`qb_off`).
 
@@ -1500,7 +1511,8 @@ name a kernel marker under `%ifdef PKG_MEGA`:
 1. **Every derived segment goes through one door**, `ar_sub` (DX = a claim,
    AX = a paragraph offset): `OSAPI_SEG SEG_SUB` in the arm, a window that
    moves and goes with its claim; the sum in the shipped build. The ROM
-   image (its claim + 2), Q\*bert's sound chips at 10000h, the import
+   image (its claim + 2), Q\*bert's sound chips at 10000h and its 6503's
+   memory past the shadow, the import
    image's clear and each chip's place (`ar_iplace`), the pictures
    (`af_slot`). `ar_crcimg` takes a claim and a paragraph, and asks again
    for the second 64KB. The zip walk (`ar_zat`) takes the 32KB GRANULE an
@@ -1602,7 +1614,7 @@ its code half in the arm - the aux part, and Q\*bert's yields in G), the
 `.ROM` image (`ar_rimgmv`, once read and checked), the pictures
 (`af_pcmv`, pinned across `af_look`'s reads and `af_snapsave`'s write),
 Pac-Man's ROM part and shadow, Q\*bert's G, ROM part, sprites and shadow,
-and its sound board's memory. A move happens only inside a claim the UI
+with its sound board's memory in the shadow's claim (`qb_shmv`). A move happens only inside a claim the UI
 task makes (SPEC.md 66.3.1), and in a bracket every other instance is
 frozen (53.2), so a play never sees one: ARCADE claims nothing between a
 pick's end and the bracket's. Between runs Q\*bert's G holds one segment
