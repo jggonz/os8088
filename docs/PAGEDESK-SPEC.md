@@ -4048,8 +4048,8 @@ window less those already written (`err_detail` 16), a dictionary over
 #### 20.16.4 Sizes
 
 Image + bss, measured after the verifier's fixes: PDWRT 47,724 (D24's cap
-49,152, +2,342); the primary 50,574 + 6,389 = 56,963 (+428 against 56,535,
-share +450); the overlay part 43,132 (+1,875 against 41,257, share +2,600);
+49,152, +2,342); the primary 50,594 + 6,389 = 56,983 (+448 against 56,535,
+share +450; the last 20 are the re-open keeping a failed save's line); the overlay part 43,132 (+1,875 against 41,257, share +2,600);
 PDENG and PDREND unchanged. One resident literal, "Save first, then try
 again.", serves the three refusals (a mark, Duplicate, Extract). The
 save claim is 40 KiB whenever the map holds a foreign page (no new claim, D12);
