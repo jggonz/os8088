@@ -661,3 +661,39 @@ C apps/arcade/arcimp.inc ar_zclaim       # the import's zip, read whole and free
     # inside the same chooser callback (and its parent's, ar_z2)
 D apps/arcade/arcsnd.inc ar_sbseg        # the Sound Blaster's ring: the DMA
     # channel reads it for the whole bracket (SND_EXT, ARCADE-SPEC 8)
+
+# --- PAGEDESK (docs/PAGEDESK-SPEC.md): the N lines are segments handed to the
+# three far-called modules, so one re-INIT verb would retire them -------------
+C apps/pagedesk/pdovlrecov.c rc_js     # PageDesk's recovery journal (16KB at
+                                         # most), read into it and freed inside
+                                         # one command: the open's offer
+                                         # (ovl_rc_offer) or the Enter that
+                                         # answers it (ovl_rc_answer)
+C apps/pagedesk/pdovlrecov.c rc_ss     # the journal's staging block, composed
+                                         # and written inside one ovl_rc_flush
+                                         # and freed before it returns
+N apps/pagedesk/pdumod.c pdu_xb        # PageDesk's exchange block (1KB): its
+                                         # segment is handed to PDENG, PDREND and
+                                         # PDWRT at INIT and kept in their
+                                         # statics. A relocation proc that
+                                         # re-INITs the three with the new
+                                         # segment would retire this line
+N apps/pagedesk/pdumod.c pdu_dclaim[c] # the document's claims: block cache,
+                                         # arena, tables, display list and the
+                                         # Flate slots (PAGEDESK-SPEC 16.2, D17),
+                                         # held while a document is open, their
+                                         # segments in PDENG's and PDREND's INIT
+                                         # record; the same re-INIT would
+                                         # retire this line
+N apps/pagedesk/pdumod.c pdu_bankraw   # the PDRES resource bank (fonts and
+                                         # art), held from first use until close
+                                         # and read by PDREND through its
+                                         # segment; UI-only otherwise
+N apps/pagedesk/pdumod.c pdu_wbuf      # PDWRT's buffers (18-40KB, PAGEDESK-SPEC
+                                         # 16.2), held across a save's or an
+                                         # extract's ticks, the segment in
+                                         # PDWRT's INIT record; each write holds
+                                         # it only inside its call
+N apps/pagedesk/pdusel.c pdu_cpseg0    # Copy's text buffer (up to 32KB), held
+                                         # across the copy job's slices and
+                                         # freed when the clipboard has it
