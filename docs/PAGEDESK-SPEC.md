@@ -3943,8 +3943,10 @@ window), Hercules and EGA. The final pass re-takes both water marks with
 #### 20.18.1 The settings
 
 One file, `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched
-from (SPEC.md 19.9: found by walking, never assumed; `os88_file_goto_q_mark`
-there and back, so the instance is left where it was). Ten bytes:
+from (`pdu_home.vol`, SPEC.md 19.9: found by walking, never assumed;
+`os88_file_goto_q_mark` there and back, so the instance is left where it was).
+Not the volume the instance stands on: a load or a save runs while it stands
+in the open document's folder (`pdu_at_doc`), which may be another disk. Ten bytes:
 
 | offset | meaning |
 |---|---|
@@ -3996,7 +3998,7 @@ popover appearing) run at the wake like every popover paint (`pdu_popown`,
 
 #### 20.18.3 Saving, and read-only media
 
-The save is OWED to the wake (`pdp_save`), not done in the key chain: closing
+The save is OWED to the wake (`pdp_owe`, paid by `ovl_pf_save`), not done in the key chain: closing
 the dialog with something changed sets the debt, and the wake writes the
 file. It is a full replace of ten bytes. When it cannot - no `SYSTEM/APPDATA`
 on the disk (a user's own volume), a write-protected or full disk, no disk -
@@ -4010,9 +4012,11 @@ read and lets the dialog change the session.
 PageDesk does not fill or change AcroForm fields (D24: filling is not selected
 this round). When the open completes for a document whose
 `pdu_xopen.flags & PDO_ACROFORM`, the status line says `Form fields are shown
-as printed; filling is not supported.` (instead of "Opened X", and again over
-the first long render's "Page drawn.", which would bury it; a signed file's
-read-only line and a save's outcome keep precedence), and Help > Document info gains a line `Forms:    as printed, not
+as printed; filling is not supported.` (instead of "Opened X", and again when
+the open's first render ends, whatever its length, since a long render's "Page
+drawn." or a slow one's progress line would bury it; a signed file's read-only
+line and a save's outcome keep precedence, and then the note is not said at
+all), and Help > Document info gains a line `Forms:    as printed, not
 fillable`. A form's pages still render, annotate and save: nothing is hidden,
 and no field value is written or changed.
 
@@ -4022,4 +4026,4 @@ Marked `/* prefs */` lines: `pducmd.c` (the View > Preferences item, the
 popover's rows, paint, key, click and its close), `pdumod.c` (the Flate slot
 rule), `pdujob.c` (the view at open, `mono_mark`, the forms note, the wake's
 `pdp_wake`), `pdovl.c` (the include and the info line), `pagedesk.c` (the
-include and the launch load). Sizes: see the wave-3 report.
+include). There is no launch load (D26). Sizes: see the wave-3 report.

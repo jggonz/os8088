@@ -33,7 +33,8 @@ static void pdp_view(void)
 }
 
 /* the status line's "Page drawn.", except that a form's note (20.18.4) is
- * said once over the first long render's, which would otherwise bury it */
+ * said again when the open's first render ends, whatever its length: a long
+ * one's "Page drawn." or a slow one's progress line would otherwise bury it */
 static const char *pdp_done(void)
 {
     if (pdp_form) {

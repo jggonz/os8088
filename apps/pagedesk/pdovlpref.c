@@ -28,17 +28,19 @@ static int ovl_pf_dive(const char *name)
             if (pdp_fd.name[i] != name[i])
                 break;
             if (name[i] == 0)
-                return os88_file_goto_q_mark(pdp_fd.clus, pdp_pl.vol) == 0;
+                return os88_file_goto_q_mark(pdp_fd.clus, pdu_home.vol) == 0;
         }
     }
 }
 
 /* bank where we stand and go to SYSTEM/APPDATA: 1 = there, 0 = nothing moved
- * (SPEC.md 19.9: found by walking, never assumed) */
+ * (SPEC.md 19.9: found by walking, never assumed). On the LAUNCH volume
+ * (pdu_home), not the one we stand on: the open and the wake stand in the
+ * DOCUMENT's folder (pdu_at_doc), which may be another disk */
 static int ovl_pf_enter(void)
 {
     os88_file_here(&pdp_pl);
-    if (os88_file_goto_q_mark(0, pdp_pl.vol) != 0)
+    if (os88_file_goto_q_mark(0, pdu_home.vol) != 0)
         return 0;
     if (!ovl_pf_dive("SYSTEM") || !ovl_pf_dive("APPDATA")) {
         os88_file_goto_q_mark(pdp_pl.clus, pdp_pl.vol);
@@ -201,26 +203,33 @@ static void ovl_pf_click(int x, int y)
     ovl_pf_step(1);
 }
 
-/* the wake pays the save (20.18.3): the session keeps the choices either way */
+/* the wake pays the save (20.18.3): the session keeps the choices either way.
+ * The reason is the kernel's (os88_ferr, read before the walk back clears
+ * it): a write refused, or the launch volume itself unreachable (no disk);
+ * only a walk that found no SYSTEM/APPDATA - which goes back and so leaves
+ * no error - is "no APPDATA folder" */
 static void ovl_pf_save(void)
 {
-    int e;
+    int e, ok;
 
-    os88_strcpy(pdu_line, "Not saved: ", sizeof(pdu_line));
-    e = 1;
-    if (!ovl_pf_enter())
-        pdu_cat(pdu_line, "no APPDATA folder", sizeof(pdu_line));
-    else {
-        e = os88_file_write(PDP_NAME, pdp_cfg, PDP_LEN);
-        if (e)
-            os88_ferr_text(os88_ferr(), pdu_line + 11, 40);
+    ok = 0;
+    if (ovl_pf_enter()) {
+        ok = os88_file_write(PDP_NAME, pdp_cfg, PDP_LEN) == 0;
+        e = os88_ferr();
         ovl_pf_leave();
-    }
-    if (e) {
-        pdu_cat(pdu_line, ". Session only.", sizeof(pdu_line));
-        pdu_wsay(pdu_line);
     } else
+        e = os88_ferr();
+    if (ok) {
         pdu_wsay("Preferences saved.");
+        return;
+    }
+    os88_strcpy(pdu_line, "Not saved: ", sizeof(pdu_line));
+    if (e)
+        os88_ferr_text(e, pdu_line + 11, 40);
+    else
+        pdu_cat(pdu_line, "no APPDATA folder", sizeof(pdu_line));
+    pdu_cat(pdu_line, ". Session only.", sizeof(pdu_line));
+    pdu_wsay(pdu_line);
 }
 
 /* the wake: the debts the dialog's close left. File I/O is legal here */

@@ -328,13 +328,14 @@ static void pdu_open_step(void)
         return;
     }
     pdu_doc = D_OPEN;
-    pdp_form = (pdu_xopen.flags & PDO_ACROFORM) != 0;   /* prefs */
+    pdp_form = 0;                       /* prefs: set where the note is said */
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
     else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
         pdu_say2("Saved ", pdu_target);
         pdu_pgsaved = 0;
-    } else if (pdp_form) {              /* prefs: PD-26 */
+    } else if (pdu_xopen.flags & PDO_ACROFORM) {  /* prefs: PD-26 */
+        pdp_form = 1;
         pdu_say(pdp_formmsg);
     } else {
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
@@ -417,8 +418,8 @@ static void pdu_render_step(void)
             pdu_say2("Incomplete rendering - ", pdu_incwhy);
             pdu_wsay(pdu_msg);
         }
-    } else if (pdu_jslices > 8)
-        pdu_wsay(pdp_done());           /* prefs: a form's note first */
+    } else if (pdp_form || pdu_jslices > 8)     /* prefs: a form's note, first render */
+        pdu_wsay(pdp_done());
 }
 
 /* ---------------------------------------------------------------------------
