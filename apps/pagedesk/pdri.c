@@ -461,7 +461,7 @@ static void rect_clip_user(const struct pd_fx *x0, const struct pd_fx *y0,
     to_dev(x1, y1); path_line(g_dx, g_dy);
     to_dev(x0, y1); path_line(g_dx, g_dy);
     path_close();
-    clip_apply(0);
+    clip_apply(2);                  /* a BBox: its low sides give back the rounding (pdrd.c) */
     path_reset();
     (void)ax; (void)ay;
 }
