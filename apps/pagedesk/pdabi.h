@@ -721,17 +721,18 @@ struct pdxb_wkeys { pdw n; struct pdxb_wkey k[3]; };
  * polyline and call again), 2: the pattern is too fine to tell from solid
  * (stroke the subpath whole), 0: done. CF = 1 is a failure: stroke solid. */
 #define PDXD_NPT    12      /* points in a piece                           */
+#define PDXD_NDASH  8       /* a pattern's elements at most (the `d` operator, 20.12.4) */
 struct pdxb_dashout {
     pdw  on;                /* points in ox/oy (1 = a dot)                  */
     pdi  ox[12], oy[12];     /* qpx (PDXD_NPT)                           */
 };
 struct pdxb_dashin {
-    pdw  vseg, xs, ys;      /* the subpath: vseg:xs and vseg:ys, pdi, qpx   */
+    pdw  vseg, xs, ys;      /* the subpath: vseg:xs and vseg:ys, pdi, qpx (any segment: PDREND lends its list's top) */
     pdw  n, closed;         /* vertices (>= 1); 1 = closed                  */
     struct pd_fx scale;     /* qpx per user unit (the CTM's)                */
     pdw  dph;               /* GS.dph: phase, quarter points, reduced       */
-    pdb  dn, pad_;          /* elements 1..4                                */
-    pdb  dash[4];           /* lengths, quarter points                      */
+    pdb  dn, pad_;          /* elements 1..PDXD_NDASH                       */
+    pdb  dash[8];           /* lengths, quarter points (PDXD_NDASH)         */
     pdw  st;                /* 0 on the first call; the walker's after      */
 };
 struct pdxb_dash {
@@ -739,7 +740,7 @@ struct pdxb_dash {
     struct pdxb_dashin in;
     pdw  i, didx, don, dpc, dpn;       /* the walker's state between calls */
     pdi  drem, pos, slen, qx, qy, x0, y0, x1, y1;
-    pdi  len[4];
+    pdi  len[8];            /* PDXD_NDASH */
     pdi  dpx[12], dpy[12];  /* PDXD_NPT */
 };
 typedef char pdabi_sz_dsh[sizeof(struct pdxb_dash) <= PD_XB_BYTES ? 1 : -1];

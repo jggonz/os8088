@@ -933,11 +933,11 @@ static void exec_op(const char *s, pdw n)
         case 'J': GS.cap = (pdb)pdm_fx_floor(opn(1)); break;
         case 'j': GS.join = (pdb)pdm_fx_floor(opn(1)); break;
         case 'M': setfx(&GS.miter, 1); break;
-        case 'd': {                     /* [lengths] phase: up to four, in quarter points (20.12.4) */
+        case 'd': {                     /* [lengths] phase: up to eight, in quarter points (20.12.4) */
             pdw ne = 0, j;
             GS.dn = 0;
             if (g_arrseen && g_nop > g_arr0) ne = g_nop - 1 - g_arr0;
-            if (ne > 4) { inc_note(PDF_INC_LIMIT, "dash array"); ne = 4; }
+            if (ne > PDXD_NDASH) { inc_note(PDF_INC_LIMIT, "dash array"); ne = PDXD_NDASH; }
             for (j = 0; j < ne; j++) GS.dash[j] = dash_q(&g_opn[g_arr0 + j]);
             if (ne) { GS.dn = (pdb)ne; GS.dph = dash_ph(opn(1)); }     /* the phase MODULO the period */
             break; }

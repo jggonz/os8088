@@ -103,7 +103,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_NOPS        24      /* operand stack                              */
 #define PDR_NNAME       32
 #define PDR_NSTR        512
-#define PDR_NPATH       200     /* flattened path vertices                    */
+#define PDR_NPATH       352     /* flattened path vertices                    */
 #define PDR_WSB         6912u   /* workspace at the tail of dl_seg: saved gstates + font cache */
 #define PDR_MINDL       256u    /* the least list room BEGIN accepts (D13): 7 KiB of dl_seg */
 #define PDR_NEDGE       256     /* staged edges                               */

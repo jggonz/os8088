@@ -256,6 +256,7 @@ PDV_KEY_PARAMS           equ 0xC3
 PDV_WRT_KEYS             equ 0x85
 PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12
+PDXD_NDASH               equ 8
 PDV_REND_CODE            equ 0x49
 PDXE_OPS                 equ 64
 PDV_GFX_CS               equ 0xC8
@@ -880,7 +881,7 @@ PDXB_DASHOUT_OY_N              equ 12
 PDXB_DASHOUT_OY_ESZ            equ 2
 PDXB_DASHOUT_BYTES             equ 50
 
-; ---- struct pdxb_dashin (24 bytes) -----------------------------------------
+; ---- struct pdxb_dashin (28 bytes) -----------------------------------------
 PDXB_DASHIN_VSEG               equ 0
 PDXB_DASHIN_XS                 equ 2
 PDXB_DASHIN_YS                 equ 4
@@ -891,38 +892,38 @@ PDXB_DASHIN_DPH                equ 14
 PDXB_DASHIN_DN                 equ 16
 PDXB_DASHIN_PAD_               equ 17
 PDXB_DASHIN_DASH               equ 18
-PDXB_DASHIN_DASH_N             equ 4
+PDXB_DASHIN_DASH_N             equ 8
 PDXB_DASHIN_DASH_ESZ           equ 1
-PDXB_DASHIN_ST                 equ 22
-PDXB_DASHIN_BYTES              equ 24
+PDXB_DASHIN_ST                 equ 26
+PDXB_DASHIN_BYTES              equ 28
 
-; ---- struct pdxb_dash (158 bytes) -------------------------------------------
+; ---- struct pdxb_dash (170 bytes) -------------------------------------------
 PDXB_DASH_OUT                  equ 0
 PDXB_DASH_IN                   equ 50
-PDXB_DASH_I                    equ 74
-PDXB_DASH_DIDX                 equ 76
-PDXB_DASH_DON                  equ 78
-PDXB_DASH_DPC                  equ 80
-PDXB_DASH_DPN                  equ 82
-PDXB_DASH_DREM                 equ 84
-PDXB_DASH_POS                  equ 86
-PDXB_DASH_SLEN                 equ 88
-PDXB_DASH_QX                   equ 90
-PDXB_DASH_QY                   equ 92
-PDXB_DASH_X0                   equ 94
-PDXB_DASH_Y0                   equ 96
-PDXB_DASH_X1                   equ 98
-PDXB_DASH_Y1                   equ 100
-PDXB_DASH_LEN                  equ 102
-PDXB_DASH_LEN_N                equ 4
+PDXB_DASH_I                    equ 78
+PDXB_DASH_DIDX                 equ 80
+PDXB_DASH_DON                  equ 82
+PDXB_DASH_DPC                  equ 84
+PDXB_DASH_DPN                  equ 86
+PDXB_DASH_DREM                 equ 88
+PDXB_DASH_POS                  equ 90
+PDXB_DASH_SLEN                 equ 92
+PDXB_DASH_QX                   equ 94
+PDXB_DASH_QY                   equ 96
+PDXB_DASH_X0                   equ 98
+PDXB_DASH_Y0                   equ 100
+PDXB_DASH_X1                   equ 102
+PDXB_DASH_Y1                   equ 104
+PDXB_DASH_LEN                  equ 106
+PDXB_DASH_LEN_N                equ 8
 PDXB_DASH_LEN_ESZ              equ 2
-PDXB_DASH_DPX                  equ 110
+PDXB_DASH_DPX                  equ 122
 PDXB_DASH_DPX_N                equ 12
 PDXB_DASH_DPX_ESZ              equ 2
-PDXB_DASH_DPY                  equ 134
+PDXB_DASH_DPY                  equ 146
 PDXB_DASH_DPY_N                equ 12
 PDXB_DASH_DPY_ESZ              equ 2
-PDXB_DASH_BYTES                equ 158
+PDXB_DASH_BYTES                equ 170
 
 ; ---- struct pdxb_emark (22 bytes) ------------------------------------------
 PDXB_EMARK_ESEG                equ 0

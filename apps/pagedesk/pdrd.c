@@ -188,6 +188,40 @@ static void emit_fill_edges(pdw rule, pdw kind)
     g_dllen += ne * 8;
 }
 
+/* ---- a dashed subpath (pdrg.c's dash_poly; PAGEDESK-SPEC 20.12.4, 20.22.7) ---- */
+/* the subpath goes to the walker in the TOP of the display list's free room, which is
+ * lent for the walk (the cap lowered by it, so the pieces' records cannot reach it): the
+ * exchange block holds only 216 vertices after the walker's state, the path table more */
+static struct pdxb_dashin g_din;
+static struct pdxb_dashout g_dout;
+static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
+{
+    pdw r, k, xb, cap = g_dlcap, nb = (pdw)(n << 1);
+    if (!x_have(PDX_GFX)) {
+        x_need(PDX_GFX);
+        if (x_gone(PDX_GFX)) stroke_poly(xs, ys, n, closed);
+        return;
+    }
+    if (g_mode != PDR_INTERP) return;                   /* a stroke draws nothing here */
+    if (!dl_room((pdw)(nb << 1))) { g_dlfull = 1; return; }
+    g_dlcap -= nb; pd_fcopy_out(ys, g_dls, g_dlcap, nb); g_din.ys = g_dlcap;
+    g_dlcap -= nb; pd_fcopy_out(xs, g_dls, g_dlcap, nb); g_din.xs = g_dlcap;
+    xb = xb_seg();
+    g_din.vseg = g_dls; g_din.n = n; g_din.closed = closed;
+    ctm_scale(&g_din.scale);
+    g_din.dph = GS.dph; g_din.dn = GS.dn; pdr_cpy(g_din.dash, GS.dash, PDXD_NDASH); g_din.st = 0;
+    pd_fcopy_out(&g_din, xb, sizeof(struct pdxb_dashout), sizeof g_din);
+    for (k = 0; k < 4000; k++) {
+        r = x_call(PDV_GFX_DASH, xb, 0, 0);
+        if (x_cf || r == 2) { if (!k) stroke_poly(xs, ys, n, closed); break; }
+        if (r != 1) break;
+        pd_fcopy_in(xb, 0, &g_dout, sizeof g_dout);
+        if (g_dout.on < 1 || g_dout.on > PDXD_NPT) break;
+        stroke_poly(g_dout.ox, g_dout.oy, g_dout.on, 0);
+    }
+    g_dlcap = cap;
+}
+
 /* ---- path painting ------------------------------------------------------- */
 /* is the whole path one axis-aligned rectangle? bounds in qpx */
 static pdi g_rqx0, g_rqy0, g_rqx1, g_rqy1;
@@ -219,7 +253,8 @@ static void path_edges(void)
         if (e - s < 2) continue;
         for (i = s; i < e; i++) {
             j = (i + 1 == e) ? s : i + 1;
-            if (g_ne >= PDR_NEDGE) { emit_fill_edges(g_fillrule, PK_FILL); }
+            /* one record or none: a fill split in two loses the crossings' parity across the cut */
+            if (g_ne >= PDR_NEDGE) { g_ne = 0; if (g_mode == PDR_INTERP) g_dlfull = 1; return; }
             edge_add(g_vx[i], g_vy[i], g_vx[j], g_vy[j]);
         }
     }
@@ -313,7 +348,7 @@ static void clip_apply(pdw rule)
         if (g_mode != PDR_INTERP || GS.cx1 < GS.cx0 || cy1 < cy0) return;     /* nothing under it reaches this pass */
         /* the WHOLE record is reserved before any of it is written (emit_fill_edges' rule); a pass
          * whose clips do not fit is a full list, and narrows */
-        if (g_ncl >= PDR_NCLIP || g_dlfull || !dl_room(DLH + 4 + ne * 8)) { g_dlfull = 1; return; }
+        if (g_ncl >= PDR_NCLIP || ne > PDR_NEDGE || g_dlfull || !dl_room(DLH + 4 + ne * 8)) { g_dlfull = 1; return; }
         pd_fcopy_out(&g_dllen, g_ws, (pdw)(WS_CL + g_ncl * 2), 2);
         w16(g_cbody, (pdi)GS.clid); w16(g_cbody + 2, (pdi)ne);
         hdr_set(DLR_CLIP, rule & 1, DLH + 4 + ne * 8, cy0, cy1);
