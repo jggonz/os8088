@@ -2228,7 +2228,7 @@ void os88_onmove(unsigned was, unsigned now)
 static void cw_u_save(void)
 {
     if (cw_u_seg == 0) {
-        cw_u_seg = os88_mem_claim(CW_U_KB);
+        cw_u_seg = os88_mem_claim_p(CW_U_KB * 64);
         if (cw_u_seg == 0) {
             cw_u_ok = 0;
             return;

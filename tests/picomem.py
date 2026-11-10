@@ -79,6 +79,30 @@ BASE = SEG << 4                 # and the BIOS data area the code reads
 FAILS = []
 
 
+# The kernel cells the legs model are read off the SDK, never typed: a hot
+# cell is `KERNEL_SEG:0xNNNN`, and a DOOR cell (SPEC.md 20.3.4, kernel size
+# pass 19's T5) is `int OS88_RARE / db <index>` - the generated block's
+# `__OSAPI_RARE <index>` - which the model answers as tests/os88huge.py does.
+def _sdk(pat, name):
+    sdk = open(os.path.join(ROOT, "apps", "os88api.inc")).read()
+    return int(re.search(pat % name, sdk, re.M).group(1), 0)
+
+
+def _hot_cell(name):
+    """the linear address of a hot cell, KERNEL_SEG:offset"""
+    return _sdk(r"^%s\s+equ\s+(0x[0-9A-Fa-f]+)", "KERNEL_SEG") * 16 + \
+        _sdk(r"^%%define\s+%s\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)", name)
+
+
+def _door_ix(name):
+    """a door cell's published index (the byte after `int OS88_RARE`)"""
+    return _sdk(r"^%%xdefine\s+%s\s+__OSAPI_RARE\s+(0x[0-9A-Fa-f]+|\d+)",
+                name)
+
+
+RARE_VEC = _sdk(r"^%s\s+equ\s+(0x[0-9A-Fa-f]+)", "OS88_RARE")
+
+
 def check(cond, what):
     print(("  ok    " if cond else "  FAIL  ") + what)
     if not cond:
@@ -926,7 +950,7 @@ def leg_kern(tmp):
 # leg mouse - USBMOUSE.DRV's PicoMEM backend (SPEC.md 9.12.7)
 # =============================================================================
 DSEG = 0x2000                   # where the model loads the driver
-FEED = 0x0060 * 16 + 0x041C     # OSAPI_MOUSE_FEED's cell: KERNEL_SEG:041Ch
+FEED = _hot_cell("OSAPI_MOUSE_FEED")    # a hot cell: the SDK says where
 
 
 def leg_mouse(tmp):
@@ -1404,11 +1428,23 @@ def leg_pmdma(tmp):
                 pic["opened"] |= pic["imr"] & ~val
                 pic["imr"] = val
 
+        door = {}                       # published index -> its model
+
         def hint(uc, n, ud):
             if n == 0x13 and uc.reg_read(UC_X86_REG_AX) == 0x6000:
                 uc.reg_write(UC_X86_REG_BX, BIOS)
                 uc.reg_write(UC_X86_REG_CX, 0x0500)
                 uc.reg_write(UC_X86_REG_DX, 0xAA55)
+            elif n == RARE_VEC:         # the door: step past the index byte
+                ip = uc.reg_read(UC_X86_REG_IP)
+                ix = uc.mem_read(uc.reg_read(UC_X86_REG_CS) * 16 + ip, 1)[0]
+                uc.reg_write(UC_X86_REG_IP, ip + 1)
+                if ix in door:
+                    door[ix](uc)
+                else:
+                    check(False, "a door call the model does not answer "
+                          "(index %02Xh)" % ix)
+                    uc.emu_stop()
 
         def hcode(uc, addr, size, ud):
             pm.icount += 1
@@ -1801,19 +1837,18 @@ def leg_pmdma(tmp):
             # benchlib's BL_NUMBERED: a save goes to the first NAMEn.EXT the
             # disk has not got. OSAPI_FILE_READ's cell answers out of `disk`:
             # FERR_NOENT (4) for a name not on it, FERR_BIG (10) for one that
-            # is - a zero-byte read of a non-empty file, as the kernel does
-            fr = 0x0060 * 16 + 0x0109
-            mu.mem_write(fr, b"\xcb")            # retf, after the hook answers
+            # is - a zero-byte read of a non-empty file, as the kernel does.
+            # A door cell (`int 81h / db <index>`): hint answers it
             disk = set()
 
-            def hfile(uc, addr, size, ud):
+            def hfile(uc):
                 name = bytes(uc.mem_read(PDSEG * 16 +
                                          uc.reg_read(UC_X86_REG_SI), 13))
                 name = name.split(b"\0")[0].decode("latin-1")
                 fl = uc.reg_read(UC_X86_REG_EFLAGS) | 1
                 uc.reg_write(UC_X86_REG_EFLAGS, fl)
                 uc.reg_write(UC_X86_REG_AX, 10 if name in disk else 4)
-            hk = mu.hook_add(UC_HOOK_CODE, hfile, None, fr, fr)
+            door[_door_ix("OSAPI_FILE_READ")] = hfile
 
             def numname(name):
                 src = PDSEG * 16 + syms["pd_s_ifile"]
@@ -1847,7 +1882,7 @@ def leg_pmdma(tmp):
                   "a numbered save takes the first NAMEn.EXT not on the "
                   "disk, cut to 8.3: %s" % seq)
             mu.mem_write(PDSEG * 16 + syms["pd_s_ifile"], b"PMBUS.TXT\0")
-            mu.hook_del(hk)
+            door.clear()
         if fault == "addr":
             tr = [t for t in text if "starts until heard" in t]
             check(tr and int(tr[-1].split()[-1]) > 1,

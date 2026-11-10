@@ -883,9 +883,12 @@ vk_claim:
     push ax
     push cx
     push dx
-    mov ax, VK_BUFKB
-    mov cx, VK_BUFKB
-    MEMKB_DMA
+    mov ax, VK_BUFKB * 64
+    mov cx, VK_BUFKB * 64
+    push bx
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P
+    pop bx
     jc .no
     mov [vk_buf], dx
 .no:
@@ -1732,8 +1735,11 @@ vk_xconv:
 .claim:
     cmp bx, VK_XCN * 2
     jae .run
-    mov ax, 64
-    MEMKB_CLAIM                     ; DX = the block
+    mov ax, 64 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the block
+    pop bx
     jc .run
     mov [vk_xcsegs + bx], dx
     inc bx

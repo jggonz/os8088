@@ -57,7 +57,7 @@ setter go too once there is one verb; R1 -16 estimated, -18.
   (each computes a KB count today and would shift by 4 instead of 10), as
   flagday.md predicted. Recorded, not taken.
 - **C1, the package side.** About 300 call sites converted. Packages call the
-  `MEMKB_*` macros (SPEC.md 50.3.7.1), the withdrawn doors' registers written
+  `MEMKB_*` macros (the old fifty-dot-three-dot-seven-dot-one, removed by `kbpara`), the withdrawn doors' registers written
   once per package as near procs over `OSAPI_MEM_P`, assembled by
   `OS88KB_BODIES` at `OS88_IMAGE_END` (or `CC_IMAGE_END`, or by hand in a
   part) and only for the entries the package named. Every helper claim is

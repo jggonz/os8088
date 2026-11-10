@@ -364,18 +364,19 @@ ws_go:
     mov si, ww_e15                  ; the save reads it ('Not enough memory')
     jc ws_no
     mov ax, [ws_dclu]               ; the output claim: whole clusters, so
-    mov cl, 10                      ; every write but the last is (16 KB,
-    shr ax, cl                      ; or one 32 KB cluster)
-    cmp ax, WS_OUTKB
+    mov cl, 4                       ; every write but the last is (16 KB,
+    shr ax, cl                      ; or one 32 KB cluster), in paragraphs
+    cmp ax, WS_OUTKB * 64
     jae .okb
-    mov ax, WS_OUTKB
+    mov ax, WS_OUTKB * 64
 .okb:
     push ax
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     pop ax
     mov si, ww_e15
     jc ws_no
-    mov cl, 10
+    mov cl, 4
     shl ax, cl                      ; (32 KB at most: a word)
     mov [ws_osz], ax
     mov [ws_oseg], dx

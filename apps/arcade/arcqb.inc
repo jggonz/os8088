@@ -62,8 +62,9 @@ qb_on:
     mov word [qb_rclaim], 0
     mov word [qb_sclaim], 0
     mov word [qbs_seg], 0
-    mov ax, 64
-    MEMKB_CLAIM
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .r
     mov [qb_gseg], dx
     mov [qb_gcs], dx                ; G as CODE: itself, but on kern_mega
@@ -77,8 +78,9 @@ qb_on:
     call qbs_want                   ;   the sound board's 32KB past it when
     or ax, ax                       ;   it can be heard here: one claim, not
     jz .shadow                      ;   two (ARCADE-SPEC 13.3)
-    mov ax, QB_SHPL * 4 / 1024 + QBS_KB
-    MEMKB_CLAIM
+    mov ax, (QB_SHPL * 4 / 1024 + QBS_KB) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .shadow
     mov [qb_shseg], dx
     mov ax, QB_SHPL * 4 / 16        ; the 6503's memory: a segment of its
@@ -88,8 +90,9 @@ qb_on:
     mov [qbs_seg], dx
     jmp short .shmv
 .shadow:
-    mov ax, QB_SHPL * 4 / 1024      ; (the shadow alone: the board silent)
-    MEMKB_CLAIM
+    mov ax, (QB_SHPL * 4 / 1024) * 64      ; (the shadow alone: the board silent)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .noshadow
     mov [qb_shseg], dx
 .silent:
@@ -245,17 +248,19 @@ qb_off:
 ; -----------------------------------------------------------------------------
 qb_build:
     push bx
-    mov ax, QB_ROMKB
+    mov ax, QB_ROMKB * 64           ; paragraphs
     cmp byte [qbs_chips], 0         ; (+4KB: the sound chips, kept past the
     je .rom                         ;   image when qb_on made the board room
-    add ax, QBS_CHIPKB              ;   - ARCADE-SPEC 13.3)
+    add ax, QBS_CHIPKB * 64         ;   - ARCADE-SPEC 13.3)
 .rom:
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [qb_rclaim], dx
     mov [ar_rseg], dx
-    mov ax, QB_SPRKB
-    MEMKB_CLAIM
+    mov ax, QB_SPRKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [qb_sclaim], dx
     mov [ar_aseg], dx

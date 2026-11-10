@@ -399,7 +399,7 @@ W16SYS w16q_dosalloc
     ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
-    add ax, 1023                    ; KB, 64 at most
+    add ax, 15                      ; paragraphs, 64KB at most
     adc dx, 0
     cmp dx, 1
     ja .no
@@ -407,11 +407,11 @@ W16SYS w16q_dosalloc
     or ax, ax
     jnz .no
 .kb:
-    mov al, ah                      ; DX:AX / 1024: 0-64
-    mov ah, dl
-    shr ax, 1
-    shr ax, 1
-    or ax, ax
+    mov cl, 4                       ; DX:AX / 16: 0-4,096
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
     jz .no
     push ax
     xor ax, ax
@@ -419,7 +419,10 @@ W16SYS w16q_dosalloc
     pop ax
     jc .no
     xor cx, cx
-    MEMKB_DMA                       ; DX = the block's selector
+    push bx
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; DX = the block's selector
+    pop bx
     jc .no
     mov [si], dx
     mov ax, dx

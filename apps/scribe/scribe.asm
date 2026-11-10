@@ -765,8 +765,9 @@ sc_entry:
     mov [sc_cseg], dx               ; so sc_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
-    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    MEMKB_CLAIM                     ; 256 x 4 bytes, session-lived. Zeroed by
+    mov ax, 1 * 64                       ; ...and the PAP dictionary (SPEC.md 68.3):
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [sc_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -4780,8 +4781,9 @@ sc_itinit:
                                     ; a sc_walk, which holds ES = [sc_dseg]
                                     ; for the whole of its pass, and the
                                     ; claim below may compact
-    mov ax, SC_ITKB                 ; the table AND the staging area
-    MEMKB_CLAIM
+    mov ax, SC_ITKB * 64                 ; the table AND the staging area
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .let
     mov [sc_iseg], dx
 .let:
@@ -7220,7 +7222,7 @@ sc_stghold:
     push ax
     push cx                         ; CL is the shift count below, and the
     push dx                         ; header promises every other register
-    mov ax, SC_DOCCAP               ; the WHOLE ceiling, not a size computed
+    mov ax, SC_DOCCAP * 64          ; the WHOLE ceiling, not a size computed
                                     ; from the document: a real Word file is
                                     ; the text plus FKP pages, and how many
                                     ; pages it needs is what the writer finds
@@ -7229,7 +7231,10 @@ sc_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
+    pop bx
     jc .no
     mov [sc_stgseg], dx
     mov es, dx
@@ -7323,7 +7328,14 @@ sc_stgread:
     mov cx, dx
 .kb:
     mov ax, cx
-    MEMKB_CLAIM                     ; preserves all but DX
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    pop cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; preserves all but DX
+    pop bx
     jc .nomem
     mov [sc_stgseg], dx
     mov es, dx
@@ -11360,7 +11372,6 @@ sc_ugrow:
     jbe .yes
     cmp word [sc_useg], 0
     jne .re
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
@@ -16963,8 +16974,9 @@ sc_pictload:
     mov [si+IMG_SRCLEN], ax
     mov ax, [sc_stgseg]
     mov [si+IMG_SRCSEG], ax
-    mov ax, SC_PICKB
-    MEMKB_CLAIM
+    mov ax, SC_PICKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [sc_picseg], dx
     mov si, sc_imgblk

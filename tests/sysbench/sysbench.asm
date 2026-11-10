@@ -311,7 +311,11 @@ sb_facts:
     mov [sb_kind], dl
     call OSAPI_CPU_INFO
     mov [sb_cputier], ax
-    MEMKB_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; (paragraphs: the report says KB)
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
     mov [sb_mlarge], ax
     mov [sb_mtotal], bx
     call OSAPI_SND_CAPS             ; AX = caps word (SND_CAP_*)
@@ -1255,8 +1259,9 @@ sb_disk:
     mov si, sb_s_h_dsk
     call bl_sline
     call bl_head
-    mov ax, SB_BIGKB
-    MEMKB_CLAIM                     ; DX = the base segment
+    mov ax, SB_BIGKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the base segment
     jc .noclaim
     mov [sb_bseg], dx
 
@@ -3200,7 +3205,12 @@ sb_write:
     cmp bx, [sb_wfree]
     ja .smaller
     push ax
-    MEMKB_CLAIM
+    push cx
+    mov cl, 6                       ; (the KB, in paragraphs)
+    shl ax, cl
+    pop cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     pop ax
     mov [sb_wkb], ax
@@ -3480,8 +3490,9 @@ sb_rah:
     cmp word [sb_dbgblk], 0         ; the whole answer is a call count
     je .nodbg
 
-    mov ax, SB_RAH_KB               ; a buffer of our own: this block is
-    MEMKB_CLAIM                     ; standalone and the file rows' claim is
+    mov ax, SB_RAH_KB * 64               ; a buffer of our own: this block is
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; standalone and the file rows' claim is
     jc .noclaim                     ; long gone by here
     mov [sb_rseg], dx
 
@@ -4638,8 +4649,9 @@ sb_hdd:
     call sb_hdd_go
     jc .none
 
-    mov ax, SB_BIGKB                ; on C: now
-    MEMKB_CLAIM
+    mov ax, SB_BIGKB * 64                ; on C: now
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .noclaim
     mov [sb_bseg], dx
 

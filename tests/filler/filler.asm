@@ -39,11 +39,11 @@
 
     OS88_HEADER 'FILLER', fl_entry
 
-FL_LEAVE  equ 8                 ; KB to leave in the largest run after a fill
+FL_LEAVE  equ 8 * 64            ; paragraphs (8 KB) to leave in the largest run
 FL_HOLD   equ 6                 ; ...and how many fill claims may be held
                                 ; (MEM_OWNER_MAX is 8 and the region is one)
-FL_STEP   equ 4                 ; ...and the ladder the forcing ask walks down
-FL_FLOOR  equ 8                 ; KB, stopping here
+FL_STEP   equ 4 * 64            ; ...and the ladder the forcing ask walks down
+FL_FLOOR  equ 8 * 64            ; paragraphs, stopping here
 FL_BSS    equ 40
 
 ; -----------------------------------------------------------------------------
@@ -75,15 +75,19 @@ fl_fill:
     cmp bx, FL_HOLD
     jae .out
     push bx                     ; OSAPI_MEM_AVAIL ANSWERS IN BX (total free
-    MEMKB_AVAIL                 ; KB): AX = largest run KB. Without the push
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; paragraphs): AX = largest run. Without the push
     pop bx                      ; the index below was the free total - a
                                 ; stray word past the region on a real-mode
                                 ; kernel, a #GP on kern_mega (KERN-MEGA-PLAN
                                 ; 14.90)
-    cmp ax, FL_LEAVE + 8
+    cmp ax, FL_LEAVE + 8 * 64
     jbe .out                    ; nothing worth taking
     sub ax, FL_LEAVE
-    MEMKB_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .out
     shl bx, 1
     mov [bx+fl_seg], dx
@@ -117,15 +121,17 @@ fl_ask:
     push bx
     push cx
     push dx
-    MEMKB_AVAIL                 ; AX = the largest run, BX = TOTAL free
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest run, BX = TOTAL free
     mov cx, bx
-    sub cx, 2                   ; start just under everything there is
+    sub cx, 2 * 64              ; start just under everything there is
 .lp:
     cmp cx, FL_FLOOR
     jbe .out                    ; nothing left worth asking for
     mov ax, cx
     inc word [fl_nask]
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jnc .got
     sub cx, FL_STEP
     jmp short .lp
@@ -157,11 +163,15 @@ fl_take:
     cmp bx, FL_HOLD
     jae .out
     push bx                     ; (BX is OSAPI_MEM_AVAIL's second answer:
-    MEMKB_AVAIL                 ; fl_fill's note)
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; fl_fill's note)
     pop bx
     or ax, ax
     jz .out
-    MEMKB_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .out
     shl bx, 1
     mov [bx+fl_seg], dx
@@ -209,7 +219,8 @@ fl_onkey:
 .ask:
     call fl_ask                 ; freed, and only then ask again
 .paint:
-    MEMKB_AVAIL                 ; THE ANSWER THE ROUND LEFT, for a row to read
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; THE ANSWER THE ROUND LEFT, for a row to read
     mov [fl_run], ax            ; rather than recompute: the largest run the
     mov [fl_tot], bx            ; kernel would fund (mem_avail models both
     inc word [fl_nround]        ; compaction passes and every pin) and the
@@ -297,7 +308,8 @@ fl_paint:
     call OSAPI_FONT_RUN
     mov cx, di
     add cx, 48
-    MEMKB_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; (in paragraphs, as every figure here)
     call fl_num
 
     add bp, 12
@@ -343,7 +355,7 @@ fl_nheld   equ os88_image_end + 14   ; word: how many of them are taken
 fl_nask    equ os88_image_end + 16   ; word: asks made
 fl_nok     equ os88_image_end + 18   ; word: ...and granted
 fl_done    equ os88_image_end + 20   ; byte: the first fill has run
-fl_got     equ os88_image_end + 22   ; word: KB of the largest grant
+fl_got     equ os88_image_end + 22   ; word: paragraphs of the largest grant
 fl_buf     equ os88_image_end + 24   ; 6 bytes: the number formatter
 fl_run     equ os88_image_end + 30   ; word: OSAPI_MEM_AVAIL's AX after a round
 fl_tot     equ os88_image_end + 32   ; word: ...and its BX

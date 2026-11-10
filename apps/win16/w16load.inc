@@ -136,8 +136,8 @@ w16_load:
     mov [w16_csz], ax
     mov cl, 4                       ; PARAGRAPHS (SPEC.md 50.3.7): the cache
     shr ax, cl                      ; is a byte count, and the part may not
-    xor cx, cx                      ; near-call the package's MEMKB_ entries
-    mov bl, MEMP_CLAIM              ; (SPEC.md 124.19.3)
+    xor cx, cx                      ; call OSAPI_MEM_P itself (SPEC.md
+    mov bl, MEMP_CLAIM              ; 124.19.3)
     call OSAPI_MEM_P
     jnc .cached
     mov si, w16_r_mem

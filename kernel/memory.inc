@@ -469,12 +469,11 @@ MEMP_CPU      equ 2             ; bit 1 says no int 13h will land in it, so
 MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
-MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
-MEMP_KB       equ 8             ; + a verb: THE KB DOORS' REGISTERS (50.3.7.1)
-MEMP_KBH      equ 0x80          ; + MEMP_KB on a claim: CX = a DMA head in KB
-                                ; (bit 7: the arm tests it by its sign)
-%if MEMP_KBH != 0x80
-  %error "osapi_mem_p's KB arm tests MEMP_KBH as the verb byte's sign"
+MEMP_CONV     equ 0x80          ; + a claim verb: CX = the head, and stay
+                                ; conventional on kern_mega (bit 7: tested by
+                                ; the verb byte's sign)
+%if MEMP_CONV != 0x80
+  %error "osapi_mem_p tests MEMP_CONV as the verb byte's sign"
 %endif
 MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
                                 ; the KB doors' answer, the pool counted
@@ -5650,44 +5649,34 @@ mem_hrecf:
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_p - OSAPI_MEM_P (a door cell, SPEC.md 50.3.7): the claim heap counted
-;               in PARAGRAPHS, for a caller whose size is a byte count
+;               in PARAGRAPHS, the one unit (kernel size pass 19)
 ; in:  BL = MEMP_CLAIM (0, bottom up) or MEMP_CLAIM_HI (1, top down):
-;           AX = paragraphs, CX = the 64KB-page-safe HEAD in paragraphs, 0 =
-;           none -> CF=0, DX = the base, AX = the paragraphs GRANTED (the
-;           request rounded up to the granule: the slack is the caller's)
+;           AX = paragraphs -> CF=0, DX = the base, AX = the paragraphs
+;           GRANTED (the request rounded up to the granule: the slack is the
+;           caller's). CX is not read
 ;           | MEMP_CPU (2): no int 13h lands in it, so its base need not be
 ;           512-aligned - on a granule of 512 every base is anyway
+;           | MEMP_CONV (80h): CX = the 64KB-page-safe HEAD in paragraphs, 0 =
+;           none, and the claim stays CONVENTIONAL on kern_mega
 ;      BL = MEMP_REGROW (4): DX = your claim, AX = paragraphs -> as
 ;           OSAPI_MEM_REGROW, AX = the paragraphs granted
-;      BL = MEMP_AVAIL (5), or anything past it: out AX = the largest claim
-;           you can have and BX = the total, in paragraphs, as OSAPI_MEM_AVAIL
-;           at the caller's floor; CX = MEM_GRAN, the granule every size is
-;           rounded to
+;      BL = MEMP_AVAIL (5): out AX = the largest claim you can have and BX =
+;           the total, in paragraphs, as OSAPI_MEM_AVAIL at the caller's floor
 ;      ES = the caller's segment (the X stub), the same fence as every claim
 ; out: CF=1 refused, and a CLAIM or REGROW verb's AX is then the request
 ;      rounded up to the granule - what was asked for, as the door counts it.
-;      Every register not named is preserved, CX (MEMP_CONV and all) included
+;      Every register not named is preserved, CX included
 ;
-;      BL + MEMP_KB (8): the WITHDRAWN KB DOORS' REGISTERS (SPEC.md 50.3.7.1),
-;           for apps/os88api.inc's MEMKB_* bodies and the C SDK - AX in KB
-;           and KEPT, every register kept but DX (BL is the caller's to
-;           restore). A claim reads no head unless + MEMP_KBH (80h): CX = the
-;           head in KB, conventional on kern_mega head or none (the KB DMA
-;           doors'). MEMP_KB + MEMP_AVAIL answers AX/BX in KB, CX kept
+; ONE CELL AND FOUR VERBS where the KB doors were five cells and a KB arm.
+; A verb is a register a cell need not cost (SPEC.md 20.3), and the DMA
+; variants fold in: a head is only read under MEMP_CONV, which is also what
+; keeps a block conventional on kern_mega, so a plain claim's site sets BL
+; and nothing else.
 ;
-; ONE CELL AND FOUR VERBS where the KB doors are five cells, because the KB
-; doors are what every .o88 built so far calls and these are what a package
-; written from now on should. A verb is a register a cell need not cost (SPEC.md
-; 20.3), and the DMA variants fold in: a head of 0 IS the plain claim, so the
-; head is always CX and only the direction is the verb's bit 0.
-;
-; On kern_mega the arm below offers the POOL first, as the KB doors do; a
+; On kern_mega the arm below offers the POOL first, as the KB doors did; a
 ; claim it declines is the conventional heap's.
 ; -----------------------------------------------------------------------------
 osapi_mem_p:
-    test bl, MEMP_KB            ; THE KB DOORS' REGISTERS (SPEC.md 50.3.7.1):
-    jnz mem_p_kb                ; the arm below, which comes back here
-.p:
 %ifdef KERN_MEGA
     ; THE POOL FIRST, as the KB doors do (KERN-MEGA-PLAN 13.6): an
     ; OS88_HIGHMEM package's claim of 64KB or less goes above 1MB where it
@@ -5695,20 +5684,15 @@ osapi_mem_p:
     ; does not take - so this arm only ADDS the pool, never removes the
     ; paragraph door. The pool counts in KB, so a pool claim is granted the
     ; KB that covers it: conventional memory is what the granule is for. A
-    ; DMA head stays conventional: THE door for a page-safe buffer a
-    ; real-mode path names, where the KB DMA doors give an OS88_HIGHMEM
-    ; package's head a pool block (KERN-MEGA-PLAN 14.160).
+    ; MEMP_CONV claim stays conventional: THE door for a page-safe buffer or
+    ; a block a real-mode path names, or one that is or will be a CS (the
+    ; parts' carve and their fetches, the C overlay - KERN-MEGA-PLAN 14.160)
+    or bl, bl                   ; MEMP_CONV is the sign
+    js .gen
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
     je .mreg
-    jcxz .mpool                 ; ...and CX = MEMP_CONV (bit 15, no head) is
-    jmp short .gen              ; a caller that must stay CONVENTIONAL: the
-                                ; block is or will be a CS, or a real-mode
-                                ; path names it - the parts' carve and their
-                                ; fetches, the C overlay. Those used the DMA
-                                ; door with no head for exactly that, and this
-                                ; is that idiom kept
 .mpool:
     push ax
     call .kb                    ; AX = the KB that covers it
@@ -5757,8 +5741,8 @@ osapi_mem_p:
     ret
 .gen:
 %endif
-    cmp bl, MEMP_AVAIL
-    jae .avail
+    cmp bl, MEMP_AVAIL          ; (signed: a MEMP_CONV claim is below it)
+    jge .avail
     add ax, MEM_GRAN - 1        ; THE ANSWER IS WHAT WAS GRANTED: the door
     and ax, -MEM_GRAN           ; rounds to the same granule, so rounding here
                                 ; first changes nothing it does and is the
@@ -5772,25 +5756,22 @@ osapi_mem_p:
     mov di, bx
     and di, 1                   ; bit 0 -> MC_DMA_HI, the top-down door
     ror di, 1
-    mov si, cx                  ; SI = the head, with MEMP_CONV off: it only
-    and si, 0x7FFF              ; steers kern_mega's arm above, and the
-                                ; caller's CX is KEPT (it was masked in
-                                ; place, against "every register kept").
-                                ; ZF = no head
+    xor si, si                  ; SI = the head: none...
+    or bl, bl
+    jns .nh
+    mov si, cx                  ; ...or MEMP_CONV's CX
 %ifdef KERN_MEGA
-    jz .mtop                    ; ...EXCEPT A RING, as mem_claim_dma_hi_x
-                                ; (KERN-MEGA-PLAN 14.55, SPEC.md 50.3.2): a
-    xor di, di                  ; HEAD is a chip's 64KB page, held only while
-.mtop:                          ; it plays, so on kern_mega it goes BOTTOM-UP
+    jcxz .nh                    ; ...EXCEPT A RING, as mem_claim_dma_hi_x
+    xor di, di                  ; (KERN-MEGA-PLAN 14.55, SPEC.md 50.3.2): a
+                                ; HEAD is a chip's 64KB page, held only while
+                                ; it plays, so on kern_mega it goes BOTTOM-UP
                                 ; - SOUND.DRV's staging pool is the one that
                                 ; asks here, and the KB door took it low. A
                                 ; claim with no head keeps the top: a carve,
                                 ; an overlay, an index - a block that is or
-                                ; may become a CS. Bit 15, MEMP_CONV, is off
-                                ; SI already (the `and si` above), so a
-                                ; conventional request is not taken for a
-                                ; head
+                                ; may become a CS
 %endif
+.nh:
 %ifdef MEM_ALIGN_CLASS
     test bl, MEMP_CPU           ; ...and DISK unless the caller says no int
     jnz .cpu                    ; 13h will land in it
@@ -5818,51 +5799,17 @@ osapi_mem_p:
     call mem_rank_top           ; an ordinary claim's rank, net of THIS TASK's
                                 ; floor - mmf_osapi_mem_avail's question
     call mem_avail_lvl_p
-    mov cx, MEM_GRAN
     retf
 .kparts:
     mov ax, SKB_FAT             ; the resident FAT window (18.8)...
     mov bx, SKB_STK             ; ...the background task slices...
     mov cx, SKB_STK0            ; ...and task 0's stack. Build constants: the
     retf                        ; image row is the kernel less these, and it
-                                ; is the only one that moves at run time.
-                                ; (Fifteen bytes, which is what took the
-                                ; parity pad MEMP_CONV's mask needed: the hot
+                                ; is the only one that moves at run time
+    nop                         ; PARITY PAD, never executed: the hot
                                 ; `.cold` routines past this - dsk_xfer,
                                 ; dsk_runcap, dsk_next_clus_x - keep their
-                                ; measured parity, tests/unit/t_hotpar.py)
-mem_p_kb:  ; STKBALANCE-OK: builds the far frame osapi_mem_p.p's retf takes
-                                ; THE KB ARM (kernel size pass 19, nogrow): the
-    cmp bl, MEMP_KB + MEMP_AVAIL; six KB doors' registers, written ONCE here
-    je .kav                     ; instead of once in every package's
-    push cx                     ; OS88KB_BODIES - which is what made C1's
-    push ax                     ; package side cost more than the doors saved
-    mov al, MEM_PARA_KB         ; AX = the head KB in paragraphs (CL: a head
-    mul cl                      ; is 64KB at most), CONVENTIONAL on kern_mega
-    or ah, MEMP_CONV >> 8       ; as the KB DMA doors were, head or none...
-    or bl, bl                   ; + MEMP_KBH is bit 7: a byte shorter than a
-    js .kh                      ; `test` (and the parity t_hotpar wants)
-    xor ax, ax                  ; ...or no head at all: a plain KB claim, which
-.kh:                            ; kern_mega may put in the pool
-    xchg ax, cx                 ; CX = the head, as the paragraph verbs read it
-    and bl, 7                   ; the verb
-    pop ax
-    push ax                     ; AX = the KB...
-    push cx
-    mov cl, 6
-    shl ax, cl                  ; ...in paragraphs
-    pop cx
-%ifdef KERN_MEGA                ; THE PARAGRAPH DOOR, far-called, whose retf
-    call COLD_SEG:osapi_mem_p.p ; lands here: kern_mega's .cold selector names
-%else                           ; itself; elsewhere it is where .cold RUNS
-    push word [api_coldseg]     ; (it slides, and a ROM adopts it), which is
-    call osapi_mem_p.p          ; the far frame's CS - `push cs`, spelt so
-%endif                          ; ovlchk's .cold rule can read it
-    pop ax                      ; AX and CX as they came in; pop leaves CF
-    pop cx
-    retf
-.kav:
-    jmp mmf_osapi_mem_avail     ; the KB AVAIL body DISKOPS calls: AX/BX KB
+                                ; measured parity (tests/unit/t_hotpar.py)
 
 
 ; -----------------------------------------------------------------------------

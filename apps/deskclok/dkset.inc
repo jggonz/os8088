@@ -536,7 +536,6 @@ dk_stall:
     add ax, 15
     mov cl, 4
     shr ax, cl                  ; ...as PARAGRAPHS (SPEC.md 50.3.7)
-    xor cx, cx
     push bx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P

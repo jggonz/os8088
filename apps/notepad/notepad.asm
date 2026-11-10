@@ -4520,7 +4520,7 @@ np_stghold:
     jae .kb
     mov ax, NP_STGMIN * 64          ; an empty note still needs somewhere to
 .kb:                                ; put its zero bytes
-    xor cx, cx                      ; (np_save sets CX after)
+                                    ; (np_save sets CX after)
     push bx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out CF=0 and DX = the base segment
@@ -7713,7 +7713,6 @@ np_ugrow:
     jbe .yes
     cmp word [np_useg], 0
     jne .re
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no

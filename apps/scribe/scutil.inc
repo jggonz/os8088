@@ -397,8 +397,9 @@ sc_scget:
     push ax
     push dx
     mov word [sc_scn], 0
-    mov ax, (2 * SC_SCHALF) / 1024
-    MEMKB_CLAIM
+    mov ax, ((2 * SC_SCHALF) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [sc_scseg], dx
     clc

@@ -247,9 +247,10 @@ cpu 8086
     cld
     rep stosw
     pop di
-    MEMKB_AVAIL                     ; AX = the largest free run, KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest free run, paragraphs
     xor dx, dx
-    mov cx, 10
+    mov cx, 4
 .kb:
     shl ax, 1
     rcl dx, 1

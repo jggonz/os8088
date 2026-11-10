@@ -864,14 +864,16 @@ vs_run:
     call bl_sline
     cmp word [vs_buf], 0
     jne .have
-    mov ax, VS_BUFKB
-    mov cx, VS_BUFKB
-    MEMKB_DMA
+    mov ax, VS_BUFKB * 64
+    mov cx, VS_BUFKB * 64
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P
     jc .noclaim
     mov [vs_buf], dx
-    mov ax, VS_TRKKB                ; the tracks are DMA'd here too: a
-    mov cx, VS_TRKKB                ; claim across a 64 KB page read NOTHING
-    MEMKB_DMA                       ; on the 286 (error 09h every call)
+    mov ax, VS_TRKKB * 64                ; the tracks are DMA'd here too: a
+    mov cx, VS_TRKKB * 64                ; claim across a 64 KB page read NOTHING
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; on the 286 (error 09h every call)
     jc .noclaim
     mov [vs_tbuf], dx
 .have:

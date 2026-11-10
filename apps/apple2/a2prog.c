@@ -317,7 +317,7 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
          * with no 46 KB hole in it but plenty of room for a listing. */
         seg = 0;
         while (kb >= 1) {
-            seg = os88_mem_claim((int)kb);
+            seg = os88_mem_claim_p((unsigned)kb << 6);
             if (seg != 0)
                 break;
             kb >>= 1;

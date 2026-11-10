@@ -2479,10 +2479,10 @@ px_head:
     add cx, ax                      ; a JPEG's NEXT head (SPEC.md 106.19) is
     mov [px_hcap], cx               ; read from a cluster: a cluster more
     mov ax, cx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; KB
-    inc ax                          ; ...and one KB more, which px_dmaclaim
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                      ; paragraphs
+    add ax, 64                      ; ...and one KB more, which px_dmaclaim
                                     ; no longer needs for alignment: KEPT,
                                     ; because the head is given back before
                                     ; the decode's claims (so it is no peak)

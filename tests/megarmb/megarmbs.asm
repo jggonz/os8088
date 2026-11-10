@@ -210,7 +210,7 @@ ms_ringc:
     mov ax, (MS_RL + 1024) / 1024 * 64 ; the ring and its words, all of it
     mov cx, ax                      ; page-safe and CONVENTIONAL: the paragraph
     push bx                         ; door with a head (the KB DMA door gives an
-    mov bl, MEMP_CLAIM              ; OS88_HIGHMEM package a pool block for a
+    mov bl, MEMP_CLAIM + MEMP_CONV              ; OS88_HIGHMEM package a pool block for a
     call OSAPI_MEM_P                ; head, KERN-MEGA-PLAN 14.160)
     pop bx
     jc .o

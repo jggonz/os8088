@@ -176,8 +176,9 @@ pr_onwake:
     jne .done
 
     ; --- the image, off the disk beside us --------------------------------
-    mov ax, PR_CLAIM_KB
-    MEMKB_CLAIM                     ; out CF=1 refused, DX = the base segment
+    mov ax, PR_CLAIM_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=1 refused, DX = the base segment
     jc .done
     mov [pr_seg], dx
     mov es, dx

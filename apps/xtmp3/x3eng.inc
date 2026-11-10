@@ -350,7 +350,7 @@ x3_e_init:
 %endif
     push ax                         ; THE PEAK'S ZERO (SPEC.md 121.10): the
     push bx                         ; heap's free total now, with the region
-    MEMKB_AVAIL                     ; and the eager parts already out of it
+    call x3_avkb                    ; and the eager parts already out of it
     mov [x3_free0], bx
     pop bx
     pop ax
@@ -1385,7 +1385,7 @@ x3_la_claim:
     shr dx, cl                      ; PARAGRAPHS (SPEC.md 50.3.7), so the
     add ax, dx                      ; PCM's 2,560 bytes are five granules and
     add ax, X3_PCMRES / 16          ; not three KB - half a KB less, held for
-    xor cx, cx                      ; the whole of every track. A disk read
+                                    ; the whole of every track. A disk read
     mov bl, MEMP_CLAIM              ; lands in it, and MEMP_CPU is not asked
     call OSAPI_MEM_P                ; for: 512-aligned (SPEC.md 50.2.1.1)
     jc .no
@@ -1916,9 +1916,12 @@ x3_ringget:
     call x3_gfree                   ; (no grant beside it)
     push cx
     push dx
-    mov ax, X3_XRL / 1024 + 1       ; the ring and its control words, all in
+    mov ax, (X3_XRL / 1024 + 1) * 64 ; the ring and its control words, all in
     mov cx, ax                      ; the page-safe head
-    MEMKB_DMA_HI
+    push bx
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P
+    pop bx
     jc .no
     mov [x3_xseg], dx
     pop dx
@@ -4359,7 +4362,7 @@ x3_wsclaim:
     jcxz .ok
     mov ax, [x3_caps1+X3C_PARA+si]  ; PARAGRAPHS, as CAPS says them: the
     push cx                         ; door that takes them (SPEC.md 50.3.7)
-    xor cx, cx                      ; rounds to the granule rather than a
+                                    ; rounds to the granule rather than a
     mov bl, MEMP_CLAIM              ; whole KB, up to half a KB less a
     call OSAPI_MEM_P                ; segment. CX is the count, so it is
     pop cx                          ; banked across the head (pop keeps CF)
@@ -4484,7 +4487,12 @@ x3_shrink:
     pop ax
     or dx, dx
     jz .out
-    MEMKB_REGROW
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    pop cx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     jc .out
     mov byte [x3_bshr], 1
 .out:
@@ -4509,11 +4517,23 @@ x3_memck:
     pop ax
     ret
 
+; x3_avkb - MEMP_AVAIL's answers in KB, the unit the working set is counted
+; in (X3S_PEAK): AX = the largest run, BX = the total. Keeps CX
+x3_avkb:
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
+    ret
+
 ; x3_curkb - AX = the working set NOW, in KB: the region, the eager carve and
 ; the heap's fall since launch (x3_memck's sample). keeps the rest
 x3_curkb:
     push bx
-    MEMKB_AVAIL                     ; BX = total free KB
+    call x3_avkb                    ; BX = total free KB
     mov ax, [x3_free0]
     sub ax, bx
     jnc .p

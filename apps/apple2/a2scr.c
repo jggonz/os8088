@@ -2713,7 +2713,7 @@ static void a2_fsx_enter(void *win)
         a2_st_dirty = 1;
         return;
     }
-    a2_fsx_sh = os88_mem_claim(A2_FSX_KB);
+    a2_fsx_sh = os88_mem_claim_p(A2_FSX_KB * 64);
     if (a2_fsx_sh == 0) {
         a2_say("No memory for colour.");
         a2_st_dirty = 1;

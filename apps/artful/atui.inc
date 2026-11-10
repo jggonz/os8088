@@ -468,7 +468,6 @@ at_subank:
     shl dx, cl
     add ax, dx                      ; AX = PARAGRAPHS, rounded up (ZF =
     jz .no                          ; none; SPEC.md 50.3.7)
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out CF=0, DX = base segment
     jc .no

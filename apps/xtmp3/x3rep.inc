@@ -336,7 +336,13 @@ x3r_write:
     mov ax, [x3_free0]
     call x3c_hex4
     push bx
-    MEMKB_AVAIL                     ; AX = the largest run, BX = the total
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest run, BX = the total...
+    mov cl, 6                   ; ...in KB, as [x3_free0]
+    shr ax, cl
+    shr bx, cl
+    pop cx
     xchg ax, bx
     mov si, x3r_s_avl
     call x3_put

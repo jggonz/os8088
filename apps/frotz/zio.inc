@@ -859,15 +859,16 @@ zi_load:
     ; bigger claim's selector already covers its first 64KB, and the pages
     ; past that are zm_pages'. Bit 2 is TI: a real-mode claim is 512-byte
     ; aligned and never has it, so this costs the XT nothing. The 64KB one
-    ; stays on the KB door ON PURPOSE: as an OS88_HIGHMEM claim of 64KB it
-    ; goes above 1MB, where OSAPI_MEM_P's would be conventional memory.
+    ; is a plain claim with no MEMP_CONV ON PURPOSE: as an OS88_HIGHMEM claim
+    ; of 64KB it goes above 1MB.
     test dl, 4
     jz .claimed
     cmp ax, 64 * 64
     jae .claimed
     call OSAPI_MEM_FREE
-    mov ax, 64
-    MEMKB_CLAIM
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov word [zi_para], 64 * 64
     jmp short .claimed
@@ -931,8 +932,9 @@ zi_load:
                                 ; above hands the old claim back and a FRESH
                                 ; claim starts undeclared
 
-    mov ax, ZI_STKKB
-    MEMKB_CLAIM
+    mov ax, ZI_STKKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [zf_stkseg], dx
     mov ax, zf_reloc
@@ -2562,8 +2564,9 @@ zi_script_open:
     push dx
     cmp word [zi_scrseg], 0
     jne .ok                         ; idempotent: a second story reuses it
-    mov ax, ZI_SCRKB
-    MEMKB_CLAIM
+    mov ax, ZI_SCRKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [zi_scrseg], dx
     mov ax, zf_reloc                ; ...AND IT MOVES (NO-PINNING A3): the

@@ -7836,8 +7836,8 @@ RD_RK       equ 3               ; (fsx_rdownf's bound, past the private block)
                                   ;          claim heap in PARAGRAPHS (SPEC.md
                                   ;          50.3.7) - a claim either way up,
                                   ;          a regrow and the free figures,
-                                  ;          each answering what was granted
-                                  ;          and the granule
+                                  ;          each answering what was
+                                  ;          granted; MEMP_CONV a verb bit
 ; ---- RN: the name at the caller's DS:SI staged first, a .cold file door
     RDPUB RDK_RN, dwf_dskw_write, FILE_WRITE ; files (SPEC.md 18.4/20.3): N,
     RDPUB RDK_RN, dwf_dskw_read, FILE_READ ; because ES:BX is the data buffer

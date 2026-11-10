@@ -54,8 +54,9 @@ XC_NBOX         equ 8
 ; -----------------------------------------------------------------------------
 xc_init:
     SAVE
-    mov ax, XC_DICT_KB
-    MEMKB_CLAIM
+    mov ax, XC_DICT_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [xc_dseg], dx
     ; the card side, by adapter: the CGA's here, the Hercules' in herc.inc (SPEC.md 102.7).  Everything

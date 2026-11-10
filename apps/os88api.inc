@@ -1636,10 +1636,9 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; The six KB doors - OSAPI_MEM_CLAIM, _CLAIM_HI, _CLAIM_DMA, _CLAIM_DMA_HI,
 ; OSAPI_MEM_AVAIL and OSAPI_MEM_REGROW - were withdrawn at the flag day
 ; (kernel size pass 19, SPEC.md 20.3.1) and their names went with them, so a
-; source still calling one fails to assemble. A package whose sizes are KB
-; counts calls the MEMKB_* macros instead: the same registers in and out as
-; those doors, written once per package as near procs over OSAPI_MEM_P
-; (OS88KB_BODIES below, SPEC.md 50.3.7.1).
+; source still calling one fails to assemble. PARAGRAPHS are the one unit:
+; a size written in KB is KB * 64, and a KB figure for a person to read is the
+; answer >> 6 at the place it is shown (kernel size pass 19, SPEC.md 50.3.7).
 ;
 ; What a claim IS has not changed. It is how you get memory your region cannot
 ; hold - a canvas, a sound clip, a decoder's tables. You are identified by the
@@ -1669,133 +1668,6 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; in (SPEC.md 66.4.1), and mem_can_move refuses an MC_DMA claim whatever you
 ; declare.
 ;
-; THE MEMKB_* MACROS - a KB-counted site's spelling (SPEC.md 50.3.7.1). Every
-; register is kept but DX; AX still holds the KB asked for; every claim is
-; the DISK class. A package that names none of them carries none of their
-; bytes: OS88_IMAGE_END assembles only the entries named before it.
-;   MEMKB_CLAIM      AX = KB -> CF=0 and DX = the base
-;   MEMKB_CLAIM_HI   ...from the top
-;   MEMKB_DMA        ...and CX = the KB of a page-safe HEAD (0 = none, and
-;   MEMKB_DMA_HI        then MEMP_CONV: conventional on kern_mega, as the
-;                       withdrawn DMA doors were)
-;   MEMKB_REGROW     DX = your claim, AX = the KB it should be -> CF=0 and
-;                    DX = its base NOW (the same when it grew where it stood,
-;                    another when it moved - your bytes came with it); CF=1
-;                    and the claim is untouched
-;   MEMKB_AVAIL      -> AX = the largest claim you can have, BX = the total,
-;                    in KB rounded down (OSAPI_MEM_P's MEMP_AVAIL answer)
-; -----------------------------------------------------------------------------
-; OS88KB_BODIES - A PACKAGE'S KB-COUNTED CLAIMS, OVER OSAPI_MEM_P (SPEC.md
-; 50.3.7.1). NOT AN API: nothing here is a kernel cell. It is the six KB doors
-; the flag day withdrew written ONCE PER PACKAGE as near procs over the one
-; cell's KB ARM (MEMP_KB: the doors' registers, kept by the kernel once
-; rather than by every package - kernel size pass 19, nogrow), for a package
-; whose sizes are KB counts and whose call sites were written against those
-; doors' registers. Each entry is BL and a jump: 5 bytes, and 7 for the
-; shared tail, 8 for memkb_avail. The MEMKB_* macros name an
-; entry and set a flag, and OS88_IMAGE_END invokes this, which assembles only
-; the entries the package named - so a package that never claims in KB
-; carries none of it. An assembly with no OS88_IMAGE_END (a part) invokes it
-; itself, at a place that is CODE after its last MEMKB_* site - and so does a
-; package whose LAST bytes are a tail its bss extends (FONTVIEW's specimen):
-; there, before the tail. Once: a second invocation assembles nothing.
-;
-; THE CONTRACTS ARE THE WITHDRAWN DOORS', register for register: every
-; register is kept but DX (the claim's base, or garbage on CF=1), AX still
-; holds the KB asked for, and memkb_avail answers AX/BX in KB rounded down
-; (the paragraph answer shifted, by the kernel's KB arm).
-; Every claim is the DISK class (SPEC.md 50.2.1.1) - what the KB doors gave -
-; so a site that is CPU-only and wants the finer granule calls OSAPI_MEM_P
-; itself with MEMP_CPU. A DMA entry (MEMP_KBH) is conventional on kern_mega
-; with a head or without one (CX = 0), as the KB DMA doors' "no page" claim
-; was and as OSAPI_MEM_P keeps a head on every package.
-; -----------------------------------------------------------------------------
-%macro OS88KB_BODIES 0
-%ifndef OS88KB__DONE              ; once: a package whose last bytes must
-%define OS88KB__DONE               ; END its image (a tail the bss extends)
-                                   ; includes this itself, before them and
-                                   ; after its last MEMKB_* site
-%ifdef MEMKB__AVAIL
-memkb_avail:                    ; out AX = the largest claim you can have, BX
-    mov bl, MEMP_KB + MEMP_AVAIL ; = the total, in KB (rounded down: a claim
-    call OSAPI_MEM_P            ; of the answer always fits); CX kept - the
-    ret                         ; kernel's KB arm (SPEC.md 50.3.7.1)
-%endif
-; The claim entries share one tail: each sets BL and jumps to it, the last
-; one assembled falls into it. The kernel's KB arm keeps AX and CX; BX is
-; the body's to keep, since BL carries the verb.
-%ifdef MEMKB__HI
-memkb_claim_hi:                 ; AX = KB -> CF=0 DX = the base, from the TOP
-    push bx
-    mov bl, MEMP_KB + MEMP_CLAIM_HI
-  %if %isdef(MEMKB__REGROW) || %isdef(MEMKB__DMAHI) || %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
-    jmp short memkb_t
-  %endif
-%endif
-%ifdef MEMKB__REGROW
-memkb_regrow:                   ; DX = your claim, AX = the KB it should be
-    push bx                     ; -> CF=0 DX = its base now (it may move)
-    mov bl, MEMP_KB + MEMP_REGROW
-  %if %isdef(MEMKB__DMAHI) || %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
-    jmp short memkb_t
-  %endif
-%endif
-%ifdef MEMKB__DMAHI
-memkb_dma_hi:                   ; ...and the DMA pair: CX = the KB of the
-    push bx                     ; HEAD that must sit inside one 64KB page (0:
-    mov bl, MEMP_KB + MEMP_KBH + MEMP_CLAIM_HI ; none), conventional on kern_mega
-  %if %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
-    jmp short memkb_t
-  %endif
-%endif
-%ifdef MEMKB__DMA
-memkb_dma:
-    push bx
-    mov bl, MEMP_KB + MEMP_KBH
-  %ifdef MEMKB__CLAIM
-    jmp short memkb_t
-  %endif
-%endif
-%ifdef MEMKB__CLAIM
-memkb_claim:                    ; AX = KB -> CF=0 DX = the base
-    push bx
-    mov bl, MEMP_KB
-%endif
-%if %isdef(MEMKB__CLAIM) || %isdef(MEMKB__HI) || %isdef(MEMKB__REGROW) || %isdef(MEMKB__DMA) || %isdef(MEMKB__DMAHI)
-memkb_t:
-    call OSAPI_MEM_P            ; the kernel's KB arm: AX, CX kept, DX the
-    pop bx                      ; answer
-    ret
-%endif
-
-%endif                             ; OS88KB__DONE
-%endmacro
-
-%macro MEMKB_CLAIM 0
- %define MEMKB__CLAIM
-    call memkb_claim
-%endmacro
-%macro MEMKB_CLAIM_HI 0
- %define MEMKB__HI
-    call memkb_claim_hi
-%endmacro
-%macro MEMKB_DMA 0
- %define MEMKB__DMA
-    call memkb_dma
-%endmacro
-%macro MEMKB_DMA_HI 0
- %define MEMKB__DMAHI
-    call memkb_dma_hi
-%endmacro
-%macro MEMKB_REGROW 0
- %define MEMKB__REGROW
-    call memkb_regrow
-%endmacro
-%macro MEMKB_AVAIL 0
- %define MEMKB__AVAIL
-    call memkb_avail
-%endmacro
-
 %define OSAPI_MEM_FREE      OS88_DOOR           ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
                                  ; (or inside a compaction's relocation proc,
@@ -1819,8 +1691,10 @@ memkb_t:
 ;     call OSAPI_MEM_COMPACT        ; CF=0: posted
 ;     ret                           ; <- RETURN.  Nothing happens until you do
 ;     ; ...and in your OSAPI_WM_ONWAKE handler:
-;     MEMKB_AVAIL                   ; now EXACT, and it is the max
-;     MEMKB_CLAIM
+;     mov bl, MEMP_AVAIL
+;     call OSAPI_MEM_P              ; now EXACT, and it is the max
+;     mov bl, MEMP_CLAIM
+;     call OSAPI_MEM_P
 ;
 ; ASK BEFORE YOU CLAIM, and that is not politeness: a claim that fails SHEDS
 ; on the way down - the disk caches go, and the read-ahead costs seconds of
@@ -1860,8 +1734,8 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
                                  ; CF FIRST - kern_big's what-if hands back
                                  ; the flags it was called with
 %define OSAPI_MEM_COMPACT   OS88_DOOR           ; AH = MEMC_WHATIF: AL = a
-                                 ; purge level, out AX/BX in KB as MEMKB_AVAIL
-                                 ; at that level, planned as if YOUR OWN
+                                 ; purge level, out AX/BX in KB as MEMP_AVAIL's
+                                 ; answers >> 6 at that level, planned as if YOUR OWN
                                  ; REGION could move;
                                  ; AH = MEMC_POST: BX = a window of yours, AL =
                                  ; the rank, out CF=0 posted (an EVT_WAKE
@@ -1905,8 +1779,10 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
 ;
 ;   mov al, MEM_PG_HIGH          ; everything except the disk cache...
 ;   call OSAPI_MEM_FLOOR         ; ...is what THIS TASK may take from now on
-;   MEMKB_AVAIL                  ; AX = the largest run that leaves it alive
-;   MEMKB_CLAIM_HI               ; ...and it is still alive afterwards
+;   mov bl, MEMP_AVAIL
+;   call OSAPI_MEM_P             ; AX = the largest run that leaves it alive
+;   mov bl, MEMP_CLAIM_HI
+;   call OSAPI_MEM_P             ; ...and it is still alive afterwards
 ;   mov al, MEM_LVL_TOP          ; the floor is lifted whatever the answer -
 ;   call OSAPI_MEM_FLOOR         ; the slot preserves the FLAGS, so...
 ;   jnc .got                     ; ...this still reads the claim's CF
@@ -2493,25 +2369,28 @@ SEG_LOW     equ 14
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7), and
 ; since the flag day (kernel size pass 19) the ONLY cell that claims, grows or
-; sizes a claim: the six KB doors went for it (SPEC.md 20.3.1), and a site
-; written in KB calls the MEMKB_* macros above, which are this call. Every
-; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says
-; what it is - so a package whose size is a BYTE count asks for the
-; paragraphs (OS88_BYTES_PARA turns a byte count into them) and saves half a
-; granule a claim on average over rounding to a KB. A claim is freed with
+; sizes a claim: the six KB doors went for it (SPEC.md 20.3.1), and so did
+; their KB arm - PARAGRAPHS ARE THE ONE UNIT (a size you know in KB is KB *
+; 64, a constant; a KB figure to show a person is the answer >> 6 where it is
+; shown). Every claim is rounded to the heap's GRANULE - 512 bytes today - so
+; a package whose size is a BYTE count asks for the paragraphs
+; (OS88_BYTES_PARA turns a byte count into them) and saves half a granule a
+; claim on average over rounding to a KB. A claim is freed with
 ; OSAPI_MEM_FREE and made movable with OSAPI_MEM_MOVABLE.
 %define OSAPI_MEM_P         OS88_DOOR           ; X: BL = the verb:
-                                 ; MEMP_CLAIM / MEMP_CLAIM_HI  AX = paragraphs,
-                                 ;          CX = the 64KB-page-safe HEAD in
-                                 ;          paragraphs (0 = none) -> CF=0,
-                                 ;          DX = the base, AX = the paragraphs
-                                 ;          GRANTED (the slack is yours).
-                                 ;          _HI claims from the TOP (SPEC.md
-                                 ;          50.3.2)
+                                 ; MEMP_CLAIM / MEMP_CLAIM_HI  AX = paragraphs
+                                 ;          -> CF=0, DX = the base, AX = the
+                                 ;          paragraphs GRANTED (the slack is
+                                 ;          yours). CX IS NOT READ. _HI claims
+                                 ;          from the TOP (SPEC.md 50.3.2)
                                  ;          | MEMP_CPU: no int 13h will
                                  ;          land in it, so its base need not
                                  ;          be 512-aligned (SPEC.md 50.2.1.1)
                                  ;          - leave it off for a disk buffer
+                                 ;          | MEMP_CONV: CX = the 64KB-page-
+                                 ;          safe HEAD in paragraphs (0 = none)
+                                 ;          AND the claim stays CONVENTIONAL on
+                                 ;          kern_mega (below)
                                  ; MEMP_REGROW  DX = your claim, AX = the new
                                  ;          paragraphs -> CF=0, DX = its base
                                  ;          NOW and AX = the paragraphs
@@ -2529,8 +2408,7 @@ SEG_LOW     equ 14
                                  ;          answer from DX
                                  ; MEMP_AVAIL  -> AX = the largest claim you
                                  ;          can have, BX = the total, in
-                                 ;          paragraphs, at your floor; CX =
-                                 ;          the GRANULE in paragraphs. Size
+                                 ;          paragraphs, at your floor. Size
                                  ;          yourself from THIS, not int 12h. IT
                                  ;          IS THE DELIVERABLE (SPEC.md 50.6.3,
                                  ;          66.10.3): a purgeable claim counts
@@ -2543,14 +2421,14 @@ SEG_LOW     equ 14
                                  ;          OSAPI_MEM_HUGE's MEMH_AVAIL
                                  ; CF=1 refused, and a CLAIM or REGROW verb's
                                  ; AX is then the request rounded up to the
-                                 ; granule. Every register not named is kept,
-                                 ; CX included. On kern_mega an OS88_HIGHMEM claim
-                                 ; with no head goes above 1MB where it can,
-                                 ; granted the KB that covers it - unless CX
-                                 ; is MEMP_CONV, which keeps it conventional.
-                                 ; A claim WITH a head is conventional there
-                                 ; on every package: THE door for a page-safe
-                                 ; buffer a real-mode path names
+                                 ; granule. Every register not named is kept
+                                 ; (BL is the verb you set: bank BX across the
+                                 ; call if you need it). On kern_mega an
+                                 ; OS88_HIGHMEM claim without MEMP_CONV goes
+                                 ; above 1MB where it can, granted the KB that
+                                 ; covers it; MEMP_CONV keeps it conventional
+                                 ; - a block that is or will be a CS, one a
+                                 ; real-mode path names, a page-safe buffer
                                  ; (KERN-MEGA-PLAN 14.160)
 MEMP_CLAIM    equ 0
 MEMP_CLAIM_HI equ 1
@@ -2561,18 +2439,11 @@ MEMP_KPARTS   equ 6              ; -> AX = the kernel's resident FAT window,
                                  ; BX = its background task stacks, CX = task
                                  ; 0's stack, in BYTES: the three fixed parts
                                  ; OSAPI_SYS_KB reports in whole KB
-MEMP_KB       equ 8              ; + a verb: THE KB DOORS' REGISTERS, which
-                                 ; is what the MEMKB_* bodies call (SPEC.md
-                                 ; 50.3.7.1): AX in KB and KEPT, every register
-                                 ; kept but DX and BL; a claim reads no head.
-                                 ; + MEMP_AVAIL: AX/BX in KB, CX kept
-MEMP_KBH      equ 0x80           ; + MEMP_KB on a claim: CX = a DMA head in KB
-                                 ; (0 = none), conventional on kern_mega
-MEMP_CONV     equ 0x8000         ; CX for a claim verb: NO head, and stay
-                                 ; CONVENTIONAL on kern_mega - a block that is
-                                 ; or will be a CS, or one a real-mode path
-                                 ; names. Plain CX = 0 may go above 1MB there
-                                 ; for an OS88_HIGHMEM package
+MEMP_CONV     equ 0x80           ; + a claim verb: CX = a page-safe HEAD in
+                                 ; paragraphs (0 = none), and the claim stays
+                                 ; CONVENTIONAL on kern_mega. Without it CX is
+                                 ; not read and an OS88_HIGHMEM package's claim
+                                 ; may go above 1MB there
 %define OS88_BYTES_PARA(n) (((n) + 15) / 16)   ; bytes -> paragraphs to ask for
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
@@ -3266,10 +3137,11 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; no head serves YOU, BX =
                                  ; the total free KB you can claim from, both
                                  ; regions, and DX = the pool's best run in KB
-                                 ; (0: none for you) - MEMKB_AVAIL with the
-                                 ; pool counted (MEGA-HUGE-PLAN F6). CF=1 on
-                                 ; kern_big and kern_small, as for any ask:
-                                 ; MEMKB_AVAIL IS that answer there
+                                 ; (0: none for you) - MEMP_AVAIL's in KB with
+                                 ; the pool counted (MEGA-HUGE-PLAN F6). CF=1
+                                 ; on kern_big and kern_small, as for any ask:
+                                 ; MEMP_AVAIL's answer >> 6 IS that answer
+                                 ; there
 MEMH_AVAIL  equ 1               ; OSAPI_MEM_HUGE AX = 0, BX = this: the ask above
                                  ; A BRIDGE IS TWO RUNS OF MEMORY (SPEC.md
                                  ; 50.3.5, KERN-MEGA-PLAN 14.169): out BX =
@@ -5415,13 +5287,11 @@ OS88_BSS_SIZE equ (%1)
 ; -----------------------------------------------------------------------------
 ; OS88_IMAGE_END - close the package. Defines os88_image_end (the label a
 ; package bases its bss offsets on), OS88_IMAGE_SIZE = $-$$ for the header,
-; assembles the MEMKB_* entries the package named (OS88KB_BODIES),
 ; defaults OS88_BSS_SIZE to 0 when no OS88_BSS was given, and enforces the
 ; APP_MAX_SIZE budget at assembly time.
 ; -----------------------------------------------------------------------------
 %macro OS88_IMAGE_END 0
     %define OS88__HAVE_END
-    OS88KB_BODIES               ; the MEMKB_* entries this package named
 os88_image_end:
 OS88_IMAGE_SIZE equ os88_image_end - $$
     %ifndef OS88__HAVE_BSS

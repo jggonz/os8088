@@ -518,6 +518,10 @@ void os88_seg_get(void *dst, unsigned seg, unsigned off, unsigned n) { printf("H
 void os88_seg_put(unsigned seg, unsigned off, const void *src, unsigned n) { printf("HARNESS: os88_seg_put: not here\n"); exit(1); }
 unsigned os88_mem_claim_p(unsigned paras)
 {
+    if ((paras & 63) == 0 && paras)     /* a KB size, which the package now
+                                         * asks for in paragraphs (kernel size
+                                         * pass 19): the KB stub's model */
+        return os88_mem_claim((int)(paras >> 6));
     printf("HARNESS: os88_mem_claim_p(%u): not a claim this program makes\n", paras);
     exit(1);
 }

@@ -187,7 +187,13 @@ mh_entry:
     mov ax, dx
     call mh_hex4
     call mh_nl
-    MEMKB_AVAIL                     ; ...and the heap's alone, beside it
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; ...and the heap's alone, beside it (in
+    mov cl, 6                   ; KB, as the row reads it)
+    shr ax, cl
+    shr bx, cl
+    pop cx
     mov si, mh_s_mav
     call mh_say
     call mh_hex4
@@ -196,8 +202,9 @@ mh_entry:
     mov ax, bx
     call mh_hex4
     call mh_nl
-    mov ax, 64                      ; --- a WHOLE 64KB file into a 64KB pool
-    MEMKB_CLAIM                     ; claim (KERN-MEGA-MEMORY-PLAN 8.6): the
+    mov ax, 64 * 64                      ; --- a WHOLE 64KB file into a 64KB pool
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; claim (KERN-MEGA-MEMORY-PLAN 8.6): the
     mov cl, 6                       ; run that ends at the window's end
     jc .no
     mov [mh_c64], dx

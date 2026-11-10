@@ -22,20 +22,22 @@ XS_CLAIM_CC     equ 28                  ; KB: ...and with the compiled hot poses
 xb_spr_load:
     SAVE
     mov byte [xb_nspr], 0
-    mov ax, XS_CLAIM_V
+    mov ax, XS_CLAIM_V * 64         ; (paragraphs, and [xb_sprkb] holds them)
     cmp byte [xb_cga], 0
     je .claim
-    mov ax, XS_CLAIM_CC             ; the compiled poses ride in the claim after the blobs; a machine
+    mov ax, XS_CLAIM_CC * 64        ; the compiled poses ride in the claim after the blobs; a machine
     mov [xb_sprkb], ax              ; without the room for them plays on the interpreted draw
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD, both claims: the plain claim
-    MEMKB_DMA                       ; on every kernel, and CONVENTIONAL on kern_mega for this
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; on every kernel, and CONVENTIONAL on kern_mega for this
 xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim refuses the big claim here)
     jnc .got
-    mov ax, XS_CLAIM_C
+    mov ax, XS_CLAIM_C * 64
 .claim:
     mov [xb_sprkb], ax              ; OS88_HIGHMEM package - the compiled poses are far-called
     xor cx, cx                      ; IN this claim, and a claim above 1MB is a data-only
-    MEMKB_DMA                       ; selector with no code view (os88api.inc, OS88_HIGHMEM)
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; selector with no code view (os88api.inc, OS88_HIGHMEM)
     jc .nomem
 .got:
     mov [xb_sprseg], dx
@@ -55,7 +57,7 @@ xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim re
 .cga:
     call xs_load_cga
     jc .done
-    cmp word [xb_sprkb], XS_CLAIM_CC
+    cmp word [xb_sprkb], XS_CLAIM_CC * 64
     je .compile
     clc                             ; (the small claim: nothing compiled, xs_ctab stays empty; the
     jmp .done                       ; cmp's own borrow is NOT an error - it took this path to a

@@ -36,5 +36,3 @@ br_dl_part_copy:
     call br_copyselection
     retf
 
-OS88KB_BODIES                        ; the MEMKB_* entries this part named (a
-                                    ; part has no OS88_IMAGE_END to do it)

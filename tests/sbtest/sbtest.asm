@@ -429,10 +429,11 @@ sb_rec:
     mov ax, si                      ; show the grant offset on line 1
     mov bx, sb_s1+2
     call sb_putu5
-    mov ax, SB_RKB
+    mov ax, SB_RKB * 64
     mov cx, ax                      ; all of it is the card's: page-safe
     mov word [sb_rtmp], 0           ; (nothing to free if this refuses)
-    MEMKB_DMA_HI                    ; DX = the ring's segment
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = the ring's segment
     mov al, 9
     jc .freefail
     mov [sb_rtmp], dx               ; a candidate, like the grant: an open

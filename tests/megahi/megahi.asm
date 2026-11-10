@@ -49,8 +49,9 @@ mh_entry:
     call OSAPI_XMEM_CAPS
     call mh_hex4
     call mh_nl
-    mov ax, 1                       ; --- a claim from the entry proc ------
-    MEMKB_CLAIM
+    mov ax, 1 * 64                       ; --- a claim from the entry proc ------
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov cl, 1
     jc .no
     mov es, dx
@@ -67,8 +68,9 @@ mh_entry:
     call mh_say
     call mh_nl
     mov bp, dx                      ; --- REGROW: in the pool, DX kept ------
-    mov ax, 8
-    MEMKB_REGROW
+    mov ax, 8 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     mov cl, 0x10
     jc .no
     mov cl, 0x11
@@ -81,8 +83,9 @@ mh_entry:
     cmp word [es:1022], 0xA5A5
     jne .no
     mov word [es:8190], 0x7E7E      ; the new last word
-    mov ax, 80                      ; --- ...past 64KB: MOVED DOWN ----------
-    MEMKB_REGROW
+    mov ax, 80 * 64                      ; --- ...past 64KB: MOVED DOWN ----------
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     mov cl, 0x13
     jc .no
     mov es, dx
@@ -167,8 +170,9 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 0x34
     jc .no
-    mov ax, 8                       ; ...and one LEFT HELD: the teardown's
-    MEMKB_CLAIM
+    mov ax, 8 * 64                       ; ...and one LEFT HELD: the teardown's
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov cl, 9
     jc .no
     push dx                         ; --- a file into that claim -----------

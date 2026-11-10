@@ -403,6 +403,7 @@ void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); 
 static unsigned char farmem[9 * 1024];
 static int n_claims;
 unsigned os88_mem_claim(int kb) { n_claims++; return kb <= 9 ? 1 : 0; }
+unsigned os88_mem_claim_p(unsigned paras) { return os88_mem_claim((int)(paras >> 6)); }
 int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
 void cw_farput(const void *src, unsigned seg, unsigned off, unsigned n)
 { (void)seg; memcpy(farmem + off, src, n); }

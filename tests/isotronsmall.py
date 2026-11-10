@@ -83,12 +83,14 @@ CANVKB, CLAIMKB = 63, 30           # SPEC.md 108.8's two claims, in KB
 
 # ONE cell since the flag day (kernel size pass 19): the KB doors this row
 # traced were withdrawn for OSAPI_MEM_P (SPEC.md 50.3), which isoTron reaches
-# through its MEMKB_* entries - so a hit is a CLAIM or an ASK by its verb, BL
-# (MEMP_KB and MEMP_KBH masked off: the entries' KB arm). And OSAPI_MEM_P is
-# a DOOR cell since T5 (SPEC.md 20.3.4): a call is `int 81h / db <index>`, no
-# cell address to break on - so the trace is at the door's entry, where the
-# stack holds the int frame (IP, CS, FLAGS), and a hit is MEM_P's when the
-# byte at the caller's CS:IP is the SDK's index, the kernel's rdp_MEM_P.
+# in paragraphs since kernel size pass 19 (kbpara) - so a hit is a CLAIM or an
+# ASK by its verb, BL (MEMP_CONV, 80h, masked off: a verb BIT that keeps a
+# claim conventional, not a verb). And OSAPI_MEM_P is a DOOR cell since T5
+# (SPEC.md 20.3.4): a call is `int 81h / db <index>`, no cell address to
+# break on - so the trace is at the door's entry, where the stack holds the
+# int frame (IP, CS, FLAGS), and a hit is MEM_P's when the byte at the
+# caller's CS:IP is the SDK's index, the kernel's rdp_MEM_P. BL is the verb
+# there: the door banks BX before it reads its index.
 def memp_door():
     """(the door's linear entry, OSAPI_MEM_P's published index)."""
     return (os88sym.linear("os88_door", DEFS),
@@ -96,7 +98,7 @@ def memp_door():
 
 
 MEMP_ASK = 5                       # MEMP_AVAIL; 0..3 are the claim verbs
-MEMP_ARM = 0x08 | 0x80             # MEMP_KB | MEMP_KBH: not part of the verb
+MEMP_CONV = 0x80                   # a verb bit (SPEC.md 50.3.7), not the verb
 MEM_MAX_SMALL = 16                 # kernel/memory.inc's MEM_MAX under KERN_SMALL
 MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE   # a cache's owner high byte (memory.inc)
 
@@ -170,10 +172,10 @@ def main():
         check(True, "A: the loader places the package", "(segment 0x%04X)" % g.seg)
         # --- B: refused before any claim -----------------------------------
         mine = [h for h in tr.hits if h.get("hit") == (g.seg, memp_ix)]
-        verb = [((h.get("regs") or {}).get("bx", 0) & 0xFF & ~MEMP_ARM)
+        verb = [((h.get("regs") or {}).get("bx", 0) & 0xFF & ~MEMP_CONV)
                 for h in mine]
         asks = sum(1 for v in verb if v == MEMP_ASK)
-        claims = sum(1 for v in verb if v < 4)
+        claims = sum(1 for v in verb if v < 4)     # CLAIM, _HI, | MEMP_CPU
         check(g.b("it_nomem") == 1 and g.w("it_cseg") == 0 and g.w("it_seg") == 0
               and asks >= 1 and claims == 0 and not tr.overflowed,
               "B: it ASKS, refuses itself and never claims",
