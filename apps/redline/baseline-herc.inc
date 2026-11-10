@@ -1,22 +1,22 @@
 ; Generated from actual MartyPC measurements; SPEC.md 103.3.
 ; Provenance and trials: apps/redline/reference-herc.json.
 rl_baseline_herc:
-    dd 101885
-    dd 74553
-    dd 151515
-    dd 152137
-    dd 107365
-    dd 440351
-    dd 186399
-    dd 298145
-    dd 851968
-    dd 1245184
-    dd 118317
-    dd 655360
-    dd 31064064
-    dd 24576000
-    dd 14221312
+    dd 103952
+    dd 72260
+    dd 137651
+    dd 132397
+    dd 107036
+    dd 446063
+    dd 202530
+    dd 288882
+    dd 742741
+    dd 1092266
+    dd 116130
+    dd 720896
+    dd 28966912
+    dd 23527424
+    dd 13828096
     dd 393216
-    dd 633514
-    dd 8126464
-    dd 7143424
+    dd 589824
+    dd 7536640
+    dd 6706517
