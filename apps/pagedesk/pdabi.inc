@@ -257,7 +257,7 @@ PDV_GFX_FN               equ 0xCD
 PDV_GFX_DASH             equ 0xCE
 PDGX_CSBYTES             equ 1264
 PDGX_LUTBYTES            equ 1028
-PDGX_SHBYTES             equ 528
+PDGX_SHBYTES             equ 570
 PDGX_SRCMAX              equ 480
 PDGX_K_GRAY              equ 1
 PDGX_K_RGB               equ 2
@@ -279,7 +279,8 @@ PDGX_LUT_INVERT          equ 0x01
 PDGX_SH_EXT0             equ 0x01
 PDGX_SH_EXT1             equ 0x02
 PDGX_SH_MESH             equ 0x04
-PDGX_TRI_BYTES           equ 14
+PDGX_VTX_BYTES           equ 10
+PDGX_TRI_BYTES           equ 30
 PDGXI_DECODE             equ 0x0001
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------

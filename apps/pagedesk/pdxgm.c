@@ -10,18 +10,18 @@
 typedef struct pd_fx fx;
 
 static void fx_cp(fx *d, const fx *s) { d->hi = s->hi; d->lo = s->lo; }
-static void fx_i(fx *r, pdi n) { pdm_fx_int(r, n); }
+#define fx_i pdm_fx_int
 static void fx_raw(fx *r, pdi hi, pdw lo) { r->hi = hi; r->lo = lo; }
 static pdi fx_sign(const fx *a) { return a->hi < 0 ? -1 : (a->hi == 0 && a->lo == 0 ? 0 : 1); }
-static void fx_add(fx *r, const fx *a, const fx *b) { pdm_fx_add(r, a, b); }
-static void fx_sub(fx *r, const fx *a, const fx *b) { pdm_fx_sub(r, a, b); }
-static void fx_mul(fx *r, const fx *a, const fx *b) { pdm_fx_mul(r, a, b); }
+#define fx_add pdm_fx_add
+#define fx_sub pdm_fx_sub
+#define fx_mul pdm_fx_mul
 static void fx_div(fx *r, const fx *a, const fx *b)
 {
     if (b->hi == 0 && b->lo == 0) { fx_raw(r, 0, 0); return; }
     pdm_fx_div(r, a, b);
 }
-static pdi fx_cmp(const fx *a, const fx *b) { return pdm_fx_cmp(a, b); }
+#define fx_cmp pdm_fx_cmp
 static void fx_clamp01(fx *r)
 {
     if (r->hi < 0) fx_raw(r, 0, 0);

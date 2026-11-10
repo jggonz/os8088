@@ -17,7 +17,7 @@
 #define GC_PAT     10
 #define GCF_NONE   1             /* Separation /None: paints nothing          */
 #define CS_ROWS    5
-#define CS_TAB     1100
+#define CS_TAB     1032
 
 struct gxcs {
     pdb kind, n, flags, pad;

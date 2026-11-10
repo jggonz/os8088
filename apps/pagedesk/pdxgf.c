@@ -7,7 +7,7 @@
  * pdxg.c after pdxgp.c. Every static array is bss, so no frame passes 96 bytes.
  * ==========================================================================*/
 #define FN_MAX   12
-#define FN_SAMAX 6144
+#define FN_SAMAX 3072
 #define FN_CODE  1024
 #define FN_STACK 100
 #define FNE_NONE 0xFFu

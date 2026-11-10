@@ -697,7 +697,7 @@ struct pdxb_img {
 #define PDV_GFX_DASH    0xCE /* rcore's dash walker (pdxdash.c)                 */
 #define PDGX_CSBYTES    1264 /* sizeof(struct pdgx_cs): an XCK_CS entry          */
 #define PDGX_LUTBYTES   1028 /* sizeof(struct pdgx_lut): an XCK_LUT entry        */
-#define PDGX_SHBYTES    528  /* a shading header + ramp: an XCK_SHADE entry      */
+#define PDGX_SHBYTES    570  /* sizeof(struct pdgx_shade): an XCK_SHADE entry     */
 #define PDGX_SRCMAX     480
 #define PDGX_K_GRAY 1
 #define PDGX_K_RGB 2
@@ -744,7 +744,8 @@ struct pdgx_shade {
 #define PDGX_SH_EXT0 0x01
 #define PDGX_SH_EXT1 0x02
 #define PDGX_SH_MESH 0x04
-#define PDGX_TRI_BYTES 14       /* a triangle vertex: x y (16.16), lum, c4      */
+#define PDGX_VTX_BYTES 10       /* a vertex: x y (16.16 each), lum, c4          */
+#define PDGX_TRI_BYTES 30       /* a triangle: three vertices                   */
 struct pdxb_gfx {
     pdw  objnum, gen;           /* in: the object; 0 = the text below          */
     pdw  tseg, toff, tlen;      /* in: direct syntax (<= 1,024 bytes)           */
@@ -757,6 +758,9 @@ struct pdxb_gfx {
     pdb  rgb[4];                /* out: r g b, byte 3 = 1 when nothing is painted */
 };
 #define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
+typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
+typedef char pdgx_sz_lut[sizeof(struct pdgx_lut)   == PDGX_LUTBYTES ? 1 : -1];
+typedef char pdgx_sz_sh [sizeof(struct pdgx_shade) == PDGX_SHBYTES  ? 1 : -1];
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/

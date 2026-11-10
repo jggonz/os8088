@@ -18,12 +18,12 @@
 #define GN_NULL  8
 #define GN_OP    9
 
-#define GX_NODES 320
-#define GX_KIDS  640
-#define GX_HEAP  2560
-#define GX_TB    1100          /* the fetch buffer: one object's syntax    */
+#define GX_NODES 224
+#define GX_KIDS  420
+#define GX_HEAP  1700
+#define GX_TB    1024          /* the fetch buffer: one object's syntax    */
 #define GX_DEPTH 8
-#define GX_VS    96
+#define GX_VS    64
 
 struct gxn { pdb t; pdb fl; pdw a; pdw b; struct pd_fx n; };
 static struct gxn gx_n[GX_NODES];

@@ -87,6 +87,8 @@ static pdw gx_source(void)
     return gx_parse(gx_tb, G.tlen);
 }
 
+#include "pdxgs.c"
+
 static pdb gx_flags_of(pdw row)
 {
     switch (cs_t[row].kind) {
@@ -275,10 +277,11 @@ pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_GFX_CS: r = v_cs(); break;
     case PDV_GFX_COLOR: r = v_color(); break;
     case PDV_GFX_LUT: r = v_lut(); break;
+    case PDV_GFX_SHADE: r = v_shade(); break;
     case PDV_GFX_FN: r = v_fn(); break;
     default: r = PDE_RANGE; break;
     }
     pd_fcopy_out(&G, g_xbseg, 0, sizeof G);
-    if (r != PDE_OK) pdx_cf = 1;
+    if (r != PDE_OK && r != PDE_BUSY) pdx_cf = 1;
     return r;
 }

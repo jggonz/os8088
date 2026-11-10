@@ -21757,7 +21757,7 @@ endif
 # the slot occupant that works at interpretation time. pdwrt's open-coded shape.
 # `make pdxg` builds it and holds it to mutool (tools/os88pdfx_gfx.py --check).
 PDX_C    := apps/pagedesk/pdxg.c apps/pagedesk/pdxgm.c apps/pagedesk/pdxgmt.c apps/pagedesk/pdxgp.c \
-            apps/pagedesk/pdxgf.c apps/pagedesk/pdxgc.c
+            apps/pagedesk/pdxgf.c apps/pagedesk/pdxgc.c apps/pagedesk/pdxgs.c
 PDX_CAP  := 61440   # PAGEDESK-SPEC 20.22.9 / L6: image + bss
 .PHONY: pdxg pdxg-host
 $(BUILD)/pdxg.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain

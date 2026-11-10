@@ -267,7 +267,253 @@ def check(build_dir, verbose):
             print("%-4s %-16s pdxg=%-18s mutool=%-18s diff=%3d tol=%d" %
                   ("ok" if ok else "FAIL", name, g, r, diff, tol_of(name)))
     print("pdfx_gfx colour: %d cases, %d outside tolerance" % (len(cs), bad))
+    bad2 = check_shade(build_dir, work, exe, verbose)
+    return 1 if (bad or bad2) else 0
+
+
+# ---------------------------------------------------------------- shading ----
+def bits(vals):
+    """[(value, nbits)...] -> bytes, MSB first, padded at the end."""
+    acc, n = 0, 0
+    for v, w in vals:
+        acc = (acc << w) | (v & ((1 << w) - 1)); n += w
+    pad = (-n) % 8
+    acc <<= pad
+    return acc.to_bytes((n + pad) // 8, "big")
+
+
+def vtx(flag, x, y, c, bf=8, bc=8, bk=8, with_flag=True):
+    v = [(flag, bf)] if with_flag else []
+    v += [(x, bc), (y, bc)] + [(k, bk) for k in c]
+    return bits(v)
+
+
+def shade_cases(d):
+    """-> [(name, shading object number)]; each is drawn in a 64x48 cell."""
+    out = []
+    g = d.add("<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>")
+    out.append(("ax_gray", d.add("<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 64 0] /Function %d 0 R /Extend [true true] >>" % g)))
+    a = d.add("<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 1 0] /N 1 >>")
+    b = d.add("<< /FunctionType 2 /Domain [0 1] /C0 [0 1 0] /C1 [0 0 1] /N 1 >>")
+    st = d.add("<< /FunctionType 3 /Domain [0 1] /Functions [%d 0 R %d 0 R] /Bounds [0.5] /Encode [0 1 0 1] >>" % (a, b))
+    out.append(("ax_rgb_diag", d.add("<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 64 48] /Function %d 0 R /Extend [true true] >>" % st)))
+    out.append(("ax_noext", d.add("<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [16 0 48 0] /Function %d 0 R /Extend [false false] >>" % g)))
+    out.append(("ax_ext0", d.add("<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [16 0 48 0] /Function %d 0 R /Extend [true false] >>" % g)))
+    e = d.add("<< /FunctionType 2 /Domain [0 1] /C0 [0.9] /C1 [0.1] /N 1.5 >>")
+    out.append(("rad_gray", d.add("<< /ShadingType 3 /ColorSpace /DeviceGray /Coords [32 24 0 32 24 22] /Function %d 0 R /Extend [false true] >>" % e)))
+    out.append(("rad_off", d.add("<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [20 24 4 44 24 14] /Function %d 0 R /Extend [true true] >>" % st)))
+    out.append(("rad_same", d.add("<< /ShadingType 3 /ColorSpace /DeviceGray /Coords [32 24 6 32 24 6] /Function %d 0 R /Extend [true true] >>" % g)))
+    ps = b"{ mul }"
+    f1 = d.add("<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1] /Length %d >>" % len(ps), ps)
+    out.append(("fn1", d.add("<< /ShadingType 1 /ColorSpace /DeviceGray /Domain [0 1 0 1] /Matrix [64 0 0 48 0 0] /Function %d 0 R >>" % f1)))
+    dec = "/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 64 0 48 0 1 0 1 0 1]"
+    data = (vtx(0, 0, 0, (255, 0, 0)) + vtx(0, 255, 0, (0, 255, 0)) + vtx(0, 128, 255, (0, 0, 255))
+            + vtx(1, 255, 255, (255, 255, 255)))
+    out.append(("mesh4", d.add("<< /ShadingType 4 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec, len(data)), data)))
+    dec5 = "/BitsPerCoordinate 8 /BitsPerComponent 8 /Decode [0 64 0 48 0 1 0 1 0 1] /VerticesPerRow 3"
+    data = b"".join(vtx(0, x, y, c, with_flag=False) for x, y, c in (
+        (0, 0, (255, 0, 0)), (128, 0, (0, 255, 0)), (255, 0, (0, 0, 255)),
+        (0, 255, (0, 0, 255)), (128, 255, (255, 0, 0)), (255, 255, (0, 255, 0))))
+    out.append(("mesh5", d.add("<< /ShadingType 5 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec5, len(data)), data)))
+    bnd = [(0, 0), (0, 85), (0, 170), (0, 255), (85, 255), (170, 255), (255, 255), (255, 170), (255, 85), (255, 0), (170, 0), (85, 0)]
+    cols = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+    def patch(pts, cs, flag=0):
+        return bits([(flag, 8)]) + b"".join(bits([(x, 8), (y, 8)]) for x, y in pts) + \
+            b"".join(bits([(k, 8) for k in c]) for c in cs)
+    data = patch(bnd, cols)
+    out.append(("coons6", d.add("<< /ShadingType 6 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec, len(data)), data)))
+    bent = [(0, 0), (20, 85), (0, 170), (0, 255), (85, 235), (170, 255), (255, 255), (235, 170), (255, 85), (255, 0), (170, 20), (85, 0)]
+    data = patch(bent, cols)
+    out.append(("coons6b", d.add("<< /ShadingType 6 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec, len(data)), data)))
+    inner = [(85, 85), (85, 170), (170, 170), (170, 85)]
+    data = patch(bent + inner, cols)
+    out.append(("tensor7", d.add("<< /ShadingType 7 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec, len(data)), data)))
+    # two patches, the second sharing the first's right edge (flag 1)
+    half = [(0, 0), (0, 42), (0, 85), (0, 127), (42, 127), (85, 127), (127, 127), (127, 85), (127, 42), (127, 0), (85, 0), (42, 0)]
+    nxt = [(127, 127 + 0)]  # unused
+    p1 = patch(half, cols)
+    new8 = [(127, 170), (127, 212), (127, 255), (170, 255), (212, 255), (255, 255), (255, 212), (255, 170)]
+    p2 = bits([(1, 8)]) + b"".join(bits([(x, 8), (y, 8)]) for x, y in new8) + \
+        b"".join(bits([(k, 8) for k in c]) for c in ((255, 255, 255), (40, 40, 40)))
+    data = p1 + p2
+    out.append(("coons_flag", d.add("<< /ShadingType 6 /ColorSpace /DeviceRGB %s /Length %d >>" % (dec, len(data)), data)))
+    return out
+
+
+def write_shade(outdir):
+    d = Doc()
+    cs = shade_cases(d)
+    cols, cw, ch = 4, 64, 48
+    rows = (len(cs) + cols - 1) // cols
+    W, H = cols * (cw + 4), rows * (ch + 4)
+    sh = " ".join("/S%d %d 0 R" % (i, o) for i, (_, o) in enumerate(cs))
+    cont = []
+    geom = {}
+    for i, (name, _) in enumerate(cs):
+        x, y = (i % cols) * (cw + 4) + 2, H - (i // cols + 1) * (ch + 4) + 2
+        geom[name] = (x, H - y - ch)           # device (left, top)
+        cont.append("q %d %d %d %d re W n 1 0 0 1 %d %d cm /S%d sh Q" % (x, y, cw, ch, x, y, i))
+    content = "\n".join(cont).encode()
+    objs = {1: (b"<< /Type /Catalog /Pages 2 0 R >>", None), 2: (b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>", None),
+            3: (("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Contents 4 0 R /Resources << /Shading << %s >> >> >>" % (W, H, sh)).encode(), None),
+            4: (("<< /Length %d >>" % len(content)).encode(), content)}
+    for n, (syn, st) in d.objs.items():
+        objs[n] = (syn.encode(), st)
+    out = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offs = {}
+    for n in sorted(objs):
+        offs[n] = len(out)
+        syn, st = objs[n]
+        out += ("%d 0 obj\n" % n).encode() + syn
+        if st is not None:
+            out += b"\nstream\n" + st + b"\nendstream"
+        out += b"\nendobj\n"
+    top = max(objs) + 1
+    x = len(out)
+    out += ("xref\n0 %d\n0000000000 65535 f \n" % top).encode()
+    for n in range(1, top):
+        out += (("%010d 00000 n \n" % offs[n]) if n in offs else "0000000000 65535 f \n").encode()
+    out += ("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (top, x)).encode()
+    pdf = os.path.join(outdir, "shade.pdf")
+    open(pdf, "wb").write(bytes(out))
+    with open(os.path.join(outdir, "shade.cases"), "w") as f:
+        for n, (syn, st) in sorted(d.objs.items()):
+            f.write("O %d %s\n" % (n, syn.encode().hex()))
+            if st is not None:
+                f.write("S %d %s\n" % (n, st.hex()))
+        for name, o in cs:
+            f.write("H %s %d\n" % (name, o))
+    return pdf, cs, geom, (cw, ch, W, H)
+
+
+def parse_shade_out(text):
+    res, cur = {}, None
+    for line in text.splitlines():
+        t = line.split()
+        if not t:
+            continue
+        if t[0] == "SH":
+            cur = {"name": t[1], "tris": []}
+            res[t[1]] = cur
+            if t[2] == "FAILED":
+                cur["failed"] = True
+                continue
+            cur.update(type=int(t[2]), flags=int(t[3]), t0=float(t[4]), t1=float(t[5]),
+                       coords=[float(v) for v in t[6:12]])
+        elif t[0] == "R":
+            cur["ramp"] = [int(v) for v in t[1:]]
+        elif t[0] == "T":
+            v = t[1:]
+            cur["tris"].append([(float(v[4 * k]), float(v[4 * k + 1]), int(v[4 * k + 2])) for k in range(3)])
+    return res
+
+
+def ref_raster(sh, cw, ch):
+    """The module's output painted as the core is specified to paint it (float, exact)."""
+    img = [[255] * cw for _ in range(ch)]
+    for j in range(ch):
+        for i in range(cw):
+            px, py = i + 0.5, ch - (j + 0.5)
+            if sh["type"] in (2, 3):
+                c = sh["coords"]
+                ext0, ext1 = sh["flags"] & 1, sh["flags"] & 2
+                if sh["type"] == 2:
+                    dx, dy = c[2] - c[0], c[3] - c[1]
+                    L2 = dx * dx + dy * dy
+                    s = ((px - c[0]) * dx + (py - c[1]) * dy) / L2 if L2 else 0
+                else:
+                    x0, y0, r0, x1, y1, r1 = c
+                    dx, dy, dr = x1 - x0, y1 - y0, r1 - r0
+                    a = dx * dx + dy * dy - dr * dr
+                    qx, qy = px - x0, py - y0
+                    b = qx * dx + qy * dy + r0 * dr
+                    cc = qx * qx + qy * qy - r0 * r0
+                    cand = []
+                    if abs(a) < 1e-9:
+                        if abs(b) > 1e-9:
+                            cand = [cc / (2 * b)]
+                    else:
+                        disc = b * b - a * cc
+                        if disc >= 0:
+                            r = disc ** 0.5
+                            cand = [(b + r) / a, (b - r) / a]
+                    s = None
+                    for sc in sorted(cand, reverse=True):
+                        if r0 + sc * dr < 0:
+                            continue
+                        if (sc < 0 and not ext0) or (sc > 1 and not ext1):
+                            continue
+                        s = sc
+                        break
+                    if s is None:
+                        continue
+                if s < 0:
+                    if not ext0:
+                        continue
+                    s = 0
+                if s > 1:
+                    if not ext1:
+                        continue
+                    s = 1
+                img[j][i] = sh["ramp"][int(round(s * 255))]
+    for tri in sh["tris"]:
+        (x0, y0, l0), (x1, y1, l1), (x2, y2, l2) = tri
+        den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if abs(den) < 1e-9:
+            continue
+        for j in range(ch):
+            for i in range(cw):
+                px, py = i + 0.5, ch - (j + 0.5)
+                w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) / den
+                w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) / den
+                w2 = 1 - w0 - w1
+                if w0 >= -1e-6 and w1 >= -1e-6 and w2 >= -1e-6:
+                    img[j][i] = int(round(w0 * l0 + w1 * l1 + w2 * l2))
+    return img
+
+
+def check_shade(build_dir, work, exe, verbose):
+    from PIL import Image
+    pdf, cs, geom, (cw, ch, W, H) = write_shade(work)
+    p = subprocess.run([exe, os.path.join(work, "shade.cases")], capture_output=True, text=True)
+    if p.returncode:
+        print(p.stdout, p.stderr)
+        return 1
+    mods = parse_shade_out(p.stdout)
+    png = os.path.join(work, "shade.png")
+    subprocess.check_call(["mutool", "draw", "-q", "-N", "-M", "0", "-r", "72", "-c", "gray", "-o", png, pdf],
+                          stderr=subprocess.DEVNULL)
+    im = Image.open(png).convert("L")
+    bad = 0
+    for name, _ in cs:
+        sh = mods.get(name)
+        if not sh or sh.get("failed"):
+            print("FAIL %-12s the module failed" % name)
+            bad += 1
+            continue
+        mine = ref_raster(sh, cw, ch)
+        left, top = geom[name]
+        tot = diff_n = 0
+        sumd = 0
+        for j in range(ch):
+            for i in range(cw):
+                r = im.getpixel((left + i, top + j))
+                d = abs(r - mine[j][i])
+                tot += 1; sumd += d
+                if d > 28:
+                    diff_n += 1
+        rate = 100.0 * diff_n / tot
+        ok = rate <= SHADE_RATE.get(name, 3.0) and sumd / tot <= 8
+        bad += 0 if ok else 1
+        if verbose or not ok:
+            print("%-4s %-12s type %d tris %-3d mean|d|=%5.2f  >28: %5.2f%% (limit %.1f%%)" %
+                  ("ok" if ok else "FAIL", name, sh["type"], len(sh["tris"]), sumd / tot, rate, SHADE_RATE.get(name, 3.0)))
+    print("pdfx_gfx shading: %d cases, %d outside tolerance" % (len(cs), bad))
     return 1 if bad else 0
+
+
+# differing-pixel limits (percent of a 64x48 cell); the module's fan-out is a 8x8 grid or 4x4 patch cells
+SHADE_RATE = {"coons6b": 4.5, "tensor7": 4.5}   # a curved edge cut into 4x4 chords: the boundary pixels differ from MuPDF's finer subdivision
 
 
 def tables():
