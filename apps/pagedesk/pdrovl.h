@@ -71,6 +71,11 @@
 #define font_synth      ovl_font_synth
 /* [rcore] an annotation with no appearance: drawn from its dictionary (QA R6b) */
 #define annot_synth     ovl_annot_synth
+/* [rcore] a PDXG edit-mark batch and its page-space helpers: once a batch, from ovl code only (size pass after the 17eee4bd4 merge) */
+#define ed_exec         ovl_ed_exec
+#define edev            ovl_edev
+#define ep              ovl_ep
+#define ed_lw           ovl_ed_lw
 #define an_num          ovl_an_num
 #define an_col          ovl_an_col
 #define an_prog         ovl_an_prog
