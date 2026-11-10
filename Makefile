@@ -21520,16 +21520,22 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
-             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h $(PDR_DIR)/pdrxg.c
+             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h $(PDR_DIR)/pdrxg.c \
+             $(PDR_DIR)/pdrx8.c $(PDR_DIR)/pdrxb.c $(PDR_DIR)/pdrx8h.inc
+# transparency (PAGEDESK-SPEC 20.22.10) ships: PDR_X8 is on unless `make PDR_X8=0`. It compiles PDREND's hooks of PDX8
+# (smlrcc and nasm together) and adds pdx8.c to the host builds
+PDR_X8 ?= 1
+PDR_X8DEF := $(if $(filter-out 0,$(PDR_X8)),-DPDR_X8)
+PDR_X8SRC := $(if $(PDR_X8DEF),$(PDR_DIR)/pdx8.c)
 # the host's stand-in slot occupants (20.22.7): the real dash walker, a fake decoder
-PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c
-PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
+PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c $(PDR_X8SRC)
+PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdx8i.c $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
 PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
 
 $(BUILD)/pdrend.raw.asm: $(PDR_CSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
-		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDR_DIR) \
+		$(PDR_X8DEF) -SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDR_DIR) \
 		$(PDR_DIR)/pdrend.c -o $@
 
 $(BUILD)/pdrend.gen.asm: $(BUILD)/pdrend.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
@@ -21546,7 +21552,7 @@ $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdren
                      $(PDR_DIR)/pdabi.inc $(wildcard $(PDR_DIR)/pdmath.inc) \
                      $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
 	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
-	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $(BUILD)/pdrend.full $(PDR_DIR)/pdrend.asm
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) $(PDR_X8DEF) -o $(BUILD)/pdrend.full $(PDR_DIR)/pdrend.asm
 	@# the second code segment (PAGEDESK-SPEC 20.22.7.9): .modc follows the image, cut at the header's image size
 	@python3 -c "import struct; d=open('$(BUILD)/pdrend.full','rb').read(); s=struct.unpack_from('<H',d,4)[0]; \
 	    c=d[s:]; assert len(c) >= 4 and struct.unpack_from('<HH',c,0) == (0x4352, len(c)), ('PDRENDC', s, len(c)); \
@@ -21562,7 +21568,7 @@ PDR_HOSTBIN := $(BUILD)/pdr_test
 $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
                 $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -Wall -Wno-unused-function -Wno-unused-variable -Wno-parentheses -Wno-int-to-void-pointer-cast \
-		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		-DPD_HOST $(PDR_X8DEF) -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 
 .PHONY: pdrend pdrend-host pdrend-fuzz
@@ -21582,14 +21588,14 @@ PDR_FUZZBIN := $(BUILD)/pdr_test_asan
 $(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
                 $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
-		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		-DPD_HOST $(PDR_X8DEF) -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 # the same hostile streams through the REAL engine (pdeng.c answers every verb), ASan+UBSan
 PDR_FUZZREAL := $(BUILD)/pdr_test_real_asan
 PDR_ENGSRC   := $(wildcard $(PDR_DIR)/pde*.c $(PDR_DIR)/pde*.h) $(PDR_DIR)/hosttest/pde_host.c
 $(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
                  $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
-	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
+	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST $(PDR_X8DEF) -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
 		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
 		$(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
@@ -21608,7 +21614,7 @@ PDR_REALBIN := $(BUILD)/pdr_test_real
 PDR_SHOTS   ?=
 $(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
-	cc -O1 -w -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+	cc -O1 -w -DPD_HOST $(PDR_X8DEF) -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 .PHONY: pdrend-real
 pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
@@ -22140,3 +22146,26 @@ pdnotes: $(BUILD)/pdu_nt
 	$(BUILD)/pdu_nt
 .PHONY: pdnotes
 # ---- end PageDesk: notes ----
+
+# ---- PageDesk: PDX8, the raster compositor of transparency (PAGEDESK-SPEC 20.22.10.11) [blend] ----
+# A part loaded into the PDMEM_X8 region, built like PDWRT.MOD: its own C unit (pdx8.c), pdx8.asm
+# for the header, the door and the primitives. `make pdx8` builds it and prints its size against
+# PDX8_RES. PDREND carries the hooks under -DPDR_X8 (pdrx8.c, pdrxb.c, pdrx8h.inc).
+PDX8_C   := apps/pagedesk/pdx8.c
+PDX8_H   := apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDX8_CAP := 16384
+.PHONY: pdx8
+$(BUILD)/pdx8.raw.asm: $(PDX8_C) $(PDX8_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		$(PDX8_C) -o $@
+$(BUILD)/pdx8.gen.asm: $(BUILD)/pdx8.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDX8.MOD: apps/pagedesk/pdx8.asm apps/pagedesk/pdrx8.inc $(BUILD)/pdx8.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdx8.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDX8.MOD: image %d + bss %d = %d bytes (cap $(PDX8_CAP))'%(i,b,t)); \
+	    sys.exit(1 if t>$(PDX8_CAP) else 0)"
+pdx8: $(BUILD)/PDX8.MOD
+# ---- end PageDesk: PDX8 ----

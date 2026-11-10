@@ -639,3 +639,36 @@ pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx)
 int pdrh_npages(void) { return npages; }
 int pdrh_nstreams(void) { return nst; }
 #endif /* PDR_REAL_ENG */
+
+/* ---- the 8-bit band's quantiser (pdrx8.inc, PAGEDESK-SPEC 20.22.10) ---------------- */
+struct pdr_xq pdr_xq;
+static unsigned xq_level(unsigned v, unsigned par)      /* 20.19.2: seven levels of the four greys */
+{
+    if (v < 21) return 0;
+    if (v < 64) return par ? 8 : 0;
+    if (v < 106) return 8;
+    if (v < 149) return par ? 7 : 8;
+    if (v < 191) return 7;
+    if (v < 234) return par ? 15 : 7;
+    return 15;
+}
+void pdr_x8quant(void)
+{
+    const unsigned char *src = MEM(pdr_xq.sseg, pdr_xq.soff);
+    unsigned char *dst = MEM(pdr_xq.dseg, pdr_xq.doff);
+    unsigned i, x;
+    for (i = 0; i < pdr_xq.n; i++) {
+        unsigned v = src[i];
+        x = pdr_xq.x0 + i;
+        if (pdr_xq.bpp == 4) {
+            unsigned k = xq_level(v, (pdr_xq.par + i) & 1), b = (x & 1) + i - (pdr_xq.x0 & 1);     /* byte (x0&1 + i) >> 1 */
+            unsigned bi = ((pdr_xq.x0 & 1) + i) >> 1; (void)b;
+            if (x & 1) dst[bi] = (unsigned char)((dst[bi] & 0xF0) | k);
+            else       dst[bi] = (unsigned char)((dst[bi] & 0x0F) | (k << 4));
+        } else {
+            unsigned bi = ((pdr_xq.x0 & 7) + i) >> 3, m = 0x80 >> (x & 7);
+            if (((v * 17u) >> 8) > bayer_t[pdr_xq.par | (x & 3)]) dst[bi] |= (unsigned char)m;
+            else dst[bi] &= (unsigned char)~m;
+        }
+    }
+}

@@ -6522,7 +6522,282 @@ object windows, the calculator stack, the lattice rows). The module's stack is t
 
 #### 20.22.10 Transparency through an 8-bit band (`blend`)
 
-*Reserved; written by its agent before its code.*
+Owner decision O4: `/ca /CA`, the sixteen blend modes, soft masks, transparency
+groups and an image's `/SMask` and `/Mask` are blended TRUE, on one grey
+channel, and the result is quantised to the adapter. Files: PDX8, the part
+that does the work (`pdx8.c`, `pdx8i.c`, `pdx8.asm`, `pdrx8.inc`: 20.22.10.11),
+and PDREND's side of it, `pdrx8.c` (the walker's hooks) and `pdrxb.c` (the
+interpretation hooks), plus `pdrd.c`'s `span_out` and `emit_state` calls. Reference implementation of the arithmetic: `tools/os88pdfx_blend.py`
+(its fixtures) against `mutool draw -c gray`.
+
+**20.22.10.1 What is blended and what is not.**
+
+* Only the bands a transparent mark touches take the 8-bit path. Every other
+  band is drawn exactly as before (4bpp palette colour or 1bpp Bayer), so a
+  page without transparency is byte-identical and a mixed page keeps its colour
+  where it has no transparency. The mark map is built while interpreting
+  (`g_x8map`, one bit per 16-row band, 256 bands; a canvas taller than 4,096
+  rows marks every band it cannot name).
+* An 8-bit band is composed in **strips of at most 8 rows** (a sub-pass's
+  row range is a strip too) on grey: the colour of every mark in the band is
+  its luminance `flum`/`slum`/an image's luma. Chroma is lost in that band
+  only. The strip is quantised into the band, columns of the page rectangle
+  only, so the desk is untouched.
+* Quantising uses the SAME rule as a flat fill in the band's own depth: 4bpp
+  the seven-level checker of 20.19.2 (thresholds 21/64/106/149/191/234, parity
+  `(x + y - page_y0) & 1`), 1bpp the 4x4 Bayer of `pat_make`. The phase is
+  absolute, so an 8-bit band and its neighbour show no seam on flat grey.
+* Blending is on grey. Separable modes use the 8-bit formulas of 20.22.10.6.
+  The non-separable modes reduce on a grey backdrop and a grey source to:
+  Hue, Saturation, Color = the backdrop; Luminosity = the source. (This is
+  what the PDF formulas give when `Sat(C) = 0`, not an approximation of them;
+  the approximation is grey in place of colour, and it is the band's.)
+* Alpha and shape are one 8-bit quantity: rasterisation is binary coverage,
+  so `AIS` (alpha is shape) cannot change a result and is not read. A knockout
+  group replaces; an isolated group starts transparent; a non-isolated group
+  starts as its parent (a non-isolated group inside a non-opaque parent is
+  treated as isolated, 20.22.10.5).
+
+**20.22.10.2 The X8 region (`PDMEM_X8`).** `S` = the band width in pixels
+(`g_bw`, at most 768), `PL = 8 * S`. Six planes of `PL` bytes then a 1,024-byte
+row buffer:
+
+| offset | plane |
+|---|---|
+| 0 | `V0` the base: opaque grey of the strip |
+| `PL` / `2PL` | layer 1: `P1` colour, `A1` alpha |
+| `3PL` / `4PL` | layer 2: `P2`, `A2` |
+| `5PL` | `MK` the soft mask in force |
+| `6PL` | 1,024 bytes: an image mask's source row |
+
+`KiB = ceil((PDX8_RES + 6 * PL + 1024) / 1024)` with `PDX8_RES` = 12,288 (the
+part's room, 20.22.10.11): 43 at 640 px, 47 at 720, 49 at 768 (the planes alone
+are 31, 35 and 37). This is the row for 20.22.2's table. The offsets above are
+from `seg:PDX8_RES`. At 8 rows it is the largest strip that two
+group layers, a mask and the base fit in 40 KiB at every adapter; 4-row strips
+would halve it and double the DL walks, 16-row would not leave 64 KiB claim
+room at 720. **Nesting depth is 2** (the page plus two layers; a mask group
+takes the layer above the current one): three nested transparency groups on
+one mark are a depth no page of the real corpus' kind reaches, a layer costs
+12 KiB at 768, and a deeper group is painted inline with `PDF_INC_LIMIT`.
+Layers hold: **isolated** layers premultiplied colour `P` and alpha `A`;
+**non-isolated** layers the colour including the backdrop `C` and the group's
+own alpha `A`.
+
+When a mark needs the region and `x8_seg` is 0, interpretation's end answers
+`PDE_NEEDMEM` (CX = `PDMEM_X8`, DX = `KiB`) once per view; a second answer with
+the region still 0 draws the whole view opaque and sets `PDF_INC_APPROX`. A
+band wider than 768 px does the same.
+
+**20.22.10.3 Records** (`pdrend.h`; the walker skips an unknown type by `len`):
+
+| type | | body |
+|---|---|---|
+| `DLR_STATE` 1 | `aux` = the colour's luminance 0..255 (was 0) | unchanged, 14 bytes |
+| `DLR_XSTATE` 6 | the transparency of the marks that follow; y 0,0; processed whatever the band | `alpha` (0..255, `ca` for fill and text, `CA` for stroke), `bm` 0..15, `smask` (0 none, else mask id + 1), 0 |
+| `DLR_GROUP` 7 | `aux` bit 0 isolated, bit 1 knockout, bit 7 END; y = the group's rows | begin: `alpha`, `bm`, `smask`, 0 (the state at `Do`); end: none |
+| `DLR_MASKB` 8 | `aux` 0 luminosity, 1 alpha; `len` spans to and including its MASKE, so a normal walk skips the block | `bc` the backdrop luminosity, 0 |
+| `DLR_MASKE` 9 | | none |
+| `DLR_IMAGE` 5 | `flags` bit 5 (0x20) an `/SMask`, bit 6 (0x40) a `/Mask` stencil | unchanged; PDX8 finds the mask object from the image's own `/SMask` or `/Mask` entry when the strip is composed |
+
+`bm` codes: 0 Normal (and Compatible), 1 Multiply, 2 Screen, 3 Overlay, 4
+Darken, 5 Lighten, 6 ColorDodge, 7 ColorBurn, 8 HardLight, 9 SoftLight, 10
+Difference, 11 Exclusion, 12 Hue, 13 Saturation, 14 Color, 15 Luminosity. An
+array of names takes the first this table has, else Normal.
+
+The effective transparency is the fold of the `gs` operators applied so far,
+so it is a tuple, not an index into the resource dictionary: a pool of 15
+5-byte tuples `{ca, CA, bm, smask, 0}` per pass (`g_xt`, reset by
+`pass_begin`), and **`pdr_gs.pad_` is the tuple's index** (0 = opaque Normal, no
+mask), which q, Q and a form's push already save. An `XSTATE` is written
+before a mark only when its tuple, for the mark's kind, differs from the last
+written; entering and leaving a group forces one. A mark under a tuple that is
+not opaque Normal without a mask sets its rows in the mark map. A pool or
+mask-table overflow sets `PDF_INC_LIMIT` and keeps the previous tuple.
+
+**20.22.10.4 ExtGState (`gs`) and the record writers (PDX8, `pdx8i.c`).** All of
+interpretation's work for transparency is PDX8's, not PDXG's and not PDREND's:
+the ExtGState parse (`/CA /ca /BM /SMask (/S /G /BC /TR)`), the tuple pool, the
+mark map and the records. It runs while the page is interpreted, after
+`PDE_NEEDMEM` has put the part in the X8 region, so it needs no slot occupant
+(a soft-masked JPEG needs PDXI in the slot and this at once) and PDXG is not
+asked for anything. The first pass of a view that has no region only DECIDES:
+`exec_op`'s `gs` arm calls `xb_gs()`, which looks the name up (`RES_LOOKUP`,
+category ExtGState) and, with no PDX8, reads `ca`, `CA`, `BM` and `SMask` of that
+dictionary: any value that is not opaque Normal and unmasked sets the view's
+need for the region (`PDE_NEEDMEM`, 20.22.10.2); so does an image with an
+`/SMask` or `/Mask`. The pass is then run again with the part present:
+
+* `gs` is `PDV_X8_GS` (BX = the tuple in force, CX/DX = the dictionary's
+  object and generation): AX = the new tuple (written to `pdr_gs.pad_`), CX = 1
+  when the dictionary has a soft mask whose `/G` form (its object at XB+0, XB+2)
+  PDREND now interprets as the mask's block; DX = `X8F_*` bits. A pool or mask
+  table overflow answers CF and keeps the previous tuple. `/TR` other than
+  `Identity` is not applied and sets `PDF_INC_TRANSP`. A **direct** ExtGState
+  dictionary (inside `/Resources`; `RES_LOOKUP` answers `objnum` 0) keeps the
+  previous tuple and sets `PDF_INC_TRANSP` until PDENG offers a key path below
+  a resource (questions to the lead in the blend report).
+* `emit_state` asks `PDV_X8_DEF` `X8D_STATE` (fill or stroke, the tuple): the answer
+  is the `XSTATE` record, in the exchange block, when the tuple for the mark's
+  kind differs from the last written, and whether the mark is transparent
+  (then `dl_put` marks its rows, `X8D_MARK`). PDREND puts the record in its list.
+* `do_form`'s tail asks `X8D_GROUP` (the frame, the Form, the tuple, the clip's
+  rows, the list's length): the answer is `MASKB` when `gs` has a mask waiting
+  (`g_xmaskpend`; PDREND then writes its own `STATE` first), or `GROUP` begin
+  when the Form's `/Group /S /Transparency` is worth a layer (isolated or
+  knockout, or under a non-trivial tuple); inside either the tuple is 0.
+  `frame_end` asks `X8D_GEND`: `GROUP` end, or `MASKE`, with the offset and
+  value PDREND patches into the `MASKB`'s length. If the mask's form would not
+  open, `X8D_NOMASK` answers the tuple without it.
+
+A soft mask: the `/G` form is interpreted at the `gs` operator, with the CTM of
+that moment, as `MASKB ... MASKE`. At most 16 masks a pass.
+
+**20.22.10.5 The walker.** `walk_band` runs once per strip of an 8-bit band
+(and once as before for the others). In a strip the sinks compose into the
+current layer:
+
+* `STATE` sets the colour (`aux`); `XSTATE` the transparency; a new `smask`
+  that is not the mask in `MK` for this strip is built first: save the
+  walker's state, push a fresh isolated layer, walk the `MASKB` block into it,
+  at `MASKE` turn the layer into `MK` (luminosity `P + (255-A)*bc`, alpha `A`),
+  pop, restore, and go on from the `XSTATE`. No recursion: an explicit resume
+  offset. A mask inside a mask is ignored (`PDF_INC_LIMIT`); a mask wanted at
+  depth 2 is too.
+* `GROUP` begin pushes a layer (isolated: `P = A = 0`; non-isolated: `C` = the
+  parent's colour, `A = 0`), resets the transparency to opaque Normal, and keeps
+  `{alpha, bm, smask}` for the end. `GROUP` end composites the layer onto its
+  parent with `alpha * mask(x)` and `bm` and pops. Only pixels with `A > 0` are
+  touched. A group deeper than 2 is painted inline.
+* A mark composes with source colour `s`, alpha `a = alpha * mask(x)`, mode
+  `bm` onto the layer: opaque backdrop (base, non-isolated)
+  `out = cb + a * (B(cb, s) - cb)`; isolated `P' = (1-a) P + a * Bp`,
+  `A' = A + a - A*a`, `Bp = s` for Normal or an empty backdrop, else
+  `Bp = s + A * (B(P/A, s) - s)`. A knockout group's mark replaces the layer's
+  pixel, composed against the group's initial backdrop (transparent when
+  isolated, the parent's pixel when not).
+* A strip's base starts white; the desk is never in it.
+
+Fast paths: depth 0, constant colour, no mask: one 256-byte table
+`lut[d] = d + a * (B(d, s) - d)` applied with `xlat` (`pdr_x8xlat`), built when
+`(s, a, bm)` change; opaque Normal on any layer is two fills.
+
+**20.22.10.6 Blend formulas** (8-bit, `mul(a,b) = round(a*b/255)`): Multiply
+`mul(b,s)`; Screen `b+s-mul(b,s)`; Overlay = HardLight with the arguments
+swapped; Darken, Lighten min, max; ColorDodge `s=255 ? 255 : min(255, b*255/(255-s))`
+(0 when `b=0`); ColorBurn `255 - min(255, (255-b)*255/s)` (255 when `b=255`,
+0 when `s=0`); HardLight `s<128 ? mul(b,2s) : screen(b, 2s-255)`; SoftLight the
+PDF formula, `D(b)` by the polynomial below `b=64` and `sqrt` above; Difference
+`|b-s|`; Exclusion `b+s-2mul(b,s)`.
+
+**20.22.10.7 The sink interface** *withdrawn.* gfx's shading became flat-polygon
+bands (FILL records, DECISIONS 23:46), which reach the compositor through the
+ordinary `span_out`; there is no `pdr_sink_grey`, no `xg_span` and no `g_psrc`.
+
+**20.22.10.8 The image hook** (rcore's `draw_image`): in an 8-bit strip the
+call `pdr_imgrow()` is replaced by `PDV_X8_IMG` `X8I_ROW`, which gets the same
+`pdr_ip` block (source row, DDA, mode, inversion; 22 bytes of it in the exchange
+block) and composes the grey into the current layer. For a record with 0x20 or
+0x40, `X8I_SET` runs once a strip before the rows: PDX8 reads the image's own
+`/SMask` (or `/Mask`) entry for the mask object, opens that stream itself (a
+second `STRM_OPEN`, closed in the same call), reads the nearest rows into the
+region's 1,024-byte buffer and writes them into the mask plane at the image's
+resolution; an `/SMask` is 8-bit grey, a `/Mask` is a 1-bit stencil whose set bit
+is TRANSPARENT unless its `/Decode` inverts it. A mask that will not open (a
+codec the core does not read) draws the image opaque and sets `PDF_INC_TRANSP`.
+
+**20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
+Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
+non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
+Nothing else in this section sets a bit.
+
+**20.22.10.10 Build gate, budgets and stack.** The hooks are compiled with `PDR_X8`,
+which the Makefile turns ON by default (the feature ships; `make PDR_X8=0` is the A/B and
+builds PDREND of the round's start to within 4 bytes) and passes to the compiler and to nasm
+together. The host harness defines it and links `pdx8.c`. PDREND's share, as accepted by the
+lead (DECISIONS 00:43): +3,008 bytes (image 2,888, bss 120) before the merge with rcore's
+second code segment; PDX8 is 14,462 + 1,254 of 16,384. The region is asked for through rcore's
+ladder (`x_mem(PDMEM_X8, KiB)`, answered by `PDE_NEEDMEM` at the end of the first pass).
+
+*Measured (the first version, the whole compositor in PDREND's C):* image
+66,634 + bss 7,988 against 54,412 + 6,896, i.e. +12,222 and +1,092, which is
+why the compositor is a part of its own (20.22.10.11).
+
+**20.22.10.11 PDX8, the compositor as a part** (the lead's decision of 23:24 and
+23:35, pinned here by `blend`; `pdx8.c`, `pdx8.asm`, `pdrx8.inc`; the PDREND side
+`pdrx8.c`, `pdrx8h.inc`, `pdrxb.c`).
+
+*What lives where.* PDX8 owns the planes, the layer stack, the blend arithmetic,
+the 256-byte table of constant spans, the group and soft-mask composition, the
+image-mask reader and the quantiser into the band (raster time), and the
+ExtGState parse, the tuple pool, the mark map, the frame table and the record
+writers (interpretation time, 20.22.10.4). PDREND keeps what only it can know:
+the walker over the display list (clips, edges, glyphs, image rows), the
+gstate's tuple index, and the far calls; where PDX8 answers a record PDREND
+puts it in the list.
+
+*The part.* Magic `'P8'` (`PDM_MAGIC_X8` 0x3850), `PDM_ABI`, **not** a slot
+occupant (no `PDX_*` id, no `PDV_REND_SLOT`); a lazy part with
+`OP_LAZY | OP_SELF | OP_COMP` that `plat` loads **into the `PDMEM_X8` region at
+its base**, with 20.22.2.4's reader and header check, when a page answers
+`PDE_NEEDMEM` for `PDMEM_X8`. Unpacked image + bss at most `PDX8_RES` = 16,384
+bytes (now 14,208 + 1,220); the planes follow at `x8_seg:PDX8_RES`, and the KiB
+PDREND asks for includes the 16 (47 at 640, 51 at 720, 53 at 768). The 16-byte
+header, all of it in the region's first bytes:
+
+| offset | field |
+|---|---|
+| +0 | magic `'P8'` |
+| +2 | `PDM_ABI` |
+| +4 / +6 | image, bss |
+| +8 | the door: `jmp short` to the entry at +16 |
+| +10 | `x8_cseg`: the region's CODE selector (equal to `x8_seg` on a real-mode kernel); `plat` writes it at load and after every regrow |
+| +12 / +14 | `eng_off`, `eng_seg`: PDENG's door, written by `plat` at load from `pdxb_init` and after a regrow |
+
+If the load fails, or the part's magic is not at `x8_seg:0` when PDREND is
+re-INITed, the region is treated as refused (`x8_seg` = 0, 20.22.10.9). PDX8
+calls PDENG and nobody else: no kernel call, no PDREND call, no PDXG. DS = CS
+inside, the caller's BP, SI, DI, DS, ES, SS:SP and DF come back, the part
+reads the planes through the segment PDREND passes at INIT (a data selector on
+kern_mega), and its bss is zeroed by the part on its first entry. Its own
+frames are at most 48 bytes in a chain, inside the occupants' budget of
+20.22.2.4.
+
+*The door.* AL = verb, BX, CX, DX; out AX, with CX and DX the answer's extra
+words, CF = 1 and AX = a `PDE_*` code for a verb or operation it does not have
+(or, for `GS`, a full pool). The verbs are 0xD1-0xD7 (0xD0 is free):
+
+| verb | in | out |
+|---|---|---|
+| `PDV_X8_INIT` 0xD1 | BX = x8_seg, CX = KiB, DX = the XB segment | 0; sent by PDREND at every `PDV_REND_INIT` that holds a region, after plat has loaded the part |
+| `PDV_X8_CTL` 0xD2 | BX = `X8C_*`: `BAND` (XB: `pdxb_x8band`: the list's segment and length, the band, the page rectangle), `BEGIN` (CX = y0, DX = y1, the strip, at most 8 rows: cleared to white, depth 0), `END` (quantises the strip into the band; out CX = `X8F_*` bits), `LUM` (CX = the colour of the marks that follow), `MKEND` (the mask block ended), `PASS` (interpretation begins; CX = the viewport's top row; resets the pool, the map, the frames), `WANT` (CX..DX = a band's rows) | `MKEND`: AX = the offset to resume at, CX = 1 (restore the clip); `WANT`: AX = 1 when any of the rows is composed in 8 bits |
+| `PDV_X8_SPAN` 0xD3 | BX = y, CX = xa, DX = xb, band-relative columns; composes a constant span of the current colour and transparency | 0 |
+| `PDV_X8_GS` 0xD4 | BX = the tuple in force, CX = object, DX = generation of an ExtGState | AX = the new tuple; CX = 1: the soft mask's /G is at XB+0, XB+2; DX = `X8F_*` bits |
+| `PDV_X8_REC` 0xD5 | BX = the offset of an XSTATE or an in-range GROUP record | AX = the offset to go on from; CX = 1 when a soft mask's block was begun (PDREND notes the STATE record in force and restores its clip at `MKEND`); DX = the end of the block being walked, 0 outside one |
+| `PDV_X8_IMG` 0xD6 | BX = `X8I_*`: `SET` (XB `pdxb_x8img`), `ROW` (CX = y; XB `pdxb_x8row`), `END` | 0 |
+| `PDV_X8_DEF` 0xD7 | BX = `X8D_*`: `STATE` (CX = stroke, DX = tuple), `MARK` (CX..DX = rows), `GROUP` (XB `pdxb_x8grp`), `GEND` (CX = frame, DX = the list's length), `NOMASK` | the record, as bytes at XB+0, AX = its length (0 none); `STATE`: DX bit 0 the mark is transparent, bit 1 transparency is in force; `GROUP`: CX bit 0 reset the last STATE, bit 1 the tuple is 0; `GEND`: CX = the MASKB length offset to patch (0 none), DX = the value |
+
+*A strip.* PDREND, per 16-row band that its mark map says holds a transparent
+mark: `BAND`; then for each strip of 8 rows `BEGIN`, the ordinary walk of the
+whole list with the strip as its row window, `END`. In the walk every
+`span_out` becomes `SPAN`; a `STATE` record is `LUM`; an `XSTATE`, or a `GROUP`
+whose rows meet the strip, is `REC`; an image is `IMG SET`, `IMG ROW` per row
+and `IMG END`; a mask block begun by `REC` (answered by CX = 1) is walked from
+the offset it returned until it reaches DX, then `MKEND` turns it into the mask
+and returns the offset of the record that asked. A band the map does not mark
+walks as before, with none of this.
+
+*Cost of the seam* (4.77 MHz, from 46.7 us a far call and the work around it):
+a span costs the call (about 100 us with the verb's switch) and the work; the
+walker's other records cost nothing new, and a page with no transparency pays
+one `WANT` a band once the part is loaded and nothing before. The quantiser and the xlat of the
+constant-colour table are hand assembly (214 + 256 bytes, 20.7 and 15.0
+instructions a pixel, `hosttest/pdb_primtest.py`); the chunk, group and mask
+composition are C (`x8_chunk` 776 bytes, `x8_gend` 1,073).
+
+*Build.* `make pdx8` builds `build/PDX8.MOD` and refuses over `PDX8_CAP`;
+`make PDR_X8=1 ...` passes `-DPDR_X8` to smlrcc and nasm together for PDREND.
+A default build is PDREND without the hooks.
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 

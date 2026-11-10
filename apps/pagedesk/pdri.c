@@ -516,6 +516,7 @@ static void do_form(pdw obj, pdw gen)
     if (g_afm) pdm_mat_mul(&GS.ctm, &g_am, &GS.ctm);
     pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
     if (hasbox) rect_clip_user(&bx0, &by0, &bx1, &by1);
+    xb_group_begin(obj, gen);               /* blend: a soft mask's /G or a transparency group (20.22.10.4) */
 }
 
 /* ---- images ---------------------------------------------------------------- */
@@ -570,6 +571,7 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = (pdb)codec;
     if (py0 < GS.cy0) py0 = GS.cy0;
     if (py1 > GS.cy1) py1 = GS.cy1;
+    if (flags & 0x60) xb_rows(py0, py1);   /* blend: an image with a mask (20.22.10.3) */
     if (codec) x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);   /* its occupant draws it */
     hdr_set(DLR_IMAGE, 0, (pdw)(DLH + DLI_BODY + extra), py0, py1);
     return dl_put(g_hdr, DLH, body, DLI_BODY);
@@ -814,7 +816,8 @@ static void exec_op(const char *s, pdw n)
             pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
             break;
         case 'r' | ('e' << 8): op_re(); break;
-        case 'g' | ('s' << 8): case 'r' | ('i' << 8): break;
+        case 'g' | ('s' << 8): xb_gs(); break;                    /* blend (20.22.10.4); a no-op without PDR_X8 */
+        case 'r' | ('i' << 8): break;
         case 'f' | ('*' << 8): paint(1, 1, 0, 0); break;
         case 'B' | ('*' << 8): paint(1, 1, 1, 0); break;
         case 'b' | ('*' << 8): paint(1, 1, 1, 1); break;
@@ -1104,6 +1107,7 @@ static pdw frame_end(void)
     strm_close();
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
         if (XG_TILE_NEXT()) return 1;
+        xb_group_end();                                 /* blend: the group or mask block ends */
         while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
         g_gsover = g_fr[g_nfr].gsover;
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;

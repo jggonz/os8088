@@ -123,6 +123,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+#ifdef PDR_X8
+    if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+#endif
     pdr_ip.nc = ncomp; pdr_ip.bpc = bpc;
     pdr_ip.lseg = (flags & 8) ? g_xcseg : 0; pdr_ip.loff = (pdw)r16(b + 24);
     pdr_ip.lflags = (flags & 8) ? b[26] : (ncomp == 4);
@@ -160,7 +163,10 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-            pdr_imgrow();
+#ifdef PDR_X8
+            if (g_xs) x8_imgrow(y); else
+#endif
+            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
         }
     }
 }
@@ -258,6 +264,7 @@ static pdw pass_begin(void)
     x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
     g_passes++;
     gs_init();
+    xb_pass();
     g_ph = PDR_INTERP;
     return interp_start(g_rq.page);
 }
@@ -308,6 +315,7 @@ static pdw verb_begin(void)
     g_pgx0 = g_rq.view.ox; g_pgy0 = g_rq.view.oy;
     g_pgx1 = (pdi)(g_pgx0 + vb_w - 1); g_pgy1 = (pdi)(g_pgy0 + vb_h - 1);
     if (!band_geometry()) return PDE_NOMEM;
+    x8_view();
     view_base(&g_rq.view);
     g_nb = band_count();
     g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
@@ -357,6 +365,7 @@ static pdw verb_step(void)
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
         if (done) {
             close_streams();
+            xb_needmem();                                   /* blend: PDX8 for a transparent page (20.22.10.2) */
             /* the extension cache filled: empty it and run the pass again, once a view */
             if (g_xcfull && !g_xcflush) {
                 g_xcflush = 1; g_xctop = 0;
@@ -573,7 +582,10 @@ static pdw verb_init(pdw xbseg)
      * added. The page view and the document's caches go on */
     if (bound && (x_ask & 0x80)) {
         for (i = 0; i < INI_OLDW; i++) if (pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
-        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); return PDE_OK; }
+#ifdef PD_DEBUGX
+        fprintf(stderr, "fast path i=%u of %u\n", i, INI_OLDW);
+#endif
+        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); x8_init(g_ini.x8_seg, g_ini.x8_kb); return PDE_OK; }
     }
     g_xb = xbseg;
     /* the engine's vector first, before anything can call the engine. The
@@ -597,6 +609,7 @@ static pdw verb_init(pdw xbseg)
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
+    x8_init(g_ini.x8_seg, g_ini.x8_kb);
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;
