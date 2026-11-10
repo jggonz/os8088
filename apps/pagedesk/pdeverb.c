@@ -735,7 +735,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
         case PDV_ENG_SETKEY:      rc = cr_setkey(); break;
         case PDV_ENG_ARENA_MARK:  pde_ax = arena_top; rc = PDE_OK; break;
         case PDV_ENG_ARENA_REL:
-            if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
+            if (bx > arena_top || bx < cr_floor) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
             break;
         default:
             /* a half-open document (PDE_PASSWORD) answers DICT_GET and TRAILER:

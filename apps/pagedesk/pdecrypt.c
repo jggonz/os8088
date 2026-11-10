@@ -50,6 +50,7 @@ extern pdw pdc_cseg;            /* pdcaes.inc: the segment ES takes in the ciphe
 #define CR_RCWIN PDE_RC4N       /* the window's: it outlives the pushes (20.22.3.3) */
 #define CR_RCSTR (PDE_RC4N + 1) /* a string's, while a stream may be open (the engine has no tail buffer) */
 static pdw   cr_win;            /* os_rewind's call: the ctx is the window's (20.22.3.3) */
+static pdw   cr_floor;          /* ARENA_REL may not go below it: the cipher area (target only) */
 
 #define CRI ((struct pdxb_crypt *)ctxs)        /* SETKEY uses the idle ctxs as its buffer */
 
@@ -192,6 +193,16 @@ static pdw cr_setkey(void)
     for (i = 0; i < 32; i++) cr_key[i] = x->key[i];
     cr_klen = x->key_len; cr_stm = x->stm; cr_str = x->str; cr_meta = x->encmeta; cr_auth = x->auth; cr_eff = x->eff;
     CR_RKn = 0;
+#ifndef PD_HOST
+    /* the cipher area is the arena's first CR_AREA bytes (20.22.5): ES must name it, and nothing else may
+     * take it - the page walk's visited bits go above it. (Left at 0, ES = 0 put Td0 and the AES
+     * schedule over the interrupt vectors and the RC4 states over the kernel's first KiB.) */
+    if (g_akb < (CR_AREA + PDE_VISBYTES + 1023) / 1024) return PDE_NOMEM;
+    pdc_cseg = g_aseg;
+    pdc_aes_tdnew();                                  /* Td0 was the last document's, or the walk's bits */
+    if (arena_top < CR_AREA) arena_top = CR_AREA;
+    cr_floor = CR_AREA;
+#endif
     cr_on = 1;
     for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;     /* the key was in the XB's copy */
     pd_fcopy_out(x, g_xb, 0, sizeof(struct pdxb_crypt));
@@ -201,7 +212,7 @@ static pdw cr_setkey(void)
 static void cr_reset(void)
 {
     pdw i;
-    cr_on = 0; cr_sn = 0; cr_sg = 0; cr_skip = 0; CR_RKn = 0; cr_curn = 0;
+    cr_on = 0; cr_sn = 0; cr_sg = 0; cr_skip = 0; CR_RKn = 0; cr_curn = 0; cr_floor = 0;
     for (i = 0; i < 32; i++) cr_key[i] = 0;
 }
 

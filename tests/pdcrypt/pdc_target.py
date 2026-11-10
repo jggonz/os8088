@@ -13,7 +13,7 @@ host driver's (`pdc_e2e dump`) for the same file.
     python3 tests/pdcrypt/pdc_target.py [FIXTURE ...]        (default: one of each algorithm)
 """
 import os, struct, subprocess, sys
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_MEM_WRITE
 from unicorn.x86_const import *
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,6 +46,13 @@ class Machine:
             self.uc.mem_write(lin(seg), d)
             self.mods[name] = (seg, size + bss)
         self.insns = 0
+        # Nothing a module does may write the interrupt vectors, the BIOS data area or the kernel stub: on the
+        # machine the cipher area is the ARENA (20.22.5), and an unset _pdc_cseg (ES = 0) put Td0 over the vectors
+        self.low = []
+        def low_write(uc, access, addr, size, value, data):
+            if len(self.low) < 4:
+                self.low.append("%04x:%04x wrote %d at %05x" % (uc.reg_read(UC_X86_REG_CS), uc.reg_read(UC_X86_REG_IP), size, addr))
+        self.uc.hook_add(UC_HOOK_MEM_WRITE, low_write, begin=0, end=lin(KSEG) + 0x4FF)
 
     def rd(self, off, n, seg=XBSEG): return bytes(self.uc.mem_read(lin(seg, off), n))
     def wr(self, off, data, seg=XBSEG): self.uc.mem_write(lin(seg, off), bytes(data))
@@ -62,6 +69,7 @@ class Machine:
         uc.reg_write(UC_X86_REG_SP, sp - 4)
         uc.emu_start(lin(seg, 8), lin(HALTSEG), count=2_000_000_000)
         rd = uc.reg_read
+        assert not self.low, "%s verb %02x wrote low memory: %s" % (mod, verb, self.low)
         assert rd(UC_X86_REG_SP) == sp and rd(UC_X86_REG_SS) == SSEG, "stack not restored"
         assert rd(UC_X86_REG_DS) == 0x1234 and rd(UC_X86_REG_ES) == 0x4321, "DS/ES not restored"
         assert rd(UC_X86_REG_BP) == 0xBEEF and rd(UC_X86_REG_SI) == 0x5151 and rd(UC_X86_REG_DI) == 0xD1D1, "BP/SI/DI not kept"
