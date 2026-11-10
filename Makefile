@@ -18502,6 +18502,10 @@ $(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDI
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
 $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
+# PDREND's code part (PAGEDESK-SPEC 20.22.7.9) beside the stand-in: its stamp
+# and 1 KiB, so the row packs; the stand-in refuses the bind, as it should
+$(PDSTUBDIR)/PDRENDC.MOD: | $(PDSTUBDIR)
+	@python3 -c "import struct; open('$@','wb').write(struct.pack('<HH',0x4352,1024)+bytes(1020))"
 $(PDSTUBDIR)/PDX%.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc $(PDDIR)/pdkgate.inc | $(PDSTUBDIR)
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_X$* -o $@ $<
 
@@ -18519,12 +18523,18 @@ PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_M
 $(shell mkdir -p $(BUILD); \
         [ -f '$(PDMODSTAMP)' ] || { rm -f $(BUILD)/.pdmods-* \
                                       $(BUILD)/pdeng.part $(BUILD)/pdrend.part \
+                                      $(BUILD)/pdrendc.pkpart \
                                       $(BUILD)/pdwrt.part $(PD_XPARTS); \
                                 touch '$(PDMODSTAMP)'; })
 $(BUILD)/pdeng.part: $(PD_ENG_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdrend.part: $(PD_REND_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
+# ...and its code part, cut beside whichever PDREND.MOD is named (rcore's
+# rule below makes $(BUILD)/PDRENDC.MOD with the real one): an eager row
+PD_RENDC_MOD = $(dir $(PD_REND_MOD))PDRENDC.MOD
+$(BUILD)/pdrendc.pkpart: $(PD_RENDC_MOD) $(PDMODSTAMP) | $(BUILD)
+	cp $< $@
 $(BUILD)/pdwrt.part: $(PD_WRT_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdxk.part: $(PD_XK_MOD) $(PDMODSTAMP) | $(BUILD)
@@ -18581,7 +18591,7 @@ $(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMAT
 # the overlay is cut off the image and rides as the LAST part (SPEC.md
 # 73.14.2); os88pkg.py refuses a --part count that is not the table's rows
 $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
-                       $(BUILD)/pdrend.part $(BUILD)/pdwrt.part \
+                       $(BUILD)/pdrend.part $(BUILD)/pdrendc.pkpart $(BUILD)/pdwrt.part \
                        $(BUILD)/pdres1.part $(BUILD)/pdres2.part \
                        $(PD_XPARTS) \
                        tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
@@ -18589,7 +18599,7 @@ $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
 		--trim $(BUILD)/pagedesk.trim.bin
 	$(OS88PKG) $(BUILD)/pagedesk.trim.bin -o $@ $(CC_PARTZ) \
 		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
-		--part $(BUILD)/pdwrt.part \
+		--part $(BUILD)/pdrendc.pkpart --part $(BUILD)/pdwrt.part \
 		--part $(BUILD)/pdres1.part --part $(BUILD)/pdres2.part \
 		$(addprefix --part ,$(PD_XPARTS)) \
 		--part $(BUILD)/PAGEDESK.OVL

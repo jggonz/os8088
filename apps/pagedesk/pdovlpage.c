@@ -590,7 +590,7 @@ static int ovl_save_begin(const char *name, int kind)
      * source is the open document's 8.3 name; author stays "" (no author
      * preference in wave 1). */
     os88_strcpy(pdu_xsave.source, pdu_name, sizeof(pdu_xsave.source));
-    pdu_datestamp(pdu_xsave.date);
+    ovl_datestamp(pdu_xsave.date);
     pdu_xsave.mode = pdu_savemode[kind];
     if (pdu_pfl) {                      /* plat: the pre-flight owns PDENG from */
         pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);       /* here (20.22.4.5) */

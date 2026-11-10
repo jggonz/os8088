@@ -533,25 +533,25 @@ static void pdu_render_step(void)
  * a PIT clock since boot was never set, and a date of 1980 is a fact the
  * file would carry as if it were true. dst holds at least 17 bytes. */
 static unsigned pdu_clkw[4];
-static void pdu_d2(char *p, unsigned v)
+static void ovl_d2(char *p, unsigned v)
 {
     p[0] = (char)('0' + v / 10);
     p[1] = (char)('0' + v % 10);
 }
-static void pdu_datestamp(char *dst)
+static void ovl_datestamp(char *dst)   /* save only: the overlay's */
 {
     dst[0] = 0;
     if (!pdu_clk(pdu_clkw))
         return;
     dst[0] = 'D';
     dst[1] = ':';
-    pdu_d2(dst + 2, pdu_clkw[0] / 100);
-    pdu_d2(dst + 4, pdu_clkw[0] % 100);
-    pdu_d2(dst + 6, pdu_clkw[1] >> 8);
-    pdu_d2(dst + 8, pdu_clkw[1] & 0xFF);
-    pdu_d2(dst + 10, pdu_clkw[2] >> 8);
-    pdu_d2(dst + 12, pdu_clkw[2] & 0xFF);
-    pdu_d2(dst + 14, pdu_clkw[3] & 0xFF);
+    ovl_d2(dst + 2, pdu_clkw[0] / 100);
+    ovl_d2(dst + 4, pdu_clkw[0] % 100);
+    ovl_d2(dst + 6, pdu_clkw[1] >> 8);
+    ovl_d2(dst + 8, pdu_clkw[1] & 0xFF);
+    ovl_d2(dst + 10, pdu_clkw[2] >> 8);
+    ovl_d2(dst + 12, pdu_clkw[2] & 0xFF);
+    ovl_d2(dst + 14, pdu_clkw[3] & 0xFF);
     dst[16] = 0;
 }
 

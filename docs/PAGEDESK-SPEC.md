@@ -4993,16 +4993,25 @@ merge):
 
 | id | occupant | part row | magic | cap (image + bss) | workspace KiB, want / min | owner |
 |---|---|---|---|---|---|---|
-| `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 / 0 | crypt |
-| `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 13 / 13 | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 64 / 32 (a font program of 54,768 / 22,016 bytes: 20.22.8) | fonts |
-| `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 64 / 12 | dct, bilevel |
-| `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 60 / 12 | jpx |
-| (6, internal) | PDWRT | 2 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
+| `PDX_KEY` 1 | PDXK | 6 | `'PK'` | 32,768 | 0 / 0 | crypt |
+| `PDX_GFX` 2 | PDXG | 7 | `'PG'` | 61,440 | 13 / 13 | gfx |
+| `PDX_FNT` 3 | PDXF | 8 | `'PF'` | 61,440 | 64 / 32 (a font program of 54,768 / 22,016 bytes: 20.22.8) | fonts |
+| `PDX_IMG` 4 | PDXI | 9 | `'PI'` | 65,024 | 64 / 12 | dct, bilevel |
+| `PDX_JPX` 5 | PDXJ | 10 | `'PJ'` | 65,024 | 60 / 12 | jpx |
+| (6, internal) | PDWRT | 3 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
 
-Row 10 is **PDX8**, blend's transparency part (20.22.10.11): not a slot
-occupant but the X8 region's first bytes (20.22.2.5), magic `'P8'`. The
-overlay row moves from 5 to **11** and stays last (`cc_ovidx`, crt0's
+Row 2 is **PDRENDC**, PDREND's code part (20.22.7.9): an EAGER row, so
+`op_load` reads it into the carve at launch beside PDENG and PDREND, and
+`pdu_mod_launch` binds it once with `PDV_REND_CODE` (BX = `OS88_CODESEL` of
+its segment, CX = the segment) before PDREND's INIT. The carve never moves,
+so there is no re-bind, no loader code and **no claim of its own**: at the
+peaks of 20.22.2.2 a ninth claim would have been refused (`MEM_OWNER_MAX`
+8). The bind's answer is not tested: a refused bind (not this build's part,
+or the stand-in, which carries a 1 KiB `PDRENDC.MOD` of its own) makes
+PDREND refuse its INIT, and the launch says so. Row 11 is **PDX8**, blend's
+transparency part (20.22.10.11): not a slot occupant but the X8 region's
+first bytes (20.22.2.5), magic `'P8'`. The overlay row moves from 5 to
+**12** and stays last (`cc_ovidx`, crt0's
 `CC_OVL_ROW` rule). Until a part lands its row carries a STAND-IN
 (`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ|X8`), named by the
 Makefile's `PD_XK_MOD` ... `PD_XJ_MOD` and `PD_X8_MOD`, which default to it: a
@@ -5207,7 +5216,7 @@ store:
   64 KiB swap about 23 ms against 1.2-3 s off a floppy (scout-platform 1).
 
 **20.22.2.8 The disks (O7).** Every geometry carries the one `PAGEDESK.O88`
-with all twelve rows. The 360KB set becomes two floppies:
+with all thirteen rows. The 360KB set becomes two floppies:
 `pagedesk360.img` (the program, `README.TXT`, `PDFONTS.TXT`, and the two
 samples the empty view and PD-29's XT proof open, `HELLO.PDF` and
 `XTGUIDE.PDF`) and **`pagedesk360b.img`** (every sample, and `README.TXT`).
@@ -5238,9 +5247,9 @@ cap is 65,024):
 | the second wave: (want, min) workspaces and `PDMEM_SLOT`, the encrypted open's slice in the overlay, five regions (XIDX to 256, GLYPH, `SEG_SUBC` windows), PDX8 into the X8 region; `pdu_bank_load` (C 465) in assembly | 64,981 | +456 |
 | `pdu_mod_launch` (C 277) in assembly; the held keys and the Insert's pre-flight (20.22.2.10: `sl_wkeys`, the save job's and the abort's hooks; the rest is overlay) | 65,015 | +34 |
 
-**9 bytes stay under the cap.** The next primary byte is a decision: the
-candidates are `pdu_layout` (1,826 of C) and `os88_onkey` (1,290), whose
-asm twins would each free several hundred.
+| PDRENDC's row and bind (+~35); `pdu_mcheck` and its tables (C 216 + 48 bss) folded into `pdu_mod_launch`'s assembly; `pdu_datestamp` / `pdu_d2` (249, a save's) to the overlay | 64,577 | -438 |
+
+**447 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key

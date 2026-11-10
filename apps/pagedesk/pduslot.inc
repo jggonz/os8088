@@ -920,7 +920,8 @@ PDU_RGLYPH      equ 5               ; PDMEM_GLYPH: fonts' glyph growth
 PDU_NREG        equ 5               ; XIDX OSW XC X8 GLYPH
 PDU_XIDXMAX     equ 256             ; KiB: eng's flat index (20.22.3)
 PDU_GLYPHMIN    equ 32              ; KiB: the glyph region's second try
-PDU_PART_X8_A   equ 10              ; pagedesk.asm's PDX8 row
+PDU_PART_RENDC_A equ 2              ; pdu.h's PDU_PART_RENDC
+PDU_PART_X8_A   equ 11              ; pagedesk.asm's PDX8 row
 PDX8_MAGIC_A    equ 0x3850          ; 'P8' (blend, 20.22.10.11)
 
 ; xr_segs - every region's window and KiB into pdu_xinit, 0 where not held. A
@@ -1629,19 +1630,54 @@ _pdu_mod_launch:
     lodsw
     mov [_pdu_bpp], ax
     xor di, di                      ; PDU_M_ENG, then PDU_M_REND: each is
-.m:                                 ; its own parts row (pdumod.c)
-    mov ax, di
-    call op_seg
-    push ax
-    push di
-    call _pdu_mcheck
-    pop cx
-    pop cx
+.m:                                 ; its own parts row, its header checked
+    mov ax, di                      ; as 3.1 says: magic, PDM_ABI, image
+    call op_seg                     ; past the door, image + bss == the row
     or ax, ax
-    jnz .no
+    jz .bad
+    push es
+    mov es, ax
+    mov dx, PDM_MAGIC_ENG
+    or di, di
+    jz .mg
+    mov dx, PDM_MAGIC_REND
+.mg:
+    cmp [es:0], dx
+    jne .badp
+    cmp word [es:2], PDM_ABI
+    jne .badp
+    mov dx, [es:4]
+    cmp dx, PDM_ENTRY
+    jbe .badp
+    add dx, [es:6]
+    jc .badp
+    pop es
+    xchg ax, cx
+    mov ax, di
+    call op_row                     ; SI = the row
+    cmp dx, [si+OP_R_LEN]
+    jne .bad
+    push cx
+    push di
+    call _pdu_mbind
+    pop cx
+    pop cx
     inc di
     cmp di, 2
     jb .m
+    mov al, PDU_PART_RENDC_A        ; PDREND's code part (20.22.7.9), in the
+    call op_seg                     ; carve with it - never moved - and bound
+    xor cx, cx                      ; once: BX its code selector, CX its data.
+    push cx                         ; A refusal (not this build's part; the
+    push ax                         ; stand-in) shows as REND_INIT's below
+    OS88_CODESEL ax, byte [cc_cpuf]
+    push ax
+    mov ax, PDV_REND_CODE
+    push ax
+    mov al, 1                       ; PDU_M_REND
+    push ax
+    call _pdu_mcall
+    add sp, 10
     mov ax, PD_XB_BYTES / 16
     push ax
     call _os88_mem_claim_p
@@ -1683,6 +1719,14 @@ _pdu_mod_launch:
     je .quit
     xor ax, ax
     jmp short .out
+.badp:
+    pop es
+.bad:
+    mov si, ml_eng                  ; "PDENG: wrong version" / "PDREND: ..."
+    or di, di
+    jz .toast
+    mov si, ml_rend
+    jmp short .toast
 .quit:
     call _pdu_mod_quit
 .toast:
@@ -1710,7 +1754,7 @@ _pdu_mod_launch:
 ; bank leaves the band and the kernel's face (D3). It was C until the slot's
 ; regions wanted the room (20.22.2)
 ; =============================================================================
-PDU_PART_RES_A  equ 3               ; pdu.h's PDU_PART_RES; RES2 is the next
+PDU_PART_RES_A  equ 4               ; pdu.h's PDU_PART_RES; RES2 is the next
 PDU_BAND_P      equ 2304 / 16       ; pdkit.inc's band: 96 x 24
 _pdu_bank_load:
     push si
@@ -1954,6 +1998,8 @@ PDU_RES_KIND_KIT_A   equ 9
 dc_map:         db 0, 2, 4, 8, 10, 6
 ml_nomem:       db 'No memory for PageDesk', 0     ; pdu_mod_launch's toasts
 ml_fail:        db 'A PageDesk module failed', 0
+ml_eng:         db 'PDENG: wrong version', 0
+ml_rend:        db 'PDREND: wrong version', 0
 
 
 section .bss

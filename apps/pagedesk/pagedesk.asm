@@ -81,27 +81,30 @@
 ; --- THE PARTS TABLE (SPEC.md 20.12, PAGEDESK-SPEC 2.2) -----------------------
 ; Eager rows first, lazy after, the overlay last (crt0.asm's CC_OVL_ROW rule).
 ; pdu.h's PDU_PART_* name these rows and the %if at the foot holds them there.
-    CC_PARTS_BEGIN 12
+    CC_PARTS_BEGIN 13
       %assign PD_PART_ENG_ASM OS88_PART_N
       OS88_PART OP_SEG,   OP_COMP                  ; 0 PDENG
       %assign PD_PART_REND_ASM OS88_PART_N
       OS88_PART OP_SEG,   OP_COMP                  ; 1 PDREND
+      %assign PD_PART_RENDC_ASM OS88_PART_N
+      OS88_PART OP_SEG,   OP_COMP                  ; 2 PDRENDC, PDREND's code
+                                                   ;   (20.22.7.9): in the carve
       %assign PD_PART_WRT_ASM OS88_PART_N
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 2 PDWRT (the slot's)
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 3 PDWRT (the slot's)
       %assign PD_PART_RES_ASM OS88_PART_N
-      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 3 PDRES [0, 65024)
+      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 4 PDRES [0, 65024)
       %assign PD_PART_RES2_ASM OS88_PART_N
-      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 4 PDRES [65024, end)
+      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 5 PDRES [65024, end)
       %assign PD_PART_XK_ASM OS88_PART_N
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 5 PDXK
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 6 PDXG
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 7 PDXF
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 8 PDXI
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 6 PDXK
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 7 PDXG
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 8 PDXF
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 9 PDXI
       %assign PD_PART_XJ_ASM OS88_PART_N
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 9 PDXJ
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 10 PDXJ
       %assign PD_PART_X8_ASM OS88_PART_N
-      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 10 PDX8 (the X8 region's)
-      CC_OVL_ROW                                   ; 11 the overlay
+      OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 11 PDX8 (the X8 region's)
+      CC_OVL_ROW                                   ; 12 the overlay
     CC_PARTS_END
 
 %include "pagedesk.gen.asm"         ; the compiled C, found through -I build/
@@ -125,6 +128,7 @@
 %define CC_U__os88_mem_claim_p
 %define CC_U__os88_mem_free
 %define CC_U__os88_seg_sub
+%define CC_U__os88_toast
 
 ; THE ARITHMETIC (PAGEDESK-SPEC 4.2, 4.3). pdmath.inc is the math agent's;
 ; until it lands the Makefile passes -DPD_MATH_STUB and the few routines the
@@ -136,13 +140,13 @@
 %endif
 
 ; --- THE DRIFT GUARDS --------------------------------------------------------
-%if PD_PART_ENG_ASM != 0 || PD_PART_REND_ASM != 1 || PD_PART_WRT_ASM != 2
+%if PD_PART_ENG_ASM != 0 || PD_PART_REND_ASM != 1 || PD_PART_WRT_ASM != 3 || PD_PART_RENDC_ASM != PDU_PART_RENDC_A
   %error "the parts table moved; pdu.h's PDU_PART_* must follow"
 %endif
-%if PD_PART_XK_ASM != 5 || PD_PART_XJ_ASM != 9 || PD_PART_X8_ASM != PDU_PART_X8_A
+%if PD_PART_XK_ASM != 6 || PD_PART_XJ_ASM != 10 || PD_PART_X8_ASM != PDU_PART_X8_A
   %error "the parts table moved; pdu.h's PDU_PART_X* must follow"
 %endif
-%if PD_PART_RES_ASM != 3 || PD_PART_RES2_ASM != 4 || cc_ovidx != 11
+%if PD_PART_RES_ASM != PDU_PART_RES_A || PD_PART_RES2_ASM != PDU_PART_RES_A + 1 || cc_ovidx != 12
   %error "the parts table moved; pdu.h's PDU_PART_RES / the overlay row must follow"
 %endif
 %if OS88UI_SBNONE != 0 || OS88UI_SBUP != 1 || OS88UI_SBDOWN != 2

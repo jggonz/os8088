@@ -41,7 +41,7 @@ static struct pdxb_init pdu_xinit;
  * kern_big (kernel/memory.inc, SPEC.md 50), and 16.2's rows one claim each
  * come to 13 at a save's peak. So the six document rows ride two claims cut
  * with os88_seg_sub (a selector on kern_mega, seg + para on every real-mode
- * kernel): A = cache, arena, tables, glyph cache (47 KiB) and B = display
+ * kernel): A = cache, arena, tables, glyph cache (50 KiB) and B = display
  * list + PDREND's workspace, band (<= 34 KiB, D13). Every cut is on a KiB,
  * so every sub-segment is 512-aligned for a disk transfer (SPEC.md 2.1.1); the cache is first in A,
  * at the claim's own base. The peak is then the carve, the exchange block,
@@ -68,7 +68,10 @@ static struct pdxb_init pdu_xinit;
 #define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4.. in B */
 /* DECISIONS D13: PDREND keeps its gstates and font cache in a 6,912-byte
  * workspace at the tail of dl_seg, so the display-list row is 22 + 7 = 29 */
-const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0,
+/* the arena is 11 (crypt, 20.22.5): an encrypted document's cipher state
+ * lives at its offset 0, and SETKEY answers PDE_NOMEM below 11 KiB. Raised for
+ * every document: A cannot grow in place once PDENG holds its rows */
+const unsigned pdu_dckb[PDU_NDC] = { 16, 11, 11, 12, 29, 0,
                                             16, 4, 1, 4, 2, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
@@ -92,47 +95,14 @@ static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: this job's writer buffer (20.1
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
 
-/* the two eager modules; PDWRT and the rest are the slot's (pduslot.c) */
-static const char *pdu_modname[2] = { "PDENG", "PDREND" };
-static const unsigned pdu_modmagic[2] = { PDM_MAGIC_ENG, PDM_MAGIC_REND };
-static const int pdu_modpart[2] = { PDU_PART_ENG, PDU_PART_REND };
-
-static char pdu_mmsg[48];               /* a refusal's toast (copied) */
-
-static unsigned pdu_peekw(unsigned seg, unsigned off)
-{
-    return (os88_peek(seg, off) & 0xFF) | ((os88_peek(seg, off + 1) & 0xFF) << 8);
-}
+/* the two eager modules (and PDREND's code part) are checked and bound by
+ * pduslot.inc's pdu_mod_launch; PDWRT and the rest are the slot's */
 
 static void pdu_cat(char *d, const char *s, int cap)
 {
     int n;
     n = os88_strlen(d);
     os88_strcpy(d + n, s, cap - n);
-}
-
-/* check module m's header in its segment against the parts row; bind it.
- * 0 = bound, else a PDE_* and a toast that names the module. */
-static int pdu_mcheck(int m, unsigned seg)
-{
-    unsigned img, bss, len;
-
-    if (seg == 0)
-        goto bad;
-    if (pdu_peekw(seg, 0) != pdu_modmagic[m] || pdu_peekw(seg, 2) != PDM_ABI)
-        goto bad;
-    img = pdu_peekw(seg, 4);
-    bss = pdu_peekw(seg, 6);
-    len = pdu_part_len(pdu_modpart[m]);
-    if (img < PDM_ENTRY + 1 || img + bss < img || img + bss != len)
-        goto bad;
-    pdu_mbind(m, seg);
-    return 0;
-bad:
-    os88_strcpy(pdu_mmsg, pdu_modname[m], sizeof(pdu_mmsg));
-    pdu_cat(pdu_mmsg, ": wrong version", sizeof(pdu_mmsg));  /* <= 21: a 6-letter name + 15 (TOAST_MAX 24) */
-    os88_toast(pdu_mmsg, 0);
-    return PDE_LIMIT;
 }
 
 /* INIT module m (verb: its INIT) with pdu_xinit; 0 or a PDE_*. The doors
