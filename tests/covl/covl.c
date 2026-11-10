@@ -277,13 +277,17 @@ void os88_onclick(int x, int y, void *win)
     cv_draw(win);
 }
 
+static struct os88_class cv_cls = {
+    OS88_CLASS_LEN, 0,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
 void *os88_main(void)
 {
     void *win;
 
-    win = os88_wm_create(CV_X, CV_Y, CV_W, CV_H, "C Overlay");
+    win = os88_wm_create(CV_X, CV_Y, CV_W, CV_H, "C Overlay", &cv_cls);
     if (win == 0)
         return 0;
-    os88_wm_snap(win, 1);
     return win;
 }
