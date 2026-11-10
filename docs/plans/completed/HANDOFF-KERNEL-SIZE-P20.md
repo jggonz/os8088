@@ -132,8 +132,28 @@ R2, R2-3, R12 (no net-negative form), R15, R16, V1; refusing KB counts of
 
 ## 7. What was run
 
-(Filled in by the final pass: the deduplicated union of every agent's rows,
-`test-full`, and the MartyPC A/B.)
+- **The deduplicated union of every agent's rows, once** (`tools/os88soak.py`,
+  run `20261110-101855`, 656 rows with Bochs and the automation-enabled 86Box
+  present; the four WIN16 rows and `hmahiber` left out for missing fixtures):
+  **554 ok, 102 FAIL**. The failures were triaged by `fix` and `fix2`
+  (`docs/plans/ksp19/fix.md`, `fix2.md`): ~38 test scripts reading W_SEG at
+  R14's old offset 22; R14 removing a CF-clearing call at Clear Skies' entry
+  (every first launch refused, ~40 rows, +1 byte); kbpara's conversion
+  clobbering PiXEL's CL and ExciteBike's BX; INSTALL's fixed-offset kernel
+  probe; headless DOS's template; a Sticky App close; tests moved to the new
+  contracts. **All 102 re-ran green** from the fix branch; `sbirq5` and
+  picomem's `sb` leg also fail at `4beca096` (pre-existing).
+- **The clobber audit** (`clobber.md`): all 269 new `OSAPI_MEM_P` sites read
+  for destroyed registers and changed outputs - none live in shipped code;
+  two test packages (MEGAHI, MEGAHG) fixed.
+- **`test-full`, once: 93 ok, 1 FAIL, 2 SKIP** (`w16cens`, `w16censall` want
+  the Win16 fixtures). The failure was `pins` not knowing `MEMH_REGROW` is a
+  resize; taught, green.
+- `make budget-check` on all four kernels: met (section 0).
+- **Not run**: the MartyPC `os88hot ab` timing against `4beca096` - the owner
+  took the disks to the field first. The cycle figures in section 2 are
+  PREDICTED. `ftpd` stalled once at STOR-after-LIST and passed on re-run; not
+  checked at the base.
 
 ## 8. Method lessons
 
