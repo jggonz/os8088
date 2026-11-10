@@ -2755,7 +2755,8 @@ dos_hend:
 
 dos_htpl:
     dw 0, MBAR_H, 8 * DOS_HTXT, 8 + TITLE_H + 1
-    dw dos_ttl, dos_hpaint, 0, 0
+    dw dos_ttl, dos_hcls            ; its CLASS (SPEC.md 11.104): the paint
+    OS88_CLASS dos_hcls, 0, PAINT, dos_hpaint, ONWAKE, dos_wake ; and the wake
 dos_ttl:      db 'DOS', 0           ; ...the window's caption too: resident for
                                     ; both templates, and the menu bar's head
 dos_hs_start: db 'Starting '
