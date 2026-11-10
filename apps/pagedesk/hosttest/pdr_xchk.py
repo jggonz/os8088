@@ -19,7 +19,7 @@ to itself, through the host harness's stand-in occupants (hosttest/pdr_xmod.c):
 
     pdr_xchk.py <pdr_test_real> <scratch> <resdir> [--hostile <pdr_test_real_asan>] [-n SEEDS]
 """
-import argparse, os, shutil, subprocess, sys
+import argparse, os, re, shutil, subprocess, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument('exe'); ap.add_argument('scratch'); ap.add_argument('resdir')
@@ -62,8 +62,13 @@ def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700):
     r = subprocess.run([binary or exe, 'render', pdf, str(page), str(zoom), '0', str(bpp), '%d/%d' % (num, den), str(w), str(H),
                         '0', '0', out, bank, '29'], capture_output=True, text=True, env=e, timeout=300)
     st = dict(kv.split('=', 1) for l in r.stdout.split('\n') if l.startswith('status') for kv in l.split()[1:] if '=' in kv)
+    m = re.search(r"^status .*first='([^']*)'", r.stdout, re.M)
+    if m: st['first'] = m.group(1)
     im = np.asarray(Image.open(out).convert('L')).astype(int) if r.returncode == 0 and os.path.exists(out) else None
+    if int(st.get('incomplete', '0'), 0) and not st.get('first'):    # QA R16: the status line would say nothing
+        unnamed.append('%s p%d %s' % (os.path.basename(pdf), page, st))
     return r.returncode, im, st, r.stderr
+unnamed = []
 def num(st, k):
     v = st.get(k, '0')
     return int(v, 16) if v.startswith('0x') else int(v)
@@ -202,6 +207,10 @@ if a.hostile:
                     if bad < 5: print('    seed %d p%d %s rc=%d %s' % (seed, pg, ad, rc, err[-300:]))
     check('hostile IMG_OPEN / IMG_ROW: every render finishes clean', bad == 0, '%d bad' % bad)
 
+rc, im, st, _ = render(forms, 2, 'vga')
+check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
+      and st.get('first') == 'number range', str(st))
+check('every Incomplete render names its first reason (QA R16)', not unnamed, '; '.join(unnamed[:4]))
 print('pdr_xchk: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAILED ' + f)
 sys.exit(1 if fails else 0)

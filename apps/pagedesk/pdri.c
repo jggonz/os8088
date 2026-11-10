@@ -61,7 +61,7 @@ static pdw tok_next(void)
     err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
     if (g_fr[g_nfr].ntok < 0xFFFE) g_fr[g_nfr].ntok++;    /* the replay count (20.22.7.12) */
     else g_fr[g_nfr].ntok = 0xFFFF;
-    if (err == PDE_RANGE) { g_inc |= PDF_INC_RANGE; err = 0; }    /* a number saturated: the token is valid */
+    if (err == PDE_RANGE) { inc_note(PDF_INC_RANGE, "number range"); err = 0; }    /* a number saturated: the token is valid */
     if (err) return err;
     pd_fcopy_in(g_xb, 0, &g_tk, 8);
     if (g_tk.len > 255) g_tk.len = 255;

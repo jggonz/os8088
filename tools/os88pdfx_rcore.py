@@ -254,6 +254,10 @@ def forms_pdf(path):
         p = d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
                   '/Resources << /XObject << /Fm1 %d 0 R >> >> >>' % (c, outer))
         d.pages.append(p)
+    # page 3: a number past 16.16 (QA R16) - the token is kept, saturated, and
+    # the Incomplete note must NAME it (it was the one unnamed bit)
+    c = d.stream('', b'0.5 g 50 50 100 100 re f 40000 w 0 g 200 200 50 50 re f')
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R >>' % c))
     d.write(path)
 
 

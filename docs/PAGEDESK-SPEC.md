@@ -1471,7 +1471,9 @@ specifies them:
   `PDE_RANGE` (the end); `{objnum, gen}` for a Form or an image; `STRM_CLOSE`
   pops. Up to 6 streams (a page, 4 forms and one image) are open at once.
 * `TOKEN`: `PDE_RANGE` with CF = 1 means "number saturated, token valid" and sets
-  `PDF_INC_RANGE`; any other error ends the page (`PDF_INC_LIMIT`, "content stream
+  `PDF_INC_RANGE`, named "number range" like every other note (QA R16: an
+  unnamed first note left the status line `Incomplete rendering - ` with
+  nothing after it); any other error ends the page (`PDF_INC_LIMIT`, "content stream
   error"). Names and operators are NUL-terminated after `len` here.
 * `DICT_GET` with paths of names and `"[n]"`; a **final reference is followed by
   PDREND** (a second call with no names). `/Widths` is read element by element, on
