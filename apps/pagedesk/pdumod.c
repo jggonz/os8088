@@ -128,10 +128,7 @@ static void pdu_mod_quit(void);
  * with them (20.22.2) */
 
 /* the writer is done: the slot goes back (20.22.2.2, as PDWRT's claim did) */
-static void pdu_wrt_out(void)
-{
-    pdu_slot_free();
-}
+#define pdu_wrt_out() pdu_slot_free()
 
 static void pdu_mod_quit(void)
 {
@@ -163,11 +160,12 @@ static unsigned pdu_needkb;
 /* D17 / PAGEDESK-SPEC 20.13.3: the Flate slots, 43 KiB (2,752 paragraphs)
  * each, at claim B's tail. Chosen by RAM, never by CPU: two when the largest
  * free run holds B, both slots and the reserve, one when one fits, none
- * otherwise (PDENG then refuses Flate with PDE_FLATE, as before). The reserve
- * is PD-29's 32 KiB PLUS a save's peak: PDWRT and its buffers measured 47.5
- * KiB on a 640 KiB XT (pagedeskxt, D28). With 32 KiB alone, a Save As on that
- * machine left 5.5 KiB unclaimed */
-/* pduslot.inc: PDU_FL_PARA_A 2752, PDU_FL_RESV_A 5120 (32 + 48 KiB) */
+ * otherwise (PDENG then refuses Flate with PDE_FLATE, as before). The first
+ * slot keeps PD-29's 32 KiB after it; 32 KiB plus a save's peak (D28) left a
+ * 640 KiB XT with 120 KiB free and no slot at all (QA F22). The second keeps
+ * 48 KiB more, and a save or an occupant that wants it back has it by
+ * release-before-refuse (20.22.2.4) */
+/* pduslot.inc: PDU_FL_PARA_A 2752, PDU_FL_RESV_A 2048 (32 KiB), PDU_FL_RESV2_A 3072 (48 KiB) */
 /* int pdu_doc_claim(void) is pduslot.inc's: the rows above carved into the
  * two claims, the Flate slots at B's tail, the module stack armed and both
  * modules INITed - 0, PDE_NOMEM with pdu_needkb set, or PDE_LIMIT */
@@ -195,10 +193,3 @@ static void pdu_stk_wake(void)
     pdu_wsay(pdu_errtext(PDE_STACK));
 }
 
-/* the writer, for one save: PDWRT into the slot with its buffers as its
- * workspace (pdu_wkb KiB) and INITed (pduslot.c). 0 or a PDE_*; on failure
- * the slot is empty. */
-static int pdu_wrt_in_now(void)
-{
-    return pdu_slot_load(PDU_OCC_WRT);
-}

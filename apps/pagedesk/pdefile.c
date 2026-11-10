@@ -23,7 +23,7 @@ static void fl_invalidate(void)
 {
     pdw i;
     u32_zero(&dc_arr);
-    dk_obj = 0;
+    dk_obj = 0; an_pg1 = 0;
     for (i = 0; i < PDE_MAXBLK; i++) { fl_valid[i] = 0; fl_stamp[i] = 0; }
     fl_clock = 0;
     for (i = 0; i < 8; i++) fl_cur[i] = 0;

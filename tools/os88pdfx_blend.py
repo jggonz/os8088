@@ -48,6 +48,14 @@ def fx_alpha():
     gs = {5: "<< /ca 0.5 /CA 0.5 >>", 6: "<< /ca 0.25 /CA 0.25 >>", 7: "<< /ca 0.8 /CA 0.8 >>"}
     return page(c, "/ExtGState << /A50 5 0 R /A25 6 0 R /A80 7 0 R >>", gs)
 
+def fx_direct():
+    # QA R4: the ExtGState dictionaries are written DIRECTLY in the resources (RES_LOOKUP's PDRL_DIRECT)
+    c = "".join(rect(i * 20, 0, 20, 160, i / 7.0) for i in range(8))
+    c += "/A50 gs 0 g 10 10 70 70 re f\n/A25 gs 1 g 50 50 50 50 re f\n"
+    c += "/A50 gs 0.3 G 8 w 30 100 80 40 re S\n"
+    c += "/BM gs 0.6 g 100 60 50 60 re f\n"
+    return page(c, "/ExtGState << /A50 << /ca 0.5 /CA 0.5 >> /A25 << /ca 0.25 /CA 0.25 >> /BM << /BM /Multiply /ca 0.8 >> >>")
+
 BMS = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "ColorDodge", "ColorBurn",
        "HardLight", "SoftLight", "Difference", "Exclusion", "Hue", "Saturation", "Color", "Luminosity"]
 def fx_blend():
@@ -98,7 +106,7 @@ def fx_image():
     return page(c, "/XObject << /I1 5 0 R /I2 7 0 R >>", objs)
 
 FIXTURES = {"alpha": fx_alpha, "blend": fx_blend, "group": fx_group,
-            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image}
+            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image, "direct": fx_direct}
 
 def write(d):
     os.makedirs(d, exist_ok=True)
@@ -145,6 +153,11 @@ def check(d, harness, bank, shots=None):
         for r in (mu, po):
             df = np.abs(o[drawn] - r[drawn]); cols.append("%5.2f %5.1f%% %5.1f%%" % (df.mean(), (df > 8).mean() * 100, (df > 24).mean() * 100))
         print("%-12s %5d  %-22s %-22s" % (n, int(drawn.sum()), cols[0], cols[1]))
+        # the gate (QA R9: GS.pad_ was shared with gfx's colour-space slots and every transparency fixture came out opaque):
+        # the render must be near ONE of the two references (they differ from each other on blends by up to ~2.4)
+        best = min(float(np.abs(o[drawn] - r[drawn]).mean()) for r in (mu, po))
+        if not best <= 4.0:
+            print("%-12s FAIL: mean difference %.2f from both references (limit 4.0)" % (n, best)); rc = 1
         if shots:
             from PIL import Image
             os.makedirs(shots, exist_ok=True)

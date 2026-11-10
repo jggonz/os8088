@@ -875,6 +875,7 @@ typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
  * tuple pool and the record writers (interpretation time) and the compositor (raster
  * time). 0xD0 is free again (PDXG no longer carries pdxgtr.c). */
 #define PDM_MAGIC_X8    0x3850  /* 'P8' */
+#define PDX8_DIRECT     0xFFFD  /* PDV_X8_GS DX / DICT_GET gen: the dictionary is DIRECT in object CX; XB+0 (GS) or XB+sizeof(pdxb_dictget) (DICT_GET) holds { real gen, coff lo, coff hi } (RES_LOOKUP's PDRL_DIRECT answer) */
 #define PDX8_RES        16384   /* the part's image + bss at most; the planes follow it */
 #define PDX8_ENGVEC     12      /* header +12: eng_off, +14: eng_seg (plat binds them at load) */
 #define PDV_X8_INIT     0xD1    /* BX = the region's segment, CX = its KiB, DX = the XB seg */
