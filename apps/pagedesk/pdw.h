@@ -12,7 +12,7 @@
 #include "pdmath.h"
 #include "pdwmap.h"
 #ifndef PDRC_STRCIPHER
-#define PDRC_STRCIPHER 0x8000 /* RAW_COPY answer (in rc.mode): the dictionary's strings are ciphertext; crypt's name wins (20.22.4.2) */
+#define PDRC_STRCIPHER 0x0100 /* RAW_COPY answer (rc.mode high byte; input mode = rc.mode & 0xFF): the dictionary's strings are ciphertext; crypt's name wins (20.22.4.2) */
 #endif
 #include "pdcrypto.h"         /* crypt's primitives, shared source (20.22.5): the writer enciphers itself */
 

@@ -4995,7 +4995,7 @@ from PLAIN, and eng/crypt implement (the contract is theirs, 20.22.3 and
 * **Strings stay ciphertext** (00:00 amendment). On an encrypted source PLAIN
   decrypts only the stream data (and corrects `/Length`); the dictionary's
   strings come through as the file has them, and the RAW_COPY answer says so:
-  `PDRC_STRCIPHER` (0x8000 in `rc.mode`'s answer; `pdw.h` defines it under
+  `PDRC_STRCIPHER` (0x0100, the HIGH BYTE of `rc.mode` in the answer (crypt's pdabi.h); `pdw.h` defines it under
   `#ifndef`, crypt's name and place win). The object's number and generation
   are the request's (`eg_num`/`eg_gen`, kept as `g_snum`/`g_sgen`). An object
   that sat in an object stream (its strings were never enciphered) comes
