@@ -5737,7 +5737,7 @@ caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
 |---|---|---|
 | MD5 block, the per-object key block | `pdcmd5.inc` | 822 with its constants |
 | RC4 key schedule and stream | `pdcrc4.inc` | 171 |
-| AES key expansion (128 and 256), decryption, CBC | `pdcaes.inc` | 1,249 with the S-box and its inverse (512) |
+| AES key expansion (128 and 256), decryption (table-driven), CBC, the decryption schedule | `pdcaes.inc` | about 1,900 with the S-box and its inverse (512); `Td0` 1,024 bytes in the cipher area |
 | AES encryption, CBC encryption | `pdcaes.inc` (not under `PDC_NOENC`) | 189 |
 | SHA-256 and SHA-512 blocks | `pdcsha2.inc` | 3,636 with the constants (896) |
 
@@ -5925,14 +5925,39 @@ under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the par
 passes), a wrong password on R3 5.1 s (the owner key as well).
 
 **Stream decryption speed on an 8088** (the cost of a page that is encrypted,
-not of opening it): RC4 23 KB/s; AES-128 CBC **1.0 KB/s** (AES-256 0.7): a
-30 KB content stream is half a minute. Candidates, in the order of their gain
-(estimates only, none built): a table-driven AES decrypt (the inverse tables
-are 1 KB at least and PDENG's share has no room: 2 to 3 times); fusing the
-permutation and the key addition in `aes_decb` (a quarter); for R6, a
-table-driven AES-128 encrypt in PDXK (4 KB of bss, built at the first call; AES
-is 39 % of a run, SHA-512 44 %, SHA-256 11 %: roughly 437 to 350 seconds) and a
-fused 64-bit rotation in `pdcsha2.inc` (SHA-512's share by about a third).
+not of opening it): RC4 22.9 KB/s; AES-128 CBC **3.4 KB/s** and AES-256 2.6 KB/s,
+from 1.0 and 0.7 (a 30 KB content stream is nine seconds, not half a minute).
+`pdcaes.inc` decrypts with the equivalent inverse cipher (FIPS 197 5.3.5): a
+round is sixteen lookups in `Td0`, a 1 KiB table of 256 entries of four bytes
+(14, 9, 13, 11 times the inverse S-box), kept as a plane of low words and a
+plane of high words. `Td2` is the same planes read the other way round; `Td1` and
+`Td3` take their bytes across the planes (`-DPDC_TD1` adds a second table
+for them: 4.1 KB/s for 1 KiB more). The schedule is made once per object by
+`pdc_aes_ks`, then `pdc_aes_dks(rk, nr)` turns it in place into the decryption
+schedule (InvMixColumns of rounds 1 to nr-1, through the same table: 18,000
+clocks); **`pdc_aes_dec` and `pdc_cbc_dec` need that schedule**, so a caller that
+decrypts calls `ks` and then `dks`, and never encrypts with the result.
+`pdc_cbc_dec` goes from the last block to the first (the previous ciphertext is
+still in the buffer), so no block is copied for the chain. The table is built at
+the first `dks` (`pdc_aes_tdnew` makes the next one rebuild it), 113,000 clocks
+with the schedule. Measured by `pdc_far.py --cycles` under Unicorn with the
+8088 costing rule of `pdc_diff.py`.
+
+**Where the cipher state lives (PDENG).** `PDC_FARST`: the key schedule (240
+bytes), `Td0` (1,024) and the RC4 states (`PDE_RC4N + 2` of 258: the open
+streams, the object-stream window's and a string's) are not in PDENG's image or
+bss. They are the first 2,560 bytes of the arena (`Td0` at 0, the schedule at
+1,024, the states from 1,264): `PDV_ENG_SETKEY` moves `arena_top` past them, and
+the cipher routines reach them through ES, which they load from `pdc_cseg` and
+restore (an `es:` prefix on each state access: RC4 22.9 KB/s, AES-128 3.4 against
+3.6 near). The arena has to hold the 8 KiB of visited bits of the page walk
+**and** this area, so a SETKEY into an arena of less than **11 KiB** answers
+`PDE_NOMEM`: plat claims 11 KiB (`pdu_dckb`, the arena row of 16.2) in place of
+8. Without `PDC_FARST` (PDXK, PDWRT, the host harness) the same routines take
+near pointers. `pdc_far.py` holds the far build to the host twin (120
+agreements, ES checked on every call); `pdc_diff.py` holds the near one.
+PDENG with it: image 53,990 + bss 10,270 = 64,260 bytes in the merged tree
+(66,752 with the same code and the state in bss).
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 

@@ -15,13 +15,21 @@ pdch_table:
 %macro T 1
         dw %1
 %endmacro
+%ifdef PDC_FARST
+%include "pdcharf.tab"
+%else
 %include "pdchar.tab"
+%endif
 pdch_start:
         hlt
+%ifndef PDC_FARST
 %include "pagedesk/pdcmd5.inc"
+%endif
 %include "pagedesk/pdcrc4.inc"
 %include "pagedesk/pdcaes.inc"
+%ifndef PDC_FARST
 %include "pagedesk/pdcsha2.inc"
+%endif
 section .data
 align 2, db 0
 pdch_image_end:

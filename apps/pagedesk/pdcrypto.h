@@ -38,6 +38,7 @@ void pdc_rc4(pdb *s, pdb *buf, pdw n);                    /* in place     */
 /* nk = key words: 4 (AES-128) or 8 (AES-256); fills (nk + 7) * 16 bytes */
 void pdc_aes_ks(pdb *rk, const pdb *key, pdw nk);
 void pdc_aes_enc(const pdb *rk, pdw nr, const pdb *in, pdb *out);
+void pdc_aes_tdnew(void);                /* the decrypt table is rebuilt at the next pdc_aes_dks */
 void pdc_aes_dks(pdb *rk, pdw nr);      /* rk from pdc_aes_ks -> the DECRYPTION schedule, in place; dec and cbc_dec need it */
 void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out);
 /* CBC over nblk whole blocks, in place; iv (16) is updated to the last

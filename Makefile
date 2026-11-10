@@ -21849,6 +21849,8 @@ $(BUILD)/pdc_e2e: $(PDC_E2E_SRC) apps/pagedesk/hosttest/pde_host.c apps/pagedesk
 		apps/pagedesk/hosttest/pdc_e2e.c apps/pagedesk/hosttest/pde_host.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
 .PHONY: pdcrypt
 pdcrypt: pdxk $(BUILD)/pdc_e2e $(BUILD)/PDENG.MOD
+	python3 tests/pdcrypt/pdc_diff.py
+	python3 tests/pdcrypt/pdc_far.py
 	python3 tests/pdcrypt/pdc_e2e.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
 	python3 tests/pdcrypt/pdc_plain.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
 	python3 tests/pdcrypt/pdc_target.py

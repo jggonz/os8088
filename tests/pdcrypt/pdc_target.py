@@ -21,7 +21,7 @@ BUILD = os.path.join(ROOT, "build")
 WORK = os.path.join(BUILD, "pdcrypt", "e2e")
 E2E = os.path.join(BUILD, "pdc_e2e")
 KSEG, ESEG, KXSEG, XBSEG, SSEG, HALTSEG = 0x0060, 0x1000, 0x2000, 0x2800, 0x2900, 0x0F00
-CACHE, ARENA, TABLES, FLATE, PDFSEG = 0x3000, 0x3400, 0x3600, 0x4000, 0x6000
+CACHE, ARENA, TABLES, FLATE, PDFSEG = 0x3000, 0x3400, 0x3800, 0x4000, 0x6000
 MEM = 0x100000
 PDE_BUSY, PDE_PASSWORD = 65, 23
 
@@ -73,7 +73,7 @@ def init_struct(cpu=0):
     w[0] = XBSEG
     w[1], w[2] = 8, ESEG                              # eng_off, eng_seg
     w[3], w[4] = CACHE, 16
-    w[5], w[6] = ARENA, 8
+    w[5], w[6] = ARENA, 11                              # 8 KiB of visited bits + the cipher area (20.22.5.1)
     w[7], w[8] = TABLES, 11
     w[21], w[22], w[23] = 1, FLATE, 86                # flags PDXI_FLATE, flate_seg, flate_kb
     w[34] = cpu

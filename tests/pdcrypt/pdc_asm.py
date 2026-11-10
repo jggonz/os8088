@@ -48,7 +48,7 @@ def build(defs):
     cmd = ["nasm", "-f", "bin", "-w+error", "-I", os.path.join(ROOT, "apps/"), "-I", HERE + "/", "-o", out] + \
           ["-D" + d for d in defs] + [os.path.join(HERE, "pdchar.asm")]
     subprocess.check_call(cmd)
-    names = [l.split()[1] for l in open(os.path.join(HERE, "pdchar.tab")) if l.strip().startswith("T ")]
+    names = [l.split()[1] for l in open(os.path.join(HERE, "pdcharf.tab" if "PDC_FARST" in defs else "pdchar.tab")) if l.strip().startswith("T ")]
     return open(out, "rb").read(), names
 
 class Asm:

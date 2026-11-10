@@ -31,10 +31,22 @@ static pdb   cr_key[32];
 static pdw   cr_klen;           /* 5..16, or 32 for AESV3                        */
 static pdw   cr_stm, cr_str;    /* PDCM_* for streams and strings               */
 static pdw   cr_meta;           /* /EncryptMetadata                             */
-static pdb   cr_rk[240];        /* the AES schedule in use                       */
 static pdw   pl_ok;             /* the borrowed ctx of cr_raw_plain stands at pl_n/pl_g/pl_pos */
-static pdw   cr_rkn, cr_rkg;    /* ...whose it is: an object (0 none), or 0xFFFF/0xFFFF the file's key */
-static pdb   cr_rc[PDE_RC4N + 2][258];  /* RC4 states: open streams, the object-stream window's, a string's */
+static pdw   CR_RKn, CR_RKg;    /* ...whose it is: an object (0 none), or 0xFFFF/0xFFFF the file's key */
+/* The cipher area (PAGEDESK-SPEC 20.22.5.1): Td0 (1,024), the AES schedule in use (240) and the RC4 states (open streams,
+ * the object-stream window's, a string's: PDE_RC4N + 2 of 258) are NOT in PDENG's image or bss. On the target they are the
+ * first CR_AREA bytes of the arena (SETKEY moves arena_top past them) and the cipher routines address them through ES; the
+ * "pointers" below are offsets there. The host build keeps them in an array. */
+#define CR_AREA 2560
+#ifdef PD_HOST
+static pdb cr_area[CR_AREA];
+#define CR_RK  (cr_area + 1024)
+#define CR_RC(i) (cr_area + 1264 + 258 * (i))
+#else
+extern pdw pdc_cseg;            /* pdcaes.inc: the segment ES takes in the cipher routines */
+#define CR_RK  ((pdb *)1024)
+#define CR_RC(i) ((pdb *)(1264 + 258 * (i)))
+#endif
 #define CR_RCWIN PDE_RC4N       /* the window's: it outlives the pushes (20.22.3.3) */
 #define CR_RCSTR (PDE_RC4N + 1) /* a string's, while a stream may be open (the engine has no tail buffer) */
 static pdw   cr_win;            /* os_rewind's call: the ctx is the window's (20.22.3.3) */
@@ -53,10 +65,10 @@ static pdw cr_objkey(pdw num, pdw gen, pdw aes)
 static void cr_sched(pdw method, pdw num, pdw gen)
 {
     if (method == PDCM_AESV3) { num = 0xFFFF; gen = 0xFFFF; }
-    if (cr_rkn == num && cr_rkg == gen) return;
-    if (method == PDCM_AESV3) { pdc_aes_ks(cr_rk, cr_key, 8); pdc_aes_dks(cr_rk, 14); }
-    else { cr_objkey(num, gen, 1); pdc_aes_ks(cr_rk, pdc_ok, 4); pdc_aes_dks(cr_rk, 10); }       /* (cr_rk is only ever decrypted with) */
-    cr_rkn = num; cr_rkg = gen;
+    if (CR_RKn == num && CR_RKg == gen) return;
+    if (method == PDCM_AESV3) { pdc_aes_ks(CR_RK, cr_key, 8); pdc_aes_dks(CR_RK, 14); }
+    else { cr_objkey(num, gen, 1); pdc_aes_ks(CR_RK, pdc_ok, 4); pdc_aes_dks(CR_RK, 10); }       /* (CR_RK is only ever decrypted with) */
+    CR_RKn = num; CR_RKg = gen;
 }
 
 /* Called by st_push as the context is made (nctx is its index): the caller left
@@ -66,7 +78,7 @@ static pdw cr_ctx_open(struct sctx *c)
 {
     pdw n;
     c->cmode = 0; c->civ = 0; c->cn = cr_sn; c->cg = cr_sg;
-    cr_rkn = 0; pl_ok = 0;                            /* (a ctx pushed over cr_raw_plain's borrowed one) */
+    CR_RKn = 0; pl_ok = 0;                            /* (a ctx pushed over cr_raw_plain's borrowed one) */
     n = (pdw)(cr_on && cr_sn && !cr_skip && cr_stm >= PDCM_RC4 && cr_stm <= PDCM_AESV3);
     cr_sn = 0; cr_sg = 0; cr_skip = 0;
     if (!n) return PDE_OK;
@@ -74,7 +86,7 @@ static pdw cr_ctx_open(struct sctx *c)
     c->crs = c->cv;
     if (cr_stm == PDCM_RC4) {
         if (!cr_win && nctx >= PDE_RC4N) return PDE_LIMIT;
-        c->crs = cr_rc[cr_win ? CR_RCWIN : nctx];
+        c->crs = CR_RC(cr_win ? CR_RCWIN : nctx);
         n = cr_objkey(c->cn, c->cg, 0);
         pdc_rc4_ks(c->crs, pdc_ok, n);
     }
@@ -110,7 +122,7 @@ static pdw cr_read(struct sctx *c, pdb *buf, pdw want)
     if (n < want) { lx_err = eof_err(); n = (pdw)(n & 0xFFF0); }
     if (!n) return 0;
     cr_sched(cr_stm, c->cn, c->cg);
-    pdc_cbc_dec(cr_rk, cr_stm == PDCM_AESV3 ? 14 : 10, c->cv, buf, (pdw)(n >> 4));
+    pdc_cbc_dec(CR_RK, cr_stm == PDCM_AESV3 ? 14 : 10, c->cv, buf, (pdw)(n >> 4));
     if (c->rrem.hi == 0 && c->rrem.lo < 16) {         /* the last block: strip the padding */
         u32_zero(&c->rrem);
         want = buf[n - 1];
@@ -131,15 +143,15 @@ static void cr_string(void)
     n = ov.len < PDE_VT - 1 ? ov.len : PDE_VT - 1;
     if (cr_str == PDCM_RC4) {
         p = cr_objkey(cr_curn, cr_curg, 0);
-        pdc_rc4_ks(cr_rc[CR_RCSTR], pdc_ok, p);
-        pdc_rc4(cr_rc[CR_RCSTR], ov.text, n);
+        pdc_rc4_ks(CR_RC(CR_RCSTR), pdc_ok, p);
+        pdc_rc4(CR_RC(CR_RCSTR), ov.text, n);
         return;
     }
     if (n < 32) { ov.len = 0; ov.text[0] = 0; return; }    /* an IV and nothing, or less */
     cr_sched(cr_str, cr_curn, cr_curg);
-    if (cr_str != PDCM_AESV3) cr_rkn = 0;
+    if (cr_str != PDCM_AESV3) CR_RKn = 0;
     p = (pdw)((n - 16) & 0xFFF0);
-    pdc_cbc_dec(cr_rk, cr_str == PDCM_AESV3 ? 14 : 10, ov.text, ov.text + 16, (pdw)(p >> 4));
+    pdc_cbc_dec(CR_RK, cr_str == PDCM_AESV3 ? 14 : 10, ov.text, ov.text + 16, (pdw)(p >> 4));
     for (i = 0; i < p; i++) ov.text[i] = ov.text[i + 16];
     if (ov.len < PDE_VT - 1) {                             /* the whole string: strip the padding */
         n = ov.text[p - 1];
@@ -179,7 +191,7 @@ static pdw cr_setkey(void)
     if (!((x->key_len >= 5 && x->key_len <= 16) || x->key_len == 32) || x->stm > PDCM_IDENTITY || x->str > PDCM_IDENTITY) return PDE_RANGE;
     for (i = 0; i < 32; i++) cr_key[i] = x->key[i];
     cr_klen = x->key_len; cr_stm = x->stm; cr_str = x->str; cr_meta = x->encmeta; cr_auth = x->auth; cr_eff = x->eff;
-    cr_rkn = 0;
+    CR_RKn = 0;
     cr_on = 1;
     for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;     /* the key was in the XB's copy */
     pd_fcopy_out(x, g_xb, 0, sizeof(struct pdxb_crypt));
@@ -189,9 +201,8 @@ static pdw cr_setkey(void)
 static void cr_reset(void)
 {
     pdw i;
-    cr_on = 0; cr_sn = 0; cr_sg = 0; cr_skip = 0; cr_rkn = 0; cr_curn = 0;
+    cr_on = 0; cr_sn = 0; cr_sg = 0; cr_skip = 0; CR_RKn = 0; cr_curn = 0;
     for (i = 0; i < 32; i++) cr_key[i] = 0;
-    for (i = 0; i < 240; i++) cr_rk[i] = 0;
 }
 
 /* eng's OPEN, state OPS_CRYPT: PDE_PASSWORD until a key is set */
@@ -256,7 +267,7 @@ static pdw cr_raw_plain(struct pdxb_rawcopy *rw)
             u32_sub16(&s_c, 32);
             if (fl_read(&s_c, pl_tb, 32) < 32) return pde_ioerr ? PDE_IO : PDE_TRUNC;
             cr_sched(cr_stm, num, gen);
-            pdc_cbc_dec(cr_rk, cr_stm == PDCM_AESV3 ? 14 : 10, pl_tb, pl_tb + 16, 1);
+            pdc_cbc_dec(CR_RK, cr_stm == PDCM_AESV3 ? 14 : 10, pl_tb, pl_tb + 16, 1);
             n = (pdw)(pl_tb[31] <= 16 && pl_tb[31] ? pl_tb[31] + 16 : 16);
             u32_sub16(&pl_dl, n);
         }

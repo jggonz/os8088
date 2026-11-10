@@ -251,6 +251,7 @@ static void imc(uint8_t *s)
         s[4*c+3] = gmul(a0,11) ^ gmul(a1,13) ^ gmul(a2,9)  ^ gmul(a3,14);
     }
 }
+PDC_WEAK void pdc_aes_tdnew(void) { }
 PDC_WEAK void pdc_aes_dks(pdb *rk, pdw nr)
 {
     pdw r;

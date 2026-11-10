@@ -126,6 +126,7 @@ section .text
 %ifndef FL_NOASM
 %include "pagedesk/pdeflate.inc"    ; FlateDecode's symbol loop (PAGEDESK-SPEC 20.13)
 %endif
+%define PDC_FARST                   ; the schedule, Td0 and the RC4 states are in the arena (pdecrypt.c, 20.22.5.1)
 %include "pagedesk/pdcmd5.inc"      ; encryption (PAGEDESK-SPEC 20.22.5): the per-object key,
 %include "pagedesk/pdcrc4.inc"      ;   RC4 and AES-CBC for streams and strings
 %define PDC_NOENC                  ; PDENG only decrypts (the writer encrypts: PDWRT includes the same source)
