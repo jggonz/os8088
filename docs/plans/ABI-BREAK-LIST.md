@@ -533,3 +533,37 @@ with their prices (docs/plans/ksp19/nogrow.md has the measurements).
 | **R12** | **reverted** | kernel -5 kern_big/emu/mega, -2 kern_small, EXTD.DRV -1, against +78 at 39 window-asking package sites (`mov ch, 0`). No net-negative form: no site had CH provably 0 without reading each, and the window askers outnumber the display walkers 39 to 5. WireFleet's fix (it asked with WM_DISPLAY's height) kept, -5. `fsx_caps` and EXTD.DRV test BH = 0 instead of `cmp bx, 16` (no window pointer is below 256): -1 each |
 | **R2-3** | **deferred to the additions pass** (reverted) | `MEGA_WTN` 64: +128 bytes of the tables' block above 1MB, no saving |
 | **C1** | **taken; its TOTAL is still positive - the owner's** | memdoors' form: kernel -90 kern_big/emu, -92 kern_small (FILECP.DRV +4), -90 kern_mega (-36 conventional) against packages **+1,037**. `nogrow` added OSAPI_MEM_P's KB arm (`MEMP_KB`/`MEMP_KBH`, +50 `.cold` a kernel, +51 kern_mega above 1MB), which took the packages to about **+330**: C1 now about kernel -40/-38/-40/-39, packages +330, **total about +170**. Under T5 a withdrawn KB door would have been a 3-byte `CD 81 nn` site like the near call, so the -2 a site the helper buys today vanishes there and C1 is about **+770** against keeping the doors as door indices |
+
+## 15. What kernel size pass 19 took (the flag day, 2026-11-10)
+
+`PKG_FMT` 10 -> **13**, `DRV_VER` 12 -> **14**; branch `kernel-size-19`;
+record `docs/plans/completed/HANDOFF-KERNEL-SIZE-P20.md`, agent notes
+`docs/plans/ksp19/`. The owner's rulings (BRIEF.md 0.0): no row grows bytes;
+small package growth that buys resident bytes is fine; inside the flag day
+nothing is frozen - smaller and not slower is taken, ABI or not.
+
+| row | status after pass 19 | where |
+|---|---|---|
+| **T5** + V7's promotion | **TAKEN** - 96 published cells behind `int 81h` + index byte; 77 hot cells; `OSAPI_GFX_DESK` promoted | t5.md, door.md |
+| **T6** | **TAKEN** (mechanism: `%imacro call` on the CELL KINDS block; renames not taken) | gates.md |
+| **P4** | **TAKEN** (the kernel's `cw_` shims on the door, `KDOOR`) | door.md |
+| **T1 / K17-1** | superseded by T5 | - |
+| **R14** + **K17-2** | **TAKEN** (class in the package, one `OSAPI_WM_FLAG`); `wm_hnd` then made a far-pointer read by wmrec (+158 clocks a callback over pre-R14, was +214) | class.md, wmrec.md |
+| **C1** | **TAKEN**, then every package site converted to paragraphs (kbpara) and the KB arm deleted; kern_mega's pool DMA heads restored as `MEMP_DMAPOOL` (40h, a verb bit) and huge regrow as `OSAPI_MEM_HUGE`'s `MEMH_REGROW` | memdoors.md, kbpara.md, megacmp.md, mcmerge.md |
+| **C2**, **C4'**, **R1** | **TAKEN** | memdoors.md |
+| **N1**, **D4**, histsys-7 | **TAKEN** (service tables read in place; D1/drivers-9 moot) | drvtab.md |
+| **R3**, **F1**, **F3** | **TAKEN** (F3 straight to the A4h/A5h mark, no dual reader) | drvtab.md |
+| **C10**, **V2** | **TAKEN** | recon.md |
+| R2's unread AX answers | **TAKEN** | nogrow.md |
+| **L1** | **superseded without a flag day**: the image pad went by proving the two fixed windows inside one 64KB page (guard 6); `KERNEL_SEG` stays 0x0060 | l1.md |
+| **R2**, **R2-3** | **deferred to the additions pass** (section 14) | nogrow.md |
+| **R12** | **reverted** (no net-negative form) | nogrow.md |
+| **R15**, R16, V1 | **deferred to the additions pass** (grow, or need a hot-path tuning pass) | recon.md |
+| **R2-4**, **R2-5** | **refused** (R2-4 grows; R2-5 clobbers SI for every bracket) | recon.md |
+| **R2-1** | **refused**: since KERN-MEGA-PLAN 14.156 `mega_hibnc` bounces the first floppy read after every disk swap | drvtab.md |
+| `OSAPI_BATCH_END` withdrawn | **WANTS THE OWNER** (-18 resident; SPEC.md 20.3.1 rule 1 names it as optional by design) | recon.md |
+| `W_DISP` offset dropped (far call built on the stack) | **WANTS THE OWNER** - about -20 resident, about +47 clocks a callback | wmrec.md |
+| RCS door entry for `call COLD_SEG:x` | **recorded** - 395 sites, -2 a site +2 a target, ~+190 clocks a call | swdrv.md |
+| `OSAPI_GFX_PIXEL` withdrawn | **recorded** - the 8-byte cell against +4 at 7 callers | recon.md |
+| KB counts >= 1,024 not refused (`mem_claim_x`'s HUGE arm) | **recorded** - +6 `.cold` a kernel to refuse | megacmp.md, swmem.md |
+| L3, L7, D8, R6, R9's universal value | out of this pass (13.3, "Out of it") | - |
