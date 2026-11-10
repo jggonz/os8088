@@ -873,7 +873,34 @@ FAST = [
         "the first time after a kernel change, ~0.1s after: the cost is "
         "os88sym proving its symbol map, and the proof is now kept beside the "
         "build under a key of the image, the defines and every source "
-        "(tools/os88sym.py, _disk_key)"),
+        "(tools/os88sym.py, _disk_key). Also kern_small (built by `all`) and "
+        "any other kernel tree whose build is current, off that build's own "
+        "map, and SPEC.md 20.3.3's CELL KINDS blocks against kern_big's "
+        "decoded table - stale, they are byte-identical today and a wrong "
+        "call after T5's flip"),
+    Row("cellgate", "fast", py("tests/unit/t_cellgate.py"), 0.3,
+        "SPEC.md 20.3.3: os88api.inc overloads `call` so T5 can turn every "
+        "RARE cell's call into the door by editing one macro. A probe "
+        "assembles byte-identical to the bare instructions; with the rare arm "
+        "swapped for a marker the marker lands on exactly the rare calls "
+        "(plain, macro-wrapped, upper-case, the driver SDK's) and nowhere "
+        "else; a rare name under `jmp` does not assemble; and os88pkg's "
+        "surviving-far-call gate refuses a mid-cell far call always and a "
+        "rare one once armed - mines packs unarmed and is REFUSED armed "
+        "early (OS88_RARE_GATE=1). FAST: every package in the tree is "
+        "assembled through this macro and packed through this gate",
+        needs=("nasm",)),
+    Row("api-abi-all", "full", py("tests/unit/t_api_abi.py", "--all"), 4.3,
+        "abi-3/gkm-2: the API table on ALL FOUR kernels, each tree's map "
+        "written by its own build, and a missing or stale tree FAILS rather "
+        "than being named. One SDK serves every kernel, so a cell that "
+        "decodes on kern_big and not on kern_mega is a package crashing on "
+        "the one machine nobody booted; the per-kernel differences are "
+        "ledger rows, and the cells whose rare-ness differs from kern_big's "
+        "are listed for T5",
+        needs=("nasm",),
+        wants=("build/smallk/kernel.bin", "build/emuk/kernel.bin",
+               "build/megak/kernel.bin")),
     Row("abicompat", "soak", py("tests/abicompat.py"), 291.0,
         "SPEC.md 20.2.0.1: does the LATEST RELEASE's software still run on "
         "this tree? Builds the newest `Release YYYYMMDD` commit once into "

@@ -294,6 +294,12 @@ def main() -> int:
         fail(f"flags bit 0 set but image is {image} bytes; the embedded "
              f"icon needs at least {ICON_END}")
 
+    # THE SURVIVING-FAR-CALL GATE (SPEC.md 20.3.3): every far call into
+    # KERNEL_SEG in the image and its parts lands on a published cell, and -
+    # once T5's door is switched on - on no rare one.
+    farcall_gate([args.input] + list(args.part),
+                 [a] + [read_file(p) for p in args.part])
+
     out = bytearray(a)
     if args.compress and args.compress_if:
         fail("--compress and --compress-if are the same decision taken two "
@@ -352,6 +358,20 @@ PKG_COMP_FMT   = 0x10           # flags bit 4: 0 = LZ4, 1 = LZB
                                 # file) and the stream's own raw tail is what
                                 # makes that enough (SPEC.md 20.13.7).
                                 # os88lz.in_place_margin asserts it below
+
+
+def farcall_gate(labels, blobs) -> None:
+    """Refuse a far call tools/os88cells.py's gate refuses (SPEC.md 20.3.3).
+    Outside an OS tree - no os88cells beside this file, no apps/os88api.inc -
+    there is nothing to check against, and nothing is refused."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import os88cells
+        bad = os88cells.farcall_problems(dict(zip(labels, blobs)))
+    except (ImportError, OSError):
+        return
+    if bad:
+        fail("; ".join(bad))
 
 
 def roundup(v: int, n: int) -> int:

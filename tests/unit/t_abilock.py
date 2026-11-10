@@ -13,6 +13,7 @@ through, and one that missed a contract would be the old silence with a file
 attached.
 """
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +85,63 @@ def main():
     check(d0 != d1, "DRV_VER's fingerprint moves with the API table too",
           "a driver far-calls the same cells through the same SDK, so a "
           "moved cell is a driver decision as well as a package one")
+    # THE C SDK (engsys-11): os88.h's prototypes and #defines are PKG_FMT's
+    # surface too, its comments are not, and os88thunk.asm is read as
+    # assembly - a thunk calling a different cell moves it.
+    h = open(os.path.join(ROOT, "apps", "cc", "os88.h")).read()
+    th = open(os.path.join(ROOT, "apps", "cc", "os88thunk.asm")).read()
+
+    def cmoves(what, rel, new, why, want=True):
+        texts = {"apps/os88api.inc": api, "apps/cc/os88.h": h,
+                 "apps/cc/os88thunk.asm": th}
+        orig = texts[rel]
+        texts[rel] = new
+        fp = abilock.fingerprint("PKG_FMT", texts)
+        check(new != orig, "the mutation for %s applies" % what,
+              "a mutation that matched nothing proves nothing")
+        check((fp != base) == want,
+              "PKG_FMT's fingerprint %s for %s" % ("moves" if want else "stands",
+                                                  what), why)
+
+    cmoves("an os88.h prototype", "apps/cc/os88.h",
+           h.replace("void os88_batch_begin(void);",
+                     "int os88_batch_begin(void);", 1),
+           "a C package compiled against the old prototype reads a return "
+           "the thunk no longer makes")
+    cmoves("an os88.h #define", "apps/cc/os88.h",
+           h.replace("#define OS88_FERR_BIG    10", "#define OS88_FERR_BIG    11", 1),
+           "a constant a C package compares an answer against")
+    cmoves("an os88.h comment", "apps/cc/os88.h",
+           h.replace("/* --- memory beyond your region", "/* --- MEMORY beyond your region", 1),
+           "C prose is not ABI", want=False)
+    cmoves("the cell a thunk calls", "apps/cc/os88thunk.asm",
+           th.replace("CC_T_VOID _os88_batch_end,     OSAPI_BATCH_END",
+                      "CC_T_VOID _os88_batch_end,     OSAPI_BATCH_BEGIN", 1),
+           "a thunk reaching a different cell is a C package calling the "
+           "wrong routine")
+
+    # THE PRIVATE ABIs (drivers-16): each guard's fingerprint moves for a
+    # code line of its include and stands for the guarded number's own line.
+    for guard in ("VX_ABI_VER", "XM_ABI_VER", "HD_ABI_VER"):
+        rel = abilock.GUARDS[guard]["defined"]
+        txt = open(os.path.join(ROOT, rel)).read()
+        f0 = abilock.fingerprint(guard, {rel: txt})
+        lines = txt.splitlines()
+        code = next(i for i, l in enumerate(lines)
+                    if l.strip() and not l.lstrip().startswith(";")
+                    and " equ " in l and not l.startswith(guard))
+        mut = list(lines)
+        mut[code] = mut[code].replace(" equ ", " equ 1 + ", 1)
+        f1 = abilock.fingerprint(guard, {rel: "\n".join(mut)})
+        check(f1 != f0, "%s's fingerprint moves for %s" % (guard, lines[code].split(";")[0].strip()),
+              "the image compares this number at attach and nothing else "
+              "makes anybody bump it")
+        own = re.sub(r"^(%s\s+equ\s+)(\d+)" % guard,
+                     lambda m: m.group(1) + str(int(m.group(2)) + 1), txt,
+                     count=1, flags=re.M)
+        check(own != txt and abilock.fingerprint(guard, {rel: own}) == f0,
+              "%s's own line is not part of its fingerprint" % guard,
+              "the bump is the decision, checked against the lock's version")
     done("t_abilock")
 
 

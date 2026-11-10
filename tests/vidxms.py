@@ -277,7 +277,7 @@ def force_bios(tmp, sysimg):
     b = os.path.join(tmp, "xmem.bin")
     d = os.path.join(tmp, "XMEM.DRV")
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-DXM_FORCE_BIOS",
-                    "-I", "drivers/", "-I", "apps/", "-o", b,
+                    "-I", "drivers/", "-I", "apps/", "-I", "kernel/", "-o", b,
                     "drivers/xmem/xmem.asm"], check=True)
     subprocess.run([sys.executable, "tools/os88drv.py", b, "-o", d],
                    check=True, capture_output=True)

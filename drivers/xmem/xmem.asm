@@ -110,40 +110,14 @@
 
 %include "os88drv.inc"
 
-XM_ABI_VER  equ 2               ; the private kernel<->overlay ABI (SPEC.md
-                                ; 52.11's +10 word). The kernel passes what it
-                                ; expects in AH at DRVV_ATTACH and we refuse a
-                                ; mismatch, so a KERNEL.SYS and an XMEM.DRV of
-                                ; different vintages - a half-copied floppy -
-                                ; fail loudly at load instead of quietly at
-                                ; the first copy
+%include "xmabi.inc"             ; the private ABI, kernel/xmabi.inc: ONE source
+                                ; with the kernel's half (SPEC.md 41.12.2), so
+                                ; XM_ABI_VER, the XMV_* verbs and the XMC_*
+                                ; copy block cannot drift - the kernel passes
+                                ; XM_ABI_VER in AH at DRVV_ATTACH and we refuse
+                                ; a mismatch
 
 OS88_OVERLAY 'XMS', XM_ABI_VER, xm_entry
-
-; --- what the kernel dispatches (the XMV_* table, mirrored in kernel/xmem.inc)
-XMV_CAPS    equ 0               ; out AX = free KB, DX:CX = pool base,
-                                ;     BL = free block-table entries
-XMV_ALLOC   equ 2               ; in DX:AX = bytes, BL = owner; out CF,
-                                ;     DX:AX = base / AX = 0/1/2
-XMV_FREE    equ 4               ; in DX:AX = base, BL = owner; out CF
-XMV_COPY    equ 6               ; in ES:SI = an XMC_ block in KERNEL_SEG
-XMV_RELINST equ 8               ; in AL = an instance slot being torn down
-XMV_WALK    equ 10              ; in DX:DI = room for CX records; out AX
-XMV_SIZE    equ 12
-
-; --- the kernel's copy parameter block, read through ES (SPEC.md 41.12.2) ----
-; ES is KERNEL_SEG inside every call the kernel makes here, and the two ends
-; are 32-bit LINEAR addresses because the conventional one cannot arrive in a
-; segment register: drv_call loads ES itself, so the caller's ES is gone by
-; the time we run. The kernel folds ES:SI into a linear address before it
-; dispatches, which is arithmetic xm_copy used to do internally anyway.
-XMC_EXT     equ 0               ; dd: the extended end
-XMC_CONV    equ 4               ; dd: the conventional end
-XMC_LEN     equ 8               ; dw: bytes
-XMC_DIR     equ 10              ; db: 0 = conventional -> extended, 1 = back
-XMC_INST    equ 11              ; db: the requesting instance (the kernel
-                                ; stamps it - snd_req_inst is kernel state)
-XMC_SIZE    equ 12
 
 XM_SEL_FLAT     equ 0x08        ; GDT entry 1: base 0, limit 4GB, data r/w
 XM_MAX_COPY     equ 32768       ; bytes per copy - a SCHEDULER rule, not a
