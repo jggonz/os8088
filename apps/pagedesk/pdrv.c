@@ -86,6 +86,36 @@ static pdw ik_find(pdw off)
     return PDR_NIK;
 }
 
+/* one row of the image through pdr_ip: the 8-bit strip's twin, or the band's */
+static void img_out(pdi y)
+{
+#ifdef PDR_X8
+    if (g_xs) { x8_imgrow(y); return; }
+#endif
+    pdr_imgrow();
+}
+/* a row under a polygon clip (a `W n` that is not a rectangle): the walker's own mask test
+ * (shape_clipped's: the row's span in mask 0, each clip polygon ANDed in) and the image
+ * row drawn over each run of what is left, its source phase moved to the run's first column */
+static void img_clipped(pdi y, pdi x0, pdi x1, pdi delta, pdw W, pdi wq)
+{
+    pdi x, xs, xe = (pdi)(x1 - g_bx0), xb = (pdi)(x0 - g_bx0);
+    pdb *p = g_mk[0];
+    mask_clear(0);
+    g_rmode = 1;
+    span_out(y, x0, x1);
+    clips_and(y);
+    g_rmode = 0;
+    for (x = xb; x <= xe;) {
+        if (p[x >> 3] & (0x80 >> (x & 7))) {
+            xs = x;
+            while (x <= xe && (p[x >> 3] & (0x80 >> (x & 7)))) x++;
+            pdr_ip.x0 = xs; pdr_ip.x1 = (pdi)(x - 1);
+            pdr_ip.xhi = (pdw)pdr_muldiv((pdi)(delta + (xs - xb) * 4), (pdi)W, wq);
+            img_out(y);
+        } else x++;
+    }
+}
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
     static pdb b[DLI_BODY];
@@ -201,10 +231,8 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-#ifdef PDR_X8
-            if (g_xs) x8_imgrow(y); else
-#endif
-            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
+            if (g_sclid < PDR_NCLIP && g_mkok) img_clipped(y, x0, x1, delta, W, wq);   /* a polygon clip */
+            else img_out(y);
         }
     }
 }

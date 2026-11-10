@@ -56,6 +56,14 @@ def fx_direct():
     c += "/BM gs 0.6 g 100 60 50 60 re f\n"
     return page(c, "/ExtGState << /A50 << /ca 0.5 /CA 0.5 >> /A25 << /ca 0.25 /CA 0.25 >> /BM << /BM /Multiply /ca 0.8 >> >>")
 
+def fx_clipimg():
+    # an image under a NON-rectangular clip (QA PSPLAY): corners must stay paper
+    img = ("/Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8",
+           bytes((x * 16 + y * 8) & 255 for y in range(8) for x in range(8)))
+    c = rect(0, 0, 160, 160, 1.0)
+    c += "q 120 0 0 120 20 20 cm 0.5 1 m 0.776 1 1 0.776 1 0.5 c 1 0.224 0.776 0 0.5 0 c 0.224 0 0 0.224 0 0.5 c 0 0.776 0.224 1 0.5 1 c h W* n /Im0 Do Q\n"
+    return page(c, "/XObject << /Im0 5 0 R >>", {5: img})
+
 BMS = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "ColorDodge", "ColorBurn",
        "HardLight", "SoftLight", "Difference", "Exclusion", "Hue", "Saturation", "Color", "Luminosity"]
 def fx_blend():
@@ -106,7 +114,7 @@ def fx_image():
     return page(c, "/XObject << /I1 5 0 R /I2 7 0 R >>", objs)
 
 FIXTURES = {"alpha": fx_alpha, "blend": fx_blend, "group": fx_group,
-            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image, "direct": fx_direct}
+            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image, "direct": fx_direct, "clipimg": fx_clipimg}
 
 def write(d):
     os.makedirs(d, exist_ok=True)
@@ -137,6 +145,12 @@ def check(d, harness, bank, shots=None):
         dump = os.path.join(tmp, n + ".dump")
         subprocess.run([harness, "render", src, "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0",
                         os.path.join(tmp, n + ".ppm"), bank], check=True, capture_output=True, env=dict(os.environ, PDB_DUMP=dump))
+        if n == "clipimg":      # not transparent: no 8-bit strips; the harness's own bitmap, corners must be paper, centre ink
+            from PIL import Image
+            im = Image.open(os.path.join(tmp, n + ".ppm")).convert("L")
+            ok = all(im.getpixel(c) == 255 for c in ((2, 2), (157, 2), (2, 157), (157, 157))) and im.getpixel((80, 80)) < 255
+            print("%-12s %s (image under a curved clip: corners paper)" % (n, "ok" if ok else "FAIL")); rc = rc or (0 if ok else 1)
+            continue
         mu, po = refs(src, tmp, n)
         raw = np.fromfile(dump, dtype=np.uint8)
         # the ladder: the same page with no region at first (PDB_NOX8: the first pass only DECIDES, the
