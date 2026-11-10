@@ -375,7 +375,8 @@ wd_plist:
 ; -----------------------------------------------------------------------------
 ; wd_scget / wd_scdrop - the transient rebuild scratch
 ; out: CF=0 with [wd_scseg] set; CF=1 = refused (the toast is set)
-; Preserves all registers. Two halves, WD_SCHALF apart: the rebuilt text and
+; Preserves all registers but BX (OSAPI_MEM_P's verb, when it claims). Two
+; halves, WD_SCHALF apart: the rebuilt text and
 ; its CHP twin, so the splice moves both in step exactly as every other
 ; operation in this app does (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------

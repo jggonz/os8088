@@ -2216,7 +2216,7 @@ op_fetch:
 ;      into, when that claim is ABOVE 1MB - kern_mega, a package whose header
 ;      says OS88_HIGHMEM and a pool with room - with the first one freed; AX
 ;      unchanged everywhere else, which is every real-mode kernel
-; clobbers: CX, DX, DI, flags
+; clobbers: BX, CX, DX, DI, flags
 ;
 ; op_fetch reads and expands in a conventional claim because both are paragraph
 ; arithmetic on the claim (R up it, the slack down it); this moves the result
