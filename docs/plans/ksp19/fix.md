@@ -65,8 +65,18 @@ PRE-EXISTING at `4beca096` (checked against a base build in
 | doshead | PRODUCT | dos_htpl was still the 8-word template: its 6th word (dos_hpaint) read as the class, dos_wake never reached; `dos_hcls` | dos +10 | ok |
 | excitebikeega | PRODUCT | xb_partget keeps BX (the head slack) across the MEMP_CONV claim - cause 4's BX twin | excitebike +2 | ok |
 | stikswap | PRODUCT | OSAPI_DESK_ITEM's package remove enters sc_modcall with AL = 0xFF: C10's form left AL = 0 ("removed") when DESK.DRV could not be read, so a declined close went through | DESK.DRV +1 | ok |
-| skies* (40 rows) | PRODUCT | cause 2 (CLEAR SKIES' entry CF) | skies +1 | `skies` ok; the rest in the re-run |
-| telnet, socktest, lz*, br*, pciether, ethernet, thewire, wirechat, apple2part, c64part, fontview, tmselfsu, dispcalc, pkgmove-* | stale rows | cause 1 | 0 | in the re-run |
+| skies* (40 rows) | PRODUCT | cause 2 (CLEAR SKIES' entry CF) | skies +1 | ok |
+| skiesstale, skiesspan | stale row | skiesprof's site finder read the listing's `call %1`: T5's SDK `call` macro puts the source text on the invocation line above | 0 | ok |
+| spkfx | stale row (test package) | its entry returned BX = the claims' verb, not the window the loader shows (SPEC.md 20.2); ftpd's inert FD_STG2 arm had the same shape and banks BX now | 0 | ok |
+| syscheck, syscheckmono | stale row | the version reasons (needs 12 / needs 10) off the SDK: DRV_VER 14, PKG_FMT 13 | 0 | ok |
+| telnet, socktest, lz*, br*, pciether, ethernet, thewire, wirechat, apple2part, c64part, fontview, tmselfsu, dispcalc, pkgmove-* | stale rows | cause 1 | 0 | ok |
+| wirefleetsystem | stale row | fix2's (merged): WC_ONCLOSE in the class | 0 | ok |
+
+**THE RE-RUN.** All 102 rows the final soak failed, from this tree in one
+`os88soak.py start` (lane 3): 97 ok at once; the five left (skiesstale,
+skiesspan, spkfx, syscheck, syscheckmono) fixed as above and re-run: ok.
+**102 of 102.** Pre-existing at 4beca096, proved by a base run: sbirq5 and
+picomem's sb leg only.
 
 **Template audit.** Every `mov si, <tpl>` before an `OSAPI_WM_CREATE` in
 apps/, drivers/, tests/ and kernel/ was checked for a sixth word that names
@@ -74,7 +84,9 @@ a class: dos_htpl was the only one left. **Register audit** of the KB ->
 paragraph sites (BX taken by the verb in BL, CL by the shift): straight-line
 reads after the call are all clean; the two found (PiXEL's CL, ExciteBike's
 BX) were both read ACROSS an intervening call, which the scan cannot follow -
-a reviewer of any other converted site should look for that shape.
+a reviewer of any other converted site should look for that shape - and for
+an ENTRY proc that claims after OSAPI_WM_CREATE: it owes the loader the
+window in BX (spkfx; every entry in the tree was scanned for it).
 
 **REDLINE, the numbers.** Against the OLD reference (calibrated at #252) the
 graphics rows moved -17%..+16% - but REDLINE profiled on the BASE build
