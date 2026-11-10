@@ -21752,6 +21752,58 @@ else
 endif
 # ---- end PageDesk: wrt ------------------------------------------------------
 
+# ---- PageDesk: xi -----------------------------------------------------------
+# PDXI.MOD (PAGEDESK-SPEC 20.22.11): the image-decoder occupant of the module
+# slot - DCT (pdxidct.c + pdxidct.inc), and the bilevel agent's CCITT and JBIG2
+# files when they are on the branch. PDWRT's recipe: a separate compilation and
+# a separate `nasm -f bin`. `make pdxi` builds the module AND runs the host check
+# against libjpeg (tools/os88pdfx_dct.py); the host side is not in `all`.
+PDI_BIT  := $(if $(wildcard apps/pagedesk/pdxiccit.c),-DPDXI_CCIT) $(if $(wildcard apps/pagedesk/pdxijb2.c),-DPDXI_JB2)
+PDI_C    := apps/pagedesk/pdxi.c apps/pagedesk/pdxidct.c $(wildcard apps/pagedesk/pdxiccit.c apps/pagedesk/pdxijb2.c)
+PDI_H    := apps/pagedesk/pdxi.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDI_SDK  ?=
+PDI_OUT  := $(BUILD)/pdi
+PDI_CAP  := 65024   # image + bss (PAGEDESK-SPEC 20.22.11): DCT <= 24,576 of it, bilevel <= 36,864
+.PHONY: pdxi pdxi-host
+$(BUILD)/pdxi.raw.asm: $(PDI_C) $(PDI_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_DEFS) \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDI_SDK),$(PDI_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
+		apps/pagedesk/pdxi.c -o $@
+$(BUILD)/pdxi.gen.asm: $(BUILD)/pdxi.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXI.MOD: apps/pagedesk/pdxi.asm apps/pagedesk/pdxidct.inc $(BUILD)/pdxi.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXI.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDI_CAP) else 0)"
+# the host harness (the C twins of the assembly) and its independent reader, libjpeg's djpeg
+$(PDI_OUT)/.host.stamp: apps/pagedesk/hosttest/pdi_test.c tools/os88pdfx_dct.py $(PDI_C) apps/pagedesk/pdxitwin.c $(PDI_H) \
+                        apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDI_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -Wno-unused-function -DPD_HOST $(PDI_BIT) -I apps/pagedesk -o $(PDI_OUT)/pdi_test \
+		apps/pagedesk/hosttest/pdi_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	python3 tools/os88pdfx_dct.py --dir $(PDI_OUT)/fx --bin $(PDI_OUT)/pdi_test
+	touch $@
+pdxi-host: $(PDI_OUT)/.host.stamp
+pdxi: $(BUILD)/PDXI.MOD pdxi-host
+# the assembly against its C twins under Unicorn (pip install unicorn), the 8088 cost model, and the
+# ASan/UBSan fuzz over the marker parser and the entropy decoder: on demand, never in `all`
+.PHONY: pdxi-asm pdxi-cycles pdxi-fuzz
+pdxi-asm: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -Wall -Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_twin \
+		apps/pagedesk/hosttest/pdi_twin.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	python3 apps/pagedesk/hosttest/pdi_asm.py
+pdxi-cycles: pdxi-asm
+	python3 apps/pagedesk/hosttest/pdi_cycles.py
+PDI_FUZZN ?= 300
+pdxi-fuzz: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+		-Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_fuzz \
+		apps/pagedesk/hosttest/pdi_fuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(PDI_OUT)/pdi_fuzz $(PDI_FUZZN) 1 $(PDI_OUT)/fx/*.jpg
+# ---- end PageDesk: xi -------------------------------------------------------
+
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
 # `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated
