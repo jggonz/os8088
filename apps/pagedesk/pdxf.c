@@ -93,7 +93,7 @@ static pdw pdx_sread(pdw seg, pdw off, pdw max)
     if (g_zm) {
         n_ = (pdw)(g_zmlen - g_zmpos);
         if (n_ > max) n_ = max;
-        if (!n_) { n_ = g_zmmore; g_zmmore = 0; return n_; }      /* "more" is said once: the slurp's probe */
+        if (!n_) return 0;              /* the end of what was inflated: g_zmmore says whether the stream went on */
         pd_fcopy(seg, off, g_ws, (pdw)(g_zfree + g_zmpos), n_);
         g_zmpos = (pdw)(g_zmpos + n_);
         return n_;
@@ -116,13 +116,16 @@ static pdw pdx_slurp(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
         if (!got) break;
         tot = (pdw)(tot + got);
         if (tot >= cap) {                                  /* the next read decides: more data = too big */
-            got = pdx_sread(g_stgseg, g_stgoff, 1);
+            got = g_zm ? g_zmmore : pdx_sread(g_stgseg, g_stgoff, 1);
             pdx_sclose();
             return got ? 0xFFFF : tot;
         }
     }
+    /* an in-place inflate that ran out of room stops SHORT of cap: still too big, never a truncated
+     * program (QZTEXT's 26,676-byte Monaco in a 32 KiB workspace drew as scattered dots: QA R13) */
+    got = (pdw)(g_zm && g_zmmore);
     pdx_sclose();
-    return tot;
+    return got ? 0xFFFF : tot;
 }
 
 #include "pdxfcm.c"
