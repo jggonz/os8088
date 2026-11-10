@@ -248,11 +248,12 @@ ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/emu.img \
       build/mega.img build/megaapps.img build/mega120.img build/megaapps120.img \
       build/megaxtmp3.img build/megaxtmp3-120.img \
-      build/megawin16.img build/megawin16-120.img
+      build/megawin16.img build/megawin16-120.img \
+      build/arcrelmega.img build/arcrelmega120.img
 ```
 
-All thirty must exist -- step 3a refuses to pack without them. **`make mega`
-is not optional either** (the owner's, 2026-11-07: kern_mega ships): its eight
+All thirty-two must exist -- step 3a refuses to pack without them. **`make mega`
+is not optional either** (the owner's, 2026-11-07: kern_mega ships): its ten
 disks go in `1440K/286-PLUS/` and `1200K/286-PLUS/`, and `mkzip.py` refuses a
 kern_mega system disk older than `build/megak/kernel.sys`, or that kernel
 older than `build/kernel.sys` - so it runs after `make`.

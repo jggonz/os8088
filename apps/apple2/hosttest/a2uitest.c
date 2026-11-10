@@ -904,6 +904,8 @@ unsigned os88_part_seg(int i) { return i == 0 ? h_rom_seg : 0; }
  * accurate core's stub - the one every case below drives - running alone */
 int os88_part_fetch(int i) { (void)i; return -1; }
 void os88_part_drop(int i) { (void)i; }
+int os88_part_movable(int i) { (void)i; return 0; }  /* the harness never
+                                             * compacts (os88_mem_movable) */
 void a2f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
 void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg)
 { (void)newseg; (void)oldseg; (void)romseg; }
