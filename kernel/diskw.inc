@@ -223,8 +223,8 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; dskw_pmask - which attribute bits refuse THIS replace (SPEC.md 19.6.2)
 ; in:  dskw_raw holds the existing entry's 32 raw bytes; [dskw_syswr] says
 ;      whose write this is
-; out: AL = the mask to test DSK_R_ATTR against; every other register and the
-;      flags preserved
+; out: AL = the mask, and ZF the entry's DSK_R_ATTR tested against it (ZF = 0
+;      refuses); every other register preserved
 ;
 ; Three tiers, and the third is the one the field paid for:
 ;
@@ -313,8 +313,9 @@ dskw_pmask:
     mov al, DSKW_KPROT
 %endif
 .out:
-    pop bx
-    ret
+    test byte [dskw_raw+DSK_R_ATTR], al ; ...and the test both callers made
+    pop bx                      ; after the call: ZF = 0 = refused (kernel
+    ret                         ; size pass 19, -4)
 %endif                          ; DSKW_SYSW
 
 ; -----------------------------------------------------------------------------
@@ -1568,9 +1569,8 @@ dskw_wbody:
                                 ; 18.4.3), so this path re-read the sector it
                                 ; had just been handed - a whole revolution
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be replaced here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be replaced here, and
+%else                           ; ZF = 0 if the entry carries any of it
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (no system writer: AL is
 %endif                          ; dead on both arms below)
     jnz .prot                   ; FERR_PROT, written beside .big above
@@ -4266,9 +4266,8 @@ dskw_wabody:
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be written here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be written here (ZF:
+%else                           ; the entry's attribute tested against it)
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (.args spends AX next)
 %endif
     jnz .prot
