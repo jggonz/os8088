@@ -4948,13 +4948,15 @@ trailer written is:
 (`pdxb_trailer.encrypt_num` / `encrypt_gen`); `/ID [<id0 whole, up to 32
 bytes> <a new 16>]` (`id0` then `id0_hi`: the first element is an input of the
 key and is written byte for byte); `/Prev`. **A DIRECT `/Encrypt` dictionary**
-(`tflags` has `PDTR_ENCDIRECT`) is not written again: the job answers
-`PDE_ENCRYPT` at its start. The dictionary could be rebuilt from
-`PDV_ENG_CRYPTINFO`'s fields (`/V /R /Length /P /O /U`, `/OE /UE /Perms`,
-`/CF /StmF /StrF`) at about 670 bytes of PDWRT (code and a 200-byte copy of
-the fields); it was left out of AP-06's 5,000-byte budget, and every producer
-this round measured (qpdf, Acrobat, iText, Ghostscript, PDFBox) writes it
-indirectly. ``job_verify` is unchanged (it looks for `xref`).
+(`tflags` has `PDTR_ENCDIRECT`) is copied as the file has it: at job start
+the job asks `PDV_ENG_RAW_COPY` for the pseudo-object `PDRC_ENCDICT`
+(0xFFFE; the text `<< ... >>`, at most 640 bytes, else `PDE_ENCRYPT`), keeps it
+(the source is closed before the trailer, when an Insert reads foreign files)
+and writes `/Encrypt <<...>>` into the update trailer. Nothing in it is
+enciphered (`/O /U /OE /UE /Perms` are the key's own data), so copying is
+exact. Cost: 640 bytes of bss and about 150 of code; `pdw_encrun.py`'s
+`aes128d` fixture checks it. Engine side (eng): `PDRC_ENCDICT` in
+`pdabi.h`'s wrt block. indirectly. ``job_verify` is unchanged (it looks for `xref`).
 `job_vfy` re-opens the temp file through PDENG, which now chains classic ->
 stream sections (20.22.3); an encrypted output is opened with the held key
 (20.22.4.4).

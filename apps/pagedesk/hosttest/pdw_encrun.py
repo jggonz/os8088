@@ -37,6 +37,7 @@ FIX = {
     'aes128':  (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'generate'),
     'aes128u': (['--encrypt', 'u1', 'owner', '128', '--use-aes=y', '--'], 'u1', 'generate'),
     'aes128c': (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'disable'),
+    'aes128d': (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'generate'),
     'aes256':  (['--encrypt', '', 'owner', '256', '--'], '', 'generate'),
     'rc4128':  (['--allow-weak-crypto', '--encrypt', '', 'owner', '128', '--use-aes=n', '--'], '', 'generate'),
     'rc440':   (['--allow-weak-crypto', '--encrypt', '', 'owner', '40', '--'], '', 'disable'),
@@ -102,7 +103,7 @@ for name, (enc, pw, osm) in FIX.items():
         tag = '%s/%s' % (name, fk)
         check(r.returncode in (0, 3), '%s: the foreign file is built (%s)' % (tag, 'AES-128, user password fp' if fenc else 'plain, xref stream'))
         p = subprocess.run([binary, 'SRC.PDF', pw, 'plain' if not fenc else 'enc-aes', fpw], cwd=d, capture_output=True, text=True,
-                           env=dict(os.environ, PDW_PREP=os.path.join(HERE, 'pdw_encprep.py'), PDW_SABOTAGE='1'))
+                           env=dict(os.environ, **({'PDW_DIRECT': '1'} if name.endswith('d') and name != 'rc4128' else {}), PDW_PREP=os.path.join(HERE, 'pdw_encprep.py'), PDW_SABOTAGE='1'))
         open(os.path.join(d, 'run.txt'), 'w').write(p.stdout + p.stderr)
         check(p.returncode == 0 and 'PASS' in p.stdout, '%s: pdw_enc (the writer over the stand-in): %s' % (tag, p.stdout.strip().splitlines()[-1] if p.stdout.strip() else p.stderr[-200:]))
         if p.returncode != 0:
@@ -120,7 +121,9 @@ for name, (enc, pw, osm) in FIX.items():
         check(ob.startswith(sb), '%s: the source bytes are the output\'s prefix' % tag)
         t = trailer_facts(os.path.join(d, 'S1.PDF'))
         check('/Prev ' in t and 'startxref' in t, '%s: the update has /Prev (%s)' % (tag, re.search(r'/Prev \d+', t).group(0) if '/Prev' in t else '-'))
-        if enc:
+        if enc and name.endswith('d') and name != 'rc4128':
+            check('/Encrypt <<' in t, '%s: the trailer carries the DIRECT /Encrypt dictionary' % tag)
+        elif enc:
             check(re.search(r'/Encrypt \d+ 0 R', t) is not None, '%s: the trailer repeats /Encrypt' % tag)
             j = json.loads(run('qpdf', '--json=2', '--password=' + pw, '--json-stream-data=none', os.path.join(d, 'SRC.PDF')).stdout)['qpdf'][1]['trailer']['value']['/ID'][0][2:]
             check(j in t.replace(' ', '').replace('<', '').replace('>', '').lower(), '%s: /ID[0] (%d bytes) is written byte for byte' % (tag, len(j) // 2))

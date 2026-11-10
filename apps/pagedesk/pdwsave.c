@@ -196,12 +196,18 @@ static pdw enc_info(void)               /* CRYPTINFO into the exchange block */
     pdw r = pdw_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
     return pdw_engcf ? (r ? r : PDE_ENCRYPT) : PDE_OK;
 }
+static char g_ecd[640]; static pdw g_ecdn;         /* a DIRECT /Encrypt dictionary's text (20.22.4.1) */
 static pdw enc_setup(void)
 {
     pdw r, k;
     enc_wipe();
     if (!g_tr.encrypt_num && !(g_tr.tflags & PDTR_ENCDIRECT)) return PDE_OK;
-    if (!g_tr.encrypt_num) return PDE_ENCRYPT;          /* a direct /Encrypt: not written again (20.22.4.1) */
+    if (!g_tr.encrypt_num) {                            /* a direct /Encrypt: its dictionary text (20.22.4.1) */
+        r = eng_raw(PDRC_ENCDICT, 0); if (r) return PDE_ENCRYPT;
+        if (sc_n < 4 || sc_n > (pdw)sizeof g_ecd || g_pg[0] != '<' || g_pg[1] != '<') return PDE_ENCRYPT;
+        for (k = 0; k < sc_n; k++) g_ecd[k] = g_pg[k];   /* the source is closed by the time the trailer is written */
+        g_ecdn = sc_n;
+    }
     r = enc_info(); if (r) return r;
     pd_fcopy_in(g_xb, EC_OFF(key), g_cop.key, 32);
     g_cop.key_len = pd_fpeekw(g_xb, EC_OFF(key_len));
@@ -922,7 +928,10 @@ static pdw job_slice(void)
                 else {
                     pb_s(" /Root "); pb_u(g_tr.root_num); pb_c(' '); pb_u(g_tr.root_gen); pb_s(" R");
                     if (g_tr.info_num) { pb_s(" /Info "); pb_u(g_tr.info_num); pb_c(' '); pb_u(g_tr.info_gen); pb_s(" R"); }
-                    if (g_enc) { pb_s(" /Encrypt "); pb_u(g_tr.encrypt_num); pb_c(' '); pb_u(g_tr.encrypt_gen); pb_s(" R"); }
+                    if (g_enc && g_tr.encrypt_num) { pb_s(" /Encrypt "); pb_u(g_tr.encrypt_num); pb_c(' '); pb_u(g_tr.encrypt_gen); pb_s(" R"); }
+                    else if (g_enc) {       /* direct: copied as the file has it (O, U are never enciphered) */
+                        pb_s(" /Encrypt "); pb_n(g_ecd, g_ecdn);
+                    }
                 }
                 id_make();
                 pb_s(" /ID ");

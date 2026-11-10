@@ -694,6 +694,9 @@ struct pdxb_wkey {
     pdb  key[32];
 };
 struct pdxb_wkeys { pdw n; struct pdxb_wkey k[3]; };
+#define PDRC_ENCDICT 0xFFFE /* PDV_ENG_RAW_COPY objnum: the text of a DIRECT /Encrypt
+                               dictionary ("<< ... >>"), when pdxb_trailer.tflags has
+                               PDTR_ENCDIRECT (PDRC_EXACT or PLAIN: same bytes)        */
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */

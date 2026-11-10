@@ -249,6 +249,7 @@ PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
 PDV_WRT_KEYS             equ 0x85
+PDRC_ENCDICT             equ 0xFFFE
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0

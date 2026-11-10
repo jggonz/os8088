@@ -93,8 +93,15 @@ def main():
         e = tr['/Encrypt']
         if isinstance(e, str):
             m = re.fullmatch(r'(\d+) (\d+) R', e); en, eg = int(m.group(1)), int(m.group(2))
+            if os.environ.get('PDW_DIRECT'):    # make it a direct dictionary: the writer must copy its text (20.22.4.1)
+                txt = plain[en][1]['value'] if False else None
+                direct = 1
+                m2 = re.search(rb'obj\s*(<<.*>>)\s*endobj', open(os.path.join(db, 'o%d.txt' % en), 'rb').read(), re.S)
+                open(os.path.join(db, 'o65534.txt'), 'wb').write(m2.group(1))
+                en = eg = 0
         else:
             direct = 1
+            open(os.path.join(db, 'o65534.txt'), 'wb').write(val_out(e).encode() if isinstance(val_out(e), str) else val_out(e))
     def ref(x):
         m = re.fullmatch(r'(\d+) (\d+) R', x or ''); return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     rn, rg = ref(tr['/Root']); inn, ig = ref(tr.get('/Info'))
