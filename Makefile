@@ -21468,6 +21468,9 @@ PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
+# the host's stand-in slot occupants (20.22.7): the real dash walker, a fake decoder
+PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c
+PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
 PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
 
@@ -21495,10 +21498,10 @@ $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdren
 
 PDR_HOSTBIN := $(BUILD)/pdr_test
 $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
-                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -Wall -Wno-unused-function -Wno-unused-variable -Wno-parentheses -Wno-int-to-void-pointer-cast \
 		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 
 .PHONY: pdrend pdrend-host pdrend-fuzz
 # the asm primitives against their C twins need Unicorn: whichever python has it
@@ -21510,18 +21513,18 @@ pdrend: $(BUILD)/PDREND.MOD pdrend-host
 # the sanitizer run (SPEC 20.3.6): ASan+UBSan build, hostile streams + random cases
 PDR_FUZZBIN := $(BUILD)/pdr_test_asan
 $(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
-                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
 		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 # the same hostile streams through the REAL engine (pdeng.c answers every verb), ASan+UBSan
 PDR_FUZZREAL := $(BUILD)/pdr_test_real_asan
 PDR_ENGSRC   := $(wildcard $(PDR_DIR)/pde*.c $(PDR_DIR)/pde*.h) $(PDR_DIR)/hosttest/pde_host.c
 $(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
-                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
 	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
 		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
-		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+		$(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
 pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_MKSTORE)
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
@@ -21537,9 +21540,9 @@ pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.
 PDR_REALBIN := $(BUILD)/pdr_test_real
 PDR_SHOTS   ?=
 $(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
-                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
 	cc -O1 -w -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 .PHONY: pdrend-real
 pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
@@ -21560,6 +21563,12 @@ $(PDR_MKSTORE): $(PDR_DIR)/hosttest/pdr_mkstore.c $(wildcard $(PDR_DIR)/pdw*.c $
 pdrend-annot: $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_annot.py $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/pdrannot $(BUILD) $(PDR_DIR)/samples $(abspath $(BUILD))/stress $(PDR_SHOTS)
 # ---- end annotr --------------------------------------------------------------------------------
+# `make pdrend-xchk` (PAGEDESK-SPEC 20.22.7): the ladder, codec images, sample depths, the dash
+# walker and edit marks in PDXG - through the stand-in occupants (hosttest/pdr_xmod.c) - against
+# mutool and against the plain image, then hostile occupant answers under ASan+UBSan.
+.PHONY: pdrend-xchk
+pdrend-xchk: $(PDR_REALBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES tools/os88pdfx_rcore.py
+	python3 $(PDR_DIR)/hosttest/pdr_xchk.py $(PDR_REALBIN) $(BUILD)/pdrxchk $(BUILD) --hostile $(PDR_FUZZREAL) -n 40
 # ---- end PageDesk: rend ----
 
 # ---- PageDesk: eng ----------------------------------------------------------
