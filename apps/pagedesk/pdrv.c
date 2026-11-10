@@ -34,13 +34,19 @@ static pdw img_row(void)
 
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
+#ifdef PDR_X8
     static pdb b[24];
+#else
+    static pdb b[20];
+#endif
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
     pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen, inl;
     (void)len;
     pd_fcopy_in(g_dls, off + DLH, b, 20);
+#ifdef PDR_X8
     if (b[18] & 0x60) pd_fcopy_in(g_dls, off + DLH + 20, b + 20, 4);      /* blend: the mask object (20.22.10.3) */
+#endif
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
     W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
     obj = (pdw)r16(b + 12); gen = (pdw)r16(b + 14);
@@ -76,7 +82,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+#ifdef PDR_X8
     if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+#endif
     for (y = ry0; y <= ry1; y++) {
         pdi qy = (pdi)(y * 4 + 2);
         if (y < g_scy0 || y > g_scy1) continue;
@@ -104,7 +112,10 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-            if (g_xs) x8_imgrow(y); else pdr_imgrow();      /* blend: the 8-bit strip (20.22.10.8) */
+#ifdef PDR_X8
+            if (g_xs) x8_imgrow(y); else
+#endif
+            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
         }
     }
 }
@@ -229,7 +240,9 @@ static pdw verb_step(void)
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
         if (done) {
             close_streams();
+#ifdef PDR_X8
             if (xb_needmem()) { g_needcx = PDMEM_X8; g_needdx = g_x8need; return PDE_NEEDMEM; }   /* 20.22.10.2 */
+#endif
             g_ph = PDR_RAST; g_bcur = g_b0;
         }
         return PDE_BUSY;

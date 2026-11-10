@@ -526,9 +526,13 @@ static void do_form(pdw obj, pdw gen)
  * clipped, or refused and noted), 1 = the record is begun. */
 static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pdw gen, pdw extra)
 {
+#ifdef PDR_X8
     static pdb body[24];
-    static struct pd_fx one, zero;
     pdw mk = (flags & 0x60) ? 4 : 0;       /* blend: a mask object follows the body (20.22.10.3) */
+#else
+    static pdb body[20];
+#endif
+    static struct pd_fx one, zero;
     pdi x00, y00, x10, y10, x01, y01, xl, xr, yt, yb;
     static pdi py0, py1, px0, px1;
     pdi pa, pb;
@@ -557,9 +561,14 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     w16(body + 8, (pdi)W); w16(body + 10, (pdi)H);
     w16(body + 12, (pdi)obj); w16(body + 14, (pdi)gen);
     body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = 0;
+#ifdef PDR_X8
     if (mk) { w16(body + 20, (pdi)g_imm_o); w16(body + 22, (pdi)g_imm_g); xb_rows(py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1); }
     hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + mk + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
     return dl_put(g_hdr, DLH, body, 20 + mk);
+#else
+    hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
+    return dl_put(g_hdr, DLH, body, 20);
+#endif
 }
 
 static void do_image(pdw obj, pdw gen)
@@ -580,6 +589,10 @@ static void do_image(pdw obj, pdw gen)
         } else { inc_note(PDF_INC_COLOUR, "image colour space"); return; }
         if (!(bpcv == 8 || (bpcv == 1 && ncomp == 1))) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
     }
+#ifndef PDR_X8
+    if (dict_get(obj, gen, "SMask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "soft mask");
+    if (dict_get(obj, gen, "Mask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "image mask");
+#endif
     if (dict_num(obj, gen, "Decode", 0, &dec0) == 0 && dec0.hi >= 1) inv = 1;
     image_place((pdw)pdm_fx_floor(&w), (pdw)pdm_fx_floor(&h), bpcv, ncomp, (pdw)((stencil ? 1 : 0) | (inv ? 2 : 0) | xb_imgmask(obj, gen)), obj, gen, 0);
 }
@@ -722,7 +735,7 @@ static void exec_op(const char *s, pdw n)
             pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
             break;
         case 'r' | ('e' << 8): op_re(); break;
-        case 'g' | ('s' << 8): xb_gs(); break;                    /* blend (20.22.10.4) */
+        case 'g' | ('s' << 8): xb_gs(); break;                    /* blend (20.22.10.4); a no-op without PDR_X8 */
         case 'r' | ('i' << 8): break;
         case 'f' | ('*' << 8): paint(1, 1, 0, 0); break;
         case 'B' | ('*' << 8): paint(1, 1, 1, 0); break;

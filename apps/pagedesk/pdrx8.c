@@ -446,41 +446,20 @@ static pdw q4(pdw v, pdw par)           /* 20.19.2's seven levels */
     if (v < 234) return par ? 15 : 7;
     return 15;
 }
-static pdb xo_[XN / 2 + 3];
 static void x8_quant(void)
 {
-    pdi y, xa, xb, x;
-    pdw c, j, bo, nb, k, ro;
+    pdi y, xa, xb;
     for (y = g_xy0; y <= g_xy1; y++) {
         if (y < g_pgy0 || y > g_pgy1) continue;
         xa = g_pgx0 < g_bx0 ? g_bx0 : g_pgx0;
         xb = g_pgx1 > (pdi)(g_bx0 + g_bw - 1) ? (pdi)(g_bx0 + g_bw - 1) : g_pgx1;
         if (xb < xa) continue;
         xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
-        ro = (pdw)((pdw)(y - g_by0) * g_bstride);
-        for (x = xa; x <= xb; x = (pdi)(x + c)) {
-            c = (pdw)(XN - (x & (XN - 1)));
-            if (c > (pdw)(xb - x + 1)) c = (pdw)(xb - x + 1);
-            pd_fcopy_in(g_x8seg, (pdw)((pdw)(y - g_xy0) * g_x8s + x), xc_, c);
-            if (g_bpp == 4) {
-                bo = (pdw)(ro + (x >> 1)); nb = (pdw)(((x + c - 1) >> 1) - (x >> 1) + 1);
-                pd_fcopy_in(g_bseg, bo, xo_, nb);
-                for (j = 0; j < c; j++) {
-                    k = q4(xc_[j], (pdw)((x + j + y - g_pgy0) & 1));
-                    if ((x + j) & 1) xo_[((x + j) >> 1) - (x >> 1)] = (pdb)((xo_[((x + j) >> 1) - (x >> 1)] & 0xF0) | k);
-                    else             xo_[((x + j) >> 1) - (x >> 1)] = (pdb)((xo_[((x + j) >> 1) - (x >> 1)] & 0x0F) | (k << 4));
-                }
-            } else {
-                bo = (pdw)(ro + (x >> 3)); nb = (pdw)(((x + c - 1) >> 3) - (x >> 3) + 1);
-                pd_fcopy_in(g_bseg, bo, xo_, nb);
-                for (j = 0; j < c; j++) {
-                    k = ((pdw)(xc_[j] * 17u) >> 8) > bayer[((y & 3) << 2) | ((x + j) & 3)];
-                    if (k) xo_[((x + j) >> 3) - (x >> 3)] |= (pdb)(0x80 >> ((x + j) & 7));
-                    else   xo_[((x + j) >> 3) - (x >> 3)] &= (pdb)~(0x80 >> ((x + j) & 7));
-                }
-            }
-            pd_fcopy_out(xo_, g_bseg, bo, nb);
-        }
+        pdr_xq.sseg = g_x8seg; pdr_xq.soff = (pdw)((pdw)(y - g_xy0) * g_x8s + xa);
+        pdr_xq.dseg = g_bseg; pdr_xq.x0 = (pdw)xa; pdr_xq.n = (pdw)(xb - xa + 1); pdr_xq.bpp = g_bpp;
+        if (g_bpp == 4) { pdr_xq.doff = (pdw)((pdw)(y - g_by0) * g_bstride + (xa >> 1)); pdr_xq.par = (pdw)((xa + y - g_pgy0) & 1); }
+        else            { pdr_xq.doff = (pdw)((pdw)(y - g_by0) * g_bstride + (xa >> 3)); pdr_xq.par = (pdw)((y & 3) << 2); }
+        pdr_x8quant();
     }
 }
 

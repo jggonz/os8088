@@ -41,7 +41,9 @@ static pdw dl_put(const pdb *h, pdw nh, const pdb *b, pdw nb)
 {
     pdw tot = nh + nb;
     if (g_dlfull || !dl_room(tot)) { g_dlfull = 1; return 0; }
+#ifdef PDR_X8
     if (h[0] >= DLR_RECT && h[0] <= DLR_IMAGE) xb_mark(r16(h + 4), r16(h + 6));   /* 20.22.10.3 */
+#endif
     pd_fcopy_out(h, g_dls, g_dllen, nh);
     if (nb) pd_fcopy_out(b, g_dls, g_dllen + nh, nb);
     g_dllen += tot; g_ndl++;
@@ -90,7 +92,9 @@ static void grey_mix(pdw lum, pdw c4)
 static void emit_state(pdw kind)
 {
     pdw lum, c4;
+#ifdef PDR_X8
     xb_state(kind);                     /* DLR_XSTATE, when the transparency changed (20.22.10.3) */
+#endif
     if (kind == PK_STROKE) { lum = GS.slum; c4 = GS.sc4; }
     else                   { lum = GS.flum; c4 = GS.fc4; }
     w16(g_stl + 0, GS.cx0); w16(g_stl + 2, GS.cy0);
@@ -102,10 +106,16 @@ static void emit_state(pdw kind)
         if (kind == PK_FILL)
             grey_mix(lum, c4);
     }
+#ifdef PDR_X8
     g_stl[14] = (pdb)lum;               /* the colour's luminosity rides in aux (20.22.10.3) */
     if (g_lstv && pdr_memeq(g_stl, g_lst, 15)) return;
     hdr_set(DLR_STATE, lum, DLH + 14, 0, 0);
     if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 15); g_lstv = 1; }
+#else
+    if (g_lstv && pdr_memeq(g_stl, g_lst, 14)) return;
+    hdr_set(DLR_STATE, 0, DLH + 14, 0, 0);
+    if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 14); g_lstv = 1; }
+#endif
 }
 
 /* a rectangle in qpx -> pixel rows/columns by the sample-point rule, thin
@@ -340,8 +350,10 @@ static void span_out(pdi y, pdi xa, pdi xb)
     row = (pdi)(y - g_by0);
     xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
     if (g_rmode) { mask_span(g_rmode - 1, xa, xb); return; }
+#ifdef PDR_X8
     if (g_psrc) { xg_span(y, (pdi)(xa + g_bx0), (pdi)(xb + g_bx0)); return; }    /* gfx's shading (20.22.10.7) */
     if (g_xs) { x8_span(y, xa, xb); return; }                                    /* the 8-bit strip */
+#endif
     if (g_bpp == 1) pdr_fill1(g_bseg, (pdw)row * g_bstride, xa, xb, g_spat[y & 3]);
     else if (g_spat[0]) fill4_mix((pdw)row * g_bstride, xa, xb, y);
     else            pdr_fill4(g_bseg, (pdw)row * g_bstride, xa, xb, g_sc4);
@@ -575,6 +587,7 @@ static pdw strike_pick(pdw fam, pdw sty, pdw em, pdw *synth)
 static pdb g_gl[4];
 static pdw g_synth;                 /* strike_pick: italic by shear           */
 /* one glyph through a slow, fully clipped path (partial glyphs) */
+#ifdef PDR_X8   /* runs of ink, not pixels: the 8-bit strip pays a span's setup each */
 static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
 {
     pdw r, c, ink;
@@ -596,6 +609,27 @@ static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw
         }
     }
 }
+#else
+static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
+{
+    pdw r, c;
+    pdi yy, xx, sh;
+    pdb v;
+    for (r = 0; r < nrows; r++) {
+        yy = (pdi)(top + r);
+        if (yy < g_scy0 || yy > g_scy1) continue;
+        sh = 0;
+        if (shear) sh = (pdi)(((pdi)g_sasc - (pdi)r + 8) >> 2) - 2;
+        for (c = 0; c < wpx; c++) {
+            v = pd_fpeekb(gseg, (pdw)(goff + r * wb + (c >> 3)));
+            if (!(v & (0x80 >> (c & 7)))) continue;
+            xx = (pdi)(gx + c + sh);
+            if (xx < g_scx0 || xx > g_scx1) continue;
+            span_out(yy, xx, xx);
+        }
+    }
+}
+#endif
 
 /* ---- the transformed-glyph cache (20.3.4): a direct-mapped table of 14
  * slots in the glyph claim, keyed by (strike, rotation, scale, code); a slot
@@ -729,7 +763,10 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
             /* the composer writes the bytes under [gx + shl, gx + gw - 1 + shr]
              * and reads at most 4 bitmap bytes a row: anything else is clipped
              * pixel by pixel */
-            if (g_xs || wb > 4 || (pdi)(gx + shl) < mn || (pdi)(gx + (pdi)gw - 1 + shr) > mx) {
+#ifdef PDR_X8
+            if (g_xs) { glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear); continue; }
+#endif
+            if (wb > 4 || (pdi)(gx + shl) < mn || (pdi)(gx + (pdi)gw - 1 + shr) > mx) {
                 glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear);
                 continue;
             }
@@ -754,8 +791,55 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 /* ---- images (pdri.c supplies the row source) ------------------------------ */
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1);
 
+#ifdef PDR_X8
 /* ---- the DL walker for one band: pdrx8.c (it grew the transparency records) ----- */
 static void walk_band(pdi ry0, pdi ry1);
+#else
+/* ---- the DL walker for one band ------------------------------------------ */
+static void walk_band(pdi ry0, pdi ry1)
+{
+    pdw off = 0, type, len;
+    pdi y0, y1, a, yy0, yy1, x0, x1;
+    static pdb pl[6];
+    pdw ne;
+    g_scx0 = g_vcx0; g_scy0 = g_vcy0; g_scx1 = g_vcx1; g_scy1 = g_vcy1;
+    g_sclid = 0xFF; g_sc4 = 0; pat_make(g_spat, 0, 1);
+    while (off < g_dllen) {
+        pd_fcopy_in(g_dls, off, g_hdr, DLH);
+        type = g_hdr[0]; len = (pdw)r16(g_hdr + 2);
+        if (len < DLH || len > g_dllen - off) break;     /* only whole records */
+        y0 = r16(g_hdr + 4); y1 = r16(g_hdr + 6);
+        if (type == DLR_STATE) {
+            pd_fcopy_in(g_dls, off + DLH, g_stl, 14);
+            g_scx0 = r16(g_stl); g_scy0 = r16(g_stl + 2);
+            g_scx1 = r16(g_stl + 4); g_scy1 = r16(g_stl + 6);
+            g_sclid = g_stl[8]; g_sc4 = g_stl[9];
+            pdr_cpy(g_spat, g_stl + 10, 4);
+        } else if (y1 >= g_wlo && y0 <= g_whi) {
+            yy0 = y0 < g_wlo ? g_wlo : y0;
+            yy1 = y1 > g_whi ? g_whi : y1;
+            if (type == DLR_RECT) {
+                pd_fcopy_in(g_dls, off + DLH, pl, 4);
+                x0 = r16(pl); x1 = r16(pl + 2);
+                if (g_sclid < PDR_NCLIP && g_mkok) { for (a = yy0; a <= yy1; a++) shape_clipped(a, 0, x0, x1, 0, 0); }
+                else for (a = yy0; a <= yy1; a++) span_out(a, x0, x1);
+            } else if (type == DLR_FILL) {
+                pd_fcopy_in(g_dls, off + DLH, pl, 6);
+                ne = (pdw)r16(pl + 4);
+                if (ne > PDR_NEDGE) ne = PDR_NEDGE;
+                g_fe = (pdw)(off + DLH + 6);       /* the edges are scanned in the list itself */
+                if (g_sclid < PDR_NCLIP && g_mkok) { for (a = yy0; a <= yy1; a++) shape_clipped(a, 1, 0, 0, ne, g_hdr[1]); }
+                else rast_edges(g_dls, g_fe, ne, g_hdr[1], yy0, yy1);
+            } else if (type == DLR_GLYPHS) {
+                draw_glyphs(off, len, yy0, yy1);
+            } else if (type == DLR_IMAGE) {
+                draw_image(off, len, yy0, yy1);
+            }
+        }
+        off += len;
+    }
+}
+#endif
 
 /* ---- one band: compose, then lock / clip / blit / unlock ----------------- */
 static pdw g_winoff;

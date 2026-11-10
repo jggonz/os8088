@@ -96,7 +96,9 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
+#ifdef PDR_X8
     if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 40; }          /* blend (20.22.10.2) */
+#endif
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
@@ -230,7 +232,9 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+#ifdef PDR_X8
         if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
+#endif
         if (seqp) { fflush(stdout); goto seq_next; }
         return 0;
     }

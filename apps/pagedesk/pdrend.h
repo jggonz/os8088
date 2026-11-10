@@ -74,6 +74,16 @@ extern struct pdr_ip pdr_ip;
 typedef char pdr_ip_size[sizeof(struct pdr_ip) == 32 ? 1 : -1];
 void pdr_imgrow(void);
 
+/* the quantiser (pdrx8.inc, 20.22.10): n pixels of 8-bit grey at sseg:soff into a
+ * 4bpp (bpp 4) or 1bpp band row at dseg:doff, which is the byte holding pixel x0.
+ * 4bpp: the seven-level checker of 20.19.2, `par` = (x0 + y - page_y0) & 1; 1bpp: the
+ * 4x4 Bayer, `par` = (y & 3) << 2. A pixel outside [x0, x0+n) in a byte it shares keeps
+ * its bits. The assembly's offsets are pdrx8.inc's XQ_*.                                 */
+struct pdr_xq { pdw sseg, soff, dseg, doff, x0, n, par, bpp; };
+extern struct pdr_xq pdr_xq;
+typedef char pdr_xq_size[sizeof(struct pdr_xq) == 16 ? 1 : -1];
+void pdr_x8quant(void);
+
 /* globals the asm shares */
 extern pdw pdr_eng_ax, pdr_eng_dx;
 extern pdw pdr_eng_off, pdr_eng_seg;
@@ -112,6 +122,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLH         8           /* header: type aux len y0 y1                 */
 
 /* ---- transparency (PAGEDESK-SPEC 20.22.10); bodies in pdrxb.c / pdrx8.c ---- */
+#ifdef PDR_X8   /* the transparency build: the host harness's, and the target's once PDX8 holds the compositor */
 /* the seams other files call; the bodies are static in pdrx8.c / pdrxb.c, which
  * pdrend.c includes after the files that call them */
 static pdw  x8_want(void);                          /* does the walk range take the 8-bit path */
@@ -136,6 +147,19 @@ static void xb_rows(pdi y0, pdi y1);                /* mark rows for the 8-bit p
 static pdw g_imm_o, g_imm_g;                        /* the image mask object do_image found    */
 static pdw g_needcx, g_needdx;                      /* PDE_NEEDMEM's CX and DX (the door returns them) */
 static void x8_view(void);                          /* verb_begin: size the planes             */
+#else
+#define xb_state(k)          ((void)0)
+#define xb_mark(a, b)        ((void)0)
+#define xb_pass()            ((void)0)
+#define xb_gs()              ((void)0)
+#define xb_group_begin(o, g) ((void)0)
+#define xb_group_end()       ((void)0)
+#define xb_needmem()         0
+#define x8_init(s, k)        ((void)0)
+#define x8_view()            ((void)0)
+#define xb_rows(a, b)        ((void)0)
+#define xb_imgmask(o, g)     0
+#endif
 
 /* ---- modes -------------------------------------------------------------- */
 #define PDR_IDLE    0

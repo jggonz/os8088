@@ -5056,7 +5056,7 @@ resource: until PDENG offers one it keeps the previous tuple and sets
 A soft mask: the `/G` form is interpreted at the `gs` operator, with the CTM of
 that moment, as `MASKB ... MASKE`: `xb_gs` sets `g_xmaskpend` and calls
 `do_form`, whose group-begin hook writes `MASKB`, and whose end hook (in
-`frame_end`) writes `MASKE` and patches the length. At most 8 masks a pass.
+`frame_end`) writes `MASKE` and patches the length. At most 16 masks a pass.
 
 `PDV_GS_PARSE` 0xD0: in `objnum`, `gen`; out the rest of `pdxb_gs`.
 0xD1-0xD7 are reserved for the module's further parsing. The module reads the
@@ -5136,12 +5136,33 @@ Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
 non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
 Nothing else in this section sets a bit.
 
-**20.22.10.10 Budgets and stack.** PDREND +2,400 bytes (measured figure in the
-blend report); `pdxgtr.c` at most 6,144 bytes inside PDXG; the compositor's
-deepest chain is `walk_band > draw/span_out > x8_span > x8_chunk > bl > sl >
-pdr_muldiv`, every frame a leaf of the interpreter's, inside the 1,776 bound.
-Host checks: `tools/os88pdfx_blend.py` writes the fixtures and compares each
-against `mutool draw -c gray`.
+**20.22.10.10 Build gate, budgets and stack.** Everything above is compiled
+only with `PDR_X8` (the Makefile passes it to the compiler and to nasm
+together): without it PDREND is the PDREND of the round's start to within 4
+bytes, which is how a branch that carries this code keeps `make` inside the
+part limit until the compositor has its room. The host harness defines it.
+
+*Measured (C compositor in PDREND, `PDR_X8` on, quantiser in assembly):*
+image 66,634 + bss 7,988 against 54,412 + 6,896, i.e. +12,222 and +1,092:
+`walk_core` 1,255, `x8_imgset` 1,151, `x8_gend` 1,073, `xb_group_begin` 817,
+`x8_chunk` 776, `xb_gs` 737, `x8_imgrow` 604, `pdr_sink_grey` 535, `x_bl` 471,
+`x8_mkdone` 303, `xb_group_end` 300, `xb_tuple` 294, `xb_state` 284 (smlrcc
+output; the quantiser is 214 bytes of assembly and a 256-byte table, down from
+837 of C). The lead's decision of 23:24 moves the raster compositor to **PDX8**,
+a part loaded into the X8 region with its planes, which then are plain near
+arrays of the part's own segment (the far chunk copies of `x8_chunk`, `x8_gend`
+and `x8_mkdone` disappear). What PDREND keeps is the walker (the loop, the
+mask jump and the saved state), `x8_want`, the mark map and `xb_state`,
+`xb_tuple`, the record writers; the pixel work crosses one far call a span, a
+row or a record. The deepest chain stays the text path's (728 of 1,776:
+`os88pdstk` reports no chain through the compositor above it).
+
+The quantiser's cost, from `hosttest/pdb_primtest.py`'s instruction count: 4bpp
+20.7 instructions a pixel (211,547 for a 640 x 16 band), 1bpp 15.0 (153,421).
+`pdxgtr.c` is 2.4 KB of C. Host checks: `tools/os88pdfx_blend.py`'s fixtures
+(`tests/pdfany/blend/`) against MuPDF and Poppler; `hosttest/pdb_primtest.py`
+(the assembly against its twin in Unicorn); `hosttest/pdb_fuzz.py` (ASan and
+UBSan over mutated fixtures).
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 
