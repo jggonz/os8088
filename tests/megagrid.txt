@@ -42,3 +42,4 @@
 1 apps/notepad/notepad.asm  # np_stghold's CR/LF staging: the note's bytes plus one a newline, rounded to paragraphs for OSAPI_MEM_P, then ES = the claim's own DX
 1 apps/word/wddoc.inc  # wd_docparse's document size: the .DOC's character count, rounded to paragraphs for wd_resize's MEMP_REGROW; the ES loaded after is [wd_pseg], a claim's own base
 1 apps/scribe/scdoc.inc  # sc_docparse's document size, WORD's wd_docparse copied: the .DOC's character count rounded to paragraphs for sc_resize's MEMP_REGROW; the ES loaded after is [sc_pseg], a claim's own base
+1 apps/pagedesk/pduslot.inc  # pdu_part_rd's .wl: a read's bytes rounded up to paragraphs as the SIZE of an os88_seg_sub window (OSAPI_SEG SEG_SUB under kern_mega, which answers the sum itself) - no segment is built by arithmetic (PAGEDESK-SPEC 20.22.2.4)

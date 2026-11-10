@@ -34,12 +34,11 @@ static const char *pdu_hkeys[] = {
 static const char *pdu_hprof[] = {
     "The PageDesk XT PDF profile",
     "",
-    "Reads: classic xref tables, updates,",
-    "  ASCIIHex and RunLength streams,",
-    "  Helvetica, Times and Courier text,",
-    "  paths, 1- and 8-bit grey images.",
-    "Refuses, saying why: Flate in low RAM,",
-    "  xref streams, encryption, JPEG.",
+    "Reads: xref tables and streams, repairs,",
+    "  every filter, passwords (RC4, AES),",
+    "  embedded fonts, JPEG, CCITT, JBIG2,",
+    "  shading, patterns, transparency.",
+    "What it cannot draw, it names.",
     "Signed files open read-only.",
     "Never runs JavaScript or links.",
     "No printing: Save As writes a PDF.",
@@ -198,5 +197,6 @@ static int ovl_card_more(int which)
 #include "pdovlnotes.c"         /* notes: the cards, the popover, the inspector */
 #include "pdutool.c"            /* the annotation tools (edit) */
 #include "pdovlpref.c"          /* prefs: the Preferences dialog (20.18) */
+#include "pdovlauth.c"          /* auth: the prompt's paint and keys (20.22.6) */
 #include "pdovlpage.c"          /* pages: the page-operation commands and prompts */
 #include "pdovlrecov.c"         /* recov: the journal and the offers (20.17) */

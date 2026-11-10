@@ -90,7 +90,7 @@ static void gx_sclose(void) { pdx_engcall(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
  * edit-store marks, pdxedit.c); blend's 0xD0-0xD7 (pdxgtr.c) follow. Those branches add their #include and a
  * PDX_OTHER_VERB(verb) that dispatches them (answering PDE_RANGE for any other) - the lead merges the three. */
 #ifndef PDX_LAST_VERB
-#define PDX_LAST_VERB 0xCD
+#define PDX_LAST_VERB 0xCF
 #endif
 #ifndef PDX_OTHER_VERB
 #define PDX_OTHER_VERB(v) PDE_RANGE
@@ -185,6 +185,8 @@ static pdw gx_source(void)
 }
 
 #include "pdxgs.c"
+#include "pdxdash.c"
+#include "pdxedit.c"
 
 static pdb gx_flags_of(pdw row)
 {
@@ -394,6 +396,8 @@ pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     pdx_cf = 0;
     if (verb == PDV_X_INIT) return v_init(bx);
     if (verb < PDV_GFX_CS || verb > PDX_LAST_VERB) { pdx_cf = 1; return PDE_RANGE; }
+    if (verb == PDV_GFX_DASH) { r = xd_verb(bx, cx); pdx_cf = (r == PDE_OK || r <= 2) ? 0 : 1; return r; }
+    if (verb == PDV_GFX_EDIT) { r = xe_verb(bx, cx); return r; }
     pd_fcopy_in(g_xbseg, 0, &G, sizeof G);
     G.ok = 0;
     switch (verb) {

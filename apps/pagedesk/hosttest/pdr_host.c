@@ -59,6 +59,18 @@ pdw pdr_scan(pdw eseg, pdw eoff, const pdw *act, pdw na, pdi ys, pdi *cx, unsign
     }
     return nc;
 }
+/* the extension cache's scan (pdrprim.inc pdr_xcfind, PAGEDESK-SPEC 20.22.7) */
+pdw pdr_xcfind(pdw seg, pdw top, pdw kind, pdw k0, pdw k1)
+{
+    unsigned long o = 0;
+    while (o + 8 <= top) {
+        const unsigned char *h = MEM(seg, (pdw)o);
+        if (h[0] == (kind & 255) && (h[4] | h[5] << 8) == k0 && (h[6] | h[7] << 8) == k1) return (pdw)(o + 8);
+        o += 8 + (unsigned)(h[2] | h[3] << 8);
+        if (o > 0xFFFF) break;
+    }
+    return 0;
+}
 void pdr_fcopy(pdw dseg, pdw doff, pdw sseg, pdw soff, pdw n)
 {
     memmove(MEM(dseg, doff), MEM(sseg, soff), n);
@@ -113,6 +125,26 @@ void pdr_imgrow(void)
         if (flip) idx = pdr_ip.sw - 1 - idx;
         if (mode == 0 || mode == 3) { bit = (src[idx >> 3] >> (7 - (idx & 7))) & 1; v = bit ? 255 : 0; }
         else if (mode == 1) v = src[idx];
+        else if (mode == 4) {
+            /* nc samples of bpc bits: tables (lseg:loff) or weights; saturating */
+            static const unsigned short w3[4] = { 77, 150, 29, 256 };
+            unsigned c, e = (idx * pdr_ip.nc) & 0xFFFF, sum = 0, s8, t;
+            for (c = 0; c < pdr_ip.nc; c++, e++) {
+                unsigned b = pdr_ip.bpc;
+                if (b == 8) s8 = src[e];
+                else if (b == 16) s8 = src[(e << 1) & 0xFFFF];
+                else {
+                    unsigned bo = (e * b) & 0xFFFF, raw = src[bo >> 3];
+                    s8 = (raw >> (8 - b - (bo & 7))) & ((1u << b) - 1);
+                    s8 *= b == 1 ? 255 : b == 2 ? 85 : 17;
+                }
+                if (pdr_ip.lseg) t = (unsigned)*MEM(pdr_ip.lseg, (pdw)(pdr_ip.loff + s8 + (c << 8))) << 8;
+                else t = pdr_ip.nc == 1 ? s8 << 8 : s8 * w3[c];
+                sum += t; if (sum > 0xFFFF) sum = 0xFFFF;
+            }
+            v = sum >> 8;
+            if (pdr_ip.lflags & 1) v = 255 - v;
+        }
         else v = (77u * src[idx * 3] + 150u * src[idx * 3 + 1] + 29u * src[idx * 3 + 2]) >> 8;
         if (mode == 3) {
             int paint = pdr_ip.inv ? bit : !bit;

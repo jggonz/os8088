@@ -164,6 +164,7 @@ struct pd_view {
 #define PDX_IMG         4
 #define PDX_JPX         5
 #define PDX_COUNT       6
+#define PDMEM_SLOT      0       /* the slot WORKSPACE (grow S, 20.22.2)   */
 #define PDMEM_XIDX      1       /* PDENG: flat xref index, 4 B an object  */
 #define PDMEM_OSW       2       /* PDENG: the object-stream window        */
 #define PDMEM_XC        3       /* PDREND: the extension cache            */
@@ -685,7 +686,70 @@ struct pdxb_img {
 /* [eng 20.22.3]    */
 /* [crypt 20.22.5]  */
 /* [wrt 20.22.4]    */
+#define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
+                                    before the job: the keys of the ENCRYPTED foreign
+                                    files an Insert reads (plat's pre-flight, 20.22.4.5) */
+struct pdxb_wkey {
+    pdw  slot;              /* the Insert slot (0..2) of the file             */
+    pdw  key_len, stm, str, eff, encmeta;   /* what PDV_ENG_SETKEY takes      */
+    pdb  key[32];
+};
+struct pdxb_wkeys { pdw n; struct pdxb_wkey k[3]; };
+#define PDRC_ENCDICT 0xFFFE /* PDV_ENG_RAW_COPY objnum: the text of a DIRECT /Encrypt
+                               dictionary ("<< ... >>"), when pdxb_trailer.tflags has
+                               PDTR_ENCDIRECT (PDRC_EXACT or PLAIN: same bytes)        */
 /* [rcore 20.22.7]  */
+/* PDV_GFX_DASH (0xCE, PDXG; the walker is rcore's pdxdash.c, 20.22.7): BX:CX =
+ * this block (PDREND puts it at XB offset 0), DX unused. The core fills `in`
+ * with st = 0 and calls; AX = 1: one piece is in `out` (stroke it as an OPEN
+ * polyline and call again), 2: the pattern is too fine to tell from solid
+ * (stroke the subpath whole), 0: done. CF = 1 is a failure: stroke solid. */
+#define PDXD_NPT    12      /* points in a piece                           */
+struct pdxb_dashout {
+    pdw  on;                /* points in ox/oy (1 = a dot)                  */
+    pdi  ox[12], oy[12];     /* qpx (PDXD_NPT)                           */
+};
+struct pdxb_dashin {
+    pdw  vseg, xs, ys;      /* the subpath: vseg:xs and vseg:ys, pdi, qpx   */
+    pdw  n, closed;         /* vertices (>= 1); 1 = closed                  */
+    struct pd_fx scale;     /* qpx per user unit (the CTM's)                */
+    pdw  dph;               /* GS.dph: phase, quarter points, reduced       */
+    pdb  dn, pad_;          /* elements 1..4                                */
+    pdb  dash[4];           /* lengths, quarter points                      */
+    pdw  st;                /* 0 on the first call; the walker's after      */
+};
+struct pdxb_dash {
+    struct pdxb_dashout out;
+    struct pdxb_dashin in;
+    pdw  i, didx, don, dpc, dpn;       /* the walker's state between calls */
+    pdi  drem, pos, slen, qx, qy, x0, y0, x1, y1;
+    pdi  len[4];
+    pdi  dpx[12], dpy[12];  /* PDXD_NPT */
+};
+typedef char pdabi_sz_dsh[sizeof(struct pdxb_dash) <= PD_XB_BYTES ? 1 : -1];
+/* PDV_GFX_EDIT (0xCF provisionally, PDXG; rcore's pdxedit.c, 20.22.7): the
+ * marks of ONE edit-store record (13.3) as a list of drawing ops. BX:CX = this
+ * block (XB offset 0), DX unused. The core fills it with skip = 0 and st[] = 0
+ * at the record's start and hands the block back unchanged between calls; each
+ * call writes `n` words of ops at XB offset PDXE_OPS - ending at the first
+ * PAINT, so the core may stroke (and dash, which uses the XB) last - with
+ * more = 1 while the record goes on. AX 0; CF = 1 a failure (the record is
+ * dropped). The ops, a word each and its arguments (page space, pt16): 1
+ * MOVE x y, 2 LINE x y, 3 INK x y (a LINE that strokes what is there first
+ * when the core's path is near full), 4 CURVE x1 y1 x2 y2 x3 y3, 5 CLOSE,
+ * 6 PAINT (bit 8 fill, 9 stroke, 10 the close flag), 7 SETB v (bits 8-15 a
+ * field of the graphics state: 0 stroke lum, 1 stroke c4, 2 fill lum, 3 fill
+ * c4, 4 dash count, 5-6 dash lengths, 7-8 dash phase low/high, 9 cap, 10
+ * join), 8 LW w16. */
+#define PDXE_OPS    64      /* XB offset of the ops                        */
+struct pdxb_emark {
+    pdw  eseg;              /* the edit store's records (pdxb_render)      */
+    pdw  rec;               /* this record's index                         */
+    pdw  bpp, mono;         /* the page's depth; pdxb_render.mono_mark     */
+    pdw  skip;              /* ops the core already has of this record     */
+    pdw  st[4];             /* the generator's place, 0 at the start       */
+    pdw  n, more;           /* out: words of ops; 1 = call again           */
+};
 /* [gfx 20.22.9]    */
 /* ---- gfx (PAGEDESK-SPEC 20.22.9): PDXG's verbs and its cache records ----- */
 #define PDV_GFX_CS      0xC8 /* compile a colour space. XB: pdxb_gfx           */
@@ -695,6 +759,7 @@ struct pdxb_img {
 #define PDV_GFX_PAT     0xCC /* a tiling pattern's parameters                   */
 #define PDV_GFX_FN      0xCD /* evaluate one function                           */
 #define PDV_GFX_DASH    0xCE /* rcore's dash walker (pdxdash.c)                 */
+#define PDV_GFX_EDIT    0xCF /* rcore's edit-store marks (pdxedit.c)            */
 #define PDGX_CSBYTES    1264 /* sizeof(struct pdgx_cs): an XCK_CS entry          */
 #define PDGX_LUTBYTES   1028 /* sizeof(struct pdgx_lut): an XCK_LUT entry        */
 #define PDGX_SRCMAX     480
@@ -783,6 +848,11 @@ typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
+#define PDIMG_NATIVE 0x0004 /* in: the /ColorSpace is not a device space: deliver
+                               PDIM_N8 in the image's own components (20.22.11) */
+#define PDJ_ALPHA 0x0100    /* jpx: flags bit - deliver the codestream's own alpha
+                               channel as PDIM_GREY8 (/SMaskInData, 20.22.13.7) */
+/* [img end]        */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];

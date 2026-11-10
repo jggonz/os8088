@@ -64,14 +64,21 @@ struct pdr_ip {
     pdw sw;                     /* source width in pixels                   */
     pdw xlo, xhi;               /* DDA: source x = (xhi:xlo) at pixel x0    */
     pdw slo, shi;               /* DDA step per destination pixel           */
-    pdw smode;                  /* 0 1bpp, 1 grey8, 2 rgb8, 3 stencil       */
+    pdw smode;                  /* 0 1bpp, 1 grey8, 2 rgb8, 3 stencil, 4 LUT */
     pdw inv;                    /* 1 = invert the sample / stencil sense    */
     pdw dmode;                  /* 1 = 1bpp band, 4 = 4bpp band             */
     pdw dyrow;                  /* y & 3, the dither row                    */
     pdw col;                    /* stencil: 1bpp 0 black / 1 white; 4bpp c4 */
+    /* smode 4 (PAGEDESK-SPEC 20.22.7): nc samples of bpc bits (1 2 4 8 16) a
+     * pixel; grey = the saturating sum over c of T[c][sample], where T is
+     * lseg:loff's 256-byte tables (gfx's struct pdgx_lut body) or, lseg 0,
+     * sample x weight / 256 for nc 1 (256), 3 (77 150 29), 4 (77 150 29 256);
+     * lflags bit 0 then takes 255 - the sum (CMYK-shaped)                    */
+    pdw nc, bpc;
+    pdw lseg, loff, lflags;
 };
 extern struct pdr_ip pdr_ip;
-typedef char pdr_ip_size[sizeof(struct pdr_ip) == 32 ? 1 : -1];
+typedef char pdr_ip_size[sizeof(struct pdr_ip) == 42 ? 1 : -1];
 void pdr_imgrow(void);
 
 /* globals the asm shares */
@@ -97,6 +104,8 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_MAXSTRIDE   96      /* band stride the masks are sized for        */
 #define PDR_NFORM       5       /* nested stream frames: page + 4 forms       */
 #define PDR_MAXRES      4
+#define PDR_XCKB        16      /* PDMEM_XC asked for (20.22.7); any grant >= 1 KiB is used */
+#define PDR_XASKS       8       /* NEEDMOD/NEEDMEM answers a page view may make (20.22.7) */
 
 /* ---- display list (PAGEDESK-SPEC 20.3.2) -------------------------------- */
 #define DLR_END     0
@@ -106,6 +115,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_GLYPHS  4
 #define DLR_IMAGE   5
 #define DLH         8           /* header: type aux len y0 y1                 */
+#define DLI_BODY    28          /* DLR_IMAGE's body (20.3.2, 20.22.7); inline rows follow */
 
 /* gfx (PAGEDESK-SPEC 20.22.9): a device colour operator ends a non-device colour space (the GS.pad_ nibbles) */
 #ifndef XG_DEVCOL
@@ -119,6 +129,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_DONE    3
 #define PDR_TEXT    4           /* text map                                   */
 #define PDR_THUMB   5
+#define PDR_XWAIT   6           /* a NEEDMOD/NEEDMEM was answered: what came of it (20.22.7) */
 
 /* ---- font bank (PAGEDESK-SPEC 11.2, 20.3.4) ----------------------------- */
 #define PDFB_MAGIC0 0x4450      /* 'PD' little-endian of "PDFB"               */
