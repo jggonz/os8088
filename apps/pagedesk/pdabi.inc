@@ -298,6 +298,7 @@ PDGXI_CAT_CS             equ 0x0100
 PDGXI_CAT_SH             equ 0x0200
 PDGXI_CAT_PAT            equ 0x0300
 PDGXI_TILES              equ 0x0004
+PDGXI_IMGCS              equ 0x0008
 PDGXI_RES                equ 0x0002
 PDM_MAGIC_X8             equ 0x3850
 PDX8_DIRECT              equ 0xFFFD

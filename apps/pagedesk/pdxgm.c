@@ -12,7 +12,6 @@ typedef struct pd_fx fx;
 static void fx_cp(fx *d, const fx *s) { d->hi = s->hi; d->lo = s->lo; }
 #define fx_i pdm_fx_int
 static void fx_raw(fx *r, pdi hi, pdw lo) { r->hi = hi; r->lo = lo; }
-static pdi fx_sign(const fx *a) { return a->hi < 0 ? -1 : (a->hi == 0 && a->lo == 0 ? 0 : 1); }
 #define fx_add pdm_fx_add
 #define fx_sub pdm_fx_sub
 #define fx_mul pdm_fx_mul
