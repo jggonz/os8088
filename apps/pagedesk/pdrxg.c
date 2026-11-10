@@ -22,6 +22,7 @@ static struct pdxb_gfx g_gx;
 #define XG_TILE_NEXT()    xg_tile_next()
 
 /* ---- one request to PDXG: begin (the block is zeroed, the CTM and clip go in), set fields, send --------------- */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_begin(pdw cat)
 {
     pdw n = 0;
@@ -36,6 +37,7 @@ static void xg_begin(pdw cat)
     g_gx.clip[0] = GS.cx0; g_gx.clip[1] = GS.cy0; g_gx.clip[2] = GS.cx1; g_gx.clip[3] = GS.cy1;
 }
 /* the PDE code (CF clear), or 0xFFFF; g_gx is the block as PDXG left it */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_req(pdw verb)
 {
     pdw r;
@@ -44,6 +46,7 @@ static pdw xg_req(pdw verb)
     pd_fcopy_in(g_xb, 0, &g_gx, sizeof g_gx);
     return x_cf && r != PDE_BUSY ? 0xFFFFu : r;
 }
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_ask(pdw verb, pdw cat, pdw rseg, pdw roff, pdw rcap, pdw state)
 {
     xg_begin(cat);
@@ -53,6 +56,7 @@ static pdw xg_ask(pdw verb, pdw cat, pdw rseg, pdw roff, pdw rcap, pdw state)
 static void xg_nc(void) { inc_note(PDF_INC_COLOUR, "colour space"); }
 
 /* the colour of cache entry e's space for the last `nop` operands (0: its initial colour) */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_color(pdw st, pdw e, pdw nop)
 {
     pdw i;
@@ -67,6 +71,7 @@ static void xg_color(pdw st, pdw e, pdw nop)
 /* ---- slots: a gstate names its fill and stroke space by a 4-bit slot (GS.pad_) ----------------------------- */
 /* the cache entry of a resource of `kind` (XCK_CS / XCK_PAT), asked for when it is not there; g_xslot is its
  * slot. Answers the entry's offset, 0 for none (skipped: the ladder, or a note) */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_entry(pdw kind, pdw verb, pdw cat, pdw size)
 {
     pdw k0 = g_reso ? g_reso : (pdw)(0x8000u | g_resp), k1 = 0x5A5Au, e;
@@ -84,12 +89,14 @@ static pdw xg_entry(pdw kind, pdw verb, pdw cat, pdw size)
     g_xcsk[g_xslot][0] = k0; g_xcsk[g_xslot][1] = k1; g_xcsn = g_xslot;
     return e;
 }
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_setslot(pdw st, pdw slot)
 {
     GS.pad_ = (pdb)(st ? ((GS.pad_ & 0x0F) | (slot << 4)) : ((GS.pad_ & 0xF0) | slot));
 }
 
 /* ---- cs / CS: answers 1 when handled here (a non-device space), 0 to fall through to the device code ----------- */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_cs(pdw st)
 {
     pdw e;
@@ -103,6 +110,7 @@ static pdw xg_cs(pdw st)
 }
 
 /* ---- sc SC scn SCN ------------------------------------------------------------- */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_sc(pdw st, pdw nop)
 {
     pdw slot = st ? (pdw)(GS.pad_ >> 4) : (pdw)(GS.pad_ & 15), e, fl;
@@ -129,6 +137,7 @@ static pdw xg_sc(pdw st, pdw nop)
 
 /* ---- sh: the polygons PDXG answers, each an ordinary fill (a /BBox record is a clip) ------------------------ */
 /* the shading `obj gen` (0: the resource of the current name), under the current CTM */
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_shade(pdw obj, pdw gen)
 {
     pdw n, st = 0, p, np, k, n1;
@@ -160,6 +169,7 @@ static void xg_shade(pdw obj, pdw gen)
     if (g_gx.kind & 1) inc_note(PDF_INC_LIMIT, "shading size");
     gs_pop();
 }
+/* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_sh(void)
 {
     if (!g_havename || g_mode != PDR_INTERP) return;
@@ -178,11 +188,13 @@ static struct {
 } g_tl;
 
 /* the current state is the fill's S1 (clipped to the path); put the current tile in it */
+/* [gfx near: per fill/record/tile (xg_tile_next per form frame)] */
 static void xg_tile(void)
 {
     pdr_cpy(&GS.ctm, &g_tl.c, sizeof GS.ctm);
     rect_clip_user(&g_tl.bb[0], &g_tl.bb[1], &g_tl.bb[2], &g_tl.bb[3]);
 }
+/* [gfx near: per fill/record/tile (xg_tile_next per form frame)] */
 static void xg_pfill(pdw rule, pdw e)
 {
     pdw n, obj = pd_fpeekw(g_xcseg, (pdw)(e + PDGX_PAT_OBJ)), gen = pd_fpeekw(g_xcseg, (pdw)(e + PDGX_PAT_OBJ + 2));
@@ -221,6 +233,7 @@ static void xg_pfill(pdw rule, pdw e)
     xg_tile();
 }
 /* frame_end: the pattern's frame ended; true when it was restarted for the next tile */
+/* [gfx near: per fill/record/tile (xg_tile_next per form frame)] */
 static pdw xg_tile_next(void)
 {
     if (!g_tl.on || g_nfr != g_tl.nfr) return 0;
@@ -239,6 +252,7 @@ static pdw xg_tile_next(void)
     return 1;
 }
 /* paint's fill: answers 1 when it also did the stroke (a pattern fill's frame runs after the operator) */
+/* [gfx near: per fill/record/tile (xg_tile_next per form frame)] */
 static pdw xg_fill(pdw rule, pdw stroke)
 {
     pdw slot = GS.pad_ & 15, e;
