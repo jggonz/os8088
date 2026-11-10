@@ -30,6 +30,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -104,7 +105,7 @@ def main():
         if args.page.upper() == "LINARENA.HTM":
             rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                          dispcp.WIN_SIZE)
-            pseg = rec[22] | (rec[23] << 8)
+            pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
             image = os.path.getsize(os88build.at("build/browser.bin"))
 
             def word(offset):
@@ -161,7 +162,7 @@ def main():
             seg = dispcp.win_rect and None
             rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                          dispcp.WIN_SIZE)
-            pseg = rec[22] | (rec[23] << 8)
+            pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
             img = os.path.getsize(os88build.at("build/browser.bin"))
             m.key("Tab")
             os88marty.settle(m)
@@ -242,7 +243,7 @@ def main():
             img2 = os.path.getsize(os88build.at("build/browser.bin"))
             rec2 = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                           dispcp.WIN_SIZE)
-            pseg2 = rec2[22] | (rec2[23] << 8)
+            pseg2 = rec2[os88geom.W_SEG] | (rec2[os88geom.W_SEG + 1] << 8)
 
             def word(off):
                 d = m.readseg(pseg2, img2 + off, 2)

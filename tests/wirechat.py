@@ -735,7 +735,7 @@ def main():
         if len(wins2) <= len(wins):
             sys.exit("wirechat: WIRECHAT.O88 did not open a window")
         rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("wirechat at %04X" % pseg)
 
         def rb(n, off=0):

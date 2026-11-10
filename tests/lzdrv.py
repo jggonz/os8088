@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88drv                                         # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 from os88sym import KERNEL_SEG                         # noqa: E402
@@ -312,7 +313,7 @@ def run(a, sysimg, plain):
             else:
                 rec = m.read(S("wm_wins") + w2[-1] * dispcp.WIN_SIZE,
                              dispcp.WIN_SIZE)
-                pseg = rec[22] | (rec[23] << 8)
+                pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
                 n = os.path.getsize(os88build.at("build/drvcall.bin"))
 
                 # RE-PROBE, AND CONFIRM IT RAN. dc_probe runs from dc_paint,

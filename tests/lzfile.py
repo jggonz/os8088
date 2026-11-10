@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import dispcp                                          # noqa: E402
@@ -100,7 +101,7 @@ def readme(m, mo, before, fails):
                      "run, or Note Pad refused the file outright")
         return
     rec = m.read(S("wm_wins") + after[-1] * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = rec[22] | (rec[23] << 8)
+    pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
     # ...and the READ, which is the assertion: np_len going non-zero is the
     # 16KB expanding into the scratch claim, so it is waited for on the
     # guest's clock rather than given four host seconds.
@@ -152,7 +153,7 @@ def main():
                      "proc refused, which is itself a failure")
         rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("lzfile: package at %04X" % pseg)
 
         raw = m.readseg(pseg, 0, img)

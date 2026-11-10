@@ -32,6 +32,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, dispcp
+import os88geom  # noqa: E402
 from os88geom import MBAR_H     # the bar's height, from the one copy
                                 # checked against kernel.asm at import
 
@@ -172,7 +173,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     os88marty.ui_done(m, "the Calculator to open")
     slot = dispcp.win_list(m, S)[-1]
     r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    seg = u16(r, 22)
+    seg = u16(r, os88geom.W_SEG)
     img_end = u16(m.read(seg * 16, 32), 8)
     cal = {"nvis": img_end + 8, "open": img_end + 14, "hn": img_end + 20}
 

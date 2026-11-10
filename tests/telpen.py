@@ -44,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty                                        # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                        # noqa: E402
 import os88sym                                          # noqa: E402
 import dispcp                                           # noqa: E402
@@ -128,7 +129,7 @@ def main():
             sys.exit("telpen: TELNET.O88 did not open a window")
         tw = wins2[-1]
         rec = m.read(S("wm_wins") + tw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         tx0, ty0, tww, thh = dispcp.win_rect(m, S, tw)
 
         def rw(n):
