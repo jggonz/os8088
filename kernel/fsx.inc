@@ -167,9 +167,8 @@ fsx_caps:
                                 ; OSAPI_VIDEO's and OSAPI_WM_DISPLAY's DH
     mov bl, dl
     xor bh, bh
-    shl bx, 1
+    shl bx, 1                   ; (CF = 0: BX is a kind, 0..4)
     mov ax, [bx+fsx_capstab]
-    clc
 .out:
     pop bx                      ; `pop` writes no flag: either answer's CF
     ret
@@ -1530,8 +1529,7 @@ fsx_rprepf:
     pusha
     mov bx, di
     sub bx, inst_tab
-    mov cl, 5
-    shr bx, cl                  ; BX = the slot: every claim is the
+    shr bx, 5                   ; BX = the slot: every claim is the
     mov [ss:fsx_rown], bx       ; instance's, so a teardown frees what an exit
                                 ; did not
     mov ax, [di+I_SPTR]
@@ -1723,8 +1721,7 @@ fsx_rmvck:
     jnz .sl
     mov bx, di                  ; AL = 0: DI's slot (fsx_rprepf's own
     sub bx, inst_tab            ; derivation, which stores it there again)
-    mov cl, 5
-    shr bx, cl
+    shr bx, 5
     mov [ss:fsx_rown], bx
 .sl:
     mov dx, MEGA_SEL_PSCR
@@ -3613,8 +3610,7 @@ rms_xfer:
     mov cx, si
 .t1:
     xchg bh, bl                 ; CH = the cylinder's low 8 bits, CL bits 6-7
-    ror bl, 1                   ; its 8-9, bits 0-5 the sector
-    ror bl, 1
+    ror bl, 2                   ; its 8-9, bits 0-5 the sector
     inc dx
     or bl, dl
     mov [rms_xcx], bx
@@ -4105,11 +4101,8 @@ rms_sstr:
     cmp al, 9                   ; (verb 9 answers in DX as verb 3 does)
     je .st
     push dx
-    cmp al, 0
-    je .rate
-    cmp al, 4
-    jne .go
-.rate:
+    test al, ~4 & 0xFF          ; the open verbs, 0 and 4: ZF = 1
+    jnz .go
     mov bx, dx                  ; the open verbs: BX the rate, DH the slot
 .go:
     call .svc
