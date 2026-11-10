@@ -41,6 +41,29 @@ static char g_sc[64];            /* scratch for a far peek                   */
 char pdw_date[24];
 char pdw_author[48];
 
+/* ---- encryption of the output (20.22.4.3) ------------------------------ */
+struct pdw_cw {                  /* the held key and the cipher's state between chunks */
+    pdb key[32]; pdw key_len, method, len, ncarry, nr;
+    pdb iv[16], chain[16], carry[16], rk[240], rc4[258];
+};
+static struct pdw_cw g_cop;
+/* the SOURCE object's key, for strings the engine left as ciphertext (20.22.4.2):
+ * g_sflag is the RAW_COPY answer's flag for the object last read (eg_num/eg_gen) */
+static struct { pdb key[32]; pdw klen, str, on; } g_sk;
+static pdw g_sflag, g_snum, g_sgen;
+static pdb g_sb[256]; static pdw g_sbn;
+static pdw g_enc;                /* the source has an /Encrypt: the trailer repeats it */
+static pdw g_encs, g_ence;       /* strings / streams are really encrypted (not identity) */
+static pdw g_cmstr, g_cmstm;     /* PDCM_* of strings / streams                        */
+static pdw g_cenc, g_cfirst;     /* a stream's bytes go through the cipher at pw_n    */
+static pdw g_onum, g_ogen;       /* the object being written                           */
+static pdw g_ivs[8];             /* the IV state (cr_iv)                               */
+static char g_es[32], g_eo[80];  /* a string's raw bytes; the cipher's answer          */
+static pdw g_esn, g_esfirst;
+#ifdef PD_HOST
+static unsigned os88_ticks(void) { static unsigned t = 4321; return (unsigned)(t += 37); }
+#endif
+
 /* ---- tiny string helpers (there is no C library here) ------------------- */
 /* struct pd_u32 assignment is a `rep movsb` through the kernel's ES: copy by field */
 static void u32cp(struct pd_u32 *d, const struct pd_u32 *s) { d->lo = s->lo; d->hi = s->hi; }
@@ -62,11 +85,92 @@ static void pw_flush(pdw last)
     g_wpos = (pdw)(g_wpos - n);
 }
 
+/* ---- the cipher (20.22.4.3) ------------------------------------------------
+ * PDWRT enciphers by itself, with crypt's shared primitives (pdcrypto.h: the
+ * per-object key, RC4, AES-CBC encrypt). cr_far enciphers `len` (<= 128) bytes
+ * at seg:off IN PLACE (the answer, `g_cop.len` bytes, may be longer: the IV
+ * first, the padding block last). g_cop holds the key and, between the chunks
+ * of one string or stream, the carry, the CBC chain and the RC4 state. */
+static void cr_iv(void)
+{
+    pdw k;
+    g_ivs[0] ^= os88_ticks(); g_ivs[1] ^= g_onum; g_ivs[2] ^= g_pos.lo; g_ivs[3] ^= g_pos.hi;
+    for (k = 0; k < 8; k++)
+        g_ivs[k] = pdm_crc16((pdw)(g_ivs[k] ^ (pdw)(0x9E37u * (k + 1))), g_ivs, 16);
+    for (k = 0; k < 8; k++) { g_cop.iv[2 * k] = (pdb)g_ivs[k]; g_cop.iv[2 * k + 1] = (pdb)(g_ivs[k] >> 8); }
+}
+#ifdef PD_HOST
+pdb pdw_host_ivs[4096][16]; unsigned pdw_host_nivs, pdw_host_ncr;
+#endif
+static pdb cw_b[208], cw_a[160];
+static pdw cr_far(pdw seg, pdw off, pdw len, pdw room, pdw phase)
+{
+    static pdw k, o, tot, take, okl;
+    static pdb *ok;
+    if (len > 128 || room < (pdw)(len + 48)) return PDE_LIMIT;
+    o = 0;
+    if (phase & 1) {
+#ifdef PD_HOST
+        pdw_host_ncr++;
+#endif
+        if (g_cop.method == PDCM_AESV3) { ok = g_cop.key; okl = 32; }
+        else {
+            pdc_okey(g_cop.key, g_cop.key_len, g_onum, g_ogen, (pdw)(g_cop.method == PDCM_AESV2));
+            ok = pdc_ok; okl = (pdw)(g_cop.key_len + 5); if (okl > 16) okl = 16;
+        }
+        if (g_cop.method == PDCM_RC4) pdc_rc4_ks(g_cop.rc4, ok, okl);
+        else {
+            pdc_aes_ks(g_cop.rk, ok, (pdw)(okl == 32 ? 8 : 4)); g_cop.nr = (pdw)(okl == 32 ? 14 : 10);
+            cr_iv();
+            for (k = 0; k < 16; k++) { cw_b[k] = g_cop.iv[k]; g_cop.chain[k] = g_cop.iv[k]; }
+            o = 16; g_cop.ncarry = 0;
+#ifdef PD_HOST
+            if (pdw_host_nivs < 4096) { for (k = 0; k < 16; k++) pdw_host_ivs[pdw_host_nivs][k] = g_cop.iv[k]; pdw_host_nivs++; }
+#endif
+        }
+    }
+    if (g_cop.method == PDCM_RC4) {
+        pd_fcopy_in(seg, off, cw_b, len); pdc_rc4(g_cop.rc4, cw_b, len); o = len;
+    } else {
+        for (k = 0; k < g_cop.ncarry; k++) cw_a[k] = g_cop.carry[k];
+        pd_fcopy_in(seg, off, cw_a + g_cop.ncarry, len);
+        tot = (pdw)(g_cop.ncarry + len); take = (pdw)(tot & 0xFFF0u);
+        if (take) pdc_cbc_enc(g_cop.rk, g_cop.nr, g_cop.chain, cw_a, (pdw)(take >> 4));
+        for (k = 0; k < take; k++) cw_b[o + k] = cw_a[k];
+        o = (pdw)(o + take);
+        g_cop.ncarry = (pdw)(tot - take);
+        for (k = 0; k < g_cop.ncarry; k++) g_cop.carry[k] = cw_a[take + k];
+        if (phase & 2) {
+            for (k = g_cop.ncarry; k < 16; k++) g_cop.carry[k] = (pdb)(16 - g_cop.ncarry);
+            pdc_cbc_enc(g_cop.rk, g_cop.nr, g_cop.chain, g_cop.carry, 1);
+            for (k = 0; k < 16; k++) cw_b[o + k] = g_cop.carry[k];
+            o = (pdw)(o + 16); g_cop.ncarry = 0;
+        }
+    }
+    pd_fcopy_out(cw_b, seg, off, o); g_cop.len = o;
+    if (o >= 16)                         /* the previous ciphertext feeds the next IV */
+        for (k = 0; k < 8; k++) g_ivs[k] ^= (pdw)(cw_b[o - 16 + 2 * k] | (cw_b[o - 15 + 2 * k] << 8));
+    return PDE_OK;
+}
+
 static void pw_n(const char *s, pdw n)
 {
     pdw room, k;
     if (g_err) return;
     if (g_mode) { pdm_u32_add16(&g_cnt, n); return; }
+    if (g_cenc) {                        /* a stream's bytes: through the cipher (20.22.4.3) */
+        while (n && !g_err) {
+            if ((pdw)(g_outcap - g_wpos) < 256) { pw_flush(0); continue; }
+            k = n < 128 ? n : 128;
+            pd_fcopy_out(s, g_wseg, g_wpos, k);
+            room = cr_far(g_wseg, g_wpos, k, (pdw)(g_outcap - g_wpos), g_cfirst);
+            if (room) { g_err = room; return; }
+            g_cfirst = 0;
+            g_wpos = (pdw)(g_wpos + g_cop.len); pdm_u32_add16(&g_pos, g_cop.len);
+            s += k; n = (pdw)(n - k);
+        }
+        return;
+    }
     if (g_crcleft) {
         k = n < g_crcleft ? n : g_crcleft;
         g_crc = pdm_crc16(g_crc, s, k);
@@ -159,6 +263,156 @@ static char pw_hex(pdw v) { v &= 15; return (char)(v < 10 ? '0' + v : 'A' + v - 
 static void pb_hex2(pdw v) { pb_c(pw_hex(v >> 4)); pb_c(pw_hex(v)); }
 static void pb_hex4(pdw v) { pb_hex2(v >> 8); pb_hex2(v & 255); }
 
+/* ---- encrypted strings and streams -------------------------------------------
+ * es_*: a string's raw bytes are collected 32 at a time, enciphered through
+ * the output region's free end (nothing is staged there but this), and written
+ * as a hex string. cs_*: a stream's bytes go through pw_n's cipher branch. */
+static void es_begin(void)
+{
+    pb_c('<'); g_esn = 0; g_esfirst = 1; g_cop.method = g_cmstr;
+}
+static void es_flush(pdw last)
+{
+    pdw k, r;
+    pb_flush();
+    if (g_err) return;
+    if ((pdw)(g_outcap - g_wpos) < 256) { pw_flush(0); if (g_err) return; }
+    pd_fcopy_out(g_es, g_wseg, g_wpos, g_esn);
+    r = cr_far(g_wseg, g_wpos, g_esn, 128, (pdw)((g_esfirst ? 1 : 0) | (last ? 2 : 0)));
+    if (r) { g_err = r; return; }
+    pd_fcopy_in(g_wseg, g_wpos, g_eo, g_cop.len);
+    g_esfirst = 0; g_esn = 0;
+    for (k = 0; k < g_cop.len; k++) pb_hex2((pdw)(pdb)g_eo[k]);
+}
+static void es_put(pdw c)
+{
+    g_es[g_esn++] = (char)c;
+    if (g_esn >= 32) es_flush(0);
+}
+static void es_end(void) { es_flush(1); pb_c('>'); }
+static void cs_begin(void)
+{
+    if (!g_ence) return;
+    pb_flush();
+    g_cop.method = g_cmstm; g_cenc = 1; g_cfirst = 1;
+}
+static void cs_end(void)
+{
+    pdw r;
+    if (!g_cenc) return;
+    pb_flush();
+    if (g_err) { g_cenc = 0; return; }
+    if ((pdw)(g_outcap - g_wpos) < 256) { pw_flush(0); if (g_err) { g_cenc = 0; return; } }
+    r = cr_far(g_wseg, g_wpos, 0, (pdw)(g_outcap - g_wpos), (pdw)(g_cfirst | 2));
+    g_cenc = 0;
+    if (r) { g_err = r; return; }
+    g_wpos = (pdw)(g_wpos + g_cop.len); pdm_u32_add16(&g_pos, g_cop.len);
+}
+/* the stored length of a stream whose plain length is *a (COUNT's result) */
+static void cs_len(struct pd_u32 *a)
+{
+    if (!g_ence || g_cmstm == PDCM_RC4) return;
+    a->lo = (pdw)(a->lo & 0xFFF0u); pdm_u32_add16(a, 32);
+}
+
+/* text copied out of a PLAIN source object (20.22.4.3): verbatim, except that
+ * with an encrypting target every string in it is decoded, enciphered under
+ * the current object's key and written as a hex string. */
+static pdw pw_hv(pdb c)
+{
+    if (c >= '0' && c <= '9') return (pdw)(c - '0');
+    c = (pdb)(c | 32);
+    if (c >= 'a' && c <= 'f') return (pdw)(c - 'a' + 10);
+    return 0xFFFF;
+}
+/* a source string collected whole (<= 256 bytes), decrypted with the source's object key, then written
+ * plain (hex) or enciphered under the output's key */
+static void sb_begin(void) { if (g_sflag) g_sbn = 0; else es_begin(); }
+static void sb_put(pdw c)
+{
+    if (!g_sflag) { es_put(c); return; }
+    if (g_sbn >= (pdw)sizeof g_sb) { g_err = PDE_LIMIT; return; }
+    g_sb[g_sbn++] = (pdb)c;
+}
+static void sb_end(void)
+{
+    pdw k, okl, nr, pad; pdb *ok;
+    if (!g_sflag) { es_end(); return; }
+    if (g_err) return;
+    if (g_sk.on) {
+        if (g_sk.str == PDCM_AESV3) { ok = g_sk.key; okl = 32; }
+        else {
+            pdc_okey(g_sk.key, g_sk.klen, g_snum, g_sgen, (pdw)(g_sk.str == PDCM_AESV2));
+            ok = pdc_ok; okl = (pdw)(g_sk.klen + 5); if (okl > 16) okl = 16;
+        }
+        if (g_sk.str == PDCM_RC4) { pdc_rc4_ks(g_cop.rc4, ok, okl); pdc_rc4(g_cop.rc4, g_sb, g_sbn); }
+        else if (g_sbn < 32 || (g_sbn & 15)) g_sbn = 0;                  /* not a whole IV + block: empty */
+        else {
+            nr = (pdw)(okl == 32 ? 14 : 10);
+            pdc_aes_ks(g_cop.rk, ok, (pdw)(okl == 32 ? 8 : 4));
+            pdc_aes_dks(g_cop.rk, nr);                 /* the DECRYPTION schedule, in place; g_cop.rk is re-keyed before it enciphers again */
+            for (k = 0; k < 16; k++) g_cop.iv[k] = g_sb[k];
+            pdc_cbc_dec(g_cop.rk, nr, g_cop.iv, g_sb + 16, (pdw)((g_sbn - 16) >> 4));
+            pad = g_sb[g_sbn - 1];
+            if (pad < 1 || pad > 16) pad = 0;
+            g_sbn = (pdw)(g_sbn - 16 - pad);
+            for (k = 0; k < g_sbn; k++) g_sb[k] = g_sb[k + 16];
+        }
+    }
+    if (g_encs) {
+        es_begin();
+        for (k = 0; k < g_sbn; k++) es_put((pdw)g_sb[k]);
+        es_end();
+    } else {
+        pb_c('<');
+        for (k = 0; k < g_sbn; k++) pb_hex2((pdw)g_sb[k]);
+        pb_c('>');
+    }
+}
+static void pb_src(const char *s, pdw n)
+{
+    pdw i = 0, a = 0, nest, v, h; pdb c;
+    if (!g_encs && !g_sflag) { pb_n(s, n); return; }
+    while (i < n && !g_err) {
+        c = (pdb)s[i];
+        if (c == '(') {
+            pb_n(s + a, (pdw)(i - a)); i++; nest = 1; sb_begin();
+            while (i < n && nest) {
+                c = (pdb)s[i++];
+                if (c == '\\' && i < n) {
+                    c = (pdb)s[i++];
+                    if (c == 'n') c = 10; else if (c == 'r') c = 13; else if (c == 't') c = 9;
+                    else if (c == 'b') c = 8; else if (c == 'f') c = 12;
+                    else if (c >= '0' && c <= '7') {
+                        v = (pdw)(c - '0');
+                        if (i < n && s[i] >= '0' && s[i] <= '7') { v = (pdw)(v * 8 + (s[i++] - '0'));
+                            if (i < n && s[i] >= '0' && s[i] <= '7') v = (pdw)(v * 8 + (s[i++] - '0')); }
+                        c = (pdb)v;
+                    } else if (c == '\r' || c == '\n') {       /* a line continuation */
+                        if (c == '\r' && i < n && s[i] == '\n') i++;
+                        continue;
+                    }
+                    sb_put(c);
+                } else if (c == '(') { nest++; sb_put(c); }
+                else if (c == ')') { if (--nest) sb_put(c); }
+                else sb_put(c);
+            }
+            sb_end(); a = i;
+        } else if (c == '<' && i + 1 < n && s[i + 1] == '<') i += 2;
+        else if (c == '<') {
+            pb_n(s + a, (pdw)(i - a)); i++; sb_begin(); v = 0xFFFF;
+            while (i < n && s[i] != '>') {
+                h = pw_hv((pdb)s[i++]);
+                if (h == 0xFFFF) continue;
+                if (v == 0xFFFF) v = h; else { sb_put((pdw)(v * 16 + h)); v = 0xFFFF; }
+            }
+            if (v != 0xFFFF) sb_put((pdw)(v * 16));
+            sb_end(); i++; a = i;
+        } else i++;
+    }
+    if (a < n) pb_n(s + a, (pdw)(n - a));
+}
+
 /* a name: '/' then the characters, anything irregular as #xx (PDF 7.3.5) */
 static void pb_name(const char *s)
 {
@@ -201,6 +455,20 @@ static void pb_textstr(const char *t, pdw n)
 {
     pdw i, hi = 0; pdb c; pdw u;
     for (i = 0; i < n; i++) if ((pdb)t[i] >= 0x80) { hi = 1; break; }
+    if (g_encs) {                       /* the same bytes, enciphered (20.22.4.3) */
+        es_begin();
+        if (!hi) for (i = 0; i < n; i++) es_put((pdw)(pdb)t[i]);
+        else {
+            es_put(0xFE); es_put(0xFF);
+            for (i = 0; i < n; i++) {
+                c = (pdb)t[i];
+                u = (c >= 0x80 && c < 0xA0) ? pw_cp1252[c - 0x80] : (pdw)c;
+                es_put((pdw)(u >> 8)); es_put((pdw)(u & 255));
+            }
+        }
+        es_end();
+        return;
+    }
     if (!hi) {
         pb_c('(');
         for (i = 0; i < n; i++) {
@@ -240,6 +508,7 @@ static void pw_tadd(pdw num, pdw gen)
 static void pw_obj(pdw num, pdw gen)
 {
     pb_flush();
+    g_onum = num; g_ogen = gen;
     pw_tadd(num, gen);
     pb_u(num); pb_c(' '); pb_u(gen); pb_s(" obj\n");
 }

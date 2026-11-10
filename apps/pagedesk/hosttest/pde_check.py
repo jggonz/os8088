@@ -23,7 +23,7 @@ import pde_fixtures
 
 PDE = {0: "OK", 1: "SYNTAX", 2: "XREF", 3: "TRUNC", 4: "CYCLE", 5: "DEPTH", 16: "FLATE", 17: "FILTER", 18: "FONT",
        19: "GRAPHICS", 20: "ENCRYPT", 21: "XREFSTM", 22: "SIGNED", 32: "RANGE", 33: "LIMIT", 34: "NOMEM", 48: "IO",
-       53: "NOTFOUND"}
+       23: "PASSWORD", 53: "NOTFOUND", 67: "NEEDMEM"}
 CODE = {v: k for k, v in PDE.items()}
 fails = 0
 
@@ -92,10 +92,12 @@ def pt16(x):
     return int(round(x * 16))
 
 
-def check_good(pde, path, cluster):
+def check_good(pde, path, cluster, opts=(), noflate=False):
+    """noflate: run without the Flate tier, so a FlateDecode content stream is
+    PDE_FLATE (16) and only that is excused"""
     name = os.path.basename(path)
-    rc, out, err = run(pde, "dump", path, ["-c", str(cluster)])
-    tag = "%s c=%d" % (name, cluster)
+    rc, out, err = run(pde, "dump", path, ["-c", str(cluster), *opts])
+    tag = "%s c=%d%s" % (name, cluster, "".join(" " + o for o in opts))
     if rc != 0:
         fail("%s: pde_test rc=%d %s" % (tag, rc, err.strip()))
         return
@@ -147,7 +149,7 @@ def check_good(pde, path, cluster):
         # content streams
         cl = [x for x in lines if x.startswith("CONTENT %d " % i)]
         cobjs = pages[i]["contents"]
-        if cl and cl[0].endswith("rc=16") and name == "FLATE.PDF":
+        if cl and cl[0].endswith("rc=16") and (name == "FLATE.PDF" or noflate):
             continue                                    # FlateDecode is refused on the XT build
         if len(cl) != len(cobjs):
             fail("%s: page %d has %d content streams, qpdf %d (%s)" % (tag, i, len(cl), len(cobjs), cl[:2]))
@@ -166,7 +168,7 @@ def check_good(pde, path, cluster):
                 fail("%s: content %s mismatch: engine %s bytes crc %s, qpdf %d bytes crc %04x" %
                      (tag, cref, m2.group(1), m2.group(2), len(p.stdout), crc16(p.stdout)))
     # every object's extent against qpdf --show-xref
-    rc, out, err = run(pde, "objs", path, ["-c", str(cluster)])
+    rc, out, err = run(pde, "objs", path, ["-c", str(cluster), *opts])
     if rc != 0:
         fail("%s: objs rc=%d %s" % (tag, rc, err.strip()))
     else:
@@ -180,13 +182,80 @@ def check_good(pde, path, cluster):
                 fail("%s: object %s offset %s != xref %d" % (tag, m.group(1), m.group(3), xr[int(m.group(1))]))
             if l.startswith("OBJ") and "rc=" in l and int(l.split()[1]) in xr:
                 fail("%s: %s" % (tag, l))
-    print("ok   %-16s c=%-2d pages=%d" % (name, cluster, npg))
+    print("ok   %-16s c=%-2d pages=%d %s" % (name, cluster, npg, " ".join(opts)))
+
+
+def check_members(pde, path, opts, work):
+    """any PDF (20.22.3.3): every object's RAW_COPY against this file's own
+    reading of what qpdf says the object is. A member's EXACT bytes are its
+    value as the decoded object stream holds it (trailing white space aside)
+    and PLAIN wraps them "n 0 obj\n" ... "\nendobj\n"; an object in no object
+    stream is the file's bytes either way."""
+    name = os.path.basename(path)
+    tag = "%s members%s" % (name, "".join(" " + o for o in opts))
+    d = os.path.join(work, "mem")
+    subprocess.run(["rm", "-rf", d])
+    os.makedirs(d)
+    rc, out, err = run(pde, "members", path, [*opts, "--", d])
+    if rc != 0 or not out.startswith("OPEN ok"):
+        fail("%s: %s %s" % (tag, out[:200], err[-200:]))
+        return
+    x = subprocess.run(["qpdf", "--show-xref", path], capture_output=True, text=True).stdout
+    comp = {int(m.group(1)): (int(m.group(2)), int(m.group(3)))
+            for m in re.finditer(r"^(\d+)/0: compressed; stream = (\d+), index = (\d+)", x, re.M)}
+    unc = {int(m.group(1)): int(m.group(2)) for m in re.finditer(r"^(\d+)/0: uncompressed; offset = (\d+)", x, re.M)}
+    data = open(path, "rb").read()
+    stm = {}
+    seen = 0
+    for l in out.splitlines():
+        m = re.match(r"MEM (\d+) kind=(\d+) pos=([0-9a-f]+) len=(\d+) exact=(-?\d+) plain=(-?\d+)", l)
+        if not m:
+            if l.startswith("MEM") or l.startswith("RAWTO"):
+                fail("%s: %s" % (tag, l))
+            continue
+        n, pos = int(m.group(1)), int(m.group(3), 16)
+        e = open(os.path.join(d, "%d.e" % n), "rb").read()
+        p = open(os.path.join(d, "%d.p" % n), "rb").read()
+        seen += 1
+        if n in comp:
+            s_, i = comp[n]
+            if s_ not in stm:
+                body = subprocess.run(["qpdf", "--show-object=%d" % s_, "--filtered-stream-data", path],
+                                      capture_output=True).stdout
+                dct = subprocess.run(["qpdf", "--show-object=%d" % s_, path], capture_output=True, text=True).stdout
+                first = int(re.search(r"/First (\d+)", dct).group(1))
+                nums = [int(v) for v in body[:first].split()]
+                stm[s_] = (body, first, nums[1::2])
+            body, first, offs = stm[s_]
+            a = first + offs[i]
+            b = first + offs[i + 1] if i + 1 < len(offs) else len(body)
+            val = body[a:b].rstrip(b" \t\r\n\f\0")
+            if pos >> 16 != (0x8000 | s_):
+                fail("%s: object %d position %08x, qpdf says stream %d" % (tag, n, pos, s_))
+            if e != val:
+                fail("%s: object %d EXACT %r != %r" % (tag, n, e[:60], val[:60]))
+            if p != b"%d 0 obj\n" % n + val + b"\nendobj\n":
+                fail("%s: object %d PLAIN %r" % (tag, n, p[:80]))
+        elif n in unc:
+            # PLAIN is EXACT but for an indirect stream /Length, written as its number (20.22.4.2)
+            want = e
+            m = re.search(rb"/Length(\s+)(\d+)\s+(\d+)\s+R", e[:e.find(b"stream")] if b"stream" in e else b"")
+            if m:
+                lo = subprocess.run(["qpdf", "--show-object=%s" % m.group(2).decode(), path], capture_output=True)
+                want = e[:m.start(2)] + lo.stdout.strip() + e[m.end():]
+            if pos != unc[n] or p != want or e != data[pos:pos + len(e)] or not e.endswith(b"endobj"):
+                fail("%s: object %d at %d (qpdf %d): EXACT/PLAIN %d/%d bytes, PLAIN wanted %d" %
+                     (tag, n, pos, unc[n], len(e), len(p), len(want)))
+    want = len([n for n in comp]) + len([n for n in unc if n])
+    if seen < want:
+        fail("%s: %d objects copied, qpdf has %d" % (tag, seen, want))
+    print("ok   %-16s members %d (%d in object streams) %s" % (name, seen, len(comp), " ".join(opts)))
 
 
 # the engine's documented code where it differs from tests/pdfneg/README.TXT
 KNOWN = {
-    "prev_loop.pdf": "XREF",       # SPEC 7.4: a /Prev cycle is PDE_XREF with the revision named
     "zero_pages.pdf": "SYNTAX",   # D10(b): a tree with no pages is PDE_SYNTAX
+    "encrypted.pdf": "PASSWORD",  # 20.22.3.4: /Encrypt is OPEN's crypt step; until 20.22.5 sets a key, PDE_PASSWORD
 }
 
 
@@ -398,7 +467,10 @@ def own(pde, work):
     def res(*a, f="res.pdf"): return lines(pde, a[0], P(f), a[1:])[-1]
     expect(res("res", 0, "Font", "F1") == "RES obj=8,0 kind=7", "res inherited ref: %s" % res("res", 0, "Font", "F1"))
     expect(res("res", 1, "Font", "F9") == "RES obj=9,0 kind=7", "res page-own: %s" % res("res", 1, "Font", "F9"))
-    expect(res("res", 1, "Font", "FD") == "RES obj=0,0 kind=7", "res direct dict: %s" % res("res", 1, "Font", "FD"))
+    d = open(P("res.pdf"), "rb").read()
+    o6 = d.index(b"6 0 obj")
+    want = "RES obj=0,0 kind=7 direct=6,0+%d" % (d.index(b"<< /Type /Font >>", o6) - o6)
+    expect(res("res", 1, "Font", "FD") == want, "res direct dict (20.22.3.8): %s, want %s" % (res("res", 1, "Font", "FD"), want))
     expect(res("res", 1, "Font", "F1") == "RES rc=53", "res: page 1 has its own resources, F1 is not inherited into it")
     expect(res("res", 0, "XObject", "Fm1") == "RES obj=10,0 kind=8", "res form is a stream: %s" % res("res", 0, "XObject", "Fm1"))
     expect(res("res", 0, "XObject", "Nope") == "RES rc=53", "res missing")
@@ -455,15 +527,17 @@ def own(pde, work):
     EXP = {
         "n_len_short": "stream:1", "n_len_long": "stream:1", "n_len_past_eof": "stream:3", "n_len_negative": "stream:1",
         "n_len_real": "stream:1", "n_no_endstream": "stream:1", "n_cr_only": "stream:1", "n_crlf": "ok", "n_huge_length": "stream:1",
-        "n_trunc_xref": "open:3", "n_trunc_in_trailer": "open:3", "n_startxref_inside": "open:2", "n_startxref_zero": "open:2",
-        "n_startxref_huge": "open:2", "n_no_eof_marker": "ok", "n_junk_after_eof": "open:3", "n_header_late": "open:1",
+        # any PDF (20.22.3.5): a cross-reference that does not hold up is rebuilt by a scan
+        "n_trunc_xref": "repaired", "n_trunc_in_trailer": "repaired", "n_startxref_inside": "repaired",
+        "n_startxref_zero": "repaired", "n_startxref_huge": "repaired", "n_no_eof_marker": "ok",
+        "n_junk_after_eof": "repaired", "n_header_late": "open:1",
         "n_header_v20": "ok", "n_header_bad_ver": "open:1", "n_empty": "open:3", "n_cz": "open:1", "n_garbage": "open:1",
-        "n_xref_short_entry": "open:2", "n_xref_badtype": "open:2", "n_xref_gen_big": "open:2", "n_xref_off_eof": "open:2",
-        "n_prev_inside": "open:2", "n_prev_cycle3": "open:2", "n_page_twice": "open:4", "n_no_pages": "open:1",
+        "n_xref_short_entry": "repaired", "n_xref_badtype": "repaired", "n_xref_gen_big": "repaired",
+        "n_xref_off_eof": "repaired", "n_prev_inside": "repaired", "n_prev_cycle3": "repaired", "n_page_twice": "open:4", "n_no_pages": "open:1",
         "n_kid_not_page": "open:1", "n_kid_dangling": "ok", "n_kid_wrong_gen": "open:1", "n_tree_30": "ok", "n_tree_33": "open:5",
-        "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:17", "n_a85": "stream:17", "n_dct": "stream:17",
-        "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
-        "n_encrypt": "open:20", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "open:21",
+        "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:16", "n_a85": "ok", "n_dct": "stream:17",
+        "n_crypt": "ok", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
+        "n_encrypt": "open:23", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "repaired",
         "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "open:33", "n_subsec_65540": "open:33",
     }
     for name, e in sorted(EXP.items()):
@@ -474,6 +548,8 @@ def own(pde, work):
             expect(f0.startswith("OPEN rc=%s " % val), "%s: want OPEN rc=%s, got %s" % (name, val, f0))
             if name == "n_cz":
                 expect("detail=1 " in f0, "n_cz: a packed file is reported with detail 1: %s" % f0)
+        elif kind == "repaired":
+            expect(f0.startswith("OPEN ok") and " flags=128 " in f0, "%s: want a repaired open, got %s" % (name, f0))
         elif kind == "flags":
             expect(f0.startswith("OPEN ok") and ("flags=%s " % val) in f0, "%s: want flags=%s, got %s" % (name, val, f0))
         else:
@@ -512,9 +588,10 @@ def own(pde, work):
     l = lines(pde, "fpchange", P("n_good.pdf"), (P("n_good.pdf"),))
     fp = [x for x in l if x.startswith("FP before")]
     expect(fp and fp[0].endswith(" SAME"), "fingerprint of the same bytes: %s" % fp)
-    # verify-eng: err_detail names the revision whose entry is wrong (0 = newest)
+    # any PDF (20.22.3.5): a bad entry no longer refuses - the file is scanned and
+    # the bad entry's object found where it really is
     f0 = first_of(pde, P("n_xref_off_eof.pdf"), ())
-    expect(f0.startswith("OPEN rc=2 ") and " detail=0 " in f0, "a bad entry in the only revision is detail 0: %s" % f0)
+    expect(f0.startswith("OPEN ok") and " flags=128 " in f0, "a bad entry is repaired: %s" % f0)
     # claims
     expect(first_of(pde, P("n_good.pdf"), ("-k", "4")).startswith("OPEN rc=34"), "a 4 KiB cache is PDE_NOMEM")
     for c in (1, 2, 4, 8, 16, 32, 64):
@@ -602,6 +679,31 @@ def main():
                                os.path.join(fix, "..", "tests", "pdfneg", "README.TXT")) if os.path.exists(r)), None)
         if rd:
             check_neg(pde, os.path.join(fix, "neg"), rd)
+    # any PDF (20.22.3): tools/os88pdfx_eng.py's fixtures, with and without the Flate tier
+    eng = os.path.join("tests", "pdfany", "eng")
+    if os.path.isdir(eng):
+        for f in sorted(os.listdir(eng)):
+            if f.endswith(".PDF"):
+                pth = os.path.join(eng, f)
+                for c in (1, 8):
+                    check_good(pde, pth, c, ("-F", "2"))
+                check_good(pde, pth, 2, (), noflate=True)
+                check_members(pde, pth, ("-F", "2"), work)
+                check_members(pde, pth, (), work)
+                if f == "XTGUI_OZ.PDF":                 # 20.22.3.9: INIT cut to one Flate slot between streams
+                    l = [x for x in lines(pde, "flshrink", pth, (42, 43), ("-F", "2")) if not x.startswith("NEEDMEM")]
+                    want = [x for x in lines(pde, "strm", pth, (42, 0), ("-F", "2")) if x.startswith("STRM")]
+                    expect(l[1:] == ["FLSHRINK busy ax=65 cf=0", "FLSHRINK taken ax=1 cf=0"] + want,
+                           "%s: flshrink %s, strm %s" % (f, l, want))
+                if f.startswith("RESDI"):               # 20.22.3.8: the direct value, where RAW_COPY puts it
+                    l = lines(pde, "res", pth, (0, "ExtGState", "GS1"))[-1]
+                    m = re.match(r"RES obj=0,0 kind=7 direct=(\d+),0\+(\d+)$", l)
+                    mem = os.path.join(work, "mem")
+                    e = open(os.path.join(mem, "%s.e" % m.group(1)), "rb").read() if m else b""
+                    expect(m and re.match(rb"<<\s*/CA 0\.5\s*/ca 0\.25\s*>>", e[int(m.group(2)):]),
+                           "%s: RES_LOOKUP direct %s, bytes there %r" % (f, l, e[int(m.group(2)):][:30] if m else b""))
+                    expect(lines(pde, "res", pth, (0, "ExtGState", "GS2"))[-1] == "RES obj=5,0 kind=7",
+                           "%s: a referenced ExtGState is not PDRL_DIRECT" % f)
     print("FAILURES:", fails)
     sys.exit(1 if fails else 0)
 

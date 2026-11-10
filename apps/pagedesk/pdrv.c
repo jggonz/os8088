@@ -158,6 +158,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+#ifdef PDR_X8
+    if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+#endif
     pdr_ip.nc = ncomp; pdr_ip.bpc = bpc;
     pdr_ip.lseg = (flags & 8) ? g_xcseg : 0; pdr_ip.loff = (pdw)r16(b + 24);
     pdr_ip.lflags = (flags & 8) ? b[26] : (ncomp == 4);
@@ -198,7 +201,10 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-            pdr_imgrow();
+#ifdef PDR_X8
+            if (g_xs) x8_imgrow(y); else
+#endif
+            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
         }
     }
 }
@@ -238,7 +244,7 @@ static pdw x_resolve(void)
     pdw id, w = x_pend & ~x_ref;
     if ((g_xrm & IK_BOTH) == IK_BOTH) ik_size();
     if (x_mwant && !(x_ref & XR_MEM)) {
-        if (x_asks < PDR_XASKS) return x_answer((pdw)(0x80 | x_mwant), x_mwant, x_mkb, PDR_INTERP);
+        if (x_asks < PDR_XASKS) return x_answer(x_mwant, (pdw)(x_mwant & 0x7F), x_mkb, PDR_INTERP);
         x_ref |= XR_MEM;
     }
     for (id = PDX_COUNT - 1; id; id--) if (w & (1u << id)) {
@@ -252,7 +258,12 @@ static void x_answered(void)
 {
     pdw a = x_ask;
     x_ask = 0; x_mwant = 0;
-    if (a & 0x80) { if (!(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM; }
+    /* a refused XC or X8 refuses regions for the page view; the glyph claim (fonts, 20.22.8) is refused
+     * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
+    if (a & 0x80) {
+        if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
+        else if (a != (0x80 | PDMEM_SLOT) && !(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM;
+    }
     else if (a && !x_have(a)) x_refuse(a);
 }
 /* the stash (20.22.7.10): the resident decoder `d` decodes, into the XC above
@@ -383,6 +394,7 @@ static pdw pass_begin(void)
     g_iknd[0] = g_iknd[1] = 0; g_ikb = 0;
     g_passes++;
     gs_init();
+    xb_pass();
     g_ph = PDR_INTERP;
     return interp_start(g_rq.page);
 }
@@ -433,6 +445,7 @@ static pdw verb_begin(void)
     g_pgx0 = g_rq.view.ox; g_pgy0 = g_rq.view.oy;
     g_pgx1 = (pdi)(g_pgx0 + vb_w - 1); g_pgy1 = (pdi)(g_pgy0 + vb_h - 1);
     if (!band_geometry()) return PDE_NOMEM;
+    x8_view();
     view_base(&g_rq.view);
     g_nb = band_count();
     g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
@@ -483,6 +496,7 @@ static pdw verb_step(void)
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
         if (done) {
             close_streams();
+            xb_needmem();                                   /* blend: PDX8 for a transparent page (20.22.10.2) */
             /* the extension cache filled: empty it and run the pass again, once a view */
             if (g_xcfull && !g_xcflush) {
                 g_xcflush = 1; g_xctop = 0;
@@ -745,14 +759,15 @@ static pdw verb_init(pdw xbseg)
                 g_xclost = 1; g_ikb = 0;
                 if (!g_xcseg) x_ref |= XR_MEM;
             }
+            x8_init(g_ini.x8_seg, g_ini.x8_kb);
             /* the glyph claim moved or grew (PDXF's GLYPH grant, a moved X):
-             * its row buffer and caches go, the pass runs again */
+             * fonts' synthetic blocks follow it (syn_adopt), and the row buffer
+             * and the caches start again from the new claim, which need not
+             * hold the old bytes; the pass runs again */
             o = g_ini.glyph_seg ? (g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb) : 0;
-            if (g_ini.glyph_seg != g_gseg || o != g_gkb) {
-                g_gseg = g_ini.glyph_seg; g_gkb = o;
-                glyph_fresh();
-                g_xclost = 1;
-            }
+            i = g_ini.glyph_seg != g_gseg || o != g_gkb;
+            syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb);
+            if (i) { glyph_fresh(); g_xclost = 1; }
             return PDE_OK;
         }
     }
@@ -778,6 +793,7 @@ static pdw verb_init(pdw xbseg)
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
+    x8_init(g_ini.x8_seg, g_ini.x8_kb);
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;

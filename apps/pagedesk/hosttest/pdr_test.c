@@ -25,6 +25,7 @@ extern pdw pd_host_ds;
 extern unsigned char pdrh_fb[];
 extern int pdrh_fbw, pdrh_fbh, pdrh_blits;
 extern int pdrh_open(const char *path);
+void pdb_dump_write(const char *path, int w, int h);
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 /* every verb is called through here: PDREND must hand the working folder back
  * where it found it (the document's), and no read by name may have been made
@@ -48,6 +49,7 @@ static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
 #define SEG_BANK 0x6000
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
+#define SEG_X8   0xB000          /* the 8-bit band, layers and mask (PDMEM_X8) */
 #define SEG_EDIT 0x9000          /* the edit store (PAGEDESK-SPEC 13.1.1) when PDR_EDITS names a file */
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 pdw pdrh_xbseg(void) { return SEG_XB; }
@@ -91,7 +93,8 @@ static int send_fontbank(void)
  * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
  * way the verb is called again. */
 #define SEG_XC   0xA000
-#define SEG_GLY2 0xC000          /* PDR_GLYMOVE's new glyph region */
+#define SEG_GLY2 0xC000             /* where PDR_GLYPHGROW (fonts, 20.22.8) and PDR_GLYMOVE (20.22.7.11) move the glyph claim */
+static unsigned g_glyold;           /* the moved claim's old size: its old place must stay 0xCD */
 extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
 static struct pdxb_init g_lastinit;
 static int g_loads, g_memasks;
@@ -132,6 +135,15 @@ static int ladder(pdw e)
         if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
         return 1;
     }
+    if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_X8) {      /* blend: the region (PDX8 is linked in) */
+        memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+        g_memasks++;
+        g_lastinit.x8_seg = SEG_X8; g_lastinit.x8_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+        memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+        if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+        memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        return 1;
+    }
     if (e == PDE_NEEDMEM) {
         g_memasks++;
         if (g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 memory answers\n"); exit(9); }
@@ -146,6 +158,18 @@ static int ladder(pdw e)
             if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
             memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
         }
+        /* fonts (20.22.8): PDR_GLYPHGROW regrows the glyph claim to what PDREND asked AND MOVES it, as
+         * OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
+        if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY) {
+            unsigned old = (unsigned)g_lastinit.glyph_kb << 10;
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            memcpy(MEM(SEG_GLY2, 0), MEM(SEG_GLY, 0), old);
+            memset(MEM(SEG_GLY, 0), 0xCD, old); g_glyold = old;
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
         return 1;
     }
     return 0;
@@ -156,6 +180,9 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memcpy(keep, MEM(SEG_XB, 0), sizeof keep);
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
+    in.eng_seg = 0xF000;    /* never called on the host (pdr_host.c twins PDENG), but nonzero as on the
+                             * machine: verb_init reads 0 as "never INITed" and a NEEDMEM's re-INIT would
+                             * otherwise start a new document instead of keeping the page view */
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
@@ -164,6 +191,9 @@ static void do_init(int bpp, int bankkb, int dlkb)
      * for the FIRST INIT, so without it a re-INIT after PDE_NEEDMEM restarted the
      * view instead of adding the region (the host's pdr_eng never reads it) */
     in.eng_off = 0x0008; in.eng_seg = 0x9000;
+#ifdef PDR_X8
+    if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 60; }          /* blend (20.22.10.2) */
+#endif
     if (getenv("PDR_XCKB0")) { in.xc_seg = SEG_XC; in.xc_kb = (pdw)atoi(getenv("PDR_XCKB0")); }   /* the claim from the start */
     g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
@@ -191,6 +221,7 @@ static int canary_check(void)
 {
     int i, j, bad = 0;
     for (i = 0; i < 5; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (j = 0; j < (int)g_glyold; j++) if (MEM(SEG_GLY, 0)[j] != 0xCD) { fprintf(stderr, "CANARY: the moved glyph claim's old place written at +%d\n", j); bad = 1; break; }
     return bad;
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)
@@ -294,7 +325,7 @@ int main(int argc, char **argv)
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
-        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
+        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (getenv("PDB_TRACE")) fprintf(stderr, "step e=%u cx=%u dx=%u\n", e, pdr_out_cx, pdr_out_dx); if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
         if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
@@ -302,6 +333,9 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+#ifdef PDR_X8
+        if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
+#endif
         if (seqp) { fflush(stdout); goto seq_next; }
         return 0;
     }

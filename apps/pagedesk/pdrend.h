@@ -81,6 +81,16 @@ extern struct pdr_ip pdr_ip;
 typedef char pdr_ip_size[sizeof(struct pdr_ip) == 42 ? 1 : -1];
 void pdr_imgrow(void);
 
+/* the quantiser (pdrx8.inc, 20.22.10): n pixels of 8-bit grey at sseg:soff into a
+ * 4bpp (bpp 4) or 1bpp band row at dseg:doff, which is the byte holding pixel x0.
+ * 4bpp: the seven-level checker of 20.19.2, `par` = (x0 + y - page_y0) & 1; 1bpp: the
+ * 4x4 Bayer, `par` = (y & 3) << 2. A pixel outside [x0, x0+n) in a byte it shares keeps
+ * its bits. The assembly's offsets are pdrx8.inc's XQ_*.                                 */
+struct pdr_xq { pdw sseg, soff, dseg, doff, x0, n, par, bpp; };
+extern struct pdr_xq pdr_xq;
+typedef char pdr_xq_size[sizeof(struct pdr_xq) == 16 ? 1 : -1];
+void pdr_x8quant(void);
+
 /* globals the asm shares */
 extern pdw pdr_eng_ax, pdr_eng_dx;
 extern pdw pdr_eng_off, pdr_eng_seg;
@@ -114,8 +124,59 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_FILL    3
 #define DLR_GLYPHS  4
 #define DLR_IMAGE   5
+#define DLR_XSTATE  6           /* transparency of the marks that follow (20.22.10.3) */
+#define DLR_GROUP   7           /* a transparency group begins or ends (aux 0x80)     */
+#define DLR_MASKB   8           /* a soft-mask definition: len spans to its MASKE     */
+#define DLR_MASKE   9
 #define DLH         8           /* header: type aux len y0 y1                 */
 #define DLI_BODY    28          /* DLR_IMAGE's body (20.3.2, 20.22.7); inline rows follow */
+
+/* gfx (PAGEDESK-SPEC 20.22.9): a device colour operator ends a non-device colour space (the GS.pad_ nibbles) */
+#ifndef XG_DEVCOL
+#define XG_DEVCOL(st) (GS.pad_ &= (pdb)((st) ? 0x0F : 0xF0))
+#endif
+/* ---- transparency (PAGEDESK-SPEC 20.22.10); the hooks are pdrx8.c / pdrxb.c, the compositor PDX8 ---- */
+#ifdef PDR_X8   /* the transparency build: the host harness's, and the target's once the Makefile passes it */
+#ifdef PD_HOST
+extern pdw pdx8_verb(pdw verb, pdw bx, pdw cx, pdw dx);
+#define x8_call(v, b, c, d)  pdx8_verb(v, b, c, d)
+#else
+pdw pdr_x8far(pdw verb, pdw bx, pdw cx, pdw dx);    /* pdrx8h.inc: AX; CF, CX, DX in x8_cf, x8_ocx, x8_odx */
+void pdr_x8bind(pdw seg);
+void pdr_x8pack(void);                              /* the band geometry into XB as pdxb_x8band */                           /* the door's code selector, once a region is held */
+#define x8_call(v, b, c, d)  pdr_x8far(v, b, c, d)
+#endif
+extern pdw x8_cf, x8_ocx, x8_odx;
+#define x8_span(y, a, b)     ((void)x8_call(PDV_X8_SPAN, (pdw)(y), (pdw)(a), (pdw)(b)))
+static void x8_imgrow(pdi y);                       /* PDX8's twin of pdr_imgrow (reads pdr_ip) */
+static void x8_imgset(const pdb *b, pdw flags, pdi xl, pdi yt, pdi wq, pdi hq, pdi x0, pdi x1, pdi ry0, pdi ry1);
+static pdw g_xs;                                    /* composing an 8-bit strip                */
+static void xb_state(pdw kind);                     /* emit_state's hook: the XSTATE record    */
+static void xb_mark(pdi y0, pdi y1);                /* dl_put's hook: rows a transparent mark touches */
+static void xb_pass(void);                          /* pass_begin: empty the tuple pool        */
+static pdw g_x8rdy;                                 /* PDX8 is in the region and has been told */
+static pdw g_x8any;                                 /* a transparent mark in this pass         */
+static void x8_bits(pdw v);                         /* X8F_* into the incomplete bits          */
+static pdw  xb_gs(void);                            /* exec_op's gs arm                        */
+static void xb_group_begin(pdw obj, pdw gen);       /* do_form's tail                          */
+static void xb_group_end(void);                     /* frame_end's form branch                 */
+static void xb_needmem(void);                       /* asks for the region when the page needs it */
+static void x8_init(pdw seg, pdw kb);               /* verb_init: take the region              */
+#define XB_IMAGE_MASK(obj, gen, kind) do { if ((kind) == 128) inc_note(PDF_INC_TRANSP, "colour key mask"); else g_x8any = 1; } while (0)
+static void xb_rows(pdi y0, pdi y1);                /* mark rows for the 8-bit path            */
+static void x8_view(void);                          /* verb_begin: size the planes             */
+#else
+#define xb_state(k)          ((void)0)
+#define xb_mark(a, b)        ((void)0)
+#define xb_pass()            ((void)0)
+#define xb_gs()              ((void)0)
+#define xb_group_begin(o, g) ((void)0)
+#define xb_group_end()       ((void)0)
+#define xb_needmem()         ((void)0)
+#define x8_init(s, k)        ((void)0)
+#define x8_view()            ((void)0)
+#define xb_rows(a, b)        ((void)0)
+#endif
 
 /* ---- modes -------------------------------------------------------------- */
 #define PDR_IDLE    0

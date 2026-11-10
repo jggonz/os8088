@@ -5,7 +5,7 @@
 
 Each PageDesk component carries a host harness behind a phony make target -
 `pdeng`, `pdefuzz`, `pdflate`, `pdflatefuzz`, `pdrend`, `pdrend-fuzz`,
-`pdrend-real`, `pdrend-annot`, `pdwrt`, `pdwrt-real`, `pdnav`, `pdnotes`,
+`pdrend-real`, `pdrend-annot`, `pdwrt`, `pdwrt-real`, `pdwrt-enc`, `pdnav`, `pdnotes`,
 `pdmathtest`, `pdabi-check`, `pdfonts` - and until this file none of them was
 a row, so nothing but the agent who wrote one ever ran it. Each target builds
 its host binary (cc, sometimes AddressSanitizer + UBSan) and runs its checker
@@ -35,7 +35,7 @@ import os88build                                            # noqa: E402
 
 TARGETS = ("pdeng", "pdefuzz", "pdflate", "pdflatefuzz", "pdrend",
            "pdrend-fuzz", "pdrend-real", "pdrend-annot", "pdwrt",
-           "pdwrt-real", "pdnav", "pdnotes", "pdmathtest", "pdabi-check",
+           "pdwrt-real", "pdwrt-enc", "pdnav", "pdnotes", "pdmathtest", "pdabi-check",
            "pdfonts")
 # A target whose host run hangs off a STAMP runs nothing when the stamp is
 # fresh, and a row that ran nothing would read as a pass: the stamp goes first

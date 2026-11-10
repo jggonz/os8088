@@ -34,7 +34,11 @@ disk in four geometries from `make pagedeskdisk` (`build/pagedesk.img` at
 1.44 MB, `pagedesk720.img`, `pagedesk120.img` at 1.2 MB, `pagedesk360.img`).
 The disk's root holds the program, `README.TXT`, `PDFONTS.TXT` (the font
 licence), the eight sample PDFs and, on every geometry but 360 KB,
-`PDFONTX.RES` (the other font sizes, optional). It is also in the everything
+`PDFONTX.RES` (the other font sizes, optional). At 360 KB the program needs
+most of a disk, so it is a PAIR: `pagedesk360.img` holds the program and the
+two samples the empty window opens (`HELLO.PDF`, `XTGUIDE.PDF`), and
+**`pagedesk360b.img`** every sample; put the second disk in a drive and open
+from it with File > Open. It is also in the everything
 set (`make allapps`) and on the live media.
 
 To open a document:
@@ -348,7 +352,7 @@ The offer is **host-checked only**; it was not seen on the glass.
 
 ## 9. Preferences
 
-View > Preferences... opens a pop-up on every layout (it fits compact's 136
+View > Preferences... opens a pop-up on every layout (eight text rows, which fit compact's 136
 pixels). Rows:
 
 | row | values |
@@ -358,10 +362,11 @@ pixels). Rows:
 | Mid panels | None, Pages, Notes, Both |
 | Mono marks | Line+frame, Line, Frame, Hatch |
 | Flate cache | Auto, Off (applies at the next open) |
+| Module cache | Auto, Off: keep the decoder modules' images in XMS or EMS when the machine has it, so a swap is a copy and not a disk read (applies at the next open) |
 
 Up/Down or Tab select a row, Left/Right/Enter/Space change it, a click on a
-row advances it, Esc or a click outside closes and saves. Settings live in ten
-bytes at `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched from
+row advances it, Esc or a click outside closes and saves. Settings live in eleven
+bytes (format version 2; a version-1 file of ten still loads, with the module cache on Auto) at `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched from
 and are read at the first document open or the first time the dialog paints,
 so an empty window shows the defaults. A damaged file is ignored whole. When
 the disk cannot be written (no APPDATA folder, write-protected, full) the choices
@@ -547,8 +552,10 @@ it.
 | `PDE_FILTER` | It uses a stream filter PageDesk cannot decode. | LZW, ASCII85, JPEG, CCITT, JBIG2, JPX, a crypt filter, or a fifth stage. Prepare on a PC. |
 | `PDE_FONT` | It uses a font PageDesk cannot draw. | reserved for a font with nothing to substitute; normal unsupported fonts draw with a substitute and say Incomplete. |
 | `PDE_GRAPHICS` | It uses graphics outside the XT profile. | shadings, patterns and similar; normally shown as Incomplete rendering. Prepare with `--raster`. |
-| `PDE_ENCRYPT` | The file is encrypted; PageDesk cannot open it. | decrypt on a PC with `os88pdprep.py --password`. |
-| `PDE_XREFSTM` | It uses cross-reference streams (PDF 1.5+ packing). | the commonest modern layout. Prepare with `os88pdprep.py`. |
+| `PDE_PASSWORD` | A password is needed. | the file is encrypted and the empty password did not open it. PageDesk asks for the password in a small prompt (Enter tries it, Esc cancels the open, a wrong one says so and asks again). |
+| `PDE_ENCRYPT` | Its encryption handler is not supported. | a security handler other than the standard one (a public-key file, say). |
+| `PDE_XREFSTM` | Its cross-reference stream is damaged. | the stream that replaces the xref table cannot be read. |
+| `PDE_NOSLOT` | Not enough memory. Close a window and try again. | no RAM for a decoder module's slot; the page is drawn without that feature and says Incomplete. |
 | `PDE_SIGNED` | The file is signed: it opens read-only. | a signature or `/Perms`: you can read it, search it and copy from it; annotation tools are greyed. |
 | `PDE_RANGE` | A page or number is outside PageDesk's range. | a page box beyond +/-2,047 points, a zero-area box, a rotation that is not a multiple of 90, or in Insert, a page past the other file's end ("no such page."). |
 | `PDE_LIMIT` | The file exceeds one of PageDesk's limits. | more than 1,024 pages, more than 8 revisions, an object number above 65,535, a file of 2 GiB, more than 256 xref subsections across the chain, one decoded stream over 1 MiB, or an Insert of a file with forms or scripts ("forms or scripts."). |

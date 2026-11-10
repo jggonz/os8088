@@ -53,7 +53,10 @@ then costs:
                 thunk's call to its slot 2, the slot's call to pdk_up 2,
                 pdk_up's one push 2 (deepstk)
   far edges     PDREND _pdr_eng and PDWRT _pdw_engcall -> PDENG's door;
-                the primary's pdu_mcall -> the three doors; the C overlay's
+                the primary's pdu_mcall -> the three doors and every
+                occupant's; PDREND's slot call (_pdr_xfar) -> every
+                occupant's door, its x8 call -> PDX8's; an occupant's or
+                PDX8's far call -> PDENG's door (20.22.2.4); the C overlay's
                 cc_ovm_* / cc_ovv_* vectors -> the function they name, + OVL
   indirect      `call ax` / `call [bx]` (os88ui.inc's handlers) can't be
                 followed. They are listed, never silently zero.
@@ -104,13 +107,38 @@ SWAP = 8                    # deepstk: on the UI stack under pdu_mcall's banked
                             # SP - the deep SS:SP 4 + the far return 4
 OVL = 8                     # cc_ovthunk / cc_ovmthunk's stash path + far frame
 
+# THE SLOT'S OCCUPANTS (PAGEDESK-SPEC 20.22.2.4) and PDX8 (20.22.10.11): one
+# segment each. An occupant is entered by the primary's pdu_mcall (PDV_X_INIT,
+# PDV_KEY_*) and by PDREND's far call through the door PDV_REND_SLOT gave it;
+# PDX8 by PDREND's far call into the X8 region. Each calls PDENG alone, so
+# every far call one of them makes is charged as PDENG's door. Source, door
+# and dispatcher as each owner named them; a part whose source is not in the
+# tree yet (the stand-in, stubs/pdstub.asm) has nothing to charge and is left
+# out.
+OCCUPANTS = [
+    # name   door          dispatcher      entered from
+    ("pdxk", "pdk_entry", "_pdk_verb", "slot"),
+    ("pdxg", "pdx_entry", "_pdx_verb", "slot"),
+    ("pdxf", "pdxf_entry", "_pdxf_verb", "slot"),
+    ("pdxi", "pdi_entry", "_pdi_verb", "slot"),
+    ("pdxj", "pdxj_entry", "_pdxj_verb", "slot"),
+    ("pdx8", "x8_entry", "_pdx8_verb", "x8"),
+]
+
+
+def occupant_segments(root=ROOT, rows=OCCUPANTS):
+    return [(n.upper(), "apps/pagedesk/%s.asm" % n, door, disp)
+            for n, door, disp, _ in rows
+            if os.path.isfile(os.path.join(root, "apps/pagedesk/%s.asm" % n))]
+
+
 # segment: top source, door label, dispatcher (per-verb chains)
 SEGMENTS = [
     ("PRIMARY", "apps/pagedesk/pagedesk.asm", None, None),
     ("PDENG", "apps/pagedesk/pdeng.asm", "pde_entry", "_pde_verb"),
     ("PDREND", "apps/pagedesk/pdrend.asm", "pdr_entry", "_pdr_verb"),
     ("PDWRT", "apps/pagedesk/pdwrt.asm", "pdw_entry", "_pdw_verb"),
-]
+] + occupant_segments()
 # far edges: (segment, function, operand) -> list of (segment, label)
 FAR_EDGES = {
     ("PRIMARY", "_pdu_mcall", "[si]"): [("PDENG", "pde_entry"), ("PDREND", "pdr_entry"),
@@ -119,6 +147,10 @@ FAR_EDGES = {
     ("PDWRT", "_pdw_engcall", "[_pdw_engvec]"): [("PDENG", "pde_entry")],
 }
 MCALL = ("PRIMARY", "_pdu_mcall")
+# PDREND's far call into the slot's occupant (rcore, pdrprim.inc; plus a
+# "slot"-named one for a synthetic tree), and into PDX8: any far call whose
+# operand names x8 (blend, pdrx8.inc: PDREND far-calls 8:[x8_seg:10])
+PDREND_SLOT_CALLS = {("_pdr_xfar", "[_pdr_x_off]"), ("_pdr_verb", "[_pdr_slot_off]")}
 
 # BOUNDED RECURSION ALREADY IN THE TREE, each with its bound, its owner and
 # the file. D21 forbids recursion, and this list is a RATCHET in the shape of
@@ -495,6 +527,10 @@ class Graph:
                 scan(f)
                 self.funcs[(seg, name)] = f
             self.missing[seg] = [m for m in src.missing if m.endswith(".gen.asm")]
+        self.occ = [(seg, door) for seg, top, door, disp in segments
+                    if seg.startswith("PDX") and seg != "PDX8" and door]
+        self.x8 = [(seg, door) for seg, top, door, disp in segments if seg == "PDX8"]
+        self.occnames = {seg for seg, _ in self.occ + self.x8}
         self.memo = {}
 
     def callee(self, seg, f, kind, t):
@@ -506,7 +542,16 @@ class Graph:
         if kind == "far":
             key = (seg, f.name, t)
             if key in FAR_EDGES:
-                return [(4, e) for e in FAR_EDGES[key]]
+                e = list(FAR_EDGES[key])
+                if (seg, f.name) == MCALL:      # PDV_X_INIT, PDV_KEY_*
+                    e += self.occ
+                return [(4, x) for x in e]
+            if seg == "PDREND" and (f.name, t) in PDREND_SLOT_CALLS and self.occ:
+                return [(4, x) for x in self.occ]
+            if seg == "PDREND" and "x8" in t.lower() and self.x8:
+                return [(4, x) for x in self.x8]
+            if seg in self.occnames:            # an occupant reads a stream
+                return [(4, ("PDENG", "pde_entry"))]
             m = re.match(r'^\[cc_ov[mv]_(\w+)\](#mm)?$', t)
             if m:
                 return [(4 + OVL, (seg, "_" + m.group(1)))]

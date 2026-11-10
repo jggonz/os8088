@@ -119,18 +119,32 @@ static void pdu_job_shift(int dy)
     }
 }
 
+static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
+static unsigned char pdu_pfl;           /* 20.22.4.5: the pre-flight - 1 the next
+                                         * file owed, 2 opening it */
+static unsigned char pdu_pfk;           /* its slot; PDM_NSLOT = the document */
+static unsigned char pdu_pfm;           /* the foreign slots the map names */
+
 /* Escape and every way out: stop what runs, release what it held */
 static void pdu_job_abort(void)
 {
     int reopen;
     reopen = 0;
+    if (pdu_opauth == 1 && pdu_au_mode) {   /* ui: an open ask goes - the */
+        ovl_au_cancel();                /* leaf the shut path uses (D21); the */
+        pdu_pop_close_soon();           /* ask IS Preferences' second face */
+    }
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
         pdu_doc_release();
         pdu_doc = D_EMPTY;
     } else if (pdu_job == J_SAVE) {
-        pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        if (pdu_pfl)                    /* the pre-flight's file (PDENG */
+            pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);   /* owes the document) */
+        else
+            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        pdu_pfl = 0;
         pdu_wrt_out();
         reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;          /* pages */
     } else if (pdu_job >= J_FIND) {     /* nav: find, text pass, thumbnail */
@@ -146,6 +160,7 @@ static void pdu_job_abort(void)
 
 static void pdu_job_start(int kind)
 {
+    pdu_lad_begin();                    /* 20.22.2.6: a page view's counts */
     pdu_job = kind;
     pdu_jcancel = 0;
     pdu_jslices = 0;
@@ -224,6 +239,7 @@ static void pdu_open_begin(const char *name)
     os88_strcpy(pdu_xopen.name, name, sizeof(pdu_xopen.name));
     pdu_doc = D_OPENING;
     pdu_opfirst = 1;
+    pdu_opauth = 0;
     pdu_say2("Opening ", name);
     pdu_dirty_all = 1;
     pdu_job_start(J_OPEN);
@@ -288,15 +304,37 @@ static void pdu_open_step(void)
         pdu_open_first();
         return;
     }
+    if (pdu_opauth == 1) {              /* the key, ui's prompt (20.22.2.6) */
+        r = ovl_au_slice(0);
+        if (r == PDE_BUSY)
+            return;
+        pdu_opauth = 2;                 /* once an open */
+        pdu_mcf = r != 0;
+        if (r)
+            goto failed;
+    }
     pd_fcopy_out(&pdu_xopen, pdu_xb, 0, sizeof(pdu_xopen));
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_OPEN, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
+    r = pdu_ladck(PDU_M_ENG, r);        /* a region: then OPEN again */
+    if (r == 0xFFFF)
+        return;
+    if (pdu_mcf && r == PDE_PASSWORD && !pdu_opauth) {
+        pdu_opauth = 1;                 /* OPEN paused at its state 7 (20.22.5) */
+        if ((r = ovl_au_slice(1)) == PDE_BUSY)
+            return;
+        pdu_opauth = 2;
+        pdu_mcf = r != 0;
+        if (!r)
+            return;                     /* no question, no prompt: OPEN again */
+    }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */
             pdu_progress("Opening ", pdu_name);
         return;
     }
+failed:
     pdu_job = J_NONE;
     if (pdu_mcf || pdu_xopen.npages == 0
         || (pdu_reopening && pdu_xopen.npages != pdu_srcn)) {       /* pages */
@@ -315,6 +353,27 @@ static void pdu_open_step(void)
         pdu_kick();
         return;
     }
+    if (pdu_socc == PDX_KEY)            /* the key is set: PDXK's RAM back */
+        pdu_slot_free();
+#ifdef PDU_LADTEST
+    {   /* A DEVELOPER'S LOOK at 20.22.2 (define PDU_LADTEST in pagedesk.c and
+         * pagedesk.asm): every occupant in and out of the slot at each open,
+         * then a toast - loads off the disk, copies back from the cache, the
+         * cache's kind (1 XMS, 2 EMS), the last answer, the largest free KiB */
+        static char m[28];
+        unsigned o, q = 0;
+        for (o = 1; o <= PDU_OCC_WRT && !q; o++)
+            q = pdu_slot_load(o);
+        pdu_slot_free();
+        m[0] = 0;
+        pdu_cat(m, "d", sizeof(m)); os88_utoa(pdu_tdisk, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " c", sizeof(m)); os88_utoa(pdu_tcache, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " x", sizeof(m)); os88_utoa(pdu_ckind, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " r", sizeof(m)); os88_utoa(q, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " f", sizeof(m)); os88_utoa(os88_mem_largest_p() >> 6, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        os88_toast(m, 0);
+    }
+#endif
     pdu_npages = pdu_xopen.npages;
     pdu_srcn = pdu_npages;              /* pages */
     pdu_rdonly = (pdu_xopen.flags & PDO_READONLY) != 0;
@@ -431,6 +490,8 @@ static void pdu_render_step(void)
     unsigned r;
     r = pdu_mcall(PDU_M_REND, PDV_REND_STEP, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: STEP again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
         pdu_progress("Drawing page ", "");
         return;
@@ -472,25 +533,25 @@ static void pdu_render_step(void)
  * a PIT clock since boot was never set, and a date of 1980 is a fact the
  * file would carry as if it were true. dst holds at least 17 bytes. */
 static unsigned pdu_clkw[4];
-static void pdu_d2(char *p, unsigned v)
+static void ovl_d2(char *p, unsigned v)
 {
     p[0] = (char)('0' + v / 10);
     p[1] = (char)('0' + v % 10);
 }
-static void pdu_datestamp(char *dst)
+static void ovl_datestamp(char *dst)   /* save only: the overlay's */
 {
     dst[0] = 0;
     if (!pdu_clk(pdu_clkw))
         return;
     dst[0] = 'D';
     dst[1] = ':';
-    pdu_d2(dst + 2, pdu_clkw[0] / 100);
-    pdu_d2(dst + 4, pdu_clkw[0] % 100);
-    pdu_d2(dst + 6, pdu_clkw[1] >> 8);
-    pdu_d2(dst + 8, pdu_clkw[1] & 0xFF);
-    pdu_d2(dst + 10, pdu_clkw[2] >> 8);
-    pdu_d2(dst + 12, pdu_clkw[2] & 0xFF);
-    pdu_d2(dst + 14, pdu_clkw[3] & 0xFF);
+    ovl_d2(dst + 2, pdu_clkw[0] / 100);
+    ovl_d2(dst + 4, pdu_clkw[0] % 100);
+    ovl_d2(dst + 6, pdu_clkw[1] >> 8);
+    ovl_d2(dst + 8, pdu_clkw[1] & 0xFF);
+    ovl_d2(dst + 10, pdu_clkw[2] >> 8);
+    ovl_d2(dst + 12, pdu_clkw[2] & 0xFF);
+    ovl_d2(dst + 14, pdu_clkw[3] & 0xFF);
     dst[16] = 0;
 }
 
@@ -518,12 +579,15 @@ static void pdu_reopen_begin(void)
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
     os88_strcpy(pdu_xopen.name, pdu_name, sizeof(pdu_xopen.name));
     pdu_reopening = 1;
+    pdu_opauth = 0;                     /* the held key answers (20.22.2.10) */
     pdu_job_start(J_OPEN);
 }
 
 static void pdu_save_step(void)
 {
     unsigned r;
+    if (pdu_pfl && ovl_ifl_step())       /* the Insert's keys first (20.22.4.5) */
+        return;
     pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));
