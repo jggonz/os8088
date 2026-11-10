@@ -60,41 +60,10 @@
 
 %ifdef KERN_BIG
 
-XM_ABI_VER  equ 2               ; the private kernel<->overlay ABI, mirrored
-                                ; in drivers/xmem/xmem.asm and passed in AH at
-                                ; DRVV_ATTACH. A KERNEL.SYS and an XMEM.DRV of
-                                ; different vintages - a half-copied floppy -
-                                ; must fail loudly at load rather than quietly
-                                ; at the first copy (SPEC.md 52.11's +10 word,
-                                ; carried in a register because the image is
-                                ; what compares it)
-
-; --- the service table the overlay returns at attach, mirrored from it -------
-XMV_CAPS    equ 0               ; out AX = free KB, DX:CX = pool base,
-                                ;     BL = free block-table entries
-XMV_ALLOC   equ 2               ; in DX:AX = bytes, BL = owner; out CF,
-                                ;     DX:AX = base / AX = 0/1/2
-XMV_FREE    equ 4               ; in DX:AX = base, BL = owner; out CF
-XMV_COPY    equ 6               ; in ES:SI = the XMC_ block below
-XMV_RELINST equ 8               ; in AL = an instance slot being torn down
-XMV_WALK    equ 10              ; in DX:DI = room for CX records; out AX
-                                ; (ABI 2: osapi_xmem_walk on kern_big)
-XMV_SIZE    equ 12
-
-; --- the copy's parameter block (SPEC.md 41.12.2) ----------------------------
-; BOTH ENDS TRAVEL AS 32-BIT LINEAR ADDRESSES, and that is forced rather than
-; chosen: slot 0x016C takes the conventional end as ES:SI, and drv_call loads
-; ES with KERNEL_SEG on its way into the image, so the caller's segment cannot
-; survive the crossing. Folding it down here is arithmetic the resident
-; xm_copy did internally anyway - and a block rather than registers because
-; the ABI wants seven of them (two 32-bit ends, a count, a direction and an
-; instance) and there are not seven to spare.
-XMC_EXT     equ 0               ; dd: the extended end
-XMC_CONV    equ 4               ; dd: the conventional end
-XMC_LEN     equ 8               ; dw: bytes
-XMC_DIR     equ 10              ; db: 0 = conventional -> extended, 1 = back
-XMC_INST    equ 11              ; db: the requesting instance
-XMC_SIZE    equ 12
+%include "xmabi.inc"             ; XM_ABI_VER, the XMV_* service table and the
+                                ; XMC_* copy block - ONE source with
+                                ; drivers/xmem/xmem.asm, and XM_ABI_VER's
+                                ; surface for tools/abilock.py (SPEC.md 41.12.2)
 
 ; -----------------------------------------------------------------------------
 ; The overlay's row. SIXTEEN BYTES SHAPED LIKE A drv_tab ROW AND NOT IN IT -

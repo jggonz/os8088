@@ -134,6 +134,19 @@ def main() -> int:
     if data[12:15] != b"\xFF\xD5\xCB":
         fail(f"{args.input}: no `call bp / retf` dispatcher at +12")
 
+    # THE SURVIVING-FAR-CALL GATE (SPEC.md 20.3.3): a driver far-calls the
+    # same table through the same SDK, so the packer refuses what
+    # tools/os88pkg.py refuses - a far call that is no published cell, and
+    # once T5's door is switched on, one to a rare cell.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import os88cells
+        bad = os88cells.farcall_problems({args.input: data})
+    except (ImportError, OSError):
+        bad = []
+    if bad:
+        fail("; ".join(bad))
+
     if data[31] != 0:
         fail(f"{args.input}: byte +31 is {data[31]:#04x} and must be zero - it "
              f"is the bss field this tool fills, and the name above is capped "

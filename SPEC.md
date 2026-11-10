@@ -45704,12 +45704,22 @@ bump so far was a person noticing: kernel size pass 4's renumbering, and
 #214's two cells re-contracted at the SAME numbers, caught in review.
 `tools/abilock.py` makes the noticing a gate. Each guarded number is LOCKED in
 `tools/abi.lock.json` to a fingerprint of the surface it guards - **`PKG_FMT`
-over `apps/os88api.inc`, `DRV_VER` over that and `drivers/os88drv.inc`**, a
-driver far-calling the same table through the same SDK - and
+over `apps/os88api.inc` and the C SDK's two halves of it, `apps/cc/os88.h`
+and `apps/cc/os88thunk.asm`** (§73: a C package reaches every cell through
+those, so a re-contracted cell the thunks were not taught is the same silent
+break), **`DRV_VER` over `apps/os88api.inc` and `drivers/os88drv.inc`**, a
+driver far-calling the same table through the same SDK - and the three
+PRIVATE kernel-to-image ABIs whose numbers the images compare at attach,
+each over the one include both sides assemble: **`VX_ABI_VER` over
+`kernel/vxabi.inc`** (VESA.DRV, §120.3), **`XM_ABI_VER` over
+`kernel/xmabi.inc`** (XMEM.DRV, §41.12.2; the two hand-typed copies became
+that one include in kernel size pass 19) and **`HD_ABI_VER` over
+`drivers/hdd/hddabi.inc`** (HDD.DRV and HDDTOOL.DRV, §52.11).
 `tests/unit/t_abilock.py`, in the fast tier, fails every `make` whose tree
 the lock no longer describes.
 
 **The fingerprint** is every line of code in those files, comments stripped
+(`;` in assembly, `/* */` and `//` in `os88.h`)
 and whitespace collapsed (each `equ`, each `%define`, each `db`/`dw` of the
 header macros), plus each `OSAPI_*` `%define`'s CONTRACT: its own comment and
 every INDENTED comment-only line under it, because the register contract is
@@ -46571,6 +46581,68 @@ The two retired cells (0x0568, 0x0580) were untouched: collapsing the table
 was a renumber and a separate decision. 0x0580 went to `OSAPI_DRV_CLASSK`
 first (§51.12), and kernel size pass 4 took the renumber and deleted 0x0568
 with the rest (§20.3.1).
+
+### 20.3.3 The call spelling — one macro decides what `call OSAPI_X` assembles to
+
+*Kernel size pass 19's T6 (docs/plans/ABI-BREAK-LIST.md 13.2), the mechanism
+T5 flips. It changes no shipped byte.*
+
+A package reaches a cell as `call OSAPI_X` and in no other way — about 8,400
+sites across the tree, a few dozen of them inside other macros (`call %2` in
+`apps/cc/os88thunk.asm`'s thunk makers, `apps/os88ui.inc`,
+`apps/win16/w16pm.inc`, `apps/stiklib.asm`). T5 moves the RARE cells (§20.3's
+six-byte `push bp / call api_r<kind> / dw target` shapes) behind a
+software-interrupt door, so a rare call must become `int <vector> / db
+<index>` while a hot call stays a far call. Rewriting the sites would have
+touched every package, every in-flight branch and every host gate that
+parses the spelling; instead **`apps/os88api.inc` overloads the mnemonic
+once**:
+
+- **`%imacro call 1`** sees every `call` in a package. One that names no
+  rare cell is emitted as the bare instruction — a near call, an indirect
+  call, a hot cell's far call — byte for byte.
+- **A rare cell carries a KIND MARK in its expansion.** NASM expands a
+  multi-line macro's parameters before the macro sees them, so by then the
+  name is gone and `OSAPI_WM_SHOW` has become `KERNEL_SEG:0x007C`. The mark
+  rides in the expansion instead: the **CELL KINDS block** at the end of
+  `apps/os88api.inc` (and of `drivers/os88drv.inc`, for `OSAPI_DRV_TASK`)
+  re-expands each rare name as `__OSAPI_RARE KERNEL_SEG:0x007C`, the macro
+  recognises the prefix, and hands the operand to **`OS88_RARE_CALL`, the
+  rare arm** — today the same far call. The same reason makes a
+  macro-wrapped site carry the mark with no edit.
+- **`__OSAPI_RARE` is defined only inside the arm**, so a rare name used as
+  anything but a call — a `jmp`, a `dw` — does not assemble. After T5 a rare
+  name is no far address, and a spelling that bypassed the macro has to fail
+  at the assembler rather than at the far end.
+- **The block is GENERATED, never typed.** Which cells are rare is a fact
+  about the kernel, so `tools/os88cells.py --write` writes each block from
+  `build/kernel.bin`'s decoded table, with the decoder
+  `tests/unit/t_api_abi.py` checks the table with, and `t_api_abi` (fast
+  tier) fails `make` when a block and kern_big's table disagree. The source
+  is kern_big's table; `t_api_abi.py --kernel <k>` lists the cells whose
+  rare-ness differs on another kernel, because one package binary serves
+  every kernel and T5 has to settle each.
+- **T5's flip is one switch**: `OS88_RARE_DOOR` 1 selects the door arm
+  (`int OS88_RARE_VEC` / `db <index>`, both names T5's), the generator then
+  writes each rare cell's index into the mark in place of its address, and
+  **the surviving-far-call gate** arms itself: `tools/os88pkg.py` and
+  `tools/os88drv.py` scan every image and part they pack for `9A lo hi
+  <KERNEL_SEG>` and refuse a far call to a rare cell. The gate's other half
+  is armed already — a far call into KERNEL_SEG at an offset INSIDE the
+  table that is no published cell's first byte, which lands mid-cell on
+  every kernel, is refused today (no package, driver or part in the tree
+  had one when it was armed). Past the table it judges nothing: kern_dos, a
+  part of DOS.O88, far-calls the kernel's own disk layer at private offsets
+  by design (`tests/unit/t_kdfar.py` polices those), and a cell newer than
+  the SDK is A4's question and The Wire's cell fence's (§92.2).
+
+`tests/unit/t_cellgate.py` (fast) proves the routing and the gate: a probe
+assembles byte-identical to the bare instructions; with the rare arm swapped
+for a marker, the marker appears at exactly the rare calls (plain, wrapped,
+upper-case and the driver SDK's) and at no other; a rare name under `jmp`
+does not assemble; and `os88pkg` packs a real package with the gate unarmed
+and refuses it with the gate armed early (`OS88_RARE_GATE=1`), since every
+package far-calls rare cells until T5.
 
 ### 20.4 osapi helpers (kernel.asm)
 

@@ -124,6 +124,8 @@ SIX THINGS ARE CHECKED, and the last is the one worth the file.
      ALIAS row that named the thunk still holds.  The two whose stem is a
      different word (`ldf_ld_pkg_start`, `fcpf_fcp_door`) are rows below.
 """
+import argparse
+import glob
 import os
 import re
 import struct
@@ -136,11 +138,23 @@ import os88layout                                            # noqa: E402
 sys.path.insert(0, HERE)
 
 import os88sym                                            # noqa: E402
-from harness import check, eq, done                       # noqa: E402
-import os88build                                       # noqa: E402
+from harness import check as _check, eq, done            # noqa: E402,F401
 
-TABLE_BASE = 0x0010
-CELL = 8                # the LONGEST cell: the decode window, not the stride
+# Which kernel's table is being read: "" for kern_big, the tree's name
+# otherwise, prefixed to every line a check prints.
+KTAG = [""]
+
+
+def check(cond, what, *a, **k):
+    return _check(cond, KTAG[0] + what, *a, **k)
+import os88build                                       # noqa: E402
+# The SHAPES live in tools/os88cells.py since kernel size pass 19 (T6): the
+# generator of the SDK's CELL KINDS blocks reads the table with the same
+# decoder this gate checks it with, so the two cannot disagree about what a
+# rare cell is.
+import os88cells                                         # noqa: E402
+from os88cells import (TABLE_BASE, CELL, SHAPES, FIXED, LEN,  # noqa: E402,F401
+                       fixed, inline, decode)
 
 # Cells that exist in the kernel and are deliberately NOT published by this
 # branch's SDK go in COMPAT, which is EMPTY. COMPAT_OLD is its record and
@@ -243,21 +257,13 @@ ALIAS = {
     "OSAPI_WM_CLOSE":     "wm_close_req",
 }
 
-SDK_FILES = ["apps/os88api.inc", "drivers/os88drv.inc"]
-DEFINE = re.compile(r"^%define\s+(OSAPI_\w+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)", re.M)
+SDK_FILES = os88cells.SDK_FILES
 
 
 def slots():
     """[(name, address, file)] for every published cell, both SDKs."""
-    out = []
-    for rel in SDK_FILES:
-        with open(os.path.join(ROOT, rel)) as f:
-            for name, addr in DEFINE.findall(f.read()):
-                out.append((name, int(addr, 16), rel))
-    return out
+    return os88cells.sdk_cells(ROOT)
 
-
-SHAPES = "1E0E1F E8.. 1FCB | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB | FIXED"
 
 # The INLINE cells (SPEC.md 20.3): published name -> (direction, register,
 # operand, trailing ops). The operand is a kernel variable's label, or
@@ -292,68 +298,61 @@ INLINE = {
 }
 
 
-# ...and the INLINE cells with NO memory operand (kernel size pass 14): a
-# protected-mode question kern_mega answers through a rare cell, which every
-# other kernel answers with registers alone, in the cell. There is nothing to
-# resolve, so the ledger is the BYTES themselves - this kernel's, which is why
-# a FIXED cell may differ on kern_mega (where these are RSLOT cells to bodies
-# of their own and this table is not read). A cell that should be one of
-# these and has become anything else fails as an INLINE cell with no row.
-FIXED = {
-    "OSAPI_XMEM_SEL":    "b801003c02cb",   # mov ax, 1 / cmp al, 2: AX = 1, CF = 1
-    "OSAPI_XMEM_RUN":    "b801003c02cb",   # ...the same refusal
-    "OSAPI_MEM_CODESEL": "89d083f801cb",   # mov ax, dx / cmp ax, 1: CF iff DX = 0
+# ...and the INLINE cells with NO memory operand (kernel size pass 14) are
+# os88cells.FIXED: the ledger is the BYTES themselves, so it lives with the
+# decoder that recognises them.
+
+
+# PER-KERNEL LEDGER ROWS (abi-3/gkm-2, kernel size pass 19): a cell that is
+# INLINE or FIXED on the real-mode kernels and a RARE cell to a body of its
+# own on this one. The value is that body's name where the naming convention
+# does not reach it, or None. Everything not listed here is held to the same
+# INLINE/FIXED/ALIAS ledgers on every kernel.
+KERNEL_OWN = {
+    "mega": {
+        # kern_mega's window-record setters: the store needs the kernel's
+        # DATA selector, and a cell has no room to load it (kernel size pass
+        # 14 kept these rare there; MEGA_ICWB's stubs serve the others)
+        "OSAPI_WM_ONMOUSEUP": None,
+        "OSAPI_WM_ONCLOSE": None,
+        "OSAPI_WM_ONDRAG": "wm_ondrag_c",
+        "OSAPI_WM_ONTIMER": "wm_ontimer_c",
+        # ...and the protected-mode questions only kern_mega answers - the
+        # FIXED refusals everywhere else
+        "OSAPI_XMEM_SEL": None,
+        "OSAPI_XMEM_RUN": None,
+        "OSAPI_MEM_CODESEL": None,
+    },
+    "small": {
+        # SPEC.md 13.8.2/13.9: kern_small REFUSES a drag or timer handler
+        # (CF = 1), where kern_big's inline setter answers CF = 0
+        "OSAPI_WM_ONDRAG": "wm_ondrag_c",
+        "OSAPI_WM_ONTIMER": "wm_ontimer_c",
+    },
 }
 
 
-def fixed(c):
-    """(length, hex) when the cell is one of FIXED's byte strings, else None."""
-    for want in set(FIXED.values()):
-        b = bytes.fromhex(want)
-        if bytes(c[:len(b)]) == b:
-            return len(b), want
-    return None
+# ...and the cells a kernel deliberately spends as NOPs and a `retf`: the
+# call succeeds and does nothing, which is the contract there.
+KERNEL_NOP = {
+    "small": {"OSAPI_GFX_BLIT1_PEN",    # no pen on kern_small (kernel.asm)
+              "OSAPI_THM_SET",          # no themes to set (SPEC.md 76)
+              "OSAPI_WM_ONWHEEL"},      # no wheel dispatch (SPEC.md 13.18)
+}
 
+# ...the refusals a kernel answers INLINE where kern_big has a body: the
+# FIXED shape (AX = 1, CF = 1), per kernel (gkm-2's "refusal stubs name their
+# contract": the bytes ARE the contract here).
+KERNEL_FIXED = {
+    "small": {"OSAPI_FS_OP": "b801003c02cb",       # no file-list engine ops
+              "OSAPI_VOL_CHECK": "b801003c02cb"},  # no volume check
+}
 
-def inline(c):
-    """(length, (dir, reg, operand, extra)) for an INLINE cell, else None.
-
-    The operand is ("abs", offset) or ("bx", disp8). Only the encodings the
-    table uses are accepted: a CS-prefixed accumulator moffs `mov` (A0-A3),
-    a `mov` r/m16 or r/m8 with [disp16] or [bx+disp8], then an optional
-    `cbw`, then the `retf` - anything else is not an inline cell.
-    """
-    if len(c) < 5 or c[0] != 0x2E:
-        return None
-    op = c[1]
-    REG8, REG16 = ("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"), \
-                  ("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
-    if op in (0xA0, 0xA1, 0xA2, 0xA3):
-        d = "load" if op in (0xA0, 0xA1) else "store"
-        reg = "al" if op in (0xA0, 0xA2) else "ax"
-        opd, n = ("abs", struct.unpack_from("<H", c, 2)[0]), 4
-    elif op in (0x88, 0x89, 0x8A, 0x8B):
-        d = "load" if op in (0x8A, 0x8B) else "store"
-        mod, r, rm = c[2] >> 6, (c[2] >> 3) & 7, c[2] & 7
-        reg = (REG16 if op & 1 else REG8)[r]
-        if mod == 0 and rm == 6:
-            opd, n = ("abs", struct.unpack_from("<H", c, 3)[0]), 5
-        elif mod == 1 and rm == 7:
-            opd, n = ("bx", c[3]), 4
-        elif mod == 2 and rm == 7:          # [bx+disp16]: OSAPI_WM_ONWHEEL's
-            opd, n = ("bx", struct.unpack_from("<H", c, 3)[0]), 5  # parity
-        else:
-            return None
-    else:
-        return None
-    extra = ()
-    if n < len(c) and c[n] == 0x98:
-        extra, n = ("cbw",), n + 1
-    elif n < len(c) and c[n] == 0xF8:       # a setter whose answer is CF = 0
-        extra, n = ("clc",), n + 1
-    if n >= len(c) or c[n] != 0xCB:
-        return None
-    return n + 1, (d, reg, opd, extra)
+# ...and a routine a kernel names differently (ALIAS above, per kernel).
+KERNEL_ALIAS = {
+    "small": {"OSAPI_GFX_DESK": "gfx_fill_gray"},  # no themes: the ground IS
+                                                   # gfx_fill_gray (ALIAS's note)
+}
 
 
 # The stem of a cold far entry: `dwf_dskw_read` -> `dskw_read`,
@@ -365,64 +364,6 @@ COLD_TAG = re.compile(r"^[a-z]{2,4}[fz]_(?=[a-z])")
 def stem(name):
     name = COLD_TAG.sub("", name, count=1)
     return name[:-2] if name.endswith("_x") else name
-
-
-def decode(blob, addr, bodies, cold_seg):
-    """(kind, target, section) for the cell at `addr`, or (None, why, None).
-
-    `bodies` maps the shared bodies' names (api_x, api_rs, api_rx, api_rxc, api_rn, api_rsc) to
-    their .text offsets; `cold_seg` is COLD_SEG's value.  The section is the
-    one the shape says the target lives in - see the header.
-    """
-    c = blob[addr:addr + CELL]
-    if len(c) < CELL:
-        return None, None, None
-
-    def rel(at, i):                       # a near displacement at c[i], from `at`
-        return (at + struct.unpack_from("<h", c, i)[0]) & 0xFFFF
-
-    def imm(i):
-        return struct.unpack_from("<H", c, i)[0]
-
-    if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
-        return "SLOT", rel(addr + 6, 4), ".text"
-    if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xEA:
-        # the SLOT's DS switch with a FAR JUMP for its call (SPEC.md 20.3):
-        # the .cold body pops the DS the cell pushed and returns for it
-        seg = imm(6)
-        if seg != cold_seg:
-            return None, "FJSLOT to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
-        return "FJSLOT", imm(4), ".cold"
-    if c[0] == 0x55 and c[1] == 0xE8:
-        # the 6-byte RARE cell (SPEC.md 20.3): push bp / call <kind> / dw target
-        body = rel(addr + 4, 2)
-        kind = {bodies.get("api_rs"): ("RSLOT", ".text"),
-                bodies.get("api_rx"): ("RXCELL", ".text"),
-                bodies.get("api_rxc"): ("RCXCELL", ".cold"),
-                bodies.get("api_rn"): ("RNCELL", ".cold"),
-                bodies.get("api_rsc"): ("RCSLOT", ".cold")}.get(body)
-        if kind is None:
-            return None, "rare cell calling 0x%04X, which is no rare body" % body, None
-        return kind[0], imm(4), kind[1]
-    if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9:
-        body = rel(addr + 7, 5)
-        if body != bodies.get("api_x"):
-            return None, "BP-family shape jumping to 0x%04X, which is not api_x" % body, None
-        return "XCELL", imm(2), ".text"
-    if c[0] == 0x9A and c[5] == 0xCB:
-        seg = imm(3)
-        if seg != cold_seg:
-            return None, "FARCELL to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
-        return "FARCELL", imm(1), ".cold"
-    if c[0] == 0xE9:
-        return "JSLOT", rel(addr + 3, 1), ".text"
-    il = inline(c)
-    if il is not None:
-        return "INLINE", il, None
-    fx = fixed(c)
-    if fx is not None:
-        return "FIXED", fx, None
-    return None, c.hex(), None
 
 
 def check_inline(name, addr, got, label_at, equ):
@@ -453,24 +394,102 @@ def check_inline(name, addr, got, label_at, equ):
           got="/".join(here) or repr(opd), want=wopd)
 
 
+# THE FOUR KERNELS (abi-3, gkm-2: kernel size pass 19). One SDK serves every
+# kernel, so the table must decode, and every published name agree with its
+# routine, on each of them - and the per-kernel exceptions are LEDGER rows
+# below, never a skipped kernel. kern_big, kern_small and kern_emu are read
+# through os88sym's PROVEN map (re-assembled with the tree's own defines and
+# compared byte for byte with its kernel.bin); kern_mega through the map its
+# own build wrote in the same nasm run as the image, which is how os88sym
+# itself reads kern_mega (_mega_map) - and which is refused here when it is
+# older than the image or the sources.
+TREES = {"big": ("", ()), "small": ("smallk", ("KERN_SMALL",)),
+         "emu": ("emuk", ("KERN_BIG", "KERN_EMU")), "mega": ("megak", None)}
+
+
+def newest_source():
+    t = 0.0
+    for d in ("kernel", "boot"):
+        for p in glob.glob(os.path.join(ROOT, d, "*.inc")) + \
+                glob.glob(os.path.join(ROOT, d, "*.asm")):
+            t = max(t, os.path.getmtime(p))
+    return t
+
+
+def tree_map(kernel):
+    """(kernel.bin path, (off, sect, equ)) for `kernel`, or (why, None)."""
+    sub, defines = TREES[kernel]
+    bdir = os88build.at(os.path.join("build", sub)) if sub else os88build.at("build")
+    kbin = os.path.join(bdir, "kernel.bin")
+    rel = os.path.relpath(bdir, ROOT)
+    if not os.path.isfile(kbin):
+        return "no kernel.bin in %s (`make %s`)" % (rel, kernel), None
+    if kernel == "big":
+        return kbin, (os88sym.syms(), os88sym.sections(), os88sym.equates())
+    if os.path.getmtime(kbin) + 1 < newest_source():
+        return "%s is older than the kernel sources (`make %s`)" % (rel, kernel), None
+    if defines is None:                         # kern_mega: its build's own map
+        full = os.path.join(bdir, "kernel-full.bin")
+        mapf = os.path.join(bdir, "kernel.map")
+        if not os.path.isfile(mapf) or \
+                os.path.getmtime(mapf) + 1 < os.path.getmtime(full if os.path.isfile(full) else kbin):
+            return "%s has no map as new as its image (`make %s`)" % (rel, kernel), None
+        return kbin, os88sym._parse_map(mapf)
+    was = os.environ.get("OS88_BUILD")
+    os.environ["OS88_BUILD"] = rel
+    try:
+        return kbin, (os88sym.syms(defines), os88sym.sections(defines),
+                      os88sym.equates(defines))
+    except RuntimeError as e:
+        return "%s: %s" % (rel, str(e).split(".")[0]), None
+    finally:
+        if was is None:
+            os.environ.pop("OS88_BUILD", None)
+        else:
+            os.environ["OS88_BUILD"] = was
+
+
 def main():
-    blob = open(os.path.join(ROOT, os88build.at("build/kernel.bin")), "rb").read()
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--kernel", action="append", choices=sorted(TREES),
+                    help="check this kernel's table (repeatable). Default: "
+                         "kern_big, and every other tree whose build is "
+                         "current - a missing or stale one is NAMED, not failed")
+    ap.add_argument("--all", action="store_true",
+                    help="all four, and a missing or stale tree FAILS")
+    a = ap.parse_args()
+    want = sorted(TREES) if a.all else (a.kernel or [])
+    for k in ("big", "small", "emu", "mega"):
+        if want and k not in want:
+            continue
+        kbin, maps = tree_map(k)
+        if maps is None:
+            if want:
+                _check(False, "kern_%s's table can be read" % k, kbin)
+            else:
+                print("  not checked: kern_%s - %s" % (k, kbin))
+            continue
+        KTAG[0] = "" if k == "big" else "[kern_%s] " % k
+        check_kernel(k, kbin, maps)
+    KTAG[0] = ""
+    done("t_api_abi")
+
+
+def check_kernel(kernel, kbin, maps):
+    blob = open(os.path.join(ROOT, kbin), "rb").read()
     # ...and drop stage 2, so every address below is an offset into `.text`
     # exactly as it was before SPEC.md 2.9 (tools/os88layout.py)
     blob = blob[os88layout.boot2_pad(ROOT):]
-    off, sect = os88sym.syms(), os88sym.sections()
-    cold_seg = os88sym.equates()["COLD_SEG"]
+    off, sect, equ = maps
+    cold_seg = equ["COLD_SEG"]
     # (section, offset) -> the labels there, for the two sections a cell can
     # name. Several labels can share an offset (an entry point and its
     # fallthrough alias), so this is a list.
     label_at = {}
     for n, o in off.items():
-        if sect.get(n) in (".text", ".cold", ".bss"):
+        if sect.get(n) in (".text", ".cold", ".bss", ".mega"):
             label_at.setdefault((sect[n], o), []).append(n)
-    equ = os88sym.equates()
-    bodies = {b: off[b] for b in ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")}
-    LEN = {"SLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
-           "XCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
+    bodies = {b: off[b] for b in os88cells.BODIES if b in off}
     tend = off["osapi_table_end"]
     starts = []
     a = TABLE_BASE
@@ -479,7 +498,7 @@ def main():
         if not check(k is not None, "the table does not decode at 0x%04X" % a, "a cell of no known shape", got=t):
             break
         starts.append(a)
-        a += t[0] if k in ("INLINE", "FIXED") else LEN[k]
+        a += os88cells.cell_len(k, t)
     check(a == tend, "the table walk ends at 0x%04X, not osapi_table_end 0x%04X" % (a, tend), "cell lengths disagree")
     startset = set(starts)
 
@@ -523,14 +542,31 @@ def main():
         if kind == "INLINE":
             check_inline(name, addr, tgt[1], label_at, equ)
             continue
+        if kind == "NOP":
+            check(name in KERNEL_NOP.get(kernel, ()),
+                  "%s (0x%04X) is a do-nothing cell on kern_%s" % (name, addr, kernel),
+                  "a cell spent as NOPs answers nothing; KERNEL_NOP names the "
+                  "ones a kernel deliberately does not implement",
+                  got=tgt[1], want="a KERNEL_NOP row")
+            continue
+        if name in KERNEL_NOP.get(kernel, ()):
+            check(False, "%s (0x%04X) is in KERNEL_NOP but its cell is a %s" % (name, addr, kind),
+                  "a stale exception silently exempts nothing")
         if kind == "FIXED":
-            check(FIXED.get(name) == tgt[1],
+            fx = dict(FIXED, **KERNEL_FIXED.get(kernel, {}))
+            check(fx.get(name) == tgt[1],
                   "%s (0x%04X) is the fixed cell %s" % (name, addr, tgt[1]),
                   "an inline cell of no memory operand that is not this name's "
                   "own bytes - the answer the SDK publishes for it has changed",
-                  got=tgt[1], want=FIXED.get(name, "no FIXED row"))
+                  got=tgt[1], want=fx.get(name, "no FIXED row"))
             continue
-        if name in INLINE or name in FIXED:
+        own = KERNEL_OWN.get(kernel, {})
+        if name in own:
+            check(kind in os88cells.RARE_KINDS,
+                  "%s (0x%04X) is a rare cell on kern_%s" % (name, addr, kernel),
+                  "KERNEL_OWN says this kernel answers the cell with a body of "
+                  "its own behind a rare cell", got=kind, want="a rare shape")
+        elif name in INLINE or name in FIXED:
             check(False, "%s (0x%04X) is in INLINE but its cell is a %s" % (name, addr, kind),
                   "the ledger names an inline cell that is not one - remove the row, "
                   "or the cell lost its inline body")
@@ -544,6 +580,10 @@ def main():
             continue
         s = name[len("OSAPI_"):].lower()
         want = {ALIAS[name]} if name in ALIAS else {s, "osapi_" + s, "api_" + s}
+        if own.get(name):
+            want = {own[name]}
+        elif name in KERNEL_ALIAS.get(kernel, {}):
+            want = {KERNEL_ALIAS[kernel][name]}
         seen = set(names)
         if where == ".cold":
             seen |= {stem(n) for n in names}
@@ -573,9 +613,35 @@ def main():
         check(name in by_name, "INLINE names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
 
-    print("t_api_abi: %d published slots (%d aliased, %d inline, %d compat), table 0x%04X..0x%04X"
-          % (len(by_addr), len(ALIAS), len(INLINE), len(COMPAT), TABLE_BASE, top))
-    done("t_api_abi")
+    # 7. THE CALL SPELLING (SPEC.md 20.3.3). The SDK's CELL KINDS blocks
+    # route `call OSAPI_X` to the rare arm for exactly the cells this table
+    # decodes as rare, so T5 can flip the arm without a site edit. A stale
+    # block is byte-identical today (both arms are the same far call) and a
+    # wrong call after the flip - which is why it fails now, while it is
+    # free. The SDK is generated from kern_big; on any other kernel a cell
+    # whose rare-ness differs is LISTED, because one package binary serves
+    # every kernel and T5 has to settle each of them.
+    kinds = {addr: kind for addr, kind in
+             ((x, decode(blob, x, bodies, cold_seg)[0]) for x in starts)}
+    rare_here = {a for a, k in kinds.items() if k in os88cells.RARE_KINDS}
+    if kernel == "big":
+        for bad in os88cells.stale(kinds, ROOT):
+            check(False, "the SDK's CELL KINDS blocks match the table", bad)
+    else:
+        marked = set()
+        for rel in SDK_FILES:
+            marked |= set(os88cells.block_rare(rel, root=ROOT) or {})
+        differ = sorted("%s (%s here)" % (n, kinds.get(a))
+                        for n, a in by_name.items()
+                        if (n in marked) != (a in rare_here))
+        if differ:
+            print("  kern_%s: %d cell(s) whose rare-ness differs from kern_big's "
+                  "(T5 settles these): %s" % (kernel, len(differ), ", ".join(differ)))
+
+    print("t_api_abi: %s%d published slots (%d aliased, %d inline, %d compat, "
+          "%d rare), table 0x%04X..0x%04X"
+          % (KTAG[0], len(by_addr), len(ALIAS), len(INLINE), len(COMPAT),
+             len(rare_here), TABLE_BASE, top))
 
 
 if __name__ == "__main__":

@@ -1,11 +1,23 @@
 {
  "DRV_VER": {
-  "fingerprint": "9c1432e0917b82e7d3b0e80c116cc8db02ca6c4c68be48e0dc1dda704edfb347",
+  "fingerprint": "39d211e7700ff33a7fc299a04cdf8da8fe3905cce356659ee3628df4121d69d3",
   "version": 14
  },
+ "HD_ABI_VER": {
+  "fingerprint": "6334dfeda1fd56beca273195d029dd1b3e31b9270359bd11435a1d77fa174bdf",
+  "version": 7
+ },
  "PKG_FMT": {
-  "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
+  "fingerprint": "e9fa2b1da740f9cd39a789c6ecca321efc4443edab7e1c4a36c88b2f936c196b",
   "version": 13
+ },
+ "VX_ABI_VER": {
+  "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
+  "version": 5
+ },
+ "XM_ABI_VER": {
+  "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
+  "version": 2
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
  "history": [
@@ -1982,6 +1994,41 @@
    "guard": "DRV_VER",
    "reason": "Kernel size pass 19 opens the flag day (docs/plans/ksp19/BRIEF.md, docs/plans/ABI-BREAK-LIST.md 13.3): the table renumbers (T5's software-interrupt door for the rare cells), the window class moves into the package (R14), the KB memory doors and duplicate file doors are withdrawn (C1, C2, C4'), and further re-contracts follow on this branch. Nothing built at PKG_FMT 10 or DRV_VER 12 runs on this kernel. 11 and 12 are drivers' numbers, so packages go to 13 and drivers to 14 (SPEC.md 20.2.0).",
    "to": 14
+  },
+  {
+   "fingerprint": "e9fa2b1da740f9cd39a789c6ecca321efc4443edab7e1c4a36c88b2f936c196b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "39d211e7700ff33a7fc299a04cdf8da8fe3905cce356659ee3628df4121d69d3",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "b26a7f8a6dfbab464ffa1b307794abd27e804282c5747840eb468f25b429d984",
+   "from": null,
+   "guard": "VX_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 5
+  },
+  {
+   "fingerprint": "114f77439b31382fb16b939b64cda26da58be28cebac546af3f9223102db339b",
+   "from": null,
+   "guard": "XM_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 2
+  },
+  {
+   "fingerprint": "6334dfeda1fd56beca273195d029dd1b3e31b9270359bd11435a1d77fa174bdf",
+   "from": null,
+   "guard": "HD_ABI_VER",
+   "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
+   "to": 7
   }
  ]
 }

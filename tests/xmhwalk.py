@@ -73,7 +73,7 @@ def xmem_syms(tmp):
     out = os.path.join(tmp, "x.bin")
     mp = os.path.join(tmp, "x.map")
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "drivers/",
-                    "-I", "apps/", "--before", "[map symbols %s]" % mp,
+                    "-I", "apps/", "-I", "kernel/", "--before", "[map symbols %s]" % mp,
                     "-o", out, "drivers/xmem/xmem.asm"], cwd=ROOT, check=True)
     img = open(os.path.join(BUILD, "xmem.bin"), "rb").read()
     if open(out, "rb").read() != img:
