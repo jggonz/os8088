@@ -4986,7 +4986,7 @@ workspace by editing ITS row below and the matching row of `pdu_occws[]` in
 |---|---|---|---|---|---|---|
 | `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 (placeholder) | crypt |
 | `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 0 (placeholder) | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 0 (placeholder) | fonts |
+| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 65,024 | want 52, min 32 (20.22.8; grows to 64 for one font by `PDMEM_SLOT`) | fonts |
 | `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 0 (placeholder) | dct, bilevel |
 | `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 0 (placeholder) | jpx |
 | (6, internal) | PDWRT | 2 | `'PW'` | 53,248 | `pdu_wkb`: 18, or up to 40 for an Extract/Insert | wrt |
@@ -5744,14 +5744,14 @@ never needs PDXF, and a later pass or page needs it only for a code or a size it
 seen. **PDREND never reads a font program, an encoding, a CMap or a `/W` array**: it names the
 FONT DICTIONARY and a character code, and PDXF reads the rest through PDENG.
 
-**Files.** `apps/pagedesk/pdxf.asm` (the door, `PDM_MAGIC_FNT`, door at +8, `pdkgate.inc`),
+**Files.** `apps/pagedesk/pdxf.asm` (the door `pdxf_entry`, `PDM_MAGIC_FNT`, door at +8, `pdkgate.inc`),
 `pdxfrs.inc` (the assembly: `pdx_muldiv`, `pdx_accline`, `pdx_pack`), `pdxf.c` (activation, the
 verbs, strike blocks) and the `#include`d `pdxfol.c` (outline recorder, flattener, coverage
 rasteriser), `pdxfsf.c` (sfnt: cmap, `glyf`, composites), `pdxfcf.c` (CFF, the Type 2 machine),
 `pdxft1.c` (Type 1), `pdxft3.c` (Type 3), `pdxfcm.c` (CMap and ToUnicode), `pdxfwd.c` (`/W`),
 `pdxfnm.c` + the generated `pdxfnm.h` (glyph names; `tools/os88pdfx_fonts.py names`). PDREND's side
-is `pdrf.c` (the font record's `emb` field), `pdri.c`'s `emb_glyph`, `text_glyph`, `text_show` and
-`run_begin`, `pdrd.c`'s `syn_*` and bank 2 in `strike_load`, and the optional `pdrt3.c`.
+is `pdrf.c` (the font record's `emb` field, the Type 3 hooks), `pdri.c`'s `emb_glyph`/`emb_hit`/`emb_miss`,
+`text_glyph`, `text_show` and `run_begin`, `pdrd.c`'s `syn_*` and bank 2 in `strike_load`, and `pdrt3.c`.
 Fixtures and their generator: `tests/pdfany/fonts/`, `tools/os88pdfx_fonts.py` (a TrueType
 subsetter, a Type 1 writer with eexec, a CFF writer, a PDF writer: there is no fontTools here).
 
@@ -5770,9 +5770,13 @@ program area (the primary says so with `PDFE_SIZE`), TrueType collections, CFF2/
 Type 1 multiple-master, a CMap with three- or four-byte codes (read as two), a predefined CJK CMap
 by name (no data on this machine; `Identity-H/V` is built in, others read as 2-byte identity).
 
-**The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`, **48 KiB**, plat's table row): the program
-`[0, 37,376)` (one at a time; a different font is a reload, the dictionary being named in every
-call), the CIDToGIDMap window (4,096 bytes: CIDs 0-2047 of a non-identity map, later CIDs answer
+**The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`; 20.22.2.3's row is **want 52, min 32 KiB**):
+the program `[0, slot - 10,752)` (one at a time; a different font is a reload, the dictionary being
+named in every call): 22,016 bytes at the min, 42,496 at the want. A program larger than that answers
+`PDE_NEEDMEM` (CF = 0, CX = 0 = `PDMEM_SLOT`, DX = 64) ONCE per font; the primary regrows S (to 64 KiB,
+a 54,768-byte program) and re-INITs, or refuses, and then the font answers `PDFE_SIZE` and is drawn in
+the substitute face with `PDF_INC_APPROX`. Measured on 85 embedded programs of four everyday PDFs: the
+median is about 13 KB, 22 KB holds about 70 % of them and 42 KB about 97 %. Then the CIDToGIDMap window (4,096 bytes: CIDs 0-2047 of a non-identity map, later CIDs answer
 the notdef), the CMap tokeniser's 512-byte staging window, and three 2,048-byte tables (ToUnicode,
 Encoding CMap, `/W` ranges). PDXF's own image + bss (the outline buffer, the 34 x 48 accumulator,
 the Type 1 name tables, the stacks) is under 61,440 (the cap, 20.22 L6).
@@ -5796,10 +5800,18 @@ workspace and parsed once. Only `GLYPH` is hot, and it is one glyph a call. A re
 the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset), the bitmaps from
 +512 bump-allocated, then keys[128] (the code in each slot, found by `(code ^ code >> 7) & 127` and
 linear probing) and info[128] (the `/W` width in 1/1000 em, the PD Latin byte of the code's
-ToUnicode, flags). A block is a (font, size): up to four of them sit at the TOP of the glyph claim,
+ToUnicode, flags). A block is a (font, size): up to `PDFB_NBLK` (4) of them sit at the TOP of the glyph claim,
 under a 64-byte header (font object and generation, the size, the pass number last used; PDREND
 FINDS, PDXF MAKES and evicts a block not used in this pass). `(glyph_kb - 24) / 4` blocks fit: a
-24 KiB claim has none (**20.22.2 gives the glyph claim 40 KiB**), 32 KiB has two. The walker
+24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
+it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
+with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
+and re-INITs PDREND - which keeps the page view when only `glyph_seg`/`glyph_kb` changed, the claim
+having possibly MOVED (`syn_adopt`) - and the slot occupant. A refusal draws the font in the
+substitute face with `PDF_INC_APPROX` and is not asked again in the page view (`XR_GLYPH`); a
+document using only the 14 standard fonts never pays. **PDXF knows the claim from `PDV_X_INIT`**
+(`pdxb_init`'s own `glyph_seg`/`glyph_kb`); a GLYPH names the claim PDREND holds (`dseg`, and its
+KiB in `cap`), and one PDXF was not handed is refused (`PDE_RANGE`) rather than written. The walker
 reads a block exactly as it reads a bank strike (strike id `0x0200 | block`, bank 2; the code
 byte of a glyph run is the SLOT), so the transformed-glyph cache, the quarter-turn rotations and
 the `scale` field all apply. A size above 32 px is the 32-px strike scaled `n` times, as the
@@ -5825,16 +5837,19 @@ base encoding as before and a Type0 font maps nothing. A `bfrange` with an array
 with a ligature become singles (a ligature keeps its first unit). Search (PDENG) and select/copy
 therefore find the text of a font whose codes are glyph indices.
 
-**Type 3** (`pdrt3.c`, built with `PDR_TYPE3`; default OFF, see Budgets). Not by C recursion
-(`pdstk` refuses a cycle): `text_glyph` QUEUES (block, slot, pen) in the glyph claim's image row
-buffer (64 entries; free while a group is interpreted) and `interp_run`, at an operator boundary
-(no operands, no array, no dictionary open), calls `t3_go()`, which opens the glyph's CharProc as
-a frame in the shape of `do_form` with CTM = FontMatrix x diag(fs x Th, fs) x [Tm x CTM at the pen]
-(the matrix and the proc's object are in the block, put there by PDXF's `pdxft3.c` together with
-the width `/Widths x FontMatrix.a`). `frame_end` pops it like a Form and the next queued glyph starts
-at the next boundary. `d0`/`d1` are accepted; the colour lock of `d1` is NOT enforced (the colour
-operators are rcore's and gfx's arms). Two one-line hooks are in `interp_run`, the third is the
-`emb == 3` branch of `text_glyph`.
+**Type 3** (`pdrt3.c`; ON, `PDR_NO_TYPE3` leaves it out). Not by C recursion (`pdstk` refuses a
+cycle): `text_glyph` QUEUES (pass, block, slot, pen) in the glyph claim's image row buffer (64
+entries of 12 bytes; free while a page is interpreted) and rcore's `PDR_T3_DRAIN()` hook in
+`interp_run`, at an operator boundary (no operands, no array, no dictionary open), calls `t3_drain()`,
+which opens the glyph's CharProc through `do_form` - rcore's Form frame push, the one frame machine -
+and then sets CTM = FontMatrix x diag(fs x Th, fs) x [Tm x CTM at the pen] (the matrix and the proc's
+object are in the block, put there by PDXF's `pdxft3.c` together with the width
+`/Widths x FontMatrix.a`). `frame_end` pops it like a Form (`PDR_T3_FRAME_END()` clears `g_t3f`) and
+the next queued glyph starts at the next boundary: no glyph starts while another's frame is open,
+so a long string runs its procs one after another, never nested, and an entry left by a pass that
+ended early (a full display list) is dropped by its pass number. `d0`/`d1` are accepted; the colour
+lock of `d1` is NOT enforced (the colour operators are rcore's and gfx's arms). pdrf.c defines both
+hooks; the third site is the `emb == 3` branch of `text_glyph`.
 
 **The rasteriser.** Outline points in font units are scaled to 26.6 pixels with a 32-bit
 intermediate (`pdx_muldiv`), quadratic and cubic curves flattened by uniform subdivision (no
@@ -5855,22 +5870,32 @@ replacement): the share of MuPDF's ink pixels that differ is **3.8 % at 8 px, 3.
 `-A 0` one-bit mode differs from its anti-aliased picture by 25 to 60 % at these sizes (it
 samples, it does not cover), so it is not a reference. The whole path - PDREND's text operators,
 the strike block, PDXF, the real PDENG and the band walker - drawn at 100 % on the VGA adapter
-(`hosttest/pdx_page.py`) differs by **3.8 % of ink over 45 pages (worst 7.6 %: the 16-px page with
-88 distinct glyphs, which does not fit its block)**. The defended threshold for a glyph-level
-check is therefore 6 % at any size and for a page 8 %.
+(`hosttest/pdx_page.py`) differs by **3.9 % of ink over 50 pages (worst outline page 7.6 %: the 16-px
+page with 88 distinct glyphs, which does not fit its block)**; the Type 3 fixture's pages are within
+2 % but for its grey-filled glyph, which a 50 % threshold of MuPDF's grey counts against the dither
+(18.2 % of 440 ink pixels at 12 px; every glyph in place, looked at). The defended threshold for a
+glyph-level check is therefore 6 % at any size and for an outline page 8 %.
 
-**Budgets** (image + bss, against the round's start): PDXF at most 61,440 (measured in the
-report). PDREND for fonts: the allowance is +1,100; **embedded fonts without Type 3 measure
-+1,596 and Type 3 another +1,076** (the report itemises them: the probe, `emb_glyph`, `syn_*`,
-`text_glyph`'s embedded branch, `text_show`'s Type0 pairs, bank 2). Chains: `text_glyph` ->
-`emb_glyph` -> the far call -> PDXF `GLYPH` -> PDENG is 534 bytes in PDXF plus PDREND's ~300 to the
-call, under 1,776; the far edge to add to `tools/os88pdstk.py` is PDXF `_pdx_eng
-[_pdx_engvec]` -> PDENG `pde_entry`.
+**Budgets** (image + bss): PDXF at most 65,024 (the part limit, the lead 23:56); it measures
+40,686 + 20,126 = **60,812**. PDREND is two caps since 20.22.7.9: what is entered once per font
+load, per glyph MISS, per Type 3 glyph proc or per glyph-claim regrow is in PDRENDC (`pdrovl.h`'s
+`[fonts]` block: `font_get`, `font_encoding`, `font_classify`, `words_hit`, `emb_miss`, `t3_drain`,
+`syn_adopt`), and the per-glyph HIT stays near (`emb_hit`, `emb_glyph`, `syn_find`/`cap`/`hdr`/`off`,
+`t3_queue`, the branches in `text_glyph`, `text_show` and `strike_load`). With Type 3 ON, PDREND
+measures 44,826 + 6,116 = **50,942** near against rcore's 51,164 without any of it (fonts' near share
+-222: the font loader's 2,135 bytes left with it) and PDRENDC **14,475** against 11,159 (+3,316).
+Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` > `_v_glyph` >
+`_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
+deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.
 
-**Checks.** `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_chain.py` (the
+**Checks.** `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
+parsers under ASan + UBSan on mutated programs and CMaps), `hosttest/pdx_chain.py` (the
 chain through the REAL PDENG: Flate-compressed font streams, the encoding rules, CIDToGIDMap,
 ToUnicode, an embedded CMap, `/W`, and the strike block's bitmaps against a direct raster),
-`hosttest/pdx_page.py` (PDREND + PDXF + PDENG against MuPDF), `hosttest/pdx_primtest.py`
+`hosttest/pdx_page.py` (PDREND + PDXF + PDENG against MuPDF, through the REAL slot code and
+`pdr_test.c`'s ladder with `hosttest/pdx_xmod.c` as the door; `PDR_GLYPHKB=24 PDR_GLYPHGROW=1` grows
+and moves the glyph claim mid-page and must draw what a 40 KiB claim draws, `PDX_SLOTKB`/`PDX_SLOTGROW`
+the workspace's growth), `hosttest/pdx_primtest.py`
 (assembly against twin). Suite rows to name: `t_pdstk`, `t_pdkgate`, PDREND's size assertion and
 the fonts rows the lead registers over those four scripts.
 
