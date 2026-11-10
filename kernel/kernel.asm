@@ -961,7 +961,7 @@ TOAST_MAX   equ 24
 %endif
 
 ; SPEC.md 51's LOADABLE DRIVERS are kern_big's too (SPEC.md 51.0). It is the
-; largest single item in docs/plans/KERN-SMALL-CUT-PLAN.md's hardware group and the
+; largest single item in docs/plans/retired/KERN-SMALL-CUT-PLAN.md's hardware group and the
 ; only one there that is not a device - it is the ABILITY to load one - so it
 ; is the one that needed a product decision rather than a measurement. The
 ; decision is the owner's, in their words: *"remove the drivers from the OS
@@ -988,7 +988,7 @@ TOAST_MAX   equ 24
 %endif
 
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
-; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
+; the half of docs/plans/retired/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
 ; Sound Blaster is a `[drv_svc + DSV_*]` read, and on a build that can load no
 ; driver that table is zero for the life of the machine. The PC SPEAKER is
@@ -1528,7 +1528,7 @@ MEGA_BOOT_KB    equ 640         ; conventional and extended, and the
 DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; instead of 4,608, and the largest volume it
                                 ; will mount is a 360KB floppy
-                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md D2).
+                                ; (docs/plans/retired/KERN-SMALL-CUT-PLAN.md D2).
                                 ;
                                 ; It is an ACCEPTANCE threshold like the value
                                 ; below, so this is not a buffer that might
@@ -1542,7 +1542,7 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; volume any host mounts.
                                 ;
                                 ; IT COULD NOT HAVE BEEN TAKEN BEFORE SPEC.md
-                                ; 37.0.1. docs/plans/KERN-SMALL-CUT-PLAN.md 7 is the
+                                ; 37.0.1. docs/plans/retired/KERN-SMALL-CUT-PLAN.md 7 is the
                                 ; floor: `.ovl` is loaded ONTO this window and
                                 ; spills through the mount buffers, so it has
                                 ; to fit FAT_PARA*16 + DSK_WIN_BYTES. At 2
@@ -8327,7 +8327,7 @@ drv_suspend_x:    xor cx, cx    ; three verbs answer here. The suspend and the
                   cmc           ; nothing had to get out of the way - because
                   retf          ; a caller does not test CF for a condition
 section .text                   ; that is not an error
-                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md 10); the
+                                ; (docs/plans/retired/KERN-SMALL-CUT-PLAN.md 10); the
                                 ; handoff REFUSES, the published meaning of a
                                 ; slot that cannot do what was asked (20.8) -
                                 ; dos_mem_whole greys the arm on the part

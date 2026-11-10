@@ -119,7 +119,7 @@ The overlay is demonstrably alive at that instruction. Moving it out of
 **The destination is `.ovlw`, not `.ovl`**: `.ovl` has ~55 bytes of blob
 headroom (`OVL_AT` 2624 + `OVL_SIZE` 1417 against `BOOT2_PAD`, guarded in
 `kernel.asm`), so ~60 bytes does not fit. `.ovlw`'s own bound is
-`docs/plans/KERN-SMALL-CUT-PLAN.md` §7's mount buffers.
+`docs/plans/retired/KERN-SMALL-CUT-PLAN.md` §7's mount buffers.
 
 **The hazard to disprove is self-overwrite.** `hb_probe_x` opens
 `HIBERNAT.PTR`, i.e. it does a FAT read, and `.ovlw` is loaded onto the FAT

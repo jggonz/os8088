@@ -1157,7 +1157,7 @@ moves with it so the file sector does not), and its window has the 1,024-byte
 `DSK_OVLPAD` (a kern_small knob build puts the mouse probe there, kern_big's
 arrangement). Neither reaches a shipped byte.
 
-`.ovl`'s bound is the window: docs/plans/KERN-SMALL-CUT-PLAN.md §7 is why
+`.ovl`'s bound is the window: docs/plans/retired/KERN-SMALL-CUT-PLAN.md §7 is why
 `kern_small`'s two-sector FAT window could not be taken until the clock ladder
 was gated out of that half. `tools/os88ovlchk.py` is the gate for both, and
 rule 2e is the one that bit: nothing in `.ovl` may be called after the mount,

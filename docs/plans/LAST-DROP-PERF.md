@@ -485,7 +485,7 @@ region cuts rather than covers.
 
 One of three, and the first is the likely one:
 
-1. **`kern_small` gets its rung back.** docs/plans/KERN-SMALL-CUT-PLAN.md quotes
+1. **`kern_small` gets its rung back.** docs/plans/retired/KERN-SMALL-CUT-PLAN.md quotes
    58.5 KB as what can be taken with nothing on the small floppies breaking; any
    row of it that lands puts this well inside the slack. It is 78 bytes against
    a plan measured in kilobytes.

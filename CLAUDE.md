@@ -1026,16 +1026,19 @@ in docs/TESTING.md, per capability.
   area byte by byte, the 0500h page and one floppy read followed through
   them; docs/plans/completed/INTERRUPT-GUIDE-PLAN.md is how it was built).
 - `docs/` — **the directory says what a document is** (`docs/README.md`, and
-  `docs/INDEX.md` lists every one under the same five headings). `docs/`
+  `docs/INDEX.md` lists every one under the same six headings). `docs/`
   itself is how the system works TODAY — instructions, contracts, maintained
   reference such as `KERNEL-MEMORY.md`, and `FIELD-NOTES.md`/`FIELD-MACHINES.md`
   for what real hardware said. **Everything else is NOT where to learn how
   something works**: `docs/plans/` is work proposed or half-done,
   `docs/plans/completed/` is how something got built (never what it does
-  now), `docs/history/` is superseded, and `docs/reports/` is a dated
+  now), `docs/plans/retired/` is a plan closed without its route being
+  taken and kept for its lesson, `docs/history/` is superseded, and `docs/reports/` is a dated
   MEASUREMENT of one tree. They go stale by design; SPEC.md, the docs above
   and the code are the authority. When you write one: a plan whose work
-  lands moves to `completed/` in that commit, and a second measurement is a
+  lands moves to `completed/` in that commit, one whose goal was met by
+  another route (or dropped) moves to `retired/` with that lesson written
+  at its top, and a second measurement is a
   NEW report rather than an edit.
 
 ## Package pipeline

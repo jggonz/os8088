@@ -58811,7 +58811,7 @@ test is **"is there a state of this machine in which this package runs"**, and
 only a package for which the answer is no comes off the disk.
 
 **And the general lesson is bigger than the disk list.**
-docs/plans/KERN-SMALL-CUT-PLAN.md's founding argument was that 70KB of free
+docs/plans/retired/KERN-SMALL-CUT-PLAN.md's founding argument was that 70KB of free
 heap is *"roughly where a
 second program becomes possible"*, reasoning from SHEET's region. That premise
 was measuring the wrong quantity, and the target built on it is retired —
@@ -103487,7 +103487,7 @@ the Makefile is the on-demand kernel MODULES (§2.8) and nothing else — so
 the disk either.
 
 **It is a product decision and the largest single item in
-docs/plans/KERN-SMALL-CUT-PLAN.md's hardware group**, and it is the only one there
+docs/plans/retired/KERN-SMALL-CUT-PLAN.md's hardware group**, and it is the only one there
 that is not a device — it is the *ability* to load one. What settles it is
 that a 128KB machine has no heap to host a driver in anyway, so the mechanism
 was closer to unusable there than merely unused. The owner's words:
@@ -103520,7 +103520,7 @@ the 360KB system disk                      50 clusters = 51,200 bytes, 14% of it
 991 of them are `.ovl`/`.ovlw` — `drv_boot`'s `SYSTEM.CFG` pass and
 `drv_init`/`drv_snd_sniff` — which live in memory the machine reuses once it
 has booted, so they move `HEAP_SEG` by nothing at all. `.ovlw`'s 188 does not
-even cross a sector, so docs/plans/KERN-SMALL-CUT-PLAN.md §7's 2,816-byte headroom
+even cross a sector, so docs/plans/retired/KERN-SMALL-CUT-PLAN.md §7's 2,816-byte headroom
 for the buffer cuts is unchanged by it. The last 81 bytes are lost to the
 512-byte rung rounding.
 
@@ -103568,7 +103568,7 @@ by construction — take the class away and either a C package's worker can
 never be spawned or the mirror breaks.
 
 **D2 could not have been taken before §37.0.1.**
-docs/plans/KERN-SMALL-CUT-PLAN.md §7 is the floor: `.ovlw` is loaded *onto* the FAT
+docs/plans/retired/KERN-SMALL-CUT-PLAN.md §7 is the floor: `.ovlw` is loaded *onto* the FAT
 window and spills through the mount buffers, so it must fit
 `FAT_PARA*16 + DSK_WIN_BYTES`. At two sectors that region is **4,352**, and
 `.ovlw` rounded to whole sectors was **4,608** — short by 256. Gating the RTC
@@ -188232,7 +188232,7 @@ register is banked.
 **On `kern_small`** there is no driver layer and no hibernate, so the thunk is
 the whole slot: `xor cx, cx` / `cmp al, 2` / `cmc` / `ret` — the suspend and
 the resume ANSWER SUCCESS with no records, because a caller does not test `CF`
-for a condition that is not an error (docs/plans/KERN-SMALL-CUT-PLAN.md §10),
+for a condition that is not an error (docs/plans/retired/KERN-SMALL-CUT-PLAN.md §10),
 and the handoff refuses, the published meaning of a slot that cannot do what
 was asked (§20.8). `cmp` sets `CF` for `AL` below 2 and `cmc` turns that into
 both answers in one byte.
@@ -190516,7 +190516,7 @@ here, for a reason that is the whole of this entry**: `kern_small` mounts
 disks *this project formats*, and `tools/os88disk.py --fatcap 2` gives the
 small build's 1.44MB floppies 4KB clusters and a 2-sector FAT so that every
 geometry stays available to it
-(docs/plans/KERN-SMALL-CUT-PLAN.md D2). **`kern_dos` mounts disks DOS
+(docs/plans/retired/KERN-SMALL-CUT-PLAN.md D2). **`kern_dos` mounts disks DOS
 formatted**, which is the entire point of the arm, and no `--fatcap` reaches
 those. A DOS whose value is running other people's software cannot pick the
 media.
