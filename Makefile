@@ -21752,6 +21752,31 @@ else
 endif
 # ---- end PageDesk: wrt ------------------------------------------------------
 
+# ---- PageDesk: gfx ----------------------------------------------------------
+# PDXG.MOD (PAGEDESK-SPEC 20.22.9): colour spaces, functions, shading, patterns -
+# the slot occupant that works at interpretation time. pdwrt's open-coded shape.
+# `make pdxg` builds it and holds it to mutool (tools/os88pdfx_gfx.py --check).
+PDX_C    := apps/pagedesk/pdxg.c apps/pagedesk/pdxgm.c apps/pagedesk/pdxgmt.c apps/pagedesk/pdxgp.c \
+            apps/pagedesk/pdxgf.c apps/pagedesk/pdxgc.c
+PDX_CAP  := 61440   # PAGEDESK-SPEC 20.22.9 / L6: image + bss
+.PHONY: pdxg pdxg-host
+$(BUILD)/pdxg.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxg.c -o $@
+$(BUILD)/pdxg.gen.asm: $(BUILD)/pdxg.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXG.MOD: apps/pagedesk/pdxg.asm $(BUILD)/pdxg.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxg.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXG.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 60)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDX_CAP) else 0)"
+pdxg-host: $(PDX_C) apps/pagedesk/hosttest/pdxg_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	python3 tools/os88pdfx_gfx.py --check --build $(BUILD)
+pdxg: $(BUILD)/PDXG.MOD pdxg-host
+# ---- end PageDesk: gfx ------------------------------------------------------
+
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
 # `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated

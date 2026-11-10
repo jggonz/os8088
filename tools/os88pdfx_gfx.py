@@ -274,7 +274,7 @@ def tables():
     def arr_(name, vals, per=10):
         s = "static const pdw %s[%d] = {\n" % (name, len(vals))
         for i in range(0, len(vals), per):
-            s += "    " + ", ".join("%d" % v for v in vals[i:i + per]) + ",\n"
+            s += "    " + ", ".join(("%du" if v > 32767 else "%d") % v for v in vals[i:i + per]) + ",\n"
         return s + "};\n"
 
     def enc(x):

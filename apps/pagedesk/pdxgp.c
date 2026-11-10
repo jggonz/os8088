@@ -284,7 +284,7 @@ static void gx_num(pdw n, struct pd_fx *r)
 {
     r->hi = 0; r->lo = 0;
     if (n == GN_NIL) return;
-    if (gx_n[n].t == GN_NUM) *r = gx_n[n].n;
+    if (gx_n[n].t == GN_NUM) { r->hi = gx_n[n].n.hi; r->lo = gx_n[n].n.lo; }
     else if (gx_n[n].t == GN_BOOL) r->hi = (pdi)gx_n[n].a;
 }
 static pdi gx_int(pdw n, pdi dflt)

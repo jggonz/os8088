@@ -100,7 +100,7 @@ static pdb gx_flags_of(pdw row)
 static pdw v_cs(void)
 {
     pdw node, row, i, k, n;
-    struct pd_fx c, rgb[3];
+    static struct pd_fx c, rgb[3];
     node = gx_source();
     if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
     for (i = 0; i < sizeof R_cs; i++) ((pdb *)&R_cs)[i] = 0;
@@ -124,7 +124,7 @@ static pdw v_cs(void)
         for (k = 0; k < 256; k++) {
             if (cs_t[row].kind == GC_IDX) fx_i(&c, (pdi)k);
             else if (k == 255) fx_i(&c, 1);
-            else fx_raw(&c, 0, (pdw)(k * 257u));
+            else fx_raw(&c, 0, (pdw)((k << 8) + k));
             if (cs_conv(row, &c, rgb)) { R_cs.flags |= PDGX_F_NONE; break; }
             R_cs.rgb[k * 3] = (pdb)fx_to255(&rgb[0]);
             R_cs.rgb[k * 3 + 1] = (pdb)fx_to255(&rgb[1]);
@@ -143,7 +143,7 @@ static pdw v_color(void)
 {
     static struct pdgx_cs hdr;
     pdw node, row, i;
-    struct pd_fx rgb[3];
+    static struct pd_fx rgb[3];
     pd_fcopy_in(G.cseg, G.coff, &hdr, 16 + 480);
     G.objnum = hdr.srcobj; G.gen = hdr.srcgen; G.tlen = hdr.srclen;
     gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
@@ -162,7 +162,7 @@ static pdw v_color(void)
 
 static pdw gx_grey(pdw row, const struct pd_fx *comps)
 {
-    struct pd_fx rgb[3];
+    static struct pd_fx rgb[3];
     pdw r, g, b;
     if (cs_conv(row, comps, rgb)) return 255;
     r = fx_to255(&rgb[0]); g = fx_to255(&rgb[1]); b = fx_to255(&rgb[2]);
@@ -173,7 +173,7 @@ static pdw gx_grey(pdw row, const struct pd_fx *comps)
 static pdw v_lut(void)
 {
     pdw node, row, n, i, v, bpc = G.bpc ? G.bpc : 8, maxv, ix;
-    struct pd_fx comps[4], dmin[4], dmax[4], t, f;
+    static struct pd_fx comps[4], dmin[4], dmax[4], t, f;
     pdb inv = 0;
     node = gx_source();
     if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
@@ -188,9 +188,9 @@ static pdw v_lut(void)
         if (cs_t[row].kind == GC_IDX) { fx_i(&dmin[i], 0); fx_i(&dmax[i], (pdi)maxv); }
         else if (cs_t[row].kind == GC_LAB) {
             if (i == 0) { fx_i(&dmin[0], 0); fx_i(&dmax[0], 100); }
-            else { dmin[i] = cs_t[row].p[3 + 2 * (i - 1)]; dmax[i] = cs_t[row].p[4 + 2 * (i - 1)]; }
+            else { fx_cp(&(dmin[i]), &(cs_t[row].p[3 + 2 * (i - 1)])); fx_cp(&(dmax[i]), &(cs_t[row].p[4 + 2 * (i - 1)])); }
         } else { fx_i(&dmin[i], 0); fx_i(&dmax[i], 1); }
-        if ((G.flags & PDGXI_DECODE) && 2 * i + 1 < 8) { dmin[i] = G.comp[2 * i]; dmax[i] = G.comp[2 * i + 1]; }
+        if ((G.flags & PDGXI_DECODE) && 2 * i + 1 < 8) { fx_cp(&(dmin[i]), &(G.comp[2 * i])); fx_cp(&(dmax[i]), &(G.comp[2 * i + 1])); }
     }
     if (n == 1) {
         for (v = 0; v < 256; v++) {
@@ -199,7 +199,7 @@ static pdw v_lut(void)
                 fx_i(&f, (pdi)r); fx_raw(&f, f.hi, 0);
                 /* index = dmin + r * (dmax - dmin) / maxv */
                 fx_sub(&t, &dmax[0], &dmin[0]); fx_mul(&t, &t, &f);
-                { struct pd_fx mv; fx_i(&mv, (pdi)maxv); fx_div(&t, &t, &mv); }
+                { static struct pd_fx mv; fx_i(&mv, (pdi)maxv); fx_div(&t, &t, &mv); }
                 fx_add(&comps[0], &dmin[0], &t);
             } else if (cs_t[row].kind == GC_IDX) {
                 fx_i(&f, (pdi)v);
@@ -208,7 +208,7 @@ static pdw v_lut(void)
                 fx_div(&t, &t, &comps[0]); fx_mul(&t, &t, &f);
                 fx_add(&comps[0], &dmin[0], &t);
             } else {
-                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)(v * 257u));
+                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)((v << 8) + v));
                 fx_sub(&t, &dmax[0], &dmin[0]); fx_mul(&t, &t, &f);
                 fx_add(&comps[0], &dmin[0], &t);
             }
@@ -216,13 +216,13 @@ static pdw v_lut(void)
         }
     } else {
         /* additive or subtractive: does the zero vector paint white? */
-        for (i = 0; i < n; i++) comps[i] = dmin[i];
+        for (i = 0; i < n; i++) fx_cp(&(comps[i]), &(dmin[i]));
         if (cs_t[row].kind == GC_CMYK || cs_t[row].kind == GC_DEVN || gx_grey(row, comps) >= 200) inv = PDGX_LUT_INVERT;
         for (i = 0; i < n; i++) {
             for (v = 0; v < 256; v++) {
                 pdw j;
-                for (j = 0; j < n; j++) comps[j] = dmin[j];
-                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)(v * 257u));
+                for (j = 0; j < n; j++) fx_cp(&(comps[j]), &(dmin[j]));
+                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)((v << 8) + v));
                 fx_sub(&t, &dmax[i], &dmin[i]); fx_mul(&t, &t, &f);
                 fx_add(&comps[i], &dmin[i], &t);
                 ix = gx_grey(row, comps);
@@ -247,7 +247,7 @@ static pdw v_fn(void)
     f = fn_compile(node);
     if (f == FNE_NONE) return PDE_GRAPHICS;
     n = fn_eval(f, G.comp, fe_x);
-    for (i = 0; i < n && i < 8; i++) G.comp[i] = fe_x[i];
+    for (i = 0; i < n && i < 8; i++) fx_cp(&(G.comp[i]), &(fe_x[i]));
     G.ncomp = n; G.ok = n ? 1 : 0;
     return PDE_OK;
 }

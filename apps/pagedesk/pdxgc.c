@@ -99,7 +99,7 @@ static pdw cs_one(pdw node, pdw first)
         d = gx_ares(a, 1);
         g->kind = GC_CALGRAY; g->n = 1;
         cs_wp(g, d);
-        { struct pd_fx gm; fx_i(&gm, 1); gx_num(gx_dres(d, "Gamma"), &gm); if (!gm.hi && !gm.lo) fx_i(&gm, 1); g->p[3] = gm; }
+        { static struct pd_fx gm; fx_i(&gm, 1); gx_num(gx_dres(d, "Gamma"), &gm); if (!gm.hi && !gm.lo) fx_i(&gm, 1); fx_cp(&(g->p[3]), &(gm)); }
     }
     else if (gx_nameis(nm, "CalRGB")) {
         pdw ng, nm9;
@@ -178,7 +178,7 @@ static void cs_xyz_rgb(const struct gxcs *g, const struct pd_fx *xyz, struct pd_
         { 0xCBC5, -1 },
         { 0x0EA6, 1 } };
     static const struct pd_fx d65[3] = { { 0xF352, 0 }, { 0x0000, 1 }, { 0x16BE, 1 } };
-    struct pd_fx s[3], t, u;
+    static struct pd_fx s[3], t, u;
     pdw i, j;
     for (i = 0; i < 3; i++) {
         fx_mul(&t, &xyz[i], &d65[i]);
@@ -193,7 +193,7 @@ static void cs_xyz_rgb(const struct gxcs *g, const struct pd_fx *xyz, struct pd_
 
 static void cs_cmyk(const struct pd_fx *v, struct pd_fx *rgb)
 {
-    struct pd_fx one, ik, t;
+    static struct pd_fx one, ik, t;
     pdw i;
     fx_i(&one, 1);
     fx_sub(&ik, &one, &v[3]);
@@ -213,8 +213,8 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
 {
     struct gxcs *g;
     pdw i, n = cs_cmp_n(row), nb;
-    struct pd_fx t, z;
-    for (i = 0; i < n && i < 8; i++) cv_v[i] = comps[i];
+    static struct pd_fx t, z;
+    for (i = 0; i < n && i < 8; i++) fx_cp(&(cv_v[i]), &(comps[i]));
     for (;;) {
         g = &cs_t[row];
         if (g->kind == GC_IDX) {
@@ -225,23 +225,23 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
             for (j = 0; j < nb; j++) {
                 pdw p = ix * nb + j, byte = p < g->tablen ? cs_tab[g->tab + p] : 0;
                 if (b->kind == GC_LAB) {
-                    if (j == 0) { fx_raw(&t, 100, 0); fx_raw(&z, 0, (pdw)(byte * 257u)); fx_mul(&cv_o[0], &t, &z); }
+                    if (j == 0) { fx_raw(&t, 100, 0); fx_raw(&z, 0, (pdw)((byte << 8) + byte)); fx_mul(&cv_o[0], &t, &z); }
                     else {
                         fx_sub(&t, &b->p[3 + 2 * (j - 1) + 1], &b->p[3 + 2 * (j - 1)]);
-                        fx_raw(&z, 0, (pdw)(byte * 257u));
+                        fx_raw(&z, 0, (pdw)((byte << 8) + byte));
                         fx_mul(&t, &t, &z);
                         fx_add(&cv_o[j], &b->p[3 + 2 * (j - 1)], &t);
                     }
-                } else { fx_raw(&cv_o[j], 0, (pdw)(byte * 257u)); }
+                } else { fx_raw(&cv_o[j], 0, (pdw)((byte << 8) + byte)); }
             }
-            for (j = 0; j < nb; j++) cv_v[j] = cv_o[j];
+            for (j = 0; j < nb; j++) fx_cp(&(cv_v[j]), &(cv_o[j]));
             row++; continue;
         }
         if (g->kind == GC_SEP || g->kind == GC_DEVN) {
             if (g->flags & GCF_NONE) return 1;
             nb = fn_eval(g->fn, cv_v, cv_o);
             if (!nb) { for (i = 0; i < 3; i++) fx_raw(&rgb[i], 0, 0); return 0; }
-            for (i = 0; i < nb; i++) cv_v[i] = cv_o[i];
+            for (i = 0; i < nb; i++) fx_cp(&(cv_v[i]), &(cv_o[i]));
             row++; continue;
         }
         break;
@@ -249,19 +249,19 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
     g = &cs_t[row];
     for (i = 0; i < 4; i++) { if (i < 8 && g->kind != GC_LAB) fx_clamp01(&cv_v[i]); }
     switch (g->kind) {
-    case GC_GRAY: rgb[0] = rgb[1] = rgb[2] = cv_v[0]; break;
-    case GC_RGB: rgb[0] = cv_v[0]; rgb[1] = cv_v[1]; rgb[2] = cv_v[2]; break;
+    case GC_GRAY: fx_cp(&rgb[0], &cv_v[0]); fx_cp(&rgb[1], &cv_v[0]); fx_cp(&rgb[2], &cv_v[0]); break;
+    case GC_RGB: fx_cp(&(rgb[0]), &(cv_v[0])); fx_cp(&(rgb[1]), &(cv_v[1])); fx_cp(&(rgb[2]), &(cv_v[2])); break;
     case GC_CMYK: cs_cmyk(cv_v, rgb); break;
     case GC_CALGRAY: {
-        struct pd_fx l;
+        static struct pd_fx l;
         fx_pow(&l, &cv_v[0], &g->p[3]);
         fx_senc(&rgb[0], &l);
-        rgb[1] = rgb[2] = rgb[0];
+        fx_cp(&rgb[1], &rgb[0]); fx_cp(&rgb[2], &rgb[0]);
         break; }
     case GC_CALRGB: {
-        struct pd_fx lin[3], xyz[3];
+        static struct pd_fx lin[3], xyz[3];
         pdw j;
-        if (g->flags & 2) { rgb[0] = cv_v[0]; rgb[1] = cv_v[1]; rgb[2] = cv_v[2]; break; }
+        if (g->flags & 2) { fx_cp(&(rgb[0]), &(cv_v[0])); fx_cp(&(rgb[1]), &(cv_v[1])); fx_cp(&(rgb[2]), &(cv_v[2])); break; }
         for (i = 0; i < 3; i++) fx_pow(&lin[i], &cv_v[i], &g->p[3 + i]);
         for (i = 0; i < 3; i++) {          /* the matrix is column-major in PDF: [XA YA ZA XB YB ZB XC YC ZC] */
             fx_raw(&xyz[i], 0, 0);
@@ -270,7 +270,7 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
         cs_xyz_rgb(g, xyz, rgb);
         break; }
     case GC_LAB: {
-        struct pd_fx f[3], xyz[3], c16, c116, c500, c200, u;
+        static struct pd_fx f[3], xyz[3], c16, c116, c500, c200, u;
         /* clamp a, b to the range */
         fn_clip(&cv_v[1], &g->p[3], &g->p[4]);
         fn_clip(&cv_v[2], &g->p[5], &g->p[6]);
@@ -280,11 +280,11 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
         fx_div(&t, &cv_v[1], &c500); fx_add(&f[0], &f[1], &t);
         fx_div(&t, &cv_v[2], &c200); fx_sub(&f[2], &f[1], &t);
         for (i = 0; i < 3; i++) {
-            struct pd_fx th, q;
+            static struct pd_fx th, q;
             fx_raw(&th, 0, 0x34F7);                 /* 6/29 */
             if (fx_cmp(&f[i], &th) > 0) { fx_mul(&q, &f[i], &f[i]); fx_mul(&q, &q, &f[i]); }
             else {
-                struct pd_fx k, c4;
+                static struct pd_fx k, c4;
                 fx_raw(&k, 0, 0x20E0);              /* 3 * (6/29)^2 */
                 fx_raw(&c4, 0, 0x234F);             /* 4/29 */
                 fx_sub(&q, &f[i], &c4); fx_mul(&q, &q, &k);

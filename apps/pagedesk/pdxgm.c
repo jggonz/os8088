@@ -9,6 +9,7 @@
 
 typedef struct pd_fx fx;
 
+static void fx_cp(fx *d, const fx *s) { d->hi = s->hi; d->lo = s->lo; }
 static void fx_i(fx *r, pdi n) { pdm_fx_int(r, n); }
 static void fx_raw(fx *r, pdi hi, pdw lo) { r->hi = hi; r->lo = lo; }
 static pdi fx_sign(const fx *a) { return a->hi < 0 ? -1 : (a->hi == 0 && a->lo == 0 ? 0 : 1); }
@@ -29,9 +30,9 @@ static void fx_clamp01(fx *r)
 /* x in 0..1 (16.16) to 0..255, rounded */
 static pdw fx_to255(const fx *a)
 {
-    fx t, k;
+    static fx t, k;
     fx_raw(&k, 255, 0);
-    t = *a;
+    fx_cp(&(t), &(*a));
     fx_clamp01(&t);
     fx_mul(&t, &t, &k);
     return (pdw)pdm_fx_round(&t);
@@ -40,7 +41,7 @@ static pdw fx_to255(const fx *a)
 /* the high 16 bits of a*b */
 static pdw gm_mulh(pdw a, pdw b)
 {
-    struct pd_u32 r;
+    static struct pd_u32 r;
     pdm_u32_mul16(&r, a, b);
     return r.hi;
 }
@@ -97,10 +98,10 @@ static void fx_exp2(fx *r, const fx *x)
 /* x ^ y for x >= 0 */
 static void fx_pow(fx *r, const fx *x, const fx *y)
 {
-    fx l;
+    static fx l;
     if (y->hi == 0 && y->lo == 0) { fx_i(r, 1); return; }
     if (x->hi < 0 || (x->hi == 0 && x->lo == 0)) { fx_raw(r, 0, 0); return; }
-    if (y->hi == 1 && y->lo == 0) { *r = *x; return; }
+    if (y->hi == 1 && y->lo == 0) { fx_cp(&(*r), &(*x)); return; }
     fx_log2(&l, x);
     fx_mul(&l, &l, y);
     fx_exp2(r, &l);
@@ -108,7 +109,7 @@ static void fx_pow(fx *r, const fx *x, const fx *y)
 
 static void fx_sqrt(fx *r, const fx *x)
 {
-    fx l, g, q, h;
+    static fx l, g, q, h;
     pdi i;
     if (x->hi < 0 || (x->hi == 0 && x->lo == 0)) { fx_raw(r, 0, 0); return; }
     fx_log2(&l, x);
@@ -123,15 +124,15 @@ static void fx_sqrt(fx *r, const fx *x)
         fx_add(&g, &g, &q);
         fx_mul(&g, &g, &h);
     }
-    *r = g;
+    fx_cp(&(*r), &(g));
 }
 
 /* sine of an angle in degrees */
 static void fx_sin(fx *r, const fx *deg)
 {
-    fx d, k, z;
+    static fx d, k, z;
     pdi neg = 0;
-    d = *deg;
+    fx_cp(&(d), &(*deg));
     while (d.hi < 0) d.hi += 360;
     while (d.hi >= 360) d.hi -= 360;
     if (d.hi >= 180) { d.hi -= 180; neg = 1; }
@@ -142,7 +143,7 @@ static void fx_sin(fx *r, const fx *deg)
 }
 static void fx_cos(fx *r, const fx *deg)
 {
-    fx d, n;
+    static fx d, n;
     fx_i(&n, 90);
     fx_sub(&d, &n, deg);
     fx_sin(r, &d);
@@ -151,7 +152,7 @@ static void fx_cos(fx *r, const fx *deg)
 /* atan2(num, den) in degrees, 0..360 (the PostScript atan) */
 static void fx_atan2(fx *r, const fx *num, const fx *den)
 {
-    fx a, b, q, t;
+    static fx a, b, q, t;
     pdi swap = 0, quad;
     pdw v;
     pdw i, f;
@@ -159,7 +160,7 @@ static void fx_atan2(fx *r, const fx *num, const fx *den)
            num->hi < 0 ? (pdw)(0 - num->lo) : num->lo);
     fx_raw(&b, den->hi < 0 ? -den->hi - (den->lo ? 1 : 0) : den->hi,
            den->hi < 0 ? (pdw)(0 - den->lo) : den->lo);
-    if (fx_cmp(&a, &b) > 0) { t = a; a = b; b = t; swap = 1; }
+    if (fx_cmp(&a, &b) > 0) { fx_cp(&(t), &(a)); fx_cp(&(a), &(b)); fx_cp(&(b), &(t)); swap = 1; }
     if (b.hi == 0 && b.lo == 0) { fx_raw(r, 0, 0); return; }
     fx_div(&q, &a, &b);                 /* 0..1 */
     i = q.hi ? 64 : (q.lo >> 10);
@@ -172,18 +173,19 @@ static void fx_atan2(fx *r, const fx *num, const fx *den)
     if (quad == 2) { fx_i(&q, 180); fx_sub(&t, &q, &t); }
     else if (quad == 3) { fx_i(&q, 180); fx_add(&t, &q, &t); }
     else if (quad == 4) { fx_i(&q, 360); fx_sub(&t, &q, &t); }
-    *r = t;
+    fx_cp(&(*r), &(t));
 }
 
 /* linear light 0..1 to the sRGB-encoded value 0..1 */
 static void fx_senc(fx *r, const fx *lin)
 {
-    fx x = *lin;
+    static fx x;
+    fx_cp(&(x), &(*lin));
     pdw i, f, v;
     fx_clamp01(&x);
     if (x.hi) { fx_i(r, 1); return; }
     i = x.lo >> 10; f = (pdw)((x.lo & 0x3FF) << 6);
     /* coarse table near black (the toe is steep): refine with two more bits */
     v = gm_tab(gm_senc, i, f);
-    r->hi = 0; r->lo = v; if (v == 65535) fx_i(r, 1);
+    r->hi = 0; r->lo = v; if (v == 65535u) fx_i(r, 1);
 }
