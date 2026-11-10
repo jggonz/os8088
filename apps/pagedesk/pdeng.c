@@ -66,9 +66,9 @@ static pdw ob_cur_n, ob_cur_g;  /* ...and its number (RES_LOOKUP's PDRL_DIRECT) 
 static pdw   ob_null;           /* the last ob_enter found a free/absent obj  */
 
 /* ---- xref (pdexref.c) ---------------------------------------------------- */
-static struct xsub xs[PD_MAXREV * PDE_REVSUB];
+static struct xsub xs[PD_MAXSUBSEC];
 static pdw   nxs;
-static pdw   rv_lo[PD_MAXREV], rv_n[PD_MAXREV];
+static pdw   rv_lo[PD_MAXREV], rv_n[PD_MAXREV], rv_thin[PD_MAXREV];
 static struct pd_u32 xr_seen[PD_MAXREV];
 static pdw   nrev;
 static struct pd_u32 xr_next;   /* the /Prev to follow, 0 = none              */
@@ -111,6 +111,8 @@ static pdb   tmpb[128];
 /* the stream header parse (ob_stream) */
 static pdw   sp_kind;
 static struct pd_u32 sp_off, sp_dstart, sp_len;
+static struct pd_u32 sp_lpos, sp_lend;  /* an indirect /Length's "n g R" (PDRC_PLAIN, 20.22.3.3) */
+static pdw sp_lref;
 static pdw   sp_nflt, sp_filters;
 static pdb   sp_flt[PD_MAXFILTERS];
 

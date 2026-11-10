@@ -317,9 +317,13 @@ static pdw ob_stream_dict(pdw num, pdw gen)
     rc = ob_dict_find("Length");
     if (rc == PDE_NOTFOUND) { rc = PDE_SYNTAX; goto bad; }
     if (rc) return rc;
+    lx_skipws();
+    lx_tell(&sp_lpos);
     rc = ob_value();
     if (rc) return rc;
-    if (ov.kind == PDK_REF) { rc = ob_follow(); if (rc) return rc; }
+    lx_tell(&sp_lend);
+    sp_lref = (pdw)(ov.kind == PDK_REF);
+    if (sp_lref) { rc = ob_follow(); if (rc) return rc; }
     if (ov.kind != PDK_INT || ov.neg || ov.range) { rc = PDE_SYNTAX; goto bad; }
     u32_cp(&sp_len, &ov.iv);
     rc = st_end(&sp_dstart, &sp_len);

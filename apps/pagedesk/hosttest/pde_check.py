@@ -237,8 +237,15 @@ def check_members(pde, path, opts, work):
             if p != b"%d 0 obj\n" % n + val + b"\nendobj\n":
                 fail("%s: object %d PLAIN %r" % (tag, n, p[:80]))
         elif n in unc:
-            if pos != unc[n] or e != p or e != data[pos:pos + len(e)] or not e.endswith(b"endobj"):
-                fail("%s: object %d at %d (qpdf %d): EXACT/PLAIN %d/%d bytes" % (tag, n, pos, unc[n], len(e), len(p)))
+            # PLAIN is EXACT but for an indirect stream /Length, written as its number (20.22.4.2)
+            want = e
+            m = re.search(rb"/Length(\s+)(\d+)\s+(\d+)\s+R", e[:e.find(b"stream")] if b"stream" in e else b"")
+            if m:
+                lo = subprocess.run(["qpdf", "--show-object=%s" % m.group(2).decode(), path], capture_output=True)
+                want = e[:m.start(2)] + lo.stdout.strip() + e[m.end():]
+            if pos != unc[n] or p != want or e != data[pos:pos + len(e)] or not e.endswith(b"endobj"):
+                fail("%s: object %d at %d (qpdf %d): EXACT/PLAIN %d/%d bytes, PLAIN wanted %d" %
+                     (tag, n, pos, unc[n], len(e), len(p), len(want)))
     want = len([n for n in comp]) + len([n for n in unc if n])
     if seen < want:
         fail("%s: %d objects copied, qpdf has %d" % (tag, seen, want))
@@ -531,7 +538,7 @@ def own(pde, work):
         "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:16", "n_a85": "ok", "n_dct": "stream:17",
         "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
         "n_encrypt": "open:23", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "repaired",
-        "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "ok", "n_subsec_65540": "open:33",
+        "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "open:33", "n_subsec_65540": "open:33",
     }
     for name, e in sorted(EXP.items()):
         out = lines(pde, "dump", P(name + ".pdf"), (), ("-b", "100000"))

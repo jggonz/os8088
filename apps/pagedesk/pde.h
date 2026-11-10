@@ -121,11 +121,11 @@ struct pde_val {
     pdb text[PDE_VT];
 };
 
-/* one xref subsection of a classic revision: a revision keeps at most
- * PDE_REVSUB, and one with more is folded into the flat index instead
- * (PAGEDESK-SPEC 20.22.3.1, which replaced 20.2.3's checkpoints) */
+/* one xref subsection, or in a thinned revision a CHECKPOINT: the ones after
+ * it up to the next are read from the file (PAGEDESK-SPEC 20.2.3); a
+ * revision keeps at most PDE_REVSUB of them */
 struct xsub { pdw first, count; struct pd_u32 off; };
-#define PDE_REVSUB      8
+#define PDE_REVSUB      (PD_MAXSUBSEC / PD_MAXREV)
 
 struct pw_frame { pdw num, gen; struct pd_u32 kpos; };
 

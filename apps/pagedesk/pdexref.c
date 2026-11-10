@@ -145,7 +145,9 @@ static pdw ix_ready(pdw n)
  * (xo_off.hi = 0x8000 | the stream, xo_off.lo = the member index). */
 static pdw xr_find(pdw num)
 {
-    pdw r, j, e, t, slot, tag;
+    static struct pd_u32 sp;
+    struct xsub *p, *x;
+    pdw r, j, first, count, t, slot, tag;
     xo_state = 0;
     if (num == 0) { xo_state = 1; return PDE_OK; }
     if (ix_on) {                                       /* the flat index (20.22.3.1) */
@@ -168,17 +170,36 @@ static pdw xr_find(pdw num)
     }
     for (r = 0; r < nrev; r++) {
         xr_rev = r;
-        for (j = 0; j < rv_n[r]; j++) {
-            e = (pdw)(rv_lo[r] + j);
-            t = xr_entry(num, xs[e].first, xs[e].count, &xs[e].off);
-            if (t == 2) return xr_rc;
-            if (t == 1) return PDE_OK;
+        x = 0;
+        for (j = 0, p = xs + rv_lo[r]; j < rv_n[r]; j++, p++) {
+            if (!rv_thin[r]) {                          /* exact: any order */
+                t = xr_entry(num, p->first, p->count, &p->off);
+                if (t == 2) return xr_rc;
+                if (t == 1) return PDE_OK;
+            } else if (p->first <= num) x = p;
+        }
+        if (x) {                                        /* thinned: from the checkpoint at or below */
+            first = x->first; count = x->count;
+            u32_cp(&sp, &x->off);
+            /* the table is ascending, so the subsections after a checkpoint are
+             * read from the file until one starts past num or the table ends */
+            for (;;) {
+                t = xr_entry(num, first, count, &sp);
+                if (t == 2) return xr_rc;
+                if (t == 1) return PDE_OK;
+                pdm_u32_mul16(&s_a, 20, count);
+                pdm_u32_add(&sp, &sp, &s_a);
+                if (xr_header(&sp)) break;
+                first = xh_first; count = xh_count;
+                if (num < first) break;
+            }
         }
     }
     return PDE_OK;
 }
 
 /* ---- OPEN, step 0: the file, the header, startxref ---------------------- */
+static pdw xr_total;                    /* subsections named by the whole chain */
 static pdw op_start(void)
 {
     pdw rc, n, i, j, found;
@@ -215,20 +236,35 @@ static pdw op_start(void)
     if (u32_dec(&tr_start, tailbuf + i, (pdw)(j - i))) return PDE_XREF;
     if (pdm_u32_cmp(&tr_start, &fl_size) >= 0 || u32_is0(&tr_start)) return PDE_XREF;
     u32_cp(&xr_next, &tr_start);
-    nxs = 0; nrev = 0;
+    nxs = 0; nrev = 0; xr_total = 0;
     return PDE_OK;
 }
 
-/* A subsection into its revision's PDE_REVSUB; a revision with more makes
- * the chain the flat index's (20.22.3.1 - it replaced 20.2.3's thinning) */
-static void xr_add(pdw first, pdw count, const struct pd_u32 *off)
+/* D10c: the whole chain may name at most PD_MAXSUBSEC subsections */
+static pdw xr_unord;
+static pdw xr_add(pdw first, pdw count, const struct pd_u32 *off)
 {
-    pdw e = (pdw)(rv_lo[nrev] + rv_n[nrev]);
-    if (rv_n[nrev] == PDE_REVSUB) { ix_on = 1; return; }
-    xs[e].first = first; xs[e].count = count;
-    u32_cp(&xs[e].off, off);
-    rv_n[nrev]++;
-    nxs = (pdw)(e + 1);
+    struct xsub *p, *q;
+    pdw lo, n, j;
+    if (++xr_total > PD_MAXSUBSEC) return PDE_LIMIT;
+    lo = rv_lo[nrev]; n = rv_n[nrev];
+    /* a thinned revision is searched in ascending order: one out of order,
+     * before or AFTER the thinning, would hide objects (20.2.3) */
+    if (xr_unord && (rv_thin[nrev] || n == PDE_REVSUB)) return PDE_LIMIT;
+    p = xs + lo;
+    if (n == PDE_REVSUB) {                              /* thin: every other one stays a checkpoint */
+        for (j = 0, q = p; j < PDE_REVSUB / 2; j++, q += 2) {
+            p[j].first = q->first; p[j].count = q->count;
+            p[j].off.lo = q->off.lo; p[j].off.hi = q->off.hi;
+        }
+        n = PDE_REVSUB / 2;
+        rv_thin[nrev] = 1;
+    }
+    p += n;
+    p->first = first; p->count = count; p->off.lo = off->lo; p->off.hi = off->hi;
+    rv_n[nrev] = (pdw)(n + 1);
+    nxs = (pdw)(lo + n + 1);
+    return PDE_OK;
 }
 
 /* ---- OPEN, step 1: one revision (xref table + trailer, or an xref stream) */
@@ -324,14 +360,15 @@ static pdw xs_head(void)
 static pdw op_rev(void)
 {
     pdw rc, first, count, i, isnewest;
-    pdw n;
+    pdw n, prevfirst;
     isnewest = (pdw)(nrev == 0);
     err_detail = nrev;
     for (i = 0; i < nrev; i++)
         if (pdm_u32_cmp(&xr_seen[i], &xr_next) == 0) return PDE_XREF;   /* /Prev loop */
     if (nrev >= PD_MAXREV) return PDE_LIMIT;
     u32_cp(&xr_seen[nrev], &xr_next);
-    rv_lo[nrev] = (pdw)(nrev * PDE_REVSUB); rv_n[nrev] = 0;
+    rv_lo[nrev] = (pdw)(nrev * PDE_REVSUB); rv_n[nrev] = 0; rv_thin[nrev] = 0;
+    xr_unord = 0; prevfirst = 0;
     rv_kind[nrev] = 0; u32_zero(&rv_xstm[nrev]);
     L = &fobj;
     lx_seek(&xr_next);
@@ -372,7 +409,12 @@ static pdw op_rev(void)
         pdm_u32_mul16(&s_a, 20, count);
         pdm_u32_add(&s_b, &s_c, &s_a);
         if (pdm_u32_cmp(&s_b, &fl_size) > 0) return PDE_TRUNC;
-        if (count) xr_add(first, count, &s_c);
+        if (count) {
+            if (first < prevfirst) xr_unord = 1;
+            prevfirst = first;
+            rc = xr_add(first, count, &s_c);
+            if (rc) return rc;
+        }
         lx_seek(&s_b);
     }
     rc = lx_token();

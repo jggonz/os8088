@@ -695,6 +695,18 @@ struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
 };
 /* [crypt 20.22.5]  */
 /* [wrt 20.22.4]    */
+#define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
+                                    before the job: the keys of the ENCRYPTED foreign
+                                    files an Insert reads (plat's pre-flight, 20.22.4.5) */
+struct pdxb_wkey {
+    pdw  slot;              /* the Insert slot (0..2) of the file             */
+    pdw  key_len, stm, str, eff, encmeta;   /* what PDV_ENG_SETKEY takes      */
+    pdb  key[32];
+};
+struct pdxb_wkeys { pdw n; struct pdxb_wkey k[3]; };
+#define PDRC_ENCDICT 0xFFFE /* PDV_ENG_RAW_COPY objnum: the text of a DIRECT /Encrypt
+                               dictionary ("<< ... >>"), when pdxb_trailer.tflags has
+                               PDTR_ENCDIRECT (PDRC_EXACT or PLAIN: same bytes)        */
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */

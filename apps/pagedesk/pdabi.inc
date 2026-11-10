@@ -249,6 +249,8 @@ PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
 PDRL_DIRECT              equ 0x0001
+PDV_WRT_KEYS             equ 0x85
+PDRC_ENCDICT             equ 0xFFFE
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -730,5 +732,24 @@ PDXB_RESLOOKUP_X_CNUM          equ 62
 PDXB_RESLOOKUP_X_CGEN          equ 64
 PDXB_RESLOOKUP_X_COFF          equ 66
 PDXB_RESLOOKUP_X_BYTES         equ 70
+
+; ---- struct pdxb_wkey (44 bytes) -------------------------------------------
+PDXB_WKEY_SLOT                 equ 0
+PDXB_WKEY_KEY_LEN              equ 2
+PDXB_WKEY_STM                  equ 4
+PDXB_WKEY_STR                  equ 6
+PDXB_WKEY_EFF                  equ 8
+PDXB_WKEY_ENCMETA              equ 10
+PDXB_WKEY_KEY                  equ 12
+PDXB_WKEY_KEY_N                equ 32
+PDXB_WKEY_KEY_ESZ              equ 1
+PDXB_WKEY_BYTES                equ 44
+
+; ---- struct pdxb_wkeys (134 bytes) ------------------------------------------
+PDXB_WKEYS_N                   equ 0
+PDXB_WKEYS_K                   equ 2
+PDXB_WKEYS_K_N                 equ 3
+PDXB_WKEYS_K_ESZ               equ 44
+PDXB_WKEYS_BYTES               equ 134
 
 %endif ; PDABI_INC

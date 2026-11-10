@@ -20,7 +20,7 @@ stream's decoded bytes, and every object-stream member's bytes, EXACT and PLAIN
 Deterministic: qpdf is run with --deterministic-id and nothing here reads the
 clock, so the same tree and the same qpdf make the same bytes.
 """
-import base64, os, re, subprocess, sys, zlib
+import base64, os, re, subprocess, sys, tempfile, zlib
 
 QPDF = "qpdf"
 NOTES = []
@@ -259,6 +259,29 @@ def xrefstm_update(classic):
     return bytes(data)
 
 
+def classic_update(data):
+    """A classic xref section appended to a file whose newest section is a
+    cross-reference stream (/Prev to it), replacing one page: PDWRT's output."""
+    out = bytearray(data)
+    prev = int(re.search(rb"startxref\s+(\d+)", data[-64:]).group(1))
+    trailer = re.search(rb"<<\s*/Type\s*/XRef.*?>>\s*stream", data[prev:], re.S).group(0)
+    size = int(re.search(rb"/Size\s+(\d+)", trailer).group(1))
+    root = re.search(rb"/Root\s+(\d+ \d+ R)", trailer).group(1)
+    ident = re.search(rb"/ID\s*\[[^\]]*\]", trailer).group(0)
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as t:
+        t.write(data)
+        t.flush()
+        first = subprocess.run([QPDF, "--json=2", "--json-key=pages", t.name], capture_output=True, text=True).stdout
+        pg = int(re.search(r'"object":\s*"(\d+) 0 R"', first).group(1))
+        body = subprocess.run([QPDF, "--show-object=%d" % pg, t.name], capture_output=True).stdout.strip()
+    o = len(out)
+    out += b"%d 0 obj\n" % pg + body[:-2].rstrip() + b" /Rotate 90 >>\nendobj\n"
+    x = len(out)
+    out += b"xref\n0 1\n0000000000 65535 f \n%d 1\n%010d 00000 n \n" % (pg, o)
+    out += b"trailer\n<< /Size %d /Root %s %s /Prev %d >>\nstartxref\n%d\n%%%%EOF\n" % (size, root, ident, prev, x)
+    return bytes(out)
+
+
 def damage_startxref(data):
     i = data.rindex(b"startxref")
     return data[:i] + b"startxref\n%d\n%%%%EOF\n" % (len(data) * 3)
@@ -373,6 +396,18 @@ def main():
     must_decode(p, 9, t2, "A85.PDF")
     objstm(p, os.path.join(out, "A85_OS.PDF"), 0, keep=True)
     NOTES.append(("A85_OS.PDF", "A85.PDF in object streams, its filters kept"))
+    # PDRC_PLAIN writes an indirect stream /Length as its number (20.22.4.2)
+    d = Doc(b"1.4")
+    d.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    d.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+    d.put(3, b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>")
+    body = b"0 0 m 100 100 l S\n" * 7
+    d.objs[4] = b"<< /Length 5 0 R >>\nstream\n" + body + b"\nendstream"
+    d.put(5, b"%d" % len(body))
+    save(out, "LENREF.PDF", d.finish(1), "a content stream whose /Length is a reference (RAW_COPY PLAIN makes it direct)")
+    # a CLASSIC update on top of a cross-reference stream: what PDWRT writes (20.22.4)
+    save(out, "MARKU_CU.PDF", classic_update(open(os.path.join(out, "MARKU_OZ.PDF"), "rb").read()),
+         "MARKU_OZ.PDF plus a classic-table update (/Prev to the xref stream): page 1 rotates")
     # RES_LOOKUP's PDRL_DIRECT (20.22.3.8): an ExtGState written inside the page
     d = Doc(b"1.5")
     d.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
