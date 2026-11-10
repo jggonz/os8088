@@ -4815,3 +4815,150 @@ gate that charged them would need a KAPI measured for a drawing call (156 is
 `READ_SEQ`'s, with an `int 13h` and the IRQ0 progress widget under it) and is
 left for its own change.
 
+
+### 20.22 Any PDF on the machine (`anypdf`, the any-PDF round)
+
+The owner's goal (2026-11-09): *"Make PageDesk able to read any PDF inside the
+operating system without the python tool."* Until this round, everything
+outside 1.3's profile was refused, drawn as **Incomplete rendering**, or left
+to `tools/os88pdprep.py` (20.14) on a modern host. The story list is
+`docs/plans/PAGEDESK-ANY-PLAN.md` (AP-01 to AP-20). This section is the
+contract those stories build against. Each agent writes detail only under its
+own 20.22.N. 1.3's profile table is rewritten from 20.22's results in the
+round's final pass, not before.
+
+**Owner decisions** (the plan's section 2 records the alternatives):
+
+| # | decision |
+|---|---|
+| O1 | Everything: xref and object streams, broken-xref repair, every filter, encryption, JPEG/CCITT/JBIG2, JPX at a reduced resolution level, every colour space, shading and patterns, soft masks and transparency, embedded TrueType/CFF/Type1/Type3/CID fonts drawn from their outlines |
+| O2 | New code goes in lazy modules sharing ONE slot, swapped as pages need them, plus a cache of the module images in XMS or EMS when the machine has either |
+| O3 | Encryption: the empty user password silently, otherwise a password prompt; RC4-40/128, AES-128, AES-256 (R6); a save appends an incremental update encrypted with the file's own key |
+| O4 | Transparency is blended TRUE, through an 8-bit grey band, then quantised or dithered to the adapter |
+| O5 | The permission bits `/P` are ignored: every action is allowed once the file is open; a save keeps the source's `/P` and `/Encrypt` |
+| O6 | AES-256 (R6) on an 8088 asks first: *"This file's encryption takes about N minutes on this machine. Open anyway?"*; other CPUs derive with progress and Cancel |
+| O7 | The 360KB set becomes TWO floppies; `PAGEDESK.O88` carries every module on every geometry |
+
+**Lead decisions** (binding on every agent):
+
+* **L1 - code goes where it RUNS.** Anything per byte or per object is
+  resident: PDENG grows to the Makefile's 57,344 bytes (image + bss) and
+  PDREND to the part limit 65,024. Anything at open only is PDXK. Anything at
+  interpretation is PDXG or PDXF, and its RESULT is kept in a core cache
+  (`PDMEM_XC`, the synthetic strikes in the glyph cache), so a later pass
+  needs no module. The only module that runs while bands are drawn is an image
+  decoder (PDXI, PDXJ). 8-bit compositing, shading spans and the quantiser
+  are core.
+* **L2 - the module ladder.** A verb that needs an absent occupant answers
+  `PDE_NEEDMOD` (CF = 0, DX = `PDX_*`) at a point it can resume from. Inside
+  PDREND, an operator whose work needs an absent module and whose result is
+  not cached is recorded as pending and skipped; the pass runs on. At the end
+  of the interpretation pass, before any band is drawn, a pending module is
+  answered with `PDE_NEEDMOD`. The primary loads it, says so with
+  `PDV_REND_SLOT`, and steps again; the pass re-runs from the start of the
+  band group (it already rescans, D4) with the module resident and the
+  earlier modules' results cached. While bands are drawn, the first band
+  whose image record needs a codec that is not resident answers `PDE_NEEDMOD`
+  before that band is put on the screen. A page view loads each module at
+  most once while interpreting. A module that cannot be loaded (`PDE_NOSLOT`,
+  a read error) sets `PDF_INC_MODULE`, and the page is drawn without that
+  feature. `pdxb_rstatus.mods` and `.swaps` report what a page cost.
+* **L3 - the slot** is one region holding the occupant's image + bss and its
+  workspace (`slot_seg/slot_kb`, given at `PDV_X_INIT`), sized per occupant
+  from 20.22.2's table and claimed by the primary when first needed. Modules
+  never claim (3.4). The cache of unpacked occupant images in XMS or EMS is
+  the primary's. Preferences has an Auto/Off row for it, and the disk is the
+  fallback.
+* **L4 - memory.** At most 8 claims at every peak on kern_big (`MEM_OWNER_MAX`).
+  A file in 1.3's old profile keeps working on a 640 KiB XT, with at least
+  64 KiB unclaimed after PD-29's session on every adapter. Everything new is
+  claimed only when a document or page needs it, and on refusal degrades to a
+  sentence, never to a crash.
+* **L5 - honesty.** A feature this round supports never sets an Incomplete bit
+  for a page that MuPDF draws. A reduced-resolution decode is NOT Incomplete,
+  and neither is a dither. Everything that is still skipped keeps its
+  `PDF_INC_*` bit and its first name.
+* **L6 - budgets** (image + bss, against the round's start). The plan's
+  section 4 has the table per agent. A budget is a cap: an agent that needs
+  more writes `BLOCKED` with the figure; it does not take a neighbour's.
+* **L7 - checks.** Every component compiles on the host and is held against
+  an independent reader (qpdf, MuPDF, Poppler, libjpeg's `djpeg`, OpenJPEG's
+  `opj_decompress`). Fixtures are DETERMINISTIC and their generators live in
+  `tools/os88pdfx_<key>.py`. A fixture whose generator needs a tool this
+  host lacks is committed with its provenance under `tests/pdfany/<key>/`.
+  Every new chain passes `pdstk` (deep 1,776, UI 384) and `pdkgate`.
+
+#### 20.22.1 The ABI this round adds (the lead's, `pdabi.h`)
+
+* Codes: `PDE_PASSWORD` 23, `PDE_NOSLOT` 24, and two statuses that are NOT
+  failures, `PDE_NEEDMOD` 66 and `PDE_NEEDMEM` 67 (CX = `PDMEM_*`, DX = KiB:
+  the primary claims the region, puts it in `pdxb_init`, re-INITs and calls
+  the same verb again). `PDE_XREFSTM` now means a damaged cross-reference
+  stream. `PDE_ENCRYPT` now means a handler PageDesk does not implement.
+* Incomplete bits `PDF_INC_MODULE`, `PDF_INC_APPROX`.
+* `PDM_ABI` 2. Occupant magics `'PK' 'PG' 'PF' 'PI' 'PJ'`, ids `PDX_KEY`
+  1 to `PDX_JPX` 5, and regions `PDMEM_XIDX`, `PDMEM_OSW`, `PDMEM_XC`,
+  `PDMEM_X8`.
+* Verbs: `PDV_ENG_CRYPTINFO` 0x13, `PDV_ENG_SETKEY` 0x14, `PDV_ENG_CRYPT`
+  0x15, `PDV_ENG_SLOT` 0x16, `PDV_REND_SLOT` 0x48, and the occupants' range
+  0xC0-0xFF: `PDV_X_INIT` 0xC0, `PDV_KEY_AUTH` 0xC1, `PDV_KEY_COST` 0xC2,
+  `PDV_IMG_OPEN/ROW/CLOSE` 0xE8-0xEA. Reserved ranges: eng 0x17-0x1F, crypt
+  0x20-0x27 and 0xC3-0xC7, rcore 0x49-0x4F, wrt 0x85-0x8F, gfx and blend
+  0xC8-0xD7, fonts 0xD8-0xE7, the image agents 0xEB-0xEF.
+* Structs grown at their END (an old caller's zeroed field keeps the old
+  behaviour): `pdxb_init` (slot, xidx, osw, xc, x8 regions, cpu, PDREND's
+  door), `pdxb_strm` (`accept`/`codec`), `pdxb_rawcopy` (`mode`:
+  `PDRC_PLAIN`), `pdxb_trailer` (`id0_hi`, `encrypt_num/gen`, `tflags`),
+  `pdxb_rstatus` (`mods`, `swaps`). Open flags `PDO_ENCRYPTED`,
+  `PDO_XREFSTM`, `PDO_OBJSTM`, `PDO_REPAIRED`. New structs `pdxb_crypt`,
+  `pdxb_cryptop` and `pdxb_img`.
+* An agent's own structs go ONLY in its marked block at the end of
+  `pdabi.h`, and a change to a lead struct is a `BLOCKED` line naming it.
+
+#### 20.22.2 The slot, the ladder and the claims (`plat`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.3 Structure: cross-reference streams, object streams, repair, LZW, ASCII85 (`eng`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.4 Saving from and to the new kinds of file (`wrt`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.5 Encryption (`crypt`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.7 PDREND's core: the ladder, the cache, images, Type3 (`rcore`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.8 Fonts from their programs (`fonts`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.9 Colour spaces, functions, shading, patterns (`gfx`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.10 Transparency through an 8-bit band (`blend`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.11 PDXI and JPEG (`dct`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.12 CCITT and JBIG2 (`bilevel`)
+
+*Reserved; written by its agent before its code.*
+
+#### 20.22.13 JPEG 2000 (`jpx`)
+
+*Reserved; written by its agent before its code.*

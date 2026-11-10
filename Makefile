@@ -21465,7 +21465,7 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 # pdrprim.inc. `make pdrend` builds the module AND runs its host checks;
 # `make` itself does not depend on it until the lead flips PD_REND_MOD.
 PDR_DIR   := apps/pagedesk
-PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
+PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
@@ -21704,7 +21704,7 @@ PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c a
 PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 49152   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert)
+PDW_CAP  := 53248   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 52 KiB for any PDF (PAGEDESK-SPEC 20.22, L6)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \

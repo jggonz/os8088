@@ -21,6 +21,7 @@ unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
 #endif
 
 #include "pdrg.c"
+#include "pdrxc.c"   /* the slot and the extension cache (20.22.2, 20.22.7) */
 #include "pdrd.c"
 #include "pdrf.c"
 #include "pdri.c"

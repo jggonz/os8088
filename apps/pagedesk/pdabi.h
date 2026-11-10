@@ -80,6 +80,14 @@ struct pd_view {
 #define PDE_ENCRYPT     20
 #define PDE_XREFSTM     21
 #define PDE_SIGNED      22
+/* any PDF (PAGEDESK-SPEC 20.22). PDE_XREFSTM is no longer a refusal: it now
+ * means a DAMAGED cross-reference stream. PDE_ENCRYPT now means an encryption
+ * PageDesk does not implement (a handler other than /Standard, public-key,
+ * an unknown /V or /R); every Standard-handler file opens (20.22.5). */
+#define PDE_PASSWORD    23      /* a password is needed, or the one given is
+                                   wrong: drives the prompt (20.22.6)      */
+#define PDE_NOSLOT      24      /* no RAM for the module slot: the feature is
+                                   skipped and the page says Incomplete     */
 #define PDE_RANGE       32
 #define PDE_LIMIT       33
 #define PDE_NOMEM       34
@@ -94,6 +102,17 @@ struct pd_view {
 #define PDE_CANCEL      64
 #define PDE_BUSY        65      /* NOT a failure: CF=0, AX=PDE_BUSY means
                                    the job continues - call again (D11)  */
+#define PDE_NEEDMOD     66      /* NOT a failure: CF=0, AX=PDE_NEEDMOD, DX =
+                                   the PDX_* module the verb needs in the
+                                   slot. The primary loads it, tells the
+                                   caller (PDV_REND_SLOT / PDV_ENG_SLOT) and
+                                   calls the SAME verb again (20.22.2)      */
+#define PDE_NEEDMEM     67      /* NOT a failure: CF=0, AX=PDE_NEEDMEM, CX =
+                                   PDMEM_* region, DX = KiB wanted. The
+                                   primary claims it (or refuses the open
+                                   with PDE_NOMEM), re-INITs the module with
+                                   the region in pdxb_init and calls the
+                                   SAME verb again (20.22.2)                */
 
 /* ---- incomplete-rendering features (PAGEDESK-SPEC 10.6), a bitmask ------ */
 #define PDF_INC_FONT    0x0001  /* a font was substituted                 */
@@ -105,6 +124,10 @@ struct pd_view {
 #define PDF_INC_OPER    0x0040  /* an unknown operator                    */
 #define PDF_INC_LIMIT   0x0080  /* a limit stopped part of the page       */
 #define PDF_INC_RANGE   0x0100  /* a transform overflowed                 */
+#define PDF_INC_MODULE  0x0200  /* a slot module could not be loaded (no
+                                   RAM, no slot, a read failed): 20.22.2   */
+#define PDF_INC_APPROX  0x0400  /* drawn approximately: no 8-bit band RAM
+                                   for transparency (20.22.10)             */
 
 /* ---- the private module stack (PAGEDESK-SPEC 20.15, DECISIONS D23) -----
  * Every module verb runs on a 2 KiB stack carved from claim B, not on the UI
@@ -123,10 +146,28 @@ struct pd_view {
 #define PD_DSTK_FILL    0xCC    /* everything between, at each carve      */
 
 /* ---- the module header (PAGEDESK-SPEC 3.1) ------------------------------ */
-#define PDM_ABI         1
+#define PDM_ABI         2      /* 2: any PDF (20.22) grew pdxb_* structs */
 #define PDM_MAGIC_ENG   0x4550  /* 'PE' */
 #define PDM_MAGIC_REND  0x5250  /* 'PR' */
 #define PDM_MAGIC_WRT   0x5750  /* 'PW' */
+/* the slot modules (PAGEDESK-SPEC 20.22.2): lazy parts that share ONE slot */
+#define PDM_MAGIC_KEY   0x4B50  /* 'PK' PDXK: key derivation, at open     */
+#define PDM_MAGIC_GFX   0x4750  /* 'PG' PDXG: colour, functions, shading,
+                                   patterns, ExtGState, dashes             */
+#define PDM_MAGIC_FNT   0x4650  /* 'PF' PDXF: font programs, CMaps        */
+#define PDM_MAGIC_IMG   0x4950  /* 'PI' PDXI: DCT, CCITT, JBIG2           */
+#define PDM_MAGIC_JPX   0x4A50  /* 'PJ' PDXJ: JPEG 2000                   */
+#define PDX_NONE        0       /* slot module ids (DX of PDE_NEEDMOD)    */
+#define PDX_KEY         1
+#define PDX_GFX         2
+#define PDX_FNT         3
+#define PDX_IMG         4
+#define PDX_JPX         5
+#define PDX_COUNT       6
+#define PDMEM_XIDX      1       /* PDENG: flat xref index, 4 B an object  */
+#define PDMEM_OSW       2       /* PDENG: the object-stream window        */
+#define PDMEM_XC        3       /* PDREND: the extension cache            */
+#define PDMEM_X8        4       /* PDREND: 8-bit band, layer and mask     */
 #define PDM_ENTRY       8
 
 /* ---- verbs (PAGEDESK-SPEC 3.5) ------------------------------------------
@@ -157,6 +198,15 @@ struct pd_view {
 #define PDV_ENG_FINGERPRINT 0x10 /* XB: pdxb_fingerprint out             */
 #define PDV_ENG_ARENA_MARK  0x11 /* AX = mark                            */
 #define PDV_ENG_ARENA_REL   0x12 /* BX = mark                            */
+#define PDV_ENG_CRYPTINFO   0x13 /* XB: pdxb_crypt out (the /Encrypt dict) */
+#define PDV_ENG_SETKEY      0x14 /* XB: pdxb_crypt in (key, methods); the
+                                    open then resumes with PDV_ENG_OPEN    */
+#define PDV_ENG_CRYPT       0x15 /* XB: pdxb_cryptop in/out: encrypt or
+                                    decrypt a far buffer with an EXPLICIT
+                                    key (the writer; no document state)    */
+#define PDV_ENG_SLOT        0x16 /* BX = PDX_* resident, CX:DX = its door
+                                    (off:seg); 0 = none                    */
+/* 0x17-0x1F reserved for eng (20.22.3); 0x20-0x27 for crypt (20.22.5)    */
 
 /* PDREND 0x40-0x7F */
 #define PDV_REND_INIT       0x40 /* BX=XB seg. XB: pdxb_init            */
@@ -171,6 +221,10 @@ struct pd_view {
 #define PDV_REND_STATUS     0x46 /* XB: pdxb_rstatus out (incomplete bits)*/
 #define PDV_REND_FONTBANK   0x47 /* XB: pdxb_fontbank in (D3): the PDRES
                                     index resident, strikes read on demand */
+#define PDV_REND_SLOT       0x48 /* BX = PDX_* resident, CX:DX = its door
+                                    (off:seg); 0 = none. STEP, TEXTMAP and
+                                    THUMB may answer PDE_NEEDMOD (20.22.2) */
+/* 0x49-0x4F reserved for rcore (20.22.7)                                  */
 
 /* PDWRT 0x80-0xBF */
 #define PDV_WRT_INIT        0x80 /* BX=XB seg. XB: pdxb_init            */
@@ -180,6 +234,25 @@ struct pd_view {
 #define PDV_WRT_NEWDOC      0x82 /* resumable fresh document. XB: pdxb_save*/
 #define PDV_WRT_EXTRACT     0x83 /* resumable graph copy. XB: pdxb_save   */
 #define PDV_WRT_ABORT       0x84 /* delete the temp file, free buffers   */
+/* 0x85-0x8F reserved for wrt (20.22.4)                                    */
+
+/* the slot occupants 0xC0-0xFF (PAGEDESK-SPEC 20.22.2). One occupant at a
+ * time; each answers only its own range and PDV_X_INIT.                  */
+#define PDV_X_INIT          0xC0 /* every occupant: BX = XB seg. XB:
+                                    pdxb_init; slot_seg/slot_kb are ITS
+                                    workspace, valid until the next swap   */
+#define PDV_KEY_AUTH        0xC1 /* resumable (PDE_BUSY). XB: pdxb_crypt
+                                    in/out. PDE_PASSWORD = wrong password  */
+#define PDV_KEY_COST        0xC2 /* XB: pdxb_crypt in. AX = estimated
+                                    seconds for ONE attempt on this CPU    */
+/* 0xC3-0xC7 reserved for crypt; 0xC8-0xD7 for gfx and blend (PDXG);
+ * 0xD8-0xE7 for fonts (PDXF)                                              */
+#define PDV_IMG_OPEN        0xE8 /* PDXI and PDXJ. XB: pdxb_img in/out     */
+#define PDV_IMG_ROW         0xE9 /* BX=dest seg, CX=dest off, DX=row (rows
+                                    ascend; a lower row needs a new OPEN).
+                                    Writes pdxb_img.rowbytes bytes          */
+#define PDV_IMG_CLOSE       0xEA
+/* 0xEB-0xEF reserved for the image agents (dct, bilevel, jpx)            */
 
 /* ---- exchange-block structs ---------------------------------------------
  * The XB is 1 KiB. Offset 0 holds the struct of the current verb. */
@@ -201,6 +274,14 @@ struct pdxb_init {
     pdw flags;              /* PDXI_*                                     */
     pdw flate_seg, flate_kb;/* PDENG (D17): Flate slots, 43 KiB each, 1-2;
                                valid only with PDXI_FLATE                 */
+    /* any PDF (20.22.2); 0 = none. A field the primary has not claimed is 0 */
+    pdw slot_seg, slot_kb;  /* the slot occupant's workspace (PDV_X_INIT)  */
+    pdw xidx_seg, xidx_kb;  /* PDENG: flat xref index (PDMEM_XIDX)         */
+    pdw osw_seg, osw_kb;    /* PDENG: object-stream window (PDMEM_OSW)     */
+    pdw xc_seg, xc_kb;      /* PDREND: extension cache (PDMEM_XC)          */
+    pdw x8_seg, x8_kb;      /* PDREND: 8-bit band + layer + mask (PDMEM_X8)*/
+    pdw cpu;                /* OSAPI_CPU_INFO's class (CPU_8086 = an XT)   */
+    pdw rend_off, rend_seg; /* far vector to PDREND's door (occupants)     */
 };
 #define PDXI_FLATE  0x0001  /* flate_seg/flate_kb are valid (PD-25)       */
 
@@ -219,6 +300,10 @@ struct pdxb_open {
 #define PDO_OUTLINE     0x0002  /* has /Outlines                         */
 #define PDO_ACROFORM    0x0004  /* has an AcroForm (not editable on XT)  */
 #define PDO_TAGGED      0x0008
+#define PDO_ENCRYPTED   0x0010  /* /Encrypt: a key was set (20.22.5)     */
+#define PDO_XREFSTM     0x0020  /* a cross-reference stream was read      */
+#define PDO_OBJSTM      0x0040  /* objects live in object streams         */
+#define PDO_REPAIRED    0x0080  /* the xref was rebuilt by scanning       */
 
 struct pdxb_pageinfo {
     pdw  objnum, gen;       /* page identity in the source                */
@@ -268,10 +353,22 @@ struct pdxb_strm {
     pdw  page;              /* in: page index when objnum == 0 (contents) */
     struct pd_u32 declen;   /* out: decoded length when known, else ~0   */
     pdw  filters;           /* out: PDFL_* chain                          */
+    pdw  accept;            /* in: PDSA_*; 0 = as before (a codec refuses) */
+    pdw  codec;             /* out: PDCD_* the chain stops before, 0 none  */
 };
 #define PDFL_HEX   0x0001
 #define PDFL_RLE   0x0002
 #define PDFL_FLATE 0x0004
+#define PDFL_A85   0x0008
+#define PDFL_LZW   0x0010
+#define PDFL_CRYPT 0x0020   /* the stream is decrypted (20.22.5)          */
+#define PDSA_CODEC 0x0001   /* stop before DCT/CCITT/JBIG2/JPX and read the
+                               CODED bytes (the image modules, 20.22.11) */
+#define PDCD_NONE  0
+#define PDCD_DCT   1
+#define PDCD_CCITT 2
+#define PDCD_JBIG2 3
+#define PDCD_JPX   4
 
 struct pdxb_token {
     pdw  kind;              /* PDT_*                                      */
@@ -308,7 +405,12 @@ struct pdxb_rawcopy {
     struct pd_u32 done;     /* in/out: bytes already copied (resumable)   */
     pdw  dseg, doff, dmax;  /* in: destination                            */
     pdw  got;               /* out                                        */
+    pdw  mode;              /* in: PDRC_*                                 */
 };
+#define PDRC_EXACT 0        /* the file's bytes (as before)               */
+#define PDRC_PLAIN 1        /* "n g obj ... endobj" synthesised: an object-
+                               stream member wrapped, strings and stream
+                               decrypted, /Length corrected (20.22.3-5)   */
 
 struct pdxb_trailer {
     pdw  size;              /* /Size of the newest revision               */
@@ -316,9 +418,14 @@ struct pdxb_trailer {
     pdw  info_num, info_gen;
     struct pd_u32 startxref;/* of the newest revision                     */
     pdb  id0[16];           /* first /ID element, 0 if absent              */
-    pdw  id0_len;
+    pdw  id0_len;           /* up to 32 since ABI 2: bytes 16-31 in id0_hi */
     pdw  version;           /* x10, header or catalog /Version            */
+    pdb  id0_hi[16];        /* /ID[0] bytes 16..31 (written back WHOLE)    */
+    pdw  encrypt_num, encrypt_gen; /* /Encrypt ref; 0/0 none or direct    */
+    pdw  tflags;            /* PDTR_*                                      */
 };
+#define PDTR_XREFSTM  0x0001  /* the newest section is a cross-reference stream */
+#define PDTR_ENCDIRECT 0x0002 /* /Encrypt is a direct dictionary           */
 
 struct pdxb_outline {
     pdw  objnum, gen;       /* in: the item (0/0 = the root's /First)     */
@@ -401,6 +508,8 @@ struct pdxb_rstatus {
     char first[32];         /* the first thing skipped, by name            */
     pdw  ops;               /* operators interpreted                        */
     pdw  passes;            /* display-list passes (10.2)                  */
+    pdw  mods;              /* bit (1 << PDX_*) per slot module the page used */
+    pdw  swaps;             /* slot loads this page cost (20.22.2)          */
 };
 
 /* PDRES on demand (DECISIONS D3): the primary reads the PDRES directory,
@@ -497,6 +606,90 @@ struct pd_edit {
 #define PDEF_MOVED    0x02
 #define PDEF_DIRTY    0x04
 #define PDEF_IRTSRC   0x08    /* irt names a SOURCE object number       */
+
+/* ---- any PDF: encryption (PAGEDESK-SPEC 20.22.5) ----------------------- */
+struct pdxb_crypt {         /* CRYPTINFO out; KEY_AUTH in/out; SETKEY in  */
+    pdw  v, r, length;      /* /V /R, /Length in bits (40..256)           */
+    pdw  p_lo, p_hi;        /* /P                                          */
+    pdw  stm, str, eff;     /* PDCM_* for streams, strings, embedded files */
+    pdw  encmeta;           /* /EncryptMetadata (default 1)                */
+    pdw  o_len, u_len;      /* 32 (R2-R4) or 48 (R5-R6)                    */
+    pdb  o[48], u[48];      /* /O /U                                       */
+    pdb  oe[32], ue[32];    /* /OE /UE (R5-R6)                             */
+    pdb  perms[16];         /* /Perms (R5-R6)                              */
+    pdb  id0[32];           /* /ID[0], whole                               */
+    pdw  id0_len;
+    pdw  pw_len;            /* in: password bytes (0 = the empty password) */
+    pdb  pw[128];           /* in: as typed; R6 takes it as UTF-8 (SASLprep
+                               of ASCII is the identity)                   */
+    pdb  key[32];           /* out of KEY_AUTH, in to SETKEY               */
+    pdw  key_len;           /* bytes: 5..16, or 32 for AESV3               */
+    pdw  auth;              /* out: PDCA_*                                 */
+    pdw  state;             /* in/out: 0 on the first call (resumable)     */
+    pdw  progress;          /* out: 0..1000 of this attempt                */
+};
+#define PDCM_NONE     0
+#define PDCM_RC4      1
+#define PDCM_AESV2    2     /* AES-128-CBC                                 */
+#define PDCM_AESV3    3     /* AES-256-CBC                                 */
+#define PDCM_IDENTITY 4
+#define PDCA_NONE     0
+#define PDCA_USER     1
+#define PDCA_OWNER    2
+
+struct pdxb_cryptop {       /* PDV_ENG_CRYPT: one chunk, in place          */
+    pdb  key[32];           /* the FILE key (from SETKEY's pdxb_crypt)    */
+    pdw  key_len;
+    pdw  method;            /* PDCM_*                                      */
+    pdw  objnum, gen;       /* the object the bytes belong to              */
+    pdw  dir;               /* 0 decrypt, 1 encrypt                        */
+    pdw  seg, off, len;     /* in: the bytes; out: len = bytes now there   */
+    pdw  room;              /* in: bytes the buffer may grow to (AES adds the
+                               IV and the padding on the last chunk)       */
+    pdw  phase;             /* in: bit0 first chunk, bit1 last chunk       */
+    pdb  iv[16];            /* in (encrypt, first chunk): the IV to use;
+                               carried between chunks by the engine        */
+    pdb  carry[16];         /* engine-private between chunks               */
+    pdw  ncarry;
+    pdb  rc4[258];          /* engine-private RC4 state between chunks     */
+};
+
+/* ---- any PDF: image modules (PAGEDESK-SPEC 20.22.11-13) --------------- */
+struct pdxb_img {
+    pdw  objnum, gen;       /* in: the image XObject; 0/0 = inline (below) */
+    pdw  iseg, ioff, ilen;  /* in: an inline image's CODED bytes           */
+    pdw  codec;             /* in: PDCD_* (pdxb_strm.codec)                */
+    pdw  w, h;              /* in: /Width /Height                          */
+    pdw  bpc, ncomp;        /* in: /BitsPerComponent; components of the
+                               /ColorSpace (0 = take the codec's)          */
+    pdw  want_w, want_h;    /* in: device pixels the image covers; the
+                               module picks the largest reduction that
+                               still gives at least this many             */
+    pdw  flags;             /* in: PDIMG_*                                 */
+    pdw  out_w, out_h;      /* out: what IMG_ROW delivers                  */
+    pdw  out_mode;          /* out: PDIM_*                                 */
+    pdw  out_ncomp;         /* out: samples a pixel for PDIM_N8            */
+    pdw  rowbytes;          /* out: <= 1024                                */
+    pdw  scale;             /* out: log2 of the reduction                  */
+    pdw  state;             /* module-private                              */
+};
+#define PDIMG_MASK   0x0001 /* /ImageMask or an SMask: one grey/1-bit plane */
+#define PDIMG_INVERT 0x0002 /* /Decode inverts                             */
+#define PDIM_GREY8   0      /* one byte a pixel, 0 black .. 255 white       */
+#define PDIM_BITS1   1      /* 1 bit a pixel, MSB first, 1 = white          */
+#define PDIM_N8      2      /* out_ncomp bytes a pixel in the image's own
+                               colour space: the core maps them through
+                               the colour-space LUTs (20.22.9)             */
+
+/* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
+/* [eng 20.22.3]    */
+/* [crypt 20.22.5]  */
+/* [wrt 20.22.4]    */
+/* [rcore 20.22.7]  */
+/* [gfx 20.22.9]    */
+/* [blend 20.22.10] */
+/* [fonts 20.22.8]  */
+/* [img 20.22.11-13]*/
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];
