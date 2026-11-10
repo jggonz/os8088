@@ -53,6 +53,7 @@ static pdw fw_open(void)
             return PDE_OK;
         }
         gc_slot = k; gc_ins = 1;
+        g_sk.on = 0; g_sflag = 0;                      /* until this file's key arrives */
         for (i = 0; i < (pdw)sizeof fw_op; i++) ((char *)&fw_op)[i] = 0;
         pd_fcopy_in(g_sv.pages_seg, (pdw)(PDM_NAMES + 14u * k), fw_op.name, 13);
         if (!fw_op.name[0]) return PDE_RANGE;
@@ -69,6 +70,11 @@ static pdw fw_open(void)
                 for (i = 0; i < g_fk.n && i < 3; i++)
                     if (g_fk.k[i].slot == gc_slot) {
                         r = enc_setkey(g_fk.k[i].key, g_fk.k[i].key_len, g_fk.k[i].stm, g_fk.k[i].str, g_fk.k[i].eff, g_fk.k[i].encmeta);
+                        if (!r) {                        /* its strings arrive as ciphertext: this file's key decrypts them (20.22.4.2) */
+                            for (e = 0; e < 32; e++) g_sk.key[e] = g_fk.k[i].key[e];
+                            g_sk.klen = g_fk.k[i].key_len; g_sk.on = 1;
+                            g_sk.str = (g_fk.k[i].str || g_fk.k[i].stm) ? g_fk.k[i].str : PDCM_RC4;
+                        }
                         return r;
                     }
                 r = PDE_PASSWORD;

@@ -4974,7 +4974,8 @@ the page/catalog/annotation patches AND of Extract and Insert) sets
 `PDRC_EXACT` (it wants the file's own bytes). The writer therefore never sees
 ciphertext and never needs to know whether a source object came from an object
 stream: PDENG hands it `N G obj <dictionary or value> [stream ... endstream]
-endobj` with strings and the stream's bytes decrypted. What the writer needs
+endobj` with the stream's bytes decrypted (AMENDED by the lead's 00:00 decision:
+the dictionary's STRINGS are not, see the last bullet). What the writer needs
 from PLAIN, and eng/crypt implement (the contract is theirs, 20.22.3 and
 20.22.5, this is what is relied on):
 
@@ -4991,6 +4992,27 @@ from PLAIN, and eng/crypt implement (the contract is theirs, 20.22.3 and
   one case this makes wrong;
 * on a file with no `/Encrypt` and no object stream PLAIN is byte for byte
   EXACT, so every byte the writer produced before this round is unchanged.
+* **Strings stay ciphertext** (00:00 amendment). On an encrypted source PLAIN
+  decrypts only the stream data (and corrects `/Length`); the dictionary's
+  strings come through as the file has them, and the RAW_COPY answer says so:
+  `PDRC_STRCIPHER` (0x8000 in `rc.mode`'s answer; `pdw.h` defines it under
+  `#ifndef`, crypt's name and place win). The object's number and generation
+  are the request's (`eg_num`/`eg_gen`, kept as `g_snum`/`g_sgen`). An object
+  that sat in an object stream (its strings were never enciphered) comes
+  without the flag. With the flag set, `pb_src` collects each string (literal
+  or hex, at most 256 decoded bytes, else `PDE_LIMIT`), decrypts it with the
+  SOURCE's per-object key (`pdc_okey` then RC4, or AES-CBC with the first 16
+  bytes as IV and the PKCS#5 pad stripped; AESV3 uses the file key itself) and
+  writes it plain as a hex string (Extract, or an unencrypted target) or
+  enciphered under the output's key (`sb_begin/sb_put/sb_end` in `pdwser.c`).
+  The source's key is `g_sk`: CRYPTINFO after the job's open (the target, and
+  Extract's source) or the key plat's pre-flight handed over (`PDV_WRT_KEYS`)
+  for an Insert's foreign file; wiped with the output key at job end. A kept
+  `/NM /T /CreationDate` text remembers the object it was read from. Cost 1,5xx
+  bytes: see 20.22.4.7. `pdw_encrun.py`'s `ann*` fixtures (an annotated
+  source, plain, AES-128, RC4-128, AES-256; Extract; Insert of an annotated
+  foreign file) compare every copied annotation's strings with a plain
+  control, and a build with the decrypt turned off fails 16 rows.
 
 **20.22.4.3 Encrypted output.** The job is *encrypting* (`g_enc`) when the
 target is a save of a file whose `pdxb_trailer` says it has an `/Encrypt`

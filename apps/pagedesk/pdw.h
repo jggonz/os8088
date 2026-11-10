@@ -11,6 +11,9 @@
 #include "pdabi.h"
 #include "pdmath.h"
 #include "pdwmap.h"
+#ifndef PDRC_STRCIPHER
+#define PDRC_STRCIPHER 0x8000 /* RAW_COPY answer (in rc.mode): the dictionary's strings are ciphertext; crypt's name wins (20.22.4.2) */
+#endif
 #include "pdcrypto.h"         /* crypt's primitives, shared source (20.22.5): the writer enciphers itself */
 
 /* ---- writer-private numbers (PAGEDESK-SPEC 20.5.1, 20.5.2) -------------- */

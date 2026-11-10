@@ -457,7 +457,7 @@ static void ap_tail(void) { cs_end(); pb_s("\nendstream\n"); pw_endobj(); }
 #define KEEP_NM 1
 #define KEEP_T  2
 static char g_keep[200];
-static pdw  g_keepn, g_keepf;
+static pdw  g_keepn, g_keepf, g_keepsf, g_keepsn, g_keepsg;   /* + where it was read: its strings' cipher state */
 static void pb_nm(void)
 {
     if (g_keepf & KEEP_NM) return;          /* in g_keep, written by pb_common */
@@ -466,7 +466,12 @@ static void pb_nm(void)
 static void pb_common(pdw f)
 {
     pb_nm();
-    if (g_keepn) pb_src(g_keep, g_keepn);
+    if (g_keepn) {
+        pdw f = g_sflag, n = g_snum, g = g_sgen;
+        g_sflag = g_keepsf; g_snum = g_keepsn; g_sgen = g_keepsg;
+        pb_src(g_keep, g_keepn);
+        g_sflag = f; g_snum = n; g_sgen = g;
+    }
     pb_s("/F "); pb_u(f); pb_s(" /P "); pb_u(g_pgnum); pb_c(' '); pb_u(g_pggen); pb_s(" R ");
     if (pdw_date[0]) { pb_s("/M "); pb_textstr(pdw_date, pw_len(pdw_date)); pb_c(' '); }
 }

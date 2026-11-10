@@ -47,6 +47,11 @@ struct pdw_cw {                  /* the held key and the cipher's state between 
     pdb iv[16], chain[16], carry[16], rk[240], rc4[258];
 };
 static struct pdw_cw g_cop;
+/* the SOURCE object's key, for strings the engine left as ciphertext (20.22.4.2):
+ * g_sflag is the RAW_COPY answer's flag for the object last read (eg_num/eg_gen) */
+static struct { pdb key[32]; pdw klen, str, on; } g_sk;
+static pdw g_sflag, g_snum, g_sgen;
+static pdb g_sb[256]; static pdw g_sbn;
 static pdw g_enc;                /* the source has an /Encrypt: the trailer repeats it */
 static pdw g_encs, g_ence;       /* strings / streams are really encrypted (not identity) */
 static pdw g_cmstr, g_cmstm;     /* PDCM_* of strings / streams                        */
@@ -320,14 +325,57 @@ static pdw pw_hv(pdb c)
     if (c >= 'a' && c <= 'f') return (pdw)(c - 'a' + 10);
     return 0xFFFF;
 }
+/* a source string collected whole (<= 256 bytes), decrypted with the source's object key, then written
+ * plain (hex) or enciphered under the output's key */
+static void sb_begin(void) { if (g_sflag) g_sbn = 0; else es_begin(); }
+static void sb_put(pdw c)
+{
+    if (!g_sflag) { es_put(c); return; }
+    if (g_sbn >= (pdw)sizeof g_sb) { g_err = PDE_LIMIT; return; }
+    g_sb[g_sbn++] = (pdb)c;
+}
+static void sb_end(void)
+{
+    pdw k, okl, nr, pad; pdb *ok;
+    if (!g_sflag) { es_end(); return; }
+    if (g_err) return;
+    if (g_sk.on) {
+        if (g_sk.str == PDCM_AESV3) { ok = g_sk.key; okl = 32; }
+        else {
+            pdc_okey(g_sk.key, g_sk.klen, g_snum, g_sgen, (pdw)(g_sk.str == PDCM_AESV2));
+            ok = pdc_ok; okl = (pdw)(g_sk.klen + 5); if (okl > 16) okl = 16;
+        }
+        if (g_sk.str == PDCM_RC4) { pdc_rc4_ks(g_cop.rc4, ok, okl); pdc_rc4(g_cop.rc4, g_sb, g_sbn); }
+        else if (g_sbn < 32 || (g_sbn & 15)) g_sbn = 0;                  /* not a whole IV + block: empty */
+        else {
+            nr = (pdw)(okl == 32 ? 14 : 10);
+            pdc_aes_ks(g_cop.rk, ok, (pdw)(okl == 32 ? 8 : 4));
+            for (k = 0; k < 16; k++) g_cop.iv[k] = g_sb[k];
+            pdc_cbc_dec(g_cop.rk, nr, g_cop.iv, g_sb + 16, (pdw)((g_sbn - 16) >> 4));
+            pad = g_sb[g_sbn - 1];
+            if (pad < 1 || pad > 16) pad = 0;
+            g_sbn = (pdw)(g_sbn - 16 - pad);
+            for (k = 0; k < g_sbn; k++) g_sb[k] = g_sb[k + 16];
+        }
+    }
+    if (g_encs) {
+        es_begin();
+        for (k = 0; k < g_sbn; k++) es_put((pdw)g_sb[k]);
+        es_end();
+    } else {
+        pb_c('<');
+        for (k = 0; k < g_sbn; k++) pb_hex2((pdw)g_sb[k]);
+        pb_c('>');
+    }
+}
 static void pb_src(const char *s, pdw n)
 {
     pdw i = 0, a = 0, nest, v, h; pdb c;
-    if (!g_encs) { pb_n(s, n); return; }
+    if (!g_encs && !g_sflag) { pb_n(s, n); return; }
     while (i < n && !g_err) {
         c = (pdb)s[i];
         if (c == '(') {
-            pb_n(s + a, (pdw)(i - a)); i++; nest = 1; es_begin();
+            pb_n(s + a, (pdw)(i - a)); i++; nest = 1; sb_begin();
             while (i < n && nest) {
                 c = (pdb)s[i++];
                 if (c == '\\' && i < n) {
@@ -343,22 +391,22 @@ static void pb_src(const char *s, pdw n)
                         if (c == '\r' && i < n && s[i] == '\n') i++;
                         continue;
                     }
-                    es_put(c);
-                } else if (c == '(') { nest++; es_put(c); }
-                else if (c == ')') { if (--nest) es_put(c); }
-                else es_put(c);
+                    sb_put(c);
+                } else if (c == '(') { nest++; sb_put(c); }
+                else if (c == ')') { if (--nest) sb_put(c); }
+                else sb_put(c);
             }
-            es_end(); a = i;
+            sb_end(); a = i;
         } else if (c == '<' && i + 1 < n && s[i + 1] == '<') i += 2;
         else if (c == '<') {
-            pb_n(s + a, (pdw)(i - a)); i++; es_begin(); v = 0xFFFF;
+            pb_n(s + a, (pdw)(i - a)); i++; sb_begin(); v = 0xFFFF;
             while (i < n && s[i] != '>') {
                 h = pw_hv((pdb)s[i++]);
                 if (h == 0xFFFF) continue;
-                if (v == 0xFFFF) v = h; else { es_put((pdw)(v * 16 + h)); v = 0xFFFF; }
+                if (v == 0xFFFF) v = h; else { sb_put((pdw)(v * 16 + h)); v = 0xFFFF; }
             }
-            if (v != 0xFFFF) es_put((pdw)(v * 16));
-            es_end(); i++; a = i;
+            if (v != 0xFFFF) sb_put((pdw)(v * 16));
+            sb_end(); i++; a = i;
         } else i++;
     }
     if (a < n) pb_n(s + a, (pdw)(n - a));

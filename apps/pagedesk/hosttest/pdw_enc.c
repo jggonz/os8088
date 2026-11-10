@@ -39,7 +39,15 @@ static unsigned char E_key[32]; static int E_keylen;
 static long E_len; static unsigned char *E_buf;
 static unsigned E_size, E_root, E_rg, E_info, E_ig, E_ver, E_en, E_eg, E_tfl, E_stmx; static long E_sx; static unsigned char E_id0[32]; static int E_id0n;
 static int E_pg[1100][12]; static int E_npg;
-static pdw g_rcmodes[4];
+static pdw g_rcmodes[4]; static int g_pl; static unsigned g_cipherserved;
+static unsigned g_cn[4096]; static int g_cnn;
+static int ciph_has(unsigned n) { int i; for (i = 0; i < g_cnn; i++) if (g_cn[i] == n) return 1; return 0; }
+static void ciph_load(void)
+{
+    char fn[100]; FILE *f; unsigned v; g_cnn = 0;
+    snprintf(fn, sizeof fn, "%s/cipher.txt", g_db); f = fopen(fn, "r");
+    if (f) { while (g_cnn < 4096 && fscanf(f, "%u", &v) == 1) g_cn[g_cnn++] = v; fclose(f); }
+}
 static int hv(int c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 static int load_db(const char *name)
 {
@@ -65,6 +73,7 @@ static int load_db(const char *name)
     snprintf(cmd, sizeof cmd, "%s/pages.txt", g_db); f = fopen(cmd, "r"); E_npg = 0;
     while (f && fgets(line, sizeof line, f) && E_npg < 1100) { sscanf(line, "%d %d %d %d %d %d %d %d %d %d %d", &a, &b, &c, &d, &e, &g, &E_pg[E_npg][6], &E_pg[E_npg][7], &E_pg[E_npg][8], &E_pg[E_npg][9], &E_pg[E_npg][10]); E_pg[E_npg][0] = a; E_pg[E_npg][1] = b; E_pg[E_npg][2] = c; E_pg[E_npg][3] = d; E_pg[E_npg][4] = e; E_pg[E_npg][5] = g; E_npg++; }
     if (f) fclose(f);
+    ciph_load();
     snprintf(cmd, sizeof cmd, "%s/enc.txt", g_db); f = fopen(cmd, "r"); E_enc = 0; E_keyed = 0; E_keylen = 0;
     while (f && fgets(line, sizeof line, f)) {
         if (sscanf(line, "%39s", k) != 1) continue;
@@ -127,6 +136,7 @@ pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
         struct pdxb_rawcopy rc; char fn[100]; FILE *f; long len, done, take; unsigned char *b;
         pd_fcopy_in(g_xb, 0, &rc, sizeof rc);
         if (rc.mode < 4) g_rcmodes[rc.mode]++;
+        { unsigned want = rc.mode; rc.mode = want; g_pl = (want == PDRC_PLAIN); }
         if (E_enc && !E_keyed && rc.mode == PDRC_PLAIN) { pdw_engcf = 1; return PDE_PASSWORD; }
         snprintf(fn, sizeof fn, "%s/o%u.txt", g_db, rc.objnum); f = fopen(fn, "rb");
         if (!f) { pdw_engcf = 1; return PDE_XREF; }
@@ -134,6 +144,7 @@ pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
         done = ((long)rc.done.hi << 16) | rc.done.lo; take = len - done; if (take < 0) take = 0; if (take > rc.dmax) take = rc.dmax;
         memcpy(pd_host_mem + (((unsigned long)rc.dseg << 4) + rc.doff), b + done, (size_t)take); free(b);
         if (done > len) { pdw_engcf = 1; return PDE_RANGE; }
+        if (g_pl && ciph_has(rc.objnum)) { rc.mode |= PDRC_STRCIPHER; g_cipherserved++; }
         rc.got = (pdw)take; done += take; rc.done.lo = (pdw)(done & 0xFFFF); rc.done.hi = (pdw)(done >> 16);
         pd_fcopy_out(&rc, g_xb, 0, sizeof rc); return 0; }
     }

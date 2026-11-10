@@ -113,10 +113,12 @@ static pdw eng_get(void)
     g_rc.dseg = pd_ds(); g_rc.doff = (pdw)g_pg;
 #endif
     g_rc.dmax = PDW_PGBUF; g_rc.got = 0; g_rc.mode = PDRC_PLAIN;      /* 20.22.4.2 */
+    g_snum = eg_num; g_sgen = eg_gen;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
     pdw_in_src(); r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0); pdw_in_tgt();
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
+    g_sflag = (pdw)((g_rc.mode & PDRC_STRCIPHER) != 0);        /* the dictionary's strings are ciphertext (20.22.4.2) */
     sc_n = g_rc.got;
     if (sc_n > PDW_PGBUF) return PDE_LIMIT;
 #ifdef PD_HOST
@@ -190,11 +192,26 @@ static void enc_wipe(void)
     pdw k;
     for (k = 0; k < (pdw)sizeof g_cop; k++) ((pdb *)&g_cop)[k] = 0;
     g_enc = g_encs = g_ence = 0; g_cenc = 0;
+    for (k = 0; k < (pdw)sizeof g_sk; k++) ((pdb *)&g_sk)[k] = 0;
+    g_sflag = 0;
 }
 static pdw enc_info(void)               /* CRYPTINFO into the exchange block */
 {
     pdw r = pdw_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
     return pdw_engcf ? (r ? r : PDE_ENCRYPT) : PDE_OK;
+}
+/* the SOURCE's key from the engine's CRYPTINFO (the document is open and keyed) */
+static pdw sk_info(void)
+{
+    pdw r = enc_info();
+    if (r) return r;
+    pd_fcopy_in(g_xb, EC_OFF(key), g_sk.key, 32);
+    g_sk.klen = pd_fpeekw(g_xb, EC_OFF(key_len));
+    if (!g_sk.klen || g_sk.klen > 32) return PDE_ENCRYPT;
+    g_sk.str = pd_fpeekw(g_xb, EC_OFF(str));
+    if (!g_sk.str && !pd_fpeekw(g_xb, EC_OFF(stm))) g_sk.str = PDCM_RC4;
+    g_sk.on = 1;
+    return PDE_OK;
 }
 static char g_ecd[640]; static pdw g_ecdn;         /* a DIRECT /Encrypt dictionary's text (20.22.4.1) */
 static pdw enc_setup(void)
@@ -216,6 +233,7 @@ static pdw enc_setup(void)
     g_ceff = pd_fpeekw(g_xb, EC_OFF(eff)); g_cem = pd_fpeekw(g_xb, EC_OFF(encmeta));
     if (!g_cmstm && !g_cmstr) g_cmstm = g_cmstr = PDCM_RC4;      /* V1, V2: RC4 for both */
     g_enc = 1; g_encs = (pdw)CR_ON(g_cmstr); g_ence = (pdw)CR_ON(g_cmstm);
+    r = sk_info(); if (r) return r;
     for (k = 0; k < 8; k++)             /* the IV state's seed (cr_iv) */
         g_ivs[k] = pdm_crc16((pdw)(0xA5A5u + k), g_tr.id0, 16);
     g_ivs[0] ^= pdm_crc16(0xFFFF, pdw_date, pw_len(pdw_date));
@@ -426,7 +444,7 @@ static pdw an_prep(pdw i)
             n = (pdw)(sc_ve - sc_kpos);                 /* "/Key value"          */
             if (n >= (pdw)(sizeof g_keep - g_keepn)) continue;
             pw_cpy(g_keep + g_keepn, g_pg + sc_kpos, n);
-            g_keepn = (pdw)(g_keepn + n); g_keep[g_keepn++] = ' ';
+            g_keepn = (pdw)(g_keepn + n); g_keep[g_keepn++] = ' '; g_keepsf = g_sflag; g_keepsn = g_snum; g_keepsg = g_sgen;
             if (k == 0) g_keepf |= KEEP_NM;
             if (k == 1) g_keepf |= KEEP_T;
         }
@@ -589,6 +607,7 @@ static pdw job_begin(pdw kind)
         if (sv_npages < 1 || sv_npages > PDM_MAXMAP) return PDE_RANGE;
         if (!sv_pgseg) return PDE_NOMEM;
         r = eng_trailer(); if (r) return r;
+        if (g_tr.encrypt_num || (g_tr.tflags & PDTR_ENCDIRECT)) { r = sk_info(); if (r) return r; }   /* strings come as ciphertext */
         for (i = 0; i < sv_npages; i++) {
             e = pd_fpeekw(sv_pgseg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
             if ((k != PDM_SRC && k != PDM_BLANK) || idx >= PD_MAXPAGES) { g_sv.err_detail = 14; return PDE_RANGE; }

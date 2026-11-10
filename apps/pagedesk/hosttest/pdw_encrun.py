@@ -38,6 +38,10 @@ FIX = {
     'aes128u': (['--encrypt', 'u1', 'owner', '128', '--use-aes=y', '--'], 'u1', 'generate'),
     'aes128c': (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'disable'),
     'aes128d': (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'generate'),
+    'annplain': ([], '', 'generate'),                                   # the annotated source (plain/plain's own S1.PDF)
+    'annaes128': (['--encrypt', '', 'owner', '128', '--use-aes=y', '--'], '', 'disable'),
+    'annrc4':  (['--allow-weak-crypto', '--encrypt', '', 'owner', '128', '--use-aes=n', '--'], '', 'generate'),
+    'annaes256': (['--encrypt', '', 'owner', '256', '--'], '', 'generate'),
     'aes256':  (['--encrypt', '', 'owner', '256', '--'], '', 'generate'),
     'rc4128':  (['--allow-weak-crypto', '--encrypt', '', 'owner', '128', '--use-aes=n', '--'], '', 'generate'),
     'rc440':   (['--allow-weak-crypto', '--encrypt', '', 'owner', '40', '--'], '', 'disable'),
@@ -91,15 +95,19 @@ def qpdf_build(enc, osm, src, dst):
 
 for name, (enc, pw, osm) in FIX.items():
     base = os.path.join(out, name); shutil.rmtree(base, ignore_errors=True); os.makedirs(base)
-    r = qpdf_build(enc, osm, sample, os.path.join(base, 'SRC.PDF'))
+    ann = name.startswith('ann'); cg = 'ann' if ann else 'std'
+    ssrc = os.path.join(out, 'plain', 'plain', 'S1.PDF') if ann else sample      # strings in copied dictionaries (20.22.4.2)
+    annfor = os.path.join(out, 'ANNFOR.PDF')
+    if ann: run('qpdf', '--empty', '--pages', ssrc, '1,2,1,2', '--', annfor)     # 4 pages, each annotated: the foreign file
+    r = qpdf_build(enc, osm, ssrc, os.path.join(base, 'SRC.PDF'))
     if r.returncode not in (0, 3):
         print('FAIL building', name, r.stderr.decode()); fails += 1; continue
-    fv = sorted(FOREIGN, key=lambda k: k != 'plain') if name in ('plain', 'aes128', 'aes256') else ['plain']
+    fv = sorted(FOREIGN, key=lambda k: k != 'plain') if name in ('plain', 'aes128', 'aes256', 'annplain', 'annaes128') else ['plain']
     for fk in fv:
         d = os.path.join(base, fk); os.makedirs(d)
         shutil.copy(os.path.join(base, 'SRC.PDF'), d)
         fenc, fpw = FOREIGN[fk]
-        r = qpdf_build(fenc, 'generate', PAGES8, os.path.join(d, 'FOREIGN.PDF'))
+        r = qpdf_build(fenc, 'generate', annfor if ann else PAGES8, os.path.join(d, 'FOREIGN.PDF'))
         tag = '%s/%s' % (name, fk)
         check(r.returncode in (0, 3), '%s: the foreign file is built (%s)' % (tag, 'AES-128, user password fp' if fenc else 'plain, xref stream'))
         p = subprocess.run([binary, 'SRC.PDF', pw, 'plain' if not fenc else 'enc-aes', fpw], cwd=d, capture_output=True, text=True,
@@ -134,18 +142,22 @@ for name, (enc, pw, osm) in FIX.items():
         check(r.returncode == 0, '%s X1.PDF: qpdf --check clean' % tag)
         px = pages(os.path.join(d, 'X1.PDF'), ''); pi = pages(os.path.join(d, 'I1.PDF'), pw)
         sa = {s_: annots(os.path.join(d, s_), pw) for s_ in ('S1.PDF', 'S2.PDF')}
-        if name == 'plain' and fk == 'plain':
-            ctrl.update(px=px, pi=pi, sa=sa)
+        xa = {s_: annots(os.path.join(d, s_), '' if s_ == 'X1.PDF' else pw) for s_ in ('X1.PDF', 'I1.PDF')}
+        if name in ('plain', 'annplain') and fk == 'plain':
+            ctrl[cg] = dict(px=px, pi=pi, sa=sa, xa=xa)
+            if ann: check(len(xa['X1.PDF']) >= 1 and any(r.get('/Contents') or r.get('/T') for r in xa['X1.PDF']) and len(xa['I1.PDF']) >= 3, '%s: the Extract/Insert controls hold annotations with strings (/Contents, /T): %d, %d' % (name, len(xa['X1.PDF']), len(xa['I1.PDF'])))
             print('     control: S1 has %d annotations, S2 %d; Extract %d pages; Insert %d pages' % (len(sa['S1.PDF']), len(sa['S2.PDF']), len(px), len(pi)))
-            check(len(sa['S1.PDF']) >= 9 and len(px) == 2 and len(pi) == 4, 'plain: the control has the nine marks, 2 extracted pages and 4 pages after Insert')
+            check(len(sa['S1.PDF']) >= 9 and len(px) == 2 and len(pi) == 4, '%s: the control has the nine marks, 2 extracted pages and 4 pages after Insert' % name)
         else:
-            check(px == ctrl['px'], '%s: the extracted pages\' decoded contents equal the plain control\'s' % tag)
-            check(pi == ctrl['pi'], '%s: the 4 pages after Insert (contents, annotation counts, rotations) equal the plain control\'s' % tag)
+            check(px == ctrl[cg]['px'], '%s: the extracted pages\' decoded contents equal the plain control\'s' % tag)
+            check(pi == ctrl[cg]['pi'], '%s: the 4 pages after Insert (contents, annotation counts, rotations) equal the plain control\'s' % tag)
+            for s_ in ('X1.PDF', 'I1.PDF'):       # strings in a COPIED object's dictionary (enciphered in the source: 20.22.4.2)
+                check(xa[s_] == ctrl[cg]['xa'][s_], '%s %s: the copied annotations\' strings (Contents, T, Subj, ...) equal the plain control\'s (%d)' % (tag, s_, len(xa[s_])))
             for s_ in ('S1.PDF', 'S2.PDF'):
-                same = sa[s_] == ctrl['sa'][s_]
+                same = sa[s_] == ctrl[cg]['sa'][s_]
                 check(same, '%s %s: decrypted annotations and appearance streams equal the plain control\'s (%d of them)' % (tag, s_, len(sa[s_])))
                 if not same:
-                    for x, y in zip(sa[s_], ctrl['sa'][s_]):
+                    for x, y in zip(sa[s_], ctrl[cg]['sa'][s_]):
                         if x != y: print('       got ', json.dumps(x)[:300]); print('       want', json.dumps(y)[:300]); break
 print('%s: %d failure(s)' % ('FAIL' if fails else 'PASS', fails))
 sys.exit(1 if fails else 0)

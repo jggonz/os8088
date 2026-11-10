@@ -68,7 +68,10 @@ def main():
     tr = objs['trailer']['value']
     enc = d['encrypt']
     # objects
-    plain = {}
+    plain = {}; cipher = []
+    encnum = 0
+    if isinstance(tr.get('/Encrypt'), str):
+        m3 = re.fullmatch(r'(\d+) (\d+) R', tr['/Encrypt']); encnum = int(m3.group(1)) if m3 else 0
     for k, v in objs.items():
         m = re.fullmatch(r'obj:(\d+) (\d+) R', k)
         if not m: continue
@@ -80,8 +83,23 @@ def main():
             t = ('%d %d obj\n%s\nstream\n' % (n, g, val_out(dic))).encode() + body + b'\nendstream\nendobj\n'
         else:
             t = ('%d %d obj\n%s\nendobj\n' % (n, g, val_out(v['value']))).encode()
+        # the strings-as-ciphertext contract (PAGEDESK-SPEC 20.22.4.2): an object that sits in the file ITSELF
+        # (not in an object stream) is served with the file's own dictionary text - strings still enciphered -
+        # and the stream decrypted with /Length fixed; the answer carries the flag
+        if enc.get('encrypted') and os.environ.get('PDW_STRCIPHER', '1') == '1' and n != encnum:
+            m2 = re.search(rb'(?<![0-9])%d %d obj\s*(.*?)\s*(stream\r?\n|endobj)' % (n, g), data, re.S)
+            if m2 and m2.group(1).startswith(b'<<'):
+                dtxt = m2.group(1)
+                if 'stream' in v:
+                    body = open(v['stream']['datafile'], 'rb').read()
+                    dtxt, k2 = re.subn(rb'/Length\s+\d+(\s+\d+\s+R)?', b'/Length %d' % len(body), dtxt, count=1)
+                    t = b'%d %d obj\n' % (n, g) + dtxt + b'\nstream\n' + body + b'\nendstream\nendobj\n'
+                else:
+                    t = b'%d %d obj\n' % (n, g) + dtxt + b'\nendobj\n'
+                cipher.append(n)
         plain[n] = (g, v)
         open(os.path.join(db, 'o%d.txt' % n), 'wb').write(t)
+    open(os.path.join(db, 'cipher.txt'), 'w').write(' '.join(map(str, cipher)) + '\n')
     # the trailer
     sx = int(re.findall(rb'startxref\s+(\d+)', data)[-1])
     isstm = 1 if re.match(rb'\d+ \d+ obj', data[sx:sx + 24]) else 0
@@ -121,7 +139,11 @@ def main():
                 if rot is None and '/Rotate' in cur: rot = cur['/Rotate']
                 if '/Parent' not in cur: break
                 cur = dictof(cur['/Parent'])
-            box = box or [0, 0, 612, 792]; crop = crop or box
+            def rsv(x):
+                while isinstance(x, str) and re.fullmatch(r'\d+ \d+ R', x): x = plain[int(x.split()[0])][1]['value']
+                return [rsv(y) for y in x] if isinstance(x, list) else x
+            box = rsv(box) if box else [0, 0, 612, 792]; crop = rsv(crop) if crop else box
+            rot = rsv(rot)
             n, g = [int(x) for x in o.split()[:2]]
             f.write('%d %d %s %s %d\n' % (n, g, ' '.join(str(int(x)) for x in box), ' '.join(str(int(x)) for x in crop), rot or 0))
     # encryption
