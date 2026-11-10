@@ -6864,7 +6864,14 @@ glyphs, never inside one): **+3,282 of PDXF**, 64,094 of 65,024. The decoder is 
 Huffman a bit at a time): small, and run once per activation. Another filter in that position
 (ASCIIHex, LZW, a chain) still fails as before. Not covered here: a Type 3 CharProc or a form in a
 Flate content stream opens through rcore's `do_form` and meets the same wall
-(`hosttest/pdx_page.py --oneslot type3` shows it).
+(`hosttest/pdx_page.py --oneslot type3` shows it). **A program the in-place inflate cannot hold is TOO LARGE, never short**: the inflate stops when its
+output would reach the region's end or overtake unread input, and `pdx_slurp` answers 0xFFFF for it
+(`PDFE_SIZE`: PDXF asks for its want, 64 KiB, else the font is substituted with `PDF_INC_APPROX`).
+Before, the stop was handed on as a one-byte "more" that the slurp read as data, so a program longer
+than a 32 KiB workspace's 22,016-byte area was drawn TRUNCATED with no note - QZTEXT's 26,676-byte
+Monaco as scattered dots once plat's batch 2 let PDXF load on 640 KB (bisected to b269a3fcb).
+`hosttest/pdx_page.py --small` runs each fixture with one Flate slot and a 32 KiB workspace: grown, it
+must equal the 48 KiB render; refused, it must equal it or note the font (t1-hex's 24,674-byte program).
 
 **Verbs** (`pdabi.h`'s `[fonts 20.22.8]` block; PDXF copies the exchange block's struct to its bss at
 entry because PDENG reuses the block):

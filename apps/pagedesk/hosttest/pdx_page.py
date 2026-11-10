@@ -16,6 +16,9 @@ font program cannot be opened beside the page's content stream and PDXF inflates
 with PDXF, then the text with PDXF refused and every slice the ladder answered sent again
 stale (as the primary does: it must finish, not ladder forever), then the text right after
 drawing the page with PDXF refused, which the strike blocks carry and must equal the first.
+--small runs each fixture with one Flate slot and a 32 KiB workspace (QA R13's QZTEXT scatter): grown
+to its want it must draw as at 48 KiB; refused, it draws the same or notes the font, never a
+truncated program silently.
 --grow checks the glyph claim's want (QA R24): a page with five embedded fonts needs five strike blocks;
 from a 40 KiB claim (four) it must grow to 48 and draw as a 48 KiB claim does, and a refused growth must
 finish with "glyph block full" noted, never ladder forever.
@@ -60,6 +63,7 @@ def main():
     ap.add_argument("--oneslot", action="store_true"); ap.add_argument("--noz", action="store_true")
     ap.add_argument("--seq", action="store_true"); ap.add_argument("--text", action="store_true")
     ap.add_argument("--grow", action="store_true")
+    ap.add_argument("--small", action="store_true")
     a = ap.parse_args()
     from PIL import Image
     import numpy as np
@@ -71,6 +75,31 @@ def main():
     open(os.path.join(bank, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + res)
     shutil.copy(os.path.join(ROOT, "build", "PDFONTX.RES"), bank)
     names = a.fixtures or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
+    if a.small:
+        # QA R13 residue (the QZTEXT scatter): ONE Flate slot and a 32 KiB workspace, whose 22,016-byte
+        # program area is smaller than t1-hex's program. The in-place inflate runs out of room; that must
+        # read as "too large" (PDXF asks for its want, else the font is substituted and noted), never as a
+        # truncated program drawn with no note
+        bad = 0
+        for n in names:
+            j = json.load(open(os.path.join(FIX, n + ".json")))
+            W, H = j["page"]
+            with tempfile.TemporaryDirectory() as t:
+                zp = os.path.join(t, "z.pdf")
+                subprocess.check_call(["mutool", "clean", "-z", os.path.join(FIX, j["pdf"]), zp], stdout=subprocess.DEVNULL)
+                def run(extra, name):
+                    ob = os.path.join(t, name + ".ppm")
+                    r = subprocess.run([exe, "render", zp, "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0", ob, bank, "29"],
+                                       capture_output=True, text=True, env=dict(os.environ, PDR_GLYPHKB="40", PDRH_FLKB="43", **extra))
+                    inc = [int(l.split("incomplete=")[1].split()[0], 16) for l in r.stdout.split("\n") if "incomplete=" in l]
+                    return r.returncode, inc[0] if inc else None, open(ob, "rb").read() if os.path.exists(ob) else None
+                A = run({}, "a"); B = run({"PDX_SLOTKB": "32", "PDX_SLOTGROW": "1"}, "b"); C = run({"PDX_SLOTKB": "32"}, "c")
+            noted = C[1] is not None and C[1] & 0x0401
+            ok = A[0] == 0 and B[2] == A[2] and C[0] == 0 and (C[2] == A[2] or noted)
+            print("%-14s 32 KiB grown: %s   32 KiB refused: %s  %s" % (n, "same" if B[2] == A[2] else "DIFFERS",
+                  "same" if C[2] == A[2] else "substituted, noted 0x%04x" % C[1] if noted else "DIFFERS, NOT NOTED", "ok" if ok else "FAIL"))
+            bad += not ok
+        return 1 if bad else 0
     if a.grow:
         # QA R24: five embedded fonts on ONE page (qpdf overlays four fixtures' page 1 on tt-simple's) need
         # five strike blocks; the glyph claim's min (40 KiB) holds four, its want (48) six
