@@ -193,7 +193,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 %endif
 
 ; -----------------------------------------------------------------------------
-; fsx_run - the bracket (SPEC.md 53.1, slot 0x0206 via X stub)
+; fsx_run - the bracket (SPEC.md 53.1, a door cell via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
 ;           window ptr, CL = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
@@ -768,7 +768,7 @@ fsx_mode:
     jmp kret_di
 
 ; -----------------------------------------------------------------------------
-; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x02B5)
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x0172)
 ;
 ; in:       nothing. Bracket-only, exclusive task only.
 ; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may
@@ -2529,9 +2529,14 @@ fsx_rdownf:
 .kn:
     or bx, bx
     jnz .keep
-    mov byte [os88_door.lim+2], 0      ; ...and THE RARE DOOR refuses every index:
-                                ; its bodies name `.cold` and the kernel's
-                                ; selectors (SPEC.md 20.3.4, 53.2.3)
+    mov byte [os88_door.lim+2], RD_P + RD_RK ; ...and THE RARE DOOR answers
+                                ; only the published block's first RD_RK
+                                ; (OSAPI_SND_CAPS, _FONT_GLYPHS, _FSX_MODE,
+                                ; .text bodies real mode can run) and the
+                                ; kernel's own below them, which no code the
+                                ; bracket runs reaches; every other index
+                                ; refuses - its body names `.cold` or the
+                                ; kernel's selectors (SPEC.md 20.3.4, 53.2.3)
     mov al, 0x8D                ; NMI off across the switch, LAST
     out 0x70, al
     mov byte [mega_drop], 2     ; ...landing at fsx_rland
@@ -2733,11 +2738,9 @@ fsx_rsndup:
 fsx_rkeep:
     dw rmk_1, rmk_1e - rmk_1, 0     ; OSAPI_WM_CONTENT
     dw rmk_2, rmk_2e - rmk_2, 0     ; OSAPI_GET_TICKS, _SET_COLOR, _MOUSE
-    dw rmk_3, rmk_3e - rmk_3, 0     ; OSAPI_SND_CAPS
     dw rmk_4, rmk_4e - rmk_4, 0     ; OSAPI_VIDEO
     dw rmk_5, rmk_5e - rmk_5, 0     ; OSAPI_CPU_INFO
-    dw rmk_6, rmk_6e - rmk_6, 0     ; OSAPI_FONT_GLYPHS
-    dw rmk_7, rmk_7e - rmk_7, 0     ; OSAPI_FSX_MODE, _FSX_WAIT
+    dw rmk_7, rmk_7e - rmk_7, 0     ; OSAPI_FSX_WAIT
     dw rmk_8, rmk_8e - rmk_8, 0     ; OSAPI_KEY_DOWN, _FSX_SURF
     dw rmk_9, rmk_9e - rmk_9, 0     ; OSAPI_WM_WAKE
     dw rmk_10, rmk_10e - rmk_10, 0  ; OSAPI_FSX_PAGE

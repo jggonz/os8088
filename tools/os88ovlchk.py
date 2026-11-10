@@ -38,16 +38,22 @@ import os, re, sys, glob
 CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
                   r'(?:(?:near|short)\s+)?(?:(\w+):)?([A-Za-z_]\w*)\b')
 # an API cell macro whose body near-calls its LAST argument
-CELL = re.compile(r'^\s*OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB|XCELL|RSLOT|RXCELL|JCELL)'
+CELL = re.compile(r'^\s*(?:OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB|XCELL|JCELL)'
                   r'\s+(?:\w+\s*,\s*)?'
-                  r'([A-Za-z_]\w*)\s*(?:,\s*\d+\s*)?$')
+                  r'([A-Za-z_]\w*)\s*(?:,\s*\d+\s*)?'
+                  # ...and THE DOOR's near kinds (SPEC.md 20.3.4): rd_tab's
+                  # RS and RX words name a `.text` routine `call bp` reaches
+                  r'|RD(?:ENT|PUB)\s+RDK_R[SX]\s*,\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?(?:;.*)?)$')
 # ...and the cells whose argument is a `.cold` BODY (SPEC.md 20.3.2): the rare
 # cold shapes reach it through api_far as COLD_SEG:target, and OSAPI_FCELL
 # far-calls it, so the target must live in `.cold` whatever section the table
 # sits in. The hit is checked as if made FROM `.cold`, which reports a target
 # left in `.text` - a far call into the cold segment at a resident offset.
-CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
-                   r'([A-Za-z_]\w*)\s*$')
+CCELL = re.compile(r'^\s*(?:OSAPI_(?:NCELL|FCELL)\s+'
+                   r'([A-Za-z_]\w*)\s*'
+                   # ...and the door's far kinds: RCS, RCX and RN reach a
+                   # `.cold` body through api_far as COLD_SEG:word
+                   r'|RD(?:ENT|PUB)\s+RDK_R(?:CS|CX|N)\s*,\s*([A-Za-z_]\w*)\s*(?:,\s*\w+\s*)?(?:;.*)?)$')
 # ...and the two-or-three-argument cells DEFINE their first argument, as `%1:`
 # inside the macro body.  A `name:` scan cannot see that, so the 45 OSAPI_JSLOT
 # targets were not merely untested above - they were not in the label map at
@@ -599,10 +605,10 @@ def main():
                              if c.group(2) in pasted]
             m = CELL.match(line)
             if m:
-                hits.append((None, m.group(1)))
+                hits.append((None, m.group(1) or m.group(2)))
             m = CCELL.match(line)
             if m:
-                hits.append(('.cold', m.group(1)))
+                hits.append(('.cold', m.group(1) or m.group(2)))
             for seg, tgt in hits:
                 tsect = where.get(tgt)
                 if tsect is None:

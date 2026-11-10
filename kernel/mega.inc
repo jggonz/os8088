@@ -442,7 +442,7 @@ mega_enterf:
     mov es, si                      ; below 1MB: toast_show COPIES it, and
     mov si, dx                      ; mega_rung below is what makes it heap
     mov cx, 146
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     mov ax, MEGA_RAM                ; ...and `.mega`'s rung to the heap: real
     call mega_rung                  ; mode can never run what is on it
@@ -2366,7 +2366,7 @@ mega_nmitell:
     push ds
     pop es
     mov cx, 182                     ; ten seconds: long enough to photograph
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     call KERNEL_SEG:mega_putsf      ; ...and the debug port (the line is the
                                     ; kernel's DATA, which `.mega`'s CS cannot
                                     ; read: the low writer does), with how many
@@ -2968,7 +2968,7 @@ mega_fkdo:
     mov byte [es:mega_fktm], 0
     mov si, mega_fkmsg              ; ES:SI
     mov cx, 182                     ; ten seconds, mega_nmitell's
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
 .nt:
     mov al, [es:mega_fkslot]
     or al, al
@@ -7443,7 +7443,7 @@ mega_fdjudge:
     pop es
     mov si, mega_tfdfb
     mov cx, 182                     ; ten seconds
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop si
     pop di
@@ -7466,7 +7466,7 @@ mega_fdjudge:
     pop es                          ; field machine shows: toast_show only
     mov si, mega_tfdoff             ; stages it, the UI task draws it
     mov cx, 146
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
  %endif
     pop es
     pop cx
@@ -15849,7 +15849,7 @@ mega_pmtail:
 %endif
     mov cx, 146                     ; draws it), for eight seconds: long enough
                                     ; to photograph
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     retf
 

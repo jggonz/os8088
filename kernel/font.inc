@@ -1157,7 +1157,7 @@ font_run:
     GFXAUDIT_HOOK
     push es                     ; the deferred hide is spent in font_run_x and
     push ds                     ; NOT here, which is SPEC.md 6.1.9: this entry
-    pop es                      ; is the kernel's, and the API slot 0x01BC is
+    pop es                      ; is the kernel's, and the API slot 0x012D is
     call font_run_x             ; an X STUB straight to font_run_x - so a hide
     pop es                      ; owed here was owed by kernel callers only
     ret
@@ -1197,7 +1197,7 @@ font_run:
 font_run_x:
     SNAPAUDIT_TALLY snap_hrun, snap_krun
     call fnt_unlazy             ; SPEC.md 6.1.9: HERE, not at font_run above,
-                                ; because slot 0x01BC's X cell names THIS
+                                ; because slot 0x012D's X cell names THIS
                                 ; label - so every package's opaque run drew
                                 ; over the mouse pointer with gfx_lock's
                                 ; promised hide unspent, and gfx_unlock then

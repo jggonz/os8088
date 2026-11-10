@@ -438,7 +438,7 @@ hb_probe_x:
 section .cold
 
 ; -----------------------------------------------------------------------------
-; drv_suspend_x - slot 0x039C's three verbs (SPEC.md 51.11): THE MACHINE, OUT
+; drv_suspend_x - a door cell's three verbs (SPEC.md 51.11): THE MACHINE, OUT
 ;                 OF MY WAY. Entered from kernel.asm's thunk under api_x, so
 ;                 ES = the caller's DS and DS = KERNEL_SEG
 ; in:  AL = 1 suspend the hardware drivers, ES:DI = a DQ_SIZE-record buffer
@@ -1011,7 +1011,7 @@ hbm_toast:
     push cs
     pop es                      ; toast_show takes ES:SI
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop cx
     ret

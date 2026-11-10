@@ -367,7 +367,7 @@ ext_e_fsx:
     push bx
     or bx, bx
     jnz .win
-    call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
+    KDOOR wm_top                ; OSAPI_WM_TOP's own cell is the door: the
     or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
 .win:

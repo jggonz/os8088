@@ -502,7 +502,7 @@ MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
                                 ; power of two, at most 256 (`and al`), and a
                                 ; multiple of 32 while guard 6b stands
 
-; --- osapi_claim_snapshot's buffer, API slot 0x01E7 (SPEC.md 20.9) ----------------
+; --- osapi_claim_snapshot's buffer, a door cell (SPEC.md 20.9) ----------------
 ; The three fields of a claim record that mean anything outside this module.
 ; MC_DMA is not one of them: it is how a claim that MOVES keeps the page
 ; property it was granted for, and nothing outside can move a claim.
@@ -512,7 +512,7 @@ CLS_OWN    equ 4                ; word: owner (SPEC.md 50.2)
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 
-; --- osapi_sys_kb's buffer, API slot 0x01ED (SPEC.md 20.9) --------------------
+; --- osapi_sys_kb's buffer, a door cell (SPEC.md 20.9) --------------------
 ; The kernel's own footprint broken into its parts, then the heap's totals.
 ; The parts sum to SK_KERN exactly - see the routine at the foot of this file
 ; for how the rounding is arranged so that they do, and why none of them is a
@@ -5443,7 +5443,7 @@ mmf_mem_claim_ownhi:            ; ...and from the TOP: the bridge's
 %endif
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_huge - OSAPI_MEM_HUGE (0x0437, KERN-MEGA-PLAN 14.1 answers 6, 7):
+; osapi_mem_huge - OSAPI_MEM_HUGE (a door cell, KERN-MEGA-PLAN 14.1 answers 6, 7):
 ; in:  AX = KB (1..65535), ES = the caller's segment
 ; out: CF = 0, DX = the claim's first segment or selector and CX = the STEP to
 ;      the next 64KB of it: 1000h for a conventional claim on every kernel,
@@ -5649,7 +5649,7 @@ mem_hrecf:
 %endif
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_p - OSAPI_MEM_P (0x045B, SPEC.md 50.3.7): the claim heap counted
+; osapi_mem_p - OSAPI_MEM_P (a door cell, SPEC.md 50.3.7): the claim heap counted
 ;               in PARAGRAPHS, for a caller whose size is a byte count
 ; in:  BL = MEMP_CLAIM (0, bottom up) or MEMP_CLAIM_HI (1, top down):
 ;           AX = paragraphs, CX = the 64KB-page-safe HEAD in paragraphs, 0 =
@@ -5912,7 +5912,7 @@ osapi_mem_movable_x:
 
 %ifdef OS88_COMPACT
 ; -----------------------------------------------------------------------------
-; osapi_mem_compact - API slot 0x03C6: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
+; osapi_mem_compact - a door cell: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
 ;        MEMC_WHATIF (0): AL = a purge level, answered as OSAPI_MEM_AVAIL
 ;                         would answer at that level
@@ -6245,7 +6245,7 @@ mem_owner_of_x:
 ; -----------------------------------------------------------------------------
 
 ; =============================================================================
-; osapi_claim_snapshot - API slot 0x01E7: the whole claim table into the caller's
+; osapi_claim_snapshot - a door cell: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
 ; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
@@ -6268,9 +6268,9 @@ mem_owner_of_x:
 %error "a claim record is no longer its own snapshot prefix - the copy below"
 %endif
 mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
-    push cx                     ; NO DS BANK: the one door in is the RCSLOT
-                                ; cell, whose api_rsc banks and restores DS
-                                ; round this whole body (size pass 10)
+    push cx                     ; NO DS BANK: the one door in is the RCS door
+                                ; kind, which banks and restores DS round
+                                ; this whole body (size pass 10)
     push si
     push di
     push ss                     ; DS = LOW_SEG for the duration: the claim map
@@ -6292,7 +6292,7 @@ mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
     retf
 
 ; =============================================================================
-; osapi_sys_kb - API slot 0x01ED: what the KERNEL occupies and what the heap
+; osapi_sys_kb - a door cell: what the KERNEL occupies and what the heap
 ;                holds, in KB (SPEC.md 20.9/2/50)
 ;
 ; in:  ES:DI = a SYSKB_SIZE buffer the caller owns

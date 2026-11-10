@@ -989,7 +989,7 @@ fpg_step:
 ; out: nothing - every register and the flags preserved, fpg_step's contract
 ;
 ; The entry point for a producer that moves bytes rather than sectors, and it
-; IS slot 0x029B (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
+; IS a door cell (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
 ; DRVC_FILE driver inside FSV_READ/FSV_WRITE calls exactly this routine. That
 ; is the half fpg_begin cannot cover: the kernel arms the widget from
 ; FSV_STAT's size and then has NOTHING to say until the verb returns, because
@@ -1137,7 +1137,7 @@ fpg_opbegin:
 
 %ifdef FPG_PARK
 ; -----------------------------------------------------------------------------
-; osapi_fs_op - OSAPI_FS_OP (0x0461). in DX:CX = the bytes ONE operation of the
+; osapi_fs_op - OSAPI_FS_OP (a door cell). in DX:CX = the bytes ONE operation of the
 ; caller's will move however many lock holds it takes; 0 = it is over. The
 ; widget PARKS on the bar between the caller's holds (fpg_finish) instead of
 ; coming down, so a load spread over timer callbacks is one bar, not one per

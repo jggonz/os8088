@@ -291,32 +291,18 @@ INLINE = {
 # decoder that recognises them.
 
 
-# PER-KERNEL LEDGER ROWS (abi-3/gkm-2, kernel size pass 19): a cell that is
-# INLINE or FIXED on the real-mode kernels and a RARE cell to a body of its
-# own on this one. The value is that body's name where the naming convention
-# does not reach it, or None. Everything not listed here is held to the same
-# INLINE/FIXED/ALIAS ledgers on every kernel.
-KERNEL_OWN = {
-    "mega": {
-        # kern_mega's window-record setters: the store needs the kernel's
-        # DATA selector, and a cell has no room to load it (kernel size pass
-        # 14 kept these rare there; MEGA_ICWB's stubs serve the others)
-        "OSAPI_WM_ONMOUSEUP": None,
-        "OSAPI_WM_ONCLOSE": None,
-        "OSAPI_WM_ONDRAG": "wm_ondrag_c",
-        "OSAPI_WM_ONTIMER": "wm_ontimer_c",
-        # ...and the protected-mode questions only kern_mega answers - the
-        # FIXED refusals everywhere else
-        "OSAPI_XMEM_SEL": None,
-        "OSAPI_XMEM_RUN": None,
-        "OSAPI_MEM_CODESEL": None,
-    },
-    "small": {
-        # SPEC.md 13.8.2/13.9: kern_small REFUSES a drag or timer handler
-        # (CF = 1), where kern_big's inline setter answers CF = 0
-        "OSAPI_WM_ONDRAG": "wm_ondrag_c",
-        "OSAPI_WM_ONTIMER": "wm_ontimer_c",
-    },
+# PER-KERNEL DOOR ROWS (SPEC.md 20.3.4, kernel size pass 19's T5): a door cell
+# a kernel has no body for holds its INDEX with a refusal entry (RDREF, or an
+# RDPUB naming a refusal by equ), so one package binary reaches the same
+# index on every kernel. The value is the routine the entry must name there.
+DOOR_OWN = {
+    "big": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse"},
+    "emu": {"OSAPI_XMEM_SEL": "api_refuse", "OSAPI_XMEM_RUN": "api_refuse"},
+    # kern_small's api_refuse IS xm_copy (`mov ax, 1 / stc / ret`), and its
+    # OSAPI_FS_OP body is that refusal too (no file-list engine ops); the one
+    # RCS refusal is `.cold`'s api_refusec (no volume check)
+    "small": {"OSAPI_XMEM_SEL": "xm_copy", "OSAPI_XMEM_RUN": "xm_copy",
+              "OSAPI_FS_OP": "xm_copy", "OSAPI_VOL_CHECK": "api_refusec"},
 }
 
 
@@ -326,14 +312,6 @@ KERNEL_NOP = {
     "small": {"OSAPI_GFX_BLIT1_PEN",    # no pen on kern_small (kernel.asm)
               "OSAPI_THM_SET",          # no themes to set (SPEC.md 76)
               "OSAPI_WM_ONWHEEL"},      # no wheel dispatch (SPEC.md 13.18)
-}
-
-# ...the refusals a kernel answers INLINE where kern_big has a body: the
-# FIXED shape (AX = 1, CF = 1), per kernel (gkm-2's "refusal stubs name their
-# contract": the bytes ARE the contract here).
-KERNEL_FIXED = {
-    "small": {"OSAPI_FS_OP": "b801003c02cb",       # no file-list engine ops
-              "OSAPI_VOL_CHECK": "b801003c02cb"},  # no volume check
 }
 
 # ...and a routine a kernel names differently (ALIAS above, per kernel).
@@ -541,20 +519,15 @@ def check_kernel(kernel, kbin, maps):
             check(False, "%s (0x%04X) is in KERNEL_NOP but its cell is a %s" % (name, addr, kind),
                   "a stale exception silently exempts nothing")
         if kind == "FIXED":
-            fx = dict(FIXED, **KERNEL_FIXED.get(kernel, {}))
+            fx = dict(FIXED)
             check(fx.get(name) == tgt[1],
                   "%s (0x%04X) is the fixed cell %s" % (name, addr, tgt[1]),
                   "an inline cell of no memory operand that is not this name's "
                   "own bytes - the answer the SDK publishes for it has changed",
                   got=tgt[1], want=fx.get(name, "no FIXED row"))
             continue
-        own = KERNEL_OWN.get(kernel, {})
-        if name in own:
-            check(kind in os88cells.RARE_KINDS,
-                  "%s (0x%04X) is a rare cell on kern_%s" % (name, addr, kernel),
-                  "KERNEL_OWN says this kernel answers the cell with a body of "
-                  "its own behind a rare cell", got=kind, want="a rare shape")
-        elif name in INLINE or name in FIXED:
+        own = {}
+        if name in INLINE or name in FIXED:
             check(False, "%s (0x%04X) is in INLINE but its cell is a %s" % (name, addr, kind),
                   "the ledger names an inline cell that is not one - remove the row, "
                   "or the cell lost its inline body")
@@ -596,40 +569,66 @@ def check_kernel(kernel, kbin, maps):
 
     # ...and the ledger must not rot: an ALIAS naming a slot nobody publishes
     # any more is a line that will never be read again.
+    dnames = {n for n, _ in os88cells.sdk_doors(ROOT)}
     for name in ALIAS:
-        check(name in by_name, "ALIAS names %s, which no SDK publishes" % name,
+        check(name in by_name or name in dnames, "ALIAS names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
     for name in list(INLINE) + list(FIXED):
         check(name in by_name, "INLINE names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
 
-    # 7. THE CALL SPELLING (SPEC.md 20.3.3). The SDK's CELL KINDS blocks
-    # route `call OSAPI_X` to the rare arm for exactly the cells this table
-    # decodes as rare, so T5 can flip the arm without a site edit. A stale
-    # block is byte-identical today (both arms are the same far call) and a
-    # wrong call after the flip - which is why it fails now, while it is
-    # free. The SDK is generated from kern_big; on any other kernel a cell
-    # whose rare-ness differs is LISTED, because one package binary serves
-    # every kernel and T5 has to settle each of them.
-    kinds = {addr: kind for addr, kind in
-             ((x, decode(blob, x, bodies, cold_seg)[0]) for x in starts)}
-    rare_here = {a for a, k in kinds.items() if k in os88cells.RARE_KINDS}
+    # 7. THE DOOR (SPEC.md 20.3.3, 20.3.4). Every published door cell is an
+    # index into rd_tab, the SAME index on every kernel - one package binary
+    # serves all four - and the SDK's CELL KINDS blocks carry it. Each
+    # index's word must reach the routine its name promises (the rules of
+    # check 6, plus DOOR_OWN's refusal entries), in the section its kind's
+    # range names; and the block must match this kernel's rdp_ equates.
+    doors = os88cells.kernel_doors(blob, off, equ)
     if kernel == "big":
-        for bad in os88cells.stale(kinds, ROOT):
-            check(False, "the SDK's CELL KINDS blocks match the table", bad)
-    else:
-        marked = set()
-        for rel in SDK_FILES:
-            marked |= set(os88cells.block_rare(rel, root=ROOT) or {})
-        differ = sorted("%s (%s here)" % (n, kinds.get(a))
-                        for n, a in by_name.items()
-                        if (n in marked) != (a in rare_here))
-        if differ:
-            print("  kern_%s: %d cell(s) whose rare-ness differs from kern_big's "
-                  "(T5 settles these): %s" % (kernel, len(differ), ", ".join(differ)))
+        for bad in os88cells.stale(doors, ROOT):
+            check(False, "the SDK's CELL KINDS blocks match the door", bad)
+    block = {}
+    for rel in SDK_FILES:
+        block.update(os88cells.block_rare(rel, root=ROOT) or {})
+    dpub = {n for n, _ in os88cells.sdk_doors(ROOT)}
+    downs = DOOR_OWN.get(kernel, {})
+    for name in sorted(dpub):
+        if not check(name in doors, "%s is in this kernel's door" % name,
+                     "the SDK says OS88_DOOR and rd_tab has no RDPUB/RDREF for it - "
+                     "a package's site reaches whatever index it was given"):
+            continue
+        ix, kind, tgt, where = doors[name]
+        check(block.get(name) == (ix, kind),
+              "%s is door index 0x%02X (%s) here, as the SDK's block says" % (name, ix, kind),
+              "ONE package binary serves every kernel, so an index may not differ "
+              "between kernels (SPEC.md 20.3.4)", got="0x%02X %s" % (ix, kind),
+              want=repr(block.get(name)))
+        names = label_at.get((where, tgt), [])
+        if not check(bool(names), "%s (door 0x%02X, %s) reaches %s:0x%04X, which is not a label there"
+                     % (name, ix, kind, where, tgt),
+                     "a word into the middle of a routine"):
+            continue
+        s_ = name[len("OSAPI_"):].lower()
+        want = {ALIAS[name]} if name in ALIAS else {s_, "osapi_" + s_, "api_" + s_}
+        if name in downs:
+            want = {downs[name]}
+        seen = set(names)
+        if where == ".cold":
+            seen |= {stem(n) for n in names}
+        check(bool(seen & want), "%s (door 0x%02X) reaches %s" % (name, ix, "/".join(names)),
+              "the SDK name and the kernel routine have parted. If this is "
+              "deliberate, add it to ALIAS (or DOOR_OWN for one kernel)",
+              got="/".join(names), want=" or ".join(sorted(want)))
+    for name in sorted(set(doors) - dpub):
+        check(False, "the door's %s is published" % name,
+              "rd_tab has an RDPUB the SDK does not say OS88_DOOR for")
+    for name in downs:
+        check(name in dpub, "DOOR_OWN names %s, a published door cell" % name,
+              "remove the row - a stale exception silently exempts nothing")
+    rare_here = set(doors)
 
     print("t_api_abi: %s%d published slots (%d aliased, %d inline, %d compat, "
-          "%d rare), table 0x%04X..0x%04X"
+          "%d door), table 0x%04X..0x%04X"
           % (KTAG[0], len(by_addr), len(ALIAS), len(INLINE), len(COMPAT),
              len(rare_here), TABLE_BASE, top))
 

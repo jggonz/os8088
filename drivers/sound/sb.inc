@@ -1139,7 +1139,7 @@ sbl_grant_chk:
     ret
 
 ; =============================================================================
-; The stream surface: slot 0x00EA's live body (SPEC.md 20.3/34.5/34.6).
+; The stream surface: slot 0x00CC's live body (SPEC.md 20.3/34.5/34.6).
 ; osapi_snd_stream (snd.inc) tail-jumps here. AL = verb, AH = handle or
 ; sub-op; every verb preserves all registers except its documented outputs.
 ; =============================================================================
@@ -2146,7 +2146,7 @@ sbl_dleft:
 ;
 ; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
 ;           CX = bytes, DI = destination offset in the CALLER's segment
-;           (BX, threaded per-call by slot 0x00EA's wrapper - SPEC.md 20.3)
+;           (BX, threaded per-call by slot 0x00CC's wrapper - SPEC.md 20.3)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -2164,7 +2164,7 @@ sbl_dleft:
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
 ; in:       SI = source offset in the CALLER's segment (BX, threaded
-;           per-call by slot 0x00EA's wrapper - SPEC.md 20.3), CX = bytes,
+;           per-call by slot 0x00CC's wrapper - SPEC.md 20.3), CX = bytes,
 ;           DI = destination offset in SND_SEG (inside a grant the caller
 ;           owns)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);

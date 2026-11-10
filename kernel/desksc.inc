@@ -242,7 +242,7 @@ sc_walk:
     pop es
     mov si, sc_s_nf
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     stc                         ; CF = 1: NOT FOUND, which stik_boot reads
     ret                         ; (SPEC.md 26.8.5) and desk_open does not
 
@@ -404,7 +404,7 @@ lnk_open:
 
 ; -----------------------------------------------------------------------------
 ; osapi_arg_text - a link's parameter for the program it started (0x04DD,
-;                  SPEC.md 26.10.7). api_rsc's far body: DS = KDATA
+;                  SPEC.md 26.10.7). the door's RCS kind's far body: DS = KDATA
 ; in:  nothing
 ; out: CF=1 none - every launch but a link's; CF=0 with DX:SI -> the NUL text,
 ;      in the link's record on task 0's stack, alive until the entry returns
@@ -2024,7 +2024,7 @@ ovl_sc_load:
     push ss
     pop es
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     add sp, 18
     jmp short .root
 .endf:
@@ -2034,7 +2034,7 @@ ovl_sc_load:
     pop es
     mov si, as_s_skip
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show   ; COPIED, so a `.boot3` string outlives it
+    KDOOR toast_show                ; COPIED, so a `.boot3` string outlives it
 %endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where

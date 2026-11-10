@@ -8,7 +8,7 @@
 > **Both verbs this study concluded were needed are published API:**
 > `OSAPI_WM_SAVEU` (withdrawn in §11.104) - the live "may I be banked?" answer that §1
 > argues `WF_SAVEU` should have been all along - and `OSAPI_WM_BAND`
-> (slot 0x028F), which §3 names as *"what is left for a colour game that wants
+> (a door cell), which §3 names as *"what is left for a colour game that wants
 > a paused cache"*. SPEC.md §11.96.11.4 is the fence they share, and
 > SPEC.md §11.96.11.2 and §11.96.11.3 are the band's lifetime and the 1bpp
 > case. **Paint is the worked consumer**: `pt_sucache` calls both

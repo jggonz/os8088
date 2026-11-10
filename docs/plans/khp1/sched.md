@@ -163,7 +163,7 @@ sysbench prices the hot SLOT round trip at 24.9 us (`API far call cell`,
 `OSAPI GET_TICKS` inline at the same), a near call at 10.7 us, and nothing
 in this pass changed either.
 
-* **`OSAPI_TASK_YIELD` (0x009E) as a cell that enters the yield directly.**
+* **`OSAPI_TASK_YIELD` (0x0086) as a cell that enters the yield directly.**
   The 8-byte SLOT switches DS around `task_yield`, which then saves the
   caller's DS and loads the kernel's itself. A far-entered yield that builds
   the `iret` frame under the far return could skip the cell's `push ds / push

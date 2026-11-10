@@ -3926,7 +3926,7 @@ section .text
 ; the wrong PLACE.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; osapi_gfx_fill_pat - API slot 0x01F3's X body (SPEC.md 20.9)
+; osapi_gfx_fill_pat - API slot 0x0134's X body (SPEC.md 20.9)
 ; in:  AX/BX/CX/DX = the rect, ES:SI = the caller's 8 pattern bytes
 ; out: nothing; SI preserved
 ;

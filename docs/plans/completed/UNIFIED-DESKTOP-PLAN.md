@@ -39,7 +39,7 @@ item answers the same four questions:
 One routine answers each question for every kind. One placement rule
 serves the kernel, the drivers, CTRL.DRV and packages alike: a placed item
 goes in its slot or the nearest free one, and every drive nobody has
-placed stays packed, gapless, into the first free cells around it. The public slot `OSAPI_DESK_SVC` (0x037B) becomes **`OSAPI_DESK_ITEM`**,
+placed stays packed, gapless, into the first free cells around it. The public slot `OSAPI_DESK_SVC` (a door cell) becomes **`OSAPI_DESK_ITEM`**,
 which a driver and a package can both call. Every item can be dragged to a
 new cell, drives included, and a drive's place is kept in SYSTEM.CFG beside
 the shortcuts. **The net is ESTIMATED at about −420 resident bytes on
@@ -222,7 +222,7 @@ Unmounting `C:` above `D:` and `E:` is one strip of three. A cell between
 two columns is never painted, so §26.3's phantom column cannot happen, and
 `desk_zones_dmg`'s corner arithmetic and the `desk_zhw` high-water mark go.
 
-### 2.5 One public slot: `OSAPI_DESK_ITEM` (0x037B, replaces `OSAPI_DESK_SVC`)
+### 2.5 One public slot: `OSAPI_DESK_ITEM` (a door cell, replaces `OSAPI_DESK_SVC`)
 
 ```
 in   AL = 1 add, 0 remove

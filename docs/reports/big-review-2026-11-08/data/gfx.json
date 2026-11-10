@@ -528,8 +528,8 @@
   },
   {
    "file": "SPEC.md",
-   "old_text": "API slot 0x02D1. `kern_big` only — the small build refuses with CF=1 |",
-   "new_text": "API slot 0x02D1. Both kernels since §5.4.2.5.1; `kern_small` has no pen and refuses an x off the byte grid |",
+   "old_text": "API slot 0x0182. `kern_big` only — the small build refuses with CF=1 |",
+   "new_text": "API slot 0x0182. Both kernels since §5.4.2.5.1; `kern_small` has no pen and refuses an x off the byte grid |",
    "why": "gfx_blit1_x is in .cold on both builds (vga12.inc:5857-5862); kern_small's arm refuses only `test al,7` != 0 (5911-5914)"
   },
   {

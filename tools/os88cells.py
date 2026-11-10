@@ -13,34 +13,38 @@ TWO THINGS LIVE HERE, and they are one subject.
    once, so the gate and the generator below cannot disagree about what a
    rare cell is. t_api_abi's header is the essay on WHY the bytes are read.
 
-2. THE KIND BLOCKS (SPEC.md 20.3.3, kernel size pass 19's T6). A package calls
-   a cell as `call OSAPI_X` and nothing else, ~8,400 sites; T5 turns a RARE
-   cell's call into `int <door> / db <index>`. Rewriting the sites would have
-   touched every package and every gate that reads the spelling, so instead
-   `apps/os88api.inc` overloads the mnemonic once (`%imacro call 1`) and each
-   rare cell carries a KIND MARK in its expansion:
+2. THE DOOR AND ITS BLOCKS (SPEC.md 20.3.3/20.3.4, kernel size pass 19's T6
+   and T5). A package calls a cell as `call OSAPI_X` and nothing else, ~8,400
+   sites; a RARE cell's call is `int OS88_RARE / db <index>` since T5, the
+   index naming the cell's word in the kernel's rd_tab. Rewriting the sites
+   would have touched every package and every gate that reads the spelling,
+   so `apps/os88api.inc` overloads the mnemonic once (`%imacro call 1`), each
+   rare cell's %define says OS88_DOOR, and a generated block re-expands it
+   with its INDEX:
 
-       %xdefine OSAPI_WM_SHOW __OSAPI_RARE OSAPI_WM_SHOW   ; RSLOT
+       %xdefine OSAPI_WM_SHOW __OSAPI_RARE 0x05   ; RS
 
-   so `call OSAPI_WM_SHOW` arrives at the macro as
-   `__OSAPI_RARE KERNEL_SEG:0x007C`, which the macro routes to the ONE rare
-   arm, `OS88_RARE_CALL`. Today that arm is the same far call, so every image
-   is byte-identical; T5 flips it by editing that one macro. NASM expands a
+   so `call OSAPI_WM_SHOW` arrives at the macro as `__OSAPI_RARE 0x05` and
+   the macro's one rare arm, `OS88_RARE_CALL`, emits the door. NASM expands a
    multi-line macro's parameters before the macro sees them, so the NAME is
    gone by then and the mark has to ride in the expansion - which is also
    what makes a macro-wrapped site (`call %2` in os88thunk.asm, os88ui.inc,
    w16pm.inc, stiklib.asm) carry it with no edit.
 
-   Which cells are rare is a fact about THE KERNEL, so the blocks are
-   GENERATED from build/kernel.bin's decoded table and never typed: `--write`
-   rewrites each SDK file's block between its markers, and t_api_abi (fast
-   tier) fails the build when a block is stale. One block per file, because a
-   %xdefine must follow the %define it re-expands - drivers/os88drv.inc
-   publishes OSAPI_DRV_TASK after including os88api.inc.
+   Which cells are rare, their kinds and their INDICES are facts about THE
+   KERNEL - rd_tab's `RDPUB` lines, whose `rdp_<NAME>` equates are the index a
+   site carries - so the blocks are GENERATED from build/kernel.bin's map and
+   never typed: `--write` rewrites each SDK file's block between its markers,
+   and t_api_abi (fast tier) fails the build when a block is stale. One block
+   per file, because a %xdefine must follow the %define it re-expands -
+   drivers/os88drv.inc publishes OSAPI_DRV_TASK after including os88api.inc.
 
-   The source of truth is kern_big's table. One SDK serves every kernel, so a
-   cell rare on kern_big and something else on another kernel is a fact T5
-   has to settle; `t_api_abi.py --kernel <k>` lists those disagreements.
+   The source of truth is kern_big's map. One package binary serves every
+   kernel, so the index of a published cell is the same on all four: rd_tab
+   holds the kernel's own entries first and the door adds RD_P to every
+   index, and a kernel with no body for a cell holds its index with a refusal
+   entry (SPEC.md 20.3.4). `t_api_abi.py --all` checks every kernel's indices
+   against this block.
 """
 import argparse
 import os
@@ -55,15 +59,17 @@ sys.path.insert(0, HERE)
 TABLE_BASE = 0x0010
 CELL = 8                # the LONGEST cell: the decode window, not the stride
 
-# The rare shapes: `push bp / call api_r<kind> / dw target`, 6 bytes, the
-# body behind the call (SPEC.md 20.3). These are the cells T5 moves behind
-# the software-interrupt door.
-RARE_KINDS = ("RSLOT", "RXCELL", "RCXCELL", "RNCELL", "RCSLOT")
-LEN = {"SLOT": 8, "YSLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
-       "XCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
-BODIES = ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")
+# THE RARE KINDS (SPEC.md 20.3.4, kernel size pass 19's T5): a rare cell is no
+# table cell at all but an INDEX into the kernel's rd_tab, reached by
+# `int OS88_RARE / db <index>`, and its kind is the range the index falls in
+# (rd_tab is written in kind order). The six-byte `push bp / call api_r<kind>
+# / dw target` cells these names once described are gone.
+RARE_KINDS = ("RS", "RCS", "RX", "RCX", "RN")
+RARE_SECT = {"RS": ".text", "RCS": ".cold", "RX": ".text", "RCX": ".cold", "RN": ".cold"}
+LEN = {"SLOT": 8, "YSLOT": 8, "XCELL": 7, "NCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
+BODIES = ("api_x", "api_nc")
 
-SHAPES = ("1E0E1F E8.. 1FCB | 9CFA0E E8.. CB90 | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | "
+SHAPES = ("1E0E1F E8.. 1FCB | 9CFA0E E8.. CB90 | 1E0E1F EA.. ssss | 55BD.. E9.. | "
           "E9.. | 9A.. ssss CB | 2E <mov> [98] CB | FIXED")
 
 # The INLINE cells with NO memory operand (kernel size pass 14): a
@@ -71,11 +77,8 @@ SHAPES = ("1E0E1F E8.. 1FCB | 9CFA0E E8.. CB90 | 1E0E1F EA.. ssss | 55E8.. tttt 
 # other kernel answers with registers alone, in the cell. The ledger is the
 # BYTES themselves - this kernel's, which is why a FIXED cell may differ on
 # kern_mega (where these are RSLOT cells to bodies of their own).
-FIXED = {
-    "OSAPI_XMEM_SEL":    "b801003c02cb",   # mov ax, 1 / cmp al, 2: AX = 1, CF = 1
-    "OSAPI_XMEM_RUN":    "b801003c02cb",   # ...the same refusal
-    "OSAPI_MEM_CODESEL": "89d083f801cb",   # mov ax, dx / cmp ax, 1: CF iff DX = 0
-}
+FIXED = {}                # (kernel size pass 19's T5 moved the last three -
+                          # OSAPI_XMEM_SEL, _XMEM_RUN, _MEM_CODESEL - behind the door)
 
 
 def fixed(c):
@@ -213,22 +216,15 @@ def decode(blob, addr, bodies, cold_seg):
         if seg != cold_seg:
             return None, "FJSLOT to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
         return "FJSLOT", imm(4), ".cold"
-    if c[0] == 0x55 and c[1] == 0xE8:
-        # the 6-byte RARE cell (SPEC.md 20.3): push bp / call <kind> / dw target
-        body = rel(addr + 4, 2)
-        kind = {bodies.get("api_rs"): ("RSLOT", ".text"),
-                bodies.get("api_rx"): ("RXCELL", ".text"),
-                bodies.get("api_rxc"): ("RCXCELL", ".cold"),
-                bodies.get("api_rn"): ("RNCELL", ".cold"),
-                bodies.get("api_rsc"): ("RCSLOT", ".cold")}.get(body)
-        if kind is None:
-            return None, "rare cell calling 0x%04X, which is no rare body" % body, None
-        return kind[0], imm(4), kind[1]
     if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9:
         body = rel(addr + 7, 5)
-        if body != bodies.get("api_x"):
-            return None, "BP-family shape jumping to 0x%04X, which is not api_x" % body, None
-        return "XCELL", imm(2), ".text"
+        if body == bodies.get("api_x"):
+            return "XCELL", imm(2), ".text"
+        if body == bodies.get("api_nc"):
+            # OSAPI_FILE_READ_SEQ's NCELL (kernel size pass 19): the XCELL's
+            # shape jumping to the N body's cell entry, a .cold file door
+            return "NCELL", imm(2), ".cold"
+        return None, "BP-family shape jumping to 0x%04X, which is neither api_x nor api_nc" % body, None
     if c[0] == 0x9A and c[5] == 0xCB:
         seg = imm(3)
         if seg != cold_seg:
@@ -288,11 +284,50 @@ def sdk_cells(root=ROOT):
     return out
 
 
+# --- the door (SPEC.md 20.3.4) -------------------------------------------------
+DOORDEF = re.compile(r"^%define\s+(OSAPI_\w+)\s+OS88_DOOR\b", re.M)
+
+
+def sdk_doors(root=ROOT):
+    """[(name, file)] for every published DOOR cell, both SDKs."""
+    out = []
+    for rel in SDK_FILES:
+        with open(os.path.join(root, rel)) as f:
+            for name in DOORDEF.findall(f.read()):
+                out.append((name, rel))
+    return out
+
+
+def door_kind(ix, equ):
+    """The kind of ABSOLUTE index `ix` by rd_tab's ranges, or None past RD_N."""
+    for k, b in zip(RARE_KINDS, ("RD_B1", "RD_B2", "RD_B3", "RD_B4", "RD_N")):
+        if ix < equ[b]:
+            return k
+    return None
+
+
+def kernel_doors(blob, off, equ):
+    """{name: (index, kind, target, section)} for every published door cell of
+    a built kernel - `index` the SDK's (rdp_<NAME>), the target rd_tab's word
+    at index + RD_P, the kind and section its range's."""
+    out = {}
+    rp, base = equ["RD_P"], off["rd_tab"]
+    for k, v in equ.items():
+        if not k.startswith("rdp_"):
+            continue
+        ab = v + rp
+        kind = door_kind(ab, equ)
+        tgt = struct.unpack_from("<H", blob, base + 2 * ab)[0]
+        out["OSAPI_" + k[4:]] = (v, kind, tgt, RARE_SECT.get(kind))
+    return out
+
+
 # --- the kind blocks ------------------------------------------------------------
 BEGIN = "; ---- BEGIN CELL KINDS"
 END = "; ---- END CELL KINDS"
 MARK = "__OSAPI_RARE"
-KIND_LINE = re.compile(r"^%xdefine\s+(OSAPI_\w+)\s+" + MARK + r"\s+(OSAPI_\w+)\s*(?:;\s*(\w+))?\s*$")
+KIND_LINE = re.compile(r"^%xdefine\s+(OSAPI_\w+)\s+" + MARK +
+                       r"\s+(0x[0-9A-Fa-f]+|\d+)\s*(?:;\s*(\w+))?\s*$")
 
 
 def block_lines(rel, text=None, root=ROOT):
@@ -309,11 +344,10 @@ def block_lines(rel, text=None, root=ROOT):
 
 
 def block_rare(rel, text=None, root=ROOT):
-    """{name: kind} the block in `rel` marks rare, or None with no block.
-
-    A line that is neither a comment nor a well-formed kind line raises, so a
-    hand edit that breaks the shape cannot be read as 'not rare'.
-    """
+    """{name: (index, kind)} the block in `rel` marks rare, or None with no
+    block. A line that is neither a comment nor a well-formed kind line
+    raises, so a hand edit that breaks the shape cannot be read as 'not
+    rare'."""
     body = block_lines(rel, text, root)
     if body is None:
         return None
@@ -323,26 +357,29 @@ def block_rare(rel, text=None, root=ROOT):
         if not s or s.startswith(";"):
             continue
         m = KIND_LINE.match(s)
-        if not m or m.group(1) != m.group(2):
+        if not m:
             raise ValueError("%s: not a kind line inside the CELL KINDS block: %r" % (rel, l))
-        out[m.group(1)] = m.group(3)
+        out[m.group(1)] = (int(m.group(2), 0), m.group(3))
     return out
 
 
 HEADER = [
-    "; Generated by tools/os88cells.py --write from build/kernel.bin's table -",
+    "; Generated by tools/os88cells.py --write from build/kernel.bin's rd_tab -",
     "; never edit by hand. tests/unit/t_api_abi.py (fast tier) fails `make`",
     "; when this block and the kernel disagree. Each line routes `call OSAPI_X`",
-    "; to the rare arm (OS88_RARE_CALL, above) - SPEC.md 20.3.3.",
+    "; to the door with the cell's INDEX (OS88_RARE_CALL, above) - SPEC.md",
+    "; 20.3.3, 20.3.4. Sorted by index: RS, RCS, RX, RCX, RN.",
 ]
 
 
 def render(rare, rel):
-    """The block body for `rel`: {name: kind} for the cells it publishes."""
+    """The block body for `rel`: {name: (index, kind)} for the cells it
+    publishes."""
     out = list(HEADER)
     w = max([len(n) for n in rare] or [0])
-    for name in sorted(rare):
-        out.append("%%xdefine %-*s %s %-*s ; %s" % (w, name, MARK, w, name, rare[name]))
+    for name in sorted(rare, key=lambda n: rare[n][0]):
+        ix, kind = rare[name]
+        out.append("%%xdefine %-*s %s 0x%02X ; %s" % (w, name, MARK, ix, kind))
     return out
 
 
@@ -363,35 +400,46 @@ def rewrite(rel, rare, root=ROOT):
 
 
 def kernel_table(kbin=None, defines=(), mega=False):
-    """(walk, {addr: kind}) for a built kernel - kern_big's build/kernel.bin
-    unless told otherwise. Needs tools/os88sym.py's proven map."""
+    """(walk, {addr: kind}, doors) for a built kernel - kern_big's
+    build/kernel.bin unless told otherwise. Needs tools/os88sym.py's proven
+    map. `doors` is kernel_doors()'s answer."""
     import os88build
     import os88layout
     import os88sym
     path = kbin or os88build.at("build/kernel.bin")
     blob = open(path, "rb").read()[os88layout.boot2_pad(ROOT):]
     off = os88sym.syms(defines)
-    cold_seg = os88sym.equates(defines)["COLD_SEG"]
+    equ = os88sym.equates(defines)
+    cold_seg = equ["COLD_SEG"]
     bodies = {b: off[b] for b in BODIES if b in off}
     cells = walk(blob, bodies, cold_seg, off["osapi_table_end"])
-    return cells, {a: k for a, k, _, _ in cells}
+    return cells, {a: k for a, k, _, _ in cells}, kernel_doors(blob, off, equ)
 
 
-def expected(kinds, root=ROOT):
-    """{file: {name: kind}} - every published RARE cell, under the file that
-    publishes it."""
+def expected(doors, root=ROOT):
+    """{file: {name: (index, kind)}} - every published DOOR cell the kernel
+    answers, under the file whose %define says OS88_DOOR."""
     out = {rel: {} for rel in SDK_FILES}
-    for name, addr, rel in sdk_cells(root):
-        k = kinds.get(addr)
-        if k in RARE_KINDS:
-            out[rel][name] = k
+    for name, rel in sdk_doors(root):
+        if name in doors:
+            out[rel][name] = doors[name][:2]
     return out
 
 
-def stale(kinds, root=ROOT):
-    """[complaint] per SDK file whose block disagrees with `kinds`."""
+def stale(doors, root=ROOT):
+    """[complaint] per SDK file whose block disagrees with the kernel's
+    doors, and for a door cell published on one side only."""
     bad = []
-    for rel, want in expected(kinds, root).items():
+    pub = {n for n, _ in sdk_doors(root)}
+    miss = sorted(pub - set(doors))
+    if miss:
+        bad.append("the SDK says OS88_DOOR for %s, and the kernel's rd_tab has no "
+                   "RDPUB for it" % ", ".join(miss))
+    extra = sorted(set(doors) - pub)
+    if extra:
+        bad.append("the kernel's rd_tab publishes %s, and no SDK %%define says "
+                   "OS88_DOOR for it" % ", ".join(extra))
+    for rel, want in expected(doors, root).items():
         try:
             have = block_rare(rel, root=root)
         except ValueError as e:
@@ -401,12 +449,12 @@ def stale(kinds, root=ROOT):
             bad.append("%s has no '%s' ... '%s' block" % (rel, BEGIN, END))
             continue
         if have != want:
-            miss = sorted(set(want) - set(have))
-            extra = sorted(set(have) - set(want))
-            moved = sorted(n for n in set(want) & set(have) if want[n] != have[n])
-            why = [("rare on the kernel, not marked: %s" % ", ".join(miss)) if miss else "",
-                   ("marked, not rare on the kernel: %s" % ", ".join(extra)) if extra else "",
-                   ("kind changed: %s" % ", ".join(moved)) if moved else ""]
+            m = sorted(set(want) - set(have))
+            x = sorted(set(have) - set(want))
+            mv = sorted(n for n in set(want) & set(have) if want[n] != have[n])
+            why = [("in the kernel's door, not marked: %s" % ", ".join(m)) if m else "",
+                   ("marked, not in the kernel's door: %s" % ", ".join(x)) if x else "",
+                   ("index or kind changed: %s" % ", ".join(mv)) if mv else ""]
             bad.append("%s's CELL KINDS block is stale (%s) - run "
                        "`python3 tools/os88cells.py --write`"
                        % (rel, "; ".join(w for w in why if w)))
@@ -448,35 +496,40 @@ def sdk_switch(root=ROOT):
 
 def farcall_problems(blobs, root=ROOT, armed=None):
     """[complaint] for every far call to KERNEL_SEG in `blobs` ({label: bytes})
-    that the gate above refuses. `armed` overrides the switch (None = read
-    OS88_RARE_DOOR, then $OS88_RARE_GATE)."""
+    that lands INSIDE the table on no published cell's first byte. Since the
+    door (OS88_RARE_DOOR) a rare cell has no table offset at all, so a far
+    call that still names one - a byte string hand-assembled, a macro that
+    built its own `9A` against an older SDK - lands mid-cell or on some hot
+    cell the renumbered table put there; the first is what can be refused.
+    Past the table nothing is judged. `armed` is kept for callers and
+    ignored."""
     seg, door = sdk_switch(root)
-    if armed is None:
-        armed = bool(door) or os.environ.get("OS88_RARE_GATE", "") not in ("", "0")
     names = {}
     for name, addr, _ in sdk_cells(root):
         names.setdefault(addr, name)
     top = max(names) if names else 0
-    rare = set()
-    if armed:
-        for rel in SDK_FILES:
-            rare |= set(block_rare(rel, root=root) or {})
     pat = re.compile(re.escape(b"\x9a") + b"(..)" + re.escape(struct.pack("<H", seg)), re.S)
     out = []
     for label, blob in blobs.items():
         for m in pat.finditer(blob):
             off = struct.unpack("<H", m.group(1))[0]
-            name = names.get(off)
-            if name is None and TABLE_BASE <= off <= top:
+            if names.get(off) is None and TABLE_BASE <= off <= top:
                 out.append("%s +0x%04X: a far call to KERNEL_SEG:0x%04X, which is no "
                            "published cell's first byte - it lands in the middle of a "
-                           "cell (SPEC.md 20.3.3)" % (label, m.start(), off))
-            elif name in rare:
-                out.append("%s +0x%04X: a far call to %s (KERNEL_SEG:0x%04X), a RARE cell. "
-                           "Since the door (OS88_RARE_DOOR) a rare cell is reached by "
-                           "`call %s` through the SDK's macro and never by a far call - "
-                           "something built this call by hand (SPEC.md 20.3.3)"
-                           % (label, m.start(), name, off, name))
+                           "cell (SPEC.md 20.3.3). A rare cell is reached through the "
+                           "door, `call OSAPI_X` and the SDK's macro, never by a far "
+                           "call" % (label, m.start(), off))
+    return out
+
+
+def door_sites(blob, vec=0x81):
+    """{index: count} for every `CD <vec> nn` in `blob` - a door site's
+    INDEX byte (SPEC.md 20.3.4). Like the far-call scan it can count data
+    that happens to spell one; it is an upper bound, which is what a fence
+    wants."""
+    out = {}
+    for m in re.finditer(re.escape(bytes([0xCD, vec])) + b"(.)", blob, re.S):
+        out[m.group(1)[0]] = out.get(m.group(1)[0], 0) + 1
     return out
 
 
@@ -485,9 +538,9 @@ def main():
     ap.add_argument("--write", action="store_true",
                     help="regenerate the SDK files' CELL KINDS blocks")
     ap.add_argument("--list", action="store_true",
-                    help="print every cell: address, kind, published name")
+                    help="print every cell: address, kind, published name; then the door")
     a = ap.parse_args()
-    cells, kinds = kernel_table()
+    cells, kinds, doors = kernel_table()
     if cells and cells[-1][1] is None:
         sys.exit("os88cells: the table does not decode at 0x%04X: %s"
                  % (cells[-1][0], cells[-1][2]))
@@ -495,19 +548,21 @@ def main():
         names = {addr: name for name, addr, _ in sdk_cells()}
         for addr, k, _, _ in cells:
             print("0x%04X %-8s %s" % (addr, k, names.get(addr, "-")))
+        for name, (ix, k, t, w) in sorted(doors.items(), key=lambda x: x[1][0]):
+            print("door 0x%02X %-4s %s -> %s:0x%04X" % (ix, k, name, w, t))
         return 0
     if a.write:
-        for rel, rare in expected(kinds).items():
+        for rel, rare in expected(doors).items():
             ch = rewrite(rel, rare)
-            print("os88cells: %s: %d rare cell(s)%s"
+            print("os88cells: %s: %d door cell(s)%s"
                   % (rel, len(rare), "" if ch else ", unchanged"))
         return 0
-    bad = stale(kinds)
+    bad = stale(doors)
     for b in bad:
         print("os88cells: FAIL: " + b)
     if not bad:
-        print("os88cells: %d rare cell(s) marked, matching the kernel"
-              % sum(len(r) for r in expected(kinds).values()))
+        print("os88cells: %d door cell(s) marked, matching the kernel"
+              % sum(len(r) for r in expected(doors).values()))
     return 1 if bad else 0
 
 

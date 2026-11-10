@@ -431,7 +431,7 @@ menu_activate:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x011E, SPEC 12.2)
+; menu_win_set - attach an app menu set to a window (a door cell, SPEC 12.2)
 ; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
