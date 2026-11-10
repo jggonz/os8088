@@ -2907,7 +2907,7 @@ dsk_boot_from_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], dl
-    mov word [bx+DV_SECS], 0    ; unknown - see the header
+    and word [bx+DV_SECS], 0    ; unknown - see the header
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop, like any volume
     mov byte [bx+DV_LBL], 0     ; ...and named by the kernel, not by us
     mov ax, bx
@@ -3184,7 +3184,7 @@ dsk_flop_add_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], cl
-    mov word [bx+DV_SECS], 0    ; unknown, like every other floppy's
+    and word [bx+DV_SECS], 0    ; unknown, like every other floppy's
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop - the caller only calls
                                 ; for a drive the equipment word claims
     mov byte [bx+DV_LBL], 0     ; ...and NAMED by the kernel, not here: an
@@ -3989,9 +3989,8 @@ dsk_fat_ofs_x:
                                 ; are the shifts by 8 and 9, at 2-3 clocks
                                 ; where `mov cl, 9 / shr dx, cl` was ~48 - and
                                 ; this is dsk_next_clus_x's per-cluster path
-    call dsk_fat_window         ; ensure DX and DX+1 are resident
-    cmp word [dsk_fatw0], 0xFFFF
-    je .bad                     ; the load failed: there is no offset to give
+    call dsk_fat_window         ; ensure DX and DX+1 are resident - ZF = 1
+    je .bad                     ; the load failed                     ; the load failed: there is no offset to give
     mov al, dl                  ; the window-relative sector: at most
     sub al, [dsk_fatw0]         ; [dsk_fatwn]-1 <= 8, so its low byte is all
     shl al, 1                   ; of it, and x512 is x2 into the high byte -
@@ -4006,7 +4005,9 @@ dsk_fat_ofs_x:
 ; -----------------------------------------------------------------------------
 ; dsk_fat_window - make FAT sector DX (and DX+1) resident (SPEC.md 18.8)
 ; in:  DX = a FAT sector index
-; out: nothing (all registers preserved). A read failure leaves the window
+; out: ZF = 1 when the window is not resident ([dsk_fatw0] = 0xFFFF, the
+;      compare both callers made after the call - kernel size pass 19, -6),
+;      every register preserved. A read failure leaves the window
 ;      invalid, which the next access retries - and dsk_next_clus answers
 ;      CF=1 for it, which every walker already reads as "the chain ends here"
 ; -----------------------------------------------------------------------------
@@ -4055,7 +4056,8 @@ dsk_fat_window:
 .ok:
     mov [dsk_fatw0], dx
 .out:
-    pop es
+    cmp word [dsk_fatw0], 0xFFFF    ; ZF = 1: none resident (the banner)
+    pop es                      ; (pop writes no flag, nor does kretc_di)
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
@@ -4349,8 +4351,7 @@ disk_mount_x:
     call dsk_fatw_pick          ; this volume's own window, if it has one and
     jnc .fat_ok                 ; this is a quiet switch back to it (18.8.1)
     xor dx, dx
-    call dsk_fat_window
-    cmp word [dsk_fatw0], 0xFFFF
+    call dsk_fat_window         ; ZF = 0: the window is resident
     jne .fat_ok
 .jfail:                         ; relay: short jc's cannot reach .fail
     jmp .fail
@@ -4751,7 +4752,6 @@ disk_mount_x:
     jnz .harvloc                ; ...UNLESS ITS READS ARE MEMORY (SPEC.md
                                 ; 62.9.2.2), in which case it takes the real
     jmp .fsicons                ; harvest below - the peek is a `rep movsw`
-    nop                         ; (a PARITY PAD, never executed: below)
 %endif                          ; and the pass was refusing, on the CABLE's
 .harvest0:                      ; grounds, a read the RAM disk serves faster
                                 ; than the floppy it is being denied. **THE
@@ -4760,10 +4760,11 @@ disk_mount_x:
                                 ; (SPEC.md 62.9.2.3): the drv_svc read it was
                                 ; protecting is exactly as impossible as the
                                 ; volume it asks about, so one symbol says it.
-                                ; THE `nop` is kernel size pass 19's: the
-                                ; `es:` above is odd, and dsk_next_clus_x
-                                ; keeps an EVEN shift with the byte dsk_xfer's
-                                ; own pad gave up (t_hotpar.py)
+                                ; (The `es:` above is odd, and the parity pad
+                                ; that paid for it went with dsk_fat_window's
+                                ; odd -5 later in kernel size pass 19:
+                                ; dsk_next_clus_x keeps its even shift,
+                                ; t_hotpar.py)
 
     push ss                     ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     pop es                      ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
@@ -6372,10 +6373,10 @@ dsk_fatw_drop:
     pop bx
     pop ax
     ret
-%elifdef KERN_SMALL
-    nop                         ; PARITY PAD, never executed (kernel size pass
-                                ; 13): dsk_next_clus_x back at an even shift
-%endif                          ; OS88_DRIVERS
+%endif                          ; OS88_DRIVERS (kern_small's PARITY PAD here,
+                                ; kernel size pass 13's, went with
+                                ; dsk_fat_window's odd -5 in pass 19:
+                                ; dsk_next_clus_x keeps its odd shift)
 
 ; -----------------------------------------------------------------------------
 ; dsk_fc_bad - dsk_free_clus_x's first three refusals share this one near jump.
