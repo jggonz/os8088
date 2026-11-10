@@ -5098,7 +5098,18 @@ three-component at the same size, 38-48 KB coded) decodes at **r5 (50 x 38) from
 KiB**, **r4 (100 x 75) from about 24 KiB** and what the want asked for from 60 KiB
 (measured with `PDXJ_KB`). Below what an image needs at its coarsest level `open`
 answers `PDE_LIMIT` (refusal 13 `MEM`), and the renderer draws the grey box with
-APPROX. The slot a 640 KiB XT must find is therefore 52.1 + 12 = **about 64 KiB**
+APPROX. **`PDE_NEEDMEM`.** The level `open` would choose is the first `r` from the reduction rule
+for which `plan(r)` fits at all (workspace unlimited, at most 63 KiB). When that needs
+more KiB than `slot_kb`, `open` closes the source and answers `PDE_NEEDMEM`, CF = 0,
+`CX = PDMEM_SLOT` (0), `DX` = the KiB it needs (the arena at its 4,096-byte floor). The
+primary regrows the slot, re-INITs and calls `IMG_OPEN` again. If it could not, the
+re-INIT carries the same `slot_kb`, and the second call does not ask again: it takes
+the coarsest-fitting level as before, or `PDE_LIMIT` when none fits (the grey box). The
+ask is made once per image (`IMG_CLOSE` or any final answer clears it). Measured
+(`PDXJ_GROW=1 pdxj_test`): 1,600 x 1,200 grey asks 22 KiB at 12 or 16 KiB and decodes
+r5 if refused, r4 once grown; at 24 KiB or more it never asks.
+
+The slot a 640 KiB XT must find is therefore 52.1 + 12 = **about 64 KiB**
 at the least and 112 KiB at the want.
 
 | workspace, in this order (`plan(r)` computes the sizes) | bytes |

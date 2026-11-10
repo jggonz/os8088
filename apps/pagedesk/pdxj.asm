@@ -80,6 +80,7 @@ pdxj_entry:
     add sp, 8
     mov cx, [_pdxj_cf]              ; CF = (pdxj_cf != 0); neg leaves AX alone
     neg cx
+    mov dx, [_pdxj_rdx]             ; NEEDMEM: KiB wanted (CX = PDMEM_SLOT = 0)
     pop ds
     pop es
     pop di
