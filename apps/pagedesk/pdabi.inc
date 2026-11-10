@@ -282,6 +282,7 @@ PDGX_SH_MESH             equ 0x04
 PDGX_VTX_BYTES           equ 10
 PDGX_TRI_BYTES           equ 30
 PDGXI_DECODE             equ 0x0001
+PDGXI_RES                equ 0x0002
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
