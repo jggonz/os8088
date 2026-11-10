@@ -588,6 +588,22 @@ static pdw img_codec(pdw obj, pdw gen)
     for (i = 0; i < 4; i++) if (g_dg.text[0] == ic_name[i * 2] && g_dg.text[1] == ic_name[i * 2 + 1]) return ic_code[i];
     return 0;
 }
+/* gfx's struct pdgx_lut (20.22.9, gfx's pdabi block) is the XCK_LUT entry:
+ * ncomp byte, flags byte (PDGX_LUT_INVERT: grey = 255 - the sum), a pad word,
+ * then four tables of 256. Until gfx's block is merged, its twin here */
+#ifndef PDGX_LUTBYTES
+#define PDGX_LUTBYTES   1028
+#define PDGX_LUT_INVERT 0x01
+struct pdgx_lut { pdb ncomp, flags; pdw pad; pdb t[1024]; };
+#endif
+#define PDR_LUT_NC 0                    /* the offsets this file reads, held to the struct below */
+#define PDR_LUT_FL 1
+#define PDR_LUT_T  4
+#ifdef PD_HOST
+#include <stddef.h>
+typedef char pdr_ck_lut[offsetof(struct pdgx_lut, ncomp) == PDR_LUT_NC && offsetof(struct pdgx_lut, flags) == PDR_LUT_FL
+                        && offsetof(struct pdgx_lut, t) == PDR_LUT_T && sizeof(struct pdgx_lut) == PDGX_LUTBYTES ? 1 : -1];
+#endif
 /* gfx's (20.22.9), from pdrxg.c: the XC offset of an image's struct pdgx_lut
  * (XCK_LUT), 0 when there is none yet - it asks for the module itself.
  * Until it lands, a colour space that is not a device one is not drawn */
@@ -621,9 +637,9 @@ static void do_image(pdw obj, pdw gen)
         else {
             lut = XG_IMAGE_LUT(obj, gen);
             if (!lut) return;                          /* asked for, or noted, by the hook */
-            ncomp = pd_fpeekw(g_xcseg, lut);
+            ncomp = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_NC));
             if (ncomp < 1 || ncomp > 4) return;
-            g_ipx.lut = (pdw)(lut + 16); g_ipx.lfl = pd_fpeekw(g_xcseg, (pdw)(lut + 2)) & 1;
+            g_ipx.lut = (pdw)(lut + PDR_LUT_T); g_ipx.lfl = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_FL)) & PDGX_LUT_INVERT;
             flags |= 8;
         }
         if (!(bpcv == 1 || bpcv == 2 || bpcv == 4 || bpcv == 8 || bpcv == 16)) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
@@ -1049,9 +1065,18 @@ static pdw annot_go(void)
     return 0;
 }
 
+/* fonts' Type 3 hooks (20.22.8, the lead's 23:38): PDR_T3_DRAIN() before each
+ * token is read and PDR_T3_FRAME_END() as a frame ends; pdrf.c defines them */
+#ifndef PDR_T3_DRAIN
+#define PDR_T3_DRAIN()
+#endif
+#ifndef PDR_T3_FRAME_END
+#define PDR_T3_FRAME_END()
+#endif
 /* a frame ended: pop to its parent, or move to the next /Contents element */
 static pdw frame_end(void)
 {
+    PDR_T3_FRAME_END();
     strm_close();
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
         while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
@@ -1086,6 +1111,7 @@ static pdw interp_run(pdw maxops)
             continue;
         }
         if (g_inl >= 2) { if (!inl_skip()) return 0; continue; }
+        PDR_T3_DRAIN();
         err = tok_next();
         if (err) {                                /* this stream is over; the annotations and the marks after it are not */
             g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error");
