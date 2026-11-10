@@ -33,7 +33,7 @@ tests/pagedeskxt.py re-assembles and checks byte-identical):
   4. Annotate (F6): an area MARK dragged on the canvas, and a NOTE placed by
      a click, typed into and kept with Enter;
   5. File > Insert from PDF... MARKUP.PDF, page `1`: 13 pages;
-  6. View > Preferences..., Up to `Flate cache`, Right to Off, Esc: the wake
+  6. View > Preferences..., Up twice to `Flate cache`, Right to Off, Esc: the wake
      writes SYSTEM/APPDATA/PAGEDESK.CFG on the launch volume and says
      `Preferences saved.`;
   7. File > Save As... QMARK.PDF: `Saved`, and the re-open drawn;
@@ -52,8 +52,8 @@ code), after QEMU has exited:
     XTGUIDE's own seven /Link plus exactly one /Square and one /Text, both on
     the twelfth page, in a document of 13 pages. Without qpdf on PATH this is
     a SKIP and the row says so; it never passes in qpdf's place;
-  * PAGEDESK.CFG is 10 bytes, `PDCF` then the version, and its Flate byte
-    (cfg[9]) is 1 - Off.
+  * PAGEDESK.CFG is 11 bytes, `PDCF`, version 2, and its Flate byte
+    (cfg[9]) is 1 - Off; the module cache byte (cfg[10]) is 0 - Auto.
 
 The heap is sampled through every step and the lowest unclaimed figure
 printed (pagedeskxt's table shape); it is asserted there, on the 640 KiB XT,
@@ -442,7 +442,8 @@ class QLeg(X.Leg):
         ui.menu_pick("View", "Preferences...")
         self.track("the Preferences dialog", lambda s: s["pop"] == P_PREFS,
                    self.cyc(), guest=30.0)
-        m.key("ArrowUp")                # row 0 -> 4, Flate cache (wraps)
+        m.key("ArrowUp")                # row 0 -> 5, Module cache (wraps)
+        m.key("ArrowUp")                # -> 4, Flate cache
         m.key("ArrowRight")             # Auto -> Off
         c0 = self.cyc()
         m.key("Escape")                 # close: the wake writes the file
@@ -530,10 +531,12 @@ class QLeg(X.Leg):
             cfg = None
             self.check(False, "%s is not on B: (%s)" % (CFG, e))
         if cfg is not None:
-            self.check(len(cfg) == 10 and cfg[:4] == b"PDCF" and cfg[9] == 1,
-                       "%s: %d bytes %s, Flate byte %s (want 10, PDCF, 1 = Off)"
+            self.check(len(cfg) == 11 and cfg[:4] == b"PDCF" and cfg[4] == 2
+                       and cfg[9] == 1 and cfg[10] == 0,
+                       "%s: %d bytes %s, Flate byte %s, module cache %s (want "
+                       "11, PDCF, v2, 1 = Off, 0 = Auto)"
                        % (CFG, len(cfg), cfg[:5], cfg[9] if len(cfg) > 9
-                          else None))
+                          else None, cfg[10] if len(cfg) > 10 else None))
         try:
             data = vol.read(SAVE_AS)
         except Exception as e:                       # noqa: BLE001

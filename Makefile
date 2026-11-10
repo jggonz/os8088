@@ -21858,6 +21858,8 @@ $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
 # ---- PageDesk: prefs ----
 # pdovlpref.c is #included by pdovl.c and the wildcard (pdu*.c) does not name it
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlpref.c
+# pdovlauth.c likewise (the password prompt, PAGEDESK-SPEC 20.22.6)
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlauth.c
 # ---- end PageDesk: prefs ----
 
 $(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \
