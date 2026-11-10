@@ -66,8 +66,7 @@ section .text
 %endmacro
 
 %ifdef PDC_FARST
-%macro AES_ES 0                     ; ES = the cipher area
-    push es
+%macro AES_ES 0                     ; ES = the cipher area (the caller pushes ES: stkbalance reads no macro)
     mov es, [_pdc_cseg]
 %endmacro
 aes_cp16:                           ; SI -> DI, 16 bytes in DS; CX lost
@@ -82,8 +81,7 @@ _pdc_aes_tdnew:
     mov byte [aes_tdok], 0
     ret
 %else
-%macro AES_ES 0                     ; the string moves below copy DS to DS: ES is borrowed (the callers restore it)
-    push es
+%macro AES_ES 0                     ; the string moves below copy DS to DS: ES is borrowed (the caller pushes and restores it)
     push ds
     pop es
 %endmacro
@@ -342,6 +340,7 @@ _pdc_aes_dks:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     call aes_tdinit
     mov si, [bp+4]
@@ -388,6 +387,7 @@ _pdc_aes_enc:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
@@ -412,6 +412,7 @@ _pdc_aes_dec:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
@@ -437,6 +438,7 @@ _pdc_cbc_enc:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
@@ -482,6 +484,7 @@ _pdc_cbc_dec:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
@@ -564,6 +567,7 @@ _pdc_aes_ks:
     mov bp, sp
     push si
     push di
+    push es
     AES_ES
     mov di, [bp+4]                  ; rk
     mov si, [bp+6]                  ; key
