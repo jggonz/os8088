@@ -3624,8 +3624,9 @@ check; LZW and every other filter (still `PDE_FILTER`); inline-image Flate
 stream was not looked at on screen: the package still ships the stand-in
 PDREND (`PD_REND_MOD`, the lead's hold), which reads no stream, and the
 primary carves the flate claim at claim B's tail (`pdumod.c`, `pdu_doc_claim`):
-two slots when the largest free run holds B, both slots and the reserve (32 KiB plus a save's 48 KiB peak, D28),
-one when one fits, none otherwise. On a kernel whose second slot's selector is
+two slots when the largest free run holds B, both slots and 80 KiB (PD-29's 32 KiB plus a save's 48 KiB peak, D28),
+one when it holds B, one slot and PD-29's 32 KiB alone (QA F22: 80 KiB there left a 640 KiB XT with 120 KiB free and no slot), none otherwise;
+a save or an occupant that wants the second slot back has it by 20.22.2.4's release. On a kernel whose second slot's selector is
 not `flate_seg + 2752` (kern_mega), one slot. The Control Panel low-memory
 setting D17 names is not built; until it is, the rule is by RAM alone.
 
@@ -4995,15 +4996,31 @@ recovery journal's 8 KiB write (`pdovlrecov.c`, retried later) and its 16 KiB
 read at launch (before any document set). S and X are given back at document
 close; S also after every save, extract or insert (as PDWRT was).
 
+**Where they lie** (QA F25). Every claim PageDesk makes itself comes from the
+TOP (`pd_claimhi`, `MEMP_CLAIM_HI`): XB, the INDEX, A and B stack under the
+carve, then X, S and W below them. Only the overlay comes from the bottom
+(`op_fetch`'s low door), so the free memory is one run between it and the
+stack, and the overlay's own room joins that run when a save drops it
+(20.22.2.4). With every claim bottom-up an object-stream file on a 640 KiB
+machine left 87.5 KiB free as 19 + 30 + 38.5 and a save needs 77 in one; now
+the save takes the overlay's 51.5 KiB and the caches around it. The second
+Flate slot's release (B's tail) leaves its hole under A, which the next S or
+W fills.
+
 **20.22.2.3 The occupants and their slot sizes.** An occupant is a module
 (3.1's 8-byte header, its door at `PDM_ENTRY`, one DS = CS segment), its part
 `OP_LAZY | OP_SELF | OP_COMP` and image + bss at most 65,024. The slot an
 occupant gets is its image + bss, rounded up to a paragraph (claim S), and its
 WORKSPACE in claim W (PDWRT: following the image in S, 20.22.2.1) (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
 `wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **A workspace is a RANGE, WANT
-and MIN**: S is sized at WANT while PD-29's 32 KiB stays free beside it, else
-at the most that fits of at least MIN (a load that cannot have MIN is
-`PDE_NOSLOT`), and `slot_kb` says what was granted. An occupant that needs
+and MIN**: W is sized at the largest free run less PD-29's 32 KiB, no more
+than WANT. Where that is under MIN, W first asks for MIN and the 32 KiB
+together, a claim that refuses, so release-before-refuse (20.22.2.4) runs
+before the reserve is spent; once all three releases have run it takes MIN
+and the page is drawn below the reserve (a load that cannot have MIN is
+`PDE_NOSLOT`). QA F24: taking MIN at once left 5.5 KiB on a 640 KiB XT with
+the overlay and the second Flate slot still held; now JB2TEXT and CCITTG4
+leave 62 KiB there. `slot_kb` says what was granted. An occupant that needs
 more for one stream answers `PDE_NEEDMEM` with CX = `PDMEM_SLOT` (0) and DX =
 the KiB: the ladder regrows S toward WANT (never past it, and only while the
 32 KiB stays free) and re-INITs the occupant either way, so an unchanged
@@ -5103,8 +5120,8 @@ without, in this order (`sl_rel_ovl`, `sl_rel_fl2`, `sl_rel_xc`, called by one l
 
 | | given back | when | costs |
 |---|---|---|---|
-| 1 | the overlay part (`op_drop`, 51 KiB) | it is fetched and no overlay frame is on the stack (`cc_ovrsp` = 0): an ask from INSIDE the overlay - the auth's PDXK, a save's PDWRT - keeps it | its next `ovl_` call reads it again (a disk call) |
-| 2 | the second Flate slot (43 KiB, where D17 chose two by RAM) | PDENG is re-INITed with `flate_kb` one slot less, the same `flate_seg` (20.22.3.9): AX = 1 took it, keeping the document and any OPEN, and claim B's tail is regrown away in place; `PDE_BUSY` (a stream lives in slot 2) changed nothing and the entry answers "nothing". PDREND is not re-INITed for it: it reads no Flate slot | a later stream decoded with one slot |
+| 1 | the overlay part (`op_drop`, 51 KiB) | it is fetched and no overlay frame is on the stack (`cc_ovrsp` = 0): an ask from INSIDE the overlay - the auth's PDXK - keeps it. A save's PDWRT is NOT asked from inside: the overlay that begins a save leaves the load to the save job's first slice (`pdu_save_step`, the wake), so the writer may have the overlay's room (QA F25: an object-stream file on a 640 KiB machine had 84 KiB free in three runs and the writer needs 77 in one) | its next `ovl_` call reads it again (a disk call); a save frees PDWRT before it fetches the overlay to say how it went |
+| 2 | the second Flate slot (43 KiB, where D17 chose two by RAM) | PDENG is re-INITed with `flate_kb` one slot less, the same `flate_seg` (20.22.3.9), and claim B's tail is regrown away in place when that INIT succeeded: PDENG's AX = 1 does not survive `pdu_minit`, which answers 0 for any success, and the only other success is a fresh INIT at one slot with nothing open, which loses nothing (QA F25: testing AX = 1 never took a slot, and left PDENG at one slot while `pdxb_init` said two, so the next region's INIT reset the document). `PDE_BUSY` (a stream lives in slot 2, or an OPEN is in progress) changed nothing and the entry answers "nothing". PDREND is not re-INITed for it: it reads no Flate slot | a later stream decoded with one slot |
 | 3 | the `PDMEM_XC` region (16 KiB) | the load answers PDREND's OWN `PDE_NEEDMOD` (`sl_inlad`: only then does PDREND's re-INIT keep its page view, 20.22.7) and XC is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0. PDREND drops its cache and band stash, refuses XC for the rest of that view and re-runs the pass (rcore) | PDREND's results cache; images needing a LUT note COLOUR/LIMIT until the next view |
 
 Only when all three have answered is the load `PDE_NOSLOT` and the occupant
@@ -5163,7 +5180,14 @@ The primary:
   the largest free run still leaves PD-29's 32 KiB (2,048 paragraphs) beside
   it;
 * grows a region already held only when it is X's LAST region (in place);
-  any other second ask is refused;
+  any other second ask is refused. That covers `PDMEM_XC` asked again with
+  an XC present, meaning "a bigger one" (rcore, L2): XC is grown while
+  nothing has been appended after it (no GLYPH, no X8 yet), and otherwise
+  the ask is answered by the same INIT with `xc_kb` unchanged, which PDREND
+  reads as the refusal and asks that size no more (`ik_size`'s `g_ikask`
+  in `pdrv.c`): the band stash works within the XC it has (20.22.7.10). Growing a middle region would move the
+  regions after it (a glyph strike, PDX8's image) inside X, which the
+  primary has no bytes for (20.22.2.9);
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
   come with it), and re-INITs PDENG, then PDREND. A region's window is cut
@@ -5319,8 +5343,9 @@ cap is 65,024):
 | QA R7: W its own claim (`sl_wsize`, PDWRT's buffers still in S), the release before a region or a growth refuses (`sl_relmem`), `pdu_ovl_room` (crt0's `CC_OVL_ROOM`), a failed bind freeing S and W | 64,959 | +84 |
 
 | QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
+| QA F25/F22/F24: every claim from the top (`pd_claimhi`: XB, the bank, A, B, X, S, W), the writer loaded by the save job (`pdu_save_step`) and freed before its overlay call, `pdu_wrt_in_now` and `pdu_wrt_out` gone (a call and a macro), the second Flate slot's own reserve, W sized to leave 32 KiB and asked with it while a release remains, the claim asked again after the XC release | 65,023 | +20 |
 
-**21 bytes stay under the cap.**
+**1 byte stays under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
@@ -5658,8 +5683,12 @@ the resources and the objects, which are the engine's:
 
 **20.22.3.9 A Flate claim cut to one slot (plat's request, 20.22.2.4).** A
 re-`INIT` with every claim the same except `flate_kb` keeps the open document
-(and an `OPEN` in progress) when `flate_kb` is now one slot's worth (43 to 85
-KiB) where it was two. Slot 2 must hold no live stream; the primary regrows the
+when `flate_kb` is now one slot's worth (43 to 85 KiB) where it was two. Slot 2
+must hold no live stream, and no `OPEN` may be in progress: a stream OPEN is
+reading can sit in slot 2 between two calls with no live context, and a cut
+there read on into another stream's state (QA F25: an xref-stream file cut
+mid-OPEN looped to `PDE_SYNTAX`), so an `OPEN` in progress answers
+`PDE_BUSY` too (+4 bytes). The primary regrows the
 Flate claim down by that slot's paragraphs afterwards. The answer is CF = 0
 with AX = 1 when the cut is taken. AX = `PDE_BUSY` means a live stream sits in
 slot 2 and nothing changed: the claim stays as it was, so ask again between

@@ -560,13 +560,10 @@ static const unsigned pdu_savemode[3] = { PDSV_INCREMENTAL, PDSV_FRESH,
 
 static void pdu_save_done(unsigned err)
 {
-    if (!ovl_save_done(err)) {           /* the overlay could not be had: PDENG still needs its document */
-        pdu_wrt_out();
-        if (pdu_xsave.mode & PDW_OUT_REOPEN)
-            pdu_reopen_begin();
-    }
+    pdu_wrt_out();                      /* the writer's room is the overlay's (QA F25) */
+    if (!ovl_save_done(err) && (pdu_xsave.mode & PDW_OUT_REOPEN))
+        pdu_reopen_begin();             /* the overlay could not be had: PDENG still needs its document */
 }
-static void pdu_wrt_out(void);
 
 /* PDENG gets the source back: OPEN again with the claims it still holds
  * (CLOSE keeps them), nothing of ours released - the edits and the page map
@@ -586,6 +583,14 @@ static void pdu_save_step(void)
     unsigned r;
     if (pdu_pfl && ovl_ifl_step())       /* the Insert's keys first (20.22.4.5) */
         return;
+    /* PDWRT in at the first slice, HERE and not in the overlay that began
+     * the save: no overlay code stands on the stack, so release-before-refuse
+     * may give the overlay's 51.5 KiB to the writer (QA F25, 20.22.2.4) */
+    if ((r = pdu_slot_load(PDU_OCC_WRT)) != 0) {    /* (resident: 0 at once) */
+        pdu_job = J_NONE;
+        pdu_save_done(r);
+        return;
+    }
     pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));

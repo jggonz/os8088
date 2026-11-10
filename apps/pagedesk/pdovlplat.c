@@ -253,10 +253,7 @@ static int ovl_ifl_step(void)
     pdu_xsave.mode &= ~PDW_OUT_REOPEN;  /* the document is back */
     pdu_pfl = 0;
     os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
-    r = pdu_wrt_in_now();               /* sl_bind hands it the keys */
-    if (!r)
-        return 0;
-    k = PDM_NSLOT;
+    return 0;                           /* PDWRT comes in at pdu_save_step: sl_bind hands it the keys */
 failed:
     pdu_pfl = 0;
     pdu_job = J_NONE;

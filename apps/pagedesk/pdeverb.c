@@ -44,7 +44,9 @@ static pdw v_init(pdw xbseg)
          * (PDE_NFL is 2), when the second holds no live stream (20.22.3.9):
          * AX = 1, or PDE_BUSY and nothing changed */
         if (ini.flate_kb >= PDE_FLSLOT_KB && ini.flate_kb < 2 * PDE_FLSLOT_KB && g_nfl == 2) {
-            if (fl_sc[1] && fl_sc[1] < ctxs + nctx) return PDE_BUSY;
+            /* ...never in the middle of OPEN: a stream it is reading may sit
+             * in slot 2 between two calls with no live context (QA F25) */
+            if (op_state || (fl_sc[1] && fl_sc[1] < ctxs + nctx)) return PDE_BUSY;
             fl_sc[1] = 0;
             if (fl_ld == 1) fl_ld = FL_NONE;
             g_nfl = 1; g_ifk = ini.flate_kb; pde_ax = 1;
