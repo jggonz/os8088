@@ -4945,7 +4945,132 @@ round's final pass, not before.
 
 #### 20.22.9 Colour spaces, functions, shading, patterns (`gfx`)
 
-*Reserved; written by its agent before its code.*
+PDXG (`PDX_GFX`, magic `PDM_MAGIC_GFX`, `PDXG.MOD`, image + bss at most
+61,440) is the slot occupant that does the work of `cs CS sc SC scn SCN sh` and
+of images in non-device colour spaces **at interpretation time** (L1). It
+compiles a colour space, a function or a shading and hands the RESULT to the
+core, which keeps it in the extension cache (`XCK_CS`, `XCK_SHADE`, `XCK_LUT`,
+`XCK_PAT`); a later pass or page needs no module. The module never claims
+memory (3.4), never holds a result between verbs except in its own workspace,
+and every verb is one call with no C recursion (20.15's stack bound).
+
+**What it reads.** The module reads PDF syntax itself. A colour space, a
+function or a shading is given as an object number (`objnum`/`gen`, fetched
+with `PDV_ENG_RAW_COPY` in `PDRC_PLAIN` mode, so an object-stream member or an
+encrypted string arrives plain) OR as direct syntax in a far buffer
+(`tseg:toff`, `tlen` <= 1,024; the core cuts it out of the resource it already
+holds). Stream data (a type 0 or 4 function, a mesh shading) is read through
+`PDV_ENG_STRM_OPEN/READ/CLOSE`. A tiny non-recursive parser (`pdxgp.c`: an
+explicit stack, a bump arena of 12 KiB in the workspace, names, numbers,
+arrays, dictionaries, references; at most 64 items a container, depth 8)
+turns it into a flat node table. References are chased by re-fetching, at most
+8 hops a value.
+
+**Numbers.** 16.16 `pd_fx` throughout; no `long`, no float. A function is
+evaluated in `pd_fx`; domains, ranges, encodes and decodes clip as the PDF
+reference says. The luminance the core stores is `(77r + 150g + 29b) >> 8`
+(pdri.c `col_set`), so a colour computed here is the core's own after one
+call.
+
+**Colour spaces** (`PDV_GFX_CS`). Device spaces never reach the module.
+Handled: `Indexed` (base any of the below, hival <= 255, table string or
+stream), `ICCBased` (by `/N`: 1, 3 or 4 components are `DeviceGray`,
+`DeviceRGB`, `DeviceCMYK`; `/Alternate` is used when present and its component
+count agrees; the profile itself is never interpreted - an owner-visible
+approximation, not an Incomplete bit), `CalGray`, `CalRGB` (white point,
+gamma and matrix applied, then XYZ D50 to sRGB), `Lab` (white point, range),
+`Separation` (`/All` and `/None` included: None paints nothing), `DeviceN`
+(up to 8 colorants, tint transform any function type), and `Pattern` (with
+or without an underlying space). The compiled space is `struct pdgx_cs`
+(`pdabi.h`'s gfx block): a 16-byte header and, for a 1-component space, a
+256-entry RGB table indexed by `round(c * 255)` (Indexed: by the index
+itself). So the core's `sc` for any 1-component space is one table lookup. A
+space with more than one component is `PDGX_F_RGBLIKE` (CalRGB and ICC N=3:
+the core takes the operands as device RGB), `PDGX_F_CMYKLIKE` (ICC N=4) or
+`PDGX_F_MODULE` (Lab, DeviceN with n >= 2): `PDV_GFX_COLOR` converts one
+operand set while the module is resident, and the core caches the answer as an
+`XCK_LUT` entry keyed by (the space's cache offset, a hash of the operands).
+The header keeps the space's source (object number, or up to 480 bytes of
+syntax) so the module can recompile it for `PDV_GFX_COLOR` without the core
+holding a second copy.
+
+**Image LUTs** (`PDV_GFX_LUT`, `XCK_LUT`). For an image whose space is not a
+device space, the module builds `struct pdgx_lut`: `ncomp` (1..4) tables of 256
+bytes. The grey of a pixel is the SATURATING SUM of `table[i][sample[i]]` over
+the components, where a sample is the raw byte (after rcore unpacks 2, 4 and
+16-bit samples to 8 bits). A 1-component space (Indexed, Separation, CalGray,
+ICC N=1, DeviceN n=1) is exact. A 3-component space is the luminance weights
+on each channel after the space's conversion (exact for RGB-like spaces,
+a linearisation about mid-grey for Lab). A 4-component space is
+`255 - (cx + my + yz + k)`-shaped per channel (the core's DeviceCMYK weights).
+`/Decode` is folded into the tables, so rcore applies none.
+
+**Functions** (`pdxgf.c`). Types 0 (sampled, 1 to 4 inputs, 8/16-bit or any
+`/BitsPerSample` 1 to 32 - multilinear interpolation in 1 and 2 inputs,
+nearest in 3 and 4), 2 (exponential), 3 (stitching - its sub-function chain is
+walked in a loop, not by recursion; depth at most 8) and 4 (PostScript
+calculator: tokens compiled to bytes, an explicit operand stack of 100 values
+and an explicit if/ifelse stack of 16 frames; every operator the reference
+lists). A function is evaluated with `fn_eval(in[], out[])` and any failure
+(a bad stream, a stack under- or overflow) makes the colour black and sets no
+Incomplete bit.
+
+**Shading** (`PDV_GFX_SHADE`). Types 2 (axial) and 3 (radial) compile to a
+`struct pdgx_shade` of 16 bytes plus a 256-entry RAMP of (luminance, VGA
+index) byte pairs sampled from the colour function(s) over `[t0, t1]`
+through the shading's colour space, `/Extend` kept as two flags. Types 1
+(function-based), 4, 5 (free-form and lattice triangle meshes), 6 (Coons) and 7
+(tensor patches) are tessellated by the module into triangles - type 1 as an
+up-to-16x16 grid of the domain, patches as 4x4 sub-patches (32 triangles), at
+most 4,096 triangles a shading, the rest dropped with `PDF_INC_LIMIT`. Each
+triangle is three vertices of (x, y in the shading's space as 16.16, luminance,
+VGA index), written into a far buffer the core names; the verb is resumable
+(`PDE_BUSY`). `/Background` and `/BBox` are returned for `sh`'s clip; a
+shading pattern's `/Matrix` and `/ExtGState` are the core's.
+
+**Raster time** is CORE code, `pdrxg.c`: `DLR_SHADE` (axial and radial: the
+record carries the inverse matrix from device pixels to shading space, the
+coordinates, the extend flags and the XC offset of the ramp; the span loop is
+a 16.16 DDA over `t`, and radial solves the quadratic with a fixed-point
+square root) and `DLR_TRI` (a Gouraud triangle: three device vertices in
+qpx with a (luminance, index) each, filled with a scan-line edge walk). They
+write through the band's span sinks: dithered on a 1bpp or 4bpp band (the
+`bayer` matrix at the pixel's absolute coordinates, so bands have no seams)
+and exact on blend's 8-bit band.
+
+**Tiling patterns** (`PDV_GFX_PAT`). A `PaintType` 1 or 2 pattern is
+rasterised ONCE per size into a cell and replicated. The module returns the
+pattern's matrix, `/BBox`, `/XStep`, `/YStep` and `/PaintType`; the core
+interprets the pattern's content stream into a display-list sub-range (the
+Type3 frame machine of 20.22.7, no recursion) and tiles the covered pixel
+rectangle cell by cell. A cell larger than 64 x 64 device pixels, or more than
+256 cells in a fill, is drawn as the pattern's mean colour (and is not
+Incomplete: a dither).
+
+**Verbs** (0xC8-0xCF; every one answers only when PDXG is the occupant):
+
+| verb | name | XB / registers |
+|---|---|---|
+| 0xC8 | `PDV_GFX_CS` | `pdxb_gfx` in/out: compile; result in `rseg:roff` (`PDGX_CSBYTES` = 784) |
+| 0xC9 | `PDV_GFX_COLOR` | `pdxb_gfx`: `cs_seg:cs_off` + `comp[]` -> `rgb[3]` |
+| 0xCA | `PDV_GFX_LUT` | `pdxb_gfx`: image LUT in `rseg:roff` (`PDGX_LUTBYTES` = 1,040) |
+| 0xCB | `PDV_GFX_SHADE` | `pdxb_gfx`: header + ramp, or triangles; resumable |
+| 0xCC | `PDV_GFX_PAT` | `pdxb_gfx`: tiling pattern parameters |
+| 0xCD | `PDV_GFX_FN` | `pdxb_gfx`: evaluate ONE function (`fn` text, `comp[]` in, `rgb`-free out `val[]`); for the host harness and the core's `sh` operands |
+| 0xCE-0xCF | | reserved (gfx) |
+
+Blend's ExtGState (`pdxgtr.c`, 0xD0-0xD7) and rcore's dash walker (`pdxdash.c`,
+0xC8-0xCF is NOT theirs: it takes the first free verb of blend's range as
+blend decides) are `#include`d by `pdxg.c` and given a case in its door's
+`switch`, in the order of the verb numbers.
+
+**Workspace** (declared for 20.22.2's table): 16 KiB parse arena + 4 KiB
+function and calculator state + 2 KiB result staging = **22 KiB** beyond image
+and bss; the module's stack is the private 2 KiB deep stack (20.15).
+**Limits** (each is a table row, never a crash): 8 nested containers, 64 items a
+container, 8 reference hops, 8 colorants, 4 inputs to a sampled function, a
+sample table of at most 8,192 bytes (larger tables are read by streaming
+nearest-sample), 4,096 triangles a shading.
 
 #### 20.22.10 Transparency through an 8-bit band (`blend`)
 
