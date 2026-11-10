@@ -86,7 +86,12 @@ sl_empty:
 _pdu_slot_free:
     call sl_empty
     xor ax, ax
+    xchg ax, [sl_wclaim]
+    call sl_afree
+sl_sfree:                           ; S alone (a W refused after it)
+    xor ax, ax
     xchg ax, [_pdu_sclaim]
+sl_afree:                           ; AX = a claim or 0
     or ax, ax
     jz .r
     push ax
@@ -126,36 +131,15 @@ _pdu_slot_load:
     mov dl, [_pdu_wkb]              ; PDWRT: this job's buffers, exactly
     mov dh, dl
 .w:
-    mov [sl_wmin], dh
-    xor dh, dh
-    push dx
-    call _os88_mem_largest_p
-    pop dx
-    sub ax, [sl_img]
-    jnb .r0
-    xor ax, ax
-.r0:
-    mov cl, 6
-    shr ax, cl                      ; KiB beside the image
-    mov bx, ax
-    sub bx, PDU_RESV_P >> 6
-    jb .cut
-    cmp bx, dx                      ; want, and PD-29's 32 KiB still free
-    jae .want
-.cut:
-    cmp ax, dx                      ; else the most that fits, up to want...
-    jb .c1
-.want:
-    mov ax, dx
-.c1:
-    mov cl, [sl_wmin]               ; ...and never under min (the claim then
-    xor ch, ch                      ; refuses: PDE_NOSLOT)
-    cmp ax, cx
-    jae .c2
-    xchg ax, cx
-.c2:
+    mov [sl_wmin], dx               ; want, min
+    mov ax, [sl_img]                ; S: the image (a decoder's W is a claim
+    cmp bl, PDU_OCC_WRT_A           ; of its own); PDWRT's buffers stay IN S,
+    jne .s1                         ; a save's peak being 8 claims (20.22.2.1)
+    mov al, dl
+    xor ah, ah
     call sl_wsset
     add ax, [sl_img]
+.s1:
     mov [sl_need], ax
     mov si, [pg_row]
     mov word [pg_cap], 0            ; the whole row
@@ -173,6 +157,20 @@ _pdu_slot_load:
     or ax, ax
     jz .nos
     mov [_pdu_sclaim], ax
+    cmp word [bp+4], PDU_OCC_WRT_A
+    je .wok
+    call sl_wsize                   ; W: sized from what is left now
+    jcxz .wok
+    push cx
+    call _os88_mem_claim_p
+    pop cx
+    or ax, ax
+    jnz .wgot
+    call sl_sfree                   ; W refused at min: S back, and release
+    jmp .nos
+.wgot:
+    mov [sl_wclaim], ax
+.wok:
     inc word [_pdu_swaps]
     call sl_copen
     mov bx, [bp+4]
@@ -214,8 +212,8 @@ _pdu_slot_load:
     ret
 .fail:
     push ax
-    call sl_empty
-    pop ax
+    call _pdu_slot_free             ; empty AND given back: a failed bind
+    pop ax                          ; held S's whole claim until the next load
     jmp short .out
 .nos:                               ; release before refuse, in order
     mov al, [sl_rel]                ; (direct calls, so pdstk follows them)
@@ -238,6 +236,36 @@ _pdu_slot_load:
 .nos2:
     mov ax, PDE_NOSLOT
     jmp short .out
+
+; sl_wsize - W's KiB for [sl_wmin] (want) / [sl_wmin+1] (min): want while
+; PD-29's 32 KiB stays free beside the largest run, else the most that fits,
+; never under min (its claim then refuses). CX = its paragraphs (0: none)
+sl_wsize:
+    call _os88_mem_largest_p
+    mov cl, 6
+    shr ax, cl                      ; KiB
+    mov dl, [sl_wmin]
+    xor dh, dh
+    mov bx, ax
+    sub bx, PDU_RESV_P >> 6
+    jb .cut
+    cmp bx, dx
+    jae .want
+.cut:
+    cmp ax, dx
+    jb .c1
+.want:
+    mov ax, dx
+.c1:
+    mov cl, [sl_wmin + 1]
+    xor ch, ch
+    cmp ax, cx
+    jae .c2
+    xchg ax, cx
+.c2:
+    call sl_wsset
+    xchg ax, cx
+    ret
 
 ; sl_wsset - AX = the workspace KiB: [sl_wskb], [sl_ws] (paragraphs) = AX
 ; paragraphs out in AX
@@ -368,7 +396,9 @@ sl_bind:
     push ax
     call _pdu_mbind
     add sp, 4
-    xor ax, ax                      ; the workspace: a data window after it
+    mov ax, [sl_wclaim]             ; the workspace: its own claim, W, or
+    or ax, ax                       ; (PDWRT) a data window after the image
+    jnz .nw
     mov cx, [sl_ws]
     jcxz .nw
     push cx
@@ -376,9 +406,6 @@ sl_bind:
     push word [_pdu_sclaim]
     call _os88_seg_sub
     add sp, 6
-    or ax, ax
-    mov dx, PDE_NOSLOT
-    jz .e
 .nw:
     mov dx, [sl_wskb]
     mov cx, PDV_X_INIT
@@ -412,9 +439,6 @@ sl_bind:
     xor ax, ax
 .r:
     ret
-.e:
-    xchg ax, dx
-    ret
 
 ; sl_grow - AX = the KiB an occupant's verb asked for its workspace
 ; (PDE_NEEDMEM, CX = PDMEM_SLOT): S regrown to at most the occupant's want,
@@ -435,6 +459,7 @@ sl_grow:
 .k:
     cmp ax, [sl_wskb]
     jbe .ini                        ; no growth: the INIT says so
+.rt:
     push ax
     mov cl, 6
     shl ax, cl
@@ -445,20 +470,25 @@ sl_grow:
     pop cx
     pop dx                          ; the KiB
     cmp ax, cx
-    jb .ini
+    jae .gw
+    push dx
+    call sl_relmem                  ; release before refuse (20.22.2.4)
+    pop ax
+    jnc .rt
+    jmp short .ini
+.gw:
     push dx
     xchg ax, dx
     mov cl, 6
     shl ax, cl
-    add ax, [sl_img]
     push ax
-    push word [_pdu_sclaim]
-    call _os88_mem_regrow_p         ; may MOVE S: the image comes with it
+    push word [sl_wclaim]
+    call _os88_mem_regrow_p         ; may MOVE W: its bytes come with it
     add sp, 4
     pop dx
     or ax, ax
     jz .ini
-    mov [_pdu_sclaim], ax
+    mov [sl_wclaim], ax
     xchg ax, dx
     call sl_wsset
 .ini:
@@ -1111,6 +1141,9 @@ _pdu_region:
     add [xr_para], ax
     jmp short .init
 .no:
+    call sl_relmem                  ; release before refuse: the overlay,
+    mov ax, [xr_kb]                 ; then a second Flate slot, and ask again
+    jnc .try
     cmp si, PDU_RGLYPH * 2         ; the glyph's second try: 32 KiB
     jne .init
     mov ax, PDU_GLYPHMIN
@@ -1159,6 +1192,24 @@ xr_reinit:
 ; region - and only then does the occupant degrade. OSW, XIDX and the glyph
 ; region are never released while an occupant runs. Each: CF = 0 something
 ; went back, CF = 1 nothing did. `.nos` calls them in this order.
+
+; sl_relmem - a region refused: (1) then (2) below, CF as theirs. XC is not
+; one of them: a region grant is PDREND's re-INIT, which re-hands XC anyway
+sl_relmem:
+    call sl_rel_ovl
+    jc sl_rel_fl2
+    ret
+
+; pdu_ovl_room - crt0's CC_OVL_ROOM, run before the overlay is fetched
+; again: it was dropped for an occupant (sl_rel_ovl), so the occupant gives
+; its claims back first - S and W are the room the overlay left. Not a
+; parked Replace's PDWRT, which holds a save's state (it leaves by
+; pdu_wrt_out). The next PDREND NEEDMOD loads it again (the cache, or the
+; disk). Registers: crt0 has pushed all it needs
+pdu_ovl_room:
+    cmp word [_pdu_socc], PDU_OCC_WRT_A
+    jne _pdu_slot_free
+    ret
 
 ; (1) the overlay: a lazy part, fetched again by its next ovl_ call. Not
 ; while overlay code stands on the stack (cc_ovthunk's stash is not empty):
@@ -2145,11 +2196,13 @@ sl_img:         resw 1
 sl_ws:          resw 1
 sl_wskb:        resw 1
 sl_need:        resw 1
-sl_wmin:        resb 1
+sl_wclaim:      resw 1              ; claim W, the occupant's workspace
+sl_wmin:        resw 1              ; want (low), min (high)
 alignb 2
 sl_dseg:        resw 1
 sl_rel:         resb 1              ; the next release (.nos): 0 overlay, 1 Flate, 2 XC
 sl_inlad:       resb 1              ; a PDREND NEEDMOD is being answered
+
 alignb 2
 rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
 rd_vol:         resw 1
