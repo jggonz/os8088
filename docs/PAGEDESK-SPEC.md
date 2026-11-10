@@ -5662,6 +5662,26 @@ streams. Every other change of the Flate claim still resets the document
 streams, sees `PDE_BUSY`, closes the inner one, sees AX = 1 and reads the
 outer one to the same bytes as an undisturbed read. Cost: 152 bytes.
 
+**20.22.3.10 A page's annotations in object streams (QA R6).** Two caches
+make reading a page's annotations, in order, cheap:
+- `ANNOTS` keeps a cursor: the page, the next index and where the last
+  element of `/Annots` ended. The next call in order reads from there,
+  rather than entering the page dictionary and skipping `index` elements
+  again.
+- Every header pair `os_find` reads goes into the resolved-offset cache,
+  tagged with its stream (`ox_enter` takes a cached position only for the
+  stream the cross-reference names). A member found later does not read the
+  header again. The header sits at the stream's start, so once the window is
+  past its ring, that read would decode the stream from its start.
+
+On `BIG_OS.PDF` (80 notes a page, in a stream longer than the ring, read
+backwards), one page's `ANNOTS` walk drops from 27,133 tokens to 10,543 and
+from 18 decodes to 16. The walk still pays a decode each time it goes back to
+the page dictionary's `/Annots` while the window is 32 KiB past it. A
+read-ahead of the array would remove that, but this round's bytes do not
+cover it. pde_check's `BIG_O*` row lists both pages' notes in order against
+the generator's. Cost: 204 bytes.
+
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
 AP-06. Owner decisions O3 (an encrypted file is saved as an incremental update

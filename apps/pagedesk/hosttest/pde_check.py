@@ -690,6 +690,11 @@ def main():
                 check_good(pde, pth, 2, (), noflate=True)
                 check_members(pde, pth, ("-F", "2"), work)
                 check_members(pde, pth, (), work)
+                if f.startswith("BIG_O"):               # QA R6: ANNOTS in order (the cursor), 80 a page from members
+                    for pg, want in ((0, list(range(89, 9, -1))), (1, list(range(90, 170)))):
+                        got = [int(m.group(1)) for m in (re.search(r" nm=eng-(\d+) ", x) for x in
+                               lines(pde, "annots", pth, (pg,), ("-F", "2"))) if m]
+                        expect(got == want, "%s p%d: ANNOTS nm %s..." % (f, pg, got[:6]))
                 if f == "XTGUI_OZ.PDF":                 # 20.22.3.9: INIT cut to one Flate slot between streams
                     l = [x for x in lines(pde, "flshrink", pth, (42, 43), ("-F", "2")) if not x.startswith("NEEDMEM")]
                     want = [x for x in lines(pde, "strm", pth, (42, 0), ("-F", "2")) if x.startswith("STRM")]

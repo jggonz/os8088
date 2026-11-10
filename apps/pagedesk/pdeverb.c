@@ -6,7 +6,7 @@ static struct pd_u32 od_pos;                    /* the current dict, just inside
 
 static void doc_reset(void)
 {
-    g_open = 0; nctx = 0; nxs = 0; nrev = 0; npages = 0; pw_sp = 0; arena_top = 0;
+    g_open = 0; nctx = 0; nxs = 0; nrev = 0; npages = 0; pw_sp = 0; arena_top = 0; an_pg1 = 0;
     op_state = 0;
     tr_size = 0; tr_root_n = 0; tr_root_g = 0; tr_info_n = 0; tr_info_g = 0; tr_has_root = 0;
     tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0;
@@ -655,21 +655,26 @@ static pdw v_annots(pdw page, pdw index)
     rc = pg_get(page);
     if (rc) return rc;
     num = pgn; gen = pgg;
-    rc = obj_dict(num, gen);
-    if (rc) return PDE_RANGE;
-    rc = od_key("Annots");
-    if (rc == PDE_NOTFOUND) return PDE_RANGE;
-    if (rc) return rc;
-    if (ov.kind == PDK_REF) { rc = ob_follow(); if (rc) return rc; }
-    if (ov.kind != PDK_ARR) return PDE_RANGE;
-    for (k = 0; k < index; k++) {
-        rc = ob_skipval();
-        if (rc == PDE_SYNTAX && ov.kind == PDK_CLOSE) return PDE_RANGE;
+    if (an_pg1 == page + 1 && an_k == index) lx_seek(&an_pos);  /* the next element (L is fobj) */
+    else {
+        rc = obj_dict(num, gen);
+        if (rc) return PDE_RANGE;
+        rc = od_key("Annots");
+        if (rc == PDE_NOTFOUND) return PDE_RANGE;
         if (rc) return rc;
+        if (ov.kind == PDK_REF) { rc = ob_follow(); if (rc) return rc; }
+        if (ov.kind != PDK_ARR) return PDE_RANGE;
+        for (k = 0; k < index; k++) {
+            rc = ob_skipval();
+            if (rc == PDE_SYNTAX && ov.kind == PDK_CLOSE) return PDE_RANGE;
+            if (rc) return rc;
+        }
     }
+    an_pg1 = 0;
     rc = ob_value();
     if (rc) return rc;
     if (ov.kind == PDK_CLOSE) return PDE_RANGE;
+    if (ov.kind == PDK_REF) { lx_tell(&an_pos); an_pg1 = (pdw)(page + 1); an_k = (pdw)(index + 1); }
     an.objnum = 0; an.gen = 0; an.subtype[0] = 0; an.nm[0] = 0; an.flags = 0; an.has_ap = 0;
     an.irt_num = 0; an.state = PDS_NONE; an.contents_len = 0; an.contents[0] = 0;
     an.rect.x0 = 0; an.rect.y0 = 0; an.rect.x1 = 0; an.rect.y1 = 0;
