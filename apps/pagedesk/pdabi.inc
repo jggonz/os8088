@@ -248,6 +248,10 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+CCF_EOL                  equ 1
+CCF_ALIGN                equ 2
+CCF_EOB                  equ 4
+CCF_BLACK1               equ 8
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -721,5 +725,14 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdxb_imgx (12 bytes) -------------------------------------------
+PDXB_IMGX_K                    equ 0
+PDXB_IMGX_COLS                 equ 2
+PDXB_IMGX_ROWS                 equ 4
+PDXB_IMGX_FLAGS                equ 6
+PDXB_IMGX_GLOBALS              equ 8
+PDXB_IMGX_RESERVED             equ 10
+PDXB_IMGX_BYTES                equ 12
 
 %endif ; PDABI_INC

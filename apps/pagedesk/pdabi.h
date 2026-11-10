@@ -690,6 +690,19 @@ struct pdxb_img {
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
+/* bilevel (20.22.12): follows pdxb_img in the XB, filled from /DecodeParms  */
+struct pdxb_imgx {
+    pdw  k;                 /* /K (CCITT), as a signed 16-bit value        */
+    pdw  cols;              /* /Columns (0 = 1728)                         */
+    pdw  rows;              /* /Rows (0 = the image's /Height)             */
+    pdw  flags;             /* CCF_*                                       */
+    pdw  globals;           /* JBIG2: non-zero if /JBIG2Globals exists     */
+    pdw  reserved;
+};
+#define CCF_EOL     1       /* /EndOfLine                                  */
+#define CCF_ALIGN   2       /* /EncodedByteAlign                           */
+#define CCF_EOB     4       /* /EndOfBlock (default true)                  */
+#define CCF_BLACK1  8       /* /BlackIs1                                   */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];

@@ -4957,7 +4957,56 @@ round's final pass, not before.
 
 #### 20.22.12 CCITT and JBIG2 (`bilevel`)
 
-*Reserved; written by its agent before its code.*
+PDXI's two bilevel decoders, `apps/pagedesk/pdxiccit.c` (AP-08) and
+`pdxijb2.c` (AP-09). PDXI's shell (`pdxi.c`, 20.22.11) `#include`s them, the
+CCITT file first, and supplies their one input and one output:
+
+```
+static int  ix_get(void);        /* next CODED byte of the open source, -1 at its end    */
+static pdw  ix_open(pdw which);  /* (re)start the source: 0 = the stream, 1 = /JBIG2Globals */
+bl_out[], bl_ow, bl_oh, bl_omode, bl_orb, bl_scale     /* what IMG_OPEN / IMG_ROW report */
+```
+
+`ix_get` is a pull from PDENG's `STRM_READ` of the raw codec bytes (the chain
+stops before CCITT and JBIG2, 20.22.3). The decoders read it forward only;
+`ix_open` starts it again (a JBIG2 band re-runs the stream, below). A decoder
+fills `bl_out` (near, at most 1,024 bytes) and the shell copies it to the
+caller's far buffer. Neither file calls the kernel or claims memory.
+
+**Parameters** (`struct pdxb_imgx`, in the `[img 20.22.11-13]` block of
+`pdabi.h`) follow `pdxb_img` in the XB and are filled from `/DecodeParms` by
+whoever opens the stream: `k`, `cols`, `rows`, `flags` (`CCF_EOL`,
+`CCF_ALIGN`, `CCF_EOB`, `CCF_BLACK1`, as /EndOfLine, /EncodedByteAlign,
+/EndOfBlock, /BlackIs1; /DamagedRowsBeforeError is accepted and ignored) and
+`globals` (non-zero when /JBIG2Globals exists, so `ix_open(1)` is meaningful).
+
+**The delivery** is what 20.22.1 says: `PDIM_BITS1` rows when no reduction is
+wanted, `PDIM_GREY8` when one is. `bl_pick` chooses the reduction `s` (0 to 3,
+that is 1/1 to 1/8): the largest with `width >> s >= want_w`, then more while
+the grey row would not fit IMG_ROW's 1,024 bytes. A reduced row is the AVERAGE
+of a 2^s x 2^s block of samples (`(white * 255) >> 2s`, where a block off the
+right or bottom edge counts the missing samples as white). A reduction is not
+Incomplete (L5) and not a dither: it is the image at the size it is shown.
+Width is limited to 8,192 (`PDE_LIMIT` beyond).
+
+**CCITT** (`cf_open`, `cf_getrow`). Group 3 one-dimensional (K = 0), Group 3
+two-dimensional (K > 0, the tag bit after each EOL) and Group 4 (K < 0).
+Streaming: one source row is decoded at a time against the previous row,
+which is a bitmap (1,024 bytes) rather than a list of changing elements, so a
+noisy row costs no more than a clean one. Workspace: none. The module's own
+bss is the two row bitmaps, a sample row, two 2 KiB code tables built at open
+from the 104 white and 104 black codes (8-bit primary lookup, 5-bit
+secondary), and the reducer's counters (2 KiB). Samples are delivered as the
+PDF defines them: black = 0 unless /BlackIs1, in which case black = 1 and the
+caller applies /Decode (`PDIMG_INVERT`). A fault ends the row where it is
+(the rest white) and decoding goes on at the next EOL; Group 4 has no EOL to
+resync on, so the rest of the image is white. The data running out is the
+same. Rows ascend; a skipped row is decoded and dropped; a lower row needs a
+new open. Cost: one pass over the coded bytes, whatever the reduction.
+
+**JBIG2** (`jb_open`, `jb_getrow`; the embedded stream format of
+ISO/IEC 14492 annex D.3, no file header; `/JBIG2Globals` first). *(Written
+with the code; see the JBIG2 paragraphs below.)*
 
 #### 20.22.13 JPEG 2000 (`jpx`)
 
