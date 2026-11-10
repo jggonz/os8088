@@ -2128,9 +2128,10 @@ CC_GATE _os88_mem_claim
 _os88_mem_claim:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    mov bl, MEMP_KB                 ; the KB arm: no head, the DISK class (the
-    call OSAPI_MEM_P                ; KB doors went at the flag day, SPEC.md
-                                    ; 50.3.7.1)
+    mov cl, 6                       ; the KB in paragraphs, OSAPI_MEM_P's one
+    shl ax, cl                      ; unit (SPEC.md 50.3.7): no head, the DISK
+    mov bl, MEMP_CLAIM              ; class
+    call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
@@ -2189,8 +2190,10 @@ _os88_mem_huge_ask:
     xor ax, ax                      ; AX = 0: ask
     call OSAPI_MEM_HUGE
     jnc .r
-    mov bl, MEMP_KB + MEMP_AVAIL    ; no ask: the heap's largest run, in KB
+    mov bl, MEMP_AVAIL              ; no ask: the heap's largest run, in KB
     call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
 .r:
     ret
 %endif
@@ -2319,7 +2322,9 @@ _os88_mem_regrow:
     mov bp, sp
     mov dx, [bp+4]
     mov ax, [bp+6]
-    mov bl, MEMP_KB + MEMP_REGROW   ; in KB, the KB arm
+    mov cl, 6                       ; in KB: paragraphs
+    shl ax, cl
+    mov bl, MEMP_REGROW
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
@@ -2329,18 +2334,17 @@ _os88_mem_regrow:
 %endif
 
 ; unsigned os88_mem_claim_p(unsigned paras) / os88_mem_regrow_p(seg, paras) /
-; os88_mem_largest_p(void) / os88_mem_gran(void) - OSAPI_MEM_P (SPEC.md
+; os88_mem_largest_p(void) - OSAPI_MEM_P (SPEC.md
 ; 50.3.7): the same claims counted in PARAGRAPHS, for a size that is a byte
 ; count - OS88_BYTES_PARA(n) is the paragraphs to ask for. The heap rounds
-; every claim to its granule (os88_mem_gran(), 32 paragraphs today), so the
+; every claim to its granule (32 paragraphs today), so the
 ; KB calls above can never ask for less than a KB and these can
 CC_GATE _os88_mem_claim_p
 %ifdef CC_U__os88_mem_claim_p
 _os88_mem_claim_p:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    xor cx, cx                      ; no DMA head
-    mov bl, MEMP_CLAIM
+    mov bl, MEMP_CLAIM              ; (no head: CX is not read)
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
@@ -2367,14 +2371,6 @@ CC_GATE _os88_mem_largest_p
 _os88_mem_largest_p:
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P                ; AX = the largest, in paragraphs
-    ret
-%endif
-CC_GATE _os88_mem_gran
-%ifdef CC_U__os88_mem_gran
-_os88_mem_gran:
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P
-    xchg ax, cx                     ; AX = the granule, in paragraphs
     ret
 %endif
 
@@ -2405,8 +2401,11 @@ cc_avail:                           ; out AX = largest KB, BX = total KB
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     jnc .r
-    mov bl, MEMP_KB + MEMP_AVAIL    ; in KB, rounded down: the KB arm
+    mov bl, MEMP_AVAIL              ; in KB, rounded down
     call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
 .r:
     ret
 %endif

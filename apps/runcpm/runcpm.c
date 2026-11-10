@@ -1241,7 +1241,7 @@ void *os88_main(void)
     os88_key_down(OS88_SCAN_ALT);
 
 
-    rc_zseg = os88_mem_claim(64);
+    rc_zseg = os88_mem_claim_p(4096);
     if (rc_zseg == 0) {
         /* the refusal, toasted with what was asked and what there is: a
          * toast is 24 characters (SPEC.md 59, TOAST_MAX) and menu.inc

@@ -94,7 +94,8 @@ def _api_cell(name):
 
 # ONE cell since the flag day (kernel size pass 19): the KB doors this row
 # traced were withdrawn for OSAPI_MEM_P (SPEC.md 50.3), which isoTron reaches
-# through its MEMKB_* entries - so a hit is a CLAIM or an ASK by its verb, BL
+# in paragraphs since kernel size pass 19 - so a hit is a CLAIM or an ASK by
+# its verb, BL
 MEMP_AT = _api_cell("OSAPI_MEM_P")
 MEMP_ASK = 5                       # MEMP_AVAIL; 0..3 are the claim verbs
 MEM_MAX_SMALL = 16                 # kernel/memory.inc's MEM_MAX under KERN_SMALL
@@ -169,7 +170,7 @@ def main():
         mine = [h for h in tr.hits if h.get("hit") == g.seg]
         verb = [((h.get("regs") or {}).get("bx", 0) & 0xFF) for h in mine]
         asks = sum(1 for v in verb if v == MEMP_ASK)
-        claims = sum(1 for v in verb if v < 4)
+        claims = sum(1 for v in verb if v & 0x7F < 4)   # MEMP_CONV is 80h
         check(g.b("it_nomem") == 1 and g.w("it_cseg") == 0 and g.w("it_seg") == 0
               and asks >= 1 and claims == 0 and not tr.overflowed,
               "B: it ASKS, refuses itself and never claims",

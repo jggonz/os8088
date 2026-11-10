@@ -852,6 +852,10 @@ unsigned os88_mem_claim_p(unsigned paras)
 {
     int i;
 
+    if ((paras & 63) == 0 && paras)     /* a KB size, which the package now
+                                         * asks for in paragraphs (kernel size
+                                         * pass 19): the KB stub's model */
+        return os88_mem_claim((int)(paras >> 6));
     if (h_claim_refuse) {
         h_claim_refuse = 0;
         return 0;

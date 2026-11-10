@@ -428,8 +428,9 @@ vm_run:
     call bl_sline
     cmp word [vm_dseg], 0
     jne .have
-    mov ax, 8                       ; the masks (VM_B of 8 KB)
-    MEMKB_CLAIM
+    mov ax, 8 * 64                       ; the masks (VM_B of 8 KB)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [vm_dseg], dx
 .have:

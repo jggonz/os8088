@@ -165,7 +165,7 @@ wr_entry:
     sub cx, MBAR_H                  ; its desktop band, for the size table
     mov [wr_pband], cx
     mov ax, OS88_BYTES_PARA(WRL_BANDSZ) ; the waveform band (SPEC.md 123.5),
-    xor cx, cx                      ; in PARAGRAPHS (50.3.7): 9,600 bytes is
+                                    ; in PARAGRAPHS (50.3.7): 9,600 bytes is
     mov bl, MEMP_CLAIM              ; 9.5 KB at the granule. A refusal is not
     call OSAPI_MEM_P                ; fatal - the waveform is then drawn
     jnc .band                       ; without its grid

@@ -595,8 +595,6 @@ fv_textlen:  db FV_INITLEN
 ; the buffer runs on into the first FV_TAIL bytes of the bss, which the loader
 ; zeroes (SPEC.md 20.2), so the 61 zeros it used to ship are in RAM exactly as
 ; before and on no disk.
-OS88KB_BODIES                       ; (the MEMKB_* bodies HERE, not at
-                                    ; OS88_IMAGE_END: fv_text ends the image)
 fv_text:
     db 'The quick brown fox jumps over the lazy dog. ABC abc 0123456789 !?'
 FV_INITLEN equ $ - fv_text

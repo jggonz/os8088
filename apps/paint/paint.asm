@@ -1050,28 +1050,6 @@ pt_fit:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_kb_of - KB a claim of CX paragraphs needs
-; in:  CX = paragraphs
-; out: AX = KB, rounded UP (a claim a paragraph short is a claim that
-;      corrupts); preserves every other register
-; -----------------------------------------------------------------------------
-pt_kb_of:
-    push cx
-    mov ax, cx
-    add ax, 63
-    jnc .ok
-    mov ax, 0xFFFF                  ; cannot happen: pt_fit caps the canvas
-.ok:
-    mov cl, 6
-    shr ax, cl
-    or ax, ax
-    jnz .out
-    inc ax
-.out:
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
 ; pt_alloc - claim everything a canvas of AX x DX needs (SPEC.md 50.3)
 ; in:  AX = width, DX = height (already through pt_fit)
 ; out: CF=1 nothing usable could be claimed; else the four claim segments are
@@ -1115,23 +1093,25 @@ pt_alloc_scratch:
     cmp word [pt_scseg], 0          ; held already (a second click on the
     jne .have                       ; tool in hand): it is funded
     mov byte [pt_havefill], 0
-    MEMKB_AVAIL                     ; AX = the largest run a claim is served
-    mov cx, PT_SC_KB                ; from, BX = the total (not ours)
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest run a claim is served
+    mov cx, PT_SC_KB * 64           ; from, BX = the total (not ours), in
+    cmp ax, cx                      ; paragraphs
+    jae .ask
+    mov cx, PT_SC_MID * 64
     cmp ax, cx
     jae .ask
-    mov cl, PT_SC_MID
-    cmp ax, cx
-    jae .ask
-    mov cl, PT_SC_MIN
+    mov cx, PT_SC_MIN * 64
     cmp ax, cx
     jb .out                         ; not even the 2KB tier: the tool greys
 .ask:
     xchg ax, cx                     ; AX = the tier
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
-    mov [pt_scseg], dx              ; AX = the KB actually granted, which is
-    mov cl, 7                       ; the only place the tier is now read from
-    shl ax, cl                      ; KB -> spans: KB * 1024 / 8 is KB << 7
+    mov [pt_scseg], dx              ; AX = the paragraphs actually granted,
+                                    ; the only place the tier is now read from
+    shl ax, 1                       ; -> spans: paragraphs * 16 / 8
     sub ax, PT_SC_STACK / 8         ; ...less the header's own two
     cmp ax, PT_FSTK_MAX
     jbe .cap
@@ -1183,15 +1163,14 @@ pt_alloc:
     ; the one it would be asked for from, and one refusal was the end of it.
     ; The canvas is the claim Paint cannot run without; it goes first, and
     ; everything else takes what is left.
-    mov cx, [pt_needp]
-    call pt_kb_of
-    MEMKB_CLAIM
+    mov ax, [pt_needp]
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [pt_base], dx
     call pt_movable                 ; the biggest claim on the machine, and
                                     ; the one worth moving (SPEC.md 66)
-    mov cl, 6
-    shl ax, cl                      ; what the claim actually holds...
+                                    ; AX = what the claim actually holds...
     mov [pt_smaxp], ax              ; ...which is >= [pt_needp]
 
     call pt_scprobe                 ; ...and the rest take what is left, none
@@ -1386,9 +1365,9 @@ pt_alloc_undo:
     push dx
     mov byte [pt_haveundo], 0
     mov word [pt_unseg], 0
-    mov cx, [pt_smaxp]
-    call pt_kb_of
-    MEMKB_CLAIM
+    mov ax, [pt_smaxp]
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [pt_unseg], dx
     call pt_movable
@@ -1485,8 +1464,9 @@ pt_uwinof:
 pt_alloc_clip:
     push ax
     push bx                         ; MEM_AVAIL answers in AX and BX
-    MEMKB_AVAIL                     ; AX = the largest run a claim is served
-    cmp ax, PT_CLIPMINP >> 6        ; from - and the floor is in paragraphs
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest run a claim is served
+    cmp ax, PT_CLIPMINP             ; from - and the floor is in paragraphs
     sbb al, al                      ; FF under the floor, 0 at or over it...
     inc ax                          ; ...so AL = 1 exactly when it is funded
     mov [pt_haveclip], al
@@ -1515,17 +1495,14 @@ pt_clip_need:
     push dx
     cmp ax, [pt_cbparas]
     jbe .ok
-    mov cx, ax
-    call pt_kb_of
-    MEMKB_CLAIM                     ; the bigger one first...
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; the bigger one first...
     jc .no
     push dx
     call pt_free_clip               ; ...then give the smaller one back
     pop dx
     mov [pt_cbseg], dx
     call pt_movable
-    mov cl, 6
-    shl ax, cl
     mov [pt_cbparas], ax
     mov byte [pt_haveclip], 1
     call pt_menufix                 ; **AND SAY SO.** pt_free_clip above set
@@ -1593,8 +1570,9 @@ pt_alloc_lzw:
     push ax
     push dx
     mov word [pt_lzwseg], 0
-    mov ax, PT_LZW_KB
-    MEMKB_CLAIM
+    mov ax, PT_LZW_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [pt_lzwseg], dx
     pop dx
@@ -1655,8 +1633,10 @@ pt_free_clip:
 ; -----------------------------------------------------------------------------
 pt_growmax:
     push ax
+    push bx                         ; (MEMP_AVAIL answers in BX too)
     push cx
-    MEMKB_AVAIL                     ; AX = largest free run, KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest free run, paragraphs
     cmp word [pt_scseg], 0          ; --- HOLD BACK A FLOOR'S WORTH OF SPAN
     jne .capped                     ; STACK (SPEC.md 42.6.2) while there is
                                     ; not one held - which, since 42.6.2.1,
@@ -1671,18 +1651,17 @@ pt_growmax:
                                     ; canvas is 2KB smaller than it had to be,
                                     ; too much and pt_alloc_scratch simply
                                     ; greys the tool. Neither refuses Paint
-    cmp ax, PT_SC_MIN + PT_MIN_KB   ; ...but not when holding it back would
-    jbe .capped                     ; cost the canvas its own floor: there,
-    sub ax, PT_SC_MIN               ; the picture wins and the tool greys
-.capped:
-    cmp ax, PT_WANT_KB
+    cmp ax, (PT_SC_MIN + PT_MIN_KB) * 64 ; ...but not when holding it back
+    jbe .capped                     ; would cost the canvas its own floor:
+    sub ax, PT_SC_MIN * 64          ; there, the picture wins and the tool
+.capped:                            ; greys
+    cmp ax, PT_WANT_KB * 64
     jbe .cap2
-    mov ax, PT_WANT_KB
+    mov ax, PT_WANT_KB * 64
 .cap2:
-    mov cl, 6
-    shl ax, cl                      ; KB -> paragraphs
     mov [pt_growp], ax
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -11198,8 +11177,9 @@ pt_menufix:
     ; fund PT_LZW_KB at all, which is also what pt_save will ask.
     push ax
     push bx                         ; MEM_AVAIL answers in AX *and* BX, and
-    MEMKB_AVAIL                     ; AX = largest free run, KB
-    cmp ax, PT_LZW_KB               ; this routine promises to preserve both
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest free run, paragraphs
+    cmp ax, PT_LZW_KB * 64          ; this routine promises to preserve both
     pop bx
     pop ax
     jb .nogif
@@ -11290,8 +11270,9 @@ pt_gate_g:
     mov si, pt_s_ng
     push ax
     push bx                         ; MEM_AVAIL answers in AX and BX
-    MEMKB_AVAIL                     ; AX = largest free run, KB
-    cmp ax, PT_LZW_KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest free run, paragraphs
+    cmp ax, PT_LZW_KB * 64
     sbb ax, ax
     inc ax                          ; ZF = 1 exactly when the tables cannot fit
     pop bx
@@ -12376,10 +12357,11 @@ pt_resize:
     mov word [pt_cbw], 0            ; ...and here the contents ARE gone: this
                                     ; is a resize, not a Copy replacing them
 %endif
-    call pt_kb_of                   ; AX = KB for CX paragraphs
+    mov ax, cx                      ; AX = the paragraphs
     push ax
-    MEMKB_CLAIM                     ; DX = the new base, CF = refused
-    pop bx                          ; BX = the KB, for the fallback below
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the new base, CF = refused
+    pop bx                          ; BX = them, for the fallback below
     jnc .moved
 
     ; The heap could not hand us a SECOND block that big - but it may well be
@@ -12390,13 +12372,11 @@ pt_resize:
     ; and not the first move.
     mov ax, bx
     mov dx, [pt_base]
-    MEMKB_REGROW                    ; DX = where it is now (same = in place)
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; DX = where it is now (same = in place)
     jc .refit
     mov [pt_base], dx               ; unchanged unless it had to move, and the
-    mov ax, bx                      ; picture came with it either way
-    mov cl, 6
-    shl ax, cl
-    mov [pt_smaxp], ax
+    mov [pt_smaxp], ax              ; picture came with it either way
     jmp .inplace                    ; one block now, so the relayout happens
                                     ; inside it - the wanted size is still on
                                     ; the stack, which is what .inplace expects
@@ -12411,8 +12391,6 @@ pt_resize:
     mov [pt_osrc], bx
     mov [pt_base], dx
     call pt_movable                 ; the new one is ours to move too
-    mov cl, 6
-    shl ax, cl
     mov [pt_smaxp], ax
     jmp short .geom
 
@@ -13706,17 +13684,18 @@ pt_ondlg:
     or bx, dx
     jz .sizeok                      ; 0 = the dialog had no size (a typed
                                     ; name): let the old path answer
-    add ax, 1023                    ; bytes -> KB, rounded up, across 32 bits
-    adc dx, 0
-    mov cl, 10
+    add ax, 15                      ; bytes -> paragraphs, rounded up, across
+    adc dx, 0                       ; 32 bits
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    or ax, dx                       ; AX = KB the file needs
-    cmp ax, PT_STAGE_MAX
+    or ax, dx                       ; AX = paragraphs the file needs
+    cmp ax, PT_STAGE_MAX * 64
     ja .toobig
     push ax
-    MEMKB_AVAIL                     ; AX = the largest free run, KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest free run
     pop bx
     cmp ax, bx
     jb .toobig
@@ -13898,7 +13877,7 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
-    mov ax, PT_STAGE_MAX
+    mov ax, PT_STAGE_MAX * 64
     call pt_stage                   ; ES:0000 = somewhere to put the file, and
     jc .nostage                     ; DX:CX = how much of it there is
     mov es, [pt_gseg]
@@ -14047,7 +14026,8 @@ pt_stage:
     push ax
     push bx
     mov [pt_stgkb], ax              ; the caller's cap, across the AVAIL call
-    MEMKB_AVAIL                     ; AX = the largest free run, in KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest free run, paragraphs
     cmp ax, [pt_stgkb]
     jbe .kb
     mov ax, [pt_stgkb]
@@ -14055,14 +14035,15 @@ pt_stage:
     or ax, ax
     jz .no
     mov [pt_stgkb], ax
-    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
     jc .no
     mov [pt_gseg], dx
-    mov ax, [pt_stgkb]              ; DX:CX = KB * 1024, 32-bit
+    mov ax, [pt_stgkb]              ; DX:CX = paragraphs * 16, 32-bit
     mov dx, ax
-    mov cl, 10
+    mov cl, 4
     shl ax, cl
-    mov cl, 6
+    mov cl, 12
     shr dx, cl
     mov cx, ax
     clc
@@ -14092,17 +14073,17 @@ pt_stagefit:
     push dx
     mov ax, [pt_fsz]
     mov dx, [pt_fsz+2]
-    add ax, 1024                    ; -> whole KB, 32-bit, and ONE BYTE OVER:
+    add ax, 16                      ; -> paragraphs, 32-bit, and ONE BYTE OVER:
     adc dx, 0                       ; pt_gbits reads a word and a byte at its
                                     ; cursor, which can be the file's last
                                     ; byte, and a claim of 64KB or less is a
                                     ; selector on kern_mega whose limit is the
                                     ; claim - so a file of whole KB faulted
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    or ax, dx                       ; AX = KB (a file this big cannot exist on
+    or ax, dx                       ; AX = paragraphs (a file this big cannot exist on
     or ax, ax                       ; the media, so this cannot overflow)
     jnz .kb
     inc ax                          ; an empty claim is not a claim
@@ -14110,7 +14091,8 @@ pt_stagefit:
     cmp ax, [pt_stgkb]              ; ...and only ever a SHRINK: a file that
     jae .out                        ; filled the claim keeps it as it is
     mov dx, [pt_gseg]
-    MEMKB_REGROW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     jc .out
     mov [pt_gseg], dx
 .out:
@@ -14943,37 +14925,34 @@ pt_cvgrow:
     sub bx, cx
     cmp bx, PT_SHRINKP
     jb .ok                          ; not worth the churn
-    call pt_kb_of                   ; AX = KB for CX paragraphs, CX preserved
-    mov bx, ax
+    mov bx, cx                      ; BX = the paragraphs
     call pt_free_undo               ; the undo image is sized from [pt_smaxp]
     mov ax, bx                      ; and comes back at the new one. A no-op on
     mov dx, [pt_base]               ; this build - PTF_UNDO is off - and called
-    MEMKB_REGROW                    ; anyway, so the arm reads the same as the
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; anyway, so the arm reads the same as the
     jc .shrno                       ; grow path above it
     mov [pt_base], dx               ; SPEC.md 50.3: a shrink "always succeeds
-    mov ax, bx                      ; in place". TESTING CF is what makes that
-    mov cl, 6                       ; a check rather than a belief, and taking
-    shl ax, cl                      ; the base back from DX is what makes a
+                                    ; in place". TESTING CF is what makes that
+                                    ; a check rather than a belief, and taking
+                                    ; the base back from DX is what makes a
     mov [pt_smaxp], ax              ; move - if the contract ever changes -
 .shrno:                             ; correct rather than silent
     call pt_alloc_undo
     jmp short .ok
 .grow:
 %endif
-    call pt_kb_of                   ; AX = KB, rounded UP
-    mov bx, ax
+    mov bx, cx                      ; BX = the paragraphs
     call pt_free_undo               ; ...and give the regrow the room it was
                                     ; holding: the undo image is sized from
                                     ; [pt_smaxp], which is about to move
     mov ax, bx
     mov dx, [pt_base]
-    MEMKB_REGROW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     jc .keep
     mov [pt_base], dx               ; the same segment when it grew where it
-    mov ax, bx                      ; stood, a different one when it moved
-    mov cl, 6
-    shl ax, cl
-    mov [pt_smaxp], ax              ; what the claim actually holds now
+    mov [pt_smaxp], ax              ; stood, a different one when it moved              ; what the claim actually holds now
     call pt_alloc_undo              ; A NEW BASE NEEDS A NEW [pt_undelta], and
     jmp short .ok                   ; pt_alloc_undo is the only thing that sets
                                     ; it - pt_layout says so in as many words,

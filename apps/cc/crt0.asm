@@ -1221,10 +1221,10 @@ cc_ovneed:
     mov cl, 4                       ; will not divide a section-relative label,
     shr ax, cl                      ; and a build that fails on arithmetic is a
                                     ; worse trade than four instructions
-    mov cx, MEMP_CONV               ; no DMA head, CONVENTIONAL on kern_mega
+    xor cx, cx                      ; no DMA head, CONVENTIONAL on kern_mega
                                     ; (a module whose base is a CS), and the
                                     ; paragraph door
-    mov bl, MEMP_CLAIM_HI           ; (SPEC.md 50.3.7): the claim is the module
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV ; (SPEC.md 50.3.7): the claim is the module
     call OSAPI_MEM_P                ; to the heap's granule, where the KB door
     mov di, ax                      ; took it to a whole KB. DI = the paragraphs
                                     ; GRANTED. CONVENTIONAL on kern_mega for an
@@ -1829,9 +1829,6 @@ section .text                       ; leave the assembler in .text - the next
 ; -----------------------------------------------------------------------------
 %macro CC_IMAGE_END 0
 section .text
-    OS88KB_BODIES               ; the MEMKB_* entries an asm include of the
-                                ; package named (os88type.inc's, SPEC.md
-                                ; 50.3.7.1) - nothing for most C packages
 %ifdef CC_OVL_PART
   ; --- THE OVERLAY'S PART (SPEC.md 73.14.2) --------------------------------
   ; HERE, after the compiled C, for two reasons: a package whose overlay is

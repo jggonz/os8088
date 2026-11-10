@@ -4992,7 +4992,6 @@ os88ui_drbank:
     shl dx, cl
     add ax, dx                  ; AX = paragraphs, rounded up (ZF = none)
     jz .none
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .none
@@ -6235,7 +6234,6 @@ os88ui_mnbank:
     shl dx, cl
     add ax, dx                  ; AX = paragraphs, rounded up (ZF = none)
     jz .no
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; out CF=0, DX = base segment
     jc .no

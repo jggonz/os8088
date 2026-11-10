@@ -1380,9 +1380,10 @@ w16_lend:
     mov dx, [w16_lseg]
     or dx, dx
     jnz .have
-    mov ax, 1
+    mov ax, 1 * 64
     xor cx, cx
-    MEMKB_DMA                       ; DX = its selector, below 1MB
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; DX = its selector, below 1MB
     jc .out
     mov ax, dx
     mov bl, SEG_REAL

@@ -99,9 +99,10 @@ mx_tick:
     call OSAPI_FILE_HERE            ; where we were launched: DX, BL
     mov [mx_home], dx
     mov [mx_hdrv], bl
-    mov ax, MX_CHUNK / 1024         ; the buffer: CONVENTIONAL (the DMA door,
+    mov ax, (MX_CHUNK / 1024) * 64         ; the buffer: CONVENTIONAL (the DMA door,
     xor cx, cx                      ; CX = 0, for an OS88_HIGHMEM package)
-    MEMKB_DMA
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P
     jc .nomem
     mov [mx_buf], dx
     mov ax, MX_XKB * 1024 & 0xFFFF  ; the XMS block

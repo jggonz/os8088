@@ -2232,9 +2232,12 @@ w16mm_wimake:
     push bp
     mov bp, dx                      ; BP = the rate
     push cx
-    mov ax, W16MM_IRL / 1024 + 1    ; the ring and its words, all the head
+    mov ax, (W16MM_IRL / 1024 + 1) * 64 ; the ring and its words, all the head
     mov cx, ax
-    MEMKB_DMA_HI                    ; DX = its segment
+    push bx
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = its segment
+    pop bx
     pop cx
     jc .nomem
     push dx

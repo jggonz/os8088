@@ -365,7 +365,11 @@ gb_facts:
     mov [gb_bpp], dh
     call OSAPI_CPU_INFO             ; AL = tier, AH = feature bits
     mov [gb_cpu], ax
-    MEMKB_AVAIL                     ; AX = largest run KB, BX = total free KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest run, BX = total free...
+    mov cl, 6                       ; ...in KB, as the report says
+    shr ax, cl
+    shr bx, cl
     mov [gb_mlarge], ax
     mov [gb_mtotal], bx
     push ds

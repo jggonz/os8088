@@ -249,7 +249,10 @@ ar_zread:
     mov byte [ar_zrun], 1
 .hno:                               ; (CF: the claim's - or's and cmp's 0)
 %else
-    MEMKB_CLAIM
+    mov cl, 6                       ; the KB in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
 %endif
     pop si
     jc .nomem
@@ -642,16 +645,17 @@ ar_iplace:
 ; no file is just not here, and says nothing
 ar_impmake:
     mov [ar_iset], si
-    mov ax, [si+AS_LEN]             ; the image's claim: header + image
-    mov dx, [si+AS_LEN+2]
-    add ax, 32 + 1023
+    mov ax, [si+AS_LEN]             ; the image's claim: header + image, in
+    mov dx, [si+AS_LEN+2]           ;   paragraphs
+    add ax, 32 + 15
     adc dx, 0
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
     or ax, dx
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jnc .claimed
     ret
 .claimed:

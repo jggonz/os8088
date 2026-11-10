@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "7fbe4cf0f313a3fea9ebc6c65b32e21d41a24743f06b41f6824a510d70fb7fcf",
+  "fingerprint": "acf0022aa8f960eee373590808be26cbd831b2e96dcf5ddbe08532b9d7778d73",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "389b2781880f70fb628234212b4ad79e29cfb0cbd6c3c8a9060f94ab9f1ee5c2",
+  "fingerprint": "f8e71ac81b2dc8bfad54ab02fc4ece5d0b126aecb1024a68c9330d9e2b45fe63",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2133,6 +2133,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "f8e71ac81b2dc8bfad54ab02fc4ece5d0b126aecb1024a68c9330d9e2b45fe63",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P in paragraphs alone: the KB arm (MEMP_KB/MEMP_KBH), OS88KB_BODIES and the MEMKB_* macros withdrawn, MEMP_CONV a verb bit (CX the head only under it), MEMP_AVAIL keeps CX, os88_mem_gran gone (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "acf0022aa8f960eee373590808be26cbd831b2e96dcf5ddbe08532b9d7778d73",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P in paragraphs alone: the KB arm (MEMP_KB/MEMP_KBH), OS88KB_BODIES and the MEMKB_* macros withdrawn, MEMP_CONV a verb bit (CX the head only under it), MEMP_AVAIL keeps CX, os88_mem_gran gone (kernel size pass 19)",
    "to": 14
   }
  ]

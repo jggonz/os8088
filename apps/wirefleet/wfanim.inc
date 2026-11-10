@@ -66,7 +66,7 @@ wf_fxplanarinit:
     push di
     push es
     mov ax, WF_FXP_KB * 64      ; (paragraphs, SPEC.md 50.3.7; every
-    xor cx, cx                  ; register is banked above, and BX is
+                                ; register is banked above, and BX is
     mov bl, MEMP_CLAIM          ; wf_spreadinit's own)
     call OSAPI_MEM_P
     jc .done

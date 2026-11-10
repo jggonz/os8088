@@ -710,8 +710,9 @@ wd_entry:
     mov [wd_cseg], dx               ; so wd_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
-    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    MEMKB_CLAIM                     ; 256 x 4 bytes, session-lived. Zeroed by
+    mov ax, 1 * 64                       ; ...and the PAP dictionary (SPEC.md 68.3):
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [wd_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -5759,8 +5760,9 @@ wd_itinit:
                                     ; the whole of its pass, and the claim
                                     ; below may compact. The one claim this
                                     ; program makes with a segment in hand
-    mov ax, WD_ITKB                 ; the table AND the staging area
-    MEMKB_CLAIM
+    mov ax, WD_ITKB * 64                 ; the table AND the staging area
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .let
     mov [wd_iseg], dx
 .let:
@@ -8863,7 +8865,7 @@ wd_stghold:
     push ax
     push cx                         ; CL is the shift count below, and the
     push dx                         ; header promises every other register
-    mov ax, WD_DOCCAP               ; the WHOLE ceiling, not a size computed
+    mov ax, WD_DOCCAP * 64          ; the WHOLE ceiling, not a size computed
                                     ; from the document: a real Word file is
                                     ; the text plus FKP pages, and how many
                                     ; pages it needs is what the writer finds
@@ -8872,7 +8874,10 @@ wd_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
+    pop bx
     jc .no
     mov [wd_stgseg], dx
     mov es, dx
@@ -9026,8 +9031,9 @@ wd_upc:
 wd_load:
     call wd_sv6
     push es
-    mov ax, WD_LSTGKB           ; the staging claim, transient across the read
-    MEMKB_CLAIM
+    mov ax, WD_LSTGKB * 64           ; the staging claim, transient across the read
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [wd_stgseg], dx
     call wd_goto                ; the folder dance on the way in
@@ -13447,7 +13453,6 @@ wd_ugrow:
     jbe .yes
     cmp word [wd_useg], 0
     jne .re
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no

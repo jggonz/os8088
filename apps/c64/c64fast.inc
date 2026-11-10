@@ -492,8 +492,8 @@ _c64x_copy:
 ; never ran on kern_mega (APPLE2's a2f_claimcode, the same fix).
 _c64f_claimcode:
     mov ax, 0x1000                  ; 64KB in paragraphs
-    mov cx, MEMP_CONV
-    mov bl, MEMP_CLAIM
+    xor cx, cx                      ; no head...
+    mov bl, MEMP_CLAIM + MEMP_CONV  ; ...and conventional
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax

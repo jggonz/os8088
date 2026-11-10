@@ -845,8 +845,11 @@ vk_kv0:
 vk_claim:
     cmp word [vk_seg], 0
     jne .have
-    mov ax, VK_KB
-    MEMKB_CLAIM
+    mov ax, VK_KB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .out
     mov [vk_seg], dx
 .have:

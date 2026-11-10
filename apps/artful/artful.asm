@@ -1401,7 +1401,7 @@ at_sncnt    equ at_snpad + 1                 ; word
 at_sntop    equ at_sncnt + 2                 ; word
 at_snbase   equ at_sntop + 2                 ; word
 at_snoffs   equ at_snbase + 2                ; word
-at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, KB
+at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, paragraphs
 at_fontbuf  equ at_akb + 2                ; the kernel's glyph table,
                                              ; copied in at launch
 at_abon     equ at_fontbuf + AT_FONTBYTES     ; byte: the About card is up

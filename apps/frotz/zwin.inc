@@ -2843,11 +2843,13 @@ zw_setup:
     mov [zw_ucol], ax
     call zw_bounds
 
-    mov ax, ZW_SBKB
-    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
+    mov ax, ZW_SBKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
     jnc .got
-    mov ax, ZW_SBKB2
-    MEMKB_CLAIM
+    mov ax, ZW_SBKB2 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .none
     mov ax, ZW_SBKB2
     jmp short .have

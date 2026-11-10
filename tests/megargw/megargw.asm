@@ -113,8 +113,9 @@ mr_entry:
     mov si, mr_s_e90
     call mr_dump
     mov dx, [mr_a]
-    mov ax, 256
-    MEMKB_REGROW
+    mov ax, 256 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+14], si
     jc .l1x
@@ -148,8 +149,9 @@ mr_entry:
     call mr_fill
     inc ax
     call mr_fill
-    mov ax, 384
-    MEMKB_REGROW
+    mov ax, 384 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+22], si
     jc .l1f
@@ -169,8 +171,9 @@ mr_entry:
     call mr_chk
 .l2b:
     mov [mr_res+26], ax
-    mov ax, 160
-    MEMKB_REGROW
+    mov ax, 160 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+28], si
     jc .l1f
@@ -234,7 +237,8 @@ mr_entry:
     call mr_fill
     mov ax, [mr_m]
     sub ax, 128
-    MEMKB_REGROW
+    mov bl, MEMP_REGROW
+    call mr_kb       
     sbb si, si
     mov [mr_res+40], si
     jc .l3f
@@ -245,7 +249,8 @@ mr_entry:
     mov [mr_res+42], ax
     mov ax, [mr_m]
     sub ax, 64
-    MEMKB_REGROW
+    mov bl, MEMP_REGROW
+    call mr_kb       
     sbb si, si
     mov [mr_res+44], si
     jc .l3f
@@ -275,11 +280,12 @@ mr_entry:
     mov ax, 3
 .l3g:
     mov [mr_res+46], ax
-    mov ax, [mr_p]                  ; below the cut: windows 0..P-2
-    dec ax
-    mov cl, 6
+    mov ax, [mr_p]                  ; below the cut: windows 0..P-2, in
+    dec ax                          ; paragraphs (64KB a window)
+    mov cl, 12
     shl ax, cl
-    MEMKB_REGROW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+48], si
     jc .l3f
@@ -522,5 +528,22 @@ mr_wp       dw 0                ; the window OSAPI_WM_CREATE made
 mr_m        dw 0
 mr_p        dw 0
 mr_fill_tok times MR_NFILL * 4 db 0
+
+; mr_kb - OSAPI_MEM_P's verb BL with AX in KB (and, with MEMP_CONV, CX the
+; head in KB): this test plans in KB. AX, CX and SI kept
+mr_kb:
+    push ax
+    push cx
+    push si
+    mov si, cx
+    mov cl, 6
+    shl ax, cl
+    shl si, cl
+    mov cx, si
+    call OSAPI_MEM_P
+    pop si
+    pop cx
+    pop ax
+    ret
 
 OS88_IMAGE_END

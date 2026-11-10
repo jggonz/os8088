@@ -383,8 +383,9 @@ wd_scget:
     push ax
     push dx
     mov word [wd_scn], 0
-    mov ax, (2 * WD_SCHALF) / 1024
-    MEMKB_CLAIM
+    mov ax, ((2 * WD_SCHALF) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [wd_scseg], dx
     clc

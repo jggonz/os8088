@@ -565,7 +565,10 @@ hg_regrow:
     push ax
     mov dx, [hg_r]
     push cx
-    MEMKB_REGROW
+    mov cl, 6                       ; (the KB, in paragraphs)
+    shl ax, cl
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     pop cx
     pop ax
     jc .o                           ; (CL = 1x: refused)

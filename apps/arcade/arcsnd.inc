@@ -129,9 +129,10 @@ ar_snd_frame:
 ; nothing kept
 ar_sb_open:
     mov byte [ar_swhy], 4
-    mov ax, AR_SB_KB
-    mov cx, AR_SB_KB
-    MEMKB_DMA_HI                    ; born PINNED, and never declared: it
+    mov ax, AR_SB_KB * 64
+    mov cx, AR_SB_KB * 64
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; born PINNED, and never declared: it
     jc .no                          ;   lives as long as the bracket
     mov [ar_sbseg], dx
     mov es, dx

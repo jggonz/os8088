@@ -11561,7 +11561,7 @@ vp_sstart:
     push di
     push es
 %ifdef VP_DIAG
-    MEMKB_AVAIL                     ; THE HEAP AS PLAY FOUND IT, for the
+    call vp_mavail              ; THE HEAP AS PLAY FOUND IT, for the
     mov [vp_mrun0], ax              ; card's memory lines (98.3): the
     mov [vp_mfre0], bx              ; largest claim, and all that is free
     mov word [vp_mrun], 0           ; ...and nothing from the ring's sizing
@@ -12084,8 +12084,11 @@ vp_rbhold:
     jnc .h                          ; and the drivers'
     mov ax, VP_RBRKB
 .h:
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
     xor cx, cx
-    MEMKB_DMA_HI
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P
     jc .n
     mov [vp_rbh], dx
 .n:
@@ -17610,7 +17613,7 @@ vp_sndprep:
     push bx                         ; A CARD: the ring and its two control
     mov ax, (VP_RL / 1024 + 1) * 64 ; words, page-safe and never moved, and
     mov cx, ax                      ; CONVENTIONAL: the paragraph door with a
-    mov bl, MEMP_CLAIM_HI           ; head (vp_aseg is in vp_rlst, and
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV           ; head (vp_aseg is in vp_rlst, and
     call OSAPI_MEM_P                ; kern_mega's KB DMA door would put it
     pop bx                          ; above 1MB, KERN-MEGA-PLAN 14.160)
     jc .ret                         ; no room for it: the play is silent
@@ -24091,10 +24094,22 @@ vp_rclaim:
 ; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
 ; CF, DX; AX, BX and CX kept
 .p:
-    push bx                         ; the KB arm with a head (SPEC.md
-    mov bl, MEMP_KB + MEMP_KBH      ; 50.3.7.1): conventional, AX and CX
-    call OSAPI_MEM_P                ; kept
+    push ax
+    push bx
+    push cx
+    mov ch, cl                      ; the head's KB (64 at most)...
+    xor cl, cl
+    shr cx, 1
+    shr cx, 1                       ; ...in paragraphs
+    push cx
+    mov cl, 6
+    shl ax, cl                      ; ...and the claim's
+    pop cx
+    mov bl, MEMP_CONV               ; conventional, with the head
+    call OSAPI_MEM_P
+    pop cx
     pop bx
+    pop ax
     ret
 
 ; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose
@@ -24128,17 +24143,32 @@ vp_rclk1:
 .no:
     stc
     ret
-vp_mclaim:                          ; OSAPI_MEM_CLAIM, IN CONVENTIONAL MEMORY:
-    push cx                         ; the DMA door with no head IS the plain
-    xor cx, cx                      ; claim (os88api.inc), and OS88_HIGHMEM
-    MEMKB_DMA                       ; does not reach it - every claim but the
-    pop cx                          ; ring's is paragraph arithmetic somewhere
-    ret                             ; (KERN-MEGA-PLAN 14.41)
+vp_mclaim:                          ; AX = KB, IN CONVENTIONAL MEMORY:
+    push bx                         ; MEMP_CONV with no head (OS88_HIGHMEM
+    mov bl, MEMP_CONV               ; does not reach it - every claim but the
+    call vp_mkb                     ; ring's is paragraph arithmetic somewhere,
+    pop bx                          ; KERN-MEGA-PLAN 14.41)
+    ret
 %else
-vp_mclaim:                          ; OSAPI_MEM_CLAIM
-    MEMKB_CLAIM
+vp_mclaim:                          ; AX = KB
+    push bx
+    mov bl, MEMP_CLAIM
+    call vp_mkb
+    pop bx
     ret
 %endif
+; vp_mkb - OSAPI_MEM_P's verb BL with AX = KB, the unit the player plans in,
+; and no head: CF, DX; AX and CX kept
+vp_mkb:
+    push ax
+    push cx
+    mov cl, 6
+    shl ax, cl
+    xor cx, cx
+    call OSAPI_MEM_P
+    pop cx
+    pop ax
+    ret
 vp_ticks:                           ; OSAPI_GET_TICKS
     call OSAPI_GET_TICKS
     ret
@@ -24156,16 +24186,20 @@ vp_clips:                           ; ...or BX as it is
     call OSAPI_WM_CLIP_SET
     ret
 %ifdef PKG_MEGA
-vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI, in conventional
-    push cx                         ; memory as vp_mclaim's
-    xor cx, cx
-    MEMKB_DMA_HI
-    pop cx
-%else
-vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI
-    MEMKB_CLAIM_HI
-%endif
+vp_mclhi:                           ; AX = KB, from the top, in
+    push bx                         ; conventional memory as vp_mclaim's
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call vp_mkb
+    pop bx
     ret
+%else
+vp_mclhi:                           ; AX = KB, from the top
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    call vp_mkb
+    pop bx
+    ret
+%endif
 ; vp_mclp / vp_mclhip - OSAPI_MEM_P's claim, from the bottom / the TOP: AX =
 ; PARAGRAPHS -> CF=0 DX = the claim, AX = the paragraphs GRANTED (SPEC.md
 ; 50.3.7). For a claim whose size is a byte count, which pays the heap's
@@ -24187,20 +24221,27 @@ vp_mclp:
     pop bx
     ret
 vp_mclpb:
-    push cx
 %ifdef PKG_MEGA
-    mov cx, MEMP_CONV
-%else
+    push cx
     xor cx, cx
-%endif
+    or bl, MEMP_CONV
     call OSAPI_MEM_P
     pop cx
+%else
+    call OSAPI_MEM_P                ; (CX is not read)
+%endif
     ret
 vp_mmov:                            ; OSAPI_MEM_MOVABLE
     call OSAPI_MEM_MOVABLE
     ret
-vp_mavail:                          ; OSAPI_MEM_AVAIL
-    MEMKB_AVAIL
+vp_mavail:                          ; MEMP_AVAIL's AX/BX, in KB; CX kept
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
     ret
 vp_xcaps:                           ; OSAPI_XMEM_CAPS
     call OSAPI_XMEM_CAPS

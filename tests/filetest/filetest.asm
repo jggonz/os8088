@@ -105,8 +105,9 @@ ft_run:
     ; (SPEC.md 50.3) rather than this package's own bss, because a package's
     ; region caps at one segment. A machine that cannot fund the claim records
     ; nothing rather than failing: refusal is a normal path.
-    mov ax, FT_BIGKB
-    MEMKB_CLAIM                 ; DX = the claim's base segment
+    mov ax, FT_BIGKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the claim's base segment
     jc .nobig
     mov [ft_bseg], dx
 

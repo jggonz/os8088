@@ -120,6 +120,7 @@ int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
 void os88_task_alive(void *win);
 int  os88_peek(unsigned seg, unsigned off);
 unsigned os88_mem_claim(int kb);        /* Undo's snapshot: a static block */
+unsigned os88_mem_claim_p(unsigned paras);
 int  os88_mem_movable(unsigned seg, int on);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);

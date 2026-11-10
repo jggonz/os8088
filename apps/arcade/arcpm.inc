@@ -220,8 +220,9 @@ pm_voices:                          ; the volume's register, the frequency's
 ; and the tiles' cached planes (64KB, ARCADE-SPEC 7.7) claimed for it and
 ; freed after. pm_setup clears it in every bracket
 pm_on:
-    mov ax, 64
-    MEMKB_CLAIM
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .r
     mov [pm_shseg], dx
     mov dx, [pm_shseg]              ; MOVABLE (SPEC.md 66): pm_shmv
@@ -268,8 +269,9 @@ PM_PRTKB    equ 48                  ; 0000-BEFF
 pm_build:
     call ar_fill
     push bx
-    mov ax, PM_PRTKB
-    MEMKB_CLAIM
+    mov ax, PM_PRTKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [pm_rclaim], dx
     mov [ar_rseg], dx

@@ -499,7 +499,10 @@ ar_romtry:
     mov ax, dx                      ; the KB it needs, and one over
     inc ax
     push ax
-    MEMKB_CLAIM
+    mov cl, 6                       ; ...in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     pop cx
     jc .nomem
     mov [ar_rimgc], dx

@@ -1448,7 +1448,7 @@ trk_fs_enter:
     call trk_txon                   ; THE TEXT SCREEN'S SHADOW IS CLAIMED HERE
     je .noshadow                    ; (SPEC.md 45.13.8), before the bracket
     mov ax, OS88_BYTES_PARA(TTX_SHBYTES)  ; and not in it: a refusal must
-    xor cx, cx                      ; still leave a screen to fall back to,
+                                    ; still leave a screen to fall back to,
     mov bl, MEMP_CLAIM              ; in PARAGRAPHS (9,676 bytes: 9.5KB at
     call OSAPI_MEM_P                ; the granule, 10 at a KB - SPEC.md 50.3.7)
     jc .noshadow                    ; and ttx_begin refusing on a zero
@@ -1891,9 +1891,10 @@ trk_ring_pick:
     push ax
     push bx
     push cx
-    MEMKB_AVAIL                     ; AX = largest run KB (BX = total)
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest run (BX = total), paragraphs
     mov cx, TRK_RING_SM
-    cmp ax, TRK_ROOMYKB
+    cmp ax, TRK_ROOMYKB * 64
     jbe .set
     call trk_rate_pick              ; AX = the rate the next Play opens at:
     cmp ax, TRK_RING_HZ             ; a slow stream never fills the full ring

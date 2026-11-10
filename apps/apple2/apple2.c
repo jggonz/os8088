@@ -1565,7 +1565,7 @@ static void a2_fast_go(void)
      * refuses it, and the fast core never ran on kern_mega. The image is
      * only ever data, so it may go above 1MB */
     code = a2f_claimcode();
-    img = code ? os88_mem_claim(64) : 0;
+    img = code ? os88_mem_claim_p(4096) : 0;
     if (img == 0) {
         if (code)
             os88_mem_free(code);
@@ -2593,7 +2593,7 @@ void *os88_main(void)
     int wh, i, j;
 
     /* --- the claims (APPLE2-SPEC section 3.1) ----------------------------- */
-    a2_m.ramseg = os88_mem_claim(A2_RAMKB); /* the Apple's address space is its
+    a2_m.ramseg = os88_mem_claim_p(A2_RAMKB * 64); /* the Apple's address space is its
                                              * own segment, up to the scratch
                                              * page's last byte */
     if (a2_m.ramseg == 0) {

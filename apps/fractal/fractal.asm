@@ -846,13 +846,17 @@ fr_cache_row:
     mov cx, [fr_ckb]
     cmp cx, FR_CACHE_MAXKB
     jae .r                          ; the ceiling: our offsets are words
-    MEMKB_AVAIL                     ; AX = largest free run in KB (BX too)
-    add cx, cx                      ; the increment is the size again, and we
-    cmp ax, cx                      ; want that much left for everybody else
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = largest free run, paragraphs (BX too)
+    mov ch, cl                      ; the increment is the size again, and we
+    xor cl, cl                      ; want that much left for everybody else:
+    shr cx, 1                       ; CX = KB * 2 * 64, the new size in
+    cmp ax, cx                      ; paragraphs (KB < 32: CH holds it)
     jb .r
-    xchg ax, cx                     ; AX = the new size in KB
+    xchg ax, cx                     ; AX = the new size
     mov dx, [fr_cseg]
-    MEMKB_REGROW                    ; out DX = the base NOW: it may have MOVED
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; out DX = the base NOW: it may have MOVED
     jc .r
     mov [fr_cseg], dx
     mov es, dx
@@ -1192,8 +1196,9 @@ fr_redraw:
 fr_kick_s:
     cmp word [fr_cseg], 0
     jne .have
-    mov ax, FR_CACHE_KB0
-    MEMKB_CLAIM                     ; DX = base segment, CF=1 refused
+    mov ax, FR_CACHE_KB0 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = base segment, CF=1 refused
     jc .have                        ; a refusal is transient: retry every kick
     mov [fr_cseg], dx
     mov byte [fr_ckb], FR_CACHE_KB0 ; BYTE stores onto the loader's zeros:

@@ -71,7 +71,13 @@ fl_entry:
     push di
     mov si, fl_s_av                 ; --- what is free, before we take any
     call fl_say
-    MEMKB_AVAIL
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; (paragraphs: the row reads KB)
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
     call fl_hex4
     mov al, ' '
     out 0xE9, al
@@ -86,8 +92,9 @@ fl_entry:
     mov ax, [0xFFFF]                ; past the segment: #GP in the entry proc
 %endif
 %if FLT_MODE == 4
-    mov ax, 32                      ; a claim, held
-    MEMKB_CLAIM
+    mov ax, 32 * 64                      ; a claim, held
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
 %endif
     mov si, fl_tpl

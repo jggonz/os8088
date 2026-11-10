@@ -457,8 +457,9 @@ rw_entry:
     call rw_ameta                   ; the meta, checked and banked
     jc .refused                     ;   (it said)
 %endif
-    mov ax, (RW_PBUF + RW_FBUF + 1023) / 1024 ; the frame as the screen
-    MEMKB_CLAIM                     ;   takes it, and rdg_render's after it
+    mov ax, (RW_PBUF + RW_FBUF + 15) / 16 ; the frame as the screen
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ;   takes it, and rdg_render's after it
     jc .noroom
     mov [rw_pseg], dx
 %ifdef PKG_MEGA
@@ -938,7 +939,14 @@ rw_load0:
     mov ax, [rw_romkb]              ;   Dream Land fits by exactly that KB
 .claim:
     push ax
-    MEMKB_CLAIM                     ; DX = its segment
+    push bx
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = its segment
+    pop cx
+    pop bx
     pop ax
     jnc .got
     cmp word [rdg_dmgseg], 0         ; no room: the damage memory, claimed
@@ -1496,7 +1504,6 @@ rw_jppara:
 rw_pclaim:
     push bx
     push cx
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     pop cx
@@ -1854,7 +1861,10 @@ rw_ramsetup:
     mul ah                          ; AX = 8KB a bank
     add al, [rw_rtc]                ; + 1KB for the clock's trailer
     push ax
-    MEMKB_CLAIM                     ; DX = its segment (the state block
+    mov cl, 6                       ; ...in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = its segment (the state block
     pop ax                          ;   names it: rw_mreloc, rwmove.inc)
     jc .room
     mov [rw_ramseg], dx
@@ -1984,8 +1994,11 @@ rw_prfload:
 .want:
     cmp byte [rw_prfon], 0          ; Machine > Profile: off, no claim
     je .r0
-    mov ax, RW_PRFKB
-    MEMKB_CLAIM                     ; DX = its segment (the state block
+    mov ax, RW_PRFKB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = its segment (the state block
+    pop bx
     jc .r0                          ;   names it: rw_mreloc, rwmove.inc)
     mov [rw_prfseg], dx
     call rw_prfrd
@@ -2078,8 +2091,9 @@ rw_jit2claim:
     je .r
     cmp word [rw_prfseg], 0         ; (a load that failed left one)
     jne .have
-    mov ax, RW_PRFKB
-    MEMKB_CLAIM                     ; DX = the profile's segment
+    mov ax, RW_PRFKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the profile's segment
     jc .r
     mov [rw_prfseg], dx
 .have:
@@ -2124,8 +2138,9 @@ rw_jit2get:
     je .r
     cmp word [rw_jit2seg], 0
     jne .r
-    mov ax, 64
-    MEMKB_CLAIM                     ; DX = its segment (the state block
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = its segment (the state block
     jc .r                           ;   names it: rw_mreloc, rwmove.inc)
     mov [rw_jit2seg], dx
 .r:
@@ -4363,8 +4378,11 @@ rw_planes:
 rw_dmgclaim:
     cmp word [rdg_dmgseg], 0
     jne .r
-    mov ax, (RDG_DMG_SIZE + 1023) / 1024
-    MEMKB_CLAIM
+    mov ax, (RDG_DMG_SIZE + 15) / 16
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .r
     mov [rdg_dmgseg], dx
 .r:

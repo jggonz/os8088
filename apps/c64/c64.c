@@ -2008,7 +2008,7 @@ static void ovl_jit_init(void)
      * image and its tables are 39.5KB of either */
     seg = 0;
     for (kb = 64; kb >= 48 && seg == 0; kb -= 16)
-        seg = os88_mem_claim(kb);
+        seg = os88_mem_claim_p((unsigned)kb << 6);
     kb += 16;
     if (seg != 0 && c64f_codesel(seg) == seg) {
         c64j_setup(seg, os88_part_seg(C64_JIT_PART), C64_JIT_LEN, c64_fseg, 0, kb);
@@ -2148,7 +2148,7 @@ static void *ovl_main(void)
     void *win;
     int wh;
 
-    c64_m.ramseg = os88_mem_claim(64);      /* the C64's RAM is its own
+    c64_m.ramseg = os88_mem_claim_p(4096);      /* the C64's RAM is its own
                                              * segment (3.1) */
     if (c64_m.ramseg == 0) {
         ovl_refuse_kb("C64: 64KB? ");
