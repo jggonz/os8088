@@ -49,7 +49,7 @@ static void jw_move(pdw d, pdw sr, pdw n) { pdw i; if (d < sr) for (i = 0; i < n
 #else
 /* the target: the slot's workspace is the far segment g_wseg (the shell's), reached only through
  * pdmath's movers (PAGEDESK-SPEC 4.3) */
-extern pdw g_wseg;
+extern pdw g_wseg, g_wbytes;
 #define jw_rb(o)     pd_fpeekb(g_wseg, (pdw)(o))
 #define jw_wb(o, v)  pd_fpokeb(g_wseg, (pdw)(o), (pdb)(v))
 #define jw_rw(o)     pd_fpeekw(g_wseg, (pdw)(o))
@@ -75,11 +75,16 @@ static void jw_move(pdw d, pdw sr, pdw n)
 #define JW_GR     0x3000u
 #define JW_INT    0x5000u
 #define JW_IAID   0x6A00u
-#define JW_BAND   0x7200u
+#define JW_BAND   0x7200u       /* where the band starts in a page that needs the tables above   */
+#define JW_BANDS  0x3000u       /* ... and where the one row of a streamed page starts (GB only) */
 #ifndef JB_BANDMAX
-#define JB_BANDMAX 16384u
+#define JB_BANDMAX 16384u       /* the most a band is given (the WANT size)                      */
 #endif
-#define JW_SYM    ((pdw)(JW_BAND + JB_BANDMAX))
+/* the workspace is a range (20.22.12): want JW_SIZE, min what the page needs. Set by jb_open. */
+static pdw jb_wsz, jb_bandoff, jb_bandmax, jb_symbase;
+#ifdef PD_HOST
+unsigned jb_host_wsz;           /* the harness shrinks the slot to test the range */
+#endif
 #define JB_HASH   4096u
 
 #define JBE_OK      0
@@ -106,6 +111,7 @@ static int jb_getb(void)
 }
 
 /* ---- the MQ decoder (T.88 annex E, hardware convention) -------------------- */
+#ifndef JB_ASM
 static const pdw mq_qe[47] = {
     0x5601, 0x3401, 0x1801, 0x0AC1, 0x0521, 0x0221, 0x5601, 0x5401, 0x4801, 0x3801,
     0x3001, 0x2401, 0x1C01, 0x1601, 0x5601, 0x5401, 0x5101, 0x4801, 0x3801, 0x3401,
@@ -119,6 +125,7 @@ static const pdb mq_nl[47] = {
     1, 6, 9, 12, 29, 33, 6, 14, 14, 14, 17, 18, 20, 21, 14, 14, 15, 16, 17, 18, 19, 19, 20, 21,
     22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 46 };
 
+#endif
 static pdw mq_chi, mq_clo, mq_a, mq_ct;
 static pdw mq_cur, mq_nxt;
 
@@ -130,6 +137,7 @@ static pdw mq_fetch(void)
     if (c < 0) { if (mq_eofn < 0xFFFFu) mq_eofn++; return 0xFFu; }
     return (pdw)c;
 }
+#ifndef JB_ASM
 static void mq_add(pdw vhi, pdw vlo)
 {
     mq_clo = (pdw)(mq_clo + vlo);
@@ -147,6 +155,9 @@ static void mq_bytein(void)
     mq_cur = mq_nxt; mq_nxt = mq_fetch();
     mq_add(0, (pdw)(mq_cur << 8)); mq_ct = 8;
 }
+#else
+extern void mq_bytein(void);   /* pdxijb2.inc */
+#endif
 /* begin an arithmetic-coded stream at the next byte of the segment */
 static void mq_init(void)
 {
@@ -159,6 +170,7 @@ static void mq_init(void)
     mq_ct -= 7;
     mq_a = 0x8000u;
 }
+#ifndef JB_ASM
 /* one decision with the context whose state byte is at workspace offset o */
 static int mq_bit(pdw o)
 {
@@ -184,6 +196,10 @@ static int mq_bit(pdw o)
     jw_wb(o, (st & 0x80) | (ix << 1) | mps);
     return (int)d;
 }
+
+#else
+extern int mq_bit(pdw o);      /* pdxijb2.inc: the same decision, in assembly */
+#endif
 
 /* ---- integer and IAID decoders (annex A) ------------------------------------ */
 #define IA_DH   0
@@ -326,7 +342,7 @@ static int gb_px(const pdb *r, pdi x)
 /* the state byte for context ctx; the hash for template 0 */
 static pdw gb_cx(pdw ctx)
 {
-    pdw h = (pdw)((ctx ^ (ctx >> 6) ^ (ctx << 3)) & (JB_HASH - 1)), n;
+    pdw h = (pdw)((ctx ^ (ctx >> 8)) & (JB_HASH - 1)), n;
     for (n = 0; n < JB_HASH; n++) {
         pdw st = jw_rb((pdw)(JW_GBHS + h));
         if (!st) { jw_ww((pdw)(JW_GB + h * 2), ctx); jw_wb((pdw)(JW_GBHS + h), 0x80); return (pdw)(JW_GBHS + h); }
@@ -337,6 +353,9 @@ static pdw gb_cx(pdw ctx)
 }
 
 static int gb_fail;
+#ifdef JB_ASM
+extern void gb_row0(void);     /* pdxijb2.inc: one template-0 row, nominal AT, no skip */
+#endif
 
 static int gb_bit(pdw ctx)
 {
@@ -365,7 +384,7 @@ static void gb_sink(pdw y)
 static void gb_cinit(void)
 {
     gb_hash = (pdb)(gb_tpl == 0);
-    if (gb_hash) jw_zero(JW_GB, (pdw)(JB_HASH * 3)); else jw_zero(JW_GB, (pdw)(1u << (gb_tpl == 1 ? 13 : 10)));
+    if (gb_hash) { jw_zero(JW_GB, (pdw)(JB_HASH * 3)); jw_wb(JW_GBHS, 0x80); } /* context 0 owns slot 0 */ else jw_zero(JW_GB, (pdw)(1u << (gb_tpl == 1 ? 13 : 10)));
 }
 static pdw gb_y, gb_ltp, gb_nb;
 static void gb_begin(void)
@@ -394,6 +413,13 @@ static pdw gb_nextrow(void)
         }
     }
     for (i = 0; i < nb; i++) gb_c[i] = 0;
+#ifdef JB_ASM
+    if (t == 0 && gb_atok && !gb_skip) {      /* the common scan: template 0, nominal AT */
+        gb_row0();
+        if (gb_fail) return PDE_LIMIT;
+        goto rowdone;
+    }
+#endif
     /* windows at x = 0 */
     w0 = 0; w1 = 0; w2 = 0;
     for (k = 0; k <= gb_l1[t]; k++) w1 = (pdw)((w1 << 1) | gb_px(gb_p1, (pdi)k));
@@ -928,7 +954,7 @@ static int jb_inband(void)
 
 static void jb_cv_band(void)
 {
-    cv_off = JW_BAND; cv_rb = jb_rb; cv_w = jb_pw; cv_h = jb_brows; cv_y0 = (pdi)jb_by0;
+    cv_off = jb_bandoff; cv_rb = jb_rb; cv_w = jb_pw; cv_h = jb_brows; cv_y0 = (pdi)jb_by0;
 }
 
 static pdw jb_segment_generic(void)
@@ -1583,7 +1609,7 @@ static void jb_band_start(pdw by0)
     pdw n;
     jb_by0 = by0;
     jb_cv_band();
-    for (n = 0; n < (pdw)(jb_rb * jb_brows); n++) jw_wb((pdw)(JW_BAND + n), jb_pdef ? 0xFF : 0);
+    for (n = 0; n < (pdw)(jb_rb * jb_brows); n++) jw_wb((pdw)(jb_bandoff + n), jb_pdef ? 0xFF : 0);
     if (jb_globals && !ix_open(1)) jb_pass();
     if (ix_open(0)) return;
     jb_pass();
@@ -1640,19 +1666,33 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
         if (jb_unb) { nreg = 2; break; }
         jb_skip();
     }
-    jb_sp = JW_SYM; jb_hp = JW_SIZE;
+    jb_wsz = JW_SIZE;
+#ifdef PD_HOST
+    if (jb_host_wsz && jb_host_wsz < jb_wsz) jb_wsz = (pdw)jb_host_wsz;
+#else
+    if (g_wbytes < jb_wsz) jb_wsz = g_wbytes;
+#endif
+    jb_bandoff = JW_BAND;
     jb_gnext = 0xFFFFu;
     jb_nrg = 0;
 #ifndef JB_NOSTREAM
     if (nreg == 1 && cand && !jb_globals) {
-        if (jb_stream_setup(cand) == PDE_OK) {
+        if ((pdw)(JW_BANDS + jb_rb) <= jb_wsz && jb_stream_setup(cand) == PDE_OK) {
+            jb_bandoff = JW_BANDS;
             jb_stream = 1; jb_sy = 0; jb_brows = 1; jb_by0 = 0;
             return PDE_OK;
         }
     }
 #endif
     n = (pdw)(1u << bl_scale);
-    s = (pdw)(JB_BANDMAX / jb_rb);
+    /* band: a third of what is above the tables, between one block of rows and the want size;
+     * the symbols and the grids get the rest */
+    if (jb_wsz < (pdw)(JW_BAND + n * jb_rb + 1024u)) return PDE_LIMIT;
+    jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 3);
+    if (jb_bandmax > JB_BANDMAX) jb_bandmax = JB_BANDMAX;
+    if (jb_bandmax < n * jb_rb) jb_bandmax = (pdw)(n * jb_rb);
+    jb_symbase = (pdw)(JW_BAND + jb_bandmax); jb_sp = jb_symbase; jb_hp = jb_wsz;
+    s = (pdw)(jb_bandmax / jb_rb);
     s = (pdw)(s - s % n);
     if (!s) return PDE_LIMIT;
     jb_brows = s > jb_ph ? (pdw)(((jb_ph + n - 1) / n) * n) : s;
@@ -1669,10 +1709,10 @@ static void jb_stream_one(void)
         if (jb_smmr) { cf_decode(); src = cf_ref; gb_y++; }
         else if (mq_eofn <= MQ_DEAD) { if (gb_nextrow()) gb_y = gb_h; src = gb_p1; }
         else { gb_y++; for (i = 0; i < gb_nb; i++) gb_p1[i] = 0; src = gb_p1; }
-        cv_off = JW_BAND; cv_rb = jb_rb; cv_w = jb_pw; cv_h = 1; cv_y0 = (pdi)y;
-        jw_put(JW_BAND, row, jb_rb);
+        cv_off = jb_bandoff; cv_rb = jb_rb; cv_w = jb_pw; cv_h = 1; cv_y0 = (pdi)y;
+        jw_put(jb_bandoff, row, jb_rb);
         cv_row((pdi)y, (pdi)jb_rx, src, gb_w, jb_rop);
-        jw_get(row, JW_BAND, jb_rb);
+        jw_get(row, jb_bandoff, jb_rb);
     }
     jb_sy++;
 }
@@ -1703,7 +1743,7 @@ static pdw jb_getrow(pdw r)
     if (jb_gnext != by) { jb_band_start(by); jb_gnext = by; }
     last = (pdw)(first + n); if (last > jb_ph) last = jb_ph;
     for (y = first; y < last; y++) {
-        pdw o = (pdw)(JW_BAND + (pdw)(y - by) * jb_rb);
+        pdw o = (pdw)(jb_bandoff + (pdw)(y - by) * jb_rb);
         jw_get(jb_srow, o, jb_rb);
         for (i = 0; i < jb_rb; i++) jb_srow[i] = (pdb)~jb_srow[i];
         if (jb_pw & 7) jb_srow[jb_rb - 1] |= (pdb)~(0xFF00 >> (jb_pw & 7));

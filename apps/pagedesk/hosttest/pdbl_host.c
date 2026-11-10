@@ -52,6 +52,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "jbig2")) {
         if (argc < 7) return 2;
         if (strcmp(argv[3], "-")) ix_buf[1] = slurp(argv[3], &ix_len[1]);
+        if (getenv("JB_WSZ")) jb_host_wsz = (unsigned)atoi(getenv("JB_WSZ"));
         e = jb_open(ix_buf[1] != 0, (pdw)atoi(argv[4]), (pdw)atoi(argv[5]));
         o = fopen(argv[6], "wb");
         if (e) { printf("error %u\n", e); return 1; }
@@ -60,6 +61,7 @@ int main(int argc, char **argv)
             e = jb_getrow(r); if (e) { printf("rowerr %u at %u\n", e, r); return 1; }
             fwrite(bl_out, 1, bl_orb, o);
         }
+        fprintf(stderr, "inc %u\n", jb_inc);
         fclose(o); return 0;
     }
     return 2;

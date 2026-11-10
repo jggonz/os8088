@@ -462,7 +462,7 @@ if __name__ == '__main__':
     if a == ['all']:
         build_host()
         a = ['ccitt', 'jb2-generic', 'jb2-text', 'jb2-huff', 'jb2-halftone', 'jb2-multi', 'mutool-ccitt', 'mutool-jb2-generic',
-             'mutool-jb2-text', 'mutool-jb2-huff', 'mutool-jb2-halftone', 'mutool-jb2-multi', 'fuzz']
+             'mutool-jb2-text', 'mutool-jb2-huff', 'mutool-jb2-halftone', 'mutool-jb2-multi', 'jb2-range', 'fuzz']
     for what in a or ['ccitt']:
         if what == 'fuzz': f += run_fuzz()
         if what == 'ccitt': f += check_ccitt(rnd)
@@ -477,5 +477,12 @@ if __name__ == '__main__':
         if what == 'jb2-multi': f += check_jb2_multi(rnd, BINS)
         if what == 'mutool-jb2-multi': f += check_jb2_multi(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
+        if what == 'jb2-range':             # a smaller slot: bands shrink, the picture does not change
+            for wsz in ('31000', '36000', '48000'):
+                os.environ['JB_WSZ'] = wsz
+                print('workspace', wsz)
+                f += check_jb2_generic(rnd, BINS)
+                f += check_jb2_multi(rnd, BINS)
+            del os.environ['JB_WSZ']
     sys.exit(1 if f else 0)
 
