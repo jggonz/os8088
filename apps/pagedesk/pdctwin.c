@@ -10,6 +10,9 @@
 #include "pdabi.h"
 #include "pdcrypto.h"
 
+/* weak: pdeng.c and pdxk.c each include this file on the host, and a harness links both */
+#define PDC_WEAK __attribute__((weak))
+
 #define ROL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 #define ROR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 #define ROR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
@@ -39,11 +42,11 @@ static const uint8_t md5_s[64] = {
 7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22, 5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
 4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23, 6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21 };
 
-void pdc_md5_init(pdw *st)
+PDC_WEAK void pdc_md5_init(pdw *st)
 {
     s32(st, 0, 0x67452301); s32(st, 1, 0xefcdab89); s32(st, 2, 0x98badcfe); s32(st, 3, 0x10325476);
 }
-void pdc_md5_block(pdw *st, const pdb *blk)
+PDC_WEAK void pdc_md5_block(pdw *st, const pdb *blk)
 {
     uint32_t m[16], a = g32(st,0), b = g32(st,1), c = g32(st,2), d = g32(st,3), f, t;
     int i, g;
@@ -71,12 +74,12 @@ static const uint32_t k256[64] = {
 0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
-void pdc_sha256_init(pdw *st)
+PDC_WEAK void pdc_sha256_init(pdw *st)
 {
     static const uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
     int i; for (i = 0; i < 8; i++) s32(st, i, h[i]);
 }
-void pdc_sha256_block(pdw *st, const pdb *blk)
+PDC_WEAK void pdc_sha256_block(pdw *st, const pdb *blk)
 {
     uint32_t w[64], v[8], t1, t2; int i;
     for (i = 0; i < 16; i++)
@@ -114,19 +117,19 @@ static const uint64_t k512[80] = {
 0x113f9804bef90daeULL,0x1b710b35131c471bULL,0x28db77f523047d84ULL,0x32caab7b40c72493ULL,0x3c9ebe0a15c9bebcULL,
 0x431d67c49c100d4cULL,0x4cc5d4becb3e42b6ULL,0x597f299cfc657e2aULL,0x5fcb6fab3ad6faecULL,0x6c44198c4a475817ULL };
 static void init512(pdw *st, const uint64_t *h) { int i; for (i = 0; i < 8; i++) s64(st, i, h[i]); }
-void pdc_sha512_init(pdw *st)
+PDC_WEAK void pdc_sha512_init(pdw *st)
 {
     static const uint64_t h[8] = {0x6a09e667f3bcc908ULL,0xbb67ae8584caa73bULL,0x3c6ef372fe94f82bULL,0xa54ff53a5f1d36f1ULL,
         0x510e527fade682d1ULL,0x9b05688c2b3e6c1fULL,0x1f83d9abfb41bd6bULL,0x5be0cd19137e2179ULL};
     init512(st, h);
 }
-void pdc_sha384_init(pdw *st)
+PDC_WEAK void pdc_sha384_init(pdw *st)
 {
     static const uint64_t h[8] = {0xcbbb9d5dc1059ed8ULL,0x629a292a367cd507ULL,0x9159015a3070dd17ULL,0x152fecd8f70e5939ULL,
         0x67332667ffc00b31ULL,0x8eb44a8768581511ULL,0xdb0c2e0d64f98fa7ULL,0x47b5481dbefa4fa4ULL};
     init512(st, h);
 }
-void pdc_sha512_block(pdw *st, const pdb *blk)
+PDC_WEAK void pdc_sha512_block(pdw *st, const pdb *blk)
 {
     uint64_t w[80], v[8], t1, t2; int i, j;
     for (i = 0; i < 16; i++) { w[i] = 0; for (j = 0; j < 8; j++) w[i] = (w[i] << 8) | blk[8*i+j]; }
@@ -145,14 +148,14 @@ void pdc_sha512_block(pdw *st, const pdb *blk)
 }
 
 /* ---- RC4 ---------------------------------------------------------------- */
-void pdc_rc4_ks(pdb *s, const pdb *key, pdw n)
+PDC_WEAK void pdc_rc4_ks(pdb *s, const pdb *key, pdw n)
 {
     int i, j = 0; pdb t;
     for (i = 0; i < 256; i++) s[i] = (pdb)i;
     for (i = 0; i < 256; i++) { j = (j + s[i] + key[i % n]) & 255; t = s[i]; s[i] = s[j]; s[j] = t; }
     s[256] = 0; s[257] = 0;
 }
-void pdc_rc4(pdb *s, pdb *buf, pdw n)
+PDC_WEAK void pdc_rc4(pdb *s, pdb *buf, pdw n)
 {
     unsigned i = s[256], j = s[257]; pdb t;
     while (n--) {
@@ -187,7 +190,7 @@ static void sb_init(void)
     for (i = 0; i < 256; i++) isb[sb[i]] = (uint8_t)i;
     sb_ready = 1;
 }
-void pdc_aes_ks(pdb *rk, const pdb *key, pdw nk)
+PDC_WEAK void pdc_aes_ks(pdb *rk, const pdb *key, pdw nk)
 {
     int i, total = 4 * (nk + 7); uint8_t rcon = 1, t[4], u;
     sb_init();
@@ -203,7 +206,7 @@ void pdc_aes_ks(pdb *rk, const pdb *key, pdw nk)
         for (u = 0; u < 4; u++) rk[4*i + u] = rk[4*(i - nk) + u] ^ t[u];
     }
 }
-void pdc_aes_enc(const pdb *rk, pdw nr, const pdb *in, pdb *out)
+PDC_WEAK void pdc_aes_enc(const pdb *rk, pdw nr, const pdb *in, pdb *out)
 {
     uint8_t s[16], t[16]; int r, i, c;
     sb_init();
@@ -223,7 +226,7 @@ void pdc_aes_enc(const pdb *rk, pdw nr, const pdb *in, pdb *out)
     }
     memcpy(out, s, 16);
 }
-void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out)
+PDC_WEAK void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out)
 {
     uint8_t s[16], t[16]; int r, i, c;
     sb_init();
@@ -242,7 +245,7 @@ void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out)
     }
     memcpy(out, s, 16);
 }
-void pdc_cbc_enc(const pdb *rk, pdw nr, pdb *iv, pdb *buf, pdw nblk)
+PDC_WEAK void pdc_cbc_enc(const pdb *rk, pdw nr, pdb *iv, pdb *buf, pdw nblk)
 {
     int i;
     while (nblk--) {
@@ -251,7 +254,7 @@ void pdc_cbc_enc(const pdb *rk, pdw nr, pdb *iv, pdb *buf, pdw nblk)
         memcpy(iv, buf, 16); buf += 16;
     }
 }
-void pdc_cbc_dec(const pdb *rk, pdw nr, pdb *iv, pdb *buf, pdw nblk)
+PDC_WEAK void pdc_cbc_dec(const pdb *rk, pdw nr, pdb *iv, pdb *buf, pdw nblk)
 {
     pdb c[16]; int i;
     while (nblk--) {
