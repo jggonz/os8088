@@ -5,8 +5,11 @@ With:      qpdf 12.4.2 (Homebrew), --static-id --static-aes-iv
            (and --allow-weak-crypto for the RC4 files, which qpdf 12 refuses otherwise)
 From:      apps/pagedesk/samples/{HELLO,MARKUP,FLATE,PAGES,XTGUIDE,ACROFORM}.PDF
 
-Each file is a real qpdf encryption of a sample, deterministic for one qpdf version;
-MANIFEST.TXT lists  file, base, user password ("-" = the empty one), owner password,
+Each file is a real qpdf encryption of a sample. The RC4 and AESV2 files are byte-identical on
+every run of the tool (the file key of those derives from the passwords, /O and /ID, and the IVs are
+static); the R5 and R6 files (AES_256_*, GUIDE_R6) are NOT: qpdf draws their file key and salts at
+random, whatever flags it is given, so the copies committed here are the reference and a fresh run
+makes equivalent but different bytes (the tests do not mind). MANIFEST.TXT lists  file, base, user password ("-" = the empty one), owner password,
 algorithm. The owner password of all of them is "owner"; the user password of the *_PW
 files is "secret".
 
