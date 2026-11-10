@@ -540,7 +540,7 @@ static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len, pdw plen)
     static struct pd_u32 u, p;
     pdw cb, head, cap, room, seg, got, i, rr, need, n;
     room = syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10);         /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
-    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len) return 0;   /* cap below cannot wrap */
+    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len || g_fioerr) return 0;   /* cap below cannot wrap; a failed read ends the page view's (QA F21) */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
     cb = file_enter();

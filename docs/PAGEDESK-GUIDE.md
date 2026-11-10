@@ -37,7 +37,13 @@ licence), the eight sample PDFs and, on every geometry but 360 KB,
 `PDFONTX.RES` (the other font sizes, optional). At 360 KB the program fills
 a disk, so it is a PAIR: `pagedesk360.img` holds the program, `README.TXT`,
 `PDFONTS.TXT` and `HELLO.PDF`, and **`pagedesk360b.img`** every sample. Put
-the second disk in a drive and open from it with File > Open. The empty
+the second disk in a drive and open from it with File > Open. PageDesk reads
+its fonts and modules from the program disk while it draws, so keep that disk
+in its drive and put the second one in the other drive. When the program disk
+is out at the moment a part is needed, a toast says `Insert the PageDesk disk`
+(a page's status line says `insert the PageDesk disk` for its fonts): put it
+back and do the same thing again - open the file again, or go back to the
+page. The empty
 window's Sample guide looks beside the program, so on the 360 KB pair open
 `XTGUIDE.PDF` from the second disk instead. It is also in the everything
 set (`make allapps`) and on the live media.

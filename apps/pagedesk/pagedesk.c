@@ -170,6 +170,7 @@ static void pdu_say2(const char *a, const char *b);
 /* ---- the slot (PAGEDESK-SPEC 20.22.2, pduslot.c / pduslot.inc) ---- */
 int  pdu_slot_load(int occ);             /* pduslot.inc */
 void pdu_slot_free(void);
+unsigned pdu_claimhi(unsigned paras);   /* pduslot.inc: from the top (edit's store) */
 void pdu_region_free(void);
 void pdu_cache_drop(void);
 unsigned pdu_ladck(int mod, unsigned r);

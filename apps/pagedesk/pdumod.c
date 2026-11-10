@@ -71,10 +71,14 @@ static struct pdxb_init pdu_xinit;
 /* the arena is 11 (crypt, 20.22.5): an encrypted document's cipher state
  * lives at its offset 0, and SETKEY answers PDE_NOMEM below 11 KiB. Raised for
  * every document: A cannot grow in place once PDENG holds its rows */
+/* the edit store (QA F26, the lead's claim-B ruling) is NOT carved: it is a
+ * claim of its own, taken at the FIRST edit (ovl_ed_need, pduedit.c), so a
+ * document only read leaves its 16 KiB to an XT's font occupant. Its row is
+ * 0 KiB here, and pdu_dc[PDU_DC_EDITS] is the claim's base once it is held */
 const unsigned pdu_dckb[PDU_NDC] = { 16, 11, 11, 12, 29, 0,
-                                            16, 4, 1, 4, 2, 2 };
+                                            0, 4, 1, 4, 2, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
-static unsigned pdu_dclaim[2];          /* the two real claims */
+static unsigned pdu_dclaim[3];          /* A, B, and the edit store */
 static unsigned pdu_flslots;            /* D17: Flate slots at B's tail, 0-2 */
 /* a document row's segment, 0 when no document is open (D15) */
 static unsigned pdu_dcseg(int row) { return (row >= 0 && row < PDU_NDC) ? pdu_dc[row] : 0; }

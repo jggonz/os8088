@@ -99,6 +99,12 @@ static void os88_gfx_lock(void) {}
 static void os88_gfx_unlock(void) {}
 static void os88_gfx_xor_fill(int a, int b, int c, int d) { }
 static int os88_wm_clip_set(void *w) { return 0; }
+/* QA F26: the edit store is a claim of its own, taken at the first edit
+ * (ovl_ed_need): the document's claims and the store, as pdumod.c holds them */
+static unsigned pdu_dc[12];             /* PDU_NDC */
+static unsigned pdu_dclaim[3] = { 0x1000, 0x1800, 0x2000 };
+static unsigned claimhi_ans = 0x2000, claimhi_n;
+static unsigned pdu_claimhi(unsigned paras) { claimhi_n++; return paras == 1024 ? claimhi_ans : 0; }
 static unsigned pdu_dcseg(int row)
 {
     return row == PDU_DC_EDITS ? 0x2000 : row == PDU_DC_UNDO ? 0x3000 : 0;

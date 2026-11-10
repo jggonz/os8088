@@ -299,7 +299,11 @@ static pdw run_begin(void)
     {   /* a strike the cache cannot hold (or a failed read): the next one down */
         pdw tries = 0, em = g_pem;
         while (idx == 0xFFFF || !strike_load(idx)) {
-            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, "font strike unavailable"); return 0; }
+            /* a read that failed is the program disk out of its drive (the 360 KB
+             * pair, QA F21): the user puts it back and draws the page again. No
+             * strike is read again in this page view (strike_fetch): one floppy
+             * error a run made the XT's degraded page 457 s */
+            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, g_fioerr ? "insert the PageDesk disk" : "font strike unavailable"); return 0; }
             em = (pdw)(g_ssize - 1);
             idx = strike_pick(f->fam, sty, em, &g_synth);
             g_pkem = 0xFFFF; g_pkfam = 0xFF;      /* do not let the memo pin the retry */

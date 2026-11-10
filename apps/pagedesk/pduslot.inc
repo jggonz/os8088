@@ -243,6 +243,11 @@ _pdu_slot_load:
 ; (release-before-refuse, run from the job and not from the overlay) and its
 ; room then joins the one free run above it. QA F25: 87.5 KiB free as 19 +
 ; 30 + 38.5 with every claim bottom-up, and a save needs 77 in one
+; unsigned pdu_claimhi(unsigned paras) - the same from C (the overlay's edit
+; store, ovl_ed_need): BX CX DX lost, as cdecl lets them be
+_pdu_claimhi:
+    mov bx, sp
+    mov ax, [bx+2]
 pd_claimhi:
     xor cx, cx
     mov bl, MEMP_CLAIM_HI
@@ -1271,6 +1276,22 @@ pdu_ovl_room:
     jne _pdu_slot_free
     ret
 
+; pdu_ovl_fail - crt0's CC_OVL_FAIL: the overlay's fetch was refused and SI
+; is the SDK's toast. A READ refused (the program disk is out of its drive,
+; the 360 KB pair's swap, QA F21) is said as pdu_home_rd says it; memory
+; and the rest keep the SDK's words. The user puts the disk back and does
+; the same thing again: the next ovl_ call fetches it (20.22.2.4 step 4)
+pdu_ovl_fail:
+    cmp si, op_s_read
+    je .d
+    cmp si, op_s_disk
+    jne .r
+.d:
+    mov si, pd_s_disk
+    jmp op_say
+.r:
+    ret
+
 ; int pdu_ovl_in(void) - 1 when the overlay is here: a tool whose ovl_ call
 ; answered "not handled" because its fetch was refused says MEMORY (QA F8)
 _pdu_ovl_in:
@@ -1737,7 +1758,7 @@ _pdu_doc_claim:
 ;
 ; void pdu_doc_free(void) - the document set given back (and S and X with it)
 _pdu_doc_free:
-    mov bx, 2
+    mov bx, 4                       ; the edit store, B, A
 .c:
     xor ax, ax
     xchg ax, [_pdu_dclaim + bx]

@@ -324,8 +324,12 @@ static void pdu_open_step(void)
             return;
         pdu_opauth = 2;
         pdu_mcf = r != 0;
-        if (!r)
-            return;                     /* no question, no prompt: OPEN again */
+        if (!r) {
+            if (pdu_ovl_in())
+                return;                 /* no question, no prompt: OPEN again */
+            pdu_mcf = 1;                /* QA F21: the overlay could not be read */
+            r = PDE_IO;                 /* (its toast said why); an OPEN with no */
+        }                               /* key left the next open refused */
     }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */

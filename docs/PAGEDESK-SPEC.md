@@ -2199,7 +2199,8 @@ document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
 | claim | sub-segments, in order | size |
 |---|---|---|
 | A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
-| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): edit store 16, undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 60-63 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
+| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 44-47 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
+| E | the edit store, 16 KiB, **at the first edit** (QA F26, the claim-B ruling): `pdu_dclaim[2]`, from the top. Its row in `pdu_dckb` is 0, so the carve gives `pdu_dc[PDU_DC_EDITS]` no room of its own until `ovl_ed_need` claims it and names it there. It is asked for when an edit tool is picked (`ovl_tool_hint`, which gives the slot's occupant back first when the store will not fit: the ladder loads it again at need) and at an edit tool's press on the page (`ovl_tool_click`) and a journal's replay; `pdu_ed_new` only refuses without it (`PDE_NOMEM`), a note's commit being too deep a chain for a claim (pdstk). `pdu_doc_free` gives it back with A and B | 16 KiB, or none for a document only read |
 
 and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
 exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
@@ -5096,9 +5097,21 @@ callback's chain: only from the wake, 20.22.2.6):
    is read at S:0 and moved down by its slack. Then back to the document's
    folder. A read that fails (`PDE_IO`: on the 360 KB pair, the program disk
    swapped for the samples disk) toasts `Insert the PageDesk disk` before
-   the occupant, the X8 region or the bank degrades (QA F21) - a sentence and
-   not a retry: a prompt that waits for the disk costs the primary room it
-   does not have (20.22.2.9).
+   the occupant, the X8 region or the bank degrades (QA F21). The retry is
+   the user's: put the disk back and do the same thing again (the lead's
+   ruling, 2026-11-10 12:10 - no prompt that waits, and no overlay held
+   resident: 51.5 KiB the XT's occupants need). Every lazy read says the
+   same sentence: the overlay's fetch, through crt0's `CC_OVL_FAIL` hook
+   (`pdu_ovl_fail` turns the SDK's `Cannot read my parts` and `No disk to
+   read from` into it; memory refusals keep their own words), and PDREND's
+   strike reads, whose incomplete-rendering reason is `insert the PageDesk
+   disk` when a strike's read failed rather than `font strike unavailable` -
+   and once one has failed no strike is read again in that page view
+   (`g_fioerr`, cleared by `mode_reset`): a floppy error per text run made
+   the XT's degraded HELLO.PDF 457 guest seconds.
+   A repeat succeeds because nothing remembers the failure: the overlay's
+   row stays unfetched, PDREND's refusals end with the page view
+   (`mode_reset`), and an occupant is loaded again at the next ask.
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
@@ -5348,8 +5361,14 @@ cap is 65,024):
 
 | QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
 | QA F25/F22/F24: every claim from the top (`pd_claimhi`: XB, the bank, A, B, X, S, W), the writer loaded by the save job (`pdu_save_step`) and freed before its overlay call, `pdu_wrt_in_now` and `pdu_wrt_out` gone (a call and a macro), the second Flate slot's own reserve, W sized to leave 32 KiB and asked with it while a release remains, the claim asked again after the XC release | 65,023 | +20 |
+| the merge of `pagedesk/anypdf` (ui's overlay moves) | 64,941 | -82 |
+| QA F21: `pdu_home_rd`'s toast `Insert the PageDesk disk` | 64,979 | +38 |
+| QA F21: crt0's `CC_OVL_FAIL` and `pdu_ovl_fail` (the overlay's refused read said the same way) | 65,001 | +22 |
+| QA F26 claim B: the edit store at the first edit (`pdu_claimhi`, the C door to `pd_claimhi`, and its overlay stub; `pdu_dclaim[3]`) | 65,023 | +22 |
+| `pdmath.inc` in the primary with `PDM_SKIP_U32`, `PDM_SKIP_PARSE`, `PDM_SKIP_TOPT16` and `PDM_SKIP_MAT`: its C names `pdm_view_size`/`fwd`/`inv` and `pdm_crc16_far` alone (the cc8086 use set), and the rest was assembled for nothing | 63,517 | -1,506 |
+| QA F21: an encrypted open whose prompt's overlay could not be read fails (`PDE_IO`) instead of opening again with no key, which left the NEXT open refused | 63,535 | +18 |
 
-**1 byte stays under the cap.**
+**1,489 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key

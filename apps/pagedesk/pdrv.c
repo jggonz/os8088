@@ -424,6 +424,7 @@ static void mode_reset(void)
     g_ierr = 0; g_ndl = 0;
     g_pkfam = 0xFF; g_aflags = 0;
     x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0;
+    g_fioerr = 0;                       /* the strikes are read again (QA F21) */
 }
 
 static pd_px vb_w, vb_h;
