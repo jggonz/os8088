@@ -46667,7 +46667,13 @@ against 227 for the six-byte rare cell (**+193, 40 µs**) and 93 for a far
 call to a `cw_` shim (+327, 69 µs). Each kind range the index passes adds a
 compare and a branch, +20. **The door is 51 bytes with the RS body alone**
 (kern_big, refusal included; 54 on kern_mega, whose `KDS` is a selector load),
-and each further kind adds its compare and its body - about 85 with all five.
+and each further kind adds its compare and its body: 132 with all five
+(a scratch assembly with one entry of each kind, kernel size pass 19), of
+which T5 recovers 74 - the five old bodies (`api_rx`'s head, `api_rxc`,
+`api_rsc`, `api_rs`, `api_rn`; `api_x` stays for the hot X cells) - when the
+last six-byte cell goes, so the door costs T5 about +58.
+Only the RS kind runs today; the other four were checked by disassembling
+that assembly, and T5's first boot is their first run.
 
 **What P4 put behind it** (kernel-private, no `PKG_FMT` or `DRV_VER`
 meaning): twenty-seven of the forty-five `cw_` shim bodies — the

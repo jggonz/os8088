@@ -8267,11 +8267,15 @@ rd_tab:
 %if rd_n > 128
  %error "rd_tab: the door compares index x 2 in one byte, so 128 entries at most"
 %endif
-RD_N        equ rd_n            ; rd_lim's immediate (fsx_rupf puts it back)
+RD_N        equ rd_n            ; os88_door.lim's immediate (fsx_rupf puts it back)
 %assign rd_b1 rd_c0             ; each kind's first index
 %assign rd_b2 rd_b1 + rd_c1
 %assign rd_b3 rd_b2 + rd_c2
 %assign rd_b4 rd_b3 + rd_c3
+RD_B1       equ rd_b1           ; ...and as equates, for the decoders that
+RD_B2       equ rd_b2           ; read a kernel's map (tests/unit/t_api_abi.py
+RD_B3       equ rd_b3           ; after T5): index < RD_B1 is RS, < RD_B2 RCS,
+RD_B4       equ rd_b4           ; < RD_B3 RX, < RD_B4 RCX, < RD_N RN
 
 os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP are the frame, the door banks DS and BX over the BP it pushes and each kind pops what it needs before a body that ends in `retf 2`
     push bp                     ; the caller's BP, under the frame: every
