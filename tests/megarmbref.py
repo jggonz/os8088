@@ -34,7 +34,7 @@ legs, and what is asserted of each:
      (SI = 0, no CPU_F_PM), os88real_swap made the word the real paragraph
      prep banked, MF_PAT written through it there reads back through the
      selector afterwards
-  N  a real-mode bracket in which OSAPI_MEM_CLAIM (a rare cell) and
+  N  a real-mode bracket in which OSAPI_MEM_P (a rare DOOR cell) and
      OSAPI_FILE_RENAME (a 3-byte JCELL) answer CF = 1 with every register
      kept; the OSAPI_SEG twin answers SEG_LIN = CS x 16 and refuses SEG_AT;
      OSAPI_FSX_WAIT (FSXW_FRAME) and OSAPI_MOUSE answer; and, stopped INSIDE
@@ -77,8 +77,18 @@ def _api_tlen():
 
 TBL, TLEN = 0x0010, _api_tlen()
 FAILS = []
-RUNS = ["rmk_1", "rmk_2", "rmk_3", "rmk_4", "rmk_5", "rmk_6", "rmk_7",
-        "rmk_8", "rmk_9", "rmk_10"]
+# (rmk_3 and rmk_6 went with T5, kernel size pass 19: OSAPI_SND_CAPS,
+# _FONT_GLYPHS and _FSX_MODE are RARE cells now, answered inside the bracket
+# by THE DOOR's first RD_RK published indices - fsx_rdownf's bound, below)
+RUNS = ["rmk_1", "rmk_2", "rmk_4", "rmk_5", "rmk_7", "rmk_8", "rmk_9",
+        "rmk_10"]
+
+
+def cell(name):
+    """a hot cell's offset in the table, off the SDK (no number typed here)"""
+    m = re.search(r"^%%define\s+%s\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)" % name,
+                  open(os.path.join(ROOT, "apps", "os88api.inc")).read(), re.M)
+    return int(m.group(1), 16)
 
 
 def want(cond, what):
@@ -187,6 +197,7 @@ def main():
     t0 = time.time()
     box = os88bochs.Box(out, [os.path.join(ROOT, PKG)])
     lines, look, after, moved, msseg = [], None, None, False, 0
+    lim_in = lim_after = None
     ext = None
     try:
         if not box.wait_pm(240):
@@ -233,6 +244,7 @@ def main():
                     ins = box.read(u16(rs) * 16 + roff + 19, 1)[0]
                     if ins == 1:
                         look = box.read(KSEG * 16 + TBL, TLEN)
+                        lim_in = box.read(box.sym("os88_door.lim") + 2, 1)[0]
                         msseg = u16(ms)
             time.sleep(0.05)
         else:
@@ -246,6 +258,7 @@ def main():
                                ("ser_row", 2), ("vx_ep", 4), ("fsx_rwhy", 1),
                                ("fsx_rmode", 1), ("fsx_task", 1)])
             exp, runs = expect_table(tbl0, box, msseg)
+            lim_after = box.read(box.sym("os88_door.lim") + 2, 1)[0]
             box.capture()
             a = box.mouse()
             try:
@@ -303,7 +316,7 @@ def main():
     leg("N", 0, False, "real mode taken")
     nx = r.get("Nx", {})
     want(nx.get("claim") == 0xFF01 and nx.get("kept") == 0x5BAD,
-         "N: OSAPI_MEM_CLAIM answered CF = 1 with every register kept "
+         "N: OSAPI_MEM_P (MEMP_CLAIM) answered CF = 1 with every register kept "
          "(%04x, %04x)" % (nx.get("claim", 0), nx.get("kept", 0)))
     want(nx.get("rename") == 0xFFFF, "N: OSAPI_FILE_RENAME (3 bytes) answered "
          "CF = 1 (%04x)" % nx.get("rename", 0))
@@ -323,12 +336,22 @@ def main():
              "(%d runs kept, the twin at rmk_seg; %d bytes differ%s)"
              % (len(runs), len(bad), ", first at %04x: %02x want %02x"
                 % (TBL + bad[0], look[bad[0]], exp[bad[0]]) if bad else ""))
-        want(look[0x01A4 - TBL] == 0xF9 and look[0x0115 - TBL] == 0xF9,
-             "inside N: OSAPI_MEM_CLAIM and OSAPI_FILE_RENAME begin `stc`")
+        ren = cell("OSAPI_FILE_RENAME")
+        want(look[ren - TBL] == 0xF9,
+             "inside N: OSAPI_FILE_RENAME (%04x) begins `stc`" % ren)
+        want(lim_in == eq["RD_P"] + eq["RD_RK"],
+             "inside N: the rare door answers only its first RD_RK published "
+             "indices - os88_door.lim's bound %s, want RD_P + RD_RK = %02x "
+             "(OSAPI_MEM_P, a door past it, refused above)"
+             % ("%02x" % lim_in if lim_in is not None else "unread",
+                eq["RD_P"] + eq["RD_RK"]))
     if after:
         t1, tf1, ext1, ser1, vx1, why, rm, ft = after
         print("\n   after")
         want(t1 == tbl0, "the table is byte for byte what it was")
+        want(lim_after == eq["RD_N"], "the rare door's bound is RD_N again "
+             "(%s, want %02x)" % ("%02x" % lim_after if lim_after is not None
+                                  else "unread", eq["RD_N"]))
         want((tf1, ext1, ser1, vx1) == (tf0, ext0, ser0, vx0),
              "task 0's flags, EXTD.DRV's row, [ser_row] and [vx_ep] as "
              "they were")
