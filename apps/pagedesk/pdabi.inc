@@ -249,6 +249,7 @@ PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
 PDXD_NPT                 equ 12
+PDV_REND_CODE            equ 0x49
 PDXE_OPS                 equ 64
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------

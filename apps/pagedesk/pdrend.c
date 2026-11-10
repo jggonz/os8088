@@ -12,6 +12,7 @@
 #include "os88.h"
 #endif
 #include "pdrend.h"
+#include "pdrovl.h"   /* what runs in the second code segment (20.22.7.9) */
 #ifndef PD_HOST
 /* DECISIONS D1: eng adds this thunk (and its prototype) to apps/cc; declared here
  * with the exact prototype until that is merged - a repeated identical
