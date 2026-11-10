@@ -351,7 +351,8 @@ static pdw sub32(pdw *hi, pdw *lo, pdw k)
 /* walk the top-level boxes up to the start of jp2c's payload */
 static pdw jp2_boxes(void)
 {
-    pdw hi, lo, t0, t1, rem, k, n, i, typ, hdr, cnt, cn, ty, as;
+    static pdw hi, lo;                                  /* sub32 takes their addresses */
+    pdw t0, t1, rem, k, n, i, typ, hdr, cnt, cn, ty, as;
     for (;;) {
         hi = rd16(); lo = rd16(); t0 = rd16(); t1 = rd16();
         if (g_trunc) return refuse(PDJ_R_NOTJPX);

@@ -46,6 +46,11 @@ def synth(w, h, ncomp, depth=8, seed=1):
     return chans
 
 
+def alpha_ramp(w, h):
+    """the alpha channel of the alpha_* fixtures: a left-to-right ramp"""
+    return np.clip(np.mgrid[0:h, 0:w][1] * 255 // w, 0, 255).astype(np.uint8)
+
+
 def write_pnm(path, chans, depth):
     h, w = chans[0].shape
     mx = (1 << depth) - 1
@@ -122,6 +127,9 @@ FIX = [
     ('refuse_bypass', (96, 64, 1, 8), ['-n', '3', '-M', '1'], 'j2k'),
     ('refuse_termall', (96, 64, 1, 8), ['-n', '3', '-M', '4'], 'j2k'),
     ('refuse_roi',  (96, 64, 1, 8),   ['-n', '3', '-ROI', 'c=0,U=5'], 'j2k'),
+    # an alpha channel (opj_compress writes a cdef box): RGBA and grey + alpha
+    ('alpha_rgba',  (96, 64, 4, 8),   ['-n', '3'], 'jp2'),
+    ('alpha_la',    (96, 64, 2, 8),   ['-n', '3'], 'jp2'),
 ]
 
 
@@ -139,15 +147,25 @@ def main():
     tmp = os.path.join(out, '_tmp'); os.makedirs(tmp, exist_ok=True)
     man = []
     for name, (w, h, nc, depth), args, ext in FIX:
-        pnm = os.path.join(tmp, name + ('.pgm' if nc == 1 else '.ppm'))
-        write_pnm(pnm, synth(w, h, nc, depth, seed=hash_name(name)), depth)
+        alpha = name.startswith('alpha_')
+        if alpha:
+            from PIL import Image
+            ch = synth(w, h, 3, 8, seed=hash_name(name))
+            ramp = alpha_ramp(w, h)
+            planes = ([c.astype(np.uint8) for c in ch] if nc == 4 else [ch[0].astype(np.uint8)]) + [ramp]
+            pnm = os.path.join(tmp, name + '.png')
+            Image.fromarray(np.stack(planes, -1), 'RGBA' if nc == 4 else 'LA').save(pnm)
+        else:
+            pnm = os.path.join(tmp, name + ('.pgm' if nc == 1 else '.ppm'))
+            write_pnm(pnm, synth(w, h, nc, depth, seed=hash_name(name)), depth)
         dst = os.path.join(out, name + '.' + ext)
         r = subprocess.run(['opj_compress', '-i', pnm, '-o', dst] + args, capture_output=True, text=True)
         if r.returncode != 0 or not os.path.exists(dst):
             print('SKIP', name, r.stderr.strip()[:100]); continue
         e = {'name': name, 'file': name + '.' + ext, 'w': w, 'h': h, 'ncomp': nc, 'depth': depth, 'args': args}
+        if alpha: e['alpha'] = True
         man.append(e)
-        if ref:
+        if ref and not alpha:
             os.makedirs(os.path.join(out, 'ref'), exist_ok=True)
             for rr in range(0, 7):
                 o = os.path.join(out, 'ref', '%s.r%d.%s' % (name, rr, 'pgm' if nc == 1 else 'ppm'))

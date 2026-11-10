@@ -9,7 +9,6 @@ static pdw w_state, w_rec, w_plane, w_strip, w_arena;   /* workspace offsets    
 static pdw w_statesz, w_nrec;
 static pdw g_arenatop, g_arenafull;
 static pdw g_persist;                   /* more than one layer: state persists  */
-static pdw g_rtop;                      /* the highest kept resolution          */
 
 /* one precinct's state block: code-block bytes, then per band two tag trees */
 static pdw g_bcb[3], g_btt[3], g_bnn[3], g_blksz, g_ncbtot;

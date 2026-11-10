@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 FIX = os.path.join(ROOT, 'tests', 'pdfany', 'jpx')
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
-from os88pdfx_jpx import read_pnm
+from os88pdfx_jpx import read_pnm, alpha_ramp
 
 
 def ceil_shift(v, s): return (v + (1 << s) - 1) >> s
@@ -53,6 +53,16 @@ def main():
         lossy = '-I' in args
         mct = nc == 3 and '-mct' not in args
         refuse = name.startswith('refuse') or name == 't_bad'
+        if e.get('alpha'):                    # /SMaskInData: the channel exact, the colour open still works
+            n += 1
+            p = subprocess.run([binp, path, tmp, str(W), str(H), '0x100'], capture_output=True, text=True, env=env)
+            ok = p.stdout.split()[:6] == ['0', str(W), str(H), '0', '1', str(W)] and np.array_equal(
+                np.fromfile(tmp, dtype=np.uint8).reshape(H, W), alpha_ramp(W, H))
+            q = subprocess.run([binp, path, '-', str(W), str(H)], capture_output=True, text=True, env=env)
+            ok = ok and not q.stdout.startswith('REFUSED')
+            print('%-14s alpha channel exact %s' % (name, 'ok' if ok else 'FAIL'))
+            if not ok: bad += 1
+            continue
         for r in range(0, 7):
             ww, hh = ceil_shift(W, r), ceil_shift(H, r)
             p = subprocess.run([binp, path, tmp, str(ww), str(hh)], capture_output=True, text=True, env=env)

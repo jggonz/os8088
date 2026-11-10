@@ -649,6 +649,32 @@
     "-ROI",
     "c=0,U=5"
    ]
+  },
+  {
+   "name": "alpha_rgba",
+   "file": "alpha_rgba.jp2",
+   "w": 96,
+   "h": 64,
+   "ncomp": 4,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3"
+   ],
+   "alpha": true
+  },
+  {
+   "name": "alpha_la",
+   "file": "alpha_la.jp2",
+   "w": 96,
+   "h": 64,
+   "ncomp": 2,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3"
+   ],
+   "alpha": true
   }
  ]
 }
