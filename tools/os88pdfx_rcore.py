@@ -15,7 +15,11 @@ holds to MuPDF and to each other:
                SAME geometry as a /DCTDecode image (a real JPEG of the ramp when
                Pillow is there, else a stub); page 3: /JPXDecode; page 4: a DCT
                and a JPX image on one page, apart; page 5: the two side by
-               side, sharing rows (one slot: 20.22.7.4's limit). The
+               side, sharing rows (one slot: the band's stash, 20.22.7.10);
+               page 6: page 5 with both as plain images, which page 5 must
+               draw as to the pixel; page 7: a JPX, a rectangle, a DCT over
+               both and the JPX again, overlapping on the same bands - the
+               paint order through the stash; page 8: page 7 plain. The
                host's stand-in decoder (hosttest/pdr_xmod.c) delivers the ramp
                whatever the bytes, so pages 1 and 2 must draw identically
   depth.pdf    the ramp at 1, 2, 4, 16 bits DeviceGray, 8 and 16-bit RGB,
@@ -131,7 +135,13 @@ def ramp_pdf(path):
     d.page(place, {'Im': dct})
     d.page(place, {'Im': jpx})
     d.page('q 150 0 0 100 20 280 cm /A Do Q q 150 0 0 100 220 20 cm /B Do Q', {'A': dct, 'B': jpx})
-    d.page('q 150 0 0 100 20 280 cm /A Do Q q 120 0 0 80 230 300 cm /B Do Q', {'A': dct, 'B': jpx})
+    side = 'q 150 0 0 100 20 280 cm /A Do Q q 120 0 0 80 230 300 cm /B Do Q'
+    d.page(side, {'A': dct, 'B': jpx})
+    d.page(side, {'A': raw, 'B': raw})
+    over = ('q 160 0 0 120 40 200 cm /B Do Q 0.3 g 120 230 80 60 re f q 160 0 0 120 140 160 cm /A Do Q '
+            'q 100 0 0 75 60 150 cm /B Do Q 0 g 250 250 30 30 re f')
+    d.page(over, {'A': dct, 'B': jpx})
+    d.page(over, {'A': raw, 'B': raw})
     d.write(path)
 
 

@@ -569,7 +569,10 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = (pdb)codec;
     if (py0 < GS.cy0) py0 = GS.cy0;
     if (py1 > GS.cy1) py1 = GS.cy1;
-    if (codec) x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);   /* its occupant draws it */
+    if (codec) {                                /* its occupant draws it */
+        x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);
+        ik_note((pdw)(codec == PDCD_JPX), (pdi)(py1 - py0 + 1), (pdw)(W * ncomp));
+    }
     hdr_set(DLR_IMAGE, 0, (pdw)(DLH + DLI_BODY + extra), py0, py1);
     return dl_put(g_hdr, DLH, body, DLI_BODY);
 }

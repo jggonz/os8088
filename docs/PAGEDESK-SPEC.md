@@ -4977,13 +4977,12 @@ more). The pinned helpers:
   say which decoders it needs (`x_rmark` lets a page with no codec image skip
   the look). When the occupant is one of them the band is drawn with it;
   otherwise the lower id is asked for with `PDE_NEEDMOD` and the band is
-  drawn after the answer. The display list is NOT rebuilt. ONE SLOT: a band
-  whose images need both PDXI and PDXJ is drawn with one of them, and the
-  other's images in that band are not drawn and set `PDF_INC_MODULE` - the
-  open limit of this section (a later round can draw the second decoder's
-  images onto the composed band when no later record shares their rows).
+  drawn after the answer. The display list is NOT rebuilt. A band whose
+  images need both PDXI and PDXJ is drawn through the stash of 20.22.7.10:
+  the resident decoder's rows first, then the other decoder, then one walk.
 * A page view makes at most `PDR_XASKS` = 8 answers; the next want is
-  refused. A page view starts at `PDV_REND_BEGIN` and lasts to the next.
+  refused. The stash's alternating loads are not counted (each finishes a
+  band). A page view starts at `PDV_REND_BEGIN` and lasts to the next.
 * The answer to `PDE_NEEDMEM` is a re-INIT with the same claims and a region
   added: an INIT whose first 24 words (`pdxb_init` up to `slot_seg`) are the
   current ones while a region is asked for adopts the regions only and keeps
@@ -5032,9 +5031,9 @@ answers is checked as hostile: `out_w` 1..4,096, `out_h` 1..32,767,
 reads and at most 1,024; anything else, or CF = 1 on any verb, is
 `PDF_INC_IMAGE` ("image decoder") and the image is not drawn. An open image
 stays open from band to band and is closed by `PDV_IMG_CLOSE`, by another
-image, and by the pass's end. A codec image whose decoder is not the occupant
-when its band is drawn (refused, or the band's other decoder, 20.22.7.2):
-`PDF_INC_MODULE`. Inline images through a codec are not drawn
+image, and by the pass's end. A codec image whose decoder is refused:
+`PDF_INC_MODULE`. A band whose images need BOTH decoders draws them all,
+through the stash of 20.22.7.10. Inline images through a codec are not drawn
 (`PDF_INC_FILTER`, as before).
 
 **20.22.7.5 Sample depths and colour (smode 4).** Images of 1, 2, 4, 8 and 16
@@ -5151,6 +5150,41 @@ At the split: PDREND.MOD 45,180 image + 5,984 bss = 51,164 (was 60,742), and
 PDRENDC.MOD 11,159, holding 35 functions of `pdrv.c`, `pdri.c` and `pdra.c`
 (the non-band verbs, the ladder's answers, the image and XObject operators,
 the annotations and the edit store's records).
+
+**20.22.7.10 Two decoders on one band: the stash.** The slot holds one
+occupant, so a band whose images need `PDX_IMG` AND `PDX_JPX` (a JPEG and a
+JPX whose rows meet) is drawn like this. Before the band is walked,
+`x_rneed` has the decoder that is in the slot decode its images first
+(`ik_fill`). It decodes only the rows that band shows: one source row a
+device row, the row `draw_image` would ask for. Those rows land in the
+extension cache above `g_xctop`, and nothing else is written there while a
+band is drawn. Then `x_rneed` asks for the other decoder (`PDE_NEEDMOD`,
+`PDR_RAST`), and the band is walked ONCE, in the list's order. Each image
+is read from the stash when it is there (`ik_find`: the record's offset,
+`g_ikb` = the band + 1, `g_ikdec`), and from the occupant when it is not.
+So paint order holds, the walker is not touched, and the 8-bit strips
+(20.22.10) need nothing.
+
+* **Cost.** One module load for each band that needs both decoders. The
+  load alternates (the stashed decoder is the one already in the slot), and
+  each decoder re-opens its image once a band. These loads are outside
+  `PDR_XASKS`, because each one finishes a band; a refused decoder ends them.
+* **Room.** The stash holds at most `PDR_NIK` = 6 images a band, each up to
+  16 rows of at most 1,024 bytes. A pass that marked both decoders adds up
+  a bound for each decoder (`ik_note`: rows x row bytes in KiB, per image).
+  At the pass's end it asks for an XC that large above what the cache holds
+  (`ik_size`; `PDE_NEEDMEM` `PDMEM_XC`, at most 63 KiB, once a size a page
+  view). The primary must therefore grant a PDMEM_XC ask when an XC already
+  exists: a bigger claim, then a re-INIT.
+* **What is left.** An image the stash has no room for, or a page with no XC
+  at all (which then draws with the resident decoder only), notes
+  `PDF_INC_LIMIT` ("image stash"), never `PDF_INC_MODULE`. A decoder that
+  fails on stashed rows notes `PDF_INC_IMAGE` as before.
+* **Checks.** `ramp.pdf` pages 5 and 7 are a DCT and a JPX that share bands:
+  side by side, and overlapping with a rectangle between them and the JPX
+  placed twice. `pdr_xchk` holds each, at VGA, Hercules and CGA, to its plain
+  twin (pages 6 and 8) to the pixel, clean. Without an XC, page 7 notes
+  LIMIT and differs from its twin, which is the negative control.
 
 #### 20.22.8 Fonts from their programs (`fonts`)
 

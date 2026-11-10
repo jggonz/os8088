@@ -35,6 +35,11 @@
 /* [rcore] the ladder's answers, once a pass (pdrv.c) */
 #define x_resolve       ovl_x_resolve
 #define x_answered      ovl_x_answered
+/* [rcore] the image stash, once a band that needs both decoders (pdrv.c) */
+#define ik_fill         ovl_ik_fill
+#define ik_size         ovl_ik_size
+#define ik_note         ovl_ik_note
+#define x_rneed         ovl_x_rneed    /* once a band, and only on a codec page */
 /* [rcore] an image's operator and its decoder's open (pdri.c, pdrv.c) */
 #define do_image        ovl_do_image
 #define image_place     ovl_image_place

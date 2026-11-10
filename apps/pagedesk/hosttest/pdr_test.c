@@ -134,6 +134,10 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
+    /* the engine's vector, nonzero as the primary's is: verb_init takes a 0 one
+     * for the FIRST INIT, so without it a re-INIT after PDE_NEEDMEM restarted the
+     * view instead of adding the region (the host's pdr_eng never reads it) */
+    in.eng_off = 0x0008; in.eng_seg = 0x9000;
     if (getenv("PDR_XCKB0")) { in.xc_seg = SEG_XC; in.xc_kb = (pdw)atoi(getenv("PDR_XCKB0")); }   /* the claim from the start */
     g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
