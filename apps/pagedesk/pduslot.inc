@@ -963,7 +963,17 @@ xr_segs:
 .f:
     jcxz .st
     push cx
-    mov dx, [xr_claim]
+    mov ax, [xr_wseg + si]          ; the window cut last time, while X and
+    mov dx, [xr_claim]              ; the region are what they were: the
+    cmp dx, [xr_wcl + si]           ; same selector (kern_mega cuts a fresh
+    jne .cut                        ; descriptor per ask, and PDREND reads a
+    cmp cx, [xr_wl + si]            ; changed glyph_seg as a new view)
+    jne .cut
+    or ax, ax
+    jnz .ok
+.cut:
+    mov [xr_wcl + si], dx
+    mov [xr_wl + si], cx
     mov ax, [xr_off + si]
     cmp cx, 4096
     jbe .w
@@ -972,8 +982,10 @@ xr_segs:
     mov bl, SEG_SUBC
     call OSAPI_SEG
     xchg ax, dx
-    jnc .ok
+    jnc .ok0
     xor ax, ax
+.ok0:
+    mov [xr_wseg + si], ax
 .ok:
     pop dx
     mov cl, 6
@@ -1161,20 +1173,41 @@ sl_rel_ovl:
     clc
     ret
 
-; (2) the second Flate slot (two only where D17 chose two by RAM: CGA and
-; Hercules at 640 KiB). NOT YET: PDENG's re-INIT keeps the document only when
-; flate_seg/flate_kb are unchanged, so a smaller flate_kb would close it. The
-; entry stays in the table, answering "nothing", until eng's INIT keeps the
-; document across a slot dropped between streams (asked of eng)
+; (2) the second Flate slot (two only where D17 chose two by RAM). PDENG is
+; re-INITed with flate_kb one slot less (PAGEDESK-SPEC 20.22.3.9): AX = 1 it
+; took it, keeping the document and any OPEN, and B's tail - slot 2 - is
+; given back in place; PDE_BUSY (a stream lives in slot 2) or anything else
+; changed nothing. PDREND is not told: it reads no Flate slot
 sl_rel_fl2:
+    cmp word [_pdu_flslots], 2
+    jne sl_rel_no
+    sub word [_pdu_xinit + PDXB_INIT_FLATE_KB], 43
+    xor ax, ax
+    mov bx, PDV_ENG_INIT
+    call dc_init
+    cmp ax, 1
+    je sl_fl2_took
+    add word [_pdu_xinit + PDXB_INIT_FLATE_KB], 43
 sl_rel_no:
     stc
+    ret
+sl_fl2_took:
+    dec word [_pdu_flslots]
+    sub word [dc_bpara], PDU_FL_PARA_A
+    push word [dc_bpara]
+    push word [_pdu_dclaim + 2]
+    call _os88_mem_regrow_p         ; a shrink stays where it is
+    pop cx
+    pop cx
+    clc
     ret
 
 ; (3) the XC region (PDREND's results cache), when it is X's LAST: X shrinks
 ; in place and PDENG and PDREND are re-INITed with xc_seg 0 - PDREND keeps
 ; nothing there that a later page cannot rebuild (20.22.2.5's refusal path)
 sl_rel_xc:
+    cmp byte [sl_inlad], 0          ; only under PDREND's own NEEDMOD: its
+    je sl_rel_no                    ; re-INIT then keeps the view (rcore)
     cmp word [xr_last], PDMEM_XC
     jne sl_rel_no
     xor ax, ax
@@ -1258,6 +1291,7 @@ _pdu_region_free:
     mov [xr_last], ax
     mov bx, PDU_NREG * 2
 .l:
+    mov [xr_wseg + bx], ax          ; the block's free took its windows
     mov [xr_len + bx], ax
     dec bx
     dec bx
@@ -1333,7 +1367,9 @@ _pdu_ladck:
     cmp word [_pdu_swaps], PDU_SWAPMAX
     jae .no
     push bx
+    mov byte [sl_inlad], 1          ; PDREND's NEEDMOD is pending: XC may go
     call _pdu_slot_load
+    mov byte [sl_inlad], 0
     pop cx
     or ax, ax
     jz .again
@@ -1448,6 +1484,10 @@ _pdu_doc_claim:
     add ax, PDU_FL_PARA_A
     loop .fls
 .take:
+    cmp word [bp-2], 0
+    je .ta
+    mov [dc_bpara], ax              ; B's paragraphs: sl_rel_fl2 cuts its tail
+.ta:
     push ax
     call _os88_mem_claim_p
     pop cx
@@ -2115,6 +2155,7 @@ sl_wmin:        resb 1
 alignb 2
 sl_dseg:        resw 1
 sl_rel:         resb 1              ; the next release (.nos): 0 overlay, 1 Flate, 2 XC
+sl_inlad:       resb 1              ; a PDREND NEEDMOD is being answered
 alignb 2
 rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
 rd_vol:         resw 1
@@ -2126,10 +2167,14 @@ sl_dir:         resw 1
 sl_msk:         resw 1
 ck_at:          resw PDU_NOCC_A     ; each occupant's place in the store
 xr_claim:       resw 1              ; claim X
+dc_bpara:       resw 1              ; claim B's paragraphs, Flate slots in
 xr_para:        resw 1
 xr_last:        resw 1              ; the region at X's top
 xr_off:         resw PDU_NREG + 1   ; by PDMEM_* (1..5), paragraphs
 xr_len:         resw PDU_NREG + 1
+xr_wseg:        resw PDU_NREG + 1   ; each region's window, as last cut
+xr_wcl:         resw PDU_NREG + 1   ; ...from this claim X
+xr_wl:          resw PDU_NREG + 1   ; ...at this length
 xr_kb:          resw 1
 x8_in:          resb 1              ; PDX8 is in the X8 region
 xr_gnew:        resb 1              ; a GLYPH region granted afresh

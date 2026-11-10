@@ -5090,8 +5090,8 @@ without, in this order (`sl_rel_ovl`, `sl_rel_fl2`, `sl_rel_xc`, called by one l
 | | given back | when | costs |
 |---|---|---|---|
 | 1 | the overlay part (`op_drop`, 51 KiB) | it is fetched and no overlay frame is on the stack (`cc_ovrsp` = 0): an ask from INSIDE the overlay - the auth's PDXK, a save's PDWRT - keeps it | its next `ovl_` call reads it again (a disk call) |
-| 2 | the second Flate slot (43 KiB, CGA and Hercules at 640 KiB, D17) | **not built**: PDENG's INIT keeps the document only when `flate_seg`/`flate_kb` are unchanged, so the entry answers "nothing" until eng's INIT keeps it across a slot dropped between streams | a stream decoded with one slot |
-| 3 | the `PDMEM_XC` region (16 KiB) | it is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0 | PDREND's results cache, rebuilt by later pages |
+| 2 | the second Flate slot (43 KiB, where D17 chose two by RAM) | PDENG is re-INITed with `flate_kb` one slot less, the same `flate_seg` (20.22.3.9): AX = 1 took it, keeping the document and any OPEN, and claim B's tail is regrown away in place; `PDE_BUSY` (a stream lives in slot 2) changed nothing and the entry answers "nothing". PDREND is not re-INITed for it: it reads no Flate slot | a later stream decoded with one slot |
+| 3 | the `PDMEM_XC` region (16 KiB) | the load answers PDREND's OWN `PDE_NEEDMOD` (`sl_inlad`: only then does PDREND's re-INIT keep its page view, 20.22.7) and XC is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0. PDREND drops its cache and band stash, refuses XC for the rest of that view and re-runs the pass (rcore) | PDREND's results cache; images needing a LUT note COLOUR/LIMIT until the next view |
 
 Only when all three have answered is the load `PDE_NOSLOT` and the occupant
 degrades as below. OSW, XIDX and the glyph region are NEVER released while an
@@ -5143,7 +5143,10 @@ The primary:
   any other second ask is refused;
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
-  come with it), and re-INITs PDENG, then PDREND. The occupant is re-INITed
+  come with it), and re-INITs PDENG, then PDREND. A region's window is cut
+  ONCE and handed again unchanged while claim X and the region's length are
+  what they were (`xr_wseg`): kern_mega's `SEG_SUBC` makes a fresh descriptor
+  per ask, and PDREND reads a changed `glyph_seg` as a new page view. The occupant is re-INITed
   only after a GLYPH grant;
 * refuses by re-INITing anyway: a region never held has its field 0, and a
   held region asked to grow keeps its segment and KiB unchanged (a refusal is
@@ -5275,8 +5278,10 @@ cap is 65,024):
 
 | PDRENDC's row and bind (+~35); `pdu_mcheck` and its tables (C 216 + 48 bss) folded into `pdu_mod_launch`'s assembly; `pdu_datestamp` / `pdu_d2` (249, a save's) to the overlay | 64,577 | -438 |
 | release before refuse (20.22.2.4: the three releases and `xr_reinit`, factored out of `pdu_region`); a new GLYPH region's word at +62 cleared | 64,733 | +156 |
+| the Flate release built on eng's shrinking INIT; XC's release only under PDREND's own NEEDMOD | 64,817 | +84 |
+| each region's window cut once and reused (`xr_wseg`/`xr_wcl`/`xr_wl`) | 64,889 | +72 |
 
-**291 bytes stay under the cap.**
+**135 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
