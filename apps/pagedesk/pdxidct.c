@@ -64,10 +64,11 @@ static pdw  dj_W, dj_H, dj_nc, dj_prog, dj_hmax, dj_vmax, dj_mcux, dj_mcuy;
 static pdw  dj_ri, dj_jfif, dj_adobe, dj_atrans, dj_gotsof;
 static pdw  dj_xform;                   /* 0 none, 1 YCbCr->RGB, 2 YCCK->CMYK */
 static pdw  dj_s, dj_bs, dj_ow, dj_oh, dj_outn, dj_native, dj_invert;
-static pdw  dj_nused, dj_mrh;           /* output rows per MCU row             */
+static pdw  dj_nused, dj_mrh, dj_wn;    /* dj_wn: samples a pixel in the working row */           /* output rows per MCU row             */
 static pdw  dj_stored;                  /* coefficients kept (else streaming)  */
 static pdw  dj_decoded, dj_done;
 static pdw  dj_nslot, dj_bstride;       /* stored block: slots, bytes          */
+static pdw  dj_mask;                    /* stored blocks carry the 64-bit nonzero mask (1/2 and 1/4 only) */
 static pdb  dj_nmap[64];                /* natural position -> slot, 255 = none */
 static pdb  dj_sl2pos[64];
 static pdw  dj_maxzz;
@@ -399,17 +400,19 @@ static pdw dj_headers(void)
 static const pdb dj_nslots[4] = { 64, 16, 4, 1 };
 static const pdb dj_maxzzs[4] = { 63, 24, 4, 0 };
 
-/* bytes a stored block takes at scale s: slots + 4 mask words (none at 1/8) */
-static pdw dj_bstr(pdw s) { return (pdw)((dj_nslots[s] + (s < 3 ? 4 : 0)) * 2); }
+/* bytes a stored block takes at scale s: its slots, and 4 mask words when `mask`. At 1/1 every
+ * coefficient is kept, so "nonzero" is the value; at 1/8 no AC scan is read. Only at 1/2 and 1/4 does a
+ * refinement scan need a bit for coefficients it does not keep. */
+static pdw dj_bstr(pdw s, pdw mask) { return (pdw)((dj_nslots[s] + (mask ? 4 : 0)) * 2); }
 
 /* does everything fit at scale s? lays the workspace out when it does */
-static pdw dj_fit(pdw s)
+static pdw dj_fit(pdw s, pdw mask)
 {
     pdw i, bs, ow, pw, tot, add, nb;
     struct dj_comp *c;
     bs = (pdw)(8 >> s);
     ow = (pdw)((dj_W + (1u << s) - 1) >> s);
-    if ((pdw)(ow * dj_outn) > 1024 || (dj_outn > 1 && ow > 341) || ow > 1024) return 0;
+    if (ow > 1024 || (pdw)(ow * dj_wn) > 1024) return 0;   /* the row buffer holds every sample of a pixel it works on */
     tot = 0;
     if (dj_stored) {
         for (i = 0; i < dj_nc; i++) {
@@ -418,7 +421,7 @@ static pdw dj_fit(pdw s)
             pdm_u32_mul16(&dj_u, c->pw, c->ph);
             if (dj_u.hi) return 0;
             nb = dj_u.lo;
-            pdm_u32_mul16(&dj_u, nb, dj_bstr(s));
+            pdm_u32_mul16(&dj_u, nb, dj_bstr(s, mask));
             if (dj_u.hi) return 0;
             if (dj_u.lo > (pdw)(g_wbytes - tot)) return 0;
             c->base = tot;
@@ -482,6 +485,7 @@ static pdw dj_plan(void)
         dj_c[i].used = (used1 ? i == 0 : 1);
         if (dj_c[i].used) dj_nused++;
     }
+    dj_wn = (dj_native || dj_nused > 1) ? dj_nc : 1;
     dj_stored = dj_prog || dj_first_nsc != dj_nc;
     /* the largest reduction that still gives want_w x want_h */
     wantw = g_im.want_w ? g_im.want_w : 0xFFFF;
@@ -492,13 +496,21 @@ static pdw dj_plan(void)
         oh = (pdw)((dj_H + (1u << s) - 1) >> s);
         if (ow >= wantw && oh >= wanth) { sr = s; break; }
     }
-    for (s = sr; s <= 3; s++) if (dj_fit(s)) break;
+    /* the smallest reduction that fits; at 1/2 and 1/4 first with the nonzero mask (every refinement
+     * scan decoded), then without it (the AC refinement scans skipped: a coefficient keeps its first-scan
+     * precision, which costs at most one quantiser step in the few coefficients kept) */
+    dj_mask = 0;
+    for (s = sr; s <= 3; s++) {
+        if (s == 1 || s == 2) { dj_mask = 1; if (dj_fit(s, 1)) break; }
+        dj_mask = 0;
+        if (dj_fit(s, 0)) break;
+    }
     if (s > 3) return PDE_LIMIT;
     dj_s = s; dj_bs = (pdw)(8 >> s);
     dj_ow = (pdw)((dj_W + (1u << s) - 1) >> s);
     dj_oh = (pdw)((dj_H + (1u << s) - 1) >> s);
     dj_mrh = (pdw)(dj_vmax * dj_bs);
-    dj_nslot = dj_nslots[s]; dj_bstride = dj_bstr(s);
+    dj_nslot = dj_nslots[s]; dj_bstride = dj_bstr(s, dj_mask);
     dj_maxzz = dj_maxzzs[s];
     /* the slot maps */
     for (i = 0; i < 64; i++) dj_nmap[i] = 255;
@@ -568,8 +580,15 @@ static void dj_mcurow_stream(pdw xform)
 }
 
 /* ---- stored: one block of a scan ---------------------------------------------- */
-static pdw dj_isnz(pdi *b, pdw k) { return (pdw)b[dj_nslot + (k >> 4)] & (pdw)(1u << (k & 15)); }
-static void dj_setnz(pdi *b, pdw k) { b[dj_nslot + (k >> 4)] = (pdi)((pdw)b[dj_nslot + (k >> 4)] | (pdw)(1u << (k & 15))); }
+static pdw dj_isnz(pdi *b, pdw k)
+{
+    if (dj_mask) return (pdw)b[dj_nslot + (k >> 4)] & (pdw)(1u << (k & 15));
+    return (pdw)b[pdi_zz[k]];           /* 1/1: every coefficient is kept */
+}
+static void dj_setnz(pdi *b, pdw k)
+{
+    if (dj_mask) b[dj_nslot + (k >> 4)] = (pdi)((pdw)b[dj_nslot + (k >> 4)] | (pdw)(1u << (k & 15)));
+}
 
 static void dj_refbit(pdi *b, pdw k, pdi p1)
 {
@@ -690,7 +709,7 @@ static void dj_scan_stored(void)
     struct dj_comp *c;
     want = 0;
     for (i = 0; i < dj_nsc; i++) if (dj_c[dj_sci[i]].used) want = 1;
-    if (!want || (dj_prog && dj_ss > dj_maxzz)) { dj_skip_scan(); return; }
+    if (!want || (dj_prog && dj_ss > dj_maxzz) || (dj_prog && dj_ah && dj_ss && dj_s && !dj_mask)) { dj_skip_scan(); return; }
     for (i = 0; i < 4; i++) dj_c[i].pred = 0;
     dj_eobrun = 0; dj_rleft = dj_ri;
     if (dj_nsc == 1) {

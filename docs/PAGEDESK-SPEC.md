@@ -5009,7 +5009,12 @@ At 1/8 only the DC coefficient is used, with no transform: a progressive image
 at 1/8 skips every AC scan without decoding it. At 1/4 and 1/2 the module uses
 libjpeg's reduced transforms (2x2 and 4x4 outputs from the low-order
 coefficients), so a progressive image keeps 4 or 16 coefficients a block, plus a
-64-bit "nonzero" mask a block that the refinement scans' run lengths need.
+64-bit "nonzero" mask a block that the refinement scans' run lengths need. When the
+masks do not fit but the masked-free blocks do, the decoder takes the reduction without
+them and SKIPS the AC refinement scans (a kept coefficient has its first-scan precision, at
+most one quantiser step off, in the few coefficients kept): a 640x480 progressive
+photograph is then 160x120 at 1/4, not 80x60 at 1/8. This is a quality loss within L5's
+reduction, not an Incomplete bit.
 
 **What is accepted.** SOF0, SOF1 and SOF2 (baseline, extended sequential,
 progressive), Huffman coded, 8-bit precision, one to four components, any
@@ -5051,13 +5056,13 @@ image + bss.
 |---|---|
 | near: Huffman tables (2 DC + 2 AC, 838 each), quantisation (4 x 128), entropy buffer 1,420, raw buffer 512, row buffers 2,112, block and transform work arrays about 1,200 | 8,826 (the module's whole bss is 8,980) |
 | far, baseline (one scan holding every component): the output planes of ONE MCU row, `padded width * rows` for each component used | at most 1,056 x 32 (a 1/1 decode of a 4:1:1-or-wider image); 17 KiB for 4:2:0 |
-| far, progressive or multi-scan: per used component `blocks * stride` plus the planes of one MCU row; stride = 136 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes | up to 62 KiB |
+| far, progressive or multi-scan: per used component `blocks * stride` plus the planes of one MCU row; stride = 128 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes, or 32 (1/2) and 8 (1/4) without the mask | up to 62 KiB |
 
 Huffman table ids 2 and 3 (a file with four tables of a class) are `PDE_FILTER`;
 cjpeg, libjpeg's progressive scripts, Photoshop and the camera makers all use 0
 and 1. An unused component (grey output of a YCbCr image) has no storage at all.
-A 1,000 x 1,000 progressive photograph is decoded at 1/4 (16 bytes a block, 15,625
-blocks, 244 KB: does not fit) and so at 1/8 (2 bytes a block, 31 KB: fits); an image
+A 1,000 x 1,000 progressive photograph is decoded at 1/4 (8 bytes a block without the mask,
+15,625 blocks, 122 KB: does not fit) and so at 1/8 (2 bytes a block, 31 KB: fits); an image
 too large even at 1/8 (about 31,000 blocks of one component, say 4,400 x 4,400, or
 a width over 8,100) is `PDE_LIMIT` as above. A baseline image has no such limit in
 rows, only in width.

@@ -25,6 +25,7 @@ extern pdw g_wseg;              /* the workspace segment                    */
 extern pdw g_wbytes;            /* usable workspace bytes (<= 64,496: 65,520 less the 1,024-byte
                                    landing zone that follows it)          */
 pdw  pdi_src_open(void);        /* open the coded bytes: PDE_OK or PDE_*    */
+pdw  pdi_src_open_obj(pdw obj, pdw gen, pdw accept, pdw codec); /* any stream object */
 pdw  pdi_src_read(pdw seg, pdw off, pdw max); /* bytes read; 0 = end        */
 pdw  pdi_src_get(void *dst, pdw max);   /* the same into a NEAR buffer, max <= 1024 */
 void pdi_src_close(void);
@@ -34,14 +35,4 @@ pdw  pdi_dct_open(void);
 pdw  pdi_dct_row(pdw seg, pdw off, pdw row);
 void pdi_dct_close(void);
 void pdi_dct_drop(void);        /* PDV_X_INIT: forget warm state            */
-#ifdef PDXI_CCIT
-pdw  pdi_ccit_open(void);
-pdw  pdi_ccit_row(pdw seg, pdw off, pdw row);
-void pdi_ccit_close(void);
-#endif
-#ifdef PDXI_JB2
-pdw  pdi_jb2_open(void);
-pdw  pdi_jb2_row(pdw seg, pdw off, pdw row);
-void pdi_jb2_close(void);
-#endif
 #endif
