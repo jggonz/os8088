@@ -1,5 +1,5 @@
-20261109
-* ARCADE plays Space Invaders and more
-* Video Battle: a battle told in video
-* 286+ kernel ships on its own disks
-* Sound debug disk for field reports
+20261110
+* PageDesk: view and edit PDFs on an XT
+* Notes, highlights and saved edits
+* VGA, CGA and Hercules faces
+* Eight sample PDFs on its own disk
