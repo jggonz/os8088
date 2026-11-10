@@ -69,6 +69,7 @@ static pdw  dj_stored;                  /* coefficients kept (else streaming)  *
 static pdw  dj_decoded, dj_done;
 static pdw  dj_nslot, dj_bstride;       /* stored block: slots, bytes          */
 static pdw  dj_dec;                     /* 1/8 only: keep 1 block in 2^dec each way (a coarser grey box) */
+static pdw  dj_need, dj_askh, dj_askkb;   /* bytes the last dj_fit laid out; the last PDE_NEEDMEM asked (handle, KiB) */
 static pdw  dj_mask;                    /* stored blocks carry the 64-bit nonzero mask (1/2 and 1/4 only) */
 static pdb  dj_nmap[64];                /* natural position -> slot, 255 = none */
 static pdb  dj_sl2pos[64];
@@ -397,6 +398,10 @@ static pdw dj_headers(void)
     }
 }
 
+#define DJ_MAXW 64496u        /* 0xFFF0 less the 1,024-byte landing zone (the 64 KiB slot) */
+#ifndef PDMEM_SLOT
+#define PDMEM_SLOT 0          /* CX of the answer: CF=0 makes it 0 */
+#endif
 /* ---- the plan: colour, scale, memory ---------------------------------------- */
 static const pdb dj_nslots[4] = { 64, 16, 4, 1 };
 static const pdb dj_maxzzs[4] = { 63, 24, 4, 0 };
@@ -439,6 +444,7 @@ static pdw dj_fit(pdw s, pdw mask, pdw dec)
         c->pstride = pw; c->pbase = tot;
         tot = (pdw)(tot + add);
     }
+    dj_need = tot;
     return 1;
 }
 
@@ -501,6 +507,23 @@ static pdw dj_plan(void)
      * scan decoded), then without it (the AC refinement scans skipped: a coefficient keeps its first-scan
      * precision, which costs at most one quantiser step in the few coefficients kept) */
     dj_mask = 0; dj_dec = 0;
+    /* a progressive image that would fit its finer scale in a bigger slot asks for one (PDE_NEEDMEM,
+     * CX = PDMEM_SLOT = 0, DX = KiB); asked once per image, so a refused regrow falls to the loop below */
+    if (dj_stored && sr <= 3 && g_wbytes < DJ_MAXW) {
+        pdw m = (pdw)(sr == 1 || sr == 2), ok, save, kb;
+        ok = dj_fit(sr, m, 0) || (m && dj_fit(sr, 0, 0));
+        if (!ok) {
+            save = g_wbytes; g_wbytes = DJ_MAXW;
+            ok = dj_fit(sr, m, 0) || (m && dj_fit(sr, 0, 0));
+            g_wbytes = save;
+            kb = (pdw)((dj_need + 2047) >> 10);
+            if (ok && !(dj_askh == g_im.h && dj_askkb == kb)) {
+                dj_askh = g_im.h; dj_askkb = kb;
+                pdi_rdx = kb;
+                return PDE_NEEDMEM;
+            }
+        }
+    }
     for (s = sr; s <= 3; s++) {
         if (s == 1 || s == 2) { dj_mask = 1; if (dj_fit(s, 1, 0)) break; }
         dj_mask = 0;

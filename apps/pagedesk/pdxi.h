@@ -12,6 +12,7 @@
 #include "pdmath.h"
 
 /* ---- PDENG's door (the far vector from pdxb_init) ----------------------- */
+extern pdw pdi_rdx;
 extern pdw pdi_engcf;                           /* CF of the last call       */
 pdw pdi_engcall(pdw verb, pdw bx, pdw cx, pdw dx); /* AX; asm on the target  */
 

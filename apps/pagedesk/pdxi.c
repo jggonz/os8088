@@ -17,6 +17,7 @@
 #endif
 
 pdw pdi_engcf;                          /* CF of the last PDENG call          */
+pdw pdi_rdx;                            /* DX of a PDE_NEEDMEM answer (KiB wanted) */
 pdw pdi_cf;                             /* CF of this door's answer           */
 pdw pdi_engvec[2];                      /* PDENG's door, offset then segment  */
 
@@ -228,6 +229,6 @@ unsigned pdi_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
     case PDV_IMG_CLOSE: v_close(); r = PDE_OK; break;
     default:            r = PDE_RANGE; break;
     }
-    pdi_cf = (pdw)(r != PDE_OK && r != PDE_BUSY);
+    pdi_cf = (pdw)(r != PDE_OK && r != PDE_BUSY && r != PDE_NEEDMEM);
     return r;
 }

@@ -77,6 +77,10 @@ pdi_entry:
     add sp, 8
     mov cx, [_pdi_cf]               ; CF = (pdi_cf != 0); neg leaves AX alone
     neg cx
+    cmp ax, PDE_NEEDMEM            ; CX = 0 = PDMEM_SLOT here; DX = KiB wanted
+    jne .nd
+    mov dx, [_pdi_rdx]
+.nd:
     pop ds
     pop es
     pop di
