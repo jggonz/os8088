@@ -93,6 +93,8 @@ static int send_fontbank(void)
  * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
  * way the verb is called again. */
 #define SEG_XC   0xA000
+#define SEG_GLY2 0xC000             /* where PDR_GLYPHGROW moves the glyph claim (fonts, 20.22.8) */
+static unsigned g_glyold;           /* the moved claim's old size: its old place must stay 0xCD */
 extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
 static struct pdxb_init g_lastinit;
 static int g_loads, g_memasks;
@@ -131,6 +133,18 @@ static int ladder(pdw e)
             if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
             memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
         }
+        /* fonts (20.22.8): PDR_GLYPHGROW regrows the glyph claim to what PDREND asked AND MOVES it, as
+         * OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
+        if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY) {
+            unsigned old = (unsigned)g_lastinit.glyph_kb << 10;
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            memcpy(MEM(SEG_GLY2, 0), MEM(SEG_GLY, 0), old);
+            memset(MEM(SEG_GLY, 0), 0xCD, old); g_glyold = old;
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
         return 1;
     }
     return 0;
@@ -141,6 +155,9 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memcpy(keep, MEM(SEG_XB, 0), sizeof keep);
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
+    in.eng_seg = 0xF000;    /* never called on the host (pdr_host.c twins PDENG), but nonzero as on the
+                             * machine: verb_init reads 0 as "never INITed" and a NEEDMEM's re-INIT would
+                             * otherwise start a new document instead of keeping the page view */
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
@@ -179,6 +196,7 @@ static int canary_check(void)
 {
     int i, j, bad = 0;
     for (i = 0; i < 5; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (j = 0; j < (int)g_glyold; j++) if (MEM(SEG_GLY, 0)[j] != 0xCD) { fprintf(stderr, "CANARY: the moved glyph claim's old place written at +%d\n", j); bad = 1; break; }
     return bad;
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)

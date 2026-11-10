@@ -923,6 +923,89 @@ struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
     pdw  sseg, soff, sw, xlo, xhi, slo, shi, smode, inv;
 };
 /* [fonts 20.22.8]  */
+/* PDXF does everything a font needs from the FONT DICTIONARY: PDREND names the
+ * font object and a character code, never a program, an encoding or a CMap. */
+#define PDV_FNT_GLYPH   0xD8    /* XB: pdxb_fglyph. One glyph: its bitmap, advance and Latin   */
+#define PDV_FNT_PATH    0xD9    /* XB: pdxb_fpath. One glyph's outline as PDFP_* ops           */
+#define PDFK_NONE 0             /* program kinds (pdxb_fglyph.kind)                            */
+#define PDFK_TT   1
+#define PDFK_CFF  2
+#define PDFK_T1   3
+#define PDFK_T3   4             /* a Type 3 font: PDXF reads its CharProcs, no program                  */
+#define PDFG_INFO   0x0001      /* pdxb_fglyph.flags in: no bitmap, only gid/lat/adv           */
+#define PDFG_BLOCK  0x0004      /* in: a STRIKE BLOCK request (below): PDXF finds or makes the block of
+                                   (font, em64 >> 6), then the code's slot in it, rasterises (em64 != 0)
+                                   and records the width and the Latin byte; answers the slot and block */
+#define PDFB_SIZE   4096        /* a strike block: 128 glyph records (4 bytes: width, left bearing i8,
+                                   bitmap offset u16), the bitmaps from +512 (the PDFB strike layout of
+                                   11.2, slots 1..128, the record of slot s at (s-1)*4; the u16 next
+                                   free bitmap offset is at +3324),
+                                   the keys[128] (u16 code, 0xFFFF empty) at +3328 and info[128] (u16
+                                   /W width in 1/1000 em, u8 PD Latin, u8 flags PDFB_F_*) at +3584. The
+                                   slot of a code is its index in keys + 1, found from hash(code) =
+                                   (code ^ code >> 7) & 127 by linear probing                  */
+#define PDFB_HDR    64          /* the 64 bytes just below the blocks: SYN_MAX (4) entries of 4 words
+                                   (font obj, gen, px, pass last used) at +0, the block count at +60 and
+                                   the magic PDFB_MAGIC at +62. PDREND finds, PDXF makes and evicts      */
+#define PDFB_MAGIC  0x5342
+#define PDFB_NBLK   4           /* blocks at most: a 40 KiB glyph claim holds four, 32 KiB two, 24 none */
+#define PDFB_GLYPHKB 40         /* the glyph claim PDREND asks for (PDMEM_GLYPH) the first time a page
+                                   needs a block; the primary gives 40, else 32, else refuses (the
+                                   font is then drawn in the substitute face, PDF_INC_APPROX)      */
+#define PDFB_KEYS   3328
+#define PDFB_INFO   3584
+#define PDFB_T3REC  512         /* a Type 3 block (em64 = 0 only, so no bitmaps): CharProc (u16 obj, u16 gen) of slot s at
+                                   +512 + (s-1)*4, the FontMatrix as 6 x (u16 lo, i16 hi) 16.16 at +1536   */
+#define PDFB_T3FM   1536
+#define PDFB_F_BMP  0x01        /* the slot's bitmap is made                                    */
+#define PDFB_F_BIG  0x02        /* the glyph does not fit 32 px or the block: not bitmapped      */
+#define PDFG_LATIN  0x0002      /* out flags: lat is meaningful (the font has a /ToUnicode)    */
+#define PDFG_T0     0x0004      /* out: a Type0 font (codes are 2 bytes)                       */
+#define PDFG_VERT   0x0008      /* out: vertical writing (-V)                                  */
+#define PDFG_CHOP   0x0010      /* out: the program was larger than the workspace              */
+#define PDFE_NOPROG   1         /* pdxb_fglyph.err: the font has no embedded program           */
+#define PDFE_FORMAT   2         /* not TrueType, CFF or Type 1 (or a refused variant)          */
+#define PDFE_SIZE     3         /* the program does not fit the workspace                      */
+#define PDFE_READ     4         /* a stream could not be read                                  */
+#define PDFE_CMAP     5         /* a predefined CJK CMap: no data here                         */
+struct pdxb_fglyph {
+    pdw objnum, gen;        /* in: the font dictionary                                       */
+    pdw code;               /* in: the character code (1 byte, or 2 for a Type0 font)       */
+    pdw flags;              /* in: PDFG_INFO                                                 */
+    pdw em64;               /* in: the size in 1/64 pixel                                    */
+    pdw asc, rows;          /* in: the strike's ascent rows and total rows (<= 48)          */
+    pdw dseg, doff, cap;    /* in: where the bitmap goes. With PDFG_BLOCK: dseg and cap name the
+                               glyph claim PDREND holds (segment, KiB), which must be the one PDXF
+                               was handed at PDV_X_INIT (else PDE_RANGE); PDXF puts the header and
+                               the blocks at its top and answers doff = the header, cap = blocks */
+    pdw w;                  /* out: width px (0 = empty glyph); 0xFFFF = not bitmapped       */
+    pdi lb;                 /* out: left bearing px                                          */
+    pdw nb;                 /* out: bytes written                                            */
+    pdw adv64;              /* out: the program's advance, 1/64 pixel                        */
+    pdw adv1000;            /* out: a Type0 font's /W or /DW width, 1/1000 em                */
+    pdw lat;                /* out: PD Latin byte of the code's ToUnicode (0 none)           */
+    pdw gid;                /* out: the glyph index (0 = none)                               */
+    pdw cid;                /* out: a Type0 font's CID                                       */
+    pdw kind;               /* out: PDFK_*                                                   */
+    pdw oflags;             /* out: PDFG_*                                                   */
+    pdw slot;               /* out (PDFG_BLOCK): the slot, 0 = none                            */
+    pdw pass;               /* in (PDFG_BLOCK): PDREND's pass number: a block not used in this pass
+                               may be reused for a new (font, size)                            */
+    pdw blk;                /* out (PDFG_BLOCK): the block index of (font, size), 0xFFFF = none free */
+    pdw err;                /* out when the answer is a failure: PDFE_*                      */
+};
+#define PDFP_M 1                /* PDV_FNT_PATH ops: M x y | L x y | C x1 y1 x2 y2 x y | Z (i16 font units) */
+#define PDFP_L 2
+#define PDFP_C 3
+#define PDFP_Z 4
+struct pdxb_fpath {
+    pdw objnum, gen, code;  /* in */
+    pdw dseg, doff, cap;    /* in: the op buffer (words)                                     */
+    pdw len;                /* out: words written                                            */
+    pdw upem;               /* out                                                           */
+    pdw adv1000;            /* out: advance, 1/1000 em                                       */
+    pdw err;
+};
 /* [img 20.22.11-13]*/
 /* bilevel (20.22.12): follows pdxb_img in the XB, filled from /DecodeParms  */
 struct pdxb_imgx {

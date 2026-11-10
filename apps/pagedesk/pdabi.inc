@@ -326,6 +326,39 @@ X8D_GEND                 equ 3
 X8D_NOMASK               equ 4
 X8F_LIMIT                equ 1
 X8F_TRANSP               equ 2
+PDV_FNT_GLYPH            equ 0xD8
+PDV_FNT_PATH             equ 0xD9
+PDFK_NONE                equ 0
+PDFK_TT                  equ 1
+PDFK_CFF                 equ 2
+PDFK_T1                  equ 3
+PDFK_T3                  equ 4
+PDFG_INFO                equ 0x0001
+PDFG_BLOCK               equ 0x0004
+PDFB_SIZE                equ 4096
+PDFB_HDR                 equ 64
+PDFB_MAGIC               equ 0x5342
+PDFB_NBLK                equ 4
+PDFB_GLYPHKB             equ 40
+PDFB_KEYS                equ 3328
+PDFB_INFO                equ 3584
+PDFB_T3REC               equ 512
+PDFB_T3FM                equ 1536
+PDFB_F_BMP               equ 0x01
+PDFB_F_BIG               equ 0x02
+PDFG_LATIN               equ 0x0002
+PDFG_T0                  equ 0x0004
+PDFG_VERT                equ 0x0008
+PDFG_CHOP                equ 0x0010
+PDFE_NOPROG              equ 1
+PDFE_FORMAT              equ 2
+PDFE_SIZE                equ 3
+PDFE_READ                equ 4
+PDFE_CMAP                equ 5
+PDFP_M                   equ 1
+PDFP_L                   equ 2
+PDFP_C                   equ 3
+PDFP_Z                   equ 4
 CCF_EOL                  equ 1
 CCF_ALIGN                equ 2
 CCF_EOB                  equ 4
@@ -1031,6 +1064,46 @@ PDXB_X8ROW_SHI                 equ 16
 PDXB_X8ROW_SMODE               equ 18
 PDXB_X8ROW_INV                 equ 20
 PDXB_X8ROW_BYTES               equ 22
+
+; ---- struct pdxb_fglyph (48 bytes) -----------------------------------------
+PDXB_FGLYPH_OBJNUM             equ 0
+PDXB_FGLYPH_GEN                equ 2
+PDXB_FGLYPH_CODE               equ 4
+PDXB_FGLYPH_FLAGS              equ 6
+PDXB_FGLYPH_EM64               equ 8
+PDXB_FGLYPH_ASC                equ 10
+PDXB_FGLYPH_ROWS               equ 12
+PDXB_FGLYPH_DSEG               equ 14
+PDXB_FGLYPH_DOFF               equ 16
+PDXB_FGLYPH_CAP                equ 18
+PDXB_FGLYPH_W                  equ 20
+PDXB_FGLYPH_LB                 equ 22
+PDXB_FGLYPH_NB                 equ 24
+PDXB_FGLYPH_ADV64              equ 26
+PDXB_FGLYPH_ADV1000            equ 28
+PDXB_FGLYPH_LAT                equ 30
+PDXB_FGLYPH_GID                equ 32
+PDXB_FGLYPH_CID                equ 34
+PDXB_FGLYPH_KIND               equ 36
+PDXB_FGLYPH_OFLAGS             equ 38
+PDXB_FGLYPH_SLOT               equ 40
+PDXB_FGLYPH_PASS               equ 42
+PDXB_FGLYPH_BLK                equ 44
+PDXB_FGLYPH_ERR                equ 46
+PDXB_FGLYPH_BYTES              equ 48
+
+; ---- struct pdxb_fpath (20 bytes) ------------------------------------------
+PDXB_FPATH_OBJNUM              equ 0
+PDXB_FPATH_GEN                 equ 2
+PDXB_FPATH_CODE                equ 4
+PDXB_FPATH_DSEG                equ 6
+PDXB_FPATH_DOFF                equ 8
+PDXB_FPATH_CAP                 equ 10
+PDXB_FPATH_LEN                 equ 12
+PDXB_FPATH_UPEM                equ 14
+PDXB_FPATH_ADV1000             equ 16
+PDXB_FPATH_ERR                 equ 18
+PDXB_FPATH_BYTES               equ 20
 
 ; ---- struct pdxb_imgx (12 bytes) -------------------------------------------
 PDXB_IMGX_K                    equ 0

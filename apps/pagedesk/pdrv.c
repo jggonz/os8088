@@ -243,7 +243,7 @@ static pdw x_resolve(void)
     pdw id, w = x_pend & ~x_ref;
     if ((g_xrm & IK_BOTH) == IK_BOTH) ik_size();
     if (x_mwant && !(x_ref & XR_MEM)) {
-        if (x_asks < PDR_XASKS) return x_answer((pdw)(0x80 | x_mwant), x_mwant, x_mkb, PDR_INTERP);
+        if (x_asks < PDR_XASKS) return x_answer(x_mwant, (pdw)(x_mwant & 0x7F), x_mkb, PDR_INTERP);
         x_ref |= XR_MEM;
     }
     for (id = PDX_COUNT - 1; id; id--) if (w & (1u << id)) {
@@ -257,7 +257,12 @@ static void x_answered(void)
 {
     pdw a = x_ask;
     x_ask = 0; x_mwant = 0;
-    if (a & 0x80) { if (!(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM; }
+    /* a refused XC or X8 refuses regions for the page view; the glyph claim (fonts, 20.22.8) is refused
+     * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
+    if (a & 0x80) {
+        if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
+        else if (a != (0x80 | PDMEM_SLOT) && !(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM;
+    }
     else if (a && !x_have(a)) x_refuse(a);
 }
 /* the stash (20.22.7.10): the resident decoder `d` decodes, into the XC above
@@ -699,17 +704,24 @@ static void xc_adopt(void)
 }
 #define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
 typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
+#define INI_GLYW 13                     /* glyph_seg's word, glyph_kb the next (fonts, 20.22.8; held by hosttest/pdx_xmod.c) */
 static pdw verb_init(pdw xbseg)
 {
     pdw bound = pdr_eng_seg, i;         /* 0 on the FIRST INIT: the bss */
     /* the answer to a PDE_NEEDMEM (20.22.7): the same claims with a region
      * added. The page view and the document's caches go on */
     if (bound && (x_ask & 0x80)) {
-        for (i = 0; i < INI_OLDW; i++) if (pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
+        /* the glyph claim may have been regrown and moved (PDMEM_GLYPH): its two words may differ */
+        for (i = 0; i < INI_OLDW; i++)
+            if ((i - INI_GLYW) > 1 && pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
 #ifdef PD_DEBUGX
         fprintf(stderr, "fast path i=%u of %u\n", i, INI_OLDW);
 #endif
-        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); x8_init(g_ini.x8_seg, g_ini.x8_kb); return PDE_OK; }
+        if (i == INI_OLDW) {
+            pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt();
+            x8_init(g_ini.x8_seg, g_ini.x8_kb); syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb);
+            return PDE_OK;
+        }
     }
     g_xb = xbseg;
     /* the engine's vector first, before anything can call the engine. The

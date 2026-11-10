@@ -5,6 +5,21 @@
  * ==========================================================================*/
 #include "pdrenc.h"
 
+/* ---- Type 3 (20.22.8): ON unless PDR_NO_TYPE3. rcore's two hooks in pdri.c (#ifndef there):
+ * PDR_T3_DRAIN() before each token of interp_run starts the next queued glyph's CharProc
+ * (pdrt3.c, through do_form) at an operator boundary; PDR_T3_FRAME_END(), first in frame_end,
+ * notes that the glyph's own frame is over. Near cost: the queue test and the frame test */
+#if !defined(PDR_TYPE3) && !defined(PDR_NO_TYPE3)
+#define PDR_TYPE3 1
+#endif
+#ifdef PDR_TYPE3
+static pdw g_t3h, g_t3n;            /* the queue: head and count (pdrt3.c)                     */
+static pdw g_t3f, g_t3fp;           /* the frame a glyph proc runs in (0 none), and its pass    */
+static pdw t3_drain(void);
+#define PDR_T3_DRAIN()     if (g_t3n && t3_drain()) continue
+#define PDR_T3_FRAME_END() if (g_t3f == g_nfr) g_t3f = 0
+#endif
+
 /* ---- the exchange block -------------------------------------------------- */
 static pdw g_xb;                    /* XB segment (PDV_REND_INIT)             */
 
@@ -146,10 +161,11 @@ static pdw glyph_code(const char *name)
 /* ---- the font cache ------------------------------------------------------ */
 struct pdr_font {
     pdw objnum, gen;
-    pdb used, fam, sty, ok;         /* ok: 0 unsupported (Type0): draws nothing */
+    pdb used, fam, sty, ok;         /* ok: 0 unsupported: draws nothing         */
     pdw first, nw;                  /* /FirstChar, /Widths length (0 = none)   */
     pdb enc[224];                   /* code 32..255 -> PD Latin (0 = none)     */
     pdw wid[224];                   /* 1/1000 em, 0xFFFF = not fetched         */
+    pdb emb, epad_;                 /* 1 an embedded program, 2 a Type0 font (20.22.8) */
 };
 /* the cache's 4 entries live in the workspace (WS_FN); one is resident at a time */
 static struct pdr_font g_fw;
@@ -219,7 +235,7 @@ static void font_classify(struct pdr_font *f, const char *base)
     if (r != 0xFFFF) f->sty |= (pdb)((r >> 8) ? 2 : 1);
     if (ci_has(b, "italic") || ci_has(b, "oblique")) f->sty |= 2;     /* both may be present */
     if (ci_has(b, "bold")) f->sty |= 1;
-    if (!known) inc_note(PDF_INC_FONT, "font substituted");
+    if (!known && !f->emb) inc_note(PDF_INC_FONT, "font substituted");
 }
 
 /* build the code -> PD Latin table from /Encoding */
@@ -289,9 +305,19 @@ static pdw font_get(pdw obj, pdw gen)
         base[0] = 0;
         if (dict_get(obj, gen, "BaseFont", 0, 0) == 0 && g_dg.kind == PDK_NAME) pdr_scpy(base, g_dg.text, 64);
         if (dict_get(obj, gen, "Subtype", 0, 0) == 0 && g_dg.kind == PDK_NAME) {
-            if (ci_has(g_dg.text, "type0")) {
-                f->ok = 0; inc_note(PDF_INC_FONT, "CID font (Type0)");
-            } else if (ci_has(g_dg.text, "type3")) inc_note(PDF_INC_FONT, "Type3 font");
+            if (ci_has(g_dg.text, "type0")) f->emb = 2;                  /* PDXF reads it (20.22.8) */
+#ifdef PDR_TYPE3
+            else if (ci_has(g_dg.text, "type3")) f->emb = 3;                       /* PDXF + pdrt3.c (20.22.8) */
+#else
+            else if (ci_has(g_dg.text, "type3")) inc_note(PDF_INC_FONT, "Type3 font");
+#endif
+        }
+        if (!f->emb) {                                  /* an embedded program: FontFile, FontFile2 or FontFile3 */
+            static char ff[11] = "FontFile";
+            for (i = 0; i < 3 && !f->emb; i++) {
+                ff[8] = i ? (char)('1' + i) : 0; ff[9] = 0;
+                if (!dict_get(obj, gen, "FontDescriptor", ff, 0)) f->emb = 1;
+            }
         }
         font_classify(f, base);
         if (ci_has(base, "symbol") || ci_has(base, "dingbat")) inc_note(PDF_INC_FONT, "Symbol font");
@@ -320,12 +346,14 @@ static pdw font_get(pdw obj, pdw gen)
     return slot;
 }
 
+static pdw g_ew, g_ewv;             /* emb_glyph's width of the current code (Type0, Type 3), 1/1000 em, and whether it is valid */
 /* advance width of a CODE in 1/1000 em: /Widths, else the base-14 table of
  * the glyph the code maps to (11.3), else a flat guess */
 static pdw font_width(pdw fi, pdw code)
 {
     struct pdr_font *f = font_sel(fi);
     pdw w, face, lat;
+    if (f->emb >= 2 && g_ewv) return g_ew;         /* a Type0 / Type 3 font's width of the code just made (emb_glyph) */
     if (code < 32) {
         /* a subset font's control codes (TeX's ligatures at 11..15, a symbolic
          * font's 1..31) are not drawn (no PD Latin for them) but still ADVANCE
