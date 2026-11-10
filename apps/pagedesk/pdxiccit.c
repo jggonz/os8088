@@ -447,6 +447,66 @@ static void cf_sample(void)
     if (cf_cols & 7)  /* pad bits count as 1 = 255 grey */ cf_samp[cf_nb - 1] |= (pdb)~m;
 }
 
+/* ---- the codec's parameters, read from /DecodeParms through PDENG's DICT_GET (target only) -----------------
+ * Nobody upstream fills pdxb_imgx (QA R22/R23: every CCITT file decoded as K = 0, 1,728 columns, and
+ * /JBIG2Globals was never found), so the module asks for them itself. The codec is the LAST stage of the
+ * chain: when /Filter is an array, its /DecodeParms entry is the last element. */
+#ifndef PD_HOST
+static struct pdxb_dictget bl_dg;
+static pdb bl_idx;                  /* 0 = /DecodeParms is a dictionary, else (index + 1) of its array element */
+static pdw bl_get(pdw obj, pdw gen, const char *name)
+{
+    pdb *q = (pdb *)&bl_dg;
+    pdw i = 0, n = 0;
+    for (i = 0; i < sizeof bl_dg; i++) q[i] = 0;
+    bl_dg.objnum = obj; bl_dg.gen = gen;
+    for (i = 0; "DecodeParms"[i]; i++) bl_dg.key[0][i] = "DecodeParms"[i];
+    if (bl_idx) { bl_dg.key[1][0] = '['; bl_dg.key[1][1] = (char)('0' + bl_idx - 1); bl_dg.key[1][2] = ']'; n = 1; }
+    if (name) for (i = 0; name[i] && i < 31; i++) bl_dg.key[1 + n][i] = name[i];
+    pd_fcopy_out(&bl_dg, g_xb, 0, sizeof bl_dg);
+    pdi_engcall(PDV_ENG_DICT_GET, 0, 0, 0);
+    if (pdi_engcf) return PDK_NULL;
+    pd_fcopy_in(g_xb, 0, &bl_dg, sizeof bl_dg);
+    return bl_dg.kind;
+}
+static void bl_params(struct pdxb_imgx *p, pdw obj, pdw gen, pdw codec)
+{
+    pdb *q = (pdb *)p;
+    pdw i, k;
+    for (i = 0; i < sizeof *p; i++) q[i] = 0;
+    p->flags = CCF_EOB;
+    if (!obj) return;
+    bl_idx = 0;
+    bl_dg.objnum = obj; bl_dg.gen = gen;
+    {   /* /Filter as an array: the last stage's parameters */
+        pdb *z = (pdb *)&bl_dg;
+        for (i = 0; i < sizeof bl_dg; i++) z[i] = 0;
+        bl_dg.objnum = obj; bl_dg.gen = gen;
+        for (i = 0; "Filter"[i]; i++) bl_dg.key[0][i] = "Filter"[i];
+        pd_fcopy_out(&bl_dg, g_xb, 0, sizeof bl_dg);
+        pdi_engcall(PDV_ENG_DICT_GET, 0, 0, 0);
+        if (!pdi_engcf) {
+            pd_fcopy_in(g_xb, 0, &bl_dg, sizeof bl_dg);
+            if (bl_dg.kind == PDK_ARR && bl_dg.count > 0 && bl_dg.count < 5) bl_idx = (pdb)bl_dg.count;
+        }
+    }
+    if (codec == PDCD_JBIG2) {
+        if (bl_get(obj, gen, "JBIG2Globals") == PDK_REF) p->globals = bl_dg.refnum;
+        return;
+    }
+    k = bl_get(obj, gen, "K");
+    if (k == PDK_INT || k == PDK_REAL) p->k = (pdw)bl_dg.num.hi;
+    k = bl_get(obj, gen, "Columns");
+    if (k == PDK_INT || k == PDK_REAL) p->cols = (pdw)bl_dg.num.hi;
+    k = bl_get(obj, gen, "Rows");
+    if (k == PDK_INT || k == PDK_REAL) p->rows = (pdw)bl_dg.num.hi;
+    if (bl_get(obj, gen, "EndOfLine") == PDK_BOOL && bl_dg.num.hi) p->flags |= CCF_EOL;
+    if (bl_get(obj, gen, "EncodedByteAlign") == PDK_BOOL && bl_dg.num.hi) p->flags |= CCF_ALIGN;
+    if (bl_get(obj, gen, "EndOfBlock") == PDK_BOOL && !bl_dg.num.hi) p->flags &= (pdw)~CCF_EOB;
+    if (bl_get(obj, gen, "BlackIs1") == PDK_BOOL && bl_dg.num.hi) p->flags |= CCF_BLACK1;
+}
+#endif
+
 static pdw cf_open(pdw k, pdw cols, pdw rows, pdw flags, pdw ih, pdw want_w)
 {
     pdw e, i;

@@ -178,7 +178,11 @@ static pdw v_open(void)
     g_im.out_ncomp = 0; g_im.rowbytes = 0; g_im.scale = 0;
     if (c == PDCD_DCT) r = pdi_dct_open();
 #if defined(PDXI_CCIT) || defined(PDXI_JB2)
+#ifdef PD_HOST
     pd_fcopy_in(g_xb, sizeof(struct pdxb_img), &s_imgx, sizeof s_imgx);
+#else
+    bl_params(&s_imgx, g_im.objnum, g_im.gen, c);   /* K, Columns, ... and /JBIG2Globals: nobody upstream fills them (QA R22, R23) */
+#endif
 #endif
 #ifdef PDXI_CCIT
     if (c == PDCD_CCITT) {
