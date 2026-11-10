@@ -372,6 +372,8 @@ static void ovl_th_step(void)
     pd_fcopy_out(&pdu_xth, pdu_xb, 0, sizeof(pdu_xth));
     r = pdu_mcall(PDU_M_REND, PDV_REND_THUMB, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
         pd_fcopy_in(pdu_xb, 0, &pdu_xth, sizeof(pdu_xth));
         return;

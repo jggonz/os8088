@@ -2,7 +2,7 @@
 ; os8088 - apps/pagedesk/stubs/pdstub.asm     STAND-IN MODULES (PAGEDESK-SPEC
 ;                                              3.1, 20.6)
 ;
-; One source, three images: assembled with -DSTUB_ENG, -DSTUB_REND or
+; One source, eight images: assembled with -DSTUB_ENG, -DSTUB_REND or
 ; -DSTUB_WRT into a module with the real one's header and door (PAGEDESK-SPEC
 ; 3.1, apps/loom/lmpvmod.asm's shape), so the primary - its parts table, its
 ; header checks, its far vectors, its job scheduler and its three layouts - is
@@ -21,6 +21,10 @@
 ;           STATUS, which says the page is an INCOMPLETE rendering by "stub
 ;           renderer" - so the picture can never be mistaken for a render.
 ;   PDWRT   INIT; everything else PDE_NOTFOUND (the save path's error text).
+;   PDXK PDXG PDXF PDXI PDXJ (-DSTUB_XK ... -DSTUB_XJ, PAGEDESK-SPEC
+;           20.22.2.3): the slot's occupants until each owner's lands -
+;           PDV_X_INIT, everything else PDE_NOTFOUND, and 1 KiB of bss so the
+;           OP_COMP row packs. The Makefile's PD_XK_MOD ... PD_XJ_MOD.
 ;
 ; It touches no file. Constants are spelled out here rather than taken from
 ; apps/pagedesk/pdabi.inc, which is the math agent's and had not landed when
@@ -35,7 +39,8 @@ PDE_OK       equ 0
 PDE_RANGE    equ 32
 PDE_NOTFOUND equ 53
 PDE_BUSY     equ 65
-PDM_ABI      equ 1
+PDM_ABI      equ 2                  ; pdabi.h: any PDF (20.22)
+%define PDS_BSS 256
 
 %ifdef STUB_ENG
   PDS_MAGIC equ 0x4550
@@ -46,8 +51,23 @@ PDM_ABI      equ 1
 %elifdef STUB_WRT
   PDS_MAGIC equ 0x5750
   PDS_BASE  equ 0x80
+%elifdef STUB_XK
+  PDS_MAGIC equ 0x4B50              ; 'PK'
+%elifdef STUB_XG
+  PDS_MAGIC equ 0x4750              ; 'PG'
+%elifdef STUB_XF
+  PDS_MAGIC equ 0x4650              ; 'PF'
+%elifdef STUB_XI
+  PDS_MAGIC equ 0x4950              ; 'PI'
+%elifdef STUB_XJ
+  PDS_MAGIC equ 0x4A50              ; 'PJ'
 %else
-  %error "assemble with -DSTUB_ENG, -DSTUB_REND or -DSTUB_WRT"
+  %error "assemble with -DSTUB_ENG/REND/WRT or -DSTUB_XK/XG/XF/XI/XJ"
+%endif
+%ifndef PDS_BASE
+  %define STUB_OCC                  ; an occupant: its verbs start at 0xC0
+  PDS_BASE  equ 0xC0                ; PDV_X_INIT
+  %define PDS_BSS 1024
 %endif
 
 org 0
@@ -55,7 +75,7 @@ pds_hdr:
     dw PDS_MAGIC                    ; +0 magic
     dw PDM_ABI                      ; +2 the ABI
     dw pds_end                      ; +4 image size
-    dw 256                          ; +6 bss: unused, declared so the part
+    dw PDS_BSS                      ; +6 bss: unused, declared so the part
                                     ;    (image + bss as zeros) compresses the
                                     ;    way a real module's does (OP_COMP)
 %if ($ - $$) != 8
@@ -308,6 +328,13 @@ pds_x1:     dw 0
 ; ---------------------------------------------------------------------------
 pds_tab:
     dw pds_init
+pds_tab_end:
+%endif
+
+%ifdef STUB_OCC
+; ---------------------------------------------------------------------------
+pds_tab:
+    dw pds_init                     ; PDV_X_INIT
 pds_tab_end:
 %endif
 

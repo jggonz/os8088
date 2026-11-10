@@ -69,10 +69,14 @@ pdr_entry:
     push ax                         ;   unsigned bx, unsigned verb
     call _pdr_verb
     add sp, 8
+    mov cx, [_pdr_out_cx]           ; PDE_NEEDMEM's region, PDE_NEEDMOD's and
+    mov dx, [_pdr_out_dx]           ; NEEDMEM's DX (20.22.7); scratch otherwise
     or ax, ax
     jz .ok
-    cmp ax, PDE_BUSY
-    je .ok
+    mov bx, ax                      ; PDE_BUSY, PDE_NEEDMOD and PDE_NEEDMEM
+    sub bx, PDE_BUSY                ; (65..67) are not failures: CF = 0
+    cmp bx, PDE_NEEDMEM - PDE_BUSY + 1
+    jb .ok
     stc
     jmp short .out
 .ok:
@@ -121,6 +125,12 @@ section .text
 ; this segment never parses or prints a number and never checksums (PDENG's and PDWRT's work)
 %define PDM_SKIP_PARSE
 %define PDM_SKIP_CRC
+; nor uses these (20.22.7's room): the base matrix is its own (pdrv.c view_base),
+; it maps no device point back to the page, writes no pt16 and no far word
+%define PDM_SKIP_U32X
+%define PDM_SKIP_TOPT16
+%define PDM_SKIP_VIEWX
+%define PDM_SKIP_POKEW
 %include "pagedesk/pdmath.inc"
 %endif
 

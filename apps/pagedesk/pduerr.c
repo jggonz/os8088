@@ -19,11 +19,13 @@ static const char *pdu_errtext(int code)
     case PDE_FILTER:   return "It uses a stream filter PageDesk cannot decode.";
     case PDE_FONT:     return "It uses a font PageDesk cannot draw.";
     case PDE_GRAPHICS: return "It uses graphics outside the XT profile.";
-    case PDE_ENCRYPT:  return "The file is encrypted; PageDesk cannot open it.";
-    case PDE_XREFSTM:  return "It uses cross-reference streams (PDF 1.5+ packing).";
+    case PDE_PASSWORD: return "A password is needed.";
+    case PDE_ENCRYPT:  return "Its encryption handler is not supported.";
+    case PDE_XREFSTM:  return "Its cross-reference stream is damaged.";
     case PDE_SIGNED:   return "The file is signed: it opens read-only.";
     case PDE_RANGE:    return "A page or number is outside PageDesk's range.";
     case PDE_LIMIT:    return "The file exceeds one of PageDesk's limits.";
+    case PDE_NOSLOT:                    /* no RAM for a module (20.22.6) */
     case PDE_NOMEM:    return "Not enough memory. Close a window and try again.";
     case PDE_STACK:    return "Out of module stack: the document was closed."; /* deepstk */
     case PDE_IO:       return "The disk could not be read.";

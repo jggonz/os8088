@@ -176,6 +176,7 @@ PDK_SLOT FILE_DELETE,    _os88_file_delete
 PDK_SLOT FILE_RENAME,    _os88_file_rename
 PDK_SLOT FILE_WRITE,     _os88_file_write_segoff, _os88_file_write
 PDK_SLOT FILE_WRITE_SEQ, _os88_file_write_seq
+PDK_SLOT GET_TICKS,      _os88_ticks
 PDK_SLOT GFX_LOCK,       _os88_gfx_lock
 PDK_SLOT GFX_UNLOCK,     _os88_gfx_unlock
 PDK_SLOT WM_CLIP_SET,    _os88_wm_clip_set
