@@ -535,6 +535,17 @@ static int ovl_pg_onfile(const char *name)
  * kind 0 Save As (14.2), 1 New (14.6), 2 Extract (13.8). The writer reads
  * the SOURCE in its own folder (D14) and writes here, so a job stands in the
  * TARGET's folder: the dialog left the instance there. */
+
+/* a refusal before the job starts: the same sentence the finished job speaks (ovl_save_done) - WITH the file's name (F18) */
+static void ovl_savefail(const char *name, unsigned err)
+{
+    os88_strcpy(pdu_line, "Could not save ", sizeof(pdu_line));
+    pdu_cat(pdu_line, name, sizeof(pdu_line));
+    pdu_cat(pdu_line, ": ", sizeof(pdu_line));
+    pdu_cat(pdu_line, pdu_errtext(err), sizeof(pdu_line));
+    pdu_say(pdu_line);
+}
+
 static int ovl_save_begin(const char *name, int kind)
 {
     int r;
@@ -553,7 +564,7 @@ static int ovl_save_begin(const char *name, int kind)
             if (pd_fpeekw(pdu_xb, 0) != pdu_xopen.size.lo
                 || pd_fpeekw(pdu_xb, 2) != pdu_xopen.size.hi) {
                 os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
-                pdu_say2("Could not save ", pdu_errtext(PDE_CHANGED));
+                ovl_savefail(name, PDE_CHANGED);
                 pdu_status_paint();
                 return 1;
             }
@@ -579,7 +590,7 @@ static int ovl_save_begin(const char *name, int kind)
     pdu_pfl = pdu_pfm != 0;             /* the pre-flight brings PDWRT in */
     r = pdu_pfl ? 0 : pdu_wrt_in_now();
     if (r) {
-        pdu_say2("Could not save ", pdu_errtext(r));
+        ovl_savefail(name, (unsigned)r);
         pdu_status_paint();
         return 1;
     }
