@@ -346,7 +346,7 @@ static pdw emb_glyph(struct pdr_font *f, pdw code)
         if (tried || !x_have(PDX_FNT)) { if (!tried) x_need(PDX_FNT); return 0; }
         tried = 1;
         g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
-        g_fgl.em64 = (pdw)(px << 6); g_fgl.asc = px; g_fgl.rows = (pdw)(px + (px + 2) / 3 + 1);
+        g_fgl.em64 = (pdw)(px << 6); g_fgl.asc = px; g_fgl.rows = (pdw)(px + (px >> 2) + 1);
         g_fgl.dseg = g_gseg; g_fgl.doff = boff;
         pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
         x_call(PDV_FNT_GLYPH, 0, 0, 0);

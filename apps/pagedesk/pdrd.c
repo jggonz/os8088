@@ -538,7 +538,7 @@ static pdw strike_load(pdw id)
     if (b == 2) {                                   /* a synthetic strike: (font, size) block idx */
         if (idx >= g_synn) return 0;
         g_sseg = (pdw)(g_gseg + (syn_off(idx) >> 4)); g_soff = 0;
-        g_ssize = g_syn[idx].px; g_sasc = g_ssize; g_sdesc = (pdw)((g_ssize + 2) / 3 + 1);
+        g_ssize = g_syn[idx].px; g_sasc = g_ssize; g_sdesc = (pdw)((g_ssize >> 2) + 1);
         g_sfirst = 1; g_slast = 128; g_sflags = 0; g_sid = id;
         return 1;
     }
