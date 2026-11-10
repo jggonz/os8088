@@ -93,7 +93,7 @@ static int send_fontbank(void)
  * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
  * way the verb is called again. */
 #define SEG_XC   0xA000
-#define SEG_GLY2 0xC000             /* where PDR_GLYPHGROW moves the glyph claim (fonts, 20.22.8) */
+#define SEG_GLY2 0xC000             /* where PDR_GLYPHGROW (fonts, 20.22.8) and PDR_GLYMOVE (20.22.7.11) move the glyph claim */
 static unsigned g_glyold;           /* the moved claim's old size: its old place must stay 0xCD */
 extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
 static struct pdxb_init g_lastinit;
@@ -107,6 +107,31 @@ static int ladder(pdw e)
         pdw id = pdr_out_dx;
         g_loads++;
         if (g_loads > 64) { fprintf(stderr, "LADDER: more than 64 module answers\n"); exit(9); }
+        /* PDR_XCDROP: the primary's release-before-refuse (plat's pdu_slot_load):
+         * the slot's claim is short, so XC is released and PDREND re-INITed with
+         * xc_seg 0 under this NEEDMOD answer, mid-view (20.22.7.11) */
+        /* PDR_GLYMOVE: PDXF's GLYPH grant (plat): the glyph claim moves to a new,
+         * bigger region under this answer, once, mid-view (20.22.7.11) */
+        if (getenv("PDR_GLYMOVE") && g_lastinit.glyph_seg == SEG_GLY) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = 40;
+            memset(MEM(SEG_GLY2, 0), 0xA5, 40u << 10);   /* a new region holds anything */
+            memset(MEM(SEG_GLY, 0), 0xCD, 8192);         /* the old one is gone: a write there is a canary */
+            g_clsize[3] = 0;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
+        if (getenv("PDR_XCDROP") && g_lastinit.xc_seg) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.xc_seg = 0; g_lastinit.xc_kb = 0;
+            g_lastinit.flate_kb = 43; g_lastinit.cache_kb += 1;   /* PDENG's words move with it (plat) */
+            g_clsize[4] = 0;                            /* no claim: the canary from byte 0 */
+            memset(MEM(SEG_XC, 0), 0xCD, 8192);         /* = CANARY, below */
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
         if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
         return 1;
     }
