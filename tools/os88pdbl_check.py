@@ -137,7 +137,7 @@ def compose(page, img, x, y, op):
                 d = page[yy][xx]
                 page[yy][xx] = (d | v, d & v, d ^ v, 1 - (d ^ v), v)[op]
 
-def check_jb2_generic(rnd, bins):
+def check_jb2_generic(rnd, bins, use_mutool=False):
     fails = total = 0
     with tempfile.TemporaryDirectory() as td:
         for case in range(60):
@@ -163,6 +163,10 @@ def check_jb2_generic(rnd, bins):
                 segs.append(F.segment(1 + n, rnd.choice([38, 39]), F.generic_segment(img, x, y, op, tpl, tpgd, at, mmr)))
                 compose(page, img, x, y, op)
             data = b''.join(segs)
+            if use_mutool:
+                total += 1
+                if mutool_pgm(segs, None, w, h, td) != page: print('MUTOOL differs generic case', case, desc); fails += 1
+                continue
             for want in (0, w // 2, w // 4):
                 for bn in bins:
                     res, err = run_jb2(bn, data, None, w, h, want, td)
@@ -396,6 +400,7 @@ if __name__ == '__main__':
         if what == 'mutool-jb2-huff': f += check_jb2_huff(rnd, BINS, True)
         if what == 'jb2-halftone': f += check_jb2_halftone(rnd, BINS)
         if what == 'mutool-jb2-halftone': f += check_jb2_halftone(rnd, BINS, True)
+        if what == 'mutool-jb2-generic': f += check_jb2_generic(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 

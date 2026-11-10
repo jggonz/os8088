@@ -26,21 +26,23 @@
  *   pdw cf_getrow(r)                                ->  PDE_*; row in bl_out
  * ==========================================================================*/
 
-#define BL_MAXW   8192          /* widest bilevel image: rowbytes <= 1024     */
+#define BL_MAXW   5120          /* widest bilevel image (600 dpi A4 is 4,960): a row is 640 bytes */
+#define BL_ROW    648           /* a row buffer: 640 bytes and the pad the shifts read           */
 
 /* what a bilevel decoder reports at open, and the row it fills */
-static pdb  bl_out[1024];
+static pdb  bl_out[1024];       /* also pdxijb2.c's tr_row: never live together */
 static pdw  bl_w, bl_h;         /* source width and height                    */
 static pdw  bl_scale;           /* 0..3                                       */
 static pdw  bl_ow, bl_oh;       /* delivered width and height                 */
 static pdw  bl_omode;           /* PDIM_BITS1 or PDIM_GREY8                   */
 static pdw  bl_orb;             /* delivered bytes a row                      */
 
-/* Five 1,032-byte rows shared by the two decoders (they never run together) and, in
+/* Four 648-byte rows shared by the two decoders (they never run together) and, in
  * pdxijb2.c, by the phases of one decoder that never overlap in time. */
-static pdb  bl_pool[5][1032];
-static pdb  bl_pop[256];        /* popcounts                                  */
-static pdb  bl_acc[1032];       /* white counts a column: at most 8 x 8 = 64 fits a byte */
+static pdb  bl_pool[4][BL_ROW];
+static pdb  bl_pop[16];         /* popcounts of a nibble                       */
+#define BL_ACC 1032
+static pdb  bl_acc[BL_ACC];       /* white counts a column: at most 8 x 8 = 64 fits a byte */
 static pdw  bl_arows;           /* rows accumulated into the group            */
 
 /* CCF_* (the flags) are in pdabi.h */
@@ -52,7 +54,7 @@ static pdw bl_pick(pdw w, pdw h, pdw want)
     pdw s = 0;
     pdw i;
     if (w == 0 || h == 0 || w > BL_MAXW) return PDE_LIMIT;
-    if (!bl_pop[255]) for (i = 0; i < 256; i++) {
+    if (!bl_pop[15]) for (i = 0; i < 16; i++) {
         pdw v = i, n = 0;
         while (v) { n += v & 1; v >>= 1; }
         bl_pop[i] = (pdb)n;
@@ -66,7 +68,7 @@ static pdw bl_pick(pdw w, pdw h, pdw want)
     bl_omode = s ? PDIM_GREY8 : PDIM_BITS1;
     bl_orb = s ? bl_ow : (pdw)((w + 7) >> 3);
     bl_arows = 0;
-    for (i = 0; i < 1032; i++) bl_acc[i] = 0;
+    for (i = 0; i < BL_ACC; i++) bl_acc[i] = 0;
     return PDE_OK;
 }
 
@@ -89,7 +91,7 @@ static void bl_arow(const pdb *r)
             bl_acc[j + 1] += bl_pop[b & 15];
         }
     } else {
-        for (i = 0; i < nb; i++) bl_acc[i] += bl_pop[r[i]];
+        for (i = 0; i < nb; i++) bl_acc[i] += (pdb)(bl_pop[r[i] >> 4] + bl_pop[r[i] & 15]);
     }
     bl_arows++;
 }
@@ -106,7 +108,7 @@ static void bl_aemit(pdw n)
         bl_out[j] = (pdb)(((pdw)(a << 8) - a) >> sh);
         bl_acc[j] = 0;
     }
-    for (; j < 1032; j++) bl_acc[j] = 0;
+    for (; j < BL_ACC; j++) bl_acc[j] = 0;
     bl_arows = 0;
 }
 
@@ -171,11 +173,16 @@ static pdw  cf_bit;
 static pdw  cf_eofn;            /* bytes of padding shifted into the window   */
 
 static pdb  cf_seg;             /* read through pdxijb2.c's segment-bounded source (MMR regions) */
+#if defined(PD_HOST) || defined(PDXI_JB2)
 static int  jb_getb(void);
+#define CF_SRC() (cf_seg ? jb_getb() : ix_get())
+#else
+#define CF_SRC() ix_get()
+#endif
 
 static void cf_shift(void)
 {
-    int c = cf_seg ? jb_getb() : ix_get();
+    int c = CF_SRC();
     cf_b[0] = cf_b[1]; cf_b[1] = cf_b[2];
     if (c < 0) { cf_b[2] = 0; if (cf_eofn < 9) cf_eofn++; } else cf_b[2] = (pdb)c;
 }

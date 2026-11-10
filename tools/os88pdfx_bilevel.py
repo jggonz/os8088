@@ -715,3 +715,56 @@ def halftone_segment(vals, pats, w, h, x=0, y=0, op=0, gx=0, gy=0, hrx=None, hry
     e = MQEnc()
     for pl in planes: enc_generic(e, pl, tpl, 0, at if tpl == 0 else at[:1], skip=skipf if skip else None)
     return d + e.flush()
+
+# ---- committed fixtures (tests/pdfany/bilevel/) ------------------------------------------------
+def build_fixtures(d):
+    """deterministic: the same bytes every run (random.Random(seed) only)"""
+    import random
+    os.makedirs(d, exist_ok=True)
+    rnd = random.Random(88)
+    def rimg(w, h):
+        img = []
+        for y in range(h):
+            if img and rnd.random() < .5:
+                row = list(img[-1])
+                for _ in range(rnd.randint(0, 5)): row[rnd.randrange(w)] ^= 1
+            else:
+                row = []; c = 0
+                while len(row) < w:
+                    row += [c] * (rnd.choice([1, 2, 3, 5, 9, 17, 70, 200]) if rnd.random() < .2 else rnd.randint(1, 12)); c ^= 1
+                row = row[:w]
+            img.append(row)
+        return img
+    def glyph(w, h): return [[1 if (x == 0 or y == 0 or x == w - 1 or (x + y) % 4 == 0 or rnd.random() < .15) else 0 for x in range(w)] for y in range(h)]
+    def put(name, data): open(os.path.join(d, name), 'wb').write(data)
+    # CCITT: G4, G3 1-D with EOL, G3 2-D (K=4), G4 byte aligned
+    img = rimg(200, 48)
+    for name, k, eol, align in (('g4', -1, False, False), ('g3_1d', 0, True, False), ('g3_2d', 4, True, False), ('g4_align', -1, False, True)):
+        put('ccitt_%s.pdf' % name, ccitt_pdf(img, k, eol, align))
+        put('ccitt_%s.bin' % name, enc_ccitt(img, k, eol=eol, align=align))
+    # JBIG2
+    W, H = 96, 64
+    gimg = rimg(W, H)
+    put('jb2_generic.pdf', jbig2_pdf([segment(0, 48, page_info(W, H)), segment(1, 38, generic_segment(gimg, tpl=0, tpgd=1))], W, H))
+    put('jb2_generic.jb2', segment(0, 48, page_info(W, H)) + segment(1, 38, generic_segment(gimg, tpl=0, tpgd=1)))
+    put('jb2_mmr.jb2', segment(0, 48, page_info(W, H)) + segment(1, 38, generic_segment(gimg, mmr=True)))
+    syms = sorted((glyph(rnd.randint(3, 10), hh) for hh in (6, 6, 8, 9, 12)), key=lambda g: (len(g), len(g[0])))
+    insts = [(rnd.randrange(len(syms)), rnd.randint(0, W - 8), rnd.randint(0, H - 12)) for _ in range(14)]
+    glob = segment(0, 0, symdict_segment(syms, 0), page=0)
+    pg = segment(1, 48, page_info(W, H)); tx = segment(2, 6, text_segment(syms, insts, W, H), refs=[0])
+    put('jb2_text.jb2', pg + tx); put('jb2_text.glob', glob)
+    put('jb2_text.pdf', jbig2_pdf([pg, tx], W, H, [glob]))
+    cfg = HuffCfg({'FS': HuffTab.std(6), 'DS': HuffTab.std(8), 'DT': HuffTab.std(11), 'RDW': HuffTab.std(14), 'RDH': HuffTab.std(14),
+                   'RDX': HuffTab.std(14), 'RDY': HuffTab.std(14)}, 0)
+    hglob = segment(0, 0, symdict_huff_segment(syms, 0, 0, True), page=0)
+    htx = segment(2, 6, text_segment(syms, insts, W, H, huff=cfg), refs=[0])
+    put('jb2_huff.jb2', pg + htx); put('jb2_huff.glob', hglob)
+    put('jb2_huff.pdf', jbig2_pdf([pg, htx], W, H, [hglob]))
+    pats = [[[1 if rnd.random() < i / 5 else 0 for _ in range(4)] for _ in range(4)] for i in range(6)]
+    vals = [[rnd.randrange(6) for _ in range(24)] for _ in range(16)]
+    pd_ = segment(0, 16, pattern_segment(pats), page=0)
+    hs = segment(2, 22, halftone_segment(vals, pats, W, H), refs=[0])
+    put('jb2_halftone.jb2', pg + hs); put('jb2_halftone.glob', pd_)
+    put('jb2_halftone.pdf', jbig2_pdf([pg, hs], W, H, [pd_]))
+
+if '--build' in sys.argv: build_fixtures(sys.argv[sys.argv.index('--build') + 1])
