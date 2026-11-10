@@ -5084,6 +5084,16 @@ merge):
 | `PDX_JPX` 5 | PDXJ | 10 | `'PJ'` | 65,024 | 60 / 12 | jpx |
 | (6, internal) | PDWRT | 3 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
 
+**A known limit on the 640 KiB XT (QA F26, the lead's ruling 2026-11-10):** a
+large embedded font subset - Quartz's TrueType in QUARTZ.PDF, programs of
+20-40 KB - is drawn in PageDesk's own face (`Incomplete rendering - font
+substituted`) and the text stays legible. PDXF loads (59.5 KiB of S), but
+what is left once the document set is held gives W its minimum, 32 KiB,
+whose 22,016-byte program area does not hold the subset; a small one
+(TTSIMPLE.PDF) draws from its outlines. Sizing the display list to the page
+would give W the rest, and it is an open item of PAGEDESK-ANY-PLAN, not of
+this round.
+
 Row 2 is **PDRENDC**, PDREND's code part (20.22.7.9): an EAGER row, so
 `op_load` reads it into the carve at launch beside PDENG and PDREND, and
 `pdu_mod_launch` binds it once with `PDV_REND_CODE` (BX = `OS88_CODESEL` of
