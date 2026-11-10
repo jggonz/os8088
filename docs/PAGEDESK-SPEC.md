@@ -4937,7 +4937,164 @@ round's final pass, not before.
 
 #### 20.22.7 PDREND's core: the ladder, the cache, images, Type3 (`rcore`)
 
-*Reserved; written by its agent before its code.*
+This section is the contract of `apps/pagedesk/pdrxc.c` (PDREND's side of the
+slot and the extension cache, #included first by `pdrend.c` so every
+`pdr*.c` file and every agent's glue can call it), the ladder in `pdrv.c`, the
+codec image path (`pdri.c` `do_image`, `pdrv.c` `draw_image`), sample depths
+through `pdrprim.inc`'s smode 4, and the two pieces of PDREND that moved into
+PDXG to make room: `pdxdash.c` and `pdxedit.c`.
+
+**20.22.7.1 The slot from PDREND's side.** `PDV_REND_SLOT` (0x48): BX = the
+`PDX_*` now in the slot, CX:DX its door (offset:segment), BX = 0 or DX = 0 =
+none. The primary sends it after every load or eviction, BEFORE the next
+step. A change of occupant counts one in `pdxb_rstatus.swaps`; an occupant that
+leaves while one of its images is open leaves that image's ONE engine stream
+on top of PDENG's stack, and PDREND closes it itself (the occupant cannot any
+more). The pinned helpers:
+
+| helper | meaning |
+|---|---|
+| `x_have(id)` | 1 when `id` is the occupant now |
+| `x_need(id)` | this pass needed `id` and skipped the work: recorded as pending; when `id` was refused for the page view it notes `PDF_INC_MODULE` instead |
+| `x_gone(id)` | `id` was refused for this page view: draw the degraded form |
+| `x_call(verb, bx, cx, dx)` | far call to the occupant's door (`_pdr_xfar`: AL = verb, BX CX DX, DS saved round it), AX back; CF in `x_cf`, DX in `x_dx`. `PDE_NOSLOT` with `x_cf` = 1 when the slot is empty. Each call sets the occupant's bit in `pdxb_rstatus.mods` |
+| `x_mem(region, kb)` | ask the primary for a region (`PDMEM_*`); 0 = refused for the page view |
+| `x_rmark(id, y0, y1)` | a display-list record on rows y0..y1 needs `id` while bands are drawn (a codec image): the page's bands look at their records |
+
+**20.22.7.2 The ladder (L2).** One answer at a time, and only between passes:
+
+* At the end of an interpretation pass PDREND answers, in this order: a
+  wanted region (`PDE_NEEDMEM`, CX = `PDMEM_*`, DX = KiB), else the
+  highest-numbered pending module (`PDE_NEEDMOD`, CF = 0, DX = `PDX_*`;
+  fonts before graphics, so PDXG - whose dash and edit-mark work is never
+  cached - is the one left resident). The step after the answer runs the
+  pass again from its start (`pass_begin`: the band group rescans, D4).
+* What the primary did NOT provide is refused for the page view: a module
+  not in the slot after the answer, a region whose segment is still 0 after
+  the re-INIT. `PDF_INC_MODULE` names a refused module; the page is drawn
+  without the work.
+* While bands are drawn, before band n is composed, its `DLR_IMAGE` records
+  say which decoders it needs (`x_rmark` lets a page with no codec image skip
+  the look). When the occupant is one of them the band is drawn with it;
+  otherwise the lower id is asked for with `PDE_NEEDMOD` and the band is
+  drawn after the answer. The display list is NOT rebuilt. ONE SLOT: a band
+  whose images need both PDXI and PDXJ is drawn with one of them, and the
+  other's images in that band are not drawn and set `PDF_INC_MODULE` - the
+  open limit of this section (a later round can draw the second decoder's
+  images onto the composed band when no later record shares their rows).
+* A page view makes at most `PDR_XASKS` = 8 answers; the next want is
+  refused. A page view starts at `PDV_REND_BEGIN` and lasts to the next.
+* The answer to `PDE_NEEDMEM` is a re-INIT with the same claims and a region
+  added: an INIT whose first 24 words (`pdxb_init` up to `slot_seg`) are the
+  current ones while a region is asked for adopts the regions only and keeps
+  the page view, the document's fonts and the cache. Any other INIT is a new
+  document (D2).
+* The text map (`PDV_REND_TEXTMAP`) runs the same ladder: after an answer
+  the walk restarts and the glyphs the primary already has are skipped.
+* Codes PDREND's door answers with CF = 0: `PDE_BUSY` 65, `PDE_NEEDMOD` 66,
+  `PDE_NEEDMEM` 67; CX and DX come from `pdr_out_cx` / `pdr_out_dx`.
+
+**20.22.7.3 The extension cache (`PDMEM_XC`).** Results computed by an
+occupant during interpretation are kept here so a later pass needs no module
+(L1). Entries are packed from offset 0: an 8-byte header (`kind` byte,
+`flags` byte, `len` word = the bytes after the header, `k0`, `k1`) then the
+entry's bytes, even-rounded. An entry is named by (`kind`, `k0`, `k1`): `XCK_CS`
+1, `XCK_FN` 2, `XCK_SHADE` 3, `XCK_PAT` 4, `XCK_LUT` 5 (gfx), `XCK_FONT` 6,
+`XCK_CMAP` 7 (fonts), `XCK_GS` 8 (blend). `xc_find(kind, k0, k1)` and
+`xc_alloc(kind, k0, k1, bytes)` answer the offset in `g_xcseg` of the entry's
+BYTES, never 0 (the header is in front); 0 = absent / no room. The scan is
+`pdr_xcfind` in `pdrprim.inc`.
+
+* No region yet: `xc_alloc` asks for one (`x_mem(PDMEM_XC, PDR_XCKB)`, 16
+  KiB; any grant of 1 to 63 KiB is used) and answers 0; the caller degrades
+  for this pass as if its module were absent, and the pass is run again with
+  the region.
+* Full: `xc_alloc` answers 0 and marks the pass. At its end the cache is
+  emptied and the pass run once more (once a page view); full again,
+  `PDF_INC_LIMIT` ("extension cache").
+* AN OFFSET IS GOOD UNTIL THE END OF THE PASS. Keep keys across passes, never
+  offsets. A new region, or a new document, is an empty cache.
+
+**20.22.7.4 Images through a codec.** `do_image` takes an XObject whose LAST
+filter is `/DCTDecode`, `/CCITTFaxDecode`, `/JBIG2Decode` or `/JPXDecode`
+(`PDCD_*`) as a codec image: the record carries the codec, and `x_rmark`
+asks for `PDX_JPX` (JPX) or `PDX_IMG` (the rest) before its first band. A
+JPX image may omit `/BitsPerComponent` and `/ColorSpace` (the codec's own).
+In `draw_image` the occupant decodes it: `PDV_IMG_OPEN` with `pdxb_img`
+(objnum/gen, codec, W H, bpc, ncomp, `want_w`/`want_h` = the device pixels
+covered, flags = the record's stencil and /Decode bits as `PDIMG_MASK` /
+`PDIMG_INVERT`); `PDV_IMG_ROW` BX:CX = the image row buffer (the glyph
+claim's offset 0, 1 KiB), DX = the row. Rows are asked for ascending; a row
+above the last asked re-opens. The module opens its OWN stream and holds at
+most that one between rows; it applies `/Decode`. Everything `IMG_OPEN`
+answers is checked as hostile: `out_w` 1..4,096, `out_h` 1..32,767,
+`out_mode` a `PDIM_*`, `out_ncomp` 1..4, `rowbytes` at least what the mode
+reads and at most 1,024; anything else, or CF = 1 on any verb, is
+`PDF_INC_IMAGE` ("image decoder") and the image is not drawn. An open image
+stays open from band to band and is closed by `PDV_IMG_CLOSE`, by another
+image, and by the pass's end. A codec image whose decoder is not the occupant
+when its band is drawn (refused, or the band's other decoder, 20.22.7.2):
+`PDF_INC_MODULE`. Inline images through a codec are not drawn
+(`PDF_INC_FILTER`, as before).
+
+**20.22.7.5 Sample depths and colour (smode 4).** Images of 1, 2, 4, 8 and 16
+bits a component in DeviceGray, DeviceRGB and DeviceCMYK are drawn, and in
+any other space through gfx's LUT: the hook `XG_IMAGE_LUT(obj, gen)` answers
+the `XC` offset of an `XCK_LUT` entry (`ncomp` at +0, `flags` at +2 - bit 0:
+the grey is 255 minus the sum, CMYK-shaped - and `ncomp` tables of 256 bytes
+at +16, `/Decode` folded in), or 0 having asked for PDXG or noted
+`PDF_INC_COLOUR`. `pdr_imgrow`'s smode 4 unpacks a sample of any of those
+depths (16 bits: the high byte), maps it through the table of its component
+(or the device weights 77, 150, 29 for RGB and an equal share for CMYK when
+there is no LUT), sums saturating, and inverts for a CMYK-shaped space.
+`pdr_ip` grows by `nc`, `bpc`, `lseg`, `loff`, `lflags` (42 bytes). A raw row
+over 1,024 bytes is still `PDF_INC_LIMIT`.
+
+**20.22.7.6 The image record** (`DLR_IMAGE`, `DLI_BODY` = 28 bytes): xl yt
+xr yb (qpx), W H, obj gen, bpc ncomp flags codec (bytes 16-19), the
+`/SMask` or `/Mask` stream's obj gen (20, 22: blend's 20.22.10.3), the LUT's
+table offset in the XC (24) and its flags (26). Flags: 1 stencil, 2 `/Decode`
+inverts, 4 mirrored, 8 a LUT, 16 inline (the rows follow the body), 32 an
+`/SMask`, 64 a `/Mask` stream. Blend's hook `XB_IMAGE_MASK(obj, gen, kind)`
+(kind 32, 64, or 128 for a colour-key array) is told of each; without its
+8-bit path the image is drawn opaque with `PDF_INC_TRANSP`.
+
+**20.22.7.7 What moved to PDXG.** Two pieces of PDREND that run only while a
+page is interpreted moved into PDXG as `#include`d source, each behind a
+generator verb that hands back its work in the XB, so the result is drawn by
+PDREND's own path and paint to the same pixel as before:
+
+* `pdxdash.c`, `PDV_GFX_DASH` 0xCE (`struct pdxb_dash`): the dash walker of
+  20.12.4, one piece of at most `PDXD_NPT` = 12 points a call; AX 1 a piece,
+  2 too fine (stroke solid), 0 done. The core puts the subpath's vertices in
+  the XB at 160 (x) and 560 (y).
+* `pdxedit.c`, `PDV_GFX_EDIT` 0xCF (`struct pdxb_emark`): the edit store's
+  marks of 13.3 / 17.4 (note, highlight, area, ink, signature, line,
+  rectangle, ellipse) for one record as ops in page space at XB offset
+  `PDXE_OPS` = 64, each batch ending at its first PAINT because a dash uses
+  the XB. A record is replayed and the ops the core already has skipped;
+  ink resumes from the block's `st[]`. The Text tool's box stays in PDREND:
+  its line breaking needs the core's font widths.
+
+Without PDXG (refused): a dashed line is stroked solid and the page notes
+`PDF_INC_MODULE`; edit marks other than Text boxes are not drawn and the
+page notes `PDF_INC_MODULE`. A page with PageDesk marks therefore loads PDXG
+(once per document on a machine without a module cache: the slot keeps its
+occupant between pages).
+
+Type3 fonts are the fonts agent's (20.22.8), drawn by this interpreter.
+
+**20.22.7.8 Checks.** `hosttest/pdr_xmod.c` stands in for the occupants on
+the host: PDXG's dash and edit verbs through the real `pdxdash.c` and
+`pdxedit.c`, and a fake image decoder that delivers a known ramp whatever the
+bytes (`PDR_XFAKE` grey / n8 / bits; `PDR_XHOSTILE=<seed>` answers hostile
+sizes and failures). `pdr_test` plays the primary's part of the ladder
+(`PDR_NOSLOT=<ids|all>` refuses modules, `PDR_NOXC` the region,
+`PDR_XCKB` sizes it). `tools/os88pdfx_rcore.py` writes the fixtures (dash,
+codec ramp, depths and their 8-bit grey equivalent, masks);
+`hosttest/pdr_xchk.py` (`make pdrend-xchk`) holds them to MuPDF and to each
+other: a codec page draws to the pixel as the plain image does, `depth.pdf`
+as `depthg.pdf` does, and `depthg.pdf` and `dash.pdf` as mutool does.
 
 #### 20.22.8 Fonts from their programs (`fonts`)
 
