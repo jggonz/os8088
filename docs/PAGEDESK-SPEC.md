@@ -5101,9 +5101,16 @@ Fixtures are built by the run from `samples/MARKUP.PDF` and `samples/PAGES.PDF`
 with qpdf 12.4.2 (`tests/pdfany/wrt/README.TXT` has the commands). When
 `pdeng.c` answers these verbs for real, `pdw_real.c` replaces the stand-in.
 
-**20.22.4.7 Cost.** PDWRT grows by at most 5,000 bytes of image + bss (cap
-53,248); the figures are in the round's report. The deep stack of a chain that
-ends in `PDV_ENG_CRYPT` is the writer's frame depth plus the engine's.
+**20.22.4.7 Cost.** PDWRT.MOD image + bss: 41,182 + 6,614 = 47,796 before,
+45,548 + 7,182 = 52,730 after (+4,934 of the 5,000 allowed, cap 53,248): the
+cipher door and the IV (`cr_far`, `cr_iv`), the string path (`pb_src`,
+`es_*`), the stream sink (`cs_*`), the key fetch, the re-key and the trailer
+(`enc_*`), the Insert stream copy (`gc_data`), the pause. One gate slot is
+added (`GET_TICKS`, for the IV). `pdstk`: PDWRT's deepest chain is 648 of the
+1,776 bytes of the deep stack, ending in `_pdw_engcall` into PDENG; the
+`PDV_ENG_CRYPT` verb's own depth is crypt's to add to that edge.
+`tests/suite.py` row `pdwrtenc` (soak) is the check; `pdwrt` and `pdwrtreal`
+still hold the plain paths byte for byte.
 
 #### 20.22.5 Encryption (`crypt`)
 
