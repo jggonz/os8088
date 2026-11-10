@@ -248,6 +248,11 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDV_GS_PARSE             equ 0xD0
+GSP_FILL                 equ 0x01
+GSP_STROKE               equ 0x02
+GSP_BM                   equ 0x04
+GSP_SMASK                equ 0x08
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -721,5 +726,20 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdxb_gs (16 bytes) ---------------------------------------------
+PDXB_GS_OBJNUM                 equ 0
+PDXB_GS_GEN                    equ 2
+PDXB_GS_PRESENT                equ 4
+PDXB_GS_FILL_A                 equ 5
+PDXB_GS_STRK_A                 equ 6
+PDXB_GS_BM                     equ 7
+PDXB_GS_SMODE                  equ 8
+PDXB_GS_BC                     equ 9
+PDXB_GS_TRNON                  equ 10
+PDXB_GS_PAD_                   equ 11
+PDXB_GS_GNUM                   equ 12
+PDXB_GS_GGEN                   equ 14
+PDXB_GS_BYTES                  equ 16
 
 %endif ; PDABI_INC

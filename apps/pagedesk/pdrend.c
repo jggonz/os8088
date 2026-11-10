@@ -25,5 +25,7 @@ unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
 #include "pdrd.c"
 #include "pdrf.c"
 #include "pdri.c"
+#include "pdrx8.c"   /* transparency: the 8-bit band (20.22.10), blend */
+#include "pdrxb.c"   /* ... and its interpretation side */
 #include "pdrv.c"
 #include "pdra.c"

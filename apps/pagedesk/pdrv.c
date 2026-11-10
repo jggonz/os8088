@@ -34,12 +34,13 @@ static pdw img_row(void)
 
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
-    static pdb b[20];
+    static pdb b[24];
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
     pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen, inl;
     (void)len;
     pd_fcopy_in(g_dls, off + DLH, b, 20);
+    if (b[18] & 0x60) pd_fcopy_in(g_dls, off + DLH + 20, b + 20, 4);      /* blend: the mask object (20.22.10.3) */
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
     W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
     obj = (pdw)r16(b + 12); gen = (pdw)r16(b + 14);
@@ -75,6 +76,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+    if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
     for (y = ry0; y <= ry1; y++) {
         pdi qy = (pdi)(y * 4 + 2);
         if (y < g_scy0 || y > g_scy1) continue;
@@ -102,7 +104,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-            pdr_imgrow();
+            if (g_xs) x8_imgrow(y); else pdr_imgrow();      /* blend: the 8-bit strip (20.22.10.8) */
         }
     }
 }
@@ -136,6 +138,7 @@ static pdw pass_begin(void)
     g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
     g_passes++;
     gs_init();
+    xb_pass();
     g_ph = PDR_INTERP;
     return interp_start(g_rq.page);
 }
@@ -185,6 +188,7 @@ static pdw verb_begin(void)
     g_pgx0 = g_rq.view.ox; g_pgy0 = g_rq.view.oy;
     g_pgx1 = (pdi)(g_pgx0 + vb_w - 1); g_pgy1 = (pdi)(g_pgy0 + vb_h - 1);
     if (!band_geometry()) return PDE_NOMEM;
+    x8_view();
     view_base(&g_rq.view);
     g_nb = band_count();
     g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
@@ -223,7 +227,11 @@ static pdw verb_step(void)
     if (g_ph == PDR_INTERP) {
         done = interp_run(PD_SLICE_OPS);
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
-        if (done) { close_streams(); g_ph = PDR_RAST; g_bcur = g_b0; }
+        if (done) {
+            close_streams();
+            if (xb_needmem()) { g_needcx = PDMEM_X8; g_needdx = g_x8need; return PDE_NEEDMEM; }   /* 20.22.10.2 */
+            g_ph = PDR_RAST; g_bcur = g_b0;
+        }
         return PDE_BUSY;
     }
     if (g_ph == PDR_RAST && g_subm) {
@@ -412,6 +420,7 @@ static pdw verb_init(pdw xbseg)
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
+    x8_init(g_ini.x8_seg, g_ini.x8_kb);
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;

@@ -25,6 +25,7 @@ extern pdw pd_host_ds;
 extern unsigned char pdrh_fb[];
 extern int pdrh_fbw, pdrh_fbh, pdrh_blits;
 extern int pdrh_open(const char *path);
+void pdb_dump_write(const char *path, int w, int h);
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 /* every verb is called through here: PDREND must hand the working folder back
  * where it found it (the document's), and no read by name may have been made
@@ -48,6 +49,7 @@ static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
 #define SEG_BANK 0x6000
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
+#define SEG_X8   0xA000          /* the 8-bit band, layers and mask (PDMEM_X8) */
 #define SEG_EDIT 0x9000          /* the edit store (PAGEDESK-SPEC 13.1.1) when PDR_EDITS names a file */
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 pdw pdrh_xbseg(void) { return SEG_XB; }
@@ -94,6 +96,7 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
+    if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 40; }          /* blend (20.22.10.2) */
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
@@ -227,6 +230,7 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+        if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
         if (seqp) { fflush(stdout); goto seq_next; }
         return 0;
     }

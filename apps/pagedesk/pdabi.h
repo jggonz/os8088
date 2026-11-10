@@ -688,6 +688,24 @@ struct pdxb_img {
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */
+/* PDXG verb (20.22.10.4): parse one ExtGState dictionary. The result is also
+ * the XCK_GS cache entry (16 bytes). */
+#define PDV_GS_PARSE    0xD0    /* XB: pdxb_gs in/out                         */
+struct pdxb_gs {
+    pdw  objnum, gen;       /* in: the ExtGState object                   */
+    pdb  present;           /* out: GSP_* keys the dictionary has         */
+    pdb  fill_a, strk_a;    /* out: 0..255 (/ca non-stroking, /CA stroking) */
+    pdb  bm;                /* out: 0..15 (20.22.10.3's table)            */
+    pdb  smode;             /* out: 0 /None, 1 /Luminosity, 2 /Alpha      */
+    pdb  bc;                /* out: /BC as a luminosity 0..255            */
+    pdb  trnon;             /* out: /TR present and not /Identity         */
+    pdb  pad_;
+    pdw  gnum, ggen;        /* out: the mask's /G form                    */
+};
+#define GSP_FILL    0x01    /* /ca                                        */
+#define GSP_STROKE  0x02    /* /CA                                        */
+#define GSP_BM      0x04
+#define GSP_SMASK   0x08    /* /SMask (None included)                     */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
 
@@ -700,6 +718,7 @@ typedef char pdabi_sz_edit[sizeof(struct pd_edit)    == 48 ? 1 : -1];
 typedef char pdabi_sz_tmg [sizeof(struct pdtm_glyph) == 12 ? 1 : -1];
 typedef char pdabi_sz_npg [sizeof(struct pd_newpage) == 10 ? 1 : -1];
 typedef char pdabi_sz_tok [sizeof(struct pdxb_token) <= PD_XB_BYTES ? 1 : -1];
+typedef char pdabi_sz_gs  [sizeof(struct pdxb_gs)   == 16 ? 1 : -1];
 typedef char pdabi_sz_dg  [sizeof(struct pdxb_dictget) <= PD_XB_BYTES ? 1 : -1];
 
 #endif /* PDABI_H */
