@@ -256,6 +256,7 @@ PDV_KEY_PARAMS           equ 0xC3
 PDV_WRT_KEYS             equ 0x85
 PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12
+PDV_REND_CODE            equ 0x49
 PDXE_OPS                 equ 64
 PDV_GFX_CS               equ 0xC8
 PDV_GFX_COLOR            equ 0xC9

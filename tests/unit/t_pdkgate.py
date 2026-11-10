@@ -78,6 +78,16 @@ def main():
               "%s: %d slot(s), one pdk_up and one pdk_dn (%s / %s)"
               % (name, len(s), sorted(hex(u) for u in ups if u is not None),
                  sorted(hex(d) for d in dns if d is not None)))
+    # PDREND's second code segment (PAGEDESK-SPEC 20.22.7.9) runs under a
+    # different CS, so a near call to pdk_up cannot reach the gate from it:
+    # moved code reaches the kernel only through a resident routine (its
+    # cc_ovv_* shims), and the part must hold no far call to KERNEL_SEG at all
+    for c in (os.path.join(build, "PDRENDC.MOD"),):
+        if os.path.exists(c) and os.path.getmtime(c) >= gm:
+            s = slots(open(c, "rb").read())
+            check(not s, "%s: no kernel call in the second code segment%s"
+                  % (os.path.relpath(c, build),
+                     "" if not s else " - at " + ", ".join(hex(i) for i, _, _ in s)))
     return done("t_pdkgate")
 
 

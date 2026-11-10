@@ -198,5 +198,6 @@ static int ovl_card_more(int which)
 #include "pdutool.c"            /* the annotation tools (edit) */
 #include "pdovlpref.c"          /* prefs: the Preferences dialog (20.18) */
 #include "pdovlauth.c"          /* auth: the prompt's paint and keys (20.22.6) */
+#include "pdovlplat.c"          /* plat: an encrypted open's key (20.22.2.6) */
 #include "pdovlpage.c"          /* pages: the page-operation commands and prompts */
 #include "pdovlrecov.c"         /* recov: the journal and the offers (20.17) */

@@ -25,6 +25,9 @@
 ;           20.22.2.3): the slot's occupants until each owner's lands -
 ;           PDV_X_INIT, everything else PDE_NOTFOUND, and 1 KiB of bss so the
 ;           OP_COMP row packs. The Makefile's PD_XK_MOD ... PD_XJ_MOD.
+;   PDX8    (-DSTUB_X8, 20.22.10.11): the X8 region's part until blend's
+;           lands - its 16-byte header (+8 a jmp short, +10/+12/+14 the words
+;           plat writes), PDV_X8_INIT and nothing else. PD_X8_MOD.
 ;
 ; It touches no file. Constants are spelled out here rather than taken from
 ; apps/pagedesk/pdabi.inc, which is the math agent's and had not landed when
@@ -45,12 +48,15 @@ PDM_ABI      equ 2                  ; pdabi.h: any PDF (20.22)
 %ifdef STUB_ENG
   PDS_MAGIC equ 0x4550
   PDS_BASE  equ 0x00
+  %define PDS_HAVEBASE
 %elifdef STUB_REND
   PDS_MAGIC equ 0x5250
   PDS_BASE  equ 0x40
+  %define PDS_HAVEBASE
 %elifdef STUB_WRT
   PDS_MAGIC equ 0x5750
   PDS_BASE  equ 0x80
+  %define PDS_HAVEBASE
 %elifdef STUB_XK
   PDS_MAGIC equ 0x4B50              ; 'PK'
 %elifdef STUB_XG
@@ -61,10 +67,16 @@ PDM_ABI      equ 2                  ; pdabi.h: any PDF (20.22)
   PDS_MAGIC equ 0x4950              ; 'PI'
 %elifdef STUB_XJ
   PDS_MAGIC equ 0x4A50              ; 'PJ'
+%elifdef STUB_X8
+  PDS_MAGIC equ 0x3850              ; 'P8': the X8 region's part (20.22.10.11)
+  PDS_BASE  equ 0xD1                ; PDV_X8_INIT
+  %define PDS_HAVEBASE
+  %define STUB_OCC
+  %define PDS_BSS 1024
 %else
-  %error "assemble with -DSTUB_ENG/REND/WRT or -DSTUB_XK/XG/XF/XI/XJ"
+  %error "assemble with -DSTUB_ENG/REND/WRT or -DSTUB_XK/XG/XF/XI/XJ/X8"
 %endif
-%ifndef PDS_BASE
+%ifndef PDS_HAVEBASE                ; (an equ is no macro: %ifndef cannot see it)
   %define STUB_OCC                  ; an occupant: its verbs start at 0xC0
   PDS_BASE  equ 0xC0                ; PDV_X_INIT
   %define PDS_BSS 1024
@@ -80,6 +92,11 @@ pds_hdr:
                                     ;    way a real module's does (OP_COMP)
 %if ($ - $$) != 8
   %error "the door is not at +8"
+%endif
+%ifdef STUB_X8
+    jmp short pds_door              ; +8: PDX8's header is 16 bytes, and
+    dw 0                            ; +10 the code selector (plat writes it)
+    dw 0, 0                         ; +12 PDENG's door (plat writes it)
 %endif
 
 ; the door: AL = verb, BX/CX/DX args; AX out, CF = 1 + AX = PDE_* on failure.

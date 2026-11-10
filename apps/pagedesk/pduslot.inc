@@ -97,8 +97,10 @@ _pdu_slot_free:
 
 ; -----------------------------------------------------------------------------
 ; int pdu_slot_load(int occ) - occupant `occ` (1..6) into S (20.22.2.4): 0, or
-; a PDE_* with S empty. S is claimed or regrown to the larger of image + bss
-; + workspace and what the expansion needs (R + the read).
+; a PDE_* with S empty. S is given back and claimed afresh at image + bss +
+; the workspace (20.22.2.3's want while PD-29's 32 KiB stays free beside it,
+; else the most of at least min that fits) or what the expansion needs (R +
+; the read), whichever is larger.
 ; -----------------------------------------------------------------------------
 _pdu_slot_load:
     push bp
@@ -111,34 +113,50 @@ _pdu_slot_load:
     mov ax, PDE_NOSLOT
     cmp word [_pdu_socc], PDU_OCC_WRT_A ; a parked Replace holds PDWRT's
     je .out                         ; state: it leaves by pdu_wrt_out alone
-    call sl_empty
+    call _pdu_slot_free             ; S is sized afresh for this one
     mov bx, [bp+4]
     mov al, [_pdu_occrow + bx]
-    xor ah, ah
-    mov [sl_row], ax
-    push ax
-    call _pdu_part_len
-    pop cx
-    mov [sl_len], ax
-    add ax, 15
-    mov cl, 4
-    shr ax, cl
-    mov [sl_img], ax
+    call sl_row_at                  ; [sl_row] [sl_len] [sl_img]
     mov bx, [bp+4]
-    mov al, [_pdu_occws + bx]
-    xor ah, ah
+    mov dl, [_pdu_occws + bx]       ; want
+    mov dh, [_pdu_occwmin + bx]     ; min
     cmp bl, PDU_OCC_WRT_A
     jne .w
-    mov ax, [_pdu_wkb]
+    mov dl, [_pdu_wkb]              ; PDWRT: this job's buffers, exactly
+    mov dh, dl
 .w:
-    mov [sl_wskb], ax
+    mov [sl_wmin], dh
+    xor dh, dh
+    push dx
+    call _os88_mem_largest_p
+    pop dx
+    sub ax, [sl_img]
+    jnb .r0
+    xor ax, ax
+.r0:
     mov cl, 6
-    shl ax, cl
-    mov [sl_ws], ax
+    shr ax, cl                      ; KiB beside the image
+    mov bx, ax
+    sub bx, PDU_RESV_P >> 6
+    jb .cut
+    cmp bx, dx                      ; want, and PD-29's 32 KiB still free
+    jae .want
+.cut:
+    cmp ax, dx                      ; else the most that fits, up to want...
+    jb .c1
+.want:
+    mov ax, dx
+.c1:
+    mov cl, [sl_wmin]               ; ...and never under min (the claim then
+    xor ch, ch                      ; refuses: PDE_NOSLOT)
+    cmp ax, cx
+    jae .c2
+    xchg ax, cx
+.c2:
+    call sl_wsset
     add ax, [sl_img]
     mov [sl_need], ax
-    mov al, [sl_row]
-    call op_row
+    mov si, [pg_row]
     mov word [pg_cap], 0            ; the whole row
     call pdu_pgeo                   ; no disk: the cache may still serve
     jc .sz
@@ -149,16 +167,7 @@ _pdu_slot_load:
     mov [sl_need], ax
 .sz:
     push word [sl_need]
-    mov ax, [_pdu_sclaim]
-    or ax, ax
-    jz .cl
-    push ax
-    call _os88_mem_regrow_p
-    pop cx
-    jmp short .c1
-.cl:
     call _os88_mem_claim_p
-.c1:
     pop cx
     or ax, ax
     jz .nos
@@ -176,38 +185,108 @@ _pdu_slot_load:
 %else
     jnc .bind
 %endif
-    call OSAPI_FILE_HERE            ; THE DISK: stand in the launch folder
+    mov bx, [bp+4]
+    shl bx, 1
+    mov dx, [_pdu_occmagic + bx]
+    mov ax, [_pdu_sclaim]
+    call sl_fetch                   ; THE DISK
+    or ax, ax
+    jnz .fail
+%ifdef PDU_LADTEST
+    inc word [_pdu_tdisk]
+%endif
+    mov bx, [bp+4]                  ; the cache's copy: pristine, before
+    xor ax, ax                      ; its first verb (OUT)
+    call sl_cio
+.bind:
+    mov bx, [bp+4]
+    mov [_pdu_socc], bx
+    call sl_bind
+    or ax, ax
+    jnz .fail
+.ok:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+.fail:
+    push ax
+    call sl_empty
+    pop ax
+    jmp short .out
+.nos:
+    mov ax, PDE_NOSLOT
+    jmp short .out
+
+; sl_wsset - AX = the workspace KiB: [sl_wskb], [sl_ws] (paragraphs) = AX
+; paragraphs out in AX
+sl_wsset:
+    mov [sl_wskb], ax
+    mov cl, 6
+    shl ax, cl
+    mov [sl_ws], ax
+    ret
+
+; sl_row_at - AL = a parts row: [sl_row], [pg_row] (op_row's SI), [sl_len]
+; its unpacked bytes, [sl_img] those in paragraphs
+sl_row_at:
+    xor ah, ah
+    mov [sl_row], ax
+    call op_row
+    mov [pg_row], si
+    mov ax, [si+OP_R_LEN]
+    mov [sl_len], ax
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    mov [sl_img], ax
+    ret
+
+; pdu_home_rd - AX = a lazy row, DX = the claim, CX = its cap (0 = all): the
+; row read out of the package from the LAUNCH folder (3.1's bracket - the
+; folder stood in comes back after) with pdu_part_rd. AX = 0 or a PDE_*
+pdu_home_rd:
+    push cx
     push dx
-    push bx
+    push ax                         ; pdu_part_rd(row, claim, cap)
+    call OSAPI_FILE_HERE
+    mov [rd_clus], dx
+    mov [rd_vol], bl
     mov dx, [_pdu_home]
     mov bl, [_pdu_home+2]
     call OSAPI_FILE_GOTO_QM
     mov ax, PDE_IO
-    jc .back0                       ; nothing moved: no way back to take
-    xor ax, ax
-    push ax                         ; the whole row
-    push word [_pdu_sclaim]
-    push word [sl_row]
+    jc .r                           ; nothing moved: no way back to take
     call _pdu_part_rd
-    add sp, 6
-    pop bx
-    pop dx
     push ax
+    mov dx, [rd_clus]
+    mov bl, [rd_vol]
     call OSAPI_FILE_GOTO_QM
     pop ax
-    jmp short .chk
-.back0:
-    pop bx
-    pop dx
+.r:
+    add sp, 6
+    ret
+
+; sl_fetch - [sl_row]/[sl_len] = a lazy module row, AX = the segment it is
+; expanded onto, DX = its magic. Read from the launch folder (3.1's bracket)
+; and checked as 3.1 checks the eager modules: magic, PDM_ABI, image past the
+; door, image + bss == the row's len. AX = 0 or a PDE_*
+sl_fetch:
+    mov [sl_dseg], ax
+    mov [sl_mag], dx
+    xchg dx, ax                     ; DX = the claim
+    mov ax, [sl_row]
+    xor cx, cx                      ; the whole row
+    call pdu_home_rd
 .chk:
     or ax, ax
-    jnz .out
-    push es                         ; 3.1's header, as the eager modules'
-    mov es, [_pdu_sclaim]
+    jnz .r
+    push es
+    mov es, [sl_dseg]
+    mov dx, [sl_mag]
     mov ax, PDE_LIMIT
-    mov bx, [bp+4]
-    shl bx, 1
-    mov dx, [_pdu_occmagic + bx]
     cmp [es:0], dx
     jne .hb
     cmp word [es:2], PDM_ABI
@@ -221,19 +300,52 @@ _pdu_slot_load:
     xor ax, ax
 .hb:
     pop es
+.r:
+    ret
+
+; sl_wkeys - PDWRT just INITed (which wiped any keys it held): the held
+; pdxb_wkeys (pdovlplat.c's pre-flight, at pdu_kseg:0) handed over with
+; PDV_WRT_KEYS when there is one. Every register but DX may go
+sl_wkeys:
+    mov ax, [_pdu_kseg]
     or ax, ax
-    jnz .out
-%ifdef PDU_LADTEST
-    inc word [_pdu_tdisk]
-%endif
-    mov bx, [bp+4]                  ; the cache's copy: pristine, before
-    xor ax, ax                      ; its first verb (OUT)
-    call sl_cio
-.bind:
-    mov bx, [bp+4]
-    mov [_pdu_socc], bx
-    push word [_pdu_sclaim]         ; the image is at S's OWN base: its door
-    mov ax, PDU_M_SLOT_A            ; is the claim's code twin (20.22.2.4)
+    jz .r
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov es, [_pdu_xb]
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, PDXB_WKEYS_BYTES / 2
+    rep movsw                       ; n = 0 is an empty set: no test
+    pop es
+    pop ds
+    pop di
+    pop si
+    xor ax, ax
+    push ax
+    push ax
+    push word [_pdu_xb]
+    mov al, PDV_WRT_KEYS
+    push ax
+    mov al, PDU_M_SLOT_A
+    push ax
+    call _pdu_mcall                 ; a refusal is the job's PDE_PASSWORD later
+    add sp, 10
+    pop dx
+.r:
+    ret
+
+; sl_bind - [_pdu_socc] in S: its door bound at S's OWN base (the claim's
+; code twin, 20.22.2.4), the workspace a data window after the image, INIT
+; with pdxb_init complete, then PDENG and PDREND told. AX = 0 or the INIT's
+; PDE_*. Also the re-INIT after a workspace grant (sl_grow)
+sl_bind:
+    push word [_pdu_sclaim]
+    mov ax, PDU_M_SLOT_A
     push ax
     call _pdu_mbind
     add sp, 4
@@ -246,12 +358,13 @@ _pdu_slot_load:
     call _os88_seg_sub
     add sp, 6
     or ax, ax
-    jz .nos2
+    mov dx, PDE_NOSLOT
+    jz .e
 .nw:
     mov dx, [sl_wskb]
     mov cx, PDV_X_INIT
     mov bx, PDXB_INIT_SLOT_SEG
-    cmp word [bp+4], PDU_OCC_WRT_A
+    cmp word [_pdu_socc], PDU_OCC_WRT_A
     jne .ini
     mov cx, PDV_WRT_INIT
     mov bx, PDXB_INIT_WBUF_SEG
@@ -264,35 +377,76 @@ _pdu_slot_load:
     call _pdu_minit
     add sp, 4
     or ax, ax
-    jnz .fail
+    jnz .r
     mov ax, PDU_M_SLOT_A
     push ax
     call _pdu_mvecseg               ; the bound door: a code selector on
     pop cx                          ; kern_mega
     xchg ax, dx
-    mov ax, [bp+4]
+    mov ax, [_pdu_socc]
     cmp al, PDU_OCC_WRT_A
     jne .t
+    call sl_wkeys                   ; the Insert's foreign keys (20.22.4.5)
     xor ax, ax                      ; PDWRT: neither module calls it
 .t:
     call sl_tell
-.ok:
     xor ax, ax
-.out:
-    pop di
-    pop si
-    pop bp
+.r:
     ret
-.nos2:
-    mov ax, PDE_NOSLOT
-.fail:
+.e:
+    xchg ax, dx
+    ret
+
+; sl_grow - AX = the KiB an occupant's verb asked for its workspace
+; (PDE_NEEDMEM, CX = PDMEM_SLOT): S regrown to at most the occupant's want,
+; only while PD-29's 32 KiB stays free, and the occupant re-INITed either
+; way - a refusal is the same slot_kb, and the occupant degrades (APPROX).
+; AX = 0 or a PDE_*
+sl_grow:
+    mov bx, [_pdu_socc]
+    or bx, bx
+    jz .none
+    cmp bl, PDU_OCC_WRT_A
+    je .none
+    mov dl, [_pdu_occws + bx]
+    xor dh, dh
+    cmp ax, dx
+    jbe .k
+    xchg ax, dx                     ; no more than its want
+.k:
+    cmp ax, [sl_wskb]
+    jbe .ini                        ; no growth: the INIT says so
     push ax
-    call sl_empty
-    pop ax
-    jmp short .out
-.nos:
-    mov ax, PDE_NOSLOT
-    jmp short .out
+    mov cl, 6
+    shl ax, cl
+    sub ax, [sl_ws]                 ; the paragraphs more
+    add ax, PDU_RESV_P
+    push ax
+    call _os88_mem_largest_p
+    pop cx
+    pop dx                          ; the KiB
+    cmp ax, cx
+    jb .ini
+    push dx
+    xchg ax, dx
+    mov cl, 6
+    shl ax, cl
+    add ax, [sl_img]
+    push ax
+    push word [_pdu_sclaim]
+    call _os88_mem_regrow_p         ; may MOVE S: the image comes with it
+    add sp, 4
+    pop dx
+    or ax, ax
+    jz .ini
+    mov [_pdu_sclaim], ax
+    xchg ax, dx
+    call sl_wsset
+.ini:
+    jmp sl_bind
+.none:
+    xor ax, ax
+    ret
 
 ; --- the geometry of a load ---------------------------------------------------
 ; pdu_pgeo - SI = a parts row, [pg_cap] = the bytes of a STORED row wanted
@@ -507,9 +661,8 @@ _pdu_part_rd:
 ; kernel, else none for the session. Off (ui's pdp_xcache) gives it back.
 ; Lays out ck_at: each occupant's place in KiB (XMS) or 16 KiB pages (EMS)
 sl_copen:
-    call _pdp_xcache
-    or ax, ax
-    jz _pdu_cache_drop
+    cmp byte [_pdp_cfg + 10], 0     ; ui's pdu_pref_modcache(): 1 = Off
+    jne _pdu_cache_drop
     cmp word [_pdu_ckind], 0
     jne .r
     mov word [_pdu_ckind], -1
@@ -762,7 +915,19 @@ _pdu_cx:
     ret
 
 ; --- the regions, claim X (20.22.2.5) ---------------------------------------
-; xr_segs - every region's window and KiB into pdu_xinit (0 where not held)
+PDU_RGLYPH      equ 5               ; PDMEM_GLYPH: fonts' glyph growth
+                                    ; (20.22.8), pdabi.h's to pin; 5 here
+PDU_NREG        equ 5               ; XIDX OSW XC X8 GLYPH
+PDU_XIDXMAX     equ 256             ; KiB: eng's flat index (20.22.3)
+PDU_GLYPHMIN    equ 32              ; KiB: the glyph region's second try
+PDU_PART_RENDC_A equ 2              ; pdu.h's PDU_PART_RENDC
+PDU_PART_X8_A   equ 11              ; pagedesk.asm's PDX8 row
+PDX8_MAGIC_A    equ 0x3850          ; 'P8' (blend, 20.22.10.11)
+
+; xr_segs - every region's window and KiB into pdu_xinit, 0 where not held. A
+; window is a SEG_SUBC pair (PDX8 is code in its region) and reaches 64 KiB
+; at most (XIDX may hold 256: eng's own addressing past that). A held GLYPH
+; region stands in for claim A's glyph row; not held, the row is handed again
 xr_segs:
     push si
     push di
@@ -770,52 +935,95 @@ xr_segs:
     mov di, _pdu_xinit + PDXB_INIT_XIDX_SEG
 .l:
     xor ax, ax
+    cwd
     mov cx, [xr_len + si]
-    jcxz .z
+    cmp si, PDU_RGLYPH * 2
+    jne .f
+    mov di, _pdu_xinit + PDXB_INIT_GLYPH_SEG
+    jcxz .ga
+.f:
+    jcxz .st
     push cx
-    push word [xr_off + si]
-    push word [xr_claim]
-    call _os88_seg_sub
-    add sp, 6
-    mov cx, [xr_len + si]
-.z:
-    mov [di], ax
-    mov ax, cx
+    mov dx, [xr_claim]
+    mov ax, [xr_off + si]
+    cmp cx, 4096
+    jbe .w
+    mov cx, 4096
+.w:
+    mov bl, SEG_SUBC
+    call OSAPI_SEG
+    xchg ax, dx
+    jnc .ok
+    xor ax, ax
+.ok:
+    pop dx
     mov cl, 6
-    shr ax, cl
-    mov [di+2], ax
+    shr dx, cl
+.st:
+    mov [di], ax
+    mov [di+2], dx
     add di, 4
     inc si
     inc si
-    cmp si, 10
+    cmp si, (PDU_NREG + 1) * 2
     jb .l
     pop di
     pop si
     ret
+.ga:
+    mov ax, [_pdu_dc + 6]           ; claim A's glyph row (PDU_DC_GLYPH 3)
+    mov dx, [_pdu_dckb + 6]
+    jmp short .st
+
+; x8_fix - PDX8 in the X8 region: its CODE selector at +10 and PDENG's door
+; at +12/+14 (blend's 20.22.10.11), after every load and every move of X
+x8_fix:
+    cmp byte [x8_in], 0
+    je .r
+    push es
+    mov ax, [_pdu_xinit + PDXB_INIT_X8_SEG]
+    mov es, ax
+    OS88_CODESEL ax, byte [cc_cpuf]
+    mov [es:10], ax
+    mov word [es:12], PDM_ENTRY
+    mov ax, [pdu_vec + 2]           ; PDENG's bound door (a code selector)
+    mov [es:14], ax
+    pop es
+.r:
+    ret
 
 ; unsigned pdu_region(unsigned r, unsigned kb) - grant PDMEM_* region r of kb
-; KiB (1..64), appended to X, or grow the LAST one; refuse anything else.
-; Then PDENG and PDREND are re-INITed with every region: 0, or the INIT's PDE_*
+; KiB (1..64; XIDX to 256), appended to X, or grow the LAST one; refuse
+; anything else. GLYPH asked past 32 and refused tries 32. X8's start is
+; PDX8 (read here at its grant). Then PDENG and PDREND are re-INITed with
+; every region (and the occupant, when the glyph changed): 0, or a PDE_*
 _pdu_region:
     push bp
     mov bp, sp
     push si
     mov si, [bp+4]
     dec si
-    cmp si, 3
+    cmp si, PDU_NREG - 1
     ja .init
     mov ax, [bp+6]
     dec ax
+    cmp ax, PDU_XIDXMAX - 1
+    ja .init
+    or si, si                       ; only XIDX passes 64 KiB
+    jz .k
     cmp ax, 63
     ja .init
+.k:
     cmp word [sl_grants], PDU_GRANTMAX
     jae .init
     inc word [sl_grants]
     inc ax
-    mov cl, 6
-    shl ax, cl                      ; paragraphs
     inc si
     shl si, 1
+.try:
+    mov [xr_kb], ax
+    mov cl, 6
+    shl ax, cl                      ; paragraphs
     mov dx, [xr_len + si]
     or dx, dx
     jz .new
@@ -832,7 +1040,7 @@ _pdu_region:
     call _os88_mem_largest_p
     pop cx
     cmp ax, cx
-    jb .init
+    jb .no
     mov ax, [xr_para]
     add ax, [sl_need]
     push ax
@@ -848,7 +1056,7 @@ _pdu_region:
 .c1:
     pop cx
     or ax, ax
-    jz .init
+    jz .no
     mov [xr_claim], ax
     mov ax, [sl_need]
     cmp word [xr_len + si], 0
@@ -857,11 +1065,25 @@ _pdu_region:
     mov [xr_off + si], dx
     mov dx, [bp+4]
     mov [xr_last], dx
+    cmp dl, PDMEM_X8                ; a new X8: PDX8 at its start
+    jne .g
+    add [xr_len + si], ax
+    add [xr_para], ax
+    call x8_load
+    jmp short .init
 .g:
     add [xr_len + si], ax
     add [xr_para], ax
+    jmp short .init
+.no:
+    cmp si, PDU_RGLYPH * 2         ; the glyph's second try: 32 KiB
+    jne .init
+    mov ax, PDU_GLYPHMIN
+    cmp [xr_kb], ax
+    ja .try
 .init:
     call xr_segs
+    call x8_fix
     mov ax, PDV_ENG_INIT
     push ax
     xor ax, ax
@@ -876,14 +1098,61 @@ _pdu_region:
     push ax
     call _pdu_minit
     add sp, 4
+    or ax, ax
+    jnz .out
+    cmp word [bp+4], PDU_RGLYPH    ; PDXF reads the glyph claim itself
+    jne .out                        ; (20.22.8): its INIT hands it again
+    cmp word [_pdu_socc], 0
+    je .out
+    call sl_bind
 .out:
     pop si
     pop bp
     ret
 
+; x8_load - the X8 region just granted (the last in X): PDX8 read into its
+; start with the slot's reader. A row that does not fit the region, or a
+; read that fails, takes the region back: PDREND then sees x8_seg 0
+x8_load:
+    push word [sl_row]              ; the occupant's row: sl_bind reads it
+    push word [sl_len]
+    push word [sl_img]
+    call xr_segs
+    call .ld
+    pop word [sl_img]
+    pop word [sl_len]
+    pop word [sl_row]
+    ret
+.ld:
+    mov al, PDU_PART_X8_A
+    call sl_row_at
+    mov si, [pg_row]
+    mov word [pg_cap], 0
+    call pdu_pgeo
+    jc .back
+    mov ax, [pg_dst]
+    add ax, [pg_rdp]
+    cmp ax, [xr_len + PDMEM_X8 * 2]
+    ja .back
+    mov ax, [_pdu_xinit + PDXB_INIT_X8_SEG]
+    or ax, ax
+    jz .back
+    mov dx, PDX8_MAGIC_A
+    call sl_fetch
+    or ax, ax
+    jnz .back
+    mov byte [x8_in], 1
+    ret
+.back:
+    xor ax, ax
+    xchg ax, [xr_len + PDMEM_X8 * 2]
+    sub [xr_para], ax
+    ret
+
 ; void pdu_region_free(void) - X given back, every region field 0
 _pdu_region_free:
     xor ax, ax
+    mov [x8_in], al
     xchg ax, [xr_claim]
     or ax, ax
     jz .z
@@ -894,7 +1163,7 @@ _pdu_region_free:
     xor ax, ax
     mov [xr_para], ax
     mov [xr_last], ax
-    mov bx, 8
+    mov bx, PDU_NREG * 2
 .l:
     mov [xr_len + bx], ax
     dec bx
@@ -915,7 +1184,9 @@ _pdu_lad_begin:
 ; answered. A ladder status (CF = 0, PDE_NEEDMOD or PDE_NEEDMEM): do the load
 ; or the grant and answer 0xFFFF - the job calls the same verb at its next
 ; slice. Anything else: r. A ladder that cannot go on: the PDE_* with pdu_mcf
-; set. PDENG's one module is PDXK (pdu_ladkey = 1: the open's auth follows);
+; set. NEEDMEM's CX = PDMEM_SLOT grows the occupant's workspace (sl_grow);
+; any other is a region (pdu_region). NEEDMOD: PDENG's one module is PDXK
+; (an encrypted open's key goes through pdovlplat.c instead, 20.22.2.6);
 ; PDREND's are GFX..JPX, and one that cannot be had is told 0x80 | id
 _pdu_ladck:
     push bp
@@ -928,17 +1199,22 @@ _pdu_ladck:
     cmp ax, PDE_NEEDMEM
     jne .out
 .lad:
-    mov word [_pdu_ladkey], 0
     inc word [sl_ladn]
     cmp word [sl_ladn], PDU_LADMAX
     ja .lim
     mov bx, [_pdu_mdx]
     cmp ax, PDE_NEEDMEM
     jne .mod
+    mov cx, [_pdu_mcx]
+    jcxz .slot                      ; PDMEM_SLOT: the occupant's workspace
     push bx
-    push word [_pdu_mcx]
+    push cx
     call _pdu_region
     add sp, 4
+    jmp short .res
+.slot:
+    xchg ax, bx
+    call sl_grow
     jmp short .res
 .mod:
     cmp word [bp+4], 0              ; PDU_M_ENG
@@ -948,7 +1224,6 @@ _pdu_ladck:
     push bx
     call _pdu_slot_load
     pop cx
-    inc word [_pdu_ladkey]
 .res:
     or ax, ax
     jnz .fail
@@ -1333,6 +1608,316 @@ dc_init:
     ret
 
 ; =============================================================================
+; int pdu_mod_launch(void) - launch (PAGEDESK-SPEC 3.1-3.4): the screen as
+; pdu_vid says, both eager modules' headers checked against their rows and
+; bound (pdumod.c's pdu_mcheck, which toasts its own refusal), the exchange
+; block, INIT with no document set, and the INDEX and the face kit at once
+; (20.21.2: the bars are drawn before any document is - only a refused claim
+; refuses, the band living in it). 0 = ready; else a toast said why. C until
+; the regions wanted the room (20.22.2)
+; =============================================================================
+_pdu_mod_launch:
+    push si
+    push di
+    mov si, _pdu_vid
+    lodsw                           ; os88_video: w, h, dock_top, kind, bpp
+    mov [_pdu_scrw], ax
+    lodsw
+    mov [_pdu_scrh], ax
+    lodsw
+    lodsw
+    mov [_pdu_adapter], ax
+    lodsw
+    mov [_pdu_bpp], ax
+    xor di, di                      ; PDU_M_ENG, then PDU_M_REND: each is
+.m:                                 ; its own parts row, its header checked
+    mov ax, di                      ; as 3.1 says: magic, PDM_ABI, image
+    call op_seg                     ; past the door, image + bss == the row
+    or ax, ax
+    jz .bad
+    push es
+    mov es, ax
+    mov dx, PDM_MAGIC_ENG
+    or di, di
+    jz .mg
+    mov dx, PDM_MAGIC_REND
+.mg:
+    cmp [es:0], dx
+    jne .badp
+    cmp word [es:2], PDM_ABI
+    jne .badp
+    mov dx, [es:4]
+    cmp dx, PDM_ENTRY
+    jbe .badp
+    add dx, [es:6]
+    jc .badp
+    pop es
+    xchg ax, cx
+    mov ax, di
+    call op_row                     ; SI = the row
+    cmp dx, [si+OP_R_LEN]
+    jne .bad
+    push cx
+    push di
+    call _pdu_mbind
+    pop cx
+    pop cx
+    inc di
+    cmp di, 2
+    jb .m
+    mov al, PDU_PART_RENDC_A        ; PDREND's code part (20.22.7.9), in the
+    call op_seg                     ; carve with it - never moved - and bound
+    xor cx, cx                      ; once: BX its code selector, CX its data.
+    push cx                         ; A refusal (not this build's part; the
+    push ax                         ; stand-in) shows as REND_INIT's below
+    OS88_CODESEL ax, byte [cc_cpuf]
+    push ax
+    mov ax, PDV_REND_CODE
+    push ax
+    mov al, 1                       ; PDU_M_REND
+    push ax
+    call _pdu_mcall
+    add sp, 10
+    mov ax, PD_XB_BYTES / 16
+    push ax
+    call _os88_mem_claim_p
+    pop cx
+    mov [_pdu_xb], ax
+    mov si, ml_nomem
+    or ax, ax
+    jz .toast                       ; nothing to give back yet
+    push es
+    push ds
+    pop es
+    mov di, _pdu_xinit
+    mov cx, PDXB_INIT_BYTES / 2
+    xor ax, ax
+    rep stosw
+    pop es
+    mov ax, [_pdu_adapter]
+    mov [_pdu_xinit + PDXB_INIT_ADAPTER], ax
+    mov al, 1
+    cmp word [_pdu_bpp], 4
+    jl .b
+    mov al, 4
+.b:
+    mov [_pdu_xinit + PDXB_INIT_BPP], al
+    call OSAPI_CPU_INFO             ; AL = the tier
+    mov [_pdu_xinit + PDXB_INIT_CPU], al
+    mov si, ml_fail
+    xor ax, ax
+    mov bx, PDV_ENG_INIT
+    call dc_init
+    jnz .quit
+    mov ax, 1
+    mov bx, PDV_REND_INIT
+    call dc_init
+    jnz .quit
+    call _pdu_bank_load
+    mov si, ml_nomem
+    cmp ax, PDE_NOMEM
+    je .quit
+    xor ax, ax
+    jmp short .out
+.badp:
+    pop es
+.bad:
+    mov si, ml_eng                  ; "PDENG: wrong version" / "PDREND: ..."
+    or di, di
+    jz .toast
+    mov si, ml_rend
+    jmp short .toast
+.quit:
+    call _pdu_mod_quit
+.toast:
+    xor ax, ax
+    push ax
+    push si
+    call _os88_toast
+    pop cx
+    pop cx
+.no:
+    mov ax, -1
+.out:
+    pop di
+    pop si
+    ret
+
+; =============================================================================
+; int pdu_bank_load(void) - the PDRES INDEX and the face's kit, once per
+; instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2). The part is read BY
+; OFFSET out of PAGEDESK.O88 itself (an OP_SELF row, stored unpacked so the
+; offsets are real), from the launch folder - and ONLY its prefix, the INDEX
+; and the kit (pdumod.c's pdu_rescap): PDREND reads each strike's bitmaps
+; itself, at part_off + the record's offset. The face's band rides after
+; what is read. 0, or a PDE_*; only PDE_NOMEM refuses the launch - a missing
+; bank leaves the band and the kernel's face (D3). It was C until the slot's
+; regions wanted the room (20.22.2)
+; =============================================================================
+PDU_PART_RES_A  equ 4               ; pdu.h's PDU_PART_RES; RES2 is the next
+PDU_BAND_P      equ 2304 / 16       ; pdkit.inc's band: 96 x 24
+_pdu_bank_load:
+    push si
+    push di
+    xor ax, ax
+    cmp [_pdu_bankraw], ax
+    je .go
+.out:                               ; up here: every way out is in reach
+    pop di
+    pop si
+    ret
+.go:
+    mov al, PDU_PART_RES_A
+    call op_row
+    mov di, [si+OP_R_OFF]           ; para
+    mov cx, [si+OP_R_LEN]
+    mov ax, PDE_NOTFOUND
+    jcxz .out
+    or di, di
+    jz .out
+    mov ax, PDE_LIMIT               ; RES2 must be RES's next byte in the
+    test cl, 15                     ; file, or a strike past 65,024 is read
+    jnz .out                        ; from the wrong place (pagedesk.asm)
+    mov [bk_para], di
+    push cx
+    mov dx, cx
+    mov cl, 4
+    shr dx, cl
+    add di, dx
+    mov al, PDU_PART_RES_A + 1
+    call op_row
+    pop dx
+    cmp [si+OP_R_OFF], di
+    mov ax, PDE_LIMIT
+    jne .out
+    mov si, dx                      ; RES's length, capped
+    cmp si, [_pdu_rescap]
+    jbe .l
+    mov si, [_pdu_rescap]
+.l:
+    push si
+    mov ax, PDU_PART_RES_A
+    push ax
+    call _pdu_part_need
+    pop cx
+    pop cx
+    mov di, ax                      ; need
+    or ax, ax
+    mov ax, PDE_IO
+    jz .out
+    lea ax, [di+PDU_BAND_P]
+    push ax
+    call _os88_mem_claim_p
+    pop cx
+    mov dx, ax
+    or ax, ax
+    mov ax, PDE_NOMEM
+    jz .out
+    mov [_pdu_bankraw], dx
+    mov ax, PDU_BAND_P
+    push ax
+    push di
+    push dx
+    call _os88_seg_sub
+    add sp, 6
+    mov [bk_band], ax
+    push ax
+    xor ax, ax
+    push ax
+    call _pk_init                   ; the band now: the bars come first
+    pop cx
+    pop cx
+    mov ax, PDU_PART_RES_A
+    mov dx, [_pdu_bankraw]
+    mov cx, si
+    call pdu_home_rd
+    or ax, ax
+    jnz .fail
+    mov ax, [_pdu_bankraw]
+    mov [_pdu_bank], ax
+    push si
+    call _pdu_bank_dir              ; 20.4.1's directory
+    pop cx
+    or ax, ax
+    jnz .fail
+    mov ax, [_pdu_kitlen]
+    or ax, ax
+    jz .nokit
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    push ax
+    mov ax, [_pdu_kitoff]
+    shr ax, cl
+    push ax
+    push word [_pdu_bankraw]
+    call _os88_seg_sub
+    add sp, 6
+    push word [bk_band]
+    push ax
+    call _pk_init
+    pop cx
+    pop cx
+.nokit:
+    call bk_fill
+    xor ax, ax
+    jmp .out
+.fail:
+    push ax                         ; the claim stays for the band: no fonts,
+    push word [bk_band]             ; no pictures, no bank (D3)
+    xor ax, ax
+    mov [_pdu_bank], ax
+    push ax
+    call _pk_init
+    pop cx
+    pop cx
+    pop ax
+    jmp .out
+
+; bk_fill - the bank is in: its KiB and D3's pdxb_fontbank (SI, DI free)
+bk_fill:
+    mov ax, [_pdu_banklen]
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    mov [_pdu_bankkb], ax
+    push es                         ; D3's pdxb_fontbank: where PDREND finds
+    push ds                         ; the strikes it reads itself
+    pop es
+    mov di, _pdu_xfb
+    mov cx, PDXB_FONTBANK_BYTES / 2
+    xor ax, ax
+    rep stosw
+    mov di, _pdu_xfb + PDXB_FONTBANK_PKGNAME
+    mov si, op_name
+    mov cx, PDXB_FONTBANK_PKGNAME_N - 1
+.n:
+    lodsb
+    or al, al
+    jz .d
+    stosb
+    loop .n
+.d:
+    pop es
+    mov ax, [_pdu_home]
+    mov [_pdu_xfb + PDXB_FONTBANK_PLACE_CLUS], ax
+    mov ax, [_pdu_home+2]
+    mov [_pdu_xfb + PDXB_FONTBANK_PLACE_VOL], ax
+    mov ax, [bk_para]
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    mov [_pdu_xfb + PDXB_FONTBANK_PART_OFF], ax
+    mov cl, 12
+    shr dx, cl
+    mov [_pdu_xfb + PDXB_FONTBANK_PART_OFF + 2], dx
+    mov ax, [_pdu_bank]
+    mov [_pdu_xfb + PDXB_FONTBANK_INDEX_SEG], ax
+    mov ax, [_pdu_banklen]
+    mov [_pdu_xfb + PDXB_FONTBANK_INDEX_LEN], ax
+    ret
+
+; =============================================================================
 ; int pdu_bank_dir(unsigned len) - 20.4.1's directory at the bank just read:
 ; 'PDRS', version 1, n entries of 12 bytes. Kind 7 is the INDEX (it sets
 ; pdu_banklen and must lie inside the `len` read); kind 9 the face's kit, on
@@ -1411,12 +1996,15 @@ PDU_RES_KIND_KIT_A   equ 9
 ; pdxb_init's six document regions, in its field order: cache, arena,
 ; tables, dl, band, glyph (rows * 2)
 dc_map:         db 0, 2, 4, 8, 10, 6
+ml_nomem:       db 'No memory for PageDesk', 0     ; pdu_mod_launch's toasts
+ml_fail:        db 'A PageDesk module failed', 0
+ml_eng:         db 'PDENG: wrong version', 0
+ml_rend:        db 'PDREND: wrong version', 0
 
 
 section .bss
 alignb 2
 _pdu_socc:      resw 1              ; the slot's occupant, 0 = empty
-_pdu_ladkey:    resw 1              ; the ladder just loaded PDXK for OPEN
 _pdu_sclaim:    resw 1              ; claim S
 _pdu_swaps:     resw 1              ; loads since the job began
 _pdu_ckind:     resw 1              ; 0 not tried, 1 XMS, 2 EMS, -1 none
@@ -1430,14 +2018,26 @@ sl_img:         resw 1
 sl_ws:          resw 1
 sl_wskb:        resw 1
 sl_need:        resw 1
+sl_wmin:        resb 1
+alignb 2
+sl_dseg:        resw 1
+rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
+rd_vol:         resw 1
+bk_para:        resw 1              ; pdu_bank_load
+bk_band:        resw 1
+_pdu_kseg:      resw 1              ; the held keys' claim (pdovlplat.c)
+sl_mag:         resw 1
 sl_dir:         resw 1
 sl_msk:         resw 1
 ck_at:          resw PDU_NOCC_A     ; each occupant's place in the store
 xr_claim:       resw 1              ; claim X
 xr_para:        resw 1
 xr_last:        resw 1              ; the region at X's top
-xr_off:         resw 5              ; by PDMEM_* (1..4), paragraphs
-xr_len:         resw 5
+xr_off:         resw PDU_NREG + 1   ; by PDMEM_* (1..5), paragraphs
+xr_len:         resw PDU_NREG + 1
+xr_kb:          resw 1
+x8_in:          resb 1              ; PDX8 is in the X8 region
+alignb 2
 pg_row:         resw 1
 pg_cap:         resw 1
 pg_len:         resw 1

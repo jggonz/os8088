@@ -41,7 +41,7 @@ static struct pdxb_init pdu_xinit;
  * kern_big (kernel/memory.inc, SPEC.md 50), and 16.2's rows one claim each
  * come to 13 at a save's peak. So the six document rows ride two claims cut
  * with os88_seg_sub (a selector on kern_mega, seg + para on every real-mode
- * kernel): A = cache, arena, tables, glyph cache (47 KiB) and B = display
+ * kernel): A = cache, arena, tables, glyph cache (50 KiB) and B = display
  * list + PDREND's workspace, band (<= 34 KiB, D13). Every cut is on a KiB,
  * so every sub-segment is 512-aligned for a disk transfer (SPEC.md 2.1.1); the cache is first in A,
  * at the claim's own base. The peak is then the carve, the exchange block,
@@ -68,7 +68,10 @@ static struct pdxb_init pdu_xinit;
 #define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4.. in B */
 /* DECISIONS D13: PDREND keeps its gstates and font cache in a 6,912-byte
  * workspace at the tail of dl_seg, so the display-list row is 22 + 7 = 29 */
-const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0,
+/* the arena is 11 (crypt, 20.22.5): an encrypted document's cipher state
+ * lives at its offset 0, and SETKEY answers PDE_NOMEM below 11 KiB. Raised for
+ * every document: A cannot grow in place once PDENG holds its rows */
+const unsigned pdu_dckb[PDU_NDC] = { 16, 11, 11, 12, 29, 0,
                                             16, 4, 1, 4, 2, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
@@ -92,47 +95,14 @@ static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: this job's writer buffer (20.1
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
 
-/* the two eager modules; PDWRT and the rest are the slot's (pduslot.c) */
-static const char *pdu_modname[2] = { "PDENG", "PDREND" };
-static const unsigned pdu_modmagic[2] = { PDM_MAGIC_ENG, PDM_MAGIC_REND };
-static const int pdu_modpart[2] = { PDU_PART_ENG, PDU_PART_REND };
-
-static char pdu_mmsg[48];               /* a refusal's toast (copied) */
-
-static unsigned pdu_peekw(unsigned seg, unsigned off)
-{
-    return (os88_peek(seg, off) & 0xFF) | ((os88_peek(seg, off + 1) & 0xFF) << 8);
-}
+/* the two eager modules (and PDREND's code part) are checked and bound by
+ * pduslot.inc's pdu_mod_launch; PDWRT and the rest are the slot's */
 
 static void pdu_cat(char *d, const char *s, int cap)
 {
     int n;
     n = os88_strlen(d);
     os88_strcpy(d + n, s, cap - n);
-}
-
-/* check module m's header in its segment against the parts row; bind it.
- * 0 = bound, else a PDE_* and a toast that names the module. */
-static int pdu_mcheck(int m, unsigned seg)
-{
-    unsigned img, bss, len;
-
-    if (seg == 0)
-        goto bad;
-    if (pdu_peekw(seg, 0) != pdu_modmagic[m] || pdu_peekw(seg, 2) != PDM_ABI)
-        goto bad;
-    img = pdu_peekw(seg, 4);
-    bss = pdu_peekw(seg, 6);
-    len = pdu_part_len(pdu_modpart[m]);
-    if (img < PDM_ENTRY + 1 || img + bss < img || img + bss != len)
-        goto bad;
-    pdu_mbind(m, seg);
-    return 0;
-bad:
-    os88_strcpy(pdu_mmsg, pdu_modname[m], sizeof(pdu_mmsg));
-    pdu_cat(pdu_mmsg, ": wrong version", sizeof(pdu_mmsg));  /* <= 21: a 6-letter name + 15 (TOAST_MAX 24) */
-    os88_toast(pdu_mmsg, 0);
-    return PDE_LIMIT;
 }
 
 /* INIT module m (verb: its INIT) with pdu_xinit; 0 or a PDE_*. The doors
@@ -142,47 +112,12 @@ bad:
  * doors and the exchange block filled in, copied to the block, and module m's
  * INIT verb called - 0, or the module's PDE_* (PDE_LIMIT if it said none) */
 
-/* launch: header checks, the exchange block, INIT with no document set.
- * 0 = ready; else a toast has said why and the launch is refused. */
-static int pdu_bank_load(void);
-static int pdu_mod_launch(void)
-{
-    struct os88_video *v;
-    int m;
-
-    v = &pdu_vid;
-    pdu_adapter = v->kind;
-    pdu_bpp = v->bpp;
-    pdu_scrw = v->w;
-    pdu_scrh = v->h;
-    for (m = PDU_M_ENG; m <= PDU_M_REND; m++)
-        if (pdu_mcheck(m, os88_part_seg(pdu_modpart[m])) != 0)
-            return -1;
-    pdu_xb = os88_mem_claim_p(PD_XB_BYTES / 16);
-    if (pdu_xb == 0) {
-        os88_toast("No memory for PageDesk", 0);
-        return -1;
-    }
-    os88_memset(&pdu_xinit, 0, sizeof(pdu_xinit));
-    pdu_xinit.adapter = pdu_adapter;
-    pdu_xinit.bpp = pdu_bpp >= 4 ? 4 : 1;
-    pdu_xinit.cpu = os88_cpu();
-    if (pdu_minit(PDU_M_ENG, PDV_ENG_INIT) != 0
-        || pdu_minit(PDU_M_REND, PDV_REND_INIT) != 0) {
-        os88_toast("A PageDesk module failed", 0);
-        pdu_mod_quit();
-        return -1;
-    }
-    /* 20.21.2: the INDEX and the face kit, at launch - the bars are drawn
-     * before any document is. Only a refused claim refuses the launch: the
-     * band lives in it */
-    if (pdu_bank_load() == PDE_NOMEM) {
-        os88_toast("No memory for PageDesk", 0);
-        pdu_mod_quit();
-        return -1;
-    }
-    return 0;
-}
+/* int pdu_mod_launch(void) is pduslot.inc's: launch - both eager modules'
+ * headers checked and bound (pdu_mcheck), the exchange block, INIT with no
+ * document set, then the INDEX and the face kit (pdu_bank_load). 0 = ready;
+ * else a toast has said why and the launch is refused. */
+int pdu_bank_load(void);
+static void pdu_mod_quit(void);
 
 /* give back everything the primary holds - the instance's death does this
  * too (SPEC.md 50), but a refused launch and a failed open must not leak
@@ -216,80 +151,12 @@ static void pdu_mod_quit(void)
     pdu_mbind(PDU_M_REND, 0);
 }
 
-/* the PDRES INDEX, once per instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1).
- * The part is read BY OFFSET out of PAGEDESK.O88 itself (an OP_SELF row,
- * stored unpacked so the offsets are real), from the folder the package was
- * launched from - and ONLY its INDEX: the directory, the PDFB strike records,
- * the widths and the glyph names, at most 8 KiB. PDREND reads each strike's
- * bitmaps itself on first use, at part_off + the record's offset.
- *
- * READ_AT wants a cluster-aligned offset and capacity (SPEC.md 18.4.4): the
- * slot's reader (pduslot.inc) reads the clusters the prefix spans and moves
- * it down onto the claim's base, so the bank IS the claim. 0, or a PDE_*; a
- * missing bank is not fatal (the renderer then substitutes the kernel face)
- * and is reported. */
-static int pdu_bank_load(void)
-{
-    static struct os88_place here;
-    unsigned para, len, need, band;
-    int r;
-
-    if (pdu_bankraw)
-        return 0;
-    len = pdu_part_len(PDU_PART_RES);
-    para = pdu_part_off(PDU_PART_RES);
-    if (len == 0 || para == 0)
-        return PDE_NOTFOUND;
-    /* the second row must be the first row's next byte in the file, or a
-     * strike past 65,024 would be read from the wrong place (pagedesk.asm) */
-    if ((len & 15) != 0
-        || pdu_part_off(PDU_PART_RES2) != para + (len >> 4))
-        return PDE_LIMIT;
-    if (len > PDU_INDEX_MAX + PDU_KIT_MAX)  /* the INDEX and the kit (20.21.2) */
-        len = PDU_INDEX_MAX + PDU_KIT_MAX;
-    /* the slot's reader (pduslot.inc, 20.22.2.4): the clusters the prefix
-     * spans, read by offset and moved down onto the claim's base; the face's
-     * band rides after what is read (20.21.3) */
-    need = pdu_part_need(PDU_PART_RES, len);
-    if (need == 0)
-        return PDE_IO;
-    pdu_bankraw = os88_mem_claim_p(need + (PDU_BAND_BYTES >> 4));
-    if (pdu_bankraw == 0)
-        return PDE_NOMEM;
-    band = os88_seg_sub(pdu_bankraw, need, PDU_BAND_BYTES >> 4);
-    pk_init(0, band);
-    os88_file_here(&here);
-    r = PDE_IO;
-    if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) == 0) {
-        r = pdu_part_rd(PDU_PART_RES, pdu_bankraw, len);
-        os88_file_goto_q_mark(here.clus, here.vol);
-    }
-    if (r == 0) {
-        pdu_bank = pdu_bankraw;
-        r = pdu_bank_dir(len);          /* pduslot.inc: 20.4.1's directory */
-        if (r == 0 && pdu_kitlen)
-            pk_init(os88_seg_sub(pdu_bankraw, pdu_kitoff >> 4,
-                                 (pdu_kitlen + 15) >> 4), band);
-    }
-    if (r) {
-        /* the claim stays for the face's band: no fonts, no pictures and no
-         * bank, which the renderer survives (D3) */
-        pk_init(0, band);
-        pdu_bank = 0;
-        return r;
-    }
-    pdu_bankkb = (pdu_banklen + 1023) >> 10;
-    /* D3's pdxb_fontbank: where PDREND finds the strikes it reads itself */
-    os88_memset(&pdu_xfb, 0, sizeof(pdu_xfb));
-    os88_strcpy(pdu_xfb.pkgname, pdu_pkgname(), sizeof(pdu_xfb.pkgname));
-    pdu_xfb.place_clus = pdu_home.clus;
-    pdu_xfb.place_vol = pdu_home.vol;
-    pdu_xfb.part_off.lo = para << 4;
-    pdu_xfb.part_off.hi = para >> 12;
-    pdu_xfb.index_seg = pdu_bank;
-    pdu_xfb.index_len = pdu_banklen;
-    return 0;
-}
+/* int pdu_bank_load(void) is pduslot.inc's: the PDRES INDEX and the face's
+ * kit, once per instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2), read
+ * by offset out of PAGEDESK.O88 from the launch folder, at most pdu_rescap
+ * bytes, with the band after them and pdu_xfb filled in. 0, or a PDE_*; a
+ * missing bank is not fatal (the renderer substitutes the kernel face) */
+static unsigned pdu_rescap = PDU_INDEX_MAX + PDU_KIT_MAX;
 
 /* open: the document set. 0, or PDE_NOMEM with pdu_needkb set */
 static unsigned pdu_needkb;
