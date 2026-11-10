@@ -117,6 +117,11 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLH         8           /* header: type aux len y0 y1                 */
 #define DLI_BODY    28          /* DLR_IMAGE's body (20.3.2, 20.22.7); inline rows follow */
 
+/* gfx (PAGEDESK-SPEC 20.22.9): a device colour operator ends a non-device colour space (the GS.pad_ nibbles) */
+#ifndef XG_DEVCOL
+#define XG_DEVCOL(st) (GS.pad_ &= (pdb)((st) ? 0x0F : 0xF0))
+#endif
+
 /* ---- modes -------------------------------------------------------------- */
 #define PDR_IDLE    0
 #define PDR_INTERP  1           /* interpreting into the DL                   */

@@ -21510,7 +21510,7 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
-             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
+             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h $(PDR_DIR)/pdrxg.c
 # the host's stand-in slot occupants (20.22.7): the real dash walker, a fake decoder
 PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c
 PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
@@ -21756,7 +21756,7 @@ PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c a
 PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 53248   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 52 KiB for any PDF (PAGEDESK-SPEC 20.22, L6)
+PDW_CAP  := 61440   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 60 KiB for any PDF: a slot occupant that enciphers with crypt's shared primitives (20.22.4, lead 23:30)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -21802,8 +21802,49 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 else
 	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
 endif
+# PDWRT on xref-stream, object-stream and ENCRYPTED sources (PAGEDESK-SPEC
+# 20.22.4.6, hosttest/pdw_enc.c): the writer over a stand-in for the PDENG
+# verbs the engine agents own (PDRC_PLAIN, CRYPTINFO, SETKEY, PDV_ENG_CRYPT),
+# on fixtures qpdf makes (plain xref stream + object stream, AES-128, AES-256,
+# RC4-128, RC4-40, a user password, a classic table), every output held to
+# qpdf --check, qpdf's own decryption and mutool. The writer enciphers
+# with crypt's shared primitives (pdctwin.c on the host), checked by qpdf.
+.PHONY: pdwrt-enc
+pdwrt-enc: | $(BUILD)
+	mkdir -p $(BUILD)/pdw-enc
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
+		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(BUILD)/pdw-enc/pdw_encfuzz 100000
+	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
 
+# ---- PageDesk: gfx ----------------------------------------------------------
+# PDXG.MOD (PAGEDESK-SPEC 20.22.9): colour spaces, functions, shading, patterns -
+# the slot occupant that works at interpretation time. pdwrt's open-coded shape.
+# `make pdxg` builds it and holds it to mutool (tools/os88pdfx_gfx.py --check).
+PDX_C    := apps/pagedesk/pdxg.c apps/pagedesk/pdxgm.c apps/pagedesk/pdxgmt.c apps/pagedesk/pdxgp.c \
+            apps/pagedesk/pdxgf.c apps/pagedesk/pdxgc.c apps/pagedesk/pdxgs.c \
+            apps/pagedesk/pdxdash.c apps/pagedesk/pdxedit.c
+PDX_CAP    := 65024   # PAGEDESK-SPEC 20.22.9 / L6: image + bss
+.PHONY: pdxg pdxg-host
+$(BUILD)/pdxg.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxg.c -o $@
+$(BUILD)/pdxg.gen.asm: $(BUILD)/pdxg.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXG.MOD: apps/pagedesk/pdxg.asm $(BUILD)/pdxg.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxg.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXG.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 60)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDX_CAP) else 0)"
+pdxg-host: $(PDX_C) apps/pagedesk/hosttest/pdxg_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	python3 tools/os88pdfx_gfx.py --check --build $(BUILD)
+pdxg: $(BUILD)/PDXG.MOD pdxg-host
+# ---- end PageDesk: gfx ------------------------------------------------------
 # ---- PageDesk: xi -----------------------------------------------------------
 # PDXI.MOD (PAGEDESK-SPEC 20.22.11): the image-decoder occupant of the module
 # slot - DCT (pdxidct.c + pdxidct.inc), and the bilevel agent's CCITT and JBIG2
@@ -21811,6 +21852,8 @@ endif
 # a separate `nasm -f bin`. `make pdxi` builds the module AND runs the host check
 # against libjpeg (tools/os88pdfx_dct.py); the host side is not in `all`.
 PDI_BIT  := $(if $(wildcard apps/pagedesk/pdxiccit.c),-DPDXI_CCIT) $(if $(wildcard apps/pagedesk/pdxijb2.c),-DPDXI_JB2)
+# the hand-written JBIG2 MQ decoder and template-0 row (bilevel's pdxijb2.inc), when it is on the branch
+PDI_JBA  := $(if $(wildcard apps/pagedesk/pdxijb2.inc),-DJB_ASM)
 PDI_C    := apps/pagedesk/pdxi.c apps/pagedesk/pdxidct.c $(wildcard apps/pagedesk/pdxiccit.c apps/pagedesk/pdxijb2.c)
 PDI_H    := apps/pagedesk/pdxi.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
 PDI_SDK  ?=
@@ -21818,14 +21861,14 @@ PDI_OUT  := $(BUILD)/pdi
 PDI_CAP  := 65024   # image + bss (PAGEDESK-SPEC 20.22.11): DCT <= 24,576 of it, bilevel <= 36,864
 .PHONY: pdxi pdxi-host
 $(BUILD)/pdxi.raw.asm: $(PDI_C) $(PDI_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_DEFS) \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_JBA) $(PDI_DEFS) \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDI_SDK),$(PDI_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
 		apps/pagedesk/pdxi.c -o $@
 $(BUILD)/pdxi.gen.asm: $(BUILD)/pdxi.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
 	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
 $(BUILD)/PDXI.MOD: apps/pagedesk/pdxi.asm apps/pagedesk/pdxidct.inc $(BUILD)/pdxi.gen.asm $(CC_RUNTIME) \
-                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
-	$(NASM) -f bin -w+error $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc apps/pagedesk/pdxijb2.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(PDI_JBA) $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
 	    assert i==len(d), (i,len(d)); t=i+b; print('PDXI.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
 	    sys.exit(1 if t>$(PDI_CAP) else 0)"

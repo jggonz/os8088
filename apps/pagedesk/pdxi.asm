@@ -134,6 +134,9 @@ section .text
 %ifndef PDXI_NODCT
 %include "pagedesk/pdxidct.inc"
 %endif
+%ifdef JB_ASM
+%include "pagedesk/pdxijb2.inc"      ; bilevel: _mq_bytein, _mq_bit, _gb_row0 (needs the C statics it names)
+%endif
 
 section .bss
 pdi_bss_end:

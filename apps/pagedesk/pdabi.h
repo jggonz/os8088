@@ -686,6 +686,18 @@ struct pdxb_img {
 /* [eng 20.22.3]    */
 /* [crypt 20.22.5]  */
 /* [wrt 20.22.4]    */
+#define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
+                                    before the job: the keys of the ENCRYPTED foreign
+                                    files an Insert reads (plat's pre-flight, 20.22.4.5) */
+struct pdxb_wkey {
+    pdw  slot;              /* the Insert slot (0..2) of the file             */
+    pdw  key_len, stm, str, eff, encmeta;   /* what PDV_ENG_SETKEY takes      */
+    pdb  key[32];
+};
+struct pdxb_wkeys { pdw n; struct pdxb_wkey k[3]; };
+#define PDRC_ENCDICT 0xFFFE /* PDV_ENG_RAW_COPY objnum: the text of a DIRECT /Encrypt
+                               dictionary ("<< ... >>"), when pdxb_trailer.tflags has
+                               PDTR_ENCDIRECT (PDRC_EXACT or PLAIN: same bytes)        */
 /* [rcore 20.22.7]  */
 /* PDV_GFX_DASH (0xCE, PDXG; the walker is rcore's pdxdash.c, 20.22.7): BX:CX =
  * this block (PDREND puts it at XB offset 0), DX unused. The core fills `in`
@@ -739,6 +751,100 @@ struct pdxb_emark {
     pdw  n, more;           /* out: words of ops; 1 = call again           */
 };
 /* [gfx 20.22.9]    */
+/* ---- gfx (PAGEDESK-SPEC 20.22.9): PDXG's verbs and its cache records ----- */
+#define PDV_GFX_CS      0xC8 /* compile a colour space. XB: pdxb_gfx           */
+#define PDV_GFX_COLOR   0xC9 /* one operand set through a MODULE space          */
+#define PDV_GFX_LUT     0xCA /* an image colour-space LUT                       */
+#define PDV_GFX_SHADE   0xCB /* a shading as flat polygon records (PDGX_REC_*)  */
+#define PDV_GFX_PAT     0xCC /* a tiling pattern's parameters                   */
+#define PDV_GFX_FN      0xCD /* evaluate one function                           */
+#define PDV_GFX_DASH    0xCE /* rcore's dash walker (pdxdash.c)                 */
+#define PDV_GFX_EDIT    0xCF /* rcore's edit-store marks (pdxedit.c)            */
+#define PDGX_CSBYTES    1264 /* sizeof(struct pdgx_cs): an XCK_CS entry          */
+#define PDGX_LUTBYTES   1028 /* sizeof(struct pdgx_lut): an XCK_LUT entry        */
+#define PDGX_SRCMAX     480
+#define PDGX_K_GRAY 1
+#define PDGX_K_RGB 2
+#define PDGX_K_CMYK 3
+#define PDGX_K_CALGRAY 4
+#define PDGX_K_CALRGB 5
+#define PDGX_K_LAB 6
+#define PDGX_K_INDEXED 7
+#define PDGX_K_SEP 8
+#define PDGX_K_DEVN 9
+#define PDGX_K_PATTERN 10
+#define PDGX_F_TABLE    0x01 /* rgb[] is valid: a 1-component space           */
+#define PDGX_F_RGBLIKE  0x02 /* operands are device RGB (ICC N=3)              */
+#define PDGX_F_CMYKLIKE 0x04 /* operands are device CMYK (ICC N=4)             */
+#define PDGX_F_MODULE   0x08 /* convert with PDV_GFX_COLOR                     */
+#define PDGX_F_NONE     0x10 /* Separation /None: paints nothing               */
+#define PDGX_F_PATTERN  0x20 /* a Pattern space; n = the underlying's (0 = none) */
+struct pdgx_cs {
+    pdb  kind, n, flags, pad;
+    pdw  hival;                 /* Indexed                                    */
+    pdw  srcobj, srcgen;        /* the source object, 0 = the text in src[]   */
+    pdw  srclen;                /* bytes of src[]                             */
+    pdw  rsv[2];
+    pdb  src[480];
+    pdb  rgb[768];              /* index (or round(c * 255)) -> r, g, b       */
+};
+#define PDGX_LUT_INVERT 0x01    /* grey = 255 - sat(sum of the tables)         */
+struct pdgx_lut {
+    pdb  ncomp, flags;
+    pdw  pad;
+    pdb  t[1024];             /* four tables of 256 */
+};
+/* PDV_GFX_SHADE paints a shading as FLAT POLYGONS (20.22.9): a gradient is bands, a mesh is triangles cut into
+ * flat sub-triangles, so PDREND needs no shading rasteriser - each record is one ordinary fill. The answer is a
+ * run of records in the caller's buffer (rseg:roff, rlen bytes, ntri records):
+ *     pdb r, g, b;  pdb flags (bit 0: a CLIP polygon, the shading's /BBox - clip to it, fill nothing);
+ *     pdb npts;     pdb n1  (0, or the length of the first contour: the rest is a second contour, wound the
+ *                            other way - a ring);   then npts x { pdi x, y }  device quarter-pixels,
+ *     already through the CTM and clamped to +-16000. Fill rule nonzero. More to come: AX = PDE_BUSY and state. */
+#define PDGX_REC_HDR   6
+#define PDGX_REC_CLIP  0x01
+struct pdxb_gfx {
+    pdw  objnum, gen;           /* in: the object; 0 = the text below          */
+    pdw  tseg, toff, tlen;      /* in: direct syntax (<= 1,024 bytes)           */
+    pdw  rseg, roff, rcap;      /* in: the result buffer                        */
+    pdw  rlen;                  /* out: bytes written there                     */
+    pdw  flags, bpc, state;
+    pdw  cseg, coff;            /* PDV_GFX_COLOR: the pdgx_cs entry             */
+    pdw  ncomp, kind, ntri, ok; /* out                                          */
+    struct pd_fx comp[8];       /* in: operands or /Decode; out: PDV_GFX_FN     */
+    pdb  rgb[4];                /* out: r g b, byte 3 = 1 when nothing is painted */
+    struct pd_mat ctm;          /* SHADE: user space -> device quarter-pixels   */
+    pdi  clip[4];               /* SHADE: the device clip in pixels, inclusive: x0 y0 x1 y1 */
+    pdw  steps;                 /* SHADE: bands over a gradient's range (0 = 32) */
+};
+/* PDV_GFX_PAT (20.22.9). Step 1 (the pattern's name, as PDGXI_RES with PDGXI_CAT_PAT) writes a struct pdgx_pat
+ * to rseg:roff. Step 2 (PDGXI_TILES; the entry at cseg:coff, ctm = the page's DEFAULT matrix, clip = the device
+ * clip) answers ctm = the pattern matrix x the default matrix (a tiling pattern: that of its first tile); a tiling pattern also the tile counts ni = ncomp,
+ * nj = kind (0: too many, draw nothing) and comp[0..3] = the device step of one tile along i (x y) and along j (x y),
+ * comp[4..5] = the first tile's i, j; a shading pattern is painted with PDV_GFX_SHADE on
+ * the entry's objnum/gen and that ctm. */
+#define PDGX_PATBYTES  56
+#define PDGX_PAT_OBJ   4        /* byte offsets of struct pdgx_pat that PDREND reads from the cache entry */
+#define PDGX_PAT_BBOX  32
+#define PDGX_PAT_DIRECT 0x01    /* a shading pattern whose /Shading is direct: not supported (objnum = 0) */
+#define PDGX_TILEMAX   40       /* tiles in one fill */
+struct pdgx_pat {
+    pdb  ptype, paint, flags, pad;      /* /PatternType (1 tiling, 2 shading), /PaintType (1 coloured, 2 not) */
+    pdw  objnum, gen;                   /* tiling: the pattern's stream; shading: the /Shading object          */
+    struct pd_fx matrix[6];             /* /Matrix                                                            */
+    struct pd_fx bbox[4];               /* tiling: /BBox                                                      */
+    struct pd_fx xstep, ystep;          /* tiling                                                             */
+};
+#define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
+#define PDGXI_CAT_CS  0x0100     /* with PDGXI_RES: the resource category, flags bits 8-11 (tlen counts the name and its NUL) */
+#define PDGXI_CAT_SH  0x0200
+#define PDGXI_CAT_PAT 0x0300
+#define PDGXI_TILES  0x0004     /* PDV_GFX_PAT step 2 */
+#define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
+                                   index is bpc), the name is at tseg:toff               */
+typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
+typedef char pdgx_sz_lut[sizeof(struct pdgx_lut)   == PDGX_LUTBYTES ? 1 : -1];
+typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
