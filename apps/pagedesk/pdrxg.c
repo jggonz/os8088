@@ -243,11 +243,12 @@ static void xg_pfill(pdw rule, pdw e)
     pdw n, obj = pd_fpeekw(g_xcseg, (pdw)(e + PDGX_PAT_OBJ)), gen = pd_fpeekw(g_xcseg, (pdw)(e + PDGX_PAT_OBJ + 2));
     pdw shading = pd_fpeekb(g_xcseg, e) == 2, paint = pd_fpeekb(g_xcseg, (pdw)(e + 1));
     if (!obj || !x_have(PDX_GFX)) { if (obj) x_need(PDX_GFX); else inc_note(PDF_INC_SHADE, "shading pattern"); return; }
+    gs_push(); clip_apply(rule);                                 /* S0 saved; this is S1: clipped to the path, so the tile
+                                                                    counts PDXG answers are those of the path's box and not of the page's */
     xg_begin(0);
     g_gx.cseg = g_xcseg; g_gx.coff = e; g_gx.flags = PDGXI_TILES;
     pdr_cpy(&g_gx.ctm, &g_base, sizeof g_base);
-    if (xg_req(PDV_GFX_PAT) != PDE_OK) { inc_note(PDF_INC_SHADE, "pattern"); return; }
-    gs_push(); clip_apply(rule);                                 /* S0 saved; this is S1: clipped to the path */
+    if (xg_req(PDV_GFX_PAT) != PDE_OK) { gs_pop(); inc_note(PDF_INC_SHADE, "pattern"); return; }
     if (shading) { pdr_cpy(&GS.ctm, &g_gx.ctm, sizeof GS.ctm); xg_shade(obj, gen); gs_pop(); return; }
     if (!g_gx.ncomp || !g_gx.kind) {                              /* too many tiles: a flat approximation */
         gs_pop();
