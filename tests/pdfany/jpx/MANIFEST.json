@@ -1,0 +1,654 @@
+{
+ "tool": "opj_compress (OpenJPEG 2.5.4)",
+ "fixtures": [
+  {
+   "name": "g_ll",
+   "file": "g_ll.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "5"
+   ]
+  },
+  {
+   "name": "g_ly",
+   "file": "g_ly.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "12",
+    "-n",
+    "5"
+   ]
+  },
+  {
+   "name": "g_ly_jp2",
+   "file": "g_ly_jp2.jp2",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "8",
+    "-n",
+    "4"
+   ]
+  },
+  {
+   "name": "c_ll",
+   "file": "c_ll.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-n",
+    "5"
+   ]
+  },
+  {
+   "name": "c_ly",
+   "file": "c_ly.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "14",
+    "-n",
+    "5"
+   ]
+  },
+  {
+   "name": "c_ly_jp2",
+   "file": "c_ly_jp2.jp2",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "10",
+    "-n",
+    "4"
+   ]
+  },
+  {
+   "name": "c_nomct",
+   "file": "c_nomct.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-mct",
+    "0"
+   ]
+  },
+  {
+   "name": "c_nomct_ly",
+   "file": "c_nomct_ly.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "10",
+    "-n",
+    "3",
+    "-mct",
+    "0"
+   ]
+  },
+  {
+   "name": "odd_ll",
+   "file": "odd_ll.j2k",
+   "w": 157,
+   "h": 113,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "4"
+   ]
+  },
+  {
+   "name": "odd_ly",
+   "file": "odd_ly.j2k",
+   "w": 157,
+   "h": 113,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "9",
+    "-n",
+    "4"
+   ]
+  },
+  {
+   "name": "tiny_ll",
+   "file": "tiny_ll.j2k",
+   "w": 7,
+   "h": 5,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "2"
+   ]
+  },
+  {
+   "name": "n1_ll",
+   "file": "n1_ll.j2k",
+   "w": 64,
+   "h": 48,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "1"
+   ]
+  },
+  {
+   "name": "n2_ly",
+   "file": "n2_ly.j2k",
+   "w": 64,
+   "h": 48,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "6",
+    "-n",
+    "2"
+   ]
+  },
+  {
+   "name": "n6_ly",
+   "file": "n6_ly.j2k",
+   "w": 200,
+   "h": 150,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "16",
+    "-n",
+    "6"
+   ]
+  },
+  {
+   "name": "n0_ll",
+   "file": "n0_ll.j2k",
+   "w": 48,
+   "h": 32,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "1",
+    "-b",
+    "16,16"
+   ]
+  },
+  {
+   "name": "cb16",
+   "file": "cb16.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "4",
+    "-b",
+    "16,16"
+   ]
+  },
+  {
+   "name": "cb32x8",
+   "file": "cb32x8.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "4",
+    "-b",
+    "32,8"
+   ]
+  },
+  {
+   "name": "cb64",
+   "file": "cb64.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "10",
+    "-n",
+    "4",
+    "-b",
+    "64,64"
+   ]
+  },
+  {
+   "name": "t64_ll",
+   "file": "t64_ll.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "5",
+    "-t",
+    "64,64"
+   ]
+  },
+  {
+   "name": "t64_ly",
+   "file": "t64_ly.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "12",
+    "-n",
+    "5",
+    "-t",
+    "64,64"
+   ]
+  },
+  {
+   "name": "t64_c",
+   "file": "t64_c.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "12",
+    "-n",
+    "4",
+    "-t",
+    "64,64"
+   ]
+  },
+  {
+   "name": "t32_nomct",
+   "file": "t32_nomct.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-t",
+    "32,32",
+    "-mct",
+    "0"
+   ]
+  },
+  {
+   "name": "t_bad",
+   "file": "t_bad.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-t",
+    "100,100"
+   ]
+  },
+  {
+   "name": "p_lrcp",
+   "file": "p_lrcp.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "30,10,3",
+    "-n",
+    "4",
+    "-p",
+    "LRCP"
+   ]
+  },
+  {
+   "name": "p_rlcp",
+   "file": "p_rlcp.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "30,10,3",
+    "-n",
+    "4",
+    "-p",
+    "RLCP"
+   ]
+  },
+  {
+   "name": "p_rpcl",
+   "file": "p_rpcl.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "30,10,3",
+    "-n",
+    "4",
+    "-p",
+    "RPCL"
+   ]
+  },
+  {
+   "name": "p_pcrl",
+   "file": "p_pcrl.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "30,10,3",
+    "-n",
+    "4",
+    "-p",
+    "PCRL"
+   ]
+  },
+  {
+   "name": "p_cprl",
+   "file": "p_cprl.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "30,10,3",
+    "-n",
+    "4",
+    "-p",
+    "CPRL"
+   ]
+  },
+  {
+   "name": "p_rpcl_pr",
+   "file": "p_rpcl_pr.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-p",
+    "RPCL",
+    "-c",
+    "[32,32],[32,32],[64,64],[64,64]"
+   ]
+  },
+  {
+   "name": "p_pcrl_pr",
+   "file": "p_pcrl_pr.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-p",
+    "PCRL",
+    "-c",
+    "[32,32],[32,32],[64,64],[64,64]"
+   ]
+  },
+  {
+   "name": "p_cprl_pr",
+   "file": "p_cprl_pr.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 3,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "20,6",
+    "-n",
+    "3",
+    "-p",
+    "CPRL",
+    "-c",
+    "[64,64],[64,64],[64,64],[64,64]"
+   ]
+  },
+  {
+   "name": "p_lrcp_pr",
+   "file": "p_lrcp_pr.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "20,6",
+    "-n",
+    "3",
+    "-p",
+    "LRCP",
+    "-c",
+    "[32,32],[32,32],[64,64],[64,64]",
+    "-b",
+    "16,16"
+   ]
+  },
+  {
+   "name": "sop_eph",
+   "file": "sop_eph.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "4",
+    "-SOP",
+    "-EPH"
+   ]
+  },
+  {
+   "name": "sop_eph_ly",
+   "file": "sop_eph_ly.j2k",
+   "w": 160,
+   "h": 120,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "20,5",
+    "-n",
+    "4",
+    "-SOP",
+    "-EPH"
+   ]
+  },
+  {
+   "name": "d12_ll",
+   "file": "d12_ll.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 12,
+   "args": [
+    "-n",
+    "3"
+   ]
+  },
+  {
+   "name": "d12_ly",
+   "file": "d12_ly.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 12,
+   "args": [
+    "-I",
+    "-r",
+    "8",
+    "-n",
+    "3"
+   ]
+  },
+  {
+   "name": "style_reset",
+   "file": "style_reset.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-M",
+    "2"
+   ]
+  },
+  {
+   "name": "style_vsc",
+   "file": "style_vsc.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-M",
+    "8"
+   ]
+  },
+  {
+   "name": "style_segs",
+   "file": "style_segs.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-M",
+    "32"
+   ]
+  },
+  {
+   "name": "style_all3",
+   "file": "style_all3.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-I",
+    "-r",
+    "8",
+    "-n",
+    "3",
+    "-M",
+    "42"
+   ]
+  },
+  {
+   "name": "refuse_bypass",
+   "file": "refuse_bypass.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-M",
+    "1"
+   ]
+  },
+  {
+   "name": "refuse_termall",
+   "file": "refuse_termall.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-M",
+    "4"
+   ]
+  },
+  {
+   "name": "refuse_roi",
+   "file": "refuse_roi.j2k",
+   "w": 96,
+   "h": 64,
+   "ncomp": 1,
+   "depth": 8,
+   "args": [
+    "-n",
+    "3",
+    "-ROI",
+    "c=0,U=5"
+   ]
+  }
+ ]
+}
