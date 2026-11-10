@@ -282,10 +282,11 @@ static void ovl_nt_rows(int first, int last)
     if (pdu_nt_cnt == 0) {              /* blank rows 1.., then row 0 says so */
         for (r = first > 0 ? first : 1; r <= last; r++)
             ovl_nt_row(r, -1, 0);
-        if (first > 0 || pdu_nt_rsig[0] == 4 + 8 * (unsigned)pdu_npall)
+        id = pdu_nt_late && pdu_npall != 2; /* the source list is still owed (F27) */
+        if (first > 0 || pdu_nt_rsig[0] == 4 + 8 * (unsigned)pdu_npall + 64 * id)
             return;
-        pdu_nt_rsig[0] = 4 + 8 * pdu_npall;     /* bit 1 clear: no row's sig */
-        ovl_nt_pad(pdu_npall == 2 ? "No changes yet" :
+        pdu_nt_rsig[0] = 4 + 8 * pdu_npall + 64 * id;   /* bit 1 clear: no row's sig */
+        ovl_nt_pad(id ? "Reading notes..." : pdu_npall == 2 ? "No changes yet" :
                    pdu_npall ? "No notes or edits" : "None on this page",
                    pdu_nt_cols);
         if (!pdu_nt_cardst) {           /* a line is its own row */
