@@ -976,7 +976,7 @@ sk_try:
                                     ; that run is the one a compaction and a
                                     ; shed would leave, so a rung under it can
                                     ; still move the heap inside this verb
-    xor cx, cx                      ; no DMA head: the CPU moves every byte
+                                    ; no DMA head: the CPU moves every byte
     mov bl, MEMP_CLAIM_HI           ; (and no MEMP_CPU: nothing is gained by
     call OSAPI_MEM_P                ; it at a 512 granule, and the class is
                                     ; the safe default for a heap buffer)

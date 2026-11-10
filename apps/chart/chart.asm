@@ -170,8 +170,9 @@ ct_entry:
                                         ; states - it decides which arithmetic
                                         ; the session gets, and nothing else
                                         ; here can recover from it being wrong
-    mov ax, CT_CLAIM_CHART_KB
-    MEMKB_CLAIM
+    mov ax, CT_CLAIM_CHART_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [ct_chartseg], dx
     mov es, dx                          ; copy the constant 118-byte BMP
@@ -621,17 +622,19 @@ ct_stage:
     ja .rerr
 .claim:
     mov ax, dx                          ; AX = the KB the file needs, plus
-    inc ax                              ; the one under CT_FOFF for the series
-    MEMKB_CLAIM                         ; - and the claim leaves AX alone
-    mov si, ct_s_nomem                  ; (every slot preserves all but its
-    jc .out                             ; outputs)
+    inc ax                              ; the one under CT_FOFF for the series,
+    mov cl, 6                           ; in paragraphs - and the claim answers
+    shl ax, cl                          ; them, exactly (a multiple of 64)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    mov si, ct_s_nomem
+    jc .out
     mov [ct_stgseg], dx
     mov es, dx
-    dec ax
-    mov ch, al                          ; CX = the file's KB * 1024: AX <= 32,
-    xor cl, cl                          ; so it fits a word
-    shl cx, 1
-    shl cx, 1
+    sub ax, 64                          ; CX = the file's KB * 1024: AX <= 32
+    mov cl, 4                           ; KB, so it fits a word
+    shl ax, cl
+    xchg ax, cx
     mov bx, CT_FOFF
     xor dx, dx
     mov si, ct_name

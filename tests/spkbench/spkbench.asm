@@ -316,8 +316,9 @@ sp_setup:
     push di
     cmp word [sp_rseg], 0
     jne .src
-    mov ax, (SP_RL + 272 + 1023) / 1024
-    MEMKB_CLAIM
+    mov ax, ((SP_RL + 272 + 1023) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [sp_rseg], dx
 .src:

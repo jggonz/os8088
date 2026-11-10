@@ -1854,7 +1854,7 @@ tz_dlgopen:
     cmp word [tz_sseg], 0
     jne .held
     mov ax, TZ_STGSZ / 16           ; (PARAGRAPHS, SPEC.md 50.3.7: BX and
-    xor cx, cx                      ; CX are banked above and tz_wmap's map
+                                    ; CX are banked above and tz_wmap's map
     mov bl, MEMP_CLAIM              ; is its own)
     call OSAPI_MEM_P
     mov al, TZR_MEM

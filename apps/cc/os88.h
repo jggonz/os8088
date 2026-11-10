@@ -1270,7 +1270,11 @@ void os88_batch_end(void);
  * is a claim: os88_mem_claim() answers a SEGMENT, which the _seg file calls
  * take and os88_peek()/os88_poke() reach a byte at a time. The kernel frees
  * your claims when your instance dies, so there is no teardown to write.
- * Size yourself from os88_mem_largest_kb(), never from int 12h. */
+ * Size yourself from os88_mem_largest_kb(), never from int 12h. The kernel
+ * counts in PARAGRAPHS alone since kernel size pass 19 (SPEC.md 50.3.7):
+ * these KB forms shift in their thunk, so a size you know as a CONSTANT is
+ * cheaper as os88_mem_claim_p(KB * 64) below, and a package that uses only
+ * the _p forms carries no shift at all. */
 unsigned os88_mem_claim(int kb);                 /* 0 = refused */
 int      os88_mem_free(unsigned seg);
 unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
@@ -1325,9 +1329,9 @@ unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len);
  * would have served. One claim over 64KB: os88_mem_huge_ask() */
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
-/* ...and the same heap counted in PARAGRAPHS (SPEC.md 50.3.7). Every claim is
- * rounded to the heap's granule - os88_mem_gran() paragraphs, 512 bytes
- * today - so the KB calls above can never ask for less than a KB, and a size
+/* ...and the same heap counted in PARAGRAPHS (SPEC.md 50.3.7), the kernel's
+ * own unit. Every claim is rounded to the heap's granule - 32 paragraphs,
+ * 512 bytes, today - so the KB calls above can never ask for less than a KB, and a size
  * that is really a byte count pays half a granule more on average through
  * them. OS88_BYTES_PARA(n) is the paragraphs to ask for n bytes. A claim
  * from either is freed by os88_mem_free and declared by os88_mem_movable. */
@@ -1336,7 +1340,6 @@ unsigned os88_mem_claim_p(unsigned paras);       /* 0 = refused */
 unsigned os88_mem_regrow_p(unsigned seg, unsigned paras); /* as _regrow */
 unsigned os88_mem_largest_p(void);  /* the CONVENTIONAL heap's, exact to the
                                      * granule, on every kernel */
-unsigned os88_mem_gran(void);
 
 /* --- letting the compactor MOVE a claim (SPEC.md 66) ----------------------
  * A claim is born PINNED, and a pinned claim sitting in the middle of the

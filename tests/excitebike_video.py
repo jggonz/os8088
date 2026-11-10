@@ -459,8 +459,8 @@ def run(tag, quick, small=False):
         g.enter(refuse_big_claim=small)
         print(tag, "race loop running, n =", g.w("xb_n"), flush=True)
         if small:
-            assert g.w("xb_sprkb") == 17 and g.b("xb_nspr") == 28 and g.b("xb_error") == 0, (
-                "the small claim was not the one taken", g.w("xb_sprkb"), g.b("xb_nspr"), g.b("xb_error"))
+            assert g.w("xb_sprkb") == 17 * 64 and g.b("xb_nspr") == 28 and g.b("xb_error") == 0, (
+                "the small claim was not the one taken", g.w("xb_sprkb") // 64, g.b("xb_nspr"), g.b("xb_error"))
             m.pause()
             assert sum(struct.unpack("<56H", g.rd("xs_ctab", 112))) == 0, "poses were compiled into a claim without the room"
             m.run()
@@ -623,7 +623,7 @@ def check_blobs(g, ref, tag):
     # the compiled hot poses ride after the blobs (SPEC.md 102.7.4) when the claim has the room
     if cgaish(tag):
         ctab, code = exbsim.compiled_poses(ref.art, ink)
-        if g.w("xb_sprkb") < 28:
+        if g.w("xb_sprkb") < 28 * 64:
             ctab, code = [0] * len(ctab), b""
     else:
         ctab, code = exbsim.vga_compiled(ref.art)
@@ -637,7 +637,7 @@ def check_blobs(g, ref, tag):
     if ctab is not None:
         have = list(struct.unpack("<%dH" % len(ctab), g.rd("xs_ctab", 2 * len(ctab))))
         assert have == ctab, ("the compiled-pose table differs from the model's", have, ctab)
-    kb = g.w("xb_sprkb")
+    kb = g.w("xb_sprkb") // 64      # paragraphs, since kernel size pass 19
     print(tag, "sprite claim: %d bytes of %d KB (%d of blobs, %d of compiled code for %d pose-phases), "
           "identical to the model" % (used, kb, len(exp), len(code),
                                       sum(1 for v in (ctab or []) if v)), flush=True)

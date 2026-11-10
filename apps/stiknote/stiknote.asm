@@ -566,18 +566,18 @@ sn_flip:
     mov si, sn_s_big
     cmp dx, SN_MAXKB
     ja .say
-    xchg ax, dx                 ; AX = the KB
-    mov bl, MEMP_KB             ; ...through the KB arm (SPEC.md 50.3.7.1),
-    call OSAPI_MEM_P            ; which keeps AX, the KB; DX = it (BX is
-                                ; written before it is read on every path)
+    mov cl, 6                   ; AX = the KB in paragraphs (BX is
+    shl dx, cl                  ; written before it is read on every path)
+    xchg ax, dx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = it, AX = the paragraphs granted
     jc .ns
     push dx
     mov es, dx
     xor bx, bx
-    xor cx, cx
-    mov ch, al
-    shl ch, 1
-    shl ch, 1                   ; CX = the KB x 1024
+    mov cl, 4
+    shl ax, cl
+    xchg ax, cx                 ; CX = the bytes it holds
     xor dx, dx
     mov si, STIK_PAY + SNP_NAME
     call OSAPI_FILE_READ        ; DX:AX = its size

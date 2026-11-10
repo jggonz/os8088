@@ -2842,7 +2842,7 @@ wr_refresh:
     xchg ax, cx                         ; big as the last one, so the fetch
     jmp short .go                       ; goes into what is there, capped at it
 .new:                                   ; - the heap the window held before the
-    xor cx, cx                          ; shrink is the only thing it lacks
+                                        ; shrink is the only thing it lacks
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .nomem

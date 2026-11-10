@@ -101219,9 +101219,11 @@ build it may over-report by up to 256 bytes a DISK claim.
 SDK (§20.3.1) for `OSAPI_MEM_P` (§50.3.7), which already carried every one of
 their arguments - the head in `CX`, `_HI` and the class in the verb, regrow
 and avail - in paragraphs, the heap's own unit. `OSAPI_MEM_FREE`,
-`OSAPI_MEM_MOVABLE`, `OSAPI_MEM_FLOOR` and `OSAPI_MEM_HUGE` stay. A package
-written in KB calls the `MEMKB_*` macros (§50.3.7.1), which keep the
-withdrawn doors' registers. What went from each kernel: six rare cells (36
+`OSAPI_MEM_MOVABLE`, `OSAPI_MEM_FLOOR` and `OSAPI_MEM_HUGE` stay. Paragraphs
+are the one unit (§50.3.7): a package's KB constant is `KB * 64`, a KB
+figure it shows a person is the answer `>> 6` where it is shown, and the
+`MEMKB_*` helpers and the cell's KB arm that bridged the conversion in this
+pass went too (kernel size pass 19, `kbpara`). What went from each kernel: six rare cells (36
 bytes of `.text`) and the door bodies in `.cold` - `mmf_osapi_mem_claim`,
 `_claim_hi`, `_claim_dma_hi`, `mem_claim_dma_x`, `mem_claim_dma_hi_x` and,
 off kern_mega, `osapi_mem_regrow_x`; the DMA door's far entry survives as
@@ -101624,30 +101626,40 @@ its claim (`mega_mpfreef`, data and code alike) and move with it
 ### 50.3.7 `OSAPI_MEM_P` — the heap in paragraphs, for a size that is a byte count
 
 ```
-OSAPI_MEM_P   0x045B, X     BL = the verb (MEMP_*), ES = the caller (X stub)
-  MEMP_CLAIM    0   AX = paragraphs, CX = the page-safe HEAD in paragraphs
-  MEMP_CLAIM_HI 1       (0 = none) -> CF=0, DX = the base, AX = the paragraphs
-                        GRANTED. _HI from the top, as OSAPI_MEM_CLAIM_HI
+OSAPI_MEM_P   door, RCX     BL = the verb (MEMP_*), ES = the caller (X stub)
+  MEMP_CLAIM    0   AX = paragraphs -> CF=0, DX = the base, AX = the
+  MEMP_CLAIM_HI 1       paragraphs GRANTED. _HI from the top (§50.3.2).
+                        CX is NOT read
     | MEMP_CPU  2       no int 13h lands in it: its base need not be
                         512-aligned (§50.2.1.1; every base is, at 512)
+    | MEMP_CONV 80h     CX = the page-safe HEAD in paragraphs (0 = none),
+                        and the claim stays CONVENTIONAL on kern_mega
   MEMP_REGROW   4   DX = your claim, AX = paragraphs -> as OSAPI_MEM_REGROW,
                         AX = the paragraphs granted
   MEMP_AVAIL    5   -> AX = the largest claim you can have, BX = the total,
-                        in paragraphs, at your floor as OSAPI_MEM_AVAIL;
-                        CX = MEM_GRAN, the granule in paragraphs - the
-                        CONVENTIONAL heap's on kern_mega; the pool too is
+                        in paragraphs, at your floor as OSAPI_MEM_AVAIL -
+                        the CONVENTIONAL heap's on kern_mega; the pool too is
                         OSAPI_MEM_HUGE's MEMH_AVAIL ask (§50.3.5)
-  CF=1 refused; every register not named is preserved
+  CF=1 refused; every register not named is preserved, CX included
   MEMP_KPARTS   6   -> AX = the kernel's resident FAT window, BX = its
                         background task stacks, CX = task 0's stack, in BYTES -
                         the three fixed parts OSAPI_SYS_KB reports in whole KB
-  + MEMP_KB     8   added to a claim, REGROW or AVAIL verb: the withdrawn KB
-                        doors' registers (§50.3.7.1) - AX in KB and KEPT,
-                        every register but DX and BL kept, no head read;
-                        AVAIL answers AX/BX in KB with CX kept
-  + MEMP_KBH  80h   with MEMP_KB on a claim: CX = the head in KB (0 = none),
-                        conventional on kern_mega either way
 ```
+
+**Paragraphs are the one unit** (kernel size pass 19, `kbpara`, the owner's
+question: *"why do packages need to call for KB at all?"*). The pass first
+kept the withdrawn KB doors' registers for the ~300 sites written against
+them - per-package `MEMKB_*` bodies, then a `MEMP_KB` arm in this cell - and
+then converted every site instead: a constant KB size is `KB * 64`, free; a
+size computed from a byte count is computed in paragraphs from the bytes; a
+package that genuinely PLANS in KB (DOS's arena and cap, RealDMG's
+cartridge plan, VBattle's rings, the Browser and the Video Player, whose
+MEMC_WHATIF and MEMH_AVAIL answers are KB) shifts at one helper of its own.
+A plain claim's site is `mov bl, verb` and the call, and nothing else: the
+head is read only under `MEMP_CONV`, so no site clears CX for a claim that
+has none, and MEMP_AVAIL keeps CX (it no longer answers the granule, which
+nothing read - `os88_mem_gran` went with it). BL is the verb, so a site whose
+BX is live across the call banks it.
 
 The KB doors cannot ask for less than a KB (§50.2.1), so a package whose size
 is a BYTE count — a story file, a document, a part, a catalog, a C overlay —
@@ -101685,14 +101697,15 @@ pool is the caller. Bit 15 of CX is not a head. kern_big and kern_small take
 pool counts in KB, and conventional memory is what the granule is for - and a
 regrow of a pool block goes to `OSAPI_MEM_REGROW`'s own arm. Every claim the
 pool declines takes the paragraph door, so the arm only adds the pool and
-never removes the granule. **`MEMP_CONV`** (`0x8000`, in CX: bit 15, where a
-head is at most `0x1000`) is the caller saying it must stay CONVENTIONAL - a
+never removes the granule. **`MEMP_CONV`** (`80h`, a bit of the verb; with it
+CX is the head) is the caller saying it must stay CONVENTIONAL - a
 block that is or will be a CS, or one a real-mode path names. It is the old
 idiom of a DMA door with no head kept explicit: the parts' carve, their
 fetches and their XMS staging, and the C runtime's overlay, used that door for
 exactly this, and the first build of this arm sent them above 1MB, where a
 code part faulted as data (`pxmega`, an invalid opcode in PiXEL's decoder).
-Every kernel masks the bit off before CX is a head.
+With `MEMP_CONV` and CX = 0 a claim is conventional with no head; without
+it CX is not read at all.
 
 **A claim WITH A HEAD stays conventional here on every package**, and that is
 now a contract rather than an accident: from KERN-MEGA-PLAN 14.160 until kernel
@@ -101702,83 +101715,6 @@ path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
 workspace a fixed disk is read through a call a run rather than a call a
 sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
-
-#### 50.3.7.1 `OS88KB_BODIES` — the KB doors, once per package
-
-The six KB doors were withdrawn at the flag day (§50.3), and about three
-hundred call sites in some hundred and thirty packages, drivers and tests
-were written against their registers: AX = KB in and **AX still the KB out**,
-every other register but DX kept, BX untouched, CX untouched (or the head).
-`OSAPI_MEM_P` takes the verb in BL and the head in CX and answers the
-paragraphs GRANTED in AX - so a site converted in place has to prove BX, CX
-and AX dead after it, or bank them, at every one of the three hundred.
-
-So the conversion is a near call to a body written **once per package**:
-
-```
-MEMKB_CLAIM      AX = KB -> CF=0 DX = the base       memkb_claim
-MEMKB_CLAIM_HI   ...from the top                     memkb_claim_hi
-MEMKB_DMA        ...CX = the head's KB (0 = none)    memkb_dma
-MEMKB_DMA_HI     ...from the top                     memkb_dma_hi
-MEMKB_REGROW     DX = a claim, AX = KB -> DX now     memkb_regrow
-MEMKB_AVAIL      -> AX/BX = largest/total, KB        memkb_avail
-```
-
-Each macro is `call memkb_*` (3 bytes, where the far call was 5) and a
-`%define` naming the entry; `OS88_IMAGE_END` invokes `OS88KB_BODIES`
-(`apps/os88api.inc`), which assembles **only the entries named before it** over one shared tail
-(`call OSAPI_MEM_P`; `pop bx`; `ret`). A package that
-claims in paragraphs, or not at all, carries none of it. A PART (its own
-assembly, with no `OS88_IMAGE_END`) invokes the macro itself after its last
-site, and so does a package whose last bytes are a tail its bss extends
-(FONTVIEW): the bodies may not land between that tail and `os88_image_end`.
-The bodies are a macro in `apps/os88api.inc` and not a file of their own so
-that every package rule, which already lists the SDK, rebuilds when they
-change (`tests/unit/t_pkgdeps.py`).
-
-**The registers are kept by the KERNEL, once: `MEMP_KB`** (kernel size pass
-19, `nogrow`). Each entry is `push bx` / `mov bl, MEMP_KB + verb` / a jump to
-the tail - 5 bytes, the tail 7, `memkb_avail` 8 - because `OSAPI_MEM_P` takes
-`MEMP_KB` (8) added to a verb as **the withdrawn doors' registers**: AX in KB
-and kept, CX kept, every register but DX and BL kept, no head read; with
-`MEMP_KBH` (80h) too a claim's CX is the head in KB, and the claim is
-conventional on kern_mega with a head or none (CX = 0 is `MEMP_CONV`);
-`MEMP_KB + MEMP_AVAIL` answers AX/BX in KB, CX kept (`mmf_osapi_mem_avail`,
-the old AVAIL door's body). The first form of these bodies did the shift and
-the banking in every package - 20 bytes for the claim, 41 to 62 for a
-package with four entries - and C1's packages paid **+1,037** against the
-kernel's -90 a kernel; the arm is **+50 `.cold` on every kernel** (+51 on
-kern_mega, above 1MB) and took the packages' side **-680** (the C SDK's
-thunks use it too). A head is read as a BYTE of KB (`mul cl`): 64KB is the
-most a page can hold, and a KB size is not checked against 1,024KB before
-its shift - the bodies before the arm shifted it unchecked too. The DMA
-entries' head of 0 is `MEMP_CONV`, because the KB DMA doors' "no page" claim
-was the idiom for "stay conventional" on kern_mega (§50.3.7); a head that is
-not 0 is conventional on every package - where the KB DMA door gave
-an `OS88_HIGHMEM` package a pool block (KERN-MEGA-PLAN 14.160), so WIN16's one
-headed ring (`w16mm.inc`) is conventional on kern_mega now.
-
-**Why a helper and not inline**, which is the brief's question (ksp19): an
-inline conversion that keeps the doors' registers is about 11 to 13 bytes a
-site against the far call's 5, and one that drops them is 4 - but only where
-BX, CX and AX are PROVED dead on every path after the call, which an
-automatic liveness pass over the tree could not decide for nine sites in ten.
-The helper is 20 bytes once and 2 bytes LESS at every site, so it is smaller
-than the exact inline conversion in any package with two sites or more, and
-it changes no site's behaviour. A site that is proved dead, or that wants
-`MEMP_CPU`, calls `OSAPI_MEM_P` itself; that is a size sweep's business, one
-package at a time. **Every claim through the helper is the DISK class** - what
-the KB doors gave, and the only class correct without reading what the
-buffer is for (§50.2.1.1; at today's 512-byte granule the two classes place
-identically).
-
-Drivers have no `OS88_IMAGE_END` (their tail is zero-only state), and there
-are nine driver sites, so the drivers were converted INLINE, each with its
-registers read: HDD.DRV's four, RAMDISK.DRV's three (its KB entry `rd_claim`
-now refuses 1,024KB and more before the shift, as the door did), SOUND.DRV's
-ring and XMEM.DRV's ROM image. The C SDK's thunks call `OSAPI_MEM_P`
-directly: `os88_mem_claim`, `os88_mem_regrow` and the KB avail answers keep
-their C signatures and shift in the thunk.
 
 ### 50.3.8 `apps/os88huge.inc` — walking a huge claim by its step, written once
 
@@ -237413,16 +237349,16 @@ protected mode its REGION is a code/data pair above 1MB and every claim of
 cache, the history, the hold, the look-ahead, the take's staging units and
 the save's output claim. Two kinds stay conventional, each by its door: the
 DMA rings (`OSAPI_MEM_CLAIM_DMA_HI`, the card's), and the **I/O claim**,
-which `wo_ioclaim` makes with `OSAPI_MEM_P` and `CX = MEMP_CONV` (§50.3.7)
+which `wo_ioclaim` makes with `OSAPI_MEM_P`, `MEMP_CONV` and `CX = 0` (§50.3.7)
 because every read of the document lands in it, the stream's against its
 deadline, and a fixed disk's transfer into a pool block is bounced nine
-sectors a call; every other kernel reads `MEMP_CONV` as no head, the claim
-it always made. Nothing in WaveRack sums a segment: the hold's addressing is
+sectors a call; every other kernel reads `MEMP_CONV` with CX = 0 as no head,
+the claim it always made. Nothing in WaveRack sums a segment: the hold's addressing is
 the bound window above, and `wc_myslot` (§123.7) compares `SSI_SEG` with its
 own DS, which is the region's data selector the loader publishes as
 `I_SPTR` wherever the region is. `waverackmega` reads the placement off the
 descriptors, not the class byte. On kern_big and kern_small the bits are
-ignored and `MEMP_CONV` reads as no head: the same claims as before, 17
+ignored and `MEMP_CONV` with CX = 0 is no head: the same claims as before, 17
 bytes of image (43,955).
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
@@ -246430,7 +246366,7 @@ It **polls and hooks nothing**, as §72.2.1 — no IRQ, IMR = 0. The receive
 ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
 
 - **Memory.** One pinned heap claim (§66 default, `MEMP_CLAIM | MEMP_CPU`,
-  and `CX` = `MEMP_CONV`: the image is `OS88_DRV_HICLAIM`, and a claim with no
+  `MEMP_CONV`, `CX` = 0: the image is `OS88_DRV_HICLAIM`, and a claim without it
   head would otherwise be offered the pool above 1MB, whose blocks move)
   holds the receive ring - 8192 + 16 bytes with **WRAP = 1**,
   plus 1,536 bytes of overrun so a frame that wraps is contiguous and is never
@@ -246440,8 +246376,8 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   the claim's linear base from `OSAPI_SEG` `SEG_LIN` - on a real-mode kernel
   the paragraph times 16, below 1MB; kern_mega does not page, so linear is
   physical there too - and the card, a 32-bit bus master, may reach it
-  wherever the heap put it. On kern_big and kern_emu `MEMP_CONV` is masked off
-  (`osapi_mem_p`): every claim there is conventional already, and `SEG_WIN`
+  wherever the heap put it. On kern_big and kern_emu `MEMP_CONV` only says CX
+  is the head (`osapi_mem_p`): every claim there is conventional already, and `SEG_WIN`
   answers the paragraph itself. **A boot attach claims in real mode** (SYSTEM.CFG's
   drivers load before `mega_enter`), so the claim's name is a paragraph that
   `mem_xlatf` cannot re-point - a pinned record gets the kernel's half only

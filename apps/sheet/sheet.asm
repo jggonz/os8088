@@ -2652,8 +2652,9 @@ sh_entry:
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
-    mov ax, SH_CLAIM_CELLS_KB
-    MEMKB_CLAIM
+    mov ax, SH_CLAIM_CELLS_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_cellseg], dx
     mov ax, sh_reloc                     ; ...and MOVABLE (SPEC.md 66.2). SHEET
@@ -2661,14 +2662,16 @@ sh_entry:
                                       ; passes these on I_TASK = 0xFF
                                       ; alone and no park is involved
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_TXT_KB
-    MEMKB_CLAIM
+    mov ax, SH_CLAIM_TXT_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_txtseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_STG_KB
-    MEMKB_CLAIM
+    mov ax, SH_CLAIM_STG_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_stgseg], dx
     mov ax, sh_reloc                   ; ...MOVABLE too (NO-PINNING 1): every
@@ -2678,8 +2681,9 @@ sh_entry:
     ; is eight claims an owner and SHEET held eight, so the macro module's claim had
     ; nowhere to come from. The note table is the claim's second part, and
     ; sh_reloc derives its segment from the border table's after a move
-    mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB
-    MEMKB_CLAIM
+    mov ax, (SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_bordseg], dx
     mov ax, sh_reloc                   ; DX IS THE CLAIM HERE: MEM_MOVABLE
@@ -2708,14 +2712,16 @@ sh_entry:
     mov word [sh_nbord], 0
     call sh_colw_clear                 ; every column the standard width (81.56)
     mov word [sh_nnote], 0
-    mov ax, SH_CLAIM_CHART_KB
-    MEMKB_CLAIM
+    mov ax, SH_CLAIM_CHART_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
-    MEMKB_CLAIM                        ; heap that cannot spare it costs Undo,
+    mov ax, SH_CLAIM_UNDO_KB * 64           ; Undo's, last and optional (81.57): a
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
     mov [sh_undoseg], dx
     mov ax, sh_reloc
@@ -43700,8 +43706,11 @@ shm_gs_h:
     sub ax, MBAR_H
     jmp shm_anum
 shm_gs_mem:
-    MEMKB_AVAIL                       ; BX = total free KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; BX = total free, paragraphs
     mov ax, bx
+    mov cl, 6                   ; ...answered in KB
+    shr ax, cl
     jmp shm_anum
 shm_gs_fpu:
     mov al, [fp_hw]

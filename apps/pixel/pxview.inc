@@ -405,18 +405,19 @@ px_viewclaim:
     mov word [px_vo_row], 0x4100    ; of lanes, a band, the thumbnail (the 4 KB
     mov word [px_vo_band], 0x4300   ; plane table it had is the butterfly's
     mov word [px_vo_thm], 0x5A00    ; registers now); the thumbnail is LAST in
-    mov ax, (0x5A00 + PX_THMW / 2 * PX_THMH + 1023) / 1024    ; the claim: its
+    mov ax, (0x5A00 + PX_THMW / 2 * PX_THMH + 15) / 16  ; the claim: its
                                     ; area is PX_THMW / 2 x PX_THMH at 4bpp
     cmp byte [px_vdepth], 16        ; ...and a 16bpp display's RGB565 table
     jne .claim                      ; past it (SPEC.md 106.27): 31 KB
-    mov ax, (PX_VORGB + 512 + 1023) / 1024
+    mov ax, (PX_VORGB + 512 + 15) / 16
     jmp short .claim
 .one:
     mov word [px_vo_band], 0x4000   ; 1bpp: tables, a band, the thumbnail
     mov word [px_vo_thm], 0x4600    ; ...and PX_THMW / 8 x PX_THMH at 1bpp
-    mov ax, (0x4600 + PX_THMW / 8 * PX_THMH + 1023) / 1024
+    mov ax, (0x4600 + PX_THMW / 8 * PX_THMH + 15) / 16
 .claim:
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [px_vseg], dx
     mov ax, px_mreloc

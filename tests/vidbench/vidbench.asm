@@ -408,12 +408,14 @@ vb_bank:
 vb_load:
     cmp word [vb_dseg], 0
     jne .ok
-    mov ax, VB_DATKB
-    MEMKB_CLAIM
+    mov ax, VB_DATKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .err
     mov [vb_dseg], dx
-    mov ax, 16
-    MEMKB_CLAIM
+    mov ax, 16 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .err
     mov [vb_rseg], dx
     push es

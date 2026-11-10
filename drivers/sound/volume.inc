@@ -138,7 +138,6 @@ volume_popup:
     add ax, VOLUME_BANDSZ + 15
     mov cl, 4
     shr ax, cl
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .nomem

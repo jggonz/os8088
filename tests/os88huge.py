@@ -527,8 +527,7 @@ class Kernel:
             self.log.append(("avail",))
             w(UC_X86_REG_AX, self.run)
             w(UC_X86_REG_BX, self.run + self.holes)
-            w(UC_X86_REG_CX, 0x20)              # MEM_GRAN
-            st._setcf(0)
+            st._setcf(0)                        # CX kept (SPEC.md 50.3.7)
         else:                                   # OSAPI_MEM_FREE
             dx = r(UC_X86_REG_DX)
             self.log.append(("free", dx))

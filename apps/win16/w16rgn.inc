@@ -1023,7 +1023,7 @@ w16r_snap:
     shr ax, 1                       ;   discard a block of the program's while
     shr ax, 1                       ;   it holds it unlocked, which Windows'
     push bx                         ;   GDI never did. In PARAGRAPHS, a byte
-    xor cx, cx                      ;   count's door (SPEC.md 50.3.7)
+                                    ;   count's door (SPEC.md 50.3.7)
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     pop bx

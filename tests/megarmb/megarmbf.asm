@@ -157,9 +157,10 @@ mf_tick:
     mov al, 'H'
     call mf_rep
     ; --- P: a conventional claim, renamed by the package -------------------
-    mov ax, 4
+    mov ax, 4 * 64
     xor cx, cx                      ; the DMA door, CX = 0: the plain claim,
-    MEMKB_DMA                       ; CONVENTIONAL for an OS88_HIGHMEM package
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; CONVENTIONAL for an OS88_HIGHMEM package
     mov [mf_cl], dx                 ; (OSAPI_MEM_CLAIM's goes above 1MB)
     push ds
     mov ds, dx
@@ -344,15 +345,19 @@ mf_main_p:
 mf_main_n:
     call mf_main
     mov [mf_ncs], cs
-    mov ax, 1                       ; OSAPI_MEM_CLAIM refused, all kept
+    mov ax, 1 * 64                       ; OSAPI_MEM_CLAIM refused, all kept
     mov bx, 0x1111
     mov cx, 0x2222
     mov dx, 0x3333
     mov si, 0x4444
     mov di, 0x5555
     mov bp, 0x6666
-    MEMKB_CLAIM
-    sbb ah, ah                      ; AH = FFh refused (AL is 1 still)
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
+    mov al, 1                       ; (AL the KB asked: OSAPI_MEM_P answers
+    sbb ah, ah                      ; paragraphs in AX) AH = FFh refused
     mov [mf_nclaim], ax
     xor ax, ax
     cmp bx, 0x1111
@@ -418,8 +423,11 @@ mf_main_n:
 ; n's entry, in protected mode: the claim N could not have
 mf_main_n2:
     call mf_main
-    mov ax, 1
-    MEMKB_CLAIM
+    mov ax, 1 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     sbb ax, ax
     mov [mf_n2c], ax                ; 0 = had
     jnz .out
@@ -436,8 +444,11 @@ mf_fill:
     jae .done
     mov ax, cx
     push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
     xor cx, cx                      ; conventional, as P's (the DMA door)
-    MEMKB_DMA
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P
     pop cx
     jc .smaller
     mov bx, [mf_ncl]

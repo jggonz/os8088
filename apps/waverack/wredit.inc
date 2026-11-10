@@ -414,8 +414,11 @@ wx_adopt:
     call wo_maxclu                  ; sources the clipboard names
     call wo_iofit
     jc .out
-    mov ax, WE_VKB
-    MEMKB_CLAIM
+    mov ax, WE_VKB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jnc .vc
     mov dx, [wo_ioseg]
     call wo_free
@@ -614,8 +617,11 @@ wx_srec:
 wx_urec0:
     cmp word [wo_useg], 0
     jne .have
-    mov ax, WX_UKB
-    MEMKB_CLAIM                     ; pinned: no relocation proc (SPEC.md 66)
+    mov ax, WX_UKB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; pinned: no relocation proc (SPEC.md 66)
+    pop bx
     jc .out
     mov [wo_useg], dx
     mov byte [wo_un], 0

@@ -2733,7 +2733,7 @@ sbl_dma_get:
     mov ax, SBL_WANT * 64       ; (paragraphs), all of it the page-safe
     mov cx, ax                  ; head, from the top
     push bx
-    mov bl, MEMP_CLAIM_HI
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV
     call OSAPI_MEM_P            ; out CF, DX = base segment
     pop bx
     jc .fail
@@ -2907,7 +2907,7 @@ sbl_pool_get:
 .min:
     mov si, ax                  ; SI = the ask, across both asks (DX is the
     mov cx, ax                  ; door's output either way). The whole pool
-    mov bl, MEMP_CLAIM_HI       ; is the chip's HEAD, and the head in
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV       ; is the chip's HEAD, and the head in
     call OSAPI_MEM_P            ; paragraphs is exactly the ask. What is
     jnc .got                    ; GRANTED past it - the granule's slack - is
                                 ; page-safe too, with no head to say so: the

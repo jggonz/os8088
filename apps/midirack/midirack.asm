@@ -590,8 +590,11 @@ mra_load:
     and bx, ~511                    ; than for a part on a sector
     push ax
     push dx
-    mov ax, MRA_CLAIM / 1024
-    MEMKB_CLAIM                     ; DX = the segment
+    mov ax, (MRA_CLAIM / 1024) * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the segment
+    pop bx
     mov bp, dx
     pop dx
     pop ax

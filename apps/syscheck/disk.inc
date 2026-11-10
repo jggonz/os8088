@@ -148,7 +148,7 @@ sc_dinit:
     shl ax, cl                      ; sectors straight into it - and
     mov cx, ax                      ; CONVENTIONAL, the paragraph door with a
     push bx                         ; head: kern_mega's KB DMA door would put
-    mov bl, MEMP_CLAIM              ; it above 1MB (KERN-MEGA-PLAN 14.160),
+    mov bl, MEMP_CLAIM + MEMP_CONV              ; it above 1MB (KERN-MEGA-PLAN 14.160),
     call OSAPI_MEM_P                ; where every fixed-disk sector of a
     pop bx                          ; check is bounced a call each
     jnc .ws
@@ -206,7 +206,10 @@ sc_fload:
     jz .noimg
     mov ax, dx
     push ax
-    MEMKB_CLAIM                     ; DX = the segment
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the segment
     pop ax
     jc .nomem
     mov [sc_fseg], dx

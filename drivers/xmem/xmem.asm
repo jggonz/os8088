@@ -1626,7 +1626,7 @@ xm_hma:
     push si
     push es
     mov ax, XM_HMAF_KB * 64     ; (paragraphs)
-    xor cx, cx                  ; no head
+                                ; no head
     mov bl, MEMP_CLAIM          ; (BX, CX banked above)
     call OSAPI_MEM_P            ; owned by our segment, and freed below
     jc .done

@@ -133,7 +133,7 @@ def read(path):
 
 _CODE = {}
 _HOT = {}
-HOT = re.compile(r"\b(?:call|jmp)\b|mem_claim|mem_movable|MEMKB_")
+HOT = re.compile(r"\b(?:call|jmp)\b|mem_claim|mem_movable")
 # OSAPI_MEM_P (SPEC.md 50.3.7) is ONE cell for four verbs, and only two of them
 # claim: the verb is BL, set a few lines above the call. A line that calls it
 # is rewritten to the claim cell's name when that verb is MEMP_CLAIM or
@@ -142,12 +142,7 @@ HOT = re.compile(r"\b(?:call|jmp)\b|mem_claim|mem_movable|MEMKB_")
 # a claim exactly where one is made. Without this the registry was BLIND to
 # every claim the granule's sweep moved onto the paragraph door.
 MEMP_CALL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_P\b")
-MEMP_VERB = re.compile(r"\bmov\s+bl\s*,\s*(MEMP_\w+(?:\s*\|\s*MEMP_\w+)?)")
-# ...and the MEMKB_* macros (SPEC.md 50.3.7.1), the withdrawn KB doors written
-# once per package: a claim macro is a claim at its own line, exactly as the
-# door it replaced was, and the ask and the regrow are not
-MEMKB_CLAIM = re.compile(r"^(\s*(?:\S+:\s*)?)MEMKB_(?:CLAIM|CLAIM_HI|DMA|DMA_HI)\b")
-MEMKB_ASK = re.compile(r"^(\s*(?:\S+:\s*)?)MEMKB_(?:AVAIL|REGROW)\b")
+MEMP_VERB = re.compile(r"\bmov\s+bl\s*,\s*(MEMP_\w+(?:\s*[|+]\s*MEMP_\w+)*)")
 
 
 def memp_verb(lines, i):
@@ -161,7 +156,8 @@ def memp_verb(lines, i):
             # MEMP_CPU): every other verb asks or resizes, and a verb added
             # later is a question until it is named here - MEMP_KPARTS was
             # read as a claim when this tested for AVAIL and REGROW instead
-            return "claim" if "MEMP_CLAIM" in v else "ask"
+            # (MEMP_CONV alone is MEMP_CLAIM + the conventional bit)
+            return "claim" if "MEMP_CLAIM" in v or "MEMP_CONV" in v else "ask"
         if re.search(r"\b(?:xor|sub)\s+(?:bx\s*,\s*bx|bl\s*,\s*bl)\b", c):
             return "claim"
         if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
@@ -183,8 +179,6 @@ def hot(lines):
             if MEMP_CALL.search(c):
                 c = MEMP_CALL.sub("call OSAPI_MEM_CLAIM" if memp_verb(lines, i)
                                   == "claim" else "call OSAPI_MEMP_ASK", c)
-            c = MEMKB_CLAIM.sub(r"\1call OSAPI_MEM_CLAIM", c)
-            c = MEMKB_ASK.sub(r"\1call OSAPI_MEMP_ASK", c)
             rows.append((i, c))
         tab = _HOT[id(lines)] = (lines, rows)
     return tab[1]

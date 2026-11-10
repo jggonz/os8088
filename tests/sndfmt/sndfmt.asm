@@ -317,9 +317,10 @@ sf_open:
     mov si, [sf_g1]
     jmp short .open
 .ext:                               ; AN EXTERNAL RING (SPEC.md 34.5.3): our
-    mov ax, (SF_RL + 1023) / 1024 + 1   ; own claim, page-safe whole - the
+    mov ax, ((SF_RL + 1023) / 1024 + 1) * 64 ; own claim, page-safe whole - the
     mov cx, ax                      ; ring and its control words after it
-    MEMKB_DMA_HI                    ; DX = its segment
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = its segment
     jc .nogrant
     mov [sf_xseg], dx
     push es

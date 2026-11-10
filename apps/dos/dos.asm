@@ -1841,18 +1841,16 @@ dos_run:
     cmp word [DOS_ACAP], 0
     je .unmount                     ; NO CAP: we want the maximum, so the
                                     ; question is only whether a pass adds any
-    push bx                         ; ...A CAP, and the cheaper road: a program
-    MEMKB_AVAIL                     ; that asked for 200K on a machine with
-    pop bx                          ; 300K free needs no compaction and no
+    call dos_avkb                   ; ...A CAP, and the cheaper road: a program
+                                    ; that asked for 200K on a machine with
+                                    ; 300K free needs no compaction and no
                                     ; silence. Net of the floor, like every
                                     ; AVAIL on this task from .sized on
     cmp ax, [DOS_ACAP]
     jae .ask                        ; it fits: claim it and ask nothing more
 .unmount:
-    push bx
-    MEMKB_AVAIL
+    call dos_avkb
     mov [dos_akb], ax               ; what the heap gives WITHOUT a pass...
-    pop bx
     push bx
     mov al, bl                      ; ...and what it would give with one, AT
     xor ah, ah                      ; THE SAME LEVEL, or the two are answers to
@@ -1885,9 +1883,8 @@ dos_run:
                                     ; to move, and the drivers stay OUT across
                                     ; it on purpose
 .ask:
-    push bx
-    MEMKB_AVAIL                     ; AX = the largest run a claim can HAVE at
-    pop bx                          ; the floor - already net of every
+    call dos_avkb                   ; AX = the largest run a claim can HAVE at
+                                    ; the floor - already net of every
                                     ; purgeable cache BELOW it and of what a
                                     ; compaction would recover (SPEC.md 50.6.3,
                                     ; 66.10.3). Nothing to compute, nothing to
@@ -1905,7 +1902,12 @@ dos_run:
                                     ; slot promises nothing about AX, so the KB
                                     ; figure has to survive the call somewhere
                                     ; other than in a register
-    MEMKB_CLAIM_HI                  ; AX = KB -> DX = base segment, at the
+    mov cl, 6                       ; ...and it is claimed in paragraphs
+    shl ax, cl
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; AX = KB -> DX = base segment, at the
+    pop bx
                                     ; floor .sized set - the same one the
                                     ; number above was answered at, or the plan
                                     ; is not the one the claim carries out.
@@ -6721,7 +6723,8 @@ DHK_SNAP    equ 0                   ; the last screen, before the restore (96.34
 DHK_POLL    equ 2                   ; the packet driver's third poll (96.23.4)
 DHK_TTY     equ 4                   ; AH=02h/09h: CF=0 = the host took it (96.33)
 DHK_MOUSE   equ 6                   ; INT 33h's state; absent = a still pointer
-DHK_CLAIM   equ 8                   ; AX = KB -> DX = segment, CF=1 refused; the
+DHK_CLAIM   equ 8                   ; AX = paragraphs -> DX = segment, CF=1
+                                    ; refused, BX clobbered; the
                                     ; host's HEAP, which only the windowed one
                                     ; has (96.44.6). ABSENT is not a refusal to
                                     ; be retried - it is "there is no heap in
@@ -7021,7 +7024,20 @@ dos_hk_bind:
 ; to claim from, which is why these two are a HOOK and not a door (SPEC.md
 ; 96.44.6). They were the last four `OSAPI_*` far calls in the core.
 dos_hk_claim:
-    MEMKB_CLAIM                     ; AX = KB -> DX = the base segment
+    mov bl, MEMP_CLAIM              ; AX = paragraphs -> DX = the base segment
+    call OSAPI_MEM_P                ; (BX is DHK_CLAIM's to clobber)
+    ret
+; dos_avkb - MEMP_AVAIL's largest claim, in KB (the unit DOS plans its arena
+; in: [DOS_ACAP], [dos_akb], MEMC_WHATIF's answer). Keeps BX and CX
+dos_avkb:
+    push bx
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    pop bx
     ret
 dos_hk_free:
     call OSAPI_MEM_FREE             ; DX = the segment
@@ -15396,7 +15412,12 @@ dos_pkt_bufs:
 %else
     mov ax, cx
     push cx
-    MEMKB_CLAIM
+    mov cl, 6                       ; the KB in paragraphs
+    shl ax, cl
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     pop cx                          ; (the size, for the zeroing below)
     jc .out                         ; **A REFUSAL IS SURVIVABLE**: the program
     mov [dos_pkt_bseg], dx          ; still runs, the interface is simply not

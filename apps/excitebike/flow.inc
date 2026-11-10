@@ -1132,8 +1132,9 @@ xb_best_table:
 xb_custom_load:
     SAVE
     mov byte [xb_custom], 0
-    mov ax, 1
-    MEMKB_CLAIM
+    mov ax, 1 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [xb_cseg], dx
     mov es, dx

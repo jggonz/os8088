@@ -349,11 +349,12 @@ px_entry:
     mov [px_cpuf], ah
     call px_hconv                   ; the parts' offsets into segments (AX kept)
     or al, al                       ; THE SHADOW, BEFORE THE WINDOW (97.9): a
-    mov ax, PX_SHKB                 ; refusal is a sentence in the window and
+    mov ax, PX_SHKB * 64            ; refusal is a sentence in the window and
     jnz .shk                        ; never a black bounce - and on an 8086,
-    mov al, PX_SHKB86               ; which px_w4want never gives WIN4, only
+    mov ax, PX_SHKB86 * 64          ; which px_w4want never gives WIN4, only
 .shk:                               ; the picture and the bar (PX_SHKB86)
-    MEMKB_CLAIM
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .noshadow
     mov [px_shseg], dx
 .noshadow:

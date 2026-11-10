@@ -287,7 +287,7 @@ tp_deferred_ld:
 ; still the document's ceiling and the status strip still says so.
 tp_claim_src:
     mov ax, TP_SRC_KB0 * 64     ; in PARAGRAPHS, as tp_srcpara regrows it
-    xor cx, cx                  ; (SPEC.md 50.3.7)
+                                ; (SPEC.md 50.3.7)
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
     jc .bad

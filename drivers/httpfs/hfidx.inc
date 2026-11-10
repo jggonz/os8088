@@ -120,7 +120,6 @@ hf_fetch:
     add ax, 15                  ; 50.3.7): the index is a byte count held
     mov cl, 4                   ; for the whole mount, and a whole KB of it
     shr ax, cl                  ; is half a granule more on average
-    xor cx, cx
     mov bl, MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; owner = our segment: drv_release sweeps it
     jnc .claimed

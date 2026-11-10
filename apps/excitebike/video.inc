@@ -470,12 +470,10 @@ xb_partget:
     mov cl, 4                       ; multiple (every disk-visible base is
     shr ax, cl                      ; 512-byte aligned)
     push ax
-    add ax, di
-    add ax, 63
-    mov cl, 6
-    shr ax, cl                      ; KB: R + the read
+    add ax, di                      ; paragraphs: R + the read
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD: the plain claim
-    MEMKB_DMA                       ; on every kernel, and CONVENTIONAL on
+    mov bl, MEMP_CONV
+    call OSAPI_MEM_P            ; on every kernel, and CONVENTIONAL on
                                     ; kern_mega for this OS88_HIGHMEM package -
                                     ; op_fetch's door (os88partsbody.inc), whose
                                     ; windows reach it there. DX = the base

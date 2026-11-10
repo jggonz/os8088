@@ -5466,7 +5466,10 @@ br_claim:
     xor ax, ax
     call br_pagepin
     pop ax
-    MEMKB_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call br_kbp
+    pop bx
     jmp short br_pageunpin
 br_claimp:                          ; ...and OSAPI_MEM_P's claim verbs, BL
     push ax                         ; and CX the caller's (SPEC.md 50.3.7)
@@ -5487,7 +5490,10 @@ br_regrow:
     je .grow                        ; test inline, so an 8088's regrow (one
     call br_wdrop                   ; a KB of document) pays a compare
 .grow:
-    MEMKB_REGROW
+    push bx
+    mov bl, MEMP_REGROW
+    call br_kbp
+    pop bx
     jc .back
     call br_reloc                   ; its word follows it (DX = where it is),
     clc                             ; and br_pageunpin declares it again: a
@@ -5499,6 +5505,18 @@ br_regrow:
     pop si
     pop bx
     jmp short br_pageunpin
+
+; br_kbp - OSAPI_MEM_P's verb BL with AX in KB, the Browser's unit (it plans
+; in KB because OSAPI_MEM_HUGE's pool answer is KB): AX and CX kept
+br_kbp:
+    push ax
+    push cx
+    mov cl, 6
+    shl ax, cl
+    call OSAPI_MEM_P
+    pop cx
+    pop ax
+    ret
 
 ; br_hclaim - THE SOURCE'S AND THE DOCUMENT'S claim: br_claim's, and on
 ; kern_mega in protected mode OSAPI_MEM_HUGE of ONE RUN (docs/plans/MEGA-
@@ -6411,19 +6429,23 @@ br_lineems_ensure:
 ; claim may sit above 1MB there, so the reserve is a share of what they can
 ; all draw on. Keeps every other register
 br_avail:
+    push cx
     cmp byte [br_mega], 0
     je .conv
-    push cx
     push dx
     xor ax, ax
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     pop dx
-    pop cx
     jnc .r
 .conv:
-    MEMKB_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; in paragraphs...
+    mov cl, 6                       ; ...and the Browser plans in KB
+    shr ax, cl
+    shr bx, cl
 .r:
+    pop cx
     ret
 
 ; br_memroom - preserve the load-start conventional-memory reserve.

@@ -286,9 +286,12 @@ dsl_w16:
     cmp bx, 64
     ja .home                        ; a 64KB cluster: no 16-bit CX names it
     mov ax, bx
-    inc ax
-    shr ax, 1                       ; KB, at least one
-    MEMKB_CLAIM                     ; DX = the block
+    mov cl, 5
+    shl ax, cl                      ; the cluster in paragraphs
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the block
+    pop bx
     jc .home
     mov bp, dx
     mov cl, 9

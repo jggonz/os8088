@@ -187,7 +187,7 @@ rd_claim:
 rd_claimp:
     push bx
     push cx
-    xor cx, cx                  ; no DMA head, and no MEMP_CPU: at a 512
+                                ; no DMA head, and no MEMP_CPU: at a 512
     mov bl, MEMP_CLAIM          ; granule every base is aligned anyway, and
     call OSAPI_MEM_P            ; the DISK class is the safe default
     pop cx

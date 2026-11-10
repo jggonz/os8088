@@ -26,16 +26,19 @@ fx_entry:
     push si
     mov si, fx_tpl
     call OSAPI_WM_CREATE
-    mov ax, 5                       ; the ring: 4 KB and the table after it
-    MEMKB_CLAIM
+    mov ax, 5 * 64                       ; the ring: 4 KB and the table after it
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [fx_rseg], dx
-    mov ax, FX_KB
-    MEMKB_CLAIM
+    mov ax, FX_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [fx_iseg], dx
-    mov ax, FX_KB + (SPKFX_FAMSZ + 1023) / 1024 ; the output, and the
-    MEMKB_CLAIM                     ; shaper's family past it: it is read
+    mov ax, (FX_KB + (SPKFX_FAMSZ + 1023) / 1024) * 64 ; the output, and the
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; shaper's family past it: it is read
     jc .out                         ; through ES, the segment emit writes
     mov [fx_oseg], dx
     mov byte [fx_up], 1

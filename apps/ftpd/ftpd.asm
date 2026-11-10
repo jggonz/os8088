@@ -483,8 +483,9 @@ fd_entry:
     ; rather than at the first STOR because the entry proc is UI-task context
     ; and a claim from a worker is not something SPEC.md 20.6 rule 7 allows.
 %if FD_STG2
-    mov ax, FD_STGKB
-    MEMKB_CLAIM                     ; out DX = the base segment
+    mov ax, FD_STGKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out DX = the base segment
     jc .nostage2
     mov [fd_stg2], dx
     mov ax, fd_reloc                ; it moves too, fd_bigseg's reason
@@ -495,8 +496,11 @@ fd_entry:
     mov word [fd_wstg], FD_STGSZ
     mov byte [fd_ckpn], FD_CKPT / FD_STGSZ
 %if FD_TIER
-    mov ax, FD_BIGSZ / 1024
-    MEMKB_CLAIM                     ; a whole number of KB, so 512-aligned
+    mov ax, (FD_BIGSZ / 1024) * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; a whole number of KB, so 512-aligned
+    pop bx
     jc .nobig                       ; refused: the 8KB server, which works
     mov [fd_bigseg], dx
     mov ax, fd_reloc                ; ...AND IT MOVES (NO-PINNING A3, SPEC.md

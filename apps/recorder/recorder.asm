@@ -781,9 +781,10 @@ rc_do_rec:
     jz .noin
     call rc_grant
     jc .out
-    mov ax, RC_RKB
+    mov ax, RC_RKB * 64
     mov cx, ax                      ; all of it is the card's: page-safe
-    MEMKB_DMA_HI                    ; DX = the ring's segment
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = the ring's segment
     jc .nomem
     mov [rc_rseg], dx
     mov di, dx                      ; verb 4, EXTERNAL (SPEC.md 34.6.4): DI:SI
@@ -884,8 +885,9 @@ rc_do_play:
 .spk:
     test byte [rc_caps], SND_CAP_PCM_EXCL
     jz .nosink
-    mov ax, (RC_PBUF_SZ+1023)/1024
-    MEMKB_CLAIM                     ; DX = the play buffer's segment
+    mov ax, (RC_PBUF_SZ + 15) / 16
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the play buffer's segment
     jc .nomem
     push bp
     mov bp, dx                      ; BP = it, for the whole play
