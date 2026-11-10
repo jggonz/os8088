@@ -114,6 +114,7 @@ _pdu_slot_load:
     cmp word [_pdu_socc], PDU_OCC_WRT_A ; a parked Replace holds PDWRT's
     je .out                         ; state: it leaves by pdu_wrt_out alone
     call _pdu_slot_free             ; S is sized afresh for this one
+    mov byte [sl_rel], 0
     mov bx, [bp+4]
     mov al, [_pdu_occrow + bx]
     call sl_row_at                  ; [sl_row] [sl_len] [sl_img]
@@ -216,7 +217,25 @@ _pdu_slot_load:
     call sl_empty
     pop ax
     jmp short .out
-.nos:
+.nos:                               ; release before refuse, in order
+    mov al, [sl_rel]                ; (direct calls, so pdstk follows them)
+    inc byte [sl_rel]
+    cmp al, 1
+    jb .q0
+    je .q1
+    cmp al, 2
+    ja .nos2
+    call sl_rel_xc
+    jmp short .qr
+.q1:
+    call sl_rel_fl2
+    jmp short .qr
+.q0:
+    call sl_rel_ovl
+.qr:
+    jc .nos
+    jmp .sz                         ; the same claim, asked again
+.nos2:
     mov ax, PDE_NOSLOT
     jmp short .out
 
@@ -1065,6 +1084,10 @@ _pdu_region:
     mov [xr_off + si], dx
     mov dx, [bp+4]
     mov [xr_last], dx
+    cmp dl, PDU_RGLYPH              ; a new GLYPH: its header word cleared
+    jne .x8                         ; below (fonts: never a stale 0x5342)
+    mov byte [xr_gnew], dl
+.x8:
     cmp dl, PDMEM_X8                ; a new X8: PDX8 at its start
     jne .g
     add [xr_len + si], ax
@@ -1082,24 +1105,16 @@ _pdu_region:
     cmp [xr_kb], ax
     ja .try
 .init:
-    call xr_segs
-    call x8_fix
-    mov ax, PDV_ENG_INIT
-    push ax
-    xor ax, ax
-    push ax
-    call _pdu_minit
-    add sp, 4
-    or ax, ax
+    call xr_reinit
     jnz .out
-    mov ax, PDV_REND_INIT
-    push ax
-    mov ax, 1
-    push ax
-    call _pdu_minit
-    add sp, 4
-    or ax, ax
-    jnz .out
+    xor cx, cx
+    xchg cl, [xr_gnew]
+    jcxz .gz
+    push es
+    mov es, [_pdu_xinit + PDXB_INIT_GLYPH_SEG]
+    mov word [es:62], 0             ; PDXF's signature word (0x5342)
+    pop es
+.gz:
     cmp word [bp+4], PDU_RGLYPH    ; PDXF reads the glyph claim itself
     jne .out                        ; (20.22.8): its INIT hands it again
     cmp word [_pdu_socc], 0
@@ -1108,6 +1123,84 @@ _pdu_region:
 .out:
     pop si
     pop bp
+    ret
+
+; xr_reinit - every region handed again (xr_segs, PDX8's words) and PDENG
+; then PDREND re-INITed: AX = 0 or the refusing INIT's PDE_*, ZF set on 0
+xr_reinit:
+    call xr_segs
+    call x8_fix
+    xor ax, ax
+    mov bx, PDV_ENG_INIT
+    call dc_init
+    jnz .r
+    mov ax, 1
+    mov bx, PDV_REND_INIT
+    call dc_init
+.r:
+    ret
+
+; --- RELEASE BEFORE REFUSE (the lead's 01:30 ruling, 20.22.2.4) -----------
+; An occupant's claim at its MIN refused: the primary gives back, one at a
+; time and the claim tried again after each, what a running occupant can do
+; without - (1) the overlay part, (2) the second Flate slot, (3) the XC
+; region - and only then does the occupant degrade. OSW, XIDX and the glyph
+; region are never released while an occupant runs. Each: CF = 0 something
+; went back, CF = 1 nothing did. `.nos` calls them in this order.
+
+; (1) the overlay: a lazy part, fetched again by its next ovl_ call. Not
+; while overlay code stands on the stack (cc_ovthunk's stash is not empty):
+; an ask from inside the overlay - the auth's PDXK, a save's PDWRT - keeps it
+sl_rel_ovl:
+    cmp word [cc_ovrsp], 0
+    jne sl_rel_no
+    test byte [cc_ovrow + OP_R_FLAG], OP_FETCHED
+    jz sl_rel_no
+    mov al, cc_ovidx
+    call op_drop
+    clc
+    ret
+
+; (2) the second Flate slot (two only where D17 chose two by RAM: CGA and
+; Hercules at 640 KiB). NOT YET: PDENG's re-INIT keeps the document only when
+; flate_seg/flate_kb are unchanged, so a smaller flate_kb would close it. The
+; entry stays in the table, answering "nothing", until eng's INIT keeps the
+; document across a slot dropped between streams (asked of eng)
+sl_rel_fl2:
+sl_rel_no:
+    stc
+    ret
+
+; (3) the XC region (PDREND's results cache), when it is X's LAST: X shrinks
+; in place and PDENG and PDREND are re-INITed with xc_seg 0 - PDREND keeps
+; nothing there that a later page cannot rebuild (20.22.2.5's refusal path)
+sl_rel_xc:
+    cmp word [xr_last], PDMEM_XC
+    jne sl_rel_no
+    xor ax, ax
+    xchg ax, [xr_len + PDMEM_XC * 2]
+    or ax, ax
+    jz sl_rel_no
+    mov word [xr_last], 0           ; none of the rest grows in place now
+    sub [xr_para], ax
+    jnz .sh
+    push word [xr_claim]            ; XC was all of X
+    call _os88_mem_free
+    pop cx
+    mov word [xr_claim], 0
+    jmp short .ri
+.sh:
+    push word [xr_para]
+    push word [xr_claim]
+    call _os88_mem_regrow_p         ; a shrink stays where it is
+    pop cx
+    pop cx
+    or ax, ax
+    jz .ri
+    mov [xr_claim], ax
+.ri:
+    call xr_reinit
+    clc
     ret
 
 ; x8_load - the X8 region just granted (the last in X): PDX8 read into its
@@ -2021,6 +2114,8 @@ sl_need:        resw 1
 sl_wmin:        resb 1
 alignb 2
 sl_dseg:        resw 1
+sl_rel:         resb 1              ; the next release (.nos): 0 overlay, 1 Flate, 2 XC
+alignb 2
 rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
 rd_vol:         resw 1
 bk_para:        resw 1              ; pdu_bank_load
@@ -2037,6 +2132,7 @@ xr_off:         resw PDU_NREG + 1   ; by PDMEM_* (1..5), paragraphs
 xr_len:         resw PDU_NREG + 1
 xr_kb:          resw 1
 x8_in:          resb 1              ; PDX8 is in the X8 region
+xr_gnew:        resb 1              ; a GLYPH region granted afresh
 alignb 2
 pg_row:         resw 1
 pg_cap:         resw 1
