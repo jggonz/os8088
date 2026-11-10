@@ -55,6 +55,17 @@ Other non-abi breaking size reductions spotted are also in scope."*
   Non-ABI size reductions you find in files you own are in scope as in any
   size pass (ksp14 section 2's method).
 
+### 0.0 NO ROW GROWS BYTES (the owner, 2026-11-10)
+
+*"We're doing a size pass, so why are we growing bytes at all? We'll handle
+the additions/speedups/etc in another pass where we decide which ones are
+worth it."* A row is taken only if it is net SMALLER - resident kernel bytes
+on every kernel it reaches AND the packages' total. A correctness fix, a
+speed-up or a cleaner contract that costs bytes is RECORDED for that later
+pass, not taken. Where a size row has a cost on one side (a kernel saving
+paid for in package bytes), take the form with the smallest total, and say
+the total.
+
 ### 0.1 The owner's answers to flagday.md 3.5 (2026-11-10)
 
 1. **T5, the software-interrupt door**, is the table row (not T1).
