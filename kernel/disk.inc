@@ -2907,7 +2907,7 @@ dsk_boot_from_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], dl
-    mov word [bx+DV_SECS], 0    ; unknown - see the header
+    and word [bx+DV_SECS], 0    ; unknown - see the header
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop, like any volume
     mov byte [bx+DV_LBL], 0     ; ...and named by the kernel, not by us
     mov ax, bx
@@ -3184,7 +3184,7 @@ dsk_flop_add_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], cl
-    mov word [bx+DV_SECS], 0    ; unknown, like every other floppy's
+    and word [bx+DV_SECS], 0    ; unknown, like every other floppy's
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop - the caller only calls
                                 ; for a drive the equipment word claims
     mov byte [bx+DV_LBL], 0     ; ...and NAMED by the kernel, not here: an

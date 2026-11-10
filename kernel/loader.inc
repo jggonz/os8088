@@ -310,7 +310,7 @@ ld_hdr_ok:
     cmp byte [es:si+LD_H_VER], PKG_FMT       ; 3: then the word is the packed
     jne ld_hdr_size.bad                      ; IMAGE's length, because with
     mov [ld_fsz], ax                         ; parts the file is not it
-    mov word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
+    and word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
     mov al, [es:si+LD_H_FLAGS]               ; BECOMES [ld_fsz] here, for
     not al                                   ; ld_check_hdr's ladder. A driver,
     test al, 0x0C                            ; or any other combination, is
@@ -1239,7 +1239,7 @@ ld_alloc:
 .nodesk:                        ; worker dying mid-launch keeps the image the
 %endif                          ; entry proc is about to call (11.103.10)
 %ifndef KERN_SMALL
-    mov word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
+    and word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
                                 ; cleared HERE rather than by the arm that
                                 ; consumes it: an entry proc can set this word
                                 ; and then return CF=1, and the arm never runs
