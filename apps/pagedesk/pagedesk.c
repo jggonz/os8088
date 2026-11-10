@@ -167,10 +167,7 @@ static void pdu_reopen_begin(void);
 static void pdu_tell(const char *s);
 static void pdu_say2(const char *a, const char *b);
 /* ---- end pages ---- */
-/* ---- the slot (PAGEDESK-SPEC 20.22.2, pduslot.c) ----
- * ui: when pduauth.c and pdupref.c carry the real pdu_auth_reset/_step and
- * pdp_xcache, #define PDU_AUTH_UI and PDP_XCACHE_UI HERE, so pduslot.c's
- * stand-ins drop out (20.22.2.6, 20.22.2.7) */
+/* ---- the slot (PAGEDESK-SPEC 20.22.2, pduslot.c / pduslot.inc) ---- */
 int  pdu_slot_load(int occ);             /* pduslot.inc */
 void pdu_slot_free(void);
 void pdu_region_free(void);
@@ -182,12 +179,11 @@ void pdu_doc_free(void);
 int  pdu_minit(int m, unsigned verb);
 int  pdu_bank_dir(unsigned len);        /* 20.4.1's directory */
 extern unsigned pdu_kitoff, pdu_kitlen;
+static unsigned ovl_au_slice(int start); /* pdovlplat.c: an encrypted open's key */
+static void pdu_pop_close_soon(void); /* pducmd.c: the job abort closes an ask */
 #ifdef PDU_LADTEST
 extern unsigned pdu_tdisk, pdu_tcache, pdu_ckind;
 #endif
-static void pdu_auth_reset(void);       /* ui's pduauth.c */
-static unsigned pdu_auth_step(void);
-int  pdp_xcache(void);                  /* ui's pdupref.c: 1 Auto, 0 Off */
 /* ---- end the slot ---- */
 
 /* About PageDesk (os88_about, SPEC.md 20.5.1.1) */

@@ -119,6 +119,8 @@ static void pdu_job_shift(int dy)
     }
 }
 
+static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
+
 /* Escape and every way out: stop what runs, release what it held */
 static void pdu_job_abort(void)
 {
@@ -127,6 +129,11 @@ static void pdu_job_abort(void)
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
+        if (pdu_opauth == 1 && pdu_au_mode) {   /* ui: an open ask goes */
+            pdu_au_closed();            /* the leaf the shut path uses (D21) */
+            if (pdu_pop == P_PREFS)
+                pdu_pop_close_soon();
+        }
         pdu_doc_release();
         pdu_doc = D_EMPTY;
     } else if (pdu_job == J_SAVE) {
@@ -202,7 +209,6 @@ static void pdu_title_set(void)
  * not - it draws nothing itself, it owes a repaint. */
 static int pdu_dirty_all;               /* the wake repaints everything */
 static int pdu_opfirst;                 /* the open's first slice is ours */
-static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
 static void pdu_open_begin(const char *name)
 {
     pdu_job_abort();
@@ -227,7 +233,6 @@ static void pdu_open_begin(const char *name)
     pdu_doc = D_OPENING;
     pdu_opfirst = 1;
     pdu_opauth = 0;
-    pdu_auth_reset();                   /* ui (20.22.2.6) */
     pdu_say2("Opening ", name);
     pdu_dirty_all = 1;
     pdu_job_start(J_OPEN);
@@ -292,11 +297,11 @@ static void pdu_open_step(void)
         pdu_open_first();
         return;
     }
-    if (pdu_opauth) {                   /* the key, ui's slices (20.22.2.6) */
-        r = pdu_auth_step();
+    if (pdu_opauth == 1) {              /* the key, ui's prompt (20.22.2.6) */
+        r = ovl_au_slice(0);
         if (r == PDE_BUSY)
             return;
-        pdu_opauth = 0;
+        pdu_opauth = 2;                 /* once an open */
         pdu_mcf = r != 0;
         if (r)
             goto failed;
@@ -305,10 +310,17 @@ static void pdu_open_step(void)
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_OPEN, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
-    r = pdu_ladck(PDU_M_ENG, r);        /* a region, or PDXK: then OPEN again */
-    if (r == 0xFFFF) {
-        pdu_opauth = pdu_ladkey;
+    r = pdu_ladck(PDU_M_ENG, r);        /* a region: then OPEN again */
+    if (r == 0xFFFF)
         return;
+    if (pdu_mcf && r == PDE_PASSWORD && !pdu_opauth) {
+        pdu_opauth = 1;                 /* OPEN paused at its state 7 (20.22.5) */
+        if ((r = ovl_au_slice(1)) == PDE_BUSY)
+            return;
+        pdu_opauth = 2;
+        pdu_mcf = r != 0;
+        if (!r)
+            return;                     /* no question, no prompt: OPEN again */
     }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */

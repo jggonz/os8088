@@ -18482,11 +18482,14 @@ PD_XG_MOD    ?= $(PDSTUBDIR)/PDXG.MOD
 PD_XF_MOD    ?= $(PDSTUBDIR)/PDXF.MOD
 PD_XI_MOD    ?= $(PDSTUBDIR)/PDXI.MOD
 PD_XJ_MOD    ?= $(PDSTUBDIR)/PDXJ.MOD
-PD_XMODS      = $(PD_XK_MOD) $(PD_XG_MOD) $(PD_XF_MOD) $(PD_XI_MOD) $(PD_XJ_MOD)
+# ...and PDX8, the part read into the X8 region (20.22.10.11), blend's
+PD_X8_MOD    ?= $(PDSTUBDIR)/PDX8.MOD
+PD_XMODS      = $(PD_XK_MOD) $(PD_XG_MOD) $(PD_XF_MOD) $(PD_XI_MOD) $(PD_XJ_MOD) \
+                $(PD_X8_MOD)
 PD_EMPTY     :=
 PD_SPACE     := $(PD_EMPTY) $(PD_EMPTY)
 PD_XPARTS     = $(BUILD)/pdxk.part $(BUILD)/pdxg.part $(BUILD)/pdxf.part \
-                $(BUILD)/pdxi.part $(BUILD)/pdxj.part
+                $(BUILD)/pdxi.part $(BUILD)/pdxj.part $(BUILD)/pdx8.part
 PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
 PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES
 PD_FONT_TXT  ?= $(BUILD)/PDFONTS.TXT
@@ -18533,6 +18536,8 @@ $(BUILD)/pdxf.part: $(PD_XF_MOD) $(PDMODSTAMP) | $(BUILD)
 $(BUILD)/pdxi.part: $(PD_XI_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdxj.part: $(PD_XJ_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdx8.part: $(PD_X8_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 
 # PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as

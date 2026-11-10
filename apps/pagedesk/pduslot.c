@@ -27,44 +27,44 @@ static const unsigned pdu_occmagic[PDU_NOCC] = {
     PDM_MAGIC_JPX, PDM_MAGIC_WRT
 };
 
-/* EACH OCCUPANT'S WORKSPACE, in KiB (20.22.2.3): its owner edits ITS line and
- * the matching row of PAGEDESK-SPEC 20.22.2.3's table, nothing else. The
- * comment lines between them keep five agents' edits from merging into one
- * hunk. PDWRT's is not here: it is pdu_wkb, per job. */
-static const unsigned char pdu_occws[PDU_NOCC] = {
+/* EACH OCCUPANT'S WORKSPACE, in KiB (20.22.2.3): a RANGE, WANT and MIN. S is
+ * sized at `want` while PD-29's 32 KiB stays free beside it, else at the most
+ * of at least `min` that fits, and slot_kb says what was granted; a verb that
+ * needs more for one stream answers PDE_NEEDMEM with CX = PDMEM_SLOT (the
+ * ladder regrows S up to `want`). Its owner edits ITS two lines and the
+ * matching row of 20.22.2.3's table, nothing else; the comment lines between
+ * them keep the edits from merging into one hunk. PDWRT's is not here: it is
+ * pdu_wkb, per job, want = min. */
+const unsigned char pdu_occws[PDU_NOCC] = {         /* want */
     0,
     /* --- */
     0,          /* PDX_KEY  PDXK  (crypt)        */
     /* --- */
-    0,          /* PDX_GFX  PDXG  (gfx, blend)   */
+    13,         /* PDX_GFX  PDXG  (gfx, blend)   */
     /* --- */
     0,          /* PDX_FNT  PDXF  (fonts)        */
     /* --- */
-    0,          /* PDX_IMG  PDXI  (dct, bilevel) */
+    64,         /* PDX_IMG  PDXI  (dct, bilevel) */
     /* --- */
-    0,          /* PDX_JPX  PDXJ  (jpx)          */
+    60,         /* PDX_JPX  PDXJ  (jpx)          */
+    /* --- */
+    0           /* PDWRT: pdu_wkb                */
+};
+const unsigned char pdu_occwmin[PDU_NOCC] = {       /* min */
+    0,
+    /* --- */
+    0,          /* PDX_KEY  PDXK  (crypt)        */
+    /* --- */
+    13,         /* PDX_GFX  PDXG  (gfx, blend)   */
+    /* --- */
+    0,          /* PDX_FNT  PDXF  (fonts)        */
+    /* --- */
+    12,         /* PDX_IMG  PDXI  (dct, bilevel) */
+    /* --- */
+    12,         /* PDX_JPX  PDXJ  (jpx)          */
     /* --- */
     0           /* PDWRT: pdu_wkb                */
 };
 
 /* pduslot.inc's state that the C reads */
 extern int pdu_socc;                    /* the slot's occupant, 0 = empty */
-extern int pdu_ladkey;                  /* the ladder just loaded PDXK for OPEN */
-
-/* ui's (20.22.2.6, 20.22.2.7): stand-ins until pduauth.c / pdupref.c land
- * and pagedesk.c defines PDU_AUTH_UI / PDP_XCACHE_UI */
-#ifndef PDU_AUTH_UI
-static void pdu_auth_reset(void)
-{
-}
-static unsigned pdu_auth_step(void)
-{
-    return PDE_PASSWORD;                /* an encrypted file: its sentence */
-}
-#endif
-#ifndef PDP_XCACHE_UI
-int pdp_xcache(void)
-{
-    return 1;                           /* Auto */
-}
-#endif

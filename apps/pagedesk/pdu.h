@@ -28,7 +28,9 @@
 #define PDU_PART_XG    6
 #define PDU_PART_XF    7
 #define PDU_PART_XI    8
-#define PDU_PART_XJ    9          /* ...and the overlay is row 10, last */
+#define PDU_PART_XJ    9
+#define PDU_PART_X8    10         /* PDX8, read into the X8 region (20.22.10.11);
+                                   * the overlay is row 11, last */
 
 /* --- module vectors (pdui.inc's pdu_vec) --------------------------------- */
 #define PDU_M_ENG   0

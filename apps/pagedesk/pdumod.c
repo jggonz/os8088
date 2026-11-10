@@ -144,7 +144,7 @@ bad:
 
 /* launch: header checks, the exchange block, INIT with no document set.
  * 0 = ready; else a toast has said why and the launch is refused. */
-static int pdu_bank_load(void);
+int pdu_bank_load(void);
 static int pdu_mod_launch(void)
 {
     struct os88_video *v;
@@ -216,80 +216,12 @@ static void pdu_mod_quit(void)
     pdu_mbind(PDU_M_REND, 0);
 }
 
-/* the PDRES INDEX, once per instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1).
- * The part is read BY OFFSET out of PAGEDESK.O88 itself (an OP_SELF row,
- * stored unpacked so the offsets are real), from the folder the package was
- * launched from - and ONLY its INDEX: the directory, the PDFB strike records,
- * the widths and the glyph names, at most 8 KiB. PDREND reads each strike's
- * bitmaps itself on first use, at part_off + the record's offset.
- *
- * READ_AT wants a cluster-aligned offset and capacity (SPEC.md 18.4.4): the
- * slot's reader (pduslot.inc) reads the clusters the prefix spans and moves
- * it down onto the claim's base, so the bank IS the claim. 0, or a PDE_*; a
- * missing bank is not fatal (the renderer then substitutes the kernel face)
- * and is reported. */
-static int pdu_bank_load(void)
-{
-    static struct os88_place here;
-    unsigned para, len, need, band;
-    int r;
-
-    if (pdu_bankraw)
-        return 0;
-    len = pdu_part_len(PDU_PART_RES);
-    para = pdu_part_off(PDU_PART_RES);
-    if (len == 0 || para == 0)
-        return PDE_NOTFOUND;
-    /* the second row must be the first row's next byte in the file, or a
-     * strike past 65,024 would be read from the wrong place (pagedesk.asm) */
-    if ((len & 15) != 0
-        || pdu_part_off(PDU_PART_RES2) != para + (len >> 4))
-        return PDE_LIMIT;
-    if (len > PDU_INDEX_MAX + PDU_KIT_MAX)  /* the INDEX and the kit (20.21.2) */
-        len = PDU_INDEX_MAX + PDU_KIT_MAX;
-    /* the slot's reader (pduslot.inc, 20.22.2.4): the clusters the prefix
-     * spans, read by offset and moved down onto the claim's base; the face's
-     * band rides after what is read (20.21.3) */
-    need = pdu_part_need(PDU_PART_RES, len);
-    if (need == 0)
-        return PDE_IO;
-    pdu_bankraw = os88_mem_claim_p(need + (PDU_BAND_BYTES >> 4));
-    if (pdu_bankraw == 0)
-        return PDE_NOMEM;
-    band = os88_seg_sub(pdu_bankraw, need, PDU_BAND_BYTES >> 4);
-    pk_init(0, band);
-    os88_file_here(&here);
-    r = PDE_IO;
-    if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) == 0) {
-        r = pdu_part_rd(PDU_PART_RES, pdu_bankraw, len);
-        os88_file_goto_q_mark(here.clus, here.vol);
-    }
-    if (r == 0) {
-        pdu_bank = pdu_bankraw;
-        r = pdu_bank_dir(len);          /* pduslot.inc: 20.4.1's directory */
-        if (r == 0 && pdu_kitlen)
-            pk_init(os88_seg_sub(pdu_bankraw, pdu_kitoff >> 4,
-                                 (pdu_kitlen + 15) >> 4), band);
-    }
-    if (r) {
-        /* the claim stays for the face's band: no fonts, no pictures and no
-         * bank, which the renderer survives (D3) */
-        pk_init(0, band);
-        pdu_bank = 0;
-        return r;
-    }
-    pdu_bankkb = (pdu_banklen + 1023) >> 10;
-    /* D3's pdxb_fontbank: where PDREND finds the strikes it reads itself */
-    os88_memset(&pdu_xfb, 0, sizeof(pdu_xfb));
-    os88_strcpy(pdu_xfb.pkgname, pdu_pkgname(), sizeof(pdu_xfb.pkgname));
-    pdu_xfb.place_clus = pdu_home.clus;
-    pdu_xfb.place_vol = pdu_home.vol;
-    pdu_xfb.part_off.lo = para << 4;
-    pdu_xfb.part_off.hi = para >> 12;
-    pdu_xfb.index_seg = pdu_bank;
-    pdu_xfb.index_len = pdu_banklen;
-    return 0;
-}
+/* int pdu_bank_load(void) is pduslot.inc's: the PDRES INDEX and the face's
+ * kit, once per instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2), read
+ * by offset out of PAGEDESK.O88 from the launch folder, at most pdu_rescap
+ * bytes, with the band after them and pdu_xfb filled in. 0, or a PDE_*; a
+ * missing bank is not fatal (the renderer substitutes the kernel face) */
+static unsigned pdu_rescap = PDU_INDEX_MAX + PDU_KIT_MAX;
 
 /* open: the document set. 0, or PDE_NOMEM with pdu_needkb set */
 static unsigned pdu_needkb;
