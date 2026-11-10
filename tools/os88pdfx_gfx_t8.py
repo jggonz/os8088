@@ -96,17 +96,25 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
         if t[0] == "O": eng.syn[int(t[1])] = bytes.fromhex(t[2])
         elif t[0] == "S": eng.stm[int(t[1])] = bytes.fromhex(t[2])
         elif t[0] == "H" and shade:
-            obj = int(t[2]); st = 0
+            obj = int(t[2]); st = 0; tot = 0
             while True:
                 g = struct.pack("<18H", obj, 0, 0, 0, 0, 0x7000, 0, 760, 0, 0, 0, st, 0, 0, 0, 0, 0, 0)
                 g += b"\0" * 36 + fx(4) + b"\0" * 8 + fx(-4) + b"\0" * 4 + fx(192) + struct.pack("<4hH", 0, 0, 63, 47, 0)
                 wr(XBSEG, 0, g)
                 ax, cf = call(0xCB, XBSEG)
                 x = rd(XBSEG, 0, 106)
+                rlen, = struct.unpack_from("<H", x, 16)
                 ntri, = struct.unpack_from("<H", x, 32)
                 st, = struct.unpack_from("<H", x, 22)
+                q = rd(0x7000, 0, rlen)
+                o = 0
+                for _ in range(ntri):
+                    npts = q[o + 4]
+                    pts = struct.unpack_from("<%dh" % (2 * npts), q, o + 6)
+                    out.append("P %d %d %d %d %d %d %s" % (q[o], q[o + 1], q[o + 2], q[o + 3], q[o + 5], npts, " ".join(map(str, pts))))
+                    o += 6 + 4 * npts; tot += 1
                 if ax != 65: break
-            out.append("SHADE %s ax=%d ntri=%d" % (t[1], ax, ntri))
+            out.append("END %s %d" % (t[1], tot))
         elif t[0] == "C":
             name, text, nc = t[1], bytes.fromhex(t[2]), int(t[3])
             comps = [float(x) for x in t[4:4 + nc]]

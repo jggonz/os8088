@@ -492,6 +492,23 @@ def check_shade(build_dir, work, exe, verbose):
         return 1
     mods = parse_shade_out(p.stdout)
     bad = 0
+    modp = os.path.join(build_dir, "PDXG.MOD")
+    try:
+        import unicorn  # noqa: F401
+        have_uc = os.path.exists(modp)
+    except ImportError:
+        have_uc = False
+    if have_uc:        # the 8086 build paints the identical polygons
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import os88pdfx_gfx_t8 as t8
+        uni = parse_shade_out("\n".join(t8.run(modp, os.path.join(work, "shade.cases"), shade=True)).replace("END %s", "END"))
+        nu = 0
+        for name, _ in cs:
+            a, b = mods.get(name), uni.get(name)
+            if not b or not a or a["polys"] != b["polys"]:
+                print("FAIL 8086 %-12s the polygons differ from the host's" % name); nu += 1
+        print("pdfx_gfx 8086 (Unicorn) shadings vs host: %d cases, %d differ" % (len(cs), nu))
+        bad += nu
     for name, _ in cs:        # the resource route gives the identical polygons
         a, b = mods.get(name), mods.get(name + "_res")
         if not b or b.get("failed") or not a or a["polys"] != b["polys"]:
