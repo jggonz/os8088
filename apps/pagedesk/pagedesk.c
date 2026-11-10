@@ -201,6 +201,7 @@ static const char *pdu_abtext[] = {
 #include "pdunotes.c"           /* 17.3: Notes & edits, the note popover */
 #include "pduinsp.c"            /* 17.3: Text properties */
 #include "pdupref.c"            /* prefs: the settings (20.18) */
+#include "pduauth.c"            /* auth: the password prompt, R6 question (20.22.6) */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
 
 /* ============================================================================

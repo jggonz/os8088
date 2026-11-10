@@ -11,7 +11,7 @@
  * close need without calling it.
  * ==========================================================================*/
 static char pdp_loaded;                 /* the file has been read (or refused) */
-static int  pdp_row;                    /* the dialog's selected setting, 0..4 */
+static int  pdp_row;                    /* the dialog's selected setting, 0..5 */
 static char pdp_chg;                    /* bit 0 any, 1 panels, 2 marks: since the dialog opened */
 static char pdp_owe;                    /* the same bits, owed to the wake */
 

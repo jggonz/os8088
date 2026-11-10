@@ -4933,16 +4933,24 @@ round's final pass, not before.
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 
-Stories AP-04 (the user half) and AP-05. Files: `pduauth.c` (primary: the
-state and the calls below), `pdovlauth.c` (overlay: paint and keys), and the
-dispatch arms in `pducmd.c`.
+Stories AP-04 (the user half) and AP-05. Files: `pdu.h`'s prefs block (the
+state and the calls below, which have to precede `pducmd.c`'s popover shut
+path), `pduauth.c` (the note that says so), `pdovlauth.c` (the overlay: paint,
+keys and the one entry `ovl_au_do`), and `pdovlpref.c`/`pducmd.c`'s few arms.
+`PD_AUTHDEMO` (a define, default off) adds ^Q/^T/^R/^U in `os88_onkey` that
+call `pdu_au_ask(0)`, `ask(1)`, `askr6(1500)` and `busy`+`prog(450)`, for a
+look at the prompt before an encrypted file can be opened.
 
-**One popover, `P_AUTH`, four modes.** It is a framed white popover of four
-text rows, 36 columns, centred in the canvas (no source control). It is
-modal in the sense of 20.6: while it is up the keys are its own (Esc included,
-ahead of the job-cancel arm), a click inside is ignored, and a click outside
-is ignored (an open that asks should not be lost to a stray click). Opening
-any other popover cancels it.
+**One popover, four modes.** The prompt is the Preferences popover's second
+face (`P_PREFS` with `pdu_au_mode` nonzero), not a popover id of its own: that
+shares every dispatch arm in `pducmd.c`, which the primary's budget could not
+pay for twice. It is a framed white popover of four text rows, 36 columns,
+centred in the canvas (no source control). While it is up the keys are its own
+(`ovl_pf_key` hands over), and a click inside is ignored. A click outside, or
+opening any other popover, **cancels** it (answer -1). Esc is the open job's
+cancel when a job is running (`pdu_jcancel`, the order of PD-03): **the open
+job's cancel path must call `pdu_au_close()`**, which also zeroes the buffer;
+with no job running, Esc closes the popover and the answer is -1.
 
 | mode | rows | keys |
 |---|---|---|
@@ -4965,7 +4973,7 @@ the open job owns the sequence, this file owns the popover and the buffer):
 
 | call | meaning |
 |---|---|
-| `int pdu_au_ask(int bad)` | the empty password failed (`bad` 0) or the typed one did (`bad` 1): show the prompt, buffer cleared, answer cleared. Returns 0 if the popover could not be shown (the overlay was refused): the caller then fails the open with `PDE_PASSWORD`, whose sentence says what is needed |
+| `int pdu_au_ask(bad)` | the empty password failed (`bad` 0) or the typed one did (`bad` 1): show the prompt, buffer cleared, answer cleared. Returns 0 if the popover could not be shown (the overlay was refused): the caller then fails the open with `PDE_PASSWORD`, whose sentence says what is needed |
 | `int pdu_au_askr6(unsigned secs)` | the question, `secs` being `PDV_KEY_COST`'s answer. Returns 0 as above (the caller then does NOT derive on an 8086) |
 | `int pdu_au_busy(void)` | show `AU_CHECK` with no question: the derivation on a faster CPU runs with progress and Cancel |
 | `void pdu_au_prog(int permille)` | the work's progress (`pdxb_crypt.progress`); repainted at the wake |
@@ -4978,9 +4986,14 @@ The R6 sequence on `CPU_8086` is therefore: `pdu_au_askr6(secs)`, poll until
 end; on any other CPU the caller shows `pdu_au_busy()` instead. The question
 is asked once per open, before the first R6 derivation (the empty password's).
 
+The calls are macros over ONE overlay entry (`ovl_au_do`, so one thunk in the
+primary); the popover's paint and keys are Preferences' own entries, which hand
+over while the mode is set. A refused overlay fetch makes ask, askr6 and busy
+answer 0 and shows nothing.
+
 **Errors.** `pdu_errtext` has one plain sentence for every code the round
-adds or re-means: `PDE_PASSWORD` "This file needs a password.", `PDE_NOSLOT`
-"Not enough memory for a module; that feature is skipped.", `PDE_ENCRYPT`
+adds or re-means: `PDE_PASSWORD` "A password is needed.", `PDE_NOSLOT` the
+`PDE_NOMEM` sentence ("Not enough memory. Close a window and try again."), `PDE_ENCRYPT`
 "Its encryption handler is not supported." and `PDE_XREFSTM` "Its
 cross-reference stream is damaged." `PDE_NEEDMOD`/`PDE_NEEDMEM` are statuses
 the ladder consumes and never reach a sentence. The primary names no
@@ -5001,7 +5014,7 @@ to 36 columns, so it stays **eight rows** and the COMPACT 640x200 canvas
 `pdp_cfg[10]`: 0 Auto, 1 Off.
 
 **Help.** The profile card (Help > The XT profile) is rewritten to the
-round's profile; the final pass of the round checks it against 1.3's table.
+round's profile (the module that skips a feature names it in the status line); the final pass of the round checks it against 1.3's table.
 
 #### 20.22.7 PDREND's core: the ladder, the cache, images, Type3 (`rcore`)
 
