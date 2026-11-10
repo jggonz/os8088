@@ -18,8 +18,11 @@ pdw pdxgh_fetch(pdw obj, pdw gen, char *buf, pdw cap)
 {
     (void)gen;
     if (obj >= MAXO || !o_syn[obj]) return 0;
-    int n = o_syn_n[obj] < (int)cap ? o_syn_n[obj] : (int)cap;
-    memcpy(buf, o_syn[obj], n);
+    extern pdw pdxg_off;
+    int n = o_syn_n[obj] - (int)pdxg_off;
+    if (n < 0) n = 0;
+    if (n > (int)cap) n = (int)cap;
+    memcpy(buf, o_syn[obj] + pdxg_off, n);
     return (pdw)n;
 }
 pdw pdxgh_sopen(pdw obj, pdw gen)
@@ -162,7 +165,13 @@ int main(int argc, char **argv)
         struct pdgx_cs cs; pd_fcopy_in(RSEG, 0, &cs, sizeof cs);
         int rgb[3] = {0, 0, 0}, none = 0;
         if (cs.flags & PDGX_F_NONE) none = 1;
-        else if (cs.flags & PDGX_F_RGBLIKE) {
+        else if (cs.flags & PDGX_F_TABLE) {      /* PDREND's own lookup (pdrxg.c xg_color): Indexed rows, else 65 samples, the nearest */
+            int nr = cs.kind == PDGX_K_INDEXED ? (cs.hival > 255 ? 256 : cs.hival + 1) : 65;
+            int ix = cs.kind == PDGX_K_INDEXED ? (int)lround(c[0]) : (int)lround(c[0] * 64.0);
+            if (ix < 0) ix = 0; if (ix >= nr) ix = nr - 1;
+            unsigned char tb[3]; pd_fcopy_in(RSEG, 16 + 3 * ix, tb, 3);
+            for (int i = 0; i < 3; i++) rgb[i] = tb[i];
+        } else if (cs.flags & PDGX_F_RGBLIKE) {
             for (int i = 0; i < 3; i++) rgb[i] = (int)lround(c[i] * 255.0);
         } else if (cs.flags & PDGX_F_CMYKLIKE) {
             int a = (int)lround(c[0] * 255), b = (int)lround(c[1] * 255), cc = (int)lround(c[2] * 255), k = (int)lround(c[3] * 255);

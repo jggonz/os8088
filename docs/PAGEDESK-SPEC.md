@@ -7061,7 +7061,7 @@ the first tile's i, j. The core
   tile there is no pattern; a coloured pattern starts black, an uncoloured one keeps the colour `scn` gave
   (components first, taken as device Gray, RGB or CMYK). More than 40 tiles: the path is filled flat, mid-grey for a
   coloured pattern, and `PDF_INC_APPROX` is set. A pattern stroke, a pattern in text and a pattern inside a tile
-  are not drawn as patterns. A tiling fill of more than `PDGX_TILEMAX` (40) tiles is drawn flat (coloured: mid grey; uncoloured: the current colour) with `PDF_INC_APPROX`.  A resource that PDXG finds through `PDGXI_RES` must lie in the first 1,024 bytes of the page's (or form's) own object text, or in a dictionary object of its own: an inline `/Resources` longer than that is cut by the fetch buffer (`GX_TB`), and the names past the cut are not found (KNOWN LIMIT; PDXG has no byte free to raise it). A fill with `B` strokes BEFORE the pattern (the frame runs after the operator).
+  are not drawn as patterns. A tiling fill of more than `PDGX_TILEMAX` (40) tiles is drawn flat (coloured: mid grey; uncoloured: the current colour) with `PDF_INC_APPROX`.  A resource that PDXG finds through `PDGXI_RES` in an inline `/Resources` longer than the 1,024-byte fetch buffer (`GX_TB`) is found by a windowed scan (`gx_win`: RAW_COPY restarted at an offset, windows overlapping by 64 bytes, a raw search for `/name` and a parse of the value after it); the scan runs only when the normal lookup, through /Parent too, found nothing, and a name that also occurs in another category of that object can be matched in its place. A fill with `B` strokes BEFORE the pattern (the frame runs after the operator).
 
 **Verbs** (0xC8-0xCF; every one answers only when PDXG is the occupant):
 
