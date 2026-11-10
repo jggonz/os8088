@@ -6283,7 +6283,18 @@ more). The pinned helpers:
   the page view, the document's fonts and the cache. Any other INIT is a new
   document (D2).
 * The text map (`PDV_REND_TEXTMAP`) runs the same ladder: after an answer
-  the walk restarts and the glyphs the primary already has are skipped.
+  the walk restarts and the glyphs the primary already has are skipped. The
+  primary copies its `pdxb_textmap` out before every slice and reads it back
+  only from a slice that was not a ladder answer, so the slice after an answer
+  arrives with the `state` it was first sent with, 0. PDREND therefore takes a
+  `state` 0 while it waits for an answer on that page (`PDR_XWAIT`, text mode,
+  the same `page`) as the answered slice, not a new pass, and writes `state` 1
+  back on every slice. Before QA R17 it began again: `mode_reset` forgot the
+  refusal, the pass asked for the same module, and a module that could not be
+  had was asked for until `PDU_LADMAX`, so Find and Copy answered "exceeds one
+  of PageDesk's limits". A pass abandoned in `PDR_XWAIT` without `PDV_REND_ABORT`
+  and followed by a new pass on the same page is taken for that continuation;
+  the primary's passes call ABORT whenever they stop early.
 * Codes PDREND's door answers with CF = 0: `PDE_BUSY` 65, `PDE_NEEDMOD` 66,
   `PDE_NEEDMEM` 67; CX and DX come from `pdr_out_cx` / `pdr_out_dx`.
 
@@ -6647,6 +6658,17 @@ Unicode when it has one, else 0 (selectable, skipped by Find); without one a sim
 base encoding as before and a Type0 font maps nothing. A `bfrange` with an array and a `bfchar`
 with a ligature become singles (a ligature keeps its first unit). Search (PDENG) and select/copy
 therefore find the text of a font whose codes are glyph indices.
+
+**The text map without PDXF** (`pdrd.c`'s `syn_next`; QA R17). A text pass asks for the strike block of
+(font, 0), and PDXF makes it. Under Find or a selection the overlay is running and cannot be dropped,
+so on a 640 KB machine PDXF (its image and bss near 65,024, plus a workspace of at least 32 KiB) is
+refused. The pass first looks up the code in the font's blocks at the sizes this view has drawn,
+because every slot of a block carries the code's Latin byte. A page on the screen therefore yields its
+text with no module. A page that was never drawn still needs PDXF, and while PDXF cannot be loaded, its
+Type0 codes map to nothing and its simple codes map through the base encoding.
+`hosttest/pdx_page.py --text` is the check. Each fixture page's text is taken three ways. The first has
+PDXF. The second refuses PDXF and re-sends every slice the ladder answered with the stale block; it
+must finish. The third refuses PDXF just after drawing the page, and it must equal the first.
 
 **Type 3** (`pdrt3.c`; ON, `PDR_NO_TYPE3` leaves it out). Not by C recursion (`pdstk` refuses a
 cycle): `text_glyph` QUEUES (pass, block, slot, pen) in the glyph claim's image row buffer (64

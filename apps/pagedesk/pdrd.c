@@ -518,6 +518,20 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     return 0xFFFF;
 }
 
+/* a text pass (px 0): the next block from `i` up of (font, ANY size) the page view has drawn, or
+ * 0xFFFF. Its slots carry each code's Latin byte, so Find and Copy need no font module for the
+ * codes the page drew (QA R17: under the overlay, a 640 KB machine cannot load PDXF) */
+static pdw syn_next(pdw obj, pdw gen, pdw i)
+{
+    pdw h = syn_hdr(), e;
+    if (!syn_cap() || !g_gseg || pd_fpeekw(g_gseg, (pdw)(h + 62)) != PDFB_MAGIC) return 0xFFFF;
+    for (; i < pd_fpeekw(g_gseg, (pdw)(h + 60)); i++) {
+        e = (pdw)(h + (i << 3));
+        if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4))) return i;
+    }
+    return 0xFFFF;
+}
+
 /* the glyph claim was REGROWN for the strike blocks (PDMEM_GLYPH, 20.22.8): the page view goes on in
  * the claim at its new place and size. The bank's PDFONTX.RES index lives in it, so its segment moves
  * with it; the strike cache keeps its entries unless the blocks' header now covers them */

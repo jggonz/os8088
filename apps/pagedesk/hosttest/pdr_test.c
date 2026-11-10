@@ -240,6 +240,32 @@ static void report(void)
            rs.mods, rs.swaps, g_loads);
 }
 
+/* one page's text map to `o`. PDR_TMSTALE: a slice the ladder answered is sent again with the
+ * block as it was sent, as the primary's Find and selection passes do (QA R17) */
+static int text_run(int page, FILE *o)
+{
+    int guard = 0, total = 0, i; struct pdxb_textmap tq; pdw e;
+    memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
+    for (;;) {
+        struct pdtm_glyph *g; int n;
+        memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
+        e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
+        if (ladder(e)) { if (!getenv("PDR_TMSTALE")) memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
+        if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
+        memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
+        g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
+        n = tq.count;
+        for (i = 0; i < n; i++) {
+            if ((g[i].flags & 1) && total + i) fputc('\n', o);
+            fputc(g[i].code, o);
+        }
+        total += n;
+        if (tq.done || ++guard > 100000) break;
+    }
+    fputc('\n', o);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
@@ -333,6 +359,16 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+        if (!seqp && getenv("PDR_TEXTAFTER")) {
+            /* the page's text right after drawing it, the font module refused (QA R17: Find under the
+             * overlay on a 640 KB machine): the strike blocks the draw left carry it */
+            FILE *o = fopen(getenv("PDR_TEXTAFTER"), "w"); int r;
+            if (!o) return 2;
+            setenv("PDR_NOSLOT", "3", 1); setenv("PDR_TMSTALE", "1", 1);
+            pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0);        /* the slot given back after the draw */
+            r = text_run(page, o); fclose(o);
+            if (r) return r;
+        }
 #ifdef PDR_X8
         if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
 #endif
@@ -367,28 +403,10 @@ int main(int argc, char **argv)
         return worst <= 1 ? 0 : 4;
     }
     if (!strcmp(argv[1], "text") && argc >= 5) {
-        int page = atoi(argv[3]), kb, np, guard = 0; struct pdxb_textmap tq; pdw e; int total = 0, i;
+        int page = atoi(argv[3]), kb, np;
         np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[4]); do_init(1, kb, 22);
-        memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
-        for (;;) {
-            struct pdtm_glyph *g; int n;
-            memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
-            e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
-            if (ladder(e)) { memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
-            if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
-            memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
-            g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
-            n = tq.count;
-            for (i = 0; i < n; i++) {
-                if ((g[i].flags & 1) && total + i) putchar('\n');
-                putchar(g[i].code);
-            }
-            total += n;
-            if (tq.done || ++guard > 100000) break;
-        }
-        putchar('\n');
-        return 0;
+        return text_run(page, stdout);
     }
     if (!strcmp(argv[1], "thumb") && argc >= 8) {
         int page = atoi(argv[3]), w = atoi(argv[4]), h = atoi(argv[5]), kb, np, guard = 0, y, x, bytes;

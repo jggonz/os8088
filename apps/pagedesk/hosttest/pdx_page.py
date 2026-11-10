@@ -12,6 +12,10 @@ program from the font dictionary, and the band walker draws the synthetic strike
 content streams Flate-compressed (`mutool clean -z`) and PDENG given ONE Flate slot, so the
 font program cannot be opened beside the page's content stream and PDXF inflates it itself.
 --noz builds PDXF without that (-DPDXF_NOZ): the A/B, which must fail.
+--text checks Find and Copy where the font module cannot be had (QA R17): each page's text
+with PDXF, then the text with PDXF refused and every slice the ladder answered sent again
+stale (as the primary does: it must finish, not ladder forever), then the text right after
+drawing the page with PDXF refused, which the strike blocks carry and must equal the first.
 --seq renders every page of each fixture and then page 1 again in ONE process (PDR_SEQ): the
 glyph claim and its strike blocks carry over from page to page as they do on the machine
 (QA R24), so no page may say "glyph block full" and the second page 1 must equal the first.
@@ -51,7 +55,7 @@ def main():
     ap.add_argument("fixtures", nargs="*"); ap.add_argument("--build", action="store_true"); ap.add_argument("--shots")
     ap.add_argument("--limit", type=float, default=None)
     ap.add_argument("--oneslot", action="store_true"); ap.add_argument("--noz", action="store_true")
-    ap.add_argument("--seq", action="store_true")
+    ap.add_argument("--seq", action="store_true"); ap.add_argument("--text", action="store_true")
     a = ap.parse_args()
     from PIL import Image
     import numpy as np
@@ -63,6 +67,27 @@ def main():
     open(os.path.join(bank, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + res)
     shutil.copy(os.path.join(ROOT, "build", "PDFONTX.RES"), bank)
     names = a.fixtures or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
+    if a.text:
+        bad = 0
+        for n in names:
+            j = json.load(open(os.path.join(FIX, n + ".json")))
+            pdf = os.path.join(FIX, j["pdf"]); W, H = j["page"]
+            for pg, size in enumerate(j["sizes"]):
+                env = dict(os.environ, PDR_GLYPHKB="40")
+                ref = subprocess.run([exe, "text", pdf, str(pg), bank], capture_output=True, env=env)
+                st = subprocess.run([exe, "text", pdf, str(pg), bank], capture_output=True, env=dict(env, PDR_NOSLOT="3", PDR_TMSTALE="1"))
+                with tempfile.TemporaryDirectory() as t:
+                    tf = os.path.join(t, "t.txt")
+                    r = subprocess.run([exe, "render", pdf, str(pg), "100", "0", "4", "1/1", str(W), str(H), "0", "0", os.path.join(t, "o.ppm"), bank, "29"],
+                                       capture_output=True, env=dict(env, PDR_TEXTAFTER=tf))
+                    after = open(tf, "rb").read() if r.returncode == 0 and os.path.exists(tf) else None
+                ok = ref.returncode == 0 and st.returncode == 0 and after == ref.stdout   # cff-cid-cmap has no /ToUnicode: no text (MuPDF: U+FFFD)
+                print("%-14s p%d %2dpx  text %d chars  refused+stale rc=%d  after a draw %s  %s" % (
+                    n, pg + 1, size, len(ref.stdout.strip()), st.returncode,
+                    "same" if after == ref.stdout else "rc=%d" % r.returncode if after is None else "DIFFERS", "ok" if ok else "FAIL"))
+                if not ok and after is not None and after != ref.stdout: print("   ref  %r\n   got  %r" % (ref.stdout[:80], after[:80]))
+                bad += not ok
+        return 1 if bad else 0
     if a.seq:
         bad = 0
         for n in names:
