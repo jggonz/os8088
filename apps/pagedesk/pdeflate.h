@@ -16,8 +16,13 @@
 #define PDEFLATE_H
 
 #define PDF_K_FLATE     3       /* a chain stage, beside PDF_K_HEX / PDF_K_RLE */
+#define PDF_K_LZW       4       /* the other SLOT stage (20.22.3.6): its table is the slot's */
 
 #define PDE_NFL         2       /* slots: the page's stream and one form inside it */
+#define FL_OSLOT        PDE_NFL /* ...and the object-stream window's (20.22.3.3)      */
+#define LZ_LEN          16384u  /* LZW (20.22.3.6), in the slot's window: entry i's prefix at 4i,
+                                   its last byte at 4i + 2, its length at LZ_LEN + 2i */
+#define LZ_STK          24576u  /*   the string being given (<= 4,096 bytes)             */
 #define PDE_FLSLOT_KB   43      /* 32 KiB history + two 4 KiB predictor rows + 3 KiB of tables and saved state */
 #define PDE_FLSLOT_PARA 2752    /* ...in paragraphs                               */
 #define PDE_FLWIN       32768u
@@ -66,6 +71,8 @@ struct flst {
     pdb ob[PDE_FLOB];
     pdb pout[PDE_PRC + 8];
     pdb ib[PDE_FLIB];       /* input read ahead from the stage below (the raw bytes, in bulk) */
+    /* LZW (20.22.3.6): after ib, so pdeflate.inc's offsets do not move */
+    pdw lzw, lwid, lnext, lprev, learly, lsp, lspos;
 };
 
 static int fl_get(struct sctx *c);          /* one byte of the Flate stage of c, or -1 */

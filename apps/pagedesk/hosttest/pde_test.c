@@ -14,6 +14,7 @@
  *   pde_test resobj FILE OBJ GEN CATEGORY NAME        RES_LOOKUP in a Form XObject
  *   pde_test outline FILE                             every outline item, depth first
  *   pde_test annots FILE PAGE                         every annotation of a page
+ *   pde_test members FILE -- DIR                      OBJ_FIND + RAW_COPY EXACT/PLAIN of every object into DIR
  *   pde_test raw FILE OBJ GEN                         RAW_COPY in 100-byte pieces: length and CRC
  *   pde_test strm FILE OBJ GEN                        STRM_OPEN + STRM_READ in 37-byte pieces
  *   pde_test faults FILE                              fail every read in turn: IO error, never a crash,
@@ -32,7 +33,7 @@
 #include "../pdmath.h"
 
 unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
-extern unsigned pde_fail;
+extern unsigned pde_fail, pde_cx, pde_dx;
 extern int pdh_load(const char *path);
 extern int pdh_cluster;
 extern unsigned long pdh_reads, pdh_failat, pdh_failto, pdh_budget, pdh_bytes;
@@ -42,6 +43,9 @@ extern unsigned long pdh_reads, pdh_failat, pdh_failto, pdh_budget, pdh_bytes;
 #define SEG_ARENA 0x4000
 #define SEG_TBL   0x5000
 #define SEG_BUF   0x6000
+#define SEG_FLATE 0x7000    /* two 43 KiB Flate slots (-F)                    */
+#define SEG_XIDX  0x9000    /* up to 256 KiB: the flat index (PDE_NEEDMEM)    */
+#define SEG_OSW   0xD000    /* 43 KiB: the object-stream window (PDE_NEEDMEM) */
 
 static int cf;
 static void cmd_outline(void);
@@ -56,13 +60,17 @@ static unsigned call(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
 static void xb_put(const void *p, unsigned n) { pd_fcopy_out(p, SEG_XB, 0, (pdw)n); }
 static void xb_get(void *p, unsigned n) { pd_fcopy_in(SEG_XB, 0, p, (pdw)n); }
 
-static unsigned cache_kb = 16;
+static unsigned cache_kb = 16, flate_n, xidx_kb, osw_kb, needmems;
 static int do_init(void)
 {
     struct pdxb_init in;
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = (pdw)cache_kb;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
+    if (flate_n) { in.flags |= PDXI_FLATE; in.flate_seg = SEG_FLATE; in.flate_kb = (pdw)(43 * flate_n); }
+    /* any PDF (20.22.3): what OPEN asked for with PDE_NEEDMEM, as the primary would */
+    if (xidx_kb) { in.xidx_seg = SEG_XIDX; in.xidx_kb = (pdw)xidx_kb; }
+    if (osw_kb) { in.osw_seg = SEG_OSW; in.osw_kb = (pdw)osw_kb; }
     xb_put(&in, sizeof in);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);
     return cf ? (int)pde_fail : 0;
@@ -74,12 +82,22 @@ static int do_open(void)
     unsigned r;
     int n = 0;
     memset(&op, 0, sizeof op);
+    needmems = 0;
     strcpy(op.name, "DOC.PDF");
     for (;;) {
         xb_put(&op, sizeof op);
         r = call(PDV_ENG_OPEN, 0, 0, 0);
         xb_get(&op, sizeof op);
-        if (!cf && r == PDE_BUSY) { if (++n > 5000) { fprintf(stderr, "OPEN never ends\n"); exit(96); } continue; }
+        if (!cf && r == PDE_BUSY) { if (++n > 200000) { fprintf(stderr, "OPEN never ends\n"); exit(96); } continue; }
+        if (!cf && r == PDE_NEEDMEM) {          /* claim, re-INIT keeping the rest, OPEN again */
+            if (++needmems > 4) { fprintf(stderr, "NEEDMEM loops\n"); exit(95); }
+            if (pde_cx == PDMEM_XIDX && pde_dx >= 1 && pde_dx <= 256) xidx_kb = pde_dx;
+            else if (pde_cx == PDMEM_OSW && pde_dx == 43) osw_kb = pde_dx;
+            else { fprintf(stderr, "NEEDMEM bad region %u kb %u\n", pde_cx, pde_dx); exit(94); }
+            fprintf(stderr, "NEEDMEM %u %u\n", pde_cx, pde_dx);
+            if (do_init()) { fprintf(stderr, "re-INIT failed\n"); exit(93); }
+            continue;
+        }
         return cf ? (int)r : 0;
     }
 }
@@ -287,6 +305,57 @@ static void cmd_annots(unsigned page)
                an.state, an.contents_len, an.contents);
     }
 }
+/* RAW_COPY of object num in mode, 100 bytes a call, into f; the byte count or -1 */
+static long raw_to(unsigned num, unsigned mode, FILE *f)
+{
+    struct pdxb_rawcopy rw;
+    unsigned r;
+    long total = 0;
+    unsigned char buf[100];
+    memset(&rw, 0, sizeof rw);
+    rw.objnum = (pdw)num; rw.dseg = SEG_BUF; rw.doff = 0; rw.dmax = 100; rw.mode = (pdw)mode;
+    for (;;) {
+        xb_put(&rw, sizeof rw);
+        r = call(PDV_ENG_RAW_COPY, 0, 0, 0);
+        if (cf) { printf("RAWTO %u mode %u rc=%u after %ld\n", num, mode, r, total); return -1; }
+        xb_get(&rw, sizeof rw);
+        if (!rw.got) return total;
+        pd_fcopy_in(SEG_BUF, 0, buf, rw.got);
+        if (f) fwrite(buf, 1, rw.got, f);
+        total += rw.got;
+        if (total > 4000000L) return -1;
+    }
+}
+/* any PDF (20.22.3.3): every object's OBJ_FIND, and its RAW_COPY in both modes
+ * into DIR/n.e and DIR/n.p, for pde_check to hold against its own reading */
+static void cmd_members(const char *dir)
+{
+    struct pdxb_objref rf;
+    struct pdxb_objinfo oi;
+    struct pdxb_trailer tr;
+    char path[512];
+    FILE *f;
+    unsigned n, r, m;
+    long e, pl;
+    call(PDV_ENG_TRAILER, 0, 0, 0); xb_get(&tr, sizeof tr);
+    for (n = 1; n < tr.size; n++) {
+        rf.objnum = (pdw)n; rf.gen = 0;
+        xb_put(&rf, sizeof rf);
+        r = call(PDV_ENG_OBJ_FIND, 0, 0, 0);
+        if (cf) { printf("MEM %u rc=%u\n", n, r); continue; }
+        xb_get(&oi, sizeof oi);
+        if (oi.kind == 0) continue;
+        for (m = 0; m < 2; m++) {
+            snprintf(path, sizeof path, "%s/%u.%c", dir, n, m ? 'p' : 'e');
+            f = fopen(path, "wb");
+            if (!f) { printf("MEM cannot write %s\n", path); return; }
+            if (m) pl = raw_to(n, PDRC_PLAIN, f); else e = raw_to(n, PDRC_EXACT, f);
+            fclose(f);
+        }
+        printf("MEM %u kind=%u pos=%08x len=%u exact=%ld plain=%ld\n", n, oi.kind,
+               ((unsigned)oi.offset.hi << 16) | oi.offset.lo, ((unsigned)oi.length.hi << 16) | oi.length.lo, e, pl);
+    }
+}
 static void cmd_raw(unsigned num, unsigned gen)
 {
     struct pdxb_rawcopy rw;
@@ -426,6 +495,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-k")) cache_kb = (unsigned)atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "-f")) pdh_failat = (unsigned long)atol(argv[i + 1]);
         else if (!strcmp(argv[i], "-b")) pdh_budget = (unsigned long)atol(argv[i + 1]);
+        else if (!strcmp(argv[i], "-F")) flate_n = (unsigned)atoi(argv[i + 1]);
     }
     if (pdh_load(file)) { fprintf(stderr, "cannot read %s\n", file); return 2; }
     if ((rc = do_init())) { printf("INIT rc=%d\n", rc); return 1; }
@@ -453,6 +523,7 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "resobj") && ex >= 4) cmd_res(1, ex, ap);
         else if (!strcmp(cmd, "outline")) cmd_outline();
         else if (!strcmp(cmd, "annots") && ex >= 1) cmd_annots(cmd_arg(ap[0]));
+        else if (!strcmp(cmd, "members") && ex >= 1) cmd_members(ap[0]);
         else if (!strcmp(cmd, "raw") && ex >= 2) cmd_raw(cmd_arg(ap[0]), cmd_arg(ap[1]));
         else if (!strcmp(cmd, "strm") && ex >= 2) cmd_strm(cmd_arg(ap[0]), cmd_arg(ap[1]));
         else if (!strcmp(cmd, "fpchange") && ex >= 1) {

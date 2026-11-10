@@ -10,6 +10,9 @@ static void doc_reset(void)
     op_state = 0;
     tr_size = 0; tr_root_n = 0; tr_root_g = 0; tr_info_n = 0; tr_info_g = 0; tr_has_root = 0;
     tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0;
+    ix_on = 0; ix_n = 0; tr_maxsize = 0; tr_tflags = 0; tr_enc_k = 0; tr_nodict = 0;
+    fd_on = 0; rp_on = 0;
+    os_reset();
     u32_zero(&xr_next); u32_zero(&tr_start); u32_zero(&tr_dict);
     fobj.buf = fo_buf; fobj.mode = 0; fobj.n = 0; fobj.i = 0; fobj.smode = 0;
     u32_zero(&fobj.fpos);
@@ -19,11 +22,24 @@ static void doc_reset(void)
 
 /* ---- INIT / OPEN / CLOSE ----------------------------------------------------- */
 
+static pdw g_ifs, g_ifk, g_iff;         /* the Flate claim INIT was given */
 static pdw v_init(pdw xbseg)
 {
     static struct pdxb_init ini;
+    pdw os = g_oseg;
     pd_fcopy_in(xbseg, 0, &ini, sizeof(struct pdxb_init));
     g_xb = xbseg;
+    /* any PDF (20.22.3.4): the regions OPEN asked for with PDE_NEEDMEM */
+    g_xseg = ini.xidx_seg; g_xkb = ini.xidx_kb;
+    g_oseg = ini.osw_kb >= PDE_OSW_KB ? ini.osw_seg : 0; g_okb = ini.osw_kb;
+    if (g_oseg != os) os_release();
+    /* ...and a re-INIT that brings them, with every other claim the same,
+     * keeps the document and OPEN's state (it amends 20.2.2) */
+    if (g_ready && (g_open || op_state) && ini.cache_seg == g_cseg && ini.cache_kb == g_ckb &&
+        ini.arena_seg == g_aseg && ini.arena_kb == g_akb && ini.tables_seg == g_tseg &&
+        ini.tables_kb == g_tkb && ini.flate_seg == g_ifs && ini.flate_kb == g_ifk && ini.flags == g_iff)
+        return PDE_OK;
+    g_ifs = ini.flate_seg; g_ifk = ini.flate_kb; g_iff = ini.flags;
     g_cseg = ini.cache_seg; g_ckb = ini.cache_kb;
     g_aseg = ini.arena_seg; g_akb = ini.arena_kb;
     g_tseg = ini.tables_seg; g_tkb = ini.tables_kb;
@@ -35,6 +51,16 @@ static pdw v_init(pdw xbseg)
     return PDE_OK;
 }
 
+/* ---- crypt's hooks: 20.22.5 fills their bodies -------------------------------- */
+/* OPEN found /Encrypt (tr_enc_k 1: the reference tr_enc_n/tr_enc_g; 2: a direct
+ * dictionary just inside at tr_enc_pos): PDE_OK once a key is set, else
+ * PDE_PASSWORD (or PDE_ENCRYPT for a handler PageDesk does not implement). */
+static pdw cr_open(void) { return PDE_PASSWORD; }
+/* RAW_COPY with PDRC_PLAIN of an object in no object stream, on a file with
+ * /Encrypt: rw in and out as v_raw_copy's, ob_extent's sp_off/ex_len/sp_kind
+ * set. Until 20.22.5 the file's bytes, as PDRC_EXACT. */
+static pdw cr_raw_plain(struct pdxb_rawcopy *rw) { (void)rw; return PDE_NOTFOUND; }
+
 static pdw open_step(void)
 {
     pdw rc, k;
@@ -43,22 +69,46 @@ static pdw open_step(void)
         for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0xFFFF);
         rc = op_start();
         if (rc) return rc;
-        op_state = 2;
+        op_state = OPS_REV;
         return PDE_BUSY;
-    case 2:
+    case OPS_REV:
         rc = op_rev();
         if (rc) return rc;
-        op_state = u32_is0(&xr_next) ? 3 : 2;
+        if (u32_is0(&xr_next)) op_state = ix_on ? OPS_FOLD : tr_enc_k ? OPS_CRYPT : OPS_CAT;
         return PDE_BUSY;
-    case 3:
+    case OPS_FOLD:                              /* 20.22.3.1 */
+        rc = op_fold();
+        if (rc) return rc;
+        op_state = OPS_WIN;
+        return PDE_BUSY;
+    case OPS_SCAN1: case OPS_SCANIX: case OPS_SCAN2:    /* 20.22.3.5 */
+        rc = op_repair();
+        if (rc) return rc;
+        op_state = OPS_WIN;
+        /* fall through */
+    case OPS_WIN:                               /* 20.22.3.3 */
+        if ((doc_flags & PDO_OBJSTM) && !g_oseg) {
+            pde_needmem = PDMEM_OSW; pde_needkb = PDE_OSW_KB;
+            return PDE_NEEDMEM;
+        }
+        op_state = OPS_CRYPT;
+        /* fall through */
+    case OPS_CRYPT:                             /* 20.22.3.4, 20.22.5 */
+        if (tr_enc_k) {
+            rc = cr_open();
+            if (rc) return rc;
+        }
+        op_state = OPS_CAT;
+        /* fall through */
+    case OPS_CAT:
         rc = op_catalog();
         if (rc) return rc;
         pw_begin();
         rc = pw_visit(pw_root_n, pw_root_g, 0);
         if (rc) return rc;
-        op_state = 4;
+        op_state = OPS_TREE;
         return PDE_BUSY;
-    case 4:
+    case OPS_TREE:
         rc = pw_step();
         if (rc) return rc;
         pw_end();
@@ -83,10 +133,11 @@ static pdw v_open(void)
         return PDE_RANGE;
     }
     rc = open_step();
-    if (rc == PDE_BUSY) {
+    if (rc && rc != PDE_BUSY && rc != PDE_NEEDMEM && rp_start(rc)) rc = PDE_BUSY;   /* repair (20.22.3.5) */
+    if (rc == PDE_BUSY || rc == PDE_NEEDMEM) {
         xo.state = op_state;
         pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
-        return PDE_BUSY;
+        return rc;
     }
     if (rc) {
         xo.err_obj = err_obj; xo.err_detail = err_detail; xo.state = 0;
@@ -149,26 +200,64 @@ static pdw v_obj_find(void)
     return PDE_OK;
 }
 
+/* RAW_COPY (20.2.6, 20.22.3.3): the bytes of an object from `done`. A member
+ * of an object stream is its value's bytes, framed "n 0 obj\n" ... "\nendobj\n"
+ * with PDRC_PLAIN; any other object is the file's bytes (crypt's hook makes
+ * PLAIN of an encrypted file's object). */
+static const char rc_tail[] = "\nendobj\n";
+static char rc_head[16];
 static pdw v_raw_copy(void)
 {
     static struct pdxb_rawcopy rw;
-    pdw rc, want;
-    rw.got = 0;
+    static struct pd_u32 rc_p;
+    pdw rc, want, hl = 0, tl = 0, d, k, t, x;
     pd_fcopy_in(g_xb, 0, &rw, sizeof(struct pdxb_rawcopy));
+    rw.got = 0;
     rc = ob_extent(rw.objnum, rw.gen);
     if (rc) return rc;
     if (sp_kind == PDK_NULL) return PDE_NOTFOUND;
-    if (pdm_u32_cmp(&rw.done, &ex_len) > 0) return PDE_RANGE;
-    pdm_u32_sub(&s_c, &ex_len, &rw.done);              /* bytes left */
+    if ((sp_off.hi & 0x8000) && rw.mode == PDRC_PLAIN) {        /* the frame: "n 0 obj\n" */
+        t = rw.objnum;
+        for (k = 5; k--; t /= 10) rc_head[k] = (char)('0' + t % 10);
+        for (k = 0; k < 4 && rc_head[k] == '0'; k++) ;
+        for (hl = 0; k < 5; ) rc_head[hl++] = rc_head[k++];
+        rc_head[hl++] = ' '; rc_head[hl++] = '0';
+        for (t = 0; t < 5; t++) rc_head[hl++] = " obj\n"[t];
+        tl = 8;
+    } else if (rw.mode == PDRC_PLAIN && tr_enc_k) {
+        rc = cr_raw_plain(&rw);
+        if (rc != PDE_NOTFOUND) return rc;
+    }
+    pdm_u32_set(&s_a, 0, (pdw)(hl + tl));
+    pdm_u32_add(&s_b, &ex_len, &s_a);                   /* the whole text */
+    if (pdm_u32_cmp(&rw.done, &s_b) > 0) return PDE_RANGE;
+    pdm_u32_sub(&s_c, &s_b, &rw.done);                  /* bytes left */
     want = rw.dmax;
     if (want > 0xFFF0) want = 0xFFF0;                   /* pd_fcopy's largest move */
     if (s_c.hi == 0 && s_c.lo < want) want = s_c.lo;
     /* the copy must not cross the end of the destination's segment: fl_copy
      * adds its progress to doff in 16 bits, so a wrap would land at dseg:0 */
     if (rw.doff != 0 && want > (pdw)(0 - rw.doff)) return PDE_RANGE;
-    pdm_u32_add(&s_c, &sp_off, &rw.done);
-    rw.got = fl_read_far(&s_c, rw.dseg, rw.doff, want);
-    if (rw.got < want) return pde_ioerr ? PDE_IO : PDE_TRUNC;
+    if (sp_off.hi & 0x8000) {                           /* a member: head, value, tail */
+        d = rw.done.lo; x = ex_len.lo;
+        while (rw.got < want) {
+            k = (pdw)(want - rw.got);
+            if (d < hl) {
+                if (k > (pdw)(hl - d)) k = (pdw)(hl - d);
+                pd_fcopy_out(rc_head + d, rw.dseg, (pdw)(rw.doff + rw.got), k);
+            } else if (d < (pdw)(hl + x)) {
+                if (k > (pdw)(hl + x - d)) k = (pdw)(hl + x - d);
+                rc_p.hi = sp_off.hi; rc_p.lo = (pdw)(sp_off.lo + d - hl);
+                k = os_copy(&rc_p, 0, rw.dseg, (pdw)(rw.doff + rw.got), k);
+                if (!k) return lx_err ? lx_err : PDE_TRUNC;
+            } else pd_fcopy_out(rc_tail + (d - hl - x), rw.dseg, (pdw)(rw.doff + rw.got), k);
+            d = (pdw)(d + k); rw.got = (pdw)(rw.got + k);
+        }
+    } else {
+        pdm_u32_add(&s_c, &sp_off, &rw.done);
+        rw.got = fl_read_far(&s_c, rw.dseg, rw.doff, want);
+        if (rw.got < want) return pde_ioerr ? PDE_IO : PDE_TRUNC;
+    }
     pdm_u32_add16(&rw.done, rw.got);
     pd_fcopy_out(&rw, g_xb, 0, sizeof(struct pdxb_rawcopy));
     return PDE_OK;
@@ -229,6 +318,7 @@ static pdw v_dict_get(void)
     dg.key[0][31] = 0; dg.key[1][31] = 0; dg.key[2][31] = 0;
     k = 0;
     if (dg.objnum == 0 && dg.gen == 0) {
+        if (tr_nodict) return PDE_NOTFOUND;            /* a repaired file with no trailer */
         L = &fobj;
         lx_seek(&tr_dict);
         ov_clear(); ov.kind = PDK_DICT;
@@ -248,6 +338,7 @@ static pdw v_dict_get(void)
                 lx_tell(&dc_a);
                 if (pdm_u32_cmp(&dc_a, &dk_pos) == 0 && ob_value() == 0) { rc = 0; k = 1; }
             }
+            if (rc) lx_err = 0;                         /* a window that cannot be re-read (20.22.3.3) */
         }
         if (rc) {
             rc = ob_enter(dg.objnum, dg.gen);
@@ -386,9 +477,15 @@ static pdw v_trailer(void)
     tr.size = tr_size; tr.root_num = tr_root_n; tr.root_gen = tr_root_g;
     tr.info_num = tr_info_n; tr.info_gen = tr_info_g;
     u32_cp(&tr.startxref, &tr_start);
-    for (i = 0; i < 16; i++) tr.id0[i] = tr_hasid ? tr_id[i] : 0;
+    for (i = 0; i < 16; i++) {
+        tr.id0[i] = tr_hasid ? tr_id[i] : 0;
+        tr.id0_hi[i] = tr_hasid ? tr_id[16 + i] : 0;     /* /ID[0] whole (20.22.3.4) */
+    }
     tr.id0_len = tr_idlen;
     tr.version = doc_ver;
+    tr.encrypt_num = tr_enc_k == 1 ? tr_enc_n : 0;
+    tr.encrypt_gen = tr_enc_k == 1 ? tr_enc_g : 0;
+    tr.tflags = (pdw)(tr_tflags | (tr_enc_k == 2 ? PDTR_ENCDIRECT : 0));
     pd_fcopy_out(&tr, g_xb, 0, sizeof(struct pdxb_trailer));
     return PDE_OK;
 }
@@ -614,6 +711,10 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
      * the file cache all go */
     if (rc != PDE_BUSY && pde_ioerr) { rc = PDE_IO; fl_invalidate(); }
     if (rc == PDE_BUSY) { pde_fail = 0; return PDE_BUSY; }  /* D11: more to do is not a failure - CF = 0, AX = PDE_BUSY */
+    if (rc == PDE_NEEDMEM) {                    /* nor is a region to claim: CX = PDMEM_*, DX = KiB (20.22.1) */
+        pde_fail = 0; pde_cx = pde_needmem; pde_dx = pde_needkb;
+        return PDE_NEEDMEM;
+    }
     pde_fail = rc;
     return rc ? rc : pde_ax;
 }

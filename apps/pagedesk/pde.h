@@ -35,6 +35,25 @@
 #define PDX_NOROOT      4       /* PDE_SYNTAX detail: no usable /Root         */
 #define PDX_NOSTART     5       /* PDE_TRUNC detail: no startxref             */
 
+/* ---- any PDF (PAGEDESK-SPEC 20.22.3) ------------------------------------ */
+#define PDE_OSW_KB      43      /* the object-stream window: one Flate slot's shape */
+#define PDE_OSRING      32512u  /* decoded bytes the window's ring is sure to hold */
+#define PDE_OSGEO       8       /* object-stream geometry records             */
+#define PDE_OSMAX       32766u  /* the highest object-stream number a position names */
+#define PDE_FOLDROWS    512     /* index rows folded an OPEN slice            */
+#define PDE_SCANBYTES   4096    /* file bytes the repair scan walks a slice   */
+#define PDE_MAXINDEX    4096    /* numbers in an xref stream's /Index         */
+/* OPEN's states (pdxb_open.state, 20.22.3.4) */
+#define OPS_REV         2       /* one revision a slice                       */
+#define OPS_CAT         3       /* the catalog, the first page-tree node      */
+#define OPS_TREE        4       /* the page tree                              */
+#define OPS_FOLD        5       /* the flat index, a slice of rows            */
+#define OPS_WIN         6       /* the object-stream window                   */
+#define OPS_CRYPT       7       /* /Encrypt: crypt's hook                     */
+#define OPS_SCAN1       8       /* repair: the highest object number          */
+#define OPS_SCANIX      9       /* repair: the index                          */
+#define OPS_SCAN2       10      /* repair: the entries                        */
+
 /* internal value kinds (above the PDK_ range) */
 #define PDK_CLOSE       0xFE
 #define PDK_WORD        0xFD    /* a keyword / operator in an object context  */
@@ -43,6 +62,10 @@
 /* a stream filter in a context */
 #define PDF_K_HEX       1
 #define PDF_K_RLE       2
+/* 3 PDF_K_FLATE and 4 PDF_K_LZW are pdeflate.h's: the SLOT stages */
+#define PDF_K_A85       5
+#define PDF_K_CODEC     0x10    /* + PDCD_*: an image codec (20.22.3.6)       */
+#define FLK_SLOT(k)     ((pdw)((k) - 3) <= 1)
 
 /* buf, n, i and fpos are at +0, +2, +4 and +8 on the target, and
  * pdelex.inc reads them there (LXS_*): move none of them */
@@ -73,6 +96,8 @@ struct sctx {
     pdw depth;              /* TOKEN's array/dict nesting                 */
     pdw wlo, whi;           /* bytes every filter stage produced (sget)   */
     pdw filters;            /* PDFL_* of the chain                        */
+    pdw fhi[PD_MAXFILTERS]; /* ASCII85: the group's high word (fbyte the low) */
+    pdw onum, ogen;         /* the stream's object (crypt's key, 20.22.5)  */
 };
 
 struct pde_tok {
@@ -102,5 +127,15 @@ struct xsub { pdw first, count; struct pd_u32 off; pdw span; };
 #define PDE_REVSUB      (PD_MAXSUBSEC / PD_MAXREV)
 
 struct pw_frame { pdw num, gen; struct pd_u32 kpos; };
+
+/* an object stream's geometry (20.22.3.3): enough to decode it again in the
+ * middle of a token, with no parse */
+struct osgeo {
+    pdw stm;                /* the stream's object number, 0 = unused     */
+    struct pd_u32 dstart, len;
+    pdw first, n;           /* /First, /N                                 */
+    pdw nflt, filters;
+    pdb flt[PD_MAXFILTERS];
+};
 
 #endif

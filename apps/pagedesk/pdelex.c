@@ -69,11 +69,14 @@ void lx_tell(struct pd_u32 *out);
 #endif
 
 static pdw st_decode(struct sctx *c);          /* pdestrm.c */
+static pdw os_copy(struct pd_u32 *pos, pdb *dst, pdw dseg, pdw doff, pdw n);   /* pdeostm.c */
 
 static pdw lx_fill(void)
 {
     if (L->mode == 0) {
-        L->n = fl_read(&L->fpos, L->buf, PDE_IB);
+        /* a position names its container (20.22.3.3): the file, or an object stream */
+        if (L->fpos.hi & 0x8000) L->n = os_copy(&L->fpos, L->buf, 0, 0, PDE_IB);
+        else L->n = fl_read(&L->fpos, L->buf, PDE_IB);
         L->gen++;
     } else {
         L->n = st_decode((struct sctx *)L);
@@ -432,14 +435,19 @@ static pdw ob_dict_find(const char *key)
 
 /* Open object (num, gen): the lexer is left at its value. A free, absent or
  * wrong-generation object sets ob_null and succeeds (a reference to it is a
- * null, PDF 7.3.10). */
+ * null, PDF 7.3.10). ob_find1 is the half for an object in no object stream:
+ * it answers OB_INSTM for a member, which ob_enter hands to ox_enter
+ * (pdeostm.c) and an object stream's own geometry refuses. */
+#define OB_INSTM 0xFFFE
 static pdw xr_find(pdw num);                    /* pdexref.c */
-static pdw ob_enter(pdw num, pdw gen)
+static pdw ox_enter(pdw num, pdw gen);          /* pdeostm.c */
+static pdw ob_find1(pdw num, pdw gen)
 {
     pdw rc;
     ob_null = 0;
     rc = xr_find(num);
     if (rc) { err_obj = num; return rc; }
+    if (xo_state == 3) return OB_INSTM;
     if (xo_state != 2) { ob_null = 1; return PDE_OK; }
     L = &fobj;
     lx_seek(&xo_off);
@@ -457,6 +465,12 @@ bad:
     err_obj = num;
     err_detail = xr_rev;                        /* the revision whose entry pointed here */
     return PDE_XREF;
+}
+static pdw ob_enter(pdw num, pdw gen)
+{
+    pdw rc = ob_find1(num, gen);
+    if (rc == OB_INSTM) rc = ox_enter(num, gen);
+    return rc;
 }
 
 /* Follow references (ov is a REF) until a value: ov holds its head. */
