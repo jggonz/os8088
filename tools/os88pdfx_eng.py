@@ -373,6 +373,17 @@ def main():
     must_decode(p, 9, t2, "A85.PDF")
     objstm(p, os.path.join(out, "A85_OS.PDF"), 0, keep=True)
     NOTES.append(("A85_OS.PDF", "A85.PDF in object streams, its filters kept"))
+    # RES_LOOKUP's PDRL_DIRECT (20.22.3.8): an ExtGState written inside the page
+    d = Doc(b"1.5")
+    d.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    d.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+    d.put(3, b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 << /CA 0.5 /ca 0.25 >> "
+             b"/GS2 5 0 R >> >> >>")
+    d.stream(4, b"", b"/GS1 gs 0 0 100 100 re f /GS2 gs")
+    d.put(5, b"<< /Type /ExtGState /LW 3 >>")
+    p = save(out, "RESDIR.PDF", d.finish(1), "a page whose /ExtGState /GS1 is written inside it (RES_LOOKUP PDRL_DIRECT)")
+    objstm(p, os.path.join(out, "RESDI_OS.PDF"), 0)
+    NOTES.append(("RESDI_OS.PDF", "RESDIR.PDF in object streams: the direct value inside a member"))
     subprocess.run(["rm", "-rf", tmp])
     with open(os.path.join(out, "README.TXT"), "w") as f:
         f.write("tests/pdfany/eng: the any-PDF reader's fixtures (PAGEDESK-SPEC 20.22.3)\n\n"

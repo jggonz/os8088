@@ -62,6 +62,7 @@ static struct pde_val ov;
 static struct pd_u32 ob_pos;    /* tell() scratch (ob_value's lookahead)      */
 static struct pd_u32 on_pos;    /* ob_num's saved place                       */
 static struct pd_u32 ob_hdr;    /* offset of the current object's "n g obj"   */
+static pdw ob_cur_n, ob_cur_g;  /* ...and its number (RES_LOOKUP's PDRL_DIRECT) */
 static pdw   ob_null;           /* the last ob_enter found a free/absent obj  */
 
 /* ---- xref (pdexref.c) ---------------------------------------------------- */

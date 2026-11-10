@@ -460,7 +460,10 @@ def own(pde, work):
     def res(*a, f="res.pdf"): return lines(pde, a[0], P(f), a[1:])[-1]
     expect(res("res", 0, "Font", "F1") == "RES obj=8,0 kind=7", "res inherited ref: %s" % res("res", 0, "Font", "F1"))
     expect(res("res", 1, "Font", "F9") == "RES obj=9,0 kind=7", "res page-own: %s" % res("res", 1, "Font", "F9"))
-    expect(res("res", 1, "Font", "FD") == "RES obj=0,0 kind=7", "res direct dict: %s" % res("res", 1, "Font", "FD"))
+    d = open(P("res.pdf"), "rb").read()
+    o6 = d.index(b"6 0 obj")
+    want = "RES obj=0,0 kind=7 direct=6,0+%d" % (d.index(b"<< /Type /Font >>", o6) - o6)
+    expect(res("res", 1, "Font", "FD") == want, "res direct dict (20.22.3.8): %s, want %s" % (res("res", 1, "Font", "FD"), want))
     expect(res("res", 1, "Font", "F1") == "RES rc=53", "res: page 1 has its own resources, F1 is not inherited into it")
     expect(res("res", 0, "XObject", "Fm1") == "RES obj=10,0 kind=8", "res form is a stream: %s" % res("res", 0, "XObject", "Fm1"))
     expect(res("res", 0, "XObject", "Nope") == "RES rc=53", "res missing")
@@ -680,6 +683,15 @@ def main():
                 check_good(pde, pth, 2, (), noflate=True)
                 check_members(pde, pth, ("-F", "2"), work)
                 check_members(pde, pth, (), work)
+                if f.startswith("RESDI"):               # 20.22.3.8: the direct value, where RAW_COPY puts it
+                    l = lines(pde, "res", pth, (0, "ExtGState", "GS1"))[-1]
+                    m = re.match(r"RES obj=0,0 kind=7 direct=(\d+),0\+(\d+)$", l)
+                    mem = os.path.join(work, "mem")
+                    e = open(os.path.join(mem, "%s.e" % m.group(1)), "rb").read() if m else b""
+                    expect(m and re.match(rb"<<\s*/CA 0\.5\s*/ca 0\.25\s*>>", e[int(m.group(2)):]),
+                           "%s: RES_LOOKUP direct %s, bytes there %r" % (f, l, e[int(m.group(2)):][:30] if m else b""))
+                    expect(lines(pde, "res", pth, (0, "ExtGState", "GS2"))[-1] == "RES obj=5,0 kind=7",
+                           "%s: a referenced ExtGState is not PDRL_DIRECT" % f)
     print("FAILURES:", fails)
     sys.exit(1 if fails else 0)
 

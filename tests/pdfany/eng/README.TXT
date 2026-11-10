@@ -27,3 +27,5 @@ MARKU_RW.PDF   MARKU_OS.PDF with the xref-stream row of the /Root's object strea
 LZW.PDF        LZWDecode content: a 45 KB stream through every code width and table reset, and EarlyChange 0
 A85.PDF        ASCII85Decode content (wrapped lines, 'z', a short last group, the /A85 abbreviation) and an [ASCII85 LZW] chain
 A85_OS.PDF     A85.PDF in object streams, its filters kept
+RESDIR.PDF     a page whose /ExtGState /GS1 is written inside it (RES_LOOKUP PDRL_DIRECT)
+RESDI_OS.PDF   RESDIR.PDF in object streams: the direct value inside a member

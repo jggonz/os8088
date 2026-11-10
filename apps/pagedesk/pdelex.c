@@ -470,6 +470,7 @@ static pdw ob_enter(pdw num, pdw gen)
 {
     pdw rc = ob_find1(num, gen);
     if (rc == OB_INSTM) rc = ox_enter(num, gen);
+    ob_cur_n = num; ob_cur_g = gen;
     return rc;
 }
 

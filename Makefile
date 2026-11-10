@@ -21615,7 +21615,7 @@ $(BUILD)/pde_fuzz: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps
 pdefuzz: pdeng $(BUILD)/pde_fuzz
 	$(BUILD)/pde_fuzz -n $(PDEFUZZ_N) -s $(PDEFUZZ_SEED) -o $(BUILD)/pdeng-fix \
 		$(BUILD)/pdeng-fix/own/*.pdf $(BUILD)/pdeng-fix/shared/samples/*.PDF \
-		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF
+		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF tests/pdfany/eng/*.PDF
 # ---- end PageDesk: eng ------------------------------------------------------
 
 # ---- PageDesk: flate --------------------------------------------------------

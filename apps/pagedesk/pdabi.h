@@ -683,6 +683,16 @@ struct pdxb_img {
 
 /* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
 /* [eng 20.22.3]    */
+#define PDRL_DIRECT  0x0001 /* pdxb_reslookup_x.rflags: the resource is written
+                               DIRECTLY in another object (an inline dictionary) */
+struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
+                               reads the pdxb_reslookup and writes all of this */
+    struct pdxb_reslookup rl;
+    pdw  rflags;            /* out: PDRL_*                                */
+    pdw  cnum, cgen;        /* out (PDRL_DIRECT): the object it is written in */
+    struct pd_u32 coff;     /* out (PDRL_DIRECT): where the value starts in that
+                               object's PDRC_EXACT RAW_COPY bytes (20.22.3.8) */
+};
 /* [crypt 20.22.5]  */
 /* [wrt 20.22.4]    */
 /* [rcore 20.22.7]  */

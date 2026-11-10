@@ -204,6 +204,9 @@ static pdw v_obj_find(void)
  * of an object stream is its value's bytes, framed "n 0 obj\n" ... "\nendobj\n"
  * with PDRC_PLAIN; any other object is the file's bytes (crypt's hook makes
  * PLAIN of an encrypted file's object). */
+#ifndef PDRC_ENCDICT
+#define PDRC_ENCDICT 0xFFFE     /* wrt's pdabi block (20.22.4.1): RAW_COPY of a direct /Encrypt */
+#endif
 static char rc_text[24];                /* "nnnnn 0 obj\n" ... "\nendobj\n" */
 static pdw v_raw_copy(void)
 {
@@ -212,7 +215,19 @@ static pdw v_raw_copy(void)
     pdw rc, want, hl = 0, x, d, k, t, i;
     pd_fcopy_in(g_xb, 0, &rw, sizeof(struct pdxb_rawcopy));
     rw.got = 0;
-    rc = ob_extent(rw.objnum, rw.gen);
+    if (rw.objnum == PDRC_ENCDICT) {                    /* a direct /Encrypt's text (20.22.4.1) */
+        if (tr_enc_k != 2) return PDE_NOTFOUND;
+        L = &fobj;
+        lx_seek(&tr_enc_pos);                           /* just inside its "<<" */
+        rc = ob_skipc();
+        if (rc) return rc;
+        lx_tell(&s_c);
+        u32_cp(&sp_off, &tr_enc_pos);
+        u32_sub16(&sp_off, 2);
+        pdm_u32_sub(&ex_len, &s_c, &sp_off);
+        sp_kind = PDK_DICT;
+        rw.mode = PDRC_EXACT;
+    } else rc = ob_extent(rw.objnum, rw.gen);
     if (rc) return rc;
     if (sp_kind == PDK_NULL) return PDE_NOTFOUND;
     x = ex_len.lo;
@@ -408,6 +423,7 @@ static pdw v_dict_get(void)
 
 /* ---- RES_LOOKUP ------------------------------------------------------------------ */
 
+static struct pdxb_reslookup_x rx;     /* its tail: rflags, cnum, cgen, coff */
 static pdw v_res_lookup(void)
 {
     static struct pdxb_reslookup rl;
@@ -453,8 +469,11 @@ static pdw v_res_lookup(void)
     if (ov.kind != PDK_DICT) return PDE_NOTFOUND;
     rc = ob_dict_find(rl.name);
     if (rc) return rc;
+    lx_skipws();
+    lx_tell(&rds);
     rc = ob_value();
     if (rc) return rc;
+    rx.rflags = 0;
     if (ov.kind == PDK_REF) {
         rl.objnum = ov.rnum; rl.gen = ov.rgen;
         rc = ob_kind_of(rl.objnum, rl.gen);
@@ -464,8 +483,11 @@ static pdw v_res_lookup(void)
     } else {
         if (ov.kind == PDK_CLOSE || ov.kind == PDK_WORD || ov.kind == PDK_EOF) return PDE_SYNTAX;
         rl.objnum = 0; rl.gen = 0; rl.kind = ov.kind;
+        rx.rflags = PDRL_DIRECT; rx.cnum = ob_cur_n; rx.cgen = ob_cur_g;   /* 20.22.3.8 */
+        pdm_u32_sub(&rx.coff, &rds, &ob_hdr);
     }
     pd_fcopy_out(&rl, g_xb, 0, sizeof(struct pdxb_reslookup));
+    pd_fcopy_out(&rx.rflags, g_xb, sizeof(struct pdxb_reslookup), sizeof rx - sizeof(struct pdxb_reslookup));
     return PDE_OK;
 }
 

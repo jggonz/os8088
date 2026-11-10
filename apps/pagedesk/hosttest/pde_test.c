@@ -252,6 +252,7 @@ static void cmd_get(int argc, char **argv)
 static void cmd_res(int forms, int argc, char **argv)
 {
     struct pdxb_reslookup rl;
+    struct pdxb_reslookup_x rx;
     unsigned r;
     memset(&rl, 0, sizeof rl);
     if (forms) { rl.page = 0xFFFF; rl.resobj = (pdw)cmd_arg(argv[0]); rl.resgen = (pdw)cmd_arg(argv[1]); argv += 2; }
@@ -260,7 +261,11 @@ static void cmd_res(int forms, int argc, char **argv)
     xb_put(&rl, sizeof rl);
     r = call(PDV_ENG_RES_LOOKUP, 0, 0, 0);
     xb_get(&rl, sizeof rl);
-    if (cf) printf("RES rc=%u\n", r);
+    if (cf) { printf("RES rc=%u\n", r); return; }
+    xb_get(&rx, sizeof rx);                         /* 20.22.3.8: the tail */
+    if (rx.rflags & PDRL_DIRECT)
+        printf("RES obj=%u,%u kind=%u direct=%u,%u+%lu\n", rl.objnum, rl.gen, rl.kind, rx.cnum, rx.cgen,
+               ((unsigned long)rx.coff.hi << 16) | rx.coff.lo);
     else printf("RES obj=%u,%u kind=%u\n", rl.objnum, rl.gen, rl.kind);
 }
 static void cmd_outline(void)

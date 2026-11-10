@@ -298,8 +298,9 @@ is released. Exhausting the arena is `PDE_LIMIT`, recoverable.
 
 A classic xref entry is exactly 20 bytes, so the engine keeps only a
 **subsection table**: per revision, per subsection, (first object, count, file
-offset of its first entry), at most `PD_MAXSUBSEC` = 256 subsections across
-at most `PD_MAXREV` = 8 revisions, newest first. Looking up object n reads the
+offset of its first entry), at most 8 subsections a revision across at most
+`PD_MAXREV` = 8 revisions, newest first (a revision with more is folded into
+20.22.3.1's flat index instead). Looking up object n reads the
 20-byte entry from the newest subsection containing n, through the block
 cache, plus a small direct-mapped cache of resolved offsets (512 entries).
 This answers "many objects exceeding the RAM index" by construction.
@@ -1057,16 +1058,11 @@ matched case-insensitively and READ_SEQ is then handed the directory's own
 spelling of it; a name not in the current folder is `PDE_IO`.
 
 The cross-reference follows 7.3 with one extension: each revision keeps at most
-32 subsection records; the 33rd merges adjacent pairs into CHECKPOINTS (a
-record that stands for `span` consecutive subsections, found again by reading
-their 20-byte-aligned headers off the file). A lookup in a thinned revision
-takes the last record whose first object is at most the one asked for and
-walks at most `span` headers. The whole chain may name at most `PD_MAXSUBSEC`
-(256) subsections: the 257th is `PDE_LIMIT` (D10c). A thinned revision must be in ascending order of
-first object throughout: a revision of 33 or more subsections with one out of
-order, before the thinning or after it, is `PDE_LIMIT`. A revision with 32 or
-fewer subsections may be in any order. A subsection that reaches past object
-65,535 (`first + count > 65,536`) is `PDE_LIMIT` (D8).
+8 subsection records, in any order; a revision with more makes the chain the
+flat index's (20.22.3.1, which replaced the checkpoints this paragraph used to
+describe, and with them D10c's 256-subsection limit and the out-of-order
+`PDE_LIMIT`). A subsection that reaches past object 65,535 (`first + count >
+65,536`) is `PDE_LIMIT` (D8).
 
 Entries are checked byte by byte (ten digits, space, five digits, space, `n`
 or `f`, a two-byte end of line: space+CR, space+LF or CR+LF); an in-use
@@ -1269,7 +1265,7 @@ call may be retried).
 | `PDE_FLATE`, `PDE_FILTER` | 20.2.5, at `STRM_OPEN` |
 | `PDE_ENCRYPT` / `PDE_XREFSTM` | `/Encrypt` in a trailer / `/Type /XRef` where `xref` was expected |
 | `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document; a `RAW_COPY` or `STRM_READ` destination that would cross the end of its segment |
-| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
+| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; an object stream numbered over 32,766 or a member past 65,535 decoded bytes (20.22.3); a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
 | `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
 | `PDE_IO` | any failed read; a name not in the folder |
 | `PDE_NOTFOUND` | a missing dictionary key or resource; no outline; `SEARCH` |
@@ -4923,15 +4919,15 @@ round's final pass, not before.
 
 AP-01, AP-02 and AP-03, and the engine seams the other agents build on. All
 of it is PDENG (L1: it runs per object or per byte). **A file whose every
-revision is a classic table, with no `/XRefStm`, no object stream and no
-damage, takes exactly the code path of 20.2.3** (the subsection records, the
-resolved-offset cache, no new claim): the new mechanisms below are entered
-only when a revision needs them.
+revision is a classic table of at most 8 subsections, with no `/XRefStm`, no
+object stream and no damage, takes exactly the code path of 20.2.3** (the
+subsection records, the resolved-offset cache, no new claim): the new
+mechanisms below are entered only when a revision needs them.
 
 **20.22.3.1 The flat index (`PDMEM_XIDX`).** A chain with a cross-reference
-STREAM in it (any revision), a hybrid section whose `/XRefStm` is read, or a
-repaired file, is resolved through a flat index instead of the subsection
-records: 4 bytes an object number, entry `n` at `xidx_seg + n / 4 :
+STREAM in it (any revision), a hybrid section whose `/XRefStm` is read, a
+classic revision of more than 8 subsections, or a repaired file, is resolved
+through a flat index instead of the subsection records: 4 bytes an object number, entry `n` at `xidx_seg + n / 4 :
 (n % 4) * 4` (so it may span several segments), little-endian:
 
 | entry | meaning |
@@ -4958,9 +4954,21 @@ reading its 20-byte rows in order (checked as 20.2.3 checks them; a bad row is
 `PDE_XREF`). A hybrid section (7.5.8.4) is folded in three passes: the table's
 in-use rows, then its `/XRefStm`'s rows, then the table's free rows, so a
 compressed object that a hybrid writer lists as free in the table is found in
-the stream and a genuinely free one stays free. An `/XRefStm` at or past the
-end of the file is ignored, as before; one inside the file that is not a
+the stream and a genuinely free one stays free; one the table leaves out of
+every subsection is found in the stream either way. (qpdf 12 lets a free row
+win over the stream, so the fixtures are of the second shape: there is no
+reference reader to hold the first to.) An `/XRefStm` at or past the end of
+the file is ignored, as before; one inside the file that is not a
 cross-reference stream is `PDE_XREFSTM`.
+
+**This replaces 20.2.3's checkpoints.** A classic revision keeps at most 8
+subsection records (`PDE_REVSUB`, 512 bytes of bss for the 8 revisions where
+the checkpoint table took 2,560); a revision with more makes the whole chain
+the flat index's, folded as above. So D10c's 256-subsection limit and the
+"33+ subsections out of order" `PDE_LIMIT` of 3.6 are gone: a file of one
+subsection an object (`xref_subsec_300.pdf`) opens, at the price of the
+index's `4 x /Size` bytes - a sparse file whose numbers reach 64,729 asks for
+the full 256 KiB, where the checkpoints asked for nothing.
 
 **20.22.3.2 Cross-reference streams.** At a revision's offset `n g obj` with
 `/Type /XRef` is read as a stream (7.5.8): its dictionary IS that revision's
@@ -4971,11 +4979,12 @@ rows: type `w0` bytes (0 width means type 1), field 2 `w1` bytes, field 3 `w2`
 bytes, big-endian. Type 0 is free, type 1 is an offset (field 3 the
 generation, which, as for a classic entry, is not kept: the object header's is
 matched, 20.2.8), type 2 is (object stream, member index), any other type is
-a null. An offset under 9 or at or past the end of the file, an object stream
-number over 32,766, a member index of 65,535, a width over 4, an `/Index`
-that is not pairs of non-negative integers, or rows that end before `/Index`
-does, is `PDE_XREFSTM` (now: a DAMAGED cross-reference stream), which 20.22.3.5
-repairs. Rows for objects at or past the index's size are ignored. The rows
+a null. An offset under 9 or at or past the end of the file, a width over 4,
+an `/Index` that is not pairs of non-negative integers, or rows that end
+before `/Index` does, is `PDE_XREFSTM` (now: a DAMAGED cross-reference
+stream), which 20.22.3.5 repairs. An object stream number over 32,766 or a
+member index of 65,535 is `PDE_LIMIT` (the index cannot name it) and is not
+repaired. Rows for objects at or past the index's size are ignored. The rows
 are decoded through the ordinary filter chain (Flate with its PNG/TIFF
 predictor - qpdf writes `/Predictor 12` - and every other filter of
 20.22.3.6); a cross-reference stream is never decrypted (7.6.2). Its Flate
@@ -5016,15 +5025,17 @@ again from the start (the swap rule: one stream is resident; asking for
 another, or for bytes before the ring, re-decodes from that stream's start up
 to the bytes asked for). A stream's decoded offsets are 16 bits: bytes past
 65,535 cannot be named and a member there is `PDE_LIMIT`. The stream's
-geometry (data offset, length, filter chain, `/First`, `/N`) is read when a
+geometry (data offset, length, Flate or not, `/First`, `/N`) is read when a
 member is first resolved and kept in 8 records (round robin), so a re-decode
 in the middle of a token needs no parse; a position in a stream whose record
 has been reused is `PDE_LIMIT` (it needs nine object streams entered between
-saving a position and returning to it). An object stream's chain is the
-ordinary one with two refusals, both `PDE_FILTER`: Flate must be its LAST
-stage and without a predictor (the ring is then Flate's own history), and LZW
-cannot be in it (LZW's table is a slot's). An object stream inside an object
-stream, or one that is not `/Type /ObjStm`, is `PDE_XREF`. Decryption of an
+saving a position and returning to it). An object stream's `/Filter` is
+`/FlateDecode` (a name, or an array of that one name) or nothing - the ring
+is then Flate's own history - and a `/DecodeParms` with a `/Predictor` above
+1, or any other filter or chain, is `PDE_FILTER`. (Every writer we know
+compresses object streams with Flate alone; a chain would cost the parse of a
+second filter list, 20.22.3.7.) An object stream inside an object stream, or
+one that is not `/Type /ObjStm`, is `PDE_XREF`. Decryption of an
 object stream is crypt's raw layer (20.22.5): the stream context carries the
 object number and generation (`sctx.onum/ogen`) for the key, and members are
 never decrypted again.
@@ -5049,7 +5060,10 @@ records it (a reference, or the position just inside a direct dictionary;
 file is `PDE_PASSWORD`, no longer `PDE_ENCRYPT`, and the trailer is never a
 refusal by itself); 3 and 4 the catalog and the page tree as before; 8 to 10
 the repair. `/ID[0]` is kept whole up to 32 bytes (`id0`, `id0_hi`, `id0_len`
-its true length).
+its true length). The 1 KiB the engine searches for `startxref` is read into
+the stream contexts, which are free during `OPEN`'s first state, and
+`FINGERPRINT` reads its two kilobytes 128 bytes at a time: the 1 KiB tail
+buffer is gone.
 
 `PDE_NEEDMEM` is the ladder's (20.22.1): the primary claims the region, puts
 it in `pdxb_init` and calls `INIT` again, then `OPEN` with the same `state`.
@@ -5074,7 +5088,10 @@ in the file wins); a `/Type /Catalog` object is remembered, the root when no
 trailer names one. Pass 1 (state 8) finds the highest object number, so the
 index can be asked for; pass 2 (state 10) writes it. Objects freed by an
 update cannot be seen by a scan and stay in use (MuPDF and qpdf do the same).
-A failure after the repair is reported as it is. A file damaged AFTER `OPEN`
+After a repair `TRAILER` reports `startxref` 0 (there is no cross-reference
+for an incremental update's `/Prev` to name: 20.22.4 saves such a file whole)
+and `DICT_GET` 0/0 reads the last trailer the scan met, `PDE_NOTFOUND` when it
+met none. A failure after the repair is reported as it is. A file damaged AFTER `OPEN`
 (an entry found wrong when an object is first read) is `PDE_XREF` at that
 verb, as before.
 
@@ -5093,8 +5110,10 @@ as `pdabi.h`.
   `/Predictor` (PNG 10-15, TIFF 2), `/Colors`, `/BitsPerComponent`,
   `/Columns` and `/EarlyChange` (0 or 1, default 1). Codes are 9 to 12 bits,
   most significant bit first; 256 clears, 257 ends; a code above the next
-  table entry, or one not yet defined, is `PDE_SYNTAX`. The table (4,096
-  entries) and the string stack are in the slot's window area.
+  table entry, or one not yet defined, is `PDE_SYNTAX`; data that ends
+  without 257 ends there (as qpdf). The table (4,096 entries of a prefix code
+  and a last byte, 16 KiB) and the string, built down from the top of a stack
+  above it, are in the slot's window area: no length table.
 * The codecs: `DCTDecode` `DCT`, `CCITTFaxDecode` `CCF`, `JBIG2Decode`,
   `JPXDecode`. With `pdxb_strm.accept` 0 they are `PDE_FILTER` at
   `STRM_OPEN`, as before. With `PDSA_CODEC` a codec that is the LAST stage of
@@ -5106,10 +5125,54 @@ as `pdabi.h`.
   first with its own `STRM_OPEN`).
 * `Crypt` stays `PDE_FILTER` until 20.22.5 handles it.
 
-**20.22.3.7 Costs.** PDENG image + bss: 47,152 at the round's start,
-*measured figures land here with the code*. RAM: nothing for a classic file;
-`4 x /Size` bytes for a stream-indexed or repaired one; 43 KiB more for a
-file with object streams.
+**20.22.3.7 Costs.** PDENG image + bss, measured (`make build/PDENG.MOD`):
+47,152 at the round's start (36,822 + 10,330); **45,620 + 8,136 = 53,756**
+with 20.22.3.1-6, +6,604 of the +6,800 this subsection was given, and
+**45,826 + 8,210 = 54,036** with 20.22.3.8's two seams (+280); the 23:30
+ledger allows eng 56,952 inside PDENG's 65,024. The
+first build was 58,926; what brought it back is in 20.22.3.1 (the checkpoint
+table: -2,048 bss), 20.22.3.4 (the tail buffer: -1,024) and code shared or
+table-driven (`kw_ix`, one stream-bounds check, Flate-only object streams, an
+LZW with no length table). Deep stack (tools/os88pdstk.py): the worst verb
+is `OPEN` at 550 bytes from the door, inside D23's 1,776, through an object
+stream's geometry read during the fold. RAM: nothing for a classic file of at
+most 8 subsections a revision; `4 x /Size` bytes for a stream-indexed,
+many-subsection or repaired one; 43 KiB more for a file with object streams
+(or, with no Flate tier, a compressed cross-reference stream).
+
+The fixtures are `tests/pdfany/eng/` (tools/os88pdfx_eng.py, provenance in its
+README): the samples as object-stream files plain and compressed, hybrids, a
+cross-reference-stream update on a classic file, object streams longer than
+the ring read backwards, three damaged files, LZW through every width and
+table reset and with `/EarlyChange 0`, ASCII85 and an [ASCII85 LZW] chain.
+`hosttest/pde_check.py` holds the engine to qpdf over every one, with and
+without the Flate tier: pages, page objects, boxes, every content stream's
+decoded bytes, and every object's `RAW_COPY` in both modes against the tool's
+own reading of the decoded object stream. `make pdefuzz` mutates them with
+the rest of the corpus, the claims random a case and every `PDE_NEEDMEM`
+granted.
+
+**20.22.3.8 Seams for the other agents.** Two answers that read the trailer
+and the resources, which are the engine's:
+
+* `RES_LOOKUP` of a resource written DIRECTLY in another object (an inline
+  `/ExtGState << /GS1 << /CA 0.5 >> >>`) answers `objnum` 0 and its `kind` as
+  before, and now also, in `pdxb_reslookup_x`'s tail (`pdabi.h`'s `[eng
+  20.22.3]` block; the verb reads the `pdxb_reslookup` at the head of the
+  exchange block and writes the whole extended struct): `rflags`
+  `PDRL_DIRECT`, `cnum`/`cgen` the object the value is written in (the page,
+  an inherited ancestor, a resource dictionary or a category dictionary,
+  whichever was entered last), and `coff`, where the value's `<<` starts in
+  that object's `RAW_COPY` `PDRC_EXACT` bytes - from `n g obj` for an object in
+  the file, from the value for an object-stream member. PDXG reads the value
+  with `RAW_COPY` from `done = coff` and parses it itself. A referenced
+  resource has `rflags` 0. (Decision 23:35, Question 3; on an encrypted file
+  a string inside the value is the file's bytes, and an ExtGState has none
+  that matters.)
+* `RAW_COPY` of `objnum` `PDRC_ENCDICT` (0xFFFE, wrt's block, 20.22.4.1) when
+  `TRAILER` has `PDTR_ENCDIRECT` copies the text of the direct `/Encrypt`
+  dictionary from its `<<` to its `>>`, the file's bytes in either mode;
+  without a direct one it is `PDE_NOTFOUND`.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
