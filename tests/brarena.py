@@ -15,6 +15,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
 import dispcp
+import os88geom  # noqa: E402
 import os88build
 import os88qemu
 import os88sym
@@ -52,7 +53,7 @@ def main():
             raise RuntimeError("the local HTML file did not open in Browser")
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         image = os.path.getsize(os88build.at("build/browser.bin"))
 
         def symbol(name):
@@ -131,7 +132,7 @@ def main():
             raise RuntimeError("the wide local HTML file did not open")
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         doclenlo_off = symbol("br_doclen")
         doclenhi_off = symbol("br_doclen_hi")
         os88qemu.acted(
@@ -276,7 +277,7 @@ def main():
         wins = dispcp.win_list(m, S)
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         os88qemu.acted(
             m, lambda: word(38) >= 1200 and dword(doclenlo_off, doclenhi_off) > 65536,
             secs=120, what="high-offset form page before submit")
@@ -344,7 +345,7 @@ def main():
             for slot in wins:
                 rec = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
                              dispcp.WIN_SIZE)
-                seg = rec[22] | (rec[23] << 8)
+                seg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
                 title_off = rec[10] | (rec[11] << 8)
                 title = bytes(m.readseg(seg or 0x1000, title_off, 24)) \
                     .split(b"\\0", 1)[0].decode("latin-1", "replace")

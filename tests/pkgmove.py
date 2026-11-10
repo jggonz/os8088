@@ -237,7 +237,7 @@ def main():
         def pseg():
             rec = m.read(S("wm_wins") + win * dispcp.WIN_SIZE,
                          dispcp.WIN_SIZE)
-            return u16(rec, 22)
+            return u16(rec, dispcp.W_SEG)
         for z in a.idle:               # the package's own "nothing running"
             os88marty.until(m, lambda _: m.read(lin(pseg(), addr(z)), 1)[0]
                             == 0, "%s = 0" % z, poll=0.3, limit=120)

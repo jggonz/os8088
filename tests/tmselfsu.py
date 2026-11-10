@@ -35,6 +35,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88geom, os88sym, dispcp, dispcorner, dispapps
+import os88geom  # noqa: E402
 import dispcells
 
 MACHINE = "os8088_xt_vga"
@@ -193,7 +194,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     def wseg(i):
         r = m.read(S("wm_wins") + i * os88geom.WIN_SIZE, os88geom.WIN_SIZE)
         used = (r[0] | (r[1] << 8)) & 1
-        sg = r[22] | (r[23] << 8)
+        sg = r[os88geom.W_SEG] | (r[os88geom.W_SEG + 1] << 8)
         return used, (sg or KSEG)
 
     used, ours = wseg(slot)

@@ -371,7 +371,7 @@ def run(a, apps, plain, P, fails):
             trackwin = wins2[-1]
         rec = m.read(S("wm_wins") + trackwin * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("  window     Tracker at %04X" % pseg)
 
         # WAIT FOR THE CLAIM, do not sleep for it. [trk_modseg] going

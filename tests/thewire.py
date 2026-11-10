@@ -1079,7 +1079,7 @@ def main():
             sys.exit("thewire: the Wire zone opened no window")
         ww = wins2[-1]
         rec = m.read(S("wm_wins") + ww * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("The Wire at %04X, image %d bytes" % (pseg, img))
 
         def b(name, n=1):
