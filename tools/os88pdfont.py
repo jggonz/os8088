@@ -346,6 +346,8 @@ def build_names():
     return out + b"\0"
 
 K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX, K_NOTICE = 1, 3, 4, 5, 6, 7, 8
+K_KIT = 9                            # PAGEDESK-SPEC 20.21.2: the face's fonts and pictures,
+                                     # right after the INDEX so one read loads both
 INDEX_MAX = 8192                     # D3: what the primary loads into one claim
 GLYPH_CACHE = 16384                  # PAGEDESK-SPEC 11.2: every strike must fit it
 
@@ -377,7 +379,7 @@ def build_res(core_only=True, art=True):
     | strike data | icons.  The first INDEX bytes are what the primary loads."""
     recs, blobs = collect_strikes(CORE_SIZES if core_only else [x for x in SIZES if x not in CORE_SIZES])
     n = len(recs)
-    nent = 7
+    nent = 8 if core_only else 7
     D = (8 + 12 * nent + 15) & ~15                    # the bank starts paragraph aligned
     wid = build_widths() if core_only else b""        # PDFONTX.RES leaves them to PDRES.BIN
     names = build_names() if core_only else b""
@@ -386,7 +388,9 @@ def build_res(core_only=True, art=True):
     tail = 16 * n + 8 + 8
     bank_len = tail + len(wid) + len(names)
     index_len = D + bank_len
-    data_off = (index_len + 15) & ~15
+    kit_off = (index_len + 15) & ~15
+    kit = build_kit_safe(core_only)
+    data_off = (kit_off + len(kit) + 15) & ~15 if kit else kit_off
     offs, o = [], data_off
     for d in blobs:
         offs.append(o)
@@ -407,18 +411,27 @@ def build_res(core_only=True, art=True):
            (K_NAMES, D + names_off if names else 0, len(names)), (K_STRIKES, data_off, len(strikes)),
            (K_ICONS, icons_off if icons else 0, len(icons)), (K_INDEX, 0, index_len),
            (K_NOTICE, notice_off, len(notice))]
+    if core_only:
+        ent.append((K_KIT, kit_off, len(kit)))
     assert len(ent) == nent
     head = b"PDRS" + struct.pack("<HH", 1, nent)
     for k, off, ln in ent:
         head += struct.pack("<HHII", k, 0, off, ln)
     head += b"\0" * (D - len(head))
-    blob = head + bank + b"\0" * (data_off - index_len) + strikes
+    blob = head + bank + b"\0" * (kit_off - index_len) + kit
+    blob += b"\0" * (data_off - len(blob)) + strikes
     blob += b"\0" * (icons_off - len(blob)) + icons
     blob += b"\0" * (notice_off - len(blob)) + notice
     parts = {"index": index_len, "dir": D, "strike records": 16 * n, "widths": len(wid),
              "names": len(names), "strike data": len(strikes), "icons": len(icons),
-             "notice": len(notice)}
+             "notice": len(notice), "kit": len(kit)}
     return blob, parts
+
+def build_kit_safe(core):
+    if not core:
+        return b""
+    import os88pdkit
+    return os88pdkit.build_kit()
 
 def build_atlas_safe(art):
     if not art:
@@ -511,18 +524,26 @@ def cmd_check(a):
     blob = open(a.res, "rb").read()
     name = os.path.basename(a.res)
     ents = read_res(blob)
-    assert set(ents) == {K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX, K_NOTICE}, ents
+    core = not a.extra
+    want_k = {K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX, K_NOTICE}
+    assert set(ents) == (want_k | {K_KIT} if core else want_k), ents
     D = ents[K_FONTS][0]
     idx = ents[K_INDEX][1]
     assert D % 16 == 0 and D >= 8 + 12 * len(ents) and ents[K_INDEX][0] == 0
     assert idx == D + ents[K_FONTS][1], "the INDEX is the directory plus the bank"
     assert idx <= INDEX_MAX, "%s: INDEX %d bytes, over D3's %d" % (name, idx, INDEX_MAX)
     so, sl = ents[K_STRIKES]
-    assert so == (idx + 15) & ~15 and so + sl <= len(blob)
+    if core:                                # 20.21.2: the kit, then the strikes
+        ko, kl = ents[K_KIT]
+        import os88pdkit
+        assert ko == (idx + 15) & ~15 and blob[ko:ko + kl] == os88pdkit.build_kit(), "the kit"
+        assert ko + kl <= INDEX_MAX + os88pdkit.KIT_MAX, "the primary reads INDEX_MAX + KIT_MAX"
+        assert so == (ko + kl + 15) & ~15 and so + sl <= len(blob)
+    else:
+        assert so == (idx + 15) & ~15 and so + sl <= len(blob)
     n = struct.unpack_from("<H", blob, D + 6)[0]
     assert blob[D + 8 + 16 * n:D + 12 + 16 * n] == b"PDFX"
     wo, no = struct.unpack_from("<HH", blob, D + 12 + 16 * n)
-    core = not a.extra
     sizes = CORE_SIZES if core else [x for x in SIZES if x not in CORE_SIZES]
     if core:
         assert (D + wo, len(build_widths())) == ents[K_WIDTHS], "widths"

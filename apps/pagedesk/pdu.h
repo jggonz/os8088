@@ -50,10 +50,16 @@
 
 /* --- metrics (20.6.4) ----------------------------------------------------- */
 #define PDU_CW       8          /* the kernel's 8x8 cell */
-#define PDU_BAR_F    16         /* a FULL/MID bar row */
+#define PDU_BAR_F    16         /* the first build's bar row: the empty view's card */
+#define PDU_BAR1_F   24         /* 20.21.4: the file bar (FULL/MID) */
+#define PDU_BAR2_F   22         /* ...and the mode bar */
+#define PDU_BTN_H    20         /* a raised button, either bar */
 #define PDU_BAR_C    12         /* the COMPACT combined bar */
-#define PDU_STAT_F   12         /* the status line */
+#define PDU_STAT_F   14         /* the status line (20.21.8) */
 #define PDU_STAT_C   10
+#define PDU_SIDE_HEAD 26        /* the Pages panel's tab row (20.21.6) */
+#define PDU_SIDE_FOOT 24        /* ...and its foot: "N pages" and put away */
+#define PDU_NOTE_HEAD 50        /* Notes & edits: the title and the filter (20.21.7) */
 #define PDU_SIDE_W   136        /* Pages/Outline sidebar, a multiple of 8 */
 #define PDU_NOTE_W   160        /* Notes & edits, a multiple of 8 */
 #define PDU_SBAR_W   16         /* the canvas's vertical bar */
@@ -105,9 +111,10 @@
 #define C_PANEL_NT  40          /* COMPACT: the notes popover */
 #define C_EV_OPEN   41          /* the empty view's two buttons */
 #define C_EV_SAMPLE 42
-#define C_NCTLID    43
+#define C_PGOF      43          /* 20.21.1: "of 12" beside the page field */
+#define C_NCTLID    44
 
-#define PDU_MAXCTL  40          /* rects laid out at once */
+#define PDU_MAXCTL  48          /* rects laid out at once (separators too) */
 
 /* control flags, per laid-out control */
 #define CF_FIELD    1           /* drawn as a field (sunken), not a button */
@@ -115,6 +122,12 @@
 #define CF_BAR2     4           /* on the mode bar */
 #define CF_PANEL    8           /* on a panel */
 #define CF_EMPTY    16          /* on the empty view */
+#define CF_SEP      32          /* 20.21.4: a group's etched rule (id C_NONE) */
+#define CF_FLAT     64          /* a tool: no frame until it is the active one */
+#define CF_ICON     128         /* a picture leads the caption (with the kit) */
+#define CF_NOCAP    256         /* ...and stands alone: no caption */
+#define CF_DROP     512         /* the caption ends in the down triangle */
+#define CF_LABEL    1024        /* plain text on the ground, not a control */
 
 struct pdu_ctl {
     int id;

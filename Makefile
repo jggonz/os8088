@@ -18524,7 +18524,7 @@ $(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
 # so every one of them is a prerequisite or an edit rebuilds nothing
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
           $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h $(PDDIR)/pdovlrecov.c   # pages, recov
-PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
+PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc $(PDDIR)/pdkit.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
           apps/weave/wfetch.inc apps/os88ui.inc
@@ -18533,9 +18533,9 @@ $(PDMATHSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.pdmath-stub $(BUILD)/.pdmath-real
 	@touch $@
 
-$(BUILD)/pagedesk.raw.asm: $(PDCSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+$(BUILD)/pagedesk.raw.asm: $(PDCSRC) $(BUILD)/pdkit.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
-		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDDIR) \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDDIR) -I $(BUILD) \
 		$(PDDIR)/pagedesk.c -o $@
 
 $(BUILD)/pagedesk.gen.asm: $(BUILD)/pagedesk.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
@@ -21786,8 +21786,14 @@ PD_ART_INC   := $(BUILD)/pdart_appicon.inc
 PD_FONT_LIC  := apps/pagedesk/fonts/LICENSES.txt apps/pagedesk/fonts/OFL-Liberation.txt \
                 apps/pagedesk/fonts/AUTHORS-Liberation.txt apps/pagedesk/fonts/AFM-NOTICE.txt
 PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
-                $(wildcard apps/pagedesk/art/*.art) $(PD_FONT_LIC) \
-                tools/os88pdfont.py tools/os88pdart.py
+                $(wildcard apps/pagedesk/art/*.art) apps/pagedesk/art/face.kit $(PD_FONT_LIC) \
+                tools/os88pdfont.py tools/os88pdart.py tools/os88pdkit.py
+
+# the face kit's names for the C (PAGEDESK-SPEC 20.21.2): the icons in
+# art/face.kit's order. --selfcheck holds the kit to its own format first
+$(BUILD)/pdkit.h: apps/pagedesk/art/face.kit tools/os88pdkit.py tools/os88pdfont.py \
+                  $(wildcard apps/pagedesk/fonts/mono-*-1[02].t88) | $(BUILD)
+	python3 tools/os88pdkit.py --selfcheck --header $@
 
 $(PD_RES_BIN): $(PD_RES_SRC)
 	@mkdir -p $(BUILD)

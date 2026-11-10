@@ -49,13 +49,18 @@ static void pdu_th_reset(void)
 }
 
 /* the list area inside the sidebar */
+/* the list well inside the sidebar (20.21.6): between the tab row and the
+ * foot, its sunken frame on these edges */
 static void pdu_side_list(struct os88_rect *o)
 {
     o->x1 = pdu_L.side.x1 + 4;
-    o->x2 = pdu_L.side.x2 - 4;
-    o->y1 = pdu_L.side.y1 + PDU_BAR_F + 2;
-    o->y2 = pdu_L.side.y2 - PDU_BAR_F;
+    o->x2 = pdu_L.side.x2 - 5;
+    o->y1 = pdu_L.side.y1 + PDU_SIDE_HEAD;
+    o->y2 = pdu_L.side.y2 - PDU_SIDE_FOOT;
 }
+
+#define PDU_CELL_P  (PDU_CELL_H + 20)   /* a cell, its number and the gap */
+static struct os88_rect pdu_cr;
 
 static int pdu_side_rows(void)
 {
@@ -63,7 +68,7 @@ static int pdu_side_rows(void)
     int n;
     o = &pdu_tr;
     pdu_side_list(o);
-    n = (o->y2 - o->y1 + 1 - 4) / (PDU_CELL_H + 12);
+    n = (o->y2 - o->y1 + 1 - 6) / PDU_CELL_P;
     return n > PDU_TH_SLOTS / 2 ? PDU_TH_SLOTS / 2 : n;     /* eight cells */
 }
 
@@ -76,11 +81,47 @@ static int pdu_cell(int k, struct os88_rect *r)
     pdu_side_list(o);
     row = k / 2;
     col = k % 2;
-    r->x1 = o->x1 + 4 + col * (PDU_CELL_W + 8);
+    r->x1 = o->x1 + 5 + col * (PDU_CELL_W + 8);
     r->x2 = r->x1 + PDU_CELL_W - 1;
-    r->y1 = o->y1 + 4 + row * (PDU_CELL_H + 12);
+    r->y1 = o->y1 + 5 + row * PDU_CELL_P;
     r->y2 = r->y1 + PDU_CELL_H - 1;
-    return r->y2 + 10 <= o->y2;
+    return r->y2 + 16 <= o->y2;
+}
+
+/* the cell's number under it (20.21.6): black on the panel's ground, or
+ * the current page's in a teal box with white ink - the strips either side
+ * of the box are the ground, so no pixel is written twice */
+static void pdu_cell_num(int act)
+{
+    int n, w, bx, y, f, g;
+    f = PK_CAP;
+    g = pdu_mono ? OS88_WHITE : pdu_cbar;
+    n = os88_strlen(pdu_num);
+    y = pdu_cr.y2 + 4;
+    if (!act) {
+        w = n * pk_adv(f);
+        if (pk_begin(PDU_CELL_W, pk_rows(f) + 2, pdu_cr.x1)) {
+            pk_text((PDU_CELL_W - w) / 2, 1, pdu_num, f);
+            pdu_kput(pdu_cr.x1, y, OS88_BLACK, g, 0);
+        }
+        return;
+    }
+    w = n * pk_adv(f) + 8;
+    bx = pdu_cr.x1 + (PDU_CELL_W - w) / 2;
+    pdu_fill(pdu_cr.x1, y, bx - 1, y + pk_rows(f) + 1, g);
+    pdu_fill(bx + w, y, pdu_cr.x2, y + pk_rows(f) + 1, g);
+    if (pk_begin(w, pk_rows(f) + 2, bx)) {
+        pk_text(4, 1, pdu_num, f);
+        pdu_kput(bx, y, OS88_WHITE, pdu_cact, 0);
+    }
+}
+
+/* the current page's ring, two pixels outside the cell's shadow */
+static void pdu_cell_ring(int act)
+{
+    os88_set_color(act ? pdu_cact : (pdu_mono ? OS88_WHITE : pdu_cbar));
+    os88_gfx_frame(pdu_cr.x1 - 3, pdu_cr.y1 - 3, pdu_cr.x2 + 3, pdu_cr.y2 + 3);
+    os88_gfx_frame(pdu_cr.x1 - 2, pdu_cr.y1 - 2, pdu_cr.x2 + 2, pdu_cr.y2 + 2);
 }
 
 /* the slot holding page pg's picture: -1 none yet, -2 it cannot be drawn */
@@ -96,7 +137,6 @@ static int pdu_th_find(int pg)
     return -1;
 }
 
-static struct os88_rect pdu_cr;
 static void pdu_cell_paint(int k)
 {
     int pg, act, n, slot;
@@ -121,14 +161,14 @@ static void pdu_cell_paint(int k)
         os88_font_run(pdu_cr.x1 + (PDU_CELL_W - 24) / 2, pdu_cr.y1 + 32,
                       slot == -2 ? " - " : "...", OS88_BLACK, OS88_WHITE);
     }
-    if (act)                            /* the current page: a heavy frame */
-        os88_gfx_frame(pdu_cr.x1 - 2, pdu_cr.y1 - 2, pdu_cr.x2 + 2,
-                       pdu_cr.y2 + 2);
+    os88_set_color(pdu_clo);            /* a one-pixel shadow (20.21.6) */
+    os88_gfx_vline(pdu_cr.x2 + 1, pdu_cr.y1 + 1, pdu_cr.y2 + 1);
+    os88_gfx_hline(pdu_cr.x1 + 1, pdu_cr.x2, pdu_cr.y2 + 1);
+    if (act)                            /* the current page: the teal ring */
+        pdu_cell_ring(1);
     os88_utoa(pg + 1, pdu_num);
-    n = os88_strlen(pdu_num);
-    os88_font_run(pdu_cr.x1 + (PDU_CELL_W - n * PDU_CW) / 2, pdu_cr.y2 + 3,
-                  pdu_num, act ? OS88_WHITE : OS88_BLACK,
-                  act ? pdu_cact : pdu_cbar);
+    n = 0;
+    pdu_cell_num(act);
 }
 
 static void pdu_side_paint(void)
@@ -150,12 +190,15 @@ static void pdu_side_paint(void)
     pdu_cground = -1;
     o = &pdu_tr;
     pdu_side_list(o);
+    pdu_sunken(o->x1, o->y1, o->x2, o->y2);   /* the list's well (20.21.6) */
+    o->x1++;
+    o->y1++;
+    o->x2--;
+    o->y2--;
     pdu_fill(o->x1, o->y1, o->x2, o->y2, pdu_mono ? OS88_WHITE : pdu_cbar);
-    os88_set_color(OS88_BLACK);
-    os88_gfx_frame(o->x1, o->y1, o->x2, o->y2);
     if (pdu_doc != D_OPEN) {
-        os88_font_run(o->x1 + 4, o->y1 + 6, "No document", OS88_BLACK,
-                      pdu_mono ? OS88_WHITE : pdu_cbar);
+        pdu_ptext(o->x1 + 4, o->y1 + 6, o->x2 - o->x1 - 7, "No document",
+                  PK_TXT, OS88_BLACK, pdu_mono ? OS88_WHITE : pdu_cbar);
     } else if (pdu_sbtab == 0) {
         rows = pdu_side_rows();
         for (k = 0; k < rows * 2; k++)
@@ -163,21 +206,22 @@ static void pdu_side_paint(void)
         pdu_thwant = 1;
         pdu_kick();                     /* the pictures still owed */
     } else if (!(pdu_xopen.flags & PDO_OUTLINE)) {
-        os88_font_run(o->x1 + 4, o->y1 + 6, "No outline", OS88_BLACK,
-                      pdu_mono ? OS88_WHITE : pdu_cbar);
+        pdu_ptext(o->x1 + 4, o->y1 + 6, o->x2 - o->x1 - 7, "No outline",
+                  PK_TXT, OS88_BLACK, pdu_mono ? OS88_WHITE : pdu_cbar);
     } else if (pdu_oln <= 0) {
-        os88_font_run(o->x1 + 4, o->y1 + 6, pdu_oln ? "No entries" : "Reading...",
-                      OS88_BLACK, pdu_mono ? OS88_WHITE : pdu_cbar);
+        pdu_ptext(o->x1 + 4, o->y1 + 6, o->x2 - o->x1 - 7,
+                  pdu_oln ? "No entries" : "Reading...",
+                  PK_TXT, OS88_BLACK, pdu_mono ? OS88_WHITE : pdu_cbar);
         pdu_kick();
     } else
         ovl_ol_paint(o);
-    /* the bottom row: "12 pages" beside the hide button */
+    /* the foot: "12 pages" beside the hide button */
     if (pdu_doc == D_OPEN) {
         os88_utoa(pdu_npages, pdu_line);
         pdu_cat(pdu_line, pdu_npages == 1 ? " page" : " pages",
                 sizeof(pdu_line));
-        os88_font_run(s->x1 + 4, s->y2 - PDU_BAR_F + 5, pdu_line, OS88_BLACK,
-                      pdu_cbar);
+        pdu_ptext(s->x1 + 6, s->y2 - PDU_SIDE_FOOT + 8, 80, pdu_line, PK_CAP,
+                  OS88_BLACK, pdu_cbar);
     }
 }
 
@@ -187,18 +231,11 @@ static void pdu_side_paint(void)
  * screenfuls, which is a new list and is painted as one. Lock held. */
 static void pdu_cell_mark(int k, int act)
 {
-    int n, g;
     if (k < 0 || pdu_sidetop + k >= (int)pdu_npages || !pdu_cell(k, &pdu_cr))
         return;
-    g = pdu_mono ? OS88_WHITE : pdu_cbar;
-    os88_set_color(act ? OS88_BLACK : g);
-    os88_gfx_frame(pdu_cr.x1 - 2, pdu_cr.y1 - 2, pdu_cr.x2 + 2,
-                   pdu_cr.y2 + 2);
+    pdu_cell_ring(act);
     os88_utoa(pdu_sidetop + k + 1, pdu_num);
-    n = os88_strlen(pdu_num);
-    os88_font_run(pdu_cr.x1 + (PDU_CELL_W - n * PDU_CW) / 2, pdu_cr.y2 + 3,
-                  pdu_num, act ? OS88_WHITE : OS88_BLACK,
-                  act ? pdu_cact : pdu_cbar);
+    pdu_cell_num(act);
 }
 
 static void pdu_side_page(int old)

@@ -36,6 +36,21 @@ void     pdu_sbmove(int *blk, int oldpos);
 int      pdu_sbhit(int *blk, int x, int y);
 /* apps/weave/wfetch.inc */
 int      w_partfetch(int part);
+/* pdkit.inc: the face's composer (PAGEDESK-SPEC 20.21.3) */
+#include "pdkit.h"
+void     pk_init(unsigned kitseg, unsigned bandseg);
+int      pk_adv(int f);
+int      pk_rows(int f);
+int      pk_haskit(void);
+int      pk_begin(int w, int h, int x);
+int      pk_text(int x, int y, const char *s, int f);
+void     pk_icon(int x, int y, int k);
+void     pk_hline(int x1, int x2, int y);
+int      pk_pen(int y, int ink, int paper, int grey);
+void     pk_pen0(void);
+extern unsigned pk_bseg, pk_st, pk_w, pk_h;    /* pdkit.inc: the band */
+void     pk_mode(int mono);
+static void pdu_kput(int x, int y, int ink, int paper, int grey);
 
 /* ============================================================================
  * THE STATE - all of it, file scope, one instance's

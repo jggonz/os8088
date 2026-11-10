@@ -13,6 +13,8 @@
 #ifndef PD_HOST
 
 static void ovl_nt_box(struct os88_rect *r, int paper, int ink, const char *s);
+static int pdu_nt_bico, pdu_nt_bdef;    /* pdovlnotes.c's ovl_nt_box: the next
+                                         * box's picture, and "the default" */
 static void ovl_nt_pad(const char *s, int cols);
 static void ovl_nt_redraw(const struct pd_rect *r);
 
@@ -134,6 +136,21 @@ static void ovl_nt_ictl(int k)
         paper = pdu_cact;
         ink = OS88_WHITE;
     }
+    if (pdu_nt_irh >= 16) {             /* the panel's look (20.21.7) */
+        if (k >= PDU_NI_AL && k <= PDU_NI_AL + 2) {
+            pdu_nt_bico = PK_I_ALIGNL + 1 + (k - PDU_NI_AL == 1 ? 2
+                          : k - PDU_NI_AL == 2 ? 1 : 0);
+            lab = pk_haskit() ? "" : lab;
+        } else if (k == PDU_NI_FONT) {
+            os88_strcpy(pdu_line + 40, lab, 16);
+            pdu_cat(pdu_line + 40, " \x1F", 16);
+            lab = pdu_line + 40;
+        } else if (k == PDU_NI_DONE) {
+            paper = pdu_cact;           /* the default: raised in teal */
+            ink = OS88_WHITE;
+            pdu_nt_bdef = 1;
+        }
+    }
     ovl_nt_box(r, paper, ink, lab);
     if (k == PDU_NI_SZM) {              /* the value between - and + */
         os88_strcpy(pdu_line + 40, " ", 4);
@@ -141,32 +158,35 @@ static void ovl_nt_ictl(int k)
         pdu_cat(pdu_line + 40, pdu_num, 12);
         pdu_cat(pdu_line + 40, " pt", 12);
         ovl_nt_pad(pdu_line + 40, 6);
-        os88_font_run(pdu_nt_ir.x1 + 9 * PDU_CW,
-                      r->y1 + (r->y2 - r->y1 + 1 - 8) / 2, pdu_line,
-                      OS88_BLACK, pdu_nt_ipaper);
+        pdu_ptext(pdu_nt_ir.x1 + 9 * PDU_CW,
+                  r->y1 + (r->y2 - r->y1 + 1 - pk_rows(PK_CAP)) / 2,
+                  6 * PDU_CW, pdu_line, PK_CAP, OS88_BLACK, pdu_nt_ipaper);
     }
 }
 
 static int ovl_nt_ipaint(struct os88_rect *o, int rh)
 {
-    int k, y;
+    int k, y, f;
     static const char *lab[4] = { "Font ", "Size ", "Color", "Align" };
     static const char lrow[4] = { 1, 2, 4, 5 };
 
     pdu_nt_irh = rh;
-    pdu_nt_ir.x1 = o->x1 + (rh == 16 ? 2 : 0);
-    pdu_nt_ir.y1 = o->y1 + (rh == 16 ? 2 : 0);
-    pdu_nt_ipaper = rh == 16 ? pdu_cbar : OS88_WHITE;
+    pdu_nt_ir.x1 = o->x1 + (rh >= 16 ? 2 : 0);
+    pdu_nt_ir.y1 = o->y1 + (rh >= 16 ? 2 : 0);
+    pdu_nt_ipaper = rh >= 16 ? pdu_cbar : OS88_WHITE;
+    f = rh >= 16 ? PK_CAP : PK_SYS;
     if (!ovl_nt_iload()) {
-        os88_font_run(pdu_nt_ir.x1, pdu_nt_ir.y1 + 4, "No text box",
-                      OS88_BLACK, pdu_nt_ipaper);
+        pdu_ptext(pdu_nt_ir.x1, pdu_nt_ir.y1 + 4, 15 * PDU_CW, "No text box",
+                  f, OS88_BLACK, pdu_nt_ipaper);
         return 1;
     }
-    os88_font_run(pdu_nt_ir.x1, pdu_nt_ir.y1 + (rh - 8) / 2,
-                  "Text properties", OS88_BLACK, pdu_nt_ipaper);
+    pdu_ptext(pdu_nt_ir.x1, pdu_nt_ir.y1 + (rh - pk_rows(f)) / 2, 18 * PDU_CW,
+              "Text properties", rh >= 16 ? PK_TTL : PK_SYS, OS88_BLACK,
+              pdu_nt_ipaper);
     for (k = 0; k < 4; k++) {
-        y = pdu_nt_ir.y1 + lrow[k] * rh + (rh - 3 - 8) / 2;
-        os88_font_run(pdu_nt_ir.x1, y, lab[k], OS88_BLACK, pdu_nt_ipaper);
+        y = pdu_nt_ir.y1 + lrow[k] * rh + (rh - 3 - pk_rows(f)) / 2;
+        pdu_ptext(pdu_nt_ir.x1, y, 5 * PDU_CW, lab[k], f, OS88_BLACK,
+                  pdu_nt_ipaper);
     }
     for (k = 0; k < PDU_NI_N; k++)
         ovl_nt_ictl(k);

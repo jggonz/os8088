@@ -32,16 +32,27 @@ static void pdp_view(void)
         pdu_zoom = 100;
 }
 
-/* the status line's "Page drawn.", except that a form's note (20.18.4) is
+/* what the status line says when a page is drawn: the changes (20.21.8,
+ * the first build's "Page drawn."), except that a form's note (20.18.4) is
  * said again when the open's first render ends, whatever its length: a long
- * one's "Page drawn." or a slow one's progress line would otherwise bury it */
+ * one's line or a slow one's progress line would otherwise bury it */
+static char pdp_chgs[24];
 static const char *pdp_done(void)
 {
+    int n;
     if (pdp_form) {
         pdp_form = 0;
         return pdp_formmsg;
     }
-    return "Page drawn.";
+    if (!pdu_dirty())
+        return "No changes";
+    n = pdu_ed_count();
+    if (n <= 0)
+        return "Unsaved changes";
+    os88_utoa(n, pdp_chgs);
+    pdu_cat(pdp_chgs, n == 1 ? " change \xFA Unsaved" : " changes \xFA Unsaved",
+            sizeof(pdp_chgs));
+    return pdp_chgs;
 }
 
 /* the popover is going (pdu_pop_shut): what changed is owed to the wake */

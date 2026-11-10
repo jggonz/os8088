@@ -24,8 +24,8 @@
 #define PDU_NT_REP   12                 /* review replies kept for the state */
 #define PDU_NT_SBASE 1000               /* item ids >= this are source ones */
 #define PDU_NT_SCAN  32                 /* /Annots elements read a page */
-#define PDU_NT_CARD  36                 /* a card's height ... */
-#define PDU_NT_PITCH 38                 /* ... and its pitch */
+#define PDU_NT_CARD  46                 /* a card's height (20.21.7) ... */
+#define PDU_NT_PITCH 50                 /* ... and its pitch */
 #define PDU_NT_LINE  12                 /* a COMPACT row */
 #define PDU_NT_MAXTXT 1024              /* 13.1: a record's text */
 #define PDU_NT_ROWS  12                 /* rows whose last picture is kept */
@@ -104,7 +104,7 @@ static int pdu_nt_nocommit;             /* Esc: let go of what was typed */
 static unsigned pdu_nt_ppg;
 static struct pd_rect pdu_nt_prc;
 
-static const char *pdu_nt_kname[10] = { "?", "Note", "Mark", "Area", "Text",
+static const char *pdu_nt_kname[10] = { "?", "Note", "Highlight", "Area", "Text",
                                         "Ink", "Line", "Rect", "Oval",
                                         "Sign" };
 
@@ -278,8 +278,11 @@ static void pdu_notes_paint(void)
     pdu_fill(n->x1 + 1, n->y1, n->x2, n->y2, pdu_cbar);
     os88_set_color(OS88_BLACK);
     os88_gfx_vline(n->x1, n->y1, n->y2);
-    os88_font_run(n->x1 + 4, n->y1 + 5, "Notes & edits", OS88_BLACK,
-                  pdu_cbar);
+    /* the title in the kit's 12 px face, ruled off under it (20.21.7) */
+    pdu_ptext(n->x1 + 6, n->y1 + 6, n->x2 - n->x1 - 32, "Notes & edits",
+              PK_TTL, OS88_BLACK, pdu_cbar);
+    os88_set_color(pdu_clo);
+    os88_gfx_hline(n->x1 + 4, n->x2 - 4, n->y1 + 24);
     pdu_cground = pdu_cbar;
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].id == C_NP_CLOSE || pdu_L.ctl[i].id == C_NP_FILTER)
@@ -288,8 +291,8 @@ static void pdu_notes_paint(void)
     pdu_nt_rok = 0;                     /* the list's ground was just filled */
     pdu_nt_tpon = -1;
     if (pdu_doc != D_OPEN)
-        os88_font_run(n->x1 + 8, n->y1 + 2 * PDU_BAR_F + 10, "No document",
-                      OS88_BLACK, pdu_cbar);
+        pdu_ptext(n->x1 + 8, n->y1 + PDU_NOTE_HEAD + 6, n->x2 - n->x1 - 12,
+                  "No document", PK_TXT, OS88_BLACK, pdu_cbar);
     else
         ovl_nt_body();
 }
@@ -380,7 +383,7 @@ static int pdu_nt_click(int x, int y)
 {
     if (pdu_doc != D_OPEN || pdu_pop != P_NONE || !PDU_NT_PANEL()
         || !pdu_inr(&pdu_L.notes, x, y)
-        || y < pdu_L.notes.y1 + 2 * PDU_BAR_F + 4)
+        || y < pdu_L.notes.y1 + PDU_NOTE_HEAD)
         return 0;
     return ovl_nt_click(x, y);
 }

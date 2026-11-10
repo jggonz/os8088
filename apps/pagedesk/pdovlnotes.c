@@ -35,26 +35,50 @@ static void ovl_nt_pad(const char *s, int cols)
     pdu_line[cols] = 0;
 }
 
-/* a labelled button: the frame, the slabs round the label and the label in
- * one font_run - every pixel once, so a toggled state does not flash the
- * caption (20.6.4's rule, PERFORMANCE.md rule 2) */
+/* each kind's picture on its card (20.21.7) */
+static const unsigned char pdu_nt_kico[10] = { PK_I_NOTE, PK_I_NOTE,
+    PK_I_HIGHLIGHT, PK_I_MARK, PK_I_TEXT, PK_I_DRAW, PK_I_LINE, PK_I_RECT,
+    PK_I_ELLIPSE, PK_I_SIGN };
+
+/* a labelled button (20.21.7): raised - its frame, the bevel and its inside
+ * as ONE band (pdudraw.c's pdu_bandcap) - every pixel once, so a toggled
+ * state does not flash the caption. paper == the active colour draws it
+ * pressed; a box under 14 rows (COMPACT's popover) is the plain look. The
+ * picture for the next box, PK_I_* + 1, is pdu_nt_bico, used once */
 static void ovl_nt_box(struct os88_rect *r, int paper, int ink, const char *s)
 {
-    int lx, ly, lx2;
-    lx = r->x1 + (r->x2 - r->x1 + 1 - os88_strlen(s) * PDU_CW) / 2;
-    ly = r->y1 + (r->y2 - r->y1 + 1 - 8) / 2;
-    lx2 = lx + os88_strlen(s) * PDU_CW;
+    static int in, act, h, ico;         /* static: see ovl_nt_row */
+    h = r->y2 - r->y1 + 1;
+    act = paper == pdu_cact && !pdu_nt_bdef;
+    pdu_nt_bdef = 0;
+    in = h >= 14 ? 2 : 1;
+    ico = pdu_kit_ico(pdu_nt_bico);
+    pdu_nt_bico = 0;
     os88_set_color(OS88_BLACK);
     os88_gfx_frame(r->x1, r->y1, r->x2, r->y2);
-    if (ly > r->y1 + 1)
-        pdu_fill(r->x1 + 1, r->y1 + 1, r->x2 - 1, ly - 1, paper);
-    if (ly + 8 < r->y2)
-        pdu_fill(r->x1 + 1, ly + 8, r->x2 - 1, r->y2 - 1, paper);
-    if (lx > r->x1 + 1)
-        pdu_fill(r->x1 + 1, ly, lx - 1, ly + 7, paper);
-    if (lx2 < r->x2)
-        pdu_fill(lx2, ly, r->x2 - 1, ly + 7, paper);
-    os88_font_run(lx, ly, s, ink, paper);
+    if (in == 2) {
+        if (act)
+            pdu_bevel(r->x1, r->y1, r->x2, r->y2, pdu_clo, paper);
+        else {
+            pdu_bevel(r->x1, r->y1, r->x2, r->y2, pdu_chi, pdu_clo);
+            if (paper == OS88_WHITE && in == 2)
+                paper = pdu_cbar;       /* a raised face is the bar's grey */
+        }
+    }
+    pdu_bc_x = r->x1 + in;
+    pdu_bc_y = r->y1 + in;
+    pdu_bc_w = r->x2 - r->x1 + 1 - 2 * in;
+    pdu_bc_h = h - 2 * in;
+    pdu_bc_cut = s;
+    pdu_bc_fl = 0;
+    pdu_bc_ico = ico;
+    pdu_bc_ink = ink;
+    pdu_bc_pap = paper;
+    pdu_bc_dis = ink == OS88_DGRAY;
+    pdu_bc_foc = 0;
+    pdu_bc_dxy = 0;
+    pdu_bc_f = in == 2 ? PK_CAP : PK_SYS;
+    pdu_bandcap();
 }
 
 /* the list's rect in the panel: under the header */
@@ -62,7 +86,7 @@ static void ovl_nt_plist(struct os88_rect *o)
 {
     o->x1 = pdu_L.notes.x1 + 4;
     o->x2 = pdu_L.notes.x2 - 4;
-    o->y1 = pdu_L.notes.y1 + 2 * PDU_BAR_F + 4;
+    o->y1 = pdu_L.notes.y1 + PDU_NOTE_HEAD;
     o->y2 = pdu_L.notes.y2 - 4;
 }
 
@@ -77,7 +101,7 @@ static void ovl_nt_geom(int card)
     pdu_nt_y0 = o->y1 + (card ? 2 : 0);
     pdu_nt_tx = o->x1 + (card ? 4 : 0);
     pdu_nt_cols = card ? 18 : (o->x2 - o->x1 + 1) / PDU_CW;
-    pdu_nt_ny = card ? o->y2 - 29 : o->y2 - PDU_NT_LINE + 1;
+    pdu_nt_ny = card ? o->y2 - 33 : o->y2 - PDU_NT_LINE + 1;
     avail = pdu_nt_ny - pdu_nt_y0 - (card ? 2 : 0);
     pdu_nt_vis = (avail + (card ? 2 : 0)) / h;
     if (pdu_nt_vis < 1)
@@ -139,17 +163,19 @@ static void ovl_nt_strip(void)
     if (b == pdu_nt_ssig)
         return;
     pdu_nt_ssig = b;
-    os88_font_run(pdu_nt_tx, pdu_nt_ny + 2, pdu_line, OS88_BLACK,
-                  pdu_nt_cardst ? pdu_cbar : OS88_WHITE);
+    pdu_ptext(pdu_nt_tx, pdu_nt_ny + 2, pdu_nt_cols * PDU_CW, pdu_line,
+              pdu_nt_cardst ? PK_CAP : PK_SYS, OS88_BLACK,
+              pdu_nt_cardst ? pdu_cbar : OS88_WHITE);
 }
 
 /* paint row r: item id (an edit's record in pdu_nt_e), or a blank slot */
 static void ovl_nt_row(int r, int id, int sel)
 {
-    struct os88_rect *o;
-    int x1, y1, ink, paper, kind, page, rep, done, n, btn;
-    const char *word;
-    char *t;
+    /* static: this is the bottom of the Notes list's chain, D22's 384 */
+    static struct os88_rect *o;
+    static int x1, y1, ink, paper, kind, page, rep, done, n, btn;
+    static const char *word;
+    static char *t;
 
     o = &pdu_nt_o;
     x1 = o->x1 + 3;
@@ -199,9 +225,9 @@ static void ovl_nt_row(int r, int id, int sel)
         word = "Resolved";
     paper = sel ? pdu_cact : OS88_WHITE;
     ink = sel ? OS88_WHITE : OS88_BLACK;
-    /* the title in pdu_nt_w: "Note - Page 3" on a card, "Note p3" on a line */
+    /* the title in pdu_nt_w: "Note . Page 3" on a card, "Note p3" on a line */
     os88_strcpy(pdu_nt_w, rep ? "Review" : pdu_nt_kname[kind], 48);
-    pdu_cat(pdu_nt_w, pdu_nt_cardst ? " - Page " : " p", 48);
+    pdu_cat(pdu_nt_w, pdu_nt_cardst ? " \xFA Page " : " p", 48);
     os88_utoa(page + 1, pdu_num);
     pdu_cat(pdu_nt_w, pdu_num, 48);
     btn = kind == PDA_NOTE && !rep && pdu_npall != 2 ? 2 + done : 0;
@@ -221,30 +247,30 @@ static void ovl_nt_row(int r, int id, int sel)
         return;
     }
 
-    /* the card: 146 x 36, interior 18 cells wide, so no slab beside a row.
-     * title / preview / a 12-row band: a status word and, on a note, the
-     * button (72 wide, the band's right half) */
-    os88_set_color(OS88_BLACK);
+    /* the card (20.21.7): 146 x 46, a two-pixel frame (black and the
+     * paper, or both teal when it is the selected one), then two bands -
+     * the picture, the title and the text; the status word - and, on a
+     * note, Resolve as a raised button in the lower right */
+    os88_set_color(sel ? pdu_cact : OS88_BLACK);
     os88_gfx_frame(x1, y1, x1 + 145, y1 + PDU_NT_CARD - 1);
-    pdu_fill(x1 + 1, y1 + 1, x1 + 144, y1 + 2, paper);
-    ovl_nt_pad(pdu_nt_w, 18);
-    os88_font_run(x1 + 1, y1 + 3, pdu_line, ink, paper);
-    pdu_fill(x1 + 1, y1 + 11, x1 + 144, y1 + 12, paper);
-    ovl_nt_pad(t, 18);
-    os88_font_run(x1 + 1, y1 + 13, pdu_line, ink, paper);
-    pdu_fill(x1 + 1, y1 + 21, x1 + 144, y1 + 22, paper);
-    pdu_fill(x1 + 1, y1 + 23, x1 + 72, y1 + 24, paper);
-    ovl_nt_pad(word, 9);
-    os88_font_run(x1 + 1, y1 + 25, pdu_line, ink, paper);
-    pdu_fill(x1 + 1, y1 + 33, x1 + 72, y1 + 34, paper);
-    pdu_nt_cr.x1 = x1 + 73;
-    pdu_nt_cr.x2 = x1 + 144;
-    pdu_nt_cr.y1 = y1 + 23;
-    pdu_nt_cr.y2 = y1 + 34;
-    if (btn)
-        ovl_nt_box(&pdu_nt_cr, paper, ink, done ? "Reopen" : "Resolve");
-    else
-        pdu_fill(pdu_nt_cr.x1, pdu_nt_cr.y1, pdu_nt_cr.x2, pdu_nt_cr.y2, paper);
+    os88_set_color(sel ? pdu_cact : OS88_WHITE);
+    os88_gfx_frame(x1 + 1, y1 + 1, x1 + 144, y1 + PDU_NT_CARD - 2);
+    if (pk_begin(142, 22, x1 + 2)) {
+        pk_icon(2, 3, pdu_nt_kico[kind]);
+        pk_text(21, 1, pdu_nt_w, PK_CAP);
+        pk_text(21, 12, t, PK_TXT);
+        pdu_kput(x1 + 2, y1 + 2, OS88_BLACK, OS88_WHITE, 0);
+    }
+    pdu_ptext(x1 + 2, y1 + 24, btn ? 68 : 142, word, PK_TXT, OS88_BLACK,
+              OS88_WHITE);
+    pdu_fill(x1 + 2, y1 + 34, x1 + (btn ? 69 : 143), y1 + 43, OS88_WHITE);
+    if (btn) {
+        pdu_nt_cr.x1 = x1 + 70;
+        pdu_nt_cr.x2 = x1 + 143;
+        pdu_nt_cr.y1 = y1 + 24;
+        pdu_nt_cr.y2 = y1 + 43;
+        ovl_nt_box(&pdu_nt_cr, pdu_cbar, OS88_BLACK, done ? "Reopen" : "Resolve");
+    }
 }
 
 /* rows first..last (the iterator walks once); the empty list says so */
@@ -267,19 +293,13 @@ static void ovl_nt_rows(int first, int last)
                           OS88_WHITE);
             return;
         }
-        id = pdu_cbar;
-        r = PDU_NT_CARD;
-        pdu_fill(pdu_nt_o.x1, pdu_nt_y0, pdu_nt_o.x2, pdu_nt_y0 + 5, id);
-        if (pdu_nt_tx > pdu_nt_o.x1)
-            pdu_fill(pdu_nt_o.x1, pdu_nt_y0 + 6, pdu_nt_tx - 1,
-                     pdu_nt_y0 + 13, id);
-        if (pdu_nt_tx + pdu_nt_cols * PDU_CW <= pdu_nt_o.x2)
-            pdu_fill(pdu_nt_tx + pdu_nt_cols * PDU_CW, pdu_nt_y0 + 6,
-                     pdu_nt_o.x2, pdu_nt_y0 + 13, id);
-        os88_font_run(pdu_nt_tx, pdu_nt_y0 + 6, pdu_line, OS88_BLACK, id);
-        if (r > 14)
-            pdu_fill(pdu_nt_o.x1, pdu_nt_y0 + 14, pdu_nt_o.x2,
-                     pdu_nt_y0 + r - 1, id);
+        id = pdu_cbar;                  /* one band the card's height */
+        if (pk_begin(pdu_nt_o.x2 - pdu_nt_o.x1 + 1, 24, pdu_nt_o.x1)) {
+            pk_text(pdu_nt_tx - pdu_nt_o.x1, 6, pdu_line, PK_TXT);
+            pdu_kput(pdu_nt_o.x1, pdu_nt_y0, OS88_BLACK, id, 0);
+        }
+        pdu_fill(pdu_nt_o.x1, pdu_nt_y0 + 24, pdu_nt_o.x2,
+                 pdu_nt_y0 + PDU_NT_CARD - 1, id);
         return;
     }
     ovl_nt_seek(pdu_nt_top + first);
@@ -302,13 +322,11 @@ static void ovl_nt_tpbtn(void)
     pdu_nt_tpon = on;
     pdu_nt_cr.x1 = o->x1 + 2;
     pdu_nt_cr.x2 = o->x2 - 2;
-    pdu_nt_cr.y1 = o->y2 - 15;
+    pdu_nt_cr.y1 = o->y2 - 19;
     pdu_nt_cr.y2 = o->y2 - 1;
-    if (!on)
-        os88_gfx_pen(1);
-    ovl_nt_box(&pdu_nt_cr, pdu_cbar, on || pdu_mono ? OS88_BLACK : OS88_DGRAY,
-               "Text properties >");
-    os88_gfx_pen(0);
+    pdu_nt_bico = PK_I_TEXT + 1;
+    ovl_nt_box(&pdu_nt_cr, pdu_cbar, on ? OS88_BLACK : OS88_DGRAY,
+               "Text properties \x10");
 }
 
 /* the whole list: rows, strip. Lock held. */
@@ -326,7 +344,7 @@ static int ovl_nt_body(void)
 {
     ovl_nt_plist(&pdu_nt_o);
     if (pdu_nt_insp)
-        return ovl_nt_ipaint(&pdu_nt_o, 16);
+        return ovl_nt_ipaint(&pdu_nt_o, 22);
     pdu_nt_srcwant();
     pdu_nt_cardst = 1;
     ovl_nt_listpaint();
@@ -560,8 +578,8 @@ static void ovl_nt_rowclick(int r, int x, int y, int popover)
         return;
     }
     /* the card's Resolve / Reopen button: the band's right 72 px */
-    if (pdu_npall != 2 && note && x >= pdu_nt_o.x1 + 3 + 73
-        && y >= pdu_nt_y0 + r * PDU_NT_PITCH + 23)
+    if (pdu_npall != 2 && note && x >= pdu_nt_o.x1 + 3 + 70
+        && y >= pdu_nt_y0 + r * PDU_NT_PITCH + 24)
         ovl_nt_resolve(id);
     else if (id == pdu_nt_sel && id < PDU_NT_SBASE) {   /* again: edit it */
         if (note)
