@@ -246,35 +246,34 @@ done:
  * (PDGX_F_TABLE) is looked up in the entry; any other is compiled again from its source and converted. */
 static pdw v_color(void)
 {
-    static struct pdgx_cs hdr;
     pdw node, row, i, k;
     static struct pd_fx rgb[3], t;
-    pd_fcopy_in(G.cseg, G.coff, &hdr, 16 + 480);
-    if (hdr.flags & PDGX_F_TABLE) {
-        k = (hdr.kind == PDGX_K_SEP || hdr.kind == PDGX_K_DEVN) ? 255 : 0;
+    pd_fcopy_in(G.cseg, G.coff, &R_cs, 16 + 480);
+    if (R_cs.flags & PDGX_F_TABLE) {
+        k = (R_cs.kind == PDGX_K_SEP || R_cs.kind == PDGX_K_DEVN) ? 255 : 0;
         if (G.ncomp) {
-            if (hdr.kind == PDGX_K_INDEXED) k = (pdw)pdm_fx_round(&G.comp[0]);
+            if (R_cs.kind == PDGX_K_INDEXED) k = (pdw)pdm_fx_round(&G.comp[0]);
             else { fx_i(&t, 255); fx_mul(&t, &t, &G.comp[0]); k = (pdw)pdm_fx_round(&t); }
             if (G.comp[0].hi < 0) k = 0;
             if (k > 255) k = 255;
         }
         pd_fcopy_in(G.cseg, (pdw)(G.coff + 496 + k * 3), G.rgb, 3);
-        G.rgb[3] = (hdr.flags & PDGX_F_NONE) ? 1 : 0;
+        G.rgb[3] = (R_cs.flags & PDGX_F_NONE) ? 1 : 0;
         G.ok = 1;
         return PDE_OK;
     }
-    G.objnum = hdr.srcobj; G.gen = hdr.srcgen; G.tlen = hdr.srclen;
+    G.objnum = R_cs.srcobj; G.gen = R_cs.srcgen; G.tlen = R_cs.srclen;
     gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
-    if (hdr.pad) {
-        if (hdr.srclen > 64) return PDE_GRAPHICS;
-        for (i = 0; i < hdr.srclen && i < 64; i++) gx_txt[i] = (char)hdr.src[i];
-        G.bpc = hdr.rsv[0];
-        node = gx_res_lookup(gx_txt, hdr.srclen);
+    if (R_cs.pad) {
+        if (R_cs.srclen > 64) return PDE_GRAPHICS;
+        for (i = 0; i < R_cs.srclen && i < 64; i++) gx_txt[i] = (char)R_cs.src[i];
+        G.bpc = R_cs.rsv[0];
+        node = gx_res_lookup(gx_txt, R_cs.srclen);
     }
     else if (G.objnum) node = gx_fetch_parse(G.objnum, G.gen);
     else {
-        for (i = 0; i < hdr.srclen && i < 480; i++) gx_tb[i] = (char)hdr.src[i];
-        node = gx_parse(gx_tb, hdr.srclen);
+        for (i = 0; i < R_cs.srclen && i < 480; i++) gx_tb[i] = (char)R_cs.src[i];
+        node = gx_parse(gx_tb, R_cs.srclen);
     }
     if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
     row = cs_first();

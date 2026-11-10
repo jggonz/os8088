@@ -327,9 +327,11 @@ static void fn_sample(const struct gxf *g, pdw lin, struct pd_fx *r)
     }
 }
 
-static struct pd_fx fe_st[FN_STACK];
-static pdb fe_bool[FN_STACK];
-static struct pd_fx fe_tmp[FN_STACK];
+/* the calculator's stacks overlay the text window gx_tb (900 of its 1,024 bytes): no text is needed once a function is
+ * compiled, and a function is evaluated within one verb after every compile */
+#define fe_st   ((struct pd_fx *)gx_tb)
+#define fe_tmp  ((struct pd_fx *)(gx_tb + FN_STACK * 4))
+#define fe_bool ((pdb *)(gx_tb + FN_STACK * 8))
 static struct pd_fx fe_x[8];
 
 static void fe_lerp(struct pd_fx *r, const struct pd_fx *a, const struct pd_fx *b, const struct pd_fx *f)

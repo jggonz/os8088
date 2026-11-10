@@ -573,7 +573,8 @@ static pdw sh_function_based(pdw d)
 }
 
 /* ---- the mesh bit reader ------------------------------------------------------- */
-static pdb sb_buf[512];
+/* the mesh reader's window overlays the second text window; the patch lattice rows the rest of it (the parse is over) */
+#define sb_buf ((pdb *)gx_tb2)
 static pdw sb_len, sb_pos, sb_bit, sb_eof;
 static int sb_getbit(void)
 {
@@ -728,9 +729,11 @@ static void pp_grid_fill(pdw tensor)
 }
 
 /* the grid evaluated on an n x n lattice, a row of points at a time (the bicubic Bernstein form, separable) */
-static fx pt_w[9][4];                         /* Bernstein weights at i / n */
-static fx pt_tx[4][9], pt_ty[4][9];           /* the rows of control points evaluated along v */
-static struct shv pt_a[9], pt_b[9];           /* two rows of the surface */
+#define pt_w  ((fx (*)[4])(gx_tb2 + 512))                 /* Bernstein weights at i / n: 144 bytes */
+#define pt_a  ((struct shv *)(gx_tb2 + 512 + 144))        /* two rows of the surface: 108 bytes each */
+#define pt_b  ((struct shv *)(gx_tb2 + 512 + 144 + 108))
+#define pt_tx ((fx (*)[9])gx_ov)                          /* the rows of control points evaluated along v: 144 bytes each */
+#define pt_ty ((fx (*)[9])(gx_ov + 144))
 static void pt_weights(pdw n)
 {
     static fx t, u, a, b;
