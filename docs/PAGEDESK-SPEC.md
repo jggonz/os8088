@@ -6645,10 +6645,10 @@ template bit, unknown-length segments of any type but the generic regions, AT pi
 more than one page, an intermediate region or a refinement larger than the workspace holds. Anything over a
 limit below answers `PDE_LIMIT` for that segment alone.
 
-**Workspace** is a RANGE (20.22.2's table): JBIG2 **want 64,000 bytes**, **min 13,000 for a page that streams** (one
-generic region and nothing else, no globals: the 12,288 context bytes and a row), about **58,000 for a scan with
+**Workspace** is a RANGE (20.22.2's table): JBIG2 **want 64,000 bytes**, **min 14,500 for a page that streams** (one
+generic region and nothing else, no globals: the 12,288 context bytes, the 2 KiB tables and a row), about **58,000 for a scan with
 text regions** (a ~200-symbol dictionary is ~24 KB of bitmaps, 29,184 of tables, a band of a few rows), and
-CCITT none. `jb_open` reads `g_wbytes` (what the shell was granted, at most 64,000 is used) and answers
+CCITT **2,048** (its two code-lookup tables live in the workspace so that PDXI's bss is smaller; JBIG2 MMR regions put the same tables at 3000, over the refinement contexts, and rebuild them at each MMR region). `jb_open` reads `g_wbytes` (what the shell was granted, at most 64,000 is used) and answers
 `PDE_LIMIT` when even the tables and a block of rows do not fit; the shell then draws the image's grey box with
 `PDF_INC_APPROX`, which is not a refusal. Below want, the band shrinks first (to a third of what is above the
 tables, never under one block of 2^s rows) and the symbol area gets the rest: content that no longer fits
@@ -6659,10 +6659,10 @@ target are pdmath's far movers over the shell's `g_wseg`:
 | offset | size | content |
 |---|---|---|
 | 0000 | 12,288 | generic-region contexts: a 4,096-entry hash (tags, states) for template 0, direct arrays for 1 to 3 |
-| 3000 | 8,192 | refinement contexts |
+| 3000 | 8,192 | refinement contexts (while an MMR region runs: the 2,048-byte CCITT tables) |
 | 5000 | 6,656 | the 13 integer decoders' contexts (512 each) |
 | 6A00 | 2,048 | IAID contexts (a dictionary of at most 2,048 symbols) |
-| 7200 | `jb_bandmax`, at most `JB_BANDMAX` 16,384 (40,000 with a page refinement) | the band: full-resolution rows of the page (a streamed page puts its one row at 3000 instead) |
+| 7200 | `jb_bandmax`, at most `JB_BANDMAX` 16,384 (40,000 with a page refinement) | the band: full-resolution rows of the page (a streamed page puts its one row at 3800 instead) |
 | after the band | to `jb_wsz` | symbol and pattern bitmaps, intermediate regions and halftone grid values growing up; 8-byte records (offset, width, height) growing down |
 
 **Bands, streaming and what a page costs.** The page cannot be resident (A4 at 300 dpi is 1 MB), so it is
@@ -6706,8 +6706,8 @@ this decoder honour; the mutool leg holds it at 0. `pdbl_fuzz` (AddressSanitizer
 truncation, markers) ran 81,000 mutations of the committed seeds in `tests/pdfany/bilevel/` clean. Sizes (the
 smlrcc + cc8086 chain with the peephole on, `jb_`/`cf_` as one translation unit with the shell's `ix_*` and
 pdmath's movers, with `pdxijb2.inc`): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders
-29,980 + 8,935 = 38,915 of the 39,000 allowed (the lead's 00:24 figure); in the whole PDXI.MOD (with the shell and
-JPEG) 47,222 + 18,468 = 65,690 against the 65,024 cap; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
+about 30,070 + 6,890 = 36,960 (39,000 allowed at 00:24); the whole PDXI.MOD (shell and JPEG too, `make build/PDXI.MOD`,
+JB_ASM) 47,310 + 16,422 = 63,732 against the 65,024 cap; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
 (frames 58 for `rf_decode`, 56 for `sd_run`, 46 for `tr_run`; none over 96), and the shell adds its own on top
 of that. Rows covering it: `tools/os88pdbl_check.py` (the legs above plus jb2-refagg, jb2-unknown, jb2-refine and jb2-range, each against the model and, where MuPDF can, against `mutool`) and `pdbl_fuzz` (32,000 more mutations with the new seeds), `hosttest/pdbl_asm.py` for the assembly; `pdkgate` is
 unaffected (neither file calls the kernel).
