@@ -71,6 +71,8 @@ def cases(d):
         alt = {1: "/DeviceGray", 3: "/DeviceRGB", 4: "/DeviceCMYK"}[nn]
         o = d.add("<< /N %d /Alternate %s /Length %d >>" % (nn, alt, len(junk)), junk)
         add("icc_%d" % nn, "[/ICCBased %d 0 R]" % o, comps)
+        add("icc_%dk" % nn, "[/ICCBased %d 0 R]" % o, [0.0] * nn)      # 0 sc: black (QZTEXT's /Cs1 cs 0 sc)
+        add("icc_%dw" % nn, "[/ICCBased %d 0 R]" % o, [1.0] * nn)      # 1 sc: white
     # --- calibrated --------------------------------------------------------
     add("calgray_a", "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 2.2 >>]", [0.5])
     add("calgray_b", "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 1 >>]", [0.5])
@@ -189,6 +191,13 @@ def write_cases(path, d, cs, page=None):
             if len(comps) == 1:      # the image route (PDV_GFX_LUT): a 1-component space at 8 bits, direct and as a page resource
                 f.write("U lut_%s %s 8\n" % (name, text.encode().hex()))
                 f.write("W lutres_%s %s 8 %d\n" % (name, ("C%d" % i).encode().hex(), 3000 + i))
+        # an inline /Resources much longer than the fetch buffer (1,024 bytes): the colour space is named after byte 2,000
+        # and again after byte 3,500, and must be found by the windowed scan (object 3600, 3700; the name's digits pick the object)
+        calrgb = [t for n_, t, _ in cs if n_ == "calrgb_a"][0]
+        for on, pad in ((3600, 2000), (3700, 3500)):
+            fonts = " ".join("/F%d %d 0 R" % (k, 100 + k) for k in range(pad // 12))
+            f.write("O %d %s\n" % (on, ("<< /Type /Page /Parent 2 0 R /Resources << /Font << %s >> /ColorSpace << /C%d %s >> >> >>" % (fonts[:pad], on - 3000, calrgb)).encode().hex()))
+            f.write("R big_%d %s 3 0.2 0.5 0.8\n" % (on, ("C%d" % (on - 3000)).encode().hex()))
 
 
 def build(outdir):
@@ -267,6 +276,9 @@ def check(build_dir, verbose):
         if got.get("res_" + name, "m") != got.get(name, "d"):
             print("FAIL res_%s: %s != %s" % (name, got.get("res_" + name), got.get(name)))
             bad += 1
+    for k in ("big_3600", "big_3700"):      # the windowed scan of a long inline /Resources finds the same colour
+        if got.get(k) != got.get("calrgb_a"):
+            print("FAIL %s: %s != %s" % (k, got.get(k), got.get("calrgb_a"))); bad += 1
     worst = {}
     for name, _, _ in cs:
         g, r = got.get(name, "missing"), ref[name]
@@ -546,7 +558,9 @@ def check_shade(build_dir, work, exe, verbose):
         L = pat.get(k, [])
         l1 = " ".join(L[0][2:6]) if L else ""
         l2 = " ".join(L[1]) if len(L) > 1 else ""
-        if e1 not in " ".join(L[0]) if L else True:
+        if L and " type 1 " in " ".join(L[0]) + " " and " obj 0 " in " ".join(L[0]) + " ":
+            print("FAIL %s: a tiling pattern's object number is 0 (the core could not replay it)" % k); bad += 1
+        elif e1 not in " ".join(L[0]) if L else True:
             print("FAIL %s: %s" % (k, " ".join(L[0]) if L else "nothing")); bad += 1
         elif e2 and e2 not in l2:
             print("FAIL %s tiles: %s (wanted %s)" % (k, l2, e2)); bad += 1

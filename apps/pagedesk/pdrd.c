@@ -518,6 +518,15 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     return 0xFFFF;
 }
 
+/* every block is in use by this pass: grow the claim to its want (PDFB_GLYPHWANT), once per claim
+ * size a growth was refused at (QA R24: LICRU's last page has five fonts). 1 = asked, the pass runs again */
+static pdw g_gnogrow;
+static pdw syn_grow(void)
+{
+    if (g_gkb >= PDFB_GLYPHWANT || g_gkb == g_gnogrow || (x_ref & XR_GLYPH)) return 0;
+    return x_mem(PDMEM_GLYPH, PDFB_GLYPHWANT);
+}
+
 /* a text pass (px 0): the next block from `i` up of (font, ANY size) the page view has drawn, or
  * 0xFFFF. Its slots carry each code's Latin byte, so Find and Copy need no font module for the
  * codes the page drew (QA R17: under the overlay, a 640 KB machine cannot load PDXF) */
@@ -554,7 +563,7 @@ static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len, pdw plen)
     static struct pd_u32 u, p;
     pdw cb, head, cap, room, seg, got, i, rr, need, n;
     room = syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10);         /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
-    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len) return 0;   /* cap below cannot wrap */
+    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len || g_fioerr) return 0;   /* cap below cannot wrap; a failed read ends the page view's (QA F21) */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
     cb = file_enter();

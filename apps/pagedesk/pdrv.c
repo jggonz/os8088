@@ -112,6 +112,36 @@ static pdw ik_find(pdw off)
     return PDR_NIK;
 }
 
+/* one row of the image through pdr_ip: the 8-bit strip's twin, or the band's */
+static void img_out(pdi y)
+{
+#ifdef PDR_X8
+    if (g_xs) { x8_imgrow(y); return; }
+#endif
+    pdr_imgrow();
+}
+/* a row under a polygon clip (a `W n` that is not a rectangle): the walker's own mask test
+ * (shape_clipped's: the row's span in mask 0, each clip polygon ANDed in) and the image
+ * row drawn over each run of what is left, its source phase moved to the run's first column */
+static void img_clipped(pdi y, pdi x0, pdi x1, pdi delta, pdw W, pdi wq)
+{
+    pdi x, xs, xe = (pdi)(x1 - g_bx0), xb = (pdi)(x0 - g_bx0);
+    pdb *p = g_mk[0];
+    mask_clear(0);
+    g_rmode = 1;
+    span_out(y, x0, x1);
+    clips_and(y);
+    g_rmode = 0;
+    for (x = xb; x <= xe;) {
+        if (p[x >> 3] & (0x80 >> (x & 7))) {
+            xs = x;
+            while (x <= xe && (p[x >> 3] & (0x80 >> (x & 7)))) x++;
+            pdr_ip.x0 = xs; pdr_ip.x1 = (pdi)(x - 1);
+            pdr_ip.xhi = (pdw)pdr_muldiv((pdi)(delta + (xs - xb) * 4), (pdi)W, wq);
+            img_out(y);
+        } else x++;
+    }
+}
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
     static pdb b[DLI_BODY];
@@ -231,10 +261,8 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-#ifdef PDR_X8
-            if (g_xs) x8_imgrow(y); else
-#endif
-            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
+            if (g_sclid < PDR_NCLIP && g_mkok) img_clipped(y, x0, x1, delta, W, wq);   /* a polygon clip */
+            else img_out(y);
         }
     }
 }
@@ -269,10 +297,18 @@ static pdw x_answer(pdw what, pdw cx, pdw dx, pdw ph)
 }
 static void ik_size(void);
 /* the end of an interpretation pass: something to ask for, or 0 */
+static pdw g_tmref;                 /* x_ref bits a text pass keeps until the next render (QA R17) */
 static pdw x_resolve(void)
 {
     pdw id, w = x_pend & ~x_ref;
     if ((g_xrm & IK_BOTH) == IK_BOTH) ik_size();
+    /* a text pass needs only the font module and the glyph claim: colour, shadings and images draw no
+     * text, and asking for them on every page of a Find swapped PDXG and PDXF per page until the job's
+     * PDU_LADMAX ("exceeds one of PageDesk's limits", minutes on QEMU: QA R17) */
+    if (g_mode == PDR_TEXT) {
+        w &= (pdw)(1u << PDX_FNT);
+        if (x_mwant != (0x80 | PDMEM_GLYPH) && x_mwant != (0x80 | PDMEM_SLOT)) x_mwant = 0;
+    }
     if (x_mwant && !(x_ref & XR_MEM)) {
         if (x_asks < PDR_XASKS) return x_answer(x_mwant, (pdw)(x_mwant & 0x7F), x_mkb, PDR_INTERP);
         x_ref |= XR_MEM;
@@ -291,10 +327,12 @@ static void x_answered(void)
     /* a refused XC or X8 refuses regions for the page view; the glyph claim (fonts, 20.22.8) is refused
      * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
     if (a & 0x80) {
-        if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
+        if (a == (0x80 | PDMEM_GLYPH)) {
+            if (!syn_cap() || g_gkb < x_mkb) { x_ref |= XR_GLYPH; g_gnogrow = g_gkb; }   /* not the size asked: not again at this size */
+        }
         else if (a != (0x80 | PDMEM_SLOT) && !(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM;
     }
-    else if (a && !x_have(a)) x_refuse(a);
+    else if (a && !x_have(a)) { x_refuse(a); if (g_mode == PDR_TEXT) g_tmref |= (pdw)(1u << a); }   /* not asked again page by page */
 }
 /* the stash (20.22.7.10): the resident decoder `d` decodes, into the XC above
  * g_xctop, the rows y0..y1 show of each of its images, one row per device row
@@ -456,6 +494,7 @@ static void mode_reset(void)
     g_ierr = 0; g_ndl = 0;
     g_pkfam = 0xFF; g_aflags = 0;
     x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0;
+    g_fioerr = 0;                       /* the strikes are read again (QA F21) */
 }
 
 static pd_px vb_w, vb_h;
@@ -465,7 +504,7 @@ static pdw verb_begin(void)
     pd_fcopy_in(g_xb, 0, &g_rq, sizeof g_rq);
     if (!g_dls || !g_bseg) return PDE_NOMEM;
     close_streams();
-    mode_reset();
+    mode_reset(); g_tmref = 0;
     g_mode = PDR_INTERP; g_thumb = 0; g_bpp = g_ini.bpp == 4 ? 4 : 1;
     g_aflags = g_rq.rflags;
     g_winoff = g_rq.win_off;
@@ -705,7 +744,7 @@ static pdw tm_start(void)
 {
     static struct pd_fx s16;
     close_streams();
-    g_tmpg = g_tmq.page;
+    g_tmpg = g_tmq.page; g_tmunread = 0;
     g_mode = PDR_TEXT; g_ph = PDR_TEXT;
     g_tmwr = g_tmrd = g_tmrun = 0; g_tmoverflow = 0; g_tmfirst = 1;
     pdm_fx_int(&s16, 16);
@@ -729,7 +768,7 @@ static pdw verb_textmap(void)
     /* a slice the ladder answered (20.22.2.6) comes back with the state the primary
      * sent first: the pass waiting for its module on this page goes on (QA R17) */
     if (g_tmq.state == 0 && !(g_ph == PDR_XWAIT && g_mode == PDR_TEXT && g_tmq.page == g_tmpg)) {
-        mode_reset();
+        mode_reset(); x_ref = g_tmref;
         g_tmdel = g_tmskip = 0;
         err = tm_start();
     } else if (g_ph == PDR_XWAIT) {
@@ -760,7 +799,7 @@ static pdw verb_textmap(void)
         g_tmrd += n; g_tmdel += n;
     }
     g_tmq.count = n;
-    g_tmq.done = (g_idone && g_tmrd >= g_tmwr) ? 1 : 0;
+    g_tmq.done = (g_idone && g_tmrd >= g_tmwr) ? (pdw)(1 | g_tmunread) : 0;
     if (g_tmq.done) { close_streams(); g_ph = PDR_IDLE; g_mode = PDR_IDLE; }
     if (g_tmoverflow) inc_note(PDF_INC_LIMIT, "text map");
     pd_fcopy_out(&g_tmq, g_xb, 0, sizeof g_tmq);
@@ -922,7 +961,7 @@ static pdw verb_init(pdw xbseg)
     x8_init(g_ini.x8_seg, g_ini.x8_kb);
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
-    g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;
+    g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0; g_gnogrow = 0; g_tmref = 0;
     g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }

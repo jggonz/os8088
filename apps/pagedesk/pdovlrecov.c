@@ -186,6 +186,8 @@ static int ovl_rc_walk(int apply)
 
     cnt = 0;
     maxid = 0;
+    if (apply && ovl_ed_need())         /* the points go in before the record */
+        return 0;
     if (apply)
         pdu_undo_begin(UL_NONE);
     for (o = RC_HDR; o + 4 <= rc_jl; o += 4 + l) {

@@ -50,11 +50,12 @@ static pdw gx_sreadf(pdw seg, pdw off, pdw cap)
 #include "pdxgf.c"
 #include "pdxgc.c"
 
+pdw pdxg_off;                       /* gx_fetch's start offset in the object's text (the windowed scan of gx_win) */
 #ifdef PD_HOST
 pdw pdxgh_fetch(pdw obj, pdw gen, char *buf, pdw cap);
 pdw pdxgh_sopen(pdw obj, pdw gen);
 pdw pdxgh_sread(pdb *buf, pdw cap);
-static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap) { return pdxgh_fetch(obj, gen, buf, cap); }
+static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap) { pdw r = pdxgh_fetch(obj, gen, buf, cap); pdxg_off = 0; return r; }
 static pdw gx_sopen(pdw obj, pdw gen) { return pdxgh_sopen(obj, gen); }
 static pdw gx_sread(pdb *buf, pdw cap) { return pdxgh_sread(buf, cap); }
 static void gx_sclose(void) { }
@@ -63,7 +64,7 @@ pdw pdx_engcall(pdw verb, pdw bx, pdw cx, pdw dx);     /* AX; asm on the target 
 static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap)
 {
     static struct pdxb_rawcopy rc;
-    rc.objnum = obj; rc.gen = gen; rc.done.lo = 0; rc.done.hi = 0;
+    rc.objnum = obj; rc.gen = gen; rc.done.lo = pdxg_off; rc.done.hi = 0; pdxg_off = 0;
     rc.dseg = pd_ds(); rc.doff = (pdw)buf; rc.dmax = cap; rc.got = 0; rc.mode = PDRC_PLAIN;
     pd_fcopy_out(&rc, g_xbseg, 0, sizeof rc);
     pdx_engcall(PDV_ENG_RAW_COPY, g_xbseg, 0, 0);
@@ -124,10 +125,33 @@ static int gx_sub(const char *p, pdw len, const char *key, char *buf, const char
 /* PDGXI_RES: the value of Resources/<category>/<name> of a Form or a page, following /Parent for
  * inherited resources (8 levels at most). txt is "Category\0Name". No dictionary is parsed whole:
  * only the value found is. */
+/* An inline /Resources longer than the fetch buffer: read the object in windows (RAW_COPY restarts at an offset),
+ * look for "/name" followed by a delimiter, and parse the value after it. The windows overlap by 64 bytes so a name
+ * across an edge is seen whole; the value is read from a window that starts at its key. */
+static pdw gx_win(pdw obj, pdw gen, const char *nm)
+{
+    pdw got, i, k, off = 0;
+    for (;;) {
+        pdxg_off = off;
+        got = gx_fetch(obj, gen, gx_tb, GX_TB);
+        for (i = 0; i + 1 < got; i++) {
+            if (gx_tb[i] != '/') continue;
+            for (k = 0; nm[k] && i + 1 + k < got && gx_tb[i + 1 + k] == nm[k]; k++) ;
+            if (nm[k] || i + 1 + k >= got || !(gx_isws((pdb)gx_tb[i + 1 + k]) || gx_isdl((pdb)gx_tb[i + 1 + k]))) continue;
+            pdxg_off = off + i + 1 + k;
+            got = gx_fetch(obj, gen, gx_tb, GX_TB);
+            i = gx_ws(gx_tb, got, 0);
+            return got > i ? gx_parse(gx_tb + i, gx_vend(gx_tb, got, i) - i) : GN_NIL;
+        }
+        if (got < GX_TB) break;
+        off += GX_TB - 64;
+    }
+    return GN_NIL;
+}
 static pdw gx_res_lookup(const char *txt, pdw len)
 {
     static char cat[20], nm[34];
-    pdw obj = G.objnum, gen = G.gen, i = 0, j = 0, hops, got;
+    pdw obj = G.objnum, gen = G.gen, i = 0, j = 0, hops, got, tr = 0, o0, g0;
     static pdw s, e, o, g, rl, cl;
     static const char *rp, *cp;
     while (i < len && txt[i] && j < 19) cat[j++] = txt[i++];
@@ -146,14 +170,15 @@ static pdw gx_res_lookup(const char *txt, pdw len)
     }
     for (hops = 0; hops < 8; hops++) {
         got = gx_fetch(obj, gen, gx_tb, GX_TB);
-        if (!got) return GN_NIL;
+        if (!got) break;
+        if (!hops) { tr = got == GX_TB; o0 = obj; g0 = gen; }
         if (gx_sub(gx_tb, got, "Resources", gx_tb2, &rp, &rl) && gx_sub(rp, rl, cat, rp == gx_tb2 ? gx_tb : gx_tb2, &cp, &cl)
             && gx_find(cp, cl, nm, &s, &e))
             return gx_parse(cp + s, e - s);
-        if (!gx_find(gx_tb, got, "Parent", &s, &e) || !gx_refat(gx_tb, s, e, &o, &g)) return GN_NIL;
+        if (!gx_find(gx_tb, got, "Parent", &s, &e) || !gx_refat(gx_tb, s, e, &o, &g)) break;
         obj = o; gen = g;
     }
-    return GN_NIL;
+    return tr ? gx_win(o0, g0, nm) : GN_NIL;           /* an inline /Resources longer than the buffer */
 }
 
 /* the full "Category\0Name" text of a PDGXI_RES request: the category by code (flags bits 8-11), the name at tseg:toff */
@@ -267,22 +292,12 @@ done:
  * (PDGX_F_TABLE) is looked up in the entry; any other is compiled again from its source and converted. */
 static pdw v_color(void)
 {
-    pdw node, row, i, k;
+    pdw node, row, i;
     static struct pd_fx rgb[3], t;
     pd_fcopy_in(G.cseg, G.coff, &R_cs, 16);
     if (!(R_cs.flags & PDGX_F_TABLE) && R_cs.srclen && R_cs.srclen <= 480) pd_fcopy_in(G.cseg, (pdw)(G.coff + 16), R_cs.src, R_cs.srclen);
-    if (R_cs.flags & PDGX_F_TABLE) {
-        pdw nr = R_cs.kind == PDGX_K_INDEXED ? (pdw)(R_cs.hival > 255 ? 256 : R_cs.hival + 1) : 65;
-        if (R_cs.kind == PDGX_K_INDEXED) k = G.ncomp ? (pdw)pdm_fx_round(&G.comp[0]) : 0;
-        else if (!G.ncomp) k = (R_cs.kind == PDGX_K_SEP || R_cs.kind == PDGX_K_DEVN) ? 64 : 0;     /* a tint's initial colour is 1 */
-        else { fx_i(&t, 64); fx_mul(&t, &t, &G.comp[0]); k = (pdw)pdm_fx_round(&t); }         /* the nearest of 65 samples */
-        if (G.ncomp && G.comp[0].hi < 0) k = 0;
-        if (k >= nr) k = (pdw)(nr - 1);
-        pd_fcopy_in(G.cseg, (pdw)(G.coff + 16 + k * 3), G.rgb, 3);
-        G.rgb[3] = (R_cs.flags & PDGX_F_NONE) ? 1 : 0;
-        G.ok = 1;
-        return PDE_OK;
-    }
+    /* a table space (PDGX_F_TABLE) is answered by PDREND from the entry itself and never asks */
+    if (R_cs.flags & PDGX_F_TABLE) return PDE_RANGE;
     G.objnum = R_cs.srcobj; G.gen = R_cs.srcgen; G.tlen = R_cs.srclen;
     gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
     if (R_cs.pad) {
@@ -339,18 +354,11 @@ static pdw v_lut(void)
     }
     if (n == 1) {
         for (v = 0; v < 256; v++) {
-            if (cs_t[row].kind == GC_IDX && bpc < 8) {
+            if (cs_t[row].kind == GC_IDX) {                      /* the sample scaled back to its depth, then dmin + r (dmax - dmin) / maxv */
                 pdw r = (pdw)((v * maxv + 127u) / 255u);
                 fx_i(&f, (pdi)r); fx_raw(&f, f.hi, 0);
-                /* index = dmin + r * (dmax - dmin) / maxv */
                 fx_sub(&t, &dmax[0], &dmin[0]); fx_mul(&t, &t, &f);
                 { static struct pd_fx mv; fx_i(&mv, (pdi)maxv); fx_div(&t, &t, &mv); }
-                fx_add(&comps[0], &dmin[0], &t);
-            } else if (cs_t[row].kind == GC_IDX) {
-                fx_i(&f, (pdi)v);
-                fx_sub(&t, &dmax[0], &dmin[0]);
-                fx_i(&comps[0], 255);
-                fx_div(&t, &t, &comps[0]); fx_mul(&t, &t, &f);
                 fx_add(&comps[0], &dmin[0], &t);
             } else {
                 fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)((v << 8) + v));
@@ -416,7 +424,7 @@ pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     pdx_cf = 0;
     if (verb == PDV_X_INIT) return v_init(bx);
     if (verb < PDV_GFX_CS || verb > PDX_LAST_VERB) { pdx_cf = 1; return PDE_RANGE; }
-    if (verb == PDV_GFX_DASH) { r = xd_verb(bx, cx); pdx_cf = (r == PDE_OK || r <= 2) ? 0 : 1; return r; }
+    if (verb == PDV_GFX_DASH) { r = xd_verb(bx, cx); pdx_cf = r > 2; return r; }
     if (verb == PDV_GFX_EDIT) { r = xe_verb(bx, cx); return r; }
     pd_fcopy_in(g_xbseg, 0, &G, sizeof G);
     G.ok = 0;

@@ -37,7 +37,13 @@ licence), the eight sample PDFs and, on every geometry but 360 KB,
 `PDFONTX.RES` (the other font sizes, optional). At 360 KB the program fills
 a disk, so it is a PAIR: `pagedesk360.img` holds the program, `README.TXT`,
 `PDFONTS.TXT` and `HELLO.PDF`, and **`pagedesk360b.img`** every sample. Put
-the second disk in a drive and open from it with File > Open. The empty
+the second disk in a drive and open from it with File > Open. PageDesk reads
+its fonts and modules from the program disk while it draws, so keep that disk
+in its drive and put the second one in the other drive. When the program disk
+is out at the moment a part is needed, a toast says `Insert the PageDesk disk`
+(a page's status line says `insert the PageDesk disk` for its fonts): put it
+back and do the same thing again - open the file again, or go back to the
+page. The empty
 window's Sample guide looks beside the program, so on the 360 KB pair open
 `XTGUIDE.PDF` from the second disk instead. It is also in the everything
 set (`make allapps`) and on the live media.
@@ -168,6 +174,17 @@ to page 5, Shift+F3 back to page 2 (VGA); `small` on CGA.
 
 A search of a long document is slow on an XT (every page is read and
 interpreted for its text). Not timed on a 4.77 MHz machine.
+
+**Embedded fonts on a 640 KB machine.** To read the text of a page set in an
+embedded font, Find needs PageDesk's font module. While Find is running, a
+640 KB machine may not have room for it. A page that has already been drawn
+does not need the module: its text comes from the glyphs drawn on it. A page
+that has not been drawn cannot be read without it. When Find finds nothing and
+such a page was skipped, it does not say only "No match". It names the first
+page it could not read, for example `No match for "telnet" - draw page 7 first`.
+Go to that page, let it draw, and press F3. A machine with more memory loads
+the font module and reads every page. **Seen** on QEMU (VGA, 640 KB): Find for
+a word that is not in PDFKIT.PDF says `No match for "zzqqx" - draw page 3 first`.
 
 ### Select and Copy
 
@@ -646,6 +663,10 @@ harness) in waves 1 and 2 for the shell and the renderer.
 - **Adapters.** The whole open, page, zoom, Find, mark, Save As and reopen
   session runs on VGA, CGA and Hercules on MartyPC's real Hercules model.
 - **Memory.** 81-97 KiB is free after a session.
+- **Embedded fonts.** A small embedded font draws from its own outlines. A
+  large subset - a Mac-made PDF's TrueType, for one - is drawn in PageDesk's
+  own face on a 640 KiB XT: the status line says `Incomplete rendering - font
+  substituted` and the text stays legible.
 
 **Still not verified**, and left to hardware or later work:
 

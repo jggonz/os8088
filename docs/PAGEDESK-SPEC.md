@@ -2254,7 +2254,8 @@ document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
 | claim | sub-segments, in order | size |
 |---|---|---|
 | A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
-| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): edit store 16, undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 60-63 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
+| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 44-47 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
+| E | the edit store, 16 KiB, **at the first edit** (QA F26, the claim-B ruling): `pdu_dclaim[2]`, from the top. Its row in `pdu_dckb` is 0, so the carve gives `pdu_dc[PDU_DC_EDITS]` no room of its own until `ovl_ed_need` claims it and names it there. It is asked for when an edit tool is picked (`ovl_tool_hint`, which gives the slot's occupant back first when the store will not fit: the ladder loads it again at need) and at an edit tool's press on the page (`ovl_tool_click`) and a journal's replay; `pdu_ed_new` only refuses without it (`PDE_NOMEM`), a note's commit being too deep a chain for a claim (pdstk). `pdu_doc_free` gives it back with A and B | 16 KiB, or none for a document only read |
 
 and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
 exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
@@ -2338,8 +2339,13 @@ says `Could not open <name>` and the `PDE_*` sentence).
 - **Esc** cancels the running job at the next slice boundary. A cancelled open
   closes and frees; a cancelled render leaves the page as drawn and says
   `Drawing cancelled - the page is incomplete.`
-- **Progress**: after 18 ticks a job writes `Opening <name> - Esc cancels`
-  (or `Drawing page`, `Saving <name>`) to the status line, once a second. A
+- **Progress**: after 18 ticks a job writes `Opening <name> (n) - Esc cancels`
+  (or `Drawing page <p> (n)`, `Saving <name> (n)`) to the status line, once a
+  second: `p` is the page drawn and `(n)` the slices so far, bracketed so it
+  is never read as a page (QA R15 read `Drawing page  416` on a one-page file).
+  `Opened <name>` is replaced by the first draw's own line (`No changes`, a
+  form's note, `Incomplete rendering - ...`) however short the draw (QA R16:
+  a page drawn in 8 slices or fewer kept `Opened` on CGA). A
   save opens `OSAPI_FS_OP` with the total `PDWRT` reports and closes it with 0.
 - **Incomplete rendering** is said once a page (`PDV_REND_STATUS`'s first
   reason): a repair of a damaged strip draws the same page again and must not
@@ -4990,8 +4996,10 @@ round's final pass, not before.
   image's grey box with `PDF_INC_APPROX`). An occupant's (`want`, `min`) row
   (20.22.2.3) is what it needs to LOAD; `min` decodes its common cases.
   `PDMEM_GLYPH` 5 is not a region of X either: PDREND answers it when a page
-  first needs a strike block, DX = the KiB the glyph claim should have (40).
-  The primary regrows the glyph claim (40, else 32, else refuses), re-INITs
+  first needs a strike block, DX = the glyph claim's MIN (`PDFB_GLYPHKB`, 40),
+  and again, DX = its WANT (`PDFB_GLYPHWANT`, 48), when a pass finds every
+  block in use (20.22.8). The primary regrows the glyph claim (DX, else 32,
+  never smaller than it is, else refuses), re-INITs
   PDREND and the font occupant with the new `glyph_seg`/`glyph_kb`, and calls
   again; a refusal draws embedded fonts with the substitute face and
   `PDF_INC_APPROX` (20.22.8).
@@ -5113,6 +5121,16 @@ merge):
 | `PDX_JPX` 5 | PDXJ | 10 | `'PJ'` | 65,024 | 60 / 12 | jpx |
 | (6, internal) | PDWRT | 3 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
 
+**A known limit on the 640 KiB XT (QA F26, the lead's ruling 2026-11-10):** a
+large embedded font subset - Quartz's TrueType in QUARTZ.PDF, programs of
+20-40 KB - is drawn in PageDesk's own face (`Incomplete rendering - font
+substituted`) and the text stays legible. PDXF loads (59.5 KiB of S), but
+what is left once the document set is held gives W its minimum, 32 KiB,
+whose 22,016-byte program area does not hold the subset; a small one
+(TTSIMPLE.PDF) draws from its outlines. Sizing the display list to the page
+would give W the rest, and it is an open item of PAGEDESK-ANY-PLAN, not of
+this round.
+
 Row 2 is **PDRENDC**, PDREND's code part (20.22.7.9): an EAGER row, so
 `op_load` reads it into the carve at launch beside PDENG and PDREND, and
 `pdu_mod_launch` binds it once with `PDV_REND_CODE` (BX = `OS88_CODESEL` of
@@ -5171,9 +5189,21 @@ callback's chain: only from the wake, 20.22.2.6):
    is read at S:0 and moved down by its slack. Then back to the document's
    folder. A read that fails (`PDE_IO`: on the 360 KB pair, the program disk
    swapped for the samples disk) toasts `Insert the PageDesk disk` before
-   the occupant, the X8 region or the bank degrades (QA F21) - a sentence and
-   not a retry: a prompt that waits for the disk costs the primary room it
-   does not have (20.22.2.9).
+   the occupant, the X8 region or the bank degrades (QA F21). The retry is
+   the user's: put the disk back and do the same thing again (the lead's
+   ruling, 2026-11-10 12:10 - no prompt that waits, and no overlay held
+   resident: 51.5 KiB the XT's occupants need). Every lazy read says the
+   same sentence: the overlay's fetch, through crt0's `CC_OVL_FAIL` hook
+   (`pdu_ovl_fail` turns the SDK's `Cannot read my parts` and `No disk to
+   read from` into it; memory refusals keep their own words), and PDREND's
+   strike reads, whose incomplete-rendering reason is `insert the PageDesk
+   disk` when a strike's read failed rather than `font strike unavailable` -
+   and once one has failed no strike is read again in that page view
+   (`g_fioerr`, cleared by `mode_reset`): a floppy error per text run made
+   the XT's degraded HELLO.PDF 457 guest seconds.
+   A repeat succeeds because nothing remembers the failure: the overlay's
+   row stays unfetched, PDREND's refusals end with the page view
+   (`mode_reset`), and an occupant is loaded again at the next ask.
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
@@ -5250,7 +5280,7 @@ adding paragraphs). The five regions:
 | 2 | `PDMEM_OSW` | PDENG, at OPEN | |
 | 3 | `PDMEM_XC` | PDREND | |
 | 4 | `PDMEM_X8` | PDREND (blend) | **PDX8 is read into its first bytes at the grant** (parts row 10, the slot's reader), with its header's +10 = the region's CODE selector, +12/+14 = PDENG's bound door, re-written after every move of X. A row that does not fit the region, or a read that fails, takes the region back: PDREND then sees `x8_seg` 0 and takes its opaque path |
-| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
+| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) - want 48 / min 40 KiB (`PDFB_GLYPHWANT` / `PDFB_GLYPHKB`) | PDXF (fonts, 20.22.8) | the MIN is asked when a page first needs a strike block, the WANT only when a pass finds all of the min's four blocks in use; stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
 
 The primary:
 
@@ -5423,8 +5453,14 @@ cap is 65,024):
 
 | QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
 | QA F25/F22/F24: every claim from the top (`pd_claimhi`: XB, the bank, A, B, X, S, W), the writer loaded by the save job (`pdu_save_step`) and freed before its overlay call, `pdu_wrt_in_now` and `pdu_wrt_out` gone (a call and a macro), the second Flate slot's own reserve, W sized to leave 32 KiB and asked with it while a release remains, the claim asked again after the XC release | 65,023 | +20 |
+| the merge of `pagedesk/anypdf` (ui's overlay moves) | 64,941 | -82 |
+| QA F21: `pdu_home_rd`'s toast `Insert the PageDesk disk` | 64,979 | +38 |
+| QA F21: crt0's `CC_OVL_FAIL` and `pdu_ovl_fail` (the overlay's refused read said the same way) | 65,001 | +22 |
+| QA F26 claim B: the edit store at the first edit (`pdu_claimhi`, the C door to `pd_claimhi`, and its overlay stub; `pdu_dclaim[3]`) | 65,023 | +22 |
+| `pdmath.inc` in the primary with `PDM_SKIP_U32`, `PDM_SKIP_PARSE`, `PDM_SKIP_TOPT16` and `PDM_SKIP_MAT`: its C names `pdm_view_size`/`fwd`/`inv` and `pdm_crc16_far` alone (the cc8086 use set), and the rest was assembled for nothing | 63,517 | -1,506 |
+| QA F21: an encrypted open whose prompt's overlay could not be read fails (`PDE_IO`) instead of opening again with no key, which left the NEXT open refused | 63,535 | +18 |
 
-**1 byte stays under the cap.**
+**1,489 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
@@ -6845,8 +6881,15 @@ pass count that is NOT reset with each render: `g_passes` restarts at 1 every ve
 made every block a previous page or thumbnail used look "used in this pass" to the next render's
 pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
 block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
-ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit: a
-24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
+ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit, at most `PDFB_NBLK` (6): a
+24 KiB claim has none, 32 KiB has two, 40 four, 48 six. **The claim is a RANGE, want 48 and min
+40** (the lead, fix round; the 20.22.2.3 pattern): a page's first block asks for the min, and
+only a pass that finds every block in use by itself (`blk` = 0xFFFF: a fifth (font, size) on
+one page, LICRU's last page) asks for the want, so a 640 KB XT keeps 40 KiB and the PDXF slot
+beside it. A growth that does not reach 48 is not asked again at that claim size until a new
+document (`g_gnogrow`), and the fifth font keeps the honest `glyph block full` note.
+`hosttest/pdx_page.py --grow` overlays four fixtures on a fifth (qpdf) and holds the grown
+render to a 48 KiB claim's, and a refused growth to the note. **The glyph claim grows lazily** (the lead, 23:38):
 it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
 with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
 and re-INITs PDREND - which keeps the page view when only `glyph_seg`/`glyph_kb` changed, the claim
@@ -6886,7 +6929,18 @@ so on a 640 KB machine PDXF (its image and bss near 65,024, plus a workspace of 
 refused. The pass first looks up the code in the font's blocks at the sizes this view has drawn,
 because every slot of a block carries the code's Latin byte. A page on the screen therefore yields its
 text with no module. A page that was never drawn still needs PDXF, and while PDXF cannot be loaded, its
-Type0 codes map to nothing and its simple codes map through the base encoding.
+Type0 codes map to nothing and its simple codes map through the base encoding. **That is never a
+silent "not found"**: a text pass that met codes it could not read ends with `done` = 1 |
+`PDTM_UNREAD` (2) in `pdxb_textmap`, and Find, when it matches nothing, names the first such page:
+`No match for "x" - draw page N first`. Drawing the page leaves its strike blocks, and the next
+Find reads it. (The words are stored by overlay code rather than a literal: the overlay's
+literals are resident and the primary is at its cap; the cost is the 2-byte `pdu_funread`.) **A text pass asks for nothing but PDXF**
+(and the glyph claim and PDXF's own workspace): colour spaces, shadings and images draw no text, and
+asking for PDXG on every page made a Find swap PDXG and PDXF per page, 60 ladder answers over QZTEXT's
+25 pages, until the job's `PDU_LADMAX` 16 answered "exceeds one of PageDesk's limits". A refusal of
+PDXF in a text pass is kept for the next pages (`g_tmref`, cleared by the next render or a new
+document), so a whole Find costs ONE answer. `pdx_page.py --text` reads every page of each fixture in
+one process with PDXF refused and fails above one answer.
 `hosttest/pdx_page.py --text` is the check. Each fixture page's text is taken three ways. The first has
 PDXF. The second refuses PDXF and re-sends every slice the ladder answered with the stale block; it
 must finish. The third refuses PDXF just after drawing the page, and it must equal the first.
@@ -7096,7 +7150,7 @@ the first tile's i, j. The core
   tile there is no pattern; a coloured pattern starts black, an uncoloured one keeps the colour `scn` gave
   (components first, taken as device Gray, RGB or CMYK). More than 40 tiles: the path is filled flat, mid-grey for a
   coloured pattern, and `PDF_INC_APPROX` is set. A pattern stroke, a pattern in text and a pattern inside a tile
-  are not drawn as patterns. A fill with `B` strokes BEFORE the pattern (the frame runs after the operator).
+  are not drawn as patterns. A tiling fill of more than `PDGX_TILEMAX` (40) tiles is drawn flat (coloured: mid grey; uncoloured: the current colour) with `PDF_INC_APPROX`.  A resource that PDXG finds through `PDGXI_RES` in an inline `/Resources` longer than the 1,024-byte fetch buffer (`GX_TB`) is found by a windowed scan (`gx_win`: RAW_COPY restarted at an offset, windows overlapping by 64 bytes, a raw search for `/name` and a parse of the value after it); the scan runs only when the normal lookup, through /Parent too, found nothing, and a name that also occurs in another category of that object can be matched in its place. A fill with `B` strokes BEFORE the pattern (the frame runs after the operator).
 
 **Verbs** (0xC8-0xCF; every one answers only when PDXG is the occupant):
 

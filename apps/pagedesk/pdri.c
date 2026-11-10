@@ -183,6 +183,7 @@ static pdw g_inbt;
 static pdw g_em;                    /* device em height of the current font, px  */
 static pdw g_pem;                   /* the em the strike is picked by (D16), px  */
 static pdw g_eslot, g_elat, g_ek = 0xFFFF, g_escale;   /* an embedded font's glyph (emb_glyph, 20.22.8) */
+static pdw g_tmunread;           /* a text pass met codes it could not read: PDTM_UNREAD (QA R17) */
 static pdw g_esub;              /* a code with no slot: its ToUnicode Latin byte for the substitute, 0xFFFF none (QA R13) */
 static pdw g_hem;                   /* device em WIDTH (text space's x axis), px */
 static pdw g_tupright;
@@ -311,7 +312,11 @@ static pdw run_begin(void)
     {   /* a strike the cache cannot hold (or a failed read): the next one down */
         pdw tries = 0, em = g_pem;
         while (idx == 0xFFFF || !strike_load(idx)) {
-            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, "font strike unavailable"); return 0; }
+            /* a read that failed is the program disk out of its drive (the 360 KB
+             * pair, QA F21): the user puts it back and draws the page again. No
+             * strike is read again in this page view (strike_fetch): one floppy
+             * error a run made the XT's degraded page 457 s */
+            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, g_fioerr ? "insert the PageDesk disk" : "font strike unavailable"); return 0; }
             em = (pdw)(g_ssize - 1);
             idx = strike_pick(f->fam, sty, em, &g_synth);
             g_pkem = 0xFFFF; g_pkfam = 0xFF;      /* do not let the memo pin the retry */
@@ -379,7 +384,7 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
         bit = PDF_INC_APPROX;
         goto refuse;
     }
-    if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
+    if (!x_have(PDX_FNT)) { x_need(PDX_FNT); if (x_gone(PDX_FNT)) g_tmunread = PDTM_UNREAD; return 0; }
     g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
     g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_pstamp;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
@@ -387,6 +392,7 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
     if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
     if (!x_cf) {
         if (emb_hit(f, code, px)) return 1;
+        if (pd_fpeekw(g_xb, 44) == 0xFFFF && syn_grow()) return 0;   /* blk: no block free this pass */
         inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face, */
         if (pd_fpeekw(g_xb, 38) & PDFG_LATIN) g_esub = pd_fpeekw(g_xb, 30);   /* as its ToUnicode says (oflags, lat) */
         return 0;

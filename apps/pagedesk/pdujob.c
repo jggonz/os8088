@@ -185,10 +185,10 @@ static void pdu_progress(const char *verb, const char *what)
     pdu_pshown = 1;
     os88_strcpy(pdu_line, verb, sizeof(pdu_line));
     pdu_cat(pdu_line, what, sizeof(pdu_line));
-    pdu_cat(pdu_line, " ", sizeof(pdu_line));
-    os88_utoa(pdu_jslices, pdu_num);
+    pdu_cat(pdu_line, " (", sizeof(pdu_line));     /* QA R15: the slices, in brackets - */
+    os88_utoa(pdu_jslices, pdu_num);                /* never read as the page */
     pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-    pdu_cat(pdu_line, " - Esc cancels", sizeof(pdu_line));
+    pdu_cat(pdu_line, ") - Esc cancels", sizeof(pdu_line));
     pdu_wsay(pdu_line);
     pdu_pshown = 1;                     /* polish: after the say, which clears it */
 }
@@ -273,6 +273,7 @@ static int pdu_open_first(void)
 }
 
 /* PAGEINFO for page n, then the view. 0 or a PDE_*. No lock: a disk read. */
+static char pdu_opsaid;                 /* "Opened X" stands: the first draw's line replaces it (R16) */
 static int pdu_incpg;                   /* page + 1 whose incompleteness
                                          * was said; 0 = not yet */
 static int pdu_page_load(int n)
@@ -324,8 +325,12 @@ static void pdu_open_step(void)
             return;
         pdu_opauth = 2;
         pdu_mcf = r != 0;
-        if (!r)
-            return;                     /* no question, no prompt: OPEN again */
+        if (!r) {
+            if (pdu_ovl_in())
+                return;                 /* no question, no prompt: OPEN again */
+            pdu_mcf = 1;                /* QA F21: the overlay could not be read */
+            r = PDE_IO;                 /* (its toast said why); an OPEN with no */
+        }                               /* key left the next open refused */
     }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */
@@ -401,6 +406,7 @@ failed:
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
         pdu_say(pdu_line);
+        pdu_opsaid = 1;                 /* QA R16: the first page's own line replaces it */
     }
     pdu_dirty_all = 1;
 }
@@ -491,7 +497,8 @@ static void pdu_render_step(void)
     if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
         return;                         /* 20.22.2.6: STEP again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
-        pdu_progress("Drawing page ", "");
+        os88_utoa(pdu_page + 1, pdu_num);       /* QA R15: the page it IS */
+        pdu_progress("Drawing page ", pdu_num);
         return;
     }
     pdu_job = J_NONE;
@@ -520,8 +527,9 @@ static void pdu_render_step(void)
             pdu_say2("Incomplete rendering - ", pdu_incwhy);
             pdu_wsay(pdu_msg);
         }
-    } else if (pdp_form || pdu_jslices > 8 || pdu_pshown) /* prefs: a form's note; polish: never leave "Esc cancels" */
+    } else if (pdp_form || pdu_jslices > 8 || pdu_pshown || pdu_opsaid) /* prefs: a form's note; polish: never leave "Esc cancels" */
         pdu_wsay(pdp_done());
+    pdu_opsaid = 0;
 }
 
 /* ---------------------------------------------------------------------------

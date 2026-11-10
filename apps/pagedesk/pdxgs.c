@@ -910,8 +910,8 @@ static pdw v_pat(void)
         d = gx_res(gx_source());
         if (d == GN_NIL || gx_ty(d) != GN_DICT) return PDE_GRAPHICS;
         for (i = 0; i < sizeof pe; i++) ((pdb *)&pe)[i] = 0;
+        pe.objnum = gx_ro; pe.gen = gx_rg;                            /* before gx_dres, which resets gx_ro */
         pe.ptype = (pdb)gx_int(gx_dres(d, "PatternType"), 0);
-        pe.objnum = gx_ro; pe.gen = gx_rg;
         for (i = 0; i < 6; i++) fx_i(&pe.matrix[i], (i == 0 || i == 3) ? 1 : 0);
         gx_nums(gx_dres(d, "Matrix"), pe.matrix, 6);
         if (pe.ptype == 1) {

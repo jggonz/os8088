@@ -1204,6 +1204,11 @@ cc_ovneed:
     mov si, op_s_disk               ; way back to take - only the reason
     call op_say
 .refused:
+%ifdef CC_OVL_FAIL
+    call CC_OVL_FAIL                ; SI = the refusal op_say put up: the
+                                    ; package may say it in its own words
+                                    ; (PAGEDESK's "Insert the PageDesk disk")
+%endif
     pop es
     pop di
     pop si

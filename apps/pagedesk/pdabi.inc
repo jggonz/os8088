@@ -340,8 +340,10 @@ PDFG_BLOCK               equ 0x0004
 PDFB_SIZE                equ 4096
 PDFB_HDR                 equ 64
 PDFB_MAGIC               equ 0x5342
-PDFB_NBLK                equ 4
+PDFB_NBLK                equ 6
 PDFB_GLYPHKB             equ 40
+PDTM_UNREAD              equ 2
+PDFB_GLYPHWANT           equ 48
 PDFB_KEYS                equ 3328
 PDFB_INFO                equ 3584
 PDFB_T3REC               equ 512
