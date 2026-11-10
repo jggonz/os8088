@@ -4954,12 +4954,15 @@ core, which keeps it in the extension cache (`XCK_CS`, `XCK_SHADE`, `XCK_LUT`,
 memory (3.4), never holds a result between verbs except in its own workspace,
 and every verb is one call with no C recursion (20.15's stack bound).
 
-**What it reads.** The module reads PDF syntax itself. A colour space, a
-function or a shading is given as an object number (`objnum`/`gen`, fetched
-with `PDV_ENG_RAW_COPY` in `PDRC_PLAIN` mode, so an object-stream member or an
-encrypted string arrives plain) OR as direct syntax in a far buffer
-(`tseg:toff`, `tlen` <= 1,024; the core cuts it out of the resource it already
-holds). Stream data (a type 0 or 4 function, a mesh shading) is read through
+**What it reads.** The module reads PDF syntax itself, through PDENG's
+`PDV_ENG_RAW_COPY` in `PDRC_PLAIN` mode (so an object-stream member or an
+encrypted string arrives plain; one window of 1,024 bytes a dictionary).
+The core names a RESOURCE, not an object: `PDGXI_RES` with the Form's object
+number (0 = the page, whose index is `bpc`) and the text `Category\0Name`; the
+module walks Resources/Category/Name through `/Parent` (8 levels), finding the
+key by a scan that parses nothing but the value it wants (a page dictionary can
+be larger than the node tables). It also accepts a plain object number or direct
+syntax (`tseg:toff`, `tlen` <= 1,024) for the host harness and for a function. Stream data (a type 0 or 4 function, a mesh shading) is read through
 `PDV_ENG_STRM_OPEN/READ/CLOSE`. A tiny non-recursive parser (`pdxgp.c`: an
 explicit stack, a bump arena of 12 KiB in the workspace, names, numbers,
 arrays, dictionaries, references; at most 64 items a container, depth 8)
@@ -4975,8 +4978,7 @@ call.
 **Colour spaces** (`PDV_GFX_CS`). Device spaces never reach the module.
 Handled: `Indexed` (base any of the below, hival <= 255, table string or
 stream), `ICCBased` (by `/N`: 1, 3 or 4 components are `DeviceGray`,
-`DeviceRGB`, `DeviceCMYK`; `/Alternate` is used when present and its component
-count agrees; the profile itself is never interpreted - an owner-visible
+`DeviceRGB`, `DeviceCMYK`; `/Alternate` and the profile are never read - an
 approximation, not an Incomplete bit), `CalGray`, `CalRGB` (white point,
 gamma and matrix applied, then XYZ D50 to sRGB), `Lab` (white point, range),
 `Separation` (`/All` and `/None` included: None paints nothing), `DeviceN`
@@ -5051,9 +5053,9 @@ Incomplete: a dither).
 
 | verb | name | XB / registers |
 |---|---|---|
-| 0xC8 | `PDV_GFX_CS` | `pdxb_gfx` in/out: compile; result in `rseg:roff` (`PDGX_CSBYTES` = 784) |
+| 0xC8 | `PDV_GFX_CS` | `pdxb_gfx` in/out: compile; result in `rseg:roff` (`PDGX_CSBYTES` = 1,264) |
 | 0xC9 | `PDV_GFX_COLOR` | `pdxb_gfx`: `cs_seg:cs_off` + `comp[]` -> `rgb[3]` |
-| 0xCA | `PDV_GFX_LUT` | `pdxb_gfx`: image LUT in `rseg:roff` (`PDGX_LUTBYTES` = 1,040) |
+| 0xCA | `PDV_GFX_LUT` | `pdxb_gfx`: image LUT in `rseg:roff` (`PDGX_LUTBYTES` = 1,028) |
 | 0xCB | `PDV_GFX_SHADE` | `pdxb_gfx`: header + ramp, or triangles; resumable |
 | 0xCC | `PDV_GFX_PAT` | `pdxb_gfx`: tiling pattern parameters |
 | 0xCD | `PDV_GFX_FN` | `pdxb_gfx`: evaluate ONE function (`fn` text, `comp[]` in, `rgb`-free out `val[]`); for the host harness and the core's `sh` operands |
@@ -5064,13 +5066,16 @@ Blend's ExtGState (`pdxgtr.c`, 0xD0-0xD7) and rcore's dash walker
 (`pdxdash.c`, 0xCE) are `#include`d by `pdxg.c` and given a case in its door's
 `switch`.
 
-**Workspace** (declared for 20.22.2's table): 16 KiB parse arena + 4 KiB
-function and calculator state + 2 KiB result staging = **22 KiB** beyond image
-and bss; the module's stack is the private 2 KiB deep stack (20.15).
+**Workspace** (for 20.22.2's table): none beyond image and bss (all of it is
+static: parse tables 5.4 KiB, function tables 5.5 KiB, a 1.3 KiB overlay for the
+verbs' result records, two 1 KiB object windows); the module's stack is the
+private 2 KiB deep stack (20.15). A mesh shading is tessellated into the core's
+2,048-byte staging area in the display-list workspace (`WS_ED`), 49 triangles a
+call (`PDE_BUSY` until done).
 **Limits** (each is a table row, never a crash): 8 nested containers, 64 items a
 container, 8 reference hops, 8 colorants, 4 inputs to a sampled function, a
-sample table of at most 8,192 bytes (larger tables are read by streaming
-nearest-sample), 4,096 triangles a shading.
+sample table of at most 3,072 bytes, 24 vertices a lattice row, 4 colour
+values a mesh vertex, 9 compiled functions a request, 4,096 triangles a shading.
 
 #### 20.22.10 Transparency through an 8-bit band (`blend`)
 
