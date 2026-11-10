@@ -241,7 +241,7 @@ static pdw v_raw_copy(void)
     rs_txt = 0;
     u32_cp(&rs_pos[0], &sp_off); u32_cp(&rs_len[0], &ex_len);
     u32_zero(&rs_len[1]); u32_zero(&rs_len[2]);
-    if (rw.mode == PDRC_PLAIN) {
+    if ((rw.mode & 0xFF) == PDRC_PLAIN) {          /* crypt ORs PDRC_STRCIPHER into the high byte */
         if (sp_off.hi & 0x8000) {                       /* a member: its frame */
             pdm_u32_set(&p, 0, rw.objnum);
             k = pdm_u32_todec(rc_text, &p, 0);
@@ -724,7 +724,10 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
             break;
         default:
-            if (!g_open) { rc = PDE_RANGE; break; }
+            /* a half-open document (PDE_PASSWORD) answers DICT_GET and TRAILER:
+             * PDXK reads /Encrypt through them (20.22.3.8, 20.22.5) */
+            if (!g_open && !(op_state == OPS_CRYPT &&
+                             (verb == PDV_ENG_DICT_GET || verb == PDV_ENG_TRAILER))) { rc = PDE_RANGE; break; }
             switch (verb) {
             case PDV_ENG_PAGEINFO:   rc = v_pageinfo((pdw)bx); break;
             case PDV_ENG_OBJ_FIND:   rc = v_obj_find(); break;

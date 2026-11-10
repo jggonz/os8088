@@ -5195,8 +5195,11 @@ the resources and the objects, which are the engine's:
   not - and says so in `xo.state`; `CRYPT SETKEY` with the user's key and then
   `OPEN` again resumes from there, without reading the cross-reference a
   second time (wrt's request: a file that took a minute to index takes it
-  once). `OPEN` with state 0, or `CLOSE`, abandons it; every other object verb
-  answers `PDE_RANGE` there, as on a closed document.
+  once). `OPEN` with state 0, or `CLOSE`, abandons it. `DICT_GET` and
+  `TRAILER` answer there (PDXK reads `/Encrypt` through them, 20.22.5); every
+  other object verb answers `PDE_RANGE`, as on a closed document. `RAW_COPY`
+  tests its mode's LOW byte, so crypt's `PDRC_STRCIPHER` in the high byte
+  of an answer fed back is harmless.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
