@@ -41,7 +41,8 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
         if verb == 0x0B:                         # RAW_COPY
             obj, gen = struct.unpack("<HH", rd(XBSEG, 0, 4))
             dseg, doff, dmax = struct.unpack("<HHH", rd(XBSEG, 8, 6))
-            data = eng.syn.get(obj, b"")[:dmax]
+            done, = struct.unpack("<H", rd(XBSEG, 4, 2))
+            data = eng.syn.get(obj, b"")[done:done + dmax]
             wr(dseg, doff, data)
             wr(XBSEG, 14, struct.pack("<H", len(data)))
         elif verb == 0x06:                       # STRM_OPEN
@@ -128,6 +129,12 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
             kind, n, flags = cs[0], cs[1], cs[2]
             rgb, none = [0, 0, 0], False
             if flags & 0x10: none = True
+            elif flags & 0x01:                   # PDREND's own lookup of a table space: Indexed rows, else 65 samples
+                hival, = struct.unpack_from("<H", cs, 4)
+                nr = (256 if hival > 255 else hival + 1) if kind == 7 else 65
+                ix = int(round(comps[0])) if kind == 7 else int(round(comps[0] * 64))
+                ix = max(0, min(nr - 1, ix))
+                rgb = list(rd(RSEG, 16 + 3 * ix, 3))
             elif flags & 0x02: rgb = [int(round(c * 255)) for c in comps[:3]]
             elif flags & 0x04:
                 a, b, c, k = [int(round(v * 255)) for v in comps[:4]]
