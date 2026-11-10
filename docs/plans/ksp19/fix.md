@@ -56,7 +56,25 @@ PRE-EXISTING at `4beca096` (checked against a base build in
 | telzm | stale row | cause 1 | 0 | ok |
 | pkgmove-dotdel/-wireflet/-browser | stale row | cause 1 | 0 | ok |
 | pxdecode, pkgmove-pixelanim/-pixelgif | PRODUCT (every kernel) | cause 4 | pixel +2 | C1.PCX, all TIFs ok; pkgmove ok |
-| abicompat | stale row (a new generation) | see below | 0 | running |
+| abicompat | stale row (a new generation) | see below | 0 | ok (and both red arms red) |
+| ftpd | stale row | cause 1; my own sweep had caught the BPB's byte 22 in its host reader, put back (twice: the fix2 merge carried it again) | 0 | ok (one run stalled at 8d's STOR-after-LIST, the next passed) |
+| dispfit, colorpresets | stale row | dispfit's size-changed handler goes in a COPY of fm_cls (WC_ONRESIZE) in a spare record; colorpresets reads WC_ONCLICK/ONKEY via W_SEG:W_CLASS and OSAPI_THM_SET off the SDK (0x0440 was the old cell) | 0 | ok |
+| doswpart | stale row | the DOS part's claim is the image at MEM_GRAN (paragraphs), not a KB count | 0 | ok |
+| vgacolor | stale row | Force Color is bit 7 of 'VM''s mode byte since F1, not a 'VC' record | 0 | ok |
+| paccman | stale row | cc_tpl is the 12-byte template, class word written by os88_wm_create | 0 | ok |
+| doshead | PRODUCT | dos_htpl was still the 8-word template: its 6th word (dos_hpaint) read as the class, dos_wake never reached; `dos_hcls` | dos +10 | ok |
+| excitebikeega | PRODUCT | xb_partget keeps BX (the head slack) across the MEMP_CONV claim - cause 4's BX twin | excitebike +2 | ok |
+| stikswap | PRODUCT | OSAPI_DESK_ITEM's package remove enters sc_modcall with AL = 0xFF: C10's form left AL = 0 ("removed") when DESK.DRV could not be read, so a declined close went through | DESK.DRV +1 | ok |
+| skies* (40 rows) | PRODUCT | cause 2 (CLEAR SKIES' entry CF) | skies +1 | `skies` ok; the rest in the re-run |
+| telnet, socktest, lz*, br*, pciether, ethernet, thewire, wirechat, apple2part, c64part, fontview, tmselfsu, dispcalc, pkgmove-* | stale rows | cause 1 | 0 | in the re-run |
+
+**Template audit.** Every `mov si, <tpl>` before an `OSAPI_WM_CREATE` in
+apps/, drivers/, tests/ and kernel/ was checked for a sixth word that names
+a class: dos_htpl was the only one left. **Register audit** of the KB ->
+paragraph sites (BX taken by the verb in BL, CL by the shift): straight-line
+reads after the call are all clean; the two found (PiXEL's CL, ExciteBike's
+BX) were both read ACROSS an intervening call, which the scan cannot follow -
+a reviewer of any other converted site should look for that shape.
 
 **REDLINE, the numbers.** Against the OLD reference (calibrated at #252) the
 graphics rows moved -17%..+16% - but REDLINE profiled on the BASE build
