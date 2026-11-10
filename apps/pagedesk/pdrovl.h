@@ -25,6 +25,7 @@
 #define tm_start        ovl_tm_start
 #define verb_init       ovl_verb_init
 #define verb_fontbank   ovl_verb_fontbank
+#define glyph_fresh     ovl_glyph_fresh
 #define verb_begin      ovl_verb_begin
 #define verb_status     ovl_verb_status
 #define verb_abort      ovl_verb_abort

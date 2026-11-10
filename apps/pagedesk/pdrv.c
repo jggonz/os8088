@@ -693,11 +693,39 @@ static void xc_adopt(void)
 #define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
 typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
 /* the words of pdxb_init that are PDREND's own claims and doors (20.22.7.11):
- * xb, the engine's vector, dl, band, glyph, bank, adapter, bpp. A re-INIT that
- * keeps them is the same document; PDENG's, PDWRT's and the Flate slots'
- * words may change under it (the primary shrinks INIT's Flate slots) */
-static const pdb ini_mine[] = { 0, 1, 2, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20 };
+ * xb, the engine's vector, dl, band, bank, adapter, bpp. A re-INIT that keeps
+ * them is the same document; PDENG's, PDWRT's and the Flate slots' words may
+ * change under it (the primary shrinks INIT's Flate slots), and so may the
+ * glyph claim and the XC, which are taken up again (glyph_fresh, the pass) */
+static const pdb ini_mine[] = { 0, 1, 2, 9, 10, 11, 12, 15, 16, 19, 20 };
 typedef char pdr_ck_inimine[(pdw)&((struct pdxb_init *)0)->bpp == 40 && (pdw)&((struct pdxb_init *)0)->dl_seg == 18 ? 1 : -1];
+/* the glyph claim is new (FONTBANK, or a re-INIT that moved or grew it): what
+ * PDREND keeps in it - the strike cache, PDFONTX.RES's INDEX at GC_IDX (D5),
+ * the transformed-glyph slots - starts again from the claim itself */
+static void glyph_fresh(void)
+{
+    pdw cb, cap, got, n, seg;
+    g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0;
+    if (g_bankok && g_gseg && g_gkb >= 8) {
+        cb = file_enter();
+        if (cb) {
+            cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
+            got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
+            file_leave();
+            if (got > cap) got = cap;
+            if (got > GC_XBASE - GC_IDX) got = GC_XBASE - GC_IDX;     /* what the region holds */
+            if (got >= 96) {
+                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), got, &g_bn_tmp);
+                n = g_bn_tmp;
+                if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
+            }
+        }
+    }
+    /* the transformed-glyph slots hold whatever the new claim held: empty them
+     * wherever glyph_xform may use them (a claim of 5 KiB or more) */
+    if (g_gseg && g_gkb >= 5) pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
+    g_pkfam = 0xFF;
+}
 static pdw verb_init(pdw xbseg)
 {
     pdw bound = pdr_eng_seg, i, o;      /* 0 on the FIRST INIT: the bss */
@@ -716,6 +744,14 @@ static pdw verb_init(pdw xbseg)
             if (o && g_xcseg != o && x_ask != (0x80 | PDMEM_XC)) {
                 g_xclost = 1; g_ikb = 0;
                 if (!g_xcseg) x_ref |= XR_MEM;
+            }
+            /* the glyph claim moved or grew (PDXF's GLYPH grant, a moved X):
+             * its row buffer and caches go, the pass runs again */
+            o = g_ini.glyph_seg ? (g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb) : 0;
+            if (g_ini.glyph_seg != g_gseg || o != g_gkb) {
+                g_gseg = g_ini.glyph_seg; g_gkb = o;
+                glyph_fresh();
+                g_xclost = 1;
             }
             return PDE_OK;
         }
@@ -772,33 +808,13 @@ static pdw xb_seg(void) { return g_xb; }
 static struct pdxb_fontbank g_fbq;
 static pdw verb_fontbank(void)
 {
-    pdw cb, cap, got, n, seg;
     pd_fcopy_in(g_xb, 0, &g_fbq, sizeof g_fbq);
     bank_attach(g_fbq.index_seg, g_fbq.index_len);
     pdr_scpy(g_pkgname, g_fbq.pkgname, 14);
     g_pclus = g_fbq.place_clus; g_pvol = g_fbq.place_vol;
     g_poff_lo = g_fbq.part_off.lo; g_poff_hi = g_fbq.part_off.hi;
-    g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0;
-    if (!g_bankok) return PDE_FONT;
-    if (g_gseg && g_gkb >= 8) {
-        cb = file_enter();
-        if (cb) {
-            cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
-            got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
-            file_leave();
-            if (got > cap) got = cap;
-            if (got > GC_XBASE - GC_IDX) got = GC_XBASE - GC_IDX;     /* what the region holds */
-            if (got >= 96) {
-                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), got, &g_bn_tmp);
-                n = g_bn_tmp;
-                if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
-            }
-        }
-    }
-    /* the transformed-glyph slots hold whatever the new claim held: empty them
-     * wherever glyph_xform may use them (a claim of 5 KiB or more) */
-    if (g_gseg && g_gkb >= 5) pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
-    g_pkfam = 0xFF;
+    if (!g_bankok) { g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0; return PDE_FONT; }
+    glyph_fresh();
     return PDE_OK;
 }
 

@@ -91,6 +91,7 @@ static int send_fontbank(void)
  * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
  * way the verb is called again. */
 #define SEG_XC   0xA000
+#define SEG_GLY2 0xC000          /* PDR_GLYMOVE's new glyph region */
 extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
 static struct pdxb_init g_lastinit;
 static int g_loads, g_memasks;
@@ -106,6 +107,18 @@ static int ladder(pdw e)
         /* PDR_XCDROP: the primary's release-before-refuse (plat's pdu_slot_load):
          * the slot's claim is short, so XC is released and PDREND re-INITed with
          * xc_seg 0 under this NEEDMOD answer, mid-view (20.22.7.11) */
+        /* PDR_GLYMOVE: PDXF's GLYPH grant (plat): the glyph claim moves to a new,
+         * bigger region under this answer, once, mid-view (20.22.7.11) */
+        if (getenv("PDR_GLYMOVE") && g_lastinit.glyph_seg == SEG_GLY) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = 40;
+            memset(MEM(SEG_GLY2, 0), 0xA5, 40u << 10);   /* a new region holds anything */
+            memset(MEM(SEG_GLY, 0), 0xCD, 8192);         /* the old one is gone: a write there is a canary */
+            g_clsize[3] = 0;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
         if (getenv("PDR_XCDROP") && g_lastinit.xc_seg) {
             memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
             g_lastinit.xc_seg = 0; g_lastinit.xc_kb = 0;

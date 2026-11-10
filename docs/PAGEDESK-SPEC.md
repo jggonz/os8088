@@ -5189,11 +5189,18 @@ So paint order holds, the walker is not touched, and the 8-bit strips
 **20.22.7.11 A re-INIT under a ladder answer.** The primary may re-INIT
 PDREND while a `PDE_NEEDMEM` or `PDE_NEEDMOD` answer is pending: to add a
 region, or to release the XC so that a slot occupant's claim fits
-(release-before-refuse, plat's `pdu_slot_load`). When PDREND's own words of
-`pdxb_init` are unchanged (`ini_mine`: `xb_seg`, the engine's vector, `dl`,
-`band`, `glyph`, `bank`, `adapter`, `bpp`), the page view and the
-document's caches go on. PDENG's, PDWRT's and the Flate slots' words may
-change under it: the primary shrinks INIT's Flate slots while releasing. Any other re-INIT is a new
+(release-before-refuse, plat's `pdu_slot_load`), or to move the glyph claim
+(PDXF's GLYPH grant, or claim X moved by a regrow). When PDREND's own words
+of `pdxb_init` are unchanged (`ini_mine`: `xb_seg`, the engine's vector,
+`dl`, `band`, `bank`, `adapter`, `bpp`), the page view and the document's
+caches go on. PDENG's, PDWRT's and the Flate slots' words may change under
+it: the primary shrinks INIT's Flate slots while releasing.
+
+A glyph claim that moved or grew is taken up at once (`glyph_fresh`). The
+strike cache starts empty. PDFONTX.RES's INDEX is read again into
+`GC_IDX`, so no FONTBANK need follow, though one is harmless. The
+transformed-glyph slots are emptied. The pass runs again, because the row
+buffer at the claim's offset 0 held an open image's row. Any other re-INIT is a new
 document and ends the view: the next STEP answers `PDE_OK`, and the primary
 must BEGIN again.
 
@@ -5210,7 +5217,10 @@ the answer was not PDREND's own `PDMEM_XC` ask:
 Images that needed a LUT or the stash then note `PDF_INC_COLOUR` or
 `PDF_INC_LIMIT`, and the next page view asks for the XC again. `pdr_test`'s
 `PDR_XCDROP` releases it this way under every NEEDMOD answer, moving
-`flate_kb` and `cache_kb` with it. `pdr_xchk`
+`flate_kb` and `cache_kb` with it. `PDR_GLYMOVE` moves the glyph claim to
+a new 40 KiB region once, under the first answer, and leaves a canary
+where the old one was. `ramp.pdf` page 9 (text, a DCT image, text) must
+then draw the same page to the pixel. `pdr_xchk`
 requires such a view to finish, every band blitted, with `PDF_INC_LIMIT` and
 never `PDF_INC_MODULE`. Before this rule the view ended at the re-INIT.
 
