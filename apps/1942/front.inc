@@ -560,6 +560,7 @@ n_key:
 
 n_launch:
     mov bx,[n_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     test ax,(1 << FSXM_MODEX) | (1 << FSXM_CGA320)
     jz .error

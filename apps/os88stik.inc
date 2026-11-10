@@ -1483,7 +1483,7 @@ stik_close:
     push ds
     pop es
     mov si, stik_rec
-    mov ax, 0xFF00              ; AL = 0 remove, AH = 0xFF: by NAME
+    xor al, al                  ; AL = 0 remove: the record names the row
     call OSAPI_DESK_ITEM
     jnc .gone
     test byte [stik_fl], STIK_F_KEPT

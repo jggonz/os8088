@@ -59,11 +59,11 @@ CELL = 8                # the LONGEST cell: the decode window, not the stride
 # body behind the call (SPEC.md 20.3). These are the cells T5 moves behind
 # the software-interrupt door.
 RARE_KINDS = ("RSLOT", "RXCELL", "RCXCELL", "RNCELL", "RCSLOT")
-LEN = {"SLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
+LEN = {"SLOT": 8, "YSLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
        "XCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
 BODIES = ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")
 
-SHAPES = ("1E0E1F E8.. 1FCB | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | "
+SHAPES = ("1E0E1F E8.. 1FCB | 9CFA0E E8.. CB90 | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | "
           "E9.. | 9A.. ssss CB | 2E <mov> [98] CB | FIXED")
 
 # The INLINE cells with NO memory operand (kernel size pass 14): a
@@ -180,6 +180,11 @@ def decode(blob, addr, bodies, cold_seg):
 
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
         return "SLOT", rel(addr + 6, 4), ".text"
+    if c[0:4] == b"\x9c\xfa\x0e\xe8" and c[6:8] == b"\xcb\x90":
+        # OSAPI_TASK_YIELD's own cell (ABI-BREAK-LIST V2, kernel size pass
+        # 19): pushf / cli / push cs / call task_yield.save / retf / nop -
+        # it builds the yield's int 08h frame under the far return
+        return "YSLOT", rel(addr + 6, 4), ".text"
     # kern_mega's arms of the same cells (kernel.asm's OSAPI_SLOT and
     # OSAPI_FJCELL under KERN_MEGA, MEGA_ICW/MEGA_ICWB): `push cs / pop ds`
     # would be a read-only DS there, so each cell reaches a per-cell STUB that

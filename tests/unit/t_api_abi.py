@@ -27,6 +27,9 @@ can simply be decoded:
 
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
                                                call near/pop ds/retf (hot, 8)
+    (YSLOT)      9C FA 0E  E8 lo hi  CB 90     pushf/cli/push cs/call near
+                                               task_yield.save/retf/nop - the
+                                               yield cell (V2, 8)
     OSAPI_XCELL  55 BD tt tt E9 lo hi          push bp/mov bp,<target>/
                                                jmp near api_x   (hot, 7)
     OSAPI_R*     55 E8 lo hi tt tt             push bp/call api_r<kind>/
@@ -585,6 +588,8 @@ def check_kernel(kernel, kbin, maps):
         elif name in KERNEL_ALIAS.get(kernel, {}):
             want = {KERNEL_ALIAS[kernel][name]}
         seen = set(names)
+        if kind == "YSLOT":                   # task_yield.save: the routine
+            seen |= {n.split(".")[0] for n in names}
         if where == ".cold":
             seen |= {stem(n) for n in names}
         check(bool(seen & want),

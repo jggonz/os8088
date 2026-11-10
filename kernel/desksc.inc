@@ -1443,30 +1443,41 @@ sc_m_move:
 
 ; -----------------------------------------------------------------------------
 ; sc_m_pdel - SC_OP_PDEL: a PACKAGE's OSAPI_DESK_ITEM remove (SPEC.md 26.9.6)
-; in:  AL = the zone its add answered, or 0xFF: a Sticky App's remove by name
-;      (SPEC.md 110.2); DX:CX = the caller's SC_REC record
+; in:  DX:CX = the caller's SC_REC record - and nothing else: the record IS
+;      the name (ABI-BREAK-LIST C10, kernel size pass 19)
 ; out: AL = 0 removed, 0xFF refused
 ;
 ; A ZONE IS NOT AN IDENTITY: the row a user's Delete frees is the next one a
 ; drag-out gets, and the boot reader compacts them. So the remove names the
-; LINK - the row goes only while its volume and path are still the record's,
-; and a shortcut the user made in that zone since is nobody's to take.
+; LINK - the first row whose volume and path are the record's. A Sticky App
+; record (+3 = SC_STIK) is found by its path's FINAL component among the
+; Sticky App rows (SPEC.md 110.2), then held to the same check. It took the
+; zone the add answered in AH until pass 19, which named nothing the record
+; did not and cost WIN16 a sixteen-zone probe loop to find its own link.
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
-    cmp al, 0xFF                ; AH = 0xFF at the door: a Sticky App's remove BY
-    jne .z                      ; NAME (SPEC.md 110.2) - its zone is found,
-    call sc_m_dfind             ; then the same check as any remove
-    jc .no
-.z:
-    mov ah, al
-    sub ah, DESK_SC0
-    cmp ah, [sc_nrows]
-    jae .no
+    mov es, dx
+    mov di, cx
+    cmp byte [es:di+SC_R_STIK], SC_STIK
+    jne .scan                   ; a Sticky App's remove is BY NAME (110.2):
+    call sc_m_dfind             ; its zone is found, then the same check as
+    jc .no                      ; any remove
     call sc_m_same
     je sc_m_del
 .no:
     mov al, 0xFF
     ret
+.scan:
+    mov al, DESK_SC0
+.z:
+    mov ah, al
+    sub ah, DESK_SC0
+    cmp ah, [sc_nrows]
+    jae .no
+    call sc_m_same              ; AL kept
+    je sc_m_del
+    inc ax
+    jmp short .z
 
 ; -----------------------------------------------------------------------------
 ; sc_m_del - SC_OP_DEL: Remove Shortcut from any of its three routes, and a

@@ -9,6 +9,7 @@ dm_frontgeom:
     inc byte [dm_frontcolor]
 .mono:
     mov bx, [dm_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     and ax, (1 << FSXM_MODEX) | (1 << FSXM_CGA320)
     mov [dm_frontplay], al

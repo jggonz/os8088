@@ -214,7 +214,7 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 | `0x04E3` | `OSAPI_SEG` | BL = the verb: SEG_LIN DX = a segment or selector -> DX:AX = its LINEAR base (for the 8237, a DMA page check, anything physical) SEG_REAL DX = a... |
 | `0x04E9` | `OSAPI_MEM_P` | X: BL = the verb: MEMP_CLAIM / MEMP_CLAIM_HI AX = paragraphs, CX = the 64KB-page-safe HEAD in paragraphs (0 = none) -> CF=0, DX = the base, AX = the... |
 | `0x04D7` | `OSAPI_IMG_NAME` | AX = the segment an image is loaded at - the base of a MEM_K_DRV or MEM_K_MOD claim - with BX = 0... |
-| `0x0216` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; out AX = MEM_MAX... |
+| `0x0216` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer, CX >= 1 = the records it holds (MEM_MAX); out CX = the records written, min(CX, the kernel's count)... |
 | `0x021C` | `OSAPI_SYS_KB` | ES:DI = a SYSKB_SIZE buffer; every register preserved... |
 | `0x015A` | `OSAPI_XMEM_CAPS` | no inputs; out AX = extended- memory KB the pool can still hand out (0 = none, and the three below will all refuse), DX:CX = the pool's 32-bit linear... |
 | `0x0160` | `OSAPI_XMEM_ALLOC` | DX:AX = bytes wanted, rounded up to 1KB; out CF=0 and DX:AX = the block's TOKEN, never 0 (opaque... |
@@ -265,7 +265,7 @@ Read first: [§31 ctrl.inc — the Control Panel window](../SPEC.md#31-ctrlinc--
 | `0x0127` | `OSAPI_VIDEO` | the screen this machine actually has (SPEC.md 39.2). No inputs... |
 | `0x020A` | `OSAPI_DRV_CFG` | AL = 0 read / anything else write, ES:SI = the driver's buffer, CX = bytes (<= YOUR blob's size)... |
 | `0x032E` | `OSAPI_DRV_DLG` | AL = FDLG_OPEN / FDLG_SAVE, ES:SI = a default name (NUL, <= 12) or 0, DI = your near completion proc... |
-| `0x0210` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer; out AX = MAX_TASKS, BX = INST_MAX... |
+| `0x0210` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer, CX >= 1 = the instance records it holds (INST_MAX)... |
 | `0x0155` | `OSAPI_CPU_INFO` | no inputs; out AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (the CPU_F_* below): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal... |
 | `0x038B` | `OSAPI_DRV_CALL_AT` | OSAPI_DRV_CALL, EXCEPT ES IS YOURS (SPEC.md 20.11.2)... |
 | `0x0419` | `OSAPI_DRV_SUSPEND` | AL = 1 suspend / 0 resume / 2 handoff (above). ES:DI = a buffer of DQ_SIZE records or DI = 0 (suspend), ES:SI = a KDH_* record (handoff). out CF=0... |
@@ -291,7 +291,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 |---|---|---|
 | `0x045B` | `OSAPI_FSX_SPK` | THE SPEAKER AT A SAMPLE RATE (SPEC.md 34.11), from INSIDE YOUR OWN FSXF_RATE BRACKET only (53.2.2) - PCM with no card... |
 | `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter / 0 exit, BX = YOUR window either way; caller holds the gfx lock (window callbacks do); out CF=1 refused, entering or leaving, when the... |
-| `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
+| `0x022F` | `OSAPI_FSX_CAPS` | in CH = 0 and BX = the window to ask ABOUT (0 = whatever is frontmost), or CH = n: display n-1, BX not read... |
 | `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
 | `0x023B` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
 | `0x0241` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |
@@ -584,5 +584,5 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *How it works today - `docs/` (51):* [86BOX.md](86BOX.md), [AGENT-SKILLS.md](AGENT-SKILLS.md), [APPLE2-SPEC.md](APPLE2-SPEC.md), [ARCADE-SPEC.md](ARCADE-SPEC.md), [BIFF-NOTES.md](BIFF-NOTES.md), [BOCHS.md](BOCHS.md), [C-TOOLCHAIN.md](C-TOOLCHAIN.md), [C64-SPEC.md](C64-SPEC.md), [DOS-DEBUGGING.md](DOS-DEBUGGING.md), [FIELD-MACHINES.md](FIELD-MACHINES.md), [FIELD-NOTES.md](FIELD-NOTES.md), [HEAP-CLAIMS.md](HEAP-CLAIMS.md), [HERCULES-TESTING.md](HERCULES-TESTING.md), [HOW-ARCADE-WAS-BUILT.md](HOW-ARCADE-WAS-BUILT.md), [HOW-CDROM-WAS-BUILT.md](HOW-CDROM-WAS-BUILT.md), [HOW-DEBUG-DISKS-WERE-BUILT.md](HOW-DEBUG-DISKS-WERE-BUILT.md), [HOW-INSTALL-WAS-BUILT.md](HOW-INSTALL-WAS-BUILT.md), [HOW-MIXER-WAS-BUILT.md](HOW-MIXER-WAS-BUILT.md), [HOW-SYSCHECK-WAS-BUILT.md](HOW-SYSCHECK-WAS-BUILT.md), [HOW-VBATTLE-WAS-BUILT.md](HOW-VBATTLE-WAS-BUILT.md), [HOW-VESA-WAS-BUILT.md](HOW-VESA-WAS-BUILT.md), [HOW-WAVERACK-WAS-BUILT.md](HOW-WAVERACK-WAS-BUILT.md), [HOW-WIN16-WAS-BUILT.md](HOW-WIN16-WAS-BUILT.md), [HOW-WIREFLEET-WAS-BUILT.md](HOW-WIREFLEET-WAS-BUILT.md), [HOW-XTMP3-WAS-BUILT.md](HOW-XTMP3-WAS-BUILT.md), [IMAGER.md](IMAGER.md), [KERNEL-MEMORY.md](KERNEL-MEMORY.md), [KODAK-EXAMPLE.md](KODAK-EXAMPLE.md), [LIVE-MEDIA.md](LIVE-MEDIA.md), [MARTYPC-DEBUG.md](MARTYPC-DEBUG.md), [README.md](README.md), [REALDMG-SPEC.md](REALDMG-SPEC.md), [REDLINE.md](REDLINE.md), [TEST-INCIDENTS.md](TEST-INCIDENTS.md), [TESTING.md](TESTING.md), [UPSTREAM.md](UPSTREAM.md), [WEAVE-SPEC.md](WEAVE-SPEC.md), [WRITING-TESTS.md](WRITING-TESTS.md), [browser/screenshots/README.md](browser/screenshots/README.md), [lemband-format.md](lemband-format.md), [syscheck/design/CODEX-PROMPTS.md](syscheck/design/CODEX-PROMPTS.md), [syscheck/design/PROMPT.md](syscheck/design/PROMPT.md), [xtmp3/ENGINE.md](xtmp3/ENGINE.md), [xtmp3/FACE.md](xtmp3/FACE.md), [xtmp3/FIELD.md](xtmp3/FIELD.md), [xtmp3/NUMERICS.md](xtmp3/NUMERICS.md), [xtmp3/STD.md](xtmp3/STD.md), [xtmp3/XT-STUDY-TABLES.md](xtmp3/XT-STUDY-TABLES.md), [xtmp3/XT-STUDY.md](xtmp3/XT-STUDY.md), [xtmp3/XT.md](xtmp3/XT.md), [xtmp3/listen/README.md](xtmp3/listen/README.md)
 
-*Not reference:* 120 open plans in `docs/plans/`, 226 design records in `docs/plans/completed/`, 11 superseded files in `docs/history/`, 172 measurements in `docs/reports/`.
+*Not reference:* 121 open plans in `docs/plans/`, 226 design records in `docs/plans/completed/`, 11 superseded files in `docs/history/`, 172 measurements in `docs/reports/`.
 

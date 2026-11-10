@@ -293,6 +293,7 @@ af_look:
 ; from the window's FSX modes; and the selection put on a READY game
 af_vgacheck:
     mov bx, [ar_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     test ax, 1 << FSXM_VGA12
     jnz .pick

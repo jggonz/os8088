@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "39d211e7700ff33a7fc299a04cdf8da8fe3905cce356659ee3628df4121d69d3",
+  "fingerprint": "fb4f170d35af45ea44b4930f3c5a1c278050042b2f2160c35c450b3e04888933",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "e9fa2b1da740f9cd39a789c6ecca321efc4443edab7e1c4a36c88b2f936c196b",
+  "fingerprint": "59953a422e5c9401114aa19d7e3fbf351818ec7d00bb11436e6588ee7efb04bd",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2029,6 +2029,20 @@
    "guard": "HD_ABI_VER",
    "reason": "T6's call spelling (SPEC.md 20.3.3): os88api.inc overloads `call` once and a generated CELL KINDS block marks the rare cells for the rare arm, today the same far call - every image byte-identical, so no bump. The lock grows engsys-11's C SDK (os88.h, os88thunk.asm) under PKG_FMT and drivers-16's private ABIs (VX_ABI_VER, XM_ABI_VER over the new kernel/xmabi.inc, HD_ABI_VER), each recorded at its current number (kernel size pass 19)",
    "to": 7
+  },
+  {
+   "fingerprint": "59953a422e5c9401114aa19d7e3fbf351818ec7d00bb11436e6588ee7efb04bd",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of recon's re-contracts (R2 snapshots bounded by CX, R12 FSX_CAPS display index in CH, C10 desk item by record, V2 yield cell) onto the flag day (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "fb4f170d35af45ea44b4930f3c5a1c278050042b2f2160c35c450b3e04888933",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of recon's re-contracts (R2 snapshots bounded by CX, R12 FSX_CAPS display index in CH, C10 desk item by record, V2 yield cell) onto the flag day (kernel size pass 19)",
+   "to": 14
   }
  ]
 }

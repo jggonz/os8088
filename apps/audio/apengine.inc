@@ -903,8 +903,8 @@ ap_find_sibling:
     push ds
     pop es
     mov di, ap_snap
-    call OSAPI_SYS_SNAPSHOT        ; AX = MAX_TASKS, BX = INST_MAX
     mov cx, INST_MAX
+    call OSAPI_SYS_SNAPSHOT        ; CX = the records written
     mov si, ap_snap + SS_INST
     mov bx, cs                     ; our own region segment
 .rec:

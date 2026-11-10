@@ -105,6 +105,7 @@ OVF_RROW    equ 24
 ; -----------------------------------------------------------------------------
 it_fs_pick:
     mov bx, [it_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the settable ids, DL = the kind
     mov bx, ax
     mov al, FSK_VGA
@@ -339,6 +340,7 @@ it_fs_setup:
     jmp .gl                         ; is asked anyway, for the harness's check)
 .cga:
     mov bx, [it_win]                ; THE FALLBACK: four colours beat none
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     test ax, 1 << FSXM_CGA320
     jz .no
