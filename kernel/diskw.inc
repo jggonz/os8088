@@ -3543,9 +3543,13 @@ dskw_read_at_x:
     ; offset / cluster_bytes, and one div: a REAL file's quotient fits 16 bits
     ; (a volume holds under 65,525 clusters), but the offset is bounded only
     ; by the entry's size, and a hostile size can overflow it - unguarded.
+%ifdef DSK_STREAM
+    call dwr_cidx               ; AX = clusters to skip: the cursor's own
+%else                           ; division, below (kernel size pass 19, -8)
     mov ax, [dwr_off]
     mov dx, [dwr_off+2]
     div word [dwr_clb]          ; AX = clusters to skip
+%endif
 %ifndef KERN_SMALL
     mov cl, 9                   ; ...and DX the bytes into the one it lands
     shr dx, cl                  ; in: its SECTORS, which dsk_read_chain skips

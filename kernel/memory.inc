@@ -5052,6 +5052,7 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; AL = the caller's own level otherwise, and
                                 ; only caches BELOW it count (SPEC.md 50.6.4)
     call mem_avail_lvl_p        ; ...in KB, which is the paragraph answer below
+mem_avail_kbdn:                 ; (AX and BX paragraphs -> KB: the what-if's)
     push cx                     ; ROUNDED DOWN: a claim of the answer must
     mov cl, 6                   ; always fit. OSAPI_MEM_P's avail takes the
     shr ax, cl                  ; paragraphs themselves (SPEC.md 50.3.7),
@@ -5404,9 +5405,17 @@ osapi_mem_hma_x:                    ; shared refusal, kernel size pass 12)
 ; left asks no 64KB page, so the head - and BR-105's shift of it, CX = 2048KB
 ; arriving as no page rule at all - went with them.
 ; -----------------------------------------------------------------------------
+%ifndef KERN_MEGA                ; OSAPI_MEM_HUGE's whole body on every other
+mmf_osapi_mem_huge:             ; kernel (its banner is below, at kern_mega's):
+    mov cx, 0x1000              ; OS88_HUGE_INCR, as the CX the frame pops on
+%endif                          ; the way out - so this retf is the cell's, CF
+                                ; and DX its answer. It FALLS IN: the cell is
+                                ; this routine's only caller there, so the
+                                ; jump past the `push cx` went, and the `xor
+                                ; cx, cx` that zeroed a DMA head nothing reads
+                                ; since the flag day (kernel size pass 19, -4)
 mmf_mem_claim_own:
     push cx
-.pushed:
     push bx
     call mem_own                ; BX = owner word = the calling segment
     jc .fail
@@ -5442,8 +5451,8 @@ mmf_mem_claim_ownhi:            ; ...and from the TOP: the bridge's
 ;      OS88_HIGHMEM package's, mega_hugef). CF = 1 refused. Freed with
 ;      OSAPI_MEM_FREE and DX, as any claim
 ; -----------------------------------------------------------------------------
-mmf_osapi_mem_huge:
 %ifdef KERN_MEGA
+mmf_osapi_mem_huge:
     or ax, ax                   ; AX = 0 ASKS (KERN-MEGA-MEMORY-PLAN MC5):
     jnz .claim                  ; the most one claim gets - the heap's, and
     cmp bx, MEMH_AVAIL          ; in protected mode the pool's and the
@@ -5495,12 +5504,7 @@ mmf_osapi_mem_huge:
 .hrm:
     mov cx, 0x1000              ; OS88_HUGE_INCR (mov leaves CF)
     retf
-%else
-    mov cx, 0x1000              ; OS88_HUGE_INCR, as the CX the door's frame
-    push cx                     ; pops on the way out - so the door's own retf
-    xor cx, cx                  ; is this cell's, CF and DX its answer (kernel
-    jmp short mmf_mem_claim_own.pushed   ; size pass 16)
-%endif
+%endif                          ; (every other kernel: mmf_mem_claim_own)
                                 ; (ODD on every kernel, and so is mem_claim_1's
                                 ; range test above: the two cancel, and
                                 ; dsk_xfer and the hot disk routines after
@@ -5970,11 +5974,13 @@ osapi_mem_compact_x:
     push es                     ; THE WHAT-IF: the caller's segment is the one
     pop word [mem_cp_self]      ; the walk excuses...
     or ah, ah                   ; MEMC_WHATIF_P (2): the same walk's own
-    jz .kb                      ; PARAGRAPHS, before the KB rounding - for a
-    call mem_avail_lvl_p        ; caller that prints the half-K the heap is
-    jmp short .wd               ; counted in (the Task Manager, 28.4.1)
-.kb:
-    call mem_avail_lvl_x        ; ...AT THE CALLER'S LEVEL (SPEC.md 66.4.3.2):
+    call mem_avail_lvl_p        ; PARAGRAPHS, before the KB rounding - for a
+    jnz .wd                     ; caller that prints the half-K the heap is
+                                ; counted in (the Task Manager, 28.4.1). The
+                                ; walk's popf hands the `or`'s ZF back (its
+                                ; .nested arm's xor sets ZF, and a 0 is 0 in
+                                ; either unit - kernel size pass 19, -2)
+    call mem_avail_kbdn         ; ...AT THE CALLER'S LEVEL (SPEC.md 66.4.3.2):
                                 ; the what-if and the claim beside it must be
                                 ; answers to the same question
 .wd:

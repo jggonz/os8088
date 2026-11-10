@@ -890,7 +890,9 @@ ld_where:
     and bx, 0FE00h
 .rdgo:
     mov [ld_roff], bx
-    ret
+    mov es, [ld_base]           ; ...and ES:BX = the region at that offset,
+    ret                         ; which both callers loaded next (kernel size
+                                ; pass 19, -4)
 
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
@@ -990,8 +992,7 @@ ld_run_body_x:
                                 ; BX HELD to the read: dsk_bytes_secs_x spends
                                 ; CL alone (kernel size pass 18, -10)
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
-    mov ax, [ld_clus]
-    mov es, [ld_base]           ; the package's OWN segment
+    mov ax, [ld_clus]           ; (ES = the package's OWN segment: ld_where)
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
@@ -1912,9 +1913,8 @@ ld_pkg_start_x:
     ; this), and what it produces is a region full of something else whose
     ; PKG_DISP is not a dispatcher: step 8's far call lands at CS=0000
     ; IP=0003, in the interrupt vector table (SPEC.md 21.5.2).
-    call ld_where               ; BX = where in the region, AX = how many
-    mov es, [ld_base]           ; ES:DI = the region at that offset
-    mov di, bx
+    call ld_where               ; BX = where in the region, AX = how many,
+    mov di, bx                  ; ES:DI = the region at that offset
     xchg cx, ax                 ; CX = the count (AX is spent)
     mov si, [ld_msrc]           ; ...the source OFFSET, first and through the
                                 ; kernel's own DS

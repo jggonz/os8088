@@ -597,13 +597,14 @@ mod_need:
 %else
     jne .freefail
 %endif
+    mov si, MOD_H_ENT           ; ...and CX is the count both sides agreed
     mov dx, cx
     shl dx, 1
-    add dx, MOD_H_ENT           ; DX = the header's own end
+    add dx, si                  ; DX = the header's own end (SI, a byte under
+                                ; the immediate - kernel size pass 19)
                                 ; DI = &mod_fp[id], and BX is untouched - so
                                 ; the `pop bx / push bx` that used to put the
                                 ; row back goes with the id derivation
-    mov si, MOD_H_ENT           ; ...and CX is the count both sides agreed
 .arm:
     es lodsw                    ; the entry table, one word a pass
     cmp ax, dx
