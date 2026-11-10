@@ -69,7 +69,7 @@ br_copyselection:
 .claim:
     cmp ax, 32                      ; OSAPI_CLIP_PUT's published ceiling
     ja .out
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [br_copyseg], dx
     mov es, dx

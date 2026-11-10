@@ -1153,7 +1153,7 @@ build that is MEANT TO GROW.
 
 ### MC7 as built, step by step
 
-- **Step 1, the doors (2026-10-25) - DONE.** One cell, `OSAPI_SEG` (`0x04E3`,
+- **Step 1, the doors (2026-10-25) - DONE.** One cell, `OSAPI_SEG` (`0x04B6`,
   SPEC.md 50.6.11), five verbs in BL rather than four cells, because a cell
   is six bytes of every kernel's `.text`: `SEG_LIN`, `SEG_REAL`, `SEG_WIN`,
   `SEG_SUB`, `SEG_FREE`. Every real-mode kernel answers the caller's own

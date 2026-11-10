@@ -95,9 +95,9 @@ CSEG = 0xE000                           # the stub: code, its DS, the record
 SSEG = 0xD000                           # a stack of its own (SS != DS)
 FSEG = 0xC000                           # a FAR buffer
 KSEG = 0x0060                           # KERNEL_SEG: OSAPI_MEM_HUGE's cell
-HUGE_CELL = 0x04C5
-MEMP_CELL = 0x04E9                      # OSAPI_MEM_P (hw_claimfit's MEMP_AVAIL)
-FREE_CELL = 0x01AA                      # OSAPI_MEM_FREE
+HUGE_CELL = 0x0498
+MEMP_CELL = 0x04BC                      # OSAPI_MEM_P (hw_claimfit's MEMP_AVAIL)
+FREE_CELL = 0x01A4                      # OSAPI_MEM_FREE
 REC = 0x8000                            # CSEG:REC the record
 NAME = 0x8020                           # ...the name the file routines pass
 CUR = 0x8040                            # ...the cursor / the stream

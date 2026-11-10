@@ -395,7 +395,7 @@ cb_run:
     cmp word [cb_dseg], 0
     jne .have
     mov ax, 16                      ; the interleave rows' 16 KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nogap
     mov [cb_dseg], dx
 .have:

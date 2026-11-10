@@ -419,7 +419,7 @@ W16SYS w16q_dosalloc
     pop ax
     jc .no
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA        ; DX = the block's selector
+    MEMKB_DMA                       ; DX = the block's selector
     jc .no
     mov [si], dx
     mov ax, dx

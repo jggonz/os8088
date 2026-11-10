@@ -797,7 +797,7 @@ rc_do_rec:
     jc .out
     mov ax, RC_RKB
     mov cx, ax                      ; all of it is the card's: page-safe
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = the ring's segment
+    MEMKB_DMA_HI                    ; DX = the ring's segment
     jc .nomem
     mov [rc_rseg], dx
     mov di, dx                      ; verb 4, EXTERNAL (SPEC.md 34.6.4): DI:SI
@@ -899,7 +899,7 @@ rc_do_play:
     test byte [rc_caps], SND_CAP_PCM_EXCL
     jz .nosink
     mov ax, (RC_PBUF_SZ+1023)/1024
-    call OSAPI_MEM_CLAIM            ; DX = the play buffer's segment
+    MEMKB_CLAIM                     ; DX = the play buffer's segment
     jc .nomem
     push bp
     mov bp, dx                      ; BP = it, for the whole play

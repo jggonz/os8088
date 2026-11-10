@@ -867,7 +867,7 @@ zi_load:
     jae .claimed
     call OSAPI_MEM_FREE
     mov ax, 64
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov word [zi_para], 64 * 64
     jmp short .claimed
@@ -932,7 +932,7 @@ zi_load:
                                 ; claim starts undeclared
 
     mov ax, ZI_STKKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [zf_stkseg], dx
     mov ax, zf_reloc
@@ -2563,7 +2563,7 @@ zi_script_open:
     cmp word [zi_scrseg], 0
     jne .ok                         ; idempotent: a second story reuses it
     mov ax, ZI_SCRKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .no
     mov [zi_scrseg], dx
     mov ax, zf_reloc                ; ...AND IT MOVES (NO-PINNING A3): the

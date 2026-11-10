@@ -126,7 +126,7 @@ WIRE_LEVEL = 7
 # the one level-3 Wire there is, level 5's 0x04D7 is v1.0.20261025's, the
 # one level-4 Wire, level 6's 0x04E3 is v1.0.20261026's, the one level-5
 # Wire, and level 7's 0x04E9 is the level-6 Wire's: every package carrying the
-# parts library claims through OSAPI_MEM_P (0x04E9) since SPEC.md 20.12.14,
+# parts library claims through OSAPI_MEM_P (0x04BC) since SPEC.md 20.12.14,
 # and every package that reports one operation as one bar calls OSAPI_FS_OP
 # (0x04EF), the parts library among them.
 WIRE_CELL_LEVELS = ((0x046D, 3), (0x04A5, 4), (0x04D7, 5), (0x04E3, 6),

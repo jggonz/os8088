@@ -32,7 +32,7 @@ RQ_PASSES   equ 3
 rq_entry:
     mov ax, 32
     mov cx, 32                      ; page-safe, all of it: the player's
-    call OSAPI_MEM_CLAIM_DMA        ; bounce is taken the same way
+    MEMKB_DMA                       ; bounce is taken the same way
     mov cl, 1
     jnc .have
     jmp .no

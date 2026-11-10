@@ -321,7 +321,7 @@ sf_open:
 .ext:                               ; AN EXTERNAL RING (SPEC.md 34.5.3): our
     mov ax, (SF_RL + 1023) / 1024 + 1   ; own claim, page-safe whole - the
     mov cx, ax                      ; ring and its control words after it
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    MEMKB_DMA_HI                    ; DX = its segment
     jc .nogrant
     mov [sf_xseg], dx
     push es

@@ -1605,7 +1605,7 @@ at_undo_init:
     cmp word [at_aseg], 0
     jne .out
     mov ax, AT_UKB0
-    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
+    MEMKB_CLAIM                     ; AX KB -> DX segment (SPEC.md 50.3)
     jc .out                         ; no claim: the menus grey Undo/Redo
     mov [at_aseg], dx
     mov [at_akb], ax
@@ -1657,7 +1657,7 @@ at_agrow:
 ; at_aregrow - the arena to AX KB; CF as OSAPI_MEM_REGROW; clobbers DX
 at_aregrow:
     mov dx, [at_aseg]
-    call OSAPI_MEM_REGROW           ; DX = the base NOW, the bytes with it
+    MEMKB_REGROW                    ; DX = the base NOW, the bytes with it
     jc .no
     mov [at_aseg], dx
     mov [at_akb], ax

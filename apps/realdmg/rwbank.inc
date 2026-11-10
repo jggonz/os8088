@@ -37,7 +37,7 @@ RW_XROMMAX_KB   equ 8192            ; MBC5's largest cartridge
 ; mega's arm) its banks IN PLACE above 1MB; CF = 1: SI = the refusal
 rw_plan:
     mov byte [rw_bcache], 0
-    call OSAPI_MEM_AVAIL            ; AX = the heap's largest run, KB (and
+    MEMKB_AVAIL                     ; AX = the heap's largest run, KB (and
     mov [rw_pavail], ax             ;   BX its total: the log's head says the
 %ifdef PKG_MEGA                     ;   one)
     call rw_xplan
@@ -116,7 +116,7 @@ rw_plan:
     jmp short .no
 .nc1:
     mov si, rw_s_room
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     cmp ax, cx
     jb .no
 .whole:
@@ -177,9 +177,9 @@ rw_bload:
     shl ax, cl
 %ifdef PKG_MEGA
     xor cx, cx                      ; CONVENTIONAL, whatever OS88_HIGHMEM
-    call OSAPI_MEM_CLAIM_DMA        ;   says: the file is read INTO it, and
+    MEMKB_DMA                       ;   says: the file is read INTO it, and
 %else                               ;   a read above 1MB bounces sector by
-    call OSAPI_MEM_CLAIM            ;   sector (a 1MB cartridge's load ran
+    MEMKB_CLAIM                     ;   sector (a 1MB cartridge's load ran
 %endif                              ;   minutes on a 286, 16.2.6)
                                     ; DX = the slots (the bank table names
 %ifdef RDG_AOT                      ;   them: rw_mreloc, rwmove.inc)
@@ -748,11 +748,11 @@ rw_mclaim:
     push cx
     mov cx, ax
 %ifndef RW_LENDTEST                 ; (tests/rdglend.py: the heap as if full)
-    call OSAPI_MEM_AVAIL            ; (asked first: a refused claim compacts
+    MEMKB_AVAIL                     ; (asked first: a refused claim compacts
     cmp ax, cx                      ;   the heap and sheds its caches)
     jb .lend
     mov ax, cx
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .r
 %endif
 .lend:

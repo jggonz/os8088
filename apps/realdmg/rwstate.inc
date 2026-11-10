@@ -192,17 +192,18 @@ rw_stwr:
     mov si, rw_ssname
     call OSAPI_FILE_WRITE
     jc .wr
-    mov cx, [rw_stlen]              ; the RAM banks
-    jcxz .rec
+    dec dx                          ; DX = 0xFFFF: the next two writes are
+    mov cx, [rw_stlen]              ; APPENDS (OSAPI_FILE_WRITE_AT keeps DX).
+    jcxz .rec                       ; The RAM banks...
     mov es, [rw_ramseg]
     xor bx, bx
-    call OSAPI_FILE_APPEND
+    call OSAPI_FILE_WRITE_AT
     jc .wr
 .rec:
     mov es, [rdg_viewseg]            ; the record, last
     mov bx, RDG_STREC
     mov cx, ST_RECSZ
-    call OSAPI_FILE_APPEND
+    call OSAPI_FILE_WRITE_AT
     jnc .wr
     call OSAPI_FILE_DELETE          ; (a half-written state is no state)
     stc

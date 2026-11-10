@@ -1913,7 +1913,7 @@ trk_ring_pick:
     push ax
     push bx
     push cx
-    call OSAPI_MEM_AVAIL            ; AX = largest run KB (BX = total)
+    MEMKB_AVAIL                     ; AX = largest run KB (BX = total)
     mov cx, TRK_RING_SM
     cmp ax, TRK_ROOMYKB
     jbe .set

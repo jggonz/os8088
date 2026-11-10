@@ -27,15 +27,15 @@ fx_entry:
     mov si, fx_tpl
     call OSAPI_WM_CREATE
     mov ax, 5                       ; the ring: 4 KB and the table after it
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [fx_rseg], dx
     mov ax, FX_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [fx_iseg], dx
     mov ax, FX_KB + (SPKFX_FAMSZ + 1023) / 1024 ; the output, and the
-    call OSAPI_MEM_CLAIM            ; shaper's family past it: it is read
+    MEMKB_CLAIM                     ; shaper's family past it: it is read
     jc .out                         ; through ES, the segment emit writes
     mov [fx_oseg], dx
     mov byte [fx_up], 1

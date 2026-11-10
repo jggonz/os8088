@@ -70,7 +70,7 @@ n_frontload:
     test byte [n_canvas],4
     jz .granule
     mov ax,3                       ; the widest band is 2,592 bytes
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noscratch
     mov es,dx
     jmp short .expand

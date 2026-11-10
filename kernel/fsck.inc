@@ -200,7 +200,7 @@ PF_TRIM     equ 64              ; the walk is that second walk
 ; =============================================================================
 %ifdef OS88_FSCK
 ; -----------------------------------------------------------------------------
-; osapi_vol_check - OSAPI_VOL_CHECK (0x04F5, SPEC.md 118.14.2). The cell is
+; osapi_vol_check - OSAPI_VOL_CHECK (0x04C8, SPEC.md 118.14.2). The cell is
 ; OSAPI_RCSLOT's: DS = KERNEL_SEG here, every other register the caller's.
 ; in:  AL = verb (AH, CX: its arguments), ES = the image, DX = the workspace
 ; out: the image's answer (CF, AX); CF=1 AX=FSKE_IMAGE for an image that is

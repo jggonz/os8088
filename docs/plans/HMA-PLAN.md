@@ -286,7 +286,7 @@ Found by `tests/hmadrv.py`, each as a red row first:
 
 ### 5.5 SOUND.DRV's claim
 
-`OSAPI_MEM_HMA` (0x0487) is a driver's buffer in the pool: AX = bytes ->
+`OSAPI_MEM_HMA` (0x045A) is a driver's buffer in the pool: AX = bytes ->
 DX:AX, AX never 0. Only a loaded driver may ask, and `drv_release` gives
 back whatever a driver still holds. `sbl_dma_get` asks it first for the 8KB
 double buffer and record ring and falls back to the heap; the CPU side

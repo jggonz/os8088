@@ -125,19 +125,19 @@ tk_r_setup:
                                     ; refused by a heap it no longer owns
 %ifdef APP_SMALL
     mov ax, TK_SHKB                 ; THE LADDER (SPEC.md 85.3.5.1): the rung
-    call OSAPI_MEM_CLAIM            ; it would like, then the two it will
+    MEMKB_CLAIM                     ; it would like, then the two it will
     jnc .got                        ; settle for. The kernel frees the claim
     mov ax, TK_SHKB2                ; with the instance (SPEC.md 50.3), so
-    call OSAPI_MEM_CLAIM            ; there is no teardown hook of our own -
+    MEMKB_CLAIM                     ; there is no teardown hook of our own -
     jnc .got                        ; which is what makes the reuse above the
     mov ax, TK_SHKB3                ; whole of the lifetime
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noshadow
 .got:
     mov [tk_shkb], al               ; the rung, for tk_tmcap below
 %else
     mov ax, TK_SHKB
-    call OSAPI_MEM_CLAIM            ; 32KB, and the kernel frees it with the
+    MEMKB_CLAIM                     ; 32KB, and the kernel frees it with the
     jc .noshadow                    ; instance (SPEC.md 50.3) - no teardown
 %endif                              ; hook of our own
     test dl, 4                      ; A SELECTOR - kern_mega put the claim
@@ -189,7 +189,7 @@ tk_r_setup:
 %else                               ; less TK_SHSEG, rounded up to a KB
     mov ax, TK_TMKB
 %endif
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov ax, dx                      ; AX = the template's own segment
     pop dx                          ; DX = the shadow again
     jnc .tmat

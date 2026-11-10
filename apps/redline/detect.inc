@@ -354,7 +354,7 @@ rl_inventory:
     call rl_e820
     call rl_tsc_mhz
 .os:
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     mov [rl_free], bx
     mov [rl_largest], ax
     call OSAPI_XMEM_CAPS

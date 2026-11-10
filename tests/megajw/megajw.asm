@@ -35,7 +35,7 @@ mj_entry:
     push di
     call OSAPI_XMEM_CAPS            ; AX = the pool's free KB
     mov [mj_res+26], ax
-    call OSAPI_MEM_AVAIL            ; AX = largest, BX = total
+    MEMKB_AVAIL                     ; AX = largest, BX = total
     mov [mj_res+28], ax
     mov [mj_res+30], bx
     xor ax, ax                      ; --- the query -------------------------

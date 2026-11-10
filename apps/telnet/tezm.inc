@@ -1853,8 +1853,10 @@ tz_dlgopen:
     ; reused; tz_sfree gives it back when the transfer is over.
     cmp word [tz_sseg], 0
     jne .held
-    mov ax, TZ_STGSZ / 1024
-    call OSAPI_MEM_CLAIM            ; every register but DX
+    mov ax, TZ_STGSZ / 16           ; (PARAGRAPHS, SPEC.md 50.3.7: BX and
+    xor cx, cx                      ; CX are banked above and tz_wmap's map
+    mov bl, MEMP_CLAIM              ; is its own)
+    call OSAPI_MEM_P
     mov al, TZR_MEM
     jc .answer
     mov [tz_sseg], dx
@@ -2203,8 +2205,9 @@ tz_commit:
     pop di                          ; is told was received is on the disk
     jnc .ok
     cmp ax, FERR_NAME               ; kern_small's cell answers this - and so
-    jne .err                        ; does APPEND for the arguments it would
-    call OSAPI_FILE_APPEND          ; refuse, so asking it is exact
+    jne .err                        ; does the APPEND for the arguments it
+    mov dx, -1                      ; would refuse, so asking it is exact:
+    call OSAPI_FILE_WRITE_AT        ; WRITE_AT at the END (18.4.7.3)
     jc .err
 .ok:
     mov ax, [tz_un]

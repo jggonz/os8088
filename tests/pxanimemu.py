@@ -34,7 +34,7 @@ if not E.available():                                    # pragma: no cover
           "holds the same part on MartyPC" % os.path.basename(__file__))
     sys.exit(0)
 from unicorn import UC_HOOK_CODE                         # noqa: E402
-from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_FLAGS,   # noqa: E402
+from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_BL, UC_X86_REG_FLAGS,   # noqa: E402
                                UC_X86_REG_SI, UC_X86_REG_CX,
                                UC_X86_REG_ES, UC_X86_REG_DX)
 
@@ -69,9 +69,13 @@ class Anim:
 
     def _mem(self, mu, addr, size, _):
         off = addr - E.KSEG * 16
-        if off == self.cells["OSAPI_MEM_CLAIM"]:
-            kb = mu.reg_read(UC_X86_REG_AX)
-            seg = self.p.claim(kb * 1024)
+        # OSAPI_MEM_P is an X stub, so the hook can land a byte in. Its two
+        # claim verbs (BL = 0 / 1) are the only claims since the flag day
+        # withdrew the KB doors (SPEC.md 50.3): AX = paragraphs
+        if off in (self.cells["OSAPI_MEM_P"], self.cells["OSAPI_MEM_P"] + 1) \
+                and mu.reg_read(UC_X86_REG_BL) in (0, 1):
+            para = mu.reg_read(UC_X86_REG_AX)
+            seg = self.p.claim(para * 16)
             mu.reg_write(UC_X86_REG_DX, seg)
             f = mu.reg_read(UC_X86_REG_FLAGS)
             mu.reg_write(UC_X86_REG_FLAGS, f & ~1)

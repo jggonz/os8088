@@ -583,8 +583,8 @@
   },
   {
    "file": "kernel/disk.inc",
-   "old_text": "; osapi_vol_paint - slot 0x0288: repaint the desktop's drive zones\n;\n; It takes the gfx lock ITSELF, so a driver must not call it from a page\n; click that already holds one - the Control Panel's own deferred-repaint\n; idiom ([cp_dirty], SPEC.md 31.2) is the shape to copy.\n",
-   "new_text": "; osapi_vol_paint lived here: slot 0x0288 is dropped (kernel.asm's API table)\n",
+   "old_text": "; osapi_vol_paint - slot 0x026A: repaint the desktop's drive zones\n;\n; It takes the gfx lock ITSELF, so a driver must not call it from a page\n; click that already holds one - the Control Panel's own deferred-repaint\n; idiom ([cp_dirty], SPEC.md 31.2) is the shape to copy.\n",
+   "new_text": "; osapi_vol_paint lived here: slot 0x026A is dropped (kernel.asm's API table)\n",
    "why": "kernel.asm:2966 '(dropped) OSAPI_CSLOT osapi_vol_paint_x ; 0x0288'; no such label"
   },
   {

@@ -187,7 +187,7 @@ mh_entry:
     mov ax, dx
     call mh_hex4
     call mh_nl
-    call OSAPI_MEM_AVAIL            ; ...and the heap's alone, beside it
+    MEMKB_AVAIL                     ; ...and the heap's alone, beside it
     mov si, mh_s_mav
     call mh_say
     call mh_hex4
@@ -197,7 +197,7 @@ mh_entry:
     call mh_hex4
     call mh_nl
     mov ax, 64                      ; --- a WHOLE 64KB file into a 64KB pool
-    call OSAPI_MEM_CLAIM            ; claim (KERN-MEGA-MEMORY-PLAN 8.6): the
+    MEMKB_CLAIM                     ; claim (KERN-MEGA-MEMORY-PLAN 8.6): the
     mov cl, 6                       ; run that ends at the window's end
     jc .no
     mov [mh_c64], dx

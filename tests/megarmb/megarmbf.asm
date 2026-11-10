@@ -161,7 +161,7 @@ mf_tick:
     ; --- P: a conventional claim, renamed by the package -------------------
     mov ax, 4
     xor cx, cx                      ; the DMA door, CX = 0: the plain claim,
-    call OSAPI_MEM_CLAIM_DMA        ; CONVENTIONAL for an OS88_HIGHMEM package
+    MEMKB_DMA                       ; CONVENTIONAL for an OS88_HIGHMEM package
     mov [mf_cl], dx                 ; (OSAPI_MEM_CLAIM's goes above 1MB)
     push ds
     mov ds, dx
@@ -353,7 +353,7 @@ mf_main_n:
     mov si, 0x4444
     mov di, 0x5555
     mov bp, 0x6666
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     sbb ah, ah                      ; AH = FFh refused (AL is 1 still)
     mov [mf_nclaim], ax
     xor ax, ax
@@ -421,7 +421,7 @@ mf_main_n:
 mf_main_n2:
     call mf_main
     mov ax, 1
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     sbb ax, ax
     mov [mf_n2c], ax                ; 0 = had
     jnz .out
@@ -439,7 +439,7 @@ mf_fill:
     mov ax, cx
     push cx
     xor cx, cx                      ; conventional, as P's (the DMA door)
-    call OSAPI_MEM_CLAIM_DMA
+    MEMKB_DMA
     pop cx
     jc .smaller
     mov bx, [mf_ncl]

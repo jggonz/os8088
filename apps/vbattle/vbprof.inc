@@ -98,7 +98,7 @@ vb_prtry:
     mov [vb_prxt], ax
     mov [vb_prxt+2], dx
     mov ax, 4
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .xno
     mov [vb_prseg], dx
     mov byte [vb_prx], 1
@@ -241,7 +241,7 @@ vb_prbeg:
     mov ax, [vb_prkb]
     or ax, ax
     jz .out
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [vb_prseg], dx
     mov ax, [vb_prkb]               ; reads: 16 a KB (an eighth of it)
@@ -761,7 +761,7 @@ vb_prtgt:
     shr dx, 1
     rcr ax, 1
     loop .kb
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .got
     cmp word [vb_prn], 3000         ; (no room for all: the first 3,000)
     jbe .no

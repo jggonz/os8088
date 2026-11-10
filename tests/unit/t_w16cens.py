@@ -12,7 +12,7 @@ census's code at a segment of its own, as part 5, SPEC.md 124.18.7),
 and its own `w16_census` is called on each program the way the loader
 calls it - the file read, every segment copied to a paragraph of its own,
 the relocations applied and the OS fixups patched for a machine with no
-coprocessor - with OSAPI_MEM_CLAIM and OSAPI_MEM_FREE answered here.
+coprocessor - with OSAPI_MEM_P's claim and OSAPI_MEM_FREE answered here.
 
 Two things are compared, for every code segment of every program:
 
@@ -67,7 +67,7 @@ IMG = 0x1000            # WIN16's segment: DS
 PSEG = 0x7000           # part 5, the loader and the census: CS (SPEC.md 124.18.7)
 FSEG = 0x2000           # the file, as w16_load reads it
 SEG0 = 0x3000           # the program's segments, one after another
-CLAIM = 0x8000          # what OSAPI_MEM_CLAIM answers
+CLAIM = 0x8000          # what the claim (OSAPI_MEM_P) answers
 SSEG = 0x9000
 THK = 0x6000            # a module block's thunks (SPEC.md 124.26.14): w16_cthk
 KSEG = 0x0060           # KERNEL_SEG: every API cell is an `int 0F0h` here
@@ -114,10 +114,12 @@ def api(name):
 
 
 IMAGE, PART, S = assemble()
-CLAIM_CELL, FREE_CELL = api("OSAPI_MEM_CLAIM"), api("OSAPI_MEM_FREE")
+FREE_CELL = api("OSAPI_MEM_FREE")
 # the package sweep moved the census's claim onto OSAPI_MEM_P, BL = MEMP_CLAIM
-# (= 0); its cell is an X stub, so the int lands a byte further in
+# (= 0); its cell is an X stub, so the int lands a byte further in. It is the
+# only claim door since the flag day withdrew the KB ones (SPEC.md 50.3)
 MEMP_CELL = api("OSAPI_MEM_P")
+CLAIM_CELL = MEMP_CELL
 REFUSAL = {}
 for k, tier in (("w16_r_c186", "186"), ("w16_r_c286", "286"),
                 ("w16_r_c386", "386"), ("w16_r_cbig", "too large"),

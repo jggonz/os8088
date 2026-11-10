@@ -3010,7 +3010,7 @@ pe_avail:
     pop bx
     jnc .o
 .conv:
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
 .o:
     pop dx
     pop cx
@@ -3557,7 +3557,7 @@ pf_go:                              ; flip's only once it is sure to run
     pop cx
     pop bx
 %else
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
 %endif
     jc .nodest
     mov [px_edseg], dx
@@ -3859,3 +3859,6 @@ pf_xchg:
     pop cx
     pop ax
     ret
+
+OS88KB_BODIES                        ; the MEMKB_* entries this part named (a
+                                    ; part has no OS88_IMAGE_END to do it)

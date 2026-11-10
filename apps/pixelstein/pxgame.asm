@@ -353,7 +353,7 @@ px_entry:
     jnz .shk                        ; never a black bounce - and on an 8086,
     mov al, PX_SHKB86               ; which px_w4want never gives WIN4, only
 .shk:                               ; the picture and the bar (PX_SHKB86)
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noshadow
     mov [px_shseg], dx
 .noshadow:

@@ -415,7 +415,7 @@ wx_adopt:
     call wo_iofit
     jc .out
     mov ax, WE_VKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .vc
     mov dx, [wo_ioseg]
     call wo_free
@@ -615,7 +615,7 @@ wx_urec0:
     cmp word [wo_useg], 0
     jne .have
     mov ax, WX_UKB
-    call OSAPI_MEM_CLAIM            ; pinned: no relocation proc (SPEC.md 66)
+    MEMKB_CLAIM                     ; pinned: no relocation proc (SPEC.md 66)
     jc .out
     mov [wo_useg], dx
     mov byte [wo_un], 0

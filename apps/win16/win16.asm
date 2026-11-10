@@ -1394,7 +1394,7 @@ w16_lend:
     jnz .have
     mov ax, 1
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA        ; DX = its selector, below 1MB
+    MEMKB_DMA                       ; DX = its selector, below 1MB
     jc .out
     mov ax, dx
     mov bl, SEG_REAL

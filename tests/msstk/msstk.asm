@@ -44,7 +44,7 @@ ms_entry:
     mov es, ax
     mov byte [es:0xF0], 'E'
     mov ax, MS_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [ms_seg], dx
     push es

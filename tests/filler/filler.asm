@@ -75,7 +75,7 @@ fl_fill:
     cmp bx, FL_HOLD
     jae .out
     push bx                     ; OSAPI_MEM_AVAIL ANSWERS IN BX (total free
-    call OSAPI_MEM_AVAIL        ; KB): AX = largest run KB. Without the push
+    MEMKB_AVAIL                 ; KB): AX = largest run KB. Without the push
     pop bx                      ; the index below was the free total - a
                                 ; stray word past the region on a real-mode
                                 ; kernel, a #GP on kern_mega (KERN-MEGA-PLAN
@@ -83,7 +83,7 @@ fl_fill:
     cmp ax, FL_LEAVE + 8
     jbe .out                    ; nothing worth taking
     sub ax, FL_LEAVE
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     shl bx, 1
     mov [bx+fl_seg], dx
@@ -117,7 +117,7 @@ fl_ask:
     push bx
     push cx
     push dx
-    call OSAPI_MEM_AVAIL        ; AX = the largest run, BX = TOTAL free
+    MEMKB_AVAIL                 ; AX = the largest run, BX = TOTAL free
     mov cx, bx
     sub cx, 2                   ; start just under everything there is
 .lp:
@@ -125,7 +125,7 @@ fl_ask:
     jbe .out                    ; nothing left worth asking for
     mov ax, cx
     inc word [fl_nask]
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .got
     sub cx, FL_STEP
     jmp short .lp
@@ -157,11 +157,11 @@ fl_take:
     cmp bx, FL_HOLD
     jae .out
     push bx                     ; (BX is OSAPI_MEM_AVAIL's second answer:
-    call OSAPI_MEM_AVAIL        ; fl_fill's note)
+    MEMKB_AVAIL                 ; fl_fill's note)
     pop bx
     or ax, ax
     jz .out
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     shl bx, 1
     mov [bx+fl_seg], dx
@@ -209,7 +209,7 @@ fl_onkey:
 .ask:
     call fl_ask                 ; freed, and only then ask again
 .paint:
-    call OSAPI_MEM_AVAIL        ; THE ANSWER THE ROUND LEFT, for a row to read
+    MEMKB_AVAIL                 ; THE ANSWER THE ROUND LEFT, for a row to read
     mov [fl_run], ax            ; rather than recompute: the largest run the
     mov [fl_tot], bx            ; kernel would fund (mem_avail models both
     inc word [fl_nround]        ; compaction passes and every pin) and the
@@ -297,7 +297,7 @@ fl_paint:
     call OSAPI_FONT_RUN
     mov cx, di
     add cx, 48
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     call fl_num
 
     add bp, 12

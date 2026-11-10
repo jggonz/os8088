@@ -236,7 +236,7 @@ pxl_entry:
     ; launch path touches SI's buffer in between (SPEC.md 20.2's reason is
     ; the NEXT launch), and every OSAPI slot preserves SI
     mov ax, PXL_RESKB
-    call OSAPI_MEM_CLAIM            ; DX = the reserve, or nothing held (a
+    MEMKB_CLAIM                     ; DX = the reserve, or nothing held (a
     jnc .res                        ; machine that small is op_load's to
     xor dx, dx                      ; refuse in its own words)
 .res:
@@ -278,11 +278,11 @@ pxl_entry:
     mov [pxl_aseg], ax
     or ax, ax
     jz .noart                       ; no masters: nothing to transpose
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run in KB
+    MEMKB_AVAIL                     ; AX = the largest free run in KB
     cmp ax, PXS_KB + PXL_SHKB       ; the set AND the shadow after it, or
     jb .noart                       ; the sprites are boxes (97.6)
     mov ax, PXS_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noart
     mov [pxl_sseg], dx
 .noart:

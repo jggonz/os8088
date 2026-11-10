@@ -416,7 +416,7 @@ px_viewclaim:
     mov word [px_vo_thm], 0x4600    ; ...and PX_THMW / 8 x PX_THMH at 1bpp
     mov ax, (0x4600 + PX_THMW / 8 * PX_THMH + 1023) / 1024
 .claim:
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [px_vseg], dx
     mov ax, px_mreloc

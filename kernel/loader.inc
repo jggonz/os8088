@@ -1626,31 +1626,22 @@ ld_start:
                                 ; program, and the wrong direction to diverge in
     ; ...and the third bound, which is this arm's alone: the LOADER's word for
     ; what it actually put there, where the part's own header cannot be
-    ; trusted. DX is image + bss, as ld_hdr_size leaves it. TWO FORMS
-    ; (SPEC.md 20.12.10.5): AX non-zero is BYTES at DX and the carve stays
-    ; whole, which is every loader built before the keep; AX = 0 is the KEEP
-    ; form, CX the paragraphs at DX the program keeps, and that one figure is
-    ; both the bound and where the carve's tail is cut - so a keep that would
-    ; cut into the program's own image + bss is refused here, by the same
-    ; compare, rather than trusted
+    ; trusted. DX is image + bss, as ld_hdr_size leaves it. ONE FORM, the
+    ; KEEP (SPEC.md 20.12.10.5): CX the paragraphs at DX the program keeps,
+    ; and that one figure is both the bound and where the carve's tail is cut
+    ; - so a keep that would cut into the program's own image + bss is
+    ; refused here, by the same compare, rather than trusted. (The BYTES
+    ; form, AX non-zero and the carve kept whole, had no loader left that
+    ; built it and went at the flag day, kernel size pass 19.)
     ;
-    ; Both are asked of AX = image + bss - 1, which ld_hdr_size's entry bound
-    ; keeps above 0: `dx > bytes` is `dx - 1 >= bytes`, and the keep's
-    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, so one
-    ; `jae` serves both and the round-up add is gone (kernel size pass 12)
-    mov cx, [ld_rehsz]
+    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, which
+    ; ld_hdr_size's entry bound keeps above 0 (kernel size pass 12)
     mov ax, dx
     dec ax
-    jcxz .rhkeep                ; 0 = the KEEP form
-    cmp ax, cx                  ; ...or BYTES, and then CX = the keep: the
-    mov cx, 0xFFFF              ; carve WHOLE (`mov` writes no flag)
-    jmp short .rhbnd
-.rhkeep:
-    mov cl, 4                   ; ...or the loader's, against the program in
-    shr ax, cl                  ; PARAGRAPHS
+    mov cl, 4
+    shr ax, cl
     mov cx, [ld_rehkp]
     cmp ax, cx
-.rhbnd:
     jae .abort                  ; CX survives to mem_reown_x: ld_slot banks it
     mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
@@ -1769,14 +1760,11 @@ ld_start:
     ; --- 8b. RE-HOME HIGH (SPEC.md 20.12.10.9, KERN-MEGA-PLAN 14.38/14.44):
     ; a program whose OWN header says OS88_HIGH leaves conventional memory
     ; here, exactly as an OS88_HIGH package does at step 7 - its region is
-    ; the carve's KEEP, so only the KEEP form (AX = 0 at the cell) qualifies,
-    ; and only a keep of one segment: a pair's limit is 64KB, and what is
+    ; the carve's KEEP, and only a keep of one segment: a pair's limit is 64KB, and what is
     ; past it would need a selector of its own (14.38.4 S4). Anything else,
     ; or no room above 1MB, and it runs low as before - not a refusal.
     ; ld_hicx tests protected mode and the bit; [ld_base] comes back as the
     ; pair's DATA selector, so .call8's far call and step 9's I_SPTR follow
-    cmp word [ld_rehsz], 0      ; the KEEP form only...
-    jne .rhnohi
     mov cx, [ld_rehkp]          ; CX = the keep, in paragraphs
     mov es, ax                  ; ES = the program, whose class byte is read
     cmp cx, 0x0FFF
@@ -2166,14 +2154,12 @@ ld_rehome:  resw 1              ; OSAPI_PKG_REHOME's answer: the segment the
                                 ; EVERY launch, not by whoever consumed it: an
                                 ; entry proc that re-homes and then aborts must
                                 ; not hand the next launch its leftovers
-ld_rehsz:   resw 1              ; ...and the bytes it says are available there,
-                                ; which is what bounds the part's image + bss
-                                ; - 0 for the KEEP form (SPEC.md 20.12.10.5)
-ld_rehkp:   resw 1              ; ...whose figure is this: the paragraphs at
-                                ; [ld_rehome] the program keeps, the bound and
-                                ; the carve's new length at once. Read only
-                                ; when [ld_rehsz] is 0, which only the cell
-                                ; writes, so it needs no clear of its own
+ld_rehkp:   resw 1              ; ...and the paragraphs at [ld_rehome] the
+                                ; program keeps, the bound and the carve's
+                                ; new length at once (SPEC.md 20.12.10.5).
+                                ; Read only when [ld_rehome] is set, which
+                                ; only the cell writes, so it needs no clear
+                                ; of its own
 %endif
 ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
@@ -2223,13 +2209,13 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x03FE: "the program is at DX, not at me"
+; osapi_pkg_rehome - API slot 0x03D1: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
-; in:  DX = the segment the program's image starts at, AX = the bytes
-;      available there - or AX = 0, the KEEP form, and then CX = the
-;      paragraphs at DX the program keeps, the carve's tail past them going
-;      back to the heap (SPEC.md 20.12.10.5) - ES = the caller's segment (the
-;      X stub's)
+; in:  DX = the segment the program's image starts at, CX = the paragraphs
+;      at DX the program keeps, the carve's tail past them going back to the
+;      heap (SPEC.md 20.12.10.5) - the KEEP form, the only one since kernel
+;      size pass 19 withdrew the bytes form (AX is no longer read) - ES = the
+;      caller's segment (the X stub's)
 ; out: CF = 0 recorded; CF = 1 refused
 ; clobbers: flags
 ;
@@ -2261,10 +2247,8 @@ osapi_pkg_rehome_x:
     jnc .no                     ; claim) has no code half and no heap record,
 %endif                          ; and the re-home runs code at its base
     mov [ld_rehome], dx
-    mov [ld_rehsz], ax          ; 0 = the KEEP form, and then...
-    mov [ld_rehkp], cx          ; ...this is its figure (SPEC.md 20.12.10.5).
-                                ; Stored either way: step 8a reads it only
-                                ; when the word above says so
+    mov [ld_rehkp], cx          ; ...and the keep (SPEC.md 20.12.10.5): step
+                                ; 8a reads it only when the word above says so
     CLC_OR_STC .no              ; CF = 0 recorded, or (.no) CF = 1 refused
     pop bx                      ; `pop` writes no flag, so the answer survives
     retf

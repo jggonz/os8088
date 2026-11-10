@@ -475,7 +475,7 @@ xb_partget:
     mov cl, 6
     shr ax, cl                      ; KB: R + the read
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD: the plain claim
-    call OSAPI_MEM_CLAIM_DMA        ; on every kernel, and CONVENTIONAL on
+    MEMKB_DMA                       ; on every kernel, and CONVENTIONAL on
                                     ; kern_mega for this OS88_HIGHMEM package -
                                     ; op_fetch's door (os88partsbody.inc), whose
                                     ; windows reach it there. DX = the base

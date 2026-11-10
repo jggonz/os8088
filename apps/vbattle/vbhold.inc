@@ -279,7 +279,7 @@ vb_xopen:
     mov [vb_htok+2], dx
     mov ax, 32                      ; the fill's bounce - CONVENTIONAL (the
     xor cx, cx                      ; DMA door, no head): the bracket reads
-    call OSAPI_MEM_CLAIM_DMA        ; into it in real mode
+    MEMKB_DMA                       ; into it in real mode
     jc .nob
     mov [vb_hbnc], dx
     mov ax, vb_reloc                ; (MOVABLE: only the fill's foreground

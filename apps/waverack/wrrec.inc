@@ -1175,7 +1175,7 @@ wc_claims:
 .try:
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI     ; (keeps all but DX)
+    MEMKB_DMA_HI                    ; (keeps all but DX)
     pop cx
     jnc .ring
     cmp ax, WC_RINGKB2 + 1
@@ -1212,7 +1212,7 @@ wc_claims:
     xor bx, bx
 .u:
     push ax
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     pop ax
     jc .short
     mov [wc_useg + bx], dx

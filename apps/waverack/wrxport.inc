@@ -1018,11 +1018,11 @@ wt_claims:
     cmp word [wt_laseg], 0
     jne .ring
     mov ax, WT_LAKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov cx, WT_LAKB * 1024
     jnc .la
     mov ax, WT_LAKB2
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov cx, WT_LAKB2 * 1024
     jc .nomem
 .la:
@@ -1041,7 +1041,7 @@ wt_claims:
 .etry:
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI     ; (keeps all but DX)
+    MEMKB_DMA_HI                    ; (keeps all but DX)
     pop cx
     jnc .egot
     cmp ax, WT_RINGKB2 + 1

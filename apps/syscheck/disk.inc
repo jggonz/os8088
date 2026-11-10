@@ -206,7 +206,7 @@ sc_fload:
     jz .noimg
     mov ax, dx
     push ax
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    MEMKB_CLAIM                     ; DX = the segment
     pop ax
     jc .nomem
     mov [sc_fseg], dx

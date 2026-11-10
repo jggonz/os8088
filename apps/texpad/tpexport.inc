@@ -34,7 +34,7 @@ tp_export_do:
     call tp_typeset
     push si                     ; the name, past both writers
     mov ax, TP_EXP_STEP
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov si, tp_s_nomem
     jc .say
     mov [tp_expseg], dx
@@ -126,7 +126,7 @@ tp_xgrow:
     xor ah, ah
     add al, TP_EXP_STEP
     mov dx, [tp_expseg]
-    call OSAPI_MEM_REGROW       ; out DX = the claim's base NOW
+    MEMKB_REGROW                ; out DX = the claim's base NOW
     jc .no
     mov [tp_expseg], dx
     add word [tp_expcap], TP_EXP_STEP * 1024

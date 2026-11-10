@@ -73,7 +73,7 @@ from deskcaltask import pkg_sym                 # noqa: E402
 TODAY = (2026, 10, 14)
 TOMORROW = (2026, 10, 15)
 TONE_CELL = 0x0060 * 16 + 0x00D3        # OSAPI_SND_TONE (os88api.inc)
-TOAST_AT = 0x0060 * 16 + 0x02AA         # OSAPI_TOAST
+TOAST_AT = 0x0060 * 16 + 0x028C         # OSAPI_TOAST
 B = os88stik
 
 fails = []

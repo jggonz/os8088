@@ -1840,8 +1840,10 @@ _os88_file_append:
     push ds
     pop es
     mov cx, [bp+8]
-    call OSAPI_FILE_APPEND
-    sbb cx, cx                      ; -1 refused, 0 done
+    mov dx, -1                      ; THE APPEND: OSAPI_FILE_WRITE_AT at the
+    call OSAPI_FILE_WRITE_AT        ; file's size (SPEC.md 18.4.7.3), the
+    sbb cx, cx                      ; cell OSAPI_FILE_APPEND was. -1 refused,
+                                    ; 0 done
     and ax, cx                      ; AX = the FERR_*, or 0
     mov [cc_ferr], ax
     xchg ax, cx                     ; the answer: 0, or -1 (see os88_ferr())
@@ -2206,7 +2208,11 @@ CC_GATE _os88_mem_claim
 _os88_mem_claim:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    call OSAPI_MEM_CLAIM
+    mov cl, 6                       ; KB -> paragraphs: the KB doors went
+    shl ax, cl                      ; at the flag day (kernel size pass 19)
+    xor cx, cx                      ; no head
+    mov bl, MEMP_CLAIM              ; (the DISK class, as the KB door was)
+    call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
@@ -2256,7 +2262,7 @@ _os88_mem_huge_step:
 ; claim of that shape (KERN-MEGA-MEMORY-PLAN MC5, MEGA-HUGE-PLAN F3): the most
 ; KB os88_mem_huge_w(kb, win) is given now, nothing claimed. kern_big and
 ; kern_small have no ask (CF = 1) and their huge claim is a conventional one,
-; so the answer there is OSAPI_MEM_AVAIL's largest run - the same question
+; so the answer there is MEMP_AVAIL's largest run, in KB - the same question
 CC_GATE _os88_mem_huge_ask
 %ifdef CC_U__os88_mem_huge_ask
 _os88_mem_huge_ask:
@@ -2265,7 +2271,10 @@ _os88_mem_huge_ask:
     xor ax, ax                      ; AX = 0: ask
     call OSAPI_MEM_HUGE
     jnc .r
-    call OSAPI_MEM_AVAIL            ; no ask: the heap's largest run
+    mov bl, MEMP_AVAIL              ; no ask: the heap's largest run
+    call OSAPI_MEM_P
+    mov cl, 6                       ; ...in KB
+    shr ax, cl
 .r:
     ret
 %endif
@@ -2394,7 +2403,10 @@ _os88_mem_regrow:
     mov bp, sp
     mov dx, [bp+4]
     mov ax, [bp+6]
-    call OSAPI_MEM_REGROW
+    mov cl, 6                       ; KB -> paragraphs
+    shl ax, cl
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 refused, or the base NOW
@@ -2457,10 +2469,10 @@ _os88_mem_gran:
 ; free KB you can claim from. Size yourself from these, never int 12h. On
 ; kern_mega they count the POOL as well (MEGA-HUGE-PLAN F6): an OS88_HIGHMEM
 ; package's claims of 64KB or less go above 1MB where they can, and
-; OSAPI_MEM_AVAIL alone counts conventional memory there - the false
+; MEMP_AVAIL alone counts conventional memory there - the false
 ; refusals and the undersizing of every C package that planned from it.
 ; OSAPI_MEM_HUGE's MEMH_AVAIL ask is that answer; kern_big and kern_small
-; refuse it (CF = 1) and OSAPI_MEM_AVAIL is the same answer there.
+; refuse it (CF = 1) and MEMP_AVAIL is the same answer there.
 CC_GATE _os88_mem_largest_kb
 %ifdef CC_U__os88_mem_largest_kb
 _os88_mem_largest_kb:
@@ -2479,7 +2491,11 @@ cc_avail:                           ; out AX = largest KB, BX = total KB
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     jnc .r
-    call OSAPI_MEM_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6                       ; paragraphs -> KB, rounded down
+    shr ax, cl
+    shr bx, cl
 .r:
     ret
 %endif

@@ -182,7 +182,7 @@ The costs, stated:
 ## 4. The API
 
 ```
-%define OSAPI_TOAST   KERNEL_SEG:0x0380   ; ES:SI = NUL text, CX = ticks to
+%define OSAPI_TOAST   KERNEL_SEG:0x035F   ; ES:SI = NUL text, CX = ticks to
                                           ; live (0 = TOAST_TICKS); out CF=1
                                           ; refused
 ```

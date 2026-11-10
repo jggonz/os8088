@@ -195,7 +195,7 @@ sc_start:
     call sc_close_if_open           ; (only if it wrongly opened)
     mov ax, (SC_RL + 1023) / 1024 + 1   ; the ring and its control words,
     mov cx, ax                      ; page-safe whole
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    MEMKB_DMA_HI                    ; DX = its segment
     jnc .claimed
     mov word [sc_xopen], 0xEE00     ; no claim: skip to the legacy leg
     mov byte [sc_state], ST_LEG

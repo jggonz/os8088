@@ -489,7 +489,6 @@ op_zshadow:
     pop ax
     call op_seg
     xchg ax, dx                 ; DX = the program: a segment, or a selector
-    xor ax, ax                  ; AX = 0: the KEEP form
     call OSAPI_PKG_REHOME
 %endmacro
 

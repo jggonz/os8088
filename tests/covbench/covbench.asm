@@ -423,7 +423,7 @@ cb_setup:
     cmp word [cb_rseg], 0
     jne .src
     mov ax, (CB_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [cb_rseg], dx
 .src:

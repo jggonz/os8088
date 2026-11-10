@@ -92,7 +92,11 @@ def _api_cell(name):
     return (seg << 4) + off
 
 
-CLAIM_AT, AVAIL_AT = _api_cell("OSAPI_MEM_CLAIM"), _api_cell("OSAPI_MEM_AVAIL")
+# ONE cell since the flag day (kernel size pass 19): the KB doors this row
+# traced were withdrawn for OSAPI_MEM_P (SPEC.md 50.3), which isoTron reaches
+# through its MEMKB_* entries - so a hit is a CLAIM or an ASK by its verb, BL
+MEMP_AT = _api_cell("OSAPI_MEM_P")
+MEMP_ASK = 5                       # MEMP_AVAIL; 0..3 are the claim verbs
 MEM_MAX_SMALL = 16                 # kernel/memory.inc's MEM_MAX under KERN_SMALL
 MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE   # a cache's owner high byte (memory.inc)
 
@@ -150,7 +154,7 @@ def main():
             f = mm.read(((r.get("ss", 0) << 4) + r.get("sp", 0)) & 0xFFFFF, 4)
             return _u16(f, 2)
         try:
-            with M.bp_trace(m, CLAIM_AT, AVAIL_AT, regs=True, on_hit=caller,
+            with M.bp_trace(m, MEMP_AT, regs=True, on_hit=caller,
                             cap=400) as tr:
                 ui.path(PKG)
                 g = L.Game(ui)
@@ -163,13 +167,14 @@ def main():
         check(True, "A: the loader places the package", "(segment 0x%04X)" % g.seg)
         # --- B: refused before any claim -----------------------------------
         mine = [h for h in tr.hits if h.get("hit") == g.seg]
-        asks = sum(1 for h in mine if h["addr"] == AVAIL_AT)
-        claims = sum(1 for h in mine if h["addr"] == CLAIM_AT)
+        verb = [((h.get("regs") or {}).get("bx", 0) & 0xFF) for h in mine]
+        asks = sum(1 for v in verb if v == MEMP_ASK)
+        claims = sum(1 for v in verb if v < 4)
         check(g.b("it_nomem") == 1 and g.w("it_cseg") == 0 and g.w("it_seg") == 0
               and asks >= 1 and claims == 0 and not tr.overflowed,
               "B: it ASKS, refuses itself and never claims",
               "(it_nomem %d, it_cseg %04X, it_seg %04X; from its segment %d "
-              "OSAPI_MEM_AVAIL, %d OSAPI_MEM_CLAIM)"
+              "MEMP_AVAIL, %d MEMP_CLAIM)"
               % (g.b("it_nomem"), g.w("it_cseg"), g.w("it_seg"), asks, claims))
         # --- C: the sentence ------------------------------------------------
         raw = m.read(g.a("it_msgbuf"), 96).split(b"\0")[0].decode("latin-1")

@@ -228,7 +228,7 @@ for a bad pointer is unchanged because its `cbw` is below the clamp.
 
 ## WANTS AN ABI BREAK
 
-1. **The ten handler setters as one cell** - `OSAPI_WM_ONSIZE` (0x01BC),
+1. **The ten handler setters as one cell** - `OSAPI_WM_ONSIZE` (0x01B0),
    `_ONMOUSEUP` (0x0196), `_ONRESIZE` (0x02EB), `_ONDRAG` (0x0334),
    `_ONTIMER` (0x0342), `_ONWAKE` (0x0357), `_ONCLOSE` (0x0362), `_ONRCLICK`
    (0x0380), `_ONCLICK` (0x0450), `_ONWHEEL` (0x0499). Every one is already

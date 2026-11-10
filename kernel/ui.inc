@@ -3183,7 +3183,7 @@ ui_rb_go:                       ; the last instruction of the GUI, and a name
 %endif
 
 ; -----------------------------------------------------------------------------
-; ui_reboot_post - API slot 0x0298 (SPEC.md 20.10). AL in, no answer.
+; ui_reboot_post - API slot 0x027A (SPEC.md 20.10). AL in, no answer.
 ;
 ; AL = 0 restart the way the System menu does, flushing the Control Panel's
 ; settings on the way out; AL non-0 restart WITHOUT going near a disk. The

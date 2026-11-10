@@ -402,7 +402,7 @@ rw_aclaim:
     jae .r
     push ax
     mov ax, 64
-    call OSAPI_MEM_CLAIM_HI         ; DX = its segment
+    MEMKB_CLAIM_HI                  ; DX = its segment
     pop ax
     jc .r
     mov bl, [rw_anseg]
@@ -814,7 +814,7 @@ rw_abounce:
     xor ah, ah
     push cx
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA        ; DX = its segment, conventional
+    MEMKB_DMA                       ; DX = its segment, conventional
     pop cx
     jc .r
     mov [rw_abseg], dx
@@ -840,7 +840,7 @@ rw_abounce:
     shr dl, 1
     mov al, dl
     xor ah, ah
-    call OSAPI_MEM_CLAIM            ; DX = its segment
+    MEMKB_CLAIM                     ; DX = its segment
     jc .r
     mov [rw_abseg], dx
     mov byte [rw_abown], 1

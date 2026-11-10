@@ -104,7 +104,7 @@ it_ret:
 ; -----------------------------------------------------------------------------
 it_entry:
     mov ax, IT_DSTKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc it_ret                           ; CF=1: the loader says so
     mov si, it_blk
     mov [si+IMG_DSTSEG], dx
@@ -202,7 +202,7 @@ it_entry:
     cmp dx, [si+IT_SRCKB]               ; only MORE than we hold is worth a
     jbe .fail                           ; second read
     xchg ax, dx
-    call OSAPI_MEM_CLAIM                ; AX = KB -> DX = the new claim
+    MEMKB_CLAIM                         ; AX = KB -> DX = the new claim
     jc .fail
     mov [si+IT_SRCKB], ax               ; ...recorded only once it is held
     xchg dx, [si+IMG_SRCSEG]

@@ -205,7 +205,7 @@ af_init:
     mov word [af_pclaim], 0
 %ifndef AF_NOPCLAIM
     mov ax, (AF_PICPAR * AF_MAXG * 16 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nopic
     mov [af_pclaim], dx
 .nopic:

@@ -225,7 +225,7 @@ PB_HEADA    equ 100 - 6
 pb_entry:
     push si
     mov ax, PB_CLAIMKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noclaim
     mov [pb_claim], dx
 .noclaim:

@@ -569,8 +569,14 @@ sn_flip:
     mov si, sn_s_big
     cmp dx, SN_MAXKB
     ja .say
-    xchg ax, dx
-    call OSAPI_MEM_CLAIM        ; DX = it; AX kept
+    xchg ax, dx                 ; AX = the KB
+    push ax
+    mov cl, 6                   ; ...in PARAGRAPHS (SPEC.md 50.3.7: BX and
+    shl ax, cl                  ; CX are written before they are read on
+    xor cx, cx                  ; every path below)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = it
+    pop ax                      ; AX = the KB again
     jc .ns
     push dx
     mov es, dx

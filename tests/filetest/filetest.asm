@@ -106,7 +106,7 @@ ft_run:
     ; region caps at one segment. A machine that cannot fund the claim records
     ; nothing rather than failing: refusal is a normal path.
     mov ax, FT_BIGKB
-    call OSAPI_MEM_CLAIM        ; DX = the claim's base segment
+    MEMKB_CLAIM                 ; DX = the claim's base segment
     jc .nobig
     mov [ft_bseg], dx
 

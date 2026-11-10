@@ -239,7 +239,7 @@ the owner (CLAUDE.md: a rung is not a build fix).
   it with one BLIT1. A release over it runs `stik_quit`:
   1. `stik_close` (os88stik.inc:613): `STIK_ONCLOSE`, remove the row by name,
      save.
-  2. On CF=0, `OSAPI_WM_CLOSE` (0x0368), then return without drawing.
+  2. On CF=0, `OSAPI_WM_CLOSE` (0x0347), then return without drawing.
 
   Sliding off cancels (the §13.5 gesture), and stikswap's declined-once case
   is unchanged. **0 kernel bytes.** While the widget owns the bar, the
@@ -646,7 +646,7 @@ kern_small gets the two cells and nothing else (12 B .text, 0 .cold).
 - `docs/INDEX.md` is regenerated.
 
 **ABI:**
-- `python3 tools/abilock.py --update "OSAPI_WM_DESK 0x046D + OSAPI_GFX_DESK 0x0473 appended; header flag bit 6; WF_DESK/WF_HOVER mirrors"`.
+- `python3 tools/abilock.py --update "OSAPI_WM_DESK 0x0440 + OSAPI_GFX_DESK 0x0473 appended; header flag bit 6; WF_DESK/WF_HOVER mirrors"`.
 - **No `PKG_FMT` bump** (cells added at the end and a reserved bit given a
   meaning, §20.2.0.1), and no `DRV_VER` bump.
 - `tools/os88pkg.py:173`'s mask goes from 0xD8 to 0x98.

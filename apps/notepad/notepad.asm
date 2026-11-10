@@ -6677,7 +6677,7 @@ np_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0362)
+; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0341)
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;

@@ -1502,7 +1502,8 @@ br_dl_onwake:
     mov cx, [br_dl_fill]
     xor ax, ax
     call br_pagepin                 ; pinned for the call, as above
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     call br_pageunpin
     jc .writefail
     jmp .wrote

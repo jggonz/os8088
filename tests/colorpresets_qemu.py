@@ -295,7 +295,7 @@ class Guest:
         finally:
             assert self.rsp(f'z0,{entry:x},1') == 'OK'
 
-THM_SET = 0x046D                 # OSAPI_THM_SET (apps/os88api.inc)
+THM_SET = 0x0440                 # OSAPI_THM_SET (apps/os88api.inc)
 THM_COLOR = 2
 
 def main():

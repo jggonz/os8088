@@ -616,7 +616,7 @@ kern_big), keep the resident cost near 80-150 bytes.
 |---|---|---|
 | 1 | `MEM_GRAN` = 32; the KB doors shift once into `mem_claim_x.gran`, which rounds and refuses; `mem_claim_1`/`mem_compact` take paragraphs; kernel paragraph doors `mem_claimp_x/_hi_x/_dma_x`; kern_mega's `mem_hiclaims` rounds UP | SPEC.md 50.2.1 |
 | 2 | package regions `roundup512(image+bss)` exactly; driver images to 512 (`DRVR_PARA`, `mem_bytes_gp_x`, `mem_regrowp` for KEEP, `os88drv.py`'s `DRV_RUNG`, `DRV_VER` 11 -> 12); FAT window, read-ahead, dirw, ASSOC.DAT cache exact; modules carry their bss as zeros in the file and claim image+bss (pads, fit-asserts and kern_small's zeroing deleted) | SPEC.md 50.2.1, 51.1.2, 2.8.1 |
-| 3 | `OSAPI_MEM_P` (0x04E9): claim/claim_hi with the DMA head in CX and `MEMP_CPU`, regrow, avail with CX = the granule; C SDK `os88_mem_claim_p`/`_regrow_p`/`_largest_p`/`os88_mem_gran`; the C `.OVL` load; the parts standard end to end in paragraphs (The Wire's fence gains level 7 for the cell) | SPEC.md 50.3.7, 20.12.14, 92.2 |
+| 3 | `OSAPI_MEM_P` (0x04BC): claim/claim_hi with the DMA head in CX and `MEMP_CPU`, regrow, avail with CX = the granule; C SDK `os88_mem_claim_p`/`_regrow_p`/`_largest_p`/`os88_mem_gran`; the C `.OVL` load; the parts standard end to end in paragraphs (The Wire's fence gains level 7 for the cell) | SPEC.md 50.3.7, 20.12.14, 92.2 |
 | 4 | the Control Panel's Drivers column counts half-KB (`~10.5K`); the Task Manager (exact figures, fraction cells) - see its own commit | SPEC.md 31.6.2, 28.4 |
 | 5 | the DISK class (`MC_DISK`, the scan's fourth bump, `mem_hifit`, `mem_cp_dest`) under `MEM_ALIGN_CLASS`, built by `MEMGRAN=16` only; gates `t_heapgran` (fast) and `memp` (soak) | SPEC.md 50.2.1.1 |
 

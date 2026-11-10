@@ -1516,7 +1516,7 @@ wm_create:
 
 ; -----------------------------------------------------------------------------
 ; OSAPI_WM_ONRESIZE - install (or clear) a window's size-CHANGED handler
-;               (public; API 0x02EB, SPEC.md 11.98)
+;               (public; API 0x02CA, SPEC.md 11.98)
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers preserved)
 ;
@@ -1903,7 +1903,7 @@ wm_prefer:
                                 ; touches no flag, so the contract holds
 
 ; -----------------------------------------------------------------------------
-; wm_minsize - "do not cut me past this" (public; API 0x0374, SPEC.md 11.100.2)
+; wm_minsize - "do not cut me past this" (public; API 0x0353, SPEC.md 11.100.2)
 ; in:  BX = window ptr, CX = minimum outer width, DX = minimum outer height
 ;      (0/0 withdraws)
 ; out: nothing - every register preserved, FLAGS INCLUDED
@@ -3750,7 +3750,7 @@ wm_fs_drop:
 
 ; -----------------------------------------------------------------------------
 ; wm_snap - opt a window OUT of content-origin alignment, or back in
-;           (public; API 0x01F2, SPEC.md 11.94)
+;           (public; API 0x01DA, SPEC.md 11.94)
 ; in:  BX = window ptr, AL = 0 = do NOT keep me aligned / non-zero = do
 ; out: nothing - every register preserved, FLAGS INCLUDED (see below)
 ;
@@ -8320,7 +8320,7 @@ wm_title_set:
 ; (SPEC.md 8.1/28).
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; wm_saveu - API 0x0280: BX = window, AL = 0 clear / non-0 set
+; wm_saveu - API 0x0268: BX = window, AL = 0 clear / non-0 set
 ; The window's promise that its content does not change while it is not
 ; drawing (SPEC.md 11.96.1). Preserves the flags for wm_snap's reason: an
 ; entry proc calls this after wm_create and the carry riding in is its own
@@ -8367,7 +8367,7 @@ wm_saveu:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_band - API 0x02C5: "cache THIS BAND of my content and hand me the rest"
+; wm_band - API 0x02A4: "cache THIS BAND of my content and hand me the rest"
 ; in:  BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom),
 ;      CX = the band's extent in pixels, measured in from that edge.
 ;      CX = 0 retires the band, and the cache goes back to the whole content.
@@ -8458,7 +8458,7 @@ wm_ownbg:
 
 ; -----------------------------------------------------------------------------
 ; wm_keeph - "my layout is fixed: hang me over the dock rather than shorten me"
-;            (public; API 0x02F0, SPEC.md 11.93)
+;            (public; API 0x02CF, SPEC.md 11.93)
 ; in:  BX = window ptr, AL = 0 clear / non-0 set
 ; out: nothing - every register preserved, FLAGS INCLUDED
 ;
@@ -11578,7 +11578,7 @@ wm_an_n     dw WM_ANIM_N        ; idiv takes a memory or register operand, not
 ; out: nothing; every register preserved. The `or` writes FLAGS, which is
 ;      free here because this cell has no CF answer to lose
 ;
-; API slot 0x03CD, and the only reason the kernel owes one: fdlg.inc and
+; API slot 0x03A0, and the only reason the kernel owes one: fdlg.inc and
 ; ui.inc set WF_NOANIM with this same `or` written out where they stand, but
 ; the SDK's alert (SPEC.md 20.5.1) - the 'Save changes?' dialog Note Pad and
 ; Paint raise out of their close negotiator, and the one window in the machine
@@ -11619,7 +11619,7 @@ wm_noanim:
 ; in:  BX = a window of yours, AL = 0 clear / non-zero set
 ; out: nothing; every register preserved, FLAGS INCLUDED
 ;
-; API slot 0x048D (SPEC.md 79.10). A saver session draws on the UI task, a
+; API slot 0x0460 (SPEC.md 79.10). A saver session draws on the UI task, a
 ; frame a pass under the gfx lock, and that is the task a server's disk half
 ; runs on and the CPU its worker runs on: FTPD measured 125 KB/s falling to
 ; 40 with fish swimming. A gated signal costs nothing, so a program doing

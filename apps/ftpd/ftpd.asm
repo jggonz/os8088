@@ -491,7 +491,7 @@ fd_entry:
     ; and a claim from a worker is not something SPEC.md 20.6 rule 7 allows.
 %if FD_STG2
     mov ax, FD_STGKB
-    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    MEMKB_CLAIM                     ; out DX = the base segment
     jc .nostage2
     mov [fd_stg2], dx
     mov ax, fd_reloc                ; it moves too, fd_bigseg's reason
@@ -503,7 +503,7 @@ fd_entry:
     mov byte [fd_ckpn], FD_CKPT / FD_STGSZ
 %if FD_TIER
     mov ax, FD_BIGSZ / 1024
-    call OSAPI_MEM_CLAIM            ; a whole number of KB, so 512-aligned
+    MEMKB_CLAIM                     ; a whole number of KB, so 512-aligned
     jc .nobig                       ; refused: the 8KB server, which works
     mov [fd_bigseg], dx
     mov ax, fd_reloc                ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
@@ -5746,7 +5746,8 @@ fd_do_write:
     jne .no                         ; does APPEND, for the arguments it would
     mov byte [fd_noseq], 1          ; refuse, so falling back to it is exact
 .app:
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     jc .no
     jmp short .ok
 .held:

@@ -530,7 +530,7 @@ rw_rpclaim:
     call rw_mclaim
     jnc .got
     mov ax, 2
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .got
     mov si, rw_s_rproom
     call rw_rpsay

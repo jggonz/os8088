@@ -98,7 +98,7 @@ SIX THINGS ARE CHECKED, and the last is the one worth the file.
   4. Every call target lands on a real `.text` symbol.  A displacement into
      the middle of a routine assembles and runs.
   5. Every cell inside the table's extent is accounted for: published here,
-     published to DRIVERS (`drivers/os88drv.inc` owns OSAPI_DRV_TASK, 0x01D9), or on the
+     published to DRIVERS (`drivers/os88drv.inc` owns OSAPI_DRV_TASK, 0x01C7), or on the
      COMPAT list below.
   6. THE NAME AGREES WITH THE ROUTINE.  `OSAPI_GFX_LOCK` must reach
      `gfx_lock`.  Most match by the naming convention (`x`, `osapi_x`,
@@ -212,7 +212,6 @@ ALIAS = {
     "OSAPI_FILE_WRITE":   "dskw_write",
     "OSAPI_FILE_READ":    "dskw_read",
     "OSAPI_FILE_DELETE":  "dskw_delete",
-    "OSAPI_FILE_APPEND":  "dskw_append",
     "OSAPI_FILE_READ_AT": "dskw_read_at",
     "OSAPI_FILE_WRITE_AT": "dskw_write_at",   # ...and its other half (18.4.7)
     "OSAPI_FILE_READ_SEQ": "dskw_read_seq",   # ...and READ_AT with a cursor (18.4.8)

@@ -787,7 +787,9 @@ fcp_claim:
     cmp ax, FCP_MAXKB
     jbe .size
     mov ax, FCP_MAXKB
-.size:                          ; 3. the claim
+.size:                          ; 3. the claim, in PARAGRAPHS (the heap's
+    mov cl, 6                   ; unit: the KB DMA door went at the flag day,
+    shl ax, cl                  ; kernel size pass 19)
     mov bx, MEM_K_COPY
     mov cx, ax                  ; ...THE WHOLE BUFFER INSIDE ONE 64KB DMA PAGE
                                 ; (SPEC.md 22.5.1). dsk_runcap splits a run at
@@ -798,14 +800,14 @@ fcp_claim:
                                 ; the heap happened to be holding. Aligned, a
                                 ; chunk smaller than the buffer never reaches
                                 ; the boundary at all
-    FCPX mem_claim_dma_x
+    FCPX mem_claimp_dma_x
     jnc .claimed
-    FCPX mem_claim_x            ; ...and a heap with no page-aligned run
+    FCPX mem_claimp_x           ; ...and a heap with no page-aligned run
     jc .full                    ; still copies, exactly as it did before
 .claimed:                       ; the segment comes back in DX, and AX still
-    mov FCV(fcp_seg), dx        ; holds the KB asked for
-    mov cl, 10                  ; 4. the chunk: KB -> bytes. 64KB exactly
-    shl ax, cl                  ; wraps to 0 - the one count that does,
+    mov FCV(fcp_seg), dx        ; holds the paragraphs asked for
+    mov cl, 4                   ; 4. the chunk: paragraphs -> bytes. 64KB
+    shl ax, cl                  ; exactly wraps to 0 - the one count that does,
     jnz .round                  ; FCP_MAXKB being the cap - and takes the
     mov ax, FCP_MAXCH           ; largest whole-sector run below it instead
 .round:

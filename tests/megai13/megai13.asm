@@ -24,7 +24,7 @@ MI_N        equ 40
 mi_entry:
     push si
     mov ax, 9                       ; 18 sectors
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov cl, 1
     jc .no
     mov si, mi_s_start

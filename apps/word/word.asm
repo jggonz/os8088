@@ -711,7 +711,7 @@ wd_entry:
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
     mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    call OSAPI_MEM_CLAIM            ; 256 x 4 bytes, session-lived. Zeroed by
+    MEMKB_CLAIM                     ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [wd_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -5802,7 +5802,7 @@ wd_itinit:
                                     ; below may compact. The one claim this
                                     ; program makes with a segment in hand
     mov ax, WD_ITKB                 ; the table AND the staging area
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .let
     mov [wd_iseg], dx
 .let:
@@ -8914,7 +8914,7 @@ wd_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
     jc .no
     mov [wd_stgseg], dx
     mov es, dx
@@ -9069,7 +9069,7 @@ wd_load:
     call wd_sv6
     push es
     mov ax, WD_LSTGKB           ; the staging claim, transient across the read
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [wd_stgseg], dx
     call wd_goto                ; the folder dance on the way in

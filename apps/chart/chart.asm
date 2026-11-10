@@ -171,7 +171,7 @@ ct_entry:
                                         ; the session gets, and nothing else
                                         ; here can recover from it being wrong
     mov ax, CT_CLAIM_CHART_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [ct_chartseg], dx
     mov es, dx                          ; copy the constant 118-byte BMP
@@ -626,7 +626,7 @@ ct_stage:
 .claim:
     mov ax, dx                          ; AX = the KB the file needs, plus
     inc ax                              ; the one under CT_FOFF for the series
-    call OSAPI_MEM_CLAIM                ; - and the claim leaves AX alone
+    MEMKB_CLAIM                         ; - and the claim leaves AX alone
     mov si, ct_s_nomem                  ; (every slot preserves all but its
     jc .out                             ; outputs)
     mov [ct_stgseg], dx

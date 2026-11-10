@@ -374,7 +374,7 @@ dskw_wrp:
 ; dskw_write_sys - dskw_write, for a file that belongs to the KERNEL
 ; in/out: dskw_write's, exactly
 ;
-; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x0280) publishes it behind
+; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x0268) publishes it behind
 ; a caller test that refuses a package FERR_PROT (SPEC.md 19.6.1), because the
 ; whole point of SPEC.md 19.6 is that a package cannot make a file the user
 ; can neither see nor delete. Two differences from the ordinary write,
@@ -3870,7 +3870,7 @@ dwf_dskw_read_seq:
 ; -----------------------------------------------------------------------------
 %ifdef DSKW_WSEQ
 WSQF_HELD   equ 0x01            ; the caller's AL...
-WSQF_SYS    equ 0x02            ; ...and APPEND_SYS's permission (18.4.4):
+WSQF_SYS    equ 0x02            ; ...and a SYSTEM file's permission (18.4.4):
                                 ; a hidden + system file may be grown
 WSQF_KEEP   equ 0x04            ; ...the hold outlives a WAKE (18.4.9.3), on a
                                 ; fixed disk: [dws_keep] is the verdict
@@ -3883,9 +3883,9 @@ DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
                                 ; where declared
 
 %ifndef KD_BUILD
-; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
-; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
-; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
+; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0434), and the kernel's
+; writers call the door below it. WSEQF_SYS is a SYSTEM file's permission, so
+; it takes OSAPI_FILE_WRITE_SYS's FENCE (SPEC.md 19.6.1): drv_owns_seg on
 ; the caller's DS, which api_rn banked under the far return api_far built -
 ; BP, BX, IP, CS, the caller's SI, the caller's DS. A close reads no flag
 dwsf_dskw_write_seq:
@@ -4199,9 +4199,9 @@ dws_hlose:
 ; bytes from past the CALLER's buffer over bytes the file owns. At or past
 ; the size the rounded tail lands on slack, so any count goes (18.4.7.2).
 ; -----------------------------------------------------------------------------
-; (The SYSTEM-file flavour, dskw_append_sys, is its far entry alone:
-; dwf_dskw_append_sys stores [dskw_syswr] = 1 and falls into dwf_dskw_append's
-; call, and dskw_wrp clears it on the way out - size pass 10, -4.)
+; (The SYSTEM-file flavour, dskw_append_sys, was its far entry alone until
+; kernel size pass 19 withdrew OSAPI_FILE_APPEND_SYS, which had no caller: a
+; driver appends to a system file through WRITE_SEQ's WSEQF_SYS.)
 dskw_append_x:
     push bx
     push cx
@@ -7089,7 +7089,7 @@ asc_flush:
     popf
     ret
 
-; OSAPI_ASSOC_FLUSH's far entry (0x0493, SPEC.md 54.5): the rare cold slot
+; OSAPI_ASSOC_FLUSH's far entry (0x0466, SPEC.md 54.5): the rare cold slot
 ; far-calls its body (api_rsc), and asc_flush ends in a near ret
 osapi_assoc_flush_x:
     call asc_flush
@@ -7309,11 +7309,16 @@ dwf_dskw_mkdir:         call dskw_mkdir_x
                     retf
 dwf_dskw_read_at:       call dskw_read_at_x
                     retf
-%ifdef DSKW_SYSW
-dwf_dskw_append_sys:    mov byte [dskw_syswr], 1    ; ...and the plain
-%endif
-dwf_dskw_append:        call dskw_append_x          ; append (dskw_wrp
-                    retf                            ; clears it)
+%ifdef KERN_SMALL
+dwf_dskw_write_at:      cmp dx, -1  ; DX = 0xFFFF IS the append (SPEC.md
+                        jne dwf_dskw_wat_no ; 18.4.7.3), which is what
+%endif                  ; OSAPI_FILE_APPEND was withdrawn for (kernel size
+dwf_dskw_append:        call dskw_append_x  ; pass 19) - so kern_small
+                    retf                    ; answers that offset and
+                                ; refuses every other: DOS.O88 does not ship
+                                ; on the small disks, os88data.inc's od_write
+                                ; takes its full arm (SPEC.md 19.9.1), and
+                                ; the INSIDE arm is kern_big's
 %ifndef KERN_SMALL
 dwf_dskw_write_at:      call dskw_write_at_x
                     retf
@@ -7331,15 +7336,9 @@ dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8
                                         ; rule 4) - falling into the refusal
-dwf_dskw_write_at:  stc         ; every caller tests CF (SPEC.md 18.4.7.4):
-                    retf        ; DOS.O88 does not ship on the small disks,
-                                ; and os88data.inc's od_write takes its full
-                                ; arm (SPEC.md 19.9.1). The INSIDE arm,
-                                ; dsk_write_chain and this door are
-                                ; kern_big's, and an append
-                                ; still has the whole body. Cold, because the
-                                ; N cell reaches the far entry by name
-                                ; (SPEC.md 20.3.2)
+dwf_dskw_wat_no:    stc         ; every caller tests CF (SPEC.md 18.4.7.4).
+                    retf        ; Cold, because the N cell reaches the far
+                                ; entry by name (SPEC.md 20.3.2)
 %endif
 ; THE AL DISPATCH IS HERE, in the COLD far entry, and not in a second resident
 ; thunk: both bodies are already cold, so branching here costs one far entry

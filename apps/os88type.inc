@@ -782,7 +782,7 @@ ty_open:
     mov ax, dx                      ; answered for it, FERR_BIG and TYE_READ
     mov cx, dx                      ; all of it is the read's (CLAIM_DMA's
     push ax                         ; 64KB question)
-    call OSAPI_MEM_CLAIM_DMA
+    MEMKB_DMA
     pop cx                          ; CX = the KB claimed
     jnc .got
     mov al, TYE_NOMEM
@@ -1210,7 +1210,7 @@ ty_cache:
     call OSAPI_MEM_FREE             ; face reuses it. A taller one gives it
     mov word [ty_psseg], 0          ; back and claims again
 .claim:
-    call OSAPI_MEM_CLAIM            ; AX = KB, preserved
+    MEMKB_CLAIM                     ; AX = KB, preserved
     jc .nomem
     mov [ty_psseg], dx
     mov [ty_pskb], al

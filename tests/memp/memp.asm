@@ -171,7 +171,7 @@ mp_suite:
     ; --- 8 and 9. the KB door at 4KB and 16KB --------------------------------
 .t8:
     mov ax, 4
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .f8
     call OSAPI_MEM_FREE
     MP_OK 8
@@ -180,7 +180,7 @@ mp_suite:
     MP_BAD 8
 .t9:
     mov ax, 16
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .f9
     call OSAPI_MEM_FREE
     MP_OK 9

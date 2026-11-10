@@ -180,7 +180,7 @@ opened it (`inst_caller`, as toasts do):
 
 ### 4.1 Built (third commit): `OSAPI_FS_OP`, one cell
 
-One slot, `OSAPI_FS_OP` at `0x04E9`, as a rare cell (6 bytes).
+One slot, `OSAPI_FS_OP` at `0x04BC`, as a rare cell (6 bytes).
 `DX:CX` = the bytes the operation will move, and `DX:CX` = 0 ends it, so
 ending needs no flag at all. `PKG_FMT` stays 10, because the cell is added at
 the end of the table (`tools/abi.lock.json` records why). The kernel side is

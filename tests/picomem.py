@@ -926,7 +926,7 @@ def leg_kern(tmp):
 # leg mouse - USBMOUSE.DRV's PicoMEM backend (SPEC.md 9.12.7)
 # =============================================================================
 DSEG = 0x2000                   # where the model loads the driver
-FEED = 0x0060 * 16 + 0x0449     # OSAPI_MOUSE_FEED's cell: KERNEL_SEG:0449h
+FEED = 0x0060 * 16 + 0x041C     # OSAPI_MOUSE_FEED's cell: KERNEL_SEG:041Ch
 
 
 def leg_mouse(tmp):

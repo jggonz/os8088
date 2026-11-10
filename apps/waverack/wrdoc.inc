@@ -329,7 +329,7 @@ wo_open:
     mov [di+WS_ENV], dx
 .noenv:
     mov ax, WE_VKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov bl, E_MEM
     jc .refuse
     mov [we_vseg], dx

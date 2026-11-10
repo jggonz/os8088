@@ -431,7 +431,7 @@ vm_run:
     cmp word [vm_dseg], 0
     jne .have
     mov ax, 8                       ; the masks (VM_B of 8 KB)
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [vm_dseg], dx
 .have:
