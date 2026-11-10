@@ -75,6 +75,7 @@ again:
     }
     if ((c >= '0' && c <= '9') || c == '-' || c == '+') {
         v = 0; n = 0;
+        if (c == '-' || c == '+') cm_eat();                 /* a sign is a character the loop below does not take */
         while ((c = cm_peek()) >= 0 && ((c >= '0' && c <= '9') || c == '-' || c == '.')) { if (c >= '0' && c <= '9') v = (pdw)(X10(v) + (c - '0')); cm_eat(); n++; }
         g_tv = v; return T_INT;
     }

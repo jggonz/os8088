@@ -220,8 +220,8 @@ static pdw sf_simple(pdw o, pdw len, pdi nc)
     g_gnc = (pdw)nc;
     p = (pdw)(o + 10);
     for (i = 0; i < g_gnc; i++) { g_gend[i] = P16(p); p = (pdw)(p + 2); if (i && g_gend[i] < g_gend[i - 1]) return 0; }
+    if (g_gnc && g_gend[g_gnc - 1] >= SF_NPT) return 0;           /* before the +1: 0xFFFF would wrap */
     np = g_gnc ? (pdw)(g_gend[g_gnc - 1] + 1) : 0;
-    if (np > SF_NPT) return 0;
     g_gnp = np;
     p = (pdw)(p + 2 + P16(p));                          /* skip instructions */
     for (i = 0; i < np; ) {

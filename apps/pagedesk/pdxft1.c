@@ -43,7 +43,7 @@ static void t1_decrypt(pdw o, pdw n, pdw r, pdw skip)
     for (i = 0; i < n; i++) {
         c = P8((pdw)(o + i));
         p = (pdw)(c ^ (r >> 8));
-        r = (pdw)((c + r) * 0xCE6D + 0x58BF);
+        r = (pdw)((unsigned)(c + r) * (unsigned)0xCE6D + (unsigned)0x58BF);
         P8w((pdw)(o + i), p);
     }
     /* the first `skip` bytes are random lead: leave them, callers step over them */
