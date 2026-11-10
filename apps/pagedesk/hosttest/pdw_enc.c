@@ -101,6 +101,8 @@ static pdw eng_crypt(void)
 /* ---- the stand-in PDENG ------------------------------------------------------ */
 static char g_db[64] = "DB";
 static char g_pw[64] = "";
+static char g_fpw[64] = "";      /* the foreign file's */
+static int g_fpwknown;            /* 0: the primary only knows the empty password until asked (the pause) */
 static char G_lastname[14];
 static int E_enc, E_keyed, E_stm, E_str, E_v, E_r, E_opens, E_setkeys, E_badkeys;
 static unsigned char E_key[32]; static int E_keylen;
@@ -112,7 +114,7 @@ static int hv(int c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 static int load_db(const char *name)
 {
     char cmd[400], line[600], k[40]; FILE *f; int a, b, c, d, e, g;
-    snprintf(cmd, sizeof cmd, "python3 %s '%s' %s '%s'", getenv("PDW_PREP") ? getenv("PDW_PREP") : "../../apps/pagedesk/hosttest/pdw_encprep.py", name, g_db, g_pw);
+    snprintf(cmd, sizeof cmd, "python3 %s '%s' %s '%s'", getenv("PDW_PREP") ? getenv("PDW_PREP") : "../../apps/pagedesk/hosttest/pdw_encprep.py", name, g_db, !strcmp(name, "FOREIGN.PDF") ? g_fpw : g_pw);
     if (system(cmd)) return -1;
     { FILE *s = fopen(name, "rb"); if (!s) return -1; fseek(s, 0, SEEK_END); E_len = ftell(s); fseek(s, 0, SEEK_SET); free(E_buf); E_buf = malloc((size_t)E_len + 1); fread(E_buf, 1, (size_t)E_len, s); fclose(s); }
     snprintf(cmd, sizeof cmd, "%s/trailer.txt", g_db); f = fopen(cmd, "r"); if (!f) return -1;
@@ -247,16 +249,47 @@ static void wrt_init(void)
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0);
 }
-static pdw save(const char *src, const char *dst)
+/* the job as the primary runs it: PDE_PASSWORD from an Insert window is an answer, not an
+ * error - ask (here: the key qpdf derives from the password), SETKEY, and call again */
+static int g_pauses, g_pausedetail;
+static struct pdxb_save SVB;
+static pdw job(pdw verb, pdw mode, const char *src, const char *dst, pdw map_n)
 {
-    struct pdxb_save sv; pdw r; int g = 0;
-    memset(&sv, 0, sizeof sv);
-    strcpy(sv.target, dst); strcpy(sv.source, src); strcpy(sv.date, "D:20261110090000"); strcpy(sv.author, "Reviewer \xE9");
-    sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = nE;
-    pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
-    do { r = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); } while (r == PDE_BUSY && ++g < 20000);
-    if (r) printf("     save %s -> %u detail %u (phase %u item %u)\n", dst, r, sv.err_detail, sv_lastph, sv_lasti);
+    pdw r; int g = 0;
+    memset(&SVB, 0, sizeof SVB);
+    strcpy(SVB.target, dst); strcpy(SVB.source, src); strcpy(SVB.date, "D:20261110090000"); strcpy(SVB.author, "Reviewer \xE9");
+    SVB.mode = mode; SVB.edits_seg = SEG_EDS; SVB.edits_count = nE; SVB.pages_seg = map_n ? SEG_MAP : 0; SVB.pages_count = map_n;
+    pd_fcopy_out(&SVB, SEG_XB, 0, sizeof SVB);
+    for (;;) {
+        r = (pdw)pdw_verb(verb, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &SVB, sizeof SVB);
+        if (r == PDE_BUSY && ++g < 20000) continue;
+        if (r == PDE_PASSWORD && g_pauses < 8) {
+            struct pdxb_crypt c; g_pauses++; g_pausedetail = SVB.err_detail;
+            memset(&c, 0, sizeof c); pd_fcopy_out(&c, SEG_XB, 0, sizeof c);
+            pdw_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0); pd_fcopy_in(g_xb, 0, &c, sizeof c);
+            if (!g_fpwknown) { g_fpwknown = 1; }
+            c.key_len = (pdw)E_keylen; memcpy(c.key, E_key, (size_t)E_keylen); c.auth = PDCA_USER;
+            pd_fcopy_out(&c, SEG_XB, 0, sizeof c);
+            pdw_engcall(PDV_ENG_SETKEY, 0, 0, 0);
+            pd_fcopy_out(&SVB, SEG_XB, 0, sizeof SVB);
+            continue;
+        }
+        break;
+    }
+    if (r) printf("     job %s -> %u detail %u (phase %u item %u)\n", dst, r, SVB.err_detail, sv_lastph, sv_lasti);
     return r;
+}
+static pdw save(const char *src, const char *dst) { return job(PDV_WRT_SAVE, PDSV_INCREMENTAL, src, dst, 0); }
+static void map_set(const unsigned *m, int n)
+{
+    int i; pd_ffill(SEG_MAP, 0, 0, 1024);
+    for (i = 0; i < n; i++) pd_fpokew(SEG_MAP, (pdw)(2 * i), (pdw)m[i]);
+}
+static void ins_slot(int k, const char *name)
+{
+    pd_ffill(SEG_MAP, (pdw)(PDM_NAMES + 14 * k), 0, 14);
+    pd_fcopy_out(name, SEG_MAP, (pdw)(PDM_NAMES + 14 * k), (pdw)(strlen(name) + 1));
+    pd_fpokew(SEG_MAP, (pdw)(1002 + 4 * k), 0); pd_fpokew(SEG_MAP, (pdw)(1004 + 4 * k), 1);
 }
 
 int main(int argc, char **argv)
@@ -303,7 +336,40 @@ int main(int argc, char **argv)
     }
     r = save("S1.PDF", "S2.PDF");
     CK(r == PDE_OK, "a save over the first save's output answers %u", r);
+    /* Extract: the two pages, the second first, from the source (a plain output from an encrypted source) */
+    remove("X1.PDF");
+    if (eng_open(src) != 0) { CK(0, "the stand-in opens %s", src); return 1; }
+    { unsigned m[2] = { PDM_MK(PDM_SRC, 0, 1), PDM_MK(PDM_SRC, 0, 0) }; map_set(m, 2); }
+    wrt_init(); es_reset();
+    r = job(PDV_WRT_EXTRACT, PDSV_EXTRACT, src, "X1.PDF", 2);
+    CK(r == PDE_OK, "Extract from %s answers %u", src, r);
+    /* Insert: pages 1 and 3 of FOREIGN.PDF after the source's first page, then its second */
+    if (argc > 3) {
+        snprintf(g_fpw, sizeof g_fpw, "%s", argc > 4 ? argv[4] : "");
+        remove("I1.PDF");
+        { unsigned m[4] = { PDM_MK(PDM_SRC, 0, 0), PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)), PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 3)), PDM_MK(PDM_SRC, 0, 1) }; map_set(m, 4); }
+        ins_slot(0, "FOREIGN.PDF");
+        if (eng_open(src) != 0) { CK(0, "the stand-in opens %s", src); return 1; }
+        wrt_init(); es_reset();
+        es_new(PDA_NOTE, 0, 400, 700, 420, 718); E.colour = PDC_YELLOW; es_text("a note beside an inserted page"); es_add();
+        g_pauses = 0;
+        r = job(PDV_WRT_SAVE, PDSV_INCREMENTAL, src, "I1.PDF", 4);
+        CK(r == PDE_OK, "Insert (target %s, foreign %s) answers %u", E_enc ? "encrypted" : "plain", argv[3], r);
+        if (strstr(argv[3], "enc")) CK(g_pauses == 1 && g_pausedetail == 20, "the encrypted foreign file paused the job once (PDE_PASSWORD, detail %d) and the job went on", g_pausedetail);
+        else CK(g_pauses == 0, "a plain foreign file never pauses");
+    }
     CK(g_ivrepeat == 0, "no IV repeated in %d (%d cipher calls)", g_nivseen, g_cryptcalls);
+    if (getenv("PDW_SABOTAGE") && E_enc) {           /* a wrong key held by the writer must fail the verify, not pass it */
+        struct pdxb_save sv; pdw rr; int g = 0;
+        if (eng_open(src) != 0) return 1;
+        es_reset(); es_new(PDA_NOTE, 0, 10, 10, 20, 20); E.colour = PDC_RED; es_text("sabotage"); es_add();
+        wrt_init();
+        memset(&sv, 0, sizeof sv); strcpy(sv.target, "BAD.PDF"); strcpy(sv.source, src); strcpy(sv.date, "D:20261110090000"); sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = nE;
+        pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
+        do { rr = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); if (g_cop.key_len && !g++) g_cop.key[0] ^= 1; } while (rr == PDE_BUSY && g < 20000);
+        CK(!E_enc || rr == PDE_PASSWORD, "a held key that is not the file's makes the verify fail (answer %u)", rr);
+        CK(access(PDW_TEMPNAME, F_OK) != 0 && access("BAD.PDF", F_OK) != 0, "...and removes the temp file");
+    }
     printf("PDW-ENC S1.PDF S2.PDF\n");
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails;

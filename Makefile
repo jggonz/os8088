@@ -21750,6 +21750,22 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 else
 	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
 endif
+# PDWRT on xref-stream, object-stream and ENCRYPTED sources (PAGEDESK-SPEC
+# 20.22.4.6, hosttest/pdw_enc.c): the writer over a stand-in for the PDENG
+# verbs the engine agents own (PDRC_PLAIN, CRYPTINFO, SETKEY, PDV_ENG_CRYPT),
+# on fixtures qpdf makes (plain xref stream + object stream, AES-128, AES-256,
+# RC4-128, RC4-40, a user password, a classic table), every output held to
+# qpdf --check, qpdf's own decryption and mutool. The cipher is OpenSSL's
+# (libcrypto, host only: nothing of it is in PDWRT.MOD). PDW_SSL names its
+# library when pkg-config does not.
+PDW_SSLC ?= $(shell pkg-config --cflags libcrypto 2>/dev/null || echo -I/opt/homebrew/opt/openssl@3/include)
+PDW_SSLL ?= $(shell pkg-config --libs libcrypto 2>/dev/null || echo -L/opt/homebrew/opt/openssl@3/lib -lcrypto)
+.PHONY: pdwrt-enc
+pdwrt-enc: | $(BUILD)
+	mkdir -p $(BUILD)/pdw-enc
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST $(PDW_SSLC) -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(PDW_SSLL)
+	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
 
 # ---- PageDesk: math ----

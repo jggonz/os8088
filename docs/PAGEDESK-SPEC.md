@@ -4944,15 +4944,17 @@ not built: it would need a new object number, a self entry, a binary counted
 length, a rewritten `job_verify` and a stream the engine must read back. The
 trailer written is:
 
-`/Size`, `/Root`, `/Info` as before; `/Encrypt` when the source has one (the
-reference when `pdxb_trailer.encrypt_num` is non-zero; when `tflags` has
-`PDTR_ENCDIRECT` the dictionary is written again from `PDV_ENG_CRYPTINFO`'s
-fields: `/Filter /Standard /V /R /Length /P /O /U`, `/OE /UE /Perms` for R5 and
-R6, `/CF /StmF /StrF` for V4 and V5, `/EncryptMetadata` when false - every
-input of the key, so the same key results; it is that dictionary's VALUES that
-are kept, not its spelling); `/ID [<id0 whole, up to 32 bytes> <a new 16>]`
-(`id0` then `id0_hi`: the first element is the key's input and is written
-byte for byte); `/Prev`. `job_verify` is unchanged (it looks for `xref`).
+`/Size`, `/Root`, `/Info` as before; `/Encrypt n g R` when the source has one
+(`pdxb_trailer.encrypt_num` / `encrypt_gen`); `/ID [<id0 whole, up to 32
+bytes> <a new 16>]` (`id0` then `id0_hi`: the first element is an input of the
+key and is written byte for byte); `/Prev`. **A DIRECT `/Encrypt` dictionary**
+(`tflags` has `PDTR_ENCDIRECT`) is not written again: the job answers
+`PDE_ENCRYPT` at its start. The dictionary could be rebuilt from
+`PDV_ENG_CRYPTINFO`'s fields (`/V /R /Length /P /O /U`, `/OE /UE /Perms`,
+`/CF /StmF /StrF`) at about 670 bytes of PDWRT (code and a 200-byte copy of
+the fields); it was left out of AP-06's 5,000-byte budget, and every producer
+this round measured (qpdf, Acrobat, iText, Ghostscript, PDFBox) writes it
+indirectly. ``job_verify` is unchanged (it looks for `xref`).
 `job_vfy` re-opens the temp file through PDENG, which now chains classic ->
 stream sections (20.22.3); an encrypted output is opened with the held key
 (20.22.4.4).
@@ -5077,13 +5079,27 @@ window the primary re-opens the SAVED file (`PDW_OUT_REOPEN`, as for every
 Insert); an encrypted save keeps the source's `/Encrypt` and `/ID[0]`, so the
 key the primary already holds opens it.
 
-**20.22.4.6 Host stand-ins and checks.** Until PDRC_PLAIN, PDV_ENG_CRYPT and
-SETKEY exist in PDENG, the host harnesses (`hosttest/pdw_enc.c`) stand in for
-exactly those verbs, over a small reader of the fixture; the standing
-differential for the output is `qpdf --check`, `qpdf --decrypt --password=`
-(the annotation strings and appearance streams read back), and `mutool draw`
-with no `invalid string length for aes encryption` on stderr. Fixtures:
-`tests/pdfany/wrt/` (provenance beside them).
+**20.22.4.6 Host stand-ins and checks.** `make pdwrt-enc` (soak row
+`pdwrtenc`) drives PDWRT through `pdw_verb` over a stand-in
+(`hosttest/pdw_enc.c`) for exactly the PDENG verbs the engine agents own and
+that had not landed when AP-06 was written: PDRC_PLAIN reads (served by
+`hosttest/pdw_encprep.py`, which has qpdf decode the fixture), the trailer's
+`encrypt_num`/`tflags`/`id0_hi`, OPEN's `PDE_PASSWORD`, CRYPTINFO, SETKEY and
+`PDV_ENG_CRYPT` (OpenSSL's AES, RC4 written there). The stand-in checks the key
+the writer holds against qpdf's own (`--show-encryption-key`), so a wrong key
+fails the verify; the harness proves that with a deliberately corrupted key.
+The standing differential for every output (`hosttest/pdw_encrun.py`):
+`qpdf --check` clean; `qpdf` with the password reads back the same annotations
+(subtype, `/Contents`, `/T`, `/Subj`, `/DA`, `/Rect`, `/C` and the bytes of
+the appearance stream) as the unencrypted control run; `mutool draw` is silent
+(no `invalid string length for aes encryption`); the source is the output's
+prefix; the trailer has `/Prev`, `/Encrypt` and the source's whole `/ID[0]`;
+Extract from an encrypted file is a plain file whose pages equal the control's;
+Insert into an encrypted file and from an AES-128 file with a user password
+(the job pauses once on `PDE_PASSWORD`, then goes on) equals the control's.
+Fixtures are built by the run from `samples/MARKUP.PDF` and `samples/PAGES.PDF`
+with qpdf 12.4.2 (`tests/pdfany/wrt/README.TXT` has the commands). When
+`pdeng.c` answers these verbs for real, `pdw_real.c` replaces the stand-in.
 
 **20.22.4.7 Cost.** PDWRT grows by at most 5,000 bytes of image + bss (cap
 53,248); the figures are in the round's report. The deep stack of a chain that
