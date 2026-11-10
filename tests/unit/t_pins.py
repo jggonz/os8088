@@ -179,8 +179,12 @@ def huge_regrow(lines, i):
         c = asm_code(lines[j])
         if HUGE_REGROW.search(c):
             return True
-        if re.search(r"\bmov\s+bx\s*,", c):
-            return False
+        if re.search(r"\bmov\s+(?:bx|bl)\s*,", c):
+            return False        # another verb set nearer the call: a
+                                # `mov bl, MEMP_CLAIM` between a REGROW and
+                                # this call (The Wire's wr_refresh: regrow,
+                                # else `.new:` claims) made the claim read as
+                                # a resize and hid the site (ksp19 patterns)
         if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
             break
     return False
