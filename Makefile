@@ -18474,6 +18474,19 @@ PD_MATH_STUB ?= 0
 PD_ENG_MOD   ?= $(BUILD)/PDENG.MOD
 PD_REND_MOD  ?= $(BUILD)/PDREND.MOD   # the real renderer: D23 private stack (deepstk) carries its chains; PD_REND_MOD=$(PDSTUBDIR)/PDREND.MOD for the stand-in
 PD_WRT_MOD   ?= $(BUILD)/PDWRT.MOD
+# THE SLOT'S OCCUPANTS (PAGEDESK-SPEC 20.22.2.3), one variable each, the
+# stand-ins until each owner's module lands (PD_REND_MOD's shape): dct writes
+# PDXI, crypt PDXK, gfx PDXG, fonts PDXF, jpx PDXJ
+PD_XK_MOD    ?= $(PDSTUBDIR)/PDXK.MOD
+PD_XG_MOD    ?= $(PDSTUBDIR)/PDXG.MOD
+PD_XF_MOD    ?= $(PDSTUBDIR)/PDXF.MOD
+PD_XI_MOD    ?= $(PDSTUBDIR)/PDXI.MOD
+PD_XJ_MOD    ?= $(PDSTUBDIR)/PDXJ.MOD
+PD_XMODS      = $(PD_XK_MOD) $(PD_XG_MOD) $(PD_XF_MOD) $(PD_XI_MOD) $(PD_XJ_MOD)
+PD_EMPTY     :=
+PD_SPACE     := $(PD_EMPTY) $(PD_EMPTY)
+PD_XPARTS     = $(BUILD)/pdxk.part $(BUILD)/pdxg.part $(BUILD)/pdxf.part \
+                $(BUILD)/pdxi.part $(BUILD)/pdxj.part
 PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
 PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES
 PD_FONT_TXT  ?= $(BUILD)/PDFONTS.TXT
@@ -18486,6 +18499,8 @@ $(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDI
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
 $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
+$(PDSTUBDIR)/PDX%.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc $(PDDIR)/pdkgate.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_X$* -o $@ $<
 
 # A module PART is its image followed by its .bss as zeros, read out of the
 # header the module wrote (+4 image, +6 bss) - apps/loom's lmpvpart rule -
@@ -18497,17 +18512,27 @@ PD_PARTPAD = @python3 -c "import struct,sys; d=open('$<','rb').read(); \
 # and a real PDREND.MOD can both be older than the part, so without this a
 # PD_REND_MOD switch kept the previous module in the package (it read as a
 # CGA launch hang on the real renderer's stack overrun - verify-notes, 22:44)
-PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))))
+PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))+$(subst $(PD_SPACE),+,$(strip $(PD_XMODS)))))
 $(shell mkdir -p $(BUILD); \
         [ -f '$(PDMODSTAMP)' ] || { rm -f $(BUILD)/.pdmods-* \
                                       $(BUILD)/pdeng.part $(BUILD)/pdrend.part \
-                                      $(BUILD)/pdwrt.part; \
+                                      $(BUILD)/pdwrt.part $(PD_XPARTS); \
                                 touch '$(PDMODSTAMP)'; })
 $(BUILD)/pdeng.part: $(PD_ENG_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdrend.part: $(PD_REND_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdwrt.part: $(PD_WRT_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxk.part: $(PD_XK_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxg.part: $(PD_XG_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxf.part: $(PD_XF_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxi.part: $(PD_XI_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxj.part: $(PD_XJ_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 
 # PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
@@ -18525,9 +18550,10 @@ $(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
           $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h $(PDDIR)/pdovlrecov.c   # pages, recov
 PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc $(PDDIR)/pdkit.inc \
+          $(PDDIR)/pduslot.inc $(PDDIR)/pdstk.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
-          apps/weave/wfetch.inc apps/os88ui.inc
+          apps/os88ui.inc
 PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
 $(PDMATHSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.pdmath-stub $(BUILD)/.pdmath-real
@@ -18552,6 +18578,7 @@ $(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMAT
 $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
                        $(BUILD)/pdrend.part $(BUILD)/pdwrt.part \
                        $(BUILD)/pdres1.part $(BUILD)/pdres2.part \
+                       $(PD_XPARTS) \
                        tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
 	python3 tools/os88ovl.py $< -o $(BUILD)/PAGEDESK.OVL \
 		--trim $(BUILD)/pagedesk.trim.bin
@@ -18559,6 +18586,7 @@ $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
 		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
 		--part $(BUILD)/pdwrt.part \
 		--part $(BUILD)/pdres1.part --part $(BUILD)/pdres2.part \
+		$(addprefix --part ,$(PD_XPARTS)) \
 		--part $(BUILD)/PAGEDESK.OVL
 $(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
 
@@ -18581,7 +18609,7 @@ PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
 define PDDISK
 	python3 tools/checkreadme.py $(PDDIR)/README.TXT
 	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
-	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(PD_SAMPLES) \
+	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(or $(3),$(PD_SAMPLES)) \
 	    --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
 endef
@@ -18591,10 +18619,20 @@ $(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,1200,$(PD_FONTX_RES))
 $(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,720,$(PD_FONTX_RES))
+# O7 (PAGEDESK-SPEC 20.22.2.8): THE 360KB SET IS TWO FLOPPIES. The first is
+# the program with the two samples the empty view and PD-29's XT proof open;
+# the second carries every sample. One file cannot span two floppies, so
+# PAGEDESK.O88 itself must fit a 360KB disk - os88disk.py refuses one that
+# does not, which is the gate.
+PD_SAMPLES360 := $(filter %/HELLO.PDF %/XTGUIDE.PDF,$(PD_SAMPLES))
 $(BUILD)/pagedesk360.img: $(PDDISKDEPS)
-	$(call PDDISK,360,)
+	$(call PDDISK,360,,$(PD_SAMPLES360))
+$(BUILD)/pagedesk360b.img: $(PD_SAMPLES) $(PDDIR)/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(PDDIR)/README.TXT $(PD_SAMPLES)
+	python3 tools/os88disk.py --verify $@
 pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
-              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img
+              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img \
+              $(BUILD)/pagedesk360b.img
 .PHONY: pagedesk pagedeskdisk
 
 # ...and the everything set and the live media carry it (SPEC.md 80.6,

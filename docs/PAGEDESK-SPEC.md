@@ -4919,9 +4919,11 @@ round's final pass, not before.
 
 The slot, the claims that hold it, the ladder that fills it, the cache behind
 it and the disks that carry its occupants. The code is the primary's:
-`apps/pagedesk/pduslot.c` (the loader, the cache, the regions, the ladder),
-its asm half in `pdui.inc` (the decompress, XMS and EMS doors), the two job
-call sites in `pdujob.c`, and `pdumod.c` (PDWRT through the slot).
+`apps/pagedesk/pduslot.inc` (the loader, the cache, the regions, the ladder,
+in assembly: 20.22.2.9), `apps/pagedesk/pduslot.c` (what an owner edits: the
+occupant table and each one's workspace, and ui's stand-ins), the job call
+sites in `pdujob.c`, `pdufind.c`, `pdusel.c` and `pduside.c`, and
+`pdumod.c` (PDWRT through the slot).
 
 **20.22.2.1 Where the slot lives: a claim of its own, which PDWRT shares.**
 The scout's three places, priced in claims (`MEM_OWNER_MAX` = 8 on kern_big,
@@ -4986,8 +4988,17 @@ The overlay row moves from 5 to 10 and stays last (`cc_ovidx`, crt0's
 `CC_OVL_ROW` rule). Until an occupant lands its row carries a STAND-IN
 (`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ`), named by the
 Makefile's `PD_XK_MOD` ... `PD_XJ_MOD`, which default to it: a header, a door
-that answers `PDV_X_INIT` and refuses every other verb with `PDE_RANGE`, and
-1 KiB of bss so the row packs.
+that answers `PDV_X_INIT` and refuses every other verb with CF = 1,
+`PDE_NOTFOUND`, and 1 KiB of bss so the row packs.
+
+**The stack gate reads an occupant by a naming rule** (`tools/os88pdstk.py`'s
+`OCCUPANTS`): its top source is `apps/pagedesk/pdx?.asm`, its door
+`pdx?_entry` and its dispatcher `_pdx?_verb` (`pdxk`, `pdxg`, `pdxf`, `pdxi`,
+`pdxj`); PDREND's far call into the slot names `slot` in its operand
+(`call far [_pdr_slot_off]`); every far call an occupant makes is taken to be
+PDENG's door. The primary's `pdu_mcall` reaches every occupant's door. An
+occupant whose source is not in the tree (the stand-in) is left out, and
+`t_pdkgate` reads every built `PDX?.MOD`, real and stand-in.
 
 The slot claim S is sized for the occupant it is about to hold:
 `max(roundup16(image + bss) + workspace, R + roundup_cluster(slack +
@@ -5060,14 +5071,16 @@ region, DX = the KiB wanted (1..64). The primary:
   any other second ask is refused;
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
-  come with it), and re-INITs PDENG and PDREND, then the occupant;
-* refuses by re-INITing with that region's field 0 (a refusal is not an
-  error).
+  come with it), and re-INITs PDENG, then PDREND. The occupant is not
+  re-INITed: it holds no region;
+* refuses by re-INITing anyway: a region never held has its field 0, and a
+  held region asked to grow keeps its segment and KiB unchanged (a refusal is
+  not an error).
 
 THE MODULES' SIDE OF IT, binding on eng and rcore: **an INIT while a document
 is open only re-hands segments**: document state, and every byte of a region
 already held, are kept. A module that asked for a region and finds its field
-0 after the re-INIT was REFUSED: it takes its degraded path and does not ask
+0 (or, asking to grow one, its KiB unchanged) after the re-INIT was REFUSED: it takes its degraded path and does not ask
 for that region again until its next `PDV_ENG_OPEN` (PDENG) or
 `PDV_REND_BEGIN` / first `TEXTMAP` / first `THUMB` (PDREND). Ask once, for the
 most the document will use: PDENG asks for `PDMEM_OSW` at OPEN once it knows
@@ -5084,24 +5097,35 @@ failure by a caller that tests `pdu_mcf` first):
 | `PDV_REND_TEXTMAP` (J_TEXT, J_FIND), `PDV_REND_THUMB` (J_THUMB) | as STEP | as STEP | as STEP |
 
 Every call site of those verbs handles them the same way through ONE function,
-`pdu_ladder(mod)` (pduslot.c): it reads the answer's CX and DX (banked by
-`pdu_mcall` in `pdu_mcx`/`pdu_mdx`), does the work, and answers 0 (call the
-verb again next slice: the job keeps its own copy of its XB struct and copies
-it out before every slice, pdujob.c's rule, so the re-INIT's use of the XB
-loses nothing) or a `PDE_*` the job then fails with. It runs from the wake
-alone, so a disk read is never under a click's chain (D22's 384).
+`unsigned pdu_ladck(int mod, unsigned r)` (pduslot.inc), called with the
+verb's answer: it reads the answer's CX and DX (banked by `pdu_mcall` in
+`pdu_mcx`/`pdu_mdx`), does the work, and answers `0xFFFF` (call the verb
+again next slice), the answer itself when it was no ladder status, or a
+`PDE_*` with `pdu_mcf` set that the job then fails with. It runs from the job
+slices alone, so a disk read is never under a click's chain (D22's 384).
 
-The caps: a page view (counted from `PDV_REND_BEGIN`, and from the start of a
-text, find or thumbnail job) loads at most **`PDU_SWAPMAX` = 6** modules; past
+**THE EXCHANGE BLOCK AFTER A LADDER ANSWER IS THE PRIMARY'S.** The grant or
+the load re-INITs with `pdxb_init`, which is written over the XB from offset
+0. So a verb that answers `PDE_NEEDMOD` or `PDE_NEEDMEM` keeps everything it
+needs of its own struct in its own state, and finds the XB again as the
+primary leaves it at the next call: OPEN, TEXTMAP and THUMB have their struct
+copied out before every slice (pdujob.c, pdufind.c, pdusel.c, pduside.c's
+rule), and STEP reads none. A loaded PDXK leaves the slot as soon as the open
+completes; a parked Replace (PDWRT resident, 20.11) refuses every other load
+with `PDE_NOSLOT` until `pdu_wrt_out` lets it go.
+
+The caps: a page view (counted from the start of every job, `pdu_lad_begin`
+in `pdu_job_start`: a render, an open, a text, find or thumbnail job) loads at
+most **`PDU_SWAPMAX` = 6** modules; past
 that a `NEEDMOD` is answered with the 0x80 refusal. rcore's side is L2's: each
 module once while interpreting, results cached, so 6 is room for a page whose
 bands alternate two image codecs a couple of times. At most **4** grants per
 verb sequence; a fifth `NEEDMEM` is refused. A job that sees a ladder status
 past either cap more than 16 times fails with `PDE_LIMIT` rather than loop.
 
-**ui's two functions** (`pduauth.c`, which defines `PDU_AUTH_UI` so the
-stand-ins in `pduslot.c` drop out; `pagedesk.c` includes it before
-`pduslot.c`): `void pdu_auth_reset(void)` at every open's start, and
+**ui's two functions** (`pduauth.c`; ui `#define`s `PDU_AUTH_UI` at the top
+of `pagedesk.c`'s slot prototype block, so the stand-ins in `pduslot.c` drop
+out and the prototypes there bind to ui's): `void pdu_auth_reset(void)` at every open's start, and
 `unsigned pdu_auth_step(void)` = `PDE_BUSY` (call again next slice), 0 (the
 key is set with `PDV_ENG_SETKEY`; resume OPEN) or a `PDE_*`. PDXK is resident
 when it is first called. The stand-in answers `PDE_PASSWORD`, so until ui
@@ -5109,8 +5133,8 @@ lands an encrypted file fails its open with that sentence.
 
 **20.22.2.7 The cache of unpacked images (O2).** The primary's alone; the
 modules never see it. It is ON when ui's preference says Auto
-(`int pdp_xcache(void)`: 1 Auto, 0 Off; `pdupref.c` defines `PDP_XCACHE_UI`
-so the stand-in, which answers 1, drops out) and the machine has a store:
+(`int pdp_xcache(void)`: 1 Auto, 0 Off; ui `#define`s `PDP_XCACHE_UI` in the
+same block so the stand-in, which answers 1, drops out) and the machine has a store:
 
 * **XMS** first: `OSAPI_XMEM_CAPS` answers at least the total + 64 KiB, and ONE
   `OSAPI_XMEM_ALLOC` block (the table is 8 entries machine-wide, SPEC.md
@@ -5131,9 +5155,9 @@ so the stand-in, which answers 1, drops out) and the machine has a store:
   and header check; a copy IN on every later load. A copy that fails drops the
   cache for the session (the disk is the fallback, always). Off frees it at
   the next load.
-* Its price: 1,000 bytes or so of primary is not spent on it (the XMS and EMS
-  doors are asm in `pdui.inc`), and nothing resident on a machine without a
-  store. Its worth: VIDEO-XMS-PLAN's 0.345 ms a KB on a real 286 makes a
+* Its price: about 570 bytes of primary (`sl_copen`, `sl_cio`, `pdu_cx`,
+  `pdu_cache_drop` in `pduslot.inc`), and no claim and no store on a machine
+  without one. Its worth: VIDEO-XMS-PLAN's 0.345 ms a KB on a real 286 makes a
   64 KiB swap about 23 ms against 1.2-3 s off a floppy (scout-platform 1).
 
 **20.22.2.8 The disks (O7).** Every geometry carries the one `PAGEDESK.O88`
@@ -5149,9 +5173,31 @@ occupants pass ~120 KB packed, the 360KB answer is to ship PDRES (82,084
 bytes, stored) beside the program as `PDRES.BIN`: the INDEX loader and
 PDREND both reach it through `pdxb_fontbank.pkgname` and `part_off`, so the
 move is primary-side only. That is the lead's call when the figures exist.
+**The 720KB disk is the next to bind**: it carries every sample with the
+program and has 100 of 713 clusters free with the stand-ins (613 in use), so
+occupants past about 100 KB packed overflow it too, and its answer is the
+same pair (the samples to a second disk) or the same `PDRES.BIN`. The 1.44MB
+and 1.2MB disks have 1,631 and 1,155 clusters free.
 
-**20.22.2.9 Room in the primary.** The `.o88` header's image + bss, before
-and after; filled in when the code lands.
+**20.22.2.9 Room in the primary.** The `.o88` header's image + bss (the
+cap is 65,024):
+
+| step | image + bss | change |
+|---|---|---|
+| the round's start | 64,147 | |
+| `pdu_ctl_paint` (C 1,692) and `pdu_bandcap` (542) in assembly (`pdui.inc`); `pdu_held` deleted (dead) | 63,313 | **-834** (the freeing owed: 800) |
+| the slot, the cache, the regions and the ladder (`pduslot.inc`, about 2,050 bytes; in C it measured 2,800), less PDWRT's old `w_partfetch` and `pdu_wrt_in_now`; and, to make the room, `pdu_doc_claim` (C 982 -> 509), `pdu_doc_free` (184 -> about 70), `pdu_minit` (133 -> about 60) and PDRES's directory walk (`pdu_bank_dir`, 166 against the C's ~440) in assembly | 64,185 | **+872** (plat's allowance: 900) |
+
+839 bytes stay under the cap, ui's +250 among them.
+
+**A developer's look** (`PDU_LADTEST`, `#define`d in `pagedesk.c` AND
+`%define`d in `pagedesk.asm`; nothing shipped compiles it): every open loads
+every occupant 1..6 into the slot and out again, then toasts `dN cN xK rE
+fF` - loads off the disk, copies back from the cache, the cache's kind (1
+XMS, 2 EMS, 65535 none), the last answer and the largest free KiB. On QEMU
+(VGA, XMEM.DRV attached) HELLO.PDF then XTGUIDE.PDF in one instance read `d6
+c0 x1 r0 f118` and `d6 c6 x1 r0 f118`: six disk loads, then six copies back
+from XMS, and the same largest free run across a close and an open.
 
 #### 20.22.3 Structure: cross-reference streams, object streams, repair, LZW, ASCII85 (`eng`)
 

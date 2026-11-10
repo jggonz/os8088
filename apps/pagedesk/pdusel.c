@@ -526,6 +526,8 @@ static void ovl_tx_step(void)
     pd_fcopy_out(&pdu_xtm, pdu_xb, 0, sizeof(pdu_xtm));
     r = pdu_mcall(PDU_M_REND, PDV_REND_TEXTMAP, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: again, next slice */
     if (pdu_mcf) {
         pdu_job = J_NONE;
         if (pdu_txm == TX_QUAD) {

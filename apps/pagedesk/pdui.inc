@@ -91,35 +91,6 @@ _pdu_pkgname:
     ret
 
 ; -----------------------------------------------------------------------------
-; unsigned pdu_read_at_seg(const char *name, unsigned seg, unsigned cap,
-;                          unsigned off_lo, unsigned off_hi)
-; os88_file_read_at() with the buffer in a CLAIM rather than in our segment:
-; OSAPI_FILE_READ_AT takes ES:BX. The base is a claim's (512-aligned, SPEC.md
-; 2.1.1); off and cap are whole clusters (18.4.4). Answers the bytes, 0 at the
-; end or refused - os88_ferr() says which, as the SDK thunk's does.
-; -----------------------------------------------------------------------------
-_pdu_read_at_seg:
-    push bp
-    mov bp, sp
-    push si
-    push es
-    mov si, [bp+4]
-    mov es, [bp+6]
-    xor bx, bx
-    mov cx, [bp+8]
-    mov ax, [bp+10]
-    mov dx, [bp+12]
-    call OSAPI_FILE_READ_AT
-    sbb cx, cx
-    and cx, ax
-    mov [cc_ferr], cx
-    sub ax, cx
-    pop es
-    pop si
-    pop bp
-    ret
-
-; -----------------------------------------------------------------------------
 ; int pdu_clk(unsigned *w) - OSAPI_CLK_GET (SPEC.md 37) into a STATIC
 ; four-word array: w[0] year, w[1] month<<8 | day, w[2] hour<<8 | minute,
 ; w[3] second. Answers 1 when a hardware RTC was found, 0 when the clock is
