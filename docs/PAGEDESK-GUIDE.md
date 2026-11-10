@@ -169,6 +169,17 @@ to page 5, Shift+F3 back to page 2 (VGA); `small` on CGA.
 A search of a long document is slow on an XT (every page is read and
 interpreted for its text). Not timed on a 4.77 MHz machine.
 
+**Embedded fonts on a 640 KB machine.** To read the text of a page set in an
+embedded font, Find needs PageDesk's font module. While Find is running, a
+640 KB machine may not have room for it. A page that has already been drawn
+does not need the module: its text comes from the glyphs drawn on it. A page
+that has not been drawn cannot be read without it. When Find finds nothing and
+such a page was skipped, it does not say only "No match". It names the first
+page it could not read, for example `No match for "telnet" - draw page 7 first`.
+Go to that page, let it draw, and press F3. A machine with more memory loads
+the font module and reads every page. **Seen** on QEMU (VGA, 640 KB): Find for
+a word that is not in PDFKIT.PDF says `No match for "zzqqx" - draw page 3 first`.
+
 ### Select and Copy
 
 Drag with the Select tool: a rubber band follows the pointer, and on release

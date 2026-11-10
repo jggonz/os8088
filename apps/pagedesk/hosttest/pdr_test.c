@@ -160,7 +160,8 @@ static int ladder(pdw e)
         }
         /* fonts (20.22.8): PDR_GLYPHGROW regrows the glyph claim to what PDREND asked AND MOVES it, as
          * OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
-        if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY) {
+        if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY
+            && !(getenv("PDR_GLYPHMAX") && (unsigned)atoi(getenv("PDR_GLYPHMAX")) <= g_lastinit.glyph_kb)) {
             unsigned old = (unsigned)g_lastinit.glyph_kb << 10;
             memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
             memcpy(MEM(SEG_GLY2, 0), MEM(SEG_GLY, 0), old);
@@ -169,6 +170,18 @@ static int ladder(pdw e)
             memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
             if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
             memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        } else if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW")) {
+            /* the claim's WANT (QA R24): grown in place, to at most PDR_GLYPHMAX KiB; no more is a refusal,
+             * which the primary answers with the same INIT */
+            unsigned kb = pdr_out_dx > 63 ? 63 : pdr_out_dx, mx = getenv("PDR_GLYPHMAX") ? (unsigned)atoi(getenv("PDR_GLYPHMAX")) : 63;
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            if (kb > mx) kb = mx;
+            if (kb > g_lastinit.glyph_kb) g_lastinit.glyph_kb = (pdw)kb;
+            g_memasks++;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+            if (g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 region answers\n"); exit(9); }
         }
         return 1;
     }
@@ -262,6 +275,7 @@ static int text_run(int page, FILE *o)
         total += n;
         if (tq.done || ++guard > 100000) break;
     }
+    if (tq.done & PDTM_UNREAD) fprintf(stderr, "textmap: UNREAD\n");   /* Find says which page to draw (QA R17) */
     fputc('\n', o);
     return 0;
 }
@@ -406,6 +420,12 @@ int main(int argc, char **argv)
         int page = atoi(argv[3]), kb, np;
         np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[4]); do_init(1, kb, 22);
+        if (!strcmp(argv[3], "all")) {          /* every page in ONE process, as a Find job runs (QA R17) */
+            int r = 0;
+            for (page = 0; page < np && !r; page++) r = text_run(page, stdout);
+            fprintf(stderr, "textmap: loads=%d\n", g_loads);
+            return r;
+        }
         return text_run(page, stdout);
     }
     if (!strcmp(argv[1], "thumb") && argc >= 8) {

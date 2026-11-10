@@ -16,6 +16,9 @@ font program cannot be opened beside the page's content stream and PDXF inflates
 with PDXF, then the text with PDXF refused and every slice the ladder answered sent again
 stale (as the primary does: it must finish, not ladder forever), then the text right after
 drawing the page with PDXF refused, which the strike blocks carry and must equal the first.
+--grow checks the glyph claim's want (QA R24): a page with five embedded fonts needs five strike blocks;
+from a 40 KiB claim (four) it must grow to 48 and draw as a 48 KiB claim does, and a refused growth must
+finish with "glyph block full" noted, never ladder forever.
 --seq renders every page of each fixture and then page 1 again in ONE process (PDR_SEQ): the
 glyph claim and its strike blocks carry over from page to page as they do on the machine
 (QA R24), so no page may say "glyph block full" and the second page 1 must equal the first.
@@ -56,6 +59,7 @@ def main():
     ap.add_argument("--limit", type=float, default=None)
     ap.add_argument("--oneslot", action="store_true"); ap.add_argument("--noz", action="store_true")
     ap.add_argument("--seq", action="store_true"); ap.add_argument("--text", action="store_true")
+    ap.add_argument("--grow", action="store_true")
     a = ap.parse_args()
     from PIL import Image
     import numpy as np
@@ -67,11 +71,45 @@ def main():
     open(os.path.join(bank, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + res)
     shutil.copy(os.path.join(ROOT, "build", "PDFONTX.RES"), bank)
     names = a.fixtures or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
+    if a.grow:
+        # QA R24: five embedded fonts on ONE page (qpdf overlays four fixtures' page 1 on tt-simple's) need
+        # five strike blocks; the glyph claim's min (40 KiB) holds four, its want (48) six
+        with tempfile.TemporaryDirectory() as t:
+            five = os.path.join(t, "five.pdf")
+            cmd = ["qpdf", os.path.join(FIX, "tt-simple.pdf"), "--pages", os.path.join(FIX, "tt-simple.pdf"), "1", "--"]
+            for o in ("t1-simple", "cff-simple", "tt-cid", "cff-cid"):
+                cmd += ["--overlay", os.path.join(FIX, o + ".pdf"), "--from=1", "--to=1", "--"]
+            subprocess.check_call(cmd + [five])
+            W, H = json.load(open(os.path.join(FIX, "tt-simple.json")))["page"]
+            def run(extra, name):
+                ob = os.path.join(t, name + ".ppm")
+                r = subprocess.run([exe, "render", five, "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0", ob, bank, "29"],
+                                   capture_output=True, text=True, env=dict(os.environ, **extra))
+                inc = [l.split("incomplete=")[1].split()[0] for l in r.stdout.split("\n") if "incomplete=" in l]
+                return r.returncode, int(inc[0], 16) if inc else None, open(ob, "rb").read() if os.path.exists(ob) else None
+            rg = run({"PDR_GLYPHKB": "40", "PDR_GLYPHGROW": "1"}, "grow")
+            rr = run({"PDR_GLYPHKB": "40", "PDR_GLYPHGROW": "1", "PDR_GLYPHMAX": "40"}, "refused")
+            r48 = run({"PDR_GLYPHKB": "48"}, "at48")
+            r40 = run({"PDR_GLYPHKB": "40"}, "at40")
+        ok = (rg[0] == 0 and rg[1] is not None and not rg[1] & 0x0080 and rg[2] == r48[2]
+              and rr[0] == 0 and rr[1] is not None and rr[1] & 0x0080 and r40[1] is not None and r40[1] & 0x0080)
+        print("five fonts: grown 40->48 inc=%s %s the 48 KiB render; refused at 40 inc=%s (block full %s); plain 40 inc=%s  %s" % (
+            hex(rg[1] or 0), "equals" if rg[2] == r48[2] else "DIFFERS from", hex(rr[1] or 0), "noted" if (rr[1] or 0) & 0x80 else "NOT NOTED",
+            hex(r40[1] or 0), "ok" if ok else "FAIL"))
+        return 0 if ok else 1
     if a.text:
         bad = 0
         for n in names:
             j = json.load(open(os.path.join(FIX, n + ".json")))
             pdf = os.path.join(FIX, j["pdf"]); W, H = j["page"]
+            # every page in one process, PDXF refused, as a Find job runs: ONE ladder answer for the job,
+            # not one per page (PDU_LADMAX is 16 a job: "exceeds one of PageDesk's limits")
+            al = subprocess.run([exe, "text", pdf, "all", bank], capture_output=True,
+                                env=dict(os.environ, PDR_GLYPHKB="40", PDR_NOSLOT="3", PDR_TMSTALE="1"))
+            loads = [int(l.split(b"=")[1]) for l in al.stderr.split(b"\n") if l.startswith(b"textmap: loads=")]
+            okj = al.returncode == 0 and loads and loads[0] <= 1
+            print("%-14s all pages, PDXF refused: %s answers  %s" % (n, loads[0] if loads else "?", "ok" if okj else "FAIL"))
+            bad += not okj
             for pg, size in enumerate(j["sizes"]):
                 env = dict(os.environ, PDR_GLYPHKB="40")
                 ref = subprocess.run([exe, "text", pdf, str(pg), bank], capture_output=True, env=env)
@@ -81,10 +119,13 @@ def main():
                     r = subprocess.run([exe, "render", pdf, str(pg), "100", "0", "4", "1/1", str(W), str(H), "0", "0", os.path.join(t, "o.ppm"), bank, "29"],
                                        capture_output=True, env=dict(env, PDR_TEXTAFTER=tf))
                     after = open(tf, "rb").read() if r.returncode == 0 and os.path.exists(tf) else None
-                ok = ref.returncode == 0 and st.returncode == 0 and after == ref.stdout   # cff-cid-cmap has no /ToUnicode: no text (MuPDF: U+FFFD)
+                unread = (b"UNREAD" in ref.stderr, b"UNREAD" in st.stderr, b"UNREAD" in r.stderr)
+                # cff-cid-cmap has no /ToUnicode: no text (MuPDF: U+FFFD). UNREAD (pdxb_textmap.done's PDTM_UNREAD) is said
+                # exactly when PDXF was refused and the view had drawn nothing: Find then names the page to draw
+                ok = ref.returncode == 0 and st.returncode == 0 and after == ref.stdout and unread == (False, True, False)
                 print("%-14s p%d %2dpx  text %d chars  refused+stale rc=%d  after a draw %s  %s" % (
                     n, pg + 1, size, len(ref.stdout.strip()), st.returncode,
-                    "same" if after == ref.stdout else "rc=%d" % r.returncode if after is None else "DIFFERS", "ok" if ok else "FAIL"))
+                    "same" if after == ref.stdout else "rc=%d" % r.returncode if after is None else "DIFFERS", "ok" if ok else "FAIL unread=%s" % (unread,)))
                 if not ok and after is not None and after != ref.stdout: print("   ref  %r\n   got  %r" % (ref.stdout[:80], after[:80]))
                 bad += not ok
         return 1 if bad else 0

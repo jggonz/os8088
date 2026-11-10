@@ -4915,8 +4915,10 @@ round's final pass, not before.
   image's grey box with `PDF_INC_APPROX`). An occupant's (`want`, `min`) row
   (20.22.2.3) is what it needs to LOAD; `min` decodes its common cases.
   `PDMEM_GLYPH` 5 is not a region of X either: PDREND answers it when a page
-  first needs a strike block, DX = the KiB the glyph claim should have (40).
-  The primary regrows the glyph claim (40, else 32, else refuses), re-INITs
+  first needs a strike block, DX = the glyph claim's MIN (`PDFB_GLYPHKB`, 40),
+  and again, DX = its WANT (`PDFB_GLYPHWANT`, 48), when a pass finds every
+  block in use (20.22.8). The primary regrows the glyph claim (DX, else 32,
+  never smaller than it is, else refuses), re-INITs
   PDREND and the font occupant with the new `glyph_seg`/`glyph_kb`, and calls
   again; a refusal draws embedded fonts with the substitute face and
   `PDF_INC_APPROX` (20.22.8).
@@ -5175,7 +5177,7 @@ adding paragraphs). The five regions:
 | 2 | `PDMEM_OSW` | PDENG, at OPEN | |
 | 3 | `PDMEM_XC` | PDREND | |
 | 4 | `PDMEM_X8` | PDREND (blend) | **PDX8 is read into its first bytes at the grant** (parts row 10, the slot's reader), with its header's +10 = the region's CODE selector, +12/+14 = PDENG's bound door, re-written after every move of X. A row that does not fit the region, or a read that fails, takes the region back: PDREND then sees `x8_seg` 0 and takes its opaque path |
-| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
+| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) - want 48 / min 40 KiB (`PDFB_GLYPHWANT` / `PDFB_GLYPHKB`) | PDXF (fonts, 20.22.8) | the MIN is asked when a page first needs a strike block, the WANT only when a pass finds all of the min's four blocks in use; stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
 
 The primary:
 
@@ -6699,8 +6701,15 @@ pass count that is NOT reset with each render: `g_passes` restarts at 1 every ve
 made every block a previous page or thumbnail used look "used in this pass" to the next render's
 pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
 block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
-ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit: a
-24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
+ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit, at most `PDFB_NBLK` (6): a
+24 KiB claim has none, 32 KiB has two, 40 four, 48 six. **The claim is a RANGE, want 48 and min
+40** (the lead, fix round; the 20.22.2.3 pattern): a page's first block asks for the min, and
+only a pass that finds every block in use by itself (`blk` = 0xFFFF: a fifth (font, size) on
+one page, LICRU's last page) asks for the want, so a 640 KB XT keeps 40 KiB and the PDXF slot
+beside it. A growth that does not reach 48 is not asked again at that claim size until a new
+document (`g_gnogrow`), and the fifth font keeps the honest `glyph block full` note.
+`hosttest/pdx_page.py --grow` overlays four fixtures on a fifth (qpdf) and holds the grown
+render to a 48 KiB claim's, and a refused growth to the note. **The glyph claim grows lazily** (the lead, 23:38):
 it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
 with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
 and re-INITs PDREND - which keeps the page view when only `glyph_seg`/`glyph_kb` changed, the claim
@@ -6740,7 +6749,18 @@ so on a 640 KB machine PDXF (its image and bss near 65,024, plus a workspace of 
 refused. The pass first looks up the code in the font's blocks at the sizes this view has drawn,
 because every slot of a block carries the code's Latin byte. A page on the screen therefore yields its
 text with no module. A page that was never drawn still needs PDXF, and while PDXF cannot be loaded, its
-Type0 codes map to nothing and its simple codes map through the base encoding.
+Type0 codes map to nothing and its simple codes map through the base encoding. **That is never a
+silent "not found"**: a text pass that met codes it could not read ends with `done` = 1 |
+`PDTM_UNREAD` (2) in `pdxb_textmap`, and Find, when it matches nothing, names the first such page:
+`No match for "x" - draw page N first`. Drawing the page leaves its strike blocks, and the next
+Find reads it. (The words are stored by overlay code rather than a literal: the overlay's
+literals are resident and the primary is at its cap; the cost is the 2-byte `pdu_funread`.) **A text pass asks for nothing but PDXF**
+(and the glyph claim and PDXF's own workspace): colour spaces, shadings and images draw no text, and
+asking for PDXG on every page made a Find swap PDXG and PDXF per page, 60 ladder answers over QZTEXT's
+25 pages, until the job's `PDU_LADMAX` 16 answered "exceeds one of PageDesk's limits". A refusal of
+PDXF in a text pass is kept for the next pages (`g_tmref`, cleared by the next render or a new
+document), so a whole Find costs ONE answer. `pdx_page.py --text` reads every page of each fixture in
+one process with PDXF refused and fails above one answer.
 `hosttest/pdx_page.py --text` is the check. Each fixture page's text is taken three ways. The first has
 PDXF. The second refuses PDXF and re-sends every slice the ladder answered with the stale block; it
 must finish. The third refuses PDXF just after drawing the page, and it must equal the first.

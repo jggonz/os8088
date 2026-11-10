@@ -518,6 +518,15 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     return 0xFFFF;
 }
 
+/* every block is in use by this pass: grow the claim to its want (PDFB_GLYPHWANT), once per claim
+ * size a growth was refused at (QA R24: LICRU's last page has five fonts). 1 = asked, the pass runs again */
+static pdw g_gnogrow;
+static pdw syn_grow(void)
+{
+    if (g_gkb >= PDFB_GLYPHWANT || g_gkb == g_gnogrow || (x_ref & XR_GLYPH)) return 0;
+    return x_mem(PDMEM_GLYPH, PDFB_GLYPHWANT);
+}
+
 /* a text pass (px 0): the next block from `i` up of (font, ANY size) the page view has drawn, or
  * 0xFFFF. Its slots carry each code's Latin byte, so Find and Copy need no font module for the
  * codes the page drew (QA R17: under the overlay, a 640 KB machine cannot load PDXF) */
