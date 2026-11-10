@@ -4898,7 +4898,14 @@ round's final pass, not before.
 * Incomplete bits `PDF_INC_MODULE`, `PDF_INC_APPROX`.
 * `PDM_ABI` 2. Occupant magics `'PK' 'PG' 'PF' 'PI' 'PJ'`, ids `PDX_KEY`
   1 to `PDX_JPX` 5, and regions `PDMEM_XIDX`, `PDMEM_OSW`, `PDMEM_XC`,
-  `PDMEM_X8`.
+  `PDMEM_X8`. `PDMEM_SLOT` 0 is not a region: an occupant verb answers
+  `PDE_NEEDMEM` with CX = 0 and DX = the KiB its slot WORKSPACE should have
+  for this one stream. The primary regrows claim S to at most the occupant's
+  `want`, only while PD-29's 32 KiB stays free beside it, re-INITs the
+  occupant with the new `slot_kb` and calls the verb again. A refusal
+  re-INITs unchanged, and the occupant degrades (a coarser scale, or the
+  image's grey box with `PDF_INC_APPROX`). An occupant's (`want`, `min`) row
+  (20.22.2.3) is what it needs to LOAD; `min` decodes its common cases.
 * Verbs: `PDV_ENG_CRYPTINFO` 0x13, `PDV_ENG_SETKEY` 0x14, `PDV_ENG_CRYPT`
   0x15, `PDV_ENG_SLOT` 0x16, `PDV_REND_SLOT` 0x48, and the occupants' range
   0xC0-0xFF: `PDV_X_INIT` 0xC0, `PDV_KEY_AUTH` 0xC1, `PDV_KEY_COST` 0xC2,

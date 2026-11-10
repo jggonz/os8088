@@ -98,6 +98,7 @@ PDX_FNT                  equ 3
 PDX_IMG                  equ 4
 PDX_JPX                  equ 5
 PDX_COUNT                equ 6
+PDMEM_SLOT               equ 0
 PDMEM_XIDX               equ 1
 PDMEM_OSW                equ 2
 PDMEM_XC                 equ 3

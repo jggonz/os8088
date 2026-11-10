@@ -164,6 +164,7 @@ struct pd_view {
 #define PDX_IMG         4
 #define PDX_JPX         5
 #define PDX_COUNT       6
+#define PDMEM_SLOT      0       /* the slot WORKSPACE (grow S, 20.22.2)   */
 #define PDMEM_XIDX      1       /* PDENG: flat xref index, 4 B an object  */
 #define PDMEM_OSW       2       /* PDENG: the object-stream window        */
 #define PDMEM_XC        3       /* PDREND: the extension cache            */
