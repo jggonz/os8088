@@ -121,30 +121,34 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_MASKE   9
 #define DLH         8           /* header: type aux len y0 y1                 */
 
-/* ---- transparency (PAGEDESK-SPEC 20.22.10); bodies in pdrxb.c / pdrx8.c ---- */
-#ifdef PDR_X8   /* the transparency build: the host harness's, and the target's once PDX8 holds the compositor */
-/* the seams other files call; the bodies are static in pdrx8.c / pdrxb.c, which
- * pdrend.c includes after the files that call them */
-static pdw  x8_want(void);                          /* does the walk range take the 8-bit path */
-static void x8_strips(void);                        /* walk it in strips of 8 rows             */
-static void x8_span(pdi y, pdi xa, pdi xb);         /* a constant-colour span, band relative columns */
-static void x8_imgrow(pdi y);                       /* pdr_imgrow's 8-bit twin (reads pdr_ip)  */
+/* ---- transparency (PAGEDESK-SPEC 20.22.10); the hooks are pdrx8.c / pdrxb.c, the compositor PDX8 ---- */
+#ifdef PDR_X8   /* the transparency build: the host harness's, and the target's once the Makefile passes it */
+#ifdef PD_HOST
+extern pdw pdx8_verb(pdw verb, pdw bx, pdw cx, pdw dx);
+#define x8_call(v, b, c, d)  pdx8_verb(v, b, c, d)
+#else
+pdw pdr_x8far(pdw verb, pdw bx, pdw cx, pdw dx);    /* pdrx8h.inc: AX; CF, CX, DX in x8_cf, x8_ocx, x8_odx */
+void pdr_x8bind(pdw seg);                           /* the door's code selector, once a region is held */
+#define x8_call(v, b, c, d)  pdr_x8far(v, b, c, d)
+#endif
+extern pdw x8_cf, x8_ocx, x8_odx;
+#define x8_span(y, a, b)     ((void)x8_call(PDV_X8_SPAN, (pdw)(y), (pdw)(a), (pdw)(b)))
+static void x8_imgrow(pdi y);                       /* PDX8's twin of pdr_imgrow (reads pdr_ip) */
 static void x8_imgset(const pdb *b, pdw flags, pdi xl, pdi yt, pdi wq, pdi hq, pdi x0, pdi x1, pdi ry0, pdi ry1);
-static void xg_span(pdi y, pdi xa, pdi xb);         /* gfx's shading painter, absolute columns */
 static pdw g_xs;                                    /* composing an 8-bit strip                */
-static pdw g_psrc;                                  /* gfx: span_out paints through xg_span    */
-void pdr_sink_grey(pdi y, pdi xa, pdi xb, const pdb *g, pdw v);
 static void xb_state(pdw kind);                     /* emit_state's hook: the XSTATE record    */
 static void xb_mark(pdi y0, pdi y1);                /* dl_put's hook: rows a transparent mark touches */
 static void xb_pass(void);                          /* pass_begin: empty the tuple pool        */
+static pdw g_x8rdy;                                 /* PDX8 is in the region and has been told */
+static pdw g_x8any;                                 /* a transparent mark in this pass         */
+static void x8_bits(pdw v);                         /* X8F_* into the incomplete bits          */
 static pdw  xb_gs(void);                            /* exec_op's gs arm                        */
 static void xb_group_begin(pdw obj, pdw gen);       /* do_form's tail                          */
 static void xb_group_end(void);                     /* frame_end's form branch                 */
 static pdw  xb_needmem(void);                       /* KiB of X8 wanted before drawing, else 0 */
 static void x8_init(pdw seg, pdw kb);               /* verb_init: take the region              */
-static pdw  xb_imgmask(pdw obj, pdw gen);           /* do_image: 0, 0x20 /SMask, 0x40 /Mask (object in g_imm_*) */
+static pdw  xb_imgmask(pdw obj, pdw gen);           /* do_image: 0, 0x20 /SMask, 0x40 /Mask       */
 static void xb_rows(pdi y0, pdi y1);                /* mark rows for the 8-bit path            */
-static pdw g_imm_o, g_imm_g;                        /* the image mask object do_image found    */
 static pdw g_needcx, g_needdx;                      /* PDE_NEEDMEM's CX and DX (the door returns them) */
 static void x8_view(void);                          /* verb_begin: size the planes             */
 #else

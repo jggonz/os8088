@@ -351,7 +351,6 @@ static void span_out(pdi y, pdi xa, pdi xb)
     xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
     if (g_rmode) { mask_span(g_rmode - 1, xa, xb); return; }
 #ifdef PDR_X8
-    if (g_psrc) { xg_span(y, (pdi)(xa + g_bx0), (pdi)(xb + g_bx0)); return; }    /* gfx's shading (20.22.10.7) */
     if (g_xs) { x8_span(y, xa, xb); return; }                                    /* the 8-bit strip */
 #endif
     if (g_bpp == 1) pdr_fill1(g_bseg, (pdw)row * g_bstride, xa, xb, g_spat[y & 3]);

@@ -688,24 +688,59 @@ struct pdxb_img {
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */
-/* PDXG verb (20.22.10.4): parse one ExtGState dictionary. The result is also
- * the XCK_GS cache entry (16 bytes). */
-#define PDV_GS_PARSE    0xD0    /* XB: pdxb_gs in/out                         */
-struct pdxb_gs {
-    pdw  objnum, gen;       /* in: the ExtGState object                   */
-    pdb  present;           /* out: GSP_* keys the dictionary has         */
-    pdb  fill_a, strk_a;    /* out: 0..255 (/ca non-stroking, /CA stroking) */
-    pdb  bm;                /* out: 0..15 (20.22.10.3's table)            */
-    pdb  smode;             /* out: 0 /None, 1 /Luminosity, 2 /Alpha      */
-    pdb  bc;                /* out: /BC as a luminosity 0..255            */
-    pdb  trnon;             /* out: /TR present and not /Identity         */
-    pdb  pad_;
-    pdw  gnum, ggen;        /* out: the mask's /G form                    */
+/* PDX8, the transparency part (20.22.10.11): loaded into the PDMEM_X8 region at its
+ * base, door at x8_seg:8, planes at x8_seg:PDX8_RES. It holds the ExtGState parse, the
+ * tuple pool and the record writers (interpretation time) and the compositor (raster
+ * time). 0xD0 is free again (PDXG no longer carries pdxgtr.c). */
+#define PDM_MAGIC_X8    0x3850  /* 'P8' */
+#define PDX8_RES        16384   /* the part's image + bss at most; the planes follow it */
+#define PDX8_ENGVEC     12      /* header +12: eng_off, +14: eng_seg (plat binds them at load) */
+#define PDV_X8_INIT     0xD1    /* BX = the region's segment, CX = its KiB, DX = the XB seg */
+#define PDV_X8_CTL      0xD2    /* BX = X8C_*; CX, DX                       */
+#define PDV_X8_SPAN     0xD3    /* BX = y, CX = xa, DX = xb (band relative) */
+#define PDV_X8_GS       0xD4    /* BX = tuple in force, CX = ExtGState obj, DX = gen */
+#define PDV_X8_REC      0xD5    /* BX = DL offset of an XSTATE/GROUP record */
+#define PDV_X8_IMG      0xD6    /* BX = X8I_*                               */
+#define PDV_X8_DEF      0xD7    /* BX = X8D_*: the record writers           */
+#define X8C_BAND        0       /* XB: pdxb_x8band                          */
+#define X8C_BEGIN       1       /* CX = y0, DX = y1: a strip of at most 8 rows */
+#define X8C_END         2       /* quantise the strip into the band; out CX = X8F_* */
+#define X8C_LUM         3       /* CX = the colour of the marks that follow */
+#define X8C_MKEND       4       /* the mask block ended; out AX = resume offset */
+#define X8C_PASS        5       /* interpretation begins: CX = the viewport's top row */
+#define X8C_WANT        6       /* CX..DX = the rows of a band: AX = 1 when any is composed in 8 bits */
+#define X8I_SET         0       /* XB: pdxb_x8img                           */
+#define X8I_ROW         1       /* CX = y; XB: pdxb_x8row                   */
+#define X8I_END         2
+#define X8D_STATE       0       /* CX = 0 fill / 1 stroke, DX = the tuple: out AX = bytes of XSTATE record at XB (0 none), DX bit 0 = the mark is transparent, bit 1 = transparency is live */
+#define X8D_MARK        1       /* CX = y0, DX = y1: rows a transparent mark touches */
+#define X8D_GROUP       2       /* XB: pdxb_x8grp: a Form begins; out AX = bytes of record at XB, CX bit 0 = reset the last STATE, bit 1 = the tuple is now 0 */
+#define X8D_GEND        3       /* CX = the frame, DX = DL length: out AX = bytes of record at XB; CX = the MASKB offset to patch (0 none), DX = the length to write there */
+#define X8D_NOMASK      4       /* the mask's form would not open: out AX = the tuple without it */
+#define X8F_LIMIT       1       /* PDF_INC_LIMIT                            */
+#define X8F_TRANSP      2       /* PDF_INC_TRANSP                           */
+struct pdxb_x8band {
+    pdw  dls, dllen;        /* the display list: segment and length         */
+    pdi  bx0, by0;          /* the band's origin in page pixels             */
+    pdw  bw;                /* its width (at most 768)                      */
+    pdw  bseg, bstride, bpp;
+    pdi  pgx0, pgy0, pgx1, pgy1;    /* the page rectangle                   */
 };
-#define GSP_FILL    0x01    /* /ca                                        */
-#define GSP_STROKE  0x02    /* /CA                                        */
-#define GSP_BM      0x04
-#define GSP_SMASK   0x08    /* /SMask (None included)                     */
+struct pdxb_x8grp {
+    pdw  frame, obj, gen;   /* the Form frame (g_nfr), the Form             */
+    pdw  tuple, dllen;      /* the tuple in force; the list's length        */
+    pdi  y0, y1;            /* the rows the group's clip covers             */
+    pdw  maskpend;          /* the Form is a soft mask's /G                 */
+};
+struct pdxb_x8img {
+    pdw  obj, gen, flags;   /* the image object; the image record's flags   */
+    pdi  xl, yt, wq, hq;    /* the image rectangle, quarter pixels          */
+    pdi  x0, x1, ry0, ry1;  /* columns and rows of this strip               */
+};
+struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
+    pdi  x0, x1;
+    pdw  sseg, soff, sw, xlo, xhi, slo, shi, smode, inv;
+};
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
 
@@ -718,7 +753,10 @@ typedef char pdabi_sz_edit[sizeof(struct pd_edit)    == 48 ? 1 : -1];
 typedef char pdabi_sz_tmg [sizeof(struct pdtm_glyph) == 12 ? 1 : -1];
 typedef char pdabi_sz_npg [sizeof(struct pd_newpage) == 10 ? 1 : -1];
 typedef char pdabi_sz_tok [sizeof(struct pdxb_token) <= PD_XB_BYTES ? 1 : -1];
-typedef char pdabi_sz_gs  [sizeof(struct pdxb_gs)   == 16 ? 1 : -1];
 typedef char pdabi_sz_dg  [sizeof(struct pdxb_dictget) <= PD_XB_BYTES ? 1 : -1];
+typedef char pdabi_sz_x8b [sizeof(struct pdxb_x8band) == 24 ? 1 : -1];
+typedef char pdabi_sz_x8g [sizeof(struct pdxb_x8grp)  == 16 ? 1 : -1];
+typedef char pdabi_sz_x8r [sizeof(struct pdxb_x8row) == 22 ? 1 : -1];
+typedef char pdabi_sz_x8i [sizeof(struct pdxb_x8img) == 22 ? 1 : -1];
 
 #endif /* PDABI_H */

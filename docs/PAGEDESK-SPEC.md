@@ -4951,11 +4951,10 @@ round's final pass, not before.
 
 Owner decision O4: `/ca /CA`, the sixteen blend modes, soft masks, transparency
 groups and an image's `/SMask` and `/Mask` are blended TRUE, on one grey
-channel, and the result is quantised to the adapter. Files: `pdrd.c`'s raster
-(`walk_band`, `span_out`, `band_*`), `pdrx8.c` + `pdrx8.inc` (the 8-bit
-compositor, the quantisers), `pdrxb.c` (the interpretation glue: the `gs` arm,
-group begin and end, the records), `pdxgtr.c` (ExtGState parsing, inside
-PDXG). Reference implementation of the arithmetic: `tools/os88pdfx_blend.py`
+channel, and the result is quantised to the adapter. Files: PDX8, the part
+that does the work (`pdx8.c`, `pdx8i.c`, `pdx8.asm`, `pdrx8.inc`: 20.22.10.11),
+and PDREND's side of it, `pdrx8.c` (the walker's hooks) and `pdrxb.c` (the
+interpretation hooks), plus `pdrd.c`'s `span_out` and `emit_state` calls. Reference implementation of the arithmetic: `tools/os88pdfx_blend.py`
 (its fixtures) against `mutool draw -c gray`.
 
 **20.22.10.1 What is blended and what is not.**
@@ -4998,8 +4997,10 @@ row buffer:
 | `5PL` | `MK` the soft mask in force |
 | `6PL` | 1,024 bytes: an image mask's source row |
 
-`KiB = ceil((6 * PL + 1024) / 1024)`: 31 at 640 px, 35 at 720, 37 at 768. This
-is the row for 20.22.2's table. At 8 rows it is the largest strip that two
+`KiB = ceil((PDX8_RES + 6 * PL + 1024) / 1024)` with `PDX8_RES` = 12,288 (the
+part's room, 20.22.10.11): 43 at 640 px, 47 at 720, 49 at 768 (the planes alone
+are 31, 35 and 37). This is the row for 20.22.2's table. The offsets above are
+from `seg:PDX8_RES`. At 8 rows it is the largest strip that two
 group layers, a mask and the base fit in 40 KiB at every adapter; 4-row strips
 would halve it and double the DL walks, 16-row would not leave 64 KiB claim
 room at 720. **Nesting depth is 2** (the page plus two layers; a mask group
@@ -5024,7 +5025,7 @@ band wider than 768 px does the same.
 | `DLR_GROUP` 7 | `aux` bit 0 isolated, bit 1 knockout, bit 7 END; y = the group's rows | begin: `alpha`, `bm`, `smask`, 0 (the state at `Do`); end: none |
 | `DLR_MASKB` 8 | `aux` 0 luminosity, 1 alpha; `len` spans to and including its MASKE, so a normal walk skips the block | `bc` the backdrop luminosity, 0 |
 | `DLR_MASKE` 9 | | none |
-| `DLR_IMAGE` 5 | `flags` bit 5 (0x20) an `/SMask`, bit 6 (0x40) a `/Mask` stencil | with 0x60: 4 more body bytes, the mask object `num`, `gen` |
+| `DLR_IMAGE` 5 | `flags` bit 5 (0x20) an `/SMask`, bit 6 (0x40) a `/Mask` stencil | unchanged; PDX8 finds the mask object from the image's own `/SMask` or `/Mask` entry when the strip is composed |
 
 `bm` codes: 0 Normal (and Compatible), 1 Multiply, 2 Screen, 3 Overlay, 4
 Darken, 5 Lighten, 6 ColorDodge, 7 ColorBurn, 8 HardLight, 9 SoftLight, 10
@@ -5041,28 +5042,43 @@ written; entering and leaving a group forces one. A mark under a tuple that is
 not opaque Normal without a mask sets its rows in the mark map. A pool or
 mask-table overflow sets `PDF_INC_LIMIT` and keeps the previous tuple.
 
-**20.22.10.4 ExtGState (`gs`) and PDXG's verbs 0xD0-0xD7.** `exec_op`'s `gs`
-arm calls `xb_gs()`: look the name up (`RES_LOOKUP`, category ExtGState); the
-parsed dictionary is cached as `XCK_GS` keyed `(objnum, gen)`; on a miss
-without PDXG it calls `x_need(PDX_GFX)` and the pass runs on with the previous
-tuple (the ladder re-runs it). With PDXG, `x_call(PDV_GS_PARSE)` fills
-`struct pdxb_gs` (pdabi.h, blend block) from the dictionary:
-`/CA /ca /BM /SMask (/S /G /BC /TR)`. `/TR` other than `Identity` is not
-applied and sets `PDF_INC_TRANSP`. A **direct** ExtGState dictionary (inside
-`/Resources`, `RES_LOOKUP` answers `objnum` 0) needs a key path below a
-resource: until PDENG offers one it keeps the previous tuple and sets
-`PDF_INC_TRANSP` (questions to the lead in the blend report).
+**20.22.10.4 ExtGState (`gs`) and the record writers (PDX8, `pdx8i.c`).** All of
+interpretation's work for transparency is PDX8's, not PDXG's and not PDREND's:
+the ExtGState parse (`/CA /ca /BM /SMask (/S /G /BC /TR)`), the tuple pool, the
+mark map and the records. It runs while the page is interpreted, after
+`PDE_NEEDMEM` has put the part in the X8 region, so it needs no slot occupant
+(a soft-masked JPEG needs PDXI in the slot and this at once) and PDXG is not
+asked for anything. The first pass of a view that has no region only DECIDES:
+`exec_op`'s `gs` arm calls `xb_gs()`, which looks the name up (`RES_LOOKUP`,
+category ExtGState) and, with no PDX8, reads `ca`, `CA`, `BM` and `SMask` of that
+dictionary: any value that is not opaque Normal and unmasked sets the view's
+need for the region (`PDE_NEEDMEM`, 20.22.10.2); so does an image with an
+`/SMask` or `/Mask`. The pass is then run again with the part present:
+
+* `gs` is `PDV_X8_GS` (BX = the tuple in force, CX/DX = the dictionary's
+  object and generation): AX = the new tuple (written to `pdr_gs.pad_`), CX = 1
+  when the dictionary has a soft mask whose `/G` form (its object at XB+0, XB+2)
+  PDREND now interprets as the mask's block; DX = `X8F_*` bits. A pool or mask
+  table overflow answers CF and keeps the previous tuple. `/TR` other than
+  `Identity` is not applied and sets `PDF_INC_TRANSP`. A **direct** ExtGState
+  dictionary (inside `/Resources`; `RES_LOOKUP` answers `objnum` 0) keeps the
+  previous tuple and sets `PDF_INC_TRANSP` until PDENG offers a key path below
+  a resource (questions to the lead in the blend report).
+* `emit_state` asks `PDV_X8_DEF` `X8D_STATE` (fill or stroke, the tuple): the answer
+  is the `XSTATE` record, in the exchange block, when the tuple for the mark's
+  kind differs from the last written, and whether the mark is transparent
+  (then `dl_put` marks its rows, `X8D_MARK`). PDREND puts the record in its list.
+* `do_form`'s tail asks `X8D_GROUP` (the frame, the Form, the tuple, the clip's
+  rows, the list's length): the answer is `MASKB` when `gs` has a mask waiting
+  (`g_xmaskpend`; PDREND then writes its own `STATE` first), or `GROUP` begin
+  when the Form's `/Group /S /Transparency` is worth a layer (isolated or
+  knockout, or under a non-trivial tuple); inside either the tuple is 0.
+  `frame_end` asks `X8D_GEND`: `GROUP` end, or `MASKE`, with the offset and
+  value PDREND patches into the `MASKB`'s length. If the mask's form would not
+  open, `X8D_NOMASK` answers the tuple without it.
 
 A soft mask: the `/G` form is interpreted at the `gs` operator, with the CTM of
-that moment, as `MASKB ... MASKE`: `xb_gs` sets `g_xmaskpend` and calls
-`do_form`, whose group-begin hook writes `MASKB`, and whose end hook (in
-`frame_end`) writes `MASKE` and patches the length. At most 16 masks a pass.
-
-`PDV_GS_PARSE` 0xD0: in `objnum`, `gen`; out the rest of `pdxb_gs`.
-0xD1-0xD7 are reserved for the module's further parsing. The module reads the
-dictionary through `xg_dictget(struct pdxb_dictget *)`, which the PDXG shell
-(gfx) provides over PDREND's service door; `pdxgtr.c` is compiled for the host
-with a stand-in.
+that moment, as `MASKB ... MASKE`. At most 16 masks a pass.
 
 **20.22.10.5 The walker.** `walk_band` runs once per strip of an 8-bit band
 (and once as before for the others). In a strip the sinks compose into the
@@ -5101,35 +5117,21 @@ swapped; Darken, Lighten min, max; ColorDodge `s=255 ? 255 : min(255, b*255/(255
 PDF formula, `D(b)` by the polynomial below `b=64` and `sqrt` above; Difference
 `|b-s|`; Exclusion `b+s-2mul(b,s)`.
 
-**20.22.10.7 The sink interface** (`pdrx8.c`; near, cdecl; valid only while a
-band is walked). gfx's shading spans write through:
-
-```
-void pdr_sink_grey(pdi y, pdi xa, pdi xb, const pdb *g, pdw v);
-```
-
-Pixels `xa..xb` (absolute) of absolute row `y`: `g != 0` one grey per pixel,
-`g[i]` for pixel `xa+i`; `g == 0` the constant `v`. Clipped to the walker's
-clip rectangle, the band and the strip. Polygon clips are NOT applied here:
-call it from `span_out`'s paint branch, which `shape_clipped` already drives
-per mask run. In an 8-bit strip it composes through the tuple in force (so a
-shading under `/ca` blends); in a 4bpp band it is the seven-level checker; in
-a 1bpp band the Bayer rule; the same quantiser as the strip's end. gfx's
-painter is `xg_span(y, xa, xb)`: `span_out` calls it when `g_psrc` is non-zero
-(gfx sets and clears `g_psrc` in its record handler). pdrxb.c supplies
-`xg_span` only when `PD_HAVE_XGSPAN` is not defined, and gfx's pdrxg.c
-defines that before pdrxb.c is included.
+**20.22.10.7 The sink interface** *withdrawn.* gfx's shading became flat-polygon
+bands (FILL records, DECISIONS 23:46), which reach the compositor through the
+ordinary `span_out`; there is no `pdr_sink_grey`, no `xg_span` and no `g_psrc`.
 
 **20.22.10.8 The image hook** (rcore's `draw_image`): in an 8-bit strip the
-call `pdr_imgrow()` is replaced by `x8_imgrow()`, which reads the same
-`pdr_ip` block (source row, DDA, mode, inversion) and composes the grey into
-the current layer. A record with 0x20 or 0x40 names a mask object; `x8_imgrow`
-opens it itself (a second `STRM_OPEN`, kept across rows, closed with the
-image), reads the nearest row into the region's 1,024-byte buffer and
-multiplies it into the alpha: an `/SMask` is 8-bit grey, a `/Mask` is a 1-bit
-stencil whose set bit is TRANSPARENT unless its `/Decode` inverts it. A mask
-that will not open (a codec the core does not read) draws the image opaque and
-sets `PDF_INC_TRANSP`.
+call `pdr_imgrow()` is replaced by `PDV_X8_IMG` `X8I_ROW`, which gets the same
+`pdr_ip` block (source row, DDA, mode, inversion; 22 bytes of it in the exchange
+block) and composes the grey into the current layer. For a record with 0x20 or
+0x40, `X8I_SET` runs once a strip before the rows: PDX8 reads the image's own
+`/SMask` (or `/Mask`) entry for the mask object, opens that stream itself (a
+second `STRM_OPEN`, closed in the same call), reads the nearest rows into the
+region's 1,024-byte buffer and writes them into the mask plane at the image's
+resolution; an `/SMask` is 8-bit grey, a `/Mask` is a 1-bit stencil whose set bit
+is TRANSPARENT unless its `/Decode` inverts it. A mask that will not open (a
+codec the core does not read) draws the image opaque and sets `PDF_INC_TRANSP`.
 
 **20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
 Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
@@ -5142,27 +5144,85 @@ together): without it PDREND is the PDREND of the round's start to within 4
 bytes, which is how a branch that carries this code keeps `make` inside the
 part limit until the compositor has its room. The host harness defines it.
 
-*Measured (C compositor in PDREND, `PDR_X8` on, quantiser in assembly):*
-image 66,634 + bss 7,988 against 54,412 + 6,896, i.e. +12,222 and +1,092:
-`walk_core` 1,255, `x8_imgset` 1,151, `x8_gend` 1,073, `xb_group_begin` 817,
-`x8_chunk` 776, `xb_gs` 737, `x8_imgrow` 604, `pdr_sink_grey` 535, `x_bl` 471,
-`x8_mkdone` 303, `xb_group_end` 300, `xb_tuple` 294, `xb_state` 284 (smlrcc
-output; the quantiser is 214 bytes of assembly and a 256-byte table, down from
-837 of C). The lead's decision of 23:24 moves the raster compositor to **PDX8**,
-a part loaded into the X8 region with its planes, which then are plain near
-arrays of the part's own segment (the far chunk copies of `x8_chunk`, `x8_gend`
-and `x8_mkdone` disappear). What PDREND keeps is the walker (the loop, the
-mask jump and the saved state), `x8_want`, the mark map and `xb_state`,
-`xb_tuple`, the record writers; the pixel work crosses one far call a span, a
-row or a record. The deepest chain stays the text path's (728 of 1,776:
-`os88pdstk` reports no chain through the compositor above it).
+*Measured (the first version, the whole compositor in PDREND's C):* image
+66,634 + bss 7,988 against 54,412 + 6,896, i.e. +12,222 and +1,092, which is
+why the compositor is a part of its own (20.22.10.11).
 
-The quantiser's cost, from `hosttest/pdb_primtest.py`'s instruction count: 4bpp
-20.7 instructions a pixel (211,547 for a 640 x 16 band), 1bpp 15.0 (153,421).
-`pdxgtr.c` is 2.4 KB of C. Host checks: `tools/os88pdfx_blend.py`'s fixtures
-(`tests/pdfany/blend/`) against MuPDF and Poppler; `hosttest/pdb_primtest.py`
-(the assembly against its twin in Unicorn); `hosttest/pdb_fuzz.py` (ASan and
-UBSan over mutated fixtures).
+**20.22.10.11 PDX8, the compositor as a part** (the lead's decision of 23:24 and
+23:35, pinned here by `blend`; `pdx8.c`, `pdx8.asm`, `pdrx8.inc`; the PDREND side
+`pdrx8.c`, `pdrx8h.inc`, `pdrxb.c`).
+
+*What lives where.* PDX8 owns the planes, the layer stack, the blend arithmetic,
+the 256-byte table of constant spans, the group and soft-mask composition, the
+image-mask reader and the quantiser into the band (raster time), and the
+ExtGState parse, the tuple pool, the mark map, the frame table and the record
+writers (interpretation time, 20.22.10.4). PDREND keeps what only it can know:
+the walker over the display list (clips, edges, glyphs, image rows), the
+gstate's tuple index, and the far calls; where PDX8 answers a record PDREND
+puts it in the list.
+
+*The part.* Magic `'P8'` (`PDM_MAGIC_X8` 0x3850), `PDM_ABI`, **not** a slot
+occupant (no `PDX_*` id, no `PDV_REND_SLOT`); a lazy part with
+`OP_LAZY | OP_SELF | OP_COMP` that `plat` loads **into the `PDMEM_X8` region at
+its base**, with 20.22.2.4's reader and header check, when a page answers
+`PDE_NEEDMEM` for `PDMEM_X8`. Unpacked image + bss at most `PDX8_RES` = 16,384
+bytes (now 14,208 + 1,220); the planes follow at `x8_seg:PDX8_RES`, and the KiB
+PDREND asks for includes the 16 (47 at 640, 51 at 720, 53 at 768). The 16-byte
+header, all of it in the region's first bytes:
+
+| offset | field |
+|---|---|
+| +0 | magic `'P8'` |
+| +2 | `PDM_ABI` |
+| +4 / +6 | image, bss |
+| +8 | the door: `jmp short` to the entry at +16 |
+| +10 | `x8_cseg`: the region's CODE selector (equal to `x8_seg` on a real-mode kernel); `plat` writes it at load and after every regrow |
+| +12 / +14 | `eng_off`, `eng_seg`: PDENG's door, written by `plat` at load from `pdxb_init` and after a regrow |
+
+If the load fails, or the part's magic is not at `x8_seg:0` when PDREND is
+re-INITed, the region is treated as refused (`x8_seg` = 0, 20.22.10.9). PDX8
+calls PDENG and nobody else: no kernel call, no PDREND call, no PDXG. DS = CS
+inside, the caller's BP, SI, DI, DS, ES, SS:SP and DF come back, the part
+reads the planes through the segment PDREND passes at INIT (a data selector on
+kern_mega), and its bss is zeroed by the part on its first entry. Its own
+frames are at most 48 bytes in a chain, inside the occupants' budget of
+20.22.2.4.
+
+*The door.* AL = verb, BX, CX, DX; out AX, with CX and DX the answer's extra
+words, CF = 1 and AX = a `PDE_*` code for a verb or operation it does not have
+(or, for `GS`, a full pool). The verbs are 0xD1-0xD7 (0xD0 is free):
+
+| verb | in | out |
+|---|---|---|
+| `PDV_X8_INIT` 0xD1 | BX = x8_seg, CX = KiB, DX = the XB segment | 0; sent by PDREND at every `PDV_REND_INIT` that holds a region, after plat has loaded the part |
+| `PDV_X8_CTL` 0xD2 | BX = `X8C_*`: `BAND` (XB: `pdxb_x8band`: the list's segment and length, the band, the page rectangle), `BEGIN` (CX = y0, DX = y1, the strip, at most 8 rows: cleared to white, depth 0), `END` (quantises the strip into the band; out CX = `X8F_*` bits), `LUM` (CX = the colour of the marks that follow), `MKEND` (the mask block ended), `PASS` (interpretation begins; CX = the viewport's top row; resets the pool, the map, the frames), `WANT` (CX..DX = a band's rows) | `MKEND`: AX = the offset to resume at, CX = 1 (restore the clip); `WANT`: AX = 1 when any of the rows is composed in 8 bits |
+| `PDV_X8_SPAN` 0xD3 | BX = y, CX = xa, DX = xb, band-relative columns; composes a constant span of the current colour and transparency | 0 |
+| `PDV_X8_GS` 0xD4 | BX = the tuple in force, CX = object, DX = generation of an ExtGState | AX = the new tuple; CX = 1: the soft mask's /G is at XB+0, XB+2; DX = `X8F_*` bits |
+| `PDV_X8_REC` 0xD5 | BX = the offset of an XSTATE or an in-range GROUP record | AX = the offset to go on from; CX = 1 when a soft mask's block was begun (PDREND notes the STATE record in force and restores its clip at `MKEND`); DX = the end of the block being walked, 0 outside one |
+| `PDV_X8_IMG` 0xD6 | BX = `X8I_*`: `SET` (XB `pdxb_x8img`), `ROW` (CX = y; XB `pdxb_x8row`), `END` | 0 |
+| `PDV_X8_DEF` 0xD7 | BX = `X8D_*`: `STATE` (CX = stroke, DX = tuple), `MARK` (CX..DX = rows), `GROUP` (XB `pdxb_x8grp`), `GEND` (CX = frame, DX = the list's length), `NOMASK` | the record, as bytes at XB+0, AX = its length (0 none); `STATE`: DX bit 0 the mark is transparent, bit 1 transparency is in force; `GROUP`: CX bit 0 reset the last STATE, bit 1 the tuple is 0; `GEND`: CX = the MASKB length offset to patch (0 none), DX = the value |
+
+*A strip.* PDREND, per 16-row band that its mark map says holds a transparent
+mark: `BAND`; then for each strip of 8 rows `BEGIN`, the ordinary walk of the
+whole list with the strip as its row window, `END`. In the walk every
+`span_out` becomes `SPAN`; a `STATE` record is `LUM`; an `XSTATE`, or a `GROUP`
+whose rows meet the strip, is `REC`; an image is `IMG SET`, `IMG ROW` per row
+and `IMG END`; a mask block begun by `REC` (answered by CX = 1) is walked from
+the offset it returned until it reaches DX, then `MKEND` turns it into the mask
+and returns the offset of the record that asked. A band the map does not mark
+walks as before, with none of this.
+
+*Cost of the seam* (4.77 MHz, from 46.7 us a far call and the work around it):
+a span costs the call (about 100 us with the verb's switch) and the work; the
+walker's other records cost nothing new, and a page with no transparency pays
+one `WANT` a band once the part is loaded and nothing before. The quantiser and the xlat of the
+constant-colour table are hand assembly (214 + 256 bytes, 20.7 and 15.0
+instructions a pixel, `hosttest/pdb_primtest.py`); the chunk, group and mask
+composition are C (`x8_chunk` 776 bytes, `x8_gend` 1,073).
+
+*Build.* `make pdx8` builds `build/PDX8.MOD` and refuses over `PDX8_CAP`;
+`make PDR_X8=1 ...` passes `-DPDR_X8` to smlrcc and nasm together for PDREND.
+A default build is PDREND without the hooks.
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 

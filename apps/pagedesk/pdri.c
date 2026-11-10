@@ -526,12 +526,7 @@ static void do_form(pdw obj, pdw gen)
  * clipped, or refused and noted), 1 = the record is begun. */
 static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pdw gen, pdw extra)
 {
-#ifdef PDR_X8
-    static pdb body[24];
-    pdw mk = (flags & 0x60) ? 4 : 0;       /* blend: a mask object follows the body (20.22.10.3) */
-#else
     static pdb body[20];
-#endif
     static struct pd_fx one, zero;
     pdi x00, y00, x10, y10, x01, y01, xl, xr, yt, yb;
     static pdi py0, py1, px0, px1;
@@ -561,14 +556,9 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     w16(body + 8, (pdi)W); w16(body + 10, (pdi)H);
     w16(body + 12, (pdi)obj); w16(body + 14, (pdi)gen);
     body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = 0;
-#ifdef PDR_X8
-    if (mk) { w16(body + 20, (pdi)g_imm_o); w16(body + 22, (pdi)g_imm_g); xb_rows(py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1); }
-    hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + mk + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
-    return dl_put(g_hdr, DLH, body, 20 + mk);
-#else
+    if (flags & 0x60) xb_rows(py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);   /* blend: an image with a mask (20.22.10.3) */
     hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
     return dl_put(g_hdr, DLH, body, 20);
-#endif
 }
 
 static void do_image(pdw obj, pdw gen)

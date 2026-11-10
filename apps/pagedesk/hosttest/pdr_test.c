@@ -97,7 +97,7 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
 #ifdef PDR_X8
-    if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 40; }          /* blend (20.22.10.2) */
+    if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 60; }          /* blend (20.22.10.2) */
 #endif
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
