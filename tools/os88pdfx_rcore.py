@@ -261,6 +261,23 @@ def forms_pdf(path):
     d.write(path)
 
 
+def hair_pdf(path):
+    """QA R11: one-pixel strokes. A fan of 1 w lines, one every 7 degrees
+    from 30 to 160 pt out of (200, 200), and an axis-aligned square: every
+    row of a steep line and every column of a shallow one must hold a pixel,
+    and the square's sides must stay one pixel thick."""
+    import math
+    d = Pdf()
+    c = ['1 w']
+    for k in range(0, 360, 7):
+        a = math.radians(k + 0.37)
+        c.append('%.3f %.3f m %.3f %.3f l S' % (200 + 30 * math.cos(a), 200 + 30 * math.sin(a),
+                                                200 + 160 * math.cos(a), 200 + 160 * math.sin(a)))
+    c.append('5 375 m 25 375 l 25 395 l 5 395 l h S')
+    d.page('\n'.join(c))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -270,7 +287,8 @@ def main():
     depth_pdf(os.path.join(out, 'depthg.pdf'), grey=True)
     mask_pdf(os.path.join(out, 'mask.pdf'))
     forms_pdf(os.path.join(out, 'forms.pdf'))
-    print('os88pdfx_rcore: 6 fixtures in %s' % out)
+    hair_pdf(os.path.join(out, 'hair.pdf'))
+    print('os88pdfx_rcore: 7 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

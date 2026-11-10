@@ -207,6 +207,30 @@ if a.hostile:
                     if bad < 5: print('    seed %d p%d %s rc=%d %s' % (seed, pg, ad, rc, err[-300:]))
     check('hostile IMG_OPEN / IMG_ROW: every render finishes clean', bad == 0, '%d bad' % bad)
 
+print('-- one-pixel strokes (hair.pdf, QA R11)')
+import math
+rc, im, st, _ = render(os.path.join(fx, 'hair.pdf'), 0, 'vga')
+gaps = steps = cover = 0
+if im is not None:
+    dark = im < 128
+    for k in range(0, 360, 7):
+        t = math.radians(k + 0.37); c, s_ = math.cos(t), math.sin(t)
+        x0, y0, x1, y1 = 200 + 30 * c, 400 - (200 + 30 * s_), 200 + 160 * c, 400 - (200 + 160 * s_)
+        steep = abs(s_) >= abs(c)
+        a0, a1 = (y0, y1) if steep else (x0, x1)
+        for v in range(int(min(a0, a1)) + 1, int(max(a0, a1))):
+            if steep:
+                u = int(math.floor(x0 + (v + 0.5 - y0) * (x1 - x0) / (y1 - y0)))
+                n, m = int(dark[v, u - 1:u + 2].sum()), int(dark[v, u - 2:u + 3].sum())
+            else:
+                u = int(math.floor(y0 + (v + 0.5 - x0) * (y1 - y0) / (x1 - x0)))
+                n, m = int(dark[u - 1:u + 2, v].sum()), int(dark[u - 2:u + 3, v].sum())
+            steps += 1; cover += m; gaps += n == 0
+check('a fan of 1 w lines at every 7 degrees: a pixel on every row (steep) or column (shallow)',
+      rc == 0 and steps > 5000 and gaps == 0, '%d gaps of %d' % (gaps, steps))
+check('... and no thicker than 1.5 pixels on the average (%.2f)' % (cover / max(steps, 1)), steps and cover / steps <= 1.5)
+check('an axis-aligned 1 w square keeps one-pixel sides', im is not None and
+      int((im[2:28, 2:28] < 128).sum()) == 80, None if im is None else str(int((im[2:28, 2:28] < 128).sum())))
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

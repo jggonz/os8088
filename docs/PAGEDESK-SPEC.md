@@ -1377,7 +1377,18 @@ CGA's y axis below about 80% and 120%). A rectangle with no area clips everythin
 A polygon clip stays on sample points. (square, verify-square; `pdr_annot`'s "an
 appearance stroking at its BBox edge".) Beziers are flattened by de Casteljau subdivision until both second
 differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
-curve), depth 6 (64 pieces) - the operation limit. Arithmetic is `pdmath`
+curve), depth 6 (64 pieces) - the operation limit. A stroke of one pixel
+(a half width of 2 qpx or less, which every `w` at or below one device pixel
+is) is not offset across the line: a band one pixel wide ACROSS a slanted
+line holds a pixel centre only on a knife edge, and `pdr_scan` truncates each
+crossing from its own edge's start, so a third of a slanted hairline's rows
+were dropped and a flattened curve came out dotted (QA R11). Each piece is
+swept instead by a span along the sampled axis - horizontal when the piece is
+steep, vertical when it is shallow - 4 qpx for an axis-aligned piece, whose
+crossings are exact, and 5 for a slanted one. That is one pixel a row or a
+column, sometimes two (1.25 on average), and never a gap. Every piece is
+wound the same way. `pdr_xchk`'s `hair.pdf` holds a fan of 1 w lines to it
+and a 1 w square to one-pixel sides. Arithmetic is `pdmath`
 (16.16) for everything that is user space; a transform that overflows sets
 `PDF_INC_RANGE` and the coordinate clamps, never wraps.
 
