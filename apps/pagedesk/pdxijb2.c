@@ -1567,6 +1567,7 @@ static pdw jb_pass(void)
         r = jb_dispatch();
         if (r == PDE_LIMIT) jb_inc |= JBF_UNSUP;
         else if (r) jb_inc |= JBF_BAD;
+        if (jb_unb) { jb_inc |= JBF_UNSUP; break; }     /* unknown length: the next header cannot be found */
         jb_skip();
     }
     return PDE_OK;
