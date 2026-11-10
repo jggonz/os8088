@@ -5094,7 +5094,11 @@ callback's chain: only from the wake, 20.22.2.6):
    onto S:0 (the stream is above its output, so the writer never overtakes
    the reader: SPEC.md 20.13.7). A row that is stored (a `PKGZ=` A/B build)
    is read at S:0 and moved down by its slack. Then back to the document's
-   folder.
+   folder. A read that fails (`PDE_IO`: on the 360 KB pair, the program disk
+   swapped for the samples disk) toasts `Insert the PageDesk disk` before
+   the occupant, the X8 region or the bank degrades (QA F21) - a sentence and
+   not a retry: a prompt that waits for the disk costs the primary room it
+   does not have (20.22.2.9).
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
@@ -5687,8 +5691,9 @@ when `flate_kb` is now one slot's worth (43 to 85 KiB) where it was two. Slot 2
 must hold no live stream, and no `OPEN` may be in progress: a stream OPEN is
 reading can sit in slot 2 between two calls with no live context, and a cut
 there read on into another stream's state (QA F25: an xref-stream file cut
-mid-OPEN looped to `PDE_SYNTAX`), so an `OPEN` in progress answers
-`PDE_BUSY` too (+4 bytes). The primary regrows the
+mid-OPEN looped to `PDE_SYNTAX`), so an `OPEN` in progress (`op_state` set
+and `g_open` not: a finished OPEN leaves `op_state` at `OPS_TREE`) answers
+`PDE_BUSY` too. The primary regrows the
 Flate claim down by that slot's paragraphs afterwards. The answer is CF = 0
 with AX = 1 when the cut is taken. AX = `PDE_BUSY` means a live stream sits in
 slot 2 and nothing changed: the claim stays as it was, so ask again between
