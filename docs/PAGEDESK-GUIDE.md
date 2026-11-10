@@ -652,6 +652,10 @@ harness) in waves 1 and 2 for the shell and the renderer.
 - **Adapters.** The whole open, page, zoom, Find, mark, Save As and reopen
   session runs on VGA, CGA and Hercules on MartyPC's real Hercules model.
 - **Memory.** 81-97 KiB is free after a session.
+- **Embedded fonts.** A small embedded font draws from its own outlines. A
+  large subset - a Mac-made PDF's TrueType, for one - is drawn in PageDesk's
+  own face on a 640 KiB XT: the status line says `Incomplete rendering - font
+  substituted` and the text stays legible.
 
 **Still not verified**, and left to hardware or later work:
 
