@@ -778,6 +778,16 @@ struct pdxb_emark {
                                    (font obj, gen, px, pass last used) at +0, the block count at +60 and
                                    the magic PDFB_MAGIC at +62. PDREND finds, PDXF makes and evicts      */
 #define PDFB_MAGIC  0x5342
+#define PDFB_NBLK   4           /* blocks at most: a 40 KiB glyph claim holds four, 32 KiB two, 24 none */
+#define PDFB_GLYPHKB 40         /* the glyph claim PDREND asks for (PDMEM_GLYPH) the first time a page
+                                   needs a block; the primary gives 40, else 32, else refuses (the
+                                   font is then drawn in the substitute face, PDF_INC_APPROX)      */
+#ifndef PDMEM_GLYPH
+#define PDMEM_GLYPH 5           /* PDREND: GROW the glyph claim (not a region of X): DX = KiB. The
+                                   primary regrows it and re-INITs PDREND (glyph_seg/glyph_kb may
+                                   change; the page view goes on) AND the slot occupant, which reads
+                                   the same two fields (20.22.8). Number asked of the lead          */
+#endif
 #define PDFB_KEYS   3328
 #define PDFB_INFO   3584
 #define PDFB_T3REC  512         /* a Type 3 block (em64 = 0 only, so no bitmaps): CharProc (u16 obj, u16 gen) of slot s at

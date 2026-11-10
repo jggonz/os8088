@@ -55,6 +55,10 @@ static pdw g_cf_base;
 /* ---- the engine: streams and dictionaries ------------------------------------ */
 static pdw g_xb;                    /* the exchange block                         */
 static pdw g_ws, g_wslen, g_pcap;
+static pdw g_wskb;                  /* slot_kb at PDV_X_INIT                         */
+static pdw g_xgs, g_xgkb;            /* the glyph claim (pdxb_init's glyph_seg/glyph_kb, re-handed by every INIT) */
+static pdw g_askobj, g_askgen;      /* the font a PDMEM_SLOT growth was last asked for (20.22.8)   */
+pdw pdx_odx;                        /* DX of the answer: PDE_NEEDMEM's KiB (the door loads it)     */
 static pdw g_kind, g_cmaplen;
 static pdw g_stgseg, g_stgoff;      /* the staging window                          */
 
@@ -76,7 +80,7 @@ static pdw pdx_sread(pdw seg, pdw off, pdw max)
 static pdw pdx_slurp(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
 {
     pdw got, tot = 0;
-    if (pdx_sopen(obj, gen)) return 0xFFFF;
+    if (pdx_sopen(obj, gen)) return 0;                     /* unreadable is not too large */
     for (;;) {
         got = pdx_sread(seg, (pdw)(off + tot), (pdw)(cap - tot > 4096 ? 4096 : cap - tot));
         if (!got) break;
@@ -479,11 +483,27 @@ static pdw v_glyph(void)
     pdw r, n;
     g->w = 0; g->lb = 0; g->nb = 0; g->adv64 = 0; g->err = 0; g->oflags = 0;
     r = fd_map(g->objnum, g->gen, g->code);
-    if (r) { g->err = g_ferr; return r; }
+    if (r) {
+        g->err = g_ferr;
+        /* a program larger than this workspace: ONE growth to 64 KiB is asked for, per font (20.22.2's
+           PDMEM_SLOT; CX = 0 is the door's own, DX = the KiB). A refusal re-INITs unchanged and the next
+           call for the font answers PDFE_SIZE: PDREND draws it in the substitute face, PDF_INC_APPROX */
+        if (g_ferr == PDFE_SIZE && g_wskb < 64 && (g_askobj != g->objnum || g_askgen != g->gen)) {
+            g_askobj = g->objnum; g_askgen = g->gen; pdx_odx = 64; return PDE_NEEDMEM;
+        }
+        return r;
+    }
     g->gid = g_gid; g->cid = g_cid; g->adv1000 = g_adv1000; g->kind = g_kind;
     g->lat = g_lat == 0xFFFF ? 0 : g_lat;
     g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
     if (g->flags & PDFG_BLOCK) {
+        /* the blocks are at the top of the glyph claim INIT named: (glyph_kb - 24) / 4 of them, at most
+           SYN_MAX, under the 64-byte header. PDREND names the claim it holds; a different one is a stale
+           INIT (a regrown claim the primary did not re-hand) and is refused rather than written */
+        if (g->dseg != g_xgs) return PDE_RANGE;
+        g->cap = g_xgkb < 28 ? 0 : (pdw)((g_xgkb - 24) >> 2);
+        if (g->cap > PDFB_NBLK) g->cap = PDFB_NBLK;
+        g->doff = (pdw)((g_xgkb << 10) - g->cap * PDFB_SIZE - PDFB_HDR);
         g->blk = blk_find(g);
         if (g->blk == 0xFFFF) { g->slot = 0; return 0; }
         return blk_slot(g, (pdw)(g->doff + PDFB_HDR + g->blk * PDFB_SIZE));
@@ -521,7 +541,9 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
         pd_fcopy_in(bx, 0, &g_a.in, sizeof g_a.in);
         g_xb = g_a.in.xb_seg;
         pdx_engvec[0] = g_a.in.eng_off; pdx_engvec[1] = g_a.in.eng_seg;
-        g_ws = g_a.in.slot_seg;
+        g_ws = g_a.in.slot_seg; g_wskb = g_a.in.slot_kb;
+        g_xgs = g_a.in.glyph_seg; g_xgkb = g_a.in.glyph_kb > 63 ? 63 : g_a.in.glyph_kb;
+        if (!g_xgs) g_xgkb = 0;
         g_wslen = (pdw)(g_a.in.slot_kb >= 64 ? 0xFFF0u : (pdw)(g_a.in.slot_kb << 10));
         if (!g_ws || g_wslen < PDXF_CIDWIN + PDXF_STG + 3 * PDXF_TAB + 4096) { pdx_cf = 1; return PDE_NOSLOT; }
         g_pcap = (pdw)(g_wslen - PDXF_CIDWIN - PDXF_STG - 3 * PDXF_TAB);
@@ -535,6 +557,6 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_FNT_PATH:  pd_fcopy_in(g_xb, 0, &g_a.pa, sizeof g_a.pa); r = v_path(); pd_fcopy_out(&g_a.pa, g_xb, 0, sizeof g_a.pa); break;
     default: r = PDE_RANGE; break;
     }
-    if (r) pdx_cf = 1;
+    if (r && r != PDE_NEEDMEM) pdx_cf = 1;
     return r;
 }

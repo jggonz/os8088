@@ -254,20 +254,22 @@ static pdw rs_glyph(pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
     pdx_acw = g_rwpx; pdx_ach = rows;
     g_fx = g_fy = 0;
     for (i = 0; i < AC_W * AC_H; i++) pdx_acc[i] = 0;
-    /* pass 2: edges, relative to the bitmap's left */
+    /* pass 2: edges, relative to the bitmap's left (xmin is free now: the left bearing in 26.6,
+       shifted unsigned because a negative signed shift is undefined on the host) */
+    xmin = (pdi)((pdw)g_rlb << 6);
     g_sxc = g_syc = 0;
     for (i = 0; i < g_oln; ) {
         k = (pdw)g_ol[i++];
         if (k == OLM) {
             if (g_sxc != g_fx || g_syc != g_fy) pdx_accline(g_fx, g_fy, g_sxc, g_syc);   /* close the open contour */
-            g_fx = (pdi)(g_ol[i] - (g_rlb * 64)); g_fy = g_ol[i + 1]; g_sxc = g_fx; g_syc = g_fy; i += 2;
+            g_fx = (pdi)(g_ol[i] - xmin); g_fy = g_ol[i + 1]; g_sxc = g_fx; g_syc = g_fy; i += 2;
         } else if (k == OLL) {
-            fl_line((pdi)(g_ol[i] - (g_rlb * 64)), g_ol[i + 1]); i += 2;
+            fl_line((pdi)(g_ol[i] - xmin), g_ol[i + 1]); i += 2;
         } else if (k == OLQ) {
-            fl_quad((pdi)(g_ol[i] - (g_rlb * 64)), g_ol[i + 1], (pdi)(g_ol[i + 2] - (g_rlb * 64)), g_ol[i + 3]); i += 4;
+            fl_quad((pdi)(g_ol[i] - xmin), g_ol[i + 1], (pdi)(g_ol[i + 2] - xmin), g_ol[i + 3]); i += 4;
         } else if (k == OLC) {
-            fl_cubic((pdi)(g_ol[i] - (g_rlb * 64)), g_ol[i + 1], (pdi)(g_ol[i + 2] - (g_rlb * 64)), g_ol[i + 3],
-                     (pdi)(g_ol[i + 4] - (g_rlb * 64)), g_ol[i + 5]); i += 6;
+            fl_cubic((pdi)(g_ol[i] - xmin), g_ol[i + 1], (pdi)(g_ol[i + 2] - xmin), g_ol[i + 3],
+                     (pdi)(g_ol[i + 4] - xmin), g_ol[i + 5]); i += 6;
         } else if (k == OLZ) {
             fl_line(g_sxc, g_syc);
         }

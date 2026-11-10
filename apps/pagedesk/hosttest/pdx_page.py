@@ -31,18 +31,19 @@ extern pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 extern pdw pdx_cf;
 static pdw x_res = 3, x_door_off, x_door_seg, x_pend, x_cf, x_dx, g_xcseg;
 static pdw g_xb;
-static pdw g_xinit;
+static pdw g_xinit, g_xigs, g_xigk;
+static pdw g_gseg, g_gkb;                      /* pdrg.c's (a tentative definition): the claim PDXF is handed */
 static int x_have(pdw id) { return id == 3; }
 static void x_need(pdw id) { x_pend |= (pdw)(1u << id); }
 static pdw x_call(pdw verb, pdw bx, pdw cx, pdw dx)
 {
     pdw r;
-    if (!g_xinit) {
+    if (!g_xinit || g_xigs != g_gseg || g_xigk != g_gkb) {   /* the primary re-hands the glyph claim (20.22.8) */
         static struct pdxb_init in;
-        g_xinit = 1;
+        g_xinit = 1; g_xigs = g_gseg; g_xigk = g_gkb;
         pd_fcopy_in(g_xb, 0, &in, 0);          /* nothing: keep the caller's block */
         pdr_zero(&in, sizeof in);
-        in.xb_seg = g_xb; in.slot_seg = 0xB000; in.slot_kb = 48;
+        in.xb_seg = g_xb; in.slot_seg = 0xB000; in.slot_kb = 48; in.glyph_seg = g_gseg; in.glyph_kb = g_gkb;
         { static pdb keep[400]; pd_fcopy_in(g_xb, 0, keep, sizeof keep); pd_fcopy_out(&in, g_xb, 0, sizeof in);
           pdxf_verb(PDV_X_INIT, g_xb, 0, 0); pd_fcopy_out(keep, g_xb, 0, sizeof keep); }
     }

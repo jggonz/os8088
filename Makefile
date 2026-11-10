@@ -21772,7 +21772,7 @@ $(BUILD)/PDWRT.MOD: apps/pagedesk/pdwrt.asm $(BUILD)/pdwrt.gen.asm $(CC_RUNTIME)
 # (hosttest/pdx_check.py against mutool, hosttest/pdx_chain.py through the real PDENG).
 PDX_C    := apps/pagedesk/pdxf.c apps/pagedesk/pdxfol.c apps/pagedesk/pdxfsf.c apps/pagedesk/pdxfcf.c \
             apps/pagedesk/pdxft1.c apps/pagedesk/pdxft3.c apps/pagedesk/pdxfnm.c apps/pagedesk/pdxfcm.c apps/pagedesk/pdxfwd.c apps/pagedesk/pdxfnm.h
-PDX_CAP  := 61440   # PAGEDESK-SPEC 20.22 L6: PDXF <= 60 KiB image + bss
+PDX_CAP  := 65024   # PAGEDESK-SPEC 20.22: PDXF <= the part limit, image + bss (the lead, 23:56)
 .PHONY: pdxf pdxf-host
 $(BUILD)/pdxf.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -21784,7 +21784,7 @@ $(BUILD)/PDXF.MOD: apps/pagedesk/pdxf.asm apps/pagedesk/pdxfrs.inc $(BUILD)/pdxf
                    $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxf.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
-	    assert i==len(d), (i,len(d)); t=i+b; print('PDXF.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 60)'%(i,b,t,t/1024)); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXF.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 65,024)'%(i,b,t,t/1024)); \
 	    sys.exit(1 if t>$(PDX_CAP) else 0)"
 pdxf: $(BUILD)/PDXF.MOD pdxf-host
 pdxf-host:

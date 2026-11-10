@@ -8,8 +8,9 @@
 ; dx).
 ;
 ; Registers: in AL = verb, BX/CX/DX = its arguments. Out AX = the answer, CF = 1
-; when it is a failure. BX, CX and DX are clobbered; BP, SI, DI, DS, ES, SS:SP
-; and DF are as they arrived.
+; when it is a failure; with AX = PDE_NEEDMEM, CF = 0, CX = 0 (PDMEM_SLOT) and
+; DX = the KiB the workspace should have (20.22.2). BX, CX and DX are
+; clobbered otherwise; BP, SI, DI, DS, ES, SS:SP and DF are as they arrived.
 ;
 ; IT CALLS PDENG THROUGH ONE FAR VECTOR (pdxb_init's eng_off/eng_seg, kept in
 ; _pdx_engvec by PDV_X_INIT); _pdx_eng is the C-callable way through it. The
@@ -79,6 +80,7 @@ pdx_entry:
     push ax
     call _pdxf_verb
     add sp, 8
+    mov dx, [_pdx_odx]              ; PDE_NEEDMEM's KiB (CF = 0 and CX = 0 = PDMEM_SLOT below)
     mov cx, [_pdx_cf]               ; CF = (pdx_cf != 0); neg leaves AX alone
     neg cx
     pop ds

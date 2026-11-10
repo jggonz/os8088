@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     else if (!dget(dobj, dgen, "FontDescriptor", "FontFile", 0) && dg.kind == PDK_REF) { ffobj = dg.refnum; ffgen = dg.refgen; }
     if (!dget(dobj, dgen, "FontDescriptor", "Flags", 0)) symbolic = (pdm_fx_round(&dg.num) & 4) != 0;
     /* the PDXF side: one GLYPH call (info only) per code does everything from the font dictionary */
-    memset(&in, 0, sizeof in); in.xb_seg = SEG_XB; in.slot_seg = SEG_WS; in.slot_kb = PDXF_WS_KB;
+    memset(&in, 0, sizeof in); in.xb_seg = SEG_XB; in.slot_seg = SEG_WS; in.slot_kb = PDXF_WS_KB; in.glyph_seg = SEG_OUT; in.glyph_kb = 40;
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     r = pdxf_verb(PDV_X_INIT, SEG_XB, 0, 0);
     if (r) { printf("INIT %u\n", r); return 1; }
@@ -137,7 +137,7 @@ int main(int argc, char **argv)
         printf("CIDMAP %s %u\n", argv[i], gl.cid);
     }
     if (getenv("PDX_PX")) {                           /* the strike block: slots, info and bitmaps */
-        pdw px = (pdw)atoi(getenv("PDX_PX")), hdr = 0x1000, blk = 0, k;
+        pdw px = (pdw)atoi(getenv("PDX_PX")), hdr = (pdw)(40u * 1024 - PDFB_NBLK * PDFB_SIZE - PDFB_HDR), blk = 0, k;   /* INIT's 40 KiB claim */
         pd_ffill(SEG_OUT, hdr, 0, PDFB_HDR + PDFB_SIZE * 4);
         for (i = 3; (int)i < argc; i++) {
             struct pdxb_fglyph gl;
