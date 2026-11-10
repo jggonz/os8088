@@ -142,7 +142,7 @@ int main(int argc, char **argv)
         for (i = 3; (int)i < argc; i++) {
             struct pdxb_fglyph gl;
             memset(&gl, 0, sizeof gl); gl.objnum = fobj; gl.gen = fgen; gl.code = (pdw)atoi(argv[i]); gl.flags = PDFG_BLOCK;
-            gl.em64 = (pdw)(px * 64); gl.dseg = SEG_OUT; gl.doff = hdr; gl.cap = 4; gl.pass = 1;
+            gl.em64 = (pdw)(px * 64); gl.dseg = SEG_OUT; gl.doff = hdr; gl.cap = 40; gl.pass = 1;   /* the claim INIT named (segment, KiB) */
             pd_fcopy_out(&gl, SEG_XB, 0, sizeof gl);
             r = call(PDV_FNT_GLYPH);
             pd_fcopy_in(SEG_XB, 0, &gl, sizeof gl);

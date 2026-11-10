@@ -48,8 +48,9 @@ static pdw x_pend;              /* bit (1 << PDX_*): needed, absent, this pass *
 static pdw x_ref;               /* refused for this page view (XR_* too)  */
 static pdw x_cf, x_dx;          /* the last x_call's carry flag and DX     */
 static pdw x_used, x_swaps;     /* pdxb_rstatus.mods / .swaps              */
-static pdw x_mwant, x_mkb;      /* a region wanted (PDMEM_*, KiB), 0 none  */
+static pdw x_mwant, x_mkb;      /* a region wanted (0x80 | PDMEM_*, KiB), 0 none: PDMEM_SLOT is 0 */
 #define XR_MEM  0x8000u         /* x_ref: the region asked for was refused */
+#define XR_GLYPH 0x4000u        /* x_ref: the glyph claim's growth was refused (fonts, 20.22.8) */
 static const char *const x_name[PDX_COUNT] = { "", "key module", "graphics module",
     "font module", "image module", "JPX module" };
 
@@ -85,7 +86,7 @@ static void x_refuse(pdw id)
 static pdw x_mem(pdw region, pdw kb)
 {
     if (x_ref & XR_MEM) return 0;
-    if (!x_mwant) { x_mwant = region; x_mkb = kb; }
+    if (!x_mwant) { x_mwant = (pdw)(0x80 | region); x_mkb = kb; }
     return 1;
 }
 

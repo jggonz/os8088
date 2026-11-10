@@ -330,40 +330,57 @@ static void t3_queue(pdw blk, pdw slot);
 #else
 #define T3_QUEUE(b, s) ((void)0)
 #endif
+/* the hit: the code's slot in the block of (font, px), as PDXF left it. Per glyph, so near */
+static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
+{
+    pdw boff, h, i, k, ip;
+    g_ek = syn_find(g_fk[GS.font].objnum, g_fk[GS.font].gen, px);
+    if (g_ek == 0xFFFF) return 0;
+    boff = syn_off(g_ek);
+    h = (pdw)((code ^ (code >> 7)) & 127);
+    for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
+        k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
+        if (k == code || k == 0xFFFF) break;
+    }
+    ip = (pdw)(boff + PDFB_INFO + h * 4);
+    if (k != code || (px && !(pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) return 0;
+    g_ewv = 1; g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
+    if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
+    return 1;
+}
+/* the miss, once per code and size (PDREND's second code segment): the glyph claim's growth
+ * (PDMEM_GLYPH: a 24 KiB claim has no blocks), the module (the ladder), then ONE PDXF call that
+ * finds or makes the block, rasterises the glyph into it and answers; PDE_NEEDMEM from PDXF is its
+ * workspace (PDMEM_SLOT) and is relayed. A refusal draws the font in the substitute face */
+static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
+{
+    pdw r, bit = PDF_INC_FONT;
+    if (!syn_cap()) {
+        if (!(x_ref & XR_GLYPH) && x_mem(PDMEM_GLYPH, PDFB_GLYPHKB)) return 0;    /* the pass runs again */
+        bit = PDF_INC_APPROX;
+        goto refuse;
+    }
+    if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
+    g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_passes;
+    pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
+    r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
+    if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
+    if (!x_cf) return emb_hit(f, code, px);
+    pd_fcopy_in(g_xb, 0, &g_fgl, sizeof g_fgl);
+    if (g_fgl.err == PDFE_SIZE) bit = PDF_INC_APPROX;
+refuse:
+    if (f->emb == 2) f->ok = 0;
+    f->emb = 0; g_fwdirty = 1;
+    inc_note(bit, "font substituted");
+    return 0;
+}
 static pdw emb_glyph(struct pdr_font *f, pdw code)
 {
-    pdw boff, h, i, k, px = 0, n = 1, ip, tried = 0, obj = g_fk[GS.font].objnum, gen = g_fk[GS.font].gen;
+    pdw px = 0, n = 1;
     if (g_mode != PDR_TEXT && f->emb != 3) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
     g_escale = n;
-    for (;;) {
-        g_ek = syn_find(obj, gen, px);
-        if (g_ek != 0xFFFF) {
-            boff = syn_off(g_ek);
-            h = (pdw)((code ^ (code >> 7)) & 127);
-            for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
-                k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
-                if (k == code || k == 0xFFFF) break;
-            }
-            ip = (pdw)(boff + PDFB_INFO + h * 4);
-            if (k == code && (!px || (pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
-                g_ewv = 1; g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
-                if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
-                return 1;
-            }
-        }
-        if (tried || !x_have(PDX_FNT)) { if (!tried) x_need(PDX_FNT); return 0; }
-        tried = 1;
-        g_fgl.objnum = obj; g_fgl.gen = gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
-        g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.doff = syn_hdr(); g_fgl.cap = syn_cap(); g_fgl.pass = g_passes;
-        pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
-        x_call(PDV_FNT_GLYPH, 0, 0, 0);
-        if (x_cf) {                                         /* refused: the substitute face from now on */
-            if (f->emb == 2) f->ok = 0;
-            f->emb = 0; g_fwdirty = 1;
-            inc_note(PDF_INC_FONT, "font substituted");
-            return 0;
-        }
-    }
+    return emb_hit(f, code, px) || emb_miss(f, code, px);
 }
 
 /* text too small for a bitmap (em < 5 px) is GREEKED: one hairline per show

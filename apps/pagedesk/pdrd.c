@@ -479,7 +479,7 @@ static pdw file_read(const char *name, pdw alo, pdw ahi, pdw seg, pdw cap)
  * (bank 2). (glyph_kb - 24) / 4 blocks: a 24 KiB claim has none and embedded fonts are not
  * drawn from their programs. A block is reused only when it was not used in THIS pass: the
  * display list being built refers to the ones it used. ------------------------------------ */
-#define SYN_MAX 4
+#define SYN_MAX PDFB_NBLK
 static pdw syn_cap(void)
 {
     pdw n = (pdw)((g_gkb - 24) >> 2);
@@ -495,11 +495,24 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     for (i = pd_fpeekw(g_gseg, (pdw)(h + 60)); i--; ) {
         e = (pdw)(h + (i << 3));
         if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4)) == px) {
-            pd_fpokew(g_gseg, (pdw)(e + 6), g_passes);           /* used in this pass: not to be reused */
+            pd_fcopy_out(&g_passes, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
             return i;
         }
     }
     return 0xFFFF;
+}
+
+/* the glyph claim was REGROWN for the strike blocks (PDMEM_GLYPH, 20.22.8): the page view goes on in
+ * the claim at its new place and size. The bank's PDFONTX.RES index lives in it, so its segment moves
+ * with it; the strike cache keeps its entries unless the blocks' header now covers them */
+static void syn_adopt(pdw seg, pdw kb)
+{
+    pdw og = g_gseg;
+    g_gseg = seg; g_gkb = kb > 63 ? 63 : kb;
+    if (!g_gseg) g_gkb = 0;
+    if (g_bk_seg[1]) g_bk_seg[1] = (pdw)(g_bk_seg[1] + (g_gseg - og));
+    if (g_scbump > (syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10))) { g_scn = 0; g_scbump = SC_BASE; }
+    g_pkfam = 0xFF;
 }
 
 static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
