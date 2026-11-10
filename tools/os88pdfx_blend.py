@@ -122,7 +122,7 @@ def refs(src, tmp, n):
 
 def check(d, harness, bank, shots=None):
     import numpy as np
-    tmp = tempfile.mkdtemp()
+    tmp = tempfile.mkdtemp(); rc = 0
     print("%-12s %5s  %-22s %-22s" % ("fixture", "rows", "vs MuPDF  mean >8 >24", "vs Poppler mean >8 >24"))
     for n in FIXTURES:
         src = os.path.join(d, n + ".pdf")
@@ -131,6 +131,14 @@ def check(d, harness, bank, shots=None):
                         os.path.join(tmp, n + ".ppm"), bank], check=True, capture_output=True, env=dict(os.environ, PDB_DUMP=dump))
         mu, po = refs(src, tmp, n)
         raw = np.fromfile(dump, dtype=np.uint8)
+        # the ladder: the same page with no region at first (PDB_NOX8: the first pass only DECIDES, the
+        # harness grants the region on PDE_NEEDMEM and the pass runs again) must draw the same pixels
+        dump2 = dump + ".l"
+        subprocess.run([harness, "render", src, "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0",
+                        os.path.join(tmp, n + ".l.ppm"), bank], check=True, capture_output=True,
+                       env=dict(os.environ, PDB_DUMP=dump2, PDB_NOX8="1"))
+        if np.fromfile(dump2, dtype=np.uint8).tobytes() != raw.tobytes():
+            print("%-12s LADDER: the two-pass render differs from the one-pass one" % n); rc = 1
         o = raw[:W * H].reshape(H, W).astype(int)
         drawn = raw[W * H:W * H + H].astype(bool)
         cols = []
@@ -144,7 +152,7 @@ def check(d, harness, bank, shots=None):
             side = np.concatenate([o[drawn], np.full((df.shape[0], 4), 128), po[drawn], np.full((df.shape[0], 4), 128), mu[drawn],
                                    np.full((df.shape[0], 4), 128), 255 - np.clip(df * 4, 0, 255)], axis=1)
             Image.fromarray(side.astype("uint8")).save(os.path.join(shots, n + ".png"))
-    return 0
+    return rc
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "write": write(sys.argv[2])

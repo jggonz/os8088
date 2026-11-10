@@ -220,11 +220,15 @@ int main(int argc, char **argv)
             rq.edits_seg = SEG_EDIT;
             rq.edits_count = getenv("PDR_ECOUNT") ? (pdw)atoi(getenv("PDR_ECOUNT")) : (pdw)(esz / 48 > 255 ? 255 : esz / 48);
         }
+  again:
         memcpy(MEM(SEG_XB, 0), &rq, sizeof rq);
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
         do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
+#ifdef PDR_X8
+        if (e == PDE_NEEDMEM && getenv("PDB_NOX8")) { unsetenv("PDB_NOX8"); kb = load_bank(argv[13]); do_init(bpp, kb, dlkb); goto again; }   /* the primary grants the region and runs the pass again */
+#endif
         if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
