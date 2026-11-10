@@ -21765,6 +21765,9 @@ pdwrt-enc: | $(BUILD)
 	mkdir -p $(BUILD)/pdw-enc
 	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST $(PDW_SSLC) -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
 		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(PDW_SSLL)
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
+		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(BUILD)/pdw-enc/pdw_encfuzz 100000
 	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
 
