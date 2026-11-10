@@ -385,10 +385,11 @@ wf_pcm_open:
     call OSAPI_MEM_P
     cmp ax, dx
     jb .out
-    mov ax, 13 * 64             ; the ring, all of it page-safe, from
-    mov cx, ax                  ; the top (BX is MEMP_AVAIL's already, and
-    mov bl, MEMP_CLAIM_HI       ; op_fetch clobbers CX)
-    call OSAPI_MEM_P
+    mov ax, 13                  ; the ring, 13KB, all of it page-safe, from
+    mov cx, ax                  ; the top - the KB arm's head, MEMP_DMAPOOL's:
+    mov bl, MEMP_KB + MEMP_KBH + MEMP_CLAIM_HI ; on kern_mega the pinned
+    call OSAPI_MEM_P            ; pool block the KB DMA door gave it (BX is
+                                ; MEMP_AVAIL's already, op_fetch clobbers CX)
     jc .out
     mov [wf_pcmseg], dx
     mov al, WF_P_SFX

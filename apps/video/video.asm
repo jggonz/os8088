@@ -24086,15 +24086,24 @@ vp_rclaim:
     pop cx
     ret
 ; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but through
-; the PARAGRAPH door, which keeps a head conventional: kern_mega's KB DMA
-; door gives an OS88_HIGHMEM package a pool block for one (KERN-MEGA-PLAN
-; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
-; CF, DX; AX, BX and CX kept
+; the PARAGRAPH door WITHOUT MEMP_DMAPOOL, which keeps a head conventional:
+; the KB arm's MEMP_KBH asks for a pool block on kern_mega (KERN-MEGA-PLAN
+; 14.160, SPEC.md 50.3.7), and vp_ring is in vp_rlst - the real-mode bracket
+; reads into it. CF, DX; AX, BX and CX kept
 .p:
-    push bx                         ; the KB arm with a head (SPEC.md
-    mov bl, MEMP_KB + MEMP_KBH      ; 50.3.7.1): conventional, AX and CX
-    call OSAPI_MEM_P                ; kept
+    push ax
+    push bx
+    push cx
+    mov bx, 64                      ; (paragraphs a KB)
+    mul bx                          ; AX = paragraphs (DX is the answer's)
+    xchg ax, cx
+    mul bx                          ; CX = the head in paragraphs
+    xchg ax, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
     pop bx
+    pop ax
     ret
 
 ; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose

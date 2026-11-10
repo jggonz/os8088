@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "835794952cdf690d45c6520d1731f8b1c0507c21020379ae57017663bc23ee3c",
+  "fingerprint": "017fbe58107592fc6b283d7468a0a033302d66e85b80fc8fc17cf5c29a9e5afa",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "4c6efa3627fc82186709b793e690d027addbea44f40d72593f8aa402cac0d891",
+  "fingerprint": "1fe364ddee03f956189634768e8fa7a24adeec77df81e922f74e5555b60128a2",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2147,6 +2147,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "STKL_D_CLICK..WAKE withdrawn from the Sticky App block: unread since R14's class; STKL_XCP.. move down 10 (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "1fe364ddee03f956189634768e8fa7a24adeec77df81e922f74e5555b60128a2",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "megacmp: MEMP_DMAPOOL (CX 4000h) on OSAPI_MEM_P restores kern_mega's pool DMA head the KB DMA doors gave; MEMP_KBH passes it on (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "017fbe58107592fc6b283d7468a0a033302d66e85b80fc8fc17cf5c29a9e5afa",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "megacmp: MEMP_DMAPOOL (CX 4000h) on OSAPI_MEM_P restores kern_mega's pool DMA head the KB DMA doors gave; MEMP_KBH passes it on (kernel size pass 19)",
    "to": 14
   }
  ]

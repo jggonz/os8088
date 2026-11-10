@@ -470,6 +470,7 @@ MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMP_DMAPOOL  equ 0x4000        ; ...or CX = the head | this: a pool head there
 MEMP_KB       equ 8             ; + a verb: THE KB DOORS' REGISTERS (50.3.7.1)
 MEMP_KBH      equ 0x80          ; + MEMP_KB on a claim: CX = a DMA head in KB
                                 ; (bit 7: the arm tests it by its sign)
@@ -5663,13 +5664,18 @@ mem_hrecf:
 ; out: CF=1 refused, and a CLAIM or REGROW verb's AX is then the request
 ;      rounded up to the granule - what was asked for, as the door counts it.
 ;      Every register not named is preserved, CX (MEMP_CONV and all) included
+;      CX = a head | MEMP_DMAPOOL (4000h): on kern_mega, an OS88_HIGHMEM
+;           package's claim and head of 64KB or less are a PINNED POOL block
+;           with the head inside one 64KB page (mega_claimdf, KERN-MEGA-PLAN
+;           14.160), as the KB DMA doors gave; anywhere else, or refused
+;           there, the head claim as without the bit
 ;
 ;      BL + MEMP_KB (8): the WITHDRAWN KB DOORS' REGISTERS (SPEC.md 50.3.7.1),
 ;           for apps/os88api.inc's MEMKB_* bodies and the C SDK - AX in KB
 ;           and KEPT, every register kept but DX (BL is the caller's to
 ;           restore). A claim reads no head unless + MEMP_KBH (80h): CX = the
-;           head in KB, conventional on kern_mega head or none (the KB DMA
-;           doors'). MEMP_KB + MEMP_AVAIL answers AX/BX in KB, CX kept
+;           head in KB, MEMP_DMAPOOL's on kern_mega, none conventional (the
+;           KB DMA doors'). MEMP_KB + MEMP_AVAIL answers AX/BX in KB, CX kept
 ;
 ; ONE CELL AND FOUR VERBS where the KB doors are five cells, because the KB
 ; doors are what every .o88 built so far calls and these are what a package
@@ -5691,25 +5697,43 @@ osapi_mem_p:
     ; does not take - so this arm only ADDS the pool, never removes the
     ; paragraph door. The pool counts in KB, so a pool claim is granted the
     ; KB that covers it: conventional memory is what the granule is for. A
-    ; DMA head stays conventional: THE door for a page-safe buffer a
-    ; real-mode path names, where the KB DMA doors give an OS88_HIGHMEM
-    ; package's head a pool block (KERN-MEGA-PLAN 14.160).
+    ; DMA head stays conventional - THE door for a page-safe buffer a
+    ; real-mode path names - unless CX carries MEMP_DMAPOOL, which asks for
+    ; what the withdrawn KB DMA doors gave an OS88_HIGHMEM package's head: a
+    ; pinned pool block (KERN-MEGA-PLAN 14.160; kernel size pass 19's
+    ; megacmp restored it after C1 had made every such head conventional).
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
     je .mreg
     jcxz .mpool                 ; ...and CX = MEMP_CONV (bit 15, no head) is
-    jmp short .gen              ; a caller that must stay CONVENTIONAL: the
-                                ; block is or will be a CS, or a real-mode
+    test ch, MEMP_DMAPOOL >> 8  ; a caller that must stay CONVENTIONAL: the
+    jz .gen                     ; block is or will be a CS, or a real-mode
                                 ; path names it - the parts' carve and their
                                 ; fetches, the C overlay. Those used the DMA
                                 ; door with no head for exactly that, and this
-                                ; is that idiom kept
+                                ; is that idiom kept. A HEAD | MEMP_DMAPOOL
+    push ax                     ; is what the KB DMA doors gave an OS88_HIGHMEM
+    push cx                     ; package (KERN-MEGA-PLAN 14.160): a pool block
+    and ch, 0x3F                ; with the head inside one 64KB page, born
+    jcxz .dno                   ; pinned (mega_claimdf), else as without the
+    call .kb                    ; bit; a head of 0 is none, conventional
+    xchg ax, cx
+    call .kb                    ; CX = the head's KB, AX the claim's
+    xchg ax, cx
+    call COLD_SEG:mega_claimdf
+    pop cx
+    jc .mno                     ; (refused: the conventional head claim)
+    jmp short .mpok
+.dno:
+    pop cx
+    jmp short .mno
 .mpool:
     push ax
     call .kb                    ; AX = the KB that covers it
     call COLD_SEG:mega_claimhf
     jc .mno
+.mpok:
     add sp, 2
 .mkb:
     push cx                     ; AX = the granted, in paragraphs again
@@ -5768,8 +5792,8 @@ osapi_mem_p:
     mov di, bx
     and di, 1                   ; bit 0 -> MC_DMA_HI, the top-down door
     ror di, 1
-    mov si, cx                  ; SI = the head, with MEMP_CONV off: it only
-    and si, 0x7FFF              ; steers kern_mega's arm above, and the
+    mov si, cx                  ; SI = the head, MEMP_CONV and MEMP_DMAPOOL
+    and si, 0x3FFF              ; off: they only steer kern_mega's arm, and the
                                 ; caller's CX is KEPT (it was masked in
                                 ; place, against "every register kept").
                                 ; ZF = no head
@@ -5782,8 +5806,8 @@ osapi_mem_p:
                                 ; asks here, and the KB door took it low. A
                                 ; claim with no head keeps the top: a carve,
                                 ; an overlay, an index - a block that is or
-                                ; may become a CS. Bit 15, MEMP_CONV, is off
-                                ; SI already (the `and si` above), so a
+                                ; may become a CS. Bits 15 and 14 (MEMP_CONV,
+                                ; MEMP_DMAPOOL) are off SI already, so a
                                 ; conventional request is not taken for a
                                 ; head
 %endif
@@ -5831,11 +5855,18 @@ mem_p_kb:  ; STKBALANCE-OK: builds the far frame osapi_mem_p.p's retf takes
                                 ; THE KB ARM (kernel size pass 19, nogrow): the
     cmp bl, MEMP_KB + MEMP_AVAIL; six KB doors' registers, written ONCE here
     je .kav                     ; instead of once in every package's
+%ifdef KERN_MEGA
+    cmp bl, MEMP_KB + MEMP_REGROW ; A POOL BLOCK'S REGROW IS THE WITHDRAWN
+    jne .kn                     ; KB DOOR'S, KB AND ALL (megacmp): a huge
+    call mem_ishidx             ; claim regrows past 1,023KB (megargw's L3),
+    jnc .kpool                  ; which the paragraph shift below wraps
+.kn:
+%endif
     push cx                     ; OS88KB_BODIES - which is what made C1's
     push ax                     ; package side cost more than the doors saved
     mov al, MEM_PARA_KB         ; AX = the head KB in paragraphs (CL: a head
-    mul cl                      ; is 64KB at most), CONVENTIONAL on kern_mega
-    or ah, MEMP_CONV >> 8       ; as the KB DMA doors were, head or none...
+    mul cl                      ; is 64KB at most) | MEMP_DMAPOOL: a POOL head
+    or ah, MEMP_DMAPOOL >> 8    ; on kern_mega as the KB DMA doors gave one,
     or bl, bl                   ; + MEMP_KBH is bit 7: a byte shorter than a
     js .kh                      ; `test` (and the parity t_hotpar wants)
     xor ax, ax                  ; ...or no head at all: a plain KB claim, which
@@ -5859,6 +5890,10 @@ mem_p_kb:  ; STKBALANCE-OK: builds the far frame osapi_mem_p.p's retf takes
     retf
 .kav:
     jmp mmf_osapi_mem_avail     ; the KB AVAIL body DISKOPS calls: AX/BX KB
+%ifdef KERN_MEGA
+.kpool:
+    jmp osapi_mem_regrow_x      ; (its retf is the cell's)
+%endif
 
 
 ; -----------------------------------------------------------------------------
@@ -5898,8 +5933,9 @@ osapi_mem_movable_x:
 .hi:                            ; above 1MB: a region never moves, and of the
     call COLD_SEG:mega_bfpcf    ; (A BRIDGE: its conventional piece is the
     jnc .seg                    ; claim declared, KERN-MEGA-PLAN 14.169)
-%endif                          ; ...and CF = 1 from the jnc: no other pool
-.out:                           ; claim is a caller's to pin or unpin
+    call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
+%endif                          ; pinned, so only its pin is the caller's to
+.out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
 %ifdef KERN_MEGA
     pop dx
 %endif

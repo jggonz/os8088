@@ -1681,9 +1681,10 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; bytes: OS88_IMAGE_END assembles only the entries named before it.
 ;   MEMKB_CLAIM      AX = KB -> CF=0 and DX = the base
 ;   MEMKB_CLAIM_HI   ...from the top
-;   MEMKB_DMA        ...and CX = the KB of a page-safe HEAD (0 = none, and
-;   MEMKB_DMA_HI        then MEMP_CONV: conventional on kern_mega, as the
-;                       withdrawn DMA doors were)
+;   MEMKB_DMA        ...and CX = the KB of a page-safe HEAD (0 = none:
+;   MEMKB_DMA_HI        conventional on kern_mega; a head is MEMP_DMAPOOL's,
+;                       a pinned pool block for an OS88_HIGHMEM package,
+;                       exactly as the withdrawn DMA doors were)
 ;   MEMKB_REGROW     DX = your claim, AX = the KB it should be -> CF=0 and
 ;                    DX = its base NOW (the same when it grew where it stood,
 ;                    another when it moved - your bytes came with it); CF=1
@@ -1712,9 +1713,10 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; (the paragraph answer shifted, by the kernel's KB arm).
 ; Every claim is the DISK class (SPEC.md 50.2.1.1) - what the KB doors gave -
 ; so a site that is CPU-only and wants the finer granule calls OSAPI_MEM_P
-; itself with MEMP_CPU. A DMA entry (MEMP_KBH) is conventional on kern_mega
-; with a head or without one (CX = 0), as the KB DMA doors' "no page" claim
-; was and as OSAPI_MEM_P keeps a head on every package.
+; itself with MEMP_CPU. A DMA entry (MEMP_KBH) with no head (CX = 0) is
+; conventional on kern_mega, as the KB DMA doors' "no page" claim was; with a
+; head it is MEMP_DMAPOOL's - an OS88_HIGHMEM package's pinned pool block,
+; as the KB DMA doors gave (SPEC.md 50.3, KERN-MEGA-PLAN 14.160).
 ; -----------------------------------------------------------------------------
 %macro OS88KB_BODIES 0
 %ifndef OS88KB__DONE              ; once: a package whose last bytes must
@@ -2555,9 +2557,14 @@ SEG_LOW     equ 14
                                  ; granted the KB that covers it - unless CX
                                  ; is MEMP_CONV, which keeps it conventional.
                                  ; A claim WITH a head is conventional there
-                                 ; on every package: THE door for a page-safe
-                                 ; buffer a real-mode path names
-                                 ; (KERN-MEGA-PLAN 14.160)
+                                 ; on every package - THE door for a page-safe
+                                 ; buffer a real-mode path names - unless CX
+                                 ; is the head | MEMP_DMAPOOL: then an
+                                 ; OS88_HIGHMEM package's claim and head of
+                                 ; 64KB or less are a PINNED POOL block, the
+                                 ; head in one 64KB page (KERN-MEGA-PLAN
+                                 ; 14.160), unpinned by OSAPI_MEM_MOVABLE and
+                                 ; kept page-safe by compaction
 MEMP_CLAIM    equ 0
 MEMP_CLAIM_HI equ 1
 MEMP_CPU      equ 2
@@ -2573,12 +2580,20 @@ MEMP_KB       equ 8              ; + a verb: THE KB DOORS' REGISTERS, which
                                  ; kept but DX and BL; a claim reads no head.
                                  ; + MEMP_AVAIL: AX/BX in KB, CX kept
 MEMP_KBH      equ 0x80           ; + MEMP_KB on a claim: CX = a DMA head in KB
-                                 ; (0 = none), conventional on kern_mega
+                                 ; (0 = none: conventional on kern_mega), a
+                                 ; head passed on | MEMP_DMAPOOL
 MEMP_CONV     equ 0x8000         ; CX for a claim verb: NO head, and stay
                                  ; CONVENTIONAL on kern_mega - a block that is
                                  ; or will be a CS, or one a real-mode path
                                  ; names. Plain CX = 0 may go above 1MB there
                                  ; for an OS88_HIGHMEM package
+MEMP_DMAPOOL  equ 0x4000         ; CX = the HEAD | this, on a claim verb:
+                                 ; on kern_mega an OS88_HIGHMEM package's
+                                 ; claim and head of 64KB or less may be a
+                                 ; PINNED POOL block above 1MB, the head in
+                                 ; one 64KB page (the KB DMA doors' answer,
+                                 ; SPEC.md 50.3); elsewhere ignored. Never
+                                 ; with MEMP_CONV
 %define OS88_BYTES_PARA(n) (((n) + 15) / 16)   ; bytes -> paragraphs to ask for
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).

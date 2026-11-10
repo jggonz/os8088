@@ -73794,14 +73794,15 @@ What differs from a grant ring (§34.5.2):
   the same call places it from the BOTTOM** (§50.3.2, KERN-MEGA-PLAN 14.55):
   a claim with a head there is a ring held while it plays, and is claimed
   low with the same page guarantee; kern_big and kern_small take it from
-  the top as before. A package changes nothing for it. The router's gate
-  (`snd_ringhif`) refuses an external ring above 1MB - a pool claim may
-  move under the chip - and answers 2 as before. (An `OS88_HIGHMEM`
-  package's head claim was a pinned POOL block, `MX_FDMA | MX_FPIN`, which
-  the gate let through, until kernel size pass 19's C1 withdrew the KB DMA
-  doors that made one; a head is conventional now.) A ring a real-mode
-  bracket feeds stays conventional through `OSAPI_MEM_P` with a head
-  (§50.3.7);
+  the top as before. A package changes nothing for it. **And for an
+  `OS88_HIGHMEM` package it is a POOL block** (§50.3, KERN-MEGA-PLAN 14.160):
+  below 16MB, the ring inside one page and born pinned, which the 8237
+  reaches through the base `sbl_ring_phys` reads (`SEG_LIN`'s low word and
+  page). The router's gate (`snd_ringhif`) refuses an external ring above
+  1MB unless the pool block it starts is a DMA door's and pinned
+  (`MX_FDMA | MX_FPIN`) - a plain pool claim may move under the chip - and
+  answers 2 as before. A ring a real-mode bracket feeds stays conventional
+  through `OSAPI_MEM_P` with a head (§50.3.7);
 - **verb 1 only RESUMES.** The total arrives through memory; an underrun
   still halts the card, and verb 1 is still what restarts it, with the same
   bound;
@@ -101238,16 +101239,38 @@ loop in the driver that held each failed block so the next attempt would land
 elsewhere: correct, but it could hold 128KB to find 32KB and refuse on a
 machine that had the room the whole time.
 
-**On kern_mega a claim WITH A HEAD is conventional** (§50.3.7). Until kernel
-size pass 19 an `OS88_HIGHMEM` package's KB DMA door gave its head a POOL
-block (KERN-MEGA-PLAN 14.160): taken from the pool's floor up, born pinned
-(`MX_FDMA | MX_FPIN`), kept page-safe by both of the pool's compactions and by
-an in-pool regrow, and unpinned by `OSAPI_MEM_MOVABLE`. Pass 19's C1 withdrew
-the KB doors and `OSAPI_MEM_P` keeps a head conventional, so nothing made such
-a block any more, and its machinery (`mega_claimdf`, `mega_dmahset`,
-`mx_dmafit`, `mega_dmamovf`, `mx_alloc`'s floor-up arm) went in that pass's
-wave C (docs/plans/ksp19/swdrv.md). KERN-MEGA-PLAN 14.160's audit is the
-record of what it was.
+**On kern_mega in protected mode, an `OS88_HIGHMEM` package's claim of 64KB or
+less WITH A HEAD is a POOL block** (KERN-MEGA-PLAN 14.160), where `mega_claimhf`
+puts its plain claims: `mega_claimdf` hands `mx_alloc` the head, which places
+the block FROM THE POOL'S FLOOR UP (§50.6.10's one exception, KERN-MEGA-PLAN
+14.166) - a candidate whose head would straddle goes UP to the next page's
+floor - and the block is all below 16MB because the pool is
+(`mega_layoutf` caps it at 15MB above the first). Since the flag day withdrew
+the KB doors (kernel size pass 19) the arm is ASKED for: `OSAPI_MEM_P` with
+the head `| MEMP_DMAPOOL` in CX (§50.3.7), which the KB arm's `MEMP_KBH` -
+every `MEMKB_DMA`/`MEMKB_DMA_HI` site, each a KB DMA door at the base - sets
+for its caller; a head without the bit is conventional. C1 made every such
+head conventional for one pass and its wave C deleted this machinery as dead;
+`megacmp` restored both (docs/plans/ksp19/megacmp.md). A driver never takes
+the arm - its own 8237 or bus-master code may not take a selector's
+base, so a driver's head claim is conventional whatever its header says. CX =
+0 is the plain claim and conventional as always. The answer is a selector,
+and a chip reaches it through the descriptor's base: `OSAPI_SEG` `SEG_LIN`
+answers the low 16 bits and the page, which is exactly what `SOUND.DRV`'s
+`sbl_ring_phys` programs an external ring from, and the floppy's native path
+does its page arithmetic on the same base (`dsk_runcap`, KERN-MEGA-PLAN
+14.156). **It is born PINNED** (`MX_FPIN`), the pool's spelling of a
+conventional claim's `MC_RLOC` = 0: a ring a chip is armed on must not move
+under it, and the pool has no relocation proc to call. `OSAPI_MEM_MOVABLE` on
+it takes the pin off (AX ≠ 0) and puts it back (AX = 0) and calls no proc -
+the selector the package holds is the claim, and a move rebases it - while
+every other pool claim still refuses the call. An unpinned one moves only
+where its head stays inside one page (`mx_dmafit`, §66.4.2's bump in both of
+the pool's passes, towards where the block is and no further), and an
+in-pool regrow that needs a new block carries the head into it. Its head
+costs no real-mode segment: a block a real-mode path names asks
+`OSAPI_MEM_P` instead. The audit of every caller is KERN-MEGA-PLAN 14.160's
+table.
 
 Two limits, both deliberate: a head bigger than 64KB is refused up front (no
 page can hold it, and that is also what bounds the bump). **The claim record
@@ -101593,7 +101616,11 @@ OSAPI_MEM_P   0x045B, X     BL = the verb (MEMP_*), ES = the caller (X stub)
                         every register but DX and BL kept, no head read;
                         AVAIL answers AX/BX in KB with CX kept
   + MEMP_KBH  80h   with MEMP_KB on a claim: CX = the head in KB (0 = none),
-                        conventional on kern_mega either way
+                        MEMP_DMAPOOL's on kern_mega (none: conventional)
+  CX | MEMP_DMAPOOL 4000h  on a claim verb with a head: on kern_mega an
+                        OS88_HIGHMEM package's claim and head of 64KB or less
+                        are a PINNED POOL block, the head in one 64KB page
+                        (§50.3, as the KB DMA doors gave); else as without it
 ```
 
 The KB doors cannot ask for less than a KB (§50.2.1), so a package whose size
@@ -101623,7 +101650,7 @@ rather than trusted to the rounding.
 `OSAPI_MEM_CLAIM_DMA_HI`'s is (§50.3.2, KERN-MEGA-PLAN 14.55): a head names a
 chip's 64KB page, so the claim is a DMA ring held only while it plays, and
 `MEMP_CLAIM_HI` with CX ≠ 0 is that door in paragraphs — `SOUND.DRV`'s staging
-pool is the caller. Bit 15 of CX is not a head. kern_big and kern_small take
+pool is the caller. Bits 15 and 14 of CX are not a head. kern_big and kern_small take
 `_HI` from the top either way.
 
 **On kern_mega it offers the pool first, as the KB doors do.** An
@@ -101641,11 +101668,13 @@ exactly this, and the first build of this arm sent them above 1MB, where a
 code part faulted as data (`pxmega`, an invalid opcode in PiXEL's decoder).
 Every kernel masks the bit off before CX is a head.
 
-**A claim WITH A HEAD stays conventional here on every package**, and that is
-now a contract rather than an accident: from KERN-MEGA-PLAN 14.160 until kernel
-size pass 19 the KB DMA doors gave an `OS88_HIGHMEM` package's head claim a
-pool block (§50.3), and this door is the one a package names for a page-safe buffer that a real-mode
-path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
+**A claim WITH A HEAD stays conventional here on every package unless CX
+carries `MEMP_DMAPOOL`** (`0x4000`), and that is a contract rather than an
+accident: since KERN-MEGA-PLAN 14.160 an `OS88_HIGHMEM` package's DMA head
+claim may be a pinned pool block (§50.3) - the KB DMA doors' answer, which the
+bit asks for in paragraphs and the KB arm's `MEMP_KBH` asks for on its
+caller's behalf - so this door WITHOUT the bit is the one a package names for
+a page-safe buffer that a real-mode path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
 workspace a fixed disk is read through a call a run rather than a call a
 sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
@@ -101688,8 +101717,9 @@ change (`tests/unit/t_pkgdeps.py`).
 the tail - 5 bytes, the tail 7, `memkb_avail` 8 - because `OSAPI_MEM_P` takes
 `MEMP_KB` (8) added to a verb as **the withdrawn doors' registers**: AX in KB
 and kept, CX kept, every register but DX and BL kept, no head read; with
-`MEMP_KBH` (80h) too a claim's CX is the head in KB, and the claim is
-conventional on kern_mega with a head or none (CX = 0 is `MEMP_CONV`);
+`MEMP_KBH` (80h) too a claim's CX is the head in KB, which the arm passes on
+`| MEMP_DMAPOOL` - a pinned pool block on kern_mega, as the KB DMA doors gave
+(§50.3) - and a head of none is conventional there;
 `MEMP_KB + MEMP_AVAIL` answers AX/BX in KB, CX kept (`mmf_osapi_mem_avail`,
 the old AVAIL door's body). The first form of these bodies did the shift and
 the banking in every package - 20 bytes for the claim, 41 to 62 for a
@@ -101699,11 +101729,13 @@ kern_mega, above 1MB) and took the packages' side **-680** (the C SDK's
 thunks use it too). A head is read as a BYTE of KB (`mul cl`): 64KB is the
 most a page can hold, and a KB size is not checked against 1,024KB before
 its shift - the bodies before the arm shifted it unchecked too. The DMA
-entries' head of 0 is `MEMP_CONV`, because the KB DMA doors' "no page" claim
+entries' head of 0 is conventional, because the KB DMA doors' "no page" claim
 was the idiom for "stay conventional" on kern_mega (§50.3.7); a head that is
-not 0 is conventional on every package - where the KB DMA door gave
-an `OS88_HIGHMEM` package a pool block (KERN-MEGA-PLAN 14.160), so WIN16's one
-headed ring (`w16mm.inc`) is conventional on kern_mega now.
+not 0 is `MEMP_DMAPOOL`'s, so an `OS88_HIGHMEM` package's headed ring (the
+Audio Player's look-ahead, WIN16's `w16mm.inc`, WireFleet's, ...) is the
+pinned pool block the KB DMA door gave it (KERN-MEGA-PLAN 14.160). C1's first
+form made every such head conventional and wave C deleted the pool arm as
+dead; `megacmp` restored both (docs/plans/ksp19/megacmp.md).
 
 **Why a helper and not inline**, which is the brief's question (ksp19): an
 inline conversion that keeps the doors' registers is about 11 to 13 bytes a
@@ -103060,12 +103092,26 @@ HMA's end up to the lowest block, and the HMA is reached last. `mx_compactf`
 one claim. The Task Manager's MAX RUN replays the pack with only the HMA
 pinned, so it reads AVAIL less the HMA's share.
 
-**(A PINNED block from the floor up** was KERN-MEGA-PLAN 14.166's rule for the
-one pool block born pinned, a KB DMA door's head claim (§50.3, KERN-MEGA-PLAN
-14.160): `mx_alloc` took it first fit UPWARD from `[mega_mxflr]` so a pin never
-cut the free run in two. Kernel size pass 19's C1 withdrew those doors, nothing
-pins a pool block at birth any more, and the arm went in that pass's wave C;
-every pool claim is taken from the top.)
+**...but a PINNED block from the floor up** (KERN-MEGA-PLAN 14.166, the
+owner's rule: *"we don't want to blockade the available space with something
+in the middle"*). A DMA door's block (§50.3, KERN-MEGA-PLAN 14.160) is born
+`MX_FPIN`, and taken top-down it landed UNDER every block taken before it -
+so when those were freed their KB stood ABOVE the pin as a run of its own,
+which the pack UP cannot join to the run below it, and the largest claim the
+pool could grant fell short of its free KB by all of them. Measured on a 1MB
+kern_mega (86Box's mr286, the sound driver up): KERN-MEGA-PLAN 14.166's
+table. So `mx_alloc` takes a block it is about to pin FIRST FIT UPWARD from
+`[mega_mxflr]`: free memory is one run from the floor to the lowest movable
+block, and a pin at its bottom leaves it one run. A head that would straddle
+a 64KB page goes to the next page's floor, which can leave a page's tail
+under it - at most 63KB, and only when two pins are standing whose heads
+cannot share a page; the next pin small enough fills it first. A MOVABLE
+block standing under the candidate (the top was too full for it) is packed
+up out of the way first, once, so the pin does not keep it below. The floor
+is the HMA when nothing else stands there, so a DOS trip that finds a pin in
+it parks the HMA with the session (§50.6.10's MC4 rule, 64KB more park) -
+and packs the pool UP first, so a block that is only movable is not left
+there to cost that.
 
 `tests/megaxmove.py` is the gate: a block moved by the pack and read back
 through its first token, by copy, in place, by the file layer and by a

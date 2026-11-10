@@ -9265,12 +9265,12 @@ MX_FWIN     equ 0x10                ; MX_FL: an OSAPI_SEG BOUND window lives in
                                     ; it (SEG_BWIN), which a rate hook may read
                                     ; through: it moves with the hook held off
                                     ; (mx_cpflags, KERN-MEGA-MEMORY-PLAN 9.1)
-                                    ; (0x80 was MX_FDMA, a KB DMA door's head
-                                    ; claim, KERN-MEGA-PLAN 14.160: dead since
-                                    ; kernel size pass 19's C1 withdrew those
-                                    ; doors and OSAPI_MEM_P keeps a head
-                                    ; conventional, so it went with its
-                                    ; machinery in that pass's wave C)
+MX_FDMA     equ 0x80                ; MX_FL: a DMA head claim (mega_claimdf,
+                                    ; KERN-MEGA-PLAN 14.160): MX_AUX is the KB
+                                    ; of its head, which no compaction lands
+                                    ; across a 64KB page (mx_dmafit) - and
+                                    ; OSAPI_MEM_MOVABLE takes its MX_FPIN off
+                                    ; and puts it back (mega_dmamovf)
 MX_NBLK     equ 96                  ; entries (KERN-MEGA-PLAN 14.49): every
                                     ; pool claim, region, driver image and
                                     ; kernel block is one. Nine programs and
@@ -9332,7 +9332,11 @@ mega_ivts_end equ mega_ivts + MEGA_FKVN * 6 ; segment} a row, mega_fkvec's
 mega_npo    equ mega_ivts_end       ; O8 (14.143): the #NP handler's offset,
 mega_npc    equ mega_npo + 2        ;   its code selector (0 none), and the
 mega_npw    equ mega_npc + 2        ;   registrant's owner byte
-mega_npe    equ mega_npw + 1
+mx_dmah     equ mega_npw + 1        ; the head KB mx_alloc's next take must
+                                    ; keep inside one 64KB page, 0 none: set
+                                    ; under [sch_lock] by mega_dmahset, cleared
+                                    ; by mx_alloc on every way out (14.160)
+mega_npe    equ mx_dmah + 1
 MEGA_MXT_SIZE equ (mega_npe + 63) & ~63 ; whole 64-byte lines: the park
                                     ; sums lines (mega_dsave)
 MEGA_MXT_LINES equ MEGA_MXT_SIZE / 64
@@ -9525,7 +9529,10 @@ mx_alloc:
                                     ; then one run from the pool's base up,
                                     ; and the HMA - its first 64KB - is
                                     ; reached last
-.top:                               ; first fit DOWNWARD: the candidate
+.top:
+    cmp byte [es:mx_dmah], 0        ; ...BUT A DMA DOOR'S BLOCK FROM THE FLOOR
+    jne .bot                        ; UP (.bot, KERN-MEGA-PLAN 14.166)
+                                    ; first fit DOWNWARD: the candidate
     mov bp, [xm_kb]                 ; ends at the pool's top, and an overlap
     sub bp, cx                      ; moves it to end where that block
     jc .norun                       ; starts - strictly falling, so it ends
@@ -9567,6 +9574,10 @@ mx_alloc:
     mov [es:di+MX_KB], cx
     mov bh, 0
     mov [es:di+MX_OWN], bx             ; ...and MX_FL clear
+    cmp byte [es:mx_dmah], 0
+    je .tk0
+    mov byte [es:di+MX_FL], MX_FDMA | MX_FPIN ; a DMA door's: born pinned
+.tk0:
     popf
     call mx_istok                   ; a token block is NAMED by its token,
     jne .phys                       ; everything else by where it is
@@ -9600,7 +9611,8 @@ mx_alloc:
     stc
 .out:
     mov byte [mega_cpry], 0
-    dec byte [sch_lock]             ; (mov and dec leave CF)
+    mov byte [es:mx_dmah], 0        ; (mov leaves CF; ES is still the tail)
+    dec byte [sch_lock]             ; (dec leaves CF)
     pop es
     pop bp
     pop di
@@ -9608,6 +9620,65 @@ mx_alloc:
     pop cx
     pop bx
     ret
+.bot:                               ; A DMA DOOR'S BLOCK IS BORN PINNED (14.160)
+    mov bp, [mega_mxflr]            ; and goes to the pool's FLOOR END: every
+.brestart:                          ; other block is taken from the top and
+    mov al, [es:mx_dmah]            ; packs UP, so the free KB are one run from
+    xor ah, ah                      ; the floor, and a pin at the bottom of it
+    mov dx, bp                      ; never cuts it in two - where the top-down
+    and dx, 63                      ; fit put the pin UNDER the blocks before
+    add dx, ax                      ; it, and their frees left a run of their
+    cmp dx, 64                      ; own above it (SPEC.md 66.4.2). First fit
+    jbe .bpage                      ; UPWARD: AX = the head's KB, kept inside
+    add bp, 64                      ; the 64KB page its first byte is in, else
+    and bp, 0xFFC0                  ; the next page's floor (the pool starts
+.bpage:                             ; at 1MB, a page edge); an overlap goes
+    mov dx, bp                      ; past the block - strictly rising, so the
+    add dx, cx                      ; walk ends. DX = the candidate's end
+    jc .norun
+    cmp dx, [xm_kb]
+    ja .norun
+    mov si, mx_tab
+.bscan:
+    mov dx, [es:si+MX_KB]
+    or dx, dx
+    jz .bnext
+    add dx, [es:si+MX_OFF]          ; DX = this block's end
+    cmp bp, dx
+    jae .bnext
+    push dx
+    mov dx, bp
+    add dx, cx
+    cmp [es:si+MX_OFF], dx
+    pop dx
+    jae .bnext
+    mov bp, dx                      ; overlap: restart past it
+    jmp short .brestart
+.bnext:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bscan
+    cmp byte [mega_cpry], 0         ; ...and NOTHING MOVABLE UNDER IT: a block
+    jne .take                       ; the top was too full for packs up out
+    mov si, mx_tab                  ; of the way once first, or the pin would
+.bmov:                              ; keep it below, a run cut off
+    cmp word [es:si+MX_KB], 0
+    je .bmn
+    test byte [es:si+MX_FL], MX_FPIN | MX_FDMA
+    jnz .bmn                        ; (another door's block, pinned or not, is
+    cmp [es:si+MX_OFF], bp          ; where it belongs)
+    jb .bpack
+.bmn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bmov
+    jmp .take                       ; (AX = the head: MX_AUX)
+.bpack:
+    mov byte [mega_cpry], 1
+    mov ax, [mega_mxflr]
+    call MEGA_SEL_CODE:mx_packupf   ; (CX and DI kept, as .norun's)
+    jmp .bot
+
 ; mx_shed - for mx_alloc's two refusals: the cheapest purgeable cache above
 ; 1MB that the claimant outranks goes (mx_shedf, `.cold`, mem_shed_one's rule
 ; for the pool). BL = the claimant's owner; for MX_KOWN, BH = its level (a
@@ -11519,6 +11590,7 @@ mx_compactf:
     mov bp, ax
     jmp short .next
 .mov:
+    call mx_dmafit                  ; (a DMA door's head kept page-safe)
     cmp cx, bp
     je .stay
     push bx
@@ -11901,6 +11973,40 @@ mx_canmove:
     test byte [es:di+MX_FL], MX_FPIN
     ret                             ; (ZF = 1: not pinned)
 
+; mx_dmafit - for both compactions: DI = a movable entry (ES the tail), CX =
+; where it is, BP = where the pass would put it -> BP moved TOWARD CX until a
+; DMA door's head (MX_FDMA, MX_AUX KB, KERN-MEGA-PLAN 14.160) lies inside one
+; 64KB page - up to the next page's floor when the block goes down, down to
+; end the head on its page's floor when it goes up - and BP = CX, no move,
+; when that would carry it to or past where it is: SPEC.md 66.4.2's bump, in
+; KB from the pool's base (1MB, a page edge). Any other block: BP as it was.
+; Clobbers AX
+mx_dmafit:
+    test byte [es:di+MX_FL], MX_FDMA
+    jz .o
+    mov ax, bp
+    and ax, 63
+    add ax, [es:di+MX_AUX]
+    cmp ax, 64
+    jbe .o                          ; the head fits where it goes
+    cmp bp, cx
+    ja .up
+    add bp, 64                      ; GOING DOWN: the next page's floor
+    and bp, ~63
+    cmp bp, cx
+    jb .o
+    jmp short .st
+.up:                                ; GOING UP: the head's end on the floor
+    add bp, [es:di+MX_AUX]          ; of the page it would cross
+    and bp, ~63
+    sub bp, [es:di+MX_AUX]
+    cmp bp, cx
+    ja .o
+.st:
+    mov bp, cx                      ; ...or it stays where it is
+.o:
+    ret
+
 ; mx_packupf - FAR (OSAPI_MEM_REGROW's last try, KERN-MEGA-PLAN 14.49): AX =
 ; a floor, KB from the pool base. Every MOVABLE block at or above it slides
 ; UP, packed against the pool's top or the pinned block above it - the
@@ -11951,8 +12057,12 @@ mx_packupf:
     push bx
     push dx
     push bp
-    mov bp, ax                      ; (above CX: the jbe)
+    mov bp, ax
+    call mx_dmafit                  ; (a DMA door's head kept page-safe:
+    cmp bp, cx                      ; it may end where it is)
+    je .same
     call mx_cpmove                  ; DI's block from CX up to BP
+.same:
     pop bp
     pop dx
     pop bx
@@ -12150,11 +12260,32 @@ section .cold                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
 ;      lives in the block's MX_SEL (OSAPI_XMEM_SEL's word), so mx_free and the
 ;      instance's teardown (mx_relinst) give it back with the block. AX and
 ;      every other register kept
+; mega_claimdf - FAR (osapi_mem_p, a head | MEMP_DMAPOOL - the withdrawn KB
+; DMA doors' answer, restored by kernel size pass 19's megacmp after C1 and
+; wave C had taken it, `.cold`): the same for a claim with a HEAD, CX = its
+; KB (1..64; KERN-MEGA-PLAN 14.160):
+; for an OS88_HIGHMEM PACKAGE only - never a driver, whose own 8237 or bus
+; master code may not take a selector's base - a pool block whose first CX KB
+; lie inside one 64KB physical page (the pool is all below 16MB, mega_layoutf,
+; so the 8237's 24 bits reach all of it), BORN PINNED (MX_FPIN) as a
+; conventional claim is born MC_RLOC 0, with MX_FDMA and the head in MX_AUX
+; so a compaction keeps it page-safe once OSAPI_MEM_MOVABLE has unpinned it
+; (mega_dmamovf, mx_dmafit). CF = 1 not taken: the door goes conventional
+mega_claimdf:
+    push ax
+    push bx
+    push cx
+    push si
+    cmp cx, 64
+    jbe mega_claimhf.chk
+    jmp short mega_claimhf.no
 mega_claimhf:
     push ax
     push bx
     push cx
     push si
+    xor cx, cx                      ; no head
+.chk:
     cmp byte [mega_on], 0
     je .no
     or ax, ax
@@ -12164,9 +12295,14 @@ mega_claimhf:
     call MEGA_SEL_CODE:mega_ownerf               ; BL = the owner: 0A0h | slot for an
     jc .no                          ; OS88_HIGHMEM package, 0C0h | row for an
                                     ; OS88_DRV_HICLAIM driver
+    jcxz .any
+    cmp bl, 0xC0                    ; a head: a package's, never a driver's
+    jae .no
+.any:
     mov si, ax                      ; SI = KB
     call mega_kbc                   ; DX:AX = bytes
     inc byte [sch_lock]             ; the base is aimed before any other
+    call mega_dmahset               ; (the head for mx_alloc, under the lock)
     call MEGA_SEL_CODE:mx_allocf    ; task can compact it away (14.37)
     jc .nol                         ; DX:AX = the block's base
     mov cx, si
@@ -12196,6 +12332,41 @@ mega_claimhf:
     pop bx
     pop ax
     clc
+    retf
+
+; mega_dmahset - CL = a DMA claim's head KB (0 none) into mx_dmah, the
+; tables' tail's byte mx_alloc reads and clears: under [sch_lock], so no other
+; task's claim sees it. Clobbers nothing
+mega_dmahset:
+    push es
+    MXT_ES
+    mov [es:mx_dmah], cl
+    pop es
+    ret
+
+; mega_dmamovf - FAR (osapi_mem_movable, `.cold`): DX = a pool selector, AX =
+; a relocation proc or 0, ES = the caller -> CF = 0 its claim is a DMA door's
+; (MX_FDMA) and is now unpinned (AX not 0: the compactor may move it, keeping
+; its head page-safe, and the proc is never called - the selector is what
+; the package holds, and it does not change) or pinned again (AX = 0); CF = 1
+; anything else, nothing changed. Every register kept
+mega_dmamovf:
+    push bx
+    push si
+    push es
+    call mega_claimfind             ; SI = its entry, ES the tail
+    jc .o
+    test byte [es:si+MX_FL], MX_FDMA
+    stc
+    jz .o
+    and byte [es:si+MX_FL], ~MX_FPIN
+    or ax, ax
+    jnz .o                          ; (CF = 0: the or)
+    or byte [es:si+MX_FL], MX_FPIN  ; (CF = 0: the or)
+.o:
+    pop es
+    pop si
+    pop bx
     retf
 
 ; mega_bfpcf - FAR (osapi_mem_movable, `.cold`): DX = a pool selector, ES =
@@ -12381,6 +12552,12 @@ mega_claimregrowf:
 .grow:
     call .hroom                     ; the KB above it free: grown in place
     jnc .ogrow                      ; (KERN-MEGA-PLAN 14.49)
+    xor cx, cx                      ; A DMA DOOR'S claim keeps its head in a
+    test byte [es:si+MX_FL], MX_FDMA ; new block too, born pinned again
+    jz .gh                          ; (14.160; SPEC.md 50.3's MC_DMA rule)
+    mov cl, [es:si+MX_AUX]
+.gh:
+    call mega_dmahset
     mov ax, bp
     call mega_kbc                   ; DX:AX = the new size in bytes
     call MEGA_SEL_CODE:mx_allocf                   ; DX:AX = the new block's base
