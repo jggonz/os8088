@@ -439,7 +439,6 @@ mc_adapter:
     push cx
     push dx
     mov bx, [mc_win]                ; ONE QUESTION FOR BOTH FACTS, and it is
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; about OUR WINDOW'S DISPLAY: AX = the
     mov [mc_caps], ax               ; Mode X mask, DL = that display's VID_*
                                     ; kind, which is also how deep it is.
@@ -1436,7 +1435,6 @@ mc_dispck:
     mov bx, [mc_win]
     or bx, bx
     jz .out
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the mask, DL = that display's kind
     cmp ax, [mc_caps]
     je .out                         ; the same display, or one that answers

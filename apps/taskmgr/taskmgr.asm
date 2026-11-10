@@ -740,13 +740,11 @@ TM_NCK      equ TM_SHOWN + 1    ; ...so tm_rowck holds one more row than that
                                 ; the worker, which is what makes [es:bx+W_*]
                                 ; legal below
 
-%macro TM_SYS_SNAPSHOT 0            ; in ES:DI = a SYS_SNAPSHOT_SIZE buffer;
-    mov cx, INST_MAX                ; clobbers AX, BX, DX, CX (the records written)
+%macro TM_SYS_SNAPSHOT 0            ; in ES:DI = a SYS_SNAPSHOT_SIZE buffer
     call OSAPI_SYS_SNAPSHOT
 %endmacro
 
-%macro TM_CLAIM_SNAPSHOT 0          ; in ES:DI = a CLAIM_SNAPSHOT_SIZE buffer;
-    mov cx, MEM_MAX                 ; clobbers CX (the records written)
+%macro TM_CLAIM_SNAPSHOT 0          ; in ES:DI = a CLAIM_SNAPSHOT_SIZE buffer
     call OSAPI_CLAIM_SNAPSHOT
 %endmacro
 

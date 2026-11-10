@@ -156,7 +156,6 @@ n_exclusive:
     jmp .release
 .mode:
     mov bx, [n_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov byte [n_cga], 0
     mov al, FSXM_MODEX

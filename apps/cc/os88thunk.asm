@@ -1093,7 +1093,6 @@ _os88_fsx_caps:
     push bp
     mov bp, sp
     mov bx, [bp+4]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov bx, [bp+6]                  ; the mask is the RETURN value, so DL is
     mov dh, 0                       ; widened into the out-parameter and AX is
@@ -2129,11 +2128,9 @@ CC_GATE _os88_mem_claim
 _os88_mem_claim:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    mov cl, 6                       ; KB -> paragraphs: the KB doors went
-    shl ax, cl                      ; at the flag day (kernel size pass 19)
-    xor cx, cx                      ; no head
-    mov bl, MEMP_CLAIM              ; (the DISK class, as the KB door was)
-    call OSAPI_MEM_P
+    mov bl, MEMP_KB                 ; the KB arm: no head, the DISK class (the
+    call OSAPI_MEM_P                ; KB doors went at the flag day, SPEC.md
+                                    ; 50.3.7.1)
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
@@ -2192,10 +2189,8 @@ _os88_mem_huge_ask:
     xor ax, ax                      ; AX = 0: ask
     call OSAPI_MEM_HUGE
     jnc .r
-    mov bl, MEMP_AVAIL              ; no ask: the heap's largest run
+    mov bl, MEMP_KB + MEMP_AVAIL    ; no ask: the heap's largest run, in KB
     call OSAPI_MEM_P
-    mov cl, 6                       ; ...in KB
-    shr ax, cl
 .r:
     ret
 %endif
@@ -2324,9 +2319,7 @@ _os88_mem_regrow:
     mov bp, sp
     mov dx, [bp+4]
     mov ax, [bp+6]
-    mov cl, 6                       ; KB -> paragraphs
-    shl ax, cl
-    mov bl, MEMP_REGROW
+    mov bl, MEMP_KB + MEMP_REGROW   ; in KB, the KB arm
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
@@ -2412,11 +2405,8 @@ cc_avail:                           ; out AX = largest KB, BX = total KB
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     jnc .r
-    mov bl, MEMP_AVAIL
+    mov bl, MEMP_KB + MEMP_AVAIL    ; in KB, rounded down: the KB arm
     call OSAPI_MEM_P
-    mov cl, 6                       ; paragraphs -> KB, rounded down
-    shr ax, cl
-    shr bx, cl
 .r:
     ret
 %endif

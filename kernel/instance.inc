@@ -2267,20 +2267,12 @@ inst_launch_post:
 ;                        instance table, in
 ;                  ONE cli window (SPEC.md 20.9/28.2)
 ;
-; in:  ES:DI = a buffer the caller owns: the SS_* header and CX >= 1
-;      instance records of SSI_RECSZ after it (SYS_SNAPSHOT_SIZE holds
-;      INST_MAX, the SDK's)
-; out: CX = the instance records written, min(CX, this kernel's INST_MAX);
-;      the buffer filled that far and no further; DI unchanged
-; clobbers: AX, BX, DX and the flags
+; in:  ES:DI = a SYS_SNAPSHOT_SIZE buffer the caller owns
+; out: BX = INST_MAX; the buffer filled; DI unchanged
+; clobbers: AX, BX (the output) and the flags
 ;
-; BOUNDED BY THE CALLER (SPEC.md 20.9, ABI-BREAK-LIST R2, kernel size pass
-; 19). It filled to the KERNEL's own INST_MAX into a buffer the package had
-; sized from the SDK's, so a kernel with more instances than the SDK the
-; package was built against wrote past the package's buffer silently: the
-; safety was over-allocation. Now the capacity is an input and the count an
-; output, and the AX/BX answers (MAX_TASKS, INST_MAX) went - the count is
-; the one a walk needs, and SS_NTASK/SS_NINST still carry the kernel's own.
+; The AX = MAX_TASKS answer was withdrawn at kernel size pass 19 (nogrow):
+; nothing read it, and SS_NTASK carries the same figure. -3 bytes.
 ;
 ; This is the whole of what a task monitor cannot get any other way, and it
 ; is ONE call rather than two on purpose. task_exit frees an instance record
@@ -2328,14 +2320,11 @@ section .cold                   ; COLD (SPEC.md 2.6, 29.9.1): 236 bytes of the
                                 ; to COLD_SEG and a four-byte trampoline in
                                 ; memory.inc to receive it
 osapi_sys_snapshot_x:
-    push si
+    push cx                     ; (no DX: nothing below writes it - not even
+    push si                     ; mem_owned_kb, which banks its own)
     push di                     ; (no BP: the RCSLOT cell's own `push bp` /
                                 ; api_rsc's `pop bp` bank it round this body)
-    mov dx, INST_MAX            ; THE CALLER'S CAPACITY BOUNDS IT (R2): DX =
-    cmp cx, dx                  ; the fewer of its CX and this kernel's
-    jae .cap                    ; INST_MAX, the records to write, for life
-    mov dx, cx                  ; (DX is spent: the contract's clobbers)
-.cap:
+
     mov bp, di                  ; BP = the buffer base, for life
 
     pushf
@@ -2391,18 +2380,13 @@ osapi_sys_snapshot_x:
     ; inside the cli window this routine exists to keep short.
     ;
     ; DS:SI is the kernel's own table and ES:DI the caller's buffer, both
-    ; already positioned; `cld` is done above. DL is the fewer of the
-    ; caller's capacity and this kernel's INST_MAX (R2), so a kern_small
-    ; snapshot fills six records and answers CX = 6, and no kernel writes
-    ; past the records the caller said it has room for.
+    ; already positioned; `cld` is done above. INST_MAX is the KERNEL's, which
+    ; is what SS_NINST reports and what the SDK's own (always 12) over-sizes
+    ; the buffer against - so a kern_small snapshot fills six records and says
+    ; six, exactly as the per-record loop did.
     mov si, inst_tab
     lea di, [bp+SS_INST]
-%if I_RECSZ / 2 > 255 || INST_MAX * I_RECSZ / 2 > 255
-  %error "the instance copy's word count is a byte multiply"
-%endif
-    mov al, I_RECSZ / 2         ; DL records of I_RECSZ/2 words: a BYTE
-    mul dl                      ; multiply, which leaves DX alone
-    xchg ax, cx
+    mov cx, INST_MAX * I_RECSZ / 2
     rep movsw
     popf
 
@@ -2426,12 +2410,13 @@ osapi_sys_snapshot_x:
     mov [es:di+SSI_KB], ax
     add di, SSI_RECSZ
     inc si
-    cmp si, dx                  ; the records WRITTEN, no further (CX >= 1,
-    jb .claim                   ; so the first pass is always one of them)
+    cmp si, INST_MAX
+    jb .claim
 
-    mov cx, dx                  ; out CX = the records written
+    mov bx, INST_MAX
     pop di
     pop si
+    pop cx
     retf                        ; FAR: the `.text` thunk is the only entry and
                                 ; far-calls (SPEC.md 2.6.1 - the body owns the
                                 ; return and there is no thunk in between)

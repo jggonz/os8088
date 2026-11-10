@@ -1847,7 +1847,6 @@ dvw_fsmain:
     push di
     push es
     mov bx, [dos_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; the DISPLAY's kind (dos_fsx's reason)
     mov [con_tkind], dl
     push ds
@@ -2032,7 +2031,7 @@ dvw_cpace:
 ; segment's word alone - MartyPC's lone Hercules decodes B800 onto B000, and a
 ; capture there would read the desktop's pixels and let the program write
 ; them), and the desktop must not be EXTENDED onto that card (OSAPI_FSX_CAPS
-; with CH = 2 asks about display 1, and CF = 1 is "there is none", SPEC.md
+; with BX = 2 asks about display 1, and CF = 1 is "there is none", SPEC.md
 ; 53.1.2) - in Extend, that RAM is the second monitor's desktop.
 ; -----------------------------------------------------------------------------
 dvw_cdetect:
@@ -2050,10 +2049,8 @@ dvw_cdetect:
     xchg si, cx                     ; under the rest, the mono card's
 .cand:
     mov byte [PS dvw_chp], 0
-    push cx                         ; (CX is the other segment)
-    mov ch, 2                       ; display 1 (R12)
+    mov bx, 2
     call OSAPI_FSX_CAPS             ; CF = 0: a second display IS desktop
-    pop cx                          ; (`pop` writes no flag)
     jnc .no
 .try:
     mov ds, cx                      ; the OTHER segment's word, which a
@@ -2138,7 +2135,7 @@ dvw_ccheck:
     push bx
     push cx
     push dx
-    mov ch, 2                       ; display 1 (R12)
+    mov bx, 2
     call OSAPI_FSX_CAPS             ; CF = 0: a second display IS desktop
     jnc .lost
     call OSAPI_VIDEO                ; DL = the primary's kind

@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c1856dfa99aa7f508b69ab13815ec498bb15fc8ba46b17f078ed12fc05850c77",
+  "fingerprint": "7fbe4cf0f313a3fea9ebc6c65b32e21d41a24743f06b41f6824a510d70fb7fcf",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "a30d12c8964bda78ff48da7f3499de7ed615c6036e21ba1c80b24a22e3ab0e21",
+  "fingerprint": "389b2781880f70fb628234212b4ad79e29cfb0cbd6c3c8a9060f94ab9f1ee5c2",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2119,6 +2119,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of class (R14, K17-2) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "389b2781880f70fb628234212b4ad79e29cfb0cbd6c3c8a9060f94ab9f1ee5c2",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "7fbe4cf0f313a3fea9ebc6c65b32e21d41a24743f06b41f6824a510d70fb7fcf",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
    "to": 14
   }
  ]

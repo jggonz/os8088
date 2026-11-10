@@ -1694,8 +1694,11 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; OS88KB_BODIES - A PACKAGE'S KB-COUNTED CLAIMS, OVER OSAPI_MEM_P (SPEC.md
 ; 50.3.7.1). NOT AN API: nothing here is a kernel cell. It is the six KB doors
 ; the flag day withdrew written ONCE PER PACKAGE as near procs over the one
-; paragraph cell, for a package whose sizes are KB counts and whose call sites
-; were written against those doors' registers. The MEMKB_* macros name an
+; cell's KB ARM (MEMP_KB: the doors' registers, kept by the kernel once
+; rather than by every package - kernel size pass 19, nogrow), for a package
+; whose sizes are KB counts and whose call sites were written against those
+; doors' registers. Each entry is BL and a jump: 5 bytes, and 7 for the
+; shared tail, 8 for memkb_avail. The MEMKB_* macros name an
 ; entry and set a flag, and OS88_IMAGE_END invokes this, which assembles only
 ; the entries the package named - so a package that never claims in KB
 ; carries none of it. An assembly with no OS88_IMAGE_END (a part) invokes it
@@ -1706,12 +1709,12 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; THE CONTRACTS ARE THE WITHDRAWN DOORS', register for register: every
 ; register is kept but DX (the claim's base, or garbage on CF=1), AX still
 ; holds the KB asked for, and memkb_avail answers AX/BX in KB rounded down
-; (the paragraph answer shifted, exactly as the kernel's own KB arm did).
+; (the paragraph answer shifted, by the kernel's KB arm).
 ; Every claim is the DISK class (SPEC.md 50.2.1.1) - what the KB doors gave -
 ; so a site that is CPU-only and wants the finer granule calls OSAPI_MEM_P
-; itself with MEMP_CPU. A DMA entry with no head (CX = 0) asks MEMP_CONV, as
-; the KB DMA doors' "no page" claim stayed conventional on kern_mega; one WITH
-; a head is OSAPI_MEM_P's, which keeps a head conventional on every package.
+; itself with MEMP_CPU. A DMA entry (MEMP_KBH) is conventional on kern_mega
+; with a head or without one (CX = 0), as the KB DMA doors' "no page" claim
+; was and as OSAPI_MEM_P keeps a head on every package.
 ; -----------------------------------------------------------------------------
 %macro OS88KB_BODIES 0
 %ifndef OS88KB__DONE              ; once: a package whose last bytes must
@@ -1720,76 +1723,54 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
                                    ; after its last MEMKB_* site
 %ifdef MEMKB__AVAIL
 memkb_avail:                    ; out AX = the largest claim you can have, BX
-    push cx                     ; = the total, in KB (rounded down: a claim
-    mov bl, MEMP_AVAIL          ; of the answer always fits); CX kept
-    call OSAPI_MEM_P
-    mov cl, 6
-    shr ax, cl
-    shr bx, cl
-    pop cx
-    ret
+    mov bl, MEMP_KB + MEMP_AVAIL ; = the total, in KB (rounded down: a claim
+    call OSAPI_MEM_P            ; of the answer always fits); CX kept - the
+    ret                         ; kernel's KB arm (SPEC.md 50.3.7.1)
 %endif
-
+; The claim entries share one tail: each sets BL and jumps to it, the last
+; one assembled falls into it. The kernel's KB arm keeps AX and CX; BX is
+; the body's to keep, since BL carries the verb.
 %ifdef MEMKB__HI
 memkb_claim_hi:                 ; AX = KB -> CF=0 DX = the base, from the TOP
     push bx
-    mov bl, MEMP_CLAIM_HI
-    jmp short memkb_go
+    mov bl, MEMP_KB + MEMP_CLAIM_HI
+  %if %isdef(MEMKB__REGROW) || %isdef(MEMKB__DMAHI) || %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
+    jmp short memkb_t
+  %endif
 %endif
 %ifdef MEMKB__REGROW
 memkb_regrow:                   ; DX = your claim, AX = the KB it should be
     push bx                     ; -> CF=0 DX = its base now (it may move)
-    mov bl, MEMP_REGROW
-    jmp short memkb_go
+    mov bl, MEMP_KB + MEMP_REGROW
+  %if %isdef(MEMKB__DMAHI) || %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
+    jmp short memkb_t
+  %endif
 %endif
 %ifdef MEMKB__DMAHI
 memkb_dma_hi:                   ; ...and the DMA pair: CX = the KB of the
-    push bx                     ; HEAD that must sit inside one 64KB page
-    mov bl, MEMP_CLAIM_HI
-    %ifdef MEMKB__DMA
-    jmp short memkb_d
-    %endif
+    push bx                     ; HEAD that must sit inside one 64KB page (0:
+    mov bl, MEMP_KB + MEMP_KBH + MEMP_CLAIM_HI ; none), conventional on kern_mega
+  %if %isdef(MEMKB__DMA) || %isdef(MEMKB__CLAIM)
+    jmp short memkb_t
+  %endif
 %endif
 %ifdef MEMKB__DMA
 memkb_dma:
     push bx
-    mov bl, MEMP_CLAIM
+    mov bl, MEMP_KB + MEMP_KBH
+  %ifdef MEMKB__CLAIM
+    jmp short memkb_t
+  %endif
 %endif
-%if %isdef(MEMKB__DMA) || %isdef(MEMKB__DMAHI)
-memkb_d:
-    push cx
-    push ax
-    mov dx, cx                  ; DX = the head's KB (DX is the answer's, so
-    mov cl, 6                   ; it is ours to spend)
-    shl ax, cl                  ; AX = paragraphs
-    shl dx, cl                  ; DX = the head's
-    jnz %%head
-    mov dh, MEMP_CONV >> 8      ; no head: conventional, as the DMA doors were
-%%head:
-    mov cx, dx
-    %if %isdef(MEMKB__CLAIM) || %isdef(MEMKB__HI) || %isdef(MEMKB__REGROW)
-    jmp short memkb_call
-    %endif
-%endif
-%if %isdef(MEMKB__CLAIM) || %isdef(MEMKB__HI) || %isdef(MEMKB__REGROW)
-    %ifdef MEMKB__CLAIM
+%ifdef MEMKB__CLAIM
 memkb_claim:                    ; AX = KB -> CF=0 DX = the base
     push bx
-    mov bl, MEMP_CLAIM
-    %endif
-memkb_go:
-    push cx
-    push ax
-    mov cl, 6
-    shl ax, cl                  ; AX = paragraphs
-    xor cx, cx                  ; no head (a regrow reads none)
+    mov bl, MEMP_KB
 %endif
 %if %isdef(MEMKB__CLAIM) || %isdef(MEMKB__HI) || %isdef(MEMKB__REGROW) || %isdef(MEMKB__DMA) || %isdef(MEMKB__DMAHI)
-memkb_call:
-    call OSAPI_MEM_P            ; AX = the paragraphs granted: not the KB
-    pop ax                      ; door's answer, so the KB goes back
-    pop cx
-    pop bx
+memkb_t:
+    call OSAPI_MEM_P            ; the kernel's KB arm: AX, CX kept, DX the
+    pop bx                      ; answer
     ret
 %endif
 
@@ -2586,6 +2567,13 @@ MEMP_KPARTS   equ 6              ; -> AX = the kernel's resident FAT window,
                                  ; BX = its background task stacks, CX = task
                                  ; 0's stack, in BYTES: the three fixed parts
                                  ; OSAPI_SYS_KB reports in whole KB
+MEMP_KB       equ 8              ; + a verb: THE KB DOORS' REGISTERS, which
+                                 ; is what the MEMKB_* bodies call (SPEC.md
+                                 ; 50.3.7.1): AX in KB and KEPT, every register
+                                 ; kept but DX and BL; a claim reads no head.
+                                 ; + MEMP_AVAIL: AX/BX in KB, CX kept
+MEMP_KBH      equ 0x80           ; + MEMP_KB on a claim: CX = a DMA head in KB
+                                 ; (0 = none), conventional on kern_mega
 MEMP_CONV     equ 0x8000         ; CX for a claim verb: NO head, and stay
                                  ; CONVENTIONAL on kern_mega - a block that is
                                  ; or will be a CS, or one a real-mode path
@@ -2889,11 +2877,8 @@ FSKP_DONE   equ 7
 ; but note what they cost: SYS_SNAPSHOT runs with interrupts off for the length
 ; a table copy, so it is a twice-a-second call, not a per-frame one.
 %define OSAPI_SYS_SNAPSHOT      KERNEL_SEG:0x01E1   ; ES:DI = a SYS_SNAPSHOT_SIZE
-                                 ; buffer, CX >= 1 = the instance records it
-                                 ; holds (INST_MAX); out CX = the records
-                                 ; written, min(CX, the kernel's count) - THE
-                                 ; WALK'S BOUND. Clobbers AX, BX, DX.
-                                 ; The scheduler header (SS_*) then CX
+                                 ; buffer; out BX = INST_MAX, AX clobbered.
+                                 ; The scheduler header (SS_*) then INST_MAX
                                  ; records of SSI_RECSZ (SSI_*), all inside ONE
                                  ; cli window - which is the point: an instance
                                  ; record is freed atomically with its task
@@ -2901,9 +2886,8 @@ FSKP_DONE   equ 7
                                  ; together or a cycle diff lands on the wrong
                                  ; row
 %define OSAPI_CLAIM_SNAPSHOT    KERNEL_SEG:0x01E7   ; ES:DI = a CLAIM_SNAPSHOT_SIZE
-                                 ; buffer, CX >= 1 = the records it holds
-                                 ; (MEM_MAX); out CX = the records written,
-                                 ; min(CX, the kernel's count). Records of
+                                 ; buffer; every register kept. The kernel's
+                                 ; MEM_MAX records (16 on kern_small) of
                                  ; CLS_RECSZ: base segment (0 = a free record),
                                  ; paragraphs, owner word (SPEC.md 50.2)
 %define OSAPI_SYS_KB        KERNEL_SEG:0x01ED   ; ES:DI = a SYSKB_SIZE buffer;
@@ -2927,9 +2911,8 @@ FSKP_DONE   equ 7
 SS_TICKS   equ 0                ; word: the tick counter at the snapshot
 SS_CUR     equ 2                ; byte: the running task slot
 SS_COOP    equ 3                ; byte: 0 pre-emptive, 1 cooperative
-SS_NTASK   equ 4                ; byte: the KERNEL's MAX_TASKS
-SS_NINST   equ 5                ; byte: the KERNEL's INST_MAX (CX out is the
-                                ; records written, which may be fewer)
+SS_NTASK   equ 4                ; byte: MAX_TASKS
+SS_NINST   equ 5                ; byte: INST_MAX, likewise BX
 SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
                                 ; ONE VALUE THAT IS THE SNAPSHOT'S OWN: 3 is
                                 ; the idle task (SPEC.md 8.1.2, 28.7), which
@@ -5542,11 +5525,9 @@ OS88_BSS_SIZE equ 0
 
 ; --- fullscreen exclusive (SPEC.md 53) ---------------------------------------
 
-%define OSAPI_FSX_CAPS      KERNEL_SEG:0x0200   ; in CH = 0 and BX = the
-                                                ; window to ask ABOUT (0 =
-                                                ; whatever is frontmost),
-                                                ; or CH = n: display n-1,
-                                                ; BX not read; out AX =
+%define OSAPI_FSX_CAPS      KERNEL_SEG:0x0200   ; in BX = the window to ask
+                                                ; ABOUT (0 = whatever is
+                                                ; frontmost); out AX =
                                                 ; bitmask (bit n = FSXM id n
                                                 ; settable on the display
                                                 ; that window is on), DL =
@@ -5571,18 +5552,14 @@ OS88_BSS_SIZE equ 0
                                                 ; yours does not exist yet.
                                                 ; SPEC.md 39.18.2.
                                                 ;
-                                                ; CH = n ASKS ABOUT A
-                                                ; DISPLAY instead - n-1 -
+                                                ; BX = 1..15 ASKS ABOUT A
+                                                ; DISPLAY instead - BX-1 -
                                                 ; and CF=1 is "no such
-                                                ; display": walk CH = 1, 2,
+                                                ; display": walk BX = 1, 2,
                                                 ; ... to find the one that
                                                 ; can, then OSAPI_FSX_RUN
-                                                ; with the same CH (SPEC.md
-                                                ; 53.1.2). CH = 0 is NOT
-                                                ; optional: it was BX = 1..15
-                                                ; until kernel size pass 19
-                                                ; (R12), so set CH to ask
-                                                ; about a window.
+                                                ; with CH = BX (SPEC.md
+                                                ; 53.1.2).
 
 %define OSAPI_FSX_RUN       KERNEL_SEG:0x0206   ; the bracket (SPEC.md 53.1).
                                                 ; In AX = a near proc in your

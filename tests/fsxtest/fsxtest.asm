@@ -40,7 +40,6 @@ FX_CONT_H equ 59
 fx_entry:
     push si
     xor bx, bx                      ; no window yet, so the frontmost - which
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; on a one-display machine is every
     mov [fx_caps], ax               ; window there is. AX = mask, DL = the
     mov [fx_kind], dl               ; answering display's kind (39.18.2)

@@ -70,7 +70,6 @@ xb_fullscreen:
     jmp .release
 .mode:
     mov bx, [xb_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov byte [xb_cga], 0
     mov byte [xb_herc], 0

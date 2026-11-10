@@ -152,8 +152,8 @@ mo_snap:
     push ds
     pop es
     mov di, mo_snbuf
+    call OSAPI_CLAIM_SNAPSHOT       ; MEM_MAX records (kern_mega's 32)
     mov cx, MEM_MAX
-    call OSAPI_CLAIM_SNAPSHOT       ; CX = the records written
     mov di, mo_snbuf
 .l:
     cmp word [di+CLS_SEG], 0

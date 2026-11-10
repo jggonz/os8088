@@ -2823,7 +2823,6 @@ dos_fsx_main:
                                     ; window's: a headless run starts clean
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     mov bx, [dos_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; DL = the DISPLAY's own kind, which
     mov [con_tkind], dl             ; osapi_video cannot answer for a window
     mov ax, [dos_fsi + FSI_SEG]     ; that is not on the primary (53.7.1)

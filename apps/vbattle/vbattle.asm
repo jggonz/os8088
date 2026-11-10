@@ -802,7 +802,6 @@ vb_door:
     add word [vb_rkeep], VB_REGKB   ; there, again here, and refused here
 .lo:                                ; too the bracket copies it: its room
     mov bx, [vb_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov [vb_capm], ax
     mov [vb_vid], dl
@@ -1980,7 +1979,6 @@ vb_load:
     mov ax, [vb_np0]
     mov [vb_namep], ax
     mov bx, [vb_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov si, [vb_npv]
     cmp dl, VID_VGA

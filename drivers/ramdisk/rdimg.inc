@@ -96,11 +96,9 @@ rd_kb_max:
     push ax
     push cx
     push dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P            ; AX = the largest free RUN in PARAGRAPHS
-    mov cl, 6                   ; ...in KB (CX is banked above)
-    shr ax, cl
-    mov bx, ax
+    mov bl, MEMP_KB + MEMP_AVAIL
+    call OSAPI_MEM_P            ; AX = the largest free RUN in KB (the KB arm,
+    mov bx, ax                  ; SPEC.md 50.3.7.1)
     cmp byte [rd_loc], RDL_XMS
     jne .conv
     cmp bx, RD_TABMAXKB + RD_EXTMAXKB   ; **A GATE, NOT A CAP** (SPEC.md

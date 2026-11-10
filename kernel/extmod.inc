@@ -354,8 +354,7 @@ ext_e_fsx:
     retf
 
 ; EXTF_CAPS - fsx_caps' second-display half (SPEC.md 53.8, 39.18.2)
-; in:  CH = n display n-1, else (CH = 0) BX = the window to ask ABOUT, or 0
-;      for the frontmost; DL = [vid_kind]
+; in:  BX = the window to ask ABOUT, or 0 for the frontmost; DL = [vid_kind]
 ; out: DL = the kind of the display that window is on; everything else kept
 ;
 ; ONE DISPLAY covers a mode-setting bracket too, which is what collapsed the
@@ -366,16 +365,16 @@ ext_e_fsx:
 ; frontmost, and the primary if nothing is visible at all.
 .caps:
     push bx
-    mov al, ch                  ; CH = n IS A DISPLAY, n-1 (SPEC.md 53.1.2,
-    dec ax                      ; R12): fsx_caps has already refused one past
-    or ch, ch                   ; [vid_ndisp]
-    jnz .kind
     or bx, bx
     jnz .win
     call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
     or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
 .win:
+    mov al, bl                  ; BX = 1..15 IS A DISPLAY, BX-1 (SPEC.md
+    dec ax                      ; 53.1.2): fsx_caps has already refused one
+    or bh, bh                   ; past [vid_ndisp], and no window pointer is
+    jz .kind                    ; below 256 (fsx_caps' own test)
                                 ; (NOT ext_wctx: that needs DI banked
     EXK wm_disp_of              ; round it, and this is the one entry a
 .kind:

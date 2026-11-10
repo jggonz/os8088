@@ -3101,8 +3101,8 @@ apic_wm_top:                       ; EXTD.DRV's and DOCK.DRV's door (SPEC.md 39.
     OSAPI_IEND
     OSAPI_RSLOT fsx_caps           ; 0x0200 - fullscreen exclusive (SPEC.md
                                   ;          53): AX = the FSXM bitmask the
-                                  ;          display of window BX (CH = 0) or
-                                  ;          display CH-1 can set, DL = its kind.
+                                  ;          display of window BX (BX = 1..15:
+                                  ;          display BX-1) can set, DL = its kind.
                                   ;          Any context - it is how an app
                                   ;          greys its mode menu (SPEC.md 47)
     OSAPI_RXCELL fsx_run       ; 0x0206 - the bracket (SPEC.md 53.1): AX =

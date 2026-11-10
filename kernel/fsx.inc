@@ -111,12 +111,9 @@ FSIF_BANKED equ 4
 ; -----------------------------------------------------------------------------
 ; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x022F)
 ;
-; in:       CH = 0 and BX = the window to ask ABOUT, or 0 for "whatever is
-;           frontmost"; or CH = n, display n-1 (BX not read) - ONE display
-;           register, OSAPI_FSX_RUN's (ABI-BREAK-LIST R12, kernel size pass
-;           19: it was BX = 1..15, an overload of the window pointer)
+; in:       BX = the window to ask ABOUT, or 0 for "whatever is frontmost"
 ; out:      AX = bitmask (bit n = FSXM id n settable), DL = the answering
-;           display's VID_* kind; CF=0. CF=1: no display CH-1
+;           display's VID_* kind; CF=0
 ; clobbers: nothing else. Any context, lock held or not (the osapi_video
 ;           precedent) - an app greys its mode menu with this per SPEC.md 47,
 ;           and fsx_mode refuses with the same bit, one predicate for both.
@@ -132,16 +129,20 @@ FSIF_BANKED equ 4
 fsx_caps:
     push bx
 %ifdef KERN_BIG
-    cmp [vid_ndisp], ch         ; CH = n ASKS ABOUT DISPLAY n-1 (SPEC.md
-    jb .out                     ; 53.1.2), and CF = 1 is "n-1 is past the last
-                                ; one": the refusal's own carry, out through
-                                ; the one `pop bx`. CH = 0 (BX's window)
-                                ; compares below nothing and asks
+    or bh, bh                   ; BX = 1..15 ASKS ABOUT DISPLAY BX-1 (SPEC.md
+    jnz .ask                    ; 53.1.2) - no window pointer is below 256, so
+                                ; BH = 0 is the test (a byte against `cmp bx,
+                                ; 16`, kernel size pass 19) -
+    cmp [vid_ndisp], bl         ; and CF = 1 is "BX-1 is past the last one":
+    jb .out                     ; the refusal's own carry, out through the one
+                                ; `pop bx`. BX = 0 (the frontmost) compares
+                                ; below nothing and asks
 %else
-    mov al, 1                   ; ONE display: CH = 1 is the primary, which
-    cmp al, ch                  ; this answers whatever BX is, and CH >= 2 a
-    jb .out                     ; display there is not (SPEC.md 53.1.2) -
+    lea ax, [bx-2]              ; ONE display: BX = 1 is the primary, which
+    cmp ax, 14                  ; this answers whatever BX is, and 2..15 are
+    jb .out                     ; displays there are not (SPEC.md 53.1.2) -
 %endif                          ; CF = 1, the refusal, out through the `pop`
+.ask:
     mov dl, [vid_kind]
 %ifdef KERN_BIG                 ; ...of the display the ASKED-ABOUT window is
                                 ; on (SPEC.md 39.18.1)

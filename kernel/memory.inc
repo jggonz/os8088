@@ -470,6 +470,12 @@ MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMP_KB       equ 8             ; + a verb: THE KB DOORS' REGISTERS (50.3.7.1)
+MEMP_KBH      equ 0x80          ; + MEMP_KB on a claim: CX = a DMA head in KB
+                                ; (bit 7: the arm tests it by its sign)
+%if MEMP_KBH != 0x80
+  %error "osapi_mem_p's KB arm tests MEMP_KBH as the verb byte's sign"
+%endif
 MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
                                 ; the KB doors' answer, the pool counted
 %ifndef MEM_GRAN                ; (MEMGRAN=16 builds the 256-byte knob,
@@ -5658,6 +5664,13 @@ mem_hrecf:
 ;      rounded up to the granule - what was asked for, as the door counts it.
 ;      Every register not named is preserved, CX (MEMP_CONV and all) included
 ;
+;      BL + MEMP_KB (8): the WITHDRAWN KB DOORS' REGISTERS (SPEC.md 50.3.7.1),
+;           for apps/os88api.inc's MEMKB_* bodies and the C SDK - AX in KB
+;           and KEPT, every register kept but DX (BL is the caller's to
+;           restore). A claim reads no head unless + MEMP_KBH (80h): CX = the
+;           head in KB, conventional on kern_mega head or none (the KB DMA
+;           doors'). MEMP_KB + MEMP_AVAIL answers AX/BX in KB, CX kept
+;
 ; ONE CELL AND FOUR VERBS where the KB doors are five cells, because the KB
 ; doors are what every .o88 built so far calls and these are what a package
 ; written from now on should. A verb is a register a cell need not cost (SPEC.md
@@ -5668,6 +5681,9 @@ mem_hrecf:
 ; claim it declines is the conventional heap's.
 ; -----------------------------------------------------------------------------
 osapi_mem_p:
+    test bl, MEMP_KB            ; THE KB DOORS' REGISTERS (SPEC.md 50.3.7.1):
+    jnz mem_p_kb                ; the arm below, which comes back here
+.p:
 %ifdef KERN_MEGA
     ; THE POOL FIRST, as the KB doors do (KERN-MEGA-PLAN 13.6): an
     ; OS88_HIGHMEM package's claim of 64KB or less goes above 1MB where it
@@ -5811,6 +5827,39 @@ osapi_mem_p:
                                 ; `.cold` routines past this - dsk_xfer,
                                 ; dsk_runcap, dsk_next_clus_x - keep their
                                 ; measured parity, tests/unit/t_hotpar.py)
+mem_p_kb:  ; STKBALANCE-OK: builds the far frame osapi_mem_p.p's retf takes
+                                ; THE KB ARM (kernel size pass 19, nogrow): the
+    cmp bl, MEMP_KB + MEMP_AVAIL; six KB doors' registers, written ONCE here
+    je .kav                     ; instead of once in every package's
+    push cx                     ; OS88KB_BODIES - which is what made C1's
+    push ax                     ; package side cost more than the doors saved
+    mov al, MEM_PARA_KB         ; AX = the head KB in paragraphs (CL: a head
+    mul cl                      ; is 64KB at most), CONVENTIONAL on kern_mega
+    or ah, MEMP_CONV >> 8       ; as the KB DMA doors were, head or none...
+    or bl, bl                   ; + MEMP_KBH is bit 7: a byte shorter than a
+    js .kh                      ; `test` (and the parity t_hotpar wants)
+    xor ax, ax                  ; ...or no head at all: a plain KB claim, which
+.kh:                            ; kern_mega may put in the pool
+    xchg ax, cx                 ; CX = the head, as the paragraph verbs read it
+    and bl, 7                   ; the verb
+    pop ax
+    push ax                     ; AX = the KB...
+    push cx
+    mov cl, 6
+    shl ax, cl                  ; ...in paragraphs
+    pop cx
+%ifdef KERN_MEGA                ; THE PARAGRAPH DOOR, far-called, whose retf
+    call COLD_SEG:osapi_mem_p.p ; lands here: kern_mega's .cold selector names
+%else                           ; itself; elsewhere it is where .cold RUNS
+    push word [api_coldseg]     ; (it slides, and a ROM adopts it), which is
+    call osapi_mem_p.p          ; the far frame's CS - `push cs`, spelt so
+%endif                          ; ovlchk's .cold rule can read it
+    pop ax                      ; AX and CX as they came in; pop leaves CF
+    pop cx
+    retf
+.kav:
+    jmp mmf_osapi_mem_avail     ; the KB AVAIL body DISKOPS calls: AX/BX KB
+
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_movable - in: DX = the claim, AX = your relocation proc (0 pins it
@@ -6194,15 +6243,10 @@ mem_owner_of_x:
 ; osapi_claim_snapshot - API slot 0x01E7: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
-; in:  ES:DI = a buffer the caller owns, CX >= 1 = the CLS_RECSZ records it
-;      holds (CLAIM_SNAPSHOT_SIZE holds MEM_MAX, the SDK's)
-; out: CX = the records written, min(CX, this kernel's MEM_MAX); the buffer
-;      filled that far and no further; DI unchanged
-; clobbers: CX (output) and the flags
-;
-; BOUNDED BY THE CALLER (ABI-BREAK-LIST R2, kernel size pass 19): it filled
-; to the kernel's own MEM_MAX, so a kernel with more claim records than the
-; SDK a package was built against overran the package's buffer silently.
+; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
+; out: the buffer filled (MEM_MAX records, this kernel's); DI unchanged
+; clobbers: the flags. The AX = MEM_MAX answer was withdrawn at kernel
+;      size pass 19 (nogrow, -3 bytes): one test read it
 ;
 ; Whole rather than per record because both things a memory map does with
 ; this table want all of it: it walks every record to draw a band, and hashes
@@ -6219,16 +6263,15 @@ mem_owner_of_x:
 %error "a claim record is no longer its own snapshot prefix - the copy below"
 %endif
 mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
-    cmp cx, MEM_MAX             ; NO DS BANK: the one door in is the RCSLOT
-    jbe .cap                    ; cell, whose api_rsc banks and restores DS
-    mov cx, MEM_MAX             ; round this whole body (size pass 10). The
-.cap:                           ; CALLER'S capacity bounds the copy (R2)
-    push cx                     ; ...and is the answer
+    push cx                     ; NO DS BANK: the one door in is the RCSLOT
+                                ; cell, whose api_rsc banks and restores DS
+                                ; round this whole body (size pass 10)
     push si
     push di
     push ss                     ; DS = LOW_SEG for the duration: the claim map
     pop ds                      ; lives there and movs reads DS:SI
     mov si, mem_tab
+    mov cx, MEM_MAX
     cld                         ; SPEC.md 1 rule 3 says DF is 0 on entry; this
                                 ; is the kernel's own string-op convention and
                                 ; costs one byte to not depend on it
@@ -6240,7 +6283,7 @@ mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
     loop .rec                   ; is three movsw and a stride, not nine fields
     pop di
     pop si
-    pop cx                      ; out CX = the records written
+    pop cx
     retf
 
 ; =============================================================================

@@ -517,3 +517,19 @@ against the rule that no release carries kern_mega's disks.
 `data/*.json`; `synth/flagday.md` (the final plan), `synth/phase1.md`,
 `synth/bugs.md`; and the three lenses `synth/challenge-truth.json`,
 `challenge-cost.json`, `challenge-fit.json`.
+
+## 14. Kernel size pass 19's no-growth rule (BRIEF.md 0.0, agent `nogrow`)
+
+The owner, 2026-11-10: *"We're doing a size pass, so why are we growing bytes
+at all?"* A row stays only if it is net smaller - resident bytes on every
+kernel it reaches and the packages' total. What wave A took that grew was
+reverted or reworked; the rows below are **deferred to the additions pass**,
+with their prices (docs/plans/ksp19/nogrow.md has the measurements).
+
+| row | status | price, MEASURED at ksp19's wave-A tip |
+|---|---|---|
+| **R2** | **deferred to the additions pass** (reverted) | +6 `.cold` every kernel (`osapi_sys_snapshot_x` +4, `mmf_osapi_claim_snapshot` +2), packages +14 (Task Manager +9, RedLine +3, WIN16, WaveRack, megaown +1 each). A correctness row: a kernel with more records than the package's SDK still overruns its buffer, as before |
+| R2's AX answers | **taken instead** | `OSAPI_SYS_SNAPSHOT`'s AX = MAX_TASKS (no reader) and `OSAPI_CLAIM_SNAPSHOT`'s AX = MEM_MAX (megaown alone) withdrawn: -3 `.cold` each, every kernel; megaown +1 |
+| **R12** | **reverted** | kernel -5 kern_big/emu/mega, -2 kern_small, EXTD.DRV -1, against +78 at 39 window-asking package sites (`mov ch, 0`). No net-negative form: no site had CH provably 0 without reading each, and the window askers outnumber the display walkers 39 to 5. WireFleet's fix (it asked with WM_DISPLAY's height) kept, -5. `fsx_caps` and EXTD.DRV test BH = 0 instead of `cmp bx, 16` (no window pointer is below 256): -1 each |
+| **R2-3** | **deferred to the additions pass** (reverted) | `MEGA_WTN` 64: +128 bytes of the tables' block above 1MB, no saving |
+| **C1** | **taken; its TOTAL is still positive - the owner's** | memdoors' form: kernel -90 kern_big/emu, -92 kern_small (FILECP.DRV +4), -90 kern_mega (-36 conventional) against packages **+1,037**. `nogrow` added OSAPI_MEM_P's KB arm (`MEMP_KB`/`MEMP_KBH`, +50 `.cold` a kernel, +51 kern_mega above 1MB), which took the packages to about **+330**: C1 now about kernel -40/-38/-40/-39, packages +330, **total about +170**. Under T5 a withdrawn KB door would have been a 3-byte `CD 81 nn` site like the near call, so the -2 a site the helper buys today vanishes there and C1 is about **+770** against keeping the doors as door indices |
