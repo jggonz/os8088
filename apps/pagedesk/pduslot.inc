@@ -349,6 +349,8 @@ pdu_home_rd:
 .q:
     ret
 TOASTSTR pd_s_disk, 'Insert the PageDesk disk'
+TOASTSTR pd_s_panmem, 'Panels wait for memory'
+TOASTSTR pd_s_rcmem, 'Recovery waits: memory'
 
 ; sl_fetch - [sl_row]/[sl_len] = a lazy module row, AX = the segment it is
 ; expanded onto, DX = its magic. Read from the launch folder (3.1's bracket)
@@ -1278,14 +1280,27 @@ pdu_ovl_room:
 
 ; pdu_ovl_fail - crt0's CC_OVL_FAIL: the overlay's fetch was refused and SI
 ; is the SDK's toast. A READ refused (the program disk is out of its drive,
-; the 360 KB pair's swap, QA F21) is said as pdu_home_rd says it; memory
-; and the rest keep the SDK's words. The user puts the disk back and does
-; the same thing again: the next ovl_ call fetches it (20.22.2.4 step 4)
+; the 360 KB pair's swap, QA F21) is said as pdu_home_rd says it. Memory
+; refused to the side panels' idle work says what waits; memory refused to
+; anything the user asked for, and the rest, keep the SDK's words. The user
+; puts the disk back and does the same thing again: the next ovl_ call
+; fetches it (20.22.2.4 step 4)
 pdu_ovl_fail:
     cmp si, op_s_read
     je .d
     cmp si, op_s_disk
-    jne .r
+    je .d
+    cmp si, op_s_mem                ; memory, refused to idle work - the
+    jne .r                          ; thumbnails' or the notes' (1), the
+    mov al, [_pdu_ovidle]           ; recovery look after an open (2): the
+    or al, al                       ; page is drawn, so the toast says what
+    jz .r                           ; waits rather than a bare refusal
+    mov si, pd_s_panmem
+    dec al
+    jz .s
+    mov si, pd_s_rcmem
+.s:
+    jmp op_say
 .d:
     mov si, pd_s_disk
     jmp op_say

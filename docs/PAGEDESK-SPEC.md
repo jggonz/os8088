@@ -5215,6 +5215,25 @@ callback's chain: only from the wake, 20.22.2.6):
    A repeat succeeds because nothing remembers the failure: the overlay's
    row stays unfetched, PDREND's refusals end with the page view
    (`mode_reset`), and an occupant is loaded again at the next ask.
+   A refused MEMORY claim for the overlay is said by what asked for it. The
+   overlay is the part a render drops for its occupants, so the work that
+   fetches it back once a page is drawn is idle work. That work is the
+   sidebar's thumbnails and outline, the Notes panel's list, and the
+   recovery look after an open (20.17.3). When that fetch is refused,
+   `pdu_ovl_fail` toasts `Panels wait for memory` or `Recovery waits:
+   memory` (`pdu_ovidle` = 1 or 2, set around the call by `pdu_idle_ovl`
+   and `pdu_rc_wake`), not the SDK's bare `Not enough memory`. The page is
+   on the glass, and the panels show `...` and `Reading notes...`. The
+   ladder then HOLDS (`pdu_ovhold`): no idle overlay call and no kick
+   until a key, a click or a command, or until the overlay arrives by
+   another path. Before the hold, a refused fetch was retried on every
+   wake, so the window spun and repeated the toast while nothing on the
+   machine changed. QA saw this on QEMU at 640 KB with SYNTH.PDF opened
+   first. A Find, a text pass, a link and a selection are the user's own
+   requests, and so are a journal write and an answer. They are held the
+   same way but keep the plain refusal. `test_hold` in
+   `hosttest/pdu_jr_test.c` checks the hold, and its negative control
+   fails without it.
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
@@ -5470,8 +5489,10 @@ cap is 65,024):
 | QA F26 claim B: the edit store at the first edit (`pdu_claimhi`, the C door to `pd_claimhi`, and its overlay stub; `pdu_dclaim[3]`) | 65,023 | +22 |
 | `pdmath.inc` in the primary with `PDM_SKIP_U32`, `PDM_SKIP_PARSE`, `PDM_SKIP_TOPT16` and `PDM_SKIP_MAT`: its C names `pdm_view_size`/`fwd`/`inv` and `pdm_crc16_far` alone (the cc8086 use set), and the rest was assembled for nothing | 63,517 | -1,506 |
 | QA F21: an encrypted open whose prompt's overlay could not be read fails (`PDE_IO`) instead of opening again with no key, which left the NEXT open refused | 63,535 | +18 |
+| QA R15/R16: the page number in the drawing line, and the first draw's line replacing `Opened X` (`pdu_opsaid`); the merges up to d6495e85e | 63,597 | +62 |
+| QA SYNTH toast: the idle hold (`pdu_idle_ovl`, `pdu_ovhold`, the recovery look through it) and `pdu_ovl_fail`'s two idle sentences | 63,947 | +350 |
 
-**1,489 bytes stay under the cap.**
+**1,077 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
