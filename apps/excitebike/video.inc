@@ -472,11 +472,13 @@ xb_partget:
     push ax
     add ax, di                      ; paragraphs: R + the read
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD: the plain claim
-    mov bl, MEMP_CONV
+    push bx                         ; (BX is the head slack, read after the
+    mov bl, MEMP_CONV               ; read: the verb may not take it)
     call OSAPI_MEM_P            ; on every kernel, and CONVENTIONAL on
                                     ; kern_mega for this OS88_HIGHMEM package -
                                     ; op_fetch's door (os88partsbody.inc), whose
                                     ; windows reach it there. DX = the base
+    pop bx
     pop ax
     jc .nomem
     push word [op_base]             ; op_read lands [op_rdseg] PARAGRAPHS up
