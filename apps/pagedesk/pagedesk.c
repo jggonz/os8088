@@ -179,8 +179,14 @@ void pdu_doc_free(void);
 int  pdu_minit(int m, unsigned verb);
 int  pdu_bank_dir(unsigned len);        /* 20.4.1's directory */
 extern unsigned pdu_kitoff, pdu_kitlen;
+int  pdu_mod_launch(void);              /* launch: modules, XB, INIT, bank */
 static unsigned ovl_au_slice(int start); /* pdovlplat.c: an encrypted open's key */
 static void pdu_pop_close_soon(void); /* pducmd.c: the job abort closes an ask */
+static int  ovl_ifl_step(void);          /* pdovlplat.c: the Insert's pre-flight */
+extern unsigned pdu_kseg;               /* pduslot.inc: the held keys' claim */
+#define PDU_KS_WKEYS 0                  /* in it: pdxb_wkeys (134 bytes), PDV_WRT_KEYS's */
+#define PDU_KS_OWN   136                /* the document's pdxb_wkey */
+#define PDU_KS_OWNID 180                /* ...and its /ID[0]'s first 16 bytes */
 #ifdef PDU_LADTEST
 extern unsigned pdu_tdisk, pdu_tcache, pdu_ckind;
 #endif

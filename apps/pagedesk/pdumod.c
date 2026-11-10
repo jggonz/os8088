@@ -142,47 +142,12 @@ bad:
  * doors and the exchange block filled in, copied to the block, and module m's
  * INIT verb called - 0, or the module's PDE_* (PDE_LIMIT if it said none) */
 
-/* launch: header checks, the exchange block, INIT with no document set.
- * 0 = ready; else a toast has said why and the launch is refused. */
+/* int pdu_mod_launch(void) is pduslot.inc's: launch - both eager modules'
+ * headers checked and bound (pdu_mcheck), the exchange block, INIT with no
+ * document set, then the INDEX and the face kit (pdu_bank_load). 0 = ready;
+ * else a toast has said why and the launch is refused. */
 int pdu_bank_load(void);
-static int pdu_mod_launch(void)
-{
-    struct os88_video *v;
-    int m;
-
-    v = &pdu_vid;
-    pdu_adapter = v->kind;
-    pdu_bpp = v->bpp;
-    pdu_scrw = v->w;
-    pdu_scrh = v->h;
-    for (m = PDU_M_ENG; m <= PDU_M_REND; m++)
-        if (pdu_mcheck(m, os88_part_seg(pdu_modpart[m])) != 0)
-            return -1;
-    pdu_xb = os88_mem_claim_p(PD_XB_BYTES / 16);
-    if (pdu_xb == 0) {
-        os88_toast("No memory for PageDesk", 0);
-        return -1;
-    }
-    os88_memset(&pdu_xinit, 0, sizeof(pdu_xinit));
-    pdu_xinit.adapter = pdu_adapter;
-    pdu_xinit.bpp = pdu_bpp >= 4 ? 4 : 1;
-    pdu_xinit.cpu = os88_cpu();
-    if (pdu_minit(PDU_M_ENG, PDV_ENG_INIT) != 0
-        || pdu_minit(PDU_M_REND, PDV_REND_INIT) != 0) {
-        os88_toast("A PageDesk module failed", 0);
-        pdu_mod_quit();
-        return -1;
-    }
-    /* 20.21.2: the INDEX and the face kit, at launch - the bars are drawn
-     * before any document is. Only a refused claim refuses the launch: the
-     * band lives in it */
-    if (pdu_bank_load() == PDE_NOMEM) {
-        os88_toast("No memory for PageDesk", 0);
-        pdu_mod_quit();
-        return -1;
-    }
-    return 0;
-}
+static void pdu_mod_quit(void);
 
 /* give back everything the primary holds - the instance's death does this
  * too (SPEC.md 50), but a refused launch and a failed open must not leak

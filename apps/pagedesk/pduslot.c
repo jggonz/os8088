@@ -4,7 +4,8 @@
  *
  * One claim S holds ONE occupant at a time - PDXK, PDXG, PDXF, PDXI, PDXJ or
  * PDWRT - its image + bss at S's own base and its workspace after it. One
- * claim X holds the four regions PDENG and PDREND ask for with PDE_NEEDMEM.
+ * claim X holds the five regions PDENG, PDREND and PDXF ask for with
+ * PDE_NEEDMEM.
  * Both are taken when a document first needs them and given back at close.
  * Every load is a READ_AT of the package's own file and an OSAPI_DECOMP onto
  * S's base, or a copy back from the XMS/EMS cache of unpacked images when the
@@ -14,7 +15,7 @@
  *
  * THE MACHINERY IS pduslot.inc, in assembly (20.22.2.9: in C it was 2,800
  * bytes of a segment that had 877). What stays here is what an OWNER edits -
- * the occupant table and each occupant's workspace - and ui's stand-ins.
+ * the occupant table and each occupant's workspace range.
  * ==========================================================================*/
 
 /* the parts row and the magic of each occupant, by id */

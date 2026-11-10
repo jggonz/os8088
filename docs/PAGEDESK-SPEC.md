@@ -4928,9 +4928,10 @@ The slot, the claims that hold it, the ladder that fills it, the cache behind
 it and the disks that carry its occupants. The code is the primary's:
 `apps/pagedesk/pduslot.inc` (the loader, the cache, the regions, the ladder,
 in assembly: 20.22.2.9), `apps/pagedesk/pduslot.c` (what an owner edits: the
-occupant table and each one's workspace, and ui's stand-ins), the job call
-sites in `pdujob.c`, `pdufind.c`, `pdusel.c` and `pduside.c`, and
-`pdumod.c` (PDWRT through the slot).
+occupant table and each one's workspace range), `apps/pagedesk/pdovlplat.c`
+(an overlay tenant: an encrypted open's key and the Insert's pre-flight,
+20.22.2.10), the job call sites in `pdujob.c`, `pdufind.c`, `pdusel.c` and
+`pduside.c`, and `pdumod.c` (PDWRT through the slot).
 
 **20.22.2.1 Where the slot lives: a claim of its own, which PDWRT shares.**
 The scout's three places, priced in claims (`MEM_OWNER_MAX` = 8 on kern_big,
@@ -4950,8 +4951,8 @@ in S. `op_fetch` no longer fetches PDWRT, so `w_partfetch`
 (`apps/weave/wfetch.inc`) leaves the primary. Jobs are one at a time (20.6.3),
 so a save never overlaps a render: the decoder in S is simply swapped out.
 
-The four PDENG and PDREND regions (`PDMEM_XIDX`, `PDMEM_OSW`, `PDMEM_XC`,
-`PDMEM_X8`) are **claim X**, one claim cut by `os88_seg_sub` like A and B,
+The five PDENG, PDREND and PDXF regions (`PDMEM_XIDX`, `PDMEM_OSW`,
+`PDMEM_XC`, `PDMEM_X8`, and 5, the glyph region, 20.22.2.5) are **claim X**, one claim cut by `os88_seg_sub` like A and B,
 taken at the first `PDE_NEEDMEM` and grown by `OSAPI_MEM_REGROW` (20.22.2.5).
 
 **20.22.2.2 The claims at every peak** (kern_big; the old table is 20.6.2's):
@@ -4978,39 +4979,53 @@ close; S also after every save, extract or insert (as PDWRT was).
 `OP_LAZY | OP_SELF | OP_COMP` and image + bss at most 65,024. The slot an
 occupant gets is its image + bss, rounded up to a paragraph, followed by its
 WORKSPACE (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
-`wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **Each owner declares its
-workspace by editing ITS row below and the matching row of `pdu_occws[]` in
-`pduslot.c`** (one number each; the rows are separated so the edits merge):
+`wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **A workspace is a RANGE, WANT
+and MIN**: S is sized at WANT while PD-29's 32 KiB stays free beside it, else
+at the most that fits of at least MIN (a load that cannot have MIN is
+`PDE_NOSLOT`), and `slot_kb` says what was granted. An occupant that needs
+more for one stream answers `PDE_NEEDMEM` with CX = `PDMEM_SLOT` (0) and DX =
+the KiB: the ladder regrows S toward WANT (never past it, and only while the
+32 KiB stays free) and re-INITs the occupant either way, so an unchanged
+`slot_kb` is the refusal (20.22.2.6). **Each owner declares its range by
+editing ITS row below and the matching rows of `pdu_occws[]` (want) and
+`pdu_occwmin[]` (min) in `pduslot.c`** (the rows are separated so the edits
+merge):
 
-| id | occupant | part row | magic | cap (image + bss) | workspace KiB | owner |
+| id | occupant | part row | magic | cap (image + bss) | workspace KiB, want / min | owner |
 |---|---|---|---|---|---|---|
-| `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 (placeholder) | crypt |
-| `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 0 (placeholder) | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 0 (placeholder) | fonts |
-| `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 0 (placeholder) | dct, bilevel |
-| `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 0 (placeholder) | jpx |
-| (6, internal) | PDWRT | 2 | `'PW'` | 53,248 | `pdu_wkb`: 18, or up to 40 for an Extract/Insert | wrt |
+| `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 / 0 | crypt |
+| `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 13 / 13 | gfx |
+| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 0 / 0 (fonts' figures pending) | fonts |
+| `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 64 / 12 | dct, bilevel |
+| `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 60 / 12 | jpx |
+| (6, internal) | PDWRT | 2 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
 
-The overlay row moves from 5 to 10 and stays last (`cc_ovidx`, crt0's
-`CC_OVL_ROW` rule). Until an occupant lands its row carries a STAND-IN
-(`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ`), named by the
-Makefile's `PD_XK_MOD` ... `PD_XJ_MOD`, which default to it: a header, a door
-that answers `PDV_X_INIT` and refuses every other verb with CF = 1,
-`PDE_NOTFOUND`, and 1 KiB of bss so the row packs.
+Row 10 is **PDX8**, blend's transparency part (20.22.10.11): not a slot
+occupant but the X8 region's first bytes (20.22.2.5), magic `'P8'`. The
+overlay row moves from 5 to **11** and stays last (`cc_ovidx`, crt0's
+`CC_OVL_ROW` rule). Until a part lands its row carries a STAND-IN
+(`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ|X8`), named by the
+Makefile's `PD_XK_MOD` ... `PD_XJ_MOD` and `PD_X8_MOD`, which default to it: a
+header (PDX8's 16 bytes with the `jmp short` door), a door that answers the
+INIT verb and refuses every other with CF = 1, `PDE_NOTFOUND`, and 1 KiB of
+bss so the row packs.
 
-**The stack gate reads an occupant by a naming rule** (`tools/os88pdstk.py`'s
-`OCCUPANTS`): its top source is `apps/pagedesk/pdx?.asm`, its door
-`pdx?_entry` and its dispatcher `_pdx?_verb` (`pdxk`, `pdxg`, `pdxf`, `pdxi`,
-`pdxj`); PDREND's far call into the slot names `slot` in its operand
-(`call far [_pdr_slot_off]`); every far call an occupant makes is taken to be
-PDENG's door. The primary's `pdu_mcall` reaches every occupant's door. An
-occupant whose source is not in the tree (the stand-in) is left out, and
-`t_pdkgate` reads every built `PDX?.MOD`, real and stand-in.
+**The stack gate reads each part from a table** (`tools/os88pdstk.py`'s
+`OCCUPANTS`: source, door, dispatcher, and whether it is entered through the
+slot or the X8 region - `pdxk` `pdk_entry`, `pdxg` and `pdxf` `pdx_entry`,
+`pdxi` `pdi_entry`, `pdxj` `pdxj_entry`, `pdx8` `x8_entry`; a new part is a
+new row). PDREND's far calls into the slot are `_pdr_xfar [_pdr_x_off]` and
+`_pdr_verb [_pdr_slot_off]`, and one whose operand names `x8` is PDX8; every
+far call a part makes is taken to be PDENG's door. The primary's `pdu_mcall`
+reaches every occupant's door. A part whose source is not in the tree (the
+stand-in) is left out, and `t_pdkgate` reads every built `PDX?.MOD`, real and
+stand-in.
 
 The slot claim S is sized for the occupant it is about to hold:
 `max(roundup16(image + bss) + workspace, R + roundup_cluster(slack +
 packed))`, the second term being the room the in-place expansion needs
-(20.22.2.4). It is resized with `OSAPI_MEM_REGROW` (a shrink stays put; a grow
+(20.22.2.4). Every load FREES S and claims it afresh, so the heap's largest
+run is asked with nothing of S in it. It is resized with `OSAPI_MEM_REGROW` (a shrink stays put; a grow
 takes only the difference when the paragraphs above are free), and refused
 with `PDE_NOSLOT` when the heap cannot give it.
 
@@ -5068,7 +5083,22 @@ occupant + PDENG (424) sits inside 1,776, which leaves an occupant about
 1,000 bytes of frames of its own (`tools/os88pdstk.py` holds the sum).
 
 **20.22.2.5 The regions (claim X, `PDE_NEEDMEM`).** CX = the `PDMEM_*`
-region, DX = the KiB wanted (1..64). The primary:
+region, DX = the KiB wanted: 1..64, and **1..256 for `PDMEM_XIDX`** (eng's
+flat index, `ceil(4 x entries / 1024)` KiB). Each region is handed as a
+`SEG_SUBC` window (`OSAPI_SEG`: a code/data pair, so PDX8 has a CS) of at most
+64 KiB at the region's start, with the region's whole KiB beside it; past 64
+KiB eng addresses the region itself (on kern_mega with `OSAPI_SEG`, never by
+adding paragraphs). The five regions:
+
+| CX | region | asked by | notes |
+|---|---|---|---|
+| 1 | `PDMEM_XIDX` | PDENG, at OPEN | up to 256 KiB |
+| 2 | `PDMEM_OSW` | PDENG, at OPEN | |
+| 3 | `PDMEM_XC` | PDREND | |
+| 4 | `PDMEM_X8` | PDREND (blend) | **PDX8 is read into its first bytes at the grant** (parts row 10, the slot's reader), with its header's +10 = the region's CODE selector, +12/+14 = PDENG's bound door, re-written after every move of X. A row that does not fit the region, or a read that fails, takes the region back: PDREND then sees `x8_seg` 0 and takes its opaque path |
+| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself |
+
+The primary:
 
 * grants a region on its first ask, appended to X in the order asked: X is
   claimed at the first, and regrown (`OSAPI_MEM_REGROW`) at each later one, only when
@@ -5078,8 +5108,8 @@ region, DX = the KiB wanted (1..64). The primary:
   any other second ask is refused;
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
-  come with it), and re-INITs PDENG, then PDREND. The occupant is not
-  re-INITed: it holds no region;
+  come with it), and re-INITs PDENG, then PDREND. The occupant is re-INITed
+  only after a GLYPH grant;
 * refuses by re-INITing anyway: a region never held has its field 0, and a
   held region asked to grow keeps its segment and KiB unchanged (a refusal is
   not an error).
@@ -5099,8 +5129,9 @@ failure by a caller that tests `pdu_mcf` first):
 
 | verb | may answer | the primary, in that slice | then |
 |---|---|---|---|
-| `PDV_ENG_OPEN` (J_OPEN) | `NEEDMEM` XIDX, OSW; `NEEDMOD` `PDX_KEY` | grants (20.22.2.5); or loads PDXK and enters the open's AUTH sub-state: ui's `pdu_auth_step()` once a slice until it stops answering `PDE_BUSY` | OPEN again at the next slice; an auth failure fails the open with its `PDE_*` (`PDE_PASSWORD`, `PDE_CANCEL`) |
+| `PDV_ENG_OPEN` (J_OPEN) | `NEEDMEM` XIDX, OSW; and **CF = 1, `PDE_PASSWORD`** at its crypt state (20.22.5: the file is half open, not failed) | grants (20.22.2.5); or enters the open's AUTH sub-state (`ovl_au_slice`, below) once a slice until it stops answering `PDE_BUSY` | OPEN again at the next slice; an auth failure fails the open with its `PDE_*` (`PDE_PASSWORD`, `PDE_CANCEL`) |
 | `PDV_REND_STEP` (J_RENDER) | `NEEDMEM` XC, X8; `NEEDMOD` GFX, FNT, IMG, JPX | grants; or loads | the same verb at the next slice |
+| an occupant's verb, under any of these | `NEEDMEM` `PDMEM_SLOT` (0), DX = KiB | regrows S toward the occupant's WANT and re-INITs it (20.22.2.3) | the same verb at the next slice |
 | `PDV_REND_TEXTMAP` (J_TEXT, J_FIND), `PDV_REND_THUMB` (J_THUMB) | as STEP | as STEP | as STEP |
 
 Every call site of those verbs handles them the same way through ONE function,
@@ -5130,18 +5161,26 @@ bands alternate two image codecs a couple of times. At most **4** grants per
 verb sequence; a fifth `NEEDMEM` is refused. A job that sees a ladder status
 past either cap more than 16 times fails with `PDE_LIMIT` rather than loop.
 
-**ui's two functions** (`pduauth.c`; ui `#define`s `PDU_AUTH_UI` at the top
-of `pagedesk.c`'s slot prototype block, so the stand-ins in `pduslot.c` drop
-out and the prototypes there bind to ui's): `void pdu_auth_reset(void)` at every open's start, and
-`unsigned pdu_auth_step(void)` = `PDE_BUSY` (call again next slice), 0 (the
-key is set with `PDV_ENG_SETKEY`; resume OPEN) or a `PDE_*`. PDXK is resident
-when it is first called. The stand-in answers `PDE_PASSWORD`, so until ui
-lands an encrypted file fails its open with that sentence.
+**The AUTH sub-state** (`ovl_au_slice`, `pdovlplat.c`, an overlay tenant: it
+runs at open frequency). First the held key (20.22.2.10); else PDXK comes
+into the slot, `pdxb_crypt` is zeroed in the XB and `PDV_KEY_COST` prices one
+run. A run that costs anything (R6) asks first on an 8088 through ui's
+`pdu_au_askr6(seconds x 2)` (O6: no answer, no derivation, `PDE_PASSWORD`),
+and shows ui's working popover (`pdu_au_busy`) elsewhere. `PDV_KEY_AUTH` is
+then called once a slice, its `progress` handed to `pdu_au_prog`; the empty
+password is tried first, silently. A wrong one asks with `pdu_au_ask` (the
+second time saying it was wrong), and the typed bytes go from ui's
+`pdu_au_pw` into the XB's `pw`, the buffer wiped at once. On success
+`PDV_ENG_SETKEY` and `pdu_au_close`, and OPEN again; an answer of
+`PDE_CANCEL` (the popover went) fails the open. **A cancelled open job**
+closes an ask still up with ui's leaf `ovl_au_cancel` and
+`pdu_pop_close_soon`, never through a painting path (D21's 384). PDXK leaves
+the slot as soon as the open completes.
 
 **20.22.2.7 The cache of unpacked images (O2).** The primary's alone; the
 modules never see it. It is ON when ui's preference says Auto
-(`int pdp_xcache(void)`: 1 Auto, 0 Off; ui `#define`s `PDP_XCACHE_UI` in the
-same block so the stand-in, which answers 1, drops out) and the machine has a store:
+(`pdp_cfg[10]`, `pdu_pref_modcache()`: 0 Auto, 1 Off) and the machine has a
+store:
 
 * **XMS** first: `OSAPI_XMEM_CAPS` answers at least the total + 64 KiB, and ONE
   `OSAPI_XMEM_ALLOC` block (the table is 8 entries machine-wide, SPEC.md
@@ -5168,7 +5207,7 @@ same block so the stand-in, which answers 1, drops out) and the machine has a st
   64 KiB swap about 23 ms against 1.2-3 s off a floppy (scout-platform 1).
 
 **20.22.2.8 The disks (O7).** Every geometry carries the one `PAGEDESK.O88`
-with all eleven rows. The 360KB set becomes two floppies:
+with all twelve rows. The 360KB set becomes two floppies:
 `pagedesk360.img` (the program, `README.TXT`, `PDFONTS.TXT`, and the two
 samples the empty view and PD-29's XT proof open, `HELLO.PDF` and
 `XTGUIDE.PDF`) and **`pagedesk360b.img`** (every sample, and `README.TXT`).
@@ -5195,7 +5234,51 @@ cap is 65,024):
 | `pdu_ctl_paint` (C 1,692) and `pdu_bandcap` (542) in assembly (`pdui.inc`); `pdu_held` deleted (dead) | 63,313 | **-834** (the freeing owed: 800) |
 | the slot, the cache, the regions and the ladder (`pduslot.inc`, about 2,050 bytes; in C it measured 2,800), less PDWRT's old `w_partfetch` and `pdu_wrt_in_now`; and, to make the room, `pdu_doc_claim` (C 982 -> 509), `pdu_doc_free` (184 -> about 70), `pdu_minit` (133 -> about 60) and PDRES's directory walk (`pdu_bank_dir`, 166 against the C's ~440) in assembly | 64,185 | **+872** (plat's allowance: 900) |
 
-839 bytes stay under the cap, ui's +250 among them.
+| ui's merge (the prompt, the preferences) | 64,525 | +340 |
+| the second wave: (want, min) workspaces and `PDMEM_SLOT`, the encrypted open's slice in the overlay, five regions (XIDX to 256, GLYPH, `SEG_SUBC` windows), PDX8 into the X8 region; `pdu_bank_load` (C 465) in assembly | 64,981 | +456 |
+| `pdu_mod_launch` (C 277) in assembly; the held keys and the Insert's pre-flight (20.22.2.10: `sl_wkeys`, the save job's and the abort's hooks; the rest is overlay) | 65,015 | +34 |
+
+**9 bytes stay under the cap.** The next primary byte is a decision: the
+candidates are `pdu_layout` (1,826 of C) and `os88_onkey` (1,290), whose
+asm twins would each free several hundred.
+
+**20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
+in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
+and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
+document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
+`/ID[0]`.
+
+* **The document's key** is kept (from `PDV_ENG_CRYPTINFO`, which answers
+  key, `key_len`, the methods and `/ID[0]` on a keyed file) whenever PDXK set
+  one. At the next `PDE_PASSWORD` of any open - the re-open after a page
+  operation's save, the open of a Save As's output, the document again after
+  the pre-flight below - the half-open file's `CRYPTINFO` is asked first, and
+  when its `/ID[0]` is the kept one the key goes back with `PDV_ENG_SETKEY`:
+  no PDXK, no question. A save keeps the source's `/Encrypt` and `/ID[0]`
+  (20.22.4.5), which is what makes this right. A file whose owner changed the
+  password and kept the `/ID[0]` would open with the old key and fail its
+  catalog: that is a re-open by the user, which asks again.
+* **The Insert's pre-flight** (20.22.4.5's other half). PDWRT is a slot
+  occupant, so PDXK cannot load while a save runs. A Save As whose page map
+  names foreign pages (`ovl_save_begin`, kind 0) therefore starts its job
+  WITHOUT PDWRT: it CLOSEs the document (`PDW_OUT_REOPEN` set, so a cancel or
+  a failure re-opens it), then, a slice at a time (`ovl_ifl_step`), OPENs
+  each foreign file the map names in its own folder (20.16's slot words),
+  through the same ladder and the same AUTH sub-state; one that comes out
+  `PDO_ENCRYPTED` has its key read with `CRYPTINFO` into the next
+  `pdxb_wkey`, `slot` = its Insert slot, and is CLOSEd. Then the document is
+  OPENed again (its held key, so no question), `PDW_OUT_REOPEN` cleared, and
+  PDWRT comes in. **`sl_bind` hands the `pdxb_wkeys` to PDWRT with
+  `PDV_WRT_KEYS` after every `PDV_WRT_INIT`** (a workspace regrow re-INITs
+  it, and the INIT wipes them); the block's `n` is set to 0 at every save's
+  start, so a later save never carries a stale key. A foreign file that fails
+  (its password refused, cancelled, unreadable) fails the save with
+  `err_detail` = 20 + its slot, which names it (20.16).
+* What it costs: every foreign file is OPENed in full once before the save
+  (the catalog and the page tree, since an unencrypted file is only known as
+  one when its OPEN passes the crypt state), and the document once more. A
+  probe that stopped an unencrypted file's OPEN at its crypt state would want
+  eng to publish that state; asked of eng, not built.
 
 **A developer's look** (`PDU_LADTEST`, `#define`d in `pagedesk.c` AND
 `%define`d in `pagedesk.asm`; nothing shipped compiles it): every open loads

@@ -120,24 +120,31 @@ static void pdu_job_shift(int dy)
 }
 
 static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
+static unsigned char pdu_pfl;           /* 20.22.4.5: the pre-flight - 1 the next
+                                         * file owed, 2 opening it */
+static unsigned char pdu_pfk;           /* its slot; PDM_NSLOT = the document */
+static unsigned char pdu_pfm;           /* the foreign slots the map names */
 
 /* Escape and every way out: stop what runs, release what it held */
 static void pdu_job_abort(void)
 {
     int reopen;
     reopen = 0;
+    if (pdu_opauth == 1 && pdu_au_mode) {   /* ui: an open ask goes - the */
+        ovl_au_cancel();                /* leaf the shut path uses (D21); the */
+        pdu_pop_close_soon();           /* ask IS Preferences' second face */
+    }
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
-        if (pdu_opauth == 1 && pdu_au_mode) {   /* ui: an open ask goes */
-            pdu_au_closed();            /* the leaf the shut path uses (D21) */
-            if (pdu_pop == P_PREFS)
-                pdu_pop_close_soon();
-        }
         pdu_doc_release();
         pdu_doc = D_EMPTY;
     } else if (pdu_job == J_SAVE) {
-        pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        if (pdu_pfl)                    /* the pre-flight's file (PDENG */
+            pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);   /* owes the document) */
+        else
+            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        pdu_pfl = 0;
         pdu_wrt_out();
         reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;          /* pages */
     } else if (pdu_job >= J_FIND) {     /* nav: find, text pass, thumbnail */
@@ -572,12 +579,15 @@ static void pdu_reopen_begin(void)
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
     os88_strcpy(pdu_xopen.name, pdu_name, sizeof(pdu_xopen.name));
     pdu_reopening = 1;
+    pdu_opauth = 0;                     /* the held key answers (20.22.2.10) */
     pdu_job_start(J_OPEN);
 }
 
 static void pdu_save_step(void)
 {
     unsigned r;
+    if (pdu_pfl && ovl_ifl_step())       /* the Insert's keys first (20.22.4.5) */
+        return;
     pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));

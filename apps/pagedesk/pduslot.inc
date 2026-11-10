@@ -303,6 +303,42 @@ sl_fetch:
 .r:
     ret
 
+; sl_wkeys - PDWRT just INITed (which wiped any keys it held): the held
+; pdxb_wkeys (pdovlplat.c's pre-flight, at pdu_kseg:0) handed over with
+; PDV_WRT_KEYS when there is one. Every register but DX may go
+sl_wkeys:
+    mov ax, [_pdu_kseg]
+    or ax, ax
+    jz .r
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    mov es, [_pdu_xb]
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, PDXB_WKEYS_BYTES / 2
+    rep movsw                       ; n = 0 is an empty set: no test
+    pop es
+    pop ds
+    pop di
+    pop si
+    xor ax, ax
+    push ax
+    push ax
+    push word [_pdu_xb]
+    mov al, PDV_WRT_KEYS
+    push ax
+    mov al, PDU_M_SLOT_A
+    push ax
+    call _pdu_mcall                 ; a refusal is the job's PDE_PASSWORD later
+    add sp, 10
+    pop dx
+.r:
+    ret
+
 ; sl_bind - [_pdu_socc] in S: its door bound at S's OWN base (the claim's
 ; code twin, 20.22.2.4), the workspace a data window after the image, INIT
 ; with pdxb_init complete, then PDENG and PDREND told. AX = 0 or the INIT's
@@ -350,6 +386,7 @@ sl_bind:
     mov ax, [_pdu_socc]
     cmp al, PDU_OCC_WRT_A
     jne .t
+    call sl_wkeys                   ; the Insert's foreign keys (20.22.4.5)
     xor ax, ax                      ; PDWRT: neither module calls it
 .t:
     call sl_tell
@@ -1570,6 +1607,99 @@ dc_init:
     ret
 
 ; =============================================================================
+; int pdu_mod_launch(void) - launch (PAGEDESK-SPEC 3.1-3.4): the screen as
+; pdu_vid says, both eager modules' headers checked against their rows and
+; bound (pdumod.c's pdu_mcheck, which toasts its own refusal), the exchange
+; block, INIT with no document set, and the INDEX and the face kit at once
+; (20.21.2: the bars are drawn before any document is - only a refused claim
+; refuses, the band living in it). 0 = ready; else a toast said why. C until
+; the regions wanted the room (20.22.2)
+; =============================================================================
+_pdu_mod_launch:
+    push si
+    push di
+    mov si, _pdu_vid
+    lodsw                           ; os88_video: w, h, dock_top, kind, bpp
+    mov [_pdu_scrw], ax
+    lodsw
+    mov [_pdu_scrh], ax
+    lodsw
+    lodsw
+    mov [_pdu_adapter], ax
+    lodsw
+    mov [_pdu_bpp], ax
+    xor di, di                      ; PDU_M_ENG, then PDU_M_REND: each is
+.m:                                 ; its own parts row (pdumod.c)
+    mov ax, di
+    call op_seg
+    push ax
+    push di
+    call _pdu_mcheck
+    pop cx
+    pop cx
+    or ax, ax
+    jnz .no
+    inc di
+    cmp di, 2
+    jb .m
+    mov ax, PD_XB_BYTES / 16
+    push ax
+    call _os88_mem_claim_p
+    pop cx
+    mov [_pdu_xb], ax
+    mov si, ml_nomem
+    or ax, ax
+    jz .toast                       ; nothing to give back yet
+    push es
+    push ds
+    pop es
+    mov di, _pdu_xinit
+    mov cx, PDXB_INIT_BYTES / 2
+    xor ax, ax
+    rep stosw
+    pop es
+    mov ax, [_pdu_adapter]
+    mov [_pdu_xinit + PDXB_INIT_ADAPTER], ax
+    mov al, 1
+    cmp word [_pdu_bpp], 4
+    jl .b
+    mov al, 4
+.b:
+    mov [_pdu_xinit + PDXB_INIT_BPP], al
+    call OSAPI_CPU_INFO             ; AL = the tier
+    mov [_pdu_xinit + PDXB_INIT_CPU], al
+    mov si, ml_fail
+    xor ax, ax
+    mov bx, PDV_ENG_INIT
+    call dc_init
+    jnz .quit
+    mov ax, 1
+    mov bx, PDV_REND_INIT
+    call dc_init
+    jnz .quit
+    call _pdu_bank_load
+    mov si, ml_nomem
+    cmp ax, PDE_NOMEM
+    je .quit
+    xor ax, ax
+    jmp short .out
+.quit:
+    call _pdu_mod_quit
+.toast:
+    xor ax, ax
+    push ax
+    push si
+    call _os88_toast
+    pop cx
+    pop cx
+.no:
+    mov ax, -1
+.out:
+    pop di
+    pop si
+    ret
+
+; =============================================================================
 ; int pdu_bank_load(void) - the PDRES INDEX and the face's kit, once per
 ; instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2). The part is read BY
 ; OFFSET out of PAGEDESK.O88 itself (an OP_SELF row, stored unpacked so the
@@ -1822,6 +1952,8 @@ PDU_RES_KIND_KIT_A   equ 9
 ; pdxb_init's six document regions, in its field order: cache, arena,
 ; tables, dl, band, glyph (rows * 2)
 dc_map:         db 0, 2, 4, 8, 10, 6
+ml_nomem:       db 'No memory for PageDesk', 0     ; pdu_mod_launch's toasts
+ml_fail:        db 'A PageDesk module failed', 0
 
 
 section .bss
@@ -1847,6 +1979,7 @@ rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
 rd_vol:         resw 1
 bk_para:        resw 1              ; pdu_bank_load
 bk_band:        resw 1
+_pdu_kseg:      resw 1              ; the held keys' claim (pdovlplat.c)
 sl_mag:         resw 1
 sl_dir:         resw 1
 sl_msk:         resw 1
