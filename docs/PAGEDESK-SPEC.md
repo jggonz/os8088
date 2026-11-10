@@ -5228,9 +5228,9 @@ verb sequence; a fifth `NEEDMEM` is refused. A job that sees a ladder status
 past either cap more than 16 times fails with `PDE_LIMIT` rather than loop.
 
 **The AUTH sub-state** (`ovl_au_slice`, `pdovlplat.c`, an overlay tenant: it
-runs at open frequency). First the held key (20.22.2.10); else PDXK comes
-into the slot, `pdxb_crypt` is zeroed in the XB and `PDV_KEY_COST` prices one
-run. A run that costs anything (R6) asks first on an 8088 through ui's
+runs at open frequency). PDXK comes into the slot, `pdxb_crypt` is zeroed in
+the XB and `PDV_KEY_COST` reads the parameters and prices one run; then the
+held key (20.22.2.10) when the file is the one it was kept for. A run that costs anything (R6) asks first on an 8088 through ui's
 `pdu_au_askr6(seconds x 2)` (O6: no answer, no derivation, `PDE_PASSWORD`),
 and shows ui's working popover (`pdu_au_busy`) elsewhere. `PDV_KEY_AUTH` is
 then called once a slice, its `progress` handed to `pdu_au_prog`; the empty
@@ -5326,18 +5326,24 @@ cap is 65,024):
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
 and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
 document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
-`/ID[0]`.
+`/ID[0]`, 196..211 the first 16 bytes of its `/Encrypt` `/U`.
 
 * **The document's key** is kept (from `PDV_ENG_CRYPTINFO`, which answers
   key, `key_len`, the methods and `/ID[0]` on a keyed file) whenever PDXK set
   one. At the next `PDE_PASSWORD` of any open - the re-open after a page
   operation's save, the open of a Save As's output, the document again after
-  the pre-flight below - the half-open file's `CRYPTINFO` is asked first, and
-  when its `/ID[0]` is the kept one the key goes back with `PDV_ENG_SETKEY`:
-  no PDXK, no question. A save keeps the source's `/Encrypt` and `/ID[0]`
-  (20.22.4.5), which is what makes this right. A file whose owner changed the
-  password and kept the `/ID[0]` would open with the old key and fail its
-  catalog: that is a re-open by the user, which asks again.
+  the pre-flight below - PDXK comes in and `PDV_KEY_COST` reads the file's parameters as for any
+  encrypted open; when its `/ID[0]`, its `/U` (first 16 bytes) and its
+  methods (`stm str eff encmeta`) are the kept ones the key goes back with
+  `PDV_ENG_SETKEY`: no question, no derivation (an R6 file is minutes on an
+  XT). A save keeps the source's `/Encrypt` and `/ID[0]` (20.22.4.5), which is
+  what makes this right. `/ID[0]` alone was not enough (QA R20): a writer that
+  re-encrypts a document keeps its `/ID` (the `GUIDE_*` fixtures are XTGUIDE
+  under RC4-128, AESV2 and R6 with one `/ID`), and the held key of one drew
+  every page of another as `content stream error`. Nor is `/U` alone: R3
+  RC4-128 and R4 AESV2 under the same passwords derive the SAME key and `/U`,
+  and only the method tells them apart. The `/U` is kept from the XB after a
+  successful `PDV_KEY_AUTH`, before `SETKEY` wipes it.
 * **The Insert's pre-flight** (20.22.4.5's other half). PDWRT is a slot
   occupant, so PDXK cannot load while a save runs. A Save As whose page map
   names foreign pages (`ovl_save_begin`, kind 0) therefore starts its job
