@@ -224,6 +224,7 @@ static pdw g_flatscale;
 static pdw x_ask;                   /* the last answer: PDX_*, or 0x80 | PDMEM_*; 0 none */
 static pdw x_asks;                  /* answers this page view                   */
 static pdw g_xph;                   /* after it: PDR_INTERP re-runs the pass, PDR_RAST draws the band */
+static pdw g_xclost;                /* the XC went from under an open view (20.22.7.11): re-run the pass */
 static pdw x_answer(pdw what, pdw cx, pdw dx, pdw ph)
 {
     x_ask = what; pdr_out_cx = cx; pdr_out_dx = dx; x_asks++;
@@ -470,7 +471,8 @@ static pdw verb_step(void)
     if (g_ph == PDR_XWAIT) {            /* the primary answered (20.22.7) */
         x_answered();
         g_ph = g_xph;
-        if (g_ph == PDR_INTERP) {
+        if (g_ph == PDR_INTERP || g_xclost) {   /* lost XC: nothing in the list may name it */
+            g_xclost = 0;
             err = pass_begin();
             if (err) { g_ph = PDR_DONE; return err; }
             return PDE_BUSY;
@@ -690,14 +692,33 @@ static void xc_adopt(void)
 }
 #define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
 typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
+/* the words of pdxb_init that are PDREND's own claims and doors (20.22.7.11):
+ * xb, the engine's vector, dl, band, glyph, bank, adapter, bpp. A re-INIT that
+ * keeps them is the same document; PDENG's, PDWRT's and the Flate slots'
+ * words may change under it (the primary shrinks INIT's Flate slots) */
+static const pdb ini_mine[] = { 0, 1, 2, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20 };
+typedef char pdr_ck_inimine[(pdw)&((struct pdxb_init *)0)->bpp == 40 && (pdw)&((struct pdxb_init *)0)->dl_seg == 18 ? 1 : -1];
 static pdw verb_init(pdw xbseg)
 {
-    pdw bound = pdr_eng_seg, i;         /* 0 on the FIRST INIT: the bss */
-    /* the answer to a PDE_NEEDMEM (20.22.7): the same claims with a region
-     * added. The page view and the document's caches go on */
-    if (bound && (x_ask & 0x80)) {
-        for (i = 0; i < INI_OLDW; i++) if (pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
-        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); return PDE_OK; }
+    pdw bound = pdr_eng_seg, i, o;      /* 0 on the FIRST INIT: the bss */
+    /* a re-INIT under a ladder answer (20.22.7, 20.22.7.11): the same claims,
+     * a region added (PDE_NEEDMEM) or the XC released to make room for a slot
+     * occupant (PDE_NEEDMOD). The page view and the document's caches go on;
+     * an XC that went from under the view is the cache AND the list's LUT
+     * offsets and the band's stash, so the pass runs again without it, and a
+     * released one is not asked for again this view */
+    if (bound && x_ask) {
+        for (i = 0; i < sizeof ini_mine; i++)
+            if (pd_fpeekw(xbseg, (pdw)(ini_mine[i] << 1)) != ((pdw *)&g_ini)[ini_mine[i]]) break;
+        if (i == sizeof ini_mine) {
+            o = g_xcseg;
+            pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt();
+            if (o && g_xcseg != o && x_ask != (0x80 | PDMEM_XC)) {
+                g_xclost = 1; g_ikb = 0;
+                if (!g_xcseg) x_ref |= XR_MEM;
+            }
+            return PDE_OK;
+        }
     }
     g_xb = xbseg;
     /* the engine's vector first, before anything can call the engine. The

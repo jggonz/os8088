@@ -103,6 +103,19 @@ static int ladder(pdw e)
         pdw id = pdr_out_dx;
         g_loads++;
         if (g_loads > 64) { fprintf(stderr, "LADDER: more than 64 module answers\n"); exit(9); }
+        /* PDR_XCDROP: the primary's release-before-refuse (plat's pdu_slot_load):
+         * the slot's claim is short, so XC is released and PDREND re-INITed with
+         * xc_seg 0 under this NEEDMOD answer, mid-view (20.22.7.11) */
+        if (getenv("PDR_XCDROP") && g_lastinit.xc_seg) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.xc_seg = 0; g_lastinit.xc_kb = 0;
+            g_lastinit.flate_kb = 43; g_lastinit.cache_kb += 1;   /* PDENG's words move with it (plat) */
+            g_clsize[4] = 0;                            /* no claim: the canary from byte 0 */
+            memset(MEM(SEG_XC, 0), 0xCD, 8192);         /* = CANARY, below */
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
         if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
         return 1;
     }

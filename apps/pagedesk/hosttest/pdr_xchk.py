@@ -117,6 +117,14 @@ check('both decoders and no XC for the stash: drawn with one, PDF_INC_LIMIT (not
 check('negative control: without the stash page 7 is NOT its plain twin (the to-the-pixel checks can fail)',
       im is not None and imp is not None and im.shape == imp.shape and int((im != imp).sum()) > 2000,
       'diff=%s' % (None if im is None or imp is None else int((im != imp).sum())))
+# the primary releases the XC under a NEEDMOD answer, mid-view (20.22.7.11): the
+# view goes on - the pass runs again without it - and finishes, every band blitted
+# (before the fix: the view ended at the re-INIT, blits 1-5 and nothing noted)
+for ad in ('vga', 'herc'):
+    rc, im, st, err = render(ramp, 6, ad, env={'PDR_XCDROP': '1'})
+    check('XC released under a NEEDMOD answer (%s): the view finishes, PDF_INC_LIMIT, no MODULE' % ad,
+          rc == 0 and num(st, 'blits') >= 40 and num(st, 'incomplete') & 0x0080 and not num(st, 'incomplete') & INC_MODULE,
+          '%s %s' % (st, err[-200:]))
 rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_XCKB': '2'})
 check('both decoders and a 2 KiB XC: what fits is stashed, the rest PDF_INC_LIMIT, nothing MODULE', rc == 0
       and not num(st, 'incomplete') & INC_MODULE, str(st))
