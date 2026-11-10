@@ -687,6 +687,76 @@ struct pdxb_img {
 /* [wrt 20.22.4]    */
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */
+/* ---- gfx (PAGEDESK-SPEC 20.22.9): PDXG's verbs and its cache records ----- */
+#define PDV_GFX_CS      0xC8 /* compile a colour space. XB: pdxb_gfx           */
+#define PDV_GFX_COLOR   0xC9 /* one operand set through a MODULE space          */
+#define PDV_GFX_LUT     0xCA /* an image colour-space LUT                       */
+#define PDV_GFX_SHADE   0xCB /* a shading: header + ramp, or triangles          */
+#define PDV_GFX_PAT     0xCC /* a tiling pattern's parameters                   */
+#define PDV_GFX_FN      0xCD /* evaluate one function                           */
+#define PDV_GFX_DASH    0xCE /* rcore's dash walker (pdxdash.c)                 */
+#define PDGX_CSBYTES    1264 /* sizeof(struct pdgx_cs): an XCK_CS entry          */
+#define PDGX_LUTBYTES   1028 /* sizeof(struct pdgx_lut): an XCK_LUT entry        */
+#define PDGX_SHBYTES    528  /* a shading header + ramp: an XCK_SHADE entry      */
+#define PDGX_SRCMAX     480
+#define PDGX_K_GRAY 1
+#define PDGX_K_RGB 2
+#define PDGX_K_CMYK 3
+#define PDGX_K_CALGRAY 4
+#define PDGX_K_CALRGB 5
+#define PDGX_K_LAB 6
+#define PDGX_K_INDEXED 7
+#define PDGX_K_SEP 8
+#define PDGX_K_DEVN 9
+#define PDGX_K_PATTERN 10
+#define PDGX_F_TABLE    0x01 /* rgb[] is valid: a 1-component space           */
+#define PDGX_F_RGBLIKE  0x02 /* operands are device RGB (ICC N=3)              */
+#define PDGX_F_CMYKLIKE 0x04 /* operands are device CMYK (ICC N=4)             */
+#define PDGX_F_MODULE   0x08 /* convert with PDV_GFX_COLOR                     */
+#define PDGX_F_NONE     0x10 /* Separation /None: paints nothing               */
+#define PDGX_F_PATTERN  0x20 /* a Pattern space; n = the underlying's (0 = none) */
+struct pdgx_cs {
+    pdb  kind, n, flags, pad;
+    pdw  hival;                 /* Indexed                                    */
+    pdw  srcobj, srcgen;        /* the source object, 0 = the text in src[]   */
+    pdw  srclen;                /* bytes of src[]                             */
+    pdw  rsv[2];
+    pdb  src[480];
+    pdb  rgb[768];              /* index (or round(c * 255)) -> r, g, b       */
+};
+#define PDGX_LUT_INVERT 0x01    /* grey = 255 - sat(sum of the tables)         */
+struct pdgx_lut {
+    pdb  ncomp, flags;
+    pdw  pad;
+    pdb  t[1024];             /* four tables of 256 */
+};
+/* a shading's cache entry: type 2 or 3, then a 256-entry RAMP of (lum, c4) */
+struct pdgx_shade {
+    pdb  type, flags;           /* PDGX_SH_*                                   */
+    pdw  nramp;                 /* 256                                         */
+    struct pd_fx coords[6];     /* x0 y0 x1 y1 (r0 r1): shading space          */
+    struct pd_fx t0, t1;
+    pdw  bbox_ok;
+    struct pd_fx bbox[4];
+    pdb  bg_ok, bg_lum, bg_c4, pad2;
+    pdb  ramp[512];             /* lum, c4 pairs                               */
+};
+#define PDGX_SH_EXT0 0x01
+#define PDGX_SH_EXT1 0x02
+#define PDGX_SH_MESH 0x04
+#define PDGX_TRI_BYTES 14       /* a triangle vertex: x y (16.16), lum, c4      */
+struct pdxb_gfx {
+    pdw  objnum, gen;           /* in: the object; 0 = the text below          */
+    pdw  tseg, toff, tlen;      /* in: direct syntax (<= 1,024 bytes)           */
+    pdw  rseg, roff, rcap;      /* in: the result buffer                        */
+    pdw  rlen;                  /* out: bytes written there                     */
+    pdw  flags, bpc, state;
+    pdw  cseg, coff;            /* PDV_GFX_COLOR: the pdgx_cs entry             */
+    pdw  ncomp, kind, ntri, ok; /* out                                          */
+    struct pd_fx comp[8];       /* in: operands or /Decode; out: PDV_GFX_FN     */
+    pdb  rgb[4];                /* out: r g b, byte 3 = 1 when nothing is painted */
+};
+#define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/

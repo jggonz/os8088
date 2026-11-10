@@ -248,6 +248,39 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDV_GFX_CS               equ 0xC8
+PDV_GFX_COLOR            equ 0xC9
+PDV_GFX_LUT              equ 0xCA
+PDV_GFX_SHADE            equ 0xCB
+PDV_GFX_PAT              equ 0xCC
+PDV_GFX_FN               equ 0xCD
+PDV_GFX_DASH             equ 0xCE
+PDGX_CSBYTES             equ 1264
+PDGX_LUTBYTES            equ 1028
+PDGX_SHBYTES             equ 528
+PDGX_SRCMAX              equ 480
+PDGX_K_GRAY              equ 1
+PDGX_K_RGB               equ 2
+PDGX_K_CMYK              equ 3
+PDGX_K_CALGRAY           equ 4
+PDGX_K_CALRGB            equ 5
+PDGX_K_LAB               equ 6
+PDGX_K_INDEXED           equ 7
+PDGX_K_SEP               equ 8
+PDGX_K_DEVN              equ 9
+PDGX_K_PATTERN           equ 10
+PDGX_F_TABLE             equ 0x01
+PDGX_F_RGBLIKE           equ 0x02
+PDGX_F_CMYKLIKE          equ 0x04
+PDGX_F_MODULE            equ 0x08
+PDGX_F_NONE              equ 0x10
+PDGX_F_PATTERN           equ 0x20
+PDGX_LUT_INVERT          equ 0x01
+PDGX_SH_EXT0             equ 0x01
+PDGX_SH_EXT1             equ 0x02
+PDGX_SH_MESH             equ 0x04
+PDGX_TRI_BYTES           equ 14
+PDGXI_DECODE             equ 0x0001
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -721,5 +754,83 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdgx_cs (1264 bytes) ---------------------------------------------
+PDXB_PDGX_CS_KIND              equ 0
+PDXB_PDGX_CS_N                 equ 1
+PDXB_PDGX_CS_FLAGS             equ 2
+PDXB_PDGX_CS_PAD               equ 3
+PDXB_PDGX_CS_HIVAL             equ 4
+PDXB_PDGX_CS_SRCOBJ            equ 6
+PDXB_PDGX_CS_SRCGEN            equ 8
+PDXB_PDGX_CS_SRCLEN            equ 10
+PDXB_PDGX_CS_RSV               equ 12
+PDXB_PDGX_CS_RSV_N             equ 2
+PDXB_PDGX_CS_RSV_ESZ           equ 2
+PDXB_PDGX_CS_SRC               equ 16
+PDXB_PDGX_CS_SRC_N             equ 480
+PDXB_PDGX_CS_SRC_ESZ           equ 1
+PDXB_PDGX_CS_RGB               equ 496
+PDXB_PDGX_CS_RGB_N             equ 768
+PDXB_PDGX_CS_RGB_ESZ           equ 1
+PDXB_PDGX_CS_BYTES             equ 1264
+
+; ---- struct pdgx_lut (1028 bytes) --------------------------------------------
+PDXB_PDGX_LUT_NCOMP            equ 0
+PDXB_PDGX_LUT_FLAGS            equ 1
+PDXB_PDGX_LUT_PAD              equ 2
+PDXB_PDGX_LUT_T                equ 4
+PDXB_PDGX_LUT_T_N              equ 1024
+PDXB_PDGX_LUT_T_ESZ            equ 1
+PDXB_PDGX_LUT_BYTES            equ 1028
+
+; ---- struct pdgx_shade (570 bytes) ------------------------------------------
+PDXB_PDGX_SHADE_TYPE           equ 0
+PDXB_PDGX_SHADE_FLAGS          equ 1
+PDXB_PDGX_SHADE_NRAMP          equ 2
+PDXB_PDGX_SHADE_COORDS         equ 4
+PDXB_PDGX_SHADE_COORDS_N       equ 6
+PDXB_PDGX_SHADE_COORDS_ESZ     equ 4
+PDXB_PDGX_SHADE_T0             equ 28
+PDXB_PDGX_SHADE_T1             equ 32
+PDXB_PDGX_SHADE_BBOX_OK        equ 36
+PDXB_PDGX_SHADE_BBOX           equ 38
+PDXB_PDGX_SHADE_BBOX_N         equ 4
+PDXB_PDGX_SHADE_BBOX_ESZ       equ 4
+PDXB_PDGX_SHADE_BG_OK          equ 54
+PDXB_PDGX_SHADE_BG_LUM         equ 55
+PDXB_PDGX_SHADE_BG_C4          equ 56
+PDXB_PDGX_SHADE_PAD2           equ 57
+PDXB_PDGX_SHADE_RAMP           equ 58
+PDXB_PDGX_SHADE_RAMP_N         equ 512
+PDXB_PDGX_SHADE_RAMP_ESZ       equ 1
+PDXB_PDGX_SHADE_BYTES          equ 570
+
+; ---- struct pdxb_gfx (72 bytes) --------------------------------------------
+PDXB_GFX_OBJNUM                equ 0
+PDXB_GFX_GEN                   equ 2
+PDXB_GFX_TSEG                  equ 4
+PDXB_GFX_TOFF                  equ 6
+PDXB_GFX_TLEN                  equ 8
+PDXB_GFX_RSEG                  equ 10
+PDXB_GFX_ROFF                  equ 12
+PDXB_GFX_RCAP                  equ 14
+PDXB_GFX_RLEN                  equ 16
+PDXB_GFX_FLAGS                 equ 18
+PDXB_GFX_BPC                   equ 20
+PDXB_GFX_STATE                 equ 22
+PDXB_GFX_CSEG                  equ 24
+PDXB_GFX_COFF                  equ 26
+PDXB_GFX_NCOMP                 equ 28
+PDXB_GFX_KIND                  equ 30
+PDXB_GFX_NTRI                  equ 32
+PDXB_GFX_OK                    equ 34
+PDXB_GFX_COMP                  equ 36
+PDXB_GFX_COMP_N                equ 8
+PDXB_GFX_COMP_ESZ              equ 4
+PDXB_GFX_RGB                   equ 68
+PDXB_GFX_RGB_N                 equ 4
+PDXB_GFX_RGB_ESZ               equ 1
+PDXB_GFX_BYTES                 equ 72
 
 %endif ; PDABI_INC

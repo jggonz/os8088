@@ -1,0 +1,284 @@
+/* ============================================================================
+ * os8088 - apps/pagedesk/pdxg.c                      PDXG.MOD (PAGEDESK-SPEC 20.22.9)
+ *
+ * The graphics slot occupant: colour spaces, functions, shadings, patterns.
+ * One translation unit (SPEC.md 73.1) - the pdxg*.c files are #included in
+ * order - compiled by cc8086 for the target (pdxg.asm is the door) and by the
+ * host `cc -DPD_HOST` for hosttest/pdxg_test.c, which #includes THIS file so it
+ * can reach the statics and supplies pdxgh_* in place of PDENG.
+ *
+ * Verbs 0xC8-0xCF, calling convention PAGEDESK-SPEC 3.1: the door pushes AL, BX,
+ * CX, DX and calls pdx_verb; the answer is AX, with CF = 1 on a failure.
+ * ==========================================================================*/
+#ifdef PD_HOST
+#include "pdabi.h"
+#include "pdmath.h"
+#else
+#include "os88.h"
+#include "pdabi.h"
+#include "pdmath.h"
+#endif
+
+pdw pdx_cf;                             /* CF of this door's answer            */
+pdw pdx_engcf;                          /* CF of the last PDENG call           */
+pdw pdx_engvec[2];                      /* PDENG's door, offset then segment   */
+static pdw g_xbseg;                     /* the exchange block                  */
+
+/* ---- the object source: PDENG on the target, the harness on the host ------- */
+static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap);
+static pdw gx_sopen(pdw obj, pdw gen);
+static pdw gx_sread(pdb *buf, pdw cap);
+static void gx_sclose(void);
+
+#include "pdxgm.c"
+#include "pdxgp.c"
+#include "pdxgf.c"
+#include "pdxgc.c"
+
+#ifdef PD_HOST
+pdw pdxgh_fetch(pdw obj, pdw gen, char *buf, pdw cap);
+pdw pdxgh_sopen(pdw obj, pdw gen);
+pdw pdxgh_sread(pdb *buf, pdw cap);
+static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap) { return pdxgh_fetch(obj, gen, buf, cap); }
+static pdw gx_sopen(pdw obj, pdw gen) { return pdxgh_sopen(obj, gen); }
+static pdw gx_sread(pdb *buf, pdw cap) { return pdxgh_sread(buf, cap); }
+static void gx_sclose(void) { }
+#else
+pdw pdx_engcall(pdw verb, pdw bx, pdw cx, pdw dx);     /* AX; asm on the target */
+static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap)
+{
+    static struct pdxb_rawcopy rc;
+    rc.objnum = obj; rc.gen = gen; rc.done.lo = 0; rc.done.hi = 0;
+    rc.dseg = pd_ds(); rc.doff = (pdw)buf; rc.dmax = cap; rc.got = 0; rc.mode = PDRC_PLAIN;
+    pd_fcopy_out(&rc, g_xbseg, 0, sizeof rc);
+    pdx_engcall(PDV_ENG_RAW_COPY, g_xbseg, 0, 0);
+    if (pdx_engcf) return 0;
+    pd_fcopy_in(g_xbseg, 0, &rc, sizeof rc);
+    return rc.got;
+}
+static pdw gx_sopen(pdw obj, pdw gen)
+{
+    static struct pdxb_strm st;
+    st.objnum = obj; st.gen = gen; st.index = 0; st.page = 0; st.accept = 0;
+    pd_fcopy_out(&st, g_xbseg, 0, sizeof st);
+    return pdx_engcall(PDV_ENG_STRM_OPEN, g_xbseg, 0, 0);
+}
+static pdw gx_sread(pdb *buf, pdw cap)
+{
+    pdw r = pdx_engcall(PDV_ENG_STRM_READ, pd_ds(), (pdw)buf, cap);
+    return pdx_engcf ? 0 : r;
+}
+static void gx_sclose(void) { pdx_engcall(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
+#endif
+
+/* ---- the verbs -------------------------------------------------------------- */
+static struct pdxb_gfx G;
+static struct pdgx_cs R_cs;
+static struct pdgx_lut R_lut;
+
+/* the node the request names: an object, or the text, parsed */
+static pdw gx_source(void)
+{
+    gx_reset();
+    fn_n = 0; fn_sused = 0; fn_cused = 0;
+    if (G.objnum) return gx_fetch_parse(G.objnum, G.gen);
+    if (!G.tlen || G.tlen > GX_TB) return GN_NIL;
+    pd_fcopy_in(G.tseg, G.toff, gx_tb, G.tlen);
+    return gx_parse(gx_tb, G.tlen);
+}
+
+static pdb gx_flags_of(pdw row)
+{
+    switch (cs_t[row].kind) {
+    case GC_RGB: return PDGX_F_RGBLIKE;
+    case GC_CMYK: return PDGX_F_CMYKLIKE;
+    default: break;
+    }
+    return cs_t[row].n > 1 ? PDGX_F_MODULE : 0;
+}
+
+static pdw v_cs(void)
+{
+    pdw node, row, i, k, n;
+    struct pd_fx c, rgb[3];
+    node = gx_source();
+    if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
+    for (i = 0; i < sizeof R_cs; i++) ((pdb *)&R_cs)[i] = 0;
+    row = cs_first();
+    R_cs.kind = cs_t[0].kind; R_cs.n = cs_t[row].n;
+    if (cs_t[0].kind == GC_PAT) {
+        R_cs.flags |= PDGX_F_PATTERN;
+        if (cs_n < 2) R_cs.n = 0;
+    }
+    R_cs.hival = cs_t[row].hival;
+    if (G.objnum) { R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; }
+    else {
+        R_cs.srclen = G.tlen;
+        if (G.tlen > 480) return PDE_GRAPHICS;
+        pd_fcopy_in(G.tseg, G.toff, R_cs.src, G.tlen);   /* gx_tb was reused by the fetches */
+    }
+    if (cs_t[0].kind == GC_PAT && cs_n < 2) goto done;
+    n = cs_t[row].n;
+    if (n == 1) {
+        R_cs.flags |= PDGX_F_TABLE;
+        for (k = 0; k < 256; k++) {
+            if (cs_t[row].kind == GC_IDX) fx_i(&c, (pdi)k);
+            else if (k == 255) fx_i(&c, 1);
+            else fx_raw(&c, 0, (pdw)(k * 257u));
+            if (cs_conv(row, &c, rgb)) { R_cs.flags |= PDGX_F_NONE; break; }
+            R_cs.rgb[k * 3] = (pdb)fx_to255(&rgb[0]);
+            R_cs.rgb[k * 3 + 1] = (pdb)fx_to255(&rgb[1]);
+            R_cs.rgb[k * 3 + 2] = (pdb)fx_to255(&rgb[2]);
+        }
+    } else R_cs.flags |= gx_flags_of(row);
+done:
+    if (G.rcap < sizeof R_cs) return PDE_NOMEM;
+    pd_fcopy_out(&R_cs, G.rseg, G.roff, sizeof R_cs);
+    G.rlen = sizeof R_cs; G.ncomp = R_cs.n; G.kind = R_cs.kind; G.ok = 1;
+    return PDE_OK;
+}
+
+/* PDV_GFX_COLOR: cseg:coff names an XCK_CS entry with PDGX_F_MODULE */
+static pdw v_color(void)
+{
+    static struct pdgx_cs hdr;
+    pdw node, row, i;
+    struct pd_fx rgb[3];
+    pd_fcopy_in(G.cseg, G.coff, &hdr, 16 + 480);
+    G.objnum = hdr.srcobj; G.gen = hdr.srcgen; G.tlen = hdr.srclen;
+    gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
+    if (G.objnum) node = gx_fetch_parse(G.objnum, G.gen);
+    else {
+        for (i = 0; i < hdr.srclen && i < 480; i++) gx_tb[i] = (char)hdr.src[i];
+        node = gx_parse(gx_tb, hdr.srclen);
+    }
+    if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
+    row = cs_first();
+    G.rgb[3] = (pdb)cs_conv(row, G.comp, rgb);
+    G.rgb[0] = (pdb)fx_to255(&rgb[0]); G.rgb[1] = (pdb)fx_to255(&rgb[1]); G.rgb[2] = (pdb)fx_to255(&rgb[2]);
+    G.ok = 1;
+    return PDE_OK;
+}
+
+static pdw gx_grey(pdw row, const struct pd_fx *comps)
+{
+    struct pd_fx rgb[3];
+    pdw r, g, b;
+    if (cs_conv(row, comps, rgb)) return 255;
+    r = fx_to255(&rgb[0]); g = fx_to255(&rgb[1]); b = fx_to255(&rgb[2]);
+    return (pdw)((r * 77u + g * 150u + b * 29u) >> 8);
+}
+
+/* PDV_GFX_LUT: the tables of an image's space (20.22.9) */
+static pdw v_lut(void)
+{
+    pdw node, row, n, i, v, bpc = G.bpc ? G.bpc : 8, maxv, ix;
+    struct pd_fx comps[4], dmin[4], dmax[4], t, f;
+    pdb inv = 0;
+    node = gx_source();
+    if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
+    row = cs_first();
+    n = cs_t[row].n;
+    if (!n || n > 4) return PDE_GRAPHICS;
+    for (i = 0; i < sizeof R_lut; i++) ((pdb *)&R_lut)[i] = 0;
+    R_lut.ncomp = (pdb)n;
+    maxv = (pdw)((1u << (bpc > 15 ? 15 : bpc)) - 1u);
+    if (bpc == 16) maxv = 65535u;
+    for (i = 0; i < n; i++) {
+        if (cs_t[row].kind == GC_IDX) { fx_i(&dmin[i], 0); fx_i(&dmax[i], (pdi)maxv); }
+        else if (cs_t[row].kind == GC_LAB) {
+            if (i == 0) { fx_i(&dmin[0], 0); fx_i(&dmax[0], 100); }
+            else { dmin[i] = cs_t[row].p[3 + 2 * (i - 1)]; dmax[i] = cs_t[row].p[4 + 2 * (i - 1)]; }
+        } else { fx_i(&dmin[i], 0); fx_i(&dmax[i], 1); }
+        if ((G.flags & PDGXI_DECODE) && 2 * i + 1 < 8) { dmin[i] = G.comp[2 * i]; dmax[i] = G.comp[2 * i + 1]; }
+    }
+    if (n == 1) {
+        for (v = 0; v < 256; v++) {
+            if (cs_t[row].kind == GC_IDX && bpc < 8) {
+                pdw r = (pdw)((v * maxv + 127u) / 255u);
+                fx_i(&f, (pdi)r); fx_raw(&f, f.hi, 0);
+                /* index = dmin + r * (dmax - dmin) / maxv */
+                fx_sub(&t, &dmax[0], &dmin[0]); fx_mul(&t, &t, &f);
+                { struct pd_fx mv; fx_i(&mv, (pdi)maxv); fx_div(&t, &t, &mv); }
+                fx_add(&comps[0], &dmin[0], &t);
+            } else if (cs_t[row].kind == GC_IDX) {
+                fx_i(&f, (pdi)v);
+                fx_sub(&t, &dmax[0], &dmin[0]);
+                fx_i(&comps[0], 255);
+                fx_div(&t, &t, &comps[0]); fx_mul(&t, &t, &f);
+                fx_add(&comps[0], &dmin[0], &t);
+            } else {
+                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)(v * 257u));
+                fx_sub(&t, &dmax[0], &dmin[0]); fx_mul(&t, &t, &f);
+                fx_add(&comps[0], &dmin[0], &t);
+            }
+            R_lut.t[v] = (pdb)gx_grey(row, comps);
+        }
+    } else {
+        /* additive or subtractive: does the zero vector paint white? */
+        for (i = 0; i < n; i++) comps[i] = dmin[i];
+        if (cs_t[row].kind == GC_CMYK || cs_t[row].kind == GC_DEVN || gx_grey(row, comps) >= 200) inv = PDGX_LUT_INVERT;
+        for (i = 0; i < n; i++) {
+            for (v = 0; v < 256; v++) {
+                pdw j;
+                for (j = 0; j < n; j++) comps[j] = dmin[j];
+                fx_raw(&f, v == 255 ? 1 : 0, v == 255 ? 0 : (pdw)(v * 257u));
+                fx_sub(&t, &dmax[i], &dmin[i]); fx_mul(&t, &t, &f);
+                fx_add(&comps[i], &dmin[i], &t);
+                ix = gx_grey(row, comps);
+                if (cs_t[row].kind == GC_LAB && i == 0) { R_lut.t[v] = (pdb)ix; continue; }
+                R_lut.t[i * 256 + v] = (pdb)(inv ? 255 - ix : (cs_t[row].kind == GC_LAB ? 0 : ix));
+            }
+        }
+        R_lut.flags = inv;
+    }
+    if (G.rcap < sizeof R_lut) return PDE_NOMEM;
+    pd_fcopy_out(&R_lut, G.rseg, G.roff, sizeof R_lut);
+    G.rlen = sizeof R_lut; G.ncomp = n; G.ok = 1;
+    return PDE_OK;
+}
+
+/* PDV_GFX_FN: evaluate one function; the inputs in comp[], ncomp of them */
+static pdw v_fn(void)
+{
+    pdw node, f, n, i;
+    node = gx_source();
+    if (node == GN_NIL) return PDE_GRAPHICS;
+    f = fn_compile(node);
+    if (f == FNE_NONE) return PDE_GRAPHICS;
+    n = fn_eval(f, G.comp, fe_x);
+    for (i = 0; i < n && i < 8; i++) G.comp[i] = fe_x[i];
+    G.ncomp = n; G.ok = n ? 1 : 0;
+    return PDE_OK;
+}
+
+static pdw v_init(pdw bx)
+{
+    static struct pdxb_init in;
+    g_xbseg = bx;
+    pd_fcopy_in(bx, 0, &in, sizeof in);
+    pdx_engvec[0] = in.eng_off; pdx_engvec[1] = in.eng_seg;
+    return PDE_OK;
+}
+
+/* the door's entry: verb, then BX/CX/DX; the answer in AX, CF in pdx_cf */
+pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
+{
+    pdw r;
+    (void)cx; (void)dx;
+    pdx_cf = 0;
+    if (verb == PDV_X_INIT) return v_init(bx);
+    if (verb < PDV_GFX_CS || verb > PDV_GFX_DASH) { pdx_cf = 1; return PDE_RANGE; }
+    pd_fcopy_in(g_xbseg, 0, &G, sizeof G);
+    G.ok = 0;
+    switch (verb) {
+    case PDV_GFX_CS: r = v_cs(); break;
+    case PDV_GFX_COLOR: r = v_color(); break;
+    case PDV_GFX_LUT: r = v_lut(); break;
+    case PDV_GFX_FN: r = v_fn(); break;
+    default: r = PDE_RANGE; break;
+    }
+    pd_fcopy_out(&G, g_xbseg, 0, sizeof G);
+    if (r != PDE_OK) pdx_cf = 1;
+    return r;
+}
