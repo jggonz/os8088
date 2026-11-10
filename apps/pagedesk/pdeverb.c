@@ -348,9 +348,12 @@ static int key_index(const char *k)
 
 static pdw v_dict_get(void)
 {
-    pdw rc, k, j;
+    pdw rc, k, j, at;
     int idx;
+    static pdw dat[3];
     pd_fcopy_in(g_xb, 0, &dg, sizeof(struct pdxb_dictget));
+    at = dg.gen == PDX8_DIRECT;                          /* a DIRECT dictionary (RES_LOOKUP's PDRL_DIRECT): { gen, coff } follow the struct */
+    if (at) { pd_fcopy_in(g_xb, sizeof(struct pdxb_dictget), dat, 6); dg.gen = dat[0]; }
     cr_curn = dg.objnum; cr_curg = dg.gen;                 /* strings read below are this object's */
     dg.kind = PDK_NULL; dg.refnum = 0; dg.refgen = 0; dg.len = 0; dg.count = 0; dg.text[0] = 0;
     dg.num.lo = 0; dg.num.hi = 0;
@@ -368,7 +371,7 @@ static pdw v_dict_get(void)
          * different key or a moved one cannot match (and the file does not
          * change while it is open; fl_invalidate forgets the offset) */
         rc = 1;
-        if (dg.objnum == dk_obj && dg.gen == dk_gen && dg.key[0][0]) {
+        if (!at && dg.objnum == dk_obj && dg.gen == dk_gen && dg.key[0][0]) {
             for (j = 0; dg.key[0][j]; j++) ;
             u32_cp(&dc_a, &dk_pos);                     /* L is fobj: pde_verb set it */
             u32_sub16(&dc_a, (pdw)(j + 1));
@@ -384,6 +387,7 @@ static pdw v_dict_get(void)
             rc = ob_enter(dg.objnum, dg.gen);
             if (rc) return rc;
             if (ob_null) return PDE_NOTFOUND;
+            if (at) { dc_a.lo = dat[1]; dc_a.hi = dat[2]; pdm_u32_add(&dc_a, &dc_a, &ob_hdr); lx_seek(&dc_a); }
             rc = ob_value();
             if (rc) return rc;
         }
@@ -415,7 +419,7 @@ static pdw v_dict_get(void)
             if (ov.kind != PDK_DICT) return PDE_NOTFOUND;
             rc = ob_dict_find(dg.key[k]);
             if (rc) return rc;
-            if (k == 0 && dg.objnum) { dk_obj = dg.objnum; dk_gen = dg.gen; lx_tell(&dk_pos); }
+            if (k == 0 && dg.objnum && !at) { dk_obj = dg.objnum; dk_gen = dg.gen; lx_tell(&dk_pos); }
             rc = ob_value();
             if (rc) return rc;
         }

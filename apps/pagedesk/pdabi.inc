@@ -300,6 +300,7 @@ PDGXI_CAT_PAT            equ 0x0300
 PDGXI_TILES              equ 0x0004
 PDGXI_RES                equ 0x0002
 PDM_MAGIC_X8             equ 0x3850
+PDX8_DIRECT              equ 0xFFFD
 PDX8_RES                 equ 16384
 PDX8_ENGVEC              equ 12
 PDV_X8_INIT              equ 0xD1
