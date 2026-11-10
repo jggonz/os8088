@@ -150,12 +150,16 @@ void pdb_dump_write(const char *path, int w, int h)
 #endif
 static void x8_strips(void)
 {
-    static struct pdxb_x8band b;
     pdi lo = g_wlo, hi = g_whi, y;
+#ifdef PD_HOST
+    static struct pdxb_x8band b;
     b.dls = g_dls; b.dllen = g_dllen; b.bx0 = g_bx0; b.by0 = g_by0; b.bw = (pdw)g_bw;
     b.bseg = g_bseg; b.bstride = g_bstride; b.bpp = g_bpp;
     b.pgx0 = g_pgx0; b.pgy0 = g_pgy0; b.pgx1 = g_pgx1; b.pgy1 = g_pgy1;
     pd_fcopy_out(&b, g_xb, 0, sizeof b);
+#else
+    pdr_x8pack();
+#endif
     x8_call(PDV_X8_CTL, X8C_BAND, 0, 0);
     for (y = lo; y <= hi; y = (pdi)(y + 8)) {
         g_wlo = y; g_whi = (pdi)(y + 7) > hi ? hi : (pdi)(y + 7);

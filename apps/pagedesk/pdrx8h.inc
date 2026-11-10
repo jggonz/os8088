@@ -45,3 +45,40 @@ _pdr_x8far:
     mov [_x8_cf], cx
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; pdr_x8pack(): the band's geometry into the exchange block as pdxb_x8band
+; (dls dllen bx0 by0 bw bseg bstride bpp pgx0 pgy0 pgx1 pgy1)
+; -----------------------------------------------------------------------------
+_pdr_x8pack:
+    push es
+    push di
+    mov es, [_g_xb]
+    xor di, di
+    mov ax, [_g_dls]
+    stosw
+    mov ax, [_g_dllen]
+    stosw
+    mov ax, [_g_bx0]
+    stosw
+    mov ax, [_g_by0]
+    stosw
+    mov ax, [_g_bw]
+    stosw
+    mov ax, [_g_bseg]
+    stosw
+    mov ax, [_g_bstride]
+    stosw
+    mov ax, [_g_bpp]
+    stosw
+    mov ax, [_g_pgx0]
+    stosw
+    mov ax, [_g_pgy0]
+    stosw
+    mov ax, [_g_pgx1]
+    stosw
+    mov ax, [_g_pgy1]
+    stosw
+    pop di
+    pop es
+    ret

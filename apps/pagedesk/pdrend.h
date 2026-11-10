@@ -128,7 +128,8 @@ extern pdw pdx8_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 #define x8_call(v, b, c, d)  pdx8_verb(v, b, c, d)
 #else
 pdw pdr_x8far(pdw verb, pdw bx, pdw cx, pdw dx);    /* pdrx8h.inc: AX; CF, CX, DX in x8_cf, x8_ocx, x8_odx */
-void pdr_x8bind(pdw seg);                           /* the door's code selector, once a region is held */
+void pdr_x8bind(pdw seg);
+void pdr_x8pack(void);                              /* the band geometry into XB as pdxb_x8band */                           /* the door's code selector, once a region is held */
 #define x8_call(v, b, c, d)  pdr_x8far(v, b, c, d)
 #endif
 extern pdw x8_cf, x8_ocx, x8_odx;
