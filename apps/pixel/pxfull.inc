@@ -19,7 +19,6 @@ px_fsoffer:
     push cx
     push si
     mov bx, [px_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the FSXM bits, DL = the kind
     xchg ax, bx                     ; BX = the bits
     xor cx, cx                      ; CL = the mask

@@ -3168,8 +3168,8 @@ apic_wm_snap:
     OSAPI_IEND
     OSAPI_RSLOT fsx_caps           ; 0x0217 - fullscreen exclusive (SPEC.md
                                   ;          53): AX = the FSXM bitmask the
-                                  ;          display of window BX (CH = 0) or
-                                  ;          display CH-1 can set, DL = its kind.
+                                  ;          display of window BX (BX = 1..15:
+                                  ;          display BX-1) can set, DL = its kind.
                                   ;          Any context - it is how an app
                                   ;          greys its mode menu (SPEC.md 47)
     OSAPI_RXCELL fsx_run       ; 0x021D - the bracket (SPEC.md 53.1): AX =

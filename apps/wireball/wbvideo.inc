@@ -51,7 +51,6 @@ wv_mode:
     cmp byte [wv_fast], 0
     je .set
     mov bx, [wb_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     test ax, 1 << FSXM_MODEX
     jz .mono

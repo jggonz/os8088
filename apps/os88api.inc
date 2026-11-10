@@ -2895,11 +2895,8 @@ FSKP_DONE   equ 7
 ; but note what they cost: SYS_SNAPSHOT runs with interrupts off for the length
 ; a table copy, so it is a twice-a-second call, not a per-frame one.
 %define OSAPI_SYS_SNAPSHOT      KERNEL_SEG:0x01F8   ; ES:DI = a SYS_SNAPSHOT_SIZE
-                                 ; buffer, CX >= 1 = the instance records it
-                                 ; holds (INST_MAX); out CX = the records
-                                 ; written, min(CX, the kernel's count) - THE
-                                 ; WALK'S BOUND. Clobbers AX, BX, DX.
-                                 ; The scheduler header (SS_*) then CX
+                                 ; buffer; out BX = INST_MAX, AX clobbered.
+                                 ; The scheduler header (SS_*) then INST_MAX
                                  ; records of SSI_RECSZ (SSI_*), all inside ONE
                                  ; cli window - which is the point: an instance
                                  ; record is freed atomically with its task
@@ -2907,9 +2904,8 @@ FSKP_DONE   equ 7
                                  ; together or a cycle diff lands on the wrong
                                  ; row
 %define OSAPI_CLAIM_SNAPSHOT    KERNEL_SEG:0x01FE   ; ES:DI = a CLAIM_SNAPSHOT_SIZE
-                                 ; buffer, CX >= 1 = the records it holds
-                                 ; (MEM_MAX); out CX = the records written,
-                                 ; min(CX, the kernel's count). Records of
+                                 ; buffer; every register kept. The kernel's
+                                 ; MEM_MAX records (16 on kern_small) of
                                  ; CLS_RECSZ: base segment (0 = a free record),
                                  ; paragraphs, owner word (SPEC.md 50.2)
 %define OSAPI_SYS_KB        KERNEL_SEG:0x0204   ; ES:DI = a SYSKB_SIZE buffer;
@@ -2933,9 +2929,8 @@ FSKP_DONE   equ 7
 SS_TICKS   equ 0                ; word: the tick counter at the snapshot
 SS_CUR     equ 2                ; byte: the running task slot
 SS_COOP    equ 3                ; byte: 0 pre-emptive, 1 cooperative
-SS_NTASK   equ 4                ; byte: the KERNEL's MAX_TASKS
-SS_NINST   equ 5                ; byte: the KERNEL's INST_MAX (CX out is the
-                                ; records written, which may be fewer)
+SS_NTASK   equ 4                ; byte: MAX_TASKS
+SS_NINST   equ 5                ; byte: INST_MAX, likewise BX
 SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
                                 ; ONE VALUE THAT IS THE SNAPSHOT'S OWN: 3 is
                                 ; the idle task (SPEC.md 8.1.2, 28.7), which
@@ -5525,11 +5520,9 @@ OS88_BSS_SIZE equ 0
 
 ; --- fullscreen exclusive (SPEC.md 53) ---------------------------------------
 
-%define OSAPI_FSX_CAPS      KERNEL_SEG:0x0217   ; in CH = 0 and BX = the
-                                                ; window to ask ABOUT (0 =
-                                                ; whatever is frontmost),
-                                                ; or CH = n: display n-1,
-                                                ; BX not read; out AX =
+%define OSAPI_FSX_CAPS      KERNEL_SEG:0x0217   ; in BX = the window to ask
+                                                ; ABOUT (0 = whatever is
+                                                ; frontmost); out AX =
                                                 ; bitmask (bit n = FSXM id n
                                                 ; settable on the display
                                                 ; that window is on), DL =
@@ -5554,18 +5547,14 @@ OS88_BSS_SIZE equ 0
                                                 ; yours does not exist yet.
                                                 ; SPEC.md 39.18.2.
                                                 ;
-                                                ; CH = n ASKS ABOUT A
-                                                ; DISPLAY instead - n-1 -
+                                                ; BX = 1..15 ASKS ABOUT A
+                                                ; DISPLAY instead - BX-1 -
                                                 ; and CF=1 is "no such
-                                                ; display": walk CH = 1, 2,
+                                                ; display": walk BX = 1, 2,
                                                 ; ... to find the one that
                                                 ; can, then OSAPI_FSX_RUN
-                                                ; with the same CH (SPEC.md
-                                                ; 53.1.2). CH = 0 is NOT
-                                                ; optional: it was BX = 1..15
-                                                ; until kernel size pass 19
-                                                ; (R12), so set CH to ask
-                                                ; about a window.
+                                                ; with CH = BX (SPEC.md
+                                                ; 53.1.2).
 
 %define OSAPI_FSX_RUN       KERNEL_SEG:0x021D   ; the bracket (SPEC.md 53.1).
                                                 ; In AX = a near proc in your

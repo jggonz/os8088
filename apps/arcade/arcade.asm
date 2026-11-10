@@ -1098,7 +1098,6 @@ ar_fsx:
 ; inv_setup - Space Invaders' picture: VGA, Hercules or CGA. SI = the window
 inv_setup:
     mov bx, si
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov dl, FSXM_VGA12
     test ax, 1 << FSXM_VGA12

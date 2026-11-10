@@ -315,7 +315,6 @@ gr_exclusive:
     OS88_ALTENTER_SEED
     call gr_release_chord
     xor bx, bx
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov al, FSXM_VGA12
     cmp dl, VID_VGA
@@ -437,7 +436,6 @@ gr_layout:
     mov word [gr_kind], (2 << 8) | VID_CGA
     jmp short .box
 .surface:
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov [gr_kind], dl
     mov byte [gr_depth], 4

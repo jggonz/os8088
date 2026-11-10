@@ -829,12 +829,11 @@ ri_p_vid:
     mov [ri_vdock], cx
     mov [ri_vkind], dx
     mov word [ri_ndisp], 0
-    mov bx, 1                       ; FSX_CAPS CH = n asks about display n-1
+    mov bx, 1                       ; FSX_CAPS BX = n asks about display n-1
 .disp:
     cmp bx, 4
     ja .ega
     push bx
-    mov ch, bl
     call OSAPI_FSX_CAPS
     pop bx
     jc .ega
@@ -1141,9 +1140,9 @@ ri_p_dev:
     push ds
     pop es
     mov di, ri_claims
-    mov cx, MEM_MAX
-    call OSAPI_CLAIM_SNAPSHOT       ; CX = the records written
+    call OSAPI_CLAIM_SNAPSHOT
     mov si, ri_claims
+    mov cx, MEM_MAX
 .claim:
     cmp word [si + CLS_SEG], 0
     je .cnext
@@ -1191,7 +1190,6 @@ ri_p_dev:
     add si, CLS_RECSZ
     loop .claim
     mov di, ri_snap                 ; the running programs
-    mov cx, INST_MAX
     call OSAPI_SYS_SNAPSHOT
     pop es
     call OSAPI_CLK_GET

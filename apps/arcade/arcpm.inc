@@ -831,7 +831,6 @@ pm_fmpate:
 ; -----------------------------------------------------------------------------
 pm_setup:
     mov bx, si
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     test ax, 1 << FSXM_VGA12
     jnz .vga

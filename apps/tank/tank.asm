@@ -441,7 +441,6 @@ tk_adapter:
     push bx
     push dx
     mov bx, [tk_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = settable ids, DL = that display's
     mov [tk_vidk], dl               ; VID_* kind - which is also the attract
                                     ; window's ink question, and it is asked

@@ -1042,7 +1042,6 @@ dd_geom_fsx:
     mov [dd_ch], dx
 .no:
     xor bx, bx
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; DL = THIS display's VID_* kind, which on
     mov [dd_vkind], dl              ; a mixed machine OSAPI_VIDEO gets wrong
     call dd_depth_of                ; (SPEC.md 53.7.1's second question)

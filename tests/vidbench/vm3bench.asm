@@ -450,7 +450,6 @@ vm_run:
     loop .fill
     pop es
     mov bx, [vm_win]
-    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; DL = the adapter
     cmp dl, VID_VGA
     je .vga

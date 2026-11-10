@@ -1692,13 +1692,12 @@ wc_mmss:
 ; wc_snap - OSAPI_SYS_SNAPSHOT into the strip's page, which no take is
 ; drawing whenever this runs (launch, Record before the strip, Stop after it,
 ; Recover, a save - all refused during this instance's take but Stop).
-; out CX = the records written. clobbers AX, BX, DX, DI
+; out BX = INST_MAX. clobbers AX, DI
 wc_snap:
     push es
     push ds
     pop es
     mov di, wc_cols
-    mov cx, INST_MAX
     call OSAPI_SYS_SNAPSHOT
     pop es
     ret
@@ -1710,7 +1709,8 @@ wc_snap:
 ; record whose region is DS (inside one callback the region cannot move).
 ; clobbers AX, BX, CX, DX, SI, DI
 wc_myslot:
-    call wc_snap                    ; CX = the records written
+    call wc_snap
+    mov cx, bx
     mov si, wc_cols + SS_INST
     xor dl, dl
     mov ax, ds

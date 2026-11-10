@@ -321,10 +321,10 @@ sn_live:
     push ds
     pop es
     mov di, sn_band
-    mov cx, INST_MAX
-    call OSAPI_SYS_SNAPSHOT         ; CX = the records written
+    call OSAPI_SYS_SNAPSHOT
     xor ax, ax
     mov dx, 1
+    mov cx, INST_MAX
     mov di, sn_band + SS_INST
 .l:
     cmp byte [di + SSI_STATE], 1

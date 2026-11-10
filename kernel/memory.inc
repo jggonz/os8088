@@ -6194,15 +6194,10 @@ mem_owner_of_x:
 ; osapi_claim_snapshot - API slot 0x01FE: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
-; in:  ES:DI = a buffer the caller owns, CX >= 1 = the CLS_RECSZ records it
-;      holds (CLAIM_SNAPSHOT_SIZE holds MEM_MAX, the SDK's)
-; out: CX = the records written, min(CX, this kernel's MEM_MAX); the buffer
-;      filled that far and no further; DI unchanged
-; clobbers: CX (output) and the flags
-;
-; BOUNDED BY THE CALLER (ABI-BREAK-LIST R2, kernel size pass 19): it filled
-; to the kernel's own MEM_MAX, so a kernel with more claim records than the
-; SDK a package was built against overran the package's buffer silently.
+; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
+; out: the buffer filled (MEM_MAX records, this kernel's); DI unchanged
+; clobbers: the flags. The AX = MEM_MAX answer was withdrawn at kernel
+;      size pass 19 (nogrow, -3 bytes): one test read it
 ;
 ; Whole rather than per record because both things a memory map does with
 ; this table want all of it: it walks every record to draw a band, and hashes
@@ -6219,16 +6214,15 @@ mem_owner_of_x:
 %error "a claim record is no longer its own snapshot prefix - the copy below"
 %endif
 mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
-    cmp cx, MEM_MAX             ; NO DS BANK: the one door in is the RCSLOT
-    jbe .cap                    ; cell, whose api_rsc banks and restores DS
-    mov cx, MEM_MAX             ; round this whole body (size pass 10). The
-.cap:                           ; CALLER'S capacity bounds the copy (R2)
-    push cx                     ; ...and is the answer
+    push cx                     ; NO DS BANK: the one door in is the RCSLOT
+                                ; cell, whose api_rsc banks and restores DS
+                                ; round this whole body (size pass 10)
     push si
     push di
     push ss                     ; DS = LOW_SEG for the duration: the claim map
     pop ds                      ; lives there and movs reads DS:SI
     mov si, mem_tab
+    mov cx, MEM_MAX
     cld                         ; SPEC.md 1 rule 3 says DF is 0 on entry; this
                                 ; is the kernel's own string-op convention and
                                 ; costs one byte to not depend on it
@@ -6240,7 +6234,7 @@ mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
     loop .rec                   ; is three movsw and a stride, not nine fields
     pop di
     pop si
-    pop cx                      ; out CX = the records written
+    pop cx
     retf
 
 ; =============================================================================

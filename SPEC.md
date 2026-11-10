@@ -23172,11 +23172,9 @@ byte-identical.
 The rule is 51.0's, and three of the four rows are one instance of it: the
 constant is an input to a buffer-size `equ` the PACKAGE compiles into itself
 (`SYS_SNAPSHOT_SIZE`, `CLAIM_SNAPSHOT_SIZE`), the package allocates that buffer
-and `osapi_sys_snapshot_x` fills it bounded by **the kernel's own** figure -
-and, since kernel size pass 19 (§20.9, ABI-BREAK-LIST R2), by the capacity the
-caller passes in CX too. So a package built at 12 reading a 6-record snapshot
-over-allocates, which is safe, and shrinking the SDK to match would have
-overflowed that buffer on `kern_big` before the caller's bound existed.
+and `osapi_sys_snapshot_x` fills it bounded by **the kernel's own** figure. So
+a package built at 12 reading a 6-record snapshot over-allocates, which is
+safe, and shrinking the SDK to match would overflow that buffer on `kern_big`.
 `MAX_TASKS` is additionally pinned by `SS_TMAX` = 16, which exists because the
 unpinned version already bit: 8 -> 14 moved `SS_INST` by 30 bytes and a
 TASKMGR built against the old SDK was written past its own buffer by exactly
@@ -23198,15 +23196,11 @@ wm_ownseg:  cmp al, MAX_WIN
 Six kernel sites validate a package-supplied window reference that way. A
 package built at 12 asking a 6-slot kernel for slot 11 gets a clean refusal.
 
-#### 11.102.2 …and there was NO refusal on the snapshot path, on either side
+#### 11.102.2 …and there is NO refusal on the snapshot path, on either side
 
-*Superseded at kernel size pass 19: the snapshots take the caller's capacity
-in CX and answer the records written there (§20.9, ABI-BREAK-LIST R2), so
-the overrun described below is now a bound rather than luck. Kept as the
-record of why.*
-
-Worth stating because the SDK advertised one. `OSAPI_SYS_SNAPSHOT` answers
-`AX = MAX_TASKS, BX = INST_MAX`, the buffer carries `SS_NTASK`/`SS_NINST`, and
+Worth stating because the SDK advertises one. `OSAPI_SYS_SNAPSHOT` answered
+`AX = MAX_TASKS, BX = INST_MAX` (the `AX` half withdrawn at kernel size pass
+19), the buffer carries `SS_NTASK`/`SS_NINST`, and
 the comment beside them says the point is *"so a stale SDK can SEE the
 mismatch"*. **Nothing reads any of it.** Neither field has a reader anywhere
 outside its own definition, and both call sites ignore the registers and walk
@@ -46483,15 +46477,13 @@ OSAPI_MEM_AVAIL          out AX = largest free run in KB, BX = total free
                          KB. The only honest number to size against — int
                          12h does not know what the kernel and the other
                          packages already hold.
-OSAPI_SYS_SNAPSHOT       in ES:DI = a SYS_SNAPSHOT_SIZE buffer, CX >= 1 =
-                         the instance records it holds (INST_MAX); out
-                         CX = the records written, clobbers AX/BX/DX. The
-                         scheduler header then one record per instance,
-                         copied in ONE cli window (§20.9).
-OSAPI_CLAIM_SNAPSHOT     in ES:DI = a CLAIM_SNAPSHOT_SIZE buffer, CX >= 1
-                         = the records it holds (MEM_MAX); out CX = the
-                         records written. Every claim record: base segment
-                         (0 = free), paragraphs, owner (§50.2).
+OSAPI_SYS_SNAPSHOT       in ES:DI = a SYS_SNAPSHOT_SIZE buffer; out BX =
+                         INST_MAX, AX clobbered. The scheduler header
+                         then one record per instance, copied in ONE cli
+                         window (§20.9).
+OSAPI_CLAIM_SNAPSHOT     in ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; every
+                         register kept. Every claim record: base segment (0 =
+                         free), paragraphs, owner (§50.2).
 OSAPI_SYS_KB             in ES:DI = a SYSKB_SIZE buffer; every register
                          preserved. The kernel's own footprint in KB
                          broken into parts that sum to SK_KERN, then the
@@ -48082,19 +48074,19 @@ Three of the four are **snapshots**, and the shape is deliberate: a whole
 table copied into a buffer the caller supplies through **ES:DI**, never a
 getter per record. The destination is the caller's own choice, exactly as
 `xm_copy` and `gfx_blit4` already do, so none of them needs an `X` stub.
-The two tables are **bounded by the caller** (kernel size pass 19,
-ABI-BREAK-LIST R2): CX going in is how many records the buffer holds (at
-least 1), the kernel writes the fewer of that and its own count, and CX
-coming out is how many it wrote - the bound a walk wants. A kernel whose table
-has grown past the SDK a package was built against therefore fills the
-buffer and stops, rather than writing past it. The AX/BX answers this
-replaced (`MAX_TASKS`, `INST_MAX`, `MEM_MAX`) went with it; `SS_NTASK` and
-`SS_NINST` still carry the kernel's own figures.
+`sys_snapshot` answers a **count** (`BX`, its instance table's), which is what
+lets a package built against an older SDK notice that a table has grown
+rather than walk off the end of its own buffer. The `AX` answers (`MAX_TASKS`
+here, `MEM_MAX` from `claim_snapshot`) were withdrawn at kernel size pass 19,
+3 bytes each on every kernel: one test read `MEM_MAX`, nothing read
+`MAX_TASKS`, and `SS_NTASK` carries it. Bounding the copy by a capacity the
+caller passes (ABI-BREAK-LIST R2) is a correctness change that costs bytes,
+deferred to the additions pass.
 
 | slot | fills | answers |
 |------|-------|---------|
-| 0x0210 `sys_snapshot`   | `SS_*` header + min(CX, `INST_MAX`) × `SSI_RECSZ` records | CX = the records written |
-| 0x0216 `claim_snapshot` | min(CX, `MEM_MAX`) × `CLS_RECSZ` records                  | CX = the records written |
+| 0x0210 `sys_snapshot`   | `SS_*` header + `INST_MAX` × `SSI_RECSZ` records | BX = `INST_MAX` |
+| 0x0216 `claim_snapshot` | `MEM_MAX` × `CLS_RECSZ` records                  | — (everything preserved) |
 | 0x021C `sys_kb`     | the `SK_*` block, KB                             | — (everything preserved) |
 
 Three things about them are load-bearing.
@@ -109199,15 +109191,11 @@ secondary: a CGA 4-colour video opened on the Hercules, `OSAPI_FSX_CAPS`
 said no CGA 320, and the Video Player refused it with the CGA one inch
 away. Two arguments, one each, and no new slot:
 
-- **`OSAPI_FSX_CAPS` with CH = n asks about DISPLAY n-1** rather than
-  about the window in BX - the same register and the same numbering as
-  `OSAPI_FSX_RUN`'s below, so a walk's answer is the bracket's argument.
-  CF=1 when there is no such display, so a package walks CH = 1, 2, ...
+- **`OSAPI_FSX_CAPS` with BX = 1..15 asks about DISPLAY BX-1** rather than
+  about a window - a value no window pointer takes, `wm_wins` being far past
+  it. CF=1 when there is no such display, so a package walks BX = 1, 2, ...
   until it refuses, and that is the enumeration. On `kern_small`, and on any
-  machine with one display, CH = 1 is the primary and 2 refuses. Until
-  kernel size pass 19 (ABI-BREAK-LIST R12) this was BX = 1..15, an overload
-  of the window pointer that cost the kernel a range test of its own; a
-  caller asking about a window now sets CH = 0.
+  machine with one display, BX = 1 is the primary and 2 refuses.
 - **`OSAPI_FSX_RUN` CH = n opens the bracket on display n-1** - the display
   `fsx_mode`'s caps test asks about and collapses the machine onto, and the
   one `OSAPI_FSX_SURF` describes - where CH = 0, every caller before it,
@@ -110402,8 +110390,7 @@ onto a 350-row Hercules loses its bottom third.
 ### 53.8 The package ABI (§20.3 slots)
 
 ```
-0x022F fsx_caps   in CH = 0 and BX = window (0 frontmost), or CH = n =
-                  display n-1 (R12, kernel size pass 19).
+0x022F fsx_caps   in BX = window (0 frontmost), or 1..15 = display BX-1.
                   out AX = that display's FSXM bitmask, DL = its kind
                   (VGA for VESA); CF=1 no such display. Any context.
 0x0235 fsx_run    in AX = near entry, BX = own window ptr, CL = flags
@@ -210973,7 +210960,7 @@ window was on then. The only way to play it was to swap the primary.
 - **`vp_canplay` asks the window's display first**, as every play before,
   and a file it plays is played exactly as it was - windowed, Live or full
   screen on that display. Refused there, it **walks the displays**,
-  `OSAPI_FSX_CAPS` with CH = 1, 2, ... until one says there is no such
+  `OSAPI_FSX_CAPS` with BX = 1, 2, ... until one says there is no such
   display (SPEC.md 53.1.2), and asks each the same question. The first that
   can is `[vp_fsdisp]`, and the card says which: `Plays full screen on the
   CGA`. None can: the window's own refusal is the one shown.

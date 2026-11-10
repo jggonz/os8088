@@ -30,10 +30,10 @@ w16j_give:
     push cx
     push dx
     push di
-    xor di, di
-    mov cx, INST_MAX
-    call OSAPI_SYS_SNAPSHOT         ; CX = the records written; DX spent
     mov dx, si                      ; DX = the locator, across the walk
+    xor di, di
+    call OSAPI_SYS_SNAPSHOT         ; BX = INST_MAX
+    mov cx, bx
     mov bx, SS_INST
 .r:
     cmp byte [es:bx + SSI_STATE], 1

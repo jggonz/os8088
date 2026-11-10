@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "b02b1802b9e7b4c90bb9842e54cc336ad0a7fd2d1d1fae9b33eb44cf72050800",
+  "fingerprint": "964e146af76bede70473e211243611d70feb7eb460a3fbe73297bafbd182792b",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "2c4bf7d45d17d389de213ebe638f1570c9f0663e2bb18545f1089f7271956f5f",
+  "fingerprint": "6c8808081d98bfa3d9d0c7a1db8dae24767982283ad5ef5f9c0a43e4648792e2",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2091,6 +2091,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of door: OS88_RARE (vector 81h) and the rare door's contract, rare cells keep the caller's IF (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "6c8808081d98bfa3d9d0c7a1db8dae24767982283ad5ef5f9c0a43e4648792e2",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "R2 and R12 reverted to the old SYS_SNAPSHOT/CLAIM_SNAPSHOT and FSX_CAPS contracts under BRIEF 0.0; the snapshots' unread AX answers withdrawn (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "964e146af76bede70473e211243611d70feb7eb460a3fbe73297bafbd182792b",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "R2 and R12 reverted to the old SYS_SNAPSHOT/CLAIM_SNAPSHOT and FSX_CAPS contracts under BRIEF 0.0; the snapshots' unread AX answers withdrawn (kernel size pass 19)",
    "to": 14
   }
  ]
