@@ -11,7 +11,7 @@
  * key goes to PDENG with PDV_ENG_SETKEY and the job calls OPEN again.
  *
  * THE HELD KEYS (20.22.2.10). A key that opened the document is kept, with
- * the first 16 bytes of its /ID[0], in one 512-byte claim (pdu_kseg, made on
+ * the first 16 bytes of its /ID[0] and of its /Encrypt /U, in one 512-byte claim (pdu_kseg, made on
  * the first key): a save keeps the source's /Encrypt and /ID[0], so the file
  * re-opened after it - and the document re-opened after the Insert's
  * pre-flight - takes it with SETKEY and no question. The same claim carries
@@ -35,6 +35,7 @@ static unsigned char pdu_au_ui;         /* ui's popover is up */
 static unsigned char pdu_au_typed;      /* a typed password has been tried */
 #define PDU_CRY(f) ((unsigned)&((struct pdxb_crypt *)0)->f)
 #define PDU_WK(f)  ((unsigned)&((struct pdxb_wkey *)0)->f)
+#define PDU_KS_OWNU (PDU_KS_OWNID + 16) /* ...and its /Encrypt's /U's (QA R20) */
 
 /* CRYPTINFO of a keyed file into the pdxb_wkey at kseg:off (and, for the
  * document's, its /ID[0]); 0 = no claim or no answer */
@@ -53,22 +54,28 @@ static int ovl_key_get(unsigned off)
     return 1;
 }
 
-/* the held key, when this half-open file's /ID[0] is the one it was kept
- * with: SETKEY, and OPEN resumes with no PDXK and no question */
+/* the held key, when this half-open file is the one it was kept for: SETKEY,
+ * and OPEN resumes with no question and no derivation. The XB holds what
+ * PDV_KEY_COST just read from the file, and /ID[0], the /U and the methods
+ * (stm str eff encmeta) must all be the kept ones. /ID[0] alone is not
+ * enough (QA R20): a writer that re-encrypts a document keeps its /ID - the
+ * GUIDE_* fixtures are XTGUIDE under RC4-128, AESV2 and R6 with one /ID - and
+ * the held key of one drew every page of another as garbage. Nor is /U: R3
+ * RC4-128 and R4 AESV2 with the same passwords derive the SAME key and /U,
+ * and only the method tells them apart. A save keeps the /Encrypt and /ID[0]
+ * (20.22.4.5), so the re-opens this is for still match. */
 static int ovl_key_try(void)
 {
     unsigned i;
     if (!pdu_kseg || !pd_fpeekw(pdu_kseg, PDU_KS_OWN + PDU_WK(key_len)))
         return 0;
-    pdu_mcall(PDU_M_ENG, PDV_ENG_CRYPTINFO, pdu_xb, 0, 0);
-    if (pdu_mcf)
-        return 0;
     for (i = 0; i < 16; i += 2)
-        if (pd_fpeekw(pdu_xb, PDU_CRY(id0) + i) != pd_fpeekw(pdu_kseg, PDU_KS_OWNID + i))
+        if (pd_fpeekw(pdu_xb, PDU_CRY(id0) + i) != pd_fpeekw(pdu_kseg, PDU_KS_OWNID + i)
+            || pd_fpeekw(pdu_xb, PDU_CRY(u) + i) != pd_fpeekw(pdu_kseg, PDU_KS_OWNU + i)
+            || (i < 8 && pd_fpeekw(pdu_xb, PDU_CRY(stm) + i)
+                         != pd_fpeekw(pdu_kseg, PDU_KS_OWN + PDU_WK(stm) + i)))
             return 0;
-    pd_ffill(pdu_xb, 0, 0, sizeof(struct pdxb_crypt));
     pd_fpokew(pdu_xb, PDU_CRY(key_len), pd_fpeekw(pdu_kseg, PDU_KS_OWN + PDU_WK(key_len)));
-    pd_fcopy(pdu_xb, PDU_CRY(stm), pdu_kseg, PDU_KS_OWN + PDU_WK(stm), 8);
     pd_fcopy(pdu_xb, PDU_CRY(key), pdu_kseg, PDU_KS_OWN + PDU_WK(key), 32);
     pd_fpokew(pdu_xb, PDU_CRY(auth), PDCA_USER);
     pdu_mcall(PDU_M_ENG, PDV_ENG_SETKEY, pdu_xb, 0, 0);
@@ -82,11 +89,9 @@ static int ovl_key_try(void)
  * the PDE_* the open fails with. `start` on the first */
 static unsigned ovl_au_slice(int start)
 {
-    unsigned r;
+    unsigned r, h;
 
     if (start) {
-        if (!pdu_aufor() && ovl_key_try())
-            return 0;                   /* the held key: OPEN again */
         pdu_au_ui = 0;
         pdu_au_typed = 0;
         r = pdu_slot_load(PDX_KEY);
@@ -96,6 +101,8 @@ static unsigned ovl_au_slice(int start)
         r = pdu_mcall(PDU_M_SLOT, PDV_KEY_COST, pdu_xb, 0, 0);
         if (pdu_mcf)
             return r ? r : PDE_ENCRYPT;
+        if (!pdu_aufor() && ovl_key_try())
+            return 0;                   /* the held key: OPEN again */
         pdu_au_st = 3;
         if (r) {                        /* R6: seconds a run; the empty
                                          * password that works is 2 runs */
@@ -132,13 +139,20 @@ static unsigned ovl_au_slice(int start)
     }
     if (!pdu_mcf || r != PDE_PASSWORD) {
         if (!pdu_mcf) {                 /* the key: PDENG resumes its OPEN */
+            h = !pdu_aufor() && (pdu_kseg || (pdu_kseg = os88_mem_claim_p(512 / 16)) != 0);
+            if (h)                      /* its /U, while the XB has it (R20) */
+                pd_fcopy(pdu_kseg, PDU_KS_OWNU, pdu_xb, PDU_CRY(u), 16);
             r = pdu_mcall(PDU_M_ENG, PDV_ENG_SETKEY, pdu_xb, 0, 0);
             if (!pdu_mcf) {
                 r = 0;
-                if (!pdu_aufor())
+                if (h)
                     ovl_key_get(PDU_KS_OWN);    /* held for the re-opens */
-            } else if (!r)
-                r = PDE_PASSWORD;
+            } else {
+                if (h)                  /* the kept one's /U is gone */
+                    pd_fpokew(pdu_kseg, PDU_KS_OWN + PDU_WK(key_len), 0);
+                if (!r)
+                    r = PDE_PASSWORD;
+            }
         }
         if (pdu_au_ui)
             pdu_au_close();
