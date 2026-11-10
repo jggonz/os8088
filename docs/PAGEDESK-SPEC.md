@@ -5180,7 +5180,14 @@ The primary:
   the largest free run still leaves PD-29's 32 KiB (2,048 paragraphs) beside
   it;
 * grows a region already held only when it is X's LAST region (in place);
-  any other second ask is refused;
+  any other second ask is refused. That covers `PDMEM_XC` asked again with
+  an XC present, meaning "a bigger one" (rcore, L2): XC is grown while
+  nothing has been appended after it (no GLYPH, no X8 yet), and otherwise
+  the ask is answered by the same INIT with `xc_kb` unchanged, which PDREND
+  reads as the refusal and asks that size no more (`ik_size`'s `g_ikask`
+  in `pdrv.c`): the band stash works within the XC it has (20.22.7.10). Growing a middle region would move the
+  regions after it (a glyph strike, PDX8's image) inside X, which the
+  primary has no bytes for (20.22.2.9);
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
   come with it), and re-INITs PDENG, then PDREND. A region's window is cut
