@@ -18,6 +18,12 @@
 #include "pdctwin.c"           /* the host twins of the assembly bodies */
 #endif
 
+#ifdef CR_DEBUG
+#include <stdio.h>
+#define CRDBG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define CRDBG(...) ((void)0)
+#endif
 #define PDE_RC4N 3              /* RC4 streams open at once (their state is 258 bytes each) */
 
 static pdw   cr_on;             /* a file key is set                            */
@@ -26,6 +32,7 @@ static pdw   cr_klen;           /* 5..16, or 32 for AESV3                       
 static pdw   cr_stm, cr_str;    /* PDCM_* for streams and strings               */
 static pdw   cr_meta;           /* /EncryptMetadata                             */
 static pdb   cr_rk[240];        /* the AES schedule in use                       */
+static pdw   pl_ok;             /* the borrowed ctx of cr_raw_plain stands at pl_n/pl_g/pl_pos */
 static pdw   cr_rkn, cr_rkg;    /* ...whose it is: an object (0 none), or 0xFFFF/0xFFFF the file's key */
 static pdb   cr_rc[PDE_RC4N][258];  /* RC4 states of open streams                */
 
@@ -56,7 +63,7 @@ static pdw cr_ctx_open(struct sctx *c)
 {
     pdw n;
     c->cmode = 0; c->civ = 0; c->cn = cr_sn; c->cg = cr_sg;
-    cr_rkn = 0;
+    cr_rkn = 0; pl_ok = 0;                            /* (a ctx pushed over cr_raw_plain's borrowed one) */
     n = (pdw)(cr_on && cr_sn && !cr_skip && cr_stm >= PDCM_RC4 && cr_stm <= PDCM_AESV3);
     cr_sn = 0; cr_sg = 0; cr_skip = 0;
     if (!n) return PDE_OK;
@@ -193,10 +200,117 @@ static pdw cr_open(void)
     return PDE_OK;
 }
 
-/* eng's RAW_COPY with mode PDRC_PLAIN on an encrypted file: see 20.22.5 */
-static pdw cr_raw_plain(void)
+/* ---- RAW_COPY with mode PDRC_PLAIN on an encrypted document (the lead's 00:00 decision, option 2) ----
+ * eng calls this for an object in no object stream, after ob_extent (sp_kind, sp_off, sp_dstart, sp_len are
+ * the object's) and takes any answer but PDE_NOTFOUND as the whole of the verb's. What is returned:
+ *   - the dictionary's STRINGS STAY CIPHERTEXT, and rw->mode gains PDRC_STRCIPHER: the object's strings are
+ *     encrypted under (objnum, gen) and the caller decrypts them (PDWRT holds the shared source);
+ *   - a stream whose data this document encrypts comes out as: the file's bytes up to the /Length value,
+ *     " <plain length>", the file's bytes to the end of "stream" and its EOL, the DECRYPTED data (still in
+ *     its filters), "\nendstream\nendobj\n". Anything else (a plain dictionary or array, an xref stream, a
+ *     /Crypt /Identity stream, an unencrypted /Metadata) is the file's bytes: PDE_NOTFOUND.
+ * Sequential reads cost nothing extra; a `done` that does not follow the last call restarts the stream's
+ * cipher and skips (RC4 cannot seek). The data runs through a ctx borrowed above nctx. */
+static struct pd_u32 pl_a, pl_b, pl_dl, pl_pos;
+static pdw pl_n, pl_g, pl_la, pl_lb;
+static pdb pl_dig[14];
+static pdb pl_tb[32];
+static const pdb pl_tail[18] = { '\n','e','n','d','s','t','r','e','a','m','\n','e','n','d','o','b','j','\n' };
+
+static pdw pl_open(struct sctx *c, pdw num, pdw gen)       /* the borrowed ctx, at the data's start */
 {
-    return PDE_ENCRYPT;
+    c->lx.buf = c->ib; c->lx.n = 0; c->lx.i = 0; c->nflt = 0;
+    u32_cp(&c->rpos, &sp_dstart); u32_cp(&c->rrem, &sp_len);
+    cr_sn = num; cr_sg = gen; cr_skip = 0;
+    return cr_ctx_open(c);
+}
+
+static pdw cr_raw_plain(struct pdxb_rawcopy *rw)
+{
+    struct sctx *c = &ctxs[nctx];
+    pdw rc, num = rw->objnum, gen = rw->gen, want, got = 0, k, n, d, head;
+    if (cr_str >= PDCM_RC4 && cr_str <= PDCM_AESV3 && !(tr_enc_k == 1 && num == tr_enc_n)) rw->mode |= PDRC_STRCIPHER;
+    if (sp_kind != PDK_STRM || !cr_on || cr_stm < PDCM_RC4 || cr_stm > PDCM_AESV3) return PDE_NOTFOUND;
+    rc = ob_filters1(num);                                   /* sp_crypt */
+    if (rc) return rc;
+    if (cr_skipchk()) return PDE_NOTFOUND;
+    if (nctx >= PDE_MAXCTX) return PDE_LIMIT;
+    /* where /Length's value is, and what the data comes to */
+    L = &fobj;
+    lx_seek(&ds_pos);
+    rc = ob_dict_find("Length");
+    if (rc) return rc == PDE_NOTFOUND ? PDE_SYNTAX : rc;
+    lx_tell(&pl_a);
+    rc = ob_value();
+    if (rc) return rc;
+    lx_tell(&pl_b);
+    u32_cp(&pl_dl, &sp_len);
+    if (cr_stm != PDCM_RC4) {                                /* AES: IV + blocks, less the last block's padding */
+        pl_dl.lo &= 0xFFF0;
+        if (pl_dl.hi == 0 && pl_dl.lo < 32) u32_zero(&pl_dl);
+        else {
+            pdm_u32_add(&s_c, &sp_dstart, &pl_dl);
+            u32_sub16(&s_c, 32);
+            if (fl_read(&s_c, pl_tb, 32) < 32) return pde_ioerr ? PDE_IO : PDE_TRUNC;
+            cr_sched(cr_stm, num, gen);
+            pdc_cbc_dec(cr_rk, cr_stm == PDCM_AESV3 ? 14 : 10, pl_tb, pl_tb + 16, 1);
+            n = (pdw)(pl_tb[31] <= 16 && pl_tb[31] ? pl_tb[31] + 16 : 16);
+            u32_sub16(&pl_dl, n);
+        }
+    }
+    pdm_u32_todec((char *)pl_dig + 1, &pl_dl, 0);
+    pl_dig[0] = ' ';
+    for (pl_lb = 1; pl_dig[pl_lb]; pl_lb++) ;
+    pl_la = (pdw)(pl_a.lo - sp_off.lo);                       /* (the header is far under 64 KiB) */
+    head = (pdw)(pl_la + pl_lb + (pdw)(sp_dstart.lo - pl_b.lo));
+    want = rw->dmax; if (want > 0xFFF0) want = 0xFFF0;
+    if (rw->doff != 0 && want > (pdw)(0 - rw->doff)) return PDE_RANGE;
+    while (got < want) {
+        k = (pdw)(want - got);
+        d = rw->done.lo;
+        if (rw->done.hi == 0 && d < head) {                   /* before the data: the file's bytes, and the new length */
+            if (d < pl_la) { if (k > (pdw)(pl_la - d)) k = (pdw)(pl_la - d); pdm_u32_add(&s_c, &sp_off, &rw->done); }
+            else if (d < (pdw)(pl_la + pl_lb)) {
+                if (k > (pdw)(pl_la + pl_lb - d)) k = (pdw)(pl_la + pl_lb - d);
+                if (!pd_fcopy_out(pl_dig + (d - pl_la), rw->dseg, (pdw)(rw->doff + got), k)) return PDE_RANGE;
+                goto step;
+            } else { if (k > (pdw)(head - d)) k = (pdw)(head - d); u32_cp(&s_c, &pl_b); pdm_u32_add16(&s_c, (pdw)(d - pl_la - pl_lb)); }
+            if (fl_read_far(&s_c, rw->dseg, (pdw)(rw->doff + got), k) < k) return pde_ioerr ? PDE_IO : PDE_TRUNC;
+            goto step;
+        }
+        pdm_u32_set(&s_c, 0, head); pdm_u32_sub(&s_c, &rw->done, &s_c);     /* the offset in the plain data and the tail */
+        if (pdm_u32_cmp(&s_c, &pl_dl) >= 0) {                 /* the tail */
+            d = (pdw)(s_c.lo - pl_dl.lo);
+            if (d >= 18) break;                               /* the end: got < dmax (0 when done is at the end) */
+            if (k > (pdw)(18 - d)) k = (pdw)(18 - d);
+            if (!pd_fcopy_out(pl_tail + d, rw->dseg, (pdw)(rw->doff + got), k)) return PDE_RANGE;
+            goto step;
+        }
+        /* the data, sequential from 0 (a restart is done == the data's start); the plaintext comes in blocks
+         * into the borrowed ctx's own ib and goes out in whatever pieces the caller asks for */
+        if (s_c.hi == 0 && s_c.lo == 0 && (!pl_ok || pl_n != num || pl_g != gen || pl_pos.lo || pl_pos.hi)) {
+            rc = pl_open(c, num, gen);
+            if (rc) return rc;
+            pl_n = num; pl_g = gen; pl_ok = 1; u32_zero(&pl_pos);
+        }
+        if (!pl_ok || pl_n != num || pl_g != gen || pdm_u32_cmp(&s_c, &pl_pos)) return PDE_RANGE;     /* not sequential */
+        if (c->lx.i >= c->lx.n) {
+            n = cr_read(c, c->ib, 256);
+            if (!n) return lx_err ? lx_err : PDE_TRUNC;
+            c->lx.n = n; c->lx.i = 0;
+        }
+        n = (pdw)(c->lx.n - c->lx.i);
+        if (k > n) k = n;
+        if (!pd_fcopy_out(c->ib + c->lx.i, rw->dseg, (pdw)(rw->doff + got), k)) return PDE_RANGE;
+        c->lx.i = (pdw)(c->lx.i + k);
+        pdm_u32_add16(&pl_pos, k);
+step:
+        pdm_u32_add16(&rw->done, k);
+        got = (pdw)(got + k);
+    }
+    rw->got = got;
+    pd_fcopy_out(rw, g_xb, 0, sizeof(struct pdxb_rawcopy));
+    return PDE_OK;
 }
 
 /* ---- a stream the key does not apply to (7.6.5): the stream dictionary is at ds_pos ---- */

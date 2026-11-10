@@ -684,6 +684,11 @@ struct pdxb_img {
 /* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
 /* [eng 20.22.3]    */
 /* [crypt 20.22.5]  */
+#define PDRC_STRCIPHER 0x0100 /* OR-ed into pdxb_rawcopy.mode on return from RAW_COPY PDRC_PLAIN of an object of an ENCRYPTED document:
+                                 the dictionary's strings are still ciphertext, encrypted under (objnum, gen) with the document's string
+                                 method (pdxb_crypt.str of CRYPTINFO); the caller decrypts them (20.22.5). The
+                                 flag rides in the HIGH byte, so a caller that feeds the struct back
+                                 unchanged is still PDRC_PLAIN: the engine compares (mode & 0xFF) */
 #define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
 /* [wrt 20.22.4]    */
 /* [rcore 20.22.7]  */

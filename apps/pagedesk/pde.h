@@ -115,7 +115,7 @@ static pdw cr_ctx_open(struct sctx *c);
 static void cr_string(void);
 static pdw cr_skipchk(void);
 static pdw cr_open(void);
-static pdw cr_raw_plain(void);
+static pdw cr_raw_plain(struct pdxb_rawcopy *rw);
 static void cr_reset(void);
 static pdw cr_info(void);
 static pdw cr_setkey(void);

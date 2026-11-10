@@ -225,6 +225,41 @@ static void dump_all(void)
     dump_strings(tr.info_num);
 }
 
+/* every object's RAW_COPY PLAIN, in chunks of CHUNK bytes, into OUTDIR/<n>.obj; one line each */
+static void do_plain(const char *outdir, unsigned chunk)
+{
+    struct pdxb_trailer tr;
+    struct pdxb_rawcopy rw;
+    unsigned o, r;
+    unsigned char *buf = malloc(chunk + 16);
+    call(PDV_ENG_TRAILER, 0, 0, 0);
+    xb_get(&tr, sizeof tr);
+    for (o = 1; o < tr.size; o++) {
+        char path[512];
+        FILE *f;
+        unsigned long total = 0;
+        unsigned mode = 0, crc = 0xFFFF;
+        memset(&rw, 0, sizeof rw);
+        rw.objnum = (pdw)o; rw.dseg = SEG_BUF; rw.doff = 0; rw.dmax = (pdw)chunk; rw.mode = PDRC_PLAIN;
+        snprintf(path, sizeof path, "%s/%u.obj", outdir ? outdir : ".", o);
+        f = outdir ? fopen(path, "wb") : 0;
+        for (;;) {
+            xb_put(&rw, sizeof rw);
+            r = call(PDV_ENG_RAW_COPY, 0, 0, 0);
+            if (cf) { printf("PLAIN %u rc=%u\n", o, r); break; }
+            xb_get(&rw, sizeof rw);
+            mode = rw.mode;
+            if (!rw.got) { printf("PLAIN %u bytes=%lu crc=%04x flag=%d\n", o, total, crc, (mode & PDRC_STRCIPHER) != 0); break; }
+            pd_fcopy_in(SEG_BUF, 0, buf, rw.got);
+            crc = crc_of(buf, rw.got, crc);
+            if (f) fwrite(buf, 1, rw.got, f);
+            total += rw.got;
+        }
+        if (f) fclose(f);
+    }
+    free(buf);
+}
+
 int main(int argc, char **argv)
 {
     int rc;
@@ -264,6 +299,7 @@ int main(int argc, char **argv)
         rc = open_loop();
     } else if (!strcmp(argv[1], "auth")) { printf("NOT ENCRYPTED rc=%d\n", rc); return 0; }
     if (rc) { printf("OPEN rc=%d\n", rc); return 4; }
+    if (!strcmp(argv[1], "plain")) { do_plain(argv[4], (unsigned)atoi(argv[5])); return 0; }
     dump_all();
     call(PDV_ENG_CLOSE, 0, 0, 0);
     return 0;

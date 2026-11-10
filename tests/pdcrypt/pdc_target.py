@@ -143,11 +143,28 @@ def run(fx, pw):
                 for _ in range(8): crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
         m.door("PDENG", 0x08)
         out.append("STREAM %d bytes=%d crc=%04x flt=%d" % (o, total, crc, flt & ~0x20))
+    # RAW_COPY PDRC_PLAIN of every object in 37-byte pieces (the same numbers as the host's `plain` command)
+    for o in range(1, min(size, 400)):
+        rw = bytearray(18); struct.pack_into("<HH", rw, 0, o, 0); struct.pack_into("<HHHH", rw, 8, 0x5800, 0, 37, 0); struct.pack_into("<H", rw, 16, 1)
+        total, crc, flag, bad = 0, 0xFFFF, 0, 0
+        while True:
+            m.wr(0, bytes(rw)); ax, cf, _ = m.door("PDENG", 0x0B)
+            if cf: bad = ax; break
+            rw[:] = m.rd(0, 18)
+            got = struct.unpack_from("<H", rw, 14)[0]; flag = (struct.unpack_from("<H", rw, 16)[0] & 0x100) != 0
+            if not got: break
+            for b in m.rd(0, got, 0x5800):
+                crc ^= b << 8
+                for _ in range(8): crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+            total += got
+        if not bad: out.append("PLAIN %d bytes=%d crc=%04x flag=%d" % (o, total, crc, flag))
     return out, m
 
 def host_lines(fx, pw):
     t = subprocess.run([E2E, "dump", os.path.join(WORK, fx), pw or "-"], capture_output=True, text=True).stdout.splitlines()
-    return [l for l in t if l.startswith(("AUTH", "TRAILER", "STREAM"))]
+    scratch = os.path.join(BUILD, "pdcrypt", "plain_tmp"); os.makedirs(scratch, exist_ok=True)
+    pl = subprocess.run([E2E, "plain", os.path.join(WORK, fx), pw or "-", scratch, "37"], capture_output=True, text=True).stdout.splitlines()
+    return [l for l in t if l.startswith(("AUTH", "TRAILER", "STREAM"))] + [l for l in pl if l.startswith("PLAIN") and "bytes=" in l]
 
 def main():
     names = sys.argv[1:] or ["RC4_40.PDF", "RC4_128.PDF", "RC4_V4.PDF", "AES_128.PDF", "AES_128_NM.PDF", "AES_256_R5.PDF",

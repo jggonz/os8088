@@ -5042,18 +5042,42 @@ when it is AES. Limits: at most `PDE_RC4N` = 3 RC4 streams open at once
 (`PDE_LIMIT` otherwise: their state is 258 bytes each); strings and streams
 under different methods work (`/StmF` and `/StrF`).
 
-**RAW_COPY with `PDRC_PLAIN` on an encrypted file is NOT done**: eng's hook
-`cr_raw_plain()` is a stub answering `PDE_ENCRYPT`. It needs the dictionary
-rewritten (each string decrypted and written back as a hex string, `/Length`
-corrected) as well as the stream; designed in the round's report, built when the
-lead decides where its ~600 bytes of PDENG come from.
+**`RAW_COPY` with `PDRC_PLAIN` on an encrypted document** (the lead's decision of
+00:00, option 2; eng's hook `cr_raw_plain(rw)` for an object in no object
+stream, called after `ob_extent`; any answer but `PDE_NOTFOUND` is the verb's
+own). The **dictionary's strings stay ciphertext**: the answer sets
+`PDRC_STRCIPHER` (0x0100) in the HIGH byte of `pdxb_rawcopy.mode`, meaning "the
+strings of object `objnum`, `gen` are encrypted under that object's key with
+the document's string method (`pdxb_crypt.str` of CRYPTINFO)": the caller
+decrypts them with the shared source (`pdc_okey`, then `pdc_cbc_dec` after
+`pdc_aes_ks`, or `pdc_rc4`), PDWRT as it tokenises. The flag is not set for the
+`/Encrypt` dictionary's own object; it is set for every other non-member object
+of an encrypted document (a member of an object stream has plaintext strings and
+no flag). **eng's dispatcher must compare `(mode & 0xFF) == PDRC_PLAIN`**, because
+a caller feeds the struct back with the flag in it. A STREAM whose data the
+document encrypts comes out as: the file's bytes of the object up to `/Length`'s
+key, ` <plain length>` (a direct integer, whether `/Length` was one or a
+reference), the file's bytes to the end of `stream` and its EOL, the DECRYPTED
+data (still in its filters), then `\nendstream\nendobj\n`. The plain length is
+`/Length` for RC4 and, for AES, `/Length` less the 16-byte IV, the bytes past the
+last whole block, and the last block's padding (read from the last two cipher
+blocks before the first byte is delivered). Anything else (a dictionary or
+array, an xref stream, a `/Crypt /Identity` stream, an unencrypted `/Metadata`)
+is the file's bytes: `PDE_NOTFOUND` to eng's own copy. `done` and `got` address
+the synthesised text, the same bytes on every call at any chunking; the DATA is
+sequential (the first byte of it, `done` = the header's length, restarts the
+cipher; a `done` that skips back into the data is `PDE_RANGE`), through a ctx
+borrowed above `nctx`, which a `STRM_OPEN` in between invalidates. The header
+must be under 64 KiB. `tests/pdcrypt/pdc_plain.py` holds it to `qpdf
+--decrypt` for the 17 fixtures at chunks of 1, 37 and 4,096 bytes.
 
-**Sizes** (image + bss, bytes). PDENG 42,302 + 11,755 = 54,057, which is +6,905
+**Sizes** (image + bss, bytes). PDENG 43,964 + 11,827 = 55,791, which is +8,639
 over the round's start (47,152; the brief said +3,200 and the lead's 23:30
 decision +6,500): the assembly 2,242, the C (`cr_read` `cr_ctx_open` `cr_string`
 `cr_sched` `cr_skipchk` `SETKEY` `CRYPTINFO`) and the hooks in eng's files about
-3,000, bss 1,520 (three RC4 states 774, the AES schedule 240, the `sctx` fields
-160, the key 32). PDXK 14,958 + 4,391 = 19,349 of 32,768.
+3,000, PLAIN 1,734, bss 1,590 (three RC4 states 774, the AES schedule 240, the
+`sctx` fields 160, the key 32, PLAIN's 76). PLAIN was estimated at 250 bytes; the
+32-bit offset arithmetic through `pdm_u32_*` is what makes it 1.7 KB. PDXK 14,958 + 4,391 = 19,349 of 32,768.
 
 **Stacks.** PDENG's chain through `cr_read` is no deeper than `v_open`'s (436
 bytes, `os88pdstk`). PDXK measured by `tests/pdcrypt/pdk_stack.py`: 226 (RC4),
@@ -5067,9 +5091,9 @@ the file key equals `qpdf --show-encryption-key` for 17 fixtures
 (`tests/pdfany/crypt/`, `tools/os88pdfx_crypt.py`), for the owner password too,
 a wrong password and the empty one on a file that has a password are
 `PDE_PASSWORD`, and every stream's CRC, every string, annotation and outline
-title equals the same driver's over `qpdf --decrypt`), `pdc_target.py` (the
+title equals the same driver's over `qpdf --decrypt`), `pdc_plain.py` (RAW_COPY PLAIN against qpdf), `pdc_target.py` (the
 **compiled** `PDENG.MOD` and `PDXK.MOD` in Unicorn, kernel stub and all,
-produce the same lines as the host, a full R6 run included), `pdk_stack.py`, and
+produce the same lines as the host, PLAIN copies and a full R6 run included), `pdk_stack.py`, and
 `pdc_fuzz.py` (ASan/UBSan over mutated copies of every fixture: bit flips, runs
 of 00 and FF, a lying `/Length`, a cut tail, ciphertext cut to 0 to 40 bytes, a
 corrupted `/O`; about 22,000 runs over three seeds, no crash, no hang, no report).

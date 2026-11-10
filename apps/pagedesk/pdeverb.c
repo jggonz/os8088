@@ -169,6 +169,10 @@ static pdw v_raw_copy(void)
     rc = ob_extent(rw.objnum, rw.gen);
     if (rc) return rc;
     if (sp_kind == PDK_NULL) return PDE_NOTFOUND;
+    if ((rw.mode & 0xFF) == PDRC_PLAIN && tr_enc_k) {          /* an encrypted document (20.22.5; eng's hook; the flag bits ride in mode's high byte) */
+        rc = cr_raw_plain(&rw);
+        if (rc != PDE_NOTFOUND) return rc;
+    }
     if (pdm_u32_cmp(&rw.done, &ex_len) > 0) return PDE_RANGE;
     pdm_u32_sub(&s_c, &ex_len, &rw.done);              /* bytes left */
     want = rw.dmax;

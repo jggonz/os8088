@@ -21787,6 +21787,7 @@ $(BUILD)/pdc_e2e: $(PDC_E2E_SRC) apps/pagedesk/hosttest/pde_host.c apps/pagedesk
 .PHONY: pdcrypt
 pdcrypt: pdxk $(BUILD)/pdc_e2e $(BUILD)/PDENG.MOD
 	python3 tests/pdcrypt/pdc_e2e.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
+	python3 tests/pdcrypt/pdc_plain.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
 	python3 tests/pdcrypt/pdc_target.py
 	python3 tests/pdcrypt/pdk_stack.py
 	python3 tests/pdcrypt/pdc_fuzz.py 300 1

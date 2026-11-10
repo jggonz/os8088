@@ -94,6 +94,7 @@ int main(int argc, char **argv)
                 xb_get(&tr, sizeof tr);
                 for (o = 1; o < tr.size && o < 64; o++) { dump_stream(o, 0, 0, 0); dump_strings(o); }
                 dump_strings(tr.info_num);
+                do_plain(0, 61);
                 ok++;
             }
             call(PDV_ENG_CLOSE, 0, 0, 0);
