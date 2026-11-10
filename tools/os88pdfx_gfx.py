@@ -381,6 +381,13 @@ def write_shade(outdir):
     rows = (len(cs) + cols - 1) // cols
     W, H = cols * (cw + 4), rows * (ch + 4)
     sh = " ".join("/S%d %d 0 R" % (i, o) for i, (_, o) in enumerate(cs))
+    # patterns, reached through a page object's resources (the module-only object 3500)
+    tile = b"0 0 1 rg 0 0 8 8 re f 1 0 0 rg 8 8 8 4 re f"
+    p1 = d.add("<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 16 12] /XStep 16 /YStep 12 /Resources << >> /Length %d >>" % len(tile), tile)
+    p2 = d.add("<< /PatternType 2 /Shading %d 0 R /Matrix [1 0 0 1 8 0] >>" % cs[0][1])
+    p3 = d.add("<< /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 4 4] /XStep -4 /YStep 4 /Matrix [2 0 0 2 1 1] /Resources << >> /Length %d >>" % len(tile), tile)
+    p4 = d.add("<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << >> /Length %d >>" % len(tile), tile)
+    pgres = "<< /Type /Page /Resources << /Shading << %s >> /Pattern << /P1 %d 0 R /P2 %d 0 R /P3 %d 0 R /P4 %d 0 R >> >> >>" % (sh, p1, p2, p3, p4)
     cont = []
     geom = {}
     for i, (name, _) in enumerate(cs):
@@ -415,8 +422,12 @@ def write_shade(outdir):
             f.write("O %d %s\n" % (n, syn.encode().hex()))
             if st is not None:
                 f.write("S %d %s\n" % (n, st.hex()))
-        for name, o in cs:
+        f.write("O 3500 %s\n" % pgres.encode().hex())
+        for i, (name, o) in enumerate(cs):
             f.write("H %s %d\n" % (name, o))
+            f.write("J %s_res S%d 3500\n" % (name, i))
+        for pn in ("P1", "P2", "P3", "P4"):
+            f.write("T pat_%s %s 3500\n" % (pn, pn))
     return pdf, cs, geom, (cw, ch, W, H)
 
 
@@ -480,11 +491,31 @@ def check_shade(build_dir, work, exe, verbose):
         print(p.stdout, p.stderr)
         return 1
     mods = parse_shade_out(p.stdout)
+    bad = 0
+    for name, _ in cs:        # the resource route gives the identical polygons
+        a, b = mods.get(name), mods.get(name + "_res")
+        if not b or b.get("failed") or not a or a["polys"] != b["polys"]:
+            print("FAIL %-12s through /Resources /Shading the polygons differ" % name); bad += 1
+    pat = {}
+    for line in p.stdout.splitlines():
+        t = line.split()
+        if t and t[0] in ("PAT", "TILES"):
+            pat.setdefault(t[1], []).append(t)
+    exp = {"pat_P1": ("type 1 paint 1", "ni 6 nj 6 i0 -1 j0 -1"), "pat_P2": ("type 2 paint 0", None), "pat_P3": ("type 1 paint 2", None), "pat_P4": ("type 1 paint 1", "ni 0 nj 0")}
+    for k, (e1, e2) in exp.items():
+        L = pat.get(k, [])
+        l1 = " ".join(L[0][2:6]) if L else ""
+        l2 = " ".join(L[1]) if len(L) > 1 else ""
+        if e1 not in " ".join(L[0]) if L else True:
+            print("FAIL %s: %s" % (k, " ".join(L[0]) if L else "nothing")); bad += 1
+        elif e2 and e2 not in l2:
+            print("FAIL %s tiles: %s (wanted %s)" % (k, l2, e2)); bad += 1
+        elif verbose:
+            print("ok   %s: %s | %s" % (k, " ".join(L[0][2:]), " ".join(L[1][2:]) if len(L) > 1 else ""))
     png = os.path.join(work, "shade.png")
     subprocess.check_call(["mutool", "draw", "-q", "-N", "-M", "0", "-r", "72", "-c", "gray", "-o", png, pdf],
                           stderr=subprocess.DEVNULL)
     im = Image.open(png).convert("L")
-    bad = 0
     for name, _ in cs:
         sh = mods.get(name)
         if not sh or sh.get("failed"):

@@ -86,6 +86,16 @@ static pdw gx_sread(pdb *buf, pdw cap)
 static void gx_sclose(void) { pdx_engcall(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 #endif
 
+/* The verbs of 0xC8-0xCF are this module's own except 0xCE (rcore's dash walker, pdxdash.c) and 0xCF (rcore's
+ * edit-store marks, pdxedit.c); blend's 0xD0-0xD7 (pdxgtr.c) follow. Those branches add their #include and a
+ * PDX_OTHER_VERB(verb) that dispatches them (answering PDE_RANGE for any other) - the lead merges the three. */
+#ifndef PDX_LAST_VERB
+#define PDX_LAST_VERB 0xCD
+#endif
+#ifndef PDX_OTHER_VERB
+#define PDX_OTHER_VERB(v) PDE_RANGE
+#endif
+
 /* ---- the verbs -------------------------------------------------------------- */
 static struct pdxb_gfx G;
 /* one overlay for the verbs' big temporaries: a verb uses one of them at a time (22.9's workspace note) */
@@ -146,14 +156,27 @@ static pdw gx_res_lookup(const char *txt, pdw len)
     return GN_NIL;
 }
 
+/* the full "Category\0Name" text of a PDGXI_RES request: the category by code (flags bits 8-11), the name at tseg:toff */
+static pdw gx_fulltxt(char *dst)
+{
+    static const char cats[] = "ColorSpace\0Shading\0Pattern\0";
+    const char *c = cats;
+    pdw k = (pdw)((G.flags >> 8) & 15), n = 0;
+    if (!k || k > 3 || !G.tlen || G.tlen > 40) return 0;
+    while (--k) { while (*c) c++; c++; }
+    while (*c) dst[n++] = *c++;
+    dst[n++] = 0;
+    pd_fcopy_in(G.tseg, G.toff, dst + n, G.tlen);
+    return (pdw)(n + G.tlen);
+}
+
 static pdw gx_source(void)
 {
     gx_reset();
     fn_n = 0; fn_sused = 0; fn_cused = 0;
     if (G.flags & PDGXI_RES) {
-        if (G.tlen > 64) return GN_NIL;
-        pd_fcopy_in(G.tseg, G.toff, gx_txt, G.tlen);
-        return gx_res_lookup(gx_txt, G.tlen);
+        pdw n = gx_fulltxt(gx_txt);
+        return n ? gx_res_lookup(gx_txt, n) : GN_NIL;
     }
     if (G.objnum) return gx_fetch_parse(G.objnum, G.gen);
     if (!G.tlen || G.tlen > GX_TB) return GN_NIL;
@@ -188,9 +211,9 @@ static pdw v_cs(void)
     }
     R_cs.hival = cs_t[row].hival;
     if (G.flags & PDGXI_RES) {
-        if (G.tlen > 64) return PDE_GRAPHICS;
-        R_cs.pad = 1; R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; R_cs.srclen = G.tlen; R_cs.rsv[0] = G.bpc;
-        pd_fcopy_in(G.tseg, G.toff, R_cs.src, G.tlen);
+        R_cs.pad = 1; R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; R_cs.rsv[0] = G.bpc;
+        R_cs.srclen = gx_fulltxt((char *)R_cs.src);
+        if (!R_cs.srclen) return PDE_GRAPHICS;
     } else if (G.objnum) { R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; }
     else {
         R_cs.srclen = G.tlen;
@@ -218,13 +241,28 @@ done:
     return PDE_OK;
 }
 
-/* PDV_GFX_COLOR: cseg:coff names an XCK_CS entry with PDGX_F_MODULE */
+/* PDV_GFX_COLOR: cseg:coff names an XCK_CS entry; ncomp operands in comp[] (0 = the space's initial colour:
+ * tint 1 for a Separation or DeviceN, index 0 for an Indexed, otherwise 0). Answers rgb[0..2]. A table space
+ * (PDGX_F_TABLE) is looked up in the entry; any other is compiled again from its source and converted. */
 static pdw v_color(void)
 {
     static struct pdgx_cs hdr;
-    pdw node, row, i;
-    static struct pd_fx rgb[3];
+    pdw node, row, i, k;
+    static struct pd_fx rgb[3], t;
     pd_fcopy_in(G.cseg, G.coff, &hdr, 16 + 480);
+    if (hdr.flags & PDGX_F_TABLE) {
+        k = (hdr.kind == PDGX_K_SEP || hdr.kind == PDGX_K_DEVN) ? 255 : 0;
+        if (G.ncomp) {
+            if (hdr.kind == PDGX_K_INDEXED) k = (pdw)pdm_fx_round(&G.comp[0]);
+            else { fx_i(&t, 255); fx_mul(&t, &t, &G.comp[0]); k = (pdw)pdm_fx_round(&t); }
+            if (G.comp[0].hi < 0) k = 0;
+            if (k > 255) k = 255;
+        }
+        pd_fcopy_in(G.cseg, (pdw)(G.coff + 496 + k * 3), G.rgb, 3);
+        G.rgb[3] = (hdr.flags & PDGX_F_NONE) ? 1 : 0;
+        G.ok = 1;
+        return PDE_OK;
+    }
     G.objnum = hdr.srcobj; G.gen = hdr.srcgen; G.tlen = hdr.srclen;
     gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
     if (hdr.pad) {
@@ -240,6 +278,7 @@ static pdw v_color(void)
     }
     if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
     row = cs_first();
+    if (!G.ncomp) for (i = 0; i < 8; i++) { if (cs_t[row].kind == GC_DEVN) fx_i(&G.comp[i], 1); else fx_i(&G.comp[i], 0); }
     G.rgb[3] = (pdb)cs_conv(row, G.comp, rgb);
     G.rgb[0] = (pdb)fx_to255(&rgb[0]); G.rgb[1] = (pdb)fx_to255(&rgb[1]); G.rgb[2] = (pdb)fx_to255(&rgb[2]);
     G.ok = 1;
@@ -355,7 +394,7 @@ pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     (void)cx; (void)dx;
     pdx_cf = 0;
     if (verb == PDV_X_INIT) return v_init(bx);
-    if (verb < PDV_GFX_CS || verb > PDV_GFX_DASH) { pdx_cf = 1; return PDE_RANGE; }
+    if (verb < PDV_GFX_CS || verb > PDX_LAST_VERB) { pdx_cf = 1; return PDE_RANGE; }
     pd_fcopy_in(g_xbseg, 0, &G, sizeof G);
     G.ok = 0;
     switch (verb) {
@@ -364,7 +403,8 @@ pdw pdx_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_GFX_LUT: r = v_lut(); break;
     case PDV_GFX_SHADE: r = v_shade(); break;
     case PDV_GFX_FN: r = v_fn(); break;
-    default: r = PDE_RANGE; break;
+    case PDV_GFX_PAT: r = v_pat(); break;
+    default: r = PDX_OTHER_VERB(verb); break;
     }
     pd_fcopy_out(&G, g_xbseg, 0, sizeof G);
     if (r != PDE_OK && r != PDE_BUSY) pdx_cf = 1;

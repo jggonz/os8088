@@ -98,10 +98,11 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
         elif t[0] == "H" and shade:
             obj = int(t[2]); st = 0
             while True:
-                g = struct.pack("<18H", obj, 0, 0, 0, 0, 0x7000, 0, 30000, 0, 0, 0, st, 0, 0, 0, 0, 0, 0)
-                wr(XBSEG, 0, g + b"\0" * (72 - len(g)))
+                g = struct.pack("<18H", obj, 0, 0, 0, 0, 0x7000, 0, 760, 0, 0, 0, st, 0, 0, 0, 0, 0, 0)
+                g += b"\0" * 36 + fx(4) + b"\0" * 8 + fx(-4) + b"\0" * 4 + fx(192) + struct.pack("<4hH", 0, 0, 63, 47, 0)
+                wr(XBSEG, 0, g)
                 ax, cf = call(0xCB, XBSEG)
-                x = rd(XBSEG, 0, 72)
+                x = rd(XBSEG, 0, 106)
                 ntri, = struct.unpack_from("<H", x, 32)
                 st, = struct.unpack_from("<H", x, 22)
                 if ax != 65: break
@@ -128,7 +129,7 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
                 a, b, c, k = [int(round(v * 255)) for v in comps[:4]]
                 rgb = [(255 - a) * (255 - k) // 255, (255 - b) * (255 - k) // 255, (255 - c) * (255 - k) // 255]
             else:
-                q = struct.pack("<18H", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, RSEG, 0, 0, 0, 0, 0)
+                q = struct.pack("<18H", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, RSEG, 0, len(comps), 0, 0, 0)
                 q += b"".join(fx(c) for c in comps) + b"\0" * 4 * (8 - len(comps)) + b"\0" * 4
                 wr(XBSEG, 0, q)
                 ax, cf = call(0xC9, XBSEG)

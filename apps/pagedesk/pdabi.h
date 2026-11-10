@@ -752,11 +752,34 @@ struct pdxb_gfx {
     pdi  clip[4];               /* SHADE: the device clip in pixels, inclusive: x0 y0 x1 y1 */
     pdw  steps;                 /* SHADE: bands over a gradient's range (0 = 32) */
 };
+/* PDV_GFX_PAT (20.22.9). Step 1 (the pattern's name, as PDGXI_RES with PDGXI_CAT_PAT) writes a struct pdgx_pat
+ * to rseg:roff. Step 2 (PDGXI_TILES; the entry at cseg:coff, ctm = the page's DEFAULT matrix, clip = the device
+ * clip) answers ctm = the pattern matrix x the default matrix (a tiling pattern: that of its first tile); a tiling pattern also the tile counts ni = ncomp,
+ * nj = kind (0: too many, draw nothing) and comp[0..3] = the device step of one tile along i (x y) and along j (x y),
+ * comp[4..5] = the first tile's i, j; a shading pattern is painted with PDV_GFX_SHADE on
+ * the entry's objnum/gen and that ctm. */
+#define PDGX_PATBYTES  56
+#define PDGX_PAT_OBJ   4        /* byte offsets of struct pdgx_pat that PDREND reads from the cache entry */
+#define PDGX_PAT_BBOX  32
+#define PDGX_PAT_DIRECT 0x01    /* a shading pattern whose /Shading is direct: not supported (objnum = 0) */
+#define PDGX_TILEMAX   40       /* tiles in one fill */
+struct pdgx_pat {
+    pdb  ptype, paint, flags, pad;      /* /PatternType (1 tiling, 2 shading), /PaintType (1 coloured, 2 not) */
+    pdw  objnum, gen;                   /* tiling: the pattern's stream; shading: the /Shading object          */
+    struct pd_fx matrix[6];             /* /Matrix                                                            */
+    struct pd_fx bbox[4];               /* tiling: /BBox                                                      */
+    struct pd_fx xstep, ystep;          /* tiling                                                             */
+};
 #define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
+#define PDGXI_CAT_CS  0x0100     /* with PDGXI_RES: the resource category, flags bits 8-11 (tlen counts the name and its NUL) */
+#define PDGXI_CAT_SH  0x0200
+#define PDGXI_CAT_PAT 0x0300
+#define PDGXI_TILES  0x0004     /* PDV_GFX_PAT step 2 */
 #define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
-                                   index is bpc), text = "Category\0Name" (tlen counts both)       */
+                                   index is bpc), the name is at tseg:toff               */
 typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
 typedef char pdgx_sz_lut[sizeof(struct pdgx_lut)   == PDGX_LUTBYTES ? 1 : -1];
+typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/

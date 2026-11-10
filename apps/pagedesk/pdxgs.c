@@ -847,6 +847,7 @@ static pdw v_shade(void)
     static fx dec[16];
     pdw d, ty, i, nd, hasfn, r = PDE_OK;
     d = gx_source();
+    if (gx_ty(d) == GN_REF) { d = gx_res(d); G.objnum = gx_ro; G.gen = gx_rg; }      /* Resources/Shading/<name> is a reference */
     if (d == GN_NIL || gx_ty(d) != GN_DICT) return PDE_GRAPHICS;
     ty = (pdw)gx_int(gx_dres(d, "ShadingType"), 0);
     sh_total = 0; sh_skip = G.state; sh_off = 0; sh_full = 0; sh_out = 0; sh_np = 0;
@@ -894,4 +895,77 @@ static pdw v_shade(void)
     else G.state = 0;
     if (sh_full == 2) G.kind |= 1;                   /* the unit limit: the core notes PDF_INC_LIMIT */
     return r;
+}
+
+/* ---- PDV_GFX_PAT ---------------------------------------------------------------------------------- */
+static pdw v_pat(void)
+{
+    static struct pdgx_pat pe;
+    static fx m[6], t, u, lo, hi, idm[6];
+    pdw d, i, ni, nj, ex;
+    if (!(G.flags & PDGXI_TILES)) {                                   /* step 1: the pattern's parameters */
+        d = gx_res(gx_source());
+        if (d == GN_NIL || gx_ty(d) != GN_DICT) return PDE_GRAPHICS;
+        for (i = 0; i < sizeof pe; i++) ((pdb *)&pe)[i] = 0;
+        pe.ptype = (pdb)gx_int(gx_dres(d, "PatternType"), 0);
+        pe.objnum = gx_ro; pe.gen = gx_rg;
+        for (i = 0; i < 6; i++) fx_i(&pe.matrix[i], (i == 0 || i == 3) ? 1 : 0);
+        gx_nums(gx_dres(d, "Matrix"), pe.matrix, 6);
+        if (pe.ptype == 1) {
+            pe.paint = (pdb)gx_int(gx_dres(d, "PaintType"), 1);
+            if (gx_nums(gx_dres(d, "BBox"), pe.bbox, 4) < 4) return PDE_GRAPHICS;
+            gx_num(gx_dres(d, "XStep"), &pe.xstep); gx_num(gx_dres(d, "YStep"), &pe.ystep);
+            if ((!pe.xstep.hi && !pe.xstep.lo) || (!pe.ystep.hi && !pe.ystep.lo)) return PDE_GRAPHICS;
+        } else if (pe.ptype == 2) {
+            ex = gx_dget(d, "Shading");
+            gx_res(ex);
+            if (gx_ty(ex) == GN_REF) { pe.objnum = gx_ro; pe.gen = gx_rg; }
+            else { pe.objnum = 0; pe.flags = PDGX_PAT_DIRECT; }
+        } else return PDE_GRAPHICS;
+        if (G.rcap < sizeof pe) return PDE_NOMEM;
+        pd_fcopy_out(&pe, G.rseg, G.roff, sizeof pe);
+        G.rlen = sizeof pe; G.ok = 1;
+        return PDE_OK;
+    }
+    pd_fcopy_in(G.cseg, G.coff, &pe, sizeof pe);                     /* step 2: the matrix and the tiles */
+    for (i = 0; i < 6; i++) fx_cp(&idm[i], &((fx *)&G.ctm)[i]);       /* the default matrix */
+    /* C = Matrix x default: x' = a x + c y + e ... */
+    {
+        static fx a, b;
+        fx_mul(&a, &pe.matrix[0], &idm[0]); fx_mul(&b, &pe.matrix[1], &idm[2]); fx_add(&m[0], &a, &b);
+        fx_mul(&a, &pe.matrix[0], &idm[1]); fx_mul(&b, &pe.matrix[1], &idm[3]); fx_add(&m[1], &a, &b);
+        fx_mul(&a, &pe.matrix[2], &idm[0]); fx_mul(&b, &pe.matrix[3], &idm[2]); fx_add(&m[2], &a, &b);
+        fx_mul(&a, &pe.matrix[2], &idm[1]); fx_mul(&b, &pe.matrix[3], &idm[3]); fx_add(&m[3], &a, &b);
+        fx_mul(&a, &pe.matrix[4], &idm[0]); fx_mul(&b, &pe.matrix[5], &idm[2]); fx_add(&m[4], &a, &b); fx_add(&m[4], &m[4], &idm[4]);
+        fx_mul(&a, &pe.matrix[4], &idm[1]); fx_mul(&b, &pe.matrix[5], &idm[3]); fx_add(&m[5], &a, &b); fx_add(&m[5], &m[5], &idm[5]);
+    }
+    for (i = 0; i < 6; i++) { fx_cp(&((fx *)&G.ctm)[i], &m[i]); fx_cp(&sh_m[i], &m[i]); }
+    G.ok = 1;
+    if (pe.ptype != 1) return PDE_OK;
+    if (!sh_cover()) { G.ncomp = 0; G.kind = 0; return PDE_OK; }
+    /* the tiles whose bbox meets the cover rectangle (pattern space) */
+    fx_sub(&t, &sh_cov[0], &pe.bbox[2]); fx_div(&t, &t, &pe.xstep); lo.hi = t.hi + 1;
+    fx_sub(&u, &sh_cov[2], &pe.bbox[0]); fx_div(&u, &u, &pe.xstep); hi.hi = u.hi + (u.lo ? 1 : 0) - 1;
+    if (pe.xstep.hi < 0) { i = (pdw)lo.hi; lo.hi = hi.hi; hi.hi = (pdi)i; }
+    ni = (pdw)(hi.hi - lo.hi + 1);
+    fx_i(&G.comp[4], lo.hi);
+    fx_sub(&t, &sh_cov[1], &pe.bbox[3]); fx_div(&t, &t, &pe.ystep); lo.hi = t.hi + 1;
+    fx_sub(&u, &sh_cov[3], &pe.bbox[1]); fx_div(&u, &u, &pe.ystep); hi.hi = u.hi + (u.lo ? 1 : 0) - 1;
+    if (pe.ystep.hi < 0) { i = (pdw)lo.hi; lo.hi = hi.hi; hi.hi = (pdi)i; }
+    nj = (pdw)(hi.hi - lo.hi + 1);
+    fx_i(&G.comp[5], lo.hi);
+    if (!ni || !nj || ni > PDGX_TILEMAX || nj > PDGX_TILEMAX || ni * nj > PDGX_TILEMAX) { ni = 0; nj = 0; }
+    G.ncomp = ni; G.kind = nj;
+    fx_mul(&G.comp[0], &pe.xstep, &m[0]); fx_mul(&G.comp[1], &pe.xstep, &m[1]);
+    fx_mul(&G.comp[2], &pe.ystep, &m[2]); fx_mul(&G.comp[3], &pe.ystep, &m[3]);
+    /* the first tile's matrix: the origin moved to tile (i0, j0) */
+    {
+        pdw k;
+        for (k = 0; k < 2; k++) {
+            fx_mul(&t, &G.comp[4], &G.comp[k]); fx_add(&m[4 + k], &m[4 + k], &t);
+            fx_mul(&t, &G.comp[5], &G.comp[2 + k]); fx_add(&m[4 + k], &m[4 + k], &t);
+            fx_cp(&((fx *)&G.ctm)[4 + k], &m[4 + k]);
+        }
+    }
+    return PDE_OK;
 }

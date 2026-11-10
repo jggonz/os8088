@@ -70,13 +70,39 @@ int main(int argc, char **argv)
             if (t[0] == 'O') { o_syn[num] = p; o_syn_n[num] = n; } else { o_str[num] = p; o_str_n[num] = n; }
             continue;
         }
-        if (t[0] == 'H') {      /* H name objnum [steps]: a shading (an object of the table) in a 64 x 48 cell */
-            char *nm = strtok(NULL, " \n"); int obj = atoi(strtok(NULL, " \n"));
+        if (t[0] == 'T') {      /* T name resname pageobj: a pattern resource - its parameters, then its tiles */
+            char *nm = strtok(NULL, " \n"); char *rn = strtok(NULL, " \n"); int po = atoi(strtok(NULL, " \n"));
+            struct pdxb_gfx g; memset(&g, 0, sizeof g);
+            pd_fcopy_out(rn, TSEG, 0, strlen(rn) + 1);
+            g.objnum = (pdw)po; g.flags = PDGXI_RES | PDGXI_CAT_PAT; g.tseg = TSEG; g.toff = 0; g.tlen = (pdw)(strlen(rn) + 1);
+            g.rseg = RSEG; g.roff = 0; g.rcap = 256;
+            pd_fcopy_out(&g, XBSEG, 0, sizeof g);
+            pdw r = pdx_verb(PDV_GFX_PAT, XBSEG, 0, 0);
+            if (r != PDE_OK) { printf("PAT %s FAILED %u\n", nm, r); continue; }
+            struct pdgx_pat pe; pd_fcopy_in(RSEG, 0, &pe, sizeof pe);
+            printf("PAT %s type %d paint %d obj %u gen %u flags %d bbox %.3f %.3f %.3f %.3f step %.3f %.3f\n", nm, pe.ptype, pe.paint, pe.objnum, pe.gen, pe.flags,
+                   fxd(&pe.bbox[0]), fxd(&pe.bbox[1]), fxd(&pe.bbox[2]), fxd(&pe.bbox[3]), fxd(&pe.xstep), fxd(&pe.ystep));
+            memset(&g, 0, sizeof g);
+            g.cseg = RSEG; g.coff = 0; g.flags = PDGXI_TILES;
+            tofx(&g.ctm.a, 4); tofx(&g.ctm.d, -4); tofx(&g.ctm.f, 4 * 48);
+            g.clip[0] = 0; g.clip[1] = 0; g.clip[2] = 63; g.clip[3] = 47;
+            pd_fcopy_out(&g, XBSEG, 0, sizeof g);
+            r = pdx_verb(PDV_GFX_PAT, XBSEG, 0, 0);
+            pd_fcopy_in(XBSEG, 0, &g, sizeof g);
+            printf("TILES %s r=%u ni %u nj %u i0 %d j0 %d step %.3f %.3f %.3f %.3f ctm %.3f %.3f %.3f %.3f %.3f %.3f\n", nm, r, g.ncomp, g.kind,
+                   (int)g.comp[4].hi, (int)g.comp[5].hi, fxd(&g.comp[0]), fxd(&g.comp[1]), fxd(&g.comp[2]), fxd(&g.comp[3]),
+                   fxd(&g.ctm.a), fxd(&g.ctm.b), fxd(&g.ctm.c), fxd(&g.ctm.d), fxd(&g.ctm.e), fxd(&g.ctm.f));
+            continue;
+        }
+        if (t[0] == 'H' || t[0] == 'J') {      /* H name objnum [steps]; J name resname pageobj [steps]: a shading in a 64 x 48 cell */
+            char *nm = strtok(NULL, " \n"); int obj = 0; char *rn = NULL; int po = 0;
+            if (t[0] == 'H') obj = atoi(strtok(NULL, " \n")); else { rn = strtok(NULL, " \n"); po = atoi(strtok(NULL, " \n")); }
             char *sp = strtok(NULL, " \n");
             static pdb big[2048]; pdw state = 0, tot = 0, calls = 0;
             for (;;) {
                 struct pdxb_gfx g; memset(&g, 0, sizeof g);
                 g.objnum = (pdw)obj; g.rseg = RSEG; g.roff = 0; g.rcap = 760; g.state = state;
+                if (rn) { pd_fcopy_out(rn, TSEG, 0, strlen(rn) + 1); g.objnum = (pdw)po; g.flags = PDGXI_RES | PDGXI_CAT_SH; g.tseg = TSEG; g.toff = 0; g.tlen = (pdw)(strlen(rn) + 1); }
                 g.steps = sp ? (pdw)atoi(sp) : 0;
                 tofx(&g.ctm.a, 4); tofx(&g.ctm.d, -4); tofx(&g.ctm.f, 4 * 48);
                 g.clip[0] = 0; g.clip[1] = 0; g.clip[2] = 63; g.clip[3] = 47;
@@ -104,14 +130,14 @@ int main(int argc, char **argv)
         char *name = strtok(NULL, " \n"); int tn; unsigned char *tx = unhex(strtok(NULL, " \n"), &tn);
         int viares = t[0] == 'R';
         if (viares) {          /* R name hex(resource name): look it up in the page object (3), as the core does */
-            unsigned char *rt = malloc(tn + 16); memcpy(rt, "ColorSpace", 11); memcpy(rt + 11, tx, tn); free(tx); tx = rt; tn += 11;
+            unsigned char *rt = malloc(tn + 2); memcpy(rt, tx, tn); rt[tn] = 0; free(tx); tx = rt; tn += 1;
         }
         int nc = atoi(strtok(NULL, " \n")); double c[8] = {0};
         for (int i = 0; i < nc && i < 8; i++) c[i] = atof(strtok(NULL, " \n"));
         struct pdxb_gfx g; memset(&g, 0, sizeof g);
         pd_fcopy_out(tx, TSEG, 0, tn);
         g.tseg = TSEG; g.toff = 0; g.tlen = (pdw)tn; g.rseg = RSEG; g.roff = 0; g.rcap = 4096;
-        if (viares) { g.objnum = (pdw)(3000 + atoi((char *)tx + 12)); g.flags = PDGXI_RES; }
+        if (viares) { g.objnum = (pdw)(3000 + atoi((char *)tx + 1)); g.flags = PDGXI_RES | PDGXI_CAT_CS; }
         pd_fcopy_out(&g, XBSEG, 0, sizeof g);
         pdw r = pdx_verb(PDV_GFX_CS, XBSEG, 0, 0);
         if (r != PDE_OK) { printf("%s FAILED %u\n", name, r); continue; }
@@ -129,7 +155,7 @@ int main(int argc, char **argv)
             rgb[0] = (255 - a) * (255 - k) / 255; rgb[1] = (255 - b) * (255 - k) / 255; rgb[2] = (255 - cc) * (255 - k) / 255;
         } else {
             struct pdxb_gfx q; memset(&q, 0, sizeof q);
-            q.cseg = RSEG; q.coff = 0;
+            q.cseg = RSEG; q.coff = 0; q.ncomp = (pdw)nc;
             for (int i = 0; i < nc && i < 8; i++) tofx(&q.comp[i], c[i]);
             pd_fcopy_out(&q, XBSEG, 0, sizeof q);
             if (pdx_verb(PDV_GFX_COLOR, XBSEG, 0, 0) != PDE_OK) { printf("%s FAILED COLOR\n", name); continue; }
