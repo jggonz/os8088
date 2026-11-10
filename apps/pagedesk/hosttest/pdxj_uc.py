@@ -95,6 +95,9 @@ class Mod:
             self.uc.mem_write((SEG_ENG << 4) + ENG_SRCLEN, struct.pack('<H', len(data)))
         self.uc.mem_write(SEG_XB << 4, struct.pack('<20H', *w))
         ax, cf = self.call(0xE8, SEG_XB, 0, 0)
+        if ax == 67 and not cf:                    # PDE_NEEDMEM: the primary cannot regrow; ask again
+            self.uc.mem_write(SEG_XB << 4, struct.pack('<20H', *w))
+            ax, cf = self.call(0xE8, SEG_XB, 0, 0)
         o = struct.unpack('<20H', bytes(self.uc.mem_read(SEG_XB << 4, 40)))
         if cf: return ('REFUSED', o[13]), None
         scale, ow, oh, mode, onc, rb = o[18], o[13], o[14], o[15], o[16], o[17]

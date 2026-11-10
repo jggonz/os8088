@@ -15,6 +15,8 @@
 #define SEG_SRC 0x5000
 #define SEG_ROW 0x4F00
 
+static unsigned g_dx_out(void) { return pdxj_rdx; }
+
 int main(int argc, char **argv)
 {
     FILE *f; long n; struct pdxb_img im; pdw r, y; unsigned char *buf;
@@ -37,6 +39,15 @@ int main(int argc, char **argv)
     im.want_w = ww; im.want_h = wh; im.flags = fl; im.ncomp = nc;
     pd_fcopy_out(&im, SEG_XB, 0, sizeof im);
     r = pdxj_verb(PDV_IMG_OPEN, SEG_XB, 0, 0);
+    if (r == PDE_NEEDMEM) {
+        fprintf(stderr, "NEEDMEM %u KiB (have %u)%s\n", g_dx_out(), in.slot_kb, getenv("PDXJ_GROW") ? ", grown" : ", refused");
+        if (getenv("PDXJ_GROW")) {
+            in.slot_kb = g_dx_out(); pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
+            pdxj_verb(PDV_X_INIT, SEG_XB, 0, 0);
+            pd_fcopy_out(&im, SEG_XB, 0, sizeof im);
+        }
+        r = pdxj_verb(PDV_IMG_OPEN, SEG_XB, 0, 0);
+    }
     pd_fcopy_in(SEG_XB, 0, &im, sizeof im);
     if (r) { printf("REFUSED %u (rc %u)\n", im.out_w, r); return 1; }
     printf("%u %u %u %u %u %u\n", im.scale, im.out_w, im.out_h, im.out_mode, im.out_ncomp, im.rowbytes);

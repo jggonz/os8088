@@ -16,6 +16,9 @@
 #define JX_MAXRES    13
 #define JX_PTAB      768
 #define JX_NCBPKT    384
+#ifndef PDMEM_SLOT
+#define PDMEM_SLOT   0               /* the primary's slot region (until the integration pdabi.h has it) */
+#endif
 #define JX_WS_WANT   60               /* the workspace asked for, KiB (20.22.13.3)     */
 #define JX_WS_MIN    12               /* the least that still decodes 1600 x 1200 at r5 */
 #define JX_CBDATA    4096

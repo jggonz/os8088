@@ -194,7 +194,7 @@ static void close_src(void)
     g_open = 0;
 }
 
-static pdw v_close(void) { close_src(); return PDE_OK; }
+static pdw v_close(void) { close_src(); g_asked = 0; return PDE_OK; }
 
 static pdw v_open(void)
 {
@@ -248,6 +248,23 @@ static pdw v_open(void)
         if (cdiv(g_xs, r) < wantw || cdiv(g_ys, r) < wanth) break;
         rq = r;
     }
+    /* the level we would choose needs more than the slot has: ask once for the KiB (20.22.2),
+     * and when the primary could not regrow it (same slot_kb) fall through to a coarser level */
+    {
+        pdw sv = g_wsend, need;
+        g_wsend = 0xFFF0u;
+        for (r = rq; r <= g_nl; r++) { k = plan(r); if (!k) break; }
+        g_wsend = sv;
+        if (!k) {
+            need = (pdw)((w_arena + JX_ARENA_MIN + 1023u) >> 10);
+            if (need > 63) need = 63;
+            if (need > g_slotkb && g_asked != g_slotkb) {
+                g_asked = g_slotkb; pdxj_rdx = need;
+                close_src();
+                return PDE_NEEDMEM;
+            }
+        }
+    }
     k = PDJ_R_MEM;
     for (r = rq; r <= g_nl; r++) {
         k = plan(r);
@@ -263,9 +280,10 @@ static pdw v_open(void)
     im.out_ncomp = g_mode == PDIM_N8 ? g_nd : 1;
     im.rowbytes = g_rowbytes; im.scale = g_r;
     pd_fcopy_out(&im, g_xb, 0, sizeof im);
-    g_open = 1;
+    g_open = 1; g_asked = 0;
     return PDE_OK;
 fail:
+    g_asked = 0;
     im.out_w = g_why;
     pd_fcopy_out(&im, g_xb, 0, sizeof im);
     close_src();

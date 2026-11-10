@@ -16,6 +16,7 @@
 #include "pdxj.h"
 #endif
 
+pdw pdxj_rdx, g_asked, g_slotkb;       /* DX of a NEEDMEM; the KiB last asked at; slot_kb */
 pdw pdxj_cf;                            /* CF of this door's answer            */
 pdw pdxj_engcf;                         /* CF of the last PDENG call           */
 pdw pdxj_engvec[2];                     /* PDENG's door, offset then segment   */
@@ -155,6 +156,7 @@ static pdw v_init(pdw bx)
     pd_fcopy_in(bx, 0, &in, sizeof in);
     pdxj_engvec[0] = in.eng_off; pdxj_engvec[1] = in.eng_seg;
     if (in.slot_kb < JX_WS_MIN) return PDE_NOMEM;
+    g_slotkb = in.slot_kb;
     g_ws = in.slot_seg;
     g_wsend = in.slot_kb >= 64 ? 0xFFF0u : (pdw)(in.slot_kb << 10);
     g_open = 0;
@@ -164,7 +166,7 @@ static pdw v_init(pdw bx)
 pdw pdxj_verb(pdw verb, pdw bx, pdw cx, pdw dx)
 {
     pdw r;
-    pdxj_cf = 0;
+    pdxj_cf = 0; pdxj_rdx = 0;
     switch (verb) {
     case PDV_X_INIT:   r = v_init(bx); break;
     case PDV_IMG_OPEN: r = v_open(); break;
@@ -172,6 +174,6 @@ pdw pdxj_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_IMG_CLOSE: r = v_close(); break;
     default: r = PDE_SYNTAX; break;
     }
-    if (r && r != PDE_BUSY) pdxj_cf = 1;
+    if (r && r != PDE_BUSY && r != PDE_NEEDMEM) pdxj_cf = 1;
     return r;
 }
