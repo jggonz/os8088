@@ -82,7 +82,7 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
 
     # PDV_X_INIT: pdxb_init at the XB: xb_seg, eng_off, eng_seg
     wr(XBSEG, 0, b"\0" * 1024)
-    wr(XBSEG, 0, struct.pack("<HHH", XBSEG, 0, ENGSEG))
+    wr(XBSEG, 0, struct.pack("<HHH", XBSEG, 0, ENGSEG) + b"\0" * 42 + struct.pack("<HH", 0x8000, 14))
     call(0xC0, XBSEG)
 
     def fx(v):

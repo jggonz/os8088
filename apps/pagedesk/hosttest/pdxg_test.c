@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     static char line[1 << 16];
     FILE *f = argc > 1 ? fopen(argv[1], "r") : NULL;
     if (!f) { fprintf(stderr, "usage: pdxg_test cases\n"); return 2; }
-    struct pdxb_init in; memset(&in, 0, sizeof in);
+    struct pdxb_init in; memset(&in, 0, sizeof in); in.slot_seg = 0x5000; in.slot_kb = 14;
     pd_fcopy_out(&in, XBSEG, 0, sizeof in);
     pdx_verb(PDV_X_INIT, XBSEG, 0, 0);
     while (fgets(line, sizeof line, f)) {

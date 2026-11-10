@@ -133,8 +133,8 @@ static pdw sh_axial_radial(pdw d, pdw type)
     fx_cp(&R_sh.t0, &dom[0]); fx_cp(&R_sh.t1, &dom[1]);
     ex = gx_dres(d, "Extend");
     if (gx_ty(ex) == GN_ARR) {
-        if (gx_ty(gx_ares(ex, 0)) == GN_BOOL && gx_n[gx_ares(ex, 0)].a) R_sh.flags |= PDGX_SH_EXT0;
-        if (gx_ty(gx_ares(ex, 1)) == GN_BOOL && gx_n[gx_ares(ex, 1)].a) R_sh.flags |= PDGX_SH_EXT1;
+        if (gx_ty(gx_ares(ex, 0)) == GN_BOOL && GN_A(gx_ares(ex, 0))) R_sh.flags |= PDGX_SH_EXT0;
+        if (gx_ty(gx_ares(ex, 1)) == GN_BOOL && GN_A(gx_ares(ex, 1))) R_sh.flags |= PDGX_SH_EXT1;
     }
     if (!sh_functions(d)) return 0;
     R_sh.type = (pdb)type; R_sh.nramp = 256;

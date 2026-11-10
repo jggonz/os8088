@@ -26,7 +26,11 @@ struct gxcs {
 };
 static struct gxcs cs_t[CS_ROWS];
 static pdw cs_n;
-static pdb cs_tab[CS_TAB];
+#define GW_CST   GW_FEND
+#define GW_END   (GW_CST + CS_TAB)       /* the workspace this module needs: 12,302 bytes */
+#define GX_WS_KB ((GW_END + 1023) / 1024)
+#define CTB(i)    pd_fpeekb(gw_seg, (pdw)(GW_CST + (i)))
+#define CTS(i, v) pd_fpokeb(gw_seg, (pdw)(GW_CST + (i)), (pdb)(v))
 static pdw cs_tused;
 
 static void cs_wp(struct gxcs *g, pdw d)
@@ -72,13 +76,13 @@ static pdw cs_one(pdw node, pdw first)
         lk = gx_ares(a, 3);
         g->tab = cs_tused;
         if (gx_ty(lk) == GN_STR) {
-            got = gx_n[lk].b;
+            got = GN_B(lk);
             if (got > CS_TAB - cs_tused) got = CS_TAB - cs_tused;
-            for (k = 0; k < got; k++) cs_tab[cs_tused + k] = (pdb)gx_heap[gx_n[lk].a + k];
+            for (k = 0; k < got; k++) CTS(cs_tused + k, GH_GET(GN_A(lk) + k));
         } else if (gx_ty(lk) == GN_DICT && gx_ro && gx_sopen(gx_ro, gx_rg) == PDE_OK) {
             got = 0;
             while (got < CS_TAB - cs_tused) {
-                pdw r = gx_sread(cs_tab + cs_tused + got, CS_TAB - cs_tused - got);
+                pdw r = gx_sreadf(gw_seg, (pdw)(GW_CST + cs_tused + got), CS_TAB - cs_tused - got);
                 if (!r) break;
                 got += r;
             }
@@ -223,7 +227,7 @@ static pdw cs_conv(pdw row, const struct pd_fx *comps, struct pd_fx *rgb)
             if (ix > g->hival) ix = g->hival;
             nb = b->n;
             for (j = 0; j < nb; j++) {
-                pdw p = ix * nb + j, byte = p < g->tablen ? cs_tab[g->tab + p] : 0;
+                pdw p = ix * nb + j, byte = p < g->tablen ? CTB(g->tab + p) : 0;
                 if (b->kind == GC_LAB) {
                     if (j == 0) { fx_raw(&t, 100, 0); fx_raw(&z, 0, (pdw)((byte << 8) + byte)); fx_mul(&cv_o[0], &t, &z); }
                     else {

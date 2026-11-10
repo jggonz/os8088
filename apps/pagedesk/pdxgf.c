@@ -25,11 +25,21 @@ struct gxf {
     struct pd_fx dom[8], rng[16], p1[16], p2[16];
     pdw nrng;
 };
-static struct gxf fn_t[FN_MAX];
+/* the workspace map goes on from the parser's (pdxgp.c GW_PEND): sample data, calculator byte code, the
+ * function table. fn_cur is the near copy of the row being worked on (fn_get / fn_put). */
+#define GW_SAM   GW_PEND
+#define GW_CODE  (GW_SAM + FN_SAMAX)
+#define GW_FNT   (GW_CODE + FN_CODE)
+#define GW_FEND  (GW_FNT + FN_MAX * sizeof(struct gxf))
+#define FCB(i)    pd_fpeekb(gw_seg, (pdw)(GW_CODE + (i)))
+#define FCS(i, v) pd_fpokeb(gw_seg, (pdw)(GW_CODE + (i)), (pdb)(v))
+#define FSB(i)    pd_fpeekb(gw_seg, (pdw)(GW_SAM + (i)))
+#define FSS(i, v) pd_fpokeb(gw_seg, (pdw)(GW_SAM + (i)), (pdb)(v))
+static struct gxf fn_cur;
+static void fn_get(pdw f) { pd_fcopy_in(gw_seg, (pdw)(GW_FNT + f * sizeof(struct gxf)), &fn_cur, sizeof(struct gxf)); }
+static pdw fn_put(pdw f) { pd_fcopy_out(&fn_cur, gw_seg, (pdw)(GW_FNT + f * sizeof(struct gxf)), sizeof(struct gxf)); return f; }
 static pdw fn_n;
-static pdb fn_sam[FN_SAMAX];
 static pdw fn_sused;
-static pdb fn_code[FN_CODE];
 static pdw fn_cused;
 
 /* ---- the calculator's byte code ------------------------------------------ */
@@ -64,7 +74,7 @@ static int fc_ins(pdw at, pdw n)        /* open n bytes at `at` */
 {
     pdw i;
     if (fn_cused + n > FN_CODE) return 0;
-    for (i = fn_cused; i > at; i--) fn_code[i - 1 + n] = fn_code[i - 1];
+    for (i = fn_cused; i > at; i--) FCS(i - 1 + n, FCB(i - 1));
     fn_cused += n;
     return 1;
 }
@@ -102,9 +112,9 @@ static pdw fc_compile(pdw len)
             if (fn_cused + 5 > FN_CODE) return 0;
             if (c == '+') { h++; k--; }
             if (pdm_fx_parse(&v, gx_tb + h, k) != PDE_OK) { v.hi = 0; v.lo = 0; }
-            fn_code[fn_cused++] = FC_PUSH;
-            fn_code[fn_cused++] = (pdb)(v.lo & 255); fn_code[fn_cused++] = (pdb)(v.lo >> 8);
-            fn_code[fn_cused++] = (pdb)((pdw)v.hi & 255); fn_code[fn_cused++] = (pdb)((pdw)v.hi >> 8);
+            FCS(fn_cused++, FC_PUSH);
+            FCS(fn_cused++, (pdb)(v.lo & 255)); FCS(fn_cused++, (pdb)(v.lo >> 8));
+            FCS(fn_cused++, (pdb)((pdw)v.hi & 255)); FCS(fn_cused++, (pdb)((pdw)v.hi >> 8));
             continue;
         }
         if (k == 2 && c == 'i' && gx_tb[h + 1] == 'f') {
@@ -112,7 +122,7 @@ static pdw fc_compile(pdw len)
             nb--;
             a0 = fc_blk0[nb]; a1 = fc_blk1[nb];
             if (!fc_ins(a0, 3)) return 0;
-            fn_code[a0] = FC_JZ; fn_code[a0 + 1] = (pdb)((a1 - a0) & 255); fn_code[a0 + 2] = (pdb)((a1 - a0) >> 8);
+            FCS(a0, FC_JZ); FCS(a0 + 1, (pdb)((a1 - a0) & 255)); FCS(a0 + 2, (pdb)((a1 - a0) >> 8));
             continue;
         }
         if (k == 6 && c == 'i' && gx_tb[h + 1] == 'f' && gx_tb[h + 2] == 'e') {
@@ -122,14 +132,14 @@ static pdw fc_compile(pdw len)
             (void)b0;
             /* A [a0,a1) then B [a1,b1): JZ over A+JMP, A, JMP over B, B */
             if (!fc_ins(a1, 3)) return 0;
-            fn_code[a1] = FC_JMP; fn_code[a1 + 1] = (pdb)((b1 - a1) & 255); fn_code[a1 + 2] = (pdb)((b1 - a1) >> 8);
+            FCS(a1, FC_JMP); FCS(a1 + 1, (pdb)((b1 - a1) & 255)); FCS(a1 + 2, (pdb)((b1 - a1) >> 8));
             if (!fc_ins(a0, 3)) return 0;
-            fn_code[a0] = FC_JZ; fn_code[a0 + 1] = (pdb)((a1 - a0 + 3) & 255); fn_code[a0 + 2] = (pdb)((a1 - a0 + 3) >> 8);
+            FCS(a0, FC_JZ); FCS(a0 + 1, (pdb)((a1 - a0 + 3) & 255)); FCS(a0 + 2, (pdb)((a1 - a0 + 3) >> 8));
             continue;
         }
         op = fc_find(gx_tb + h, k);
         if (op < 0 || fn_cused + 1 > FN_CODE) return 0;
-        fn_code[fn_cused++] = (pdb)op;
+        FCS(fn_cused++, (pdb)op);
     }
     if (nopen) return 0;
     return fn_cused - base;
@@ -157,7 +167,7 @@ static pdw fn_one(pdw node)
     t = gx_dres(d, "FunctionType");
     if (gx_ty(t) != GN_NUM) return FNFAIL();
     f = fn_n++;
-    g = &fn_t[f];
+    g = &fn_cur;
     g->type = (pdb)gx_int(t, 9); g->ok = 0; g->nsub = 0; g->nrng = 0;
     g->soff = 0; g->slen = 0; g->coff = 0; g->clen = 0;
     arr = gx_dres(d, "Domain");
@@ -178,7 +188,7 @@ static pdw fn_one(pdw node)
         gx_num(gx_dres(d, "N"), &tmp[0]);
         g->sub[0] = (pdw)tmp[0].hi; g->sub[1] = tmp[0].lo;      /* N, as hi:lo */
         g->ok = 1;
-        return f;
+        return fn_put(f);
     }
     if (g->type == 3) {
         static pdw bn, en;
@@ -191,7 +201,7 @@ static pdw fn_one(pdw node)
         g->nsub = (pdb)k;
         for (i = 0; i < k; i++) { fn_subnode[f][i] = gx_aget(fa, i); g->sub[i] = 0; }
         g->ok = 1;
-        return f;
+        return fn_put(f);
     }
     if (g->type == 0) {
         static pdw sz[4];
@@ -224,15 +234,15 @@ static pdw fn_one(pdw node)
         g->soff = fn_sused;
         got = 0;
         while (got < nbytes) {
-            pdw r = gx_sread(fn_sam + fn_sused + got, nbytes - got);
+            pdw r = gx_sreadf(gw_seg, (pdw)(GW_SAM + fn_sused + got), nbytes - got);
             if (!r) break;
             got += r;
         }
         gx_sclose();
-        for (i = got; i < nbytes; i++) fn_sam[fn_sused + i] = 0;
+        for (i = got; i < nbytes; i++) FSS(fn_sused + i, 0);
         g->slen = nbytes; fn_sused += nbytes;
         g->ok = 1;
-        return f;
+        return fn_put(f);
     }
     if (g->type == 4) {
         pdw len;
@@ -249,7 +259,7 @@ static pdw fn_one(pdw node)
         n = fc_compile(len);
         if (!n) { fn_cused = g->coff; return FNFAIL(); }
         g->clen = n; g->ok = 1;
-        return f;
+        return fn_put(f);
     }
     return FNFAIL();
 }
@@ -257,22 +267,26 @@ static pdw fn_one(pdw node)
 /* the driver: a type 3 chain compiles by a loop over the rows it creates */
 static pdw fn_compile(pdw node)
 {
-    pdw root, i, k, s;
-    struct gxf *g;
+    pdw root, i, k, s, t3;
     root = fn_one(node);
     if (root == FNE_NONE) return FNE_NONE;
     for (i = root; i < fn_n; i++) {
-        g = &fn_t[i];
-        if (g->type != 3) continue;
-        for (k = 0; k < g->nsub; k++) {
+        fn_get(i);
+        if (fn_cur.type != 3) continue;
+        t3 = fn_cur.nsub;
+        for (k = 0; k < t3; k++) {
             s = fn_one(fn_subnode[i][k]);
             if (s == FNE_NONE) { fn_n = root; return FNE_NONE; }
-            fn_t[i].sub[k] = s;
+            fn_get(i); fn_cur.sub[k] = s; fn_put(i);
         }
     }
     for (i = fn_n; i > root; i--) {
-        g = &fn_t[i - 1];
-        if (g->type == 3 && !g->nout) g->nout = fn_t[g->sub[0]].nout;
+        fn_get(i - 1);
+        if (fn_cur.type == 3 && !fn_cur.nout) {
+            s = fn_cur.sub[0];
+            fn_get(s); k = fn_cur.nout;
+            fn_get(i - 1); fn_cur.nout = (pdb)k; fn_put(i - 1);
+        }
     }
     return root;
 }
@@ -298,7 +312,7 @@ static void fn_sample(const struct gxf *g, pdw lin, struct pd_fx *r)
     while (left) {
         pdw avail = 8 - sh, use = left < avail ? left : avail, b;
         b = g->soff + byte;
-        b = b < FN_SAMAX && byte < g->slen ? fn_sam[b] : 0;
+        b = b < FN_SAMAX && byte < g->slen ? FSB(b) : 0;
         b = (b >> (avail - use)) & ((1u << use) - 1u);
         v = (pdw)((v << use) | b);
         left -= use; sh = 0; byte++;
@@ -402,15 +416,15 @@ static pdw fn_eval_ps(const struct gxf *g, const struct pd_fx *in, struct pd_fx 
         fx_cp(&(fe_st[sp]), &(x)); fe_bool[sp] = 0; sp++;
     }
     while (pc < end) {
-        op = fn_code[pc++];
+        op = FCB(pc++);
         if (op == FC_PUSH) {
             if (sp >= FN_STACK) return 0;
-            fe_st[sp].lo = (pdw)(fn_code[pc] | (fn_code[pc + 1] << 8));
-            fe_st[sp].hi = (pdi)(pdw)(fn_code[pc + 2] | (fn_code[pc + 3] << 8));
+            fe_st[sp].lo = (pdw)(FCB(pc) | (FCB(pc + 1) << 8));
+            fe_st[sp].hi = (pdi)(pdw)(FCB(pc + 2) | (FCB(pc + 3) << 8));
             fe_bool[sp] = 0; sp++; pc += 4; continue;
         }
         if (op == FC_JZ || op == FC_JMP) {
-            n2 = (pdw)(fn_code[pc] | (fn_code[pc + 1] << 8)); pc += 2;
+            n2 = (pdw)(FCB(pc) | (FCB(pc + 1) << 8)); pc += 2;
             if (op == FC_JMP) { pc += n2; continue; }
             if (!sp) return 0;
             fx_cp(&(a), &(fe_st[--sp]));
@@ -504,13 +518,13 @@ static pdw fn_eval_ps(const struct gxf *g, const struct pd_fx *in, struct pd_fx 
 /* Evaluate function f at in[0..nin). Answers the number of outputs, 0 on failure. */
 static pdw fn_eval(pdw f, const struct pd_fx *in, struct pd_fx *out)
 {
-    const struct gxf *g;
+    const struct gxf *g = &fn_cur;
     static struct pd_fx x, lo, hi, d, num, t;
     pdw depth = 0, i, k, n = 0;
-    g = &fn_t[f];
-    if (f >= fn_n || !g->ok) return 0;
+    if (f >= fn_n) return 0;
+    fn_get(f);
+    if (!g->ok) return 0;
     if (g->type == 3) {
-        const struct gxf *top = g;
         fx_cp(&(x), &(in[0]));
         fn_clip(&x, &g->dom[0], &g->dom[1]);
         while (g->type == 3) {
@@ -526,7 +540,7 @@ static pdw fn_eval(pdw f, const struct pd_fx *in, struct pd_fx *out)
                 fx_sub(&num, &g->p2[2 * k + 1], &g->p2[2 * k]); fx_mul(&t, &t, &num);
                 fx_add(&x, &g->p2[2 * k], &t);
             }
-            g = &fn_t[g->sub[k]];
+            fn_get(g->sub[k]);
         }
         fx_cp(&(fe_x[0]), &(x));
         n = g->type == 0 ? fn_eval_sampled(g, fe_x, out) :
@@ -539,7 +553,7 @@ static pdw fn_eval(pdw f, const struct pd_fx *in, struct pd_fx *out)
             n = g->nout;
             for (i = 0; i < n; i++) { fx_sub(&t, &g->p2[i], &g->p1[i]); fx_mul(&t, &t, &pw); fx_add(&out[i], &g->p1[i], &t); }
         }
-        g = top;
+        fn_get(f);
     } else if (g->type == 0) n = fn_eval_sampled(g, in, out);
     else if (g->type == 4) n = fn_eval_ps(g, in, out);
     else if (g->type == 2) {

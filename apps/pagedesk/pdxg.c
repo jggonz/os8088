@@ -23,12 +23,27 @@ pdw pdx_cf;                             /* CF of this door's answer            *
 pdw pdx_engcf;                          /* CF of the last PDENG call           */
 pdw pdx_engvec[2];                      /* PDENG's door, offset then segment   */
 static pdw g_xbseg;                     /* the exchange block                  */
+static pdw gw_seg;                      /* the slot workspace (pdxb_init.slot_seg): parse arrays, function tables */
 
 /* ---- the object source: PDENG on the target, the harness on the host ------- */
 static pdw gx_fetch(pdw obj, pdw gen, char *buf, pdw cap);
 static pdw gx_sopen(pdw obj, pdw gen);
 static pdw gx_sread(pdb *buf, pdw cap);
 static void gx_sclose(void);
+/* read the open stream into far memory: through a 128-byte near window */
+static pdw gx_sreadf(pdw seg, pdw off, pdw cap)
+{
+    static pdb win[128];
+    pdw got = 0, n, r;
+    while (got < cap) {
+        n = cap - got < 128 ? cap - got : 128;
+        r = gx_sread(win, n);
+        if (!r) break;
+        pd_fcopy_out(win, seg, (pdw)(off + got), r);
+        got += r;
+    }
+    return got;
+}
 
 #include "pdxgm.c"
 #include "pdxgp.c"
@@ -329,7 +344,8 @@ static pdw v_init(pdw bx)
     g_xbseg = bx;
     pd_fcopy_in(bx, 0, &in, sizeof in);
     pdx_engvec[0] = in.eng_off; pdx_engvec[1] = in.eng_seg;
-    return PDE_OK;
+    gw_seg = in.slot_seg;
+    return in.slot_kb >= GX_WS_KB ? PDE_OK : PDE_NOMEM;
 }
 
 /* the door's entry: verb, then BX/CX/DX; the answer in AX, CF in pdx_cf */
