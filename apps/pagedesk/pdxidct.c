@@ -56,7 +56,7 @@ const pdb pdi_zz[64] = {        /* zigzag index -> natural position           */
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63 };
 
 /* ---- state ---------------------------------------------------------------- */
-static struct dj_huff dj_ht[8];         /* 0..3 DC, 4..7 AC                    */
+static struct dj_huff dj_ht[4];         /* 0..1 DC, 2..3 AC (tables 2 and 3 of a file: PDE_FILTER) */
 static pdw  dj_qt[4][64];               /* natural order                       */
 static pdb  dj_qset[4];
 static struct dj_comp dj_c[4];
@@ -171,6 +171,9 @@ static void dj_efill(void)
 
 static void dj_ensure(void)
 {
+    /* past the real bytes (a truncated scan, a marker): stay on the zero padding, so
+     * a long run of blocks past the end never walks off the buffer */
+    if ((pdw)(pdi_pos >> 3) > dj_eend) pdi_pos = (pdw)(dj_eend << 3);
     if ((pdi)dj_eend - (pdi)(pdi_pos >> 3) < DJ_NEED && !dj_emk && !dj_eeof) dj_efill();
 }
 
@@ -224,6 +227,9 @@ static pdw dj_dht_build(struct dj_huff *t, pdb *cnt, pdw nv)
         first = code;
         n = cnt[L - 1];
         t->valoff[L] = (pdw)(k - first);
+        /* over-subscribed (more codes than L bits hold): refuse BEFORE filling the lookup */
+        if (L < 16) { if ((pdw)(first + n) > (pdw)(1u << L)) return PDE_SYNTAX; }
+        else if ((pdw)(first + n) < first) return PDE_SYNTAX;
         for (i = 0; i < n; i++) {
             c = (pdw)(first + i);
             sym = t->vals[k + i];
@@ -268,10 +274,11 @@ static void dj_dht(void)
         tc = dj_rd8();
         th = tc & 15; tc = tc >> 4;
         if (tc > 1 || th > 3) { dj_err = PDE_SYNTAX; return; }
+        if (th > 1) { dj_err = PDE_FILTER; return; }
         tot = 0;
         for (i = 0; i < 16; i++) { cnt[i] = (pdb)dj_rd8(); tot = (pdw)(tot + cnt[i]); }
         if (tot > 256 || dj_err) { dj_err = PDE_SYNTAX; return; }
-        t = &dj_ht[tc * 4 + th];
+        t = &dj_ht[tc * 2 + th];
         for (i = 0; i < tot; i++) t->vals[i] = (pdb)dj_rd8();
         if (dj_err) return;
         nv = tot;
@@ -316,6 +323,7 @@ static void dj_sos(void)
         dj_sci[i] = (pdb)j;
         dj_sdc[i] = (pdb)(t >> 4); dj_sac[i] = (pdb)(t & 15);
         if (dj_sdc[i] > 3 || dj_sac[i] > 3) { dj_err = PDE_SYNTAX; return; }
+        if (dj_sdc[i] > 1 || dj_sac[i] > 1) { dj_err = PDE_FILTER; return; }
     }
     dj_ss = dj_rd8(); dj_se = dj_rd8();
     t = dj_rd8();
@@ -549,7 +557,7 @@ static void dj_mcurow_stream(pdw xform)
             for (by = 0; by < c->v; by++)
                 for (bx = 0; bx < c->h; bx++) {
                     dj_ensure();
-                    d = pdi_block(&dj_ht[dj_sdc[k]], &dj_ht[4 + dj_sac[k]], pdi_coef);
+                    d = pdi_block(&dj_ht[dj_sdc[k]], &dj_ht[2 + dj_sac[k]], pdi_coef);
                     c->pred = (pdi)(c->pred + d);
                     pdi_coef[0] = c->pred;
                     if (xform && c->used) dj_put(c, (pdw)(mx * c->h + bx), by);
@@ -586,7 +594,7 @@ static void dj_ac_first(pdi *b, struct dj_huff *act)
             if (k > 63) break;
             v = dj_ext(pdi_bits(s), s);
             sl = dj_nmap[pdi_zz[k]];
-            if (sl != 255) b[sl] = (pdi)(v << dj_al);
+            if (sl != 255) b[sl] = (pdi)((pdw)v << dj_al);
             dj_setnz(b, k);
         } else {
             if (r == 15) k = (pdw)(k + 15);
@@ -647,7 +655,7 @@ static void dj_block(pdw k, pdw bx, pdw by)
     pdi d;
     struct dj_huff *dct, *act;
     c = &dj_c[dj_sci[k]];
-    dct = &dj_ht[dj_sdc[k]]; act = &dj_ht[4 + dj_sac[k]];
+    dct = &dj_ht[dj_sdc[k]]; act = &dj_ht[2 + dj_sac[k]];
     if (!c->used) {                         /* parse and discard */
         if (!dj_prog) { pdi_block(dct, act, pdi_coef); return; }
         if (dj_ss == 0) {
@@ -668,7 +676,7 @@ static void dj_block(pdw k, pdw bx, pdw by)
             s = pdi_hsym(dct);
             d = s ? dj_ext(pdi_bits(s > 16 ? 16 : s), s) : 0;
             c->pred = (pdi)(c->pred + d);
-            dj_blk[0] = (pdi)(c->pred << dj_al);
+            dj_blk[0] = (pdi)((pdw)c->pred << dj_al);
         } else if (pdi_bits(1)) dj_blk[0] = (pdi)(dj_blk[0] | (1 << dj_al));
     } else if (dj_ah == 0) dj_ac_first(dj_blk, act);
     else dj_ac_refine(dj_blk, act);
@@ -859,7 +867,7 @@ void pdi_dct_drop(void) { dj_warm = 0; }
 static void dj_reset(void)
 {
     pdw i;
-    for (i = 0; i < 8; i++) dj_ht[i].set = 0;
+    for (i = 0; i < 4; i++) dj_ht[i].set = 0;
     for (i = 0; i < 4; i++) dj_qset[i] = 0;
     dj_gotsof = 0; dj_ri = 0; dj_jfif = 0; dj_adobe = 0; dj_atrans = 0;
     dj_err = 0; dj_decoded = 0; dj_done = 0; dj_mready = -1; dj_mnext = 0;

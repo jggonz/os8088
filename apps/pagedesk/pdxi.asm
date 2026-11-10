@@ -127,7 +127,9 @@ section .text
 %include "cc/os88thunk.asm"
 
 %include "pagedesk/pdmath.inc"
+%ifndef PDXI_NODCT
 %include "pagedesk/pdxidct.inc"
+%endif
 
 section .bss
 pdi_bss_end:

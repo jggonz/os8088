@@ -87,9 +87,16 @@ void pdi_src_close(void)
     s_src = 0;
 }
 
+#ifndef PDXI_NODCT                      /* -DPDXI_NODCT: the size A/B (the shell without DCT) */
 #include "pdxidct.c"
 #if defined(PD_HOST) && !defined(PDI_ASM)
 #include "pdxitwin.c"
+#endif
+#else
+pdw pdi_dct_open(void) { return PDE_FILTER; }
+pdw pdi_dct_row(pdw seg, pdw off, pdw row) { (void)seg; (void)off; (void)row; return PDE_RANGE; }
+void pdi_dct_close(void) { }
+void pdi_dct_drop(void) { }
 #endif
 #ifdef PDXI_CCIT
 #include "pdxiccit.c"

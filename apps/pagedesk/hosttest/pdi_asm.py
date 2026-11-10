@@ -57,8 +57,8 @@ class Machine:
     def _hook(self, uc, addr, size, ud):
         self.insn += 1
         if self.capture:
-            b = bytes(uc.mem_read(addr, size))
-            self.hist[b] = self.hist.get(b, 0) + 1
+            a = addr - SEG * 16
+            self.hist[a] = self.hist.get(a, 0) + 1
 
     def call(self, fn, args):
         mu = self.mu
@@ -191,7 +191,7 @@ def main():
             got = m.r(0x7000, 88)
             per_mode[mode].append(m.insn)
             if got != want:
-                bad += 1; print('IDCT mismatch case %d mode %d kind coefs=%s' % (k, mode, coef[:8])); 
+                bad += 1; print('IDCT mismatch case %d mode %d\n  coef %s\n  qt0 %d\n  want %s\n  got  %s' % (k, mode, coef, qt[0], want.hex(), got.hex()))
                 if bad > 5: return 1
             n_idct += 1
         elif mt[0] == 'B':

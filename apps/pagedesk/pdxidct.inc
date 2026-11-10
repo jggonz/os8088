@@ -423,6 +423,29 @@ idc_d2:
     pop cx
     ret
 
+; --- AX = pass 2's DC input -> AL = the flat pixel it makes: ((i0 + 16) >> 5) + 128, clamped
+;     (exactly what the full 1-D gives a row whose other seven inputs are 0, for all
+;     three transforms: i0 * 2^13..15 + the rounding term, shifted by 18..20)
+idc_dcv:
+    cwd
+    add ax, 16
+    adc dx, 0
+    mov cl, 5
+    shr ax, cl
+    mov cl, 11
+    shl dx, cl
+    or ax, dx
+    cmp ax, 127
+    jg .hi
+    add ax, 128
+    jns .ok
+    xor ax, ax
+    ret
+.hi:
+    mov ax, 255
+.ok:
+    ret
+
 ; void pdi_idct(int *coef, unsigned *qt, mode, dseg, doff, stride)
 _pdi_idct:
     push bp
@@ -441,6 +464,37 @@ _pdi_idct:
     mov [idc_doff], ax
     mov ax, [bp+14]
     mov [idc_stride], ax
+    ; a block with no AC term is one flat value: skip both passes
+    mov di, [bp+4]
+    add di, 2
+    mov cx, 63
+    xor ax, ax
+    repe scasw
+    jne .generic
+    mov bx, [bp+4]
+    mov ax, [bx]
+    mov bx, [bp+6]
+    imul word [bx]
+    shl ax, 1
+    shl ax, 1
+    call idc_dcv
+    mov bx, [idc_mode]                  ; nout = 8 >> mode
+    mov cx, 8
+    xchg cx, bx
+    shr bx, cl                          ; (BX = 8 >> mode, kept in BX)
+    mov es, [idc_dseg]
+    mov di, [idc_doff]
+    mov dx, bx                          ; rows left
+.fl:
+    mov cx, bx
+    push di
+    rep stosb
+    pop di
+    add di, [idc_stride]
+    dec dx
+    jnz .fl
+    jmp .out
+.generic:
     ; dequantise: ws[i] = coef[i] * qt[i] (low 16 bits)
     mov si, [bp+4]
     mov bx, [bp+6]
@@ -567,6 +621,26 @@ _pdi_idct:
     mov [bx], ax
     add bx, 2
     loop .ld2
+    mov ax, [I1]
+    or ax, [I2]
+    or ax, [I3]
+    or ax, [I4]
+    or ax, [I5]
+    or ax, [I6]
+    or ax, [I7]
+    jnz .rfull
+    mov ax, [I0]
+    call idc_dcv
+    mov bx, ax                          ; the flat pixel
+    mov ax, [idc_r]
+    mul word [idc_stride]
+    add ax, [idc_doff]
+    mov di, ax
+    mov ax, bx
+    mov cx, [idc_nout]
+    rep stosb
+    jmp .rnext
+.rfull:
     call idc_kern
     mov ax, [idc_r]
     mul word [idc_stride]
@@ -591,10 +665,12 @@ _pdi_idct:
     mov [es:di], al
     inc di
     loop .st2
+.rnext:
     inc word [idc_r]
     mov ax, [idc_r]
     cmp ax, [idc_nout]
     jb .row
+.out:
     pop es
     pop di
     pop si

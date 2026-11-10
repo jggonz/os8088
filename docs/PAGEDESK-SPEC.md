@@ -5042,24 +5042,83 @@ YCbCr (a JFIF marker, or Adobe `transform = 1`, or no marker and the ids are not
 * `PDIM_BITS1` is not produced.
 
 **The workspace** (declared here, for 20.22.2's table): **64 KiB**
-(`slot_kb = 64`), the most an occupant may have. The module's near memory is
-its image + bss.
+(`slot_kb = 64`), the most an occupant may have; the top 1,024 bytes are the
+landing zone the engine's `STRM_READ` writes the coded bytes to (it writes far),
+and `pdi_src_get` copies them to a near buffer. The module's near memory is its
+image + bss.
 
 | use | bytes |
 |---|---|
-| near: Huffman tables (8 x 838), quantisation (4 x 128), entropy buffer 1,100, raw buffer 512, row buffers 2,200, block and work arrays 600 | about 11,000 |
-| far, baseline: output planes of ONE MCU row, `rows * padded width` for each component used | 1,056 x 16 at the worst |
-| far, progressive or multi-scan: per used component `blocks * stride` + the planes of one MCU row; stride = 136 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes | up to 64 KiB |
+| near: Huffman tables (2 DC + 2 AC, 838 each), quantisation (4 x 128), entropy buffer 1,420, raw buffer 512, row buffers 2,112, block and transform work arrays about 1,200 | about 8,200 (bss 8,980 with the shell) |
+| far, baseline (one scan holding every component): the output planes of ONE MCU row, `padded width * rows` for each component used | at most 1,056 x 32 (a 1/1 decode of a 4:1:1-or-wider image); 17 KiB for 4:2:0 |
+| far, progressive or multi-scan: per used component `blocks * stride` plus the planes of one MCU row; stride = 136 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes | up to 62 KiB |
 
-An unused component (grey output of a YCbCr image) has no storage at all. Two
-consequences: a 1,000 x 1,000 progressive photograph is decoded at 1/4 (16
-bytes a block, 15,625 blocks, 250 KB) only if it fits, else at 1/8 (2 bytes a
-block, 31 KB); and an image too large even at 1/8 is `PDE_LIMIT` as above.
+Huffman table ids 2 and 3 (a file with four tables of a class) are `PDE_FILTER`;
+cjpeg, libjpeg's progressive scripts, Photoshop and the camera makers all use 0
+and 1. An unused component (grey output of a YCbCr image) has no storage at all.
+A 1,000 x 1,000 progressive photograph is decoded at 1/4 (16 bytes a block, 15,625
+blocks, 244 KB: does not fit) and so at 1/8 (2 bytes a block, 31 KB: fits); an image
+too large even at 1/8 (about 31,000 blocks of one component, say 4,400 x 4,400, or
+a width over 8,100) is `PDE_LIMIT` as above. A baseline image has no such limit in
+rows, only in width.
 
-**Cost** (measured, written below once taken): the Huffman decoder is a table
-lookup of the first 8 bits with a canonical fall-back for longer codes; the
-transforms are libjpeg's integer ones (`jidctint`, `jidctred`), with a
-whole-column shortcut when a column has no AC term.
+**Fidelity.** Against `djpeg -dct int` (libjpeg-turbo 3.2.0, `tools/os88pdfx_dct.py`
+over 26 fixtures, 228 comparisons):
+
+* every **grey** decode of a baseline image is bit-exact (max 0) at 1/1, 1/2, 1/4 and
+  1/8, because the transforms are `jidctint`, `jidctred`'s 4x4 and 2x2, and the
+  1x1 is the same dequantise and shift;
+* a **progressive or multi-scan** image is bit-exact at 1/1 and 1/8; at 1/2 and
+  1/4 the coefficients outside the low 4x4 (resp. 2x2) are not kept, whereas
+  libjpeg's reduced transforms read all but one column, so the result is an
+  approximation: mean absolute difference below 3 levels, maximum 36, on fixtures
+  made to be hard (hard edges, noise);
+* **PDIM_N8** is libjpeg's to within one level at 1/1 (the YCbCr conversion is 16-bit
+  fixed point); at a reduction chroma is the luma's reduction replicated, where
+  libjpeg decodes chroma at a larger reduction, so only its luma is held to
+  libjpeg (mean below 12 on subsampled images, below 3 otherwise);
+* CMYK and YCCK (Adobe) match libjpeg-turbo's own CMYK-to-RGB to within 3.
+
+**The assembly** is `pdxidct.inc`: `pdi_hsym`, `pdi_bits`, `pdi_block`, `pdi_idct`.
+`hosttest/pdi_asm.py` runs it under Unicorn's real-mode x86 against the C twins
+in `pdxitwin.c` (300 transforms, 300 blocks over random canonical Huffman tables
+and the real tables of a cjpeg file, 64 bit reads): 0 mismatches. The twins are
+the oracle that the fast paths (a block with no AC term is one flat value; a row
+whose other seven inputs are 0 is flat) are held to.
+
+**Cost** (`hosttest/pdi_cycles.py`: instruction counts under Unicorn, priced by
+the 8088 timing tables with the 4.34-clocks-a-byte fetch floor; a model, not a
+measurement on iron):
+
+| | 8088 clocks | at 4.77 MHz |
+|---|---|---|
+| IDCT 8x8, a real photographic block | 120,000 | 25 ms |
+| IDCT 4x4 (1/2) | 57,000 | 12 ms |
+| IDCT 2x2 (1/4) | 27,000 | 5.6 ms |
+| any IDCT of a block with no AC term | 1,800 to 2,800 | 0.4 to 0.6 ms |
+| 1/8: DC only, no transform | about 400 | 0.1 ms |
+| baseline block, Huffman and dezigzag, 12 coefficients | 19,000 (2,500 to 41,000) | 4 ms |
+
+A 4:2:0 MCU row of 640 pixels (40 MCUs, 6 blocks each, grey out, so 4 transforms an
+MCU) costs about 4.6 s at 1/1, 2.8 s at 1/2, 1.9 s at 1/4 and 1.0 s at 1/8,
+nearly all of it the entropy decoder at the reductions: a 640x480 photograph at 1/2 is
+30 rows, about 85 s. The module does not hide this; it is the price of reading
+every block, and the reason the reduction rule exists. The transform is one
+`imul` per multiply (about 150 clocks), 12 a 1-D pass, 16 passes.
+
+**Robustness.** `hosttest/pdi_fuzz.c` (ASan + UBSan) mutates the 30 fixtures
+(bit flips, forged markers and lengths, rewritten header bytes, truncation) and
+drives X_INIT, OPEN, every ROW and CLOSE, with a random workspace size, random
+want and flags, the coded bytes in short chunks, and guard bands around the
+workspace and the destination row. It found one bug (the Huffman lookup filled
+before an over-subscribed length was refused) and then ran 30,000 mutations clean.
+The bit reader reads only inside a zero-padded buffer; the entropy buffer is
+refilled before every block.
+
+**Chains** (`os88pdstk`, PDXI added as a segment with its far edge
+`_pdi_engcall -> PDENG`): the deepest chain is 566 bytes of the 1,776, and 478 of
+those are PDENG's own below `pde_entry`; PDXI's frames above it are 88 bytes. The
+module makes no kernel call of its own (the stream is read through PDENG).
 
 #### 20.22.12 CCITT and JBIG2 (`bilevel`)
 
