@@ -587,13 +587,7 @@ static int ovl_save_begin(const char *name, int kind)
         pd_fpokew(pdu_kseg, PDU_KS_WKEYS, 0);
     pdu_pfm = kind == 0 && pdu_pgmap ? ovl_ifl_need() : 0;
     pdu_pfk = 0;
-    pdu_pfl = pdu_pfm != 0;             /* the pre-flight brings PDWRT in */
-    r = pdu_pfl ? 0 : pdu_wrt_in_now();
-    if (r) {
-        ovl_savefail(name, (unsigned)r);
-        pdu_status_paint();
-        return 1;
-    }
+    pdu_pfl = pdu_pfm != 0;             /* PDWRT comes in at the job's first slice */
     for (r = 0; r < (int)sizeof(pdu_xsave); r++)
         ((char *)&pdu_xsave)[r] = 0;
     os88_strcpy(pdu_xsave.target, name, sizeof(pdu_xsave.target));

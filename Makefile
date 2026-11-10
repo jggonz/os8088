@@ -21926,6 +21926,7 @@ pdcrypt: pdxk $(BUILD)/pdc_e2e $(BUILD)/PDENG.MOD
 	python3 tests/pdcrypt/pdc_e2e.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
 	python3 tests/pdcrypt/pdc_plain.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
 	python3 tests/pdcrypt/pdc_target.py
+	python3 tests/pdcrypt/pdc_heldkey.py
 	python3 tests/pdcrypt/pdk_stack.py
 	python3 tests/pdcrypt/pdc_fuzz.py 300 1
 # ---- end PageDesk: crypt ------------------------------------------------------
@@ -22172,6 +22173,8 @@ $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlpref.c
 # pdovlauth.c likewise (the password prompt, PAGEDESK-SPEC 20.22.6)
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlauth.c
+# pdovlplat.c likewise (the key of an encrypted open, PAGEDESK-SPEC 20.22.2.6): an edit to it alone rebuilt nothing
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlplat.c
 # ---- end PageDesk: prefs ----
 
 $(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \

@@ -256,7 +256,7 @@ static pdw cr_raw_plain(struct pdxb_rawcopy *rw)
     pdw rc, num = rw->objnum, gen = rw->gen, want, got = 0, k, n, d, head;
     if (cr_str >= PDCM_RC4 && cr_str <= PDCM_AESV3 && !(tr_enc_k == 1 && num == tr_enc_n)) rw->mode |= PDRC_STRCIPHER;
     if (sp_kind != PDK_STRM || !cr_on || cr_stm < PDCM_RC4 || cr_stm > PDCM_AESV3) return PDE_NOTFOUND;
-    rc = ob_filters1(num);                                   /* sp_crypt */
+    cr_peek = 1; rc = ob_filters1(num); cr_peek = 0;         /* sp_crypt (the chain itself is the caller's: no Flate slot is needed to copy) */
     if (rc) return rc;
     if (cr_skipchk()) return PDE_NOTFOUND;
     if (nctx >= PDE_MAXCTX) return PDE_LIMIT;

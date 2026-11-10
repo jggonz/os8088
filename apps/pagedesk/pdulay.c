@@ -445,6 +445,7 @@ void pdu_layout(struct pdu_lay *L, int ox, int oy, int w, int h,
         int cy, bw1, bw2, gx;
         lay_full = 1;
         lay_pad = 12;
+        lay_kit &= full;                /* COMPACT paints the 8-pixel face (F16) */
         bw1 = lay_w(C_EV_OPEN);
         bw2 = lay_w(C_EV_SAMPLE);
         gx = (L->canvas.x1 + L->canvas.x2 + 1 - bw1 - bw2 - 8) / 2;

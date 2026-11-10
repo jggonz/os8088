@@ -387,7 +387,7 @@ static void pdu_pop_open(int kind, int src)
     pdu_popsrc = src;
     rows = pdu_pop_rows();
     w = 12;
-    if (kind == P_FIND) w = 30;
+    if (kind == P_FIND) w = 37;         /* "Find: " + 30 + the cursor (R18) */
     if (kind == P_NOTES || kind == P_NOTE) w = pdu_nt_pw();  /* notes */
     if (kind == P_PAGES) w = 32;
     if (kind == P_PREFS) {              /* prefs */
@@ -480,11 +480,8 @@ static void pdu_pop_close(void)
  * ==========================================================================*/
 static void pdu_sample(void)
 {
-    if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) != 0) {
-        pdu_tell("The disk PageDesk came from is not in a drive.");
-        return;
-    }
-    pdu_open_begin("XTGUIDE.PDF");
+    if (!ovl_sample())                  /* its overlay body says what is missing */
+        pdu_tell(pdu_errtext(PDE_NOMEM));
 }
 
 static void pdu_open_dlg(void)
