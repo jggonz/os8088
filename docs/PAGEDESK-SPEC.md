@@ -6566,6 +6566,27 @@ the notdef), the CMap tokeniser's 512-byte staging window, and three 2,048-byte 
 Encoding CMap, `/W` ranges). PDXF's own image + bss (the outline buffer, the 34 x 48 accumulator,
 the Type 1 name tables, the stacks) is under 61,440 (the cap, 20.22 L6).
 
+**Streams without a Flate slot** (`apps/pagedesk/pdxfz.c`; QA R13, F19). PDENG decodes a Flate
+stream in a Flate slot (20.22.3), and a machine with ONE slot - the 640 KB VGA machine is one - has
+given it to the page's content stream while PDREND interprets the page, so PDXF's `STRM_OPEN` of
+a Flate font program, ToUnicode, Encoding CMap or CIDToGIDMap answers `PDE_LIMIT` (`fl_attach`,
+"a third Flate stream open at once"); every Quartz, Word and MuPDF page is a Flate content stream,
+so before this no real document's embedded font drew there (the fixtures drew: their content
+streams are uncompressed). On `PDE_LIMIT` or `PDE_FLATE` from `STRM_OPEN`, a stream whose
+`/Filter` is `/FlateDecode` alone is copied with `RAW_COPY PDRC_PLAIN` (decrypted by PDENG's own
+hook) into the workspace's free area - `[0, program)` for the program, above the program for the
+others - moved to that area's TOP, and inflated into its BOTTOM. The decoder needs no window (the
+output is whole in the area, so a match is a copy within it) and reads its input through a
+512-byte near buffer, so output may overwrite any input byte already taken; output that would
+reach unread input or pass the area is "too large" (`PDFE_SIZE` for a program, the growth above;
+a truncated table for the others). The callers then read the bytes as they would PDENG's
+(`pdx_sread`, `pdx_sclose`). Its tables borrow the TrueType point arrays (a font activates between
+glyphs, never inside one): **+3,282 of PDXF**, 64,094 of 65,024. The decoder is puff's (canonical
+Huffman a bit at a time): small, and run once per activation. Another filter in that position
+(ASCIIHex, LZW, a chain) still fails as before. Not covered here: a Type 3 CharProc or a form in a
+Flate content stream opens through rcore's `do_form` and meets the same wall
+(`hosttest/pdx_page.py --oneslot type3` shows it).
+
 **Verbs** (`pdabi.h`'s `[fonts 20.22.8]` block; PDXF copies the exchange block's struct to its bss at
 entry because PDENG reuses the block):
 
@@ -6675,7 +6696,10 @@ Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` >
 `_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
 deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.
 
-**Checks.** `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
+**Checks.** `hosttest/pdx_page.py --oneslot` renders every fixture with its content streams
+Flate-compressed and ONE Flate slot (`--noz`, PDXF built without the in-place inflate, must fail:
+the fonts come out substituted), and `pdx_fuzz -z` inflates each fixture's program at zlib levels
+0, 1 and 9 exactly, then mutated under ASan and UBSan. `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
 parsers under ASan + UBSan on mutated programs and CMaps), `hosttest/pdx_chain.py` (the
 chain through the REAL PDENG: Flate-compressed font streams, the encoding rules, CIDToGIDMap,
 ToUnicode, an embedded CMap, `/W`, and the strike block's bitmaps against a direct raster),

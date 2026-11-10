@@ -12,6 +12,7 @@
  *
  *   cc -DPD_HOST -DPDR_REAL_ENG -I apps/pagedesk -I <engine dir> ... pdr_hosteng.c <engine dir>/pdeng.c
  * ==========================================================================*/
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #define os88_file_read_seq pde_doc_read_seq
@@ -64,7 +65,7 @@ int pdrh_open(const char *path)
     if (pdh_load(path)) return 0;
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_ECACHE; in.cache_kb = 16; in.arena_seg = SEG_EARENA; in.arena_kb = 8;
-    in.tables_seg = SEG_ETBL; in.tables_kb = 11; in.flate_seg = 0xD000; in.flate_kb = 86; in.flags = PDXI_FLATE;
+    in.tables_seg = SEG_ETBL; in.tables_kb = 11; in.flate_seg = 0xD000; in.flate_kb = getenv("PDRH_FLKB") ? (unsigned)atoi(getenv("PDRH_FLKB")) : 86; in.flags = PDXI_FLATE;   /* PDRH_FLKB=43: ONE Flate slot, the 640 KB VGA machine's (QA R13) */
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pde_verb(PDV_ENG_INIT, SEG_XB, 0, 0);
     if (pde_fail) { fprintf(stderr, "engine INIT failed %u\n", pde_fail); return 0; }

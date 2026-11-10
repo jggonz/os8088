@@ -21816,7 +21816,7 @@ $(BUILD)/PDWRT.MOD: apps/pagedesk/pdwrt.asm $(BUILD)/pdwrt.gen.asm $(CC_RUNTIME)
 # loops are apps/pagedesk/pdxf.asm. `make pdxf` builds it and runs its host checks
 # (hosttest/pdx_check.py against mutool, hosttest/pdx_chain.py through the real PDENG).
 PDX_C    := apps/pagedesk/pdxf.c apps/pagedesk/pdxfol.c apps/pagedesk/pdxfsf.c apps/pagedesk/pdxfcf.c \
-            apps/pagedesk/pdxft1.c apps/pagedesk/pdxft3.c apps/pagedesk/pdxfnm.c apps/pagedesk/pdxfcm.c apps/pagedesk/pdxfwd.c apps/pagedesk/pdxfnm.h
+            apps/pagedesk/pdxft1.c apps/pagedesk/pdxft3.c apps/pagedesk/pdxfnm.c apps/pagedesk/pdxfcm.c apps/pagedesk/pdxfwd.c apps/pagedesk/pdxfz.c apps/pagedesk/pdxfnm.h
 PDX_CAP  := 65024   # PAGEDESK-SPEC 20.22: PDXF <= the part limit, image + bss (the lead, 23:56)
 .PHONY: pdxf pdxf-host
 $(BUILD)/pdxf.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
@@ -21835,15 +21835,16 @@ pdxf: $(BUILD)/PDXF.MOD pdxf-host
 pdxf-host:
 	python3 apps/pagedesk/hosttest/pdx_check.py --build --limit 6.0
 	python3 apps/pagedesk/hosttest/pdx_chain.py --build
-# the parsers under ASan + UBSan on mutated font programs and CMaps (hosttest/pdx_fuzz.c)
+# the parsers under ASan + UBSan on mutated font programs, CMaps and zlib streams (hosttest/pdx_fuzz.c)
 PDX_FUZZ_N ?= 300
 .PHONY: pdxf-fuzz
 pdxf-fuzz: | $(BUILD)
 	cc -std=gnu99 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk \
-		-o $(BUILD)/pdx_fuzz apps/pagedesk/hosttest/pdx_fuzz.c apps/pagedesk/pdmath.c
+		-o $(BUILD)/pdx_fuzz apps/pagedesk/hosttest/pdx_fuzz.c apps/pagedesk/pdmath.c -lz
 	$(BUILD)/pdx_fuzz -n $(PDX_FUZZ_N) tests/pdfany/fonts/vera-sub.ttf tests/pdfany/fonts/vera.cff tests/pdfany/fonts/vera-cid.cff \
 		tests/pdfany/fonts/vera2048.cff tests/pdfany/fonts/t1-simple.pfa tests/pdfany/fonts/t1-hex.pfa
 	$(BUILD)/pdx_fuzz -c -n $(PDX_FUZZ_N)
+	$(BUILD)/pdx_fuzz -z -n $(PDX_FUZZ_N) tests/pdfany/fonts/vera-sub.ttf tests/pdfany/fonts/vera.cff tests/pdfany/fonts/t1-simple.pfa
 $(BUILD)/pdxf.o88: $(BUILD)/PDXF.MOD
 
 # the host harness and its independent readers (qpdf, mutool, Poppler); PDW_SHOTS
