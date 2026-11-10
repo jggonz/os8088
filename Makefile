@@ -21704,7 +21704,7 @@ PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c a
 PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 53248   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 52 KiB for any PDF (PAGEDESK-SPEC 20.22, L6)
+PDW_CAP  := 61440   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 60 KiB for any PDF: a slot occupant that enciphers with crypt's shared primitives (20.22.4, lead 23:30)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -21755,16 +21755,13 @@ endif
 # verbs the engine agents own (PDRC_PLAIN, CRYPTINFO, SETKEY, PDV_ENG_CRYPT),
 # on fixtures qpdf makes (plain xref stream + object stream, AES-128, AES-256,
 # RC4-128, RC4-40, a user password, a classic table), every output held to
-# qpdf --check, qpdf's own decryption and mutool. The cipher is OpenSSL's
-# (libcrypto, host only: nothing of it is in PDWRT.MOD). PDW_SSL names its
-# library when pkg-config does not.
-PDW_SSLC ?= $(shell pkg-config --cflags libcrypto 2>/dev/null || echo -I/opt/homebrew/opt/openssl@3/include)
-PDW_SSLL ?= $(shell pkg-config --libs libcrypto 2>/dev/null || echo -L/opt/homebrew/opt/openssl@3/lib -lcrypto)
+# qpdf --check, qpdf's own decryption and mutool. The writer enciphers
+# with crypt's shared primitives (pdctwin.c on the host), checked by qpdf.
 .PHONY: pdwrt-enc
 pdwrt-enc: | $(BUILD)
 	mkdir -p $(BUILD)/pdw-enc
-	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST $(PDW_SSLC) -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
-		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(PDW_SSLL)
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
 	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
 		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
 	$(BUILD)/pdw-enc/pdw_encfuzz 100000

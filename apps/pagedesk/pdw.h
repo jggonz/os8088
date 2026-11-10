@@ -11,6 +11,7 @@
 #include "pdabi.h"
 #include "pdmath.h"
 #include "pdwmap.h"
+#include "pdcrypto.h"         /* crypt's primitives, shared source (20.22.5): the writer enciphers itself */
 
 /* ---- writer-private numbers (PAGEDESK-SPEC 20.5.1, 20.5.2) -------------- */
 #define PDW_OUTMIN   4096u   /* the output region of the writer buffer, bytes

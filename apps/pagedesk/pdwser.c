@@ -42,7 +42,11 @@ char pdw_date[24];
 char pdw_author[48];
 
 /* ---- encryption of the output (20.22.4.3) ------------------------------ */
-static struct pdxb_cryptop g_cop;   /* the held key + the cipher's state between calls */
+struct pdw_cw {                  /* the held key and the cipher's state between chunks */
+    pdb key[32]; pdw key_len, method, len, ncarry, nr;
+    pdb iv[16], chain[16], carry[16], rk[240], rc4[258];
+};
+static struct pdw_cw g_cop;
 static pdw g_enc;                /* the source has an /Encrypt: the trailer repeats it */
 static pdw g_encs, g_ence;       /* strings / streams are really encrypted (not identity) */
 static pdw g_cmstr, g_cmstm;     /* PDCM_* of strings / streams                        */
@@ -76,12 +80,12 @@ static void pw_flush(pdw last)
     g_wpos = (pdw)(g_wpos - n);
 }
 
-/* ---- the cipher door (20.22.4.3) ------------------------------------------
- * ONE call into PDENG's PDV_ENG_CRYPT over `len` bytes at seg:off, in place,
- * which may grow to `room`. g_cop holds the key and, between the chunks of one
- * string or stream, the engine's carry and RC4 state: it is copied to the
- * exchange block and back on every call, so nothing in between may assume the
- * block is intact. */
+/* ---- the cipher (20.22.4.3) ------------------------------------------------
+ * PDWRT enciphers by itself, with crypt's shared primitives (pdcrypto.h: the
+ * per-object key, RC4, AES-CBC encrypt). cr_far enciphers `len` (<= 128) bytes
+ * at seg:off IN PLACE (the answer, `g_cop.len` bytes, may be longer: the IV
+ * first, the padding block last). g_cop holds the key and, between the chunks
+ * of one string or stream, the carry, the CBC chain and the RC4 state. */
 static void cr_iv(void)
 {
     pdw k;
@@ -90,19 +94,57 @@ static void cr_iv(void)
         g_ivs[k] = pdm_crc16((pdw)(g_ivs[k] ^ (pdw)(0x9E37u * (k + 1))), g_ivs, 16);
     for (k = 0; k < 8; k++) { g_cop.iv[2 * k] = (pdb)g_ivs[k]; g_cop.iv[2 * k + 1] = (pdb)(g_ivs[k] >> 8); }
 }
+#ifdef PD_HOST
+pdb pdw_host_ivs[4096][16]; unsigned pdw_host_nivs, pdw_host_ncr;
+#endif
+static pdb cw_b[208], cw_a[160];
 static pdw cr_far(pdw seg, pdw off, pdw len, pdw room, pdw phase)
 {
-    pdw r, k;
-    g_cop.seg = seg; g_cop.off = off; g_cop.len = len; g_cop.room = room; g_cop.phase = phase;
-    g_cop.objnum = g_onum; g_cop.gen = g_ogen; g_cop.dir = 1;
-    if ((phase & 1) && g_cop.method != PDCM_RC4) cr_iv();
-    pd_fcopy_out(&g_cop, g_xb, 0, sizeof g_cop);
-    r = pdw_engcall(PDV_ENG_CRYPT, 0, 0, 0);
-    if (pdw_engcf) return r ? r : PDE_ENCRYPT;
-    pd_fcopy_in(g_xb, 0, &g_cop, sizeof g_cop);
-    if (g_cop.len > room) return PDE_LIMIT;
-    if (g_cop.len >= 16)                 /* the previous ciphertext feeds the next IV */
-        for (k = 0; k < 8; k++) g_ivs[k] ^= pd_fpeekw(seg, (pdw)(off + g_cop.len - 16 + 2 * k));
+    static pdw k, o, tot, take, okl;
+    static pdb *ok;
+    if (len > 128 || room < (pdw)(len + 48)) return PDE_LIMIT;
+    o = 0;
+    if (phase & 1) {
+#ifdef PD_HOST
+        pdw_host_ncr++;
+#endif
+        if (g_cop.method == PDCM_AESV3) { ok = g_cop.key; okl = 32; }
+        else {
+            pdc_okey(g_cop.key, g_cop.key_len, g_onum, g_ogen, (pdw)(g_cop.method == PDCM_AESV2));
+            ok = pdc_ok; okl = (pdw)(g_cop.key_len + 5); if (okl > 16) okl = 16;
+        }
+        if (g_cop.method == PDCM_RC4) pdc_rc4_ks(g_cop.rc4, ok, okl);
+        else {
+            pdc_aes_ks(g_cop.rk, ok, (pdw)(okl == 32 ? 8 : 4)); g_cop.nr = (pdw)(okl == 32 ? 14 : 10);
+            cr_iv();
+            for (k = 0; k < 16; k++) { cw_b[k] = g_cop.iv[k]; g_cop.chain[k] = g_cop.iv[k]; }
+            o = 16; g_cop.ncarry = 0;
+#ifdef PD_HOST
+            if (pdw_host_nivs < 4096) { for (k = 0; k < 16; k++) pdw_host_ivs[pdw_host_nivs][k] = g_cop.iv[k]; pdw_host_nivs++; }
+#endif
+        }
+    }
+    if (g_cop.method == PDCM_RC4) {
+        pd_fcopy_in(seg, off, cw_b, len); pdc_rc4(g_cop.rc4, cw_b, len); o = len;
+    } else {
+        for (k = 0; k < g_cop.ncarry; k++) cw_a[k] = g_cop.carry[k];
+        pd_fcopy_in(seg, off, cw_a + g_cop.ncarry, len);
+        tot = (pdw)(g_cop.ncarry + len); take = (pdw)(tot & 0xFFF0u);
+        if (take) pdc_cbc_enc(g_cop.rk, g_cop.nr, g_cop.chain, cw_a, (pdw)(take >> 4));
+        for (k = 0; k < take; k++) cw_b[o + k] = cw_a[k];
+        o = (pdw)(o + take);
+        g_cop.ncarry = (pdw)(tot - take);
+        for (k = 0; k < g_cop.ncarry; k++) g_cop.carry[k] = cw_a[take + k];
+        if (phase & 2) {
+            for (k = g_cop.ncarry; k < 16; k++) g_cop.carry[k] = (pdb)(16 - g_cop.ncarry);
+            pdc_cbc_enc(g_cop.rk, g_cop.nr, g_cop.chain, g_cop.carry, 1);
+            for (k = 0; k < 16; k++) cw_b[o + k] = g_cop.carry[k];
+            o = (pdw)(o + 16); g_cop.ncarry = 0;
+        }
+    }
+    pd_fcopy_out(cw_b, seg, off, o); g_cop.len = o;
+    if (o >= 16)                         /* the previous ciphertext feeds the next IV */
+        for (k = 0; k < 8; k++) g_ivs[k] ^= (pdw)(cw_b[o - 16 + 2 * k] | (cw_b[o - 15 + 2 * k] << 8));
     return PDE_OK;
 }
 

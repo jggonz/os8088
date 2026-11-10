@@ -5,7 +5,7 @@
  * source object, in which every literal and hex string is decoded and written
  * enciphered. Random and mutated text - unbalanced parentheses, dangling
  * backslashes, odd hex, `<<`, strings that straddle the end of the span - goes
- * through it with a stand-in cipher; the writer must neither crash nor run
+ * through it through the writer's own cipher (crypt's twin, AES-128 CBC); the writer must neither crash nor run
  * past its buffers (the sanitizers watch) nor loop, and the number of strings
  * it enciphers must equal the number a plain reading finds.
  * ==========================================================================*/
@@ -14,20 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
-{                                       /* PDV_ENG_CRYPT: AES-shaped growth, no cipher */
-    struct pdxb_cryptop o; unsigned char b[640]; pdw n, i;
-    (void)bx; (void)cx; (void)dx; pdw_engcf = 0;
-    if (verb != PDV_ENG_CRYPT) { pdw_engcf = 1; return PDE_RANGE; }
-    pd_fcopy_in(g_xb, 0, &o, sizeof o);
-    n = o.len; if (n > 600) { pdw_engcf = 1; return PDE_LIMIT; }
-    pd_fcopy_in(o.seg, o.off, b, n);
-    if (o.phase & 1) { memmove(b + 16, b, n); memset(b, 0xAA, 16); n = (pdw)(n + 16); }
-    if (o.phase & 2) { for (i = 0; i < 16; i++) b[n++] = 0x10; }
-    if (n > o.room) { pdw_engcf = 1; return PDE_LIMIT; }
-    pd_fcopy_out(b, o.seg, o.off, n); o.len = n; pd_fcopy_out(&o, g_xb, 0, sizeof o);
-    return PDE_OK;
-}
+pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx) { (void)verb; (void)bx; (void)cx; (void)dx; pdw_engcf = 1; return PDE_RANGE; }
 unsigned os88_ticks_unused;
 static unsigned rnd_s = 12345;
 static unsigned rnd(void) { rnd_s = rnd_s * 1103515245u + 12345u; return rnd_s >> 8; }

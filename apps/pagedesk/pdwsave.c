@@ -182,13 +182,14 @@ static pdw eng_pageinfo(pdw idx)
 #else
 #define EC_OFF(f) ((pdw)&((struct pdxb_crypt *)0)->f)
 #endif
-static pdw sv_pw;                       /* the job paused for a password (20.22.4.5) */
+static pdw g_ceff, g_cem;               /* the held /EncryptMetadata and embedded-file method */
+static struct pdxb_wkeys g_fk;          /* the foreign files' keys, from plat's pre-flight */
 #define CR_ON(m) ((m) == PDCM_RC4 || (m) == PDCM_AESV2 || (m) == PDCM_AESV3)
 static void enc_wipe(void)
 {
     pdw k;
-    for (k = 0; k < 32; k++) g_cop.key[k] = 0;
-    g_cop.key_len = 0; g_enc = g_encs = g_ence = 0; g_cenc = 0;
+    for (k = 0; k < (pdw)sizeof g_cop; k++) ((pdb *)&g_cop)[k] = 0;
+    g_enc = g_encs = g_ence = 0; g_cenc = 0;
 }
 static pdw enc_info(void)               /* CRYPTINFO into the exchange block */
 {
@@ -206,25 +207,33 @@ static pdw enc_setup(void)
     g_cop.key_len = pd_fpeekw(g_xb, EC_OFF(key_len));
     if (!g_cop.key_len || g_cop.key_len > 32 || !pd_fpeekw(g_xb, EC_OFF(auth))) return PDE_ENCRYPT;   /* the engine holds no key */
     g_cmstm = pd_fpeekw(g_xb, EC_OFF(stm)); g_cmstr = pd_fpeekw(g_xb, EC_OFF(str));
-    if (pd_fpeekw(g_xb, EC_OFF(v)) < 4) g_cmstm = g_cmstr = PDCM_RC4;      /* V1, V2: RC4 for both */
+    g_ceff = pd_fpeekw(g_xb, EC_OFF(eff)); g_cem = pd_fpeekw(g_xb, EC_OFF(encmeta));
+    if (!g_cmstm && !g_cmstr) g_cmstm = g_cmstr = PDCM_RC4;      /* V1, V2: RC4 for both */
     g_enc = 1; g_encs = (pdw)CR_ON(g_cmstr); g_ence = (pdw)CR_ON(g_cmstm);
     for (k = 0; k < 8; k++)             /* the IV state's seed (cr_iv) */
         g_ivs[k] = pdm_crc16((pdw)(0xA5A5u + k), g_tr.id0, 16);
     g_ivs[0] ^= pdm_crc16(0xFFFF, pdw_date, pw_len(pdw_date));
     return PDE_OK;
 }
-/* the output's own /Encrypt, given the held key (job_vfy): CRYPTINFO reads the
- * new file's dictionary into the block, the key goes in beside it, SETKEY gives
- * it to the engine, and OPEN resumes */
-static pdw enc_rekey(void)
+/* SETKEY after a document is half-open on a file that needs a key: CRYPTINFO
+ * (the engine's recorded /Encrypt) into the block, then the key and the methods
+ * poked in beside it. Used for the OUTPUT (job_vfy, the held key) and for a
+ * foreign file (fw_open, the key plat's pre-flight derived). */
+static pdw enc_setkey(const pdb *key, pdw klen, pdw stm, pdw str, pdw eff, pdw em)
 {
     pdw r = enc_info();
     if (r) return r;
-    pd_fcopy_out(g_cop.key, g_xb, EC_OFF(key), 32);
-    pd_fpokew(g_xb, EC_OFF(key_len), g_cop.key_len); pd_fpokew(g_xb, EC_OFF(auth), PDCA_USER);
+    pd_fcopy_out(key, g_xb, EC_OFF(key), 32);
+    pd_fpokew(g_xb, EC_OFF(key_len), klen); pd_fpokew(g_xb, EC_OFF(auth), PDCA_USER);
+    pd_fpokew(g_xb, EC_OFF(stm), stm); pd_fpokew(g_xb, EC_OFF(str), str);
+    pd_fpokew(g_xb, EC_OFF(eff), eff); pd_fpokew(g_xb, EC_OFF(encmeta), em);
     pd_fpokew(g_xb, EC_OFF(state), 0);
     r = pdw_engcall(PDV_ENG_SETKEY, 0, 0, 0);
     return pdw_engcf ? (r ? r : PDE_ENCRYPT) : PDE_OK;
+}
+static pdw enc_rekey(void)
+{
+    return enc_setkey(g_cop.key, g_cop.key_len, g_cmstm, g_cmstr, g_ceff, g_cem);
 }
 
 /* ---- the scan of the edit store ------------------------------------------- */
@@ -536,7 +545,8 @@ static pdw job_verify(void)
 static void job_clear(void)
 {
     sv_active = 0; sv_phase = PH_IDLE; g_err = 0; g_created = 0; g_wpos = 0; g_lnn = 0; sv_pgidx = 0xFFFF; g_mode = 0; an_sub = AS_START;
-    sv_pw = 0; enc_wipe();               /* the file key does not outlive the job (20.22.4.3) */
+    enc_wipe();               /* the file key does not outlive the job (20.22.4.3) */
+    for (g_esn = 0; g_esn < (pdw)sizeof g_fk; g_esn++) ((pdb *)&g_fk)[g_esn] = 0;
 }
 static pdw job_fail(pdw err)
 {
@@ -565,7 +575,7 @@ static pdw job_begin(pdw kind)
     if (sv_cnt && !g_edseg) return PDE_NOMEM;           /* D2: a claim of 0 is no claim */
     if (kind != 1 && !pdw_engvec[1]) return PDE_NOMEM;  /* no PDENG to read the source  */
     sv_xbad = 0; sv_catver = 0; sv_xi = 0; sv_i = 0; sv_xstart = 0; sv_copyw = 0; sv_sub = 0; sv_coff = 0; g_io = 0; an_sub = AS_START; sv_flushed = 0; sv_vstage = 0;
-    sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0; sv_pw = 0; enc_wipe();
+    sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0; enc_wipe();
     gc_ins = 0; gc_b0 = 4; fg_has = 0; fg_next = 0; fg_stage = 0; fg_closed = 0; fg_pages = 0;
     pdm_u32_set(&sv_total, 0, 0);
     if (kind == 2) {                                    /* Extract (13.8) */

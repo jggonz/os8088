@@ -4997,13 +4997,17 @@ encrypted (their source's key is used to READ; the output is a fresh plain
 file, as before).
 
 *The key.* Fetched once, at job start, by `PDV_ENG_CRYPTINFO` on the open,
-keyed document: the engine answers `pdxb_crypt` with `key`/`key_len`/`auth`
-filled from the key `PDV_ENG_SETKEY` gave it, as well as the dictionary. This
-is the one addition to 20.22.5 the writer asks for (logged to crypt and eng).
-The writer copies `key`, `key_len`, `stm`, `str`, `eff` into its own
-`pdxb_cryptop` (the key does not live in PDENG across Insert, which re-opens
-PDENG on other files, and PDENG's key is the foreign file's then) and zeroes
-that copy at job end, on abort and on failure. A method `PDCM_IDENTITY` for
+keyed document: the engine answers `pdxb_crypt` with what `PDV_ENG_SETKEY`
+set (`key`, `key_len`, `stm`, `str`, `eff`, `encmeta`, `auth`; lead decision
+23:30). The writer copies them (the key does not live in PDENG across Insert,
+which re-opens PDENG on other files) and zeroes the copy, the derived
+schedules and the foreign keys at job end, on abort and on failure.
+**PDWRT enciphers by itself**: `PDV_ENG_CRYPT` was withdrawn from PDENG, and
+the per-object key (algorithm 1), RC4 and AES-CBC encrypt are crypt's shared
+source (`pdcrypto.h`, `pdcmd5.inc pdcrc4.inc pdcaes.inc`, host twin
+`pdctwin.c`) which `pdwrt.asm` includes. `cr_far` enciphers up to 128 bytes in
+place in the writer buffer, keeping the carry, the CBC chain and the RC4
+state itself between chunks. A method `PDCM_IDENTITY` for
 strings or streams (V4/V5 crypt filters) means those are written plain.
 
 *Strings.* Every string the writer emits in an object that is not in an object
@@ -5013,7 +5017,7 @@ strings (`/Contents`, `/T`, `/Subj`), `/NM`, `/M`, `/DA`, and every string in
 a span copied out of the source (the page, catalog and annotation patches, the
 kept `/NM /T /CreationDate`, Extract/Insert objects). A copied span goes
 through `pb_src`, which walks it for literal and hex strings, decodes them
-(the escapes of 7.3.4.2), encrypts the raw bytes through `PDV_ENG_CRYPT` in
+(the escapes of 7.3.4.2), encrypts the raw bytes in
 chunks of at most 32 bytes (first chunk `phase` 1, last chunk 2) and writes
 the result as a hex string `<...>`; everything else in the span is copied
 verbatim. A plain job calls the same sites and writes exactly what it wrote
@@ -5057,38 +5061,38 @@ the `/Encrypt` dictionary itself are never encrypted and never touched.
 
 **20.22.4.4 The output is read back.** `job_vfy` opens PDSAVE.$$$ through
 PDENG. An encrypted output makes OPEN answer `PDE_PASSWORD` (the engine has no
-key for a new document); the writer answers it itself, with no prompt: it
-calls `PDV_ENG_CRYPTINFO` (the new file's dictionary), sets `key`/`key_len`
-from its copy, calls `PDV_ENG_SETKEY` and calls OPEN again. The three
-objects it reads for the `N G obj` check use `PDRC_EXACT`.
+key for a new document); the writer answers it itself, with no prompt:
+`enc_setkey` calls `PDV_ENG_CRYPTINFO`, pokes the held key, `key_len`, `stm`,
+`str`, `eff`, `encmeta` and `auth` into the block beside it, calls
+`PDV_ENG_SETKEY` and calls OPEN again. (SETKEY is given the methods; the
+engine's CRYPTINFO before a SETKEY carries none.) The three objects it reads
+for the `N G obj` check use `PDRC_EXACT`.
 
-**20.22.4.5 Insert from an encrypted foreign file.** A foreign window opens
-the file with `PDV_ENG_OPEN` (20.16.3). The engine answers `PDE_PASSWORD` when
-the file needs a key. The shape the writer needs from the primary (ui and plat
-build it): the job verb answers `PDE_PASSWORD` with CF = 1 and the job is
-KEPT, not failed: `pdxb_save.state` stays nonzero, `err_detail` = 20 + the
-window's slot (the same number a failing Insert reports, naming the file), and
-PDENG holds the half-opened foreign file. The primary tries the empty
-password silently (`PDV_KEY_AUTH` with `pw_len` 0, then `PDV_ENG_SETKEY`), and
-only if that answers `PDE_PASSWORD` asks the user, as it does for an ordinary
-open; on success it calls the same job verb again with the same block and the
-writer calls `PDV_ENG_OPEN` once more, which resumes (`PDV_ENG_SETKEY` says
-so). Cancel is `PDV_WRT_ABORT`. A second `PDE_PASSWORD` in one window means
-the key given was wrong; the primary decides how often to ask. After the last
-window the primary re-opens the SAVED file (`PDW_OUT_REOPEN`, as for every
-Insert); an encrypted save keeps the source's `/Encrypt` and `/ID[0]`, so the
-key the primary already holds opens it.
+**20.22.4.5 Insert from an encrypted foreign file.** PDWRT is a slot
+occupant, so PDXK cannot load while it runs and the job never pauses for a
+password (the earlier `PDE_PASSWORD` pause is withdrawn). plat's PRE-FLIGHT
+(20.22.2) derives each encrypted foreign file's key before the job starts and
+hands them over with `PDV_WRT_KEYS` (0x85), called after `PDV_WRT_INIT` and
+before the job verb: `pdxb_wkeys` { `n`, three `pdxb_wkey` { `slot` (the
+Insert slot of the file), `key_len`, `stm`, `str`, `eff`, `encmeta`, `key[32]`
+} } in the `[wrt 20.22.4]` block of `pdabi.h`. The writer keeps them until
+the job ends (or `PDV_WRT_INIT`/ABORT/failure, which wipe them). When a
+foreign window's OPEN answers `PDE_PASSWORD`, `fw_open` finds the key of that
+slot, does `enc_setkey` (as for the output) and OPENs again; a file with no
+key handed over fails the job with `PDE_PASSWORD`. After the last window the
+primary re-opens the SAVED file (`PDW_OUT_REOPEN`); an encrypted save keeps
+the source's `/Encrypt` and `/ID[0]`, so the key it already holds opens it.
 
 **20.22.4.6 Host stand-ins and checks.** `make pdwrt-enc` (soak row
 `pdwrtenc`) drives PDWRT through `pdw_verb` over a stand-in
-(`hosttest/pdw_enc.c`) for exactly the PDENG verbs the engine agents own and
-that had not landed when AP-06 was written: PDRC_PLAIN reads (served by
+(`hosttest/pdw_enc.c`) for the PDENG verbs the engine agents own and that had
+not landed when AP-06 was written: PDRC_PLAIN reads (served by
 `hosttest/pdw_encprep.py`, which has qpdf decode the fixture), the trailer's
-`encrypt_num`/`tflags`/`id0_hi`, OPEN's `PDE_PASSWORD`, CRYPTINFO, SETKEY and
-`PDV_ENG_CRYPT` (OpenSSL's AES, RC4 written there). The stand-in checks the key
-the writer holds against qpdf's own (`--show-encryption-key`), so a wrong key
-fails the verify; the harness proves that with a deliberately corrupted key.
-The standing differential for every output (`hosttest/pdw_encrun.py`):
+`encrypt_num`/`tflags`/`id0_hi`, OPEN's `PDE_PASSWORD`, CRYPTINFO and SETKEY
+(which refuses a key or method that is not qpdf's, so a wrong held key fails
+the verify; the harness proves that with a deliberately corrupted key).
+The cipher is the writer's own, crypt's host twin, checked by qpdf. The
+standing differential for every output (`hosttest/pdw_encrun.py`):
 `qpdf --check` clean; `qpdf` with the password reads back the same annotations
 (subtype, `/Contents`, `/T`, `/Subj`, `/DA`, `/Rect`, `/C` and the bytes of
 the appearance stream) as the unencrypted control run; `mutool draw` is silent
@@ -5096,19 +5100,19 @@ the appearance stream) as the unencrypted control run; `mutool draw` is silent
 prefix; the trailer has `/Prev`, `/Encrypt` and the source's whole `/ID[0]`;
 Extract from an encrypted file is a plain file whose pages equal the control's;
 Insert into an encrypted file and from an AES-128 file with a user password
-(the job pauses once on `PDE_PASSWORD`, then goes on) equals the control's.
-Fixtures are built by the run from `samples/MARKUP.PDF` and `samples/PAGES.PDF`
-with qpdf 12.4.2 (`tests/pdfany/wrt/README.TXT` has the commands). When
-`pdeng.c` answers these verbs for real, `pdw_real.c` replaces the stand-in.
+(its key handed over by `PDV_WRT_KEYS`, as plat's pre-flight will) equals the
+control's. A 100,000-text ASan/UBSan fuzz of `pb_src` is part of the row.
+Fixtures are built by the run from `samples/MARKUP.PDF` and
+`samples/PAGES.PDF` with qpdf 12.4.2 (`tests/pdfany/wrt/README.TXT`).
 
-**20.22.4.7 Cost.** PDWRT.MOD image + bss: 41,182 + 6,614 = 47,796 before,
-45,548 + 7,182 = 52,730 after (+4,934 of the 5,000 allowed, cap 53,248): the
-cipher door and the IV (`cr_far`, `cr_iv`), the string path (`pb_src`,
-`es_*`), the stream sink (`cs_*`), the key fetch, the re-key and the trailer
-(`enc_*`), the Insert stream copy (`gc_data`), the pause. One gate slot is
-added (`GET_TICKS`, for the IV). `pdstk`: PDWRT's deepest chain is 648 of the
-1,776 bytes of the deep stack, ending in `_pdw_engcall` into PDENG; the
-`PDV_ENG_CRYPT` verb's own depth is crypt's to add to that edge.
+**20.22.4.7 Cost.** PDWRT.MOD image + bss: 41,182 + 6,614 = 47,796 at the
+round's start; 49,018 + 8,109 = 57,127 now (cap 61,440, lead decision 23:30):
+the writer's cipher door, the IV, the string path (`pb_src`, `es_*`), the
+stream sink (`cs_*`), the key fetch and re-key (`enc_*`), the Insert stream
+copy (`gc_data`) and crypt's shared MD5, RC4 and AES in assembly (about 4.4 KB
+of that). One gate slot is added (`GET_TICKS`, for the IV). Its workspace
+stays the writer buffer of 20.22.2.3 (18 KiB, up to 40 for Extract/Insert).
+`pdstk`: PDWRT's deepest chain is 558 of the 1,776 bytes of the deep stack.
 `tests/suite.py` row `pdwrtenc` (soak) is the check; `pdwrt` and `pdwrtreal`
 still hold the plain paths byte for byte.
 

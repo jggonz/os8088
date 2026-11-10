@@ -64,9 +64,14 @@ static pdw fw_open(void)
         pd_fcopy_out(&fw_op, g_xb, 0, sizeof fw_op);
         pdw_in_src(); r = pdw_engcall(PDV_ENG_OPEN, 0, 0, 0); pdw_in_tgt();
         if (pdw_engcf) {
-            if (r == PDE_PASSWORD) {                     /* 20.22.4.5: the job is kept; the primary asks, SETKEYs and calls again */
+            if (r == PDE_PASSWORD) {                     /* 20.22.4.5: plat's pre-flight gave this file's key; SETKEY it, OPEN resumes */
                 pd_fcopy_in(g_xb, 0, &fw_op, sizeof fw_op);
-                g_sv.err_detail = (pdw)(20 + gc_slot); sv_pw = 1;
+                for (i = 0; i < g_fk.n && i < 3; i++)
+                    if (g_fk.k[i].slot == gc_slot) {
+                        r = enc_setkey(g_fk.k[i].key, g_fk.k[i].key_len, g_fk.k[i].stm, g_fk.k[i].str, g_fk.k[i].eff, g_fk.k[i].encmeta);
+                        return r;
+                    }
+                r = PDE_PASSWORD;
             }
             return r ? r : PDE_SYNTAX;
         }

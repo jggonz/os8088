@@ -5,7 +5,8 @@
  * PDWRT is driven through pdw_verb() as the primary drives it, over a STAND-IN
  * for the PDENG verbs this round's engine agents own and that have not landed:
  *   PDRC_PLAIN reads, PDV_ENG_TRAILER (encrypt_num, tflags, id0_hi), OPEN's
- *   PDE_PASSWORD, CRYPTINFO, SETKEY, and PDV_ENG_CRYPT.
+ *   PDE_PASSWORD, CRYPTINFO and SETKEY (the writer enciphers itself, with crypt's
+ * shared primitives: pdctwin.c on the host).
  * The reads come from hosttest/pdw_encprep.py (qpdf decodes the file); the
  * cipher is OpenSSL's (AES) and RC4 written here; the stand-in checks the key
  * the writer holds against qpdf's, so a wrong key fails the job.
@@ -20,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <openssl/evp.h>
 
 #define SEG_XB   0x2000
 #define SEG_WBUF 0x7000
@@ -29,80 +29,10 @@
 static int fails;
 #define CK(c, ...) do { if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); } else { printf("ok   "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-/* ---- the cipher ------------------------------------------------------------ */
-static void md5(const unsigned char *in, int n, unsigned char *out)
-{
-    unsigned l = 16; EVP_MD_CTX *c = EVP_MD_CTX_new();
-    EVP_DigestInit_ex(c, EVP_md5(), NULL); EVP_DigestUpdate(c, in, (size_t)n); EVP_DigestFinal_ex(c, out, &l); EVP_MD_CTX_free(c);
-}
-static void aes_block(const unsigned char *key, int klen, const unsigned char *in, unsigned char *out)
-{
-    EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new(); int l;
-    EVP_EncryptInit_ex(c, klen == 32 ? EVP_aes_256_ecb() : EVP_aes_128_ecb(), NULL, key, NULL);
-    EVP_CIPHER_CTX_set_padding(c, 0); EVP_EncryptUpdate(c, out, &l, in, 16); EVP_CIPHER_CTX_free(c);
-}
-static void rc4(unsigned char *st, unsigned char *buf, int n)      /* st: S[256], i, j */
-{
-    int k; unsigned i = st[256], j = st[257], t;
-    for (k = 0; k < n; k++) { i = (i + 1) & 255; j = (j + st[i]) & 255; t = st[i]; st[i] = st[j]; st[j] = (unsigned char)t; buf[k] ^= st[(st[i] + st[j]) & 255]; }
-    st[256] = (unsigned char)i; st[257] = (unsigned char)j;
-}
-static int g_cryptcalls, g_ivrepeat;
-static unsigned char g_ivseen[4096][16]; static int g_nivseen;
-static pdw eng_crypt(void)
-{
-    struct pdxb_cryptop o; unsigned char ok[32], in[512], buf[640], h[32]; int okl, n, i, take, outn = 0;
-    pd_fcopy_in(g_xb, 0, &o, sizeof o);
-    g_cryptcalls++;
-    if (o.method == PDCM_AESV3) { memcpy(ok, o.key, 32); okl = 32; }
-    else {
-        unsigned char m[64]; int k = 0;
-        memcpy(m, o.key, o.key_len); k = o.key_len;
-        m[k++] = (unsigned char)o.objnum; m[k++] = (unsigned char)(o.objnum >> 8); m[k++] = 0;
-        m[k++] = (unsigned char)o.gen; m[k++] = (unsigned char)(o.gen >> 8);
-        if (o.method == PDCM_AESV2) { memcpy(m + k, "sAlT", 4); k += 4; }
-        md5(m, k, h); okl = o.key_len + 5 < 16 ? o.key_len + 5 : 16; memcpy(ok, h, (size_t)okl);
-    }
-    n = o.len; if (n > 400) return PDE_LIMIT;
-    pd_fcopy_in(o.seg, o.off, in, (pdw)n);
-    if (o.method == PDCM_RC4) {
-        if (o.phase & 1) { int a, b = 0; unsigned char t; for (a = 0; a < 256; a++) o.rc4[a] = (pdb)a;
-            for (a = 0; a < 256; a++) { b = (b + o.rc4[a] + ok[a % okl]) & 255; t = o.rc4[a]; o.rc4[a] = o.rc4[b]; o.rc4[b] = t; }
-            o.rc4[256] = o.rc4[257] = 0; }
-        memcpy(buf, in, (size_t)n); rc4(o.rc4, buf, n); outn = n;
-    } else {
-        unsigned char *chain = o.rc4, blk[16];
-        if (o.phase & 1) {
-            int z; for (z = 0; z < g_nivseen; z++) if (!memcmp(g_ivseen[z], o.iv, 16)) g_ivrepeat++;
-            if (g_nivseen < 4096) memcpy(g_ivseen[g_nivseen++], o.iv, 16);
-            memcpy(buf, o.iv, 16); outn = 16; memcpy(chain, o.iv, 16); o.ncarry = 0;
-        }
-        { unsigned char all[1024]; int an = 0;
-          memcpy(all, o.carry, o.ncarry); an = o.ncarry; memcpy(all + an, in, (size_t)n); an += n;
-          take = an / 16 * 16;
-          for (i = 0; i < take; i += 16) {
-              for (n = 0; n < 16; n++) blk[n] = (unsigned char)(all[i + n] ^ chain[n]);
-              aes_block(ok, okl, blk, chain); memcpy(buf + outn, chain, 16); outn += 16;
-          }
-          o.ncarry = (pdw)(an - take); memcpy(o.carry, all + take, (size_t)o.ncarry);
-          if (o.phase & 2) {
-              int pad = 16 - o.ncarry;
-              memcpy(blk, o.carry, o.ncarry); memset(blk + o.ncarry, pad, (size_t)pad);
-              for (n = 0; n < 16; n++) blk[n] ^= chain[n];
-              aes_block(ok, okl, blk, chain); memcpy(buf + outn, chain, 16); outn += 16; o.ncarry = 0;
-          } }
-    }
-    if (outn > o.room) return PDE_LIMIT;
-    pd_fcopy_out(buf, o.seg, o.off, (pdw)outn); o.len = (pdw)outn;
-    pd_fcopy_out(&o, g_xb, 0, sizeof o);
-    return PDE_OK;
-}
-
 /* ---- the stand-in PDENG ------------------------------------------------------ */
 static char g_db[64] = "DB";
 static char g_pw[64] = "";
 static char g_fpw[64] = "";      /* the foreign file's */
-static int g_fpwknown;            /* 0: the primary only knows the empty password until asked (the pause) */
 static char G_lastname[14];
 static int E_enc, E_keyed, E_stm, E_str, E_v, E_r, E_opens, E_setkeys, E_badkeys;
 static unsigned char E_key[32]; static int E_keylen;
@@ -166,15 +96,14 @@ pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_ENG_CRYPTINFO: {
         struct pdxb_crypt c; memset(&c, 0, sizeof c);
         if (!E_enc) { pdw_engcf = 1; return PDE_RANGE; }
-        c.v = (pdw)E_v; c.r = (pdw)E_r; c.stm = (pdw)E_stm; c.str = (pdw)E_str; c.encmeta = 1;
-        if (E_keyed) { memcpy(c.key, E_key, (size_t)E_keylen); c.key_len = (pdw)E_keylen; c.auth = PDCA_USER; }
+        c.v = (pdw)E_v; c.r = (pdw)E_r;
+        if (E_keyed) { c.stm = (pdw)E_stm; c.str = (pdw)E_str; c.encmeta = 1; memcpy(c.key, E_key, (size_t)E_keylen); c.key_len = (pdw)E_keylen; c.auth = PDCA_USER; }
         memcpy(c.id0, E_id0, 32); c.id0_len = (pdw)E_id0n;
         pd_fcopy_out(&c, g_xb, 0, sizeof c); return 0; }
     case PDV_ENG_SETKEY: {
         struct pdxb_crypt c; pd_fcopy_in(g_xb, 0, &c, sizeof c); E_setkeys++;
-        if (c.key_len != (pdw)E_keylen || memcmp(c.key, E_key, (size_t)E_keylen)) { E_badkeys++; pdw_engcf = 1; return PDE_PASSWORD; }
+        if (c.key_len != (pdw)E_keylen || memcmp(c.key, E_key, (size_t)E_keylen) || c.stm != (pdw)E_stm || c.str != (pdw)E_str) { E_badkeys++; pdw_engcf = 1; return PDE_PASSWORD; }
         E_keyed = 1; return 0; }
-    case PDV_ENG_CRYPT: { pdw r = eng_crypt(); pdw_engcf = r != 0; return r; }
     case PDV_ENG_TRAILER: {
         struct pdxb_trailer t; memset(&t, 0, sizeof t);
         t.size = (pdw)E_size; t.root_num = (pdw)E_root; t.root_gen = (pdw)E_rg; t.info_num = (pdw)E_info; t.info_gen = (pdw)E_ig;
@@ -249,9 +178,7 @@ static void wrt_init(void)
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0);
 }
-/* the job as the primary runs it: PDE_PASSWORD from an Insert window is an answer, not an
- * error - ask (here: the key qpdf derives from the password), SETKEY, and call again */
-static int g_pauses, g_pausedetail;
+/* the job as the primary runs it */
 static struct pdxb_save SVB;
 static pdw job(pdw verb, pdw mode, const char *src, const char *dst, pdw map_n)
 {
@@ -263,17 +190,6 @@ static pdw job(pdw verb, pdw mode, const char *src, const char *dst, pdw map_n)
     for (;;) {
         r = (pdw)pdw_verb(verb, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &SVB, sizeof SVB);
         if (r == PDE_BUSY && ++g < 20000) continue;
-        if (r == PDE_PASSWORD && g_pauses < 8) {
-            struct pdxb_crypt c; g_pauses++; g_pausedetail = SVB.err_detail;
-            memset(&c, 0, sizeof c); pd_fcopy_out(&c, SEG_XB, 0, sizeof c);
-            pdw_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0); pd_fcopy_in(g_xb, 0, &c, sizeof c);
-            if (!g_fpwknown) { g_fpwknown = 1; }
-            c.key_len = (pdw)E_keylen; memcpy(c.key, E_key, (size_t)E_keylen); c.auth = PDCA_USER;
-            pd_fcopy_out(&c, SEG_XB, 0, sizeof c);
-            pdw_engcall(PDV_ENG_SETKEY, 0, 0, 0);
-            pd_fcopy_out(&SVB, SEG_XB, 0, sizeof SVB);
-            continue;
-        }
         break;
     }
     if (r) printf("     job %s -> %u detail %u (phase %u item %u)\n", dst, r, SVB.err_detail, sv_lastph, sv_lasti);
@@ -294,7 +210,7 @@ static void ins_slot(int k, const char *name)
 
 int main(int argc, char **argv)
 {
-    pdw r; unsigned size0; const char *src = argc > 1 ? argv[1] : "SRC.PDF";
+    pdw r; unsigned size0; int setk0 = 0; const char *src = argc > 1 ? argv[1] : "SRC.PDF";
     if (argc > 2) snprintf(g_pw, sizeof g_pw, "%s", argv[2]);
     remove("S1.PDF"); remove("S2.PDF"); remove(PDW_TEMPNAME);
     wrt_init();
@@ -313,7 +229,7 @@ int main(int argc, char **argv)
     CK(r == PDE_OK, "save over %s answers %u", src, r);
     CK(g_rcmodes[PDRC_PLAIN] > 0, "the writer read the source with PDRC_PLAIN (%u calls)", g_rcmodes[PDRC_PLAIN]);
     if (E_enc) {
-        CK(g_cryptcalls > 0 && E_badkeys == 0, "%d PDV_ENG_CRYPT calls; the key the writer held was qpdf's (%d bad SETKEYs)", g_cryptcalls, E_badkeys);
+        CK(pdw_host_ncr > 0 && E_badkeys == 0, "%u strings and streams enciphered by the writer; every SETKEY key and method was qpdf's (%d bad)", pdw_host_ncr, E_badkeys);
         CK(E_setkeys >= 2, "the verify re-opened the encrypted output with the held key (%d SETKEYs)", E_setkeys);
     }
     if (r) return 1;
@@ -349,16 +265,27 @@ int main(int argc, char **argv)
         remove("I1.PDF");
         { unsigned m[4] = { PDM_MK(PDM_SRC, 0, 0), PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)), PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 3)), PDM_MK(PDM_SRC, 0, 1) }; map_set(m, 4); }
         ins_slot(0, "FOREIGN.PDF");
-        if (eng_open(src) != 0) { CK(0, "the stand-in opens %s", src); return 1; }
-        wrt_init(); es_reset();
+        { /* plat's pre-flight (20.22.4.5): the foreign file's key and methods, then the document again */
+          struct pdxb_wkeys wk; int setk;
+          memset(&wk, 0, sizeof wk);
+          if (strstr(argv[3], "enc")) {
+              load_db("FOREIGN.PDF"); setk = E_setkeys;
+              wk.n = 1; wk.k[0].slot = 0; wk.k[0].key_len = (pdw)E_keylen; memcpy(wk.k[0].key, E_key, (size_t)E_keylen);
+              wk.k[0].stm = (pdw)E_stm; wk.k[0].str = (pdw)E_str; wk.k[0].encmeta = 1; (void)setk;
+          }
+          G_lastname[0] = 0;
+          if (eng_open(src) != 0) { CK(0, "the stand-in opens %s", src); return 1; }
+          wrt_init(); es_reset(); setk0 = E_setkeys;
+          pd_fcopy_out(&wk, SEG_XB, 0, sizeof wk);
+          CK(pdw_verb(PDV_WRT_KEYS, SEG_XB, 0, 0) == PDE_OK, "PDV_WRT_KEYS takes %u foreign key(s)", (unsigned)wk.n);
+        }
         es_new(PDA_NOTE, 0, 400, 700, 420, 718); E.colour = PDC_YELLOW; es_text("a note beside an inserted page"); es_add();
-        g_pauses = 0;
         r = job(PDV_WRT_SAVE, PDSV_INCREMENTAL, src, "I1.PDF", 4);
         CK(r == PDE_OK, "Insert (target %s, foreign %s) answers %u", E_enc ? "encrypted" : "plain", argv[3], r);
-        if (strstr(argv[3], "enc")) CK(g_pauses == 1 && g_pausedetail == 20, "the encrypted foreign file paused the job once (PDE_PASSWORD, detail %d) and the job went on", g_pausedetail);
-        else CK(g_pauses == 0, "a plain foreign file never pauses");
+        if (strstr(argv[3], "enc")) CK(E_setkeys > setk0, "the encrypted foreign file was opened with the key plat's pre-flight handed over (%d SETKEYs)", E_setkeys - setk0);
     }
-    CK(g_ivrepeat == 0, "no IV repeated in %d (%d cipher calls)", g_nivseen, g_cryptcalls);
+    { unsigned a, b, rep = 0; for (a = 0; a < pdw_host_nivs; a++) for (b = a + 1; b < pdw_host_nivs; b++) if (!memcmp(pdw_host_ivs[a], pdw_host_ivs[b], 16)) rep++;
+      CK(rep == 0 || !E_enc, "no IV repeated in %u (%u repeats)", pdw_host_nivs, rep); }
     if (getenv("PDW_SABOTAGE") && E_enc) {           /* a wrong key held by the writer must fail the verify, not pass it */
         struct pdxb_save sv; pdw rr; int g = 0;
         if (eng_open(src) != 0) return 1;
