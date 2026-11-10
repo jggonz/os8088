@@ -25689,24 +25689,41 @@ handler, so packages shrank too.
 #### 11.104.1 One reader: `wm_hnd`, which also asks whether the record is a window
 
 `wm_hnd` (in: SI = window, BP = a `WC_*` slot; out: BP = the handler, 0 =
-none, ZF = none; every other register kept) is the only place a handler is
-found. It reads `W_CLASS` through the kernel's DS, then the class through
-W_SEG (or DS for a kernel window), compares the slot against the length and
-loads it. **It tests `W_FLAGS` bit 0 first**: a record freed while the caller
-waited on the gfx lock - a dying worker's `inst_task_die` destroys its window
-and frees its region under the lock - has no handler, so the content click,
-the right click, the drag edge, the timer and the wake all re-test liveness in
-one place (big-review BR-28; the timer pass's and the wake's own copies of the
+none, ZF = none, BX = SI; every other register kept) is the only place a
+handler is found. It reads `W_CLASS` through the kernel's DS, then the class
+through W_SEG, compares the slot against the length and loads it. **It tests
+`W_FLAGS` bit 0 first**: a record freed while the caller waited on the gfx
+lock - a dying worker's `inst_task_die` destroys its window and frees its
+region under the lock - has no handler, so the content click, the right
+click, the drag edge, the timer and the wake all re-test liveness in one
+place (big-review BR-28; the timer pass's and the wake's own copies of the
 test were dropped). Kernel windows' classes are `.text` tables beside their
 templates (`app_cls_about`, `fm_cls`, `cp_cls`, `hb_cls`, and kern_small's
 `fdlg_cls`, which the Standard File chooser points `W_CLASS` at to get its
 release).
 
-**The price is clocks a callback**: the call and the body are about 200 8088
-clocks against the ~21 of the `mov bp, [si+W_ONx]` each site had, ~42 us at
-4.77 MHz - against a callback that is itself at least one billing bracket
-(`ui_bill`'s `task_cycles` and `inst_win_owner`) and usually a drawing call of
-756 us. It is not on any per-pixel or per-glyph path.
+**A kernel window's `W_CLASS` is its class's offset from SEGMENT 0** on
+kern_big, kern_emu and kern_small (`WM_KCLS_BIAS` = `KERNEL_SEG` x 16, which
+`wm_create` adds to the high byte when it makes W_SEG 0, and which the
+chooser's write carries). So `{W_CLASS, W_SEG}` is a true far pointer to the
+class for every window, and `wm_hnd` loads DS from W_SEG with no test of
+which kind of window it holds. kern_mega cannot - segment 0 is the null
+selector in protected mode - so there the pointer is the plain `.text`
+offset and `wm_hnd` keeps the W_SEG = 0 test. `kernel.asm` fails the build if
+`.text` would end past 64KB of linear memory, where the 16-bit pointer would
+wrap. Nothing outside the kernel reads a kernel window's class. **BX comes
+back as the window** (SI), which every caller had there already or had dead:
+it is two bytes either way and 19 clocks cheaper than banking the caller's BX.
+
+**The price is clocks a callback**: the call and the body are 182 8088
+clocks (214 at the 4-clocks-a-byte fetch floor) on the real-mode kernels and
+209 (245) on kern_mega, against the ~24 (37) of the `mov bp, [si+W_ONx]` /
+`or bp, bp` each site had before R14 - ~38 us at 4.77 MHz, against a callback
+that is itself at least one billing bracket (`ui_bill`'s `task_cycles` and
+`inst_win_owner`) and usually a drawing call of 756 us. It is not on any
+per-pixel or per-glyph path. R14 landed it at 234 (264); kernel size pass
+19's `wmrec` took the bias and the BX output (docs/plans/ksp19/wmrec.md, with
+why the record was NOT reordered for an `lds`).
 
 #### 11.104.2 kern_small's answer: `OSAPI_WM_CREATE` says how many slots it dispatches
 

@@ -8601,6 +8601,9 @@ KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
 ; =============================================================================
 kernel_text_end:
 KTEXT_SIZE equ kernel_text_end - $$
+%if KTEXT_SIZE + WM_KCLS_BIAS > 0x10000 ; every kernel window's class is
+  %error "a kernel class's W_CLASS is its offset from segment 0 (wm_hnd, SPEC.md 11.104.1): .text must end below 64KB of linear memory"
+%endif                          ; .text, and its W_CLASS a 16-bit linear offset
 
 ; ...AND THE ONE SPEC.md 15 SAYS IS "on spw_resident_end", WHICH HAD NO CODE.
 ; The label was defined in viddet.inc and referenced by nothing in the tree -

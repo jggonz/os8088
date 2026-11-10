@@ -426,11 +426,13 @@ FDBODY fdlg_open_x
     inc bx                      ; fm_kinit - impossible, and refused rather
     jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
 %ifdef KERN_SMALL
-    mov word [bx+W_CLASS-1], fdlg_cls ; the column's release (SPEC.md
-                                ; 38.3): this build's Disk window has none of
-                                ; its own, so the chooser's window takes a
-                                ; CLASS of its own (fdlg_cls, files.inc,
-                                ; SPEC.md 11.104). BX is the window + 1
+    mov word [bx+W_CLASS-1], fdlg_cls + WM_KCLS_BIAS ; the column's
+                                ; release (SPEC.md 38.3): this build's Disk
+                                ; window has none of its own, so the
+                                ; chooser's window takes a CLASS of its own
+                                ; (fdlg_cls, files.inc, SPEC.md 11.104) -
+                                ; biased like every kernel window's, since
+                                ; W_SEG is 0 (11.104.1). BX is the window + 1
 %endif
     jmp fdk_di                  ; CF=0, still app_launch's
 .fail:
