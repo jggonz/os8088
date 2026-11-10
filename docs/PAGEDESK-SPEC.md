@@ -5075,7 +5075,7 @@ this decoder honour; the mutool leg holds it at 0. `pdbl_fuzz` (AddressSanitizer
 truncation, markers) ran 81,000 mutations of the committed seeds in `tests/pdfany/bilevel/` clean. Sizes (the
 smlrcc + cc8086 chain with the peephole on, `jb_`/`cf_` as one translation unit with the shell's `ix_*` and
 pdmath's movers): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders 27,244 + 8,857 =
-36,081 of the 36,864 allowed; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
+36,101 of the 36,864 allowed; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
 (frames 58 for `rf_decode`, 56 for `sd_run`, 46 for `tr_run`; none over 96), and the shell adds its own on top
 of that. Rows covering it: `tools/os88pdbl_check.py` (the five legs above) and `pdbl_fuzz`; `pdkgate` is
 unaffected (neither file calls the kernel).
