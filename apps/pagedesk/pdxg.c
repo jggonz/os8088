@@ -241,9 +241,11 @@ static pdw v_cs(void)
         }
     } else R_cs.flags |= gx_flags_of(row);
 done:
-    if (G.rcap < sizeof R_cs) return PDE_NOMEM;
-    pd_fcopy_out(&R_cs, G.rseg, G.roff, sizeof R_cs);
-    G.rlen = sizeof R_cs; G.ncomp = R_cs.n; G.kind = R_cs.kind; G.ok = 1;
+    /* a table space keeps all of it; any other only the header and its source (the entry is trimmed to rlen) */
+    k = (R_cs.flags & PDGX_F_TABLE) ? sizeof R_cs : (pdw)(16 + R_cs.srclen);
+    if (G.rcap < k) return PDE_NOMEM;
+    pd_fcopy_out(&R_cs, G.rseg, G.roff, k);
+    G.rlen = k; G.ncomp = R_cs.n; G.kind = R_cs.kind; G.ok = 1;
     return PDE_OK;
 }
 
@@ -254,7 +256,8 @@ static pdw v_color(void)
 {
     pdw node, row, i, k;
     static struct pd_fx rgb[3], t;
-    pd_fcopy_in(G.cseg, G.coff, &R_cs, 16 + 480);
+    pd_fcopy_in(G.cseg, G.coff, &R_cs, 16);
+    if (!(R_cs.flags & PDGX_F_TABLE) && R_cs.srclen && R_cs.srclen <= 480) pd_fcopy_in(G.cseg, (pdw)(G.coff + 16), R_cs.src, R_cs.srclen);
     if (R_cs.flags & PDGX_F_TABLE) {
         k = (R_cs.kind == PDGX_K_SEP || R_cs.kind == PDGX_K_DEVN) ? 255 : 0;
         if (G.ncomp) {
@@ -302,7 +305,7 @@ static pdw gx_grey(pdw row, const struct pd_fx *comps)
 /* PDV_GFX_LUT: the tables of an image's space (20.22.9) */
 static pdw v_lut(void)
 {
-    pdw node, row, n, i, v, bpc = G.kind ? G.kind : 8, maxv, ix;        /* in: kind = the sample depth */
+    pdw node, row, n, i, v, k, bpc = G.kind ? G.kind : 8, maxv, ix;        /* in: kind = the sample depth */
     static struct pd_fx comps[4], dmin[4], dmax[4], t, f;
     pdb inv = 0;
     node = gx_source();
@@ -362,9 +365,10 @@ static pdw v_lut(void)
         }
         R_lut.flags = inv;
     }
-    if (G.rcap < sizeof R_lut) return PDE_NOMEM;
-    pd_fcopy_out(&R_lut, G.rseg, G.roff, sizeof R_lut);
-    G.rlen = sizeof R_lut; G.ncomp = n; G.ok = 1;
+    k = (pdw)(4 + 256 * n);                              /* the header and the tables the space has */
+    if (G.rcap < k) return PDE_NOMEM;
+    pd_fcopy_out(&R_lut, G.rseg, G.roff, k);
+    G.rlen = k; G.ncomp = n; G.ok = 1;
     return PDE_OK;
 }
 

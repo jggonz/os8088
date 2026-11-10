@@ -135,6 +135,16 @@ static pdw xc_find(pdw kind, pdw k0, pdw k1)
 {
     return g_xcseg && kind ? pdr_xcfind(g_xcseg, g_xctop, kind, k0, k1) : 0;
 }
+/* the entry just allocated (the LAST one) turned out to need only `bytes` of what it asked for: give the rest back */
+static void xc_trim(pdw e, pdw bytes)
+{
+    bytes = (pdw)((bytes + 1) & ~1u);
+    pd_fcopy_in(g_xcseg, (pdw)(e - 6), &g_xch.len, 2);
+    if (e + g_xch.len != g_xctop || bytes >= g_xch.len) return;
+    g_xch.len = bytes;
+    pd_fcopy_out(&g_xch.len, g_xcseg, (pdw)(e - 6), 2);
+    g_xctop = (pdw)(e + bytes);
+}
 static pdw xc_alloc(pdw kind, pdw k0, pdw k1, pdw bytes)
 {
     pdw o = g_xctop;
