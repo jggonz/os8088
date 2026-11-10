@@ -131,6 +131,18 @@ def run(fx, pw):
     root, info = struct.unpack_from("<H", tr, 2)[0], struct.unpack_from("<H", tr, 6)[0]
     size = struct.unpack_from("<H", tr, 0)[0]
     out.append("TRAILER root=%d info=%d" % (root, info))
+    # every annotation of every page (strings: /NM, /Contents; decrypted through the cipher area on the target)
+    cstr = lambda b: bytes(b).split(b"\0")[0].decode("latin-1")
+    for pg in range(0, 64):
+        ax, cf, _ = m.door("PDENG", 0x03, pg)
+        if cf: break
+        for a in range(0, 64):
+            ax, cf, _ = m.door("PDENG", 0x0E, pg, a)
+            if cf: break
+            an = m.rd(0, 230)
+            ln = struct.unpack_from("<H", an, 60)[0]
+            out.append("ANNOT %d %d obj=%d %s nm=%s len=%d %s" % (pg, a, struct.unpack_from("<H", an, 0)[0], cstr(an[4:20]), cstr(an[28:52]), ln,
+                                                                  bytes(an[62:62 + min(ln, 160)]).hex()))
     for o in range(1, min(size, 400)):
         sx = bytearray(18); struct.pack_into("<H", sx, 0, o)
         m.wr(0, bytes(sx))
@@ -172,7 +184,7 @@ def host_lines(fx, pw):
     t = subprocess.run([E2E, "dump", os.path.join(WORK, fx), pw or "-"], capture_output=True, text=True).stdout.splitlines()
     scratch = os.path.join(BUILD, "pdcrypt", "plain_tmp"); os.makedirs(scratch, exist_ok=True)
     pl = subprocess.run([E2E, "plain", os.path.join(WORK, fx), pw or "-", scratch, "37"], capture_output=True, text=True).stdout.splitlines()
-    return [l for l in t if l.startswith(("AUTH", "TRAILER", "STREAM"))] + [l for l in pl if l.startswith("PLAIN") and "bytes=" in l]
+    return [l for l in t if l.startswith(("AUTH", "TRAILER", "STREAM", "ANNOT"))] + [l for l in pl if l.startswith("PLAIN") and "bytes=" in l]
 
 def main():
     names = sys.argv[1:] or ["RC4_40.PDF", "RC4_128.PDF", "RC4_V4.PDF", "AES_128.PDF", "AES_128_NM.PDF", "AES_256_R5.PDF",
