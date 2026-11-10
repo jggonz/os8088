@@ -471,11 +471,43 @@ static pdw file_read(const char *name, pdw alo, pdw ahi, pdw seg, pdw cap)
     return os88_file_read_seq(name, seg, 0, cap, g_cur8);
 }
 
+/* ---- the synthetic strikes (PAGEDESK-SPEC 20.22.8): embedded fonts. The TOP of the glyph
+ * claim holds up to SYN_MAX blocks of PDFB_SIZE (pdabi.h's [fonts] block), one a (font, size);
+ * PDXF fills them (PDV_FNT_GLYPH with PDFG_BLOCK), the walker reads them like any strike
+ * (bank 2). (glyph_kb - 24) / 4 blocks: a 24 KiB claim has none and embedded fonts are not
+ * drawn from their programs. A block is reused only when it was not used in THIS pass: the
+ * display list being built refers to the ones it used. ------------------------------------ */
+#define SYN_MAX 4
+static pdw g_synn;
+static struct { pdw obj, gen, px, pass; } g_syn[SYN_MAX];
+static pdw syn_cap(void)
+{
+    pdw n = (pdw)((g_gkb - 24) >> 2);
+    return g_gkb < 28 ? 0 : n > SYN_MAX ? SYN_MAX : n;
+}
+static pdw syn_off(pdw i) { return (pdw)(((g_gkb << 10) - syn_cap() * PDFB_SIZE) + i * PDFB_SIZE); }
+/* the block of (font, px) - made empty when new - or 0xFFFF; px 0 = a text-map pass's info block */
+static pdw syn_get(pdw obj, pdw gen, pdw px)
+{
+    pdw i, cap = syn_cap(), b;
+    if (!cap || !g_gseg) return 0xFFFF;
+    for (i = 0; i < g_synn; i++)
+        if (g_syn[i].obj == obj && g_syn[i].gen == gen && g_syn[i].px == px) { g_syn[i].pass = g_passes; return i; }
+    i = g_synn;
+    if (i < cap) g_synn++;
+    else for (i = 0; g_syn[i].pass == g_passes; ) if (++i == cap) return 0xFFFF;    /* one not used in this pass */
+    g_syn[i].obj = obj; g_syn[i].gen = gen; g_syn[i].px = px; g_syn[i].pass = g_passes;
+    b = syn_off(i);
+    pd_ffill(g_gseg, b, 0, PDFB_SIZE);
+    pd_ffill(g_gseg, (pdw)(b + PDFB_KEYS), 0xFF, 256);
+    return i;
+}
+
 static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
 {
     static struct pd_u32 u, p;
     pdw cb, head, cap, room, seg, got, i;
-    room = (pdw)(g_gkb << 10);                 /* g_gkb <= 63 (INIT) */
+    room = (pdw)((g_gkb << 10) - syn_cap() * PDFB_SIZE);       /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
     if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u) return 0;   /* cap below cannot wrap */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
@@ -503,6 +535,13 @@ static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
 static pdw strike_load(pdw id)
 {
     pdw b = id >> 8, idx = id & 255, i, lo, hi, len;
+    if (b == 2) {                                   /* a synthetic strike: (font, size) block idx */
+        if (idx >= g_synn) return 0;
+        g_sseg = (pdw)(g_gseg + (syn_off(idx) >> 4)); g_soff = 0;
+        g_ssize = g_syn[idx].px; g_sasc = g_ssize; g_sdesc = (pdw)((g_ssize + 2) / 3 + 1);
+        g_sfirst = 1; g_slast = 128; g_sflags = 0; g_sid = id;
+        return 1;
+    }
     if (b > 1 || !g_bk_seg[b] || idx >= g_bk_n[b]) return 0;
     pd_fcopy_in(g_bk_seg[b], 8 + idx * 16, g_srec, 16);
     g_ssize = g_srec[2]; g_sasc = g_srec[3]; g_sdesc = g_srec[4];

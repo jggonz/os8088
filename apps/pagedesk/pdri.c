@@ -170,6 +170,7 @@ static pdw g_tdirty;
 static pdw g_inbt;
 static pdw g_em;                    /* device em height of the current font, px  */
 static pdw g_pem;                   /* the em the strike is picked by (D16), px  */
+static pdw g_eslot, g_elat, g_ek = 0xFFFF, g_escale;   /* an embedded font's glyph (emb_glyph, 20.22.8) */
 static pdw g_hem;                   /* device em WIDTH (text space's x axis), px */
 static pdw g_tupright;
 static pdb g_tmchan;
@@ -290,6 +291,9 @@ static pdw run_begin(void)
     f = font_sel(GS.font);
     if (!f->ok) return 0;
     sty = f->sty;
+    if (f->emb && g_ek != 0xFFFF) {             /* an embedded font: its synthetic strike (20.22.8) */
+        idx = (pdw)(0x0200 | g_ek); g_pkscale = g_escale; strike_load(idx);
+    } else {
     idx = strike_pick(f->fam, sty, g_pem, &g_synth);
     {   /* a strike the cache cannot hold (or a failed read): the next one down */
         pdw tries = 0, em = g_pem;
@@ -299,6 +303,7 @@ static pdw run_begin(void)
             idx = strike_pick(f->fam, sty, em, &g_synth);
             g_pkem = 0xFFFF; g_pkfam = 0xFF;      /* do not let the memo pin the retry */
         }
+    }
     }
     g_rid = idx; g_rscale = g_pkscale;
     g_rfam = f->fam; g_rsty = (pdb)sty; g_rpx = (pdb)g_ssize;
@@ -311,6 +316,47 @@ static pdw run_begin(void)
     else g_rasc = g_rdesc = g_rext;
     g_rn = 0; g_ropen = 1;
     return 1;
+}
+
+/* ---- an embedded font's glyph (PAGEDESK-SPEC 20.22.8): the code's slot in the font's strike
+ * block (pdrd.c), made by PDXF the first time. A block holds the width and the Latin byte of every
+ * code it has seen, so a later pass or page needs no module. 1 = g_eslot / g_ew / g_elat set;
+ * 0 = not available: PDXF absent (x_need: the ladder re-runs the pass) or it refused the font
+ * (this font is drawn in the substitute face from here on) ----------------------------------- */
+static struct pdxb_fglyph g_fgl;
+static pdw emb_glyph(struct pdr_font *f, pdw code)
+{
+    pdw boff, h, i, k, px = 0, n = 1, ip, tried = 0;
+    if (g_mode != PDR_TEXT) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
+    g_escale = n; g_ek = syn_get(g_fk[GS.font].objnum, g_fk[GS.font].gen, px);
+    if (g_ek == 0xFFFF) { inc_note(PDF_INC_FONT, "font substituted"); return 0; }
+    boff = syn_off(g_ek);
+    for (;;) {
+        h = (pdw)((code ^ (code >> 7)) & 127);
+        for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
+            k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
+            if (k == code || k == 0xFFFF) break;
+        }
+        ip = (pdw)(boff + PDFB_INFO + h * 4);
+        if (k == code && (!px || (pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
+            g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
+            if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
+            return 1;
+        }
+        if (tried || !x_have(PDX_FNT)) { if (!tried) x_need(PDX_FNT); return 0; }
+        tried = 1;
+        g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+        g_fgl.em64 = (pdw)(px << 6); g_fgl.asc = px; g_fgl.rows = (pdw)(px + (px + 2) / 3 + 1);
+        g_fgl.dseg = g_gseg; g_fgl.doff = boff;
+        pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
+        x_call(PDV_FNT_GLYPH, 0, 0, 0);
+        if (x_cf) {                                         /* refused: the substitute face from now on */
+            if (f->emb == 2) f->ok = 0;
+            f->emb = 0; g_fwdirty = 1;
+            inc_note(PDF_INC_FONT, "font substituted");
+            return 0;
+        }
+    }
 }
 
 /* text too small for a bitmap (em < 5 px) is GREEKED: one hairline per show
@@ -379,16 +425,27 @@ static void glyph_emit(pdw code, pdw lat, pdi px, pdi py)
 /* one glyph: draw it (unless invisible), advance the pen */
 static void text_glyph(pdw code)
 {
-    pdw lat, w;
+    pdw lat, w, vis, is2 = 0;
     struct pdr_font *f;
     pdi px, py;
-    if (GS.font == 255) { w = 556; lat = code; }
+    g_ek = 0xFFFF;
+    if (GS.font == 255) { w = 556; lat = code; vis = 1; }
     else {
         f = font_sel(GS.font);
-        lat = code >= 32 ? f->enc[code - 32] : 0;
-        w = font_width(GS.font, code);
+        if (f->emb && emb_glyph(f, code)) {
+            is2 = (pdw)(f->emb == 2);
+            lat = g_mode == PDR_TEXT ? g_elat : g_eslot;
+            vis = g_mode == PDR_TEXT ? (pdw)(lat >= 32) : 1;
+            w = font_width(GS.font, code);
+        } else if (f->emb == 2) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = g_ew = 1000; }
+        else {
+            g_ek = 0xFFFF;
+            lat = code >= 32 ? f->enc[code - 32] : 0;
+            vis = (pdw)(lat >= 32);
+            w = font_width(GS.font, code);
+        }
     }
-    if (GS.tr != 3 && lat >= 32 && g_em >= 1) {
+    if (GS.tr != 3 && vis && g_em >= 1) {
         px = q2p(pdr_clampq(pdm_fx_round(&g_penx)));
         py = q2p(pdr_clampq(pdm_fx_round(&g_peny)));
         if (g_mode == PDR_TEXT || g_pem >= 5) glyph_emit(code, lat, px, py);
@@ -396,12 +453,12 @@ static void text_glyph(pdw code)
             if (!g_gkhave) { g_gkhave = 1; g_gkx0 = px; g_gky = (pdi)(py - (pdi)((g_em + 2) / 3)); }
             g_gkx1 = (pdi)(px + (pdi)((w * g_hem) / 1000));
         }
-    } else if (g_mode == PDR_TEXT && lat >= 32) glyph_emit(code, lat, 0, 0);
+    } else if (g_mode == PDR_TEXT && vis) glyph_emit(code, lat, 0, 0);
     /* advance: ((w/1000) fs + Tc + Tw if space) * Th */
     pdm_fx_int(&t0, (pdi)w);
     pdm_fx_mul(&t0, &t0, &g_fsk);
     pdm_fx_add(&t0, &t0, &GS.tc);
-    if (code == 32) pdm_fx_add(&t0, &t0, &GS.tw);
+    if (code == 32 && !is2) pdm_fx_add(&t0, &t0, &GS.tw);
     if (GS.tz.hi != 100 || GS.tz.lo) pdm_fx_mul(&t0, &t0, &g_thk);
     pdm_fx_add(&g_tadv, &g_tadv, &t0);
     pdm_fx_mul(&t1, &t0, &g_M.a); pdm_fx_add(&g_penx, &g_penx, &t1);
@@ -426,6 +483,10 @@ static void text_end_show(void)
 static void text_show(const pdb *s, pdw n)
 {
     pdw i;
+    if (GS.font != 255 && font_sel(GS.font)->emb == 2) {         /* a Type0 font: 2-byte codes (20.22.8) */
+        for (i = 0; i + 1 < n; i += 2) text_glyph((pdw)((s[i] << 8) | s[i + 1]));
+        return;
+    }
     for (i = 0; i < n; i++) text_glyph(s[i]);
 }
 /* a TJ number: move left by n/1000 em */

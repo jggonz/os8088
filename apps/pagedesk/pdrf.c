@@ -146,10 +146,11 @@ static pdw glyph_code(const char *name)
 /* ---- the font cache ------------------------------------------------------ */
 struct pdr_font {
     pdw objnum, gen;
-    pdb used, fam, sty, ok;         /* ok: 0 unsupported (Type0): draws nothing */
+    pdb used, fam, sty, ok;         /* ok: 0 unsupported: draws nothing         */
     pdw first, nw;                  /* /FirstChar, /Widths length (0 = none)   */
     pdb enc[224];                   /* code 32..255 -> PD Latin (0 = none)     */
     pdw wid[224];                   /* 1/1000 em, 0xFFFF = not fetched         */
+    pdb emb, epad_;                 /* 1 an embedded program, 2 a Type0 font (20.22.8) */
 };
 /* the cache's 4 entries live in the workspace (WS_FN); one is resident at a time */
 static struct pdr_font g_fw;
@@ -219,7 +220,7 @@ static void font_classify(struct pdr_font *f, const char *base)
     if (r != 0xFFFF) f->sty |= (pdb)((r >> 8) ? 2 : 1);
     if (ci_has(b, "italic") || ci_has(b, "oblique")) f->sty |= 2;     /* both may be present */
     if (ci_has(b, "bold")) f->sty |= 1;
-    if (!known) inc_note(PDF_INC_FONT, "font substituted");
+    if (!known && !f->emb) inc_note(PDF_INC_FONT, "font substituted");
 }
 
 /* build the code -> PD Latin table from /Encoding */
@@ -289,9 +290,15 @@ static pdw font_get(pdw obj, pdw gen)
         base[0] = 0;
         if (dict_get(obj, gen, "BaseFont", 0, 0) == 0 && g_dg.kind == PDK_NAME) pdr_scpy(base, g_dg.text, 64);
         if (dict_get(obj, gen, "Subtype", 0, 0) == 0 && g_dg.kind == PDK_NAME) {
-            if (ci_has(g_dg.text, "type0")) {
-                f->ok = 0; inc_note(PDF_INC_FONT, "CID font (Type0)");
-            } else if (ci_has(g_dg.text, "type3")) inc_note(PDF_INC_FONT, "Type3 font");
+            if (ci_has(g_dg.text, "type0")) f->emb = 2;                  /* PDXF reads it (20.22.8) */
+            else if (ci_has(g_dg.text, "type3")) inc_note(PDF_INC_FONT, "Type3 font");
+        }
+        if (!f->emb) {                                  /* an embedded program: FontFile, FontFile2 or FontFile3 */
+            static char ff[11] = "FontFile";
+            for (i = 0; i < 3 && !f->emb; i++) {
+                ff[8] = i ? (char)('1' + i) : 0; ff[9] = 0;
+                if (!dict_get(obj, gen, "FontDescriptor", ff, 0)) f->emb = 1;
+            }
         }
         font_classify(f, base);
         if (ci_has(base, "symbol") || ci_has(base, "dingbat")) inc_note(PDF_INC_FONT, "Symbol font");
@@ -320,12 +327,14 @@ static pdw font_get(pdw obj, pdw gen)
     return slot;
 }
 
+static pdw g_ew;                    /* emb_glyph's width of the current code (Type0), 1/1000 em */
 /* advance width of a CODE in 1/1000 em: /Widths, else the base-14 table of
  * the glyph the code maps to (11.3), else a flat guess */
 static pdw font_width(pdw fi, pdw code)
 {
     struct pdr_font *f = font_sel(fi);
     pdw w, face, lat;
+    if (f->emb == 2) return g_ew;                   /* a Type0 font's /W width of the code just made (emb_glyph) */
     if (code < 32) {
         /* a subset font's control codes (TeX's ligatures at 11..15, a symbolic
          * font's 1..31) are not drawn (no PD Latin for them) but still ADVANCE
