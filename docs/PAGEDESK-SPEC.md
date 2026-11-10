@@ -5007,9 +5007,9 @@ a linearisation about mid-grey for Lab). A 4-component space is
 `255 - (cx + my + yz + k)`-shaped per channel (the core's DeviceCMYK weights).
 `/Decode` is folded into the tables, so rcore applies none.
 
-**Functions** (`pdxgf.c`). Types 0 (sampled, 1 to 4 inputs, 8/16-bit or any
-`/BitsPerSample` 1 to 32 - multilinear interpolation in 1 and 2 inputs,
-nearest in 3 and 4), 2 (exponential), 3 (stitching - its sub-function chain is
+**Functions** (`pdxgf.c`). Types 0 (sampled, 1 to 4 inputs, `/BitsPerSample` 1 to 32 - linear
+interpolation in 1 and 2 inputs, nearest sample in 3 and 4; a table over 3,072
+bytes is refused and the colour stays black with PDF_INC_COLOUR), 2 (exponential), 3 (stitching - its sub-function chain is
 walked in a loop, not by recursion; depth at most 8) and 4 (PostScript
 calculator: tokens compiled to bytes, an explicit operand stack of 100 values
 and an explicit if/ifelse stack of 16 frames; every operator the reference
