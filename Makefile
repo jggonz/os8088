@@ -21523,7 +21523,7 @@ $(BUILD)/pdrend.raw.asm: $(PDR_CSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 		$(PDR_DIR)/pdrend.c -o $@
 
 $(BUILD)/pdrend.gen.asm: $(BUILD)/pdrend.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
-	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG) --ovl-resident
 
 # Until the math agent's pdmath.inc is merged, a stub with the same labels lets
 # the size and the syntax be checked. It is derived from what the C calls, so
@@ -21536,8 +21536,17 @@ $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdren
                      $(PDR_DIR)/pdabi.inc $(wildcard $(PDR_DIR)/pdmath.inc) \
                      $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
 	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
-	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $@ $(PDR_DIR)/pdrend.asm
-	@echo "PDREND.MOD: $(call FILESIZE,$@) bytes image$(if $(PDR_MATH), (math stub: size is a floor),)"
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $(BUILD)/pdrend.full $(PDR_DIR)/pdrend.asm
+	@# the second code segment (PAGEDESK-SPEC 20.22.7.9): .modc follows the image, cut at the header's image size
+	@python3 -c "import struct; d=open('$(BUILD)/pdrend.full','rb').read(); s=struct.unpack_from('<H',d,4)[0]; \
+	    c=d[s:]; assert len(c) >= 4 and struct.unpack_from('<HH',c,0) == (0x4352, len(c)), ('PDRENDC', s, len(c)); \
+	    open('$@','wb').write(d[:s]); open('$(BUILD)/PDRENDC.MOD','wb').write(c)"
+	@echo "PDREND.MOD: $(call FILESIZE,$@) bytes image, PDRENDC.MOD $(call FILESIZE,$(BUILD)/PDRENDC.MOD) bytes of code$(if $(PDR_MATH), (math stub: size is a floor),)"
+$(BUILD)/PDRENDC.MOD: $(BUILD)/PDREND.MOD ;
+# PDRENDC rides as a part of its own, loaded beside PDREND and bound by
+# PDV_REND_CODE (PAGEDESK-SPEC 20.22.7.9); no bss - its data is PDREND's
+$(BUILD)/pdrendc.part: $(BUILD)/PDRENDC.MOD | $(BUILD)
+	cp $< $@
 
 PDR_HOSTBIN := $(BUILD)/pdr_test
 $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
@@ -21552,7 +21561,12 @@ PDR_UPY := $(shell for p in python3 /usr/bin/python3; do $$p -c 'import unicorn'
 pdrend-host: $(PDR_HOSTBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN) $(BUILD)/pdrtest $(BUILD)
 	@$(if $(PDR_UPY),$(PDR_UPY) $(PDR_DIR)/hosttest/pdr_primtest.py,echo "pdr_primtest: SKIP - no python with the unicorn package")
-pdrend: $(BUILD)/PDREND.MOD pdrend-host
+pdrend: $(BUILD)/PDREND.MOD pdrend-host pdrend-ovl
+# the second code segment (PAGEDESK-SPEC 20.22.7.9) run in Unicorn: the bind,
+# its refusals, moved verbs both ways across the cut, and a moved claim
+.PHONY: pdrend-ovl
+pdrend-ovl: $(BUILD)/PDREND.MOD $(BUILD)/PDRENDC.MOD
+	python3 $(PDR_DIR)/hosttest/pdr_ovltest.py $(BUILD)
 # the sanitizer run (SPEC 20.3.6): ASan+UBSan build, hostile streams + random cases
 PDR_FUZZBIN := $(BUILD)/pdr_test_asan
 $(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \

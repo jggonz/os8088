@@ -741,6 +741,13 @@ typedef char pdabi_sz_dsh[sizeof(struct pdxb_dash) <= PD_XB_BYTES ? 1 : -1];
  * field of the graphics state: 0 stroke lum, 1 stroke c4, 2 fill lum, 3 fill
  * c4, 4 dash count, 5-6 dash lengths, 7-8 dash phase low/high, 9 cap, 10
  * join), 8 LW w16. */
+/* PDV_REND_CODE (rcore's 0x49, 20.22.7.9): PDREND's second code segment, the
+ * part PDRENDC, is bound. BX = its CODE selector (OS88_CODESEL'd under
+ * kern_mega; the segment itself on a real-mode kernel), CX = its DATA
+ * segment. Sent after the part is read and before any other verb, and again
+ * whenever its claim moves. CF = 1 PDE_RANGE: not this build's part, and
+ * until a PDV_REND_CODE succeeds every other verb answers that. */
+#define PDV_REND_CODE 0x49
 #define PDXE_OPS    64      /* XB offset of the ops                        */
 struct pdxb_emark {
     pdw  eseg;              /* the edit store's records (pdxb_render)      */
