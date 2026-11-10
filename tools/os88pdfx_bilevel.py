@@ -391,3 +391,125 @@ def jbig2_pdf(segs, w, h, globals_segs=None, decode_inv=False):
     for o in offs: out += b'%010d 00000 n \n' % o
     out += b'trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % (len(objs) + 1, x)
     return bytes(out)
+
+# ---- refinement (6.3), symbol dictionaries (6.5), text regions (6.4): arithmetic coded ----
+def rf_context(cur, ref, x, y, dx, dy, tpl, at):
+    c = lambda xx, yy: _gb_pix(cur, xx, yy)
+    r = lambda xx, yy: _gb_pix(ref, xx - dx, yy - dy)
+    if tpl == 0:
+        a1 = c(x + at[0][0], y + at[0][1]); a2 = r(x + at[1][0], y + at[1][1])
+        return (c(x - 1, y) | c(x + 1, y - 1) << 1 | c(x, y - 1) << 2 | a1 << 3 | r(x + 1, y + 1) << 4 | r(x, y + 1) << 5
+                | r(x - 1, y + 1) << 6 | r(x + 1, y) << 7 | r(x, y) << 8 | r(x - 1, y) << 9 | r(x + 1, y - 1) << 10
+                | r(x, y - 1) << 11 | a2 << 12)
+    return (c(x - 1, y) | c(x + 1, y - 1) << 1 | c(x, y - 1) << 2 | c(x - 1, y - 1) << 3 | r(x + 1, y + 1) << 4
+            | r(x, y + 1) << 5 | r(x + 1, y) << 6 | r(x, y) << 7 | r(x - 1, y) << 8 | r(x, y - 1) << 9)
+
+NOMINAL_RAT = [(-1, -1), (-1, -1)]
+def enc_refine(e, tgt, ref, dx, dy, tpl=0, tpgr=0, at=None, name='gr'):
+    at = at or NOMINAL_RAT
+    h = len(tgt); w = len(tgt[0]) if h else 0
+    ltp = 0; cen = 0x80 if tpl else 0x100
+    r = lambda xx, yy: _gb_pix(ref, xx - dx, yy - dy)
+    for y in range(h):
+        if tpgr:
+            # a row is typical when every pixel whose 3x3 reference neighbourhood is uniform equals it
+            typ = 1
+            for x in range(w):
+                nb = [r(x + i, y + j) for j in (-1, 0, 1) for i in (-1, 0, 1)]
+                if len(set(nb)) == 1 and tgt[y][x] != nb[0]: typ = 0; break
+            e.bit((name, cen), typ ^ ltp); ltp = typ
+        for x in range(w):
+            if tpgr and ltp:
+                nb = [r(x + i, y + j) for j in (-1, 0, 1) for i in (-1, 0, 1)]
+                if len(set(nb)) == 1: continue
+            e.bit((name, rf_context(tgt, ref, x, y, dx, dy, tpl, at)), tgt[y][x])
+
+def ceil_log2(n):
+    k = 0
+    while (1 << k) < n: k += 1
+    return k
+
+def symdict_segment(syms, tpl=0, at=None, exported=None, ref_syms=0):
+    """syms: new symbols (2-D 0/1 lists), arithmetic coded, no aggregation.  Returns segment DATA.
+    Symbols are sent in the order given, grouped into runs of equal height (callers sort)."""
+    at = at or NOMINAL_AT[tpl]
+    e = MQEnc(); nnew = len(syms); nin = ref_syms
+    hprev = 0; i = 0
+    while i < nnew:
+        hc = len(syms[i]); enc_int(e, 'DH', hc - hprev); hprev = hc; wprev = 0
+        while i < nnew and len(syms[i]) == hc:
+            w = len(syms[i][0]) if hc else 0
+            enc_int(e, 'DW', w - wprev); wprev = w
+            if w and hc: enc_generic(e, syms[i], tpl, 0, at, name='gb')
+            i += 1
+        enc_int(e, 'DW', None)
+    total = nin + nnew
+    ex = exported if exported is not None else [False] * nin + [True] * nnew
+    i = 0; cur = 0
+    while i < total:
+        j = i
+        while j < total and ex[j] == bool(cur): j += 1
+        enc_int(e, 'EX', j - i); i = j; cur ^= 1
+    nex = sum(1 for x in ex if x)
+    hdr = struct.pack('>H', tpl << 10)
+    if tpl == 0: hdr += b''.join(struct.pack('>bb', *a) for a in at)
+    else: hdr += struct.pack('>bb', *at[0])
+    hdr += struct.pack('>II', nex, nnew)
+    return hdr + e.flush()
+
+def text_segment(syms, insts, w, h, x=0, y=0, op=0, logstrips=0, corner=1, transp=0, comb=0, defpix=0, dsoff=0,
+                 refine=False, rtpl=0, rat=None):
+    """insts: (symbol id, X, Y) with X, Y the top-left of the drawn bitmap on the region;
+    for a refined instance (symbol id, X, Y, refined bitmap) the refined bitmap is drawn."""
+    strips = 1 << logstrips
+    e = MQEnc(); nsyms = len(syms); cl = ceil_log2(nsyms)
+    rat = rat or NOMINAL_RAT
+    items = []
+    for it in insts:
+        sid, X, Y = it[0], it[1], it[2]
+        bm = it[3] if len(it) > 3 else syms[sid]
+        bh = len(bm); bw = len(bm[0]) if bh else 0
+        if not transp:
+            S = X + (bw - 1 if corner in (2, 3) else 0)
+            T = Y + (bh - 1 if corner in (0, 2) else 0)
+        else:
+            T = X + (bw - 1 if corner in (2, 3) else 0)
+            S = Y + (bh - 1 if corner in (0, 2) else 0)
+        items.append((T // strips, S, T, it, bw, bh))
+    items.sort(key=lambda t: (t[0], t[1]))
+    enc_int(e, 'DT', 0)
+    stript = 0; firsts = 0; i = 0
+    while i < len(items):
+        st = items[i][0] * strips
+        enc_int(e, 'DT', (st - stript) // strips); stript = st
+        first = True; curs = 0
+        while i < len(items) and items[i][0] * strips == st:
+            _, S, T, it, bw, bh = items[i]; i += 1
+            sid = it[0]; hasref = len(it) > 3
+            sw0 = len(syms[sid][0]); sh0 = len(syms[sid])
+            # the pre-advance of the decoder: right corners add the DRAWN width - 1, so the code carries S - that
+            wd = bw; hd = bh
+            if not transp: pre = (wd - 1) if corner in (2, 3) else 0
+            else: pre = (hd - 1) if corner in (0, 2) else 0
+            cin = S - pre
+            if first: enc_int(e, 'FS', cin - firsts); firsts = cin; first = False
+            else: enc_int(e, 'DS', cin - curs - dsoff)
+            if strips > 1: enc_int(e, 'IT', T - st)
+            enc_iaid(e, 'ID', cl, sid)
+            if refine: enc_int(e, 'RI', 1 if hasref else 0)
+            if hasref:
+                rdw, rdh = bw - sw0, bh - sh0
+                rdx = rdy = 0
+                enc_int(e, 'RDW', rdw); enc_int(e, 'RDH', rdh); enc_int(e, 'RDX', rdx); enc_int(e, 'RDY', rdy)
+                enc_refine(e, it[3], syms[sid], (rdw >> 1) + rdx, (rdh >> 1) + rdy, rtpl, 0, rat, 'gr')
+            curs = S if pre else cin
+            if not transp and corner in (0, 1): curs = cin + wd - 1
+            elif transp and corner in (1, 3): curs = cin + hd - 1
+            elif (not transp and corner in (2, 3)) or (transp and corner in (0, 2)): curs = S
+        enc_int(e, 'DS', None)
+    flags = ((1 if False else 0) | (1 if refine else 0) << 1 | logstrips << 2 | corner << 4 | transp << 6 | comb << 7
+             | defpix << 9 | (dsoff & 31) << 10 | rtpl << 15)
+    d = region_info(w, h, x, y, op) + struct.pack('>H', flags)
+    if refine and not rtpl: d += b''.join(struct.pack('>bb', *a) for a in rat)
+    d += struct.pack('>I', len(insts))
+    return d + e.flush()

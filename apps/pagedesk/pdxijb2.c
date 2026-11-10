@@ -42,6 +42,7 @@ static void jw_ww(pdw o, pdw v) { jw_mem[o] = (pdb)v; jw_mem[(pdw)(o + 1)] = (pd
 static void jw_get(pdb *dst, pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) dst[i] = jw_mem[(pdw)(o + i)]; }
 static void jw_put(pdw o, const pdb *src, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = src[i]; }
 static void jw_zero(pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = 0; }
+static void jw_move(pdw d, pdw sr, pdw n) { pdw i; if (d < sr) for (i = 0; i < n; i++) jw_mem[(pdw)(d + i)] = jw_mem[(pdw)(sr + i)]; else for (i = n; i; i--) jw_mem[(pdw)(d + i - 1)] = jw_mem[(pdw)(sr + i - 1)]; }
 #endif
 
 #define JW_GB     0x0000u
@@ -314,8 +315,10 @@ static int gb_bit(pdw ctx)
 static void ht_plane_row(pdw y, const pdb *row) { (void)y; (void)row; }
 static int gb_skipf(pdw x, pdw y) { (void)x; (void)y; return 0; }
 
+static pdw gb_boff, gb_brb;     /* sink 3: a bitmap in the workspace            */
 static void gb_sink(pdw y)
 {
+    if (gb_sinkmode == 3) { jw_put((pdw)(gb_boff + y * gb_brb), gb_c, gb_brb); return; }
     if (gb_sinkmode == 0) {
         cv_row((pdi)(gb_dy + (pdi)y), gb_dx, gb_c, gb_w, gb_op);
         if ((pdi)(gb_dy + (pdi)y + 1) >= (pdi)(cv_y0 + (pdi)cv_h)) gb_stop = 1;
@@ -324,6 +327,11 @@ static void gb_sink(pdw y)
 
 /* The arithmetic-coded generic region. Needs gb_w/gb_h/gb_tpl/gb_tpgd/gb_at set and
  * mq_init done. Contexts are cleared here. Returns 0 or PDE_*. */
+static void gb_cinit(void)
+{
+    gb_hash = (pdb)(gb_tpl == 0);
+    if (gb_hash) jw_zero(JW_GB, (pdw)(JB_HASH * 3)); else jw_zero(JW_GB, (pdw)(1u << (gb_tpl == 1 ? 13 : 10)));
+}
 static pdw gb_arith(void)
 {
     pdw x, y, nb = (pdw)((gb_w + 7) >> 3), t = gb_tpl, ltp = 0, w0, w1, w2, ctx, k, i;
@@ -331,7 +339,6 @@ static pdw gb_arith(void)
     int bit;
     if (gb_w > BL_MAXW) return PDE_LIMIT;
     gb_hash = (pdb)(t == 0);
-    if (gb_hash) { jw_zero(JW_GB, (pdw)(JB_HASH * 3)); } else jw_zero(JW_GB, (pdw)(1u << (t == 1 ? 13 : 10)));
     gb_fail = 0; gb_stop = 0;
     gb_c = gb_r0; gb_p1 = gb_r1; gb_p2 = gb_r2;
     for (i = 0; i < GB_MAXRB; i++) gb_r0[i] = gb_r1[i] = gb_r2[i] = 0;
@@ -406,6 +413,357 @@ static pdw gb_mmr(void)
         gb_c = cf_ref;
         gb_sink(y);
     }
+    return PDE_OK;
+}
+
+
+/* ---- symbol and pattern storage --------------------------------------------------- */
+#define JB_MAXSYMS 4096u
+#define JB_RECSZ   6
+
+static pdw jb_alloc(pdw w, pdw h)       /* a zeroed bitmap, or 0 */
+{
+    pdw rb = (pdw)((w + 7) >> 3), size, o;
+    if (w > BL_MAXW) return 0;
+    if (h && rb > (pdw)(0xFFFFu / h)) return 0;
+    size = (pdw)(rb * h);
+    if ((pdw)(jb_hp - jb_sp) < (pdw)(size + 64) || (pdw)(jb_hp - jb_sp) > 0xF000u) return 0;
+    o = jb_sp; jw_zero(o, size); jb_sp = (pdw)(jb_sp + size);
+    return o;
+}
+static pdw jb_recs(pdw n)               /* n records at the top, or 0 */
+{
+    pdw sz;
+    if (n > JB_MAXSYMS) return 0;
+    sz = (pdw)(n * JB_RECSZ);
+    if ((pdw)(jb_hp - jb_sp) < (pdw)(sz + 64)) return 0;
+    jb_hp = (pdw)(jb_hp - sz);
+    return jb_hp;
+}
+static void jb_setrec(pdw base, pdw i, pdw off, pdw w, pdw h)
+{
+    pdw o = (pdw)(base + i * JB_RECSZ);
+    jw_ww(o, off); jw_ww((pdw)(o + 2), w); jw_ww((pdw)(o + 4), h);
+}
+static pdw jb_rec_off, jb_rec_w, jb_rec_h;
+static void jb_getrec(pdw base, pdw i)
+{
+    pdw o = (pdw)(base + i * JB_RECSZ);
+    jb_rec_off = jw_rw(o); jb_rec_w = jw_rw((pdw)(o + 2)); jb_rec_h = jw_rw((pdw)(o + 4));
+}
+
+/* ---- the segment registry (decoded once, kept across bands) ------------------------------ */
+#define JB_NRG 24
+#define RGK_SYM   1     /* symbol dictionary: ofs = records, cnt = exported symbols */
+#define RGK_PAT   2     /* pattern dictionary: ofs = bitmaps, cnt = patterns, a = w, b = h */
+#define RGK_TAB   3     /* custom Huffman table: ofs = the table in the workspace    */
+#define RGK_BAD   4     /* decoded and unusable                                      */
+static pdw jb_rg_num[JB_NRG], jb_rg_ofs[JB_NRG], jb_rg_cnt[JB_NRG], jb_rg_a[JB_NRG], jb_rg_b[JB_NRG];
+static pdb jb_rg_kind[JB_NRG];
+static pdw jb_nrg;
+static pdw jb_rg_find(pdw num)
+{
+    pdw i;
+    for (i = 0; i < jb_nrg; i++) if (jb_rg_num[i] == num) return i;
+    return 0xFFFFu;
+}
+
+/* ---- generic refinement (6.3) ---------------------------------------------------------- */
+/* current rows live in jb_srow (the row being made) and tr_row (the row above); the
+ * reference rows y-1, y, y+1 in gb_r0..2. None of the three is in use while a
+ * refinement runs. */
+static pdb jb_srow[GB_MAXRB], tr_row[GB_MAXRB];
+#define RF_MAXW 8192
+static pdw rf_tpl, rf_tpgr;
+static pdi rf_at[2][2];
+static pdw rf_w, rf_rw;
+
+static int rf_cur(const pdb *r, pdi x)
+{
+    if (x < 0 || x >= (pdi)rf_w) return 0;
+    return (r[x >> 3] >> (7 - (x & 7))) & 1;
+}
+static int rf_ref(const pdb *r, pdi x)
+{
+    if (x < 0 || x >= (pdi)rf_rw) return 0;
+    return (r[x >> 3] >> (7 - (x & 7))) & 1;
+}
+
+/* dst: a bitmap of w x h in the workspace; ref at (x - dx, y - dy) of the reference.
+ * mq_init done and the refinement contexts cleared by the caller. */
+static pdw rf_decode(pdw dst, pdw w, pdw h, pdw ref, pdw rw, pdw rh, pdi dx, pdi dy)
+{
+    pdw rb = (pdw)((w + 7) >> 3), rrb = (pdw)((rw + 7) >> 3), x, y, i, ctx, ltp = 0, cen;
+    pdb *cur = jb_srow, *up = tr_row;
+    pdb *r0 = gb_r0, *r1 = gb_r1, *r2 = gb_r2;
+    pdi ry;
+    int bit, a, b, c, d, e, f, g, hh, ii;
+    if (w > RF_MAXW || rw > RF_MAXW) return PDE_LIMIT;
+    rf_w = w; rf_rw = rw;
+    cen = rf_tpl ? 0x80u : 0x100u;
+    for (i = 0; i < GB_MAXRB; i++) up[i] = 0;
+    for (y = 0; y < h; y++) {
+        for (i = 0; i < GB_MAXRB; i++) { cur[i] = 0; r0[i] = r1[i] = r2[i] = 0; }
+        ry = (pdi)((pdi)y - dy);
+        if (ry - 1 >= 0 && ry - 1 < (pdi)rh) jw_get(r0, (pdw)(ref + (pdw)(ry - 1) * rrb), rrb);
+        if (ry >= 0 && ry < (pdi)rh) jw_get(r1, (pdw)(ref + (pdw)ry * rrb), rrb);
+        if (ry + 1 >= 0 && ry + 1 < (pdi)rh) jw_get(r2, (pdw)(ref + (pdw)(ry + 1) * rrb), rrb);
+        if (rf_tpgr) ltp ^= (pdw)mq_bit((pdw)(JW_GR + cen));
+        for (x = 0; x < w; x++) {
+            pdi rx = (pdi)((pdi)x - dx);
+            a = rf_ref(r1, rx);
+            if (ltp) {          /* typical prediction: a uniform 3 x 3 reference neighbourhood is the pixel */
+                b = rf_ref(r0, (pdi)(rx - 1)); c = rf_ref(r0, rx); d = rf_ref(r0, (pdi)(rx + 1));
+                e = rf_ref(r1, (pdi)(rx - 1)); f = rf_ref(r1, (pdi)(rx + 1));
+                g = rf_ref(r2, (pdi)(rx - 1)); hh = rf_ref(r2, rx); ii = rf_ref(r2, (pdi)(rx + 1));
+                if (b == a && c == a && d == a && e == a && f == a && g == a && hh == a && ii == a) {
+                    if (a) cur[x >> 3] |= (pdb)(0x80 >> (x & 7));
+                    continue;
+                }
+            }
+            if (rf_tpl == 0) {
+                pdi ax = (pdi)((pdi)x + rf_at[0][0]), ay = rf_at[0][1];
+                ctx = (pdw)(rf_cur(cur, (pdi)(x - 1)));
+                ctx |= (pdw)(rf_cur(up, (pdi)(x + 1)) << 1);
+                ctx |= (pdw)(rf_cur(up, (pdi)x) << 2);
+                ctx |= (pdw)((ay == 0 ? rf_cur(cur, ax) : rf_cur(up, ax)) << 3);
+                ctx |= (pdw)(rf_ref(r2, (pdi)(rx + 1)) << 4);
+                ctx |= (pdw)(rf_ref(r2, rx) << 5);
+                ctx |= (pdw)(rf_ref(r2, (pdi)(rx - 1)) << 6);
+                ctx |= (pdw)(rf_ref(r1, (pdi)(rx + 1)) << 7);
+                ctx |= (pdw)(a << 8);
+                ctx |= (pdw)(rf_ref(r1, (pdi)(rx - 1)) << 9);
+                ctx |= (pdw)(rf_ref(r0, (pdi)(rx + 1)) << 10);
+                ctx |= (pdw)(rf_ref(r0, rx) << 11);
+                {
+                    pdi qx = (pdi)(rx + rf_at[1][0]), qy = rf_at[1][1];
+                    ctx |= (pdw)((qy == -1 ? rf_ref(r0, qx) : qy == 0 ? rf_ref(r1, qx) : rf_ref(r2, qx)) << 12);
+                }
+            } else {
+                ctx = (pdw)(rf_cur(cur, (pdi)(x - 1)));
+                ctx |= (pdw)(rf_cur(up, (pdi)(x + 1)) << 1);
+                ctx |= (pdw)(rf_cur(up, (pdi)x) << 2);
+                ctx |= (pdw)(rf_cur(up, (pdi)(x - 1)) << 3);
+                ctx |= (pdw)(rf_ref(r2, (pdi)(rx + 1)) << 4);
+                ctx |= (pdw)(rf_ref(r2, rx) << 5);
+                ctx |= (pdw)(rf_ref(r1, (pdi)(rx + 1)) << 6);
+                ctx |= (pdw)(a << 7);
+                ctx |= (pdw)(rf_ref(r1, (pdi)(rx - 1)) << 8);
+                ctx |= (pdw)(rf_ref(r0, rx) << 9);
+            }
+            bit = mq_bit((pdw)(JW_GR + ctx));
+            if (bit) cur[x >> 3] |= (pdb)(0x80 >> (x & 7));
+        }
+        jw_put((pdw)(dst + y * rb), cur, rb);
+        for (i = 0; i < rb; i++) up[i] = cur[i];
+    }
+    return PDE_OK;
+}
+
+/* ---- Huffman (annex B) is added below; the text region and the dictionary take their
+ * numbers through jb_idec, which picks the integer decoder or a table. ---------------- */
+static pdb jb_huff;
+static int hf_dec(pdw role);            /* returns 1 for OOB, 0 with jb_ival set */
+static pdw hf_ids(void);                /* a symbol ID in Huffman mode           */
+static pdw hf_refsize(void);
+static int jb_idec(pdw role)
+{
+    if (jb_huff) return hf_dec(role);
+    return ia_dec(role);
+}
+
+/* ---- text regions (6.4) ------------------------------------------------------------------ */
+static pdw tr_recs, tr_nsyms;           /* SBSYMS: records                                      */
+static pdw tr_ninst, tr_strips, tr_logs, tr_corner, tr_comb, tr_defpix, tr_refine, tr_transp;
+static pdi tr_dsoff, tr_ox, tr_oy;      /* the region's origin on the canvas                    */
+static pdw tr_rtpl;
+static pdi tr_rat[2][2];
+
+static void tr_draw(pdw off, pdw w, pdw h, pdi x, pdi y)
+{
+    pdw rb = (pdw)((w + 7) >> 3), sy;
+    if (!w || !h) return;
+    if (rb > GB_MAXRB - 2) return;
+    for (sy = 0; sy < h; sy++) {
+        pdi yy = (pdi)(y + (pdi)sy);
+        if (yy < cv_y0 || yy >= (pdi)(cv_y0 + (pdi)cv_h)) continue;
+        jw_get(tr_row, (pdw)(off + sy * rb), rb);
+        tr_row[rb] = 0; tr_row[rb + 1] = 0;
+        cv_row(yy, x, tr_row, w, tr_comb);
+    }
+}
+
+static pdw tr_run(void)
+{
+    pdi stript, firsts, curs, curt, ti;
+    pdw n = 0, id, ri, e;
+    int first;
+    if (jb_idec(IA_DT)) return PDE_SYNTAX;
+    stript = (pdi)(-jb_ival * (pdi)tr_strips); firsts = 0;
+    while (n < tr_ninst) {
+        if (jb_idec(IA_DT)) return PDE_SYNTAX;
+        stript = (pdi)(stript + jb_ival * (pdi)tr_strips);
+        first = 1;
+        for (;;) {
+            if (first) {
+                if (jb_idec(IA_FS)) return PDE_SYNTAX;
+                firsts = (pdi)(firsts + jb_ival); curs = firsts; first = 0;
+            } else {
+                if (jb_idec(IA_DS)) break;
+                curs = (pdi)(curs + jb_ival + tr_dsoff);
+            }
+            if (n >= tr_ninst) return PDE_SYNTAX;
+            if (tr_strips == 1) curt = 0;
+            else { if (jb_idec(IA_IT)) return PDE_SYNTAX; curt = jb_ival; }
+            ti = (pdi)(stript + curt);
+            id = jb_huff ? hf_ids() : ia_id();
+            if (jb_ovf || id >= tr_nsyms) return PDE_SYNTAX;
+            ri = 0;
+            if (tr_refine) { if (jb_huff) { ri = (pdw)jb_idec(IA_RI) ? 0 : (pdw)jb_ival; } else { if (jb_idec(IA_RI)) return PDE_SYNTAX; ri = (pdw)jb_ival; } }
+            jb_getrec(tr_recs, id);
+            {
+                pdw so = jb_rec_off, sw = jb_rec_w, sh = jb_rec_h, mark = jb_sp;
+                pdi x, y;
+                if (ri) {
+                    pdi rdw, rdh, rdx, rdy;
+                    pdw nw, nh, no;
+                    if (jb_idec(IA_RDW)) return PDE_SYNTAX; rdw = jb_ival;
+                    if (jb_idec(IA_RDH)) return PDE_SYNTAX; rdh = jb_ival;
+                    if (jb_idec(IA_RDX)) return PDE_SYNTAX; rdx = jb_ival;
+                    if (jb_idec(IA_RDY)) return PDE_SYNTAX; rdy = jb_ival;
+                    if (jb_huff) { (void)hf_refsize(); }
+                    if ((pdi)(sw + rdw) < 0 || (pdi)(sh + rdh) < 0) return PDE_SYNTAX;
+                    nw = (pdw)(sw + rdw); nh = (pdw)(sh + rdh);
+                    no = jb_alloc(nw, nh);
+                    if (!no) return PDE_LIMIT;
+                    if (jb_huff) mq_init();
+                    e = rf_decode(no, nw, nh, so, sw, sh, (pdi)((rdw >> 1) + rdx), (pdi)((rdh >> 1) + rdy));
+                    if (e) return e;
+                    so = no; sw = nw; sh = nh;
+                }
+                /* the corner and the advance before the draw */
+                if (!tr_transp && (tr_corner == 2 || tr_corner == 3)) curs = (pdi)(curs + (pdi)sw - 1);
+                if (tr_transp && (tr_corner == 0 || tr_corner == 2)) curs = (pdi)(curs + (pdi)sh - 1);
+                if (!tr_transp) {
+                    x = curs; y = ti;
+                    if (tr_corner == 3 || tr_corner == 2) x = (pdi)(curs - (pdi)sw + 1);
+                    if (tr_corner == 0 || tr_corner == 2) y = (pdi)(ti - (pdi)sh + 1);
+                } else {
+                    x = ti; y = curs;
+                    if (tr_corner == 3 || tr_corner == 2) x = (pdi)(ti - (pdi)sw + 1);
+                    if (tr_corner == 0 || tr_corner == 2) y = (pdi)(curs - (pdi)sh + 1);
+                }
+                tr_draw(so, sw, sh, (pdi)(x + tr_ox), (pdi)(y + tr_oy));
+                if (!tr_transp && (tr_corner == 0 || tr_corner == 1)) curs = (pdi)(curs + (pdi)sw - 1);
+                if (tr_transp && (tr_corner == 1 || tr_corner == 3)) curs = (pdi)(curs + (pdi)sh - 1);
+                jb_sp = mark;
+            }
+            n++;
+            if (jb_ovf) return PDE_SYNTAX;
+        }
+    }
+    return PDE_OK;
+}
+
+/* ---- symbol dictionaries (6.5) ----------------------------------------------------------------- */
+static pdw sd_huff, sd_refagg, sd_tpl, sd_rtpl, sd_nin, sd_numnew, sd_numex, sd_all;
+static pdi sd_at[4][2];
+
+static void sd_contexts(void)
+{
+    jw_zero(JW_INT, (pdw)(IA_N * 512u));
+    jw_zero(JW_IAID, (pdw)(1u << jb_idlen));
+    jw_zero(JW_GR, 8192);
+}
+static pdw jb_codelen(pdw n)            /* ceil(log2(n)), at least 0 */
+{
+    pdw k = 0;
+    while ((1u << k) < n && k < 15) k++;
+    return k;
+}
+
+/* decodes the new symbols into sd_all (records, input symbols first) and exports */
+static pdw sd_run(void)
+{
+    pdw ndec = 0, e, symw, hch = 0, totw, o, k, i, j, total = (pdw)(sd_nin + sd_numnew), runs, keep, cur;
+    pdi hc = 0, sw = 0;
+    int first;
+    (void)first; (void)totw; (void)hch; (void)k;
+    jb_idlen = jb_codelen(total);
+    if (jb_idlen > 11) return PDE_LIMIT;
+    if (!jb_huff) { sd_contexts(); mq_init(); }
+    else { jw_zero(JW_GR, 8192); }
+    gb_tpl = sd_tpl; gb_tpgd = 0; gb_sinkmode = 3; gb_skip = 0;
+    for (i = 0; i < 4; i++) { gb_at[i][0] = sd_at[i][0]; gb_at[i][1] = sd_at[i][1]; }
+    if (!jb_huff || sd_refagg) { if (!jb_huff || sd_refagg) gb_cinit(); }
+    while (ndec < sd_numnew) {
+        if (jb_idec(IA_DH)) return PDE_SYNTAX;
+        hc = (pdi)(hc + jb_ival); if (hc < 0 || hc > 8192) return PDE_SYNTAX;
+        sw = 0;
+        for (;;) {
+            if (jb_idec(IA_DW)) break;
+            if (ndec >= sd_numnew) return PDE_SYNTAX;
+            sw = (pdi)(sw + jb_ival); if (sw < 0 || sw > RF_MAXW) return PDE_SYNTAX;
+            symw = (pdw)sw; hch = (pdw)hc;
+            o = jb_alloc(symw, (pdw)hc);
+            if (!o) return PDE_LIMIT;
+            if (!jb_huff && !sd_refagg) {
+                if (symw && hc) {
+                    gb_w = symw; gb_h = (pdw)hc; gb_boff = o; gb_brb = (pdw)((symw + 7) >> 3);
+                    e = gb_arith(); if (e) return e;
+                }
+            } else if (sd_refagg) {
+                if (jb_idec(IA_AI)) return PDE_SYNTAX;
+                if (jb_ival < 1) return PDE_SYNTAX;
+                if (jb_ival == 1) {
+                    pdw id; pdi rdx, rdy;
+                    id = jb_huff ? hf_ids() : ia_id();
+                    if (id >= (pdw)(sd_nin + ndec)) return PDE_SYNTAX;
+                    if (jb_idec(IA_RDX)) return PDE_SYNTAX; rdx = jb_ival;
+                    if (jb_idec(IA_RDY)) return PDE_SYNTAX; rdy = jb_ival;
+                    if (jb_huff) { (void)hf_refsize(); mq_init(); }
+                    jb_getrec(sd_all, id);
+                    rf_tpl = sd_rtpl; rf_tpgr = 0;
+                    e = rf_decode(o, symw, (pdw)hc, jb_rec_off, jb_rec_w, jb_rec_h, rdx, rdy);
+                    if (e) return e;
+                } else {
+                    /* an aggregate: a small text region over the symbols so far */
+                    pdw saved[8], mark = jb_sp;
+                    saved[0] = cv_off; saved[1] = cv_rb; saved[2] = cv_w; saved[3] = cv_h; saved[4] = (pdw)cv_y0;
+                    cv_off = o; cv_rb = (pdw)((symw + 7) >> 3); cv_w = symw; cv_h = (pdw)hc; cv_y0 = 0;
+                    tr_recs = sd_all; tr_nsyms = (pdw)(sd_nin + ndec);
+                    tr_ninst = (pdw)jb_ival; tr_strips = 1; tr_corner = 1; tr_comb = 0; tr_defpix = 0;
+                    tr_refine = 1; tr_transp = 0; tr_dsoff = 0; tr_ox = 0; tr_oy = 0; tr_rtpl = sd_rtpl;
+                    rf_tpl = sd_rtpl; rf_tpgr = 0;
+                    e = tr_run();
+                    cv_off = saved[0]; cv_rb = saved[1]; cv_w = saved[2]; cv_h = saved[3]; cv_y0 = (pdi)saved[4];
+                    jb_sp = mark;
+                    if (e) return e;
+                    gb_tpl = sd_tpl; gb_sinkmode = 3; gb_tpgd = 0;
+                }
+            }
+            jb_setrec(sd_all, (pdw)(sd_nin + ndec), o, symw, (pdw)hc);
+            ndec++;
+        }
+    }
+    /* the export flags (6.5.10) */
+    if (jb_idlen > 11) return PDE_LIMIT;
+    keep = 0; cur = 0; runs = 0;
+    for (i = 0; i < total; ) {
+        pdw run;
+        if (jb_idec(IA_EX)) return PDE_SYNTAX;
+        if (jb_ival < 0 || (pdw)jb_ival > (pdw)(total - i)) return PDE_SYNTAX;
+        run = (pdw)jb_ival;
+        if (cur) for (j = 0; j < run; j++) {
+            jb_getrec(sd_all, (pdw)(i + j));
+            jb_setrec(sd_all, keep, jb_rec_off, jb_rec_w, jb_rec_h);
+            keep++;
+        }
+        i = (pdw)(i + run); cur ^= 1;
+        if (++runs > (pdw)(total * 2 + 4)) return PDE_SYNTAX;
+    }
+    if (keep != sd_numex) { /* the declared count is advisory: the flags decide */ }
+    sd_numex = keep;
     return PDE_OK;
 }
 
@@ -536,7 +894,132 @@ static pdw jb_segment_generic(void)
     jb_cv_band();
     if (f & 1) return gb_mmr();
     mq_init();
+    gb_cinit();
     return gb_arith();
+}
+
+
+/* ---- Huffman: filled in by the next step; arithmetic-only builds refuse it ------------------ */
+static int hf_dec(pdw role) { (void)role; jb_ovf = 1; return 1; }
+static pdw hf_ids(void) { jb_ovf = 1; return 0; }
+static pdw hf_refsize(void) { jb_ovf = 1; return 0; }
+
+/* ---- segment-level wrappers ------------------------------------------------------------------ */
+static void jb_rg_add(pdw kind, pdw ofs, pdw cnt, pdw a, pdw b)
+{
+    if (jb_nrg >= JB_NRG) { jb_inc |= JBF_UNSUP; return; }
+    jb_rg_num[jb_nrg] = jb_sn; jb_rg_kind[jb_nrg] = (pdb)kind; jb_rg_ofs[jb_nrg] = ofs;
+    jb_rg_cnt[jb_nrg] = cnt; jb_rg_a[jb_nrg] = a; jb_rg_b[jb_nrg] = b;
+    jb_nrg++;
+}
+
+static pdw jb_segment_symdict(void)
+{
+    pdw f, k, nin = 0, i, j, e, msp = jb_sp, mhp = jb_hp, total, M;
+    f = (pdw)(jb_b() << 8); f |= jb_b();
+    sd_huff = (pdw)(f & 1); sd_refagg = (pdw)((f >> 1) & 1);
+    sd_tpl = (pdw)((f >> 10) & 3); sd_rtpl = (pdw)((f >> 12) & 1);
+    jb_huff = (pdb)sd_huff;
+    if (f & 0x300) { jb_inc |= JBF_UNSUP; return PDE_LIMIT; }   /* bitmap contexts retained / used */
+    if (!sd_huff)
+        for (k = 0; k < (sd_tpl ? 1u : 4u); k++) { sd_at[k][0] = (pdi)(signed char)jb_b(); sd_at[k][1] = (pdi)(signed char)jb_b();
+            if (sd_at[k][1] < -2 || sd_at[k][1] > 0 || (sd_at[k][1] == 0 && sd_at[k][0] >= 0)) return PDE_LIMIT; }
+    else for (k = 0; k < 4; k++) { sd_at[k][0] = gb_atnomv[0][k * 2]; sd_at[k][1] = gb_atnomv[0][k * 2 + 1]; }
+    if (sd_refagg && !sd_rtpl) {
+        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
+        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+    }
+    jb_b32(); sd_numex = jb_lo; if (jb_hi) return PDE_LIMIT;
+    jb_b32(); sd_numnew = jb_lo; if (jb_hi || sd_numnew > JB_MAXSYMS) return PDE_LIMIT;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        j = jb_rg_find(jb_ref[i]);
+        if (j != 0xFFFFu && jb_rg_kind[j] == RGK_SYM) nin = (pdw)(nin + jb_rg_cnt[j]);
+        else if (j != 0xFFFFu && jb_rg_kind[j] == RGK_BAD) return PDE_LIMIT;
+    }
+    total = (pdw)(nin + sd_numnew);
+    if (total > JB_MAXSYMS) return PDE_LIMIT;
+    sd_all = jb_recs(total ? total : 1);
+    if (!sd_all) return PDE_LIMIT;
+    sd_nin = nin; j = 0;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        pdw g = jb_rg_find(jb_ref[i]);
+        if (g != 0xFFFFu && jb_rg_kind[g] == RGK_SYM)
+            for (k = 0; k < jb_rg_cnt[g]; k++) {
+                jb_getrec(jb_rg_ofs[g], k);
+                jb_setrec(sd_all, j, jb_rec_off, jb_rec_w, jb_rec_h); j++;
+            }
+    }
+    e = sd_run();
+    if (e) { jb_sp = msp; jb_hp = mhp; return e; }
+    M = sd_numex;
+    if (M < total) {
+        jw_move((pdw)(sd_all + (pdw)((total - M) * JB_RECSZ)), sd_all, (pdw)(M * JB_RECSZ));
+        sd_all = (pdw)(sd_all + (pdw)((total - M) * JB_RECSZ)); jb_hp = sd_all;
+    }
+    jb_rg_add(RGK_SYM, sd_all, M, 0, 0);
+    return PDE_OK;
+}
+
+static pdw jb_segment_text(void)
+{
+    pdw f, k, i, j, g, nsy = 0, e, msp = jb_sp, mhp = jb_hp, direct, trows = 0, y0r = 0, rbr, tmp = 0;
+    f = (pdw)(jb_b() << 8); f |= jb_b();
+    jb_huff = (pdb)(f & 1); tr_refine = (pdw)((f >> 1) & 1); tr_strips = (pdw)(1u << ((f >> 2) & 3));
+    tr_corner = (pdw)((f >> 4) & 3); tr_transp = (pdw)((f >> 6) & 1); tr_comb = (pdw)((f >> 7) & 3);
+    tr_defpix = (pdw)((f >> 9) & 1); tr_dsoff = (pdi)((f >> 10) & 31); if (tr_dsoff > 15) tr_dsoff = (pdi)(tr_dsoff - 32);
+    tr_rtpl = (pdw)((f >> 15) & 1);
+    if (jb_huff) { jb_inc |= JBF_UNSUP; return PDE_LIMIT; }
+    if (tr_refine && !tr_rtpl) {
+        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
+        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+    }
+    jb_b32(); if (jb_hi) return PDE_LIMIT; tr_ninst = jb_lo;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        j = jb_rg_find(jb_ref[i]);
+        if (j != 0xFFFFu && jb_rg_kind[j] == RGK_SYM) nsy = (pdw)(nsy + jb_rg_cnt[j]);
+        else if (j != 0xFFFFu && jb_rg_kind[j] == RGK_BAD) return PDE_LIMIT;
+    }
+    if (nsy > JB_MAXSYMS) return PDE_LIMIT;
+    if (!nsy) return PDE_OK;
+    tr_recs = jb_recs(nsy);
+    if (!tr_recs) return PDE_LIMIT;
+    tr_nsyms = nsy; j = 0;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        g = jb_rg_find(jb_ref[i]);
+        if (g != 0xFFFFu && jb_rg_kind[g] == RGK_SYM)
+            for (k = 0; k < jb_rg_cnt[g]; k++) {
+                jb_getrec(jb_rg_ofs[g], k);
+                jb_setrec(tr_recs, j, jb_rec_off, jb_rec_w, jb_rec_h); j++;
+            }
+    }
+    jb_idlen = jb_codelen(nsy);
+    if (jb_idlen > 11) { jb_sp = msp; jb_hp = mhp; return PDE_LIMIT; }
+    direct = (pdw)(!tr_defpix && jb_rop == 0 && tr_comb == 0);
+    if (direct) { jb_cv_band(); tr_ox = (pdi)jb_rx; tr_oy = (pdi)jb_ry; }
+    else {
+        pdw by1 = (pdw)(jb_by0 + jb_brows), ye = jb_satadd(jb_ry, jb_rh), y1r;
+        y0r = jb_ry > jb_by0 ? jb_ry : jb_by0; y1r = ye < by1 ? ye : by1;
+        trows = (pdw)(y1r - y0r); rbr = (pdw)((jb_rw + 7) >> 3);
+        tmp = jb_alloc(jb_rw, trows);
+        if (!tmp) { jb_sp = msp; jb_hp = mhp; return PDE_LIMIT; }
+        if (tr_defpix) for (k = 0; k < (pdw)(rbr * trows); k++) jw_wb((pdw)(tmp + k), 0xFF);
+        cv_off = tmp; cv_rb = rbr; cv_w = jb_rw; cv_h = trows; cv_y0 = (pdi)(y0r - jb_ry);
+        tr_ox = 0; tr_oy = 0;
+    }
+    sd_contexts();
+    mq_init();
+    rf_tpl = tr_rtpl; rf_tpgr = 0;
+    e = tr_run();
+    if (!e && !direct) {
+        jb_cv_band();
+        for (k = 0; k < trows; k++) {
+            jw_get(tr_row, (pdw)(tmp + k * rbr), rbr);
+            tr_row[rbr] = 0; tr_row[rbr + 1] = 0;
+            cv_row((pdi)(y0r + k), (pdi)jb_rx, tr_row, jb_rw, jb_rop);
+        }
+    }
+    jb_sp = msp; jb_hp = mhp;
+    return e;
 }
 
 /* ---- the segment loop for one stream, one band ------------------------------------------ */
@@ -552,6 +1035,16 @@ static pdw jb_dispatch(void)
         if (jb_inband()) r = jb_segment_generic();
         break;
     case 48: jb_pageinfo(); break;
+    case 0:
+        if (jb_rg_find(jb_sn) == 0xFFFFu) {
+            r = jb_segment_symdict();
+            if (r) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); jb_inc |= JBF_UNSUP; r = PDE_OK; }
+        }
+        break;
+    case 6: case 7:
+        if (jb_region()) return PDE_TRUNC;
+        if (jb_inband()) r = jb_segment_text();
+        break;
     case 4: case 20: case 36: case 40: jb_inc |= JBF_UNSUP; break;
     default: break;
     }
@@ -610,7 +1103,6 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
     return PDE_OK;
 }
 
-static pdb jb_srow[1032];
 static pdw jb_getrow(pdw r)
 {
     pdw n = (pdw)(1u << bl_scale), first = (pdw)(r << bl_scale), by, y, i, last;

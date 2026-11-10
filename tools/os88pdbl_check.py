@@ -174,6 +174,83 @@ def check_jb2_generic(rnd, bins):
     print('jbig2 generic: %d runs, %d failed' % (total, fails))
     return fails
 
+
+def glyph(w, h, rnd):
+    return [[1 if (x == 0 or y == 0 or x == w - 1 or (x + y) % 4 == 0 or rnd.random() < .15) else 0 for x in range(w)] for y in range(h)]
+
+def blit(dst, img, x, y, op, defin=None):
+    compose(dst, img, x, y, op)
+
+def mutool_pgm(segs, globs, w, h, td):
+    pdf = F.jbig2_pdf(segs, w, h, globs)
+    open(td + '/m.pdf', 'wb').write(pdf)
+    r = subprocess.run(['mutool', 'draw', '-q', '-r', '72', '-c', 'gray', '-o', td + '/m.pgm', td + '/m.pdf', '1'], capture_output=True)
+    d = open(td + '/m.pgm', 'rb').read().split(b'\n', 3)[3]
+    return [[1 if d[y * w + x] < 128 else 0 for x in range(w)] for y in range(h)]
+
+def check_jb2_text(rnd, bins, use_mutool=False, refine_ok=True):
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(40):
+            W = rnd.choice([60, 97, 130]); H = rnd.choice([40, 75, 110])
+            nsym = rnd.randint(2, 9)
+            hs = sorted(rnd.randint(4, 14) for _ in range(nsym))
+            syms = [glyph(rnd.randint(2, 12), hh, rnd) for hh in hs]
+            tpl = rnd.randint(0, 3)
+            logs = rnd.randint(0, 3); corner = rnd.randint(0, 3); transp = rnd.randint(0, 1)
+            comb = rnd.choice([0, 0, 1, 2, 3]); defpix = rnd.choice([0, 0, 1]); dsoff = rnd.randint(-3, 3)
+            rop = rnd.choice([0, 0, 1, 2, 4]); refine = refine_ok and rnd.random() < .4; rtpl = rnd.randint(0, 1)
+            insts = []
+            for _ in range(rnd.randint(1, 24)):
+                sid = rnd.randrange(nsym)
+                X = rnd.randint(-3, W - 4); Y = rnd.randint(-3, H - 4)
+                if refine and rnd.random() < .5:
+                    base = syms[sid]; bh = len(base) + rnd.randint(-1, 2); bw = len(base[0]) + rnd.randint(-1, 2)
+                    bm = [[(base[y][x] if y < len(base) and x < len(base[0]) else 0) ^ (1 if rnd.random() < .1 else 0) for x in range(bw)] for y in range(bh)]
+                    insts.append((sid, X, Y, bm))
+                else: insts.append((sid, X, Y))
+            # model: region with default pixel, symbols combined by comb, region combined to page by rop
+            region = [[defpix] * W for _ in range(H)]
+            order = sorted(range(len(insts)), key=lambda i: i)  # draw order = decoder order (strip, s)
+            # decoder order is by strip then S: reproduce the encoder's sort for non-commutative ops
+            strips = 1 << logs
+            def key(it):
+                bm = it[3] if len(it) > 3 else syms[it[0]]
+                bh = len(bm); bw = len(bm[0])
+                if not transp:
+                    S = it[1] + (bw - 1 if corner in (2, 3) else 0); T = it[2] + (bh - 1 if corner in (0, 2) else 0)
+                else:
+                    T = it[1] + (bw - 1 if corner in (2, 3) else 0); S = it[2] + (bh - 1 if corner in (0, 2) else 0)
+                return (T // strips, S)
+            for it in sorted(insts, key=key):
+                bm = it[3] if len(it) > 3 else syms[it[0]]
+                compose(region, bm, it[1], it[2], comb)
+            page = [[0] * W for _ in range(H)]
+            compose(page, region, 0, 0, rop)
+            dseg = F.segment(0, 0, F.symdict_segment(syms, tpl), page=0)
+            in_globals = rnd.random() < .5
+            tseg = F.segment(2, 6, F.text_segment(syms, insts, W, H, 0, 0, rop, logs, corner, transp, comb, defpix, dsoff, refine, rtpl), refs=[0])
+            pseg = F.segment(1, 48, F.page_info(W, H))
+            if in_globals: globs, segs = [dseg], [pseg, tseg]
+            else: globs, segs = None, [dseg, pseg, tseg]
+            if use_mutool:
+                mp = mutool_pgm(segs, globs, W, H, td)
+                if mp != page: print('MUTOOL differs text case', case, dict(tpl=tpl, logs=logs, corner=corner, transp=transp, comb=comb, defpix=defpix, dsoff=dsoff, rop=rop, refine=refine, rtpl=rtpl)); fails += 1
+                total += 1
+                continue
+            data = b''.join(segs)
+            for want in (0, W // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, data, b''.join(globs) if globs else None, W, H, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, W, H, sc):
+                        open('/tmp/failt_%d.jb2' % case, 'wb').write(data)
+                        print('FAIL text case', case, W, H, 'want', want, dict(tpl=tpl, logs=logs, corner=corner, transp=transp, comb=comb, defpix=defpix, dsoff=dsoff, rop=rop, refine=refine, rtpl=rtpl, glob=in_globals)); fails += 1
+    print('jbig2 text%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     seed = 1
@@ -187,6 +264,8 @@ if __name__ == '__main__':
     for what in a or ['ccitt']:
         if what == 'ccitt': f += check_ccitt(rnd)
         if what == 'jb2-generic': f += check_jb2_generic(rnd, BINS)
+        if what == 'jb2-text': f += check_jb2_text(rnd, BINS)
+        if what == 'mutool-jb2-text': f += check_jb2_text(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 
