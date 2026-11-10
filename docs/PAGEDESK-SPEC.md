@@ -4907,6 +4907,12 @@ round's final pass, not before.
   re-INITs unchanged, and the occupant degrades (a coarser scale, or the
   image's grey box with `PDF_INC_APPROX`). An occupant's (`want`, `min`) row
   (20.22.2.3) is what it needs to LOAD; `min` decodes its common cases.
+  `PDMEM_GLYPH` 5 is not a region of X either: PDREND answers it when a page
+  first needs a strike block, DX = the KiB the glyph claim should have (40).
+  The primary regrows the glyph claim (40, else 32, else refuses), re-INITs
+  PDREND and the font occupant with the new `glyph_seg`/`glyph_kb`, and calls
+  again; a refusal draws embedded fonts with the substitute face and
+  `PDF_INC_APPROX` (20.22.8).
 * Verbs: `PDV_ENG_CRYPTINFO` 0x13, `PDV_ENG_SETKEY` 0x14, `PDV_ENG_CRYPT`
   0x15, `PDV_ENG_SLOT` 0x16, `PDV_REND_SLOT` 0x48, and the occupants' range
   0xC0-0xFF: `PDV_X_INIT` 0xC0, `PDV_KEY_AUTH` 0xC1, `PDV_KEY_COST` 0xC2,

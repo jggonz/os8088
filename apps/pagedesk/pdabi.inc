@@ -103,6 +103,7 @@ PDMEM_XIDX               equ 1
 PDMEM_OSW                equ 2
 PDMEM_XC                 equ 3
 PDMEM_X8                 equ 4
+PDMEM_GLYPH              equ 5
 PDM_ENTRY                equ 8
 PDV_ENG_INIT             equ 0x00
 PDV_ENG_OPEN             equ 0x01

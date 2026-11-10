@@ -169,6 +169,7 @@ struct pd_view {
 #define PDMEM_OSW       2       /* PDENG: the object-stream window        */
 #define PDMEM_XC        3       /* PDREND: the extension cache            */
 #define PDMEM_X8        4       /* PDREND: 8-bit band, layer and mask     */
+#define PDMEM_GLYPH     5       /* PDREND: GROW the glyph claim, DX = KiB */
 #define PDM_ENTRY       8
 
 /* ---- verbs (PAGEDESK-SPEC 3.5) ------------------------------------------
