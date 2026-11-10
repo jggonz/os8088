@@ -4949,7 +4949,199 @@ round's final pass, not before.
 
 #### 20.22.10 Transparency through an 8-bit band (`blend`)
 
-*Reserved; written by its agent before its code.*
+Owner decision O4: `/ca /CA`, the sixteen blend modes, soft masks, transparency
+groups and an image's `/SMask` and `/Mask` are blended TRUE, on one grey
+channel, and the result is quantised to the adapter. Files: `pdrd.c`'s raster
+(`walk_band`, `span_out`, `band_*`), `pdrx8.c` + `pdrx8.inc` (the 8-bit
+compositor, the quantisers), `pdrxb.c` (the interpretation glue: the `gs` arm,
+group begin and end, the records), `pdxgtr.c` (ExtGState parsing, inside
+PDXG). Reference implementation of the arithmetic: `tools/os88pdfx_blend.py`
+(its fixtures) against `mutool draw -c gray`.
+
+**20.22.10.1 What is blended and what is not.**
+
+* Only the bands a transparent mark touches take the 8-bit path. Every other
+  band is drawn exactly as before (4bpp palette colour or 1bpp Bayer), so a
+  page without transparency is byte-identical and a mixed page keeps its colour
+  where it has no transparency. The mark map is built while interpreting
+  (`g_x8map`, one bit per 16-row band, 256 bands; a canvas taller than 4,096
+  rows marks every band it cannot name).
+* An 8-bit band is composed in **strips of at most 8 rows** (a sub-pass's
+  row range is a strip too) on grey: the colour of every mark in the band is
+  its luminance `flum`/`slum`/an image's luma. Chroma is lost in that band
+  only. The strip is quantised into the band, columns of the page rectangle
+  only, so the desk is untouched.
+* Quantising uses the SAME rule as a flat fill in the band's own depth: 4bpp
+  the seven-level checker of 20.19.2 (thresholds 21/64/106/149/191/234, parity
+  `(x + y - page_y0) & 1`), 1bpp the 4x4 Bayer of `pat_make`. The phase is
+  absolute, so an 8-bit band and its neighbour show no seam on flat grey.
+* Blending is on grey. Separable modes use the 8-bit formulas of 20.22.10.6.
+  The non-separable modes reduce on a grey backdrop and a grey source to:
+  Hue, Saturation, Color = the backdrop; Luminosity = the source. (This is
+  what the PDF formulas give when `Sat(C) = 0`, not an approximation of them;
+  the approximation is grey in place of colour, and it is the band's.)
+* Alpha and shape are one 8-bit quantity: rasterisation is binary coverage,
+  so `AIS` (alpha is shape) cannot change a result and is not read. A knockout
+  group replaces; an isolated group starts transparent; a non-isolated group
+  starts as its parent (a non-isolated group inside a non-opaque parent is
+  treated as isolated, 20.22.10.5).
+
+**20.22.10.2 The X8 region (`PDMEM_X8`).** `S` = the band width in pixels
+(`g_bw`, at most 768), `PL = 8 * S`. Six planes of `PL` bytes then a 1,024-byte
+row buffer:
+
+| offset | plane |
+|---|---|
+| 0 | `V0` the base: opaque grey of the strip |
+| `PL` / `2PL` | layer 1: `P1` colour, `A1` alpha |
+| `3PL` / `4PL` | layer 2: `P2`, `A2` |
+| `5PL` | `MK` the soft mask in force |
+| `6PL` | 1,024 bytes: an image mask's source row |
+
+`KiB = ceil((6 * PL + 1024) / 1024)`: 31 at 640 px, 35 at 720, 37 at 768. This
+is the row for 20.22.2's table. At 8 rows it is the largest strip that two
+group layers, a mask and the base fit in 40 KiB at every adapter; 4-row strips
+would halve it and double the DL walks, 16-row would not leave 64 KiB claim
+room at 720. **Nesting depth is 2** (the page plus two layers; a mask group
+takes the layer above the current one): three nested transparency groups on
+one mark are a depth no page of the real corpus' kind reaches, a layer costs
+12 KiB at 768, and a deeper group is painted inline with `PDF_INC_LIMIT`.
+Layers hold: **isolated** layers premultiplied colour `P` and alpha `A`;
+**non-isolated** layers the colour including the backdrop `C` and the group's
+own alpha `A`.
+
+When a mark needs the region and `x8_seg` is 0, interpretation's end answers
+`PDE_NEEDMEM` (CX = `PDMEM_X8`, DX = `KiB`) once per view; a second answer with
+the region still 0 draws the whole view opaque and sets `PDF_INC_APPROX`. A
+band wider than 768 px does the same.
+
+**20.22.10.3 Records** (`pdrend.h`; the walker skips an unknown type by `len`):
+
+| type | | body |
+|---|---|---|
+| `DLR_STATE` 1 | `aux` = the colour's luminance 0..255 (was 0) | unchanged, 14 bytes |
+| `DLR_XSTATE` 6 | the transparency of the marks that follow; y 0,0; processed whatever the band | `alpha` (0..255, `ca` for fill and text, `CA` for stroke), `bm` 0..15, `smask` (0 none, else mask id + 1), 0 |
+| `DLR_GROUP` 7 | `aux` bit 0 isolated, bit 1 knockout, bit 7 END; y = the group's rows | begin: `alpha`, `bm`, `smask`, 0 (the state at `Do`); end: none |
+| `DLR_MASKB` 8 | `aux` 0 luminosity, 1 alpha; `len` spans to and including its MASKE, so a normal walk skips the block | `bc` the backdrop luminosity, 0 |
+| `DLR_MASKE` 9 | | none |
+| `DLR_IMAGE` 5 | `flags` bit 5 (0x20) an `/SMask`, bit 6 (0x40) a `/Mask` stencil | with 0x60: 4 more body bytes, the mask object `num`, `gen` |
+
+`bm` codes: 0 Normal (and Compatible), 1 Multiply, 2 Screen, 3 Overlay, 4
+Darken, 5 Lighten, 6 ColorDodge, 7 ColorBurn, 8 HardLight, 9 SoftLight, 10
+Difference, 11 Exclusion, 12 Hue, 13 Saturation, 14 Color, 15 Luminosity. An
+array of names takes the first this table has, else Normal.
+
+The effective transparency is the fold of the `gs` operators applied so far,
+so it is a tuple, not an index into the resource dictionary: a pool of 15
+5-byte tuples `{ca, CA, bm, smask, 0}` per pass (`g_xt`, reset by
+`pass_begin`), and **`pdr_gs.pad_` is the tuple's index** (0 = opaque Normal, no
+mask), which q, Q and a form's push already save. An `XSTATE` is written
+before a mark only when its tuple, for the mark's kind, differs from the last
+written; entering and leaving a group forces one. A mark under a tuple that is
+not opaque Normal without a mask sets its rows in the mark map. A pool or
+mask-table overflow sets `PDF_INC_LIMIT` and keeps the previous tuple.
+
+**20.22.10.4 ExtGState (`gs`) and PDXG's verbs 0xD0-0xD7.** `exec_op`'s `gs`
+arm calls `xb_gs()`: look the name up (`RES_LOOKUP`, category ExtGState); the
+parsed dictionary is cached as `XCK_GS` keyed `(objnum, gen)`; on a miss
+without PDXG it calls `x_need(PDX_GFX)` and the pass runs on with the previous
+tuple (the ladder re-runs it). With PDXG, `x_call(PDV_GS_PARSE)` fills
+`struct pdxb_gs` (pdabi.h, blend block) from the dictionary:
+`/CA /ca /BM /SMask (/S /G /BC /TR)`. `/TR` other than `Identity` is not
+applied and sets `PDF_INC_TRANSP`. A **direct** ExtGState dictionary (inside
+`/Resources`, `RES_LOOKUP` answers `objnum` 0) needs a key path below a
+resource: until PDENG offers one it keeps the previous tuple and sets
+`PDF_INC_TRANSP` (questions to the lead in the blend report).
+
+A soft mask: the `/G` form is interpreted at the `gs` operator, with the CTM of
+that moment, as `MASKB ... MASKE`: `xb_gs` sets `g_xmaskpend` and calls
+`do_form`, whose group-begin hook writes `MASKB`, and whose end hook (in
+`frame_end`) writes `MASKE` and patches the length. At most 8 masks a pass.
+
+`PDV_GS_PARSE` 0xD0: in `objnum`, `gen`; out the rest of `pdxb_gs`.
+0xD1-0xD7 are reserved for the module's further parsing. The module reads the
+dictionary through `xg_dictget(struct pdxb_dictget *)`, which the PDXG shell
+(gfx) provides over PDREND's service door; `pdxgtr.c` is compiled for the host
+with a stand-in.
+
+**20.22.10.5 The walker.** `walk_band` runs once per strip of an 8-bit band
+(and once as before for the others). In a strip the sinks compose into the
+current layer:
+
+* `STATE` sets the colour (`aux`); `XSTATE` the transparency; a new `smask`
+  that is not the mask in `MK` for this strip is built first: save the
+  walker's state, push a fresh isolated layer, walk the `MASKB` block into it,
+  at `MASKE` turn the layer into `MK` (luminosity `P + (255-A)*bc`, alpha `A`),
+  pop, restore, and go on from the `XSTATE`. No recursion: an explicit resume
+  offset. A mask inside a mask is ignored (`PDF_INC_LIMIT`); a mask wanted at
+  depth 2 is too.
+* `GROUP` begin pushes a layer (isolated: `P = A = 0`; non-isolated: `C` = the
+  parent's colour, `A = 0`), resets the transparency to opaque Normal, and keeps
+  `{alpha, bm, smask}` for the end. `GROUP` end composites the layer onto its
+  parent with `alpha * mask(x)` and `bm` and pops. Only pixels with `A > 0` are
+  touched. A group deeper than 2 is painted inline.
+* A mark composes with source colour `s`, alpha `a = alpha * mask(x)`, mode
+  `bm` onto the layer: opaque backdrop (base, non-isolated)
+  `out = cb + a * (B(cb, s) - cb)`; isolated `P' = (1-a) P + a * Bp`,
+  `A' = A + a - A*a`, `Bp = s` for Normal or an empty backdrop, else
+  `Bp = s + A * (B(P/A, s) - s)`. A knockout group's mark replaces the layer's
+  pixel, composed against the group's initial backdrop (transparent when
+  isolated, the parent's pixel when not).
+* A strip's base starts white; the desk is never in it.
+
+Fast paths: depth 0, constant colour, no mask: one 256-byte table
+`lut[d] = d + a * (B(d, s) - d)` applied with `xlat` (`pdr_x8xlat`), built when
+`(s, a, bm)` change; opaque Normal on any layer is two fills.
+
+**20.22.10.6 Blend formulas** (8-bit, `mul(a,b) = round(a*b/255)`): Multiply
+`mul(b,s)`; Screen `b+s-mul(b,s)`; Overlay = HardLight with the arguments
+swapped; Darken, Lighten min, max; ColorDodge `s=255 ? 255 : min(255, b*255/(255-s))`
+(0 when `b=0`); ColorBurn `255 - min(255, (255-b)*255/s)` (255 when `b=255`,
+0 when `s=0`); HardLight `s<128 ? mul(b,2s) : screen(b, 2s-255)`; SoftLight the
+PDF formula, `D(b)` by the polynomial below `b=64` and `sqrt` above; Difference
+`|b-s|`; Exclusion `b+s-2mul(b,s)`.
+
+**20.22.10.7 The sink interface** (`pdrx8.c`; near, cdecl; valid only while a
+band is walked). gfx's shading spans write through:
+
+```
+void pdr_sink_grey(pdi y, pdi xa, pdi xb, const pdb *g, pdw v);
+```
+
+Pixels `xa..xb` (absolute) of absolute row `y`: `g != 0` one grey per pixel,
+`g[i]` for pixel `xa+i`; `g == 0` the constant `v`. Clipped to the walker's
+clip rectangle, the band and the strip. Polygon clips are NOT applied here:
+call it from `span_out`'s paint branch, which `shape_clipped` already drives
+per mask run. In an 8-bit strip it composes through the tuple in force (so a
+shading under `/ca` blends); in a 4bpp band it is the seven-level checker; in
+a 1bpp band the Bayer rule; the same quantiser as the strip's end. gfx's
+painter is `xg_span(y, xa, xb)`: `span_out` calls it when `g_psrc` is non-zero
+(gfx sets and clears `g_psrc` in its record handler). pdrxb.c supplies
+`xg_span` only when `PD_HAVE_XGSPAN` is not defined, and gfx's pdrxg.c
+defines that before pdrxb.c is included.
+
+**20.22.10.8 The image hook** (rcore's `draw_image`): in an 8-bit strip the
+call `pdr_imgrow()` is replaced by `x8_imgrow()`, which reads the same
+`pdr_ip` block (source row, DDA, mode, inversion) and composes the grey into
+the current layer. A record with 0x20 or 0x40 names a mask object; `x8_imgrow`
+opens it itself (a second `STRM_OPEN`, kept across rows, closed with the
+image), reads the nearest row into the region's 1,024-byte buffer and
+multiplies it into the alpha: an `/SMask` is 8-bit grey, a `/Mask` is a 1-bit
+stencil whose set bit is TRANSPARENT unless its `/Decode` inverts it. A mask
+that will not open (a codec the core does not read) draws the image opaque and
+sets `PDF_INC_TRANSP`.
+
+**20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
+Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
+non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
+Nothing else in this section sets a bit.
+
+**20.22.10.10 Budgets and stack.** PDREND +2,400 bytes (measured figure in the
+blend report); `pdxgtr.c` at most 6,144 bytes inside PDXG; the compositor's
+deepest chain is `walk_band > draw/span_out > x8_span > x8_chunk > bl > sl >
+pdr_muldiv`, every frame a leaf of the interpreter's, inside the 1,776 bound.
+Host checks: `tools/os88pdfx_blend.py` writes the fixtures and compares each
+against `mutool draw -c gray`.
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 
