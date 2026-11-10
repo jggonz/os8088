@@ -461,7 +461,7 @@ def main():
         #   _pmc_mset       os88_menu_set patches the set's oncmd field (a set
         #                   in .rodata would take that patch silently and
         #                   wrongly);
-        #   cc_tpl          the SDK's 16-byte wm_create template
+        #   cc_tpl          the SDK's 12-byte wm_create template (WT_SIZE)
         #                   (apps/cc/crt0.asm) has its first FIVE words -
         #                   WT_X, WT_Y, WT_W, WT_H, WT_TITLE - written by
         #                   os88_wm_create() at launch. Only ten bytes are
@@ -501,7 +501,7 @@ def main():
                                         # the packed bits the loaded header
                                         # may still carry
         for name, span in (('_pmc_items', 8), ('_pmc_mset', 64),
-                           ('cc_tpl', 10),
+                           ('cc_tpl', 12),   # WT_SIZE: the class too
                            ('_pmc_step', 2), ('_pmc_rows', 2),
                            ('_pmc_rsh', 2), ('_pmc_promptph', 2),
                            ('_pmc_rndstate', 2)):
