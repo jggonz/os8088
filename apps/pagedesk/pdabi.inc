@@ -277,7 +277,16 @@ PDGX_F_PATTERN           equ 0x20
 PDGX_LUT_INVERT          equ 0x01
 PDGX_REC_HDR             equ 6
 PDGX_REC_CLIP            equ 0x01
+PDGX_PATBYTES            equ 56
+PDGX_PAT_OBJ             equ 4
+PDGX_PAT_BBOX            equ 32
+PDGX_PAT_DIRECT          equ 0x01
+PDGX_TILEMAX             equ 40
 PDGXI_DECODE             equ 0x0001
+PDGXI_CAT_CS             equ 0x0100
+PDGXI_CAT_SH             equ 0x0200
+PDGXI_CAT_PAT            equ 0x0300
+PDGXI_TILES              equ 0x0004
 PDGXI_RES                equ 0x0002
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
@@ -813,5 +822,22 @@ PDXB_GFX_CLIP_N                equ 4
 PDXB_GFX_CLIP_ESZ              equ 2
 PDXB_GFX_STEPS                 equ 104
 PDXB_GFX_BYTES                 equ 106
+
+; ---- struct pdgx_pat (56 bytes) --------------------------------------------
+PDXB_PDGX_PAT_PTYPE            equ 0
+PDXB_PDGX_PAT_PAINT            equ 1
+PDXB_PDGX_PAT_FLAGS            equ 2
+PDXB_PDGX_PAT_PAD              equ 3
+PDXB_PDGX_PAT_OBJNUM           equ 4
+PDXB_PDGX_PAT_GEN              equ 6
+PDXB_PDGX_PAT_MATRIX           equ 8
+PDXB_PDGX_PAT_MATRIX_N         equ 6
+PDXB_PDGX_PAT_MATRIX_ESZ       equ 4
+PDXB_PDGX_PAT_BBOX             equ 32
+PDXB_PDGX_PAT_BBOX_N           equ 4
+PDXB_PDGX_PAT_BBOX_ESZ         equ 4
+PDXB_PDGX_PAT_XSTEP            equ 48
+PDXB_PDGX_PAT_YSTEP            equ 52
+PDXB_PDGX_PAT_BYTES            equ 56
 
 %endif ; PDABI_INC

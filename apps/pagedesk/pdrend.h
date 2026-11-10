@@ -105,8 +105,6 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_FILL    3
 #define DLR_GLYPHS  4
 #define DLR_IMAGE   5
-#define DLR_SHADE   6           /* gfx: axial / radial shading (pdrxg.c, 20.22.9)  */
-#define DLR_TRI     7           /* gfx: a Gouraud triangle; blend's records take 8 upward */
 #define DLH         8           /* header: type aux len y0 y1                 */
 
 /* ---- modes -------------------------------------------------------------- */

@@ -746,7 +746,6 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 
 /* ---- images (pdri.c supplies the row source) ------------------------------ */
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1);
-static void xg_walk(pdw type, pdw off, pdi yy0, pdi yy1);       /* pdrxg.c: DLR_SHADE, DLR_TRI */
 
 /* ---- the DL walker for one band ------------------------------------------ */
 static void walk_band(pdi ry0, pdi ry1)
@@ -787,8 +786,6 @@ static void walk_band(pdi ry0, pdi ry1)
                 draw_glyphs(off, len, yy0, yy1);
             } else if (type == DLR_IMAGE) {
                 draw_image(off, len, yy0, yy1);
-            } else if (type == DLR_SHADE || type == DLR_TRI) {
-                xg_walk(type, off, yy0, yy1);
             }
         }
         off += len;
