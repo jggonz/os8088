@@ -5681,8 +5681,9 @@ when `flate_kb` is now one slot's worth (43 to 85 KiB) where it was two. Slot 2
 must hold no live stream, and no `OPEN` may be in progress: a stream OPEN is
 reading can sit in slot 2 between two calls with no live context, and a cut
 there read on into another stream's state (QA F25: an xref-stream file cut
-mid-OPEN looped to `PDE_SYNTAX`), so an `OPEN` in progress answers
-`PDE_BUSY` too (+4 bytes). The primary regrows the
+mid-OPEN looped to `PDE_SYNTAX`), so an `OPEN` in progress (`op_state` set
+and `g_open` not: a finished OPEN leaves `op_state` at `OPS_TREE`) answers
+`PDE_BUSY` too. The primary regrows the
 Flate claim down by that slot's paragraphs afterwards. The answer is CF = 0
 with AX = 1 when the cut is taken. AX = `PDE_BUSY` means a live stream sits in
 slot 2 and nothing changed: the claim stays as it was, so ask again between
