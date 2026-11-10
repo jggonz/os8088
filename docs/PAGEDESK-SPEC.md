@@ -4986,7 +4986,7 @@ workspace by editing ITS row below and the matching row of `pdu_occws[]` in
 |---|---|---|---|---|---|---|
 | `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 (placeholder) | crypt |
 | `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 0 (placeholder) | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 65,024 | want 52, min 32 (20.22.8; grows to 64 for one font by `PDMEM_SLOT`) | fonts |
+| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 65,024 | want 64, min 32 (20.22.8; below `want`, one font may grow it by `PDMEM_SLOT`) | fonts |
 | `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 0 (placeholder) | dct, bilevel |
 | `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 0 (placeholder) | jpx |
 | (6, internal) | PDWRT | 2 | `'PW'` | 53,248 | `pdu_wkb`: 18, or up to 40 for an Extract/Insert | wrt |
@@ -5770,13 +5770,13 @@ program area (the primary says so with `PDFE_SIZE`), TrueType collections, CFF2/
 Type 1 multiple-master, a CMap with three- or four-byte codes (read as two), a predefined CJK CMap
 by name (no data on this machine; `Identity-H/V` is built in, others read as 2-byte identity).
 
-**The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`; 20.22.2.3's row is **want 52, min 32 KiB**):
+**The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`; 20.22.2.3's row is **want 64, min 32 KiB**):
 the program `[0, slot - 10,752)` (one at a time; a different font is a reload, the dictionary being
-named in every call): 22,016 bytes at the min, 42,496 at the want. A program larger than that answers
-`PDE_NEEDMEM` (CF = 0, CX = 0 = `PDMEM_SLOT`, DX = 64) ONCE per font; the primary regrows S (to 64 KiB,
-a 54,768-byte program) and re-INITs, or refuses, and then the font answers `PDFE_SIZE` and is drawn in
+named in every call): 22,016 bytes at the min, 54,768 at the want. A program larger than the area it
+got answers `PDE_NEEDMEM` (CF = 0, CX = 0 = `PDMEM_SLOT`, DX = 64, the want) ONCE per font while the
+workspace is under 64 KiB; the primary regrows S and re-INITs, or refuses, and then the font answers `PDFE_SIZE` and is drawn in
 the substitute face with `PDF_INC_APPROX`. Measured on 85 embedded programs of four everyday PDFs: the
-median is about 13 KB, 22 KB holds about 70 % of them and 42 KB about 97 %. Then the CIDToGIDMap window (4,096 bytes: CIDs 0-2047 of a non-identity map, later CIDs answer
+median is about 13 KB, 22 KB holds about 70 % of them, 42 KB about 97 % and 54 KB all but one (78 KB). Then the CIDToGIDMap window (4,096 bytes: CIDs 0-2047 of a non-identity map, later CIDs answer
 the notdef), the CMap tokeniser's 512-byte staging window, and three 2,048-byte tables (ToUnicode,
 Encoding CMap, `/W` ranges). PDXF's own image + bss (the outline buffer, the 34 x 48 accumulator,
 the Type 1 name tables, the stacks) is under 61,440 (the cap, 20.22 L6).
