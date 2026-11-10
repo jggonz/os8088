@@ -1226,6 +1226,17 @@ boot time on the 5150 (docs/FIELD-MACHINES.md), not in an emulator.
 
 ### 7.13 The FAT window and the sector buffer under the kernel - one rounding fewer, WAITING FOR THE NEXT ABI BREAK
 
+**TAKEN WITHOUT THE ABI BREAK, kernel size pass 19 (`docs/plans/ksp19/l1.md`).**
+The pad below exists because guard 6 made the FAT window and `dsk_secbuf`
+512-aligned, and 512-alignment is only the way to rule out a 64KB-page
+straddle for a base not known until run time. These two are assembly-time
+constants, so guard 6 now proves each lies inside one page and `KIMG_PARA`
+rounds to the paragraph: the same pad, removed with `KERNEL_SEG` left at
+0x0060 (-208 kern_big, -128 kern_small; kern_mega's 128-byte granule absorbed
+its 56 at that build). The flag-day layout below is kept as the record; it
+would have cost kern_small about +576 (a 716-byte hole under a shared
+`KERNEL_SEG` of 0x01A0 against its 140-byte pad).
+
 Raised by the owner on 2026-10-24, after docs/plans/MOVABLE-COLD-PLAN.md
 landed. **This row is NOT a refusal.** It is doable, and the owner's call is to
 take it the next time the SDK breaks anyway, because what it costs is a flag
