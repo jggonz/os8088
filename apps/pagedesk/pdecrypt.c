@@ -51,8 +51,8 @@ static void cr_sched(pdw method, pdw num, pdw gen)
 {
     if (method == PDCM_AESV3) { num = 0xFFFF; gen = 0xFFFF; }
     if (cr_rkn == num && cr_rkg == gen) return;
-    if (method == PDCM_AESV3) pdc_aes_ks(cr_rk, cr_key, 8);
-    else { cr_objkey(num, gen, 1); pdc_aes_ks(cr_rk, pdc_ok, 4); }
+    if (method == PDCM_AESV3) { pdc_aes_ks(cr_rk, cr_key, 8); pdc_aes_dks(cr_rk, 14); }
+    else { cr_objkey(num, gen, 1); pdc_aes_ks(cr_rk, pdc_ok, 4); pdc_aes_dks(cr_rk, 10); }       /* (cr_rk is only ever decrypted with) */
     cr_rkn = num; cr_rkg = gen;
 }
 

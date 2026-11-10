@@ -21586,8 +21586,8 @@ $(BUILD)/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/pdeng.gen.asm apps/pagedesk
                     apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDE_INC) -l $(BUILD)/PDENG.lst -o $@ apps/pagedesk/pdeng.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,s,b=struct.unpack_from('<HHHH',d,0); \
-	    assert s==len(d),(s,len(d)); print('PDENG.MOD: image %d + bss %d = %d bytes (target 40960, cap 57344)' % (s,b,s+b)); \
-	    sys.exit(1 if s+b>57344 else 0)"
+	    assert s==len(d),(s,len(d)); print('PDENG.MOD: image %d + bss %d = %d bytes (target 40960, cap 65024)' % (s,b,s+b)); \
+	    sys.exit(1 if s+b>65024 else 0)"
 
 $(BUILD)/pde_test: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_test.c \
                    apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)

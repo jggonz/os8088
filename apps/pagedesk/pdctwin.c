@@ -239,22 +239,34 @@ PDC_WEAK void pdc_aes_enc(const pdb *rk, pdw nr, const pdb *in, pdb *out)
     }
     memcpy(out, s, 16);
 }
-PDC_WEAK void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out)
+/* the decryption schedule (FIPS 197 5.3.5): rk[1..nr-1] through InvMixColumns, in place */
+static void imc(uint8_t *s)
+{
+    int c;
+    for (c = 0; c < 4; c++) {
+        uint8_t a0 = s[4*c], a1 = s[4*c+1], a2 = s[4*c+2], a3 = s[4*c+3];
+        s[4*c]   = gmul(a0,14) ^ gmul(a1,11) ^ gmul(a2,13) ^ gmul(a3,9);
+        s[4*c+1] = gmul(a0,9)  ^ gmul(a1,14) ^ gmul(a2,11) ^ gmul(a3,13);
+        s[4*c+2] = gmul(a0,13) ^ gmul(a1,9)  ^ gmul(a2,14) ^ gmul(a3,11);
+        s[4*c+3] = gmul(a0,11) ^ gmul(a1,13) ^ gmul(a2,9)  ^ gmul(a3,14);
+    }
+}
+PDC_WEAK void pdc_aes_dks(pdb *rk, pdw nr)
+{
+    pdw r;
+    sb_init();
+    for (r = 1; r < nr; r++) imc(rk + 16 * r);
+}
+PDC_WEAK void pdc_aes_dec(const pdb *rk, pdw nr, const pdb *in, pdb *out)     /* rk: the decryption schedule */
 {
     uint8_t s[16], t[16]; int r, i, c;
     sb_init();
     for (i = 0; i < 16; i++) s[i] = in[i] ^ rk[16*nr + i];
     for (r = (int)nr - 1; r >= 0; r--) {
         for (c = 0; c < 4; c++) for (i = 0; i < 4; i++) t[4*((c + i) & 3) + i] = s[4*c + i];   /* InvShiftRows */
-        for (i = 0; i < 16; i++) s[i] = isb[t[i]] ^ rk[16*r + i];
-        if (r != 0)
-            for (c = 0; c < 4; c++) {
-                uint8_t a0 = s[4*c], a1 = s[4*c+1], a2 = s[4*c+2], a3 = s[4*c+3];
-                s[4*c]   = gmul(a0,14) ^ gmul(a1,11) ^ gmul(a2,13) ^ gmul(a3,9);
-                s[4*c+1] = gmul(a0,9)  ^ gmul(a1,14) ^ gmul(a2,11) ^ gmul(a3,13);
-                s[4*c+2] = gmul(a0,13) ^ gmul(a1,9)  ^ gmul(a2,14) ^ gmul(a3,11);
-                s[4*c+3] = gmul(a0,11) ^ gmul(a1,13) ^ gmul(a2,9)  ^ gmul(a3,14);
-            }
+        for (i = 0; i < 16; i++) s[i] = isb[t[i]];
+        if (r != 0) imc(s);
+        for (i = 0; i < 16; i++) s[i] ^= rk[16*r + i];
     }
     memcpy(out, s, 16);
 }

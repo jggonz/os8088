@@ -41,13 +41,15 @@ class Twin:
         rk = ctypes.create_string_buffer(240); self.l.pdc_aes_ks(rk, key, nk); return rk.raw[:16 * (nk + 7)]
     def aes_enc(self, rk, nr, blk):
         o = ctypes.create_string_buffer(16); self.l.pdc_aes_enc(rk, nr, bytes(blk), o); return o.raw
-    def aes_dec(self, rk, nr, blk):
-        o = ctypes.create_string_buffer(16); self.l.pdc_aes_dec(rk, nr, bytes(blk), o); return o.raw
+    def aes_dks(self, rk, nr):
+        b = ctypes.create_string_buffer(bytes(rk), len(rk)); self.l.pdc_aes_dks(b, nr); return b.raw[:len(rk)]
+    def aes_dec(self, rk, nr, blk):                     # rk: a standard schedule; the decryption one is made here
+        o = ctypes.create_string_buffer(16); self.l.pdc_aes_dec(self.aes_dks(rk, nr), nr, bytes(blk), o); return o.raw
     def _cbc(self, f, rk, nr, iv, data):
         iv = ctypes.create_string_buffer(bytes(iv), 16); b = ctypes.create_string_buffer(bytes(data), len(data))
         f(rk, nr, iv, b, len(data) // 16); return b.raw[:len(data)], iv.raw
     def cbc_enc(self, rk, nr, iv, data): return self._cbc(self.l.pdc_cbc_enc, rk, nr, iv, data)
-    def cbc_dec(self, rk, nr, iv, data): return self._cbc(self.l.pdc_cbc_dec, rk, nr, iv, data)
+    def cbc_dec(self, rk, nr, iv, data): return self._cbc(self.l.pdc_cbc_dec, self.aes_dks(rk, nr), nr, iv, data)
 
 if __name__ == "__main__":
     import sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

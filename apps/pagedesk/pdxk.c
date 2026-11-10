@@ -276,6 +276,7 @@ static void k6_unwrap(const pdb *enc)
     for (i = 0; i < 32; i++) { k6_cmp[i] = enc[i]; k6_ek[i] = k6_k[i]; }
     for (i = 0; i < 16; i++) k6_iv0[i] = 0;
     pdc_aes_ks(k6_rk, k6_ek, 8);
+    pdc_aes_dks(k6_rk, 14);
     pdc_cbc_dec(k6_rk, 14, k6_iv0, k6_cmp, 2);
 }
 

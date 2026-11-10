@@ -112,9 +112,12 @@ class Asm:
         RK = BUF + 1024; self.w(RK + 400, key); self.call("_pdc_aes_ks", [RK, RK + 400, nk]); return self.r(RK, 16 * (nk + 7))
     def aes_enc(self, rk, nr, blk):
         RK = BUF + 1024; self.w(RK, rk); self.w(RK + 400, blk); self.call("_pdc_aes_enc", [RK, nr, RK + 400, RK + 420]); return self.r(RK + 420, 16)
-    def aes_dec(self, rk, nr, blk):
-        RK = BUF + 1024; self.w(RK, rk); self.w(RK + 400, blk); self.call("_pdc_aes_dec", [RK, nr, RK + 400, RK + 420]); return self.r(RK + 420, 16)
+    def aes_dks(self, rk, nr):
+        RK = BUF + 1024; self.w(RK, rk); self.call("_pdc_aes_dks", [RK, nr]); return self.r(RK, len(rk))
+    def aes_dec(self, rk, nr, blk):                     # rk: a standard schedule; dks is part of the call measured only in dks_clocks
+        RK = BUF + 1024; self.w(RK, self.aes_dks(rk, nr)); self.w(RK + 400, blk); self.call("_pdc_aes_dec", [RK, nr, RK + 400, RK + 420]); return self.r(RK + 420, 16)
     def _cbc(self, name, rk, nr, iv, data):
+        if name == "_pdc_cbc_dec": rk = self.aes_dks(rk, nr)
         RK = BUF + 1024; self.w(RK, rk); self.w(RK + 400, iv); self.w(RK + 500, data)
         self.call(name, [RK, nr, RK + 400, RK + 500, len(data) // 16]); return self.r(RK + 500, len(data)), self.r(RK + 400, 16)
     def cbc_enc(self, rk, nr, iv, data): return self._cbc("_pdc_cbc_enc", rk, nr, iv, data)
