@@ -18,9 +18,7 @@ static unsigned char *ix_buf[2]; static unsigned long ix_len[2], ix_pos; static 
 static int ix_get(void) { return ix_pos < ix_len[ix_cur] ? ix_buf[ix_cur][ix_pos++] : -1; }
 static pdw ix_open(pdw which) { ix_cur = which; ix_pos = 0; return which < 2 && ix_buf[which] ? 0 : 1; }
 #include "../pdxiccit.c"
-#ifdef HAVE_JB2
 #include "../pdxijb2.c"
-#endif
 
 static unsigned char *slurp(const char *p, unsigned long *n)
 {
@@ -49,7 +47,6 @@ int main(int argc, char **argv)
         }
         fclose(o); return 0;
     }
-#ifdef HAVE_JB2
     if (!strcmp(argv[1], "jbig2")) {
         if (argc < 7) return 2;
         if (strcmp(argv[3], "-")) ix_buf[1] = slurp(argv[3], &ix_len[1]);
@@ -63,6 +60,5 @@ int main(int argc, char **argv)
         }
         fclose(o); return 0;
     }
-#endif
     return 2;
 }

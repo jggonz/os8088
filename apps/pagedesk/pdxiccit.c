@@ -167,9 +167,12 @@ static pdb  cf_b[3];
 static pdw  cf_bit;
 static pdw  cf_eofn;            /* bytes of padding shifted into the window   */
 
+static pdb  cf_seg;             /* read through pdxijb2.c's segment-bounded source (MMR regions) */
+static int  jb_getb(void);
+
 static void cf_shift(void)
 {
-    int c = ix_get();
+    int c = cf_seg ? jb_getb() : ix_get();
     cf_b[0] = cf_b[1]; cf_b[1] = cf_b[2];
     if (c < 0) { cf_b[2] = 0; if (cf_eofn < 9) cf_eofn++; } else cf_b[2] = (pdb)c;
 }
@@ -400,7 +403,7 @@ static pdw cf_open(pdw k, pdw cols, pdw rows, pdw flags, pdw ih, pdw want_w)
     cf_k = k; cf_cols = cols; cf_flags = flags; cf_nb = (pdw)((cols + 7) >> 3);
     cf_cur = cf_rowa; cf_ref = cf_rowb;
     for (i = 0; i < cf_nb; i++) cf_rowa[i] = cf_rowb[i] = 0;
-    cf_next = 0; cf_end = 0; cf_gdone = 0;
+    cf_next = 0; cf_end = 0; cf_gdone = 0; cf_seg = 0;
     cf_binit();
     return PDE_OK;
 }

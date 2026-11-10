@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import os88pdfx_bilevel as F
 
 BIN = 'build-bl/pdbl'
+BINS = ['build-bl/pdbl', 'build-bl/pdbl_b']
 
 def rimg(w, h, p, rnd):
     img = []
@@ -104,17 +105,88 @@ def check_mutool_ccitt(rnd):
     print('mutool ccitt: %d cases, %d differ' % (total, fails))
     return fails
 
+
+def bits_of(raw, rb, ow, oh, mode):
+    got = []
+    for r in range(oh):
+        row = raw[r * rb:(r + 1) * rb]
+        got.append([(row[x >> 3] >> (7 - (x & 7))) & 1 for x in range(ow)] if mode == 1 else list(row))
+    return got
+
+def run_jb2(binp, data, globals_, w, h, want, td):
+    open(td + '/j', 'wb').write(data)
+    g = '-'
+    if globals_ is not None:
+        open(td + '/g', 'wb').write(globals_); g = td + '/g'
+    rc, out = run([binp, 'jbig2', td + '/j', g, h, want, td + '/jo']) if False else (None, None)
+    r = subprocess.run([binp, 'jbig2', td + '/j', g, str(h), str(want), td + '/jo'], capture_output=True, text=True)
+    if r.returncode: return None, r.stdout + r.stderr
+    mode, ow, oh, rb, s = map(int, r.stdout.split()[:5])
+    return (bits_of(open(td + '/jo', 'rb').read(), rb, ow, oh, mode), s), ''
+
+def jb2_expect(page, w, h, s):
+    """page: rows of 0/1 (1 = black).  delivered samples: 0 = black"""
+    return model(page, w, h, s, False)
+
+def compose(page, img, x, y, op):
+    h = len(page); w = len(page[0])
+    for j, row in enumerate(img):
+        for i, v in enumerate(row):
+            xx, yy = x + i, y + j
+            if 0 <= xx < w and 0 <= yy < h:
+                d = page[yy][xx]
+                page[yy][xx] = (d | v, d & v, d ^ v, 1 - (d ^ v), v)[op]
+
+def check_jb2_generic(rnd, bins):
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(60):
+            w = rnd.choice([8, 33, 100, 257, 300]); h = rnd.choice([5, 31, 64, 90])
+            nreg = rnd.choice([1, 1, 2, 3])
+            default = rnd.choice([0, 0, 1])
+            page = [[default] * w for _ in range(h)]
+            segs = [F.segment(0, 48, F.page_info(w, h, default))]; desc = []
+            for n in range(nreg):
+                rw = rnd.randint(1, w); rh = rnd.randint(1, h)
+                if n == 0 and rnd.random() < .6: rw, rh = w, h
+                img = rimg(rw, rh, 0.2, rnd)
+                x = rnd.randint(0, w - rw) if rw < w else 0
+                y = rnd.randint(0, h - rh) if rh < h else 0
+                op = rnd.choice([0, 0, 1, 2, 3, 4])
+                tpl = rnd.randint(0, 3); tpgd = rnd.randint(0, 1)
+                at = None
+                if rnd.random() < .3:
+                    at = list(F.NOMINAL_AT[tpl]); at[0] = (rnd.randint(-5, 4), rnd.choice([-1, -2])) if rnd.random() < .5 else at[0]
+                    if tpl == 0 and rnd.random() < .5: at[2] = (rnd.randint(-8, 8), -2)
+                mmr = rnd.random() < .25
+                desc.append((rw, rh, x, y, op, tpl, tpgd, at, mmr, default))
+                segs.append(F.segment(1 + n, rnd.choice([38, 39]), F.generic_segment(img, x, y, op, tpl, tpgd, at, mmr)))
+                compose(page, img, x, y, op)
+            data = b''.join(segs)
+            for want in (0, w // 2, w // 4):
+                for bn in bins:
+                    res, err = run_jb2(bn, data, None, w, h, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, w, h, err); fails += 1; continue
+                    got, s = res
+                    if got != jb2_expect(page, w, h, s):
+                        open('/tmp/fail_%d.jb2' % case, 'wb').write(data); print('FAIL generic case', case, w, h, 'want', want, 'bin', bn, desc); fails += 1
+    print('jbig2 generic: %d runs, %d failed' % (total, fails))
+    return fails
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     seed = 1
     while a and a[0].startswith('--'):
         if a[0] == '--bin': BIN = a[1]; a = a[2:]
+        elif a[0] == '--bins': BINS = a[1].split(','); a = a[2:]
         elif a[0] == '--seed': seed = int(a[1]); a = a[2:]
         else: break
     rnd = random.Random(seed)
     f = 0
     for what in a or ['ccitt']:
         if what == 'ccitt': f += check_ccitt(rnd)
+        if what == 'jb2-generic': f += check_jb2_generic(rnd, BINS)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 

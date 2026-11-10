@@ -215,3 +215,179 @@ def ccitt_pdf(img, k=-1, eol=False, align=False, eob=True, black1=False):
     parms = '<< /K %d /Columns %d /Rows %d /EndOfLine %s /EncodedByteAlign %s /EndOfBlock %s /BlackIs1 %s >>' % (
         k, w, h, *[str(x).lower() for x in (eol, align, eob, black1)])
     return pdf_image(data, w, h, '/CCITTFaxDecode', parms, decode='/Decode [1 0]' if black1 else '')
+
+# ============================================================================
+# JBIG2 reference encoder (T.88): MQ coder, integers, generic regions.  Test
+# fixtures only.  Pixel context bit orders follow the layout in pdxijb2.c.
+# ============================================================================
+QE = [(0x5601,1,1,1),(0x3401,2,6,0),(0x1801,3,9,0),(0x0AC1,4,12,0),(0x0521,5,29,0),(0x0221,38,33,0),
+      (0x5601,7,6,1),(0x5401,8,14,0),(0x4801,9,14,0),(0x3801,10,14,0),(0x3001,11,17,0),(0x2401,12,18,0),
+      (0x1C01,13,20,0),(0x1601,29,21,0),(0x5601,15,14,1),(0x5401,16,14,0),(0x5101,17,15,0),(0x4801,18,16,0),
+      (0x3801,19,17,0),(0x3401,20,18,0),(0x3001,21,19,0),(0x2801,22,19,0),(0x2401,23,20,0),(0x2201,24,21,0),
+      (0x1C01,25,22,0),(0x1801,26,23,0),(0x1601,27,24,0),(0x1401,28,25,0),(0x1201,29,26,0),(0x1101,30,27,0),
+      (0x0AC1,31,28,0),(0x09C1,32,29,0),(0x08A1,33,30,0),(0x0521,34,31,0),(0x0441,35,32,0),(0x02A1,36,33,0),
+      (0x0221,37,34,0),(0x0141,38,35,0),(0x0111,39,36,0),(0x0085,40,37,0),(0x0049,41,38,0),(0x0025,42,39,0),
+      (0x0015,43,40,0),(0x0009,44,41,0),(0x0005,45,42,0),(0x0001,45,43,0),(0x5601,46,46,0)]
+
+class MQEnc:
+    def __init__(s):
+        s.A = 0x8000; s.C = 0; s.CT = 12; s.out = bytearray([0]); s.cx = {}
+    def _byteout(s):
+        o = s.out
+        if o[-1] == 0xFF:
+            o.append((s.C >> 20) & 0xFF); s.C &= 0xFFFFF; s.CT = 7
+        elif s.C < 0x8000000:
+            o.append((s.C >> 19) & 0xFF); s.C &= 0x7FFFF; s.CT = 8
+        else:
+            o[-1] += 1
+            if o[-1] == 0xFF:
+                s.C &= 0x7FFFFFF; o.append((s.C >> 20) & 0xFF); s.C &= 0xFFFFF; s.CT = 7
+            else:
+                o.append((s.C >> 19) & 0xFF); s.C &= 0x7FFFF; s.CT = 8
+    def _renorm(s):
+        while True:
+            s.A = (s.A << 1) & 0xFFFF; s.C <<= 1; s.CT -= 1
+            if s.CT == 0: s._byteout()
+            if s.A & 0x8000: break
+    def bit(s, key, b):
+        st = s.cx.setdefault(key, [0, 0])
+        qe, nm, nl, sw = QE[st[0]]
+        if b == st[1]:
+            s.A -= qe
+            if not (s.A & 0x8000):
+                if s.A < qe: s.A = qe
+                else: s.C += qe
+                st[0] = nm; s._renorm()
+            else: s.C += qe
+        else:
+            s.A -= qe
+            if s.A < qe: s.C += qe
+            else: s.A = qe
+            if sw: st[1] ^= 1
+            st[0] = nl; s._renorm()
+    def flush(s):
+        t = s.C + s.A; s.C |= 0xFFFF
+        if s.C >= t: s.C -= 0x8000
+        s.C <<= s.CT; s._byteout(); s.C <<= s.CT; s._byteout()
+        r = bytes(s.out[1:])
+        if r and r[-1] == 0xFF: return r + b'\xAC'
+        return r + b'\xFF\xAC'
+
+def enc_int(e, name, v):
+    """annex A.2 integer; v = None for OOB.  contexts are keyed (name, PREV)"""
+    st = {'prev': 1}
+    def put(b):
+        e.bit((name, st['prev']), b)
+        p = st['prev']
+        st['prev'] = ((p << 1) | b) if p < 256 else ((((p << 1) | b) & 511) | 256)
+    if v is None: s, a = 1, 0
+    else: s, a = (1 if v < 0 else 0), abs(v)
+    put(s)
+    if a < 4: pre, n, off = [0], 2, 0
+    elif a < 20: pre, n, off = [1, 0], 4, 4
+    elif a < 84: pre, n, off = [1, 1, 0], 6, 20
+    elif a < 340: pre, n, off = [1, 1, 1, 0], 8, 84
+    elif a < 4436: pre, n, off = [1, 1, 1, 1, 0], 12, 340
+    else: pre, n, off = [1, 1, 1, 1, 1], 32, 4436
+    for b in pre: put(b)
+    x = a - off
+    for i in range(n - 1, -1, -1): put((x >> i) & 1)
+
+def enc_iaid(e, name, codelen, v):
+    prev = 1
+    for i in range(codelen - 1, -1, -1):
+        b = (v >> i) & 1
+        e.bit((name, prev), b); prev = (prev << 1) | b
+
+def _gb_pix(img, x, y):
+    if y < 0 or x < 0 or y >= len(img) or x >= len(img[0]): return 0
+    return img[y][x]
+
+NOMINAL_AT = {0: [(3, -1), (-3, -1), (2, -2), (-2, -2)], 1: [(3, -1)], 2: [(2, -1)], 3: [(2, -1)]}
+TPGD_CTX = {0: 0x9B25, 1: 0x0795, 2: 0x00E5, 3: 0x0195}
+
+def gb_context(img, x, y, tpl, at):
+    p = lambda dx, dy: _gb_pix(img, x + dx, y + dy)
+    if tpl == 0:
+        return (p(-1, 0) | p(-2, 0) << 1 | p(-3, 0) << 2 | p(-4, 0) << 3 | p(*at[0]) << 4 | p(2, -1) << 5 | p(1, -1) << 6
+                | p(0, -1) << 7 | p(-1, -1) << 8 | p(-2, -1) << 9 | p(*at[1]) << 10 | p(*at[2]) << 11
+                | p(1, -2) << 12 | p(0, -2) << 13 | p(-1, -2) << 14 | p(*at[3]) << 15)
+    if tpl == 1:
+        return (p(-1, 0) | p(-2, 0) << 1 | p(-3, 0) << 2 | p(*at[0]) << 3 | p(2, -1) << 4 | p(1, -1) << 5 | p(0, -1) << 6
+                | p(-1, -1) << 7 | p(-2, -1) << 8 | p(2, -2) << 9 | p(1, -2) << 10 | p(0, -2) << 11 | p(-1, -2) << 12)
+    if tpl == 2:
+        return (p(-1, 0) | p(-2, 0) << 1 | p(*at[0]) << 2 | p(1, -1) << 3 | p(0, -1) << 4 | p(-1, -1) << 5 | p(-2, -1) << 6
+                | p(1, -2) << 7 | p(0, -2) << 8 | p(-1, -2) << 9)
+    return (p(-1, 0) | p(-2, 0) << 1 | p(-3, 0) << 2 | p(-4, 0) << 3 | p(*at[0]) << 4 | p(1, -1) << 5 | p(0, -1) << 6
+            | p(-1, -1) << 7 | p(-2, -1) << 8 | p(-3, -1) << 9)
+
+def enc_generic(e, img, tpl, tpgd, at=None, name='gb', skip=None):
+    """code img (rows of 0/1) with the MQ encoder e"""
+    at = at or NOMINAL_AT[tpl]
+    h = len(img); w = len(img[0]); ltp = 0
+    for y in range(h):
+        if tpgd:
+            prev = img[y - 1] if y else [0] * w
+            typical = 1 if img[y] == prev else 0
+            e.bit((name, TPGD_CTX[tpl]), typical ^ ltp); ltp = typical
+            if typical: continue
+        for x in range(w):
+            if skip and skip(x, y): continue
+            e.bit((name, gb_context(img, x, y, tpl, at)), img[y][x])
+
+# ---- segments -----------------------------------------------------------------
+def segment(num, typ, data, refs=(), page=1):
+    fl = typ | (0x40 if page > 255 else 0)
+    out = struct.pack('>I', num) + bytes([fl])
+    n = len(refs)
+    if n <= 4: out += bytes([n << 5])
+    else:
+        out += struct.pack('>I', (7 << 29) | n) + bytes((n + 8) >> 3)
+    for r in refs:
+        out += bytes([r]) if num <= 256 else struct.pack('>H', r) if num <= 65535 else struct.pack('>I', r)
+    out += struct.pack('>I', page) if page > 255 else bytes([page])
+    return out + struct.pack('>I', len(data)) + data
+
+def page_info(w, h, default=0, comb=0, striped=0):
+    f = (default << 2) | (comb << 3)
+    return struct.pack('>IIIIBH', w, h, 0, 0, f, striped)
+
+def region_info(w, h, x, y, op=0):
+    return struct.pack('>IIIIB', w, h, x, y, op)
+
+def generic_segment(img, x=0, y=0, op=0, tpl=0, tpgd=0, at=None, mmr=False):
+    h = len(img); w = len(img[0])
+    d = region_info(w, h, x, y, op)
+    if mmr:
+        d += bytes([1])
+        bw = BitW(); ref = [0] * w
+        for row in img: enc_2d(bw, row, ref); ref = row
+        bw.put('000000000001' * 2)
+        return d + bw.bytes()
+    at = at or NOMINAL_AT[tpl]
+    d += bytes([(tpl << 1) | (tpgd << 3)])
+    for a in at: d += struct.pack('>bb', *a)
+    e = MQEnc(); enc_generic(e, img, tpl, tpgd, at)
+    return d + e.flush()
+
+def jbig2_pdf(segs, w, h, globals_segs=None, decode_inv=False):
+    """a PDF whose image is the JBIG2 segments (embedded format)"""
+    data = b''.join(segs)
+    objs = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>' % (w, h)).encode()]
+    cont = ('q %d 0 0 %d 0 0 cm /Im0 Do Q' % (w, h)).encode()
+    objs.append(b'<< /Length %d >>\nstream\n' % len(cont) + cont + b'\nendstream')
+    parms = ' /DecodeParms << /JBIG2Globals 6 0 R >>' if globals_segs else ''
+    objs.append(('<< /Type /XObject /Subtype /Image /Width %d /Height %d /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode%s /Length %d >>' % (w, h, parms, len(data))).encode()
+                + b'\nstream\n' + data + b'\nendstream')
+    if globals_segs:
+        g = b''.join(globals_segs)
+        objs.append(b'<< /Length %d >>\nstream\n' % len(g) + g + b'\nendstream')
+    out = bytearray(b'%PDF-1.4\n'); offs = []
+    for i, o in enumerate(objs):
+        offs.append(len(out)); out += b'%d 0 obj\n' % (i + 1) + o + b'\nendobj\n'
+    x = len(out)
+    out += b'xref\n0 %d\n0000000000 65535 f \n' % (len(objs) + 1)
+    for o in offs: out += b'%010d 00000 n \n' % o
+    out += b'trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % (len(objs) + 1, x)
+    return bytes(out)
