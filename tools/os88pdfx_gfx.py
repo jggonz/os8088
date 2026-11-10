@@ -141,11 +141,12 @@ def write_pdf(path, d, cs):
         x, y = (i % cols) * cell, H - (i // cols + 1) * cell
         cont.append("/C%d cs %s sc %d %d %d %d re f" % (i, " ".join(fnum(v) for v in comps), x, y, cell, cell))
     content = ("\n".join(cont)).encode()
+    page = ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Contents 4 0 R "
+            "/Resources << /ColorSpace << %s >> >> >>" % (W, H, res)).encode()
     objs = {
         1: (b"<< /Type /Catalog /Pages 2 0 R >>", None),
         2: (b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>", None),
-        3: (("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Contents 4 0 R "
-             "/Resources << /ColorSpace << %s >> >> >>" % (W, H, res)).encode(), None),
+        3: (page, None),
         4: (("<< /Length %d >>" % len(content)).encode(), content),
     }
     for n, (syn, st) in d.objs.items():
@@ -166,18 +167,25 @@ def write_pdf(path, d, cs):
         out += (("%010d 00000 n \n" % offs[n]) if n in offs else "0000000000 65535 f \n").encode()
     out += ("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (top, x)).encode()
     open(path, "wb").write(bytes(out))
-    return W, H, cols, cell
+    return W, H, cols, cell, page
 
 
-def write_cases(path, d, cs):
+def write_cases(path, d, cs, page=None):
     with open(path, "w") as f:
+        if page is not None:
+            f.write("O 3 %s\n" % page.hex())
+            f.write("O 2 %s\n" % b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".hex())
         for n, (syn, st) in sorted(d.objs.items()):
             f.write("O %d %s\n" % (n, syn.encode().hex()))
             if st is not None:
                 f.write("S %d %s\n" % (n, st.hex()))
-        for name, text, comps in cs:
+        for i, (name, text, comps) in enumerate(cs):
             f.write("C %s %s %d %s\n" % (name, text.encode().hex(), len(comps),
                                          " ".join(repr(float(c)) for c in comps)))
+            # the same space reached through the page's resources, the way the core asks (PDGXI_RES)
+            f.write("O %d %s\n" % (3000 + i, ("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /C%d %s >> >> >>" % (i, text)).encode().hex()))
+            f.write("R res_%s %s %d %s\n" % (name, ("C%d" % i).encode().hex(), len(comps),
+                                            " ".join(repr(float(c)) for c in comps)))
 
 
 def build(outdir):
@@ -186,8 +194,8 @@ def build(outdir):
     cs = cases(d)
     pdf = os.path.join(outdir, "colour.pdf")
     geom = write_pdf(pdf, d, cs)
-    write_cases(os.path.join(outdir, "colour.cases"), d, cs)
-    return pdf, cs, geom
+    write_cases(os.path.join(outdir, "colour.cases"), d, cs, geom[4])
+    return pdf, cs, geom[:4]
 
 
 def mutool_pixels(pdf, cs, geom, workdir):
@@ -232,7 +240,7 @@ def check(build_dir, verbose):
     exe = os.path.join(work, "pdxg_test")
     srcs = [os.path.join(PD, "hosttest", "pdxg_test.c"), os.path.join(PD, "pdmath.c"),
             os.path.join(PD, "hosttest", "pdhost.c")]
-    cc = ["cc", "-std=gnu99", "-O1", "-Wall", "-Wno-parentheses", "-Wno-unused-function",
+    cc = ["cc", "-std=gnu99", "-O1", "-Wall", "-fno-strict-aliasing", "-Wno-parentheses", "-Wno-unused-function",
           "-DPD_HOST", "-I", PD, "-o", exe] + srcs
     subprocess.check_call(cc)
     got = {}
@@ -242,12 +250,16 @@ def check(build_dir, verbose):
         return 1
     for line in p.stdout.splitlines():
         t = line.split()
-        if len(t) == 4:
+        if len(t) == 4 and t[1] != "FAILED":
             got[t[0]] = tuple(int(v) for v in t[1:])
         elif len(t) == 2 and t[1] == "NONE":
             got[t[0]] = None
     ref = mutool_pixels(pdf, cs, geom, work)
     bad = 0
+    for name, _, _ in cs:               # the resource route must give exactly the direct route's colour
+        if got.get("res_" + name, "m") != got.get(name, "d"):
+            print("FAIL res_%s: %s != %s" % (name, got.get("res_" + name), got.get(name)))
+            bad += 1
     worst = {}
     for name, _, _ in cs:
         g, r = got.get(name, "missing"), ref[name]
@@ -267,6 +279,28 @@ def check(build_dir, verbose):
             print("%-4s %-16s pdxg=%-18s mutool=%-18s diff=%3d tol=%d" %
                   ("ok" if ok else "FAIL", name, g, r, diff, tol_of(name)))
     print("pdfx_gfx colour: %d cases, %d outside tolerance" % (len(cs), bad))
+    mod = os.path.join(build_dir, "PDXG.MOD")
+    try:
+        import unicorn  # noqa: F401
+        have_uc = os.path.exists(mod)
+    except ImportError:
+        have_uc = False
+    if have_uc:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import os88pdfx_gfx_t8 as t8
+        tgt = {}
+        for line in t8.run(mod, os.path.join(work, "colour.cases")):
+            t = line.split()
+            tgt[t[0]] = None if t[1] == "NONE" else tuple(int(v) for v in t[1:])
+        nb = 0
+        for name, _, _ in cs:
+            a, b = tgt.get(name), got.get(name)
+            if (a is None) != (b is None) or (a and max(abs(x - y) for x, y in zip(a, b)) > 1):
+                print("FAIL 8086 %-16s target=%s host=%s" % (name, a, b)); nb += 1
+        print("pdfx_gfx 8086 (Unicorn) vs host: %d cases, %d differ by more than 1" % (len(cs), nb))
+        bad += nb
+    else:
+        print("pdfx_gfx 8086 (Unicorn): SKIP (no unicorn, or build/PDXG.MOD not built)")
     bad2 = check_shade(build_dir, work, exe, verbose)
     return 1 if (bad or bad2) else 0
 
@@ -472,6 +506,50 @@ def ref_raster(sh, cw, ch):
     return img
 
 
+def read_imgs(text, cw, ch):
+    res, cur, rows = {}, None, []
+    for line in text.splitlines():
+        if line.startswith("IMG "):
+            cur = line.split()[1]; res[cur] = []
+        elif cur is not None and line.strip():
+            res[cur].append([int(v) for v in line.split()])
+    return res
+
+
+def check_core(work, cs, geom, im, cw, ch, verbose):
+    """the CORE's rasteriser (pdrxgr.c, compiled with the module in one unit) against mutool"""
+    exe = os.path.join(work, "pdxgr_test")
+    srcs = [os.path.join(PD, "hosttest", "pdxgr_test.c"), os.path.join(PD, "pdmath.c"), os.path.join(PD, "hosttest", "pdhost.c")]
+    subprocess.check_call(["cc", "-std=gnu99", "-O1", "-w", "-fno-strict-aliasing", "-DPD_HOST", "-I", PD, "-o", exe] + srcs)
+    p = subprocess.run([exe, os.path.join(work, "shade.cases")], capture_output=True, text=True)
+    if p.returncode:
+        print(p.stdout, p.stderr)
+        return 1
+    imgs = read_imgs(p.stdout, cw, ch)
+    bad = 0
+    for name, _ in cs:
+        left, top = geom[name]
+        a = imgs.get(name)
+        if not a:
+            print("FAIL %-12s the rasteriser painted nothing" % name); bad += 1; continue
+        tot = dn = 0; sd = 0
+        for j in range(ch):
+            for i in range(cw):
+                d = abs(im.getpixel((left + i, top + j)) - a[j][i])
+                tot += 1; sd += d; dn += d > 36
+        rate = 100.0 * dn / tot
+        lim = CORE_RATE.get(name, 3.0)
+        ok = rate <= lim and sd / tot <= 10
+        bad += 0 if ok else 1
+        if verbose or not ok:
+            print("%-4s core %-12s mean|d|=%5.2f  >36: %5.2f%% (limit %.1f%%)" % ("ok" if ok else "FAIL", name, sd / tot, rate, lim))
+    print("pdfx_gfx core raster: %d cases, %d outside tolerance" % (len(cs), bad))
+    return 1 if bad else 0
+
+
+CORE_RATE = {"coons6b": 4.5, "tensor7": 4.5}      # curved edges in 4x4 chords, as SHADE_RATE
+
+
 def check_shade(build_dir, work, exe, verbose):
     from PIL import Image
     pdf, cs, geom, (cw, ch, W, H) = write_shade(work)
@@ -509,6 +587,7 @@ def check_shade(build_dir, work, exe, verbose):
             print("%-4s %-12s type %d tris %-3d mean|d|=%5.2f  >28: %5.2f%% (limit %.1f%%)" %
                   ("ok" if ok else "FAIL", name, sh["type"], len(sh["tris"]), sumd / tot, rate, SHADE_RATE.get(name, 3.0)))
     print("pdfx_gfx shading: %d cases, %d outside tolerance" % (len(cs), bad))
+    bad += check_core(work, cs, geom, im, cw, ch, verbose)
     return 1 if bad else 0
 
 

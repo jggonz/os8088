@@ -73,14 +73,73 @@ static void gx_sclose(void) { pdx_engcall(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 
 /* ---- the verbs -------------------------------------------------------------- */
 static struct pdxb_gfx G;
-static struct pdgx_cs R_cs;
-static struct pdgx_lut R_lut;
+/* one overlay for the verbs' big temporaries: a verb uses one of them at a time (22.9's workspace note) */
+static pdb gx_ov[1264];
+#define R_cs  (*(struct pdgx_cs *)gx_ov)
+#define R_lut (*(struct pdgx_lut *)gx_ov)
 
 /* the node the request names: an object, or the text, parsed */
+/* PDGXI_RES: the value of Resources/<category>/<name> of a Form or a page, following /Parent for
+ * inherited resources (at most 8 levels). The text is "Category\0Name". */
+static char gx_txt[64];
+/* the dictionary text that /key of dict text p[0..len) names: inline (a slice of p) or a reference
+ * fetched into `buf`. Answers 1 and the slice in *dp, *dl. */
+static int gx_sub(const char *p, pdw len, const char *key, char *buf, const char **dp, pdw *dl)
+{
+    static pdw s, e, o, g;
+    pdw got;
+    if (!gx_find(p, len, key, &s, &e)) return 0;
+    if (gx_refat(p, s, e, &o, &g)) {
+        got = gx_fetch(o, g, buf, GX_TB);
+        if (!got) return 0;
+        *dp = buf; *dl = got; return 1;
+    }
+    *dp = p + s; *dl = e - s; return 1;
+}
+/* PDGXI_RES: the value of Resources/<category>/<name> of a Form or a page, following /Parent for
+ * inherited resources (8 levels at most). txt is "Category\0Name". No dictionary is parsed whole:
+ * only the value found is. */
+static pdw gx_res_lookup(const char *txt, pdw len)
+{
+    static char cat[20], nm[34];
+    pdw obj = G.objnum, gen = G.gen, i = 0, j = 0, hops, got;
+    static pdw s, e, o, g, rl, cl;
+    static const char *rp, *cp;
+    while (i < len && txt[i] && j < 19) cat[j++] = txt[i++];
+    cat[j] = 0; i++; j = 0;
+    while (i < len && txt[i] && j < 33) nm[j++] = txt[i++];
+    nm[j] = 0;
+    if (!obj) {
+#ifdef PD_HOST
+        return GN_NIL;
+#else
+        static struct pdxb_pageinfo pi;
+        if (pdx_engcall(PDV_ENG_PAGEINFO, G.bpc, 0, 0) != PDE_OK || pdx_engcf) return GN_NIL;
+        pd_fcopy_in(g_xbseg, 0, &pi, 4);
+        obj = pi.objnum; gen = pi.gen;
+#endif
+    }
+    for (hops = 0; hops < 8; hops++) {
+        got = gx_fetch(obj, gen, gx_tb, GX_TB);
+        if (!got) return GN_NIL;
+        if (gx_sub(gx_tb, got, "Resources", gx_tb2, &rp, &rl) && gx_sub(rp, rl, cat, rp == gx_tb2 ? gx_tb : gx_tb2, &cp, &cl)
+            && gx_find(cp, cl, nm, &s, &e))
+            return gx_parse(cp + s, e - s);
+        if (!gx_find(gx_tb, got, "Parent", &s, &e) || !gx_refat(gx_tb, s, e, &o, &g)) return GN_NIL;
+        obj = o; gen = g;
+    }
+    return GN_NIL;
+}
+
 static pdw gx_source(void)
 {
     gx_reset();
     fn_n = 0; fn_sused = 0; fn_cused = 0;
+    if (G.flags & PDGXI_RES) {
+        if (G.tlen > 64) return GN_NIL;
+        pd_fcopy_in(G.tseg, G.toff, gx_txt, G.tlen);
+        return gx_res_lookup(gx_txt, G.tlen);
+    }
     if (G.objnum) return gx_fetch_parse(G.objnum, G.gen);
     if (!G.tlen || G.tlen > GX_TB) return GN_NIL;
     pd_fcopy_in(G.tseg, G.toff, gx_tb, G.tlen);
@@ -113,7 +172,11 @@ static pdw v_cs(void)
         if (cs_n < 2) R_cs.n = 0;
     }
     R_cs.hival = cs_t[row].hival;
-    if (G.objnum) { R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; }
+    if (G.flags & PDGXI_RES) {
+        if (G.tlen > 64) return PDE_GRAPHICS;
+        R_cs.pad = 1; R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; R_cs.srclen = G.tlen; R_cs.rsv[0] = G.bpc;
+        pd_fcopy_in(G.tseg, G.toff, R_cs.src, G.tlen);
+    } else if (G.objnum) { R_cs.srcobj = G.objnum; R_cs.srcgen = G.gen; }
     else {
         R_cs.srclen = G.tlen;
         if (G.tlen > 480) return PDE_GRAPHICS;
@@ -149,7 +212,13 @@ static pdw v_color(void)
     pd_fcopy_in(G.cseg, G.coff, &hdr, 16 + 480);
     G.objnum = hdr.srcobj; G.gen = hdr.srcgen; G.tlen = hdr.srclen;
     gx_reset(); fn_n = 0; fn_sused = 0; fn_cused = 0;
-    if (G.objnum) node = gx_fetch_parse(G.objnum, G.gen);
+    if (hdr.pad) {
+        if (hdr.srclen > 64) return PDE_GRAPHICS;
+        for (i = 0; i < hdr.srclen && i < 64; i++) gx_txt[i] = (char)hdr.src[i];
+        G.bpc = hdr.rsv[0];
+        node = gx_res_lookup(gx_txt, hdr.srclen);
+    }
+    else if (G.objnum) node = gx_fetch_parse(G.objnum, G.gen);
     else {
         for (i = 0; i < hdr.srclen && i < 480; i++) gx_tb[i] = (char)hdr.src[i];
         node = gx_parse(gx_tb, hdr.srclen);

@@ -758,6 +758,8 @@ struct pdxb_gfx {
     pdb  rgb[4];                /* out: r g b, byte 3 = 1 when nothing is painted */
 };
 #define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
+#define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
+                                   index is bpc), text = "Category\0Name" (tlen counts both)       */
 typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
 typedef char pdgx_sz_lut[sizeof(struct pdgx_lut)   == PDGX_LUTBYTES ? 1 : -1];
 typedef char pdgx_sz_sh [sizeof(struct pdgx_shade) == PDGX_SHBYTES  ? 1 : -1];

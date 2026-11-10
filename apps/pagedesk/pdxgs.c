@@ -180,10 +180,10 @@ static void sh_tri(void)
 
 /* ---- type 1: a grid of the domain --------------------------------------------- */
 #define SH_GRID 8
+#define grid ((struct shv (*)[SH_GRID + 1])gx_ov)
 static pdw sh_function_based(pdw d)
 {
     static struct pd_fx dom[4], mat[6], one, fa, fb, in[2], px, py, tx, ty, tmp;
-    static struct shv grid[SH_GRID + 1][SH_GRID + 1];
     pdw n, i, j, k;
     fx_raw(&dom[0], 0, 0); fx_i(&dom[1], 1); fx_raw(&dom[2], 0, 0); fx_i(&dom[3], 1);
     gx_nums(gx_dres(d, "Domain"), dom, 4);
@@ -316,7 +316,8 @@ static pdw sh_freeform(void)
 }
 
 /* ---- type 5: a lattice -------------------------------------------------------------- */
-static struct smv sm_prev[24], sm_row[24];
+#define sm_prev ((struct smv *)gx_ov)
+#define sm_row  ((struct smv *)(gx_ov + 24 * sizeof(struct smv)))
 static pdw sh_lattice(pdw d)
 {
     pdw vpr = (pdw)gx_int(gx_dres(d, "VerticesPerRow"), 0), i, have = 0;

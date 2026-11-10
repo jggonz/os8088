@@ -9,7 +9,7 @@
 #include "../pdxg.c"
 
 extern unsigned char pd_host_mem[];
-#define MAXO 256
+#define MAXO 4096
 static unsigned char *o_syn[MAXO]; static int o_syn_n[MAXO];
 static unsigned char *o_str[MAXO]; static int o_str_n[MAXO];
 static int s_cur, s_pos;
@@ -107,13 +107,18 @@ int main(int argc, char **argv)
             printf("END %s %u\n", nm, tot);
             continue;
         }
-        if (t[0] != 'C') continue;
+        if (t[0] != 'C' && t[0] != 'R') continue;
         char *name = strtok(NULL, " \n"); int tn; unsigned char *tx = unhex(strtok(NULL, " \n"), &tn);
+        int viares = t[0] == 'R';
+        if (viares) {          /* R name hex(resource name): look it up in the page object (3), as the core does */
+            unsigned char *rt = malloc(tn + 16); memcpy(rt, "ColorSpace", 11); memcpy(rt + 11, tx, tn); free(tx); tx = rt; tn += 11;
+        }
         int nc = atoi(strtok(NULL, " \n")); double c[8] = {0};
         for (int i = 0; i < nc && i < 8; i++) c[i] = atof(strtok(NULL, " \n"));
         struct pdxb_gfx g; memset(&g, 0, sizeof g);
         pd_fcopy_out(tx, TSEG, 0, tn);
         g.tseg = TSEG; g.toff = 0; g.tlen = (pdw)tn; g.rseg = RSEG; g.roff = 0; g.rcap = 4096;
+        if (viares) { g.objnum = (pdw)(3000 + atoi((char *)tx + 12)); g.flags = PDGXI_RES; }
         pd_fcopy_out(&g, XBSEG, 0, sizeof g);
         pdw r = pdx_verb(PDV_GFX_CS, XBSEG, 0, 0);
         if (r != PDE_OK) { printf("%s FAILED %u\n", name, r); continue; }

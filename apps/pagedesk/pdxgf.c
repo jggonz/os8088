@@ -6,7 +6,7 @@
  * byte code with forward jumps run on an explicit operand stack. #included by
  * pdxg.c after pdxgp.c. Every static array is bss, so no frame passes 96 bytes.
  * ==========================================================================*/
-#define FN_MAX   12
+#define FN_MAX   9
 #define FN_SAMAX 3072
 #define FN_CODE  1024
 #define FN_STACK 100

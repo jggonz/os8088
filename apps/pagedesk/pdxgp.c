@@ -300,3 +300,92 @@ static pdw gx_nums(pdw a, struct pd_fx *out, pdw max)
     for (i = 0; i < n; i++) gx_num(gx_ares(a, i), &out[i]);
     return n;
 }
+
+/* ---- find a key in a dictionary WITHOUT parsing it (a page's dictionary can be larger than the node tables) ---- */
+static char gx_tb2[GX_TB];      /* the second window: a dictionary reached by reference */
+
+static pdw gx_ws(const char *p, pdw len, pdw i)
+{
+    while (i < len) {
+        if (gx_isws((pdb)p[i])) i++;
+        else if (p[i] == '%') { while (i < len && p[i] != 10 && p[i] != 13) i++; }
+        else break;
+    }
+    return i;
+}
+/* the index just after the value that starts at i (a ref "n g R" counts as one value) */
+static pdw gx_vend(const char *p, pdw len, pdw i)
+{
+    pdw depth = 0, h, k;
+    int c;
+    for (;;) {
+        i = gx_ws(p, len, i);
+        if (i >= len) return len;
+        c = (pdb)p[i];
+        if (c == '<' && i + 1 < len && p[i + 1] == '<') { depth++; i += 2; continue; }
+        if (c == '>' && i + 1 < len && p[i + 1] == '>') {
+            if (!depth) return i;
+            depth--; i += 2; if (!depth) return i; continue;
+        }
+        if (c == '[') { depth++; i++; continue; }
+        if (c == ']') { if (!depth) return i; depth--; i++; if (!depth) return i; continue; }
+        if (c == '(') {
+            int lvl = 1;
+            i++;
+            while (i < len && lvl) { if (p[i] == '\\') i++; else if (p[i] == '(') lvl++; else if (p[i] == ')') lvl--; i++; }
+            if (!depth) return i; continue;
+        }
+        if (c == '<') { while (i < len && p[i] != '>') i++; i++; if (!depth) return i; continue; }
+        if (c == '/') {
+            i++;
+            while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+            if (!depth) return i; continue;
+        }
+        h = i;
+        while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+        if (i == h) { i++; continue; }                        /* a stray delimiter */
+        if (!depth) {
+            if (c >= '0' && c <= '9') {                       /* maybe "n g R" */
+                k = gx_ws(p, len, i);
+                if (k < len && p[k] >= '0' && p[k] <= '9') {
+                    while (k < len && p[k] >= '0' && p[k] <= '9') k++;
+                    k = gx_ws(p, len, k);
+                    if (k < len && p[k] == 'R') return k + 1;
+                }
+            }
+            return i;
+        }
+    }
+}
+/* the value of /key in the first dictionary of p[0..len): its extent in *s, *e; 1 when found */
+static int gx_find(const char *p, pdw len, const char *key, pdw *s, pdw *e)
+{
+    pdw i = 0, h, k, tl;
+    while (i + 1 < len && !(p[i] == '<' && p[i + 1] == '<')) i++;
+    i += 2;
+    for (;;) {
+        i = gx_ws(p, len, i);
+        if (i >= len || p[i] != '/') return 0;
+        i++; h = i;
+        while (i < len && !gx_isws((pdb)p[i]) && !gx_isdl((pdb)p[i])) i++;
+        tl = i - h;
+        k = 0;
+        while (key[k] && k < tl && p[h + k] == key[k]) k++;
+        i = gx_ws(p, len, i);
+        *s = i; *e = gx_vend(p, len, i);
+        if (k == tl && !key[k]) return 1;
+        i = *e;
+        if (i >= len) return 0;
+    }
+}
+/* a ref "n g R" at p[s..e) -> obj, gen */
+static int gx_refat(const char *p, pdw s, pdw e, pdw *obj, pdw *gen)
+{
+    pdw a = 0, b = 0;
+    while (s < e && p[s] >= '0' && p[s] <= '9') a = (pdw)(a * 10 + (p[s++] - '0'));
+    s = gx_ws(p, e, s);
+    while (s < e && p[s] >= '0' && p[s] <= '9') b = (pdw)(b * 10 + (p[s++] - '0'));
+    s = gx_ws(p, e, s);
+    if (s >= e || p[s] != 'R' || !a) return 0;
+    *obj = a; *gen = b; return 1;
+}
