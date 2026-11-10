@@ -698,6 +698,21 @@ struct pdxb_img {
 #define PDFK_CFF  2
 #define PDFK_T1   3
 #define PDFG_INFO   0x0001      /* pdxb_fglyph.flags in: no bitmap, only gid/lat/adv           */
+#define PDFG_BLOCK  0x0004      /* in: dseg:doff is a STRIKE BLOCK (below): PDXF finds or adds the code's
+                                   slot there, rasterises into it (em64 != 0) and records the width and
+                                   the Latin byte; the verb answers the slot                    */
+#define PDFB_SIZE   4096        /* a strike block: 128 glyph records (4 bytes: width, left bearing i8,
+                                   bitmap offset u16), the bitmaps from +512 (the PDFB strike layout of
+                                   11.2, slots 1..128, the record of slot s at (s-1)*4; the u16 next
+                                   free bitmap offset is at +3324),
+                                   the keys[128] (u16 code, 0xFFFF empty) at +3328 and info[128] (u16
+                                   /W width in 1/1000 em, u8 PD Latin, u8 flags PDFB_F_*) at +3584. The
+                                   slot of a code is its index in keys + 1, found from hash(code) =
+                                   (code ^ code >> 7) & 127 by linear probing                  */
+#define PDFB_KEYS   3328
+#define PDFB_INFO   3584
+#define PDFB_F_BMP  0x01        /* the slot's bitmap is made                                    */
+#define PDFB_F_BIG  0x02        /* the glyph does not fit 32 px or the block: not bitmapped      */
 #define PDFG_LATIN  0x0002      /* out flags: lat is meaningful (the font has a /ToUnicode)    */
 #define PDFG_T0     0x0004      /* out: a Type0 font (codes are 2 bytes)                       */
 #define PDFG_VERT   0x0008      /* out: vertical writing (-V)                                  */
@@ -724,6 +739,7 @@ struct pdxb_fglyph {
     pdw cid;                /* out: a Type0 font's CID                                       */
     pdw kind;               /* out: PDFK_*                                                   */
     pdw oflags;             /* out: PDFG_*                                                   */
+    pdw slot;               /* out (PDFG_BLOCK): the slot, 0 = none                            */
     pdw err;                /* out when the answer is a failure: PDFE_*                      */
 };
 #define PDFP_M 1                /* PDV_FNT_PATH ops: M x y | L x y | C x1 y1 x2 y2 x y | Z (i16 font units) */

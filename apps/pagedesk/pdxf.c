@@ -401,6 +401,42 @@ pdw pdx_cf;                         /* the carry flag of the last verb (the door
 pdw pdx_engvec[2];                  /* PDENG's door, offset then segment (PDV_X_INIT)         */
 static union { struct pdxb_fglyph gl; struct pdxb_fpath pa; struct pdxb_init in; } g_a;
 
+/* PDFG_BLOCK: the strike block at (dseg, doff) gets the code's slot, info and (em64 != 0) bitmap */
+static pdw blk_slot(struct pdxb_fglyph *g)
+{
+    pdw h = (pdw)((g->code ^ (g->code >> 7)) & 127), i, k, kp, ip, flags, bump, wb, n, rp;
+    pdb *dummy = 0;
+    (void)dummy;
+    g->slot = 0;
+    if (g->code == 0xFFFF) return 0;
+    for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
+        kp = (pdw)(g->doff + PDFB_KEYS + h * 2); k = pd_fpeekw(g->dseg, kp);
+        if (k == g->code) break;
+        if (k == 0xFFFF) { pd_fpokew(g->dseg, kp, g->code); break; }
+    }
+    if (i == 128) return PDE_LIMIT;                                   /* the block's keys are full */
+    g->slot = (pdw)(h + 1);
+    ip = (pdw)(g->doff + PDFB_INFO + h * 4);
+    flags = pd_fpeekb(g->dseg, (pdw)(ip + 3));
+    pd_fpokew(g->dseg, ip, g->adv1000);
+    pd_fpokeb(g->dseg, (pdw)(ip + 2), (pdb)g->lat);
+    if (!g->em64 || (flags & (PDFB_F_BMP | PDFB_F_BIG))) return 0;
+    /* the bitmap: bump-allocated after the records */
+    rp = (pdw)(g->doff + h * 4);                                       /* record of slot (h + 1) */
+    bump = pd_fpeekw(g->dseg, (pdw)(g->doff + PDFB_KEYS - 4));
+    if (!g_gid) { pd_fpokeb(g->dseg, (pdw)(ip + 3), (pdb)(flags | PDFB_F_BMP)); return 0; }
+    n = fnt_glyph(g_gid, g->em64, g->asc, g->rows, g->dseg, (pdw)(g->doff + 512 + bump), (pdw)(PDFB_KEYS - 4 - 512 - bump));
+    g->adv64 = g_gadv;
+    if (n == 0xFFFF) { pd_fpokeb(g->dseg, (pdw)(ip + 3), (pdb)(flags | PDFB_F_BIG)); return 0; }
+    wb = n;
+    pd_fpokeb(g->dseg, rp, (pdb)g_rwpx); pd_fpokeb(g->dseg, (pdw)(rp + 1), (pdb)g_rlb);
+    pd_fpokew(g->dseg, (pdw)(rp + 2), bump);
+    pd_fpokew(g->dseg, (pdw)(g->doff + PDFB_KEYS - 4), (pdw)(bump + ((wb + 1) & 0xFFFE)));
+    pd_fpokeb(g->dseg, (pdw)(ip + 3), (pdb)(flags | PDFB_F_BMP));
+    g->w = g_rwpx; g->lb = g_rlb; g->nb = n;
+    return 0;
+}
+
 static pdw v_glyph(void)
 {
     struct pdxb_fglyph *g = &g_a.gl;
@@ -411,6 +447,7 @@ static pdw v_glyph(void)
     g->gid = g_gid; g->cid = g_cid; g->adv1000 = g_adv1000; g->kind = g_kind;
     g->lat = g_lat == 0xFFFF ? 0 : g_lat;
     g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
+    if (g->flags & PDFG_BLOCK) return blk_slot(g);
     if (g->flags & PDFG_INFO) return 0;
     if (!g_gid) { g->w = 0; return 0; }                         /* no glyph: nothing to draw */
     n = fnt_glyph(g_gid, g->em64, g->asc, g->rows, g->dseg, g->doff, g->cap);

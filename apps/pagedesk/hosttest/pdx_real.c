@@ -136,6 +136,28 @@ int main(int argc, char **argv)
         printf("WID %u %u\n", gl.cid, gl.adv1000);
         printf("CIDMAP %s %u\n", argv[i], gl.cid);
     }
+    if (getenv("PDX_PX")) {                           /* the strike block: slots, info and bitmaps */
+        pdw px = (pdw)atoi(getenv("PDX_PX")), blk = 0x1000, k;
+        pd_ffill(SEG_OUT, blk, 0, PDFB_SIZE);
+        pd_ffill(SEG_OUT, (pdw)(blk + PDFB_KEYS), 0xFF, 256);
+        for (i = 3; (int)i < argc; i++) {
+            struct pdxb_fglyph gl;
+            memset(&gl, 0, sizeof gl); gl.objnum = fobj; gl.gen = fgen; gl.code = (pdw)atoi(argv[i]); gl.flags = PDFG_BLOCK;
+            gl.em64 = (pdw)(px * 64); gl.asc = px + 1; gl.rows = px + 1 + (px + 3) / 4 + 1; gl.dseg = SEG_OUT; gl.doff = blk;
+            pd_fcopy_out(&gl, SEG_XB, 0, sizeof gl);
+            r = call(PDV_FNT_GLYPH);
+            pd_fcopy_in(SEG_XB, 0, &gl, sizeof gl);
+            if (r || !gl.slot) { printf("BLK %s none\n", argv[i]); continue; }
+            {
+                pdw rp = blk + (gl.slot - 1) * 4, w = pd_fpeekb(SEG_OUT, rp), bo = pd_fpeekw(SEG_OUT, rp + 2), nb = ((w + 7) / 8) * gl.rows;
+                pdw ip = blk + PDFB_INFO + (gl.slot - 1) * 4;
+                printf("BLK %s slot %u w %u lb %d adv %u lat %u fl %u key %u ", argv[i], gl.slot, w, (int)(signed char)pd_fpeekb(SEG_OUT, rp + 1),
+                       pd_fpeekw(SEG_OUT, ip), pd_fpeekb(SEG_OUT, ip + 2), pd_fpeekb(SEG_OUT, ip + 3), pd_fpeekw(SEG_OUT, blk + PDFB_KEYS + (gl.slot - 1) * 2));
+                for (k = 0; k < nb && w; k++) printf("%02x", pd_fpeekb(SEG_OUT, blk + 512 + bo + k));
+                printf("\n");
+            }
+        }
+    }
     (void)n; (void)nb;
     return 0;
 }
