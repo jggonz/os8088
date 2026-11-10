@@ -5240,8 +5240,47 @@ explicit 16-entry stack). The only kernel calls would be through `pdkgate.inc`;
 none are made - the module reaches PDENG through its door, and its largest frame
 is 74 bytes (cc8086's gate is 96).
 
-*Cost on a 4.77 MHz 8088, from instruction counts* (taken once, 20.22.13.10).
+*Cost on a 4.77 MHz 8088: 20.22.13.10.*
 
 ##### 20.22.13.10 Measured cost
 
-*To be filled from the instruction counts when the routines are final.*
+Taken ONCE with `hosttest/pdxj_cost.py`: the real `PDXJ.MOD` in Unicorn with a
+per-instruction hook, every executed instruction bucketed by the function that owns
+it and priced with a coarse 8088 table (fetch floor 4 clocks a byte, register op 3,
+memory operand 14-25, push 15, pop 12, call 23, mul/imul 130, shift by CL 8 + 4 a
+bit). **An estimate good to about +-30%**; MartyPC and the 5150 are the arbiters.
+Instruction counts are exact. Fixture: 160x120, one tile, 5 resolutions.
+
+| decode | instructions | est. clocks | 4.77 MHz |
+|---|---|---|---|
+| lossless 5/3, full size (r0) | 21.6 M (g_ll, 160x120, measured) | ~352 M | ~74 s |
+| lossless 5/3, r2 (40x30) | 1.55 M | ~25 M | 5.3 s |
+| lossy 9/7, full size (r0) | 8.3 M | ~148 M | 31 s |
+| lossy 9/7, r2 (40x30) | 1.12 M | ~19 M | 3.9 s |
+| lossless, 157x113 r0 (noisy) | 19.8 M | ~323 M | 68 s |
+
+*Where it goes.* Tier-1 is 70-95% of a lossless decode and 62% of a lossy one
+(the transform is 31% of lossy full size and under 4% once the top levels are
+dropped): **dropping levels removes tier-1 work with them, which is why the
+reduction rule pays**. Tier-2 (packets) is under 3% anywhere; dequantise 2.5-4%;
+the grey conversion about 1%.
+
+* **Per MQ decision: 31 to 37 instructions, about 440 to 550 clocks** (the
+  decoder 31-37, byte-in amortised). This is the unit of tier-1.
+* **Per code-block pass** (significance, refinement or cleanup, MQ included)
+  costs by the samples it visits and the decisions it takes: measured averages
+  141 to 1,190 k clocks a pass on 64x64 and smaller blocks, i.e. roughly
+  **35 to 290 clocks a sample a pass**; a noisy lossless block costs about 8x a
+  smooth lossy one because it codes every sample in every plane.
+* **Per wavelet level** (grey, 9/7, per stage, clocks): 0.66 M, 2.4 M, 8.8 M, 33.9 M
+  for stages of 10x8, 20x15, 40x30, 80x60 = 80, 300, 1,200, 4,800 samples, i.e.
+  about **7,000 clocks a sample of the stage's area** (four lifting steps per
+  direction, two directions, a multiply per step); 5/3: 0.2 M, 0.6 M, 2.1 M,
+  7.4 M for the same stages, **about 1,500 clocks a sample**, a quarter of 9/7.
+  Each stage costs four times the one before it.
+
+The consequence for the product: a scan that reduces to about 100x75 decodes in
+tens of seconds on an XT, a 2x larger result takes four times the transform and
+about three times the tier-1 time. PDREND runs it once per image per page view and
+the result is cached by the caller (20.22.7). A faster machine scales as its
+clock; nothing here is memory-bound.
