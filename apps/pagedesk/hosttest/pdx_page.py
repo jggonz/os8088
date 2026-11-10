@@ -12,9 +12,15 @@ program from the font dictionary, and the band walker draws the synthetic strike
 content streams Flate-compressed (`mutool clean -z`) and PDENG given ONE Flate slot, so the
 font program cannot be opened beside the page's content stream and PDXF inflates it itself.
 --noz builds PDXF without that (-DPDXF_NOZ): the A/B, which must fail.
+--seq renders every page of each fixture and then page 1 again in ONE process (PDR_SEQ): the
+glyph claim and its strike blocks carry over from page to page as they do on the machine
+(QA R24), so no page may say "glyph block full" and the second page 1 must equal the first.
 
-Per page it counts the pixels that differ between PDREND's 1:1 VGA render (thresholded)
-and mutool's AA render at 50%, as a share of mutool's ink. Exits 1 above --limit.
+Per page it counts LOST pixels (mutool's AA render covers them at least a quarter, no ink of
+ours within one pixel) and STRAY ones (ours, mutool under 1/8 everywhere within one pixel), as
+pdx_check.py does, as a share of mutool's ink at 50%; the plain difference from AA@50% is printed
+beside it. Exits 1 above --limit. (The Type 3 fixture's small pages show LOST at their filled
+shapes' anti-aliased edges: PDREND's path filler, not a glyph rasteriser.)
 """
 import argparse, json, os, shutil, subprocess, sys, tempfile
 
@@ -45,6 +51,7 @@ def main():
     ap.add_argument("fixtures", nargs="*"); ap.add_argument("--build", action="store_true"); ap.add_argument("--shots")
     ap.add_argument("--limit", type=float, default=None)
     ap.add_argument("--oneslot", action="store_true"); ap.add_argument("--noz", action="store_true")
+    ap.add_argument("--seq", action="store_true")
     a = ap.parse_args()
     from PIL import Image
     import numpy as np
@@ -56,6 +63,22 @@ def main():
     open(os.path.join(bank, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + res)
     shutil.copy(os.path.join(ROOT, "build", "PDFONTX.RES"), bank)
     names = a.fixtures or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
+    if a.seq:
+        bad = 0
+        for n in names:
+            j = json.load(open(os.path.join(FIX, n + ".json")))
+            pdf = os.path.join(FIX, j["pdf"]); W, H = j["page"]; np_ = len(j["sizes"])
+            seq = " ".join("%s:%d" % (pdf, k) for k in list(range(np_)) + [0])
+            with tempfile.TemporaryDirectory() as t:
+                ob = os.path.join(t, "s")
+                r = subprocess.run([exe, "render", "x", "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0", ob, bank, "29"],
+                                   capture_output=True, text=True, env=dict(os.environ, PDR_GLYPHKB="40", PDR_SEQ=seq))
+                incs = [l.split("incomplete=")[1].split()[0] for l in r.stdout.split("\n") if "incomplete=" in l]
+                same = os.path.exists(ob + ".0.ppm") and open(ob + ".0.ppm", "rb").read() == open(ob + ".%d.ppm" % np_, "rb").read()
+            ok = r.returncode == 0 and len(incs) == np_ + 1 and all(int(x, 16) & 0x0080 == 0 for x in incs) and same
+            print("%-14s seq %d renders  inc=%s  page 1 again %s  %s" % (n, len(incs), ",".join(incs), "identical" if same else "DIFFERS", "ok" if ok else "FAIL"))
+            bad += not ok
+        return 1 if bad else 0
     worst = 0.0; tot = totd = 0; bad = 0
     for n in names:
         j = json.load(open(os.path.join(FIX, n + ".json")))
@@ -76,15 +99,21 @@ def main():
                     print("%-14s %2dpx  RENDER FAILED rc=%d %s" % (n, size, r.returncode, r.stderr.strip()[:120])); bad += 1; continue
                 st = dict(kv.split("=", 1) for l in r.stdout.split("\n") if l.startswith("status") for kv in l.split()[1:] if "=" in kv)
                 mine = np.asarray(Image.open(out).convert("L"), dtype=float)[:H, :W] < 128
-                refa = np.asarray(Image.open(ref).convert("L"), dtype=float)[:H, :W] < 128
+                refg = np.asarray(Image.open(ref).convert("L"), dtype=float)[:H, :W]
+                refa = refg < 128
                 if a.shots:
                     os.makedirs(a.shots, exist_ok=True)
                     both = np.concatenate([np.asarray(Image.open(out).convert("L"))[:H, :W], np.asarray(Image.open(ref).convert("L"))[:H, :W]], axis=1)
                     Image.fromarray(both).save(os.path.join(a.shots, "%s-%d.png" % (n, size)))
-            ink = int(refa.sum()); d = int((mine != refa).sum()); rate = 100.0 * d / max(1, ink)
-            print("%-14s %2dpx  ink %5d  diff %5d (%5.1f%%)  inc=%s first=%s" % (n, size, ink, d, rate, st.get("incomplete", "?"), st.get("first", "").strip("'")[:24]))
+            # LOST / STRAY as pdx_check.py counts them (the dropout control's measure, QA R24)
+            def dil(m):
+                p = np.pad(m, 1); return np.max([p[1 + dy:1 + dy + m.shape[0], 1 + dx:1 + dx + m.shape[1]] for dy in (-1, 0, 1) for dx in (-1, 0, 1)], axis=0)
+            lost = int(((refg < 192) & ~dil(mine)).sum()); stray = int((mine & ~dil(refg < 224)).sum())
+            ink = int(refa.sum()); d = int((mine != refa).sum()); rate = 100.0 * (lost + stray) / max(1, ink)
+            print("%-14s %2dpx  ink %5d  lost %4d stray %4d (%5.1f%%)  diff %5d vs AA@50%%  inc=%s first=%s" % (n, size, ink, lost, stray, rate, d, st.get("incomplete", "?"), st.get("first", "").strip("'")[:24]))
+            d = lost + stray
             tot += ink; totd += d; worst = max(worst, rate)
-    print("total: %d differing of %d ink pixels (%.1f%%); worst page %.1f%%" % (totd, tot, 100.0 * totd / max(1, tot), worst))
+    print("total: %d lost or stray of %d ink pixels (%.1f%%); worst page %.1f%%" % (totd, tot, 100.0 * totd / max(1, tot), worst))
     return 1 if bad or (a.limit is not None and worst > a.limit) else 0
 
 if __name__ == "__main__":

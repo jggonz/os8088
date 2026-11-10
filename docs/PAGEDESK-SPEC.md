@@ -6608,7 +6608,12 @@ the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset)
 linear probing) and info[128] (the `/W` width in 1/1000 em, the PD Latin byte of the code's
 ToUnicode, flags). A block is a (font, size): up to `PDFB_NBLK` (4) of them sit at the TOP of the glyph claim,
 under a 64-byte header (font object and generation, the size, the pass number last used; PDREND
-FINDS, PDXF MAKES and evicts a block not used in this pass). `(glyph_kb - 24) / 4` blocks fit: a
+FINDS, PDXF MAKES and evicts a block not used in this pass). That number is PDREND's `g_pstamp`, a
+pass count that is NOT reset with each render: `g_passes` restarts at 1 every verb, and a stamp of it
+made every block a previous page or thumbnail used look "used in this pass" to the next render's
+pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
+block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
+ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit: a
 24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
 it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
 with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
@@ -6661,9 +6666,22 @@ hooks; the third site is the `emb == 3` branch of `text_glyph`.
 intermediate (`pdx_muldiv`), quadratic and cubic curves flattened by uniform subdivision (no
 recursion, no stack: `n` from the control polygon's second difference), and the signed AREA of every
 edge accumulated per cell (a pixel is 256), then packed to one bit where the coverage is at least
-`PDXF_THR` = **128**. The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
+`PDXF_THR` = **128**. Then **dropout control** (`pdx_drop`, C; QA R24): a stem or bar thinner than
+a pixel that straddles two gives each under half and vanished whole at 5-8 px (`h i j l` gone, `#`
+read as `v`). The coverage is recomputed from the accumulator, and every run of covered cells along
+a row, then down a column (the columns seeing the pixels the rows added), that has NO pixel on and
+is at most `PDXF_DROPRUN` = 2 cells long - a stroke crossing that line, not an edge running along
+it - gets its fullest cell if that holds at least `PDXF_DROPMIN` = 40 of 256: one pixel, so a stroke
+never disappears and nothing that already drew is thickened. 614 bytes of PDXF (64,714). The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
 C twins by `hosttest/pdx_primtest.py` under Unicorn (muldiv, `accline`, `pack`: identical on every
 case). A glyph wider than 32 px does not bitmap (`PDFB_F_BIG`).
+
+**Strokes against MuPDF** (`hosttest/pdx_check.py`'s limit since the dropout control): LOST is a
+pixel MuPDF's anti-aliased render covers at least a quarter with no ink of ours within one pixel,
+STRAY ink of ours where MuPDF covers under 1/8 everywhere within one pixel; a 1-bit picture differs
+from the AA picture at every edge, which is no defect, and these two are the defects. With dropout
+control: **1.5 % of ink at 8 px, 0.3 at 10, 0 at 12-16, no stray pixel**; without it (A/B,
+`PDXF_DROPMIN` 9999) 16 % at 8 px. The figures below are the threshold's, measured before it.
 
 **Measured against MuPDF** (`hosttest/pdx_check.py`, glyph for glyph at the same pen position, the
 reference being `mutool draw -r 72` anti-aliased and thresholded at 50 %, so the question is only

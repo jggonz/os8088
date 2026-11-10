@@ -363,7 +363,7 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
     }
     if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
     g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
-    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_passes;
+    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_pstamp;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
     r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
     if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }

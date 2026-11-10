@@ -392,7 +392,7 @@ static pdw pass_begin(void)
     g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
     x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
     g_iknd[0] = g_iknd[1] = 0; g_ikb = 0;
-    g_passes++;
+    g_passes++; g_pstamp++;
     gs_init();
     xb_pass();
     g_ph = PDR_INTERP;

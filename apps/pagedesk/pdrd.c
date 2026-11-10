@@ -511,7 +511,7 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     for (i = pd_fpeekw(g_gseg, (pdw)(h + 60)); i--; ) {
         e = (pdw)(h + (i << 3));
         if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4)) == px) {
-            pd_fcopy_out(&g_passes, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
+            pd_fcopy_out(&g_pstamp, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
             return i;
         }
     }
