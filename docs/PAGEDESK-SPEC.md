@@ -4995,7 +4995,7 @@ merge):
 |---|---|---|---|---|---|---|
 | `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 / 0 | crypt |
 | `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 13 / 13 | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 0 / 0 (fonts' figures pending) | fonts |
+| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 61,440 | 64 / 32 (a font program of 54,768 / 22,016 bytes: 20.22.8) | fonts |
 | `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 64 / 12 | dct, bilevel |
 | `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 60 / 12 | jpx |
 | (6, internal) | PDWRT | 2 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |

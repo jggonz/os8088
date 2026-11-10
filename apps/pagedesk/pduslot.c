@@ -43,7 +43,7 @@ const unsigned char pdu_occws[PDU_NOCC] = {         /* want */
     /* --- */
     13,         /* PDX_GFX  PDXG  (gfx, blend)   */
     /* --- */
-    0,          /* PDX_FNT  PDXF  (fonts)        */
+    64,         /* PDX_FNT  PDXF  (fonts)        */
     /* --- */
     64,         /* PDX_IMG  PDXI  (dct, bilevel) */
     /* --- */
@@ -58,7 +58,7 @@ const unsigned char pdu_occwmin[PDU_NOCC] = {       /* min */
     /* --- */
     13,         /* PDX_GFX  PDXG  (gfx, blend)   */
     /* --- */
-    0,          /* PDX_FNT  PDXF  (fonts)        */
+    32,         /* PDX_FNT  PDXF  (fonts)        */
     /* --- */
     12,         /* PDX_IMG  PDXI  (dct, bilevel) */
     /* --- */
