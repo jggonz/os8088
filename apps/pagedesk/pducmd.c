@@ -650,6 +650,7 @@ static void pdu_cmd(int id)
 void os88_oncmd(int item, int menu, void *win)
 {
     int pg;
+    pdu_ovhold = 0;                     /* the user acted: the panels try again */
     pdu_about_off();
     pg = pdu_pg_menucmd(menu, item);   /* pages: the page commands' rows */
     if (pg) {
@@ -864,6 +865,7 @@ static void pdu_find_key(int ascii)
 void os88_onkey(int ascii, int scan, void *win)
 {
     int ch;
+    pdu_ovhold = 0;
 
     if (pdu_about) {
         pdu_about_off();
@@ -1061,6 +1063,7 @@ void os88_onclick(int x, int y, void *win)
 {
     int id, k, r;
     struct os88_rect *o;
+    pdu_ovhold = 0;
 
     if (pdu_about) {
         pdu_about_off();
