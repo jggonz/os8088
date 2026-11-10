@@ -21776,6 +21776,20 @@ $(BUILD)/PDXK.MOD: apps/pagedesk/pdxk.asm $(BUILD)/pdxk.gen.asm $(CC_RUNTIME) \
 	    sys.exit(1 if t>$(PDK_CAP) else 0)"
 pdxk: $(BUILD)/PDXK.MOD
 	python3 tests/pdcrypt/pdc_diff.py
+# `make pdcrypt`: the whole encryption check (PAGEDESK-SPEC 20.22.5) - the library's assembly against the
+# vectors and the host twins, the REAL PDENG + PDXK (host) against qpdf over 17 fixtures, the COMPILED
+# PDENG.MOD + PDXK.MOD in Unicorn against the host, the ASan/UBSan fuzz. Not in `all`.
+PDC_E2E_SRC := apps/pagedesk/pdeng.c apps/pagedesk/pdxk.c apps/pagedesk/pdecrypt.c apps/pagedesk/pdcsum.c apps/pagedesk/pdctwin.c \
+               apps/pagedesk/pdcrypto.h apps/pagedesk/hosttest/pdc_e2e.c $(PDE_SRC)
+$(BUILD)/pdc_e2e: $(PDC_E2E_SRC) apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c | $(BUILD)
+	$(CC) -g -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest apps/pagedesk/pdeng.c apps/pagedesk/pdxk.c \
+		apps/pagedesk/hosttest/pdc_e2e.c apps/pagedesk/hosttest/pde_host.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+.PHONY: pdcrypt
+pdcrypt: pdxk $(BUILD)/pdc_e2e $(BUILD)/PDENG.MOD
+	python3 tests/pdcrypt/pdc_e2e.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
+	python3 tests/pdcrypt/pdc_target.py
+	python3 tests/pdcrypt/pdk_stack.py
+	python3 tests/pdcrypt/pdc_fuzz.py 300 1
 # ---- end PageDesk: crypt ------------------------------------------------------
 
 # ---- PageDesk: math ----

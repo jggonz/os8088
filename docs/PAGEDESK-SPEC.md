@@ -4929,124 +4929,206 @@ round's final pass, not before.
 
 #### 20.22.5 Encryption (`crypt`)
 
-Owner decisions O3 (empty user password silently, a prompt otherwise; RC4-40,
-RC4-128, AES-128, AES-256) and O5 (`/P` is ignored: every action is allowed
-once the file opens, and a save keeps the source's `/P` and `/Encrypt`) bind
-this section. AP-04 is the story; AP-05 (the R6 question) takes
-`PDV_KEY_COST` from here and builds its sentence in 20.22.6.
+Owner decisions O3 (the empty user password silently, a prompt otherwise; RC4-40,
+RC4-128, AES-128, AES-256) and O5 (`/P` is ignored: every action is allowed once
+the file opens, and a save keeps the source's `/P` and `/Encrypt`) bind this
+section. AP-04 is the story; AP-05 (the R6 question) takes `PDV_KEY_COST` from
+here and builds its sentence in 20.22.6. The lead's decision of 23:30 (the
+restructure that made PDENG's share fit) is built in. Numbers are measured:
+20.22.5.1.
 
-**Split by when the work runs (L1).** What runs per byte or per object is in
-PDENG; what runs once at open is in PDXK.
+**What runs where (L1).**
 
 | where | what | why there |
 |---|---|---|
-| PDENG (`pdecrypt.c` + `pdcmd5.inc` `pdcrc4.inc` `pdcaesd.inc`) | parsing `/Encrypt`; the per-object key (MD5 for RC4 and AESV2, none for AESV3); RC4; AES-CBC decrypt of strings and streams; `PDV_ENG_CRYPT` | a stream is decrypted while a page is drawn, when the one slot may hold a codec |
-| PDXK (`pdxk.asm`, `pdxk.c`, `pdcsha2.inc`, `pdcaese.inc`, the same MD5/RC4/AES sources) | algorithms 2, 2.A, 2.B (and 4, 5, 6, 7, 8 of ISO 32000-2 as authentication), the file key from `/UE` `/OE`, the cost estimate | at open only, and large (SHA-2 and AES encryption) |
+| PDENG (`pdecrypt.c`; `pdcmd5.inc` `pdcrc4.inc` `pdcaes.inc`) | the per-object key (MD5), RC4, AES-CBC **decryption**, of a stream's raw bytes and of a string lexed from the file; `PDV_ENG_SETKEY`; a minimal `PDV_ENG_CRYPTINFO` | a stream is read while a page is drawn, when the one slot may hold a codec |
+| PDXK (`pdxk.asm`, `pdxk.c`, `pdcsum.c`, `pdcsha2.inc`, the same MD5/RC4/AES sources) | reading `/Encrypt` through PDENG's `DICT_GET`; algorithms 2, 4, 5, 6, 7 (R2 to R4) and 2.A, 2.B (R5, R6); the file key from `/UE` `/OE`; the cost estimate | at open only, and large (SHA-2, AES encryption) |
+| PDWRT | encrypting what a save writes | **by the shared source**: PDWRT includes `pdcrypto.h`, `pdcmd5.inc`, `pdcrc4.inc` and `pdcaes.inc` WITHOUT `PDC_NOENC` (the encrypting half). `PDV_ENG_CRYPT` is withdrawn (decision 23:30). Per-object key: `pdc_okey(key, klen, num, gen, aes)` leaves the 16-byte MD5 in `pdc_ok`; the key is its first `min(klen + 5, 16)` bytes (AESV2 passes `aes = 1`, which appends `sAlT`; AESV3 uses the file key as it is). `pdc_aes_ks(rk, key, 4 or 8)` then `pdc_cbc_enc(rk, 10 or 14, iv, buf, nblocks)` (the caller writes the 16-byte IV first and pads to PKCS#5); `pdc_rc4_ks` / `pdc_rc4` for RC4. All take NEAR buffers; the host twin is `pdctwin.c` |
 
-**The library.** Every primitive has a C twin written in the engine's number
-style (`pdw` words, a 32-bit quantity is two words, no `long`) and an 8086
-assembly body for the target. The host harness (`apps/pagedesk/hosttest/
-pdc_test.c`) runs the C twins against the published vectors (RFC 1321, FIPS
-180-4, FIPS 197 and NIST SP 800-38A CBC, the RC4 vectors of RFC 6229's
-predecessors); `tests/pdcrypt/pdc_diff.py` runs the assembly bodies in
-Unicorn against the same vectors and against the twins on random inputs.
+**The library** (`apps/pagedesk/pdcrypto.h` is its declaration and layouts). Every
+primitive has an 8086 body (SmallerC cdecl, near pointers, `cpu 8086`) and a HOST
+twin in `pdctwin.c` written from the standards with the compiler's own 32- and
+64-bit integers. `tests/pdcrypt/pdc_diff.py` holds the twin and the shipping
+assembly (in Unicorn) to RFC 1321, FIPS 180-4 (SHA-256 including the million-`a`
+message, SHA-384, SHA-512), FIPS 197, SP 800-38A F.2 and the RC4 vectors
+(RFC 6229 offset 0 among them), then to each other on random keys and lengths
+(240 agreements), with a negative control (one flipped bit in AES must be
+caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
 
-| primitive | C twin | assembly | called |
-|---|---|---|---|
-| MD5 block | `pdc_md5_block(st, blk)` | `pdcmd5.inc` | per 64 bytes |
-| RC4 | `pdc_rc4(s, buf, n)` | `pdcrc4.inc` | per run of up to 255 bytes |
-| AES key expansion | `pdc_aes_ks(rk, key, nk)` (128 and 256) | `pdcaes.inc` | per key |
-| AES block, either way | `pdc_aes_enc(rk, nr, in, out)`, `pdc_aes_dec` | `pdcaese.inc`, `pdcaesd.inc` | per 16 bytes |
-| AES-CBC over a run | `pdc_cbc_enc`, `pdc_cbc_dec` (the chaining in the proc) | same | per run |
-| SHA-256 / SHA-512 block (SHA-384 is SHA-512 with other constants) | `pdc_sha256_block`, `pdc_sha512_block` | `pdcsha2.inc` | per 64 or 128 bytes |
+| primitive | assembly | body, bytes |
+|---|---|---|
+| MD5 block, the per-object key block | `pdcmd5.inc` | 822 with its constants |
+| RC4 key schedule and stream | `pdcrc4.inc` | 171 |
+| AES key expansion (128 and 256), decryption, CBC | `pdcaes.inc` | 1,249 with the S-box and its inverse (512) |
+| AES encryption, CBC encryption | `pdcaes.inc` (not under `PDC_NOENC`) | 189 |
+| SHA-256 and SHA-512 blocks | `pdcsha2.inc` | 3,636 with the constants (896) |
 
-All take NEAR buffers (the module's DS); the far data is moved through
-`pd_fcopy_in` / `pd_fcopy_out` by the caller in runs of at most 256 bytes.
+**PDXK** (`PDM_MAGIC_KEY`, the door at +8 as `pdwrt.asm`; image + bss at most
+32,768, no workspace). Verbs; CF = 1 on a failure.
 
-**PDXK.** `apps/pagedesk/pdxk.asm` (the door at +8, `PDM_MAGIC_KEY`, shaped
-as `pdwrt.asm`) and `pdxk.c`, which includes `pdxk*.c`. Image + bss at most
-32,768; its workspace is 0 beyond that (the R6 buffer of 4,096 bytes is bss).
-Verbs, all with CF = 1 on a failure:
+* `PDV_X_INIT` 0xC0 stores the XB segment, PDENG's door (`eng_off/eng_seg`) and
+  `cpu`.
+* `PDV_KEY_PARAMS` 0xC3: XB = `pdxb_crypt` out. The file's `/Encrypt` parameters
+  (`v r length p stm str eff encmeta o_len u_len o u oe ue perms id0 id0_len`),
+  no password tried. Read with PDENG: `PDV_ENG_CRYPTINFO` says where the
+  dictionary is (a reference, or direct in the trailer) and gives the whole
+  `/ID[0]`; then one `PDV_ENG_DICT_GET` a key: `/Filter` must be `/Standard`,
+  `/V` in {1, 2, 4, 5}, `/R` in 2 to 6, `/Length`, `/P`, `/O` `/U`
+  (the first 48 bytes), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4
+  and V5 `/StmF` `/StrF` and `/CF/<name>/CFM` (`/V2` RC4, `/AESV2`, `/AESV3`,
+  `/None`, `/Identity`) and `/CF/<name>/Length`. Anything else is
+  `PDE_ENCRYPT`. Limits of reading through `DICT_GET`: a **direct** `/Encrypt`
+  with V4 or V5 is `PDE_ENCRYPT` (the path to `CFM` is four keys; nothing
+  writes one), and `/P` is the 16.16 integer `DICT_GET` returns, so a `/P`
+  outside plus or minus 32,767 is `PDE_ENCRYPT` on R2 to R4 (where it enters the
+  key) and ignored on R5 and R6. `eff` is `stm` (embedded files follow the
+  stream filter).
+* `PDV_KEY_AUTH` 0xC1: XB = `pdxb_crypt` in/out. `state` 0 starts: when `v` is 0
+  the parameters are read as above (the caller need fill only `pw_len` and
+  `pw`). Then the USER password, then the OWNER password. R2 to R4 are one call
+  (about a second on an 8088). R5 and R6 are resumable: `AX = PDE_BUSY` (CF = 0)
+  with `progress` 0 to 1000 of the run in hand (`state` is nonzero while busy);
+  the caller calls again, and cancels by not calling. One call is a slice of
+  about 40 work units (an AES block is 1, a SHA-256 block 4, a SHA-512 block 14:
+  about 0.6 s on an 8088, 20 ms on a 386). The module must stay loaded between
+  the calls (the primary does not swap the slot during a job); a call whose
+  `state` is nonzero after a reload restarts from the beginning. Success:
+  `AX = PDE_OK`, `key` and `key_len` (5 to 16, or 32), `auth` = `PDCA_USER` or
+  `PDCA_OWNER`, and the password copy is wiped. A wrong password: CF = 1,
+  `PDE_PASSWORD`. **The silent attempt (`pw_len` 0) on R6 tries the user key
+  only**: the owner key costs another 1.7 runs (20.22.5.1) and an empty owner
+  password with a non-empty user password is not a thing any writer makes.
+* `PDV_KEY_COST` 0xC2: XB = `pdxb_crypt` in (an empty struct is read from the
+  file first and returned filled, so the caller learns `r`, the methods and
+  `length` from this one call), `pw_len`. `AX` = the estimated seconds of **one
+  run of algorithm 2.B** on this CPU class (`pdxb_init.cpu`: 8086 as measured,
+  286 a sixth, 386 a 24th, later a 60th); 0 for R2 to R5 (about a second, not
+  worth a question). A call whose parameters cannot be read answers CF = 1.
+  The caller multiplies by the runs: a correct **user** password is 2 runs (the
+  check, then the key salt), a wrong one 1 (the silent attempt) or 2.7 (a typed
+  password, which tries the owner key as well).
 
-* `PDV_X_INIT` 0xC0: stores `pdxb_init` (the XB segment, PDENG's door from
-  `eng_off/eng_seg` for `PDV_ENG_CRYPTINFO`).
-* `PDV_KEY_AUTH` 0xC1: XB = `pdxb_crypt`. With `state` 0 it fills the
-  parameters by calling PDENG (`PDV_ENG_CRYPTINFO`) when `v` is 0, then
-  tries the USER password (`pw`, `pw_len`; 0 = the empty password), then the
-  OWNER password. `AX = PDE_BUSY` (CF = 0) while an R6 attempt is part way,
-  with `progress` 0..1000; the caller calls again with `state` unchanged.
-  Success: `AX = PDE_OK`, `key` and `key_len` set, `auth` = `PDCA_USER` or
-  `PDCA_OWNER`. A wrong password: CF = 1, `PDE_PASSWORD`. A parameter set
-  PageDesk does not implement (`/V` or `/R` unknown): CF = 1, `PDE_ENCRYPT`.
-  One call is a slice of at most 8 block operations of the R6 loop (a SHA
-  block or an AES run), so the primary's job loop stays responsive and
-  Cancel works between slices (the caller simply stops calling).
-* `PDV_KEY_COST` 0xC2: XB = `pdxb_crypt` with `r`, `pw_len`; `AX` = the
-  estimated seconds of ONE attempt (see below), 0 for R2-R4 (about a
-  second, not worth a question).
+**PDENG.**
 
-**PDENG.** Three verbs.
-
-* `PDV_ENG_CRYPTINFO` 0x13 reads the `/Encrypt` dictionary eng recorded
-  (the trailer's value: a reference or a direct dictionary, from the newest
-  trailer or xref-stream dictionary) into `pdxb_crypt`: `/Filter` must be
-  `/Standard`, `/V` in {1, 2, 4, 5}, `/R` in {2, 3, 4, 5, 6}, `/Length`,
-  `/P`, `/O` `/U` (32 bytes, or 48 for R5-R6, the rest of a longer string
-  ignored), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4 and V5 the
-  crypt filters `/CF` named by `/StmF` and `/StrF` (`/EFF` too): `/CFM` of
-  `/V2` is `PDCM_RC4`, `/AESV2` `PDCM_AESV2`, `/AESV3` `PDCM_AESV3`,
-  `/None` or `/Identity` `PDCM_IDENTITY`. `id0` is the whole `/ID[0]`
-  (up to 32 bytes; a file with no `/ID` has an empty one). Anything else is
-  `PDE_ENCRYPT`.
-* `PDV_ENG_SETKEY` 0x14 takes `key`, `key_len`, `stm`, `str`, `eff`,
-  `encmeta` from the XB, derives nothing, and makes OPEN resume. From then
-  on `PDO_ENCRYPTED` is set and decryption is automatic.
-* `PDV_ENG_CRYPT` 0x15 encrypts or decrypts a far buffer with an explicit
-  key and object for the writer. `phase` bit 0 is the first chunk, bit 1 the
-  last; a decrypt of an AES run strips the padding on the last chunk, an
-  encrypt writes the IV first (the caller's `iv`, the engine has no random
-  source) and pads at the end; `room` is the most `len` may grow to.
+* `PDV_ENG_CRYPTINFO` 0x13 (from the moment OPEN has read the cross-reference;
+  `pdxb_cryptinfo`, `pdabi.h`'s crypt block): `on`, the trailer's `/Encrypt`
+  (`enc_k` 0 none, 1 a reference, 2 direct; `enc_num/enc_gen`), the whole
+  `/ID[0]` (`id0`, `id0_len` at most 32), and what `SETKEY` set (`auth`,
+  `key_len`, `key`, `stm`, `str`, `eff`, `encmeta`). The plat pre-flight for
+  Insert reads a foreign file's key and methods here.
+* `PDV_ENG_SETKEY` 0x14: XB = `pdxb_crypt` in (`key`, `key_len`, `stm`, `str`,
+  `eff`, `encmeta`, `auth`). The XB's copy of the key is zeroed. `OPEN` then
+  resumes from its state 7 and `PDO_ENCRYPTED` is set. `OPEN` answers
+  `PDE_PASSWORD` (CF = 1) at state 7 without discarding the document, and
+  **`DICT_GET` is allowed in that pause** so PDXK can read the dictionary.
+  Closing, re-INIT or a new OPEN forgets the key.
+* `PDV_ENG_CRYPT` is **withdrawn**.
 
 Where decryption sits (and nowhere else):
 
 | place | what is decrypted |
 |---|---|
-| `pdestrm.c` `raw_get`, `st_decode`'s `nflt == 0` branch, `v_strm_read`'s `nflt == 0` branch | the raw bytes of a stream, at the lowest layer, so every filter sits above plaintext. AES-CBC holds back the last 16 bytes until the stream's end so the padding is stripped; RC4 is a keystream |
-| `pdelex.c` `ob_value`'s `PDT_STR` case | a string lexed from the FILE in object mode; never the `/Encrypt` dictionary's own strings, nor a member of an object stream (the stream is what was encrypted) |
-| `v_raw_copy` when `mode == PDRC_PLAIN` (eng leaves the hook) | the object's strings and stream, for Extract and Insert |
+| `pdestrm.c` `raw_get`, `st_decode`'s `nflt == 0` branch, `v_strm_read`'s `nflt == 0` branch (each one `if (c->cmode)` call of `cr_read`) | the raw bytes of a stream, at the lowest layer, so every filter, Flate included, sits above plaintext. An AES stream is its 16-byte IV and blocks; the padding is stripped from the last block, which the stream's `/Length` identifies, so nothing is held back; a length that is not a multiple of 16 loses the tail, a padding byte outside 1 to 16 is left alone, a stream under 32 bytes is empty |
+| `pdelex.c` `ob_value`'s `PDT_STR` case (`cr_string`) | a string lexed from the FILE in object mode: its first 254 bytes (the rest of a longer string stays ciphertext; the true length is adjusted). Never the `/Encrypt` dictionary's own strings (`cr_curn` equals `tr_enc_n`), the trailer's (`cr_curn` 0), or a member of an object stream (eng sets `cr_curn` to 0 while the lexer is in one: the object stream is what was encrypted) |
+| `st_push` (`cr_ctx_open`) | the caller leaves the stream's object in `cr_sn/cr_sg` (0 = not encrypted: an xref stream, or a caller that did not say; `v_strm_open` sets them, and eng sets them for an object stream); the key is derived there |
 
-A stream is left as it is when it is an xref stream (`/Type /XRef`), when
-its filter chain names `/Crypt` with `/Name /Identity` (or no name), or when
-it is the `/Metadata` stream and `/EncryptMetadata` is false, or when
-`/StmF` is the identity. The per-object key is MD5 of the file key, the
-object number's low three bytes and the generation's low two (little
-endian), then `sAlT` for AESV2, cut to `min(key_len + 5, 16)`; AESV3 uses the
-file key. Every length is clamped before use: a stream whose AES ciphertext
-is shorter than 32 bytes or not a multiple of 16 yields the bytes that
-decrypt, never more than the stream holds, and a padding byte above 16 or a
-padding that does not match leaves the plaintext untouched at the end.
+A stream is left as it is when it is an xref stream (`/Type /XRef`), a
+`/Metadata` stream with `/EncryptMetadata` false, or its chain names `/Filter
+/Crypt` with `/DecodeParms << /Name /Identity >>` (or no name); `/Crypt` is a
+chain member that costs no stage. A stream declared `declen` is unknown (~0)
+when it is AES. Limits: at most `PDE_RC4N` = 3 RC4 streams open at once
+(`PDE_LIMIT` otherwise: their state is 258 bytes each); strings and streams
+under different methods work (`/StmF` and `/StrF`).
 
-**R6 cost (`PDV_KEY_COST`).** Algorithm 2.B hashes `K1 = (password ‖ K ‖
-udata) x 64` with AES-128-CBC under `K[0:16]`, `IV = K[16:32]`, then takes
-`K` as SHA-256, SHA-384 or SHA-512 of the cipher text by the sum of its first
-16 bytes mod 3. It runs at least 64 rounds and stops when the last byte of
-the cipher text is no more than `round - 32`, so about 71 on average. With
-the empty password and no user data (`udata` is empty for the user password),
-a round encrypts `64 x |K|` bytes, 128 to 256 AES blocks, and hashes the same
-bytes. Checking a USER password is one run of 2.B; deriving the file key from
-a user password that was right is a SECOND run (the key salt); trying the
-OWNER password as well adds `udata` = `/U`'s 48 bytes (a round is then 3,072
-bytes larger) and its own two runs. So the empty password on a file whose
-owner password it is not costs two runs; a wrong typed password costs one
-run to find it wrong, then one more for the owner password.
+**RAW_COPY with `PDRC_PLAIN` on an encrypted file is NOT done**: eng's hook
+`cr_raw_plain()` is a stub answering `PDE_ENCRYPT`. It needs the dictionary
+rewritten (each string decrypted and written back as a hex string, `/Length`
+corrected) as well as the stream; designed in the round's report, built when the
+lead decides where its ~600 bytes of PDENG come from.
 
-*Counts and cycles to be filled by the measurement of this section (the
-library's assembly, costed by instruction in Unicorn with the 8088's
-`max(4.34 x bytes, clocks)` rule of `tests/pdmath/pdcycles.py`); see 20.22.5.1.*
+**Sizes** (image + bss, bytes). PDENG 42,158 + 11,755 = 53,913, which is +6,761
+over the round's start (47,152; the brief said +3,200 and the lead's 23:30
+decision +6,500): the assembly 2,242, the C (`cr_read` `cr_ctx_open` `cr_string`
+`cr_sched` `cr_skipchk` `SETKEY` `CRYPTINFO`) and the hooks in eng's files about
+3,000, bss 1,520 (three RC4 states 774, the AES schedule 240, the `sctx` fields
+160, the key 32). PDXK 14,912 + 4,019 = 18,931 of 32,768.
+
+**Stacks.** PDENG's chain through `cr_read` is no deeper than `v_open`'s (436
+bytes, `os88pdstk`). PDXK measured by `tests/pdcrypt/pdk_stack.py`: 226 (RC4),
+256 (AES-128), 264 (R6, three slices, the nested `DICT_GET` and SHA-512)
+bytes below the door's entry, of 1,776. Far edge to name in `os88pdstk.py`:
+`_pdk_engcall` to PDENG's `pde_entry`.
+
+**Checks.** `make pdcrypt` (host and Unicorn; not in `all`): `pdc_diff.py`
+(the library), `pdc_e2e.py` (the real PDENG and PDXK on the host against `qpdf`:
+the file key equals `qpdf --show-encryption-key` for 17 fixtures
+(`tests/pdfany/crypt/`, `tools/os88pdfx_crypt.py`), for the owner password too,
+a wrong password and the empty one on a file that has a password are
+`PDE_PASSWORD`, and every stream's CRC, every string, annotation and outline
+title equals the same driver's over `qpdf --decrypt`), `pdc_target.py` (the
+**compiled** `PDENG.MOD` and `PDXK.MOD` in Unicorn, kernel stub and all,
+produce the same lines as the host, a full R6 run included), `pdk_stack.py`, and
+`pdc_fuzz.py` (ASan/UBSan over mutated copies of every fixture: bit flips, runs
+of 00 and FF, a lying `/Length`, a cut tail, ciphertext cut to 0 to 40 bytes, a
+corrupted `/O`; about 22,000 runs over three seeds, no crash, no hang, no report).
 
 #### 20.22.5.1 R6 cost, measured
 
-*Pending the library.*
+Algorithm 2.B: `K = SHA-256(pw || salt || udata)`, then at least 64 rounds, each
+`K1 = (pw || K || udata) x 64` encrypted with AES-128-CBC under `K[0:16]`, `IV =
+K[16:32]`, and `K = SHA-256, SHA-384 or SHA-512(E)` by the sum of `E`'s first 16
+bytes mod 3, until `E`'s last byte is no more than the round number minus 32.
+Counted by running it (`pdk_cycles.py`, the host twin standing in for the data),
+priced from the shipping assembly run in Unicorn with the 8088 rule
+`max(4.34 x instruction bytes, clocks)` of `tests/pdmath/pdcycles.py`, and
+checked against the real `PDXK.MOD` (three of its own slices, instruction by
+instruction: the glue and the hash finalisation add **6.2 %** to the operations
+priced alone, and that factor is in every figure below).
+
+| operation on an 8088 | clocks | ms |
+|---|---|---|
+| AES-128 CBC encrypt, one block | 61,100 | 12.8 |
+| AES-128 key schedule | 23,200 | 4.9 |
+| SHA-256 block (64 bytes) | 204,400 | 42.8 |
+| SHA-512 block (128 bytes) | 790,100 | 165.6 |
+| MD5 block | 98,200 | 20.6 |
+| AES-128 / AES-256 decrypt, one block | 74,900 / 105,200 | 15.7 / 22.0 |
+| RC4, per byte | 203 | 0.043 |
+
+One run of 2.B, mean over 60 random salts (rounds are 69 to 71 on average, 64 at
+least):
+
+| password | rounds | AES blocks | SHA-256 blocks | SHA-384/512 blocks | seconds (min to max) |
+|---|---|---|---|---|---|
+| empty | 69.8 | 13,350 | 1,142 | 1,156 | **437** (355 to 557) |
+| 6 characters | 69.9 | 15,021 | 1,307 | 1,282 | 490 (425 to 623) |
+| 12 characters | 69.0 | 16,445 | 1,449 | 1,389 | 534 (455 to 652) |
+| 24 characters | 71.2 | 20,452 | 1,733 | 1,750 | 665 (560 to 821) |
+
+That is `9.1 x (password + 48)` seconds, the formula in `PDV_KEY_COST`
+(`pdk_cycles.py --stats`). A run is a **seventh of an hour for the empty
+password**; the attempts are runs: a correct user password is **two** (the check
+and the key salt: 14.6 minutes for the empty one, 13 to 15 on a file's own
+salts), a wrong password typed in is 2.7 (the user key, then the owner key, whose
+`udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 22 to 24
+minutes),
+and the silent empty attempt on a file that has a user password is 1 (7.3
+minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
+therefore "about 15 minutes" for a file that opens, and the prompt that follows a
+failed silent attempt another 15. On a 286 (a sixth) it is 2.5 and on a 386 well
+under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
+`DICT_GET` included): R2 0.17 s, R3 and R4 1.8 s (50 MD5 passes and 20 RC4
+passes), a wrong password on R3 5.1 s (the owner key as well).
+
+**Stream decryption speed on an 8088** (the cost of a page that is encrypted,
+not of opening it): RC4 23 KB/s; AES-128 CBC **1.0 KB/s** (AES-256 0.7): a
+30 KB content stream is half a minute. Candidates, in the order of their gain
+(estimates only, none built): a table-driven AES decrypt (the inverse tables
+are 1 KB at least and PDENG's share has no room: 2 to 3 times); fusing the
+permutation and the key addition in `aes_decb` (a quarter); for R6, a
+table-driven AES-128 encrypt in PDXK (4 KB of bss, built at the first call; AES
+is 39 % of a run, SHA-512 44 %, SHA-256 11 %: roughly 437 to 350 seconds) and a
+fused 64-bit rotation in `pdcsha2.inc` (SHA-512's share by about a third).
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 

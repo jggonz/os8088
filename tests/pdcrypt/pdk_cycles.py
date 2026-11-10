@@ -74,6 +74,73 @@ def scenario(tw, c, name, p, pw, who):
     clk = cnt["aes"] * c["aes"] + cnt["ks"] * c["ks"] + cnt["s256"] * c["s256"] + cnt["s512"] * c["s512"] + cnt["first"] * c["s256"]
     return runs, cnt, clk
 
+def labels():
+    import re
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", os.path.join(ROOT, "apps") + "/", "-I", os.path.join(ROOT, "build") + "/",
+                           "-l", os.path.join(ROOT, "build", "PDXK.lst"), "-o", os.path.join(ROOT, "build", "PDXK.MOD"),
+                           os.path.join(ROOT, "apps/pagedesk/pdxk.asm")])
+    pend = []; labs = {}
+    for l in open(os.path.join(ROOT, "build", "PDXK.lst")).read().splitlines():
+        m = re.match(r'\s*\d+\s+([0-9A-F]{8})\s', l)
+        if m:
+            for n in pend: labs[n] = int(m.group(1), 16)
+            pend = []; continue
+        mm = re.match(r'\s*\d+\s+(?:<\d+>)?\s*([A-Za-z_$][\w$]*):', l)
+        if mm: pend.append(mm.group(1))
+    return labs
+
+def calibrate(c, slices=3):
+    """the real PDXK.MOD in Unicorn, KEY_AUTH slices costed instruction by instruction, against the same work priced block by block"""
+    from unicorn import UC_HOOK_CODE
+    import pdc_target as T
+    labs = labels()
+    p = params("AES_256_R6.PDF")
+    m = T.Machine(open(os.path.join(WORK, "AES_256_R6.PDF"), "rb").read())
+    m.wr(0, T.init_struct().ljust(1024, b"\0"))
+    assert m.door("PDXK", 0xC0, T.XBSEG)[1] == 0
+    cr = bytearray(402)
+    struct.pack_into("<11H", cr, 0, 5, 6, 256, 0xFFFC, 0xFFFF, 3, 3, 3, 1, 48, 48)
+    cr[22:70] = p["o"]; cr[70:118] = p["u"]; cr[118:150] = p["oe"]; cr[150:182] = p["ue"]
+    base = T.lin(T.KXSEG)
+    ops = {"aes": labs["_pdc_cbc_enc"], "s256": labs["_pdc_sha256_block"], "s512": labs["_pdc_sha512_block"], "ks": labs["_pdc_aes_ks"]}
+    inv = {base + a: k for k, a in ops.items()}
+    cnt = dict(aes=0, s256=0, s512=0, ks=0); tot = [0.0, 0]
+    def hook(u, addr, size, ud):
+        tot[0] += pdc_asm.cost(bytes(u.mem_read(addr, min(size, 4))), size); tot[1] += 1
+        k = inv.get(addr)
+        if k: cnt[k] += 1
+    m.uc.hook_add(UC_HOOK_CODE, hook)
+    for sl in range(slices):
+        m.wr(0, bytes(cr))
+        ax, cf, _ = m.door("PDXK", 0xC1)
+        cr[:] = m.rd(0, 402)
+        assert not cf and ax == 65, ("a slice", ax, cf)
+    priced = cnt["aes"] * c["aes"] + cnt["s256"] * c["s256"] + cnt["s512"] * c["s512"] + cnt["ks"] * c["ks"]
+    print("calibration: %d slices of the real PDXK.MOD: %d AES blocks, %d key schedules, %d SHA-256 blocks, %d SHA-512 blocks; %d instructions"
+          % (slices, cnt["aes"], cnt["ks"], cnt["s256"], cnt["s512"], tot[1]))
+    print("  costed %0.f clocks; the same operations priced alone %0.f: glue and finalisation add %.1f%%" % (tot[0], priced, 100.0 * (tot[0] - priced) / priced))
+    return tot[0] / priced
+
+def stats(tw, c, glue):
+    """the expectation over random salts: one run of 2.B with an n-character password and no user data (the
+    validation of a user password, or the key derivation after it): rounds, block operations, seconds on an 8088"""
+    import random
+    rnd = random.Random(2088)
+    out = []
+    for n in (0, 6, 12, 24):
+        pw = bytes(rnd.randrange(33, 127) for _ in range(n))
+        secs, rounds, aes, s256, s512 = [], [], [], [], []
+        for _ in range(60):
+            cnt = dict(aes=0, ks=0, s256=0, s512=0, rounds=0, first=0)
+            run_2b(tw, pw, bytes(rnd.randrange(256) for _ in range(8)), b"", cnt)
+            clk = cnt["aes"] * c["aes"] + cnt["ks"] * c["ks"] + (cnt["s256"] + cnt["first"]) * c["s256"] + cnt["s512"] * c["s512"]
+            secs.append(clk * CLK_US / 1e6 * glue); rounds.append(cnt["rounds"]); aes.append(cnt["aes"]); s256.append(cnt["s256"] + cnt["first"]); s512.append(cnt["s512"])
+        m = lambda v: sum(v) / len(v)
+        print("  %2d-char password, one run, mean of 60 salts: %5.1f rounds, %6.0f AES blocks, %5.0f SHA-256 blocks, %5.0f SHA-384/512 blocks  -> %5.0f s (min %4.0f, max %4.0f)"
+              % (n, m(rounds), m(aes), m(s256), m(s512), m(secs), min(secs), max(secs)))
+        out.append((n, m(secs)))
+    return out
+
 def main():
     tw = pdc_twin.Twin()
     c = measure()
@@ -89,6 +156,14 @@ def main():
         print("%-52s runs %d  rounds %3d  AES blocks %6d  SHA-256 blocks %5d  SHA-512 blocks %5d  -> %7.0f s = %5.1f min"
               % (who, runs, cnt["rounds"], cnt["aes"], cnt["s256"] + cnt["first"], cnt["s512"], sec, sec / 60))
         rows.append((who, runs, cnt, sec))
+    if "--stats" in sys.argv:
+        print("expectation over random salts (glue factor 1.062 from the calibration):")
+        stats(tw, c, 1.062)
+    if "--calibrate" in sys.argv:
+        f = calibrate(c)
+        for who, runs, cnt, sec in rows:
+            print("  with the glue: %-52s %7.0f s = %5.1f min" % (who, sec * f, sec * f / 60))
     return 0
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

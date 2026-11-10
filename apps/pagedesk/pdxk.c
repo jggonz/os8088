@@ -309,6 +309,7 @@ static pdw kx_r56(void)
         case 1:
             if (!k6_run()) { cr.progress = k6_progress(); return PDE_BUSY; }
             if (k6_eq32(k6_k, cr.u)) { k6_begin(cr.u + 40, kx_empty, 0); kx_stage = 2; }
+            else if (cr.r >= 6 && cr.pw_len == 0) return PDE_PASSWORD;   /* the silent attempt tries the user key only: the owner's costs another 1.7 runs (20.22.5.1) */
             else { k6_begin(cr.o + 32, cr.u, 48); kx_stage = 3; }
             break;
         case 2:

@@ -54,6 +54,10 @@ def main():
         rc, out, err = run("auth", path, "wrongpw")
         if "AUTH rc=23" not in out: fail("%s: a wrong password gave %r" % (name, out.strip()))
         n += 1
+        if upw:                                         # the silent attempt (the empty password) on a file that has one
+            rc, out, err = run("auth", path, "-")
+            if "AUTH rc=23" not in out: fail("%s: the empty password gave %r" % (name, out.strip()))
+            n += 1
         plain = os.path.join(WORK, "plain_" + name)
         subprocess.check_call(["qpdf", "--password=" + upw, "--decrypt", "--static-id", path, plain])
         rc, a, err = run("dump", path, upw or "-")
