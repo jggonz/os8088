@@ -237,8 +237,8 @@ mr_entry:
     call mr_fill
     mov ax, [mr_m]
     sub ax, 128
-    mov bl, MEMP_REGROW
-    call mr_kb       
+    mov bx, MEMH_REGROW             ; (in KB: past 1,023KB)
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+40], si
     jc .l3f
@@ -249,8 +249,8 @@ mr_entry:
     mov [mr_res+42], ax
     mov ax, [mr_m]
     sub ax, 64
-    mov bl, MEMP_REGROW
-    call mr_kb       
+    mov bx, MEMH_REGROW             ; (in KB: past 1,023KB)
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+44], si
     jc .l3f
@@ -281,11 +281,11 @@ mr_entry:
 .l3g:
     mov [mr_res+46], ax
     mov ax, [mr_p]                  ; below the cut: windows 0..P-2, in
-    dec ax                          ; paragraphs (64KB a window)
-    mov cl, 12
+    dec ax                          ; KB (64KB a window) - past 1,023KB, so
+    mov cl, 6                       ; MEMH_REGROW: paragraphs wrap there
     shl ax, cl
-    mov bl, MEMP_REGROW
-    call OSAPI_MEM_P
+    mov bx, MEMH_REGROW
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+48], si
     jc .l3f
@@ -528,22 +528,5 @@ mr_wp       dw 0                ; the window OSAPI_WM_CREATE made
 mr_m        dw 0
 mr_p        dw 0
 mr_fill_tok times MR_NFILL * 4 db 0
-
-; mr_kb - OSAPI_MEM_P's verb BL with AX in KB (and, with MEMP_CONV, CX the
-; head in KB): this test plans in KB. AX, CX and SI kept
-mr_kb:
-    push ax
-    push cx
-    push si
-    mov si, cx
-    mov cl, 6
-    shl ax, cl
-    shl si, cl
-    mov cx, si
-    call OSAPI_MEM_P
-    pop si
-    pop cx
-    pop ax
-    ret
 
 OS88_IMAGE_END

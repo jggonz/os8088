@@ -938,7 +938,7 @@ hf_run:
     mov byte [hf_dmawhy], 4     ; 4: the block was refused
     mov ax, [hf_hik]
     mov cx, ax                  ; CX = KB of head = ALL of it
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call hf_kb       
     jc .dmafix
     mov di, HF_N                ; the slot check 13 handed back

@@ -899,7 +899,7 @@ mrb_start:
     jne .have
     mov ax, ((MRB_RL + 16 + 1023) / 1024) * 64
     mov cx, ax
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P
     jc .have                        ; REFUSED: no external ring, [mrb_seg]
     mov [mrb_seg], dx               ; still 0 - the grant ring plays (.grant)

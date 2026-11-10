@@ -73847,14 +73847,15 @@ What differs from a grant ring (§34.5.2):
   the same call places it from the BOTTOM** (§50.3.2, KERN-MEGA-PLAN 14.55):
   a claim with a head there is a ring held while it plays, and is claimed
   low with the same page guarantee; kern_big and kern_small take it from
-  the top as before. A package changes nothing for it. The router's gate
-  (`snd_ringhif`) refuses an external ring above 1MB - a pool claim may
-  move under the chip - and answers 2 as before. (An `OS88_HIGHMEM`
-  package's head claim was a pinned POOL block, `MX_FDMA | MX_FPIN`, which
-  the gate let through, until kernel size pass 19's C1 withdrew the KB DMA
-  doors that made one; a head is conventional now.) A ring a real-mode
-  bracket feeds stays conventional through `OSAPI_MEM_P` with a head
-  (§50.3.7);
+  the top as before. A package changes nothing for it. **And for an
+  `OS88_HIGHMEM` package it is a POOL block** (§50.3, KERN-MEGA-PLAN 14.160):
+  below 16MB, the ring inside one page and born pinned, which the 8237
+  reaches through the base `sbl_ring_phys` reads (`SEG_LIN`'s low word and
+  page). The router's gate (`snd_ringhif`) refuses an external ring above
+  1MB unless the pool block it starts is a DMA door's and pinned
+  (`MX_FDMA | MX_FPIN`) - a plain pool claim may move under the chip - and
+  answers 2 as before. A ring a real-mode bracket feeds stays conventional
+  through `OSAPI_MEM_P` with a head (§50.3.7);
 - **verb 1 only RESUMES.** The total arrives through memory; an underrun
   still halts the card, and verb 1 is still what restarts it, with the same
   bound;
@@ -86141,7 +86142,7 @@ table's end and present on every kernel (docs/plans/KERN-MEGA-PLAN.md 12.2):
 | `OSAPI_MEM_CODESEL` **0x04B9** | DX = the segment (or selector) naming a claim of the caller's. Out CF=0, AX = the selector to **far call code** in it: DX itself on a real-mode kernel; under `CPU_F_PM` the code half of the claim's allocator pair - DX - 8 for its data half, which is the claim's value, and a code half as it is (§50.6.12). CF=1 when there is none: DX = 0, or under `CPU_F_PM` anything that is not a pair's - a GDT segment, a data-only selector (an `OSAPI_XMEM_SEL` window, the read-ahead store). Any context. `apps/os88api.inc`'s `OS88_CODESEL` is its inline fast path, `value - 8` under `CPU_F_PM`. **Until KERN-MEGA-MEMORY-PLAN MC7 the protected-mode answer was a static LDT code alias, `(S >> 2) | 4`, and the macro inlined it; MC7's step 6 retired the aliases.** A binary built before MC7 that converts with `OS88_CODESEL` or `op_cseg` - a C package with an overlay (crt0's `cc_ovbind`), a package that far-calls a code part (`apps/os88partsbody.inc`), PIXELSTEIN 3D, LOOM's preview, WEAVE's canvas core - still computes the alias, which now names an unrelated LDT entry with no fault to say so: such a binary must be rebuilt for kern_mega, and kern_mega pairs with its own release's apps disk (§20.18). Every real-mode kernel runs it as before, which is why `PKG_FMT` did not move |
 | `OSAPI_XMEM_WALK` **0x04BF** | ES:DI = room for CX records of `XMW_SIZE` (6) bytes. Out CF=0, AX = the extended pool's live blocks written, each `XMW_OFF` (KB from the pool's base, which `OSAPI_XMEM_CAPS` answers in DX:CX), `XMW_KB` and `XMW_OWN`: an instance slot for an `OSAPI_XMEM_ALLOC` block, 80h \| slot for a package's REGION placed above 1MB (`OS88_HIGH`, docs/plans/KERN-MEGA-PLAN.md 13.3 step 4), 0A0h \| slot for a CLAIM it took there (`OS88_HIGHMEM`, KERN-MEGA-PLAN item 81), 0C0h \| row a driver's claim, FDh a driver's image, FEh the kernel's own (the read-ahead store, module pairs), FFh a cell called outside any instance. The record's sixth byte, `XMW_CLS`, is 0 except for a driver's block on kern_mega, where it is that driver's `DRVC_*` class off `drv_tab` (0 when no row matches) - so a reader names `SOUND.DRV` and not *a driver* - and for a kernel CACHE on kern_mega (owner FEh), where it is the cache's purge level, FBh-FEh: a block the next claim may take back (§50.6.8). **BX = `XMW_LONG` (4C58h, 'XL')** asks for LONG records: `XMW_FIXED`'s, each `XMW_LSIZE` = 8 bytes with `XMW_TAG` (+6, a word) the cache's whole `MEM_P_*` tag - its low byte the window slot, volume or owner the cache serves - and 0 for every other record (§28.4.11, KERN-MEGA-PLAN 14.92). kern_mega answers it; kern_big's `XMEM.DRV` refuses it with CF=1, AX = 2 and nothing written. **BX = `XMW_FIXED` (4658h, 'XF')** asks kern_mega for its fixed areas as well: one record each IN FRONT of the blocks, owner `XMW_GDT`, `XMW_LDT` (the LDT and the IDT) and `XMW_KCODE` (`.cold` and `.mega`), at POSITIVE `XMW_OFF`s past the pool's KB - they are at the top of RAM, above the pool (§50.6.9). The HMA (`XMW_HMA`, F0h) is the pool's first block and is walked as one; `XMW_PAD` is not written (§28.4.10, KERN-MEGA-PLAN 14.70.2). Additive: every other kernel writes 0 at `XMW_CLS` and ignores BX, but for kern_big's `XMW_LONG` refusal above and its `XMW_FIXED` with the HMA's tail installed, which puts the HMA's contents in front (§28.4.13). On kern_big with a store the pool is `XMEM.DRV`'s and the cell walks its table (overlay ABI 2's `XMV_WALK`, §28.4.8): owner a slot or FFh. CF=1, AX = 1 with no pool - kern_small, kern_mega in real mode, a kern_big machine without the overlay. The Task Manager's "RAM is RAM" reads it (KERN-MEGA-PLAN 13.6). Any context |
 | `OSAPI_XMEM_RUN` **0x04CB** | DX:AX = the TOKEN of an `OSAPI_XMEM_ALLOC` block the caller owns (its base). Out CF=0, DX = the first of a **run of data selectors**, CX = the step between them (8): selector *k* is the 64KB window from 32KB x *k* into the block, the last ones cut at its end, so **any 32KB of the block lies wholly inside one window** - the one at (offset >> 15), at (offset & 7FFFh). What a reader of records of 32KB or less needs to read them in place from ANY context once made, where `OSAPI_XMEM_SEL`'s one window has to be re-aimed by the UI task per read and `OSAPI_MEM_HUGE`'s 64KB windows cut a record that straddles one in two. One view a block: a block with a run takes no `OSAPI_XMEM_SEL` and the reverse (AX = 2 either way). Freed with the block. CF=1, AX = 1 not available (every kernel but kern_mega in protected mode) or no run of free LDT entries, 2 not the base of a block the caller owns or it has a selector already. UI-task context. The Video Player's hold and bank (98.3.18.16) are its consumer; docs/plans/KERN-MEGA-PLAN.md 14.16 |
-| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). **AX = 0 ASKS** (§50.3.5): AX = the most KB a claim of BX's shape is given now, nothing claimed - and BX = `MEMH_AVAIL` (1) is the KB doors' answer with the pool counted, AX largest / BX total / DX the pool's best run; CF=1 on kern_big and kern_small, whose `OSAPI_MEM_AVAIL` is that answer. Any context |
+| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). **AX = 0 ASKS** (§50.3.5): AX = the most KB a claim of BX's shape is given now, nothing claimed - and BX = `MEMH_AVAIL` (1) is the KB doors' answer with the pool counted, AX largest / BX total / DX the pool's best run; CF=1 on kern_big and kern_small, whose `OSAPI_MEM_AVAIL` is that answer. **BX = `MEMH_REGROW` (4)** with DX = a claim regrows it to AX KB - a claim above 1MB on kern_mega at any size, CF=1 for any other (§50.3.5, THE REGROW). Any context |
 
 **Branch on `CPU_F_PM`, then on the slot.** A package that reads extended
 memory in place takes 41.13's or 41.15's route without the bit and this one
@@ -101293,16 +101294,38 @@ loop in the driver that held each failed block so the next attempt would land
 elsewhere: correct, but it could hold 128KB to find 32KB and refuse on a
 machine that had the room the whole time.
 
-**On kern_mega a claim WITH A HEAD is conventional** (§50.3.7). Until kernel
-size pass 19 an `OS88_HIGHMEM` package's KB DMA door gave its head a POOL
-block (KERN-MEGA-PLAN 14.160): taken from the pool's floor up, born pinned
-(`MX_FDMA | MX_FPIN`), kept page-safe by both of the pool's compactions and by
-an in-pool regrow, and unpinned by `OSAPI_MEM_MOVABLE`. Pass 19's C1 withdrew
-the KB doors and `OSAPI_MEM_P` keeps a head conventional, so nothing made such
-a block any more, and its machinery (`mega_claimdf`, `mega_dmahset`,
-`mx_dmafit`, `mega_dmamovf`, `mx_alloc`'s floor-up arm) went in that pass's
-wave C (docs/plans/ksp19/swdrv.md). KERN-MEGA-PLAN 14.160's audit is the
-record of what it was.
+**On kern_mega in protected mode, an `OS88_HIGHMEM` package's claim of 64KB or
+less WITH A HEAD is a POOL block** (KERN-MEGA-PLAN 14.160), where `mega_claimhf`
+puts its plain claims: `mega_claimdf` hands `mx_alloc` the head, which places
+the block FROM THE POOL'S FLOOR UP (§50.6.10's one exception, KERN-MEGA-PLAN
+14.166) - a candidate whose head would straddle goes UP to the next page's
+floor - and the block is all below 16MB because the pool is
+(`mega_layoutf` caps it at 15MB above the first). Since the flag day withdrew
+the KB doors (kernel size pass 19) the arm is ASKED for: `OSAPI_MEM_P`'s
+`MEMP_CONV + MEMP_DMAPOOL` with the head in CX (§50.3.7), which every site
+that was a KB DMA door with a head at the base carries; a head without the
+bit is conventional. C1 made every such
+head conventional for one pass and its wave C deleted this machinery as dead;
+`megacmp` restored both (docs/plans/ksp19/megacmp.md). A driver never takes
+the arm - its own 8237 or bus-master code may not take a selector's
+base, so a driver's head claim is conventional whatever its header says. CX =
+0 is the plain claim and conventional as always. The answer is a selector,
+and a chip reaches it through the descriptor's base: `OSAPI_SEG` `SEG_LIN`
+answers the low 16 bits and the page, which is exactly what `SOUND.DRV`'s
+`sbl_ring_phys` programs an external ring from, and the floppy's native path
+does its page arithmetic on the same base (`dsk_runcap`, KERN-MEGA-PLAN
+14.156). **It is born PINNED** (`MX_FPIN`), the pool's spelling of a
+conventional claim's `MC_RLOC` = 0: a ring a chip is armed on must not move
+under it, and the pool has no relocation proc to call. `OSAPI_MEM_MOVABLE` on
+it takes the pin off (AX ≠ 0) and puts it back (AX = 0) and calls no proc -
+the selector the package holds is the claim, and a move rebases it - while
+every other pool claim still refuses the call. An unpinned one moves only
+where its head stays inside one page (`mx_dmafit`, §66.4.2's bump in both of
+the pool's passes, towards where the block is and no further), and an
+in-pool regrow that needs a new block carries the head into it. Its head
+costs no real-mode segment: a block a real-mode path names asks
+`OSAPI_MEM_P` instead. The audit of every caller is KERN-MEGA-PLAN 14.160's
+table.
 
 Two limits, both deliberate: a head bigger than 64KB is refused up front (no
 page can hold it, and that is also what bounds the bump). **The claim record
@@ -101532,6 +101555,18 @@ window, and the rules are:
 
 **THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.174):
 `OSAPI_MEM_REGROW` with DX = a huge claim (64KB windows) and AX = the new KB
+- since the flag day withdrew that door (kernel size pass 19), `OSAPI_MEM_P`'s
+`MEMP_REGROW` in paragraphs below 1,024KB, and at ANY size **this cell with
+BX = `MEMH_REGROW`** (4, `MEMP_REGROW`'s value: BL is either cell's verb),
+DX = the claim and AX = the KB, which takes a claim above 1MB (a run or a
+bridge, `mem_ishidx`) straight to the pool's KB regrow
+(`osapi_mem_regrow_x`) and answers CF = 1 for any other claim, AX not kept.
+Paragraphs cannot say 1,024KB in sixteen bits, and C1's KB arm wrapped there
+(`megargw`'s L3, closed #GP; the Browser's source, `br_regrow`; RunCPM's file claims through
+`os88_mem_regrow`, whose thunk takes this cell from 1,024KB up). On every
+other kernel no claim reaches 1,024KB and the cell, a claim there, refuses
+AX = 1,024 or more - so `MEMH_REGROW` is only ever asked that size, and
+below it `MEMP_REGROW` serves every claim on every kernel. The regrow
 answers CF = 0 and DX = its first selector NOW, the step still 8, every byte
 up to the smaller size where it was in the walk, and keeps the claim's SHAPE:
 one run stays one run (so `HUGE_NOBRIDGE`'s promise outlives every regrow
@@ -101634,8 +101669,14 @@ OSAPI_MEM_P   door, RCX     BL = the verb (MEMP_*), ES = the caller (X stub)
                         512-aligned (§50.2.1.1; every base is, at 512)
     | MEMP_CONV 80h     CX = the page-safe HEAD in paragraphs (0 = none),
                         and the claim stays CONVENTIONAL on kern_mega
+    | MEMP_DMAPOOL 40h  with MEMP_CONV and a head: on kern_mega in protected
+                        mode an OS88_HIGHMEM package's claim and head of
+                        64KB or less are a PINNED POOL block, the head in
+                        one 64KB page (§50.3, the KB DMA doors' answer);
+                        anywhere else, or refused there, MEMP_CONV's claim
   MEMP_REGROW   4   DX = your claim, AX = paragraphs -> as OSAPI_MEM_REGROW,
-                        AX = the paragraphs granted
+                        AX = the paragraphs granted. 1,024KB and more is
+                        OSAPI_MEM_HUGE's MEMH_REGROW, in KB (§50.3.5)
   MEMP_AVAIL    5   -> AX = the largest claim you can have, BX = the total,
                         in paragraphs, at your floor as OSAPI_MEM_AVAIL -
                         the CONVENTIONAL heap's on kern_mega; the pool too is
@@ -101687,9 +101728,9 @@ rather than trusted to the rounding.
 **On kern_mega a claim WITH A HEAD is taken from the bottom**, as
 `OSAPI_MEM_CLAIM_DMA_HI`'s is (§50.3.2, KERN-MEGA-PLAN 14.55): a head names a
 chip's 64KB page, so the claim is a DMA ring held only while it plays, and
-`MEMP_CLAIM_HI` with CX ≠ 0 is that door in paragraphs — `SOUND.DRV`'s staging
-pool is the caller. Bit 15 of CX is not a head. kern_big and kern_small take
-`_HI` from the top either way.
+`MEMP_CONV + MEMP_CLAIM_HI` with CX ≠ 0 is that door in paragraphs —
+`SOUND.DRV`'s staging pool is the caller. kern_big and kern_small take `_HI`
+from the top either way.
 
 **On kern_mega it offers the pool first, as the KB doors do.** An
 `OS88_HIGHMEM` package's claim of 64KB or less with no DMA head goes to
@@ -101707,11 +101748,21 @@ code part faulted as data (`pxmega`, an invalid opcode in PiXEL's decoder).
 With `MEMP_CONV` and CX = 0 a claim is conventional with no head; without
 it CX is not read at all.
 
-**A claim WITH A HEAD stays conventional here on every package**, and that is
-now a contract rather than an accident: from KERN-MEGA-PLAN 14.160 until kernel
-size pass 19 the KB DMA doors gave an `OS88_HIGHMEM` package's head claim a
-pool block (§50.3), and this door is the one a package names for a page-safe buffer that a real-mode
-path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
+**A claim WITH A HEAD stays conventional here on every package unless the
+verb carries `MEMP_DMAPOOL`** (`40h`, beside `MEMP_CONV`), and that is a
+contract rather than an accident: since KERN-MEGA-PLAN 14.160 an
+`OS88_HIGHMEM` package's DMA head claim may be a pinned pool block (§50.3) -
+the KB DMA doors' answer, which the bit asks for in paragraphs. It is a verb
+bit and not a bit of CX (`megacmp`'s first form, `CX | 4000h`) because the
+verb is a byte every site writes anyway: the bit costs no site a byte and no
+kernel but kern_mega one, where a CX bit cost every kernel a mask of the head
+and a site that computes its head an `or`. Every site converted from a
+`OSAPI_MEM_CLAIM_DMA`/`_DMA_HI` call with a head at the base carries it
+(the Audio Player's look-ahead, WIN16's `w16mm.inc`, WireFleet's, 1942's and
+Arcade's rings, MIDIRack, PiXEL's `px_dmaclaim`, the Recorder, both WaveRack
+rings, XT-MP3's, `os88type.inc`'s read buffer; docs/plans/ksp19/mcmerge.md is
+the table). So this door WITHOUT the bit is the one a package names for
+a page-safe buffer that a real-mode path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
 workspace a fixed disk is read through a call a run rather than a call a
 sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
@@ -103049,12 +103100,26 @@ HMA's end up to the lowest block, and the HMA is reached last. `mx_compactf`
 one claim. The Task Manager's MAX RUN replays the pack with only the HMA
 pinned, so it reads AVAIL less the HMA's share.
 
-**(A PINNED block from the floor up** was KERN-MEGA-PLAN 14.166's rule for the
-one pool block born pinned, a KB DMA door's head claim (§50.3, KERN-MEGA-PLAN
-14.160): `mx_alloc` took it first fit UPWARD from `[mega_mxflr]` so a pin never
-cut the free run in two. Kernel size pass 19's C1 withdrew those doors, nothing
-pins a pool block at birth any more, and the arm went in that pass's wave C;
-every pool claim is taken from the top.)
+**...but a PINNED block from the floor up** (KERN-MEGA-PLAN 14.166, the
+owner's rule: *"we don't want to blockade the available space with something
+in the middle"*). A DMA door's block (§50.3, KERN-MEGA-PLAN 14.160) is born
+`MX_FPIN`, and taken top-down it landed UNDER every block taken before it -
+so when those were freed their KB stood ABOVE the pin as a run of its own,
+which the pack UP cannot join to the run below it, and the largest claim the
+pool could grant fell short of its free KB by all of them. Measured on a 1MB
+kern_mega (86Box's mr286, the sound driver up): KERN-MEGA-PLAN 14.166's
+table. So `mx_alloc` takes a block it is about to pin FIRST FIT UPWARD from
+`[mega_mxflr]`: free memory is one run from the floor to the lowest movable
+block, and a pin at its bottom leaves it one run. A head that would straddle
+a 64KB page goes to the next page's floor, which can leave a page's tail
+under it - at most 63KB, and only when two pins are standing whose heads
+cannot share a page; the next pin small enough fills it first. A MOVABLE
+block standing under the candidate (the top was too full for it) is packed
+up out of the way first, once, so the pin does not keep it below. The floor
+is the HMA when nothing else stands there, so a DOS trip that finds a pin in
+it parks the HMA with the session (§50.6.10's MC4 rule, 64KB more park) -
+and packs the pool UP first, so a block that is only movable is not left
+there to cost that.
 
 `tests/megaxmove.py` is the gate: a block moved by the pack and read back
 through its first token, by copy, in place, by the file layer and by a

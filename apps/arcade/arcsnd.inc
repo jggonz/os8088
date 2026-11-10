@@ -131,7 +131,7 @@ ar_sb_open:
     mov byte [ar_swhy], 4
     mov ax, AR_SB_KB * 64
     mov cx, AR_SB_KB * 64
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; born PINNED, and never declared: it
     jc .no                          ;   lives as long as the bracket
     mov [ar_sbseg], dx

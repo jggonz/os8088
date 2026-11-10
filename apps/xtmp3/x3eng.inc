@@ -1919,7 +1919,7 @@ x3_ringget:
     mov ax, (X3_XRL / 1024 + 1) * 64 ; the ring and its control words, all in
     mov cx, ax                      ; the page-safe head
     push bx
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P
     pop bx
     jc .no

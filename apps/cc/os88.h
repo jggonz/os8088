@@ -1280,7 +1280,12 @@ int      os88_mem_free(unsigned seg);
 unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * claim is untouched;
                                                   * otherwise the base NOW,
-                                                  * which may have MOVED */
+                                                  * which may have MOVED.
+                                                  * kb >= 1024 is an
+                                                  * os88_mem_huge claim's,
+                                                  * above 1MB on kern_mega
+                                                  * (MEMH_REGROW, SPEC.md
+                                                  * 50.3.5) */
 /* os88_mem_huge - a claim of ANY size (SPEC.md 50.3.5): 0 = refused, else its
  * first segment or selector; os88_mem_huge_step() is what to add to it for
  * each 64KB - 0x1000 on a real-mode kernel, 8 under kern_mega's protected

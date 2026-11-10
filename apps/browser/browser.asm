@@ -5491,8 +5491,11 @@ br_regrow:
     call br_wdrop                   ; a KB of document) pays a compare
 .grow:
     push bx
-    mov bl, MEMP_REGROW
-    call br_kbp
+    mov bx, MEMH_REGROW             ; (= MEMP_REGROW: BL, either cell's verb)
+    cmp ah, 4                       ; 1,024KB and more is no paragraph count:
+    jae .huge                       ; kern_mega's pool claim regrows in KB
+    call br_kbp                     ; (SPEC.md 50.3.5), where the shift would
+.gd:                                ; wrap - a 1,025KB source regrown to 1KB
     pop bx
     jc .back
     call br_reloc                   ; its word follows it (DX = where it is),
@@ -5505,6 +5508,11 @@ br_regrow:
     pop si
     pop bx
     jmp short br_pageunpin
+.huge:
+    push ax
+    call OSAPI_MEM_HUGE
+    pop ax
+    jmp short .gd
 
 ; br_kbp - OSAPI_MEM_P's verb BL with AX in KB, the Browser's unit (it plans
 ; in KB because OSAPI_MEM_HUGE's pool answer is KB): AX and CX kept

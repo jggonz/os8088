@@ -783,7 +783,7 @@ rc_do_rec:
     jc .out
     mov ax, RC_RKB * 64
     mov cx, ax                      ; all of it is the card's: page-safe
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; DX = the ring's segment
     jc .nomem
     mov [rc_rseg], dx

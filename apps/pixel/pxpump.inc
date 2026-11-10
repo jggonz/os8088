@@ -46,7 +46,7 @@ px_dmaclaim:
     push ax
     push cx
     mov cx, ax
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call OSAPI_MEM_P
     jc .out
     mov bx, dx

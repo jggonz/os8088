@@ -2405,7 +2405,8 @@ SEG_LOW     equ 14
                                  ;          place, so claim a worst case, build
                                  ;          into it and regrow to what you used
                                  ;          (SPEC.md 50.3.1). ALWAYS take the
-                                 ;          answer from DX
+                                 ;          answer from DX. 1,024KB or more
+                                 ;          is OSAPI_MEM_HUGE's MEMH_REGROW
                                  ; MEMP_AVAIL  -> AX = the largest claim you
                                  ;          can have, BX = the total, in
                                  ;          paragraphs, at your floor. Size
@@ -2429,7 +2430,9 @@ SEG_LOW     equ 14
                                  ; covers it; MEMP_CONV keeps it conventional
                                  ; - a block that is or will be a CS, one a
                                  ; real-mode path names, a page-safe buffer
-                                 ; (KERN-MEGA-PLAN 14.160)
+                                 ; (KERN-MEGA-PLAN 14.160) - unless
+                                 ; MEMP_DMAPOOL asks for the head's pool
+                                 ; block (below)
 MEMP_CLAIM    equ 0
 MEMP_CLAIM_HI equ 1
 MEMP_CPU      equ 2
@@ -2444,6 +2447,17 @@ MEMP_CONV     equ 0x80           ; + a claim verb: CX = a page-safe HEAD in
                                  ; CONVENTIONAL on kern_mega. Without it CX is
                                  ; not read and an OS88_HIGHMEM package's claim
                                  ; may go above 1MB there
+MEMP_DMAPOOL  equ 0x40           ; + MEMP_CONV, CX = a head (not 0): a DMA
+                                 ; RING. On kern_mega in protected mode an
+                                 ; OS88_HIGHMEM package's claim and head of
+                                 ; 64KB or less are then a PINNED POOL block
+                                 ; above 1MB, the head inside one 64KB page
+                                 ; (the withdrawn KB DMA doors' answer,
+                                 ; SPEC.md 50.3, KERN-MEGA-PLAN 14.160):
+                                 ; OSAPI_MEM_MOVABLE unpins it and compaction
+                                 ; keeps the head page-safe. Elsewhere, or
+                                 ; refused there, it is MEMP_CONV's claim. Not
+                                 ; for a ring a real-mode path reads
 %define OS88_BYTES_PARA(n) (((n) + 15) / 16)   ; bytes -> paragraphs to ask for
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
@@ -3143,6 +3157,17 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; MEMP_AVAIL's answer >> 6 IS that answer
                                  ; there
 MEMH_AVAIL  equ 1               ; OSAPI_MEM_HUGE AX = 0, BX = this: the ask above
+MEMH_REGROW equ MEMP_REGROW     ; OSAPI_MEM_HUGE BX = this (4), DX = a claim, AX =
+                                 ; KB: REGROW, in KB, for the size MEMP_REGROW's
+                                 ; paragraphs cannot say (1,024KB and more). On
+                                 ; kern_mega in protected mode, a claim above
+                                 ; 1MB (a run or a bridge) to ANY size, as
+                                 ; MEMP_REGROW (DX = the claim NOW; AX is not
+                                 ; kept); CF=1 for every other claim - and on
+                                 ; every other kernel, where no claim reaches
+                                 ; 1,024KB, it is refused at 1,024KB or more.
+                                 ; Below 1,024KB use MEMP_REGROW, which serves
+                                 ; every claim on every kernel
                                  ; A BRIDGE IS TWO RUNS OF MEMORY (SPEC.md
                                  ; 50.3.5, KERN-MEGA-PLAN 14.169): out BX =
                                  ; its POOL piece's windows when you got

@@ -16,7 +16,7 @@ n_pcm_open:
 .claim:
     mov ax,13 * 64
     mov cx,13 * 64
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P
     jc .out
     mov [n_pcmseg],dx

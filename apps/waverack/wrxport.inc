@@ -1048,7 +1048,7 @@ wt_claims:
     push cx
     mov cx, ax
     push bx
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; (keeps all but DX)
     pop bx
     pop cx

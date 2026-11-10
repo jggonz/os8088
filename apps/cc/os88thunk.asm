@@ -2315,6 +2315,8 @@ _os88_task_restartable:
 ; new size in KB; out DX = the claim's base NOW. ALWAYS TAKE THE ANSWER: a
 ; grow that had to move leaves your old segment pointing at memory that is no
 ; longer yours. 0 = refused, and the old claim is untouched at its old base.
+; 1,024KB and more is no paragraph count: OSAPI_MEM_HUGE's MEMH_REGROW (an
+; os88_mem_huge claim above 1MB on kern_mega; refused everywhere else)
 CC_GATE _os88_mem_regrow
 %ifdef CC_U__os88_mem_regrow
 _os88_mem_regrow:
@@ -2322,10 +2324,16 @@ _os88_mem_regrow:
     mov bp, sp
     mov dx, [bp+4]
     mov ax, [bp+6]
+    mov bx, MEMH_REGROW             ; (= MEMP_REGROW: BL, either cell's verb)
+    cmp ah, 4
+    jae .huge                       ; 1,024KB or more
     mov cl, 6                       ; in KB: paragraphs
     shl ax, cl
-    mov bl, MEMP_REGROW
     call OSAPI_MEM_P
+    jmp short .r
+.huge:
+    call OSAPI_MEM_HUGE
+.r:
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 refused, or the base NOW

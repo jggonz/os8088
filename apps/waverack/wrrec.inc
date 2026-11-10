@@ -1175,7 +1175,7 @@ wc_claims:
 .try:
     push cx
     mov cx, ax
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; (keeps all but DX)
     pop cx
     jnc .ring

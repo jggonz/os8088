@@ -472,6 +472,9 @@ MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x80          ; + a claim verb: CX = the head, and stay
                                 ; conventional on kern_mega (bit 7: tested by
                                 ; the verb byte's sign)
+MEMP_DMAPOOL  equ 0x40          ; + MEMP_CONV: the head a POOL block on
+                                ; kern_mega (an OS88_HIGHMEM package's, 14.160)
+MEMH_REGROW   equ MEMP_REGROW   ; OSAPI_MEM_HUGE's BX: DX's pool claim to AX KB
 %if MEMP_CONV != 0x80
   %error "osapi_mem_p tests MEMP_CONV as the verb byte's sign"
 %endif
@@ -5474,6 +5477,12 @@ mmf_osapi_mem_huge:
     clc
     retf
 .claim:
+    cmp bx, MEMH_REGROW         ; BX = MEMH_REGROW: DX's POOL claim (a run or
+    jne .new                    ; a bridge) regrown to AX KB - past 1,023KB,
+    call mem_ishidx             ; which OSAPI_MEM_P's paragraphs cannot say
+    jc .bret                    ; (megargw's L3, RunCPM's files). Any other
+    jmp osapi_mem_regrow_x      ; claim: CF = 1. (Its retf is the cell's)
+.new:
     call COLD_SEG:mega_hugef        ; above 1MB, if it can be
     jc .conv
     retf
@@ -5658,6 +5667,11 @@ mem_hrecf:
 ;           512-aligned - on a granule of 512 every base is anyway
 ;           | MEMP_CONV (80h): CX = the 64KB-page-safe HEAD in paragraphs, 0 =
 ;           none, and the claim stays CONVENTIONAL on kern_mega
+;           | MEMP_CONV | MEMP_DMAPOOL (C0h): the same, but on kern_mega in
+;           protected mode an OS88_HIGHMEM package's claim and head (not 0)
+;           of 64KB or less are a PINNED POOL block, the head inside one 64KB
+;           page (mega_claimdf, KERN-MEGA-PLAN 14.160), as the withdrawn KB
+;           DMA doors gave; anywhere else, or refused there, as MEMP_CONV
 ;      BL = MEMP_REGROW (4): DX = your claim, AX = paragraphs -> as
 ;           OSAPI_MEM_REGROW, AX = the paragraphs granted
 ;      BL = MEMP_AVAIL (5): out AX = the largest claim you can have and BX =
@@ -5687,8 +5701,12 @@ osapi_mem_p:
     ; MEMP_CONV claim stays conventional: THE door for a page-safe buffer or
     ; a block a real-mode path names, or one that is or will be a CS (the
     ; parts' carve and their fetches, the C overlay - KERN-MEGA-PLAN 14.160)
+    ; - unless MEMP_DMAPOOL asks, with a head, for what the withdrawn KB DMA
+    ; doors gave an OS88_HIGHMEM package: a pinned pool block (14.160;
+    ; restored by kernel size pass 19's megacmp after C1 had made every such
+    ; head conventional)
     or bl, bl                   ; MEMP_CONV is the sign
-    js .gen
+    js .mdma
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
@@ -5697,6 +5715,7 @@ osapi_mem_p:
     push ax
     call .kb                    ; AX = the KB that covers it
     call COLD_SEG:mega_claimhf
+.mpc:
     jc .mno
     add sp, 2
 .mkb:
@@ -5709,29 +5728,35 @@ osapi_mem_p:
 .mno:
     pop ax
     jmp short .gen
+.mdma:                          ; MEMP_CONV: conventional with the head CX...
+    test bl, MEMP_DMAPOOL       ; ...UNLESS MEMP_DMAPOOL: a head (none is
+    jz .gen                     ; conventional) is a pool block with the head
+    jcxz .gen                   ; inside one 64KB page, born pinned, for an
+    push ax                     ; OS88_HIGHMEM package (mega_claimdf), else
+    push cx                     ; the conventional head claim
+    call .kb
+    xchg ax, cx
+    call .kb
+    xchg ax, cx                 ; AX = the claim's KB, CX the head's
+    call COLD_SEG:mega_claimdf
+    pop cx
+    jmp short .mpc
 .mreg:
+    push ax
+    call .kb                    ; (in KB, both arms)
     call mem_ishidx             ; a POOL block: OSAPI_MEM_REGROW's own arm
     jc .mconv                   ; resizes it (or moves it down), in KB
-    push ax
-    call .kb
     call COLD_SEG:osapi_mem_regrow_x
-    jc .mno
-    add sp, 2
-    jmp short .mkb
+    jmp short .mpc
 .mconv:                         ; ...and so does it a conventional claim
     cmp byte [mega_on], 0       ; mega_hugec made a RUN over (MEGA-HUGE-PLAN
-    je .gen                     ; F8): the paragraph regrow would leave its
-    push ax                     ; windows as they were
-    call .kb
-    call COLD_SEG:mega_hugecrgf
-    jnc .mok
+    je .mno                     ; F8): the paragraph regrow would leave its
+    call COLD_SEG:mega_hugecrgf ; windows as they were
+    jnc .mpc
     jnz .mno                    ; (no run: the paragraph door's own)
     pop ax                      ; a run, refused
     stc
     retf
-.mok:
-    add sp, 2
-    jmp short .mkb
 .kb:
     push cx
     add ax, 63
@@ -5849,8 +5874,9 @@ osapi_mem_movable_x:
 .hi:                            ; above 1MB: a region never moves, and of the
     call COLD_SEG:mega_bfpcf    ; (A BRIDGE: its conventional piece is the
     jnc .seg                    ; claim declared, KERN-MEGA-PLAN 14.169)
-%endif                          ; ...and CF = 1 from the jnc: no other pool
-.out:                           ; claim is a caller's to pin or unpin
+    call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
+%endif                          ; pinned, so only its pin is the caller's to
+.out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
 %ifdef KERN_MEGA
     pop dx
 %endif

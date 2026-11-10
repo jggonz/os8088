@@ -432,7 +432,7 @@ sb_rec:
     mov ax, SB_RKB * 64
     mov cx, ax                      ; all of it is the card's: page-safe
     mov word [sb_rtmp], 0           ; (nothing to free if this refuses)
-    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
     call OSAPI_MEM_P            ; DX = the ring's segment
     mov al, 9
     jc .freefail

@@ -886,7 +886,7 @@ vk_claim:
     mov ax, VK_BUFKB * 64
     mov cx, VK_BUFKB * 64
     push bx
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call OSAPI_MEM_P
     pop bx
     jc .no

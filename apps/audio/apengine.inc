@@ -121,7 +121,7 @@ ap_ensure_bufs:
     push bx
     mov ax, 32 * 64                 ; AP_LA_SZ in paragraphs
     mov cx, 32 * 64                 ; ALL OF IT PAGE-SAFE: the floppy's 8237
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call OSAPI_MEM_P            ; writes every gulp straight into it, and
     jnc .got                       ; a run across a 64KB page is split there,
     mov bl, MEMP_CLAIM

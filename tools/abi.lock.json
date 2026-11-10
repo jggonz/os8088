@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "9daa4ddbd3cfdf34fc730f8e45f13bb7014932e1792964b4f325bc9961460394",
+  "fingerprint": "c3fc6e3e13b55af13e0b5eac6a40aa8ed467ff559bd50654479c827a296031da",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "01601fb9d201a43de2f95838c56d8f99bd16473a994d5457cc65022cd5106680",
+  "fingerprint": "e525a39b56edeb56b4f7c0cf5fb738304ec24afcaa94d76c27adf287d8d874db",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2161,6 +2161,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of kbpara (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "e525a39b56edeb56b4f7c0cf5fb738304ec24afcaa94d76c27adf287d8d874db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of megacmp (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "c3fc6e3e13b55af13e0b5eac6a40aa8ed467ff559bd50654479c827a296031da",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of megacmp (kernel size pass 19)",
    "to": 14
   }
  ]

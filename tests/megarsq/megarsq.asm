@@ -33,7 +33,7 @@ rq_entry:
     mov ax, 32 * 64
     mov cx, 32 * 64                      ; page-safe, all of it: the player's
     push bx
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call OSAPI_MEM_P            ; bounce is taken the same way
     pop bx
     mov cx, 1

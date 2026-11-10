@@ -24088,11 +24088,11 @@ vp_rclaim:
 .r:
     pop cx
     ret
-; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but through
-; the PARAGRAPH door, which keeps a head conventional: kern_mega's KB DMA
-; door gives an OS88_HIGHMEM package a pool block for one (KERN-MEGA-PLAN
-; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
-; CF, DX; AX, BX and CX kept
+; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but
+; MEMP_CONV WITHOUT MEMP_DMAPOOL, which keeps a head conventional: with it
+; kern_mega gives an OS88_HIGHMEM package's head a pool block (KERN-MEGA-PLAN
+; 14.160, SPEC.md 50.3.7), and vp_ring is in vp_rlst - the real-mode bracket
+; reads into it. CF, DX; AX, BX and CX kept
 .p:
     push ax
     push bx

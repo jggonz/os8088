@@ -785,7 +785,7 @@ ty_open:
     shl ax, cl
     mov cx, ax
     push bx
-    mov bl, MEMP_CONV
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
     call OSAPI_MEM_P
     pop bx
     pop cx                          ; CX = the KB claimed
