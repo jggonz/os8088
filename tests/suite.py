@@ -22451,7 +22451,9 @@ SOAK = [
     Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
         "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
         "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
-        "thread each - HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "thread each, B: an 80-cylinder 720 KB drive with pagedesk720.img "
+        "(every sample; the 360 KB pair's first disk holds the program alone) "
+        "- HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
         "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
         "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
         "reachable at every trough with the caches shed, task 0's stack <= "
@@ -22461,8 +22463,8 @@ SOAK = [
         "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
         "beside another session's MartyPC",
         needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
-        wants=("build/os8088-360.img", "build/pagedesk360.img",
-               "build/pagedesk.bin")),
+        wants=("build/os8088-360.img", "build/os8088-720.img",
+               "build/pagedesk720.img", "build/pagedesk.bin")),
 ]
 
 

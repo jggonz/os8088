@@ -5484,9 +5484,12 @@ is the first disk's list. The fast row `pd360` (`tests/unit/t_pd360.py`)
 builds that disk from the current `build/pagedesk.o88` on every `make` and
 fails with fewer than 4 clusters free. At this writing 5 are free.
 
-The 360KB XT proof (`tests/pagedeskxt.py`, PD-29) opens `XTGUIDE.PDF` from
-B:, which now holds the program and not the guide. It needs a 720KB B:, a
-third drive or a disk of its own. That is open.
+The XT proof (`tests/pagedeskxt.py`, PD-29) opens `HELLO.PDF` and
+`XTGUIDE.PDF`, so it boots `pagedesk720.img` in an 80-cylinder 720KB B:
+(DECISIONS 07:22). The machines are `os8088_xt_vga_720b`,
+`os8088_5150_cga_720b_gla` and `os8088_5150_herc_720_gla`. Each is the 360KB
+profile it replaces with only the drives changed, still 640 KiB. The
+Hercules one has two 720KB drives, so its A: is `os8088-720.img`.
 
 **20.22.2.9 Room in the primary.** The `.o88` header's image + bss (the
 cap is 65,024):
