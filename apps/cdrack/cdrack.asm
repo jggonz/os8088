@@ -181,19 +181,8 @@ cr_entry:
     OS88_REGION_MOVABLE_NOKEEP cr_ret ; every byte that outlives a pass is a
                                     ; static and moves with us
     mov [cr_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin on the 8-pixel grid
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; every pixel is the paint's (the face is
-                                    ; dark: no white flash before it)
-    mov si, cr_about
-    call OSAPI_ABOUT_SET
     mov si, cr_menus
     call OSAPI_MENU_SET
-    mov ax, cr_wheel
-    call OSAPI_WM_ONWHEEL
-    mov ax, cr_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 1
     call OSAPI_WM_TIMER             ; the first poll, next tick (CF = 1 on
                                     ; kern_small, which has no driver either:
@@ -203,8 +192,6 @@ cr_entry:
     call OSAPI_WM_PREFER            ; the size, per adapter - and applied
     xchg ax, bx                     ; AX = the window
     mov bx, cr_btrec
-    mov si, cr_onup
-    mov di, cr_ondrag
     mov dx, cr_onclick
     call os88ui_btninit             ; keeps every register
     xchg ax, bx
@@ -1803,7 +1790,11 @@ cr_fillb:
 ; DATA
 ; =============================================================================
 cr_tpl:     dw 12, 28, CC_W + 2, C1_H + TITLE_H + 1
-            dw cr_ttl, cr_paint, cr_key, 0
+            dw cr_ttl, cr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS cr_cls, WF_OWNBG, PAINT, cr_paint, ONKEY, cr_key, \
+               ONCLICK, os88ui_btnclick, ABOUT, cr_about, ONMOUSEUP, cr_onup, \
+               ONTIMER, cr_tick, ONDRAG, cr_ondrag, ONWHEEL, cr_wheel
 cr_ttl      equ 16                  ; the header's name field: 'CDRack'
 
 cr_pref:    times 6 dw 0            ; OSAPI_WM_PREFER's table (cr_prefset)

@@ -94,12 +94,6 @@ fl_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [fl_win], bx
-    mov ax, fl_tick
-    call OSAPI_WM_ONTIMER
-%if FLT_MODE == 6
-    mov ax, fl_wake
-    call OSAPI_WM_ONWAKE
-%endif
     mov ax, 27                      ; a second and a half
     call OSAPI_WM_TIMER
 %if FLT_MODE == 4
@@ -270,10 +264,13 @@ fl_hex2:
 
 fl_tpl:
     dw 40, 120, 200, 60
+    dw fl_ttl, fl_cls
 %if FLT_MODE == 0
-    dw fl_ttl, fl_paint, fl_key, fl_click
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONKEY, fl_key, ONCLICK, fl_click
+%elif FLT_MODE == 6
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONWAKE, fl_wake
 %else
-    dw fl_ttl, fl_paint, 0, 0
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint
 %endif
 fl_ttl:     db FLT_NAME, 0
 fl_s_pfx:   db 'FLT', FLT_CH, ': ', 0

@@ -193,7 +193,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 %endif
 
 ; -----------------------------------------------------------------------------
-; fsx_run - the bracket (SPEC.md 53.1, slot 0x021D via X stub)
+; fsx_run - the bracket (SPEC.md 53.1, slot 0x0206 via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
 ;           window ptr, CL = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
@@ -768,7 +768,7 @@ fsx_mode:
     jmp kret_di
 
 ; -----------------------------------------------------------------------------
-; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x02E3)
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x02B5)
 ;
 ; in:       nothing. Bracket-only, exclusive task only.
 ; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may

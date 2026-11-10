@@ -230,7 +230,9 @@ pf_hex2:
 
 pf_tpl:
     dw 8, 400, 200, 40
-    dw pf_ttl, pf_paint, 0, 0
+    dw pf_ttl, pf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pf_cls, 0, PAINT, pf_paint
 pf_ttl:     db 'MegaPfl', 0
 pf_s_e9:    db 'MEGAPFL: ', 0
 

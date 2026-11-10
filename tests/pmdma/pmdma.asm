@@ -109,7 +109,6 @@ pd_entry:
     jc .out
     mov [pd_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP
     clc
     jmp short .out
 .refuse:
@@ -3215,7 +3214,10 @@ pd_drv:
 
 pd_tpl:
     dw 7, 22, 632, 448
-    dw pd_ttl, pd_paint, pd_onkey, pd_onclick
+    dw pd_ttl, pd_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pd_cls, 0, PAINT, pd_paint, ONKEY, pd_onkey, \
+               ONCLICK, pd_onclick
 
 pd_ttl:     db 'PicoMEM DMA', 0
 

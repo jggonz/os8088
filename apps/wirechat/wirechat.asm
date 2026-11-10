@@ -556,13 +556,6 @@ wc_entry:
     OS88_REGION_MOVABLE_NOKEEP wc_ret   ; every byte that outlives a pass is a
                                         ; static; the worker declares itself at
                                         ; its spawn (wc_hire)
-    mov al, 1
-    call OSAPI_WM_SNAP                  ; 8-aligned content (SPEC.md 11.94)
-    mov bx, [wc_win]
-    mov al, 1                           ; every pixel is ours (SPEC.md 113.5):
-    call OSAPI_WM_OWNBG                 ; a dark theme never flashes white
-    mov al, 1
-    call OSAPI_WM_SIZABLE
     mov si, wc_sizes
     call OSAPI_WM_PREFER
     mov cx, WC_MINW
@@ -570,32 +563,14 @@ wc_entry:
     call OSAPI_WM_MINSIZE
     mov si, wc_menus
     call OSAPI_MENU_SET
-    mov si, wc_about
-    call OSAPI_ABOUT_SET
     mov bx, [wc_win]                    ; BX re-loaded before each hook: The
-    mov ax, wc_onwake                   ; Wire's reason (a stale BX is
-    call OSAPI_WM_ONWAKE                ; refused in silence)
-    mov bx, [wc_win]
-    mov ax, wc_onresize
-    call OSAPI_WM_ONRESIZE
-    mov bx, [wc_win]
-    mov ax, wc_onrclick
-    call OSAPI_WM_ONRCLICK
-    mov bx, [wc_win]
-    mov ax, wc_ontimer
-    call OSAPI_WM_ONTIMER
-    mov bx, [wc_win]
-    mov ax, wc_onwheel                  ; the mouse WHEEL scrolls the pane
-    call OSAPI_WM_ONWHEEL               ; (SPEC.md 13.18); a no-op on the
-                                        ; 128KB kernel, flags preserved
-    mov bx, [wc_win]
     mov ax, 18                          ; one second; re-armed in the handler
     call OSAPI_WM_TIMER
     mov ax, [wc_win]                    ; the buttons' gesture (SPEC.md
-    mov bx, wc_btrec                    ; 20.5.1.3): the library installs the
-    mov si, wc_onup                     ; press, the release and the drag, and
-    mov di, wc_ondrag                   ; chains a press that is not a
-    mov dx, wc_onclick                  ; button's to wc_onclick
+    mov bx, wc_btrec                    ; 20.5.1.3): the press, the release and
+    mov dx, wc_onclick                  ; the drag are wc_cls's, and the
+                                        ; library chains a press that is not a
+                                        ; button's to wc_onclick
     call os88ui_btninit
     ; --- the state a fresh window starts in ------------------------------
     mov word [wc_ln+LN_BUF], wc_lbuf    ; os88line wants these before the
@@ -622,7 +597,13 @@ wc_ret:
 ; - 1 = 171, and the dock owns row 176.
 wc_tpl:
     dw 16, 22, WC_FRW, WC_HVGA
-    dw wc_ttl, wc_paint, wc_onkey, 0    ; no W_ONCLICK: os88ui_btninit's
+    dw wc_ttl, wc_cls                   ; no W_ONCLICK: os88ui_btninit's
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS wc_cls, WF_OWNBG | WF_SIZABLE, PAINT, wc_paint, \
+               ONKEY, wc_onkey, ONCLICK, os88ui_btnclick, ABOUT, wc_about, \
+               ONWAKE, wc_onwake, ONMOUSEUP, wc_onup, ONRESIZE, wc_onresize, \
+               ONRCLICK, wc_onrclick, ONTIMER, wc_ontimer, ONDRAG, wc_ondrag, \
+               ONWHEEL, wc_onwheel
 
     OS88_PREFER wc_sizes, WC_FRW, WC_HVGA,  WC_FRWH, WC_HHERC,  WC_FRW, WC_HCGA
 
@@ -652,7 +633,7 @@ wc_hlplines:                            ; F1's card: the keys (SPEC.md 113.6.3)
 ; =============================================================================
 ; 'About WireChat' - the standard card
 ; =============================================================================
-; wc_about - the OSAPI_ABOUT_SET handler. in: SI = our window; lock HELD
+; wc_about - the WC_ABOUT handler. in: SI = our window; lock HELD
 wc_about:
     mov byte [wc_abon], 1               ; 2 is F1's help card (wc_fkey)
     call wc_popdown                     ; a popup and the card cannot both be up

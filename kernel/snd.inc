@@ -1068,7 +1068,7 @@ spk_off:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_fsx_spk - slot 0x042E (SPEC.md 34.11.1): a THIN door. The kernel does
+; osapi_fsx_spk - slot 0x03D9 (SPEC.md 34.11.1): a THIN door. The kernel does
 ; only what is the kernel's - the arbitration of channel 2, the divisor it
 ; banks and trims so [ticks] stays exact, and the open flag spk_off tears
 ; down by. The IRQ0 vector and channel 0's count are the CALLER'S to write,

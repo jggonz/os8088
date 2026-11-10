@@ -48,7 +48,7 @@
 ; panel can be closed with the disk tool still on screen.
 ;
 ; This needed the one kernel byte-count the split had otherwise avoided:
-; OSAPI_WM_DESTROY, slot 0x029E, 8 bytes of jump table. Closing an unowned
+; OSAPI_WM_DESTROY, slot 0x0281, 8 bytes of jump table. Closing an unowned
 ; window is a hide (SPEC.md 38.1), so without a destroy every load leaks a
 ; window record holding a W_SEG that names a freed claim - and MAX_WIN is 12.
 ; Holding 11KB was the better of those two, which is why this was a documented

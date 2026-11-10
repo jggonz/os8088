@@ -334,8 +334,6 @@ wr_entry:
     mov ax, bx                          ; **THE GESTURE'S TWO SLOTS** (SPEC.md
                                         ; 20.5.1.3): neither is a template word
     mov bx, wr_btrec
-    mov si, wr_onup
-    mov di, wr_ondrag
     mov dx, wr_onclick                ; OUR own click work; the library
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
@@ -361,33 +359,8 @@ wr_entry:
                                         ; the six-row list stops being a list
     mov si, wr_menus
     call OSAPI_MENU_SET
-    mov si, wr_about
-    call OSAPI_ABOUT_SET                ; SPEC.md 12.2 - every package has one,
-                                        ; and CLAUDE.md names the two that
-                                        ; shipped without
     mov bx, [wr_win]                    ; BX RE-LOADED BEFORE EACH HOOK. Every
-    mov ax, wr_onwake                   ; slot here documents BX = the window
-    call OSAPI_WM_ONWAKE                ; and most preserve it, but "most" is
-    mov bx, [wr_win]                    ; not a contract to build five installs
-    mov ax, wr_onclose                  ; on - and a hook installed against a
-    call OSAPI_WM_ONCLOSE               ; stale BX is refused in silence
-    mov bx, [wr_win]
-    mov ax, wr_onup
-    call OSAPI_WM_ONMOUSEUP             ; the thumb's release...
-    mov bx, [wr_win]
-    mov ax, wr_ontimer              ; 13.10.5.4.2's PAUSE commit, the gesture's
-    call OSAPI_WM_ONTIMER           ; third edge
-    mov ax, wr_ondrag
-    call OSAPI_WM_ONDRAG                ; ...and its movement. CF = 1 on the
-                                        ; 128KB kernel, which has no W_ONDRAG
-                                        ; at all; the bar then pages and does
-                                        ; not drag, which is what both kernel
-                                        ; bars did before SPEC.md 13.10.5
-    mov bx, [wr_win]
-    mov ax, wr_onwheel                  ; the mouse WHEEL scrolls the list
-    call OSAPI_WM_ONWHEEL               ; (SPEC.md 13.18); a no-op on the
-                                        ; 128KB kernel, flags preserved
-    mov bx, [wr_win]
+                                        ; not a contract to build five installs
     call OSAPI_WM_WAKE
     clc
 .out:
@@ -399,7 +372,12 @@ wr_entry:
 ; having to move it: 24 + WR_HCGA - 1 = 170, and the dock owns row 176.
 wr_tpl:
     dw 60, 24, WR_FRW, WR_HVGA
-    dw wr_ttl, wr_paint, wr_onkey, wr_onclick
+    dw wr_ttl, wr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS wr_cls, 0, PAINT, wr_paint, ONKEY, wr_onkey, \
+               ONCLICK, wr_onclick, ABOUT, wr_about, ONWAKE, wr_onwake, \
+               ONCLOSE, wr_onclose, ONMOUSEUP, wr_onup, ONTIMER, wr_ontimer, \
+               ONDRAG, wr_ondrag, ONWHEEL, wr_onwheel
 
     OS88_PREFER wr_sizes, WR_FRW, WR_HVGA,  WR_FRW, WR_HVGA,  WR_FRW, WR_HCGA
 
@@ -2373,7 +2351,7 @@ wr_onclose:
     clc
     ret
 
-; --- wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 12.2, 20.5.1) -----------
+; --- wr_about - the WC_ABOUT handler (SPEC.md 12.2, 20.5.1) -----------
 wr_about:
     push bx
     push si

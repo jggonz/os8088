@@ -104,7 +104,7 @@ two rounds for the cross-file lists.
   not carry the grow at all. Proved equivalent to the base under unicorn
   over 30,000 cases per kernel; every path runs fewer instructions.
 * **video-xms** (+209 / +84): the VOL_TAKE half is +66 of `.cold` with
-  **`OSAPI_VOL_TAKE` (0x043A) RETIRED** - a take is `OSAPI_VOL_ADD` with DX
+  **`OSAPI_VOL_TAKE` (0x0467) RETIRED** - a take is `OSAPI_VOL_ADD` with DX
   != 0 (DL = the index `OSAPI_VOL_AT` answered), which main's SDK had marked
   "RESERVED, pass 0" - and the take and give-back are each one word store,
   DV_KIND and DV_UNIT adjacent. `DRVC_EMS` keeps no 36-byte table copy: its

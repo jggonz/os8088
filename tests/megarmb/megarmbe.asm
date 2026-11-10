@@ -48,8 +48,6 @@ me_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [me_win], bx
-    mov ax, me_tick
-    call OSAPI_WM_ONTIMER
     mov ax, ME_WAIT
     call OSAPI_WM_TIMER
     clc
@@ -399,7 +397,9 @@ me_lr:      db FSXL_DRV, DRVC_EMS, FSXL_END
 me_ln:      db FSXL_END
 me_tpl:
     dw 8, 300, 200, 40
-    dw me_ttl, me_paint, 0, 0
+    dw me_ttl, me_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS me_cls, 0, PAINT, me_paint, ONTIMER, me_tick
 me_ttl:     db 'MegaRMB EMS', 0
 
 ; THE RESULT BLOCK, in the bss (tests/vidrmbems.py reads it: its offset is

@@ -676,7 +676,7 @@ menu_relayout:
 ; -----------------------------------------------------------------------------
                                 ; (menu_ab_cell's body: a part of
                                 ; menu_relayout, entered from its `.done`)
-    xor ax, ax                  ; AX is W_ABOUT's to fill below
+    xor ax, ax                  ; AX is WC_ABOUT's to fill below
     mov [menu_abcell], ax
     mov bx, [menu_win]
     or bx, bx
@@ -694,7 +694,12 @@ menu_relayout:
     mov byte [di], 0
     pop di
                                 ; --- the items: About if it is offered, then
-    mov ax, [bx + W_ABOUT]      ; Close, which every application gets (12.7):
+    push bp                     ; Close, which every application gets (12.7):
+    mov si, bx                  ; the About slot of the window's CLASS
+    mov bp, WC_ABOUT            ; (SPEC.md 11.104) - SI is reloaded below
+    call wm_hnd
+    xchg ax, bp
+    pop bp
                                 ; BX is still [menu_win] - neither copy, menu_es
                                 ; nor KES touches it (kernel size pass 15). The
                                 ; About handler's offset, 0 = none: this was

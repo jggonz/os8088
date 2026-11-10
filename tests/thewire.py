@@ -224,7 +224,7 @@ FIXTURE = {
         # it: assertion 4 counts what that filter shows, and a tier-3 archive
         # would leave the two assertions reading each other's fixture.
         # needs_wire 7: the tree carries build/mseg.o88, whose parts library
-        # calls OSAPI_MEM_P (0x04BC) and OSAPI_FS_OP (0x04C2, SPEC.md 12.8.10)
+        # calls OSAPI_MEM_P (0x045B) and OSAPI_FS_OP (0x0461, SPEC.md 12.8.10)
         # - the cell fence (SPEC.md 92.2), declared as the site's own entries
         # declare it, and what this tree's Wire (WIRE_LEVEL 7) installs
         {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
@@ -616,7 +616,7 @@ def zstr(m, sym, n):
     return m.read(S(sym), n).split(b"\0")[0].decode("latin1", "replace")
 
 
-W_SEG = 22                              # the package's own segment, and
+W_SEG = 18                              # the package's own segment, and
                                         # os88geom stops at W_TITLE
 
 

@@ -85,7 +85,6 @@ wb_entry:
     jc .out
     mov [wb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP
     clc
     jmp short .out
 .refuse:
@@ -525,7 +524,10 @@ wb_ident:
 
 wb_tpl:
     dw 7, 22, 632, 448
-    dw wb_ttl, wb_paint, wb_onkey, wb_onclick
+    dw wb_ttl, wb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS wb_cls, 0, PAINT, wb_paint, ONKEY, wb_onkey, \
+               ONCLICK, wb_onclick
 
 wb_ttl:     db 'Weave Band Bench', 0
 

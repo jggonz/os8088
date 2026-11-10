@@ -107,12 +107,6 @@ fv_entry:
                                     ; The proc is a bare `ret` that is already
                                     ; here: nothing in the region names the
                                     ; region's own segment
-    mov al, 1
-    call OSAPI_WM_SNAP              ; makes fv_x + FV_TEXTX byte-aligned
-    mov ax, fv_onwake
-    call OSAPI_WM_ONWAKE
-    mov si, fv_about                ; 'About Font Viewer...' under our name in
-    call OSAPI_ABOUT_SET            ; the bar (SPEC.md 12.2, 90.9)
     call OSAPI_WM_WAKE              ; ordinary launch needs the same first load
     clc
 .out:
@@ -545,7 +539,10 @@ fv_copy:
 
 fv_tpl:
     dw 10, 22, FV_W, FV_H
-    dw fv_title, fv_paint, fv_onkey, fv_onclick
+    dw fv_title, fv_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fv_cls, 0, PAINT, fv_paint, ONKEY, fv_onkey, \
+               ONCLICK, fv_onclick, ABOUT, fv_about, ONWAKE, fv_onwake
 
 fv_title:      db 'Font Viewer', 0
 fv_s_none:     db 'No .F88 files', 0

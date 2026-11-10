@@ -702,7 +702,9 @@ ft_num_do:
 ; --- window template + strings ------------------------------------------------
 ft_tpl:
     dw 150, 26, 240, 300
-    dw ft_ttl, ft_paint, 0, 0
+    dw ft_ttl, ft_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ft_cls, 0, PAINT, ft_paint
 
 ft_ttl:    db 'File Test', 0
 ft_s_pass: db 'PASS', 0

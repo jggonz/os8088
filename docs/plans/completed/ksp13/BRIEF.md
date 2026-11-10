@@ -128,8 +128,8 @@ byte of those windows too.
   a cell offset, a module's or driver's header, a file format or a
   `SYSTEM.CFG` key.
   `git diff origin/main HEAD -- apps/os88api.inc drivers/os88drv.inc` is the
-  list of what is NOT frozen: `OSAPI_WM_QUIET` (0x0460), `OSAPI_MEM_HMA`
-  (0x0487), `OSAPI_ASSOC_FLUSH` (0x0466) and its `ASSOC_FL_*`,
+  list of what is NOT frozen: `OSAPI_WM_QUIET` (0x048D), `OSAPI_MEM_HMA`
+  (0x0487), `OSAPI_ASSOC_FLUSH` (0x040B) and its `ASSOC_FL_*`,
   `DRVM_CEIL_NET`'s value, and the HMA driver contract. Those may change
   freely - **so pass 12's first ABI wish (`OSAPI_MEM_HMA` as an arm of
   `OSAPI_MEM_CLAIM_DMA_HI`/`OSAPI_MEM_FREE`, ~-14/-6) is wkcore's to take**.

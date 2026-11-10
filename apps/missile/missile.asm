@@ -378,9 +378,6 @@ mc_entry:
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
-    mov ax, mc_onresize             ; mc_mono / mc_ecoarse / mc_caps are facts
-    call OSAPI_WM_ONRESIZE          ; about the CARD, and it can change under
-                                    ; us (SPEC.md 11.98)
     mov si, mc_pref                 ; **THE PLAYFIELD IS THE RULES** (SPEC.md
     call OSAPI_WM_PREFER            ; 11.100.1): this window is not WF_SIZABLE,
                                     ; so until it published these three sizes
@@ -396,17 +393,6 @@ mc_entry:
     call OSAPI_WM_MINSIZE           ; to the rows both cards have (SPEC.md
                                     ; 39.16.3) and the small card's own face is
                                     ; the smallest this game is still itself
-    mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
-    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
-                                    ; mono-only and VGA turned out to gain
-                                    ; more - and what lets the status strip's
-                                    ; three opaque runs take font_run's
-                                    ; single-store path WINDOWED as well as
-                                    ; fullscreen (SPEC.md 48.9). It preserves
-                                    ; FLAGS, so the CF the loader reads is
-                                    ; still WM_CREATE's. The price is 8px
-                                    ; drag steps on the two 1bpp adapters,
-                                    ; which for a game window is nothing
     mov al, OSAPI_CUR_CROSS         ; the pointer IS the gunsight, so the
     call OSAPI_WM_CURSOR            ; kernel draws it over our content and we
                                     ; stop drawing a second one on top of the
@@ -416,8 +402,6 @@ mc_entry:
                                     ; screen, so mc_cross_* still runs there
     mov si, mc_menus
     call OSAPI_MENU_SET
-    mov si, mc_about
-    call OSAPI_ABOUT_SET            ; 'About Missile' under our name in the bar
 .full:                              ; (SPEC.md 12.2); preserves the flags
     pop di
     pop si
@@ -7290,11 +7274,14 @@ mx_px:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; x/y/w/h are computed by mc_entry from the live screen.
 mc_tpl:
     dw 0, 0, 0, 0
-    dw mc_ttl, mc_paint, mc_onkey, mc_onclick
+    dw mc_ttl, mc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mc_cls, 0, PAINT, mc_paint, ONKEY, mc_onkey, \
+               ONCLICK, mc_onclick, ABOUT, mc_about, ONRESIZE, mc_onresize
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_PREFER mc_pref, MC_PREF_VW, MC_PREF_VH,  MC_PREF_HW, MC_PREF_HH,  MC_PREF_CW, MC_PREF_CH

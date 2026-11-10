@@ -138,7 +138,9 @@ bw_set:     db 0, 1, 2, 4, 7, 9, 14, 15    ; never 12, the clear's
 
 bw_tpl:                             ; the FRAME, so the title and the border
     dw 400, 120, BW_W + 2 * BW_OFF + 8, BW_H + 2 * BW_OFF + 32  ; are on top
-    dw bw_title, bw_paint, 0, 0
+    dw bw_title, bw_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS bw_cls, 0, PAINT, bw_paint
 
 bw_title:   db 'B4 Walk', 0
 

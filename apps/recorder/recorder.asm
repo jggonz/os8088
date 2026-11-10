@@ -211,20 +211,6 @@ rc_entry:
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    push ax                         ; SPEC.md 13.7: the buttons fire on the
-    mov ax, rc_onup                 ; RELEASE, over the button the press
-    call OSAPI_WM_ONMOUSEUP         ; landed on - so a mis-aimed press can be
-    mov ax, rc_ondrag               ; slid off and cancelled - and 13.8.1's
-    call OSAPI_WM_ONDRAG            ; tracking edge, so it comes back UP while
-    mov ax, rc_ontimer              ; the record pump (SPEC.md 13.9; CF on
-    call OSAPI_WM_ONTIMER           ; kern_small, which has no SOUND.DRV)
-    pop ax                          ; the pointer is off it rather than at the
-                                    ; release. Not template words; set after
-                                    ; wm_create, like MENU_SET
-    mov si, rc_about                ; 'About Recorder' above the Close the
-    call OSAPI_ABOUT_SET            ; kernel already puts in our pull-down
-                                    ; (SPEC.md 12.2) - flags preserved, so the
-                                    ; CF the branch above cleared still stands
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -1394,7 +1380,7 @@ rc_putu5:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; =============================================================================
 ; 'About Recorder' - the credit card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
@@ -1402,7 +1388,7 @@ rc_putu5:
 ; handlers taking it down are what a widget cannot own.
 
 ; -----------------------------------------------------------------------------
-; rc_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; rc_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -1459,7 +1445,11 @@ rc_ab4:     db 'Jorge Gonzalez', 0
 
 rc_tpl:
     dw 210, 150, 220, 140           ; x, y, w, h -> content 218 x 121
-    dw rc_ttl, rc_paint, 0, rc_onclick
+    dw rc_ttl, rc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rc_cls, 0, PAINT, rc_paint, ONCLICK, rc_onclick, \
+               ABOUT, rc_about, ONMOUSEUP, rc_onup, ONTIMER, rc_ontimer, \
+               ONDRAG, rc_ondrag
 
 rc_ttl:      db 'Recorder', 0
 

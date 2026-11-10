@@ -134,8 +134,6 @@ pr_entry:
     mov [pr_win], bx                ; the wake handler is handed SI = the
                                     ; window, but the repaint below wants it
                                     ; from a path that has spent SI
-    mov ax, pr_onwake
-    call OSAPI_WM_ONWAKE            ; BX = the window we just created
     call OSAPI_WM_WAKE              ; ...and kick ourselves once. It is legal
                                     ; from any context and the UI task pops it
                                     ; after this load has finished, which is
@@ -489,10 +487,12 @@ pr_paint:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) --------------------------
 pr_tpl:
     dw 40, 40, 288, 112
-    dw pr_ttl, pr_paint, 0, 0
+    dw pr_ttl, pr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pr_cls, 0, PAINT, pr_paint, ONWAKE, pr_onwake
 
 pr_ttl:     db 'PKGRUN', 0
 pr_s_file:  db 'HELLO.O88', 0

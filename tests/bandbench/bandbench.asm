@@ -102,11 +102,6 @@ bb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [bb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; the content origin onto a multiple of 8,
-                                    ; so `aligned` means aligned (SPEC.md
-                                    ; 11.94) - it preserves flags, so the CF
-                                    ; this proc owes the loader survives
     clc
 .out:
     pop si
@@ -822,7 +817,10 @@ bb_run:
 
 bb_tpl:
     dw 7, 22, 632, 448              ; x = 7 so WF_SNAP wants W_X + 1 on a
-    dw bb_ttl, bb_paint, bb_onkey, bb_onclick   ; multiple of 8
+    dw bb_ttl, bb_cls                           ; multiple of 8
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS bb_cls, 0, PAINT, bb_paint, ONKEY, bb_onkey, \
+               ONCLICK, bb_onclick
 
 bb_ttl:     db 'Band Bench', 0
 

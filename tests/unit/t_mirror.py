@@ -200,6 +200,7 @@ C_ALIAS = {
     "OS88_ASSOC_FULL": "ASSOC_FL_FULL",
     "OS88_ASSOC_HOLD": "ASSOC_FL_HOLD",
     "OS88_ASSOC_NOFLUSH": "ASSOC_FL_NOFLUSH",
+    "OS88_CLASS_LEN": "WC_MAXLEN",           # the whole class, every slot named
 }
 C_ONLY = {
     "OS88_H": "the include guard",

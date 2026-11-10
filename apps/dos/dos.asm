@@ -1166,12 +1166,10 @@ dos_entry:
                                     ; library lays the page out from where
                                     ; the window IS before every hit test,
                                     ; SPEC.md 20.5.1.3.5)
-    mov si, dos_onup                ; slots - the press, the release and the
-    mov di, dos_ondrag              ; tracking edge - and none of them is a
-    mov dx, dos_click               ; template word except the press, which
-    call os88ui_btninit             ; 20.5.1.3.3's cell now lets it write
-    pop dx                          ; late. dos_click is OUR own click work
-    mov bx, [dos_win]               ; and the library chains to it
+    mov dx, dos_click               ; record - its three slots are dos_cls's
+    call os88ui_btninit             ; (SPEC.md 11.104). dos_click is OUR own
+    pop dx                          ; click work and the library chains to it
+    mov bx, [dos_win]
     WIN_END
 
 
@@ -1247,27 +1245,6 @@ dos_entry:
                                     ; the first paint can read a screen whose
                                     ; attribute is still a zeroed bss's
 %endif
-    WIN_END
-
-    mov bx, [dos_win]               ; **NAMED, not whatever the last call left
-    mov ax, dos_wake                ; in BX.** The slot takes BX = the window
-    call OSAPI_WM_ONWAKE            ; and AX = the handler, and this used to
-                                    ; ride on a leftover: the first proc above
-                                    ; it that clobbered BX registered the
-                                    ; handler against another window's slot and
-                                    ; every wake this package posts went
-                                    ; nowhere - Run, Enter-re-run and the
-                                    ; console's own launch all stuck at
-                                    ; DST_READY with nothing to see
-    WIN_ONLY                        ; ...and the window's two: a close that
-                                    ; stops a windowed run, and the About card
-%ifdef DVW
-    mov ax, HENT(dvw_onclose)       ; a running program is stopped by a close,
-    call OSAPI_WM_ONCLOSE           ; not orphaned behind a hidden window
-%endif                              ; (SPEC.md 96.54). BX is still the window:
-                                    ; every slot preserves it
-    mov si, dos_about
-    call OSAPI_ABOUT_SET
     WIN_END
 
     mov byte [dos_pvol], 0xFF       ; **THE SENTINEL, BECAUSE BSS IS ZERO AND
@@ -8094,12 +8071,12 @@ dos_keeph:
     pop bx                          ; window is ON, not the primary (SPEC.md
                                     ; 39.16.4), because a drag across a seam is
                                     ; exactly when the answer changes
-    xor al, al
+    mov ax, WFB_KEEPH * 256
     cmp dl, VID_CGA
     jne .set
-    inc al
+    inc ax
 .set:
-    call OSAPI_WM_KEEPH
+    call OSAPI_WM_FLAG
     pop si
     pop dx
     pop cx
@@ -10749,10 +10726,20 @@ dos_tpl:
                                     ; (SPEC.md 96.32.5). The WIDTH is
                                     ; per-adapter and dos_pref says so; this
                                     ; row is the VGA/CGA one
-    dw dos_ttl, dos_paint, dos_key, 0   ; W_ONCLICK is installed by
-                                    ; os88ui_btninit (SPEC.md
-                                    ; 20.5.1.3.3), so the buttons see
-                                    ; the press before dos_click does
+    dw dos_ttl, dos_cls
+; its CLASS (SPEC.md 11.104). The press is the button library's (SPEC.md
+; 20.5.1.3.3), so the buttons see it before dos_click does; the wake is what
+; Run, Enter-re-run and the console's own launch post; a running program is
+; stopped by a close (DVW), not orphaned behind a hidden window (SPEC.md
+; 96.54); and the About card
+%ifdef DVW
+  %define DOS_C_CLOSE HENT(dvw_onclose)
+%else
+  %define DOS_C_CLOSE 0
+%endif
+    OS88_CLASS dos_cls, 0, PAINT, dos_paint, ONKEY, dos_key, \
+               ONCLICK, os88ui_btnclick, ABOUT, dos_about, ONWAKE, dos_wake, \
+               ONCLOSE, DOS_C_CLOSE, ONMOUSEUP, dos_onup, ONDRAG, dos_ondrag
 
     OS88_PREFER dos_pref, DOS_CONW, DOS_FRAMEH,  DOS_HERCW, DOS_FRAMEH,  DOS_CONW, 300
                                     ; **A REAL WIDTH AND A GENEROUS HEIGHT**,

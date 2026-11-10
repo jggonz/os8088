@@ -759,7 +759,7 @@ and the proposed replacement.
     - **Code:** on `VID_VESA` AH is the depth, 8 or 16 (`viddet.inc:681`).
     - **Proposed:** "1, 4, 8 or 16, so the sign bit is clear"
 15. **`kernel/fsx.inc:107`**, "(SPEC.md 53.8, 0x02C0)".
-    - **Code:** `OSAPI_FSX_CAPS` is `KERNEL_SEG:0x0217`
+    - **Code:** `OSAPI_FSX_CAPS` is `KERNEL_SEG:0x0200`
       (`apps/os88api.inc:5301`, `kernel.asm:3034`).
     - **Proposed:** "(SPEC.md 53.8, 0x022F)"
 16. **`kernel/fsx.inc:576`**, "(SPEC.md 53.4, 0x02D0)".
@@ -772,7 +772,7 @@ and the proposed replacement.
     - **Proposed:** "fsx_wait - the frame clock (SPEC.md 53.5, 0x0241)"
 18. **`kernel/fsx.inc:976-977`**, "(SPEC.md 53.10, the stale slot number 04E8h)".
     - **Code:** `OSAPI_FSX_PAGE` is 0x03C5 (`os88api.inc:5414`).
-    - **Proposed:** "(SPEC.md 53.10, slot 0x0398)"
+    - **Proposed:** "(SPEC.md 53.10, slot 0x034E)"
 19. **`kernel/fsx.inc:193-194`**, "bit 1 = FSXF_FASTTICK; others refuse)".
     - **Code:** bit 2 is `FSXF_RATE` with DX/DI (kern_big), bit 3 is
       `FSXF_REAL`, and CH is the display (`fsx.inc:221-233`).

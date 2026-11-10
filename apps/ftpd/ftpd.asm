@@ -476,13 +476,6 @@ fd_entry:
     ; every slot called below preserves every register but its outputs,
     ; and none of them outputs BX (apps size pass 2).
     OS88_REGION_MOVABLE_NOKEEP
-    mov al, 1
-    call OSAPI_WM_SNAP              ; 8-aligned content, so every log line takes
-                                    ; font_run's single-store path on the two
-                                    ; mono adapters (SPEC.md 11.94)
-    mov ax, fd_wake
-    call OSAPI_WM_ONWAKE            ; THE UI-TASK HALF. Everything this package
-                                    ; does to a disk happens in there
     ; --- the SECOND STAGE, if this machine has the room (SPEC.md 77.41) ----
     ; A REFUSAL IS A NORMAL PATH (PERFORMANCE.md rule 6): [fd_stg2] stays 0,
     ; fd_handoff never flips, and the server is the single-stage one that
@@ -512,28 +505,8 @@ fd_entry:
     mov byte [fd_ckpn], FD_CKPT / FD_BIGSZ
 .nobig:
 %endif
-    mov ax, fd_onup
-    call OSAPI_WM_ONMOUSEUP         ; SPEC.md 13.7: EVERY control here fires on
-                                    ; the RELEASE, over the one the press
-                                    ; landed on, so a mis-aimed press can be
-                                    ; slid off. W_ONMOUSEUP is inside the
-                                    ; 28-byte record, so it is on both kernels
-    mov ax, fd_ondrag
-    call OSAPI_WM_ONDRAG            ; ...and SPEC.md 13.8.2: the control it
-                                    ; landed on FOLLOWS the pointer between the
-                                    ; two edges. THE CARRY IS NOT TESTED - on
-                                    ; kern_small this refuses and there is no
-                                    ; drag edge, which leaves the static down
-                                    ; state that section asks for: down on the
-                                    ; press, up on the release, and the release
-                                    ; still re-finds the control before firing
-    mov ax, fd_onclose
-    call OSAPI_WM_ONCLOSE           ; ...and the last chance to write the
-                                    ; settings out (SPEC.md 77.17)
     mov si, fd_menus                ; SI is the entry proc's own, pushed at
     call OSAPI_MENU_SET             ; the top and popped at .out
-    mov si, fd_about
-    call OSAPI_ABOUT_SET
     call fd_cfg_load                ; SYSTEM\APPDATA\FTPD.CFG, if the disk has
                                     ; one. UI-task context, which the entry
                                     ; proc is - the worker does not exist yet
@@ -2085,12 +2058,12 @@ fd_promise:
     mov bx, [fd_win]
     or bx, bx                       ; before wm_create, and after a refused
     jz .out                         ; one: nothing to promise about
-    mov al, 0                       ; something is owed: withdraw
+    mov ax, WFB_SAVEU * 256         ; something is owed: withdraw
     cmp byte [fd_dirty], 0
     jne .say
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+    inc ax                          ; (two colours for good: fd_cls's WF_1BPP)
 .say:
-    call OSAPI_WM_SAVEU             ; BX is [fd_win] and not whatever was in it
+    call OSAPI_WM_FLAG              ; BX is [fd_win] and not whatever was in it
 .out:                               ; (SPEC.md 11.96.11.4)
     pop bx
     pop ax
@@ -6595,10 +6568,13 @@ fd_bye:
 
 ; --- fd_quiet - AL = 1 / 0: ask for a blank saver while we serve, or stop ---
 fd_quiet:
+    push ax
     push bx
     mov bx, [fd_win]
-    call OSAPI_WM_QUIET             ; (SPEC.md 79.10) - keeps every register
+    mov ah, WFB_QUIET
+    call OSAPI_WM_FLAG              ; (SPEC.md 79.10) - keeps every register
     pop bx
+    pop ax
     ret
 
 ; --- fd_shutdown - stop serving entirely -------------------------------------
@@ -8283,7 +8259,16 @@ fd_ab5:     db 'Contributed by Elendilon', 0
 
 fd_tpl:
     dw 40, 40, FD_W, FD_H
-    dw fd_ttl, fd_paint, fd_onkey, fd_onclick
+    dw fd_ttl, fd_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+; EVERY control here fires on the RELEASE (SPEC.md 13.7) and FOLLOWS the
+; pointer between the edges (13.8.2) - kern_small dispatches no drag, which
+; leaves the static down state that section asks for; the close is the last
+; chance to write the settings out (77.17). WF_1BPP: two colours for good,
+; and fd_promise answers the SAVEU half per tick
+    OS88_CLASS fd_cls, WF_1BPP, PAINT, fd_paint, ONKEY, fd_onkey, \
+               ONCLICK, fd_onclick, ABOUT, fd_about, ONWAKE, fd_wake, \
+               ONCLOSE, fd_onclose, ONMOUSEUP, fd_onup, ONDRAG, fd_ondrag
 
 %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)

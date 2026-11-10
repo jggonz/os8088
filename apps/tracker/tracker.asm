@@ -353,16 +353,6 @@ trk_entry:
     call OSAPI_WM_CREATE            ; out BX = window ptr, CF on full
     jc .out
     mov [trk_win], bx
-    mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
-    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
-                                    ; mono-only and VGA turned out to gain
-                                    ; more - and it is what lets every text
-                                    ; run we draw take font_run's single-store
-                                    ; path instead of the erase-and-letter
-                                    ; fallback (on VGA, the fallback's own
-                                    ; glyphs are the ones that come out
-                                    ; aligned). wm_snap preserves FLAGS, so
-                                    ; the loader's CF still survives to .out
     mov si, trk_pref                ; the two faces as a DECLARATION (SPEC.md
     call OSAPI_WM_PREFER            ; 11.100.1): a drag onto the other card of
                                     ; an extended desktop (11.100.4) takes the
@@ -371,16 +361,11 @@ trk_entry:
                                     ; content height it lands at. Flags kept
     push bx                         ; THE BUTTONS' GESTURE (SPEC.md 20.5.1.3):
     mov ax, bx                      ; press inverts, release fires, a slide
-    mov bx, tw_btns                 ; off cancels, and the two slots it rides
-    mov si, tw_onup                 ; on are the library's to install
-    mov di, tw_ondrag
-    mov dx, tw_onclick              ; ...a press on no button goes here
+    mov bx, tw_btns                 ; off cancels; the two slots it rides on
+    mov dx, tw_onclick              ; are trk_cls's. A press on no button
+                                    ; goes here
     call os88ui_btninit
     pop bx
-    mov ax, tw_clickw               ; ...and the press reaches US first, so the
-    call OSAPI_WM_ONCLICK           ; rects are re-read where the window is NOW
-                                    ; before the library hit-tests them (a
-                                    ; drag calls none of our handlers)
     mov byte [trk_rep], 2           ; Repeat: List - and the first song opened
                                     ; is the list, so it loops as it always
                                     ; did (45.21.3, 45.22.4)
@@ -394,13 +379,6 @@ trk_entry:
                                     ; arrives ZEROED, so a set installed ahead
                                     ; of it carries EMPTY strings.
                                     ; It preserves FLAGS too, so the loader's
-    mov si, trk_about               ; CF still survives to .out
-    call OSAPI_ABOUT_SET
-    mov ax, trk_onwake              ; SPEC.md 54.10: the kernel calls this once
-    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
-                                    ; module loads in front of it. BX is still
-                                    ; the window and the slot preserves the
-                                    ; flags the loader's CF rides in
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map.
@@ -699,7 +677,7 @@ trk_oncmd:
 .out:
     jmp tw_refresh                  ; a menu command's effect on the face now
 ; -----------------------------------------------------------------------------
-; trk_about - the OSAPI_ABOUT_SET handler: the STANDARD About card (os88ui.inc,
+; trk_about - the WC_ABOUT handler: the STANDARD About card (os88ui.inc,
 ;             SPEC.md 20.5.1), drawn over the face and remembered in
 ;             [trk_abon]. While it is up the worker drops its frames under the
 ;             lock (trk_render), tw_refresh refuses, and the button record has
@@ -3468,10 +3446,14 @@ trk_frame:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words); x/y set by trk_entry ----
+; --- window template (SPEC.md 11: 12 bytes, 6 words); x/y set by trk_entry ----
 trk_tpl:
     dw 0, 0, TRK_WINW, TRK_WINH
-    dw trk_ttl, trk_paint, trk_onkey, tw_clickw
+    dw trk_ttl, trk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS trk_cls, 0, PAINT, trk_paint, ONKEY, trk_onkey, \
+               ONCLICK, tw_clickw, ABOUT, trk_about, ONWAKE, trk_onwake, \
+               ONMOUSEUP, tw_onup, ONDRAG, tw_ondrag
 
 ; --- the frame per adapter (SPEC.md 11.100.1): VGA, Hercules, CGA ------------
     OS88_PREFER trk_pref, TRK_WINW, TRK_WINH,  TRK_WINW, TRK_WINH, \

@@ -2209,7 +2209,7 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x03D1: "the program is at DX, not at me"
+; osapi_pkg_rehome - API slot 0x0381: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
 ; in:  DX = the segment the program's image starts at, CX = the paragraphs
 ;      at DX the program keeps, the carve's tail past them going back to the

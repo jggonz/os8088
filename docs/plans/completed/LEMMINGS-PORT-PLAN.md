@@ -377,7 +377,7 @@ CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/me
 
 **Need.** Enter the SPEC.md 53 exclusive bracket from C - the whole game lives inside it
 
-- *Slot:* OSAPI_FSX_RUN (0x02C8) exists; no C thunk, and os88.h's header comment names OSAPI_FSX_* as deliberately unwrapped
+- *Slot:* OSAPI_FSX_RUN (0x02A7) exists; no C thunk, and os88.h's header comment names OSAPI_FSX_* as deliberately unwrapped
 - *Action:* Add a thunk to os88thunk.asm + os88.h, GATED %ifdef CC_HAS_FSX. NOT a raw C function pointer: add %define CC_HAS_FSX and a crt0.asm trampoline cc_fsxentry that near-calls a declared callback void os88_fsx_main(void *win), exactly as every other callback is declared, so the shim and the C cannot drift. The thunk is int os88_fsx_run(void *win, int flags) with AX = cc_fsxentry, BX = win, CX = flags, CF -> 0/-1. Stack it on os88_fullscreen(win,1) the way apps/missile/missile.asm:1186-1227 does. THE GATE IS NOT OPTIONAL: crt0.asm %includes os88thunk.asm WHOLE and only ~13 of its 1,968 lines are behind %ifdef, so six ungated thunks land in the image of every existing C package - cword ships with 1,043 bytes spare. CC_HAS_FDLG and CC_HAS_PARTS are the precedent
 
 ---
@@ -412,7 +412,7 @@ CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/me
 
 **Need.** The rect the bracket owns on a two-display machine
 
-- *Slot:* OSAPI_FSX_SURF (0x03CB), no C thunk
+- *Slot:* OSAPI_FSX_SURF (0x03F8), no C thunk
 - *Action:* Add int os88_fsx_surf(struct os88_rect *r) behind CC_HAS_FSX, using the existing os88_rect. Costs a single-display machine one call and stops the fullscreen landing on the monitor we are not on
 
 ---

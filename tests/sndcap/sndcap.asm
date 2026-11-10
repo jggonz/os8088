@@ -74,8 +74,6 @@ sc_entry:
     mov si, sc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
-    mov ax, sc_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9                       ; half a second for the desktop to settle
     call OSAPI_WM_TIMER
     clc
@@ -440,7 +438,10 @@ sc_scan:
 ; --- the window ------------------------------------------------------------------
 sc_tpl:
     dw 340, 88, 190, 60
-    dw sc_ttl, sc_paint, sc_nop, sc_nop
+    dw sc_ttl, sc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sc_cls, 0, PAINT, sc_paint, ONKEY, sc_nop, ONCLICK, sc_nop, \
+               ONTIMER, sc_tick
 sc_ttl:     db 'Snd Capture', 0
 sc_line:    db 'step: -', 0
 

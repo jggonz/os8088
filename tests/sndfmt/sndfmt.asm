@@ -71,8 +71,6 @@ sf_entry:
     mov si, sf_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
-    mov ax, sf_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9                       ; half a second for the desktop to settle
     call OSAPI_WM_TIMER
     clc
@@ -526,7 +524,10 @@ sf_sin:                             ; round(32767 sin(2 pi i / 64))
 ; --- the window ------------------------------------------------------------------
 sf_tpl:
     dw 340, 88, 190, 60
-    dw sf_ttl, sf_paint, sf_nop, sf_nop
+    dw sf_ttl, sf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sf_cls, 0, PAINT, sf_paint, ONKEY, sf_nop, ONCLICK, sf_nop, \
+               ONTIMER, sf_tick
 sf_ttl:     db 'Snd Format', 0
 sf_line:    db 'step: -', 0
 

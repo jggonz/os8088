@@ -1351,7 +1351,7 @@ text screen untestable on that card in this container.
     other**, Tracker and Paint alike, both cards still pixel-identical to a
     forced repaint afterwards.
 
-    `fsx_surf` (slot 0x02E3) hands the app the rect its bracket owns, in the
+    `fsx_surf` (slot 0x02B5) hands the app the rect its bracket owns, in the
     coordinates the drawing slots take. It answers `(0,0,w,h)` on every
     one-display machine and after any `fsx_mode` call, so it is exactly what
     the two apps hard-coded and a single-display machine cannot see the

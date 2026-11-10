@@ -215,7 +215,9 @@ it_entry:
 
 it_tpl:
     dw 30, 30, IT_W, IT_H
-    dw it_title, it_paint, 0, 0
+    dw it_title, it_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS it_cls, 0, PAINT, it_paint
 it_title:   db 'os88img self-test', 0
 it_s_ok:    db 'ok', 0
 it_s_bad:   db 'FAIL', 0

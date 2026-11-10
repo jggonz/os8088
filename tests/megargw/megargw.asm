@@ -506,7 +506,9 @@ mr_hex2:
 
 mr_tpl:
     dw 8, 400, 200, 40
-    dw mr_ttl, mr_paint, 0, 0
+    dw mr_ttl, mr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mr_cls, 0, PAINT, mr_paint
 mr_ttl:     db 'MegaRgw', 0
 mr_s_e9:    db 'MEGARGW: ', 0
 mr_s_e90:   db 'MEGARGW0: ', 0

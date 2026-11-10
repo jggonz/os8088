@@ -744,18 +744,13 @@ wd_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
     jc .out                         ; table full: nothing to flag
-    push ax
-    mov al, 1                       ; resizable (SPEC.md 11.1/27): wd_paint
-    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    mov al, 1                       ; so the next repaint re-wraps for free
-    call OSAPI_WM_SAVEU             ; ...and it PROMISES its content stands
-                                    ; still while it is not drawing, so a
-                                    ; raise puts the old pixels back instead
-                                    ; of lettering 464 cells (SPEC.md 11.96.1).
-                                    ; True of this app: everything that draws
-                                    ; goes through wd_redraw or wd_paint, and
-                                    ; the worker's two background drawers ask
-                                    ; OSAPI_WM_OBSCURED first
+%ifdef OS88UI_SBDRAG
+    pushf                           ; the entry still owes the loader
+    cmp al, WC_ONDRAG + 1           ; wm_create's CF (SPEC.md 13.10.7.1). AL =
+    sbb al, al                      ; the class slots this kernel dispatches:
+    mov [wd_nodrag], al             ; no drag edge on kern_small (11.104)
+    popf
+%endif
     push cx                         ; ...and a FLOOR under the grow box: two
     push dx                         ; strips of fixed-position chrome cannot be
     mov cx, WD_MIN_W                ; expressed by WMIN_W, which is 96 for the
@@ -767,20 +762,8 @@ wd_entry:
     mov si, wd_pref                 ; which this window has never used more
     call OSAPI_WM_PREFER            ; than 600 (SPEC.md 11.100.1). A page is
     pop si                          ; the one thing that is always glad of them
-    mov al, 1
-    call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
-    pop ax                          ; every keystroke redraws a row of text and
-                                    ; an aligned cell writes ONE framebuffer
-                                    ; byte where an unaligned one writes two.
-                                    ; TRUE ON VGA TOO - mode 12h is 8 pixels
-                                    ; to a byte per plane - and measured, this
-                                    ; window was the worked example: it used
-                                    ; to open at content x = 61 there, skew 5,
-                                    ; which typebench prices at 9.4% of every
-                                    ; keystroke (SPEC.md 11.94)
-    push si
-    mov si, wd_habout               ; NO kernel menus (SPEC.md 68.2): the
-    call OSAPI_ABOUT_SET            ; nine-menu bar is drawn in the window.
+    push si                         ; NO kernel menus (SPEC.md 68.2): the
+                                    ; nine-menu bar is drawn in the window.
     mov si, wd_menus0               ; The kernel bar carries only the app
     call OSAPI_MENU_SET             ; name pull-down - an EMPTY set (count 0)
     pop si                          ; whose AM_NAME makes the bar read
@@ -826,31 +809,6 @@ wd_entry:
     ; those runs declaring nothing - measured, by the row that reads
     ; MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    push ax                         ; SPEC.md 54.10: the kernel calls this once
-    mov ax, wd_onwake               ; our window is on the glass, and the launch
-    call OSAPI_WM_ONWAKE            ; document loads in front of it. BX is still
-                                    ; the window, and the slot preserves the
-                                    ; flags the CF we owe the loader rides in
-    mov ax, wd_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
-    call OSAPI_WM_ONWHEEL           ; the document; flags preserved too, and
-    pop ax                          ; on kern_small the cell does nothing
-%ifdef OS88UI_SBDRAG
-    pushf                           ; the entry still owes the loader
-    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
-    mov ax, wd_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
-    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
-                                ; below captures OSAPI_WM_ONDRAG's OWN
-                                ; CF and a third install after it would
-                                ; answer for the wrong slot
-    mov ax, wd_onup                 ; SPEC.md 13.10.6.4: these two are the
-    call OSAPI_WM_ONMOUSEUP         ; THUMB's alone. wd_mtrack's poll loop
-    mov ax, wd_ondrag               ; (27.8.1) owns a gesture that cannot be
-    call OSAPI_WM_ONDRAG            ; live at the same time as a bar drag - the
-    sbb al, al                      ; menu runs modally INSIDE W_ONCLICK, and
-    mov [wd_nodrag], al             ; the kernel's arm is not set until that
-    pop ax                          ; returns - so 13.7's no-mixing rule is
-    popf                            ; satisfied by "not at the same time"
-%endif
     pushf                           ; the visual break exists for the machine
     push ax                         ; that cannot repaint a screenful between
     call OSAPI_CPU_INFO             ; keystrokes, and nowhere else: on anything
@@ -19062,7 +19020,7 @@ wd_doclose:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_habout - the OSAPI_ABOUT_SET handler: SI = our window, lock held
+; wd_habout - the WC_ABOUT handler: SI = our window, lock held
 ; -----------------------------------------------------------------------------
 wd_habout:
     call wd_bounds                  ; the kernel bar path arrives without a
@@ -21297,7 +21255,7 @@ wd_s_abou4: db 'Ported by Jorge Gonzalez', 0
 wd_s_ok:    db 'OK', 0
 TOASTSTR wd_m_noclose, 'Close refused, try again'
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
 ; reference, clamped onto smaller adapters by wm_create (SPEC.md 11). The
 ; chrome strips cost 60px of content, so a small frame would leave the
@@ -21317,12 +21275,27 @@ TOASTSTR wd_m_noclose, 'Close refused, try again'
 
 wd_tpl:
     dw 20, 24, 600, 440
-    dw wd_wttl, wd_paint, wd_onkey, wd_onclick
+    dw wd_wttl, wd_cls
                                     ; the TITLE is the bss buffer wd_compttl
                                     ; composes - 'Microsoft Word - <NAME>' -
                                     ; before wm_create banks the pointer, and
                                     ; wd_settitle recomposes it on every name
                                     ; change (SPEC.md 68.2)
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with -
+; scribe.asm's sc_cls, the same window, says why each one is here
+%ifdef OS88UI_SBDRAG
+  %define WD_C_TIMER wd_ontimer
+  %define WD_C_UP wd_onup
+  %define WD_C_DRAG wd_ondrag
+%else
+  %define WD_C_TIMER 0
+  %define WD_C_UP 0
+  %define WD_C_DRAG 0
+%endif
+    OS88_CLASS wd_cls, WF_SIZABLE | WF_SAVEU, PAINT, wd_paint, \
+               ONKEY, wd_onkey, ONCLICK, wd_onclick, ABOUT, wd_habout, \
+               ONWAKE, wd_onwake, ONMOUSEUP, WD_C_UP, ONTIMER, WD_C_TIMER, \
+               ONDRAG, WD_C_DRAG, ONWHEEL, wd_onwheel
 
 ; The EMPTY kernel menu set (SPEC.md 12.2): zero menus, but its AM_NAME puts
 ; 'Microsoft Word' in the kernel bar instead of the 15-char header name. The

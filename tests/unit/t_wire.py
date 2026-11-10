@@ -1688,7 +1688,7 @@ def archive_refusals(tmp, mod):
 def fence(tmp, mod):
     """A package calling a cell an older kernel lacks needs a level-3 Wire.
 
-    build/wirechat.o88 far-calls OSAPI_WM_ONWHEEL (0x046C) and nothing newer,
+    build/wirechat.o88 far-calls OSAPI_WM_ONWHEEL (0x0499) and nothing newer,
     and build/hello.o88 calls nothing past 0x046D, so they are the two sides of
     the line. (It was Note Pad until Note Pad's document moved onto
     OSAPI_MEM_P, 0x04E9, which made it a level-7 package - SPEC.md 50.3.7.)
@@ -1725,7 +1725,7 @@ def fence(tmp, mod):
               "it far-calls 0x%04X; v1.0.20261025's kernel (table end "
               "0x04D7) does not have OSAPI_IMG_NAME" % (top or 0),
               got=lvl, want=">= 5")
-    # LEVEL 6: OSAPI_SEG (0x04B6) is past v1.0.20261026's table, the one
+    # LEVEL 6: OSAPI_SEG (0x0455) is past v1.0.20261026's table, the one
     # level-5 Wire. A package that calls it and reads below 6 is offered to a
     # machine whose kernel would jump into whatever followed its table end -
     # PiXEL calls it, so its level is the check
@@ -1733,16 +1733,16 @@ def fence(tmp, mod):
         lvl, top = mod.cell_level([open(pix, "rb").read()])
         if top is not None and top >= 0x04E3:
             check(lvl is not None and lvl >= 6,
-                  "PiXEL's OSAPI_SEG (0x04B6) needs at least a level-6 Wire",
+                  "PiXEL's OSAPI_SEG (0x0455) needs at least a level-6 Wire",
                   "WIRE_CELL_LEVELS has no row for v1.0.20261026's table end",
                   got=lvl, want=">= 6")
-    # LEVEL 7: OSAPI_MEM_P (0x04BC, SPEC.md 50.3.7) is past the level-6
+    # LEVEL 7: OSAPI_MEM_P (0x045B, SPEC.md 50.3.7) is past the level-6
     # Wire's table, and the parts library claims through it (SPEC.md
     # 20.12.14) - so a parted package is level 7, and PiXEL is one
     if os.path.exists(pix):
         lvl, top = mod.cell_level([open(pix, "rb").read()])
         if top is not None and top >= 0x04E9:
-            eq(lvl, 7, "PiXEL's OSAPI_MEM_P (0x04BC) needs a level-7 Wire",
+            eq(lvl, 7, "PiXEL's OSAPI_MEM_P (0x045B) needs a level-7 Wire",
                "WIRE_CELL_LEVELS has no row for the level-6 Wire's table end")
 
     pub = os.path.join(tmp, "fpkg")

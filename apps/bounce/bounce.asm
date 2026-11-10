@@ -83,8 +83,6 @@ bn_entry:
     mov [bn_win], bx
     OS88_REGION_MOVABLE             ; SPEC.md 66.6.1: the worker declares
                                     ; itself restartable at its spawn
-    mov si, bn_about                ; the standard About (SPEC.md 12.2, 20.5.1)
-    call OSAPI_ABOUT_SET
     mov ax, BN_X0                   ; fresh Bounce: the square at (4,4) going
     mov [bn_pos], ax                ; (3,2) - the kind's seed, SPEC.md 14
     mov [bn_pos+2], ax
@@ -347,7 +345,7 @@ bn_wipe:
 ; =============================================================================
 ; 'About Bounce' - the standard card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
-; bn_about - the OSAPI_ABOUT_SET handler
+; bn_about - the WC_ABOUT handler
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 bn_about:
     mov byte [bn_abon], 1
@@ -391,10 +389,13 @@ bn_repaint:
     ret
 
 ; --- data ----------------------------------------------------------------------
-; window template (SPEC.md 11: 16 bytes, 8 words), the kind's: 300,150 keeps
+; window template (SPEC.md 11: 12 bytes, 6 words), the kind's: 300,150 keeps
 ; the whole cap-10 cascade on a VGA screen, and wm_fit clamps a shorter one
 bn_tpl:     dw 300, 150, BN_W, BN_H
-            dw bn_ttl, bn_paint, 0, bn_abdismiss
+            dw bn_ttl, bn_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS bn_cls, 0, PAINT, bn_paint, ONCLICK, bn_abdismiss, \
+               ABOUT, bn_about
 
 bn_ttl:     db 'Bounce', 0
 

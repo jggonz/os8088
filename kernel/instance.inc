@@ -110,7 +110,7 @@ KIND_HIBER   equ 3              ; the Hibernate window (SPEC.md 87.1): the
 %endif
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
-; --- osapi_sys_snapshot's buffer, API slot 0x01F8 (SPEC.md 20.9) ------------------
+; --- osapi_sys_snapshot's buffer, API slot 0x01E1 (SPEC.md 20.9) ------------------
 ; A scheduler header, then one record per instance. Both halves are copied in
 ; one cli window, which is the whole reason this is a snapshot rather than a
 ; getter - see the routine at the foot of this file. ABI: mirrored in
@@ -184,10 +184,9 @@ KD_INIT  equ 6                  ; word: init proc or 0 - in: BX = window,
 KD_NAME  equ 8                  ; word: NUL name string (copied to I_NAME)
 KD_ICON  equ 10                 ; word: 16x16 icon body ptr, 0 = generic
 KD_CAP   equ 12                 ; byte: max simultaneous instances
-KD_WFLAG equ 13                 ; byte: extra W_FLAGS bits OR-ed into the new
-                                ; window after wm_create (SPEC.md 29.3) -
-                                ; feature bits only (WF_SIZABLE), never 0/1
-KD_SIZE  equ 14                 ; stride. NOT A POWER OF TWO since kernel size
+KD_SIZE  equ 13                 ; stride (13 since kernel size pass 19: the
+                                ; KD_WFLAG byte that was 13 is the kind's
+                                ; class's style word now, SPEC.md 11.104). NOT A POWER OF TWO since kernel size
                                 ; pass 13: the word after KD_TPL was KD_TASK,
                                 ; a built-in kind's task entry, until Bounce
                                 ; (the last kind with one) became a package
@@ -199,23 +198,23 @@ KD_SIZE  equ 14                 ; stride. NOT A POWER OF TWO since kernel size
 inst_kinds:                     ; indexed by KIND_* * KD_SIZE; caps are binding
     dw app_tpl_about,  0,             0,   0,                app_ttl_about
     dw inst_ico_about
-    db 1, 0                     ; About: stateless singleton
+    db 1                        ; About: stateless singleton
     dw fm_tpl,         fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
     dw inst_ico_disk
-    db VIEW_SLOTS+1, WF_SIZABLE ; Disk: FOUR of the user's windows, each with
+    db VIEW_SLOTS+1             ; Disk: FOUR of the user's windows, each with
                                 ; its own FS_SIZE-byte state block and its own
-                                ; claimed listing cache; resizable (SPEC.md
-                                ; 22/22.1) - PLUS ONE, the Standard File
+                                ; claimed listing cache; resizable (its
+                                ; class's style, SPEC.md 22/22.1) - PLUS ONE, the Standard File
                                 ; chooser's (SPEC.md 38.1), which fm_count
                                 ; does not count. The cap and fm_pool's size
                                 ; are one number (files.inc's FM_NSLOT)
     dw cp_tpl,         0,             0,   cp_kinit,         cp_sname
     dw inst_ico_ctrl
-    db 1, 0                     ; Control Panel: stateless task-less singleton
+    db 1                        ; Control Panel: stateless task-less singleton
 %ifdef KERN_BIG
     dw hb_tpl,         0,             0,   hb_kinit,         hb_ttl
     dw 0                        ; the generic icon: it is never in the dock
-    db 1, 0                     ; Hibernate: stateless task-less singleton
+    db 1                        ; Hibernate: stateless task-less singleton
                                 ; (SPEC.md 87.1), painted by its module
 %endif
 
@@ -517,7 +516,7 @@ inst_park_mk:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_parksafe_set - API slot 0x02F1: "you may park me while I am blocked in
+; inst_parksafe_set - API slot 0x02C3: "you may park me while I am blocked in
 ;                     the kernel" (SPEC.md 66.5.4)
 ; in:  AL = 1 declare / 0 withdraw, ES = the caller's segment (the X stub's)
 ; out: CF = 0 recorded; CF = 1 the caller is not a live package instance
@@ -535,7 +534,7 @@ inst_parksafe_set:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_restart_set - API slot 0x03BF: "if you have to move my region, throw my
+; inst_restart_set - API slot 0x036F: "if you have to move my region, throw my
 ;                    worker's stack away and re-enter it here" (SPEC.md 66.6.2)
 ; in:  AX = a near offset in the caller's own image, 0 to withdraw;
 ;      ES = the caller's segment (the X stub's)
@@ -747,7 +746,7 @@ inst_seg_parked:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; inst_task_park - API slot 0x02F7: a DRIVER's worker parks here (SPEC.md
+; inst_task_park - API slot 0x02C9: a DRIVER's worker parks here (SPEC.md
 ;                  66.5.5), the way a package's parks at OSAPI_TASK_ALIVE
 ; in:  nothing
 ; out: nothing (all registers and the flags preserved)
@@ -1568,7 +1567,9 @@ app_launch:
     shl ax, cl
     add [si], ax                ; x - cascaded IN THE TEMPLATE for this one
     add [si+2], ax              ; call, and put back the moment it returns:
-    call wm_create              ; wm_create copies the record's first sixteen
+    push ax                     ; (wm_create answers in AL, SPEC.md 11.104)
+    call wm_create              ; wm_create copies the record's first twelve
+    pop ax                      ; (a pop writes no flag)
     pushf                       ; bytes out before it reads anything else, so
     sub [si], ax                ; nothing ever sees the template moved but it.
     sub [si+2], ax              ; It was copied to a 16-byte inst_tplbuf and
@@ -1579,11 +1580,9 @@ app_launch:
                                 ; wm_create preserves AX and SI (its banks)
     pop si                      ; BX = window (hidden), CF = table full
     jc .failj                   ; record was never published: still free
-    mov al, [si+KD_WFLAG]       ; the kind's feature bits (WF_SIZABLE) join
-    or [bx+W_FLAGS], al         ; W_FLAGS right after create (SPEC.md 29.3) -
-                                ; the LOW byte, which is all a byte field can
-                                ; reach (an `or` of AX with AH = 0, until size
-                                ; pass 10)
+                                ; (the kind's feature bits - the Disk
+                                ; window's WF_SIZABLE - are its class's style
+                                ; word now, born in wm_create: SPEC.md 11.104)
 
     ; --- fill + bind + init --------------------------------------------------
 %if I_TASK != I_KIND + 1
@@ -1656,9 +1655,13 @@ app_launch:
 ; task_exit's release byte.
 ; -----------------------------------------------------------------------------
 app_close_win:
-    push di
     call wm_ask_close           ; SPEC.md 75.1: the window may REFUSE, and a
-    jc .refused                 ; refusal means nothing at all happens - not
+%ifdef KERN_BIG                 ; refusal means nothing at all happens - not
+    jnc app_close_now           ; (PARITY on kern_big, kernel size pass 19:
+    ret                         ; the byte longer form keeps ui_task, behind
+%else                           ; it, at its measured parity -
+    jc app_close_ret            ; tests/unit/t_hotpar.py; kern_small's is
+%endif                          ; the short one)
                                 ; even the hide, because a window that is
                                 ; asking "save changes?" has to stay on screen
                                 ; to be answered. ABOVE the ownership test on
@@ -1667,6 +1670,13 @@ app_close_win:
                                 ; that hide AS the cancel (SPEC.md 38.2, 75.3),
                                 ; so their negotiator - if one is ever
                                 ; installed - has to be able to refuse it too
+; app_close_now - the same close, with the window's negotiator NOT asked: the
+; answer to a close request (wm_close_req, SPEC.md 75.2) IS its answer, and
+; asking again would put the alert up twice. ui_task's request pass is the one
+; caller. It used to zero the record's W_ONCL first; a negotiator is a class
+; slot now (SPEC.md 11.104), and the class is the package's, not ours to write
+app_close_now:
+    push di
     call inst_of_win            ; DI = record; CF = unowned
     jc .hide
     cmp byte [di+I_STATE], 1
@@ -1739,9 +1749,9 @@ app_close_win:
     jmp .out
 .hide:
     call wm_hide                ; instant visual feedback + repaint
-.refused:
 .out:
     pop di
+app_close_ret:                  ; (app_close_win's refusal: nothing pushed)
     ret
                                 ; (kern_big's parity pad here and menu.inc's
                                 ; before menu_popup cancelled, with nothing
@@ -2253,7 +2263,7 @@ inst_launch_post:
     retf
 
 ; =============================================================================
-; osapi_sys_snapshot_x - API slot 0x01F8's COLD body: the scheduler and the
+; osapi_sys_snapshot_x - API slot 0x01E1's COLD body: the scheduler and the
 ;                        instance table, in
 ;                  ONE cli window (SPEC.md 20.9/28.2)
 ;

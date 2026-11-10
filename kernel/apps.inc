@@ -23,7 +23,10 @@
 ; The callbacks are the `.cold` BODIES: a kernel window's callbacks are
 ; dispatched into the cold segment by wm_pkgcall (SPEC.md 2.6.3), so they need
 ; no resident thunk and none has one.
-app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint_x, 0, 0
+app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_cls_about
+app_cls_about:  dw 6, 0, app_about_paint_x  ; its CLASS (SPEC.md 11.104): a
+                                ; paint and nothing else, so the length stops
+                                ; at WC_PAINT's slot
 
 app_ttl_about:  db 'About os8088', 0
 

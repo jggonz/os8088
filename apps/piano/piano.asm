@@ -162,29 +162,10 @@ pn_entry:
                                     ; pn_metrics' below, whatever came before
                                     ; it - so the plain form's pushf/push/pop
                                     ; kept nothing anybody reads
-    mov ax, pn_metrics              ; the keyboard's depth follows the box, and
-    call OSAPI_WM_ONRESIZE          ; the box is the kernel's (SPEC.md 11.98).
-                                    ; pn_metrics IS the handler: it reads DX and
-                                    ; keeps every register, which is the whole
-                                    ; of what ONRESIZE asks
-    mov ax, pn_onup                 ; SPEC.md 13.7/13.8.1: the five buttons
-    call OSAPI_WM_ONMOUSEUP         ; fire on the RELEASE and follow the
-    mov ax, pn_ondrag               ; pointer between the edges. The KEYS do
-    call OSAPI_WM_ONDRAG            ; not - a note is a safe prefix action
     call OSAPI_WM_GEOM              ; CX/DX = the content we were actually
     call pn_metrics                 ; given, which on a CGA is 22 rows short
     mov si, pn_menus
     call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
-    mov si, pn_about                ; ...and 'About Piano' above the Close the
-    call OSAPI_ABOUT_SET            ; kernel already puts in our pull-down
-                                    ; (SPEC.md 12.2). Flags preserved, like
-                                    ; menu_win_set above
-    mov al, 1                       ; ...and it PROMISES its content stands
-    call OSAPI_WM_SAVEU             ; still while it is not drawing (SPEC.md
-                                    ; 11.96.1): no worker, and its one polling
-                                    ; loop runs INSIDE a click callback, so
-                                    ; every pixel it changes is a pixel the
-                                    ; user asked for
 .out:
     pop si                          ; pop leaves the flags alone
     ret
@@ -1659,7 +1640,7 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
     pop cx
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; =============================================================================
 ; 'About Piano' - the credit card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
@@ -1669,7 +1650,7 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
 ; the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; pn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; pn_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -1758,7 +1739,11 @@ pn_ablines:
 
 pn_tpl:
     dw 250, 100, 224, 177           ; x, y, w, h -> content 222 x 158
-    dw pn_ttl, pn_paint, pn_onkey, pn_onclick
+    dw pn_ttl, pn_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pn_cls, WF_SAVEU, PAINT, pn_paint, ONKEY, pn_onkey, \
+               ONCLICK, pn_onclick, ABOUT, pn_about, ONMOUSEUP, pn_onup, \
+               ONRESIZE, pn_metrics, ONDRAG, pn_ondrag
 
 pn_ttl:      db 'Piano', 0
 

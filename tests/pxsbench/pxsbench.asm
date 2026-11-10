@@ -236,11 +236,6 @@ pb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [pb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; an 8-aligned content origin (SPEC.md
-                                    ; 11.94): the blit row wants x on the byte
-                                    ; grid, and it preserves the flags so the
-                                    ; CF this proc owes the loader survives
     clc
 .out:
     pop si
@@ -2302,7 +2297,10 @@ pb_run:
 
 pb_tpl:
     dw 7, 22, 632, 448              ; x = 7 so WF_SNAP wants W_X + 1 on a
-    dw pb_ttl, pb_paint, pb_onkey, pb_onclick   ; multiple of 8
+    dw pb_ttl, pb_cls                           ; multiple of 8
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pb_cls, 0, PAINT, pb_paint, ONKEY, pb_onkey, \
+               ONCLICK, pb_onclick
 
 pb_ttl:     db 'Pixelstein Bench', 0
 

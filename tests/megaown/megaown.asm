@@ -60,10 +60,7 @@ mo_entry:
     jc .out
     OS88_REGION_MOVABLE
     mov [mo_win], bx
-    mov ax, mo_tick
-    call OSAPI_WM_ONTIMER
     mov ax, mo_wake
-    call OSAPI_WM_ONWAKE
 %ifdef MO_HOLE
     xor cx, cx
 .h:
@@ -558,7 +555,8 @@ mo_tpl:
 %else
     dw 230, 300, 200, 40
 %endif
-    dw mo_ttl, mo_paint, 0, 0
+    dw mo_ttl, mo_cls
+    OS88_CLASS mo_cls, 0, PAINT, mo_paint
 %ifdef MO_LOWBIG
 mo_ttl:     db 'MegaLowB', 0
 mo_s_c:     db 'MEGALOWB: c ', 0

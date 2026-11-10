@@ -208,8 +208,6 @@ mh_entry:
     jc .no
     OS88_REGION_MOVABLE
     mov [mh_win], bx
-    mov ax, mh_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9
     call OSAPI_WM_TIMER
     clc
@@ -327,7 +325,9 @@ mh_hex2:
 
 mh_tpl:
     dw 8, 300, 200, 40
-    dw mh_ttl, mh_paint, 0, 0
+    dw mh_ttl, mh_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mh_cls, 0, PAINT, mh_paint, ONTIMER, mh_tick
 mh_ttl:     db 'MegaHi', 0
 mh_s_ds:    db 'MEGAHI: ds ', 0
 mh_s_caps:  db ' caps ', 0

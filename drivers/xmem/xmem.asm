@@ -343,7 +343,7 @@ xm_svc:
 
 ; -----------------------------------------------------------------------------
 ; xm_walk - the pool's live blocks, for the Task Manager (XMV_WALK, behind
-;           slot 0x0492; SPEC.md 28.4.8)
+;           slot 0x0431; SPEC.md 28.4.8)
 ;
 ; in:       DX:DI = room for CX records of 6 bytes
 ; out:      CF = 0, AX = records written, each {dw XB_OFF, dw XB_KB, db

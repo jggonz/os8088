@@ -69,7 +69,9 @@ di_paint:
 
 di_tpl:
     dw 120, 120, 200, 60
-    dw di_ttl, di_paint, 0, 0
+    dw di_ttl, di_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS di_cls, 0, PAINT, di_paint
 
     OS88_MENUSET di_menus, di_name, di_oncmd
         OS88_MENU di_m_file, di_i_file, 2

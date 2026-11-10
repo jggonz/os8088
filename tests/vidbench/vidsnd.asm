@@ -1148,7 +1148,10 @@ vs_pmup:
 
 vs_tpl:
     dw 7, 22, 632, 300
-    dw vs_ttl, vs_paint, vs_onkey, vs_onclick
+    dw vs_ttl, vs_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vs_cls, 0, PAINT, vs_paint, ONKEY, vs_onkey, \
+               ONCLICK, vs_onclick
 
 vs_ttl:       db 'Video Sound Bench', 0
 vs_s_title:   db 'VIDSND - a frame interrupt off the card (VIDEO-PLAN W0 c,e)', 0

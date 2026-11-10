@@ -145,12 +145,8 @@ sb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [sb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; every adapter (11.94); PRESERVES FLAGS
     mov si, sb_menus
     call OSAPI_MENU_SET
-    mov si, sb_onabout
-    call OSAPI_ABOUT_SET
     clc
 .out:
     pop si
@@ -4997,7 +4993,10 @@ sb_hdpick:
 
 sb_tpl:
     dw 7, 22, 632, 448
-    dw sb_ttl, sb_paint, sb_onkey, sb_onclick
+    dw sb_ttl, sb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sb_cls, 0, PAINT, sb_paint, ONKEY, sb_onkey, \
+               ONCLICK, sb_onclick, ABOUT, sb_onabout
 
 sb_ttl:     db 'Sys Bench', 0
 

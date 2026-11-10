@@ -2361,7 +2361,7 @@ not slow but WRONG.
 *(72-74 were written as 68-70 on a parallel track and renumbered at the
 merge; their commits cite the old numbers.)*
 
-72. **`OSAPI_XMEM_SEL` (0x046C) and `OSAPI_MEM_CODESEL` (0x0472) are in
+72. **`OSAPI_XMEM_SEL` (0x0499) and `OSAPI_MEM_CODESEL` (0x049F) are in
     the table** *(renumbered at the elendilon merge of 2026-10-19, which
     brought `OSAPI_WM_ONWHEEL` in at 0x0499: kern_mega's four cells are now
     XMEM_SEL 0x049F, CODESEL 0x04A5, XMEM_WALK 0x04AB and MEM_HUGE 0x04B1,
@@ -3824,7 +3824,7 @@ the same fix as the ISR's.
 
 ### 14.8 Item 7 as built: claims of a megabyte and more (2026-10-19)
 
-SPEC.md 50.3.5 is the contract: `OSAPI_MEM_HUGE` at 0x04B1 (0x047E until the
+SPEC.md 50.3.5 is the contract: `OSAPI_MEM_HUGE` at 0x04B1 (0x04AB until the
 elendilon merge renumbered it, item 72), appended to the
 table, so an ADDITION and no `PKG_FMT` bump (answer 7). AX = KB, DX = the first
 segment or selector, CX = the step: 1000h conventional on every kernel, 8 for
@@ -11353,7 +11353,7 @@ neither of which Bochs has). Four kern_mega defects came out of it, 14.85 to
 - `thewire` is red on QEMU on this branch before any of this: its fixture
   will not pack, `TREEONE far-calls cell 0x04E3, at or past WIRE_TABLE_END
   0x04A5`. The archive's program is `build/mseg.o88`, a package with PARTS,
-  and MC7 (KERN-MEGA-MEMORY-PLAN) put OSAPI_SEG (0x04B6) into every parts
+  and MC7 (KERN-MEGA-MEMORY-PLAN) put OSAPI_SEG (0x0455) into every parts
   package through `apps/os88partsbody.inc` - a cell newer than any Wire level
   SPEC.md 92.2's fence knows. The release that publishes the cell owes the
   Wire a level (`WIRE_CELL_LEVELS`, `WIRE_TABLE_END`, `wcat.inc`'s

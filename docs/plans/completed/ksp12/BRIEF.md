@@ -100,7 +100,7 @@ Two lines `make` prints now:
   `kernel/` cell offsets, a module's or driver's header, a file format or
   `SYSTEM.CFG` key. Do not change a frozen one.
   `git diff origin/main origin/elendilon -- apps/os88api.inc drivers/os88drv.inc`
-  is the list of what is NOT frozen: `OSAPI_MEM_HMA` (0x0440),
+  is the list of what is NOT frozen: `OSAPI_MEM_HMA` (0x046D),
   `OSAPI_WM_QUIET` (0x0473), the HMA driver contract, `DRVM_CEIL_NET`'s
   value, and anything else that diff shows. Those may change freely (keep the
   SDK, the drivers and the packages that use them in step; `abilock.py`

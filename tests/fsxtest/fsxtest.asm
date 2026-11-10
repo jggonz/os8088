@@ -288,10 +288,12 @@ fx_main:
     call OSAPI_GFX_FILL
     jmp short .wait
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) -------------------------
 fx_tpl:
     dw 300, 60, 200, 78             ; x, y, w, h -> content 198 x 59
-    dw fx_ttl, fx_paint, fx_onkey, 0
+    dw fx_ttl, fx_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fx_cls, 0, PAINT, fx_paint, ONKEY, fx_onkey
 
 fx_ttl:     db 'FSX Test', 0
 fx_s_caps:  db 'CAPS=....  [-]', 0  ; +5 the mask, +12 the result char
