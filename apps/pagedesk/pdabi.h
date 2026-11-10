@@ -1,5 +1,4 @@
-/* ============================================================================
- * os8088 - apps/pagedesk/pdabi.h          PageDesk's ONE shared contract
+/* ===================================================================== * os8088 - apps/pagedesk/pdabi.h          PageDesk's ONE shared contract
  *
  * docs/PAGEDESK-SPEC.md is the authority; this file is its C side and
  * apps/pagedesk/pdabi.inc its assembly side. tools/os88pdabi.py --check
@@ -925,6 +924,19 @@ struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
 };
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
+/* bilevel (20.22.12): follows pdxb_img in the XB, filled from /DecodeParms  */
+struct pdxb_imgx {
+    pdw  k;                 /* /K (CCITT), as a signed 16-bit value        */
+    pdw  cols;              /* /Columns (0 = 1728)                         */
+    pdw  rows;              /* /Rows (0 = the image's /Height)             */
+    pdw  flags;             /* CCF_*                                       */
+    pdw  globals;           /* JBIG2: non-zero if /JBIG2Globals exists     */
+    pdw  reserved;
+};
+#define CCF_EOL     1       /* /EndOfLine                                  */
+#define CCF_ALIGN   2       /* /EncodedByteAlign                           */
+#define CCF_EOB     4       /* /EndOfBlock (default true)                  */
+#define CCF_BLACK1  8       /* /BlackIs1                                   */
 #define PDIMG_NATIVE 0x0004 /* in: the /ColorSpace is not a device space: deliver
                                PDIM_N8 in the image's own components (20.22.11) */
 #define PDJ_ALPHA 0x0100    /* jpx: flags bit - deliver the codestream's own alpha

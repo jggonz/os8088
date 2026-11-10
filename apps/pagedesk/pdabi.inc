@@ -326,6 +326,10 @@ X8D_GEND                 equ 3
 X8D_NOMASK               equ 4
 X8F_LIMIT                equ 1
 X8F_TRANSP               equ 2
+CCF_EOL                  equ 1
+CCF_ALIGN                equ 2
+CCF_EOB                  equ 4
+CCF_BLACK1               equ 8
 PDIMG_NATIVE             equ 0x0004
 PDJ_ALPHA                equ 0x0100
 
@@ -1027,5 +1031,14 @@ PDXB_X8ROW_SHI                 equ 16
 PDXB_X8ROW_SMODE               equ 18
 PDXB_X8ROW_INV                 equ 20
 PDXB_X8ROW_BYTES               equ 22
+
+; ---- struct pdxb_imgx (12 bytes) -------------------------------------------
+PDXB_IMGX_K                    equ 0
+PDXB_IMGX_COLS                 equ 2
+PDXB_IMGX_ROWS                 equ 4
+PDXB_IMGX_FLAGS                equ 6
+PDXB_IMGX_GLOBALS              equ 8
+PDXB_IMGX_RESERVED             equ 10
+PDXB_IMGX_BYTES                equ 12
 
 %endif ; PDABI_INC

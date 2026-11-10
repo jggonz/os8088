@@ -7025,7 +7025,155 @@ module makes no kernel call of its own (the stream is read through PDENG).
 
 #### 20.22.12 CCITT and JBIG2 (`bilevel`)
 
-*Reserved; written by its agent before its code.*
+PDXI's two bilevel decoders, `apps/pagedesk/pdxiccit.c` (AP-08) and
+`pdxijb2.c` (AP-09). PDXI's shell (`pdxi.c`, 20.22.11) `#include`s them, the
+CCITT file first, and supplies their one input and one output:
+
+```
+static int  ix_get(void);        /* next CODED byte of the open source, -1 at its end    */
+static pdw  ix_open(pdw which);  /* (re)start the source: 0 = the stream, 1 = /JBIG2Globals */
+bl_out[], bl_ow, bl_oh, bl_omode, bl_orb, bl_scale     /* what IMG_OPEN / IMG_ROW report */
+```
+
+`ix_get` is a pull from PDENG's `STRM_READ` of the raw codec bytes (the chain
+stops before CCITT and JBIG2, 20.22.3). The decoders read it forward only;
+`ix_open` starts it again (a JBIG2 band re-runs the stream, below). A decoder
+fills `bl_out` (near, at most 1,024 bytes) and the shell copies it to the
+caller's far buffer. Neither file calls the kernel or claims memory.
+
+**Parameters** (`struct pdxb_imgx`, in the `[img 20.22.11-13]` block of
+`pdabi.h`) follow `pdxb_img` in the XB and are filled from `/DecodeParms` by
+whoever opens the stream: `k`, `cols`, `rows`, `flags` (`CCF_EOL`,
+`CCF_ALIGN`, `CCF_EOB`, `CCF_BLACK1`, as /EndOfLine, /EncodedByteAlign,
+/EndOfBlock, /BlackIs1; /DamagedRowsBeforeError is accepted and ignored) and
+`globals` (non-zero when /JBIG2Globals exists, so `ix_open(1)` is meaningful).
+
+**The delivery** is what 20.22.1 says: `PDIM_BITS1` rows when no reduction is
+wanted, `PDIM_GREY8` when one is. `bl_pick` chooses the reduction `s` (0 to 3,
+that is 1/1 to 1/8): the largest with `width >> s >= want_w`, then more while
+the grey row would not fit IMG_ROW's 1,024 bytes. A reduced row is the AVERAGE
+of a 2^s x 2^s block of samples (`(white * 255) >> 2s`, where a block off the
+right or bottom edge counts the missing samples as white). A reduction is not
+Incomplete (L5) and not a dither: it is the image at the size it is shown.
+Width is limited to 5,120 (`PDE_LIMIT` beyond; 600 dpi A4 is 4,960).
+
+**CCITT** (`cf_open`, `cf_getrow`). Group 3 one-dimensional (K = 0), Group 3
+two-dimensional (K > 0, the tag bit after each EOL) and Group 4 (K < 0).
+Streaming: one source row is decoded at a time against the previous row,
+which is a bitmap (1,024 bytes) rather than a list of changing elements, so a
+noisy row costs no more than a clean one. Workspace: none. The module's own
+bss is the shared 648-byte row buffers (two row bitmaps and a sample row), the 1,024-byte
+delivery row, two index tables built at open from the 104 white and 104 black codes (8-bit
+primary lookup, 5-bit secondary: 2 KiB) and the reducer's counters (1 KiB). Samples are delivered as the
+PDF defines them: black = 0 unless /BlackIs1, in which case black = 1 and the
+caller applies /Decode (`PDIMG_INVERT`). A fault ends the row where it is
+(the rest white) and decoding goes on at the next EOL; Group 4 has no EOL to
+resync on, so the rest of the image is white. The data running out is the
+same. Rows ascend; a skipped row is decoded and dropped; a lower row needs a
+new open. Cost: one pass over the coded bytes, whatever the reduction.
+
+**JBIG2** (`jb_open(globals, h, want_w)`, `jb_getrow(r)`; the embedded stream format of ISO/IEC 14492
+annex D.3, segments only, no file header; /JBIG2Globals first). Supported, each held against MuPDF:
+
+* generic regions, MQ-coded (templates 0 to 3, TPGDON, AT pixels in rows y-2 to y with ay = 0 only to the
+  left) and MMR (the CCITT G4 rows of `pdxiccit.c`, read through the segment's own byte bound);
+* symbol dictionaries, MQ-coded (template 0 to 3, input symbols from referred dictionaries, export flags)
+  and Huffman-coded (collective bitmaps stored raw or MMR); text regions, MQ or Huffman, with every
+  REFCORNER, TRANSPOSED, strip size, SBDSOFFSET, SBCOMBOP and SBDEFPIXEL, refinement of an instance
+  (MQ only; template 0 with its AT pixels, or 1); the symbol ID code table of 7.4.3.1.7;
+* the standard Huffman tables B.1 to B.15 and custom tables (segment 53), selected as the flags say;
+* pattern dictionaries (MQ or MMR) and halftone regions (MQ or MMR bitplanes, gray coding, HENABLESKIP,
+  HRX/HRY rotation, HGX/HGY signed, HCOMBOP, HDEFPIXEL);
+* symbol dictionaries with refinement / aggregate coding (SDREFAGG = 1, MQ): a symbol coded as the refinement of
+  one earlier symbol (REFAGGNINST = 1, with RDX/RDY) or as an aggregate, a text region of that many instances
+  (each possibly refined) drawn on the symbol's own bitmap, both over the dictionary's input and new symbols
+  (6.5.8.2); SDRTEMPLATE 0 with its AT pixels, or 1;
+* intermediate regions (types 4, 20, 36, 40): decoded once into a bitmap that stays in the workspace and is
+  kept in the registry for a refinement region that refers to it; generic refinement regions (types 40, 42, 43;
+  GRTEMPLATE 0 or 1, TPGRON, AT pixels) whose reference is the intermediate region they refer to or, with no
+  reference, the page under the region (page refinement, 7.4.7.5), which is copied out of the band and so needs
+  the region inside one band: a page that contains one makes `jb_open` give the band up to 40,000 bytes (half
+  of what is above the tables), and a region still taller than that is reported `JBF_UNSUP` and left unrefined;
+* segments of unknown data length (0xFFFFFFFF, immediate and intermediate generic regions only, 7.2.7): `jb_open`
+  scans each once for the end marker (FF AC for MQ, 00 00 for MMR) and the true row count that follows it,
+  keeps its length and rows (four segments), and every later pass sees a bounded segment with the true height;
+* page information (default pixel, default operator), the region combination operators OR, AND, XOR, XNOR and
+  REPLACE, end-of-stripe and end-of-page (ignored: the page height is the page information's, or /Height when
+  that is unknown), multiple regions in any order.
+
+Not supported, each marked in `jb_inc` (the shell reads `JBF_UNSUP`/`JBF_BAD`; the region is skipped and the
+page is drawn without it): Huffman text regions with refinement, Huffman symbol dictionaries with refinement
+or aggregate coding, dictionaries with retained or reused bitmap contexts (flags bits 8 and 9), the extended
+template bit, unknown-length segments of any type but the generic regions, AT pixels more than two rows up,
+more than one page, an intermediate region or a refinement larger than the workspace holds. Anything over a
+limit below answers `PDE_LIMIT` for that segment alone.
+
+**Workspace** is a RANGE (20.22.2's table): JBIG2 **want 64,000 bytes**, **min 14,500 for a page that streams** (one
+generic region and nothing else, no globals: the 12,288 context bytes, the 2 KiB tables and a row), about **58,000 for a scan with
+text regions** (a ~200-symbol dictionary is ~24 KB of bitmaps, 29,184 of tables, a band of a few rows), and
+CCITT **2,048** (its two code-lookup tables live in the workspace so that PDXI's bss is smaller; JBIG2 MMR regions put the same tables at 3000, over the refinement contexts, and rebuild them at each MMR region). `jb_open` reads `g_wbytes` (what the shell was granted, at most 64,000 is used) and answers
+`PDE_LIMIT` when even the tables and a block of rows do not fit; the shell then draws the image's grey box with
+`PDF_INC_APPROX`, which is not a refusal. Below want, the band shrinks first (to a third of what is above the
+tables, never under one block of 2^s rows) and the symbol area gets the rest: content that no longer fits
+(a dictionary, a halftone grid, an intermediate region) is `PDE_LIMIT` for that segment alone, reported
+`JBF_UNSUP`, and the rest of the page is drawn. The workspace is reached only through `jw_*`, which on the
+target are pdmath's far movers over the shell's `g_wseg`:
+
+| offset | size | content |
+|---|---|---|
+| 0000 | 12,288 | generic-region contexts: a 4,096-entry hash (tags, states) for template 0, direct arrays for 1 to 3 |
+| 3000 | 8,192 | refinement contexts (while an MMR region runs: the 2,048-byte CCITT tables) |
+| 5000 | 6,656 | the 13 integer decoders' contexts (512 each) |
+| 6A00 | 2,048 | IAID contexts (a dictionary of at most 2,048 symbols) |
+| 7200 | `jb_bandmax`, at most `JB_BANDMAX` 16,384 (40,000 with a page refinement) | the band: full-resolution rows of the page (a streamed page puts its one row at 3800 instead) |
+| after the band | to `jb_wsz` | symbol and pattern bitmaps, intermediate regions and halftone grid values growing up; 8-byte records (offset, width, height) growing down |
+
+**Bands, streaming and what a page costs.** The page cannot be resident (A4 at 300 dpi is 1 MB), so it is
+decoded in bands of `jb_bandmax / rowbytes` full-resolution rows (a multiple of 2^s, so a delivered group never
+straddles two bands): 25 rows of an A4/600 dpi page, 52 of A4/300 dpi, the whole of a small page. A band is
+decoded by running the segment stream again from the start and applying only what touches it. A dictionary,
+pattern dictionary, halftone grid and custom table is decoded once and kept in the registry (24 segments), so
+later bands skip its bytes; a region outside the band is skipped by byte count; a generic region stops at the
+band's last row (its earlier rows are decoded and dropped, the decoder being sequential); a text region walks
+all its instances and draws the ones that touch the band. **Streaming:** a page whose only drawing segment is
+ONE generic region (the usual scanner and "lossless" encoder output) is not banded at all: `jb_open` counts the
+region segments, and with exactly one decodes its rows as they are asked for, in one pass over the stream, with
+the arithmetic decoder's state kept between calls. A reduced scale does not shorten the decode (every pixel is
+still decoded) but it keeps the delivered row small: s is the largest reduction that still gives `want_w`
+pixels, 2^s x 2^s blocks averaged as for CCITT. A truncated stream stops a decoder after 64 bytes of padding
+rather than decode zeros to the end of the page. Cost, ESTIMATED and not measured on an 8088: `pdxijb2.inc` is the MQ decoder (`mq_bit`, `mq_bytein`) and the
+template-0 generic-region row (`gb_row0`: the context kept whole and shifted a pixel at a time, a 4,096-entry
+hash, and an all-white loop that decides a context-0 pixel with every register live and no call) in 8086
+assembly, about 1.1 KB; the C twins stay for the other templates, a non-nominal AT pixel and HENABLESKIP, and
+`hosttest/pdbl_asm.py` runs the assembly under Unicorn against the encoder, bit for bit, with the fetch-floor
+cycle count of PERFORMANCE.md Part 2 (4 clocks a code byte, 4 more a memory operand): **207 cycles a pixel on a
+blank page, 418 on a sparse scan (5% black strokes), 664 on regular ruled lines, 9,600 on dense random bits**
+(the C was about 2,000 on all of them). A4 at 300 dpi is 8.7 M pixels: **about 13 minutes on a 4.77 MHz XT** for a
+text scan (the model is optimistic against memory timings; call it a quarter hour) instead of an hour, a
+quarter of that again for TPGDON pages whose repeated rows are copied, and seconds on a 286 or 386. A
+symbol-mode page costs its symbols' pixels once plus about 3,000 cycles an instance in every band the
+instance's text region reaches. Limits: width 5,120 (`PDE_LIMIT` beyond: the row buffers are 648 bytes),
+4,096 symbols a page, at most 2,048 in one dictionary, 4,096 distinct contexts for template 0 (a noisier page
+answers `PDE_LIMIT` for that region), custom tables of at most 21 lines, symbol bitmaps and grid values within
+the free part of the workspace (about 18 KB: a dictionary or a halftone grid that does not fit is
+`PDE_LIMIT` and its regions are skipped).
+
+**Checks.** `python3 tools/os88pdbl_check.py all` (host, python3; `build` makes the binaries, the legs are named in its docstring) drives `build-bl/pdbl` built from
+`apps/pagedesk/hosttest/pdbl_host.c` (once with the shipped band size and once with a 400-byte band): ccitt
+(576 shapes against the encoder), jb2-generic, jb2-text, jb2-huff, jb2-halftone (random pages from the reference
+encoders of `tools/os88pdfx_bilevel.py`, compared as delivered samples at scale 0 and reduced). The same
+encoders' output is also drawn by `mutool draw` (`mutool-ccitt`, `mutool-jb2-generic`, `mutool-jb2-text`,
+`mutool-jb2-huff`, `mutool-jb2-halftone`), and the CCITT G3/G4 streams by libtiff through PIL, so no decoder here
+is checked only against its own encoder. MuPDF ignores a halftone region's HDEFPIXEL = 1, which the spec and
+this decoder honour; the mutool leg holds it at 0. `pdbl_fuzz` (AddressSanitizer + UBSan, bit flips, byte runs,
+truncation, markers) ran 81,000 mutations of the committed seeds in `tests/pdfany/bilevel/` clean. Sizes (the
+smlrcc + cc8086 chain with the peephole on, `jb_`/`cf_` as one translation unit with the shell's `ix_*` and
+pdmath's movers, with `pdxijb2.inc`): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders
+about 30,070 + 6,890 = 36,960 (39,000 allowed at 00:24); the whole PDXI.MOD (shell and JPEG too, `make build/PDXI.MOD`,
+JB_ASM) 47,310 + 16,422 = 63,732 against the 65,024 cap; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
+(frames 58 for `rf_decode`, 56 for `sd_run`, 46 for `tr_run`; none over 96), and the shell adds its own on top
+of that. Rows covering it: `tools/os88pdbl_check.py` (the legs above plus jb2-refagg, jb2-unknown, jb2-refine and jb2-range, each against the model and, where MuPDF can, against `mutool`) and `pdbl_fuzz` (32,000 more mutations with the new seeds), `hosttest/pdbl_asm.py` for the assembly; `pdkgate` is
+unaffected (neither file calls the kernel).
 
 #### 20.22.13 JPEG 2000 (`jpx`)
 
