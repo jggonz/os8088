@@ -354,6 +354,17 @@ def segment_unknown(num, typ, data, trailer_rows, mmr=False, page=1):
     seg = segment(num, typ, b'', page=page)[:-4] + struct.pack('>I', 0xFFFFFFFF)
     return seg + data + (b'\x00\x00' if mmr else b'') + struct.pack('>I', trailer_rows)
 
+def refine_segment(tgt, ref, x=0, y=0, op=0, tpl=0, tpgr=0, rat=None):
+    """a generic refinement region (7.4.7) coding tgt over ref (same size; ref = the reference bitmap, which is the
+    page under the region or the intermediate region the segment refers to).  Returns the segment DATA."""
+    rat = rat or NOMINAL_RAT
+    h = len(tgt); w = len(tgt[0])
+    e = MQEnc(); enc_refine(e, tgt, ref, 0, 0, tpl, tpgr, rat, 'gr')
+    d = region_info(w, h, x, y, op) + bytes([tpl | (tpgr << 1)])
+    if not tpl: d += b''.join(struct.pack('>bb', *a) for a in rat)
+    return d + e.flush()
+
+
 def page_info(w, h, default=0, comb=0, striped=0):
     f = (default << 2) | (comb << 3)
     return struct.pack('>IIIIBH', w, h, 0, 0, f, striped)
@@ -850,5 +861,27 @@ def build_fixtures(d):
     hs = segment(2, 22, halftone_segment(vals, pats, W, H), refs=[0])
     put('jb2_halftone.jb2', pg + hs); put('jb2_halftone.glob', pd_)
     put('jb2_halftone.pdf', jbig2_pdf([pg, hs], W, H, [pd_]))
+    # SDREFAGG dictionary (refinement + aggregate) imported from jb2_text's, a refinement region of an intermediate
+    # generic region and of the page, an unknown-length generic region
+    ent = [('ref', 1, 1, 0, [r[:] + [0] for r in syms[1]]), ('agg', 14, 12, [(0, 0, 0), (2, 5, 3), (3, 8, 1)])]
+    ent.sort(key=lambda en: len(en[4]) if en[0] == 'ref' else en[2])
+    rdat, rnew = symdict_refagg_segment(ent, syms)
+    ragg = segment(1, 0, rdat, refs=[0], page=0)
+    rinsts = [(i % len(rnew), rnd.randint(0, W - 16), rnd.randint(0, H - 14)) for i in range(8)]
+    rtx = segment(3, 6, text_segment(rnew, rinsts, W, H), refs=[1])
+    put('jb2_refagg.jb2', segment(2, 48, page_info(W, H)) + rtx); put('jb2_refagg.glob', glob + ragg)
+    put('jb2_refagg.pdf', jbig2_pdf([segment(2, 48, page_info(W, H)), rtx], W, H, [glob + ragg]))
+    A = [r[40:80] for r in gimg[10:50]]
+    T = [[v ^ (1 if rnd.random() < .06 else 0) for v in r] for r in A]
+    rf = (segment(0, 48, page_info(W, H)) + segment(1, 38, generic_segment(A, 10, 10, 4, 0, 0))
+          + segment(2, 42, refine_segment(T, A, 10, 10, 4, 0, 1)))
+    put('jb2_refine.jb2', rf); put('jb2_refine.pdf', jbig2_pdf([rf], W, H))
+    # an intermediate generic region, refined (40), refined again by an immediate region: MuPDF has no intermediate regions
+    T2 = [[v ^ (1 if rnd.random() < .06 else 0) for v in r] for r in T]
+    it = (segment(0, 48, page_info(W, H)) + segment(1, 36, generic_segment(A, 10, 10, 4, 0, 0))
+          + segment(2, 40, refine_segment(T, A, 10, 10, 4, 1, 0), refs=[1]) + segment(3, 43, refine_segment(T2, T, 10, 10, 4, 0, 1), refs=[2]))
+    put('jb2_inter.jb2', it)
+    uk = (segment(0, 48, page_info(W, H)) + segment_unknown(1, 38, generic_segment(gimg, tpl=1), H))
+    put('jb2_unknown.jb2', uk); put('jb2_unknown.pdf', jbig2_pdf([uk], W, H))
 
 if '--build' in sys.argv: build_fixtures(sys.argv[sys.argv.index('--build') + 1])

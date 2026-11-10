@@ -564,6 +564,15 @@ static pdw jb_rg_find(pdw num)
     for (i = 0; i < jb_nrg; i++) if (jb_rg_num[i] == num) return i;
     return 0xFFFFu;
 }
+#define RGK_BMP   6     /* an intermediate region: ofs = the bitmap, a = w, b = h              */
+static pdw jb_rg_findk(pdw num, pdw kind)
+{
+    pdw i;
+    for (i = 0; i < jb_nrg; i++) if (jb_rg_num[i] == num && jb_rg_kind[i] == kind) return i;
+    return 0xFFFFu;
+}
+static pdb jb_cvint;            /* the region being decoded is an intermediate one: its canvas is jb_intbm */
+static pdw jb_intbm;
 
 /* ---- generic refinement (6.3) ---------------------------------------------------------- */
 /* current rows live in jb_srow (the row being made) and tr_row (the row above); the
@@ -1029,6 +1038,7 @@ static pdw jb_segment_generic(void)
     }
     gb_w = jb_rw; gb_h = jb_rh; gb_sinkmode = 0; gb_dx = (pdi)jb_rx; gb_dy = (pdi)jb_ry; gb_op = jb_rop; gb_skip = 0;
     jb_cv_band();
+    if (jb_cvint) { gb_sinkmode = 3; gb_boff = jb_intbm; gb_brb = (pdw)((jb_rw + 7) >> 3); }
     if (f & 1) return gb_mmr();
     mq_init();
     gb_cinit();
@@ -1257,6 +1267,13 @@ static pdw jb_cv_open(pdw direct, pdw defpix)
 {
     pdw k;
     cvs_direct = direct; cvs_mark = jb_sp;
+    if (jb_cvint) {             /* a whole-region bitmap that stays */
+        cvs_direct = 1;
+        if (defpix) for (k = 0; k < (pdw)(((jb_rw + 7) >> 3) * jb_rh); k++) jw_wb((pdw)(jb_intbm + k), 0xFF);
+        cv_off = jb_intbm; cv_rb = (pdw)((jb_rw + 7) >> 3); cv_w = jb_rw; cv_h = jb_rh; cv_y0 = 0;
+        tr_ox = 0; tr_oy = 0;
+        return PDE_OK;
+    }
     if (direct) { jb_cv_band(); tr_ox = (pdi)jb_rx; tr_oy = (pdi)jb_ry; return PDE_OK; }
     {
         pdw by1 = (pdw)(jb_by0 + jb_brows), ye = jb_satadd(jb_ry, jb_rh), y1r;
@@ -1600,6 +1617,76 @@ static pdw jb_segment_text(void)
     return e;
 }
 
+/* An intermediate region (4, 20, 36, 40): decoded once into a bitmap that stays in the workspace and is
+ * kept in the registry for a refinement region that refers to it. */
+static pdw jb_segment_refine(void);
+static pdw jb_segment_inter(void)
+{
+    pdw w = jb_rw, h = jb_rh, e, sav = jb_sp;
+    if (!w || !h || w > BL_MAXW) return PDE_LIMIT;
+    jb_intbm = jb_alloc(w, h);
+    if (!jb_intbm) return PDE_LIMIT;
+    jb_cvint = 1;
+    e = jb_st == 36 ? jb_segment_generic() : jb_st == 4 ? jb_segment_text() : jb_st == 20 ? jb_segment_halftone() : jb_segment_refine();
+    jb_cvint = 0;
+    if (e) { jb_sp = sav; return e; }
+    jb_rg_add(RGK_BMP, jb_intbm, 0, w, h);
+    return PDE_OK;
+}
+
+/* A generic refinement region (7.4.7; 40 intermediate, 42 / 43 immediate). The reference is the intermediate
+ * region it refers to, else the page under the region - which is only there while the region lies inside the
+ * band being made (a region taller than a band cannot be refined: reported as unsupported). */
+static pdw jb_segment_refine(void)
+{
+    pdw f, k, ref, rw, rh, dst, rb = (pdw)((jb_rw + 7) >> 3), e, y, g, mark, b;
+    pdb inter = jb_cvint;
+    f = jb_b();
+    rf_tpl = (pdw)(f & 1); rf_tpgr = (pdw)((f >> 1) & 1);
+    if (!rf_tpl) {
+        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
+        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+    }
+    if (!jb_rw || !jb_rh || jb_rw > RF_MAXW) return PDE_LIMIT;
+    mark = jb_sp;
+    ref = 0; g = 0xFFFFu;
+    for (k = 0; k < jb_nref && k < 32; k++) { g = jb_rg_findk(jb_ref[k], RGK_BMP); if (g != 0xFFFFu) break; }
+    if (g != 0xFFFFu) {
+        ref = jb_rg_ofs[g]; rw = jb_rg_a[g]; rh = jb_rg_b[g];
+        if (rw != jb_rw || rh != jb_rh) return PDE_LIMIT;
+    } else {                    /* the page itself, copied out of the band */
+        if (inter) return PDE_LIMIT;
+        if (jb_ry < jb_by0 || jb_satadd(jb_ry, jb_rh) > (pdw)(jb_by0 + jb_brows) || jb_satadd(jb_rx, jb_rw) > jb_pw) { jb_inc |= JBF_UNSUP; return PDE_OK; }
+        rw = jb_rw; rh = jb_rh;
+        ref = jb_alloc(rw, rh);
+        if (!ref) return PDE_LIMIT;
+        for (y = 0; y < rh; y++) {
+            jw_get(tr_row, (pdw)(jb_bandoff + (pdw)(jb_ry - jb_by0 + y) * jb_rb), jb_rb);
+            tr_row[jb_rb] = 0; tr_row[jb_rb + 1] = 0;
+            for (b = 0; b < rb; b++) {
+                pdw v = jb_srcbyte(tr_row, (pdi)(jb_rx + b * 8));
+                if (b == (pdw)(rb - 1) && (rw & 7)) v &= (pdw)(0xFF00 >> (rw & 7)) & 0xFF;
+                jw_wb((pdw)(ref + y * rb + b), v);
+            }
+        }
+    }
+    dst = inter ? jb_intbm : jb_alloc(jb_rw, jb_rh);
+    if (!dst) { jb_sp = mark; return PDE_LIMIT; }
+    mq_init();
+    jw_zero(JW_GR, 8192);
+    e = rf_decode(dst, jb_rw, jb_rh, ref, rw, rh, 0, 0);
+    if (!e && !inter) {
+        jb_cv_band();
+        for (y = 0; y < jb_rh; y++) {
+            jw_get(tr_row, (pdw)(dst + y * rb), rb);
+            tr_row[rb] = 0; tr_row[rb + 1] = 0;
+            cv_row((pdi)(jb_ry + y), (pdi)jb_rx, tr_row, jb_rw, jb_rop);
+        }
+    }
+    jb_sp = mark;
+    return e;
+}
+
 /* ---- the segment loop for one stream, one band ------------------------------------------ */
 static pdw jb_dispatch(void)
 {
@@ -1640,7 +1727,17 @@ static pdw jb_dispatch(void)
         if (jb_region()) return PDE_TRUNC;
         if (jb_inband()) r = jb_segment_halftone();
         break;
-    case 4: case 20: case 36: case 40: jb_inc |= JBF_UNSUP; break;
+    case 4: case 20: case 36: case 40:
+        if (jb_region()) return PDE_TRUNC;
+        if (jb_rg_find(jb_sn) == 0xFFFFu) {
+            r = jb_segment_inter();
+            if (r) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); jb_inc |= JBF_UNSUP; r = PDE_OK; }
+        }
+        break;
+    case 42: case 43:
+        if (jb_region()) return PDE_TRUNC;
+        if (jb_inband()) r = jb_segment_refine();
+        break;
     default: break;
     }
     return r;
@@ -1662,6 +1759,7 @@ static pdw jb_pass(void)
 
 /* ---- open / rows ----------------------------------------------------------------------------- */
 static pdw jb_globals, jb_bandok, jb_gnext;
+static pdb jb_pgref;            /* a page-refinement region (42 / 43) is present: bands grow to hold it */
 static pdb jb_stream;           /* one generic region and nothing else draws: rows are decoded on demand, once */
 static pdw jb_sy, jb_smmr;      /* the next source row; the region is MMR */
 
@@ -1705,7 +1803,7 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
     pdw e, n, s, segn = 0, nreg = 0, cand = 0;
     jb_globals = globals; jb_ih = ih; jb_inc = 0; jb_pw = 0; jb_stream = 0;
     ix_open(0);
-    jb_by0 = 0; jb_brows = 0; jb_rb = 0; jb_nut = 0;
+    jb_by0 = 0; jb_brows = 0; jb_rb = 0; jb_nut = 0; jb_pgref = 0;
     for (;;) {                  /* find the page information */
         if (jb_hdr()) return PDE_SYNTAX;
         segn++;
@@ -1723,6 +1821,7 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
             || jb_st == 4 || jb_st == 20 || jb_st == 36 || jb_st == 40) {
             nreg++;
             if ((jb_st == 38 || jb_st == 39) && !jb_unb) cand = segn;
+            if (jb_st == 42 || jb_st == 43) jb_pgref = 1;
         }
         jb_skip();
         if (jb_unb) { nreg = 2; break; }
@@ -1750,7 +1849,8 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
      * the symbols and the grids get the rest */
     if (jb_wsz < (pdw)(JW_BAND + n * jb_rb + 1024u)) return PDE_LIMIT;
     jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 3);
-    if (jb_bandmax > JB_BANDMAX) jb_bandmax = JB_BANDMAX;
+    if (jb_pgref) jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 2);      /* a page refinement wants its region inside one band */
+    if (jb_bandmax > (jb_pgref ? 40000u : JB_BANDMAX)) jb_bandmax = jb_pgref ? 40000u : JB_BANDMAX;
     if (jb_bandmax < n * jb_rb) jb_bandmax = (pdw)(n * jb_rb);
     jb_symbase = (pdw)(JW_BAND + jb_bandmax); jb_sp = jb_symbase; jb_hp = jb_wsz;
     s = (pdw)(jb_bandmax / jb_rb);

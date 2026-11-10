@@ -383,6 +383,65 @@ def check_jb2_unknown(rnd, bins, use_mutool=False):
 
 
 
+def check_jb2_refine(rnd, bins, use_mutool=False):
+    """generic refinement regions: of an intermediate region (generic 36, text 4, refinement 40) and of the page"""
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(60):
+            W = rnd.choice([40, 100, 133]); H = rnd.choice([30, 64]); mode = rnd.choice(['inter', 'chain', 'page', 'text'])
+            w = rnd.randint(8, W); h = rnd.randint(6, H); x = rnd.randint(0, W - w); y = rnd.randint(0, H - h)
+            tpl = rnd.randint(0, 1); tpgr = rnd.randint(0, 1); op = rnd.choice([0, 1, 2, 4, 4, 4])
+            if use_mutool and tpl == 1: tpgr = 0   # jbig2dec uses 0x40 for the template-1 SLTP context; the spec's (and pdf.js's) is the centre pixel, bit 7 here
+            if use_mutool: mode = 'page'; x = y = 0   # MuPDF has no intermediate regions and refines the page at ITS origin, not the region's
+            A = rimg(w, h, 0.25, rnd)
+            def tweak(img):
+                return [[v ^ (1 if rnd.random() < .08 else 0) for v in row] for row in img]
+            page = [[0] * W for _ in range(H)]
+            segs = [F.segment(0, 48, F.page_info(W, H))]; sn = 1
+            if mode == 'page':
+                base = F.generic_segment(A, x, y, 4, 0, 0)
+                segs.append(F.segment(sn, 38, base)); sn += 1
+                compose(page, A, x, y, 4)
+                ref = A
+            elif mode == 'text':
+                syms = [glyph(rnd.randint(3, 8), rnd.randint(4, 8), rnd) for _ in range(3)]
+                syms.sort(key=len)
+                insts = [(rnd.randrange(3), rnd.randint(0, max(0, w - 9)), rnd.randint(0, max(0, h - 9))) for _ in range(rnd.randint(1, 5))]
+                region = [[0] * w for _ in range(h)]
+                for it in sorted(insts, key=lambda it: (it[2], it[1])): compose(region, syms[it[0]], it[1], it[2], 0)
+                segs.append(F.segment(sn, 0, F.symdict_segment(syms, 0), page=0)); sn += 1
+                segs.append(F.segment(sn, 4, F.text_segment(syms, insts, w, h, x, y, 0, 0, 1, 0, 0, 0, 0, False, 0), refs=[sn - 1])); sn += 1
+                ref = region
+            else:
+                segs.append(F.segment(sn, 36, F.generic_segment(A, x, y, 4, 0, 0))); sn += 1
+                ref = A
+                if mode == 'chain':
+                    B = tweak(A)
+                    segs.append(F.segment(sn, 40, F.refine_segment(B, ref, x, y, 4, rnd.randint(0, 1), 0), refs=[sn - 1])); sn += 1
+                    ref = B
+            T = tweak(ref)
+            refs = [] if mode == 'page' else [sn - 1]
+            segs.append(F.segment(sn, rnd.choice([42, 43]), F.refine_segment(T, ref, x, y, op, tpl, tpgr), refs=refs))
+            compose(page, T, x, y, op)
+            if use_mutool:
+                total += 1
+                try: mp = mutool_pgm(segs, None, W, H, td)
+                except Exception as ex: print('mutool fail', mode, ex); fails += 1; continue
+                if mp != page: print('MUTOOL differs refine case', case, mode, tpl, tpgr, op); fails += 1
+                continue
+            data = b''.join(segs)
+            for want in (0, W // 2):
+                for bn in (bins[:1] if mode == 'page' else bins):    # a page refinement needs the region inside one band (20.22.12)
+                    res, err = run_jb2(bn, data, None, W, H, want, td); total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, W, H, sc):
+                        exp = jb2_expect(page, W, H, sc); dif = [(xx, yy) for yy in range(len(exp)) for xx in range(len(exp[0])) if exp[yy][xx] != got[yy][xx]]; print('  diffs', len(dif), dif[:6], 'bounds x', x, x + w - 1); open('/tmp/failf_%d.jb2' % case, 'wb').write(data); print('FAIL refine case', case, mode, W, H, 'reg', w, h, x, y, tpl, tpgr, op, 'want', want); fails += 1
+    print('jbig2 refine%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
+
+
 def custom_table(rnd, oob, name):
     """-> (segment data, HuffTab) for a custom table covering -64..63 in 8 lines"""
     lines = [(4, 4)] * 8
@@ -563,7 +622,8 @@ def run_fuzz(n=1500):
     seeds = ['c:%sccitt_g4.bin:-1:200:4:48' % D, 'c:%sccitt_g3_1d.bin:0:200:5:48' % D, 'c:%sccitt_g3_2d.bin:4:200:5:48' % D,
              'c:%sccitt_g4_align.bin:-1:200:6:48' % D, 'j:%sjb2_generic.jb2:64' % D, 'j:%sjb2_mmr.jb2:64' % D,
              'j:%sjb2_text.jb2:%sjb2_text.glob:64' % (D, D), 'j:%sjb2_huff.jb2:%sjb2_huff.glob:64' % (D, D),
-             'j:%sjb2_halftone.jb2:%sjb2_halftone.glob:64' % (D, D)]
+             'j:%sjb2_halftone.jb2:%sjb2_halftone.glob:64' % (D, D),
+             'j:%sjb2_refagg.jb2:%sjb2_refagg.glob:64' % (D, D), 'j:%sjb2_refine.jb2:-:64' % D, 'j:%sjb2_inter.jb2:-:64' % D, 'j:%sjb2_unknown.jb2:-:64' % D]
     r = subprocess.run(['build-bl/pdbl_fuzz', '-n', str(n), '-s', '1'] + seeds, capture_output=True, text=True)
     print(r.stdout.strip() or r.stderr[-400:])
     return r.returncode
@@ -598,6 +658,8 @@ if __name__ == '__main__':
         if what == 'mutool-jb2-refagg': f += check_jb2_refagg(rnd, BINS, True)
         if what == 'jb2-unknown': f += check_jb2_unknown(rnd, BINS)
         if what == 'mutool-jb2-unknown': f += check_jb2_unknown(rnd, BINS, True)
+        if what == 'jb2-refine': f += check_jb2_refine(rnd, BINS)
+        if what == 'mutool-jb2-refine': f += check_jb2_refine(rnd, BINS, True)
         if what == 'jb2-multi': f += check_jb2_multi(rnd, BINS)
         if what == 'mutool-jb2-multi': f += check_jb2_multi(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)

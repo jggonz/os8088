@@ -15,3 +15,13 @@ stream was also decoded by an independent reader before it was trusted:
   jb2_generic   96x64, one MQ generic region, template 0, TPGDON      jb2_mmr   the same bitmap, MMR
   jb2_text      symbol dictionary (.glob) + text region (.jb2)         jb2_huff  Huffman, MMR collective
   jb2_halftone  pattern dictionary (.glob) + halftone region           *.bin / *.jb2 / *.glob: coded bytes
+
+  jb2_refagg    jb2_text's dictionary (.glob) + an SDREFAGG dictionary (one refinement, one aggregate of 3 instances)
+                and a text region over its symbols. MuPDF draws the same picture.
+  jb2_refine    a generic region and a page refinement region (42) over it. MuPDF draws it differently unless the region
+                is at (0,0): it refines the page at the page origin, not under the region (the checks hold x = y = 0).
+  jb2_inter     intermediate generic region (36), refined by 40, refined again by 43: MuPDF has no intermediate regions
+  jb2_unknown   a generic region of unknown length (length FFFFFFFF, marker FF AC, true row count). MuPDF draws the same.
+  Two MuPDF (jbig2dec) disagreements, both argued from the spec and pdf.js: a generic refinement region with
+  GRTEMPLATE 1 and TPGRON 1 (jbig2dec's SLTP context is 0x40, the centre reference pixel is bit 7), and a page
+  refinement region away from (0,0). The checks hold what they can against MuPDF and the rest against the model.
