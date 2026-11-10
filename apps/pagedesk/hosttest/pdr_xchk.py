@@ -339,6 +339,31 @@ check('... a disc, not its box: each square\'s corners are paper and its centre 
 for ad in ('cga', 'herc'):
     rc, im, st, _ = render(clips, 0, ad)
     check('clips.pdf on %s: clean, the discs drawn' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 128).sum()) > 5000)
+print('-- paths past 200 vertices and dash arrays past four (bigpath.pdf; KBMIDI2 path size, SYNTH dash array)')
+big = os.path.join(fx, 'bigpath.pdf')
+for pg, what in ((0, 'a 340-vertex even-odd star with a hole under a 330-segment circle'), (1, 'one clip of 300 vertices'),
+                 (2, 'dash arrays of 5, 6 and 8 elements, one on a 300-segment circle')):
+    rc, im, st, _ = render(big, pg, 'vga')
+    rck, imk, stk, _ = render(big, pg, 'vga', dl=12)
+    ref = mutool(big, pg)
+    pct = cellmatch(im, ref, 60) if im is not None else 100.0
+    check('%s: drawn clean and as MuPDF (%.1f%% of cells off; %s passes, %s with a 12 KiB list, the same pixels)' % (what, pct, st.get('passes'), stk.get('passes')),
+          rc == 0 and rck == 0 and num(st, 'incomplete') == 0 and num(stk, 'incomplete') == 0 and pct < 1.5
+          and im is not None and imk is not None and int((im != imk).sum()) == 0, str(st.get('first')))
+rc, im, st, _ = render(big, 0, 'vga')
+check('... the star is ONE even-odd fill: the hole at its centre is paper, the ring around it ink (%s passes)' % st.get('passes'),
+      im is not None and im[400 - 200, 200] > 200 and im[400 - 200, 200 + 90] < 60 and im[400 - 200, 200 - 90] < 60
+      and im[400 - 200 - 90, 200] < 60)
+rc, im, st, _ = render(big, 3, 'vga')
+check('a nine-element dash array: drawn with eight, noted (first=dash array)', rc == 0 and st.get('first') == 'dash array'
+      and im is not None and 150 < int((im[400 - 300 - 2:400 - 300 + 2, 20:380] < 128).any(axis=0).sum()) < 330, str(st))
+rc, im, st, _ = render(big, 4, 'vga')
+check('a 400-vertex path is past the table: drawn as far as it holds, noted (first=path size)', rc == 0 and st.get('first') == 'path size', str(st))
+rc, im, st, _ = render(big, 5, 'vga')
+ref = mutool(big, 5)
+pct = cellmatch(im, ref, 60) if im is not None else 100.0
+check('six discs in one path (KBMIDI2\'s shape; 360 vertices at the fine bound): the bound loosens as the table fills, so it fits, clean and as MuPDF (%.1f%% of cells off)' % pct,
+      rc == 0 and num(st, 'incomplete') == 0 and pct < 1.5, str(st.get('first')))
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

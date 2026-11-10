@@ -389,17 +389,18 @@ if r is not None:
         else: check('replace scenario renders', False, err[:100])
 
 # ============================================================================================
-# verify-annotr: an ink stroke longer than the path buffer (PDR_NPATH 200) is stroked in pieces, and
+# verify-annotr: an ink stroke longer than the path buffer (PDR_NPATH) is stroked in pieces, and
 # each piece goes on FROM the last point - the segment across the cut is not lost
 import struct as _st
+NPATH = int(re.search(r'#define PDR_NPATH\s+(\d+)', open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pdrend.h')).read()).group(1))
 def ink_store(pts):
     rec = _st.pack('<BBH4hHHHBBBBHHHHHH14x', 5, 0, 0, 0, 0, 400 * 16, 300 * 16, 0, 0, 1, 0, 0, 4, 0, 0, 0, 48, len(pts), 0, 0)
     return rec + b''.join(_st.pack('<hh', x * 16, y * 16) for x, y in pts)
-pts = [(20 + (i & 1) * 2, 150) for i in range(197)] + [(380, 150), (380, 150)]
+pts = [(20 + (i & 1) * 2, 150) for i in range(NPATH - 3)] + [(380, 150), (380, 150)]
 sp = os.path.join(scratch, 'ink.bin'); open(sp, 'wb').write(ink_store(pts))
 rc, im, st, err = render(writepdf('ink.pdf', page_pdf(b'')), flags=2, store=sp, H=300, W=400)
 row = (lum(im)[300 - 150, 100:300] < 128) if rc == 0 else np.zeros(1)
-check('an ink stroke of 199 points: the segment across the path buffer\'s cut (point 196 -> 197) is drawn (%d of 200 px inked)' % row.sum(), rc == 0 and row.all(), err[:80])
+check('an ink stroke of %d points: the segment across the path buffer\'s cut (point %d -> %d) is drawn (%d of 200 px inked)' % (NPATH - 1, NPATH - 4, NPATH - 3, row.sum()), rc == 0 and row.all(), err[:80])
 
 # verify-annotr: the store is drawn a budget a turn (about 1,024 points and text bytes), never all of
 # it in one slice: 200 ink records of 60 points (a dot each) take more steps than one, and the last is drawn
@@ -474,7 +475,9 @@ check('an odd array\'s phase cycles over twice its sum: [4] 6 d opens with a 2 p
 rc, im, st, err = draw(b'[3] 0 d 2 w 50 50 m 100 250 150 50 200 250 c S 250 60 m 350 60 l 300 140 l h S')
 check('dashed curves and closed paths draw (no Incomplete)', rc == 0 and inc(st) == 0 and (lum(im) < 128).sum() > 300)
 rc, im, st, err = draw(b'[1 2 3 4 5 6] 0 d 2 w 20 150 m 380 150 l S')
-check('a six-element array keeps four and says so (Incomplete: limit)', rc == 0 and inc(st) & 0x80 and (lum(im) < 128).sum() > 100)
+check('a six-element array is drawn whole (no Incomplete; SYNTH\'s were noted when four was the most)', rc == 0 and inc(st) == 0 and (lum(im) < 128).sum() > 100)
+rc, im, st, err = draw(b'[1 2 3 4 5 6 7 8 9] 0 d 2 w 20 150 m 380 150 l S')
+check('a nine-element array keeps eight and says so (Incomplete: limit)', rc == 0 and inc(st) & 0x80 and (lum(im) < 128).sum() > 100)
 rc, im, st, err = draw(b'[10 10] 0 d 3 w 20 150 m 380 150 l S', adapter='herc', zoom=100)
 check('a dash on Hercules', rc == 0 and len([1 for k, n in runs(lum(im)[int(150 * 29 / 45):int(150 * 29 / 45) + 1, 10:390][0] < 128) if k]) >= 12)
 

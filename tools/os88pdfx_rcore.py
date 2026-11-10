@@ -437,6 +437,47 @@ def clips_pdf(path):
     d.write(path)
 
 
+def bigpath_pdf(path):
+    """Paths past the old 200-vertex table and dash arrays past four (QA KBMIDI2 'path size',
+    SYNTH 'dash array'; PAGEDESK-SPEC 20.3.2, 20.12.4). Page 1: a 150-pointed star (300
+    vertices) with a 40-vertex disc cut out of it, filled even-odd - more edges than a FILL
+    record holds (256) while the pass covers it, so the pass narrows rather than splitting the
+    fill, which would lose the parity - and a 330-segment circle stroked over it. Page 2: ONE clip of 300 vertices over stripes. Page 3: dash arrays of 5, 6 and 8
+    elements on lines, and an 8-element one on a 300-segment circle (more vertices than the
+    exchange block holds: the walker reads them from the list's lent top). Page 4: a nine-
+    element array (drawn with eight, noted 'dash array'). Page 5: a 400-vertex path (past the
+    table: drawn as far as it holds, noted 'path size'). Page 6: six discs of 60 pt in ONE path
+    (KBMIDI2's four discs, bigger): 384 vertices at the fine bound, so it fits only because the
+    bound loosens as the table fills."""
+    import math
+    d = Pdf()
+    def poly(cx, cy, rs, n, op='m'):
+        pts = []
+        for i in range(n):
+            a = 2 * math.pi * i / n; r = rs[i % len(rs)]
+            pts.append('%.2f %.2f %s' % (cx + r * math.cos(a), cy + r * math.sin(a), 'm' if not i else 'l'))
+        return ' '.join(pts) + ' h'
+    d.page('0 g %s %s f* 1 w 0.4 g %s S' % (poly(200, 200, (180, 110), 300), poly(200, 200, (60,), 40), poly(200, 200, (150,), 330)))
+    stripes = ' '.join('0 g 20 %d 360 6 re f' % (20 + k * 12) for k in range(30))
+    d.page('q %s W n %s Q' % (poly(200, 200, (185, 95), 300), stripes))
+    c = ['2 w [10 4 2 4 6 4] 0 d 20 380 m 380 380 l S',
+         '[12 3 3 3 6 3 3 3] 5 d 20 364 m 380 364 l S',
+         '[9 3 2 3 2] 0 d 20 348 m 380 348 l S',
+         '1 J 3 w [0 6 0 6 0 14 8 6] 0 d 20 330 m 380 330 l S 0 J',
+         '1.5 w [14 4 4 4 2 4 4 4] 3 d %s S' % poly(200, 160, (140,), 300)]
+    d.page('\n'.join(c))
+    d.page('2 w [10 4 2 4 6 4 2 4 3] 0 d 20 300 m 380 300 l S')
+    d.page('0 g %s f' % poly(200, 200, (180, 160), 400))
+    def circ(cx, cy, r):
+        k = 0.5523 * r
+        return ('%.2f %.2f m %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c '
+                '%.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c h' % (
+                    cx + r, cy, cx + r, cy + k, cx + k, cy + r, cx, cy + r, cx - k, cy + r, cx - r, cy + k, cx - r, cy,
+                    cx - r, cy - k, cx - k, cy - r, cx, cy - r, cx + k, cy - r, cx + r, cy - k, cx + r, cy))
+    d.page('0 g %s f' % ' '.join(circ(70 + (i % 3) * 130, 130 + (i // 3) * 140, 60) for i in range(6)))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -451,7 +492,8 @@ def main():
     park_pdf(os.path.join(out, 'park.pdf'))
     noap_pdf(os.path.join(out, 'noap.pdf'))
     clips_pdf(os.path.join(out, 'clips.pdf'))
-    print('os88pdfx_rcore: 11 fixtures in %s' % out)
+    bigpath_pdf(os.path.join(out, 'bigpath.pdf'))
+    print('os88pdfx_rcore: 12 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

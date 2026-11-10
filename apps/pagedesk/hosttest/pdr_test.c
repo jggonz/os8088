@@ -251,6 +251,7 @@ static void report(void)
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
     printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
            rs.mods, rs.swaps, g_loads);
+    if (getenv("PDR_PATHHIST")) { extern long pdrh_pamax, pdrh_psmax, pdrh_pover; printf("path most=%ld subpath most=%ld past the table=%ld\n", pdrh_pamax, pdrh_psmax, pdrh_pover); }
     if (getenv("PDR_CLIPHIST")) { extern long pdrh_clipone, pdrh_cliptot, pdrh_clipnmax; printf("clips one=%ld pass=%ld entries=%ld\n", pdrh_clipone, pdrh_cliptot, pdrh_clipnmax); }
     if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail; printf("xshade calls=%ld stepmax=%ld fails=%ld\n", pdrh_xshades, pdrh_xstepmax, pdrh_xshfail); }
 }

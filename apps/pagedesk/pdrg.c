@@ -19,8 +19,8 @@ struct pdr_gs {
     pdb  fncs, sncs;                /* colour components of the space (1,3,4)*/
     pdb  tr, font;                  /* render mode, font cache index (255=none)*/
     pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
-    pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 2,040) */
-    pdb  dn, dash[4];               /* dash pattern: elements (0 = solid) and lengths, quarter points */
+    pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 3,570) */
+    pdb  dn, dash[PDXD_NDASH];       /* dash pattern: elements (0 = solid) and lengths, quarter points */
     pdb  xt;                        /* blend: the transparency tuple in force (20.22.10; pad_ is gfx's colour-space slots) */
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
@@ -30,9 +30,9 @@ static pdw g_gsn;                   /* depth: saved states below the current */
 #define GS g_gcur
 static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) */
 #define WS_GS   0u                  /* PD_MAXGSTACK x sizeof(struct pdr_gs)    */
-#define WS_FN   1344u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 84 */
-#define WS_ED   4096u               /* PDR_NEDGE staged edges, 8 bytes each    */
-#define WS_CL   6144u               /* PDR_NCLIP clip records' list offsets, 2 bytes each (to 6,654) */
+#define WS_FN   1408u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 88 */
+#define WS_ED   4160u               /* PDR_NEDGE staged edges, 8 bytes each (the 4 fonts end at 4,152) */
+#define WS_CL   6208u               /* PDR_NCLIP clip records' list offsets, 2 bytes each (to 6,718) */
 /* the 16 saved states end before the font table: held by the compiler on both builds */
 typedef char pdr_ck_gs[PD_MAXGSTACK * sizeof(struct pdr_gs) <= WS_FN ? 1 : -1];
 static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }
@@ -226,10 +226,22 @@ typedef char pdr_ck_lend1[PDR_NEDGE * 2 <= PDR_NSTR ? 1 : -1];               /* 
 typedef char pdr_ck_lend2[PDR_NSPAN * 3 <= PDR_NPATH * 2 ? 1 : -1];          /* g_cx, g_cd on g_vx */
 typedef char pdr_ck_lend3[PDR_MAXSTRIDE * 2 <= PDR_NPATH * 2 ? 1 : -1];      /* g_mk on g_vy */
 
-static void path_reset(void) { g_nv = 0; g_cur = 0; g_sub = 0; g_pclip = 0; }
+#ifdef PD_HOST
+long pdrh_pa, pdrh_ps, pdrh_pamax, pdrh_psmax, pdrh_pover;   /* PDR_PATHHIST: what a page's paths would take (host only) */
+#endif
+static void path_reset(void) { g_nv = 0; g_cur = 0; g_sub = 0; g_pclip = 0;
+#ifdef PD_HOST
+    if (pdrh_pa > PDR_NPATH) pdrh_pover++; pdrh_pa = 0;
+#endif
+}
 
 static void path_add(pdi x, pdi y, pdb flag)
 {
+#ifdef PD_HOST
+    if (flag & 1) pdrh_ps = 0;
+    if (++pdrh_pa > pdrh_pamax) pdrh_pamax = pdrh_pa;
+    if (++pdrh_ps > pdrh_psmax) pdrh_psmax = pdrh_ps;
+#endif
     if (g_nv >= PDR_NPATH) { g_plimit = 1; return; }
     g_vx[g_nv] = x; g_vy[g_nv] = y; g_vf[g_nv] = flag; g_nv++;
     g_cpx = x; g_cpy = y;
@@ -269,12 +281,16 @@ static pdi g_bz[PDR_BZMAX * 8];      /* pending pieces: x0 y0 x1 y1 x2 y2 x3 y3 
 static pdw g_bzd[PDR_BZMAX];         /* ...and each one's depth               */
 static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
-    pdi a, b, c, e, f, m1, m2;
+    pdi a, b, c, e, f, m1, m2, tol;
     pdi *p, *r, *t;
     pdw n, d;
     g_bz[0] = x0; g_bz[1] = y0; g_bz[2] = x1; g_bz[3] = y1;
     g_bz[4] = x2; g_bz[5] = y2; g_bz[6] = x3; g_bz[7] = y3;
     g_bzd[0] = 0;
+    /* the bound loosens as the path table fills - 1 qpx for its first 128 vertices, 2 (0.38
+     * pixel) to 255, 3 (0.56) past them; the pieces go as 1/sqrt(bound), so a big path of
+     * curves fits (QA KBMIDI2: four discs in one path, 372 vertices at 100% and 405 at 200%) */
+    tol = (pdi)(1 + (g_nv >> 7));
     n = 1;
     while (n) {
         n--;
@@ -285,7 +301,7 @@ static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
             m1 = (pdi)(m1 + pdr_abs((pdi)(r[0] - 2 * r[2] + r[4])));
             m2 = (pdi)(m2 + pdr_abs((pdi)(r[2] - 2 * r[4] + r[6])));
         }
-        if (d >= 6 || (m1 <= 1 && m2 <= 1) || g_nv >= PDR_NPATH || n + 2 > PDR_BZMAX) {
+        if (d >= 6 || (m1 <= tol && m2 <= tol) || g_nv >= PDR_NPATH || n + 2 > PDR_BZMAX) {
             path_add(p[6], p[7], 0);
             continue;
         }
@@ -546,7 +562,7 @@ static void ctm_scale(struct pd_fx *out)
 
 
 /* ---- dash patterns (the `d` operator; PAGEDESK-SPEC 20.12.4, 20.22.7) -------
- * GS.dash holds up to four lengths in quarter points. The WALK - cutting a
+ * GS.dash holds up to PDXD_NDASH (8) lengths in quarter points. The WALK - cutting a
  * polyline where the pattern changes - is PDXG's (pdxdash.c, PDV_GFX_DASH):
  * the core hands it a subpath in the exchange block and strokes every "on"
  * piece it hands back as its own open polyline (so each carries the line's
@@ -556,35 +572,7 @@ static pdw xb_seg(void);            /* pdrv.c: the exchange block (pdrf.c's g_xb
 #ifndef PDV_GFX_DASH
 #define PDV_GFX_DASH 0xCE           /* gfx's (20.22.9); defined here until its block lands */
 #endif
-#define XD_XS 160u                  /* the subpath's x in the XB, after the block, then its y */
-#define XD_YS (XD_XS + PDR_NPATH * 2)
-typedef char pdr_ck_xd[sizeof(struct pdxb_dash) <= XD_XS && XD_YS + PDR_NPATH * 2 <= PD_XB_BYTES ? 1 : -1];
-static struct pdxb_dashin g_din;
-static struct pdxb_dashout g_dout;
-static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
-{
-    pdw r, k, xb;
-    if (!x_have(PDX_GFX)) {
-        x_need(PDX_GFX);
-        if (x_gone(PDX_GFX)) stroke_poly(xs, ys, n, closed);
-        return;
-    }
-    xb = xb_seg();
-    pd_fcopy_out(xs, xb, XD_XS, (pdw)(n << 1));
-    pd_fcopy_out(ys, xb, XD_YS, (pdw)(n << 1));
-    g_din.vseg = xb; g_din.xs = XD_XS; g_din.ys = XD_YS; g_din.n = n; g_din.closed = closed;
-    ctm_scale(&g_din.scale);
-    g_din.dph = GS.dph; g_din.dn = GS.dn; pdr_cpy(g_din.dash, GS.dash, 4); g_din.st = 0;
-    pd_fcopy_out(&g_din, xb, sizeof(struct pdxb_dashout), sizeof g_din);
-    for (k = 0; k < 4000; k++) {
-        r = x_call(PDV_GFX_DASH, xb, 0, 0);
-        if (x_cf || r == 2) { if (!k) stroke_poly(xs, ys, n, closed); return; }
-        if (r != 1) return;
-        pd_fcopy_in(xb, 0, &g_dout, sizeof g_dout);
-        if (g_dout.on < 1 || g_dout.on > PDXD_NPT) return;
-        stroke_poly(g_dout.ox, g_dout.oy, g_dout.on, 0);
-    }
-}
+static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed);   /* pdrd.c: it lends the list */
 
 static void stroke_path(void)
 {

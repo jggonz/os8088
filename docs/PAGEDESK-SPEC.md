@@ -1334,7 +1334,7 @@ saved graphics states and the font cache moved into the workspace tail of `dl_se
 scan was written in assembly (`pdr_act`, `pdr_scan`, `pdr_fcopy` in `pdrprim.inc`;
 they read 8-byte edge records through ES, and a FILL record is scanned in the list
 itself, with no copy). What is left in bss is hot: the active-edge list and crossing
-arrays (`g_act`, `g_cx`, `g_cd`, 0.9 KB), the flattened path (1 KB), the operand and
+arrays (`g_act`, `g_cx`, `g_cd`, 0.9 KB), the flattened path (1.7 KB: 352 vertices), the operand and
 run staging the engine and `dl_put` take by near pointer (2 KB). What
 would reach 40 KB is a different division of labour (the shell doing thumbnails,
 the text map moving into PDENG), not further trimming.
@@ -1343,7 +1343,7 @@ Claims it expects from `PDV_REND_INIT` (16.2 revised by this section):
 
 | `pdxb_init` field | size | holds |
 |---|---|---|
-| `dl_seg`, `dl_kb` | **29 KiB** (<= 63): 22 KiB of list + the WORKSPACE (`PDR_WSB` = 6,912 bytes) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds, by offset: saved graphics states 0 (16 x 78), the four-entry font cache 1,280 (4 x 684; one font is resident in bss at a time), staged edges 4,096 (256 x 8) and the polygon clips' list offsets 6,144 (255 x 2; the clips themselves are `DLR_CLIP` records of the list). A claim with less than `PDR_WSB` + 256 bytes (`dl_kb` < 7) is treated as NO claim: `BEGIN`, `TEXTMAP` and `THUMB` refuse `PDE_NOMEM` and nothing is written to it (before verify-rend a 1-6 KiB claim had the workspace written past its end) |
+| `dl_seg`, `dl_kb` | **29 KiB** (<= 63): 22 KiB of list + the WORKSPACE (`PDR_WSB` = 6,912 bytes) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds, by offset: saved graphics states 0 (16 x 88), the four-entry font cache 1,408 (4 x 686; one font is resident in bss at a time), staged edges 4,160 (256 x 8) and the polygon clips' list offsets 6,208 (255 x 2; the clips themselves are `DLR_CLIP` records of the list). A claim with less than `PDR_WSB` + 256 bytes (`dl_kb` < 7) is treated as NO claim: `BEGIN`, `TEXTMAP` and `THUMB` refuse `PDE_NOMEM` and nothing is written to it (before verify-rend a 1-6 KiB claim had the workspace written past its end) |
 | `band_seg`, `band_bytes` | `16 x stride`, stride = `ceil(w/8)` (1bpp) or `ceil(w/2)` (4bpp) of the canvas width rounded out to 8 pixels: 1.5 KiB at 720 px 1bpp, 5.1 KiB at 640 px 4bpp | one band |
 | `glyph_seg`, `glyph_kb` | **24 KiB** (16.2 said 12; 20.3.4 carves it; more than 63 counts as 63) | image row buffer, PDFONTX index, transformed glyphs, the strike cache |
 | `bank_seg`, `bank_kb` | ignored | (D3: the bank arrives through `PDV_REND_FONTBANK`) |
@@ -1377,7 +1377,11 @@ CGA's y axis below about 80% and 120%). A rectangle with no area clips everythin
 A polygon clip stays on sample points. (square, verify-square; `pdr_annot`'s "an
 appearance stroking at its BBox edge".) Beziers are flattened by de Casteljau subdivision until both second
 differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
-curve), depth 6 (64 pieces) - the operation limit. A stroke of one pixel
+curve), depth 6 (64 pieces) - the operation limit. The bound loosens as the path table
+fills: 1 qpx for a path's first 128 vertices, 2 (0.38 px) to 255, 3 (0.56 px) past them;
+the pieces go as one over its square root, so a big path of curves fits the table
+(KBMIDI2.PDF's four discs in ONE path took 372 vertices at 100%, 301 now; `pdr_xchk`'s
+six discs take 360 at the fine bound and 321 with it). A stroke of one pixel
 (a half width of 2 qpx or less, which every `w` at or below one device pixel
 is) is not offset across the line: a band one pixel wide ACROSS a slanted
 line holds a pixel centre only on a knife edge, and `pdr_scan` truncates each
@@ -1424,7 +1428,11 @@ that can cross a row of the PASS are kept (an edge wholly above or below adds no
 crossing to any row the pass draws), and a clip whose box misses the pass's rows,
 or the clip it sits in, is not stored at all: nothing under it reaches the list.
 A pass whose clips do not fit is a full list and narrows (20.3.2's group plan), like
-one whose marks do not, so there is no clip limit short of one row. This replaced a
+one whose marks do not, so there is no clip limit short of one row. A FILL record holds
+256 edges (the walker's active list, `g_act`): a filled path with more that cross the pass's
+rows is a full list too, never two records, because a fill cut in two loses the crossings'
+parity across the cut (`pdr_xchk`'s `bigpath.pdf`: a 340-vertex even-odd star with a hole,
+drawn in 5 passes of a 29 KiB list as MuPDF draws it). This replaced a
 pool of 8 polygons / 96 edges in the workspace, which SYNTH.PDF (88 clips a pass)
 and KBMIDI2.PDF (a 170-edge clip) outgrew - both drew those clips as their boxes,
 `PDF_INC_LIMIT` "clip depth" / "clip path size"; `pdr_xchk`'s `clips.pdf` holds 100
@@ -1755,7 +1763,9 @@ guarantees): 40 edges **6,888 -> 5,727 instructions**.
 * Codes below 32 are not drawn (no PD Latin for them) but advance by their `/Widths`
   entry (read uncached); before verify-rend they advanced by 0.
 * Fonts at most 4 distinct per page in the cache (round robin), 14 distinct
-  rotated/doubled glyphs hot; paths of 200 vertices, 256 staged edges, 24
+  rotated/doubled glyphs hot; paths of 352 vertices (`PDR_NPATH`; 200 until QA, whose
+  corpus's largest path was KBMIDI2's 271 - `PDR_PATHHIST=1` on the host harness prints a
+  page's largest path, subpath and how many outgrow the table), 256 staged edges, 24
   operands, 512 bytes of a string per operator (the rest is cut, `PDF_INC_LIMIT`).
 * The page's `q` depth beyond 16 and Form nesting beyond 4 are refused
   (`PDF_INC_LIMIT`); the `Q` that matches a refused `q` restores nothing, so every
@@ -3396,7 +3406,7 @@ path, stroke, fill, dash and text machinery, so a mark clips, turns and scales w
 | Rect | a solid frame as above | |
 | Ellipse | four Beziers, kappa 0.5523, in the same inset | |
 | Text box | the writer's layout (PDWRT 20.5.6): 2 pt of padding, the first baseline 0.8 size below the top, leading 1.2 size, `/Q` from `align`, lines broken at the last space that fits else inside the word, `\n`, `\r`, `\r\n` paragraphs, no line below the frame, at most 1,024 bytes; the PDRES face of the family (`style >> 4`: 0 sans, 1 serif, 2 mono) and `style & 3` (bold, italic), at `size` points (0 = 12). Widths are kept exactly (whole thousandths of an em) so the breaks are PDWRT's | black |
-| Ink, Sign | each pen-up separated stroke as one polyline, round caps and joins; a one-point stroke is a dot; at most 4,096 points; a stroke longer than the path buffer (200 vertices) is stroked in pieces, each going on FROM the last point (the first version lost the segment across each cut) | black |
+| Ink, Sign | each pen-up separated stroke as one polyline, round caps and joins; a one-point stroke is a dot; at most 4,096 points; a stroke longer than the path buffer (`PDR_NPATH`, 352 vertices) is stroked in pieces, each going on FROM the last point (the first version lost the segment across each cut) | black |
 | Line, Arrow | a butt-capped shaft and, for each of `align` bit 0 (start) and bit 1 (end), an open head of two barbs 25 degrees off the line, 8 pt plus two widths long | black |
 
 `mono_mark` is the shell's preference (17.4); the value 0 is what a zero-initialised block asks
@@ -3407,8 +3417,9 @@ unbounded - `pdr_fuzz.py` draws a store of 60,000 points and wrapped offsets und
 
 #### 20.12.4 Dash patterns
 
-`[a b c d] phase d` is kept in the graphics state (so `q`/`Q` restore it): up to four lengths,
-each in quarter points 0..255 (a longer array keeps four and sets `PDF_INC_LIMIT` "dash array";
+`[a b c d] phase d` is kept in the graphics state (so `q`/`Q` restore it): up to eight lengths
+(`PDXD_NDASH`; four until QA found SYNTH.PDF's six-element arrays), each in quarter points
+0..255 (a longer array keeps eight and sets `PDF_INC_LIMIT` "dash array";
 `[] 0 d` and `0 d` are solid), and the phase in quarter points REDUCED MODULO THE PERIOD (the
 sum, twice it for an odd count) when `d` runs, so any phase is exact to a quarter point - the
 first version clamped it to 63.75 pt (`dph` took the state's spare pad byte, so the state did not
@@ -3420,8 +3431,9 @@ hairline at all; with butt caps it is nothing). An odd count cycles with on and 
 consumed from the pattern's start; a closed subpath dashes round its closing segment; curves are
 dashed after flattening. A pattern whose lengths sum to under 1.5 device pixels draws solid (it
 cannot be told from it, and the piece count would be the cost), and one subpath cuts at most 3,000
-pieces. The saved graphics states grew to 84 bytes (`WS_FN` 1,344; `pdr_ck_gs` holds 16 of them
-under it in both compilers). The walker's state is static and its pieces reach `stroke_poly` in
+pieces. The saved graphics states grew to 88 bytes with the eight lengths (`WS_FN` 1,408;
+`pdr_ck_gs` holds 16 of them under it in both compilers; the font cache, staged edges and clip
+offsets each moved up 64 bytes, to 4,160 and 6,208). The walker's state is static and its pieces reach `stroke_poly` in
 one call (20.12.8).
 
 #### 20.12.5 Inline images
@@ -6589,8 +6601,11 @@ PDREND's own path and paint to the same pixel as before:
 
 * `pdxdash.c`, `PDV_GFX_DASH` 0xCE (`struct pdxb_dash`): the dash walker of
   20.12.4, one piece of at most `PDXD_NPT` = 12 points a call; AX 1 a piece,
-  2 too fine (stroke solid), 0 done. The core puts the subpath's vertices in
-  the XB at 160 (x) and 560 (y).
+  2 too fine (stroke solid), 0 done. The core puts the subpath's vertices at
+  the TOP of its display list's free room and lowers the list's cap by them
+  for the walk (`vseg:xs`, `vseg:ys` name them), so the pieces' records cannot
+  reach them; the XB after the walker's state held only 216, the path table
+  holds `PDR_NPATH` = 352. No room for them is a full list (the pass narrows).
 * `pdxedit.c`, `PDV_GFX_EDIT` 0xCF (`struct pdxb_emark`): the edit store's
   marks of 13.3 / 17.4 (note, highlight, area, ink, signature, line,
   rectangle, ellipse) for one record as ops in page space at XB offset

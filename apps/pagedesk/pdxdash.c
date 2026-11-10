@@ -110,7 +110,7 @@ static pdw xd_run(void)
     static pdi sum, ph;
     pdw k;
     if (XD.in.st == 0) {
-        if (XD.in.n < 1 || XD.in.n > 0x3FFF || XD.in.dn < 1 || XD.in.dn > 4) { XD.in.st = XS_DONE; return 2; }
+        if (XD.in.n < 1 || XD.in.n > 0x3FFF || XD.in.dn < 1 || XD.in.dn > PDXD_NDASH) { XD.in.st = XS_DONE; return 2; }
         sum = 0;
         for (k = 0; k < XD.in.dn; k++) {
             pdm_fx_int(&t1, (pdi)XD.in.dash[k]);
@@ -134,10 +134,12 @@ static pdw xd_run(void)
         switch (XD.in.st) {
         case XS_SEG:
             if (XD.i >= XD.in.n || XD.dpc >= 3000) { XD.in.st = XS_END; break; }
-            if (XD.i + 1 == XD.in.n) {
+            k = XD.i + 1;                                    /* the segment's end: the start again on the closing one */
+            if (k == XD.in.n) {
                 if (!XD.in.closed) { XD.in.st = XS_END; break; }
-                XD.x1 = xd_vx(0); XD.y1 = xd_vy(0);
-            } else { XD.x1 = xd_vx(XD.i + 1); XD.y1 = xd_vy(XD.i + 1); }
+                k = 0;
+            }
+            XD.x1 = xd_vx(k); XD.y1 = xd_vy(k);
             XD.x0 = xd_vx(XD.i); XD.y0 = xd_vy(XD.i);
             XD.slen = xd_hypot((pdi)(XD.x1 - XD.x0), (pdi)(XD.y1 - XD.y0));
             XD.pos = 0;
