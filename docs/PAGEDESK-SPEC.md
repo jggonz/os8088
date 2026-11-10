@@ -4957,7 +4957,8 @@ round's final pass, not before.
 is the image-decoder occupant of the slot. It holds three codecs behind one
 protocol: DCT (this section, `pdxidct.c`), CCITT (20.22.12, `pdxiccit.c`) and
 JBIG2 (20.22.12, `pdxijb2.c`). Image + bss is at most 65,024 bytes, of which DCT
-is at most 24,576 and bilevel at most 36,864. The door is at `PDM_ENTRY` like
+is at most 24,576 and bilevel at most 36,864 (measured: shell 3,158, DCT 22,528, bilevel 36,081 with both
+of its codecs: 61,767 in all). A JBIG2 decode needs `g_wbytes` of 64,000, so its minimum slot is 64 KiB. The door is at `PDM_ENTRY` like
 `pdwrt.asm`'s: AL = verb, BX/CX/DX its arguments, AX the answer, CF = 1 for a
 failure. It answers `PDV_X_INIT` and `PDV_IMG_OPEN/ROW/CLOSE` only; any other
 verb is `PDE_RANGE`. It reaches PDENG through the far vector `pdxb_init`
@@ -5061,11 +5062,26 @@ image + bss.
 Huffman table ids 2 and 3 (a file with four tables of a class) are `PDE_FILTER`;
 cjpeg, libjpeg's progressive scripts, Photoshop and the camera makers all use 0
 and 1. An unused component (grey output of a YCbCr image) has no storage at all.
-A 1,000 x 1,000 progressive photograph is decoded at 1/4 (8 bytes a block without the mask,
-15,625 blocks, 122 KB: does not fit) and so at 1/8 (2 bytes a block, 31 KB: fits); an image
-too large even at 1/8 (about 31,000 blocks of one component, say 4,400 x 4,400, or
-a width over 8,100) is `PDE_LIMIT` as above. A baseline image has no such limit in
-rows, only in width.
+**Workspace range (want, min).** `want` 64 KiB; the module works in whatever `slot_kb` it is given and
+coarsens instead of refusing. Measured on a 2,400 x 1,800 colour 4:2:0 photograph drawn at 600 x 450
+(`PDI_KB` in the host harness; the landing zone takes the first 1 KiB of any grant):
+
+| image | slot_kb | what it decodes |
+|---|---|---|
+| baseline | 4 | 1/4, 600 x 450, as asked (one MCU row of planes) |
+| baseline | 3 | 1/8, 300 x 225 (the 1/4 plane row no longer fits) |
+| progressive, grey out | 48 to 64 | 1/8 with one block in two each way: 150 x 113 |
+| progressive, grey out | 12 to 32 | one block in four each way: 75 x 57 |
+| progressive, grey out | under 12 | `PDE_LIMIT` |
+
+So the DCT minimum is **4 KiB** for a baseline photograph and **12 KiB** for a progressive one. A
+progressive image is coefficients: 2,400 x 1,800 has 67,500 luma blocks, 2 bytes each at 1/8 is 132 KiB,
+which no slot holds, so at 1/8 the decoder KEEPS ONE BLOCK IN 2 (then 1 in 4) each way, parsing and
+discarding the rest (the DC predictor still moves), and the rows it delivers are the kept blocks'
+DC values: exactly djpeg's 1/8 picture sampled every 2nd or 4th pixel (max difference 0). Only a grey
+single-plane image takes this path; a progressive colour image in `PDIM_N8`, or whose grey needs all
+three planes, over the slot at 1/8 answers `PDE_LIMIT` and PDREND draws the grey box with
+`PDF_INC_APPROX`. A width over 8,100 is also `PDE_LIMIT`.
 
 **Fidelity.** Against `djpeg -dct int` (libjpeg-turbo 3.2.0, `tools/os88pdfx_dct.py`
 over 30 fixtures, 228 comparisons):

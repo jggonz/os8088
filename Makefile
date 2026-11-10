@@ -21787,6 +21787,21 @@ $(PDI_OUT)/.host.stamp: apps/pagedesk/hosttest/pdi_test.c tools/os88pdfx_dct.py 
 	touch $@
 pdxi-host: $(PDI_OUT)/.host.stamp
 pdxi: $(BUILD)/PDXI.MOD pdxi-host
+# the assembly against its C twins under Unicorn (pip install unicorn), the 8088 cost model, and the
+# ASan/UBSan fuzz over the marker parser and the entropy decoder: on demand, never in `all`
+.PHONY: pdxi-asm pdxi-cycles pdxi-fuzz
+pdxi-asm: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -Wall -Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_twin \
+		apps/pagedesk/hosttest/pdi_twin.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	python3 apps/pagedesk/hosttest/pdi_asm.py
+pdxi-cycles: pdxi-asm
+	python3 apps/pagedesk/hosttest/pdi_cycles.py
+PDI_FUZZN ?= 300
+pdxi-fuzz: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+		-Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_fuzz \
+		apps/pagedesk/hosttest/pdi_fuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(PDI_OUT)/pdi_fuzz $(PDI_FUZZN) 1 $(PDI_OUT)/fx/*.jpg
 # ---- end PageDesk: xi -------------------------------------------------------
 
 # ---- PageDesk: math ----

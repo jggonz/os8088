@@ -68,6 +68,7 @@ static pdw  dj_nused, dj_mrh, dj_wn;    /* dj_wn: samples a pixel in the working
 static pdw  dj_stored;                  /* coefficients kept (else streaming)  */
 static pdw  dj_decoded, dj_done;
 static pdw  dj_nslot, dj_bstride;       /* stored block: slots, bytes          */
+static pdw  dj_dec;                     /* 1/8 only: keep 1 block in 2^dec each way (a coarser grey box) */
 static pdw  dj_mask;                    /* stored blocks carry the 64-bit nonzero mask (1/2 and 1/4 only) */
 static pdb  dj_nmap[64];                /* natural position -> slot, 255 = none */
 static pdb  dj_sl2pos[64];
@@ -406,19 +407,19 @@ static const pdb dj_maxzzs[4] = { 63, 24, 4, 0 };
 static pdw dj_bstr(pdw s, pdw mask) { return (pdw)((dj_nslots[s] + (mask ? 4 : 0)) * 2); }
 
 /* does everything fit at scale s? lays the workspace out when it does */
-static pdw dj_fit(pdw s, pdw mask)
+static pdw dj_fit(pdw s, pdw mask, pdw dec)
 {
     pdw i, bs, ow, pw, tot, add, nb;
     struct dj_comp *c;
     bs = (pdw)(8 >> s);
-    ow = (pdw)((dj_W + (1u << s) - 1) >> s);
+    ow = (pdw)((dj_W + ((pdw)(1u << s) << dec) - 1) / ((pdw)(1u << s) << dec));
     if (ow > 1024 || (pdw)(ow * dj_wn) > 1024) return 0;   /* the row buffer holds every sample of a pixel it works on */
     tot = 0;
     if (dj_stored) {
         for (i = 0; i < dj_nc; i++) {
             c = &dj_c[i];
             if (!c->used) continue;
-            pdm_u32_mul16(&dj_u, c->pw, c->ph);
+            pdm_u32_mul16(&dj_u, (pdw)((c->pw + (1u << dec) - 1) >> dec), (pdw)((c->ph + (1u << dec) - 1) >> dec));
             if (dj_u.hi) return 0;
             nb = dj_u.lo;
             pdm_u32_mul16(&dj_u, nb, dj_bstr(s, mask));
@@ -499,16 +500,21 @@ static pdw dj_plan(void)
     /* the smallest reduction that fits; at 1/2 and 1/4 first with the nonzero mask (every refinement
      * scan decoded), then without it (the AC refinement scans skipped: a coefficient keeps its first-scan
      * precision, which costs at most one quantiser step in the few coefficients kept) */
-    dj_mask = 0;
+    dj_mask = 0; dj_dec = 0;
     for (s = sr; s <= 3; s++) {
-        if (s == 1 || s == 2) { dj_mask = 1; if (dj_fit(s, 1)) break; }
+        if (s == 1 || s == 2) { dj_mask = 1; if (dj_fit(s, 1, 0)) break; }
         dj_mask = 0;
-        if (dj_fit(s, 0)) break;
+        if (dj_fit(s, 0, 0)) break;
+    }
+    /* nothing fits even at 1/8: a progressive grey image keeps one block of 2 (then 4) each way, so a
+     * 2,400 x 1,800 photograph still draws, as a 150 x 113 (then 75 x 57) picture */
+    if (s > 3 && dj_stored && dj_nused == 1 && dj_wn == 1 && dj_c[0].v == dj_vmax) {
+        for (i = 1; i <= 2; i++) if (dj_fit(3, 0, i)) { dj_dec = i; s = 3; break; }
     }
     if (s > 3) return PDE_LIMIT;
     dj_s = s; dj_bs = (pdw)(8 >> s);
-    dj_ow = (pdw)((dj_W + (1u << s) - 1) >> s);
-    dj_oh = (pdw)((dj_H + (1u << s) - 1) >> s);
+    dj_ow = (pdw)((dj_W + ((pdw)(1u << s) << dj_dec) - 1) / ((pdw)(1u << s) << dj_dec));
+    dj_oh = (pdw)((dj_H + ((pdw)(1u << s) << dj_dec) - 1) / ((pdw)(1u << s) << dj_dec));
     dj_mrh = (pdw)(dj_vmax * dj_bs);
     dj_nslot = dj_nslots[s]; dj_bstride = dj_bstr(s, dj_mask);
     dj_maxzz = dj_maxzzs[s];
@@ -663,7 +669,7 @@ static void dj_ac_refine(pdi *b, struct dj_huff *act)
 
 static pdw dj_boff(struct dj_comp *c, pdw bx, pdw by)
 {
-    pdm_u32_mul16(&dj_u, (pdw)(by * c->pw + bx), dj_bstride);
+    pdm_u32_mul16(&dj_u, (pdw)((by >> dj_dec) * ((c->pw + (1u << dj_dec) - 1) >> dj_dec) + (bx >> dj_dec)), dj_bstride);
     return (pdw)(c->base + dj_u.lo);
 }
 
@@ -675,6 +681,15 @@ static void dj_block(pdw k, pdw bx, pdw by)
     struct dj_huff *dct, *act;
     c = &dj_c[dj_sci[k]];
     dct = &dj_ht[dj_sdc[k]]; act = &dj_ht[2 + dj_sac[k]];
+    if (dj_dec && ((bx | by) & (pdw)((1u << dj_dec) - 1))) {      /* not kept: the predictor still moves */
+        if (dj_ss == 0) {
+            if (dj_ah == 0) {
+                s = pdi_hsym(dct);
+                c->pred = (pdi)(c->pred + (s ? dj_ext(pdi_bits(s > 16 ? 16 : s), s) : 0));
+            } else pdi_bits(1);
+        }
+        return;
+    }
     if (!c->used) {                         /* parse and discard */
         if (!dj_prog) { pdi_block(dct, act, pdi_coef); return; }
         if (dj_ss == 0) {
@@ -754,7 +769,7 @@ static pdw dj_decode_all(void)
         pdw i;
         for (i = 0; i < dj_nc; i++)
             if (dj_c[i].used) {
-                pdm_u32_mul16(&dj_u, (pdw)(dj_c[i].pw * dj_c[i].ph), dj_bstride);
+                pdm_u32_mul16(&dj_u, (pdw)(((dj_c[i].pw + (1u << dj_dec) - 1) >> dj_dec) * ((dj_c[i].ph + (1u << dj_dec) - 1) >> dj_dec)), dj_bstride);
                 pd_ffill(g_wseg, dj_c[i].base, 0, dj_u.lo);
             }
     }
@@ -785,6 +800,7 @@ static void dj_mcurow_stored(pdw m)
         if (!c->used) continue;
         for (by = 0; by < c->v; by++)
             for (bx = 0; bx < c->pw; bx++) {
+                if (dj_dec && ((bx | (pdw)(m * c->v + by)) & (pdw)((1u << dj_dec) - 1))) continue;
                 o = dj_boff(c, bx, (pdw)(m * c->v + by));
                 if (dj_s == 0) pd_fcopy_in(g_wseg, o, pdi_coef, 128);
                 else {
@@ -822,6 +838,7 @@ static void dj_outrow(pdw row, pdw seg, pdw off)
     pdw m, yy, i, j, x, xs, cnt, rx, n, nc, v, a, b, cc, mm, ky, kk;
     struct dj_comp *c;
     pdb *p;
+    row = (pdw)(row << dj_dec);
     m = (pdw)(row / dj_mrh);
     yy = (pdw)(row - m * dj_mrh);
     if (dj_mready != (pdi)m) {
@@ -834,6 +851,7 @@ static void dj_outrow(pdw row, pdw seg, pdw off)
         for (i = 0; i < nc; i++) if (dj_c[i].used) c = &dj_c[i];
         pd_fcopy_in(g_wseg, (pdw)(c->pbase + (yy / (dj_vmax / c->v)) * c->pstride), dj_prow, c->pstride);
         rx = (pdw)(dj_hmax / c->h);
+        if (dj_dec) for (x = 0; x < dj_ow; x++) dj_prow[x] = dj_prow[x << dj_dec];
         if (rx == 1) p = dj_prow;
         else {
             xs = 0; cnt = 0;

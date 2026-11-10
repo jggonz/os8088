@@ -98,8 +98,8 @@ def main():
             k, sum(sp) // len(sp), [c for kd, c in v if kd == 3][0], [c for kd, c in v if kd == 0][0], [c for kd, c in v if kd == 2][0],
             sum(sp) / len(sp) / 4772.7))
     # baseline blocks from a real file's tables and entropy data
-    jpg = os.path.join(A.ROOT, 'build', 'pdfx_dct', 'b420.jpg')
-    if os.path.exists(jpg):
+    jpg = A.FIXB420
+    if jpg:
         tabs = A.real_tables(jpg)
         d = open(jpg, 'rb').read(); i = d.index(b'\xff\xda'); i += 2 + ((d[i + 2] << 8) | d[i + 3])
         # unstuff

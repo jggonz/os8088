@@ -18,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 BUILD = os.path.join(ROOT, 'build', 'pdi')
 SEG = 0x1000
+FIXB420 = next((p for p in (os.path.join(BUILD, 'fx', 'b420.jpg'), os.path.join(ROOT, 'build', 'pdfx_dct', 'b420.jpg')) if os.path.exists(p)), '')
 
 # 8088 cycle costs by mnemonic (IBM 8088 timing; EA add-ons folded into the figure
 # for a memory operand). A model, used for the per-block cost in the spec.
@@ -161,7 +162,7 @@ def main():
         qt = [rs.choice((1, 2, 3, 5, 8, 16, 40, 99, 255)) for _ in range(64)] if kind != 4 else [rs.randint(1, 65535) for _ in range(64)]
         recs.append(b'I' + struct.pack('<H', mode) + struct.pack('<64h', *coef) + struct.pack('<64H', *qt))
         meta.append(('I', mode, coef, qt))
-    std = real_tables(os.path.join(ROOT, 'build', 'pdfx_dct', 'b420.jpg')) if os.path.exists(os.path.join(ROOT, 'build', 'pdfx_dct', 'b420.jpg')) else {}
+    std = real_tables(FIXB420) if FIXB420 else {}
     for i in range(o.cases):
         if std and i % 4 == 0:
             (cd, vd), (ca, va) = std[0x00], std[0x10]
