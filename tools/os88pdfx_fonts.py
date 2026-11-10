@@ -591,11 +591,11 @@ def tt_simple_pdf(font_bytes, codes, widths, base, sizes=SIZES):
     pdf.set(cat, "<< /Type /Catalog /Pages %d 0 R >>" % pages)
     return pdf.write(cat)
 
-def write_sidecar(out, name, program, codes, gids, nbytes=1):
+def write_sidecar(out, name, program, codes, gids, nbytes=1, extra=None):
     """what hosttest/pdx_check.py needs to place PDXF's glyphs exactly where the PDF put them"""
     import json
     json.dump({"pdf": name + ".pdf", "program": program, "codes": codes, "gids": gids, "sizes": list(SIZES),
-               "page": [PAGE_W, PAGE_H], "pitch": [PITCH_X, PITCH_Y], "margin": 8, "nbytes": nbytes},
+               "page": [PAGE_W, PAGE_H], "pitch": [PITCH_X, PITCH_Y], "margin": 8, "nbytes": nbytes, **(extra or {})},
               open(os.path.join(out, name + ".json"), "w"), indent=1, sort_keys=True)
     open(os.path.join(out, name + ".json"), "a").write("\n")
 
@@ -663,6 +663,25 @@ def tounicode_cmap(pairs):
     out.append("endcmap CMapName currentdict /CMap defineresource pop end end")
     return "\n".join(out) + "\n"
 
+def encoding_cmap(pairs):
+    """an embedded Encoding CMap: [(code, cid)] -> cidrange for runs, cidchar for the rest"""
+    out = ["/CIDInit /ProcSet findresource begin 12 dict begin begincmap", "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def",
+           "/CMapName /PDXF-Test def /CMapType 1 def", "1 begincodespacerange <0000> <FFFF> endcodespacerange"]
+    pairs = sorted(pairs); runs = []; singles = []
+    i = 0
+    while i < len(pairs):
+        j = i
+        while j + 1 < len(pairs) and pairs[j + 1][0] == pairs[j][0] + 1 and pairs[j + 1][1] == pairs[j][1] + 1: j += 1
+        if j - i >= 2: runs.append((pairs[i][0], pairs[j][0], pairs[i][1]))
+        else: singles += pairs[i:j + 1]
+        i = j + 1
+    if runs:
+        out.append("%d begincidrange" % len(runs)); out += ["<%04X> <%04X> %d" % r for r in runs]; out.append("endcidrange")
+    if singles:
+        out.append("%d begincidchar" % len(singles)); out += ["<%04X> %d" % r for r in singles]; out.append("endcidchar")
+    out.append("endcmap CMapName currentdict /CMap defineresource pop end end")
+    return "\n".join(out) + "\n"
+
 def make(out, src):
     os.makedirs(out, exist_ok=True)
     t = TTF(open(find_src("Vera.ttf", src), "rb").read())
@@ -696,13 +715,20 @@ def make(out, src):
     cw = {i + 1: w1000[c] for i, c in enumerate(codes)}
     wr("cff-cid.pdf", cid_font_pdf("CIDFontType0", "FontFile3", cffc, "/Subtype /CIDFontType0C", cids, cw, "ABCDEF+VeraCID",
         tounicode=tounicode_cmap([(i + 1, c) for i, c in enumerate(codes)]).encode()))
-    write_sidecar(out, "cff-cid", "vera-cid.cff", cids, cids, 2)
+    write_sidecar(out, "cff-cid", "vera-cid.cff", cids, cids, 2,
+                  {"unicode": {str(i + 1): c for i, c in enumerate(codes)}, "widths": {str(c): w for c, w in cw.items()}})
+    # the same font through an EMBEDDED Encoding CMap: code 0x0100 + n -> CID n+1 (runs and singles)
+    ecodes = [0x100 + i for i in range(len(cids))]
+    wr("cff-cid-cmap.pdf", cid_font_pdf("CIDFontType0", "FontFile3", cffc, "/Subtype /CIDFontType0C", ecodes, {0x100 + i: cw[i + 1] for i in range(len(cids))},
+        "ABCDEF+VeraCID", cmapstream=encoding_cmap([(0x100 + i, i + 1) for i in range(len(cids)) if i % 7 != 3] + [(0x100 + i, i + 1) for i in range(len(cids)) if i % 7 == 3]).encode()))
+    write_sidecar(out, "cff-cid-cmap", "vera-cid.cff", ecodes, cids, 2, {"cidmap": {str(0x100 + i): i + 1 for i in range(len(cids))}})
     # ---- TrueType in a Type0 font: Identity CIDToGIDMap, cid == new gid; and a mapped one with ToUnicode
     gids = [cm[c] for c in codes]
     cwt = {cm[c]: w1000[c] for c in codes}
     wr("tt-cid.pdf", cid_font_pdf("CIDFontType2", "FontFile2", fb, "/Length1 %d" % len(fb), gids, cwt, "ABCDEF+VeraCID2",
         tounicode=tounicode_cmap([(cm[c], c) for c in codes]).encode()))
-    write_sidecar(out, "tt-cid", "vera-sub.ttf", gids, gids, 2)
+    write_sidecar(out, "tt-cid", "vera-sub.ttf", gids, gids, 2,
+                  {"unicode": {str(cm[c]): c for c in codes}, "widths": {str(g): cwt[g] for g in gids}})
     # CID = the code point, the CIDToGIDMap stream maps it to the glyph (a window below 2048 here)
     m = bytearray(2 * 256)
     for c in codes:

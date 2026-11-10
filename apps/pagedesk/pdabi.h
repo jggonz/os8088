@@ -689,6 +689,93 @@ struct pdxb_img {
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
+#define PDV_FNT_LOAD    0xD8    /* XB: pdxb_fload. Reads a /FontFile* stream into the workspace */
+#define PDV_FNT_ENC     0xD9    /* XB: pdxb_fenc. The simple font's encoding context       */
+#define PDV_FNT_GID     0xDA    /* XB: pdxb_fgid. code (or CID) -> glyph index              */
+#define PDV_FNT_GLYPH   0xDB    /* XB: pdxb_fglyph. One glyph's 1-bit bitmap                */
+#define PDV_FNT_PATH    0xDC    /* XB: pdxb_fpath. One glyph's outline as PDFP_* ops        */
+#define PDV_FNT_CMAP    0xDD    /* XB: pdxb_fcmap. An Encoding CMap or ToUnicode -> table   */
+#define PDV_FNT_WIDTHS  0xDE    /* XB: pdxb_fwid. A CIDFont's /DW and /W -> ranges          */
+#define PDFK_NONE 0             /* program kinds (pdxb_fload.kind)                          */
+#define PDFK_TT   1
+#define PDFK_CFF  2
+#define PDFK_T1   3
+#define PDFKF_CID    0x0001     /* pdxb_fload.flags: a CID-keyed CFF                        */
+#define PDFKF_OTTO   0x0002     /* an OpenType wrapper around the CFF                       */
+#define PDFKF_MAPPED 0x0004     /* the CIDToGIDMap window was filled                        */
+#define PDFKF_CHOP   0x0008     /* the program was longer than the workspace: refused       */
+struct pdxb_fload {
+    pdw objnum, gen;        /* in: the /FontFile* stream                                   */
+    pdw hint;               /* in: 0 detect (the format is read from the bytes)            */
+    pdw cidmap_obj, cidmap_gen; /* in: the CIDToGIDMap stream, 0 = identity                */
+    pdw kind;               /* out: PDFK_*                                                 */
+    pdw nglyphs;            /* out                                                         */
+    pdw upem;               /* out: units per em                                           */
+    pdw bbox_top, bbox_bot; /* out: the program's ascent and descent, 1/1000 em (bot > 0 is below) */
+    pdw flags;              /* out: PDFKF_*                                                */
+    pdw detail;             /* out on failure: the reason (a PDXF_E_* number)              */
+};
+#define PDXF_E_SIZE   1         /* the program does not fit the workspace                  */
+#define PDXF_E_FORMAT 2         /* not TrueType, CFF or Type 1 (or a refused variant)      */
+#define PDXF_E_READ   3         /* the stream could not be read                            */
+#define PDFE_SYMBOLIC 0x0001    /* pdxb_fenc.flags: the descriptor says symbolic            */
+#define PDFE_HASENC   0x0002    /* the font dictionary has an /Encoding                    */
+#define PDFE_FIRST    0x0004    /* first call of a context: forget the old /Differences    */
+#define PDFE_MORE     0x0008    /* more /Differences follow in the next call               */
+struct pdxb_fdiff { pdw code; char name[22]; };      /* one /Differences entry          */
+struct pdxb_fenc {
+    pdw flags;
+    pdw ndiff;              /* entries used in diff[]                                      */
+    pdb lat[224];           /* the base encoding: PD Latin per code 32..255 (0 = none)     */
+    struct pdxb_fdiff diff[12];
+};
+struct pdxb_fgid {
+    pdw code;               /* in: the character code (simple) or the CID (kind 1)         */
+    pdw kind;               /* in: 0 through the encoding context, 1 a CID                 */
+    pdw gid;                /* out: 0 = no glyph                                           */
+};
+struct pdxb_fglyph {
+    pdw gid;
+    pdw em64;               /* in: the size in 1/64 pixel                                  */
+    pdw asc, rows;          /* in: the strike's ascent rows and total rows (<= 48)         */
+    pdw dseg, doff, cap;    /* in: where the bitmap goes                                   */
+    pdw w;                  /* out: width px (0 = empty glyph); 0xFFFF = not bitmapped    */
+    pdi lb;                 /* out: left bearing px                                        */
+    pdw bytes;              /* out: written                                                */
+    pdw adv64;              /* out: the program's advance, 1/64 px                         */
+};
+#define PDFP_M 1                /* PDV_FNT_PATH ops: M x y | L x y | C x1 y1 x2 y2 x y | Z (i16 font units) */
+#define PDFP_L 2
+#define PDFP_C 3
+#define PDFP_Z 4
+struct pdxb_fpath {
+    pdw gid;
+    pdw dseg, doff, cap;    /* in: the op buffer (words)                                   */
+    pdw len;                /* out: words written                                          */
+    pdw upem;               /* out                                                         */
+    pdw adv;                /* out: advance, 1/1000 em                                     */
+};
+#define PDFC_ENC  0             /* pdxb_fcmap.kind                                              */
+#define PDFC_UNI  1
+#define PDFC_IDENT 0x0001       /* pdxb_fcmap.flags: Identity-H/V (no table)                     */
+#define PDFC_VERT  0x0002
+#define PDFC_TRUNC 0x0004       /* the table did not fit: covered codes are right              */
+#define PDFC_MIXED 0x0008       /* a mixed-length codespace: read as 2 bytes (approximate)       */
+struct pdxb_fcmap {
+    pdw objnum, gen;        /* in: the stream (0 with .name = a predefined CMap's name)      */
+    pdw kind;               /* in: PDFC_ENC or PDFC_UNI                                      */
+    pdw dseg, doff, cap;    /* in: the table                                                 */
+    pdw len;                /* out: bytes of table (header 4 + 6 a range)                    */
+    pdw flags;              /* out                                                           */
+    char name[24];          /* in: a predefined CMap's name when objnum is 0                 */
+};
+struct pdxb_fwid {
+    pdw objnum, gen;        /* in: the CIDFont dictionary                                    */
+    pdw dseg, doff, cap;    /* in: the (first, last, width) triples                          */
+    pdw dw;                 /* out: /DW (1000 when absent)                                   */
+    pdw len;                /* out: bytes written (6 a range)                                */
+    pdw more;               /* out: 1 when the array was longer than the buffer              */
+};
 /* [img 20.22.11-13]*/
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */

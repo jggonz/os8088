@@ -11,6 +11,8 @@
 #include "../pdxf.c"
 
 unsigned char pd_host_mem[1 << 20];
+pdw pdx_eng_ax;
+pdw pdx_eng(pdw v, pdw b, pdw c, pdw d) { (void)v; (void)b; (void)c; (void)d; return PDE_RANGE; }
 static long long mul64(long a, long b) { return (long long)a * b; }
 pdi pdx_muldiv(pdi a, pdi b, pdi c)
 {
