@@ -257,7 +257,6 @@ PDV_GFX_FN               equ 0xCD
 PDV_GFX_DASH             equ 0xCE
 PDGX_CSBYTES             equ 1264
 PDGX_LUTBYTES            equ 1028
-PDGX_SHBYTES             equ 570
 PDGX_SRCMAX              equ 480
 PDGX_K_GRAY              equ 1
 PDGX_K_RGB               equ 2
@@ -276,11 +275,8 @@ PDGX_F_MODULE            equ 0x08
 PDGX_F_NONE              equ 0x10
 PDGX_F_PATTERN           equ 0x20
 PDGX_LUT_INVERT          equ 0x01
-PDGX_SH_EXT0             equ 0x01
-PDGX_SH_EXT1             equ 0x02
-PDGX_SH_MESH             equ 0x04
-PDGX_VTX_BYTES           equ 10
-PDGX_TRI_BYTES           equ 30
+PDGX_REC_HDR             equ 6
+PDGX_REC_CLIP            equ 0x01
 PDGXI_DECODE             equ 0x0001
 PDGXI_RES                equ 0x0002
 
@@ -786,29 +782,7 @@ PDXB_PDGX_LUT_T_N              equ 1024
 PDXB_PDGX_LUT_T_ESZ            equ 1
 PDXB_PDGX_LUT_BYTES            equ 1028
 
-; ---- struct pdgx_shade (570 bytes) ------------------------------------------
-PDXB_PDGX_SHADE_TYPE           equ 0
-PDXB_PDGX_SHADE_FLAGS          equ 1
-PDXB_PDGX_SHADE_NRAMP          equ 2
-PDXB_PDGX_SHADE_COORDS         equ 4
-PDXB_PDGX_SHADE_COORDS_N       equ 6
-PDXB_PDGX_SHADE_COORDS_ESZ     equ 4
-PDXB_PDGX_SHADE_T0             equ 28
-PDXB_PDGX_SHADE_T1             equ 32
-PDXB_PDGX_SHADE_BBOX_OK        equ 36
-PDXB_PDGX_SHADE_BBOX           equ 38
-PDXB_PDGX_SHADE_BBOX_N         equ 4
-PDXB_PDGX_SHADE_BBOX_ESZ       equ 4
-PDXB_PDGX_SHADE_BG_OK          equ 54
-PDXB_PDGX_SHADE_BG_LUM         equ 55
-PDXB_PDGX_SHADE_BG_C4          equ 56
-PDXB_PDGX_SHADE_PAD2           equ 57
-PDXB_PDGX_SHADE_RAMP           equ 58
-PDXB_PDGX_SHADE_RAMP_N         equ 512
-PDXB_PDGX_SHADE_RAMP_ESZ       equ 1
-PDXB_PDGX_SHADE_BYTES          equ 570
-
-; ---- struct pdxb_gfx (72 bytes) --------------------------------------------
+; ---- struct pdxb_gfx (106 bytes) --------------------------------------------
 PDXB_GFX_OBJNUM                equ 0
 PDXB_GFX_GEN                   equ 2
 PDXB_GFX_TSEG                  equ 4
@@ -833,6 +807,11 @@ PDXB_GFX_COMP_ESZ              equ 4
 PDXB_GFX_RGB                   equ 68
 PDXB_GFX_RGB_N                 equ 4
 PDXB_GFX_RGB_ESZ               equ 1
-PDXB_GFX_BYTES                 equ 72
+PDXB_GFX_CTM                   equ 72
+PDXB_GFX_CLIP                  equ 96
+PDXB_GFX_CLIP_N                equ 4
+PDXB_GFX_CLIP_ESZ              equ 2
+PDXB_GFX_STEPS                 equ 104
+PDXB_GFX_BYTES                 equ 106
 
 %endif ; PDABI_INC

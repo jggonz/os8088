@@ -70,42 +70,34 @@ int main(int argc, char **argv)
             if (t[0] == 'O') { o_syn[num] = p; o_syn_n[num] = n; } else { o_str[num] = p; o_str_n[num] = n; }
             continue;
         }
-        if (t[0] == 'H') {      /* H name objnum: a shading (an object of the table) */
+        if (t[0] == 'H') {      /* H name objnum [steps]: a shading (an object of the table) in a 64 x 48 cell */
             char *nm = strtok(NULL, " \n"); int obj = atoi(strtok(NULL, " \n"));
-            static pdb big[40000]; pdw state = 0, tot = 0; int first = 1;
+            char *sp = strtok(NULL, " \n");
+            static pdb big[2048]; pdw state = 0, tot = 0, calls = 0;
             for (;;) {
                 struct pdxb_gfx g; memset(&g, 0, sizeof g);
-                g.objnum = (pdw)obj; g.rseg = RSEG; g.roff = 0; g.rcap = 30000; g.state = state;
+                g.objnum = (pdw)obj; g.rseg = RSEG; g.roff = 0; g.rcap = 760; g.state = state;
+                g.steps = sp ? (pdw)atoi(sp) : 0;
+                tofx(&g.ctm.a, 4); tofx(&g.ctm.d, -4); tofx(&g.ctm.f, 4 * 48);
+                g.clip[0] = 0; g.clip[1] = 0; g.clip[2] = 63; g.clip[3] = 47;
                 pd_fcopy_out(&g, XBSEG, 0, sizeof g);
                 pdw r = pdx_verb(PDV_GFX_SHADE, XBSEG, 0, 0);
                 pd_fcopy_in(XBSEG, 0, &g, sizeof g);
                 if (r != PDE_OK && r != PDE_BUSY) { printf("SH %s FAILED %u\n", nm, r); break; }
                 pd_fcopy_in(RSEG, 0, big, g.rlen);
-                struct pdgx_shade *sh = (struct pdgx_shade *)big;
-                if (first) {
-                    printf("SH %s %d %d %.5f %.5f", nm, sh->type, sh->flags, fxd(&sh->t0), fxd(&sh->t1));
-                    for (int i = 0; i < 6; i++) printf(" %.5f", fxd(&sh->coords[i]));
-                    printf("\nR");
-                    for (int i = 0; i < 256; i++) printf(" %d", sh->ramp[i * 2]);
-                    printf("\nRC");
-                    for (int i = 0; i < 256; i++) printf(" %d", sh->ramp[i * 2 + 1]);
-                    printf("\nB %d", sh->bg_ok ? sh->bg_lum : -1); printf("\n"); first = 0;
-                }
+                pdb *q = big;
                 for (int i = 0; i < g.ntri; i++) {
-                    pdb *q = big + PDGX_SHBYTES + i * PDGX_TRI_BYTES;
-                    printf("T");
-                    for (int v = 0; v < 3; v++) {
-                        struct pd_fx x, y;
-                        x.lo = (pdw)(q[0] | (q[1] << 8)); x.hi = (pdi)(short)(q[2] | (q[3] << 8));
-                        y.lo = (pdw)(q[4] | (q[5] << 8)); y.hi = (pdi)(short)(q[6] | (q[7] << 8));
-                        printf(" %.4f %.4f %d %d", fxd(&x), fxd(&y), q[8], q[9]); q += 10;
-                    }
+                    int np = q[4];
+                    printf("P %d %d %d %d %d %d", q[0], q[1], q[2], q[3], q[5], np);
+                    for (int k = 0; k < np; k++) printf(" %d %d", (short)(q[6 + 4 * k] | (q[7 + 4 * k] << 8)), (short)(q[8 + 4 * k] | (q[9 + 4 * k] << 8)));
                     printf("\n"); tot++;
+                    q += 6 + 4 * np;
                 }
+                calls++;
                 if (r == PDE_OK) break;
                 state = g.state;
             }
-            printf("END %s %u\n", nm, tot);
+            printf("END %s %u calls %u\n", nm, tot, calls);
             continue;
         }
         if (t[0] != 'C' && t[0] != 'R') continue;
