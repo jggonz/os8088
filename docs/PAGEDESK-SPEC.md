@@ -6935,7 +6935,7 @@ array of names takes the first this table has, else Normal.
 The effective transparency is the fold of the `gs` operators applied so far,
 so it is a tuple, not an index into the resource dictionary: a pool of 15
 5-byte tuples `{ca, CA, bm, smask, 0}` per pass (`g_xt`, reset by
-`pass_begin`), and **`pdr_gs.pad_` is the tuple's index** (0 = opaque Normal, no
+`pass_begin`), and **`pdr_gs.xt` is the tuple's index** (`pad_` is gfx's colour-space slots, 20.22.9: sharing it made every device colour operator clear the tuple, QA R9) (0 = opaque Normal, no
 mask), which q, Q and a form's push already save. An `XSTATE` is written
 before a mark only when its tuple, for the mark's kind, differs from the last
 written; entering and leaving a group forces one. A mark under a tuple that is
@@ -6956,7 +6956,10 @@ need for the region (`PDE_NEEDMEM`, 20.22.10.2); so does an image with an
 `/SMask` or `/Mask`. The pass is then run again with the part present:
 
 * `gs` is `PDV_X8_GS` (BX = the tuple in force, CX/DX = the dictionary's
-  object and generation): AX = the new tuple (written to `pdr_gs.pad_`), CX = 1
+  object and generation; a DIRECT dictionary, RES_LOOKUP's `PDRL_DIRECT`: CX =
+  `cnum`, DX = `PDX8_DIRECT` (0xFFFD) and XB+0 holds `{cgen, coff lo, coff hi}`;
+  PDX8 hands the same tail after the `pdxb_dictget` to PDENG's DICT_GET, whose
+  `gen` 0xFFFD means "start the dictionary at `coff` of this object"): AX = the new tuple (written to `pdr_gs.xt`), CX = 1
   when the dictionary has a soft mask whose `/G` form (its object at XB+0, XB+2)
   PDREND now interprets as the mask's block; DX = `X8F_*` bits. A pool or mask
   table overflow answers CF and keeps the previous tuple. `/TR` other than
@@ -7034,8 +7037,7 @@ is TRANSPARENT unless its `/Decode` inverts it. A mask that will not open (a
 codec the core does not read) draws the image opaque and sets `PDF_INC_TRANSP`.
 
 **20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
-Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
-non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
+Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
 Nothing else in this section sets a bit.
 
 **20.22.10.10 Build gate, budgets and stack.** The hooks are compiled with `PDR_X8`,

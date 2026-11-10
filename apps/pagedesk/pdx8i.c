@@ -43,10 +43,13 @@ static pdw g_gm[4][4];          /* memo: obj, gen, tuple in, tuple out (0xFFFF =
 static pdw g_gmn;
 
 /* the raw PDENG answer for gt_q, the final reference NOT followed */
+static pdw g_at[3];             /* a DIRECT ExtGState (PDX8_DIRECT): the object's real generation, the value's offset in it */
+static pdw g_atf;
 static pdw x8_rawget(void)
 {
     pdw e;
     pd_fcopy_out(&gt_q, g_xb, 0, sizeof gt_q);
+    if (gt_q.gen == PDX8_DIRECT && g_atf) pd_fcopy_out(g_at, g_xb, sizeof gt_q, 6);   /* PDENG's DICT_GET reads the tail */
     e = x8_eng(PDV_ENG_DICT_GET, 0, 0, 0);
     if (!e) pd_fcopy_in(g_xb, 0, &gt_q, sizeof gt_q);
     return e;
@@ -229,7 +232,9 @@ static pdw x8d_tuple(pdw ca, pdw CA, pdw bm, pdw sm)
 static pdw x8d_gs(pdw cur, pdw obj, pdw gen)
 {
     pdw ca = 255, CA = 255, bm = 0, sm = 0, id, t, i;
-    for (i = 0; i < 4; i++)
+    g_atf = gen == PDX8_DIRECT;                         /* the tail (cgen, coff) is at XB+0, written by PDREND */
+    if (g_atf) for (i = 0; i < 3; i++) g_at[i] = pd_fpeekw(g_xb, (pdw)(i * 2));
+    for (i = 0; i < 4 && !g_atf; i++)
         if (g_gm[i][3] != 0xFFFF && g_gm[i][0] == obj && g_gm[i][1] == gen && g_gm[i][2] == cur) { x8_odx = 0; return g_gm[i][3]; }
     if (cur) { ca = g_xt[cur][0]; CA = g_xt[cur][1]; bm = g_xt[cur][2]; sm = g_xt[cur][3]; }
     g_x8f = 0;
@@ -257,7 +262,7 @@ static pdw x8d_gs(pdw cur, pdw obj, pdw gen)
     t = x8d_tuple(ca, CA, bm, sm);
     x8_odx = g_x8f;
     if (t == 0xFFFF) { x8_cf = 1; return PDE_LIMIT; }
-    if (!g_x8f) {                                       /* a clean answer is remembered (4 entries, round robin) */
+    if (!g_x8f && !g_atf) {                             /* a clean answer is remembered (4 entries, round robin) */
         i = g_gmn++ & 3;
         g_gm[i][0] = obj; g_gm[i][1] = gen; g_gm[i][2] = cur; g_gm[i][3] = t;
     }
