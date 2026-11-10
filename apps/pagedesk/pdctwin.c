@@ -42,6 +42,19 @@ static const uint8_t md5_s[64] = {
 7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22, 5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
 4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23, 6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21 };
 
+PDC_WEAK pdb pdc_ok[16];
+PDC_WEAK void pdc_okey(const pdb *key, pdw klen, pdw num, pdw gen, pdw aes)
+{
+    pdb b[64]; pdw st[8], n = 0, i;
+    memset(b, 0, sizeof b);
+    for (i = 0; i < klen; i++) b[n++] = key[i];
+    b[n++] = (pdb)num; b[n++] = (pdb)(num >> 8); b[n++] = 0; b[n++] = (pdb)gen; b[n++] = (pdb)(gen >> 8);
+    if (aes) { b[n++] = 's'; b[n++] = 'A'; b[n++] = 'l'; b[n++] = 'T'; }
+    b[n] = 0x80; b[56] = (pdb)(n << 3);
+    pdc_md5_init(st); pdc_md5_block(st, b);
+    for (i = 0; i < 8; i++) { pdc_ok[2 * i] = (pdb)st[i]; pdc_ok[2 * i + 1] = (pdb)(st[i] >> 8); }
+}
+
 PDC_WEAK void pdc_md5_init(pdw *st)
 {
     s32(st, 0, 0x67452301); s32(st, 1, 0xefcdab89); s32(st, 2, 0x98badcfe); s32(st, 3, 0x10325476);

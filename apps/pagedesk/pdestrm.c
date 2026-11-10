@@ -375,7 +375,8 @@ static pdw st_push(pdw filtered)
     c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
     c->filters = sp_filters;
     fl_drop(c);
-    cr_ctx_open(c);
+    i = cr_ctx_open(c);
+    if (i) return i;
     if (c->nflt && (sp_filters & PDFL_FLATE)) {
         i = fl_attach(c);
         if (i) return i;

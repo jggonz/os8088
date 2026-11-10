@@ -21,6 +21,9 @@
 #ifndef PDCRYPTO_H
 #define PDCRYPTO_H
 
+/* the per-object key block of 7.6.3 (algorithm 1): MD5(key || num[3] || gen[2] [|| "sAlT"]) into pdc_ok */
+extern pdb pdc_ok[16];
+void pdc_okey(const pdb *key, pdw klen, pdw num, pdw gen, pdw aes);
 void pdc_md5_init(pdw *st);
 void pdc_md5_block(pdw *st, const pdb *blk);              /* 64 bytes     */
 void pdc_sha256_init(pdw *st);

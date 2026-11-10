@@ -236,6 +236,14 @@ int main(int argc, char **argv)
     rc = open_loop();
     if (rc == PDE_PASSWORD) {
         const char *pw = argc > 3 ? argv[3] : "-";
+        if (!strcmp(argv[1], "params")) {         /* the raw pdxb_crypt PDENG reads out of /Encrypt, as hex */
+            memset(&cr, 0, sizeof cr);
+            call(PDV_ENG_CRYPTINFO, 0, 0, 0); xb_get(&cr, sizeof cr);
+            printf("SIZE %u\n", (unsigned)sizeof cr);
+            hex((unsigned char *)&cr, sizeof cr);
+            printf("\n");
+            return 0;
+        }
         if (!strcmp(argv[1], "cost")) {
             memset(&cr, 0, sizeof cr);
             call(PDV_ENG_CRYPTINFO, 0, 0, 0); xb_get(&cr, sizeof cr);

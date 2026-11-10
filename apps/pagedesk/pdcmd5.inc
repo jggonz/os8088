@@ -12,6 +12,8 @@
 cpu 8086
 
 section .bss
+_pdc_ok: resb 16                    ; _pdc_okey's answer: the MD5 digest, as the state's own bytes
+okb:    resb 64                     ; its message block
 md5v:   resw 8                      ; a b c d, lo then hi
 md5blk: resw 1
 md5i:   resw 1
@@ -172,6 +174,62 @@ _pdc_md5_block:
     add bx, 4
     add si, 4
     loop .fin
+    pop di
+    pop si
+    pop bp
+    ret
+
+; _pdc_okey(key, klen, num, gen, aes): MD5( key[klen] || num lo,hi,0 || gen lo,hi [|| "sAlT"] ) into
+; _pdc_ok (7.6.3 algorithm 1). klen <= 32. AX BX CX DX lost, BP SI DI kept.
+_pdc_okey:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov di, okb
+    xor ax, ax
+    mov cx, 32
+.z: mov [di], ax
+    inc di
+    inc di
+    loop .z
+    mov si, [bp+4]
+    mov cx, [bp+6]
+    mov di, okb
+    jcxz .nk
+.k: mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .k
+.nk:
+    mov ax, [bp+8]
+    mov [di], ax
+    add di, 3                       ; (the third byte of the number is 0)
+    mov ax, [bp+10]
+    mov [di], ax
+    add di, 2
+    cmp word [bp+12], 0
+    je .ns
+    mov word [di], 0x4173           ; "sA"
+    mov word [di+2], 0x546C         ; "lT"
+    add di, 4
+.ns:
+    mov byte [di], 0x80
+    mov ax, di
+    sub ax, okb
+    mov cl, 3
+    shl ax, cl
+    mov [okb+56], ax
+    mov ax, _pdc_ok
+    push ax
+    call _pdc_md5_init
+    mov ax, okb
+    push ax
+    mov ax, _pdc_ok
+    push ax
+    call _pdc_md5_block
+    add sp, 6
     pop di
     pop si
     pop bp

@@ -77,7 +77,8 @@ struct sctx {
     pdw cmode;              /* 0 plain, else the PDCM_* the raw bytes are in */
     pdw civ;                /* AES: the IV has been read                   */
     pdw cn, cg;             /* the stream's object, for its key            */
-    pdb cs[258];            /* RC4: S, i, j; AES: the chaining block in [0..16) */
+    pdb *crs;               /* the cipher state: an RC4 slot, or cv        */
+    pdb cv[16];             /* AES: the chaining block                     */
 };
 
 struct pde_tok {
@@ -110,7 +111,7 @@ struct pw_frame { pdw num, gen; struct pd_u32 kpos; };
 
 /* ---- any PDF: encryption (pdecrypt.c, PAGEDESK-SPEC 20.22.5) ------------- */
 static pdw cr_read(struct sctx *c, pdb *buf, pdw want);
-static void cr_ctx_open(struct sctx *c);
+static pdw cr_ctx_open(struct sctx *c);
 static void cr_string(void);
 static pdw cr_skipchk(void);
 static pdw cr_open(void);
