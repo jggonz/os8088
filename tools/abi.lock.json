@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "964e146af76bede70473e211243611d70feb7eb460a3fbe73297bafbd182792b",
+  "fingerprint": "258d8ce9d1e1f4591ba6d6421e8adac749790671818c933c97c766da024d72ec",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "6c8808081d98bfa3d9d0c7a1db8dae24767982283ad5ef5f9c0a43e4648792e2",
+  "fingerprint": "6d1fff2cbfa06594dd6ebcd81df9f1ffab6a54cf27a79b4b33716d2c679c8779",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2105,6 +2105,34 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "R2 and R12 reverted to the old SYS_SNAPSHOT/CLAIM_SNAPSHOT and FSX_CAPS contracts under BRIEF 0.0; the snapshots' unread AX answers withdrawn (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "664b9472c2c7a876c33888389ea23c206ad4aab878289034a5e02a67cc4f82dc",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "MEMP_KB/MEMP_KBH: OSAPI_MEM_P's KB arm, the MEMKB_* bodies over it (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "bf97af6bf16877773613e3505c510203443635335f98ee176873018467fe9406",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "MEMP_KB/MEMP_KBH: OSAPI_MEM_P's KB arm, the MEMKB_* bodies over it (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "6d1fff2cbfa06594dd6ebcd81df9f1ffab6a54cf27a79b4b33716d2c679c8779",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "MEMP_KB/MEMP_KBH: OSAPI_MEM_P's KB arm, the MEMKB_* bodies and the C thunks over it (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "258d8ce9d1e1f4591ba6d6421e8adac749790671818c933c97c766da024d72ec",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "MEMP_KB/MEMP_KBH: OSAPI_MEM_P's KB arm, the MEMKB_* bodies and the C thunks over it (kernel size pass 19)",
    "to": 14
   }
  ]

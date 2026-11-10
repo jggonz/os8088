@@ -101533,6 +101533,12 @@ OSAPI_MEM_P   0x04BC, X     BL = the verb (MEMP_*), ES = the caller (X stub)
   MEMP_KPARTS   6   -> AX = the kernel's resident FAT window, BX = its
                         background task stacks, CX = task 0's stack, in BYTES -
                         the three fixed parts OSAPI_SYS_KB reports in whole KB
+  + MEMP_KB     8   added to a claim, REGROW or AVAIL verb: the withdrawn KB
+                        doors' registers (§50.3.7.1) - AX in KB and KEPT,
+                        every register but DX and BL kept, no head read;
+                        AVAIL answers AX/BX in KB with CX kept
+  + MEMP_KBH  80h   with MEMP_KB on a claim: CX = the head in KB (0 = none),
+                        conventional on kern_mega either way
 ```
 
 The KB doors cannot ask for less than a KB (§50.2.1), so a package whose size
@@ -101613,18 +101619,34 @@ MEMKB_AVAIL      -> AX/BX = largest/total, KB        memkb_avail
 Each macro is `call memkb_*` (3 bytes, where the far call was 5) and a
 `%define` naming the entry; `OS88_IMAGE_END` invokes `OS88KB_BODIES`
 (`apps/os88api.inc`), which assembles **only the entries named before it** over one shared tail
-(push BX, CX, AX; the shift; `call OSAPI_MEM_P`; pop; `ret`). A package that
+(`call OSAPI_MEM_P`; `pop bx`; `ret`). A package that
 claims in paragraphs, or not at all, carries none of it. A PART (its own
 assembly, with no `OS88_IMAGE_END`) invokes the macro itself after its last
 site, and so does a package whose last bytes are a tail its bss extends
 (FONTVIEW): the bodies may not land between that tail and `os88_image_end`.
 The bodies are a macro in `apps/os88api.inc` and not a file of their own so
 that every package rule, which already lists the SDK, rebuilds when they
-change (`tests/unit/t_pkgdeps.py`). The claim is 20
-bytes, each further entry 5 to 21, avail 14. The DMA entries turn a head of 0
-into `MEMP_CONV`, because the KB DMA doors' "no page" claim was the idiom for
-"stay conventional" on kern_mega (§50.3.7); a head that is not 0 is
-`OSAPI_MEM_P`'s, conventional on every package - where the KB DMA door gave
+change (`tests/unit/t_pkgdeps.py`).
+
+**The registers are kept by the KERNEL, once: `MEMP_KB`** (kernel size pass
+19, `nogrow`). Each entry is `push bx` / `mov bl, MEMP_KB + verb` / a jump to
+the tail - 5 bytes, the tail 7, `memkb_avail` 8 - because `OSAPI_MEM_P` takes
+`MEMP_KB` (8) added to a verb as **the withdrawn doors' registers**: AX in KB
+and kept, CX kept, every register but DX and BL kept, no head read; with
+`MEMP_KBH` (80h) too a claim's CX is the head in KB, and the claim is
+conventional on kern_mega with a head or none (CX = 0 is `MEMP_CONV`);
+`MEMP_KB + MEMP_AVAIL` answers AX/BX in KB, CX kept (`mmf_osapi_mem_avail`,
+the old AVAIL door's body). The first form of these bodies did the shift and
+the banking in every package - 20 bytes for the claim, 41 to 62 for a
+package with four entries - and C1's packages paid **+1,037** against the
+kernel's -90 a kernel; the arm is **+50 `.cold` on every kernel** (+51 on
+kern_mega, above 1MB) and took the packages' side **-680** (the C SDK's
+thunks use it too). A head is read as a BYTE of KB (`mul cl`): 64KB is the
+most a page can hold, and a KB size is not checked against 1,024KB before
+its shift - the bodies before the arm shifted it unchecked too. The DMA
+entries' head of 0 is `MEMP_CONV`, because the KB DMA doors' "no page" claim
+was the idiom for "stay conventional" on kern_mega (§50.3.7); a head that is
+not 0 is conventional on every package - where the KB DMA door gave
 an `OS88_HIGHMEM` package a pool block (KERN-MEGA-PLAN 14.160), so WIN16's one
 headed ring (`w16mm.inc`) is conventional on kern_mega now.
 
@@ -103061,9 +103083,10 @@ every verb past `SEG_BWIN`: kern_big and kern_small byte-identical).
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
 
-- A **window** is a descriptor the caller owns, recorded in `mega_wtab` (64
-  rows of selector and owner byte - 32 until kernel size pass 19, ABI-BREAK-LIST
-  R2-3, a count that costs the tables' block and no conventional byte - in the tables' TAIL past the IDT and
+- A **window** is a descriptor the caller owns, recorded in `mega_wtab` (32
+  rows of selector and owner byte - 64 is ABI-BREAK-LIST R2-3, +128 bytes of
+  the tables' block above 1MB, deferred to the additions pass by kernel size
+  pass 19's no-growth rule - in the tables' TAIL past the IDT and
   reached through `MEGA_SEL_MXT` - `.lowbss` until kern_mega size pass 2,
   `kernel/mega.inc`'s `MEGA_MXT_SIZE`): the instance's slot, or
   `0C0h | row` for a driver, or FFh for neither. The owner's end frees it

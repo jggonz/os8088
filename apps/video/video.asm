@@ -24109,19 +24109,10 @@ vp_rclaim:
 ; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
 ; CF, DX; AX, BX and CX kept
 .p:
-    push ax
-    push bx
-    push cx
-    mov bx, cx
-    mov cl, 6
-    shl ax, cl                      ; paragraphs (SPEC.md 50.3.7)
-    shl bx, cl
-    mov cx, bx
-    mov bl, MEMP_CLAIM
-    call OSAPI_MEM_P
-    pop cx
+    push bx                         ; the KB arm with a head (SPEC.md
+    mov bl, MEMP_KB + MEMP_KBH      ; 50.3.7.1): conventional, AX and CX
+    call OSAPI_MEM_P                ; kept
     pop bx
-    pop ax
     ret
 
 ; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose

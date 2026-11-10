@@ -723,17 +723,13 @@ wo_iofit:
 ; nothing (KERN-MEGA-PLAN 10.3 item 85, 14.156). Every other kernel reads
 ; MEMP_CONV as CX = 0, the claim it always made. keeps all but DX
 wo_ioclaim:
-    push ax
     push bx
     push cx
-    mov cl, 6
-    shl ax, cl                      ; KB -> paragraphs
-    mov cx, MEMP_CONV
-    mov bl, MEMP_CLAIM
+    xor cx, cx                      ; the KB arm with a head of none: MEMP_CONV
+    mov bl, MEMP_KB + MEMP_KBH      ; (SPEC.md 50.3.7.1), AX kept
     call OSAPI_MEM_P
     pop cx                          ; (pops keep CF)
     pop bx
-    pop ax
     ret
 
 ; wo_maxclu - AX = the largest cluster any live source record reads, or AX
