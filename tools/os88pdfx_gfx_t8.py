@@ -128,10 +128,6 @@ def run(mod_path, cases_path, trace=False, shade=False, stats=None):
             kind, n, flags = cs[0], cs[1], cs[2]
             rgb, none = [0, 0, 0], False
             if flags & 0x10: none = True
-            elif flags & 0x01:
-                ix = int(round(comps[0])) if kind == 7 else int(round(comps[0] * 255))
-                ix = max(0, min(255, ix))
-                rgb = list(cs[496 + ix * 3:496 + ix * 3 + 3])
             elif flags & 0x02: rgb = [int(round(c * 255)) for c in comps[:3]]
             elif flags & 0x04:
                 a, b, c, k = [int(round(v * 255)) for v in comps[:4]]

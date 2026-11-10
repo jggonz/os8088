@@ -400,7 +400,6 @@ static void fe_pop2(struct pd_fx *a, struct pd_fx *b, pdw *sp)
 {
     fx_cp(&(*b), &(fe_st[--(*sp)])); fx_cp(&(*a), &(fe_st[--(*sp)]));
 }
-static int fe_isint(const struct pd_fx *a) { return a->lo == 0; }
 
 /* one program run; the operand stack starts with the inputs */
 static pdw fn_eval_ps(const struct gxf *g, const struct pd_fx *in, struct pd_fx *out)

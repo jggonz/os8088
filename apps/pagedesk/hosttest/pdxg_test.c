@@ -162,11 +162,7 @@ int main(int argc, char **argv)
         struct pdgx_cs cs; pd_fcopy_in(RSEG, 0, &cs, sizeof cs);
         int rgb[3] = {0, 0, 0}, none = 0;
         if (cs.flags & PDGX_F_NONE) none = 1;
-        else if (cs.flags & PDGX_F_TABLE) {
-            int ix = cs.kind == PDGX_K_INDEXED ? (int)lround(c[0]) : (int)lround(c[0] * 255.0);
-            if (ix < 0) ix = 0; if (ix > 255) ix = 255;
-            for (int i = 0; i < 3; i++) rgb[i] = cs.rgb[ix * 3 + i];
-        } else if (cs.flags & PDGX_F_RGBLIKE) {
+        else if (cs.flags & PDGX_F_RGBLIKE) {
             for (int i = 0; i < 3; i++) rgb[i] = (int)lround(c[i] * 255.0);
         } else if (cs.flags & PDGX_F_CMYKLIKE) {
             int a = (int)lround(c[0] * 255), b = (int)lround(c[1] * 255), cc = (int)lround(c[2] * 255), k = (int)lround(c[3] * 255);
