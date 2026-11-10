@@ -39,6 +39,8 @@ static struct { pdb kind; pdb id; pdi y0, y1; } g_xfr[6];   /* per frame: 1 grou
 static struct pdxb_dictget gt_q;
 static struct pdxb_gs gt_g;
 static pdw g_xnt;
+static pdw g_gm[4][4];          /* memo: obj, gen, tuple in, tuple out (0xFFFF = empty); no mask */
+static pdw g_gmn;
 
 /* the raw PDENG answer for gt_q, the final reference NOT followed */
 static pdw x8_rawget(void)
@@ -183,6 +185,7 @@ static void x8d_pass(pdw vcy0)
     pdw i;
     g_vcy0 = (pdi)vcy0;
     g_xtn = 0; g_nmask = 0; g_xmaskpend = 0; g_xnt = 0;
+    for (i = 0; i < 4; i++) g_gm[i][3] = 0xFFFF;
     x8d_trivial();
     for (i = 0; i < 32; i++) g_x8map[i] = 0;
     for (i = 0; i < 6; i++) g_xfr[i].kind = 0;
@@ -225,7 +228,9 @@ static pdw x8d_tuple(pdw ca, pdw CA, pdw bm, pdw sm)
  * is at XB+0 (obj, gen) and PDREND interprets it as a Form next; x8_odx = X8F_* bits. */
 static pdw x8d_gs(pdw cur, pdw obj, pdw gen)
 {
-    pdw ca = 255, CA = 255, bm = 0, sm = 0, id, t;
+    pdw ca = 255, CA = 255, bm = 0, sm = 0, id, t, i;
+    for (i = 0; i < 4; i++)
+        if (g_gm[i][3] != 0xFFFF && g_gm[i][0] == obj && g_gm[i][1] == gen && g_gm[i][2] == cur) { x8_odx = 0; return g_gm[i][3]; }
     if (cur) { ca = g_xt[cur][0]; CA = g_xt[cur][1]; bm = g_xt[cur][2]; sm = g_xt[cur][3]; }
     g_x8f = 0;
     gt_g.objnum = obj; gt_g.gen = gen;
@@ -252,6 +257,10 @@ static pdw x8d_gs(pdw cur, pdw obj, pdw gen)
     t = x8d_tuple(ca, CA, bm, sm);
     x8_odx = g_x8f;
     if (t == 0xFFFF) { x8_cf = 1; return PDE_LIMIT; }
+    if (!g_x8f) {                                       /* a clean answer is remembered (4 entries, round robin) */
+        i = g_gmn++ & 3;
+        g_gm[i][0] = obj; g_gm[i][1] = gen; g_gm[i][2] = cur; g_gm[i][3] = t;
+    }
     return t;
 }
 
