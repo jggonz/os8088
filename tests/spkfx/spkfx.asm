@@ -26,6 +26,9 @@ fx_entry:
     push si
     mov si, fx_tpl
     call OSAPI_WM_CREATE
+    push bx                         ; THE WINDOW is what the entry hands the
+                                    ; loader in BX (SPEC.md 20.2), and the
+                                    ; claims' verb is BL
     mov ax, 5 * 64                       ; the ring: 4 KB and the table after it
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
@@ -43,6 +46,7 @@ fx_entry:
     mov [fx_oseg], dx
     mov byte [fx_up], 1
 .out:
+    pop bx
     pop si
     pop dx
     pop ax

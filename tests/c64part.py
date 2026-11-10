@@ -206,7 +206,7 @@ def run():
         seg = 0
         for i in dispcp.win_list(m, S):
             rec = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-            sg = u16(rec, 22)           # W_SEG
+            sg = u16(rec, dispcp.W_SEG)
             if sg and m.read(lin(sg), 2) == b"O8":
                 seg = sg
         say("ld_status = %d, package segment %04X" % (st, seg))

@@ -232382,15 +232382,13 @@ the first picked writes
 it, so a user can turn it off by installing again or by deleting the link.
 
 Started with `CHECK` (`OSAPI_ARG_TEXT`), INSTALL runs 117.10.3 **before** it
-creates a window. **The cell is asked whether it is there first**: a kernel
-built before `OSAPI_ARG_TEXT` ends its table at `0x04DD` and a far call there
-runs data (the debug registry's tags, or kern_mega's data word), and the new
-release's `A:\INSTALL.O88` double-clicked on a machine booted from an older
-C: is exactly that kernel. `in_entry` compares the cell's bytes - `push bp`
-and a `call` - and the call's target with those of `OSAPI_ARG_FILE` (a door cell`,
-54.5, the same `OSAPI_RCSLOT` on every kernel) without calling either;
-a mismatch takes the plain start, which is exact, since a kernel without the
-cell cannot have started INSTALL from a link. Nothing newer, no card, or no answer: one toast saying which
+creates a window. It asks the cell straight away: the cell was once probed
+first - its bytes compared with `OSAPI_ARG_FILE`'s at their old table offsets,
+because a kernel built before `OSAPI_ARG_TEXT` ended its table there - and
+the flag day made that probe both dead and wrong (kernel size pass 19): both
+are DOOR cells, so the offsets name other cells and the probe always took the
+plain start, and `PKG_FMT` 13 means an older kernel refuses this INSTALL.O88
+at the loader (`LD_EVER`, 20.8) before its entry runs. Nothing newer, no card, or no answer: one toast saying which
 (*os8088 is up to date*, *Update check: no network*) and the entry refuses,
 which aborts the launch with the toast standing and no `Load failed` (20.12.4).
 Newer: the window, on the source page, with the network row picked.

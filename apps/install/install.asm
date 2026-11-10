@@ -172,8 +172,6 @@ NET_NEW     equ 5                   ; ...or a newer one
 IN_VBUFSZ   equ 768                 ; the reply, headers and all: Apache's
                                     ; run to ~250 bytes before the file
 IN_NEWS     equ 4                   ; lines of what is new shown
-IN_ARGT     equ 0x04DD              ; OSAPI_ARG_TEXT's cell, and OSAPI_ARG_FILE's:
-IN_ARGF     equ 0x0249              ; in_entry's gate compares the two (117.10.6)
 
 ; =============================================================================
 ; in_entry - package entry point (SPEC.md 20.2)
@@ -184,12 +182,6 @@ in_entry:
     call OSAPI_FILE_HERE            ; where we were started: the floppy source
     mov [in_home], dx               ; comes back here (SPEC.md 117.10.5)
     mov [in_home+2], bl
-    cmp word [es:IN_ARGT], 0xE855   ; IS THE CELL THERE? (SPEC.md 117.10.6): a
-    jne .plain                      ; kernel before it ends its table at 0x04DD
-    mov ax, [es:IN_ARGT+2]          ; and runs on into data. `push bp` / `call`
-    sub ax, [es:IN_ARGF+2]          ; landing where OSAPI_ARG_FILE's does - the
-    cmp ax, IN_ARGF - IN_ARGT       ; same OSAPI_RCSLOT - is the cell; no older
-    jne .plain                      ; kernel can have started us from a link
     call OSAPI_ARG_TEXT             ; STARTED AT BOOT? (SPEC.md 117.10.6): the
     jc .plain                       ; link's parameter is CHECK
     push ds

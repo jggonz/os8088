@@ -729,10 +729,12 @@ px_claims:
     pop cx
     pop bx
 %else
+    push cx                         ; (CL is the scale px_wkp takes below)
     mov cl, 6                       ; the master first: the largest, its KB
     shl ax, cl                      ; in paragraphs
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P
+    pop cx
 %endif
     jc .nomem
     mov [px_cur + PXR_MSEG], dx

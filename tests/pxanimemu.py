@@ -64,21 +64,21 @@ class Anim:
         self.k = self.p.syms["px_k"]
         self.claims = {}
         self.cells = self.p.cells
-        mu.hook_add(UC_HOOK_CODE, self._mem, begin=E.KSEG * 16,
-                    end=E.KSEG * 16 + 0xFFFF)
+        self.p.doors[self.p.door_ix["OSAPI_MEM_P"]] = self._mem
 
-    def _mem(self, mu, addr, size, _):
-        off = addr - E.KSEG * 16
-        # OSAPI_MEM_P is an X stub, so the hook can land a byte in. Its two
-        # claim verbs (BL = 0 / 1) are the only claims since the flag day
-        # withdrew the KB doors (SPEC.md 50.3): AX = paragraphs
-        if off in (self.cells["OSAPI_MEM_P"], self.cells["OSAPI_MEM_P"] + 1) \
-                and mu.reg_read(UC_X86_REG_BL) in (0, 1):
-            para = mu.reg_read(UC_X86_REG_AX)
-            seg = self.p.claim(para * 16)
-            mu.reg_write(UC_X86_REG_DX, seg)
-            f = mu.reg_read(UC_X86_REG_FLAGS)
-            mu.reg_write(UC_X86_REG_FLAGS, f & ~1)
+    def _mem(self, mu):
+        # OSAPI_MEM_P is a DOOR since T5 (kernel size pass 19, SPEC.md
+        # 20.3.4; tests/pxpartemu.py answers the int). Its two claim verbs
+        # (BL = 0 / 1) are the only claims since the flag day withdrew the
+        # KB doors (SPEC.md 50.3): AX = paragraphs
+        bl = mu.reg_read(UC_X86_REG_BL)
+        if bl not in (0, 1):
+            raise RuntimeError("OSAPI_MEM_P verb %02X" % bl)
+        para = mu.reg_read(UC_X86_REG_AX)
+        seg = self.p.claim(para * 16)
+        mu.reg_write(UC_X86_REG_DX, seg)
+        f = mu.reg_read(UC_X86_REG_FLAGS)
+        mu.reg_write(UC_X86_REG_FLAGS, f & ~1)
 
     def _flag(self, cf):
         f = self.p.mu.reg_read(UC_X86_REG_FLAGS)

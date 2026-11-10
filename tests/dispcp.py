@@ -42,6 +42,7 @@ import os88ui                                                # noqa: E402
 from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H, KERNEL_SEG,  # noqa: E402
                       WF_SAVEU, WF_SIZABLE, WF_KEEPH,
                       WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE,
+                      W_SEG,
                       DESK_ZY0, DESK_ZW, DESK_COLW,
                       DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE,
                       FM_ROW_Y0, FM_ROW_H, FS_SCRL, FS_N, FS_VSEG)

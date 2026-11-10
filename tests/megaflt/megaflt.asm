@@ -272,12 +272,12 @@ fl_hex2:
 fl_tpl:
     dw 40, 120, 200, 60
     dw fl_ttl, fl_cls
-%if FLT_MODE == 0
-    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONKEY, fl_key, ONCLICK, fl_click
-%elif FLT_MODE == 6
-    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONWAKE, fl_wake
+%if FLT_MODE == 0                   ; (every build's timer is fl_tick: the
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONKEY, fl_key, ONCLICK, fl_click, ONTIMER, fl_tick
+%elif FLT_MODE == 6                 ; fault is IN it, or starts there)
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONWAKE, fl_wake, ONTIMER, fl_tick
 %else
-    OS88_CLASS fl_cls, 0, PAINT, fl_paint
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONTIMER, fl_tick
 %endif
 fl_ttl:     db FLT_NAME, 0
 fl_s_pfx:   db 'FLT', FLT_CH, ': ', 0
