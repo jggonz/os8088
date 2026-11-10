@@ -929,7 +929,7 @@ stm_shut:
 .repaint:
     mov byte [menu_bdirty], 0
     call stm_rect
-    call KERNEL_SEG:cw_wm_paint_dmg
+    KDOOR wm_paint_dmg
 .done:
     mov byte [menu_bdirty], 1
     ret
@@ -1818,7 +1818,7 @@ stm_a_launch:
     call COLD_SEG:wm_cbd
     jmp short .back
 .miss:
-    call KERNEL_SEG:cw_snd_beep ; the disk went away between the drop and now
+    KDOOR snd_beep              ; the disk went away between the drop and now
 .back:
     call COLD_SEG:drvf_drv_vol_back
     ret
@@ -1833,7 +1833,7 @@ stm_a_close:
     or bx, bx
     jz .r
     call KERNEL_SEG:cw_gfx_lock
-    call KERNEL_SEG:cw_app_close_win
+    KDOOR app_close_win
     call KERNEL_SEG:cw_gfx_unlock
 .r:
     ret

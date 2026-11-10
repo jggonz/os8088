@@ -57,6 +57,7 @@ import os
 import shutil
 import struct
 import sys
+import re
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,8 +73,23 @@ from deskcaltask import pkg_sym                 # noqa: E402
 
 TODAY = (2026, 10, 14)
 TOMORROW = (2026, 10, 15)
-TONE_CELL = 0x0060 * 16 + 0x00D3        # OSAPI_SND_TONE (os88api.inc)
-TOAST_AT = 0x0060 * 16 + 0x02AA         # OSAPI_TOAST
+
+
+def _cell(name):
+    """A hot OSAPI cell's linear address, off the SDK's own `%define`."""
+    txt = open(os.path.join(HERE, "..", "apps", "os88api.inc")).read()
+    seg = int(re.search(r"^KERNEL_SEG\s+equ\s+(0x[0-9A-Fa-f]+)", txt, re.M).group(1), 16)
+    off = int(re.search(r"^%%define\s+%s\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)" % name,
+                        txt, re.M).group(1), 16)
+    return (seg << 4) + off
+
+
+TONE_CELL = _cell("OSAPI_SND_TONE")
+# OSAPI_TOAST is a DOOR cell since T5 (kernel size pass 19, SPEC.md 20.3.4):
+# no cell address, so the toasts are read at the routine its rd_tab entry
+# names, toast_show - which the kernel's own toasts (KDOOR sites) reach too,
+# with ES:SI the line just as a package's call hands it
+TOAST_SYM = "toast_show"
 B = os88stik
 
 fails = []
@@ -312,7 +328,7 @@ def main():
             # bare=False: the folder's close would run inside the few
             # seconds the launch's toast is up (a loaded soak missed it);
             # nothing here presses a card the folder covers
-            # EVERY toast is read at the OSAPI_TOAST cell itself, its ES:SI
+            # EVERY toast is read at OSAPI_TOAST's routine itself, its ES:SI
             # string read while the guest is stopped: Later fires on the beat
             # after the one that says the launch's line, and its own toast
             # overwrites toast_buf before a poll of the buffer may look
@@ -321,7 +337,7 @@ def main():
                 rg = rec.get("regs") or mm.regs()
                 raw = bytes(mm.readseg(rg["es"], rg["si"], 32))
                 return raw.split(b"\0")[0].decode("latin-1")
-            with os88marty.bp_trace(m, TOAST_AT, regs=True,
+            with os88marty.bp_trace(m, ui._S(TOAST_SYM), regs=True,
                                     on_hit=said) as tt:
                 c = Cal(ui, tmp, check=check, bare=False,
                         before=lambda: m.write(ui._S("clk_sec"),

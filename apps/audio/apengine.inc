@@ -118,13 +118,17 @@ ap_ensure_bufs:
     cmp word [ap_la_seg], 0
     jne ap_rpin
     push cx
-    mov ax, 32                     ; AP_LA_SZ / 1024
-    mov cx, 32                     ; ALL OF IT PAGE-SAFE: the floppy's 8237
-    call OSAPI_MEM_CLAIM_DMA       ; writes every gulp straight into it, and
+    push bx
+    mov ax, 32 * 64                 ; AP_LA_SZ in paragraphs
+    mov cx, 32 * 64                 ; ALL OF IT PAGE-SAFE: the floppy's 8237
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P            ; writes every gulp straight into it, and
     jnc .got                       ; a run across a 64KB page is split there,
-    call OSAPI_MEM_CLAIM           ; a revolution lost a pass (KERN-MEGA-PLAN
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; a revolution lost a pass (KERN-MEGA-PLAN
 .got:                              ; 14.160: on kern_mega a pool block). No
-    pop cx                         ; page-safe run: the plain claim, as before
+    pop bx                         ; page-safe run: the plain claim, as before
+    pop cx
     jc .fail                       ; (out CF, DX = base segment; `mov cx, 32`
                                    ; and not `mov cx, ax`: an EVEN +12, so
                                    ; the player's code after it keeps its
@@ -903,7 +907,7 @@ ap_find_sibling:
     push ds
     pop es
     mov di, ap_snap
-    call OSAPI_SYS_SNAPSHOT        ; AX = MAX_TASKS, BX = INST_MAX
+    call OSAPI_SYS_SNAPSHOT        ; BX = INST_MAX
     mov cx, INST_MAX
     mov si, ap_snap + SS_INST
     mov bx, cs                     ; our own region segment

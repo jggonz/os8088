@@ -38,8 +38,6 @@ W16PG_REC   equ 320                 ;   ...a desktop record (26.9.6), 128
 
 W16PG_LKSZ  equ 50                  ; a link: 'LK', 1, the volume, the kind,
 W16PG_LKPTH equ 5                   ;   and the path below the root, NUL - 44
-W16PG_SC0   equ 9                   ; the shortcuts' zones on kern_big, and
-W16PG_SCN   equ 15                  ;   how many (SPEC.md 26.8, SC_MAX)
 
 ; -----------------------------------------------------------------------------
 ; w16pg_init - the end of a WM_DDE_INITIATE broadcast (w16t_bsend): DX = the
@@ -704,7 +702,7 @@ w16pg_show:
     ret
 
 ; DeleteGroup(name) - its folder and everything in it, then its shortcut,
-; tried at each zone until one is this link (SPEC.md 26.9.6)
+; which the record names (SPEC.md 26.9.6)
 w16pg_delgrp:
     call w16pg_gname
     jc .out
@@ -719,20 +717,11 @@ w16pg_delgrp:
     pop si
     jc .out
     call w16pg_desk
-    mov ah, W16PG_SC0
-.z:
-    push ax
     push ds
     pop es
     mov si, w16_gbuf + W16PG_REC
     xor al, al
-    call OSAPI_DESK_ITEM
-    pop ax
-    jnc .gone
-    inc ah
-    cmp ah, W16PG_SC0 + W16PG_SCN
-    jb .z
-.gone:
+    call OSAPI_DESK_ITEM            ; refused or not, the group is gone
     mov si, w16_gbuf + W16PG_GRP    ; the current group no longer
     mov di, w16pg_grp
 .c:

@@ -249,7 +249,8 @@ dkb_geom:
     mov [dock_lc1], ax
     inc ax
     mov [dock_fc1], ax
-    add ax, 2
+    inc ax                      ; (two incs, a byte under `add ax, 2` in
+    inc ax                      ; each of the two images - kernel size pass 19)
     mov [dock_c0], ax
     mov word [dock_thk], DOCK_H
     %2 dock_band                ; (each image's own hop: no resident shim -

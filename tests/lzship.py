@@ -94,7 +94,7 @@ def compressed(img):
             name = e[:11].decode("ascii", "replace")
             seen[1] += 1
             hdr = first_sector(clus)
-            if e[12] in (0x5A, 0x5B):               # a 'CZ' data file, either
+            if e[12] in (0xA4, 0xA5):               # a 'CZ' data file, either
                                                     # format (SPEC.md 20.14.1)
                 seen[0] += 1
             elif len(hdr) >= 12 and hdr[:2] == b"O8":

@@ -534,7 +534,7 @@ def read_page(m):
         if w not in (FD_W, FD_W_SNAP):
             continue                    # ...the SNAP too - see FD_W_SNAP
         r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        seg = dispcp._u16(r, 22)
+        seg = dispcp._u16(r, os88geom.W_SEG)
         o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
         return PAGES.get(m.readseg(seg, img + FD_PAGE_OFF, 1)[0], "?")
@@ -563,7 +563,7 @@ def read_state(m):
         if w not in (FD_W, FD_W_SNAP):
             continue                    # ...the SNAP too, see FD_W_SNAP
         r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        seg = dispcp._u16(r, 22)
+        seg = dispcp._u16(r, os88geom.W_SEG)
         o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
         v = m.readseg(seg, img + FD_ST_OFF, 1)[0]

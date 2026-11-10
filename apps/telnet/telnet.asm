@@ -182,10 +182,10 @@ te_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [te_win], bx
-    mov ax, bx                      ; **THE GESTURE'S TWO SLOTS** (SPEC.md
-    mov bx, te_btrec                ; 20.5.1.3): neither is a template word.
-    mov si, te_onup                 ; os88ui_btninit keeps every register and
-    mov di, te_ondrag               ; nothing below reads the ones it is
+    mov ax, bx                      ; **THE GESTURE'S RECORD** (SPEC.md
+    mov bx, te_btrec                ; 20.5.1.3): its three slots are te_cls's.
+                                    ; os88ui_btninit keeps every register and
+                                    ; nothing below reads the ones it is
     mov dx, te_onclick              ; handed - BX is re-loaded where it is
                                     ; wanted, SI is the entry's own and is
                                     ; popped at .out - so there is no frame
@@ -232,33 +232,10 @@ te_entry:
                                     ; the cursor drawn until `?25l`
     call con_font                    ; the 256 CP437 glyphs, ROM where there is
     call con_clear                   ; one and the shipped table where not
-    mov al, 1
     mov bx, [te_win]                ; ...BX is the window: WM_CREATE left it
-    call OSAPI_WM_SNAP              ; there, but con_clear runs in between              ; the screen is 8px cells, so an aligned
-                                    ; content origin is what earns font_run's
-                                    ; single-store path on the two mono
-                                    ; adapters (SPEC.md 11.94)
     mov si, te_menus                ; (no frame round SI: .out pops the
                                     ; caller's, and nothing between reads it)
     call OSAPI_MENU_SET             ; ...and BX is [te_win] from here on: this
-    mov al, 1                       ; and the three slots below preserve every
-    call OSAPI_WM_SIZABLE           ; register. **RESIZABLE, AND NOTHING REFLOWS.**
-                                    ; te_layout derives con_vcols and con_vrows
-                                    ; from the LIVE content box on every call,
-                                    ; so both axes change how much of the
-                                    ; fixed 80x25 screen is on view and
-                                    ; neither changes the screen. The window
-                                    ; opens wide enough for all of it
-    mov ax, tz_wake
-    call OSAPI_WM_ONWAKE            ; **THE UI-TASK HALF** (SPEC.md 70.11.3):
-                                    ; everything in this package that touches a
-                                    ; file happens in there, because a worker
-                                    ; may not (SPEC.md 20.6 rule 7). It
-                                    ; preserves the flags, which matters here
-                                    ; for OSAPI_ABOUT_SET's reason below
-    mov si, te_about
-    call OSAPI_ABOUT_SET            ; 'About Telnet' under our name in the bar
-                                    ; (SPEC.md 12.2)
     clc
 .out:
     pop si
@@ -1351,7 +1328,7 @@ te_owed:
 ; without the lock.
 ;
 ; **THE DEPTH CLAIM IS NOT TWO COLOURS ANY MORE** (SPEC.md 70.8.5). It was:
-; CBLACK and CWHITE, four uses each and nothing else, so OSAPI_SAVEU_1BPP rode
+; CBLACK and CWHITE, four uses each and nothing else, so WF_1BPP rode
 ; along and the cache was 11,642 bytes rather than 46,526. After 70.8 the
 ; content is whatever sixteen colours the board chose, and 11.96.17's promise
 ; - every pixel of my content is colour 0 or colour 15 - is FALSE on a colour
@@ -1369,14 +1346,17 @@ te_promise:
     or bx, bx                       ; before wm_create, and after a refused
     jz .out                         ; one: nothing to promise about
     call te_owed
-    mov al, 0                       ; something is owed: withdraw
+    mov ax, WFB_SAVEU * 256         ; something is owed: withdraw
     jc .say
-    mov al, OSAPI_SAVEU_ON
-    cmp byte [con_mono], 0
-    je .say                         ; colour: 1bpp would be a LIE (70.8.5)
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+    mov ax, WFB_1BPP * 256          ; the DEPTH claim, stated with every
+    cmp byte [con_mono], 0          ; promise (SPEC.md 11.104.3: it is a bit of
+    je .clr                         ; its own) - colour: 1bpp would be a LIE
+    inc ax                          ; (70.8.5)
+.clr:
+    call OSAPI_WM_FLAG
+    mov ax, WFB_SAVEU * 256 + 1
 .say:
-    call OSAPI_WM_SAVEU             ; BX is [te_win] and not whatever was in it
+    call OSAPI_WM_FLAG              ; BX is [te_win] and not whatever was in it
 .out:                               ; (SPEC.md 11.96.11.4)
     pop bx
     pop ax
@@ -1784,7 +1764,7 @@ te_show:
     ret
 
 ; =============================================================================
-; te_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2)
+; te_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;
@@ -2040,8 +2020,12 @@ te_s_conn:  db 'Connect', 0
 ; --- window template (SPEC.md 11) -------------------------------------------
 te_tpl:
     dw 40, 40, TE_W, TE_H
-    dw te_name_s, te_paint, te_onkey, te_onclick    ; the title is the
+    dw te_name_s, te_cls                            ; the title is the
                                                     ; app name's string
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS te_cls, WF_SIZABLE, PAINT, te_paint, ONKEY, te_onkey, \
+               ONCLICK, os88ui_btnclick, ABOUT, te_about, ONWAKE, tz_wake, \
+               ONMOUSEUP, te_onup, ONDRAG, te_ondrag
 
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)

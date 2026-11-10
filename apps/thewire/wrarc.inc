@@ -627,7 +627,8 @@ wr_arcwrite:
     xor bx, bx
     mov cx, [wr_asize]
     call wr_fpin                    ; PINNED for the call (wr_fpin's reason)
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     jmp short .wrote
 .first:
     mov cl, [wr_ehdr + WA_DEPTH]    ; --- are we standing there already?

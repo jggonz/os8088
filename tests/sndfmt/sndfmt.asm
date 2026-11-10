@@ -71,8 +71,6 @@ sf_entry:
     mov si, sf_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
-    mov ax, sf_tick
-    call OSAPI_WM_ONTIMER
     mov ax, 9                       ; half a second for the desktop to settle
     call OSAPI_WM_TIMER
     clc
@@ -319,9 +317,10 @@ sf_open:
     mov si, [sf_g1]
     jmp short .open
 .ext:                               ; AN EXTERNAL RING (SPEC.md 34.5.3): our
-    mov ax, (SF_RL + 1023) / 1024 + 1   ; own claim, page-safe whole - the
+    mov ax, ((SF_RL + 1023) / 1024 + 1) * 64 ; own claim, page-safe whole - the
     mov cx, ax                      ; ring and its control words after it
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; DX = its segment
     jc .nogrant
     mov [sf_xseg], dx
     push es
@@ -526,7 +525,10 @@ sf_sin:                             ; round(32767 sin(2 pi i / 64))
 ; --- the window ------------------------------------------------------------------
 sf_tpl:
     dw 340, 88, 190, 60
-    dw sf_ttl, sf_paint, sf_nop, sf_nop
+    dw sf_ttl, sf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sf_cls, 0, PAINT, sf_paint, ONKEY, sf_nop, ONCLICK, sf_nop, \
+               ONTIMER, sf_tick
 sf_ttl:     db 'Snd Format', 0
 sf_line:    db 'step: -', 0
 

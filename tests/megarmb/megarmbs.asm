@@ -78,8 +78,6 @@ ms_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [ms_win], bx
-    mov ax, ms_tick
-    call OSAPI_WM_ONTIMER
     mov ax, MS_WAIT
     call OSAPI_WM_TIMER
     clc
@@ -212,7 +210,7 @@ ms_ringc:
     mov ax, (MS_RL + 1024) / 1024 * 64 ; the ring and its words, all of it
     mov cx, ax                      ; page-safe and CONVENTIONAL: the paragraph
     push bx                         ; door with a head (the KB DMA door gives an
-    mov bl, MEMP_CLAIM              ; OS88_HIGHMEM package a pool block for a
+    mov bl, MEMP_CLAIM + MEMP_CONV              ; OS88_HIGHMEM package a pool block for a
     call OSAPI_MEM_P                ; head, KERN-MEGA-PLAN 14.160)
     pop bx
     jc .o
@@ -710,7 +708,9 @@ ms_lsnd:    db FSXL_DRV, DRVC_SOUND, FSXL_END
 ms_letters: db 'PQLMKOIJWSZ'
 ms_tpl:
     dw 8, 300, 200, 40
-    dw ms_ttl, ms_paint, 0, 0
+    dw ms_ttl, ms_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ms_cls, 0, PAINT, ms_paint, ONTIMER, ms_tick
 ms_ttl:     db 'MegaRMB sound', 0
 ms_name0:   db 'MEGARMBS: ', 0
 ms_s_start: db 'start', 0

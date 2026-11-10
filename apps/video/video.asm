@@ -449,15 +449,11 @@ vp_entry:
     pop cx                          ; and EGA both
     pop bx
     jbe .ngrey
-    mov al, 1
+    mov ax, WFB_OWNBG * 256 + 1
     mov [vp_grey], al
-    call OSAPI_WM_OWNBG
+    call OSAPI_WM_FLAG
 .ngrey:
     pop ax
-    mov al, 1                       ; A FIXED LAYOUT (SPEC.md 11.93): its
-    call OSAPI_WM_KEEPH             ; height hangs over the dock rather than
-                                    ; be cut - CGA's band is too short for the
-                                    ; picture, the bar and the buttons (98.4.1)
 %ifdef PKG_MEGA
     OS88_REGION_MOVABLE vp_reloc    ; SPEC.md 66.6.1.1. A play pins it anyway:
 %else
@@ -467,25 +463,11 @@ vp_entry:
     push bx                         ; THE BUTTONS' GESTURE (SPEC.md 20.5.1.3):
     mov ax, bx                      ; press inverts, release fires, a slide
     mov bx, vp_btns                 ; off cancels
-    mov si, vp_onup
-    mov di, vp_ondrag
     mov dx, vp_onclick              ; ...a press on no button: the scrub bar
     call os88ui_btninit
     pop bx
-    mov ax, vp_clickw               ; ...and the press reaches US first, so the
-    call OSAPI_WM_ONCLICK           ; rects are where the window is NOW
     mov si, vp_menus
     call OSAPI_MENU_SET
-    mov si, vp_about
-    call OSAPI_ABOUT_SET
-    mov ax, vp_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, vp_ontimer              ; the hold's loading (98.3.18); refused
-    call OSAPI_WM_ONTIMER           ; on kern_small, which has no XMS anyway
-    mov ax, vp_onclose              ; THE CLOSE ENDS THE SESSION FIRST
-    call OSAPI_WM_ONCLOSE           ; (98.3.18.10)
-    mov ax, vp_onresize             ; ...and a landing on another display
-    call OSAPI_WM_ONRESIZE          ; asks again (98.3.21)
     call vp_fmt                     ; ([vp_msg]: the image's vp_s_none)
     call vp_wakew                   ; the document, and a settled first paint,
     mov bx, [vp_win]                ; from the wake (SPEC.md 54.10)
@@ -11579,7 +11561,7 @@ vp_sstart:
     push di
     push es
 %ifdef VP_DIAG
-    call OSAPI_MEM_AVAIL            ; THE HEAP AS PLAY FOUND IT, for the
+    call vp_mavail              ; THE HEAP AS PLAY FOUND IT, for the
     mov [vp_mrun0], ax              ; card's memory lines (98.3): the
     mov [vp_mfre0], bx              ; largest claim, and all that is free
     mov word [vp_mrun], 0           ; ...and nothing from the ring's sizing
@@ -12102,8 +12084,11 @@ vp_rbhold:
     jnc .h                          ; and the drivers'
     mov ax, VP_RBRKB
 .h:
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call OSAPI_MEM_P
     jc .n
     mov [vp_rbh], dx
 .n:
@@ -17628,7 +17613,7 @@ vp_sndprep:
     push bx                         ; A CARD: the ring and its two control
     mov ax, (VP_RL / 1024 + 1) * 64 ; words, page-safe and never moved, and
     mov cx, ax                      ; CONVENTIONAL: the paragraph door with a
-    mov bl, MEMP_CLAIM_HI           ; head (vp_aseg is in vp_rlst, and
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV           ; head (vp_aseg is in vp_rlst, and
     call OSAPI_MEM_P                ; kern_mega's KB DMA door would put it
     pop bx                          ; above 1MB, KERN-MEGA-PLAN 14.160)
     jc .ret                         ; no room for it: the play is silent
@@ -23442,7 +23427,7 @@ vp_repaint:                         ; SI = window, lock held, no region armed
     pop bx
     ret
 
-vp_about:                           ; OSAPI_ABOUT_SET's handler: SI = window
+vp_about:                           ; the WC_ABOUT handler: SI = window
     push bx
     push si
     mov byte [vp_abon], 1
@@ -24103,21 +24088,24 @@ vp_rclaim:
 .r:
     pop cx
     ret
-; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but through
-; the PARAGRAPH door, which keeps a head conventional: kern_mega's KB DMA
-; door gives an OS88_HIGHMEM package a pool block for one (KERN-MEGA-PLAN
-; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
-; CF, DX; AX, BX and CX kept
+; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but
+; MEMP_CONV WITHOUT MEMP_DMAPOOL, which keeps a head conventional: with it
+; kern_mega gives an OS88_HIGHMEM package's head a pool block (KERN-MEGA-PLAN
+; 14.160, SPEC.md 50.3.7), and vp_ring is in vp_rlst - the real-mode bracket
+; reads into it. CF, DX; AX, BX and CX kept
 .p:
     push ax
     push bx
     push cx
-    mov bx, cx
+    mov ch, cl                      ; the head's KB (64 at most)...
+    xor cl, cl
+    shr cx, 1
+    shr cx, 1                       ; ...in paragraphs
+    push cx
     mov cl, 6
-    shl ax, cl                      ; paragraphs (SPEC.md 50.3.7)
-    shl bx, cl
-    mov cx, bx
-    mov bl, MEMP_CLAIM
+    shl ax, cl                      ; ...and the claim's
+    pop cx
+    mov bl, MEMP_CONV               ; conventional, with the head
     call OSAPI_MEM_P
     pop cx
     pop bx
@@ -24155,17 +24143,32 @@ vp_rclk1:
 .no:
     stc
     ret
-vp_mclaim:                          ; OSAPI_MEM_CLAIM, IN CONVENTIONAL MEMORY:
-    push cx                         ; the DMA door with no head IS the plain
-    xor cx, cx                      ; claim (os88api.inc), and OS88_HIGHMEM
-    call OSAPI_MEM_CLAIM_DMA        ; does not reach it - every claim but the
-    pop cx                          ; ring's is paragraph arithmetic somewhere
-    ret                             ; (KERN-MEGA-PLAN 14.41)
+vp_mclaim:                          ; AX = KB, IN CONVENTIONAL MEMORY:
+    push bx                         ; MEMP_CONV with no head (OS88_HIGHMEM
+    mov bl, MEMP_CONV               ; does not reach it - every claim but the
+    call vp_mkb                     ; ring's is paragraph arithmetic somewhere,
+    pop bx                          ; KERN-MEGA-PLAN 14.41)
+    ret
 %else
-vp_mclaim:                          ; OSAPI_MEM_CLAIM
-    call OSAPI_MEM_CLAIM
+vp_mclaim:                          ; AX = KB
+    push bx
+    mov bl, MEMP_CLAIM
+    call vp_mkb
+    pop bx
     ret
 %endif
+; vp_mkb - OSAPI_MEM_P's verb BL with AX = KB, the unit the player plans in,
+; and no head: CF, DX; AX and CX kept
+vp_mkb:
+    push ax
+    push cx
+    mov cl, 6
+    shl ax, cl
+    xor cx, cx
+    call OSAPI_MEM_P
+    pop cx
+    pop ax
+    ret
 vp_ticks:                           ; OSAPI_GET_TICKS
     call OSAPI_GET_TICKS
     ret
@@ -24183,16 +24186,20 @@ vp_clips:                           ; ...or BX as it is
     call OSAPI_WM_CLIP_SET
     ret
 %ifdef PKG_MEGA
-vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI, in conventional
-    push cx                         ; memory as vp_mclaim's
-    xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA_HI
-    pop cx
-%else
-vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI
-    call OSAPI_MEM_CLAIM_HI
-%endif
+vp_mclhi:                           ; AX = KB, from the top, in
+    push bx                         ; conventional memory as vp_mclaim's
+    mov bl, MEMP_CONV + MEMP_CLAIM_HI
+    call vp_mkb
+    pop bx
     ret
+%else
+vp_mclhi:                           ; AX = KB, from the top
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    call vp_mkb
+    pop bx
+    ret
+%endif
 ; vp_mclp / vp_mclhip - OSAPI_MEM_P's claim, from the bottom / the TOP: AX =
 ; PARAGRAPHS -> CF=0 DX = the claim, AX = the paragraphs GRANTED (SPEC.md
 ; 50.3.7). For a claim whose size is a byte count, which pays the heap's
@@ -24214,20 +24221,27 @@ vp_mclp:
     pop bx
     ret
 vp_mclpb:
-    push cx
 %ifdef PKG_MEGA
-    mov cx, MEMP_CONV
-%else
+    push cx
     xor cx, cx
-%endif
+    or bl, MEMP_CONV
     call OSAPI_MEM_P
     pop cx
+%else
+    call OSAPI_MEM_P                ; (CX is not read)
+%endif
     ret
 vp_mmov:                            ; OSAPI_MEM_MOVABLE
     call OSAPI_MEM_MOVABLE
     ret
-vp_mavail:                          ; OSAPI_MEM_AVAIL
-    call OSAPI_MEM_AVAIL
+vp_mavail:                          ; MEMP_AVAIL's AX/BX, in KB; CX kept
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
     ret
 vp_xcaps:                           ; OSAPI_XMEM_CAPS
     call OSAPI_XMEM_CAPS
@@ -24281,7 +24295,18 @@ vp_tpl:
     dw 7, 22, 0, 0                  ; W_X = 7 mod 8: the content on a byte
                                     ; (SPEC.md 11.94). The size: vp_entry's,
                                     ; from the layout (98.4.1)
-    dw vp_cap, vp_paint, vp_onkey, vp_clickw
+    dw vp_cap, vp_cls
+; ...and its CLASS (SPEC.md 11.104). A FIXED LAYOUT (11.93): its height hangs
+; over the dock rather than be cut - CGA's band is too short for the picture,
+; the bar and the buttons (98.4.1). The press reaches US first, so the rects
+; are where the window is NOW, and goes on to the button library; the timer
+; is the hold's loading (98.3.18; kern_small has no XMS anyway); THE CLOSE
+; ENDS THE SESSION FIRST (98.3.18.10); a landing on another display asks
+; again (98.3.21)
+    OS88_CLASS vp_cls, WF_KEEPH, PAINT, vp_paint, ONKEY, vp_onkey, \
+               ONCLICK, vp_clickw, ABOUT, vp_about, ONWAKE, vp_onwake, \
+               ONCLOSE, vp_onclose, ONMOUSEUP, vp_onup, ONRESIZE, vp_onresize, \
+               ONTIMER, vp_ontimer, ONDRAG, vp_ondrag
 
     OS88_MENUSET vp_menus, vp_ttl, vp_oncmd
         OS88_MENU vp_m_file, vp_i_file, 8

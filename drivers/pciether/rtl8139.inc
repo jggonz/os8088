@@ -151,8 +151,8 @@ rt_rstwait:
 rt_claim:
     push dx
     mov ax, OS88_BYTES_PARA(RT_CLAIM)
-    mov cx, MEMP_CONV           ; no head, and below 1MB
-    mov bl, MEMP_CLAIM | MEMP_CPU
+    xor cx, cx                  ; no head, and below 1MB
+    mov bl, MEMP_CLAIM | MEMP_CPU | MEMP_CONV
     call OSAPI_MEM_P            ; DX = the base
     jc  .out
     mov [rt_seg], dx

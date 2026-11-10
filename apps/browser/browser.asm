@@ -291,34 +291,25 @@ br_entry:
     popf
     call br_size                    ; the template's HEIGHT is the machine's
     mov si, br_tpl
-    call OSAPI_WM_CREATE
-    jc .out
+    call OSAPI_WM_CREATE            ; ...and AL = the class slots this kernel
+    jc .out                         ; dispatches (SPEC.md 11.104)
+    cmp al, WC_ONDRAG + 1           ; CF = 1 below it: kern_small, no tracking
+    sbb al, al                      ; edge, so the thumb stays inert there
+    mov [br_nodrag], al             ; (SPEC.md 13.10.7.1)
     call br_keeph                   ; ...and on a CGA it is allowed over the dock
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
-    mov ax, br_onrclk
-    call OSAPI_WM_ONRCLICK          ; right click copies an active selection
-    mov ax, br_dl_mainclose
-    call OSAPI_WM_ONCLOSE           ; stop and release an active transfer first
     mov byte [br_bmrefreshreq], 1   ; first read waits until W_ONWAKE, after show
     call br_bmmenuset
-    push ax                         ; **THE BUTTONS' THREE SLOTS** (SPEC.md
-    push bx                         ; 20.5.1.3.3): btninit links this record so
-    push cx                         ; the library's click thunk can find it,
-    push dx                         ; and installs the PRESS as well as the
-    push si                         ; release and the tracking edge. br_onclick
-    push di                         ; is our own click work and the library
-    mov ax, bx                      ; chains to it when the press was not a
-    mov bx, br_btrec                ; button's - which is what stops a package
-    mov si, br_onup                 ; having a click path that skips them
-    mov di, br_ondrag
-    mov dx, br_onclick
+    push ax                         ; **THE BUTTONS' RECORD** (SPEC.md
+    push bx                         ; 20.5.1.3.3): btninit links it so the
+    push dx                         ; library's click thunk - br_cls's PRESS -
+    mov ax, bx                      ; can find it. br_onclick is our own click
+    mov bx, br_btrec                ; work and the library chains to it when
+    mov dx, br_onclick              ; the press was not a button's
     call os88ui_btninit
-    pop di
-    pop si
     pop dx
-    pop cx
     pop bx
     pop ax
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
@@ -327,23 +318,6 @@ br_entry:
     ; those runs declaring nothing - measured, by the row that reads
     ; MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-%ifdef OS88UI_SBDRAG
-    pushf                           ; the entry still owes the loader
-    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
-    mov ax, br_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
-    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
-                                ; below captures OSAPI_WM_ONDRAG's OWN
-                                ; CF and a third install after it would
-                                ; answer for the wrong slot
-    mov ax, br_onup
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, br_ondrag
-    call OSAPI_WM_ONDRAG
-    sbb al, al                      ; CF = 1 on kern_small: no tracking edge,
-    mov [br_nodrag], al             ; so the thumb stays inert there
-    pop ax
-    popf
-%endif
     mov word [br_loc + LN_BUF], br_ubuf     ; **THE BLOCK'S BUFFER WORDS, and
     mov word [br_loc + LN_MAX], BR_UBUF     ; they are not optional**: bss
                                             ; arrives ZEROED (SPEC.md 21 step
@@ -363,44 +337,12 @@ br_entry:
                                     ; It is before br_arg deliberately: a
                                     ; browser launched ON a document has a real
                                     ; name to show and may overwrite this
-    mov si, br_about
-    call OSAPI_ABOUT_SET            ; 'About Browser' under our name in the bar
-                                    ; (SPEC.md 12.2). It preserves the flags,
-                                    ; which matters here: wm_create's CF above
-                                    ; is the loader's answer and still has to
-                                    ; ride out of this proc
-    mov al, 1
-    call OSAPI_WM_SIZABLE           ; br_measure re-reads the content box on
-                                    ; every paint and relayouts on a WIDTH
-                                    ; change (BROWSER-PLAN 3.5), so the window
-                                    ; can be resized without anything else
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
-                                    ; ...AND NOTHING HAS BEEN FETCHED YET, so
-    call OSAPI_WM_SAVEU             ; the page is standing still and a raise
-                                    ; may put it back instead of lettering it
-                                    ; (SPEC.md 11.96.1). Only the STARTING
-                                    ; answer: br_promise re-answers it per
-                                    ; fetch, which is SPEC.md 71.11 and the
-                                    ; whole reason this app can promise at all
-                                    ; - its worker advances the page and skips
-                                    ; drawing when covered, which is the
-                                    ; disqualifier, but only while a fetch is
-                                    ; in flight
     mov si, br_pref                 ; **AND THE THREE HEIGHTS BECOME A
     call OSAPI_WM_PREFER            ; DECLARATION** (SPEC.md 11.100.1). br_size
                                     ; above still decides what we OPEN at and
                                     ; says the same thing, so a launch is
                                     ; unchanged; this is for every LATER moment
                                     ; the adapter can move under us
-    mov ax, br_onresize
-    call OSAPI_WM_ONRESIZE          ; ...and tell us, so the dock question gets
-                                    ; asked again (SPEC.md 11.98)
-    mov ax, br_onwake               ; SPEC.md 54.10: the kernel calls this once
-    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
-                                    ; document loads in front of it
-    mov ax, br_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls the
-    call OSAPI_WM_ONWHEEL           ; page. Flags preserved, so wm_create's CF
-                                    ; still rides out; a no-op on kern_small
     call br_arg                     ; launched ON a document? then BANK it -
                                     ; br_onwake above is what opens it
                                     ; WF_SNAP is the DEFAULT now (SPEC.md
@@ -495,12 +437,12 @@ br_keeph:
                                     ; the seam is exactly when the answer
                                     ; changes - which is also when br_onresize
                                     ; calls this
-    xor al, al                      ; **AND IT ANSWERS BOTH WAYS.** This used
+    mov ax, WFB_KEEPH * 256         ; **AND IT ANSWERS BOTH WAYS.** This used
     cmp dl, VID_CGA                 ; to return without touching the flag on
     jne .set                        ; anything but a CGA, which is correct
-    inc al                          ; exactly once - at launch, when the flag
+    inc ax                          ; exactly once - at launch, when the flag
 .set:                               ; is clear anyway. It is called from
-    call OSAPI_WM_KEEPH             ; br_onresize now, where the adapter can
+    call OSAPI_WM_FLAG              ; br_onresize now, where the adapter can
                                     ; have gone the OTHER way, and a KEEPH left
                                     ; set on a VGA raises the height ceiling by
                                     ; the dock's 24 rows on a screen with no
@@ -5006,7 +4948,7 @@ br_sh7: db 'Ctrl+A all (address/page); Ctrl+C copy', 0
 br_sh8: db 'Ctrl+D bookmark; Ctrl+U source', 0
 
 ; -----------------------------------------------------------------------------
-; br_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; br_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;
@@ -5524,7 +5466,10 @@ br_claim:
     xor ax, ax
     call br_pagepin
     pop ax
-    call OSAPI_MEM_CLAIM
+    push bx
+    mov bl, MEMP_CLAIM
+    call br_kbp
+    pop bx
     jmp short br_pageunpin
 br_claimp:                          ; ...and OSAPI_MEM_P's claim verbs, BL
     push ax                         ; and CX the caller's (SPEC.md 50.3.7)
@@ -5545,7 +5490,13 @@ br_regrow:
     je .grow                        ; test inline, so an 8088's regrow (one
     call br_wdrop                   ; a KB of document) pays a compare
 .grow:
-    call OSAPI_MEM_REGROW
+    push bx
+    mov bx, MEMH_REGROW             ; (= MEMP_REGROW: BL, either cell's verb)
+    cmp ah, 4                       ; 1,024KB and more is no paragraph count:
+    jae .huge                       ; kern_mega's pool claim regrows in KB
+    call br_kbp                     ; (SPEC.md 50.3.5), where the shift would
+.gd:                                ; wrap - a 1,025KB source regrown to 1KB
+    pop bx
     jc .back
     call br_reloc                   ; its word follows it (DX = where it is),
     clc                             ; and br_pageunpin declares it again: a
@@ -5557,6 +5508,23 @@ br_regrow:
     pop si
     pop bx
     jmp short br_pageunpin
+.huge:
+    push ax
+    call OSAPI_MEM_HUGE
+    pop ax
+    jmp short .gd
+
+; br_kbp - OSAPI_MEM_P's verb BL with AX in KB, the Browser's unit (it plans
+; in KB because OSAPI_MEM_HUGE's pool answer is KB): AX and CX kept
+br_kbp:
+    push ax
+    push cx
+    mov cl, 6
+    shl ax, cl
+    call OSAPI_MEM_P
+    pop cx
+    pop ax
+    ret
 
 ; br_hclaim - THE SOURCE'S AND THE DOCUMENT'S claim: br_claim's, and on
 ; kern_mega in protected mode OSAPI_MEM_HUGE of ONE RUN (docs/plans/MEGA-
@@ -6469,19 +6437,23 @@ br_lineems_ensure:
 ; claim may sit above 1MB there, so the reserve is a share of what they can
 ; all draw on. Keeps every other register
 br_avail:
+    push cx
     cmp byte [br_mega], 0
     je .conv
-    push cx
     push dx
     xor ax, ax
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     pop dx
-    pop cx
     jnc .r
 .conv:
-    call OSAPI_MEM_AVAIL
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; in paragraphs...
+    mov cl, 6                       ; ...and the Browser plans in KB
+    shr ax, cl
+    shr bx, cl
 .r:
+    pop cx
     ret
 
 ; br_memroom - preserve the load-start conventional-memory reserve.
@@ -6887,7 +6859,8 @@ br_savesourceems:
     mov bx, si
     mov si, br_name
     mov cx, [br_saveamount]
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     jc .fail
     jmp short .advanced
 .seqok:
@@ -14273,8 +14246,21 @@ br_styletail:  db '</style'
 ; --- window template (SPEC.md 11) ----------------------------------------------
 br_tpl:
     dw 40, 30, 496, 150
-    dw br_s_webbrowser, br_paint, br_onkey, 0 ; W_ONCLICK is installed by
-                                        ; os88ui_btninit (20.5.1.3.3)
+    dw br_s_webbrowser, br_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; RESIZABLE - br_measure re-reads the content box on every paint and
+; relayouts on a WIDTH change (BROWSER-PLAN 3.5). SAVEU + 1BPP: nothing has
+; been fetched yet, so the page stands still and a raise may put it back -
+; only the STARTING answer, br_promise re-answers it per fetch (SPEC.md
+; 71.11). The press is the button library's (20.5.1.3.3), the timer is the
+; scroll bar's PAUSE commit (13.10.5.4.2), and the wake opens a launch
+; document once the window is on the glass (54.10)
+    OS88_CLASS br_cls, WF_SIZABLE | WF_SAVEU | WF_1BPP, \
+               PAINT, br_paint, ONKEY, br_onkey, ONCLICK, os88ui_btnclick, \
+               ABOUT, br_about, ONWAKE, br_onwake, ONCLOSE, br_dl_mainclose, \
+               ONMOUSEUP, br_onup, ONRESIZE, br_onresize, \
+               ONRCLICK, br_onrclk, ONTIMER, br_ontimer, ONDRAG, br_ondrag, \
+               ONWHEEL, br_onwheel
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
 ; No Close item: SPEC.md 12.7 puts one in the app-NAME cell for every

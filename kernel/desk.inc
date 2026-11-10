@@ -988,7 +988,7 @@ desk_zones_paint_x:
                                 ; zone whole, [wm_dmg_zb] owes those windows
     mov byte [wm_dmg_npro], 1   ; ...and so nothing was PROMOTED: the front
                                 ; window is the one it was. Both kernels
-    call KERNEL_SEG:cw_wm_paint_dmg
+    KDOOR wm_paint_dmg
 .n:
     inc si
     cmp si, DSL_SLOT            ; ...and "no cell" is never painted
@@ -1543,7 +1543,7 @@ desk_zone_redraw:
     jmp short .done
 .full:
     pop ax
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     jmp short .done
 .nonep:
     pop ax
@@ -1774,10 +1774,10 @@ desk_pic:
     stc
     jne .kern                   ; only a file class's DSV_CAPS means FSCAP_*
     mov al, [bx+DV_CLASS]
-    call drv_cls_svc_x          ; CLSCF: DI = its copied table
-    jc .kern
-    test byte [di+DSV_CAPS], FSCAP_ICON
-    stc
+    call drv_cls_svc_x          ; CLSCF: ES:DI = its table, in place. ES is
+    jc .kern                    ; this routine's to clobber, and the X cell
+    test byte [es:di+DSV_CAPS], FSCAP_ICON ; below makes it our DS first
+    stc                         ; (api_x)
     jz .kern
     mov bh, al
     mov bl, DRV_ICONV
@@ -2188,15 +2188,16 @@ desk_learn_x:
 
 %ifndef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; osapi_desk_item - slot 0x03F8: put an ITEM on the desktop, or take one off
+; osapi_desk_item - a door cell: put an ITEM on the desktop, or take one off
 ;                   (SPEC.md 26.9)
 ; in:  AL = 1 add / 0 remove; ES = the caller's segment (an X cell)
 ;      add, from a DRIVER:  ES:SI -> a DSV_R_SIZE service record (SPEC.md
 ;                           26.7), whose +39 is the cell it would like
 ;      add, from a PACKAGE: ES:SI -> an SC_REC link record (SPEC.md 26.8.1),
 ;                           whose +1 is the cell it would like
-;      remove: a driver its own service item; a package the link in zone AH,
-;               ES:SI -> the record it added, which the row must still match
+;      remove: a driver its own service item; a package the link ES:SI ->
+;               the record it added, found by volume and path (a Sticky App
+;               record by its path's final component) - no zone (C10)
 ;      0xFF as the cell is "the first free one". A package calls this from a
 ;      window callback - the UI task, the gfx lock held - and never from a
 ;      worker: a link is PERSISTED, which writes SYSTEM.CFG (SPEC.md 20.6 r7)
@@ -2283,13 +2284,16 @@ osapi_desk_item_x:
     je .no
     jmp short .ok
 .pdel:
-    cmp ah, DESK_SC0            ; a link's zone or nothing: and never 0,
-    jb .no                      ; which is the module's "removed"
-    mov al, ah                  ; the zone AND the record, DX:CX: CTRL.DRV
-    mov ah, SC_OP_PDEL          ; removes the row only if it is still THIS
-    call sc_modcall             ; link - a zone is reused, and renumbered at
-    or al, al                   ; boot. AL = 0 removed; the zone back is a
-    jnz .no                     ; refusal, or no disk to read the module from
+    mov ax, (SC_OP_PDEL << 8) | 0xFF ; THE RECORD ALONE, DX:CX (ABI-BREAK-LIST C10,
+    call sc_modcall             ; kernel size pass 19): CTRL.DRV finds the row
+    or al, al                   ; by it - a zone is reused, and renumbered at
+    jnz .no                     ; boot, so it named nothing the record did not.
+                                ; AL = 0xFF going in: a module that cannot be
+                                ; read (no system disk) answers nothing, and
+                                ; that is a REFUSAL - 0 was "removed", and a
+                                ; Sticky App closed with its row stranded
+                                ; AL = 0 removed; 0xFF is a refusal, or no disk
+                                ; to read the module from
 .ok:
     CLC_OR_STC .no              ; (kernel size pass 15: OSAPI_DESK_ITEM's
 .out:                           ; answer is CF)

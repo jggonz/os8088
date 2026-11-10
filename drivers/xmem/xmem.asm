@@ -110,40 +110,14 @@
 
 %include "os88drv.inc"
 
-XM_ABI_VER  equ 2               ; the private kernel<->overlay ABI (SPEC.md
-                                ; 52.11's +10 word). The kernel passes what it
-                                ; expects in AH at DRVV_ATTACH and we refuse a
-                                ; mismatch, so a KERNEL.SYS and an XMEM.DRV of
-                                ; different vintages - a half-copied floppy -
-                                ; fail loudly at load instead of quietly at
-                                ; the first copy
+%include "xmabi.inc"             ; the private ABI, kernel/xmabi.inc: ONE source
+                                ; with the kernel's half (SPEC.md 41.12.2), so
+                                ; XM_ABI_VER, the XMV_* verbs and the XMC_*
+                                ; copy block cannot drift - the kernel passes
+                                ; XM_ABI_VER in AH at DRVV_ATTACH and we refuse
+                                ; a mismatch
 
 OS88_OVERLAY 'XMS', XM_ABI_VER, xm_entry
-
-; --- what the kernel dispatches (the XMV_* table, mirrored in kernel/xmem.inc)
-XMV_CAPS    equ 0               ; out AX = free KB, DX:CX = pool base,
-                                ;     BL = free block-table entries
-XMV_ALLOC   equ 2               ; in DX:AX = bytes, BL = owner; out CF,
-                                ;     DX:AX = base / AX = 0/1/2
-XMV_FREE    equ 4               ; in DX:AX = base, BL = owner; out CF
-XMV_COPY    equ 6               ; in ES:SI = an XMC_ block in KERNEL_SEG
-XMV_RELINST equ 8               ; in AL = an instance slot being torn down
-XMV_WALK    equ 10              ; in DX:DI = room for CX records; out AX
-XMV_SIZE    equ 12
-
-; --- the kernel's copy parameter block, read through ES (SPEC.md 41.12.2) ----
-; ES is KERNEL_SEG inside every call the kernel makes here, and the two ends
-; are 32-bit LINEAR addresses because the conventional one cannot arrive in a
-; segment register: drv_call loads ES itself, so the caller's ES is gone by
-; the time we run. The kernel folds ES:SI into a linear address before it
-; dispatches, which is arithmetic xm_copy used to do internally anyway.
-XMC_EXT     equ 0               ; dd: the extended end
-XMC_CONV    equ 4               ; dd: the conventional end
-XMC_LEN     equ 8               ; dw: bytes
-XMC_DIR     equ 10              ; db: 0 = conventional -> extended, 1 = back
-XMC_INST    equ 11              ; db: the requesting instance (the kernel
-                                ; stamps it - snd_req_inst is kernel state)
-XMC_SIZE    equ 12
 
 XM_SEL_FLAT     equ 0x08        ; GDT entry 1: base 0, limit 4GB, data r/w
 XM_MAX_COPY     equ 32768       ; bytes per copy - a SCHEDULER rule, not a
@@ -369,7 +343,7 @@ xm_svc:
 
 ; -----------------------------------------------------------------------------
 ; xm_walk - the pool's live blocks, for the Task Manager (XMV_WALK, behind
-;           slot 0x04BF; SPEC.md 28.4.8)
+;           a door cell; SPEC.md 28.4.8)
 ;
 ; in:       DX:DI = room for CX records of 6 bytes
 ; out:      CF = 0, AX = records written, each {dw XB_OFF, dw XB_KB, db
@@ -439,7 +413,7 @@ ROMF_HWALK      equ 10          ; MIRRORED: boot/osrom.asm's - the HMA tail's
 
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x015A)
+; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x0106)
 ;
 ; out:      AX = KB the pool can still hand out (0 = none, and alloc, free and
 ;           copy will all refuse), DX:CX = the pool's 32-bit linear base,
@@ -474,7 +448,7 @@ xm_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, slot 0x0160)
+; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, a door cell)
 ;
 ; in:       DX:AX = bytes wanted (rounded up to 1KB), BL = the owner to stamp
 ; out:      CF = 0 and DX:AX = the block's 32-bit linear base;
@@ -594,7 +568,7 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (XMV_FREE, slot 0x0166)
+; xm_free - give a block back (XMV_FREE, a door cell)
 ;
 ; in:       DX:AX = a base this caller owns, BL = the caller
 ; out:      CF = 0 freed and merged with the adjacent free runs;
@@ -783,7 +757,7 @@ xm_chk:
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes between conventional and extended memory
-;           (XMV_COPY, behind slot 0x016C, SPEC.md 41.5)
+;           (XMV_COPY, behind slot 0x010D, SPEC.md 41.5)
 ;
 ; in:       ES:SI = the kernel's XMC_ block (ES is KERNEL_SEG by construction)
 ; out:      CF = 0 done; CF = 1 and AX = 1 the transport refused (or, from
@@ -1651,8 +1625,10 @@ xm_hma:
     push dx
     push si
     push es
-    mov ax, XM_HMAF_KB
-    call OSAPI_MEM_CLAIM        ; owned by our segment, and freed below
+    mov ax, XM_HMAF_KB * 64     ; (paragraphs)
+                                ; no head
+    mov bl, MEMP_CLAIM          ; (BX, CX banked above)
+    call OSAPI_MEM_P            ; owned by our segment, and freed below
     jc .done
     push dx
     mov es, dx

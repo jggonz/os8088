@@ -1857,7 +1857,14 @@ pu_start:
     cbw
     or ax, ax
     jz .r
-    call OSAPI_MEM_CLAIM            ; (all but DX kept)
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    pop cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; (all but DX kept)
+    pop bx
     jc .no
     mov [px_ewseg], dx
 .r:
@@ -2307,6 +2314,7 @@ pu_tnum:
     pop dx
     pop bx
     ret
+
 
 pu_tdig:    times 5 db 0
 pu_ctext:   times 128 db 0          ; the line, before it is put

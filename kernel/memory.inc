@@ -469,7 +469,15 @@ MEMP_CPU      equ 2             ; bit 1 says no int 13h will land in it, so
 MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
-MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMP_CONV     equ 0x80          ; + a claim verb: CX = the head, and stay
+                                ; conventional on kern_mega (bit 7: tested by
+                                ; the verb byte's sign)
+MEMP_DMAPOOL  equ 0x40          ; + MEMP_CONV: the head a POOL block on
+                                ; kern_mega (an OS88_HIGHMEM package's, 14.160)
+MEMH_REGROW   equ MEMP_REGROW   ; OSAPI_MEM_HUGE's BX: DX's pool claim to AX KB
+%if MEMP_CONV != 0x80
+  %error "osapi_mem_p tests MEMP_CONV as the verb byte's sign"
+%endif
 MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
                                 ; the KB doors' answer, the pool counted
 %ifndef MEM_GRAN                ; (MEMGRAN=16 builds the 256-byte knob,
@@ -496,7 +504,7 @@ MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
                                 ; power of two, at most 256 (`and al`), and a
                                 ; multiple of 32 while guard 6b stands
 
-; --- osapi_claim_snapshot's buffer, API slot 0x0216 (SPEC.md 20.9) ----------------
+; --- osapi_claim_snapshot's buffer, a door cell (SPEC.md 20.9) ----------------
 ; The three fields of a claim record that mean anything outside this module.
 ; MC_DMA is not one of them: it is how a claim that MOVES keeps the page
 ; property it was granted for, and nothing outside can move a claim.
@@ -506,7 +514,7 @@ CLS_OWN    equ 4                ; word: owner (SPEC.md 50.2)
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 
-; --- osapi_sys_kb's buffer, API slot 0x021C (SPEC.md 20.9) --------------------
+; --- osapi_sys_kb's buffer, a door cell (SPEC.md 20.9) --------------------
 ; The kernel's own footprint broken into its parts, then the heap's totals.
 ; The parts sum to SK_KERN exactly - see the routine at the foot of this file
 ; for how the rounding is arranged so that they do, and why none of them is a
@@ -923,8 +931,8 @@ mem_floor_ax:
 ; (SPEC.md 50.3)
 ;
 ; in:       AX = KB wanted (1..640), BX = owner word (instance slot, or a
-;           MEM_K_* kernel tag); mem_claim_dma also CX = KB of the block's
-;           HEAD that must not cross a 64KB physical boundary (0 = none)
+;           MEM_K_* kernel tag); mem_claimp_dma also CX = PARAGRAPHS of the
+;           block's HEAD that must not cross a 64KB physical boundary
 ; out:      CF = 0, DX = base segment of the block; CF = 1 refused (no free
 ;           record, no hole big enough, this owner is at MEM_OWNER_MAX, a
 ;           silly size, or nothing page-safe when CX asked for it)
@@ -993,41 +1001,11 @@ mem_floor_ax:
 ; They were down there because OSAPI_MEM_CLAIM was the only door a driver had.
 ; These two are the other one. Nothing else changes: the scan, the page bump
 ; and the record are the same code, reached with the direction (DI) set.
-mem_claim_dma_hi_x:
-    push si
-    push di
-    mov di, MC_DMA_HI           ; ...and this one MEANS top-down, where the
-%ifdef KERN_MEGA                ; door below asks the tag
-    jcxz .top                   ; ...EXCEPT A RING, on kern_mega (KERN-MEGA-
-    xor di, di                  ; PLAN 14.55, SPEC.md 34.5.3): a HEAD is a
-.top:                           ; chip's 64KB page, so a claim with one is a
-%endif                          ; DMA ring held only while it plays - and goes
-                                ; BOTTOM-UP, mem_claim_dma_x's own scan and
-                                ; page bump. CX = 0 asks no page of anything:
-                                ; the parts carve, the C overlay, a scratch -
-                                ; a block that is or may become a CS, so it
-                                ; stays at the top, SPEC.md 20.12.10.8
-    jmp short mem_claim_dma_x.head
-mem_claim_dma_x:
-    push si
-    push di
-    xor di, di
-.head:
-    push cx
-    mov si, cx
-    mov cl, 6
-    shl si, cl                  ; head KB -> paragraphs
-    pop cx
-    jnc .set
-    mov si, 0xFFFF              ; a head past 1MB: let the page test refuse it
-.set:                           ; rather than wrap into a plausible small one
-    jmp short mem_claim_x.go    ; DI is already this door's own answer, and
-                                ; there is no longer a TAG that can disagree
-                                ; with it: SPEC.md 50.6.1.1's defect was a
-                                ; purgeable claim reaching the scan without
-                                ; passing the direction test, and 50.6.1 has
-                                ; since deleted the test. A door that asks
-                                ; nothing cannot skip the asking
+; (mem_claim_dma_x and mem_claim_dma_hi_x, the KB DMA doors' near bodies,
+; went with the package doors at the flag day, kernel size pass 19: a head is
+; asked in PARAGRAPHS now, through mem_claimp_dma_x or OSAPI_MEM_P, and the
+; KB head's shift - which made CX = 2048KB no page rule at all, BR-105 - had
+; no caller left.)
 mem_claim_hi_x:
     push si
     push di
@@ -2222,7 +2200,7 @@ mem_can_move:
 .frameless:                     ; (mem_can_move.frameless: the name SPEC.md
                                 ; 66.6.1 and 66.4.3.2 use for this predicate)
     mov ax, bx                  ; the slot to its record - inst_ptr's own job
-    call KERNEL_SEG:cw_inst_ptr ; (mem_is_region's own shim); AH is 0 by the
+    KDOOR inst_ptr              ; (mem_is_region's own shim); AH is 0 by the
                                 ; cmp bx, INST_MAX / jae above
     cmp byte [di+I_TASK], 0xFF
     je .fmseg                   ; no worker at all: SPEC.md 66.6.1's own case
@@ -2420,7 +2398,7 @@ mem_is_region:
     push ax
     push di
     mov ax, bx                  ; the slot to its record - inst_ptr's own job
-    call KERNEL_SEG:cw_inst_ptr ; (SPEC.md 29.4), and the shim already exists.
+    KDOOR inst_ptr              ; (SPEC.md 29.4), and the shim already exists.
                                 ; mem_can_move has tested cmp bx, INST_MAX /
                                 ; jae before calling, so AH is 0 - and inst_ptr
                                 ; zeroes it anyway
@@ -5076,6 +5054,7 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; AL = the caller's own level otherwise, and
                                 ; only caches BELOW it count (SPEC.md 50.6.4)
     call mem_avail_lvl_p        ; ...in KB, which is the paragraph answer below
+mem_avail_kbdn:                 ; (AX and BX paragraphs -> KB: the what-if's)
     push cx                     ; ROUNDED DOWN: a claim of the answer must
     mov cl, 6                   ; always fit. OSAPI_MEM_P's avail takes the
     shr ax, cl                  ; paragraphs themselves (SPEC.md 50.3.7),
@@ -5415,43 +5394,38 @@ osapi_mem_hma_x:                    ; shared refusal, kernel size pass 12)
 %endif
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_claim - in: AX = KB, ES = the caller's segment (the stub's doing)
-;                   out: CF = 0 and DX = segment, CF = 1 refused
+; mmf_mem_claim_own - FAR, kernel-private: AX = KB, ES = the caller the claim
+;                     is FOR -> CF = 0 and DX = its base, CF = 1 refused;
+;                     every register kept but DX
 ;
-; The plain claim IS the DMA claim with no head to constrain, so it borrows the
-; body rather than repeating it - and it has to bank CX, which is the head
-; parameter there and one of the registers this slot promises to preserve.
-; ITS CELL'S FAR ENTRY IS THE BODY (SPEC.md 2.6.1): nothing near-calls it, so
-; it ends in `retf` and the `call / retf` shim that named it is gone.
+; The CONVENTIONAL claim a KB-counted cell makes on a package's behalf:
+; OSAPI_MEM_HUGE's (whose own retf is this one's, its CX framed underneath -
+; kernel size pass 16) and kern_mega's regrow MOVING a pool block down. It was
+; the far entry of OSAPI_MEM_CLAIM_DMA, and with OSAPI_MEM_CLAIM, _CLAIM_HI
+; and _CLAIM_DMA_HI it was a package door until the flag day withdrew all four
+; for OSAPI_MEM_P (kernel size pass 19, SPEC.md 20.3.1, 50.3.7). Every caller
+; left asks no 64KB page, so the head - and BR-105's shift of it, CX = 2048KB
+; arriving as no page rule at all - went with them.
 ; -----------------------------------------------------------------------------
-mmf_osapi_mem_claim:
-%ifdef KERN_MEGA
-    call COLD_SEG:mega_claimhf    ; OS88_HIGHMEM: above 1MB, if it can be
-    jc .conv
-    retf
-.conv:
-%endif
-    push cx                     ; no head: no 64KB page constraint, and the
-    xor cx, cx                  ; DMA door's own frame banks CX - so this is
-    SKIPF1                      ; that door with its `push cx` stepped over
-                                ; (test al, imm8: flags only, and no flag is
-                                ; an input there). It was `call` the door's
-                                ; near body and `pop cx / retf`, and the door
-                                ; had a far entry of its own besides (kernel
-                                ; size pass 16)
-mmf_osapi_mem_claim_dma:        ; THE DMA DOOR'S FAR ENTRY IS THE BODY: AX =
-    push cx                     ; KB, CX = the head's KB, ES = the caller.
-.pushed:                        ; Every register kept but DX
+%ifndef KERN_MEGA                ; OSAPI_MEM_HUGE's whole body on every other
+mmf_osapi_mem_huge:             ; kernel (its banner is below, at kern_mega's):
+    mov cx, 0x1000              ; OS88_HUGE_INCR, as the CX the frame pops on
+%endif                          ; the way out - so this retf is the cell's, CF
+                                ; and DX its answer. It FALLS IN: the cell is
+                                ; this routine's only caller there, so the
+                                ; jump past the `push cx` went, and the `xor
+                                ; cx, cx` that zeroed a DMA head nothing reads
+                                ; since the flag day (kernel size pass 19, -4)
+mmf_mem_claim_own:
+    push cx
     push bx
-%ifdef KERN_MEGA
-    jcxz .conv                  ; A HEAD, FROM AN OS88_HIGHMEM PACKAGE: a
-    call COLD_SEG:mega_claimdf  ; pool block below 16MB with the head inside
-    jnc .out                    ; one 64KB page, born pinned (KERN-MEGA-PLAN
-.conv:                          ; 14.160). No head - the plain door, a carve,
-%endif                          ; an overlay - stays conventional, as before
     call mem_own                ; BX = owner word = the calling segment
     jc .fail
-    call mem_claim_dma_x
+%ifdef KERN_MEGA
+    call mem_claim_x.low        ; (past the arm that offers a KERNEL cache
+%else                           ; the pool: an owner is no cache's tag)
+    call mem_claim_x
+%endif
     jmp short .out
 .fail:
     xor dx, dx
@@ -5460,50 +5434,18 @@ mmf_osapi_mem_claim_dma:        ; THE DMA DOOR'S FAR ENTRY IS THE BODY: AX =
     pop bx                      ; pop leaves CF alone, and so does retf
     pop cx
     retf
-
-; -----------------------------------------------------------------------------
-; osapi_mem_claim_dma - in: AX = KB, CX = KB of the head that must not cross a
-;                       64KB physical boundary, ES = the caller's segment
-;                       out: CF = 0 and DX = segment, CF = 1 refused
-;
-; What an ISA DMA buffer asks for (SPEC.md 50.3/51.6). A driver reaches it
-; through the same slot table as everything else: mem_own accepts a driver's
-; image segment as an owner exactly as it accepts a package's region.
-; -----------------------------------------------------------------------------
-; ---- osapi_mem_claim_hi / _dma_hi - the same, from the TOP (SPEC.md 50.3.2)
-; What a driver's long-lived, hardware-addressed buffer asks for. A ring the
-; 8237 or a NIC holds the address of is exactly as unmovable as a package's
-; region, so it belongs at the same end - and out of the arena the compactor
-; and every data claim share.
-; -----------------------------------------------------------------------------
-mmf_osapi_mem_claim_hi:         ; (the cell's far entry, as mmf_osapi_mem_claim)
 %ifdef KERN_MEGA
-    call COLD_SEG:mega_claimhf    ; (the same: "from the top" means nothing
-    jc .conv                        ; to a pool block)
-    retf
-.conv:
-%endif
-    push cx
-    xor cx, cx                  ; no head: no 64KB page constraint
-    jmp short mmf_osapi_mem_claim_dma_hi.pushed
-
-mmf_osapi_mem_claim_dma_hi:     ; ...and the top-down DMA door's, the same
-    push cx                     ; body down to the claim and the same tail
-.pushed:
-    push bx
-%ifdef KERN_MEGA
-    jcxz .conv                  ; (the same pool arm: "from the top" means
-    call COLD_SEG:mega_claimdf  ; nothing to a pool block, and a head here
-    jnc mmf_osapi_mem_claim_dma.out ; is taken bottom-up anyway, 14.55)
-.conv:
-%endif
+mmf_mem_claim_ownhi:            ; ...and from the TOP: the bridge's
+    push cx                     ; conventional piece (mega.inc, MC5 and
+    push bx                     ; 14.169)
     call mem_own
-    jc mmf_osapi_mem_claim_dma.fail
-    call mem_claim_dma_hi_x
-    jmp short mmf_osapi_mem_claim_dma.out
+    jc mmf_mem_claim_own.fail
+    call mem_claim_hi_x
+    jmp short mmf_mem_claim_own.out
+%endif
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_huge - OSAPI_MEM_HUGE (0x04C5, KERN-MEGA-PLAN 14.1 answers 6, 7):
+; osapi_mem_huge - OSAPI_MEM_HUGE (a door cell, KERN-MEGA-PLAN 14.1 answers 6, 7):
 ; in:  AX = KB (1..65535), ES = the caller's segment
 ; out: CF = 0, DX = the claim's first segment or selector and CX = the STEP to
 ;      the next 64KB of it: 1000h for a conventional claim on every kernel,
@@ -5511,8 +5453,8 @@ mmf_osapi_mem_claim_dma_hi:     ; ...and the top-down DMA door's, the same
 ;      OS88_HIGHMEM package's, mega_hugef). CF = 1 refused. Freed with
 ;      OSAPI_MEM_FREE and DX, as any claim
 ; -----------------------------------------------------------------------------
-mmf_osapi_mem_huge:
 %ifdef KERN_MEGA
+mmf_osapi_mem_huge:
     or ax, ax                   ; AX = 0 ASKS (KERN-MEGA-MEMORY-PLAN MC5):
     jnz .claim                  ; the most one claim gets - the heap's, and
     cmp bx, MEMH_AVAIL          ; in protected mode the pool's and the
@@ -5535,13 +5477,18 @@ mmf_osapi_mem_huge:
     clc
     retf
 .claim:
+    cmp bx, MEMH_REGROW         ; BX = MEMH_REGROW: DX's POOL claim (a run or
+    jne .new                    ; a bridge) regrown to AX KB - past 1,023KB,
+    call mem_ishidx             ; which OSAPI_MEM_P's paragraphs cannot say
+    jc .bret                    ; (megargw's L3, RunCPM's files). Any other
+    jmp osapi_mem_regrow_x      ; claim: CF = 1. (Its retf is the cell's)
+.new:
     call COLD_SEG:mega_hugef        ; above 1MB, if it can be
     jc .conv
     retf
 .conv:
     push ax
-    xor cx, cx                  ; no head: no 64KB page constraint
-    call COLD_SEG:mmf_osapi_mem_claim_dma ; (the door's far entry)
+    call COLD_SEG:mmf_mem_claim_own ; (the conventional KB claim)
     pop cx                      ; (the KB, for the bridge)
     jnc .cgot
     xchg ax, cx                 ; AX = the KB, CX = the heap's refusal
@@ -5565,12 +5512,7 @@ mmf_osapi_mem_huge:
 .hrm:
     mov cx, 0x1000              ; OS88_HUGE_INCR (mov leaves CF)
     retf
-%else
-    mov cx, 0x1000              ; OS88_HUGE_INCR, as the CX the door's frame
-    push cx                     ; pops on the way out - so the door's own retf
-    xor cx, cx                  ; is this cell's, CF and DX its answer (kernel
-    jmp short mmf_osapi_mem_claim_dma.pushed   ; size pass 16)
-%endif
+%endif                          ; (every other kernel: mmf_mem_claim_own)
                                 ; (ODD on every kernel, and so is mem_claim_1's
                                 ; range test above: the two cancel, and
                                 ; dsk_xfer and the hot disk routines after
@@ -5582,7 +5524,7 @@ mmf_osapi_mem_huge:
 ; osapi_mem_free - in: DX = segment, ES = the caller's segment
 ;                  out: CF = 0 released, CF = 1 refused (not yours)
 ; -----------------------------------------------------------------------------
-mmf_osapi_mem_free:             ; (the cell's far entry, as mmf_osapi_mem_claim)
+mmf_osapi_mem_free:             ; (the cell's far entry IS the body)
 %ifdef KERN_MEGA
     call mem_ishidx             ; a pool SELECTOR (mega_claimhf): its block
     jc .conv                    ; and the selector go back together
@@ -5614,26 +5556,19 @@ mmf_osapi_mem_free:             ; (the cell's far entry, as mmf_osapi_mem_claim)
     retf
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_regrow - in: DX = the claim, AX = new size in KB, ES = the
-;                    caller's segment; out: mem_regrow's, CF=1 if not yours
+; osapi_mem_regrow_x - FAR, kern_mega's alone: a POOL block's regrow, in KB -
+;                      DX = the selector, AX = the new KB, ES = the caller;
+;                      out CF = 0 and DX = the claim now, CF = 1 refused.
+;                      OSAPI_MEM_P's MEMP_REGROW reaches it for a pool block
+;                      (an OS88_HIGHMEM claim), which counts in KB
 ;
-; The slot needs this wrapper for the same reason osapi_mem_free does, and
-; went without it: mem_regrow's fence is `cmp [ss:si+MC_OWN], bx`, and nothing
-; put an owner in BX. OSAPI_XSTUB stamps ES from the caller's DS and stops
-; there, so what the fence actually compared was whatever the package left in
-; BX - a size, a loop counter - against an owner segment. It never matched,
-; so the slot ALWAYS answered CF=1 and no package could resize a claim.
-;
-; apps/paint is the one shipped caller and passes BX = the KB it wants, so
-; its fragmentation fallback - the entire reason mem_regrow was written - has
-; never once run. That is the failure mode of a fence with an implicit input:
-; the refusal is indistinguishable from an honest "no room", which is exactly
-; what the caller reports and the user believes.
+; It was OSAPI_MEM_REGROW's body on every kernel until the flag day withdrew
+; the KB doors (kernel size pass 19, SPEC.md 20.3.1): the conventional half
+; is mem_regrowp's under OSAPI_MEM_P, and only the pool's is left here - with
+; osapi_mem_regrow_c, the far entry mega_hgcpr regrows a run's piece through.
 ; -----------------------------------------------------------------------------
-osapi_mem_regrow_x:
 %ifdef KERN_MEGA
-    call mem_ishidx             ; a pool SELECTOR (mega_claimhf, OS88_HIGHMEM):
-    jc .conv                    ; resized in the pool, the selector kept...
+osapi_mem_regrow_x:
     call COLD_SEG:mega_claimregrowf
     jc .huge
     retf
@@ -5652,11 +5587,7 @@ osapi_mem_regrow_x:
     jc .mfail
     xchg ax, cx                 ; AX = new, CX = old
     mov bx, dx                  ; BX = the selector
-    push cx
-    xor cx, cx
-    call COLD_SEG:mmf_osapi_mem_claim_dma ; (the DMA door's far entry: DX =
-                                ; the new segment, CX kept)
-    pop cx
+    call COLD_SEG:mmf_mem_claim_own ; (DX = the new segment, CX kept)
     jc .mback
     mov si, cx
     mov cl, 9
@@ -5688,16 +5619,7 @@ osapi_mem_regrow_x:
     pop bx
     pop ax
     retf
-.conv:
-    cmp byte [mega_on], 0       ; PROTECTED MODE: a claim mega_hugec made a
-    je osapi_mem_regrow_c       ; RUN over is regrown with its windows (F8)
-    call COLD_SEG:mega_hugecrgf
-    jnc .rr
-    jnz osapi_mem_regrow_c      ; (ZF = 0: no run - the plain regrow)
-.rr:
-    retf                        ; (CF = 1 with ZF = 1: a run, refused)
 osapi_mem_regrow_c:             ; (a far entry: the run's piece, mega_hgcpr)
-%endif
     push bx
     call mem_own                ; BX = the owner ES names (CF=1 = not a
     jc .out                     ; region or driver image we know)
@@ -5706,7 +5628,6 @@ osapi_mem_regrow_c:             ; (a far entry: the run's piece, mega_hgcpr)
     pop bx                      ; pop leaves CF and DX alone
     retf
 
-%ifdef KERN_MEGA
 ; mem_hrecf - FAR (mega.inc's huge regrow, MEGA-HUGE-PLAN F8): DX = a claim's
 ; value, ES = the caller -> CF = 0, AX = its KB and CX = its MC_RLOC (CX =
 ; FFFFh in: read; anything else is written first); CF = 1 it is no claim of
@@ -5736,32 +5657,37 @@ mem_hrecf:
 %endif
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_p - OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7): the claim heap counted
-;               in PARAGRAPHS, for a caller whose size is a byte count
+; osapi_mem_p - OSAPI_MEM_P (a door cell, SPEC.md 50.3.7): the claim heap counted
+;               in PARAGRAPHS, the one unit (kernel size pass 19)
 ; in:  BL = MEMP_CLAIM (0, bottom up) or MEMP_CLAIM_HI (1, top down):
-;           AX = paragraphs, CX = the 64KB-page-safe HEAD in paragraphs, 0 =
-;           none -> CF=0, DX = the base, AX = the paragraphs GRANTED (the
-;           request rounded up to the granule: the slack is the caller's)
+;           AX = paragraphs -> CF=0, DX = the base, AX = the paragraphs
+;           GRANTED (the request rounded up to the granule: the slack is the
+;           caller's). CX is not read
 ;           | MEMP_CPU (2): no int 13h lands in it, so its base need not be
 ;           512-aligned - on a granule of 512 every base is anyway
+;           | MEMP_CONV (80h): CX = the 64KB-page-safe HEAD in paragraphs, 0 =
+;           none, and the claim stays CONVENTIONAL on kern_mega
+;           | MEMP_CONV | MEMP_DMAPOOL (C0h): the same, but on kern_mega in
+;           protected mode an OS88_HIGHMEM package's claim and head (not 0)
+;           of 64KB or less are a PINNED POOL block, the head inside one 64KB
+;           page (mega_claimdf, KERN-MEGA-PLAN 14.160), as the withdrawn KB
+;           DMA doors gave; anywhere else, or refused there, as MEMP_CONV
 ;      BL = MEMP_REGROW (4): DX = your claim, AX = paragraphs -> as
 ;           OSAPI_MEM_REGROW, AX = the paragraphs granted
-;      BL = MEMP_AVAIL (5), or anything past it: out AX = the largest claim
-;           you can have and BX = the total, in paragraphs, as OSAPI_MEM_AVAIL
-;           at the caller's floor; CX = MEM_GRAN, the granule every size is
-;           rounded to
+;      BL = MEMP_AVAIL (5): out AX = the largest claim you can have and BX =
+;           the total, in paragraphs, as OSAPI_MEM_AVAIL at the caller's floor
 ;      ES = the caller's segment (the X stub), the same fence as every claim
 ; out: CF=1 refused, and a CLAIM or REGROW verb's AX is then the request
 ;      rounded up to the granule - what was asked for, as the door counts it.
-;      Every register not named is preserved, CX (MEMP_CONV and all) included
+;      Every register not named is preserved, CX included
 ;
-; ONE CELL AND FOUR VERBS where the KB doors are five cells, because the KB
-; doors are what every .o88 built so far calls and these are what a package
-; written from now on should. A verb is a register a cell need not cost (SPEC.md
-; 20.3), and the DMA variants fold in: a head of 0 IS the plain claim, so the
-; head is always CX and only the direction is the verb's bit 0.
+; ONE CELL AND FOUR VERBS where the KB doors were five cells and a KB arm.
+; A verb is a register a cell need not cost (SPEC.md 20.3), and the DMA
+; variants fold in: a head is only read under MEMP_CONV, which is also what
+; keeps a block conventional on kern_mega, so a plain claim's site sets BL
+; and nothing else.
 ;
-; On kern_mega the arm below offers the POOL first, as the KB doors do; a
+; On kern_mega the arm below offers the POOL first, as the KB doors did; a
 ; claim it declines is the conventional heap's.
 ; -----------------------------------------------------------------------------
 osapi_mem_p:
@@ -5772,24 +5698,24 @@ osapi_mem_p:
     ; does not take - so this arm only ADDS the pool, never removes the
     ; paragraph door. The pool counts in KB, so a pool claim is granted the
     ; KB that covers it: conventional memory is what the granule is for. A
-    ; DMA head stays conventional: THE door for a page-safe buffer a
-    ; real-mode path names, where the KB DMA doors give an OS88_HIGHMEM
-    ; package's head a pool block (KERN-MEGA-PLAN 14.160).
+    ; MEMP_CONV claim stays conventional: THE door for a page-safe buffer or
+    ; a block a real-mode path names, or one that is or will be a CS (the
+    ; parts' carve and their fetches, the C overlay - KERN-MEGA-PLAN 14.160)
+    ; - unless MEMP_DMAPOOL asks, with a head, for what the withdrawn KB DMA
+    ; doors gave an OS88_HIGHMEM package: a pinned pool block (14.160;
+    ; restored by kernel size pass 19's megacmp after C1 had made every such
+    ; head conventional)
+    or bl, bl                   ; MEMP_CONV is the sign
+    js .mdma
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
     je .mreg
-    jcxz .mpool                 ; ...and CX = MEMP_CONV (bit 15, no head) is
-    jmp short .gen              ; a caller that must stay CONVENTIONAL: the
-                                ; block is or will be a CS, or a real-mode
-                                ; path names it - the parts' carve and their
-                                ; fetches, the C overlay. Those used the DMA
-                                ; door with no head for exactly that, and this
-                                ; is that idiom kept
 .mpool:
     push ax
     call .kb                    ; AX = the KB that covers it
     call COLD_SEG:mega_claimhf
+.mpc:
     jc .mno
     add sp, 2
 .mkb:
@@ -5802,29 +5728,35 @@ osapi_mem_p:
 .mno:
     pop ax
     jmp short .gen
+.mdma:                          ; MEMP_CONV: conventional with the head CX...
+    test bl, MEMP_DMAPOOL       ; ...UNLESS MEMP_DMAPOOL: a head (none is
+    jz .gen                     ; conventional) is a pool block with the head
+    jcxz .gen                   ; inside one 64KB page, born pinned, for an
+    push ax                     ; OS88_HIGHMEM package (mega_claimdf), else
+    push cx                     ; the conventional head claim
+    call .kb
+    xchg ax, cx
+    call .kb
+    xchg ax, cx                 ; AX = the claim's KB, CX the head's
+    call COLD_SEG:mega_claimdf
+    pop cx
+    jmp short .mpc
 .mreg:
+    push ax
+    call .kb                    ; (in KB, both arms)
     call mem_ishidx             ; a POOL block: OSAPI_MEM_REGROW's own arm
     jc .mconv                   ; resizes it (or moves it down), in KB
-    push ax
-    call .kb
     call COLD_SEG:osapi_mem_regrow_x
-    jc .mno
-    add sp, 2
-    jmp short .mkb
+    jmp short .mpc
 .mconv:                         ; ...and so does it a conventional claim
     cmp byte [mega_on], 0       ; mega_hugec made a RUN over (MEGA-HUGE-PLAN
-    je .gen                     ; F8): the paragraph regrow would leave its
-    push ax                     ; windows as they were
-    call .kb
-    call COLD_SEG:mega_hugecrgf
-    jnc .mok
+    je .mno                     ; F8): the paragraph regrow would leave its
+    call COLD_SEG:mega_hugecrgf ; windows as they were
+    jnc .mpc
     jnz .mno                    ; (no run: the paragraph door's own)
     pop ax                      ; a run, refused
     stc
     retf
-.mok:
-    add sp, 2
-    jmp short .mkb
 .kb:
     push cx
     add ax, 63
@@ -5834,8 +5766,8 @@ osapi_mem_p:
     ret
 .gen:
 %endif
-    cmp bl, MEMP_AVAIL
-    jae .avail
+    cmp bl, MEMP_AVAIL          ; (signed: a MEMP_CONV claim is below it)
+    jge .avail
     add ax, MEM_GRAN - 1        ; THE ANSWER IS WHAT WAS GRANTED: the door
     and ax, -MEM_GRAN           ; rounds to the same granule, so rounding here
                                 ; first changes nothing it does and is the
@@ -5849,25 +5781,22 @@ osapi_mem_p:
     mov di, bx
     and di, 1                   ; bit 0 -> MC_DMA_HI, the top-down door
     ror di, 1
-    mov si, cx                  ; SI = the head, with MEMP_CONV off: it only
-    and si, 0x7FFF              ; steers kern_mega's arm above, and the
-                                ; caller's CX is KEPT (it was masked in
-                                ; place, against "every register kept").
-                                ; ZF = no head
+    xor si, si                  ; SI = the head: none...
+    or bl, bl
+    jns .nh
+    mov si, cx                  ; ...or MEMP_CONV's CX
 %ifdef KERN_MEGA
-    jz .mtop                    ; ...EXCEPT A RING, as mem_claim_dma_hi_x
-                                ; (KERN-MEGA-PLAN 14.55, SPEC.md 50.3.2): a
-    xor di, di                  ; HEAD is a chip's 64KB page, held only while
-.mtop:                          ; it plays, so on kern_mega it goes BOTTOM-UP
+    jcxz .nh                    ; ...EXCEPT A RING, as mem_claim_dma_hi_x
+    xor di, di                  ; (KERN-MEGA-PLAN 14.55, SPEC.md 50.3.2): a
+                                ; HEAD is a chip's 64KB page, held only while
+                                ; it plays, so on kern_mega it goes BOTTOM-UP
                                 ; - SOUND.DRV's staging pool is the one that
                                 ; asks here, and the KB door took it low. A
                                 ; claim with no head keeps the top: a carve,
                                 ; an overlay, an index - a block that is or
-                                ; may become a CS. Bit 15, MEMP_CONV, is off
-                                ; SI already (the `and si` above), so a
-                                ; conventional request is not taken for a
-                                ; head
+                                ; may become a CS
 %endif
+.nh:
 %ifdef MEM_ALIGN_CLASS
     test bl, MEMP_CPU           ; ...and DISK unless the caller says no int
     jnz .cpu                    ; 13h will land in it
@@ -5895,19 +5824,18 @@ osapi_mem_p:
     call mem_rank_top           ; an ordinary claim's rank, net of THIS TASK's
                                 ; floor - mmf_osapi_mem_avail's question
     call mem_avail_lvl_p
-    mov cx, MEM_GRAN
     retf
 .kparts:
     mov ax, SKB_FAT             ; the resident FAT window (18.8)...
     mov bx, SKB_STK             ; ...the background task slices...
     mov cx, SKB_STK0            ; ...and task 0's stack. Build constants: the
     retf                        ; image row is the kernel less these, and it
-                                ; is the only one that moves at run time.
-                                ; (Fifteen bytes, which is what took the
-                                ; parity pad MEMP_CONV's mask needed: the hot
+                                ; is the only one that moves at run time
+    nop                         ; PARITY PAD, never executed: the hot
                                 ; `.cold` routines past this - dsk_xfer,
                                 ; dsk_runcap, dsk_next_clus_x - keep their
-                                ; measured parity, tests/unit/t_hotpar.py)
+                                ; measured parity (tests/unit/t_hotpar.py)
+
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_movable - in: DX = the claim, AX = your relocation proc (0 pins it
@@ -5957,7 +5885,7 @@ osapi_mem_movable_x:
 
 %ifdef OS88_COMPACT
 ; -----------------------------------------------------------------------------
-; osapi_mem_compact - API slot 0x0443: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
+; osapi_mem_compact - a door cell: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
 ;        MEMC_WHATIF (0): AL = a purge level, answered as OSAPI_MEM_AVAIL
 ;                         would answer at that level
@@ -6018,11 +5946,13 @@ osapi_mem_compact_x:
     push es                     ; THE WHAT-IF: the caller's segment is the one
     pop word [mem_cp_self]      ; the walk excuses...
     or ah, ah                   ; MEMC_WHATIF_P (2): the same walk's own
-    jz .kb                      ; PARAGRAPHS, before the KB rounding - for a
-    call mem_avail_lvl_p        ; caller that prints the half-K the heap is
-    jmp short .wd               ; counted in (the Task Manager, 28.4.1)
-.kb:
-    call mem_avail_lvl_x        ; ...AT THE CALLER'S LEVEL (SPEC.md 66.4.3.2):
+    call mem_avail_lvl_p        ; PARAGRAPHS, before the KB rounding - for a
+    jnz .wd                     ; caller that prints the half-K the heap is
+                                ; counted in (the Task Manager, 28.4.1). The
+                                ; walk's popf hands the `or`'s ZF back (its
+                                ; .nested arm's xor sets ZF, and a 0 is 0 in
+                                ; either unit - kernel size pass 19, -2)
+    call mem_avail_kbdn         ; ...AT THE CALLER'S LEVEL (SPEC.md 66.4.3.2):
                                 ; the what-if and the claim beside it must be
                                 ; answers to the same question
 .wd:
@@ -6288,12 +6218,13 @@ mem_owner_of_x:
 ; -----------------------------------------------------------------------------
 
 ; =============================================================================
-; osapi_claim_snapshot - API slot 0x0216: the whole claim table into the caller's
+; osapi_claim_snapshot - a door cell: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
 ; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
-; out: AX = MEM_MAX; the buffer filled; DI unchanged
-; clobbers: AX (output) and the flags
+; out: the buffer filled (MEM_MAX records, this kernel's); DI unchanged
+; clobbers: the flags. The AX = MEM_MAX answer was withdrawn at kernel
+;      size pass 19 (nogrow, -3 bytes): one test read it
 ;
 ; Whole rather than per record because both things a memory map does with
 ; this table want all of it: it walks every record to draw a band, and hashes
@@ -6310,9 +6241,9 @@ mem_owner_of_x:
 %error "a claim record is no longer its own snapshot prefix - the copy below"
 %endif
 mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
-    push cx                     ; NO DS BANK: the one door in is the RCSLOT
-                                ; cell, whose api_rsc banks and restores DS
-                                ; round this whole body (size pass 10)
+    push cx                     ; NO DS BANK: the one door in is the RCS door
+                                ; kind, which banks and restores DS round
+                                ; this whole body (size pass 10)
     push si
     push di
     push ss                     ; DS = LOW_SEG for the duration: the claim map
@@ -6331,11 +6262,10 @@ mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
     pop di
     pop si
     pop cx
-    mov ax, MEM_MAX
     retf
 
 ; =============================================================================
-; osapi_sys_kb - API slot 0x021C: what the KERNEL occupies and what the heap
+; osapi_sys_kb - a door cell: what the KERNEL occupies and what the heap
 ;                holds, in KB (SPEC.md 20.9/2/50)
 ;
 ; in:  ES:DI = a SYSKB_SIZE buffer the caller owns

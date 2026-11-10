@@ -242,7 +242,7 @@ sc_walk:
     pop es
     mov si, sc_s_nf
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     stc                         ; CF = 1: NOT FOUND, which stik_boot reads
     ret                         ; (SPEC.md 26.8.5) and desk_open does not
 
@@ -404,7 +404,7 @@ lnk_open:
 
 ; -----------------------------------------------------------------------------
 ; osapi_arg_text - a link's parameter for the program it started (0x04DD,
-;                  SPEC.md 26.10.7). api_rsc's far body: DS = KDATA
+;                  SPEC.md 26.10.7). the door's RCS kind's far body: DS = KDATA
 ; in:  nothing
 ; out: CF=1 none - every launch but a link's; CF=0 with DX:SI -> the NUL text,
 ;      in the link's record on task 0's stack, alive until the entry returns
@@ -543,7 +543,7 @@ sc_rclick_x:
     mov cx, di
     mov dx, si
     mov ax, 1
-    call KERNEL_SEG:cw_menu_popup
+    KDOOR menu_popup
     pop ax                      ; `pop` writes no flag: the pick's CF stands
     jc .u
 %ifdef OS88_IMG
@@ -1391,7 +1391,7 @@ sc_m_move:
     call sc_m_xor    ; the outline is up from here on
 .track:
     mov di, ui_ev               ; THE RELEASE IS AN EVENT, and the mouse ISR
-    call KERNEL_SEG:cw_evq_mup  ; queued it with the point it happened at -
+    KDOOR evq_mup               ; queued it with the point it happened at -
     jnc .drop                   ; which matters most HERE, because the hand
                                 ; drags WHILE this image is read off the
                                 ; floppy and has often let go before the
@@ -1443,30 +1443,41 @@ sc_m_move:
 
 ; -----------------------------------------------------------------------------
 ; sc_m_pdel - SC_OP_PDEL: a PACKAGE's OSAPI_DESK_ITEM remove (SPEC.md 26.9.6)
-; in:  AL = the zone its add answered, or 0xFF: a Sticky App's remove by name
-;      (SPEC.md 110.2); DX:CX = the caller's SC_REC record
+; in:  DX:CX = the caller's SC_REC record - and nothing else: the record IS
+;      the name (ABI-BREAK-LIST C10, kernel size pass 19)
 ; out: AL = 0 removed, 0xFF refused
 ;
 ; A ZONE IS NOT AN IDENTITY: the row a user's Delete frees is the next one a
 ; drag-out gets, and the boot reader compacts them. So the remove names the
-; LINK - the row goes only while its volume and path are still the record's,
-; and a shortcut the user made in that zone since is nobody's to take.
+; LINK - the first row whose volume and path are the record's. A Sticky App
+; record (+3 = SC_STIK) is found by its path's FINAL component among the
+; Sticky App rows (SPEC.md 110.2), then held to the same check. It took the
+; zone the add answered in AH until pass 19, which named nothing the record
+; did not and cost WIN16 a sixteen-zone probe loop to find its own link.
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
-    cmp al, 0xFF                ; AH = 0xFF at the door: a Sticky App's remove BY
-    jne .z                      ; NAME (SPEC.md 110.2) - its zone is found,
-    call sc_m_dfind             ; then the same check as any remove
-    jc .no
-.z:
-    mov ah, al
-    sub ah, DESK_SC0
-    cmp ah, [sc_nrows]
-    jae .no
+    mov es, dx
+    mov di, cx
+    cmp byte [es:di+SC_R_STIK], SC_STIK
+    jne .scan                   ; a Sticky App's remove is BY NAME (110.2):
+    call sc_m_dfind             ; its zone is found, then the same check as
+    jc .no                      ; any remove
     call sc_m_same
     je sc_m_del
 .no:
     mov al, 0xFF
     ret
+.scan:
+    mov al, DESK_SC0
+.z:
+    mov ah, al
+    sub ah, DESK_SC0
+    cmp ah, [sc_nrows]
+    jae .no
+    call sc_m_same              ; AL kept
+    je sc_m_del
+    inc ax
+    jmp short .z
 
 ; -----------------------------------------------------------------------------
 ; sc_m_del - SC_OP_DEL: Remove Shortcut from any of its three routes, and a
@@ -2013,7 +2024,7 @@ ovl_sc_load:
     push ss
     pop es
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     add sp, 18
     jmp short .root
 .endf:
@@ -2023,7 +2034,7 @@ ovl_sc_load:
     pop es
     mov si, as_s_skip
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show   ; COPIED, so a `.boot3` string outlives it
+    KDOOR toast_show                ; COPIED, so a `.boot3` string outlives it
 %endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where

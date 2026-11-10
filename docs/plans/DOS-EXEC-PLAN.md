@@ -1310,7 +1310,7 @@ the phase's shape, and there are three answers:
    `make emu`'s shape (SPEC.md 9.11.7): `int 13h`, the FAT driver and the
    volume layer, with no window manager, no drawing, no scheduler. The file
    system and the window system are 69% of the kernel between them
-   (docs/plans/KERN-SMALL-CUT-PLAN.md), so this is not a small subtraction —
+   (docs/plans/retired/KERN-SMALL-CUT-PLAN.md), so this is not a small subtraction —
    plausibly 30–40 KB, leaving DOS ~600 KB. Most work, most capability, and a
    third kernel to maintain.
 2. **The shim carries its own FAT reader.** `DOS.O88` stops being a package for

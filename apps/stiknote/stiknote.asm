@@ -245,11 +245,8 @@ sn_entry:
     jc .out
     OS88_REGION_MOVABLE sn_ret
     mov al, 1
-    call OSAPI_WM_KEEPH         ; a fixed layout: hang over the dock, never cut
     mov si, sn_menus
     call OSAPI_MENU_SET
-    mov si, sn_about
-    call OSAPI_ABOUT_SET
     call stik_made              ; MAKE, the prefilters, the tick
     xor al, al                  ; the note the file names, or the first
     call sn_read
@@ -569,16 +566,18 @@ sn_flip:
     mov si, sn_s_big
     cmp dx, SN_MAXKB
     ja .say
+    mov cl, 6                   ; AX = the KB in paragraphs (BX is
+    shl dx, cl                  ; written before it is read on every path)
     xchg ax, dx
-    call OSAPI_MEM_CLAIM        ; DX = it; AX kept
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = it, AX = the paragraphs granted
     jc .ns
     push dx
     mov es, dx
     xor bx, bx
-    xor cx, cx
-    mov ch, al
-    shl ch, 1
-    shl ch, 1                   ; CX = the KB x 1024
+    mov cl, 4
+    shl ax, cl
+    xchg ax, cx                 ; CX = the bytes it holds
     xor dx, dx
     mov si, STIK_PAY + SNP_NAME
     call OSAPI_FILE_READ        ; DX:AX = its size
@@ -806,7 +805,12 @@ sn_about:
 ; --- the pad's window (SPEC.md 110.11, 110.13) --------------------------------
 snp_tpl:
     dw 167, 260, 194, 172       ; stik_load sizes and places it (STIK_RIGHT)
-    dw sn_title, snp_paint, snp_onkey, 0
+    dw sn_title, snp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; The press, the release, the wake, the tick and the close are os88stik.inc's
+    OS88_CLASS snp_cls, WF_KEEPH, PAINT, snp_paint, ONKEY, snp_onkey, \
+               ONCLICK, stik_click, ABOUT, sn_about, ONWAKE, STIK_WAKE, \
+               ONCLOSE, stik_close, ONMOUSEUP, stik_mup, ONTIMER, stik_tick
 
 sn_title:   db 'Sticky Note', 0
 

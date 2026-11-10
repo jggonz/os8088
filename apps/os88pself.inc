@@ -93,16 +93,23 @@ op_self:
     and bx, 0FE00h              ; BX = R, where the read lands
     add ax, bx                  ; R + the read: the claim
     jc .no6
-    add ax, 1023
+    add ax, 15
     rcr ax, 1                   ; (the carry back in)
-    mov al, ah
-    xor ah, ah
-    shr ax, 1                   ; AX = KB, rounded up - under 65, so AH = 0
-    cmp al, [bp+1]              ; ...and never under the caller's floor (AH,
-    jae .kb                     ; banked with the format; [bp] is SS's, and
-    mov al, [bp+1]              ; so is this frame)
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1                   ; AX = PARAGRAPHS, rounded up
+    mov dh, [bp+1]              ; ...and never under the caller's floor (AH,
+    xor dl, dl                  ; banked with the format, in KB; [bp] is
+    shr dx, 1                   ; SS's, and so is this frame): DX = it in
+    shr dx, 1                   ; paragraphs
+    cmp ax, dx
+    jae .kb
+    xchg ax, dx
 .kb:
-    call OSAPI_MEM_CLAIM        ; DX = the claim
+    push bx                     ; (BX = R, below)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the claim
+    pop bx
     jc .no6
     push dx                     ; [bp-8]
     mov es, dx

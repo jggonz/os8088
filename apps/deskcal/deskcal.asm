@@ -371,15 +371,12 @@ dc_entry:
     mov [dc_win], bx
     OS88_REGION_MOVABLE_NOKEEP dc_entry.out ; AX, DX spent: the proc is a ret
     mov al, 1
-    call OSAPI_WM_KEEPH         ; a fixed layout: hang over the dock, never cut
     call dc_compact             ; TALL / MID show both lists: no page
     je .m                       ; to choose, so no Show item (the layout
     dec word [dc_menus_list + AMENU_NITEM]  ; is the session's)
 .m:
     mov si, dc_menus
     call OSAPI_MENU_SET
-    mov si, dc_about
-    call OSAPI_ABOUT_SET
     call dc_menulive            ; the greyed items, as the payload stands
     call stik_made              ; LAST: MAKE, the prefilters, the tick
     clc
@@ -1796,7 +1793,12 @@ dc_keys:
 ; --- the window (SPEC.md 110.3, 110.11) --------------------------------------
 dc_tpl:
     dw 375, 42, 178, 357        ; stik_load sizes and places it (STIK_RIGHT)
-    dw dc_title, dc_paint, dc_onkey, 0
+    dw dc_title, dc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; The press, the release, the wake, the tick and the close are os88stik.inc's
+    OS88_CLASS dc_cls, WF_KEEPH, PAINT, dc_paint, ONKEY, dc_onkey, \
+               ONCLICK, stik_click, ABOUT, dc_about, ONWAKE, stik_wake, \
+               ONCLOSE, stik_close, ONMOUSEUP, stik_mup, ONTIMER, stik_tick
 
 dc_title:   db 'Desk '                 ; ...whose tail is the Calendar
 dc_m_cal:   db 'Calendar', 0           ; menu's title

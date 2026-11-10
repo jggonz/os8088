@@ -491,7 +491,10 @@ sc_man_expand:
     jz .unknown
     mov ax, dx
     push ax
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the segment
     pop ax
     jc .unknown
     push dx                         ; the claim

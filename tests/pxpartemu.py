@@ -32,7 +32,8 @@ import struct
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 try:
-    from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE
+    from unicorn import (Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE,
+                         UC_HOOK_INTR)
     from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_BX,
                                    UC_X86_REG_CX, UC_X86_REG_DX,
                                    UC_X86_REG_SI, UC_X86_REG_DI,
@@ -83,6 +84,20 @@ def api_cells():
                    r"%define\s+(OSAPI_\w+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)", 16)
 
 
+# A RARE cell is no table cell since T5 (kernel size pass 19, SPEC.md
+# 20.3.4): `call OSAPI_x` assembles to `int OS88_RARE / db <index>`, so a
+# part that calls one reaches PxPart._door, which steps past the index byte
+# and answers through PxPart.doors (index -> callable(mu)). The index is read
+# off the SDK's generated CELL KINDS block, as the part was assembled with it.
+RARE_VEC = 0x81                         # OS88_RARE (apps/os88api.inc)
+
+
+def door_cells():
+    return _parsed("door", os.path.join(ROOT, "apps", "os88api.inc"),
+                   r"%xdefine\s+(OSAPI_\w+)\s+__OSAPI_RARE\s+"
+                   r"(0x[0-9A-Fa-f]+|\d+)", 0)
+
+
 class PxPart:
     def __init__(self, part, link=None):
         self.syms = link_syms(link)
@@ -102,9 +117,28 @@ class PxPart:
         self.heap = HEAP
         self.mu.hook_add(UC_HOOK_CODE, self._cell,
                          begin=KSEG * 16, end=KSEG * 16 + 0xFFFF)
+        self.door_ix = door_cells()
+        self.doors = {}                 # door index -> callable(mu)
+        # OSAPI_MEM_FREE and OSAPI_MEM_MOVABLE: no-ops, as the bare `retf`
+        # each table cell was before T5 (the claims are a bump allocator
+        # here, and nothing compacts)
+        for n in ("OSAPI_MEM_FREE", "OSAPI_MEM_MOVABLE"):
+            self.doors[self.door_ix[n]] = lambda mu: None
+        self.mu.hook_add(UC_HOOK_INTR, self._door)
         self.steps = 0
 
     # --- the kernel, as far as a part can tell ----------------------------
+    def _door(self, mu, intno, _):
+        if intno != RARE_VEC:
+            raise RuntimeError("int %02Xh from the part" % intno)
+        ip = mu.reg_read(UC_X86_REG_IP)
+        ix = mu.mem_read(mu.reg_read(UC_X86_REG_CS) * 16 + ip, 1)[0]
+        mu.reg_write(UC_X86_REG_IP, (ip + 1) & 0xFFFF)
+        if ix not in self.doors:
+            raise RuntimeError("door index %02Xh (%s) is not modelled" % (
+                ix, [k for k, v in self.door_ix.items() if v == ix]))
+        self.doors[ix](mu)
+
     def _cell(self, mu, addr, size, _):
         off = addr - KSEG * 16
         if off == self.cells["OSAPI_GET_TICKS"]:

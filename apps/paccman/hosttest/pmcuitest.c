@@ -272,9 +272,26 @@ static void *hg_topwin;                 /* os88_wm_create makes the new
                                          * what the kernel does and what
                                          * pmc_frame's focus test reads */
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
 {
     (void) title;
+    h_cls = cls;
+    hg_snap = !(cls->style & OS88_WF_NOSNAP);   /* born snapped: the default */
     hg_setwin(x, y, w, h);
     hg_topwin = &hg_win_tag;
     return &hg_win_tag;
@@ -343,14 +360,6 @@ int os88_wm_damage(void *win, struct os88_rect *r)
     r->y2 = hg_dmg_y2;
     return 0;
 }
-void os88_wm_snap(void *win, int on)
-{
-    (void) win;
-    hg_snap = on;
-    hg_setwin(hg_wx, hg_wy, hg_ww, hg_wh);   /* it APPLIES, not just registers */
-}
-void os88_wm_keeph(void *win, int on)     { (void) win; (void) on; }
-void os88_wm_ownbg(void *win, int on)     { (void) win; (void) on; }
 void os88_wm_minsize(void *w, int a, int b) { (void) w; (void) a; (void) b; }
 void os88_wm_display(void *win, struct os88_video *v)
 {
@@ -366,7 +375,6 @@ void os88_menu_set(void *win, struct os88_menuset *set)
     hg_mset = set;
     set->oncmd = 1;                      /* the kernel writes this */
 }
-void os88_about_set(void *win)                     { (void) win; }
 /* The card only DRAWS - the app keeps the flag and the dismissal - so the two
  * stubs COUNT rather than paint. The pixel audit rebuilds the field from the
  * two RAMs, and a card modelled as pixels would make every audit after an

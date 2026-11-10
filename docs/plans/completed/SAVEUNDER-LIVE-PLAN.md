@@ -6,9 +6,9 @@
 > consumer.
 >
 > **Both verbs this study concluded were needed are published API:**
-> `OSAPI_WM_SAVEU` (slot 0x02A4) - the live "may I be banked?" answer that §1
+> `OSAPI_WM_SAVEU` (withdrawn in §11.104) - the live "may I be banked?" answer that §1
 > argues `WF_SAVEU` should have been all along - and `OSAPI_WM_BAND`
-> (slot 0x02D3), which §3 names as *"what is left for a colour game that wants
+> (a door cell), which §3 names as *"what is left for a colour game that wants
 > a paused cache"*. SPEC.md §11.96.11.4 is the fence they share, and
 > SPEC.md §11.96.11.2 and §11.96.11.3 are the band's lifetime and the 1bpp
 > case. **Paint is the worked consumer**: `pt_sucache` calls both
@@ -96,7 +96,7 @@ is safe, and it is the context `wm_clip_set` already calls it from.
 The other direction — a fetch completing, a game ending, a timer expiring — is
 discovered by the worker, and is the direction where being late costs nothing.
 So a worker can stage a byte and let the UI task set the flag on
-`OSAPI_WM_ONWAKE` (0x0458), which is `apps/ftpd`'s shape (SPEC.md §20.6 rule 7)
+`OSAPI_WM_ONWAKE` (0x042B), which is `apps/ftpd`'s shape (SPEC.md §20.6 rule 7)
 and needs no new rule.
 
 ### 2.1 …and if a worker sets it directly, it must hold the lock
@@ -203,7 +203,7 @@ silently get the feature on both 1bpp adapters and nothing on VGA, which is
 the machine with the memory to spare.
 
 This is Paint's problem with the adapters reversed (SPEC.md §11.96.11.3), and
-it has Paint's answer: `OSAPI_WM_BAND` (0x03A8). A **top** band of ~250 rows
+it has Paint's answer: `OSAPI_WM_BAND` (0x037B). A **top** band of ~250 rows
 fits under the ceiling on VGA (494 px ≈ 63 bytes a row × 4 planes = 252 bytes
 a row, so ~250 rows of the 373), and the app owes the bottom ~123 rows through
 `OSAPI_WM_DAMAGE`. That is still two thirds of the page body coming back as a

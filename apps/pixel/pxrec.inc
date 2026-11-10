@@ -136,11 +136,7 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
 ; PX_AVAIL routine - a call of px_avail / pe_avail on the ARM, of
 ; OSAPI_MEM_AVAIL itself in the shipped build (byte for byte what it was)
 %macro PX_AVAIL 1
-%ifdef PKG_MEGA
-    call %1
-%else
-    call OSAPI_MEM_AVAIL
-%endif
+    call %1                         ; (in KB on every build)
 %endmacro
 
 ; PX_HRUN - straight after the ARM's master claim (the master in px_claims,

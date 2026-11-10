@@ -756,13 +756,17 @@ void os88_onclick(int x, int y, void *win)
     cf_enter(win, 1, 1);
 }
 
+static struct os88_class cf_cls = {
+    OS88_CLASS_LEN, 0,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
 void *os88_main(void)
 {
     void *win;
 
-    win = os88_wm_create(CF_X, CF_Y, CF_W, CF_H, "C FSX Gate");
+    win = os88_wm_create(CF_X, CF_Y, CF_W, CF_H, "C FSX Gate", &cf_cls);
     if (win == 0)
         return 0;
-    os88_wm_snap(win, 1);
     return win;
 }

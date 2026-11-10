@@ -56,6 +56,18 @@ recorded as a bump, which is the system working) or `FAIL`:
      non-event rather than a failure, and it is driven by the release's own
      tools so its kernel's symbols resolve.
 
+ACROSS A BUMP - A NEW GENERATION. When leg B finds PKG_FMT moved since the
+release (kernel size pass 19's flag day: 10 -> 13, the table renumbered and
+the rare cells behind a door), nothing the release shipped is meant to run
+here, and the row asks the question that is left: is every one of them
+STOPPED at the version byte? Leg A and leg C then count the moved cells and
+changed constants as DECLARED (no release binary can reach them); leg D is
+unchanged; and leg F holds the tip to refusing, with LD_EVER, every package
+that opens on the release's own kernel - a window there is an old binary
+far-calling the renumbered table. Its red arm stamps one release package with
+THIS tree's PKG_FMT, which must then not be refused that way. The leg goes
+back to "opens as it did" by itself once a release is cut at the new format.
+
 What this row CANNOT see is a contract that moved in PROSE only - a driver
 verb that now refuses a form it used to take, say - unless a package on those
 disks takes that path at launch. Those are `tests/abicompat.txt`'s
@@ -84,6 +96,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLS = os.path.join(ROOT, "tools")
 ALLOW = os.path.join(HERE, "abicompat.txt")
+LD_EVER = 6                     # kernel/loader.inc: another package format
 
 SYS_IMG = "os8088-360.img"
 # the release's 360KB disks whose packages leg F launches, in order; a
@@ -238,16 +251,32 @@ def allowlist():
 # the static legs
 # =============================================================================
 
-def leg_a(base, red_cell=False):
+def leg_a(base, bumps, red_cell=False):
     a = cells(read(base, "apps/os88api.inc"))
     b = cells(read(ROOT, "apps/os88api.inc"))
     if red_cell:
         k = sorted(b)[0]
         b[k] += 1
-        print("A    red arm: pretending %s moved" % k)
+        print("A    red arm: pretending %s moved, and PKG_FMT with it not "
+              "bumped" % k)
+        bumps = {}
     if not a:
         say("A", "FAIL", "no OSAPI cell read out of the release's SDK - the "
             "pattern no longer matches and the leg would test nothing")
+        return
+    if "PKG_FMT" in bumps:
+        # A NEW GENERATION (SPEC.md 20.2.0.1): PKG_FMT moved since the
+        # release, so no release package reaches a cell here - leg D shows
+        # every one refused at the version byte and leg F shows the loader
+        # doing it. A moved or withdrawn cell is the designed consequence,
+        # not a far call into the wrong routine; it is counted, not failed.
+        moved = sum(1 for k, v in a.items() if k in b and b[k] != v)
+        gone = sum(1 for k in a if k not in b)
+        say("A", "DECLARED", "PKG_FMT %d -> %d since the release: %d of %d "
+            "release cells moved and %d gone (door cells or withdrawn), which "
+            "no release package can reach" % (bumps["PKG_FMT"][0],
+                                               bumps["PKG_FMT"][1], moved,
+                                               len(a), gone))
         return
     bad = 0
     byoff = {}
@@ -308,9 +337,18 @@ def leg_b(base):
 def leg_c(base, bumps):
     acks, _ = allowlist()
     bad = 0
-    for rel in ("apps/os88api.inc", "drivers/os88drv.inc"):
+    for rel, guard in (("apps/os88api.inc", "PKG_FMT"),
+                       ("drivers/os88drv.inc", "DRV_VER")):
         a = constants(read(base, rel))
         b = constants(read(ROOT, rel))
+        if guard in bumps:
+            # ...and a constant of a file whose guard moved re-contracts
+            # nothing a release binary can still meet (leg D's refusal)
+            n = sum(1 for k in a if k not in b or b[k] != a[k])
+            say("C", "DECLARED", "%s: %d release constant(s) changed or gone "
+                "under %s %d -> %d" % (rel, n, guard, bumps[guard][0],
+                                       bumps[guard][1]))
+            continue
         for k in sorted(a):
             if k in ("PKG_FMT", "DRV_VER") and k in bumps:
                 continue
@@ -580,7 +618,15 @@ def run_leg(tools, sysimg, appsimg, pkgs, tag):
     return res
 
 
-def leg_f(base, only, red_version):
+def leg_f(base, only, red_version, bumps):
+    # A NEW GENERATION: PKG_FMT moved since the release, so the answer this
+    # leg holds the tip to is the loader REFUSING every release package at
+    # the version byte (LD_EVER, SPEC.md 20.8) - a window, or any other
+    # status, is an old binary reaching the renumbered table. The red arm
+    # then stamps one package with THIS tree's PKG_FMT, which must not be
+    # refused that way.
+    newgen = "PKG_FMT" in bumps
+    tip_pf = version_of(ROOT, "apps/os88api.inc", "PKG_FMT")
     bimg = os.path.join(base, "build")
     sys.path.insert(0, TOOLS)
     import os88build
@@ -603,7 +649,8 @@ def leg_f(base, only, red_version):
         if red_version and not bad and not opened:
             scratch = tempfile.mktemp(prefix="abicompat-red-", suffix=".img")
             shutil.copy(apps, scratch)
-            _flip_version(os88fat.Fat12(scratch), pkgs[0])
+            _flip_version(os88fat.Fat12(scratch), pkgs[0],
+                          tip_pf if newgen else None)
             tip_apps = scratch
             print("F    red arm: %s's version byte flipped on the tip leg's "
                   "disk" % pkgs[0])
@@ -621,6 +668,15 @@ def leg_f(base, only, red_version):
         for p in pkgs:
             if ctl.get(p) == "window":
                 opened += 1
+                if newgen:
+                    if got.get(p) != "status %d" % LD_EVER:
+                        say("F", "FAIL", "%s %s opens on the release's kernel "
+                            "and is not refused at the version byte here "
+                            "(PKG_FMT %d -> %d): %s" % (
+                                img, p, bumps["PKG_FMT"][0],
+                                bumps["PKG_FMT"][1], got.get(p)))
+                        bad += 1
+                    continue
                 if got.get(p) != "window":
                     say("F", "FAIL", "%s %s opens on the release's kernel "
                         "and not on this one: %s" % (img, p, got.get(p)))
@@ -632,6 +688,13 @@ def leg_f(base, only, red_version):
     elif not opened:
         say("F", "FAIL", "nothing opened even on the release's own kernel - "
             "the control proves nothing")
+    elif not bad and newgen:
+        say("F", "ok", "%d of %d release packages that open on the release's "
+            "kernel are refused here at the version byte (LD_EVER), PKG_FMT "
+            "%d -> %d%s" % (opened, len(seen), bumps["PKG_FMT"][0],
+                            bumps["PKG_FMT"][1],
+                            ("; refused on both: " + " ".join(other))
+                            if other else ""))
     elif not bad:
         say("F", "ok", "%d of %d release packages open here as they do on "
             "the release's kernel%s" % (opened, len(seen),
@@ -639,16 +702,20 @@ def leg_f(base, only, red_version):
                                          + " ".join(other)) if other else ""))
 
 
-def _flip_version(v, spec):
+def _flip_version(v, spec, to=None):
     """Flip PKG_FMT in the header of `spec` ('DIR/NAME' or 'NAME') on an
-    image, in place: the red arm's broken package."""
+    image, in place: the red arm's broken package - or, across a bump, set
+    it to TO (this tree's), the release binary that claims the new format."""
     folder, _, name = spec.rpartition("/")
 
     def scan(off, n):
         for i in range(off, off + n, 32):
             if v.pretty(bytes(v.img[i:i + 11])) == name:
                 fc = struct.unpack_from("<H", v.img, i + 26)[0]
-                v.img[v.cluster_off(fc) + 2] ^= 0x40
+                if to is None:
+                    v.img[v.cluster_off(fc) + 2] ^= 0x40
+                else:
+                    v.img[v.cluster_off(fc) + 2] = to
                 return True
         return False
 
@@ -696,8 +763,8 @@ def main():
                                                  "HEAD")), flush=True)
     base = build_base(sha)
 
-    leg_a(base, a.red_cell)
     bumps = leg_b(base)
+    leg_a(base, bumps, a.red_cell)
     leg_c(base, bumps)
     files = shipped(base)
     items = [(k, p) for k in ("pkg", "drv", "cz") for p in files[k]]
@@ -709,7 +776,7 @@ def main():
     for n in notes:
         say("note", "NOTE", n)
     if not a.static:
-        leg_f(base, a.k, a.red_version)
+        leg_f(base, a.k, a.red_version, bumps)
 
     fails = [r for r in RESULTS if r[1] == "FAIL"]
     print("\nabicompat: %d FAIL, %d DECLARED, %d ok"

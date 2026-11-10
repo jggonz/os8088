@@ -437,8 +437,24 @@ static int dmg_whole = 1;
 static struct os88_rect dmg;
 static void *the_win = (void *)0x1234;
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
 {
+    h_cls = cls;
     return the_win;
 }
 void os88_wm_content(void *win, struct os88_pt *o) { o->x = GX; o->y = GY; }
@@ -461,9 +477,6 @@ int os88_wm_clip_set(void *win)
     clip_armed = 1;
     return 0;
 }
-void os88_wm_snap(void *win, int on) { }
-void os88_wm_ownbg(void *win, int on) { }
-void os88_wm_onwake(void *win) { }
 int  os88_wm_wake(void *win) { return 0; }
 void os88_wm_destroy(void *win)
 {
@@ -515,7 +528,6 @@ int  os88_fullscreen(void *win, int enter)
     return 0;
 }
 void os88_menu_set(void *win, struct os88_menuset *set) { }
-void os88_about_set(void *win) { }
 
 /* os88_task_spawn's REAL contract (os88.h:615-620): call it from a callback
  * with the gfx lock HELD - "that is required, not allowed" - and it answers 0,
@@ -845,6 +857,11 @@ unsigned os88_mem_claim_p(unsigned paras)
     int i;
     if (paras == 0 || h_claim_block)
         return 0;
+    if ((paras & 63) == 0 && paras)     /* a KB size, which the package now
+                                         * asks for in paragraphs (kernel size
+                                         * pass 19): the KB stub's model */
+        return os88_mem_claim((int)(paras >> 6));
+
     if (paras > 4096) {
         if (h_big_paras || (long)paras * 16 > (long)sizeof(h_big))
             return 0;

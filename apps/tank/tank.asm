@@ -655,7 +655,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; whole frame - the arkanoid/tracker pattern.
 
 ; -----------------------------------------------------------------------------
-; tk_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; tk_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -705,7 +705,10 @@ tk_ab3:      db 'Contributed by Elendilon', 0
 
 tk_tpl:
     dw 0, 0, TK_WINW, TK_WINH
-    dw tk_ttl, tk_paint, tk_onkey, tk_onclick
+    dw tk_ttl, tk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tk_cls, 0, PAINT, tk_paint, ONKEY, tk_onkey, \
+               ONCLICK, tk_onclick, ABOUT, tk_about, ONRESIZE, tk_onresize
 
 %include "tklogo.inc"
 %assign TK_GONSEG 0                ; tkover.inc's strokes, COUNTED here: the
@@ -1218,21 +1221,8 @@ tk_entry:
                                     ; CF again there, so the _NOKEEP spelling
                                     ; made the entry proc refuse ITSELF on the
                                     ; small build (tests/tanksmall.py)
-    mov al, 1                       ; an 8-aligned content origin: every
-    call OSAPI_WM_SNAP              ; font_run below reaches SPEC.md 6.1's
-                                    ; single-store cell, and the score band's
-                                    ; OSAPI_GFX_SCROLL has ends it accepts
-    mov ax, tk_onresize             ; the card can change under us
-    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98), and tk_adapter is every
-                                    ; fact this package holds about it
     mov si, tk_menus
     call OSAPI_MENU_SET
-    mov si, tk_about                ; ...and 'About Tank Attack' above the
-    call OSAPI_ABOUT_SET            ; Close the kernel already puts in our
-                                    ; pull-down (SPEC.md 12.2). WINDOWED only:
-                                    ; inside an fsx bracket the app owns every
-                                    ; pixel and there is no bar to pull down
-                                    ; (SPEC.md 53.7, docs/plans/completed/GFX-FSX-PLAN.md)
 .full:
     pop di
     pop si

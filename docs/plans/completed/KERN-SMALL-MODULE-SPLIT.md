@@ -19,7 +19,7 @@ The ask, in the requester's words:
 ## 0. The verdict, up front
 
 **Two of the four candidates are possible and two are refused by the mechanism
-itself. The net is ~4.6 KB, not the ~13.0 KB docs/plans/KERN-SMALL-CUT-PLAN.md §6
+itself. The net is ~4.6 KB, not the ~13.0 KB docs/plans/retired/KERN-SMALL-CUT-PLAN.md §6
 claimed** — that figure was the four files' `.cold` added up, and this
 investigation is what checked it.
 
@@ -312,7 +312,7 @@ place, not value it created (CLAUDE.md's rung rule).
 
 ---
 
-## 6. What this corrects in docs/plans/KERN-SMALL-CUT-PLAN.md
+## 6. What this corrects in docs/plans/retired/KERN-SMALL-CUT-PLAN.md
 
 That document's §6 is wrong and this is the correction, made in place there
 too:
@@ -471,7 +471,7 @@ landed 512 bytes above its projection and needed `MOD_NENT` = 7 rather than
 16; §9.2.6 has why.
 
 **All three waves are BUILT, and there is no fourth in this document.** What
-is left of the 128KB ask lives in docs/plans/KERN-SMALL-CUT-PLAN.md §8.1, whose
+is left of the 128KB ask lives in docs/plans/retired/KERN-SMALL-CUT-PLAN.md §8.1, whose
 tiers are the next thing to choose from.
 
 ### 9.2.1 W0 as built

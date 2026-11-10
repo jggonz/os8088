@@ -864,14 +864,16 @@ vs_run:
     call bl_sline
     cmp word [vs_buf], 0
     jne .have
-    mov ax, VS_BUFKB
-    mov cx, VS_BUFKB
-    call OSAPI_MEM_CLAIM_DMA
+    mov ax, VS_BUFKB * 64
+    mov cx, VS_BUFKB * 64
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P
     jc .noclaim
     mov [vs_buf], dx
-    mov ax, VS_TRKKB                ; the tracks are DMA'd here too: a
-    mov cx, VS_TRKKB                ; claim across a 64 KB page read NOTHING
-    call OSAPI_MEM_CLAIM_DMA        ; on the 286 (error 09h every call)
+    mov ax, VS_TRKKB * 64                ; the tracks are DMA'd here too: a
+    mov cx, VS_TRKKB * 64                ; claim across a 64 KB page read NOTHING
+    mov bl, MEMP_CONV + MEMP_DMAPOOL
+    call OSAPI_MEM_P            ; on the 286 (error 09h every call)
     jc .noclaim
     mov [vs_tbuf], dx
 .have:
@@ -1148,7 +1150,10 @@ vs_pmup:
 
 vs_tpl:
     dw 7, 22, 632, 300
-    dw vs_ttl, vs_paint, vs_onkey, vs_onclick
+    dw vs_ttl, vs_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vs_cls, 0, PAINT, vs_paint, ONKEY, vs_onkey, \
+               ONCLICK, vs_onclick
 
 vs_ttl:       db 'Video Sound Bench', 0
 vs_s_title:   db 'VIDSND - a frame interrupt off the card (VIDEO-PLAN W0 c,e)', 0

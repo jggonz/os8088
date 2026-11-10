@@ -11353,7 +11353,7 @@ neither of which Bochs has). Four kern_mega defects came out of it, 14.85 to
 - `thewire` is red on QEMU on this branch before any of this: its fixture
   will not pack, `TREEONE far-calls cell 0x04E3, at or past WIRE_TABLE_END
   0x04A5`. The archive's program is `build/mseg.o88`, a package with PARTS,
-  and MC7 (KERN-MEGA-MEMORY-PLAN) put OSAPI_SEG (0x04E3) into every parts
+  and MC7 (KERN-MEGA-MEMORY-PLAN) put OSAPI_SEG (0x022C) into every parts
   package through `apps/os88partsbody.inc` - a cell newer than any Wire level
   SPEC.md 92.2's fence knows. The release that publishes the cell owes the
   Wire a level (`WIRE_CELL_LEVELS`, `WIRE_TABLE_END`, `wcat.inc`'s

@@ -250,7 +250,8 @@ def ovl_sym(name):
             f.write(open(src).read() + "\n[map all %s]\n" % mp)
         r = subprocess.run(["nasm", "-f", "bin", "-w+error", "-I",
                             os.path.join(ROOT, "drivers") + os.sep, "-I",
-                            os.path.join(ROOT, "apps") + os.sep, "-o", out, cp],
+                            os.path.join(ROOT, "apps") + os.sep, "-I",
+                            os.path.join(ROOT, "kernel") + os.sep, "-o", out, cp],
                            capture_output=True, text=True, cwd=ROOT)
         if r.returncode != 0:
             raise SystemExit("xmcheck: could not assemble the overlay:\n"

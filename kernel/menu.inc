@@ -431,7 +431,7 @@ menu_activate:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x011E, SPEC 12.2)
+; menu_win_set - attach an app menu set to a window (a door cell, SPEC 12.2)
 ; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
@@ -492,7 +492,9 @@ menu_win_set:
 ; -----------------------------------------------------------------------------
 menu_relayout:
     mov byte [menu_bdirty], 1   ; the cells, the name, or both, are about to
-    call kent_di                ; be different: the bar owes a full redraw
+    call kent_bp                ; be different: the bar owes a full redraw
+                                ; (BP banked too: menu_ab_cell's wm_hnd spends
+                                ; it - kernel size pass 19)
                                 ; (kent_di = push ax/bx/cx/dx/si/di)
     push es
 
@@ -676,7 +678,7 @@ menu_relayout:
 ; -----------------------------------------------------------------------------
                                 ; (menu_ab_cell's body: a part of
                                 ; menu_relayout, entered from its `.done`)
-    xor ax, ax                  ; AX is W_ABOUT's to fill below
+    xor ax, ax                  ; (0: no cell yet)
     mov [menu_abcell], ax
     mov bx, [menu_win]
     or bx, bx
@@ -694,17 +696,20 @@ menu_relayout:
     mov byte [di], 0
     pop di
                                 ; --- the items: About if it is offered, then
-    mov ax, [bx + W_ABOUT]      ; Close, which every application gets (12.7):
-                                ; BX is still [menu_win] - neither copy, menu_es
-                                ; nor KES touches it (kernel size pass 15). The
-                                ; About handler's offset, 0 = none: this was
-                                ; wm_about_get (kernel size pass 16)
-    xor bx, bx                  ; BX = Close's index
-    or ax, ax
-    jz .noab
+                                ; Close, which every application gets (12.7):
+    mov si, bx                  ; the About slot of the window's CLASS
+    xor dx, dx                  ; (SPEC.md 11.104) - SI is reloaded below.
+    mov bp, WC_ABOUT            ; DX is Close's index: BX comes back from
+    call wm_hnd                 ; wm_hnd as the window (its output, kernel
+    jz .noab                    ; size pass 19), and DX is dead in this body
+                                ; (kent_bp banked it). wm_hnd's ZF is the
+                                ; answer, offset unread (kernel size pass 19,
+                                ; -6 with kent_bp/kret_es; +2 here, even, for
+                                ; wm_hnd's -19 clocks a callback)
     mov word [menu_abitems], menu_abstr
-    inc bx
+    inc dx
 .noab:
+    mov bx, dx
     mov cx, bx                  ; CX = item count = Close's index + 1, which
     inc cx                      ; is MENU_ABMAX when About is offered (kernel
                                 ; size pass 10: 5 bytes over two immediates)
@@ -735,8 +740,7 @@ menu_relayout:
     mov [menu_abcell], ax
     inc word [menu_nbar]
 .out:
-    pop es
-    jmp kret_di
+    jmp kret_es                 ; ES, then kent_bp's bank
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
@@ -2214,7 +2218,7 @@ menu_kbnav:
     jmp short .place            ; dismisses (SPEC.md 9.6.3)
 .live:
     mov ax, di
-    call KERNEL_SEG:cw_menu_item_dis          ; a greyed item or a separator is not a place
+    KDOOR menu_item_dis                       ; a greyed item or a separator is not a place
     jc .step                    ; to stop. DI only ever moves one way, so this
                                 ; walks off an end rather than looping
 
@@ -2230,7 +2234,7 @@ menu_kbnav:
                                 ; so a pointer the user has put in a column
                                 ; stays in it - and otherwise it is where the
                                 ; item text starts (.beside)
-    call KERNEL_SEG:cw_mou_clamp              ; the clamp the ISR itself uses, so the
+    KDOOR mou_clamp                           ; the clamp the ISR itself uses, so the
     mov [mouse_x], ax           ; two-display seam is honoured by construction
     mov [mouse_y], bx           ; rather than by a rectangle known here
     mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)

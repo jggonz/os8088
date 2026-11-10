@@ -56,7 +56,7 @@ The rows that hold it: `t_stik` (fast); `stikboot`, `stikmiss`, `stikshort`,
 
 What the user gets:
 - A Sticky App is an ordinary package in `A:\STIKAPPS\` that includes a new shared source file, `apps/os88stik.inc`.
-- "This widget is open, launched from here" is stored as one row in the existing SYSTEM.CFG desktop trailer. That trailer is how desktop icons are already persisted. The row is written through the existing `OSAPI_DESK_ITEM` (0x03F8) into the existing on-demand settings core (CTRL.DRV), which is §2.8's mechanism, the one DOCK.DRV uses.
+- "This widget is open, launched from here" is stored as one row in the existing SYSTEM.CFG desktop trailer. That trailer is how desktop icons are already persisted. The row is written through the existing `OSAPI_DESK_ITEM` (a door cell) into the existing on-demand settings core (CTRL.DRV), which is §2.8's mechanism, the one DOCK.DRV uses.
 - At boot, a ~60-byte loop in `.cold` relaunches each marked row through the existing `sc_open`. A missing file produces one toast, and the row turns back into a visible desktop shortcut.
 - Position and calendar data live in the widget's own `SYSTEM\APPDATA\DESKCAL.DAT`.
 
@@ -127,7 +127,7 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 | Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_STIK`), not called. |
 | Section numbering | §106 is the highest used top-level section and section 104 was never used. **Take §107** (renumbered §110 when main took 107 first - the hazard the renumber check below names). No section registry exists under docs/. |
 | Rung headroom [measured, `tools/kernsize.py`] | kern_big image rung **200 B left**, cold rung **462 left**, low 34, footprint 59 steps spare. kern_small was not measured (no `build/smallk` in this worktree). |
-| `OSAPI_WM_OWNSEG` (0x03BF) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
+| `OSAPI_WM_OWNSEG` (a door cell) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
 | `TESTIMG` | **Exists** (`Makefile:13667`). `make test TESTIMG=<img>` boots a chosen A: disk. That is what the screenshots use. |
 | `-rtc base=` | **Not used** anywhere in the tree, so `tests/os88qemu.py` takes no extra args today. Date pinning goes through MartyPC instead, poking `clk_*` the way `tests/kdreturn.py:387` does. |
 
@@ -291,9 +291,9 @@ The include provides:
 1. **`stik_load`** (entry proc, before `OSAPI_WM_CREATE`; SI = `ld_lname`, DI = the template):
    - Copy the 8.3 name.
    - **Singleton:** for each window slot 0..11, call `OSAPI_WM_OWNSEG`. If a segment other than our DS has the same header name at +16, toast `Desk Calendar is open` and answer CF = 1, which declines the launch (`[ld_said]` keeps the kernel quiet).
-   - Bank with `OSAPI_FILE_HERE` (0x01C1: DX = cluster, BL = volume).
-   - Walk root → `SYSTEM` → `APPDATA` with `OSAPI_FILE_FIND` (0x0283: +14 type, +16 cluster) and `OSAPI_FILE_GOTO` (0x01C7). Use GOTO, not GOTO_Q (§19.9); Cyclone's `cy_data_enter`, `cyclone.asm:7361-7520`, is the worked example.
-   - `OSAPI_FILE_READ` (0x0109) into a paragraph-aligned buffer with 80 B of slack, then GOTO back.
+   - Bank with `OSAPI_FILE_HERE` (a door cell: DX = cluster, BL = volume).
+   - Walk root → `SYSTEM` → `APPDATA` with `OSAPI_FILE_FIND` (0x015F: +14 type, +16 cluster) and `OSAPI_FILE_GOTO` (a door cell). Use GOTO, not GOTO_Q (§19.9); Cyclone's `cy_data_enter`, `cyclone.asm:7361-7520`, is the worked example.
+   - `OSAPI_FILE_READ` (a door cell) into a paragraph-aligned buffer with 80 B of slack, then GOTO back.
    - Validate the magic, the version and the **exact size**:
      - **missing:** use the defaults;
      - **damaged:** set `stik_damaged` and run empty;
@@ -302,7 +302,7 @@ The include provides:
 2. **`stik_made`** (after WM_CREATE, BX = window):
    - Store the window.
    - Install `OSAPI_WM_ONTIMER` (0x0342) → `stik_tick` and `OSAPI_WM_ONCLOSE` (0x0362) → `stik_close`.
-   - Arm `OSAPI_WM_TIMER` (0x033A) for 1 tick.
+   - Arm `OSAPI_WM_TIMER` (0x0190) for 1 tick.
    - If that answers CF = 1 (kern_small), set `stik_worker`; the first W_PAINT hires the worker (item 6).
    - Do **not** call `OSAPI_WM_NOANIM`: the SDK says not for a main window (os88api.inc:649), and an open animation at boot is harmless.
 3. **`stik_tick`** (timer callback: UI task, lock held, file slots legal, §13.9):
@@ -314,7 +314,7 @@ The include provides:
      | +1 | 0xFF |
      | +2 | 1 |
      | +3 | `'D'` |
-     | +4 | `OSAPI_FILE_PATH` (0x041F) minus its leading `\`, then `\`, then the 8.3 name: `STIKAPPS\DESKCAL.O88`, 22 of 45 |
+     | +4 | `OSAPI_FILE_PATH` (0x0375) minus its leading `\`, then `\`, then the 8.3 name: `STIKAPPS\DESKCAL.O88`, 22 of 45 |
      | +49 | `STIK_CAP` |
      | +64 | `STIK_ICON` |
 
@@ -324,7 +324,7 @@ The include provides:
    - (d) If dirty and `stik_nohome` = 0, run `stik_save`.
    - (e) Re-arm for **36 ticks** (~2 s).
 4. **`stik_save`:**
-   - Bank, walk, `OSAPI_FILE_WRITE` (0x0103) the header and payload as one call, GOTO back.
+   - Bank, walk, `OSAPI_FILE_WRITE` (a door cell) the header and payload as one call, GOTO back.
    - On CF = 1 (the disk is swapped), keep dirty and retry on the next tick, silently.
    - If `stik_damaged`, the first save first asks `os88ui_ask AYESNO 'Replace damaged calendar?'`. On No, it stays read-only for the session.
 5. **`stik_close`** (W_ONCLOSE negotiator: close box and File ▸ Close; **not** Restart or power-off, `ui.inc:2814-2850`):
@@ -338,7 +338,7 @@ The include provides:
    - The registration (a) is skipped, because `OSAPI_DESK_ITEM` is `stc` there.
 
 **Placement on restore**, user-first's anchor rule, applied in `stik_load`:
-- If the saved screen width and height equal `OSAPI_VIDEO` AX/BX (0x0127), use the saved x,y.
+- If the saved screen width and height equal `OSAPI_VIDEO` AX/BX (0x00D9), use the saved x,y.
 - Otherwise anchor to the nearer edge on each axis:
   - `x' = x` if `x + w/2 < oldW/2`, else `newW - (oldW - x)`;
   - the same for y against the dock line (`OSAPI_VIDEO` CX).
@@ -427,9 +427,9 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    written at runtime, never shipped (so never pac
 **Window setup:**
 - non-sizable; snap on (the default);
 - `OSAPI_WM_KEEPH` (0x02F0);
-- `OSAPI_WM_OWNBG` (0x02C5): the painter lays every pixel of ground;
+- `OSAPI_WM_OWNBG` (0x02A4): the painter lays every pixel of ground;
 - `OSAPI_WM_SAVEU` (0x02A4) with AL = 3, i.e. ON | **1BPP** (§11.96.17), because the face is two-colour on **every** adapter (ink 0, ground 15). The save-under is 1/4 size and an uncover is a blit;
-- `OSAPI_WM_PREFER` (0x036E) gets the per-adapter frames below;
+- `OSAPI_WM_PREFER` (a door cell) gets the per-adapter frames below;
 - `OSAPI_WM_ONRESIZE` (0x02EB) re-derives the layout after §39.11's adapter switch.
 
 **Date maths** (copied in, ~80 B):
@@ -512,8 +512,8 @@ The file is the 16-byte Sticky App header (§3.3) followed by this payload. Fixe
 1. **Date rolled:** move today's inverse (two 3-cell runs, ~8 ms), plus the header if the month changed.
 2. **Due check:** find the first appointment with REMIND set, FIRED clear, date = today, a time, and `time − lead ≤ now`. If no alert is up:
    - set FIRED and dirty;
-   - `OSAPI_SND_TONE` (0x00D3): 880 Hz then 660 Hz, 4 ticks each, DL = 0x40;
-   - `OSAPI_TOAST` (0x02AA) with `09:30 Dentist`, the user's text last, because only 24 characters reach the bar (§59.10);
+   - `OSAPI_SND_TONE` (0x00B5): 880 Hz then 660 Hz, 4 ticks each, DL = 0x40;
+   - `OSAPI_TOAST` (0x0257) with `09:30 Dentist`, the user's text last, because only 24 characters reach the bar (§59.10);
    - `os88ui_ask OS88UI_AOK` with `Reminder 09:30 Dentist`, ≤ 34 characters. Its completion proc clears `dc_alert`;
    - redraw that agenda line (`!` becomes `-`).
 
@@ -1155,7 +1155,7 @@ recommended default in its §7 is what shipped.
    `OSAPI_WM_DESK` `0x0473`, `OSAPI_GFX_DESK` `0x0479`, `osapi_table_end`
    `0x047F`; `PKG_FMT` 10 / `DRV_VER` 11 kept, the lock re-taken on top of
    main's (cells appended at the end). **Moved again at the merge of `70df8a99`**,
-   behind #249's 8-byte `OSAPI_THM_SET` at `0x046D`: `OSAPI_CLK_GET`
+   behind #249's 8-byte `OSAPI_THM_SET` at `0x0214`: `OSAPI_CLK_GET`
    `0x0475`, `OSAPI_WM_DESK` `0x047B`, `OSAPI_GFX_DESK` `0x0481`,
    `osapi_table_end` `0x0487`; the same numbers kept, the lock re-taken.
 

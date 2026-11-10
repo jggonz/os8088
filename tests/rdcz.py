@@ -108,7 +108,7 @@ def strike(img, name=DOC):
         if b[o] in (0, 0xE5) or bytes(b[o:o + 11]) != want:
             continue
         czm = b[o + R_CZM]
-        if czm not in (0x5A, 0x5B):         # DSK_CZ_MARK + the format
+        if czm not in (0xA4, 0xA5):         # DSK_CZ_MARK + the format
             sys.exit("rdcz: %s is NOT compressed on %s (mark %#04x) - the "
                      "fixture this row stands on has changed, so striking "
                      "its hint would assert nothing" % (name, img, czm))

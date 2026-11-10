@@ -159,7 +159,7 @@ import os88flush   # noqa: E402
 import megafix     # noqa: E402
 
 TITLE = "DeskProbe"
-W_ONKEY = 14                    # apps/os88api.inc
+W_CLASS, WC_ONKEY = 12, 6       # apps/os88api.inc (SPEC.md 11.104)
 WF_SAVEU, WF_OWNBG, WF_NOANIM = 32, 64, 0x4000
 WF_DESK = geom.WF_DESK
 IF_DESK = geom.IF_DESK
@@ -666,8 +666,10 @@ def leg_keys(ui):
     check(top_i(ui) == np.i, "Note Pad is wm_top")
     rec = ui._S("wm_wins") + np.i * geom.WIN_SIZE
     nseg = struct.unpack_from("<H", m.read(rec + geom.W_SEG, 2))[0]
-    nkey = struct.unpack_from("<H", m.read(rec + W_ONKEY, 2))[0]
-    check(nkey != 0, "Note Pad takes keys (W_ONKEY %#x)" % nkey)
+    ncls = struct.unpack_from("<H", m.read(rec + W_CLASS, 2))[0]
+    nkey = struct.unpack_from("<H", m.read(_lin(m, nseg, ncls + WC_ONKEY),
+                                           2))[0]
+    check(nkey != 0, "Note Pad takes keys (its class's WC_ONKEY %#x)" % nkey)
     nk = _lin(m, nseg, nkey)
 
     print("B: a press on the widget: the keys go to IT")

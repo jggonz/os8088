@@ -437,9 +437,12 @@ def api_slots():
     trimmed to a sentence.
     """
     lines = read("apps/os88api.inc").split("\n")
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88cells
+    door = os88cells.block_rare("apps/os88api.inc", root=ROOT) or {}
     out = []
     for i, ln in enumerate(lines):
-        m = re.match(r"^%define\s+(OSAPI_[A-Z0-9_]+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)"
+        m = re.match(r"^%define\s+(OSAPI_[A-Z0-9_]+)\s+(?:KERNEL_SEG:(0x[0-9A-Fa-f]+)|OS88_DOOR)"
                      r"\s*(?:;\s*(.*))?$", ln)
         if not m:
             continue
@@ -449,7 +452,11 @@ def api_slots():
             if not c:
                 break
             note += " " + c.group(1).strip()
-        out.append((m.group(1), m.group(2), " ".join(note.split())))
+        slot = m.group(2)
+        if slot is None:                # a DOOR cell (SPEC.md 20.3.4): its
+            ix = door.get(m.group(1))   # index, from the generated block
+            slot = "door 0x%02X" % ix[0] if ix else "door"
+        out.append((m.group(1), slot, " ".join(note.split())))
     return out
 
 
@@ -613,6 +620,12 @@ def own_specs():
 # any given file was, which is exactly the misleading the split exists to end.
 DOC_KINDS = [
     ("docs/plans/completed/", "completed"),
+    # RETIRED is the third way a plan ends, and it is not COMPLETED: the goal
+    # may have been met, but not by the route the plan proposed, so reading it
+    # as "how this got built" would be wrong. It is kept for what it taught -
+    # its header says what actually happened. Above the docs/plans/ catch-all
+    # for the same prefix-order reason as completed/.
+    ("docs/plans/retired/", "retired"),
     ("docs/plans/", "plan"),
     ("docs/history/", "history"),
     # A REPORT is a measurement, not a description: true of the tree it was
@@ -796,8 +809,9 @@ def build():
       "under `docs/` is NOT where to learn how something works, and is "
       "deliberately not listed by name: `docs/plans/` is work proposed or "
       "half-done, `docs/plans/completed/` is how something got built (never "
-      "what it does now), `docs/history/` is superseded, and `docs/reports/` "
-      "is a dated MEASUREMENT of one tree. SPEC.md, the files below and the "
+      "what it does now), `docs/plans/retired/` is a plan closed without its "
+      "route being taken, kept for its lesson, `docs/history/` is "
+      "superseded, and `docs/reports/` is a dated MEASUREMENT of one tree. SPEC.md, the files below and the "
       "code are the authority.")
     w("")
     docs = doc_files()
@@ -806,9 +820,10 @@ def build():
       + ", ".join("[%s](%s)" % ((n[len("docs/"):],) * 2) for n in refs))
     w("")
     counts = dict((k, sum(1 for _n, kk in docs if kk == k))
-                  for k in ("plan", "completed", "history", "report"))
+                  for k in ("plan", "completed", "retired", "history", "report"))
     w("*Not reference:* %(plan)d open plans in `docs/plans/`, %(completed)d "
-      "design records in `docs/plans/completed/`, %(history)d superseded "
+      "design records in `docs/plans/completed/`, %(retired)d retired plans "
+      "in `docs/plans/retired/`, %(history)d superseded "
       "files in `docs/history/`, %(report)d measurements in "
       "`docs/reports/`." % counts)
     w("")

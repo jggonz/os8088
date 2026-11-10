@@ -472,12 +472,6 @@ C apps/xtmp3/x3pars.inc x3p_pseg         # the front end's probe scratch,
 D apps/xtmp3/x3eng.inc x3_xseg           # the external ring a DSP 3.00+ plays
                                          # by auto-init DMA (OSAPI_MEM_CLAIM_DMA_HI,
                                          # SPEC.md 121.6), freed at the play's stop
-X drivers/ramdisk/rdstore.inc @rd_claimp # rd_claim's OSAPI_MEM_P twin (SPEC.md
-                                         # 50.3.7): it JUMPS into rd_claim's tail,
-                                         # which stores DX at [bx] and declares it
-                                         # with rd_reloc at once - a jmp into
-                                         # another routine's label this scan does
-                                         # not follow
 X apps/browser/browser.asm @br_claimp    # br_claim's twin on OSAPI_MEM_P (SPEC.md
                                          # 50.3.7) and for br_claim's reason below:
                                          # it unpins the page claims after the call,

@@ -71,14 +71,47 @@ int  os88_gfx_scroll(int x1, int y1, int x2, int y2, int dy);
 int  os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows);
 void os88_font_run(int x, int y, const char *s, int ink, int paper);
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title);
+/* the window CLASS (SPEC.md 11.104) - apps/cc/os88.h's, mirrored */
+struct os88_class {
+    unsigned len, style;
+    void (*paint)(void), (*onkey)(void), (*onclick)(void), (*about)(void),
+         (*onwake)(void), (*onclose)(void), (*onmouseup)(void),
+         (*onresize)(void), (*onrclick)(void), (*onsize)(void),
+         (*ontimer)(void), (*ondrag)(void), (*onwheel)(void);
+};
+#define OS88_CLASS_LEN 30
+#define OS88_WF_SIZABLE 0x0004
+#define OS88_WF_NOSNAP  0x0010
+#define OS88_WF_SAVEU   0x0020
+#define OS88_WF_OWNBG   0x0040
+#define OS88_WF_KEEPH   0x0080
+#define OS88_WF_QUIET   0x1000
+#define OS88_WF_1BPP    0x2000
+#define OS88_WF_NOANIM  0x4000
+#define OS88_WFB_SIZABLE 2
+#define OS88_WFB_NOSNAP  4
+#define OS88_WFB_SAVEU   5
+#define OS88_WFB_OWNBG   6
+#define OS88_WFB_KEEPH   7
+#define OS88_WFB_QUIET   12
+#define OS88_WFB_1BPP    13
+void os88_t_paint(void);
+void os88_t_onkey(void);
+void os88_t_onclick(void);
+void os88_t_about(void);
+void os88_t_onwake(void);
+void os88_t_onclose(void);
+void os88_t_onmouseup(void);
+void os88_t_onresize(void);
+void os88_t_ontimer(void);
+void os88_t_onwheel(void);
+void os88_wm_flag(void *win, int bit, int on);
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls);
 void os88_wm_content(void *win, struct os88_pt *o);
 int  os88_wm_geom(void *win, struct os88_size *s);
 int  os88_wm_damage(void *win, struct os88_rect *r);
 int  os88_wm_clip_set(void *win);
-void os88_wm_snap(void *win, int on);
-void os88_wm_ownbg(void *win, int on);
-void os88_wm_onwake(void *win);
 int  os88_wm_wake(void *win);
 int  os88_fullscreen(void *win, int enter);
 int  os88_key_down(int scan);
@@ -87,7 +120,6 @@ int  os88_key_down(int scan);
 #define OS88_SCAN_ENTER 0x1C
 #define OS88_SCAN_ALT   0x38
 void os88_menu_set(void *win, struct os88_menuset *set);
-void os88_about_set(void *win);
 
 void os88_wm_destroy(void *win);
 int  os88_task_spawn(void *win);

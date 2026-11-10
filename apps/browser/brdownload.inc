@@ -961,19 +961,8 @@ br_dl_openwin:
     call OSAPI_WM_CREATE
     jc .failed
     mov [br_dl_win], bx
-    mov ax, br_dl_onwake
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONWAKE
-    mov ax, br_dl_managerclose
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONCLOSE
-    mov ax, br_dl_timer
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONTIMER
-    mov ax, [br_dl_win]
+    mov ax, bx
     mov bx, br_dl_btrec
-    mov si, br_dl_onup
-    mov di, br_dl_ondrag
     mov dx, br_dl_onclick
     call os88ui_btninit
     mov bx, [br_dl_win]
@@ -1502,7 +1491,8 @@ br_dl_onwake:
     mov cx, [br_dl_fill]
     xor ax, ax
     call br_pagepin                 ; pinned for the call, as above
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     call br_pageunpin
     jc .writefail
     jmp .wrote
@@ -2566,7 +2556,12 @@ br_dl_resolve_redirect:
 
 br_dl_tpl:
     dw 40, 20, 560, 154
-    dw br_dl_title, br_dl_paint, 0, 0
+    dw br_dl_title, br_dl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS br_dl_cls, 0, PAINT, br_dl_paint, ONCLICK, os88ui_btnclick, \
+               ONWAKE, br_dl_onwake, ONCLOSE, br_dl_managerclose, \
+               ONMOUSEUP, br_dl_onup, ONTIMER, br_dl_timer, \
+               ONDRAG, br_dl_ondrag
 br_dl_title: db 'Download Manager', 0
 
 br_dl_btnlabels: dw 0

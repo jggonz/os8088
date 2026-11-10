@@ -81,7 +81,7 @@ CMZ_PSTEP   equ 512             ; source bytes between progress reports - the
                                 ; widget's own unit (SPEC.md 12.8.1), so a
                                 ; report is a compare until the bar's pixel
                                 ; extent actually moves
-CMZ_XPROG   equ apic_fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPEC.md
+%define CMZ_XPROG   fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPEC.md
                                 ; 18.99.4): an OSAPI_SLOT is
                                 ; `push ds / push cs / pop ds / call <body> /
                                 ; pop ds / retf`, which is a far-callable
@@ -90,7 +90,7 @@ CMZ_XPROG   equ apic_fpg_stepb          ; OSAPI_FS_PROG. The cloner's idiom (SPE
                                 ; with the SOURCE in DS and needs neither a
                                 ; cw_ shim nor a callback in its own ABI
 
-CMZ_XTOAST  equ apic_toast_show          ; OSAPI_TOAST, and it is what lets this
+%define CMZ_XTOAST  toast_show          ; OSAPI_TOAST, and it is what lets this
                                 ; image carry its own VERDICT STRINGS: the
                                 ; slot takes ES:SI rather than DS:SI (the text
                                 ; is often in a heap claim, and a module image
@@ -1099,12 +1099,12 @@ cmz_rearm:
     jnz .big
     or ax, ax
     jz .out
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     jmp short .out
 .big:
     push ax
     mov ax, 0x8000
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     pop ax
     sub ax, 0x8000
     sbb dx, 0
@@ -1134,7 +1134,7 @@ cmz_prog:
     CMZ_TRACK 0                 ; the step PAINTS the trough
     push ax
     mov ax, CMZ_PSTEP
-    call KERNEL_SEG:CMZ_XPROG
+    KDOOR CMZ_XPROG
     pop ax
     CMZ_TRACK 1
     ret
@@ -1524,7 +1524,7 @@ cmz_sizes:
     CSDO_OFF
     mov ax, cx
     mov cl, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub cl, DSK_CZ_MARK             ; 20.14.1): 0x5A and 0x5B pass
+    sub cl, DSK_CZ_MARK             ; 20.14.1): 0xA4 and 0xA5 pass
     cmp cl, LZ_LZB
     jbe .cz
     mov cl, 0xFF                ; no hint: what it occupies is what it
@@ -2474,7 +2474,7 @@ cmz_jloop:
     mov dx, [cs:cmz_jtot+2]     ; 12.8.10): one bar from part 1 to the verdict,
     shl cx, 1                   ; PARKED across every 'Put SET.002 in A:'
     rcl dx, 1                   ; instead of rescaling per part. Twice the
-    call KERNEL_SEG:apic_fs_op  ; original: it is written once and the parts
+    KDOOR osapi_fs_op           ; original: it is written once and the parts
     jc .noop                    ; read once, and a part is no bigger than what
     CSDO mov byte [CSEG cmz_jop], 1 ; it rebuilds, so an OVER-estimate that
 .noop:                          ; ends a little short. Owned as 0FFh, so only
@@ -2663,7 +2663,7 @@ cmz_jexit:
     push dx                     ; here: the verdict, a refusal, Esc and an
     xor cx, cx                  ; abandoned prompt (cmz_jdisp's .abort)
     xor dx, dx
-    call KERNEL_SEG:apic_fs_op
+    KDOOR osapi_fs_op
     pop dx
 .noop:
 %endif
@@ -3406,7 +3406,7 @@ cmz_say:
     mov si, ax
 .tail:
     xor cx, cx                  ; TOAST_TICKS, the default life
-    call KERNEL_SEG:CMZ_XTOAST
+    KDOOR CMZ_XTOAST
     pop es
     pop si
     pop cx

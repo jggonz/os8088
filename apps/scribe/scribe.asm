@@ -765,8 +765,9 @@ sc_entry:
     mov [sc_cseg], dx               ; so sc_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
-    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    call OSAPI_MEM_CLAIM            ; 256 x 4 bytes, session-lived. Zeroed by
+    mov ax, 1 * 64                       ; ...and the PAP dictionary (SPEC.md 68.3):
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [sc_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -799,18 +800,13 @@ sc_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
     jc .out                         ; table full: nothing to flag
-    push ax
-    mov al, 1                       ; resizable (SPEC.md 11.1/27): sc_paint
-    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-                                    ; so the next repaint re-wraps for free
-    mov al, 1                       ; ...and it PROMISES its content stands
-    call OSAPI_WM_SAVEU             ; still while it is not drawing, so a
-                                    ; raise puts the old pixels back instead
-                                    ; of lettering 464 cells (SPEC.md 11.96.1).
-                                    ; True of this app: everything that draws
-                                    ; goes through sc_redraw or sc_paint, and
-                                    ; the worker's two background drawers ask
-                                    ; OSAPI_WM_OBSCURED first
+%ifdef OS88UI_SBDRAG
+    pushf                           ; the entry still owes the loader
+    cmp al, WC_ONDRAG + 1           ; wm_create's CF (SPEC.md 13.10.7.1). AL =
+    sbb al, al                      ; the class slots this kernel dispatches:
+    mov [sc_nodrag], al             ; no drag edge on kern_small (11.104)
+    popf
+%endif
     push cx                         ; ...and a FLOOR under the grow box: two
     push dx                         ; strips of fixed-position chrome cannot be
     mov cx, SC_MIN_W                ; expressed by WMIN_W, which is 96 for the
@@ -822,20 +818,8 @@ sc_entry:
     mov si, sc_pref                 ; which this window has never used more
     call OSAPI_WM_PREFER            ; than 600 (SPEC.md 11.100.1). A page is
     pop si                          ; the one thing that is always glad of them
-    mov al, 1
-    call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
-    pop ax                          ; every keystroke redraws a row of text and
-                                    ; an aligned cell writes ONE framebuffer
-                                    ; byte where an unaligned one writes two.
-                                    ; TRUE ON VGA TOO - mode 12h is 8 pixels
-                                    ; to a byte per plane - and measured, this
-                                    ; window was the worked example: it used
-                                    ; to open at content x = 61 there, skew 5,
-                                    ; which typebench prices at 9.4% of every
-                                    ; keystroke (SPEC.md 11.94)
-    push si
-    mov si, sc_habout               ; NO kernel menus (SPEC.md 68.2): the
-    call OSAPI_ABOUT_SET            ; nine-menu bar is drawn in the window.
+    push si                         ; NO kernel menus (SPEC.md 68.2): the
+                                    ; nine-menu bar is drawn in the window.
     mov si, sc_menus0               ; The kernel bar carries only the app
     call OSAPI_MENU_SET             ; name pull-down - an EMPTY set (count 0)
     pop si                          ; whose AM_NAME makes the bar read
@@ -860,27 +844,6 @@ sc_entry:
     ; THIS segment now, so nothing names it but CS and a compaction moves the
     ; two together - the bare `ret` proc is the whole of the fix-up.
     OS88_REGION_MOVABLE
-    push ax                         ; SPEC.md 13.18: the mouse wheel scrolls
-    mov ax, sc_onwheel              ; the document. BX is still the window, and
-    call OSAPI_WM_ONWHEEL           ; the slot preserves the flags the CF we
-    pop ax                          ; owe the loader rides in
-%ifdef OS88UI_SBDRAG
-    pushf                           ; the entry still owes the loader
-    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
-    mov ax, sc_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
-    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
-                                ; below captures OSAPI_WM_ONDRAG's OWN
-                                ; CF and a third install after it would
-                                ; answer for the wrong slot
-    mov ax, sc_onup                 ; SPEC.md 13.10.6.4: these two are the
-    call OSAPI_WM_ONMOUSEUP         ; THUMB's alone. sc_mtrack's poll loop
-    mov ax, sc_ondrag               ; (27.8.1) owns a gesture that cannot be
-    call OSAPI_WM_ONDRAG            ; live at the same time as a bar drag - the
-    sbb al, al                      ; menu runs modally INSIDE W_ONCLICK, and
-    mov [sc_nodrag], al             ; the kernel's arm is not set until that
-    pop ax                          ; returns - so 13.7's no-mixing rule is
-    popf                            ; satisfied by "not at the same time"
-%endif
     pushf                           ; the visual break exists for the machine
     push ax                         ; that cannot repaint a screenful between
     call OSAPI_CPU_INFO             ; keystrokes, and nowhere else: on anything
@@ -4818,8 +4781,9 @@ sc_itinit:
                                     ; a sc_walk, which holds ES = [sc_dseg]
                                     ; for the whole of its pass, and the
                                     ; claim below may compact
-    mov ax, SC_ITKB                 ; the table AND the staging area
-    call OSAPI_MEM_CLAIM
+    mov ax, SC_ITKB * 64                 ; the table AND the staging area
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .let
     mov [sc_iseg], dx
 .let:
@@ -7258,7 +7222,7 @@ sc_stghold:
     push ax
     push cx                         ; CL is the shift count below, and the
     push dx                         ; header promises every other register
-    mov ax, SC_DOCCAP               ; the WHOLE ceiling, not a size computed
+    mov ax, SC_DOCCAP * 64          ; the WHOLE ceiling, not a size computed
                                     ; from the document: a real Word file is
                                     ; the text plus FKP pages, and how many
                                     ; pages it needs is what the writer finds
@@ -7267,7 +7231,10 @@ sc_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF=0 and DX = the base segment
+    pop bx
     jc .no
     mov [sc_stgseg], dx
     mov es, dx
@@ -7361,7 +7328,14 @@ sc_stgread:
     mov cx, dx
 .kb:
     mov ax, cx
-    call OSAPI_MEM_CLAIM            ; preserves all but DX
+    push cx
+    mov cl, 6                       ; the KB, in paragraphs
+    shl ax, cl
+    pop cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; preserves all but DX
+    pop bx
     jc .nomem
     mov [sc_stgseg], dx
     mov es, dx
@@ -11398,7 +11372,6 @@ sc_ugrow:
     jbe .yes
     cmp word [sc_useg], 0
     jne .re
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
@@ -17001,8 +16974,9 @@ sc_pictload:
     mov [si+IMG_SRCLEN], ax
     mov ax, [sc_stgseg]
     mov [si+IMG_SRCSEG], ax
-    mov ax, SC_PICKB
-    call OSAPI_MEM_CLAIM
+    mov ax, SC_PICKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [sc_picseg], dx
     mov si, sc_imgblk
@@ -17800,11 +17774,11 @@ sc_doclose:
 ; centred, modal exactly like a dropdown - sc_mkey and sc_mroute consume
 ; everything while [sc_about] is up, and closing repaints through the same
 ; sc_mrepair. Reached from Help > About... and from the kernel bar's 'About
-; Scribe' (OSAPI_ABOUT_SET, registered in sc_entry).
+; Scribe' (sc_cls's WC_ABOUT, SPEC.md 11.104).
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; sc_habout - the OSAPI_ABOUT_SET handler: SI = our window, lock held
+; sc_habout - the WC_ABOUT handler: SI = our window, lock held
 ; -----------------------------------------------------------------------------
 sc_habout:
     call sc_bounds                  ; the kernel bar path arrives without a
@@ -20123,7 +20097,7 @@ sc_s_abou5: db 'Updated by Koriban', 0
 sc_s_ok:    db 'OK', 0
 TOASTSTR sc_m_noclose, 'Close refused, try again'
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
 ; reference, clamped onto smaller adapters by wm_create (SPEC.md 11). The
 ; chrome strips cost 60px of content, so a small frame would leave the
@@ -20143,12 +20117,29 @@ TOASTSTR sc_m_noclose, 'Close refused, try again'
 
 sc_tpl:
     dw 20, 24, 600, 440
-    dw sc_wttl, sc_paint, sc_onkey, sc_onclick
-                                    ; the TITLE is the bss buffer sc_compttl
+    dw sc_wttl, sc_cls              ; the TITLE is the bss buffer sc_compttl
                                     ; composes - 'Scribe - <NAME>' -
                                     ; before wm_create banks the pointer, and
                                     ; sc_settitle recomposes it on every name
                                     ; change (SPEC.md 68.2)
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; RESIZABLE (SPEC.md 11.1/27): sc_paint lays out from the live record, so a
+; repaint re-wraps for free. SAVEU: everything that draws goes through
+; sc_redraw or sc_paint, and the worker's two background drawers ask
+; OSAPI_WM_OBSCURED first - so a raise puts the old pixels back instead of
+; lettering 464 cells (11.96.1). The content is SNAPPED (the default, 11.94):
+; every keystroke redraws a row of text, and an aligned cell writes ONE
+; framebuffer byte where an unaligned one writes two - typebench priced the
+; skew at 9.4% of every keystroke. The About is the same box Help > About...
+; opens; the wheel scrolls the document (13.18); the timer is the scroll
+; bar's PAUSE commit (13.10.5.4.2), and the release and the drag are the
+; THUMB's alone (13.10.6.4) - sc_mtrack's poll loop owns a gesture that cannot
+; be live at the same time as a bar drag, so 13.7's no-mixing rule is
+; satisfied by "not at the same time"
+    OS88_CLASS sc_cls, WF_SIZABLE | WF_SAVEU, PAINT, sc_paint, \
+               ONKEY, sc_onkey, ONCLICK, sc_onclick, ABOUT, sc_habout, \
+               ONMOUSEUP, sc_onup, ONTIMER, sc_ontimer, ONDRAG, sc_ondrag, \
+               ONWHEEL, sc_onwheel
 
 ; The EMPTY kernel menu set (SPEC.md 12.2): zero menus, but its AM_NAME puts
 ; 'Scribe' in the kernel bar instead of the 15-char header name. The

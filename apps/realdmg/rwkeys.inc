@@ -49,8 +49,6 @@ rw_ctlopen:
     call OSAPI_WM_CREATE            ; CF = 1: the window table is full -
     jc .r                           ;   nothing, and the game plays on
     mov [rw_kwin], bx
-    mov al, 1                       ; it paints every pixel of its own
-    call OSAPI_WM_OWNBG             ;   (its mat), so no white under it
     call OSAPI_WM_FRONT
     call OSAPI_WM_SHOW              ; (its first paint is all of it)
     ret
@@ -587,7 +585,10 @@ rw_konkey:
 
 rw_ktpl:
     dw 0, 0, RW_KW + 2, RW_KH + TITLE_H + 2     ; x, y set by rw_ctlopen
-    dw rw_s_kttl, rw_kpaint, rw_konkey, rw_konclick
+    dw rw_s_kttl, rw_kcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rw_kcls, WF_OWNBG, PAINT, rw_kpaint, ONKEY, rw_konkey, \
+               ONCLICK, rw_konclick
 rw_s_kttl:      db 'RealDMG Controls', 0
 rw_s_kdef:      db 'Default', 0
 

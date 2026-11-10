@@ -859,15 +859,16 @@ zi_load:
     ; bigger claim's selector already covers its first 64KB, and the pages
     ; past that are zm_pages'. Bit 2 is TI: a real-mode claim is 512-byte
     ; aligned and never has it, so this costs the XT nothing. The 64KB one
-    ; stays on the KB door ON PURPOSE: as an OS88_HIGHMEM claim of 64KB it
-    ; goes above 1MB, where OSAPI_MEM_P's would be conventional memory.
+    ; is a plain claim with no MEMP_CONV ON PURPOSE: as an OS88_HIGHMEM claim
+    ; of 64KB it goes above 1MB.
     test dl, 4
     jz .claimed
     cmp ax, 64 * 64
     jae .claimed
     call OSAPI_MEM_FREE
-    mov ax, 64
-    call OSAPI_MEM_CLAIM
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov word [zi_para], 64 * 64
     jmp short .claimed
@@ -931,8 +932,9 @@ zi_load:
                                 ; above hands the old claim back and a FRESH
                                 ; claim starts undeclared
 
-    mov ax, ZI_STKKB
-    call OSAPI_MEM_CLAIM
+    mov ax, ZI_STKKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [zf_stkseg], dx
     mov ax, zf_reloc
@@ -2503,7 +2505,7 @@ zi_m_issave:  db 'A saved game: open its story, then RESTORE.', 0
 ;
 ; IT IS BUFFERED WHOLE AND WRITTEN WHOLE, and that is forced rather than
 ; chosen. A worker may not touch a file slot (SPEC.md 20.6), so the write is
-; the UI task's; and OSAPI_FILE_APPEND (slot 0x0286) refuses a file whose size
+; the UI task's; and OSAPI_FILE_APPEND (withdrawn, kernel size pass 19) refuses a file whose size
 ; is not a whole number of clusters, so a transcript cannot be dribbled out a
 ; line at a time without padding the file with rubbish. OSAPI_FILE_WRITE
 ; REPLACES, so the only correct thing to replace it with is everything so far.
@@ -2562,8 +2564,9 @@ zi_script_open:
     push dx
     cmp word [zi_scrseg], 0
     jne .ok                         ; idempotent: a second story reuses it
-    mov ax, ZI_SCRKB
-    call OSAPI_MEM_CLAIM
+    mov ax, ZI_SCRKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .no
     mov [zi_scrseg], dx
     mov ax, zf_reloc                ; ...AND IT MOVES (NO-PINNING A3): the

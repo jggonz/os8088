@@ -287,16 +287,25 @@ section .text
 ; where SPEC.md 31.9.2 gave a DRIVER's page a typed field (SPEC.md 62.9.15).
 ; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_cls
+cp_cls:     dw cp_cls_end - cp_cls, 0   ; its CLASS (SPEC.md 11.104)
 %ifdef KERN_BIG
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
+            dw cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
 %else                           ; **NO KEYBOARD ON kern_small** (SPEC.md
                                 ; 62.9.15): the one field in the machine that
                                 ; can be typed into is the RAM disk's size, and
                                 ; kern_small has no RAM disk. The word goes
                                 ; back to 0, which is what it was for the whole
                                 ; life of the panel before SPEC.md 31.9.2
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
+            dw cpf_cp_paint, 0, cpf_cp_onclick
 %endif
+            dw 0, 0, 0              ; About, wake, close
+            dw cpf_cp_onup          ; the release, a COLD offset (2.6.3)
+%ifdef KERN_BIG
+            dw 0, 0, 0, 0           ; resize notice, right click, negotiator,
+            dw cpf_cp_ondrag        ; timer - and the drag (SPEC.md 13.8.2)
+%endif
+cp_cls_end:
 
 ; -----------------------------------------------------------------------------
 ; cp_kinit - KD_INIT (SPEC.md 29.3): install the panel's extra edges
@@ -323,22 +332,17 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
 ; unlike the file dialog this window is an INSTANCE that can be closed from
 ; the dock, the bar and its own close box.
 ; -----------------------------------------------------------------------------
-cp_kinit:
 %ifdef KERN_BIG
+cp_kinit:
     push ax
     xor ax, ax
     mov [cp_down], al
     call COLD_SEG:os88ui_arm_f
     pop ax
+    ret                         ; (the release and the drag are cp_cls's
+%else                           ; slots now, SPEC.md 11.104 - and kern_small,
+cp_kinit    equ 0               ; with nothing else to do, has no KD_INIT)
 %endif
-    mov word [bx+W_ONMOUSEUP], cpf_cp_onup ; a COLD offset (SPEC.md 2.6.3):
-                                ; wm_onmouseup's store, written here - the
-                                ; routine is kern_mega's alone since cell
-                                ; 0x0196 became it (kernel size pass 14).
-%ifdef KERN_BIG                 ; apps.inc's kind table is resident and so
-    mov word [bx+W_ONDRAG], cpf_cp_ondrag ; is this proc. ...and
-%endif                          ; wm_ondrag's store, cell 0x0334's own now
-    ret
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
                                 ; NAME column, which is the tighter of the two
@@ -1219,7 +1223,7 @@ section .cold                   ; ...and the two that stay resident
     call cp_live
 %else
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind
+    KDOOR inst_find_kind
 %endif
 %endmacro
 
@@ -1942,9 +1946,11 @@ cp_drv_name:
     push es
     mov si, cp_sbuf             ; '' unless a PUBLISHED class names a page
     mov byte [si], 0
-    call cp_clssvc              ; DI = this class's published table
+    call cp_clssvc              ; ES:DI = this class's published table
     jc .out
-    mov cx, [di+DSV_CPNAME]     ; the driver's own pointer, in ITS segment
+    mov cx, [es:di+DSV_CPNAME]  ; the driver's own pointer, in ITS segment -
+                                ; which is not ES for class 1, whose table is
+                                ; the kernel's copy, so it is read below
     jcxz .out
     cbw                         ; AL = the class, 1..DRVC_MAX
     xchg di, ax
@@ -2053,19 +2059,21 @@ cp_drv_ev:
     jc .no                      ; a static page, or a driver that went away
     mov bx, dx                  ; BX = the pane-relative y...
     mov dx, bp                  ; ...DX the pane top, CX already the x
+    push es
     push si
     mov si, di                  ; SI = pane left, banked past drv_cls_svc
-    call cp_clssvc
+    call cp_clssvc              ; ES:DI = the class's table, in place
     pop bp                      ; BP = the cell (pushed as SI above)
+    jc .noes
+    mov bp, [es:bp+di]          ; BP = the published proc, 0 = not wanted.
+                                ; THE OVERRIDE IS LOAD-BEARING (SPEC.md 1):
+                                ; [bp+di] defaults to SS, LOW_SEG here, and
+                                ; read a task stack it answers 0 - which looks
+                                ; exactly like a driver that did not publish
+.noes:                          ; the cell
+    pop es                      ; (pop writes no flag)
     jc .yes                     ; the class went: nothing to call, and the
                                 ; caller must still not run the static path
-    add bp, di
-    mov bp, [ds:bp]             ; BP = the published proc, 0 = not wanted.
-                                ; THE OVERRIDE IS LOAD-BEARING (SPEC.md 1):
-                                ; SS is LOW_SEG here and [bp] defaults to it,
-                                ; so without it this reads a task stack and
-                                ; answers 0 - which looks exactly like a
-                                ; driver that did not publish the cell
     mov di, si
     or bp, bp
     jz .yes
@@ -2633,17 +2641,17 @@ cp_promise:
     push bx
     push di
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind   ; CF = 1: no live panel, nothing to
+    KDOOR inst_find_kind                ; CF = 1: no live panel, nothing to
     jc .out                             ; promise about - cp_page runs from
                                         ; the paint, and the record is what
                                         ; carries the flag
     mov bx, [di+I_WIN]
-    mov al, 1
+    mov ax, WFB_SAVEU * 256 + 1
     cmp byte [cp_sel], CP_ITIME
     jne .say
     xor al, al                          ; the clock is on the pane: withdraw,
-.say:                                   ; and wm_saveu drops the claim with it
-    call KERNEL_SEG:apic_wm_saveu       ; the CELL (0x0378): the Control
+.say:                                   ; and wm_flag drops the claim with it
+    KDOOR wm_flag                       ; the CELL (OSAPI_WM_FLAG): the Control
                                         ; Panel answers SPEC.md 11.96.1's
                                         ; promise per PAGE, from its
                                         ; module (SPEC.md 31.12)
@@ -3164,7 +3172,7 @@ cp_thm_click:
     pop si
     jmp short .donej
 .nowinj:
-    call KERNEL_SEG:cw_snd_beep ; DRVE_OK = the image loaded and SSV_CFG itself
+    KDOOR snd_beep              ; DRVE_OK = the image loaded and SSV_CFG itself
                                 ; refused, which today is wm_create finding the
                                 ; table full - no window, and NOT ABOUT THE
                                 ; DISK, so it does not say the disk. cp_open_x's
@@ -3206,7 +3214,7 @@ cp_thm_click:
     pop si
     jmp short .donej
 .cnowin:
-    call KERNEL_SEG:cw_snd_beep  ; DRVE_OK = the image loaded and THMV_OPEN
+    KDOOR snd_beep               ; DRVE_OK = the image loaded and THMV_OPEN
     jmp short .donej             ; itself refused (wm_create's table full)
 .groups:
 %endif
@@ -3603,7 +3611,7 @@ cp_fdd_click:
     lea cx, [di+CPF_BX1]
                                 ; ...from its left edge
     call cp_fdstg               ; BX = the item array, AX = the count
-    call KERNEL_SEG:cw_menu_popup ; CF = 1 nothing chosen, else AL = the pick
+    KDOOR menu_popup              ; CF = 1 nothing chosen, else AL = the pick
     pop bx
     jc .done
 
@@ -4342,8 +4350,8 @@ cp_vid_fc:
     call cp_vid_fcok            ; CF = greyed...
     mov ax, OS88UI_GCHECK
     adc ah, 0                   ; ...is AH = OS88UI_DIS (1) or 0
-    test byte [drv_cfg+CFG_VGC], 1
-    call cp_gnz                 ; ticked when bit 0 is set (SPEC.md 39.28)
+    test byte [drv_cfg+CFG_VGC], CFG_VGCB
+    call cp_gnz                 ; ticked when the bit is set (SPEC.md 39.28)
     jmp kretm_si
 %endif
 
@@ -4506,10 +4514,10 @@ cp_vid_click:
     mov al, 5
     call cp_ctl                 ; ...and it fires on the RELEASE (13.8.3)
     jc .done
-    and byte [drv_cfg+CFG_VGC], 1   ; stored 0 or 1, whatever a record held
-    xor byte [drv_cfg+CFG_VGC], 1
+    xor byte [drv_cfg+CFG_VGC], CFG_VGCB ; (a bit of 'VM's mode byte, F1)
+    test byte [drv_cfg+CFG_VGC], CFG_VGCB
     call cp_wdset               ; remembered on close (SPEC.md 31.8) - the
-    jz .fcdraw                  ; door writes no flags, so ZF is the xor's: an
+    jz .fcdraw                  ; door writes no flags, so ZF is the test's: an
     call cp_vgc_force           ; UN-tick waits for the next start (39.28)
 .fcdraw:
     call cp_vid_fc
@@ -4814,7 +4822,7 @@ cp_tick_x:
     cmp byte [cp_sel], CP_ITIME
     jne .out
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind         ; CF = 1: no live Control Panel
+    KDOOR inst_find_kind                      ; CF = 1: no live Control Panel
     jc .out
     mov bx, [di+I_WIN]
     test byte [bx+W_FLAGS], 2   ; visible?
@@ -5409,7 +5417,7 @@ cp_flush_x:
                                 ; 2.8.6, cp_fdnop's shape)
 .tell:
     xor cx, cx                  ; a toast COPIES its line, so image data is
-    call KERNEL_SEG:cw_toast_show   ; fine for the drop that follows
+    KDOOR toast_show                ; fine for the drop that follows
     pop es
     pop si
     jmp kretm_cx
@@ -5468,7 +5476,7 @@ cp_toast1:
     pop es
     push cx
     xor cx, cx                  ; CX = 0: TOAST_TICKS
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop cx
     pop es
     ret
@@ -7701,7 +7709,7 @@ cpf_shutdown:
     call cp_unpin               ; cancellation must not pin the image, unless
 %else                           ; an open panel still owns it (driver.inc)
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind
+    KDOOR inst_find_kind
     jnc .kept                  ; an open panel still owns CTRL.DRV
     mov al, MOD_CTRL
     call mod_drop              ; cancellation must not pin the image
@@ -7835,12 +7843,12 @@ cp_open_x:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
     jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jnc .out                    ; the panel itself refused - no instance slot,
                                 ; no window. app_launch's own answer, and it
                                 ; is not about the disk, so it keeps the beep
                                 ; the three call sites used to give it
-    call ct_cw_snd_beep         ; audible refusal (SPEC.md 34.3), which is
+    KDOOR snd_beep              ; audible refusal (SPEC.md 34.3), which is
                                 ; what every one of these call sites did with
                                 ; a CF=1 from app_launch before cp_open owned
                                 ; the decision

@@ -182,6 +182,35 @@ KERNEL_GLOB = os.path.join(ROOT, "kernel", "*.inc")
 CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c",
         "apps/apple2/apple2.c", "apps/apple2/a2scr.c"]
 
+# THE C SDK, under ITS OWN PREFIX (engsys-11, kernel size pass 19).
+# apps/cc/os88.h restates the SDK's constants for C as `#define OS88_<X>`, so
+# the name-pairing above never meets them: OS88_FT_DIR is OSAPI_FT_DIR,
+# OS88_RED is CRED, OS88_FSI_W is FSI_W. Each one is resolved by the PREFIX
+# MAP below - the first of these spellings apps/os88api.inc (or the kernel)
+# defines - or by an explicit row in C_ALIAS, and must agree with it. A
+# constant only C has goes in C_ONLY with the reason; an os88.h constant that
+# resolves to nothing and is in neither list FAILS, so a new one is either
+# mirrored or explained, never silently unwatched.
+C_HEADER = "apps/cc/os88.h"
+C_PREFIX = ("{}", "OSAPI_{}", "C{}")
+C_ALIAS = {
+    "OS88_MENU_MAX": "MENU_APPMAX",          # os88.h's own comment says so
+    "OS88_SCAN_ENTER": "KSC_ENTER",
+    "OS88_SCAN_ALT": "KSC_ALT",
+    "OS88_ASSOC_FULL": "ASSOC_FL_FULL",
+    "OS88_ASSOC_HOLD": "ASSOC_FL_HOLD",
+    "OS88_ASSOC_NOFLUSH": "ASSOC_FL_NOFLUSH",
+    "OS88_CLASS_LEN": "WC_MAXLEN",           # the whole class, every slot named
+}
+C_ONLY = {
+    "OS88_H": "the include guard",
+    "OS88_BLITP_PROBE": "OSAPI_GFX_BLITP's DI bit 15 (SPEC.md 5.4.3.2); the "
+                        "assembly SDK documents the bit and names no constant",
+    "OS88_HUGE_W32": "os88_mem_huge_w's window argument, a C wrapper's own "
+                     "encoding of OSAPI_MEM_HUGE's window choice",
+    "OS88_HUGE_W16": "the same",
+}
+
 # Constants a host tool spells out for itself, and where the truth lives.
 PY_MIRROR = {
     "KERNEL_SEG":   ["tools/os88sym.py", "tools/os88marty.py"],
@@ -207,7 +236,7 @@ PY_MIRROR = {
 # SPEC.md 51.0 took the same decision for MEM_P_FATW_N and states the rule.
 DIVERGENT = {
     "MAX_TASKS": "kern_small has 7 slots (SPEC.md 8.7, "
-                 "docs/plans/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
+                 "docs/plans/retired/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
                  "taskmgr sizes SS_TSTATE from it, so a package built at 14 "
                  "reading a 7-slot snapshot over-allocates and is safe, where "
                  "the reverse overflows",
@@ -378,6 +407,38 @@ def main():
               "the same quantity under two names is still two constants, and "
               "this one sizes a record the library writes past the end of",
               got="%s=%s; %s=%s" % (na, a, nb, b), want="one value")
+
+    # ...the C SDK, through its prefix map (C_HEADER above).
+    sdk = {}
+    for rel in ["apps/os88api.inc", "apps/os88ui.inc", "drivers/os88drv.inc"] \
+            + sorted(r for r in tables if r.startswith("kernel/")):
+        for n, v in tables.get(rel, {}).items():
+            sdk.setdefault(n, (v, rel))
+    cdefs = defs(C_HEADER, re.compile(r"^#define\s+(OS88_[A-Z0-9_]*)(?:[ \t]+([^\s/]*))?[ \t]*(?:/\*|$)", re.M))
+    cmatched = 0
+    for name, val in sorted(cdefs.items()):
+        if name in C_ONLY:
+            continue
+        stem = name[len("OS88_"):]
+        cands = [C_ALIAS[name]] if name in C_ALIAS else [f.format(stem) for f in C_PREFIX]
+        hit = next((c for c in cands if c in sdk), None)
+        if not check(hit is not None, "%s (%s) mirrors an SDK constant" % (name, C_HEADER),
+                     "os88.h restates the SDK for C, so a value there with no "
+                     "assembly twin is unwatched: map it in C_ALIAS, or put it "
+                     "in C_ONLY with the reason",
+                     got="none of " + ", ".join(cands), want="one defined"):
+            continue
+        cmatched += 1
+        check(sdk[hit][0] == val, "%s agrees with %s (%s)" % (name, hit, sdk[hit][1]),
+              "a C package compares the kernel's answer against the C copy; a "
+              "drifted one is a wrong branch, never a build error",
+              got="%s=%s; %s=%s" % (name, val, hit, sdk[hit][0]), want="one value")
+    check(cmatched > 50, "os88.h's constants were found to compare",
+          "a regex that stopped matching would pass with nothing checked",
+          got=cmatched, want="> 50")
+    for name in list(C_ALIAS) + list(C_ONLY):
+        check(name in cdefs, "C_ALIAS/C_ONLY's %s is still in os88.h" % name,
+              "a stale exception silently exempts nothing")
 
     # ...and the Python side, which cannot include anything at all.
     # THE KERNEL, WHOLE - not kernel.asm alone, for the docstring's reason one
