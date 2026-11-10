@@ -235,8 +235,10 @@ new findings as new items.
 4. Run `make test-full` ALONE, with nothing else building, then
    `make budget-check`.
 5. Push, rewrite the PR body (what works, what was seen versus built, the
-   rung record, the rows, what is left), and report to the user honestly,
-   failures included. Merge only on the user's instruction (`--admin`).
+   rung record, the rows, what is left, and **screenshots of the merged head
+   on every adapter it reaches**, per CLAUDE.md *Pull requests show the
+   change*), and report to the user honestly, failures included. Merge only
+   on the user's instruction (`--admin`).
 
 Clean up: remove each agent's worktree once its branch is merged. Stop every
 Monitor. Kill only the emulators this run started.

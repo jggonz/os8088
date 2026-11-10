@@ -943,6 +943,38 @@ integrated into the feature's PR, and the final pass run once - is
 `.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
 `LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
 
+## Pull requests show the change
+
+**Every pull request that changes what the machine draws carries screenshots
+of the change in its description.** This is the owner's rule (2026-11-09),
+and it binds every contributor and every agent. `.github/pull_request_template.md`
+is the shape, and `.github/workflows/pr-screenshots.yml` fails a pull request
+that touches `apps/`, `kernel/`, `drivers/`, `faces/` or `boot/` when its
+description has neither an image nor a reason.
+
+- **Coverage.** Take one screenshot for each adapter the change reaches: VGA,
+  CGA and Hercules, plus EGA where it has its own layout. Crop and zoom a small
+  change (`tools/shot.py --crop --zoom`) so the reader can see it. Where
+  something changed rather than appeared, show it before and after.
+- **Source.** Take them on the glass: QEMU (`tools/shot.py`), MartyPC, 86Box
+  or real hardware. Name which one under each picture. A host-side render, such
+  as a harness bitmap or a mock-up, is labelled as one and never stands in for
+  the machine.
+- **Hosting.** Commit them under `docs/<subject>/` on the pull request's
+  branch, as `docs/waverack/` did, and link
+  `https://raw.githubusercontent.com/<owner>/<repo>/<commit SHA>/docs/...`.
+  Pin the link to a SHA, not a branch, so it survives the branch's deletion.
+  Alternatively, drop them into the description on github.com. Never commit
+  them under `build/`.
+- **No visible change.** A change with nothing to see (a host tool, a gate,
+  docs, a refactor whose pixels are identical) writes a line
+  `No visible change: <why>` in the description's Screenshots section. The
+  reason is the claim a reviewer checks, so "pixels identical" names the row
+  or A/B that showed it.
+- **Updates.** A description rewritten after review (a refresh, a fan-out's
+  final pass, a fork review's fixes) keeps or replaces the screenshots so
+  that they show the head being merged, not an earlier one.
+
 ## Shared agent skills
 
 The maintained skills live in `.claude/skills/`; `.agents/skills/` links to
