@@ -457,6 +457,84 @@ def symdict_segment(syms, tpl=0, at=None, exported=None, ref_syms=0):
     hdr += struct.pack('>II', nex, nnew)
     return hdr + e.flush()
 
+def _agg_text(e, syms, cl, insts, rtpl, rat):
+    """the text region inside an aggregate symbol (6.5.8.2.1): strips 1, TOPLEFT, refinement allowed.
+    insts: (sid, X, Y[, refined bitmap]); returns nothing, the bits go to e"""
+    items = sorted(insts, key=lambda it: (it[2], it[1]))
+    enc_int(e, 'DT', 0)
+    stript = 0; firsts = 0; i = 0
+    while i < len(items):
+        T = items[i][2]
+        enc_int(e, 'DT', T - stript); stript = T
+        first = True; curs = 0
+        while i < len(items) and items[i][2] == T:
+            it = items[i]; i += 1
+            sid, X = it[0], it[1]
+            bm = it[3] if len(it) > 3 else syms[sid]
+            bh = len(bm); bw = len(bm[0]) if bh else 0
+            sw0 = len(syms[sid][0]); sh0 = len(syms[sid])
+            if first: enc_int(e, 'FS', X - firsts); firsts = X; first = False
+            else: enc_int(e, 'DS', X - curs)
+            enc_iaid(e, 'ID', cl, sid)
+            hasref = len(it) > 3
+            enc_int(e, 'RI', 1 if hasref else 0)
+            if hasref:
+                rdw, rdh = bw - sw0, bh - sh0
+                enc_int(e, 'RDW', rdw); enc_int(e, 'RDH', rdh); enc_int(e, 'RDX', 0); enc_int(e, 'RDY', 0)
+                enc_refine(e, bm, syms[sid], (rdw >> 1), (rdh >> 1), rtpl, 0, rat, 'gr')
+            curs = X + bw - 1
+        enc_int(e, 'DS', None)
+
+def symdict_refagg_segment(entries, insyms, tpl=0, rtpl=0, rat=None, exported=None):
+    """a symbol dictionary with SDREFAGG = 1, arithmetic coded.  insyms: the imported symbols' bitmaps.
+    entries (sorted by symbol height): ('ref', sid, rdx, rdy, bitmap) - one refinement of symbol sid (any id
+    already known), ('agg', w, h, [(sid, X, Y[, refined bitmap]), ...]) - an aggregate of instances.
+    Returns (segment DATA, the new symbols' bitmaps)."""
+    rat = rat or NOMINAL_RAT
+    e = MQEnc(); nin = len(insyms); nnew = len(entries); total = nin + nnew
+    cl = ceil_log2(total); known = list(insyms); newbm = []
+    hprev = 0; i = 0
+    def height(en):
+        return len(en[4]) if en[0] == 'ref' else en[2]
+    while i < nnew:
+        hc = height(entries[i]); enc_int(e, 'DH', hc - hprev); hprev = hc; wprev = 0
+        while i < nnew and height(entries[i]) == hc:
+            en = entries[i]
+            w = len(en[4][0]) if en[0] == 'ref' and hc else (en[1] if en[0] == 'agg' else 0)
+            enc_int(e, 'DW', w - wprev); wprev = w
+            if en[0] == 'ref':
+                enc_int(e, 'AI', 1); enc_iaid(e, 'ID', cl, en[1])
+                enc_int(e, 'RDX', en[2]); enc_int(e, 'RDY', en[3])
+                enc_refine(e, en[4], known[en[1]], en[2], en[3], rtpl, 0, rat, 'gr')
+                bm = en[4]
+            else:
+                insts = en[3]
+                enc_int(e, 'AI', len(insts))
+                if len(insts) == 1:
+                    # the decoder treats one instance as a plain refinement: callers use 'ref' for that
+                    raise ValueError('an aggregate needs 2 or more instances')
+                _agg_text(e, known, cl, insts, rtpl, rat)
+                bm = [[0] * w for _ in range(hc)]
+                for it in insts:
+                    b = it[3] if len(it) > 3 else known[it[0]]
+                    for yy, row in enumerate(b):
+                        for xx, v in enumerate(row):
+                            if v and 0 <= it[1] + xx < w and 0 <= it[2] + yy < hc: bm[it[2] + yy][it[1] + xx] = 1
+            known.append(bm); newbm.append(bm); i += 1
+        enc_int(e, 'DW', None)
+    ex = exported if exported is not None else [False] * nin + [True] * nnew
+    i = 0; cur = 0
+    while i < total:
+        j = i
+        while j < total and ex[j] == bool(cur): j += 1
+        enc_int(e, 'EX', j - i); i = j; cur ^= 1
+    nex = sum(1 for x in ex if x)
+    hdr = struct.pack('>H', (1 << 1) | (tpl << 10) | (rtpl << 12))
+    hdr += b''.join(struct.pack('>bb', *a) for a in (NOMINAL_AT[tpl] if tpl == 0 else NOMINAL_AT[tpl][:1]))
+    if not rtpl: hdr += b''.join(struct.pack('>bb', *a) for a in rat)
+    hdr += struct.pack('>II', nex, nnew)
+    return hdr + e.flush(), newbm
+
 class ArithEm:
     def __init__(s, e, cl): s.e = e; s.cl = cl
     def int(s, name, v): enc_int(s.e, name, v)

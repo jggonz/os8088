@@ -755,6 +755,27 @@ static pdw jb_codelen(pdw n)            /* ceil(log2(n)), at least 0 */
     return k;
 }
 
+/* A symbol coded by refinement / aggregation (6.5.8.2): REFAGGNINST = 1 refines one symbol, more is a
+ * text region of that many (refined) instances drawn on the symbol's own bitmap at o */
+static pdw sd_aggsym(pdw o, pdw w, pdw h, pdw nsym)
+{
+    pdw n, id;
+    pdi rdx, rdy;
+    if (jb_idec(IA_AI) || jb_ival < 1) return PDE_SYNTAX;
+    n = (pdw)jb_ival;
+    if (n == 1) {
+        id = ia_id(); if (jb_ovf || id >= nsym) return PDE_SYNTAX;
+        if (jb_idec(IA_RDX)) return PDE_SYNTAX; rdx = jb_ival;
+        if (jb_idec(IA_RDY)) return PDE_SYNTAX; rdy = jb_ival;
+        jb_getrec(sd_all, id);
+        return rf_decode(o, w, h, jb_rec_off, jb_rec_w, jb_rec_h, rdx, rdy);
+    }
+    tr_ninst = n; tr_strips = 1; tr_dsoff = 0; tr_corner = 1; tr_transp = 0; tr_comb = 0; tr_refine = 1;
+    tr_recs = sd_all; tr_nsyms = nsym; tr_ox = 0; tr_oy = 0;
+    cv_off = o; cv_rb = (pdw)((w + 7) >> 3); cv_w = w; cv_h = h; cv_y0 = 0;
+    return tr_run();
+}
+
 /* decodes the new symbols into sd_all (records, input symbols first) and exports */
 static pdw sd_run(void)
 {
@@ -781,7 +802,10 @@ static pdw sd_run(void)
             symw = (pdw)sw; hch = (pdw)hc;
             o = jb_alloc(symw, (pdw)hc);
             if (!o) return PDE_LIMIT;
-            if (!jb_huff && !sd_refagg) {
+            if (sd_refagg) {
+                rf_tpl = sd_rtpl; rf_tpgr = 0;
+                e = sd_aggsym(o, symw, (pdw)hc, (pdw)(sd_nin + ndec)); if (e) return e;
+            } else if (!jb_huff) {
                 if (symw && hc) {
                     gb_w = symw; gb_h = (pdw)hc; gb_boff = o; gb_brb = (pdw)((symw + 7) >> 3);
                     e = gb_arith(); if (e) return e;
@@ -1450,7 +1474,7 @@ static pdw jb_segment_symdict(void)
     sd_tpl = (pdw)((f >> 10) & 3); sd_rtpl = (pdw)((f >> 12) & 1);
     jb_huff = (pdb)sd_huff;
     if (f & 0x300) { jb_inc |= JBF_UNSUP; return PDE_LIMIT; }   /* bitmap contexts retained / used */
-    if (sd_refagg) return PDE_LIMIT;                            /* refinement / aggregate coding: not supported (20.22.12) */
+    if (sd_refagg && sd_huff) return PDE_LIMIT;                 /* Huffman with refinement / aggregate coding: not supported (20.22.12) */
     if (sd_huff) {
         pdw sel;
         jb_collect_tabs();
@@ -1465,6 +1489,10 @@ static pdw jb_segment_symdict(void)
         for (k = 0; k < (sd_tpl ? 1u : 4u); k++) { sd_at[k][0] = (pdi)(signed char)jb_b(); sd_at[k][1] = (pdi)(signed char)jb_b();
             if (sd_at[k][1] < -2 || sd_at[k][1] > 0 || (sd_at[k][1] == 0 && sd_at[k][0] >= 0)) return PDE_LIMIT; }
     else for (k = 0; k < 4; k++) { sd_at[k][0] = gb_atnomv[0][k * 2]; sd_at[k][1] = gb_atnomv[0][k * 2 + 1]; }
+    if (sd_refagg && !sd_rtpl) {
+        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
+        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+    }
     jb_b32(); sd_numex = jb_lo; if (jb_hi) return PDE_LIMIT;
     jb_b32(); sd_numnew = jb_lo; if (jb_hi || sd_numnew > JB_MAXSYMS) return PDE_LIMIT;
     nin = jb_syms(0);

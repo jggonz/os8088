@@ -263,6 +263,94 @@ def check_jb2_text(rnd, bins, use_mutool=False, refine_ok=True):
     return fails
 
 
+# MuPDF 1.28.6 disagrees with the spec model on a REFINED instance inside an aggregate when SDRTEMPLATE = 0
+def check_jb2_refagg(rnd, bins, use_mutool=False):
+    """symbol dictionaries with SDREFAGG: refinements of one symbol and aggregates, imported + new symbols"""
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(40):
+            W = rnd.choice([60, 97, 130]); H = rnd.choice([40, 75, 110])
+            n1 = rnd.randint(2, 6)
+            hs = sorted(rnd.randint(4, 12) for _ in range(n1))
+            base = [glyph(rnd.randint(3, 10), hh, rnd) for hh in hs]
+            tpl = rnd.randint(0, 3); rtpl = rnd.randint(0, 1)
+            known = list(base); entries = []
+            for _ in range(rnd.randint(1, 6)):
+                if rnd.random() < .5 or len(known) < 2:
+                    sid = rnd.randrange(len(known)); b = known[sid]
+                    bh = len(b) + rnd.randint(-1, 2); bw = len(b[0]) + rnd.randint(-1, 2)
+                    rdx = rnd.randint(-1, 1); rdy = rnd.randint(-1, 1)
+                    bm = [[(b[y][x] if y < len(b) and x < len(b[0]) else 0) ^ (1 if rnd.random() < .12 else 0) for x in range(bw)] for y in range(bh)]
+                    entries.append(('ref', sid, rdx, rdy, bm))
+                else:
+                    insts = []
+                    for _k in range(rnd.randint(2, 4)):
+                        sid = rnd.randrange(len(known))
+                        item = (sid, rnd.randint(0, 8), rnd.randint(0, 6))
+                        if rnd.random() < (0.0 if (use_mutool and rtpl == 0) else .3):
+                            b = known[sid]; bm = [row[:] for row in b]; bm[0][0] ^= 1
+                            item = item + (bm,)
+                        insts.append(item)
+                    entries.append(('agg', rnd.randint(8, 20), rnd.randint(6, 16), insts))
+                # keep the entries sorted by height; later entries may refer to earlier new symbols only
+                # in the order given, so build `known` as the decoder will (sorted order)
+            hof = lambda en: len(en[4]) if en[0] == 'ref' else en[2]
+            entries.sort(key=hof)
+            # references to new symbols must point at ones that come EARLIER after sorting: rebuild ids
+            ok = True; known = list(base)
+            for en in entries:
+                if en[0] == 'ref' and en[1] >= len(known): ok = False
+                if en[0] == 'agg' and any(it[0] >= len(known) for it in en[3]): ok = False
+                # the symbol's own bitmap joins `known` after it is built; encoder does that, here only ids matter
+                known.append(None)
+            if not ok: continue
+            try: data, newbm = F.symdict_refagg_segment(entries, base, tpl, rtpl)
+            except Exception as ex: print('encode', ex); continue
+            allsyms = base + newbm
+            insts = []
+            for _ in range(rnd.randint(2, 14)):
+                insts.append((rnd.randrange(len(allsyms)), rnd.randint(0, W - 8), rnd.randint(0, H - 8)))
+            page = [[0] * W for _ in range(H)]
+            for it in sorted(insts, key=lambda it: (it[2] + len(allsyms[it[0]]) * 0, it[1])):
+                pass
+            region = [[0] * W for _ in range(H)]
+            for it in sorted(insts, key=lambda it: (it[2], it[1])):
+                compose(region, allsyms[it[0]], it[1], it[2], 0)
+            compose(page, region, 0, 0, 0)
+            d1 = F.segment(0, 0, F.symdict_segment(base, tpl), page=0)
+            d2 = F.segment(1, 0, data, refs=[0], page=0)
+            tseg = F.segment(3, 6, F.text_segment(allsyms, insts, W, H, 0, 0, 0, 0, 1, 0, 0, 0, 0, False, 0), refs=[1])
+            pseg = F.segment(2, 48, F.page_info(W, H))
+            # the text region sees the dictionary's EXPORTED symbols: only the new ones (the imported are not exported)
+            tsyms = newbm
+            insts2 = [(it[0] - len(base), it[1], it[2]) for it in insts if it[0] >= len(base)]
+            if not insts2: continue
+            region = [[0] * W for _ in range(H)]
+            for it in sorted(insts2, key=lambda it: (it[2], it[1])):
+                compose(region, tsyms[it[0]], it[1], it[2], 0)
+            page = [[0] * W for _ in range(H)]; compose(page, region, 0, 0, 0)
+            tseg = F.segment(3, 6, F.text_segment(tsyms, insts2, W, H, 0, 0, 0, 0, 1, 0, 0, 0, 0, False, 0), refs=[1])
+            segs = [d1, d2, pseg, tseg]
+            if use_mutool:
+                mp = mutool_pgm(segs, None, W, H, td)
+                total += 1
+                if mp != page: print('MUTOOL differs refagg case', case, 'tpl', tpl, 'rtpl', rtpl, [(e0[0], (e0[2], e0[3]) if e0[0]=='ref' else len(e0[3])) for e0 in entries]); fails += 1
+                continue
+            data = b''.join(segs)
+            for want in (0, W // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, data, None, W, H, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, W, H, sc):
+                        open('/tmp/failr_%d.jb2' % case, 'wb').write(data)
+                        print('FAIL refagg case', case, W, H, 'want', want, tpl, rtpl); fails += 1
+    print('jbig2 refagg%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
+
+
 def custom_table(rnd, oob, name):
     """-> (segment data, HuffTab) for a custom table covering -64..63 in 8 lines"""
     lines = [(4, 4)] * 8
@@ -474,6 +562,8 @@ if __name__ == '__main__':
         if what == 'jb2-halftone': f += check_jb2_halftone(rnd, BINS)
         if what == 'mutool-jb2-halftone': f += check_jb2_halftone(rnd, BINS, True)
         if what == 'mutool-jb2-generic': f += check_jb2_generic(rnd, BINS, True)
+        if what == 'jb2-refagg': f += check_jb2_refagg(rnd, BINS)
+        if what == 'mutool-jb2-refagg': f += check_jb2_refagg(rnd, BINS, True)
         if what == 'jb2-multi': f += check_jb2_multi(rnd, BINS)
         if what == 'mutool-jb2-multi': f += check_jb2_multi(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
