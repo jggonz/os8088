@@ -4953,7 +4953,113 @@ round's final pass, not before.
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 
-*Reserved; written by its agent before its code.*
+**PDXI** (`PDX_IMG`, magic `PDM_MAGIC_IMG`, `apps/pagedesk/pdxi.asm` + `pdxi.c`)
+is the image-decoder occupant of the slot. It holds three codecs behind one
+protocol: DCT (this section, `pdxidct.c`), CCITT (20.22.12, `pdxiccit.c`) and
+JBIG2 (20.22.12, `pdxijb2.c`). Image + bss is at most 65,024 bytes, of which DCT
+is at most 24,576 and bilevel at most 36,864. The door is at `PDM_ENTRY` like
+`pdwrt.asm`'s: AL = verb, BX/CX/DX its arguments, AX the answer, CF = 1 for a
+failure. It answers `PDV_X_INIT` and `PDV_IMG_OPEN/ROW/CLOSE` only; any other
+verb is `PDE_RANGE`. It reaches PDENG through the far vector `pdxb_init`
+carried (`eng_off/eng_seg`), and the kernel through `pdkgate.inc` (it makes no
+kernel call today).
+
+**The IMG protocol as PDXI implements it.**
+
+* `PDV_X_INIT` (BX = XB): reads `pdxb_init`, keeps `xb_seg`, the PDENG vector
+  and `slot_seg/slot_kb`, drops any open image and any warm state (below).
+  Workspace = `min(slot_kb * 1024, 65,520)` bytes at `slot_seg:0`. A DCT image
+  needs the whole of it only when it is progressive or multi-scan; a baseline
+  image needs one MCU row of output planes (at most 20 KiB).
+* `PDV_IMG_OPEN` (XB = `pdxb_img`). `codec` selects the arm (`PDCD_DCT` here);
+  an unknown or absent codec is `PDE_FILTER`. The module copies the request out
+  of the XB, because `STRM_OPEN` needs the XB for `pdxb_strm`, opens the coded
+  bytes (`objnum/gen` through `PDV_ENG_STRM_OPEN` with `accept = PDSA_CODEC`,
+  whose `codec` must come back equal to the request's, else `PDE_FILTER`; or
+  the inline `iseg:ioff`, `ilen` bytes), parses the markers, chooses the scale
+  and fills `out_w out_h out_mode out_ncomp rowbytes scale` in the XB. A
+  progressive (or multi-scan) image is entropy-decoded completely in OPEN, so
+  OPEN is where its time goes; a baseline image decodes lazily in ROW.
+* `PDV_IMG_ROW` (BX = dest seg, CX = dest off, DX = row): writes `rowbytes`
+  bytes. A baseline image answers rows in ascending order only (a lower row is
+  `PDE_RANGE`: the caller OPENs again) and skips forward by entropy-decoding the
+  MCU rows between without transforming them. A progressive image answers any
+  row, because its coefficients are all in the workspace. A row at or past
+  `out_h` is `PDE_RANGE`.
+* `PDV_IMG_CLOSE` closes the coded stream. A fully decoded progressive image
+  stays in the workspace as **warm state**: an OPEN with the same
+  `objnum gen w h want_w want_h flags` and the same inline address as the warm
+  state, with no `PDV_X_INIT` between, reuses the coefficients and costs
+  nothing, so a page drawn in bands does not re-decode a progressive image per
+  band. Anything else evicts it.
+
+**The reduction rule.** For `s` = 3, 2, 1, 0 (1/8, 1/4, 1/2, 1/1) the reduced
+size is `ceil(w / 2^s)` by `ceil(h / 2^s)`. The module takes the largest `s` for
+which both are at least `want_w` and `want_h` (`want = 0` means 1/1). It then
+takes the smallest `s` at least that one for which (a) `rowbytes <= 1,024` and (b)
+the workspace holds the image's planes and coefficients. So a result smaller than
+`want` happens only when it must: 3 or 4 interleaved samples a pixel, or a
+progressive image too big for the workspace. A source whose own reduced size
+cannot fit even at 1/8 (more than about 8,000 pixels across, or a progressive
+image whose DC coefficients at 1/8 need more than the workspace, about 32,000
+blocks of one component) is refused with `PDE_LIMIT` before any row is read;
+PDREND draws it as an image it cannot show. Reduction is **not** Incomplete
+(L5).
+At 1/8 only the DC coefficient is used, with no transform: a progressive image
+at 1/8 skips every AC scan without decoding it. At 1/4 and 1/2 the module uses
+libjpeg's reduced transforms (2x2 and 4x4 outputs from the low-order
+coefficients), so a progressive image keeps 4 or 16 coefficients a block, plus a
+64-bit "nonzero" mask a block that the refinement scans' run lengths need.
+
+**What is accepted.** SOF0, SOF1 and SOF2 (baseline, extended sequential,
+progressive), Huffman coded, 8-bit precision, one to four components, any
+sampling factors from 1 to 4 whose ratios to the largest are whole numbers,
+restart markers (`DRI`, `RSTn`), 8- and 16-bit quantisation tables, any
+number of scans. Anything else (arithmetic, lossless, hierarchical, 12-bit,
+fractional sampling ratios, a missing table) is `PDE_FILTER`. Damaged entropy
+data is not an error: the decoder feeds zero bits after the marker it meets,
+resynchronises at the next `RSTn`, and finishes with whatever it has, as
+libjpeg does. A component count other than 1, 3 or 4 is `PDE_FILTER`.
+
+**The output.** The colour transform follows libjpeg: three components are
+YCbCr (a JFIF marker, or Adobe `transform = 1`, or no marker and the ids are not
+`R G B`) or RGB (Adobe `transform = 0`, or ids `R G B`); four components are CMYK
+(no Adobe marker, or `transform = 0`) or YCCK (`transform = 2`).
+
+* **Grey** (`PDIM_GREY8`, `rowbytes = out_w`) is the default: one component
+  gives its samples; YCbCr gives Y alone, **with no chroma transformed**; RGB
+  gives `(77 R + 150 G + 29 B) >> 8`; CMYK and YCCK give the luma of the
+  `(255 - C)(255 - K)/255` form, for `PDIMG_INVERT` set (Adobe's inverted
+  samples) or not. For one-component and RGB images `PDIMG_INVERT` also inverts
+  the grey.
+* **Native** (`PDIM_N8`, `rowbytes = out_w * out_ncomp`) when the caller sets
+  `PDIMG_NATIVE` (0x0004, defined in the img block of `pdabi.h`): the image's
+  `/ColorSpace` is not a device space, so the core maps the samples through its
+  colour-space LUTs. `out_ncomp` is 1 (grey), 3 (RGB, after the YCbCr
+  transform) or 4 (CMYK, after the YCCK transform, in the polarity the file
+  stores: Adobe files are inverted and the core applies `/Decode`). Chroma is
+  replicated (a box), and the RGB conversion is libjpeg's to within one level.
+* `PDIM_BITS1` is not produced.
+
+**The workspace** (declared here, for 20.22.2's table): **64 KiB**
+(`slot_kb = 64`), the most an occupant may have. The module's near memory is
+its image + bss.
+
+| use | bytes |
+|---|---|
+| near: Huffman tables (8 x 838), quantisation (4 x 128), entropy buffer 1,100, raw buffer 512, row buffers 2,200, block and work arrays 600 | about 11,000 |
+| far, baseline: output planes of ONE MCU row, `rows * padded width` for each component used | 1,056 x 16 at the worst |
+| far, progressive or multi-scan: per used component `blocks * stride` + the planes of one MCU row; stride = 136 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes | up to 64 KiB |
+
+An unused component (grey output of a YCbCr image) has no storage at all. Two
+consequences: a 1,000 x 1,000 progressive photograph is decoded at 1/4 (16
+bytes a block, 15,625 blocks, 250 KB) only if it fits, else at 1/8 (2 bytes a
+block, 31 KB); and an image too large even at 1/8 is `PDE_LIMIT` as above.
+
+**Cost** (measured, written below once taken): the Huffman decoder is a table
+lookup of the first 8 bits with a canonical fall-back for longer codes; the
+transforms are libjpeg's integer ones (`jidctint`, `jidctred`), with a
+whole-column shortcut when a column has no AC term.
 
 #### 20.22.12 CCITT and JBIG2 (`bilevel`)
 
