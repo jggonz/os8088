@@ -457,12 +457,67 @@ def symdict_segment(syms, tpl=0, at=None, exported=None, ref_syms=0):
     hdr += struct.pack('>II', nex, nnew)
     return hdr + e.flush()
 
+class ArithEm:
+    def __init__(s, e, cl): s.e = e; s.cl = cl
+    def int(s, name, v): enc_int(s.e, name, v)
+    def it(s, v, logs): enc_int(s.e, 'IT', v)
+    def id(s, sid): enc_iaid(s.e, 'ID', s.cl, sid)
+
+class HuffTab:
+    """a Huffman table: normal lines (low, preflen, rangelen), lower (low, preflen), upper (low, preflen), oob preflen"""
+    def __init__(s, normal, lower, upper, oob):
+        s.normal, s.lower, s.upper, s.oob = normal, lower, upper, oob
+        pls = [l[1] for l in normal] + [lower[1], upper[1], oob]
+        s.codes = assign_codes(pls)
+    @staticmethod
+    def std(n): return HuffTab(*std_lines(n))
+    def enc(s, bw, v):
+        nn = len(s.normal)
+        if v is None:
+            c = s.codes[nn + 2]; assert c, 'table has no OOB'; bw.putn(*c); return
+        for i, (low, pl, rl) in enumerate(s.normal):
+            if pl and low <= v < low + (1 << rl):
+                bw.putn(*s.codes[i]); bw.putn(v - low, rl); return
+        if s.lower[1] and v < s.normal[0][0]:
+            bw.putn(*s.codes[nn]); bw.putn(s.lower[0] - v, 32); return
+        if s.upper[1] and v >= s.upper[0]:
+            bw.putn(*s.codes[nn + 1]); bw.putn(v - s.upper[0], 32); return
+        raise ValueError('value %d not in table' % v)
+
+class HuffEm:
+    """text-region Huffman emitter.  cfg: .tabs {name: HuffTab}, .hflags, .idtable_bytes"""
+    def __init__(s, cfg, nsyms):
+        s.cfg = cfg; s.bw = BitW(); s.nsyms = nsyms
+        s.lens = cfg.symlens(nsyms); s.sym_codes = assign_codes(s.lens)
+    def int(s, name, v):
+        if name == 'RI': s.bw.put('1' if v else '0'); return
+        s.cfg.tabs[name].enc(s.bw, v)
+    def it(s, v, logs): s.bw.putn(v, logs)
+    def id(s, sid): s.bw.putn(*s.sym_codes[sid])
+
+class HuffCfg:
+    def __init__(s, tabs, hflags, symlen=None):
+        s.tabs = tabs; s.hflags = hflags; s.symlen = symlen
+    def symlens(s, n):
+        L = s.symlen or max(1, ceil_log2(n)) if n > 1 else 1
+        return [L] * n
+    def idtable_bytes(s, n):
+        # 35 run-code lengths of 6 bits, then the symbol code lengths as literal run codes, byte aligned
+        lens = s.symlens(n)
+        bw = BitW()
+        rc = assign_codes([6] * 35)
+        for _ in range(35): bw.putn(6, 4)
+        for l in lens: bw.putn(*rc[l])
+        bw.align()
+        return bw.bytes()
+
 def text_segment(syms, insts, w, h, x=0, y=0, op=0, logstrips=0, corner=1, transp=0, comb=0, defpix=0, dsoff=0,
-                 refine=False, rtpl=0, rat=None):
+                 refine=False, rtpl=0, rat=None, huff=None):
     """insts: (symbol id, X, Y) with X, Y the top-left of the drawn bitmap on the region;
     for a refined instance (symbol id, X, Y, refined bitmap) the refined bitmap is drawn."""
     strips = 1 << logstrips
-    e = MQEnc(); nsyms = len(syms); cl = ceil_log2(nsyms)
+    e = MQEnc() if not huff else None; nsyms = len(syms); cl = ceil_log2(nsyms)
+    em = ArithEm(e, cl) if not huff else HuffEm(huff, nsyms)
     rat = rat or NOMINAL_RAT
     items = []
     for it in insts:
@@ -477,11 +532,11 @@ def text_segment(syms, insts, w, h, x=0, y=0, op=0, logstrips=0, corner=1, trans
             S = Y + (bh - 1 if corner in (0, 2) else 0)
         items.append((T // strips, S, T, it, bw, bh))
     items.sort(key=lambda t: (t[0], t[1]))
-    enc_int(e, 'DT', 0)
-    stript = 0; firsts = 0; i = 0
+    em.int('DT', 0 if not huff else 1)
+    stript = 0 if not huff else -strips; firsts = 0; i = 0
     while i < len(items):
         st = items[i][0] * strips
-        enc_int(e, 'DT', (st - stript) // strips); stript = st
+        em.int('DT', (st - stript) // strips); stript = st
         first = True; curs = 0
         while i < len(items) and items[i][0] * strips == st:
             _, S, T, it, bw, bh = items[i]; i += 1
@@ -492,11 +547,11 @@ def text_segment(syms, insts, w, h, x=0, y=0, op=0, logstrips=0, corner=1, trans
             if not transp: pre = (wd - 1) if corner in (2, 3) else 0
             else: pre = (hd - 1) if corner in (0, 2) else 0
             cin = S - pre
-            if first: enc_int(e, 'FS', cin - firsts); firsts = cin; first = False
-            else: enc_int(e, 'DS', cin - curs - dsoff)
-            if strips > 1: enc_int(e, 'IT', T - st)
-            enc_iaid(e, 'ID', cl, sid)
-            if refine: enc_int(e, 'RI', 1 if hasref else 0)
+            if first: em.int('FS', cin - firsts); firsts = cin; first = False
+            else: em.int('DS', cin - curs - dsoff)
+            if strips > 1: em.it(T - st, logstrips)
+            em.id(sid)
+            if refine: em.int('RI', 1 if hasref else 0)
             if hasref:
                 rdw, rdh = bw - sw0, bh - sh0
                 rdx = rdy = 0
@@ -506,10 +561,111 @@ def text_segment(syms, insts, w, h, x=0, y=0, op=0, logstrips=0, corner=1, trans
             if not transp and corner in (0, 1): curs = cin + wd - 1
             elif transp and corner in (1, 3): curs = cin + hd - 1
             elif (not transp and corner in (2, 3)) or (transp and corner in (0, 2)): curs = S
-        enc_int(e, 'DS', None)
-    flags = ((1 if False else 0) | (1 if refine else 0) << 1 | logstrips << 2 | corner << 4 | transp << 6 | comb << 7
+        em.int('DS', None)
+    flags = ((1 if huff else 0) | (1 if refine else 0) << 1 | logstrips << 2 | corner << 4 | transp << 6 | comb << 7
              | defpix << 9 | (dsoff & 31) << 10 | rtpl << 15)
     d = region_info(w, h, x, y, op) + struct.pack('>H', flags)
+    if huff: d += struct.pack('>H', huff.hflags)
     if refine and not rtpl: d += b''.join(struct.pack('>bb', *a) for a in rat)
     d += struct.pack('>I', len(insts))
+    if huff: return d + huff.idtable_bytes(nsyms) + em.bw.bytes()
     return d + e.flush()
+
+
+# ---- the standard Huffman tables of T.88 annex B (B.1 to B.15) ------------------------------
+# Lines are (PREFLEN, RANGELEN, RANGELOW) in table order: the normal lines, then the lower-range
+# line, the upper-range line (PREFLEN 0 when the table has none) and, when HTOOB, the OOB line.
+# PROVENANCE: transcribed from the tables compiled into MuPDF 1.28.6's mutool (jbig2dec's
+# jbig2_hufftab.c) and checked here: every table is a complete prefix code (sum of 2**-PREFLEN
+# is exactly 1) and its codes are assigned by B.3.
+STD_TABLES = {1: [[1, 4, 0], [2, 8, 16], [3, 16, 272], [0, 32, -1], [3, 32, 65808]], 2: [[1, 0, 0], [2, 0, 1], [3, 0, 2], [4, 3, 3], [5, 6, 11], [0, 32, -1], [6, 32, 75], [6, 0, 0]], 3: [[8, 8, -256], [1, 0, 0], [2, 0, 1], [3, 0, 2], [4, 3, 3], [5, 6, 11], [8, 32, -257], [7, 32, 75], [6, 0, 0]], 4: [[1, 0, 1], [2, 0, 2], [3, 0, 3], [4, 3, 4], [5, 6, 12], [0, 32, -1], [5, 32, 76]], 5: [[7, 8, -255], [1, 0, 1], [2, 0, 2], [3, 0, 3], [4, 3, 4], [5, 6, 12], [7, 32, -256], [6, 32, 76]], 6: [[5, 10, -2048], [4, 9, -1024], [4, 8, -512], [4, 7, -256], [5, 6, -128], [5, 5, -64], [4, 5, -32], [2, 7, 0], [3, 7, 128], [3, 8, 256], [4, 9, 512], [4, 10, 1024], [6, 32, -2049], [6, 32, 2048]], 7: [[4, 9, -1024], [3, 8, -512], [4, 7, -256], [5, 6, -128], [5, 5, -64], [4, 5, -32], [4, 5, 0], [5, 5, 32], [5, 6, 64], [4, 7, 128], [3, 8, 256], [3, 9, 512], [3, 10, 1024], [5, 32, -1025], [5, 32, 2048]], 8: [[8, 3, -15], [9, 1, -7], [8, 1, -5], [9, 0, -3], [7, 0, -2], [4, 0, -1], [2, 1, 0], [5, 0, 2], [6, 0, 3], [3, 4, 4], [6, 1, 20], [4, 4, 22], [4, 5, 38], [5, 6, 70], [5, 7, 134], [6, 7, 262], [7, 8, 390], [6, 10, 646], [9, 32, -16], [9, 32, 1670], [2, 0, 0]], 9: [[8, 4, -31], [9, 2, -15], [8, 2, -11], [9, 1, -7], [7, 1, -5], [4, 1, -3], [3, 1, -1], [3, 1, 1], [5, 1, 3], [6, 1, 5], [3, 5, 7], [6, 2, 39], [4, 5, 43], [4, 6, 75], [5, 7, 139], [5, 8, 267], [6, 8, 523], [7, 9, 779], [6, 11, 1291], [9, 32, -32], [9, 32, 3339], [2, 0, 0]], 10: [[7, 4, -21], [8, 0, -5], [7, 0, -4], [5, 0, -3], [2, 2, -2], [5, 0, 2], [6, 0, 3], [7, 0, 4], [8, 0, 5], [2, 6, 6], [5, 5, 70], [6, 5, 102], [6, 6, 134], [6, 7, 198], [6, 8, 326], [6, 9, 582], [6, 10, 1094], [7, 11, 2118], [8, 32, -22], [8, 32, 4166], [2, 0, 0]], 11: [[1, 0, 1], [2, 1, 2], [4, 0, 4], [4, 1, 5], [5, 1, 7], [5, 2, 9], [6, 2, 13], [7, 2, 17], [7, 3, 21], [7, 4, 29], [7, 5, 45], [7, 6, 77], [0, 32, -1], [7, 32, 141]], 12: [[1, 0, 1], [2, 0, 2], [3, 1, 3], [5, 0, 5], [5, 1, 6], [6, 1, 8], [7, 0, 10], [7, 1, 11], [7, 2, 13], [7, 3, 17], [7, 4, 25], [8, 5, 41], [0, 32, -1], [8, 32, 73]], 13: [[1, 0, 1], [3, 0, 2], [4, 0, 3], [5, 0, 4], [4, 1, 5], [3, 3, 7], [6, 1, 15], [6, 2, 17], [6, 3, 21], [6, 4, 29], [6, 5, 45], [7, 6, 77], [0, 32, -1], [7, 32, 141]], 14: [[3, 0, -2], [3, 0, -1], [1, 0, 0], [3, 0, 1], [3, 0, 2], [0, 32, -1], [0, 32, 3]], 15: [[7, 4, -24], [6, 2, -8], [5, 1, -4], [4, 0, -2], [3, 0, -1], [1, 0, 0], [3, 0, 1], [4, 0, 2], [5, 1, 3], [6, 2, 5], [7, 4, 9], [7, 32, -25], [7, 32, 25]]}
+STD_OOB = {1: 0, 2: 1, 3: 1, 4: 0, 5: 0, 6: 0, 7: 0, 8: 1, 9: 1, 10: 1, 11: 0, 12: 0, 13: 0, 14: 0, 15: 0}
+
+def std_lines(n):
+    """-> (normal lines [(low, preflen, rangelen)], lower (low, preflen), upper (low, preflen), oob preflen or 0)"""
+    ls = STD_TABLES[n]; k = len(ls) - (1 if STD_OOB[n] else 0)
+    normal = [(l[2], l[0], l[1]) for l in ls[:k - 2]]
+    return normal, (ls[k - 2][2], ls[k - 2][0]), (ls[k - 1][2], ls[k - 1][0]), (ls[-1][0] if STD_OOB[n] else 0)
+
+def assign_codes(preflens):
+    """B.3: codes (value, length) for lines in table order; preflen 0 = no code"""
+    mx = max(preflens + [0]); cnt = [0] * (mx + 2)
+    for l in preflens:
+        if l: cnt[l] += 1
+    first = [0] * (mx + 2); out = [None] * len(preflens)
+    for cl in range(1, mx + 1):
+        first[cl] = (first[cl - 1] + cnt[cl - 1]) * 2
+        c = first[cl]
+        for i, l in enumerate(preflens):
+            if l == cl: out[i] = (c, cl); c += 1
+    return out
+
+def gen_c_huff():
+    low = []; pl = []; rl = []; start = [0]; nn = [0]
+    for n in range(1, 16):
+        normal, lo, up, oob = std_lines(n)
+        start.append(len(low)); nn.append(len(normal))
+        for (a, b, c) in normal: low.append(a); pl.append(b); rl.append(c)
+        low.append(lo[0]); pl.append(lo[1]); rl.append(32)
+        low.append(min(up[0], 32767)); pl.append(up[1]); rl.append(32)
+        low.append(0); pl.append(oob); rl.append(0)       # the OOB line is always present; PREFLEN 0 = none
+    start.append(len(low))
+    f = lambda a: ", ".join(str(x) for x in a)
+    return ("static const pdi hf_s_low[%d] = { %s };\nstatic const pdb hf_s_pl[%d] = { %s };\nstatic const pdb hf_s_rl[%d] = { %s };\n"
+            "static const pdb hf_s_nn[16] = { %s };\nstatic const pdw hf_s_start[17] = { %s };" %
+            (len(low), f(low), len(pl), f(pl), len(rl), f(rl), f(nn), f(start)))
+if '--gen-c-huff' in sys.argv: print(gen_c_huff())
+
+def table_segment_data(lines, lower_pl, upper_pl, oob_pl, low, high, ps, rs):
+    """a custom Huffman table (segment type 53): lines = [(preflen, rangelen)] covering low..high"""
+    flags = (1 if oob_pl else 0) | ((ps - 1) << 1) | ((rs - 1) << 4)
+    bw = BitW()
+    for pl, rl in lines: bw.putn(pl, ps); bw.putn(rl, rs)
+    bw.putn(lower_pl, ps); bw.putn(upper_pl, ps)
+    if oob_pl: bw.putn(oob_pl, ps)
+    bw.align()
+    return bytes([flags]) + struct.pack('>ii', low, high) + bw.bytes(), bw
+
+def custom_tab(lines, low, lower_pl, upper_pl, oob_pl):
+    normal = []; cur = low
+    for pl, rl in lines: normal.append((cur, pl, rl)); cur += 1 << rl
+    return HuffTab(normal, (low - 1, lower_pl), (cur, upper_pl), oob_pl)
+
+def symdict_huff_segment(syms, dh=0, dw=0, bm_mmr=False, tpl=0, tabs=None, exported=None, ref_syms=0):
+    """Huffman symbol dictionary.  dh 0/1 = B.4/B.5, dw 0/1 = B.2/B.3.  Symbols must be grouped by height
+    (non-decreasing) and, for B.2, non-decreasing in width inside a class.  tabs: custom HuffTabs for
+    ('DH','DW') overriding the standard ones, with selector 3."""
+    tabs = tabs or {}
+    tDH = tabs.get('DH') or HuffTab.std(4 if dh == 0 else 5)
+    tDW = tabs.get('DW') or HuffTab.std(2 if dw == 0 else 3)
+    tB1 = HuffTab.std(1)
+    bw = BitW(); nnew = len(syms); nin = ref_syms
+    hprev = 0; i = 0
+    while i < nnew:
+        hc = len(syms[i]); tDH.enc(bw, hc - hprev); hprev = hc; wprev = 0; cls = []
+        while i < nnew and len(syms[i]) == hc:
+            w = len(syms[i][0]) if hc else 0
+            tDW.enc(bw, w - wprev); wprev = w; cls.append(syms[i]); i += 1
+        tDW.enc(bw, None)
+        totw = sum(len(x[0]) for x in cls)
+        coll = [sum((x[y] for x in cls), []) for y in range(hc)]
+        if bm_mmr and totw:
+            b2 = BitW(); ref = [0] * totw
+            for row in coll: enc_2d(b2, row, ref); ref = row
+            data = b2.bytes()
+            tB1.enc(bw, len(data)); bw.align(); bw.b += data
+        else:
+            tB1.enc(bw, 0); bw.align()
+            for row in coll:
+                r = BitW(); r.put(''.join(str(v) for v in row)); r.align(); bw.b += r.bytes()
+    total = nin + nnew
+    ex = exported if exported is not None else [False] * nin + [True] * nnew
+    i = 0; cur = 0
+    while i < total:
+        j = i
+        while j < total and ex[j] == bool(cur): j += 1
+        tB1.enc(bw, j - i); i = j; cur ^= 1
+    nex = sum(1 for x in ex if x)
+    sel = lambda k, std_sel: 3 if k in tabs else std_sel
+    flags = 1 | (sel('DH', dh) << 2) | (sel('DW', dw) << 4) | (tpl << 10)
+    return struct.pack('>HII', flags, nex, nnew) + bw.bytes()

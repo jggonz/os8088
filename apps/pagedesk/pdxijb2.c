@@ -67,8 +67,12 @@ static pdw jb_inc;
 static pdw jb_lh, jb_ll;        /* bytes left in the segment (32 bits)            */
 static pdb jb_unb;              /* the segment's length is unknown (unbounded)    */
 
+static pdb jb_sub;              /* a sub-limit inside the segment (MMR / refinement data of a stated size) */
+static pdw jb_subn;
+
 static int jb_getb(void)
 {
+    if (jb_sub) { if (!jb_subn) return -1; jb_subn--; }
     if (!jb_unb) {
         if (!jb_lh && !jb_ll) return -1;
         if (!jb_ll) { jb_lh--; jb_ll = 0xFFFF; } else jb_ll--;
@@ -253,7 +257,9 @@ static void cv_row(pdi y, pdi dx, const pdb *src, pdw w, pdw op)
 
 /* ---- generic region decoding (6.2) ---------------------------------------------- */
 #define GB_MAXRB 1032
-static pdb  gb_r0[GB_MAXRB], gb_r1[GB_MAXRB], gb_r2[GB_MAXRB];
+#define gb_r0 bl_pool[0]
+#define gb_r1 bl_pool[1]
+#define gb_r2 bl_pool[2]
 static pdb *gb_c, *gb_p1, *gb_p2;
 static pdw  gb_tpl, gb_tpgd;
 static pdi  gb_at[4][2];
@@ -472,7 +478,8 @@ static pdw jb_rg_find(pdw num)
 /* current rows live in jb_srow (the row being made) and tr_row (the row above); the
  * reference rows y-1, y, y+1 in gb_r0..2. None of the three is in use while a
  * refinement runs. */
-static pdb jb_srow[GB_MAXRB], tr_row[GB_MAXRB];
+#define jb_srow bl_pool[3]
+#define tr_row bl_pool[4]
 #define RF_MAXW 8192
 static pdw rf_tpl, rf_tpgr;
 static pdi rf_at[2][2];
@@ -566,6 +573,10 @@ static pdb jb_huff;
 static int hf_dec(pdw role);            /* returns 1 for OOB, 0 with jb_ival set */
 static pdw hf_ids(void);                /* a symbol ID in Huffman mode           */
 static pdw hf_refsize(void);
+static pdw hf_uval;                     /* the last value as an unsigned 16-bit (BMSIZE)  */
+static void hb_align(void);
+static pdw jb_b(void);
+#define HF_BM 13
 static int jb_idec(pdw role)
 {
     if (jb_huff) return hf_dec(role);
@@ -619,7 +630,7 @@ static pdw tr_run(void)
             id = jb_huff ? hf_ids() : ia_id();
             if (jb_ovf || id >= tr_nsyms) return PDE_SYNTAX;
             ri = 0;
-            if (tr_refine) { if (jb_huff) { ri = (pdw)jb_idec(IA_RI) ? 0 : (pdw)jb_ival; } else { if (jb_idec(IA_RI)) return PDE_SYNTAX; ri = (pdw)jb_ival; } }
+            if (tr_refine) { if (jb_idec(IA_RI)) return PDE_SYNTAX; ri = (pdw)jb_ival; }
             jb_getrec(tr_recs, id);
             {
                 pdw so = jb_rec_off, sw = jb_rec_w, sh = jb_rec_h, mark = jb_sp;
@@ -685,21 +696,21 @@ static pdw jb_codelen(pdw n)            /* ceil(log2(n)), at least 0 */
 /* decodes the new symbols into sd_all (records, input symbols first) and exports */
 static pdw sd_run(void)
 {
-    pdw ndec = 0, e, symw, hch = 0, totw, o, k, i, j, total = (pdw)(sd_nin + sd_numnew), runs, keep, cur;
+    pdw ndec = 0, e, symw, hch = 0, totw, o, k, i, j, total = (pdw)(sd_nin + sd_numnew), runs, keep, cur, cs = 0, ctw = 0;
     pdi hc = 0, sw = 0;
     int first;
     (void)first; (void)totw; (void)hch; (void)k;
     jb_idlen = jb_codelen(total);
     if (jb_idlen > 11) return PDE_LIMIT;
     if (!jb_huff) { sd_contexts(); mq_init(); }
-    else { jw_zero(JW_GR, 8192); }
+    else { jw_zero(JW_GR, 8192); hb_align(); }
     gb_tpl = sd_tpl; gb_tpgd = 0; gb_sinkmode = 3; gb_skip = 0;
     for (i = 0; i < 4; i++) { gb_at[i][0] = sd_at[i][0]; gb_at[i][1] = sd_at[i][1]; }
     if (!jb_huff || sd_refagg) { if (!jb_huff || sd_refagg) gb_cinit(); }
     while (ndec < sd_numnew) {
         if (jb_idec(IA_DH)) return PDE_SYNTAX;
         hc = (pdi)(hc + jb_ival); if (hc < 0 || hc > 8192) return PDE_SYNTAX;
-        sw = 0;
+        sw = 0; cs = ndec; ctw = 0;
         for (;;) {
             if (jb_idec(IA_DW)) break;
             if (ndec >= sd_numnew) return PDE_SYNTAX;
@@ -743,7 +754,42 @@ static pdw sd_run(void)
                 }
             }
             jb_setrec(sd_all, (pdw)(sd_nin + ndec), o, symw, (pdw)hc);
+            ctw = (pdw)(ctw + symw);
             ndec++;
+        }
+        if (jb_ovf) return PDE_SYNTAX;
+        if (jb_huff && !sd_refagg && ndec > cs) {       /* the height class's collective bitmap (6.5.9) */
+            pdw bm, tmp, rbt, yy, b, x0, mark = jb_sp, rbs;
+            if (jb_idec(HF_BM)) return PDE_SYNTAX;
+            bm = hf_uval; hb_align();
+            rbt = (pdw)((ctw + 7) >> 3);
+            tmp = jb_alloc(ctw, (pdw)hc);
+            if (!tmp) return PDE_LIMIT;
+            if (!bm) { for (k = 0; k < (pdw)(rbt * (pdw)hc); k++) jw_wb((pdw)(tmp + k), jb_b()); }
+            else {
+                jb_sub = 1; jb_subn = bm;
+                gb_w = ctw; gb_h = (pdw)hc; gb_sinkmode = 3; gb_boff = tmp; gb_brb = rbt;
+                e = gb_mmr();
+                while (jb_subn) jb_getb();
+                jb_sub = 0;
+                if (e) return e;
+            }
+            x0 = 0;
+            for (k = cs; k < ndec; k++) {
+                jb_getrec(sd_all, (pdw)(sd_nin + k));
+                rbs = (pdw)((jb_rec_w + 7) >> 3);
+                for (yy = 0; yy < (pdw)hc; yy++) {
+                    jw_get(tr_row, (pdw)(tmp + yy * rbt), rbt);
+                    tr_row[rbt] = 0; tr_row[rbt + 1] = 0;
+                    for (b = 0; b < rbs; b++) {
+                        pdw v = jb_srcbyte(tr_row, (pdi)(x0 + b * 8));
+                        if (b == (pdw)(rbs - 1) && (jb_rec_w & 7)) v &= (pdw)(0xFF00 >> (jb_rec_w & 7)) & 0xFF;
+                        jw_wb((pdw)(jb_rec_off + yy * rbs + b), v);
+                    }
+                }
+                x0 = (pdw)(x0 + jb_rec_w);
+            }
+            jb_sp = mark;
         }
     }
     /* the export flags (6.5.10) */
@@ -899,10 +945,226 @@ static pdw jb_segment_generic(void)
 }
 
 
-/* ---- Huffman: filled in by the next step; arithmetic-only builds refuse it ------------------ */
-static int hf_dec(pdw role) { (void)role; jb_ovf = 1; return 1; }
-static pdw hf_ids(void) { jb_ovf = 1; return 0; }
+/* ---- Huffman (T.88 annex B) ---------------------------------------------------------------- */
+static const pdi hf_s_low[202] = { 0, 16, 272, -1, 32767, 0, 0, 1, 2, 3, 11, -1, 75, 0, -256, 0, 1, 2, 3, 11, -257, 75, 0, 1, 2, 3, 4, 12, -1, 76, 0, -255, 1, 2, 3, 4, 12, -256, 76, 0, -2048, -1024, -512, -256, -128, -64, -32, 0, 128, 256, 512, 1024, -2049, 2048, 0, -1024, -512, -256, -128, -64, -32, 0, 32, 64, 128, 256, 512, 1024, -1025, 2048, 0, -15, -7, -5, -3, -2, -1, 0, 2, 3, 4, 20, 22, 38, 70, 134, 262, 390, 646, -16, 1670, 0, -31, -15, -11, -7, -5, -3, -1, 1, 3, 5, 7, 39, 43, 75, 139, 267, 523, 779, 1291, -32, 3339, 0, -21, -5, -4, -3, -2, 2, 3, 4, 5, 6, 70, 102, 134, 198, 326, 582, 1094, 2118, -22, 4166, 0, 1, 2, 4, 5, 7, 9, 13, 17, 21, 29, 45, 77, -1, 141, 0, 1, 2, 3, 5, 6, 8, 10, 11, 13, 17, 25, 41, -1, 73, 0, 1, 2, 3, 4, 5, 7, 15, 17, 21, 29, 45, 77, -1, 141, 0, -2, -1, 0, 1, 2, -1, 3, 0, -24, -8, -4, -2, -1, 0, 1, 2, 3, 5, 9, -25, 25, 0 };
+static const pdb hf_s_pl[202] = { 1, 2, 3, 0, 3, 0, 1, 2, 3, 4, 5, 0, 6, 6, 8, 1, 2, 3, 4, 5, 8, 7, 6, 1, 2, 3, 4, 5, 0, 5, 0, 7, 1, 2, 3, 4, 5, 7, 6, 0, 5, 4, 4, 4, 5, 5, 4, 2, 3, 3, 4, 4, 6, 6, 0, 4, 3, 4, 5, 5, 4, 4, 5, 5, 4, 3, 3, 3, 5, 5, 0, 8, 9, 8, 9, 7, 4, 2, 5, 6, 3, 6, 4, 4, 5, 5, 6, 7, 6, 9, 9, 2, 8, 9, 8, 9, 7, 4, 3, 3, 5, 6, 3, 6, 4, 4, 5, 5, 6, 7, 6, 9, 9, 2, 7, 8, 7, 5, 2, 5, 6, 7, 8, 2, 5, 6, 6, 6, 6, 6, 6, 7, 8, 8, 2, 1, 2, 4, 4, 5, 5, 6, 7, 7, 7, 7, 7, 0, 7, 0, 1, 2, 3, 5, 5, 6, 7, 7, 7, 7, 7, 8, 0, 8, 0, 1, 3, 4, 5, 4, 3, 6, 6, 6, 6, 6, 7, 0, 7, 0, 3, 3, 1, 3, 3, 0, 0, 0, 7, 6, 5, 4, 3, 1, 3, 4, 5, 6, 7, 7, 7, 0 };
+static const pdb hf_s_rl[202] = { 4, 8, 16, 32, 32, 0, 0, 0, 0, 3, 6, 32, 32, 0, 8, 0, 0, 0, 3, 6, 32, 32, 0, 0, 0, 0, 3, 6, 32, 32, 0, 8, 0, 0, 0, 3, 6, 32, 32, 0, 10, 9, 8, 7, 6, 5, 5, 7, 7, 8, 9, 10, 32, 32, 0, 9, 8, 7, 6, 5, 5, 5, 5, 6, 7, 8, 9, 10, 32, 32, 0, 3, 1, 1, 0, 0, 0, 1, 0, 0, 4, 1, 4, 5, 6, 7, 7, 8, 10, 32, 32, 0, 4, 2, 2, 1, 1, 1, 1, 1, 1, 1, 5, 2, 5, 6, 7, 8, 8, 9, 11, 32, 32, 0, 4, 0, 0, 0, 2, 0, 0, 0, 0, 6, 5, 5, 6, 7, 8, 9, 10, 11, 32, 32, 0, 0, 1, 0, 1, 1, 2, 2, 2, 3, 4, 5, 6, 32, 32, 0, 0, 0, 1, 0, 1, 1, 0, 1, 2, 3, 4, 5, 32, 32, 0, 0, 0, 0, 0, 1, 3, 1, 2, 3, 4, 5, 6, 32, 32, 0, 0, 0, 0, 0, 0, 32, 32, 0, 4, 2, 1, 0, 0, 0, 0, 0, 1, 2, 4, 32, 32, 0 };
+static const pdb hf_s_nn[16] = { 0, 3, 5, 6, 5, 6, 12, 13, 18, 19, 18, 12, 12, 12, 5, 11 };
+static const pdw hf_s_start[17] = { 0, 0, 6, 14, 23, 31, 40, 55, 71, 92, 114, 135, 150, 165, 180, 188, 202 };
+
+
+static void jb_rg_add(pdw kind, pdw ofs, pdw cnt, pdw a, pdw b);
+
+#define HF_NS 8                 /* simultaneous tables (text region: FS DS DT RDW RDH RDX RDY RSIZE) */
+#define HF_ML 43
+static pdi hf_low[HF_NS][HF_ML];
+static pdb hf_pl[HF_NS][HF_ML], hf_rl[HF_NS][HF_ML];
+static pdw hf_cd[HF_NS][HF_ML];
+static pdb hf_n[HF_NS];
+static pdb hf_slot[14];
+static pdw hf_logs;
+
+/* the bit reader over the segment */
+static pdw hb_byte, hb_n;
+static pdw hb_bit(void)
+{
+    if (!hb_n) { int c = jb_getb(); hb_byte = c < 0 ? 0 : (pdw)c; hb_n = 8; if (c < 0) jb_eof = 1; }
+    hb_n--;
+    return (pdw)((hb_byte >> hb_n) & 1);
+}
+static pdw hb_bits(pdw n)       /* n <= 16 */
+{
+    pdw v = 0;
+    while (n--) v = (pdw)((v << 1) | hb_bit());
+    return v;
+}
+static void hb_align(void) { hb_n = 0; }
+
+/* B.3: codes from the prefix lengths, in table order */
+static void hf_assign(pdw t)
+{
+    pdw n = (pdw)(hf_n[t] + 3), cnt[18], first = 0, len, i, code, mx = 0;
+    for (i = 0; i < 18; i++) cnt[i] = 0;
+    for (i = 0; i < n; i++) { if (hf_pl[t][i] > 16) hf_pl[t][i] = 0; cnt[hf_pl[t][i]]++; if (hf_pl[t][i] > mx) mx = hf_pl[t][i]; }
+    cnt[0] = 0;
+    for (len = 1; len <= mx; len++) {
+        first = (pdw)((first + cnt[len - 1]) << 1);
+        code = first;
+        for (i = 0; i < n; i++) if (hf_pl[t][i] == len) hf_cd[t][i] = code++;
+    }
+}
+static void hf_std(pdw t, pdw k)
+{
+    pdw a = hf_s_start[k], n = hf_s_nn[k], i;
+    hf_n[t] = (pdb)n;
+    for (i = 0; i < n + 3; i++) { hf_low[t][i] = hf_s_low[a + i]; hf_pl[t][i] = hf_s_pl[a + i]; hf_rl[t][i] = hf_s_rl[a + i]; }
+    hf_assign(t);
+}
+/* a custom table in the workspace: one byte of normal-line count, then 4 bytes a line */
+static void hf_custom(pdw t, pdw rg)
+{
+    pdw o = jb_rg_ofs[rg], n = jb_rg_cnt[rg], i;
+    hf_n[t] = (pdb)n;
+    for (i = 0; i < n + 3; i++) {
+        hf_low[t][i] = (pdi)jw_rw((pdw)(o + i * 4)); hf_pl[t][i] = jw_rb((pdw)(o + i * 4 + 2)); hf_rl[t][i] = jw_rb((pdw)(o + i * 4 + 3));
+    }
+    hf_assign(t);
+}
+
+/* one value from table t: 1 for OOB; else jb_ival and hf_uval */
+static pdw jb_tabs[8], jb_ntabs;
+static pdb hf_big;
+static int hf_dec_t(pdw t)
+{
+    pdw code = 0, len, l, n = (pdw)(hf_n[t] + 3), rl, mag, hi, lo;
+    int neg = 0;
+    for (len = 1; len <= 16; len++) {
+        code = (pdw)((code << 1) | hb_bit());
+        for (l = 0; l < n; l++) if (hf_pl[t][l] == len && hf_cd[t][l] == code) goto found;
+    }
+    jb_ovf = 1; return 1;
+found:
+    if (l == (pdw)(n - 1)) return 1;                    /* the OOB line */
+    rl = hf_rl[t][l];
+    if (l < n - 3) {                                    /* a normal line */
+        pdw off = hb_bits(rl);
+        if (hf_low[t][l] >= 0) { mag = (pdw)((pdw)hf_low[t][l] + off); if (mag < off) jb_ovf = 1; }
+        else if (off >= (pdw)(-hf_low[t][l])) mag = (pdw)(off + hf_low[t][l]);
+        else { mag = (pdw)(-hf_low[t][l] - off); neg = 1; }
+    } else {                                            /* lower (l = n - 3) or upper (l = n - 2): a 32-bit offset */
+        hi = hb_bits(16); lo = hb_bits(16);
+        if (hi) { jb_ovf = 1; return 1; }
+        if (l == (pdw)(n - 3)) {                        /* low - offset */
+            mag = (pdw)(lo + (pdw)(-hf_low[t][l])); if (mag < lo) jb_ovf = 1; neg = 1;
+            if (hf_low[t][l] >= 0) { jb_ovf = 1; }
+        } else { mag = (pdw)((pdw)hf_low[t][l] + lo); if (mag < lo) jb_ovf = 1; }
+    }
+    hf_uval = mag; hf_big = 0;
+    if (mag > 0x7FFF) { hf_big = 1; jb_ival = 0; }
+    else jb_ival = (pdi)(neg ? -(pdi)mag : (pdi)mag);
+    return 0;
+}
+
+static int hf_dec(pdw role)
+{
+    if (role == IA_IT) { jb_ival = (pdi)hb_bits(hf_logs); return 0; }
+    if (role == IA_RI) { jb_ival = (pdi)hb_bit(); return 0; }
+    {
+        int r = hf_dec_t(hf_slot[role]);
+        if (hf_big && role != HF_BM) jb_ovf = 1;
+        return r;
+    }
+}
+
+/* the symbol-ID codes (7.4.3.1.7): canonical codes over lengths kept in the workspace */
+static pdw hf_cnt[18], hf_first[18], hf_off[18], hf_sorted, hf_nsym;
+static void hf_canon(pdw lens, pdw n, pdw sorted)       /* lens: n bytes; sorted: n words */
+{
+    pdw i, len, pos[18], first = 0;
+    for (i = 0; i < 18; i++) hf_cnt[i] = 0;
+    for (i = 0; i < n; i++) hf_cnt[jw_rb((pdw)(lens + i)) & 15]++;
+    hf_cnt[0] = 0;
+    hf_off[1] = 0;
+    for (len = 1; len < 17; len++) {
+        first = (pdw)((first + hf_cnt[len - 1]) << 1);
+        hf_first[len] = first;
+        if (len > 1) hf_off[len] = (pdw)(hf_off[len - 1] + hf_cnt[len - 1]);
+        pos[len] = hf_off[len];
+    }
+    for (i = 0; i < n; i++) {
+        len = jw_rb((pdw)(lens + i)) & 15;
+        if (len) { jw_ww((pdw)(sorted + pos[len] * 2), i); pos[len]++; }
+    }
+}
+static int hf_canon_dec(pdw sorted)                      /* a symbol, or -1 */
+{
+    pdw code = 0, len;
+    for (len = 1; len < 17; len++) {
+        code = (pdw)((code << 1) | hb_bit());
+        if (hf_cnt[len] && code >= hf_first[len] && (pdw)(code - hf_first[len]) < hf_cnt[len])
+            return (int)jw_rw((pdw)(sorted + (pdw)(hf_off[len] + code - hf_first[len]) * 2));
+    }
+    return -1;
+}
+static pdw hf_ids(void)
+{
+    int v = hf_canon_dec(hf_sorted);
+    if (v < 0) { jb_ovf = 1; return 0; }
+    return (pdw)v;
+}
 static pdw hf_refsize(void) { jb_ovf = 1; return 0; }
+
+/* reads the symbol ID table of a Huffman text region; nsyms symbols */
+static pdw hf_idtable(pdw nsyms)
+{
+    pdw rl, lens, rsorted, i, c, run, prev = 0, n;
+    int v;
+    rl = jb_alloc(40 * 8, 1);                       /* 35 run-code lengths */
+    rsorted = jb_alloc(40 * 16, 1);
+    lens = jb_alloc((pdw)(nsyms * 8), 1);
+    hf_sorted = jb_alloc((pdw)(nsyms * 16), 1);
+    if (!rl || !rsorted || !lens || !hf_sorted) return PDE_LIMIT;
+    hb_align();
+    for (i = 0; i < 35; i++) jw_wb((pdw)(rl + i), hb_bits(4));
+    hf_canon(rl, 35, rsorted);
+    i = 0;
+    while (i < nsyms) {
+        v = hf_canon_dec(rsorted);
+        if (v < 0) return PDE_SYNTAX;
+        c = (pdw)v;
+        if (c < 32) { jw_wb((pdw)(lens + i), c); prev = c; i++; continue; }
+        if (c == 32) { run = (pdw)(hb_bits(2) + 3); if (!i) return PDE_SYNTAX; c = prev; }
+        else if (c == 33) { run = (pdw)(hb_bits(3) + 3); c = 0; }
+        else { run = (pdw)(hb_bits(7) + 11); c = 0; }
+        if (i + run > nsyms) return PDE_SYNTAX;
+        for (n = 0; n < run; n++) jw_wb((pdw)(lens + i + n), c);
+        i = (pdw)(i + run);
+    }
+    hb_align();
+    for (i = 0; i < nsyms; i++) if (jw_rb((pdw)(lens + i)) > 15) return PDE_LIMIT;
+    hf_canon(lens, nsyms, hf_sorted);
+    return PDE_OK;
+}
+
+/* a custom table segment (type 53) */
+static pdw jb_segment_table(void)
+{
+    pdw f, ps, rs, o, nn = 0, n;
+    pdi cur, high, lowv;
+    f = jb_b(); ps = (pdw)(((f >> 1) & 7) + 1); rs = (pdw)(((f >> 4) & 7) + 1);
+    jb_b32(); cur = (pdi)jb_lo; if (jb_hi != 0 && jb_hi != 0xFFFFu) return PDE_LIMIT;
+    jb_b32(); high = (pdi)jb_lo; if (jb_hi != 0 && jb_hi != 0xFFFFu) return PDE_LIMIT;
+    lowv = cur;
+    o = jb_alloc((pdw)(8 * 4 * HF_ML), 1);
+    if (!o) return PDE_LIMIT;
+    hb_align();
+    while (cur < high) {
+        pdw pl = hb_bits(ps), rl = hb_bits(rs);
+        if (nn >= HF_ML - 3 || rl > 15) return PDE_LIMIT;
+        jw_ww((pdw)(o + nn * 4), (pdw)cur); jw_wb((pdw)(o + nn * 4 + 2), pl); jw_wb((pdw)(o + nn * 4 + 3), rl);
+        cur = (pdi)(cur + (pdi)(1u << rl)); nn++;
+    }
+    n = nn;
+    jw_ww((pdw)(o + n * 4), (pdw)(pdi)(lowv - 1)); jw_wb((pdw)(o + n * 4 + 2), hb_bits(ps)); jw_wb((pdw)(o + n * 4 + 3), 32);
+    n++;
+    jw_ww((pdw)(o + n * 4), (pdw)high); jw_wb((pdw)(o + n * 4 + 2), hb_bits(ps)); jw_wb((pdw)(o + n * 4 + 3), 32);
+    n++;
+    jw_ww((pdw)(o + n * 4), 0); jw_wb((pdw)(o + n * 4 + 2), (f & 1) ? hb_bits(ps) : 0); jw_wb((pdw)(o + n * 4 + 3), 0);
+    jb_sp = (pdw)(o + (pdw)((n + 1) * 4));
+    jb_rg_add(RGK_TAB, o, nn, 0, 0);
+    return PDE_OK;
+}
+
+/* the table for a slot: a standard one, or the next custom table the segment refers to */
+static pdw jb_tnext;
+static pdw hf_select(pdw slot, pdw std)
+{
+    if (std) { hf_std(slot, std); return PDE_OK; }
+    if (jb_tnext >= jb_ntabs) return PDE_SYNTAX;
+    hf_custom(slot, jb_tabs[jb_tnext++]);
+    return PDE_OK;
+}
+
 
 /* ---- segment-level wrappers ------------------------------------------------------------------ */
 static void jb_rg_add(pdw kind, pdw ofs, pdw cnt, pdw a, pdw b)
@@ -913,6 +1175,16 @@ static void jb_rg_add(pdw kind, pdw ofs, pdw cnt, pdw a, pdw b)
     jb_nrg++;
 }
 
+static void jb_collect_tabs(void)
+{
+    pdw i, g;
+    jb_ntabs = 0; jb_tnext = 0;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        g = jb_rg_find(jb_ref[i]);
+        if (g != 0xFFFFu && jb_rg_kind[g] == RGK_TAB && jb_ntabs < 8) jb_tabs[jb_ntabs++] = g;
+    }
+}
+
 static pdw jb_segment_symdict(void)
 {
     pdw f, k, nin = 0, i, j, e, msp = jb_sp, mhp = jb_hp, total, M;
@@ -921,6 +1193,17 @@ static pdw jb_segment_symdict(void)
     sd_tpl = (pdw)((f >> 10) & 3); sd_rtpl = (pdw)((f >> 12) & 1);
     jb_huff = (pdb)sd_huff;
     if (f & 0x300) { jb_inc |= JBF_UNSUP; return PDE_LIMIT; }   /* bitmap contexts retained / used */
+    if (sd_huff && sd_refagg) return PDE_LIMIT;                 /* Huffman with aggregation: not supported */
+    if (sd_huff) {
+        pdw sel;
+        jb_collect_tabs();
+        sel = (pdw)((f >> 2) & 3); if (sel == 2 || hf_select(0, sel == 0 ? 4u : sel == 1 ? 5u : 0)) return PDE_LIMIT;
+        sel = (pdw)((f >> 4) & 3); if (sel == 2 || hf_select(1, sel == 0 ? 2u : sel == 1 ? 3u : 0)) return PDE_LIMIT;
+        if (hf_select(2, (pdw)(((f >> 6) & 1) ? 0 : 1))) return PDE_LIMIT;
+        if (hf_select(3, (pdw)(((f >> 7) & 1) ? 0 : 1))) return PDE_LIMIT;
+        hf_std(4, 1);
+        hf_slot[IA_DH] = 0; hf_slot[IA_DW] = 1; hf_slot[HF_BM] = 2; hf_slot[IA_AI] = 3; hf_slot[IA_EX] = 4;
+    }
     if (!sd_huff)
         for (k = 0; k < (sd_tpl ? 1u : 4u); k++) { sd_at[k][0] = (pdi)(signed char)jb_b(); sd_at[k][1] = (pdi)(signed char)jb_b();
             if (sd_at[k][1] < -2 || sd_at[k][1] > 0 || (sd_at[k][1] == 0 && sd_at[k][0] >= 0)) return PDE_LIMIT; }
@@ -968,7 +1251,23 @@ static pdw jb_segment_text(void)
     tr_corner = (pdw)((f >> 4) & 3); tr_transp = (pdw)((f >> 6) & 1); tr_comb = (pdw)((f >> 7) & 3);
     tr_defpix = (pdw)((f >> 9) & 1); tr_dsoff = (pdi)((f >> 10) & 31); if (tr_dsoff > 15) tr_dsoff = (pdi)(tr_dsoff - 32);
     tr_rtpl = (pdw)((f >> 15) & 1);
-    if (jb_huff) { jb_inc |= JBF_UNSUP; return PDE_LIMIT; }
+    if (jb_huff && tr_refine) return PDE_LIMIT;                 /* Huffman with refinement: not supported */
+    if (jb_huff) {
+        pdw hf = (pdw)(jb_b() << 8), sel;
+        hf |= jb_b();
+        jb_collect_tabs();
+        sel = (pdw)(hf & 3); if (sel == 2 || hf_select(0, sel == 0 ? 6u : sel == 1 ? 7u : 0)) return PDE_LIMIT;
+        sel = (pdw)((hf >> 2) & 3); if (hf_select(1, sel == 0 ? 8u : sel == 1 ? 9u : sel == 2 ? 10u : 0)) return PDE_LIMIT;
+        sel = (pdw)((hf >> 4) & 3); if (sel == 3 ? hf_select(2, 0) : hf_select(2, (pdw)(11 + sel))) return PDE_LIMIT;
+        sel = (pdw)((hf >> 6) & 3); if (sel == 2 || hf_select(3, sel == 0 ? 14u : sel == 1 ? 15u : 0)) return PDE_LIMIT;
+        sel = (pdw)((hf >> 8) & 3); if (sel == 2 || hf_select(4, sel == 0 ? 14u : sel == 1 ? 15u : 0)) return PDE_LIMIT;
+        sel = (pdw)((hf >> 10) & 3); if (sel == 2 || hf_select(5, sel == 0 ? 14u : sel == 1 ? 15u : 0)) return PDE_LIMIT;
+        sel = (pdw)((hf >> 12) & 3); if (sel == 2 || hf_select(6, sel == 0 ? 14u : sel == 1 ? 15u : 0)) return PDE_LIMIT;
+        if (hf_select(7, (pdw)(((hf >> 14) & 1) ? 0 : 1))) return PDE_LIMIT;
+        hf_slot[IA_FS] = 0; hf_slot[IA_DS] = 1; hf_slot[IA_DT] = 2; hf_slot[IA_RDW] = 3; hf_slot[IA_RDH] = 4;
+        hf_slot[IA_RDX] = 5; hf_slot[IA_RDY] = 6;
+        hf_logs = (pdw)((f >> 2) & 3);
+    }
     if (tr_refine && !tr_rtpl) {
         for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
         if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
@@ -993,7 +1292,7 @@ static pdw jb_segment_text(void)
             }
     }
     jb_idlen = jb_codelen(nsy);
-    if (jb_idlen > 11) { jb_sp = msp; jb_hp = mhp; return PDE_LIMIT; }
+    if (jb_idlen > 11 && !jb_huff) { jb_sp = msp; jb_hp = mhp; return PDE_LIMIT; }
     direct = (pdw)(!tr_defpix && jb_rop == 0 && tr_comb == 0);
     if (direct) { jb_cv_band(); tr_ox = (pdi)jb_rx; tr_oy = (pdi)jb_ry; }
     else {
@@ -1006,8 +1305,10 @@ static pdw jb_segment_text(void)
         cv_off = tmp; cv_rb = rbr; cv_w = jb_rw; cv_h = trows; cv_y0 = (pdi)(y0r - jb_ry);
         tr_ox = 0; tr_oy = 0;
     }
-    sd_contexts();
-    mq_init();
+    if (jb_huff) {
+        e = hf_idtable(nsy);
+        if (e) { jb_sp = msp; jb_hp = mhp; return e; }
+    } else { sd_contexts(); mq_init(); }
     rf_tpl = tr_rtpl; rf_tpgr = 0;
     e = tr_run();
     if (!e && !direct) {
@@ -1026,6 +1327,7 @@ static pdw jb_segment_text(void)
 static pdw jb_dispatch(void)
 {
     pdw r = PDE_OK;
+    jb_ovf = 0;
 #ifdef JBDBG
     fprintf(stderr, "seg %u type %u left %u:%u\n", jb_sn, jb_st, jb_lh, jb_ll);
 #endif
@@ -1044,6 +1346,12 @@ static pdw jb_dispatch(void)
     case 6: case 7:
         if (jb_region()) return PDE_TRUNC;
         if (jb_inband()) r = jb_segment_text();
+        break;
+    case 53:
+        if (jb_rg_find(jb_sn) == 0xFFFFu) {
+            r = jb_segment_table();
+            if (r) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); jb_inc |= JBF_UNSUP; r = PDE_OK; }
+        }
         break;
     case 4: case 20: case 36: case 40: jb_inc |= JBF_UNSUP; break;
     default: break;

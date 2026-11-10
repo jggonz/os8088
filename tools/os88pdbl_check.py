@@ -251,6 +251,87 @@ def check_jb2_text(rnd, bins, use_mutool=False, refine_ok=True):
     print('jbig2 text%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
     return fails
 
+
+def custom_table(rnd, oob, name):
+    """-> (segment data, HuffTab) for a custom table covering -64..63 in 8 lines"""
+    lines = [(4, 4)] * 8
+    pls = (2, 3, 3) if oob else (2, 2, 0)
+    if rnd.random() < .5:       # a different shape: 4 + 4 lines of mixed widths
+        lines = [(3, 3), (3, 3), (3, 3), (3, 4), (4, 4), (4, 5), (5, 5), (5, 6)]
+        # lengths must stay a prefix code: 3*3 lines at 3 bits = .375, one at 3 = .125 -> .5, 4,4 = .125, 5,5 = .0625 -> ok
+        pls = (2, 3, 3) if oob else (2, 2, 0)
+        k = sum(2.0 ** -l[0] for l in lines) + sum(2.0 ** -p for p in pls if p)
+        if k > 1.0: lines = [(4, 4)] * 8
+    low = -64
+    data, _ = F.table_segment_data(lines, pls[0], pls[1], pls[2], low, low + sum(1 << rl for _, rl in lines), 3, 3)
+    high = low + sum(1 << rl for _, rl in lines)
+    return data, F.custom_tab(lines, low, pls[0], pls[1], pls[2])
+
+def check_jb2_huff(rnd, bins, use_mutool=False):
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(40):
+            W = rnd.choice([60, 97, 130]); H = rnd.choice([40, 75, 110])
+            nsym = rnd.randint(2, 12)
+            hs = sorted(rnd.randint(4, 14) for _ in range(nsym))
+            syms = sorted((glyph(rnd.randint(2, 12), hh, rnd) for hh in hs), key=lambda g: (len(g), len(g[0])))
+            logs = rnd.randint(0, 3); corner = rnd.randint(0, 3); transp = rnd.randint(0, 1)
+            comb = rnd.choice([0, 0, 1, 2, 3]); defpix = rnd.choice([0, 0, 1]); dsoff = rnd.randint(-3, 3)
+            rop = rnd.choice([0, 0, 1, 2, 4])
+            dh, dw = rnd.randint(0, 1), rnd.randint(0, 1)
+            if dw == 0: syms = sorted(syms, key=lambda g: (len(g), len(g[0])))
+            mmr = rnd.random() < .5
+            insts = []
+            for _ in range(rnd.randint(1, 24)):
+                insts.append((rnd.randrange(nsym), rnd.randint(0, W - 4), rnd.randint(0, H - 4)))
+            region = [[defpix] * W for _ in range(H)]
+            strips = 1 << logs
+            def key(it):
+                bm = syms[it[0]]; bh = len(bm); bw = len(bm[0])
+                if not transp:
+                    S = it[1] + (bw - 1 if corner in (2, 3) else 0); T = it[2] + (bh - 1 if corner in (0, 2) else 0)
+                else:
+                    T = it[1] + (bw - 1 if corner in (2, 3) else 0); S = it[2] + (bh - 1 if corner in (0, 2) else 0)
+                return (T // strips, S)
+            for it in sorted(insts, key=key): compose(region, syms[it[0]], it[1], it[2], comb)
+            page = [[0] * W for _ in range(H)]; compose(page, region, 0, 0, rop)
+            # text-region tables: standard, or custom (collected in order FS, DS, DT)
+            fs_sel = rnd.choice([0, 1, 3]); ds_sel = rnd.choice([0, 1, 2, 3]); dt_sel = rnd.choice([0, 1, 2, 3])
+            tabs = {}; extra = []; refs = [0]; nextseg = 10
+            def mk(name, sel, stds, oob):
+                global_n = None
+                if sel == 3:
+                    data, t = custom_table(rnd, oob, name)
+                    tabs[name] = t; extra.append((data, name))
+                else: tabs[name] = F.HuffTab.std(stds[sel])
+            mk('FS', fs_sel, (6, 7), False); mk('DS', ds_sel, (8, 9, 10), True); mk('DT', dt_sel, (11, 12, 13), False)
+            tabs['RDW'] = tabs['RDH'] = tabs['RDX'] = tabs['RDY'] = F.HuffTab.std(14)
+            hflags = fs_sel | (ds_sel << 2) | (dt_sel << 4)
+            cfg = F.HuffCfg(tabs, hflags)
+            tabsegs = []
+            for n, (data, name) in enumerate(extra):
+                tabsegs.append(F.segment(nextseg + n, 53, data, page=0)); refs.append(nextseg + n)
+            dseg = F.segment(0, 0, F.symdict_huff_segment(syms, dh, dw, mmr), page=0)
+            tseg = F.segment(2, 6, F.text_segment(syms, insts, W, H, 0, 0, rop, logs, corner, transp, comb, defpix, dsoff, huff=cfg), refs=refs)
+            pseg = F.segment(1, 48, F.page_info(W, H))
+            globs = [dseg] + tabsegs; segs = [pseg, tseg]
+            if use_mutool:
+                mp = mutool_pgm(segs, globs, W, H, td)
+                total += 1
+                if mp != page: print('MUTOOL differs huff case', case, dict(dh=dh, dw=dw, mmr=mmr, fs=fs_sel, ds=ds_sel, dt=dt_sel, logs=logs, corner=corner, transp=transp)); fails += 1
+                continue
+            for want in (0, W // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, b''.join(segs), b''.join(globs), W, H, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, W, H, sc):
+                        open('/tmp/failh_%d.jb2' % case, 'wb').write(b''.join(segs)); open('/tmp/failh_%d.g' % case, 'wb').write(b''.join(globs))
+                        print('FAIL huff case', case, W, H, 'want', want, dict(dh=dh, dw=dw, mmr=mmr, fs=fs_sel, ds=ds_sel, dt=dt_sel, logs=logs, corner=corner, transp=transp)); fails += 1
+    print('jbig2 huffman%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     seed = 1
@@ -266,6 +347,8 @@ if __name__ == '__main__':
         if what == 'jb2-generic': f += check_jb2_generic(rnd, BINS)
         if what == 'jb2-text': f += check_jb2_text(rnd, BINS)
         if what == 'mutool-jb2-text': f += check_jb2_text(rnd, BINS, True)
+        if what == 'jb2-huff': f += check_jb2_huff(rnd, BINS)
+        if what == 'mutool-jb2-huff': f += check_jb2_huff(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 

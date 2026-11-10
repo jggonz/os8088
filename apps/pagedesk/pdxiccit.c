@@ -36,8 +36,11 @@ static pdw  bl_ow, bl_oh;       /* delivered width and height                 */
 static pdw  bl_omode;           /* PDIM_BITS1 or PDIM_GREY8                   */
 static pdw  bl_orb;             /* delivered bytes a row                      */
 
+/* Five 1,032-byte rows shared by the two decoders (they never run together) and, in
+ * pdxijb2.c, by the phases of one decoder that never overlap in time. */
+static pdb  bl_pool[5][1032];
 static pdb  bl_pop[256];        /* popcounts                                  */
-static pdw  bl_acc[1032];       /* white counters, one per output column      */
+static pdb  bl_acc[1032];       /* white counts a column: at most 8 x 8 = 64 fits a byte */
 static pdw  bl_arows;           /* rows accumulated into the group            */
 
 /* CCF_* (the flags) are in pdabi.h */
@@ -123,14 +126,15 @@ static const pdw cf_run_of[104] = {
 /* Primary lookup on 8 bits; entry = run << 4 | length. A code longer than 8
  * bits points (length field 15) into a second table on the next 5 bits. */
 #define CF_NSEC 24
-static pdw cf_pri[2][256];
-static pdw cf_sec[2][CF_NSEC * 32];
+static pdb cf_pri[2][256];      /* index + 1 into the 104 codes, or 0; a long code: 0x80 | block */
+static pdb cf_sec[2][CF_NSEC * 32];
 static pdw cf_nsec[2];
 static pdb cf_built;
 
 static void cf_build(void)
 {
-    pdw c, i, k, ln, code, run, e, base, ex, fill;
+    pdw c, i, k, ln, code, base, ex, fill;
+    pdb e;
     if (cf_built) return;
     for (c = 0; c < 2; c++) {
         cf_nsec[c] = 0;
@@ -139,19 +143,18 @@ static void cf_build(void)
         for (i = 0; i < 104; i++) {
             code = c ? cf_black_code[i] : cf_white_code[i];
             ln = c ? cf_black_len[i] : cf_white_len[i];
-            run = cf_run_of[i];
-            e = (pdw)((run << 4) | ln);
+            e = (pdb)(i + 1);
             if (ln <= 8) {
                 fill = (pdw)(1u << (8 - ln));
                 base = (pdw)(code << (8 - ln));
                 for (k = 0; k < fill; k++) cf_pri[c][base + k] = e;
             } else {
                 pdw pre = (pdw)(code >> (ln - 8));
-                if ((cf_pri[c][pre] & 15) != 15) {
-                    cf_pri[c][pre] = (pdw)((cf_nsec[c] * 32) << 4 | 15);
+                if (!(cf_pri[c][pre] & 0x80)) {
+                    cf_pri[c][pre] = (pdb)(0x80 | cf_nsec[c]);
                     cf_nsec[c]++;
                 }
-                base = (pdw)(cf_pri[c][pre] >> 4);
+                base = (pdw)((cf_pri[c][pre] & 0x7F) << 5);
                 ex = (pdw)(ln - 8);
                 fill = (pdw)(1u << (5 - ex));
                 base += (pdw)((code & ((1u << ex) - 1)) << (5 - ex));
@@ -204,27 +207,30 @@ static int cf_done(void)
  * -1 for an invalid code or a run longer than the row. */
 static int cf_run(pdw c, pdw cols)
 {
-    pdw total = 0, e, v;
+    pdw total = 0, e, v, run;
     for (;;) {
         v = cf_peek(13);
         e = cf_pri[c][v >> 5];
-        if ((e & 15) == 15) e = cf_sec[c][(e >> 4) + (v & 31)];
-        if (!(e & 15)) return -1;
-        total += (e >> 4);
-        cf_adv(e & 15);
-        if ((e >> 4) < 64) return (int)total;
+        if (e & 0x80) e = cf_sec[c][((e & 0x7F) << 5) + (v & 31)];
+        if (!e) return -1;
+        e--;
+        run = cf_run_of[e];
+        total += run;
+        cf_adv(c ? cf_black_len[e] : cf_white_len[e]);
+        if (run < 64) return (int)total;
         if (total > cols) return -1;
     }
 }
 
 /* ---- rows ----------------------------------------------------------------- */
-static pdb  cf_rowa[1024], cf_rowb[1024];
+#define cf_rowa bl_pool[0]
+#define cf_rowb bl_pool[1]
 static pdb *cf_cur, *cf_ref;
 static pdw  cf_k, cf_cols, cf_flags, cf_nb;
 static pdw  cf_next;            /* source rows decoded so far                 */
 static pdb  cf_end;             /* no more coded rows: the rest are white     */
 static pdw  cf_gdone;           /* output groups delivered                    */
-static pdb  cf_samp[1024];
+#define cf_samp bl_pool[2]
 
 static void cf_fill(pdb *r, pdw a, pdw b)       /* set bits [a, b) */
 {
