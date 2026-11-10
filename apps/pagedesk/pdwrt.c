@@ -84,6 +84,8 @@ static pdw v_job(pdw fresh)
         }
     } else if (r == PDE_BUSY) {
         g_sv.state = (pdw)(sv_phase + 1);
+    } else if (r == PDE_PASSWORD && sv_pw && sv_active) {
+        sv_pw = 0; g_sv.state = (pdw)(sv_phase + 1);      /* paused, not failed (20.22.4.5) */
     } else {
         r = job_fail(r);
     }

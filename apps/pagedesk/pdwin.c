@@ -63,7 +63,13 @@ static pdw fw_open(void)
     if (fg_stage == 1) {                                 /* OPEN is resumable (D11) */
         pd_fcopy_out(&fw_op, g_xb, 0, sizeof fw_op);
         pdw_in_src(); r = pdw_engcall(PDV_ENG_OPEN, 0, 0, 0); pdw_in_tgt();
-        if (pdw_engcf) return r ? r : PDE_SYNTAX;
+        if (pdw_engcf) {
+            if (r == PDE_PASSWORD) {                     /* 20.22.4.5: the job is kept; the primary asks, SETKEYs and calls again */
+                pd_fcopy_in(g_xb, 0, &fw_op, sizeof fw_op);
+                g_sv.err_detail = (pdw)(20 + gc_slot); sv_pw = 1;
+            }
+            return r ? r : PDE_SYNTAX;
+        }
         pd_fcopy_in(g_xb, 0, &fw_op, sizeof fw_op);
         if (r == PDE_BUSY) return PDE_OK;
         fg_stage = 2;
