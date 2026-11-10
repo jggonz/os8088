@@ -350,6 +350,7 @@ static void sb_end(void)
         else {
             nr = (pdw)(okl == 32 ? 14 : 10);
             pdc_aes_ks(g_cop.rk, ok, (pdw)(okl == 32 ? 8 : 4));
+            pdc_aes_dks(g_cop.rk, nr);                 /* the DECRYPTION schedule, in place; g_cop.rk is re-keyed before it enciphers again */
             for (k = 0; k < 16; k++) g_cop.iv[k] = g_sb[k];
             pdc_cbc_dec(g_cop.rk, nr, g_cop.iv, g_sb + 16, (pdw)((g_sbn - 16) >> 4));
             pad = g_sb[g_sbn - 1];
