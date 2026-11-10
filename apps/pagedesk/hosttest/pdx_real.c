@@ -93,7 +93,8 @@ int main(int argc, char **argv)
         if (pde_fail) { fprintf(stderr, "open failed %u\n", pde_fail); return 2; }
         break;
     }
-    memset(&rl, 0, sizeof rl); rl.page = 0; strcpy(rl.category, "Font"); strcpy(rl.name, "F1");
+    memset(&rl, 0, sizeof rl); rl.page = getenv("PDX_PAGE") ? (pdw)atoi(getenv("PDX_PAGE")) : 0; strcpy(rl.category, "Font");
+    strcpy(rl.name, getenv("PDX_FONT") ? getenv("PDX_FONT") : "F1");     /* another font of a real file (QA R13) */
     pd_fcopy_out(&rl, SEG_XB, 0, sizeof rl);
     pde_verb(PDV_ENG_RES_LOOKUP, 0, 0, 0);
     if (pde_fail) { fprintf(stderr, "no font F1\n"); return 2; }

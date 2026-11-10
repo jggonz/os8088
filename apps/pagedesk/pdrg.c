@@ -48,6 +48,10 @@ static pdw g_pkfam = 0xFF, g_pksty, g_pkem, g_pkres, g_pkscale;
 static pdw g_inc;                   /* PDF_INC_* seen                        */
 static char g_incname[32];
 static pdw g_ops, g_passes;
+/* the strike blocks' stamp (20.22.8): a pass count that is NOT reset with each verb - g_passes restarts
+ * at 1 every render, so a block a previous page's pass 1 used looked "used in this pass" to the next
+ * page's pass 1 and no block could be reused (QA R24: "glyph block full" on pages 2 and later) */
+static pdw g_pstamp;
 
 #ifdef PD_HOST
 static void pdr_cpy(void *d, const void *s, pdw n)

@@ -64,17 +64,47 @@ static pdw g_stgseg, g_stgoff;      /* the staging window                       
 
 static pdw pdx_zero(void *p, pdw n) { pdw i; pdb *b = (pdb *)p; for (i = 0; i < n; i++) b[i] = 0; return n; }
 static struct pdxb_strm g_st;
+/* A stream that PDENG cannot open for want of a Flate slot - the page's content
+ * stream holds the only one - is inflated here into the workspace above the
+ * program (pdxfz.c, 20.22.8, "Streams without a Flate slot") and read from there: g_zm */
+static pdw g_zm, g_zfree, g_zmpos, g_zmlen, g_zmmore;
+static pdw g_zseg, g_zin, g_zinend, g_zout, g_zstart, g_zlim, g_zmore, g_zerr;
+static pdw pdx_zstrm(pdw obj, pdw gen, pdw off);
 static pdw pdx_sopen(pdw obj, pdw gen)
 {
+    pdw r, n;
+    g_zm = 0;
     pdx_zero(&g_st, sizeof g_st);
     g_st.objnum = obj; g_st.gen = gen;
     pd_fcopy_out(&g_st, g_xb, 0, sizeof g_st);
-    return pdx_eng(PDV_ENG_STRM_OPEN, 0, 0, 0);
+    r = pdx_eng(PDV_ENG_STRM_OPEN, 0, 0, 0);
+#ifdef PDXF_NOZ
+    return r;               /* the host's A/B: no in-place inflate (hosttest/pdx_page.py --noz) */
+#endif
+    if (r != PDE_LIMIT && r != PDE_FLATE) return r;
+    n = pdx_zstrm(obj, gen, g_zfree);
+    if (!n) return r;
+    g_zm = 1; g_zmpos = 0; g_zmmore = (pdw)(n == 0xFFFF); g_zmlen = (pdw)(g_zout - g_zfree);
+    return 0;
 }
+static pdw n_;
 static pdw pdx_sread(pdw seg, pdw off, pdw max)
 {
+    if (g_zm) {
+        n_ = (pdw)(g_zmlen - g_zmpos);
+        if (n_ > max) n_ = max;
+        if (!n_) { n_ = g_zmmore; g_zmmore = 0; return n_; }      /* "more" is said once: the slurp's probe */
+        pd_fcopy(seg, off, g_ws, (pdw)(g_zfree + g_zmpos), n_);
+        g_zmpos = (pdw)(g_zmpos + n_);
+        return n_;
+    }
     if (pdx_eng(PDV_ENG_STRM_READ, seg, off, max)) return 0;
     return pdx_eng_ax;
+}
+static void pdx_sclose(void)
+{
+    if (g_zm) g_zm = 0;
+    else pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
 }
 /* the whole stream into far memory; 0xFFFF when it is larger than cap or unreadable */
 static pdw pdx_slurp(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
@@ -87,11 +117,11 @@ static pdw pdx_slurp(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
         tot = (pdw)(tot + got);
         if (tot >= cap) {                                  /* the next read decides: more data = too big */
             got = pdx_sread(g_stgseg, g_stgoff, 1);
-            pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+            pdx_sclose();
             return got ? 0xFFFF : tot;
         }
     }
-    pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    pdx_sclose();
     return tot;
 }
 
@@ -243,6 +273,7 @@ static struct pdxb_dictget g_dg2;
 
 /* a dictionary value that is a name: compare it to s */
 static pdw fd_name_is(const char *s) { return g_dg.kind == PDK_NAME && nm_eq(g_dg.text, s); }
+#include "pdxfz.c"
 static pdw fd_ref(pdw obj, pdw gen, const char *a, const char *b, const char *c)      /* 1 + the reference in g_ro/g_rg */
 {
     pdw r;
@@ -313,13 +344,13 @@ static pdw fd_activate(pdw fobj, pdw fgen)
 {
     pdw n, sym = 0, cidobj = 0, cidgen = 0, tuobj = 0, tugen = 0;
     g_fobj = 0; g_kind = PDFK_NONE; g_cmaplen = 0; g_ft0 = 0; g_fvert = 0; g_ftu = 0; g_fcm = 0; g_fdw = 1000; g_fwl = 0; g_ferr = 0;
-    g_dobj = fobj; g_dgen = fgen; g_cmapobj = 0;
+    g_dobj = fobj; g_dgen = fgen; g_cmapobj = 0; g_zfree = 0;
     g_tuoff = (pdw)(g_pcap + PDXF_CIDWIN + PDXF_STG); g_cmoff2 = (pdw)(g_tuoff + PDXF_TAB); g_wdoff = (pdw)(g_cmoff2 + PDXF_TAB);
     if (!wd_get(fobj, fgen, "Subtype", 0, 0) && fd_name_is("Type3")) {         /* its glyphs are content streams: no program (20.22.8) */
         g_kind = PDFK_T3;
         if (fd_refs(fobj, fgen, "ToUnicode", 0, 0) && !pdx_sopen(g_ro, g_rg)) {
             if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
-            pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+            pdx_sclose();
         }
         fd_simple_enc(fobj, fgen, 0);
         g_fobj = fobj; g_fgen = fgen;
@@ -345,7 +376,7 @@ static pdw fd_activate(pdw fobj, pdw fgen)
     n = pdx_slurp(g_ffobj, g_ffgen, g_ws, 0, g_pcap);
     if (n == 0xFFFF) { g_ferr = PDFE_SIZE; return PDE_LIMIT; }
     if (!n) { g_ferr = PDFE_READ; return PDE_FONT; }
-    g_pseg = g_ws; g_plen = n;
+    g_pseg = g_ws; g_plen = n; g_zfree = n;
     if (cidobj) {
         n = pdx_slurp(cidobj, cidgen, g_ws, g_pcap, PDXF_CIDWIN);
         g_cmaplen = n == 0xFFFF ? PDXF_CIDWIN : n;
@@ -354,12 +385,12 @@ static pdw fd_activate(pdw fobj, pdw fgen)
     /* the tables */
     if (tuobj && !pdx_sopen(tuobj, tugen)) {
         if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
-        pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+        pdx_sclose();
     }
     if (g_ft0) {
         if (g_cmapobj && !pdx_sopen(g_cmapobj, g_cmapgen)) {
             if (!cm_parse(PDFC_ENC, g_ws, g_cmoff2, PDXF_TAB)) g_fcm = 1;
-            pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+            pdx_sclose();
         }
         g_fwl = wd_ranges(g_dobj, g_dgen, g_ws, g_wdoff, PDXF_TAB); g_fdw = g_wdw;
     } else fd_simple_enc(fobj, fgen, sym);

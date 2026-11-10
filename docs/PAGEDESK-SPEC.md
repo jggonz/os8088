@@ -6358,7 +6358,18 @@ more). The pinned helpers:
   the page view, the document's fonts and the cache. Any other INIT is a new
   document (D2).
 * The text map (`PDV_REND_TEXTMAP`) runs the same ladder: after an answer
-  the walk restarts and the glyphs the primary already has are skipped.
+  the walk restarts and the glyphs the primary already has are skipped. The
+  primary copies its `pdxb_textmap` out before every slice and reads it back
+  only from a slice that was not a ladder answer, so the slice after an answer
+  arrives with the `state` it was first sent with, 0. PDREND therefore takes a
+  `state` 0 while it waits for an answer on that page (`PDR_XWAIT`, text mode,
+  the same `page`) as the answered slice, not a new pass, and writes `state` 1
+  back on every slice. Before QA R17 it began again: `mode_reset` forgot the
+  refusal, the pass asked for the same module, and a module that could not be
+  had was asked for until `PDU_LADMAX`, so Find and Copy answered "exceeds one
+  of PageDesk's limits". A pass abandoned in `PDR_XWAIT` without `PDV_REND_ABORT`
+  and followed by a new pass on the same page is taken for that continuation;
+  the primary's passes call ABORT whenever they stop early.
 * Codes PDREND's door answers with CF = 0: `PDE_BUSY` 65, `PDE_NEEDMOD` 66,
   `PDE_NEEDMEM` 67; CX and DX come from `pdr_out_cx` / `pdr_out_dx`.
 
@@ -6641,6 +6652,27 @@ the notdef), the CMap tokeniser's 512-byte staging window, and three 2,048-byte 
 Encoding CMap, `/W` ranges). PDXF's own image + bss (the outline buffer, the 34 x 48 accumulator,
 the Type 1 name tables, the stacks) is under 61,440 (the cap, 20.22 L6).
 
+**Streams without a Flate slot** (`apps/pagedesk/pdxfz.c`; QA R13, F19). PDENG decodes a Flate
+stream in a Flate slot (20.22.3), and a machine with ONE slot - the 640 KB VGA machine is one - has
+given it to the page's content stream while PDREND interprets the page, so PDXF's `STRM_OPEN` of
+a Flate font program, ToUnicode, Encoding CMap or CIDToGIDMap answers `PDE_LIMIT` (`fl_attach`,
+"a third Flate stream open at once"); every Quartz, Word and MuPDF page is a Flate content stream,
+so before this no real document's embedded font drew there (the fixtures drew: their content
+streams are uncompressed). On `PDE_LIMIT` or `PDE_FLATE` from `STRM_OPEN`, a stream whose
+`/Filter` is `/FlateDecode` alone is copied with `RAW_COPY PDRC_PLAIN` (decrypted by PDENG's own
+hook) into the workspace's free area - `[0, program)` for the program, above the program for the
+others - moved to that area's TOP, and inflated into its BOTTOM. The decoder needs no window (the
+output is whole in the area, so a match is a copy within it) and reads its input through a
+512-byte near buffer, so output may overwrite any input byte already taken; output that would
+reach unread input or pass the area is "too large" (`PDFE_SIZE` for a program, the growth above;
+a truncated table for the others). The callers then read the bytes as they would PDENG's
+(`pdx_sread`, `pdx_sclose`). Its tables borrow the TrueType point arrays (a font activates between
+glyphs, never inside one): **+3,282 of PDXF**, 64,094 of 65,024. The decoder is puff's (canonical
+Huffman a bit at a time): small, and run once per activation. Another filter in that position
+(ASCIIHex, LZW, a chain) still fails as before. Not covered here: a Type 3 CharProc or a form in a
+Flate content stream opens through rcore's `do_form` and meets the same wall
+(`hosttest/pdx_page.py --oneslot type3` shows it).
+
 **Verbs** (`pdabi.h`'s `[fonts 20.22.8]` block; PDXF copies the exchange block's struct to its bss at
 entry because PDENG reuses the block):
 
@@ -6662,7 +6694,12 @@ the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset)
 linear probing) and info[128] (the `/W` width in 1/1000 em, the PD Latin byte of the code's
 ToUnicode, flags). A block is a (font, size): up to `PDFB_NBLK` (4) of them sit at the TOP of the glyph claim,
 under a 64-byte header (font object and generation, the size, the pass number last used; PDREND
-FINDS, PDXF MAKES and evicts a block not used in this pass). `(glyph_kb - 24) / 4` blocks fit: a
+FINDS, PDXF MAKES and evicts a block not used in this pass). That number is PDREND's `g_pstamp`, a
+pass count that is NOT reset with each render: `g_passes` restarts at 1 every verb, and a stamp of it
+made every block a previous page or thumbnail used look "used in this pass" to the next render's
+pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
+block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
+ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit: a
 24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
 it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
 with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
@@ -6697,6 +6734,17 @@ base encoding as before and a Type0 font maps nothing. A `bfrange` with an array
 with a ligature become singles (a ligature keeps its first unit). Search (PDENG) and select/copy
 therefore find the text of a font whose codes are glyph indices.
 
+**The text map without PDXF** (`pdrd.c`'s `syn_next`; QA R17). A text pass asks for the strike block of
+(font, 0), and PDXF makes it. Under Find or a selection the overlay is running and cannot be dropped,
+so on a 640 KB machine PDXF (its image and bss near 65,024, plus a workspace of at least 32 KiB) is
+refused. The pass first looks up the code in the font's blocks at the sizes this view has drawn,
+because every slot of a block carries the code's Latin byte. A page on the screen therefore yields its
+text with no module. A page that was never drawn still needs PDXF, and while PDXF cannot be loaded, its
+Type0 codes map to nothing and its simple codes map through the base encoding.
+`hosttest/pdx_page.py --text` is the check. Each fixture page's text is taken three ways. The first has
+PDXF. The second refuses PDXF and re-sends every slice the ladder answered with the stale block; it
+must finish. The third refuses PDXF just after drawing the page, and it must equal the first.
+
 **Type 3** (`pdrt3.c`; ON, `PDR_NO_TYPE3` leaves it out). Not by C recursion (`pdstk` refuses a
 cycle): `text_glyph` QUEUES (pass, block, slot, pen) in the glyph claim's image row buffer (64
 entries of 12 bytes; free while a page is interpreted) and rcore's `PDR_T3_DRAIN()` hook in
@@ -6715,9 +6763,22 @@ hooks; the third site is the `emb == 3` branch of `text_glyph`.
 intermediate (`pdx_muldiv`), quadratic and cubic curves flattened by uniform subdivision (no
 recursion, no stack: `n` from the control polygon's second difference), and the signed AREA of every
 edge accumulated per cell (a pixel is 256), then packed to one bit where the coverage is at least
-`PDXF_THR` = **128**. The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
+`PDXF_THR` = **128**. Then **dropout control** (`pdx_drop`, C; QA R24): a stem or bar thinner than
+a pixel that straddles two gives each under half and vanished whole at 5-8 px (`h i j l` gone, `#`
+read as `v`). The coverage is recomputed from the accumulator, and every run of covered cells along
+a row, then down a column (the columns seeing the pixels the rows added), that has NO pixel on and
+is at most `PDXF_DROPRUN` = 2 cells long - a stroke crossing that line, not an edge running along
+it - gets its fullest cell if that holds at least `PDXF_DROPMIN` = 40 of 256: one pixel, so a stroke
+never disappears and nothing that already drew is thickened. 614 bytes of PDXF (64,714). The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
 C twins by `hosttest/pdx_primtest.py` under Unicorn (muldiv, `accline`, `pack`: identical on every
 case). A glyph wider than 32 px does not bitmap (`PDFB_F_BIG`).
+
+**Strokes against MuPDF** (`hosttest/pdx_check.py`'s limit since the dropout control): LOST is a
+pixel MuPDF's anti-aliased render covers at least a quarter with no ink of ours within one pixel,
+STRAY ink of ours where MuPDF covers under 1/8 everywhere within one pixel; a 1-bit picture differs
+from the AA picture at every edge, which is no defect, and these two are the defects. With dropout
+control: **1.5 % of ink at 8 px, 0.3 at 10, 0 at 12-16, no stray pixel**; without it (A/B,
+`PDXF_DROPMIN` 9999) 16 % at 8 px. The figures below are the threshold's, measured before it.
 
 **Measured against MuPDF** (`hosttest/pdx_check.py`, glyph for glyph at the same pen position, the
 reference being `mutool draw -r 72` anti-aliased and thresholded at 50 %, so the question is only
@@ -6750,7 +6811,10 @@ Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` >
 `_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
 deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.
 
-**Checks.** `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
+**Checks.** `hosttest/pdx_page.py --oneslot` renders every fixture with its content streams
+Flate-compressed and ONE Flate slot (`--noz`, PDXF built without the in-place inflate, must fail:
+the fonts come out substituted), and `pdx_fuzz -z` inflates each fixture's program at zlib levels
+0, 1 and 9 exactly, then mutated under ASan and UBSan. `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
 parsers under ASan + UBSan on mutated programs and CMaps), `hosttest/pdx_chain.py` (the
 chain through the REAL PDENG: Flate-compressed font streams, the encoding rules, CIDToGIDMap,
 ToUnicode, an embedded CMap, `/W`, and the strike block's bitmaps against a direct raster),
