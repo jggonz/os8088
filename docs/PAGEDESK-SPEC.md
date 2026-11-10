@@ -2324,8 +2324,13 @@ says `Could not open <name>` and the `PDE_*` sentence).
 - **Esc** cancels the running job at the next slice boundary. A cancelled open
   closes and frees; a cancelled render leaves the page as drawn and says
   `Drawing cancelled - the page is incomplete.`
-- **Progress**: after 18 ticks a job writes `Opening <name> - Esc cancels`
-  (or `Drawing page`, `Saving <name>`) to the status line, once a second. A
+- **Progress**: after 18 ticks a job writes `Opening <name> (n) - Esc cancels`
+  (or `Drawing page <p> (n)`, `Saving <name> (n)`) to the status line, once a
+  second: `p` is the page drawn and `(n)` the slices so far, bracketed so it
+  is never read as a page (QA R15 read `Drawing page  416` on a one-page file).
+  `Opened <name>` is replaced by the first draw's own line (`No changes`, a
+  form's note, `Incomplete rendering - ...`) however short the draw (QA R16:
+  a page drawn in 8 slices or fewer kept `Opened` on CGA). A
   save opens `OSAPI_FS_OP` with the total `PDWRT` reports and closes it with 0.
 - **Incomplete rendering** is said once a page (`PDV_REND_STATUS`'s first
   reason): a repair of a damaged strip draws the same page again and must not
