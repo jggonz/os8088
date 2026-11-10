@@ -4933,7 +4933,75 @@ round's final pass, not before.
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 
-*Reserved; written by its agent before its code.*
+Stories AP-04 (the user half) and AP-05. Files: `pduauth.c` (primary: the
+state and the calls below), `pdovlauth.c` (overlay: paint and keys), and the
+dispatch arms in `pducmd.c`.
+
+**One popover, `P_AUTH`, four modes.** It is a framed white popover of four
+text rows, 36 columns, centred in the canvas (no source control). It is
+modal in the sense of 20.6: while it is up the keys are its own (Esc included,
+ahead of the job-cancel arm), a click inside is ignored, and a click outside
+is ignored (an open that asks should not be lost to a stray click). Opening
+any other popover cancels it.
+
+| mode | rows | keys |
+|---|---|---|
+| `AU_PW` asking | `Password: ***_` / blank / blank / `Enter: open  Esc: cancel` | printable ASCII appends (at most 39), Backspace deletes, Enter answers (an empty entry is ignored: the empty password was already tried), Esc cancels |
+| `AU_PWBAD` | the same with `Wrong password.` in row 2 | the same; typing leaves the line until Enter |
+| `AU_R6` the question | `This file's encryption takes` / `about N minutes on this machine.` / `Open anyway?` / `Enter: open  Esc: cancel` | Enter or Y answers Yes, Esc or N answers No |
+| `AU_CHECK` working | `Checking...  NN%` / blank / blank / `Esc: cancel` | Esc cancels |
+
+The wording of the question is the owner's (O6), verbatim apart from N, which
+is whole minutes, rounded up, at least 1, from `PDV_KEY_COST`'s seconds
+(`pdu_au_askr6` does the conversion). A password is at most **39 bytes** when
+typed: the buffer is `pdu_needle` (40 bytes, otherwise Find's, free while a
+popover of another kind is up), so the primary pays no bytes for it. Stars are
+drawn for the last 22 characters at most. The buffer is zeroed when the popover
+closes by any route, when a new ask begins and when the answer is taken
+(`pdu_au_close`).
+
+**The calls plat's ladder makes** (primary, `static`, one translation unit;
+the open job owns the sequence, this file owns the popover and the buffer):
+
+| call | meaning |
+|---|---|
+| `int pdu_au_ask(int bad)` | the empty password failed (`bad` 0) or the typed one did (`bad` 1): show the prompt, buffer cleared, answer cleared. Returns 0 if the popover could not be shown (the overlay was refused): the caller then fails the open with `PDE_PASSWORD`, whose sentence says what is needed |
+| `int pdu_au_askr6(unsigned secs)` | the question, `secs` being `PDV_KEY_COST`'s answer. Returns 0 as above (the caller then does NOT derive on an 8086) |
+| `int pdu_au_busy(void)` | show `AU_CHECK` with no question: the derivation on a faster CPU runs with progress and Cancel |
+| `void pdu_au_prog(int permille)` | the work's progress (`pdxb_crypt.progress`); repainted at the wake |
+| `int pdu_au_poll(void)` | 0 waiting, 1 answered (Enter or Yes; the popover is now in `AU_CHECK`), -1 cancelled (Esc, N, or the popover was closed some other way; the popover is gone). Read it each slice while the job waits; a -1 means the caller cancels the open exactly as an Esc on the progress line does |
+| `pdu_au_pw`, `pdu_au_len` | the typed password and its byte count, valid when `pdu_au_poll()` is 1 after `pdu_au_ask`. The caller copies it into `pdxb_crypt.pw/pw_len` and zeroes its own copy afterwards |
+| `void pdu_au_close(void)` | the work is over (success, or the caller gives up): zero the buffer, drop the state, and close the popover at the next wake. A wrong password does not call this: it calls `pdu_au_ask(1)` and the popover stays |
+
+The R6 sequence on `CPU_8086` is therefore: `pdu_au_askr6(secs)`, poll until
+1 or -1, then derive with `pdu_au_prog` updates, and `pdu_au_close()` at the
+end; on any other CPU the caller shows `pdu_au_busy()` instead. The question
+is asked once per open, before the first R6 derivation (the empty password's).
+
+**Errors.** `pdu_errtext` has one plain sentence for every code the round
+adds or re-means: `PDE_PASSWORD` "This file needs a password.", `PDE_NOSLOT`
+"Not enough memory for a module; that feature is skipped.", `PDE_ENCRYPT`
+"Its encryption handler is not supported." and `PDE_XREFSTM` "Its
+cross-reference stream is damaged." `PDE_NEEDMOD`/`PDE_NEEDMEM` are statuses
+the ladder consumes and never reach a sentence. The primary names no
+`PDF_INC_*` reason of its own: the module that sets the bit supplies the name
+in `pdxb_rstatus.first` (so `PDF_INC_MODULE` reads as the module's note, "module
+not loaded"), and Document info says only "incomplete rendering".
+
+**Preferences.** `PAGEDESK.CFG` is format **version 2**, eleven bytes: the
+version-1 ten, then byte 10, the **module cache** (0 Auto, 1 Off: the XMS/EMS
+cache of module images, O2). A version-1 file (ten bytes, version byte 1)
+still loads, and byte 10 keeps its default, Auto. A file of any other version
+or length is ignored as a whole, as before, and a save always writes version 2.
+The dialog gains a sixth row, `Module cache  Auto/Off`; its note and key lines
+merge into one (`Arrows Esc  View, caches: next open`) and the popover widens
+to 36 columns, so it stays **eight rows** and the COMPACT 640x200 canvas
+(92-104 px) still holds it. The setting is read at the open, before the claims
+(like Flate). plat reads it through `pdu_pref_modcache()`, a macro over
+`pdp_cfg[10]`: 0 Auto, 1 Off.
+
+**Help.** The profile card (Help > The XT profile) is rewritten to the
+round's profile; the final pass of the round checks it against 1.3's table.
 
 #### 20.22.7 PDREND's core: the ladder, the cache, images, Type3 (`rcore`)
 
