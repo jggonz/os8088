@@ -186,6 +186,21 @@ static int ovl_ed_room(unsigned tbytes, unsigned pbytes)
 /* ============================================================================
  * 20.8
  * ==========================================================================*/
+/* the edit store at the FIRST edit (QA F26, claim B): a claim of its own from
+ * the top, not 16 KiB of B held from the open. 1 = no store (no document, or
+ * no room): the edit is refused. Every writer of ed_seg() asks first: a new
+ * record goes in only where it is (pdu_ed_new: a note's commit is too deep
+ * a chain for a claim, pdstk), so it is asked for at an edit tool's PRESS on
+ * the page (ovl_tool_click) and by a journal's replay (recov), and picking an
+ * edit tool asks first - that click also gives the slot's occupant back when
+ * the store will not fit (ovl_tool_hint): the ladder loads it again at need */
+static int ovl_ed_need(void)
+{
+    if (!pdu_dclaim[2] && pdu_dclaim[0])
+        pdu_dc[PDU_DC_EDITS] = pdu_dclaim[2] = pdu_claimhi(ED_END >> 4);
+    return !pdu_dclaim[2];
+}
+
 int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
                const pd_pt *pts, unsigned npts)
 {
@@ -193,7 +208,7 @@ int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
     int idx;
 
     pdu_ed_err = 0;
-    if (ed_seg() == 0) {
+    if (!pdu_dclaim[2]) {               /* asked for at the press (ovl_ed_need) */
         pdu_ed_err = PDE_NOMEM;
         return -1;
     }

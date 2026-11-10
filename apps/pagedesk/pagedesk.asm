@@ -73,6 +73,7 @@
 %define CC_OVL_PART                 ; ...a PART of PAGEDESK.O88
 %define CC_OVL_LAZY                 ; ...fetched on the first call into it
 %define CC_OVL_ROOM pdu_ovl_room     ; ...and the occupant makes room for it (20.22.2.4)
+%define CC_OVL_FAIL pdu_ovl_fail     ; ...and a read refused names the disk (QA F21)
 %define OP_NO_LAZYOK                ; op_fetch's own refusal is the answer
 
 %define CC_ICON     "pdart_appicon.inc"         ; tools/os88pdart.py, art/app.art
@@ -139,6 +140,13 @@
 %ifdef PD_MATH_STUB
   %include "pagedesk/stubs/pdmstub.inc"
 %else
+  ; the primary's C names pdm_view_size/fwd/inv and pdm_crc16_far alone (its
+  ; cc8086 use set): the u32, fixed-point parse/print, pt16 and matrix ops are
+  ; the modules' (QA F21's prompt bytes came from here)
+  %define PDM_SKIP_U32
+  %define PDM_SKIP_PARSE
+  %define PDM_SKIP_TOPT16
+  %define PDM_SKIP_MAT
   %include "pagedesk/pdmath.inc"
 %endif
 

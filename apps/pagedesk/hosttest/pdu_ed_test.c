@@ -68,6 +68,12 @@ static void os88_gfx_unlock(void) {}
 static int nxor;
 static void os88_gfx_xor_fill(int a, int b, int c, int d) { nxor++; }
 static int os88_wm_clip_set(void *w) { return 0; }
+/* QA F26: the edit store is a claim of its own, taken at the first edit
+ * (ovl_ed_need): the document's claims and the store, as pdumod.c holds them */
+static unsigned pdu_dc[12];             /* PDU_NDC */
+static unsigned pdu_dclaim[3] = { 0x1000, 0x1800, 0x2000 };
+static unsigned claimhi_ans = 0x2000, claimhi_n;
+static unsigned pdu_claimhi(unsigned paras) { claimhi_n++; return paras == 1024 ? claimhi_ans : 0; }
 static unsigned pdu_dcseg(int row)
 {
     return row == PDU_DC_EDITS ? 0x2000 : row == PDU_DC_UNDO ? 0x3000 : 0;
@@ -815,6 +821,30 @@ static void test_walk(unsigned s, int steps)
     CHECK(bad == 0, "random walk seed %u: %d bad states", s, bad);
 }
 
+/* QA F26: the store is claimed at the first edit, once, from the top, and an
+ * edit with no store is refused (never written through segment 0) */
+static void test_lazy_store(void)
+{
+    unsigned keep = pdu_dclaim[2];
+    fresh();
+    pdu_dclaim[2] = 0;
+    claimhi_n = 0;
+    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == -1 && pdu_ed_err == PDE_NOMEM,
+          "no store: the record is refused with PDE_NOMEM");
+    pdu_dclaim[0] = 0;
+    CHECK(ovl_ed_need() == 1 && claimhi_n == 0, "no document: nothing is claimed");
+    pdu_dclaim[0] = 0x1000;
+    claimhi_ans = 0;
+    CHECK(ovl_ed_need() == 1 && claimhi_n == 1 && !pdu_dclaim[2], "no room: refused");
+    claimhi_ans = 0x2000;
+    CHECK(ovl_ed_need() == 0 && pdu_dclaim[2] == 0x2000 && pdu_dc[PDU_DC_EDITS] == 0x2000,
+          "the first edit claims 16 KiB and the row names it");
+    CHECK(ovl_ed_need() == 0 && claimhi_n == 2, "held: not claimed again");
+    mk(PDA_HIGHLIGHT, 0, 0, 0, 100, 100);
+    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == 0 && pdu_ed_n == 1, "and the edit goes in");
+    pdu_dclaim[2] = keep;
+}
+
 int main(void)
 {
     unsigned s;
@@ -833,6 +863,7 @@ int main(void)
     test_gen();
     test_src();
     test_pageop();
+    test_lazy_store();
     for (s = 1; s <= 40; s++)
         test_walk(s, 400);
     printf("%d checks, %d failed\n", checks, fails);

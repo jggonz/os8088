@@ -488,6 +488,10 @@ int ovl_tool_click(int x, int y)
         pdu_ed_show();
         return t;
     }
+    if (ovl_ed_need()) {                /* QA F26: the store at the first edit */
+        pdu_tell(pdu_errtext(PDE_NOMEM));
+        return 1;
+    }
     if (t == C_T_HILITE)
         return 0;                       /* Highlight: nav selects, then asks */
     if (t == C_T_TEXT) {                /* an existing box: type into it */
@@ -644,6 +648,13 @@ void ovl_tool_hint(int id)
     case C_T_ELLIPSE: s = "Drag the box the ellipse fits."; break;
     case C_T_SIGN:    s = "Draw one stroke."; break;
     }
-    if (s)
+    if (s) {
         pdu_tell(s);
+        /* an edit tool: the edit store now (QA F26), the slot's room given
+         * for it here and not under the edit's own click (ovl_ed_need) */
+        if (id != C_T_SELECT && ovl_ed_need() && pdu_socc != PDU_OCC_WRT) {
+            pdu_slot_free();
+            ovl_ed_need();
+        }
+    }
 }
