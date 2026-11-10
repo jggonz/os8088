@@ -1210,10 +1210,10 @@ dkx_click:
     cmp bx, cx
     mov bx, cx                  ; mov does not touch flags: BX = our window for
     je .fmin                    ; whichever of the two calls is taken
-    call KERNEL_SEG:apic_wm_front     ; the routine's own cell is the door
+    KDOOR wm_front                    ; the routine's own cell is the door
     jmp short .unlock
 .fmin:
-    call KERNEL_SEG:apic_inst_minimize ; sets I_FLAGS bit0 and wm_hides, so
+    KDOOR inst_minimize                ; sets I_FLAGS bit0 and wm_hides, so
                                 ; the tile inverts (SPEC.md 30.3)
 .unlock:
     call KERNEL_SEG:cw_gfx_unlock

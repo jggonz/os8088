@@ -2333,7 +2333,7 @@ CLK_PROBE_SPAN equ 22
 section .cold
 ; -----------------------------------------------------------------------------
 ; osapi_clk_get - OSAPI_CLK_GET, the date and time a package may read
-;                 (SPEC.md 37.96); far, DS = KERNEL_SEG (api_rsc)
+;                 (SPEC.md 37.96); far, DS = KERNEL_SEG (the door's RCS kind)
 ; out: CX = year, DH = month, DL = day, BH = hour, BL = minute, AH = second,
 ;      AL = bit 0 a hardware RTC was found, bit 1 12-hour display; CF = 0
 ;

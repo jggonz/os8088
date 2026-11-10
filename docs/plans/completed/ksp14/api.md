@@ -42,9 +42,9 @@ Clocks are 8088.
 
 ### 1. Three cells are INLINE off kern_mega, with no memory operand - -12 / -12 / -6 / 0
 
-`OSAPI_XMEM_SEL` (0x0425) and `OSAPI_XMEM_RUN` (0x043D) are kern_mega's
+`OSAPI_XMEM_SEL` (a door cell) and `OSAPI_XMEM_RUN` (a door cell) are kern_mega's
 protected-mode doors and every other kernel's answer is the refusal AX = 1,
-CF = 1; `OSAPI_MEM_CODESEL` (0x042B) answers AX = DX, CF iff DX = 0 off
+CF = 1; `OSAPI_MEM_CODESEL` (a door cell) answers AX = DX, CF iff DX = 0 off
 kern_mega. Each was a rare cell (`push bp / call api_rs / dw x`) to a six-byte
 `.text` body reached by nothing else. The cell IS that body now - `mov ax, 1 /
 cmp al, 2 / retf` (`OSAPI_XREFUSE`) and `mov ax, dx / cmp ax, 1 / retf`, six

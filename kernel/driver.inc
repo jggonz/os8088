@@ -457,8 +457,8 @@ DSV_CAPS    equ 0               ; dw: capability bits it ADDS (SND_CAP_*)
                                 ; ...OR, on a DRVC_FILE driver, FSCAP_* below:
                                 ; one word, read per class, and the two
                                 ; classes can never both own it
-DSV_FM      equ 2               ; dw: near proc behind slot 0x00E3, 0 = none
-DSV_STREAM  equ 4               ; dw: near proc behind slot 0x00EA, 0 = none
+DSV_FM      equ 2               ; dw: near proc behind slot 0x00C5, 0 = none
+DSV_STREAM  equ 4               ; dw: near proc behind slot 0x00CC, 0 = none
 DSV_TICK    equ 6               ; dw: near proc called from snd_tick, 0 = none
 DSV_RELINST equ 8               ; dw: near proc, release one instance's grants
 DSV_NAME    equ 10              ; dw: -> a NUL sink name, in ITS segment
@@ -3247,7 +3247,7 @@ osapi_drv_dlg_x:                ; THE BODY IS CTRL.DRV's, modc_e_dlg (ctrl.inc,
     jmp far [CPFP + CPE_DLG*4]  ; kernel size pass 14): it can only succeed
                                 ; with the panel's window up, and with no
                                 ; image the slot is mod_gone's CF = 1. FAR: the
-                                ; only entry is kernel.asm's api_rxc, and the
+                                ; only entry is kernel.asm's door (its RCX kind), and the
                                 ; body's (or mod_gone's) retf answers it
 
 ; -----------------------------------------------------------------------------

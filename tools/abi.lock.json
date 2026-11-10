@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c1856dfa99aa7f508b69ab13815ec498bb15fc8ba46b17f078ed12fc05850c77",
+  "fingerprint": "8209c9334b778253a14a0e4aceb7042aa3705e151ce75e0ced8f9ec7427a5a44",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "a30d12c8964bda78ff48da7f3499de7ed615c6036e21ba1c80b24a22e3ab0e21",
+  "fingerprint": "818e538602135a3bf386e87d483c7ba153b08129d05e3396175c056358b7be6c",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -53,14 +53,14 @@
    "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x03E5); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (a door cell); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 8
   },
   {
    "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x03E5); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (a door cell); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 9
   },
   {
@@ -109,14 +109,14 @@
    "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x03FF (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x021C (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 10
   },
   {
    "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x03FF (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x03F3 (SPEC.md 37.96), OSAPI_WM_DESK 0x03F9 and OSAPI_GFX_DESK 0x021C (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 11
   },
   {
@@ -221,14 +221,14 @@
    "fingerprint": "1b54119e966a2494d5b90e15a31d51708f5865657efcde14953e16ddaacc6243",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_ASSOC_FLUSH (0x040B) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "reason": "OSAPI_ASSOC_FLUSH (a door cell) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
    "to": 10
   },
   {
    "fingerprint": "76db0c6485a05e20cc6aa5649c86ed0430710447cfb672128736b5dfeb5757e8",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_ASSOC_FLUSH (0x040B) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "reason": "OSAPI_ASSOC_FLUSH (a door cell) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
    "to": 11
   },
   {
@@ -725,14 +725,14 @@
    "fingerprint": "df5d549daceacc518900ebf0163664e5b2fd224c384d27f9ec7c1a031e796d95",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x0411) and OSAPI_DRV_USE (0x0417) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
+   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (a door cell) and OSAPI_DRV_USE (a door cell) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
    "to": 10
   },
   {
    "fingerprint": "470e0c6bea8a4da7b9317ed0cf627db339712236a424fdf86fac6be435b14f5a",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (0x0411) and OSAPI_DRV_USE (0x0417) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
+   "reason": "main -> elendilon merge (KERN-MEGA-PLAN 14.67): main's OSAPI_SERIAL (a door cell) and OSAPI_DRV_USE (a door cell) keep their offsets; kern_mega's six cells, which had shipped in no release and in nothing main builds, move up past them in the same order - XMEM_SEL 0x04AB, MEM_CODESEL 0x04B1, XMEM_WALK 0x04B7, MEM_HUGE 0x04BD, XMEM_RUN 0x04C3, MEM_SUBSEG 0x04C9. Every package main or a release built still runs; only elendilon-built packages that call the six moved cells must be rebuilt, so neither number bumps",
    "to": 11
   },
   {
@@ -1124,14 +1124,14 @@
    "fingerprint": "b7e236b01c23c3a477cd8a0ffcc4f69aa9be41db14578917a93fd9eb6ae810a6",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_SEG (0x0455): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "reason": "OSAPI_SEG (0x022C): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
    "to": 10
   },
   {
    "fingerprint": "a58c69b62a367c2a1b7fe61fede83599ff230eabdc0910c60a8b822b47518b93",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_SEG (0x0455): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "reason": "OSAPI_SEG (0x022C): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
    "to": 11
   },
   {
@@ -2119,6 +2119,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of class (R14, K17-2) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "818e538602135a3bf386e87d483c7ba153b08129d05e3396175c056358b7be6c",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "T5: every rare cell behind the software-interrupt door (int 81h + an index byte), the table renumbered once, OS88_RARE_DOOR thrown (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "8209c9334b778253a14a0e4aceb7042aa3705e151ce75e0ced8f9ec7427a5a44",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "T5: every rare cell behind the software-interrupt door (int 81h + an index byte), the table renumbered once, OS88_RARE_DOOR thrown (kernel size pass 19)",
    "to": 14
   }
  ]

@@ -306,7 +306,7 @@ fdlg_ref:   stc                 ; kern_big's: the same refusal, in front of
 %endif
 
 ; -----------------------------------------------------------------------------
-; fdlg_open - slot 0x0124's body (SPEC.md 38.6, 38.7)
+; fdlg_open - slot 0x00D6's body (SPEC.md 38.6, 38.7)
 ; in:  AL = 0 Open / 1 Save, BX = requester window, DI = completion proc,
 ;      SI = a default name (NUL, <= 12) or 0; gfx lock HELD by the caller
 ; out: CF=0 the chooser is ON SCREEN; CF=1 refused. All registers preserved.

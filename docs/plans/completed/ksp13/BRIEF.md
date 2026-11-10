@@ -129,7 +129,7 @@ byte of those windows too.
   `SYSTEM.CFG` key.
   `git diff origin/main HEAD -- apps/os88api.inc drivers/os88drv.inc` is the
   list of what is NOT frozen: `OSAPI_WM_QUIET` (0x048D), `OSAPI_MEM_HMA`
-  (0x0487), `OSAPI_ASSOC_FLUSH` (0x040B) and its `ASSOC_FL_*`,
+  (0x0487), `OSAPI_ASSOC_FLUSH` (a door cell) and its `ASSOC_FL_*`,
   `DRVM_CEIL_NET`'s value, and the HMA driver contract. Those may change
   freely - **so pass 12's first ABI wish (`OSAPI_MEM_HMA` as an arm of
   `OSAPI_MEM_CLAIM_DMA_HI`/`OSAPI_MEM_FREE`, ~-14/-6) is wkcore's to take**.

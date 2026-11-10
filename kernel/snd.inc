@@ -689,7 +689,7 @@ osapi_snd_caps:
     ret                         ; vary
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_fm - the public FM request (slot 0x00E3, SPEC.md 20.3/34.2)
+; osapi_snd_fm - the public FM request (slot 0x00C5, SPEC.md 20.3/34.2)
 ;
 ; in:       AL = verb, and the verb's own registers. Verb 2's patch pointer
 ;           has ALREADY been staged into the kernel by the slot's X stub, so
@@ -767,7 +767,7 @@ osapi_snd_fm:
 %endif                          ; OS88_SNDCARD - the FM slot's live body ends
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_stream - the public stream request (slot 0x00EA, SPEC.md 34.5)
+; osapi_snd_stream - the public stream request (slot 0x00CC, SPEC.md 34.5)
 ; in:       AL = verb, and the verb's own registers
 ; out:      AX = the verb's answer; DX = bytes consumed ON VERB 3 ONLY;
 ;           CF = 1 no streaming sink, or the driver refused
@@ -853,7 +853,7 @@ osapi_snd_stream:
 %endif                          ; OS88_SNDCARD - the stream slot's live body
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_tone - the public tone request (slot 0x00D3, SPEC.md 20.3)
+; osapi_snd_tone - the public tone request (slot 0x00B5, SPEC.md 20.3)
 ;
 ; in:       AX = frequency Hz (0 = off), CX = duration ticks (0 = until off),
 ;           DL = priority
@@ -902,7 +902,7 @@ osapi_snd_tone:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; osapi_snd_play - slot 0x00DB (SPEC.md 34.4): the PWM CLIP'S DOOR. The clip
+; osapi_snd_play - slot 0x00BD (SPEC.md 34.4): the PWM CLIP'S DOOR. The clip
 ; itself - the rate, the rescale table, the pacer, the click-abort - is
 ; apps/os88pcm.inc's, a library in the one package that plays clips, because
 ; the whole player here was ~630 resident bytes on both kernels (a 256-byte
@@ -1068,7 +1068,7 @@ spk_off:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_fsx_spk - slot 0x03D9 (SPEC.md 34.11.1): a THIN door. The kernel does
+; osapi_fsx_spk - slot 0x020D (SPEC.md 34.11.1): a THIN door. The kernel does
 ; only what is the kernel's - the arbitration of channel 2, the divisor it
 ; banks and trims so [ticks] stays exact, and the open flag spk_off tears
 ; down by. The IRQ0 vector and channel 0's count are the CALLER'S to write,

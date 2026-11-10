@@ -1408,7 +1408,7 @@ assoc_run_x:
     push ds                     ; found" alone leaves the user with no way to
     pop es                      ; know WHICH program a document wanted - which
     xor cx, cx                  ; is exactly the report that found this
-    call KERNEL_SEG:cw_toast_show ; (SPEC.md 54.4.1). A TOAST since size pass
+    KDOOR toast_show              ; (SPEC.md 54.4.1). A TOAST since size pass
                                 ; 4, as every other failed launch is; ES and
                                 ; CX come back through kretfc_es. The name is
                                 ; assoc_fnb AS assoc_locate LEFT IT - built

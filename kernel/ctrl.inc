@@ -2651,7 +2651,7 @@ cp_promise:
     jne .say
     xor al, al                          ; the clock is on the pane: withdraw,
 .say:                                   ; and wm_flag drops the claim with it
-    call KERNEL_SEG:apic_wm_flag        ; the CELL (OSAPI_WM_FLAG): the Control
+    KDOOR wm_flag                       ; the CELL (OSAPI_WM_FLAG): the Control
                                         ; Panel answers SPEC.md 11.96.1's
                                         ; promise per PAGE, from its
                                         ; module (SPEC.md 31.12)
@@ -5417,7 +5417,7 @@ cp_flush_x:
                                 ; 2.8.6, cp_fdnop's shape)
 .tell:
     xor cx, cx                  ; a toast COPIES its line, so image data is
-    call KERNEL_SEG:cw_toast_show   ; fine for the drop that follows
+    KDOOR toast_show                ; fine for the drop that follows
     pop es
     pop si
     jmp kretm_cx
@@ -5476,7 +5476,7 @@ cp_toast1:
     pop es
     push cx
     xor cx, cx                  ; CX = 0: TOAST_TICKS
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop cx
     pop es
     ret

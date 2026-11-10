@@ -33,7 +33,7 @@ file API can deliver a file ≥ 64KB. Both land as SPEC amendments *before* code
   separator-ruled channel columns, position/BPM/speed readouts, instrument list,
   per-channel volume-bar scopes.
 - **Kernel amendment 1 — worker-safe stream verbs + ring mode** (§34/§20.3/§20.6).
-- **Kernel amendment 2 — `dskw_readbig`, API slot 0x018A** (§18.4/§20.3).
+- **Kernel amendment 2 — `dskw_readbig`, a door cell** (§18.4/§20.3).
 - **Tooling** — `tools/mkmod.py` (deterministic 5.6KB test MOD), a data-file mode in
   `tools/os88disk.py`, Makefile wiring, `apps/tracker/beverly.mod` (Beverly Hills Cop,
   116,085 bytes, user-supplied) shipped as `BEVERLY.MOD` in the APPS folder.
@@ -95,11 +95,11 @@ hole every few seconds. Ring mode reuses the same three counters as **free-runni
 Estimated delta for 1a+1b+1c: ~200–250 bytes of `.text` (ISR-adjacent; §34.7's section
 rule bars any of it from `.fartext`) against 19,278 bytes of measured `KERN_BUDGET` headroom.
 
-## Kernel amendment 2 — `dskw_readbig` (API slot 0x018A)
+## Kernel amendment 2 — `dskw_readbig` (a door cell)
 
 `dskw_read`'s CX is a 16-bit byte count into one ES:BX segment: a file ≥ 65,536 bytes
 is FERR_BIG *unconditionally*, and real-world MODs (BEVERLY.MOD is 116,085 bytes) live
-above it. New op in `kernel/diskw.inc`, reached by packages at slot 0x018A
+above it. New op in `kernel/diskw.inc`, reached by packages at a door cell
 (`OSAPI_FILE_READBIG`, table becomes 60×8):
 
 - in SI = NUL 8.3 name (marshalled like dskw_read's), **ES = destination base

@@ -644,7 +644,7 @@ fm_kinit_x:
     add cx, FM_CHCOLW           ; ...and its floor has the button column on
 .notch:
     mov dx, FM_MIN_H            ; (SPEC.md 11.100.2). This window is the one
-    call KERNEL_SEG:cw_wm_minsize ; the field found it on: dropped low on a
+    KDOOR wm_minsize              ; the field found it on: dropped low on a
                                 ; 200-row CGA it was clamped until it showed
                                 ; the header, the two buttons and the status
                                 ; line with NOT ONE FILE ROW between them -
@@ -2798,7 +2798,7 @@ fm_choose:
     and byte [di+I_FLAGS], 0xFE
 %endif
     mov bx, [di+I_WIN]
-    call KERNEL_SEG:cw_wm_show
+    KDOOR wm_show
     jmp ct_cw_gfx_unlock
 .notopen:
     call fm_count               ; CX = live file-manager instances
@@ -5451,7 +5451,7 @@ fm_fmt_home:
     call fm_ncpy
 .titled:
     xor ax, ax
-    call KERNEL_SEG:cw_wm_title_set
+    KDOOR wm_title_set
     pop si
 .next:
     call fmv_inext
@@ -5658,7 +5658,7 @@ fm_toast_hdr:
     pop es
     mov si, fm_hdrbuf
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop cx
     ret
@@ -7738,13 +7738,13 @@ fm_repaint:
     jz .titled
     xor ax, ax                  ; (the zero is the store's too)
     mov [fm_tdirty], ax
-    call KERNEL_SEG:cw_wm_title_set
+    KDOOR wm_title_set
 .titled:
     call fm_cfill               ; white-fill content (the Note Pad idiom)
 
     mov bx, si
     call fm_draw_core
-    call KERNEL_SEG:cw_wm_grow_paint ; the white fill above erased the grow box;
+    KDOOR wm_grow_paint              ; the white fill above erased the grow box;
                                 ; BX is still the window ptr (SPEC.md 11.1)
 .done:
     jmp kretc_di
@@ -8771,7 +8771,7 @@ fm_status_only:
 
     call fm_draw_status
     mov bx, si                  ; the padded run above reaches into the GROW
-    call KERNEL_SEG:cw_wm_grow_paint ; BOX's rows at the bottom-right corner -
+    KDOOR wm_grow_paint              ; BOX's rows at the bottom-right corner -
                                 ; so the line ate part of it and nothing put
                                 ; it back until the next full repaint.
                                 ; fm_repaint has always done this after its own

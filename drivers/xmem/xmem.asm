@@ -343,7 +343,7 @@ xm_svc:
 
 ; -----------------------------------------------------------------------------
 ; xm_walk - the pool's live blocks, for the Task Manager (XMV_WALK, behind
-;           slot 0x0431; SPEC.md 28.4.8)
+;           a door cell; SPEC.md 28.4.8)
 ;
 ; in:       DX:DI = room for CX records of 6 bytes
 ; out:      CF = 0, AX = records written, each {dw XB_OFF, dw XB_KB, db
@@ -413,7 +413,7 @@ ROMF_HWALK      equ 10          ; MIRRORED: boot/osrom.asm's - the HMA tail's
 
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x015A)
+; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x0106)
 ;
 ; out:      AX = KB the pool can still hand out (0 = none, and alloc, free and
 ;           copy will all refuse), DX:CX = the pool's 32-bit linear base,
@@ -448,7 +448,7 @@ xm_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, slot 0x0160)
+; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, a door cell)
 ;
 ; in:       DX:AX = bytes wanted (rounded up to 1KB), BL = the owner to stamp
 ; out:      CF = 0 and DX:AX = the block's 32-bit linear base;
@@ -568,7 +568,7 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (XMV_FREE, slot 0x0166)
+; xm_free - give a block back (XMV_FREE, a door cell)
 ;
 ; in:       DX:AX = a base this caller owns, BL = the caller
 ; out:      CF = 0 freed and merged with the adjacent free runs;
@@ -757,7 +757,7 @@ xm_chk:
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes between conventional and extended memory
-;           (XMV_COPY, behind slot 0x016C, SPEC.md 41.5)
+;           (XMV_COPY, behind slot 0x010D, SPEC.md 41.5)
 ;
 ; in:       ES:SI = the kernel's XMC_ block (ES is KERNEL_SEG by construction)
 ; out:      CF = 0 done; CF = 1 and AX = 1 the transport refused (or, from

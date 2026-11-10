@@ -1496,7 +1496,7 @@ ld_start:
     ; untouched by this load from beginning to end, and the ordering that
     ; had to be got right no longer exists to get wrong.
     call ct_cw_gfx_lock
-    call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
+    KDOOR wm_show               ; in: BX = window ptr; repaints all
     call ct_cw_gfx_unlock
     mov word [ld_base], 0       ; ...AND NOTHING IS BEING LOADED ANY MORE
                                 ; (SPEC.md 66.6.1). mem_can_move pins the
@@ -2209,7 +2209,7 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x0381: "the program is at DX, not at me"
+; osapi_pkg_rehome - a door cell: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
 ; in:  DX = the segment the program's image starts at, CX = the paragraphs
 ;      at DX the program keeps, the carve's tail past them going back to the

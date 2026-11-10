@@ -437,9 +437,12 @@ def api_slots():
     trimmed to a sentence.
     """
     lines = read("apps/os88api.inc").split("\n")
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88cells
+    door = os88cells.block_rare("apps/os88api.inc", root=ROOT) or {}
     out = []
     for i, ln in enumerate(lines):
-        m = re.match(r"^%define\s+(OSAPI_[A-Z0-9_]+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)"
+        m = re.match(r"^%define\s+(OSAPI_[A-Z0-9_]+)\s+(?:KERNEL_SEG:(0x[0-9A-Fa-f]+)|OS88_DOOR)"
                      r"\s*(?:;\s*(.*))?$", ln)
         if not m:
             continue
@@ -449,7 +452,11 @@ def api_slots():
             if not c:
                 break
             note += " " + c.group(1).strip()
-        out.append((m.group(1), m.group(2), " ".join(note.split())))
+        slot = m.group(2)
+        if slot is None:                # a DOOR cell (SPEC.md 20.3.4): its
+            ix = door.get(m.group(1))   # index, from the generated block
+            slot = "door 0x%02X" % ix[0] if ix else "door"
+        out.append((m.group(1), slot, " ".join(note.split())))
     return out
 
 
