@@ -5049,7 +5049,7 @@ image + bss.
 
 | use | bytes |
 |---|---|
-| near: Huffman tables (2 DC + 2 AC, 838 each), quantisation (4 x 128), entropy buffer 1,420, raw buffer 512, row buffers 2,112, block and transform work arrays about 1,200 | about 8,200 (bss 8,980 with the shell) |
+| near: Huffman tables (2 DC + 2 AC, 838 each), quantisation (4 x 128), entropy buffer 1,420, raw buffer 512, row buffers 2,112, block and transform work arrays about 1,200 | 8,826 (the module's whole bss is 8,980) |
 | far, baseline (one scan holding every component): the output planes of ONE MCU row, `padded width * rows` for each component used | at most 1,056 x 32 (a 1/1 decode of a 4:1:1-or-wider image); 17 KiB for 4:2:0 |
 | far, progressive or multi-scan: per used component `blocks * stride` plus the planes of one MCU row; stride = 136 (1/1), 40 (1/2), 16 (1/4), 2 (1/8) bytes | up to 62 KiB |
 
@@ -5063,7 +5063,7 @@ a width over 8,100) is `PDE_LIMIT` as above. A baseline image has no such limit 
 rows, only in width.
 
 **Fidelity.** Against `djpeg -dct int` (libjpeg-turbo 3.2.0, `tools/os88pdfx_dct.py`
-over 26 fixtures, 228 comparisons):
+over 30 fixtures, 228 comparisons):
 
 * every **grey** decode of a baseline image is bit-exact (max 0) at 1/1, 1/2, 1/4 and
   1/8, because the transforms are `jidctint`, `jidctred`'s 4x4 and 2x2, and the
@@ -5071,7 +5071,7 @@ over 26 fixtures, 228 comparisons):
 * a **progressive or multi-scan** image is bit-exact at 1/1 and 1/8; at 1/2 and
   1/4 the coefficients outside the low 4x4 (resp. 2x2) are not kept, whereas
   libjpeg's reduced transforms read all but one column, so the result is an
-  approximation: mean absolute difference below 3 levels, maximum 36, on fixtures
+  approximation: mean absolute difference below 3.0 levels, maximum 36, on fixtures
   made to be hard (hard edges, noise);
 * **PDIM_N8** is libjpeg's to within one level at 1/1 (the YCbCr conversion is 16-bit
   fixed point); at a reduction chroma is the luma's reduction replicated, where
@@ -5096,13 +5096,13 @@ measurement on iron):
 | IDCT 4x4 (1/2) | 57,000 | 12 ms |
 | IDCT 2x2 (1/4) | 27,000 | 5.6 ms |
 | any IDCT of a block with no AC term | 1,800 to 2,800 | 0.4 to 0.6 ms |
-| 1/8: DC only, no transform | about 400 | 0.1 ms |
+| 1/8: DC only, no transform | not priced: a far poke and a clamp, small beside the 4 ms of entropy decoding | |
 | baseline block, Huffman and dezigzag, 12 coefficients | 19,000 (2,500 to 41,000) | 4 ms |
 
 A 4:2:0 MCU row of 640 pixels (40 MCUs, 6 blocks each, grey out, so 4 transforms an
-MCU) costs about 4.6 s at 1/1, 2.8 s at 1/2, 1.9 s at 1/4 and 1.0 s at 1/8,
+MCU) costs about 5.0 s at 1/1, 2.8 s at 1/2, 1.9 s at 1/4 and 1.0 s at 1/8,
 nearly all of it the entropy decoder at the reductions: a 640x480 photograph at 1/2 is
-30 rows, about 85 s. The module does not hide this; it is the price of reading
+30 rows, about 87 s. The module does not hide this; it is the price of reading
 every block, and the reason the reduction rule exists. The transform is one
 `imul` per multiply (about 150 clocks), 12 a 1-D pass, 16 passes.
 

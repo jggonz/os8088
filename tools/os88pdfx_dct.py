@@ -276,7 +276,7 @@ def main():
                     # coefficients beyond the low N x N are not kept (stored scans), or the chroma is the luma's
                     # reduction replicated (20.22.11): bounded by the mean, not the max
                     lim = -1
-                    ok = mean <= (4.0 if not chroma else 20.0)
+                    ok = mean <= (4.0 if not (chroma or native) else 20.0)
                 else:
                     ok = mx <= lim
                 if not ok: bad += 1

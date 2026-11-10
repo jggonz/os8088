@@ -21773,7 +21773,7 @@ $(BUILD)/pdxi.gen.asm: $(BUILD)/pdxi.raw.asm tools/cc8086.py tools/ccpeep.py $(C
 	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
 $(BUILD)/PDXI.MOD: apps/pagedesk/pdxi.asm apps/pagedesk/pdxidct.inc $(BUILD)/pdxi.gen.asm $(CC_RUNTIME) \
                    $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
-	$(NASM) -f bin -w+error $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
+	$(NASM) -f bin -w+error $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
 	    assert i==len(d), (i,len(d)); t=i+b; print('PDXI.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
 	    sys.exit(1 if t>$(PDI_CAP) else 0)"
