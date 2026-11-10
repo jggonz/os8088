@@ -549,7 +549,7 @@ return that answer.
 
 ## 6. What goes in `kern_dos`, against the 39 KB
 
-Sizes from docs/plans/KERN-SMALL-CUT-PLAN.md §1.2's attribution (heap-bearing
+Sizes from docs/plans/retired/KERN-SMALL-CUT-PLAN.md §1.2's attribution (heap-bearing
 sections, `kern_small`) — **an upper bound**, since that table is the whole of
 each file and `kern_dos` wants part of it.
 

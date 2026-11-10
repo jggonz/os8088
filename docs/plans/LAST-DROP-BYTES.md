@@ -1259,7 +1259,7 @@ this row removes: **165 bytes at build 477**, anywhere from 0 to 511 depending
 on the day, about 256 on average.
 
 **What has to move, and why it is FIXED in size.** `.ovlw` is loaded onto the
-FAT window and spills through the mount buffers (docs/plans/KERN-SMALL-CUT-PLAN.md
+FAT window and spills through the mount buffers (docs/plans/retired/KERN-SMALL-CUT-PLAN.md
 §7), so the FAT window and what follows it move together or not at all. What
 follows it is `.lowbss`, and `.lowbss` holds exactly ONE DMA buffer:
 `dsk_secbuf` (`dsk_win_base` .. `dsk_win_end`), 512 bytes at offset 0.

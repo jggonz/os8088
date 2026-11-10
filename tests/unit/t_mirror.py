@@ -236,7 +236,7 @@ PY_MIRROR = {
 # SPEC.md 51.0 took the same decision for MEM_P_FATW_N and states the rule.
 DIVERGENT = {
     "MAX_TASKS": "kern_small has 7 slots (SPEC.md 8.7, "
-                 "docs/plans/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
+                 "docs/plans/retired/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
                  "taskmgr sizes SS_TSTATE from it, so a package built at 14 "
                  "reading a 7-slot snapshot over-allocates and is safe, where "
                  "the reverse overflows",

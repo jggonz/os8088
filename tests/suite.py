@@ -2711,7 +2711,7 @@ FULL = [
         "MACHINE does, which is a different question, because a purgeable "
         "claim that sizes itself off available heap has a floor of its own "
         "and the directory read-ahead is 64KB on a 640KB box. It is also "
-        "docs/plans/KERN-SMALL-CUT-PLAN.md 8.2's `cheapest unexamined lever`: it "
+        "docs/plans/retired/KERN-SMALL-CUT-PLAN.md 8.2's `cheapest unexamined lever`: it "
         "walks mem_tab on the machine and fails if ANY pinned claim stands on "
         "a bare desktop, because that is heap the machine never gets back and "
         "no assembler can see it - SPEC.md 54.0's association cache was "
