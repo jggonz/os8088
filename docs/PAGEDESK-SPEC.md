@@ -5586,6 +5586,18 @@ the resources and the objects, which are the engine's:
   tests its mode's LOW byte, so crypt's `PDRC_STRCIPHER` in the high byte
   of an answer fed back is harmless.
 
+**20.22.3.9 A Flate claim cut to one slot (plat's request, 20.22.2.4).** A
+re-`INIT` with every claim the same except `flate_kb` keeps the open document
+(and an `OPEN` in progress) when `flate_kb` is now one slot's worth (43 to 85
+KiB) where it was two. Slot 2 must hold no live stream; the primary regrows the
+Flate claim down by that slot's paragraphs afterwards. The answer is CF = 0
+with AX = 1 when the cut is taken. AX = `PDE_BUSY` means a live stream sits in
+slot 2 and nothing changed: the claim stays as it was, so ask again between
+streams. Every other change of the Flate claim still resets the document
+(20.2.2). `pde_test flshrink` (pde_check's `XTGUI_OZ.PDF` row) opens two Flate
+streams, sees `PDE_BUSY`, closes the inner one, sees AX = 1 and reads the
+outer one to the same bytes as an undisturbed read. Cost: 152 bytes.
+
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
 AP-06. Owner decisions O3 (an encrypted file is saved as an incremental update

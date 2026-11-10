@@ -17,6 +17,7 @@
  *   pde_test members FILE -- DIR                      OBJ_FIND + RAW_COPY EXACT/PLAIN of every object into DIR
  *   pde_test raw FILE OBJ GEN                         RAW_COPY in 100-byte pieces: length and CRC
  *   pde_test strm FILE OBJ GEN                        STRM_OPEN + STRM_READ in 37-byte pieces
+ *   pde_test flshrink FILE OUTER INNER                 two Flate streams open; INIT cut to one slot (20.22.3.9)
  *   pde_test faults FILE                              fail every read in turn: IO error, never a crash,
  *                                                     and the engine opens the file afterwards
  *   pde_test multi FILE...                            open each in turn on one engine (re-INIT, reuse)
@@ -60,7 +61,7 @@ static unsigned call(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
 static void xb_put(const void *p, unsigned n) { pd_fcopy_out(p, SEG_XB, 0, (pdw)n); }
 static void xb_get(void *p, unsigned n) { pd_fcopy_in(SEG_XB, 0, p, (pdw)n); }
 
-static unsigned cache_kb = 16, flate_n, xidx_kb, osw_kb, needmems;
+static unsigned cache_kb = 16, flate_n, xidx_kb, osw_kb, needmems, init_ax;
 static int do_init(void)
 {
     struct pdxb_init in;
@@ -72,7 +73,7 @@ static int do_init(void)
     if (xidx_kb) { in.xidx_seg = SEG_XIDX; in.xidx_kb = (pdw)xidx_kb; }
     if (osw_kb) { in.osw_seg = SEG_OSW; in.osw_kb = (pdw)osw_kb; }
     xb_put(&in, sizeof in);
-    call(PDV_ENG_INIT, SEG_XB, 0, 0);
+    init_ax = call(PDV_ENG_INIT, SEG_XB, 0, 0);
     return cf ? (int)pde_fail : 0;
 }
 
@@ -409,6 +410,40 @@ static void cmd_strm(unsigned num, unsigned gen)
     call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
     printf("STRM obj=%u bytes=%u crc=%04x\n", num, total, crc);
 }
+/* 20.22.3.9: two Flate streams open, a re-INIT cutting the claim to one
+ * slot is PDE_BUSY; the inner one closed, it is taken (AX = 1) and the
+ * outer one reads on to the same bytes as `strm` gives */
+static void cmd_flshrink(unsigned outer, unsigned inner)
+{
+    struct pdxb_strm sx;
+    unsigned r, got, total = 0, crc = 0xFFFF, i;
+    unsigned char buf[40];
+    for (i = 0; i < 2; i++) {
+        memset(&sx, 0, sizeof sx);
+        sx.objnum = (pdw)(i ? inner : outer);
+        xb_put(&sx, sizeof sx);
+        r = call(PDV_ENG_STRM_OPEN, 0, 0, 0);
+        if (cf) { printf("FLSHRINK open rc=%u\n", r); return; }
+        got = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 37);   /* both decoders under way */
+        if (!i) { pd_fcopy_in(SEG_BUF, 0, buf, (pdw)got); crc = pdm_crc16((pdw)crc, buf, (pdw)got); total = got; }
+    }
+    flate_n = 1;
+    do_init();
+    printf("FLSHRINK busy ax=%u cf=%d\n", init_ax, cf);
+    call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    do_init();
+    printf("FLSHRINK taken ax=%u cf=%d\n", init_ax, cf);
+    for (;;) {
+        got = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 37);
+        if (cf) { printf("FLSHRINK readrc=%u after %u\n", got, total); break; }
+        if (!got) break;
+        pd_fcopy_in(SEG_BUF, 0, buf, (pdw)got);
+        crc = pdm_crc16((pdw)crc, buf, (pdw)got);
+        total += got;
+    }
+    call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    printf("STRM obj=%u bytes=%u crc=%04x\n", outer, total, crc);
+}
 static void sig(void)
 {
     struct pdxb_trailer tr;
@@ -531,6 +566,7 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "members") && ex >= 1) cmd_members(ap[0]);
         else if (!strcmp(cmd, "raw") && ex >= 2) cmd_raw(cmd_arg(ap[0]), cmd_arg(ap[1]));
         else if (!strcmp(cmd, "strm") && ex >= 2) cmd_strm(cmd_arg(ap[0]), cmd_arg(ap[1]));
+        else if (!strcmp(cmd, "flshrink") && ex >= 2) cmd_flshrink(cmd_arg(ap[0]), cmd_arg(ap[1]));
         else if (!strcmp(cmd, "fpchange") && ex >= 1) {
             struct pdxb_fingerprint a, b;
             unsigned r1, r2;
