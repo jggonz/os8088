@@ -72,6 +72,7 @@
 %define CC_HAS_OVL                  ; pdovl.c's ovl_* (PAGEDESK-SPEC 2.2)
 %define CC_OVL_PART                 ; ...a PART of PAGEDESK.O88
 %define CC_OVL_LAZY                 ; ...fetched on the first call into it
+%define CC_OVL_ROOM pdu_ovl_room     ; ...and the occupant makes room for it (20.22.2.4)
 %define OP_NO_LAZYOK                ; op_fetch's own refusal is the answer
 
 %define CC_ICON     "pdart_appicon.inc"         ; tools/os88pdart.py, art/app.art

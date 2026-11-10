@@ -4964,6 +4964,14 @@ in S. `op_fetch` no longer fetches PDWRT, so `w_partfetch`
 (`apps/weave/wfetch.inc`) leaves the primary. Jobs are one at a time (20.6.3),
 so a save never overlaps a render: the decoder in S is simply swapped out.
 
+**A decoder's workspace is a claim of its own, W** (QA R7, 2026-11-10): S
+is the image + bss alone and W is claimed after it, sized from what is left
+then, so the two need not be one contiguous run - on a 640 KiB machine the
+heap beside a document is three holes, none of them an image + workspace
+(measured: 19 / 51.5 / 20 KiB around a 51.5 KiB overlay). PDWRT keeps its
+buffers IN S: a save's peak stays the 8 claims above. A W refused at MIN
+gives S back and runs the release below before the next try.
+
 The five PDENG, PDREND and PDXF regions (`PDMEM_XIDX`, `PDMEM_OSW`,
 `PDMEM_XC`, `PDMEM_X8`, and 5, the glyph region, 20.22.2.5) are **claim X**, one claim cut by `os88_seg_sub` like A and B,
 taken at the first `PDE_NEEDMEM` and grown by `OSAPI_MEM_REGROW` (20.22.2.5).
@@ -4990,8 +4998,8 @@ close; S also after every save, extract or insert (as PDWRT was).
 **20.22.2.3 The occupants and their slot sizes.** An occupant is a module
 (3.1's 8-byte header, its door at `PDM_ENTRY`, one DS = CS segment), its part
 `OP_LAZY | OP_SELF | OP_COMP` and image + bss at most 65,024. The slot an
-occupant gets is its image + bss, rounded up to a paragraph, followed by its
-WORKSPACE (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
+occupant gets is its image + bss, rounded up to a paragraph (claim S), and its
+WORKSPACE in claim W (PDWRT: following the image in S, 20.22.2.1) (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
 `wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **A workspace is a RANGE, WANT
 and MIN**: S is sized at WANT while PD-29's 32 KiB stays free beside it, else
 at the most that fits of at least MIN (a load that cannot have MIN is
@@ -5100,7 +5108,16 @@ without, in this order (`sl_rel_ovl`, `sl_rel_fl2`, `sl_rel_xc`, called by one l
 | 3 | the `PDMEM_XC` region (16 KiB) | the load answers PDREND's OWN `PDE_NEEDMOD` (`sl_inlad`: only then does PDREND's re-INIT keep its page view, 20.22.7) and XC is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0. PDREND drops its cache and band stash, refuses XC for the rest of that view and re-runs the pass (rcore) | PDREND's results cache; images needing a LUT note COLOUR/LIMIT until the next view |
 
 Only when all three have answered is the load `PDE_NOSLOT` and the occupant
-degrades as below. OSW, XIDX and the glyph region are NEVER released while an
+degrades as below. A **region** refused (20.22.2.5) and a **workspace
+growth** refused (`sl_grow`, 20.22.2.6) run (1) and (2) the same way
+(`sl_relmem`) before they refuse. **The overlay comes back by giving the
+occupant back**: crt0's `CC_OVL_ROOM` hook (`pdu_ovl_room`) frees S and W
+before the overlay is fetched again, so the next page that needs the
+occupant loads it again (the cache, or the disk) rather than the overlay
+being refused - which was QA R5's "Not enough memory" and a UI that never
+went idle. A load that fails after its claims (a refused INIT) gives S and W
+back (`pdu_slot_free`); it used to keep S, 82.5 KiB on QA's machine, until
+the next load. OSW, XIDX and the glyph region are NEVER released while an
 occupant runs: the document's index and object stream are what it reads, and
 the glyph region is what PDXF writes. A claim refused at WANT never reaches
 this loop: the loader asks for the most that fits, so only a MIN above the
@@ -5294,8 +5311,9 @@ cap is 65,024):
 | the Flate release built on eng's shrinking INIT; XC's release only under PDREND's own NEEDMOD | 64,817 | +84 |
 | each region's window cut once and reused (`xr_wseg`/`xr_wcl`/`xr_wl`) | 64,889 | +72 |
 | `pdu_bank_load` for a packed INDEX row (20.22.14): `part_off` worked out from row 5, the 65,024 adjacency check and the read cap gone | 64,875 | -14 |
+| QA R7: W its own claim (`sl_wsize`, PDWRT's buffers still in S), the release before a region or a growth refuses (`sl_relmem`), `pdu_ovl_room` (crt0's `CC_OVL_ROOM`), a failed bind freeing S and W | 64,959 | +84 |
 
-**149 bytes stay under the cap.**
+**65 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
