@@ -90,6 +90,7 @@ static pdw  dj_seg;
 static pdb  dj_prow[DJ_PROW];
 static pdb  dj_orow[1024];
 static pdi  dj_blk[68];
+static struct pd_u32 dj_u;      /* scratch for pdm_u32_mul16: an automatic cannot be addressed */
 
 /* ---- raw bytes ------------------------------------------------------------ */
 static pdi dj_rb(void)
@@ -398,7 +399,6 @@ static pdw dj_fit(pdw s)
 {
     pdw i, bs, ow, pw, tot, add, nb;
     struct dj_comp *c;
-    struct pd_u32 u;
     bs = (pdw)(8 >> s);
     ow = (pdw)((dj_W + (1u << s) - 1) >> s);
     if ((pdw)(ow * dj_outn) > 1024 || (dj_outn > 1 && ow > 341) || ow > 1024) return 0;
@@ -407,14 +407,14 @@ static pdw dj_fit(pdw s)
         for (i = 0; i < dj_nc; i++) {
             c = &dj_c[i];
             if (!c->used) continue;
-            pdm_u32_mul16(&u, c->pw, c->ph);
-            if (u.hi) return 0;
-            nb = u.lo;
-            pdm_u32_mul16(&u, nb, dj_bstr(s));
-            if (u.hi) return 0;
-            if (u.lo > (pdw)(g_wbytes - tot)) return 0;
+            pdm_u32_mul16(&dj_u, c->pw, c->ph);
+            if (dj_u.hi) return 0;
+            nb = dj_u.lo;
+            pdm_u32_mul16(&dj_u, nb, dj_bstr(s));
+            if (dj_u.hi) return 0;
+            if (dj_u.lo > (pdw)(g_wbytes - tot)) return 0;
             c->base = tot;
-            tot = (pdw)(tot + u.lo);
+            tot = (pdw)(tot + dj_u.lo);
         }
     }
     for (i = 0; i < dj_nc; i++) {
@@ -636,9 +636,8 @@ static void dj_ac_refine(pdi *b, struct dj_huff *act)
 
 static pdw dj_boff(struct dj_comp *c, pdw bx, pdw by)
 {
-    struct pd_u32 u;
-    pdm_u32_mul16(&u, (pdw)(by * c->pw + bx), dj_bstride);
-    return (pdw)(c->base + u.lo);
+    pdm_u32_mul16(&dj_u, (pdw)(by * c->pw + bx), dj_bstride);
+    return (pdw)(c->base + dj_u.lo);
 }
 
 static void dj_block(pdw k, pdw bx, pdw by)
@@ -728,9 +727,8 @@ static pdw dj_decode_all(void)
         pdw i;
         for (i = 0; i < dj_nc; i++)
             if (dj_c[i].used) {
-                struct pd_u32 u;
-                pdm_u32_mul16(&u, (pdw)(dj_c[i].pw * dj_c[i].ph), dj_bstride);
-                pd_ffill(g_wseg, dj_c[i].base, 0, u.lo);
+                pdm_u32_mul16(&dj_u, (pdw)(dj_c[i].pw * dj_c[i].ph), dj_bstride);
+                pd_ffill(g_wseg, dj_c[i].base, 0, dj_u.lo);
             }
     }
     for (;;) {

@@ -106,7 +106,7 @@ static pdw v_init(pdw bx)
     pd_fcopy_in(bx, 0, &in, sizeof in);
     pdi_engvec[0] = in.eng_off; pdi_engvec[1] = in.eng_seg;
     g_wseg = in.slot_seg;
-    g_wbytes = in.slot_kb >= 64 ? (pdw)65520 : (pdw)(in.slot_kb << 10);
+    g_wbytes = in.slot_kb >= 64 ? (pdw)0xFFF0 : (pdw)(in.slot_kb << 10);
     g_wbytes = g_wbytes > 1024 ? (pdw)(g_wbytes - 1024) : 0;   /* the landing zone */
     if (s_codec) pdi_src_close();
     s_codec = 0;
