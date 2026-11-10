@@ -53,15 +53,17 @@ def check(name, cond, why=''):
     else: fails.append(name + ' ' + why); print('  FAIL ' + name + ' ' + why)
 
 ADAPT = {'vga': (1, 1, 640, 4), 'herc': (29, 45, 720, 1), 'cga': (5, 12, 640, 1)}
-def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700):
+def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700, dl=29):
     num, den, w, bpp = ADAPT[adapter]
     out = os.path.join(scratch, 'o.ppm')
     if os.path.exists(out): os.remove(out)
     e = dict(os.environ, PDR_GLYPHKB='24', ASAN_OPTIONS='detect_leaks=0')
     e.update(env or {})
     r = subprocess.run([binary or exe, 'render', pdf, str(page), str(zoom), '0', str(bpp), '%d/%d' % (num, den), str(w), str(H),
-                        '0', '0', out, bank, '29'], capture_output=True, text=True, env=e, timeout=300)
+                        '0', '0', out, bank, str(dl)], capture_output=True, text=True, env=e, timeout=300)
     st = dict(kv.split('=', 1) for l in r.stdout.split('\n') if l.startswith('status') for kv in l.split()[1:] if '=' in kv)
+    m = re.search(r"^xshade calls=(\d+) stepmax=(\d+)", r.stdout, re.M)
+    if m: st['xcalls'], st['xstepmax'] = m.group(1), m.group(2)
     m = re.search(r"^status .*first='([^']*)'", r.stdout, re.M)
     if m: st['first'] = m.group(1)
     im = np.asarray(Image.open(out).convert('L')).astype(int) if r.returncode == 0 and os.path.exists(out) else None
@@ -231,6 +233,28 @@ check('a fan of 1 w lines at every 7 degrees: a pixel on every row (steep) or co
 check('... and no thicker than 1.5 pixels on the average (%.2f)' % (cover / max(steps, 1)), steps and cover / steps <= 1.5)
 check('an axis-aligned 1 w square keeps one-pixel sides', im is not None and
       int((im[2:28, 2:28] < 128).sum()) == 80, None if im is None else str(int((im[2:28, 2:28] < 128).sum())))
+print('-- the group plan and the shading cull (small.pdf, QA R15)')
+small = os.path.join(fx, 'small.pdf')
+for ad in ('vga', 'herc', 'cga'):
+    rc, im, st, _ = render(small, 0, ad)
+    rc8, im8, st8, _ = render(small, 0, ad, dl=12)
+    check('hundreds of shapes a few rows tall (%s): a 12 KiB list draws what a 29 KiB one does, clean (%s and %s passes)'
+          % (ad, st.get('passes'), st8.get('passes')),
+          rc == 0 and rc8 == 0 and im is not None and im8 is not None and int((im != im8).sum()) == 0
+          and num(st, 'incomplete') == 0 and num(st8, 'incomplete') == 0)
+# page 2: 96 knobs, each a shading in a clip 3 to 9 pixels across (SYNTH.PDF's buttons), PDXG stood in for by PDR_XSHADE
+xs = {'PDR_XSHADE': '1'}
+rc, im, st, _ = render(small, 1, 'vga', env=xs)
+rcn, imn, stn, _ = render(small, 1, 'vga', env=dict(xs, PDR_NOSHCULL='1'))
+check('96 knobs: one PDXG call each in one pass (%s calls, %s passes; %s without the cull)' % (st.get('xcalls'), st.get('passes'), stn.get('xcalls')),
+      rc == 0 and num(st, 'incomplete') == 0 and num(st, 'xcalls') == 96 and num(st, 'passes') <= 2 and num(stn, 'xcalls') > 5 * 96)
+check('... each cut into no more bands than its clip has pixels (%s, against %s)' % (st.get('xstepmax'), stn.get('xstepmax')),
+      num(st, 'xstepmax') <= 10 and num(stn, 'xstepmax') == 32)
+for dlk in (16, 12):
+    rck, imk, stk, _ = render(small, 1, 'vga', env=xs, dl=dlk)
+    check('... a %d KiB list draws them to the pixel, asking PDXG only for a pass\'s own rows (%s calls, %s passes)' % (dlk, stk.get('xcalls'), stk.get('passes')),
+          rck == 0 and imk is not None and im is not None and int((imk != im).sum()) == 0 and num(stk, 'incomplete') == 0
+          and num(stk, 'xcalls') <= 2 * 96 and num(stk, 'passes') <= 8)
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

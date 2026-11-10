@@ -238,11 +238,15 @@ static void report(void)
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
     printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
            rs.mods, rs.swaps, g_loads);
+    if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax; printf("xshade calls=%ld stepmax=%ld\n", pdrh_xshades, pdrh_xstepmax); }
 }
 
+int pdrh_noshcull, pdrh_dlhist;      /* PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
+    pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
+    pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
     pd_host_ds = 0x1000;
     if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
     if (getenv("PDR_GLYPHKB")) g_glykb = atoi(getenv("PDR_GLYPHKB"));

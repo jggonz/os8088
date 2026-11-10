@@ -33,6 +33,8 @@
 #define xc_adopt        ovl_xc_adopt
 #define view_base       ovl_view_base
 #define group_narrow    ovl_group_narrow
+/* [rcore] a content stream's end, once a page, form or /Contents element (pdri.c) */
+#define frame_end       ovl_frame_end
 /* [rcore] the ladder's answers, once a pass (pdrv.c) */
 #define x_resolve       ovl_x_resolve
 #define x_answered      ovl_x_answered

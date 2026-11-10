@@ -278,6 +278,53 @@ def hair_pdf(path):
     d.write(path)
 
 
+def small_pdf(path):
+    """QA R15: hundreds of shapes a few pixels tall - knobs, dots, a shading's
+    levels inside a small clip - which PDREND keeps as RECT runs rather than
+    edge lists. Page 1 is circles (nonzero), rings (even-odd, a hole) and
+    clipped stripes at three sizes; the A/B (PDR_NOSMALL) must agree to the
+    pixel and need more passes in a small list. Page 2 is 96 shadings in
+    clips of 3 to 9 points."""
+    d = Pdf()
+    c = []
+    k = 0.5523
+    def circle(x, y, r):
+        return ('%.2f %.2f m %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c '
+                '%.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c h ') % (
+            x + r, y, x + r, y + k * r, x + k * r, y + r, x, y + r, x - k * r, y + r, x - r, y + k * r, x - r, y,
+            x - r, y - k * r, x - k * r, y - r, x, y - r, x + k * r, y - r, x + r, y - k * r, x + r, y)
+    for i in range(16):
+        for j in range(12):
+            x, y = 12 + i * 23.5, 12 + j * 31.0
+            g = ((i * 7 + j * 3) % 10) / 10.0
+            r = (0.6, 0.9, 1.3)[(i + j) % 3]
+            if (i + j) % 4 == 0:
+                c.append('%.1f g %s %s f*' % (g, circle(x, y, r * 1.6), circle(x, y, r * 0.7)))
+            elif (i + j) % 4 == 1:
+                c.append('q %.1f %.1f 3 3 re W n' % (x - 1.5, y - 1.5))
+                for b in range(6):
+                    c.append('%.2f g %.1f %.1f %.1f 4 re f' % (b / 6.0, x - 2 + b * 0.7, y - 2, 0.7))
+                c.append('Q')
+            else:
+                c.append('%.1f g %s f' % (g, circle(x, y, r)))
+    d.page('\n'.join(c))
+    # page 2: 96 knobs, each an axial /Sh in its own clip a few pixels across
+    # (SYNTH.PDF's buttons): a pass must not ask PDXG for a knob whose clip
+    # misses its rows, and a knob is cut into no more bands than it has
+    # pixels (the harness's PDR_XSHADE stands in for PDXG)
+    fn = d.add('<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>')
+    sh = d.add('<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 0 1] /Function %d 0 R /Extend [true true] >>' % fn)
+    c = []
+    for i in range(12):
+        for j in range(8):
+            x, y, sz = 20 + i * 30.0, 20 + j * 45.0, (3, 5, 9)[(i + j) % 3]
+            c.append('q %.1f %.1f %d %d re W n %d 0 0 %d %.1f %.1f cm /S0 sh Q' % (x, y, sz, sz, sz, sz, x, y))
+    cc = d.stream('', '\n'.join(c))
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
+                         '/Resources << /Shading << /S0 %d 0 R >> >> >>' % (cc, sh)))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -288,7 +335,8 @@ def main():
     mask_pdf(os.path.join(out, 'mask.pdf'))
     forms_pdf(os.path.join(out, 'forms.pdf'))
     hair_pdf(os.path.join(out, 'hair.pdf'))
-    print('os88pdfx_rcore: 7 fixtures in %s' % out)
+    small_pdf(os.path.join(out, 'small.pdf'))
+    print('os88pdfx_rcore: 8 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

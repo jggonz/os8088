@@ -1433,12 +1433,39 @@ horizontal or vertical (the table-rule case) become `DLR_RECT`s directly.
 band is blitted opaque, so a second pass could not paint over a band already
 shown. Instead one **pass** interprets the whole content stream for the rows of a
 *group of bands*, culling at emit time everything outside them. The first group is
-every band of the canvas. When the list fills (`dl_kb`), the group is **halved**
-(bands `[b0, b0+n/2)`), the content is **rescanned from its first byte**, the group
-is drawn and the next group follows; the group width stays halved. When one band
-still overflows, that band is composed in **sub-passes of halving row ranges**
-onto the same band buffer and blitted once. Only when even one *row* overflows is
-the rest of that row dropped, with `PDF_INC_LIMIT`. The result is the identical image
+every band of the canvas. When the list fills (`dl_kb`), the group is **narrowed**
+and the content is **rescanned from its first byte**; the group is drawn and the
+next group follows. When one band still overflows, that band is composed in
+**sub-passes of narrower row ranges** onto the same band buffer and blitted once.
+Only when even one *row* overflows is the rest of that row dropped, with
+`PDF_INC_LIMIT`.
+
+How far to narrow is read off the list that filled (QA R15, `group_plan`): every
+record carries its rows, so the bytes a group of the first *k* bands (or rows)
+would have held so far are those of the records whose first row lies in them - a
+STATE, emitted only for the mark after it, counting with that mark. The next
+group is the most bands whose share is at most half the list, never more than
+half of the old group (halving's own progress) and never fewer than one. A group
+that leaves the list less than half full makes the next one twice as wide, and
+less than a quarter full four times (`group_grow`), because every group is a
+whole interpretation - but never past a **ceiling**, half the last width that
+filled the list, which only a group using under a quarter of the list *at* the
+ceiling doubles: growing straight back to a width that had overflowed traded
+every pass it saved for a wasted one.
+
+**A shading costs nothing outside its clip** (QA R15, `pdrxg.c`'s `xg_steps`). A
+`sh` whose clip misses the pass's rows or the view is skipped before PDXG is
+asked - or loaded - and one in a clip under 32 pixels across is asked for no more
+bands (`pdxb_gfx.steps`, 20.22.9) than the clip has pixels. SYNTH.PDF's keys and
+knobs are hundreds of `sh` in clips a few pixels across: every pass asked PDXG for
+every one and took 32 levels of each, a 22-byte STATE and a RECT a level, so a
+16-row group held 470 STATEs (10 KB of the list) and the dense bands went one row
+a pass. At 243% on QEMU it was 32 passes and about 2,770 BIOS ticks under
+`-icount shift=4`; it is 15 passes and 431 ticks (instructions, not QEMU's wall
+clock, which host load moves by 2x either way). `pdr_xchk`'s
+`small.pdf` page 2 - 96 knobs, `pdr_test`'s `PDR_XSHADE` standing in for PDXG -
+holds one call a knob and at most ten bands, the same pixels from a 29, 16 and 12
+KiB list, against `PDR_NOSHCULL` (every shading asked, 32 bands). The result is the identical image
 whatever the list size (`pdr_check`: 4, 8, 12 and 16 KiB lists (claims 4 KiB larger) against 22 KiB,
 byte for byte, 11 to 63 passes). `pdxb_rstatus.passes` counts them.
 
@@ -6804,7 +6831,8 @@ Incomplete bit.
 records and the core appends each as an ordinary `FILL` through the existing filler, so PDREND carries no shading
 rasteriser. The request is `pdxb_gfx` with the resource (`PDGXI_RES | PDGXI_CAT_SH`, the Form or page, the name at
 `tseg:toff`; or `objnum:gen` of a shading object), the CTM (`ctm`: user space to device quarter-pixels), the device
-clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32), and the result buffer
+clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32 - PDREND passes the clip's
+largest side in pixels when that is under 32, 20.3.2), and the result buffer
 (`rseg:roff`, `rcap`; the core uses 760 bytes of the exchange block). The answer is `ntri` records in `rlen` bytes
 (`pdabi.h`, `PDGX_REC_*`): `r g b flags npts n1` then `npts` points of two `pdi` device quarter-pixels,
 already through the CTM and clamped to +-16,000, filled non-zero. `n1` is the length of a first contour when a

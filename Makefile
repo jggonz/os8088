@@ -21531,7 +21531,7 @@ PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h $(PDR_DIR)/pdrxg.c \
-             $(PDR_DIR)/pdrx8.c $(PDR_DIR)/pdrxb.c $(PDR_DIR)/pdrx8h.inc
+             $(PDR_DIR)/pdrx8.c $(PDR_DIR)/pdrxb.c $(PDR_DIR)/pdrx8h.inc $(PDR_DIR)/pdrovl.h
 # transparency (PAGEDESK-SPEC 20.22.10) ships: PDR_X8 is on unless `make PDR_X8=0`. It compiles PDREND's hooks of PDX8
 # (smlrcc and nasm together) and adds pdx8.c to the host builds
 PDR_X8 ?= 1

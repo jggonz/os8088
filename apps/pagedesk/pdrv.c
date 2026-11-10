@@ -386,6 +386,7 @@ static void close_streams(void)
 
 /* a pass interprets the content once for the rows of bands [g_b0, g_b1) */
 static pdw g_subm, g_subm_w;            /* sub-row mode: one band, composed in pieces */
+static pdw g_gceil, g_sceil;            /* group_grow's ceilings: bands / rows of a band in pieces */
 static pdw pass_begin(void)
 {
     img_close();                        /* a held image is not the top stream any more */
@@ -449,30 +450,118 @@ static pdw verb_begin(void)
     x8_view();
     view_base(&g_rq.view);
     g_nb = band_count();
-    g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
+    g_gw = g_nb; g_b0 = 0; g_b1 = g_nb; g_gceil = g_nb;
     g_deskwhite = 0;
     err = pass_start();
     if (err) { g_ph = PDR_DONE; return err; }
     return PDE_OK;
 }
 
+/* how many units (bands, or rows of a band composed in pieces) from g_gy0
+ * the next pass should take, read off the list that just filled (QA R15).
+ * Every record carries its rows, so the bytes a pass over the first k units
+ * would have held SO FAR are those of the records whose first row is in
+ * them; the rest of the page adds to that, so the pass takes the most units
+ * whose share is at most half the list - never more than half of n
+ * (halving's own progress) and never less than one. Halving alone took
+ * SYNTH.PDF's 7-band group to one band in three wasted passes, and its
+ * dense band to one row in four more. */
+#define GP_MAX 32
+#define g_gpb ((pdw *)g_iks)                /* the image stash's room: read only while a band is drawn,
+                                             * and the pass_begin after this clears it (g_ikb) */
+typedef char pdr_ck_gpb[GP_MAX * 2 <= sizeof g_iks ? 1 : -1];
+static pdw group_plan(pdw n, pdw unit)
+{
+    static pdb h[DLH];
+    pdw off = 0, len, k, sum, lim, st = 0;
+    pdi y;
+    lim = (n + 1) >> 1;
+    if (lim > GP_MAX) lim = GP_MAX;
+    pdr_zero(g_gpb, GP_MAX * 2);
+    while (off < g_dllen) {
+        pd_fcopy_in(g_dls, off, h, DLH);
+        len = (pdw)r16(h + 2);
+        if (len < DLH || len > g_dllen - off) break;
+        off += len;
+        if (h[0] == DLR_STATE) { st += len; continue; }     /* emitted for the mark after it: its rows */
+        y = r16(h + 4);
+        k = y < g_gy0 ? 0 : (pdw)((pdw)(y - g_gy0) / unit);
+        if (k < GP_MAX) g_gpb[k] += len + st;
+        st = 0;
+    }
+    sum = 0;
+    for (k = 0; k < lim; k++) {
+        sum += g_gpb[k];
+        if (k && sum > (g_dlcap >> 1)) break;
+    }
+    return k ? k : 1;
+}
+/* a pass that left most of the list unused: the next one is wider (QA R15),
+ * but never past the ceiling - half the last width that filled the list -
+ * which only a pass that used under a quarter of it AT the ceiling raises:
+ * growing straight back to a width that overflowed traded every pass it
+ * saved for a wasted one */
+static pdw group_grow(pdw w, pdw most, pdw *ceil)
+{
+    if (g_dllen < (g_dlcap >> 2)) {
+        if (w >= *ceil) *ceil <<= 1;
+        w <<= 2;
+    } else if (g_dllen < (g_dlcap >> 1)) w <<= 1;
+    if (w > *ceil) w = *ceil;
+    return w > most ? most : w;
+}
+
+#ifdef PD_HOST
+extern int pdrh_dlhist;
+#include <stdio.h>
+static void dl_hist(const char *why)
+{
+    static pdb h[DLH];
+    pdw off = 0, len; long n[16] = {0}, b[16] = {0};
+    if (!pdrh_dlhist) return;
+    while (off < g_dllen) {
+        pd_fcopy_in(g_dls, off, h, DLH);
+        len = (pdw)r16(h + 2);
+        if (len < DLH || len > g_dllen - off) break;
+        if (pdrh_dlhist > 1 && n[0] < 400) {
+            static pdb bb[22]; pdw q, m = len - DLH > 22 ? 22 : len - DLH;
+            pd_fcopy_in(g_dls, off + DLH, bb, m);
+            fprintf(stderr, "REC %u %u %u %d-%d ", off, h[0], h[1], r16(h + 4), r16(h + 6));
+            for (q = 0; q < m; q++) fprintf(stderr, "%02x", bb[q]);
+            fprintf(stderr, "\n"); n[0]++;
+        }
+        n[h[0] & 15]++; b[h[0] & 15] += len; off += len;
+    }
+    fprintf(stderr, "DLHIST %s pass=%u b=%u-%u gy=%d-%d subm=%u w=%u len=%u cap=%u ops=%u st %ld/%ld rect %ld/%ld fill %ld/%ld gly %ld/%ld img %ld/%ld x %ld/%ld\n",
+        why, g_passes, g_b0, g_b1, g_gy0, g_gy1, g_subm, g_subm_w, g_dllen, g_dlcap, g_ops,
+        n[1], b[1], n[2], b[2], n[3], b[3], n[4], b[4], n[5], b[5], n[6] + n[7] + n[8] + n[9], b[6] + b[7] + b[8] + b[9]);
+}
+#define DL_HIST(w) dl_hist(w)
+#else
+#define DL_HIST(w)
+#endif
 /* the DL filled up: narrow the group and rescan (PAGEDESK-SPEC 20.3.2) */
 static void group_narrow(void)
 {
-    pdw n = g_b1 - g_b0;
-    close_streams();
+    pdw n = g_b1 - g_b0, rows;
     if (n > 1) {
-        g_gw = (n + 1) >> 1;
+        g_gceil = (n + 1) >> 1;
+        g_gw = group_plan(n, PD_BANDROWS);
+        close_streams();
         g_b1 = g_b0 + g_gw;
         pass_start();
     } else if (g_subm ? g_subm_w > 1 : (g_gy1 - g_gy0) > 0) {
         /* one band and still too much: compose it in sub-passes of fewer rows,
          * onto the same band buffer, and blit once (PAGEDESK-SPEC 20.3.2) */
-        if (!g_subm) { g_subm = 1; g_subm_w = (pdw)(g_gy1 - g_gy0 + 1); band_open(g_b0); band_init(); }
-        g_subm_w = (g_subm_w + 1) >> 1;
+        rows = g_subm ? g_subm_w : (pdw)(g_gy1 - g_gy0 + 1);
+        g_sceil = (rows + 1) >> 1;
+        g_subm_w = group_plan(rows, 1);
+        close_streams();
+        if (!g_subm) { g_subm = 1; band_open(g_b0); band_init(); }
         g_gy1 = (pdi)(g_gy0 + g_subm_w - 1);
         pass_begin();
     } else {
+        close_streams();
         inc_note(PDF_INC_LIMIT, "display list full");
         g_ph = PDR_RAST; g_bcur = g_b0;
     }
@@ -494,8 +583,9 @@ static pdw verb_step(void)
     }
     if (g_ph == PDR_INTERP) {
         done = interp_run(PD_SLICE_OPS);
-        if (g_dlfull) { group_narrow(); return PDE_BUSY; }
+        if (g_dlfull) { DL_HIST("full"); group_narrow(); return PDE_BUSY; }
         if (done) {
+            DL_HIST("done");
             close_streams();
             xb_needmem();                                   /* blend: PDX8 for a transparent page (20.22.10.2) */
             /* the extension cache filled: empty it and run the pass again, once a view */
@@ -524,6 +614,7 @@ static pdw verb_step(void)
             g_bcur = g_b1;                      /* the group (one band) is done */
         } else {
             pdi hi = (pdi)(g_by0 + g_brows - 1);
+            g_subm_w = group_grow(g_subm_w, g_brows, &g_sceil);
             g_gy0 = (pdi)(g_gy1 + 1);
             g_gy1 = (pdi)(g_gy0 + g_subm_w - 1);
             if (g_gy1 > hi) g_gy1 = hi;
@@ -540,6 +631,7 @@ static pdw verb_step(void)
         if (g_bcur >= g_b1) {
         groupend:
             if (g_b1 >= g_nb) { img_close(); g_ph = PDR_DONE; return PDE_OK; }
+            g_gw = group_grow(g_gw, g_nb, &g_gceil);      /* a narrowed width held for the rest of the page */
             g_b0 = g_b1;
             g_b1 = g_b0 + g_gw; if (g_b1 > g_nb) g_b1 = g_nb;
             err = pass_start();
@@ -683,7 +775,7 @@ static pdw verb_thumb(void)
         g_tdseg = g_thq.dseg; g_tdoff = g_thq.doff; g_tstride = (pdw)((g_thq.w + 7) >> 3);
         if (!band_geometry()) return PDE_NOMEM;
         g_rq.page = g_thq.page;
-        g_nb = band_count(); g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
+        g_nb = band_count(); g_gw = g_nb; g_b0 = 0; g_b1 = g_nb; g_gceil = g_nb;
         err = pass_start();
         g_thq.state = 1;
         pd_fcopy_out(&g_thq, g_xb, 0, sizeof g_thq);
