@@ -1503,6 +1503,7 @@ dos_fsx:
     push cx
     push si
     mov bx, si
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the modes this adapter allows, DL =
     test ax, 1 << FSXM_TEXT80       ; the DISPLAY's own kind (SPEC.md 53.7.1),
     jz .out                         ; which osapi_video cannot answer for a

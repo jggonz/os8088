@@ -1872,6 +1872,7 @@ pb_adapter:
     push bx
     push dx
     mov bx, [pb_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the mask, DL = the kind
     mov [pb_vkind], dl
     mov [pb_caps], ax

@@ -1279,6 +1279,7 @@ cs_adapter:
     push dx
     push si
     mov bx, [cs_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov [cs_caps], ax
     mov [cs_vidk], dl

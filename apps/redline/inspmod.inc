@@ -829,11 +829,12 @@ ri_p_vid:
     mov [ri_vdock], cx
     mov [ri_vkind], dx
     mov word [ri_ndisp], 0
-    mov bx, 1                       ; FSX_CAPS BX = n asks about display n-1
+    mov bx, 1                       ; FSX_CAPS CH = n asks about display n-1
 .disp:
     cmp bx, 4
     ja .ega
     push bx
+    mov ch, bl
     call OSAPI_FSX_CAPS
     pop bx
     jc .ega

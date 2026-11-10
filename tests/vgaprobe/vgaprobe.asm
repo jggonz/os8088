@@ -67,6 +67,7 @@ VP_WRAPS    equ 0F000h              ; the wrap test's start address
 vp_entry:
     push si
     xor bx, bx
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the modes this display offers
     mov [vp_caps], ax
     mov si, vp_tpl

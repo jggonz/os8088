@@ -30,6 +30,7 @@ px_adapter:
     push bx
     push dx
     mov bx, [px_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the settable modes, DL = the kind
     mov [px_caps], ax
     mov [px_vkind], dl

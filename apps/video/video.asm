@@ -2073,7 +2073,7 @@ vp_pbk:
 
 ; vp_canplay - can it play HERE, and if not here, ON ANOTHER DISPLAY (SPEC.md
 ; 98.3.21)? The window's display first, as every play before; refused there,
-; each display of an extended desktop in turn, OSAPI_FSX_CAPS with BX = 1, 2,
+; each display of an extended desktop in turn, OSAPI_FSX_CAPS with CH = 1, 2,
 ; ... until it says there is none (SPEC.md 53.1.2) - the first that can is
 ; [vp_fsdisp], and the play goes full screen on it, the window staying where
 ; it is. Nothing can: the window's own refusal is the one shown.
@@ -2084,6 +2084,7 @@ vp_pbk:
 vp_canplay:
     mov byte [vp_fsdisp], 0
     mov bx, [vp_win]
+    mov ch, 0                       ; the window's display (R12)
     call vp_canp1
     mov ah, [vp_ok]                 ; AH = 1: it plays here, so the walk
     cmp ah, 1                       ; wants a display that plays it NATIVE
@@ -2099,7 +2100,8 @@ vp_canplay:
     mov bx, 1
 .d:
     push bx
-    call OSAPI_FSX_CAPS             ; CF=1: no display BX-1, the walk's end;
+    mov ch, bl                      ; CH = n: display n-1 (R12), for this
+    call OSAPI_FSX_CAPS             ; and vp_canp1. CF=1: none, the walk's end;
     mov [vp_fskind], dl             ; DL its kind, for what the card says
     pop bx
     jc .none
@@ -2134,6 +2136,7 @@ vp_canplay:
     cmp ah, 1                       ; nothing plays it better: as it plays
     jne .out                        ; HERE, the window's answer made again
     mov bx, [vp_win]
+    mov ch, 0
     call vp_canp1
 .out:
     ret
@@ -2200,7 +2203,7 @@ vp_reask:
     ret
 
 ; vp_canp1 - can THIS display play it (SPEC.md 98.3, 98.3.2)? BX = the window
-; to ask about, or a display (OSAPI_FSX_CAPS' BX). In its own layout's mode
+; to ask about and CH = 0, or CH = n a display (OSAPI_FSX_CAPS' CH). In its own layout's mode
 ; if the display has it; else through the SHADOW, in the first other layout
 ; whose mode it has and whose screen holds the canvas
 vp_canp1:

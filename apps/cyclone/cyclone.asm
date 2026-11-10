@@ -509,6 +509,7 @@ cy_pal:
     ; Preserves nothing: every caller is a spine or a callback that reloads
     ; what it uses on the next line (SPEC.md 67.5.5).
     mov bx, [cy_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; DL = that display's VID_* kind
     mov al, CY_C_ENEMY2
     mov ah, CY_C_ESHOT

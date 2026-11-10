@@ -108836,11 +108836,15 @@ secondary: a CGA 4-colour video opened on the Hercules, `OSAPI_FSX_CAPS`
 said no CGA 320, and the Video Player refused it with the CGA one inch
 away. Two arguments, one each, and no new slot:
 
-- **`OSAPI_FSX_CAPS` with BX = 1..15 asks about DISPLAY BX-1** rather than
-  about a window - a value no window pointer takes, `wm_wins` being far past
-  it. CF=1 when there is no such display, so a package walks BX = 1, 2, ...
+- **`OSAPI_FSX_CAPS` with CH = n asks about DISPLAY n-1** rather than
+  about the window in BX - the same register and the same numbering as
+  `OSAPI_FSX_RUN`'s below, so a walk's answer is the bracket's argument.
+  CF=1 when there is no such display, so a package walks CH = 1, 2, ...
   until it refuses, and that is the enumeration. On `kern_small`, and on any
-  machine with one display, BX = 1 is the primary and 2 refuses.
+  machine with one display, CH = 1 is the primary and 2 refuses. Until
+  kernel size pass 19 (ABI-BREAK-LIST R12) this was BX = 1..15, an overload
+  of the window pointer that cost the kernel a range test of its own; a
+  caller asking about a window now sets CH = 0.
 - **`OSAPI_FSX_RUN` CH = n opens the bracket on display n-1** - the display
   `fsx_mode`'s caps test asks about and collapses the machine onto, and the
   one `OSAPI_FSX_SURF` describes - where CH = 0, every caller before it,
@@ -110030,7 +110034,8 @@ onto a 350-row Hercules loses its bottom third.
 ### 53.8 The package ABI (§20.3 slots)
 
 ```
-0x022F fsx_caps   in BX = window (0 frontmost), or 1..15 = display BX-1.
+0x022F fsx_caps   in CH = 0 and BX = window (0 frontmost), or CH = n =
+                  display n-1 (R12, kernel size pass 19).
                   out AX = that display's FSXM bitmask, DL = its kind
                   (VGA for VESA); CF=1 no such display. Any context.
 0x0235 fsx_run    in AX = near entry, BX = own window ptr, CL = flags
@@ -210578,7 +210583,7 @@ window was on then. The only way to play it was to swap the primary.
 - **`vp_canplay` asks the window's display first**, as every play before,
   and a file it plays is played exactly as it was - windowed, Live or full
   screen on that display. Refused there, it **walks the displays**,
-  `OSAPI_FSX_CAPS` with BX = 1, 2, ... until one says there is no such
+  `OSAPI_FSX_CAPS` with CH = 1, 2, ... until one says there is no such
   display (SPEC.md 53.1.2), and asks each the same question. The first that
   can is `[vp_fsdisp]`, and the card says which: `Plays full screen on the
   CGA`. None can: the window's own refusal is the one shown.

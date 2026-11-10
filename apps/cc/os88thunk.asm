@@ -1173,6 +1173,7 @@ _os88_fsx_caps:
     push bp
     mov bp, sp
     mov bx, [bp+4]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov bx, [bp+6]                  ; the mask is the RETURN value, so DL is
     mov dh, 0                       ; widened into the out-parameter and AX is

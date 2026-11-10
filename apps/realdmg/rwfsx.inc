@@ -279,6 +279,7 @@ rw_fsenter:
 rw_fspick:
     push bx
     mov bx, [rw_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; AX = the modes this display can set
     pop bx
     test ax, 1 << FSXM_VGA0D

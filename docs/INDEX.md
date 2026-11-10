@@ -291,7 +291,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 |---|---|---|
 | `0x045B` | `OSAPI_FSX_SPK` | THE SPEAKER AT A SAMPLE RATE (SPEC.md 34.11), from INSIDE YOUR OWN FSXF_RATE BRACKET only (53.2.2) - PCM with no card... |
 | `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter / 0 exit, BX = YOUR window either way; caller holds the gfx lock (window callbacks do); out CF=1 refused, entering or leaving, when the... |
-| `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
+| `0x022F` | `OSAPI_FSX_CAPS` | in CH = 0 and BX = the window to ask ABOUT (0 = whatever is frontmost), or CH = n: display n-1, BX not read... |
 | `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
 | `0x023B` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
 | `0x0241` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |

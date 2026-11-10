@@ -5415,9 +5415,11 @@ OS88_BSS_SIZE equ 0
 
 ; --- fullscreen exclusive (SPEC.md 53) ---------------------------------------
 
-%define OSAPI_FSX_CAPS      KERNEL_SEG:0x022F   ; in BX = the window to ask
-                                                ; ABOUT (0 = whatever is
-                                                ; frontmost); out AX =
+%define OSAPI_FSX_CAPS      KERNEL_SEG:0x022F   ; in CH = 0 and BX = the
+                                                ; window to ask ABOUT (0 =
+                                                ; whatever is frontmost),
+                                                ; or CH = n: display n-1,
+                                                ; BX not read; out AX =
                                                 ; bitmask (bit n = FSXM id n
                                                 ; settable on the display
                                                 ; that window is on), DL =
@@ -5442,14 +5444,18 @@ OS88_BSS_SIZE equ 0
                                                 ; yours does not exist yet.
                                                 ; SPEC.md 39.18.2.
                                                 ;
-                                                ; BX = 1..15 ASKS ABOUT A
-                                                ; DISPLAY instead - BX-1 -
+                                                ; CH = n ASKS ABOUT A
+                                                ; DISPLAY instead - n-1 -
                                                 ; and CF=1 is "no such
-                                                ; display": walk BX = 1, 2,
+                                                ; display": walk CH = 1, 2,
                                                 ; ... to find the one that
                                                 ; can, then OSAPI_FSX_RUN
-                                                ; with CH = BX (SPEC.md
-                                                ; 53.1.2).
+                                                ; with the same CH (SPEC.md
+                                                ; 53.1.2). CH = 0 is NOT
+                                                ; optional: it was BX = 1..15
+                                                ; until kernel size pass 19
+                                                ; (R12), so set CH to ask
+                                                ; about a window.
 
 %define OSAPI_FSX_RUN       KERNEL_SEG:0x0235   ; the bracket (SPEC.md 53.1).
                                                 ; In AX = a near proc in your

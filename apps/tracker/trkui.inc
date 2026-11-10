@@ -250,6 +250,7 @@ tui_track:
     cmp dx, [tui_layh]              ; ...and the layout is picked by HEIGHT, so
     je .out                         ; a surface of a different shape from the
     mov bx, [trk_win]               ; screen needs its own (see tui_layout_for)
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS             ; DL = THIS display's VID_* kind - the only
     mov dh, 1                       ; place the DEPTH can come from, since
     cmp dl, VID_VGA                 ; OSAPI_VIDEO answers about the primary and

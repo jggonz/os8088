@@ -20,6 +20,7 @@ xb_frontgeom:
     ; 320x200x4 mode - a fact from OSAPI_FSX_CAPS, never a guess (SPEC.md 47).
     ; EGA sees the splash and a sentence: the race is VGA/CGA/Hercules.
     mov bx, [xb_win]
+    mov ch, 0               ; CH = 0: BX's window's display (R12)
     call OSAPI_FSX_CAPS
     mov byte [xb_frontplay], 0
     cmp dl, VID_VGA

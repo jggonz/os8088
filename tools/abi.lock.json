@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "741f5f63671c3dc0c124872e9ef37e9e452283d976352e0d1b98fd84d4485997",
+  "fingerprint": "39d9c82bc5633f0bedb3bbee65e4ca3c1187f6ca9547a8e9141a73dcce2938c6",
   "version": 14
  },
  "PKG_FMT": {
-  "fingerprint": "89347b525aa187f424b2b106d05254cfe184fb1baca626ce67f5c369309c23c4",
+  "fingerprint": "0ebdff0eb0d9070190d4c66ef7ef0e9d84fd1e6811151ca9e360e2f1e7e607bc",
   "version": 13
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1995,6 +1995,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "R2 snapshots bounded by the caller's CX, C10 desk-item remove by record (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "0ebdff0eb0d9070190d4c66ef7ef0e9d84fd1e6811151ca9e360e2f1e7e607bc",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "R12: OSAPI_FSX_CAPS takes the display in CH, BX = 1..15 retired (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "39d9c82bc5633f0bedb3bbee65e4ca3c1187f6ca9547a8e9141a73dcce2938c6",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "R12: OSAPI_FSX_CAPS takes the display in CH, BX = 1..15 retired (kernel size pass 19)",
    "to": 14
   }
  ]
