@@ -173,7 +173,7 @@ ui_task:
     xchg ax, [mou_whl]
     or ax, ax
     jz .events
-    mov di, WC_ONWHEEL
+    mov bp, WC_ONWHEEL
     jmp short .kdisp
 %else
     jz .events                  ; nothing latched and is most of them
@@ -227,9 +227,10 @@ ui_task:
     jc .events                  ; while Locator owns the bar (SPEC.md 26.8.5).
 %endif                          ; With the lock FREE: an open locks itself
 %ifdef KERN_BIG
-    mov di, WC_ONKEY            ; WHICH class slot: the wheel joins below
+    mov bp, WC_ONKEY            ; WHICH class slot: the wheel joins below
 .kdisp:                         ; with WC_ONWHEEL (SPEC.md 10.4), and nothing
-%endif                          ; from here to the read spends DI
+%endif                          ; from here to the read spends BP (kernel
+                                ; size pass 19: DI's `mov bp, di` went, -2)
     call gfx_lock               ; handler draws; it runs under the lock
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
                                 ;    4 is a mutex nobody released
@@ -240,10 +241,8 @@ ui_task:
     or bx, bx
     jz .key_done
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
-%ifdef KERN_BIG
-    mov bp, di                  ; WC_ONKEY, or WC_ONWHEEL for the wheel
-%else
-    mov bp, WC_ONKEY
+%ifndef KERN_BIG                ; (kern_big's BP is WC_ONKEY or WC_ONWHEEL,
+    mov bp, WC_ONKEY            ; loaded above)
 %endif
     call wm_hnd                 ; out of the window's class (SPEC.md 11.104):
     jz .key_done                ; ZF = the window may not take keys

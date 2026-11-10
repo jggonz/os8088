@@ -1565,19 +1565,20 @@ app_launch:
     xchg ax, dx                 ; cascade: (+16,+16) per pool slot so
     mov cl, 4                   ; instances don't stack exactly
     shl ax, cl
-    add [si], ax                ; x - cascaded IN THE TEMPLATE for this one
-    add [si+2], ax              ; call, and put back the moment it returns:
-    push ax                     ; (wm_create answers in AL, SPEC.md 11.104)
+    xchg ax, cx                 ; ...carried in CX, which wm_create keeps (AL
+                                ; is its answer, SPEC.md 11.104 - the push/pop
+                                ; of AX round it went, kernel size pass 19)
+    add [si], cx                ; x - cascaded IN THE TEMPLATE for this one
+    add [si+2], cx              ; call, and put back the moment it returns:
     call wm_create              ; wm_create copies the record's first twelve
-    pop ax                      ; (a pop writes no flag)
     pushf                       ; bytes out before it reads anything else, so
-    sub [si], ax                ; nothing ever sees the template moved but it.
-    sub [si+2], ax              ; It was copied to a 16-byte inst_tplbuf and
+    sub [si], cx                ; nothing ever sees the template moved but it.
+    sub [si+2], cx              ; It was copied to a 16-byte inst_tplbuf and
     popf                        ; offset there until kernel size pass 17 (-7
                                 ; and -16 of .bss). Every kind's template is
                                 ; .text, written by nothing else, and read
                                 ; by nothing but this, on the UI task only;
-                                ; wm_create preserves AX and SI (its banks)
+                                ; wm_create preserves CX and SI (its banks)
     pop si                      ; BX = window (hidden), CF = table full
     jc .failj                   ; record was never published: still free
                                 ; (the kind's feature bits - the Disk
