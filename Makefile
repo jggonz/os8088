@@ -21505,7 +21505,7 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
-             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
+             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h $(PDR_DIR)/pdrxg.c
 # the host's stand-in slot occupants (20.22.7): the real dash walker, a fake decoder
 PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c
 PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
@@ -21815,6 +21815,31 @@ pdwrt-enc: | $(BUILD)
 	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
 
+# ---- PageDesk: gfx ----------------------------------------------------------
+# PDXG.MOD (PAGEDESK-SPEC 20.22.9): colour spaces, functions, shading, patterns -
+# the slot occupant that works at interpretation time. pdwrt's open-coded shape.
+# `make pdxg` builds it and holds it to mutool (tools/os88pdfx_gfx.py --check).
+PDX_C    := apps/pagedesk/pdxg.c apps/pagedesk/pdxgm.c apps/pagedesk/pdxgmt.c apps/pagedesk/pdxgp.c \
+            apps/pagedesk/pdxgf.c apps/pagedesk/pdxgc.c apps/pagedesk/pdxgs.c \
+            apps/pagedesk/pdxdash.c apps/pagedesk/pdxedit.c
+PDX_CAP    := 65024   # PAGEDESK-SPEC 20.22.9 / L6: image + bss
+.PHONY: pdxg pdxg-host
+$(BUILD)/pdxg.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxg.c -o $@
+$(BUILD)/pdxg.gen.asm: $(BUILD)/pdxg.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXG.MOD: apps/pagedesk/pdxg.asm $(BUILD)/pdxg.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxg.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXG.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 60)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDX_CAP) else 0)"
+pdxg-host: $(PDX_C) apps/pagedesk/hosttest/pdxg_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	python3 tools/os88pdfx_gfx.py --check --build $(BUILD)
+pdxg: $(BUILD)/PDXG.MOD pdxg-host
+# ---- end PageDesk: gfx ------------------------------------------------------
 # ---- PageDesk: xi -----------------------------------------------------------
 # PDXI.MOD (PAGEDESK-SPEC 20.22.11): the image-decoder occupant of the module
 # slot - DCT (pdxidct.c + pdxidct.inc), and the bilevel agent's CCITT and JBIG2
