@@ -126,6 +126,24 @@ int main(int argc, char **argv)
             printf("END %s %u calls %u\n", nm, tot, calls);
             continue;
         }
+        if (t[0] == 'U' || t[0] == 'W') {      /* U name hex(cs) depth; W name hex(resource name) depth pageobj: the image LUT (PDV_GFX_LUT) */
+            char *nm = strtok(NULL, " \n"); int tn; unsigned char *tx = unhex(strtok(NULL, " \n"), &tn);
+            int depth = atoi(strtok(NULL, " \n"));
+            struct pdxb_gfx g; memset(&g, 0, sizeof g);
+            if (t[0] == 'W') { unsigned char *rt = malloc(tn + 2); memcpy(rt, tx, tn); rt[tn] = 0; free(tx); tx = rt; tn += 1; }
+            pd_fcopy_out(tx, TSEG, 0, tn);
+            g.tseg = TSEG; g.toff = 0; g.tlen = (pdw)tn; g.rseg = RSEG; g.roff = 0; g.rcap = PDGX_LUTBYTES; g.kind = (pdw)depth;
+            if (t[0] == 'W') { g.objnum = (pdw)atoi(strtok(NULL, " \n")); g.flags = PDGXI_RES | PDGXI_CAT_CS; }
+            pd_fcopy_out(&g, XBSEG, 0, sizeof g);
+            pdw r = pdx_verb(PDV_GFX_LUT, XBSEG, 0, 0);
+            if (r != PDE_OK) { printf("LUT %s FAILED\n", nm); free(tx); continue; }
+            static struct pdgx_lut lt; pd_fcopy_in(RSEG, 0, &lt, sizeof lt);
+            printf("LUT %s", nm);
+            for (int i = 0; i < 256; i++) printf(" %d", lt.t[i]);
+            printf("\n");
+            free(tx);
+            continue;
+        }
         if (t[0] != 'C' && t[0] != 'R') continue;
         char *name = strtok(NULL, " \n"); int tn; unsigned char *tx = unhex(strtok(NULL, " \n"), &tn);
         int viares = t[0] == 'R';

@@ -703,8 +703,13 @@ typedef char pdr_ck_lut[offsetof(struct pdgx_lut, ncomp) == PDR_LUT_NC && offset
  * (XCK_LUT), 0 when there is none yet - it asks for the module itself.
  * Until it lands, a colour space that is not a device one is not drawn */
 #ifndef XG_IMAGE_LUT
+#ifndef PDR_NOXG
+static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc);          /* pdrxg.c */
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_image_lut(obj, gen, bpc)
+#else
 static pdw xg_nolut(void) { inc_note(PDF_INC_COLOUR, "image colour space"); return 0; }
-#define XG_IMAGE_LUT(obj, gen) xg_nolut()
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_nolut()
+#endif
 #endif
 /* blend's (20.22.10), from pdrxb.c: an image with a /SMask (kind 32), a
  * /Mask stream (64) or a colour-key /Mask (128). Until its 8-bit path is in
@@ -730,7 +735,7 @@ static void do_image(pdw obj, pdw gen)
             ncomp = 0;                                 /* JPX: the codec's own */
         } else if (g_dg.kind == PDK_NAME && (ncomp = ci_has(g_dg.text, "gray") ? 1 : ci_has(g_dg.text, "rgb") ? 3 : ci_has(g_dg.text, "cmyk") ? 4 : 0) != 0) ;
         else {
-            lut = XG_IMAGE_LUT(obj, gen);
+            lut = XG_IMAGE_LUT(obj, gen, bpcv);
             if (!lut) return;                          /* asked for, or noted, by the hook */
             ncomp = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_NC));
             if (ncomp < 1 || ncomp > 4) return;
@@ -982,7 +987,7 @@ static void exec_op(const char *s, pdw n)
         if (k == ('B' | ('M' << 8)) && c2 == 'C') return;
         if (k == ('B' | ('D' << 8)) && c2 == 'C') return;
         if (k == ('E' | ('M' << 8)) && c2 == 'C') return;
-        if ((k == ('S' | ('C' << 8)) || k == ('s' | ('c' << 8))) && c2 == 'N') {
+        if ((k == ('S' | ('C' << 8)) && c2 == 'N') || (k == ('s' | ('c' << 8)) && c2 == 'n')) {   /* SCN and scn */
             pdw st = (s[0] == 'S');
             if (XG_SC(st, g_nop)) return;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);

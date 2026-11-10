@@ -178,6 +178,10 @@ static pdw gx_source(void)
         pdw n = gx_fulltxt(gx_txt);
         return n ? gx_res_lookup(gx_txt, n) : GN_NIL;
     }
+    if ((G.flags & PDGXI_IMGCS) && G.objnum) {
+        pdw d = gx_fetch_parse(G.objnum, G.gen);
+        return d == GN_NIL ? GN_NIL : gx_dres(d, "ColorSpace");
+    }
     if (G.objnum) return gx_fetch_parse(G.objnum, G.gen);
     if (!G.tlen || G.tlen > GX_TB) return GN_NIL;
     pd_fcopy_in(G.tseg, G.toff, gx_tb, G.tlen);
@@ -298,7 +302,7 @@ static pdw gx_grey(pdw row, const struct pd_fx *comps)
 /* PDV_GFX_LUT: the tables of an image's space (20.22.9) */
 static pdw v_lut(void)
 {
-    pdw node, row, n, i, v, bpc = G.bpc ? G.bpc : 8, maxv, ix;
+    pdw node, row, n, i, v, bpc = G.kind ? G.kind : 8, maxv, ix;        /* in: kind = the sample depth */
     static struct pd_fx comps[4], dmin[4], dmax[4], t, f;
     pdb inv = 0;
     node = gx_source();

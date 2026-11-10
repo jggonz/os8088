@@ -135,6 +135,31 @@ static pdw xg_sc(pdw st, pdw nop)
     return 1;
 }
 
+/* ---- an image's colour space: its LUT (struct pdgx_lut) in the XC cache, asked of PDXG when it is not there ---- */
+/* do_image's hook: g_dg still holds the image's /ColorSpace (a NAME: a resource of the current scope; otherwise
+ * PDXG reads the value out of the image dictionary). Answers the XC offset, or 0 (asked for, or noted) */
+/* [gfx far-candidate: per image] */
+static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc)
+{
+    pdw e, k1 = (pdw)(((gen << 5) | bpc) ^ 0x4C55u), n = 0;
+    e = xc_find(XCK_LUT, obj, k1);
+    if (e) return e;
+    if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return 0; }
+    if (!(e = xc_alloc(XCK_LUT, obj, k1, PDGX_LUTBYTES))) { xg_nc(); return 0; }
+    xg_begin(0);
+    if (g_dg.kind == PDK_NAME) {                        /* a resource of this scope: "ColorSpace\0Name" */
+        while (g_dg.text[n] && n < 32) n++;
+        pd_fcopy_out(g_dg.text, g_xb, 128, n);
+        pd_fcopy_out("", g_xb, (pdw)(128 + n), 1);
+        g_gx.objnum = g_reso; g_gx.gen = g_resg; g_gx.bpc = g_resp == 0xFFFFu ? 0 : g_resp;
+        g_gx.flags = (pdw)(PDGXI_RES | PDGXI_CAT_CS); g_gx.tseg = g_xb; g_gx.toff = 128; g_gx.tlen = (pdw)(n + 1);
+    } else { g_gx.objnum = obj; g_gx.gen = gen; g_gx.flags = PDGXI_IMGCS; }
+    g_gx.kind = bpc;                                    /* the sample depth (PDV_GFX_LUT's input) */
+    g_gx.rseg = g_xcseg; g_gx.roff = e; g_gx.rcap = PDGX_LUTBYTES;
+    if (xg_req(PDV_GFX_LUT) != PDE_OK) { xg_nc(); return 0; }
+    return e;
+}
+
 /* ---- sh: the polygons PDXG answers, each an ordinary fill (a /BBox record is a clip) ------------------------ */
 /* the shading `obj gen` (0: the resource of the current name), under the current CTM */
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
