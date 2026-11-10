@@ -73,6 +73,13 @@ resident per kernel against ~+330 package bytes, ~+900 once T5 lands) rather
 than the six KB doors restored as door cells. R14's +214 clocks a callback
 stands unless the final pass's `os88hot ab` shows it on the glass.
 
+**And (the owner, 2026-11-10): "We're in the middle of the abi break, and
+will continue to be; breaking now isn't a break, it's just work. So if it's
+smaller and faster, go ahead and do it."** Until this pass merges, no layout,
+record, register contract or cell is frozen. A change that is smaller (and
+not slower on a hot path) is TAKEN, ABI or not - with every caller in the
+tree converted and SPEC.md moved with it. Only growth is refused (0.0).
+
 ### 0.1 The owner's answers to flagday.md 3.5 (2026-11-10)
 
 1. **T5, the software-interrupt door**, is the table row (not T1).
