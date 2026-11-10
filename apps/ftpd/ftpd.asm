@@ -484,8 +484,10 @@ fd_entry:
     ; and a claim from a worker is not something SPEC.md 20.6 rule 7 allows.
 %if FD_STG2
     mov ax, FD_STGKB * 64
+    push bx                         ; (BX is the window: the loader shows it)
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P            ; out DX = the base segment
+    pop bx
     jc .nostage2
     mov [fd_stg2], dx
     mov ax, fd_reloc                ; it moves too, fd_bigseg's reason
