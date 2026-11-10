@@ -4921,7 +4921,195 @@ round's final pass, not before.
 
 #### 20.22.3 Structure: cross-reference streams, object streams, repair, LZW, ASCII85 (`eng`)
 
-*Reserved; written by its agent before its code.*
+AP-01, AP-02 and AP-03, and the engine seams the other agents build on. All
+of it is PDENG (L1: it runs per object or per byte). **A file whose every
+revision is a classic table, with no `/XRefStm`, no object stream and no
+damage, takes exactly the code path of 20.2.3** (the subsection records, the
+resolved-offset cache, no new claim): the new mechanisms below are entered
+only when a revision needs them.
+
+**20.22.3.1 The flat index (`PDMEM_XIDX`).** A chain with a cross-reference
+STREAM in it (any revision), a hybrid section whose `/XRefStm` is read, or a
+repaired file, is resolved through a flat index instead of the subsection
+records: 4 bytes an object number, entry `n` at `xidx_seg + n / 4 :
+(n % 4) * 4` (so it may span several segments), little-endian:
+
+| entry | meaning |
+|---|---|
+| `0x00000000` | absent: no revision mentions it (a null) |
+| `0xFFFFFFFF` | free (a null) |
+| bit 31 clear | in use at that file offset (an offset is under 2 GiB, 20.2.2) |
+| bit 31 set | in object stream `hi & 0x7FFF` (at most 32,766), member `lo` (at most 65,534) |
+
+It holds `max(/Size)` entries over the chain (a repair: the highest object
+number met, plus one), at most 65,536 - object numbers stay 16 bits (D8, an
+object above 65,535 is `PDE_LIMIT` as before). There is no lower engine
+ceiling: the index is `ceil(4 x entries / 1024)` KiB, at most 256, asked for
+with `PDE_NEEDMEM` (CX = `PDMEM_XIDX`, DX = KiB) during `OPEN` when the claim
+the primary gave is smaller, and whether the machine has it is the primary's
+claim. Refused, the open is `PDE_NOMEM`, and 20.22.6's sentence for it names
+the object count. Only `OPEN` ever answers `PDE_NEEDMEM`; after `OPEN` the
+index and the window below never grow.
+
+Revisions are folded newest first and an entry is written only while it is
+still `0`, so the newest revision that MENTIONS an object wins, a free entry
+counting as a mention (7.5.6). A classic revision in such a chain is folded by
+reading its 20-byte rows in order (checked as 20.2.3 checks them; a bad row is
+`PDE_XREF`). A hybrid section (7.5.8.4) is folded in three passes: the table's
+in-use rows, then its `/XRefStm`'s rows, then the table's free rows, so a
+compressed object that a hybrid writer lists as free in the table is found in
+the stream and a genuinely free one stays free. An `/XRefStm` at or past the
+end of the file is ignored, as before; one inside the file that is not a
+cross-reference stream is `PDE_XREFSTM`.
+
+**20.22.3.2 Cross-reference streams.** At a revision's offset `n g obj` with
+`/Type /XRef` is read as a stream (7.5.8): its dictionary IS that revision's
+trailer (`/Size`, `/Root`, `/Info`, `/Prev`, `/Encrypt`, `/ID`, the same
+newest-wins rule as 20.2.3), `/W [w0 w1 w2]` with each width 0 to 4, `/Index`
+(pairs `first count`, default `[0 /Size]`, at most 4,096 numbers), and the
+rows: type `w0` bytes (0 width means type 1), field 2 `w1` bytes, field 3 `w2`
+bytes, big-endian. Type 0 is free, type 1 is an offset (field 3 the
+generation, which, as for a classic entry, is not kept: the object header's is
+matched, 20.2.8), type 2 is (object stream, member index), any other type is
+a null. An offset under 9 or at or past the end of the file, an object stream
+number over 32,766, a member index of 65,535, a width over 4, an `/Index`
+that is not pairs of non-negative integers, or rows that end before `/Index`
+does, is `PDE_XREFSTM` (now: a DAMAGED cross-reference stream), which 20.22.3.5
+repairs. Rows for objects at or past the index's size are ignored. The rows
+are decoded through the ordinary filter chain (Flate with its PNG/TIFF
+predictor - qpdf writes `/Predictor 12` - and every other filter of
+20.22.3.6); a cross-reference stream is never decrypted (7.6.2). Its Flate
+stage takes Flate slot 0 when the machine has the Flate tier (no stream is
+open during `OPEN`) and the object-stream window's slot when it has not
+(`PDE_NEEDMEM` for `PDMEM_OSW` first). The fold runs in `OPEN` slices of 512
+rows (`PDE_BUSY`, `state` 5). `PDO_XREFSTM` is set when a stream was read,
+`PDO_OBJSTM` when an entry names an object stream; `TRAILER` reports
+`tflags` `PDTR_XREFSTM` when the NEWEST section is a stream, and `startxref`
+is that section's offset whatever its kind. `DICT_GET` 0/0 reads the newest
+trailer dictionary or cross-reference stream dictionary.
+
+**20.22.3.3 Object streams (`PDMEM_OSW`).** A member is read IN PLACE from
+the object stream's decoded bytes, through the one funnel every read goes
+through (the file layer's copy, 6.1): **a position names its container.** A
+position with bit 31 clear is a file offset; one with bit 31 set is `hi =
+0x8000 | object stream`, `lo` = offset in that stream's decoded bytes. Every
+save-and-seek-back in the parser (a reference followed in the middle of a
+dictionary, the dictionary and array cursors, a page's inherited attributes)
+therefore keeps working across a hop into or out of an object stream with no
+change to the parser. Resolving member `k` of stream `s` reads the stream's
+header pairs (`num off`, 7.5.7): pair `k` must name the object (else every
+pair is searched for it; not found is a null), the position is `/First + off`,
+the generation is 0 (a reference with any other is a null), and there is no
+`n g obj` or `endobj`. A resolved position is kept in the resolved-offset
+cache (20.2.2) as `hi | lo`, so the pairs are read once an object.
+
+The decoded bytes live in the OBJECT-STREAM WINDOW: one region of 43 KiB,
+exactly the shape of a Flate slot (20.13: a 32 KiB ring at offset 0, the rows,
+the tables and the saved state), asked for with `PDE_NEEDMEM` (CX =
+`PDMEM_OSW`, DX = 43) at the end of the fold when any entry names an object
+stream, or when the repair scan meets one. It is a THIRD Flate slot, private
+to the window, so an object stream is decoded while a page's content and a
+form hold slots 0 and 1, and an XT without the Flate tier still reads
+compressed objects. The ring holds the last 32,512 decoded bytes of the stream
+in it; a read ahead of what is decoded decodes on, a read behind it decodes
+again from the start (the swap rule: one stream is resident; asking for
+another, or for bytes before the ring, re-decodes from that stream's start up
+to the bytes asked for). A stream's decoded offsets are 16 bits: bytes past
+65,535 cannot be named and a member there is `PDE_LIMIT`. The stream's
+geometry (data offset, length, filter chain, `/First`, `/N`) is read when a
+member is first resolved and kept in 8 records (round robin), so a re-decode
+in the middle of a token needs no parse; a position in a stream whose record
+has been reused is `PDE_LIMIT` (it needs nine object streams entered between
+saving a position and returning to it). An object stream's chain is the
+ordinary one with two refusals, both `PDE_FILTER`: Flate must be its LAST
+stage and without a predictor (the ring is then Flate's own history), and LZW
+cannot be in it (LZW's table is a slot's). An object stream inside an object
+stream, or one that is not `/Type /ObjStm`, is `PDE_XREF`. Decryption of an
+object stream is crypt's raw layer (20.22.5): the stream context carries the
+object number and generation (`sctx.onum/ogen`) for the key, and members are
+never decrypted again.
+
+`OBJ_FIND` of a member answers its position (bit 31 set) as `offset` and the
+bytes of its VALUE as `length` (`kind` as usual; a member is never a stream).
+`RAW_COPY` with `mode = PDRC_EXACT` copies those value bytes; with
+`PDRC_PLAIN` it copies `n 0 obj\n`, the value, `\nendobj\n` (`done` and
+`got` address that synthesised text, the same bytes every call). `PDRC_PLAIN`
+of an object that is not a member is the file's bytes exactly (on a file with
+no `/Encrypt`), and on an encrypted file it is crypt's hook
+`cr_raw_plain()` in `pdeverb.c` (20.22.5 fills it: strings and stream
+decrypted, `/Length` made direct).
+
+**20.22.3.4 What `OPEN` does now.** The states (`pdxb_open.state`): 2 one
+revision a slice, as before, now either kind; 5 the fold (`PDE_NEEDMEM` for
+the index first; 512 rows a slice); 6 the window check (`PDE_NEEDMEM` for the
+window); 7 encryption: when any revision's trailer has `/Encrypt` the engine
+records it (a reference, or the position just inside a direct dictionary;
+`TRAILER`'s `encrypt_num/gen` and `PDTR_ENCDIRECT`) and calls crypt's hook
+`cr_open()`, which answers `PDE_PASSWORD` until 20.22.5 lands (so an encrypted
+file is `PDE_PASSWORD`, no longer `PDE_ENCRYPT`, and the trailer is never a
+refusal by itself); 3 and 4 the catalog and the page tree as before; 8 to 10
+the repair. `/ID[0]` is kept whole up to 32 bytes (`id0`, `id0_hi`, `id0_len`
+its true length).
+
+`PDE_NEEDMEM` is the ladder's (20.22.1): the primary claims the region, puts
+it in `pdxb_init` and calls `INIT` again, then `OPEN` with the same `state`.
+**A re-`INIT` whose cache, arena, tables and Flate claims are the ones it
+already has keeps the document and the open state** and only takes the new
+`xidx_*`/`osw_*` (this amends 20.2.2's "a re-INIT closes any document", which
+still holds for any other re-INIT).
+
+**20.22.3.5 Repair (AP-02).** When `OPEN` fails in states 0 to 7, 3 or 4 with
+`PDE_XREF`, `PDE_TRUNC`, `PDE_XREFSTM`, or `PDE_SYNTAX` for a missing root
+(`err_detail` 4), the engine throws the cross-reference away and scans the
+file instead (`PDO_REPAIRED`); a header failure (`err_detail` 1 or 2), an I/O
+error, a limit, memory and encryption are not repaired. The scan is a token
+walk of the whole file from offset 0 in `OPEN` slices of 4 KiB, skipping every
+stream's data (to its `endstream`): `n g obj` at a token boundary is an
+object at the offset of `n` (a later one overwrites an earlier one: the
+incremental-update rule); an object stream's header pairs are read and each
+member written as `(stream, index)` at that point of the walk, so the order
+of the file decides between a member and a direct object of the same number;
+`trailer <<...>>` and a `/Type /XRef` dictionary are trailers (the LAST one
+in the file wins); a `/Type /Catalog` object is remembered, the root when no
+trailer names one. Pass 1 (state 8) finds the highest object number, so the
+index can be asked for; pass 2 (state 10) writes it. Objects freed by an
+update cannot be seen by a scan and stay in use (MuPDF and qpdf do the same).
+A failure after the repair is reported as it is. A file damaged AFTER `OPEN`
+(an entry found wrong when an object is first read) is `PDE_XREF` at that
+verb, as before.
+
+**20.22.3.6 Filters (AP-03) and the codec pass-through.** Kinds now:
+`ASCIIHexDecode` `AHx`, `RunLengthDecode` `RL`, `FlateDecode` `Fl`,
+`LZWDecode` `LZW`, `ASCII85Decode` `A85`, at most four a chain, `PDFL_*` bits
+as `pdabi.h`.
+
+* ASCII85 (7.4.3): a push stage like ASCIIHex. White space is skipped, `z`
+  is four zeros between groups only, `~` ends the data, a last group of 2 to
+  4 characters gives 1 to 3 bytes, a character outside `!`..`u`, a group over
+  2^32 - 1, or a last group of one character is `PDE_SYNTAX` at the read.
+* LZW (7.4.4): a slot stage like Flate - the ONE slot stage a chain is Flate
+  or LZW (both: `PDE_FILTER`), it needs the Flate tier (none: `PDE_FLATE`, as
+  Flate), and it reuses Flate's predictor and delivery: `/DecodeParms`
+  `/Predictor` (PNG 10-15, TIFF 2), `/Colors`, `/BitsPerComponent`,
+  `/Columns` and `/EarlyChange` (0 or 1, default 1). Codes are 9 to 12 bits,
+  most significant bit first; 256 clears, 257 ends; a code above the next
+  table entry, or one not yet defined, is `PDE_SYNTAX`. The table (4,096
+  entries) and the string stack are in the slot's window area.
+* The codecs: `DCTDecode` `DCT`, `CCITTFaxDecode` `CCF`, `JBIG2Decode`,
+  `JPXDecode`. With `pdxb_strm.accept` 0 they are `PDE_FILTER` at
+  `STRM_OPEN`, as before. With `PDSA_CODEC` a codec that is the LAST stage of
+  the chain is not decoded: the chain stops before it, `pdxb_strm.codec`
+  names it (`PDCD_*`) and `STRM_READ` delivers the CODED bytes; a codec
+  anywhere else, or two, is `PDE_FILTER`. The codec's parameters are the
+  caller's to read with `DICT_GET` (`DecodeParms`, `[n]` when `/DecodeParms`
+  is an array, and `JBIG2Globals`, a reference to a stream the caller opens
+  first with its own `STRM_OPEN`).
+* `Crypt` stays `PDE_FILTER` until 20.22.5 handles it.
+
+**20.22.3.7 Costs.** PDENG image + bss: 47,152 at the round's start,
+*measured figures land here with the code*. RAM: nothing for a classic file;
+`4 x /Size` bytes for a stream-indexed or repaired one; 43 KiB more for a
+file with object streams.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
