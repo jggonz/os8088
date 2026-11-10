@@ -817,8 +817,10 @@ struct pdxb_fglyph {
     pdw flags;              /* in: PDFG_INFO                                                 */
     pdw em64;               /* in: the size in 1/64 pixel                                    */
     pdw asc, rows;          /* in: the strike's ascent rows and total rows (<= 48)          */
-    pdw dseg, doff, cap;    /* in: where the bitmap goes; with PDFG_BLOCK dseg:doff is the strike
-                               block HEADER (PDFB_HDR) and the blocks lie above it (cap = their count) */
+    pdw dseg, doff, cap;    /* in: where the bitmap goes. With PDFG_BLOCK: dseg and cap name the
+                               glyph claim PDREND holds (segment, KiB), which must be the one PDXF
+                               was handed at PDV_X_INIT (else PDE_RANGE); PDXF puts the header and
+                               the blocks at its top and answers doff = the header, cap = blocks */
     pdw w;                  /* out: width px (0 = empty glyph); 0xFFFF = not bitmapped       */
     pdi lb;                 /* out: left bearing px                                          */
     pdw nb;                 /* out: bytes written                                            */

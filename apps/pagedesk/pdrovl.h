@@ -59,4 +59,15 @@
 #define ed_textline     ovl_ed_textline
 #define font_synth      ovl_font_synth
 
+/* [fonts] once per FONT LOAD (a Tf whose font is not cached), per glyph MISS (once per code and
+   size: the PDXF call), per Type 3 glyph PROC, and once per glyph-claim regrow (pdrf.c, pdri.c,
+   pdrt3.c, pdrd.c). The hit - emb_hit, syn_find, font_sel, font_width - stays near */
+#define font_get        ovl_font_get
+#define font_encoding   ovl_font_encoding
+#define font_classify   ovl_font_classify
+#define words_hit       ovl_words_hit
+#define emb_miss        ovl_emb_miss
+#define t3_drain        ovl_t3_drain
+#define syn_adopt       ovl_syn_adopt
+
 #endif

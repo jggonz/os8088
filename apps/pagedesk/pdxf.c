@@ -498,9 +498,10 @@ static pdw v_glyph(void)
     g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
     if (g->flags & PDFG_BLOCK) {
         /* the blocks are at the top of the glyph claim INIT named: (glyph_kb - 24) / 4 of them, at most
-           SYN_MAX, under the 64-byte header. PDREND names the claim it holds; a different one is a stale
-           INIT (a regrown claim the primary did not re-hand) and is refused rather than written */
-        if (g->dseg != g_xgs) return PDE_RANGE;
+           SYN_MAX, under the 64-byte header. PDREND names the claim it holds (dseg, and its KiB in cap); a
+           different one is a stale INIT (a regrown claim the primary did not re-hand) and is refused
+           rather than written */
+        if (g->dseg != g_xgs || g->cap != g_xgkb) return PDE_RANGE;
         g->cap = g_xgkb < 28 ? 0 : (pdw)((g_xgkb - 24) >> 2);
         if (g->cap > PDFB_NBLK) g->cap = PDFB_NBLK;
         g->doff = (pdw)((g_xgkb << 10) - g->cap * PDFB_SIZE - PDFB_HDR);

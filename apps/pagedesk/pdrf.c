@@ -5,6 +5,21 @@
  * ==========================================================================*/
 #include "pdrenc.h"
 
+/* ---- Type 3 (20.22.8): ON unless PDR_NO_TYPE3. rcore's two hooks in pdri.c (#ifndef there):
+ * PDR_T3_DRAIN() before each token of interp_run starts the next queued glyph's CharProc
+ * (pdrt3.c, through do_form) at an operator boundary; PDR_T3_FRAME_END(), first in frame_end,
+ * notes that the glyph's own frame is over. Near cost: the queue test and the frame test */
+#if !defined(PDR_TYPE3) && !defined(PDR_NO_TYPE3)
+#define PDR_TYPE3 1
+#endif
+#ifdef PDR_TYPE3
+static pdw g_t3h, g_t3n;            /* the queue: head and count (pdrt3.c)                     */
+static pdw g_t3f, g_t3fp;           /* the frame a glyph proc runs in (0 none), and its pass    */
+static pdw t3_drain(void);
+#define PDR_T3_DRAIN()     if (g_t3n && t3_drain()) continue
+#define PDR_T3_FRAME_END() if (g_t3f == g_nfr) g_t3f = 0
+#endif
+
 /* ---- the exchange block -------------------------------------------------- */
 static pdw g_xb;                    /* XB segment (PDV_REND_INIT)             */
 

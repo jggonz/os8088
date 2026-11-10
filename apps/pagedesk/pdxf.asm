@@ -48,7 +48,7 @@ pdx_hdr:
   %error "pdxf.asm: the door is not at PDM_ENTRY - the header grew"
 %endif
 
-pdx_entry:
+pdxf_entry:                          ; the door: pdstk names an occupant's door pdx?_entry (20.22.2.3)
     push bp
     push si
     push di

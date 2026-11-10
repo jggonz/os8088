@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """pdx_page - PDREND + PDXF + the real PDENG draw each font fixture's pages, held to MuPDF
 (PAGEDESK-SPEC 20.22.8). The whole interpretation-time path: PDREND's text operators find
-the font's strike block, call PDXF (here in-process: a shim pdrxc.c answers x_have with 1 and
-x_call with pdxf_verb), PDXF reads the program from the font dictionary, and the band
-walker draws the synthetic strike.
+the font's strike block, call PDXF through the REAL slot code (pdrxc.c) and pdr_test.c's
+ladder, which "loads" the font module on PDE_NEEDMOD (hosttest/pdx_xmod.c: the door is
+pdxf_verb in-process, re-INITed with the glyph claim as the primary does), PDXF reads the
+program from the font dictionary, and the band walker draws the synthetic strike.
 
     python3 apps/pagedesk/hosttest/pdx_page.py [--build] [--shots DIR] [fixture ...]
 
@@ -18,41 +19,6 @@ FIX = os.path.join(ROOT, "tests", "pdfany", "fonts")
 OUT = os.path.join(ROOT, "build", "pdxhost")
 EXE = os.path.join(OUT, "pdr_test_xf")
 
-SHIM = r'''/* the host shim of pdrxc.c (hosttest/pdx_page.py): PDXF is always resident and in-process */
-#define XCK_CS 1
-#define XCK_FN 2
-#define XCK_SHADE 3
-#define XCK_PAT 4
-#define XCK_LUT 5
-#define XCK_FONT 6
-#define XCK_CMAP 7
-#define XCK_GS 8
-extern pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx);
-extern pdw pdx_cf;
-static pdw x_res = 3, x_door_off, x_door_seg, x_pend, x_cf, x_dx, g_xcseg;
-static pdw g_xb;
-static pdw g_xinit, g_xigs, g_xigk;
-static pdw g_gseg, g_gkb;                      /* pdrg.c's (a tentative definition): the claim PDXF is handed */
-static int x_have(pdw id) { return id == 3; }
-static void x_need(pdw id) { x_pend |= (pdw)(1u << id); }
-static pdw x_call(pdw verb, pdw bx, pdw cx, pdw dx)
-{
-    pdw r;
-    if (!g_xinit || g_xigs != g_gseg || g_xigk != g_gkb) {   /* the primary re-hands the glyph claim (20.22.8) */
-        static struct pdxb_init in;
-        g_xinit = 1; g_xigs = g_gseg; g_xigk = g_gkb;
-        pd_fcopy_in(g_xb, 0, &in, 0);          /* nothing: keep the caller's block */
-        pdr_zero(&in, sizeof in);
-        in.xb_seg = g_xb; in.slot_seg = 0xB000; in.slot_kb = 48; in.glyph_seg = g_gseg; in.glyph_kb = g_gkb;
-        { static pdb keep[400]; pd_fcopy_in(g_xb, 0, keep, sizeof keep); pd_fcopy_out(&in, g_xb, 0, sizeof in);
-          pdxf_verb(PDV_X_INIT, g_xb, 0, 0); pd_fcopy_out(keep, g_xb, 0, sizeof keep); }
-    }
-    r = pdxf_verb(verb, bx, cx, dx); x_cf = pdx_cf; x_dx = 0;
-    return r;
-}
-static pdw xc_find(pdw kind, pdw k0, pdw k1) { (void)kind; (void)k0; (void)k1; return 0; }
-static pdw xc_alloc(pdw kind, pdw k0, pdw k1, pdw bytes) { (void)kind; (void)k0; (void)k1; (void)bytes; return 0; }
-'''
 
 def build():
     os.makedirs(OUT, exist_ok=True)
@@ -61,13 +27,12 @@ def build():
         if f.endswith((".c", ".h", ".inc")) and not f.startswith("pdx"):
             shutil.copy(os.path.join(PD, f), src)
     shutil.copy(os.path.join(PD, "pdabi.h"), src)
-    open(os.path.join(src, "pdrxc.c"), "w").write(SHIM)
     hosttest = os.path.join(PD, "hosttest")
     cmd = ["cc", "-std=gnu99", "-O1", "-w", "-DPD_HOST", "-DPDR_REAL_ENG", "-DPDR_TYPE3", "-I", src, "-I", PD, "-I", hosttest,
            "-o", EXE,
            os.path.join(hosttest, "pdr_test.c"), os.path.join(hosttest, "pdr_host.c"), os.path.join(hosttest, "pdhost.c"),
            os.path.join(PD, "pdmath.c"), os.path.join(src, "pdrend.c"), os.path.join(hosttest, "pdx_hosteng.c"), os.path.join(PD, "pdeng.c"),
-           os.path.join(PD, "pdxf.c")]
+           os.path.join(PD, "pdxf.c"), os.path.join(hosttest, "pdx_xmod.c")]
     subprocess.check_call(cmd)
 
 def main():
