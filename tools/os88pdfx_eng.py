@@ -188,9 +188,11 @@ def save(out, name, data, what):
 
 
 # ---------------------------------------------------------------- the variants
-def objstm(src, dst, compress):
+def objstm(src, dst, compress, keep=False):
     a = ["--object-streams=generate", "--deterministic-id", "--newline-before-endstream"]
-    if not compress:
+    if keep:
+        a.append("--stream-data=preserve")      # the streams' own filters, as they are
+    elif not compress:
         a.append("--compress-streams=n")
     qpdf(*a, src, dst)
 
@@ -369,7 +371,7 @@ def main():
     must_decode(p, 5, t2, "A85.PDF")
     must_decode(p, 7, b"\0" * 64 + t2[:301], "A85.PDF")
     must_decode(p, 9, t2, "A85.PDF")
-    objstm(p, os.path.join(out, "A85_OS.PDF"), 0)
+    objstm(p, os.path.join(out, "A85_OS.PDF"), 0, keep=True)
     NOTES.append(("A85_OS.PDF", "A85.PDF in object streams, its filters kept"))
     subprocess.run(["rm", "-rf", tmp])
     with open(os.path.join(out, "README.TXT"), "w") as f:

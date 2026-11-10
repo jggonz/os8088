@@ -1859,8 +1859,8 @@ def negative_files():
     sub = pdf.finish(root)
     nsub = len(re.findall(rb'\n\d+ \d+\n', sub[sub.rindex(b'\nxref\n'):]))
     assert nsub > 256, nsub
-    add('xref_subsec_300.pdf', sub, 'open', 'PDE_LIMIT',
-        'a VALID file whose xref has %d subsections (one per object); the engine keeps at most 256 (PD_MAXSUBSEC)' % nsub)
+    add('xref_subsec_300.pdf', sub, 'open', 'PDE_OK',
+        'a VALID file whose xref has %d subsections (one per object): folded into the flat index (PAGEDESK-SPEC 20.22.3.1)' % nsub)
     pdf, root, pg, pr, cs = mini()
     body = pdf.objs.pop(cs)
     pdf.objs[70000] = body

@@ -78,7 +78,7 @@ static pdw rp_obj(pdw num)
     if (rc || ov.kind != PDK_DICT) return rc == PDE_IO ? rc : PDE_OK;
     lx_tell(&rp_d);
     if (ob_dict_find("Type") == PDE_OK && ob_value() == PDE_OK && ov.kind == PDK_NAME)
-        t = str_eq(ov.text, "ObjStm") ? 1 : str_eq(ov.text, "XRef") ? 2 : str_eq(ov.text, "Catalog") ? 3 : 0;
+        t = kw_ix(ov.text, "ObjStm\0XRef\0Catalog\0");
     lx_seek(&rp_d);
     if (t == 3) { rp_cat_n = num; rp_cat_g = rp_n1; }
     if (t == 2 && rp_pass == 1) { rp_trailer(); lx_seek(&rp_d); }
@@ -148,21 +148,17 @@ static pdw rp_scan(void)
 
 /* OPEN failed with rc: is it a cross-reference a scan can rebuild? Then the
  * document is set back to a file and nothing else, and the scan begins. */
+static void doc_reset(void);
 static pdw rp_start(pdw rc)
 {
-    pdw k;
+    pdw v = doc_ver;
     if (rp_on || (op_state == 0 && err_detail != PDX_NOSTART && rc != PDE_XREF)) return 0;
     if (rc != PDE_XREF && rc != PDE_TRUNC && rc != PDE_XREFSTM && !(rc == PDE_SYNTAX && err_detail == PDX_NOROOT))
         return 0;
     if (!g_filed) return 0;
-    if (pw_sp || npages) pw_end();
-    pw_sp = 0; npages = 0;
-    nctx = 0; os_reset();
-    nrev = 0; nxs = 0; ix_on = 0; ix_n = 0; fd_on = 0;
-    tr_size = 0; tr_maxsize = 0; tr_has_root = 0; tr_info_n = 0; tr_hasid = 0; tr_enc_k = 0;
-    tr_tflags = 0; tr_nodict = 1;
-    doc_flags = PDO_REPAIRED;
-    for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0xFFFF);
+    doc_reset();                                /* a file and nothing else; startxref is 0 */
+    doc_ver = v; tr_nodict = 1; doc_flags = PDO_REPAIRED;
+    pd_ffill(g_tseg, PDE_TBL_CACHE, 0xFF, PDE_OFFCACHE * PDE_OCBYTES);
     u32_zero(&rp_pos); rp_nn = 0; rp_max = 0; rp_cat_n = 0; rp_pass = 1; rp_on = 1;
     err_obj = 0; err_detail = 0;
     op_state = OPS_SCAN1;

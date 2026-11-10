@@ -20,9 +20,9 @@
 
 #define PDE_NFL         2       /* slots: the page's stream and one form inside it */
 #define FL_OSLOT        PDE_NFL /* ...and the object-stream window's (20.22.3.3)      */
-#define LZ_LEN          16384u  /* LZW (20.22.3.6), in the slot's window: entry i's prefix at 4i,
-                                   its last byte at 4i + 2, its length at LZ_LEN + 2i */
-#define LZ_STK          24576u  /*   the string being given (<= 4,096 bytes)             */
+#define LZ_TOP          24576u  /* LZW (20.22.3.6), in the slot's window: entry i's prefix at 4i,
+                                   its last byte at 4i + 2 (16 KiB); the string being given is
+                                   built down from LZ_TOP (<= 4,097 bytes)                     */
 #define PDE_FLSLOT_KB   43      /* 32 KiB history + two 4 KiB predictor rows + 3 KiB of tables and saved state */
 #define PDE_FLSLOT_PARA 2752    /* ...in paragraphs                               */
 #define PDE_FLWIN       32768u

@@ -63,10 +63,10 @@ static pdw cr_raw_plain(struct pdxb_rawcopy *rw) { (void)rw; return PDE_NOTFOUND
 
 static pdw open_step(void)
 {
-    pdw rc, k;
+    pdw rc;
     switch (op_state) {
     case 0:
-        for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0xFFFF);
+        pd_ffill(g_tseg, PDE_TBL_CACHE, 0xFF, PDE_OFFCACHE * PDE_OCBYTES);   /* every slot empty */
         rc = op_start();
         if (rc) return rc;
         op_state = OPS_REV;
@@ -204,34 +204,33 @@ static pdw v_obj_find(void)
  * of an object stream is its value's bytes, framed "n 0 obj\n" ... "\nendobj\n"
  * with PDRC_PLAIN; any other object is the file's bytes (crypt's hook makes
  * PLAIN of an encrypted file's object). */
-static const char rc_tail[] = "\nendobj\n";
-static char rc_head[16];
+static char rc_text[24];                /* "nnnnn 0 obj\n" ... "\nendobj\n" */
 static pdw v_raw_copy(void)
 {
     static struct pdxb_rawcopy rw;
     static struct pd_u32 rc_p;
-    pdw rc, want, hl = 0, tl = 0, d, k, t, x;
+    pdw rc, want, hl = 0, x, d, k, t, i;
     pd_fcopy_in(g_xb, 0, &rw, sizeof(struct pdxb_rawcopy));
     rw.got = 0;
     rc = ob_extent(rw.objnum, rw.gen);
     if (rc) return rc;
     if (sp_kind == PDK_NULL) return PDE_NOTFOUND;
-    if ((sp_off.hi & 0x8000) && rw.mode == PDRC_PLAIN) {        /* the frame: "n 0 obj\n" */
-        t = rw.objnum;
-        for (k = 5; k--; t /= 10) rc_head[k] = (char)('0' + t % 10);
-        for (k = 0; k < 4 && rc_head[k] == '0'; k++) ;
-        for (hl = 0; k < 5; ) rc_head[hl++] = rc_head[k++];
-        rc_head[hl++] = ' '; rc_head[hl++] = '0';
-        for (t = 0; t < 5; t++) rc_head[hl++] = " obj\n"[t];
-        tl = 8;
+    x = ex_len.lo;
+    if (sp_off.hi & 0x8000) {
+        if (rw.mode == PDRC_PLAIN) {                    /* the frame around a member's value */
+            t = rw.objnum; i = 5;
+            do { rc_text[--i] = (char)('0' + t % 10); t /= 10; } while (t);
+            for (; i < 5; i++) rc_text[hl++] = rc_text[i];
+            for (i = 0; i < 15; i++) rc_text[hl + i] = " 0 obj\n\nendobj\n"[i];
+            hl = (pdw)(hl + 7);
+        }
+        ex_len.lo = (pdw)(x + hl + (hl ? 8 : 0));       /* a member is under 64 KiB */
     } else if (rw.mode == PDRC_PLAIN && tr_enc_k) {
         rc = cr_raw_plain(&rw);
         if (rc != PDE_NOTFOUND) return rc;
     }
-    pdm_u32_set(&s_a, 0, (pdw)(hl + tl));
-    pdm_u32_add(&s_b, &ex_len, &s_a);                   /* the whole text */
-    if (pdm_u32_cmp(&rw.done, &s_b) > 0) return PDE_RANGE;
-    pdm_u32_sub(&s_c, &s_b, &rw.done);                  /* bytes left */
+    if (pdm_u32_cmp(&rw.done, &ex_len) > 0) return PDE_RANGE;
+    pdm_u32_sub(&s_c, &ex_len, &rw.done);               /* bytes left */
     want = rw.dmax;
     if (want > 0xFFF0) want = 0xFFF0;                   /* pd_fcopy's largest move */
     if (s_c.hi == 0 && s_c.lo < want) want = s_c.lo;
@@ -239,18 +238,20 @@ static pdw v_raw_copy(void)
      * adds its progress to doff in 16 bits, so a wrap would land at dseg:0 */
     if (rw.doff != 0 && want > (pdw)(0 - rw.doff)) return PDE_RANGE;
     if (sp_off.hi & 0x8000) {                           /* a member: head, value, tail */
-        d = rw.done.lo; x = ex_len.lo;
+        d = rw.done.lo;
         while (rw.got < want) {
             k = (pdw)(want - rw.got);
-            if (d < hl) {
-                if (k > (pdw)(hl - d)) k = (pdw)(hl - d);
-                pd_fcopy_out(rc_head + d, rw.dseg, (pdw)(rw.doff + rw.got), k);
-            } else if (d < (pdw)(hl + x)) {
+            t = (pdw)(rw.doff + rw.got);
+            if (d < hl || d >= (pdw)(hl + x)) {         /* the frame's text */
+                i = d < hl ? d : (pdw)(d - x);
+                if (k > (pdw)(d < hl ? hl - d : hl + x + 8 - d)) k = (pdw)(d < hl ? hl - d : hl + x + 8 - d);
+                pd_fcopy_out(rc_text + i, rw.dseg, t, k);
+            } else {
                 if (k > (pdw)(hl + x - d)) k = (pdw)(hl + x - d);
                 rc_p.hi = sp_off.hi; rc_p.lo = (pdw)(sp_off.lo + d - hl);
-                k = os_copy(&rc_p, 0, rw.dseg, (pdw)(rw.doff + rw.got), k);
+                k = os_copy(&rc_p, 0, rw.dseg, t, k);
                 if (!k) return lx_err ? lx_err : PDE_TRUNC;
-            } else pd_fcopy_out(rc_tail + (d - hl - x), rw.dseg, (pdw)(rw.doff + rw.got), k);
+            }
             d = (pdw)(d + k); rw.got = (pdw)(rw.got + k);
         }
     } else {

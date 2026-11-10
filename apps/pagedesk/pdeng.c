@@ -50,7 +50,6 @@ static pdw   fl_blk, fl_shift, fl_nblk, fl_clock;
 static pdw   fl_blo[PDE_MAXBLK], fl_bhi[PDE_MAXBLK];
 static pdw   fl_valid[PDE_MAXBLK];      /* valid bytes in the slot, 0 = empty */
 static pdw   fl_stamp[PDE_MAXBLK];
-static pdb   tailbuf[PDE_TAIL];
 static pdw   fl_reads;          /* READ_SEQ calls: a counter, for the harness */
 
 /* ---- lexer (pdelex.c) ---------------------------------------------------- */
@@ -66,9 +65,9 @@ static struct pd_u32 ob_hdr;    /* offset of the current object's "n g obj"   */
 static pdw   ob_null;           /* the last ob_enter found a free/absent obj  */
 
 /* ---- xref (pdexref.c) ---------------------------------------------------- */
-static struct xsub xs[PD_MAXSUBSEC];
+static struct xsub xs[PD_MAXREV * PDE_REVSUB];
 static pdw   nxs;
-static pdw   rv_lo[PD_MAXREV], rv_n[PD_MAXREV], rv_thin[PD_MAXREV];
+static pdw   rv_lo[PD_MAXREV], rv_n[PD_MAXREV];
 static struct pd_u32 xr_seen[PD_MAXREV];
 static pdw   nrev;
 static struct pd_u32 xr_next;   /* the /Prev to follow, 0 = none              */
@@ -147,12 +146,12 @@ static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 /* forward: the parts call across their include order (any PDF, 20.22.3) */
 static pdw ob_stream_dict(pdw num, pdw gen);
 static pdw ob_filters(pdw num);
-/* tk.text's place in a list of names ("A\0B\0...\0"): 1, 2, ..., or 0 */
-static pdw kw_ix(const char *l)
+/* t's place in a list of names ("A\0B\0...\0"): 1, 2, ..., or 0 */
+static pdw kw_ix(const pdb *t, const char *l)
 {
     pdw i = 1;
     while (*l) {
-        if (str_eq(tk.text, l)) return i;
+        if (str_eq(t, l)) return i;
         while (*l++) ;
         i++;
     }

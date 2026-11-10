@@ -238,9 +238,6 @@ static pdw st_decode(struct sctx *c)
 
 /* A filter's name to its kind (20.22.3.6): 0 unknown; PDF_K_CODEC + PDCD_*
  * an image codec, which the chain may stop before */
-static const char *const flt_names[16] = {
-    "ASCIIHexDecode", "AHx", "RunLengthDecode", "RL", "FlateDecode", "Fl", "LZWDecode", "LZW",
-    "ASCII85Decode", "A85", "DCTDecode", "DCT", "CCITTFaxDecode", "CCF", "JBIG2Decode", "JPXDecode" };
 static const pdb flt_kinds[16] = {
     PDF_K_HEX, PDF_K_HEX, PDF_K_RLE, PDF_K_RLE, PDF_K_FLATE, PDF_K_FLATE, PDF_K_LZW, PDF_K_LZW,
     PDF_K_A85, PDF_K_A85, PDF_K_CODEC + PDCD_DCT, PDF_K_CODEC + PDCD_DCT, PDF_K_CODEC + PDCD_CCITT,
@@ -248,9 +245,9 @@ static const pdb flt_kinds[16] = {
 static const pdb flt_bits[6] = { 0, PDFL_HEX, PDFL_RLE, PDFL_FLATE, PDFL_LZW, PDFL_A85 };
 static pdw flt_kind(const pdb *name)
 {
-    pdw k;
-    for (k = 0; k < 16; k++) if (str_eq(name, flt_names[k])) return flt_kinds[k];
-    return 0;
+    pdw k = kw_ix(name, "ASCIIHexDecode\0AHx\0RunLengthDecode\0RL\0FlateDecode\0Fl\0LZWDecode\0LZW\0"
+                        "ASCII85Decode\0A85\0DCTDecode\0DCT\0CCITTFaxDecode\0CCF\0JBIG2Decode\0JPXDecode\0");
+    return k ? flt_kinds[k - 1] : 0;
 }
 static pdw flt_bit(pdw k) { return k < 6 ? flt_bits[k] : 0; }
 
@@ -276,6 +273,30 @@ static pdw flt_add(const pdb *name)
     return PDE_OK;
 }
 
+/* "stream" just read: its end of line, and where the data starts into *ds */
+static pdw st_eol(struct pd_u32 *ds)
+{
+    int c = lx_getc();
+    if (c == 13 && lx_peek() == 10) c = lx_getc();
+    if (c != 10) return PDE_SYNTAX;
+    lx_tell(ds);
+    return PDE_OK;
+}
+/* The data at *ds for *len ends inside the file, at "endstream" */
+static pdw st_end(const struct pd_u32 *ds, const struct pd_u32 *len)
+{
+    pdw rc;
+    pdm_ovf_clear();
+    pdm_u32_add(&s_a, ds, len);
+    if (pdm_ovf() || pdm_u32_cmp(&s_a, &fl_size) > 0) return PDE_TRUNC;
+    L = &fobj;
+    lx_seek(&s_a);
+    rc = lx_token();
+    if (rc == PDE_IO) return rc;
+    if (rc || tk.kind != PDT_OP || !str_eq(tk.text, "endstream")) return PDE_SYNTAX;
+    return PDE_OK;
+}
+
 /* The lexer is just inside the object's dictionary (ov.kind == PDK_DICT).
  * Fills sp_kind; for a stream also sp_dstart / sp_len (validated against the
  * file and the "endstream" keyword) and leaves the lexer after "endstream".
@@ -283,7 +304,6 @@ static pdw flt_add(const pdb *name)
 static pdw ob_stream_dict(pdw num, pdw gen)
 {
     pdw rc;
-    int c;
     lx_tell(&ds_pos);
     rc = ob_skipc();
     if (rc) return rc;
@@ -291,29 +311,23 @@ static pdw ob_stream_dict(pdw num, pdw gen)
     if (rc) return rc;
     if (tk.kind != PDT_OP || !str_eq(tk.text, "stream")) { sp_kind = PDK_DICT; return PDE_OK; }
     sp_kind = PDK_STRM;
-    c = lx_getc();
-    if (c == 13) { if (lx_peek() == 10) L->i++; else { err_obj = num; return PDE_SYNTAX; } }
-    else if (c != 10) { err_obj = num; return PDE_SYNTAX; }
-    lx_tell(&sp_dstart);
+    rc = st_eol(&sp_dstart);
+    if (rc) goto bad;
     lx_seek(&ds_pos);
     rc = ob_dict_find("Length");
-    if (rc == PDE_NOTFOUND) { err_obj = num; return PDE_SYNTAX; }
+    if (rc == PDE_NOTFOUND) { rc = PDE_SYNTAX; goto bad; }
     if (rc) return rc;
     rc = ob_value();
     if (rc) return rc;
     if (ov.kind == PDK_REF) { rc = ob_follow(); if (rc) return rc; }
-    if (ov.kind != PDK_INT || ov.neg || ov.range) { err_obj = num; return PDE_SYNTAX; }
+    if (ov.kind != PDK_INT || ov.neg || ov.range) { rc = PDE_SYNTAX; goto bad; }
     u32_cp(&sp_len, &ov.iv);
-    pdm_ovf_clear();
-    pdm_u32_add(&s_a, &sp_dstart, &sp_len);
-    if (pdm_ovf() || pdm_u32_cmp(&s_a, &fl_size) > 0) { err_obj = num; return PDE_TRUNC; }
-    L = &fobj;
-    lx_seek(&s_a);
-    rc = lx_token();
+    rc = st_end(&sp_dstart, &sp_len);
     if (rc == PDE_IO) return rc;
-    if (rc || tk.kind != PDT_OP || !str_eq(tk.text, "endstream")) { err_obj = num; return PDE_SYNTAX; }
     (void)gen;
-    return PDE_OK;
+bad:
+    if (rc) err_obj = num;
+    return rc;
 }
 
 /* The stream's /Filter chain into sp_flt (needs sp_kind == PDK_STRM). */
@@ -419,21 +433,22 @@ static pdw ob_extent(pdw num, pdw gen)
 /* ---- the open-stream stack -------------------------------------------------- */
 
 /* A stream context, fresh: the raw bytes at ds for len, the chain flt. */
+static void nz(void *p, pdw n)
+{
+    pdb *q = (pdb *)p;
+    while (n--) *q++ = 0;
+}
 static void ctx_init(struct sctx *c, const struct pd_u32 *ds, const struct pd_u32 *len,
                      pdw nflt, const pdb *flt, pdw filters)
 {
     pdw i;
-    c->lx.buf = c->ib; c->lx.n = 0; c->lx.i = 0; c->lx.mode = 1; c->lx.gen = 0;
-    c->lx.smode = 0; c->lx.sdepth = 0;
-    u32_zero(&c->lx.fpos);
+    nz(&c->lx, sizeof(struct lxs));             /* all but the lookahead buffer, zero */
+    nz(&c->rpos, (pdw)((pdb *)(c + 1) - (pdb *)&c->rpos));
+    c->lx.buf = c->ib; c->lx.mode = 1;
     u32_cp(&c->rpos, ds);
     u32_cp(&c->rrem, len);
-    u32_zero(&c->outc);
     c->nflt = nflt;
-    for (i = 0; i < PD_MAXFILTERS; i++) {
-        c->flt[i] = flt[i]; c->fcnt[i] = 0; c->fbyte[i] = 0; c->fdone[i] = 0; c->fhi[i] = 0;
-    }
-    c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
+    for (i = 0; i < PD_MAXFILTERS; i++) c->flt[i] = flt[i];
     c->filters = filters;
 }
 

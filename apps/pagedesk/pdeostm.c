@@ -49,67 +49,55 @@ static void os_reset(void)
  * or a reference to an object in no object stream), /Filter (names) and
  * refuses a predictor; checks "stream" and "endstream" as ob_stream_dict
  * does, and leaves the lexer after "endstream". */
-static struct pd_u32 og_d, og_sv, og_len;
-static pdb og_flt[PD_MAXFILTERS];
+static struct pd_u32 og_sv, og_len;
 static pdw og_here(pdw stm)
 {
-    pdw rc, typ = 0, n = 0xFFFF, first = 0xFFFF, haslen = 0, nflt = 0, filters = 0, k, i;
+    pdw rc, k, typ = 0, n = 0xFFFF, first = 0xFFFF, haslen = 0, flate = 0;
     struct osgeo *g;
-    int c;
-    lx_tell(&og_d);
     for (;;) {
         rc = lx_token();
         if (rc) return rc;
         if (tk.kind == PDT_DICTE) break;
         if (tk.kind != PDT_NAME) return PDE_XREF;
-        k = str_eq(tk.text, "Type") ? 1 : str_eq(tk.text, "N") ? 2 : str_eq(tk.text, "First") ? 3 :
-            str_eq(tk.text, "Length") ? 4 : str_eq(tk.text, "Filter") ? 5 :
-            str_eq(tk.text, "DecodeParms") ? 6 : 0;
+        k = kw_ix(tk.text, "Type\0N\0First\0Length\0Filter\0DecodeParms\0");
         rc = ob_value();
         if (rc) return rc;
-        if (k == 1 && ov.kind == PDK_NAME && str_eq(ov.text, "ObjStm")) typ = 1;
-        else if (k >= 2 && k <= 4 && ov.kind == PDK_INT && !ov.neg && !ov.iv.hi) {
-            if (k == 2) n = ov.iv.lo; else if (k == 3) first = ov.iv.lo;
-            else { u32_cp(&og_len, &ov.iv); haslen = 1; }
-        } else if (k == 4 && ov.kind == PDK_REF) {       /* /Length n g R, read now */
+        if (k == 4 && ov.kind == PDK_REF) {             /* /Length n g R, read now */
             lx_tell(&og_sv);
             rc = ob_find1(ov.rnum, ov.rgen);
             if (rc == OB_INSTM) rc = PDE_XREF;
             if (!rc && !ob_null) rc = ob_value();
             if (rc) return rc;
-            if (ov.kind == PDK_INT && !ov.neg && !ov.range) { u32_cp(&og_len, &ov.iv); haslen = 1; }
             L = &fobj;
             lx_seek(&og_sv);
-            ov.kind = PDK_NULL;
-        } else if (k == 5 && (ov.kind == PDK_NAME || ov.kind == PDK_ARR)) {
-            i = (pdw)(ov.kind == PDK_ARR);
-            for (;;) {
-                if (i) {
-                    rc = ob_value();
-                    if (rc) return rc;
-                    if (ov.kind == PDK_CLOSE) break;
-                    if (ov.kind != PDK_NAME) return PDE_FILTER;
-                }
-                if (nflt >= PD_MAXFILTERS) return PDE_LIMIT;
-                c = (int)flt_kind(ov.text);
-                /* Flate the last stage (its history is the window), no LZW, no codec */
-                if (!c || c >= PDF_K_CODEC || c == PDF_K_LZW || (filters & PDFL_FLATE)) return PDE_FILTER;
-                og_flt[nflt++] = (pdb)c;
-                filters |= flt_bit((pdw)c);
-                if (!i) break;
+        }
+        if (k == 1) typ = (pdw)(ov.kind == PDK_NAME && str_eq(ov.text, "ObjStm"));
+        else if (k >= 2 && k <= 4) {
+            if (ov.kind != PDK_INT || ov.neg || ov.iv.hi) return PDE_XREF;
+            if (k == 2) n = ov.iv.lo; else if (k == 3) first = ov.iv.lo;
+            else { u32_cp(&og_len, &ov.iv); haslen = 1; }
+        } else if (k == 5) {                            /* /FlateDecode or [/FlateDecode]: its history is the ring */
+            k = (pdw)(ov.kind == PDK_ARR);
+            if (k) {
+                rc = ob_value();
+                if (rc) return rc;
             }
-            ov.kind = PDK_NULL;
-        } else if (k == 6 && ov.kind == PDK_DICT) {     /* a predictor cannot share the ring */
+            if (ov.kind != PDK_NAME || flt_kind(ov.text) != PDF_K_FLATE) return PDE_FILTER;
+            if (k) {
+                rc = ob_value();
+                if (rc) return rc;
+                if (ov.kind != PDK_CLOSE) return PDE_FILTER;
+            }
+            flate = 1;
+        } else if (k == 6 && ov.kind != PDK_NULL) {     /* a predictor cannot share the ring */
+            if (ov.kind != PDK_DICT) return PDE_FILTER;
             rc = ob_dict_find("Predictor");
             if (rc == PDE_OK) {
                 rc = ob_value();
                 if (rc) return rc;
                 if (ov.kind != PDK_INT || ov.iv.lo > 1 || ov.iv.hi) return PDE_FILTER;
-                rc = ob_skipc();
-            } else if (rc == PDE_NOTFOUND) rc = PDE_OK;
-            if (rc) return rc;
-            ov.kind = PDK_NULL;
-        } else if (k == 6 && ov.kind == PDK_ARR) return PDE_FILTER;
+            } else if (rc != PDE_NOTFOUND) return rc;
+        }
         if (ov.kind == PDK_ARR || ov.kind == PDK_DICT) {
             rc = ob_skipc();
             if (rc) return rc;
@@ -119,24 +107,15 @@ static pdw og_here(pdw stm)
     rc = lx_token();
     if (rc) return rc;
     if (tk.kind != PDT_OP || !str_eq(tk.text, "stream")) return PDE_XREF;
-    c = lx_getc();
-    if (c == 13 && lx_peek() == 10) c = lx_getc();
-    if (c != 10) return PDE_SYNTAX;
-    lx_tell(&og_sv);
-    pdm_ovf_clear();
-    pdm_u32_add(&s_a, &og_sv, &og_len);
-    if (pdm_ovf() || pdm_u32_cmp(&s_a, &fl_size) > 0) return PDE_TRUNC;
-    L = &fobj;
-    lx_seek(&s_a);
-    rc = lx_token();
-    if (rc || tk.kind != PDT_OP || !str_eq(tk.text, "endstream")) return rc == PDE_IO ? rc : PDE_SYNTAX;
+    rc = st_eol(&og_sv);
+    if (!rc) rc = st_end(&og_sv, &og_len);
+    if (rc) return rc;
     og_i = og_next;
     og_next = (pdw)((og_next + 1) & (PDE_OSGEO - 1));
     if (ow_g == og_i) ow_g = 0xFFFF;
     g = &og[og_i];
     g->stm = stm; u32_cp(&g->dstart, &og_sv); u32_cp(&g->len, &og_len);
-    g->first = first; g->n = n; g->nflt = nflt; g->filters = filters;
-    for (i = 0; i < PD_MAXFILTERS; i++) g->flt[i] = (pdb)(i < nflt ? og_flt[i] : 0);
+    g->first = first; g->n = n; g->flate = flate;
     return PDE_OK;
 }
 
@@ -164,10 +143,11 @@ static void ctx_init(struct sctx *c, const struct pd_u32 *ds, const struct pd_u3
 /* Decode stream og[i] from its start. */
 static void os_rewind(pdw i)
 {
+    static const pdb og_fl[PD_MAXFILTERS] = { PDF_K_FLATE };
     struct osgeo *g = &og[i];
-    ctx_init(&osc, &g->dstart, &g->len, g->nflt, g->flt, g->filters);
+    ctx_init(&osc, &g->dstart, &g->len, g->flate, og_fl, g->flate ? PDFL_FLATE : 0);
     osc.onum = g->stm; osc.ogen = 0;
-    if (g->filters & PDFL_FLATE) {
+    if (g->flate) {
         fl_sc[FL_OSLOT] = &osc; fl_fresh[FL_OSLOT] = 1;
         fl_pp[FL_OSLOT][0] = 0; fl_pp[FL_OSLOT][1] = 0; fl_pp[FL_OSLOT][2] = 1; fl_pp[FL_OSLOT][3] = 8;
         if (fl_ld == FL_OSLOT) fl_ld = FL_NONE;     /* its state is the old stream's: drop it */

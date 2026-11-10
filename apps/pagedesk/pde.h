@@ -121,10 +121,11 @@ struct pde_val {
     pdb text[PDE_VT];
 };
 
-/* one xref subsection, or a CHECKPOINT standing for `span` consecutive ones
- * (PAGEDESK-SPEC 20.2.3): a revision keeps at most PDE_REVSUB of them */
-struct xsub { pdw first, count; struct pd_u32 off; pdw span; };
-#define PDE_REVSUB      (PD_MAXSUBSEC / PD_MAXREV)
+/* one xref subsection of a classic revision: a revision keeps at most
+ * PDE_REVSUB, and one with more is folded into the flat index instead
+ * (PAGEDESK-SPEC 20.22.3.1, which replaced 20.2.3's checkpoints) */
+struct xsub { pdw first, count; struct pd_u32 off; };
+#define PDE_REVSUB      8
 
 struct pw_frame { pdw num, gen; struct pd_u32 kpos; };
 
@@ -134,8 +135,7 @@ struct osgeo {
     pdw stm;                /* the stream's object number, 0 = unused     */
     struct pd_u32 dstart, len;
     pdw first, n;           /* /First, /N                                 */
-    pdw nflt, filters;
-    pdb flt[PD_MAXFILTERS];
+    pdw flate;              /* /FlateDecode, or no filter at all          */
 };
 
 #endif

@@ -528,7 +528,7 @@ def own(pde, work):
         "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:16", "n_a85": "ok", "n_dct": "stream:17",
         "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
         "n_encrypt": "open:23", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "repaired",
-        "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "open:33", "n_subsec_65540": "open:33",
+        "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "ok", "n_subsec_65540": "open:33",
     }
     for name, e in sorted(EXP.items()):
         out = lines(pde, "dump", P(name + ".pdf"), (), ("-b", "100000"))

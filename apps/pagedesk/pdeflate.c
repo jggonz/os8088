@@ -441,54 +441,50 @@ static pdw lz_code(void)
     return code;
 }
 
-/* Code p's string into the stack at LZ_STK + at; its length. */
-static pdw lz_str(pdw p, pdw at)
+/* Code p's string into the stack, ending at `top`: where it starts. The
+ * table is 4 bytes a code - its prefix code, then its last byte. */
+static pdw lz_str(pdw p, pdw top)
 {
-    pdw len = 1, k;
-    if (p >= 258) len = pd_fpeekw(fl.seg, (pdw)(LZ_LEN + 2 * p));
-    for (k = (pdw)(at + len); k > at; ) {
-        if (p < 256) { pd_fpokeb(fl.seg, (pdw)(LZ_STK + --k), (pdb)p); break; }
-        pd_fpokeb(fl.seg, (pdw)(LZ_STK + --k), pd_fpeekb(fl.seg, (pdw)(4 * p + 2)));
+    while (p >= 256) {
+        pd_fpokeb(fl.seg, --top, pd_fpeekb(fl.seg, (pdw)(4 * p + 2)));
         p = pd_fpeekw(fl.seg, (pdw)(4 * p));
     }
-    return len;
+    pd_fpokeb(fl.seg, --top, (pdb)p);
+    return top;
 }
 
 /* A fill of LZW: the codes' strings into ob, a long one across fills. The
  * table is the slot's window area, so nothing is flushed to a history. */
 static void lz_fill(void)
 {
-    pdw code, len, k;
+    pdw code, pos, k;
     while (fl.on < PDE_FLOB && fl.state != FS_END) {
         if (fl.lsp) {                               /* a string still being given */
             k = fl.lsp;
             if (k > (pdw)(PDE_FLOB - fl.on)) k = (pdw)(PDE_FLOB - fl.on);
-            pd_fcopy_in(fl.seg, (pdw)(LZ_STK + fl.lspos), fl.ob + fl.on, k);
+            pd_fcopy_in(fl.seg, fl.lspos, fl.ob + fl.on, k);
             fl.on = (pdw)(fl.on + k); fl.lspos = (pdw)(fl.lspos + k); fl.lsp = (pdw)(fl.lsp - k);
             continue;
         }
         code = lz_code();
         if (code == 0xFFFF || code == 257) { fl.state = FS_END; break; }   /* the data ended (without EOD: as qpdf) */
         if (code == 256) { fl.lwid = 9; fl.lnext = 258; fl.lprev = 0xFFFF; continue; }
-        if (code > fl.lnext || (code == fl.lnext && fl.lprev == 0xFFFF) || (code < 258 && code > 255)) {
+        if (code > fl.lnext || (code == fl.lnext && fl.lprev == 0xFFFF)) {
             fl_fail(PDE_SYNTAX); break;
         }
-        if (code < fl.lnext) len = lz_str(code, 0);
+        if (code < fl.lnext) pos = lz_str(code, LZ_TOP);
         else {                                      /* KwKwK: the previous string and its first byte */
-            len = lz_str(fl.lprev, 0);
-            pd_fpokeb(fl.seg, (pdw)(LZ_STK + len), pd_fpeekb(fl.seg, LZ_STK));
-            len++;
+            pos = lz_str(fl.lprev, LZ_TOP - 1);
+            pd_fpokeb(fl.seg, LZ_TOP - 1, pd_fpeekb(fl.seg, pos));
         }
         if (fl.lprev != 0xFFFF && fl.lnext < 4096) {
             pd_fpokew(fl.seg, (pdw)(4 * fl.lnext), fl.lprev);
-            pd_fpokeb(fl.seg, (pdw)(4 * fl.lnext + 2), pd_fpeekb(fl.seg, LZ_STK));
-            pd_fpokew(fl.seg, (pdw)(LZ_LEN + 2 * fl.lnext),
-                      (pdw)(1 + (fl.lprev < 258 ? 1 : pd_fpeekw(fl.seg, (pdw)(LZ_LEN + 2 * fl.lprev)))));
+            pd_fpokeb(fl.seg, (pdw)(4 * fl.lnext + 2), pd_fpeekb(fl.seg, pos));
             fl.lnext++;
             if ((pdw)(fl.lnext + fl.learly) >= (pdw)(1u << fl.lwid) && fl.lwid < 12) fl.lwid++;
         }
         fl.lprev = code;
-        fl.lsp = len; fl.lspos = 0;
+        fl.lsp = (pdw)(LZ_TOP - pos); fl.lspos = pos;
     }
 }
 

@@ -145,8 +145,7 @@ static pdw ix_ready(pdw n)
  * (xo_off.hi = 0x8000 | the stream, xo_off.lo = the member index). */
 static pdw xr_find(pdw num)
 {
-    static struct pd_u32 sp;
-    pdw r, j, e, last, a, first, count, t, slot, tag;
+    pdw r, j, e, t, slot, tag;
     xo_state = 0;
     if (num == 0) { xo_state = 1; return PDE_OK; }
     if (ix_on) {                                       /* the flat index (20.22.3.1) */
@@ -169,43 +168,22 @@ static pdw xr_find(pdw num)
     }
     for (r = 0; r < nrev; r++) {
         xr_rev = r;
-        last = 0xFFFF;
         for (j = 0; j < rv_n[r]; j++) {
             e = (pdw)(rv_lo[r] + j);
-            if (!rv_thin[r]) {                          /* exact: any order */
-                t = xr_entry(num, xs[e].first, xs[e].count, &xs[e].off);
-                if (t == 2) return xr_rc;
-                if (t == 1) return PDE_OK;
-            } else if (xs[e].first <= num) last = e;
-        }
-        if (rv_thin[r] && last != 0xFFFF) {
-            e = last;
             t = xr_entry(num, xs[e].first, xs[e].count, &xs[e].off);
             if (t == 2) return xr_rc;
             if (t == 1) return PDE_OK;
-            pdm_u32_mul16(&s_a, 20, xs[e].count);
-            pdm_u32_add(&sp, &xs[e].off, &s_a);
-            for (a = 1; a < xs[e].span; a++) {         /* the subsections it stands for */
-                if (xr_header(&sp)) break;
-                first = xh_first; count = xh_count;
-                if (num < first) break;                 /* ascending: past it */
-                t = xr_entry(num, first, count, &sp);
-                if (t == 2) return xr_rc;
-                if (t == 1) return PDE_OK;
-                pdm_u32_mul16(&s_a, 20, count);
-                pdm_u32_add(&sp, &sp, &s_a);
-            }
         }
     }
     return PDE_OK;
 }
 
 /* ---- OPEN, step 0: the file, the header, startxref ---------------------- */
-static pdw xr_total;                    /* subsections named by the whole chain */
 static pdw op_start(void)
 {
     pdw rc, n, i, j, found;
     static const char sx[] = "startxref";
+    pdb *tailbuf = (pdb *)ctxs;                 /* nothing is open yet: the stream contexts are scratch */
     rc = fl_open(xo.name);
     if (rc) return rc;
     if (fl_size.hi == 0 && fl_size.lo < 9) { err_detail = PDX_NOHEADER; return PDE_TRUNC; }
@@ -237,35 +215,20 @@ static pdw op_start(void)
     if (u32_dec(&tr_start, tailbuf + i, (pdw)(j - i))) return PDE_XREF;
     if (pdm_u32_cmp(&tr_start, &fl_size) >= 0 || u32_is0(&tr_start)) return PDE_XREF;
     u32_cp(&xr_next, &tr_start);
-    nxs = 0; nrev = 0; xr_total = 0;
+    nxs = 0; nrev = 0;
     return PDE_OK;
 }
 
-/* D10c: the whole chain may name at most PD_MAXSUBSEC subsections */
-static pdw xr_unord;
-static pdw xr_add(pdw first, pdw count, const struct pd_u32 *off)
+/* A subsection into its revision's PDE_REVSUB; a revision with more makes
+ * the chain the flat index's (20.22.3.1 - it replaced 20.2.3's thinning) */
+static void xr_add(pdw first, pdw count, const struct pd_u32 *off)
 {
-    pdw lo, n, j;
-    if (++xr_total > PD_MAXSUBSEC) return PDE_LIMIT;
-    lo = rv_lo[nrev]; n = rv_n[nrev];
-    /* a thinned revision is searched in ascending order: one out of order,
-     * before or AFTER the thinning, would hide objects (20.2.3) */
-    if (xr_unord && (rv_thin[nrev] || n == PDE_REVSUB)) return PDE_LIMIT;
-    if (n == PDE_REVSUB) {                              /* thin: pairs become checkpoints */
-        for (j = 0; j < PDE_REVSUB / 2; j++) {
-            xs[lo + j].first = xs[lo + 2 * j].first;
-            xs[lo + j].count = xs[lo + 2 * j].count;
-            u32_cp(&xs[lo + j].off, &xs[lo + 2 * j].off);
-            xs[lo + j].span = (pdw)(xs[lo + 2 * j].span + xs[lo + 2 * j + 1].span);
-        }
-        n = PDE_REVSUB / 2;
-        rv_thin[nrev] = 1;
-    }
-    xs[lo + n].first = first; xs[lo + n].count = count; xs[lo + n].span = 1;
-    u32_cp(&xs[lo + n].off, off);
-    rv_n[nrev] = (pdw)(n + 1);
-    nxs = (pdw)(lo + n + 1);
-    return PDE_OK;
+    pdw e = (pdw)(rv_lo[nrev] + rv_n[nrev]);
+    if (rv_n[nrev] == PDE_REVSUB) { ix_on = 1; return; }
+    xs[e].first = first; xs[e].count = count;
+    u32_cp(&xs[e].off, off);
+    rv_n[nrev]++;
+    nxs = (pdw)(e + 1);
 }
 
 /* ---- OPEN, step 1: one revision (xref table + trailer, or an xref stream) */
@@ -288,7 +251,7 @@ static pdw tr_keys(pdw isnewest)
         if (rc) return rc;
         if (tk.kind == PDT_DICTE) return PDE_OK;
         if (tk.kind != PDT_NAME) return PDE_XREF;
-        k = kw_ix("Size\0Prev\0Root\0Info\0Encrypt\0ID\0XRefStm\0Type\0W\0Index\0");
+        k = kw_ix(tk.text, "Size\0Prev\0Root\0Info\0Encrypt\0ID\0XRefStm\0Type\0W\0Index\0");
         rc = ob_value();
         if (rc) return rc;
         if (k == 1) {                                   /* Size */
@@ -361,16 +324,15 @@ static pdw xs_head(void)
 static pdw op_rev(void)
 {
     pdw rc, first, count, i, isnewest;
-    pdw n, prevfirst;
+    pdw n;
     isnewest = (pdw)(nrev == 0);
     err_detail = nrev;
     for (i = 0; i < nrev; i++)
         if (pdm_u32_cmp(&xr_seen[i], &xr_next) == 0) return PDE_XREF;   /* /Prev loop */
     if (nrev >= PD_MAXREV) return PDE_LIMIT;
     u32_cp(&xr_seen[nrev], &xr_next);
-    rv_lo[nrev] = (pdw)(nrev * PDE_REVSUB); rv_n[nrev] = 0; rv_thin[nrev] = 0;
+    rv_lo[nrev] = (pdw)(nrev * PDE_REVSUB); rv_n[nrev] = 0;
     rv_kind[nrev] = 0; u32_zero(&rv_xstm[nrev]);
-    xr_unord = 0; prevfirst = 0;
     L = &fobj;
     lx_seek(&xr_next);
     rc = lx_token();
@@ -410,12 +372,7 @@ static pdw op_rev(void)
         pdm_u32_mul16(&s_a, 20, count);
         pdm_u32_add(&s_b, &s_c, &s_a);
         if (pdm_u32_cmp(&s_b, &fl_size) > 0) return PDE_TRUNC;
-        if (count) {
-            if (first < prevfirst) xr_unord = 1;
-            prevfirst = first;
-            rc = xr_add(first, count, &s_c);
-            if (rc) return rc;
-        }
+        if (count) xr_add(first, count, &s_c);
         lx_seek(&s_b);
     }
     rc = lx_token();
@@ -596,6 +553,7 @@ static pdw op_fold(void)
 }
 
 /* ---- OPEN, step 2: the catalog ------------------------------------------ */
+static const pdb op_cflag[4] = { PDO_OUTLINE, PDO_READONLY, PDO_ACROFORM, PDO_TAGGED };
 static pdw op_catalog(void)
 {
     pdw rc, i, nf;
@@ -613,30 +571,16 @@ static pdw op_catalog(void)
         if (rc) return rc;
         if (tk.kind == PDT_DICTE) break;
         if (tk.kind != PDT_NAME) return PDE_SYNTAX;
-        if (str_eq(tk.text, "Pages")) {
+        i = kw_ix(tk.text, "Pages\0Outlines\0Perms\0AcroForm\0MarkInfo\0");
+        if (i == 1) {
             rc = ob_value();
             if (rc) return rc;
             if (ov.kind == PDK_REF) { pw_root_n = ov.rnum; pw_root_g = ov.rgen; }
-        } else if (str_eq(tk.text, "Outlines")) {
-            doc_flags |= PDO_OUTLINE;
-            rc = ob_skipval();
-            if (rc) return rc;
-        } else if (str_eq(tk.text, "Perms")) {
-            doc_flags |= PDO_READONLY;
-            rc = ob_skipval();
-            if (rc) return rc;
-        } else if (str_eq(tk.text, "AcroForm")) {
-            doc_flags |= PDO_ACROFORM;
-            rc = ob_skipval();
-            if (rc) return rc;
-        } else if (str_eq(tk.text, "MarkInfo")) {
-            rc = ob_skipval();
-            if (rc) return rc;
-            doc_flags |= PDO_TAGGED;
-        } else {
-            rc = ob_skipval();
-            if (rc) return rc;
+            continue;
         }
+        rc = ob_skipval();
+        if (rc) return rc;
+        if (i) doc_flags |= op_cflag[i - 2];
     }
     if (pw_root_n == 0) { err_detail = PDX_NOROOT; return PDE_SYNTAX; }
     if (doc_flags & PDO_ACROFORM) {
