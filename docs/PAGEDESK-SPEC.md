@@ -1057,11 +1057,12 @@ matched case-insensitively and READ_SEQ is then handed the directory's own
 spelling of it; a name not in the current folder is `PDE_IO`.
 
 The cross-reference follows 7.3 with one extension: each revision keeps at most
-32 subsection records; the 33rd merges adjacent pairs into CHECKPOINTS (a
-record that stands for `span` consecutive subsections, found again by reading
-their 20-byte-aligned headers off the file). A lookup in a thinned revision
-takes the last record whose first object is at most the one asked for and
-walks at most `span` headers. The whole chain may name at most `PD_MAXSUBSEC`
+32 subsection records; the 33rd keeps every other record as a CHECKPOINT (the
+subsections between two checkpoints are found again by reading their headers
+off the file). A lookup in a thinned revision takes the last record whose
+first object is at most the one asked for and reads the headers after it
+until one starts past that object or the table ends (20.22.3.7: the walk is
+bounded by the table, so a record needs no count of what it stands for). The whole chain may name at most `PD_MAXSUBSEC`
 (256) subsections: the 257th is `PDE_LIMIT` (D10c). A thinned revision must be in ascending order of
 first object throughout: a revision of 33 or more subsections with one out of
 order, before the thinning or after it, is `PDE_LIMIT`. A revision with 32 or
@@ -1269,7 +1270,7 @@ call may be retried).
 | `PDE_FLATE`, `PDE_FILTER` | 20.2.5, at `STRM_OPEN` |
 | `PDE_ENCRYPT` / `PDE_XREFSTM` | `/Encrypt` in a trailer / `/Type /XRef` where `xref` was expected |
 | `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document; a `RAW_COPY` or `STRM_READ` destination that would cross the end of its segment |
-| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
+| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; an object stream numbered over 32,766 or a member past 65,535 decoded bytes (20.22.3); a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
 | `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
 | `PDE_IO` | any failed read; a name not in the folder |
 | `PDE_NOTFOUND` | a missing dictionary key or resource; no outline; `SEARCH` |
@@ -5208,7 +5209,284 @@ from XMS, and the same largest free run across a close and an open.
 
 #### 20.22.3 Structure: cross-reference streams, object streams, repair, LZW, ASCII85 (`eng`)
 
-*Reserved; written by its agent before its code.*
+AP-01, AP-02 and AP-03, and the engine seams the other agents build on. All
+of it is PDENG (L1: it runs per object or per byte). **A file whose every
+revision is a classic table, with no `/XRefStm`, no object stream and no
+damage, takes exactly the code path of 20.2.3** (the subsection records and
+their checkpoints, the resolved-offset cache, no new claim): the new
+mechanisms below are entered only when a revision needs them. A classic file
+never pays the index's 4 bytes an object, however sparse it is.
+
+**20.22.3.1 The flat index (`PDMEM_XIDX`).** A chain with a cross-reference
+STREAM in it (any revision), a hybrid section whose `/XRefStm` is read, or a
+repaired file, is resolved through a flat index instead of the subsection
+records: 4 bytes an object number, entry `n` at `xidx_seg + n / 4 :
+(n % 4) * 4` (so it may span several segments), little-endian:
+
+| entry | meaning |
+|---|---|
+| `0x00000000` | absent: no revision mentions it (a null) |
+| `0xFFFFFFFF` | free (a null) |
+| bit 31 clear | in use at that file offset (an offset is under 2 GiB, 20.2.2) |
+| bit 31 set | in object stream `hi & 0x7FFF` (at most 32,766), member `lo` (at most 65,534) |
+
+It holds `max(/Size)` entries over the chain (a repair: the highest object
+number met, plus one), at most 65,536 - object numbers stay 16 bits (D8, an
+object above 65,535 is `PDE_LIMIT` as before). There is no lower engine
+ceiling: the index is `ceil(4 x entries / 1024)` KiB, at most 256, asked for
+with `PDE_NEEDMEM` (CX = `PDMEM_XIDX`, DX = KiB) during `OPEN` when the claim
+the primary gave is smaller, and whether the machine has it is the primary's
+claim. Refused, the open is `PDE_NOMEM`, and 20.22.6's sentence for it names
+the object count. Only `OPEN` ever answers `PDE_NEEDMEM`; after `OPEN` the
+index and the window below never grow.
+
+Revisions are folded newest first and an entry is written only while it is
+still `0`, so the newest revision that MENTIONS an object wins, a free entry
+counting as a mention (7.5.6). A classic revision in such a chain is folded by
+reading its 20-byte rows in order (checked as 20.2.3 checks them; a bad row is
+`PDE_XREF`). A hybrid section (7.5.8.4) is folded in three passes: the table's
+in-use rows, then its `/XRefStm`'s rows, then the table's free rows, so a
+compressed object that a hybrid writer lists as free in the table is found in
+the stream and a genuinely free one stays free; one the table leaves out of
+every subsection is found in the stream either way. (qpdf 12 lets a free row
+win over the stream, so the fixtures are of the second shape: there is no
+reference reader to hold the first to.) An `/XRefStm` at or past the end of
+the file is ignored, as before; one inside the file that is not a
+cross-reference stream is `PDE_XREFSTM`.
+
+**20.22.3.2 Cross-reference streams.** At a revision's offset `n g obj` with
+`/Type /XRef` is read as a stream (7.5.8): its dictionary IS that revision's
+trailer (`/Size`, `/Root`, `/Info`, `/Prev`, `/Encrypt`, `/ID`, the same
+newest-wins rule as 20.2.3), `/W [w0 w1 w2]` with each width 0 to 4, `/Index`
+(pairs `first count`, default `[0 /Size]`, at most 4,096 numbers), and the
+rows: type `w0` bytes (0 width means type 1), field 2 `w1` bytes, field 3 `w2`
+bytes, big-endian. Type 0 is free, type 1 is an offset (field 3 the
+generation, which, as for a classic entry, is not kept: the object header's is
+matched, 20.2.8), type 2 is (object stream, member index), any other type is
+a null. An offset under 9 or at or past the end of the file, a width over 4,
+an `/Index` that is not pairs of non-negative integers, or rows that end
+before `/Index` does, is `PDE_XREFSTM` (now: a DAMAGED cross-reference
+stream), which 20.22.3.5 repairs. An object stream number over 32,766 or a
+member index of 65,535 is `PDE_LIMIT` (the index cannot name it) and is not
+repaired. Rows for objects at or past the index's size are ignored. The rows
+are decoded through the ordinary filter chain (Flate with its PNG/TIFF
+predictor - qpdf writes `/Predictor 12` - and every other filter of
+20.22.3.6); a cross-reference stream is never decrypted (7.6.2). Its Flate
+stage takes Flate slot 0 when the machine has the Flate tier (no stream is
+open during `OPEN`) and the object-stream window's slot when it has not
+(`PDE_NEEDMEM` for `PDMEM_OSW` first). The fold runs in `OPEN` slices of 512
+rows (`PDE_BUSY`, `state` 5). `PDO_XREFSTM` is set when a stream was read,
+`PDO_OBJSTM` when an entry names an object stream; `TRAILER` reports
+`tflags` `PDTR_XREFSTM` when the NEWEST section is a stream, and `startxref`
+is that section's offset whatever its kind. `DICT_GET` 0/0 reads the newest
+trailer dictionary or cross-reference stream dictionary.
+
+**20.22.3.3 Object streams (`PDMEM_OSW`).** A member is read IN PLACE from
+the object stream's decoded bytes, through the one funnel every read goes
+through (the file layer's copy, 6.1): **a position names its container.** A
+position with bit 31 clear is a file offset; one with bit 31 set is `hi =
+0x8000 | object stream`, `lo` = offset in that stream's decoded bytes. Every
+save-and-seek-back in the parser (a reference followed in the middle of a
+dictionary, the dictionary and array cursors, a page's inherited attributes)
+therefore keeps working across a hop into or out of an object stream with no
+change to the parser. Resolving member `k` of stream `s` reads the stream's
+header pairs (`num off`, 7.5.7): pair `k` must name the object (else every
+pair is searched for it; not found is a null), the position is `/First + off`,
+the generation is 0 (a reference with any other is a null), and there is no
+`n g obj` or `endobj`. A resolved position is kept in the resolved-offset
+cache (20.2.2) as `hi | lo`, so the pairs are read once an object.
+
+The decoded bytes live in the OBJECT-STREAM WINDOW: one region of 43 KiB,
+exactly the shape of a Flate slot (20.13: a 32 KiB ring at offset 0, the rows,
+the tables and the saved state), asked for with `PDE_NEEDMEM` (CX =
+`PDMEM_OSW`, DX = 43) at the end of the fold when any entry names an object
+stream, or when the repair scan meets one. It is a THIRD Flate slot, private
+to the window, so an object stream is decoded while a page's content and a
+form hold slots 0 and 1, and an XT without the Flate tier still reads
+compressed objects. The ring holds the last 32,512 decoded bytes of the stream
+in it; a read ahead of what is decoded decodes on, a read behind it decodes
+again from the start (the swap rule: one stream is resident; asking for
+another, or for bytes before the ring, re-decodes from that stream's start up
+to the bytes asked for). A stream's decoded offsets are 16 bits: bytes past
+65,535 cannot be named and a member there is `PDE_LIMIT`. The stream's
+geometry (data offset, length, Flate or not, `/First`, `/N`) is read when a
+member is first resolved and kept in 8 records (round robin), so a re-decode
+in the middle of a token needs no parse; a position in a stream whose record
+has been reused is `PDE_LIMIT` (it needs nine object streams entered between
+saving a position and returning to it). An object stream's `/Filter` is
+`/FlateDecode` (a name, or an array of that one name) or nothing - the ring
+is then Flate's own history - and a `/DecodeParms` with a `/Predictor` above
+1, or any other filter or chain, is `PDE_FILTER`. (Every writer we know
+compresses object streams with Flate alone; a chain would cost the parse of a
+second filter list, 20.22.3.7.) An object stream inside an object stream, or
+one that is not `/Type /ObjStm`, is `PDE_XREF`. Decryption of an
+object stream is crypt's raw layer (20.22.5): the stream context carries the
+object number and generation (`sctx.onum/ogen`) for the key, and members are
+never decrypted again.
+
+`OBJ_FIND` of a member answers its position (bit 31 set) as `offset` and the
+bytes of its VALUE as `length` (`kind` as usual; a member is never a stream).
+`RAW_COPY` with `mode = PDRC_EXACT` copies those value bytes; with
+`PDRC_PLAIN` it copies `n 0 obj\n`, the value, `\nendobj\n` (`done` and
+`got` address that synthesised text, the same bytes every call). `PDRC_PLAIN`
+of an object that is not a member is the file's bytes exactly (on a file with
+no `/Encrypt`), and on an encrypted file it is crypt's hook
+`cr_raw_plain()` in `pdeverb.c` (20.22.5 fills it: strings and stream
+decrypted, `/Length` made direct).
+
+**20.22.3.4 What `OPEN` does now.** The states (`pdxb_open.state`): 2 one
+revision a slice, as before, now either kind; 5 the fold (`PDE_NEEDMEM` for
+the index first; 512 rows a slice); 6 the window check (`PDE_NEEDMEM` for the
+window); 7 encryption: when any revision's trailer has `/Encrypt` the engine
+records it (a reference, or the position just inside a direct dictionary;
+`TRAILER`'s `encrypt_num/gen` and `PDTR_ENCDIRECT`) and calls crypt's hook
+`cr_open()`, which answers `PDE_PASSWORD` until 20.22.5 lands (so an encrypted
+file is `PDE_PASSWORD`, no longer `PDE_ENCRYPT`, and the trailer is never a
+refusal by itself); 3 and 4 the catalog and the page tree as before; 8 to 10
+the repair. `/ID[0]` is kept whole up to 32 bytes (`id0`, `id0_hi`, `id0_len`
+its true length). The 1 KiB the engine searches for `startxref` is read into
+the stream contexts, which are free during `OPEN`'s first state, and
+`FINGERPRINT` reads its two kilobytes 128 bytes at a time: the 1 KiB tail
+buffer is gone.
+
+`PDE_NEEDMEM` is the ladder's (20.22.1): the primary claims the region, puts
+it in `pdxb_init` and calls `INIT` again, then `OPEN` with the same `state`.
+**A re-`INIT` whose cache, arena, tables and Flate claims are the ones it
+already has keeps the document and the open state** and only takes the new
+`xidx_*`/`osw_*` (this amends 20.2.2's "a re-INIT closes any document", which
+still holds for any other re-INIT).
+
+**20.22.3.5 Repair (AP-02).** When `OPEN` fails in states 0 to 7, 3 or 4 with
+`PDE_XREF`, `PDE_TRUNC`, `PDE_XREFSTM`, or `PDE_SYNTAX` for a missing root
+(`err_detail` 4), the engine throws the cross-reference away and scans the
+file instead (`PDO_REPAIRED`); a header failure (`err_detail` 1 or 2), an I/O
+error, a limit, memory and encryption are not repaired. The scan is a token
+walk of the whole file from offset 0 in `OPEN` slices of 4 KiB, skipping every
+stream's data (to its `endstream`): `n g obj` at a token boundary is an
+object at the offset of `n` (a later one overwrites an earlier one: the
+incremental-update rule); an object stream's header pairs are read and each
+member written as `(stream, index)` at that point of the walk, so the order
+of the file decides between a member and a direct object of the same number;
+`trailer <<...>>` and a `/Type /XRef` dictionary are trailers (the LAST one
+in the file wins); a `/Type /Catalog` object is remembered, the root when no
+trailer names one. Pass 1 (state 8) finds the highest object number, so the
+index can be asked for; pass 2 (state 10) writes it. Objects freed by an
+update cannot be seen by a scan and stay in use (MuPDF and qpdf do the same).
+After a repair `TRAILER` reports `startxref` 0 (there is no cross-reference
+for an incremental update's `/Prev` to name: 20.22.4 saves such a file whole)
+and `DICT_GET` 0/0 reads the last trailer the scan met, `PDE_NOTFOUND` when it
+met none. A failure after the repair is reported as it is. A file damaged AFTER `OPEN`
+(an entry found wrong when an object is first read) is `PDE_XREF` at that
+verb, as before.
+
+**20.22.3.6 Filters (AP-03) and the codec pass-through.** Kinds now:
+`ASCIIHexDecode` `AHx`, `RunLengthDecode` `RL`, `FlateDecode` `Fl`,
+`LZWDecode` `LZW`, `ASCII85Decode` `A85`, at most four a chain, `PDFL_*` bits
+as `pdabi.h`.
+
+* ASCII85 (7.4.3): a push stage like ASCIIHex. White space is skipped, `z`
+  is four zeros between groups only, `~` ends the data, a last group of 2 to
+  4 characters gives 1 to 3 bytes, a character outside `!`..`u`, a group over
+  2^32 - 1, or a last group of one character is `PDE_SYNTAX` at the read.
+* LZW (7.4.4): a slot stage like Flate - the ONE slot stage a chain is Flate
+  or LZW (both: `PDE_FILTER`), it needs the Flate tier (none: `PDE_FLATE`, as
+  Flate), and it reuses Flate's predictor and delivery: `/DecodeParms`
+  `/Predictor` (PNG 10-15, TIFF 2), `/Colors`, `/BitsPerComponent`,
+  `/Columns` and `/EarlyChange` (0 or 1, default 1). Codes are 9 to 12 bits,
+  most significant bit first; 256 clears, 257 ends; a code above the next
+  table entry, or one not yet defined, is `PDE_SYNTAX`; data that ends
+  without 257 ends there (as qpdf). The table (4,096 entries of a prefix code
+  and a last byte, 16 KiB) and the string, built down from the top of a stack
+  above it, are in the slot's window area: no length table.
+* The codecs: `DCTDecode` `DCT`, `CCITTFaxDecode` `CCF`, `JBIG2Decode`,
+  `JPXDecode`. With `pdxb_strm.accept` 0 they are `PDE_FILTER` at
+  `STRM_OPEN`, as before. With `PDSA_CODEC` a codec that is the LAST stage of
+  the chain is not decoded: the chain stops before it, `pdxb_strm.codec`
+  names it (`PDCD_*`) and `STRM_READ` delivers the CODED bytes; a codec
+  anywhere else, or two, is `PDE_FILTER`. The codec's parameters are the
+  caller's to read with `DICT_GET` (`DecodeParms`, `[n]` when `/DecodeParms`
+  is an array, and `JBIG2Globals`, a reference to a stream the caller opens
+  first with its own `STRM_OPEN`).
+* `Crypt` stays `PDE_FILTER` until 20.22.5 handles it.
+
+**20.22.3.7 Costs.** PDENG image + bss, measured (`make build/PDENG.MOD`):
+47,152 at the round's start (36,822 + 10,330); **46,512 + 9,810 = 56,322**
+with 20.22.3.1-8, +9,170 of the 9,800 the 23:20 ledger gives eng (56,952
+inside PDENG's 65,024, the part limit). The first build was 58,926; what
+brought it back is a checkpoint record with no count of what it stands for
+(the walk is bounded by the table instead: 2,048 bytes of bss where the
+round's start had 2,560), the tail buffer gone (20.22.3.4: -1,024) and code
+shared or table-driven (`kw_ix`, one stream-bounds check, Flate-only object
+streams, an LZW with no length table, `pdm_u32_todec` for RAW_COPY's
+numbers). A flat-index fold of classic tables was built and withdrawn: it
+made a sparse classic file cost 4 bytes an object, which a large one on a
+640 KiB XT cannot pay, and the checkpoints never refuse. Deep stack
+(tools/os88pdstk.py): the worst verb is `OPEN` at 550 bytes from the door,
+inside D23's 1,776, through an object stream's geometry read during the
+fold. RAM: nothing for a classic file; `4 x /Size` bytes for a
+stream-indexed or repaired one (a cross-reference-stream file of `/Size`
+16,000 asks 63 KiB, which a 640 KiB XT with a document open may refuse:
+`PDE_NOMEM`, and 20.22.6 says so); 43 KiB more for a file with object
+streams (or, with no Flate tier, a compressed cross-reference stream).
+
+The fixtures are `tests/pdfany/eng/` (tools/os88pdfx_eng.py, provenance in its
+README): the samples as object-stream files plain and compressed, hybrids, a
+cross-reference-stream update on a classic file and a classic update on a
+cross-reference stream (PDWRT's shape), a stream with an indirect `/Length`, object streams longer than
+the ring read backwards, three damaged files, LZW through every width and
+table reset and with `/EarlyChange 0`, ASCII85 and an [ASCII85 LZW] chain.
+`hosttest/pde_check.py` holds the engine to qpdf over every one, with and
+without the Flate tier: pages, page objects, boxes, every content stream's
+decoded bytes, and every object's `RAW_COPY` in both modes against the tool's
+own reading of the decoded object stream. `make pdefuzz` mutates them with
+the rest of the corpus, the claims random a case and every `PDE_NEEDMEM`
+granted.
+
+**20.22.3.8 Seams for the other agents.** Four answers that read the trailer,
+the resources and the objects, which are the engine's:
+
+* `RES_LOOKUP` of a resource written DIRECTLY in another object (an inline
+  `/ExtGState << /GS1 << /CA 0.5 >> >>`) answers `objnum` 0 and its `kind` as
+  before, and now also, in `pdxb_reslookup_x`'s tail (`pdabi.h`'s `[eng
+  20.22.3]` block; the verb reads the `pdxb_reslookup` at the head of the
+  exchange block and writes the whole extended struct): `rflags`
+  `PDRL_DIRECT`, `cnum`/`cgen` the object the value is written in (the page,
+  an inherited ancestor, a resource dictionary or a category dictionary,
+  whichever was entered last), and `coff`, where the value's `<<` starts in
+  that object's `RAW_COPY` `PDRC_EXACT` bytes - from `n g obj` for an object in
+  the file, from the value for an object-stream member. PDXG reads the value
+  with `RAW_COPY` from `done = coff` and parses it itself. A referenced
+  resource has `rflags` 0. (Decision 23:35, Question 3; on an encrypted file
+  a string inside the value is the file's bytes, and an ExtGState has none
+  that matters.)
+* `RAW_COPY` of `objnum` `PDRC_ENCDICT` (0xFFFE, wrt's block, 20.22.4.1) when
+  `TRAILER` has `PDTR_ENCDIRECT` copies the text of the direct `/Encrypt`
+  dictionary from its `<<` to its `>>`, the file's bytes in either mode;
+  without a direct one it is `PDE_NOTFOUND`, and a dictionary longer than 640
+  bytes is `PDE_LIMIT` (PDWRT copies it into a fixed buffer).
+* `RAW_COPY` `PDRC_PLAIN` of an object is written as up to three pieces, one
+  after another in `done`: the frame (`n g obj`, the dictionary, `stream`),
+  the stream's data and the tail (`endstream`, `endobj`). An object-stream
+  member is framed as before (20.22.3.3). A stream in the file whose
+  `/Length` is a REFERENCE has that reference written as its number - the
+  dictionary's bytes up to the reference, the decimal value, the bytes after
+  it - so PDWRT, which copies an object into a file whose objects are
+  renumbered, never carries a reference to a length object it did not copy
+  (wrt's request, 20.22.4.2). The number is the one the stream was read with.
+  On an encrypted file the PLAIN copy goes to the `crypt` hook
+  (`cr_raw_plain`, 20.22.5), which decrypts the strings and the data; the
+  EXACT copy is the file's bytes as ever.
+* `OPEN` that answers `PDE_PASSWORD` (20.22.5: the file is encrypted and the
+  empty password does not open it) leaves the document HALF open - the
+  cross-reference, the trailer and the `/Encrypt` dictionary read, the pages
+  not - and says so in `xo.state`; `CRYPT SETKEY` with the user's key and then
+  `OPEN` again resumes from there, without reading the cross-reference a
+  second time (wrt's request: a file that took a minute to index takes it
+  once). `OPEN` with state 0, or `CLOSE`, abandons it. `DICT_GET` and
+  `TRAILER` answer there (PDXK reads `/Encrypt` through them, 20.22.5); every
+  other object verb answers `PDE_RANGE`, as on a closed document. `RAW_COPY`
+  tests its mode's LOW byte, so crypt's `PDRC_STRCIPHER` in the high byte
+  of an answer fed back is harmless.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
@@ -5429,7 +5707,257 @@ still hold the plain paths byte for byte.
 
 #### 20.22.5 Encryption (`crypt`)
 
-*Reserved; written by its agent before its code.*
+Owner decisions O3 (the empty user password silently, a prompt otherwise; RC4-40,
+RC4-128, AES-128, AES-256) and O5 (`/P` is ignored: every action is allowed once
+the file opens, and a save keeps the source's `/P` and `/Encrypt`) bind this
+section. AP-04 is the story; AP-05 (the R6 question) takes `PDV_KEY_COST` from
+here and builds its sentence in 20.22.6. The lead's decision of 23:30 (the
+restructure that made PDENG's share fit) is built in. Numbers are measured:
+20.22.5.1.
+
+**What runs where (L1).**
+
+| where | what | why there |
+|---|---|---|
+| PDENG (`pdecrypt.c`; `pdcmd5.inc` `pdcrc4.inc` `pdcaes.inc`) | the per-object key (MD5), RC4, AES-CBC **decryption**, of a stream's raw bytes and of a string lexed from the file; `PDV_ENG_SETKEY`; a minimal `PDV_ENG_CRYPTINFO` | a stream is read while a page is drawn, when the one slot may hold a codec |
+| PDXK (`pdxk.asm`, `pdxk.c`, `pdcsum.c`, `pdcsha2.inc`, the same MD5/RC4/AES sources) | reading `/Encrypt` through PDENG's `DICT_GET`; algorithms 2, 4, 5, 6, 7 (R2 to R4) and 2.A, 2.B (R5, R6); the file key from `/UE` `/OE`; the cost estimate | at open only, and large (SHA-2, AES encryption) |
+| PDWRT | encrypting what a save writes | **by the shared source**: PDWRT includes `pdcrypto.h`, `pdcmd5.inc`, `pdcrc4.inc` and `pdcaes.inc` WITHOUT `PDC_NOENC` (the encrypting half). `PDV_ENG_CRYPT` is withdrawn (decision 23:30). Per-object key: `pdc_okey(key, klen, num, gen, aes)` leaves the 16-byte MD5 in `pdc_ok`; the key is its first `min(klen + 5, 16)` bytes (AESV2 passes `aes = 1`, which appends `sAlT`; AESV3 uses the file key as it is). `pdc_aes_ks(rk, key, 4 or 8)` then `pdc_cbc_enc(rk, 10 or 14, iv, buf, nblocks)` (the caller writes the 16-byte IV first and pads to PKCS#5); `pdc_rc4_ks` / `pdc_rc4` for RC4. All take NEAR buffers; the host twin is `pdctwin.c` |
+
+**The library** (`apps/pagedesk/pdcrypto.h` is its declaration and layouts). Every
+primitive has an 8086 body (SmallerC cdecl, near pointers, `cpu 8086`) and a HOST
+twin in `pdctwin.c` written from the standards with the compiler's own 32- and
+64-bit integers. `tests/pdcrypt/pdc_diff.py` holds the twin and the shipping
+assembly (in Unicorn) to RFC 1321, FIPS 180-4 (SHA-256 including the million-`a`
+message, SHA-384, SHA-512), FIPS 197, SP 800-38A F.2 and the RC4 vectors
+(RFC 6229 offset 0 among them), then to each other on random keys and lengths
+(240 agreements), with a negative control (one flipped bit in AES must be
+caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
+
+| primitive | assembly | body, bytes |
+|---|---|---|
+| MD5 block, the per-object key block | `pdcmd5.inc` | 822 with its constants |
+| RC4 key schedule and stream | `pdcrc4.inc` | 171 |
+| AES key expansion (128 and 256), decryption (table-driven), CBC, the decryption schedule | `pdcaes.inc` | about 1,900 with the S-box and its inverse (512); `Td0` 1,024 bytes in the cipher area |
+| AES encryption, CBC encryption | `pdcaes.inc` (not under `PDC_NOENC`) | 189 |
+| SHA-256 and SHA-512 blocks | `pdcsha2.inc` | 3,636 with the constants (896) |
+
+**PDXK** (`PDM_MAGIC_KEY`, the door at +8 as `pdwrt.asm`; image + bss at most
+32,768, no workspace). Verbs; CF = 1 on a failure.
+
+* `PDV_X_INIT` 0xC0 stores the XB segment, PDENG's door (`eng_off/eng_seg`) and
+  `cpu`.
+* `PDV_KEY_PARAMS` 0xC3: XB = `pdxb_crypt` out. The file's `/Encrypt` parameters
+  (`v r length p stm str eff encmeta o_len u_len o u oe ue perms id0 id0_len`),
+  no password tried. Read with PDENG: `PDV_ENG_CRYPTINFO` gives the whole
+  `/ID[0]`, `PDV_ENG_TRAILER` says where the dictionary is (`encrypt_num/gen`,
+  or `PDTR_ENCDIRECT` in `tflags`: eng's fields, 20.22.3.4); then one
+  `PDV_ENG_DICT_GET` a key: `/Filter` must be `/Standard`,
+  `/V` in {1, 2, 4, 5}, `/R` in 2 to 6, `/Length`, `/P`, `/O` `/U`
+  (the first 48 bytes), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4
+  and V5 `/StmF` `/StrF` and `/CF/<name>/CFM` (`/V2` RC4, `/AESV2`, `/AESV3`,
+  `/None`, `/Identity`) and `/CF/<name>/Length`. Anything else is
+  `PDE_ENCRYPT`. Limits of reading through `DICT_GET`: a **direct** `/Encrypt`
+  with V4 or V5 is `PDE_ENCRYPT` (the path to `CFM` is four keys; nothing
+  writes one), and `/P` is the 16.16 integer `DICT_GET` returns, so a `/P`
+  outside plus or minus 32,767 is `PDE_ENCRYPT` on R2 to R4 (where it enters the
+  key) and ignored on R5 and R6. `eff` is `stm` (embedded files follow the
+  stream filter).
+* `PDV_KEY_AUTH` 0xC1: XB = `pdxb_crypt` in/out. `state` 0 starts: when `v` is 0
+  the parameters are read as above (the caller need fill only `pw_len` and
+  `pw`). Then the USER password, then the OWNER password. R2 to R4 are one call
+  (about a second on an 8088). R5 and R6 are resumable: `AX = PDE_BUSY` (CF = 0)
+  with `progress` 0 to 1000 of the run in hand (`state` is nonzero while busy);
+  the caller calls again, and cancels by not calling. One call is a slice of
+  about 40 work units (an AES block is 1, a SHA-256 block 4, a SHA-512 block 14:
+  about 0.6 s on an 8088, 20 ms on a 386). The module must stay loaded between
+  the calls (the primary does not swap the slot during a job); a call whose
+  `state` is nonzero after a reload restarts from the beginning. Success:
+  `AX = PDE_OK`, `key` and `key_len` (5 to 16, or 32), `auth` = `PDCA_USER` or
+  `PDCA_OWNER`, and the password copy is wiped. A wrong password: CF = 1,
+  `PDE_PASSWORD`. **The silent attempt (`pw_len` 0) on R6 tries the user key
+  only**: the owner key costs another 1.7 runs (20.22.5.1) and an empty owner
+  password with a non-empty user password is not a thing any writer makes.
+* `PDV_KEY_COST` 0xC2: XB = `pdxb_crypt` in (an empty struct is read from the
+  file first and returned filled, so the caller learns `r`, the methods and
+  `length` from this one call), `pw_len`. `AX` = the estimated seconds of **one
+  run of algorithm 2.B** on this CPU class (`pdxb_init.cpu`: 8086 as measured,
+  286 a sixth, 386 a 24th, later a 60th); 0 for R2 to R5 (about a second, not
+  worth a question). A call whose parameters cannot be read answers CF = 1.
+  The caller multiplies by the runs: a correct **user** password is 2 runs (the
+  check, then the key salt), a wrong one 1 (the silent attempt) or 2.7 (a typed
+  password, which tries the owner key as well).
+
+**PDENG.**
+
+* `PDV_ENG_CRYPTINFO` 0x13 (from the moment OPEN has read the cross-reference):
+  `pdxb_crypt` out, with `state` 1 when a key is set, then what `SETKEY` set
+  (`auth`, `key_len`, `key`, `stm`, `str`, `eff`, `encmeta`) and the whole
+  `/ID[0]` (`id0`, `id0_len` at most 32) always; `v`, `r` and the strings stay
+  0 (PDXK reads those). The plat pre-flight for Insert reads a foreign file's
+  key and methods here.
+* `PDV_ENG_SETKEY` 0x14: XB = `pdxb_crypt` in (`key`, `key_len`, `stm`, `str`,
+  `eff`, `encmeta`, `auth`). The XB's copy of the key is zeroed. `OPEN` then
+  resumes from its state 7 and `PDO_ENCRYPTED` is set. `OPEN` answers
+  `PDE_PASSWORD` (CF = 1) at state 7 without discarding the document, and
+  **`DICT_GET` and `TRAILER` are allowed in that pause** so PDXK can read the
+  dictionary.
+  Closing, re-INIT or a new OPEN forgets the key.
+* `PDV_ENG_CRYPT` is **withdrawn**.
+
+Where decryption sits (and nowhere else):
+
+| place | what is decrypted |
+|---|---|
+| `pdestrm.c` `raw_get`, `st_decode`'s `nflt == 0` branch, `v_strm_read`'s `nflt == 0` branch (each one `if (c->cmode)` call of `cr_read`) | the raw bytes of a stream, at the lowest layer, so every filter, Flate included, sits above plaintext. An AES stream is its 16-byte IV and blocks; the padding is stripped from the last block, which the stream's `/Length` identifies, so nothing is held back; a length that is not a multiple of 16 loses the tail, a padding byte outside 1 to 16 is left alone, a stream under 32 bytes is empty |
+| `pdelex.c` `ob_value`'s `PDT_STR` case (`cr_string`) | a string lexed from the FILE in object mode: its first 254 bytes (the rest of a longer string stays ciphertext; the true length is adjusted). Never the `/Encrypt` dictionary's own strings (`cr_curn` equals `tr_enc_n`), the trailer's (`cr_curn` 0), or a member of an object stream (eng sets `cr_curn` to 0 while the lexer is in one: the object stream is what was encrypted) |
+| `st_push` (`cr_ctx_open`) | the caller leaves the stream's object in `cr_sn/cr_sg` (0 = not encrypted: an xref stream, or a caller that did not say; `v_strm_open` sets them, and eng sets them for an object stream); the key is derived there |
+
+A stream is left as it is when it is an xref stream (`/Type /XRef`), a
+`/Metadata` stream with `/EncryptMetadata` false, or its chain names `/Filter
+/Crypt` with `/DecodeParms << /Name /Identity >>` (or no name); `/Crypt` is a
+chain member that costs no stage. A stream declared `declen` is unknown (~0)
+when it is AES. Limits: at most `PDE_RC4N` = 3 RC4 streams open at once
+(`PDE_LIMIT` otherwise: their state is 258 bytes each); strings and streams
+under different methods work (`/StmF` and `/StrF`).
+
+**`RAW_COPY` with `PDRC_PLAIN` on an encrypted document** (the lead's decision of
+00:00, option 2; eng's hook `cr_raw_plain(rw)` for an object in no object
+stream, called after `ob_extent`; any answer but `PDE_NOTFOUND` is the verb's
+own). The **dictionary's strings stay ciphertext**: the answer sets
+`PDRC_STRCIPHER` (0x0100) in the HIGH byte of `pdxb_rawcopy.mode`, meaning "the
+strings of object `objnum`, `gen` are encrypted under that object's key with
+the document's string method (`pdxb_crypt.str` of CRYPTINFO)": the caller
+decrypts them with the shared source (`pdc_okey`, then `pdc_cbc_dec` after
+`pdc_aes_ks`, or `pdc_rc4`), PDWRT as it tokenises. The flag is not set for the
+`/Encrypt` dictionary's own object; it is set for every other non-member object
+of an encrypted document (a member of an object stream has plaintext strings and
+no flag). **eng's dispatcher must compare `(mode & 0xFF) == PDRC_PLAIN`**, because
+a caller feeds the struct back with the flag in it. A STREAM whose data the
+document encrypts comes out as: the file's bytes of the object up to `/Length`'s
+key, ` <plain length>` (a direct integer, whether `/Length` was one or a
+reference), the file's bytes to the end of `stream` and its EOL, the DECRYPTED
+data (still in its filters), then `\nendstream\nendobj\n`. The plain length is
+`/Length` for RC4 and, for AES, `/Length` less the 16-byte IV, the bytes past the
+last whole block, and the last block's padding (read from the last two cipher
+blocks before the first byte is delivered). Anything else (a dictionary or
+array, an xref stream, a `/Crypt /Identity` stream, an unencrypted `/Metadata`)
+is the file's bytes: `PDE_NOTFOUND` to eng's own copy. `done` and `got` address
+the synthesised text, the same bytes on every call at any chunking; the DATA is
+sequential (the first byte of it, `done` = the header's length, restarts the
+cipher; a `done` that skips back into the data is `PDE_RANGE`), through a ctx
+borrowed above `nctx`, which a `STRM_OPEN` in between invalidates. The header
+must be under 64 KiB. `tests/pdcrypt/pdc_plain.py` holds it to `qpdf
+--decrypt` for the 17 fixtures at chunks of 1, 37 and 4,096 bytes.
+
+**Sizes** (image + bss, bytes). PDENG 43,964 + 11,827 = 55,791, which is +8,639
+over the round's start (47,152; the brief said +3,200 and the lead's 23:30
+decision +6,500): the assembly 2,242, the C (`cr_read` `cr_ctx_open` `cr_string`
+`cr_sched` `cr_skipchk` `SETKEY` `CRYPTINFO`) and the hooks in eng's files about
+3,000, PLAIN 1,734, bss 1,590 (three RC4 states 774, the AES schedule 240, the
+`sctx` fields 160, the key 32, PLAIN's 76). PLAIN was estimated at 250 bytes; the
+32-bit offset arithmetic through `pdm_u32_*` is what makes it 1.7 KB. PDXK 14,958 + 4,391 = 19,349 of 32,768.
+
+**Stacks.** PDENG's chain through `cr_read` is no deeper than `v_open`'s (436
+bytes, `os88pdstk`). PDXK measured by `tests/pdcrypt/pdk_stack.py`: 226 (RC4),
+256 (AES-128), 264 (R6, three slices, the nested `DICT_GET` and SHA-512)
+bytes below the door's entry, of 1,776. Far edge to name in `os88pdstk.py`:
+`_pdk_engcall` to PDENG's `pde_entry`.
+
+**Checks.** `make pdcrypt` (host and Unicorn; not in `all`): `pdc_diff.py`
+(the library), `pdc_e2e.py` (the real PDENG and PDXK on the host against `qpdf`:
+the file key equals `qpdf --show-encryption-key` for 17 fixtures
+(`tests/pdfany/crypt/`, `tools/os88pdfx_crypt.py`), for the owner password too,
+a wrong password and the empty one on a file that has a password are
+`PDE_PASSWORD`, and every stream's CRC, every string, annotation and outline
+title equals the same driver's over `qpdf --decrypt`), `pdc_plain.py` (RAW_COPY PLAIN against qpdf), `pdc_target.py` (the
+**compiled** `PDENG.MOD` and `PDXK.MOD` in Unicorn, kernel stub and all,
+produce the same lines as the host, PLAIN copies and a full R6 run included), `pdk_stack.py`, and
+`pdc_fuzz.py` (ASan/UBSan over mutated copies of every fixture: bit flips, runs
+of 00 and FF, a lying `/Length`, a cut tail, ciphertext cut to 0 to 40 bytes, a
+corrupted `/O`; about 22,000 runs over three seeds, no crash, no hang, no report).
+
+#### 20.22.5.1 R6 cost, measured
+
+Algorithm 2.B: `K = SHA-256(pw || salt || udata)`, then at least 64 rounds, each
+`K1 = (pw || K || udata) x 64` encrypted with AES-128-CBC under `K[0:16]`, `IV =
+K[16:32]`, and `K = SHA-256, SHA-384 or SHA-512(E)` by the sum of `E`'s first 16
+bytes mod 3, until `E`'s last byte is no more than the round number minus 32.
+Counted by running it (`pdk_cycles.py`, the host twin standing in for the data),
+priced from the shipping assembly run in Unicorn with the 8088 rule
+`max(4.34 x instruction bytes, clocks)` of `tests/pdmath/pdcycles.py`, and
+checked against the real `PDXK.MOD` (three of its own slices, instruction by
+instruction: the glue and the hash finalisation add **6.2 %** to the operations
+priced alone, and that factor is in every figure below).
+
+| operation on an 8088 | clocks | ms |
+|---|---|---|
+| AES-128 CBC encrypt, one block | 61,100 | 12.8 |
+| AES-128 key schedule | 23,200 | 4.9 |
+| SHA-256 block (64 bytes) | 204,400 | 42.8 |
+| SHA-512 block (128 bytes) | 790,100 | 165.6 |
+| MD5 block | 98,200 | 20.6 |
+| AES-128 / AES-256 decrypt, one block | 74,900 / 105,200 | 15.7 / 22.0 |
+| RC4, per byte | 203 | 0.043 |
+
+One run of 2.B, mean over 60 random salts (rounds are 69 to 71 on average, 64 at
+least):
+
+| password | rounds | AES blocks | SHA-256 blocks | SHA-384/512 blocks | seconds (min to max) |
+|---|---|---|---|---|---|
+| empty | 69.8 | 13,350 | 1,142 | 1,156 | **437** (355 to 557) |
+| 6 characters | 69.9 | 15,021 | 1,307 | 1,282 | 490 (425 to 623) |
+| 12 characters | 69.0 | 16,445 | 1,449 | 1,389 | 534 (455 to 652) |
+| 24 characters | 71.2 | 20,452 | 1,733 | 1,750 | 665 (560 to 821) |
+
+That is `9.1 x (password + 48)` seconds, the formula in `PDV_KEY_COST`
+(`pdk_cycles.py --stats`). A run is a **seventh of an hour for the empty
+password**; the attempts are runs: a correct user password is **two** (the check
+and the key salt: 14.6 minutes for the empty one, 13 to 15 on a file's own
+salts), a wrong password typed in is 2.7 (the user key, then the owner key, whose
+`udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 22 to 24
+minutes),
+and the silent empty attempt on a file that has a user password is 1 (7.3
+minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
+therefore "about 15 minutes" for a file that opens, and the prompt that follows a
+failed silent attempt another 15. On a 286 (a sixth) it is 2.5 and on a 386 well
+under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
+`DICT_GET` included): R2 0.17 s, R3 and R4 1.8 s (50 MD5 passes and 20 RC4
+passes), a wrong password on R3 5.1 s (the owner key as well).
+
+**Stream decryption speed on an 8088** (the cost of a page that is encrypted,
+not of opening it): RC4 22.9 KB/s; AES-128 CBC **3.4 KB/s** and AES-256 2.6 KB/s,
+from 1.0 and 0.7 (a 30 KB content stream is nine seconds, not half a minute).
+`pdcaes.inc` decrypts with the equivalent inverse cipher (FIPS 197 5.3.5): a
+round is sixteen lookups in `Td0`, a 1 KiB table of 256 entries of four bytes
+(14, 9, 13, 11 times the inverse S-box), kept as a plane of low words and a
+plane of high words. `Td2` is the same planes read the other way round; `Td1` and
+`Td3` take their bytes across the planes (`-DPDC_TD1` adds a second table
+for them: 4.1 KB/s for 1 KiB more). The schedule is made once per object by
+`pdc_aes_ks`, then `pdc_aes_dks(rk, nr)` turns it in place into the decryption
+schedule (InvMixColumns of rounds 1 to nr-1, through the same table: 18,000
+clocks); **`pdc_aes_dec` and `pdc_cbc_dec` need that schedule**, so a caller that
+decrypts calls `ks` and then `dks`, and never encrypts with the result.
+`pdc_cbc_dec` goes from the last block to the first (the previous ciphertext is
+still in the buffer), so no block is copied for the chain. The table is built at
+the first `dks` (`pdc_aes_tdnew` makes the next one rebuild it), 113,000 clocks
+with the schedule. Measured by `pdc_far.py --cycles` under Unicorn with the
+8088 costing rule of `pdc_diff.py`.
+
+**Where the cipher state lives (PDENG).** `PDC_FARST`: the key schedule (240
+bytes), `Td0` (1,024) and the RC4 states (`PDE_RC4N + 2` of 258: the open
+streams, the object-stream window's and a string's) are not in PDENG's image or
+bss. They are the first 2,560 bytes of the arena (`Td0` at 0, the schedule at
+1,024, the states from 1,264): `PDV_ENG_SETKEY` moves `arena_top` past them, and
+the cipher routines reach them through ES, which they load from `pdc_cseg` and
+restore (an `es:` prefix on each state access: RC4 22.9 KB/s, AES-128 3.4 against
+3.6 near). The arena has to hold the 8 KiB of visited bits of the page walk
+**and** this area, so a SETKEY into an arena of less than **11 KiB** answers
+`PDE_NOMEM`: plat claims 11 KiB (`pdu_dckb`, the arena row of 16.2) in place of
+8. Without `PDC_FARST` (PDXK, PDWRT, the host harness) the same routines take
+near pointers. `pdc_far.py` holds the far build to the host twin (120
+agreements, ES checked on every call); `pdc_diff.py` holds the near one.
+PDENG with it: image 53,990 + bss 10,270 = 64,260 bytes in the merged tree
+(66,752 with the same code and the state in bss).
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 

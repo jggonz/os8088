@@ -6,16 +6,35 @@
 ; _pdc_aes_dec(rk, nr, in, out)
 ; _pdc_cbc_enc(rk, nr, iv, buf, nblk)   in place; iv is left = the last ciphertext block
 ; _pdc_cbc_dec(rk, nr, iv, buf, nblk)
+; _pdc_aes_dks(rk, nr)                  rk from _pdc_aes_ks -> the DECRYPTION schedule, in place (the equivalent
+;                                       inverse cipher, FIPS 197 5.3.5). _pdc_aes_dec and _pdc_cbc_dec need
+;                                       it; call it once per schedule, and never encrypt with the result
 ; nr = nk + 6. SmallerC cdecl, near pointers into DS; AX BX CX DX lost, BP SI DI
 ; DS ES SS:SP DF kept. PDC_NOENC (PDENG) leaves the encrypting half out. The C twin is pdctwin.c. The state lives in four bytes
 ; of bss (aes_b, aes_t, aes_c); the S-box and its inverse are the only tables
-; (512 bytes); InvMixColumns is MixColumns after the {04}/{05} pre-step.
+; (512 bytes) and, for decryption, Td0 (1 KiB; PDC_TD1 adds Td1, another 1 KiB and about 3.5 -> 4.1 KB/s) in bss (aes_td, filled on first use).
 ; =============================================================================
 %ifndef PDCAES_INC
 %define PDCAES_INC 1
 cpu 8086
 
+%ifdef PDC_FARST                    ; PDENG: the schedule, Td0 and the RC4 states live in a far area (the arena), ES = _pdc_cseg
+%ifndef PDC_NOENC
+%error "PDC_FARST is the decrypting half only"
+%endif
+%define RKP es:
+%define RKB es:
+%else
+%define RKP
+%define RKB ds:
+%endif
 section .bss
+%ifdef PDC_FARST
+%ifndef PDC_CSEG_DEF
+%define PDC_CSEG_DEF 1
+_pdc_cseg: resw 1
+%endif
+%endif
 aes_b:   resb 16
 aes_t:   resb 16
 aes_c:   resb 16
@@ -27,6 +46,16 @@ aes_k:   resw 1
 aes_i:   resw 1
 aes_tot: resw 1
 aes_rcon: resb 1
+aes_tdok: resb 1
+%ifdef PDC_FARST
+aes_td   equ 0                      ; Td0 at offset 0 of the far area; _pdc_aes_tdnew rebuilds it on the next dks
+%else
+%ifdef PDC_TD1
+aes_td:  resb 2048                  ; Td0 and Td1 as word planes, built on first use: low words +2x, high words +512+2x, then +1024 for Td1
+%else
+aes_td:  resb 1024                  ; Td0 as two word planes, built on first use: low words +2x, high words +512+2x
+%endif
+%endif
 section .text
 
 %macro AES_XT 0                     ; AL = xtime(AL); AH lost
@@ -36,22 +65,42 @@ section .text
     xor al, ah
 %endmacro
 
-aes_cp16:                           ; SI -> DI, 16 bytes; AX CX lost
+%ifdef PDC_FARST
+%macro AES_ES 0                     ; ES = the cipher area
+    push es
+    mov es, [_pdc_cseg]
+%endmacro
+aes_cp16:                           ; SI -> DI, 16 bytes in DS; CX lost
+    push es
+    push ds
+    pop es
     mov cx, 8
-.l: mov ax, [si]
-    mov [di], ax
-    inc si
-    inc si
-    inc di
-    inc di
-    loop .l
+    rep movsw
+    pop es
     ret
+_pdc_aes_tdnew:
+    mov byte [aes_tdok], 0
+    ret
+%else
+%macro AES_ES 0                     ; the string moves below copy DS to DS: ES is borrowed (the callers restore it)
+    push es
+    push ds
+    pop es
+%endmacro
+aes_cp16:                           ; SI -> DI, 16 bytes (ES = DS, DF clear); CX lost
+    mov cx, 8
+    rep movsw
+    ret
+_pdc_aes_tdnew:
+    mov byte [aes_tdok], 0
+    ret
+%endif
 
 aes_ark:                            ; aes_b ^= the 16 bytes at BX; AX CX SI lost
     mov si, aes_b
     mov cx, 8
 .l: mov ax, [si]
-    xor ax, [bx]
+    xor ax, [RKP bx]
     mov [si], ax
     inc si
     inc si
@@ -60,6 +109,7 @@ aes_ark:                            ; aes_b ^= the 16 bytes at BX; AX CX SI lost
     loop .l
     ret
 
+%ifndef PDC_NOENC
 ; aes_perm: aes_b = sub[ aes_b[ perm[k] ] ]; SI = perm table, DX = sub table
 aes_perm:
     mov di, aes_t
@@ -117,35 +167,6 @@ aes_mix:                            ; MixColumns in place on aes_b
     jnz .c
     ret
 
-aes_imix:                           ; the pre-step of InvMixColumns, in place on aes_b
-    mov si, aes_b
-    mov di, 4
-.c: mov bl, [si]
-    mov bh, [si+1]
-    mov cl, [si+2]
-    mov ch, [si+3]
-    mov al, bl
-    xor al, cl
-    AES_XT
-    AES_XT
-    xor bl, al
-    xor cl, al
-    mov al, bh
-    xor al, ch
-    AES_XT
-    AES_XT
-    xor bh, al
-    xor ch, al
-    mov [si], bl
-    mov [si+1], bh
-    mov [si+2], cl
-    mov [si+3], ch
-    add si, 4
-    dec di
-    jnz .c
-    ret
-
-%ifndef PDC_NOENC
 aes_encb:                           ; aes_b = E(aes_b)
     mov bx, [aes_rkp]
     call aes_ark
@@ -171,30 +192,194 @@ aes_encb:                           ; aes_b = E(aes_b)
     ret
 
 %endif
-aes_decb:                           ; aes_b = D(aes_b)
+; ---- decryption: the equivalent inverse cipher over two 1 KiB tables ----------------------------------
+; Td0[x] = (14 s, 9 s, 13 s, 11 s) for s = InvSbox[x], bytes b0..b3 = rows 0..3, and Td1[x] = (b3, b0, b1, b2).
+; Td2 and Td3 are those with their words swapped, so they are read from the same planes the other way round.
+; A round is 16 lookups; the key added is the schedule _pdc_aes_dks made.
+%define AES_T0L aes_td
+%define AES_T0H aes_td + 512
+%define AES_T1L aes_td + 1024
+%define AES_T1H aes_td + 1536
+
+%macro TDX 2                        ; ax:dx ^= Td<%1>[x] (mov, not xor, when %2 = 1); BX = 2x
+ %if %2 = 1
+  %define TDOP mov
+ %else
+  %define TDOP xor
+ %endif
+ %if %1 = 0
+    TDOP ax, [RKP bx + AES_T0L]
+    TDOP dx, [RKP bx + AES_T0H]
+ %elif %1 = 2
+    TDOP ax, [RKP bx + AES_T0H]
+    TDOP dx, [RKP bx + AES_T0L]
+ %elifdef PDC_TD1
+  %if %1 = 1
+    TDOP ax, [RKP bx + AES_T1L]
+    TDOP dx, [RKP bx + AES_T1H]
+  %else
+    TDOP ax, [RKP bx + AES_T1H]
+    TDOP dx, [RKP bx + AES_T1L]
+  %endif
+ %elif %1 = 1                       ; Td1 from Td0's bytes: (b3, b0, b1, b2)
+    xor al, [RKP bx + AES_T0H + 1]
+    xor ah, [RKP bx + AES_T0L]
+    xor dl, [RKP bx + AES_T0L + 1]
+    xor dh, [RKP bx + AES_T0H]
+ %else                              ; Td3 = (b1, b2, b3, b0)
+    xor al, [RKP bx + AES_T0L + 1]
+    xor ah, [RKP bx + AES_T0H]
+    xor dl, [RKP bx + AES_T0H + 1]
+    xor dh, [RKP bx + AES_T0L]
+ %endif
+ %undef TDOP
+%endmacro
+
+%macro TDIDX 3                      ; BX = 2 * byte [si + %1]; ax:dx ^= Td<%2>[it] (a mov when %3 = 1)
+    mov bl, [si + %1]
+    xor bh, bh
+    shl bx, 1
+    TDX %2, %3
+%endmacro
+
+%macro TDCOL 5                      ; column %1 (its four source offsets %2..%5) -> [di + 4 * %1], key at [bp + 4 * %1]
+    TDIDX %2, 0, 1
+    TDIDX %3, 1, 0
+    TDIDX %4, 2, 0
+    TDIDX %5, 3, 0
+    xor ax, [RKB bp + 4 * %1]
+    xor dx, [RKB bp + 4 * %1 + 2]
+    mov [di + 4 * %1], ax
+    mov [di + 4 * %1 + 2], dx
+%endmacro
+
+aes_tdinit:                         ; fill the table once; AX BX CX DX SI DI lost
+    cmp byte [aes_tdok], 0
+    jne .done
+    mov byte [aes_tdok], 1
+    xor bx, bx
+.x: mov al, [bx + aes_isbox]
+    mov dh, al                      ; s
+    AES_XT
+    mov cl, al                      ; 2s
+    AES_XT
+    mov ch, al                      ; 4s
+    AES_XT
+    mov dl, al                      ; 8s
+    mov al, dl
+    xor al, ch
+    xor al, cl                      ; 14 s
+    mov ah, dl
+    xor ah, dh                      ; 9 s
+    mov di, bx
+    shl di, 1
+    mov [RKP di + AES_T0L], ax
+    mov al, dl
+    xor al, ch
+    xor al, dh                      ; 13 s
+    mov ah, dl
+    xor ah, cl
+    xor ah, dh                      ; 11 s
+    mov [RKP di + AES_T0H], ax
+%ifdef PDC_TD1
+    mov al, [RKP di + AES_T0H + 1]      ; Td1 = (b3, b0, b1, b2)
+    mov ah, [RKP di + AES_T0L]
+    mov [RKP di + AES_T1L], ax
+    mov al, [RKP di + AES_T0L + 1]
+    mov ah, [RKP di + AES_T0H]
+    mov [RKP di + AES_T1H], ax
+%endif
+    inc bx
+    cmp bx, 256
+    jb .x
+.done:
+    ret
+
+aes_decb:                           ; aes_b = D(aes_b), with the decryption schedule
+    push bp
     mov ax, [aes_nr]
     mov [aes_r], ax
     mov cl, 4
     shl ax, cl
     mov bx, [aes_rkp]
     add bx, ax
+    mov bp, bx
     call aes_ark
-.r: dec word [aes_r]
+    sub bp, 16                      ; round nr-1's key
+    mov si, aes_b
+    mov di, aes_t
+    dec word [aes_r]                ; nr-1 rounds
+.r: TDCOL 0, 0, 13, 10, 7
+    TDCOL 1, 4, 1, 14, 11
+    TDCOL 2, 8, 5, 2, 15
+    TDCOL 3, 12, 9, 6, 3
+    sub bp, 16
+    xchg si, di
+    dec word [aes_r]
+    jz .fin
+    jmp .r
+.fin:                               ; SI = where the last round wrote: InvShiftRows, InvSubBytes, rk[0]
+    mov bx, si
     mov si, aes_ishift
     mov dx, aes_isbox
-    call aes_perm
-    mov ax, [aes_r]
-    mov cl, 4
-    shl ax, cl
+    mov di, aes_b
+    mov cx, 16
+.l: lodsb
+    xlat
+    xchg bx, dx
+    xlat
+    xchg bx, dx
+    mov [di], al                    ; (ES is the kernel's: no stosb)
+    inc di
+    loop .l
     mov bx, [aes_rkp]
-    add bx, ax
-    call aes_ark
-    cmp word [aes_r], 0
-    je .done
-    call aes_imix
-    call aes_mix
-    jmp .r
-.done:
+    pop bp
+    jmp aes_ark
+
+; _pdc_aes_dks(rk, nr)
+_pdc_aes_dks:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    AES_ES
+    call aes_tdinit
+    mov si, [bp+4]
+    add si, 16
+    mov cx, [bp+6]
+    dec cx
+    shl cx, 1
+    shl cx, 1                       ; 4 * (nr-1) words
+.w: xor ax, ax
+    xor dx, dx
+    mov bl, [RKP si]
+    xor bh, bh
+    mov bl, [bx + aes_sbox]
+    shl bx, 1
+    TDX 0, 0
+    mov bl, [RKP si+1]
+    xor bh, bh
+    mov bl, [bx + aes_sbox]
+    shl bx, 1
+    TDX 1, 0
+    mov bl, [RKP si+2]
+    xor bh, bh
+    mov bl, [bx + aes_sbox]
+    shl bx, 1
+    TDX 2, 0
+    mov bl, [RKP si+3]
+    xor bh, bh
+    mov bl, [bx + aes_sbox]
+    shl bx, 1
+    TDX 3, 0
+    mov [RKP si], ax
+    mov [RKP si+2], dx
+    add si, 4
+    loop .w
+    pop es
+    pop di
+    pop si
+    pop bp
     ret
 
 %ifndef PDC_NOENC
@@ -203,6 +388,7 @@ _pdc_aes_enc:
     mov bp, sp
     push si
     push di
+    AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
     mov ax, [bp+6]
@@ -214,6 +400,7 @@ _pdc_aes_enc:
     mov si, aes_b
     mov di, [bp+10]
     call aes_cp16
+    pop es
     pop di
     pop si
     pop bp
@@ -225,6 +412,7 @@ _pdc_aes_dec:
     mov bp, sp
     push si
     push di
+    AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
     mov ax, [bp+6]
@@ -236,6 +424,7 @@ _pdc_aes_dec:
     mov si, aes_b
     mov di, [bp+10]
     call aes_cp16
+    pop es
     pop di
     pop si
     pop bp
@@ -248,6 +437,7 @@ _pdc_cbc_enc:
     mov bp, sp
     push si
     push di
+    AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
     mov ax, [bp+6]
@@ -280,6 +470,7 @@ _pdc_cbc_enc:
     dec word [bp+12]
     jmp .blk
 .done:
+    pop es
     pop di
     pop si
     pop bp
@@ -291,41 +482,61 @@ _pdc_cbc_dec:
     mov bp, sp
     push si
     push di
+    AES_ES
     mov ax, [bp+4]
     mov [aes_rkp], ax
     mov ax, [bp+6]
     mov [aes_nr], ax
-.blk:
-    cmp word [bp+12], 0
-    je .done
-    mov si, [bp+10]
+    mov cx, [bp+12]                 ; nblk
+    or cx, cx
+    jz .done
+    mov ax, cx                      ; the last ciphertext block becomes the next iv
+    mov cl, 4
+    shl ax, cl
+    add ax, [bp+10]
+    sub ax, 16
+    mov si, ax
     mov di, aes_c
-    call aes_cp16                   ; the ciphertext, kept for the chain
-    mov si, aes_c
+    call aes_cp16
+    ; the blocks go from the LAST to the first: P(i) = D(C(i)) ^ C(i-1), and C(i-1) is still in the buffer
+.blk:
+    mov ax, [bp+12]
+    dec ax
+    mov cl, 4
+    shl ax, cl
+    add ax, [bp+10]                 ; this block
+    mov si, ax
     mov di, aes_b
     call aes_cp16
     call aes_decb
-    mov si, aes_b
-    mov bx, [bp+8]
-    mov di, [bp+10]
+    mov ax, [bp+12]
+    dec ax
+    mov cl, 4
+    shl ax, cl
+    add ax, [bp+10]
+    mov di, ax
+    mov bx, [bp+8]                  ; the previous ciphertext: the iv for block 0
+    cmp word [bp+12], 1
+    je .x
+    lea bx, [di-16]
+.x: mov si, aes_b
     mov cx, 8
-.x: mov ax, [si]
+.xl:
+    lodsw
     xor ax, [bx]
+    inc bx
+    inc bx
     mov [di], ax
-    inc si
-    inc si
-    inc bx
-    inc bx
     inc di
     inc di
-    loop .x
+    loop .xl
+    dec word [bp+12]
+    jnz .blk
     mov si, aes_c
     mov di, [bp+8]
-    call aes_cp16
-    add word [bp+10], 16
-    dec word [bp+12]
-    jmp .blk
+    call aes_cp16                   ; iv = the last ciphertext block
 .done:
+    pop es
     pop di
     pop si
     pop bp
@@ -353,6 +564,7 @@ _pdc_aes_ks:
     mov bp, sp
     push si
     push di
+    AES_ES
     mov di, [bp+4]                  ; rk
     mov si, [bp+6]                  ; key
     mov ax, [bp+8]
@@ -362,7 +574,7 @@ _pdc_aes_ks:
     shl cx, 1
 .cp:
     mov al, [si]
-    mov [di], al
+    mov [RKP di], al
     inc si
     inc di
     loop .cp                        ; DI = word nk
@@ -376,10 +588,10 @@ _pdc_aes_ks:
     mov [aes_i], ax
     mov word [aes_k], 0
     mov byte [aes_rcon], 1
-.w: mov dl, [di-4]
-    mov dh, [di-3]
-    mov cl, [di-2]
-    mov ch, [di-1]
+.w: mov dl, [RKP di-4]
+    mov dh, [RKP di-3]
+    mov cl, [RKP di-2]
+    mov ch, [RKP di-1]
     mov ax, [aes_k]
     or ax, ax
     jnz .nz
@@ -401,17 +613,17 @@ _pdc_aes_ks:
     jne .x
     AES_SUB4
 .x: mov al, dl
-    xor al, [si]
-    mov [di], al
+    xor al, [RKP si]
+    mov [RKP di], al
     mov al, dh
-    xor al, [si+1]
-    mov [di+1], al
+    xor al, [RKP si+1]
+    mov [RKP di+1], al
     mov al, cl
-    xor al, [si+2]
-    mov [di+2], al
+    xor al, [RKP si+2]
+    mov [RKP di+2], al
     mov al, ch
-    xor al, [si+3]
-    mov [di+3], al
+    xor al, [RKP si+3]
+    mov [RKP di+3], al
     add si, 4
     add di, 4
     inc word [aes_k]
@@ -426,6 +638,7 @@ _pdc_aes_ks:
     jae .end
     jmp .w
 .end:
+    pop es
     pop di
     pop si
     pop bp

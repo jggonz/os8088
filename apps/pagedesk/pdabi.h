@@ -684,7 +684,23 @@ struct pdxb_img {
 
 /* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
 /* [eng 20.22.3]    */
+#define PDRL_DIRECT  0x0001 /* pdxb_reslookup_x.rflags: the resource is written
+                               DIRECTLY in another object (an inline dictionary) */
+struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
+                               reads the pdxb_reslookup and writes all of this */
+    struct pdxb_reslookup rl;
+    pdw  rflags;            /* out: PDRL_*                                */
+    pdw  cnum, cgen;        /* out (PDRL_DIRECT): the object it is written in */
+    struct pd_u32 coff;     /* out (PDRL_DIRECT): where the value starts in that
+                               object's PDRC_EXACT RAW_COPY bytes (20.22.3.8) */
+};
 /* [crypt 20.22.5]  */
+#define PDRC_STRCIPHER 0x0100 /* OR-ed into pdxb_rawcopy.mode on return from RAW_COPY PDRC_PLAIN of an object of an ENCRYPTED document:
+                                 the dictionary's strings are still ciphertext, encrypted under (objnum, gen) with the document's string
+                                 method (pdxb_crypt.str of CRYPTINFO); the caller decrypts them (20.22.5). The
+                                 flag rides in the HIGH byte, so a caller that feeds the struct back
+                                 unchanged is still PDRC_PLAIN: the engine compares (mode & 0xFF) */
+#define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
 /* [wrt 20.22.4]    */
 #define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
                                     before the job: the keys of the ENCRYPTED foreign
