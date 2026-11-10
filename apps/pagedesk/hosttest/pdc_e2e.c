@@ -238,7 +238,8 @@ int main(int argc, char **argv)
         const char *pw = argc > 3 ? argv[3] : "-";
         if (!strcmp(argv[1], "params")) {         /* the raw pdxb_crypt PDENG reads out of /Encrypt, as hex */
             memset(&cr, 0, sizeof cr);
-            call(PDV_ENG_CRYPTINFO, 0, 0, 0); xb_get(&cr, sizeof cr);
+            xb_put(&cr, sizeof cr);
+            kcall(PDV_KEY_PARAMS, 0, 0, 0); xb_get(&cr, sizeof cr);
             printf("SIZE %u\n", (unsigned)sizeof cr);
             hex((unsigned char *)&cr, sizeof cr);
             printf("\n");
@@ -246,11 +247,11 @@ int main(int argc, char **argv)
         }
         if (!strcmp(argv[1], "cost")) {
             memset(&cr, 0, sizeof cr);
-            call(PDV_ENG_CRYPTINFO, 0, 0, 0); xb_get(&cr, sizeof cr);
-            cr.pw_len = 0; xb_put(&cr, sizeof cr);
-            printf("COST r=%u empty=%u s\n", cr.r, kcall(PDV_KEY_COST, 0, 0, 0));
+            xb_put(&cr, sizeof cr);
+            printf("COST empty=%u s\n", kcall(PDV_KEY_COST, 0, 0, 0));
+            xb_get(&cr, sizeof cr); printf("COST r=%u\n", cr.r);
             cr.pw_len = 8; xb_put(&cr, sizeof cr);
-            printf("COST r=%u 8chars=%u s\n", cr.r, kcall(PDV_KEY_COST, 0, 0, 0));
+            printf("COST 8chars=%u s\n", kcall(PDV_KEY_COST, 0, 0, 0));
             return 0;
         }
         rc = do_auth(pw);

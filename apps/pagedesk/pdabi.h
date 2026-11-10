@@ -684,6 +684,18 @@ struct pdxb_img {
 /* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
 /* [eng 20.22.3]    */
 /* [crypt 20.22.5]  */
+#define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
+struct pdxb_cryptinfo {     /* PDV_ENG_CRYPTINFO out: what the engine knows (20.22.5) */
+    pdw  on;                /* SETKEY has been called for this document            */
+    pdw  enc_k;             /* the trailer's /Encrypt: 0 none, 1 a reference, 2 a direct dictionary */
+    pdw  enc_num, enc_gen;  /* ...the reference                                    */
+    pdw  id0_len;           /* /ID[0], whole: its true length capped at 32         */
+    pdb  id0[32];
+    pdw  auth;              /* PDCA_* SETKEY was told                              */
+    pdw  key_len;           /* the file key SETKEY holds                           */
+    pdb  key[32];
+    pdw  stm, str, eff, encmeta;
+};
 /* [wrt 20.22.4]    */
 /* [rcore 20.22.7]  */
 /* [gfx 20.22.9]    */

@@ -29,7 +29,7 @@ static pdb   cr_rk[240];        /* the AES schedule in use                      
 static pdw   cr_rkn, cr_rkg;    /* ...whose it is: an object (0 none), or 0xFFFF/0xFFFF the file's key */
 static pdb   cr_rc[PDE_RC4N][258];  /* RC4 states of open streams                */
 
-#define CRI ((struct pdxb_crypt *)ctxs)        /* CRYPTINFO / SETKEY use the idle ctxs as their buffer */
+#define CRI ((struct pdxb_crypt *)ctxs)        /* SETKEY uses the idle ctxs as its buffer */
 
 /* the per-object key: pdc_ok, and its length (7.6.3 algorithm 1) */
 static pdw cr_objkey(pdw num, pdw gen, pdw aes)
@@ -139,143 +139,22 @@ static void cr_string(void)
     ov.text[p < PDE_VT - 1 ? p : PDE_VT - 1] = 0;
 }
 
-/* ---- PDV_ENG_CRYPTINFO: the /Encrypt dictionary ---------------------------------- */
-static struct pd_u32 cr_dpos, cr_cpos;  /* the dictionary, just inside; a crypt filter's */
-static pdb   cr_nm[2][24];              /* /StmF /StrF                                 */
-static pdw   cr_gv, cr_cflen, ci_v, ci_r, ci_m[2];   /* (no address of a local: SPEC.md 73) */
-
-static pdw cr_find(const char *k)
-{
-    L = &fobj;
-    lx_seek(&cr_dpos);
-    return ob_dict_find(k);
-}
-
-/* The value of key k, references followed. kind 0 an integer into cr_gv, 1 a
- * string into dst (cr_gv its length, at most max), 2 a name into dst, 3 a
- * boolean into cr_gv. PDE_NOTFOUND when absent; a value of another kind is 0. */
-static pdw cr_get(const char *k, pdw kind, pdb *dst, pdw max)
-{
-    pdw rc = cr_find(k), n, i;
-    cr_gv = 0;
-    if (rc) return rc;
-    rc = ob_value();
-    if (rc) return rc;
-    if (ov.kind == PDK_REF) {
-        lx_tell(&on_pos);
-        rc = ob_follow();
-        if (rc) return rc;
-        L = &fobj;
-        lx_seek(&on_pos);
-    }
-    if (kind == 0) { if (ov.kind == PDK_INT && !ov.neg && !ov.iv.hi) cr_gv = ov.iv.lo; }
-    else if (kind == 3) { if (ov.kind == PDK_BOOL) cr_gv = (ov.fx.lo || ov.fx.hi) ? 1 : 0; }
-    else if (ov.kind == (kind == 1 ? PDK_STR : PDK_NAME)) {
-        n = ov.len < max ? ov.len : max;
-        if (n > PDE_VT - 1) n = PDE_VT - 1;
-        for (i = 0; i < n; i++) dst[i] = ov.text[i];
-        if (kind == 2) dst[n] = 0;
-        cr_gv = n;
-    }
-    return PDE_OK;
-}
-
-/* a crypt filter's method by its name into *meth; 0xFF for one not implemented */
-static pdw cr_cfm(const pdb *name, pdw *meth)
-{
-    pdw rc;
-    *meth = PDCM_IDENTITY;
-    if (!name[0] || str_eq(name, "Identity")) return PDE_OK;
-    rc = cr_find("CF");
-    if (!rc) rc = ob_value();
-    if (rc || ov.kind != PDK_DICT) return rc == PDE_NOTFOUND ? PDE_OK : rc;
-    rc = ob_dict_find((const char *)name);
-    if (!rc) rc = ob_value();
-    if (rc || ov.kind != PDK_DICT) return rc == PDE_NOTFOUND ? PDE_OK : rc;
-    lx_tell(&cr_cpos);                                 /* the crypt filter's dictionary */
-    rc = ob_dict_find("Length");
-    if (!rc && ob_value() == PDE_OK && ov.kind == PDK_INT && !ov.neg) cr_cflen = ov.iv.lo;
-    L = &fobj;
-    lx_seek(&cr_cpos);
-    rc = ob_dict_find("CFM");
-    if (!rc) rc = ob_value();
-    if (rc || ov.kind != PDK_NAME) return rc == PDE_NOTFOUND ? PDE_OK : rc;
-    if (str_eq(ov.text, "V2")) *meth = PDCM_RC4;
-    else if (str_eq(ov.text, "AESV2")) *meth = PDCM_AESV2;
-    else if (str_eq(ov.text, "AESV3")) *meth = PDCM_AESV3;
-    else if (str_eq(ov.text, "None")) *meth = PDCM_NONE;
-    else *meth = 0xFF;
-    return PDE_OK;
-}
-
+/* ---- PDV_ENG_CRYPTINFO: what the engine knows (the dictionary is PDXK's to read) ------
+ * The trailer's /Encrypt (eng recorded it: a reference, or a direct dictionary), the
+ * whole /ID[0], and what SETKEY set: the key, its length, the methods, who got in.
+ * Allowed from the moment OPEN has read the cross-reference (it answers PDE_PASSWORD). */
+static pdw cr_auth, cr_eff;     /* PDCA_* SETKEY was told; the embedded-file method  */
+#define CIN ((struct pdxb_cryptinfo *)tailbuf)
 static pdw cr_info(void)
 {
-    struct pdxb_crypt *x = CRI;
-    pdw rc, i;
-    if (nctx != 0 || tr_enc_k == 0) return PDE_RANGE;
-    L = &fobj;
-    cr_curn = 0;
-    if (tr_enc_k == 1) {
-        rc = ob_enter(tr_enc_n, tr_enc_g);
-        if (rc) return rc;
-        if (ob_null) return PDE_ENCRYPT;
-        rc = ob_value();
-        if (rc) return rc;
-    } else {
-        lx_seek(&tr_enc_pos);
-        ov_clear(); ov.kind = PDK_DICT;
-    }
-    if (ov.kind != PDK_DICT) return PDE_ENCRYPT;
-    lx_tell(&cr_dpos);
-    for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;
-    rc = cr_get("Filter", 2, cr_nm[0], 23);
-    if (rc || !str_eq(cr_nm[0], "Standard")) return rc ? rc : PDE_ENCRYPT;
-    rc = cr_get("V", 0, 0, 0); ci_v = cr_gv;
-    if (!rc) { rc = cr_get("R", 0, 0, 0); ci_r = cr_gv; }
-    if (rc || (ci_v != 1 && ci_v != 2 && ci_v != 4 && ci_v != 5) || ci_r < 2 || ci_r > 6) return rc ? rc : PDE_ENCRYPT;
-    x->v = ci_v; x->r = ci_r;
-    rc = cr_get("Length", 0, 0, 0);
-    if (rc && rc != PDE_NOTFOUND) return rc;
-    x->length = (ci_v == 1 || cr_gv == 0) ? 40 : cr_gv;
-    rc = cr_find("P");
-    if (!rc) rc = ob_value();
-    if (rc || ov.kind != PDK_INT) return rc ? rc : PDE_ENCRYPT;
-    x->p_lo = ov.iv.lo; x->p_hi = ov.iv.hi;
-    if (ov.neg) {                                      /* two's complement */
-        x->p_lo = (pdw)(~ov.iv.lo + 1);
-        x->p_hi = (pdw)(~ov.iv.hi + (ov.iv.lo == 0));
-    }
-    rc = cr_get("O", 1, x->o, 48); x->o_len = cr_gv;
-    if (!rc) { rc = cr_get("U", 1, x->u, 48); x->u_len = cr_gv; }
-    if (!rc && ci_r >= 5) {
-        rc = cr_get("OE", 1, x->oe, 32);
-        if (!rc) rc = cr_get("UE", 1, x->ue, 32);
-        if (!rc) rc = cr_get("Perms", 1, x->perms, 16);
-    }
-    if (rc && rc != PDE_NOTFOUND) return rc;
-    x->encmeta = 1;
-    rc = cr_get("EncryptMetadata", 3, 0, 0);
-    if (!rc) x->encmeta = cr_gv;
-    else if (rc != PDE_NOTFOUND) return rc;
-    x->stm = PDCM_RC4; x->str = PDCM_RC4;
-    if (ci_v >= 4) {
-        rc = cr_get("StmF", 2, cr_nm[0], 23);
-        if (!rc || rc == PDE_NOTFOUND) { if (rc) cr_nm[0][0] = 0; rc = cr_get("StrF", 2, cr_nm[1], 23); if (rc) cr_nm[1][0] = 0; }
-        if (rc && rc != PDE_NOTFOUND) return rc;
-        cr_cflen = 0;
-        rc = cr_cfm(cr_nm[0], &ci_m[0]);
-        if (!rc) rc = cr_cfm(cr_nm[1], &ci_m[1]);
-        if (rc) return rc;
-        if (ci_m[0] == 0xFF || ci_m[1] == 0xFF) return PDE_ENCRYPT;
-        x->stm = ci_m[0]; x->str = ci_m[1];
-        if (x->stm == PDCM_AESV2) x->length = 128;
-        else if (x->stm == PDCM_AESV3) x->length = 256;
-        else if (cr_cflen) x->length = cr_cflen < 40 ? (pdw)(cr_cflen << 3) : cr_cflen;
-    }
-    x->eff = x->stm;
-    x->id0_len = tr_idlen < 32 ? tr_idlen : 32;
-    for (i = 0; i < x->id0_len; i++) x->id0[i] = tr_id[i];
-    pd_fcopy_out(x, g_xb, 0, sizeof(struct pdxb_crypt));
+    struct pdxb_cryptinfo *ci = CIN;
+    pdw i;
+    ci->on = cr_on; ci->enc_k = tr_enc_k; ci->enc_num = tr_enc_n; ci->enc_gen = tr_enc_g;
+    ci->id0_len = tr_idlen < 32 ? tr_idlen : 32;
+    for (i = 0; i < 32; i++) ci->id0[i] = tr_id[i];
+    ci->auth = cr_auth; ci->key_len = cr_klen; ci->stm = cr_stm; ci->str = cr_str; ci->eff = cr_eff; ci->encmeta = cr_meta;
+    for (i = 0; i < 32; i++) ci->key[i] = cr_key[i];
+    pd_fcopy_out(ci, g_xb, 0, sizeof(struct pdxb_cryptinfo));
     return PDE_OK;
 }
 
@@ -288,7 +167,7 @@ static pdw cr_setkey(void)
     pd_fcopy_in(g_xb, 0, x, sizeof(struct pdxb_crypt));
     if (!((x->key_len >= 5 && x->key_len <= 16) || x->key_len == 32) || x->stm > PDCM_IDENTITY || x->str > PDCM_IDENTITY) return PDE_RANGE;
     for (i = 0; i < 32; i++) cr_key[i] = x->key[i];
-    cr_klen = x->key_len; cr_stm = x->stm; cr_str = x->str; cr_meta = x->encmeta;
+    cr_klen = x->key_len; cr_stm = x->stm; cr_str = x->str; cr_meta = x->encmeta; cr_auth = x->auth; cr_eff = x->eff;
     cr_rkn = 0;
     cr_on = 1;
     for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;     /* the key was in the XB's copy */
@@ -348,67 +227,3 @@ static pdw cr_skipchk(void)
     return str_eq(ov.text, "Identity") ? 1 : 0;
 }
 
-/* ---- PDV_ENG_CRYPT: encrypt or decrypt a far buffer with an explicit key ---------------
- * RC4 in any chunking (phase bit 0 = the first chunk: the key is set up). AES-CBC in
- * ONE call (phase 3): the writer's buffers are small. Block at a time. */
-#define COP ((struct pdxb_cryptop *)tailbuf)
-static pdb cr_blk[16], cr_nxt[16];
-
-static pdw cr_crypt(void)
-{
-    struct pdxb_cryptop *o = COP;
-    pdw i, k, n, nr, np, tail;
-    pd_fcopy_in(g_xb, 0, o, sizeof(struct pdxb_cryptop));
-    if (o->key_len < 5 || (o->key_len > 16 && o->key_len != 32)) return PDE_RANGE;
-    if (o->method == PDCM_IDENTITY || o->method == PDCM_NONE) return PDE_OK;
-    if (o->method == PDCM_RC4) {
-        if (o->phase & 1) { pdc_okey(o->key, o->key_len, o->objnum, o->gen, 0); n = (pdw)(o->key_len + 5); pdc_rc4_ks(o->rc4, pdc_ok, n > 16 ? 16 : n); }
-        for (k = 0; k < o->len; k += n) {
-            n = (pdw)(o->len - k); if (n > 128) n = 128;
-            pd_fcopy_in(o->seg, (pdw)(o->off + k), tmpb, n);
-            pdc_rc4(o->rc4, tmpb, n);
-            pd_fcopy_out(tmpb, o->seg, (pdw)(o->off + k), n);
-        }
-        pd_fcopy_out(o, g_xb, 0, sizeof(struct pdxb_cryptop));
-        return PDE_OK;
-    }
-    if ((o->method != PDCM_AESV2 && o->method != PDCM_AESV3) || o->phase != 3) return PDE_RANGE;
-    if (o->method == PDCM_AESV3) { pdc_aes_ks(cr_rk, o->key, 8); nr = 14; }
-    else { pdc_okey(o->key, o->key_len, o->objnum, o->gen, 1); pdc_aes_ks(cr_rk, pdc_ok, 4); nr = 10; }
-    cr_rkn = 0;
-    np = (pdw)(o->len >> 4);
-    if (!o->dir) {                                              /* decrypt, in place: IV, blocks, padding */
-        if (np < 2) { o->len = 0; goto done; }
-        pd_fcopy_in(o->seg, o->off, o->iv, 16);
-        for (k = 1; k < np; k++) {
-            pd_fcopy_in(o->seg, (pdw)(o->off + (k << 4)), cr_blk, 16);
-            pdc_cbc_dec(cr_rk, nr, o->iv, cr_blk, 1);
-            n = 16;
-            if (k + 1 == np && cr_blk[15] >= 1 && cr_blk[15] <= 16) n = (pdw)(16 - cr_blk[15]);
-            pd_fcopy_out(cr_blk, o->seg, (pdw)(o->off + ((k - 1) << 4)), n);
-            o->len = (pdw)(((k - 1) << 4) + n);
-        }
-        goto done;
-    }
-    tail = (pdw)(o->len & 15);                                  /* encrypt: IV, blocks, the padded tail */
-    k = (pdw)((np << 4) + 32);
-    if (k > o->room || k < 32) return PDE_RANGE;
-    for (i = 0; i < 16; i++) cr_nxt[i] = 0;
-    pd_fcopy_in(o->seg, (pdw)(o->off + (np << 4)), cr_nxt, tail);       /* the tail, before it is overwritten */
-    for (i = tail; i < 16; i++) cr_nxt[i] = (pdb)(16 - tail);
-    for (k = np; k > 0; k--) {                                 /* from the end, so a block's output never lands on one not yet read */
-        pd_fcopy_in(o->seg, (pdw)(o->off + ((k - 1) << 4)), cr_blk, 16);
-        pd_fcopy_out(cr_blk, o->seg, (pdw)(o->off + (k << 4)), 16);
-    }
-    pd_fcopy_out(o->iv, o->seg, o->off, 16);                   /* now the data sits at +16: encrypt it in place, forwards */
-    pd_fcopy_out(cr_nxt, o->seg, (pdw)(o->off + 16 + (np << 4)), 16);
-    for (k = 0; k <= np; k++) {
-        pd_fcopy_in(o->seg, (pdw)(o->off + 16 + (k << 4)), cr_blk, 16);
-        pdc_cbc_enc(cr_rk, nr, o->iv, cr_blk, 1);
-        pd_fcopy_out(cr_blk, o->seg, (pdw)(o->off + 16 + (k << 4)), 16);
-    }
-    o->len = (pdw)(16 + ((np + 1) << 4));
-done:
-    pd_fcopy_out(o, g_xb, 0, sizeof(struct pdxb_cryptop));
-    return PDE_OK;
-}

@@ -7,7 +7,7 @@
 ; _pdc_cbc_enc(rk, nr, iv, buf, nblk)   in place; iv is left = the last ciphertext block
 ; _pdc_cbc_dec(rk, nr, iv, buf, nblk)
 ; nr = nk + 6. SmallerC cdecl, near pointers into DS; AX BX CX DX lost, BP SI DI
-; DS ES SS:SP DF kept. The C twin is pdctwin.c. The state lives in four bytes
+; DS ES SS:SP DF kept. PDC_NOENC (PDENG) leaves the encrypting half out. The C twin is pdctwin.c. The state lives in four bytes
 ; of bss (aes_b, aes_t, aes_c); the S-box and its inverse are the only tables
 ; (512 bytes); InvMixColumns is MixColumns after the {04}/{05} pre-step.
 ; =============================================================================
@@ -145,6 +145,7 @@ aes_imix:                           ; the pre-step of InvMixColumns, in place on
     jnz .c
     ret
 
+%ifndef PDC_NOENC
 aes_encb:                           ; aes_b = E(aes_b)
     mov bx, [aes_rkp]
     call aes_ark
@@ -169,6 +170,7 @@ aes_encb:                           ; aes_b = E(aes_b)
     jbe .r
     ret
 
+%endif
 aes_decb:                           ; aes_b = D(aes_b)
     mov ax, [aes_nr]
     mov [aes_r], ax
@@ -195,6 +197,7 @@ aes_decb:                           ; aes_b = D(aes_b)
 .done:
     ret
 
+%ifndef PDC_NOENC
 _pdc_aes_enc:
     push bp
     mov bp, sp
@@ -216,6 +219,7 @@ _pdc_aes_enc:
     pop bp
     ret
 
+%endif
 _pdc_aes_dec:
     push bp
     mov bp, sp
@@ -237,6 +241,7 @@ _pdc_aes_dec:
     pop bp
     ret
 
+%ifndef PDC_NOENC
 ; _pdc_cbc_enc(rk, nr, iv, buf, nblk)
 _pdc_cbc_enc:
     push bp
@@ -280,6 +285,7 @@ _pdc_cbc_enc:
     pop bp
     ret
 
+%endif
 _pdc_cbc_dec:
     push bp
     mov bp, sp

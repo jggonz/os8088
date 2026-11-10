@@ -598,13 +598,12 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             break;
         case PDV_ENG_CRYPTINFO:   rc = g_filed ? cr_info() : PDE_RANGE; break;     /* 20.22.5 */
         case PDV_ENG_SETKEY:      rc = cr_setkey(); break;
-        case PDV_ENG_CRYPT:       rc = cr_crypt(); break;
         case PDV_ENG_ARENA_MARK:  pde_ax = arena_top; rc = PDE_OK; break;
         case PDV_ENG_ARENA_REL:
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
             break;
         default:
-            if (!g_open) { rc = PDE_RANGE; break; }
+            if (!g_open && !(op_state == 7 && verb == PDV_ENG_DICT_GET)) { rc = PDE_RANGE; break; }    /* PDXK reads /Encrypt at the password pause (20.22.5) */
             switch (verb) {
             case PDV_ENG_PAGEINFO:   rc = v_pageinfo((pdw)bx); break;
             case PDV_ENG_OBJ_FIND:   rc = v_obj_find(); break;

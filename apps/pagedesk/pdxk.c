@@ -368,6 +368,148 @@ static pdw kx_cost(void)
     return s ? s : 1;
 }
 
+/* ---- the /Encrypt dictionary, read through PDENG's DICT_GET (PAGEDESK-SPEC 20.22.5) -------
+ * PDENG says where it is (CRYPTINFO: a reference, or direct in the trailer); every key is one
+ * DICT_GET, which is cheap beside what follows. A direct dictionary is reached as the trailer's
+ * /Encrypt, two keys deep at most, so a V4 or V5 file whose /Encrypt is direct (nothing writes one)
+ * is PDE_ENCRYPT. P is a 16.16 integer there: the signed values every writer uses; a P outside
+ * +-32767 is PDE_ENCRYPT for R2 to R4, where it enters the key, and ignored for R5 and R6. */
+static struct pdxb_dictget dg;
+static struct pdxb_cryptinfo ci;
+static pdw dg_n, dg_g;
+
+static void dg_name(char *dst, const char *src)
+{
+    pdw i;
+    for (i = 0; i < 31 && src && src[i]; i++) dst[i] = src[i];
+    dst[i] = 0;
+}
+
+static pdw dget(const char *k0, const char *k1, const char *k2)
+{
+    pdw r, i;
+    for (i = 0; i < sizeof dg; i++) ((pdb *)&dg)[i] = 0;
+    dg.objnum = dg_n; dg.gen = dg_g;
+    if (dg_n) { dg_name(dg.key[0], k0); dg_name(dg.key[1], k1); dg_name(dg.key[2], k2); }
+    else {
+        if (k2) return PDE_ENCRYPT;
+        dg_name(dg.key[0], "Encrypt"); dg_name(dg.key[1], k0); dg_name(dg.key[2], k1);
+    }
+    pd_fcopy_out(&dg, g_xb, 0, sizeof dg);
+    r = pdk_engcall(PDV_ENG_DICT_GET, 0, 0, 0);
+    if (pdk_engcf) return r;
+    pd_fcopy_in(g_xb, 0, &dg, sizeof dg);
+    return PDE_OK;
+}
+
+static pdw dg_is(const char *s)
+{
+    pdw i;
+    for (i = 0; s[i]; i++) if (dg.text[i] != s[i]) return 0;
+    return dg.text[i] == 0;
+}
+
+/* an integer key: PDE_OK with the value in *out, PDE_NOTFOUND absent, else the engine's code */
+static pdw dgi(const char *k, pdw *out)
+{
+    pdw r = dget(k, 0, 0);
+    if (r) return r;
+    if (dg.kind != PDK_INT || dg.num.hi < 0) return PDE_NOTFOUND;
+    *out = (pdw)dg.num.hi;
+    return PDE_OK;
+}
+
+/* a string key into dst (at most max), its true length into *len */
+static pdw dgs(const char *k, pdb *dst, pdw max, pdw *len)
+{
+    pdw r = dget(k, 0, 0), i, n;
+    if (r) return r;
+    if (dg.kind != PDK_STR) return PDE_NOTFOUND;
+    n = dg.len < max ? dg.len : max;
+    if (n > 127) n = 127;
+    for (i = 0; i < n; i++) dst[i] = (pdb)dg.text[i];
+    *len = n;
+    return PDE_OK;
+}
+
+static char kx_nm[2][32];       /* /StmF and /StrF                            */
+static pdw kx_cflen, kx_m[2];
+
+/* the method of crypt filter kx_nm[w] */
+static pdw kx_cfm(pdw w)
+{
+    pdw r;
+    kx_m[w] = PDCM_IDENTITY;
+    if (!kx_nm[w][0] || (kx_nm[w][0] == 'I' && kx_nm[w][1] == 'd')) return PDE_OK;
+    if (!dg_n) return PDE_ENCRYPT;                      /* a direct dictionary three levels down: not reachable */
+    r = dget("CF", kx_nm[w], "CFM");
+    if (r) return r == PDE_NOTFOUND ? PDE_ENCRYPT : r;
+    if (dg_is("V2")) kx_m[w] = PDCM_RC4;
+    else if (dg_is("AESV2")) kx_m[w] = PDCM_AESV2;
+    else if (dg_is("AESV3")) kx_m[w] = PDCM_AESV3;
+    else if (dg_is("None")) kx_m[w] = PDCM_NONE;
+    else return PDE_ENCRYPT;
+    r = dget("CF", kx_nm[w], "Length");
+    if (!r && dg.kind == PDK_INT && dg.num.hi > 0 && !kx_cflen) kx_cflen = (pdw)dg.num.hi;
+    return PDE_OK;
+}
+
+/* cr = the file's parameters (cr.pw and cr.pw_len are the caller's and stay) */
+static pdw kp_v, kp_r, kp_len, kp_n;           /* (no address of a local: SPEC.md 73) */
+static pdw kx_params(void)
+{
+    pdw r, v, rr, len, i;
+    r = pdk_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
+    if (pdk_engcf) return r;
+    pd_fcopy_in(g_xb, 0, &ci, sizeof ci);
+    if (!ci.enc_k) return PDE_RANGE;
+    dg_n = (ci.enc_k == 1) ? ci.enc_num : 0; dg_g = (ci.enc_k == 1) ? ci.enc_gen : 0;
+    r = dget("Filter", 0, 0);
+    if (r || !dg_is("Standard")) return r ? r : PDE_ENCRYPT;
+    r = dgi("V", &kp_v);
+    if (!r) r = dgi("R", &kp_r);
+    if (r) return r == PDE_NOTFOUND ? PDE_ENCRYPT : r;
+    v = kp_v; rr = kp_r;
+    if ((v != 1 && v != 2 && v != 4 && v != 5) || rr < 2 || rr > 6) return PDE_ENCRYPT;
+    cr.v = v; cr.r = rr;
+    kp_len = 40;
+    r = dgi("Length", &kp_len); len = kp_len;
+    if (r && r != PDE_NOTFOUND) return r;
+    cr.length = (v == 1) ? 40 : len;
+    r = dget("P", 0, 0);
+    if (r == PDE_OK && dg.kind == PDK_INT) { cr.p_lo = (pdw)dg.num.hi; cr.p_hi = (dg.num.hi < 0) ? 0xFFFF : 0; }
+    else if (rr < 5) return PDE_ENCRYPT;
+    r = dgs("O", cr.o, 48, &kp_n); cr.o_len = kp_n;
+    if (!r) { r = dgs("U", cr.u, 48, &kp_n); cr.u_len = kp_n; }
+    if (r) return r == PDE_NOTFOUND ? PDE_ENCRYPT : r;
+    if (rr >= 5) {
+        r = dgs("OE", cr.oe, 32, &kp_n);
+        if (!r) r = dgs("UE", cr.ue, 32, &kp_n);
+        if (!r) r = dgs("Perms", cr.perms, 16, &kp_n);
+        if (r) return r == PDE_NOTFOUND ? PDE_ENCRYPT : r;
+    }
+    cr.encmeta = 1;
+    r = dget("EncryptMetadata", 0, 0);
+    if (r == PDE_OK && dg.kind == PDK_BOOL) cr.encmeta = (dg.num.hi || dg.num.lo) ? 1 : 0;
+    cr.stm = PDCM_RC4; cr.str = PDCM_RC4;
+    if (v >= 4) {
+        kx_nm[0][0] = 0; kx_nm[1][0] = 0; kx_cflen = 0;
+        if (dget("StmF", 0, 0) == PDE_OK && dg.kind == PDK_NAME) for (i = 0; i < 31 && dg.text[i]; i++) { kx_nm[0][i] = dg.text[i]; kx_nm[0][i + 1] = 0; }
+        if (dget("StrF", 0, 0) == PDE_OK && dg.kind == PDK_NAME) for (i = 0; i < 31 && dg.text[i]; i++) { kx_nm[1][i] = dg.text[i]; kx_nm[1][i + 1] = 0; }
+        r = kx_cfm(0);
+        if (!r) r = kx_cfm(1);
+        if (r) return r;
+        cr.stm = kx_m[0]; cr.str = kx_m[1];
+        if (cr.stm == PDCM_AESV2) cr.length = 128;
+        else if (cr.stm == PDCM_AESV3) cr.length = 256;
+        else if (kx_cflen) cr.length = kx_cflen < 40 ? (pdw)(kx_cflen << 3) : kx_cflen;
+    }
+    cr.eff = cr.stm;
+    cr.id0_len = ci.id0_len;
+    for (i = 0; i < 32; i++) cr.id0[i] = ci.id0[i];
+    return PDE_OK;
+}
+
 /* ---- the verbs ----------------------------------------------------------------- */
 static pdb sv_pw[128];
 static pdw sv_pwl;
@@ -391,10 +533,9 @@ static pdw v_auth(void)
         kx_wipe();
         sv_pwl = cr.pw_len; if (sv_pwl > 128) sv_pwl = 128;
         for (i = 0; i < sv_pwl; i++) sv_pw[i] = cr.pw[i];
-        if (cr.v == 0) {                      /* the parameters: from PDENG */
-            r = pdk_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
-            if (pdk_engcf) return r;
-            pd_fcopy_in(g_xb, 0, &cr, sizeof cr);
+        if (cr.v == 0) {                      /* the parameters: the /Encrypt dictionary, through PDENG */
+            r = kx_params();
+            if (r) return r;
         }
         cr.pw_len = sv_pwl;
         for (i = 0; i < sv_pwl; i++) cr.pw[i] = sv_pw[i];
@@ -416,9 +557,29 @@ static pdw v_auth(void)
     return r;
 }
 
+static pdw v_params(void)                         /* the file's parameters into the XB, no password tried */
+{
+    pdw r;
+    pd_fcopy_in(g_xb, 0, &cr, sizeof cr);
+    r = kx_params();
+    if (r) return r;
+    pd_fcopy_out(&cr, g_xb, 0, sizeof cr);
+    return PDE_OK;
+}
+
+static pdw kx_cerr;
 static pdw v_cost(void)
 {
+    pdw r;
+    kx_cerr = 0;
     pd_fcopy_in(g_xb, 0, &cr, sizeof cr);
+    if (cr.v == 0) {                              /* an empty struct: read the file's parameters first */
+        sv_pwl = cr.pw_len;
+        r = kx_params();
+        if (r) { kx_cerr = 1; return r; }
+        cr.pw_len = sv_pwl;
+        pd_fcopy_out(&cr, g_xb, 0, sizeof cr);   /* the caller learns r and the methods from this */
+    }
     return kx_cost();
 }
 
@@ -430,8 +591,10 @@ unsigned pdk_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
     case PDV_X_INIT:   r = v_init(bx); break;
     case PDV_KEY_AUTH: r = v_auth(); break;
     case PDV_KEY_COST: r = v_cost(); break;
+    case PDV_KEY_PARAMS: r = v_params(); break;
     default:           r = PDE_RANGE; break;
     }
-    pdk_cf = (pdw)(r != PDE_OK && r != PDE_BUSY && !(verb == PDV_KEY_COST));
+    if (verb == PDV_KEY_COST) pdk_cf = kx_cerr;
+    else pdk_cf = (pdw)(r != PDE_OK && r != PDE_BUSY);
     return r;
 }

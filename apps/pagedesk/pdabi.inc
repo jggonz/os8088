@@ -248,6 +248,7 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDV_KEY_PARAMS           equ 0xC3
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -721,5 +722,25 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdxb_cryptinfo (86 bytes) --------------------------------------
+PDXB_CRYPTINFO_ON              equ 0
+PDXB_CRYPTINFO_ENC_K           equ 2
+PDXB_CRYPTINFO_ENC_NUM         equ 4
+PDXB_CRYPTINFO_ENC_GEN         equ 6
+PDXB_CRYPTINFO_ID0_LEN         equ 8
+PDXB_CRYPTINFO_ID0             equ 10
+PDXB_CRYPTINFO_ID0_N           equ 32
+PDXB_CRYPTINFO_ID0_ESZ         equ 1
+PDXB_CRYPTINFO_AUTH            equ 42
+PDXB_CRYPTINFO_KEY_LEN         equ 44
+PDXB_CRYPTINFO_KEY             equ 46
+PDXB_CRYPTINFO_KEY_N           equ 32
+PDXB_CRYPTINFO_KEY_ESZ         equ 1
+PDXB_CRYPTINFO_STM             equ 78
+PDXB_CRYPTINFO_STR             equ 80
+PDXB_CRYPTINFO_EFF             equ 82
+PDXB_CRYPTINFO_ENCMETA         equ 84
+PDXB_CRYPTINFO_BYTES           equ 86
 
 %endif ; PDABI_INC

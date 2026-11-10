@@ -119,6 +119,5 @@ static pdw cr_raw_plain(void);
 static void cr_reset(void);
 static pdw cr_info(void);
 static pdw cr_setkey(void);
-static pdw cr_crypt(void);
 
 #endif

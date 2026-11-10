@@ -122,6 +122,7 @@ section .text
 %endif
 %include "pagedesk/pdcmd5.inc"      ; encryption (PAGEDESK-SPEC 20.22.5): the per-object key,
 %include "pagedesk/pdcrc4.inc"      ;   RC4 and AES-CBC for streams and strings
+%define PDC_NOENC                  ; PDENG only decrypts (the writer encrypts: PDWRT includes the same source)
 %include "pagedesk/pdcaes.inc"
 
 ; =============================================================================
