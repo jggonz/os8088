@@ -1600,6 +1600,12 @@ FAST = [
         "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
         "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
         "narrowest canvas (39 cells) - the card cuts a longer one"),
+    Row("pd360", "fast", py("tests/unit/t_pd360.py"), 0.2,
+        "PAGEDESK-SPEC 20.22.2.8: the 360KB program disk (the Makefile's "
+        "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
+        "from the CURRENT package keeps 4 of 354 clusters free - "
+        "pagedesk360.img is on demand and went stale while the fix round "
+        "grew the program to 359 of 354"),
     Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
         "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
         "model - the filters (This page / All pages / Changes), order, "

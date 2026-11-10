@@ -5457,18 +5457,33 @@ now (`make pagedeskdisk`):
 
 | image | carries | clusters before | after |
 |---|---|---:|---:|
-| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,139 / 2,847 |
-| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,139 / 2,371 |
-| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 574 / 713 |
-| `pagedesk360.img` | the program, `README.TXT`, `PDFONTS.TXT` (the OFL rides with the fonts inside the program), and `HELLO.PDF` WHEN IT FITS | 414 / 354 (refused) | 354 / 354 |
-| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 72 / 354 |
+| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,145 / 2,847 |
+| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,145 / 2,371 |
+| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 577 / 713 |
+| `pagedesk360.img` | the program and `PDFONTS.TXT`: the OFL rides with the fonts inside the program, so it stays beside them | 414 / 354 (refused) | 349 / 354 |
+| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 71 / 354 |
 
-`HELLO.PDF` fits on `pagedesk360.img` with no cluster to spare. The recipe
-tries it, and when the program has grown past it, it says so and builds the
-disk without it. That is not an error, since the second disk carries it.
-The program not fitting IS the error, from the second attempt. On a 360KB
-pair the empty view's Sample guide (`XTGUIDE.PDF` beside the program) finds
-nothing until the guide is opened from the second disk with File > Open.
+The two text files are packed (`os88lz.py --wrap`, SPEC.md 20.13.5) on
+every geometry, in `$(PDZ)` = `build/pdz-<fmt>/`. Nothing in PageDesk reads
+either one, and Note Pad's read of a packed file is the transparent one.
+`PDFONTS.TXT` goes from 9,456 bytes to 5,113 (ten clusters to five), and
+`README.TXT` from 4,446 to 3,098. The fix round's program (348,168 bytes,
+341 clusters) needed 359 of `pagedesk360.img`'s 354 clusters with
+`README.TXT` and `PDFONTS.TXT` beside it. Packing paid five of those
+clusters, and `README.TXT` moving to the second disk paid four more. The
+first disk no longer takes `HELLO.PDF` "when it fits": that spent whatever
+slack there was and hid the growth until the program itself did not fit.
+On a 360KB pair the empty view's Sample guide (`XTGUIDE.PDF` beside the
+program) finds nothing until the guide is opened from the second disk with
+File > Open.
+
+**The gate reads the current package.** `pagedeskdisk` is on demand, so its
+image goes stale; the fix round's overflow passed `t_image` and
+`t_diskverify` on an image from that morning. The Makefile's `PD360DISK1`
+is the first disk's list. The fast row `pd360` (`tests/unit/t_pd360.py`)
+builds that disk from the current `build/pagedesk.o88` on every `make` and
+fails with fewer than 4 clusters free. At this writing 5 are free.
+
 The 360KB XT proof (`tests/pagedeskxt.py`, PD-29) opens `XTGUIDE.PDF` from
 B:, which now holds the program and not the guide. It needs a 720KB B:, a
 third drive or a disk of its own. That is open.

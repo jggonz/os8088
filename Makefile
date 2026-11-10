@@ -18619,12 +18619,30 @@ pagedesk: $(BUILD)/pagedesk.o88
 # apps/pagedesk/samples/*.PDF; apps/pagedesk/stubs/HELLO.PDF is the stand-in
 # a tree without them falls back on.
 PD_SAMPLES ?= $(or $(wildcard $(PDDIR)/samples/*.PDF),$(PDDIR)/stubs/HELLO.PDF)
-PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
+# THE TWO TEXT FILES ARE PACKED the way the system disk's README.TXT and the
+# faces' licence are (SPEC.md 20.13.5): nothing in PageDesk reads either, and
+# Note Pad's read of a 'CZ' file is the transparent one. PDFONTS.TXT 9,456
+# bytes is 5,113 (ten clusters to five), README.TXT 4,446 is 3,098. Their
+# own directory, not $(ZDATA): tests/unit/t_pkg.py compares every README.TXT
+# on a shipped image against $(ZDATA)'s of the same name, and the system
+# disk's is not this one. PKGZ= ships them plain
+PDZ := $(BUILD)/pdz$(if $(PKGZ),-$(PKGZ))
+PD_TXTZ := $(PDZ)/README.TXT $(PDZ)/PDFONTS.TXT
+$(PDZ)/README.TXT: $(PDDIR)/README.TXT tools/os88lz.py
+$(PDZ)/PDFONTS.TXT: $(PD_FONT_TXT) tools/os88lz.py
+$(PD_TXTZ):
+	@mkdir -p $(@D)
+ifeq ($(PKGZ),)
+	cp $< $@
+else
+	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
+endif
+PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PD_TXTZ) \
               $(PD_SAMPLES) tools/os88disk.py tools/checkreadme.py
 define PDDISK
 	python3 tools/checkreadme.py $(PDDIR)/README.TXT
 	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
-	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(or $(3),$(PD_SAMPLES)) \
+	    $(PD_TXTZ) $(2) $(or $(3),$(PD_SAMPLES)) \
 	    --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
 endef
@@ -18635,25 +18653,25 @@ $(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 $(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,720,$(PD_FONTX_RES))
 # O7, O8 (PAGEDESK-SPEC 20.22.2.8, 20.22.14): THE 360KB SET IS TWO FLOPPIES.
-# The first is the program, README.TXT, PDFONTS.TXT (the OFL rides with the
-# fonts inside the program) and HELLO.PDF WHEN IT FITS; the second carries
-# every sample. One file cannot span two floppies, so PAGEDESK.O88 itself must
-# fit a 360KB disk - os88disk.py refuses one that does not, which is the gate,
-# and the second attempt (no HELLO.PDF) is where it bites. The first failing
-# says so and is not an error: HELLO.PDF is on the second disk either way.
-PD_SAMPLES360 := $(filter %/HELLO.PDF,$(PD_SAMPLES))
+# The first is the program and PDFONTS.TXT - the OFL rides with the fonts
+# inside the program, so it stays beside them - and nothing else; the second
+# carries every sample and README.TXT, which nothing reads at run time. The
+# fix round's program needed 359 clusters of 354 with README.TXT beside it,
+# and the first disk used to take HELLO.PDF "when it fits", which spent
+# whatever slack there was and hid the growth until the program itself did
+# not fit. One file cannot span two floppies, so PAGEDESK.O88 must fit.
+# PD360DISK1 IS ONE LIST FOR TWO READERS: this recipe and
+# tests/unit/t_pd360.py (FAST), which builds the disk from the CURRENT
+# package and fails `make` with fewer than 4 clusters free - an on-demand
+# image cannot be the gate, because it goes stale
+PD360DISK1 = $(BUILD)/pagedesk.o88 $(PDZ)/PDFONTS.TXT --folder SYSTEM/APPDATA
 $(BUILD)/pagedesk360.img: $(PDDISKDEPS)
-	python3 tools/checkreadme.py $(PDDIR)/README.TXT
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pagedesk.o88 \
-	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(PD_SAMPLES360) \
-	    --folder SYSTEM/APPDATA 2>/dev/null || { \
-	  echo "pagedesk360.img: HELLO.PDF does not fit beside PAGEDESK.O88;" \
-	       "it rides pagedesk360b.img (PAGEDESK-SPEC 20.22.2.8)"; \
-	  python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pagedesk.o88 \
-	      $(PDDIR)/README.TXT $(PD_FONT_TXT) --folder SYSTEM/APPDATA; }
+	python3 tools/os88disk.py -o $@ --size 360 $(PD360DISK1)
 	python3 tools/os88disk.py --verify $@
-$(BUILD)/pagedesk360b.img: $(PD_SAMPLES) $(PDDIR)/README.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(PDDIR)/README.TXT $(PD_SAMPLES)
+$(BUILD)/pagedesk360b.img: $(PD_SAMPLES) $(PDZ)/README.TXT tools/os88disk.py \
+                           tools/checkreadme.py
+	python3 tools/checkreadme.py $(PDDIR)/README.TXT
+	python3 tools/os88disk.py -o $@ --size 360 $(PDZ)/README.TXT $(PD_SAMPLES)
 	python3 tools/os88disk.py --verify $@
 pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
               $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img \
