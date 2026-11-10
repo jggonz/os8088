@@ -21718,22 +21718,22 @@ $(BUILD)/PDWRT.MOD: apps/pagedesk/pdwrt.asm $(BUILD)/pdwrt.gen.asm $(CC_RUNTIME)
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
 	    assert i==len(d), (i,len(d)); t=i+b; print('PDWRT.MOD: image %d + bss %d = %d bytes (%.1f KiB; target 40, cap 48)'%(i,b,t,t/1024)); \
 	    sys.exit(1 if t>$(PDW_CAP) else 0)"
-# PDXF.MOD - the font module (docs/PAGEDESK-SPEC.md 20.22.8): TrueType, CFF, Type 1,
+# PDXF.MOD - the font module (PAGEDESK-SPEC 20.22.8): TrueType, CFF, Type 1,
 # CMaps, ToUnicode. One C translation unit (apps/pagedesk/pdxf.c #includes pdxf*.c)
 # through the same smlrcc + tools/cc8086.py chain as PDWRT; the door and the inner
 # loops are apps/pagedesk/pdxf.asm. `make pdxf` builds it and runs its host checks
 # (hosttest/pdx_check.py against mutool, hosttest/pdx_chain.py through the real PDENG).
 PDX_C    := apps/pagedesk/pdxf.c apps/pagedesk/pdxfol.c apps/pagedesk/pdxfsf.c apps/pagedesk/pdxfcf.c \
-            apps/pagedesk/pdxft1.c apps/pagedesk/pdxfnm.c apps/pagedesk/pdxfcm.c apps/pagedesk/pdxfwd.c apps/pagedesk/pdxfnm.h
+            apps/pagedesk/pdxft1.c apps/pagedesk/pdxft3.c apps/pagedesk/pdxfnm.c apps/pagedesk/pdxfcm.c apps/pagedesk/pdxfwd.c apps/pagedesk/pdxfnm.h
 PDX_CAP  := 61440   # PAGEDESK-SPEC 20.22 L6: PDXF <= 60 KiB image + bss
 .PHONY: pdxf pdxf-host
 $(BUILD)/pdxf.raw.asm: $(PDX_C) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
-		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		-DPDXF_ASM -SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
 		apps/pagedesk/pdxf.c -o $@
 $(BUILD)/pdxf.gen.asm: $(BUILD)/pdxf.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
 	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
-$(BUILD)/PDXF.MOD: apps/pagedesk/pdxf.asm $(BUILD)/pdxf.gen.asm $(CC_RUNTIME) \
+$(BUILD)/PDXF.MOD: apps/pagedesk/pdxf.asm apps/pagedesk/pdxfrs.inc $(BUILD)/pdxf.gen.asm $(CC_RUNTIME) \
                    $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxf.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \

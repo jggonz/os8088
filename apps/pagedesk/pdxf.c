@@ -310,6 +310,17 @@ static pdw fd_activate(pdw fobj, pdw fgen)
     pdw n, sym = 0, cidobj = 0, cidgen = 0, tuobj = 0, tugen = 0;
     g_fobj = 0; g_kind = PDFK_NONE; g_cmaplen = 0; g_ft0 = 0; g_fvert = 0; g_ftu = 0; g_fcm = 0; g_fdw = 1000; g_fwl = 0; g_ferr = 0;
     g_dobj = fobj; g_dgen = fgen; g_cmapobj = 0;
+    g_tuoff = (pdw)(g_pcap + PDXF_CIDWIN + PDXF_STG); g_cmoff2 = (pdw)(g_tuoff + PDXF_TAB); g_wdoff = (pdw)(g_cmoff2 + PDXF_TAB);
+    if (!wd_get(fobj, fgen, "Subtype", 0, 0) && fd_name_is("Type3")) {         /* its glyphs are content streams: no program (20.22.8) */
+        g_kind = PDFK_T3;
+        if (fd_refs(fobj, fgen, "ToUnicode", 0, 0) && !pdx_sopen(g_ro, g_rg)) {
+            if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
+            pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+        }
+        fd_simple_enc(fobj, fgen, 0);
+        g_fobj = fobj; g_fgen = fgen;
+        return 0;
+    }
     if (!wd_get(fobj, fgen, "Subtype", 0, 0) && fd_name_is("Type0")) {
         g_ft0 = 1;
         if (!fd_refs(fobj, fgen, "DescendantFonts", "[0]", 0)) { g_ferr = PDFE_NOPROG; return PDE_FONT; }
@@ -337,7 +348,6 @@ static pdw fd_activate(pdw fobj, pdw fgen)
     }
     if (!fnt_open()) { g_ferr = PDFE_FORMAT; return PDE_FONT; }
     /* the tables */
-    g_tuoff = (pdw)(g_pcap + PDXF_CIDWIN + PDXF_STG); g_cmoff2 = (pdw)(g_tuoff + PDXF_TAB); g_wdoff = (pdw)(g_cmoff2 + PDXF_TAB);
     if (tuobj && !pdx_sopen(tuobj, tugen)) {
         if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
         pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
@@ -390,7 +400,7 @@ static pdw fd_map(pdw fobj, pdw fgen, pdw code)
         if (g_fcm) { v = tab_find(g_cmoff2, code); if (!g_tfound) v = (pdw)((pd_fpeekb(g_ws, (pdw)(g_cmoff2 + 1)) & PDFC_IDENT) ? code : 0); }
         g_cid = v; g_adv1000 = cid_width(v);
         gid = cid_gid(v);
-    } else gid = enc_gid(code);
+    } else gid = g_kind == PDFK_T3 ? 1 : enc_gid(code);
     if (g_ftu) { v = tab_find(g_tuoff, code); g_lat = g_tfound ? uni_lat(v) : 0; }
     g_gid = gid;
     return 0;
@@ -400,6 +410,8 @@ static pdw fd_map(pdw fobj, pdw fgen, pdw code)
 pdw pdx_cf;                         /* the carry flag of the last verb (the door reads it)   */
 pdw pdx_engvec[2];                  /* PDENG's door, offset then segment (PDV_X_INIT)         */
 static union { struct pdxb_fglyph gl; struct pdxb_fpath pa; struct pdxb_init in; } g_a;
+
+#include "pdxft3.c"
 
 /* PDFG_BLOCK, step 1: the block of (font, size) in the header at (dseg, doff): found, or made (a free one, else one
  * not used in this pass); returns its index, 0xFFFF when none can be had */
@@ -444,6 +456,7 @@ static pdw blk_slot(struct pdxb_fglyph *g, pdw boff)
     flags = pd_fpeekb(seg, (pdw)(ip + 3));
     pd_fpokew(seg, ip, g->adv1000);
     pd_fpokeb(seg, (pdw)(ip + 2), (pdb)(g_lat == 0xFFFF ? 255 : g_lat));          /* 255: no /ToUnicode */
+    if (g_kind == PDFK_T3) return t3_info(g, boff, h, ip);
     if (!px || (flags & (PDFB_F_BMP | PDFB_F_BIG))) return 0;
     if (!g_gid) { pd_fpokeb(seg, (pdw)(ip + 3), (pdb)(flags | PDFB_F_BMP)); return 0; }
     rp = (pdw)(boff + h * 4);                                          /* the record of slot (h + 1) */

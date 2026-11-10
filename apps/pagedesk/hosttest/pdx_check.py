@@ -81,6 +81,7 @@ def main():
     worst = 0.0; tot_ref = tot_diff = 0
     for n in names:
         j = json.load(open(os.path.join(FIX, n + ".json")))
+        if j.get("type3") or not j.get("program"): continue            # a Type 3 font has no program: pdx_page.py draws it
         pdf = os.path.join(FIX, j["pdf"]); prog = os.path.join(FIX, j["program"])
         for pg, size in enumerate(j["sizes"], 1):
             asc = size + 1; rows = asc + (size + 3) // 4 + 1

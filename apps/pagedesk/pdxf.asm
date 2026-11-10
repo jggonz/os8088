@@ -114,56 +114,6 @@ _pdx_eng:
     pop bp
     ret
 
-; -----------------------------------------------------------------------------
-; int pdx_muldiv(int a, int b, int c)
-; round-half-away(a*b/c) with a 32-bit intermediate, saturating at +-32767;
-; c = 0 answers 0. (The host twin is hosttest/pdx_host.c's pdx_muldiv.)
-; -----------------------------------------------------------------------------
-_pdx_muldiv:
-    push bp
-    mov bp, sp
-    push si
-    mov ax, [bp+4]
-    imul word [bp+6]                ; DX:AX = a*b
-    mov cx, [bp+8]
-    xor si, si                      ; SI bit 0 = the result is negative
-    or cx, cx
-    jz .zero
-    jns .cpos
-    neg cx
-    xor si, 1
-.cpos:
-    or dx, dx
-    jns .ppos
-    neg dx
-    neg ax
-    sbb dx, 0
-    xor si, 1
-.ppos:
-    mov bx, cx
-    shr bx, 1
-    add ax, bx                      ; + |c|/2: round half away from zero
-    adc dx, 0
-    cmp dx, cx
-    jae .sat                        ; the quotient would not fit 16 bits
-    div cx
-    cmp ax, 32767
-    ja .sat
-    jmp .sign
-.sat:
-    mov ax, 32767
-.sign:
-    test si, 1
-    jz .out
-    neg ax
-    jmp .out
-.zero:
-    xor ax, ax
-.out:
-    pop si
-    pop bp
-    ret
-
 ; =============================================================================
 ; DATA AND BSS FIRST - pdx_bss_beg must be the first label in .bss
 ; =============================================================================
@@ -181,6 +131,9 @@ section .text
 %include "cc/os88thunk.asm"
 
 %include "pagedesk/pdmath.inc"
+
+%define PDXF_THR_ASM 128               ; = pdxfol.c's PDXF_THR
+%include "pagedesk/pdxfrs.inc"       ; _pdx_muldiv, _pdx_accline, _pdx_pack
 
 section .bss
 pdx_bss_end:

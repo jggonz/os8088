@@ -291,7 +291,11 @@ static pdw font_get(pdw obj, pdw gen)
         if (dict_get(obj, gen, "BaseFont", 0, 0) == 0 && g_dg.kind == PDK_NAME) pdr_scpy(base, g_dg.text, 64);
         if (dict_get(obj, gen, "Subtype", 0, 0) == 0 && g_dg.kind == PDK_NAME) {
             if (ci_has(g_dg.text, "type0")) f->emb = 2;                  /* PDXF reads it (20.22.8) */
+#ifdef PDR_TYPE3
+            else if (ci_has(g_dg.text, "type3")) f->emb = 3;                       /* PDXF + pdrt3.c (20.22.8) */
+#else
             else if (ci_has(g_dg.text, "type3")) inc_note(PDF_INC_FONT, "Type3 font");
+#endif
         }
         if (!f->emb) {                                  /* an embedded program: FontFile, FontFile2 or FontFile3 */
             static char ff[11] = "FontFile";
@@ -327,14 +331,14 @@ static pdw font_get(pdw obj, pdw gen)
     return slot;
 }
 
-static pdw g_ew;                    /* emb_glyph's width of the current code (Type0), 1/1000 em */
+static pdw g_ew, g_ewv;             /* emb_glyph's width of the current code (Type0, Type 3), 1/1000 em, and whether it is valid */
 /* advance width of a CODE in 1/1000 em: /Widths, else the base-14 table of
  * the glyph the code maps to (11.3), else a flat guess */
 static pdw font_width(pdw fi, pdw code)
 {
     struct pdr_font *f = font_sel(fi);
     pdw w, face, lat;
-    if (f->emb == 2) return g_ew;                   /* a Type0 font's /W width of the code just made (emb_glyph) */
+    if (f->emb >= 2 && g_ewv) return g_ew;         /* a Type0 / Type 3 font's width of the code just made (emb_glyph) */
     if (code < 32) {
         /* a subset font's control codes (TeX's ligatures at 11..15, a symbolic
          * font's 1..31) are not drawn (no PD Latin for them) but still ADVANCE

@@ -21,6 +21,7 @@ def main():
     names = [a for a in sys.argv[1:] if not a.startswith("-")] or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
     for n in names:
         j = json.load(open(os.path.join(FIX, n + ".json")))
+        if j.get("type3"): continue
         out = subprocess.run([BIN, os.path.join(FIX, j["pdf"]), str(j["nbytes"])] + [str(c) for c in j["codes"]], capture_output=True, text=True)
         lines = out.stdout.split("\n")
         gid = {}; uni = {}; wid = {}; cmp_ = {}; head = lines[0] if lines else ""

@@ -254,6 +254,7 @@ PDFK_NONE                equ 0
 PDFK_TT                  equ 1
 PDFK_CFF                 equ 2
 PDFK_T1                  equ 3
+PDFK_T3                  equ 4
 PDFG_INFO                equ 0x0001
 PDFG_BLOCK               equ 0x0004
 PDFB_SIZE                equ 4096
@@ -261,6 +262,8 @@ PDFB_HDR                 equ 64
 PDFB_MAGIC               equ 0x5342
 PDFB_KEYS                equ 3328
 PDFB_INFO                equ 3584
+PDFB_T3REC               equ 512
+PDFB_T3FM                equ 1536
 PDFB_F_BMP               equ 0x01
 PDFB_F_BIG               equ 0x02
 PDFG_LATIN               equ 0x0002

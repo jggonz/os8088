@@ -682,6 +682,30 @@ def encoding_cmap(pairs):
     out.append("endcmap CMapName currentdict /CMap defineresource pop end end")
     return "\n".join(out) + "\n"
 
+def type3_pdf():
+    """a Type 3 font: four glyph procedures (a square, a triangle, a diamond with d0 and its own colour,
+    a bar), a /FontMatrix of 0.001, /Differences and /Widths; one page a size, one glyph a cell"""
+    pdf = PDF()
+    cat = pdf.reserve(); pages = pdf.reserve()
+    procs = {
+        "sq":  "700 0 50 0 650 700 d1\n50 0 600 700 re f",
+        "tri": "700 0 50 0 650 700 d1\n50 0 m 650 0 l 350 700 l f",
+        "dia": "700 0 d0\n1 0 0 rg\n350 0 m 650 350 l 350 700 l 50 350 l f",
+        "bar": "400 0 50 0 350 700 d1\n100 0 200 700 re f",
+    }
+    ids = {n: pdf.add(pdf.stream(b, compress=False)) for n, b in procs.items()}
+    font = pdf.add("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 700 700] /FontMatrix [0.001 0 0 0.001 0 0] "
+                   "/CharProcs << %s >> /Encoding << /Type /Encoding /Differences [97 /sq /tri /dia /bar] >> "
+                   "/FirstChar 97 /LastChar 100 /Widths [700 700 700 400] >>" % " ".join("/%s %d 0 R" % (n, i) for n, i in ids.items()))
+    kids = []
+    codes = [97, 98, 99, 100] * 4
+    for sz in SIZES:
+        cs = pdf.add(pdf.stream(grid_page(None, sz, codes, PAGE_W, PAGE_H, PITCH_X, PITCH_Y), compress=False))
+        kids.append(pdf.add("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %d %d] /Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>" % (pages, PAGE_W, PAGE_H, font, cs)))
+    pdf.set(pages, "<< /Type /Pages /Kids [%s] /Count %d >>" % (" ".join("%d 0 R" % k for k in kids), len(kids)))
+    pdf.set(cat, "<< /Type /Catalog /Pages %d 0 R >>" % pages)
+    return pdf.write(cat), codes
+
 def make(out, src):
     os.makedirs(out, exist_ok=True)
     t = TTF(open(find_src("Vera.ttf", src), "rb").read())
@@ -746,6 +770,9 @@ def make(out, src):
         wr(nm + ".pdf", simple_font_pdf("Type1", "FontFile", data, "/Length1 %d /Length2 %d /Length3 %d" % (l1, l2, l3), codes + [0x7f], {**w1000, 0x7f: 500}, "ABCDEF+VeraT1",
             encoding="<< /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [127 /flexdemo] >>"))
         write_sidecar(out, nm, nm + ".pfa", codes + [0x7f], list(range(2, len(codes) + 3)))
+    t3, t3codes = type3_pdf()
+    wr("type3.pdf", t3)
+    write_sidecar(out, "type3", None, t3codes, [], 1, {"type3": True})
     print("wrote", out)
 
 # ----------------------------------------------------------------------------

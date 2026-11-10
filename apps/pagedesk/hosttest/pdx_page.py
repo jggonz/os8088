@@ -62,7 +62,7 @@ def build():
     shutil.copy(os.path.join(PD, "pdabi.h"), src)
     open(os.path.join(src, "pdrxc.c"), "w").write(SHIM)
     hosttest = os.path.join(PD, "hosttest")
-    cmd = ["cc", "-std=gnu99", "-O1", "-w", "-DPD_HOST", "-DPDR_REAL_ENG", "-I", src, "-I", PD, "-I", hosttest,
+    cmd = ["cc", "-std=gnu99", "-O1", "-w", "-DPD_HOST", "-DPDR_REAL_ENG", "-DPDR_TYPE3", "-I", src, "-I", PD, "-I", hosttest,
            "-o", EXE,
            os.path.join(hosttest, "pdr_test.c"), os.path.join(hosttest, "pdr_host.c"), os.path.join(hosttest, "pdhost.c"),
            os.path.join(PD, "pdmath.c"), os.path.join(src, "pdrend.c"), os.path.join(hosttest, "pdx_hosteng.c"), os.path.join(PD, "pdeng.c"),

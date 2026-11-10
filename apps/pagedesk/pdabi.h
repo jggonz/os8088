@@ -697,6 +697,7 @@ struct pdxb_img {
 #define PDFK_TT   1
 #define PDFK_CFF  2
 #define PDFK_T1   3
+#define PDFK_T3   4             /* a Type 3 font: PDXF reads its CharProcs, no program                  */
 #define PDFG_INFO   0x0001      /* pdxb_fglyph.flags in: no bitmap, only gid/lat/adv           */
 #define PDFG_BLOCK  0x0004      /* in: a STRIKE BLOCK request (below): PDXF finds or makes the block of
                                    (font, em64 >> 6), then the code's slot in it, rasterises (em64 != 0)
@@ -715,6 +716,9 @@ struct pdxb_img {
 #define PDFB_MAGIC  0x5342
 #define PDFB_KEYS   3328
 #define PDFB_INFO   3584
+#define PDFB_T3REC  512         /* a Type 3 block (em64 = 0 only, so no bitmaps): CharProc (u16 obj, u16 gen) of slot s at
+                                   +512 + (s-1)*4, the FontMatrix as 6 x (u16 lo, i16 hi) 16.16 at +1536   */
+#define PDFB_T3FM   1536
 #define PDFB_F_BMP  0x01        /* the slot's bitmap is made                                    */
 #define PDFB_F_BIG  0x02        /* the glyph does not fit 32 px or the block: not bitmapped      */
 #define PDFG_LATIN  0x0002      /* out flags: lat is meaningful (the font has a /ToUnicode)    */

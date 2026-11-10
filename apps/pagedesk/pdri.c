@@ -324,10 +324,16 @@ static pdw run_begin(void)
  * 0 = not available: PDXF absent (x_need: the ladder re-runs the pass) or it refused the font
  * (this font is drawn in the substitute face from here on) ----------------------------------- */
 static struct pdxb_fglyph g_fgl;
+#ifdef PDR_TYPE3
+static void t3_queue(pdw blk, pdw slot);
+#define T3_QUEUE(b, s) t3_queue(b, s)
+#else
+#define T3_QUEUE(b, s) ((void)0)
+#endif
 static pdw emb_glyph(struct pdr_font *f, pdw code)
 {
     pdw boff, h, i, k, px = 0, n = 1, ip, tried = 0, obj = g_fk[GS.font].objnum, gen = g_fk[GS.font].gen;
-    if (g_mode != PDR_TEXT) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
+    if (g_mode != PDR_TEXT && f->emb != 3) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
     g_escale = n;
     for (;;) {
         g_ek = syn_find(obj, gen, px);
@@ -340,7 +346,7 @@ static pdw emb_glyph(struct pdr_font *f, pdw code)
             }
             ip = (pdw)(boff + PDFB_INFO + h * 4);
             if (k == code && (!px || (pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
-                g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
+                g_ewv = 1; g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
                 if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
                 return 1;
             }
@@ -429,16 +435,17 @@ static void text_glyph(pdw code)
     pdw lat, w, vis, is2 = 0;
     struct pdr_font *f;
     pdi px, py;
-    g_ek = 0xFFFF;
+    g_ek = 0xFFFF; g_ewv = 0;
     if (GS.font == 255) { w = 556; lat = code; vis = 1; }
     else {
         f = font_sel(GS.font);
         if (f->emb && emb_glyph(f, code)) {
             is2 = (pdw)(f->emb == 2);
             lat = g_mode == PDR_TEXT ? g_elat : g_eslot;
-            vis = g_mode == PDR_TEXT ? (pdw)(lat >= 32) : 1;
+            vis = g_mode == PDR_TEXT ? (pdw)(lat >= 32) : (pdw)(f->emb != 3);
+            if (f->emb == 3 && g_mode != PDR_TEXT && GS.tr != 3) T3_QUEUE(g_ek, g_eslot);      /* a Type 3 proc runs between operators */
             w = font_width(GS.font, code);
-        } else if (f->emb == 2) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = g_ew = 1000; }
+        } else if (f->emb == 2) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = 1000; }
         else {
             g_ek = 0xFFFF;
             lat = code >= 32 ? f->enc[code - 32] : 0;
@@ -1076,6 +1083,10 @@ static pdw frame_end(void)
 }
 
 /* run at most `maxops` operators. Returns 1 when the page is finished */
+#ifdef PDR_TYPE3
+#include "pdrt3.c"
+#endif
+
 static pdw interp_run(pdw maxops)
 {
     pdw err, ops = 0, kind, toks = 0;
@@ -1092,6 +1103,9 @@ static pdw interp_run(pdw maxops)
             continue;
         }
         if (g_inl >= 2) { if (!inl_skip()) return 0; continue; }
+#ifdef PDR_TYPE3
+        if (g_t3n && !g_nop && !g_arrd && !g_inl && !g_dictd && t3_go()) continue;      /* Type 3 glyph procs run between operators */
+#endif
         err = tok_next();
         if (err) {                                /* this stream is over; the annotations and the marks after it are not */
             g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error");

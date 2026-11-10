@@ -83,12 +83,15 @@ static pdi pdx_clamp(pdi v, pdi lo, pdi hi) { return v < lo ? lo : v > hi ? hi :
 /* ---- the accumulator (signed area, 1 px = 256) ------------------------------ */
 #define AC_W   34                   /* cells a row: 32 + 2 guard               */
 #define AC_H   48                   /* rows                                    */
-static pdi g_acc[AC_W * AC_H];
-static pdw g_acw;                   /* glyph width in px (<= 32)               */
-static pdw g_ach;                   /* rows in use (<= AC_H)                   */
+pdi pdx_acc[AC_W * AC_H];           /* (global: pdxfrs.inc reaches it by name)  */
+pdw pdx_acw;                        /* glyph width in px (<= 32)               */
+pdw pdx_ach;                        /* rows in use (<= AC_H)                   */
 
+#ifdef PDXF_ASM
+void pdx_accline(pdi x0, pdi y0, pdi x1, pdi y1);   /* pdxfrs.inc */
+#else
 /* one edge in 26.6 device coordinates relative to the bitmap's top-left
- * (x right, y DOWN). Accumulates into g_acc. */
+ * (x right, y DOWN). Accumulates into pdx_acc. */
 static void pdx_accline(pdi x0, pdi y0, pdi x1, pdi y1)
 {
     pdi dir = 1, t, ya, yb, xa, xb, xl, xr, dx, dyl, d, ymax, row, il, ir, a0, a1, a2, am, sd, l0, lr, wd, xm;
@@ -96,19 +99,19 @@ static void pdx_accline(pdi x0, pdi y0, pdi x1, pdi y1)
     pdi *a;
     if (y0 == y1) return;
     if (y0 > y1) { dir = -1; t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t; }
-    ymax = (pdi)(g_ach << 6);
+    ymax = (pdi)(pdx_ach << 6);
     if (y1 <= 0 || y0 >= ymax) return;
     dx = (pdi)(x1 - x0); dyl = (pdi)(y1 - y0);
     row = y0 < 0 ? 0 : (pdi)(y0 >> 6);
-    for (; (row << 6) < y1 && row < (pdi)g_ach; row++) {
+    for (; (row << 6) < y1 && row < (pdi)pdx_ach; row++) {
         ya = (pdi)(row << 6); if (ya < y0) ya = y0;
         yb = (pdi)((row << 6) + 64); if (yb > y1) yb = y1;
         xa = (pdi)(x0 + pdx_muldiv((pdi)(ya - y0), dx, dyl));
         xb = (pdi)(x0 + pdx_muldiv((pdi)(yb - y0), dx, dyl));
         xl = xa < xb ? xa : xb; xr = xa < xb ? xb : xa;
-        xl = pdx_clamp(xl, 0, (pdi)(g_acw << 6)); xr = pdx_clamp(xr, 0, (pdi)(g_acw << 6));
+        xl = pdx_clamp(xl, 0, (pdi)(pdx_acw << 6)); xr = pdx_clamp(xr, 0, (pdi)(pdx_acw << 6));
         d = (pdi)(dir * (yb - ya) * 4);
-        a = g_acc + row * AC_W;
+        a = pdx_acc + row * AC_W;
         il = (pdi)(xl >> 6);
         if (xr - (il << 6) <= 64) {                 /* inside one cell */
             xm = (pdi)(((xl + xr) >> 1) - (il << 6));
@@ -135,31 +138,37 @@ static void pdx_accline(pdi x0, pdi y0, pdi x1, pdi y1)
     }
 }
 
+#endif /* PDXF_ASM */
+
 /* the coverage threshold (of 256) at which a pixel is ink; hosttest/pdx_check.py
  * set it (PAGEDESK-SPEC 20.22.8) */
 #ifndef PDXF_THR
 #define PDXF_THR 128
 #endif
-/* pack g_acc into the far buffer: rows of (w+7)/8 bytes, MSB first. Returns bytes */
+/* pack pdx_acc into the far buffer: rows of (w+7)/8 bytes, MSB first. Returns bytes */
+#ifdef PDXF_ASM
+pdw pdx_pack(pdw dseg, pdw doff);                   /* pdxfrs.inc */
+#else
 static pdw pdx_pack(pdw dseg, pdw doff)
 {
-    pdw r, x, wb = (pdw)((g_acw + 7) >> 3), bit;
+    pdw r, x, wb = (pdw)((pdx_acw + 7) >> 3), bit;
     pdi s, c;
     pdb v;
     pdi *a;
-    for (r = 0; r < g_ach; r++) {
-        a = g_acc + r * AC_W; s = 0; v = 0; bit = 0;
-        for (x = 0; x < g_acw; x++) {
+    for (r = 0; r < pdx_ach; r++) {
+        a = pdx_acc + r * AC_W; s = 0; v = 0; bit = 0;
+        for (x = 0; x < pdx_acw; x++) {
             s = (pdi)(s + a[x]);
             c = pdx_abs(s);
             v = (pdb)(v << 1);
             if (c >= PDXF_THR) v |= 1;
             if (++bit == 8) { pd_fpokeb(dseg, (pdw)(doff + r * wb + (x >> 3)), v); v = 0; bit = 0; }
         }
-        if (bit) pd_fpokeb(dseg, (pdw)(doff + r * wb + (g_acw >> 3)), (pdb)(v << (8 - bit)));
+        if (bit) pd_fpokeb(dseg, (pdw)(doff + r * wb + (pdx_acw >> 3)), (pdb)(v << (8 - bit)));
     }
-    return (pdw)(wb * g_ach);
+    return (pdw)(wb * pdx_ach);
 }
+#endif /* PDXF_ASM */
 
 /* ---- flattening ---------------------------------------------------------- */
 static pdi g_fx, g_fy;              /* the current point, 26.6 device           */
@@ -242,9 +251,9 @@ static pdw rs_glyph(pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
     if (!g_rwpx) return 0;
     wb = (pdw)((g_rwpx + 7) >> 3);
     if (wb * rows > cap) return 0xFFFF;
-    g_acw = g_rwpx; g_ach = rows;
+    pdx_acw = g_rwpx; pdx_ach = rows;
     g_fx = g_fy = 0;
-    for (i = 0; i < AC_W * AC_H; i++) g_acc[i] = 0;
+    for (i = 0; i < AC_W * AC_H; i++) pdx_acc[i] = 0;
     /* pass 2: edges, relative to the bitmap's left */
     g_sxc = g_syc = 0;
     for (i = 0; i < g_oln; ) {
