@@ -1942,9 +1942,11 @@ cp_drv_name:
     push es
     mov si, cp_sbuf             ; '' unless a PUBLISHED class names a page
     mov byte [si], 0
-    call cp_clssvc              ; DI = this class's published table
+    call cp_clssvc              ; ES:DI = this class's published table
     jc .out
-    mov cx, [di+DSV_CPNAME]     ; the driver's own pointer, in ITS segment
+    mov cx, [es:di+DSV_CPNAME]  ; the driver's own pointer, in ITS segment -
+                                ; which is not ES for class 1, whose table is
+                                ; the kernel's copy, so it is read below
     jcxz .out
     cbw                         ; AL = the class, 1..DRVC_MAX
     xchg di, ax
@@ -2053,19 +2055,21 @@ cp_drv_ev:
     jc .no                      ; a static page, or a driver that went away
     mov bx, dx                  ; BX = the pane-relative y...
     mov dx, bp                  ; ...DX the pane top, CX already the x
+    push es
     push si
     mov si, di                  ; SI = pane left, banked past drv_cls_svc
-    call cp_clssvc
+    call cp_clssvc              ; ES:DI = the class's table, in place
     pop bp                      ; BP = the cell (pushed as SI above)
+    jc .noes
+    mov bp, [es:bp+di]          ; BP = the published proc, 0 = not wanted.
+                                ; THE OVERRIDE IS LOAD-BEARING (SPEC.md 1):
+                                ; [bp+di] defaults to SS, LOW_SEG here, and
+                                ; read a task stack it answers 0 - which looks
+                                ; exactly like a driver that did not publish
+.noes:                          ; the cell
+    pop es                      ; (pop writes no flag)
     jc .yes                     ; the class went: nothing to call, and the
                                 ; caller must still not run the static path
-    add bp, di
-    mov bp, [ds:bp]             ; BP = the published proc, 0 = not wanted.
-                                ; THE OVERRIDE IS LOAD-BEARING (SPEC.md 1):
-                                ; SS is LOW_SEG here and [bp] defaults to it,
-                                ; so without it this reads a task stack and
-                                ; answers 0 - which looks exactly like a
-                                ; driver that did not publish the cell
     mov di, si
     or bp, bp
     jz .yes
@@ -4342,8 +4346,8 @@ cp_vid_fc:
     call cp_vid_fcok            ; CF = greyed...
     mov ax, OS88UI_GCHECK
     adc ah, 0                   ; ...is AH = OS88UI_DIS (1) or 0
-    test byte [drv_cfg+CFG_VGC], 1
-    call cp_gnz                 ; ticked when bit 0 is set (SPEC.md 39.28)
+    test byte [drv_cfg+CFG_VGC], CFG_VGCB
+    call cp_gnz                 ; ticked when the bit is set (SPEC.md 39.28)
     jmp kretm_si
 %endif
 
@@ -4506,10 +4510,10 @@ cp_vid_click:
     mov al, 5
     call cp_ctl                 ; ...and it fires on the RELEASE (13.8.3)
     jc .done
-    and byte [drv_cfg+CFG_VGC], 1   ; stored 0 or 1, whatever a record held
-    xor byte [drv_cfg+CFG_VGC], 1
+    xor byte [drv_cfg+CFG_VGC], CFG_VGCB ; (a bit of 'VM's mode byte, F1)
+    test byte [drv_cfg+CFG_VGC], CFG_VGCB
     call cp_wdset               ; remembered on close (SPEC.md 31.8) - the
-    jz .fcdraw                  ; door writes no flags, so ZF is the xor's: an
+    jz .fcdraw                  ; door writes no flags, so ZF is the test's: an
     call cp_vgc_force           ; UN-tick waits for the next start (39.28)
 .fcdraw:
     call cp_vid_fc

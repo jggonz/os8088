@@ -1524,7 +1524,7 @@ cmz_sizes:
     CSDO_OFF
     mov ax, cx
     mov cl, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub cl, DSK_CZ_MARK             ; 20.14.1): 0x5A and 0x5B pass
+    sub cl, DSK_CZ_MARK             ; 20.14.1): 0xA4 and 0xA5 pass
     cmp cl, LZ_LZB
     jbe .cz
     mov cl, 0xFF                ; no hint: what it occupies is what it

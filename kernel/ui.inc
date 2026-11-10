@@ -3341,8 +3341,9 @@ section .text
 ;      volume_popup (drivers/sound/volume.inc), the one caller, holds nothing
 ;      in any of them across a bridge call: kernel size pass 14 took the five
 ;      pushes off (10 bytes). A second caller that needs one banks it itself
-ui_volume_bridge: dw ui_volume_service, KERNEL_SEG
-ui_volume_service:
+ui_volume_service:                  ; (SOUND.DRV far-calls KERNEL_SEG:this - DI
+                                ; at SNDV_MIXPOP is its offset, R3: the 4-byte
+                                ; far pointer it was went, kernel size pass 19)
     push ds
     KDS
     KES
@@ -3405,7 +3406,7 @@ ui_clkcell:
     mov dx, [menu_mixx]         ; DX = the speaker's left x, CX the press's
     push ds
     pop es
-    mov di, ui_volume_bridge
+    mov di, ui_volume_service   ; the bridge, KERNEL_SEG's (R3)
     mov bx, DRVC_SOUND*256 + SNDV_MIXPOP ; SNDV_MIXPOP, no graphics lock held
     call drv_pkg_call_x
     jnc .r                      ; the speaker's: the popup has run (or said

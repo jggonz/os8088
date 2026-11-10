@@ -1087,16 +1087,15 @@ assoc_sweep:
 %ifdef OS88_REDIR
     cmp ah, DVK_FILE
     jne .kind
-    push ax                     ; THIS ROW's class (SPEC.md 62.9.19): two
-    push di                     ; file classes, and only one of them is
-    mov al, [bx+DV_CLASS]       ; memory
-    call drv_cls_svc_x          ; CLSCF: a DVK_FILE row's class is a copied one - dsk_vol_add derives the kind FROM the class, 5 or 8
-    test byte [di+DSV_CAPS], FSCAP_LOCAL
-    pop di
-    pop ax                      ; (pop writes no flag)
-    jnz .kind                   ; ...a redirected one whose reads are MEMORY
-    mov al, 0                   ; (62.9.2.2) too, and any other is the cable
-%endif
+    mov al, [bx+DV_CLASS]       ; THIS ROW's class (SPEC.md 62.9.19): two
+    push es                     ; file classes, and only one of them is memory
+    call drv_cls_svc_x          ; CLSCF: a DVK_FILE row's class is a published one - dsk_vol_add derives the kind FROM the class, 5 or 8, and drv_release drops a class's rows with it
+    mov al, [es:di+DSV_CAPS]    ; ...read in place (kernel size pass 19), and
+    and al, FSCAP_LOCAL         ; the PASS is the bit: 2 for a redirected one
+    shl al, 1                   ; whose reads are MEMORY (62.9.2.2), 0 for any
+    pop es                      ; other, which is the cable. DI is this loop's
+%endif                          ; to clobber (the proc answers in it).
+                                ; FSCAP_LOCAL is 1: driver.inc says so
 .kind:
     cmp al, ch
     jne .volnext                ; ...not this pass's

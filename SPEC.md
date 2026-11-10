@@ -2233,7 +2233,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,838 bytes, 6 sectors (with main's Color presets, at the `elendilon -> main` merge; kernel size pass 12 had it at 2,615, and 2,650 before) |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 12,502 in all (`MODC_SIZE`) |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 164 bytes): BSS, as zeros at the file's end (§2.8.1) | 164 |
+| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 159 bytes): BSS, as zeros at the file's end (§2.8.1) | 159 |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -50740,7 +50740,7 @@ layout, one word longer):
 
 So no container changed. The package header's eight flag bits are all
 spoken for, a part table carries one format byte for every row, and a `'CZ'`
-file's format byte and its directory hint (`5Ah`/`5Bh`, 20.14.1) say LZ4 or
+file's format byte and its directory hint (`A4h`/`A5h`, 20.14.1) say LZ4 or
 LZB; all four still say exactly that, and every reader that goes through the
 decoder - the package loader, the transparent `'CZ'` read (drivers, modules,
 overlays, files), `OSAPI_DECOMP` (parts), the Compress verb's Decompress and
@@ -50886,13 +50886,14 @@ each file's first sector to find out would make every Disk window and every
 file dialog pay for a feature most files do not use. So the answer is carried
 in the entry the walk is holding anyway — **three bytes this kernel otherwise leaves
 alone** (§19.1) - though not free on other systems: Windows NT, Linux and
-macOS read +12's bits 3 and 4 as lower-case flags (so 5Ah lists the name in
-lower case there), +13 is the create time's hundredths, and OS/2 and NT treat
-+20 as an EA handle on FAT12/16:
+macOS read +12's bits 3 and 4 as lower-case flags - so the mark keeps both
+CLEAR (kernel size pass 19, ABI-BREAK-LIST F3: it was 5Ah/5Bh, which listed
+every packed file in lower case there) - +13 is the create time's hundredths,
+and OS/2 and NT treat +20 as an EA handle on FAT12/16:
 
 | offset | what FAT calls it | what it carries here |
 |---|---|---|
-| +12 | `NTRes` | **5Ah** = this file is compressed; anything else = it is not |
+| +12 | `NTRes` | **A4h** = this file is compressed; anything else = it is not |
 | +13 | `CrtTimeTenth` | the unpacked size, high byte |
 | +20 | `FstClusHI` | the unpacked size, low word |
 
@@ -50913,8 +50914,8 @@ header claiming another length is refused by the decoder itself, which has to
 produce exactly that many bytes. Neither number is more trustworthy than the
 other, so a disagreement is not resolved in favour of either.
 
-**The mark carries the format** (`DSK_CZ_MARK + LZ_*`, so `0x5A` is LZ4 and
-`0x5B` LZB), and every writer of the hint carries it — `dskw_commit` from the
+**The mark carries the format** (`DSK_CZ_MARK + LZ_*`, so `0xA4` is LZ4 and
+`0xA5` LZB), and every writer of the hint carries it — `dskw_commit` from the
 bytes it is writing (§20.14.4) and `tools/os88disk.py` from each file's
 `'CZ'` header. It was load-bearing when the two formats got different answers
 at the capacity decision (a window for one, a refusal for the other); since
@@ -72148,8 +72149,8 @@ recorded COLOUR this boot does not grey it — the verdict is per POWER-ON
 
 It is control id 5 (the rows are 0, Set Primary 1, the desktop radios 2..4),
 and like every check box in the panel it FIRES ON THE RELEASE (§13.8.3). The
-tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.30), so a `VC`
-record holding any other value shows clear and the first click ticks it. The
+tick is bit 7 of `CFG_VGC`, `CFG_VGCB` - a bit of the `VM` record's mode
+byte since kernel size pass 19 - and the click flips that bit alone (§39.30). The
 label is lettered by `cp_vid_paint` and the glyph by `cp_vid_ctls`, the
 Date/Time page's split, so a press edge redraws the glyph and not the words.
 The caption — "Switches now, and is kept" — is true of the tick; the un-tick
@@ -75711,7 +75712,7 @@ The package ABI extends `drivers/sound/sndpkg.inc`, through the existing
 | `SNDV_MIXGET` (8) | AL = channel | CF=0, CL/CH = left/right percentage 0..100; DL bit 0 = stereo, bit 1 = tone control; DH = native maximum (3/7/15/31); mono repeats left; CF=1 AX=SNDE_MIXARG (8) for unsupported channel |
 | `SNDV_MIXSET` (9) | AL = channel; CL/CH = left/right 0..100 | CF=0 written; invalid values or channel refuse before any write, CF=1 AX=SNDE_MIXARG; unavailable mixer answers SNDE_NOMIX |
 | `SNDV_MIXICON` (10) | CX = left x, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only |
-| `SNDV_MIXPOP` (11) | CX = the PRESS's x, DX = icon left x; ES:DI = kernel-private far bridge record; UI task, no lock held | CF=1 when the press is not on the icon's 24 pixels (the kernel then opens the Date/Time page - the hit test is the driver's since kernel size pass 14, at the owner's word); otherwise tracks volume popup, restores pixels and frees scratch on every exit; CF=0 |
+| `SNDV_MIXPOP` (11) | CX = the PRESS's x, DX = icon left x; DI = the kernel-private bridge's offset, far-called at `KERNEL_SEG`:DI (ES = the kernel's, which is the driver's test that the bar is asking; a 4-byte far-pointer record until kernel size pass 19, ABI-BREAK-LIST R3); UI task, no lock held | CF=1 when the press is not on the icon's 24 pixels (the kernel then opens the Date/Time page - the hit test is the driver's since kernel size pass 14, at the owner's word); otherwise tracks volume popup, restores pixels and frees scratch on every exit; CF=0 |
 | `SNDV_MIXICON_THEME` (12) | CX = left x, AL = menu-bar background, AH = menu-bar ink, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only; verb 10 retains its original white/black drawing |
 
 `SNDV_MIXPOP` is the kernel's alone and the driver tells it apart by ES: the
@@ -84759,16 +84760,20 @@ about. A re-sense at boot was considered and refused for the field case
 itself: the owner's machines misread with the monitor already on and warm,
 so a second reading a few seconds later reads the same.
 
-**The setting is `SYSTEM.CFG`'s `VC` key** (§51.5), one byte at ver 1,
-`CFG_VGC` in `drv_cfg`. Like `FD` (§31.14) it is **not a plain store and not
+**The setting is bit 7 of `SYSTEM.CFG`'s `VM` record's mode byte** (§51.5),
+`CFG_VGCB` of `CFG_VGC` = `CFG_VDM` in `drv_cfg`. It was a key of its own, `VC`,
+one byte at ver 1, until kernel size pass 19 folded it in (ABI-BREAK-LIST F1):
+the arrangement's mode is 0 or 1, the boot masks the bit off before it
+range-checks it, and the pack writes the mode UNDER the bit, so `VM`'s ver
+stands - an older file's mode byte carries the bit clear - and a flag day
+costs a Force Color set once more. Like `FD` (§31.14) it is **not a plain store and not
 in `_map`**: the Control Panel edits the struct byte directly and the boot
 reads it once. So nothing in the settings read seeds it, and a `SYSTEM.CFG`
 with no `VC` record - every file an older kernel wrote - would leave it
 whatever `.bss` held: **`drv_init` zeroes all of `drv_cfg`** in the run that
 already forgot every class's services (the struct follows `drv_svc_end`, and
-an `%error` holds them adjacent). And the setting is **bit 0 alone**:
-`vgcf_boot` and the box's glyph test that bit, and the click stores 0 or 1,
-so a record holding any other value reads clear and cannot stick ticked.
+an `%error` holds them adjacent). And the setting is **that bit alone**:
+the boot and the box's glyph test it, and the click flips it.
 
 **What it does** is `cp_vgc_force`, ONE body (the `VGC_FORCE` macro, kept in
 `driver.inc` beside the settings it serves) in **`CTRL.DRV`'s settings core**
@@ -102801,8 +102806,9 @@ every verb past `SEG_BWIN`: kern_big and kern_small byte-identical).
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
 
-- A **window** is a descriptor the caller owns, recorded in `mega_wtab` (32
-  rows of selector and owner byte, in the tables' TAIL past the IDT and
+- A **window** is a descriptor the caller owns, recorded in `mega_wtab` (64
+  rows of selector and owner byte - 32 until kernel size pass 19, ABI-BREAK-LIST
+  R2-3, a count that costs the tables' block and no conventional byte - in the tables' TAIL past the IDT and
   reached through `MEGA_SEL_MXT` - `.lowbss` until kern_mega size pass 2,
   `kernel/mega.inc`'s `MEGA_MXT_SIZE`): the instance's slot, or
   `0C0h | row` for a driver, or FFh for neither. The owner's end frees it
@@ -103567,8 +103573,9 @@ driver with a single tier need not implement the verb at all; it answers `CF=1`
 and the caller reports that, with nothing to undo. What tiers a driver *has* is
 `DSV_TIERS` below, and this verb must never change it.
 
-The service table, in the driver's segment, copied whole by the kernel at
-attach so every later dispatch is a near read plus one far call:
+The service table, in the driver's segment - **read there, in place**, for as
+long as the class is published (kernel size pass 19; the SOUND class's alone
+is still copied whole, below):
 
 ```
 DSV_CAPS    dw  capability bits it ADDS to OSAPI_SND_CAPS
@@ -103590,42 +103597,45 @@ driver to probe again — see §31.7 for what that costs and why the answer cann
 change between attach and detach. 0 means the driver did not answer, and the
 panel then assumes it can do everything.
 
-**The table has a length, and the driver's header carries it** — §62.9.1.1's
-answer for the `FSV_*` table, one level up, because the same widening happened
-here: the three Control Panel cells and `DSV_PKGCALL` took `DSV_SIZE` 28 → 36.
-"Every driver is in this tree and `make` rebuilds them all" is true for a driver
-built in the same tree and **wrong for the file on somebody's disk**: `HDD.DRV`
-and `NET.DRV` both put their own data directly after their tables, so a kernel
-copying 36 bytes out of a released one published `'Ha'` — or `net_read` — into
-`DSV_PKGCALL`, which is the fence any `.O88` on the apps floppy reaches through
-`OSAPI_DRV_CALL` (§20.11).
+**The table has a FLOOR, and every driver carries all of it** (kernel size
+pass 19, ABI-BREAK-LIST D4 and histsys-7). `DSV_FLOOR` (36, `DSV_SIZE` today)
+is in `drivers/os88drv.inc`, and `OS88_DRV_END` refuses a driver whose
+`OS88_DRIVER` fourth argument - its table's real length, `HDD.DRV`'s and
+`EMS.DRV`'s - is anything else; a driver that gives none pads to `DSV_SIZE`.
+Every driver in the tree had carried a whole table since `DSV_SIZE` last moved,
+two `DRV_VER` bumps before, so the floor wrote down what was true and broke
+nothing. **What it buys is that nothing is length-tested any more**:
 
-So the dispatcher's pad byte at **+15 is `DRV_H_DSV`, the byte length of the
-`DSV_*` table this driver was built with**. `OS88_DRIVER` writes its fourth
-argument there - `DSV_SIZE` when it has none, and the table's REAL length when
-the driver passes one (`HDD.DRV` and `EMS.DRV` do - both `DSV_SIZE` today,
-`EMS.DRV`'s a table whose only real cell is `DSV_PKGCALL`), so a short table needs no pad out to
-`DSV_SIZE`; `OS88_DRV_END` refuses an odd length, one under 2 or one over
-`DSV_SIZE`. `drv_publish` copies that many bytes and **publishes 0
-for every cell past it**, so a cell the driver does not have is refused by the
-`or bp, bp` / `jz` test every consumer already makes — `drv_pkg_call`'s fence,
-`cp_drv_ev`'s three page cells — instead of being far-called; the copy is
-clamped to `DSV_SIZE`, over a table zeroed first. (It was "all or
-`DSV_TAB0`" until `DSV_GEOM` took `DSV_SIZE` 36 → 38 in §87 - it is 36 again
-now `DSV_GEOM` is `DSV_BLK`'s sub-function 2 - when every
-released driver became "shorter" and lost its four newest cells — the Control
-Panel page's and `DSV_PKGCALL`, which for `ETHER.DRV` is the whole socket
-surface.) **A byte of 0
-means `DSV_TAB0` = 28**, the length every released driver has, so a mismatched
-floppy set degrades to a driver with no page key and no package door rather
-than a wild far call. `DRV_VER` does not change, for §62.9.1.1's reason: every
-existing cell means what it meant, and a version bump would cost the user a
-working driver instead of one missing cell.
+- **The kernel reads every class's table IN PLACE**, through the class's
+  published segment (`drv_cls_svc_x` answers ES:DI), keeping only the
+  offset `DRVV_ATTACH` answered (`drv_svco`, a word a class from class 2).
+  It used to keep a 36-byte copy per class - seven, 252 bytes of resident
+  `.bss` that were mostly zeros, `DSV_*` being the union of every class's
+  cells - copied as far as the header's +15 said over a zero-filled slot.
+  So **a driver's table must stay where it said and stay readable until its
+  detach**: not in attach-only memory it reuses (`HDD.DRV`'s was, in
+  `hd_mbr`'s bytes, and moved out), not past a `DRV_H_KEEP` drop.
+- **The SOUND class's table is still COPIED**, whole, into `drv_svc`: the
+  `dsk_get_dir` idiom, so every consumer in `snd.inc` is an ordinary near
+  read with DS = KERNEL_SEG, and `snd_tick` - which runs inside IRQ0 - does
+  not have to point a segment register anywhere to find out whether it has
+  work. `DRVV_TIER` re-publishes it.
+- **+15, `DRV_H_DSV`, is not read for a length** (its bits 7 and 6,
+  `OS88_DRV_HIGHOK` and `_HICLAIM`, still are, by kern_mega), and the
+  fallbacks for a header that said 0 - `DSV_TAB0` and §62.9.1.1's
+  `FSV_TAB0`, both 28, for drivers older than the length bytes - are gone
+  with it (N1). `DRV_VER`'s equality test is what keeps an older, shorter
+  driver out.
 
-The copy is the `dsk_get_dir` idiom in a new place: every consumer downstream
-is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
-runs inside IRQ0 — does not have to point a segment register anywhere to find
-out whether it has work.
+A cell appended to `DSV_*` later is past the floor: the kernel must test it
+against +15 before reading it, or the `DRV_VER` bump that adds it raises
+`DSV_FLOOR` - `kernel/driver.inc` refuses to assemble until one of the two is
+done. The history this replaced: the three Control Panel cells and
+`DSV_PKGCALL` took `DSV_SIZE` 28 → 36 while released `HDD.DRV` and `NET.DRV`
+put their own data directly after their tables, so a kernel copying 36 bytes
+out of one published `'Ha'` - or `net_read` - into `DSV_PKGCALL`, the fence
+any `.O88` reaches through `OSAPI_DRV_CALL` (§20.11); the length byte and the
+zero-fill were the answer while a released driver could be shorter.
 
 **`drv_svc_call` takes NO GENERAL REGISTER, and that is a contract.** Every
 one of them is an argument to something in the sound ABI (§34.2, §34.5): AL
@@ -103661,7 +103671,8 @@ leaves the speaker for the exclusive-clip tier that has nowhere else to go
 
 There is one publication slot **per driver class**, not one in total:
 `[drv_owner]`, the far pointer `drv_svc_call` dispatches through and the
-copied service table are all arrays indexed by `DRVR_CLASS - 1`.
+published service table's offset (`drv_svco`; a COPIED table per class until
+kernel size pass 19, §51.2) are all arrays indexed by `DRVR_CLASS - 1`.
 
 That is a fix, not a generalisation. There used to be one of each,
 overwritten by whichever driver attached last — so on a machine with a sound
@@ -104198,8 +104209,9 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-`VC` is §39.30's Force Color, one byte at ver 1 on `kern_big`, applied by
-the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
+Force Color (§39.30) is bit 7 of `VM`'s mode byte on `kern_big`, applied by
+the boot overlay and read by nothing resident - the `VC` key it was went at
+kernel size pass 19. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
 only. `TP` is §76.14.14's Color preset, seven bytes at ver 1 on both kernels -
@@ -108767,12 +108779,14 @@ found drives added to `[hd_wantmnt]`) are each sent exactly once to an image
 hibernate round trip is `hbm_detach`/`hbm_reload`, a fresh image again. Both
 finish before anything reads a partition table, and the first thing that does
 - `hd_cfg_automount`'s first `hd_part_load` - blanks the buffer, so what the
-probe left there is never seen. The service table goes with them: `drv_publish`
-copies it when `hd_attach` returns and the kernel never reads ours again.
+probe left there is never seen. The service table USED to go with them, while
+`drv_publish` copied it once; since kernel size pass 19 the kernel reads it in
+place for as long as `HDD.DRV` is published (§51.2), so `hd_services` sits
+out in the padding before the window, beside `hd_at_dup`, and not in it.
 
 | | resident (every call) | in `hd_mbr` (once) |
 |---|---|---|
-| attach | `hd_entry`'s dispatch, the refusal | `hd_attach`, `hd_at_bios`/`_channel`/`_ident`/`_geom`, `hd_services`, `hd_idbuf` |
+| attach | `hd_entry`'s dispatch, the refusal, `hd_services` | `hd_attach`, `hd_at_bios`/`_channel`/`_ident`/`_geom`, `hd_idbuf` |
 | ready | `hd_cfg_automount` | `hd_ready` |
 
 **`hd_ready` LEAVES BY A JUMP**, and that is the one rule a reader has to
@@ -115795,10 +115809,10 @@ FSV_RMTREE  equ 28      ; SI = a folder's name, in the CURRENT folder: remove
                         ; and AX = FERR_*. Optional like FSV_COPY: a 0 row
                         ; sends dskw_rtbody to the empty-only FSV_RMDIR
 FSV_SIZE    equ 30
-FSV_TAB0    equ 28      ; the length a driver whose header says 0 has (below)
+FSV_FLOOR   equ 30      ; every file driver carries the whole table (below)
 ```
 
-##### 62.9.1.1 The table has a length, and the driver's header carries it
+##### 62.9.1.1 The table had a length in the driver's header; it has a floor now
 
 The table grew twice — `FSV_ENUM`/`FSV_COPY` took it to 28, `FSV_RMTREE` to
 30 — and each time the kernel simply read the new cell, which is fine for a
@@ -115809,17 +115823,20 @@ read `'os'` (0x736F) out of `net_name`, found it non-zero, and far-called
 into it. `DRV_VER` did not change because the driver ABI did not: every
 existing cell means what it meant.
 
-So the driver header's reserved word at +10 is now **`DRV_H_FSV`, the byte
+So the driver header's reserved word at +10 became **`DRV_H_FSV`, the byte
 length of the `FSV_*` table this driver was built with** — `OS88_DRIVER`
-writes `FSV_SIZE` there for every class, and only `DRVC_FILE` is ever read.
-`drv_fs_call` and `drv_fs_has` refuse a verb at or past that length exactly as
-they refuse a 0 cell: `CF=1, AX=0`, "not published", which every caller
-already handles by falling back. **A word of 0 means `FSV_TAB0` = 28**, which
-is what every released driver has and what every one of them carried in that
-word, so a mismatched floppy set degrades to the older behaviour (a folder
-delete on the Link volume goes back to empty-only) instead of a jump into a
-name string. Growing the table again is now one constant: the length travels
-with the driver, and a cell the driver does not have is not read.
+writes `FSV_SIZE` there for every class - and `drv_fs_has` refused a verb at
+or past it, with a word of 0 read as `FSV_TAB0` = 28, the released drivers'.
+
+**Since kernel size pass 19 the table has a FLOOR instead** (`FSV_FLOOR`, 30,
+`drivers/os88drv.inc`; ABI-BREAK-LIST N1 and D4), §51.2's rule for the
+`DSV_*` table one level down: every file driver `DRV_VER` 14 admits carries
+every verb up to `FSV_SIZE` - a 0 for one it declines - so `drv_fs_has` reads
+a verb's cell in place with **no length test**, and +10 is written and not
+read. A verb appended later is past the floor, and `kernel/driver.inc`
+refuses to assemble until it is length-tested or a `DRV_VER` bump raises the
+floor. A 0 cell is still `CF=1, AX=0`, "not published", which every caller
+already handles by falling back.
 
 **`FSV_ENUM` IS NOT `FSV_LIST`, AND THAT IS NOT A DUPLICATION.** They ask the
 same question of the same folder and they cannot share a verb, because
@@ -117698,9 +117715,11 @@ mount**: a detach between the mount and the verb would leave a banked segment
 naming freed memory. A copy between the RAM disk and the cable alternates
 mounts as every cross-volume copy does, and the class follows each one.
 
-**Class 8 keeps a copied table, past the two classes that do not** (6, `DRVC_POINT`,
-and 7, `DRVC_EMS`). `drv_cls_svc_x` steps over them to the slot after class 5's
-(through `drv_svcix`, a byte a class, since kernel size pass 12), and `drv_pkg_call_x` - `OSAPI_DRV_CALL`, which carried the same compaction
+**Class 8 has a service table, past the two classes that do not** (6, `DRVC_POINT`,
+and 7, `DRVC_EMS`). `drv_cls_svc_x` stepped over them to the copy after class 5's
+(through `drv_svcix`, a byte a class, from kernel size pass 12 until pass 19
+read every table but SOUND's in place and `drv_svcix` had nothing to index,
+§51.2), and `drv_pkg_call_x` - `OSAPI_DRV_CALL`, which carried the same compaction
 written inline - now calls it through `drvf_drv_cls_svc` instead, so class 8 is
 taught once. Every other per-class walk (`drv_pub_seg`, `drv_cp_class_x`,
 `osapi_vol_fence`, `drv_svc_clear`, `MEM_RR_ROW drv_fseg`) runs `1..DRVC_MAX` and
@@ -220710,14 +220729,15 @@ is reached by OUT and needs no CPU above an 8088.
 ### 107.1 What the kernel carries
 
 - **A class, `DRVC_EMS` = 7** (`apps/os88api.inc`), appended after
-  `DRVC_POINT` because a class number is ABI. It has a publication slot and,
-  like `DRVC_POINT`, **no copy of its service table**: its one cell is
-  `DSV_PKGCALL`, and `drv_publish` puts that word in `drv_fptr7`'s OFFSET
-  half - which nothing reads for this class, `drv_pkg_disp` taking class
-  1's `PKG_DISP` for every far call - where `drv_pkg_call_x` reads it. So
-  `drv_cls_svc_x` refuses the two last classes by one `>= DRVC_POINT` test,
-  as it did before EMS. (It shipped for one cycle with a 36-byte copy for
-  that one word, and kernel size pass 11 took the copy out.)
+  `DRVC_POINT` because a class number is ABI. It has a publication slot and
+  a **service table read in place** (§51.2), every cell 0 but
+  `DSV_PKGCALL`, the door `drv_pkg_call_x` reaches. (It shipped for one
+  cycle with a 36-byte copy for that one word; kernel size pass 11 took the
+  copy out and put the word in `drv_fptr7`'s OFFSET half, with `EMS.DRV`'s
+  "table" whatever 34 bytes of code lay ahead of the door; kernel size pass 19
+  read every class's table but SOUND's in place and gave `EMS.DRV` a whole
+  one - 34 bytes of image - so the special case left `drv_pkg_call_x`,
+  `drv_publish` and kern_mega's `fsx_rdrvf`.)
 - **A row, `EMS.DRV`, "EMS"**, on `kern_big` and `kern_emu`, SYSTEM.CFG
   **bit 7** on both, **not wanted by default** (§51.3): attach writes to
   I/O ports, and on a machine without a board at that address they are

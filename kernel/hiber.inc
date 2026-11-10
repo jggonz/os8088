@@ -1683,9 +1683,13 @@ hbm_geom:
     mov ah, [bx+DV_UNIT]        ; the driver's handle
     mov al, [bx+DV_CLASS]
     mov [drv_blkcls], al
-    call COLD_SEG:drvf_drv_cls_svc  ; DI = the class's service table
+    push es
+    call COLD_SEG:drvf_drv_cls_svc  ; ES:DI = the class's service table, in
+    jc .nogeo                   ; place (kernel size pass 19)
+    mov bp, [es:di+DSV_GEOM]    ; == DSV_BLK, and AL = 2 is the sub-function
+.nogeo:
+    pop es                      ; (pop writes no flag)
     jc .no
-    mov bp, [di+DSV_GEOM]       ; == DSV_BLK, and AL = 2 is the sub-function
     mov al, 2
     HBGC drv_blk_call_x         ; DL = unit, CX:BX = base, SI = spt,
     jc .no                      ; DI = heads; CF = 1 not int 13h

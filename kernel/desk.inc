@@ -1774,10 +1774,10 @@ desk_pic:
     stc
     jne .kern                   ; only a file class's DSV_CAPS means FSCAP_*
     mov al, [bx+DV_CLASS]
-    call drv_cls_svc_x          ; CLSCF: DI = its copied table
-    jc .kern
-    test byte [di+DSV_CAPS], FSCAP_ICON
-    stc
+    call drv_cls_svc_x          ; CLSCF: ES:DI = its table, in place. ES is
+    jc .kern                    ; this routine's to clobber, and the X cell
+    test byte [es:di+DSV_CAPS], FSCAP_ICON ; below makes it our DS first
+    stc                         ; (api_x)
     jz .kern
     mov bh, al
     mov bl, DRV_ICONV

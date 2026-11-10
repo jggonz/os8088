@@ -476,18 +476,18 @@ em_bases:   dw 0x260, 0x264, 0x268, 0x26C ; the bases tried in each frame: the
             dw 0x288, 0               ; Lo-tech's, and a PicoMEM's default
 
 ; =============================================================================
-; THE SERVICE TABLE IS ONE CELL. DRVC_EMS keeps no copy of a driver's table:
-; drv_publish reads [SI + DSV_PKGCALL] alone, the moment attach returns, into
-; drv_fptr7's offset half (kernel/driver.inc, SPEC.md 107.1) - so em_svc is
-; whatever lies DSV_PKGCALL bytes ahead of the door, and the 34 bytes there
-; are code, never read as cells.
+; THE SERVICE TABLE (SPEC.md 51.2, 107.1): every cell 0 but the door. The
+; kernel reads it IN PLACE since kernel size pass 19 - the Control Panel's
+; walks ask every class for DSV_CPNAME and DSV_CPCLOSE, kern_mega's real-mode
+; bracket for DSV_BLK, DSV_TICK and DSV_STREAM - so it is a whole table now,
+; DSV_FLOOR bytes (OS88_DRV_END holds it there). It was one cell, em_door, read
+; once at attach into drv_fptr7's offset half, with the 34 bytes ahead of it
+; whatever code happened to be there: 34 bytes of image (zeros: a few of file)
+; for 9 of every kernel's .text that the special case cost.
 ; =============================================================================
-em_door:    dw em_pkg           ; DSV_PKGCALL
-em_svc      equ em_door - DSV_PKGCALL
-em_svc_end  equ em_door + 2     ; (OS88_DRIVER's +15 table length: DSV_SIZE)
-%if em_door - $$ < DSV_PKGCALL
-    %error "em_door must lie DSV_PKGCALL bytes into the image at least"
-%endif
+em_svc:     times DSV_PKGCALL db 0  ; no page, no sound, no blocks, no files
+            dw em_pkg           ; DSV_PKGCALL: the door
+em_svc_end:
 
 ; =============================================================================
 ; State. Zero-only below OS88_STATE, so it costs the file nothing

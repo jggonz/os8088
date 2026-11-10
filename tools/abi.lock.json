@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "fb4f170d35af45ea44b4930f3c5a1c278050042b2f2160c35c450b3e04888933",
+  "fingerprint": "68c6a489be5a0a90f7c4b0bccc9fa8125e9e5233969a3a22f52dab478b38a762",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -2042,6 +2042,13 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of recon's re-contracts (R2 snapshots bounded by CX, R12 FSX_CAPS display index in CH, C10 desk item by record, V2 yield cell) onto the flag day (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "68c6a489be5a0a90f7c4b0bccc9fa8125e9e5233969a3a22f52dab478b38a762",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of drvtab: service tables read in place (histsys-7), DSV/FSV floors (D4) with the 28-byte fallbacks gone (N1), the volume bridge in DI (R3), MEGA_WTN 64 (R2-3) (kernel size pass 19)",
    "to": 14
   }
  ]
