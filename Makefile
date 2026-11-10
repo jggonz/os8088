@@ -21791,6 +21791,19 @@ $(PDXJ_OUT)/.host.stamp: apps/pagedesk/hosttest/pdxj_test.c apps/pagedesk/hostte
 	touch $@
 pdxj-host: $(PDXJ_OUT)/.host.stamp
 pdxj: $(BUILD)/PDXJ.MOD pdxj-host
+# the parser fuzz (ASan + UBSan; the second build lowers the arena floor so the
+# arena-full path is reached) and the real module in Unicorn: on demand, minutes
+.PHONY: pdxj-fuzz pdxj-uc
+pdxj-fuzz: | $(BUILD)
+	mkdir -p $(PDXJ_OUT)
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DJX_ARENA_MIN=300 -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz_small apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	$(PDXJ_OUT)/pdxj_fuzz -n 200 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+	$(PDXJ_OUT)/pdxj_fuzz_small -n 100 -s 3 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+pdxj-uc: $(BUILD)/PDXJ.MOD $(PDXJ_OUT)/.host.stamp
+	python3 apps/pagedesk/hosttest/pdxj_uc.py
 # ---- end PageDesk: jpx ------------------------------------------------------
 
 

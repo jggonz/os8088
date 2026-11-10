@@ -5024,7 +5024,7 @@ refuses gets). Nothing is silent.
 | 1 `NOTJPX` | neither signature found |
 | 2 `TRUNC` | the main header is cut off, or SIZ is not first |
 | 3 `GEOM` | a nonzero origin; an axis over 32767; tile size not a multiple of 2^NL with several tiles; a subsampled component; Csiz over 16 |
-| 4 `DEPTH` | precision over 12 bits, or a band needing more than 15 bit-planes |
+| 4 `DEPTH` | precision over 12 bits, or a QCD that leaves a band with no magnitude bit (`guard + eps < 1`). A code-block whose bit-planes (`Mb - zero bit-planes`) exceed 15 decodes as zero, quietly, like an arena overflow |
 | 5 `STYLE` | code-block style BYPASS (lazy) or TERMALL, which put several codeword segments in a code-block and so lengths in the packet header this module does not parse |
 | 6 `ROI` | an RGN marker |
 | 7 `PACKED` | PPM or PPT packed packet headers, or a POC progression change |
@@ -5035,6 +5035,7 @@ refuses gets). Nothing is silent.
 | 12 `LIMIT` | more than 768 precincts in a tile; more than 255 layers; a precinct with more than 384 kept code-blocks in a packet at every reduction up to the limit; a code-block segment over 65535 bytes |
 | 13 `MEM` | not even the lowest resolution fits the workspace (20.22.13.3) |
 | 14 `SOURCE` | the stream could not be opened, or ends before the first tile |
+| 15 `NOALPHA` | `PDJ_ALPHA` asked and the file has no alpha channel (20.22.13.7) |
 
 A stream that is CUT OFF after the first tile's first packet is NOT an error:
 the packets that are present are decoded and the rest are zero (a truncated
@@ -5076,10 +5077,13 @@ a segment.
 | context states, the MQ state | 64 |
 | row work for the horizontal transform (E and O arrays, two rows + 2 pads) | 4,100 |
 | row map of the tile-component, 1024 words | 2,048 |
-| precinct table, 768 entries x 6 | 4,608 |
+| precinct table, 768 entries x 4 (state offset, record base) | 3,072 |
 | packet code-block list, 384 x 6 | 2,304 |
-| source buffer | 512 |
-| scalars, geometry, the tile and component records | about 1,200 |
+| source buffer; depth-below-8 sample tables (4 x 128) | 512; 512 |
+| scalars, geometry, the tile and component records, MQ state | about 1,100 |
+
+*Measured:* **image 22,384 + bss 40,111 = 62,495 bytes** against the cap of 65,024
+(2,529 spare), `make build/PDXJ.MOD`.
 
 | workspace, in this order (`plan(r)` computes the sizes) | bytes |
 |---|---|
@@ -5192,26 +5196,49 @@ open (no `PDJ_ALPHA`) decodes component 0 as above whatever the file carries.
 ##### 20.22.13.8 Checks
 
 `tools/os88pdfx_jpx.py` writes, deterministically, with `opj_compress`
-(OpenJPEG 2.5.4, recorded in `tests/pdfany/jpx/README`): lossless and lossy;
-1 and 3 components; several tile sizes; all five progression orders; NL 1 to 6;
-code-block sizes 16, 32 and 64; layers; user precincts; SOP and EPH; a
-non-multiple tile size (the refusal). `hosttest/pdxj_test.c` compares the
-module's output at every reduction with `opj_decompress -r <n>` as the
-maximum and mean absolute difference, in a table in the report; the budgets
-are `max <= 3` and `mean <= 0.5` for 9/7 and `max = 0` for lossless 5/3
-without a transform (the MCT case is compared on component 0 only). The
-assembly routines are held to their twins bit for bit by
-`hosttest/pdxj_asm.py` (Unicorn, the way `pdmathtest` does it). The fuzz
-target is `hosttest/pdxj_fuzz.c` (ASan + UBSan, a mutator over the fixtures).
+(OpenJPEG 2.5.4, recorded in `tests/pdfany/jpx/README`): 45 fixtures - lossless
+and lossy; 1, 2, 3 and 4 components; several tile sizes; all five progression
+orders; 1 to 7 resolutions; code-block sizes 16, 32 and 64; layers; user
+precincts; SOP and EPH; 12-bit samples; every supported code-block style; an
+alpha channel; and the refusals (BYPASS, TERMALL, ROI, a tile size that is not a
+multiple of 2^NL). Four checks, all host-side:
+
+1. `hosttest/pdxj_cmp.py` runs the host build of the module (`pdxj_test`) at
+   every reduction each file allows and compares with `opj_decompress -r <n>` as
+   the maximum and mean absolute difference: 278 cases. Budgets: `max = 0` for
+   lossless 5/3 without a transform; `max <= 3`, `mean <= 0.5` for 9/7;
+   a file with the multiple component transform is compared on its Y (the
+   reference is Y computed from the RGB `opj_decompress` clamped, so the budget
+   is `max <= 12`, `mean <= 0.1` lossless and `mean <= 0.7` lossy); an alpha
+   channel is compared exactly. Measured: every lossless non-MCT case is exact;
+   9/7 cases are within max 1 (mean 0.04 to 0.23).
+2. `hosttest/pdxj_asm.py` holds `pdxjasm.inc` to its twin `pdxjtw.c` bit for bit
+   in Unicorn - MQ decoder through random streams and contexts, every lifting
+   routine near and far, interleave, dequantise, grey - including the 16-bit wrap
+   of intermediate sums. A mutation of either side fails it.
+3. `hosttest/pdxj_uc.py` runs the REAL `PDXJ.MOD` (compiled by cc8086, SS != DS,
+   far workspace, the door and its register contract) in Unicorn on every fixture
+   at two reductions and compares every row with the host build: 86 cases, 0
+   differences.
+4. `hosttest/pdxj_fuzz.c` (ASan + UBSan; mutated fixtures - flipped, overwritten
+   and inserted bytes, the header more often, truncation, a random workspace
+   size - with guard bytes either side of the workspace and an alarm for hangs):
+   34,000+ inputs, no report. A second build lowers `JX_ARENA_MIN` to reach the
+   arena-full path.
 
 ##### 20.22.13.9 The stack, the gate and the cost
 
 The module's door runs on the private deep stack (20.15); the budget is 1,776
-bytes per verb, including the PDENG call that `src_get` makes. The deepest
-chain is `pdxj_entry > pdxj_verb > v_row > tile_decode > t1_block > pass >
-mq call`, about 330 bytes; the transform driver adds no frame beyond two helper
-calls. The only kernel calls are through `pdkgate.inc` (none are made; the
-module reaches PDENG through its door).
+bytes per verb, including the PDENG call that `src_get` makes. `tools/os88pdstk.py` (run with PDXJ added as a segment; the edges `PDXJ
+_pdxj_engcall [_pdxj_engvec] -> PDENG pde_entry` and `PRIMARY _pdu_mcall [si] ->
+PDXJ pdxj_entry` are the two this module adds) reports the worst chain through
+`v_row`: **700 bytes**, of which the module's own frames to its `STRM_READ` call
+are 276 and PDENG's decoder under it 424; `v_open` 546, `v_close` 478, `v_init`
+46. The decode chain itself (`v_row > decode_trow > decode_tile > decode_comp >
+t1_block > t1_cup > xj_mqdec`) is shorter. No recursion (a tag tree walks an
+explicit 16-entry stack). The only kernel calls would be through `pdkgate.inc`;
+none are made - the module reaches PDENG through its door, and its largest frame
+is 74 bytes (cc8086's gate is 96).
 
 *Cost on a 4.77 MHz 8088, from instruction counts* (taken once, 20.22.13.10).
 

@@ -17,7 +17,9 @@
 #define JX_PTAB      768
 #define JX_NCBPKT    384
 #define JX_CBDATA    8192
-#define JX_ARENA_MIN 4096u
+#ifndef JX_ARENA_MIN
+#define JX_ARENA_MIN 4096u            /* the host fuzz lowers it to reach the arena-full path */
+#endif
 #define JX_MAXDIM    1024
 #define JX_MAXAXIS   32767
 
