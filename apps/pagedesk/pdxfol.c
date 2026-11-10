@@ -255,7 +255,7 @@ static pdw rs_glyph(pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
     g_fx = g_fy = 0;
     for (i = 0; i < AC_W * AC_H; i++) pdx_acc[i] = 0;
     /* pass 2: edges, relative to the bitmap's left (xmin is free now: the left bearing in 26.6,
-       shifted unsigned because a negative signed shift is undefined on the host) */
+     * shifted unsigned because a negative signed shift is undefined on the host) */
     xmin = (pdi)((pdw)g_rlb << 6);
     g_sxc = g_syc = 0;
     for (i = 0; i < g_oln; ) {

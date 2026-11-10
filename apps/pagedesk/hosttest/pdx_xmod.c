@@ -62,8 +62,8 @@ pdw pdr_xfar(pdw verb, pdw bx, pdw cx, pdw dx)
     pdx_odx = 0;
     r = pdxf_verb(verb, bx, cx, dx);
     /* PDX_SLOTGROW: grant a PDMEM_SLOT answer at once, as plat's ladder does (regrow S, re-INIT,
-       the same verb again), so PDXF's side of the growth is exercised; without it the answer goes
-       back to PDREND and pdr_test.c's ladder refuses it */
+     * the same verb again), so PDXF's side of the growth is exercised; without it the answer goes
+     * back to PDREND and pdr_test.c's ladder refuses it */
     if (!pdx_cf && r == PDE_NEEDMEM && getenv("PDX_SLOTGROW") && pdx_odx <= 64) {
         static unsigned char gl[sizeof(struct pdxb_fglyph)];
         memcpy(gl, XMEM(xb, 0), sizeof gl);

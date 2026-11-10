@@ -123,7 +123,7 @@ static int ladder(pdw e)
             memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
         }
         /* fonts (20.22.8): PDR_GLYPHGROW regrows the glyph claim to what PDREND asked AND MOVES it, as
-           OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
+         * OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
         if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY) {
             unsigned old = (unsigned)g_lastinit.glyph_kb << 10;
             memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
@@ -145,8 +145,8 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
     in.eng_seg = 0xF000;    /* never called on the host (pdr_host.c twins PDENG), but nonzero as on the
-                               machine: verb_init reads 0 as "never INITed" and a NEEDMEM's re-INIT would
-                               otherwise start a new document instead of keeping the page view */
+                             * machine: verb_init reads 0 as "never INITed" and a NEEDMEM's re-INIT would
+                             * otherwise start a new document instead of keeping the page view */
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
