@@ -805,10 +805,10 @@ osapi_snd_stream:
 %ifdef KERN_MEGA
     test al, ~4 & 0xFF          ; kern_mega: an EXTERNAL ring (verb 0 or 4)
     jnz .ringok                 ; in a POOL block - an OS88_HIGHMEM claim -
-    test ah, 2                  ; is above 1MB and refused there unless it
-    jz .ringok                  ; is a DMA door's pinned block (KERN-MEGA-
-    cmp byte [mega_on], 0       ; PLAN 14.160): a plain one may move under
-    je .ringok                  ; the chip (SND_OPENF_EXT = 2). ASKED
+    test ah, 2                  ; is above 1MB and refused there: a pool
+    jz .ringok                  ; block may move under the chip
+    cmp byte [mega_on], 0       ; (SND_OPENF_EXT = 2)
+    je .ringok                  ; ASKED
     call MEGA_SEL_CODE:snd_ringhif ; OF THE DESCRIPTOR'S BASE (snd_ringhif,
     jnc .ringok                 ; below). In real mode DI is a paragraph and
     ret                         ; nothing is asked. CF = 1, AX = 2: refused
@@ -826,11 +826,9 @@ osapi_snd_stream:
     cmp al, 9                   ; verb 9 answers in DX as verb 3 does (SPEC.md
     je .status                  ; 34.5.1)
     push dx                     ; every other verb gets its DX back
-    cmp al, 0
-    je .rate
-    cmp al, 4
-    jne .go
-.rate:                          ; ...except on the two OPEN verbs, where BX is
+    test al, ~4 & 0xFF          ; (ZF = 1 for verbs 0 and 4 alone)
+    jnz .go
+                                ; ...except on the two OPEN verbs, where BX is
     mov bx, dx                  ; unused and the RATE needs somewhere to be
                                 ; (see above). The kernel is what stamps,
                                 ; so the kernel is what banks DX
@@ -1207,55 +1205,25 @@ spk_gate0:
     pop es
     ret
 ; -----------------------------------------------------------------------------
-; snd_ringhif - FAR, protected mode: is the external ring DI ABOVE 1MB and
-; not a DMA door's pinned pool block? CF = 1 and AX = 2 (refused) when its
-; descriptor's base is above 1MB and the pool block starting there is not
-; MX_FDMA | MX_FPIN, else CF = 0 and every register kept. ASKED OF THE BASE,
-; not of DI's TI bit: since KERN-MEGA-MEMORY-PLAN MC7.4 EVERY claim is an LDT
-; selector, so the bit test refused the conventional DMA ring MIDIRack hands
-; over. A plain pool claim may MOVE under the chip (the pool compacts), so it
-; stays refused; a DMA door's (KERN-MEGA-PLAN 14.160) is born pinned and the
-; pool is all below 16MB, so the 8237 reaches it through the base the driver
-; reads (sbl_ring_phys, SEG_LIN) and nothing moves it while it plays. No
-; descriptor leaves DX = 0 and the driver judges the ring (osapi_snd_stream,
+; snd_ringhif - FAR, protected mode: is the external ring DI ABOVE 1MB? CF =
+; 1 and AX = 2 (refused) when its descriptor's base is, else CF = 0 and every
+; register kept. ASKED OF THE BASE, not of DI's TI bit: since
+; KERN-MEGA-MEMORY-PLAN MC7.4 EVERY claim is an LDT selector, so the bit test
+; refused the conventional DMA ring MIDIRack hands over. A pool claim may MOVE
+; under the chip (the pool compacts), so it is refused; the one pool block
+; that could not (a KB DMA door's, MX_FDMA, KERN-MEGA-PLAN 14.160) went with
+; those doors at kernel size pass 19's C1 - a DMA head is conventional now.
+; No descriptor leaves DX = 0 and the driver judges the ring (osapi_snd_stream,
 ; SND_OPENF_EXT = 2)
 ; -----------------------------------------------------------------------------
 snd_ringhif:
     push dx
     push ax
-    push si
-    push es
     mov ax, di
     xor dx, dx
     call MEGA_SEL_CODE:mega_selbasef ; DX:AX = the base
-    cmp dx, 0x10                ; below 1MB: the driver judges it
-    jb .r                       ; (CF = 1 from the compare: cleared at .r)
-    mov si, MEGA_SEL_MXT        ; (the tables' tail; `cpu 8086` here)
-    mov es, si
-    call mx_rel                 ; AX = its KB from the pool's base
-    jc .no
-    mov si, mx_tab
-.l:
-    cmp word [es:si+MX_KB], 0
-    je .n
-    cmp [es:si+MX_OFF], ax
-    jne .n
-    mov al, [es:si+MX_FL]
-    and al, MX_FDMA | MX_FPIN
-    cmp al, MX_FDMA | MX_FPIN
-    jne .no
-    stc                         ; (a DMA door's, pinned: taken)
-    jmp short .r
-.n:
-    add si, MX_BLKSZ
-    cmp si, mx_tab_end
-    jb .l
-.no:
-    clc                         ; (refused: inverted at .r)
-.r:
+    cmp dx, 0x10                ; CF = 1 below 1MB: the driver judges it
     cmc                         ; CF = 1 refused
-    pop es
-    pop si
     pop ax
     pop dx
     jnc .o
