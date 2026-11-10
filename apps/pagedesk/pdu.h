@@ -423,9 +423,11 @@ static void pdu_wsay(const char *s);
 /* ---- prefs ---- (PAGEDESK-SPEC 20.18; pdupref.c, pdovlpref.c) */
 #define P_PREFS  8              /* the Preferences popover */
 #ifndef PD_HOST
-/* the settings: 'PDCF', version 1, view, FULL panels, MID panels, mono
- * marks, Flate cache. The file is exactly these ten bytes (20.18.1) */
-static char pdp_cfg[10] = { 'P', 'D', 'C', 'F', 1, 0, 3, 0, 0, 0 };
+/* the settings: 'PDCF', version 2, view, FULL panels, MID panels, mono
+ * marks, Flate cache, module cache. The file is these eleven bytes (20.18.1,
+ * 20.22.6); a version-1 file is the first ten */
+static char pdp_cfg[11] = { 'P', 'D', 'C', 'F', 2, 0, 3, 0, 0, 0, 0 };
+#define pdu_pref_modcache() (pdp_cfg[10])   /* 0 Auto, 1 Off (plat, O2) */
 static const char pdp_formmsg[] =
     "Form fields are shown as printed; filling is not supported.";
 static char pdp_form;                   /* the open document has an AcroForm */
@@ -440,6 +442,36 @@ static void ovl_pf_click(int x, int y);
 static void ovl_pf_save(void);
 static void ovl_pf_load(void);
 static void ovl_pf_wake(void);
+static int  ovl_au_do(int op, int val);
+static void ovl_au_cancel(void);        /* a leaf: pdu_pop_shut calls it */
+static void ovl_au_pnt(void);
+static void ovl_au_ky(int ascii);
+#define AU_PW    1
+#define AU_PWBAD 2
+#define AU_R6    3
+#define AU_CHECK 4
+#define AU_COLS  36
+
+static char pdu_au_pw[128];             /* the typed password (resident bss: an overlay's data is resident) */
+static int  pdu_au_len;
+
+static char pdu_au_mode;                /* AU_*: the popover is asking/working */
+static signed char pdu_au_ans;          /* 0 waiting, 1 answered, -1 cancelled */
+static int  pdu_au_val;                 /* AU_R6: minutes; AU_CHECK: permille */
+
+#define pdu_au_poll() (pdu_au_ans)
+
+/* the popover is going by some other road (pdu_pop_shut): a question still
+ * open is a cancel (the overlay's ovl_au_cancel, which wipes the buffer) */
+#define pdu_au_closed() do { if (pdu_au_mode) ovl_au_cancel(); } while (0)
+
+/* the calls plat's ladder makes (20.22.6); one overlay entry, and a refused
+ * fetch makes ask/askr6/busy answer 0 */
+#define pdu_au_ask(bad)  ovl_au_do((bad) ? 2 : 1, 0)
+#define pdu_au_askr6(s)  ovl_au_do(3, (int)(((s) + 59u) / 60u))
+#define pdu_au_busy()    ovl_au_do(4, 0)
+#define pdu_au_prog(p)   ovl_au_do(5, (p))
+#define pdu_au_close()   ovl_au_do(6, 0)
 #endif
 /* ---- end prefs ---- */
 /* ---- recov ---- */
