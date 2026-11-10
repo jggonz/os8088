@@ -14,6 +14,7 @@ the temporary trampoline after each call. No instrumentation ships in the OS.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import shutil
@@ -295,7 +296,10 @@ class Guest:
         finally:
             assert self.rsp(f'z0,{entry:x},1') == 'OK'
 
-THM_SET = 0x0440                 # OSAPI_THM_SET (apps/os88api.inc)
+THM_SET = int(re.search(r'^%define\s+OSAPI_THM_SET\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)',
+                        open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                                          'apps', 'os88api.inc')).read(),
+                        re.M).group(1), 16)     # OSAPI_THM_SET, off the SDK
 THM_COLOR = 2
 
 def main():
@@ -434,9 +438,16 @@ def main():
 
         def chooser():
             ptr,raw,(xx,yy,www,hhh) = top_window()
+            # the handlers are the window's CLASS's (SPEC.md 11.104): W_CLASS
+            # in the window's own segment - linear for a kernel window, whose
+            # W_SEG is 0 and whose W_CLASS is biased to match
+            cls = (struct.unpack_from('<H',raw,eq['W_SEG'])[0] << 4) + \
+                struct.unpack_from('<H',raw,eq['W_CLASS'])[0]
+            body = g.read(cls, eq['WC_ONCLICK'] + 2)
+            assert struct.unpack_from('<H',body,0)[0] >= eq['WC_ONCLICK'] + 2
             return (ptr, xx, yy,
-                    struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0],
-                    struct.unpack_from('<H',raw,eq['W_ONKEY'])[0])
+                    struct.unpack_from('<H',body,eq['WC_ONCLICK'])[0],
+                    struct.unpack_from('<H',body,eq['WC_ONKEY'])[0])
 
         row = lin('thmv_row')
 
