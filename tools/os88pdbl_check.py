@@ -332,6 +332,51 @@ def check_jb2_huff(rnd, bins, use_mutool=False):
     print('jbig2 huffman%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
     return fails
 
+
+def check_jb2_halftone(rnd, bins, use_mutool=False):
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(30):
+            W = rnd.choice([48, 80, 130]); H = rnd.choice([40, 64, 90])
+            pw = rnd.choice([3, 4, 5, 8]); ph = rnd.choice([3, 4, 6, 8])
+            npats = rnd.choice([2, 3, 4, 7, 16])
+            pats = [[[1 if rnd.random() < (i / max(1, npats - 1)) else 0 for _ in range(pw)] for _ in range(ph)] for i in range(npats)]
+            gw = rnd.randint(2, W // pw + 2); gh = rnd.randint(2, H // ph + 2)
+            vals = [[rnd.randrange(npats) for _ in range(gw)] for _ in range(gh)]
+            mmr = rnd.random() < .3; tpl = rnd.randint(0, 3); skip = rnd.random() < .3
+            rot = rnd.random() < .3
+            hrx = pw * 256 if not rot else rnd.choice([1024, 1500, 2000]); hry = 0 if not rot else rnd.choice([0, 300, -300 & 0xFFFF][:2])
+            gx = rnd.choice([0, 0, 256 * 3, -256 * 2]); gy = rnd.choice([0, 0, 256 * 2, -256 * 3])
+            hcomb = rnd.choice([0, 0, 1, 2, 4]); defpix = rnd.choice([0, 0, 1]); rop = rnd.choice([0, 0, 2, 4])
+            if use_mutool: defpix = 0      # MuPDF's jbig2dec ignores HDEFPIXEL of a halftone region
+            cells = F.halftone_cells(gw, gh, gx, gy, hrx, hry)
+            region = [[defpix] * W for _ in range(H)]
+            for m in range(gh):
+                for n in range(gw):
+                    px, py = cells[(m, n)]
+                    compose(region, pats[vals[m][n]], px, py, hcomb)
+            page = [[0] * W for _ in range(H)]; compose(page, region, 0, 0, rop)
+            pd_ = F.segment(0, 16, F.pattern_segment(pats, mmr, tpl), page=0)
+            hd = F.segment(2, 22, F.halftone_segment(vals, pats, W, H, 0, 0, rop, gx, gy, hrx, hry, mmr, tpl, skip, hcomb, defpix), refs=[0])
+            pg = F.segment(1, 48, F.page_info(W, H))
+            globs, segs = [pd_], [pg, hd]
+            info = dict(mmr=mmr, tpl=tpl, skip=skip, rot=rot, hcomb=hcomb, defpix=defpix, rop=rop, npats=npats, pw=pw, ph=ph)
+            if use_mutool:
+                mp = mutool_pgm(segs, globs, W, H, td); total += 1
+                if mp != page: print('MUTOOL differs halftone case', case, info); fails += 1
+                continue
+            for want in (0, W // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, b''.join(segs), b''.join(globs), W, H, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, W, H, sc):
+                        open('/tmp/failht_%d.jb2' % case, 'wb').write(b''.join(segs)); open('/tmp/failht_%d.g' % case, 'wb').write(b''.join(globs))
+                        print('FAIL halftone case', case, 'want', want, info); fails += 1
+    print('jbig2 halftone%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     seed = 1
@@ -349,6 +394,8 @@ if __name__ == '__main__':
         if what == 'mutool-jb2-text': f += check_jb2_text(rnd, BINS, True)
         if what == 'jb2-huff': f += check_jb2_huff(rnd, BINS)
         if what == 'mutool-jb2-huff': f += check_jb2_huff(rnd, BINS, True)
+        if what == 'jb2-halftone': f += check_jb2_halftone(rnd, BINS)
+        if what == 'mutool-jb2-halftone': f += check_jb2_halftone(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 

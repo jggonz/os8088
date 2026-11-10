@@ -12,8 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 #define PD_HOST 1
+#include "../pdmath.h"
 #include "../pdabi.h"
 
+unsigned char pd_host_mem[0x110000];
 static unsigned char *ix_buf[2]; static unsigned long ix_len[2], ix_pos; static int ix_cur;
 static int ix_get(void) { return ix_pos < ix_len[ix_cur] ? ix_buf[ix_cur][ix_pos++] : -1; }
 static pdw ix_open(pdw which) { ix_cur = which; ix_pos = 0; return which < 2 && ix_buf[which] ? 0 : 1; }

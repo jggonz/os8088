@@ -669,3 +669,49 @@ def symdict_huff_segment(syms, dh=0, dw=0, bm_mmr=False, tpl=0, tabs=None, expor
     sel = lambda k, std_sel: 3 if k in tabs else std_sel
     flags = 1 | (sel('DH', dh) << 2) | (sel('DW', dw) << 4) | (tpl << 10)
     return struct.pack('>HII', flags, nex, nnew) + bw.bytes()
+
+# ---- pattern dictionaries and halftone regions ------------------------------------------------
+def pattern_segment(pats, mmr=False, tpl=0):
+    pw = len(pats[0][0]); ph = len(pats[0]); n = len(pats)
+    coll = [sum((p[y] for p in pats), []) for y in range(ph)]
+    d = bytes([(1 if mmr else 0) | (tpl << 1), pw, ph]) + struct.pack('>I', n - 1)
+    if mmr:
+        bw = BitW(); ref = [0] * (n * pw)
+        for row in coll: enc_2d(bw, row, ref); ref = row
+        return d + bw.bytes()
+    at = [(-pw, 0), (-3, -1), (2, -2), (-2, -2)]
+    e = MQEnc(); enc_generic(e, coll, tpl, 0, at if tpl == 0 else at[:1])
+    return d + e.flush()
+
+def halftone_cells(gw, gh, gx, gy, hrx, hry):
+    return {(m, n): ((gx + m * hry + n * hrx) >> 8, (gy + m * hrx - n * hry) >> 8) for m in range(gh) for n in range(gw)}
+
+def halftone_segment(vals, pats, w, h, x=0, y=0, op=0, gx=0, gy=0, hrx=None, hry=0, mmr=False, tpl=0, skip=False,
+                     hcomb=0, defpix=0):
+    """vals: HGH rows of HGW gray values (< len(pats)).  Returns segment data."""
+    gh = len(vals); gw = len(vals[0]); npats = len(pats); pw = len(pats[0][0]); ph = len(pats[0])
+    hrx = hrx if hrx is not None else pw * 256
+    bpp = max(1, ceil_log2(npats))
+    cells = halftone_cells(gw, gh, gx, gy, hrx, hry)
+    def skipf(xx, yy):          # x = column n, y = row m
+        px, py = cells[(yy, xx)]
+        return px + pw <= 0 or px >= w or py + ph <= 0 or py >= h
+    flags = (1 if mmr else 0) | (tpl << 1) | ((1 if skip else 0) << 3) | (hcomb << 4) | (defpix << 7)
+    d = region_info(w, h, x, y, op) + bytes([flags]) + struct.pack('>IIiiHH', gw, gh, gx, gy, hrx, hry)
+    planes = []
+    for j in range(bpp - 1, -1, -1):
+        pl = [[((v >> j) & 1) ^ (((v >> (j + 1)) & 1) if j < bpp - 1 else 0) for v in row] for row in vals]
+        if skip:
+            pl = [[0 if skipf(xx, yy) else pl[yy][xx] for xx in range(gw)] for yy in range(gh)]
+        planes.append(pl)
+    at = [(3 if tpl <= 1 else 2, -1), (-3, -1), (2, -2), (-2, -2)]
+    if mmr:
+        out = bytearray()
+        for pl in planes:
+            bw = BitW(); ref = [0] * gw
+            for row in pl: enc_2d(bw, row, ref); ref = row
+            bw.put('000000000001' * 2); bw.align(); out += bw.bytes()
+        return d + bytes(out)
+    e = MQEnc()
+    for pl in planes: enc_generic(e, pl, tpl, 0, at if tpl == 0 else at[:1], skip=skipf if skip else None)
+    return d + e.flush()

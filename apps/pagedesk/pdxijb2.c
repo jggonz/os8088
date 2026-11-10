@@ -318,8 +318,8 @@ static int gb_bit(pdw ctx)
 }
 
 /* the sink for each finished row */
-static void ht_plane_row(pdw y, const pdb *row) { (void)y; (void)row; }
-static int gb_skipf(pdw x, pdw y) { (void)x; (void)y; return 0; }
+static void ht_plane_row(pdw y, const pdb *row);
+static int gb_skipf(pdw x, pdw y);
 
 static pdw gb_boff, gb_brb;     /* sink 3: a bitmap in the workspace            */
 static void gb_sink(pdw y)
@@ -392,6 +392,7 @@ static pdw gb_arith(void)
 }
 
 /* ---- MMR (Group 4) regions: pdxiccit.c's rows over the segment's bytes --------- */
+static pdb gb_mmr_cont;         /* a later bitplane of a halftone: the bit reader's window carries over */
 static void cf_mmr_begin(pdw w)
 {
     pdw i;
@@ -400,7 +401,7 @@ static void cf_mmr_begin(pdw w)
     cf_cur = cf_rowa; cf_ref = cf_rowb;
     for (i = 0; i < 1024; i++) cf_rowa[i] = cf_rowb[i] = 0;
     cf_end = 0; cf_seg = 1;
-    cf_binit();
+    if (!gb_mmr_cont) cf_binit();
 }
 /* EOFB if present, then the next byte boundary */
 static void cf_mmr_end(void)
@@ -1155,6 +1156,190 @@ static pdw jb_segment_table(void)
     return PDE_OK;
 }
 
+
+/* ---- pattern dictionaries (6.7) and halftone regions (6.6) -------------------------------- */
+#define RGK_HT 5            /* decoded grid values: ofs = one byte a cell, a = columns, b = rows */
+
+static pdw ht_vals, ht_gw, ht_gh, ht_first, ht_hbw, ht_hbh, ht_pw, ht_ph, ht_hrx, ht_hry;
+static struct pd_u32 ht_gx, ht_gy, ht_t1, ht_t2;
+static pdi ht_px, ht_py;
+
+/* the position of grid cell (row m, column n) (6.6.5.2): x = (HGX + m*HRY + n*HRX) >> 8,
+ * y = (HGY + m*HRX - n*HRY) >> 8, as signed 16 bit; returns 0 when it does not fit */
+static pdb ht_gxn, ht_gyn;          /* HGX / HGY are negative; ht_gx / ht_gy then hold the magnitude */
+static struct pd_u32 ht_zero;
+
+/* (P - N) >> 8 as a signed 16-bit value (arithmetic, so a negative difference rounds down);
+ * P and N are non-negative, so the pdmath unsigned operations never wrap. 0 = does not fit. */
+static int ht_diff(const struct pd_u32 *P, const struct pd_u32 *N, pdi *out)
+{
+    struct pd_u32 *d = &ht_t2;
+    if (pdm_u32_cmp(P, N) >= 0) {
+        pdm_u32_sub(d, P, N); pdm_u32_shr(d, d, 8);
+        if (d->hi || d->lo > 32767u) return 0;
+        *out = (pdi)d->lo; return 1;
+    }
+    pdm_u32_sub(d, N, P); pdm_u32_add16(d, 255); pdm_u32_shr(d, d, 8);
+    if (d->hi || d->lo > 32767u) return 0;
+    *out = (pdi)(-(pdi)d->lo); return 1;
+}
+static struct pd_u32 ht_p, ht_n;
+static int ht_cell(pdw m, pdw n)
+{
+    pdm_u32_mul16(&ht_p, m, ht_hry);
+    pdm_u32_mul16(&ht_t1, n, ht_hrx);
+    pdm_u32_add(&ht_p, &ht_p, &ht_t1);
+    ht_n = ht_zero;
+    if (ht_gxn) ht_n = ht_gx; else pdm_u32_add(&ht_p, &ht_p, &ht_gx);
+    if (!ht_diff(&ht_p, &ht_n, &ht_px)) return 0;
+    pdm_u32_mul16(&ht_p, m, ht_hrx);
+    pdm_u32_mul16(&ht_n, n, ht_hry);
+    if (ht_gyn) pdm_u32_add(&ht_n, &ht_n, &ht_gy); else pdm_u32_add(&ht_p, &ht_p, &ht_gy);
+    return ht_diff(&ht_p, &ht_n, &ht_py);
+}
+static int gb_skipf(pdw x, pdw y)                  /* HSKIP[m = y, n = x]: the pattern lies wholly outside the region */
+{
+    if (!ht_cell(y, x)) return 1;
+    return (int)((ht_px + (pdi)ht_pw <= 0) || ht_px >= (pdi)ht_hbw || (ht_py + (pdi)ht_ph <= 0) || ht_py >= (pdi)ht_hbh);
+}
+static void ht_plane_row(pdw y, const pdb *row)    /* gray coding folded in: value = value << 1 | (bit ^ last bit) */
+{
+    pdw x, o = (pdw)(ht_vals + y * ht_gw), v, bit;
+    for (x = 0; x < ht_gw; x++) {
+        v = jw_rb((pdw)(o + x));
+        bit = (pdw)((row[x >> 3] >> (7 - (x & 7))) & 1);
+        if (!ht_first) bit ^= (pdw)(v & 1);
+        jw_wb((pdw)(o + x), (v << 1) | bit);
+    }
+}
+
+/* columns [x0, x0 + w) of a w2 x h bitmap at src (rows of rbt bytes) into the bitmap dst */
+static void jb_split(pdw src, pdw rbt, pdw x0, pdw w, pdw h, pdw dst)
+{
+    pdw yy, b, rbs = (pdw)((w + 7) >> 3), v;
+    for (yy = 0; yy < h; yy++) {
+        jw_get(tr_row, (pdw)(src + yy * rbt), rbt);
+        tr_row[rbt] = 0; tr_row[rbt + 1] = 0;
+        for (b = 0; b < rbs; b++) {
+            v = jb_srcbyte(tr_row, (pdi)(x0 + b * 8));
+            if (b == (pdw)(rbs - 1) && (w & 7)) v &= (pdw)((0xFF00 >> (w & 7)) & 0xFF);
+            jw_wb((pdw)(dst + yy * rbs + b), v);
+        }
+    }
+}
+
+static pdw jb_segment_pattern(void)
+{
+    pdw f, pw, ph, np, tmp, pats, mark = jb_sp, e, k;
+    f = jb_b(); pw = jb_b(); ph = jb_b();
+    jb_b32(); if (jb_hi || jb_lo > 255) return PDE_LIMIT;
+    np = (pdw)(jb_lo + 1);
+    if (!pw || !ph) return PDE_SYNTAX;
+    pats = jb_alloc(pw, (pdw)(ph * np));
+    tmp = jb_alloc((pdw)(np * pw), ph);
+    if (!pats || !tmp) { jb_sp = mark; return PDE_LIMIT; }
+    gb_tpl = (pdw)((f >> 1) & 3); gb_tpgd = 0; gb_w = (pdw)(np * pw); gb_h = ph; gb_sinkmode = 3; gb_boff = tmp;
+    gb_brb = (pdw)((gb_w + 7) >> 3); gb_skip = 0;
+    gb_at[0][0] = (pdi)-(pdi)pw; gb_at[0][1] = 0; gb_at[1][0] = -3; gb_at[1][1] = -1;
+    gb_at[2][0] = 2; gb_at[2][1] = -2; gb_at[3][0] = -2; gb_at[3][1] = -2;
+    if (f & 1) { gb_mmr_cont = 0; e = gb_mmr(); }
+    else { mq_init(); gb_cinit(); e = gb_arith(); }
+    if (e) { jb_sp = mark; return e; }
+    for (k = 0; k < np; k++) jb_split(tmp, gb_brb, (pdw)(k * pw), pw, ph, (pdw)(pats + k * ((pw + 7) >> 3) * ph));
+    jb_sp = tmp;
+    jb_rg_add(RGK_PAT, pats, np, pw, ph);
+    return PDE_OK;
+}
+
+static pdw jb_segment_halftone(void)
+{
+    pdw f, tpl, g, pat, npats, bpp, j, e, direct, hcomb, defpix, tmp = 0, trows = 0, y0r = 0, rbr = 0, msp = jb_sp, m, n, rbp, k;
+    pdi sx, sy;
+    f = jb_b();
+    tpl = (pdw)((f >> 1) & 3); hcomb = (pdw)((f >> 4) & 7); defpix = (pdw)((f >> 7) & 1);
+    jb_b32(); if (jb_hi || jb_lo > 8192) return PDE_LIMIT; ht_gw = jb_lo;
+    jb_b32(); if (jb_hi || jb_lo > 8192) return PDE_LIMIT; ht_gh = jb_lo;
+    jb_b32(); ht_gx.hi = jb_hi; ht_gx.lo = jb_lo; ht_gxn = (pdb)((jb_hi & 0x8000u) != 0);
+    if (ht_gxn) { ht_gx.lo = (pdw)(~jb_lo + 1); ht_gx.hi = (pdw)(~jb_hi + (jb_lo ? 0 : 1)); }
+    jb_b32(); ht_gy.hi = jb_hi; ht_gy.lo = jb_lo; ht_gyn = (pdb)((jb_hi & 0x8000u) != 0);
+    if (ht_gyn) { ht_gy.lo = (pdw)(~jb_lo + 1); ht_gy.hi = (pdw)(~jb_hi + (jb_lo ? 0 : 1)); }
+    ht_hrx = (pdw)(jb_b() << 8); ht_hrx |= jb_b();
+    ht_hry = (pdw)(jb_b() << 8); ht_hry |= jb_b();
+    (void)sx; (void)sy;
+    pat = 0xFFFFu;
+    for (j = 0; j < jb_nref && j < 32; j++) { g = jb_rg_find(jb_ref[j]); if (g != 0xFFFFu && jb_rg_kind[g] == RGK_PAT) pat = g; }
+    if (pat == 0xFFFFu) return PDE_SYNTAX;
+    npats = jb_rg_cnt[pat]; ht_pw = jb_rg_a[pat]; ht_ph = jb_rg_b[pat]; rbp = (pdw)((ht_pw + 7) >> 3);
+    ht_hbw = jb_rw; ht_hbh = jb_rh;
+    for (bpp = 0; (1u << bpp) < npats; bpp++) {}
+    if (!bpp) bpp = 1;
+    /* the grid values: decoded once, kept */
+    g = jb_rg_find(jb_sn);
+    if (g != 0xFFFFu && jb_rg_kind[g] == RGK_BAD) return PDE_LIMIT;
+    if (g == 0xFFFFu) {
+        pdw cells;
+        if (ht_gw && ht_gh > (pdw)(0xFFFFu / ht_gw)) return PDE_LIMIT;
+        cells = (pdw)(ht_gw * ht_gh);
+        ht_vals = jb_alloc((pdw)(cells ? cells : 1), 8);        /* 8 bits wide: a byte a cell */
+        if (!ht_vals) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); return PDE_LIMIT; }
+        ht_vals = (pdw)(ht_vals);
+        /* jb_alloc(w, h) takes w bits: ask for cells x 8 bits = cells bytes */
+        jb_sp = (pdw)(ht_vals + cells);
+        gb_tpl = tpl; gb_tpgd = 0; gb_w = ht_gw; gb_h = ht_gh; gb_sinkmode = 1;
+        gb_skip = (pdw)((f >> 3) & 1);
+        gb_at[0][0] = tpl <= 1 ? 3 : 2; gb_at[0][1] = -1; gb_at[1][0] = -3; gb_at[1][1] = -1;
+        gb_at[2][0] = 2; gb_at[2][1] = -2; gb_at[3][0] = -2; gb_at[3][1] = -2;
+        e = PDE_OK;
+        if (!(f & 1)) { mq_init(); gb_cinit(); }
+        for (j = bpp; j > 0 && !e; j--) {
+            ht_first = (pdw)(j == bpp);
+            if (f & 1) { gb_mmr_cont = (pdb)!ht_first; e = gb_mmr(); cf_mmr_end(); }
+            else e = gb_arith();
+        }
+        gb_mmr_cont = 0; gb_skip = 0;
+        if (e) { jb_sp = msp; jb_rg_add(RGK_BAD, 0, 0, 0, 0); return e; }
+        jb_rg_add(RGK_HT, ht_vals, cells, ht_gw, ht_gh);
+        g = (pdw)(jb_nrg - 1);
+    }
+    ht_vals = jb_rg_ofs[g];
+    /* the canvas */
+    direct = (pdw)(!defpix && jb_rop == 0 && hcomb == 0);
+    msp = jb_sp;
+    if (direct) { jb_cv_band(); tr_ox = (pdi)jb_rx; tr_oy = (pdi)jb_ry; }
+    else {
+        pdw by1 = (pdw)(jb_by0 + jb_brows), ye = jb_satadd(jb_ry, jb_rh), y1r;
+        y0r = jb_ry > jb_by0 ? jb_ry : jb_by0; y1r = ye < by1 ? ye : by1;
+        trows = (pdw)(y1r - y0r); rbr = (pdw)((jb_rw + 7) >> 3);
+        tmp = jb_alloc(jb_rw, trows);
+        if (!tmp) { jb_sp = msp; return PDE_LIMIT; }
+        if (defpix) for (k = 0; k < (pdw)(rbr * trows); k++) jw_wb((pdw)(tmp + k), 0xFF);
+        cv_off = tmp; cv_rb = rbr; cv_w = jb_rw; cv_h = trows; cv_y0 = (pdi)(y0r - jb_ry);
+        tr_ox = 0; tr_oy = 0;
+    }
+    tr_comb = hcomb;
+    for (m = 0; m < ht_gh; m++) {
+        for (n = 0; n < ht_gw; n++) {
+            pdw v;
+            if (!ht_cell(m, n)) continue;
+            if ((pdi)(ht_py + (pdi)ht_ph + tr_oy) <= cv_y0 || (pdi)(ht_py + tr_oy) >= (pdi)(cv_y0 + (pdi)cv_h)) continue;
+            if (ht_px + (pdi)ht_pw <= 0 || ht_px >= (pdi)ht_hbw) continue;
+            v = jw_rb((pdw)(ht_vals + m * ht_gw + n));
+            if (v >= npats) v = (pdw)(npats - 1);
+            tr_draw((pdw)(jb_rg_ofs[pat] + v * rbp * ht_ph), ht_pw, ht_ph, (pdi)(ht_px + tr_ox), (pdi)(ht_py + tr_oy));
+        }
+    }
+    if (!direct) {
+        jb_cv_band();
+        for (k = 0; k < trows; k++) {
+            jw_get(tr_row, (pdw)(tmp + k * rbr), rbr);
+            tr_row[rbr] = 0; tr_row[rbr + 1] = 0;
+            cv_row((pdi)(y0r + k), (pdi)jb_rx, tr_row, jb_rw, jb_rop);
+        }
+    }
+    jb_sp = msp;
+    return PDE_OK;
+}
+
 /* the table for a slot: a standard one, or the next custom table the segment refers to */
 static pdw jb_tnext;
 static pdw hf_select(pdw slot, pdw std)
@@ -1352,6 +1537,16 @@ static pdw jb_dispatch(void)
             r = jb_segment_table();
             if (r) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); jb_inc |= JBF_UNSUP; r = PDE_OK; }
         }
+        break;
+    case 16:
+        if (jb_rg_find(jb_sn) == 0xFFFFu) {
+            r = jb_segment_pattern();
+            if (r) { jb_rg_add(RGK_BAD, 0, 0, 0, 0); jb_inc |= JBF_UNSUP; r = PDE_OK; }
+        }
+        break;
+    case 22: case 23:
+        if (jb_region()) return PDE_TRUNC;
+        if (jb_inband()) r = jb_segment_halftone();
         break;
     case 4: case 20: case 36: case 40: jb_inc |= JBF_UNSUP; break;
     default: break;
