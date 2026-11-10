@@ -496,7 +496,7 @@ MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
                                 ; power of two, at most 256 (`and al`), and a
                                 ; multiple of 32 while guard 6b stands
 
-; --- osapi_claim_snapshot's buffer, API slot 0x0216 (SPEC.md 20.9) ----------------
+; --- osapi_claim_snapshot's buffer, API slot 0x01FF (SPEC.md 20.9) ----------------
 ; The three fields of a claim record that mean anything outside this module.
 ; MC_DMA is not one of them: it is how a claim that MOVES keeps the page
 ; property it was granted for, and nothing outside can move a claim.
@@ -506,7 +506,7 @@ CLS_OWN    equ 4                ; word: owner (SPEC.md 50.2)
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 
-; --- osapi_sys_kb's buffer, API slot 0x021C (SPEC.md 20.9) --------------------
+; --- osapi_sys_kb's buffer, API slot 0x0205 (SPEC.md 20.9) --------------------
 ; The kernel's own footprint broken into its parts, then the heap's totals.
 ; The parts sum to SK_KERN exactly - see the routine at the foot of this file
 ; for how the rounding is arranged so that they do, and why none of them is a
@@ -5957,7 +5957,7 @@ osapi_mem_movable_x:
 
 %ifdef OS88_COMPACT
 ; -----------------------------------------------------------------------------
-; osapi_mem_compact - API slot 0x0443: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
+; osapi_mem_compact - API slot 0x03F3: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
 ;        MEMC_WHATIF (0): AL = a purge level, answered as OSAPI_MEM_AVAIL
 ;                         would answer at that level
@@ -6288,7 +6288,7 @@ mem_owner_of_x:
 ; -----------------------------------------------------------------------------
 
 ; =============================================================================
-; osapi_claim_snapshot - API slot 0x0216: the whole claim table into the caller's
+; osapi_claim_snapshot - API slot 0x01FF: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
 ; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
@@ -6335,7 +6335,7 @@ mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
     retf
 
 ; =============================================================================
-; osapi_sys_kb - API slot 0x021C: what the KERNEL occupies and what the heap
+; osapi_sys_kb - API slot 0x0205: what the KERNEL occupies and what the heap
 ;                holds, in KB (SPEC.md 20.9/2/50)
 ;
 ; in:  ES:DI = a SYSKB_SIZE buffer the caller owns

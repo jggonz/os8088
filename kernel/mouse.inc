@@ -3028,7 +3028,7 @@ kbd_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x02FC)
+; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x02CE)
 ; in:  AL = a make scancode (0x4B left, 0x4D right, 0x39 space, ...)
 ; out: CF = 1 down, CF = 0 up; every register preserved
 ;
@@ -4141,7 +4141,7 @@ mou_byte:
     jmp mou_apply               ; ...which ends in the ret this needs
 
 ; -----------------------------------------------------------------------------
-; osapi_mouse_feed - slot 0x0449: one relative report from a DRIVER (SPEC.md
+; osapi_mouse_feed - slot 0x03F9: one relative report from a DRIVER (SPEC.md
 ;                    9.12.1)
 ;
 ; in:  AX = dx, BX = dy, signed, POSITIVE dy IS DOWN; CL = the buttons in
@@ -5561,7 +5561,7 @@ cur_shape_set:
 ; sectors of disk. That is the whole measurable cost of the feature.
 ; -----------------------------------------------------------------------------
 
-; cur_busy    - slot 0x040B, the PACKAGE's door: it must hold the lock ITSELF
+; cur_busy    - slot 0x03BB, the PACKAGE's door: it must hold the lock ITSELF
 ; cur_busy_on - ...and the KERNEL's, inside fpg_arm, which need not (SPEC.md
 ;               12.8.4: the one painter in the machine that draws lock-free)
 ;

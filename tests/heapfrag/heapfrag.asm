@@ -88,7 +88,6 @@ hf_entry:
                                 ; with LD_EABORT and the package refuses itself
     push ax
     mov ax, hf_wake             ; ...and check 18 is answered there, because
-    call OSAPI_WM_ONWAKE        ; that is the whole shape under test: a package
     pop ax                      ; cannot compact its own region from inside its
                                 ; own callback, so it posts and is woken
     pop si
@@ -1455,7 +1454,9 @@ hf_numgo:
 
 hf_tpl:
     dw 140, 26, 250, 250
-    dw hf_ttl, hf_paint, hf_key, 0
+    dw hf_ttl, hf_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hf_cls, 0, PAINT, hf_paint, ONKEY, hf_key, ONWAKE, hf_wake
 
 hf_ttl:    db 'Heap Compaction', 0
 hf_s_pass: db 'PASS', 0

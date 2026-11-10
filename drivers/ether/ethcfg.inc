@@ -106,7 +106,10 @@ EC_COK      equ 1               ; ...and their control ids (SPEC.md 13.8.4):
 EC_CCANCEL  equ 2               ; what a press ARMS and a release fires
 EC_NF       equ 4               ; Address, Subnet, Router, Name
 
-ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_paint, ec_key, ec_click
+ec_tpl:     dw 60, 30, EC_FW, EC_FH, ec_s_title, ec_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ec_cls, 0, PAINT, ec_paint, ONKEY, ec_key, ONCLICK, ec_click, \
+               ONMOUSEUP, ec_up, ONDRAG, ec_drag
 ec_s_title: db 'Ethernet Setup', 0
 
 ; -----------------------------------------------------------------------------
@@ -160,10 +163,7 @@ eth_cfg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [ec_win], bx
-    mov ax, ec_up               ; SPEC.md 13.7/13.8.1: NOT template words, so a
-    call OSAPI_WM_ONMOUSEUP     ; window installs them itself after create
     mov ax, ec_drag
-    call OSAPI_WM_ONDRAG
     mov byte [ec_down], 0       ; a window reopened mid-gesture must not come
     xor ax, ax                  ; up with one armed for the next release to
     call os88ui_arm             ; fire

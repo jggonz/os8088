@@ -862,7 +862,10 @@ VK_SIZE     equ 13212000            ; tests/vidkern.py's STREAM.DAT
 
 vk_tpl:
     dw 7, 22, 632, 300
-    dw vk_ttl, vk_paint, vk_onkey, vk_onclick
+    dw vk_ttl, vk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vk_cls, 0, PAINT, vk_paint, ONKEY, vk_onkey, \
+               ONCLICK, vk_onclick
 
 vk_ttl:       db 'Video Kernel Gate', 0
 vk_f_stream:  db 'STREAM.DAT', 0

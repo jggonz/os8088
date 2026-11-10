@@ -2188,7 +2188,7 @@ desk_learn_x:
 
 %ifndef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; osapi_desk_item - slot 0x03F8: put an ITEM on the desktop, or take one off
+; osapi_desk_item - slot 0x03A8: put an ITEM on the desktop, or take one off
 ;                   (SPEC.md 26.9)
 ; in:  AL = 1 add / 0 remove; ES = the caller's segment (an X cell)
 ;      add, from a DRIVER:  ES:SI -> a DSV_R_SIZE service record (SPEC.md

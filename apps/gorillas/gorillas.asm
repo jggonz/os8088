@@ -43,9 +43,7 @@ gr_entry:
     mov si, gr_menus
     call OSAPI_MENU_SET
     mov si, gr_about
-    call OSAPI_ABOUT_SET
     mov al, 1
-    call OSAPI_WM_OWNBG
     call OSAPI_FONT_GLYPHS
     mov [gr_fontseg], dx
     mov [gr_fontoff], si
@@ -2625,7 +2623,10 @@ gr_cgablit:
     pop es
     ret
 
-gr_tpl: dw 40, 28, 530, 282, gr_title, gr_paint, gr_onkey, gr_click
+gr_tpl: dw 40, 28, 530, 282, gr_title, gr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS gr_cls, WF_OWNBG, PAINT, gr_paint, ONKEY, gr_onkey, \
+               ONCLICK, gr_click, ABOUT, gr_about
 OS88_PREFER gr_pref, 530, 282, 530, 282, 530, 150
 OS88_MENUSET gr_menus, gr_title, gr_oncmd
     OS88_MENU gr_mgame, gr_items, 3

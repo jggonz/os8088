@@ -123,7 +123,9 @@ fx_onkey:
 
 fx_tpl:
     dw 40, 40, 160, 40
-    dw fx_ttl, fx_paint, fx_onkey, 0
+    dw fx_ttl, fx_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fx_cls, 0, PAINT, fx_paint, ONKEY, fx_onkey
 fx_ttl: db 'SpkFx', 0
 
 fx_rate:  dw 8000

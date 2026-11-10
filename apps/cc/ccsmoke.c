@@ -167,20 +167,25 @@ void os88_about(void *win)
  * attach the menu set and the About handler, and return it. The loader shows
  * it. Returning 0 aborts the launch, which is what a full window table looks
  * like from here. */
+/* The window's CLASS (SPEC.md 11.104): its handlers, as the trampolines the
+ * shim asked for, and the flags it is born with - none here. The content
+ * origin is on a multiple of 8 because every window's is by default, so every
+ * os88_font_run() above takes the single-store path on the two 1bpp adapters
+ * (SPEC.md 6.1, 11.94). */
+static struct os88_class sm_cls = {
+    OS88_CLASS_LEN, 0,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about,
+    0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
 void *os88_main(void)
 {
     void *win;
 
-    win = os88_wm_create(SM_X, SM_Y, SM_W, SM_H, "C Smoke");
+    win = os88_wm_create(SM_X, SM_Y, SM_W, SM_H, "C Smoke", &sm_cls);
     if (win == 0)
         return 0;
 
     os88_menu_set(win, &sm_menus);       /* &static: fine. &automatic: refused */
-    os88_about_set(win);
-
-    /* Content origin on a multiple of 8, so every os88_font_run() above takes
-     * the single-store path on the two 1bpp adapters (SPEC.md 6.1, 11.94). A
-     * no-op on VGA, so it is set unconditionally rather than after asking. */
-    os88_wm_snap(win, 1);
     return win;
 }

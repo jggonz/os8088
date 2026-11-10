@@ -210,12 +210,7 @@ tv_do_open:
     call OSAPI_WM_CREATE
     jc .no
     mov [tv_win], bx
-    mov ax, tv_up                ; SPEC.md 13.7/13.8.1: NOT template words, so
-    call OSAPI_WM_ONMOUSEUP      ; a window installs them itself after create
-    mov ax, tv_drag
-    call OSAPI_WM_ONDRAG
     mov ax, tv_close
-    call OSAPI_WM_ONCLOSE        ; what makes this image safe to free (header)
     mov byte [tv_down], 0
     xor ax, ax
     call os88ui_arm              ; a window reopened mid-gesture must not come
@@ -800,7 +795,10 @@ tv_r:       dw 0, 0, 0, 0
     OS88_RET_LADDER bp
 
 ; --- the window --------------------------------------------------------------
-tv_tpl:     dw TV_X, TV_Y, TV_FW, TV_FH, tv_s_title, tv_paint, tv_key, tv_click
+tv_tpl:     dw TV_X, TV_Y, TV_FW, TV_FH, tv_s_title, tv_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tv_cls, 0, PAINT, tv_paint, ONKEY, tv_key, ONCLICK, tv_click, \
+               ONCLOSE, tv_close, ONMOUSEUP, tv_up, ONDRAG, tv_drag
 tv_s_title: db 'Color Theme', 0
 tv_s_apply: db 'Apply', 0
 tv_s_cancel: db 'Cancel', 0

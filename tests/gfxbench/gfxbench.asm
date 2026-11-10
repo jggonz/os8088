@@ -160,20 +160,8 @@ gb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [gb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; EVERY adapter (SPEC.md 11.94 - it was
-                                    ; mono only until VGA was measured and
-                                    ; gained more) - and it PRESERVES FLAGS,
-                                    ; so the CF this proc owes the loader
-                                    ; survives it. The rows below are
-                                    ; unaffected either way: this harness sets
-                                    ; its own text x explicitly, which is what
-                                    ; keeps `aligned` and `skewed` meaning the
-                                    ; same thing on all three adapters
     mov si, gb_menus
     call OSAPI_MENU_SET
-    mov si, gb_onabout
-    call OSAPI_ABOUT_SET
     clc
 .out:
     pop si
@@ -3014,7 +3002,10 @@ gb_b_vsync:
 ; 7 because WF_SNAP wants the CONTENT origin - W_X + 1 - on a multiple of 8.
 gb_tpl:
     dw 7, 22, 632, 448
-    dw gb_ttl, gb_paint, gb_onkey, gb_onclick
+    dw gb_ttl, gb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS gb_cls, 0, PAINT, gb_paint, ONKEY, gb_onkey, \
+               ONCLICK, gb_onclick, ABOUT, gb_onabout
 
 gb_ttl:     db 'Gfx Bench', 0
 

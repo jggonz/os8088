@@ -381,12 +381,8 @@ dk_entry:
     jc .out
     mov [dk_win], bx
     OS88_REGION_MOVABLE dk_ret
-    mov al, 1
-    call OSAPI_WM_KEEPH         ; a fixed layout: hang over the dock, never cut
     mov si, dk_menus
     call OSAPI_MENU_SET
-    mov si, dk_about
-    call OSAPI_ABOUT_SET
     call stik_made              ; MAKE, the prefilters, the tick
     call dk_hands               ; what the first paint will draw
     call dk_hkeep
@@ -1161,7 +1157,12 @@ dk_menulive:
 ; --- the clock's window (SPEC.md 110.11, 110.14) ------------------------------
 dk_tpl:
     dw 23, 60, 130, 200         ; stik_load sizes and places it (STIK_RIGHT)
-    dw dk_title, dk_paint, dk_onkey, 0
+    dw dk_title, dk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; The press, the release, the wake, the tick and the close are os88stik.inc's
+    OS88_CLASS dk_cls, WF_KEEPH, PAINT, dk_paint, ONKEY, dk_onkey, \
+               ONCLICK, stik_click, ABOUT, dk_about, ONWAKE, stik_wake, \
+               ONCLOSE, stik_close, ONMOUSEUP, stik_mup, ONTIMER, stik_tick
 
 dk_paint:
     jmp stik_paint

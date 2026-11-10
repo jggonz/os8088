@@ -212,12 +212,8 @@ ar_entry:
     mov si, ar_menus
     call OSAPI_MENU_SET
     mov bx, [ar_win]
-    mov al, 1                       ; every pixel of the content is ours
-    call OSAPI_WM_OWNBG
     call af_vgacheck                ; (the display's modes: the window's own)
     mov bx, [ar_win]
-    mov si, ar_about
-    call OSAPI_ABOUT_SET
     clc
 .out:
     ret
@@ -2359,7 +2355,10 @@ ar_none:    dw 0
 
 ar_tpl:
     dw 60, 40, AR_CONT_W+2, AR_CONT_H+TITLE_H+1
-    dw ar_title, ar_paint, ar_onkey, ar_onclick
+    dw ar_title, ar_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ar_cls, WF_OWNBG, PAINT, ar_paint, ONKEY, ar_onkey, \
+               ONCLICK, ar_onclick, ABOUT, ar_about
     OS88_MENUSET ar_menus, ar_title, ar_oncmd
 %ifdef ARC_PACMAN
         OS88_MENU ar_m_game, ar_i_game, 10

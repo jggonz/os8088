@@ -5743,20 +5743,9 @@ mega_icw_%1:
     MEGA_ICW_STUB gfx_b1ink, ax
 %endif
     MEGA_ICW_STUB ico_c1, ax
-%macro MEGA_ICWB_STUB 1
-mega_icwb_%1:
-    push ds
-    mov ds, [cs:k_dsel]
-    mov [bx+%1], ax
-    pop ds
-    retf
-%endmacro
-    MEGA_ICWB_STUB W_ONSIZE
-    MEGA_ICWB_STUB W_ONSZ
-    MEGA_ICWB_STUB W_ONWK
-    MEGA_ICWB_STUB W_ONRC
-    MEGA_ICWB_STUB W_ONCLICK
-    MEGA_ICWB_STUB W_ONWH           ; (the wheel's, SPEC.md 13.18)
+; (MEGA_ICWB_STUB's six - the handler setters' stores through the data alias
+; - went with the setters: a window's handlers are its class's, SPEC.md
+; 11.104, kernel size pass 19)
 
 ; mega_bhex4 / mega_bhex2 - AX (AL) as 4 (2) hex digits at ES:DI
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)

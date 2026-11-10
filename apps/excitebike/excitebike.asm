@@ -53,14 +53,9 @@ xb_entry:
     OS88_ALTENTER_ARM
     mov si, xb_pref
     call OSAPI_WM_PREFER
-    mov al, 1
-    call OSAPI_WM_SNAP
     mov si, xb_about
-    call OSAPI_ABOUT_SET
     mov word [xb_x0], XB_X0
     mov bx, [xb_win]
-    mov ax, xb_timer
-    call OSAPI_WM_ONTIMER
     mov bx, [xb_win]
     mov ax, 1
     call OSAPI_WM_TIMER
@@ -195,7 +190,10 @@ xb_onkey:
     RESTORE
     ret
 
-xb_tpl: dw 52, 32, 452, 284, xb_title, xb_paint, xb_onkey, xb_click
+xb_tpl: dw 52, 32, 452, 284, xb_title, xb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS xb_cls, 0, PAINT, xb_paint, ONKEY, xb_onkey, \
+               ONCLICK, xb_click, ABOUT, xb_about, ONTIMER, xb_timer
 OS88_PREFER xb_pref, 452,284,452,284,452,154
 xb_title: db 'Excitebike',0
 xb_credits: dw xb_title,xb_credit1,xb_credit2,xb_credit3,xb_credit4,0

@@ -566,9 +566,7 @@ fm_kinit_x:
 .nostale:                       ; and the block it names is about to be a
     pop dx                      ; DIFFERENT window's. Shedding it then would
     pop bx                      ; zero the new tenant's FS_VSEG
-%else
-    mov word [bx+W_ONWH], fm_onwheel_x  ; the wheel scrolls it (SPEC.md 13.18.3)
-%endif
+%endif                          ; (kern_big's wheel is fm_cls's, 13.18.3)
     xor ax, ax                  ; EVERY field a fresh window starts from,
     push di                     ; as words off one zero, by STOSW (kernel size
     dec ax                      ; pass 17, -10: ES = DS, app_launch - KD_INIT's
@@ -653,27 +651,11 @@ fm_kinit_x:
                                 ; a window that is technically a Disk window
                                 ; and cannot be used as one
 %ifdef KERN_BIG
-    mov ax, fm_onup_x           ; SPEC.md 13.7/13.8.1: the two edges the two
-    call KERNEL_SEG:cw_wm_onmouseup ; header buttons fire and track on. Not
-%ifdef OS88UI_SBDRAG
-    mov [bx + W_ONTIMER], ax    ; ...AND THE SAME PROC IS THE PAUSE COMMIT'S
-                                ; (SPEC.md 13.10.5.4.2): a timer that fires
-                                ; mid-drag is a release with the hand still
-                                ; down, and os88ui_sbdrop tells the two apart
-                                ; off [ui_armw]. A plain store, because
-                                ; wm_ontimer is one; nothing ARMS it here -
-                                ; fm_ondrag does, on movement - so a window
-                                ; merely open has no timer
-%endif
-    mov ax, fm_ondrag_x         ; template words - the template is eight and
-    call KERNEL_SEG:cw_wm_ondrag ; growing it would read one past every
-                                ; existing package's - so a KD_INIT is where
-                                ; a kernel window installs them, and a
+    mov byte [fm_dbtn], 0       ; (the release, the pause timer and the drag
+%endif                          ; are fm_cls's slots, SPEC.md 11.104.) A
                                 ; KD_POOL block is REUSED, so a window closed
                                 ; mid-gesture must not hand a pressed button
                                 ; to the next one in its slot
-    mov byte [fm_dbtn], 0
-%endif
     mov word [bx + W_MENUS], fm_menus
                                 ; the Disk browser IS Locator's window
                                 ; (SPEC.md 12.3): fronting it keeps Locator
@@ -2285,12 +2267,39 @@ section .text                   ; DATA, so back to the kernel segment: cold code
 fm_fchk:    db 0
 
 
-; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-fm_tpl:     dw 110, 80, 320, 200, fm_ttl, fm_paint_x, fm_onkey_x, fm_onclick_x
-                                ; the three callbacks are the COLD bodies:
+; --- window template: {x, y, w, h, title, class} words, and the class ------
+fm_tpl:     dw 110, 80, 320, 200, fm_ttl, fm_cls
+                                ; the callbacks are the COLD bodies:
                                 ; wm_pkgcall dispatches a kernel window into
                                 ; `.cold` (SPEC.md 2.6.3), so each is a near
-                                ; proc there and none has a resident thunk
+                                ; proc there and none has a resident thunk.
+                                ; The CLASS (SPEC.md 11.104) is .text, read
+                                ; through DS by wm_hnd; resizable is its style
+fm_cls:     dw fm_cls_end - fm_cls, WF_SIZABLE
+            dw fm_paint_x, fm_onkey_x, fm_onclick_x
+%ifdef KERN_BIG
+            dw 0, 0, 0              ; About, wake, close
+            dw fm_onup_x            ; SPEC.md 13.7/13.8.1: the two edges the
+            dw 0, 0, 0              ; two header buttons fire and track on;
+ %ifdef OS88UI_SBDRAG               ; resize notice, right click, negotiator
+            dw fm_onup_x            ; ...AND THE SAME PROC IS THE PAUSE
+ %else                              ; COMMIT'S (SPEC.md 13.10.5.4.2): a timer
+            dw 0                    ; that fires mid-drag is a release with
+ %endif                             ; the hand still down, and os88ui_sbdrop
+            dw fm_ondrag_x          ; tells the two apart off [ui_armw]
+            dw fm_onwheel_x         ; the wheel scrolls it (SPEC.md 13.18.3)
+%endif
+fm_cls_end:
+%if fm_cls_end - fm_cls > 30
+  %error "a class is 4 + 2 x 13 slots at most"
+%endif
+%ifdef KERN_SMALL
+fdlg_cls:   dw fdlg_cls_end - fdlg_cls, WF_SIZABLE  ; THE CHOOSER'S (SPEC.md
+            dw fm_paint_x, fm_onkey_x, fm_onclick_x ; 38.3): this build's
+            dw 0, 0, 0              ; Disk window has no release of its own,
+            dw fdlg_onup            ; so the chooser's is a class of its own
+fdlg_cls_end:                       ; that fdlg_open points W_CLASS at
+%endif
 fm_ttl      equ fm_s_root       ; the same four bytes fm_title_set letters at
                                 ; the root, and both are .text = KERNEL_SEG
 

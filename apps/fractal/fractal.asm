@@ -337,9 +337,6 @@ fr_entry:
     OS88_REGION_MOVABLE_NOKEEP fr_noreloc
     mov si, fr_menus
     call OSAPI_MENU_SET             ; BX = the window, SI = our set
-    mov si, fr_about                ; ...and 'About Fractal' above the Close
-    call OSAPI_ABOUT_SET            ; the kernel already puts in our pull-down
-                                    ; (SPEC.md 12.2)
     clc                             ; the window exists: CF = 0 for the loader
 .out:
     pop si                          ; POP leaves the flags alone
@@ -1016,10 +1013,11 @@ fr_nowork:
 fr_promise:
     mov bx, [fr_win]
     mov ax, [fr_pass]               ; 0..3, so (pass + 1) >> 2 is 1 at rest
-    inc ax                          ; (OSAPI_SAVEU_ON) and 0 while rendering -
-    shr ax, 1                       ; a withdrawal, and wm_saveu drops any
+    inc ax                          ; (set) and 0 while rendering - a
+    shr ax, 1                       ; withdrawal, and OSAPI_WM_FLAG drops any
     shr ax, 1                       ; cache made under the last promise with it
-    call OSAPI_WM_SAVEU
+    mov ah, WFB_SAVEU               ; (AH is 0 above: AX was 1..4)
+    call OSAPI_WM_FLAG
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2030,7 +2028,7 @@ fr_status:
 ; one of them back.
 
 ; -----------------------------------------------------------------------------
-; fr_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; fr_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -2084,12 +2082,15 @@ fr_ab1:     db 'Fractal for os8088', 0
 fr_ab2:     db 0
 fr_ab3:     db 'Contributed by Jorge Gonzalez', 0
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; 322 x 199 -> content 320 x 180 -> canvas 320 x 170. No W_ONKEY: everything
 ; this app does is a menu command or a click.
 fr_tpl:
     dw 150, 60, 322, 199
-    dw fr_ttl, fr_paint, 0, fr_onclick
+    dw fr_ttl, fr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fr_cls, 0, PAINT, fr_paint, ONCLICK, fr_onclick, \
+               ABOUT, fr_about
 
 fr_ttl:      db 'Fractal', 0
 
@@ -2330,9 +2331,6 @@ fr_bss_end equ fr_paltab + FR_CAP + 1
 %endif
 %if FR_PCT_CELLS != 4
   %error "fr_status_pct's pad store and loader-zero NUL assume a four-cell field"
-%endif
-%if OSAPI_SAVEU_ON != 1
-  %error "fr_promise computes the promise as (pass + 1) >> 2, which is 1"
 %endif
 %if (FR_CACHE_KB0 * 1024) & 0FFh
   %error "fr_kick_s stores fr_cmax's HIGH byte only - the low one is the loader's zero"

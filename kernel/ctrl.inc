@@ -287,16 +287,25 @@ section .text
 ; where SPEC.md 31.9.2 gave a DRIVER's page a typed field (SPEC.md 62.9.15).
 ; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
 ; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_cls
+cp_cls:     dw cp_cls_end - cp_cls, 0   ; its CLASS (SPEC.md 11.104)
 %ifdef KERN_BIG
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
+            dw cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
 %else                           ; **NO KEYBOARD ON kern_small** (SPEC.md
                                 ; 62.9.15): the one field in the machine that
                                 ; can be typed into is the RAM disk's size, and
                                 ; kern_small has no RAM disk. The word goes
                                 ; back to 0, which is what it was for the whole
                                 ; life of the panel before SPEC.md 31.9.2
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
+            dw cpf_cp_paint, 0, cpf_cp_onclick
 %endif
+            dw 0, 0, 0              ; About, wake, close
+            dw cpf_cp_onup          ; the release, a COLD offset (2.6.3)
+%ifdef KERN_BIG
+            dw 0, 0, 0, 0           ; resize notice, right click, negotiator,
+            dw cpf_cp_ondrag        ; timer - and the drag (SPEC.md 13.8.2)
+%endif
+cp_cls_end:
 
 ; -----------------------------------------------------------------------------
 ; cp_kinit - KD_INIT (SPEC.md 29.3): install the panel's extra edges
@@ -323,22 +332,17 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
 ; unlike the file dialog this window is an INSTANCE that can be closed from
 ; the dock, the bar and its own close box.
 ; -----------------------------------------------------------------------------
-cp_kinit:
 %ifdef KERN_BIG
+cp_kinit:
     push ax
     xor ax, ax
     mov [cp_down], al
     call COLD_SEG:os88ui_arm_f
     pop ax
+    ret                         ; (the release and the drag are cp_cls's
+%else                           ; slots now, SPEC.md 11.104 - and kern_small,
+cp_kinit    equ 0               ; with nothing else to do, has no KD_INIT)
 %endif
-    mov word [bx+W_ONMOUSEUP], cpf_cp_onup ; a COLD offset (SPEC.md 2.6.3):
-                                ; wm_onmouseup's store, written here - the
-                                ; routine is kern_mega's alone since cell
-                                ; 0x0196 became it (kernel size pass 14).
-%ifdef KERN_BIG                 ; apps.inc's kind table is resident and so
-    mov word [bx+W_ONDRAG], cpf_cp_ondrag ; is this proc. ...and
-%endif                          ; wm_ondrag's store, cell 0x0334's own now
-    ret
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
                                 ; NAME column, which is the tighter of the two
@@ -2638,12 +2642,12 @@ cp_promise:
                                         ; the paint, and the record is what
                                         ; carries the flag
     mov bx, [di+I_WIN]
-    mov al, 1
+    mov ax, WFB_SAVEU * 256 + 1
     cmp byte [cp_sel], CP_ITIME
     jne .say
     xor al, al                          ; the clock is on the pane: withdraw,
-.say:                                   ; and wm_saveu drops the claim with it
-    call KERNEL_SEG:apic_wm_saveu       ; the CELL (0x0378): the Control
+.say:                                   ; and wm_flag drops the claim with it
+    call KERNEL_SEG:apic_wm_flag        ; the CELL (OSAPI_WM_FLAG): the Control
                                         ; Panel answers SPEC.md 11.96.1's
                                         ; promise per PAGE, from its
                                         ; module (SPEC.md 31.12)

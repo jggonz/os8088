@@ -58,10 +58,13 @@ DKSG_PWD    equ 3               ; - the alarm's), db a digital one's,
 DKSG_W      equ 4               ; dw the content's width,
 DKSG_E      equ 6               ; then its entries
 DKT_FORM    equ WT_SIZE         ; a form's window template, past WT_*: its
-DKT_GEOS    equ WT_SIZE + 2     ; record, its layouts by screen class, its
-DKT_CLOSE   equ WT_SIZE + 4     ; close and release callbacks, and the proc
-DKT_MUP     equ WT_SIZE + 6     ; that makes its state before it opens
-DKT_INIT    equ WT_SIZE + 8
+DKT_GEOS    equ WT_SIZE + 2     ; record, its layouts by screen class, and
+DKT_INIT    equ WT_SIZE + 4     ; the proc that makes its state before it
+                                ; opens. Its close and release callbacks are
+                                ; its CLASS's (SPEC.md 11.104), and so is
+DKT_STYLE   equ WF_OWNBG | WF_KEEPH | WF_NOANIM ; every form's style: every
+                                ; pixel ours, a fixed layout, and no zoom -
+                                ; the paint is the opening
 
 %macro DKSE 7
     db %1, %2
@@ -144,8 +147,10 @@ dk_tick12:  db 8                 ; inside a 12-px box, from its third row
             dw 00C0h, 01C0h, 0380h, 3700h, 3E00h, 1C00h, 0800h, 0000h
 
 dk_stpl:    dw 0, MBAR_H + 4, DK_SETW + 2, 0
-            dw dkss_title, dk_spaint, dk_skey, dk_sclick
-            dw dk_fset, dk_sgeos, dk_sclose, dk_smup, dk_sapplied
+            dw dkss_title, dk_scls
+            dw dk_fset, dk_sgeos, dk_sapplied
+    OS88_CLASS dk_scls, DKT_STYLE, PAINT, dk_spaint, ONKEY, dk_skey, \
+               ONCLICK, dk_sclick, ONCLOSE, dk_sclose, ONMOUSEUP, dk_smup
 
 ; -----------------------------------------------------------------------------
 ; dk_setopen / dk_almopen - a form's window: in front if it is up, else made
@@ -222,15 +227,6 @@ dk_fopen:
     call OSAPI_WM_CREATE
     jc .x                       ; the window table is full: nothing opens
     mov [di + DKW_WIN], bx
-    mov al, 1
-    call OSAPI_WM_OWNBG         ; every pixel is ours
-    mov al, 1
-    call OSAPI_WM_KEEPH
-    call OSAPI_WM_NOANIM        ; no zoom: the paint is the opening
-    mov ax, [si + DKT_CLOSE]
-    call OSAPI_WM_ONCLOSE
-    mov ax, [si + DKT_MUP]
-    call OSAPI_WM_ONMOUSEUP
     mov si, dk_menus
     call OSAPI_MENU_SET
     call OSAPI_WM_FRONT

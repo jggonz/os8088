@@ -216,7 +216,9 @@ st_run:
 ; -----------------------------------------------------------------------------
 st_tpl:
     dw 40, 300, 200, 40
-    dw st_ttl, st_paint, st_onkey, 0
+    dw st_ttl, st_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS st_cls, 0, PAINT, st_paint, ONKEY, st_onkey
 
 st_ttl:     db 'Spans', 0
 st_s_line:  db 'driven by the host', 0

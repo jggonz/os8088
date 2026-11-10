@@ -407,9 +407,6 @@ vb_entry:
     jc .out
     mov [vb_win], bx
     OS88_REGION_MOVABLE
-    mov bx, [vb_win]                ; (the compaction a play may post wakes
-    mov ax, vb_onwake               ; us: VBATTLE-RAM-PLAN R1)
-    call OSAPI_WM_ONWAKE
     mov word [vb_status], vb_s_ready
     cmp byte [vb_found], 0          ; NO BATTLE beside us, none embedded, no
     jne .some                       ; document: the window says to open one,
@@ -419,9 +416,6 @@ vb_entry:
     mov bx, [vb_win]
     mov si, vb_menus                ; File > Open... (and Close)
     call OSAPI_MENU_SET
-    mov bx, [vb_win]                ; the standard About card (SPEC.md 12.2)
-    mov si, vb_about
-    call OSAPI_ABOUT_SET
     clc
 .out:
     ret
@@ -1243,7 +1237,7 @@ vb_paint:
 .r:
     ret
 
-; vb_about - OSAPI_ABOUT_SET's handler: SI = the window, no region armed, so
+; vb_about - vb_cls's WC_ABOUT handler: SI = the window, no region armed, so
 ; the handler entry (os88ui_about) arms one
 vb_about:
     mov byte [vb_abon], 1
@@ -5747,7 +5741,10 @@ vb_utoa:
 ; =============================================================================
 vb_tpl:
     dw 40, 40, 320, 72
-    dw vb_title, vb_paint, vb_onkey, vb_onclick
+    dw vb_title, vb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vb_cls, 0, PAINT, vb_paint, ONKEY, vb_onkey, \
+               ONCLICK, vb_onclick, ABOUT, vb_about, ONWAKE, vb_onwake
 vb_title:     db 'Video Battle', 0
 vb_actab:     db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0
 vb_name:      db 'BATTLE.VBT', 0

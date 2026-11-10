@@ -1416,7 +1416,7 @@ sol_mkback:
 .out:
     ret
 
-; sol_about - the About handler (API 0x018A, SPEC.md 12.2/43)
+; sol_about - the About handler (API OSAPI_ABOUT_SET (withdrawn), SPEC.md 12.2/43)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; may clobber the callback set
 ;
@@ -2838,12 +2838,26 @@ sol_cmd_deal:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; x/y/w/h are computed by sol_entry from the live screen; the four procs are
 ; all that is really pinned here.
 sol_tpl:
     dw 0, 0, 0, 0
-    dw sol_ttl, sol_paint, sol_onkey, sol_onclick
+    dw sol_ttl, sol_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+; OWNBG (SPEC.md 11.90.1/43.9.1): sol_drawall's first act is a felt fill of
+; the WHOLE content, so the kernel's white fill was the first layer of a
+; double draw - and the felt is CGREEN, which reduces to BLACK on both mono
+; adapters, so it was the window going WHITE and then black in front of a
+; 681 ms repaint. 'About Solitaire' under our name in the bar (12.2)
+%ifdef SOLF_ABOUT
+  %define SOL_C_ABOUT sol_about
+%else
+  %define SOL_C_ABOUT 0
+%endif
+    OS88_CLASS sol_cls, WF_KEEPH | WF_OWNBG | WF_SAVEU, PAINT, sol_paint, \
+               ONKEY, sol_onkey, ONCLICK, sol_onclick, ABOUT, SOL_C_ABOUT, \
+               ONRESIZE, sol_onresize
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_PREFER sol_pref, SOL_PW_B, SOL_PH_B,  SOL_PW_B, SOL_PH_B,  SOL_PW_S, SOL_PH_S
@@ -3110,33 +3124,6 @@ sol_entry:                          ; (SI and DI are not saved: SPEC.md
     OS88_REGION_MOVABLE sol_ret     ; ...naming a bare `ret` of our own (16
                                     ; bytes against the bare form's 19): this
                                     ; package holds no segment word of its own
-    mov ax, sol_onresize            ; the card metrics are picked from the
-    call OSAPI_WM_ONRESIZE          ; SCREEN, so an adapter change invalidates
-                                    ; them (SPEC.md 11.98)
-    mov al, 1                       ; **HANG OVER THE DOCK RATHER THAN BE
-    call OSAPI_WM_KEEPH             ; SHORTENED** (SPEC.md 11.93), on EVERY
-                                    ; adapter and not just the small one. This
-                                    ; layout is fixed and every row taken off
-                                    ; the frame is one sol_colfan takes off the
-                                    ; cards, so the dock's 24 rows are worth a
-                                    ; whole fan step - measured, they take a
-                                    ; 7-card build from 9px a card to the
-                                    ; record's full 12 on a CGA, and stop the
-                                    ; Hercules compressing its deepest column
-                                    ; at all. VGA has the room already, so it
-                                    ; is a no-op there.
-                                    ;
-                                    ; UNCONDITIONAL is not laziness: a version
-                                    ; that asked the adapter set it from
-                                    ; OSAPI_WM_DISPLAY, which answers the MORE
-                                    ; RESTRICTIVE display for a straddling
-                                    ; window (SPEC.md 39.16.4.1) while wm_fit
-                                    ; clamps to the ORIGIN's - so a game half
-                                    ; over the seam was told CGA, set the flag,
-                                    ; and got the HERCULES ceiling: 317 rows on
-                                    ; a card whose band is 303. The flag is not
-                                    ; an adapter question at all, and asking
-                                    ; one was the bug
     mov si, sol_pref                ; ...and the size this game wants on each
     call OSAPI_WM_PREFER            ; card (SPEC.md 11.100.1). sol_metrics has
                                     ; always had two records and picked the
@@ -3147,36 +3134,6 @@ sol_entry:                          ; (SI and DI are not saved: SPEC.md
     call OSAPI_WM_MINSIZE
     mov si, sol_menus
     call OSAPI_MENU_SET             ; draws nothing, and preserves the flags
-    mov al, 1                       ; ...and it PROMISES its content stands
-    call OSAPI_WM_SAVEU             ; still while it is not drawing (SPEC.md
-                                    ; 11.96.1): no worker, so the table only
-                                    ; moves when a card is dragged. sol_track
-                                    ; in the paint proc is a GEOMETRY re-read,
-                                    ; and geometry is what wm_su_ck already
-                                    ; invalidates on, so skipping it costs
-                                    ; nothing
-    mov al, 1                       ; ...AND IT OWNS ITS BACKGROUND (SPEC.md
-    call OSAPI_WM_OWNBG             ; 11.90.1/43.9.1): sol_drawall's first act
-                                    ; is a felt fill of the WHOLE content and
-                                    ; sol_pinv in front of it keeps no sliver,
-                                    ; so every pixel is written by us. The
-                                    ; kernel's white fill was therefore the
-                                    ; first layer of a double draw - and the
-                                    ; felt is CGREEN, which reduces to BLACK
-                                    ; on both mono adapters (39.4), so on the
-                                    ; machines this game is for it was the
-                                    ; window going WHITE and then black in
-                                    ; front of a 681 ms repaint. Neither this
-                                    ; nor the promise above touches the flags,
-                                    ; so wm_create's CF still rides out to the
-                                    ; loader
-%ifdef SOLF_ABOUT
-    mov si, sol_about
-    call OSAPI_ABOUT_SET            ; 'About Solitaire' under our name in the
-                                    ; bar (SPEC.md 12.2) - same contract, and
-                                    ; it preserves the flags for the same
-                                    ; reason: the CF above is the loader's
-%endif   ; SOLF_ABOUT
     jmp sol_mkback                  ; ...and LAST, the card back, over these
                                     ; very bytes: a tail jump, so nothing here
                                     ; runs after it starts writing. It keeps

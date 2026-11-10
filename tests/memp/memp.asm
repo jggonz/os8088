@@ -234,7 +234,9 @@ mp_paint:
 
 mp_tpl:
     dw 40, 40, 120, 40
-    dw mp_ttl, mp_paint, 0, 0
+    dw mp_ttl, mp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mp_cls, 0, PAINT, mp_paint
 mp_ttl:     db 'MEMP', 0
 
     OS88_BSS 64

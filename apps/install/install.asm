@@ -226,12 +226,8 @@ in_entry:
     jc in_ret
     OS88_REGION_MOVABLE_NOKEEP in_ret   ; every byte that outlives a pass is
                                     ; a static and moves with us
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin on the 8px grid
     mov si, in_about
-    call OSAPI_ABOUT_SET
     mov ax, in_onclose              ; every way of closing comes through here,
-    call OSAPI_WM_ONCLOSE           ; which is where the tool is given back
     push bx                         ; (the window: VOL_SYS answers in BL, and
     call OSAPI_VOL_SYS              ; in_build spends BX)
     cmp bl, 2                       ; BL = the volume we booted from
@@ -254,19 +250,15 @@ in_entry:
     call in_build
     pop ax                          ; AX = the window
     mov bx, in_btrec
-    mov si, in_onup
-    mov di, in_ondrag
     mov dx, in_onclick              ; a press that was not a button's: the
     call os88ui_btninit             ; radio rows, or the About card
-    xchg ax, bx
-    mov ax, in_press                ; ...and OURS goes in front of the
-    call OSAPI_WM_ONCLICK           ; library's: see in_press
+    xchg ax, bx                     ; (the PRESS is OURS, in front of the
+                                    ; library's: in_cls names in_press)
     cmp byte [in_net], NET_LOOK
     jne .noask
-    mov ax, in_ontimer              ; the network is asked from a timer, a tick
-    call OSAPI_WM_ONTIMER           ; after the first paint, so the page says
-    mov ax, 1                       ; what is happening while it waits
-    call OSAPI_WM_TIMER
+    mov ax, 1                       ; the network is asked from a timer, a tick
+    call OSAPI_WM_TIMER             ; after the first paint, so the page says
+                                    ; what is happening while it waits
 .noask:
     clc
 in_ret:
@@ -2577,7 +2569,11 @@ in_hex2:
 ; DATA
 ; =============================================================================
 in_tpl:     dw 148, 24, IN_W, IN_H
-            dw in_ttl, in_paint, in_onkey, 0
+            dw in_ttl, in_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS in_cls, 0, PAINT, in_paint, ONKEY, in_onkey, \
+               ONCLICK, in_press, ABOUT, in_about, ONCLOSE, in_onclose, \
+               ONMOUSEUP, in_onup, ONTIMER, in_ontimer, ONDRAG, in_ondrag
 
 in_ttl:     db 'Install os8088', 0
 

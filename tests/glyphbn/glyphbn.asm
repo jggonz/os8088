@@ -368,7 +368,9 @@ gb_tpl:
     dw 120, 30, 140, 110        ; the shape grid is 4 rows of 16 from y=8 and
                                 ; two 12px columns from x=8; the cost arms
                                 ; draw at (88,20), right of both
-    dw gb_ttl, gb_paint, gb_onkey, 0
+    dw gb_ttl, gb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS gb_cls, 0, PAINT, gb_paint, ONKEY, gb_onkey
 
 gb_ttl:  db 'GlyphBench', 0
 

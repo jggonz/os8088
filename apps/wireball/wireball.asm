@@ -49,7 +49,6 @@ wb_entry:
     OS88_ALTENTER_ARM
     mov [wb_win], bx
     mov al, 1
-    call OSAPI_WM_OWNBG
     mov si, wb_prefs
     call OSAPI_WM_PREFER
     mov cx, 418
@@ -57,8 +56,6 @@ wb_entry:
     call OSAPI_WM_MINSIZE
     mov si, wb_menus
     call OSAPI_MENU_SET
-    mov si, wb_about
-    call OSAPI_ABOUT_SET
     mov ax, bx
     mov bx, wb_btrec
     mov si, wb_buttonup
@@ -214,8 +211,11 @@ wb_main:
     ret
 
 wb_tpl:
-    dw 30,24,418,295
-    dw wb_title,wb_paint,wb_onkey,wb_onclick
+    dw 30, 24, 418, 295
+    dw wb_title, wb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS wb_cls, WF_OWNBG, PAINT, wb_paint, ONKEY, wb_onkey, \
+               ONCLICK, wb_onclick, ABOUT, wb_about
     OS88_MENUSET wb_menus, wb_title, wb_oncmd
         OS88_MENU wb_game, wb_items, 2
     OS88_MENUSET_END wb_menus

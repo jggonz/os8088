@@ -614,79 +614,24 @@ pt_entry:
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
 %endif
-    mov ax, pt_onup                 ; SPEC.md 13.7/13.8.1: Apply fires on the
-    call OSAPI_WM_ONMOUSEUP         ; RELEASE and follows the pointer between
-    mov ax, pt_ondrag               ; the edges. Not template words, so they
-    call OSAPI_WM_ONDRAG            ; are set after wm_create
-    mov ax, pt_onwake               ; ...and the one the KERNEL posts, once this
-    call OSAPI_WM_ONWAKE            ; window is on the glass, so a launch
-                                    ; document loads in front of something the
-                                    ; user can see (SPEC.md 54.10)
-    mov ax, pt_onclose              ; SPEC.md 75.1/42.16: the kernel asks before
-    call OSAPI_WM_ONCLOSE           ; it closes us, and a picture with unsaved
-                                    ; work answers. A side table, so it goes
-                                    ; here and not in pt_tpl
-    mov al, 1                       ; WE OWN OUR BACKGROUND (SPEC.md 11.90.1):
-    call OSAPI_WM_OWNBG             ; pt_fsbed + the palette + the strip + the
-                                    ; canvas cover every pixel of the content,
-                                    ; so the kernel's white fill in front of
-                                    ; W_PAINT is a white HOLE for as long as
-                                    ; the canvas takes to blit - measured at
-                                    ; 8.7 s on a textured bitmap
-                                    ;
-                                    ; NO WF_SAVEU here, and the promise WOULD
-                                    ; hold - Paint owns no worker, its marquee
-                                    ; is a latched XOR and its caret is
-                                    ; keystroke-driven. What disqualifies it is
-                                    ; MEMORY: a cache over this content is ~9KB
-                                    ; on 1bpp, ~36KB on VGA and ~150KB for a
-                                    ; window grown over most of a 640x480
-                                    ; screen, on top of the ~127KB Paint
-                                    ; already holds - so on a 256KB machine it
-                                    ; is refused and the feature is not there.
-                                    ; (This comment used to say the repaint was
-                                    ; "the cheapest in the tree" and that there
-                                    ; was one cache for the machine. Both were
-                                    ; wrong: PERFORMANCE.md Set 32 measures the
-                                    ; repaint at 9 s, and SPEC.md 11.96.3 made
-                                    ; the cache one per WINDOW.)
-                                    ;
-                                    ; ...AND THAT IS WHAT SPEC.md 11.96.11 IS
-                                    ; FOR. The tool column is 451 of the 604
-                                    ; drawing calls a repaint issues - 75% of
-                                    ; a measured 421.8 ms on a 4.77MHz 8088 -
-                                    ; and it is 44 pixels wide, so banking THAT
-                                    ; is ~1KB on 1bpp and ~13KB on VGA instead
-                                    ; of 9KB and 150KB. The promise is made
-                                    ; only if the band was taken: refused, a
-                                    ; WF_SAVEU here asks for the whole-content
-                                    ; cache this app cannot afford.
-                                    ;
-                                    ; ...ON A COLOUR ADAPTER. On a 1bpp one the
-                                    ; whole content IS ~9KB and Paint takes the
-                                    ; lot - pt_sucache below, and it is a fact
-                                    ; about the SCREEN, so pt_onresize re-asks
     call pt_sucache                 ; (no flags to keep across it or the next:
                                     ; the proc SAYS its CF at the bottom)
-    mov ax, pt_onresize             ; ...and TELL US WHEN THE ADAPTER MOVES
-    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98). Outside the PT_M_LIVE
-                                    ; gate below on purpose: a Paint that could
-                                    ; not fund a canvas still has a screen
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus
-    mov al, 1                       ; resizable: the canvas IS the content, so
-    call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture.
+    mov ax, WFB_SIZABLE * 256 + 1   ; resizable: the canvas IS the content, so
+    call OSAPI_WM_FLAG              ; dragging the grow box sizes the picture.
                                     ; It used to be conditional on there being
                                     ; an undo image to stage the old picture
                                     ; in; pt_resize copies block to block now
                                     ; and needs no staging area at all
-    mov ax, pt_onsize               ; ...and the kernel asks us before it
-    call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
+    mov word [pt_wcls + WC_ONSIZE], pt_onsize    ; ...and the kernel asks us
+                                    ; before it commits one (SPEC.md 11.1) -
+                                    ; a slot of our own class, written here
+                                    ; because only a LIVE Paint has a canvas
+                                    ; to negotiate (SPEC.md 11.104)
 %ifdef PTF_ABOUT
-    mov si, pt_about
-    call OSAPI_ABOUT_SET            ; 'About Paint' under our name in the bar
-                                    ; (SPEC.md 12.2); BX is still the window.
-%endif
+    mov word [pt_wcls + WC_ABOUT], pt_about      ; 'About Paint' under our
+%endif                              ; name in the bar (SPEC.md 12.2)
                                     ; LIVE only - see pt_about
     call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
@@ -12955,7 +12900,7 @@ pt_num:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; pt_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2)
+; pt_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn), SPEC.md 12.2)
 ; in:  SI = our window; UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ;
@@ -13126,8 +13071,8 @@ pt_sucache:
     mov cx, PT_CV_X                 ; divider column is the band's last pixel
     call OSAPI_WM_BAND
     jnc .promise
-    xor al, al                      ; REFUSED, so the promise cannot be made:
-    call OSAPI_WM_SAVEU             ; WF_SAVEU without a band asks for the
+    mov ax, WFB_SAVEU * 256         ; REFUSED, so the promise cannot be made:
+    call OSAPI_WM_FLAG              ; WF_SAVEU without a band asks for the
     jmp short .out                  ; whole-content cache the band exists to
                                     ; avoid, and on this adapter that is 150KB
 .whole:
@@ -13138,8 +13083,8 @@ pt_sucache:
     xor cx, cx
     call OSAPI_WM_BAND
 .promise:
-    mov al, 1
-    call OSAPI_WM_SAVEU             ; our content does not change while we are
+    mov ax, WFB_SAVEU * 256 + 1
+    call OSAPI_WM_FLAG              ; our content does not change while we are
 .out:                               ; not drawing: no worker, the marquee is a
     pop cx                          ; latched XOR, the caret is keystroke-driven
     pop bx
@@ -13311,7 +13256,7 @@ pt_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0362)
+; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API OSAPI_WM_ONCLOSE (withdrawn))
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;
@@ -16444,9 +16389,40 @@ pt_tpl:
     dw PT_CW_DEF + PT_CHROME_W      ; WT_W
     dw PT_CH_DEF + PT_CHROME_H      ; WT_H
     dw pt_s_title                   ; WT_TITLE
-    dw pt_paint                     ; WT_PAINT
-    dw pt_onkey                     ; WT_ONKEY
-    dw pt_click                     ; WT_ONCLICK
+    dw pt_wcls                      ; WT_CLASS
+
+; ...and its CLASS (SPEC.md 11.104). Apply fires on the RELEASE and follows
+; the pointer between the edges (13.7/13.8.1); the KERNEL posts the wake once
+; this window is on the glass, so a launch document loads in front of
+; something the user can see (54.10); the close asks about unsaved work
+; (75.1/42.16); the resize notice is outside the LIVE gate on purpose - a
+; Paint that could not fund a canvas still has a screen (11.98). The About
+; and the size negotiator are the LIVE Paint's, written by pt_entry.
+;
+; WE OWN OUR BACKGROUND (SPEC.md 11.90.1): pt_fsbed + the palette + the strip
+; + the canvas cover every pixel of the content, so the kernel's white fill in
+; front of W_PAINT is a white HOLE for as long as the canvas takes to blit -
+; measured at 8.7 s on a textured bitmap.
+;
+; NO WF_SAVEU here, and the promise WOULD hold - Paint owns no worker, its
+; marquee is a latched XOR and its caret is keystroke-driven. What
+; disqualifies it is MEMORY: a cache over this content is ~9KB on 1bpp, ~36KB
+; on VGA and ~150KB for a window grown over most of a 640x480 screen, on top
+; of the ~127KB Paint already holds - so on a 256KB machine it is refused and
+; the feature is not there. (PERFORMANCE.md Set 32 measures the repaint at
+; 9 s, and SPEC.md 11.96.3 made the cache one per WINDOW.) ...AND THAT IS WHAT
+; SPEC.md 11.96.11 IS FOR. The tool column is 451 of the 604 drawing calls a
+; repaint issues - 75% of a measured 421.8 ms on a 4.77MHz 8088 - and it is
+; 44 pixels wide, so banking THAT is ~1KB on 1bpp and ~13KB on VGA instead of
+; 9KB and 150KB. The promise is made only if the band was taken (pt_sucache):
+; refused, a WF_SAVEU asks for the whole-content cache this app cannot
+; afford. ...ON A COLOUR ADAPTER. On a 1bpp one the whole content IS ~9KB
+; and Paint takes the lot - and it is a fact about the SCREEN, so
+; pt_onresize re-asks.
+    OS88_CLASS pt_wcls, WF_OWNBG, PAINT, pt_paint, ONKEY, pt_onkey, \
+               ONCLICK, pt_click, ABOUT, 0, ONWAKE, pt_onwake, \
+               ONCLOSE, pt_onclose, ONMOUSEUP, pt_onup, ONRESIZE, pt_onresize, \
+               ONSIZE, 0, ONDRAG, pt_ondrag
 
 ; --- menus (SPEC.md 12.2) ----------------------------------------------------
     OS88_MENUSET pt_menus, pt_appname, pt_oncmd

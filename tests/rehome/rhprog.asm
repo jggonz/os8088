@@ -294,7 +294,9 @@ rp_hex4:
 ; -----------------------------------------------------------------------------
 rp_tpl:
     dw 140, 90, 250, 60             ; x, y, w, h
-    dw rp_title, rp_paint, 0, 0
+    dw rp_title, rp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rp_cls, 0, PAINT, rp_paint
 
 rp_title:  db 'REHOMED '
 rp_t_n:    db '0'

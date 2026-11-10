@@ -420,11 +420,11 @@ FDBODY fdlg_open_x
     inc bx                      ; fm_kinit - impossible, and refused rather
     jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
 %ifdef KERN_SMALL
-    mov word [bx+W_ONMOUSEUP-1], fdlg_onup ; the column's release (SPEC.md
+    mov word [bx+W_CLASS-1], fdlg_cls ; the column's release (SPEC.md
                                 ; 38.3): this build's Disk window has none of
-                                ; its own, so the chooser's is ours - and
-                                ; wm_onmouseup IS this store, which kern_small
-                                ; publishes no shim for. BX is the window + 1
+                                ; its own, so the chooser's window takes a
+                                ; CLASS of its own (fdlg_cls, files.inc,
+                                ; SPEC.md 11.104). BX is the window + 1
 %endif
     jmp fdk_di                  ; CF=0, still app_launch's
 .fail:

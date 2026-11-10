@@ -126,12 +126,7 @@ sv_do_cfg:
     call OSAPI_WM_CREATE
     jc .no
     mov [sv_win], bx
-    mov ax, sc_up               ; SPEC.md 13.7/13.8.1: NOT template words, so a
-    call OSAPI_WM_ONMOUSEUP     ; window installs them itself after create
-    mov ax, sc_drag
-    call OSAPI_WM_ONDRAG
     mov ax, sc_close            ; ...and the close negotiator, which is what
-    call OSAPI_WM_ONCLOSE       ; makes this image safe to free (see the header)
     mov byte [sc_down], 0
     xor ax, ax
     call os88ui_arm             ; a window reopened mid-gesture must not come
@@ -869,7 +864,10 @@ sc_str2num:
     OS88_RET_LADDER bp
 
 ; --- the window ---------------------------------------------------------------
-sc_tpl:    dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_paint, sc_key, sc_click
+sc_tpl:    dw SC_X, SC_Y, SC_FW, SC_FH, sc_s_title, sc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sc_cls, 0, PAINT, sc_paint, ONKEY, sc_key, ONCLICK, sc_click, \
+               ONCLOSE, sc_close, ONMOUSEUP, sc_up, ONDRAG, sc_drag
 sc_s_title: db 'Screen Saver', 0
 
 sc_labels:  dw sc_s_m0, sc_s_m1, sc_s_m2, sc_s_m3

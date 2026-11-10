@@ -39,7 +39,9 @@ pm_paint:                       ; W_PAINT arrives white-filled: nothing to add
 
 pm_tpl:
     dw 200, 150, 160, 60
-    dw pm_ttl, pm_paint, 0, 0
+    dw pm_ttl, pm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pm_cls, 0, PAINT, pm_paint
 
 pm_ttl: db 'PkgMax', 0
 

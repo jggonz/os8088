@@ -4409,7 +4409,10 @@ vk_b_lide:
 
 vk_tpl:
     dw 7, 22, 632, 300
-    dw vk_ttl, vk_paint, vk_onkey, vk_onclick
+    dw vk_ttl, vk_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vk_cls, 0, PAINT, vk_paint, ONKEY, vk_onkey, \
+               ONCLICK, vk_onclick
 
 vk_ttl:       db 'Video Disk Bench', 0
 vk_f_names:   db 'STREAM.DAT', 0, 'BADAPPLE.V88', 0, 'BAPPLE.V88', 0, 0

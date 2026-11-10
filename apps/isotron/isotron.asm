@@ -279,14 +279,9 @@ it_entry:
     call OSAPI_WM_PREFER
     mov si, it_menus
     call OSAPI_MENU_SET
-    mov si, it_about
-    call OSAPI_ABOUT_SET
     OS88_ALTENTER_ARM               ; arms OSAPI_KEY_DOWN as well: the full-
                                     ; screen chord is wave 3's, the arming is
                                     ; the entry proc's (SPEC.md 11.2.1.1)
-    mov bx, [it_win]
-    mov ax, it_onresize
-    call OSAPI_WM_ONRESIZE
     mov byte [it_state], ST_TITLE
     mov byte [it_tier], 1
     mov byte [it_snd], 1
@@ -305,8 +300,8 @@ it_entry:
     jc .nomem2
     mov [it_seg], dx
     mov bx, [it_win]
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; the picture is every pixel of the content
+    mov ax, WFB_OWNBG * 256 + 1
+    call OSAPI_WM_FLAG              ; the picture is every pixel of the content
     mov word [it_spanhk], it_span_box ; a step's tail: windowed (itfs.inc)
     mov word [it_lookp], it_col     ; the isoTron look, until C
     push es
@@ -946,10 +941,13 @@ it_putdec:
 ; TABLES
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) --------------------------
 it_tpl:
     dw 0, 30, 640, 420
-    dw it_ttl, it_paint, it_onkey, it_onclick
+    dw it_ttl, it_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS it_cls, 0, PAINT, it_paint, ONKEY, it_onkey, \
+               ONCLICK, it_onclick, ABOUT, it_about, ONRESIZE, it_onresize
 
 ; --- what we ask for on each adapter (SPEC.md 11.100.1): a frame SPANNING THE
 ; DISPLAY, which drops both side borders (11.95.2), so the content is the

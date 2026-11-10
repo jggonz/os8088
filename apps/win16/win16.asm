@@ -959,7 +959,7 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_nwy, 2
     W16BSS w16_nwcx, 2
     W16BSS w16_nwcy, 2
-    W16BSS w16_otpl, 16         ; ...and its os8088 window template
+    W16BSS w16_otpl, WT_SIZE    ; ...and its os8088 window template
     W16BSS w16_ttab, W16_MAXTOP * W16_TTLSZ ; second windows' titles
     W16BSS w16_pfosw, 2         ; the os8088 window being painted (w16_ppaint)
     W16BSS w16_inmodal, 1       ; the innermost modal dialog's slot + 1
@@ -1306,18 +1306,7 @@ w16_entry:
     jc .out
     mov [w16_win], bx
     mov [w16_jwin], bx
-    mov ax, w16_wake
-    call OSAPI_WM_ONWAKE
-    mov ax, w16_onclose
-    call OSAPI_WM_ONCLOSE
-    mov ax, w16_onup                ; the rest of SPEC.md 124.8's input table
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, w16_ondrag
-    call OSAPI_WM_ONDRAG
-    mov ax, w16_onrclick
-    call OSAPI_WM_ONRCLICK
     mov ax, w16_ontimer
-    call OSAPI_WM_ONTIMER
     mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
     push es                         ; the CD's volume, for int 2Fh 15xxh (124.33.3)
@@ -2617,7 +2606,18 @@ section .text
 ; --- the window template (SPEC.md 11) ----------------------------------------
 w16_tpl:
     dw 160, 120, W16_W, W16_H
-    dw w16_title, w16_paint, w16_onkey, w16_onclick
+    dw w16_title, w16_tpl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS w16_tpl_cls, 0, PAINT, w16_paint, ONKEY, w16_onkey, \
+               ONCLICK, w16_onclick, ONWAKE, w16_wake, ONCLOSE, w16_onclose, \
+               ONMOUSEUP, w16_onup, ONRCLICK, w16_onrclick, \
+               ONTIMER, w16_ontimer, ONDRAG, w16_ondrag
+; ...and every OWNED window's (w16wnd.inc's w16_oopen builds the template in
+; w16_otpl): W_PAINT paints every pixel, and a dialog does not zoom open
+; (SPEC.md 11.99.2.1)
+    OS88_CLASS w16_ocls, WF_OWNBG | WF_NOANIM, PAINT, w16_paint, \
+               ONKEY, w16_onkey, ONCLICK, w16_onclick, ONCLOSE, w16_onclose, \
+               ONMOUSEUP, w16_onup, ONRCLICK, w16_onrclick, ONDRAG, w16_ondrag
 
 w16_title:      db 'WIN16', 0
 %ifdef PKG_MEGA

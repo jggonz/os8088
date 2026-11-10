@@ -489,98 +489,24 @@ np_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
     jc .out                         ; table full: nothing to flag
-    push ax
-    mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
-    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-                                    ; so the next repaint re-wraps for free
-                                    ; (wm_sizable preserves AL, so the second
-                                    ; `mov al, 1` that used to sit here was a
-                                    ; dead store into a register still holding
-                                    ; the value)
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
-    call OSAPI_WM_SAVEU             ; ...and it PROMISES its content stands
-                                    ; still while it is not drawing, so a
-                                    ; raise puts the old pixels back instead
-                                    ; of lettering 464 cells (SPEC.md 11.96.1).
-                                    ; True of this app: everything that draws
-                                    ; goes through np_redraw or np_paint, and
-                                    ; the worker's two background drawers ask
-                                    ; OSAPI_WM_OBSCURED first.
-                                    ; ...AND THAT IT IS TWO COLOURS (SPEC.md
-                                    ; 11.96.17), which is a quarter of the
-                                    ; cache and a quarter of the blit. True
-                                    ; here and in no other window that
-                                    ; promises: the text is CBLACK on CWHITE
-                                    ; and the only other thing inside the
-                                    ; content is os88ui_sbar, whose track is
-                                    ; gfx_fill_gray - a 50% dither of 15 and 0
-                                    ; rather than a grey. Minesweeper, Piano
-                                    ; and Solitaire all draw in real colours
+                                    ; (resizable, the save-under promise and
+                                    ; its two colours, and every handler are
+                                    ; np_cls's, SPEC.md 11.104)
+%ifdef NPF_FIND
+%ifdef OS88UI_SBDRAG
+    pushf                           ; THE ENTRY STILL OWES THE LOADER
+    cmp al, WC_ONDRAG + 1           ; wm_create's CF. AL = the class slots this
+    sbb al, al                      ; kernel dispatches: 0xFF into the byte the
+    mov [np_nodrag], al             ; grab site tests on kern_small, which has
+    popf                            ; no drag edge to hold a thumb with
+%endif                              ; OS88UI_SBDRAG
+%endif                              ; NPF_FIND
     push si                         ; ...and LARGER where the screen has the
     mov si, np_pref                 ; room (SPEC.md 11.100.1): VGA/EGA and the
     call OSAPI_WM_PREFER            ; Hercules open wider and a little taller,
-    pop si                          ; CGA keeps the template. Flags preserved
-    mov al, 1
-    call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
-    pop ax                          ; every keystroke redraws a row of text and
-                                    ; an aligned cell writes ONE framebuffer
-                                    ; byte where an unaligned one writes two.
-                                    ; TRUE ON VGA TOO - mode 12h is 8 pixels
-                                    ; to a byte per plane - and measured, this
-                                    ; window was the worked example: it used
-                                    ; to open at content x = 61 there, skew 5,
-                                    ; which typebench prices at 9.4% of every
-                                    ; keystroke (SPEC.md 11.94)
-%ifdef NPF_FIND
-    pushf                           ; THE ENTRY STILL OWES THE LOADER
-                                    ; wm_create's CF, and OSAPI_WM_ONDRAG
-                                    ; STATES a flag of its own (SPEC.md
-                                    ; 13.8.2) - so the installs go inside
-                                    ; a pushf exactly as the CPU_INFO block
-                                    ; below does
-%ifdef OS88UI_SBDRAG
-    mov ax, np_ontimer              ; 13.10.5.4.2's PAUSE commit - FIRST of the
-    call OSAPI_WM_ONTIMER           ; three, because the `sbb al, al` below
-                                    ; captures OSAPI_WM_ONDRAG's OWN CF and a
-                                    ; third install after it would answer for
-                                    ; the wrong slot
-%endif                              ; OS88UI_SBDRAG
-    mov ax, np_onup                 ; SPEC.md 13.7 / 13.8.2: the release and
-    call OSAPI_WM_ONMOUSEUP         ; the tracking edge, both AFTER wm_create
-    mov ax, np_ondrag               ; and neither a template word. **THE FIND
-    call OSAPI_WM_ONDRAG            ; PANEL'S, NOT THE BAR'S**: these two were
-                                    ; under the %ifdef above, so SBDRAGOFF=1
-                                    ; installed no release handler and the
-                                    ; panel's four buttons never fired
-%ifdef OS88UI_SBDRAG
-    sbb al, al                      ; CF = 1 on kern_small: 0xFF into the byte
-    mov [np_nodrag], al             ; the grab site tests. The CAPTURE is the
-                                    ; bar's even where the install is not:
-                                    ; with no bar gesture there is no thumb
-                                    ; to hold inert
-%endif                              ; OS88UI_SBDRAG
-    popf
-%endif                              ; NPF_FIND
-%ifndef APP_SMALL                   ; (the small build is kern_small's, which
-    mov ax, np_onwheel              ; has no wheel.) SPEC.md 13.18: the mouse
-    call OSAPI_WM_ONWHEEL           ; wheel scrolls the note; flags preserved
-%endif
-    mov ax, np_onwake               ; SPEC.md 54.10: the kernel calls this once
-    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the
-                                    ; launch document loads in front of it
-    mov ax, np_onclose              ; SPEC.md 75.1: the kernel asks before it
-    call OSAPI_WM_ONCLOSE           ; closes us, and a note with unsaved work
-                                    ; answers. A side table, so this goes here
-                                    ; and not in np_tpl; it preserves the
-                                    ; FLAGS, which the CF we still owe the
-                                    ; loader depends on
-    push si
+                                    ; CGA keeps the template. Flags preserved
     mov si, np_menus                ; BX is still the window: hand it our
     call OSAPI_MENU_SET             ; menus (draws nothing, takes no lock)
-%ifdef NPF_ABOUT
-    mov si, np_about                ; ...and 'About Note Pad' above the Close
-    call OSAPI_ABOUT_SET            ; the kernel already puts in our pull-down
-%endif
     pop si                          ; CF is still wm_create's: the branch
                                     ; above consumed it and OSAPI_MENU_SET
                                     ; preserves flags too (SPEC.md 20.3)
@@ -6677,7 +6603,7 @@ np_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0362)
+; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API OSAPI_WM_ONCLOSE (withdrawn))
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;
@@ -10923,7 +10849,7 @@ np_saycnt:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; Same geometry the built-in used: 260x180 outer -> 258x160 content.
 ; =============================================================================
 ; 'About Note Pad' - the credit card (SPEC.md 12.2, 20.5.1)
@@ -10934,7 +10860,7 @@ np_saycnt:
 ; content on a timer.
 
 ; -----------------------------------------------------------------------------
-; np_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; np_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -11019,7 +10945,45 @@ np_abdismiss:
 
 np_tpl:
     dw 60, 60, 260, 180
-    dw np_ttl, np_paint, np_onkey, np_onclick
+    dw np_ttl, np_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; RESIZABLE: np_paint lays out from the live record, so a repaint re-wraps
+; for free. SAVEU: everything that draws goes through np_redraw or np_paint,
+; and the worker's two background drawers ask OSAPI_WM_OBSCURED first - so a
+; raise puts the old pixels back instead of lettering 464 cells (11.96.1).
+; 1BPP: CBLACK on CWHITE, and os88ui_sbar's track is a 50% dither of 15 and
+; 0 rather than a grey - a quarter of the cache and of the blit (11.96.17).
+; The find panel's release and drag (13.7/13.8.2) are its four buttons'; the
+; timer is the scroll bar's PAUSE commit (13.10.5.4.2); the wake loads a
+; launch document once the window is on the glass (54.10); the close asks
+; about unsaved work (75.1)
+%ifdef NPF_FIND
+  %define NP_C_UP np_onup
+  %define NP_C_DRAG np_ondrag
+ %ifdef OS88UI_SBDRAG
+  %define NP_C_TIMER np_ontimer
+ %else
+  %define NP_C_TIMER 0
+ %endif
+%else
+  %define NP_C_UP 0
+  %define NP_C_DRAG 0
+  %define NP_C_TIMER 0
+%endif
+%ifdef NPF_ABOUT
+  %define NP_C_ABOUT np_about
+%else
+  %define NP_C_ABOUT 0
+%endif
+%ifndef APP_SMALL                   ; (the small build is kern_small's, which
+  %define NP_C_WHEEL np_onwheel     ; has no wheel - SPEC.md 13.18)
+%else
+  %define NP_C_WHEEL 0
+%endif
+    OS88_CLASS np_cls, WF_SIZABLE | WF_SAVEU | WF_1BPP, PAINT, np_paint, \
+               ONKEY, np_onkey, ONCLICK, np_onclick, ABOUT, NP_C_ABOUT, \
+               ONWAKE, np_onwake, ONCLOSE, np_onclose, ONMOUSEUP, NP_C_UP, \
+               ONTIMER, NP_C_TIMER, ONDRAG, NP_C_DRAG, ONWHEEL, NP_C_WHEEL
 
 ; --- the opening size per adapter (SPEC.md 11.100.1) ---------------------------
 ; The template above is CGA's, whose 640x200 has no room to spare - and it is

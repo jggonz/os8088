@@ -59,7 +59,6 @@ mu_entry:
     call OSAPI_WM_CREATE
     jc .main                         ; a full table is not a failure here -
     mov ax, mu_vup                   ; the other four gestures still work
-    call OSAPI_WM_ONMOUSEUP
     call OSAPI_GFX_LOCK              ; legal: the entry runs with the lock
     call OSAPI_WM_SHOW               ; FREE (SPEC.md 20.2), unlike a callback
     call OSAPI_GFX_UNLOCK
@@ -69,9 +68,6 @@ mu_entry:
     jc .out
     mov [mu_win], bx                 ; ...banked: mu_vclick retitles it, being
                                      ; the only thing it can leave behind
-    mov ax, mu_onup
-    call OSAPI_WM_ONMOUSEUP          ; SPEC.md 13.7 - AFTER wm_create, never
-                                     ; in the template (the copy is 8 words)
     clc
 .out:
     pop si
@@ -327,11 +323,17 @@ mu_l_b:     db 'Two', 0
 ; -----------------------------------------------------------------------------
 mu_tpl:
     dw 120, 60, MU_W, MU_H
-    dw mu_title, mu_paint, 0, mu_onclick
+    dw mu_title, mu_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mu_cls, 0, PAINT, mu_paint, ONCLICK, mu_onclick, \
+               ONMOUSEUP, mu_onup
 
 mu_vtpl:                            ; clear of the main window AND of the
     dw 400, 60, MU_VW, MU_VH        ; drive column on a 640px screen
-    dw mu_vtitle, mu_vpaint, 0, mu_vclick
+    dw mu_vtitle, mu_vcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mu_vcls, 0, PAINT, mu_vpaint, ONCLICK, mu_vclick, \
+               ONMOUSEUP, mu_vup
 
 mu_title:   db 'MupTest', 0
 mu_t_no:    db 'Cancelled', 0

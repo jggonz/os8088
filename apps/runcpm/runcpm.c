@@ -86,6 +86,16 @@
 
 #include "os88.h"
 
+/* THE WINDOW'S CLASS (SPEC.md 11.104): cell columns on byte boundaries (the
+ * default - blit1, scroll and font_run's single-store path all want it); we
+ * paint every pixel, so a repaint is not a white flash followed by 25 bands
+ * (OWNBG); the wake is the slice driver's entry (74.1). */
+static struct os88_class rc_cls = {
+    OS88_CLASS_LEN, OS88_WF_OWNBG,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, 0, 0, 0, 0, 0, 0, 0
+};
+
 /* --- prototypes: the callbacks the shim declares, and the parts' entry
  * points, so the host harness's clang (stricter than SmallerC about an
  * undeclared function) and the target agree (LESSONS.md 3) ---------------- */
@@ -1263,19 +1273,12 @@ void *os88_main(void)
     rc_slice_n = 512 << os88_cpu();          /* 8086 512, 286 1024, 386+ 2048 */
     rc_clock_begin();
 
-    win = os88_wm_create(RC_WIN_X, RC_WIN_Y, RC_WIN_W, RC_WIN_H, rc_title);
+    win = os88_wm_create(RC_WIN_X, RC_WIN_Y, RC_WIN_W, RC_WIN_H, rc_title,
+                         &rc_cls);
     if (win == 0)
         return 0;
     rc_win = win;
-    os88_wm_snap(win, 1);                   /* cell columns on byte boundaries:
-                                             * blit1, scroll and font_run's
-                                             * single-store path all want it */
-    os88_wm_ownbg(win, 1);                  /* we paint every pixel, so a
-                                             * repaint is not a white flash
-                                             * followed by 25 bands */
     os88_menu_set(win, (struct os88_menuset *)&rc_kmenus);
-    os88_about_set(win);
-    os88_wm_onwake(win);                    /* the slice driver's entry (74.1) */
     rc_fs_init();                           /* bank the launch folder */
     return win;                             /* the first paint kicks */
 }

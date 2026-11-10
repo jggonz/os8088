@@ -616,7 +616,7 @@ def zstr(m, sym, n):
     return m.read(S(sym), n).split(b"\0")[0].decode("latin1", "replace")
 
 
-W_SEG = 22                              # the package's own segment, and
+W_SEG = 18                              # the package's own segment, and
                                         # os88geom stops at W_TITLE
 
 

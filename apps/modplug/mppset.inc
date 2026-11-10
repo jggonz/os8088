@@ -952,7 +952,10 @@ mpps_onkey:
 ; =============================================================================
 mpps_tpl:
     dw 0, 0, MPPS_FW, MPPS_H + TITLE_H + 1      ; x/y/h set by mpps_geom
-    dw mpps_ttl, mpps_paint, mpps_onkey, mpps_onclick
+    dw mpps_ttl, mpps_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mpps_cls, 0, PAINT, mpps_paint, ONKEY, mpps_onkey, \
+               ONCLICK, mpps_onclick
 mpps_ttl: db 'ModPlug Player Setup', 0
 
 ; --- General (prose spans the pane: 46 glyphs) --------------------------------

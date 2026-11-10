@@ -297,40 +297,6 @@ cal_entry:
                                     ; CF the loader is owed is the `clc`)
     mov si, cal_menus
     call OSAPI_MENU_SET             ; the bar already says 'Calc' on frame one
-%ifdef CALF_ABOUT
-    mov si, cal_about
-    call OSAPI_ABOUT_SET            ; ...and 'About Calc' above its Close
-%endif                              ; (SPEC.md 12.2/12.7)
-    mov ax, cal_onup
-    call OSAPI_WM_ONMOUSEUP         ; SPEC.md 13.7: a key fires on the RELEASE,
-                                    ; over the key the press landed on, so a
-                                    ; mis-aimed press can be slid off
-    mov ax, cal_ondrag
-    call OSAPI_WM_ONDRAG            ; ...and SPEC.md 13.8.2: the key it landed
-                                    ; on FOLLOWS the pointer between the two
-                                    ; edges, so sliding off says the gesture is
-                                    ; cancelled before the button comes up
-    mov ax, cal_ontimer
-    call OSAPI_WM_ONTIMER           ; ...and SPEC.md 13.9's one-shot, which is
-                                    ; how a key pressed from the KEYBOARD gets
-                                    ; back up: it has no release edge, and a
-                                    ; callback cannot sleep
-    mov ax, cal_sync
-    call OSAPI_WM_ONRESIZE          ; SPEC.md 11.98: [cal_nvis] is derived from
-                                    ; the content box and KEPT, so the box
-                                    ; moving under us - an adapter switch, a
-                                    ; drag across an extended desktop's seam -
-                                    ; has to re-derive it BEFORE the repaint
-    mov al, 1
-    call OSAPI_WM_SNAP              ; every pen here is content + a multiple of
-                                    ; 8, so this is what buys the single-store
-                                    ; font_run path (SPEC.md 6.1/11.94) - and
-                                    ; it preserves every register, so the 1 is
-                                    ; still in AL for the call below
-    call OSAPI_WM_SAVEU             ; ...and our content genuinely does not
-                                    ; change while we are not drawing (SPEC.md
-                                    ; 11.96.1): no worker, no clock, nothing
-                                    ; here moves but on a click or a key
     clc                             ; THE ANSWER IS STATED, not carried: the
                                     ; CF wm_create gave does NOT survive the
                                     ; calls above on kern_small, where
@@ -886,7 +852,7 @@ cal_oncmd:
 ; is that section's own division of the work.
 
 ; -----------------------------------------------------------------------------
-; cal_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; cal_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
 ; in:  SI = our window ptr; the UI task, gfx lock HELD, far-called at our
 ;      segment - a window callback in every respect that matters, so it draws
 ;      directly
@@ -3097,14 +3063,28 @@ cal_fmtv:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; Authored for a 640x480 VGA; wm_fit clamps the origin onto whatever screen
 ; this machine has (SPEC.md 39.7), and the frame HEIGHT is inside every
 ; adapter's desktop band with the history folded up - which is the whole
 ; point of CAL_BASE_H being what it is.
 cal_tpl:
     dw 180, 48, CAL_CW + 2, CAL_BASE_H + TITLE_H + 1
-    dw cal_ttl, cal_paint, cal_onkey, cal_onclick
+    dw cal_ttl, cal_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; SAVEU: our content does not change while we are not drawing (SPEC.md
+; 11.96.1) - no worker, no clock. A key fires on the RELEASE (13.7), follows
+; the pointer between the edges (13.8.2), and a key pressed from the KEYBOARD
+; gets back up on the one-shot timer (13.9); [cal_nvis] is re-derived when
+; the box moves under us (11.98)
+%ifdef CALF_ABOUT
+  %define CAL_ABOUT cal_about       ; ...and 'About Calc' above its Close
+%else                               ; (SPEC.md 12.2/12.7)
+  %define CAL_ABOUT 0
+%endif
+    OS88_CLASS cal_cls, WF_SAVEU, PAINT, cal_paint, ONKEY, cal_onkey, \
+               ONCLICK, cal_onclick, ABOUT, CAL_ABOUT, ONMOUSEUP, cal_onup, \
+               ONRESIZE, cal_sync, ONTIMER, cal_ontimer, ONDRAG, cal_ondrag
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
 ; Three menus, and every item is also a key - the menu is the discoverable

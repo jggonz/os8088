@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9c1432e0917b82e7d3b0e80c116cc8db02ca6c4c68be48e0dc1dda704edfb347",
+  "fingerprint": "a839d7b5832ab499831a6eda39390d99e3e62822d2fd3645b35d9653d88bc924",
   "version": 14
  },
  "PKG_FMT": {
-  "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
+  "fingerprint": "dadff3810ea1339a7d9fb06e12cf01f301aca5519f6d005706c6dd3e80a26699",
   "version": 13
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1981,6 +1981,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "Kernel size pass 19 opens the flag day (docs/plans/ksp19/BRIEF.md, docs/plans/ABI-BREAK-LIST.md 13.3): the table renumbers (T5's software-interrupt door for the rare cells), the window class moves into the package (R14), the KB memory doors and duplicate file doors are withdrawn (C1, C2, C4'), and further re-contracts follow on this branch. Nothing built at PKG_FMT 10 or DRV_VER 12 runs on this kernel. 11 and 12 are drivers' numbers, so packages go to 13 and drivers to 14 (SPEC.md 20.2.0).",
+   "to": 14
+  },
+  {
+   "fingerprint": "dadff3810ea1339a7d9fb06e12cf01f301aca5519f6d005706c6dd3e80a26699",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "kernel size pass 19 R14/K17-2: the window class (W_CLASS, WT_CLASS, WC_*, OS88_CLASS), OSAPI_WM_FLAG and WFB_*, the record re-laid out; the ten handler setters, OSAPI_ABOUT_SET and six flag setters withdrawn and the table renumbered (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "a839d7b5832ab499831a6eda39390d99e3e62822d2fd3645b35d9653d88bc924",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "kernel size pass 19 R14/K17-2: the window class (W_CLASS, WT_CLASS, WC_*, OS88_CLASS), OSAPI_WM_FLAG and WFB_*, the record re-laid out; the ten handler setters, OSAPI_ABOUT_SET and six flag setters withdrawn and the table renumbered (kernel size pass 19)",
    "to": 14
   }
  ]

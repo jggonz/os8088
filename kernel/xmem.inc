@@ -504,7 +504,7 @@ xm_caps:
 
 %ifndef KERN_MEGA
 ; -----------------------------------------------------------------------------
-; osapi_xmem_walk - slot 0x04BF's body on kern_big (SPEC.md 28.4.8): the
+; osapi_xmem_walk - slot 0x045E's body on kern_big (SPEC.md 28.4.8): the
 ;                   overlay's block table, so the Task Manager can bill the
 ;                   pool to whoever holds it. ES:DI = room for CX records;
 ;                   out CF = 0, AX = written. CF = 1, AX = 1 no store - the
@@ -753,7 +753,7 @@ xm_cblk:    resb XMC_SIZE       ; the copy's parameter block, read by the
 ; against one kernel far-calls into whatever follows the other's table - which
 ; here is the debug registry, not code. It assembles, it loads, it launches,
 ; and it dies somewhere unrelated. So a kern_big-only slot is present here as
-; a cell pointing at a body that answers, exactly as retired slot 0x0190 is.
+; a cell pointing at a body that answers, exactly as retired slot 0x018A is.
 ;
 ; THE ANSWERS ARE TIER 0's, BYTE FOR BYTE, and that is the safety argument
 ; rather than a convenience. The target machine is an 8088, so a kern_big

@@ -632,7 +632,7 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ;      before it frees your image; a worker that never exits leaves the
 ;      image claimed and the row loaded - a leak, never a free under a CS
 ;      that still points into it.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x01C8
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,

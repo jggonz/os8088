@@ -66,15 +66,8 @@ sd_entry:
                                     ; static and moves with us: a bare `ret`
     mov si, sd_pref                 ; a size per adapter (SPEC.md 11.100.1)
     call OSAPI_WM_PREFER
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content on a multiple of 8: every row is
-                                    ; font_run's one-store path
     mov si, sd_about
-    call OSAPI_ABOUT_SET
-    mov ax, sd_onclose
-    call OSAPI_WM_ONCLOSE
     mov ax, sd_ontimer
-    call OSAPI_WM_ONTIMER           ; kern_small refuses: no play test there
     jc .notimer
     mov ax, SD_DSPGAP               ; the play test starts from the timer, on
     call OSAPI_WM_TIMER             ; the UI task - verb 0 is a callback's
@@ -693,7 +686,10 @@ sd_tone:
 
 ; --- data ----------------------------------------------------------------------
 sd_tpl:     dw 0, MBAR_H, 640, 240
-            dw sd_ttl, sd_paint, sd_onkey, 0
+            dw sd_ttl, sd_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sd_cls, 0, PAINT, sd_paint, ONKEY, sd_onkey, ABOUT, sd_about, \
+               ONCLOSE, sd_onclose, ONTIMER, sd_ontimer
     OS88_PREFER sd_pref, 640, SD_ROWS*12+6+TITLE_H+2, 712, SD_ROWS*10+6+TITLE_H+2, 640, SD_ROWS*8+6+TITLE_H+2
 sd_ttl      equ 16                  ; the header's name field
 

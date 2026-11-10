@@ -828,29 +828,8 @@ TOAST_MAX   equ 24
 %%back:
  cpu 8086
 %endmacro
-; MEGA_ICWB field - the body of a five-byte INLINE cell that installs a
-; handler: `mov [byte cs:bx+field], ax`, BX = the window, AX = the proc. The
-; same shape as MEGA_ICW one step along: kern_mega jumps to a stub that does
-; the store through the data alias (kernel/mega.inc).
-%macro MEGA_ICWB 1
- %ifdef KERN_MEGA
-    jmp strict near mega_icwb_%1
-    nop
- %else
-    mov [byte cs:bx+%1], ax
- %endif
-%endmacro
-; MEGA_ICWBW field - MEGA_ICWB with a WORD displacement, for the SIX-byte
-; cell (the wheel's, kept even for t_hotpar's parity)
-%macro MEGA_ICWBW 1
- %ifdef KERN_MEGA
-    jmp strict near mega_icwb_%1
-    nop
-    nop
- %else
-    mov [word cs:bx+%1], ax
- %endif
-%endmacro
+; (MEGA_ICWB and MEGA_ICWBW, the handler setters' inline bodies, went with
+; the setters in kernel size pass 19: SPEC.md 11.104)
 %macro KES 0
  %ifnidni __?SECT?__, [section .text]
   %ifnidni __?SECT?__, [section .vga] ; (the VGA rung is KERNEL_SEG's too)
@@ -2822,7 +2801,8 @@ rmk_sstr:          ; (a real-mode bracket's twin: fsx_rkeepm)
                                   ;          34.6). The two numbers are held
                                   ;          rather than reused, which is what
                                   ;          fixes every slot below them
-    OSAPI_RSLOT wm_sizable         ; 0x00F1 - window features (SPEC.md 11.1)
+apic_wm_flag:
+    OSAPI_RSLOT wm_flag            ; 0x00F1 - BX = window, AH = a W_FLAGS bit NUMBER (WFB_*), AL = 0 clear / non-zero set (SPEC.md 11.104.3)
     OSAPI_RSLOT wm_fullscreen      ; 0x00F7 - fullscreen (SPEC.md 11.2)
 apic_wm_grow_paint:
     OSAPI_RSLOT wm_grow_paint      ; 0x00FD - grow-box restore (SPEC.md 11.1)
@@ -2899,8 +2879,6 @@ api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
                                   ;          AX/BX = dest, CX/DX = w/h. ES is
                                   ;          the caller's own choice here, so
                                   ;          no stub is needed
-    OSAPI_RSLOT wm_about_set       ; 0x018A - the app-name pull-down (12.2):
-                                  ;          BX = win, SI = your About handler
     OSAPI_RCSLOT osapi_vol_kind_x  ; 0x0190 - AL = a volume index. CF=1 = there
                                   ;          is no such volume; CF=0 with AL =
                                   ;          VK_REMOVABLE / VK_FIXED and AH =
@@ -2915,31 +2893,6 @@ api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
                                   ;          free list, and taking it cost the
                                   ;          table nothing where an append
                                   ;          would have been eight bytes
-apic_wm_onmouseup:
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_onmouseup       ; 0x0196 - BX = window, AX = a near proc in
-%else                             ; (INLINE off kern_mega, OSAPI_WM_ONWHEEL's
-    OSAPI_ICELL 6                 ; word displacement for the cell's six
-    mov [word cs:bx+W_ONMOUSEUP], ax ; bytes; kern_mega's store needs the data
-    OSAPI_IEND                    ; alias, so it keeps the rare cell and its
-%endif                            ; body - kernel size pass 14)
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          release half of a content click
-                                  ;          (SPEC.md 13.7). Call it after
-                                  ;          OSAPI_WM_CREATE, like
-                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
-                                  ;          not a template word.
-                                  ;
-                                  ;          THIS CELL IS REUSED, and it is
-                                  ;          the worked example of SPEC.md
-                                  ;          20.3.1's free list: it held the
-                                  ;          RETIRED gfx_dbuf_gone (32), whose
-                                  ;          contract was withdrawn, whose SDK
-                                  ;          name was removed, and which
-                                  ;          therefore had no caller that
-                                  ;          could exist. Reuse cost the table
-                                  ;          nothing where an append would
-                                  ;          have grown it
     OSAPI_SLOT gfx_scroll         ; 0x019C - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
@@ -2957,14 +2910,6 @@ rmk_6:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          body below), AL = first code,
                                   ;          AH = last, CX = bytes per glyph
 rmk_6e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x01BC - install the resize negotiator
-                                  ;          (SPEC.md 11.1): BX = win, AX =
-                                  ;          near proc. The other half of
-                                  ;          docs/plans/completed/PAINT-NOTES.md's resize
-                                  ;          complaint - wm_resize is the app
-                                  ;          asking, this is the app answering
-    MEGA_ICWB W_ONSIZE
-    OSAPI_IEND
     OSAPI_RSLOT osapi_file_here    ; 0x01C1 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
     OSAPI_RSLOT osapi_file_goto    ; 0x01C7 - ...and how to put it back
@@ -3025,18 +2970,6 @@ apic_wm_top:                       ; EXTD.DRV's and DOCK.DRV's door (SPEC.md 39.
                                   ;          your own window ptr; W_FLAGS bit1
                                   ;          only says VISIBLE, which a wholly
                                   ;          covered window still is
-apic_wm_snap:
-    OSAPI_RSLOT wm_snap            ; 0x01F2 - BX = window, AL = 0 clear / non-0
-                                  ;          set: keep this window's CONTENT
-                                  ;          ORIGIN on a multiple of 8, so its
-                                  ;          text can take font_run's
-                                  ;          single-store path (SPEC.md
-                                  ;          11.94/6.1). Content, not frame:
-                                  ;          the border makes them differ by
-                                  ;          one and the kernel owns that
-                                  ;          pixel. Mono only - it is a no-op
-                                  ;          on VGA, so an app may set it
-                                  ;          unconditionally
     OSAPI_RCXCELL osapi_vol_add_x    ; 0x01F8 - X: a DRVC_DISK driver registers
                                   ;          one mounted volume (SPEC.md
                                   ;          18.7/51.8). in AL = its own
@@ -3299,13 +3232,6 @@ apic_gfx_pen_cf:
                                   ;         a quiet mount. For a caller about to
                                   ;         read or write BY NAME rather than to
                                   ;         list - which is every copy loop
-apic_wm_saveu:
-    OSAPI_RSLOT wm_saveu           ; 0x02A4 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "My content does not change
-                                  ;          while I am not drawing", which
-                                  ;          lets the raise cache put its old
-                                  ;          pixels back instead of calling
-                                  ;          W_PAINT (SPEC.md 11.96.1)
 apic_toast_show:
     OSAPI_RSLOT toast_show         ; 0x02AA - ES:SI = a NUL line, CX = ticks to
                                   ;          live (0 = ~3s). Says it in the
@@ -3354,14 +3280,6 @@ apic_wm_destroy:
                                   ;         what lets a system file too big for
                                   ;         the caller's buffer be finished at
                                   ;         all (SPEC.md 18.4.4)
-    OSAPI_RSLOT wm_ownbg           ; 0x02C5 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "I paint every pixel of my
-                                  ;          content myself", which skips
-                                  ;          wm_draw_win's white fill for it
-                                  ;          (SPEC.md 11.90.1). A window that
-                                  ;          sets it and leaves a pixel unwritten
-                                  ;          shows whatever was there before -
-                                  ;          after a move, another window's
     OSAPI_SLOT wm_damage          ; 0x02CB - BX = your window, inside your own
                                   ;          W_PAINT. CF=1 = draw the whole
                                   ;          content (AX/BX/CX/DX = it); CF=0 =
@@ -3430,38 +3348,6 @@ apic_fpg_stepb:
                                   ;          the title bar and its boxes - stays
                                   ;          the arrow, because it is the
                                   ;          kernel's to draw and to click
-    OSAPI_ICELL 5                 ; 0x02EB - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it). Your
-                                  ;          content box CHANGED and you did
-                                  ;          not ask - the machine changed
-                                  ;          adapter under you (SPEC.md
-                                  ;          39.11.2), or your window crossed
-                                  ;          the seam onto a shorter display
-                                  ;          (39.16.3). Called SI = window,
-                                  ;          CX/DX = the NEW content size, gfx
-                                  ;          lock HELD, and MUST NOT DRAW: a
-                                  ;          full repaint follows and this is
-                                  ;          your chance to be laid out
-                                  ;          correctly before it. The other
-                                  ;          half of OSAPI_WM_ONSIZE, which
-                                  ;          asks BEFORE and takes an answer
-                                  ;          (SPEC.md 11.98)
-    MEGA_ICWB W_ONSZ
-    OSAPI_IEND
-    OSAPI_RSLOT wm_keeph           ; 0x02F0 - BX = window, AL = 0 clear / non-0
-                                  ;          set. "My layout is FIXED: if I
-                                  ;          will not fit the desktop band,
-                                  ;          hang me over the dock rather than
-                                  ;          shorten me" (SPEC.md 11.93). Only
-                                  ;          you know whether a row can be
-                                  ;          given up - shortened, your content
-                                  ;          is still drawn and simply outside
-                                  ;          the frame, so it takes no clicks.
-                                  ;          Call it from your entry proc,
-                                  ;          right after OSAPI_WM_CREATE: it
-                                  ;          re-fits from the size you asked
-                                  ;          for, and preserves the flags so
-                                  ;          the CF you owe the loader survives
     OSAPI_RCSLOT osapi_vol_at_x    ; 0x02F6 - DL = an int 13h drive number,
                                   ;          BX:CX = a partition's 32-bit base
                                   ;          LBA. out CF=0 and AL = the volume
@@ -3608,33 +3494,6 @@ rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          has neither, so this borrows the
                                   ;          panel's - which is the window the
                                   ;          page is drawn in anyway
-apic_wm_ondrag_c:
-%ifdef KERN_MEGA                  ; kern_mega: its cell cannot store through CS
-    OSAPI_RSLOT wm_ondrag_c        ; 0x0334 - BX = window, AX = a near proc in
-%else
- %ifdef KERN_BIG                  ; INLINE on kern_big and kern_emu: the store,
-    OSAPI_ICELL 6                 ; and CF = 0, the ANSWER (the shim it was
-    mov [cs:bx+W_ONDRAG], ax      ; said so below) - kernel size pass 14
-    clc                           ; 0x0334 - BX = window, AX = a near proc in
-    OSAPI_IEND
- %else
-    OSAPI_RSLOT wm_ondrag_c        ; 0x0334 - BX = window, AX = a near proc in
- %endif
-%endif
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          pointer MOVED while your press
-                                  ;          was armed (SPEC.md 13.8.2).
-                                  ;          CX = x, DX = y, SI = window, the
-                                  ;          same environment W_ONCLICK and
-                                  ;          W_ONMOUSEUP are dispatched in.
-                                  ;          Between the two edges of one
-                                  ;          gesture, only when the point
-                                  ;          CHANGED, and outside the window
-                                  ;          as freely as the release - which
-                                  ;          is the whole point, because a
-                                  ;          control cannot un-draw itself as
-                                  ;          the pointer leaves if nothing
-                                  ;          tells it. Call it AFTER wm_create
 apic_wm_timer_c:
     OSAPI_SLOT wm_timer_c         ; 0x033A - BX = window, AX = TICKS from now
                                   ;          (0 cancels). Arms the one-shot
@@ -3643,25 +3502,6 @@ apic_wm_timer_c:
                                   ;          timer disarms itself FIRST, so a
                                   ;          handler wanting a repeat re-arms
                                   ;          inside itself. 18.2 ticks a second
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_ontimer_c       ; 0x0342 - BX = window, AX = a near proc in
-%else
- %ifdef KERN_BIG                  ; INLINE on kern_big and kern_emu, as 0x0334
-    OSAPI_ICELL 6
-    mov [cs:bx+W_ONTIMER], ax     ; 0x0342 - BX = window, AX = a near proc in
-    clc
-    OSAPI_IEND
- %else
-    OSAPI_RSLOT wm_ontimer_c       ; 0x0342 - BX = window, AX = a near proc in
- %endif
-%endif
-                                  ;          YOUR segment (0 clears it): what
-                                  ;          the timer above calls. CX = DX = 0
-                                  ;          (a timer has no point), SI = the
-                                  ;          window, under the gfx lock and
-                                  ;          billed to you - W_ONCLICK's
-                                  ;          environment. Call it AFTER
-                                  ;          wm_create
 apic_drv_pkg_call:
     OSAPI_XCELL drv_pkg_call_x      ; 0x0348 - a PACKAGE calls a DRIVER (SPEC.md
                                   ;          20.11). BH = the DRVC_* class, BL
@@ -3705,19 +3545,6 @@ rmk_9:            ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          calls the handler below WITHOUT
                                   ;          the gfx lock
 rmk_9e:           ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_ICELL 5                 ; 0x0357 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          WAKE handler. Called SI = your
-                                  ;          window, on the UI task, lock NOT
-                                  ;          held, billed to your instance -
-                                  ;          it may call the file slots and
-                                  ;          may take the lock for a burst it
-                                  ;          can state. Install it after
-                                  ;          OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONRESIZE - a side table,
-                                  ;          not a template word
-    MEGA_ICWB W_ONWK
-    OSAPI_IEND
     OSAPI_RSLOT osapi_file_goto_qm ; 0x035C - DX = folder cluster, BL = volume:
                                   ;          OSAPI_FILE_GOTO_Q's quiet stand
                                   ;          AND THEN inst_vol_mark, so the
@@ -3742,28 +3569,6 @@ rmk_9e:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          package called one and got the
                                   ;          other. Sort the %defines by address
                                   ;          after every merge from main
-%ifdef KERN_MEGA
-    OSAPI_RSLOT wm_onclose         ; 0x0362 - BX = window, AX = a near proc in
-%else                             ; (INLINE off kern_mega, as 0x0196 above -
-    OSAPI_ICELL 6                 ; kernel size pass 14)
-    mov [word cs:bx+W_ONCL], ax   ; 0x0362 - BX = window, AX = a near proc in
-    OSAPI_IEND
-%endif
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          CLOSE NEGOTIATOR (SPEC.md 75.1).
-                                  ;          Called SI = your window, on the UI
-                                  ;          task, gfx lock HELD - W_ONCLICK's
-                                  ;          environment - when anything at all
-                                  ;          tries to close you: the close box,
-                                  ;          the app-name menu's Close, the
-                                  ;          dock tile's context menu. Answer
-                                  ;          CF = 0 to let the close happen and
-                                  ;          CF = 1 to REFUSE it, in which case
-                                  ;          nothing happens at all and you owe
-                                  ;          the user a way out. Install it
-                                  ;          after OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONWAKE - a side table,
-                                  ;          not a template word
     OSAPI_RSLOT wm_close_req       ; 0x0368 - BX = a window of yours: close it
                                   ;          (SPEC.md 75.2). DEFERRED to the
                                   ;          next UI pass, because the caller
@@ -3798,22 +3603,6 @@ apic_wm_minsize:
                                   ;   SI = the first usable row, DL = kind, DH =
                                   ;   bpp - OSAPI_VIDEO for the display THIS
                                   ;   WINDOW is on (SPEC.md 39.16.4)
-    OSAPI_ICELL 5                 ; 0x0380 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          RIGHT-CLICK handler (SPEC.md
-                                  ;          13.11). Called CX = x, DX = y,
-                                  ;          SI = your window, on the UI task,
-                                  ;          gfx lock HELD - W_ONCLICK's
-                                  ;          environment exactly - when the
-                                  ;          RIGHT button is pressed in the
-                                  ;          content of your FRONTMOST window.
-                                  ;          Press edge only; there is no
-                                  ;          release half. Install it after
-                                  ;          OSAPI_WM_CREATE like
-                                  ;          OSAPI_WM_ONWAKE - a side table,
-                                  ;          not a template word
-    MEGA_ICWB W_ONRC
-    OSAPI_IEND
     OSAPI_RNCELL dwf_dskw_rmany ; 0x0385  N: SI = a NUL 8.3 name, AL = 0 an
                                   ;         EMPTY folder only / non-zero the
                                   ;         whole tree under it (SPEC.md 18.6).
@@ -3961,26 +3750,6 @@ rmk_10:           ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          allows it, and neither is
                                   ;          derivable from the info block
 rmk_10e:          ; (a real-mode bracket keeps it: fsx_rkeep)
-    OSAPI_RSLOT wm_noanim          ; 0x03CD - BX = a window of yours, between
-                                  ;          OSAPI_WM_CREATE and
-                                  ;          OSAPI_WM_SHOW: it does NOT zoom
-                                  ;          open (SPEC.md 11.99.2.1). No AL
-                                  ;          and no clear - the five sibling
-                                  ;          flag slots (wm_sizable, wm_snap,
-                                  ;          wm_keeph, wm_ownbg, wm_saveu) all
-                                  ;          take AL = 0 clear / non-zero set
-                                  ;          and this one deliberately does
-                                  ;          not, the bit
-                                  ;          being read in one place and only
-                                  ;          on the wm_show of a window that
-                                  ;          is not yet visible. THE CELL IS
-                                  ;          IN BOTH KERNELS and the body is
-                                  ;          not %ifdef'd: a slot that exists
-                                  ;          in one build and not another is
-                                  ;          an ABI that depends on a knob
-                                  ;          (SPEC.md 20.8 rule 4), and on
-                                  ;          kern_small the bit is simply set
-                                  ;          and never read
     OSAPI_FCELL lzf_decomp      ; 0x03D3 - expand a compressed block
                                   ;          (docs/plans/O88-COMPRESSION-PLAN.md
                                   ;          12.1). A JSLOT and not an X or N
@@ -4276,17 +4045,6 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          tree had already spent, and took
                                   ;          the tail cell the size pass freed
                                   ;          (OSAPI_MEM_COMPACT_WAKE's)
-    OSAPI_ICELL 5                 ; 0x0450 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          PRESS half of a content click.
-                                  ;          W_ONCLICK is a template word and
-                                  ;          this is the only way to write it
-                                  ;          late, which os88ui_btninit needs
-                                  ;          so the button control can see a
-                                  ;          press before the package does
-                                  ;          (SPEC.md 20.5.1.3.3)
-    MEGA_ICWB W_ONCLICK
-    OSAPI_IEND
 rmk_rseq:         ; (a real-mode bracket's twin: fsx_rkeepm)
     OSAPI_RNCELL dwf_dskw_read_seq ; 0x0455  N: A STREAMING READ (SPEC.md
                                   ;          18.4.8): SI = name, DX:BX = the
@@ -4384,12 +4142,6 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          offset; AX = 0, DX = a block ->
                                   ;          given back. kern_big with the HMA
                                   ;          holding `.cold`; refuses elsewhere
-    OSAPI_RSLOT wm_quiet          ; 0x048D - BX = a window of yours, AL = 0
-                                  ;          clear / non-zero set: while it is
-                                  ;          up, an idle session BLANKS rather
-                                  ;          than animates (SPEC.md 79.10). In
-                                  ;          both kernels (20.8 rule 4); read
-                                  ;          only by kern_big's saver
     OSAPI_RCSLOT osapi_assoc_flush_x ; 0x0493 - DL = a volume, AL = 0
                                   ;          incremental / 1 full: bring its
                                   ;          ASSOC.DAT up to date with the
@@ -4398,29 +4150,6 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          them now; CF=1, AX = FERR_* = it
                                   ;          could not. Synchronous; a worker
                                   ;          may not. kern_small refuses
-    OSAPI_ICELL 6                 ; 0x0499 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          WHEEL handler (SPEC.md 13.18),
-                                  ;          OSAPI_WM_ONRCLICK's shape. Called
-                                  ;          AX = signed notches, POSITIVE
-                                  ;          TOWARD THE USER (scroll DOWN), SI
-                                  ;          = your window, gfx lock HELD, on
-                                  ;          the FRONT window - where a key
-                                  ;          goes. FLAGS PRESERVED; on
-                                  ;          kern_small, which has no wheel,
-                                  ;          the cell does nothing at all.
-                                  ;          SIX bytes and not five, the
-                                  ;          word displacement deliberate:
-                                  ;          every .text byte after the table
-                                  ;          moves by the cell, and an odd
-                                  ;          shift puts the hot routines at
-                                  ;          the wrong parity (t_hotpar)
-%ifdef KERN_BIG
-    MEGA_ICWBW W_ONWH             ; (kern_mega: the store through the data
-%else                             ; alias, kernel/mega.inc)
-    times 5 nop
-%endif
-    OSAPI_IEND
     OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
     OSAPI_RCSLOT osapi_drv_use_x  ; 0x04A5 - THE DRIVERS PAGE'S TICK, AS A
                                   ;          DOOR (SPEC.md 117.3). AH = 0 UP
@@ -4591,9 +4320,17 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 119*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x04EB bytes: 44 SLOT (8), 11 XCELL (7), 119 rare (6, OSAPI_FS_OP and OSAPI_VOL_CHECK XREFUSE ICELLs of the same 6 where they are off), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 110*6 + 6*3 + 6 + 7*5 + 1*6 + 8
+%error "os8088 API jump table must be exactly 0x048A bytes: 44 SLOT (8), 11 XCELL (7), 110 rare (6, OSAPI_FS_OP and OSAPI_VOL_CHECK XREFUSE ICELLs of the same 6 where they are off), 6 JCELL (3), 1 FCELL (6), 9 ICELL (7 of 5, 1 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19 (R14) withdrew the ten handler setters, OSAPI_ABOUT_SET and six of the seven flag setters, and OSAPI_WM_SIZABLE's cell became OSAPI_WM_FLAG (SPEC.md 11.104)"
 %endif
+    db 0                        ; PARITY PAD, never executed (kernel size
+                                ; pass 19): R14 took 97 bytes out of the
+                                ; table - OSAPI_WM_ONWHEEL's own parity byte
+                                ; among them - and an ODD shift in front of
+                                ; every hot routine costs a 16-bit bus a
+                                ; second cycle on each of their word
+                                ; operands (tests/unit/t_hotpar.py). Nothing
+                                ; falls into it: the table ends on a cell
 
 %ifdef KERN_MEGA
 ; kern_mega's DATA SEGMENT WORD (KDS/KES above, kernel/mega.inc), and it is
@@ -4946,7 +4683,7 @@ api_gfx_rest:
     ret
 
 ; -----------------------------------------------------------------------------
-; api_file_find - slot 0x0283 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
+; api_file_find - slot 0x026C (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
 ; buffer; out CF=0 with it filled and CX = the next ordinal (SPEC.md 19.7.1)
 ;
 ; An X stub because the buffer is the caller's, and it is the same fence as
@@ -4962,7 +4699,7 @@ api_gfx_rest:
 ; enumerate one folder and open files from another.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; api_file_find_raw - slot 0x03D9, and api_file_find's twin in one respect
+; api_file_find_raw - slot 0x0389, and api_file_find's twin in one respect
 ;
 ; **THE SIZE, AND NOTHING ELSE.** A compressed file has two of them (SPEC.md
 ; 20.14.3): what it occupies and what it expands to. `api_file_find` answers
@@ -5025,7 +4762,7 @@ api_ff_go:
     retf
 
 ; -----------------------------------------------------------------------------
-; api_file_path - slot 0x041F (X). in ES:DI = the caller's buffer, CX = its
+; api_file_path - slot 0x03CF (X). in ES:DI = the caller's buffer, CX = its
 ; size; out CF=0 with the path written and CX its length, else AX = FERR_*
 ;
 ; An X cell (not a JSLOT like api_file_find, which does its own segment work):
@@ -5063,7 +4800,7 @@ api_file_path:
 %endif
 
 ; -----------------------------------------------------------------------------
-; api_file_write_sys - slot 0x0280, and the ONE fenced cell (SPEC.md 19.6.1)
+; api_file_write_sys - slot 0x0269, and the ONE fenced cell (SPEC.md 19.6.1)
 ;
 ; dskw_write for a file that belongs to the KERNEL: hidden, system and (bar
 ; SYSTEM.CFG) read-only, which is what makes an installed volume a SYSTEM
@@ -5088,7 +4825,7 @@ api_file_path:
 ; BX is banked across it because BX is the caller's DATA BUFFER offset here -
 ; the fence needs a register and that one is live.
 ;
-; api_file_append_sys - slot 0x02C2 - is the SAME cell with a different tail,
+; api_file_append_sys - slot 0x02A5 - is the SAME cell with a different tail,
 ; and it shares this body rather than copying it because the fence is the
 ; whole of the interesting part and two copies of a fence is one that can be
 ; got wrong. [api_sysfp] IS which dskw_ entry point runs - the offset half
@@ -6390,7 +6127,7 @@ section .text
 
 ; osapi_mouse lives in kernel/mouse.inc beside the IRQ it re-arms (SPEC.md 9.13).
 
-; ---- osapi_xmem_sel - API slot 0x04B3 (KERN-MEGA-PLAN 12.2) ----------------
+; ---- osapi_xmem_sel - API slot 0x0452 (KERN-MEGA-PLAN 12.2) ----------------
 ; in:  DX:AX = a linear address inside an OSAPI_XMEM_ALLOC block YOU own,
 ;      CX = the window's bytes (0 = 65,536)
 ; out: CF = 0, AX = a DATA selector whose descriptor covers exactly that
@@ -6424,7 +6161,7 @@ osapi_xmem_selc:
 section .text
 %endif
 
-; ---- osapi_xmem_run - API slot 0x04CB (KERN-MEGA-PLAN 14.16) ----------------
+; ---- osapi_xmem_run - API slot 0x046A (KERN-MEGA-PLAN 14.16) ----------------
 ; in:  DX:AX = the token of an OSAPI_XMEM_ALLOC block YOU own (its base)
 ; out: CF = 0, DX = the first of a RUN of DATA selectors and CX = the step
 ;      between them (8): selector k is the 64KB window from 32KB x k into the
@@ -6445,7 +6182,7 @@ osapi_xmem_run:                 ; (eleven bytes of .text: the segment binds
     ret
 %endif
 
-; ---- osapi_mem_subseg - API slot 0x04D1 (KERN-MEGA-PLAN 14.44) -------------
+; ---- osapi_mem_subseg - API slot 0x0470 (KERN-MEGA-PLAN 14.44) -------------
 ; in:  AX = a paragraph offset into the CALLER's own region (the X cell's ES =
 ;      its DS), BL bit 0 = it will be far-called, BL bit 1 = CX is the
 ;      window's length in paragraphs (0 = to the end)
@@ -6480,7 +6217,7 @@ osapi_mem_subseg equ mod_gone   ; `stc / retf`: CF = 1, every register kept
 osapi_arg_text_x equ mod_gone   ; no links on kern_small, so no parameter
 %endif                          ; (SPEC.md 26.10.7): CF = 1
 
-; ---- osapi_seg - API slot 0x04E3 (KERN-MEGA-MEMORY-PLAN MC7) ----------------
+; ---- osapi_seg - API slot 0x0482 (KERN-MEGA-MEMORY-PLAN MC7) ----------------
 ; BL = the verb, the X cell's ES = the caller's DS (SPEC.md 50.6.11):
 ;   SEG_LIN  DX = a segment or selector -> DX:AX = its linear base
 ;   SEG_REAL DX = a segment or selector -> DX = a real-mode segment with the
@@ -6586,7 +6323,7 @@ osapi_segr:
                                 ; in `.cold` keep their measured parity)
 section .text
 
-; ---- osapi_img_name - API slot 0x04D7 (KERN-MEGA-PLAN 14.70.3) -------------
+; ---- osapi_img_name - API slot 0x0476 (KERN-MEGA-PLAN 14.70.3) -------------
 ; in:  AX = the segment a driver's or module's image is loaded at - what the
 ;      claim table gives as the base of a MEM_K_DRV or MEM_K_MOD claim - with
 ;      BX = 0; or, BX = 1, a block's XMW_OFF in the pool above 1MB
@@ -6681,7 +6418,7 @@ section .text
 osapi_img_name equ mod_gone     ; `stc / retf`: CF = 1, every register kept
 %endif
 
-; ---- osapi_xmem_walk - API slot 0x04BF (KERN-MEGA-PLAN 13.6) ---------------
+; ---- osapi_xmem_walk - API slot 0x045E (KERN-MEGA-PLAN 13.6) ---------------
 ; in:  ES:DI = room for CX records of XMW_SIZE (6) bytes; BX = XMW_FIXED asks
 ;      kern_mega for the fixed areas under the pool too (below)
 ; out: CF = 0, AX = records written: every block the extended pool holds,
@@ -6723,7 +6460,7 @@ osapi_xmem_walk equ xm_copy     ; kern_small: no extended memory, and its
                                 ; osapi_fsx_spk already borrows it (snd.inc)
 %endif                          ; (kern_big's is XMEM.DRV's table, xmem.inc)
 
-; ---- osapi_mem_codesel - API slot 0x04B9 (KERN-MEGA-PLAN 12.2, 10.3 item 51)
+; ---- osapi_mem_codesel - API slot 0x0458 (KERN-MEGA-PLAN 12.2, 10.3 item 51)
 ; in:  DX = the segment (or selector) a claim of yours is named by
 ; out: CF = 0, AX = the selector to FAR CALL code in it: DX itself on a
 ;      real-mode kernel, its LDT code alias on kern_mega (and a pair's code
@@ -6972,7 +6709,7 @@ osapi_file_goto_qm:
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
 ; -----------------------------------------------------------------------------
-; osapi_vol_kind_x - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x0190)
+; osapi_vol_kind_x - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x018A)
 ; in:  AL = a volume index (0 = A:, 1 = B:, ...)
 ; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
 ; clobbers: AX (the output), flags
@@ -8139,16 +7876,7 @@ cw_wm_content equ apic_wm_content ; THE CELL IS THE DOOR (kernel size pass
                                 ; conversion, the Control Panel and the
                                 ; hibernate card - once an operation each
 cw_wm_minsize equ apic_wm_minsize ; THE CELL IS THE DOOR (size pass 9)
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_wm_snap equ apic_wm_snap ; THE CELL IS THE DOOR (size pass 9)
-                                ; app_tmr_kinit asks for the snap
-                                ; (SPEC.md 11.94), and Timer is
-%endif                                  ; kern_big's alone (SPEC.md 14.6)
 %ifdef KERN_BIG
-cw_wm_onmouseup equ apic_wm_onmouseup ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_ondrag equ apic_wm_ondrag_c ; THE CELL IS THE DOOR (size pass 13): it
-                                ; answers CF = 0 as well, and fm_kinit_x reads
-                                ; no flag after it
 cw_wm_timer equ apic_wm_timer_c ; SPEC.md 13.10.5.4.2's PAUSE commit: the
                                 ; kernel ARMS the same one-shot a package
                                 ; does, through the same cell since size pass
@@ -8321,23 +8049,12 @@ gfx_blit1:            call COLD_SEG:gbz_gfx_blit1
 ; since kernel size pass 14, so their shims are kern_mega's alone; 0x033A's
 ; routine is more than a store and keeps its shim on both big builds.
 %ifdef KERN_BIG
-%ifdef KERN_MEGA
-wm_ondrag_c:          call wm_ondrag
-                  clc             ; CF = 0 is the ANSWER, not the caller's own
-                  ret             ; carry coming back: the bodies write no flag
-%endif
 wm_timer_c equ wm_timer         ; ...and the timer's states its CF = 0 itself
                                 ; (wm.inc; kernel size pass 18, -4)
-%ifdef KERN_MEGA
-wm_ontimer_c:         call wm_ontimer
-                  clc
-                  ret
-%endif
 %else
-wm_ondrag_c:                    ; THREE LABELS, ONE BODY - the cells are what
-wm_timer_c:                     ; cost, and a refusal has nothing to say about
-wm_ontimer_c:         stc       ; which of the three it is refusing
-                  ret
+wm_timer_c:           stc       ; kern_small has no timer (SPEC.md 13.9): the
+                  ret             ; one refusal left of three (kernel size
+                                ; pass 19: the two installers went with R14)
 %endif
 
 ; --- ...and the file modules': loader.inc, diskw.inc, files.inc (SPEC.md 2.6).

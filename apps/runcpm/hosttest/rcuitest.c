@@ -225,8 +225,23 @@ void os88_font_run(int x, int y, const char *s, int ink, int paper)
     }
 }
 
-void *os88_wm_create(int x, int y, int w, int h, const char *title)
-{ (void)x; (void)y; (void)w; (void)h; (void)title; return (void *)1; }
+/* the trampolines a class names (SPEC.md 11.104) - addresses, never called
+ * here */
+void os88_t_paint(void) {}
+void os88_t_onkey(void) {}
+void os88_t_onclick(void) {}
+void os88_t_about(void) {}
+void os88_t_onwake(void) {}
+void os88_t_onclose(void) {}
+void os88_t_onmouseup(void) {}
+void os88_t_onresize(void) {}
+void os88_t_ontimer(void) {}
+void os88_t_onwheel(void) {}
+static struct os88_class *h_cls;        /* what os88_wm_create was handed */
+void os88_wm_flag(void *win, int bit, int on) { (void)win; (void)bit; (void)on; }
+void *os88_wm_create(int x, int y, int w, int h, const char *title,
+                     struct os88_class *cls)
+{ (void)x; (void)y; (void)w; (void)h; (void)title; h_cls = cls; return (void *)1; }
 void os88_wm_content(void *win, struct os88_pt *o) { o->x = cont_x; o->y = cont_y; }
 int  os88_wm_geom(void *win, struct os88_size *s) { s->w = cont_w; s->h = cont_h; return 0; }
 int  os88_wm_damage(void *win, struct os88_rect *r)
@@ -240,9 +255,6 @@ int  os88_wm_damage(void *win, struct os88_rect *r)
     return 0;
 }
 int  os88_wm_clip_set(void *win) { return 0; }
-void os88_wm_snap(void *win, int on) {}
-void os88_wm_ownbg(void *win, int on) {}
-void os88_wm_onwake(void *win) {}
 int  os88_wm_wake(void *win) { wakes_posted++; return 0; }
 /* OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/wm.inc
  * wm_fullscreen: wm_raise whole on enter, wm_paint_all on exit), under the
@@ -280,7 +292,6 @@ int  os88_fullscreen(void *win, int enter)
     return 0;
 }
 void os88_menu_set(void *win, struct os88_menuset *set) {}
-void os88_about_set(void *win) {}
 int  os88_snd_tone(int hz, int ticks, int prio) { return 0; }
 /* the self-close (wave 3): os88_task_spawn wants the lock held (SPEC.md 20.6)
  * and may refuse (the task table full - transient); the worker destroys the

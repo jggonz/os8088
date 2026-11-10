@@ -326,7 +326,9 @@ fl_paint:
 
 fl_tpl:
     dw 300, 26, 176, 60
-    dw fl_ttl, fl_paint, fl_onkey, 0
+    dw fl_ttl, fl_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS fl_cls, 0, PAINT, fl_paint, ONKEY, fl_onkey
 
 fl_ttl:    db 'Filler', 0
 fl_s_free: db 'free', 0

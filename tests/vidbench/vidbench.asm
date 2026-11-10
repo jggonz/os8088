@@ -79,8 +79,6 @@ vb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [vb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
 .out:
     pop si
@@ -831,7 +829,10 @@ vb_run:
 ; =============================================================================
 vb_tpl:
     dw 7, 22, 632, 448
-    dw vb_ttl, vb_paint, vb_onkey, vb_onclick
+    dw vb_ttl, vb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vb_cls, 0, PAINT, vb_paint, ONKEY, vb_onkey, \
+               ONCLICK, vb_onclick
 
 vb_ttl:       db 'Video Bench', 0
 vb_f_dat:     db 'VIDBENCH.DAT', 0

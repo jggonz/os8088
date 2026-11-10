@@ -56,7 +56,7 @@ from os88geom import WIN_SIZE, MAX_WIN                        # noqa: E402
 PORT = 8096
 SAME = "--same" in sys.argv[1:]
 MARK = b"this file is on the SERVED tree and nowhere else\r\n"
-W_SEG = 22
+W_SEG = 18
 NET_LOOK, NET_SAME, NET_NEW = 1, 4, 5
 P_WELCOME, P_DONE, P_BUSY = 0, 6, 8
 

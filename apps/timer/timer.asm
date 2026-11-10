@@ -144,14 +144,8 @@ tm_entry:
                                     ; proc is a bare `ret`; the kern_small
                                     ; worker declares itself restartable at its
                                     ; spawn. Spends AX, DX and the flags
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content origin onto a multiple of 8, on
-                                    ; EVERY adapter (SPEC.md 11.94)
     mov si, tm_about                ; the standard About (SPEC.md 12.2, 20.5.1)
-    call OSAPI_ABOUT_SET
     ; --- the clock -----------------------------------------------------------
-    mov ax, tm_tick
-    call OSAPI_WM_ONTIMER
     mov ax, TM_TICKS
     call OSAPI_WM_TIMER             ; CF = 1: kern_small carries the slot and
     adc [tm_clk], ah                ; not the body (SPEC.md 13.9) - so the
@@ -165,9 +159,6 @@ tm_entry:
     ; --- the buttons' gesture: the library installs the three slots ---------
     xchg ax, bx                     ; AX = the window
     mov bx, tm_btrec
-    mov si, tm_onup                 ; W_ONMOUSEUP: fire
-    mov di, tm_ondrag               ; W_ONDRAG: track (refused on kern_small,
-                                    ; and the library ignores that on purpose)
     mov dx, tm_onclick              ; a press that was not a button's: the
     call os88ui_btninit             ; About card's dismissal. It keeps every
     xchg ax, bx                     ; register, so this is BX = the window -
@@ -639,11 +630,15 @@ tm_onclick:
     ret
 
 ; --- data ----------------------------------------------------------------------
-; window template (SPEC.md 11: 16 bytes, 8 words), at the kind's position.
+; window template (SPEC.md 11: 12 bytes, 6 words), at the kind's position.
 ; No W_ONCLICK word: os88ui_btninit installs the library's, which chains to
 ; tm_onclick.
 tm_tpl:     dw 330, 60, TM_W, TM_H
-            dw tm_ttl, tm_paint, 0, 0
+            dw tm_ttl, tm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tm_cls, 0, PAINT, tm_paint, ONCLICK, os88ui_btnclick, \
+               ABOUT, tm_about, ONMOUSEUP, tm_onup, ONTIMER, tm_tick, \
+               ONDRAG, tm_ondrag
 
 ; The title is the header's NAME FIELD (SPEC.md 20.2, +16): OS88_HEADER
 ; NUL-pads it to 16 bytes and refuses a name over 15, so it is a terminated

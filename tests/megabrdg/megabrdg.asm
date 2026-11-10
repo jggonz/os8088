@@ -751,7 +751,9 @@ mb_legs_end:
 
 mb_tpl:
     dw 8, 400, 200, 40
-    dw mb_ttl, mb_paint, 0, 0
+    dw mb_ttl, mb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mb_cls, 0, PAINT, mb_paint
 mb_ttl:     db 'MegaBrdg', 0
 mb_s_e9:    db 'MEGABRDG: ', 0
 mb_s_e90:   db 'MEGABRDG0: ', 0

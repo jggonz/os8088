@@ -772,7 +772,7 @@ and the proposed replacement.
     - **Proposed:** "fsx_wait - the frame clock (SPEC.md 53.5, 0x0241)"
 18. **`kernel/fsx.inc:976-977`**, "(SPEC.md 53.10, the stale slot number 04E8h)".
     - **Code:** `OSAPI_FSX_PAGE` is 0x03C5 (`os88api.inc:5414`).
-    - **Proposed:** "(SPEC.md 53.10, slot 0x03C5)"
+    - **Proposed:** "(SPEC.md 53.10, slot 0x037B)"
 19. **`kernel/fsx.inc:193-194`**, "bit 1 = FSXF_FASTTICK; others refuse)".
     - **Code:** bit 2 is `FSXF_RATE` with DX/DI (kern_big), bit 3 is
       `FSXF_REAL`, and CH is the display (`fsx.inc:221-233`).

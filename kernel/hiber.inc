@@ -293,7 +293,10 @@ MRF_SIG     equ 0x3146524D      ; 'MRF1' in the same cell: kernel/megares.inc's
 
 section .text
 ; --- resident data: the template and the title (read through DS by wm) -----
-hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hbf_paint, hbf_onkey, hbf_onclick
+hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hb_cls
+hb_cls:     dw 18, 0, hbf_paint, hbf_onkey, hbf_onclick, 0, 0, 0, hbf_onup
+                                ; ...its CLASS (SPEC.md 11.104): the release
+                                ; is a COLD offset (SPEC.md 2.6.3)
 hb_ttl:     db 'Hibernate', 0
 hb_s_ptr:   db 'HIBERNAT.PTR', 0    ; THE ONE name (SPEC.md 87.3). The two
 HB_S_EXT    equ hb_s_ptr + 9        ; files differ in three bytes, so the
@@ -435,7 +438,7 @@ hb_probe_x:
 section .cold
 
 ; -----------------------------------------------------------------------------
-; drv_suspend_x - slot 0x0419's three verbs (SPEC.md 51.11): THE MACHINE, OUT
+; drv_suspend_x - slot 0x03C9's three verbs (SPEC.md 51.11): THE MACHINE, OUT
 ;                 OF MY WAY. Entered from kernel.asm's thunk under api_x, so
 ;                 ES = the caller's DS and DS = KERNEL_SEG
 ; in:  AL = 1 suspend the hardware drivers, ES:DI = a DQ_SIZE-record buffer
@@ -1605,14 +1608,9 @@ hbm_forget:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hbm_kinit:
-    push ax
-    mov byte [hb_down], 0
-    mov ax, hbf_onup            ; a COLD offset (SPEC.md 2.6.3)
-    call KERNEL_SEG:cw_wm_onmouseup
-    mov al, 1
-    call KERNEL_SEG:cw_wm_snap  ; text on cell boundaries (SPEC.md 11.94)
-    pop ax
-    ret
+    mov byte [hb_down], 0       ; (the release is hb_cls's slot, SPEC.md
+    ret                         ; 11.104, and the snap the default every
+                                ; window is born with, 11.94)
 
 ; -----------------------------------------------------------------------------
 ; hbm_open - the System menu's Hibernate... (SPEC.md 87.1): open the window

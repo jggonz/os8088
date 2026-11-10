@@ -9,7 +9,7 @@
 ; dskw_read, dskw_delete, dskw_rename, dskw_dfree - were the first surface,
 ; and read and write are ONE routine each: both take a far pointer and a
 ; 32-bit count, so there is no separate big-file entry point any more
-; (SPEC.md 18.4.1; its slot 0x0190 has since gone to OSAPI_VOL_KIND),
+; (SPEC.md 18.4.1; its slot 0x018A has since gone to OSAPI_VOL_KIND),
 ; for the OS and for packages alike (they ARE the API cells 0x0103..0x0118,
 ; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory
 ; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles and no
@@ -3883,7 +3883,7 @@ DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
                                 ; where declared
 
 %ifndef KD_BUILD
-; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
+; dwsf_dskw_write_seq - THE CELL's way in (slot 0x040C), and the kernel's
 ; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
 ; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
 ; the caller's DS, which api_rn banked under the far return api_far built -
@@ -4158,7 +4158,7 @@ dws_hlose:
 ; out: CF=0 with AX=0; CF=1 with AX = FERR_*
 ; clobbers: AX (the output), CF
 ;
-; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x0286)
+; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x026F)
 ; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
 ; out/clobbers: dskw_write_at's
 ;

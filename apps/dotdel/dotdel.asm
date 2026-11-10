@@ -254,23 +254,9 @@ dd_entry:
                                     ; the loader is still wm_create's
     mov si, dd_menus
     call OSAPI_MENU_SET
-    mov si, dd_about
-    call OSAPI_ABOUT_SET
     mov bx, [dd_win]
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; every pixel of the content is ours: the
-                                    ; kernel's white fill would be one whole
-                                    ; screen of flash before the first frame
     mov bx, [dd_win]
-    mov ax, dd_onresize
-    call OSAPI_WM_ONRESIZE          ; the box moved under us - a drag across a
-                                    ; display seam is the case that matters
-                                    ; (SPEC.md 93.4)
     mov bx, [dd_win]
-    mov ax, dd_onwake
-    call OSAPI_WM_ONWAKE            ; ...and the ONE callback without the gfx
-                                    ; lock, which is where a resize has to
-                                    ; happen (SPEC.md 93.3.3.2)
     mov byte [dd_wmode], 0          ; THIN by default (SPEC.md 93.3.3.1): it is
                                     ; the board the field's overlay of the real
                                     ; machine matched, and Full is one menu
@@ -1074,10 +1060,14 @@ dd_depth_of:
 ; TABLES
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) --------------------------
 dd_tpl:
     dw 40, 30, DD_COLS * DD_TWMAX + DD_HUDW + 10, 300
-    dw dd_ttl, dd_paint, dd_onkey, dd_onclick
+    dw dd_ttl, dd_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS dd_cls, WF_OWNBG, PAINT, dd_paint, ONKEY, dd_onkey, \
+               ONCLICK, dd_onclick, ABOUT, dd_about, ONWAKE, dd_onwake, \
+               ONRESIZE, dd_onresize
 
 ; --- what we ask for on each adapter (SPEC.md 11.100.1) -----------------------
 ; The width is the board at its largest tile plus the HUD column plus the

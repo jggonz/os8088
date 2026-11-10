@@ -2223,7 +2223,7 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x03FE: "the program is at DX, not at me"
+; osapi_pkg_rehome - API slot 0x03AE: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
 ; in:  DX = the segment the program's image starts at, AX = the bytes
 ;      available there - or AX = 0, the KEEP form, and then CX = the

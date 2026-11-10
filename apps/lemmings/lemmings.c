@@ -53,6 +53,18 @@
  * ==========================================================================*/
 
 #include "os88.h"
+
+/* THE WINDOW'S CLASS (SPEC.md 11.104). RESIZABLE: lay out from the LIVE
+ * geometry, never from the template's numbers. The content origin is on a
+ * multiple of 8 (the default), so every font_run takes SPEC.md 6.1's
+ * single-store path on 1bpp. The timer is armed only by a selection move
+ * (os88_ontimer); kern_small refuses the arm, which is why lem_pv_defer()
+ * tests os88_wm_timer()'s answer and has a second path (SPEC.md 13.8.2). */
+static struct os88_class lem_cls = {
+    OS88_CLASS_LEN, OS88_WF_SIZABLE,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, os88_t_onwake,
+    0, 0, os88_t_onresize, 0, 0, os88_t_ontimer, 0, 0
+};
 #include "lemstr.h"                 /* the generated LEMS_* ids - build/ */
 
 /* --- the window, authored against the 640x480 reference (SPEC.md 39) --------
@@ -2511,26 +2523,12 @@ void *os88_main(void)
     lem_menus.name = lem_name;
 
     lem_win = os88_wm_create(LEM_WIN_X, LEM_WIN_Y, LEM_WIN_W, LEM_WIN_H,
-                             lem_name);
+                             lem_name, &lem_cls);
     if (lem_win == 0)
         return 0;
 
     os88_wm_minsize(lem_win, LEM_MIN_W, LEM_MIN_H);
-    os88_wm_sizable(lem_win, 1);        /* ...then lay out from the LIVE
-                                         * geometry, never from these numbers */
-    os88_wm_snap(lem_win, 1);           /* content origin on a multiple of 8, so
-                                         * every font_run takes SPEC.md 6.1's
-                                         * single-store path on 1bpp */
-    os88_wm_onresize(lem_win);
-    os88_wm_onwake(lem_win);
-    os88_wm_ontimer(lem_win);           /* installed, armed only by a selection
-                                         * move (os88_ontimer above). It may be
-                                         * REFUSED on a kern_small machine,
-                                         * which is why lem_pv_defer() tests
-                                         * os88_wm_timer()'s answer and has a
-                                         * second path (SPEC.md 13.8.2) */
     os88_menu_set(lem_win, &lem_menus);
-    os88_about_set(lem_win);
 
     lem_mode_ok = lem_probe_mode(lem_win);
 

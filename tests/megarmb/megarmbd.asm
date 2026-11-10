@@ -40,8 +40,6 @@ md_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [md_win], bx
-    mov ax, md_tick
-    call OSAPI_WM_ONTIMER
     mov ax, MD_WAIT
     call OSAPI_WM_TIMER
     clc
@@ -147,7 +145,9 @@ md_main:
 
 md_tpl:
     dw 8, 300, 200, 40
-    dw md_ttl, md_paint, 0, 0
+    dw md_ttl, md_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS md_cls, 0, PAINT, md_paint, ONTIMER, md_tick
 md_ttl:     db 'MegaRMB two displays', 0
 
 ; THE RESULT BLOCK, in the bss at os88_image_end (the .bin header's image

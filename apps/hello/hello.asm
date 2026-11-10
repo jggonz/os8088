@@ -55,26 +55,6 @@ hl_entry:
     OS88_REGION_MOVABLE
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
-    mov si, hl_about                 ; ...and the STANDARD About (SPEC.md 12.2,
-    call OSAPI_ABOUT_SET             ; 20.5.1), which is the item the kernel
-                                     ; puts above Close in our own pull-down.
-                                     ; The File > About item below stays: it is
-                                     ; what makes this the worked example for a
-                                     ; command handler, and the two are not
-                                     ; rivals - the kernel's is where a user
-                                     ; looks for an About on EVERY app, and
-                                     ; this one's page is the demo
-                                     ; NO WF_SAVEU: the promise holds, and the
-                                     ; repaint is one fixed string - a raise
-                                     ; that draws it costs nothing worth
-                                     ; spending a claim on. It used to say
-                                     ; "there is ONE cache for the machine, so
-                                     ; taking it for this would be taking it
-                                     ; from something that letters"; SPEC.md
-                                     ; 11.96.3 retired that bound - the cache
-                                     ; is per WINDOW now and ranks TRIVIAL, so
-                                     ; it is not taken from anybody. The
-                                     ; reason left is the honest one
 .out:
     pop si
     ret
@@ -178,7 +158,7 @@ hl_oncmd:
 ; draws the card last, and a handler that takes it down.
 
 ; -----------------------------------------------------------------------------
-; hl_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
+; hl_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; clobbers BX/SI, which any window callback may (SPEC.md 12.2:
 ;      the kernel dispatches it exactly like W_ONCLICK)
@@ -241,12 +221,15 @@ hl_repaint:
     pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 hl_tpl:
     dw 200, 150, 240, 90            ; x, y, w, h -> content 238 x 71
-    dw hl_ttl, hl_paint, 0, hl_abdismiss  ; no onkey; the click is the
+    dw hl_ttl, hl_cls                     ; no onkey; the click is the
                                           ; About card's dismissal and
                                           ; nothing else
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hl_cls, 0, PAINT, hl_paint, ONCLICK, hl_abdismiss, \
+               ABOUT, hl_about
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET hl_menus, hl_name, hl_oncmd

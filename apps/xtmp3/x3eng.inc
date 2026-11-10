@@ -15,8 +15,6 @@
 ; clobber AX, CX, DX, SI, DI - BX is the caller's):
 ;
 ;   x3_e_init         the entry proc, before the window: x3_st's first state
-;   x3_e_attach       the entry proc, after it (x3_win set): the wake and the
-;                     close handlers
 ;   x3_e_tick         every X3_TICK ticks, from the window's timer
 ;   x3_e_play   AL    play queue entry AL from its start
 ;   x3_e_cue    AL    load entry AL without playing it (READY)
@@ -360,20 +358,9 @@ x3_e_init:
     clc
     ret
 
-; x3_e_attach - the window exists: the wake (the worker's handshake, the
-; launch document's handover) and the close negotiator
-x3_e_attach:
-    push ax
-    push bx
-    mov bx, [x3_win]
-    mov ax, x3_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, x3_onclose
-    call OSAPI_WM_ONCLOSE
-    pop bx
-    pop ax
-    clc
-    ret
+; (x3_e_attach is gone: the engine's wake - the worker's handshake, the launch
+; document's handover - and its close negotiator are x3_cls's slots, SPEC.md
+; 11.104, in xtmp3.asm)
 
 ; -----------------------------------------------------------------------------
 ; x3_e_tick - the window's timer: the clock, the meters, the gauge, a
@@ -934,7 +921,7 @@ x3_qfpdel:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; x3_onwake - OSAPI_WM_ONWAKE: the worker's requests, serviced in order. No
+; x3_onwake - WC_ONWAKE: the worker's requests, serviced in order. No
 ; lock arrives with it; the file I/O needs none, and what draws takes it
 ; in:  SI = the window
 ; -----------------------------------------------------------------------------

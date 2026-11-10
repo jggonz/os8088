@@ -512,20 +512,13 @@ rw_entry:
     call OSAPI_WM_CREATE            ; BX = the window
     jc .refused
     mov [rw_win], bx
-    mov ax, rw_onclose              ; the save RAM on the way out
-    call OSAPI_WM_ONCLOSE
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content on the byte grid, for BLITP
-    call OSAPI_WM_OWNBG             ; we paint every pixel of it
     OS88_REGION_MOVABLE rw_reloc
     mov [rw_dsel], ds               ; (our data, for code entered with DS
                                     ;   not ours: rw_dscanhk)
     mov si, rw_menus
     call OSAPI_MENU_SET
     mov si, rw_about
-    call OSAPI_ABOUT_SET
     mov ax, rw_onwake
-    call OSAPI_WM_ONWAKE
     cmp byte [rw_argpend], 0
     je .ok
     call OSAPI_WM_WAKE              ; the document, once the window is up
@@ -4838,7 +4831,11 @@ rw_abdismiss:
 
 rw_tpl:
     dw 160, 60, RW_CONT_W + 2, RW_CONT_H + TITLE_H + 2
-    dw rw_ttl, rw_paint, rw_onkey, rw_abdismiss
+    dw rw_ttl, rw_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS rw_cls, WF_OWNBG, PAINT, rw_paint, ONKEY, rw_onkey, \
+               ONCLICK, rw_abdismiss, ABOUT, rw_about, ONWAKE, rw_onwake, \
+               ONCLOSE, rw_onclose
 
     OS88_MENUSET rw_menus, rw_ttl, rw_oncmd
         OS88_MENU rw_m_mach, rw_i_mach, 10

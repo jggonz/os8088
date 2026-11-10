@@ -410,27 +410,12 @@ px_entry:
                                     ; so the proc is not a `ret` - it moves
                                     ; the segment words the loader left and
                                     ; the ones px_gen_init derived from them
-    mov al, 1                       ; THE LAYOUT IS FIXED (SPEC.md 11.93): 80
-    call OSAPI_WM_KEEPH             ; band rows + 24 HUD + 16 line = 120
-                                    ; content rows under an 18-row title, and
-                                    ; the smallest desktop in the tree (640x200
-                                    ; CGA) clamps a frame at 155 against this
-                                    ; 150 - five rows. Without the flag wm_fit
-                                    ; would shorten the RECORD in silence, the
-                                    ; band go on drawing through the cut, and
-                                    ; the rows below it take no clicks (apps/
-                                    ; mines' worked example). Flags preserved,
-                                    ; so the loader's CF survives it (97.3)
     mov al, 1                       ; an 8-aligned content origin: the band
-    call OSAPI_WM_SNAP              ; blit wants x on the byte grid
     mov si, px_pref
     call OSAPI_WM_PREFER            ; per-adapter frame sizes; flags preserved
     mov bx, [px_win]
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; every pixel of the content is ours
     mov bx, [px_win]
     mov ax, px_onresize
-    call OSAPI_WM_ONRESIZE          ; the card can change under us
     call px_adapter                 ; which raster this display gives us
     call px_set_load                ; PXSTEIN.CFG: the player's last picks,
                                     ; clamped (pxset.inc) - after the adapter
@@ -453,9 +438,7 @@ px_entry:
     mov bx, [px_win]
     mov si, px_menus
     call OSAPI_MENU_SET
-    mov bx, [px_win]
-    mov si, px_about
-    call OSAPI_ABOUT_SET            ; SPEC.md 12.2: every package has one
+    mov bx, [px_win]                ; (the About is px_cls's: SPEC.md 12.2)
     clc
 .full:
     pop di
@@ -1047,7 +1030,10 @@ px_ttl:      db 'Pixelstein 3D', 0
 
 px_tpl:
     dw 0, 0, PX_WINW, PX_WINH
-    dw px_ttl, px_paint, px_onkey, px_onclick
+    dw px_ttl, px_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS px_cls, WF_KEEPH | WF_OWNBG, PAINT, px_paint, ONKEY, px_onkey, \
+               ONCLICK, px_onclick, ABOUT, px_about, ONRESIZE, px_onresize
 
     OS88_PREFER px_pref, PX_WINW, PX_WINH, PX_WINW, PX_WINH, PX_WINW, PX_WINH
 

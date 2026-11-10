@@ -449,15 +449,11 @@ vp_entry:
     pop cx                          ; and EGA both
     pop bx
     jbe .ngrey
-    mov al, 1
+    mov ax, WFB_OWNBG * 256 + 1
     mov [vp_grey], al
-    call OSAPI_WM_OWNBG
+    call OSAPI_WM_FLAG
 .ngrey:
     pop ax
-    mov al, 1                       ; A FIXED LAYOUT (SPEC.md 11.93): its
-    call OSAPI_WM_KEEPH             ; height hangs over the dock rather than
-                                    ; be cut - CGA's band is too short for the
-                                    ; picture, the bar and the buttons (98.4.1)
 %ifdef PKG_MEGA
     OS88_REGION_MOVABLE vp_reloc    ; SPEC.md 66.6.1.1. A play pins it anyway:
 %else
@@ -467,25 +463,11 @@ vp_entry:
     push bx                         ; THE BUTTONS' GESTURE (SPEC.md 20.5.1.3):
     mov ax, bx                      ; press inverts, release fires, a slide
     mov bx, vp_btns                 ; off cancels
-    mov si, vp_onup
-    mov di, vp_ondrag
     mov dx, vp_onclick              ; ...a press on no button: the scrub bar
     call os88ui_btninit
     pop bx
-    mov ax, vp_clickw               ; ...and the press reaches US first, so the
-    call OSAPI_WM_ONCLICK           ; rects are where the window is NOW
     mov si, vp_menus
     call OSAPI_MENU_SET
-    mov si, vp_about
-    call OSAPI_ABOUT_SET
-    mov ax, vp_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, vp_ontimer              ; the hold's loading (98.3.18); refused
-    call OSAPI_WM_ONTIMER           ; on kern_small, which has no XMS anyway
-    mov ax, vp_onclose              ; THE CLOSE ENDS THE SESSION FIRST
-    call OSAPI_WM_ONCLOSE           ; (98.3.18.10)
-    mov ax, vp_onresize             ; ...and a landing on another display
-    call OSAPI_WM_ONRESIZE          ; asks again (98.3.21)
     call vp_fmt                     ; ([vp_msg]: the image's vp_s_none)
     call vp_wakew                   ; the document, and a settled first paint,
     mov bx, [vp_win]                ; from the wake (SPEC.md 54.10)
@@ -24281,7 +24263,18 @@ vp_tpl:
     dw 7, 22, 0, 0                  ; W_X = 7 mod 8: the content on a byte
                                     ; (SPEC.md 11.94). The size: vp_entry's,
                                     ; from the layout (98.4.1)
-    dw vp_cap, vp_paint, vp_onkey, vp_clickw
+    dw vp_cap, vp_cls
+; ...and its CLASS (SPEC.md 11.104). A FIXED LAYOUT (11.93): its height hangs
+; over the dock rather than be cut - CGA's band is too short for the picture,
+; the bar and the buttons (98.4.1). The press reaches US first, so the rects
+; are where the window is NOW, and goes on to the button library; the timer
+; is the hold's loading (98.3.18; kern_small has no XMS anyway); THE CLOSE
+; ENDS THE SESSION FIRST (98.3.18.10); a landing on another display asks
+; again (98.3.21)
+    OS88_CLASS vp_cls, WF_KEEPH, PAINT, vp_paint, ONKEY, vp_onkey, \
+               ONCLICK, vp_clickw, ABOUT, vp_about, ONWAKE, vp_onwake, \
+               ONCLOSE, vp_onclose, ONMOUSEUP, vp_onup, ONRESIZE, vp_onresize, \
+               ONTIMER, vp_ontimer, ONDRAG, vp_ondrag
 
     OS88_MENUSET vp_menus, vp_ttl, vp_oncmd
         OS88_MENU vp_m_file, vp_i_file, 8

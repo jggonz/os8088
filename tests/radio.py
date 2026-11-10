@@ -277,7 +277,7 @@ def main():
 
         # --- 6. A PICK DOES NOT RE-LETTER EITHER ROW -------------------------
         # font_run_x is the only way a PACKAGE's label reaches the screen, and
-        # the `_x` matters: slot 0x01E5's cell names font_run_x, so a
+        # the `_x` matters: slot 0x01D4's cell names font_run_x, so a
         # breakpoint on font_run is one a package never reaches. This assertion
         # was a FALSE GREEN on that symbol until the deliberate breakage below
         # refused to go red - docs/WRITING-TESTS.md 1 working as advertised.

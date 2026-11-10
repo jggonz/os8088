@@ -221,7 +221,6 @@ ALIAS = {
     "OSAPI_FILE_RMDIR":   "dskw_rmany",
     "OSAPI_TASK_SPAWN":   "inst_pkg_spawn",
     "OSAPI_TASK_ALIVE":   "inst_pkg_alive",
-    "OSAPI_ABOUT_SET":    "wm_about_set",
     "OSAPI_FS_PROG":      "fpg_stepb",
     "OSAPI_XMEM_CAPS":    "xm_caps",
     "OSAPI_XMEM_ALLOC":   "xm_alloc",
@@ -268,27 +267,14 @@ INLINE = {
     "OSAPI_SET_COLOR":     ("store", "al", "gfx_color", ()),
     "OSAPI_SRAND":         ("store", "ax", "osapi_seed", ()),
     "OSAPI_CPU_INFO":      ("load",  "ax", "cpu_tier", ()),   # AH = [cpu_feat], the byte after
-    "OSAPI_WM_ONSIZE":     ("store", "ax", "[bx+W_ONSIZE]", ()),
     "OSAPI_MENU_OWNER":    ("load",  "bx", "menu_win", ()),
     "OSAPI_BOOT_TICKS":    ("load",  "ax", "boot_ticks", ()),
     "OSAPI_EVQ_PENDING":   ("load",  "al", "evq_count", ("cbw",)),
-    "OSAPI_WM_ONRESIZE":   ("store", "ax", "[bx+W_ONSZ]", ()),
     "OSAPI_VOL_SYS":       ("load",  "bl", "dsk_bootvol", ()),
-    "OSAPI_WM_ONWAKE":     ("store", "ax", "[bx+W_ONWK]", ()),
-    "OSAPI_WM_ONRCLICK":   ("store", "ax", "[bx+W_ONRC]", ()),
-    "OSAPI_WM_ONWHEEL":    ("store", "ax", "[bx+W_ONWH]", ()),   # kern_big; nops on kern_small
     "OSAPI_GFX_BLIT1_PEN": ("store", "ax", "gfx_b1ink", ()),  # AH -> gfx_b1pap, adjacent
     "OSAPI_ICON_PEN":      ("store", "ax", "ico_c1", ()),     # AH -> ico_c2, adjacent
-    "OSAPI_WM_ONCLICK":    ("store", "ax", "[bx+W_ONCLICK]", ()),
-    # kernel size pass 14: two more window-record setters whose body was the
-    # store and a `ret`. Word displacements, OSAPI_WM_ONWHEEL's six bytes;
-    # kern_mega keeps both as rare cells (its store needs the data alias)
-    "OSAPI_WM_ONMOUSEUP":  ("store", "ax", "[bx+W_ONMOUSEUP]", ()),
-    "OSAPI_WM_ONCLOSE":    ("store", "ax", "[bx+W_ONCL]", ()),
-    # ...and two whose contract is CF = 0 as well (SPEC.md 13.8.2, 13.9: the
-    # kern_big answer to kern_small's refusal), so a `clc` before the retf
-    "OSAPI_WM_ONDRAG":     ("store", "ax", "[bx+W_ONDRAG]", ("clc",)),
-    "OSAPI_WM_ONTIMER":    ("store", "ax", "[bx+W_ONTIMER]", ("clc",)),
+    # (the ten window-handler setters that were rows here left the table with
+    # kernel size pass 19's window class, SPEC.md 11.104)
 }
 
 

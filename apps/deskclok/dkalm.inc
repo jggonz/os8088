@@ -54,8 +54,10 @@ dkas_plus:  db '+', 0
 dkas_title: db 'Alarm', 0
 
 dk_atpl:    dw 0, MBAR_H + 24, DKA_W + 2, 0
-            dw dkas_title, dk_apaint, dk_akey, dk_aclick
-            dw dk_falm, dk_ageos, dk_aclose, dk_amup, dk_ainit
+            dw dkas_title, dk_acls
+            dw dk_falm, dk_ageos, dk_ainit
+    OS88_CLASS dk_acls, DKT_STYLE, PAINT, dk_apaint, ONKEY, dk_akey, \
+               ONCLICK, dk_aclick, ONCLOSE, dk_aclose, ONMOUSEUP, dk_amup
 
 ; dk_ainit - DKT_INIT (dkset.inc's dk_almopen): the edit, a copy of the
 ; payload's alarm, the hour with the keys. Keeps everything

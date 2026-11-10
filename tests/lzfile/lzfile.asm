@@ -422,7 +422,9 @@ lz_paint:
 
 lz_tpl:
     dw 110, 84, 300, 90
-    dw lz_ttl, lz_paint, 0, 0
+    dw lz_ttl, lz_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS lz_cls, 0, PAINT, lz_paint
 
 lz_ttl:     db 'LZ file', 0
 

@@ -234,7 +234,10 @@ DC_VERD     equ 8                   ; 'refused ' / 'DISPATCH'
 ; --- window template (SPEC.md 11) --------------------------------------------
 dc_tpl:
     dw 200, 200, 280, 78
-    dw dc_ttl, dc_paint, dc_onkey, dc_onclick
+    dw dc_ttl, dc_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS dc_cls, 0, PAINT, dc_paint, ONKEY, dc_onkey, \
+               ONCLICK, dc_onclick
 
 dc_ttl:     db 'Driver Call', 0
 dc_src:     db 'hello world'        ; the pristine subject, copied in per probe
