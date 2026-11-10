@@ -137,11 +137,19 @@ def test_bits(m, rng, n):
     return bad, len(seq)
 
 KIND = None
-KINDS = ('text', 'noise', 'blank', 'lines')
+KINDS = ('text', 'noise', 'blank', 'lines', 'scan')
 
 def rand_img(rng, w, h):
     kind = rng.choice(KINDS) if KIND is None else KIND
     img = [[0] * w for _ in range(h)]
+    if kind == 'scan':      # white paper with sparse glyph-like strokes (~5% black), the shape of a scanned text page
+        for _ in range(w * h // 260):
+            x0 = rng.randrange(w); y0 = rng.randrange(h); L = rng.randint(3, 14); horiz = rng.random() < .5
+            for k in range(L):
+                for t in range(2):
+                    xx, yy = (x0 + k, y0 + t) if horiz else (x0 + t, y0 + k)
+                    if xx < w and yy < h: img[yy][xx] = 1
+        return img
     for y in range(h):
         for x in range(w):
             if kind == 'noise': img[y][x] = 1 if rng.random() < 0.3 else 0

@@ -5016,19 +5016,40 @@ annex D.3, segments only, no file header; /JBIG2Globals first). Supported, each 
 * the standard Huffman tables B.1 to B.15 and custom tables (segment 53), selected as the flags say;
 * pattern dictionaries (MQ or MMR) and halftone regions (MQ or MMR bitplanes, gray coding, HENABLESKIP,
   HRX/HRY rotation, HGX/HGY signed, HCOMBOP, HDEFPIXEL);
+* symbol dictionaries with refinement / aggregate coding (SDREFAGG = 1, MQ): a symbol coded as the refinement of
+  one earlier symbol (REFAGGNINST = 1, with RDX/RDY) or as an aggregate, a text region of that many instances
+  (each possibly refined) drawn on the symbol's own bitmap, both over the dictionary's input and new symbols
+  (6.5.8.2); SDRTEMPLATE 0 with its AT pixels, or 1;
+* intermediate regions (types 4, 20, 36, 40): decoded once into a bitmap that stays in the workspace and is
+  kept in the registry for a refinement region that refers to it; generic refinement regions (types 40, 42, 43;
+  GRTEMPLATE 0 or 1, TPGRON, AT pixels) whose reference is the intermediate region they refer to or, with no
+  reference, the page under the region (page refinement, 7.4.7.5), which is copied out of the band and so needs
+  the region inside one band: a page that contains one makes `jb_open` give the band up to 40,000 bytes (half
+  of what is above the tables), and a region still taller than that is reported `JBF_UNSUP` and left unrefined;
+* segments of unknown data length (0xFFFFFFFF, immediate and intermediate generic regions only, 7.2.7): `jb_open`
+  scans each once for the end marker (FF AC for MQ, 00 00 for MMR) and the true row count that follows it,
+  keeps its length and rows (four segments), and every later pass sees a bounded segment with the true height;
 * page information (default pixel, default operator), the region combination operators OR, AND, XOR, XNOR and
   REPLACE, end-of-stripe and end-of-page (ignored: the page height is the page information's, or /Height when
   that is unknown), multiple regions in any order.
 
 Not supported, each marked in `jb_inc` (the shell reads `JBF_UNSUP`/`JBF_BAD`; the region is skipped and the
-page is drawn without it): intermediate regions (types 4, 20, 36, 40), generic refinement regions on the page
-(42, 43), symbol dictionaries with refinement or aggregate coding (SDREFAGG), Huffman text regions with
-refinement, dictionaries with retained or reused bitmap contexts (flags bits 8 and 9), the extended template
-bit, segments of unknown data length (0xFFFFFFFF), AT pixels more than two rows up, more than one page.
-Anything over a limit below answers `PDE_LIMIT` for that segment alone.
+page is drawn without it): Huffman text regions with refinement, Huffman symbol dictionaries with refinement
+or aggregate coding, dictionaries with retained or reused bitmap contexts (flags bits 8 and 9), the extended
+template bit, unknown-length segments of any type but the generic regions, AT pixels more than two rows up,
+more than one page, an intermediate region or a refinement larger than the workspace holds. Anything over a
+limit below answers `PDE_LIMIT` for that segment alone.
 
-**Workspace** (declared for 20.22.2's table: JBIG2 64,000 bytes, want = min; CCITT none), reached only through
-`jw_*`, which on the target are pdmath's far movers over the shell's `g_wseg`:
+**Workspace** is a RANGE (20.22.2's table): JBIG2 **want 64,000 bytes**, **min 13,000 for a page that streams** (one
+generic region and nothing else, no globals: the 12,288 context bytes and a row), about **58,000 for a scan with
+text regions** (a ~200-symbol dictionary is ~24 KB of bitmaps, 29,184 of tables, a band of a few rows), and
+CCITT none. `jb_open` reads `g_wbytes` (what the shell was granted, at most 64,000 is used) and answers
+`PDE_LIMIT` when even the tables and a block of rows do not fit; the shell then draws the image's grey box with
+`PDF_INC_APPROX`, which is not a refusal. Below want, the band shrinks first (to a third of what is above the
+tables, never under one block of 2^s rows) and the symbol area gets the rest: content that no longer fits
+(a dictionary, a halftone grid, an intermediate region) is `PDE_LIMIT` for that segment alone, reported
+`JBF_UNSUP`, and the rest of the page is drawn. The workspace is reached only through `jw_*`, which on the
+target are pdmath's far movers over the shell's `g_wseg`:
 
 | offset | size | content |
 |---|---|---|
@@ -5036,11 +5057,11 @@ Anything over a limit below answers `PDE_LIMIT` for that segment alone.
 | 3000 | 8,192 | refinement contexts |
 | 5000 | 6,656 | the 13 integer decoders' contexts (512 each) |
 | 6A00 | 2,048 | IAID contexts (a dictionary of at most 2,048 symbols) |
-| 7200 | `JB_BANDMAX` 16,384 | the band: full-resolution rows of the page |
-| B200 | to 64,000 | symbol and pattern bitmaps and halftone grid values growing up; 8-byte records (offset, width, height) growing down |
+| 7200 | `jb_bandmax`, at most `JB_BANDMAX` 16,384 (40,000 with a page refinement) | the band: full-resolution rows of the page (a streamed page puts its one row at 3000 instead) |
+| after the band | to `jb_wsz` | symbol and pattern bitmaps, intermediate regions and halftone grid values growing up; 8-byte records (offset, width, height) growing down |
 
 **Bands, streaming and what a page costs.** The page cannot be resident (A4 at 300 dpi is 1 MB), so it is
-decoded in bands of `JB_BANDMAX / rowbytes` full-resolution rows (a multiple of 2^s, so a delivered group never
+decoded in bands of `jb_bandmax / rowbytes` full-resolution rows (a multiple of 2^s, so a delivered group never
 straddles two bands): 25 rows of an A4/600 dpi page, 52 of A4/300 dpi, the whole of a small page. A band is
 decoded by running the segment stream again from the start and applying only what touches it. A dictionary,
 pattern dictionary, halftone grid and custom table is decoded once and kept in the registry (24 segments), so
@@ -5052,13 +5073,18 @@ region segments, and with exactly one decodes its rows as they are asked for, in
 the arithmetic decoder's state kept between calls. A reduced scale does not shorten the decode (every pixel is
 still decoded) but it keeps the delivered row small: s is the largest reduction that still gives `want_w`
 pixels, 2^s x 2^s blocks averaged as for CCITT. A truncated stream stops a decoder after 64 bytes of padding
-rather than decode zeros to the end of the page. Cost, MODELLED and not measured on an 8088 (the cycles below
-are from the instruction counts of the compiled C, with a far peek or poke at 40 cycles): about 2,000 cycles a
-decoded pixel in C, so an A4/300 dpi generic page is 8.7 M pixels, 17 G cycles, about an hour on a 4.77 MHz XT
-(a 286 or 386 is several times faster per clock, and still minutes); a symbol-mode page costs its symbols'
-pixels once plus, of the order of 3,000 cycles an instance in every band the instance's text region reaches. The hand-written 8086 MQ decoder and context loop is the recorded next step
-(it removes the call and far-access overhead that is most of the 2,000); it was not written in this round,
-so `mq_bit` and `gb_nextrow` are C. Limits: width 5,120 (`PDE_LIMIT` beyond: the row buffers are 648 bytes),
+rather than decode zeros to the end of the page. Cost, ESTIMATED and not measured on an 8088: `pdxijb2.inc` is the MQ decoder (`mq_bit`, `mq_bytein`) and the
+template-0 generic-region row (`gb_row0`: the context kept whole and shifted a pixel at a time, a 4,096-entry
+hash, and an all-white loop that decides a context-0 pixel with every register live and no call) in 8086
+assembly, about 1.1 KB; the C twins stay for the other templates, a non-nominal AT pixel and HENABLESKIP, and
+`hosttest/pdbl_asm.py` runs the assembly under Unicorn against the encoder, bit for bit, with the fetch-floor
+cycle count of PERFORMANCE.md Part 2 (4 clocks a code byte, 4 more a memory operand): **207 cycles a pixel on a
+blank page, 418 on a sparse scan (5% black strokes), 664 on regular ruled lines, 9,600 on dense random bits**
+(the C was about 2,000 on all of them). A4 at 300 dpi is 8.7 M pixels: **about 13 minutes on a 4.77 MHz XT** for a
+text scan (the model is optimistic against memory timings; call it a quarter hour) instead of an hour, a
+quarter of that again for TPGDON pages whose repeated rows are copied, and seconds on a 286 or 386. A
+symbol-mode page costs its symbols' pixels once plus about 3,000 cycles an instance in every band the
+instance's text region reaches. Limits: width 5,120 (`PDE_LIMIT` beyond: the row buffers are 648 bytes),
 4,096 symbols a page, at most 2,048 in one dictionary, 4,096 distinct contexts for template 0 (a noisier page
 answers `PDE_LIMIT` for that region), custom tables of at most 21 lines, symbol bitmaps and grid values within
 the free part of the workspace (about 18 KB: a dictionary or a halftone grid that does not fit is

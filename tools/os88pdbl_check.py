@@ -623,7 +623,7 @@ def run_fuzz(n=1500):
              'c:%sccitt_g4_align.bin:-1:200:6:48' % D, 'j:%sjb2_generic.jb2:64' % D, 'j:%sjb2_mmr.jb2:64' % D,
              'j:%sjb2_text.jb2:%sjb2_text.glob:64' % (D, D), 'j:%sjb2_huff.jb2:%sjb2_huff.glob:64' % (D, D),
              'j:%sjb2_halftone.jb2:%sjb2_halftone.glob:64' % (D, D),
-             'j:%sjb2_refagg.jb2:%sjb2_refagg.glob:64' % (D, D), 'j:%sjb2_refine.jb2:-:64' % D, 'j:%sjb2_inter.jb2:-:64' % D, 'j:%sjb2_unknown.jb2:-:64' % D]
+             'j:%sjb2_refagg.jb2:%sjb2_refagg.glob:64' % (D, D), 'j:%sjb2_refine.jb2:64' % D, 'j:%sjb2_inter.jb2:64' % D, 'j:%sjb2_unknown.jb2:64' % D]
     r = subprocess.run(['build-bl/pdbl_fuzz', '-n', str(n), '-s', '1'] + seeds, capture_output=True, text=True)
     print(r.stdout.strip() or r.stderr[-400:])
     return r.returncode
@@ -642,7 +642,7 @@ if __name__ == '__main__':
     if a == ['all']:
         build_host()
         a = ['ccitt', 'jb2-generic', 'jb2-text', 'jb2-huff', 'jb2-halftone', 'jb2-multi', 'mutool-ccitt', 'mutool-jb2-generic',
-             'mutool-jb2-text', 'mutool-jb2-huff', 'mutool-jb2-halftone', 'mutool-jb2-multi', 'jb2-range', 'fuzz']
+             'mutool-jb2-text', 'mutool-jb2-huff', 'mutool-jb2-halftone', 'mutool-jb2-multi', 'jb2-refagg', 'mutool-jb2-refagg', 'jb2-unknown', 'mutool-jb2-unknown', 'jb2-refine', 'mutool-jb2-refine', 'jb2-range', 'fuzz']
     for what in a or ['ccitt']:
         if what == 'fuzz': f += run_fuzz()
         if what == 'ccitt': f += check_ccitt(rnd)

@@ -926,6 +926,24 @@ static void jb_b32(void)
     jb_hi = (pdw)((a << 8) | b); jb_lo = (pdw)((c << 8) | d);
 }
 
+/* the two refinement AT pixels of a segment (rf_at); 1 when they are out of range */
+static int jb_readrat(void)
+{
+    pdw k;
+    for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
+    return rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1;
+}
+/* the generic region's AT pixels (6.2.5.4) for the current template; 1 when one is out of range */
+static int jb_readat(void)
+{
+    pdw k;
+    for (k = 0; k < (gb_tpl ? 1u : 4u); k++) {
+        gb_at[k][0] = (pdi)(signed char)jb_b(); gb_at[k][1] = (pdi)(signed char)jb_b();
+        if (gb_at[k][1] < -2 || gb_at[k][1] > 0 || (gb_at[k][1] == 0 && gb_at[k][0] >= 0)) return 1;
+    }
+    return 0;
+}
+
 /* Reads one segment header; the data length is left in jb_lh/jb_ll.
  * Returns 0, or 1 at the end of the stream / on a header that cannot be used. */
 static int jb_hdr(void)
@@ -1030,12 +1048,7 @@ static pdw jb_segment_generic(void)
     f = jb_b();
     gb_tpl = (pdw)((f >> 1) & 3); gb_tpgd = (pdw)((f >> 3) & 1);
     if (f & 16) { jb_inc |= JBF_UNSUP; return PDE_OK; }
-    if (!(f & 1)) {
-        for (k = 0; k < (gb_tpl ? 1u : 4u); k++) {
-            gb_at[k][0] = (pdi)(signed char)jb_b(); gb_at[k][1] = (pdi)(signed char)jb_b();
-            if (gb_at[k][1] < -2 || gb_at[k][1] > 0 || (gb_at[k][1] == 0 && gb_at[k][0] >= 0)) { jb_inc |= JBF_UNSUP; return PDE_OK; }
-        }
-    }
+    if (!(f & 1) && jb_readat()) { jb_inc |= JBF_UNSUP; return PDE_OK; }
     gb_w = jb_rw; gb_h = jb_rh; gb_sinkmode = 0; gb_dx = (pdi)jb_rx; gb_dy = (pdi)jb_ry; gb_op = jb_rop; gb_skip = 0;
     jb_cv_band();
     if (jb_cvint) { gb_sinkmode = 3; gb_boff = jb_intbm; gb_brb = (pdw)((jb_rw + 7) >> 3); }
@@ -1540,8 +1553,7 @@ static pdw jb_segment_symdict(void)
             if (sd_at[k][1] < -2 || sd_at[k][1] > 0 || (sd_at[k][1] == 0 && sd_at[k][0] >= 0)) return PDE_LIMIT; }
     else for (k = 0; k < 4; k++) { sd_at[k][0] = gb_atnomv[0][k * 2]; sd_at[k][1] = gb_atnomv[0][k * 2 + 1]; }
     if (sd_refagg && !sd_rtpl) {
-        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
-        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+        if (jb_readrat()) return PDE_LIMIT;
     }
     jb_b32(); sd_numex = jb_lo; if (jb_hi) return PDE_LIMIT;
     jb_b32(); sd_numnew = jb_lo; if (jb_hi || sd_numnew > JB_MAXSYMS) return PDE_LIMIT;
@@ -1590,8 +1602,7 @@ static pdw jb_segment_text(void)
         hf_logs = (pdw)((f >> 2) & 3);
     }
     if (tr_refine && !tr_rtpl) {
-        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
-        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+        if (jb_readrat()) return PDE_LIMIT;
     }
     jb_b32(); if (jb_hi) return PDE_LIMIT; tr_ninst = jb_lo;
     nsy = jb_syms(0);
@@ -1644,8 +1655,7 @@ static pdw jb_segment_refine(void)
     f = jb_b();
     rf_tpl = (pdw)(f & 1); rf_tpgr = (pdw)((f >> 1) & 1);
     if (!rf_tpl) {
-        for (k = 0; k < 2; k++) { rf_at[k][0] = (pdi)(signed char)jb_b(); rf_at[k][1] = (pdi)(signed char)jb_b(); }
-        if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
+        if (jb_readrat()) return PDE_LIMIT;
     }
     if (!jb_rw || !jb_rh || jb_rw > RF_MAXW) return PDE_LIMIT;
     mark = jb_sp;
@@ -1759,6 +1769,10 @@ static pdw jb_pass(void)
 
 /* ---- open / rows ----------------------------------------------------------------------------- */
 static pdw jb_globals, jb_bandok, jb_gnext;
+#ifndef PDMEM_SLOT
+#define PDMEM_SLOT 0
+#endif
+pdw jb_need_kb, jb_need_cx;     /* with PDE_NEEDMEM from jb_open: CX = jb_need_cx (PDMEM_SLOT), DX = jb_need_kb */
 static pdb jb_pgref;            /* a page-refinement region (42 / 43) is present: bands grow to hold it */
 static pdb jb_stream;           /* one generic region and nothing else draws: rows are decoded on demand, once */
 static pdw jb_sy, jb_smmr;      /* the next source row; the region is MMR */
@@ -1786,11 +1800,7 @@ static pdw jb_stream_setup(pdw cand)
     f = jb_b();
     if (f & 16) return PDE_LIMIT;
     gb_tpl = (pdw)((f >> 1) & 3); gb_tpgd = (pdw)((f >> 3) & 1); jb_smmr = (pdw)(f & 1);
-    if (!(f & 1))
-        for (k = 0; k < (gb_tpl ? 1u : 4u); k++) {
-            gb_at[k][0] = (pdi)(signed char)jb_b(); gb_at[k][1] = (pdi)(signed char)jb_b();
-            if (gb_at[k][1] < -2 || gb_at[k][1] > 0 || (gb_at[k][1] == 0 && gb_at[k][0] >= 0)) return PDE_LIMIT;
-        }
+    if (!(f & 1) && jb_readat()) return PDE_LIMIT;
     if (!jb_rw || !jb_rh || jb_rw > BL_MAXW) return PDE_LIMIT;
     gb_w = jb_rw; gb_h = jb_rh; gb_sinkmode = 2; gb_skip = 0;
     if (jb_smmr) cf_mmr_begin(gb_w);
@@ -1847,7 +1857,11 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
     n = (pdw)(1u << bl_scale);
     /* band: a third of what is above the tables, between one block of rows and the want size;
      * the symbols and the grids get the rest */
-    if (jb_wsz < (pdw)(JW_BAND + n * jb_rb + 1024u)) return PDE_LIMIT;
+    if (jb_wsz < (pdw)(JW_BAND + n * jb_rb + 1024u)) {
+        /* too small for this page: ask the slot to grow to want (63 KiB holds 64,000) unless that is what it has */
+        if (jb_wsz < JW_SIZE) { jb_need_kb = 63; jb_need_cx = PDMEM_SLOT; return PDE_NEEDMEM; }
+        return PDE_LIMIT;
+    }
     jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 3);
     if (jb_pgref) jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 2);      /* a page refinement wants its region inside one band */
     if (jb_bandmax > (jb_pgref ? 40000u : JB_BANDMAX)) jb_bandmax = jb_pgref ? 40000u : JB_BANDMAX;
