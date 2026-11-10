@@ -42,8 +42,6 @@ gr_entry:
     call OSAPI_WM_PREFER
     mov si, gr_menus
     call OSAPI_MENU_SET
-    mov si, gr_about
-    mov al, 1
     call OSAPI_FONT_GLYPHS
     mov [gr_fontseg], dx
     mov [gr_fontoff], si

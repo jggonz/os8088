@@ -1416,7 +1416,7 @@ sol_mkback:
 .out:
     ret
 
-; sol_about - the About handler (API OSAPI_ABOUT_SET (withdrawn), SPEC.md 12.2/43)
+; sol_about - the About handler (its class's WC_ABOUT, SPEC.md 12.2/43)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; may clobber the callback set
 ;

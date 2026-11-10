@@ -4948,7 +4948,7 @@ br_sh7: db 'Ctrl+A all (address/page); Ctrl+C copy', 0
 br_sh8: db 'Ctrl+D bookmark; Ctrl+U source', 0
 
 ; -----------------------------------------------------------------------------
-; br_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; br_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;

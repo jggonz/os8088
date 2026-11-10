@@ -126,7 +126,6 @@ sv_do_cfg:
     call OSAPI_WM_CREATE
     jc .no
     mov [sv_win], bx
-    mov ax, sc_close            ; ...and the close negotiator, which is what
     mov byte [sc_down], 0
     xor ax, ax
     call os88ui_arm             ; a window reopened mid-gesture must not come

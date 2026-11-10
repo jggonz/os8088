@@ -511,7 +511,6 @@ ark_entry:
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    mov ax, ark_onresize            ; the metric record is picked from the
     mov si, ark_pref                ; **AND THE WINDOW FOLLOWS THE METRICS**
     call OSAPI_WM_PREFER            ; (SPEC.md 11.100.1). ark_metrics has always
                                     ; had two records and picked the right one;
@@ -1025,7 +1024,7 @@ ark_refocus:
 ; it.
 
 ; -----------------------------------------------------------------------------
-; ark_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
+; ark_about - the WC_ABOUT handler: a window callback in every respect
 ; in:  SI = our window ptr; caller holds the gfx lock
 ; -----------------------------------------------------------------------------
 ark_about:

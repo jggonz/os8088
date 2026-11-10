@@ -2,7 +2,7 @@
 
 > **STATUS: `W_ONMOUSEUP` IMPLEMENTED** (SPEC.md §13.7; `kernel/wm.inc`,
 > `kernel/ui.inc`, `kernel/kernel.asm`, `apps/os88api.inc`), gated by
-> `tests/muptest` on all three adapters, at **API OSAPI_WM_ONMOUSEUP (withdrawn) — a REUSED retired
+> `tests/muptest` on all three adapters, at **the class slot `WC_ONMOUSEUP` since §11.104 — a REUSED retired
 > cell** (SPEC.md §20.3.1), which is what kept it small: `.text` +141 against
 > 168 left in the image rung, so **the footprint spare is still three steps
 > and that rung has 27 bytes left**. **The §2 withdrawals were NOT done** —

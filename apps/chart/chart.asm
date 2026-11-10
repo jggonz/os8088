@@ -203,7 +203,6 @@ ct_entry:
     OS88_REGION_MOVABLE
     mov si, ct_menus
     call OSAPI_MENU_SET                 ; preserves CF (SPEC.md 20.3)
-    mov si, ct_about                    ; ...and 'About Chart' above its Close
     mov dx, [ct_chartseg]               ; ...AND THE CANVAS MOVES (NO-PINNING
     mov ax, ct_reloc                    ; A3, SPEC.md 82.14.1): ct_reloc's
     call OSAPI_MEM_MOVABLE              ; header. Declared once the window
@@ -451,7 +450,7 @@ ct_oncmd:
 
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; ct_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn), SPEC.md 12.2). SI = our
+; ct_about - the WC_ABOUT handler (SPEC.md 11.104). SI = our
 ; window on entry; the UI task, gfx lock held.
 ;
 ; IT WAS A TOAST, on the argument that "an About is one line here" and that a

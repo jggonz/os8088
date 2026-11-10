@@ -163,7 +163,6 @@ eth_cfg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [ec_win], bx
-    mov ax, ec_drag
     mov byte [ec_down], 0       ; a window reopened mid-gesture must not come
     xor ax, ax                  ; up with one armed for the next release to
     call os88ui_arm             ; fire

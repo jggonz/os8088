@@ -8115,7 +8115,7 @@ wm_title_set:
 ; (SPEC.md 8.1/28).
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; wm_band - API OSAPI_WM_OWNBG (withdrawn): "cache THIS BAND of my content and hand me the rest"
+; wm_band - OSAPI_WM_BAND: "cache THIS BAND of my content and hand me the rest"
 ; in:  BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom),
 ;      CX = the band's extent in pixels, measured in from that edge.
 ;      CX = 0 retires the band, and the cache goes back to the whole content.

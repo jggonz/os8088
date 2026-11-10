@@ -162,7 +162,6 @@ pn_entry:
                                     ; pn_metrics' below, whatever came before
                                     ; it - so the plain form's pushf/push/pop
                                     ; kept nothing anybody reads
-    mov ax, pn_ondrag               ; pointer between the edges. The KEYS do
     call OSAPI_WM_GEOM              ; CX/DX = the content we were actually
     call pn_metrics                 ; given, which on a CGA is 22 rows short
     mov si, pn_menus
@@ -1651,7 +1650,7 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
 ; the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; pn_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; pn_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

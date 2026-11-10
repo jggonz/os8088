@@ -53,9 +53,7 @@ xb_entry:
     OS88_ALTENTER_ARM
     mov si, xb_pref
     call OSAPI_WM_PREFER
-    mov si, xb_about
     mov word [xb_x0], XB_X0
-    mov bx, [xb_win]
     mov bx, [xb_win]
     mov ax, 1
     call OSAPI_WM_TIMER

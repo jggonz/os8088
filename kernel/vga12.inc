@@ -5361,7 +5361,7 @@ gfx_unlock:
 %endif
 
 ; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot OSAPI_ABOUT_SET (withdrawn))
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; OSAPI_GFX_SCROLL)
 ;
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
 ;           coords), SI = dy SIGNED: positive moves the rect's content UP dy

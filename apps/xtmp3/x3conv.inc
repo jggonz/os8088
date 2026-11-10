@@ -1027,8 +1027,6 @@ x3c_dopen:
     mov ax, bx
     push bx
     mov bx, x3c_btrec
-    mov si, x3c_dup
-    mov di, x3c_ddrag
     mov dx, x3c_dclick
     call os88ui_btninit
     pop bx
@@ -3298,7 +3296,8 @@ x3c_dtpl:   dw 0, 0, XD_W + 2, 0
             dw x3c_t_drive, x3c_dcls
 ; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
     OS88_CLASS x3c_dcls, WF_NOANIM, PAINT, x3c_dpaint, ONKEY, x3c_dkey, \
-               ONCLOSE, x3c_dclose
+               ONCLICK, os88ui_btnclick, ONCLOSE, x3c_dclose, \
+               ONMOUSEUP, x3c_dup, ONDRAG, x3c_ddrag
 x3c_t_drive: db 'Decode First', 0
 x3c_t_prog:  db 'Decoding to Disk', 0
 x3c_t_files: db 'Decoded Files', 0

@@ -1306,7 +1306,6 @@ w16_entry:
     jc .out
     mov [w16_win], bx
     mov [w16_jwin], bx
-    mov ax, w16_ontimer
     mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
     push es                         ; the CD's volume, for int 2Fh 15xxh (124.33.3)

@@ -144,7 +144,6 @@ tm_entry:
                                     ; proc is a bare `ret`; the kern_small
                                     ; worker declares itself restartable at its
                                     ; spawn. Spends AX, DX and the flags
-    mov si, tm_about                ; the standard About (SPEC.md 12.2, 20.5.1)
     ; --- the clock -----------------------------------------------------------
     mov ax, TM_TICKS
     call OSAPI_WM_TIMER             ; CF = 1: kern_small carries the slot and
@@ -586,7 +585,7 @@ tm_worker:
 ; =============================================================================
 ; 'About Timer' - the standard card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
-; tm_about - the OSAPI_ABOUT_SET handler
+; tm_about - the WC_ABOUT handler
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; While the card is up the button record is told it has NO buttons, so a
 ; press anywhere in the content reaches tm_onclick and takes the card down

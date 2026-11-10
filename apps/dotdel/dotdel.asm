@@ -255,8 +255,6 @@ dd_entry:
     mov si, dd_menus
     call OSAPI_MENU_SET
     mov bx, [dd_win]
-    mov bx, [dd_win]
-    mov bx, [dd_win]
     mov byte [dd_wmode], 0          ; THIN by default (SPEC.md 93.3.3.1): it is
                                     ; the board the field's overlay of the real
                                     ; machine matched, and Full is one menu

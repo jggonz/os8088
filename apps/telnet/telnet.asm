@@ -182,10 +182,10 @@ te_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [te_win], bx
-    mov ax, bx                      ; **THE GESTURE'S TWO SLOTS** (SPEC.md
-    mov bx, te_btrec                ; 20.5.1.3): neither is a template word.
-    mov si, te_onup                 ; os88ui_btninit keeps every register and
-    mov di, te_ondrag               ; nothing below reads the ones it is
+    mov ax, bx                      ; **THE GESTURE'S RECORD** (SPEC.md
+    mov bx, te_btrec                ; 20.5.1.3): its three slots are te_cls's.
+                                    ; os88ui_btninit keeps every register and
+                                    ; nothing below reads the ones it is
     mov dx, te_onclick              ; handed - BX is re-loaded where it is
                                     ; wanted, SI is the entry's own and is
                                     ; popped at .out - so there is no frame
@@ -1764,7 +1764,7 @@ te_show:
     ret
 
 ; =============================================================================
-; te_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn), SPEC.md 12.2)
+; te_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;
@@ -2024,7 +2024,8 @@ te_tpl:
                                                     ; app name's string
 ; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
     OS88_CLASS te_cls, WF_SIZABLE, PAINT, te_paint, ONKEY, te_onkey, \
-               ONCLICK, te_onclick, ABOUT, te_about, ONWAKE, tz_wake
+               ONCLICK, os88ui_btnclick, ABOUT, te_about, ONWAKE, tz_wake, \
+               ONMOUSEUP, te_onup, ONDRAG, te_ondrag
 
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)

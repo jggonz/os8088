@@ -579,7 +579,7 @@ tg_newgame:
 ; content is what apps/arkanoid and apps/missile do for the same reason.
 ; -----------------------------------------------------------------------------
 
-; tg_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
+; tg_about - the WC_ABOUT handler: a window callback in every respect
 ; in:  SI = our window ptr; caller holds the gfx lock
 tg_about:
     call tg_track

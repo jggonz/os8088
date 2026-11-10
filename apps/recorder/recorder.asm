@@ -211,11 +211,6 @@ rc_entry:
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    push ax                         ; SPEC.md 13.7: the buttons fire on the
-    mov ax, rc_ontimer              ; the record pump (SPEC.md 13.9; CF on
-    pop ax                          ; the pointer is off it rather than at the
-                                    ; release. Not template words; set after
-                                    ; wm_create, like MENU_SET
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -1393,7 +1388,7 @@ rc_putu5:
 ; handlers taking it down are what a widget cannot own.
 
 ; -----------------------------------------------------------------------------
-; rc_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; rc_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

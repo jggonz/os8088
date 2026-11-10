@@ -23,15 +23,12 @@ wf_entry:
     mov [wf_win], bx
     OS88_REGION_MOVABLE
     OS88_ALTENTER_ARM
-    mov al, 1
     mov si, wf_prefs
     call OSAPI_WM_PREFER
     mov si, wf_menus
     call OSAPI_MENU_SET
     mov ax, bx
     mov bx, wf_buttons
-    mov si, wf_buttonupentry
-    mov di, wf_buttondrag
     mov dx, wf_clickentry
     call os88ui_btninit
     mov bx, [wf_win]
@@ -540,9 +537,10 @@ wf_tpl:
     dw wf_title, wf_cls
 ; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
     OS88_CLASS wf_cls, WF_OWNBG, PAINT, wf_paint, ONKEY, wf_keyentry, \
-               ONCLICK, wf_clickentry, ABOUT, wf_aboutentry, ONWAKE, wf_tick, \
-               ONCLOSE, wf_closeentry, ONRCLICK, wf_rightclick, \
-               ONTIMER, wf_tick
+               ONCLICK, os88ui_btnclick, ABOUT, wf_aboutentry, \
+               ONWAKE, wf_tick, ONCLOSE, wf_closeentry, \
+               ONMOUSEUP, wf_buttonupentry, ONRCLICK, wf_rightclick, \
+               ONTIMER, wf_tick, ONDRAG, wf_buttondrag
 wf_prefs: dw 600,414, 600,304, 600,154
     OS88_MENUSET wf_menus, wf_title, wf_commandentry
         OS88_MENU wf_gamemenu, wf_gameitems, 6

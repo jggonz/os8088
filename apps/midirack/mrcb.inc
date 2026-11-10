@@ -975,7 +975,7 @@ mr_cmd_quit:
     pop bx
     ret
 
-; mr_about - OSAPI_ABOUT_SET's handler (SI = the window; gfx lock held)
+; mr_about - the WC_ABOUT handler (SI = the window; gfx lock held)
 mr_about:
     jmp mr_cmd_about
 

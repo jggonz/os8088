@@ -242,8 +242,6 @@ zf_entry:
 
     mov si, zf_menus
     call OSAPI_MENU_SET             ; preserves every register AND the flags
-    mov si, zf_abouth               ; the HANDLER (SPEC.md 12.2). This passed the
-    mov al, 1
     push cx                         ; ...and the floor is DECLARED now (SPEC.md
     push dx                         ; 11.100.2) rather than answered by a
     mov cx, ZF_MIN_W                ; negotiator. zf_onsize was ten

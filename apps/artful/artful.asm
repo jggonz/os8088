@@ -844,7 +844,7 @@ at_worker:
 ; standard card here.
 
 ; -----------------------------------------------------------------------------
-; at_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; at_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

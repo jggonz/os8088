@@ -985,7 +985,6 @@ hd_inst_post:
     call OSAPI_WM_CREATE        ; CF = 1: the window table is full
     jc .out
     mov [hd_lwin], bx
-    mov ax, hd_lwake
 .wake:
     call OSAPI_WM_WAKE          ; CF = 1, the event ring full, is left: the
 .out:                           ; window stays and the next click kicks it

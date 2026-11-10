@@ -158,7 +158,7 @@ hl_oncmd:
 ; draws the card last, and a handler that takes it down.
 
 ; -----------------------------------------------------------------------------
-; hl_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; hl_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; clobbers BX/SI, which any window callback may (SPEC.md 12.2:
 ;      the kernel dispatches it exactly like W_ONCLICK)

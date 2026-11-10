@@ -226,8 +226,6 @@ in_entry:
     jc in_ret
     OS88_REGION_MOVABLE_NOKEEP in_ret   ; every byte that outlives a pass is
                                     ; a static and moves with us
-    mov si, in_about
-    mov ax, in_onclose              ; every way of closing comes through here,
     push bx                         ; (the window: VOL_SYS answers in BL, and
     call OSAPI_VOL_SYS              ; in_build spends BX)
     cmp bl, 2                       ; BL = the volume we booted from

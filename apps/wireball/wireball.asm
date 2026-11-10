@@ -48,7 +48,6 @@ wb_entry:
     OS88_REGION_MOVABLE
     OS88_ALTENTER_ARM
     mov [wb_win], bx
-    mov al, 1
     mov si, wb_prefs
     call OSAPI_WM_PREFER
     mov cx, 418
@@ -58,8 +57,6 @@ wb_entry:
     call OSAPI_MENU_SET
     mov ax, bx
     mov bx, wb_btrec
-    mov si, wb_buttonup
-    mov di, wb_buttondrag
     mov dx, wb_onclick
     call os88ui_btninit
     mov bx, [wb_win]             ; loader success returns the window, not the button record
@@ -215,7 +212,8 @@ wb_tpl:
     dw wb_title, wb_cls
 ; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
     OS88_CLASS wb_cls, WF_OWNBG, PAINT, wb_paint, ONKEY, wb_onkey, \
-               ONCLICK, wb_onclick, ABOUT, wb_about
+               ONCLICK, os88ui_btnclick, ABOUT, wb_about, \
+               ONMOUSEUP, wb_buttonup, ONDRAG, wb_buttondrag
     OS88_MENUSET wb_menus, wb_title, wb_oncmd
         OS88_MENU wb_game, wb_items, 2
     OS88_MENUSET_END wb_menus

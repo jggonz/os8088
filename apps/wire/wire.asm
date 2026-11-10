@@ -851,7 +851,7 @@ wr_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 78.7, slot OSAPI_ABOUT_SET (withdrawn))
+; wr_about - the WC_ABOUT handler (SPEC.md 78.7, 11.104)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment -
 ;      a window callback in every respect that matters
 ; out: nothing; preserves all registers

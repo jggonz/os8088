@@ -345,7 +345,7 @@ bn_wipe:
 ; =============================================================================
 ; 'About Bounce' - the standard card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
-; bn_about - the OSAPI_ABOUT_SET handler
+; bn_about - the WC_ABOUT handler
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 bn_about:
     mov byte [bn_abon], 1

@@ -58,7 +58,6 @@ mu_entry:
     mov si, mu_vtpl
     call OSAPI_WM_CREATE
     jc .main                         ; a full table is not a failure here -
-    mov ax, mu_vup                   ; the other four gestures still work
     call OSAPI_GFX_LOCK              ; legal: the entry runs with the lock
     call OSAPI_WM_SHOW               ; FREE (SPEC.md 20.2), unlike a callback
     call OSAPI_GFX_UNLOCK

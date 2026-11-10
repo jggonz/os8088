@@ -852,7 +852,7 @@ cal_oncmd:
 ; is that section's own division of the work.
 
 ; -----------------------------------------------------------------------------
-; cal_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; cal_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD, far-called at our
 ;      segment - a window callback in every respect that matters, so it draws
 ;      directly

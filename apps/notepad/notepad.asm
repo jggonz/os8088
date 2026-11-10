@@ -6603,7 +6603,7 @@ np_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API OSAPI_WM_ONCLOSE (withdrawn))
+; np_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, the class slot `WC_ONCLOSE` since §11.104)
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;
@@ -10860,7 +10860,7 @@ np_saycnt:
 ; content on a timer.
 
 ; -----------------------------------------------------------------------------
-; np_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; np_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

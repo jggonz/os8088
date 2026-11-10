@@ -46,7 +46,6 @@ dm_entry:
     OS88_ALTENTER_ARM
     mov si, dm_pref
     call OSAPI_WM_PREFER
-    mov si, dm_about
     call OSAPI_GET_TICKS
     or ax, 1
     mov [dm_seed], ax

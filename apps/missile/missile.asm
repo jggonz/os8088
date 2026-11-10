@@ -378,7 +378,6 @@ mc_entry:
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
-    mov ax, mc_onresize             ; mc_mono / mc_ecoarse / mc_caps are facts
     mov si, mc_pref                 ; **THE PLAYFIELD IS THE RULES** (SPEC.md
     call OSAPI_WM_PREFER            ; 11.100.1): this window is not WF_SIZABLE,
                                     ; so until it published these three sizes

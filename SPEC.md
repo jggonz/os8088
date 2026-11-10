@@ -19639,7 +19639,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot OSAPI_WM_ONSIZE (withdrawn),
+should still get its rows. Install it with `wm_onsize` (the class slot `WC_ONSIZE` since §11.104,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -21619,7 +21619,7 @@ transparent call is still there for the clipped case and the small build.
 
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
-**`wm_keeph` (API slot OSAPI_WM_KEEPH (withdrawn)), BX = window, AL = 0 clear / non-0 set: "my
+**`wm_keeph` (OSAPI_WM_KEEPH, withdrawn in §11.104), BX = window, AL = 0 clear / non-0 set: "my
 layout is FIXED, so my height is not the kernel's to reduce."** A window that
 sets it and will not fit the desktop band is clamped against the **display's
 own bottom** instead of against the row the dock starts on — so it hangs over
@@ -21712,7 +21712,7 @@ the height and the `y` it re-fits. `NOKEEPH` takes it out with the rest.
 ### 11.94 `WF_SNAP` — a window that keeps its content on a byte boundary
 
 **Opt-in, EVERY ADAPTER, and the whole of it is one `and`.** `wm_snap` (API
-slot OSAPI_WM_SNAP (withdrawn)) sets `WF_SNAP` on a window, and every site that writes `W_X` then
+withdrawn in §11.104) sets `WF_SNAP` on a window, and every site that writes `W_X` then
 keeps that window's **content origin** on a multiple of 8 — so every
 `font_run` the window makes reaches the single-store fast path (§6.1) instead
 of the erase-and-letter fallback. §6.1.1 measures what that is worth: the
@@ -28068,7 +28068,7 @@ at most two items and the second one is the point:
 
 | item | present when | dispatched by |
 |------|--------------|----------------|
-| `About <Name>` | the window registered a handler with `wm_about_set` (slot OSAPI_ABOUT_SET (withdrawn)) | the application, through its own dispatcher, exactly like `W_ONCLICK` |
+| `About <Name>` | the window registered a handler with `wm_about_set` (withdrawn in §11.104) | the application, through its own dispatcher, exactly like `W_ONCLICK` |
 | `Close` | **always** | the kernel |
 
 **One duplicate had to go with it, and exactly one.** A Disk window OWNS the
@@ -29754,7 +29754,7 @@ want the release. Rows, icons and title bars have one: §22.2's file row,
 §26.2's drive zone, §38.3's dialog row and §11.95's title bar all select or
 raise first and open or zoom second.
 
-### 13.7 A package's mouse-up — `W_ONMOUSEUP` (API OSAPI_WM_ONMOUSEUP (withdrawn))
+### 13.7 A package's mouse-up — `W_ONMOUSEUP` (the class slot `WC_ONMOUSEUP` since §11.104)
 
 `W_ONMOUSEUP` is the release half of a content click. Installed with
 `OSAPI_WM_ONMOUSEUP` (BX = window, AX = a near proc in the caller's segment,
@@ -29918,7 +29918,7 @@ tracks live already (§11.1.1, MOUSEUP-PLAN §1.1); the title bar; and region 0,
 a package's content release, where the kernel has no widget to light and
 §13.7's contract is that the package decides identity.
 
-#### 13.8.2 A package tracks too — `W_ONDRAG` (API OSAPI_WM_ONDRAG (withdrawn))
+#### 13.8.2 A package tracks too — `W_ONDRAG` (the class slot `WC_ONDRAG` since §11.104)
 
 The kernel can track because it has a pass, and this section used to say a
 package could not: it has `W_ONCLICK` and `W_ONMOUSEUP` and nothing in
@@ -30429,7 +30429,7 @@ The caption's ink is now the grey when the control is disabled:
 The 1bpp adapters draw the same pixels as before: `font_ink` substitutes
 `[gfx_disink]` for any ink a disabled run is handed.
 
-### 13.9 A window's TIMER — `W_ONTIMER` (API OSAPI_WM_ONTIMER (withdrawn))
+### 13.9 A window's TIMER — `W_ONTIMER` (the class slot `WC_ONTIMER` since §11.104)
 
 **Call me back in N ticks.** `OSAPI_WM_TIMER` (BX = window, AX = ticks from
 now, 0 cancels) arms one; `W_ONTIMER` — installed with `OSAPI_WM_ONTIMER`
@@ -31751,7 +31751,7 @@ its `cmp`/`mov`/`call` left this ladder with the write half they called.
 **equality** test against a free-running word: any stale value costs one extra
 pass and nothing else, there is no ordering to get wrong and no wrap to survive.
 
-### 13.11 A package's RIGHT click — `W_ONRCLICK` (API OSAPI_WM_ONRCLICK (withdrawn))
+### 13.11 A package's RIGHT click — `W_ONRCLICK` (the class slot `WC_ONRCLICK` since §11.104)
 
 Until this slot existed the right button reached **no package at all**.
 `ui_rdown` (§12.4) raises a background window, skips the chrome and the bar
@@ -32750,7 +32750,7 @@ set before the epilogue survives it.
 `div` answers one with **INT 0**, so five bytes turn a crash into a press that
 does nothing.
 
-### 13.18 A window's WHEEL — `W_ONWH` (API OSAPI_WM_ONWHEEL (withdrawn), `kern_big`)
+### 13.18 A window's WHEEL — `W_ONWH` (the class slot `WC_ONWHEEL` since §11.104, `kern_big`)
 
 `OSAPI_WM_ONWHEEL` installs a near proc for a window, after
 `OSAPI_WM_CREATE`, exactly as `OSAPI_WM_ONRCLICK` does. When the wheel turns,
@@ -47091,7 +47091,7 @@ it is part of. The picture is the same to the pixel on all three adapters;
 what went is 107 bytes of every button-carrying image and one `[gfx_color]`
 store on the pressed path, which the opaque run never read.
 
-#### 20.5.1.3.3 The PRESS is the library's — `OSAPI_WM_ONCLICK` (API OSAPI_WM_ONCLICK (withdrawn))
+#### 20.5.1.3.3 The PRESS is the library's — `OSAPI_WM_ONCLICK` (the class slot `WC_ONCLICK` since §11.104)
 
 `os88ui_btninit` installs all three of a gesture's edges, and until this cell
 existed it could only install two. `W_ONMOUSEUP` and `W_ONDRAG` have slots;
@@ -136881,7 +136881,7 @@ writes over the kernel, and it is why the SDK's wording on `OSAPI_WM_ONCLOSE`
 is *"you now owe the user a way out"* rather than a description of a
 mechanism.
 
-### 75.1 `W_ONCLOSE` — the window may refuse (API OSAPI_WM_ONCLOSE (withdrawn))
+### 75.1 `W_ONCLOSE` — the window may refuse (the class slot `WC_ONCLOSE` since §11.104)
 
 `wm_onclose` (BX = window, AX = a near proc in that window's own segment, 0
 clears it) installs a **close negotiator**. `wm_ask_close` calls it from the

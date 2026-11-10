@@ -19020,7 +19020,7 @@ wd_doclose:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_habout - the OSAPI_ABOUT_SET handler: SI = our window, lock held
+; wd_habout - the WC_ABOUT handler: SI = our window, lock held
 ; -----------------------------------------------------------------------------
 wd_habout:
     call wd_bounds                  ; the kernel bar path arrives without a

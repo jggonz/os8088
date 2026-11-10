@@ -334,8 +334,6 @@ wr_entry:
     mov ax, bx                          ; **THE GESTURE'S TWO SLOTS** (SPEC.md
                                         ; 20.5.1.3): neither is a template word
     mov bx, wr_btrec
-    mov si, wr_onup
-    mov di, wr_ondrag
     mov dx, wr_onclick                ; OUR own click work; the library
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
@@ -362,11 +360,7 @@ wr_entry:
     mov si, wr_menus
     call OSAPI_MENU_SET
     mov bx, [wr_win]                    ; BX RE-LOADED BEFORE EACH HOOK. Every
-    mov bx, [wr_win]                    ; not a contract to build five installs
-    mov bx, [wr_win]
-    mov bx, [wr_win]
-    mov bx, [wr_win]
-    mov bx, [wr_win]
+                                        ; not a contract to build five installs
     call OSAPI_WM_WAKE
     clc
 .out:
@@ -2357,7 +2351,7 @@ wr_onclose:
     clc
     ret
 
-; --- wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 12.2, 20.5.1) -----------
+; --- wr_about - the WC_ABOUT handler (SPEC.md 12.2, 20.5.1) -----------
 wr_about:
     push bx
     push si

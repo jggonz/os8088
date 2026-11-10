@@ -2651,7 +2651,7 @@ cs_i13:      db 'F1 to F7  step a setting, in flight', 0   ; in the blank
                                                           ; at thirteen lines
 
 ; -----------------------------------------------------------------------------
-; cs_about - the OSAPI_ABOUT_SET handler (slot OSAPI_ABOUT_SET (withdrawn))
+; cs_about - the WC_ABOUT handler (SPEC.md 11.104)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD.  preserves all
 ; -----------------------------------------------------------------------------
 cs_about:

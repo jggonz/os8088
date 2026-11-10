@@ -517,8 +517,6 @@ rw_entry:
                                     ;   not ours: rw_dscanhk)
     mov si, rw_menus
     call OSAPI_MENU_SET
-    mov si, rw_about
-    mov ax, rw_onwake
     cmp byte [rw_argpend], 0
     je .ok
     call OSAPI_WM_WAKE              ; the document, once the window is up

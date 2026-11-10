@@ -677,7 +677,7 @@ trk_oncmd:
 .out:
     jmp tw_refresh                  ; a menu command's effect on the face now
 ; -----------------------------------------------------------------------------
-; trk_about - the OSAPI_ABOUT_SET handler: the STANDARD About card (os88ui.inc,
+; trk_about - the WC_ABOUT handler: the STANDARD About card (os88ui.inc,
 ;             SPEC.md 20.5.1), drawn over the face and remembered in
 ;             [trk_abon]. While it is up the worker drops its frames under the
 ;             lock (trk_render), tw_refresh refuses, and the button record has

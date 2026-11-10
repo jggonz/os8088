@@ -162,7 +162,6 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
-    mov ax, hd_tw_drag
     mov byte [hd_tdown], 0
 .show:
     call OSAPI_WM_SHOW

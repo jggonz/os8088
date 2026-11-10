@@ -86,10 +86,6 @@ hf_entry:
                                 ; OSAPI_MEM_MOVABLE answers in CF and the macro
                                 ; leaves it, so without this the launch aborts
                                 ; with LD_EABORT and the package refuses itself
-    push ax
-    mov ax, hf_wake             ; ...and check 18 is answered there, because
-    pop ax                      ; cannot compact its own region from inside its
-                                ; own callback, so it posts and is woken
     pop si
     ret
 

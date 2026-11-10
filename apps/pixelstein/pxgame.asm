@@ -414,8 +414,6 @@ px_entry:
     mov si, px_pref
     call OSAPI_WM_PREFER            ; per-adapter frame sizes; flags preserved
     mov bx, [px_win]
-    mov bx, [px_win]
-    mov ax, px_onresize
     call px_adapter                 ; which raster this display gives us
     call px_set_load                ; PXSTEIN.CFG: the player's last picks,
                                     ; clamped (pxset.inc) - after the adapter

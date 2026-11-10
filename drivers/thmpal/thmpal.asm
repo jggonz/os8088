@@ -210,7 +210,6 @@ tv_do_open:
     call OSAPI_WM_CREATE
     jc .no
     mov [tv_win], bx
-    mov ax, tv_close
     mov byte [tv_down], 0
     xor ax, ax
     call os88ui_arm              ; a window reopened mid-gesture must not come

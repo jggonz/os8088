@@ -66,9 +66,6 @@ sd_entry:
                                     ; static and moves with us: a bare `ret`
     mov si, sd_pref                 ; a size per adapter (SPEC.md 11.100.1)
     call OSAPI_WM_PREFER
-    mov si, sd_about
-    mov ax, sd_ontimer
-    jc .notimer
     mov ax, SD_DSPGAP               ; the play test starts from the timer, on
     call OSAPI_WM_TIMER             ; the UI task - verb 0 is a callback's
     jnc .timed

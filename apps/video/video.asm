@@ -23424,7 +23424,7 @@ vp_repaint:                         ; SI = window, lock held, no region armed
     pop bx
     ret
 
-vp_about:                           ; OSAPI_ABOUT_SET's handler: SI = window
+vp_about:                           ; the WC_ABOUT handler: SI = window
     push bx
     push si
     mov byte [vp_abon], 1
