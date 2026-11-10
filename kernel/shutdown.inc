@@ -214,7 +214,7 @@ sd_confirm:
     mov di, ui_ev
     mov bp, evq_drain           ; modal clicks consumed, package wakes owed
     call sd_disp
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     call KERNEL_SEG:cw_gfx_unlock
     CSDO mov byte [CSEG sd_active], 0
     pop ax

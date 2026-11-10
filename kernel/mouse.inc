@@ -3562,7 +3562,7 @@ kbm_move:
     add ax, [mouse_y]
     mov bx, ax
     pop ax
-    call KERNEL_SEG:cw_mou_clamp
+    KDOOR mou_clamp
     mov [mouse_x], ax
     mov [mouse_y], bx
     mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
@@ -3679,7 +3679,7 @@ kbm_ui:                         ; FAR, slot 2 (KBM_E_UI). ui_task tests
     call KERNEL_SEG:cw_gfx_lock ; (the cells are the doors, SPEC.md 2.8.8)
     mov cx, [mouse_x]
     mov dx, [mouse_y]
-    call KERNEL_SEG:cw_wm_hit   ; BX = the window under the pointer, 0 = none
+    KDOOR wm_hit                ; BX = the window under the pointer, 0 = none
     or bx, bx
     jz .unlock
     call KERNEL_SEG:apic_wm_front ; ...which activates it too, so the menu bar

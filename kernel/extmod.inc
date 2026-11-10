@@ -287,7 +287,7 @@ ext_e_ylow:                     ; EXT_YLOW: ui_ylow's arm, behind its caller's
     mov ax, [ui_curx]           ; the drag's PROPOSED x, not W_X
     mov bx, MBAR_H              ; any row the primary's band contains, so a
                                 ; point on display 0 resolves to it
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     or al, al
     jz .done                    ; display 0 keeps the chrome's floor, which
                                 ; the caller loaded into SI. Anything else is
@@ -516,7 +516,7 @@ ext_org_disp:
     push bx
     mov ax, [bx+W_X]
     mov bx, [bx+W_Y]
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     pop bx
     or al, al
     ret

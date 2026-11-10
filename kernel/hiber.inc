@@ -1309,7 +1309,7 @@ hbm_win:
     push ax
     push di
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_inst_find_kind   ; DI = the record
+    KDOOR inst_find_kind                ; DI = the record
     jc .no
     mov si, [di+I_WIN]
     or si, si
@@ -1631,9 +1631,9 @@ hbm_open:
     mov byte [hb_down], 0
 .launch:
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jnc .out
-    call KERNEL_SEG:cw_snd_beep
+    KDOOR snd_beep
 .out:
     pop si
     pop ax
@@ -2467,7 +2467,7 @@ hbm_ask:
                                 ; ui_task's next step hands it to the front
                                 ; window - where Esc is Discard
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jmp short .out
 .stale:
     mov si, hbm_s_stale
@@ -5117,7 +5117,7 @@ hbm_wake:
     call hbm_kd                
     mov bp, dock_force
     call hbm_kd                
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     ; 5. the two files are spent, and the drivers come back -----------------
     call hbm_forget
     ; **AND A SUSPEND'S ROWS COME BACK THROUGH THIS DOOR TOO** (SPEC.md

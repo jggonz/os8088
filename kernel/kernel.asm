@@ -2707,6 +2707,22 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
     OSAPI_IEND
 %endmacro
 
+; ---- THE RARE DOOR (SPEC.md 20.3.3) -----------------------------------------
+; A call through the door is `int OS88_RARE` and the INDEX byte after it -
+; three bytes where a far call is five - and the kernel keeps a two-byte word
+; per index (rd_tab, below the includes, with the door itself). KDOOR is the
+; kernel's own spelling: `KDOOR app_launch` reaches the routine rd_tab
+; declares as `RDENT RDK_RS, app_launch`. The index is the symbol rix_<name>
+; the RDENT makes, so a site naming a routine with no RDENT fails to assemble
+; rather than far-calling a wild offset. OS88_RARE is mirrored in
+; apps/os88api.inc (tests/unit/t_mirror.py pairs the two).
+OS88_RARE   equ 0x81            ; SPEC.md 20.3.3: 81h-85h are BASIC's
+                                ; reserved block, which nothing else uses
+%macro KDOOR 1
+    int OS88_RARE
+    db rix_%1
+%endmacro
+
 ; ---- CLC_OR_STC .label: THE CF-RETURN TAIL IN TWO BYTES (size pass 9) -------
 ; The tree's commonest exit is
 ;       clc / jmp short .out / .no: stc / .out:      4 bytes, 2 + 15 cycles
@@ -4695,6 +4711,10 @@ dbg_reg:
 ; routine to call...
 api_rx:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp                      ; the cell's return address = its target word
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (V7): a count a cell,
+    add word [ss:bp+rc_lo-OSAPI_TABLE_OFF-4], 1 ; keyed by its offset in
+    adc word [ss:bp+rc_hi-OSAPI_TABLE_OFF-4], 0 ; the table (.lowbss)
+%endif
     mov bp, [cs:bp]
 api_x:
     push ds                     ; the caller's DS...
@@ -4718,6 +4738,10 @@ api_x:
 ; behalf; the epilogue is api_x's own.
 api_rxc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (V7): a count a cell,
+    add word [ss:bp+rc_lo-OSAPI_TABLE_OFF-4], 1 ; keyed by its offset in
+    adc word [ss:bp+rc_hi-OSAPI_TABLE_OFF-4], 0 ; the table (.lowbss)
+%endif
     mov bp, [cs:bp]
                                 ; (was api_xc: the cold X body, reached only by falling through from api_rxc)
     push ds
@@ -4739,6 +4763,10 @@ api_rxc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the targe
 ; the retf gives back. BP is an INPUT to no cell of this shape.
 api_rsc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (V7): a count a cell,
+    add word [ss:bp+rc_lo-OSAPI_TABLE_OFF-4], 1 ; keyed by its offset in
+    adc word [ss:bp+rc_hi-OSAPI_TABLE_OFF-4], 0 ; the table (.lowbss)
+%endif
     mov bp, [cs:bp]
     push ds
     KDS
@@ -4748,6 +4776,10 @@ api_rsc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the targe
                                 ; size pass 17, -1: a rare cell's jump)
 api_rs:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (V7): a count a cell,
+    add word [ss:bp+rc_lo-OSAPI_TABLE_OFF-4], 1 ; keyed by its offset in
+    adc word [ss:bp+rc_hi-OSAPI_TABLE_OFF-4], 0 ; the table (.lowbss)
+%endif
     mov bp, [cs:bp]
     push ds
     KDS
@@ -4843,9 +4875,18 @@ rom_vgabw   equ rom_vgabw0      ; data labels off the source, both arms, and
 ; reason there is why this body cannot serve it: every one of these names is
 ; MANDATORY, so the stage is unconditional too.
 ; The caller's DS and SI stay banked across the far call, IN THAT ORDER:
-; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9).
+; dwsf_dskw_write_seq reads the DS there for WSEQF_SYS's fence (18.4.9), at
+; API_RN_DSOFF past its own BP once it has pushed BX and BP - the frame is
+; BP, BX, api_far's IP and CS, the caller's SI, the caller's DS. The rare
+; door's RN body (rd_k4) builds the same frame, so one number serves both
+; (abi-4, kernel size pass 19).
+API_RN_DSOFF equ 10
 api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (V7): a count a cell,
+    add word [ss:bp+rc_lo-OSAPI_TABLE_OFF-4], 1 ; keyed by its offset in
+    adc word [ss:bp+rc_hi-OSAPI_TABLE_OFF-4], 0 ; the table (.lowbss)
+%endif
     mov bp, [cs:bp]
                                 ; (was api_n: the N body, reached only by falling through from api_rn)
     push ds
@@ -7112,8 +7153,6 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; -----------------------------------------------------------------------------
 %ifdef KERN_BIG
   %define ct_cw_wm_clip_test KERNEL_SEG:cw_wm_clip_test ; 2 sites (small: 3)
-%else
-  %define ct_cw_snd_beep KERNEL_SEG:cw_snd_beep         ; 2 sites (big: 4)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -7948,21 +7987,14 @@ MARK_FNVEC  equ $ - mark_fvec
 ; (task_sleep, task_yield, wm_clip_set, wm_content: the Bounce task's). No
 ; kind has a task now.
 ; =============================================================================
-cw_app_launch:          call app_launch
-                    retf
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's fdt_go, kernel size
-cw_app_close_win:       call app_close_win  ; pass 13) the Standard File chooser's
-%endif
-cw_kretf:           retf                ; close (SPEC.md 38.7) - AND cw_kretf,
-                                        ; THE .text `retf` an image's hand-built
+cw_kretf:           retf                ; THE .text `retf` an image's hand-built
                                         ; far hop lands a near `ret` on: DOCK.DRV's
                                         ; dkk_* stubs, EXTD.DRV's exk_go and
-                                        ; CTRL.DRV's cp_kgo. It was a byte of its
-                                        ; own, kern_big's alone (DOCK_OPT); this
-                                        ; one is on both kernels and costs none
-                                        ; (kernel size pass 13). Nothing may go
-                                        ; between the call and it: cw_app_close_win
-                                        ; IS the near call and this retf
+                                        ; CTRL.DRV's cp_kgo. It was the tail of
+                                        ; cw_app_close_win until that shim went
+                                        ; behind the rare door (kernel size pass
+                                        ; 19, P4 - SPEC.md 20.3.3), and is a
+                                        ; byte of its own again
 cw_clk_snapshot:        call clk_snapshot
                     retf
 
@@ -7982,20 +8014,8 @@ cw_cur_lazyrect:        call cur_lazyrect   ; ...and SPEC.md 7.1.4.5's rect
 ; brackets a session with: the arrow has to be off the glass for as long as
 ; something is drawing over it, and every gfx_lock/gfx_unlock inside a frame
 ; then nests underneath and draws nothing (SPEC.md 79.6). kern_big's, like the
-; saver itself.
-cw_cursor_hide:         call cursor_hide
-                    retf
-cw_cursor_show:         call cursor_show
-                    retf
-%endif                                      ; so kern_small pays for none of
-cw_evq_mup:             call evq_mup        ; them out of its 75-byte rung.
-                    retf                    ; THE WHOLE LOOP and not its two
-                                            ; halves: cw_evq_pop and
-                                            ; cw_wm_wake_eaten were reached
-                                            ; only from fm_drag's two `.cold`
-                                            ; track loops, which now call this
-                                            ; instead - so two cells died here
-                                            ; and one was born (SPEC.md 74.1.1)
+; saver itself. (Both are behind the rare door since kernel size pass 19.)
+%endif
 cw_font_run:            call font_run
                     retf
 %ifdef KERN_BIG                 ; ...and gfx_disp_enter is dual display's
@@ -8025,11 +8045,8 @@ cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
 ; the dock, so nothing in it has ever been able to touch either (SPEC.md 12.9,
 ; 30.3.2) - and a saver session has drawn over both. fsx_restore is the other
 ; caller that has to say so, and for the identical reason: an app that owned
-; the whole screen really did overdraw them.
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_blk_relit:           call blk_relit
-                    retf
-%endif
+; the whole screen really did overdraw them. (Behind the rare door since
+; kernel size pass 19 - rd_tab, below.)
 cw_gfx_frame:           call gfx_frame
                     retf
 cw_gfx_hline equ apic_gfx_hline ; THE CELL IS THE DOOR (size pass 9)
@@ -8048,52 +8065,20 @@ cw_icon_draw_ix:        call icon_draw_ix   ; the INDEXED kind (SPEC.md 25.7),
                                             ; other caller in the tree
 cw_icon_draw16:         call icon_draw16
                     retf
-cw_inst_find_kind:      call inst_find_kind
-                    retf
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's FDKT hop)
-cw_inst_fhome_idx:      call inst_fhome_idx
-                    retf
-%endif
-cw_inst_win_owner:      call inst_win_owner
-                    retf
-; ...and the instance store's. (apps.inc's three kinds had three more here -
+; (...and the instance store's went behind the rare door in kernel size pass
+; 19 - rd_tab, below. apps.inc's three kinds had three more here -
 ; cw_inst_of_win, cw_task_sleep and cw_inst_task_die - until Timer and Bounce
 ; became packages, SPEC.md 14.8; About reaches nothing in the store.)
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_inst_ptr:            call inst_ptr
-                    retf
-%endif
 cw_mem_disp equ spw_near        ; `call bp` / `retf` - viddet.inc's splash door
                                 ; is the same three bytes, and it stays where
                                 ; SPL_RESIDENT needs it (size pass 10)
-%ifndef KERN_SMALL              ; (kern_small: FDLG.DRV's FDKT hop - and so
-cw_menu_activate:       call menu_activate  ; are menu_draw_bar and wm_pkgcall
-                    retf                    ; below; DESK.DRV and DOCK.DRV
-%endif                                      ; keep them on kern_big)
-; ...and menu_kbnav's two, which went cold with it (SPEC.md 12.10)
-cw_menu_item_dis:       call menu_item_dis
-                    retf
-cw_mou_clamp:           call mou_clamp
-                    retf
-; (...and the BOOT OVERLAY's: menu_init's one outbound call, cw_menu_relayout,
-; is spw_near's `call bp` since kernel size pass 13 - and dock_init has none,
+; (the menu's five - menu_activate, menu_draw_bar, menu_popup and
+; menu_kbnav's two - are behind the rare door since kernel size pass 19. And
+; the BOOT OVERLAY's: menu_init's one outbound call, cw_menu_relayout, is
+; spw_near's `call bp` since kernel size pass 13 - and dock_init has none,
 ; what it asked cw_dock_force for being two words it writes itself)
-%ifndef KERN_SMALL
-cw_menu_draw_bar:       call menu_draw_bar
-                    retf
-%endif
-cw_menu_popup:          call menu_popup
-                    retf
-cw_snd_beep:            call snd_beep
-                    retf
-cw_snd_disp_set:        call snd_disp_set
-                    retf
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_task_exit equ task_exit      ; NEVER RETURNS - cw_inst_task_die's reason
-%endif
-%ifndef KERN_SMALL              ; (drv_task_x's; kern_small's one caller,
-cw_task_spawn:           call task_spawn ; sch_idle_start, uses spw_near)
-                     retf
 %endif
 cw_task_yield equ apic_task_yield ; THE CELL IS THE DOOR (size pass 13)
 cw_toast_show equ apic_toast_show ; THE CELL IS THE DOOR (size pass 9)
@@ -8121,9 +8106,8 @@ cw_vga_xor_rect_vram:   call vga_xor_rect_vram
 ; ...and EXTD.DRV's one hop that is on OSAPI_WM_DISPLAY's path (wm_disp_now's
 ; one-display arm, SPEC.md 39.19.6.2). Four bytes here where the image carried
 ; a twelve-byte stub of its own, and a near call + RETF where the stub built
-; the frame by hand and returned through cw_kretf
-cw_vid_disp_of:         call vid_disp_of
-                    retf
+; the frame by hand and returned through cw_kretf - behind the rare door
+; since kernel size pass 19
 %endif
 cw_wm_clip_clear equ apic_wm_clip_clear ; THE CELL IS THE DOOR (size pass 9)
 cw_wm_clip_rows:        call wm_clip_rows
@@ -8170,31 +8154,245 @@ cw_wm_dmg_hit:           call wm_dmg_hit
 cw_wm_zone_r:            call wm_zone_r      ; is any of a zone revealed?
                      retf                    ; (SPEC.md 11.91.6)
 %endif
-cw_wm_dmg_wins:         call wm_dmg_wins
-                    retf
 cw_wm_grow_paint equ apic_wm_grow_paint ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_hit:              call wm_hit
-                    retf
-cw_wm_idx2ptr:          call wm_idx2ptr
-                    retf
-cw_wm_paint_all:        call wm_paint_all
-                    retf
-cw_wm_paint_dmg:         call wm_paint_dmg
-                     retf
 %ifndef KERN_SMALL
 cw_wm_pkgcall:          call wm_pkgcall
                     retf
 %endif
 cw_wm_show equ apic_wm_show ; THE CELL IS THE DOOR (size pass 9)
-%ifdef WM_ANIM
-cw_inst_unmin:          call inst_unmin
-                    retf
-%endif
-cw_xm_release_rec:      call xm_release_rec
-                    retf
 cw_wm_title_set equ apic_wm_title_set ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_win_rect:         call wm_win_rect
-                    retf
+
+; =============================================================================
+; THE RARE DOOR (SPEC.md 20.3.3, kernel size pass 19)
+;
+; A rare call is `int OS88_RARE` and the INDEX byte after it: three bytes at
+; the site where a far call is five, and a two-byte word here where a rare
+; cell is six. The `int` pushes FLAGS, CS and an IP that names the index
+; byte, and clears IF and TF. The door then
+;
+;   1. puts the caller's FLAGS back (`push [bp+6] / popf`) - IF as the caller
+;      had it. Rare cells ARE called with IF = 0: OSAPI_FSX_SPK inside
+;      os88spk.inc's pushf/cli window, OSAPI_MEM_COMPACT and OSAPI_MEM_P in
+;      the Task Manager's one-moment snapshot, and the kernel's own
+;      drv_task_x spawn (SPEC.md 20.3.3's audit), so the lean door's `sti`
+;      would open three critical sections. Four bytes against its one;
+;   2. reads the index through the caller's CS:IP and steps the stacked IP
+;      past it, so the `retf 2` lands on the instruction after the site;
+;   3. refuses an index this kernel has no word for: CF = 1 and AX = 1,
+;      everything else kept - OSAPI_XREFUSE's answer (SPEC.md 20.3.3);
+;   4. loads BP with the index's word and enters the BODY of the index's
+;      KIND, which the index's RANGE names: rd_tab is written in kind order
+;      (RDENT refuses anything else), so no kind byte is stored anywhere.
+;
+; The bodies are api_rs/_rsc/_rx/_rxc/_rn's past their `pop bp / mov bp,
+; [cs:bp]` heads, with the caller's BP under the frame as the cell's
+; `push bp` leaves it, and each ends in `retf 2`: the FLAGS slot is dropped
+; and the BODY's flags - its CF answer - are what the caller gets. Only the
+; kinds rd_tab has entries for are assembled.
+;
+; CYCLES (8088 clocks, each instruction at max(its clocks, 4 x its bytes),
+; PREDICTED; docs/plans/ksp19/door.md has the table): the RS path is 420
+; clocks around the routine - `int`, the door, the body's DS bank and
+; `call bp`, its tail and `retf 2` - against 227 for the six-byte rare cell
+; it replaces (+193, 40 us at 4.77 MHz) and 93 for a far call to a `cw_`
+; shim (+327, 69 us). Each kind the index's range passes on the way costs
+; one more compare and branch, +20.
+; =============================================================================
+%define RDK_RS  0               ; DS = KERNEL, a .text routine (api_rs's shape)
+%define RDK_RCS 1               ; ...a .cold routine (api_rsc's)
+%define RDK_RX  2               ; and ES = the caller's DS, .text (api_rx's)
+%define RDK_RCX 3               ; ...a .cold routine (api_rxc's)
+%define RDK_RN  4               ; the name at DS:SI staged, .cold (api_rn's)
+%assign rd_n 0
+%assign rd_k 0
+%assign rd_c0 0
+%assign rd_c1 0
+%assign rd_c2 0
+%assign rd_c3 0
+%assign rd_c4 0
+%macro RDENT 2                  ; %1 = RDK_*, %2 = the routine: its index is
+ %assign rd_kk %1               ; rix_<routine>
+ %if rd_kk < rd_k
+  %error "rd_tab: an entry out of KIND order - the door names the kind by the index's range (SPEC.md 20.3.3)"
+ %endif
+ %assign rd_k rd_kk
+rix_%2 equ rd_n
+    dw %2
+ %assign rd_n rd_n + 1
+ %assign rd_c%[rd_kk] rd_c%[rd_kk] + 1
+%endmacro
+
+; THE TABLE. Kernel size pass 19 (P4) put the kernel's own `cw_` shims here -
+; the rehearsal of T5 on traffic nothing outside the kernel sees: a shim was
+; `call X / retf`, four bytes, and its every far call site five. The ones
+; left as shims above are the drawing doors a repaint calls by the dozen
+; (gfx_fill, gfx_frame, font_run, the icons, the clip rows ...), where the
+; door's ~69 us a call would be paid per primitive; one that takes BP as an
+; input (wm_pkgcall), which the door cannot carry; and clk_snapshot, which
+; kern_dos's disk layer reaches with a stub of its own.
+rd_tab:
+    RDENT RDK_RS, app_launch
+%ifndef KERN_SMALL
+    RDENT RDK_RS, app_close_win
+    RDENT RDK_RS, inst_fhome_idx
+    RDENT RDK_RS, menu_activate
+    RDENT RDK_RS, menu_draw_bar
+    RDENT RDK_RS, task_spawn
+%endif
+%ifdef KERN_BIG
+    RDENT RDK_RS, cursor_hide
+    RDENT RDK_RS, cursor_show
+    RDENT RDK_RS, blk_relit
+    RDENT RDK_RS, inst_ptr
+    RDENT RDK_RS, vid_disp_of
+%endif
+%ifdef WM_ANIM
+    RDENT RDK_RS, inst_unmin
+%endif
+    RDENT RDK_RS, evq_mup
+    RDENT RDK_RS, inst_find_kind
+    RDENT RDK_RS, inst_win_owner
+    RDENT RDK_RS, menu_item_dis
+    RDENT RDK_RS, menu_popup
+    RDENT RDK_RS, mou_clamp
+    RDENT RDK_RS, snd_beep
+    RDENT RDK_RS, snd_disp_set
+    RDENT RDK_RS, wm_dmg_wins
+    RDENT RDK_RS, wm_hit
+    RDENT RDK_RS, wm_idx2ptr
+    RDENT RDK_RS, wm_paint_all
+    RDENT RDK_RS, wm_paint_dmg
+    RDENT RDK_RS, xm_release_rec
+    RDENT RDK_RS, wm_win_rect
+%if rd_n > 128
+ %error "rd_tab: the door compares index x 2 in one byte, so 128 entries at most"
+%endif
+RD_N        equ rd_n            ; rd_lim's immediate (fsx_rupf puts it back)
+%assign rd_b1 rd_c0             ; each kind's first index
+%assign rd_b2 rd_b1 + rd_c1
+%assign rd_b3 rd_b2 + rd_c2
+%assign rd_b4 rd_b3 + rd_c3
+
+os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP are the frame, the door banks DS and BX over the BP it pushes and each kind pops what it needs before a body that ends in `retf 2`
+    push bp                     ; the caller's BP, under the frame: every
+    mov bp, sp                  ; body's tail pops it
+    push word [bp+6]            ; [bp+2] IP, [bp+4] CS, [bp+6] FLAGS: the
+    popf                        ; caller's IF back (step 1 above)
+    push ds
+    push bx
+    lds bx, [bp+2]              ; DS:BX = the index byte
+    inc word [bp+2]             ; ...and the return steps past it
+    mov bl, [bx]
+    mov bh, 0
+.lim:                         ; kern_mega's real-mode FSX bracket writes 0
+    cmp bl, rd_n                ; over this immediate (fsx_rdownf), so every
+    jae .ref                  ; index refuses there (SPEC.md 53.2.3)
+    add bx, bx
+%ifdef RARE_COUNTERS            ; `make RARECNT=1` (kernel size pass 19, V7):
+    add word [ss:bx+rd_clo], 1  ; one 32-bit count an index
+    adc word [ss:bx+rd_chi], 0
+%endif
+    mov bp, [cs:bx+rd_tab]      ; BP = the routine
+%if rd_c0
+ %if rd_n > rd_b1
+    cmp bl, rd_b1 * 2
+    jae .k1
+ %endif
+    pop bx                      ; RS: the caller's DS is already where the
+    KDS                         ; body's `push ds` would put it
+    call bp
+%endif
+.tail:
+    pop ds
+    pop bp
+    retf 2
+.ref:
+    pop bx
+    pop ds
+    pop bp
+    mov ax, 1                   ; OSAPI_XREFUSE's answer
+    stc
+    retf 2
+.k1:
+%if rd_c1                       ; RCS: COLD_SEG:BP through api_far
+ %if rd_n > rd_b2
+    cmp bl, rd_b2 * 2
+    jae .k2
+ %endif
+    pop bx
+    KDS
+    push cs
+    call api_far
+    jmp short .tail
+%endif
+.k2:
+%if rd_c2                       ; RX: ES = the caller's DS
+ %if rd_n > rd_b3
+    cmp bl, rd_b3 * 2
+    jae .k3
+ %endif
+    pop bx
+    pop ds
+    push ds
+    push es
+    push ds
+    pop es
+    KDS
+    call bp
+.xtail:
+    pop es
+    pop ds
+    pop bp
+    retf 2
+%endif
+.k3:
+%if rd_c3                       ; RCX: ...and the routine .cold
+ %if rd_n > rd_b4
+    cmp bl, rd_b4 * 2
+    jae .k4
+ %endif
+    pop bx
+    pop ds
+    push ds
+    push es
+    push ds
+    pop es
+    KDS
+    push cs
+    call api_far
+ %if rd_c2
+    jmp short .xtail
+ %else
+    pop es
+    pop ds
+    pop bp
+    retf 2
+ %endif
+%endif
+.k4:
+%if rd_c4                       ; RN: api_rn's body, the frame API_RN_DSOFF
+    pop bx                      ; names
+    pop ds
+    push ds
+    push si
+    call api_cpname
+    KDS
+    call inst_vol_enter
+    mov si, api_name
+    push cs
+    call api_far
+    pop si
+    jmp .tail
+%endif
+%ifdef RARE_COUNTERS
+section .lowbss
+rc_lo:  resb OSAPI_TABLE_LEN    ; the rare CELLS' counts, a word at each cell's
+        resb 2                  ; offset (cells are six bytes apart or more)
+rc_hi:  resb OSAPI_TABLE_LEN + 2
+rd_clo: resw 128                ; low and high words of each index's count,
+rd_chi: resw 128                ; read off LOW_SEG by the V7 reading
+section .text
+%endif
 
 ; --- COLD-SIDE TRAMPOLINES (SPEC.md 2.6.2) -----------------------------------
 ; A call out of `.cold` into `.text` is five bytes (`call KERNEL_SEG:x`) where
@@ -8242,17 +8440,14 @@ ct_font_width:      call KERNEL_SEG:font_width
                     ret                     ; 3 / 4 sites
 ct_fpg_begin:       call KERNEL_SEG:fpg_begin
                     ret                     ; 4 / 3 sites
-ct_cw_inst_win_owner: call KERNEL_SEG:cw_inst_win_owner
-                    ret                     ; 5 / 4 sites
 ct_cw_gfx_xor_fill: call KERNEL_SEG:cw_gfx_xor_fill
                     ret                     ; 3 / 3 sites
 %ifndef KERN_BIG                ; (kern_big: the far call itself - above)
 ct_cw_wm_clip_test: call KERNEL_SEG:cw_wm_clip_test
                     ret                     ; - / 3 sites
-%else                           ; (kern_small: the far call itself - above)
-ct_cw_snd_beep:     call KERNEL_SEG:cw_snd_beep
-                    ret                     ; 4 / - sites
-%endif
+%endif                          ; (ct_cw_snd_beep and ct_cw_inst_win_owner
+                                ; went in kernel size pass 19: a near call
+                                ; is the 3 bytes the rare door's site is)
 ct_fpg_end:         call KERNEL_SEG:fpg_end
                     ret                     ; 3 / 3 sites
 ; (ct_cw_task_yield went in kernel size pass 13: 3 / 2 sites, a wash on

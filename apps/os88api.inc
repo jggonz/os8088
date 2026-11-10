@@ -78,6 +78,11 @@ KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
                             ; apps floppies) whenever the kernel moves
+OS88_RARE    equ 0x81       ; THE RARE DOOR's vector (SPEC.md 20.3.3): a rare
+                            ; cell is reached as `int OS88_RARE` and an index
+                            ; byte. The kernel owns it on every kernel, and
+                            ; DOS (SPEC.md 96.12) virtualises it for a DOS
+                            ; program; a package never hooks it
 
 ; =============================================================================
 ; DRAW FROM THE CONTENT ORIGIN. ALWAYS. (SPEC.md 11.96.12)

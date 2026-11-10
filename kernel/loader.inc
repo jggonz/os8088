@@ -234,7 +234,7 @@ ld_unreserve:
 %ifdef KERN_BIG
     COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
 %endif                          ; with it if nobody else is a widget (11.103.10)
-    call KERNEL_SEG:cw_xm_release_rec   ; DI = the record
+    KDOOR xm_release_rec                ; DI = the record
     call ld_slot
     call mem_free_owner_x
     mov bx, [ld_base]
@@ -1350,7 +1350,7 @@ ld_start:
                                 ; written into its head (SPEC.md 20.12.10)
     push word [snd_inst]        ; the outer dispatch's stamp
     mov di, [ld_rec]
-    call KERNEL_SEG:cw_snd_disp_set     ; DI = record: this instance is asking
+    KDOOR snd_disp_set                  ; DI = record: this instance is asking
 %ifdef KERN_MEGA
     call mega_pkgok             ; kern_big's DOS.O88 refuses here, in a toast
     jnc .pkgok                  ; raised under this launch's stamp, so step

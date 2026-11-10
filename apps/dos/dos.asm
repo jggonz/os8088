@@ -2944,6 +2944,31 @@ dos_prog_done:                      ; the INT 21h terminate path jumps here,
 ; program's to scribble on, and a save area the program can corrupt is worse
 ; than none, because it fails at restore time when nothing can be done.
 ; -----------------------------------------------------------------------------
+; dos_vslot - WHERE AH=25h WRITES and AH=35h READS vector AL: out ES:BX, its
+; IVT slot - or `dos_rarev`, ours, for OS88_RARE, the kernel's rare door
+; (SPEC.md 96.12, 20.3.3). That vector is how DOS.O88 - its INT 21h included
+; - and every other package reach the kernel, so the live one stays the
+; door and the program's goes here. kern_dos runs this same core (one binary,
+; both hosts) and virtualises it too. A slot and not "set it and ignore it",
+; because a program that sets a vector and reads it back must get what it
+; set; never reset, because a vector a program left set outlives it in DOS.
+; The two calls each wrote out the six-instruction walk to the slot, so
+; sharing it pays for the door's arm: the core is 2 bytes SHORTER (16,570),
+; kernel size pass 19. AL and DX kept
+dos_vslot:
+    xor bx, bx
+    mov es, bx
+    mov bl, al
+    shl bx, 1
+    shl bx, 1
+    cmp al, OS88_RARE
+    jne .r
+    push ds
+    pop es
+    mov bx, dos_rarev
+.r:
+    ret
+
 dos_save_machine:
     push ax
     push cx
@@ -3759,6 +3784,12 @@ dos_hvec:
 ; (PSP:000A) and, above it, the program's own NEAR return - so the way back is
 ; that near address under the PSP's CS: the far return's IP is overwritten
 ; with it, and `retf 2` drops it.
+dos_rarev:  dw 0, 0                 ; the program's OS88_RARE (dos_vslot):
+                                    ; four bytes of the padding dos_cpm's
+                                    ; `align 16` leaves, and not of the
+                                    ; core's bss - every host reserves
+                                    ; CORE_BSS_SIZE, and kern_dos's image
+                                    ; has no kilobyte to spare for them
     align 16
 dos_cpm:
     cmp cl, 0x24
@@ -4485,13 +4516,8 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; anything it likes and the machine still comes back.
     push bx
     push es
-    xor bx, bx
-    mov es, bx
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov [es:bx], dx
+    call dos_vslot                  ; ES:BX = the slot - the rare door's is
+    mov [es:bx], dx                 ; OURS (SPEC.md 96.12)
     ; ...and the PROGRAM's DS, off the frame - THROUGH THE STACK AND NOT
     ; THROUGH AX (SPEC.md 96.7.1.3). AH=25h answers nothing, so AX is the
     ; program's: `mov ax, [bp]` handed it back its own DS, and the idiom that
@@ -4509,12 +4535,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 .getvec:
     ; AH=35h: AL = the interrupt; out ES:BX = its handler.
     push ax
-    xor bx, bx
-    mov es, bx
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
+    call dos_vslot                  ; ES:BX = the slot (SPEC.md 96.12)
     mov ax, [es:bx+2]
     mov bx, [es:bx]
     mov [bp-6], ax                  ; ...the banked ES, as .getdta above

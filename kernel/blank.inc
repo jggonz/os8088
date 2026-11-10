@@ -776,7 +776,7 @@ ss_stop_x:
     mov al, SSV_STOP
     call ss_call
     call ct_cw_gfx_lock
-    call KERNEL_SEG:cw_blk_relit
+    KDOOR blk_relit
     call ct_cw_gfx_unlock       ; ...and FALLS INTO ss_reap_x: the image goes
                                 ; back, if nothing else has a use for it
                                 ; (SPEC.md 79.8)
@@ -921,7 +921,7 @@ ssf_set:
 .stop:
     mov [blk_sv], al            ; AL is still the 0 that brought us here
     call ss_stop_x
-    call KERNEL_SEG:cw_cursor_show
+    KDOOR cursor_show
     jmp short .ok
 .start:                         ; --- ss_start_x, above -----------------------
     cmp byte [ss_modes], 0      ; no mode ticked: blank the signal instead
@@ -954,7 +954,7 @@ ssf_set:
     call ct_cw_gfx_unlock       ; contract is "clobbers: flags"
     popf
     jc .no                      ; nothing loaded, so nothing to hide
-    call KERNEL_SEG:cw_cursor_hide
+    KDOOR cursor_hide
     mov al, 1                   ; ...and a byte store through AL is three
     mov [blk_sv], al            ; bytes where an immediate one is six
 .ok:
