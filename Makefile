@@ -21804,6 +21804,15 @@ pdxf: $(BUILD)/PDXF.MOD pdxf-host
 pdxf-host:
 	python3 apps/pagedesk/hosttest/pdx_check.py --build --limit 6.0
 	python3 apps/pagedesk/hosttest/pdx_chain.py --build
+# the parsers under ASan + UBSan on mutated font programs and CMaps (hosttest/pdx_fuzz.c)
+PDX_FUZZ_N ?= 300
+.PHONY: pdxf-fuzz
+pdxf-fuzz: | $(BUILD)
+	cc -std=gnu99 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk \
+		-o $(BUILD)/pdx_fuzz apps/pagedesk/hosttest/pdx_fuzz.c apps/pagedesk/pdmath.c
+	$(BUILD)/pdx_fuzz -n $(PDX_FUZZ_N) tests/pdfany/fonts/vera-sub.ttf tests/pdfany/fonts/vera.cff tests/pdfany/fonts/vera-cid.cff \
+		tests/pdfany/fonts/vera2048.cff tests/pdfany/fonts/t1-simple.pfa tests/pdfany/fonts/t1-hex.pfa
+	$(BUILD)/pdx_fuzz -c -n $(PDX_FUZZ_N)
 $(BUILD)/pdxf.o88: $(BUILD)/PDXF.MOD
 
 # the host harness and its independent readers (qpdf, mutool, Poppler); PDW_SHOTS
