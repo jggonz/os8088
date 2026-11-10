@@ -572,7 +572,12 @@ static int ovl_save_begin(const char *name, int kind)
         if (pdu_wkb > 40)
             pdu_wkb = 40;
     }
-    r = pdu_wrt_in_now();
+    if (pdu_kseg)                       /* plat: no foreign key yet (20.22.4.5) */
+        pd_fpokew(pdu_kseg, PDU_KS_WKEYS, 0);
+    pdu_pfm = kind == 0 && pdu_pgmap ? ovl_ifl_need() : 0;
+    pdu_pfk = 0;
+    pdu_pfl = pdu_pfm != 0;             /* the pre-flight brings PDWRT in */
+    r = pdu_pfl ? 0 : pdu_wrt_in_now();
     if (r) {
         pdu_say2("Could not save ", pdu_errtext(r));
         pdu_status_paint();
@@ -585,8 +590,12 @@ static int ovl_save_begin(const char *name, int kind)
      * source is the open document's 8.3 name; author stays "" (no author
      * preference in wave 1). */
     os88_strcpy(pdu_xsave.source, pdu_name, sizeof(pdu_xsave.source));
-    pdu_datestamp(pdu_xsave.date);
+    ovl_datestamp(pdu_xsave.date);
     pdu_xsave.mode = pdu_savemode[kind];
+    if (pdu_pfl) {                      /* plat: the pre-flight owns PDENG from */
+        pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);       /* here (20.22.4.5) */
+        pdu_xsave.mode |= PDW_OUT_REOPEN;
+    }
     pdu_savekind = kind;
     if (kind == 0) {                    /* edit (13.1.1): the user's marks */
         pdu_xsave.edits_seg = pdu_ed_seg();

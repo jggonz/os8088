@@ -34,7 +34,12 @@ disk in four geometries from `make pagedeskdisk` (`build/pagedesk.img` at
 1.44 MB, `pagedesk720.img`, `pagedesk120.img` at 1.2 MB, `pagedesk360.img`).
 The disk's root holds the program, `README.TXT`, `PDFONTS.TXT` (the font
 licence), the eight sample PDFs and, on every geometry but 360 KB,
-`PDFONTX.RES` (the other font sizes, optional). It is also in the everything
+`PDFONTX.RES` (the other font sizes, optional). At 360 KB the program fills
+a disk, so it is a PAIR: `pagedesk360.img` holds the program, `README.TXT`,
+`PDFONTS.TXT` and `HELLO.PDF`, and **`pagedesk360b.img`** every sample. Put
+the second disk in a drive and open from it with File > Open. The empty
+window's Sample guide looks beside the program, so on the 360 KB pair open
+`XTGUIDE.PDF` from the second disk instead. It is also in the everything
 set (`make allapps`) and on the live media.
 
 To open a document:

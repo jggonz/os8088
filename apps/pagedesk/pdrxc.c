@@ -106,6 +106,19 @@ static pdw x_call(pdw verb, pdw bx, pdw cx, pdw dx)
  * at a band's records only when there is one */
 static pdw g_xrm;
 #define x_rmark(m) (g_xrm |= (pdw)(1u << (m)))
+/* the image stash (20.22.7.10): KiB one band of each decoder's images can
+ * need, [0] PDX_IMG's and [1] PDX_JPX's, summed over this pass (an upper
+ * bound: 16 rows of at most 1 KiB an image). Only a pass that marked both
+ * decoders asks for it */
+static pdw g_iknd[2];
+static void ik_note(pdw k, pdi rows, pdw rb)
+{
+    if (rows > PD_BANDROWS) rows = PD_BANDROWS;
+    if (rows < 1) rows = 1;
+    if (!rb || rb > 1024) rb = 1024;
+    g_iknd[k] += (pdw)(((pdw)rows * rb + 1023) >> 10);
+    if (g_iknd[k] > 63) g_iknd[k] = 63;
+}
 
 /* ---- the extension cache ---------------------------------------------------- */
 /* pdrprim.inc: the offset of the bytes of the entry (kind, k0, k1) among

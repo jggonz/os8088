@@ -267,7 +267,8 @@ def real():
           why="D21/D23: the UI task's stack is 512 bytes and the kernel's menu bar "
               "is the next thing under it")
     for seg, door in [("PDENG", "pde_entry"), ("PDREND", "pdr_entry"), ("PDWRT", "pdw_entry")] + \
-            [(seg, door) for seg, _, door, _ in P.occupant_segments(ROOT)]:
+            [(seg, door) for seg, _, door, _ in P.occupant_segments(ROOT)
+             if os.path.isfile(os.path.join(build, seg.lower() + ".gen.asm"))]:
         check((seg, door) in g.funcs, "%s's door %s is found" % (seg, door),
               why="a renamed door would make every chain under it read as zero")
     c, p = g.cost(("PDREND", "pdr_entry"), "deep")

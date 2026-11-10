@@ -21,6 +21,8 @@ extern unsigned char pd_host_mem[];
 extern pdw pdrh_xbseg(void);
 extern pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 extern pdw pdx_cf, pdx_odx;
+/* pdrv.c's verb_init skips words 13 and 14 of pdxb_init (INI_GLYW) on a NEEDMEM re-INIT */
+typedef char pdx_ck_glyw[offsetof(struct pdxb_init, glyph_seg) == 26 && offsetof(struct pdxb_init, glyph_kb) == 28 ? 1 : -1];
 #define XMEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 
 pdw pdrh_slot;                      /* the occupant the harness "loaded"     */

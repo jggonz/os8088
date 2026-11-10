@@ -1,5 +1,4 @@
-/* ============================================================================
- * os8088 - apps/pagedesk/pdabi.h          PageDesk's ONE shared contract
+/* ===================================================================== * os8088 - apps/pagedesk/pdabi.h          PageDesk's ONE shared contract
  *
  * docs/PAGEDESK-SPEC.md is the authority; this file is its C side and
  * apps/pagedesk/pdabi.inc its assembly side. tools/os88pdabi.py --check
@@ -169,6 +168,7 @@ struct pd_view {
 #define PDMEM_OSW       2       /* PDENG: the object-stream window        */
 #define PDMEM_XC        3       /* PDREND: the extension cache            */
 #define PDMEM_X8        4       /* PDREND: 8-bit band, layer and mask     */
+#define PDMEM_GLYPH     5       /* PDREND: GROW the glyph claim, DX = KiB */
 #define PDM_ENTRY       8
 
 /* ---- verbs (PAGEDESK-SPEC 3.5) ------------------------------------------
@@ -684,7 +684,23 @@ struct pdxb_img {
 
 /* ---- reserved blocks: each agent defines its own structs ONLY here ------ */
 /* [eng 20.22.3]    */
+#define PDRL_DIRECT  0x0001 /* pdxb_reslookup_x.rflags: the resource is written
+                               DIRECTLY in another object (an inline dictionary) */
+struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
+                               reads the pdxb_reslookup and writes all of this */
+    struct pdxb_reslookup rl;
+    pdw  rflags;            /* out: PDRL_*                                */
+    pdw  cnum, cgen;        /* out (PDRL_DIRECT): the object it is written in */
+    struct pd_u32 coff;     /* out (PDRL_DIRECT): where the value starts in that
+                               object's PDRC_EXACT RAW_COPY bytes (20.22.3.8) */
+};
 /* [crypt 20.22.5]  */
+#define PDRC_STRCIPHER 0x0100 /* OR-ed into pdxb_rawcopy.mode on return from RAW_COPY PDRC_PLAIN of an object of an ENCRYPTED document:
+                                 the dictionary's strings are still ciphertext, encrypted under (objnum, gen) with the document's string
+                                 method (pdxb_crypt.str of CRYPTINFO); the caller decrypts them (20.22.5). The
+                                 flag rides in the HIGH byte, so a caller that feeds the struct back
+                                 unchanged is still PDRC_PLAIN: the engine compares (mode & 0xFF) */
+#define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
 /* [wrt 20.22.4]    */
 #define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
                                     before the job: the keys of the ENCRYPTED foreign
@@ -758,7 +774,154 @@ struct pdxb_emark {
     pdw  n, more;           /* out: words of ops; 1 = call again           */
 };
 /* [gfx 20.22.9]    */
+/* ---- gfx (PAGEDESK-SPEC 20.22.9): PDXG's verbs and its cache records ----- */
+#define PDV_GFX_CS      0xC8 /* compile a colour space. XB: pdxb_gfx           */
+#define PDV_GFX_COLOR   0xC9 /* one operand set through a MODULE space          */
+#define PDV_GFX_LUT     0xCA /* an image colour-space LUT                       */
+#define PDV_GFX_SHADE   0xCB /* a shading as flat polygon records (PDGX_REC_*)  */
+#define PDV_GFX_PAT     0xCC /* a tiling pattern's parameters                   */
+#define PDV_GFX_FN      0xCD /* evaluate one function                           */
+#define PDV_GFX_DASH    0xCE /* rcore's dash walker (pdxdash.c)                 */
+#define PDV_GFX_EDIT    0xCF /* rcore's edit-store marks (pdxedit.c)            */
+#define PDGX_CSBYTES    1264 /* sizeof(struct pdgx_cs): an XCK_CS entry          */
+#define PDGX_LUTBYTES   1028 /* sizeof(struct pdgx_lut): an XCK_LUT entry        */
+#define PDGX_SRCMAX     480
+#define PDGX_K_GRAY 1
+#define PDGX_K_RGB 2
+#define PDGX_K_CMYK 3
+#define PDGX_K_CALGRAY 4
+#define PDGX_K_CALRGB 5
+#define PDGX_K_LAB 6
+#define PDGX_K_INDEXED 7
+#define PDGX_K_SEP 8
+#define PDGX_K_DEVN 9
+#define PDGX_K_PATTERN 10
+#define PDGX_F_TABLE    0x01 /* rgb[] is valid: a 1-component space           */
+#define PDGX_F_RGBLIKE  0x02 /* operands are device RGB (ICC N=3)              */
+#define PDGX_F_CMYKLIKE 0x04 /* operands are device CMYK (ICC N=4)             */
+#define PDGX_F_MODULE   0x08 /* convert with PDV_GFX_COLOR                     */
+#define PDGX_F_NONE     0x10 /* Separation /None: paints nothing               */
+#define PDGX_F_PATTERN  0x20 /* a Pattern space; n = the underlying's (0 = none) */
+struct pdgx_cs {
+    pdb  kind, n, flags, pad;
+    pdw  hival;                 /* Indexed                                    */
+    pdw  srcobj, srcgen;        /* the source object, 0 = the text in src[]   */
+    pdw  srclen;                /* bytes of src[]                             */
+    pdw  rsv[2];
+    pdb  src[480];
+    pdb  rgb[768];              /* index (or round(c * 255)) -> r, g, b       */
+};
+#define PDGX_LUT_INVERT 0x01    /* grey = 255 - sat(sum of the tables)         */
+struct pdgx_lut {
+    pdb  ncomp, flags;
+    pdw  pad;
+    pdb  t[1024];             /* four tables of 256 */
+};
+/* PDV_GFX_SHADE paints a shading as FLAT POLYGONS (20.22.9): a gradient is bands, a mesh is triangles cut into
+ * flat sub-triangles, so PDREND needs no shading rasteriser - each record is one ordinary fill. The answer is a
+ * run of records in the caller's buffer (rseg:roff, rlen bytes, ntri records):
+ *     pdb r, g, b;  pdb flags (bit 0: a CLIP polygon, the shading's /BBox - clip to it, fill nothing);
+ *     pdb npts;     pdb n1  (0, or the length of the first contour: the rest is a second contour, wound the
+ *                            other way - a ring);   then npts x { pdi x, y }  device quarter-pixels,
+ *     already through the CTM and clamped to +-16000. Fill rule nonzero. More to come: AX = PDE_BUSY and state. */
+#define PDGX_REC_HDR   6
+#define PDGX_REC_CLIP  0x01
+struct pdxb_gfx {
+    pdw  objnum, gen;           /* in: the object; 0 = the text below          */
+    pdw  tseg, toff, tlen;      /* in: direct syntax (<= 1,024 bytes)           */
+    pdw  rseg, roff, rcap;      /* in: the result buffer                        */
+    pdw  rlen;                  /* out: bytes written there                     */
+    pdw  flags, bpc, state;
+    pdw  cseg, coff;            /* PDV_GFX_COLOR: the pdgx_cs entry             */
+    pdw  ncomp, kind, ntri, ok; /* out                                          */
+    struct pd_fx comp[8];       /* in: operands or /Decode; out: PDV_GFX_FN     */
+    pdb  rgb[4];                /* out: r g b, byte 3 = 1 when nothing is painted */
+    struct pd_mat ctm;          /* SHADE: user space -> device quarter-pixels   */
+    pdi  clip[4];               /* SHADE: the device clip in pixels, inclusive: x0 y0 x1 y1 */
+    pdw  steps;                 /* SHADE: bands over a gradient's range (0 = 32) */
+};
+/* PDV_GFX_PAT (20.22.9). Step 1 (the pattern's name, as PDGXI_RES with PDGXI_CAT_PAT) writes a struct pdgx_pat
+ * to rseg:roff. Step 2 (PDGXI_TILES; the entry at cseg:coff, ctm = the page's DEFAULT matrix, clip = the device
+ * clip) answers ctm = the pattern matrix x the default matrix (a tiling pattern: that of its first tile); a tiling pattern also the tile counts ni = ncomp,
+ * nj = kind (0: too many, draw nothing) and comp[0..3] = the device step of one tile along i (x y) and along j (x y),
+ * comp[4..5] = the first tile's i, j; a shading pattern is painted with PDV_GFX_SHADE on
+ * the entry's objnum/gen and that ctm. */
+#define PDGX_PATBYTES  56
+#define PDGX_PAT_OBJ   4        /* byte offsets of struct pdgx_pat that PDREND reads from the cache entry */
+#define PDGX_PAT_BBOX  32
+#define PDGX_PAT_DIRECT 0x01    /* a shading pattern whose /Shading is direct: not supported (objnum = 0) */
+#define PDGX_TILEMAX   40       /* tiles in one fill */
+struct pdgx_pat {
+    pdb  ptype, paint, flags, pad;      /* /PatternType (1 tiling, 2 shading), /PaintType (1 coloured, 2 not) */
+    pdw  objnum, gen;                   /* tiling: the pattern's stream; shading: the /Shading object          */
+    struct pd_fx matrix[6];             /* /Matrix                                                            */
+    struct pd_fx bbox[4];               /* tiling: /BBox                                                      */
+    struct pd_fx xstep, ystep;          /* tiling                                                             */
+};
+#define PDGXI_DECODE 0x0001     /* comp[] holds /Decode, 2 per component        */
+#define PDGXI_CAT_CS  0x0100     /* with PDGXI_RES: the resource category, flags bits 8-11 (tlen counts the name and its NUL) */
+#define PDGXI_CAT_SH  0x0200
+#define PDGXI_CAT_PAT 0x0300
+#define PDGXI_TILES  0x0004     /* PDV_GFX_PAT step 2 */
+#define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
+                                   index is bpc), the name is at tseg:toff               */
+typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
+typedef char pdgx_sz_lut[sizeof(struct pdgx_lut)   == PDGX_LUTBYTES ? 1 : -1];
+typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
 /* [blend 20.22.10] */
+/* PDX8, the transparency part (20.22.10.11): loaded into the PDMEM_X8 region at its
+ * base, door at x8_seg:8, planes at x8_seg:PDX8_RES. It holds the ExtGState parse, the
+ * tuple pool and the record writers (interpretation time) and the compositor (raster
+ * time). 0xD0 is free again (PDXG no longer carries pdxgtr.c). */
+#define PDM_MAGIC_X8    0x3850  /* 'P8' */
+#define PDX8_RES        16384   /* the part's image + bss at most; the planes follow it */
+#define PDX8_ENGVEC     12      /* header +12: eng_off, +14: eng_seg (plat binds them at load) */
+#define PDV_X8_INIT     0xD1    /* BX = the region's segment, CX = its KiB, DX = the XB seg */
+#define PDV_X8_CTL      0xD2    /* BX = X8C_*; CX, DX                       */
+#define PDV_X8_SPAN     0xD3    /* BX = y, CX = xa, DX = xb (band relative) */
+#define PDV_X8_GS       0xD4    /* BX = tuple in force, CX = ExtGState obj, DX = gen */
+#define PDV_X8_REC      0xD5    /* BX = DL offset of an XSTATE/GROUP record */
+#define PDV_X8_IMG      0xD6    /* BX = X8I_*                               */
+#define PDV_X8_DEF      0xD7    /* BX = X8D_*: the record writers           */
+#define X8C_BAND        0       /* XB: pdxb_x8band                          */
+#define X8C_BEGIN       1       /* CX = y0, DX = y1: a strip of at most 8 rows */
+#define X8C_END         2       /* quantise the strip into the band; out CX = X8F_* */
+#define X8C_LUM         3       /* CX = the colour of the marks that follow */
+#define X8C_MKEND       4       /* the mask block ended; out AX = resume offset */
+#define X8C_PASS        5       /* interpretation begins: CX = the viewport's top row */
+#define X8C_WANT        6       /* CX..DX = the rows of a band: AX = 1 when any is composed in 8 bits */
+#define X8I_SET         0       /* XB: pdxb_x8img                           */
+#define X8I_ROW         1       /* CX = y; XB: pdxb_x8row                   */
+#define X8I_END         2
+#define X8D_STATE       0       /* CX = 0 fill / 1 stroke, DX = the tuple: out AX = bytes of XSTATE record at XB (0 none), DX bit 0 = the mark is transparent, bit 1 = transparency is live */
+#define X8D_MARK        1       /* CX = y0, DX = y1: rows a transparent mark touches */
+#define X8D_GROUP       2       /* XB: pdxb_x8grp: a Form begins; out AX = bytes of record at XB, CX bit 0 = reset the last STATE, bit 1 = the tuple is now 0 */
+#define X8D_GEND        3       /* CX = the frame, DX = DL length: out AX = bytes of record at XB; CX = the MASKB offset to patch (0 none), DX = the length to write there */
+#define X8D_NOMASK      4       /* the mask's form would not open: out AX = the tuple without it */
+#define X8F_LIMIT       1       /* PDF_INC_LIMIT                            */
+#define X8F_TRANSP      2       /* PDF_INC_TRANSP                           */
+struct pdxb_x8band {
+    pdw  dls, dllen;        /* the display list: segment and length         */
+    pdi  bx0, by0;          /* the band's origin in page pixels             */
+    pdw  bw;                /* its width (at most 768)                      */
+    pdw  bseg, bstride, bpp;
+    pdi  pgx0, pgy0, pgx1, pgy1;    /* the page rectangle                   */
+};
+struct pdxb_x8grp {
+    pdw  frame, obj, gen;   /* the Form frame (g_nfr), the Form             */
+    pdw  tuple, dllen;      /* the tuple in force; the list's length        */
+    pdi  y0, y1;            /* the rows the group's clip covers             */
+    pdw  maskpend;          /* the Form is a soft mask's /G                 */
+};
+struct pdxb_x8img {
+    pdw  obj, gen, flags;   /* the image object; the image record's flags   */
+    pdi  xl, yt, wq, hq;    /* the image rectangle, quarter pixels          */
+    pdi  x0, x1, ry0, ry1;  /* columns and rows of this strip               */
+};
+struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
+    pdi  x0, x1;
+    pdw  sseg, soff, sw, xlo, xhi, slo, shi, smode, inv;
+};
 /* [fonts 20.22.8]  */
 /* PDXF does everything a font needs from the FONT DICTIONARY: PDREND names the
  * font object and a character code, never a program, an encoding or a CMap. */
@@ -789,12 +952,6 @@ struct pdxb_emark {
 #define PDFB_GLYPHKB 40         /* the glyph claim PDREND asks for (PDMEM_GLYPH) the first time a page
                                    needs a block; the primary gives 40, else 32, else refuses (the
                                    font is then drawn in the substitute face, PDF_INC_APPROX)      */
-#ifndef PDMEM_GLYPH
-#define PDMEM_GLYPH 5           /* PDREND: GROW the glyph claim (not a region of X): DX = KiB. The
-                                   primary regrows it and re-INITs PDREND (glyph_seg/glyph_kb may
-                                   change; the page view goes on) AND the slot occupant, which reads
-                                   the same two fields (20.22.8). Number asked of the lead          */
-#endif
 #define PDFB_KEYS   3328
 #define PDFB_INFO   3584
 #define PDFB_T3REC  512         /* a Type 3 block (em64 = 0 only, so no bitmaps): CharProc (u16 obj, u16 gen) of slot s at
@@ -850,6 +1007,19 @@ struct pdxb_fpath {
     pdw err;
 };
 /* [img 20.22.11-13]*/
+/* bilevel (20.22.12): follows pdxb_img in the XB, filled from /DecodeParms  */
+struct pdxb_imgx {
+    pdw  k;                 /* /K (CCITT), as a signed 16-bit value        */
+    pdw  cols;              /* /Columns (0 = 1728)                         */
+    pdw  rows;              /* /Rows (0 = the image's /Height)             */
+    pdw  flags;             /* CCF_*                                       */
+    pdw  globals;           /* JBIG2: non-zero if /JBIG2Globals exists     */
+    pdw  reserved;
+};
+#define CCF_EOL     1       /* /EndOfLine                                  */
+#define CCF_ALIGN   2       /* /EncodedByteAlign                           */
+#define CCF_EOB     4       /* /EndOfBlock (default true)                  */
+#define CCF_BLACK1  8       /* /BlackIs1                                   */
 #define PDIMG_NATIVE 0x0004 /* in: the /ColorSpace is not a device space: deliver
                                PDIM_N8 in the image's own components (20.22.11) */
 #define PDJ_ALPHA 0x0100    /* jpx: flags bit - deliver the codestream's own alpha
@@ -866,5 +1036,9 @@ typedef char pdabi_sz_tmg [sizeof(struct pdtm_glyph) == 12 ? 1 : -1];
 typedef char pdabi_sz_npg [sizeof(struct pd_newpage) == 10 ? 1 : -1];
 typedef char pdabi_sz_tok [sizeof(struct pdxb_token) <= PD_XB_BYTES ? 1 : -1];
 typedef char pdabi_sz_dg  [sizeof(struct pdxb_dictget) <= PD_XB_BYTES ? 1 : -1];
+typedef char pdabi_sz_x8b [sizeof(struct pdxb_x8band) == 24 ? 1 : -1];
+typedef char pdabi_sz_x8g [sizeof(struct pdxb_x8grp)  == 16 ? 1 : -1];
+typedef char pdabi_sz_x8r [sizeof(struct pdxb_x8row) == 22 ? 1 : -1];
+typedef char pdabi_sz_x8i [sizeof(struct pdxb_x8img) == 22 ? 1 : -1];
 
 #endif /* PDABI_H */

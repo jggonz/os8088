@@ -111,6 +111,7 @@ static void col_set(pdw stroke, pdw r, pdw g, pdw b)
 static void col_apply(pdw stroke, pdw nop)
 {
     pdw a, b, c, k, base;
+    XG_DEVCOL(stroke);                        /* a device colour ends a non-device space (pdrxg.c) */
     if (g_nop < nop) return;                 /* too few operands: ignored (10.6 is for features) */
     base = g_nop - nop;
     if (nop == 1) { a = fx_u8(&g_opn[base]); col_set(stroke, a, a, a); }
@@ -334,7 +335,7 @@ static void t3_queue(pdw blk, pdw slot);
 static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
 {
     pdw boff, h, i, k, ip;
-    g_ek = syn_find(g_fk[GS.font].objnum, g_fk[GS.font].gen, px);
+    g_ek = syn_find(f->objnum, f->gen, px);
     if (g_ek == 0xFFFF) return 0;
     boff = syn_off(g_ek);
     h = (pdw)((code ^ (code >> 7)) & 127);
@@ -348,7 +349,7 @@ static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
     if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
     return 1;
 }
-/* the miss, once per code and size (PDREND's second code segment): the glyph claim's growth
+/* the miss, once per code and size (once rcore's PDRENDC lands, a candidate for it: pdrovl.h): the glyph claim's growth
  * (PDMEM_GLYPH: a 24 KiB claim has no blocks), the module (the ladder), then ONE PDXF call that
  * finds or makes the block, rasterises the glyph into it and answers; PDE_NEEDMEM from PDXF is its
  * workspace (PDMEM_SLOT) and is relayed. A refusal draws the font in the substitute face */
@@ -361,14 +362,17 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
         goto refuse;
     }
     if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
-    g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+    g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
     g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_passes;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
     r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
     if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
-    if (!x_cf) return emb_hit(f, code, px);
-    pd_fcopy_in(g_xb, 0, &g_fgl, sizeof g_fgl);
-    if (g_fgl.err == PDFE_SIZE) bit = PDF_INC_APPROX;
+    if (!x_cf) {
+        if (emb_hit(f, code, px)) return 1;
+        inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face */
+        return 0;
+    }
+    if (r == PDE_LIMIT) bit = PDF_INC_APPROX;          /* PDFE_SIZE: the program is larger than the workspace */
 refuse:
     if (f->emb == 2) f->ok = 0;
     f->emb = 0; g_fwdirty = 1;
@@ -601,6 +605,7 @@ static void do_form(pdw obj, pdw gen)
     if (g_afm) pdm_mat_mul(&GS.ctm, &g_am, &GS.ctm);
     pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
     if (hasbox) rect_clip_user(&bx0, &by0, &bx1, &by1);
+    xb_group_begin(obj, gen);               /* blend: a soft mask's /G or a transparency group (20.22.10.4) */
 }
 
 /* ---- images ---------------------------------------------------------------- */
@@ -655,7 +660,11 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = (pdb)codec;
     if (py0 < GS.cy0) py0 = GS.cy0;
     if (py1 > GS.cy1) py1 = GS.cy1;
-    if (codec) x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);   /* its occupant draws it */
+    if (flags & 0x60) xb_rows(py0, py1);   /* blend: an image with a mask (20.22.10.3) */
+    if (codec) {                                /* its occupant draws it */
+        x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);
+        ik_note((pdw)(codec == PDCD_JPX), (pdi)(py1 - py0 + 1), (pdw)(W * ncomp));
+    }
     hdr_set(DLR_IMAGE, 0, (pdw)(DLH + DLI_BODY + extra), py0, py1);
     return dl_put(g_hdr, DLH, body, DLI_BODY);
 }
@@ -765,12 +774,31 @@ static struct pd_fx *opn(pdw back)    /* the operand `back` from the end (1 = la
 }
 
 static void setfx(struct pd_fx *d, pdw back) { pdr_cpy(d, opn(back), 4); }
+#ifndef PDR_NOXG
+#include "pdrxg.c"            /* gfx: colour spaces and shading (20.22.9) */
+#endif
+#ifndef XG_CS
+#define XG_CS(st) 0
+#endif
+#ifndef XG_SC
+#define XG_SC(st, nop) 0
+#endif
+#ifndef XG_SH
+#define XG_SH() inc_note(PDF_INC_SHADE, "shading")
+#endif
+#ifndef XG_FILL
+#define XG_FILL(rule, st) (fill_path(rule), 0)
+#endif
+#ifndef XG_TILE_NEXT
+#define XG_TILE_NEXT() 0
+#endif
+
 static void paint(pdw fill, pdw rule, pdw stroke, pdw close)
 {
     if (close) path_close();
     if (g_plimit) { inc_note(PDF_INC_LIMIT, "path size"); g_plimit = 0; }
     if (g_mode == PDR_INTERP) {
-        if (fill) fill_path(rule);
+        if (fill && XG_FILL(rule, stroke)) stroke = 0;       /* a pattern fill strokes first and answers 1 */
         if (stroke) stroke_path();
     }
     if (g_pclip) clip_apply(g_pclip - 1);
@@ -809,6 +837,7 @@ static pdw dash_ph(const struct pd_fx *v)
     q = (pdw)v->hi % per;
     return (pdw)((q * 4u + (v->lo >> 14)) % per);
 }
+
 static void exec_op(const char *s, pdw n)
 {
     pdw k = (pdw)((pdb)s[0] | (n > 1 ? ((pdb)s[1] << 8) : 0));
@@ -879,7 +908,8 @@ static void exec_op(const char *s, pdw n)
             pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
             break;
         case 'r' | ('e' << 8): op_re(); break;
-        case 'g' | ('s' << 8): case 'r' | ('i' << 8): break;
+        case 'g' | ('s' << 8): xb_gs(); break;                    /* blend (20.22.10.4); a no-op without PDR_X8 */
+        case 'r' | ('i' << 8): break;
         case 'f' | ('*' << 8): paint(1, 1, 0, 0); break;
         case 'B' | ('*' << 8): paint(1, 1, 1, 0); break;
         case 'b' | ('*' << 8): paint(1, 1, 1, 1); break;
@@ -888,6 +918,7 @@ static void exec_op(const char *s, pdw n)
         case 'r' | ('g' << 8): col_apply(0, 3); GS.fncs = 3; break;
         case 'C' | ('S' << 8): case 'c' | ('s' << 8): {
             pdw st = (s[0] == 'C');
+            if (XG_CS(st)) break;
             if (g_havename && ci_has(g_name, "devicegray")) { if (st) GS.sncs = 1; else GS.fncs = 1; }
             else if (g_havename && ci_has(g_name, "devicergb")) { if (st) GS.sncs = 3; else GS.fncs = 3; }
             else if (g_havename && ci_has(g_name, "devicecmyk")) { if (st) GS.sncs = 4; else GS.fncs = 4; }
@@ -896,6 +927,7 @@ static void exec_op(const char *s, pdw n)
             break; }
         case 'S' | ('C' << 8): case 's' | ('c' << 8): {
             pdw st = (s[0] == 'S');
+            if (XG_SC(st, g_nop)) break;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "colour space");
             break; }
@@ -940,7 +972,7 @@ static void exec_op(const char *s, pdw n)
         case 'D' | ('o' << 8): do_xobject(); break;
         case 'B' | ('I' << 8): case 'I' | ('D' << 8): case 'E' | ('I' << 8): break;   /* pdri handles */
         case 'E' | ('X' << 8): case 'B' | ('X' << 8): case 'M' | ('P' << 8): case 'D' | ('P' << 8): break;
-        case 's' | ('h' << 8): inc_note(PDF_INC_SHADE, "shading"); break;
+        case 's' | ('h' << 8): XG_SH(); break;
         case 'd' | ('0' << 8): case 'd' | ('1' << 8): break;
         default: goto unknown;
         }
@@ -952,6 +984,7 @@ static void exec_op(const char *s, pdw n)
         if (k == ('E' | ('M' << 8)) && c2 == 'C') return;
         if ((k == ('S' | ('C' << 8)) || k == ('s' | ('c' << 8))) && c2 == 'N') {
             pdw st = (s[0] == 'S');
+            if (XG_SC(st, g_nop)) return;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "pattern colour");
             return;
@@ -1165,6 +1198,8 @@ static pdw frame_end(void)
     PDR_T3_FRAME_END();
     strm_close();
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
+        if (XG_TILE_NEXT()) return 1;
+        xb_group_end();                                 /* blend: the group or mask block ends */
         while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
         g_gsover = g_fr[g_nfr].gsover;
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;

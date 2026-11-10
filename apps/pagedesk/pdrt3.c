@@ -33,27 +33,22 @@ static void t3_queue(pdw blk, pdw slot)
 static pdw t3_drain(void)
 {
     static struct pd_mat fm, dev;
-    static struct pd_fx sx;
-    pdw boff, rp, obj, gen, i, afm;
-    struct pd_fx *p;
+    pdw boff, i, afm;
     if ((g_t3f && g_t3fp == g_passes && g_t3f <= g_nfr) || g_nop || g_arrd || g_inl || g_dictd) return 0;
     while (g_t3n) {
         pd_fcopy_in(g_gseg, (pdw)((g_t3h & (T3_QMAX - 1)) * 12), g_t3q, 12);
         g_t3h++; g_t3n--;
         if (g_t3q[0] != g_passes) continue;                     /* left over by an earlier pass */
         boff = syn_off((pdw)(g_t3q[1] >> 8));
-        rp = (pdw)(boff + PDFB_T3REC + (((g_t3q[1] & 255) - 1) << 2));
-        obj = pd_fpeekw(g_gseg, rp); gen = pd_fpeekw(g_gseg, (pdw)(rp + 2));
-        if (!obj) continue;
-        p = &fm.a;
-        for (i = 0; i < 6; i++) {                               /* FontMatrix x diag(fs*Th, fs) */
-            p[i].lo = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_T3FM + (i << 2))); p[i].hi = (pdi)pd_fpeekw(g_gseg, (pdw)(boff + PDFB_T3FM + (i << 2) + 2));
-            if (i & 1) pdm_fx_mul(&p[i], &p[i], &GS.fs);
-            else { pdm_fx_mul(&sx, &GS.fs, &g_thk); pdm_fx_mul(&p[i], &p[i], &sx); }
-        }
-        pdr_cpy(&dev.a, &g_M.a, 16); pdr_cpy(&dev.e, &g_t3q[2], 4); pdr_cpy(&dev.f, &g_t3q[4], 4);
+        pd_fcopy_in(g_gseg, (pdw)(boff + PDFB_T3REC + (((g_t3q[1] & 255) - 1) << 2)), g_t3q, 4);   /* the CharProc */
+        if (!g_t3q[0]) continue;
+        pd_fcopy_in(g_gseg, (pdw)(boff + PDFB_T3FM), &fm, 24);  /* FontMatrix: 6 x (lo, hi), a pd_mat */
+        pdm_mat_ident(&dev);                                    /* x diag(fs*Th, fs) */
+        pdm_fx_mul(&dev.a, &GS.fs, &g_thk); pdr_cpy(&dev.d, &GS.fs, 4);
+        pdm_mat_mul(&fm, &fm, &dev);
+        pdr_cpy(&dev.a, &g_M.a, 16); pdr_cpy(&dev.e, &g_t3q[2], 8);   /* the device matrix at the pen */
         afm = g_afm; g_afm = 0; i = g_nfr;                      /* a CharProc is a form with no /Matrix or /BBox */
-        do_form(obj, gen);
+        do_form(g_t3q[0], g_t3q[1]);
         g_afm = afm;
         if (g_nfr == i) continue;                               /* refused: do_form noted why */
         pdm_mat_mul(&GS.ctm, &fm, &dev);

@@ -65,12 +65,33 @@ static pdw img_xopen(pdw m, const pdb *b, pdi wq, pdi hq)
     return 1;
 }
 
+/* ---- the image stash (PAGEDESK-SPEC 20.22.7.10) ------------------------------
+ * One slot holds one decoder, and a band can need two (a JPEG and a JPX whose
+ * rows meet). Before such a band is walked, the decoder IN the slot decodes
+ * the rows the band shows of each of its images into the extension cache,
+ * above what the cache holds; then the other decoder is asked for and the
+ * band is walked once, in the list's order, its images read from the stash.
+ * One module load a band, alternating, and the walker is not touched. */
+#define PDR_NIK 6                       /* stashed images a band               */
+#define IK_BOTH ((1u << PDX_IMG) | (1u << PDX_JPX))
+static struct pdr_ik { pdw off, soff, w, h, rb, mode, nc, err; pdi y0, y1; } g_iks[PDR_NIK];
+static pdw g_ikn, g_ikb, g_ikdec;       /* entries; band + 1 they are for (0 none); their decoder */
+static pdw g_ikask;                     /* the XC size last asked for it, this page view */
+static pdw g_bcur;                      /* the band being drawn (the pass machine's)    */
+static pdw ik_find(pdw off)
+{
+    pdw i;
+    if (g_ikb != (pdw)(g_bcur + 1)) return PDR_NIK;
+    for (i = 0; i < g_ikn; i++) if (g_iks[i].off == off) return i;
+    return PDR_NIK;
+}
+
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
     static pdb b[DLI_BODY];
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
-    pdw W, H, bpc, ncomp, flags, rb, sm, obj, gen, inl, m;
+    pdw W, H, bpc, ncomp, flags, rb, sm, obj, gen, inl, m, k = PDR_NIK, mode, onc;
     (void)len;
     pd_fcopy_in(g_dls, off + DLH, b, DLI_BODY);
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
@@ -85,15 +106,29 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (hq < 1) hq = 1;
     if (!W || !H || W > 4096 || H > 0x7FFF) return;
     if (m) {
-        if (!x_have(m)) { inc_note(PDF_INC_MODULE, x_name[m]); return; }   /* refused, or the band's other decoder (x_rneed) */
-        if (!g_iopen || g_icodec != m || g_iobj != obj || g_igen != gen) {
-            g_iobj = obj; g_igen = gen;
-            if (!img_xopen(m, b, wq, hq)) { inc_note(PDF_INC_IMAGE, "image decoder"); return; }
+        k = ik_find(off);
+        if (k < PDR_NIK) {                     /* decoded before the walk (20.22.7.10) */
+            if (g_iks[k].err) {
+                if (g_iks[k].err == 1) inc_note(PDF_INC_IMAGE, "image decoder");
+                else if (g_iks[k].err == 2) inc_note(PDF_INC_LIMIT, "image stash");
+                return;
+            }
+            W = g_iks[k].w; H = g_iks[k].h; rb = g_iks[k].rb; mode = g_iks[k].mode; onc = g_iks[k].nc;
+        } else {
+            if (!x_have(m)) {                  /* refused; or no room to stash the band's other decoder */
+                if (g_ikb == (pdw)(g_bcur + 1) && g_ikdec == m) inc_note(PDF_INC_LIMIT, "image stash");
+                else inc_note(PDF_INC_MODULE, x_name[m]);
+                return;
+            }
+            if (!g_iopen || g_icodec != m || g_iobj != obj || g_igen != gen) {
+                g_iobj = obj; g_igen = gen;
+                if (!img_xopen(m, b, wq, hq)) { inc_note(PDF_INC_IMAGE, "image decoder"); return; }
+            }
+            W = g_xi.out_w; H = g_xi.out_h; rb = g_xi.rowbytes; mode = g_xi.out_mode; onc = g_xi.out_ncomp;
         }
-        W = g_xi.out_w; H = g_xi.out_h; rb = g_xi.rowbytes;
-        sm = g_xi.out_mode == PDIM_GREY8 ? 1 : g_xi.out_mode == PDIM_BITS1 ? ((flags & 1) ? 3 : 0) : 4;
-        if (g_xi.out_ncomp != ncomp) flags &= ~8;  /* a LUT is for the space's own samples */
-        ncomp = g_xi.out_ncomp; bpc = 8;
+        sm = mode == PDIM_GREY8 ? 1 : mode == PDIM_BITS1 ? ((flags & 1) ? 3 : 0) : 4;
+        if (onc != ncomp) flags &= ~8;         /* a LUT is for the space's own samples */
+        ncomp = onc; bpc = 8;
         flags &= ~2;                           /* the occupant applied /Decode */
     } else {
         /* the row in bytes, without a 16-bit product that can wrap: W x ncomp
@@ -123,6 +158,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+#ifdef PDR_X8
+    if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+#endif
     pdr_ip.nc = ncomp; pdr_ip.bpc = bpc;
     pdr_ip.lseg = (flags & 8) ? g_xcseg : 0; pdr_ip.loff = (pdw)r16(b + 24);
     pdr_ip.lflags = (flags & 8) ? b[26] : (ncomp == 4);
@@ -133,7 +171,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
         else if (qy >= yb) sr = (pdi)(H - 1);
         else sr = pdr_muldiv((pdi)(qy - yt), (pdi)H, hq);
         if (sr >= (pdi)H) sr = (pdi)(H - 1);
-        if (m) {
+        if (k < PDR_NIK) {
+            if (y < g_iks[k].y0 || y > g_iks[k].y1) continue;
+        } else if (m) {
             if (sr < g_icur && !img_xopen(m, b, wq, hq)) return;
             if (sr != g_icur) {
                 x_call(PDV_IMG_ROW, g_gseg, 0, (pdw)sr);
@@ -151,6 +191,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.boff = (pdw)(y - g_by0) * g_bstride;
             pdr_ip.x0 = (pdi)(x0 - g_bx0); pdr_ip.x1 = (pdi)(x1 - g_bx0);
             if (inl) { pdr_ip.sseg = g_dls; pdr_ip.soff = (pdw)(off + DLH + DLI_BODY + (pdw)sr * rb); }
+            else if (k < PDR_NIK) { pdr_ip.sseg = g_xcseg; pdr_ip.soff = (pdw)(g_iks[k].soff + (pdw)(y - g_iks[k].y0) * rb); }
             else { pdr_ip.sseg = g_gseg; pdr_ip.soff = 0; }
             pdr_ip.sw = W;
             pdr_ip.xlo = 0; pdr_ip.xhi = (pdw)s0;
@@ -160,7 +201,10 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.dmode = g_bpp;
             pdr_ip.dyrow = (pdw)(y & 3);
             pdr_ip.col = g_bpp == 1 ? (g_spat[0] & 1) : g_sc4;
-            pdr_imgrow();
+#ifdef PDR_X8
+            if (g_xs) x8_imgrow(y); else
+#endif
+            pdr_imgrow();                                   /* blend: the 8-bit strip's twin (20.22.10.8) */
         }
     }
 }
@@ -169,7 +213,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
  * THE PASS MACHINE
  * ==========================================================================*/
 static pdw g_ph;                    /* PDR_*                                    */
-static pdw g_nb, g_b0, g_b1, g_gw, g_bcur;
+static pdw g_nb, g_b0, g_b1, g_gw;   /* g_bcur: above, with the image stash */
 static struct pdxb_render g_rq;
 static struct pdxb_init g_ini;
 static struct pdxb_textmap g_tmq;
@@ -186,16 +230,19 @@ static pdw g_flatscale;
 static pdw x_ask;                   /* the last answer: PDX_*, or 0x80 | PDMEM_*; 0 none */
 static pdw x_asks;                  /* answers this page view                   */
 static pdw g_xph;                   /* after it: PDR_INTERP re-runs the pass, PDR_RAST draws the band */
+static pdw g_xclost;                /* the XC went from under an open view (20.22.7.11): re-run the pass */
 static pdw x_answer(pdw what, pdw cx, pdw dx, pdw ph)
 {
     x_ask = what; pdr_out_cx = cx; pdr_out_dx = dx; x_asks++;
     g_xph = ph; g_ph = PDR_XWAIT;
     return (what & 0x80) ? PDE_NEEDMEM : PDE_NEEDMOD;
 }
+static void ik_size(void);
 /* the end of an interpretation pass: something to ask for, or 0 */
 static pdw x_resolve(void)
 {
     pdw id, w = x_pend & ~x_ref;
+    if ((g_xrm & IK_BOTH) == IK_BOTH) ik_size();
     if (x_mwant && !(x_ref & XR_MEM)) {
         if (x_asks < PDR_XASKS) return x_answer(x_mwant, (pdw)(x_mwant & 0x7F), x_mkb, PDR_INTERP);
         x_ref |= XR_MEM;
@@ -215,19 +262,89 @@ static void x_answered(void)
      * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
     if (a & 0x80) {
         if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
-        else if (a == (0x80 | PDMEM_XC) ? !g_ini.xc_seg : a == (0x80 | PDMEM_X8) ? !g_ini.x8_seg : 0) x_ref |= XR_MEM;
+        else if (a != (0x80 | PDMEM_SLOT) && !(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM;
     }
     else if (a && !x_have(a)) x_refuse(a);
+}
+/* the stash (20.22.7.10): the resident decoder `d` decodes, into the XC above
+ * g_xctop, the rows y0..y1 show of each of its images, one row per device row
+ * (the row draw_image would ask for). A failed open is err 1 (drawn as
+ * "image decoder"), no room err 2 ("image stash", PDF_INC_LIMIT), a record
+ * draw_image would not draw err 3 */
+static void ik_fill(pdw d, pdi y0, pdi y1)
+{
+    static pdb h[DLH], b[DLI_BODY];
+    static struct pdr_ik *e;
+    pdw off = 0, len, top = (pdw)((g_xctop + 1) & ~1u), n, H, W;
+    pdi wq, hq, y, sr, last, yt, yb;
+    g_ikn = 0; g_ikb = (pdw)(g_bcur + 1); g_ikdec = d;
+    while (off < g_dllen && g_ikn < PDR_NIK) {
+        pd_fcopy_in(g_dls, off, h, DLH);
+        len = (pdw)r16(h + 2);
+        if (len < DLH || len > g_dllen - off) break;
+        if (h[0] == DLR_IMAGE && r16(h + 6) >= y0 && r16(h + 4) <= y1
+            && (n = pd_fpeekb(g_dls, (pdw)(off + DLH + 19))) != 0 && (n == PDCD_JPX ? PDX_JPX : PDX_IMG) == d) {
+            pd_fcopy_in(g_dls, off + DLH, b, DLI_BODY);
+            e = &g_iks[g_ikn++];
+            pdr_zero(e, sizeof *e);
+            e->off = off; e->err = 3;
+            e->y0 = r16(h + 4) < y0 ? y0 : r16(h + 4);
+            e->y1 = r16(h + 6) > y1 ? y1 : r16(h + 6);
+            yt = r16(b + 2); yb = r16(b + 6);
+            wq = (pdi)(r16(b + 4) - r16(b)); hq = (pdi)(yb - yt);
+            if (wq < 1) wq = 1;
+            if (hq < 1) hq = 1;
+            W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
+            if (!W || !H || W > 4096 || H > 0x7FFF || (b[18] & 16)) goto next;
+            g_iobj = (pdw)r16(b + 12); g_igen = (pdw)r16(b + 14);
+            e->err = 1;
+            if (!img_xopen(d, b, wq, hq)) goto next;
+            e->w = g_xi.out_w; e->h = H = g_xi.out_h; e->rb = g_xi.rowbytes;
+            e->mode = g_xi.out_mode; e->nc = g_xi.out_ncomp;
+            n = (pdw)(e->y1 - e->y0 + 1);
+            e->err = 2;
+            if (!g_xcseg || g_xccap < top || (pdw)(g_xccap - top) / n < e->rb) { img_close(); goto next; }
+            e->soff = top; e->err = 0; last = -1;
+            for (y = e->y0; y <= e->y1; y++) {
+                pdi qy = (pdi)(y * 4 + 2);
+                if (qy <= yt) sr = 0;
+                else if (qy >= yb) sr = (pdi)(H - 1);
+                else sr = pdr_muldiv((pdi)(qy - yt), (pdi)H, hq);
+                if (sr >= (pdi)H) sr = (pdi)(H - 1);
+                if (sr == last) pd_fcopy(g_xcseg, top, g_xcseg, (pdw)(top - e->rb), e->rb);
+                else {
+                    x_call(PDV_IMG_ROW, g_xcseg, top, (pdw)sr);
+                    if (x_cf) { e->err = 1; break; }
+                    last = sr;
+                }
+                top = (pdw)(top + e->rb);
+            }
+            img_close();
+            top = (pdw)((top + 1) & ~1u);
+        }
+    next:
+        off = (pdw)(off + len);
+    }
+}
+/* the XC the stash may need (20.22.7.10), asked at the end of a pass that
+ * marked both decoders: the larger decoder's bound above what the XC holds */
+static void ik_size(void)
+{
+    pdw kb = g_iknd[0] > g_iknd[1] ? g_iknd[0] : g_iknd[1];
+    kb = (pdw)(kb + ((g_xcseg ? g_xctop : 0) + 1023 >> 10));
+    if (kb > 63) kb = 63;
+    if (kb > (g_xcseg ? g_xccap >> 10 : 0) && kb != g_ikask) { g_ikask = kb; x_mem(PDMEM_XC, kb); }
 }
 /* before band g_bcur is drawn: the occupant its codec images need (20.22.7).
  * The band's DLR_IMAGE records say which; when the resident occupant is one
  * of them the band is drawn with it, else the lowest is asked for. A band
- * whose images need BOTH decoders draws one decoder's: draw_image notes the
- * other's as PDF_INC_MODULE (one slot) */
+ * whose images need BOTH decoders (20.22.7.10) has the resident one's
+ * stashed, then the other asked for: one load a band, outside PDR_XASKS
+ * (each makes a band's progress), and the walk draws them all in order */
 static pdw x_rneed(void)
 {
     static pdb h[DLH];
-    pdw off = 0, need = 0, len, id;
+    pdw off = 0, need = 0, len, id, r;
     pdi y0 = (pdi)(g_vcy0 + (pdi)g_bcur * PD_BANDROWS), y1 = (pdi)(y0 + PD_BANDROWS - 1);
     if (!g_xrm) return 0;
     while (off < g_dllen) {
@@ -239,6 +356,19 @@ static pdw x_rneed(void)
         off = (pdw)(off + len);
     }
     need &= ~x_ref;
+    if (g_ikb == (pdw)(g_bcur + 1)) need &= ~(1u << g_ikdec);    /* stashed for this band */
+    if (need == IK_BOTH && ((need >> x_res) & 1)) {
+        id = x_res == PDX_IMG ? PDX_JPX : PDX_IMG;
+        if (!g_xcseg) {                 /* nowhere to stash: the resident draws, the other is noted */
+            g_ikn = 0; g_ikb = (pdw)(g_bcur + 1); g_ikdec = id;
+            return 0;
+        }
+        ik_fill(x_res, y0, y1);
+        img_close();
+        r = x_answer(id, 0, id, PDR_RAST);
+        x_asks--;
+        return r;
+    }
     if (!need || (need >> x_res) & 1) return 0;
     id = (need & (1u << PDX_IMG)) ? PDX_IMG : PDX_JPX;
     if (x_asks >= PDR_XASKS) { x_refuse(id); return 0; }
@@ -261,8 +391,10 @@ static pdw pass_begin(void)
     g_eylo = (pdi)(g_gy0 * 4); g_eyhi = (pdi)(g_gy1 * 4 + 3);
     g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
     x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
+    g_iknd[0] = g_iknd[1] = 0; g_ikb = 0;
     g_passes++;
     gs_init();
+    xb_pass();
     g_ph = PDR_INTERP;
     return interp_start(g_rq.page);
 }
@@ -291,7 +423,7 @@ static void mode_reset(void)
     g_inc = 0; g_incname[0] = 0; g_ops = 0; g_passes = 0;
     g_ierr = 0; g_ndl = 0;
     g_pkfam = 0xFF; g_aflags = 0;
-    x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0;
+    x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0;
 }
 
 static pd_px vb_w, vb_h;
@@ -313,6 +445,7 @@ static pdw verb_begin(void)
     g_pgx0 = g_rq.view.ox; g_pgy0 = g_rq.view.oy;
     g_pgx1 = (pdi)(g_pgx0 + vb_w - 1); g_pgy1 = (pdi)(g_pgy0 + vb_h - 1);
     if (!band_geometry()) return PDE_NOMEM;
+    x8_view();
     view_base(&g_rq.view);
     g_nb = band_count();
     g_gw = g_nb; g_b0 = 0; g_b1 = g_nb;
@@ -351,7 +484,8 @@ static pdw verb_step(void)
     if (g_ph == PDR_XWAIT) {            /* the primary answered (20.22.7) */
         x_answered();
         g_ph = g_xph;
-        if (g_ph == PDR_INTERP) {
+        if (g_ph == PDR_INTERP || g_xclost) {   /* lost XC: nothing in the list may name it */
+            g_xclost = 0;
             err = pass_begin();
             if (err) { g_ph = PDR_DONE; return err; }
             return PDE_BUSY;
@@ -362,6 +496,7 @@ static pdw verb_step(void)
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
         if (done) {
             close_streams();
+            xb_needmem();                                   /* blend: PDX8 for a transparent page (20.22.10.2) */
             /* the extension cache filled: empty it and run the pass again, once a view */
             if (g_xcfull && !g_xcflush) {
                 g_xcflush = 1; g_xctop = 0;
@@ -571,17 +706,70 @@ static void xc_adopt(void)
 }
 #define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
 typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
+/* the words of pdxb_init that are PDREND's own claims and doors (20.22.7.11):
+ * xb, the engine's vector, dl, band, bank, adapter, bpp. A re-INIT that keeps
+ * them is the same document; PDENG's, PDWRT's and the Flate slots' words may
+ * change under it (the primary shrinks INIT's Flate slots), and so may the
+ * glyph claim and the XC, which are taken up again (glyph_fresh, the pass) */
+static const pdb ini_mine[] = { 0, 1, 2, 9, 10, 11, 12, 15, 16, 19, 20 };
+typedef char pdr_ck_inimine[(pdw)&((struct pdxb_init *)0)->bpp == 40 && (pdw)&((struct pdxb_init *)0)->dl_seg == 18 ? 1 : -1];
+/* the glyph claim is new (FONTBANK, or a re-INIT that moved or grew it): what
+ * PDREND keeps in it - the strike cache, PDFONTX.RES's INDEX at GC_IDX (D5),
+ * the transformed-glyph slots - starts again from the claim itself */
+static void glyph_fresh(void)
+{
+    pdw cb, cap, got, n, seg;
+    g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0;
+    if (g_bankok && g_gseg && g_gkb >= 8) {
+        cb = file_enter();
+        if (cb) {
+            cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
+            got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
+            file_leave();
+            if (got > cap) got = cap;
+            if (got > GC_XBASE - GC_IDX) got = GC_XBASE - GC_IDX;     /* what the region holds */
+            if (got >= 96) {
+                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), got, &g_bn_tmp);
+                n = g_bn_tmp;
+                if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
+            }
+        }
+    }
+    /* the transformed-glyph slots hold whatever the new claim held: empty them
+     * wherever glyph_xform may use them (a claim of 5 KiB or more) */
+    if (g_gseg && g_gkb >= 5) pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
+    g_pkfam = 0xFF;
+}
 static pdw verb_init(pdw xbseg)
 {
-    pdw bound = pdr_eng_seg, i;         /* 0 on the FIRST INIT: the bss */
-    /* the answer to a PDE_NEEDMEM (20.22.7): the same claims with a region
-     * added. The page view and the document's caches go on */
-    if (bound && (x_ask & 0x80)) {
-        /* the glyph claim may have been regrown and moved (PDMEM_GLYPH): its two words may differ */
-        for (i = 0; i < INI_OLDW; i++)
-            if (&((pdw *)&g_ini)[i] != &g_ini.glyph_seg && &((pdw *)&g_ini)[i] != &g_ini.glyph_kb &&
-                pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
-        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb); return PDE_OK; }
+    pdw bound = pdr_eng_seg, i, o;      /* 0 on the FIRST INIT: the bss */
+    /* a re-INIT under a ladder answer (20.22.7, 20.22.7.11): the same claims,
+     * a region added (PDE_NEEDMEM) or the XC released to make room for a slot
+     * occupant (PDE_NEEDMOD). The page view and the document's caches go on;
+     * an XC that went from under the view is the cache AND the list's LUT
+     * offsets and the band's stash, so the pass runs again without it, and a
+     * released one is not asked for again this view */
+    if (bound && x_ask) {
+        for (i = 0; i < sizeof ini_mine; i++)
+            if (pd_fpeekw(xbseg, (pdw)(ini_mine[i] << 1)) != ((pdw *)&g_ini)[ini_mine[i]]) break;
+        if (i == sizeof ini_mine) {
+            o = g_xcseg;
+            pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt();
+            if (o && g_xcseg != o && x_ask != (0x80 | PDMEM_XC)) {
+                g_xclost = 1; g_ikb = 0;
+                if (!g_xcseg) x_ref |= XR_MEM;
+            }
+            x8_init(g_ini.x8_seg, g_ini.x8_kb);
+            /* the glyph claim moved or grew (PDXF's GLYPH grant, a moved X):
+             * fonts' synthetic blocks follow it (syn_adopt), and the row buffer
+             * and the caches start again from the new claim, which need not
+             * hold the old bytes; the pass runs again */
+            o = g_ini.glyph_seg ? (g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb) : 0;
+            i = g_ini.glyph_seg != g_gseg || o != g_gkb;
+            syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb);
+            if (i) { glyph_fresh(); g_xclost = 1; }
+            return PDE_OK;
+        }
     }
     g_xb = xbseg;
     /* the engine's vector first, before anything can call the engine. The
@@ -605,6 +793,7 @@ static pdw verb_init(pdw xbseg)
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
+    x8_init(g_ini.x8_seg, g_ini.x8_kb);
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;
@@ -635,33 +824,13 @@ static pdw xb_seg(void) { return g_xb; }
 static struct pdxb_fontbank g_fbq;
 static pdw verb_fontbank(void)
 {
-    pdw cb, cap, got, n, seg;
     pd_fcopy_in(g_xb, 0, &g_fbq, sizeof g_fbq);
     bank_attach(g_fbq.index_seg, g_fbq.index_len);
     pdr_scpy(g_pkgname, g_fbq.pkgname, 14);
     g_pclus = g_fbq.place_clus; g_pvol = g_fbq.place_vol;
     g_poff_lo = g_fbq.part_off.lo; g_poff_hi = g_fbq.part_off.hi;
-    g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0;
-    if (!g_bankok) return PDE_FONT;
-    if (g_gseg && g_gkb >= 8) {
-        cb = file_enter();
-        if (cb) {
-            cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
-            got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
-            file_leave();
-            if (got > cap) got = cap;
-            if (got > GC_XBASE - GC_IDX) got = GC_XBASE - GC_IDX;     /* what the region holds */
-            if (got >= 96) {
-                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), got, &g_bn_tmp);
-                n = g_bn_tmp;
-                if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
-            }
-        }
-    }
-    /* the transformed-glyph slots hold whatever the new claim held: empty them
-     * wherever glyph_xform may use them (a claim of 5 KiB or more) */
-    if (g_gseg && g_gkb >= 5) pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
-    g_pkfam = 0xFF;
+    if (!g_bankok) { g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0; return PDE_FONT; }
+    glyph_fresh();
     return PDE_OK;
 }
 

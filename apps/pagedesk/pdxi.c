@@ -190,6 +190,7 @@ static pdw v_open(void)
 #ifdef PDXI_JB2
     if (c == PDCD_JBIG2) {
         r = jb_open(s_imgx.globals, g_im.h, g_im.want_w);
+        if (r == PDE_NEEDMEM) pdi_rdx = jb_need_kb;     /* the door's DX (pdxi.asm) */
         if (!r) ix_report();
     }
 #endif

@@ -1763,17 +1763,17 @@ def negative_files():
     add('trunc_header.pdf', good[:5], 'open', 'PDE_TRUNC', 'file is only the five bytes "%PDF-"')
     add('bad_header.pdf', b'GIF89a' + good[6:], 'open', 'PDE_SYNTAX', 'no %PDF- header in the first 1024 bytes')
     xr = good.rindex(b'\nxref\n') + 1
-    add('trunc_xref.pdf', good[:xr + 40], 'open', 'PDE_TRUNC', 'cut in the middle of the xref table; no trailer or startxref')
-    add('trunc_startxref.pdf', good[:good.rindex(b'startxref')] + b'startxref\n', 'open', 'PDE_TRUNC', 'startxref has no offset')
-    add('xref_wrong_offset.pdf', good.replace(b'startxref\n%d' % xr, b'startxref\n%d' % (xr + 3)), 'open', 'PDE_XREF',
-        'startxref points inside the xref keyword, not at it')
+    add('trunc_xref.pdf', good[:xr + 40], 'open', 'PDE_OK', 'cut in the middle of the xref table; no trailer or startxref (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('trunc_startxref.pdf', good[:good.rindex(b'startxref')] + b'startxref\n', 'open', 'PDE_OK', 'startxref has no offset (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('xref_wrong_offset.pdf', good.replace(b'startxref\n%d' % xr, b'startxref\n%d' % (xr + 3)), 'open', 'PDE_OK',
+        'startxref points inside the xref keyword, not at it (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
     # object offset pointing at the wrong object
     m = re.search(rb'(xref\n0 \d+\n0000000000 65535 f \n)(\d{10})( 00000 n \n)(\d{10})', good)
     swapped = good[:m.start(2)] + m.group(4) + good[m.end(2):m.start(4)] + m.group(2) + good[m.end(4):]
-    add('xref_swapped_entries.pdf', swapped, 'open', 'PDE_XREF', 'two xref entries swapped: "N 0 obj" is not at the offset')
-    add('xref_size_huge.pdf', good.replace(b'/Size %d' % (max(pdf.objs) + 1), b'/Size 99999999'), 'open', 'PDE_XREF',
-        '/Size claims 99,999,999 objects, the table has a handful')
-    add('no_root.pdf', good.replace(b'/Root %d 0 R' % root, b'/Foo %d 0 R' % root), 'open', 'PDE_XREF', 'trailer has no /Root')
+    add('xref_swapped_entries.pdf', swapped, 'open', 'PDE_OK', 'two xref entries swapped: "N 0 obj" is not at the offset (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('xref_size_huge.pdf', good.replace(b'/Size %d' % (max(pdf.objs) + 1), b'/Size 99999999'), 'open', 'PDE_OK',
+        '/Size claims 99,999,999 objects, the table has a handful (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('no_root.pdf', good.replace(b'/Root %d 0 R' % root, b'/Foo %d 0 R' % root), 'open', 'PDE_OK', 'trailer has no /Root (the scan finds the /Type /Catalog, PAGEDESK-SPEC 20.22.3.5)')
     # streams
     s = good.index(b'stream\n') + 7
     cut = good.index(b'\nendstream')
@@ -1886,7 +1886,7 @@ def negative_files():
     pdf, root, pg, pr, cs = mini()
     lzw = lzw_literal(b'BT /F1 12 Tf 72 700 Td (LZW content, valid codes) Tj ET\n')
     pdf.objs[cs] = b'<< /Length %d /Filter /LZWDecode >>\nstream\n' % len(lzw) + lzw + b'\nendstream'
-    add('lzw_unsupported.pdf', pdf.finish(root), 'render', 'PDE_FILTER', 'LZWDecode content')
+    add('lzw_unsupported.pdf', pdf.finish(root), 'render', 'PDE_OK', 'LZWDecode content (decoded on the Flate tier, PAGEDESK-SPEC 20.22.3.6; PDE_FLATE without it)')
     pdf, root, pg, pr, cs = mini()
     pdf.stream(b'BT /F1 12 Tf 72 700 Td (five stages, each valid) Tj ET\n',
                filters=('ASCIIHexDecode', 'RunLengthDecode', 'ASCIIHexDecode', 'RunLengthDecode', 'ASCIIHexDecode'), num=cs)
@@ -1894,9 +1894,9 @@ def negative_files():
     # incremental chains
     base = good
     prevloop = base.replace(b'trailer\n<<', b'trailer\n<< /Prev %d' % xr)
-    add('prev_loop.pdf', prevloop, 'open', 'PDE_XREF', '/Prev points at the xref section it is in')
-    add('prev_broken.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 7'), 'open', 'PDE_XREF', '/Prev points at an offset with no xref section')
-    add('prev_past_eof.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 99999999'), 'open', 'PDE_XREF', '/Prev beyond the end of the file')
+    add('prev_loop.pdf', prevloop, 'open', 'PDE_OK', '/Prev points at the xref section it is in (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('prev_broken.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 7'), 'open', 'PDE_OK', '/Prev points at an offset with no xref section (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
+    add('prev_past_eof.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 99999999'), 'open', 'PDE_OK', '/Prev beyond the end of the file (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)')
     chain = base
     pdfx, rootx, _, _, _ = mini()
     extra = max(pdfx.objs) + 1      # an object of its own; the font and page stay as they were
@@ -1989,7 +1989,7 @@ def negative_files():
     xd = b''.join(bytes([t]) + a.to_bytes(3, 'big') + bytes([b]) for t, a, b in ents)
     out.extend(b'7 0 obj\n<< /Type /XRef /Size 8 /W [1 3 1] /Root 1 0 R /Length %d >>\nstream\n' % len(xd) + xd
                + b'\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n' % xpos)
-    add('xrefstm_objstm.pdf', bytes(out), 'open', 'PDE_XREFSTM', 'a PDF 1.5 file with a cross-reference STREAM and an object stream (valid, but outside the XT profile)')
+    add('xrefstm_objstm.pdf', bytes(out), 'open', 'PDE_OK', 'a PDF 1.5 file with a cross-reference STREAM and an object stream (read since PAGEDESK-SPEC 20.22.3)')
     return N
 
 

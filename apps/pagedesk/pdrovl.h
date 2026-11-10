@@ -25,6 +25,7 @@
 #define tm_start        ovl_tm_start
 #define verb_init       ovl_verb_init
 #define verb_fontbank   ovl_verb_fontbank
+#define glyph_fresh     ovl_glyph_fresh
 #define verb_begin      ovl_verb_begin
 #define verb_status     ovl_verb_status
 #define verb_abort      ovl_verb_abort
@@ -35,6 +36,11 @@
 /* [rcore] the ladder's answers, once a pass (pdrv.c) */
 #define x_resolve       ovl_x_resolve
 #define x_answered      ovl_x_answered
+/* [rcore] the image stash, once a band that needs both decoders (pdrv.c) */
+#define ik_fill         ovl_ik_fill
+#define ik_size         ovl_ik_size
+#define ik_note         ovl_ik_note
+#define x_rneed         ovl_x_rneed    /* once a band, and only on a codec page */
 /* [rcore] an image's operator and its decoder's open (pdri.c, pdrv.c) */
 #define do_image        ovl_do_image
 #define image_place     ovl_image_place
@@ -58,16 +64,5 @@
 #define ed_text         ovl_ed_text
 #define ed_textline     ovl_ed_textline
 #define font_synth      ovl_font_synth
-
-/* [fonts] once per FONT LOAD (a Tf whose font is not cached), per glyph MISS (once per code and
-   size: the PDXF call), per Type 3 glyph PROC, and once per glyph-claim regrow (pdrf.c, pdri.c,
-   pdrt3.c, pdrd.c). The hit - emb_hit, syn_find, font_sel, font_width - stays near */
-#define font_get        ovl_font_get
-#define font_encoding   ovl_font_encoding
-#define font_classify   ovl_font_classify
-#define words_hit       ovl_words_hit
-#define emb_miss        ovl_emb_miss
-#define t3_drain        ovl_t3_drain
-#define syn_adopt       ovl_syn_adopt
 
 #endif

@@ -1057,11 +1057,12 @@ matched case-insensitively and READ_SEQ is then handed the directory's own
 spelling of it; a name not in the current folder is `PDE_IO`.
 
 The cross-reference follows 7.3 with one extension: each revision keeps at most
-32 subsection records; the 33rd merges adjacent pairs into CHECKPOINTS (a
-record that stands for `span` consecutive subsections, found again by reading
-their 20-byte-aligned headers off the file). A lookup in a thinned revision
-takes the last record whose first object is at most the one asked for and
-walks at most `span` headers. The whole chain may name at most `PD_MAXSUBSEC`
+32 subsection records; the 33rd keeps every other record as a CHECKPOINT (the
+subsections between two checkpoints are found again by reading their headers
+off the file). A lookup in a thinned revision takes the last record whose
+first object is at most the one asked for and reads the headers after it
+until one starts past that object or the table ends (20.22.3.7: the walk is
+bounded by the table, so a record needs no count of what it stands for). The whole chain may name at most `PD_MAXSUBSEC`
 (256) subsections: the 257th is `PDE_LIMIT` (D10c). A thinned revision must be in ascending order of
 first object throughout: a revision of 33 or more subsections with one out of
 order, before the thinning or after it, is `PDE_LIMIT`. A revision with 32 or
@@ -1269,7 +1270,7 @@ call may be retried).
 | `PDE_FLATE`, `PDE_FILTER` | 20.2.5, at `STRM_OPEN` |
 | `PDE_ENCRYPT` / `PDE_XREFSTM` | `/Encrypt` in a trailer / `/Type /XRef` where `xref` was expected |
 | `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document; a `RAW_COPY` or `STRM_READ` destination that would cross the end of its segment |
-| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
+| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; an object stream numbered over 32,766 or a member past 65,535 decoded bytes (20.22.3); a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
 | `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
 | `PDE_IO` | any failed read; a name not in the folder |
 | `PDE_NOTFOUND` | a missing dictionary key or resource; no outline; `SEARCH` |
@@ -1739,6 +1740,12 @@ checks them alone). Nothing is looked up at run time. All little-endian.
 
 A size is in exactly one of the two resource files. A missing `PDFONTX.RES` is not an
 error and not Incomplete rendering: the renderer scales a core strike (D5).
+
+**20.22.14 amends this section (O8).** Both files' strikes are LZ4 streams,
+each record giving its unpacked and packed lengths, and the icon atlas is one
+stream. Inside `PAGEDESK.O88`, `PDRES.BIN` is two rows: the INDEX packed and
+the strikes stored. The figures below are the version-1 files, which
+`os88pdfont.py build --stored` still writes.
 
 #### 20.4.1 Layout and the directory (D3)
 
@@ -4906,6 +4913,12 @@ round's final pass, not before.
   re-INITs unchanged, and the occupant degrades (a coarser scale, or the
   image's grey box with `PDF_INC_APPROX`). An occupant's (`want`, `min`) row
   (20.22.2.3) is what it needs to LOAD; `min` decodes its common cases.
+  `PDMEM_GLYPH` 5 is not a region of X either: PDREND answers it when a page
+  first needs a strike block, DX = the KiB the glyph claim should have (40).
+  The primary regrows the glyph claim (40, else 32, else refuses), re-INITs
+  PDREND and the font occupant with the new `glyph_seg`/`glyph_kb`, and calls
+  again; a refusal draws embedded fonts with the substitute face and
+  `PDF_INC_APPROX` (20.22.8).
 * Verbs: `PDV_ENG_CRYPTINFO` 0x13, `PDV_ENG_SETKEY` 0x14, `PDV_ENG_CRYPT`
   0x15, `PDV_ENG_SLOT` 0x16, `PDV_REND_SLOT` 0x48, and the occupants' range
   0xC0-0xFF: `PDV_X_INIT` 0xC0, `PDV_KEY_AUTH` 0xC1, `PDV_KEY_COST` 0xC2,
@@ -4928,9 +4941,10 @@ The slot, the claims that hold it, the ladder that fills it, the cache behind
 it and the disks that carry its occupants. The code is the primary's:
 `apps/pagedesk/pduslot.inc` (the loader, the cache, the regions, the ladder,
 in assembly: 20.22.2.9), `apps/pagedesk/pduslot.c` (what an owner edits: the
-occupant table and each one's workspace, and ui's stand-ins), the job call
-sites in `pdujob.c`, `pdufind.c`, `pdusel.c` and `pduside.c`, and
-`pdumod.c` (PDWRT through the slot).
+occupant table and each one's workspace range), `apps/pagedesk/pdovlplat.c`
+(an overlay tenant: an encrypted open's key and the Insert's pre-flight,
+20.22.2.10), the job call sites in `pdujob.c`, `pdufind.c`, `pdusel.c` and
+`pduside.c`, and `pdumod.c` (PDWRT through the slot).
 
 **20.22.2.1 Where the slot lives: a claim of its own, which PDWRT shares.**
 The scout's three places, priced in claims (`MEM_OWNER_MAX` = 8 on kern_big,
@@ -4950,8 +4964,16 @@ in S. `op_fetch` no longer fetches PDWRT, so `w_partfetch`
 (`apps/weave/wfetch.inc`) leaves the primary. Jobs are one at a time (20.6.3),
 so a save never overlaps a render: the decoder in S is simply swapped out.
 
-The four PDENG and PDREND regions (`PDMEM_XIDX`, `PDMEM_OSW`, `PDMEM_XC`,
-`PDMEM_X8`) are **claim X**, one claim cut by `os88_seg_sub` like A and B,
+**A decoder's workspace is a claim of its own, W** (QA R7, 2026-11-10): S
+is the image + bss alone and W is claimed after it, sized from what is left
+then, so the two need not be one contiguous run - on a 640 KiB machine the
+heap beside a document is three holes, none of them an image + workspace
+(measured: 19 / 51.5 / 20 KiB around a 51.5 KiB overlay). PDWRT keeps its
+buffers IN S: a save's peak stays the 8 claims above. A W refused at MIN
+gives S back and runs the release below before the next try.
+
+The five PDENG, PDREND and PDXF regions (`PDMEM_XIDX`, `PDMEM_OSW`,
+`PDMEM_XC`, `PDMEM_X8`, and 5, the glyph region, 20.22.2.5) are **claim X**, one claim cut by `os88_seg_sub` like A and B,
 taken at the first `PDE_NEEDMEM` and grown by `OSAPI_MEM_REGROW` (20.22.2.5).
 
 **20.22.2.2 The claims at every peak** (kern_big; the old table is 20.6.2's):
@@ -4976,41 +4998,64 @@ close; S also after every save, extract or insert (as PDWRT was).
 **20.22.2.3 The occupants and their slot sizes.** An occupant is a module
 (3.1's 8-byte header, its door at `PDM_ENTRY`, one DS = CS segment), its part
 `OP_LAZY | OP_SELF | OP_COMP` and image + bss at most 65,024. The slot an
-occupant gets is its image + bss, rounded up to a paragraph, followed by its
-WORKSPACE (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
-`wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **Each owner declares its
-workspace by editing ITS row below and the matching row of `pdu_occws[]` in
-`pduslot.c`** (one number each; the rows are separated so the edits merge):
+occupant gets is its image + bss, rounded up to a paragraph (claim S), and its
+WORKSPACE in claim W (PDWRT: following the image in S, 20.22.2.1) (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
+`wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **A workspace is a RANGE, WANT
+and MIN**: S is sized at WANT while PD-29's 32 KiB stays free beside it, else
+at the most that fits of at least MIN (a load that cannot have MIN is
+`PDE_NOSLOT`), and `slot_kb` says what was granted. An occupant that needs
+more for one stream answers `PDE_NEEDMEM` with CX = `PDMEM_SLOT` (0) and DX =
+the KiB: the ladder regrows S toward WANT (never past it, and only while the
+32 KiB stays free) and re-INITs the occupant either way, so an unchanged
+`slot_kb` is the refusal (20.22.2.6). **Each owner declares its range by
+editing ITS row below and the matching rows of `pdu_occws[]` (want) and
+`pdu_occwmin[]` (min) in `pduslot.c`** (the rows are separated so the edits
+merge):
 
-| id | occupant | part row | magic | cap (image + bss) | workspace KiB | owner |
+| id | occupant | part row | magic | cap (image + bss) | workspace KiB, want / min | owner |
 |---|---|---|---|---|---|---|
-| `PDX_KEY` 1 | PDXK | 5 | `'PK'` | 32,768 | 0 (placeholder) | crypt |
-| `PDX_GFX` 2 | PDXG | 6 | `'PG'` | 61,440 | 0 (placeholder) | gfx |
-| `PDX_FNT` 3 | PDXF | 7 | `'PF'` | 65,024 | want 64, min 32 (20.22.8; below `want`, one font may grow it by `PDMEM_SLOT`) | fonts |
-| `PDX_IMG` 4 | PDXI | 8 | `'PI'` | 65,024 | 0 (placeholder) | dct, bilevel |
-| `PDX_JPX` 5 | PDXJ | 9 | `'PJ'` | 65,024 | 0 (placeholder) | jpx |
-| (6, internal) | PDWRT | 2 | `'PW'` | 53,248 | `pdu_wkb`: 18, or up to 40 for an Extract/Insert | wrt |
+| `PDX_KEY` 1 | PDXK | 6 | `'PK'` | 32,768 | 0 / 0 | crypt |
+| `PDX_GFX` 2 | PDXG | 7 | `'PG'` | 65,024 | 13 / 13 | gfx |
+| `PDX_FNT` 3 | PDXF | 8 | `'PF'` | 65,024 | 64 / 32 (a font program of 54,768 / 22,016 bytes; below `want`, one font may grow it by `PDMEM_SLOT`: 20.22.8) | fonts |
+| `PDX_IMG` 4 | PDXI | 9 | `'PI'` | 65,024 | 64 / 12 | dct, bilevel |
+| `PDX_JPX` 5 | PDXJ | 10 | `'PJ'` | 65,024 | 60 / 12 | jpx |
+| (6, internal) | PDWRT | 3 | `'PW'` | 61,440 | `pdu_wkb`, want = min: 18, or up to 40 for an Extract/Insert | wrt |
 
-The overlay row moves from 5 to 10 and stays last (`cc_ovidx`, crt0's
-`CC_OVL_ROW` rule). Until an occupant lands its row carries a STAND-IN
-(`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ`), named by the
-Makefile's `PD_XK_MOD` ... `PD_XJ_MOD`, which default to it: a header, a door
-that answers `PDV_X_INIT` and refuses every other verb with CF = 1,
-`PDE_NOTFOUND`, and 1 KiB of bss so the row packs.
+Row 2 is **PDRENDC**, PDREND's code part (20.22.7.9): an EAGER row, so
+`op_load` reads it into the carve at launch beside PDENG and PDREND, and
+`pdu_mod_launch` binds it once with `PDV_REND_CODE` (BX = `OS88_CODESEL` of
+its segment, CX = the segment) before PDREND's INIT. The carve never moves,
+so there is no re-bind, no loader code and **no claim of its own**: at the
+peaks of 20.22.2.2 a ninth claim would have been refused (`MEM_OWNER_MAX`
+8). The bind's answer is not tested: a refused bind (not this build's part,
+or the stand-in, which carries a 1 KiB `PDRENDC.MOD` of its own) makes
+PDREND refuse its INIT, and the launch says so. Row 11 is **PDX8**, blend's
+transparency part (20.22.10.11): not a slot occupant but the X8 region's
+first bytes (20.22.2.5), magic `'P8'`. The overlay row moves from 5 to
+**12** and stays last (`cc_ovidx`, crt0's
+`CC_OVL_ROW` rule). Until a part lands its row carries a STAND-IN
+(`apps/pagedesk/stubs/pdstub.asm -DSTUB_XK|XG|XF|XI|XJ|X8`), named by the
+Makefile's `PD_XK_MOD` ... `PD_XJ_MOD` and `PD_X8_MOD`, which default to it: a
+header (PDX8's 16 bytes with the `jmp short` door), a door that answers the
+INIT verb and refuses every other with CF = 1, `PDE_NOTFOUND`, and 1 KiB of
+bss so the row packs.
 
-**The stack gate reads an occupant by a naming rule** (`tools/os88pdstk.py`'s
-`OCCUPANTS`): its top source is `apps/pagedesk/pdx?.asm`, its door
-`pdx?_entry` and its dispatcher `_pdx?_verb` (`pdxk`, `pdxg`, `pdxf`, `pdxi`,
-`pdxj`); PDREND's far call into the slot names `slot` in its operand
-(`call far [_pdr_slot_off]`); every far call an occupant makes is taken to be
-PDENG's door. The primary's `pdu_mcall` reaches every occupant's door. An
-occupant whose source is not in the tree (the stand-in) is left out, and
-`t_pdkgate` reads every built `PDX?.MOD`, real and stand-in.
+**The stack gate reads each part from a table** (`tools/os88pdstk.py`'s
+`OCCUPANTS`: source, door, dispatcher, and whether it is entered through the
+slot or the X8 region - `pdxk` `pdk_entry`, `pdxg` and `pdxf` `pdx_entry`,
+`pdxi` `pdi_entry`, `pdxj` `pdxj_entry`, `pdx8` `x8_entry`; a new part is a
+new row). PDREND's far calls into the slot are `_pdr_xfar [_pdr_x_off]` and
+`_pdr_verb [_pdr_slot_off]`, and one whose operand names `x8` is PDX8; every
+far call a part makes is taken to be PDENG's door. The primary's `pdu_mcall`
+reaches every occupant's door. A part whose source is not in the tree (the
+stand-in) is left out, and `t_pdkgate` reads every built `PDX?.MOD`, real and
+stand-in.
 
 The slot claim S is sized for the occupant it is about to hold:
 `max(roundup16(image + bss) + workspace, R + roundup_cluster(slack +
 packed))`, the second term being the room the in-place expansion needs
-(20.22.2.4). It is resized with `OSAPI_MEM_REGROW` (a shrink stays put; a grow
+(20.22.2.4). Every load FREES S and claims it afresh, so the heap's largest
+run is asked with nothing of S in it. It is resized with `OSAPI_MEM_REGROW` (a shrink stays put; a grow
 takes only the difference when the paragraphs above are free), and refused
 with `PDE_NOSLOT` when the heap cannot give it.
 
@@ -5050,6 +5095,34 @@ callback's chain: only from the wake, 20.22.2.6):
    `PDX_*` id (0 for PDWRT, which neither calls) and CX:DX = `PDM_ENTRY` : the
    code selector.
 
+**Release before refuse** (the lead's ruling of 01:30, DECISIONS.md). A claim
+of S refused at MIN is not yet `PDE_NOSLOT`: the loader gives back, ONE AT A
+TIME and with the same claim asked again after each, what a document can run
+without, in this order (`sl_rel_ovl`, `sl_rel_fl2`, `sl_rel_xc`, called by one loop in
+`pdu_slot_load`'s `.nos`, directly so `pdstk` follows each):
+
+| | given back | when | costs |
+|---|---|---|---|
+| 1 | the overlay part (`op_drop`, 51 KiB) | it is fetched and no overlay frame is on the stack (`cc_ovrsp` = 0): an ask from INSIDE the overlay - the auth's PDXK, a save's PDWRT - keeps it | its next `ovl_` call reads it again (a disk call) |
+| 2 | the second Flate slot (43 KiB, where D17 chose two by RAM) | PDENG is re-INITed with `flate_kb` one slot less, the same `flate_seg` (20.22.3.9): AX = 1 took it, keeping the document and any OPEN, and claim B's tail is regrown away in place; `PDE_BUSY` (a stream lives in slot 2) changed nothing and the entry answers "nothing". PDREND is not re-INITed for it: it reads no Flate slot | a later stream decoded with one slot |
+| 3 | the `PDMEM_XC` region (16 KiB) | the load answers PDREND's OWN `PDE_NEEDMOD` (`sl_inlad`: only then does PDREND's re-INIT keep its page view, 20.22.7) and XC is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0. PDREND drops its cache and band stash, refuses XC for the rest of that view and re-runs the pass (rcore) | PDREND's results cache; images needing a LUT note COLOUR/LIMIT until the next view |
+
+Only when all three have answered is the load `PDE_NOSLOT` and the occupant
+degrades as below. A **region** refused (20.22.2.5) and a **workspace
+growth** refused (`sl_grow`, 20.22.2.6) run (1) and (2) the same way
+(`sl_relmem`) before they refuse. **The overlay comes back by giving the
+occupant back**: crt0's `CC_OVL_ROOM` hook (`pdu_ovl_room`) frees S and W
+before the overlay is fetched again, so the next page that needs the
+occupant loads it again (the cache, or the disk) rather than the overlay
+being refused - which was QA R5's "Not enough memory" and a UI that never
+went idle. A load that fails after its claims (a refused INIT) gives S and W
+back (`pdu_slot_free`); it used to keep S, 82.5 KiB on QA's machine, until
+the next load. OSW, XIDX and the glyph region are NEVER released while an
+occupant runs: the document's index and object stream are what it reads, and
+the glyph region is what PDXF writes. A claim refused at WANT never reaches
+this loop: the loader asks for the most that fits, so only a MIN above the
+largest free run fails.
+
 **A load that fails** (no RAM: `PDE_NOSLOT`; a read error; a bad header)
 leaves S empty and tells PDREND **BX = 0x80 | id**, CX = DX = 0: that module
 is unavailable for the rest of this page view, PDREND sets
@@ -5068,7 +5141,22 @@ occupant + PDENG (424) sits inside 1,776, which leaves an occupant about
 1,000 bytes of frames of its own (`tools/os88pdstk.py` holds the sum).
 
 **20.22.2.5 The regions (claim X, `PDE_NEEDMEM`).** CX = the `PDMEM_*`
-region, DX = the KiB wanted (1..64). The primary:
+region, DX = the KiB wanted: 1..64, and **1..256 for `PDMEM_XIDX`** (eng's
+flat index, `ceil(4 x entries / 1024)` KiB). Each region is handed as a
+`SEG_SUBC` window (`OSAPI_SEG`: a code/data pair, so PDX8 has a CS) of at most
+64 KiB at the region's start, with the region's whole KiB beside it; past 64
+KiB eng addresses the region itself (on kern_mega with `OSAPI_SEG`, never by
+adding paragraphs). The five regions:
+
+| CX | region | asked by | notes |
+|---|---|---|---|
+| 1 | `PDMEM_XIDX` | PDENG, at OPEN | up to 256 KiB |
+| 2 | `PDMEM_OSW` | PDENG, at OPEN | |
+| 3 | `PDMEM_XC` | PDREND | |
+| 4 | `PDMEM_X8` | PDREND (blend) | **PDX8 is read into its first bytes at the grant** (parts row 10, the slot's reader), with its header's +10 = the region's CODE selector, +12/+14 = PDENG's bound door, re-written after every move of X. A row that does not fit the region, or a read that fails, takes the region back: PDREND then sees `x8_seg` 0 and takes its opaque path |
+| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
+
+The primary:
 
 * grants a region on its first ask, appended to X in the order asked: X is
   claimed at the first, and regrown (`OSAPI_MEM_REGROW`) at each later one, only when
@@ -5078,8 +5166,16 @@ region, DX = the KiB wanted (1..64). The primary:
   any other second ask is refused;
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
-  come with it), and re-INITs PDENG, then PDREND. The occupant is not
-  re-INITed: it holds no region;
+  come with it), and re-INITs PDENG, then PDREND. A region's window is cut
+  ONCE and handed again unchanged while claim X and the region's length are
+  what they were (`xr_wseg`): kern_mega's `SEG_SUBC` makes a fresh descriptor
+  per ask, and PDREND reads a changed `glyph_seg` as a new page view. The occupant is re-INITed
+  only after a GLYPH grant;
+* hands PDREND the font bank again (`PDV_REND_FONTBANK`) after every such
+  re-INIT (`dc_inits`, shared with the open): an INIT that is not answering
+  PDREND's own ladder is a new document to it and forgets the bank, so the
+  XIDX and OSW that PDENG's OPEN asks for left every base-14 font of an
+  xref-stream file with no strike (QA R1, "font strike unavailable");
 * refuses by re-INITing anyway: a region never held has its field 0, and a
   held region asked to grow keeps its segment and KiB unchanged (a refusal is
   not an error).
@@ -5099,8 +5195,9 @@ failure by a caller that tests `pdu_mcf` first):
 
 | verb | may answer | the primary, in that slice | then |
 |---|---|---|---|
-| `PDV_ENG_OPEN` (J_OPEN) | `NEEDMEM` XIDX, OSW; `NEEDMOD` `PDX_KEY` | grants (20.22.2.5); or loads PDXK and enters the open's AUTH sub-state: ui's `pdu_auth_step()` once a slice until it stops answering `PDE_BUSY` | OPEN again at the next slice; an auth failure fails the open with its `PDE_*` (`PDE_PASSWORD`, `PDE_CANCEL`) |
+| `PDV_ENG_OPEN` (J_OPEN) | `NEEDMEM` XIDX, OSW; and **CF = 1, `PDE_PASSWORD`** at its crypt state (20.22.5: the file is half open, not failed) | grants (20.22.2.5); or enters the open's AUTH sub-state (`ovl_au_slice`, below) once a slice until it stops answering `PDE_BUSY` | OPEN again at the next slice; an auth failure fails the open with its `PDE_*` (`PDE_PASSWORD`, `PDE_CANCEL`) |
 | `PDV_REND_STEP` (J_RENDER) | `NEEDMEM` XC, X8; `NEEDMOD` GFX, FNT, IMG, JPX | grants; or loads | the same verb at the next slice |
+| an occupant's verb, under any of these | `NEEDMEM` `PDMEM_SLOT` (0), DX = KiB | regrows S toward the occupant's WANT and re-INITs it (20.22.2.3) | the same verb at the next slice |
 | `PDV_REND_TEXTMAP` (J_TEXT, J_FIND), `PDV_REND_THUMB` (J_THUMB) | as STEP | as STEP | as STEP |
 
 Every call site of those verbs handles them the same way through ONE function,
@@ -5130,18 +5227,26 @@ bands alternate two image codecs a couple of times. At most **4** grants per
 verb sequence; a fifth `NEEDMEM` is refused. A job that sees a ladder status
 past either cap more than 16 times fails with `PDE_LIMIT` rather than loop.
 
-**ui's two functions** (`pduauth.c`; ui `#define`s `PDU_AUTH_UI` at the top
-of `pagedesk.c`'s slot prototype block, so the stand-ins in `pduslot.c` drop
-out and the prototypes there bind to ui's): `void pdu_auth_reset(void)` at every open's start, and
-`unsigned pdu_auth_step(void)` = `PDE_BUSY` (call again next slice), 0 (the
-key is set with `PDV_ENG_SETKEY`; resume OPEN) or a `PDE_*`. PDXK is resident
-when it is first called. The stand-in answers `PDE_PASSWORD`, so until ui
-lands an encrypted file fails its open with that sentence.
+**The AUTH sub-state** (`ovl_au_slice`, `pdovlplat.c`, an overlay tenant: it
+runs at open frequency). First the held key (20.22.2.10); else PDXK comes
+into the slot, `pdxb_crypt` is zeroed in the XB and `PDV_KEY_COST` prices one
+run. A run that costs anything (R6) asks first on an 8088 through ui's
+`pdu_au_askr6(seconds x 2)` (O6: no answer, no derivation, `PDE_PASSWORD`),
+and shows ui's working popover (`pdu_au_busy`) elsewhere. `PDV_KEY_AUTH` is
+then called once a slice, its `progress` handed to `pdu_au_prog`; the empty
+password is tried first, silently. A wrong one asks with `pdu_au_ask` (the
+second time saying it was wrong), and the typed bytes go from ui's
+`pdu_au_pw` into the XB's `pw`, the buffer wiped at once. On success
+`PDV_ENG_SETKEY` and `pdu_au_close`, and OPEN again; an answer of
+`PDE_CANCEL` (the popover went) fails the open. **A cancelled open job**
+closes an ask still up with ui's leaf `ovl_au_cancel` and
+`pdu_pop_close_soon`, never through a painting path (D21's 384). PDXK leaves
+the slot as soon as the open completes.
 
 **20.22.2.7 The cache of unpacked images (O2).** The primary's alone; the
 modules never see it. It is ON when ui's preference says Auto
-(`int pdp_xcache(void)`: 1 Auto, 0 Off; ui `#define`s `PDP_XCACHE_UI` in the
-same block so the stand-in, which answers 1, drops out) and the machine has a store:
+(`pdp_cfg[10]`, `pdu_pref_modcache()`: 0 Auto, 1 Off) and the machine has a
+store:
 
 * **XMS** first: `OSAPI_XMEM_CAPS` answers at least the total + 64 KiB, and ONE
   `OSAPI_XMEM_ALLOC` block (the table is 8 entries machine-wide, SPEC.md
@@ -5167,24 +5272,31 @@ same block so the stand-in, which answers 1, drops out) and the machine has a st
   without one. Its worth: VIDEO-XMS-PLAN's 0.345 ms a KB on a real 286 makes a
   64 KiB swap about 23 ms against 1.2-3 s off a floppy (scout-platform 1).
 
-**20.22.2.8 The disks (O7).** Every geometry carries the one `PAGEDESK.O88`
-with all eleven rows. The 360KB set becomes two floppies:
-`pagedesk360.img` (the program, `README.TXT`, `PDFONTS.TXT`, and the two
-samples the empty view and PD-29's XT proof open, `HELLO.PDF` and
-`XTGUIDE.PDF`) and **`pagedesk360b.img`** (every sample, and `README.TXT`).
-THE ARITHMETIC THAT BINDS: a 360KB disk is 354 clusters of 1,024 bytes, and
-one file cannot span two floppies, so `PAGEDESK.O88` itself must stay under
-about 350,000 bytes. It is 225,778 at the round's start; the occupants add
-their PACKED bytes (stand-ins about 100 each). Should the five real
-occupants pass ~120 KB packed, the 360KB answer is to ship PDRES (82,084
-bytes, stored) beside the program as `PDRES.BIN`: the INDEX loader and
-PDREND both reach it through `pdxb_fontbank.pkgname` and `part_off`, so the
-move is primary-side only. That is the lead's call when the figures exist.
-**The 720KB disk is the next to bind**: it carries every sample with the
-program and has 100 of 713 clusters free with the stand-ins (613 in use), so
-occupants past about 100 KB packed overflow it too, and its answer is the
-same pair (the samples to a second disk) or the same `PDRES.BIN`. The 1.44MB
-and 1.2MB disks have 1,631 and 1,155 clusters free.
+**20.22.2.8 The disks (O7, O8).** Every geometry carries the one
+`PAGEDESK.O88` with all thirteen rows. One file cannot span two floppies, so
+the program must fit a 360KB disk (354 clusters of 1,024 bytes). With every
+real occupant it measured 372,717 bytes, and `pagedesk360.img` needed 414
+clusters and `pagedesk720.img` 754 of 713. 20.22.14 (O8) packs the core font
+bank inside the program and `PDFONTX.RES` beside it. What each disk carries
+now (`make pagedeskdisk`):
+
+| image | carries | clusters before | after |
+|---|---|---:|---:|
+| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,139 / 2,847 |
+| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,139 / 2,371 |
+| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 574 / 713 |
+| `pagedesk360.img` | the program, `README.TXT`, `PDFONTS.TXT` (the OFL rides with the fonts inside the program), and `HELLO.PDF` WHEN IT FITS | 414 / 354 (refused) | 354 / 354 |
+| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 72 / 354 |
+
+`HELLO.PDF` fits on `pagedesk360.img` with no cluster to spare. The recipe
+tries it, and when the program has grown past it, it says so and builds the
+disk without it. That is not an error, since the second disk carries it.
+The program not fitting IS the error, from the second attempt. On a 360KB
+pair the empty view's Sample guide (`XTGUIDE.PDF` beside the program) finds
+nothing until the guide is opened from the second disk with File > Open.
+The 360KB XT proof (`tests/pagedeskxt.py`, PD-29) opens `XTGUIDE.PDF` from
+B:, which now holds the program and not the guide. It needs a 720KB B:, a
+third drive or a disk of its own. That is open.
 
 **20.22.2.9 Room in the primary.** The `.o88` header's image + bss (the
 cap is 65,024):
@@ -5195,7 +5307,58 @@ cap is 65,024):
 | `pdu_ctl_paint` (C 1,692) and `pdu_bandcap` (542) in assembly (`pdui.inc`); `pdu_held` deleted (dead) | 63,313 | **-834** (the freeing owed: 800) |
 | the slot, the cache, the regions and the ladder (`pduslot.inc`, about 2,050 bytes; in C it measured 2,800), less PDWRT's old `w_partfetch` and `pdu_wrt_in_now`; and, to make the room, `pdu_doc_claim` (C 982 -> 509), `pdu_doc_free` (184 -> about 70), `pdu_minit` (133 -> about 60) and PDRES's directory walk (`pdu_bank_dir`, 166 against the C's ~440) in assembly | 64,185 | **+872** (plat's allowance: 900) |
 
-839 bytes stay under the cap, ui's +250 among them.
+| ui's merge (the prompt, the preferences) | 64,525 | +340 |
+| the second wave: (want, min) workspaces and `PDMEM_SLOT`, the encrypted open's slice in the overlay, five regions (XIDX to 256, GLYPH, `SEG_SUBC` windows), PDX8 into the X8 region; `pdu_bank_load` (C 465) in assembly | 64,981 | +456 |
+| `pdu_mod_launch` (C 277) in assembly; the held keys and the Insert's pre-flight (20.22.2.10: `sl_wkeys`, the save job's and the abort's hooks; the rest is overlay) | 65,015 | +34 |
+
+| PDRENDC's row and bind (+~35); `pdu_mcheck` and its tables (C 216 + 48 bss) folded into `pdu_mod_launch`'s assembly; `pdu_datestamp` / `pdu_d2` (249, a save's) to the overlay | 64,577 | -438 |
+| release before refuse (20.22.2.4: the three releases and `xr_reinit`, factored out of `pdu_region`); a new GLYPH region's word at +62 cleared | 64,733 | +156 |
+| the Flate release built on eng's shrinking INIT; XC's release only under PDREND's own NEEDMOD | 64,817 | +84 |
+| each region's window cut once and reused (`xr_wseg`/`xr_wcl`/`xr_wl`) | 64,889 | +72 |
+| `pdu_bank_load` for a packed INDEX row (20.22.14): `part_off` worked out from row 5, the 65,024 adjacency check and the read cap gone | 64,875 | -14 |
+| QA R7: W its own claim (`sl_wsize`, PDWRT's buffers still in S), the release before a region or a growth refuses (`sl_relmem`), `pdu_ovl_room` (crt0's `CC_OVL_ROOM`), a failed bind freeing S and W | 64,959 | +84 |
+
+| QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
+
+**21 bytes stay under the cap.**
+
+**20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
+in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
+and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
+document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
+`/ID[0]`.
+
+* **The document's key** is kept (from `PDV_ENG_CRYPTINFO`, which answers
+  key, `key_len`, the methods and `/ID[0]` on a keyed file) whenever PDXK set
+  one. At the next `PDE_PASSWORD` of any open - the re-open after a page
+  operation's save, the open of a Save As's output, the document again after
+  the pre-flight below - the half-open file's `CRYPTINFO` is asked first, and
+  when its `/ID[0]` is the kept one the key goes back with `PDV_ENG_SETKEY`:
+  no PDXK, no question. A save keeps the source's `/Encrypt` and `/ID[0]`
+  (20.22.4.5), which is what makes this right. A file whose owner changed the
+  password and kept the `/ID[0]` would open with the old key and fail its
+  catalog: that is a re-open by the user, which asks again.
+* **The Insert's pre-flight** (20.22.4.5's other half). PDWRT is a slot
+  occupant, so PDXK cannot load while a save runs. A Save As whose page map
+  names foreign pages (`ovl_save_begin`, kind 0) therefore starts its job
+  WITHOUT PDWRT: it CLOSEs the document (`PDW_OUT_REOPEN` set, so a cancel or
+  a failure re-opens it), then, a slice at a time (`ovl_ifl_step`), OPENs
+  each foreign file the map names in its own folder (20.16's slot words),
+  through the same ladder and the same AUTH sub-state; one that comes out
+  `PDO_ENCRYPTED` has its key read with `CRYPTINFO` into the next
+  `pdxb_wkey`, `slot` = its Insert slot, and is CLOSEd. Then the document is
+  OPENed again (its held key, so no question), `PDW_OUT_REOPEN` cleared, and
+  PDWRT comes in. **`sl_bind` hands the `pdxb_wkeys` to PDWRT with
+  `PDV_WRT_KEYS` after every `PDV_WRT_INIT`** (a workspace regrow re-INITs
+  it, and the INIT wipes them); the block's `n` is set to 0 at every save's
+  start, so a later save never carries a stale key. A foreign file that fails
+  (its password refused, cancelled, unreadable) fails the save with
+  `err_detail` = 20 + its slot, which names it (20.16).
+* What it costs: every foreign file is OPENed in full once before the save
+  (the catalog and the page tree, since an unencrypted file is only known as
+  one when its OPEN passes the crypt state), and the document once more. A
+  probe that stopped an unencrypted file's OPEN at its crypt state would want
+  eng to publish that state; asked of eng, not built.
 
 **A developer's look** (`PDU_LADTEST`, `#define`d in `pagedesk.c` AND
 `%define`d in `pagedesk.asm`; nothing shipped compiles it): every open loads
@@ -5208,7 +5371,296 @@ from XMS, and the same largest free run across a close and an open.
 
 #### 20.22.3 Structure: cross-reference streams, object streams, repair, LZW, ASCII85 (`eng`)
 
-*Reserved; written by its agent before its code.*
+AP-01, AP-02 and AP-03, and the engine seams the other agents build on. All
+of it is PDENG (L1: it runs per object or per byte). **A file whose every
+revision is a classic table, with no `/XRefStm`, no object stream and no
+damage, takes exactly the code path of 20.2.3** (the subsection records and
+their checkpoints, the resolved-offset cache, no new claim): the new
+mechanisms below are entered only when a revision needs them. A classic file
+never pays the index's 4 bytes an object, however sparse it is.
+
+**20.22.3.1 The flat index (`PDMEM_XIDX`).** A chain with a cross-reference
+STREAM in it (any revision), a hybrid section whose `/XRefStm` is read, or a
+repaired file, is resolved through a flat index instead of the subsection
+records: 4 bytes an object number, entry `n` at `xidx_seg + n / 4 :
+(n % 4) * 4` (so it may span several segments), little-endian:
+
+| entry | meaning |
+|---|---|
+| `0x00000000` | absent: no revision mentions it (a null) |
+| `0xFFFFFFFF` | free (a null) |
+| bit 31 clear | in use at that file offset (an offset is under 2 GiB, 20.2.2) |
+| bit 31 set | in object stream `hi & 0x7FFF` (at most 32,766), member `lo` (at most 65,534) |
+
+It holds `max(/Size)` entries over the chain (a repair: the highest object
+number met, plus one), at most 65,536 - object numbers stay 16 bits (D8, an
+object above 65,535 is `PDE_LIMIT` as before). There is no lower engine
+ceiling: the index is `ceil(4 x entries / 1024)` KiB, at most 256, asked for
+with `PDE_NEEDMEM` (CX = `PDMEM_XIDX`, DX = KiB) during `OPEN` when the claim
+the primary gave is smaller, and whether the machine has it is the primary's
+claim. Refused, the open is `PDE_NOMEM`, and 20.22.6's sentence for it names
+the object count. Only `OPEN` ever answers `PDE_NEEDMEM`; after `OPEN` the
+index and the window below never grow.
+
+Revisions are folded newest first and an entry is written only while it is
+still `0`, so the newest revision that MENTIONS an object wins, a free entry
+counting as a mention (7.5.6). A classic revision in such a chain is folded by
+reading its 20-byte rows in order (checked as 20.2.3 checks them; a bad row is
+`PDE_XREF`). A hybrid section (7.5.8.4) is folded in three passes: the table's
+in-use rows, then its `/XRefStm`'s rows, then the table's free rows, so a
+compressed object that a hybrid writer lists as free in the table is found in
+the stream and a genuinely free one stays free; one the table leaves out of
+every subsection is found in the stream either way. (qpdf 12 lets a free row
+win over the stream, so the fixtures are of the second shape: there is no
+reference reader to hold the first to.) An `/XRefStm` at or past the end of
+the file is ignored, as before; one inside the file that is not a
+cross-reference stream is `PDE_XREFSTM`.
+
+**20.22.3.2 Cross-reference streams.** At a revision's offset `n g obj` with
+`/Type /XRef` is read as a stream (7.5.8): its dictionary IS that revision's
+trailer (`/Size`, `/Root`, `/Info`, `/Prev`, `/Encrypt`, `/ID`, the same
+newest-wins rule as 20.2.3), `/W [w0 w1 w2]` with each width 0 to 4, `/Index`
+(pairs `first count`, default `[0 /Size]`, at most 4,096 numbers), and the
+rows: type `w0` bytes (0 width means type 1), field 2 `w1` bytes, field 3 `w2`
+bytes, big-endian. Type 0 is free, type 1 is an offset (field 3 the
+generation, which, as for a classic entry, is not kept: the object header's is
+matched, 20.2.8), type 2 is (object stream, member index), any other type is
+a null. An offset under 9 or at or past the end of the file, a width over 4,
+an `/Index` that is not pairs of non-negative integers, or rows that end
+before `/Index` does, is `PDE_XREFSTM` (now: a DAMAGED cross-reference
+stream), which 20.22.3.5 repairs. An object stream number over 32,766 or a
+member index of 65,535 is `PDE_LIMIT` (the index cannot name it) and is not
+repaired. Rows for objects at or past the index's size are ignored. The rows
+are decoded through the ordinary filter chain (Flate with its PNG/TIFF
+predictor - qpdf writes `/Predictor 12` - and every other filter of
+20.22.3.6); a cross-reference stream is never decrypted (7.6.2). Its Flate
+stage takes Flate slot 0 when the machine has the Flate tier (no stream is
+open during `OPEN`) and the object-stream window's slot when it has not
+(`PDE_NEEDMEM` for `PDMEM_OSW` first). The fold runs in `OPEN` slices of 512
+rows (`PDE_BUSY`, `state` 5). `PDO_XREFSTM` is set when a stream was read,
+`PDO_OBJSTM` when an entry names an object stream; `TRAILER` reports
+`tflags` `PDTR_XREFSTM` when the NEWEST section is a stream, and `startxref`
+is that section's offset whatever its kind. `DICT_GET` 0/0 reads the newest
+trailer dictionary or cross-reference stream dictionary.
+
+**20.22.3.3 Object streams (`PDMEM_OSW`).** A member is read IN PLACE from
+the object stream's decoded bytes, through the one funnel every read goes
+through (the file layer's copy, 6.1): **a position names its container.** A
+position with bit 31 clear is a file offset; one with bit 31 set is `hi =
+0x8000 | object stream`, `lo` = offset in that stream's decoded bytes. Every
+save-and-seek-back in the parser (a reference followed in the middle of a
+dictionary, the dictionary and array cursors, a page's inherited attributes)
+therefore keeps working across a hop into or out of an object stream with no
+change to the parser. Resolving member `k` of stream `s` reads the stream's
+header pairs (`num off`, 7.5.7): pair `k` must name the object (else every
+pair is searched for it; not found is a null), the position is `/First + off`,
+the generation is 0 (a reference with any other is a null), and there is no
+`n g obj` or `endobj`. A resolved position is kept in the resolved-offset
+cache (20.2.2) as `hi | lo`, so the pairs are read once an object.
+
+The decoded bytes live in the OBJECT-STREAM WINDOW: one region of 43 KiB,
+exactly the shape of a Flate slot (20.13: a 32 KiB ring at offset 0, the rows,
+the tables and the saved state), asked for with `PDE_NEEDMEM` (CX =
+`PDMEM_OSW`, DX = 43) at the end of the fold when any entry names an object
+stream, or when the repair scan meets one. It is a THIRD Flate slot, private
+to the window, so an object stream is decoded while a page's content and a
+form hold slots 0 and 1, and an XT without the Flate tier still reads
+compressed objects. The ring holds the last 32,512 decoded bytes of the stream
+in it; a read ahead of what is decoded decodes on, a read behind it decodes
+again from the start (the swap rule: one stream is resident; asking for
+another, or for bytes before the ring, re-decodes from that stream's start up
+to the bytes asked for). A stream's decoded offsets are 16 bits: bytes past
+65,535 cannot be named and a member there is `PDE_LIMIT`. The stream's
+geometry (data offset, length, Flate or not, `/First`, `/N`) is read when a
+member is first resolved and kept in 8 records (round robin), so a re-decode
+in the middle of a token needs no parse; a position in a stream whose record
+has been reused is `PDE_LIMIT` (it needs nine object streams entered between
+saving a position and returning to it). An object stream's `/Filter` is
+`/FlateDecode` (a name, or an array of that one name) or nothing - the ring
+is then Flate's own history - and a `/DecodeParms` with a `/Predictor` above
+1, or any other filter or chain, is `PDE_FILTER`. (Every writer we know
+compresses object streams with Flate alone; a chain would cost the parse of a
+second filter list, 20.22.3.7.) An object stream inside an object stream, or
+one that is not `/Type /ObjStm`, is `PDE_XREF`. Decryption of an
+object stream is crypt's raw layer (20.22.5): the stream context carries the
+object number and generation (`sctx.onum/ogen`) for the key, and members are
+never decrypted again.
+
+`OBJ_FIND` of a member answers its position (bit 31 set) as `offset` and the
+bytes of its VALUE as `length` (`kind` as usual; a member is never a stream).
+`RAW_COPY` with `mode = PDRC_EXACT` copies those value bytes; with
+`PDRC_PLAIN` it copies `n 0 obj\n`, the value, `\nendobj\n` (`done` and
+`got` address that synthesised text, the same bytes every call). `PDRC_PLAIN`
+of an object that is not a member is the file's bytes exactly (on a file with
+no `/Encrypt`), and on an encrypted file it is crypt's hook
+`cr_raw_plain()` in `pdeverb.c` (20.22.5 fills it: strings and stream
+decrypted, `/Length` made direct).
+
+**20.22.3.4 What `OPEN` does now.** The states (`pdxb_open.state`): 2 one
+revision a slice, as before, now either kind; 5 the fold (`PDE_NEEDMEM` for
+the index first; 512 rows a slice); 6 the window check (`PDE_NEEDMEM` for the
+window); 7 encryption: when any revision's trailer has `/Encrypt` the engine
+records it (a reference, or the position just inside a direct dictionary;
+`TRAILER`'s `encrypt_num/gen` and `PDTR_ENCDIRECT`) and calls crypt's hook
+`cr_open()`, which answers `PDE_PASSWORD` until 20.22.5 lands (so an encrypted
+file is `PDE_PASSWORD`, no longer `PDE_ENCRYPT`, and the trailer is never a
+refusal by itself); 3 and 4 the catalog and the page tree as before; 8 to 10
+the repair. `/ID[0]` is kept whole up to 32 bytes (`id0`, `id0_hi`, `id0_len`
+its true length). The 1 KiB the engine searches for `startxref` is read into
+the stream contexts, which are free during `OPEN`'s first state, and
+`FINGERPRINT` reads its two kilobytes 128 bytes at a time: the 1 KiB tail
+buffer is gone.
+
+`PDE_NEEDMEM` is the ladder's (20.22.1): the primary claims the region, puts
+it in `pdxb_init` and calls `INIT` again, then `OPEN` with the same `state`.
+**A re-`INIT` whose cache, arena, tables and Flate claims are the ones it
+already has keeps the document and the open state** and only takes the new
+`xidx_*`/`osw_*` (this amends 20.2.2's "a re-INIT closes any document", which
+still holds for any other re-INIT).
+
+**20.22.3.5 Repair (AP-02).** When `OPEN` fails in states 0 to 7, 3 or 4 with
+`PDE_XREF`, `PDE_TRUNC`, `PDE_XREFSTM`, or `PDE_SYNTAX` for a missing root
+(`err_detail` 4), the engine throws the cross-reference away and scans the
+file instead (`PDO_REPAIRED`); a header failure (`err_detail` 1 or 2), an I/O
+error, a limit, memory and encryption are not repaired. The scan is a token
+walk of the whole file from offset 0 in `OPEN` slices of 4 KiB, skipping every
+stream's data (to its `endstream`): `n g obj` at a token boundary is an
+object at the offset of `n` (a later one overwrites an earlier one: the
+incremental-update rule); an object stream's header pairs are read and each
+member written as `(stream, index)` at that point of the walk, so the order
+of the file decides between a member and a direct object of the same number;
+`trailer <<...>>` and a `/Type /XRef` dictionary are trailers (the LAST one
+in the file wins); a `/Type /Catalog` object is remembered, the root when no
+trailer names one. Pass 1 (state 8) finds the highest object number, so the
+index can be asked for; pass 2 (state 10) writes it. Objects freed by an
+update cannot be seen by a scan and stay in use (MuPDF and qpdf do the same).
+After a repair `TRAILER` reports `startxref` 0 (there is no cross-reference
+for an incremental update's `/Prev` to name: 20.22.4 saves such a file whole)
+and `DICT_GET` 0/0 reads the last trailer the scan met, `PDE_NOTFOUND` when it
+met none. A failure after the repair is reported as it is. A file damaged AFTER `OPEN`
+(an entry found wrong when an object is first read) is `PDE_XREF` at that
+verb, as before.
+
+**20.22.3.6 Filters (AP-03) and the codec pass-through.** Kinds now:
+`ASCIIHexDecode` `AHx`, `RunLengthDecode` `RL`, `FlateDecode` `Fl`,
+`LZWDecode` `LZW`, `ASCII85Decode` `A85`, at most four a chain, `PDFL_*` bits
+as `pdabi.h`.
+
+* ASCII85 (7.4.3): a push stage like ASCIIHex. White space is skipped, `z`
+  is four zeros between groups only, `~` ends the data, a last group of 2 to
+  4 characters gives 1 to 3 bytes, a character outside `!`..`u`, a group over
+  2^32 - 1, or a last group of one character is `PDE_SYNTAX` at the read.
+* LZW (7.4.4): a slot stage like Flate - the ONE slot stage a chain is Flate
+  or LZW (both: `PDE_FILTER`), it needs the Flate tier (none: `PDE_FLATE`, as
+  Flate), and it reuses Flate's predictor and delivery: `/DecodeParms`
+  `/Predictor` (PNG 10-15, TIFF 2), `/Colors`, `/BitsPerComponent`,
+  `/Columns` and `/EarlyChange` (0 or 1, default 1). Codes are 9 to 12 bits,
+  most significant bit first; 256 clears, 257 ends; a code above the next
+  table entry, or one not yet defined, is `PDE_SYNTAX`; data that ends
+  without 257 ends there (as qpdf). The table (4,096 entries of a prefix code
+  and a last byte, 16 KiB) and the string, built down from the top of a stack
+  above it, are in the slot's window area: no length table.
+* The codecs: `DCTDecode` `DCT`, `CCITTFaxDecode` `CCF`, `JBIG2Decode`,
+  `JPXDecode`. With `pdxb_strm.accept` 0 they are `PDE_FILTER` at
+  `STRM_OPEN`, as before. With `PDSA_CODEC` a codec that is the LAST stage of
+  the chain is not decoded: the chain stops before it, `pdxb_strm.codec`
+  names it (`PDCD_*`) and `STRM_READ` delivers the CODED bytes; a codec
+  anywhere else, or two, is `PDE_FILTER`. The codec's parameters are the
+  caller's to read with `DICT_GET` (`DecodeParms`, `[n]` when `/DecodeParms`
+  is an array, and `JBIG2Globals`, a reference to a stream the caller opens
+  first with its own `STRM_OPEN`).
+* `Crypt` stays `PDE_FILTER` until 20.22.5 handles it.
+
+**20.22.3.7 Costs.** PDENG image + bss, measured (`make build/PDENG.MOD`):
+47,152 at the round's start (36,822 + 10,330); **46,512 + 9,810 = 56,322**
+with 20.22.3.1-8, +9,170 of the 9,800 the 23:20 ledger gives eng (56,952
+inside PDENG's 65,024, the part limit). The first build was 58,926; what
+brought it back is a checkpoint record with no count of what it stands for
+(the walk is bounded by the table instead: 2,048 bytes of bss where the
+round's start had 2,560), the tail buffer gone (20.22.3.4: -1,024) and code
+shared or table-driven (`kw_ix`, one stream-bounds check, Flate-only object
+streams, an LZW with no length table, `pdm_u32_todec` for RAW_COPY's
+numbers). A flat-index fold of classic tables was built and withdrawn: it
+made a sparse classic file cost 4 bytes an object, which a large one on a
+640 KiB XT cannot pay, and the checkpoints never refuse. Deep stack
+(tools/os88pdstk.py): the worst verb is `OPEN` at 550 bytes from the door,
+inside D23's 1,776, through an object stream's geometry read during the
+fold. RAM: nothing for a classic file; `4 x /Size` bytes for a
+stream-indexed or repaired one (a cross-reference-stream file of `/Size`
+16,000 asks 63 KiB, which a 640 KiB XT with a document open may refuse:
+`PDE_NOMEM`, and 20.22.6 says so); 43 KiB more for a file with object
+streams (or, with no Flate tier, a compressed cross-reference stream).
+
+The fixtures are `tests/pdfany/eng/` (tools/os88pdfx_eng.py, provenance in its
+README): the samples as object-stream files plain and compressed, hybrids, a
+cross-reference-stream update on a classic file and a classic update on a
+cross-reference stream (PDWRT's shape), a stream with an indirect `/Length`, object streams longer than
+the ring read backwards, three damaged files, LZW through every width and
+table reset and with `/EarlyChange 0`, ASCII85 and an [ASCII85 LZW] chain.
+`hosttest/pde_check.py` holds the engine to qpdf over every one, with and
+without the Flate tier: pages, page objects, boxes, every content stream's
+decoded bytes, and every object's `RAW_COPY` in both modes against the tool's
+own reading of the decoded object stream. `make pdefuzz` mutates them with
+the rest of the corpus, the claims random a case and every `PDE_NEEDMEM`
+granted.
+
+**20.22.3.8 Seams for the other agents.** Four answers that read the trailer,
+the resources and the objects, which are the engine's:
+
+* `RES_LOOKUP` of a resource written DIRECTLY in another object (an inline
+  `/ExtGState << /GS1 << /CA 0.5 >> >>`) answers `objnum` 0 and its `kind` as
+  before, and now also, in `pdxb_reslookup_x`'s tail (`pdabi.h`'s `[eng
+  20.22.3]` block; the verb reads the `pdxb_reslookup` at the head of the
+  exchange block and writes the whole extended struct): `rflags`
+  `PDRL_DIRECT`, `cnum`/`cgen` the object the value is written in (the page,
+  an inherited ancestor, a resource dictionary or a category dictionary,
+  whichever was entered last), and `coff`, where the value's `<<` starts in
+  that object's `RAW_COPY` `PDRC_EXACT` bytes - from `n g obj` for an object in
+  the file, from the value for an object-stream member. PDXG reads the value
+  with `RAW_COPY` from `done = coff` and parses it itself. A referenced
+  resource has `rflags` 0. (Decision 23:35, Question 3; on an encrypted file
+  a string inside the value is the file's bytes, and an ExtGState has none
+  that matters.)
+* `RAW_COPY` of `objnum` `PDRC_ENCDICT` (0xFFFE, wrt's block, 20.22.4.1) when
+  `TRAILER` has `PDTR_ENCDIRECT` copies the text of the direct `/Encrypt`
+  dictionary from its `<<` to its `>>`, the file's bytes in either mode;
+  without a direct one it is `PDE_NOTFOUND`, and a dictionary longer than 640
+  bytes is `PDE_LIMIT` (PDWRT copies it into a fixed buffer).
+* `RAW_COPY` `PDRC_PLAIN` of an object is written as up to three pieces, one
+  after another in `done`: the frame (`n g obj`, the dictionary, `stream`),
+  the stream's data and the tail (`endstream`, `endobj`). An object-stream
+  member is framed as before (20.22.3.3). A stream in the file whose
+  `/Length` is a REFERENCE has that reference written as its number - the
+  dictionary's bytes up to the reference, the decimal value, the bytes after
+  it - so PDWRT, which copies an object into a file whose objects are
+  renumbered, never carries a reference to a length object it did not copy
+  (wrt's request, 20.22.4.2). The number is the one the stream was read with.
+  On an encrypted file the PLAIN copy goes to the `crypt` hook
+  (`cr_raw_plain`, 20.22.5), which decrypts the strings and the data; the
+  EXACT copy is the file's bytes as ever.
+* `OPEN` that answers `PDE_PASSWORD` (20.22.5: the file is encrypted and the
+  empty password does not open it) leaves the document HALF open - the
+  cross-reference, the trailer and the `/Encrypt` dictionary read, the pages
+  not - and says so in `xo.state`; `CRYPT SETKEY` with the user's key and then
+  `OPEN` again resumes from there, without reading the cross-reference a
+  second time (wrt's request: a file that took a minute to index takes it
+  once). `OPEN` with state 0, or `CLOSE`, abandons it. `DICT_GET` and
+  `TRAILER` answer there (PDXK reads `/Encrypt` through them, 20.22.5); every
+  other object verb answers `PDE_RANGE`, as on a closed document. `RAW_COPY`
+  tests its mode's LOW byte, so crypt's `PDRC_STRCIPHER` in the high byte
+  of an answer fed back is harmless.
+
+**20.22.3.9 A Flate claim cut to one slot (plat's request, 20.22.2.4).** A
+re-`INIT` with every claim the same except `flate_kb` keeps the open document
+(and an `OPEN` in progress) when `flate_kb` is now one slot's worth (43 to 85
+KiB) where it was two. Slot 2 must hold no live stream; the primary regrows the
+Flate claim down by that slot's paragraphs afterwards. The answer is CF = 0
+with AX = 1 when the cut is taken. AX = `PDE_BUSY` means a live stream sits in
+slot 2 and nothing changed: the claim stays as it was, so ask again between
+streams. Every other change of the Flate claim still resets the document
+(20.2.2). `pde_test flshrink` (pde_check's `XTGUI_OZ.PDF` row) opens two Flate
+streams, sees `PDE_BUSY`, closes the inner one, sees AX = 1 and reads the
+outer one to the same bytes as an undisturbed read. Cost: 152 bytes.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
@@ -5429,7 +5881,268 @@ still hold the plain paths byte for byte.
 
 #### 20.22.5 Encryption (`crypt`)
 
-*Reserved; written by its agent before its code.*
+Owner decisions O3 (the empty user password silently, a prompt otherwise; RC4-40,
+RC4-128, AES-128, AES-256) and O5 (`/P` is ignored: every action is allowed once
+the file opens, and a save keeps the source's `/P` and `/Encrypt`) bind this
+section. AP-04 is the story; AP-05 (the R6 question) takes `PDV_KEY_COST` from
+here and builds its sentence in 20.22.6. The lead's decision of 23:30 (the
+restructure that made PDENG's share fit) is built in. Numbers are measured:
+20.22.5.1.
+
+**What runs where (L1).**
+
+| where | what | why there |
+|---|---|---|
+| PDENG (`pdecrypt.c`; `pdcmd5.inc` `pdcrc4.inc` `pdcaes.inc`) | the per-object key (MD5), RC4, AES-CBC **decryption**, of a stream's raw bytes and of a string lexed from the file; `PDV_ENG_SETKEY`; a minimal `PDV_ENG_CRYPTINFO` | a stream is read while a page is drawn, when the one slot may hold a codec |
+| PDXK (`pdxk.asm`, `pdxk.c`, `pdcsum.c`, `pdcsha2.inc`, the same MD5/RC4/AES sources) | reading `/Encrypt` through PDENG's `DICT_GET`; algorithms 2, 4, 5, 6, 7 (R2 to R4) and 2.A, 2.B (R5, R6); the file key from `/UE` `/OE`; the cost estimate | at open only, and large (SHA-2, AES encryption) |
+| PDWRT | encrypting what a save writes | **by the shared source**: PDWRT includes `pdcrypto.h`, `pdcmd5.inc`, `pdcrc4.inc` and `pdcaes.inc` WITHOUT `PDC_NOENC` (the encrypting half). `PDV_ENG_CRYPT` is withdrawn (decision 23:30). Per-object key: `pdc_okey(key, klen, num, gen, aes)` leaves the 16-byte MD5 in `pdc_ok`; the key is its first `min(klen + 5, 16)` bytes (AESV2 passes `aes = 1`, which appends `sAlT`; AESV3 uses the file key as it is). `pdc_aes_ks(rk, key, 4 or 8)` then `pdc_cbc_enc(rk, 10 or 14, iv, buf, nblocks)` (the caller writes the 16-byte IV first and pads to PKCS#5); `pdc_rc4_ks` / `pdc_rc4` for RC4. All take NEAR buffers; the host twin is `pdctwin.c` |
+
+**The library** (`apps/pagedesk/pdcrypto.h` is its declaration and layouts). Every
+primitive has an 8086 body (SmallerC cdecl, near pointers, `cpu 8086`) and a HOST
+twin in `pdctwin.c` written from the standards with the compiler's own 32- and
+64-bit integers. `tests/pdcrypt/pdc_diff.py` holds the twin and the shipping
+assembly (in Unicorn) to RFC 1321, FIPS 180-4 (SHA-256 including the million-`a`
+message, SHA-384, SHA-512), FIPS 197, SP 800-38A F.2 and the RC4 vectors
+(RFC 6229 offset 0 among them), then to each other on random keys and lengths
+(240 agreements), with a negative control (one flipped bit in AES must be
+caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
+
+| primitive | assembly | body, bytes |
+|---|---|---|
+| MD5 block, the per-object key block | `pdcmd5.inc` | 822 with its constants |
+| RC4 key schedule and stream | `pdcrc4.inc` | 171 |
+| AES key expansion (128 and 256), decryption (table-driven), CBC, the decryption schedule | `pdcaes.inc` | about 1,900 with the S-box and its inverse (512); `Td0` 1,024 bytes in the cipher area |
+| AES encryption, CBC encryption | `pdcaes.inc` (not under `PDC_NOENC`) | 189 |
+| SHA-256 and SHA-512 blocks | `pdcsha2.inc` | 3,636 with the constants (896) |
+
+**PDXK** (`PDM_MAGIC_KEY`, the door at +8 as `pdwrt.asm`; image + bss at most
+32,768, no workspace). Verbs; CF = 1 on a failure.
+
+* `PDV_X_INIT` 0xC0 stores the XB segment, PDENG's door (`eng_off/eng_seg`) and
+  `cpu`.
+* `PDV_KEY_PARAMS` 0xC3: XB = `pdxb_crypt` out. The file's `/Encrypt` parameters
+  (`v r length p stm str eff encmeta o_len u_len o u oe ue perms id0 id0_len`),
+  no password tried. Read with PDENG: `PDV_ENG_CRYPTINFO` gives the whole
+  `/ID[0]`, `PDV_ENG_TRAILER` says where the dictionary is (`encrypt_num/gen`,
+  or `PDTR_ENCDIRECT` in `tflags`: eng's fields, 20.22.3.4); then one
+  `PDV_ENG_DICT_GET` a key: `/Filter` must be `/Standard`,
+  `/V` in {1, 2, 4, 5}, `/R` in 2 to 6, `/Length`, `/P`, `/O` `/U`
+  (the first 48 bytes), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4
+  and V5 `/StmF` `/StrF` and `/CF/<name>/CFM` (`/V2` RC4, `/AESV2`, `/AESV3`,
+  `/None`, `/Identity`) and `/CF/<name>/Length`. Anything else is
+  `PDE_ENCRYPT`. Limits of reading through `DICT_GET`: a **direct** `/Encrypt`
+  with V4 or V5 is `PDE_ENCRYPT` (the path to `CFM` is four keys; nothing
+  writes one), and `/P` is the 16.16 integer `DICT_GET` returns, so a `/P`
+  outside plus or minus 32,767 is `PDE_ENCRYPT` on R2 to R4 (where it enters the
+  key) and ignored on R5 and R6. `eff` is `stm` (embedded files follow the
+  stream filter).
+* `PDV_KEY_AUTH` 0xC1: XB = `pdxb_crypt` in/out. `state` 0 starts: when `v` is 0
+  the parameters are read as above (the caller need fill only `pw_len` and
+  `pw`). Then the USER password, then the OWNER password. R2 to R4 are one call
+  (about a second on an 8088). R5 and R6 are resumable: `AX = PDE_BUSY` (CF = 0)
+  with `progress` 0 to 1000 of the run in hand (`state` is nonzero while busy);
+  the caller calls again, and cancels by not calling. One call is a slice of
+  about 40 work units (an AES block is 1, a SHA-256 block 4, a SHA-512 block 14:
+  about 0.6 s on an 8088, 20 ms on a 386). The module must stay loaded between
+  the calls (the primary does not swap the slot during a job); a call whose
+  `state` is nonzero after a reload restarts from the beginning. Success:
+  `AX = PDE_OK`, `key` and `key_len` (5 to 16, or 32), `auth` = `PDCA_USER` or
+  `PDCA_OWNER`, and the password copy is wiped. A wrong password: CF = 1,
+  `PDE_PASSWORD`. **The silent attempt (`pw_len` 0) on R6 tries the user key
+  only**: the owner key costs another 1.7 runs (20.22.5.1) and an empty owner
+  password with a non-empty user password is not a thing any writer makes.
+* `PDV_KEY_COST` 0xC2: XB = `pdxb_crypt` in (an empty struct is read from the
+  file first and returned filled, so the caller learns `r`, the methods and
+  `length` from this one call), `pw_len`. `AX` = the estimated seconds of **one
+  run of algorithm 2.B** on this CPU class (`pdxb_init.cpu`: 8086 as measured,
+  286 a sixth, 386 a 24th, later a 60th); 0 for R2 to R5 (about a second, not
+  worth a question). A call whose parameters cannot be read answers CF = 1.
+  The caller multiplies by the runs: a correct **user** password is 2 runs (the
+  check, then the key salt), a wrong one 1 (the silent attempt) or 2.7 (a typed
+  password, which tries the owner key as well).
+
+**PDENG.**
+
+* `PDV_ENG_CRYPTINFO` 0x13 (from the moment OPEN has read the cross-reference):
+  `pdxb_crypt` out, with `state` 1 when a key is set, then what `SETKEY` set
+  (`auth`, `key_len`, `key`, `stm`, `str`, `eff`, `encmeta`) and the whole
+  `/ID[0]` (`id0`, `id0_len` at most 32) always; `v`, `r` and the strings stay
+  0 (PDXK reads those). The plat pre-flight for Insert reads a foreign file's
+  key and methods here.
+* `PDV_ENG_SETKEY` 0x14: XB = `pdxb_crypt` in (`key`, `key_len`, `stm`, `str`,
+  `eff`, `encmeta`, `auth`). The XB's copy of the key is zeroed. `OPEN` then
+  resumes from its state 7 and `PDO_ENCRYPTED` is set. `OPEN` answers
+  `PDE_PASSWORD` (CF = 1) at state 7 without discarding the document, and
+  **`DICT_GET` and `TRAILER` are allowed in that pause** so PDXK can read the
+  dictionary.
+  Closing, re-INIT or a new OPEN forgets the key.
+  **The cipher area.** `Td0` (1,024), the AES schedule in use (240) and the
+  five RC4 states (`PDE_RC4N` streams, the object-stream window's, a string's:
+  258 each) are not in PDENG's image or bss: they are the first `CR_AREA` =
+  2,560 bytes of the ARENA, and every cipher routine reaches them through ES =
+  `_pdc_cseg`. SETKEY sets `_pdc_cseg` to the arena's segment, marks `Td0` for
+  rebuilding (the arena held the page walk's bits, or another document's
+  table), moves `arena_top` past the area (so the walk's 8 KiB of visited bits
+  go above it), and answers `PDE_NOMEM` on an arena under 11 KiB;
+  `ARENA_REL` may not release below it. An unset `_pdc_cseg` is ES = 0, which
+  writes the table over the interrupt vectors: `tests/pdcrypt/pdc_target.py`
+  fails any module write below `KERNEL_SEG:0500`.
+* `PDV_ENG_CRYPT` is **withdrawn**.
+
+Where decryption sits (and nowhere else):
+
+| place | what is decrypted |
+|---|---|
+| `pdestrm.c` `raw_get`, `st_decode`'s `nflt == 0` branch, `v_strm_read`'s `nflt == 0` branch (each one `if (c->cmode)` call of `cr_read`) | the raw bytes of a stream, at the lowest layer, so every filter, Flate included, sits above plaintext. An AES stream is its 16-byte IV and blocks; the padding is stripped from the last block, which the stream's `/Length` identifies, so nothing is held back; a length that is not a multiple of 16 loses the tail, a padding byte outside 1 to 16 is left alone, a stream under 32 bytes is empty |
+| `pdelex.c` `ob_value`'s `PDT_STR` case (`cr_string`) | a string lexed from the FILE in object mode: its first 254 bytes (the rest of a longer string stays ciphertext; the true length is adjusted). Never the `/Encrypt` dictionary's own strings (`cr_curn` equals `tr_enc_n`), the trailer's (`cr_curn` 0), or a member of an object stream (eng sets `cr_curn` to 0 while the lexer is in one: the object stream is what was encrypted) |
+| `st_push` (`cr_ctx_open`) | the caller leaves the stream's object in `cr_sn/cr_sg` (0 = not encrypted: an xref stream, or a caller that did not say; `v_strm_open` sets them, and eng sets them for an object stream); the key is derived there |
+
+A stream is left as it is when it is an xref stream (`/Type /XRef`), a
+`/Metadata` stream with `/EncryptMetadata` false, or its chain names `/Filter
+/Crypt` with `/DecodeParms << /Name /Identity >>` (or no name); `/Crypt` is a
+chain member that costs no stage. A stream declared `declen` is unknown (~0)
+when it is AES. Limits: at most `PDE_RC4N` = 3 RC4 streams open at once
+(`PDE_LIMIT` otherwise: their state is 258 bytes each); strings and streams
+under different methods work (`/StmF` and `/StrF`).
+
+**`RAW_COPY` with `PDRC_PLAIN` on an encrypted document** (the lead's decision of
+00:00, option 2; eng's hook `cr_raw_plain(rw)` for an object in no object
+stream, called after `ob_extent`; any answer but `PDE_NOTFOUND` is the verb's
+own). The **dictionary's strings stay ciphertext**: the answer sets
+`PDRC_STRCIPHER` (0x0100) in the HIGH byte of `pdxb_rawcopy.mode`, meaning "the
+strings of object `objnum`, `gen` are encrypted under that object's key with
+the document's string method (`pdxb_crypt.str` of CRYPTINFO)": the caller
+decrypts them with the shared source (`pdc_okey`, then `pdc_cbc_dec` after
+`pdc_aes_ks`, or `pdc_rc4`), PDWRT as it tokenises. The flag is not set for the
+`/Encrypt` dictionary's own object; it is set for every other non-member object
+of an encrypted document (a member of an object stream has plaintext strings and
+no flag). **eng's dispatcher must compare `(mode & 0xFF) == PDRC_PLAIN`**, because
+a caller feeds the struct back with the flag in it. A STREAM whose data the
+document encrypts comes out as: the file's bytes of the object up to `/Length`'s
+key, ` <plain length>` (a direct integer, whether `/Length` was one or a
+reference), the file's bytes to the end of `stream` and its EOL, the DECRYPTED
+data (still in its filters), then `\nendstream\nendobj\n`. The plain length is
+`/Length` for RC4 and, for AES, `/Length` less the 16-byte IV, the bytes past the
+last whole block, and the last block's padding (read from the last two cipher
+blocks before the first byte is delivered). Anything else (a dictionary or
+array, an xref stream, a `/Crypt /Identity` stream, an unencrypted `/Metadata`)
+is the file's bytes: `PDE_NOTFOUND` to eng's own copy. `done` and `got` address
+the synthesised text, the same bytes on every call at any chunking; the DATA is
+sequential (the first byte of it, `done` = the header's length, restarts the
+cipher; a `done` that skips back into the data is `PDE_RANGE`), through a ctx
+borrowed above `nctx`, which a `STRM_OPEN` in between invalidates. The header
+must be under 64 KiB. `tests/pdcrypt/pdc_plain.py` holds it to `qpdf
+--decrypt` for the 17 fixtures at chunks of 1, 37 and 4,096 bytes.
+
+**Sizes** (image + bss, bytes). PDENG 43,964 + 11,827 = 55,791, which is +8,639
+over the round's start (47,152; the brief said +3,200 and the lead's 23:30
+decision +6,500): the assembly 2,242, the C (`cr_read` `cr_ctx_open` `cr_string`
+`cr_sched` `cr_skipchk` `SETKEY` `CRYPTINFO`) and the hooks in eng's files about
+3,000, PLAIN 1,734, bss 1,590 (three RC4 states 774, the AES schedule 240, the
+`sctx` fields 160, the key 32, PLAIN's 76). PLAIN was estimated at 250 bytes; the
+32-bit offset arithmetic through `pdm_u32_*` is what makes it 1.7 KB. PDXK 14,958 + 4,391 = 19,349 of 32,768.
+
+**Stacks.** PDENG's chain through `cr_read` is no deeper than `v_open`'s (436
+bytes, `os88pdstk`). PDXK measured by `tests/pdcrypt/pdk_stack.py`: 226 (RC4),
+256 (AES-128), 264 (R6, three slices, the nested `DICT_GET` and SHA-512)
+bytes below the door's entry, of 1,776. Far edge to name in `os88pdstk.py`:
+`_pdk_engcall` to PDENG's `pde_entry`.
+
+**Checks.** `make pdcrypt` (host and Unicorn; not in `all`): `pdc_diff.py`
+(the library), `pdc_e2e.py` (the real PDENG and PDXK on the host against `qpdf`:
+the file key equals `qpdf --show-encryption-key` for 17 fixtures
+(`tests/pdfany/crypt/`, `tools/os88pdfx_crypt.py`), for the owner password too,
+a wrong password and the empty one on a file that has a password are
+`PDE_PASSWORD`, and every stream's CRC, every string, annotation and outline
+title equals the same driver's over `qpdf --decrypt`), `pdc_plain.py` (RAW_COPY PLAIN against qpdf), `pdc_target.py` (the
+**compiled** `PDENG.MOD` and `PDXK.MOD` in Unicorn, kernel stub and all,
+produce the same lines as the host, PLAIN copies and a full R6 run included), `pdk_stack.py`, and
+`pdc_fuzz.py` (ASan/UBSan over mutated copies of every fixture: bit flips, runs
+of 00 and FF, a lying `/Length`, a cut tail, ciphertext cut to 0 to 40 bytes, a
+corrupted `/O`; about 22,000 runs over three seeds, no crash, no hang, no report).
+
+#### 20.22.5.1 R6 cost, measured
+
+Algorithm 2.B: `K = SHA-256(pw || salt || udata)`, then at least 64 rounds, each
+`K1 = (pw || K || udata) x 64` encrypted with AES-128-CBC under `K[0:16]`, `IV =
+K[16:32]`, and `K = SHA-256, SHA-384 or SHA-512(E)` by the sum of `E`'s first 16
+bytes mod 3, until `E`'s last byte is no more than the round number minus 32.
+Counted by running it (`pdk_cycles.py`, the host twin standing in for the data),
+priced from the shipping assembly run in Unicorn with the 8088 rule
+`max(4.34 x instruction bytes, clocks)` of `tests/pdmath/pdcycles.py`, and
+checked against the real `PDXK.MOD` (three of its own slices, instruction by
+instruction: the glue and the hash finalisation add **6.2 %** to the operations
+priced alone, and that factor is in every figure below).
+
+| operation on an 8088 | clocks | ms |
+|---|---|---|
+| AES-128 CBC encrypt, one block | 61,100 | 12.8 |
+| AES-128 key schedule | 23,200 | 4.9 |
+| SHA-256 block (64 bytes) | 204,400 | 42.8 |
+| SHA-512 block (128 bytes) | 790,100 | 165.6 |
+| MD5 block | 98,200 | 20.6 |
+| AES-128 / AES-256 decrypt, one block | 74,900 / 105,200 | 15.7 / 22.0 |
+| RC4, per byte | 203 | 0.043 |
+
+One run of 2.B, mean over 60 random salts (rounds are 69 to 71 on average, 64 at
+least):
+
+| password | rounds | AES blocks | SHA-256 blocks | SHA-384/512 blocks | seconds (min to max) |
+|---|---|---|---|---|---|
+| empty | 69.8 | 13,350 | 1,142 | 1,156 | **437** (355 to 557) |
+| 6 characters | 69.9 | 15,021 | 1,307 | 1,282 | 490 (425 to 623) |
+| 12 characters | 69.0 | 16,445 | 1,449 | 1,389 | 534 (455 to 652) |
+| 24 characters | 71.2 | 20,452 | 1,733 | 1,750 | 665 (560 to 821) |
+
+That is `9.1 x (password + 48)` seconds, the formula in `PDV_KEY_COST`
+(`pdk_cycles.py --stats`). A run is a **seventh of an hour for the empty
+password**; the attempts are runs: a correct user password is **two** (the check
+and the key salt: 14.6 minutes for the empty one, 13 to 15 on a file's own
+salts), a wrong password typed in is 2.7 (the user key, then the owner key, whose
+`udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 22 to 24
+minutes),
+and the silent empty attempt on a file that has a user password is 1 (7.3
+minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
+therefore "about 15 minutes" for a file that opens, and the prompt that follows a
+failed silent attempt another 15. On a 286 (a sixth) it is 2.5 and on a 386 well
+under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
+`DICT_GET` included): R2 0.17 s, R3 and R4 1.8 s (50 MD5 passes and 20 RC4
+passes), a wrong password on R3 5.1 s (the owner key as well).
+
+**Stream decryption speed on an 8088** (the cost of a page that is encrypted,
+not of opening it): RC4 22.9 KB/s; AES-128 CBC **3.4 KB/s** and AES-256 2.6 KB/s,
+from 1.0 and 0.7 (a 30 KB content stream is nine seconds, not half a minute).
+`pdcaes.inc` decrypts with the equivalent inverse cipher (FIPS 197 5.3.5): a
+round is sixteen lookups in `Td0`, a 1 KiB table of 256 entries of four bytes
+(14, 9, 13, 11 times the inverse S-box), kept as a plane of low words and a
+plane of high words. `Td2` is the same planes read the other way round; `Td1` and
+`Td3` take their bytes across the planes (`-DPDC_TD1` adds a second table
+for them: 4.1 KB/s for 1 KiB more). The schedule is made once per object by
+`pdc_aes_ks`, then `pdc_aes_dks(rk, nr)` turns it in place into the decryption
+schedule (InvMixColumns of rounds 1 to nr-1, through the same table: 18,000
+clocks); **`pdc_aes_dec` and `pdc_cbc_dec` need that schedule**, so a caller that
+decrypts calls `ks` and then `dks`, and never encrypts with the result.
+`pdc_cbc_dec` goes from the last block to the first (the previous ciphertext is
+still in the buffer), so no block is copied for the chain. The table is built at
+the first `dks` (`pdc_aes_tdnew` makes the next one rebuild it), 113,000 clocks
+with the schedule. Measured by `pdc_far.py --cycles` under Unicorn with the
+8088 costing rule of `pdc_diff.py`.
+
+**Where the cipher state lives (PDENG).** `PDC_FARST`: the key schedule (240
+bytes), `Td0` (1,024) and the RC4 states (`PDE_RC4N + 2` of 258: the open
+streams, the object-stream window's and a string's) are not in PDENG's image or
+bss. They are the first 2,560 bytes of the arena (`Td0` at 0, the schedule at
+1,024, the states from 1,264): `PDV_ENG_SETKEY` moves `arena_top` past them, and
+the cipher routines reach them through ES, which they load from `pdc_cseg` and
+restore (an `es:` prefix on each state access: RC4 22.9 KB/s, AES-128 3.4 against
+3.6 near). The arena has to hold the 8 KiB of visited bits of the page walk
+**and** this area, so a SETKEY into an arena of less than **11 KiB** answers
+`PDE_NOMEM`: plat claims 11 KiB (`pdu_dckb`, the arena row of 16.2) in place of
+8. Without `PDC_FARST` (PDXK, PDWRT, the host harness) the same routines take
+near pointers. `pdc_far.py` holds the far build to the host twin (120
+agreements, ES checked on every call); `pdc_diff.py` holds the near one.
+PDENG with it: image 53,990 + bss 10,270 = 64,260 bytes in the merged tree
+(66,752 with the same code and the state in bss).
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 
@@ -5558,13 +6271,12 @@ more). The pinned helpers:
   say which decoders it needs (`x_rmark` lets a page with no codec image skip
   the look). When the occupant is one of them the band is drawn with it;
   otherwise the lower id is asked for with `PDE_NEEDMOD` and the band is
-  drawn after the answer. The display list is NOT rebuilt. ONE SLOT: a band
-  whose images need both PDXI and PDXJ is drawn with one of them, and the
-  other's images in that band are not drawn and set `PDF_INC_MODULE` - the
-  open limit of this section (a later round can draw the second decoder's
-  images onto the composed band when no later record shares their rows).
+  drawn after the answer. The display list is NOT rebuilt. A band whose
+  images need both PDXI and PDXJ is drawn through the stash of 20.22.7.10:
+  the resident decoder's rows first, then the other decoder, then one walk.
 * A page view makes at most `PDR_XASKS` = 8 answers; the next want is
-  refused. A page view starts at `PDV_REND_BEGIN` and lasts to the next.
+  refused. The stash's alternating loads are not counted (each finishes a
+  band). A page view starts at `PDV_REND_BEGIN` and lasts to the next.
 * The answer to `PDE_NEEDMEM` is a re-INIT with the same claims and a region
   added: an INIT whose first 24 words (`pdxb_init` up to `slot_seg`) are the
   current ones while a region is asked for adopts the regions only and keeps
@@ -5613,9 +6325,9 @@ answers is checked as hostile: `out_w` 1..4,096, `out_h` 1..32,767,
 reads and at most 1,024; anything else, or CF = 1 on any verb, is
 `PDF_INC_IMAGE` ("image decoder") and the image is not drawn. An open image
 stays open from band to band and is closed by `PDV_IMG_CLOSE`, by another
-image, and by the pass's end. A codec image whose decoder is not the occupant
-when its band is drawn (refused, or the band's other decoder, 20.22.7.2):
-`PDF_INC_MODULE`. Inline images through a codec are not drawn
+image, and by the pass's end. A codec image whose decoder is refused:
+`PDF_INC_MODULE`. A band whose images need BOTH decoders draws them all,
+through the stash of 20.22.7.10. Inline images through a codec are not drawn
 (`PDF_INC_FILTER`, as before).
 
 **20.22.7.5 Sample depths and colour (smode 4).** Images of 1, 2, 4, 8 and 16
@@ -5732,6 +6444,79 @@ At the split: PDREND.MOD 45,180 image + 5,984 bss = 51,164 (was 60,742), and
 PDRENDC.MOD 11,159, holding 35 functions of `pdrv.c`, `pdri.c` and `pdra.c`
 (the non-band verbs, the ladder's answers, the image and XObject operators,
 the annotations and the edit store's records).
+
+**20.22.7.10 Two decoders on one band: the stash.** The slot holds one
+occupant, so a band whose images need `PDX_IMG` AND `PDX_JPX` (a JPEG and a
+JPX whose rows meet) is drawn like this. Before the band is walked,
+`x_rneed` has the decoder that is in the slot decode its images first
+(`ik_fill`). It decodes only the rows that band shows: one source row a
+device row, the row `draw_image` would ask for. Those rows land in the
+extension cache above `g_xctop`, and nothing else is written there while a
+band is drawn. Then `x_rneed` asks for the other decoder (`PDE_NEEDMOD`,
+`PDR_RAST`), and the band is walked ONCE, in the list's order. Each image
+is read from the stash when it is there (`ik_find`: the record's offset,
+`g_ikb` = the band + 1, `g_ikdec`), and from the occupant when it is not.
+So paint order holds, the walker is not touched, and the 8-bit strips
+(20.22.10) need nothing.
+
+* **Cost.** One module load for each band that needs both decoders. The
+  load alternates (the stashed decoder is the one already in the slot), and
+  each decoder re-opens its image once a band. These loads are outside
+  `PDR_XASKS`, because each one finishes a band; a refused decoder ends them.
+* **Room.** The stash holds at most `PDR_NIK` = 6 images a band, each up to
+  16 rows of at most 1,024 bytes. A pass that marked both decoders adds up
+  a bound for each decoder (`ik_note`: rows x row bytes in KiB, per image).
+  At the pass's end it asks for an XC that large above what the cache holds
+  (`ik_size`; `PDE_NEEDMEM` `PDMEM_XC`, at most 63 KiB, once a size a page
+  view). The primary must therefore grant a PDMEM_XC ask when an XC already
+  exists: a bigger claim, then a re-INIT.
+* **What is left.** An image the stash has no room for, or a page with no XC
+  at all (which then draws with the resident decoder only), notes
+  `PDF_INC_LIMIT` ("image stash"), never `PDF_INC_MODULE`. A decoder that
+  fails on stashed rows notes `PDF_INC_IMAGE` as before.
+* **Checks.** `ramp.pdf` pages 5 and 7 are a DCT and a JPX that share bands:
+  side by side, and overlapping with a rectangle between them and the JPX
+  placed twice. `pdr_xchk` holds each, at VGA, Hercules and CGA, to its plain
+  twin (pages 6 and 8) to the pixel, clean. Without an XC, page 7 notes
+  LIMIT and differs from its twin, which is the negative control.
+
+**20.22.7.11 A re-INIT under a ladder answer.** The primary may re-INIT
+PDREND while a `PDE_NEEDMEM` or `PDE_NEEDMOD` answer is pending: to add a
+region, or to release the XC so that a slot occupant's claim fits
+(release-before-refuse, plat's `pdu_slot_load`), or to move the glyph claim
+(PDXF's GLYPH grant, or claim X moved by a regrow). When PDREND's own words
+of `pdxb_init` are unchanged (`ini_mine`: `xb_seg`, the engine's vector,
+`dl`, `band`, `bank`, `adapter`, `bpp`), the page view and the document's
+caches go on. PDENG's, PDWRT's and the Flate slots' words may change under
+it: the primary shrinks INIT's Flate slots while releasing.
+
+A glyph claim that moved or grew is taken up at once (`glyph_fresh`). The
+strike cache starts empty. PDFONTX.RES's INDEX is read again into
+`GC_IDX`, so no FONTBANK need follow, though one is harmless. The
+transformed-glyph slots are emptied. The pass runs again, because the row
+buffer at the claim's offset 0 held an open image's row. Any other re-INIT is a new
+document and ends the view: the next STEP answers `PDE_OK`, and the primary
+must BEGIN again.
+
+The XC holds more than the cache while a view is open: the LUT offsets that
+image records carry, and a band's stash (20.22.7.10), which is written just
+before the NEEDMOD it asks. So when the XC changes under an open view and
+the answer was not PDREND's own `PDMEM_XC` ask:
+
+* the pass runs again, so nothing in the list names the old XC;
+* the stash is dropped;
+* if the XC is gone, `XR_MEM` refuses regions for the rest of the view, so
+  the primary is not asked for what it just released.
+
+Images that needed a LUT or the stash then note `PDF_INC_COLOUR` or
+`PDF_INC_LIMIT`, and the next page view asks for the XC again. `pdr_test`'s
+`PDR_XCDROP` releases it this way under every NEEDMOD answer, moving
+`flate_kb` and `cache_kb` with it. `PDR_GLYMOVE` moves the glyph claim to
+a new 40 KiB region once, under the first answer, and leaves a canary
+where the old one was. `ramp.pdf` page 9 (text, a DCT image, text) must
+then draw the same page to the pixel. `pdr_xchk`
+requires such a view to finish, every band blitted, with `PDF_INC_LIMIT` and
+never `PDF_INC_MODULE`. Before this rule the view ended at the re-INIT.
 
 #### 20.22.8 Fonts from their programs (`fonts`)
 
@@ -5877,13 +6662,15 @@ page with 88 distinct glyphs, which does not fit its block)**; the Type 3 fixtur
 glyph-level check is therefore 6 % at any size and for an outline page 8 %.
 
 **Budgets** (image + bss): PDXF at most 65,024 (the part limit, the lead 23:56); it measures
-40,686 + 20,126 = **60,812**. PDREND is two caps since 20.22.7.9: what is entered once per font
-load, per glyph MISS, per Type 3 glyph proc or per glyph-claim regrow is in PDRENDC (`pdrovl.h`'s
-`[fonts]` block: `font_get`, `font_encoding`, `font_classify`, `words_hit`, `emb_miss`, `t3_drain`,
-`syn_adopt`), and the per-glyph HIT stays near (`emb_hit`, `emb_glyph`, `syn_find`/`cap`/`hdr`/`off`,
-`t3_queue`, the branches in `text_glyph`, `text_show` and `strike_load`). With Type 3 ON, PDREND
-measures 44,826 + 6,116 = **50,942** near against rcore's 51,164 without any of it (fonts' near share
--222: the font loader's 2,135 bytes left with it) and PDRENDC **14,475** against 11,159 (+3,316).
+40,686 + 20,126 = **60,812**. PDREND: fonts' share is at most **+2,700** near (the lead, once
+20.22.7.9's second code segment was decided; moving code there is optional under it). Measured against
+PDREND built at rcore's 27bb5f290 (no fonts code: 54,792 + 5,948 = 60,740), fonts' PDREND is 57,328 +
+6,076 = 63,404, **+2,664 with Type 3 included**, and nothing is moved. Per glyph: `emb_hit`,
+`emb_glyph`, `syn_find`/`cap`/`hdr`/`off`, `t3_queue`, the branches in `text_glyph`, `text_show` and
+`strike_load`; per miss, per Type 3 proc or per regrow (the candidates for `pdrovl.h` should the
+room be wanted): `emb_miss`, `t3_drain`, `syn_adopt`, `font_get`'s probe. A code that finds its
+block's 128 keys full answers no slot (not a refusal of the font): PDREND notes `PDF_INC_LIMIT` and
+draws that code in the substitute face; `PDE_LIMIT` from GLYPH means `PDFE_SIZE` only.
 Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` > `_v_glyph` >
 `_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
 deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.
@@ -5901,11 +6688,439 @@ the fonts rows the lead registers over those four scripts.
 
 #### 20.22.9 Colour spaces, functions, shading, patterns (`gfx`)
 
-*Reserved; written by its agent before its code.*
+PDXG (`PDX_GFX`, magic `PDM_MAGIC_GFX`, `PDXG.MOD`, image + bss at most
+65,024: lead decision 23:18) is the slot occupant that does the work of `cs CS sc SC scn SCN sh` and
+of images in non-device colour spaces **at interpretation time** (L1). It
+compiles a colour space, a function or a shading and hands the RESULT to the
+core, which keeps it in the extension cache (`XCK_CS`, `XCK_SHADE`, `XCK_LUT`,
+`XCK_PAT`); a later pass or page needs no module. The module never claims
+memory (3.4), never holds a result between verbs except in its own workspace,
+and every verb is one call with no C recursion (20.15's stack bound).
+
+**What it reads.** The module reads PDF syntax itself, through PDENG's
+`PDV_ENG_RAW_COPY` in `PDRC_PLAIN` mode (so an object-stream member or an
+encrypted string arrives plain; one window of 1,024 bytes a dictionary).
+The core names a RESOURCE, not an object: `PDGXI_RES` with the Form's object
+number (0 = the page, whose index is `bpc`) and the text `Category\0Name`; the
+module walks Resources/Category/Name through `/Parent` (8 levels), finding the
+key by a scan that parses nothing but the value it wants (a page dictionary can
+be larger than the node tables). It also accepts a plain object number or direct
+syntax (`tseg:toff`, `tlen` <= 1,024) for the host harness and for a function. Stream data (a type 0 or 4 function, a mesh shading) is read through
+`PDV_ENG_STRM_OPEN/READ/CLOSE`. A tiny non-recursive parser (`pdxgp.c`: an
+explicit stack, a bump arena of 12 KiB in the workspace, names, numbers,
+arrays, dictionaries, references; at most 64 items a container, depth 8)
+turns it into a flat node table. References are chased by re-fetching, at most
+8 hops a value.
+
+**Numbers.** 16.16 `pd_fx` throughout; no `long`, no float. A function is
+evaluated in `pd_fx`; domains, ranges, encodes and decodes clip as the PDF
+reference says. The luminance the core stores is `(77r + 150g + 29b) >> 8`
+(pdri.c `col_set`), so a colour computed here is the core's own after one
+call.
+
+**Colour spaces** (`PDV_GFX_CS`). Device spaces never reach the module.
+Handled: `Indexed` (base any of the below, hival <= 255, table string or
+stream), `ICCBased` (by `/N`: 1, 3 or 4 components are `DeviceGray`,
+`DeviceRGB`, `DeviceCMYK`; `/Alternate` and the profile are never read - an
+approximation, not an Incomplete bit), `CalGray`, `CalRGB` (white point,
+gamma and matrix applied, then XYZ D50 to sRGB), `Lab` (white point, range),
+`Separation` (`/All` and `/None` included: None paints nothing), `DeviceN`
+(up to 8 colorants, tint transform any function type), and `Pattern` (with
+or without an underlying space). The compiled space is `struct pdgx_cs`
+(`pdabi.h`'s gfx block): a 16-byte header and, for a 1-component space, a
+256-entry RGB table indexed by `round(c * 255)` (Indexed: by the index
+itself). So the core's `sc` for any 1-component space is one table lookup. A
+space with more than one component is `PDGX_F_RGBLIKE` (CalRGB and ICC N=3:
+the core takes the operands as device RGB), `PDGX_F_CMYKLIKE` (ICC N=4) or
+`PDGX_F_MODULE` (Lab, DeviceN with n >= 2): `PDV_GFX_COLOR` converts one
+operand set while the module is resident, and the core caches the answer as an
+`XCK_LUT` entry keyed by (the space's cache offset, a hash of the operands).
+The header keeps the space's source (object number, or up to 480 bytes of
+syntax) so the module can recompile it for `PDV_GFX_COLOR` without the core
+holding a second copy.
+
+**Image LUTs** (`PDV_GFX_LUT`, `XCK_LUT`). For an image whose space is not a
+device space, the module builds `struct pdgx_lut`: `ncomp` (1..4) tables of 256
+bytes. The grey of a pixel is the SATURATING SUM of `table[i][sample[i]]` over
+the components, where a sample is the raw byte (after rcore unpacks 2, 4 and
+16-bit samples to 8 bits). A 1-component space (Indexed, Separation, CalGray,
+ICC N=1, DeviceN n=1) is exact. A 3-component space is the luminance weights
+on each channel after the space's conversion (exact for RGB-like spaces,
+a linearisation about mid-grey for Lab). A 4-component space is
+`255 - (cx + my + yz + k)`-shaped per channel (the core's DeviceCMYK weights).
+`/Decode` is folded into the tables, so rcore applies none.
+
+**Functions** (`pdxgf.c`). Types 0 (sampled, 1 to 4 inputs, `/BitsPerSample` 1 to 32 - linear
+interpolation in 1 and 2 inputs, nearest sample in 3 and 4; a table over 3,072
+bytes is refused and the colour stays black with PDF_INC_COLOUR), 2 (exponential), 3 (stitching - its sub-function chain is
+walked in a loop, not by recursion; depth at most 8) and 4 (PostScript
+calculator: tokens compiled to bytes, an explicit operand stack of 100 values
+and an explicit if/ifelse stack of 16 frames; every operator the reference
+lists). A function is evaluated with `fn_eval(in[], out[])` and any failure
+(a bad stream, a stack under- or overflow) makes the colour black and sets no
+Incomplete bit.
+
+**Shading** (`PDV_GFX_SHADE`) is drawn as FLAT POLYGONS (lead decision 23:52, option 1): the module answers
+records and the core appends each as an ordinary `FILL` through the existing filler, so PDREND carries no shading
+rasteriser. The request is `pdxb_gfx` with the resource (`PDGXI_RES | PDGXI_CAT_SH`, the Form or page, the name at
+`tseg:toff`; or `objnum:gen` of a shading object), the CTM (`ctm`: user space to device quarter-pixels), the device
+clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32), and the result buffer
+(`rseg:roff`, `rcap`; the core uses 760 bytes of the exchange block). The answer is `ntri` records in `rlen` bytes
+(`pdabi.h`, `PDGX_REC_*`): `r g b flags npts n1` then `npts` points of two `pdi` device quarter-pixels,
+already through the CTM and clamped to +-16,000, filled non-zero. `n1` is the length of a first contour when a
+second (the hole of a ring, wound the other way) follows. Flag bit 0 marks a CLIP record: the shading's `/BBox`,
+sent first; the core clips to it and fills nothing. The core wraps the whole shading in `q`/`Q`.
+
+* **Type 2** (axial): bands perpendicular to the axis, `steps` across the visible part of `[0, 1]` (cut to the
+  cover rectangle), each the colour at its middle; `/Extend` adds one band to the clip edge. The geometry is done in
+  the user space of the shading against the user-space rectangle that covers the clip (the inverse of the CTM on
+  the clip's corners, two pixels out), so rotation and skew need no special case.
+* **Type 3** (radial): when one circle lies inside the other (the usual case), exact RINGS between the circles
+  of consecutive `s` (a polygon of M sides for each, M = 16, 24, 32 or 48 by the size on the device, its radius
+  scaled so the polygon has the circle's AREA) and an extension as a disc or a ring out to a circle that covers the
+  rectangle; otherwise (a cone) discs in increasing `s`, the later over the earlier, the ends extended in eight
+  closer-and-closer discs until the circles leave the rectangle. Identical circles paint nothing.
+* **Type 1** (function-based): an 8 x 8 grid of the domain, one flat quad a cell with the mean of its corners'
+  colours.
+* **Types 4 and 5** (triangle meshes): each triangle is cut into k x k flat sub-triangles, k = 1 + (the largest
+  colour change along an edge) / 28, at most 5, and no finer than one a step of 8 device pixels; adjacent
+  triangles of different k meet in a T-junction (a hairline at worst).
+* **Types 6 and 7** (patches): the surface is evaluated on an n x n lattice, n = 2, 4 or 8 by the colour change
+  across the patch, one flat quad a cell (separable Bernstein evaluation, a row of the lattice at a time).
+
+The verb is RESUMABLE: when the buffer is full it answers `PDE_BUSY` with `state` = the units done (a unit is a band,
+a ring, a row of grid cells, a triangle, a patch cell); the core calls again and the module re-parses, skipping those
+units without evaluating a function for them. At most 6,000 units a shading; the rest is dropped and `kind` bit 0
+is set (the core notes `PDF_INC_LIMIT`). `/Background` and `/AntiAlias` are ignored (`sh` ignores Background by
+the reference); a shading pattern's `/ExtGState` is not applied.
+
+**Tiling and shading patterns** (`PDV_GFX_PAT`). `scn /Name` in a `Pattern` space asks step 1 (the name as
+`PDGXI_RES | PDGXI_CAT_PAT`): the module writes `struct pdgx_pat` (56 bytes: type, `PaintType`, the stream or
+shading object, `/Matrix`, `/BBox`, `/XStep`, `/YStep`) as an `XCK_PAT` entry, and the gstate's slot names it. A fill
+with such a gstate (`f F f* B B* b b*`, not text and not a stroke) asks step 2 (`PDGXI_TILES`; the entry at
+`cseg:coff`, `ctm` = the page's default matrix, `clip`): the answer is `ctm` = the pattern matrix x the default
+matrix (a tiling pattern's: that of its first tile), and for a tiling pattern `ncomp` x `kind` tiles (0 = too
+many: more than `PDGX_TILEMAX` = 40 in a fill), `comp[0..3]` the device step of a tile along i and along j, and
+the first tile's i, j. The core
+* **shading pattern**: clips to the path, sets the CTM and paints the shading (above) with `objnum:gen` of the
+  entry; a direct `/Shading` dictionary is refused with `PDF_INC_SHADE`;
+* **tiling pattern**: pushes a form frame on the pattern's stream, with its own resources, clipped to the path
+  and, per tile, to the `/BBox`; the frame ends once a tile and `frame_end` (the hook `XG_TILE_NEXT`) restarts it
+  for the next, adding the step to the matrix, until the counts are done, when the saved state comes back. Inside a
+  tile there is no pattern; a coloured pattern starts black, an uncoloured one keeps the colour `scn` gave
+  (components first, taken as device Gray, RGB or CMYK). More than 40 tiles: the path is filled flat, mid-grey for a
+  coloured pattern, and `PDF_INC_APPROX` is set. A pattern stroke, a pattern in text and a pattern inside a tile
+  are not drawn as patterns. A fill with `B` strokes BEFORE the pattern (the frame runs after the operator).
+
+**Verbs** (0xC8-0xCF; every one answers only when PDXG is the occupant):
+
+| verb | name | XB / registers |
+|---|---|---|
+| 0xC8 | `PDV_GFX_CS` | `pdxb_gfx` in/out: compile; result in `rseg:roff` (`PDGX_CSBYTES` = 1,264) |
+| 0xC9 | `PDV_GFX_COLOR` | `pdxb_gfx`: `cseg:coff` + `ncomp` operands in `comp[]` (0: the initial colour) -> `rgb[3]`, `rgb[3]` = 1 when nothing is painted |
+| 0xCA | `PDV_GFX_LUT` | `pdxb_gfx`: image LUT in `rseg:roff` (`PDGX_LUTBYTES` = 1,028) |
+| 0xCB | `PDV_GFX_SHADE` | `pdxb_gfx`: flat polygon records (above); resumable |
+| 0xCC | `PDV_GFX_PAT` | `pdxb_gfx`: step 1 the pattern's parameters, step 2 its matrix and tiles |
+| 0xCD | `PDV_GFX_FN` | `pdxb_gfx`: evaluate ONE function (`fn` text, `comp[]` in, `rgb`-free out `val[]`); for the host harness |
+| 0xCE | `PDV_GFX_DASH` | rcore's `pdxdash.c` dash walker, `#include`d |
+| 0xCF | `PDV_GFX_EDIT` | rcore's `pdxedit.c` edit-store marks, `#include`d |
+
+Blend's ExtGState (`pdxgtr.c`, 0xD0-0xD7) and the two above are `#include`d by `pdxg.c` and dispatched by the
+`PDX_OTHER_VERB(verb)` hook of its door (`PDX_LAST_VERB` is the highest verb it accepts); the colour code answers
+`PDE_RANGE` for any other.
+
+**Workspace** (for 20.22.2's table): `want` 13 KiB, `min` 13 KiB (12,302 bytes: the parse nodes, kids and
+strings 4.8 KiB, sample data 3 KiB, calculator byte code 1 KiB, the function table 2.3 KiB and the Indexed table
+1 KiB, laid out in `pdxgp.c`/`pdxgf.c`/`pdxgc.c` as `GW_*`; `GX_WS_KB` is the figure and `PDV_X_INIT` answers
+`PDE_NOMEM` below it). The rest of the module's data is bss: 11.7 KB (the verbs' 1.3 KiB overlay, two 1 KiB
+object windows, the calculator stack, the lattice rows). The module's stack is the private 2 KiB deep stack
+(20.15), measured at 204 bytes for a colour and well under 1 KiB for a shading.
+
+**Limits** (each is a table row, never a crash): 8 nested containers, 64 items a container, 8 reference hops,
+8 colorants, 4 inputs to a sampled function, a sample table of at most 3,072 bytes, 24 vertices a lattice row,
+4 colour values a mesh vertex, 9 compiled functions a request, 6,000 units a shading, 40 tiles a pattern fill.
+
+**Size** (as built, 2026-11-10): see the report; PDXG image + bss against its 65,024 cap, and the core's share
+(`pdrxg.c`) against its allowance, are measured there each time they change.
 
 #### 20.22.10 Transparency through an 8-bit band (`blend`)
 
-*Reserved; written by its agent before its code.*
+Owner decision O4: `/ca /CA`, the sixteen blend modes, soft masks, transparency
+groups and an image's `/SMask` and `/Mask` are blended TRUE, on one grey
+channel, and the result is quantised to the adapter. Files: PDX8, the part
+that does the work (`pdx8.c`, `pdx8i.c`, `pdx8.asm`, `pdrx8.inc`: 20.22.10.11),
+and PDREND's side of it, `pdrx8.c` (the walker's hooks) and `pdrxb.c` (the
+interpretation hooks), plus `pdrd.c`'s `span_out` and `emit_state` calls. Reference implementation of the arithmetic: `tools/os88pdfx_blend.py`
+(its fixtures) against `mutool draw -c gray`.
+
+**20.22.10.1 What is blended and what is not.**
+
+* Only the bands a transparent mark touches take the 8-bit path. Every other
+  band is drawn exactly as before (4bpp palette colour or 1bpp Bayer), so a
+  page without transparency is byte-identical and a mixed page keeps its colour
+  where it has no transparency. The mark map is built while interpreting
+  (`g_x8map`, one bit per 16-row band, 256 bands; a canvas taller than 4,096
+  rows marks every band it cannot name).
+* An 8-bit band is composed in **strips of at most 8 rows** (a sub-pass's
+  row range is a strip too) on grey: the colour of every mark in the band is
+  its luminance `flum`/`slum`/an image's luma. Chroma is lost in that band
+  only. The strip is quantised into the band, columns of the page rectangle
+  only, so the desk is untouched.
+* Quantising uses the SAME rule as a flat fill in the band's own depth: 4bpp
+  the seven-level checker of 20.19.2 (thresholds 21/64/106/149/191/234, parity
+  `(x + y - page_y0) & 1`), 1bpp the 4x4 Bayer of `pat_make`. The phase is
+  absolute, so an 8-bit band and its neighbour show no seam on flat grey.
+* Blending is on grey. Separable modes use the 8-bit formulas of 20.22.10.6.
+  The non-separable modes reduce on a grey backdrop and a grey source to:
+  Hue, Saturation, Color = the backdrop; Luminosity = the source. (This is
+  what the PDF formulas give when `Sat(C) = 0`, not an approximation of them;
+  the approximation is grey in place of colour, and it is the band's.)
+* Alpha and shape are one 8-bit quantity: rasterisation is binary coverage,
+  so `AIS` (alpha is shape) cannot change a result and is not read. A knockout
+  group replaces; an isolated group starts transparent; a non-isolated group
+  starts as its parent (a non-isolated group inside a non-opaque parent is
+  treated as isolated, 20.22.10.5).
+
+**20.22.10.2 The X8 region (`PDMEM_X8`).** `S` = the band width in pixels
+(`g_bw`, at most 768), `PL = 8 * S`. Six planes of `PL` bytes then a 1,024-byte
+row buffer:
+
+| offset | plane |
+|---|---|
+| 0 | `V0` the base: opaque grey of the strip |
+| `PL` / `2PL` | layer 1: `P1` colour, `A1` alpha |
+| `3PL` / `4PL` | layer 2: `P2`, `A2` |
+| `5PL` | `MK` the soft mask in force |
+| `6PL` | 1,024 bytes: an image mask's source row |
+
+`KiB = ceil((PDX8_RES + 6 * PL + 1024) / 1024)` with `PDX8_RES` = 12,288 (the
+part's room, 20.22.10.11): 43 at 640 px, 47 at 720, 49 at 768 (the planes alone
+are 31, 35 and 37). This is the row for 20.22.2's table. The offsets above are
+from `seg:PDX8_RES`. At 8 rows it is the largest strip that two
+group layers, a mask and the base fit in 40 KiB at every adapter; 4-row strips
+would halve it and double the DL walks, 16-row would not leave 64 KiB claim
+room at 720. **Nesting depth is 2** (the page plus two layers; a mask group
+takes the layer above the current one): three nested transparency groups on
+one mark are a depth no page of the real corpus' kind reaches, a layer costs
+12 KiB at 768, and a deeper group is painted inline with `PDF_INC_LIMIT`.
+Layers hold: **isolated** layers premultiplied colour `P` and alpha `A`;
+**non-isolated** layers the colour including the backdrop `C` and the group's
+own alpha `A`.
+
+When a mark needs the region and `x8_seg` is 0, interpretation's end answers
+`PDE_NEEDMEM` (CX = `PDMEM_X8`, DX = `KiB`) once per view; a second answer with
+the region still 0 draws the whole view opaque and sets `PDF_INC_APPROX`. A
+band wider than 768 px does the same.
+
+**20.22.10.3 Records** (`pdrend.h`; the walker skips an unknown type by `len`):
+
+| type | | body |
+|---|---|---|
+| `DLR_STATE` 1 | `aux` = the colour's luminance 0..255 (was 0) | unchanged, 14 bytes |
+| `DLR_XSTATE` 6 | the transparency of the marks that follow; y 0,0; processed whatever the band | `alpha` (0..255, `ca` for fill and text, `CA` for stroke), `bm` 0..15, `smask` (0 none, else mask id + 1), 0 |
+| `DLR_GROUP` 7 | `aux` bit 0 isolated, bit 1 knockout, bit 7 END; y = the group's rows | begin: `alpha`, `bm`, `smask`, 0 (the state at `Do`); end: none |
+| `DLR_MASKB` 8 | `aux` 0 luminosity, 1 alpha; `len` spans to and including its MASKE, so a normal walk skips the block | `bc` the backdrop luminosity, 0 |
+| `DLR_MASKE` 9 | | none |
+| `DLR_IMAGE` 5 | `flags` bit 5 (0x20) an `/SMask`, bit 6 (0x40) a `/Mask` stencil | unchanged; PDX8 finds the mask object from the image's own `/SMask` or `/Mask` entry when the strip is composed |
+
+`bm` codes: 0 Normal (and Compatible), 1 Multiply, 2 Screen, 3 Overlay, 4
+Darken, 5 Lighten, 6 ColorDodge, 7 ColorBurn, 8 HardLight, 9 SoftLight, 10
+Difference, 11 Exclusion, 12 Hue, 13 Saturation, 14 Color, 15 Luminosity. An
+array of names takes the first this table has, else Normal.
+
+The effective transparency is the fold of the `gs` operators applied so far,
+so it is a tuple, not an index into the resource dictionary: a pool of 15
+5-byte tuples `{ca, CA, bm, smask, 0}` per pass (`g_xt`, reset by
+`pass_begin`), and **`pdr_gs.pad_` is the tuple's index** (0 = opaque Normal, no
+mask), which q, Q and a form's push already save. An `XSTATE` is written
+before a mark only when its tuple, for the mark's kind, differs from the last
+written; entering and leaving a group forces one. A mark under a tuple that is
+not opaque Normal without a mask sets its rows in the mark map. A pool or
+mask-table overflow sets `PDF_INC_LIMIT` and keeps the previous tuple.
+
+**20.22.10.4 ExtGState (`gs`) and the record writers (PDX8, `pdx8i.c`).** All of
+interpretation's work for transparency is PDX8's, not PDXG's and not PDREND's:
+the ExtGState parse (`/CA /ca /BM /SMask (/S /G /BC /TR)`), the tuple pool, the
+mark map and the records. It runs while the page is interpreted, after
+`PDE_NEEDMEM` has put the part in the X8 region, so it needs no slot occupant
+(a soft-masked JPEG needs PDXI in the slot and this at once) and PDXG is not
+asked for anything. The first pass of a view that has no region only DECIDES:
+`exec_op`'s `gs` arm calls `xb_gs()`, which looks the name up (`RES_LOOKUP`,
+category ExtGState) and, with no PDX8, reads `ca`, `CA`, `BM` and `SMask` of that
+dictionary: any value that is not opaque Normal and unmasked sets the view's
+need for the region (`PDE_NEEDMEM`, 20.22.10.2); so does an image with an
+`/SMask` or `/Mask`. The pass is then run again with the part present:
+
+* `gs` is `PDV_X8_GS` (BX = the tuple in force, CX/DX = the dictionary's
+  object and generation): AX = the new tuple (written to `pdr_gs.pad_`), CX = 1
+  when the dictionary has a soft mask whose `/G` form (its object at XB+0, XB+2)
+  PDREND now interprets as the mask's block; DX = `X8F_*` bits. A pool or mask
+  table overflow answers CF and keeps the previous tuple. `/TR` other than
+  `Identity` is not applied and sets `PDF_INC_TRANSP`. A **direct** ExtGState
+  dictionary (inside `/Resources`; `RES_LOOKUP` answers `objnum` 0) keeps the
+  previous tuple and sets `PDF_INC_TRANSP` until PDENG offers a key path below
+  a resource (questions to the lead in the blend report).
+* `emit_state` asks `PDV_X8_DEF` `X8D_STATE` (fill or stroke, the tuple): the answer
+  is the `XSTATE` record, in the exchange block, when the tuple for the mark's
+  kind differs from the last written, and whether the mark is transparent
+  (then `dl_put` marks its rows, `X8D_MARK`). PDREND puts the record in its list.
+* `do_form`'s tail asks `X8D_GROUP` (the frame, the Form, the tuple, the clip's
+  rows, the list's length): the answer is `MASKB` when `gs` has a mask waiting
+  (`g_xmaskpend`; PDREND then writes its own `STATE` first), or `GROUP` begin
+  when the Form's `/Group /S /Transparency` is worth a layer (isolated or
+  knockout, or under a non-trivial tuple); inside either the tuple is 0.
+  `frame_end` asks `X8D_GEND`: `GROUP` end, or `MASKE`, with the offset and
+  value PDREND patches into the `MASKB`'s length. If the mask's form would not
+  open, `X8D_NOMASK` answers the tuple without it.
+
+A soft mask: the `/G` form is interpreted at the `gs` operator, with the CTM of
+that moment, as `MASKB ... MASKE`. At most 16 masks a pass.
+
+**20.22.10.5 The walker.** `walk_band` runs once per strip of an 8-bit band
+(and once as before for the others). In a strip the sinks compose into the
+current layer:
+
+* `STATE` sets the colour (`aux`); `XSTATE` the transparency; a new `smask`
+  that is not the mask in `MK` for this strip is built first: save the
+  walker's state, push a fresh isolated layer, walk the `MASKB` block into it,
+  at `MASKE` turn the layer into `MK` (luminosity `P + (255-A)*bc`, alpha `A`),
+  pop, restore, and go on from the `XSTATE`. No recursion: an explicit resume
+  offset. A mask inside a mask is ignored (`PDF_INC_LIMIT`); a mask wanted at
+  depth 2 is too.
+* `GROUP` begin pushes a layer (isolated: `P = A = 0`; non-isolated: `C` = the
+  parent's colour, `A = 0`), resets the transparency to opaque Normal, and keeps
+  `{alpha, bm, smask}` for the end. `GROUP` end composites the layer onto its
+  parent with `alpha * mask(x)` and `bm` and pops. Only pixels with `A > 0` are
+  touched. A group deeper than 2 is painted inline.
+* A mark composes with source colour `s`, alpha `a = alpha * mask(x)`, mode
+  `bm` onto the layer: opaque backdrop (base, non-isolated)
+  `out = cb + a * (B(cb, s) - cb)`; isolated `P' = (1-a) P + a * Bp`,
+  `A' = A + a - A*a`, `Bp = s` for Normal or an empty backdrop, else
+  `Bp = s + A * (B(P/A, s) - s)`. A knockout group's mark replaces the layer's
+  pixel, composed against the group's initial backdrop (transparent when
+  isolated, the parent's pixel when not).
+* A strip's base starts white; the desk is never in it.
+
+Fast paths: depth 0, constant colour, no mask: one 256-byte table
+`lut[d] = d + a * (B(d, s) - d)` applied with `xlat` (`pdr_x8xlat`), built when
+`(s, a, bm)` change; opaque Normal on any layer is two fills.
+
+**20.22.10.6 Blend formulas** (8-bit, `mul(a,b) = round(a*b/255)`): Multiply
+`mul(b,s)`; Screen `b+s-mul(b,s)`; Overlay = HardLight with the arguments
+swapped; Darken, Lighten min, max; ColorDodge `s=255 ? 255 : min(255, b*255/(255-s))`
+(0 when `b=0`); ColorBurn `255 - min(255, (255-b)*255/s)` (255 when `b=255`,
+0 when `s=0`); HardLight `s<128 ? mul(b,2s) : screen(b, 2s-255)`; SoftLight the
+PDF formula, `D(b)` by the polynomial below `b=64` and `sqrt` above; Difference
+`|b-s|`; Exclusion `b+s-2mul(b,s)`.
+
+**20.22.10.7 The sink interface** *withdrawn.* gfx's shading became flat-polygon
+bands (FILL records, DECISIONS 23:46), which reach the compositor through the
+ordinary `span_out`; there is no `pdr_sink_grey`, no `xg_span` and no `g_psrc`.
+
+**20.22.10.8 The image hook** (rcore's `draw_image`): in an 8-bit strip the
+call `pdr_imgrow()` is replaced by `PDV_X8_IMG` `X8I_ROW`, which gets the same
+`pdr_ip` block (source row, DDA, mode, inversion; 22 bytes of it in the exchange
+block) and composes the grey into the current layer. For a record with 0x20 or
+0x40, `X8I_SET` runs once a strip before the rows: PDX8 reads the image's own
+`/SMask` (or `/Mask`) entry for the mask object, opens that stream itself (a
+second `STRM_OPEN`, closed in the same call), reads the nearest rows into the
+region's 1,024-byte buffer and writes them into the mask plane at the image's
+resolution; an `/SMask` is 8-bit grey, a `/Mask` is a 1-bit stencil whose set bit
+is TRANSPARENT unless its `/Decode` inverts it. A mask that will not open (a
+codec the core does not read) draws the image opaque and sets `PDF_INC_TRANSP`.
+
+**20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
+Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
+non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
+Nothing else in this section sets a bit.
+
+**20.22.10.10 Build gate, budgets and stack.** The hooks are compiled with `PDR_X8`,
+which the Makefile turns ON by default (the feature ships; `make PDR_X8=0` is the A/B and
+builds PDREND of the round's start to within 4 bytes) and passes to the compiler and to nasm
+together. The host harness defines it and links `pdx8.c`. PDREND's share, as accepted by the
+lead (DECISIONS 00:43): +3,008 bytes (image 2,888, bss 120) before the merge with rcore's
+second code segment; PDX8 is 14,462 + 1,254 of 16,384. The region is asked for through rcore's
+ladder (`x_mem(PDMEM_X8, KiB)`, answered by `PDE_NEEDMEM` at the end of the first pass).
+
+*Measured (the first version, the whole compositor in PDREND's C):* image
+66,634 + bss 7,988 against 54,412 + 6,896, i.e. +12,222 and +1,092, which is
+why the compositor is a part of its own (20.22.10.11).
+
+**20.22.10.11 PDX8, the compositor as a part** (the lead's decision of 23:24 and
+23:35, pinned here by `blend`; `pdx8.c`, `pdx8.asm`, `pdrx8.inc`; the PDREND side
+`pdrx8.c`, `pdrx8h.inc`, `pdrxb.c`).
+
+*What lives where.* PDX8 owns the planes, the layer stack, the blend arithmetic,
+the 256-byte table of constant spans, the group and soft-mask composition, the
+image-mask reader and the quantiser into the band (raster time), and the
+ExtGState parse, the tuple pool, the mark map, the frame table and the record
+writers (interpretation time, 20.22.10.4). PDREND keeps what only it can know:
+the walker over the display list (clips, edges, glyphs, image rows), the
+gstate's tuple index, and the far calls; where PDX8 answers a record PDREND
+puts it in the list.
+
+*The part.* Magic `'P8'` (`PDM_MAGIC_X8` 0x3850), `PDM_ABI`, **not** a slot
+occupant (no `PDX_*` id, no `PDV_REND_SLOT`); a lazy part with
+`OP_LAZY | OP_SELF | OP_COMP` that `plat` loads **into the `PDMEM_X8` region at
+its base**, with 20.22.2.4's reader and header check, when a page answers
+`PDE_NEEDMEM` for `PDMEM_X8`. Unpacked image + bss at most `PDX8_RES` = 16,384
+bytes (now 14,208 + 1,220); the planes follow at `x8_seg:PDX8_RES`, and the KiB
+PDREND asks for includes the 16 (47 at 640, 51 at 720, 53 at 768). The 16-byte
+header, all of it in the region's first bytes:
+
+| offset | field |
+|---|---|
+| +0 | magic `'P8'` |
+| +2 | `PDM_ABI` |
+| +4 / +6 | image, bss |
+| +8 | the door: `jmp short` to the entry at +16 |
+| +10 | `x8_cseg`: the region's CODE selector (equal to `x8_seg` on a real-mode kernel); `plat` writes it at load and after every regrow |
+| +12 / +14 | `eng_off`, `eng_seg`: PDENG's door, written by `plat` at load from `pdxb_init` and after a regrow |
+
+If the load fails, or the part's magic is not at `x8_seg:0` when PDREND is
+re-INITed, the region is treated as refused (`x8_seg` = 0, 20.22.10.9). PDX8
+calls PDENG and nobody else: no kernel call, no PDREND call, no PDXG. DS = CS
+inside, the caller's BP, SI, DI, DS, ES, SS:SP and DF come back, the part
+reads the planes through the segment PDREND passes at INIT (a data selector on
+kern_mega), and its bss is zeroed by the part on its first entry. Its own
+frames are at most 48 bytes in a chain, inside the occupants' budget of
+20.22.2.4.
+
+*The door.* AL = verb, BX, CX, DX; out AX, with CX and DX the answer's extra
+words, CF = 1 and AX = a `PDE_*` code for a verb or operation it does not have
+(or, for `GS`, a full pool). The verbs are 0xD1-0xD7 (0xD0 is free):
+
+| verb | in | out |
+|---|---|---|
+| `PDV_X8_INIT` 0xD1 | BX = x8_seg, CX = KiB, DX = the XB segment | 0; sent by PDREND at every `PDV_REND_INIT` that holds a region, after plat has loaded the part |
+| `PDV_X8_CTL` 0xD2 | BX = `X8C_*`: `BAND` (XB: `pdxb_x8band`: the list's segment and length, the band, the page rectangle), `BEGIN` (CX = y0, DX = y1, the strip, at most 8 rows: cleared to white, depth 0), `END` (quantises the strip into the band; out CX = `X8F_*` bits), `LUM` (CX = the colour of the marks that follow), `MKEND` (the mask block ended), `PASS` (interpretation begins; CX = the viewport's top row; resets the pool, the map, the frames), `WANT` (CX..DX = a band's rows) | `MKEND`: AX = the offset to resume at, CX = 1 (restore the clip); `WANT`: AX = 1 when any of the rows is composed in 8 bits |
+| `PDV_X8_SPAN` 0xD3 | BX = y, CX = xa, DX = xb, band-relative columns; composes a constant span of the current colour and transparency | 0 |
+| `PDV_X8_GS` 0xD4 | BX = the tuple in force, CX = object, DX = generation of an ExtGState | AX = the new tuple; CX = 1: the soft mask's /G is at XB+0, XB+2; DX = `X8F_*` bits |
+| `PDV_X8_REC` 0xD5 | BX = the offset of an XSTATE or an in-range GROUP record | AX = the offset to go on from; CX = 1 when a soft mask's block was begun (PDREND notes the STATE record in force and restores its clip at `MKEND`); DX = the end of the block being walked, 0 outside one |
+| `PDV_X8_IMG` 0xD6 | BX = `X8I_*`: `SET` (XB `pdxb_x8img`), `ROW` (CX = y; XB `pdxb_x8row`), `END` | 0 |
+| `PDV_X8_DEF` 0xD7 | BX = `X8D_*`: `STATE` (CX = stroke, DX = tuple), `MARK` (CX..DX = rows), `GROUP` (XB `pdxb_x8grp`), `GEND` (CX = frame, DX = the list's length), `NOMASK` | the record, as bytes at XB+0, AX = its length (0 none); `STATE`: DX bit 0 the mark is transparent, bit 1 transparency is in force; `GROUP`: CX bit 0 reset the last STATE, bit 1 the tuple is 0; `GEND`: CX = the MASKB length offset to patch (0 none), DX = the value |
+
+*A strip.* PDREND, per 16-row band that its mark map says holds a transparent
+mark: `BAND`; then for each strip of 8 rows `BEGIN`, the ordinary walk of the
+whole list with the strip as its row window, `END`. In the walk every
+`span_out` becomes `SPAN`; a `STATE` record is `LUM`; an `XSTATE`, or a `GROUP`
+whose rows meet the strip, is `REC`; an image is `IMG SET`, `IMG ROW` per row
+and `IMG END`; a mask block begun by `REC` (answered by CX = 1) is walked from
+the offset it returned until it reaches DX, then `MKEND` turns it into the mask
+and returns the offset of the record that asked. A band the map does not mark
+walks as before, with none of this.
+
+*Cost of the seam* (4.77 MHz, from 46.7 us a far call and the work around it):
+a span costs the call (about 100 us with the verb's switch) and the work; the
+walker's other records cost nothing new, and a page with no transparency pays
+one `WANT` a band once the part is loaded and nothing before. The quantiser and the xlat of the
+constant-colour table are hand assembly (214 + 256 bytes, 20.7 and 15.0
+instructions a pixel, `hosttest/pdb_primtest.py`); the chunk, group and mask
+composition are C (`x8_chunk` 776 bytes, `x8_gend` 1,073).
+
+*Build.* `make pdx8` builds `build/PDX8.MOD` and refuses over `PDX8_CAP`;
+`make PDR_X8=1 ...` passes `-DPDR_X8` to smlrcc and nasm together for PDREND.
+A default build is PDREND without the hooks.
 
 #### 20.22.11 PDXI and JPEG (`dct`)
 
@@ -6099,7 +7314,155 @@ module makes no kernel call of its own (the stream is read through PDENG).
 
 #### 20.22.12 CCITT and JBIG2 (`bilevel`)
 
-*Reserved; written by its agent before its code.*
+PDXI's two bilevel decoders, `apps/pagedesk/pdxiccit.c` (AP-08) and
+`pdxijb2.c` (AP-09). PDXI's shell (`pdxi.c`, 20.22.11) `#include`s them, the
+CCITT file first, and supplies their one input and one output:
+
+```
+static int  ix_get(void);        /* next CODED byte of the open source, -1 at its end    */
+static pdw  ix_open(pdw which);  /* (re)start the source: 0 = the stream, 1 = /JBIG2Globals */
+bl_out[], bl_ow, bl_oh, bl_omode, bl_orb, bl_scale     /* what IMG_OPEN / IMG_ROW report */
+```
+
+`ix_get` is a pull from PDENG's `STRM_READ` of the raw codec bytes (the chain
+stops before CCITT and JBIG2, 20.22.3). The decoders read it forward only;
+`ix_open` starts it again (a JBIG2 band re-runs the stream, below). A decoder
+fills `bl_out` (near, at most 1,024 bytes) and the shell copies it to the
+caller's far buffer. Neither file calls the kernel or claims memory.
+
+**Parameters** (`struct pdxb_imgx`, in the `[img 20.22.11-13]` block of
+`pdabi.h`) follow `pdxb_img` in the XB and are filled from `/DecodeParms` by
+whoever opens the stream: `k`, `cols`, `rows`, `flags` (`CCF_EOL`,
+`CCF_ALIGN`, `CCF_EOB`, `CCF_BLACK1`, as /EndOfLine, /EncodedByteAlign,
+/EndOfBlock, /BlackIs1; /DamagedRowsBeforeError is accepted and ignored) and
+`globals` (non-zero when /JBIG2Globals exists, so `ix_open(1)` is meaningful).
+
+**The delivery** is what 20.22.1 says: `PDIM_BITS1` rows when no reduction is
+wanted, `PDIM_GREY8` when one is. `bl_pick` chooses the reduction `s` (0 to 3,
+that is 1/1 to 1/8): the largest with `width >> s >= want_w`, then more while
+the grey row would not fit IMG_ROW's 1,024 bytes. A reduced row is the AVERAGE
+of a 2^s x 2^s block of samples (`(white * 255) >> 2s`, where a block off the
+right or bottom edge counts the missing samples as white). A reduction is not
+Incomplete (L5) and not a dither: it is the image at the size it is shown.
+Width is limited to 5,120 (`PDE_LIMIT` beyond; 600 dpi A4 is 4,960).
+
+**CCITT** (`cf_open`, `cf_getrow`). Group 3 one-dimensional (K = 0), Group 3
+two-dimensional (K > 0, the tag bit after each EOL) and Group 4 (K < 0).
+Streaming: one source row is decoded at a time against the previous row,
+which is a bitmap (1,024 bytes) rather than a list of changing elements, so a
+noisy row costs no more than a clean one. Workspace: none. The module's own
+bss is the shared 648-byte row buffers (two row bitmaps and a sample row), the 1,024-byte
+delivery row, two index tables built at open from the 104 white and 104 black codes (8-bit
+primary lookup, 5-bit secondary: 2 KiB) and the reducer's counters (1 KiB). Samples are delivered as the
+PDF defines them: black = 0 unless /BlackIs1, in which case black = 1 and the
+caller applies /Decode (`PDIMG_INVERT`). A fault ends the row where it is
+(the rest white) and decoding goes on at the next EOL; Group 4 has no EOL to
+resync on, so the rest of the image is white. The data running out is the
+same. Rows ascend; a skipped row is decoded and dropped; a lower row needs a
+new open. Cost: one pass over the coded bytes, whatever the reduction.
+
+**JBIG2** (`jb_open(globals, h, want_w)`, `jb_getrow(r)`; the embedded stream format of ISO/IEC 14492
+annex D.3, segments only, no file header; /JBIG2Globals first). Supported, each held against MuPDF:
+
+* generic regions, MQ-coded (templates 0 to 3, TPGDON, AT pixels in rows y-2 to y with ay = 0 only to the
+  left) and MMR (the CCITT G4 rows of `pdxiccit.c`, read through the segment's own byte bound);
+* symbol dictionaries, MQ-coded (template 0 to 3, input symbols from referred dictionaries, export flags)
+  and Huffman-coded (collective bitmaps stored raw or MMR); text regions, MQ or Huffman, with every
+  REFCORNER, TRANSPOSED, strip size, SBDSOFFSET, SBCOMBOP and SBDEFPIXEL, refinement of an instance
+  (MQ only; template 0 with its AT pixels, or 1); the symbol ID code table of 7.4.3.1.7;
+* the standard Huffman tables B.1 to B.15 and custom tables (segment 53), selected as the flags say;
+* pattern dictionaries (MQ or MMR) and halftone regions (MQ or MMR bitplanes, gray coding, HENABLESKIP,
+  HRX/HRY rotation, HGX/HGY signed, HCOMBOP, HDEFPIXEL);
+* symbol dictionaries with refinement / aggregate coding (SDREFAGG = 1, MQ): a symbol coded as the refinement of
+  one earlier symbol (REFAGGNINST = 1, with RDX/RDY) or as an aggregate, a text region of that many instances
+  (each possibly refined) drawn on the symbol's own bitmap, both over the dictionary's input and new symbols
+  (6.5.8.2); SDRTEMPLATE 0 with its AT pixels, or 1;
+* intermediate regions (types 4, 20, 36, 40): decoded once into a bitmap that stays in the workspace and is
+  kept in the registry for a refinement region that refers to it; generic refinement regions (types 40, 42, 43;
+  GRTEMPLATE 0 or 1, TPGRON, AT pixels) whose reference is the intermediate region they refer to or, with no
+  reference, the page under the region (page refinement, 7.4.7.5), which is copied out of the band and so needs
+  the region inside one band: a page that contains one makes `jb_open` give the band up to 40,000 bytes (half
+  of what is above the tables), and a region still taller than that is reported `JBF_UNSUP` and left unrefined;
+* segments of unknown data length (0xFFFFFFFF, immediate and intermediate generic regions only, 7.2.7): `jb_open`
+  scans each once for the end marker (FF AC for MQ, 00 00 for MMR) and the true row count that follows it,
+  keeps its length and rows (four segments), and every later pass sees a bounded segment with the true height;
+* page information (default pixel, default operator), the region combination operators OR, AND, XOR, XNOR and
+  REPLACE, end-of-stripe and end-of-page (ignored: the page height is the page information's, or /Height when
+  that is unknown), multiple regions in any order.
+
+Not supported, each marked in `jb_inc` (the shell reads `JBF_UNSUP`/`JBF_BAD`; the region is skipped and the
+page is drawn without it): Huffman text regions with refinement, Huffman symbol dictionaries with refinement
+or aggregate coding, dictionaries with retained or reused bitmap contexts (flags bits 8 and 9), the extended
+template bit, unknown-length segments of any type but the generic regions, AT pixels more than two rows up,
+more than one page, an intermediate region or a refinement larger than the workspace holds. Anything over a
+limit below answers `PDE_LIMIT` for that segment alone.
+
+**Workspace** is a RANGE (20.22.2's table): JBIG2 **want 64,000 bytes**, **min 14,500 for a page that streams** (one
+generic region and nothing else, no globals: the 12,288 context bytes, the 2 KiB tables and a row), about **58,000 for a scan with
+text regions** (a ~200-symbol dictionary is ~24 KB of bitmaps, 29,184 of tables, a band of a few rows), and
+CCITT **2,048** (its two code-lookup tables live in the workspace so that PDXI's bss is smaller; JBIG2 MMR regions put the same tables at 3000, over the refinement contexts, and rebuild them at each MMR region). `jb_open` reads `g_wbytes` (what the shell was granted, at most 64,000 is used) and answers
+`PDE_LIMIT` when even the tables and a block of rows do not fit; the shell then draws the image's grey box with
+`PDF_INC_APPROX`, which is not a refusal. Below want, the band shrinks first (to a third of what is above the
+tables, never under one block of 2^s rows) and the symbol area gets the rest: content that no longer fits
+(a dictionary, a halftone grid, an intermediate region) is `PDE_LIMIT` for that segment alone, reported
+`JBF_UNSUP`, and the rest of the page is drawn. The workspace is reached only through `jw_*`, which on the
+target are pdmath's far movers over the shell's `g_wseg`:
+
+| offset | size | content |
+|---|---|---|
+| 0000 | 12,288 | generic-region contexts: a 4,096-entry hash (tags, states) for template 0, direct arrays for 1 to 3 |
+| 3000 | 8,192 | refinement contexts (while an MMR region runs: the 2,048-byte CCITT tables) |
+| 5000 | 6,656 | the 13 integer decoders' contexts (512 each) |
+| 6A00 | 2,048 | IAID contexts (a dictionary of at most 2,048 symbols) |
+| 7200 | `jb_bandmax`, at most `JB_BANDMAX` 16,384 (40,000 with a page refinement) | the band: full-resolution rows of the page (a streamed page puts its one row at 3800 instead) |
+| after the band | to `jb_wsz` | symbol and pattern bitmaps, intermediate regions and halftone grid values growing up; 8-byte records (offset, width, height) growing down |
+
+**Bands, streaming and what a page costs.** The page cannot be resident (A4 at 300 dpi is 1 MB), so it is
+decoded in bands of `jb_bandmax / rowbytes` full-resolution rows (a multiple of 2^s, so a delivered group never
+straddles two bands): 25 rows of an A4/600 dpi page, 52 of A4/300 dpi, the whole of a small page. A band is
+decoded by running the segment stream again from the start and applying only what touches it. A dictionary,
+pattern dictionary, halftone grid and custom table is decoded once and kept in the registry (24 segments), so
+later bands skip its bytes; a region outside the band is skipped by byte count; a generic region stops at the
+band's last row (its earlier rows are decoded and dropped, the decoder being sequential); a text region walks
+all its instances and draws the ones that touch the band. **Streaming:** a page whose only drawing segment is
+ONE generic region (the usual scanner and "lossless" encoder output) is not banded at all: `jb_open` counts the
+region segments, and with exactly one decodes its rows as they are asked for, in one pass over the stream, with
+the arithmetic decoder's state kept between calls. A reduced scale does not shorten the decode (every pixel is
+still decoded) but it keeps the delivered row small: s is the largest reduction that still gives `want_w`
+pixels, 2^s x 2^s blocks averaged as for CCITT. A truncated stream stops a decoder after 64 bytes of padding
+rather than decode zeros to the end of the page. Cost, ESTIMATED and not measured on an 8088: `pdxijb2.inc` is the MQ decoder (`mq_bit`, `mq_bytein`) and the
+template-0 generic-region row (`gb_row0`: the context kept whole and shifted a pixel at a time, a 4,096-entry
+hash, and an all-white loop that decides a context-0 pixel with every register live and no call) in 8086
+assembly, about 1.1 KB; the C twins stay for the other templates, a non-nominal AT pixel and HENABLESKIP, and
+`hosttest/pdbl_asm.py` runs the assembly under Unicorn against the encoder, bit for bit, with the fetch-floor
+cycle count of PERFORMANCE.md Part 2 (4 clocks a code byte, 4 more a memory operand): **207 cycles a pixel on a
+blank page, 418 on a sparse scan (5% black strokes), 664 on regular ruled lines, 9,600 on dense random bits**
+(the C was about 2,000 on all of them). A4 at 300 dpi is 8.7 M pixels: **about 13 minutes on a 4.77 MHz XT** for a
+text scan (the model is optimistic against memory timings; call it a quarter hour) instead of an hour, a
+quarter of that again for TPGDON pages whose repeated rows are copied, and seconds on a 286 or 386. A
+symbol-mode page costs its symbols' pixels once plus about 3,000 cycles an instance in every band the
+instance's text region reaches. Limits: width 5,120 (`PDE_LIMIT` beyond: the row buffers are 648 bytes),
+4,096 symbols a page, at most 2,048 in one dictionary, 4,096 distinct contexts for template 0 (a noisier page
+answers `PDE_LIMIT` for that region), custom tables of at most 21 lines, symbol bitmaps and grid values within
+the free part of the workspace (about 18 KB: a dictionary or a halftone grid that does not fit is
+`PDE_LIMIT` and its regions are skipped).
+
+**Checks.** `python3 tools/os88pdbl_check.py all` (host, python3; `build` makes the binaries, the legs are named in its docstring) drives `build-bl/pdbl` built from
+`apps/pagedesk/hosttest/pdbl_host.c` (once with the shipped band size and once with a 400-byte band): ccitt
+(576 shapes against the encoder), jb2-generic, jb2-text, jb2-huff, jb2-halftone (random pages from the reference
+encoders of `tools/os88pdfx_bilevel.py`, compared as delivered samples at scale 0 and reduced). The same
+encoders' output is also drawn by `mutool draw` (`mutool-ccitt`, `mutool-jb2-generic`, `mutool-jb2-text`,
+`mutool-jb2-huff`, `mutool-jb2-halftone`), and the CCITT G3/G4 streams by libtiff through PIL, so no decoder here
+is checked only against its own encoder. MuPDF ignores a halftone region's HDEFPIXEL = 1, which the spec and
+this decoder honour; the mutool leg holds it at 0. `pdbl_fuzz` (AddressSanitizer + UBSan, bit flips, byte runs,
+truncation, markers) ran 81,000 mutations of the committed seeds in `tests/pdfany/bilevel/` clean. Sizes (the
+smlrcc + cc8086 chain with the peephole on, `jb_`/`cf_` as one translation unit with the shell's `ix_*` and
+pdmath's movers, with `pdxijb2.inc`): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders
+about 30,070 + 6,890 = 36,960 (39,000 allowed at 00:24); the whole PDXI.MOD (shell and JPEG too, `make build/PDXI.MOD`,
+JB_ASM) 47,310 + 16,422 = 63,732 against the 65,024 cap; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
+(frames 58 for `rf_decode`, 56 for `sd_run`, 46 for `tr_run`; none over 96), and the shell adds its own on top
+of that. Rows covering it: `tools/os88pdbl_check.py` (the legs above plus jb2-refagg, jb2-unknown, jb2-refine and jb2-range, each against the model and, where MuPDF can, against `mutool`) and `pdbl_fuzz` (32,000 more mutations with the new seeds), `hosttest/pdbl_asm.py` for the assembly; `pdkgate` is
+unaffected (neither file calls the kernel).
 
 #### 20.22.13 JPEG 2000 (`jpx`)
 
@@ -6453,3 +7816,136 @@ tens of seconds on an XT, a 2x larger result takes four times the transform and
 about three times the tier-1 time. PDREND runs it once per image per page view and
 the result is cached by the caller (20.22.7). A faster machine scales as its
 clock; nothing here is memory-bound.
+
+#### 20.22.14 The core font bank, packed inside the program (`pdres`, O8)
+
+**Why.** With every real occupant `PAGEDESK.O88` measured 372,717 bytes, and
+a 360KB floppy is 354 clusters of 1,024 bytes: `pagedesk360.img` needed 414,
+and `pagedesk720.img` 754 of 713. The owner's answer (DECISIONS O8) keeps
+PDRES (20.4) INSIDE the program and stores its bulk as LZ4 blocks, rather
+than moving it beside the program as 20.22.2.8 had planned. Its 82,084 bytes
+were rows 4 and 5, stored (OP_SELF), so that PDREND could read a strike by
+file offset.
+
+**The block is the STRIKE.** A strike is what PDREND reads on a miss and
+keeps in its cache (20.3.4, `pdrd.c`'s `strike_fetch`), whole and
+contiguous. Fixed 4 KiB blocks would have split strikes (2,886 to 4,692
+bytes in PDRES, up to 11,790 in `PDFONTX.RES`) across two or three blocks,
+so one miss would have read and decoded several blocks into a strike that
+still had to be put back together. One stream a strike means one miss reads
+one stream and decodes it once. It also packs no worse: the 18 distinct core
+strikes are 66,784 bytes, which become 41,349 packed one stream each,
+against 41,885 as 4 KiB blocks of the same region (the owner's measure of
+the whole file in 4 KiB blocks was 49,229).
+
+**The format (20.4.1, 20.4.2, as amended here).** `tools/os88pdfont.py
+build` writes:
+
+* **A strike record's `u32 length` is two words**: bytes 12-13 the strike's
+  UNPACKED length, bytes 14-15 its PACKED length, 0 = stored. The high word
+  was always 0 (every strike must fit the 16 KiB cache). A packed strike is
+  an LZ4 stream in SPEC.md 20.13.7's shape (`T` word, the symbols, `T` raw
+  bytes; no near-call escape), starting 16-bit aligned, and the record's
+  offset names the stream. A strike is packed only when that pays (every one
+  does today). A bank with any packed record is **`PDFB` version 2**.
+  Synthesised italics still share their upright strike's offset, and so its
+  stream.
+* **The icon atlas (kind 4) is one LZ4 stream**, said by the directory
+  entry's `flags` bit 0, whose `length` is then `unpacked << 16 | packed`
+  (2,708 and 1,287 bytes). No other kind carries a flag. Nothing on the
+  machine reads the atlas today (the face's kit, kind 9, replaced it), so
+  this is only file bytes. The directory stays `PDRS` version 1, and the
+  primary's walk (`pdu_bank_dir`) is unchanged.
+* **The INDEX, the kit and the notice stay stored in the file.** The INDEX
+  is read whole and is not a strike, and the notice is for a person to read.
+* **`PDFONTX.RES` is packed the same way.** It is the same reader and the same
+  record, so it costs no code, and the file goes from 311,732 bytes to
+  160,676. That is what lets the 720KB disk carry every sample (below).
+* `build --stored` writes the version-1 files, and its `PDRES.BIN` is
+  byte-identical to the round's start. It is the A/B. `check` decodes every
+  packed strike and the atlas against their sources. It holds each strike's
+  cache room (below) to the 16 KiB glyph cache: 8,802 bytes at most in
+  PDRES and 15,900 in `PDFONTX.RES`.
+
+**In the package: two rows, cut where the strikes start.** `os88pdfont.py
+cut` splits `PDRES.BIN` at kind 6's offset (`data_off`, a multiple of 16,
+12,048 today):
+
+| row | bytes of `PDRES.BIN` | flags | on disk |
+|---|---|---|---|
+| 4 | `[0, data_off)`: the directory, the bank (records, widths, names) and the kit | `OP_ASSET`, `OP_LAZY \| OP_SELF \| OP_COMP` | 12,048 -> 5,624 (os88pkg packs it, like any `OP_COMP` row) |
+| 5 | `[data_off, end)`: the strike streams, the atlas stream, the notice | `OP_ASSET`, `OP_LAZY \| OP_SELF` (stored) | 43,188 |
+
+Row 5 is stored, so its offsets are real. The file offset of `PDRES.BIN`'s
+byte 0, D3's `part_off`, is therefore **row 5's offset less row 4's
+UNPACKED length**. That byte is no longer in the file at all (row 4 is
+packed), but every strike offset counts from it. `pdu_bank_load` works it
+out (`bk_para`). It refuses a row 4 that is not a paragraph multiple, or
+that is longer than `pdu_rescap` (`PDU_INDEX_MAX + PDU_KIT_MAX`, 12,800),
+with `PDE_LIMIT`. It reads row 4 with `pdu_part_rd`, the slot's own reader,
+which expands a packed row in place (`R = roundup512(len - packed)` above
+the claim's base, SPEC.md 20.13.7). Before, a cap could stop the read short
+of the row. A packed row cannot be cut, so the cap is now a refusal. The
+two rows are no longer adjacent in the file, and the adjacency check went
+with the 65,024 cut.
+
+**PDREND on a miss** (`strike_fetch`, `pdrd.c`). With `U` the unpacked
+length, `P` the packed length, `head` the stream's offset into its first
+cluster and `rd = roundup(head + P, cluster)` the read:
+
+* the stream is read into the strike's own cache slot at `R' = ceil16(U - P
+  - head)` (0 when that is negative), so it starts at or above `U - P` from
+  the slot's base. That is SPEC.md 20.13.7's condition for a decoder writing
+  from the base never to overtake its source;
+* the slot's room is `max(roundup512(U), R' + rd)` (at most `U + 14 +` a
+  cluster), and the cache's own wrap rule applies to that room;
+* `OSAPI_DECOMP` expands it onto the slot's base. It goes through a new gate
+  slot `DECOMP` (`pdkgate.inc`) by `pdr_lzdec`, `pdrprim.inc`'s thunk
+  (`DS:SI` is the stream in the glyph claim, not the module's own segment,
+  so it is assembly). A refusal counts as a failed read: `g_fioerr`, the
+  strike unavailable, and `pdri.c` steps down a size as it already does.
+* The strike cache IS the cache of decoded blocks: a decoded strike stays in
+  its slot, keyed by its record, until the cache wraps (`SC_NENT` = 8
+  entries, or the room). INIT and FONTBANK clear it. No further cache is
+  added, and no claim.
+
+`pdr_host.c` carries the host twin of `pdr_lzdec` (an LZ4 decoder in this
+shape, refusing what the kernel refuses), so `make pdrend-host` and every
+`pdr_*.py` harness read the packed `PDRES.BIN` exactly as the machine does.
+
+**What it costs an XT.** The kernel's LZ4 arm decodes at about 64 cycles an
+output byte (SPEC.md 20.13.6: Note Pad's launch on MartyPC's 5150, 63.8,
+filter included) and no worse than 92.2 (the same stream before kernel
+hot-paths pass 1). A core strike of 2,886-4,692 bytes is therefore
+**40-90 ms** of decode on a 4.77 MHz 8088, and `PDFONTX.RES`'s largest
+(11,790) 160-230 ms. The read it rides on shrinks by 40%: 4,692 bytes
+become 2,675, five clusters become three. At about 400 ms a call, a miss
+costs what it did plus the decode. A miss is once per (family, style, size)
+a document first draws, and again only after the 8-entry cache wraps:
+`HELLO.PDF` draws two or three strikes, and so pays two or three decodes
+per open. The INDEX row decodes once per instance at launch: 12,048 bytes,
+about 160 ms, against about 6.4 KB (thirteen sectors) less to read.
+
+**What it buys** (`make pagedeskdisk`):
+
+| | before | after |
+|---|---:|---:|
+| `PDRES.BIN` | 82,084 | 55,236 |
+| rows 4 + 5 on disk | 82,084 | 48,813 |
+| `PAGEDESK.O88` | 372,717 | 339,755 |
+| `PDFONTX.RES` | 311,732 | 160,676 |
+| primary image + bss | 64,889 | 64,875 |
+| PDREND image (cap 65,024) | 53,982 | 54,222 |
+
+20.22.2.8 has the disks. Every other module (PDENG, PDWRT, the six slot
+occupants) assembles byte-identical: the gate's staged DS is assembled only
+where `pdr_lzdec` is named.
+
+**Verified** (host): `make pdrend-host` (21 checks) and `pdr_primtest` pass
+on the packed files, among them the strikes read at 512 B, 1 KiB and 4 KiB
+clusters. Of `pdr_check`'s renders, all but one are byte-identical to the
+same check run on `build --stored` files. The exception is the 8 KiB glyph
+claim (3 KiB of strike cache), which draws "what its cache holds" and says
+Incomplete either way: a slot's room is not the same number packed as
+stored, so a cache that tight holds a different set of strikes (476
+pixels of 307,200). `t_pdkgate` and `t_pdstk` pass.

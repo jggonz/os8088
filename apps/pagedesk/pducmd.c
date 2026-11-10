@@ -1115,7 +1115,8 @@ void os88_onclick(int x, int y, void *win)
         else if (pdu_tool == C_T_SELECT || pdu_tool == C_T_HILITE)
             pdu_nav_press(x, y);        /* nav: a link, or a text selection */
         else
-            pdu_tell(pdu_why(pdu_tool) ? pdu_why(pdu_tool)
-                                       : "That tool is not in this build yet.");
+            pdu_tell(!pdu_ovl_in() ? "Not enough memory for that tool."
+                     : pdu_why(pdu_tool) ? pdu_why(pdu_tool)
+                     : "That tool is not in this build yet.");
     }
 }

@@ -41,6 +41,9 @@ static pdw dl_put(const pdb *h, pdw nh, const pdb *b, pdw nb)
 {
     pdw tot = nh + nb;
     if (g_dlfull || !dl_room(tot)) { g_dlfull = 1; return 0; }
+#ifdef PDR_X8
+    if (h[0] >= DLR_RECT && h[0] <= DLR_IMAGE) xb_mark(r16(h + 4), r16(h + 6));   /* 20.22.10.3 */
+#endif
     pd_fcopy_out(h, g_dls, g_dllen, nh);
     if (nb) pd_fcopy_out(b, g_dls, g_dllen + nh, nb);
     g_dllen += tot; g_ndl++;
@@ -89,6 +92,9 @@ static void grey_mix(pdw lum, pdw c4)
 static void emit_state(pdw kind)
 {
     pdw lum, c4;
+#ifdef PDR_X8
+    xb_state(kind);                     /* DLR_XSTATE, when the transparency changed (20.22.10.3) */
+#endif
     if (kind == PK_STROKE) { lum = GS.slum; c4 = GS.sc4; }
     else                   { lum = GS.flum; c4 = GS.fc4; }
     w16(g_stl + 0, GS.cx0); w16(g_stl + 2, GS.cy0);
@@ -100,9 +106,16 @@ static void emit_state(pdw kind)
         if (kind == PK_FILL)
             grey_mix(lum, c4);
     }
+#ifdef PDR_X8
+    g_stl[14] = (pdb)lum;               /* the colour's luminosity rides in aux (20.22.10.3) */
+    if (g_lstv && pdr_memeq(g_stl, g_lst, 15)) return;
+    hdr_set(DLR_STATE, lum, DLH + 14, 0, 0);
+    if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 15); g_lstv = 1; }
+#else
     if (g_lstv && pdr_memeq(g_stl, g_lst, 14)) return;
     hdr_set(DLR_STATE, 0, DLH + 14, 0, 0);
     if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 14); g_lstv = 1; }
+#endif
 }
 
 /* a rectangle in qpx -> pixel rows/columns by the sample-point rule, thin
@@ -338,6 +351,9 @@ static void span_out(pdi y, pdi xa, pdi xb)
     row = (pdi)(y - g_by0);
     xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
     if (g_rmode) { mask_span(g_rmode - 1, xa, xb); return; }
+#ifdef PDR_X8
+    if (g_xs) { x8_span(y, xa, xb); return; }                                    /* the 8-bit strip */
+#endif
     if (g_bpp == 1) pdr_fill1(g_bseg, (pdw)row * g_bstride, xa, xb, g_spat[y & 3]);
     else if (g_spat[0]) fill4_mix((pdw)row * g_bstride, xa, xb, y);
     else            pdr_fill4(g_bseg, (pdw)row * g_bstride, xa, xb, g_sc4);
@@ -511,30 +527,42 @@ static void syn_adopt(pdw seg, pdw kb)
     g_gseg = seg; g_gkb = kb > 63 ? 63 : kb;
     if (!g_gseg) g_gkb = 0;
     if (g_bk_seg[1]) g_bk_seg[1] = (pdw)(g_bk_seg[1] + (g_gseg - og));
-    if (g_scbump > (syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10))) { g_scn = 0; g_scbump = SC_BASE; }
-    g_pkfam = 0xFF;
+    if (g_scbump > syn_hdr()) { g_scn = 0; g_scbump = SC_BASE; }
 }
 
-static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
+/* PAGEDESK-SPEC 20.22.14: `plen` != 0 is a PACKED strike, an LZ4 stream of plen
+ * bytes that expands to len. It is read into its own slot at rr = ceil16(len - plen
+ * - head) (0 when negative), so the stream starts at or above len - plen from the
+ * slot's base (SPEC.md 20.13.7: the decoder then never overtakes its source), and
+ * OSAPI_DECOMP expands it onto the base; the slot's room is the larger of the two */
+static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len, pdw plen)
 {
     static struct pd_u32 u, p;
-    pdw cb, head, cap, room, seg, got, i;
+    pdw cb, head, cap, room, seg, got, i, rr, need, n;
     room = syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10);         /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
-    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u) return 0;   /* cap below cannot wrap */
+    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len) return 0;   /* cap below cannot wrap */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
     cb = file_enter();
     if (!cb) { g_fioerr = 1; return 0; }
     head = u.lo & (cb - 1);
-    cap = (pdw)((head + len + cb - 1) & ~(cb - 1));   /* len < 60K and cb <= 4K: no wrap */
+    n = plen ? plen : len;                      /* the bytes on disk */
+    cap = (pdw)((head + n + cb - 1) & ~(cb - 1));   /* n < 60K and cb <= 4K: no wrap */
+    rr = 0;
+    if (plen && len - plen > head) rr = (pdw)((len - plen - head + 15) & ~15u);
+    need = (pdw)(rr + cap);                     /* <= len + 14 + cb: no wrap */
+    if (need < len) need = len;
     /* every comparison by subtraction: g_scbump <= room, so none of them wraps */
-    if (cap > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
-    if (cap > room - g_scbump) { file_leave(); return 0; }       /* a strike larger than the cache */
+    if (need > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
+    if (need > room - g_scbump) { file_leave(); return 0; }      /* a strike larger than the cache */
     seg = (pdw)(g_gseg + (g_scbump >> 4));
-    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, seg, cap);
+    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, (pdw)(seg + (rr >> 4)), cap);
     file_leave();
-    if (got < head + len) { g_fioerr = 1; return 0; }
-    pd_fcopy(seg, 0, seg, head, len);          /* the strike down to the paragraph */
+    if (got < head + n) { g_fioerr = 1; return 0; }
+    if (plen) {
+        if (pdr_lzdec((pdw)(seg + (rr >> 4)), head, plen, seg, len)) { g_fioerr = 1; return 0; }
+    } else
+        pd_fcopy(seg, 0, seg, head, len);      /* the strike down to the paragraph */
     i = g_scn++;
     g_scb[i] = (pdb)b; g_scolo[i] = olo; g_scohi[i] = ohi;
     g_scoff[i] = g_scbump; g_sclen[i] = len;
@@ -563,7 +591,7 @@ static pdw strike_load(pdw id)
     g_sid = id;
     for (i = 0; i < g_scn; i++)
         if (g_scb[i] == b && g_scolo[i] == lo && g_scohi[i] == hi) goto found;
-    if (!strike_fetch(b, lo, hi, len)) return 0;
+    if (!strike_fetch(b, lo, hi, len, (pdw)(g_srec[14] | (g_srec[15] << 8)))) return 0;     /* 20.22.14: packed */
     i = g_scn - 1;
 found:
     g_sseg = (pdw)(g_gseg + (g_scoff[i] >> 4)); g_soff = 0;
@@ -621,6 +649,29 @@ static pdw strike_pick(pdw fam, pdw sty, pdw em, pdw *synth)
 static pdb g_gl[4];
 static pdw g_synth;                 /* strike_pick: italic by shear           */
 /* one glyph through a slow, fully clipped path (partial glyphs) */
+#ifdef PDR_X8   /* runs of ink, not pixels: the 8-bit strip pays a span's setup each */
+static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
+{
+    pdw r, c, ink;
+    pdi yy, xa, xb, sh, rs;
+    for (r = 0; r < nrows; r++) {
+        yy = (pdi)(top + r);
+        if (yy < g_scy0 || yy > g_scy1) continue;
+        sh = 0;
+        if (shear) sh = (pdi)(((pdi)g_sasc - (pdi)r + 8) >> 2) - 2;
+        rs = -1;
+        for (c = 0; c <= wpx; c++) {            /* one span a run of ink pixels */
+            ink = c < wpx && (pd_fpeekb(gseg, (pdw)(goff + r * wb + (c >> 3))) & (0x80 >> (c & 7)));
+            if (ink) { if (rs < 0) rs = (pdi)c; continue; }
+            if (rs < 0) continue;
+            xa = (pdi)(gx + rs + sh); xb = (pdi)(gx + (pdi)c - 1 + sh); rs = -1;
+            if (xa < g_scx0) xa = g_scx0;
+            if (xb > g_scx1) xb = g_scx1;
+            if (xb >= xa) span_out(yy, xa, xb);
+        }
+    }
+}
+#else
 static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
 {
     pdw r, c;
@@ -640,6 +691,7 @@ static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw
         }
     }
 }
+#endif
 
 /* ---- the transformed-glyph cache (20.3.4): a direct-mapped table of 14
  * slots in the glyph claim, keyed by (strike, rotation, scale, code); a slot
@@ -773,6 +825,9 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
             /* the composer writes the bytes under [gx + shl, gx + gw - 1 + shr]
              * and reads at most 4 bitmap bytes a row: anything else is clipped
              * pixel by pixel */
+#ifdef PDR_X8
+            if (g_xs) { glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear); continue; }
+#endif
             if (wb > 4 || (pdi)(gx + shl) < mn || (pdi)(gx + (pdi)gw - 1 + shr) > mx) {
                 glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear);
                 continue;
@@ -798,6 +853,10 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 /* ---- images (pdri.c supplies the row source) ------------------------------ */
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1);
 
+#ifdef PDR_X8
+/* ---- the DL walker for one band: pdrx8.c (it grew the transparency records) ----- */
+static void walk_band(pdi ry0, pdi ry1);
+#else
 /* ---- the DL walker for one band ------------------------------------------ */
 static void walk_band(pdi ry0, pdi ry1)
 {
@@ -842,6 +901,7 @@ static void walk_band(pdi ry0, pdi ry1)
         off += len;
     }
 }
+#endif
 
 /* ---- one band: compose, then lock / clip / blit / unlock ----------------- */
 static pdw g_winoff;

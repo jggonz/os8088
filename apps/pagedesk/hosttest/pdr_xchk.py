@@ -7,7 +7,9 @@ to itself, through the host harness's stand-in occupants (hosttest/pdr_xmod.c):
     PDR_NOSLOT refuses one and the page says PDF_INC_MODULE;
   * codec images: the stand-in decoder delivers the ramp the plain image on
     ramp.pdf's first page holds, so the DCT and JPX pages must draw it to the
-    pixel, at every adapter; two codecs on one page swap the slot per band;
+    pixel, at every adapter; two codecs on one page swap the slot per band,
+    and two on ONE band are drawn through the stash (20.22.7.10) exactly as
+    their plain twins, in the list's order;
   * sample depths (smode 4): 1/2/4/16-bit grey, 8/16-bit RGB, CMYK and a
     /Decode [1 0] image against mutool;
   * the dash walker and the edit marks in PDXG: dash.pdf against mutool, and
@@ -96,11 +98,46 @@ check('ramp raw vs mutool', rc == 0 and cellmatch(im, ref, 24) < 2.0, '%.2f%% ce
 rc, im, st, _ = render(ramp, 3, 'vga')
 check('a DCT and a JPX image apart: both used, one swap each, clean', rc == 0 and num(st, 'mods') & MOD_IMG and num(st, 'mods') & MOD_JPX
       and num(st, 'incomplete') == 0 and num(st, 'swaps') == 2, str(st))
-rc, im, st, _ = render(ramp, 4, 'vga')
-# KNOWN LIMIT (20.22.7.4): one slot, so a band whose images need both decoders draws
-# with one; the other's rows there are not drawn and the page says PDF_INC_MODULE
-check('a DCT and a JPX image sharing rows: one decoder a band, no ping-pong, noted', rc == 0
-      and num(st, 'incomplete') == INC_MODULE and num(st, 'swaps') <= 2, str(st))
+# one slot, a band needing both decoders (20.22.7.10): the resident one's images are
+# stashed in the XC and the other is loaded - every image drawn, in the list's order
+for pg, what in ((4, 'side by side'), (6, 'overlapping, a rectangle between, the JPX twice')):
+    for ad in ('vga', 'herc', 'cga'):
+        rc, im, st, err = render(ramp, pg, ad)
+        rcp, imp, stp, _ = render(ramp, pg + 1, ad)
+        same = im is not None and imp is not None and im.shape == imp.shape and int((im != imp).sum()) == 0
+        check('DCT + JPX sharing bands, %s (%s): = the plain images to the pixel, clean' % (what, ad),
+              rc == 0 and rcp == 0 and same and num(st, 'incomplete') == 0 and num(st, 'mods') & MOD_IMG and num(st, 'mods') & MOD_JPX,
+              'rc=%d diff=%s %s %s' % (rc, None if im is None or imp is None else int((im != imp).sum()), st, err[-200:]))
+    if pg == 4:
+        check('... one decoder load a shared band (swaps bounded by the bands, not PDR_XASKS)', 2 <= num(st, 'swaps') <= 12, str(st))
+rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_NOXC': '1'})
+rcp, imp, _, _ = render(ramp, 7, 'vga')
+check('both decoders and no XC for the stash: drawn with one, PDF_INC_LIMIT (not MODULE)', rc == 0
+      and num(st, "incomplete") & 0x0080 and not num(st, 'incomplete') & INC_MODULE, str(st))
+check('negative control: without the stash page 7 is NOT its plain twin (the to-the-pixel checks can fail)',
+      im is not None and imp is not None and im.shape == imp.shape and int((im != imp).sum()) > 2000,
+      'diff=%s' % (None if im is None or imp is None else int((im != imp).sum())))
+# the primary releases the XC under a NEEDMOD answer, mid-view (20.22.7.11): the
+# view goes on - the pass runs again without it - and finishes, every band blitted
+# (before the fix: the view ended at the re-INIT, blits 1-5 and nothing noted)
+for ad in ('vga', 'herc'):
+    rc, im, st, err = render(ramp, 6, ad, env={'PDR_XCDROP': '1'})
+    check('XC released under a NEEDMOD answer (%s): the view finishes, PDF_INC_LIMIT, no MODULE' % ad,
+          rc == 0 and num(st, 'blits') >= 40 and num(st, 'incomplete') & 0x0080 and not num(st, 'incomplete') & INC_MODULE,
+          '%s %s' % (st, err[-200:]))
+# PDXF's GLYPH grant moves the glyph claim under a ladder answer, mid-view (20.22.7.11):
+# the caches start again from the new claim and the pass re-runs - the page is unchanged
+for ad in ('vga', 'herc'):
+    rc0, im0, st0, _ = render(ramp, 8, ad)
+    rc, im, st, err = render(ramp, 8, ad, env={'PDR_GLYMOVE': '1'})
+    same = im is not None and im0 is not None and im.shape == im0.shape and int((im != im0).sum()) == 0
+    check('glyph claim moved under a NEEDMOD (%s): the pass re-ran, the page is the same to the pixel, clean' % ad,
+          rc == 0 and rc0 == 0 and same and num(st, 'passes') > num(st0, 'passes') and num(st, 'incomplete') == 0
+          and im0 is not None and int((im0 < 128).sum()) > 500,
+          'rc=%d diff=%s %s %s' % (rc, None if im is None or im0 is None else int((im != im0).sum()), st, err[-200:]))
+rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_XCKB': '2'})
+check('both decoders and a 2 KiB XC: what fits is stashed, the rest PDF_INC_LIMIT, nothing MODULE', rc == 0
+      and not num(st, 'incomplete') & INC_MODULE, str(st))
 for ad in ('vga', 'cga'):
     rc, im, st, _ = render(ramp, 1, ad, env={'PDR_NOSLOT': '4'})
     rcw, imw, _, _ = render(ramp, 0, ad)

@@ -103,6 +103,7 @@ PDMEM_XIDX               equ 1
 PDMEM_OSW                equ 2
 PDMEM_XC                 equ 3
 PDMEM_X8                 equ 4
+PDMEM_GLYPH              equ 5
 PDM_ENTRY                equ 8
 PDV_ENG_INIT             equ 0x00
 PDV_ENG_OPEN             equ 0x01
@@ -249,11 +250,82 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDRL_DIRECT              equ 0x0001
+PDRC_STRCIPHER           equ 0x0100
+PDV_KEY_PARAMS           equ 0xC3
 PDV_WRT_KEYS             equ 0x85
 PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12
 PDV_REND_CODE            equ 0x49
 PDXE_OPS                 equ 64
+PDV_GFX_CS               equ 0xC8
+PDV_GFX_COLOR            equ 0xC9
+PDV_GFX_LUT              equ 0xCA
+PDV_GFX_SHADE            equ 0xCB
+PDV_GFX_PAT              equ 0xCC
+PDV_GFX_FN               equ 0xCD
+PDV_GFX_DASH             equ 0xCE
+PDV_GFX_EDIT             equ 0xCF
+PDGX_CSBYTES             equ 1264
+PDGX_LUTBYTES            equ 1028
+PDGX_SRCMAX              equ 480
+PDGX_K_GRAY              equ 1
+PDGX_K_RGB               equ 2
+PDGX_K_CMYK              equ 3
+PDGX_K_CALGRAY           equ 4
+PDGX_K_CALRGB            equ 5
+PDGX_K_LAB               equ 6
+PDGX_K_INDEXED           equ 7
+PDGX_K_SEP               equ 8
+PDGX_K_DEVN              equ 9
+PDGX_K_PATTERN           equ 10
+PDGX_F_TABLE             equ 0x01
+PDGX_F_RGBLIKE           equ 0x02
+PDGX_F_CMYKLIKE          equ 0x04
+PDGX_F_MODULE            equ 0x08
+PDGX_F_NONE              equ 0x10
+PDGX_F_PATTERN           equ 0x20
+PDGX_LUT_INVERT          equ 0x01
+PDGX_REC_HDR             equ 6
+PDGX_REC_CLIP            equ 0x01
+PDGX_PATBYTES            equ 56
+PDGX_PAT_OBJ             equ 4
+PDGX_PAT_BBOX            equ 32
+PDGX_PAT_DIRECT          equ 0x01
+PDGX_TILEMAX             equ 40
+PDGXI_DECODE             equ 0x0001
+PDGXI_CAT_CS             equ 0x0100
+PDGXI_CAT_SH             equ 0x0200
+PDGXI_CAT_PAT            equ 0x0300
+PDGXI_TILES              equ 0x0004
+PDGXI_RES                equ 0x0002
+PDM_MAGIC_X8             equ 0x3850
+PDX8_RES                 equ 16384
+PDX8_ENGVEC              equ 12
+PDV_X8_INIT              equ 0xD1
+PDV_X8_CTL               equ 0xD2
+PDV_X8_SPAN              equ 0xD3
+PDV_X8_GS                equ 0xD4
+PDV_X8_REC               equ 0xD5
+PDV_X8_IMG               equ 0xD6
+PDV_X8_DEF               equ 0xD7
+X8C_BAND                 equ 0
+X8C_BEGIN                equ 1
+X8C_END                  equ 2
+X8C_LUM                  equ 3
+X8C_MKEND                equ 4
+X8C_PASS                 equ 5
+X8C_WANT                 equ 6
+X8I_SET                  equ 0
+X8I_ROW                  equ 1
+X8I_END                  equ 2
+X8D_STATE                equ 0
+X8D_MARK                 equ 1
+X8D_GROUP                equ 2
+X8D_GEND                 equ 3
+X8D_NOMASK               equ 4
+X8F_LIMIT                equ 1
+X8F_TRANSP               equ 2
 PDV_FNT_GLYPH            equ 0xD8
 PDV_FNT_PATH             equ 0xD9
 PDFK_NONE                equ 0
@@ -268,7 +340,6 @@ PDFB_HDR                 equ 64
 PDFB_MAGIC               equ 0x5342
 PDFB_NBLK                equ 4
 PDFB_GLYPHKB             equ 40
-PDMEM_GLYPH              equ 5
 PDFB_KEYS                equ 3328
 PDFB_INFO                equ 3584
 PDFB_T3REC               equ 512
@@ -288,6 +359,10 @@ PDFP_M                   equ 1
 PDFP_L                   equ 2
 PDFP_C                   equ 3
 PDFP_Z                   equ 4
+CCF_EOL                  equ 1
+CCF_ALIGN                equ 2
+CCF_EOB                  equ 4
+CCF_BLACK1               equ 8
 PDIMG_NATIVE             equ 0x0004
 PDJ_ALPHA                equ 0x0100
 
@@ -764,6 +839,14 @@ PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
 
+; ---- struct pdxb_reslookup_x (70 bytes) ------------------------------------
+PDXB_RESLOOKUP_X_RL            equ 0
+PDXB_RESLOOKUP_X_RFLAGS        equ 60
+PDXB_RESLOOKUP_X_CNUM          equ 62
+PDXB_RESLOOKUP_X_CGEN          equ 64
+PDXB_RESLOOKUP_X_COFF          equ 66
+PDXB_RESLOOKUP_X_BYTES         equ 70
+
 ; ---- struct pdxb_wkey (44 bytes) -------------------------------------------
 PDXB_WKEY_SLOT                 equ 0
 PDXB_WKEY_KEY_LEN              equ 2
@@ -850,6 +933,138 @@ PDXB_EMARK_N                   equ 18
 PDXB_EMARK_MORE                equ 20
 PDXB_EMARK_BYTES               equ 22
 
+; ---- struct pdgx_cs (1264 bytes) ---------------------------------------------
+PDXB_PDGX_CS_KIND              equ 0
+PDXB_PDGX_CS_N                 equ 1
+PDXB_PDGX_CS_FLAGS             equ 2
+PDXB_PDGX_CS_PAD               equ 3
+PDXB_PDGX_CS_HIVAL             equ 4
+PDXB_PDGX_CS_SRCOBJ            equ 6
+PDXB_PDGX_CS_SRCGEN            equ 8
+PDXB_PDGX_CS_SRCLEN            equ 10
+PDXB_PDGX_CS_RSV               equ 12
+PDXB_PDGX_CS_RSV_N             equ 2
+PDXB_PDGX_CS_RSV_ESZ           equ 2
+PDXB_PDGX_CS_SRC               equ 16
+PDXB_PDGX_CS_SRC_N             equ 480
+PDXB_PDGX_CS_SRC_ESZ           equ 1
+PDXB_PDGX_CS_RGB               equ 496
+PDXB_PDGX_CS_RGB_N             equ 768
+PDXB_PDGX_CS_RGB_ESZ           equ 1
+PDXB_PDGX_CS_BYTES             equ 1264
+
+; ---- struct pdgx_lut (1028 bytes) --------------------------------------------
+PDXB_PDGX_LUT_NCOMP            equ 0
+PDXB_PDGX_LUT_FLAGS            equ 1
+PDXB_PDGX_LUT_PAD              equ 2
+PDXB_PDGX_LUT_T                equ 4
+PDXB_PDGX_LUT_T_N              equ 1024
+PDXB_PDGX_LUT_T_ESZ            equ 1
+PDXB_PDGX_LUT_BYTES            equ 1028
+
+; ---- struct pdxb_gfx (106 bytes) --------------------------------------------
+PDXB_GFX_OBJNUM                equ 0
+PDXB_GFX_GEN                   equ 2
+PDXB_GFX_TSEG                  equ 4
+PDXB_GFX_TOFF                  equ 6
+PDXB_GFX_TLEN                  equ 8
+PDXB_GFX_RSEG                  equ 10
+PDXB_GFX_ROFF                  equ 12
+PDXB_GFX_RCAP                  equ 14
+PDXB_GFX_RLEN                  equ 16
+PDXB_GFX_FLAGS                 equ 18
+PDXB_GFX_BPC                   equ 20
+PDXB_GFX_STATE                 equ 22
+PDXB_GFX_CSEG                  equ 24
+PDXB_GFX_COFF                  equ 26
+PDXB_GFX_NCOMP                 equ 28
+PDXB_GFX_KIND                  equ 30
+PDXB_GFX_NTRI                  equ 32
+PDXB_GFX_OK                    equ 34
+PDXB_GFX_COMP                  equ 36
+PDXB_GFX_COMP_N                equ 8
+PDXB_GFX_COMP_ESZ              equ 4
+PDXB_GFX_RGB                   equ 68
+PDXB_GFX_RGB_N                 equ 4
+PDXB_GFX_RGB_ESZ               equ 1
+PDXB_GFX_CTM                   equ 72
+PDXB_GFX_CLIP                  equ 96
+PDXB_GFX_CLIP_N                equ 4
+PDXB_GFX_CLIP_ESZ              equ 2
+PDXB_GFX_STEPS                 equ 104
+PDXB_GFX_BYTES                 equ 106
+
+; ---- struct pdgx_pat (56 bytes) --------------------------------------------
+PDXB_PDGX_PAT_PTYPE            equ 0
+PDXB_PDGX_PAT_PAINT            equ 1
+PDXB_PDGX_PAT_FLAGS            equ 2
+PDXB_PDGX_PAT_PAD              equ 3
+PDXB_PDGX_PAT_OBJNUM           equ 4
+PDXB_PDGX_PAT_GEN              equ 6
+PDXB_PDGX_PAT_MATRIX           equ 8
+PDXB_PDGX_PAT_MATRIX_N         equ 6
+PDXB_PDGX_PAT_MATRIX_ESZ       equ 4
+PDXB_PDGX_PAT_BBOX             equ 32
+PDXB_PDGX_PAT_BBOX_N           equ 4
+PDXB_PDGX_PAT_BBOX_ESZ         equ 4
+PDXB_PDGX_PAT_XSTEP            equ 48
+PDXB_PDGX_PAT_YSTEP            equ 52
+PDXB_PDGX_PAT_BYTES            equ 56
+
+; ---- struct pdxb_x8band (24 bytes) -----------------------------------------
+PDXB_X8BAND_DLS                equ 0
+PDXB_X8BAND_DLLEN              equ 2
+PDXB_X8BAND_BX0                equ 4
+PDXB_X8BAND_BY0                equ 6
+PDXB_X8BAND_BW                 equ 8
+PDXB_X8BAND_BSEG               equ 10
+PDXB_X8BAND_BSTRIDE            equ 12
+PDXB_X8BAND_BPP                equ 14
+PDXB_X8BAND_PGX0               equ 16
+PDXB_X8BAND_PGY0               equ 18
+PDXB_X8BAND_PGX1               equ 20
+PDXB_X8BAND_PGY1               equ 22
+PDXB_X8BAND_BYTES              equ 24
+
+; ---- struct pdxb_x8grp (16 bytes) ------------------------------------------
+PDXB_X8GRP_FRAME               equ 0
+PDXB_X8GRP_OBJ                 equ 2
+PDXB_X8GRP_GEN                 equ 4
+PDXB_X8GRP_TUPLE               equ 6
+PDXB_X8GRP_DLLEN               equ 8
+PDXB_X8GRP_Y0                  equ 10
+PDXB_X8GRP_Y1                  equ 12
+PDXB_X8GRP_MASKPEND            equ 14
+PDXB_X8GRP_BYTES               equ 16
+
+; ---- struct pdxb_x8img (22 bytes) ------------------------------------------
+PDXB_X8IMG_OBJ                 equ 0
+PDXB_X8IMG_GEN                 equ 2
+PDXB_X8IMG_FLAGS               equ 4
+PDXB_X8IMG_XL                  equ 6
+PDXB_X8IMG_YT                  equ 8
+PDXB_X8IMG_WQ                  equ 10
+PDXB_X8IMG_HQ                  equ 12
+PDXB_X8IMG_X0                  equ 14
+PDXB_X8IMG_X1                  equ 16
+PDXB_X8IMG_RY0                 equ 18
+PDXB_X8IMG_RY1                 equ 20
+PDXB_X8IMG_BYTES               equ 22
+
+; ---- struct pdxb_x8row (22 bytes) ------------------------------------------
+PDXB_X8ROW_X0                  equ 0
+PDXB_X8ROW_X1                  equ 2
+PDXB_X8ROW_SSEG                equ 4
+PDXB_X8ROW_SOFF                equ 6
+PDXB_X8ROW_SW                  equ 8
+PDXB_X8ROW_XLO                 equ 10
+PDXB_X8ROW_XHI                 equ 12
+PDXB_X8ROW_SLO                 equ 14
+PDXB_X8ROW_SHI                 equ 16
+PDXB_X8ROW_SMODE               equ 18
+PDXB_X8ROW_INV                 equ 20
+PDXB_X8ROW_BYTES               equ 22
+
 ; ---- struct pdxb_fglyph (48 bytes) -----------------------------------------
 PDXB_FGLYPH_OBJNUM             equ 0
 PDXB_FGLYPH_GEN                equ 2
@@ -889,5 +1104,14 @@ PDXB_FPATH_UPEM                equ 14
 PDXB_FPATH_ADV1000             equ 16
 PDXB_FPATH_ERR                 equ 18
 PDXB_FPATH_BYTES               equ 20
+
+; ---- struct pdxb_imgx (12 bytes) -------------------------------------------
+PDXB_IMGX_K                    equ 0
+PDXB_IMGX_COLS                 equ 2
+PDXB_IMGX_ROWS                 equ 4
+PDXB_IMGX_FLAGS                equ 6
+PDXB_IMGX_GLOBALS              equ 8
+PDXB_IMGX_RESERVED             equ 10
+PDXB_IMGX_BYTES                equ 12
 
 %endif ; PDABI_INC

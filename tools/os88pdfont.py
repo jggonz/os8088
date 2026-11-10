@@ -374,10 +374,33 @@ def cmd_notice(a):
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "wb").write(build_notice_text())
     print("%s %d bytes" % (os.path.basename(a.out), os.path.getsize(a.out)))
-def build_res(core_only=True, art=True):
+def pack_strike_blob(d):
+    """PAGEDESK-SPEC 20.22.14: a strike as an LZ4 stream in SPEC.md 20.13.7's
+    shape (T word, symbols, raw tail) - what OSAPI_DECOMP expands, in place,
+    from the top of the strike cache. None when packing does not pay."""
+    import os88lz
+    c = os88lz.lz4_compress(d)
+    if len(c) >= len(d):
+        return None
+    assert os88lz.lz4_decompress(c, len(d)) == d
+    return c
+
+def build_res(core_only=True, art=True, pack=True):
     """Layout (D3): directory | PDFB bank (header, strike records, PDFX, widths, names)
-    | strike data | icons.  The first INDEX bytes are what the primary loads."""
+    | strike data | icons.  The first INDEX bytes are what the primary loads.
+    pack (PAGEDESK-SPEC 20.22.14): each distinct strike is stored as an LZ4
+    stream; its record keeps the UNPACKED length in bytes 12-13 and says the
+    PACKED length in 14-15 (0 = stored), and the bank is PDFB version 2."""
     recs, blobs = collect_strikes(CORE_SIZES if core_only else [x for x in SIZES if x not in CORE_SIZES])
+    plens = [0] * len(blobs)
+    if pack:
+        for bi, d in enumerate(blobs):
+            c = pack_strike_blob(d)
+            if c is not None:
+                plens[bi] = len(c)
+                blobs[bi] = (d, c + b"\0" * (len(c) % 2))      # streams start 16-bit aligned too
+    ulen = [len(d[0]) if isinstance(d, tuple) else len(d) for d in blobs]
+    blobs = [d[1] if isinstance(d, tuple) else d for d in blobs]
     n = len(recs)
     nent = 8 if core_only else 7
     D = (8 + 12 * nent + 15) & ~15                    # the bank starts paragraph aligned
@@ -398,25 +421,32 @@ def build_res(core_only=True, art=True):
     strikes = b"".join(blobs)
     icons_off = (o + 15) & ~15
     icons = build_atlas_safe(art and core_only)
+    icons_u = len(icons)
+    if pack and icons:              # 20.22.14: the atlas as one LZ4 stream, directory flag 1
+        c = pack_strike_blob(icons)
+        if c is not None:
+            icons = c
+    icons_flags = 1 if len(icons) != icons_u else 0
     notice = NOTICE.encode("ascii")
     notice_off = (icons_off + len(icons) + 15) & ~15
-    bank = b"PDFB" + struct.pack("<HH", 1, n)
+    bank = b"PDFB" + struct.pack("<HH", 2 if any(plens) else 1, n)
     for fam, st, size, asc, desc, flags, bi in recs:
-        bank += struct.pack("<BBBBBBBBII", FAMILIES.index(fam), st, size, asc, desc, FIRST, LAST,
-                            flags, offs[bi], len(blobs[bi]))
+        bank += struct.pack("<BBBBBBBBIHH", FAMILIES.index(fam), st, size, asc, desc, FIRST, LAST,
+                            flags, offs[bi], ulen[bi], plens[bi])
     bank += b"PDFX" + struct.pack("<HH", widths_off, names_off)
     bank += wid + names
     assert len(bank) == bank_len
     ent = [(K_FONTS, D, bank_len), (K_WIDTHS, D + widths_off if wid else 0, len(wid)),
            (K_NAMES, D + names_off if names else 0, len(names)), (K_STRIKES, data_off, len(strikes)),
-           (K_ICONS, icons_off if icons else 0, len(icons)), (K_INDEX, 0, index_len),
+           (K_ICONS, icons_off if icons else 0, (icons_u << 16 | len(icons)) if icons_flags else len(icons)),
+           (K_INDEX, 0, index_len),
            (K_NOTICE, notice_off, len(notice))]
     if core_only:
         ent.append((K_KIT, kit_off, len(kit)))
     assert len(ent) == nent
     head = b"PDRS" + struct.pack("<HH", 1, nent)
-    for k, off, ln in ent:
-        head += struct.pack("<HHII", k, 0, off, ln)
+    for k, off, ln in ent:            # flags bit 0 (20.22.14): an LZ4 stream, length = unpacked << 16 | packed
+        head += struct.pack("<HHII", k, icons_flags if k == K_ICONS else 0, off, ln)
     head += b"\0" * (D - len(head))
     blob = head + bank + b"\0" * (kit_off - index_len) + kit
     blob += b"\0" * (data_off - len(blob)) + strikes
@@ -424,7 +454,10 @@ def build_res(core_only=True, art=True):
     blob += b"\0" * (notice_off - len(blob)) + notice
     parts = {"index": index_len, "dir": D, "strike records": 16 * n, "widths": len(wid),
              "names": len(names), "strike data": len(strikes), "icons": len(icons),
+             "icons unpacked": icons_u,
              "notice": len(notice), "kit": len(kit)}
+    if pack:
+        parts["strikes unpacked"] = sum(ulen[i] for i in range(len(ulen)))
     return blob, parts
 
 def build_kit_safe(core):
@@ -440,21 +473,47 @@ def build_atlas_safe(art):
     return os88pdart.build_atlas()
 
 def cmd_build(a):
-    blob, parts = build_res(core_only=not a.extra)
+    blob, parts = build_res(core_only=not a.extra, pack=not a.stored)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "wb").write(blob)
     print("%s %d bytes%s: " % (os.path.basename(a.out), len(blob), " (extra sizes, no icons)" if a.extra else " (core sizes 8/10/12)")
           + ", ".join("%s %d" % kv for kv in parts.items()))
 
+def cmd_cut(a):
+    """Row 4 is [0, data_off) - read by the primary, PACKED by os88pkg (OP_COMP) and
+    expanded by pdu_part_rd; row 5 is [data_off, end), stored (OP_SELF), where PDREND
+    reads each strike by file offset. data_off is a multiple of 16, so the primary
+    finds part_off as row 5's offset less row 4's unpacked length (pdu_bank_load)."""
+    blob = open(a.res, "rb").read()
+    so = read_res(blob)[K_STRIKES][0]
+    assert so % 16 == 0 and 0 < so < len(blob) and so <= 65024 and len(blob) - so <= 65024, so
+    open(a.index, "wb").write(blob[:so])
+    open(a.strikes, "wb").write(blob[so:])
+
 # ---------------------------------------------------------------- proof/check
-def read_res(blob):
+def read_dir(blob):
+    """kind -> (flags, offset, length) as the directory says them"""
     assert blob[:4] == b"PDRS"
     ver, n = struct.unpack_from("<HH", blob, 4)
-    ents = {}
+    out = {}
     for i in range(n):
         k, f, o, l = struct.unpack_from("<HHII", blob, 8 + 12 * i)
-        ents[k] = (o, l)
-    return ents
+        assert f in (0, 1) and (f == 0 or k == K_ICONS), "directory kind %d flags %d" % (k, f)
+        out[k] = (f, o, l)
+    return out
+
+def read_res(blob):
+    """kind -> (offset, bytes in the file); a flag-1 entry's length word is
+    unpacked << 16 | packed (PAGEDESK-SPEC 20.22.14)"""
+    return {k: (o, l & 0xFFFF if f else l) for k, (f, o, l) in read_dir(blob).items()}
+
+def res_part(blob, k):
+    """a directory part's bytes, expanded when its flag says LZ4 (20.22.14)"""
+    f, o, l = read_dir(blob)[k]
+    if not f:
+        return blob[o:o + l]
+    import os88lz
+    return os88lz.lz4_decompress(blob[o:o + (l & 0xFFFF)], l >> 16)
 
 def bank_strikes(blob):
     ents = read_res(blob)
@@ -462,9 +521,15 @@ def bank_strikes(blob):
     assert blob[D:D + 4] == b"PDFB"
     n = struct.unpack_from("<H", blob, D + 6)[0]
     for i in range(n):
-        fam, st, size, asc, desc, f, l, flags, off, ln = struct.unpack_from("<BBBBBBBBII", blob, D + 8 + 16 * i)
+        fam, st, size, asc, desc, f, l, flags, off, ln, pl = struct.unpack_from("<BBBBBBBBIHH", blob, D + 8 + 16 * i)
+        if pl:                              # 20.22.14: an LZ4 stream, PDFB version 2
+            import os88lz
+            assert struct.unpack_from("<H", blob, D + 4)[0] == 2, "a packed strike in a version-1 bank"
+            data = os88lz.lz4_decompress(blob[off:off + pl], ln)
+        else:
+            data = blob[off:off + ln]
         yield dict(fam=fam, st=st, size=size, asc=asc, desc=desc, first=f, last=l,
-                   flags=flags, off=off, data=blob[off:off + ln])
+                   flags=flags, off=off, data=data, packed=pl, disk=pl or ln)
 
 def blit_text(strike, text, widths_scale=None):
     """-> list of rows (strings) drawing text with the bitmap's own advance."""
@@ -551,7 +616,7 @@ def cmd_check(a):
         assert (D + no, len(build_names())) == ents[K_NAMES], "names"
         assert blob[D + no:D + no + ents[K_NAMES][1]] == build_names()
         io, il = ents[K_ICONS]
-        assert io % 16 == 0 and io >= so + sl and blob[io:io + il] == build_atlas_safe(True)
+        assert io % 16 == 0 and io >= so + sl and res_part(blob, K_ICONS) == build_atlas_safe(True)
     else:
         assert wo == no == 0 and ents[K_WIDTHS] == ents[K_NAMES] == ents[K_ICONS] == (0, 0)
     no_, nl = ents[K_NOTICE]
@@ -565,7 +630,7 @@ def cmd_check(a):
         assert key not in seen and s["size"] in sizes, key
         seen.add(key)
         off = s["off"]
-        assert so <= off and off + len(s["data"]) <= so + sl and off % 2 == 0, key
+        assert so <= off and off + s["disk"] <= so + sl and off % 2 == 0, key
         src = key if key in S else (fam, st.replace("i", "") or "r", s["size"])
         assert (src != key) == bool(s["flags"] & 1), key
         meta, gl = S[src]
@@ -574,11 +639,15 @@ def cmd_check(a):
         assert s["data"] == want_data, "strike %s differs from its source" % (key,)
         assert (s["asc"], s["desc"], s["first"], s["last"]) == \
             (int(meta["ascent"]), int(meta["descent"]), FIRST, LAST)
-        biggest = max(biggest, len(s["data"]))
+        # the strike cache's room for it (PAGEDESK-SPEC 20.22.14): a packed strike is read
+        # at the top of its own slot, a cluster (<= 4 KiB) of slack about it, and expanded down
+        u = len(s["data"])
+        need = max((u + 511) & ~511, u + 15 + 4095) if s["packed"] else u
+        biggest = max(biggest, need)
     want = {(f, st, z) for f in FAMILIES for st in STYLES for z in sizes}
     assert seen == want, sorted(want ^ seen)
-    assert biggest <= GLYPH_CACHE, "a %d-byte strike cannot fit the glyph cache" % biggest
-    print("%s ok: %d bytes, INDEX %d (limit %d), %d strike records, largest strike %d"
+    assert biggest <= GLYPH_CACHE, "a strike needing %d bytes cannot fit the glyph cache" % biggest
+    print("%s ok: %d bytes, INDEX %d (limit %d), %d strike records, largest strike (cache room) %d"
           % (name, len(blob), idx, INDEX_MAX, n, biggest))
 
 def main():
@@ -586,7 +655,11 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch").set_defaults(f=cmd_fetch)
     sub.add_parser("draw").set_defaults(f=cmd_draw)
-    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--extra", action="store_true", help="PDFONTX.RES: the sizes PDRES.BIN does not carry"); b.set_defaults(f=cmd_build)
+    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--extra", action="store_true", help="PDFONTX.RES: the sizes PDRES.BIN does not carry")
+    b.add_argument("--stored", action="store_true", help="the strikes unpacked, PDFB version 1 (the A/B for 20.22.14)"); b.set_defaults(f=cmd_build)
+    cu = sub.add_parser("cut", help="PAGEDESK-SPEC 20.22.14: PDRES.BIN's two package rows - the INDEX "
+                        "(directory, bank, kit) and the strike region from kind 6's offset on")
+    cu.add_argument("res"); cu.add_argument("index"); cu.add_argument("strikes"); cu.set_defaults(f=cmd_cut)
     pr = sub.add_parser("proof"); pr.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))
     pr.add_argument("--extra", default=os.path.join(ROOT, "build", "PDFONTX.RES")); pr.add_argument("-o", "--out", default=os.path.expanduser("~/Repos/pagedesk-logs/shots/fonts")); pr.set_defaults(f=cmd_proof)
     c = sub.add_parser("check"); c.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))

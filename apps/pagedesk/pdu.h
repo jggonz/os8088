@@ -21,14 +21,17 @@
 /* --- the parts table (pagedesk.asm's %if holds these) ------------------- */
 #define PDU_PART_ENG   0
 #define PDU_PART_REND  1
-#define PDU_PART_WRT   2
-#define PDU_PART_RES   3          /* PDRES [0, 65024)            */
-#define PDU_PART_RES2  4          /* PDRES [65024, end), adjacent */
-#define PDU_PART_XK    5          /* the slot's occupants (20.22.2.3) */
-#define PDU_PART_XG    6
-#define PDU_PART_XF    7
-#define PDU_PART_XI    8
-#define PDU_PART_XJ    9          /* ...and the overlay is row 10, last */
+#define PDU_PART_RENDC 2          /* PDREND's code part, eager (20.22.7.9) */
+#define PDU_PART_WRT   3
+#define PDU_PART_RES   4          /* PDRES [0, 65024)            */
+#define PDU_PART_RES2  5          /* PDRES [65024, end), adjacent */
+#define PDU_PART_XK    6          /* the slot's occupants (20.22.2.3) */
+#define PDU_PART_XG    7
+#define PDU_PART_XF    8
+#define PDU_PART_XI    9
+#define PDU_PART_XJ    10
+#define PDU_PART_X8    11         /* PDX8, read into the X8 region (20.22.10.11);
+                                   * the overlay is row 12, last */
 
 /* --- module vectors (pdui.inc's pdu_vec) --------------------------------- */
 #define PDU_M_ENG   0
@@ -398,6 +401,7 @@ void     pdu_pg_apply(const void *delta, unsigned len, int undo);
 #define pdu_tool_hint ovl_tool_hint
 #define pdu_undo_cmd ovl_undo_cmd
 int      pdu_tool_click(int x, int y);
+int      pdu_ovl_in(void);              /* pduslot.inc: the overlay is fetched */
 int      pdu_tool_hilite(void);         /* nav calls it when a Highlight selection ends */
 int      pdu_tool_delete(void);
 int      pdu_tool_enter(void);

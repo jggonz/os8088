@@ -163,6 +163,9 @@ _os88_file_read_seq:
 %endif
 
 %include "pagedesk/pdrprim.inc"
+%ifdef PDR_X8                           ; blend: PDX8's far calls (20.22.10.11); the Makefile passes -DPDR_X8 to nasm and the compiler together
+%include "pagedesk/pdrx8h.inc"
+%endif
 
 section .bss
 pdr_bss_end:

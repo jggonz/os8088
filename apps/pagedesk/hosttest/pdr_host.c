@@ -245,6 +245,42 @@ pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
     return 0;
 }
 
+/* OSAPI_DECOMP's LZ4 arm (SPEC.md 20.13.3, 20.13.7) for pdr_lzdec (PAGEDESK-SPEC
+ * 20.22.14): T word, symbols, T raw bytes; exactly ulen out; every length, offset
+ * and run bounded as the kernel bounds it. It reads the source AS IT GOES, so a
+ * stream expanded in place from above its output is held to 20.13.7's rule here
+ * too: a decoder that overtook its source would read bytes it had overwritten */
+pdw pdr_lzdec(pdw sseg, pdw soff, pdw plen, pdw dseg, pdw ulen)
+{
+    unsigned long s = ((unsigned long)sseg << 4) + soff, d = (unsigned long)dseg << 4;
+    unsigned long p, end, o = 0, t;
+    unsigned ll, ml, off, e, k;
+#define SB(i) pd_host_mem[s + (i)]
+    if (plen < 2) return 0xFFFF;
+    t = (unsigned)(SB(0) | SB(1) << 8);
+    if (t == 0xFFFF || t > plen - 2u) return 0xFFFF;          /* the filter escape: not ours */
+    p = 2; end = plen - t;
+    while (p < end) {
+        k = SB(p); p++;
+        ll = k >> 4;
+        if (ll == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ll += e; } while (e == 255 && ll < 65535u);
+        if (p + ll > end || o + ll > ulen) return 0xFFFF;
+        while (ll--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+        if (p + 2 > end) return 0xFFFF;                     /* symbols end in a match */
+        off = (unsigned)(SB(p) | SB(p + 1) << 8); p += 2;
+        if (!off || off > o) return 0xFFFF;
+        ml = k & 15;
+        if (ml == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ml += e; } while (e == 255 && ml < 65535u);
+        ml += 4;
+        if (o + ml > ulen) return 0xFFFF;
+        while (ml--) { pd_host_mem[d + o] = pd_host_mem[d + o - off]; o++; }
+    }
+    if (o + t != ulen) return 0xFFFF;
+    while (t--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+#undef SB
+    return 0;
+}
+
 struct pdr_gp pdr_gp;
 struct pdr_ip pdr_ip;
 pdw pdr_eng_ax, pdr_eng_dx, pdr_eng_off, pdr_eng_seg;
@@ -639,3 +675,36 @@ pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx)
 int pdrh_npages(void) { return npages; }
 int pdrh_nstreams(void) { return nst; }
 #endif /* PDR_REAL_ENG */
+
+/* ---- the 8-bit band's quantiser (pdrx8.inc, PAGEDESK-SPEC 20.22.10) ---------------- */
+struct pdr_xq pdr_xq;
+static unsigned xq_level(unsigned v, unsigned par)      /* 20.19.2: seven levels of the four greys */
+{
+    if (v < 21) return 0;
+    if (v < 64) return par ? 8 : 0;
+    if (v < 106) return 8;
+    if (v < 149) return par ? 7 : 8;
+    if (v < 191) return 7;
+    if (v < 234) return par ? 15 : 7;
+    return 15;
+}
+void pdr_x8quant(void)
+{
+    const unsigned char *src = MEM(pdr_xq.sseg, pdr_xq.soff);
+    unsigned char *dst = MEM(pdr_xq.dseg, pdr_xq.doff);
+    unsigned i, x;
+    for (i = 0; i < pdr_xq.n; i++) {
+        unsigned v = src[i];
+        x = pdr_xq.x0 + i;
+        if (pdr_xq.bpp == 4) {
+            unsigned k = xq_level(v, (pdr_xq.par + i) & 1), b = (x & 1) + i - (pdr_xq.x0 & 1);     /* byte (x0&1 + i) >> 1 */
+            unsigned bi = ((pdr_xq.x0 & 1) + i) >> 1; (void)b;
+            if (x & 1) dst[bi] = (unsigned char)((dst[bi] & 0xF0) | k);
+            else       dst[bi] = (unsigned char)((dst[bi] & 0x0F) | (k << 4));
+        } else {
+            unsigned bi = ((pdr_xq.x0 & 7) + i) >> 3, m = 0x80 >> (x & 7);
+            if (((v * 17u) >> 8) > bayer_t[pdr_xq.par | (x & 3)]) dst[bi] |= (unsigned char)m;
+            else dst[bi] &= (unsigned char)~m;
+        }
+    }
+}
