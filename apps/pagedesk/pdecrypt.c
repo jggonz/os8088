@@ -139,22 +139,23 @@ static void cr_string(void)
     ov.text[p < PDE_VT - 1 ? p : PDE_VT - 1] = 0;
 }
 
-/* ---- PDV_ENG_CRYPTINFO: what the engine knows (the dictionary is PDXK's to read) ------
- * The trailer's /Encrypt (eng recorded it: a reference, or a direct dictionary), the
- * whole /ID[0], and what SETKEY set: the key, its length, the methods, who got in.
- * Allowed from the moment OPEN has read the cross-reference (it answers PDE_PASSWORD). */
+/* ---- PDV_ENG_CRYPTINFO: what SETKEY set, and the whole /ID[0] ----------------------------
+ * pdxb_crypt out: `state` 1 when a key is set, then `key`, `key_len`, `auth`, `stm`, `str`,
+ * `eff`, `encmeta`; `id0`, `id0_len` always (R2 to R4 hash it into the key). Where the dictionary
+ * is comes from TRAILER (encrypt_num/gen, PDTR_ENCDIRECT); PDXK reads it with DICT_GET. Both are
+ * allowed from the moment OPEN has read the cross-reference (20.22.5). */
 static pdw cr_auth, cr_eff;     /* PDCA_* SETKEY was told; the embedded-file method  */
-#define CIN ((struct pdxb_cryptinfo *)tailbuf)
 static pdw cr_info(void)
 {
-    struct pdxb_cryptinfo *ci = CIN;
+    struct pdxb_crypt *x = CRI;
     pdw i;
-    ci->on = cr_on; ci->enc_k = tr_enc_k; ci->enc_num = tr_enc_n; ci->enc_gen = tr_enc_g;
-    ci->id0_len = tr_idlen < 32 ? tr_idlen : 32;
-    for (i = 0; i < 32; i++) ci->id0[i] = tr_id[i];
-    ci->auth = cr_auth; ci->key_len = cr_klen; ci->stm = cr_stm; ci->str = cr_str; ci->eff = cr_eff; ci->encmeta = cr_meta;
-    for (i = 0; i < 32; i++) ci->key[i] = cr_key[i];
-    pd_fcopy_out(ci, g_xb, 0, sizeof(struct pdxb_cryptinfo));
+    if (nctx != 0) return PDE_RANGE;
+    for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;
+    x->state = cr_on; x->auth = cr_auth; x->key_len = cr_klen; x->stm = cr_stm; x->str = cr_str; x->eff = cr_eff; x->encmeta = cr_meta;
+    for (i = 0; i < 32; i++) { x->key[i] = cr_key[i]; x->id0[i] = tr_id[i]; }
+    x->id0_len = tr_idlen < 32 ? tr_idlen : 32;
+    pd_fcopy_out(x, g_xb, 0, sizeof(struct pdxb_crypt));
+    for (i = 0; i < sizeof(struct pdxb_crypt); i++) ((pdb *)x)[i] = 0;     /* (the key was in the idle ctxs) */
     return PDE_OK;
 }
 

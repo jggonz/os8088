@@ -4970,9 +4970,10 @@ caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
   `cpu`.
 * `PDV_KEY_PARAMS` 0xC3: XB = `pdxb_crypt` out. The file's `/Encrypt` parameters
   (`v r length p stm str eff encmeta o_len u_len o u oe ue perms id0 id0_len`),
-  no password tried. Read with PDENG: `PDV_ENG_CRYPTINFO` says where the
-  dictionary is (a reference, or direct in the trailer) and gives the whole
-  `/ID[0]`; then one `PDV_ENG_DICT_GET` a key: `/Filter` must be `/Standard`,
+  no password tried. Read with PDENG: `PDV_ENG_CRYPTINFO` gives the whole
+  `/ID[0]`, `PDV_ENG_TRAILER` says where the dictionary is (`encrypt_num/gen`,
+  or `PDTR_ENCDIRECT` in `tflags`: eng's fields, 20.22.3.4); then one
+  `PDV_ENG_DICT_GET` a key: `/Filter` must be `/Standard`,
   `/V` in {1, 2, 4, 5}, `/R` in 2 to 6, `/Length`, `/P`, `/O` `/U`
   (the first 48 bytes), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4
   and V5 `/StmF` `/StrF` and `/CF/<name>/CFM` (`/V2` RC4, `/AESV2`, `/AESV3`,
@@ -5010,17 +5011,18 @@ caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
 
 **PDENG.**
 
-* `PDV_ENG_CRYPTINFO` 0x13 (from the moment OPEN has read the cross-reference;
-  `pdxb_cryptinfo`, `pdabi.h`'s crypt block): `on`, the trailer's `/Encrypt`
-  (`enc_k` 0 none, 1 a reference, 2 direct; `enc_num/enc_gen`), the whole
-  `/ID[0]` (`id0`, `id0_len` at most 32), and what `SETKEY` set (`auth`,
-  `key_len`, `key`, `stm`, `str`, `eff`, `encmeta`). The plat pre-flight for
-  Insert reads a foreign file's key and methods here.
+* `PDV_ENG_CRYPTINFO` 0x13 (from the moment OPEN has read the cross-reference):
+  `pdxb_crypt` out, with `state` 1 when a key is set, then what `SETKEY` set
+  (`auth`, `key_len`, `key`, `stm`, `str`, `eff`, `encmeta`) and the whole
+  `/ID[0]` (`id0`, `id0_len` at most 32) always; `v`, `r` and the strings stay
+  0 (PDXK reads those). The plat pre-flight for Insert reads a foreign file's
+  key and methods here.
 * `PDV_ENG_SETKEY` 0x14: XB = `pdxb_crypt` in (`key`, `key_len`, `stm`, `str`,
   `eff`, `encmeta`, `auth`). The XB's copy of the key is zeroed. `OPEN` then
   resumes from its state 7 and `PDO_ENCRYPTED` is set. `OPEN` answers
   `PDE_PASSWORD` (CF = 1) at state 7 without discarding the document, and
-  **`DICT_GET` is allowed in that pause** so PDXK can read the dictionary.
+  **`DICT_GET` and `TRAILER` are allowed in that pause** so PDXK can read the
+  dictionary.
   Closing, re-INIT or a new OPEN forgets the key.
 * `PDV_ENG_CRYPT` is **withdrawn**.
 
@@ -5046,12 +5048,12 @@ rewritten (each string decrypted and written back as a hex string, `/Length`
 corrected) as well as the stream; designed in the round's report, built when the
 lead decides where its ~600 bytes of PDENG come from.
 
-**Sizes** (image + bss, bytes). PDENG 42,158 + 11,755 = 53,913, which is +6,761
+**Sizes** (image + bss, bytes). PDENG 42,302 + 11,755 = 54,057, which is +6,905
 over the round's start (47,152; the brief said +3,200 and the lead's 23:30
 decision +6,500): the assembly 2,242, the C (`cr_read` `cr_ctx_open` `cr_string`
 `cr_sched` `cr_skipchk` `SETKEY` `CRYPTINFO`) and the hooks in eng's files about
 3,000, bss 1,520 (three RC4 states 774, the AES schedule 240, the `sctx` fields
-160, the key 32). PDXK 14,912 + 4,019 = 18,931 of 32,768.
+160, the key 32). PDXK 14,958 + 4,391 = 19,349 of 32,768.
 
 **Stacks.** PDENG's chain through `cr_read` is no deeper than `v_open`'s (436
 bytes, `os88pdstk`). PDXK measured by `tests/pdcrypt/pdk_stack.py`: 226 (RC4),

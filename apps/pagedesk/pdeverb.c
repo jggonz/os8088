@@ -400,6 +400,9 @@ static pdw v_trailer(void)
     u32_cp(&tr.startxref, &tr_start);
     for (i = 0; i < 16; i++) tr.id0[i] = tr_hasid ? tr_id[i] : 0;
     tr.id0_len = tr_idlen;
+    for (i = 0; i < 16; i++) tr.id0_hi[i] = (tr_hasid && tr_idlen > 16) ? tr_id[16 + i] : 0;
+    tr.encrypt_num = (tr_enc_k == 1) ? tr_enc_n : 0; tr.encrypt_gen = (tr_enc_k == 1) ? tr_enc_g : 0;   /* eng's (20.22.3.4) */
+    tr.tflags = (tr_enc_k == 2) ? PDTR_ENCDIRECT : 0;
     tr.version = doc_ver;
     pd_fcopy_out(&tr, g_xb, 0, sizeof(struct pdxb_trailer));
     return PDE_OK;
@@ -603,7 +606,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
             break;
         default:
-            if (!g_open && !(op_state == 7 && verb == PDV_ENG_DICT_GET)) { rc = PDE_RANGE; break; }    /* PDXK reads /Encrypt at the password pause (20.22.5) */
+            if (!g_open && !(op_state == 7 && (verb == PDV_ENG_DICT_GET || verb == PDV_ENG_TRAILER))) { rc = PDE_RANGE; break; }    /* PDXK reads /Encrypt at the password pause (20.22.5) */
             switch (verb) {
             case PDV_ENG_PAGEINFO:   rc = v_pageinfo((pdw)bx); break;
             case PDV_ENG_OBJ_FIND:   rc = v_obj_find(); break;

@@ -376,7 +376,8 @@ static pdw kx_cost(void)
  * is PDE_ENCRYPT. P is a 16.16 integer there: the signed values every writer uses; a P outside
  * +-32767 is PDE_ENCRYPT for R2 to R4, where it enters the key, and ignored for R5 and R6. */
 static struct pdxb_dictget dg;
-static struct pdxb_cryptinfo ci;
+static struct pdxb_crypt ci;
+static struct pdxb_trailer trl;
 static pdw dg_n, dg_g;
 
 static void dg_name(char *dst, const char *src)
@@ -460,11 +461,14 @@ static pdw kp_v, kp_r, kp_len, kp_n;           /* (no address of a local: SPEC.m
 static pdw kx_params(void)
 {
     pdw r, v, rr, len, i;
-    r = pdk_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
+    r = pdk_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);               /* the whole /ID[0] */
     if (pdk_engcf) return r;
     pd_fcopy_in(g_xb, 0, &ci, sizeof ci);
-    if (!ci.enc_k) return PDE_RANGE;
-    dg_n = (ci.enc_k == 1) ? ci.enc_num : 0; dg_g = (ci.enc_k == 1) ? ci.enc_gen : 0;
+    r = pdk_engcall(PDV_ENG_TRAILER, 0, 0, 0);                 /* where /Encrypt is */
+    if (pdk_engcf) return r;
+    pd_fcopy_in(g_xb, 0, &trl, sizeof trl);
+    if (!trl.encrypt_num && !(trl.tflags & PDTR_ENCDIRECT)) return PDE_RANGE;
+    dg_n = trl.encrypt_num; dg_g = trl.encrypt_gen;
     r = dget("Filter", 0, 0);
     if (r || !dg_is("Standard")) return r ? r : PDE_ENCRYPT;
     r = dgi("V", &kp_v);
