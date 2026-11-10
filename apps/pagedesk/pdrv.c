@@ -212,7 +212,7 @@ static void x_answered(void)
     pdw a = x_ask;
     x_ask = 0; x_mwant = 0;
     /* a refused XC or X8 refuses regions for the page view; the glyph claim (fonts, 20.22.8) is refused
-       alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
+     * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
     if (a & 0x80) {
         if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
         else if (a == (0x80 | PDMEM_XC) ? !g_ini.xc_seg : a == (0x80 | PDMEM_X8) ? !g_ini.x8_seg : 0) x_ref |= XR_MEM;

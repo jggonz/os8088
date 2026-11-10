@@ -486,8 +486,8 @@ static pdw v_glyph(void)
     if (r) {
         g->err = g_ferr;
         /* a program larger than this workspace: ONE growth to 64 KiB is asked for, per font (20.22.2's
-           PDMEM_SLOT; CX = 0 is the door's own, DX = the KiB). A refusal re-INITs unchanged and the next
-           call for the font answers PDFE_SIZE: PDREND draws it in the substitute face, PDF_INC_APPROX */
+         * PDMEM_SLOT; CX = 0 is the door's own, DX = the KiB). A refusal re-INITs unchanged and the next
+         * call for the font answers PDFE_SIZE: PDREND draws it in the substitute face, PDF_INC_APPROX */
         if (g_ferr == PDFE_SIZE && g_wskb < 64 && (g_askobj != g->objnum || g_askgen != g->gen)) {
             g_askobj = g->objnum; g_askgen = g->gen; pdx_odx = 64; return PDE_NEEDMEM;
         }
@@ -498,9 +498,9 @@ static pdw v_glyph(void)
     g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
     if (g->flags & PDFG_BLOCK) {
         /* the blocks are at the top of the glyph claim INIT named: (glyph_kb - 24) / 4 of them, at most
-           SYN_MAX, under the 64-byte header. PDREND names the claim it holds (dseg, and its KiB in cap); a
-           different one is a stale INIT (a regrown claim the primary did not re-hand) and is refused
-           rather than written */
+         * SYN_MAX, under the 64-byte header. PDREND names the claim it holds (dseg, and its KiB in cap); a
+         * different one is a stale INIT (a regrown claim the primary did not re-hand) and is refused
+         * rather than written */
         if (g->dseg != g_xgs || g->cap != g_xgkb) return PDE_RANGE;
         g->cap = g_xgkb < 28 ? 0 : (pdw)((g_xgkb - 24) >> 2);
         if (g->cap > PDFB_NBLK) g->cap = PDFB_NBLK;
