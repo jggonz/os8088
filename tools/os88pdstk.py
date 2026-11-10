@@ -116,10 +116,12 @@ OVL = 8                     # cc_ovthunk / cc_ovmthunk's stash path + far frame
 # PDENG's door. An occupant whose source is not in the tree yet (the stand-in,
 # stubs/pdstub.asm) has nothing of its own to charge and is left out.
 OCCUPANTS = ["pdxk", "pdxg", "pdxf", "pdxi", "pdxj"]
+# an occupant whose door and dispatcher predate the rule: (door, dispatcher)
+OCC_NAMES = {"pdxi": ("pdi_entry", "_pdi_verb")}
 
 
 def occupant_segments(root=ROOT, names=OCCUPANTS):
-    return [(n.upper(), "apps/pagedesk/%s.asm" % n, "%s_entry" % n, "_%s_verb" % n)
+    return [(n.upper(), "apps/pagedesk/%s.asm" % n) + OCC_NAMES.get(n, ("%s_entry" % n, "_%s_verb" % n))
             for n in names if os.path.isfile(os.path.join(root, "apps/pagedesk/%s.asm" % n))]
 
 
