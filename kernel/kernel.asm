@@ -1696,14 +1696,18 @@ VIEW_KB     equ 2               ; each cache: 1,536 bytes of entries and 64 of
 ; gone, with KERNEL_SEG where it always was and no ABI moved (ABI-BREAK-LIST
 ; L1's saving, without its flag day: docs/plans/ksp19/l1.md). It used to round
 ; to 512, and before THAT every base in the map was a round constant like
-; 0x0300 or 0x2A00 and nothing said why that mattered. kern_mega rounds to
-; its selector granule instead, 128 bytes: FAT_SEG and LOW_SEG are identity
-; selectors there, a GDT entry every 8 paragraphs.
+; 0x0300 or 0x2A00 and nothing said why that mattered. kern_mega still rounds
+; to 512: its ladder is unpacked, so the heap base above it would otherwise
+; lose guard 6's alignment (docs/plans/ksp19/l1.md).
 %ifdef KERN_MEGA
-KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 127) / 128) * 8    ; image + scratch,
-                                ; to kern_mega's selector granule: FAT_SEG and
-                                ; LOW_SEG are identity selectors there, whose
-                                ; GDT bases are i x 128 (mega.inc)
+KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; image + scratch,
+                                ; still to 512 on kern_mega: its ladder is not
+                                ; packed (LADDER_PACK), so the rungs above the
+                                ; image - and HEAP_SEG, which guard 6 holds to
+                                ; 512 - inherit this rounding. A 128-byte
+                                ; granule here broke guard 6 the first time
+                                ; .bss moved by a non-multiple of 512 (the
+                                ; drvtab merge, kernel size pass 19)
 %else
 KIMG_PARA   equ (KTEXT_SIZE + KBSS_SIZE + 15) / 16           ; image + scratch,
                                 ; to the PARAGRAPH (kernel size pass 19)
