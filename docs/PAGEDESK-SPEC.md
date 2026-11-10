@@ -4932,7 +4932,220 @@ round's final pass, not before.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
-*Reserved; written by its agent before its code.*
+AP-06. Owner decisions O3 (an encrypted file is saved as an incremental update
+encrypted with the file's own key) and O5 (`/P` is ignored; the source's `/P`
+and `/Encrypt` are kept unchanged) bind this section. Nothing here changes
+14.2's phases, 20.5's verbs or the cap on what a slice may do; it changes what
+the phases read and what they write.
+
+**20.22.4.1 The update section stays classic.** Whatever the newest section of
+the source is (a classic table, a cross-reference stream, a hybrid), the
+update is appended as a CLASSIC `xref` section whose trailer carries
+`/Prev <the source's newest startxref>` (`pdxb_trailer.startxref`, which PDENG
+answers for a stream section too). Measured, qpdf 12.4.2 and MuPDF 1.28.6:
+a classic update over an xref-stream file, shadowing objects that live in an
+object stream with top-level objects of the same number, is accepted by both
+with no warning (`qpdf --check`, `--show-xref`, `mutool show`), plain and
+AES-128. An xref-stream update was equally accepted and buys nothing, so it is
+not built: it would need a new object number, a self entry, a binary counted
+length, a rewritten `job_verify` and a stream the engine must read back. The
+trailer written is:
+
+`/Size`, `/Root`, `/Info` as before; `/Encrypt n g R` when the source has one
+(`pdxb_trailer.encrypt_num` / `encrypt_gen`); `/ID [<id0 whole, up to 32
+bytes> <a new 16>]` (`id0` then `id0_hi`: the first element is an input of the
+key and is written byte for byte); `/Prev`. **A DIRECT `/Encrypt` dictionary**
+(`tflags` has `PDTR_ENCDIRECT`) is copied as the file has it: at job start
+the job asks `PDV_ENG_RAW_COPY` for the pseudo-object `PDRC_ENCDICT`
+(0xFFFE; the text `<< ... >>`, at most 640 bytes, else `PDE_ENCRYPT`), keeps it
+(the source is closed before the trailer, when an Insert reads foreign files)
+and writes `/Encrypt <<...>>` into the update trailer. Nothing in it is
+enciphered (`/O /U /OE /UE /Perms` are the key's own data), so copying is
+exact. Cost: 640 bytes of bss and about 150 of code; `pdw_encrun.py`'s
+`aes128d` fixture checks it. Engine side (eng): `PDRC_ENCDICT` in
+`pdabi.h`'s wrt block. indirectly. ``job_verify` is unchanged (it looks for `xref`).
+`job_vfy` re-opens the temp file through PDENG, which now chains classic ->
+stream sections (20.22.3); an encrypted output is opened with the held key
+(20.22.4.4).
+
+A hybrid source (a classic table with `/XRefStm`): `/Prev` names its classic
+section and a reader merges the `/XRefStm` itself, so nothing is written for
+it. A source rewritten through an object stream needs nothing either: an
+object this job rewrites (an annotation, a page, the catalog, an `/Annots`
+owner) is written top-level under the SAME number and generation, which
+shadows the compressed copy.
+
+**20.22.4.2 Every read is `PDRC_PLAIN`.** `eng_get` (the one RAW_COPY door of
+the page/catalog/annotation patches AND of Extract and Insert) sets
+`pdxb_rawcopy.mode = PDRC_PLAIN`; only `job_vfy`'s three-object check keeps
+`PDRC_EXACT` (it wants the file's own bytes). The writer therefore never sees
+ciphertext and never needs to know whether a source object came from an object
+stream: PDENG hands it `N G obj <dictionary or value> [stream ... endstream]
+endobj` with the stream's bytes decrypted (AMENDED by the lead's 00:00 decision:
+the dictionary's STRINGS are not, see the last bullet). What the writer needs
+from PLAIN, and eng/crypt implement (the contract is theirs, 20.22.3 and
+20.22.5, this is what is relied on):
+
+* the text begins `N G obj` and ends `endobj`; an object-stream member is
+  wrapped in that frame; `done`/`got` address the SYNTHESISED text, the same
+  bytes on every call (the writer reads a long stream in chunks);
+* a stream object's dictionary carries a DIRECT integer `/Length` equal to the
+  number of stream bytes that follow `stream` + one EOL (the decrypted length);
+  the stream bytes are decrypted but not defiltered; the text after the data is
+  `endstream`, an EOL, `endobj`;
+* an object the engine would not decrypt (an `/Type /XRef` stream, a `/Crypt
+  /Identity` stream, the `/Metadata` of `/EncryptMetadata false`) is returned
+  as it is: the writer treats it like any other stream, see 20.22.4.3 for the
+  one case this makes wrong;
+* on a file with no `/Encrypt` and no object stream PLAIN is byte for byte
+  EXACT, so every byte the writer produced before this round is unchanged.
+* **Strings stay ciphertext** (00:00 amendment). On an encrypted source PLAIN
+  decrypts only the stream data (and corrects `/Length`); the dictionary's
+  strings come through as the file has them, and the RAW_COPY answer says so:
+  `PDRC_STRCIPHER` (0x0100, the HIGH BYTE of `rc.mode` in the answer (crypt's pdabi.h); `pdw.h` defines it under
+  `#ifndef`, crypt's name and place win). The object's number and generation
+  are the request's (`eg_num`/`eg_gen`, kept as `g_snum`/`g_sgen`). An object
+  that sat in an object stream (its strings were never enciphered) comes
+  without the flag. With the flag set, `pb_src` collects each string (literal
+  or hex, at most 256 decoded bytes, else `PDE_LIMIT`), decrypts it with the
+  SOURCE's per-object key (`pdc_okey` then RC4, or AES-CBC with the first 16
+  bytes as IV and the PKCS#5 pad stripped; AESV3 uses the file key itself) and
+  writes it plain as a hex string (Extract, or an unencrypted target) or
+  enciphered under the output's key (`sb_begin/sb_put/sb_end` in `pdwser.c`).
+  The source's key is `g_sk`: CRYPTINFO after the job's open (the target, and
+  Extract's source) or the key plat's pre-flight handed over (`PDV_WRT_KEYS`)
+  for an Insert's foreign file; wiped with the output key at job end. A kept
+  `/NM /T /CreationDate` text remembers the object it was read from. Cost 1,5xx
+  bytes: see 20.22.4.7. `pdw_encrun.py`'s `ann*` fixtures (an annotated
+  source, plain, AES-128, RC4-128, AES-256; Extract; Insert of an annotated
+  foreign file) compare every copied annotation's strings with a plain
+  control, and a build with the decrypt turned off fails 16 rows.
+
+**20.22.4.3 Encrypted output.** The job is *encrypting* (`g_enc`) when the
+target is a save of a file whose `pdxb_trailer` says it has an `/Encrypt`
+(`encrypt_num` or `PDTR_ENCDIRECT`); Extract and a new document are never
+encrypted (their source's key is used to READ; the output is a fresh plain
+file, as before).
+
+*The key.* Fetched once, at job start, by `PDV_ENG_CRYPTINFO` on the open,
+keyed document: the engine answers `pdxb_crypt` with what `PDV_ENG_SETKEY`
+set (`key`, `key_len`, `stm`, `str`, `eff`, `encmeta`, `auth`; lead decision
+23:30). The writer copies them (the key does not live in PDENG across Insert,
+which re-opens PDENG on other files) and zeroes the copy, the derived
+schedules and the foreign keys at job end, on abort and on failure.
+**PDWRT enciphers by itself**: `PDV_ENG_CRYPT` was withdrawn from PDENG, and
+the per-object key (algorithm 1), RC4 and AES-CBC encrypt are crypt's shared
+source (`pdcrypto.h`, `pdcmd5.inc pdcrc4.inc pdcaes.inc`, host twin
+`pdctwin.c`) which `pdwrt.asm` includes. `cr_far` enciphers up to 128 bytes in
+place in the writer buffer, keeping the carry, the CBC chain and the RC4
+state itself between chunks. A method `PDCM_IDENTITY` for
+strings or streams (V4/V5 crypt filters) means those are written plain.
+
+*Strings.* Every string the writer emits in an object that is not in an object
+stream (every object it writes) is encrypted with the per-object key of the
+object being written (`pw_obj` records its number and generation): the text
+strings (`/Contents`, `/T`, `/Subj`), `/NM`, `/M`, `/DA`, and every string in
+a span copied out of the source (the page, catalog and annotation patches, the
+kept `/NM /T /CreationDate`, Extract/Insert objects). A copied span goes
+through `pb_src`, which walks it for literal and hex strings, decodes them
+(the escapes of 7.3.4.2), encrypts the raw bytes in
+chunks of at most 32 bytes (first chunk `phase` 1, last chunk 2) and writes
+the result as a hex string `<...>`; everything else in the span is copied
+verbatim. A plain job calls the same sites and writes exactly what it wrote
+before (`pb_src` is `pb_n`).
+
+*Streams.* The appearance streams are encrypted at the one byte sink,
+`pw_n`: `ap_head` starts the cipher after `stream\n`, `ap_tail` finishes it
+(the AES padding block) before `\nendstream`. The COUNT pass counts plain
+bytes; its result is converted to the stored length before `/Length` is
+written: RC4 and the identity are unchanged, AES-CBC is `(n & ~15) + 32`
+(16 for the IV, then `16 * (n / 16 + 1)` with PKCS#5 padding). Insert and
+Extract-into-encrypted copy a stream by its decrypted `/Length` (from PLAIN):
+the dictionary's `/Length` is rewritten to the stored length, the raw `stream`
+keyword and EOL are replaced by `stream\n`, the data runs through the same
+cipher, and the tail is `\nendstream\nendobj\n` written by the writer. There
+is no verbatim copy of ciphertext anywhere: an object that kept its number and
+was not in an object stream could have been, but decrypt-then-encrypt is one
+path, and is correct for the rest.
+
+*The IV.* The machine has no random source and PDENG has none either (the
+caller's `iv` is the contract). The writer builds each IV from eight words of
+state: seeded at job start from the CRC of `/ID[0]` and of the save date; for
+every IV the kernel tick count (`OSAPI_GET_TICKS`, a gate slot) and the
+object number, the output offset and the previous ciphertext (its last 16
+bytes, folded in after every cipher call) are mixed in and the words are
+spread through `pdm_crc16`, as `id_make` spreads the document ID. What that
+buys, and what it does not: no two IVs of one save repeat, nor of two saves of
+one file (the tick and the chained ciphertext differ), and an IV is not
+predictable from the file alone without the tick at which it was written. It is not
+cryptographic randomness. That is enough HERE because CBC needs the IV to be
+unpredictable only against an attacker who chooses the plaintext after seeing
+the IV, and nothing on this machine lets an attacker choose what a user types
+into a note.
+
+*Limits stated.* (a) A copied stream whose source object the engine left
+undecrypted because of `/EncryptMetadata false` or `/Crypt /Identity`, copied
+into an encrypted target, is encrypted by the writer: such a stream is only
+ever a `/Metadata` stream, which readers show nothing of. (b) The strings of
+the `/Encrypt` dictionary itself are never encrypted and never touched.
+(c) `/P` is not read.
+
+**20.22.4.4 The output is read back.** `job_vfy` opens PDSAVE.$$$ through
+PDENG. An encrypted output makes OPEN answer `PDE_PASSWORD` (the engine has no
+key for a new document); the writer answers it itself, with no prompt:
+`enc_setkey` calls `PDV_ENG_CRYPTINFO`, pokes the held key, `key_len`, `stm`,
+`str`, `eff`, `encmeta` and `auth` into the block beside it, calls
+`PDV_ENG_SETKEY` and calls OPEN again. (SETKEY is given the methods; the
+engine's CRYPTINFO before a SETKEY carries none.) The three objects it reads
+for the `N G obj` check use `PDRC_EXACT`.
+
+**20.22.4.5 Insert from an encrypted foreign file.** PDWRT is a slot
+occupant, so PDXK cannot load while it runs and the job never pauses for a
+password (the earlier `PDE_PASSWORD` pause is withdrawn). plat's PRE-FLIGHT
+(20.22.2) derives each encrypted foreign file's key before the job starts and
+hands them over with `PDV_WRT_KEYS` (0x85), called after `PDV_WRT_INIT` and
+before the job verb: `pdxb_wkeys` { `n`, three `pdxb_wkey` { `slot` (the
+Insert slot of the file), `key_len`, `stm`, `str`, `eff`, `encmeta`, `key[32]`
+} } in the `[wrt 20.22.4]` block of `pdabi.h`. The writer keeps them until
+the job ends (or `PDV_WRT_INIT`/ABORT/failure, which wipe them). When a
+foreign window's OPEN answers `PDE_PASSWORD`, `fw_open` finds the key of that
+slot, does `enc_setkey` (as for the output) and OPENs again; a file with no
+key handed over fails the job with `PDE_PASSWORD`. After the last window the
+primary re-opens the SAVED file (`PDW_OUT_REOPEN`); an encrypted save keeps
+the source's `/Encrypt` and `/ID[0]`, so the key it already holds opens it.
+
+**20.22.4.6 Host stand-ins and checks.** `make pdwrt-enc` (soak row
+`pdwrtenc`) drives PDWRT through `pdw_verb` over a stand-in
+(`hosttest/pdw_enc.c`) for the PDENG verbs the engine agents own and that had
+not landed when AP-06 was written: PDRC_PLAIN reads (served by
+`hosttest/pdw_encprep.py`, which has qpdf decode the fixture), the trailer's
+`encrypt_num`/`tflags`/`id0_hi`, OPEN's `PDE_PASSWORD`, CRYPTINFO and SETKEY
+(which refuses a key or method that is not qpdf's, so a wrong held key fails
+the verify; the harness proves that with a deliberately corrupted key).
+The cipher is the writer's own, crypt's host twin, checked by qpdf. The
+standing differential for every output (`hosttest/pdw_encrun.py`):
+`qpdf --check` clean; `qpdf` with the password reads back the same annotations
+(subtype, `/Contents`, `/T`, `/Subj`, `/DA`, `/Rect`, `/C` and the bytes of
+the appearance stream) as the unencrypted control run; `mutool draw` is silent
+(no `invalid string length for aes encryption`); the source is the output's
+prefix; the trailer has `/Prev`, `/Encrypt` and the source's whole `/ID[0]`;
+Extract from an encrypted file is a plain file whose pages equal the control's;
+Insert into an encrypted file and from an AES-128 file with a user password
+(its key handed over by `PDV_WRT_KEYS`, as plat's pre-flight will) equals the
+control's. A 100,000-text ASan/UBSan fuzz of `pb_src` is part of the row.
+Fixtures are built by the run from `samples/MARKUP.PDF` and
+`samples/PAGES.PDF` with qpdf 12.4.2 (`tests/pdfany/wrt/README.TXT`).
+
+**20.22.4.7 Cost.** PDWRT.MOD image + bss: 41,182 + 6,614 = 47,796 at the
+round's start; 49,018 + 8,109 = 57,127 now (cap 61,440, lead decision 23:30):
+the writer's cipher door, the IV, the string path (`pb_src`, `es_*`), the
+stream sink (`cs_*`), the key fetch and re-key (`enc_*`), the Insert stream
+copy (`gc_data`) and crypt's shared MD5, RC4 and AES in assembly (about 4.4 KB
+of that). One gate slot is added (`GET_TICKS`, for the IV). Its workspace
+stays the writer buffer of 20.22.2.3 (18 KiB, up to 40 for Extract/Insert).
+`pdstk`: PDWRT's deepest chain is 558 of the 1,776 bytes of the deep stack.
+`tests/suite.py` row `pdwrtenc` (soak) is the check; `pdwrt` and `pdwrtreal`
+still hold the plain paths byte for byte.
 
 #### 20.22.5 Encryption (`crypt`)
 

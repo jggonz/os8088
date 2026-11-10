@@ -249,6 +249,8 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDV_WRT_KEYS             equ 0x85
+PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12
 PDXE_OPS                 equ 64
 PDIMG_NATIVE             equ 0x0004
@@ -726,6 +728,25 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdxb_wkey (44 bytes) -------------------------------------------
+PDXB_WKEY_SLOT                 equ 0
+PDXB_WKEY_KEY_LEN              equ 2
+PDXB_WKEY_STM                  equ 4
+PDXB_WKEY_STR                  equ 6
+PDXB_WKEY_EFF                  equ 8
+PDXB_WKEY_ENCMETA              equ 10
+PDXB_WKEY_KEY                  equ 12
+PDXB_WKEY_KEY_N                equ 32
+PDXB_WKEY_KEY_ESZ              equ 1
+PDXB_WKEY_BYTES                equ 44
+
+; ---- struct pdxb_wkeys (134 bytes) ------------------------------------------
+PDXB_WKEYS_N                   equ 0
+PDXB_WKEYS_K                   equ 2
+PDXB_WKEYS_K_N                 equ 3
+PDXB_WKEYS_K_ESZ               equ 44
+PDXB_WKEYS_BYTES               equ 134
 
 ; ---- struct pdxb_dashout (50 bytes) ----------------------------------------
 PDXB_DASHOUT_ON                equ 0

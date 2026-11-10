@@ -18,6 +18,27 @@ static char g_txt[PDW_TXTMAX + 2];
 static pdw  g_tlen;
 static pd_pt g_rx0, g_ry0, g_rx1, g_ry1;   /* the /Rect actually written      */
 static pdw  g_nm_hi, g_nm_lo;    /* the document nonce (20.5.2)              */
+static char g_sl[48];            /* a short string being built for pb_textstr */
+static pdw sl_cat(pdw k, const char *t)
+{
+    while (*t) g_sl[k++] = *t++;
+    return k;
+}
+static pdw sl_h4(pdw k, pdw v)
+{
+    pdw j;
+    for (j = 0; j < 4; j++) g_sl[k++] = pw_hex((pdw)(v >> (12 - 4 * j)));
+    return k;
+}
+/* "PD-<hi><lo>-<id>": the /NM value, a string like any other (it is enciphered
+ * in an encrypted file) */
+static void pb_nmstr(pdw id)
+{
+    pdw k = 0;
+    k = sl_cat(0, "PD-");
+    k = sl_h4(k, g_nm_hi); k = sl_h4(k, g_nm_lo); g_sl[k++] = '-'; k = sl_h4(k, id);
+    pb_textstr(g_sl, k);
+}
 static pdw  g_pgnum, g_pggen;    /* the page object the annotation belongs to */
 
 static const char *const pw_pal[16] = {   /* the 16 VGA colours as PDF rgb     */
@@ -423,8 +444,9 @@ static void ap_head(pdw num)
     pb_pt((pd_pt)(g_rx1 - g_rx0)); pb_c(' '); pb_pt((pd_pt)(g_ry1 - g_ry0)); pb_s("] ");
     ap_resources();
     pb_s("/Length "); pb_u32(&ap_len, 0); pb_s(" >>\nstream\n");
+    cs_begin();                         /* the stream's bytes are enciphered from here (20.22.4.3) */
 }
-static void ap_tail(void) { pb_s("\nendstream\n"); pw_endobj(); }
+static void ap_tail(void) { cs_end(); pb_s("\nendstream\n"); pw_endobj(); }
 
 /* ---- the annotation dictionary ------------------------------------------- */
 /* A REPLACED source annotation keeps the keys that are its identity and its
@@ -435,18 +457,23 @@ static void ap_tail(void) { pb_s("\nendstream\n"); pw_endobj(); }
 #define KEEP_NM 1
 #define KEEP_T  2
 static char g_keep[200];
-static pdw  g_keepn, g_keepf;
+static pdw  g_keepn, g_keepf, g_keepsf, g_keepsn, g_keepsg;   /* + where it was read: its strings' cipher state */
 static void pb_nm(void)
 {
     if (g_keepf & KEEP_NM) return;          /* in g_keep, written by pb_common */
-    pb_s("/NM (PD-"); pb_hex4(g_nm_hi); pb_hex4(g_nm_lo); pb_c('-'); pb_hex4(g_ed.id); pb_s(") ");
+    pb_s("/NM "); pb_nmstr(g_ed.id); pb_c(' ');
 }
 static void pb_common(pdw f)
 {
     pb_nm();
-    if (g_keepn) pb_n(g_keep, g_keepn);
+    if (g_keepn) {
+        pdw f = g_sflag, n = g_snum, g = g_sgen;
+        g_sflag = g_keepsf; g_snum = g_keepsn; g_sgen = g_keepsg;
+        pb_src(g_keep, g_keepn);
+        g_sflag = f; g_snum = n; g_sgen = g;
+    }
     pb_s("/F "); pb_u(f); pb_s(" /P "); pb_u(g_pgnum); pb_c(' '); pb_u(g_pggen); pb_s(" R ");
-    if (pdw_date[0]) { pb_s("/M ("); pb_n(pdw_date, pw_len(pdw_date)); pb_s(") "); }
+    if (pdw_date[0]) { pb_s("/M "); pb_textstr(pdw_date, pw_len(pdw_date)); pb_c(' '); }
 }
 static void pb_cref(void)               /* /C [r g b] */
 {
@@ -470,6 +497,18 @@ static void annot_z(pdw apnum)
 {
     pb_common(4);
     pb_s("/AP << /N "); pb_u(apnum); pb_s(" 0 R >> >>\n"); pw_endobj();
+}
+/* /DA "/Helv 12 Tf 1 0 0 rg": a string, so it is enciphered in an encrypted file */
+static void pb_da(void)
+{
+    pdw k = sl_cat(0, "/");
+    k = sl_cat(k, pw_resn[ft_face()]);
+    g_sl[k++] = ' ';
+    k = (pdw)(k + pw_utoa(g_sl + k, g_ed.size ? g_ed.size : 12));
+    k = sl_cat(k, " Tf ");
+    k = sl_cat(k, pw_pal[g_ed.colour & 15]);
+    k = sl_cat(k, " rg");
+    pb_textstr(g_sl, k);
 }
 /* the object header and the dictionary up to the point list's opening "[" for
  * a kind that has one, else the whole object. Returns 1 when more follows
@@ -497,15 +536,15 @@ static pdw annot_a(pdw num, pdw gen, pdw apnum, pdw parent_n, pdw parent_g)
     case PDA_AREA:
         pb_s("/Subtype /Square "); pb_rectarr(); pb_cref(); pb_bs(ed_w16(), g_ed.align & 1);
         if (g_tlen) pb_contents();
-        pb_s("/Subj (Area mark) "); break;
+        pb_s("/Subj "); pb_textstr("Area mark", 9); pb_c(' '); break;
     case PDA_RECT:
         pb_s("/Subtype /Square "); pb_rectarr(); pb_cref(); pb_bs(ed_w16(), 0); break;
     case PDA_ELLIPSE:
         pb_s("/Subtype /Circle "); pb_rectarr(); pb_cref(); pb_bs(ed_w16(), 0); break;
     case PDA_TEXT:
-        pb_s("/Subtype /FreeText "); pb_rectarr(); pb_contents(); pb_s("/DA (/");
-        pb_s(pw_resn[ft_face()]); pb_c(' '); pb_u(g_ed.size ? g_ed.size : 12); pb_c(' ');
-        pb_s("Tf "); pb_s(pw_pal[g_ed.colour & 15]); pb_s(" rg) /Q "); pb_u(g_ed.align > 2 ? 0 : g_ed.align);
+        pb_s("/Subtype /FreeText "); pb_rectarr(); pb_contents(); pb_s("/DA ");
+        pb_da();
+        pb_s(" /Q "); pb_u(g_ed.align > 2 ? 0 : g_ed.align);
         pb_s(" /Border [0 0 0] "); break;
     case PDA_INK: case PDA_SIGN:
         pb_s("/Subtype /Ink "); pb_rectarr(); pb_cref(); pb_bs((pdw)(g_ed.size * 8), 0);
@@ -528,7 +567,7 @@ static void annot_c(pdw apnum)
         if (g_tlen) pb_contents();
     } else {
         pb_s("] ");
-        if (g_ed.kind == PDA_SIGN) pb_s("/Subj (Drawn signature) ");
+        if (g_ed.kind == PDA_SIGN) { pb_s("/Subj "); pb_textstr("Drawn signature", 15); pb_c(' '); }
     }
     annot_z(apnum);
 }
