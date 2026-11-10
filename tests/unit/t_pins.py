@@ -165,6 +165,27 @@ def memp_verb(lines, i):
     return "claim"
 
 
+# OSAPI_MEM_HUGE's BX = MEMH_REGROW (SPEC.md 50.3.5, kernel size pass 19)
+# RESIZES a claim the package already holds - it is the paragraph door's
+# REGROW for 1,024KB and more - so it is no claim site, exactly as
+# MEMP_REGROW is not. The verb is BX, set within a few lines above the call
+# (the Browser's br_regrow sets it and jumps to the call).
+HUGE_CALL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_HUGE\b")
+HUGE_REGROW = re.compile(r"\bmov\s+(?:bx\s*,\s*MEMH_REGROW|bx\s*,\s*MEMP_REGROW|bl\s*,\s*MEMP_REGROW)\b")
+
+
+def huge_regrow(lines, i):
+    for j in range(i - 1, max(-1, i - 24), -1):
+        c = asm_code(lines[j])
+        if HUGE_REGROW.search(c):
+            return True
+        if re.search(r"\bmov\s+bx\s*,", c):
+            return False
+        if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
+            break
+    return False
+
+
 def hot(lines):
     """The lines that can be a claim, a declaration or a call to a wrapper -
     every other line is skipped by the walks that look for those. Once per
@@ -176,6 +197,11 @@ def hot(lines):
             c = asm_code(ln)
             if not HOT.search(c):
                 continue
+            if re.search(r"\bcall\s+(?:far\s+)?(?:OSAPI_MEM_HUGE|OSAPI_MEM_P|br_kbp)\b", c) and huge_regrow(lines, i):
+                # a call made with the REGROW verb already in BX - the cell
+                # itself or a package's own wrapper that passes BL through
+                # (the Browser's br_kbp) - resizes, it does not claim
+                c = re.sub(r"\bcall\s+(?:far\s+)?[\w.:]+", "call OSAPI_MEMP_ASK", c)
             if MEMP_CALL.search(c):
                 c = MEMP_CALL.sub("call OSAPI_MEM_CLAIM" if memp_verb(lines, i)
                                   == "claim" else "call OSAPI_MEMP_ASK", c)
