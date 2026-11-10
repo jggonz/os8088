@@ -135,6 +135,20 @@ for ad in ('vga', 'herc'):
           rc == 0 and rc0 == 0 and same and num(st, 'passes') > num(st0, 'passes') and num(st, 'incomplete') == 0
           and im0 is not None and int((im0 < 128).sum()) > 500,
           'rc=%d diff=%s %s %s' % (rc, None if im is None or im0 is None else int((im != im0).sum()), st, err[-200:]))
+# Flate Forms in a Flate page with ONE Flate slot (QA R14, 20.22.7.12): each parent is
+# parked and replayed, and the page draws as with two slots (where the nesting of three
+# Flate streams parks too) - and as mutool draws it
+forms = os.path.join(fx, 'forms.pdf')
+r1 = render(forms, 0, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 0, 'vga', env={'PDR_FLATE': '2'})
+same = r1[1] is not None and r2[1] is not None and int((r1[1] != r2[1]).sum()) == 0
+check('Flate Forms nested in a Flate page, ONE slot: = two slots to the pixel, clean', r1[0] == 0 and same
+      and num(r1[2], 'incomplete') == 0 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
+ref = mutool(forms, 0)
+pct = cellmatch(r1[1], ref, 40) if r1[1] is not None else 100
+check('forms.pdf (one slot) vs mutool (<= 3% of cells off by 40)', pct <= 3.0, '%.2f%%' % pct)
+r1 = render(forms, 1, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 1, 'vga', env={'PDR_FLATE': '2'})
+check('an inline image before the Do, ONE slot: not replayable, noted (form stream); two slots clean',
+      num(r1[2], 'incomplete') & 0x0002 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
 rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_XCKB': '2'})
 check('both decoders and a 2 KiB XC: what fits is stashed, the rest PDF_INC_LIMIT, nothing MODULE', rc == 0
       and not num(st, 'incomplete') & INC_MODULE, str(st))

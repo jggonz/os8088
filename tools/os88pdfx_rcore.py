@@ -30,6 +30,12 @@ holds to MuPDF and to each other:
                them: depth.pdf must draw to the pixel as this does
   mask.pdf     a /DCTDecode image with /ImageMask true (a CCITT-like stencil
                through the decoder's 1-bit rows), and an image with /SMask
+  forms.pdf    Flate Forms inside a Flate page, as Quartz writes every page
+               (QA R14): page 1 draws before and after a Form that nests a
+               second Flate Form, with 300 tokens before each Do, so with ONE
+               Flate slot each parent is parked and replayed (20.22.7.12) and
+               must draw as with two; page 2 has an inline image before the
+               Do, which cannot be replayed by tokens (the known limit)
 
 The ramp is a function of the pixel: (x * 200) / (w - 1) + (y * 55) / (h - 1),
 the same as hosttest/pdr_xmod.c's.
@@ -37,6 +43,7 @@ the same as hosttest/pdr_xmod.c's.
 import io
 import os
 import sys
+import zlib
 
 
 def ramp(x, y, w, h):
@@ -230,6 +237,26 @@ def mask_pdf(path):
     d.write(path)
 
 
+def forms_pdf(path):
+    d = Pdf()
+    def flate(dict_txt, text):
+        return d.stream(dict_txt + ' /Filter /FlateDecode', zlib.compress(text.encode('latin-1')))
+    walk = ' '.join('%d %d l' % (30 + (i * 7) % 340, 30 + (i * 13) % 340) for i in range(100))
+    inner = flate('/Type /XObject /Subtype /Form /BBox [0 0 400 400]',
+                  '0.6 g 150 150 100 100 re f 1 w 0 G 30 30 m ' + walk + ' S')
+    outer = flate('/Type /XObject /Subtype /Form /BBox [0 0 400 400] /Resources << /XObject << /In %d 0 R >> >>' % inner,
+                  '0.2 g 40 250 120 60 re f 2 w 0 G 380 30 m ' + walk + ' S /In Do 0 g 250 40 100 40 re f')
+    content = '0.8 g 10 10 380 30 re f 0 G 1 w 20 380 m ' + walk + ' S /Fm1 Do 0.4 g 300 300 60 60 re f'
+    for page, pre in ((1, ''), (2, 'q 20 0 0 20 10 360 cm BI /W 4 /H 4 /BPC 8 /CS /G ID \x00\x40\x80\xc0'
+                                       '\x40\x80\xc0\xff\x80\xc0\xff\x00\xc0\xff\x00\x40 EI Q ')):
+        body = (pre + content).encode('latin-1').decode('unicode_escape').encode('latin-1')
+        c = d.stream('/Filter /FlateDecode', zlib.compress(body))
+        p = d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
+                  '/Resources << /XObject << /Fm1 %d 0 R >> >> >>' % (c, outer))
+        d.pages.append(p)
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -238,7 +265,8 @@ def main():
     depth_pdf(os.path.join(out, 'depth.pdf'))
     depth_pdf(os.path.join(out, 'depthg.pdf'), grey=True)
     mask_pdf(os.path.join(out, 'mask.pdf'))
-    print('os88pdfx_rcore: 5 fixtures in %s' % out)
+    forms_pdf(os.path.join(out, 'forms.pdf'))
+    print('os88pdfx_rcore: 6 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

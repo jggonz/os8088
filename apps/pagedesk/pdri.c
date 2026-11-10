@@ -30,7 +30,11 @@ struct pdr_frame {
     pdw isform, gsbase;             /* a Form frame; the gs index it started at */
     pdw resp, reso, resg;           /* resource context to restore               */
     pdw cidx;                       /* /Contents element (page frame)             */
-    pdw gsover, pad1, pad2;         /* g_gsover at entry; 16 bytes: an index is a shift */
+    pdw gsover;                     /* g_gsover at entry                          */
+    pdw obj, gen;                   /* a Form frame's stream (to open it again)   */
+    pdw ntok;                       /* TOKEN calls on its stream; 0xFFFF = raw bytes read (inline image) */
+    pdw ok, park;                   /* ok: page_open/do_form made it (it can be parked);
+                                       park: its stream is closed under a Form (20.22.7.12) */
 };
 static struct pdr_frame g_fr[PDR_NFORM];
 static pdw g_nfr;
@@ -38,6 +42,7 @@ static pdw g_resp, g_reso, g_resg;  /* current resource context                 
 static pdw g_page;
 static pdw g_idone;                 /* interpretation finished                    */
 static pdw g_ierr;                  /* a stream error stopped it                  */
+static pdw g_pgopen;                /* the page's own content stream is open      */
 
 static struct pdxb_strm g_sm;
 static pdw strm_open(pdw obj, pdw gen, pdw page, pdw index)
@@ -51,7 +56,11 @@ static void strm_close(void) { pdr_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 /* the next content token into g_tk; returns 0 or a PDE code */
 static pdw tok_next(void)
 {
-    pdw err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
+    pdw err;
+    if (g_fr[g_nfr].park) { g_tk.kind = PDT_EOF; g_tk.len = 0; return 0; }  /* parked and not reopened: it ended */
+    err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
+    if (g_fr[g_nfr].ntok < 0xFFFE) g_fr[g_nfr].ntok++;    /* the replay count (20.22.7.12) */
+    else g_fr[g_nfr].ntok = 0xFFFF;
     if (err == PDE_RANGE) { g_inc |= PDF_INC_RANGE; err = 0; }    /* a number saturated: the token is valid */
     if (err) return err;
     pd_fcopy_in(g_xb, 0, &g_tk, 8);
@@ -575,6 +584,34 @@ static pdw g_afm;                   /* drawing an annotation's appearance: pdra.
 static pdw ap_fit(const struct pd_mat *m, const struct pd_fx *bx0, const struct pd_fx *by0,
                   const struct pd_fx *bx1, const struct pd_fx *by1);
 static struct pd_mat g_am;          /* the matrix A of PDF 1.7 12.5.5 */
+/* PARKING (20.22.7.12). A Form's stream opened inside a Flate stream needs a
+ * second Flate slot; with one (an XT, a low-memory claim) STRM_OPEN answers
+ * PDE_LIMIT - and a Quartz page is ONE Flate Form inside a Flate content
+ * stream. Then the parent's stream is CLOSED, the Form runs in its slot, and
+ * at the Form's end the parent is opened again and the tokens it had given
+ * are read past (ntok TOKEN calls: the same decoded bytes give the same
+ * tokens). A parent that read raw bytes (an inline image) cannot be replayed
+ * by tokens and is not parked. */
+static pdw frame_reopen(pdw d)
+{
+    pdw n;
+    if (d ? strm_open(g_fr[d].obj, g_fr[d].gen, 0, 0) : strm_open(0, 0, g_page, g_fr[0].cidx)) return 0;
+    for (n = g_fr[d].ntok; n; n--) if (pdr_eng(PDV_ENG_TOKEN, 0, 0, 0)) break;
+    g_fr[d].park = 0;
+    if (n) { strm_close(); return 0; }
+    return 1;
+}
+static pdw form_open(pdw obj, pdw gen)
+{
+    pdw d = g_nfr, e = strm_open(obj, gen, 0, 0);
+    if (!e) return 1;
+    if (e != PDE_LIMIT || !g_fr[d].ok || g_fr[d].ntok == 0xFFFF || (!d && !g_pgopen)) return 0;
+    strm_close();                           /* the parent's stream: its slot is the Form's */
+    g_fr[d].park = 1;
+    if (!strm_open(obj, gen, 0, 0)) return 1;
+    if (!frame_reopen(d)) { g_fr[d].park = 1; g_fr[d].ok = 0; }   /* it cannot come back: frame_end sees it ended */
+    return 0;
+}
 static void do_form(pdw obj, pdw gen)
 {
     static struct pd_mat m;
@@ -593,9 +630,10 @@ static void do_form(pdw obj, pdw gen)
     }
     hasres = (dict_get(obj, gen, "Resources", 0, 0) == 0 && g_dg.kind != PDK_NULL);
     if (g_afm && (!hasbox || !ap_fit(&m, &bx0, &by0, &bx1, &by1))) return;
-    if (strm_open(obj, gen, 0, 0)) { inc_note(PDF_INC_FILTER, "form stream"); return; }
+    if (!form_open(obj, gen)) { inc_note(PDF_INC_FILTER, "form stream"); return; }
     ressave_p = g_resp; ressave_o = g_reso; ressave_g = g_resg;
     g_nfr++;
+    g_fr[g_nfr].obj = obj; g_fr[g_nfr].gen = gen; g_fr[g_nfr].ntok = 0; g_fr[g_nfr].ok = 1; g_fr[g_nfr].park = 0;
     g_fr[g_nfr].isform = 1; g_fr[g_nfr].gsbase = g_gsn; g_fr[g_nfr].gsover = g_gsover;
     g_gsover = 0;
     g_fr[g_nfr].resp = ressave_p; g_fr[g_nfr].reso = ressave_o; g_fr[g_nfr].resg = ressave_g;
@@ -1077,6 +1115,7 @@ static void inl_token(void)
 static void inl_start(void)
 {
     pdw bits, extra;
+    g_fr[g_nfr].ntok = 0xFFFF;              /* raw bytes follow: tokens cannot replay this stream */
     g_inl = 3; g_ist = 0; g_icap = 0;
     if (!g_gseg) { g_inl = 0; return; }             /* no scratch: the lexer goes on in the data */
     if (!g_if && g_iw && g_ih && g_ics && g_iw <= 4096 &&
@@ -1171,7 +1210,6 @@ static pdw inl_skip(void)
 static pdw g_aph;                   /* 5 edit highlights, 1 source highlights, 0 page content, 2 other source annotations, 3 other edits, 4 done */
 static pdw g_aidx;                  /* the next /Annots index of phase 1 or 2 */
 static pdw g_aflags;                /* PDRF_* in force: 0 for a thumbnail or the text map */
-static pdw g_pgopen;                /* the page's own content stream is open  */
 static pdw g_await;                 /* the walk yielded with no stream open: annot_go again at the next turn */
 static pdw annot_next(void);        /* 1 = a stream is open and interpretation goes on (or g_await) */
 static pdw g_aedi;                  /* the next edit record of phase 5 or 3 */
@@ -1195,21 +1233,29 @@ static pdw annot_go(void)
 /* a frame ended: pop to its parent, or move to the next /Contents element */
 static pdw frame_end(void)
 {
+again:                                                  /* a loop, not a call: D21 (the UI task's stack) */
     PDR_T3_FRAME_END();
-    strm_close();
+    if (!g_fr[g_nfr].park) strm_close();               /* a parked frame's stream is closed already */
+    g_fr[g_nfr].park = 0;
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
         if (XG_TILE_NEXT()) return 1;
         xb_group_end();                                 /* blend: the group or mask block ends */
         while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
         g_gsover = g_fr[g_nfr].gsover;
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;
+        g_fr[g_nfr].ok = 0;
         g_nfr--;
         g_gsfloor = g_nfr > 0 && g_fr[g_nfr].isform ? g_fr[g_nfr].gsbase + 1 : 0;
+        if (g_fr[g_nfr].park && !frame_reopen(g_nfr)) {  /* the parent parked under this Form (20.22.7.12) */
+            inc_note(PDF_INC_FILTER, "form stream");
+            g_fr[g_nfr].park = 1;                        /* nothing open: its own end closes nothing */
+            goto again;
+        }
         if (!g_nfr && !g_pgopen) return annot_go();      /* an annotation's form: the next one */
         return 1;
     }
     /* the page: next element of /Contents */
-    g_fr[0].cidx++;
+    g_fr[0].cidx++; g_fr[0].ntok = 0; g_fr[0].ok = 1;
     if (strm_open(0, 0, g_page, g_fr[0].cidx) == 0) return 1;
     g_pgopen = 0;
     return annot_go();
@@ -1240,8 +1286,9 @@ static pdw interp_run(pdw maxops)
         err = tok_next();
         if (err) {                                /* this stream is over; the annotations and the marks after it are not */
             g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error");
-            while (g_nfr) { strm_close(); g_nfr--; }
-            if (g_pgopen) strm_close();
+            while (g_nfr) { if (!g_fr[g_nfr].park) strm_close(); g_fr[g_nfr].park = 0; g_fr[g_nfr].ok = 0; g_nfr--; }
+            if (g_pgopen && !g_fr[0].park) strm_close();
+            g_fr[0].park = 0;
             g_pgopen = 0;                         /* the next stream clears the lexer's state (annot_try, page_open) */
             if (annot_go()) continue;
             return 1;
@@ -1320,7 +1367,7 @@ static pdw page_open(void)
     pdw err;
     gs_reset();
     g_resp = g_page; g_reso = 0; g_resg = 0;
-    g_fr[0].isform = 0; g_fr[0].cidx = 0;
+    g_fr[0].isform = 0; g_fr[0].cidx = 0; g_fr[0].ntok = 0; g_fr[0].ok = 1; g_fr[0].park = 0;
     g_inl = 0; g_dictd = 0; op_clear();
     err = strm_open(0, 0, g_page, 0);
     if (!err) g_pgopen = 1;
@@ -1333,6 +1380,7 @@ static pdw interp_start(pdw page)
     pdw err;
     op_clear(); g_tjlive = 0; g_inl = 0; g_icap = 0; g_dictd = 0; g_inbt = 0;
     path_reset(); g_plimit = 0; g_nfr = 0; g_idone = 0; g_ierr = 0;
+    pdr_zero(g_fr, sizeof g_fr);            /* no frame is parked or parkable from a pass before */
     g_page = page;
     g_ops = 0;
     g_rn = 0; g_ropen = 0;

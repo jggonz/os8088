@@ -378,8 +378,9 @@ static pdw x_rneed(void)
 static void close_streams(void)
 {
     img_close();
-    while (g_nfr) { strm_close(); g_nfr--; }
-    if (g_pgopen) strm_close();
+    while (g_nfr) { if (!g_fr[g_nfr].park) strm_close(); g_fr[g_nfr].park = 0; g_fr[g_nfr].ok = 0; g_nfr--; }
+    if (g_pgopen && !g_fr[0].park) strm_close();
+    g_fr[0].park = 0;
     g_pgopen = 0; g_idone = 1; g_await = 0;
 }
 

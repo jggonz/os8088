@@ -6518,6 +6518,33 @@ then draw the same page to the pixel. `pdr_xchk`
 requires such a view to finish, every band blitted, with `PDF_INC_LIMIT` and
 never `PDF_INC_MODULE`. Before this rule the view ended at the re-INIT.
 
+**20.22.7.12 A Form inside a Flate stream, with one Flate slot: parking.**
+A Form's stream opened while its parent's Flate stream is open needs a
+second Flate slot. With one slot (an XT, or a low-memory claim that gave
+the second back) `PDV_ENG_STRM_OPEN` answers `PDE_LIMIT` (20.13.3). A
+Quartz page is one Flate Form inside a Flate content stream, so before this
+rule such a page drew nothing and noted `form stream` (QA R14).
+
+Each frame of the interpreter keeps the stream it reads (`obj`, `gen`; the
+page's `cidx`) and how many tokens it has taken (`ntok`). When a Form's open
+answers `PDE_LIMIT` and the parent can be parked, the parent's stream is
+closed, the frame is marked `park`, and the Form is opened in the freed
+slot. At the Form's end the parent is opened again and `ntok`
+`PDV_ENG_TOKEN` calls read past what it had already given. The same
+decoded bytes give the same tokens, so the parent resumes at the operator
+after its `Do`. Nesting parks each parent in turn.
+
+A parent cannot be parked once it has read raw bytes, because an inline
+image's data is not replayed by tokens. Such a frame is marked unparkable
+and the Form notes `form stream` (`PDF_INC_FILTER`), as before. A
+parent that cannot be opened again notes the same and ends there, as if
+its stream were over, and the frames under it go on. The cost is the re-inflate of the parent up to
+the `Do`, once per parked Form. `pdr_test`'s `PDR_FLATE=1` gives the
+host one Flate slot. `forms.pdf` page 1 (Flate Forms two deep inside a
+Flate page) must draw the same with one slot as with two, to the pixel and
+clean. Page 2 puts an inline image before the `Do` and must note `form stream`
+with one slot and draw clean with two.
+
 #### 20.22.8 Fonts from their programs (`fonts`)
 
 AP-14 and AP-15. A font whose program is embedded (`/FontFile2` TrueType, `/FontFile` Type 1,
