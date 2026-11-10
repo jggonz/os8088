@@ -188,7 +188,6 @@ static int pdu_cground = -1;            /* the paper every control the caller
 static int pdu_cid[PDU_MAXCTL], pdu_cx1[PDU_MAXCTL], pdu_cy1[PDU_MAXCTL];
 static unsigned pdu_cst[PDU_MAXCTL];    /* 0 = nothing known */
 static char pdu_clab[PDU_MAXCTL][16];
-static int pdu_held = -1;               /* a raised button the mouse holds */
 
 /* each control's picture, PK_I_* + 1 (0 none) */
 static const unsigned char pdu_cico[C_NCTLID] = {
@@ -224,48 +223,7 @@ static int pdu_bc_pap, pdu_bc_dis, pdu_bc_foc, pdu_bc_dxy, pdu_bc_f;
 static unsigned pdu_bc_fl;
 static const char *pdu_bc_cut;
 
-static void pdu_bandcap(void)
-{
-    static int adv, n, cw, bx, ty, w, h;
-
-    w = pdu_bc_w;
-    h = pdu_bc_h;
-    if (w <= 0 || h <= 0 || !pk_begin(w, h, pdu_bc_x))
-        return;
-    adv = pk_adv(pdu_bc_f);
-    n = os88_strlen(pdu_bc_cut);
-    cw = n * adv;
-    if (pdu_bc_ico)
-        cw = cw + 16 + (n ? 4 : 0);
-    if (pdu_bc_fl & CF_DROP)
-        cw = cw + adv + 4;
-    bx = (w - cw) / 2 + pdu_bc_dxy;
-    if (bx < 0)
-        bx = 0;
-    if (pdu_bc_ico) {
-        pk_icon(bx, (h - 16) / 2 + pdu_bc_dxy, pdu_bc_ico - 1);
-        bx = bx + 20;
-    }
-    ty = (h - pk_rows(pdu_bc_f)) / 2 + pdu_bc_dxy;
-    bx = pk_text(bx, ty, pdu_bc_cut, pdu_bc_f);
-    if (pdu_bc_fl & CF_DROP) {
-        pdu_lbuf[0] = 0x1F;             /* the down triangle (20.21.2) */
-        pdu_lbuf[1] = 0;
-        pk_text(bx + 4, ty, pdu_lbuf, pdu_bc_f);
-    }
-    if (pdu_bc_foc) {                   /* PD-23: where Tab is, a ring */
-        pk_hline(0, w - 1, 0);
-        pk_hline(0, w - 1, h - 1);
-        for (n = 1; n < h - 1; n++) {
-            pk_hline(0, 0, n);
-            pk_hline(w - 1, w - 1, n);
-        }
-    }
-    if (pk_pen(pdu_bc_y, pdu_bc_ink, pdu_bc_pap, pdu_bc_dis && pdu_mono)) {
-        os88_gfx_blit1_seg(pk_bseg, 0, pk_st, pdu_bc_x, pdu_bc_y, pk_w, pk_h);
-        pk_pen0();                      /* pdu_kput's, inline: a frame less */
-    }
-}
+void pdu_bandcap(void);                 /* pdui.inc (20.22.2.9) */
 
 /* a picture index for the overlay (PK_I_* + 1, 0 none): none without the kit */
 static int pdu_kit_ico(int ico)
@@ -273,111 +231,13 @@ static int pdu_kit_ico(int ico)
     return pk_haskit() ? ico : 0;
 }
 
+/* one control: pdui.inc's pdu_ctl_paint_a, the assembly of what was this
+ * function's C (PAGEDESK-SPEC 20.22.2.9: 1,692 bytes of C, the primary's
+ * room for the slot). It reads the statics above by name. */
+void pdu_ctl_paint_a(int i, struct pdu_ctl *c);
 static void pdu_ctl_paint(int i)
 {
-    /* static: a click's repaint reaches here from deep in the overlay's
-     * commit chain (D22's 384, tools/os88pdstk.py) */
-    static struct pdu_ctl *c;
-    static const char *s;
-    static int act, dis, foc, ink, paper, n, k, ground, in, same, max, ico;
-    static int held, compact, look;
-    static unsigned st, fl;
-
-    c = &pdu_L.ctl[i];
-    fl = c->flags;
-    if (fl & CF_SEP) {                  /* the etched rule: with its ground */
-        if (pdu_cground >= 0) {
-            os88_set_color(pdu_clo);
-            os88_gfx_vline(c->x1, c->y1 + 1, c->y2 - 1);
-            os88_set_color(pdu_chi);
-            os88_gfx_vline(c->x2, c->y1 + 1, c->y2 - 1);
-        }
-        return;
-    }
-    compact = pdu_L.kind == PDU_L_COMPACT;
-    s = pdu_label(c->id);
-    act = pdu_active(c->id);
-    dis = pdu_why(c->id) != 0;
-    foc = (c->id == pdu_focus && !dis);  /* PD-23: where Tab is */
-    held = (c->id == pdu_held && !act && !dis);
-    ground = (fl & CF_EMPTY) ? OS88_WHITE : pdu_cbar;
-    ico = (fl & CF_ICON) && pk_haskit() ? pdu_cico[c->id] : 0;
-    /* the look: 0 label, 1 field, 2 flat tool, 3 raised, 4 plain (COMPACT) */
-    look = compact ? 4 : (fl & CF_LABEL) ? 0 : (fl & CF_FIELD) ? 1
-           : (fl & CF_FLAT) ? 2 : 3;
-    if (act && !dis && look != 0) {
-        paper = pdu_cact;
-        ink = OS88_WHITE;
-    } else {
-        paper = look == 1 ? OS88_WHITE : ground;
-        ink = OS88_BLACK;
-    }
-    if (dis && !pdu_mono)
-        ink = OS88_DGRAY;
-    in = look == 3 ? 2 : look == 0 ? 0 : 1;
-    st = 1 | (act ? 2 : 0) | (dis ? 4 : 0) | (foc ? 8 : 0) | (held ? 16 : 0)
-         | ((unsigned)paper << 5) | ((unsigned)ink << 9);
-    /* the caption, cut to the inside */
-    n = (fl & CF_NOCAP) && ico ? 0 : os88_strlen(s);
-    k = compact ? PK_SYS : PK_CAP;
-    max = c->x2 - c->x1 + 1 - 2 * in - (compact ? 0 : 4) - (ico ? 20 : 0)
-          - ((fl & CF_DROP) ? pk_adv(k) + 4 : 0);
-    max = max / pk_adv(k);
-    if (n > max)
-        n = max < 0 ? 0 : max;
-    if (n > 15)
-        n = 15;
-    for (k = 0; k < n; k++)
-        pdu_cut[k] = s[k];
-    pdu_cut[n] = 0;
-    same = pdu_cid[i] == c->id && pdu_cx1[i] == c->x1 && pdu_cy1[i] == c->y1
-           && pdu_cst[i] == st;
-    if (pdu_cground >= 0)
-        same = 0;                       /* a fresh ground: all of it */
-    else if (same) {
-        for (k = 0; pdu_clab[i][k] == pdu_cut[k] && pdu_cut[k]; k++)
-            ;
-        if (pdu_clab[i][k] == pdu_cut[k])
-            return;                     /* nothing changed */
-        same = 2;                       /* the band alone */
-    }
-    if (!same && look != 0) {
-        if (dis)
-            os88_gfx_pen(1);
-        else
-            os88_set_color(OS88_BLACK);
-        if (look == 2 && !act && !foc)  /* an idle tool has no frame */
-            os88_set_color(ground);
-        if (look != 2 || act || foc || pdu_cground < 0)
-            os88_gfx_frame(c->x1, c->y1, c->x2, c->y2);
-        if (dis)
-            os88_gfx_pen(0);
-        if (look == 3) {
-            if (act || held)
-                pdu_bevel(c->x1, c->y1, c->x2, c->y2, pdu_clo, paper);
-            else
-                pdu_bevel(c->x1, c->y1, c->x2, c->y2, pdu_chi, pdu_clo);
-        }
-    }
-    pdu_bc_x = c->x1 + in;
-    pdu_bc_y = c->y1 + in;
-    pdu_bc_w = c->x2 - c->x1 + 1 - 2 * in;
-    pdu_bc_h = c->y2 - c->y1 + 1 - 2 * in;
-    pdu_bc_cut = pdu_cut;
-    pdu_bc_fl = compact ? 0 : fl;
-    pdu_bc_ico = ico;
-    pdu_bc_ink = ink;
-    pdu_bc_pap = paper;
-    pdu_bc_dis = dis;
-    pdu_bc_foc = foc && look != 0;
-    pdu_bc_dxy = held ? 1 : 0;
-    pdu_bc_f = compact ? PK_SYS : PK_CAP;
-    pdu_bandcap();
-    pdu_cid[i] = c->id;
-    pdu_cx1[i] = c->x1;
-    pdu_cy1[i] = c->y1;
-    pdu_cst[i] = st;
-    os88_strcpy(pdu_clab[i], pdu_cut, sizeof(pdu_clab[i]));
+    pdu_ctl_paint_a(i, &pdu_L.ctl[i]);
 }
 
 /* repaint one control by id, if it is laid out */

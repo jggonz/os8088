@@ -24,11 +24,19 @@
 #define PDU_PART_WRT   2
 #define PDU_PART_RES   3          /* PDRES [0, 65024)            */
 #define PDU_PART_RES2  4          /* PDRES [65024, end), adjacent */
+#define PDU_PART_XK    5          /* the slot's occupants (20.22.2.3) */
+#define PDU_PART_XG    6
+#define PDU_PART_XF    7
+#define PDU_PART_XI    8
+#define PDU_PART_XJ    9          /* ...and the overlay is row 10, last */
 
 /* --- module vectors (pdui.inc's pdu_vec) --------------------------------- */
 #define PDU_M_ENG   0
 #define PDU_M_REND  1
-#define PDU_M_WRT   2
+#define PDU_M_SLOT  2          /* the slot's occupant, PDWRT among them */
+#define PDU_M_WRT   PDU_M_SLOT
+#define PDU_OCC_WRT 6          /* PDWRT, the slot's sixth occupant (20.22.2.1) */
+#define PDU_NOCC    7          /* occupant ids 1..6 (PDX_KEY..PDX_JPX, PDWRT) */
 
 /* --- os88ui.inc's scroll-bar answers (pagedesk.asm's %if holds these) ---- */
 #define PDU_SB_NONE  0
