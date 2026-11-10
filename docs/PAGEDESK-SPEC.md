@@ -5081,6 +5081,25 @@ callback's chain: only from the wake, 20.22.2.6):
    `PDX_*` id (0 for PDWRT, which neither calls) and CX:DX = `PDM_ENTRY` : the
    code selector.
 
+**Release before refuse** (the lead's ruling of 01:30, DECISIONS.md). A claim
+of S refused at MIN is not yet `PDE_NOSLOT`: the loader gives back, ONE AT A
+TIME and with the same claim asked again after each, what a document can run
+without, in this order (`sl_rel_ovl`, `sl_rel_fl2`, `sl_rel_xc`, called by one loop in
+`pdu_slot_load`'s `.nos`, directly so `pdstk` follows each):
+
+| | given back | when | costs |
+|---|---|---|---|
+| 1 | the overlay part (`op_drop`, 51 KiB) | it is fetched and no overlay frame is on the stack (`cc_ovrsp` = 0): an ask from INSIDE the overlay - the auth's PDXK, a save's PDWRT - keeps it | its next `ovl_` call reads it again (a disk call) |
+| 2 | the second Flate slot (43 KiB, CGA and Hercules at 640 KiB, D17) | **not built**: PDENG's INIT keeps the document only when `flate_seg`/`flate_kb` are unchanged, so the entry answers "nothing" until eng's INIT keeps it across a slot dropped between streams | a stream decoded with one slot |
+| 3 | the `PDMEM_XC` region (16 KiB) | it is X's LAST region: X shrinks in place (freed when XC was all of it) and PDENG then PDREND are re-INITed with `xc_seg` 0 | PDREND's results cache, rebuilt by later pages |
+
+Only when all three have answered is the load `PDE_NOSLOT` and the occupant
+degrades as below. OSW, XIDX and the glyph region are NEVER released while an
+occupant runs: the document's index and object stream are what it reads, and
+the glyph region is what PDXF writes. A claim refused at WANT never reaches
+this loop: the loader asks for the most that fits, so only a MIN above the
+largest free run fails.
+
 **A load that fails** (no RAM: `PDE_NOSLOT`; a read error; a bad header)
 leaves S empty and tells PDREND **BX = 0x80 | id**, CX = DX = 0: that module
 is unavailable for the rest of this page view, PDREND sets
@@ -5112,7 +5131,7 @@ adding paragraphs). The five regions:
 | 2 | `PDMEM_OSW` | PDENG, at OPEN | |
 | 3 | `PDMEM_XC` | PDREND | |
 | 4 | `PDMEM_X8` | PDREND (blend) | **PDX8 is read into its first bytes at the grant** (parts row 10, the slot's reader), with its header's +10 = the region's CODE selector, +12/+14 = PDENG's bound door, re-written after every move of X. A row that does not fit the region, or a read that fails, takes the region back: PDREND then sees `x8_seg` 0 and takes its opaque path |
-| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself |
+| 5 | GLYPH (`PDMEM_GLYPH`, pdabi.h's to pin) | PDXF (fonts, 20.22.8) | stands in for claim A's glyph row in `glyph_seg`/`glyph_kb` once held (until then the row is handed); asked past 32 KiB and refused, it is tried again at 32. The occupant is re-INITed after it, PDXF reading the glyph claim itself. A region granted afresh has its word at +62 cleared, so PDXF never reads stale bytes as its signature (0x5342) |
 
 The primary:
 
@@ -5255,8 +5274,9 @@ cap is 65,024):
 | `pdu_mod_launch` (C 277) in assembly; the held keys and the Insert's pre-flight (20.22.2.10: `sl_wkeys`, the save job's and the abort's hooks; the rest is overlay) | 65,015 | +34 |
 
 | PDRENDC's row and bind (+~35); `pdu_mcheck` and its tables (C 216 + 48 bss) folded into `pdu_mod_launch`'s assembly; `pdu_datestamp` / `pdu_d2` (249, a save's) to the overlay | 64,577 | -438 |
+| release before refuse (20.22.2.4: the three releases and `xr_reinit`, factored out of `pdu_region`); a new GLYPH region's word at +62 cleared | 64,733 | +156 |
 
-**447 bytes stay under the cap.**
+**291 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
