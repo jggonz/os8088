@@ -5136,7 +5136,10 @@ The primary:
   any other second ask is refused;
 * re-hands EVERY region at every INIT (`pdu_minit` copies one `pdxb_init`),
   recomputing each segment after a regrow, which may have MOVED X (its bytes
-  come with it), and re-INITs PDENG, then PDREND. The occupant is re-INITed
+  come with it), and re-INITs PDENG, then PDREND. A region's window is cut
+  ONCE and handed again unchanged while claim X and the region's length are
+  what they were (`xr_wseg`): kern_mega's `SEG_SUBC` makes a fresh descriptor
+  per ask, and PDREND reads a changed `glyph_seg` as a new page view. The occupant is re-INITed
   only after a GLYPH grant;
 * refuses by re-INITing anyway: a region never held has its field 0, and a
   held region asked to grow keeps its segment and KiB unchanged (a refusal is
@@ -5269,8 +5272,9 @@ cap is 65,024):
 | PDRENDC's row and bind (+~35); `pdu_mcheck` and its tables (C 216 + 48 bss) folded into `pdu_mod_launch`'s assembly; `pdu_datestamp` / `pdu_d2` (249, a save's) to the overlay | 64,577 | -438 |
 | release before refuse (20.22.2.4: the three releases and `xr_reinit`, factored out of `pdu_region`); a new GLYPH region's word at +62 cleared | 64,733 | +156 |
 | the Flate release built on eng's shrinking INIT; XC's release only under PDREND's own NEEDMOD | 64,817 | +84 |
+| each region's window cut once and reused (`xr_wseg`/`xr_wcl`/`xr_wl`) | 64,889 | +72 |
 
-**207 bytes stay under the cap.**
+**135 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key

@@ -963,7 +963,17 @@ xr_segs:
 .f:
     jcxz .st
     push cx
-    mov dx, [xr_claim]
+    mov ax, [xr_wseg + si]          ; the window cut last time, while X and
+    mov dx, [xr_claim]              ; the region are what they were: the
+    cmp dx, [xr_wcl + si]           ; same selector (kern_mega cuts a fresh
+    jne .cut                        ; descriptor per ask, and PDREND reads a
+    cmp cx, [xr_wl + si]            ; changed glyph_seg as a new view)
+    jne .cut
+    or ax, ax
+    jnz .ok
+.cut:
+    mov [xr_wcl + si], dx
+    mov [xr_wl + si], cx
     mov ax, [xr_off + si]
     cmp cx, 4096
     jbe .w
@@ -972,8 +982,10 @@ xr_segs:
     mov bl, SEG_SUBC
     call OSAPI_SEG
     xchg ax, dx
-    jnc .ok
+    jnc .ok0
     xor ax, ax
+.ok0:
+    mov [xr_wseg + si], ax
 .ok:
     pop dx
     mov cl, 6
@@ -1279,6 +1291,7 @@ _pdu_region_free:
     mov [xr_last], ax
     mov bx, PDU_NREG * 2
 .l:
+    mov [xr_wseg + bx], ax          ; the block's free took its windows
     mov [xr_len + bx], ax
     dec bx
     dec bx
@@ -2159,6 +2172,9 @@ xr_para:        resw 1
 xr_last:        resw 1              ; the region at X's top
 xr_off:         resw PDU_NREG + 1   ; by PDMEM_* (1..5), paragraphs
 xr_len:         resw PDU_NREG + 1
+xr_wseg:        resw PDU_NREG + 1   ; each region's window, as last cut
+xr_wcl:         resw PDU_NREG + 1   ; ...from this claim X
+xr_wl:          resw PDU_NREG + 1   ; ...at this length
 xr_kb:          resw 1
 x8_in:          resb 1              ; PDX8 is in the X8 region
 xr_gnew:        resb 1              ; a GLYPH region granted afresh
