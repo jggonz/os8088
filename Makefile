@@ -21804,6 +21804,61 @@ pdxi-fuzz: $(PDI_OUT)/.host.stamp
 	$(PDI_OUT)/pdi_fuzz $(PDI_FUZZN) 1 $(PDI_OUT)/fx/*.jpg
 # ---- end PageDesk: xi -------------------------------------------------------
 
+# ---- PageDesk: jpx ----------------------------------------------------------
+# PDXJ.MOD (PAGEDESK-SPEC 20.22.13): JPEG 2000 at a reduced resolution level, a
+# slot occupant (PDX_JPX). PDWRT's shape: a SEPARATE compilation and its own
+# `nasm -f bin` job. `make pdxj` builds it AND runs the host checks, which are
+# host-side only and not in `all`: the module against opj_decompress -r
+# (hosttest/pdxj_cmp.py, a SKIP without OpenJPEG's tools), the assembly against
+# its C twin (hosttest/pdxj_asm.py, a SKIP without Unicorn) and the parser fuzz
+# (hosttest/pdxj_fuzz.c, ASan + UBSan, a few seconds).
+PDXJ_C   := apps/pagedesk/pdxj.c apps/pagedesk/pdxjhdr.c apps/pagedesk/pdxjpkt.c apps/pagedesk/pdxjt1.c \
+            apps/pagedesk/pdxjdwt.c apps/pagedesk/pdxjimg.c
+PDXJ_H   := apps/pagedesk/pdxj.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDXJ_CAP := 65024   # PAGEDESK-SPEC 20.22.13, L6: PDXJ image + bss
+PDXJ_OUT := $(BUILD)/pdxj
+.PHONY: pdxj pdxj-host
+$(BUILD)/pdxj.raw.asm: $(PDXJ_C) $(PDXJ_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxj.c -o $@
+$(BUILD)/pdxj.gen.asm: $(BUILD)/pdxj.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXJ.MOD: apps/pagedesk/pdxj.asm apps/pagedesk/pdxjasm.inc apps/pagedesk/hosttest/pdxj_mqtab.inc \
+                   $(BUILD)/pdxj.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxj.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXJ.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDXJ_CAP) else 0)"
+$(PDXJ_OUT)/.host.stamp: apps/pagedesk/hosttest/pdxj_test.c apps/pagedesk/hosttest/pdxj_cmp.py apps/pagedesk/hosttest/pdxj_asm.py \
+                         $(PDXJ_C) $(PDXJ_H) apps/pagedesk/pdxjtw.c apps/pagedesk/pdxjasm.inc apps/pagedesk/pdmath.c \
+                         apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDXJ_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -I apps/pagedesk/hosttest -o $(PDXJ_OUT)/pdxj_test \
+		apps/pagedesk/hosttest/pdxj_test.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	@if command -v opj_decompress >/dev/null 2>&1; then python3 apps/pagedesk/hosttest/pdxj_cmp.py; \
+	  else echo "pdxj: SKIP the opj_decompress comparison - OpenJPEG's tools are not installed"; fi
+	@python3 apps/pagedesk/hosttest/pdxj_asm.py; r=$$?; [ $$r -eq 0 -o $$r -eq 77 ]
+	touch $@
+pdxj-host: $(PDXJ_OUT)/.host.stamp
+pdxj: $(BUILD)/PDXJ.MOD pdxj-host
+# the parser fuzz (ASan + UBSan; the second build lowers the arena floor so the
+# arena-full path is reached) and the real module in Unicorn: on demand, minutes
+.PHONY: pdxj-fuzz pdxj-uc
+pdxj-fuzz: | $(BUILD)
+	mkdir -p $(PDXJ_OUT)
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DJX_ARENA_MIN=300 -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz_small apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	$(PDXJ_OUT)/pdxj_fuzz -n 200 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+	$(PDXJ_OUT)/pdxj_fuzz_small -n 100 -s 3 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+pdxj-uc: $(BUILD)/PDXJ.MOD $(PDXJ_OUT)/.host.stamp
+	python3 apps/pagedesk/hosttest/pdxj_uc.py
+# ---- end PageDesk: jpx ------------------------------------------------------
+
+
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
 # `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated

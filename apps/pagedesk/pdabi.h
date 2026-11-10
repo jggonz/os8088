@@ -693,6 +693,8 @@ struct pdxb_img {
 /* [img 20.22.11-13]*/
 #define PDIMG_NATIVE 0x0004 /* in: the /ColorSpace is not a device space: deliver
                                PDIM_N8 in the image's own components (20.22.11) */
+#define PDJ_ALPHA 0x0100    /* jpx: flags bit - deliver the codestream's own alpha
+                               channel as PDIM_GREY8 (/SMaskInData, 20.22.13.7) */
 /* [img end]        */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */

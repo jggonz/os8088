@@ -250,6 +250,7 @@ PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
 PDIMG_NATIVE             equ 0x0004
+PDJ_ALPHA                equ 0x0100
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0

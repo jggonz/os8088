@@ -5235,4 +5235,342 @@ module makes no kernel call of its own (the stream is read through PDENG).
 
 #### 20.22.13 JPEG 2000 (`jpx`)
 
-*Reserved; written by its agent before its code.*
+PDXJ (`PDM_MAGIC_JPX`, slot id `PDX_JPX`) decodes a `/JPXDecode` image at a
+REDUCED RESOLUTION LEVEL (owner decision O1): the screen never needs more
+device pixels than the image covers, so the highest wavelet levels are
+discarded and only the code-blocks of the resolutions that are kept are
+decoded. The files are `apps/pagedesk/pdxj.asm` (the door at `PDM_ENTRY`,
+`pdwrt.asm`'s shape, and the assembly inner loops), `pdxj.c` (the verbs; it
+`#include`s `pdxjhdr.c` markers and geometry, `pdxjpkt.c` tier-2, `pdxjt1.c`
+tier-1, `pdxjdwt.c` the transform driver), `pdxjtw.c` (the host twins of the
+assembly) and `tools/os88pdfx_jpx.py` (fixtures, `tests/pdfany/jpx/`).
+
+**Verbs** (`pdabi.h`): `PDV_X_INIT` (`slot_seg/slot_kb` are the workspace,
+`eng_off/eng_seg` PDENG's door), `PDV_IMG_OPEN`, `PDV_IMG_ROW` and
+`PDV_IMG_CLOSE`, the protocol 20.22.11 pins for PDXI. `0xEE-0xEF` are spare.
+`IMG_OPEN` reads the headers, decides the reduction, **and nothing is decoded
+until the first `IMG_ROW`**, which decodes the first tile row (every tile that
+touches it). `out_w`/`out_h` are final at `OPEN`. A lower row than the last
+asked is `PDE_RANGE`: the caller re-OPENs, as 20.22.11 says. `IMG_CLOSE` closes
+the PDENG stream and forgets everything; an `OPEN` while one is open closes it
+first. The module keeps no state between a CLOSE and the next OPEN.
+
+*The coded bytes* come from PDENG (`PDV_ENG_STRM_OPEN` with `accept =
+PDSA_CODEC`; the answer must say `codec == PDCD_JPX`, else `PDE_FILTER`) read
+FORWARD ONLY with `PDV_ENG_STRM_READ` into a 512-byte buffer in the module's own
+DS, or, for an inline image (`objnum == 0`), from the far buffer
+`iseg:ioff`, `ilen` bytes. Both are one function pair (`src_open`, `src_get`),
+so the decoder never knows which. A restart is a second `STRM_OPEN`.
+
+**Containers.** A JP2 file (signature box `0000000C 6A502020`) is walked box by
+box; `jp2c` starts the codestream, `jp2h` is read for `ihdr`/`cdef` only, and
+every other box is skipped by length (a box length of 0 = to the end; 1 = the
+64-bit form, whose high 32 bits must be 0). A bare codestream starts `FF4F`.
+A `pclr` (palette) or `cmap` box is REFUSED: the colour the PDF asks for is
+ahead of the palette, and mapping through it is the colour module's job
+(20.22.9), not this one's.
+
+##### 20.22.13.1 What is decoded, and what is refused
+
+A refusal answers `IMG_OPEN` with `PDE_FILTER` (CF = 1) and writes a reason
+code, `PDJ_R_*` below, to `pdxb_img.out_w` (every other out field is
+unspecified). PDREND draws no image and notes `PDF_INC_FILTER`, which the user
+reads as *Incomplete rendering: image* (the same line a DCT image that PDXI
+refuses gets). Nothing is silent.
+
+| supported | |
+|---|---|
+| containers | bare codestream; JP2 with `jp2c` anywhere after the signature |
+| markers | SOC SIZ COD COC QCD QCC SOT SOD EOC; TLM PLM PLT CRG COM are skipped |
+| geometry | origin 0 (`XOsiz = YOsiz = XTOsiz = YTOsiz = 0`); each of Xsiz, Ysiz, XTsiz, YTsiz at most 32767; one or many tiles in raster order, each tile's tile-parts contiguous; `Csiz` at most 16 |
+| components | `XRsiz = YRsiz = 1` for every component; depth 1 to 12 bits, signed or unsigned |
+| decomposition | NL 0 to 12; with more than one tile, XTsiz and YTsiz multiples of 2^NL (so every tile origin is even at every level and one parity rule serves) |
+| code-blocks | 4x4 to 64x64 (`xcb + ycb <= 12`), styles RESET, VSC, SEGSYM; PTERM is ignored (it only constrains the encoder) |
+| precincts | the default (2^15) and any user list; at most 768 precincts across the components of a tile |
+| layers | 1 to 255 |
+| progressions | LRCP RLCP RPCL PCRL CPRL; SOP and EPH markers present or not |
+| wavelets | 9/7 irreversible and 5/3 reversible |
+| quantisation | none, scalar derived, scalar expounded; guard bits 0 to 7 |
+| transform | the multiple component transform, RCT or ICT, is honoured by NOT undoing it (see 20.22.13.6) |
+
+| refused (`PDJ_R_*`) | why |
+|---|---|
+| 1 `NOTJPX` | neither signature found |
+| 2 `TRUNC` | the main header is cut off, or SIZ is not first |
+| 3 `GEOM` | a nonzero origin; an axis over 32767; tile size not a multiple of 2^NL with several tiles; a subsampled component; Csiz over 16 |
+| 4 `DEPTH` | precision over 12 bits, or a QCD that leaves a band with no magnitude bit (`guard + eps < 1`). A code-block whose bit-planes (`Mb - zero bit-planes`) exceed 15 decodes as zero, quietly, like an arena overflow |
+| 5 `STYLE` | code-block style BYPASS (lazy) or TERMALL, which put several codeword segments in a code-block and so lengths in the packet header this module does not parse |
+| 6 `ROI` | an RGN marker |
+| 7 `PACKED` | PPM or PPT packed packet headers, or a POC progression change |
+| 8 `PERTILE` | a COD, COC, QCD or QCC in a tile-part header, or a COC or QCC in the main header that differs from COD/QCD for ANY component (the geometry of a skipped component still decides where the next packet starts) |
+| 9 `PALETTE` | a `pclr` or `cmap` box |
+| 10 `PART2` | Rsiz bit 15 (Part-2 extensions) |
+| 11 `ORDER` | tiles out of raster order, or a tile's tile-parts interleaved with another's |
+| 12 `LIMIT` | more than 768 precincts in a tile; more than 255 layers; a precinct with more than 384 kept code-blocks in a packet at every reduction up to the limit; a code-block segment over 65535 bytes |
+| 13 `MEM` | not even the lowest resolution fits the workspace (20.22.13.3); answered `PDE_LIMIT`, the others `PDE_FILTER` |
+| 14 `SOURCE` | the stream could not be opened, or ends before the first tile |
+| 15 `NOALPHA` | `PDJ_ALPHA` asked and the file has no alpha channel (20.22.13.7) |
+
+A stream that is CUT OFF after the first tile's first packet is NOT an error:
+the packets that are present are decoded and the rest are zero (a truncated
+file shows what it has). Every count, length and index read from the file is
+bounded before use; the parsers have an ASan/UBSan fuzz target (20.22.13.9).
+
+##### 20.22.13.2 The reduction rule
+
+Let `NL` be the file's decomposition levels, `W x H` the image (Xsiz, Ysiz),
+`want_w x want_h` the device pixels the image covers (0 = the image's own
+size). **`scale = r` is the smallest `r` in `0..NL` that satisfies BOTH:**
+
+1. *quality*: `r >= rq`, where `rq` is the largest `r <= NL` with
+   `ceil(W/2^r) >= want_w` and `ceil(H/2^r) >= want_h` (0 when even `r = 0`
+   is short);
+2. *machine*: the reduced image is at most 1024 pixels wide and tall, its
+   row (`out_w`, times `out_ncomp` for PDIM_N8) is at most 1024 bytes, and the
+   whole plan fits the workspace (20.22.13.3).
+
+`out_w = ceil(W/2^r)`, `out_h = ceil(H/2^r)`. If no `r <= NL` satisfies 2 the
+answer is `PDJ_R_MEM`. A reduced decode is NOT an incomplete page (L5); the
+caller scales it to the device rectangle as it scales any image, with the
+nearest-pixel row rule of 20.22.7, so a 4x reduction shows blocks four device
+pixels wide.
+
+##### 20.22.13.3 Memory: the workspace and the module's bss
+
+The module's image + bss is at most **65,024**. Its workspace is `slot_kb`
+KiB, **60 KiB** (the figure for 20.22.2's table), addressed with 16-bit offsets
+inside the one segment `slot_seg`. Nothing the module reads in a loop lives in
+the workspace except through the far movers or the assembly routines, which take
+a segment.
+
+| bss (always) | bytes |
+|---|---|
+| tier-1 flags, 66 x 66 words (the horizontal transform's interleave buffer, 2,048, overlays it) | 8,712 |
+| scratch, 64 x 64 words: the tier-1 magnitudes; the packet's code-block list (3 x 384 words) and the horizontal transform's E and O rows (2 x 514 words) overlay it | 8,192 |
+| one code-block's coded bytes (a longer one is cut: fewer passes; `JX_CBDATA` 4,096) | 4,098 |
+| tier-1 context tables and the MQ state | about 1,100 |
+| row map of the tile-component, 1024 words | 2,048 |
+| precinct table, 768 entries x 4 (state offset, record base) | 3,072 |
+| source buffer; depth-below-8 sample tables (4 x 128) | 512; 512 |
+| scalars, geometry, the tile and component records | about 1,400 |
+
+The tier-1 arrays are the decoder's inner loop, so they stay in the module's own
+segment and are reached with near pointers; moving them into the workspace would
+make every flag and magnitude access a far call (about three times the 74 s of
+20.22.13.10) and would not shrink the slot, which is image + bss + workspace
+whichever side holds them. The saving is taken by overlay instead: three arrays
+that are never live at once share the scratch array (6,148 bytes) and one
+the tier-1 flags, and the code-block buffer is halved (4,096).
+
+*Measured:* **image 22,514 + bss 29,607 = 52,121 bytes** against the cap of 65,024
+(was 62,495), `make build/PDXJ.MOD`.
+
+**Workspace range (want, min) = (60 KiB, 12 KiB).** `PDV_X_INIT` answers `PDE_NOMEM`
+below 12 KiB. `plan(r)` already walks `r` upward until the regions fit, so a smaller
+workspace costs resolution, not correctness: a 1,600 x 1,200 JPEG 2000 (grey, and
+three-component at the same size, 38-48 KB coded) decodes at **r5 (50 x 38) from 12
+KiB**, **r4 (100 x 75) from about 24 KiB** and what the want asked for from 60 KiB
+(measured with `PDXJ_KB`). Below what an image needs at its coarsest level `open`
+answers `PDE_LIMIT` (refusal 13 `MEM`), and the renderer draws the grey box with
+APPROX. The slot a 640 KiB XT must find is therefore 52.1 + 12 = **about 64 KiB**
+at the least and 112 KiB at the want.
+
+| workspace, in this order (`plan(r)` computes the sizes) | bytes |
+|---|---|
+| persistent packet state: one byte of Lblock and inclusion per code-block, and a 2-byte node for each tag-tree node of two trees; only when there is more than one layer. With one layer a packet builds its trees afresh in a temporary at the start of this region, sized for the biggest precinct-band | about 7 B a code-block |
+| code-block records of the KEPT decoded components: head, tail, passes, zero bit-planes | 6 B a code-block |
+| the coefficient plane of one tile-component at the kept resolution: `2 * tw * th` | 2 B a coefficient |
+| the output strip(s): present when there are several tiles across, or more than one decoded component: one byte a pixel, `out_w x tile-row height`, per decoded component | 1 B a pixel |
+| the ARENA: the coded bytes of the kept code-blocks of the tile, in segments of `next:2 len:2 data` | the rest, at least 4,096 |
+
+`plan(r)` is called for `r = rq, rq+1, ...` with the geometry of tile (0,0), the
+largest, and accepts the first `r` for which every region is non-empty and the
+arena is at least 4,096 bytes. **A tile whose kept coded bytes exceed the arena
+loses the code-blocks that arrive after it is full** (they decode as zero: the
+tile is blurrier, never absent); lower resolutions come first in every
+resolution-major order and early layers first in LRCP, so what is lost is the
+detail the reduction was about to discard anyway. This is a graceful, not a
+reported, degradation (L5: it is the same class as a reduced decode).
+
+*What 60 KiB buys, honestly.* The plane is 2 bytes a coefficient, so a one-component
+image with no strip and a 4 KiB arena reduces to about 28,000 pixels (170 x 165):
+a scanned page covering a 640 x 480 window arrives at roughly one fifth of its
+device width. That is the price of the 64 KiB workspace ceiling (L3) and it is
+the lever to pull if a better picture is wanted: a second 64 KiB region for the
+plane lifts it four-fold.
+
+##### 20.22.13.4 The decode
+
+Per tile, in the order the file gives them:
+
+1. **Tile-part headers** (SOT, then markers to SOD). Psot = 0 means to EOC.
+   The tile-parts of a tile are read as one byte stream (`td_byte`), so
+   packets are parsed without regard to where a tile-part ends.
+2. **Tier-2.** The packets are generated in the COD's progression order and
+   each is parsed by `packet(comp, res, precinct, layer)`: SOP skipped, the
+   header bits read with the 0xFF bit-stuffing rule, tag trees walked with an
+   explicit 16-entry stack (no recursion), the number-of-passes code, Lblock,
+   the length of each code-block's single codeword segment, EPH skipped. The
+   body is then, per included code-block, either **copied into the arena**
+   (a kept component at a kept resolution) or **skipped** by length. The
+   header of a skipped packet is still parsed in full, because its length is
+   known only from it and the tag-tree and Lblock state it leaves is needed by
+   its precinct's next layer.
+3. **Tier-1** for each kept code-block: its segments are joined in
+   `cbdata`, then `P = Mb - zbp` bit-planes are decoded pass by pass (cleanup,
+   then significance, refinement, cleanup, ...), `Mb = guard + eps_b - 1`, with
+   the MQ decoder in assembly (`xj_mqdec`). A pass beyond the data decodes
+   from the 0xFF fill the standard defines. Magnitudes keep one fractional
+   bit (`v = 2B + 2^bp`: the reconstruction midpoint), so a lossless decode is
+   `v >> 1`, exact.
+4. **Dequantisation** into the 16-bit plane in fixed point. Reversible: `c =
+   sign * (v >> 1)`, F = 0 fractional bits. Irreversible: `c = sign * v * m
+   / 2^sh` with `m = 2048 + mu` and `sh = 12 + eps - Rb - F`, `Rb = depth + gain`
+   (gain 0 for LL, 1 for HL and LH, 2 for HH), `F = clamp(11 - depth, 0, 3)`,
+   saturated to the int16 range (`xj_deq`).
+5. **The inverse wavelet** for `NL - r` levels, in place (Mallat layout), the
+   horizontal pass first and then the vertical, as F.3.2 orders them. 9/7 in
+   Q14 fixed point, the six lifting steps of F.3.8.2 in the order the standard
+   gives (`K`, `1/K`, then delta, gamma, beta, alpha), each a 16x16 -> 32
+   multiply and a rounded shift by 14 (`xj_lift`, `xj_scale`); 5/3 in integers
+   (`xj_lift53`). Symmetric extension is done by CHOOSING the neighbour rows or
+   padding the row arrays, never by a branch in the loop. The vertical pass
+   works on whole rows through a row map, so the final interleave of rows is a
+   permutation of map entries, not a copy (the map, `rowmap`, is why the plane
+   height is limited to 1024).
+6. **Components to grey** (20.22.13.6) and **to bytes**: `xj_grey`.
+
+The inverse transforms use the level shift the standard does: the unsigned
+DC offset `2^(depth-1)` is added at the end, in the grey conversion.
+
+##### 20.22.13.5 Fixed-point arithmetic
+
+No `float` and no `long` exist on the machine and none is used. The 9/7
+constants in Q14 are `alpha = -25987`, `beta = -868`, `gamma = 14466`, `delta =
+7266`, `K = 20155`, `1/K = 13318` (each `round(x * 2^14)`). A lifting step is
+
+    dst[i] -= ((a[i] + b[i]) * k + 8192) >> 14        (k signed, sum in int16)
+
+the sum fitting int16 because F <= 3 keeps every transient at most 2^13 for
+the depths allowed. The differential harness measures the whole pipeline
+against `opj_decompress -r` (20.22.13.8).
+
+##### 20.22.13.6 Components to grey
+
+* One component (or `PDIMG_ALPHA`): that component, `PDIM_GREY8`.
+* Three or more components with the multiple component transform on (COD's
+  SGcod byte 3 = 1): component 0 ONLY is decoded, because after the forward
+  RCT or ICT component 0 IS the luminance Y (RCT: floor((R + 2G + B)/4); ICT:
+  0.299 R + 0.587 G + 0.114 B). Components 1 and 2 cost their packet headers
+  and nothing else. The result is `PDIM_GREY8`. (A colour JPX therefore comes out
+  in grey, as every other RGB image does on these adapters, at a third of the
+  work.)
+* Two or more components with the transform off: `PDIM_N8`, `out_ncomp = n =
+  min(pdxb_img.ncomp or Csiz, Csiz, 4)` components interleaved, each a byte in
+  its own sample range scaled to 0..255, for the colour module to map (20.22.9).
+  The row bytes are `n * out_w`, so `out_w <= 1024 / n` enters the reduction.
+* The depth is scaled to 8 bits by a right shift (d > 8) or by the multiplier
+  255 / (2^d - 1) (d < 8, so a 1-bit component is 0 or 255). `/Decode` is the
+  caller's (PDIMG_INVERT is honoured here: v -> 255 - v on grey).
+
+##### 20.22.13.7 `/SMaskInData` and the alpha channel
+
+When the PDF asks for the codestream's own alpha, PDREND opens the same object
+with `flags |= PDJ_ALPHA` (0x0100, this module's, `pdabi.h`'s block `[img]`)
+and receives that channel alone as `PDIM_GREY8`, `PDIMG_MASK` semantics: 255 =
+opaque. The channel is the one the `cdef` box marks Typ 1 (opacity) or 2
+(premultiplied); with no `cdef`, component `Csiz - 1` when `Csiz` is 2 or 4.
+With neither, `OPEN` answers `PDE_FILTER` with `PDJ_R_NOALPHA` (15). The colour
+open (no `PDJ_ALPHA`) decodes component 0 as above whatever the file carries.
+
+##### 20.22.13.8 Checks
+
+`tools/os88pdfx_jpx.py` writes, deterministically, with `opj_compress`
+(OpenJPEG 2.5.4, recorded in `tests/pdfany/jpx/README`): 45 fixtures - lossless
+and lossy; 1, 2, 3 and 4 components; several tile sizes; all five progression
+orders; 1 to 7 resolutions; code-block sizes 16, 32 and 64; layers; user
+precincts; SOP and EPH; 12-bit samples; every supported code-block style; an
+alpha channel; and the refusals (BYPASS, TERMALL, ROI, a tile size that is not a
+multiple of 2^NL). Four checks, all host-side:
+
+1. `hosttest/pdxj_cmp.py` runs the host build of the module (`pdxj_test`) at
+   every reduction each file allows and compares with `opj_decompress -r <n>` as
+   the maximum and mean absolute difference: 278 cases. Budgets: `max = 0` for
+   lossless 5/3 without a transform; `max <= 3`, `mean <= 0.5` for 9/7;
+   a file with the multiple component transform is compared on its Y (the
+   reference is Y computed from the RGB `opj_decompress` clamped, so the budget
+   is `max <= 12`, `mean <= 0.1` lossless and `mean <= 0.7` lossy); an alpha
+   channel is compared exactly. Measured: every lossless non-MCT case is exact;
+   9/7 cases are within max 1 (mean 0.04 to 0.23).
+2. `hosttest/pdxj_asm.py` holds `pdxjasm.inc` to its twin `pdxjtw.c` bit for bit
+   in Unicorn - MQ decoder through random streams and contexts, every lifting
+   routine near and far, interleave, dequantise, grey - including the 16-bit wrap
+   of intermediate sums. A mutation of either side fails it.
+3. `hosttest/pdxj_uc.py` runs the REAL `PDXJ.MOD` (compiled by cc8086, SS != DS,
+   far workspace, the door and its register contract) in Unicorn on every fixture
+   at two reductions and compares every row with the host build: 86 cases, 0
+   differences.
+4. `hosttest/pdxj_fuzz.c` (ASan + UBSan; mutated fixtures - flipped, overwritten
+   and inserted bytes, the header more often, truncation, a random workspace
+   size - with guard bytes either side of the workspace and an alarm for hangs):
+   34,000+ inputs, no report. A second build lowers `JX_ARENA_MIN` to reach the
+   arena-full path.
+
+##### 20.22.13.9 The stack, the gate and the cost
+
+The module's door runs on the private deep stack (20.15); the budget is 1,776
+bytes per verb, including the PDENG call that `src_get` makes. `tools/os88pdstk.py` (run with PDXJ added as a segment; the edges `PDXJ
+_pdxj_engcall [_pdxj_engvec] -> PDENG pde_entry` and `PRIMARY _pdu_mcall [si] ->
+PDXJ pdxj_entry` are the two this module adds) reports the worst chain through
+`v_row`: **700 bytes**, of which the module's own frames to its `STRM_READ` call
+are 276 and PDENG's decoder under it 424; `v_open` 546, `v_close` 478, `v_init`
+46. The decode chain itself (`v_row > decode_trow > decode_tile > decode_comp >
+t1_block > t1_cup > xj_mqdec`) is shorter. No recursion (a tag tree walks an
+explicit 16-entry stack). The only kernel calls would be through `pdkgate.inc`;
+none are made - the module reaches PDENG through its door, and its largest frame
+is 74 bytes (cc8086's gate is 96).
+
+*Cost on a 4.77 MHz 8088: 20.22.13.10.*
+
+##### 20.22.13.10 Measured cost
+
+Taken ONCE with `hosttest/pdxj_cost.py`: the real `PDXJ.MOD` in Unicorn with a
+per-instruction hook, every executed instruction bucketed by the function that owns
+it and priced with a coarse 8088 table (fetch floor 4 clocks a byte, register op 3,
+memory operand 14-25, push 15, pop 12, call 23, mul/imul 130, shift by CL 8 + 4 a
+bit). **An estimate good to about +-30%**; MartyPC and the 5150 are the arbiters.
+Instruction counts are exact. Fixture: 160x120, one tile, 5 resolutions.
+
+| decode | instructions | est. clocks | 4.77 MHz |
+|---|---|---|---|
+| lossless 5/3, full size (r0) | 21.6 M (g_ll, 160x120, measured) | ~352 M | ~74 s |
+| lossless 5/3, r2 (40x30) | 1.55 M | ~25 M | 5.3 s |
+| lossy 9/7, full size (r0) | 8.3 M | ~148 M | 31 s |
+| lossy 9/7, r2 (40x30) | 1.12 M | ~19 M | 3.9 s |
+| lossless, 157x113 r0 (noisy) | 19.8 M | ~323 M | 68 s |
+
+*Where it goes.* Tier-1 is 70-95% of a lossless decode and 62% of a lossy one
+(the transform is 31% of lossy full size and under 4% once the top levels are
+dropped): **dropping levels removes tier-1 work with them, which is why the
+reduction rule pays**. Tier-2 (packets) is under 3% anywhere; dequantise 2.5-4%;
+the grey conversion about 1%.
+
+* **Per MQ decision: 31 to 37 instructions, about 440 to 550 clocks** (the
+  decoder 31-37, byte-in amortised). This is the unit of tier-1.
+* **Per code-block pass** (significance, refinement or cleanup, MQ included)
+  costs by the samples it visits and the decisions it takes: measured averages
+  141 to 1,190 k clocks a pass on 64x64 and smaller blocks, i.e. roughly
+  **35 to 290 clocks a sample a pass**; a noisy lossless block costs about 8x a
+  smooth lossy one because it codes every sample in every plane.
+* **Per wavelet level** (grey, 9/7, per stage, clocks): 0.66 M, 2.4 M, 8.8 M, 33.9 M
+  for stages of 10x8, 20x15, 40x30, 80x60 = 80, 300, 1,200, 4,800 samples, i.e.
+  about **7,000 clocks a sample of the stage's area** (four lifting steps per
+  direction, two directions, a multiply per step); 5/3: 0.2 M, 0.6 M, 2.1 M,
+  7.4 M for the same stages, **about 1,500 clocks a sample**, a quarter of 9/7.
+  Each stage costs four times the one before it.
+
+The consequence for the product: a scan that reduces to about 100x75 decodes in
+tens of seconds on an XT, a 2x larger result takes four times the transform and
+about three times the tier-1 time. PDREND runs it once per image per page view and
+the result is cached by the caller (20.22.7). A faster machine scales as its
+clock; nothing here is memory-bound.
