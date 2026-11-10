@@ -71,6 +71,8 @@ def cases(d):
         alt = {1: "/DeviceGray", 3: "/DeviceRGB", 4: "/DeviceCMYK"}[nn]
         o = d.add("<< /N %d /Alternate %s /Length %d >>" % (nn, alt, len(junk)), junk)
         add("icc_%d" % nn, "[/ICCBased %d 0 R]" % o, comps)
+        add("icc_%dk" % nn, "[/ICCBased %d 0 R]" % o, [0.0] * nn)      # 0 sc: black (QZTEXT's /Cs1 cs 0 sc)
+        add("icc_%dw" % nn, "[/ICCBased %d 0 R]" % o, [1.0] * nn)      # 1 sc: white
     # --- calibrated --------------------------------------------------------
     add("calgray_a", "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 2.2 >>]", [0.5])
     add("calgray_b", "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 1 >>]", [0.5])

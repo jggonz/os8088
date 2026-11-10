@@ -10,6 +10,7 @@
  * ==========================================================================*/
 static pdw g_xcsk[16][2];           /* colour-space slot -> its cache key (k0, k1); slot 0 = a device space */
 static pdw g_xcsn;                  /* slots in use (1..15)                                                */
+static struct pd_fx i_fx64;
 static pdw g_xslot;                 /* xg_entry's slot                                                     */
 static pdw g_xcrr;                  /* the slot a 16th space takes (round robin)                           */
 static pdw g_xcrcap;                /* xg_alloc's room                                                      */
@@ -66,7 +67,24 @@ static pdw xg_ask(pdw verb, pdw cat, pdw rseg, pdw roff, pdw rcap, pdw state)
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static void xg_color(pdw st, pdw e, pdw nop)
 {
-    pdw i;
+    pdw i, k, nr;
+    static pdb rgb3[3];
+    static struct pd_fx t;
+    if (pd_fpeekb(g_xcseg, (pdw)(e + 2)) & PDGX_F_TABLE) {       /* a one-component space: its colour is in the entry, and the
+        * slot is not needed (a page that also draws text would otherwise swap PDXG and the font module on every operator) */
+        k = pd_fpeekb(g_xcseg, e);
+        nr = k == PDGX_K_INDEXED ? (pdw)(pd_fpeekw(g_xcseg, (pdw)(e + 4)) > 255 ? 256 : pd_fpeekw(g_xcseg, (pdw)(e + 4)) + 1) : 65;
+        if (!nop) k = (k == PDGX_K_SEP || k == PDGX_K_DEVN) ? 64 : 0;
+        else {
+            pdr_cpy(&t, &g_opn[g_nop - 1], 4);
+            if (k != PDGX_K_INDEXED) { pdm_fx_int(&i_fx64, 64); pdm_fx_mul(&t, &t, &i_fx64); }
+            k = t.hi < 0 ? 0 : (pdw)pdm_fx_round(&t);
+        }
+        if (k >= nr) k = (pdw)(nr - 1);
+        pd_fcopy_in(g_xcseg, (pdw)(e + 16 + k * 3), rgb3, 3);
+        col_set(st, rgb3[0], rgb3[1], rgb3[2]);
+        return;
+    }
     if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return; }
     xg_begin(0);
     g_gx.cseg = g_xcseg; g_gx.coff = e; g_gx.ncomp = nop;
