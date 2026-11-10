@@ -325,6 +325,50 @@ def small_pdf(path):
     d.write(path)
 
 
+def park_pdf(path):
+    """The occupant park (20.22.7.12): a Flate page whose shadings make PDXG
+    read a Flate stream of its own (a sampled function, object 3, which the
+    harness's PDR_XSHADE_OBJ=3 stand-in opens). With ONE Flate slot the page's
+    stream holds it, PDXG's open is refused, and the frame is parked, asked
+    again and replayed; rectangles after each `sh` prove it resumes at the
+    operator after. Page 2 is the same inside a Flate Form. Page 3 is a Flate
+    image with a Flate /SMask, which PDX8 reads while the core reads the image."""
+    d = Pdf()
+    samples = bytes(range(0, 256, 4))
+    fn = d.stream('/FunctionType 0 /Domain [0 1] /Range [0 1] /Size [64] /BitsPerSample 8 /Filter /FlateDecode',
+                  zlib.compress(samples))
+    assert fn == 3
+    sh = d.add('<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 0 1] /Function %d 0 R >>' % fn)
+    c = []
+    for i in range(6):
+        for j in range(5):
+            x, y = 30 + i * 60.0, 40 + j * 70.0
+            c.append('q %.1f %.1f 30 30 re W n 30 0 0 30 %.1f %.1f cm /S0 sh Q 0 g %.1f %.1f 30 4 re f' % (x, y, x, y, x, y + 34))
+    body = '\n'.join(c)
+    res = '/Shading << /S0 %d 0 R >>' % sh
+    cc = d.stream('/Filter /FlateDecode', zlib.compress(body.encode('latin-1')))
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R /Resources << %s >> >>' % (cc, res)))
+    fm = d.stream('/Type /XObject /Subtype /Form /BBox [0 0 400 400] /Resources << %s >> /Filter /FlateDecode' % res,
+                  zlib.compress(body.encode('latin-1')))
+    c2 = d.stream('/Filter /FlateDecode', zlib.compress(b'0.5 g 5 5 20 20 re f /Fm0 Do 0 g 370 370 20 20 re f'))
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
+                         '/Resources << /XObject << /Fm0 %d 0 R >> >> >>' % (c2, fm)))
+    # page 3: a Flate image with a Flate /SMask over black stripes - PDX8 reads the
+    # mask while the core reads the image: two Flate streams at band time
+    w = h = 64
+    img = bytes(((x * 4) & 0xFF) | 0x80 for y in range(h) for x in range(w))
+    msk = bytes(min(255, (y * 4)) for y in range(h) for x in range(w))
+    sm = d.stream('/Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 8 '
+                  '/Filter /FlateDecode' % (w, h), zlib.compress(msk))
+    im = d.stream('/Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 8 '
+                  '/SMask %d 0 R /Filter /FlateDecode' % (w, h, sm), zlib.compress(img))
+    c3 = d.stream('/Filter /FlateDecode', zlib.compress(
+        b' '.join(b'0 g 50 %d 300 10 re f' % (60 + k * 20) for k in range(15)) + b' q 300 0 0 300 50 50 cm /Im0 Do Q'))
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
+                         '/Resources << /XObject << /Im0 %d 0 R >> >> >>' % (c3, im)))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -336,7 +380,8 @@ def main():
     forms_pdf(os.path.join(out, 'forms.pdf'))
     hair_pdf(os.path.join(out, 'hair.pdf'))
     small_pdf(os.path.join(out, 'small.pdf'))
-    print('os88pdfx_rcore: 8 fixtures in %s' % out)
+    park_pdf(os.path.join(out, 'park.pdf'))
+    print('os88pdfx_rcore: 9 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

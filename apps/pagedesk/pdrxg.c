@@ -45,6 +45,10 @@ static pdw xg_req(pdw verb)
     pdw r;
     pd_fcopy_out(&g_gx, g_xb, 0, sizeof g_gx);
     r = x_call(verb, g_xb, 0, 0);
+    if (x_cf && r != PDE_BUSY && strm_park()) {     /* its stream wanted our Flate slot (20.22.7.12) */
+        pd_fcopy_out(&g_gx, g_xb, 0, sizeof g_gx);
+        r = x_call(verb, g_xb, 0, 0);
+    }
     pd_fcopy_in(g_xb, 0, &g_gx, sizeof g_gx);
     return x_cf && r != PDE_BUSY ? 0xFFFFu : r;
 }

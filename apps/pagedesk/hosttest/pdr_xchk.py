@@ -62,8 +62,8 @@ def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700, d
     r = subprocess.run([binary or exe, 'render', pdf, str(page), str(zoom), '0', str(bpp), '%d/%d' % (num, den), str(w), str(H),
                         '0', '0', out, bank, str(dl)], capture_output=True, text=True, env=e, timeout=300)
     st = dict(kv.split('=', 1) for l in r.stdout.split('\n') if l.startswith('status') for kv in l.split()[1:] if '=' in kv)
-    m = re.search(r"^xshade calls=(\d+) stepmax=(\d+)", r.stdout, re.M)
-    if m: st['xcalls'], st['xstepmax'] = m.group(1), m.group(2)
+    m = re.search(r"^xshade calls=(\d+) stepmax=(\d+) fails=(\d+)", r.stdout, re.M)
+    if m: st['xcalls'], st['xstepmax'], st['xfails'] = m.group(1), m.group(2), m.group(3)
     m = re.search(r"^status .*first='([^']*)'", r.stdout, re.M)
     if m: st['first'] = m.group(1)
     im = np.asarray(Image.open(out).convert('L')).astype(int) if r.returncode == 0 and os.path.exists(out) else None
@@ -255,6 +255,29 @@ for dlk in (16, 12):
     check('... a %d KiB list draws them to the pixel, asking PDXG only for a pass\'s own rows (%s calls, %s passes)' % (dlk, stk.get('xcalls'), stk.get('passes')),
           rck == 0 and imk is not None and im is not None and int((imk != im).sum()) == 0 and num(stk, 'incomplete') == 0
           and num(stk, 'xcalls') <= 2 * 96 and num(stk, 'passes') <= 8)
+print('-- an occupant\'s stream under the one Flate slot: the park (park.pdf, 20.22.7.12)')
+park = os.path.join(fx, 'park.pdf')
+for pg, what in ((0, 'a Flate page'), (1, 'a Flate Form in a Flate page')):
+    pe = {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3'}
+    rc2, im2, st2, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='2'))
+    rc1, im1, st1, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='1'))
+    rcn, imn, stn, _ = render(park, pg, 'vga', env=dict(pe, PDR_FLATE='1', PDR_NOPARK='1'))
+    check('%s: 30 shadings whose PDXG reads a Flate stream draw with one slot as with two, clean (%s refusals parked)' % (what, st1.get('xfails')),
+          rc1 == 0 and rc2 == 0 and im1 is not None and im2 is not None and int((im1 != im2).sum()) == 0
+          and num(st1, 'incomplete') == 0 and num(st2, 'incomplete') == 0 and num(st1, 'xfails') > 0)
+    check('... and without the park they are refused and noted (first=%s), the rest of the page drawn' % stn.get('first'),
+          rcn == 0 and imn is not None and stn.get('first') == 'shading' and int((imn != im1).sum()) > 0
+          and int((imn < 64).sum()) >= int((im1 < 64).sum()) // 4)
+rc2, im2, st2, _ = render(park, 2, 'vga', env={'PDR_FLATE': '2'})
+rc1, im1, st1, _ = render(park, 2, 'vga', env={'PDR_FLATE': '1'})
+rcn, imn, stn, _ = render(park, 2, 'vga', env={'PDR_FLATE': '1', 'PDR_NOPARK': '1'})
+ref = mutool(park, 2)
+m1 = cellmatch(im1, ref, 40) if im1 is not None else 100.0
+check('a Flate image with a Flate /SMask: one slot draws as two and as MuPDF (%.1f%% of cells off), clean' % m1,
+      rc1 == 0 and rc2 == 0 and im1 is not None and im2 is not None and int((im1 != im2).sum()) == 0
+      and num(st1, 'incomplete') == 0 and m1 < 1.0)
+check('... and without the park the mask is refused and noted (first=%s)' % stn.get('first'),
+      rcn == 0 and stn.get('first') == 'transparency' and imn is not None and int((imn != im1).sum()) > 0)
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

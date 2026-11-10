@@ -26,6 +26,32 @@ static pdw img_reopen(void)
     g_iopen = 1; g_icur = -1; g_icodec = 0;
     return 1;
 }
+#ifdef PDR_X8
+/* AN IMAGE'S MASK UNDER ONE FLATE SLOT (20.22.7.12): PDX8 opens the image's
+ * /SMask (or /Mask) stream while the core holds the image's own, so a Flate
+ * image with a Flate mask needs two slots. The core opens the mask once
+ * itself to ask: refused, it closes its own stream - the rows are read again
+ * from the first (img_reopen) after PDX8 is done - and answers 1. A stack of
+ * streams (PDENG's STRM_CLOSE pops), so the probe leaves the image's alone */
+static pdw img_mask_park(pdw obj, pdw gen, pdw flags)
+{
+    pdw n, g;
+#ifdef PD_HOST
+    if (pdrh_nopark) return 0;
+#endif
+    if (!g_iopen || g_icodec) return 0;
+    pdr_zero(&g_dg, sizeof g_dg);
+    g_dg.objnum = obj; g_dg.gen = gen;
+    pdr_scpy(g_dg.key[0], (flags & 0x40) ? "Mask" : "SMask", 32);
+    if (eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0) || g_dg.kind != PDK_REF) return 0;
+    n = g_dg.refnum; g = g_dg.refgen;
+    n = strm_open(n, g, 0, 0);
+    if (!n) { strm_close(); return 0; }
+    if (n != PDE_LIMIT) return 0;
+    img_close();
+    return 1;
+}
+#endif
 /* read the next source row into the row buffer; 0 on a short stream */
 static pdw img_row(void)
 {
@@ -159,7 +185,11 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
 #ifdef PDR_X8
-    if (g_xs) x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+    if (g_xs) {
+        pdw rp = (flags & 0x60) && !m && !inl && img_mask_park(obj, gen, flags);
+        x8_imgset(b, flags, xl, yt, wq, hq, x0, x1, ry0, ry1);   /* blend: this strip's image mask */
+        if (rp && !img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
+    }
 #endif
     pdr_ip.nc = ncomp; pdr_ip.bpc = bpc;
     pdr_ip.lseg = (flags & 8) ? g_xcseg : 0; pdr_ip.loff = (pdw)r16(b + 24);

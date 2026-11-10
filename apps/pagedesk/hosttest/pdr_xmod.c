@@ -101,14 +101,26 @@ static pdw img_row(pdw seg, pdw off, pdw row, pdw *cf)
  * whatever the shading, an axial ramp down the device clip: `steps` (0 =
  * 32) bands across its whole width, one record each, as PDXG cuts an axial
  * gradient; pdrh_xshades counts the calls, pdrh_xstepmax the most bands */
-long pdrh_xshades, pdrh_xstepmax;
-static pdw shade_fake(void)
+long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail;
+extern pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx);
+static pdw shade_fake(pdw *cf)
 {
     static struct pdxb_gfx g;
     int n, k, x0, x1, y0, h;
     unsigned off;
     unsigned char *d;
     memcpy(&g, XMEM(pdrh_xbseg(), 0), sizeof g);
+    if (getenv("PDR_XSHADE_OBJ")) {
+        /* PDXG reads a stream of its own for this shading (a sampled function): the
+         * object PDR_XSHADE_OBJ names, opened through the real engine. With the one
+         * Flate slot held by the content stream it is refused - the park's case
+         * (20.22.7.12) - and the shading fails as PDXG's would */
+        static struct pdxb_strm st;
+        memset(&st, 0, sizeof st); st.objnum = (pdw)atoi(getenv("PDR_XSHADE_OBJ"));
+        memcpy(XMEM(pdrh_xbseg(), 0), &st, sizeof st);
+        if (pdr_eng(PDV_ENG_STRM_OPEN, 0, 0, 0)) { pdrh_xshfail++; memcpy(XMEM(pdrh_xbseg(), 0), &g, sizeof g); *cf = 1; return PDE_GRAPHICS; }
+        pdr_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    }
     n = g.steps ? g.steps : 32; if (n < 4) n = 4; if (n > 96) n = 96;
     if (n > pdrh_xstepmax) pdrh_xstepmax = n;
     x0 = g.clip[0] * 4 - 4; x1 = g.clip[2] * 4 + 8;                     /* qpx, a pixel past each side */
@@ -149,7 +161,7 @@ pdw pdrh_xmod(pdw verb, pdw bx, pdw cx, pdw dx, pdw *cf, pdw *dxo)
     case PDX_GFX:
         if (verb == 0xCE) return xd_verb(bx, cx);
         if (verb == 0xCF) return xe_verb(bx, cx);
-        if (verb == PDV_GFX_SHADE && getenv("PDR_XSHADE")) return shade_fake();
+        if (verb == PDV_GFX_SHADE && getenv("PDR_XSHADE")) return shade_fake(cf);
         break;
     case PDX_IMG: case PDX_JPX:
         if (verb == PDV_IMG_OPEN) return img_open(cf);
