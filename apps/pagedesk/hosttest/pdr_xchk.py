@@ -278,6 +278,24 @@ check('a Flate image with a Flate /SMask: one slot draws as two and as MuPDF (%.
       and num(st1, 'incomplete') == 0 and m1 < 1.0)
 check('... and without the park the mask is refused and noted (first=%s)' % stn.get('first'),
       rcn == 0 and stn.get('first') == 'transparency' and imn is not None and int((imn != im1).sum()) > 0)
+print('-- a slice bounded by time (QA R27): PDR_SLICETICK=4 ends every slice after ONE operator')
+samples = os.path.join(here, '..', 'samples')
+cases = [(os.path.join(fx, f), pg, env) for f, pg, env in (
+    ('forms.pdf', 0, {}), ('forms.pdf', 1, {}), ('depthg.pdf', 0, {}), ('mask.pdf', 0, {}), ('dash.pdf', 0, {}),
+    ('small.pdf', 1, {'PDR_XSHADE': '1'}), ('park.pdf', 0, {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3', 'PDR_FLATE': '1'}),
+    ('park.pdf', 1, {'PDR_XSHADE': '1', 'PDR_XSHADE_OBJ': '3', 'PDR_FLATE': '1'}), ('park.pdf', 2, {'PDR_FLATE': '1'}))]
+cases += [(os.path.join(samples, f), pg, {}) for f, pg in (('XTGUIDE.PDF', 0), ('XTGUIDE.PDF', 3), ('MARKUP.PDF', 0), ('ACROFORM.PDF', 0), ('MONOIMG.PDF', 0))]
+bad = []
+for pdf, pg, env in cases:
+    env = dict({'PDR_FLATE': '1'}, **env)              # one slot: the park and the slice's end together
+    for ad in ('vga', 'cga'):
+        rca, ima, sta, _ = render(pdf, pg, ad, env=env)
+        rcb, imb, stb, _ = render(pdf, pg, ad, env=dict(env, PDR_SLICETICK='4'))
+        if not (rca == 0 and rcb == 0 and ima is not None and imb is not None and ima.shape == imb.shape
+                and int((ima != imb).sum()) == 0 and sta.get('incomplete') == stb.get('incomplete')):
+            bad.append('%s p%d %s: rc %s/%s inc %s/%s diff %s' % (os.path.basename(pdf), pg, ad, rca, rcb, sta.get('incomplete'),
+                       stb.get('incomplete'), 'n/a' if ima is None or imb is None or ima.shape != imb.shape else int((ima != imb).sum())))
+check('%d pages x 2 adapters, a slice per operator: the same picture and the same Incomplete bits' % len(cases), not bad, '; '.join(bad[:4]))
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

@@ -227,6 +227,11 @@ int pdrh_blits;
 void os88_gfx_lock(void) {}
 void os88_gfx_unlock(void) {}
 int  os88_wm_clip_set(void *win) { (void)win; return 0; }
+/* the slice's clock (QA R27): still, unless PDR_SLICETICK=<n> makes every call
+ * n ticks later than the last - PDR_SLICETICK=4 ends a slice after EVERY
+ * operator, and the picture must not change */
+unsigned pdrh_tickstep, pdrh_tick;
+unsigned os88_ticks(void) { pdrh_tick += pdrh_tickstep; return pdrh_tick; }
 pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
 {
     pdw r; int c;

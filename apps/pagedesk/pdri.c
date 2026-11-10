@@ -1307,10 +1307,14 @@ again:                                                  /* a loop, not a call: D
 #include "pdrt3.c"
 #endif
 
+/* a slice is bounded in TIME as well (QA R27): the UI task takes no input
+ * until it returns, and on a 4.77 MHz 8088 256 text operators are 5 s */
+#define PDR_SLICE_TICKS 4               /* ~220 ms of the BIOS tick */
 static pdw interp_run(pdw maxops)
 {
-    pdw err, ops = 0, kind, toks = 0;
+    pdw err, ops = 0, kind, toks = 0, t0;
     if (g_idone) return 1;
+    t0 = (pdw)os88_ticks();
     while (ops < maxops) {
         if (g_dlfull) return 0;
         /* a slice is bounded in TOKENS too: a stream of a million numbers, or an
@@ -1390,6 +1394,7 @@ static pdw interp_run(pdw maxops)
             op_clear();
             g_tjlive = 0;
             ops++;
+            if ((pdw)((pdw)os88_ticks() - t0) >= PDR_SLICE_TICKS) return 0;
             break;
         case PDT_EOF:
         eof:

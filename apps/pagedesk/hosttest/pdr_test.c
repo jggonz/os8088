@@ -274,6 +274,7 @@ int main(int argc, char **argv)
     if (argc < 2) return 1;
     pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
     pdrh_nopark = getenv("PDR_NOPARK") != 0;
+    { extern unsigned pdrh_tickstep; pdrh_tickstep = getenv("PDR_SLICETICK") ? (unsigned)atoi(getenv("PDR_SLICETICK")) : 0; }
     pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
     pd_host_ds = 0x1000;
     if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
