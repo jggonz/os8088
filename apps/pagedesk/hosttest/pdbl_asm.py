@@ -174,6 +174,7 @@ def test_rows(m, rng, w, h):
         m.uc.mem_write(0x10000 + c, bytes(nb))
         m.setw(m.gbc, c); m.setw(m.p1, p1); m.setw(m.p2, p2)
         m.call(m.row0)
+        if m.getw(m.fail): return 0, h, 0, 1   # the 4,096-context table filled (random noise): the decoder reports it, as gb_cx does
         row = bytes(m.uc.mem_read(0x10000 + c, nb))
         exp = bytearray(nb)
         for x in range(w):

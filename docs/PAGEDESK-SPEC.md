@@ -6705,10 +6705,11 @@ is checked only against its own encoder. MuPDF ignores a halftone region's HDEFP
 this decoder honour; the mutool leg holds it at 0. `pdbl_fuzz` (AddressSanitizer + UBSan, bit flips, byte runs,
 truncation, markers) ran 81,000 mutations of the committed seeds in `tests/pdfany/bilevel/` clean. Sizes (the
 smlrcc + cc8086 chain with the peephole on, `jb_`/`cf_` as one translation unit with the shell's `ix_*` and
-pdmath's movers): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders 27,244 + 8,857 =
-36,101 of the 36,864 allowed; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
+pdmath's movers, with `pdxijb2.inc`): CCITT alone 5,054 bytes of code and tables and 6,758 of bss; both decoders
+29,980 + 8,935 = 38,915 of the 39,000 allowed (the lead's 00:24 figure); in the whole PDXI.MOD (with the shell and
+JPEG) 47,222 + 18,468 = 65,690 against the 65,024 cap; the deepest chain of the two files is `jb_getrow` to `ix_get` at 326 bytes
 (frames 58 for `rf_decode`, 56 for `sd_run`, 46 for `tr_run`; none over 96), and the shell adds its own on top
-of that. Rows covering it: `tools/os88pdbl_check.py` (the five legs above) and `pdbl_fuzz`; `pdkgate` is
+of that. Rows covering it: `tools/os88pdbl_check.py` (the legs above plus jb2-refagg, jb2-unknown, jb2-refine and jb2-range, each against the model and, where MuPDF can, against `mutool`) and `pdbl_fuzz` (32,000 more mutations with the new seeds), `hosttest/pdbl_asm.py` for the assembly; `pdkgate` is
 unaffected (neither file calls the kernel).
 
 #### 20.22.13 JPEG 2000 (`jpx`)
