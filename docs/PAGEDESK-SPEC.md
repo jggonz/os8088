@@ -4925,7 +4925,169 @@ round's final pass, not before.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
-*Reserved; written by its agent before its code.*
+AP-06. Owner decisions O3 (an encrypted file is saved as an incremental update
+encrypted with the file's own key) and O5 (`/P` is ignored; the source's `/P`
+and `/Encrypt` are kept unchanged) bind this section. Nothing here changes
+14.2's phases, 20.5's verbs or the cap on what a slice may do; it changes what
+the phases read and what they write.
+
+**20.22.4.1 The update section stays classic.** Whatever the newest section of
+the source is (a classic table, a cross-reference stream, a hybrid), the
+update is appended as a CLASSIC `xref` section whose trailer carries
+`/Prev <the source's newest startxref>` (`pdxb_trailer.startxref`, which PDENG
+answers for a stream section too). Measured, qpdf 12.4.2 and MuPDF 1.28.6:
+a classic update over an xref-stream file, shadowing objects that live in an
+object stream with top-level objects of the same number, is accepted by both
+with no warning (`qpdf --check`, `--show-xref`, `mutool show`), plain and
+AES-128. An xref-stream update was equally accepted and buys nothing, so it is
+not built: it would need a new object number, a self entry, a binary counted
+length, a rewritten `job_verify` and a stream the engine must read back. The
+trailer written is:
+
+`/Size`, `/Root`, `/Info` as before; `/Encrypt` when the source has one (the
+reference when `pdxb_trailer.encrypt_num` is non-zero; when `tflags` has
+`PDTR_ENCDIRECT` the dictionary is written again from `PDV_ENG_CRYPTINFO`'s
+fields: `/Filter /Standard /V /R /Length /P /O /U`, `/OE /UE /Perms` for R5 and
+R6, `/CF /StmF /StrF` for V4 and V5, `/EncryptMetadata` when false - every
+input of the key, so the same key results; it is that dictionary's VALUES that
+are kept, not its spelling); `/ID [<id0 whole, up to 32 bytes> <a new 16>]`
+(`id0` then `id0_hi`: the first element is the key's input and is written
+byte for byte); `/Prev`. `job_verify` is unchanged (it looks for `xref`).
+`job_vfy` re-opens the temp file through PDENG, which now chains classic ->
+stream sections (20.22.3); an encrypted output is opened with the held key
+(20.22.4.4).
+
+A hybrid source (a classic table with `/XRefStm`): `/Prev` names its classic
+section and a reader merges the `/XRefStm` itself, so nothing is written for
+it. A source rewritten through an object stream needs nothing either: an
+object this job rewrites (an annotation, a page, the catalog, an `/Annots`
+owner) is written top-level under the SAME number and generation, which
+shadows the compressed copy.
+
+**20.22.4.2 Every read is `PDRC_PLAIN`.** `eng_get` (the one RAW_COPY door of
+the page/catalog/annotation patches AND of Extract and Insert) sets
+`pdxb_rawcopy.mode = PDRC_PLAIN`; only `job_vfy`'s three-object check keeps
+`PDRC_EXACT` (it wants the file's own bytes). The writer therefore never sees
+ciphertext and never needs to know whether a source object came from an object
+stream: PDENG hands it `N G obj <dictionary or value> [stream ... endstream]
+endobj` with strings and the stream's bytes decrypted. What the writer needs
+from PLAIN, and eng/crypt implement (the contract is theirs, 20.22.3 and
+20.22.5, this is what is relied on):
+
+* the text begins `N G obj` and ends `endobj`; an object-stream member is
+  wrapped in that frame; `done`/`got` address the SYNTHESISED text, the same
+  bytes on every call (the writer reads a long stream in chunks);
+* a stream object's dictionary carries a DIRECT integer `/Length` equal to the
+  number of stream bytes that follow `stream` + one EOL (the decrypted length);
+  the stream bytes are decrypted but not defiltered; the text after the data is
+  `endstream`, an EOL, `endobj`;
+* an object the engine would not decrypt (an `/Type /XRef` stream, a `/Crypt
+  /Identity` stream, the `/Metadata` of `/EncryptMetadata false`) is returned
+  as it is: the writer treats it like any other stream, see 20.22.4.3 for the
+  one case this makes wrong;
+* on a file with no `/Encrypt` and no object stream PLAIN is byte for byte
+  EXACT, so every byte the writer produced before this round is unchanged.
+
+**20.22.4.3 Encrypted output.** The job is *encrypting* (`g_enc`) when the
+target is a save of a file whose `pdxb_trailer` says it has an `/Encrypt`
+(`encrypt_num` or `PDTR_ENCDIRECT`); Extract and a new document are never
+encrypted (their source's key is used to READ; the output is a fresh plain
+file, as before).
+
+*The key.* Fetched once, at job start, by `PDV_ENG_CRYPTINFO` on the open,
+keyed document: the engine answers `pdxb_crypt` with `key`/`key_len`/`auth`
+filled from the key `PDV_ENG_SETKEY` gave it, as well as the dictionary. This
+is the one addition to 20.22.5 the writer asks for (logged to crypt and eng).
+The writer copies `key`, `key_len`, `stm`, `str`, `eff` into its own
+`pdxb_cryptop` (the key does not live in PDENG across Insert, which re-opens
+PDENG on other files, and PDENG's key is the foreign file's then) and zeroes
+that copy at job end, on abort and on failure. A method `PDCM_IDENTITY` for
+strings or streams (V4/V5 crypt filters) means those are written plain.
+
+*Strings.* Every string the writer emits in an object that is not in an object
+stream (every object it writes) is encrypted with the per-object key of the
+object being written (`pw_obj` records its number and generation): the text
+strings (`/Contents`, `/T`, `/Subj`), `/NM`, `/M`, `/DA`, and every string in
+a span copied out of the source (the page, catalog and annotation patches, the
+kept `/NM /T /CreationDate`, Extract/Insert objects). A copied span goes
+through `pb_src`, which walks it for literal and hex strings, decodes them
+(the escapes of 7.3.4.2), encrypts the raw bytes through `PDV_ENG_CRYPT` in
+chunks of at most 32 bytes (first chunk `phase` 1, last chunk 2) and writes
+the result as a hex string `<...>`; everything else in the span is copied
+verbatim. A plain job calls the same sites and writes exactly what it wrote
+before (`pb_src` is `pb_n`).
+
+*Streams.* The appearance streams are encrypted at the one byte sink,
+`pw_n`: `ap_head` starts the cipher after `stream\n`, `ap_tail` finishes it
+(the AES padding block) before `\nendstream`. The COUNT pass counts plain
+bytes; its result is converted to the stored length before `/Length` is
+written: RC4 and the identity are unchanged, AES-CBC is `(n & ~15) + 32`
+(16 for the IV, then `16 * (n / 16 + 1)` with PKCS#5 padding). Insert and
+Extract-into-encrypted copy a stream by its decrypted `/Length` (from PLAIN):
+the dictionary's `/Length` is rewritten to the stored length, the raw `stream`
+keyword and EOL are replaced by `stream\n`, the data runs through the same
+cipher, and the tail is `\nendstream\nendobj\n` written by the writer. There
+is no verbatim copy of ciphertext anywhere: an object that kept its number and
+was not in an object stream could have been, but decrypt-then-encrypt is one
+path, and is correct for the rest.
+
+*The IV.* The machine has no random source and PDENG has none either (the
+caller's `iv` is the contract). The writer builds each IV from eight words of
+state: seeded at job start from the CRC of `/ID[0]` and of the save date; for
+every IV the kernel tick count (`OSAPI_GET_TICKS`, a gate slot) and the
+object number, the output offset and the previous ciphertext (its last 16
+bytes, folded in after every cipher call) are mixed in and the words are
+spread through `pdm_crc16`, as `id_make` spreads the document ID. What that
+buys, and what it does not: no two IVs of one save repeat, nor of two saves of
+one file (the tick and the chained ciphertext differ), and an IV is not
+predictable from the file alone without the tick at which it was written. It is not
+cryptographic randomness. That is enough HERE because CBC needs the IV to be
+unpredictable only against an attacker who chooses the plaintext after seeing
+the IV, and nothing on this machine lets an attacker choose what a user types
+into a note.
+
+*Limits stated.* (a) A copied stream whose source object the engine left
+undecrypted because of `/EncryptMetadata false` or `/Crypt /Identity`, copied
+into an encrypted target, is encrypted by the writer: such a stream is only
+ever a `/Metadata` stream, which readers show nothing of. (b) The strings of
+the `/Encrypt` dictionary itself are never encrypted and never touched.
+(c) `/P` is not read.
+
+**20.22.4.4 The output is read back.** `job_vfy` opens PDSAVE.$$$ through
+PDENG. An encrypted output makes OPEN answer `PDE_PASSWORD` (the engine has no
+key for a new document); the writer answers it itself, with no prompt: it
+calls `PDV_ENG_CRYPTINFO` (the new file's dictionary), sets `key`/`key_len`
+from its copy, calls `PDV_ENG_SETKEY` and calls OPEN again. The three
+objects it reads for the `N G obj` check use `PDRC_EXACT`.
+
+**20.22.4.5 Insert from an encrypted foreign file.** A foreign window opens
+the file with `PDV_ENG_OPEN` (20.16.3). The engine answers `PDE_PASSWORD` when
+the file needs a key. The shape the writer needs from the primary (ui and plat
+build it): the job verb answers `PDE_PASSWORD` with CF = 1 and the job is
+KEPT, not failed: `pdxb_save.state` stays nonzero, `err_detail` = 20 + the
+window's slot (the same number a failing Insert reports, naming the file), and
+PDENG holds the half-opened foreign file. The primary tries the empty
+password silently (`PDV_KEY_AUTH` with `pw_len` 0, then `PDV_ENG_SETKEY`), and
+only if that answers `PDE_PASSWORD` asks the user, as it does for an ordinary
+open; on success it calls the same job verb again with the same block and the
+writer calls `PDV_ENG_OPEN` once more, which resumes (`PDV_ENG_SETKEY` says
+so). Cancel is `PDV_WRT_ABORT`. A second `PDE_PASSWORD` in one window means
+the key given was wrong; the primary decides how often to ask. After the last
+window the primary re-opens the SAVED file (`PDW_OUT_REOPEN`, as for every
+Insert); an encrypted save keeps the source's `/Encrypt` and `/ID[0]`, so the
+key the primary already holds opens it.
+
+**20.22.4.6 Host stand-ins and checks.** Until PDRC_PLAIN, PDV_ENG_CRYPT and
+SETKEY exist in PDENG, the host harnesses (`hosttest/pdw_enc.c`) stand in for
+exactly those verbs, over a small reader of the fixture; the standing
+differential for the output is `qpdf --check`, `qpdf --decrypt --password=`
+(the annotation strings and appearance streams read back), and `mutool draw`
+with no `invalid string length for aes encryption` on stderr. Fixtures:
+`tests/pdfany/wrt/` (provenance beside them).
+
+**20.22.4.7 Cost.** PDWRT grows by at most 5,000 bytes of image + bss (cap
+53,248); the figures are in the round's report. The deep stack of a chain that
+ends in `PDV_ENG_CRYPT` is the writer's frame depth plus the engine's.
 
 #### 20.22.5 Encryption (`crypt`)
 
