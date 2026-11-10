@@ -194,3 +194,16 @@ agent's DONE for about ten minutes.
 
 **Rule:** match the word after the time stamp, whether or not `STATUS:` comes
 before it: `\] [0-9:]+ (STATUS: *)?(STARTED|DONE|BLOCKED|FAILED)`.
+
+## Per-branch verification was replaced by one QA run
+
+**PageDesk any-PDF (#354), 2026-11-09.** Twelve agents were running and an
+Opus verifier was planned for each finished branch. The owner asked instead:
+*"Instead of doing code verification after each step, can you first do a QA
+testing run in emulation after all the features are completed? Then look into
+fixing the bugs that come up during testing."*
+
+**Rule:** no reviewer between steps. Merge each branch as its agent reports
+DONE, with `make` after every merge. When every feature is in, run one QA pass
+in emulation over the whole feature, list the bugs, fix them, and only then run
+the soak union and `test-full` (SKILL.md, Steps 4-6).

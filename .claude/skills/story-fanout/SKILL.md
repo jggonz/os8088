@@ -1,6 +1,6 @@
 ---
 name: story-fanout
-description: Build out a user-story-based feature - a plan's stories, open items or waves (WIN16-NEXT-PLAN's Q-items, a *-PLAN.md story list) - by fanning the independent items out to parallel sub-agents, each in its own worktree on a cheaper model, with a Monitor armed on every long-running agent, then verifying and improving each branch with Opus before integrating it into the feature's PR and running the final pass once. Use when the user asks to work through, parallelize or "fan out" a plan's stories or items, to continue a story-based PR with sub-agents, or to build a feature as several independent pieces at once. For a C port use port-to-os8088; for a native game remake use native-game-port.
+description: Build out a user-story-based feature - a plan's stories, open items or waves (WIN16-NEXT-PLAN's Q-items, a *-PLAN.md story list) - by fanning the independent items out to parallel sub-agents, each in its own worktree on a cheaper model, with a Monitor armed on every long-running agent, integrating each branch into the feature's PR as it finishes, then ONE QA testing run in emulation once every feature is in, a fix round for what it finds, and the final pass once. Use when the user asks to work through, parallelize or "fan out" a plan's stories or items, to continue a story-based PR with sub-agents, or to build a feature as several independent pieces at once. For a C port use port-to-os8088; for a native game remake use native-game-port.
 ---
 
 # Story fan-out
@@ -11,7 +11,7 @@ for Claude Code and Codex tool mappings and session state, and
 
 A story-based feature arrives as a list: a plan's stories, a PR's open items, a
 wave's checklist. Most items in that list touch different files and can be built
-at the same time. This skill builds them that way, under four rules from the
+at the same time. This skill builds them that way, under five rules from the
 owner:
 
 1. **Parallelize as much as possible.** Fan the independent items out to
@@ -21,12 +21,18 @@ owner:
    happens. Arm a second Monitor, the stall watchdog (Step 3), so that an agent
    that goes quiet is caught and nudged by the lead without anyone asking. An
    idle notification is not a delivered result.
-3. **Cheaper models build; Opus verifies.** Implementers run on Sonnet, or on
-   Haiku for a mechanical chore. Opus reviews each finished branch and improves
-   it where that is warranted.
-4. **The final pass runs once, at the end** (CLAUDE.md, *Testing*). No agent
+3. **Cheaper models build.** Implementers run on Sonnet, or on Haiku for a
+   mechanical chore; Opus only where a wrong build costs more than the saving
+   (Step 3).
+4. **No verification between steps: QA in emulation once every feature is in,
+   then fix** (the owner, 2026-11-09). There is no per-branch reviewer. Each
+   branch is merged as its agent reports DONE, with a plain `make` after the
+   merge so the tree stays buildable. When the last feature is in, the lead
+   runs ONE QA testing run in emulation over the whole feature (Step 5), lists
+   the bugs, and fixes them (Step 6).
+5. **The final pass runs once, at the end** (CLAUDE.md, *Testing*). No agent
    runs a soak row or `test-full`. The lead runs the deduplicated union after
-   every branch is in.
+   the fix round.
 
 The worked example is the WIN16-NEXT round on PR #329: seven agents for Q1, Q2,
 Q3, Q7, Q8, L1/Q4 and L2, all started from one shared brief.
@@ -140,7 +146,7 @@ Use the maximum timeout and re-arm it on every expiry while any agent is still
 running. List the log files by name; a glob is expanded only once.
 
 Arm the **stall watchdog** beside it, also before launching, with one
-`--worktree` per log file (the log's stem, so a verifier logging to its
+`--worktree` per log file (the log's stem, so a fixer logging to its
 implementer's file is covered by the same entry):
 
 ```
@@ -192,53 +198,65 @@ While they run:
 - Each agent launched later gets its section numbers from the reserved table
   in its brief.
 
-## Step 4 - verify and improve with Opus
+## Step 4 - integrate as each agent finishes
 
-As each agent reports `DONE`, start an Opus verifier (`model: "opus"`) on its
-branch. Do not wait for the whole set. The verifier gets the item, the plan
-section, the branch and the agent's report, and NOT your opinion of the work.
-It:
+There is no review between steps (rule 4). When an agent reports `DONE`, read
+its report, then merge its branch into the feature branch. Merge order keeps
+conflicts smallest: docs-only and host-tool branches first, then packages,
+then kernel; when several are DONE at once, take them in that order. Resolve
+each conflict by reading both sides, and never take one side wholesale without
+checking what the other carried. Integrate in a worktree with a warm `build/`.
+After EACH merge, run a full `make` and the size checks for every budget the
+agents were given (package parts included). If the kernel changed, also run
+`tools/kernsize.py` and `make budget-check`. Two branches can each pass alone
+and fail together; a build that breaks is fixed before the next merge.
 
-1. reviews the diff for correctness, register and section discipline, SPEC
-   agreement, regressions against main, and leaks on every exit path;
-2. checks the report's claims against the branch. A "SEEN" claim needs its
-   screenshot or log; a size claim needs the kernsize output;
-3. fixes what it finds, in its own commits on the same branch, re-running
-   only host checks;
-4. writes `<logs>/<key>-verify.md`: confirmed, fixed, and still open.
+Update the plan as branches land: mark a story `I` (integrated), never `S`
+(seen). Seeing it is the QA run's job.
 
 Use Opus for implementation from the start only when the item is subtle enough
 that a wrong build costs more than the saving: fault paths, re-entry, anything
 whose failure is "the wrong package closed". Say so when you choose it.
 
-## Step 5 - integrate
+## Step 5 - one QA testing run in emulation
 
-Merge each verified branch into the feature branch in the order that keeps
-conflicts smallest: docs-only and host-tool branches first, then packages, then
-kernel. Resolve each conflict by reading both sides; never take one side
-wholesale without checking what the other carried. Integrate in a worktree
-with a warm `build/`. After EACH merge, run a full `make` and the size checks
-for every budget the agents were given (package parts included). If the kernel
-changed, also run `tools/kernsize.py` and `make budget-check`. Two branches
-can each pass alone and fail together.
-Update the plan: tick what was SEEN, and leave open what was only built. Add
-new findings as new items.
+When every fan-out item is integrated, and not before, the lead runs ONE QA
+pass on the merged head, driving the real UI in emulation:
 
-## Step 6 - the final pass, once
+1. Build the head once. Boot it in QEMU on every adapter the feature reaches
+   (VGA, CGA, Hercules, and EGA where it has its own layout), with MartyPC
+   for what only the XT can answer (speed, memory on a 640 KiB 8088).
+2. Exercise each story's user-visible claim end to end: menus, keys, mouse,
+   dialogs, the files the feature exists for, and the refusal and low-RAM
+   paths. Compare each result with an independent reference wherever one
+   exists (a host tool's render, a known-good output file). Screenshot each
+   claim, cropped and zoomed.
+3. Write every defect into a QA list in the plan: what was done, what was
+   seen, what was expected, the adapter, the screenshot. Mark the stories
+   that passed `S`.
 
-1. Refresh any artefact a plain `make` leaves stale (for WIN16,
+This is a functional pass, not the soak union: the rows still run once, in
+Step 6.
+
+## Step 6 - the fix round, then the final pass, once
+
+1. Fix the QA list. Independent defects may fan out again under Steps 1-3,
+   one agent per file-disjoint group. Then re-run ONLY the QA cases that
+   failed.
+2. Refresh any artefact a plain `make` leaves stale (for WIN16,
    `make build/win16/DOS.O88`).
-2. Run ONE `os88test.py soak -k … -k …` over the deduplicated union of every
-   row the agents and verifiers named, with any Bochs rows in the container, in
-   parallel, and a Monitor on each run.
-3. Fix the failures and re-run only those rows.
-4. Run `make test-full` ALONE, with nothing else building, then
+3. Run ONE `os88test.py soak -k … -k …` over the deduplicated union of every
+   row the agents named, with any Bochs rows in the container, in parallel,
+   and a Monitor on each run.
+4. Fix the failures and re-run only those rows.
+5. Run `make test-full` ALONE, with nothing else building, then
    `make budget-check`.
-5. Push, rewrite the PR body (what works, what was seen versus built, the
-   rung record, the rows, what is left, and **screenshots of the merged head
-   on every adapter it reaches**, per CLAUDE.md *Pull requests show the
-   change*), and report to the user honestly, failures included. Merge only
-   on the user's instruction (`--admin`).
+6. Push, rewrite the PR body (what works, what was seen versus built, the
+   rung record, the rows, the QA list and what was fixed, what is left, and
+   **screenshots of the merged head on every adapter it reaches**, per
+   CLAUDE.md *Pull requests show the change*), and report to the user
+   honestly, failures included. Merge only on the user's instruction
+   (`--admin`).
 
 Clean up: remove each agent's worktree once its branch is merged. Stop every
 Monitor. Kill only the emulators this run started.

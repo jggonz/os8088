@@ -938,10 +938,12 @@ getting Windows to boot here cost.
 Building out a feature's **user stories or open items in parallel** - each
 independent item to a sub-agent of its own in its own worktree on a cheaper
 model, one shared brief, a Monitor armed on every long-running agent, each
-finished branch verified and improved by an Opus reviewer before it is
-integrated into the feature's PR, and the final pass run once - is
+finished branch integrated into the feature's PR as it lands with no review
+between steps, then ONE QA testing run in emulation once every feature is in,
+a fix round for what it finds, and the final pass run once - is
 `.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
-`LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
+`LESSONS.md` is what the WIN16 Phase B/C, WIN16-NEXT and PageDesk any-PDF
+rounds learned.
 
 ## Pull requests show the change
 
