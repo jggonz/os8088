@@ -111,6 +111,7 @@ static void col_set(pdw stroke, pdw r, pdw g, pdw b)
 static void col_apply(pdw stroke, pdw nop)
 {
     pdw a, b, c, k, base;
+    GS.pad_ &= stroke ? 0x0F : 0xF0;            /* a device colour ends a non-device space (pdrxg.c) */
     if (g_nop < nop) return;                 /* too few operands: ignored (10.6 is for features) */
     base = g_nop - nop;
     if (nop == 1) { a = fx_u8(&g_opn[base]); col_set(stroke, a, a, a); }
@@ -651,6 +652,8 @@ static pdw dash_ph(const struct pd_fx *v)
     q = (pdw)v->hi % per;
     return (pdw)((q * 4u + (v->lo >> 14)) % per);
 }
+#include "pdrxg.c"            /* gfx: colour spaces and shading (20.22.9) */
+
 static void exec_op(const char *s, pdw n)
 {
     pdw k = (pdw)((pdb)s[0] | (n > 1 ? ((pdb)s[1] << 8) : 0));
@@ -730,6 +733,7 @@ static void exec_op(const char *s, pdw n)
         case 'r' | ('g' << 8): col_apply(0, 3); GS.fncs = 3; break;
         case 'C' | ('S' << 8): case 'c' | ('s' << 8): {
             pdw st = (s[0] == 'C');
+            if (xg_cs(st)) break;
             if (g_havename && ci_has(g_name, "devicegray")) { if (st) GS.sncs = 1; else GS.fncs = 1; }
             else if (g_havename && ci_has(g_name, "devicergb")) { if (st) GS.sncs = 3; else GS.fncs = 3; }
             else if (g_havename && ci_has(g_name, "devicecmyk")) { if (st) GS.sncs = 4; else GS.fncs = 4; }
@@ -738,6 +742,7 @@ static void exec_op(const char *s, pdw n)
             break; }
         case 'S' | ('C' << 8): case 's' | ('c' << 8): {
             pdw st = (s[0] == 'S');
+            if (xg_sc(st, g_nop)) break;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "colour space");
             break; }
@@ -782,7 +787,7 @@ static void exec_op(const char *s, pdw n)
         case 'D' | ('o' << 8): do_xobject(); break;
         case 'B' | ('I' << 8): case 'I' | ('D' << 8): case 'E' | ('I' << 8): break;   /* pdri handles */
         case 'E' | ('X' << 8): case 'B' | ('X' << 8): case 'M' | ('P' << 8): case 'D' | ('P' << 8): break;
-        case 's' | ('h' << 8): inc_note(PDF_INC_SHADE, "shading"); break;
+        case 's' | ('h' << 8): xg_sh(); break;
         case 'd' | ('0' << 8): case 'd' | ('1' << 8): break;
         default: goto unknown;
         }
@@ -794,6 +799,7 @@ static void exec_op(const char *s, pdw n)
         if (k == ('E' | ('M' << 8)) && c2 == 'C') return;
         if ((k == ('S' | ('C' << 8)) || k == ('s' | ('c' << 8))) && c2 == 'N') {
             pdw st = (s[0] == 'S');
+            if (xg_sc(st, g_nop)) return;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "pattern colour");
             return;

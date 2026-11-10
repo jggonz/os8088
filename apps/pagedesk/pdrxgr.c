@@ -40,19 +40,19 @@ static void xg_shr(struct pd_fx *r, pdw k)      /* r >>= k (arithmetic), k < 16 
 }
 
 /* ---- axial: U = 255 s is linear in the pixel ------------------------------------- */
-static struct pd_fx xg_sa, xg_sb, xg_sc;    /* U(X, Y) = sa X + sb Y + sc          */
+static struct pd_fx xg_ua, xg_ub, xg_uc;    /* U(X, Y) = sa X + sb Y + sc          */
 
 static void xg_axial_row(pdi y, pdi rx0, pdi rx1)
 {
     pdi x = rx0, xe, dir;
     pdw idx, c, j, ext0 = xg_e.flags & PDGX_SH_EXT0, ext1 = xg_e.flags & PDGX_SH_EXT1;
-    dir = (xg_sa.hi < 0) ? -1 : ((xg_sa.hi == 0 && xg_sa.lo == 0) ? 0 : 1);
+    dir = (xg_ua.hi < 0) ? -1 : ((xg_ua.hi == 0 && xg_ua.lo == 0) ? 0 : 1);
     while (x <= rx1) {
-        pdm_fx_int(&xg_q0, x); pdm_fx_mul(&xg_q0, &xg_q0, &xg_sa); pdm_fx_add(&xg_q0, &xg_q0, &xg_q6);
+        pdm_fx_int(&xg_q0, x); pdm_fx_mul(&xg_q0, &xg_q0, &xg_ua); pdm_fx_add(&xg_q0, &xg_q0, &xg_q6);
         if (xg_q0.hi < 0) {                                 /* before the first stop */
             if (!ext0) {
                 if (dir <= 0) return;
-                pdm_fx_neg(&xg_q1, &xg_q0); pdm_fx_div(&xg_q1, &xg_q1, &xg_sa);
+                pdm_fx_neg(&xg_q1, &xg_q0); pdm_fx_div(&xg_q1, &xg_q1, &xg_ua);
                 x = (pdi)(x + pdm_fx_floor(&xg_q1) + 1); continue;
             }
             idx = 0;
@@ -60,7 +60,7 @@ static void xg_axial_row(pdi y, pdi rx0, pdi rx1)
             if (!ext1) {
                 if (dir >= 0) return;
                 pdm_fx_int(&xg_q1, 255); pdm_fx_sub(&xg_q1, &xg_q0, &xg_q1);
-                pdm_fx_neg(&xg_q2, &xg_sa); pdm_fx_div(&xg_q1, &xg_q1, &xg_q2);
+                pdm_fx_neg(&xg_q2, &xg_ua); pdm_fx_div(&xg_q1, &xg_q1, &xg_q2);
                 x = (pdi)(x + pdm_fx_floor(&xg_q1) + 1); continue;
             }
             idx = 255;
@@ -75,8 +75,8 @@ static void xg_axial_row(pdi y, pdi rx0, pdi rx1)
             /* U leaves the class at index j+1 (rising) or j (falling): the pixels until then */
             pdm_fx_int(&xg_q1, (pdi)(dir > 0 ? j + 1 : j));
             pdm_fx_sub(&xg_q1, &xg_q1, &xg_q0);
-            if (dir > 0) pdm_fx_div(&xg_q1, &xg_q1, &xg_sa);
-            else { pdm_fx_neg(&xg_q2, &xg_sa); pdm_fx_neg(&xg_q1, &xg_q1); pdm_fx_div(&xg_q1, &xg_q1, &xg_q2); }
+            if (dir > 0) pdm_fx_div(&xg_q1, &xg_q1, &xg_ua);
+            else { pdm_fx_neg(&xg_q2, &xg_ua); pdm_fx_neg(&xg_q1, &xg_q1); pdm_fx_div(&xg_q1, &xg_q1, &xg_q2); }
             xe = (pdi)(x + pdm_fx_floor(&xg_q1));
             if (xg_q1.lo == 0 && xe > x) xe--;
             if (xe < x) xe = x;
@@ -185,17 +185,17 @@ static void xg_shade_rows(pdw xoff, const struct pd_fx *m, pdi rx0, pdi rx1, pdi
         pdm_fx_mul(&K, &ux, &ux); pdm_fx_mul(&t, &uy, &uy); pdm_fx_add(&K, &K, &t);
         pdm_fx_mul(&K, &K, &big);                                   /* |d|^2 / big */
         pdm_fx_int(&t, 255); pdm_fx_div(&K, &K, &t);                /* ... / 255 */
-        pdm_fx_mul(&xg_sa, &xg_m[0], &ux); pdm_fx_mul(&t, &xg_m[1], &uy); pdm_fx_add(&xg_sa, &xg_sa, &t); pdm_fx_div(&xg_sa, &xg_sa, &K);
-        pdm_fx_mul(&xg_sb, &xg_m[2], &ux); pdm_fx_mul(&t, &xg_m[3], &uy); pdm_fx_add(&xg_sb, &xg_sb, &t); pdm_fx_div(&xg_sb, &xg_sb, &K);
-        pdm_fx_sub(&xg_sc, &xg_m[4], &xg_e.coords[0]); pdm_fx_mul(&xg_sc, &xg_sc, &ux);
-        pdm_fx_sub(&t, &xg_m[5], &xg_e.coords[1]); pdm_fx_mul(&t, &t, &uy); pdm_fx_add(&xg_sc, &xg_sc, &t);
-        pdm_fx_div(&xg_sc, &xg_sc, &K);
+        pdm_fx_mul(&xg_ua, &xg_m[0], &ux); pdm_fx_mul(&t, &xg_m[1], &uy); pdm_fx_add(&xg_ua, &xg_ua, &t); pdm_fx_div(&xg_ua, &xg_ua, &K);
+        pdm_fx_mul(&xg_ub, &xg_m[2], &ux); pdm_fx_mul(&t, &xg_m[3], &uy); pdm_fx_add(&xg_ub, &xg_ub, &t); pdm_fx_div(&xg_ub, &xg_ub, &K);
+        pdm_fx_sub(&xg_uc, &xg_m[4], &xg_e.coords[0]); pdm_fx_mul(&xg_uc, &xg_uc, &ux);
+        pdm_fx_sub(&t, &xg_m[5], &xg_e.coords[1]); pdm_fx_mul(&t, &t, &uy); pdm_fx_add(&xg_uc, &xg_uc, &t);
+        pdm_fx_div(&xg_uc, &xg_uc, &K);
         xg_q5.hi = 0; xg_q5.lo = 0x8000;                            /* 0.5: the pixel centre */
         for (y = y0; y <= y1; y++) {
             /* q6 = sb (y + .5) + sc + sa .5 */
-            pdm_fx_int(&xg_q6, y); pdm_fx_add(&xg_q6, &xg_q6, &xg_q5); pdm_fx_mul(&xg_q6, &xg_q6, &xg_sb);
-            pdm_fx_add(&xg_q6, &xg_q6, &xg_sc);
-            pdm_fx_mul(&t, &xg_sa, &xg_q5); pdm_fx_add(&xg_q6, &xg_q6, &t);
+            pdm_fx_int(&xg_q6, y); pdm_fx_add(&xg_q6, &xg_q6, &xg_q5); pdm_fx_mul(&xg_q6, &xg_q6, &xg_ub);
+            pdm_fx_add(&xg_q6, &xg_q6, &xg_uc);
+            pdm_fx_mul(&t, &xg_ua, &xg_q5); pdm_fx_add(&xg_q6, &xg_q6, &t);
             xg_axial_row(y, rx0, rx1);
         }
         return;
