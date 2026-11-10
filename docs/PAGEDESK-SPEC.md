@@ -4624,3 +4624,194 @@ lead, not fixed. A section named below is not edited; this one overrides it.
 - Which checks have **not** been run on anything but the host or QEMU, with
   what that does and does not show, is the guide's section 17; the contract's
   timing budgets (15.2) and memory ceilings (16.1) are PD-29's to state.
+
+### 20.21 The face (`face`, after the merge)
+
+The owner's word (2026-11-09): *"We just shipped PageDesk but the UI does not
+look like the design ... give PageDesk the look of the attached screenshot."*
+The screenshot is `docs/pagedesk/design/vga-workspace.png`; the face as first
+shipped is `docs/pagedesk/design/before-vga-qemu.png`. This section is the
+contract for the change and overrides 17.2, 17.6 and 20.6.4 where they differ.
+It is the vga-face and retro-face skills' method applied to a C package:
+fonts and icons generated on the host, every control's inside composed into
+one 1bpp band and put down with one `OSAPI_GFX_BLIT1`, and the frame drawn
+round it, so no pixel is written twice and an unchanged control is no call.
+
+#### 20.21.1 What the design asks for, and what the OS answers
+
+| the design shows | the build |
+|---|---|
+| bevelled buttons, a picture beside the caption | the bars of 20.21.4; the pictures are the kit's (20.21.2) |
+| a narrow slab typewriter face in the bars and panels | Liberation Mono at 10 px (bold for captions, regular for text) and 12 px bold for panel titles, from the strikes PDRES already carries (20.4.2), packed by `tools/os88pdfont.py` into the kit at a fixed 6 or 7 pixel advance |
+| the page field `3` and `of 12` beside it | two controls: the field and a label (`C_PGOF`) |
+| `Fit width` with a drop-down mark | the Fit control, captioned with the current fit (`Fit width`, `Fit page`, or `Zoom`), opening the zoom list as before |
+| Find and Print at the right end | Find at the right end. **No Print** (1.1) |
+| tools Select, Highlight, Note, Text, Draw, Shape with a drop-down, Sign | Draw is the Ink tool on the bar; Shape is the More control, renamed, whose list is unchanged (Mark, Ink, Line, Rectangle, Ellipse, Sign). It shows as active while its list's tool is the current one |
+| teal for the active mode, tool and tab | `OS88_CYAN` (the VGA palette's 00AAAAh: the package does not own the palette) |
+| a dark desk, the page with a shadow | `OS88_DGRAY`, and a 2-pixel black shadow right and below the page |
+| thumbnails with the number under each, the current one in a teal frame and a teal number box | 20.21.6 |
+| Notes & edits: a title, a filter drop-down, a card per item with a picture, a bold title line and the text, Reply and Resolve | 20.21.7. **No Reply**: PageDesk writes no reply annotation (20.20.2 item 4) |
+| the status line as three fields: changes, the page, the keys | 20.21.8 |
+| `PageDesk - XT-GUIDE.PDF *` | the kernel's title bar, unchanged |
+
+#### 20.21.2 The kit (`PDUK`, PDRES kind 9)
+
+`tools/os88pdfont.py build` packs a ninth kind into `PDRES.BIN` **right after
+the INDEX** (at `data_off`, before the strike data), so the read that loads
+the INDEX loads the kit with it:
+
+```
+'PDUK', u16 version (1), u16 font count f (3), u16 icon count n
+f x 8 bytes {u8 advance, u8 rows, u8 ascent, u8 glyph count g, u16 offset, u16 0}
+n x 32 bytes: 16 rows of a 16x16 icon, two bytes a row, bit 7 of the first
+               byte the leftmost pixel, 1 = ink
+font data: g glyphs x rows bytes, bit 7 leftmost, 1 = ink, a fixed advance
+```
+
+Fonts 0, 1 and 2 are Liberation Mono bold 10 px (captions), regular 10 px
+(text) and bold 12 px (titles). Glyph k is the code `32 + k` for k < 95; the
+five after it are the drawing marks the bars need, at CP437's codes so the
+kernel's 8x8 face draws the same mark when the kit is absent: `0x10` right
+triangle, `0x11` left triangle, `0x1F` down triangle, `0xFA` middle dot, `0x9E`
+a multiplication cross (the close box). A glyph whose ink is wider than the
+advance is refused by `check`. Icons are hand drawn as text in
+`apps/pagedesk/art/face.kit`; their order is the build's, and
+`$(BUILD)/pdkit.h` names them (`PK_I_*`) for the C. `check` refuses a kit
+whose icon count differs from the header the C was built with.
+
+The read: `PDU_INDEX_MAX` becomes the INDEX's 8 KiB **plus** the kit's
+(`PDU_KIT_MAX` = `PK_KIT_MAX`, 4.5 KiB, one constant in `tools/os88pdkit.py`), and D3's limit on the INDEX itself is unchanged.
+The claim also holds the band (20.21.3) after what was read. It is taken at
+LAUNCH, not at the first open, because the bars are drawn before any
+document is: the claim count is unchanged (it is the INDEX claim), and a
+claim refused at launch leaves the face on the kernel's 8x8 face with no
+pictures - a complete face, the one 20.6.4 describes.
+
+#### 20.21.3 The composer (`apps/pagedesk/pdkit.inc`, assembly, primary)
+
+Seven cdecl routines (SPEC.md 73.3) over one band in the claim:
+
+| routine | does |
+|---|---|
+| `pk_begin(w, h, x)` | a clear band `w` x `h` pixels (h <= 24) for a field whose left edge will be at screen `x`: the band starts on the byte column holding `x` and everything is composed `x & 7` pixels in, which is what SPEC.md 5.4.2.8's off-grid BLIT1 expects. Refuses (answers 0) a band wider than its 96-byte stride |
+| `pk_text(x, y, s, f)` | font `f`'s glyphs ORed in at band position x, y; answers the x after the last |
+| `pk_icon(x, y, k)` | icon `k`, ORed in, clipped to the band |
+| `pk_hline(x1, x2, y)` | a run of ink (an underline, the drop-down's rule) |
+| `pk_pen(y, ink, paper, grey)` | makes the band ready to go down at screen row y: on colour `OSAPI_GFX_BLIT1_PEN` (an inline cell); on a 1bpp display the pen is not read and a set bit is lit, so a greyed band is ANDed with the row's checkerboard and a band whose ink is not white is inverted (CDRack's rule; a greyed caption's `DGRAY` is black there). The C then puts it down with `os88_gfx_blit1_seg(pk_bseg, 0, pk_st, x, y, pk_w, pk_h)` - ONE drawing call, through the SDK's thunk as every other primary draw is (20.21.9) - and `pk_pen0()` puts the pen back to white on black, which the thumbnails' and the page's own BLIT1 bands are drawn with inside the same lock hold |
+| `pk_adv(f)` | font `f`'s advance: 6, 6, 7 with the kit, 8 without |
+
+Without the kit every font is the kernel's 8x8 table (`OSAPI_FONT_GLYPHS`,
+read once) and `pk_icon` draws nothing.
+
+#### 20.21.4 The bars
+
+FULL and MID: the file bar is 24 rows and the mode bar 22 (were 16 and 16);
+COMPACT keeps 12, the kernel face and no pictures. A bar is its `CLGRAY`
+ground with a white top rule and a dark-grey bottom rule; groups are parted by
+an etched pair of lines (dark grey, white). A control is one of four looks:
+
+| look | used for | drawn as | calls |
+|---|---|---|---|
+| raised | commands, modes, the drop-downs, panel buttons | black frame; white top and left inside it, dark grey bottom and right; the inside one band | 6 |
+| pressed / active | an active mode, a held button | black frame; dark grey top and left, the face colour bottom and right; the inside one band in `CYAN` with white ink (a held, inactive button: `CLGRAY`, black ink, shifted one pixel) | 6 |
+| flat tool | the mode's tools | inactive: no frame, the ground's colour round one band; active: black frame round a `CYAN` band | 2 |
+| field | the page and zoom fields | black frame round a white band | 2 |
+
+On a 1bpp display grey is white: raised is the frame with a black bottom and
+right inside it, and active is the band inverted. A greyed control is its
+caption in `DGRAY` (on 1bpp the kernel's disabled pen on the frame and a band
+ANDed with a checkerboard). The 20.6.4 cache stands: a control whose look,
+caption and state did not change is no call. Metrics: a caption and picture
+button is `4 + 4 + 16 + 3 + 6n + 4` wide, a picture alone 24, a caption alone
+`6n + 14`; a band is the control's inside, so the frame and bevel are the
+only pixels outside it.
+
+#### 20.21.5 The canvas
+
+The desk is `DGRAY` on colour and the 50% pattern on 1bpp, as before; the
+page gets a black shadow two pixels wide on its right and bottom, offset two
+pixels down and right, drawn with the desk (the four desk pieces become six
+round the page and its shadow). The vertical bar is os88ui's, unchanged.
+
+#### 20.21.6 The Pages panel
+
+`CLGRAY` with the tab row (Pages, Outline) as raised/active tabs, the list
+inside a sunken frame (dark grey top and left, white bottom and right). A
+thumbnail cell is the page's white with a black frame and a one-pixel dark
+grey shadow; the current page's cell has a two-pixel `CYAN` frame outside it
+and its number in a `CYAN` box with white ink, every other number black on the
+panel's grey. On 1bpp the current frame is black and the number inverted. The
+foot is `N pages` and the put-away button (a raised button with the left
+triangle).
+
+#### 20.21.7 Notes & edits
+
+The title `Notes & edits` in font 2, the close box a raised button with the
+cross; the filter a raised drop-down (`This page`, `All pages`, `Changes`
+with the down triangle). A card is white with a black frame: the kind's
+picture at its left (a note, a highlight, the T of a text box, the tool's
+picture for the rest), a bold title line (`Note`, the middle dot, `Page 3`)
+and up to two lines of the item's text in font 1; a note's card carries
+Resolve (or Reopen) as a raised button. The selected card's frame is two
+pixels of `CYAN` (black on 1bpp). Text properties keeps its rows (family,
+size, bold, italic, colour, align, Delete, Done) drawn in the same looks:
+drop-downs raised, B and I and the three alignments as raised/active
+buttons, Done raised in `CYAN` with white ink as the default.
+
+#### 20.21.8 The status line
+
+14 rows, `CLGRAY`, a white rule above. One band (font 0, black on grey) holds
+three fields: the message on the left (and, where the first build said
+`Page drawn.`, the changes: `No changes`, `N changes · Unsaved`, or the form
+note of 20.18.4), `Page n of N` in the middle, and the keys on the right
+(`Ctrl+S Save As | Esc Select`; `Ctrl+O Open` with no document). The first
+build's adapter name and geometry are no longer on the line; Help > Document
+info's `Layout:` row gives the layout and the content box it was chosen from.
+
+#### 20.21.9 What it cost, and the two decisions it took
+
+Measured on the build this section shipped with (image + bss, `.o88` header):
+
+| | before (c678c46d8) | the face | |
+|---|---|---|---|
+| primary | 52,810 + 6,393 = 59,203 | 57,324 + 6,793 = **64,117** | +4,914, 907 under `APP_MAX_SIZE` 65,024 |
+| overlay part | 48,318 | 48,490 | +172, of 49,152 |
+| `PDRES.BIN` | 77,828 | 82,084 | +4,256: the kit, 4,230 bytes (3 fonts x 100 glyphs, 28 icons) |
+| `PAGEDESK.O88` on disk | 218,295 | 225,711 | +7,416 |
+| the INDEX claim | <= 8 KiB + a cluster, at the first open | <= 12.5 KiB + a cluster + the 2,304-byte band, **at launch** | |
+
+**Decision 1: the primary passes D24's 59,392.** D24's figure was a planning
+cap that left room for the polish waves, and the primary was 189 bytes under it
+when the face began; there is no way to compose a control in one band without
+the composer (`pdkit.inc`, 899 bytes of code), the band painter
+(`pdu_ctl_paint` 1,692 bytes and `pdu_bandcap` 542, both C) and the panels'
+new looks.
+The hard limit is the loader's 65,024 for one claim (SPEC.md 20.1) and the
+face leaves 907 bytes of it. A later change that needs primary bytes takes
+them from here first: `pdu_ctl_paint` is the largest C function the face
+added and the first candidate for assembly.
+
+**Decision 2: the INDEX claim is taken at launch.** The bars are drawn before
+any document is open, so the kit has to be in memory before the first paint.
+The claim count does not change (it is the INDEX claim, D3), and a claim the
+heap refuses refuses the launch with `No memory for PageDesk`, before a window
+exists; a read that fails keeps the claim for the band and draws the kernel's
+8x8 face without pictures, which is a complete face.
+
+**The UI stack.** The Notes list's card button is the deepest drawing chain
+in the primary (`cc_onkey` through `ovl_nt_row` and `ovl_nt_box` to the
+composer). `ovl_nt_row`, `ovl_nt_box`, `pdu_ctl_paint` and `pdu_bandcap` keep
+their locals static and `pdu_bandcap` takes its thirteen arguments as the
+`pdu_bc_*` statics, so the chain is no deeper than the first build's: the
+pdstk gate's worst UI chain is 364 against 366 before (D22's 384). The band
+is put down through the C SDK's `os88_gfx_blit1_seg` rather than a direct
+`OSAPI_GFX_BLIT1` in `pdkit.inc`: that is how every other drawing call in the
+primary is made. **The gate does not charge those calls**: `tools/os88pdstk.py`
+reads the primary's source without expanding `CC_IMAGE_END`, the macro that
+includes `apps/cc/os88thunk.asm`, so a thunk's kernel call is "no body found"
+and costs 0, where a direct one costs KAPI's 156. The figures above are
+therefore frames only, for the first build's draws and the face's alike; a
+gate that charged them would need a KAPI measured for a drawing call (156 is
+`READ_SEQ`'s, with an `int 13h` and the IRQ0 progress widget under it) and is
+left for its own change.
+

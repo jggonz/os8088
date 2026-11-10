@@ -198,7 +198,7 @@ static void pdu_relayout(void)
     k = pdu_kind(pdu_sz.w, pdu_sz.h);
     pdu_layout(&pdu_L, pdu_pt.x, pdu_pt.y, pdu_sz.w, pdu_sz.h,
                pdu_want_side[k], pdu_want_notes[k], pdu_mode,
-               pdu_doc != D_OPEN);
+               pdu_doc != D_OPEN, pk_haskit());
     if (pdu_doc == D_OPEN)
         pdu_view_set();
     if (pdu_lw != pdu_sz.w || pdu_lh != pdu_sz.h || pdu_lx != pdu_pt.x

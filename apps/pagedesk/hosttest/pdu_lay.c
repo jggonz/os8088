@@ -43,6 +43,8 @@ static int overlap(const struct os88_rect *a, const struct os88_rect *b)
 
 static struct pdu_lay L;
 
+static int kit = 1;                     /* 20.21: with the face kit, and without */
+
 static void one(int w, int h, int side, int notes, int mode, int empty,
                 const char *tag)
 {
@@ -50,7 +52,7 @@ static void one(int w, int h, int side, int notes, int mode, int empty,
     struct os88_rect *reg[7];
     struct os88_rect cr, cj;
 
-    pdu_layout(&L, ox, oy, w, h, side, notes, mode, empty);
+    pdu_layout(&L, ox, oy, w, h, side, notes, mode, empty, kit);
     x2 = ox + w - 1; y2 = oy + h - 1;
     reg[0] = &L.bar1; reg[1] = &L.bar2; reg[2] = &L.side; reg[3] = &L.notes;
     reg[4] = &L.canvas; reg[5] = &L.sbar; reg[6] = &L.status;
@@ -118,6 +120,8 @@ int main(void)
     };
     int i, w, h, m;
 
+    for (kit = 1; kit >= 0; kit--) {
+    printf("-- %s the face kit --\n", kit ? "with" : "without");
     for (w = 320; w <= 720; w += 8)
         for (h = 100; h <= 460; h += 2)
             for (m = 0; m < 4; m++) {
@@ -130,7 +134,7 @@ int main(void)
             one(D[i].cw, D[i].ch, 1, 1, m, 1, D[i].name);
             one(D[i].cw, D[i].ch, 0, 1, m, 0, D[i].name);
         }
-        pdu_layout(&L, 8, 40, D[i].cw, D[i].ch, 1, 1, PDU_MODE_ANNOT, 0);
+        pdu_layout(&L, 8, 40, D[i].cw, D[i].ch, 1, 1, PDU_MODE_ANNOT, 0, kit);
         CHECK(L.kind == D[i].kind, "%s: kind %d, expected %d", D[i].name, L.kind, D[i].kind);
         printf("%-17s content %dx%d: kind %s, canvas %dx%d, side %s, notes %s, %d controls\n",
                D[i].name, D[i].cw, D[i].ch,
@@ -140,11 +144,20 @@ int main(void)
         /* every mode's tools are on the glass in that mode at that display */
         for (m = 0; m < 4; m++) {
             const int *t;
-            pdu_layout(&L, 8, 40, D[i].cw, D[i].ch, 1, 1, m, 0);
-            for (t = pdu_tools(m, L.kind == PDU_L_COMPACT); *t; t++)
+            pdu_layout(&L, 8, 40, D[i].cw, D[i].ch, 1, 1, m, 0, kit);
+            for (t = pdu_bartools(m, L.kind == PDU_L_COMPACT); *t; t++)
                 CHECK(pdu_find(&L, *t) >= 0, "%s mode %d: tool %d not laid out", D[i].name, m, *t);
             CHECK(pdu_find(&L, C_M_READ + m) >= 0, "%s mode %d: its tab is missing", D[i].name, m);
         }
+    }
+    /* 20.21.1: the design's file bar is whole at 640 with the kit */
+    if (kit) {
+        static const int want[] = { C_OPEN, C_SAVEAS, C_UNDO, C_REDO, C_PREV, C_PAGE,
+                                    C_PGOF, C_NEXT, C_ZOUT, C_ZOOM, C_ZIN, C_FIT, C_FIND, 0 };
+        pdu_layout(&L, 8, 40, 640, 416, 1, 1, PDU_MODE_ANNOT, 0, 1);
+        for (i = 0; want[i]; i++)
+            CHECK(pdu_find(&L, want[i]) >= 0, "VGA: file bar control %d missing", want[i]);
+    }
     }
     printf("pdu_lay: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;

@@ -68,7 +68,15 @@ million boxes (`pdlay`).
 The **status line** is where PageDesk talks: progress ("Drawing page 4 - Esc
 cancels"), outcomes ("Saved X"), and, whenever a control is greyed, the reason
 if you press it anyway ("Open a document first.", "This is the last page.").
-Every button is either live or greyed with a stated reason.
+When a page has been drawn it says what is unsaved ("3 changes · Unsaved",
+"No changes"); its middle says the page and its right end the two keys you
+most need. Every button is either live or greyed with a stated reason.
+
+On the full and mid layouts the bars are drawn with pictures beside their
+captions, in the compact typewriter face PageDesk carries for its pages
+(Liberation Mono), with the active mode and tool in teal (SPEC 20.21). The
+compact layout keeps the system's 8x8 face and captions only: CGA's bar is
+12 lines tall.
 
 ### Adapters
 
@@ -90,7 +98,7 @@ Four modes, F5 to F8 or the buttons (Document menu):
 | mode | key | tools (keys 1-6 pick them in this order) |
 |---|---|---|
 | Read | F5 | Select |
-| Annotate | F6 | Select, Highlight, Note, Text, Mark, More (Ink, Line, Rectangle, Ellipse, Sign) |
+| Annotate | F6 | Select, Highlight, Note, Text, Mark, More (Ink, Line, Rectangle, Ellipse, Sign) - on the full and mid bars these read Select, Highlight, Note, Text, Draw (Ink), Shape and Sign, and Mark, Line, Rectangle and Ellipse are in Shape's list; the keys keep this order, so 5 is Mark and 6 opens the list |
 | Edit | F7 | Select, Text, Delete |
 | Pages | F8 | Rotate L, Rotate R, Delete, Blank, Extract |
 

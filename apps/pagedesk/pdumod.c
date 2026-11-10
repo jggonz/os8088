@@ -81,7 +81,10 @@ static unsigned pdu_bank;               /* ...and the part's first byte in it */
 static unsigned pdu_bankkb;
 static unsigned pdu_banklen;            /* the INDEX's bytes (kind 7) */
 #define PDU_INDEX_MAX 8192u             /* D3: the INDEX is at most 8 KiB */
+#define PDU_KIT_MAX   PK_KIT_MAX        /* 20.21.2: ...and the kit after it */
+#define PDU_BAND_BYTES 2304u            /* pdkit.inc's band: 96 x 24 */
 #define PDU_RES_KIND_INDEX 7            /* 20.4.1's directory kinds */
+#define PDU_RES_KIND_KIT 9
 static struct pdxb_fontbank pdu_xfb;
 
 static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, D9) */
@@ -160,6 +163,7 @@ static int pdu_minit(int m)
 
 /* launch: header checks, the exchange block, INIT with no document set.
  * 0 = ready; else a toast has said why and the launch is refused. */
+static int pdu_bank_load(void);
 static int pdu_mod_launch(void)
 {
     struct os88_video *v;
@@ -183,6 +187,14 @@ static int pdu_mod_launch(void)
     pdu_xinit.bpp = pdu_bpp >= 4 ? 4 : 1;
     if (pdu_minit(PDU_M_ENG) != 0 || pdu_minit(PDU_M_REND) != 0) {
         os88_toast("A PageDesk module failed", 0);
+        pdu_mod_quit();
+        return -1;
+    }
+    /* 20.21.2: the INDEX and the face kit, at launch - the bars are drawn
+     * before any document is. Only a refused claim refuses the launch: the
+     * band lives in it */
+    if (pdu_bank_load() == PDE_NOMEM) {
+        os88_toast("No memory for PageDesk", 0);
         pdu_mod_quit();
         return -1;
     }
@@ -239,6 +251,7 @@ static void pdu_mod_quit(void)
     pdu_doc_free();
     pdu_wrt_out();
     if (pdu_bankraw) {
+        pk_init(0, 0);                  /* no band: nothing more is drawn */
         os88_mem_free(pdu_bankraw);
         pdu_bankraw = 0;
         pdu_bank = 0;
@@ -281,8 +294,8 @@ static int pdu_bank_load(void)
     if ((len & 15) != 0
         || pdu_part_off(PDU_PART_RES2) != para + (len >> 4))
         return PDE_LIMIT;
-    if (len > PDU_INDEX_MAX)            /* the INDEX is what is read */
-        len = PDU_INDEX_MAX;
+    if (len > PDU_INDEX_MAX + PDU_KIT_MAX)  /* the INDEX and the kit (20.21.2) */
+        len = PDU_INDEX_MAX + PDU_KIT_MAX;
     clus = os88_disk_cluster_sectors();
     if (clus <= 0)
         clus = 1;
@@ -302,9 +315,11 @@ static int pdu_bank_load(void)
     cap = (cap + clus - 1) & ~(clus - 1);
     if (cap < slack + len)
         return PDE_LIMIT;
-    pdu_bankraw = os88_mem_claim_p((cap + 15) >> 4);
+    /* the face's band rides after what is read (20.21.3) */
+    pdu_bankraw = os88_mem_claim_p((cap + PDU_BAND_BYTES) >> 4);
     if (pdu_bankraw == 0)
         return PDE_NOMEM;
+    pk_init(0, os88_seg_sub(pdu_bankraw, cap >> 4, PDU_BAND_BYTES >> 4));
     os88_file_here(&here);
     r = 0;
     if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) != 0)
@@ -326,20 +341,32 @@ static int pdu_bank_load(void)
             n = pdu_peekw(pdu_bank, 6);
             for (i = 0; i < n && 8 + i * 12 + 12 <= len; i++) {
                 e = 8 + i * 12;
+                if (pdu_peekw(pdu_bank, e + 6) != 0
+                    || pdu_peekw(pdu_bank, e + 10) != 0)
+                    continue;           /* an offset or length past 64 KiB */
                 if (pdu_peekw(pdu_bank, e) == PDU_RES_KIND_INDEX
-                    && pdu_peekw(pdu_bank, e + 4) == 0
-                    && pdu_peekw(pdu_bank, e + 6) == 0
-                    && pdu_peekw(pdu_bank, e + 10) == 0) {
+                    && pdu_peekw(pdu_bank, e + 4) == 0) {
                     pdu_banklen = pdu_peekw(pdu_bank, e + 8);
                     r = pdu_banklen && pdu_banklen <= len ? 0 : PDE_LIMIT;
-                    break;
                 }
+                /* the kit: on a paragraph, inside what was read */
+                if (pdu_peekw(pdu_bank, e) == PDU_RES_KIND_KIT
+                    && (pdu_peekw(pdu_bank, e + 4) & 15) == 0
+                    && pdu_peekw(pdu_bank, e + 8) != 0
+                    && pdu_peekw(pdu_bank, e + 4) <= len
+                    && pdu_peekw(pdu_bank, e + 8) <= len - pdu_peekw(pdu_bank, e + 4))
+                    pk_init(os88_seg_sub(pdu_bankraw,
+                                         (slack + pdu_peekw(pdu_bank, e + 4)) >> 4,
+                                         (pdu_peekw(pdu_bank, e + 8) + 15) >> 4),
+                            os88_seg_sub(pdu_bankraw, cap >> 4,
+                                         PDU_BAND_BYTES >> 4));
             }
         }
     }
     if (r) {
-        os88_mem_free(pdu_bankraw);
-        pdu_bankraw = 0;
+        /* the claim stays for the face's band: no fonts, no pictures and no
+         * bank, which the renderer survives (D3) */
+        pk_init(0, os88_seg_sub(pdu_bankraw, cap >> 4, PDU_BAND_BYTES >> 4));
         pdu_bank = 0;
         return r;
     }

@@ -97,6 +97,8 @@
 
 %include "pagedesk/pdui.inc"        ; the seam: module vectors, part rows,
                                     ; the read by offset, the scroll bar
+%include "pagedesk/pdkit.inc"       ; the face's composer: one band, one
+                                    ; BLIT1 a control (PAGEDESK-SPEC 20.21.3)
 %include "pagedesk/pdstk.inc"       ; pdu_mcall on the private module stack
                                     ; (PAGEDESK-SPEC 20.15, D23)
 %include "weave/wfetch.inc"         ; THE lazy-part door, fetched from HOME
