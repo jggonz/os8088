@@ -775,6 +775,11 @@ cs_entry:
                                     ; card. The entry proc is UI-task context
                                     ; - it is what opens the window - so the
                                     ; file slots are legal here
+    clc                             ; ...and its CF is the READ's, not ours:
+                                    ; no settings file yet answers CF = 1, and
+                                    ; the loader would hear a refused launch
+                                    ; (the six setters that stood here cleared
+                                    ; it until R14 moved them into cs_cls)
 .full:
     pop di
     pop si
