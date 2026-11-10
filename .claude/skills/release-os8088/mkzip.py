@@ -474,11 +474,13 @@ ITEMS = [
      "changes, which it saves under a new name and never over the original. "
      "It is made for a PC with 640KB of memory. Each disk carries the program and eight sample "
      "PDFs, one of them a guide to PageDesk itself; all but the 360KB disk "
-     "also carry the extra font sizes. PDFONTS.TXT on the disk is the "
+     "also carry the extra font sizes. At 360KB the program and two samples "
+     "fill one disk, and the second 360KB disk carries every sample. PDFONTS.TXT on the disk is the "
      "licence of the fonts it uses. PageDesk is on the everything sets and "
      "the live media too.",
      [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
-      ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", "")]),
+      ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", ""),
+      ("pagedesk360b.img", "360KB", "the samples")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -539,6 +541,7 @@ DEST = {
     "os8088-720.img": "720K/OS88-720.IMG",
     "apps720.img": "720K/APPS-720.IMG",
     "more720.img": "720K/MORE-720.IMG",
+    "pagedesk360b.img": "PROGRAMS/PAGEDESK/PDESK36B.IMG",   # PDESK360's second
     "small720.img": "720K/128K-RAM/OS88-720.IMG",
     "os8088-360.img": "360K/OS88-360.IMG",
     "apps360.img": "360K/APPS-360.IMG",

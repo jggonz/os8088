@@ -129,6 +129,11 @@ DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "win16.img", "win16-120.img", "win16-720.img", "win16-360.img",
                # ...and ARCADE's release floppy (ARCADE-SPEC 1.6), DATA images
                "arcrel.img", "arcrel120.img", "arcrel720.img", "arcrel360.img"]
+# ON-DEMAND data images, read when they have been built: PageDesk's own
+# disks (`make pagedeskdisk`), the 360KB pair among them (PAGEDESK-SPEC
+# 20.22.2.8)
+OPTIONAL_DATA = ["pagedesk.img", "pagedesk120.img", "pagedesk720.img",
+                 "pagedesk360.img", "pagedesk360b.img"]
 
 
 class Vol:
@@ -368,8 +373,13 @@ def main():
     small = read(os.path.join(build, "smallk", "kernel.sys"))
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES + DEBUG_IMAGES] +
                            [(i, "small") for i in SMALL_SYSTEM_IMAGES] +
-                           [(i, False) for i in DATA_IMAGES]):
+                           [(i, False) for i in DATA_IMAGES] +
+                           [(i, None) for i in OPTIONAL_DATA]):
         p = os.path.join(build, img)
+        if is_system is None:
+            if not os.path.exists(p):
+                continue
+            is_system, seen = False, seen - 1   # read, not counted below
         if not os.path.exists(p):
             check(False, "%s is missing" % img, "run `make` first")
             continue
