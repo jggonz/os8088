@@ -7018,7 +7018,8 @@ dos_hk_bind:
     ret
 
 ; --- dos_hk_claim / dos_hk_free - DHK_CLAIM/DHK_FREE: the host's heap --------
-; in:  AX = KB; out: DX = the base segment, CF=1 refused / in: DX = it back
+; in:  AX = PARAGRAPHS; out: DX = the base segment, CF=1 refused / in: DX
+; = it back
 ;
 ; The kernel's heap, which is the windowed host's and no other's: under
 ; `kern_dos` the program owns everything above the floor and there is nothing

@@ -1480,6 +1480,7 @@ pt_alloc_clip:
 ; in:  AX = paragraphs a Copy is about to need
 ; out: CF=0 the claim is big enough (it may have been replaced), CF=1 it could
 ;      not be grown and the old one is still intact; preserves all registers
+;      but BX (OSAPI_MEM_P's verb, when it claims)
 ;
 ; The clipboard starts with NO claim (SPEC.md 42.6.6) and is claimed here, by
 ; the first Copy, at the size it holds; a later bigger one grows it. Growing
@@ -14059,7 +14060,8 @@ pt_stage:
 ; -----------------------------------------------------------------------------
 ; pt_stagefit - shrink the staging claim to the bytes actually read
 ; in:  [pt_fsz] = the 32-bit size
-; out: nothing (all registers and the flags preserved)
+; out: nothing (every register but BX - OSAPI_MEM_P's verb, which pt_load,
+;      the one caller, banks - and the flags preserved)
 ;
 ; A shrink always succeeds in place (SPEC.md 50.3.1), so this cannot fail and
 ; cannot move the buffer. It matters because pt_adopt runs next and wants a

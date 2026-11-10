@@ -173,8 +173,9 @@ hg_entry:
     call hg_hex4
     call hg_nl
     ; --- C: every free KB in one claim ---------------------------------------
-    mov ax, [hg_big]
-    call OSAPI_MEM_HUGE
+    xor bx, bx                      ; THE ASK READS BX (64KB windows): BL is
+    mov ax, [hg_big]                ; XMEM_CAPS's count here, and BX = 4 is
+    call OSAPI_MEM_HUGE             ; MEMH_REGROW (kernel size pass 19)
     mov bx, cx                      ; (the step: CL is the failure's code)
     mov cl, 0x02
     jc .no

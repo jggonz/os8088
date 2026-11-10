@@ -108,6 +108,10 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 3
     jc .no
+    xor bx, bx                      ; THE ASK READS BX (64KB windows): the
+                                    ; REGROW above left BL = MEMP_REGROW, and
+                                    ; BX = 4 is MEMH_REGROW (kernel size pass
+                                    ; 19, clobber.md)
     mov ax, 200                     ; --- OSAPI_MEM_HUGE: 200KB, four pieces
     call OSAPI_MEM_HUGE             ; walked by the step it answers (KERN-
     mov [mh_hstep], cx              ; MEGA-PLAN 14.1 answers 6, 7)
@@ -161,6 +165,7 @@ mh_entry:
     call OSAPI_MEM_FREE
     mov cl, 0x32
     jc .no
+    xor bx, bx                      ; (BX read again: a bridge answers in it)
     mov ax, 200                     ; ...and the FREE gave the whole run back:
     call OSAPI_MEM_HUGE             ; the same claim again lands on the same
     mov cl, 0x33                    ; first selector, which it cannot if the
