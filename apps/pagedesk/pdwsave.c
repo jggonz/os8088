@@ -112,11 +112,13 @@ static pdw eng_get(void)
 #else
     g_rc.dseg = pd_ds(); g_rc.doff = (pdw)g_pg;
 #endif
-    g_rc.dmax = PDW_PGBUF; g_rc.got = 0;
+    g_rc.dmax = PDW_PGBUF; g_rc.got = 0; g_rc.mode = PDRC_PLAIN;      /* 20.22.4.2 */
+    g_snum = eg_num; g_sgen = eg_gen;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
     pdw_in_src(); r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0); pdw_in_tgt();
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
+    g_sflag = (pdw)((g_rc.mode & PDRC_STRCIPHER) != 0);        /* the dictionary's strings are ciphertext (20.22.4.2) */
     sc_n = g_rc.got;
     if (sc_n > PDW_PGBUF) return PDE_LIMIT;
 #ifdef PD_HOST
@@ -132,7 +134,7 @@ static pdw eng_get(void)
 #else
     g_rc.doff = (pdw)(g_pg + PDW_PGBUF);
 #endif
-    g_rc.dmax = 8; g_rc.got = 0;
+    g_rc.dmax = 8; g_rc.got = 0; g_rc.mode = PDRC_PLAIN;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
     pdw_in_src(); r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0); pdw_in_tgt();
     if (pdw_engcf) return r ? r : PDE_XREF;
@@ -171,6 +173,91 @@ static pdw eng_pageinfo(pdw idx)
     pd_fcopy_in(g_xb, 0, &g_pi, sizeof g_pi);
     sv_pgidx = idx;
     return PDE_OK;
+}
+
+
+/* ---- the file key and the trailer of an encrypting save (20.22.4.3, .1) -------- */
+/* CRYPTINFO's answer is read in place in the exchange block (the key and the
+ * methods are peeked at their offsets in pdxb_crypt) */
+#ifdef PD_HOST
+#define EC_OFF(f) ((pdw)(unsigned long)&((struct pdxb_crypt *)0)->f)
+#else
+#define EC_OFF(f) ((pdw)&((struct pdxb_crypt *)0)->f)
+#endif
+static pdw g_ceff, g_cem;               /* the held /EncryptMetadata and embedded-file method */
+static struct pdxb_wkeys g_fk;          /* the foreign files' keys, from plat's pre-flight */
+#define CR_ON(m) ((m) == PDCM_RC4 || (m) == PDCM_AESV2 || (m) == PDCM_AESV3)
+static void enc_wipe(void)
+{
+    pdw k;
+    for (k = 0; k < (pdw)sizeof g_cop; k++) ((pdb *)&g_cop)[k] = 0;
+    g_enc = g_encs = g_ence = 0; g_cenc = 0;
+    for (k = 0; k < (pdw)sizeof g_sk; k++) ((pdb *)&g_sk)[k] = 0;
+    g_sflag = 0;
+}
+static pdw enc_info(void)               /* CRYPTINFO into the exchange block */
+{
+    pdw r = pdw_engcall(PDV_ENG_CRYPTINFO, 0, 0, 0);
+    return pdw_engcf ? (r ? r : PDE_ENCRYPT) : PDE_OK;
+}
+/* the SOURCE's key from the engine's CRYPTINFO (the document is open and keyed) */
+static pdw sk_info(void)
+{
+    pdw r = enc_info();
+    if (r) return r;
+    pd_fcopy_in(g_xb, EC_OFF(key), g_sk.key, 32);
+    g_sk.klen = pd_fpeekw(g_xb, EC_OFF(key_len));
+    if (!g_sk.klen || g_sk.klen > 32) return PDE_ENCRYPT;
+    g_sk.str = pd_fpeekw(g_xb, EC_OFF(str));
+    if (!g_sk.str && !pd_fpeekw(g_xb, EC_OFF(stm))) g_sk.str = PDCM_RC4;
+    g_sk.on = 1;
+    return PDE_OK;
+}
+static char g_ecd[640]; static pdw g_ecdn;         /* a DIRECT /Encrypt dictionary's text (20.22.4.1) */
+static pdw enc_setup(void)
+{
+    pdw r, k;
+    enc_wipe();
+    if (!g_tr.encrypt_num && !(g_tr.tflags & PDTR_ENCDIRECT)) return PDE_OK;
+    if (!g_tr.encrypt_num) {                            /* a direct /Encrypt: its dictionary text (20.22.4.1) */
+        r = eng_raw(PDRC_ENCDICT, 0); if (r) return PDE_ENCRYPT;
+        if (sc_n < 4 || sc_n > (pdw)sizeof g_ecd || g_pg[0] != '<' || g_pg[1] != '<') return PDE_ENCRYPT;
+        for (k = 0; k < sc_n; k++) g_ecd[k] = g_pg[k];   /* the source is closed by the time the trailer is written */
+        g_ecdn = sc_n;
+    }
+    r = enc_info(); if (r) return r;
+    pd_fcopy_in(g_xb, EC_OFF(key), g_cop.key, 32);
+    g_cop.key_len = pd_fpeekw(g_xb, EC_OFF(key_len));
+    if (!g_cop.key_len || g_cop.key_len > 32 || !pd_fpeekw(g_xb, EC_OFF(auth))) return PDE_ENCRYPT;   /* the engine holds no key */
+    g_cmstm = pd_fpeekw(g_xb, EC_OFF(stm)); g_cmstr = pd_fpeekw(g_xb, EC_OFF(str));
+    g_ceff = pd_fpeekw(g_xb, EC_OFF(eff)); g_cem = pd_fpeekw(g_xb, EC_OFF(encmeta));
+    if (!g_cmstm && !g_cmstr) g_cmstm = g_cmstr = PDCM_RC4;      /* V1, V2: RC4 for both */
+    g_enc = 1; g_encs = (pdw)CR_ON(g_cmstr); g_ence = (pdw)CR_ON(g_cmstm);
+    r = sk_info(); if (r) return r;
+    for (k = 0; k < 8; k++)             /* the IV state's seed (cr_iv) */
+        g_ivs[k] = pdm_crc16((pdw)(0xA5A5u + k), g_tr.id0, 16);
+    g_ivs[0] ^= pdm_crc16(0xFFFF, pdw_date, pw_len(pdw_date));
+    return PDE_OK;
+}
+/* SETKEY after a document is half-open on a file that needs a key: CRYPTINFO
+ * (the engine's recorded /Encrypt) into the block, then the key and the methods
+ * poked in beside it. Used for the OUTPUT (job_vfy, the held key) and for a
+ * foreign file (fw_open, the key plat's pre-flight derived). */
+static pdw enc_setkey(const pdb *key, pdw klen, pdw stm, pdw str, pdw eff, pdw em)
+{
+    pdw r = enc_info();
+    if (r) return r;
+    pd_fcopy_out(key, g_xb, EC_OFF(key), 32);
+    pd_fpokew(g_xb, EC_OFF(key_len), klen); pd_fpokew(g_xb, EC_OFF(auth), PDCA_USER);
+    pd_fpokew(g_xb, EC_OFF(stm), stm); pd_fpokew(g_xb, EC_OFF(str), str);
+    pd_fpokew(g_xb, EC_OFF(eff), eff); pd_fpokew(g_xb, EC_OFF(encmeta), em);
+    pd_fpokew(g_xb, EC_OFF(state), 0);
+    r = pdw_engcall(PDV_ENG_SETKEY, 0, 0, 0);
+    return pdw_engcf ? (r ? r : PDE_ENCRYPT) : PDE_OK;
+}
+static pdw enc_rekey(void)
+{
+    return enc_setkey(g_cop.key, g_cop.key_len, g_cmstm, g_cmstr, g_ceff, g_cem);
 }
 
 /* ---- the scan of the edit store ------------------------------------------- */
@@ -318,13 +405,13 @@ static pdw cat_patch(void)
         return PDE_OK;
     pw_obj(g_tr.root_num, g_tr.root_gen);
     if (f) {
-        pb_n(g_pg + ds, (pdw)(sc_vs - ds));
+        pb_src(g_pg + ds, (pdw)(sc_vs - ds));
         pb_s(sv_catver == 15 ? "/1.5" : "/1.4");
-        pb_n(g_pg + sc_ve, (pdw)(sc_close + 2 - sc_ve));
+        pb_src(g_pg + sc_ve, (pdw)(sc_close + 2 - sc_ve));
     } else {
-        pb_n(g_pg + ds, (pdw)(sc_close - ds));
+        pb_src(g_pg + ds, (pdw)(sc_close - ds));
         pb_s(sv_catver == 15 ? " /Version /1.5 " : " /Version /1.4 ");
-        pb_n(g_pg + sc_close, 2);
+        pb_src(g_pg + sc_close, 2);
     }
     pb_s("\n"); pw_endobj();
     return PDE_OK;
@@ -357,7 +444,7 @@ static pdw an_prep(pdw i)
             n = (pdw)(sc_ve - sc_kpos);                 /* "/Key value"          */
             if (n >= (pdw)(sizeof g_keep - g_keepn)) continue;
             pw_cpy(g_keep + g_keepn, g_pg + sc_kpos, n);
-            g_keepn = (pdw)(g_keepn + n); g_keep[g_keepn++] = ' ';
+            g_keepn = (pdw)(g_keepn + n); g_keep[g_keepn++] = ' '; g_keepsf = g_sflag; g_keepsn = g_snum; g_keepsg = g_sgen;
             if (k == 0) g_keepf |= KEEP_NM;
             if (k == 1) g_keepf |= KEEP_T;
         }
@@ -386,7 +473,7 @@ static pdw an_run(void)
         pb_flush(); g_mode = 1; pdm_u32_set(&g_cnt, 0, 0); bl_reset(); an_sub = AS_COUNT;
         break;
     case AS_COUNT:
-        if (ap_step()) { pb_flush(); u32cp(&ap_len, &g_cnt); g_mode = 0; an_sub = AS_HEAD; }
+        if (ap_step()) { pb_flush(); u32cp(&ap_len, &g_cnt); cs_len(&ap_len); g_mode = 0; an_sub = AS_HEAD; }
         break;
     case AS_HEAD:
         ap_head(tg(T_OAPN, i)); bl_reset(); an_sub = AS_BODY;
@@ -482,6 +569,8 @@ static pdw job_verify(void)
 static void job_clear(void)
 {
     sv_active = 0; sv_phase = PH_IDLE; g_err = 0; g_created = 0; g_wpos = 0; g_lnn = 0; sv_pgidx = 0xFFFF; g_mode = 0; an_sub = AS_START;
+    enc_wipe();               /* the file key does not outlive the job (20.22.4.3) */
+    for (g_esn = 0; g_esn < (pdw)sizeof g_fk; g_esn++) ((pdb *)&g_fk)[g_esn] = 0;
 }
 static pdw job_fail(pdw err)
 {
@@ -510,7 +599,7 @@ static pdw job_begin(pdw kind)
     if (sv_cnt && !g_edseg) return PDE_NOMEM;           /* D2: a claim of 0 is no claim */
     if (kind != 1 && !pdw_engvec[1]) return PDE_NOMEM;  /* no PDENG to read the source  */
     sv_xbad = 0; sv_catver = 0; sv_xi = 0; sv_i = 0; sv_xstart = 0; sv_copyw = 0; sv_sub = 0; sv_coff = 0; g_io = 0; an_sub = AS_START; sv_flushed = 0; sv_vstage = 0;
-    sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0;
+    sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0; enc_wipe();
     gc_ins = 0; gc_b0 = 4; fg_has = 0; fg_next = 0; fg_stage = 0; fg_closed = 0; fg_pages = 0;
     pdm_u32_set(&sv_total, 0, 0);
     if (kind == 2) {                                    /* Extract (13.8) */
@@ -518,6 +607,7 @@ static pdw job_begin(pdw kind)
         if (sv_npages < 1 || sv_npages > PDM_MAXMAP) return PDE_RANGE;
         if (!sv_pgseg) return PDE_NOMEM;
         r = eng_trailer(); if (r) return r;
+        if (g_tr.encrypt_num || (g_tr.tflags & PDTR_ENCDIRECT)) { r = sk_info(); if (r) return r; }   /* strings come as ciphertext */
         for (i = 0; i < sv_npages; i++) {
             e = pd_fpeekw(sv_pgseg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
             if ((k != PDM_SRC && k != PDM_BLANK) || idx >= PD_MAXPAGES) { g_sv.err_detail = 14; return PDE_RANGE; }
@@ -543,6 +633,7 @@ static pdw job_begin(pdw kind)
     }
     if (!fresh) {
         r = eng_trailer(); if (r) return r;
+        r = enc_setup(); if (r) return r;
         r = eng_fingerprint(); if (r) return r;
         g_nm_hi = g_fp.crc_head; g_nm_lo = (pdw)(g_fp.crc_tail ^ g_fp.size.lo);
         u32cp(&sv_srcsize, &g_fp.size);
@@ -656,7 +747,10 @@ static pdw job_vfy(void)
     if (sv_vf == 1) {                                   /* OPEN is resumable (D11) */
         pd_fcopy_out(&g_op, g_xb, 0, sizeof g_op);
         r = pdw_engcall(PDV_ENG_OPEN, 0, 0, 0);
-        if (pdw_engcf) return r ? r : PDE_SYNTAX;
+        if (pdw_engcf) {
+            if (r == PDE_PASSWORD && g_enc) { pd_fcopy_in(g_xb, 0, &g_op, sizeof g_op); return enc_rekey(); }
+            return r ? r : PDE_SYNTAX;
+        }
         pd_fcopy_in(g_xb, 0, &g_op, sizeof g_op);
         if (r == PDE_BUSY) return PDE_OK;
         if (g_op.size.lo != g_pos.lo || g_op.size.hi != g_pos.hi) return PDE_TRUNC;
@@ -681,7 +775,7 @@ static pdw job_vfy(void)
 #else
         g_rc.dseg = pd_ds(); g_rc.doff = (pdw)g_sc;
 #endif
-        g_rc.dmax = 16; g_rc.got = 0;
+        g_rc.dmax = 16; g_rc.got = 0; g_rc.mode = PDRC_EXACT;
         pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
         r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0);
         if (pdw_engcf) return r ? r : PDE_XREF;
@@ -853,12 +947,18 @@ static pdw job_slice(void)
                 else {
                     pb_s(" /Root "); pb_u(g_tr.root_num); pb_c(' '); pb_u(g_tr.root_gen); pb_s(" R");
                     if (g_tr.info_num) { pb_s(" /Info "); pb_u(g_tr.info_num); pb_c(' '); pb_u(g_tr.info_gen); pb_s(" R"); }
+                    if (g_enc && g_tr.encrypt_num) { pb_s(" /Encrypt "); pb_u(g_tr.encrypt_num); pb_c(' '); pb_u(g_tr.encrypt_gen); pb_s(" R"); }
+                    else if (g_enc) {       /* direct: copied as the file has it (O, U are never enciphered) */
+                        pb_s(" /Encrypt "); pb_n(g_ecd, g_ecdn);
+                    }
                 }
                 id_make();
                 pb_s(" /ID ");
                 pb_c('[');
                 if (!sv_fresh && g_tr.id0_len) {
-                    pb_c('<'); for (k = 0; k < g_tr.id0_len && k < 16; k++) pb_hex2(g_tr.id0[k]); pb_c('>');
+                    pb_c('<');     /* the whole /ID[0], up to 32 bytes: it is an input of the key */
+                    for (k = 0; k < g_tr.id0_len && k < 32; k++) pb_hex2(k < 16 ? g_tr.id0[k] : g_tr.id0_hi[k - 16]);
+                    pb_c('>');
                 } else pb_id();
                 pb_id(); pb_c(']');
                 if (!sv_fresh) { pb_s(" /Prev "); pb_u32(&sv_prev, 0); }

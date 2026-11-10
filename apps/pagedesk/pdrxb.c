@@ -115,14 +115,3 @@ static void xb_group_end(void)
     g_xlive = 0;
     if (at) { pd_fcopy_out(t, g_dls, at, 2); g_lstv = 0; }     /* the mask block's length: a normal walk jumps it */
 }
-
-/* an image's /SMask or /Mask (20.22.10.3): 0x20, 0x40 or 0; PDX8 finds the object itself */
-static pdw xb_imgmask(pdw obj, pdw gen)
-{
-    if (dict_get(obj, gen, "SMask", 0, 0) == 0 && g_dg.kind != PDK_NULL) { g_x8any = 1; return 0x20; }
-    if (dict_get(obj, gen, "Mask", 0, 0) == 0 && g_dg.kind != PDK_NULL) {
-        if (g_dg.kind == PDK_ARR) { inc_note(PDF_INC_TRANSP, "colour key mask"); return 0; }
-        g_x8any = 1; return 0x40;
-    }
-    return 0;
-}

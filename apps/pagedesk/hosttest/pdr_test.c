@@ -49,7 +49,7 @@ static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
 #define SEG_BANK 0x6000
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
-#define SEG_X8   0xA000          /* the 8-bit band, layers and mask (PDMEM_X8) */
+#define SEG_X8   0xB000          /* the 8-bit band, layers and mask (PDMEM_X8) */
 #define SEG_EDIT 0x9000          /* the edit store (PAGEDESK-SPEC 13.1.1) when PDR_EDITS names a file */
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 pdw pdrh_xbseg(void) { return SEG_XB; }
@@ -86,6 +86,55 @@ static int send_fontbank(void)
 {
     return (int)vcall(PDV_REND_FONTBANK, 0, 0, 0);
 }
+/* ---- the primary's side of the ladder (PAGEDESK-SPEC 20.22.2, 20.22.7) ----
+ * PDE_NEEDMOD: "load" the stand-in occupant (hosttest/pdr_xmod.c) unless
+ * PDR_NOSLOT lists its id ("all" = every one), and tell PDREND with
+ * PDV_REND_SLOT. PDE_NEEDMEM for PDMEM_XC: claim it (PDR_XCKB overrides the
+ * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
+ * way the verb is called again. */
+#define SEG_XC   0xA000
+extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
+static struct pdxb_init g_lastinit;
+static int g_loads, g_memasks;
+static unsigned g_clsize[5];        /* the claims' sizes, for the canaries below */
+static int ladder(pdw e)
+{
+    static unsigned char xb[1024];
+    const char *no = getenv("PDR_NOSLOT");
+    if (e == PDE_NEEDMOD) {
+        pdw id = pdr_out_dx;
+        g_loads++;
+        if (g_loads > 64) { fprintf(stderr, "LADDER: more than 64 module answers\n"); exit(9); }
+        if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
+        return 1;
+    }
+    if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_X8) {      /* blend: the region (PDX8 is linked in) */
+        memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+        g_memasks++;
+        g_lastinit.x8_seg = SEG_X8; g_lastinit.x8_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+        memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+        if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+        memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        return 1;
+    }
+    if (e == PDE_NEEDMEM) {
+        g_memasks++;
+        if (g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 memory answers\n"); exit(9); }
+        if (pdr_out_cx == PDMEM_XC && !getenv("PDR_NOXC")) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.xc_seg = SEG_XC;
+            g_lastinit.xc_kb = getenv("PDR_XCKB") ? (pdw)atoi(getenv("PDR_XCKB")) : pdr_out_dx;
+            if (g_lastinit.xc_kb > 63) g_lastinit.xc_kb = 63;
+            g_clsize[4] = (unsigned)g_lastinit.xc_kb << 10;
+            memset(MEM(SEG_XC, g_clsize[4]), 0xCD, 0x10000u - g_clsize[4] < 8192 ? 0x10000u - g_clsize[4] : 8192);
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
+        return 1;
+    }
+    return 0;
+}
 static void do_init(int bpp, int bankkb, int dlkb)
 {
     struct pdxb_init in; static unsigned char keep[sizeof(struct pdxb_fontbank)];
@@ -95,10 +144,12 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
-    in.bpp = (pdw)bpp; in.adapter = 0;
+    in.bpp = (pdw)bpp; in.adapter = 0; in.eng_seg = 1;   /* nonzero: PDREND treats a later INIT as a re-hand (the host engine ignores the vector) */
 #ifdef PDR_X8
     if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 60; }          /* blend (20.22.10.2) */
 #endif
+    if (getenv("PDR_XCKB0")) { in.xc_seg = SEG_XC; in.xc_kb = (pdw)atoi(getenv("PDR_XCKB0")); }   /* the claim from the start */
+    g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
@@ -108,20 +159,22 @@ static void do_init(int bpp, int bankkb, int dlkb)
  * next); a renderer that writes past its claim shows up here - 8 KiB, not a few bytes, because the
  * workspace's regions start up to 6 KiB in, so an overrun need not touch a claim's first bytes */
 #define CANARY 8192
-static const struct { pdw seg; unsigned size; const char *name; } g_cl[4] = {
-    { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" } };
-static unsigned g_clsize[4];
+static const struct { pdw seg; unsigned size; const char *name; } g_cl[5] = {
+    { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" },
+    { SEG_XC, 0, "extension cache" } };
+static unsigned g_clsize[5];
 static unsigned canary_len(int i) { unsigned room = 0x10000u - g_clsize[i]; return room < CANARY ? room : CANARY; }
 static void canary_set(int dlkb)
 {
     int i;
     g_clsize[0] = 1024; g_clsize[1] = dlkb >= 63 ? 0xFC00u : (unsigned)dlkb << 10; g_clsize[2] = 9600; g_clsize[3] = (unsigned)g_glykb << 10;
-    for (i = 0; i < 4; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, canary_len(i));
+    g_clsize[4] = g_lastinit.xc_seg ? (unsigned)g_lastinit.xc_kb << 10 : 0xFC00u;   /* ladder() moves it to a grant */
+    for (i = 0; i < 5; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, canary_len(i));
 }
 static int canary_check(void)
 {
     int i, j, bad = 0;
-    for (i = 0; i < 4; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (i = 0; i < 5; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
     return bad;
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)
@@ -136,7 +189,8 @@ static void report(void)
     struct pdxb_rstatus rs;
     vcall(PDV_REND_STATUS, 0, 0, 0);
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
-    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits);
+    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
+           rs.mods, rs.swaps, g_loads);
 }
 
 int main(int argc, char **argv)
@@ -220,15 +274,11 @@ int main(int argc, char **argv)
             rq.edits_seg = SEG_EDIT;
             rq.edits_count = getenv("PDR_ECOUNT") ? (pdw)atoi(getenv("PDR_ECOUNT")) : (pdw)(esz / 48 > 255 ? 255 : esz / 48);
         }
-  again:
         memcpy(MEM(SEG_XB, 0), &rq, sizeof rq);
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
-        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
-#ifdef PDR_X8
-        if (e == PDE_NEEDMEM && getenv("PDB_NOX8")) { unsetenv("PDB_NOX8"); kb = load_bank(argv[13]); do_init(bpp, kb, dlkb); goto again; }   /* the primary grants the region and runs the pass again */
-#endif
+        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (getenv("PDB_TRACE")) fprintf(stderr, "step e=%u cx=%u dx=%u\n", e, pdr_out_cx, pdr_out_dx); if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
         if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
@@ -278,6 +328,7 @@ int main(int argc, char **argv)
             struct pdtm_glyph *g; int n;
             memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
             e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
+            if (ladder(e)) { memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
             if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
             memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
             g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
@@ -303,6 +354,7 @@ int main(int argc, char **argv)
             memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
             e = vcall(PDV_REND_THUMB, 0, 0, 0);
             memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
+            if (ladder(e)) e = PDE_BUSY;
         } while (e == PDE_BUSY && ++guard < 100000);
         if (e) { fprintf(stderr, "thumb -> %u\n", e); return 3; }
         bytes = (w + 7) / 8;

@@ -64,14 +64,21 @@ struct pdr_ip {
     pdw sw;                     /* source width in pixels                   */
     pdw xlo, xhi;               /* DDA: source x = (xhi:xlo) at pixel x0    */
     pdw slo, shi;               /* DDA step per destination pixel           */
-    pdw smode;                  /* 0 1bpp, 1 grey8, 2 rgb8, 3 stencil       */
+    pdw smode;                  /* 0 1bpp, 1 grey8, 2 rgb8, 3 stencil, 4 LUT */
     pdw inv;                    /* 1 = invert the sample / stencil sense    */
     pdw dmode;                  /* 1 = 1bpp band, 4 = 4bpp band             */
     pdw dyrow;                  /* y & 3, the dither row                    */
     pdw col;                    /* stencil: 1bpp 0 black / 1 white; 4bpp c4 */
+    /* smode 4 (PAGEDESK-SPEC 20.22.7): nc samples of bpc bits (1 2 4 8 16) a
+     * pixel; grey = the saturating sum over c of T[c][sample], where T is
+     * lseg:loff's 256-byte tables (gfx's struct pdgx_lut body) or, lseg 0,
+     * sample x weight / 256 for nc 1 (256), 3 (77 150 29), 4 (77 150 29 256);
+     * lflags bit 0 then takes 255 - the sum (CMYK-shaped)                    */
+    pdw nc, bpc;
+    pdw lseg, loff, lflags;
 };
 extern struct pdr_ip pdr_ip;
-typedef char pdr_ip_size[sizeof(struct pdr_ip) == 32 ? 1 : -1];
+typedef char pdr_ip_size[sizeof(struct pdr_ip) == 42 ? 1 : -1];
 void pdr_imgrow(void);
 
 /* the quantiser (pdrx8.inc, 20.22.10): n pixels of 8-bit grey at sseg:soff into a
@@ -107,6 +114,8 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_MAXSTRIDE   96      /* band stride the masks are sized for        */
 #define PDR_NFORM       5       /* nested stream frames: page + 4 forms       */
 #define PDR_MAXRES      4
+#define PDR_XCKB        16      /* PDMEM_XC asked for (20.22.7); any grant >= 1 KiB is used */
+#define PDR_XASKS       8       /* NEEDMOD/NEEDMEM answers a page view may make (20.22.7) */
 
 /* ---- display list (PAGEDESK-SPEC 20.3.2) -------------------------------- */
 #define DLR_END     0
@@ -120,6 +129,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_MASKB   8           /* a soft-mask definition: len spans to its MASKE     */
 #define DLR_MASKE   9
 #define DLH         8           /* header: type aux len y0 y1                 */
+#define DLI_BODY    28          /* DLR_IMAGE's body (20.3.2, 20.22.7); inline rows follow */
 
 /* ---- transparency (PAGEDESK-SPEC 20.22.10); the hooks are pdrx8.c / pdrxb.c, the compositor PDX8 ---- */
 #ifdef PDR_X8   /* the transparency build: the host harness's, and the target's once the Makefile passes it */
@@ -146,11 +156,10 @@ static void x8_bits(pdw v);                         /* X8F_* into the incomplete
 static pdw  xb_gs(void);                            /* exec_op's gs arm                        */
 static void xb_group_begin(pdw obj, pdw gen);       /* do_form's tail                          */
 static void xb_group_end(void);                     /* frame_end's form branch                 */
-static pdw  xb_needmem(void);                       /* KiB of X8 wanted before drawing, else 0 */
+static void xb_needmem(void);                       /* asks for the region when the page needs it */
 static void x8_init(pdw seg, pdw kb);               /* verb_init: take the region              */
-static pdw  xb_imgmask(pdw obj, pdw gen);           /* do_image: 0, 0x20 /SMask, 0x40 /Mask       */
+#define XB_IMAGE_MASK(obj, gen, kind) do { if ((kind) == 128) inc_note(PDF_INC_TRANSP, "colour key mask"); else g_x8any = 1; } while (0)
 static void xb_rows(pdi y0, pdi y1);                /* mark rows for the 8-bit path            */
-static pdw g_needcx, g_needdx;                      /* PDE_NEEDMEM's CX and DX (the door returns them) */
 static void x8_view(void);                          /* verb_begin: size the planes             */
 #else
 #define xb_state(k)          ((void)0)
@@ -159,11 +168,10 @@ static void x8_view(void);                          /* verb_begin: size the plan
 #define xb_gs()              ((void)0)
 #define xb_group_begin(o, g) ((void)0)
 #define xb_group_end()       ((void)0)
-#define xb_needmem()         0
+#define xb_needmem()         ((void)0)
 #define x8_init(s, k)        ((void)0)
 #define x8_view()            ((void)0)
 #define xb_rows(a, b)        ((void)0)
-#define xb_imgmask(o, g)     0
 #endif
 
 /* ---- modes -------------------------------------------------------------- */
@@ -173,6 +181,7 @@ static void x8_view(void);                          /* verb_begin: size the plan
 #define PDR_DONE    3
 #define PDR_TEXT    4           /* text map                                   */
 #define PDR_THUMB   5
+#define PDR_XWAIT   6           /* a NEEDMOD/NEEDMEM was answered: what came of it (20.22.7) */
 
 /* ---- font bank (PAGEDESK-SPEC 11.2, 20.3.4) ----------------------------- */
 #define PDFB_MAGIC0 0x4450      /* 'PD' little-endian of "PDFB"               */

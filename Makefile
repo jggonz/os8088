@@ -18474,6 +18474,19 @@ PD_MATH_STUB ?= 0
 PD_ENG_MOD   ?= $(BUILD)/PDENG.MOD
 PD_REND_MOD  ?= $(BUILD)/PDREND.MOD   # the real renderer: D23 private stack (deepstk) carries its chains; PD_REND_MOD=$(PDSTUBDIR)/PDREND.MOD for the stand-in
 PD_WRT_MOD   ?= $(BUILD)/PDWRT.MOD
+# THE SLOT'S OCCUPANTS (PAGEDESK-SPEC 20.22.2.3), one variable each, the
+# stand-ins until each owner's module lands (PD_REND_MOD's shape): dct writes
+# PDXI, crypt PDXK, gfx PDXG, fonts PDXF, jpx PDXJ
+PD_XK_MOD    ?= $(PDSTUBDIR)/PDXK.MOD
+PD_XG_MOD    ?= $(PDSTUBDIR)/PDXG.MOD
+PD_XF_MOD    ?= $(PDSTUBDIR)/PDXF.MOD
+PD_XI_MOD    ?= $(PDSTUBDIR)/PDXI.MOD
+PD_XJ_MOD    ?= $(PDSTUBDIR)/PDXJ.MOD
+PD_XMODS      = $(PD_XK_MOD) $(PD_XG_MOD) $(PD_XF_MOD) $(PD_XI_MOD) $(PD_XJ_MOD)
+PD_EMPTY     :=
+PD_SPACE     := $(PD_EMPTY) $(PD_EMPTY)
+PD_XPARTS     = $(BUILD)/pdxk.part $(BUILD)/pdxg.part $(BUILD)/pdxf.part \
+                $(BUILD)/pdxi.part $(BUILD)/pdxj.part
 PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
 PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES
 PD_FONT_TXT  ?= $(BUILD)/PDFONTS.TXT
@@ -18486,6 +18499,8 @@ $(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDI
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
 $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
+$(PDSTUBDIR)/PDX%.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc $(PDDIR)/pdkgate.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_X$* -o $@ $<
 
 # A module PART is its image followed by its .bss as zeros, read out of the
 # header the module wrote (+4 image, +6 bss) - apps/loom's lmpvpart rule -
@@ -18497,17 +18512,27 @@ PD_PARTPAD = @python3 -c "import struct,sys; d=open('$<','rb').read(); \
 # and a real PDREND.MOD can both be older than the part, so without this a
 # PD_REND_MOD switch kept the previous module in the package (it read as a
 # CGA launch hang on the real renderer's stack overrun - verify-notes, 22:44)
-PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))))
+PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))+$(subst $(PD_SPACE),+,$(strip $(PD_XMODS)))))
 $(shell mkdir -p $(BUILD); \
         [ -f '$(PDMODSTAMP)' ] || { rm -f $(BUILD)/.pdmods-* \
                                       $(BUILD)/pdeng.part $(BUILD)/pdrend.part \
-                                      $(BUILD)/pdwrt.part; \
+                                      $(BUILD)/pdwrt.part $(PD_XPARTS); \
                                 touch '$(PDMODSTAMP)'; })
 $(BUILD)/pdeng.part: $(PD_ENG_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdrend.part: $(PD_REND_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 $(BUILD)/pdwrt.part: $(PD_WRT_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxk.part: $(PD_XK_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxg.part: $(PD_XG_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxf.part: $(PD_XF_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxi.part: $(PD_XI_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdxj.part: $(PD_XJ_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 
 # PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
@@ -18525,9 +18550,10 @@ $(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
           $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h $(PDDIR)/pdovlrecov.c   # pages, recov
 PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc $(PDDIR)/pdkit.inc \
+          $(PDDIR)/pduslot.inc $(PDDIR)/pdstk.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
-          apps/weave/wfetch.inc apps/os88ui.inc
+          apps/os88ui.inc
 PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
 $(PDMATHSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.pdmath-stub $(BUILD)/.pdmath-real
@@ -18552,6 +18578,7 @@ $(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMAT
 $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
                        $(BUILD)/pdrend.part $(BUILD)/pdwrt.part \
                        $(BUILD)/pdres1.part $(BUILD)/pdres2.part \
+                       $(PD_XPARTS) \
                        tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
 	python3 tools/os88ovl.py $< -o $(BUILD)/PAGEDESK.OVL \
 		--trim $(BUILD)/pagedesk.trim.bin
@@ -18559,6 +18586,7 @@ $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
 		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
 		--part $(BUILD)/pdwrt.part \
 		--part $(BUILD)/pdres1.part --part $(BUILD)/pdres2.part \
+		$(addprefix --part ,$(PD_XPARTS)) \
 		--part $(BUILD)/PAGEDESK.OVL
 $(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
 
@@ -18581,7 +18609,7 @@ PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
 define PDDISK
 	python3 tools/checkreadme.py $(PDDIR)/README.TXT
 	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
-	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(PD_SAMPLES) \
+	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(or $(3),$(PD_SAMPLES)) \
 	    --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
 endef
@@ -18591,10 +18619,20 @@ $(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,1200,$(PD_FONTX_RES))
 $(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,720,$(PD_FONTX_RES))
+# O7 (PAGEDESK-SPEC 20.22.2.8): THE 360KB SET IS TWO FLOPPIES. The first is
+# the program with the two samples the empty view and PD-29's XT proof open;
+# the second carries every sample. One file cannot span two floppies, so
+# PAGEDESK.O88 itself must fit a 360KB disk - os88disk.py refuses one that
+# does not, which is the gate.
+PD_SAMPLES360 := $(filter %/HELLO.PDF %/XTGUIDE.PDF,$(PD_SAMPLES))
 $(BUILD)/pagedesk360.img: $(PDDISKDEPS)
-	$(call PDDISK,360,)
+	$(call PDDISK,360,,$(PD_SAMPLES360))
+$(BUILD)/pagedesk360b.img: $(PD_SAMPLES) $(PDDIR)/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(PDDIR)/README.TXT $(PD_SAMPLES)
+	python3 tools/os88disk.py --verify $@
 pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
-              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img
+              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img \
+              $(BUILD)/pagedesk360b.img
 .PHONY: pagedesk pagedeskdisk
 
 # ...and the everything set and the live media carry it (SPEC.md 80.6,
@@ -21469,8 +21507,14 @@ PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrxc.c $(PDR_DIR)
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h \
              $(PDR_DIR)/pdrx8.c $(PDR_DIR)/pdrxb.c $(PDR_DIR)/pdrx8h.inc
-# transparency (PAGEDESK-SPEC 20.22.10): PDR_X8=1 compiles PDREND's hooks of PDX8 (smlrcc and nasm together)
-PDR_X8DEF := $(if $(PDR_X8),-DPDR_X8)
+# transparency (PAGEDESK-SPEC 20.22.10) ships: PDR_X8 is on unless `make PDR_X8=0`. It compiles PDREND's hooks of PDX8
+# (smlrcc and nasm together) and adds pdx8.c to the host builds
+PDR_X8 ?= 1
+PDR_X8DEF := $(if $(filter-out 0,$(PDR_X8)),-DPDR_X8)
+PDR_X8SRC := $(if $(PDR_X8DEF),$(PDR_DIR)/pdx8.c)
+# the host's stand-in slot occupants (20.22.7): the real dash walker, a fake decoder
+PDR_XMOD  := $(PDR_DIR)/hosttest/pdr_xmod.c $(PDR_X8SRC)
+PDR_XDEP  := $(PDR_XMOD) $(PDR_DIR)/pdx8i.c $(PDR_DIR)/pdxdash.c $(PDR_DIR)/pdxedit.c
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
 PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
 
@@ -21498,10 +21542,10 @@ $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdren
 
 PDR_HOSTBIN := $(BUILD)/pdr_test
 $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
-                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -Wall -Wno-unused-function -Wno-unused-variable -Wno-parentheses -Wno-int-to-void-pointer-cast \
-		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+		-DPD_HOST $(PDR_X8DEF) -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 
 .PHONY: pdrend pdrend-host pdrend-fuzz
 # the asm primitives against their C twins need Unicorn: whichever python has it
@@ -21513,18 +21557,18 @@ pdrend: $(BUILD)/PDREND.MOD pdrend-host
 # the sanitizer run (SPEC 20.3.6): ASan+UBSan build, hostile streams + random cases
 PDR_FUZZBIN := $(BUILD)/pdr_test_asan
 $(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
-                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) | $(BUILD)
 	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
-		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+		-DPD_HOST $(PDR_X8DEF) -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD)
 # the same hostile streams through the REAL engine (pdeng.c answers every verb), ASan+UBSan
 PDR_FUZZREAL := $(BUILD)/pdr_test_real_asan
 PDR_ENGSRC   := $(wildcard $(PDR_DIR)/pde*.c $(PDR_DIR)/pde*.h) $(PDR_DIR)/hosttest/pde_host.c
 $(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
-                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
-	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
+                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST $(PDR_X8DEF) -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
 		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
-		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+		$(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
 pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_MKSTORE)
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
@@ -21540,9 +21584,9 @@ pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.
 PDR_REALBIN := $(BUILD)/pdr_test_real
 PDR_SHOTS   ?=
 $(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
-                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
-	cc -O1 -w -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
-		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_XDEP) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -w -DPD_HOST $(PDR_X8DEF) -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_XMOD) $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
 .PHONY: pdrend-real
 pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
@@ -21563,6 +21607,12 @@ $(PDR_MKSTORE): $(PDR_DIR)/hosttest/pdr_mkstore.c $(wildcard $(PDR_DIR)/pdw*.c $
 pdrend-annot: $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_annot.py $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/pdrannot $(BUILD) $(PDR_DIR)/samples $(abspath $(BUILD))/stress $(PDR_SHOTS)
 # ---- end annotr --------------------------------------------------------------------------------
+# `make pdrend-xchk` (PAGEDESK-SPEC 20.22.7): the ladder, codec images, sample depths, the dash
+# walker and edit marks in PDXG - through the stand-in occupants (hosttest/pdr_xmod.c) - against
+# mutool and against the plain image, then hostile occupant answers under ASan+UBSan.
+.PHONY: pdrend-xchk
+pdrend-xchk: $(PDR_REALBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES tools/os88pdfx_rcore.py
+	python3 $(PDR_DIR)/hosttest/pdr_xchk.py $(PDR_REALBIN) $(BUILD)/pdrxchk $(BUILD) --hostile $(PDR_FUZZREAL) -n 40
 # ---- end PageDesk: rend ----
 
 # ---- PageDesk: eng ----------------------------------------------------------
@@ -21707,7 +21757,7 @@ PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c a
 PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 53248   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 52 KiB for any PDF (PAGEDESK-SPEC 20.22, L6)
+PDW_CAP  := 61440   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert); 60 KiB for any PDF: a slot occupant that enciphers with crypt's shared primitives (20.22.4, lead 23:30)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -21753,7 +21803,132 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 else
 	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
 endif
+# PDWRT on xref-stream, object-stream and ENCRYPTED sources (PAGEDESK-SPEC
+# 20.22.4.6, hosttest/pdw_enc.c): the writer over a stand-in for the PDENG
+# verbs the engine agents own (PDRC_PLAIN, CRYPTINFO, SETKEY, PDV_ENG_CRYPT),
+# on fixtures qpdf makes (plain xref stream + object stream, AES-128, AES-256,
+# RC4-128, RC4-40, a user password, a classic table), every output held to
+# qpdf --check, qpdf's own decryption and mutool. The writer enciphers
+# with crypt's shared primitives (pdctwin.c on the host), checked by qpdf.
+.PHONY: pdwrt-enc
+pdwrt-enc: | $(BUILD)
+	mkdir -p $(BUILD)/pdw-enc
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
+		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(BUILD)/pdw-enc/pdw_encfuzz 100000
+	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
+
+# ---- PageDesk: xi -----------------------------------------------------------
+# PDXI.MOD (PAGEDESK-SPEC 20.22.11): the image-decoder occupant of the module
+# slot - DCT (pdxidct.c + pdxidct.inc), and the bilevel agent's CCITT and JBIG2
+# files when they are on the branch. PDWRT's recipe: a separate compilation and
+# a separate `nasm -f bin`. `make pdxi` builds the module AND runs the host check
+# against libjpeg (tools/os88pdfx_dct.py); the host side is not in `all`.
+PDI_BIT  := $(if $(wildcard apps/pagedesk/pdxiccit.c),-DPDXI_CCIT) $(if $(wildcard apps/pagedesk/pdxijb2.c),-DPDXI_JB2)
+# the hand-written JBIG2 MQ decoder and template-0 row (bilevel's pdxijb2.inc), when it is on the branch
+PDI_JBA  := $(if $(wildcard apps/pagedesk/pdxijb2.inc),-DJB_ASM)
+PDI_C    := apps/pagedesk/pdxi.c apps/pagedesk/pdxidct.c $(wildcard apps/pagedesk/pdxiccit.c apps/pagedesk/pdxijb2.c)
+PDI_H    := apps/pagedesk/pdxi.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDI_SDK  ?=
+PDI_OUT  := $(BUILD)/pdi
+PDI_CAP  := 65024   # image + bss (PAGEDESK-SPEC 20.22.11): DCT <= 24,576 of it, bilevel <= 36,864
+.PHONY: pdxi pdxi-host
+$(BUILD)/pdxi.raw.asm: $(PDI_C) $(PDI_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_JBA) $(PDI_DEFS) \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDI_SDK),$(PDI_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
+		apps/pagedesk/pdxi.c -o $@
+$(BUILD)/pdxi.gen.asm: $(BUILD)/pdxi.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXI.MOD: apps/pagedesk/pdxi.asm apps/pagedesk/pdxidct.inc $(BUILD)/pdxi.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc apps/pagedesk/pdxijb2.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(PDI_JBA) $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXI.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDI_CAP) else 0)"
+# the host harness (the C twins of the assembly) and its independent reader, libjpeg's djpeg
+$(PDI_OUT)/.host.stamp: apps/pagedesk/hosttest/pdi_test.c tools/os88pdfx_dct.py $(PDI_C) apps/pagedesk/pdxitwin.c $(PDI_H) \
+                        apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDI_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -Wno-unused-function -DPD_HOST $(PDI_BIT) -I apps/pagedesk -o $(PDI_OUT)/pdi_test \
+		apps/pagedesk/hosttest/pdi_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	python3 tools/os88pdfx_dct.py --dir $(PDI_OUT)/fx --bin $(PDI_OUT)/pdi_test
+	touch $@
+pdxi-host: $(PDI_OUT)/.host.stamp
+pdxi: $(BUILD)/PDXI.MOD pdxi-host
+# the assembly against its C twins under Unicorn (pip install unicorn), the 8088 cost model, and the
+# ASan/UBSan fuzz over the marker parser and the entropy decoder: on demand, never in `all`
+.PHONY: pdxi-asm pdxi-cycles pdxi-fuzz
+pdxi-asm: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -Wall -Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_twin \
+		apps/pagedesk/hosttest/pdi_twin.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	python3 apps/pagedesk/hosttest/pdi_asm.py
+pdxi-cycles: pdxi-asm
+	python3 apps/pagedesk/hosttest/pdi_cycles.py
+PDI_FUZZN ?= 300
+pdxi-fuzz: $(PDI_OUT)/.host.stamp
+	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+		-Wno-unused-function -DPD_HOST -I apps/pagedesk -o $(PDI_OUT)/pdi_fuzz \
+		apps/pagedesk/hosttest/pdi_fuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	$(PDI_OUT)/pdi_fuzz $(PDI_FUZZN) 1 $(PDI_OUT)/fx/*.jpg
+# ---- end PageDesk: xi -------------------------------------------------------
+
+# ---- PageDesk: jpx ----------------------------------------------------------
+# PDXJ.MOD (PAGEDESK-SPEC 20.22.13): JPEG 2000 at a reduced resolution level, a
+# slot occupant (PDX_JPX). PDWRT's shape: a SEPARATE compilation and its own
+# `nasm -f bin` job. `make pdxj` builds it AND runs the host checks, which are
+# host-side only and not in `all`: the module against opj_decompress -r
+# (hosttest/pdxj_cmp.py, a SKIP without OpenJPEG's tools), the assembly against
+# its C twin (hosttest/pdxj_asm.py, a SKIP without Unicorn) and the parser fuzz
+# (hosttest/pdxj_fuzz.c, ASan + UBSan, a few seconds).
+PDXJ_C   := apps/pagedesk/pdxj.c apps/pagedesk/pdxjhdr.c apps/pagedesk/pdxjpkt.c apps/pagedesk/pdxjt1.c \
+            apps/pagedesk/pdxjdwt.c apps/pagedesk/pdxjimg.c
+PDXJ_H   := apps/pagedesk/pdxj.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDXJ_CAP := 65024   # PAGEDESK-SPEC 20.22.13, L6: PDXJ image + bss
+PDXJ_OUT := $(BUILD)/pdxj
+.PHONY: pdxj pdxj-host
+$(BUILD)/pdxj.raw.asm: $(PDXJ_C) $(PDXJ_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxj.c -o $@
+$(BUILD)/pdxj.gen.asm: $(BUILD)/pdxj.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXJ.MOD: apps/pagedesk/pdxj.asm apps/pagedesk/pdxjasm.inc apps/pagedesk/hosttest/pdxj_mqtab.inc \
+                   $(BUILD)/pdxj.gen.asm $(CC_RUNTIME) \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxj.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXJ.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDXJ_CAP) else 0)"
+$(PDXJ_OUT)/.host.stamp: apps/pagedesk/hosttest/pdxj_test.c apps/pagedesk/hosttest/pdxj_cmp.py apps/pagedesk/hosttest/pdxj_asm.py \
+                         $(PDXJ_C) $(PDXJ_H) apps/pagedesk/pdxjtw.c apps/pagedesk/pdxjasm.inc apps/pagedesk/pdmath.c \
+                         apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDXJ_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -I apps/pagedesk/hosttest -o $(PDXJ_OUT)/pdxj_test \
+		apps/pagedesk/hosttest/pdxj_test.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	@if command -v opj_decompress >/dev/null 2>&1; then python3 apps/pagedesk/hosttest/pdxj_cmp.py; \
+	  else echo "pdxj: SKIP the opj_decompress comparison - OpenJPEG's tools are not installed"; fi
+	@python3 apps/pagedesk/hosttest/pdxj_asm.py; r=$$?; [ $$r -eq 0 -o $$r -eq 77 ]
+	touch $@
+pdxj-host: $(PDXJ_OUT)/.host.stamp
+pdxj: $(BUILD)/PDXJ.MOD pdxj-host
+# the parser fuzz (ASan + UBSan; the second build lowers the arena floor so the
+# arena-full path is reached) and the real module in Unicorn: on demand, minutes
+.PHONY: pdxj-fuzz pdxj-uc
+pdxj-fuzz: | $(BUILD)
+	mkdir -p $(PDXJ_OUT)
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	clang -std=gnu99 -O1 -g -fsanitize=address,undefined -DJX_ARENA_MIN=300 -DPD_HOST -w -I apps/pagedesk -I apps/pagedesk/hosttest \
+		-o $(PDXJ_OUT)/pdxj_fuzz_small apps/pagedesk/hosttest/pdxj_fuzz.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c
+	$(PDXJ_OUT)/pdxj_fuzz -n 200 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+	$(PDXJ_OUT)/pdxj_fuzz_small -n 100 -s 3 tests/pdfany/jpx/*.j2k tests/pdfany/jpx/*.jp2
+pdxj-uc: $(BUILD)/PDXJ.MOD $(PDXJ_OUT)/.host.stamp
+	python3 apps/pagedesk/hosttest/pdxj_uc.py
+# ---- end PageDesk: jpx ------------------------------------------------------
+
 
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
@@ -21861,6 +22036,8 @@ $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
 # ---- PageDesk: prefs ----
 # pdovlpref.c is #included by pdovl.c and the wildcard (pdu*.c) does not name it
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlpref.c
+# pdovlauth.c likewise (the password prompt, PAGEDESK-SPEC 20.22.6)
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlauth.c
 # ---- end PageDesk: prefs ----
 
 $(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \

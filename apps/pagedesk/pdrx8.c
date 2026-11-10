@@ -16,7 +16,6 @@
 static pdw g_x8seg, g_x8kb;     /* PDV_REND_INIT's x8_seg / x8_kb               */
 static pdw g_x8on;              /* the region fits this view's band             */
 static pdw g_x8need;            /* KiB the view wants (PDX8_RES + planes)       */
-static pdw g_x8ask;             /* PDE_NEEDMEM answered once this view          */
 static pdw g_wst, g_wsave;      /* the last STATE record's offset + 1, and the one a mask block interrupted */
 static pdw g_wmend;             /* a mask block is being walked: its end        */
 static pdw g_woff;              /* the walker's position in the list            */
@@ -203,18 +202,17 @@ static void x8_init(pdw seg, pdw kb)
 static void x8_view(void)
 {
     pdw need;
-    g_x8ask = 0; g_x8on = 0;
+    g_x8on = 0;
     if (g_bw > 768) { g_x8need = 0; return; }
     need = (pdw)(PDX8_RES + 6u * 8u * (pdw)g_bw + 1024u);
     g_x8need = (pdw)((need + 1023u) >> 10);
     g_x8on = g_x8seg && g_x8kb >= g_x8need;
 }
-/* the end of interpretation, before any band of the pass is drawn (20.22.10.2) */
-static pdw xb_needmem(void)
+/* the end of interpretation, before any band of the pass is drawn (20.22.10.2): the
+ * region through rcore's ladder (x_mem answers PDE_NEEDMEM at the end of the pass) */
+static void xb_needmem(void)
 {
-    if (!g_x8any || g_x8on) return 0;
-    if (!g_x8need) { inc_note(PDF_INC_APPROX, "band too wide for transparency"); return 0; }
-    if (g_x8ask) { inc_note(PDF_INC_APPROX, "no RAM for transparency"); return 0; }
-    g_x8ask = 1;
-    return g_x8need;
+    if (!g_x8any || g_x8on) return;
+    if (!g_x8need) { inc_note(PDF_INC_APPROX, "band too wide for transparency"); return; }
+    if (!x_mem(PDMEM_X8, g_x8need)) inc_note(PDF_INC_APPROX, "no RAM for transparency");
 }
