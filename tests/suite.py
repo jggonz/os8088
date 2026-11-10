@@ -1548,6 +1548,76 @@ FAST = [
         "C message and a tool's help text and stands for comments and code. "
         "~2s: it walks the built disks and hashes the packages' strings",
         needs=()),
+    Row("pdfix", "fast", py("tests/unit/t_pdfix.py"), 0.3,
+        "PAGEDESK-SPEC 18 / 20.1: tools/os88pdfgen.py regenerates PageDesk's "
+        "eight sample PDFs byte-identically to the committed "
+        "apps/pagedesk/samples/, every XT-profile sample passes qpdf --check "
+        "(SKIP, never pass, without qpdf on PATH), and every negative file's "
+        "expected PDE_* code exists in pdabi.h",
+        needs=()),
+    Row("pdstk", "fast", py("tests/unit/t_pdstk.py"), 1.3,
+        "DECISIONS D21/D23 (PageDesk's stack): tools/os88pdstk.py reads every "
+        "PageDesk segment's source and build/*.gen.asm, builds the call graph "
+        "with each frame, push and return address, and fails on recursion "
+        "outside its bounded ratchet, a module verb deeper than the 2 KiB "
+        "private stack less 256, or a callback chain on the UI task's 512-byte "
+        "stack over 384 (dispatch + frames + the kernel call). bez() recursing "
+        "seven deep wrote over the kernel's menu bar. Three synthetic negative "
+        "controls always run; the real tree SKIPs, by name, until `make "
+        "pagedesk` has built it",
+        ),
+    Row("pdjr", "fast", py("tests/unit/t_pdjr.py"), 2.0,
+        "PAGEDESK-SPEC 20.17 (PD-20): PageDesk's recovery journal on the host - "
+        "the whole-store rewrite and its debounce, recovery through the 20.8 "
+        "edit-store API, a stale fingerprint, a torn or corrupt journal, a "
+        "read-only volume, the 8 KiB limit, the interrupted-save note and "
+        "its retirement on Save, and the /NM seed",
+        needs=()),
+    Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
+        "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
+        ">64 KiB stream, 64 pages, 10,000 sparse objects within "
+        "PD_MAXSUBSEC, a 3-revision chain where the newest wins, 256 "
+        "annotations - 0.45 s of image generation kept out of the fast tier",
+        needs=()),
+    Row("pdprep", "fast", py("tests/unit/t_pdprep.py"), 1.5,
+        "PAGEDESK-SPEC 20.14 / PD-22: tools/os88pdprep.py on generated "
+        "inputs - RunLength, dither, tokenizer, an objstm+Flate six-page PDF "
+        "prepared (raster of shading/alpha/poster pages, invisible text, Info "
+        "stamp, byte-reproducible), qpdf/os88pdfcheck/profile/PDENG "
+        "verification, refusals, decrypt, the input never overwritten, "
+        "negative control. SKIP without qpdf",
+        needs=()),
+    Row("pdlay", "fast", py("tests/unit/t_pdlay.py"), 0.5,
+        "PAGEDESK-SPEC 17.1 / 20.6.4: apps/pagedesk/pdulay.c - the layout "
+        "the package compiles - built on the host and swept over every "
+        "content box 320x100..720x460 in every mode and the five displays by "
+        "name (VGA, EGA, Hercules 348 and 350, CGA): regions and controls "
+        "inside the box and their own bar, no overlap, the canvas on the "
+        "8-pixel grid, the kind from the thresholds, every mode's tools on "
+        "the glass. ~15M checks in ~0.4 s",
+        needs=("cc",)),
+    Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
+        "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
+        "model - the filters (This page / All pages / Changes), order, "
+        "seek/step/find consistency, copy-on-edit shadowing, review state "
+        "(resolve/reopen as a reply), 256 records, the kind table and the "
+        "change words - built on the host over a fake store "
+        "(hosttest/pdu_nt.c; SKIP without cc)",
+        needs=("cc",)),
+    Row("pded", "fast", py("tests/unit/t_pded.py"), 0.5,
+        "PAGEDESK-SPEC 13.1.1 / 13.6 / 20.8: apps/pagedesk/pduedit.c and "
+        "pduundo.c - the edit store and undo the package compiles - built on "
+        "the host: every kind's layout, the limits, undo/redo against "
+        "snapshots, typing coalescing, the 64-command history, the save "
+        "point, source annotations, page-op deltas and 40 seeded random "
+        "walks. ~0.5 s",
+        needs=("cc",)),
+    Row("pdkgate", "fast", py("tests/unit/t_pdkgate.py"), 0.1,          # deepstk
+        "PAGEDESK-SPEC 20.15 (D23): every far call to KERNEL_SEG in the "
+        "BUILT PDENG/PDREND/PDWRT and the stand-ins sits in a pdkgate.inc "
+        "slot (near call to one pdk_up before, jump to one pdk_dn after), so "
+        "no kernel call runs on the private module stack. SKIP when no "
+        "module is built"),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
@@ -22243,6 +22313,134 @@ SOAK = [
         "here) that saturate in every stage that can, so each out-of-line "
         "clamp is held to the model too. Needs `make` to have built the parts",
         needs=("qemu", "nasm", "numpy")),
+    # ---- PageDesk (rows): the host harnesses behind `make pd*`, one row a
+    # target (tests/pagedeskhost.py), and PD-29's two emulator rows ----
+    Row("pdeng", "soak", py("tests/pagedeskhost.py", "pdeng"), 10.0,
+        "PAGEDESK-SPEC 20.2 / PD-06: `make pdeng` - PDENG.MOD built (its "
+        "size line and cap) and the engine's host harness "
+        "(hosttest/pde_check.py) over its own fixtures, the shared samples,"
+        " the stress set and the negative corpus, each answer checked "
+        "against qpdf. Red when the reader opens, walks or refuses a file "
+        "differently from what the corpus pins. Measured 7.5s warm",
+        needs=("cc",), builds=True),
+    Row("pdefuzz", "soak", py("tests/pagedeskhost.py", "pdefuzz"), 40.0,
+        "PAGEDESK-SPEC 20.2.1 / PD-28: `make pdefuzz` - the engine under "
+        "AddressSanitizer + UBSan, every verb driven over 100 mutations of "
+        "each corpus file. Red on any out-of-bounds read, overflow or "
+        "undefined behaviour a hostile PDF reaches. Measured 28.3s",
+        needs=("cc",), builds=True),
+    Row("pdflate", "soak", py("tests/pagedeskhost.py", "pdflate"), 8.0,
+        "PAGEDESK-SPEC 20.13 / PD-25: `make pdflate` - FlateDecode and the "
+        "PNG/TIFF predictors in PDENG against Python's zlib, a predictor "
+        "written from the spec, and qpdf (hosttest/pde_fl_check.py). "
+        "Measured 5.8s",
+        needs=("cc",), builds=True),
+    Row("pdflatefuzz", "soak", py("tests/pagedeskhost.py", "pdflatefuzz"), 5.0,
+        "PAGEDESK-SPEC 20.13 / PD-28: `make pdflatefuzz` - the inflater "
+        "under ASan + UBSan over mutated streams at every read size: no "
+        "crash and no write outside the 43 KiB slot. Measured 2.2s warm",
+        needs=(), builds=True),
+    Row("pdrend", "soak", py("tests/pagedeskhost.py", "pdrend"), 8.0,
+        "PAGEDESK-SPEC 20.3: `make pdrend` - PDREND.MOD built, the "
+        "renderer's host harness (hosttest/pdr_check.py) and, with Unicorn,"
+        " the asm row primitives against their C twins byte for byte "
+        "(hosttest/pdr_primtest.py; a SKIP line without unicorn, which the "
+        "row prints). Measured 5.3s",
+        needs=("cc",), builds=True),
+    Row("pdrendfuzz", "soak", py("tests/pagedeskhost.py", "pdrend-fuzz"), 215.0,
+        "PAGEDESK-SPEC 20.3.6 / 20.12 / PD-28: `make pdrend-fuzz` - PDREND "
+        "under ASan + UBSan over 38 hostile content streams and 400 random "
+        "ones, again through the REAL engine, and again with a hostile edit"
+        " store (bad offsets, 60,000 points, inverted rects, no such kind)."
+        " Measured 171.4s, which is why it is soak",
+        needs=(), builds=True),
+    Row("pdrendreal", "soak", py("tests/pagedeskhost.py", "pdrend-real"), 6.0,
+        "PAGEDESK-SPEC 20.3 / PD-07: `make pdrend-real` - PDREND linked "
+        "with the REAL PDENG draws every committed sample as VGA, Hercules "
+        "and CGA see it and compares each with mutool "
+        "(hosttest/pdr_real.py, 52 renders). Needs mutool. Measured 3.2s",
+        needs=(), builds=True),
+    Row("pdrendannot", "soak", py("tests/pagedeskhost.py", "pdrend-annot"), 15.0,
+        "PAGEDESK-SPEC 20.12 / PD-12..15: `make pdrend-annot` - an edit "
+        "store of every kind saved by the REAL writer over the REAL engine "
+        "(hosttest/pdr_mkstore.c), qpdf-clean, rendered by mutool and drawn"
+        " by PDREND from the store, compared; source /AP appearances, "
+        "dashes and inline images. Needs qpdf and mutool. RED at 8e00bef0d:"
+        " pdr_mkstore.c predates PDWRT's verify-through-PDENG (14.2 step 4)"
+        " and answers PDE_IO 48 - rows-report.md carries the three-line "
+        "harness fix",
+        needs=(), builds=True),
+    Row("pdwrt", "soak", py("tests/pagedeskhost.py", "pdwrt"), 6.0,
+        "PAGEDESK-SPEC 20.5 / PD-17: `make pdwrt` - PDWRT.MOD built under "
+        "its cap and the writer's host harness (hosttest/pdw_test.c) whose "
+        "every output is read back by qpdf, mutool and Poppler "
+        "(pdw_verify.py). The harness hangs off a stamp, so the row deletes"
+        " it first: a fresh stamp ran nothing. Measured 4.0s",
+        needs=("cc",), builds=True),
+    Row("pdwrtreal", "soak", py("tests/pagedeskhost.py", "pdwrt-real"), 6.0,
+        "PAGEDESK-SPEC 20.5 / 20.11 / 20.16 / PD-17..19: `make pdwrt-real` "
+        "- PDWRT over the REAL PDENG: incremental saves twice over "
+        "MARKUP.PDF, page operations, Extract, Insert from another PDF "
+        "(foreign windows, Esc inside one, a full disk in the middle), each"
+        " output qpdf --check clean and its page tree checked "
+        "(pdw_pgcheck.py). Measured 4.2s",
+        needs=(), builds=True),
+    Row("pdnav", "soak", py("tests/pagedeskhost.py", "pdnav"), 6.0,
+        "PAGEDESK-SPEC 20.10 / PD-10, PD-11: `make pdnav` - PDENG's SEARCH "
+        "matcher against a reference over 400 random pages and piece sizes "
+        "(pde_srch.py), and the link records of the sample guide "
+        "(XTGUIDE.PDF has exactly 7). Measured 4.0s",
+        needs=(), builds=True),
+    Row("pdmathtest", "soak", py("tests/pagedeskhost.py", "pdmathtest"), 30.0,
+        "PAGEDESK-SPEC 4 / 20.7: `make pdmathtest` - pdmath.inc (8086, in "
+        "Unicorn's real mode) against pdmath.c bit for bit over 126,439 "
+        "cases: 32-bit and fixed-point arithmetic, the view transform, far "
+        "memory. Red when the target's arithmetic and the host's disagree, "
+        "which every host harness above assumes they do not. Measured 22.2s",
+        needs=("unicorn", "nasm"), builds=True),
+    Row("pdabicheck", "soak", py("tests/pagedeskhost.py", "pdabi-check"), 2.0,
+        "PAGEDESK-SPEC 20.7: `make pdabi-check` - pdabi.h against its "
+        "generated assembly mirror pdabi.inc and pdmath.inc's constants "
+        "(tools/os88pdabi.py --check). `all` runs it too; the row is so "
+        "that `soak -k 'pd*'` is the whole PageDesk host set. Measured 0.7s",
+        needs=(), builds=True),
+    Row("pdfonts", "soak", py("tests/pagedeskhost.py", "pdfonts"), 3.0,
+        "PAGEDESK-SPEC 20.4 / PD-05: `make pdfonts` - PDRES.BIN and "
+        "PDFONTX.RES rebuilt from the committed sources and checked "
+        "(os88pdfont.py check), PDFONTS.TXT, and the art atlas "
+        "(os88pdart.py check). Measured 0.4s warm",
+        needs=(), builds=True),
+    Row("pagedesk", "soak", py("tests/pagedesk.py"), 300.0,
+        "PAGEDESK-SPEC 20 / PD-28: PageDesk's user flows end to end on QEMU, "
+        "VGA (FULL layout) and a VIDEO=cga private tree (COMPACT) - XTGUIDE "
+        "opened by association, paged, zoomed, Find `Index` (page 12), an "
+        "area Mark and a typed Note, Insert from PDF (MARKUP.PDF page 1), "
+        "Preferences (Flate Off, written to SYSTEM/APPDATA/PAGEDESK.CFG) and "
+        "Save As - each step confirmed off PageDesk's statics, then the "
+        "floppy read back on the host: qpdf --check exit 0, 13 pages, one "
+        "/Square and one /Text on page 12, XTGUIDE's 7 /Link kept, the CFG's "
+        "Flate byte 1. Without qpdf the PDF half SKIPs, never passes. On "
+        "VGA, back on page 12 the re-opened mark must draw all four edges "
+        "(it drew two before PAGEDESK-SPEC 20.3.2's outward BBox clip). "
+        "Measured 122s VGA + 176s CGA with the knob tree built cold",
+        needs=("qemu", "nasm", "cc"), serial=True, timeout=1200,
+        wants=("build/os8088.img", "build/pagedesk.img",
+               "build/pagedesk.bin")),
+    Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
+        "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
+        "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
+        "thread each - HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
+        "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
+        "reachable at every trough with the caches shed, task 0's stack <= "
+        "384 (D22) and the private module stack <= 1792 (D23) with their "
+        "canaries; REPORTS every step's guest seconds at 4.77 MHz and never "
+        "asserts them (first page ~2.3 guest minutes, Find ~24). The legs "
+        "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
+        "beside another session's MartyPC",
+        needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
+        wants=("build/os8088-360.img", "build/pagedesk360.img",
+               "build/pagedesk.bin")),
 ]
 
 

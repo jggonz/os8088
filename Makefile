@@ -1,4 +1,4 @@
-# =============================================================================
+# ======================================================================
 # os8088 - build a bootable 1.44MB floppy image
 #
 #   make deps   install the host dependencies FIRST (see below)
@@ -18451,6 +18451,174 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ))
 
+# ---- PageDesk: shell ----
+# PAGEDESK.O88 (docs/PAGEDESK-SPEC.md 2.2, 20.6): the primary C package and
+# its five parts - PDENG and PDREND (eager), PDWRT (lazy), PDRES (lazy, read
+# by offset) and the overlay. `make pagedesk` builds it; `make pagedeskdisk`
+# its own floppy in all four geometries. NOT IN `all`, for cworddisk's and
+# loomdisk's reason: a C package needs SmallerC (SPEC.md 73.1).
+#
+# THE MODULES ARE VARIABLES. PD_ENG_MOD / PD_REND_MOD / PD_WRT_MOD name
+# each module image (a bare `nasm -f bin` output, its own 8-byte header at
+# +0, PAGEDESK-SPEC 3.1) and default to the STAND-INS in apps/pagedesk/stubs/,
+# so the package builds and launches before the real modules land; the module
+# agents' blocks build $(BUILD)/PDENG.MOD and the rest, and the lead flips
+# these defaults at integration. PDRES.BIN, PDFONTX.RES and PDFONTS.TXT are
+# the fonts block's (below this one, so they are named here too: a
+# prerequisite is expanded where its rule is read, and the fonts block's `:=`
+# comes later - the two must agree). PD_MATH_STUB=1 builds against
+# stubs/pdmstub.inc instead of pdmath.inc, the A/B the stand-in was for.
+PDDIR        := apps/pagedesk
+PDSTUBDIR    := $(BUILD)/pdstub
+PD_MATH_STUB ?= 0
+PD_ENG_MOD   ?= $(BUILD)/PDENG.MOD
+PD_REND_MOD  ?= $(BUILD)/PDREND.MOD   # the real renderer: D23 private stack (deepstk) carries its chains; PD_REND_MOD=$(PDSTUBDIR)/PDREND.MOD for the stand-in
+PD_WRT_MOD   ?= $(BUILD)/PDWRT.MOD
+PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
+PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES
+PD_FONT_TXT  ?= $(BUILD)/PDFONTS.TXT
+
+$(PDSTUBDIR):
+	@mkdir -p $@
+$(PDSTUBDIR)/PDENG.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_ENG -o $@ $<
+$(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
+$(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
+
+# A module PART is its image followed by its .bss as zeros, read out of the
+# header the module wrote (+4 image, +6 bss) - apps/loom's lmpvpart rule -
+# so the carve or op_fetch's claim covers the bss (pagedesk.asm's table).
+PD_PARTPAD = @python3 -c "import struct,sys; d=open('$<','rb').read(); \
+	    s,b=struct.unpack_from('<HH',d,4); assert s==len(d), ('$<',s,len(d)); \
+	    open('$@','wb').write(d+bytes(b))"
+# WHICH module each part is cut from is STAMPED, VPSTAMP's shape: a stand-in
+# and a real PDREND.MOD can both be older than the part, so without this a
+# PD_REND_MOD switch kept the previous module in the package (it read as a
+# CGA launch hang on the real renderer's stack overrun - verify-notes, 22:44)
+PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))))
+$(shell mkdir -p $(BUILD); \
+        [ -f '$(PDMODSTAMP)' ] || { rm -f $(BUILD)/.pdmods-* \
+                                      $(BUILD)/pdeng.part $(BUILD)/pdrend.part \
+                                      $(BUILD)/pdwrt.part; \
+                                touch '$(PDMODSTAMP)'; })
+$(BUILD)/pdeng.part: $(PD_ENG_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdrend.part: $(PD_REND_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdwrt.part: $(PD_WRT_MOD) $(PDMODSTAMP) | $(BUILD)
+	$(PD_PARTPAD)
+
+# PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
+# TWO adjacent rows cut at 65,024 - a multiple of 16, so the second row's
+# bytes follow the first's in the file and D3's offsets hold across the cut
+# (pagedesk.asm's table; pdumod.c's pdu_bank_load checks the adjacency)
+$(BUILD)/pdres1.part: $(PD_RES_BIN) | $(BUILD)
+	@python3 -c "d=open('$<','rb').read(); open('$@','wb').write(d[:65024])"
+$(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
+	@python3 -c "d=open('$<','rb').read(); assert 65024 < len(d) <= 2*65024, len(d); \
+	    open('$@','wb').write(d[65024:])"
+
+# the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
+# so every one of them is a prerequisite or an edit rebuilds nothing
+PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
+          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h $(PDDIR)/pdovlrecov.c   # pages, recov
+PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
+          $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
+          $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
+          apps/weave/wfetch.inc apps/os88ui.inc
+PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
+$(PDMATHSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.pdmath-stub $(BUILD)/.pdmath-real
+	@touch $@
+
+$(BUILD)/pagedesk.raw.asm: $(PDCSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDDIR) \
+		$(PDDIR)/pagedesk.c -o $@
+
+$(BUILD)/pagedesk.gen.asm: $(BUILD)/pagedesk.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+$(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMATHSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		$(if $(filter 1,$(PD_MATH_STUB)),-DPD_MATH_STUB) \
+		-o $@ $(PDDIR)/pagedesk.asm
+	@echo "pagedesk: $(call FILESIZE,$@) bytes (primary + overlay, before the cut)"
+
+# the overlay is cut off the image and rides as the LAST part (SPEC.md
+# 73.14.2); os88pkg.py refuses a --part count that is not the table's rows
+$(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
+                       $(BUILD)/pdrend.part $(BUILD)/pdwrt.part \
+                       $(BUILD)/pdres1.part $(BUILD)/pdres2.part \
+                       tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
+	python3 tools/os88ovl.py $< -o $(BUILD)/PAGEDESK.OVL \
+		--trim $(BUILD)/pagedesk.trim.bin
+	$(OS88PKG) $(BUILD)/pagedesk.trim.bin -o $@ $(CC_PARTZ) \
+		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
+		--part $(BUILD)/pdwrt.part \
+		--part $(BUILD)/pdres1.part --part $(BUILD)/pdres2.part \
+		--part $(BUILD)/PAGEDESK.OVL
+$(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
+
+pagedesk: $(BUILD)/pagedesk.o88
+
+# --- PAGEDESK'S OWN DISK, all four geometries (PD-24) ------------------------
+# PAGEDESK.O88 (every part inside it, the core fonts among them), README.TXT,
+# PDFONTS.TXT (the font licence, which SIL OFL 1.1 section 2 wants with every
+# copy - DECISIONS D10) and the samples at the ROOT, so the empty view's
+# Sample guide finds XTGUIDE.PDF beside the program; PDFONTX.RES, the other
+# font sizes, beside them on every geometry but 360KB (D5). The PDFs go on
+# RAW: os88disk.py packs nothing it is not told to, and PDENG reads them
+# with READ_SEQ/READ_AT, which deliver a file as it lies (the WaveRack clips'
+# precedent, PAGEDESK-PLAN L8). The samples are the fix agent's
+# apps/pagedesk/samples/*.PDF; apps/pagedesk/stubs/HELLO.PDF is the stand-in
+# a tree without them falls back on.
+PD_SAMPLES ?= $(or $(wildcard $(PDDIR)/samples/*.PDF),$(PDDIR)/stubs/HELLO.PDF)
+PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
+              $(PD_SAMPLES) tools/os88disk.py tools/checkreadme.py
+define PDDISK
+	python3 tools/checkreadme.py $(PDDIR)/README.TXT
+	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
+	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(PD_SAMPLES) \
+	    --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+endef
+$(BUILD)/pagedesk.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,1440,$(PD_FONTX_RES))
+$(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,1200,$(PD_FONTX_RES))
+$(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,720,$(PD_FONTX_RES))
+$(BUILD)/pagedesk360.img: $(PDDISKDEPS)
+	$(call PDDISK,360,)
+pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
+              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img
+.PHONY: pagedesk pagedeskdisk
+
+# ...and the everything set and the live media carry it (SPEC.md 80.6,
+# tests/unit/t_livefull.py): one PAGEDESK\ folder, the program beside its
+# samples. Appended here because $(ALLAPPSARGS) is defined just above and
+# $(LIVEARGS) reads it further down.
+PDALL := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
+         $(PD_FONTX_RES) $(PD_SAMPLES)
+ALLAPPSARGS += $(addprefix PAGEDESK:,$(PDALL))
+ALLAPPS += $(PDALL)
+# ---- end PageDesk: shell ----
+
+# ---- PageDesk: deepstk ----
+# D23 (docs/PAGEDESK-SPEC.md 20.15): THE PRIVATE MODULE STACK. pdstk.inc is
+# the primary's one door into the modules (pdu_mcall, on a 2 KiB stack carved
+# from claim B) and pdkgate.inc every module's kernel-call gate (back up to the
+# UI stack for each OSAPI call). Prerequisites only - the rules are the
+# shell's and the module blocks' - so an edit to either rebuilds what
+# includes it. tests/unit/t_pdkgate.py holds the gate to the built modules.
+$(BUILD)/pagedesk.bin: $(PDDIR)/pdstk.inc $(PDDIR)/pdabi.inc
+$(BUILD)/PDENG.MOD $(BUILD)/PDREND.MOD $(BUILD)/PDWRT.MOD: $(PDDIR)/pdkgate.inc
+$(PDSTUBDIR)/PDENG.MOD $(PDSTUBDIR)/PDREND.MOD $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/pdkgate.inc
+# ---- end PageDesk: deepstk ----
+
 #> [Media and bundles] allapps :: every app on as many floppies as it takes (build/apps-all.list)
 allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)
 
@@ -21288,3 +21456,410 @@ wireballtest: wireballdisk $(IMG)
 # Native WireBall art is reproducible from the committed imagegen source.
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
+
+# ---- PageDesk: rend ----
+# PDREND.MOD - the rendering segment (docs/PAGEDESK-SPEC.md 10, 20.3). One C
+# translation unit (apps/pagedesk/pdrend.c #includes pdr*.c) through the same
+# smlrcc + tools/cc8086.py chain as every C module (apps/loom/lmpvmod.c's
+# rule is the model), assembled with pdrend.asm and the primitives in
+# pdrprim.inc. `make pdrend` builds the module AND runs its host checks;
+# `make` itself does not depend on it until the lead flips PD_REND_MOD.
+PDR_DIR   := apps/pagedesk
+PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
+             $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
+             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
+PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
+PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
+
+$(BUILD)/pdrend.raw.asm: $(PDR_CSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDR_DIR) \
+		$(PDR_DIR)/pdrend.c -o $@
+
+$(BUILD)/pdrend.gen.asm: $(BUILD)/pdrend.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+# Until the math agent's pdmath.inc is merged, a stub with the same labels lets
+# the size and the syntax be checked. It is derived from what the C calls, so
+# it cannot drift, and it is never shipped (the module built with it is not run).
+$(BUILD)/pdr_mathstub.inc: $(BUILD)/pdrend.gen.asm
+	@{ echo "; generated: stand-ins for pdmath.inc (see pdrend.asm)"; \
+	   grep -o '_pd[m_][a-z0-9_]*' $< | sort -u | while read n; do echo "$$n: ret"; done; } > $@
+
+$(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdrend.gen.asm \
+                     $(PDR_DIR)/pdabi.inc $(wildcard $(PDR_DIR)/pdmath.inc) \
+                     $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
+	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $@ $(PDR_DIR)/pdrend.asm
+	@echo "PDREND.MOD: $(call FILESIZE,$@) bytes image$(if $(PDR_MATH), (math stub: size is a floor),)"
+
+PDR_HOSTBIN := $(BUILD)/pdr_test
+$(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+	cc -O1 -Wall -Wno-unused-function -Wno-unused-variable -Wno-parentheses -Wno-int-to-void-pointer-cast \
+		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+
+.PHONY: pdrend pdrend-host pdrend-fuzz
+# the asm primitives against their C twins need Unicorn: whichever python has it
+PDR_UPY := $(shell for p in python3 /usr/bin/python3; do $$p -c 'import unicorn' 2>/dev/null && { echo $$p; break; }; done)
+pdrend-host: $(PDR_HOSTBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN) $(BUILD)/pdrtest $(BUILD)
+	@$(if $(PDR_UPY),$(PDR_UPY) $(PDR_DIR)/hosttest/pdr_primtest.py,echo "pdr_primtest: SKIP - no python with the unicorn package")
+pdrend: $(BUILD)/PDREND.MOD pdrend-host
+# the sanitizer run (SPEC 20.3.6): ASan+UBSan build, hostile streams + random cases
+PDR_FUZZBIN := $(BUILD)/pdr_test_asan
+$(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
+		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+# the same hostile streams through the REAL engine (pdeng.c answers every verb), ASan+UBSan
+PDR_FUZZREAL := $(BUILD)/pdr_test_real_asan
+PDR_ENGSRC   := $(wildcard $(PDR_DIR)/pde*.c $(PDR_DIR)/pde*.h) $(PDR_DIR)/hosttest/pde_host.c
+$(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
+                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
+		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
+		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
+pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_MKSTORE)
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzzr $(BUILD) -n 200 --seed 23
+# wave 2 (annotr): the same hostile streams with PDRF_ANNOTS | PDRF_EDITS and a hostile edit store (bad offsets,
+# 60,000 points, inverted and page-sized rects, no such kind), through the real engine
+	mkdir -p $(BUILD)/pdrfuzze/store && cd $(BUILD)/pdrfuzze/store && $(abspath $(PDR_MKSTORE)) $(abspath $(PDR_DIR)/samples/MARKUP.PDF) hostile .
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzze $(BUILD) -n 200 --seed 31 \
+		--store $(abspath $(BUILD))/pdrfuzze/store/store.bin --ecount `cat $(BUILD)/pdrfuzze/store/store.cnt`
+# `make pdrend-real`: PDREND linked with the REAL PDENG (hosttest/pdr_hosteng.c), every committed
+# sample drawn as VGA, Hercules and CGA see it and compared with mutool (hosttest/pdr_real.py).
+# PDR_SHOTS=<dir> also writes each page beside mutool's for a human to look at.
+PDR_REALBIN := $(BUILD)/pdr_test_real
+PDR_SHOTS   ?=
+$(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
+                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -w -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+.PHONY: pdrend-real
+pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
+	python3 $(PDR_DIR)/hosttest/pdr_cache.py $(PDR_REALBIN) $(BUILD)/pdrcache $(BUILD) $(PDR_DIR)/samples
+# ---- annotr (wave 2, PAGEDESK-SPEC 20.12): annotations on screen ------------------------------
+# `make pdrend-annot`: hosttest/pdr_mkstore.c builds an edit store through the real writer (PDWRT over
+# the real PDENG) and saves the same marks as a PDF; hosttest/pdr_annot.py draws the ORIGINAL with the
+# store through PDREND (real engine) and compares it with mutool's render of the saved file, then
+# checks every kind, the source /AP annotations (against mutool), dash patterns and inline images.
+$(PDR_MKSTORE): $(PDR_DIR)/hosttest/pdr_mkstore.c $(wildcard $(PDR_DIR)/pdw*.c $(PDR_DIR)/pdw*.h) $(PDR_ENGSRC) \
+                $(PDR_DIR)/pdmath.c $(PDR_DIR)/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(BUILD)/pdr-annot
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -c $(PDR_DIR)/pdeng.c -o $(BUILD)/pdr-annot/pdeng.o
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -c $(PDR_DIR)/hosttest/pde_host.c -o $(BUILD)/pdr-annot/pde_host.o
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_mkstore.c $(PDR_DIR)/pdmath.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(BUILD)/pdr-annot/pdeng.o $(BUILD)/pdr-annot/pde_host.o
+.PHONY: pdrend-annot
+pdrend-annot: $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+	python3 $(PDR_DIR)/hosttest/pdr_annot.py $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/pdrannot $(BUILD) $(PDR_DIR)/samples $(abspath $(BUILD))/stress $(PDR_SHOTS)
+# ---- end annotr --------------------------------------------------------------------------------
+# ---- end PageDesk: rend ----
+
+# ---- PageDesk: eng ----------------------------------------------------------
+# PDENG.MOD (PAGEDESK-SPEC 3, 6-8, 20.2): the PDF reader segment, a C MODULE in
+# apps/loom/lmpvmod.asm's shape - the same smlrcc, the same tools/cc8086.py gate
+# and peephole, the same open-coded compile line (a module has no package
+# header, so CC_PACKAGE does not fit it). `make pdeng` builds it and runs the
+# host harness over the engine's own fixtures and, when tools/os88pdfgen.py is
+# there, over the shared samples, stress set and negative corpus, checked
+# against qpdf. NOT in `all`: the lead flips that at integration.
+PDE_SRC := $(wildcard apps/pagedesk/pde*.c apps/pagedesk/pde.h apps/pagedesk/pde_os88.h)
+PDE_INC ?=
+HOSTCC  ?= cc
+$(BUILD)/pdeng.raw.asm: $(PDE_SRC) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) -I apps/pagedesk \
+		apps/pagedesk/pdeng.c -o $@
+	@rm -f apps/pagedesk/pdeng.i
+
+$(BUILD)/pdeng.gen.asm: $(BUILD)/pdeng.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+$(BUILD)/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/pdeng.gen.asm apps/pagedesk/pdmath.inc \
+                    apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDE_INC) -l $(BUILD)/PDENG.lst -o $@ apps/pagedesk/pdeng.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,s,b=struct.unpack_from('<HHHH',d,0); \
+	    assert s==len(d),(s,len(d)); print('PDENG.MOD: image %d + bss %d = %d bytes (target 40960, cap 57344)' % (s,b,s+b)); \
+	    sys.exit(1 if s+b>57344 else 0)"
+
+$(BUILD)/pde_test: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_test.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_test.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+pdeng: $(BUILD)/PDENG.MOD $(BUILD)/pde_test apps/pagedesk/hosttest/pde_check.py
+	python3 apps/pagedesk/hosttest/pde_check.py $(BUILD)/pde_test $(BUILD)/pdeng-fix
+
+# `make pdefuzz` - the hostile-input pass (PAGEDESK-SPEC 20.2.1, PD-28): the
+# engine built with AddressSanitizer and UBSan, every verb driven over
+# mutations of the corpus `make pdeng` generates. PDEFUZZ_N mutations a file
+# (100 is about half a minute here), PDEFUZZ_SEED picks them. Host only.
+PDEFUZZ_N    ?= 100
+PDEFUZZ_SEED ?= 1
+PDE_SAN      ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+$(BUILD)/pde_fuzz: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fuzz.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -O1 $(PDE_SAN) -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fuzz.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+.PHONY: pdeng pdefuzz
+pdefuzz: pdeng $(BUILD)/pde_fuzz
+	$(BUILD)/pde_fuzz -n $(PDEFUZZ_N) -s $(PDEFUZZ_SEED) -o $(BUILD)/pdeng-fix \
+		$(BUILD)/pdeng-fix/own/*.pdf $(BUILD)/pdeng-fix/shared/samples/*.PDF \
+		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF
+# ---- end PageDesk: eng ------------------------------------------------------
+
+# ---- PageDesk: flate --------------------------------------------------------
+# FlateDecode and the PNG/TIFF predictors in PDENG (PAGEDESK-SPEC 20.13, PD-25).
+# `make pdflate` builds PDENG.MOD (the target gates and the size print) and the
+# host driver hosttest/pde_fl_test.c, then hosttest/pde_fl_check.py runs the
+# whole matrix against Python's zlib, a predictor written from the spec and
+# qpdf. `make pdflatefuzz` is the same engine under AddressSanitizer and UBSan,
+# driven over mutated streams and every read size (hosttest/pde_fl_fuzz.c).
+# Host only; the target arm is hosttest/pde_boot.py's (PDENG.MOD in QEMU).
+PDFL_SRC := $(PDE_SRC) apps/pagedesk/pdeflate.h apps/pagedesk/pdeflate.c
+# The SHIPPED module's dependencies on flate's own files: eng's PDE_SRC wildcard
+# (pde*.c, pde.h) does not match pdeflate.h, and eng's PDENG.MOD rule predates
+# pdeflate.inc, so without these an edit to either left PDENG.MOD stale.
+$(BUILD)/pdeng.raw.asm $(BUILD)/pde_test $(BUILD)/pde_fuzz: apps/pagedesk/pdeflate.h
+$(BUILD)/PDENG.MOD: apps/pagedesk/pdeflate.inc
+# ---- PageDesk: perf ----
+# the lexer's classes, word scan and buffer moves in assembly (pdelex.inc)
+$(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdelex.inc
+# verify-perf: PDREND's caches live for the document, so `make pdrend-real`
+# also draws page after page in ONE process against a fresh process per page,
+# with a read failed inside a font load (hosttest/pdr_cache.py). PDENG's
+# cursor and lexer edges are pde_check.py's (`make pdeng`)
+pdrend-real: pdrend-cache
+.PHONY: pdrend-cache
+pdrend-cache: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_DIR)/hosttest/pdr_cache.py
+	python3 $(PDR_DIR)/hosttest/pdr_cache.py $(PDR_REALBIN) $(BUILD)/pdrcache $(BUILD) $(PDR_DIR)/samples
+# ---- end PageDesk: perf ----
+$(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_test.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+$(BUILD)/pde_fl_fuzz: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_fuzz.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -O1 $(PDE_SAN) -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_fuzz.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+.PHONY: pdflate pdflatefuzz pdflateboot
+pdflate: $(BUILD)/PDENG.MOD $(BUILD)/pde_fl_test apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py $(BUILD)/pde_fl_test $(BUILD)
+
+# the module itself, in QEMU (a 386-class CPU running the 16-bit code SmallerC
+# emitted): `make pdflateboot` checks its CRCs and prints instructions a byte
+pdflateboot: $(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD apps/pagedesk/hosttest/pde_fl_boot.py apps/pagedesk/hosttest/pde_fl_boot.c
+	python3 apps/pagedesk/hosttest/pde_fl_boot.py $(BUILD) --icount
+
+PDFLFUZZ_N ?= 300
+pdflatefuzz: $(BUILD)/pde_fl_fuzz apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py --corpus $(BUILD)/pdfl-corpus
+	$(BUILD)/pde_fl_fuzz -n $(PDFLFUZZ_N) -s $(PDEFUZZ_SEED) $(BUILD)/pdfl-corpus/*.pdf
+# THE C TWIN ON THE TARGET: the same module with the hand-written symbol loop
+# (apps/pagedesk/pdeflate.inc) left out and its C twin compiled in, into
+# $(BUILD)/flc/. `make pdflateboot` boots both and compares them.
+$(BUILD)/flc: | $(BUILD)
+	mkdir -p $@
+$(BUILD)/flc/pdeng.raw.asm: $(PDFL_SRC) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD)/flc cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S -DFL_NOASM \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) -I apps/pagedesk \
+		apps/pagedesk/pdeng.c -o $@
+	@rm -f apps/pagedesk/pdeng.i
+$(BUILD)/flc/pdeng.gen.asm: $(BUILD)/flc/pdeng.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/flc/pdeng.gen.asm apps/pagedesk/pdmath.inc \
+                        apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -DFL_NOASM -I apps/ -I $(BUILD)/flc/ -I $(BUILD)/ -o $@ apps/pagedesk/pdeng.asm
+# ---- end PageDesk: flate ----------------------------------------------------
+
+
+# ---- PageDesk: wrt ----------------------------------------------------------
+# PDWRT.MOD (PAGEDESK-SPEC 20.5): the writer module - serialiser, appearance
+# streams, incremental save, fresh documents. A SEPARATE compilation and a
+# separate `nasm -f bin` job, open-coded the way LOOM.WPV is (a module has no
+# package header, so CC_PACKAGE does not fit). `make pdwrt` builds it AND runs
+# its host harness; the harness is host-side only and is not in `all`.
+#
+# PDW_SDK is an extra include root searched BEFORE apps/ - a tree holding a
+# newer cc/os88.h, cc/os88thunk.asm and pagedesk/pdmath.inc, pdabi.inc. It
+# exists for verifying before those files land on this branch and is empty in
+# the lead's integration tree.
+PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c apps/pagedesk/pdwap.c \
+            apps/pagedesk/pdwscan.c apps/pagedesk/pdwsave.c \
+            apps/pagedesk/pdwpg.c apps/pagedesk/pdwgc.c apps/pagedesk/pdwin.c   # pages: 20.11, insert: 20.16
+PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
+PDW_SDK  ?=
+PDW_OUT  := $(BUILD)/pdw
+PDW_CAP  := 49152   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert)
+.PHONY: pdwrt pdwrt-host
+$(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDW_SDK),$(PDW_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
+		apps/pagedesk/pdwrt.c -o $@
+$(BUILD)/pdwrt.gen.asm: $(BUILD)/pdwrt.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDWRT.MOD: apps/pagedesk/pdwrt.asm $(BUILD)/pdwrt.gen.asm $(CC_RUNTIME) \
+                    $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(if $(PDW_SDK),-I $(PDW_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdwrt.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDWRT.MOD: image %d + bss %d = %d bytes (%.1f KiB; target 40, cap 48)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDW_CAP) else 0)"
+# the host harness and its independent readers (qpdf, mutool, Poppler); PDW_SHOTS
+# is where the rendered PNGs go ('' = none)
+PDW_SHOTS ?=
+$(PDW_OUT)/.host.stamp: apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/hosttest/pdw_verify.py $(PDW_C) $(PDW_H) \
+                        apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDW_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(PDW_OUT)/pdw_test \
+		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	PDW_OUT=$(abspath $(PDW_OUT)) $(PDW_OUT)/pdw_test > $(PDW_OUT)/files.txt || { cat $(PDW_OUT)/files.txt; exit 1; }
+	python3 apps/pagedesk/hosttest/pdw_verify.py $(abspath $(PDW_OUT)) $(PDW_SHOTS)
+	touch $@
+pdwrt-host: $(PDW_OUT)/.host.stamp
+pdwrt: $(BUILD)/PDWRT.MOD pdwrt-host
+# PDWRT against the REAL PDENG (hosttest/pdw_real.c): on demand, and a SKIP
+# until pdeng.c is on the branch. PDW_ENG is the directory holding pdeng.c and
+# hosttest/pde_host.c; PDW_REAL_PDF the source it saves over twice.
+PDW_ENG      ?= apps/pagedesk
+PDW_REAL_PDF ?= apps/pagedesk/samples/MARKUP.PDF
+.PHONY: pdwrt-real
+pdwrt-real: | $(BUILD)
+ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
+	mkdir -p $(BUILD)/pdw-real
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
+	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
+	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
+	python3 apps/pagedesk/hosttest/pdw_pgcheck.py $(abspath $(BUILD)/pdw-real) $(abspath apps/pagedesk/samples)
+else
+	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
+endif
+# ---- end PageDesk: wrt ------------------------------------------------------
+
+# ---- PageDesk: math ----
+# PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
+# `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated
+# assembly mirror pdabi.inc, pdmath.inc's mirrored constants and its coverage of
+# pdmath.h, in a few milliseconds. `pdmathtest` is the differential test -
+# pdmath.inc (8086, run in Unicorn's real-mode x86) against pdmath.c bit for bit
+# - on demand, like the other host-side instruments (needs nasm, cc and
+# `pip install unicorn`). `pdabi-write` regenerates pdabi.inc.
+.PHONY: pdabi-check pdabi-write pdmathtest
+all: pdabi-check
+pdabi-check:
+	@python3 tools/os88pdabi.py --check
+pdabi-write:
+	python3 tools/os88pdabi.py --write
+pdmathtest:
+	python3 tests/pdmath/pdmath_diff.py $(PDMATH_ARGS)
+# ---- end PageDesk: math ----
+# ---- PageDesk: fonts ----
+# PDRES.BIN and PDFONTX.RES (docs/PAGEDESK-SPEC.md 20.4, DECISIONS D3/D5): the
+# document font strikes, the Core14 width tables, the glyph-name table and the icon
+# atlas, packed from the COMMITTED sources under apps/pagedesk/fonts/ and
+# apps/pagedesk/art/.  Pure Python, no network, no Pillow.  PDRES.BIN is the core
+# (8/10/12 px, widths, names, icons) that rides inside PAGEDESK.O88; PDFONTX.RES is
+# the optional file of the other sizes that rides beside it; PDFONTS.TXT is the
+# font licence text that must travel with both (SIL OFL 1.1 section 2).
+# `python3 tools/os88pdfont.py fetch|draw` is the one-time regeneration of the font
+# sources from the pinned TTFs/AFMs (never run by make).
+PD_RES_BIN   := $(BUILD)/PDRES.BIN
+PD_FONTX_RES := $(BUILD)/PDFONTX.RES
+PD_FONT_TXT  := $(BUILD)/PDFONTS.TXT
+PD_ART_INC   := $(BUILD)/pdart_appicon.inc
+PD_FONT_LIC  := apps/pagedesk/fonts/LICENSES.txt apps/pagedesk/fonts/OFL-Liberation.txt \
+                apps/pagedesk/fonts/AUTHORS-Liberation.txt apps/pagedesk/fonts/AFM-NOTICE.txt
+PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
+                $(wildcard apps/pagedesk/art/*.art) $(PD_FONT_LIC) \
+                tools/os88pdfont.py tools/os88pdart.py
+
+$(PD_RES_BIN): $(PD_RES_SRC)
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py build -o $@
+	python3 tools/os88pdfont.py check --res $@
+
+$(PD_FONTX_RES): $(PD_RES_SRC)
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py build --extra -o $@
+	python3 tools/os88pdfont.py check --extra --res $@
+
+$(PD_FONT_TXT): $(PD_FONT_LIC) tools/os88pdfont.py
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py notice -o $@
+
+# both includes come out of one run; the second rides on the first
+$(PD_ART_INC): $(wildcard apps/pagedesk/art/*.art) tools/os88pdart.py
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdart.py build --inc-dir $(BUILD)
+$(BUILD)/pdart_docglyph.inc: $(PD_ART_INC) ;
+
+.PHONY: pdfonts
+all: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
+pdfonts: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
+	python3 tools/os88pdart.py check
+# ---- end PageDesk: fonts ----
+
+# ---- PageDesk: nav ----
+# Navigation, selection, Find, thumbnails, outline and links (PAGEDESK-SPEC
+# 20.10). `make pdnav` builds PDENG's host harnesses for SEARCH and the link
+# records and runs them: pde_srch.py is a differential test of the matcher
+# against a reference over random pages and piece sizes, pde_link reads the
+# sample guide's links. The primary's own files (pdunav.c, pdusel.c,
+# pdufind.c, pduside.c) are matched by PDCSRC's pdu*.c wildcard; the
+# overlay's tenant is not, so it is named here.
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnav.c
+$(BUILD)/pde_srch: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pde_srch.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_srch.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+$(BUILD)/pde_link: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pde_link.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_link.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+pdnav: $(BUILD)/pde_srch $(BUILD)/pde_link
+	python3 apps/pagedesk/hosttest/pde_srch.py $(BUILD)/pde_srch apps/pagedesk/samples/HELLO.PDF 400
+	$(BUILD)/pde_link apps/pagedesk/samples/XTGUIDE.PDF | grep -c '^L ' | grep -qx 7
+.PHONY: pdnav
+# ---- end PageDesk: nav ----
+
+# ---- PageDesk: notes ----
+# Notes & edits, the note popover and the Text properties inspector
+# (docs/PAGEDESK-SPEC.md 20.9). pdovlnotes.c is included by pdovl.c, so the
+# shell block's PDCSRC wildcard (pdu*.c) does not name it: say so here, or an
+# edit to it rebuilds nothing. `make pdnotes` runs the list model's host test
+# (apps/pagedesk/hosttest/pdu_nt.c compiles pdunotes.c, the file the package
+# compiles, against a fake store); tests/unit/t_pdnotes.py is the same run.
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
+
+# ---- PageDesk: prefs ----
+# pdovlpref.c is #included by pdovl.c and the wildcard (pdu*.c) does not name it
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlpref.c
+# ---- end PageDesk: prefs ----
+
+$(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \
+                 apps/pagedesk/pdu.h apps/pagedesk/pdabi.h | $(BUILD)
+	$(HOSTCC) -O1 -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk \
+		apps/pagedesk/hosttest/pdu_nt.c -o $@
+
+pdnotes: $(BUILD)/pdu_nt
+	$(BUILD)/pdu_nt
+.PHONY: pdnotes
+# ---- end PageDesk: notes ----
