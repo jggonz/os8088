@@ -698,9 +698,9 @@ struct pdxb_img {
 #define PDFK_CFF  2
 #define PDFK_T1   3
 #define PDFG_INFO   0x0001      /* pdxb_fglyph.flags in: no bitmap, only gid/lat/adv           */
-#define PDFG_BLOCK  0x0004      /* in: dseg:doff is a STRIKE BLOCK (below): PDXF finds or adds the code's
-                                   slot there, rasterises into it (em64 != 0) and records the width and
-                                   the Latin byte; the verb answers the slot                    */
+#define PDFG_BLOCK  0x0004      /* in: a STRIKE BLOCK request (below): PDXF finds or makes the block of
+                                   (font, em64 >> 6), then the code's slot in it, rasterises (em64 != 0)
+                                   and records the width and the Latin byte; answers the slot and block */
 #define PDFB_SIZE   4096        /* a strike block: 128 glyph records (4 bytes: width, left bearing i8,
                                    bitmap offset u16), the bitmaps from +512 (the PDFB strike layout of
                                    11.2, slots 1..128, the record of slot s at (s-1)*4; the u16 next
@@ -709,6 +709,10 @@ struct pdxb_img {
                                    /W width in 1/1000 em, u8 PD Latin, u8 flags PDFB_F_*) at +3584. The
                                    slot of a code is its index in keys + 1, found from hash(code) =
                                    (code ^ code >> 7) & 127 by linear probing                  */
+#define PDFB_HDR    64          /* the 64 bytes just below the blocks: SYN_MAX (4) entries of 4 words
+                                   (font obj, gen, px, pass last used) at +0, the block count at +60 and
+                                   the magic PDFB_MAGIC at +62. PDREND finds, PDXF makes and evicts      */
+#define PDFB_MAGIC  0x5342
 #define PDFB_KEYS   3328
 #define PDFB_INFO   3584
 #define PDFB_F_BMP  0x01        /* the slot's bitmap is made                                    */
@@ -728,7 +732,8 @@ struct pdxb_fglyph {
     pdw flags;              /* in: PDFG_INFO                                                 */
     pdw em64;               /* in: the size in 1/64 pixel                                    */
     pdw asc, rows;          /* in: the strike's ascent rows and total rows (<= 48)          */
-    pdw dseg, doff, cap;    /* in: where the bitmap goes                                     */
+    pdw dseg, doff, cap;    /* in: where the bitmap goes; with PDFG_BLOCK dseg:doff is the strike
+                               block HEADER (PDFB_HDR) and the blocks lie above it (cap = their count) */
     pdw w;                  /* out: width px (0 = empty glyph); 0xFFFF = not bitmapped       */
     pdi lb;                 /* out: left bearing px                                          */
     pdw nb;                 /* out: bytes written                                            */
@@ -740,6 +745,9 @@ struct pdxb_fglyph {
     pdw kind;               /* out: PDFK_*                                                   */
     pdw oflags;             /* out: PDFG_*                                                   */
     pdw slot;               /* out (PDFG_BLOCK): the slot, 0 = none                            */
+    pdw pass;               /* in (PDFG_BLOCK): PDREND's pass number: a block not used in this pass
+                               may be reused for a new (font, size)                            */
+    pdw blk;                /* out (PDFG_BLOCK): the block index of (font, size), 0xFFFF = none free */
     pdw err;                /* out when the answer is a failure: PDFE_*                      */
 };
 #define PDFP_M 1                /* PDV_FNT_PATH ops: M x y | L x y | C x1 y1 x2 y2 x y | Z (i16 font units) */

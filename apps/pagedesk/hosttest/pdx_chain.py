@@ -42,7 +42,7 @@ def main():
         for c, g in j.get("cidmap", {}).items():
             if cmp_.get(int(c)) != g: errs.append("cmap(%s)=%s want %d" % (c, cmp_.get(int(c)), g))
         # the strike block at 12 px against a direct raster of the same gids
-        px = 12; asc = px + 1; rows = px + 1 + (px + 3) // 4 + 1
+        px = 12; asc = px; rows = px + px // 4 + 1
         env = dict(os.environ, PDX_PX=str(px))
         blk = subprocess.run([BIN, os.path.join(FIX, j["pdf"]), str(j["nbytes"])] + [str(c) for c in j["codes"]], capture_output=True, text=True, env=env).stdout
         hostbin = os.path.join(ROOT, "build", "pdx_host")

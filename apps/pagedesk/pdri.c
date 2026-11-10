@@ -326,28 +326,29 @@ static pdw run_begin(void)
 static struct pdxb_fglyph g_fgl;
 static pdw emb_glyph(struct pdr_font *f, pdw code)
 {
-    pdw boff, h, i, k, px = 0, n = 1, ip, tried = 0;
+    pdw boff, h, i, k, px = 0, n = 1, ip, tried = 0, obj = g_fk[GS.font].objnum, gen = g_fk[GS.font].gen;
     if (g_mode != PDR_TEXT) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
-    g_escale = n; g_ek = syn_get(g_fk[GS.font].objnum, g_fk[GS.font].gen, px);
-    if (g_ek == 0xFFFF) { inc_note(PDF_INC_FONT, "font substituted"); return 0; }
-    boff = syn_off(g_ek);
+    g_escale = n;
     for (;;) {
-        h = (pdw)((code ^ (code >> 7)) & 127);
-        for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
-            k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
-            if (k == code || k == 0xFFFF) break;
-        }
-        ip = (pdw)(boff + PDFB_INFO + h * 4);
-        if (k == code && (!px || (pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
-            g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
-            if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
-            return 1;
+        g_ek = syn_find(obj, gen, px);
+        if (g_ek != 0xFFFF) {
+            boff = syn_off(g_ek);
+            h = (pdw)((code ^ (code >> 7)) & 127);
+            for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
+                k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
+                if (k == code || k == 0xFFFF) break;
+            }
+            ip = (pdw)(boff + PDFB_INFO + h * 4);
+            if (k == code && (!px || (pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
+                g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
+                if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
+                return 1;
+            }
         }
         if (tried || !x_have(PDX_FNT)) { if (!tried) x_need(PDX_FNT); return 0; }
         tried = 1;
-        g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
-        g_fgl.em64 = (pdw)(px << 6); g_fgl.asc = px; g_fgl.rows = (pdw)(px + (px >> 2) + 1);
-        g_fgl.dseg = g_gseg; g_fgl.doff = boff;
+        g_fgl.objnum = obj; g_fgl.gen = gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+        g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.doff = syn_hdr(); g_fgl.cap = syn_cap(); g_fgl.pass = g_passes;
         pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
         x_call(PDV_FNT_GLYPH, 0, 0, 0);
         if (x_cf) {                                         /* refused: the substitute face from now on */
