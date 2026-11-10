@@ -42,8 +42,8 @@ static void xb_state(pdw kind)
 {
     pdw n;
     g_xnt = 0;
-    if (!g_x8rdy || g_mode != PDR_INTERP || (!GS.pad_ && !g_xlive)) return;
-    n = x8_call(PDV_X8_DEF, X8D_STATE, kind == PK_STROKE, GS.pad_);
+    if (!g_x8rdy || g_mode != PDR_INTERP || (!GS.xt && !g_xlive)) return;
+    n = x8_call(PDV_X8_DEF, X8D_STATE, kind == PK_STROKE, GS.xt);
     g_xnt = x8_odx & 1; g_xlive = (x8_odx >> 1) & 1;
     if (n) xb_emit(n);
 }
@@ -64,20 +64,30 @@ static void xb_detect(pdw obj, pdw gen)
 /* the gs operator */
 static pdw xb_gs(void)
 {
-    pdw n0, t;
+    pdw n0, t, cn, cg;
+    static pdw dt[3];
     if (g_mode != PDR_INTERP || !g_havename) return 0;
     if (res_lookup("ExtGState", g_name)) return 0;
-    if (!g_rl.objnum) { inc_note(PDF_INC_TRANSP, "direct ExtGState"); return 0; }
-    if (!g_x8rdy) { xb_detect(g_rl.objnum, g_rl.gen); return 0; }
-    t = x8_call(PDV_X8_GS, GS.pad_, g_rl.objnum, g_rl.gen);
+    cn = g_rl.objnum; cg = g_rl.gen;
+    if (!cn) {                                          /* a DIRECT dictionary (PDRL_DIRECT, 20.22.3.8): RES_LOOKUP's tail is still in XB */
+        if (!g_x8rdy) { g_x8any = 1; return 0; }        /* pass 1: ask for the region; PDX8 reads the dictionary in pass 2 */
+        cn = pd_fpeekw(g_xb, (pdw)(sizeof(struct pdxb_reslookup) + 2));
+        dt[0] = pd_fpeekw(g_xb, (pdw)(sizeof(struct pdxb_reslookup) + 4));
+        dt[1] = pd_fpeekw(g_xb, (pdw)(sizeof(struct pdxb_reslookup) + 6));
+        dt[2] = pd_fpeekw(g_xb, (pdw)(sizeof(struct pdxb_reslookup) + 8));
+        pd_fcopy_out(dt, g_xb, 0, 6);
+        cg = PDX8_DIRECT;
+    }
+    else if (!g_x8rdy) { xb_detect(cn, cg); return 0; }
+    t = x8_call(PDV_X8_GS, GS.xt, cn, cg);
     x8_bits(x8_odx);
     if (x8_cf) return 0;
-    GS.pad_ = (pdb)t;
+    GS.xt = (pdb)t;
     if (x8_ocx) {                                       /* a soft mask: its /G is a Form, interpreted into a block */
         g_xmaskpend = 1; n0 = g_nfr;
         do_form(pd_fpeekw(g_xb, 0), pd_fpeekw(g_xb, 2));
         g_xmaskpend = 0;
-        if (g_nfr == n0) GS.pad_ = (pdb)x8_call(PDV_X8_DEF, X8D_NOMASK, 0, 0);   /* the form would not open */
+        if (g_nfr == n0) GS.xt = (pdb)x8_call(PDV_X8_DEF, X8D_NOMASK, 0, 0);   /* the form would not open */
     }
     return 0;
 }
@@ -90,7 +100,7 @@ static void xb_group_begin(pdw obj, pdw gen)
     pdw n;
     q.maskpend = g_xmaskpend; g_xmaskpend = 0;
     if (!g_x8rdy || g_mode != PDR_INTERP) return;
-    q.frame = g_nfr; q.obj = obj; q.gen = gen; q.tuple = GS.pad_; q.dllen = g_dllen;
+    q.frame = g_nfr; q.obj = obj; q.gen = gen; q.tuple = GS.xt; q.dllen = g_dllen;
     q.y0 = GS.cy0 > g_gy0 ? GS.cy0 : g_gy0; q.y1 = GS.cy1 < g_gy1 ? GS.cy1 : g_gy1;
     if (GS.cx1 < GS.cx0) q.y1 = (pdi)(q.y0 - 1);
     pd_fcopy_out(&q, g_xb, 0, sizeof q);
@@ -98,7 +108,7 @@ static void xb_group_begin(pdw obj, pdw gen)
     if (!n) return;
     xb_emit(n);
     if (x8_ocx & 1) g_lstv = 0;                         /* a mask's block opens with its own STATE */
-    GS.pad_ = 0;                                        /* inside: opaque Normal, no mask */
+    GS.xt = 0;                                        /* inside: opaque Normal, no mask */
     g_xlive = 0;
 }
 

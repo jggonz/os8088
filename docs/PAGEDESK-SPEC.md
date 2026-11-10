@@ -5252,9 +5252,9 @@ verb sequence; a fifth `NEEDMEM` is refused. A job that sees a ladder status
 past either cap more than 16 times fails with `PDE_LIMIT` rather than loop.
 
 **The AUTH sub-state** (`ovl_au_slice`, `pdovlplat.c`, an overlay tenant: it
-runs at open frequency). First the held key (20.22.2.10); else PDXK comes
-into the slot, `pdxb_crypt` is zeroed in the XB and `PDV_KEY_COST` prices one
-run. A run that costs anything (R6) asks first on an 8088 through ui's
+runs at open frequency). PDXK comes into the slot, `pdxb_crypt` is zeroed in
+the XB and `PDV_KEY_COST` reads the parameters and prices one run; then the
+held key (20.22.2.10) when the file is the one it was kept for. A run that costs anything (R6) asks first on an 8088 through ui's
 `pdu_au_askr6(seconds x 2)` (O6: no answer, no derivation, `PDE_PASSWORD`),
 and shows ui's working popover (`pdu_au_busy`) elsewhere. `PDV_KEY_AUTH` is
 then called once a slice, its `progress` handed to `pdu_au_prog`; the empty
@@ -5351,18 +5351,24 @@ cap is 65,024):
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
 and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
 document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
-`/ID[0]`.
+`/ID[0]`, 196..211 the first 16 bytes of its `/Encrypt` `/U`.
 
 * **The document's key** is kept (from `PDV_ENG_CRYPTINFO`, which answers
   key, `key_len`, the methods and `/ID[0]` on a keyed file) whenever PDXK set
   one. At the next `PDE_PASSWORD` of any open - the re-open after a page
   operation's save, the open of a Save As's output, the document again after
-  the pre-flight below - the half-open file's `CRYPTINFO` is asked first, and
-  when its `/ID[0]` is the kept one the key goes back with `PDV_ENG_SETKEY`:
-  no PDXK, no question. A save keeps the source's `/Encrypt` and `/ID[0]`
-  (20.22.4.5), which is what makes this right. A file whose owner changed the
-  password and kept the `/ID[0]` would open with the old key and fail its
-  catalog: that is a re-open by the user, which asks again.
+  the pre-flight below - PDXK comes in and `PDV_KEY_COST` reads the file's parameters as for any
+  encrypted open; when its `/ID[0]`, its `/U` (first 16 bytes) and its
+  methods (`stm str eff encmeta`) are the kept ones the key goes back with
+  `PDV_ENG_SETKEY`: no question, no derivation (an R6 file is minutes on an
+  XT). A save keeps the source's `/Encrypt` and `/ID[0]` (20.22.4.5), which is
+  what makes this right. `/ID[0]` alone was not enough (QA R20): a writer that
+  re-encrypts a document keeps its `/ID` (the `GUIDE_*` fixtures are XTGUIDE
+  under RC4-128, AESV2 and R6 with one `/ID`), and the held key of one drew
+  every page of another as `content stream error`. Nor is `/U` alone: R3
+  RC4-128 and R4 AESV2 under the same passwords derive the SAME key and `/U`,
+  and only the method tells them apart. The `/U` is kept from the XB after a
+  successful `PDV_KEY_AUTH`, before `SETKEY` wipes it.
 * **The Insert's pre-flight** (20.22.4.5's other half). PDWRT is a slot
   occupant, so PDXK cannot load while a save runs. A Save As whose page map
   names foreign pages (`ovl_save_begin`, kind 0) therefore starts its job
@@ -5691,6 +5697,26 @@ streams. Every other change of the Flate claim still resets the document
 (20.2.2). `pde_test flshrink` (pde_check's `XTGUI_OZ.PDF` row) opens two Flate
 streams, sees `PDE_BUSY`, closes the inner one, sees AX = 1 and reads the
 outer one to the same bytes as an undisturbed read. Cost: 152 bytes.
+
+**20.22.3.10 A page's annotations in object streams (QA R6).** Two caches
+make reading a page's annotations, in order, cheap:
+- `ANNOTS` keeps a cursor: the page, the next index and where the last
+  element of `/Annots` ended. The next call in order reads from there,
+  rather than entering the page dictionary and skipping `index` elements
+  again.
+- Every header pair `os_find` reads goes into the resolved-offset cache,
+  tagged with its stream (`ox_enter` takes a cached position only for the
+  stream the cross-reference names). A member found later does not read the
+  header again. The header sits at the stream's start, so once the window is
+  past its ring, that read would decode the stream from its start.
+
+On `BIG_OS.PDF` (80 notes a page, in a stream longer than the ring, read
+backwards), one page's `ANNOTS` walk drops from 27,133 tokens to 10,543 and
+from 18 decodes to 16. The walk still pays a decode each time it goes back to
+the page dictionary's `/Annots` while the window is 32 KiB past it. A
+read-ahead of the array would remove that, but this round's bytes do not
+cover it. pde_check's `BIG_O*` row lists both pages' notes in order against
+the generator's. Cost: 204 bytes.
 
 #### 20.22.4 Saving from and to the new kinds of file (`wrt`)
 
@@ -6124,18 +6150,22 @@ least):
 | 12 characters | 69.0 | 16,445 | 1,449 | 1,389 | 534 (455 to 652) |
 | 24 characters | 71.2 | 20,452 | 1,733 | 1,750 | 665 (560 to 821) |
 
-That is `9.1 x (password + 48)` seconds, the formula in `PDV_KEY_COST`
-(`pdk_cycles.py --stats`). A run is a **seventh of an hour for the empty
-password**; the attempts are runs: a correct user password is **two** (the check
-and the key salt: 14.6 minutes for the empty one, 13 to 15 on a file's own
-salts), a wrong password typed in is 2.7 (the user key, then the owner key, whose
-`udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 22 to 24
-minutes),
-and the silent empty attempt on a file that has a user password is 1 (7.3
-minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
-therefore "about 15 minutes" for a file that opens, and the prompt that follows a
-failed silent attempt another 15. On a 286 (a sixth) it is 2.5 and on a 386 well
-under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
+That is `9.1 x (password + 48)` seconds as priced. **MartyPC's 5150 measured
+it 1.4 times longer** (QA F23: 1,212 s and 1,213 s on CGA and Hercules for the
+two runs of an empty user password, priced at 874), the real 8088's prefetch and
+bus costs that the pricing rule does not see, so `PDV_KEY_COST` returns
+**`12.75 x (password + 48)` seconds** on an 8088 (612 for the empty one) and the
+table above is the priced figure. A faster class divides by 6, 24 or 60 as
+before; the 1.4 has not been measured there, so those estimates err long. A run is
+**ten minutes for the empty password**; the attempts are runs: a correct user
+password is **two** (the check and the key salt: 20.4 minutes for the empty one,
+measured 20.2), a wrong password typed in is 2.7 (the user key, then the owner
+key, whose `udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 30
+minutes), and the silent empty attempt on a file that has a user password is 1
+(10 minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
+therefore "about 20 minutes" for a file that opens, and the prompt that follows a
+failed silent attempt another 20. On a 286 (a sixth) it is 3.4 and on a 386 about
+a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
 `DICT_GET` included): R2 0.17 s, R3 and R4 1.8 s (50 MD5 passes and 20 RC4
 passes), a wrong password on R3 5.1 s (the owner key as well).
 
@@ -6195,6 +6225,17 @@ cancel when a job is running (`pdu_jcancel`, the order of PD-03): **the open
 job's cancel path must call `pdu_au_close()`**, which also zeroes the buffer;
 with no job running, Esc closes the popover and the answer is -1.
 
+Fix round (QA F3-F5): the prompt is centred in the canvas (the overlay moves
+the popover's rectangle after `pdu_pop_open` places it); a close paints
+nothing while it is going (`pdu_au_mode` 5, set by the leaves `ovl_au_end` and
+the keys' cancel), so no Preferences rows are painted over the canvas; and a
+job that waits for the person (`pdu_au_wait`, set while asking, wrong or
+asking the R6 question) does not re-post its wake: the key, the close or the
+answer posts it. Re-posting made the wake spin on disk work and kept the
+kernel's file-progress clock on the pointer for as long as the prompt waited.
+`pdu_au_close()` is now `ovl_au_end()`, a leaf (no path to the code that opens
+popovers, pdstk D21), and `pdu_job_abort` uses it.
+
 | mode | rows | keys |
 |---|---|---|
 | `AU_PW` asking | `Password: ***_` / blank / blank / `Enter: open  Esc: cancel` | printable ASCII appends (at most 127), Backspace deletes, Enter answers (an empty entry is ignored: the empty password was already tried), Esc cancels |
@@ -6235,9 +6276,9 @@ over while the mode is set. A refused overlay fetch makes ask, askr6 and busy
 answer 0 and shows nothing.
 
 **Errors.** `pdu_errtext` has one plain sentence for every code the round
-adds or re-means: `PDE_PASSWORD` "A password is needed.", `PDE_NOSLOT` the
-`PDE_NOMEM` sentence ("Not enough memory. Close a window and try again."), `PDE_ENCRYPT`
-"Its encryption handler is not supported." and `PDE_XREFSTM` "Its
+adds or re-means: `PDE_PASSWORD` "Password needed.", `PDE_NOSLOT` the
+`PDE_NOMEM` sentence ("Out of memory. Close a window, retry."), `PDE_ENCRYPT`
+"Its encryption is not supported." and `PDE_XREFSTM` "Its
 cross-reference stream is damaged." `PDE_NEEDMOD`/`PDE_NEEDMEM` are statuses
 the ladder consumes and never reach a sentence. The primary names no
 `PDF_INC_*` reason of its own: the module that sets the bit supplies the name
@@ -6961,7 +7002,7 @@ array of names takes the first this table has, else Normal.
 The effective transparency is the fold of the `gs` operators applied so far,
 so it is a tuple, not an index into the resource dictionary: a pool of 15
 5-byte tuples `{ca, CA, bm, smask, 0}` per pass (`g_xt`, reset by
-`pass_begin`), and **`pdr_gs.pad_` is the tuple's index** (0 = opaque Normal, no
+`pass_begin`), and **`pdr_gs.xt` is the tuple's index** (`pad_` is gfx's colour-space slots, 20.22.9: sharing it made every device colour operator clear the tuple, QA R9) (0 = opaque Normal, no
 mask), which q, Q and a form's push already save. An `XSTATE` is written
 before a mark only when its tuple, for the mark's kind, differs from the last
 written; entering and leaving a group forces one. A mark under a tuple that is
@@ -6982,7 +7023,10 @@ need for the region (`PDE_NEEDMEM`, 20.22.10.2); so does an image with an
 `/SMask` or `/Mask`. The pass is then run again with the part present:
 
 * `gs` is `PDV_X8_GS` (BX = the tuple in force, CX/DX = the dictionary's
-  object and generation): AX = the new tuple (written to `pdr_gs.pad_`), CX = 1
+  object and generation; a DIRECT dictionary, RES_LOOKUP's `PDRL_DIRECT`: CX =
+  `cnum`, DX = `PDX8_DIRECT` (0xFFFD) and XB+0 holds `{cgen, coff lo, coff hi}`;
+  PDX8 hands the same tail after the `pdxb_dictget` to PDENG's DICT_GET, whose
+  `gen` 0xFFFD means "start the dictionary at `coff` of this object"): AX = the new tuple (written to `pdr_gs.xt`), CX = 1
   when the dictionary has a soft mask whose `/G` form (its object at XB+0, XB+2)
   PDREND now interprets as the mask's block; DX = `X8F_*` bits. A pool or mask
   table overflow answers CF and keeps the previous tuple. `/TR` other than
@@ -7060,8 +7104,7 @@ is TRANSPARENT unless its `/Decode` inverts it. A mask that will not open (a
 codec the core does not read) draws the image opaque and sets `PDF_INC_TRANSP`.
 
 **20.22.10.9 Incomplete bits and degradations.** No region: `PDF_INC_APPROX`.
-Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A direct ExtGState, a
-non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
+Depth, pool, mask or band-width limits: `PDF_INC_LIMIT`. A non-identity `/TR`, an image `/Mask` that is a colour-key array: `PDF_INC_TRANSP`.
 Nothing else in this section sets a bit.
 
 **20.22.10.10 Build gate, budgets and stack.** The hooks are compiled with `PDR_X8`,

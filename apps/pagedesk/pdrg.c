@@ -21,6 +21,7 @@ struct pdr_gs {
     pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
     pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 2,040) */
     pdb  dn, dash[4];               /* dash pattern: elements (0 = solid) and lengths, quarter points */
+    pdb  xt;                        /* blend: the transparency tuple in force (20.22.10; pad_ is gfx's colour-space slots) */
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
  * the workspace at the tail of dl_seg (PDR_WSB bytes, PAGEDESK-SPEC 20.3.1) */

@@ -1596,6 +1596,10 @@ FAST = [
         "8-pixel grid, the kind from the thresholds, every mode's tools on "
         "the glass. ~15M checks in ~0.4 s",
         needs=("cc",)),
+    Row("pderrlen", "fast", py("tests/unit/t_pderrlen.py"), 0.1,
+        "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
+        "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
+        "narrowest canvas (39 cells) - the card cuts a longer one"),
     Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
         "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
         "model - the filters (This page / All pages / Changes), order, "

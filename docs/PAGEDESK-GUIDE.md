@@ -544,23 +544,23 @@ it.
 
 | code | message | what it means and what to do |
 |---|---|---|
-| `PDE_SYNTAX` | The file is damaged: it does not parse as PDF. | no `%PDF-` header at byte 0, a bad stream length, a document with no pages, or a packed copy of the file (a `.PDF` that the OS has compressed on disk and that PageDesk would read as its wrapper). Re-copy the file from the original. |
-| `PDE_XREF` | The file's cross-reference table is damaged. | a damaged or looping xref chain, no `/Root`, an offset the file does not hold. PageDesk never repairs a file; repair it first with `qpdf` on a PC. |
+| `PDE_SYNTAX` | Damaged: it does not parse as a PDF. | no `%PDF-` header at byte 0, a bad stream length, a document with no pages, or a packed copy of the file (a `.PDF` that the OS has compressed on disk and that PageDesk would read as its wrapper). Re-copy the file from the original. |
+| `PDE_XREF` | Its cross-reference table is damaged. | a damaged or looping xref chain, no `/Root`, an offset the file does not hold. PageDesk never repairs a file; repair it first with `qpdf` on a PC. |
 | `PDE_TRUNC` | The file is truncated. | no `startxref`, or data past the end. Copy the file again. |
-| `PDE_CYCLE` | The file's page or resource tree loops. | a page-tree node reached twice or a `/Parent` loop. |
-| `PDE_DEPTH` | The file nests objects deeper than PageDesk reads. | more than 32 levels. |
+| `PDE_CYCLE` | Its page or resource tree loops. | a page-tree node reached twice or a `/Parent` loop. |
+| `PDE_DEPTH` | Objects nest too deep for PageDesk. | more than 32 levels. |
 | `PDE_FLATE` | No Flate cache (low RAM, or set Off). | free memory could not hold the 43 KiB slot with 32 KiB to spare, or Preferences has Flate Off. Close windows, set Flate cache to Auto, reopen; or prepare the file with `os88pdprep.py` on a PC. |
-| `PDE_FILTER` | It uses a stream filter PageDesk cannot decode. | LZW, ASCII85, JPEG, CCITT, JBIG2, JPX, a crypt filter, or a fifth stage. Prepare on a PC. |
+| `PDE_FILTER` | Its stream filter is not supported. | LZW, ASCII85, JPEG, CCITT, JBIG2, JPX, a crypt filter, or a fifth stage. Prepare on a PC. |
 | `PDE_FONT` | It uses a font PageDesk cannot draw. | reserved for a font with nothing to substitute; normal unsupported fonts draw with a substitute and say Incomplete. |
-| `PDE_GRAPHICS` | It uses graphics outside the XT profile. | shadings, patterns and similar; normally shown as Incomplete rendering. Prepare with `--raster`. |
-| `PDE_PASSWORD` | A password is needed. | the file is encrypted and the empty password did not open it. PageDesk asks for the password in a small prompt (Enter tries it, Esc cancels the open, a wrong one says so and asks again). |
-| `PDE_ENCRYPT` | Its encryption handler is not supported. | a security handler other than the standard one (a public-key file, say). |
+| `PDE_GRAPHICS` | Its graphics are outside the profile. | shadings, patterns and similar; normally shown as Incomplete rendering. Prepare with `--raster`. |
+| `PDE_PASSWORD` | Password needed. | the file is encrypted and the empty password did not open it. PageDesk asks for the password in a small prompt (Enter tries it, Esc cancels the open, a wrong one says so and asks again). |
+| `PDE_ENCRYPT` | Its encryption is not supported. | a security handler other than the standard one (a public-key file, say). |
 | `PDE_XREFSTM` | Its cross-reference stream is damaged. | the stream that replaces the xref table cannot be read. |
-| `PDE_NOSLOT` | Not enough memory. Close a window and try again. | no RAM for a decoder module's slot; the page is drawn without that feature and says Incomplete. |
+| `PDE_NOSLOT` | Out of memory. Close a window, retry. | no RAM for a decoder module's slot; the page is drawn without that feature and says Incomplete. |
 | `PDE_SIGNED` | The file is signed: it opens read-only. | a signature or `/Perms`: you can read it, search it and copy from it; annotation tools are greyed. |
-| `PDE_RANGE` | A page or number is outside PageDesk's range. | a page box beyond +/-2,047 points, a zero-area box, a rotation that is not a multiple of 90, or in Insert, a page past the other file's end ("no such page."). |
-| `PDE_LIMIT` | The file exceeds one of PageDesk's limits. | more than 1,024 pages, more than 8 revisions, an object number above 65,535, a file of 2 GiB, more than 256 xref subsections across the chain, one decoded stream over 1 MiB, or an Insert of a file with forms or scripts ("forms or scripts."). |
-| `PDE_NOMEM` | Not enough memory. Close a window and try again. | a claim was refused (the open says `Not enough memory: PageDesk needs N KB.`). Close other windows. |
+| `PDE_RANGE` | A number is outside PageDesk's range. | a page box beyond +/-2,047 points, a zero-area box, a rotation that is not a multiple of 90, or in Insert, a page past the other file's end ("no such page."). |
+| `PDE_LIMIT` | It exceeds one of PageDesk's limits. | more than 1,024 pages, more than 8 revisions, an object number above 65,535, a file of 2 GiB, more than 256 xref subsections across the chain, one decoded stream over 1 MiB, or an Insert of a file with forms or scripts ("forms or scripts."). |
+| `PDE_NOMEM` | Out of memory. Close a window, retry. | a claim was refused (the open says `Not enough memory: PageDesk needs N KB.`). Close other windows. |
 | `PDE_STACK` | Out of module stack: the document was closed. | the safety check on the private stack fired; reopen. Report it with the file if you can. |
 | `PDE_IO` | The disk could not be read. | also "the file is not in this folder". Check the disk. |
 | `PDE_DISKFULL` | The disk is full. | choose another disk; the temporary file was removed. |
