@@ -750,8 +750,8 @@ the safe direction; `SS_TSTATE` is `MAX_TASKS` bytes.
 `.lowbss` (`kernel/dskwin.inc`, SPEC.md §2.1.2):
 
 - `dsk_secbuf`, 512 B — one sector of scratch, written by int 13h through
-  ES:BX. First, because it is the int 13h target and takes the rung's
-  512-aligned base.
+  ES:BX. First, because it is the int 13h target and guard 6 proves the
+  rung's first 512 bytes stay inside one 64KB page.
 - `dsk_ovlpad` — **0 on `kern_big`, `kern_small` and `kern_emu` alike**, and
   non-zero only under `KERN_KNOB`, where a diagnostic joins `.ovl` and
   needs a rung to spill into. It is the boot overlay's landing ground and
@@ -814,26 +814,35 @@ the room, and never asked for unless `mem_avail` reports twice their size.
 
 ## Two invariants that are easy to break
 
-### Every disk-visible base is 512-byte aligned
+### No disk transfer straddles a 64KB page
 
 int 13h moves one sector per call, which bounds a transfer to 512 bytes —
-but **does not stop one from straddling a 64KB physical boundary**. Only
-starting on a 512-byte boundary does that, and the DMA controller answers a
-straddle with error 09h. The symptom is a **"Disk error" toast on any save
-larger than the distance from the buffer to the next 64KB boundary**: Paint's
-63KB BMP hits it immediately, a Note Pad text file never does.
+but **does not stop one from straddling a 64KB physical boundary**, and the
+DMA controller answers a straddle with error 09h. The symptom is a **"Disk
+error" toast on any save larger than the distance from the buffer to the
+next 64KB boundary**: Paint's 63KB BMP hits it immediately, a Note Pad text
+file never does.
 
-Every base an int 13h transfer can land on — the FAT window, `dsk_secbuf`,
-a package image being loaded, a package's file buffer out of the heap — has
-to be 512-aligned, so the image rung and the FAT window stay whole 512-byte
-steps (`FAT_PARA` is a multiple of 32 paragraphs) and `FAT_SEG` and `LOW_SEG`
-sit on them. Above that, `LADDER_PACK` (every kernel but kern_mega) rounds the
-top of `.lowbss`, `.vga`, `.cold` and `.vgabuf` only to the paragraph, none of
-them being a transfer target, `KERN_END` alone rounds to 512, and
-`mem_floor_ax` rounds a lower heap floor up at run time. Guard 6 proves the ladder, guard
-2d the decoder rung, and guard 6b the heap: `mem_claim` rounds every size to
-`MEM_GRAN` paragraphs (512 bytes), so every base it hands out is the floor,
-the top or a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
+Starting on a 512-byte boundary is the way to rule a straddle out for a base
+nobody knows until run time, so `KERNEL_SEG` (where the boot reads land),
+`HEAP_SEG` and every heap claim are 512-aligned: guard 6 proves the first
+two, and guard 6b the heap — `mem_claim` rounds every size to `MEM_GRAN`
+paragraphs (512 bytes), so every base it hands out is the floor, the top or
+a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
+
+**The two FIXED windows are proved directly instead** (kernel size pass 19):
+the FAT window at `FAT_SEG` and `dsk_secbuf` at `LOW_SEG:0` are
+assembly-time constants, so guard 6 asserts that each lies inside ONE 64KB
+page, which is the fact the alignment only stood in for. That let the image
+stop rounding to 512 — `KIMG_PARA` is paragraphs (kern_mega: its 128-byte
+selector granule) — and with `LADDER_PACK` rounding `.lowbss`, `.vga`,
+`.cold` and `.vgabuf` to the paragraph too, **`KERN_END` is the ONE rounding
+left on kern_big, kern_small and kern_emu**; `mem_floor_ax` rounds a lower
+heap floor up at run time. The image pad it removed was 0-511 bytes a build
+(208 on kern_big and 128 on kern_small the day it went), ABI-BREAK-LIST L1's
+whole saving with `KERNEL_SEG` left where it was. If the image ever pushes
+the FAT window across 0x10000, guard 6 says so: round `FAT_SEG` up to the
+page, never the image back to 512.
 
 ### The boot sector has to get out of the way
 

@@ -1191,8 +1191,8 @@ TOAST_MAX   equ 24
 ; `.cold` and `.vgabuf` round to the PARAGRAPH (a segment is all either needs)
 ; and KERN_END alone rounds to 512, once, where it was three roundings to
 ; make one number aligned - and every heap floor rounds up at run time
-; (mem_floor_ax). The image rung and the FAT window stay whole: FAT_SEG and
-; LOW_SEG sit on them. kern_mega keeps its rungs - COLD_SEG is a selector
+; (mem_floor_ax). Since kernel size pass 19 the image does not round to 512
+; either (KIMG_PARA below), so on these kernels KERN_END is the ONLY rounding. kern_mega keeps its rungs - COLD_SEG is a selector
 ; there, a multiple of 8 paragraphs. NO_LADDER_PACK is the A/B
 %ifdef ROM_ADOPT
   %ifndef NO_LADDER_PACK
@@ -1684,18 +1684,30 @@ VIEW_KB     equ 2               ; each cache: 1,536 bytes of entries and 64 of
 ; of this file, which is legal because a segment VALUE never changes an
 ; instruction's length - `mov ax, imm16` is `mov ax, imm16` whatever the
 ; immediate turns out to be, so NASM converges on the second pass.
-; The image rounds up to a whole 512 BYTES, not to a paragraph, and that is
-; not tidiness - it is what keeps every rung above it 512-aligned. int 13h
-; moves one sector per call, which bounds a transfer to 512 bytes but does
-; NOT stop one from straddling a 64KB physical boundary: only starting on a
-; 512-byte boundary does that, and the DMA controller answers a straddle with
-; error 09h. Every base below is an int 13h target - the FAT snapshot, the
-; disk buffers, a package image, a package's file buffer out of the heap -
-; and FAT_PARA (288) and LOW_PARA are both multiples of 32
-; paragraphs, so aligning this one rung aligns the whole ladder. Guard 6
-; proves it. It used to hold by luck: every base in the map was a round
-; constant like 0x0300 or 0x2A00, and nothing said why that mattered.
-KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; image + scratch
+; The image rounds to the PARAGRAPH (kernel size pass 19), and the two rungs
+; above it - the FAT window and LOW_SEG, whose first 512 bytes are dsk_secbuf -
+; therefore start wherever the image happens to end. That is safe because
+; what int 13h refuses is a transfer that STRADDLES a 64KB physical page
+; (error 09h), and a 512-byte base is only one way to rule that out: the way
+; for a base nobody knows until run time, such as a heap claim (guard 6 keeps
+; HEAP_SEG and every claim on it). These two bases are ASSEMBLY-TIME
+; CONSTANTS, so guard 6 proves the stronger fact directly - neither window
+; crosses a page - and the 0-511-byte pad a 512-byte image rung carried is
+; gone, with KERNEL_SEG where it always was and no ABI moved (ABI-BREAK-LIST
+; L1's saving, without its flag day: docs/plans/ksp19/l1.md). It used to round
+; to 512, and before THAT every base in the map was a round constant like
+; 0x0300 or 0x2A00 and nothing said why that mattered. kern_mega rounds to
+; its selector granule instead, 128 bytes: FAT_SEG and LOW_SEG are identity
+; selectors there, a GDT entry every 8 paragraphs.
+%ifdef KERN_MEGA
+KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 127) / 128) * 8    ; image + scratch,
+                                ; to kern_mega's selector granule: FAT_SEG and
+                                ; LOW_SEG are identity selectors there, whose
+                                ; GDT bases are i x 128 (mega.inc)
+%else
+KIMG_PARA   equ (KTEXT_SIZE + KBSS_SIZE + 15) / 16           ; image + scratch,
+                                ; to the PARAGRAPH (kernel size pass 19)
+%endif
 %ifdef ROM_COLD
 %ifdef COLD_SLIDE
 ; THE VGA RUNG (docs/plans/MOVABLE-COLD-PLAN.md 2): `.vga`, the code only a
@@ -9603,12 +9615,22 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 %if 4 * (MENU_POPMAX*MENU_ITEM_H + 2) * (MENU_MAXW/8 + 2) > MENU_SAVE_KB*1024
 %error "menu save-under can overflow its claim - lower MENU_POPMAX/MENU_MAXW"
 %endif
-; 6. every base an int 13h transfer can land on is 512-byte aligned, or a
-;    single-sector read can still straddle a 64KB DMA boundary and fail with
-;    error 09h (see KIMG_PARA above). A segment is 512-aligned when it is a
-;    multiple of 32 paragraphs.
-%if (KERNEL_SEG % 32) || (FAT_SEG % 32) || (LOW_SEG % 32)
-%error "a disk-buffer segment is not 512-byte aligned - see KIMG_PARA"
+; 6. no int 13h transfer can straddle a 64KB DMA page, which fails with error
+;    09h (SPEC.md 2.1.1). A base known only at run time - KERNEL_SEG's boot
+;    reads, HEAP_SEG and every claim on it - is 512-byte aligned (a multiple
+;    of 32 paragraphs), the one way to rule it out for a sector at any
+;    address. The two FIXED windows, the FAT snapshot and dsk_secbuf, are
+;    proved directly instead: each lies inside one page (see KIMG_PARA above,
+;    kernel size pass 19). If the image ever grows far enough to push one
+;    across 0x10000, round FAT_SEG up to the page rather than the image to 512.
+%if KERNEL_SEG % 32
+%error "KERNEL_SEG is not 512-byte aligned - the boot reads land on it"
+%endif
+%if (FAT_SEG * 16) >> 16 != (FAT_SEG * 16 + FAT_PARA * 16 - 1) >> 16
+%error "the FAT window straddles a 64KB DMA page - see KIMG_PARA (SPEC.md 2.1.1)"
+%endif
+%if (LOW_SEG * 16) >> 16 != (LOW_SEG * 16 + DSK_WIN_BYTES - 1) >> 16
+%error "dsk_secbuf straddles a 64KB DMA page - see KIMG_PARA (SPEC.md 2.1.1)"
 %endif
 %if HEAP_SEG % 32
 %error "the heap base is not 512-byte aligned - see KIMG_PARA"

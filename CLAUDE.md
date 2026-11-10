@@ -53,7 +53,7 @@ first of them fires in the first minute of a session.
 | **[docs/BOCHS.md](docs/BOCHS.md)** | running **kern_mega** at all. Bochs is its instrument and nothing else's: QEMU lets code write through CS and checks no segment limit, so it runs what a real 286 faults on, and Bochs reproduced the Victory 286's faults to the CS:IP. Install, `tools/os88bochs.py` and `tools/os88bochsui.py`, reading E9 and the debugger, recipes - and the four blind spots, of which the one that bites is that **its CPU is a 386, so the 286 reset path never runs there** - docs/86BOX.md is where it does |
 | **[docs/86BOX.md](docs/86BOX.md)** | anything only an 86Box machine can answer - **a 286 or 386 running kern_mega's RESET path, an AT BIOS, the owner's mr286 or pc5150 profile, or a TIMING on a machine MartyPC does not model** - or the moment you are about to write *"86Box cannot be automated"*. **It can, and in a container**: `python3 tools/os88box.py build` makes upstream 86Box with its automation socket and GDB stub (three minutes), and `tools/os88box.py` boots any `vm/` profile HEADLESS - step by exact emulated time, screenshot, read the text screen and guest memory, keys, a closed-loop pointer (`to X Y` off the kernel's own `mouse_x`), double-clicks, typing, `quit` saving the CMOS. **`faults` is the instrument for a machine that REBOOTS**: this tree's patch prints every CPU exception and shutdown with its CS:IP, resolved against the kernel map - the one tool that sees a 286 reset loop, which Bochs (a 386) cannot. Read its *AT machines start in BIOS setup once* before the first launch and its *What it is NOT* before quoting a time: 86Box is not cycle-accurate |
 | **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable, **or reaching for a test tier** — it is the matrix of what each emulator can and cannot do, with a recipe per capability, and its *When to run which tier* is the AUTHORITY on when `fast`, `full` and the soak are run. None of the three is a per-commit gate, and the Testing section below is only its short form |
-| **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory — the three rules and their guards, what `kernsize`'s lines mean, the ladder, task stacks and the standing gotchas (512-aligned bases, sections are not heap, rungs are not a design input). |
+| **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory — the three rules and their guards, what `kernsize`'s lines mean, the ladder, task stacks and the standing gotchas (no transfer across a 64KB page, sections are not heap, rungs are not a design input). |
 | **[docs/HEAP-CLAIMS.md](docs/HEAP-CLAIMS.md)** | declaring a heap claim movable, or asking why a compaction achieved less than expected — one row per claim in the tree with its `MC_RLOC` verdict and the reason, including the packages that claim and have never declared (Word, Sheet, every C package — the C SDK cannot). `tools/heapmap.py` reads the fact off a running machine |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — MartyPC boots a real Hercules and `shot` reads it back (use the `_herc_gla` twin: the IBM ROM is not in the tree); QEMU needs `VIDEO=herc HERCSEG=0x7000` plus `tools/hercshot.py`, and all four ways of getting that wrong give a black or plausible image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
@@ -405,9 +405,11 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `SYSTEM.CFG` are still hostile and still fenced (§19). On kern_mega, where
   the kernel can afford not to crash, closing the faulting package beats
   stopping the machine.
-- **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
-  straddling a 64KB physical boundary with error 09h, and only starting
-  512-aligned prevents it. The symptom is "Disk error" on a large save.
+- **No disk transfer may straddle a 64KB page.** int 13h answers one with
+  error 09h; the symptom is "Disk error" on a large save. A base known only
+  at run time (the heap, every claim, `KERNEL_SEG`) is 512-byte aligned, the
+  one way to rule that out; the two FIXED windows (`FAT_SEG`, `dsk_secbuf`)
+  are proved inside one page by guard 6 instead (SPEC.md 2.1.1).
 - **Memory is THREE rules and three quantities** (docs/KERNEL-MEMORY.md):
   **kern_big fully RESIDES in 100KB at the desktop**, **kern_small fully
   RESIDES in 64KB** — every non-purgeable byte, no drivers, no XMS, on VGA
