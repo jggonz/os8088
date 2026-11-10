@@ -66,6 +66,13 @@ pass, not taken. Where a size row has a cost on one side (a kernel saving
 paid for in package bytes), take the form with the smallest total, and say
 the total.
 
+**Two rulings under 0.0 (the owner, 2026-11-10):** small package growth
+that buys RESIDENT kernel bytes is fine (R14's 8-16-byte growths in seven
+small packages stand); and **C1 is kept** in nogrow's KB-arm form (~-40
+resident per kernel against ~+330 package bytes, ~+900 once T5 lands) rather
+than the six KB doors restored as door cells. R14's +214 clocks a callback
+stands unless the final pass's `os88hot ab` shows it on the glass.
+
 ### 0.1 The owner's answers to flagday.md 3.5 (2026-11-10)
 
 1. **T5, the software-interrupt door**, is the table row (not T1).
