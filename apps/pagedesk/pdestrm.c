@@ -14,6 +14,12 @@ static int raw_get(struct sctx *c)
 {
     pdw want, n;
     if (c->rbi >= c->rbn) {
+        if (c->cmode) {
+            n = cr_read(c, c->rb, PDE_RB);
+            if (!n) return -1;
+            c->rbn = n; c->rbi = 0;
+            return c->rb[c->rbi++];
+        }
         want = PDE_RB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return -1;
@@ -175,6 +181,7 @@ static pdw st_decode(struct sctx *c)
     int b;
     if (lx_err) return 0;
     if (c->nflt == 0) {
+        if (c->cmode) return cr_read(c, c->ib, PDE_IB);
         want = PDE_IB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return 0;
@@ -202,9 +209,12 @@ static pdw flt_kind(const pdb *name)
     if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return g_nfl ? PDF_K_FLATE : 100 + PDE_FLATE;
     return 100 + PDE_FILTER;
 }
+static pdw sp_crypt;                            /* the chain names /Crypt (20.22.5) */
 static pdw flt_add(const pdb *name)
 {
-    pdw k = flt_kind(name);
+    pdw k;
+    if (str_eq(name, "Crypt")) { sp_crypt = 1; return PDE_OK; }
+    k = flt_kind(name);
     if (k > 100) return (pdw)(k - 100);
     if (sp_nflt >= PD_MAXFILTERS) return PDE_LIMIT;
     if (k == PDF_K_FLATE && (sp_filters & PDFL_FLATE)) return PDE_FILTER;   /* one Flate stage a chain */
@@ -265,7 +275,7 @@ static pdw ob_filters1(pdw num)
 {
     pdw rc, rn, rg;
     int hops;
-    sp_nflt = 0; sp_filters = 0;
+    sp_nflt = 0; sp_filters = 0; sp_crypt = 0;
     lx_seek(&ds_pos);
     rc = ob_dict_find("F");                           /* an external file stream */
     if (rc == PDE_OK) { err_obj = num; return PDE_FILTER; }
@@ -365,6 +375,7 @@ static pdw st_push(pdw filtered)
     c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
     c->filters = sp_filters;
     fl_drop(c);
+    cr_ctx_open(c);
     if (c->nflt && (sp_filters & PDFL_FLATE)) {
         i = fl_attach(c);
         if (i) return i;
@@ -439,9 +450,10 @@ static pdw v_strm_open(void)
     if (sp_kind != PDK_STRM) { err_obj = num; return PDE_SYNTAX; }
     rc = ob_filters(num);
     if (rc) return rc;
+    cr_sn = num; cr_sg = gen; cr_skip = cr_skipchk();
     rc = st_push(1);
     if (rc) return rc;
-    if (sp_nflt == 0) u32_cp(&sx.declen, &sp_len);
+    if (sp_nflt == 0 && ctxs[nctx - 1].cmode != PDCM_AESV2 && ctxs[nctx - 1].cmode != PDCM_AESV3) u32_cp(&sx.declen, &sp_len);
     else { sx.declen.lo = 0xFFFF; sx.declen.hi = 0xFFFF; }
     sx.filters = sp_filters;
     pd_fcopy_out(&sx, g_xb, 0, sizeof(struct pdxb_strm));
@@ -474,7 +486,13 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
     }
     while (got < dmax) {
         want = (pdw)(dmax - got);
-        if (c->nflt == 0) {
+        if (c->nflt == 0 && c->cmode) {
+            if (want > 128) want = 128;
+            k = cr_read(c, tmpb, want);
+            if (!k) break;
+            if (!pd_fcopy_out(tmpb, dseg, (pdw)(doff + got), k)) return PDE_RANGE;
+            got = (pdw)(got + k);
+        } else if (c->nflt == 0) {
             if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
             if (!want) break;
             k = fl_read_far(&c->rpos, dseg, (pdw)(doff + got), want);

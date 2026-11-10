@@ -308,7 +308,17 @@ static pdw op_rev(void)
             u32_cp(&xr_next, &ov.iv);
             if (u32_is0(&xr_next) || pdm_u32_cmp(&xr_next, &fl_size) >= 0) return PDE_XREF;
         } else if (str_eq(tk.text, "Encrypt")) {
-            return PDE_ENCRYPT;
+            rc = ob_value();
+            if (rc) return rc;
+            if (tr_enc_k == 0) {                    /* the newest revision's wins */
+                if (ov.kind == PDK_REF) { tr_enc_k = 1; tr_enc_n = ov.rnum; tr_enc_g = ov.rgen; }
+                else if (ov.kind == PDK_DICT) { tr_enc_k = 2; lx_tell(&tr_enc_pos); }
+                else return PDE_ENCRYPT;
+            }
+            if (ov.kind == PDK_DICT) {
+                rc = ob_skipc();
+                if (rc) return rc;
+            }
         } else if (str_eq(tk.text, "ID")) {
             rc = ob_value();
             if (rc) return rc;
@@ -316,8 +326,8 @@ static pdw op_rev(void)
                 rc = ob_value();
                 if (rc) return rc;
                 if (ov.kind == PDK_STR && !tr_hasid) {
-                    for (i = 0; i < 16; i++) tr_id[i] = 0;
-                    for (i = 0; i < ov.len && i < 16 && i < PDE_VT - 1; i++) tr_id[i] = ov.text[i];
+                    for (i = 0; i < 32; i++) tr_id[i] = 0;
+                    for (i = 0; i < ov.len && i < 32 && i < PDE_VT - 1; i++) tr_id[i] = ov.text[i];
                     tr_idlen = ov.len; tr_hasid = 1;
                 }
                 if (ov.kind == PDK_ARR || ov.kind == PDK_DICT) {

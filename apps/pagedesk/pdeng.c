@@ -78,9 +78,13 @@ static pdw   xo_gen;
 static pdw   tr_size, tr_root_n, tr_root_g, tr_info_n, tr_info_g, tr_has_root;
 static struct pd_u32 tr_start;  /* newest startxref                           */
 static struct pd_u32 tr_dict;   /* newest trailer dict, just after "<<"       */
-static pdb   tr_id[16];
+static pdb   tr_id[32];         /* /ID[0] whole, up to 32 bytes (R2-R4 key input) */
 static pdw   tr_idlen, tr_hasid;
 static pdw   doc_ver, doc_flags;
+static pdw   tr_enc_k, tr_enc_n, tr_enc_g;  /* /Encrypt: 0 none, 1 a ref, 2 a direct dict */
+static struct pd_u32 tr_enc_pos;            /* ...a direct one: just inside its "<<"      */
+static pdw   cr_curn, cr_curg;  /* the object the lexer is in (0: none, the trailer, a member) */
+static pdw   cr_sn, cr_sg, cr_skip;  /* st_push's caller: the stream's object, 0 = plain; skip */
 
 /* ---- pages (pdepage.c) --------------------------------------------------- */
 static pdw   npages;
@@ -133,6 +137,7 @@ static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 #include "pdexref.c"
 #include "pdepage.c"
 #include "pdestrm.c"
+#include "pdecrypt.c"           /* encryption: 20.22.5 */
 #include "pdeflate.c"
 #include "pdesrch.c"             /* nav: SEARCH (20.10.1) */
 #include "pdeverb.c"

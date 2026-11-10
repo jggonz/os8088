@@ -9,7 +9,8 @@ static void doc_reset(void)
     g_open = 0; nctx = 0; nxs = 0; nrev = 0; npages = 0; pw_sp = 0; arena_top = 0;
     op_state = 0;
     tr_size = 0; tr_root_n = 0; tr_root_g = 0; tr_info_n = 0; tr_info_g = 0; tr_has_root = 0;
-    tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0;
+    tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0; tr_enc_k = 0;
+    cr_reset();
     u32_zero(&xr_next); u32_zero(&tr_start); u32_zero(&tr_dict);
     fobj.buf = fo_buf; fobj.mode = 0; fobj.n = 0; fobj.i = 0; fobj.smode = 0;
     u32_zero(&fobj.fpos);
@@ -48,7 +49,12 @@ static pdw open_step(void)
     case 2:
         rc = op_rev();
         if (rc) return rc;
-        op_state = u32_is0(&xr_next) ? 3 : 2;
+        op_state = u32_is0(&xr_next) ? (tr_enc_k ? 7 : 3) : 2;
+        return PDE_BUSY;
+    case 7:                                             /* /Encrypt: a key first (20.22.5) */
+        rc = cr_open();
+        if (rc) return rc;
+        op_state = 3;
         return PDE_BUSY;
     case 3:
         rc = op_catalog();
@@ -87,6 +93,11 @@ static pdw v_open(void)
         xo.state = op_state;
         pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
         return PDE_BUSY;
+    }
+    if (rc == PDE_PASSWORD) {                           /* not a failure of the file: OPEN resumes after SETKEY */
+        xo.state = op_state;
+        pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
+        return rc;
     }
     if (rc) {
         xo.err_obj = err_obj; xo.err_detail = err_detail; xo.state = 0;
@@ -224,6 +235,7 @@ static pdw v_dict_get(void)
     pdw rc, k, j;
     int idx;
     pd_fcopy_in(g_xb, 0, &dg, sizeof(struct pdxb_dictget));
+    cr_curn = dg.objnum; cr_curg = dg.gen;                 /* strings read below are this object's */
     dg.kind = PDK_NULL; dg.refnum = 0; dg.refgen = 0; dg.len = 0; dg.count = 0; dg.text[0] = 0;
     dg.num.lo = 0; dg.num.hi = 0;
     dg.key[0][31] = 0; dg.key[1][31] = 0; dg.key[2][31] = 0;
@@ -584,6 +596,9 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             rc = fl_fingerprint(&fp);
             if (!rc) pd_fcopy_out(&fp, g_xb, 0, sizeof(struct pdxb_fingerprint));
             break;
+        case PDV_ENG_CRYPTINFO:   rc = g_filed ? cr_info() : PDE_RANGE; break;     /* 20.22.5 */
+        case PDV_ENG_SETKEY:      rc = cr_setkey(); break;
+        case PDV_ENG_CRYPT:       rc = cr_crypt(); break;
         case PDV_ENG_ARENA_MARK:  pde_ax = arena_top; rc = PDE_OK; break;
         case PDV_ENG_ARENA_REL:
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }

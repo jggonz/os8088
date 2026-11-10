@@ -73,6 +73,11 @@ struct sctx {
     pdw depth;              /* TOKEN's array/dict nesting                 */
     pdw wlo, whi;           /* bytes every filter stage produced (sget)   */
     pdw filters;            /* PDFL_* of the chain                        */
+    /* any PDF: decryption of the raw bytes (pdecrypt.c, 20.22.5) */
+    pdw cmode;              /* 0 plain, else the PDCM_* the raw bytes are in */
+    pdw civ;                /* AES: the IV has been read                   */
+    pdw cn, cg;             /* the stream's object, for its key            */
+    pdb cs[258];            /* RC4: S, i, j; AES: the chaining block in [0..16) */
 };
 
 struct pde_tok {
@@ -102,5 +107,17 @@ struct xsub { pdw first, count; struct pd_u32 off; pdw span; };
 #define PDE_REVSUB      (PD_MAXSUBSEC / PD_MAXREV)
 
 struct pw_frame { pdw num, gen; struct pd_u32 kpos; };
+
+/* ---- any PDF: encryption (pdecrypt.c, PAGEDESK-SPEC 20.22.5) ------------- */
+static pdw cr_read(struct sctx *c, pdb *buf, pdw want);
+static void cr_ctx_open(struct sctx *c);
+static void cr_string(void);
+static pdw cr_skipchk(void);
+static pdw cr_open(void);
+static pdw cr_raw_plain(void);
+static void cr_reset(void);
+static pdw cr_info(void);
+static pdw cr_setkey(void);
+static pdw cr_crypt(void);
 
 #endif
