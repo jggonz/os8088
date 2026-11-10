@@ -595,6 +595,51 @@ def check_shade(build_dir, work, exe, verbose):
 SHADE_RATE = {"coons6b": 4.5, "tensor7": 4.5}   # a curved edge cut into 4x4 chords: the boundary pixels differ from MuPDF's finer subdivision
 
 
+def fuzz(build_dir, n, seed):
+    """ASan+UBSan build of both harnesses over byte-flipped copies of the fixtures' objects and streams
+    (hostile PDF bytes: every count, length and offset the parser reads). Exit 1 on any sanitizer report."""
+    import random
+    work = os.path.join(build_dir, "pdfany-gfx")
+    os.makedirs(work, exist_ok=True)
+    build(work)
+    write_shade(work)
+    exes = []
+    for src in ("pdxg_test.c", "pdxgr_test.c"):
+        exe = os.path.join(work, src[:-2] + "_asan")
+        subprocess.check_call(["cc", "-std=gnu99", "-O1", "-g", "-w", "-fno-strict-aliasing", "-fsanitize=address,undefined",
+                               "-fno-sanitize-recover=undefined", "-DPD_HOST", "-I", PD, "-o", exe,
+                               os.path.join(PD, "hosttest", src), os.path.join(PD, "pdmath.c"),
+                               os.path.join(PD, "hosttest", "pdhost.c")], stderr=subprocess.DEVNULL)
+        exes.append((exe, "colour.cases" if src == "pdxg_test.c" else "shade.cases"))
+    rnd = random.Random(seed)
+    bad = 0
+    for k in range(n):
+        for exe, cases in exes:
+            lines = open(os.path.join(work, cases)).read().split("\n")
+            out = []
+            for ln in lines:
+                t = ln.split(" ")
+                if t and t[0] in ("O", "S") and len(t) == 3 and rnd.random() < 0.35:
+                    b = bytearray(bytes.fromhex(t[2]))
+                    for _ in range(rnd.randint(1, 6)):
+                        if b:
+                            i = rnd.randrange(len(b))
+                            b[i] = rnd.choice([0, 255, 0x3C, 0x5B, 0x28, rnd.randrange(256)])
+                    if rnd.random() < 0.15:
+                        b = b[:rnd.randrange(len(b) + 1)]
+                    ln = "%s %s %s" % (t[0], t[1], bytes(b).hex())
+                out.append(ln)
+            path = os.path.join(work, "fuzz.cases")
+            open(path, "w").write("\n".join(out))
+            p = subprocess.run([exe, path], capture_output=True, text=True, timeout=120)
+            if p.returncode not in (0,) and ("ERROR" in p.stderr or "runtime error" in p.stderr or p.returncode < 0):
+                print("FUZZ FAIL round %d %s\n%s" % (k, cases, p.stderr[:1500]))
+                bad += 1
+                break
+    print("pdfx_gfx fuzz: %d rounds x 2 harnesses, %d failures" % (n, bad))
+    return 1 if bad else 0
+
+
 def tables():
     def arr_(name, vals, per=10):
         s = "static const pdw %s[%d] = {\n" % (name, len(vals))
@@ -622,6 +667,8 @@ def main():
     ap.add_argument("--tables", action="store_true")
     ap.add_argument("--write", metavar="DIR")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--fuzz", type=int, metavar="N", help="ASan+UBSan over N rounds of mutated fixtures")
+    ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--build", default=os.path.join(ROOT, "build"))
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
@@ -629,6 +676,8 @@ def main():
         tables()
     if a.write:
         build(a.write)
+    if a.fuzz:
+        sys.exit(fuzz(a.build, a.fuzz, a.seed))
     if a.check:
         sys.exit(check(a.build, a.v))
 

@@ -20,7 +20,7 @@ class Eng:
         self.syn, self.stm, self.cur, self.pos = {}, {}, None, 0
 
 
-def run(mod_path, cases_path, trace=False):
+def run(mod_path, cases_path, trace=False, shade=False, stats=None):
     img = open(mod_path, "rb").read()
     magic, abi, isz, bss = struct.unpack_from("<HHHH", img)
     eng = Eng()
@@ -60,7 +60,10 @@ def run(mod_path, cases_path, trace=False):
 
     mu.hook_add(UC_HOOK_CODE, engine, begin=lin(ENGSEG, 0), end=lin(ENGSEG, 0) + 1)
 
+    depth = [0]
+
     def call(verb, bx):
+        wr(STKSEG, 0xD000, b"\xcc" * 0x2000)
         mu.reg_write(UC_X86_REG_SS, STKSEG); mu.reg_write(UC_X86_REG_SP, 0xF000)
         sp = 0xF000 - 4
         wr(STKSEG, sp, struct.pack("<HH", 0, RETSEG))
@@ -73,6 +76,8 @@ def run(mod_path, cases_path, trace=False):
             mu.emu_start(lin(MODSEG, 8), lin(RETSEG, 0), count=40_000_000)
         except UcError as e:
             raise SystemExit("unicorn: %s at %04x:%04x" % (e, mu.reg_read(UC_X86_REG_CS), mu.reg_read(UC_X86_REG_IP)))
+        used = 0xF000 - next((o for o in range(0xD000, 0xF000) if rd(STKSEG, o, 1) != b"\xcc"), 0xF000)
+        depth[0] = max(depth[0], used)
         return mu.reg_read(UC_X86_REG_EAX) & 0xFFFF, mu.reg_read(UC_X86_REG_EFLAGS) & 1
 
     # PDV_X_INIT: pdxb_init at the XB: xb_seg, eng_off, eng_seg
@@ -90,6 +95,17 @@ def run(mod_path, cases_path, trace=False):
         if not t: continue
         if t[0] == "O": eng.syn[int(t[1])] = bytes.fromhex(t[2])
         elif t[0] == "S": eng.stm[int(t[1])] = bytes.fromhex(t[2])
+        elif t[0] == "H" and shade:
+            obj = int(t[2]); st = 0
+            while True:
+                g = struct.pack("<18H", obj, 0, 0, 0, 0, 0x7000, 0, 30000, 0, 0, 0, st, 0, 0, 0, 0, 0, 0)
+                wr(XBSEG, 0, g + b"\0" * (72 - len(g)))
+                ax, cf = call(0xCB, XBSEG)
+                x = rd(XBSEG, 0, 72)
+                ntri, = struct.unpack_from("<H", x, 32)
+                st, = struct.unpack_from("<H", x, 22)
+                if ax != 65: break
+            out.append("SHADE %s ax=%d ntri=%d" % (t[1], ax, ntri))
         elif t[0] == "C":
             name, text, nc = t[1], bytes.fromhex(t[2]), int(t[3])
             comps = [float(x) for x in t[4:4 + nc]]
@@ -120,8 +136,12 @@ def run(mod_path, cases_path, trace=False):
                 r = rd(XBSEG, 68, 4)
                 none = bool(r[3]); rgb = list(r[:3])
             out.append("%s NONE" % name if none else "%s %d %d %d" % (name, *rgb))
+    if stats is not None:
+        stats["stack"] = depth[0]
     return out
 
 
 if __name__ == "__main__":
-    print("\n".join(run(sys.argv[1], sys.argv[2])))
+    st = {}
+    print("\n".join(run(sys.argv[1], sys.argv[2], shade=len(sys.argv) > 3, stats=st)))
+    print("deepest stack use: %d bytes" % st["stack"], file=sys.stderr)

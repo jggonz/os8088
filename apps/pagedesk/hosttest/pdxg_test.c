@@ -38,6 +38,7 @@ pdw pdx_engcall(pdw v, pdw b, pdw c, pdw d) { (void)v; (void)b; (void)c; (void)d
 
 static unsigned char *unhex(const char *h, int *n)
 {
+    if (!h) h = "";
     int l = (int)strlen(h) / 2; unsigned char *p = malloc(l + 1);
     for (int i = 0; i < l; i++) { unsigned v; sscanf(h + 2 * i, "%2x", &v); p[i] = (unsigned char)v; }
     p[l] = 0; *n = l; return p;

@@ -33,7 +33,8 @@ pdw pdxgh_sopen(pdw obj, pdw gen) { (void)gen; if (obj >= 256 || !o_str[obj]) re
 pdw pdxgh_sread(pdb *buf, pdw cap) { int left = o_str_n[s_cur] - s_pos, n = left < (int)cap ? left : (int)cap; if (n <= 0) return 0; memcpy(buf, o_str[s_cur] + s_pos, n); s_pos += n; return (pdw)n; }
 pdw pdx_engcall(pdw v, pdw b, pdw c, pdw d) { (void)v; (void)b; (void)c; (void)d; return 0; }
 static unsigned char *unhex(const char *h, int *n)
-{ int l = (int)strlen(h) / 2; unsigned char *p = malloc(l + 1); for (int i = 0; i < l; i++) { unsigned v; sscanf(h + 2 * i, "%2x", &v); p[i] = (unsigned char)v; } p[l] = 0; *n = l; return p; }
+{
+    if (!h) h = ""; int l = (int)strlen(h) / 2; unsigned char *p = malloc(l + 1); for (int i = 0; i < l; i++) { unsigned v; sscanf(h + 2 * i, "%2x", &v); p[i] = (unsigned char)v; } p[l] = 0; *n = l; return p; }
 static void tofx(struct pd_fx *r, double v) { long n = lround(v * 65536.0); r->hi = (pdi)(n >> 16); r->lo = (pdw)(n & 0xFFFF); }
 #define XBSEG 0x2000
 #define RSEG  0x4000
