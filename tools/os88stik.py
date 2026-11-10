@@ -234,9 +234,9 @@ def widget_off(stik_bss, paylen):
 # has NASM evaluate the block's addresses against these.
 STIKLIB_AT = 288
 STIKLIB_NENT = 26
-STKL_HD = 110 + 4 * STIKLIB_NENT + 2
+STKL_HD = 100 + 4 * STIKLIB_NENT + 2
 STKL_REC = STKL_HD + STIK_HDR_SIZE
-STKL_FW = 64
+STKL_FW = 54
 DESKCAL_LIB = True              # the Desk Calendar's kern_big build
 STIKNOTE_LIB = True             # Sticky Note's (it is on no small disk)
 DESKCLOK_LIB = True             # the Desk Clock's kern_big build

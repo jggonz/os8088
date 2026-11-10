@@ -492,7 +492,9 @@ menu_win_set:
 ; -----------------------------------------------------------------------------
 menu_relayout:
     mov byte [menu_bdirty], 1   ; the cells, the name, or both, are about to
-    call kent_di                ; be different: the bar owes a full redraw
+    call kent_bp                ; be different: the bar owes a full redraw
+                                ; (BP banked too: menu_ab_cell's wm_hnd spends
+                                ; it - kernel size pass 19)
                                 ; (kent_di = push ax/bx/cx/dx/si/di)
     push es
 
@@ -676,7 +678,7 @@ menu_relayout:
 ; -----------------------------------------------------------------------------
                                 ; (menu_ab_cell's body: a part of
                                 ; menu_relayout, entered from its `.done`)
-    xor ax, ax                  ; AX is WC_ABOUT's to fill below
+    xor ax, ax                  ; (0: no cell yet)
     mov [menu_abcell], ax
     mov bx, [menu_win]
     or bx, bx
@@ -694,19 +696,14 @@ menu_relayout:
     mov byte [di], 0
     pop di
                                 ; --- the items: About if it is offered, then
-    push bp                     ; Close, which every application gets (12.7):
+                                ; Close, which every application gets (12.7):
     mov si, bx                  ; the About slot of the window's CLASS
-    mov bp, WC_ABOUT            ; (SPEC.md 11.104) - SI is reloaded below
-    call wm_hnd
-    xchg ax, bp
-    pop bp
-                                ; BX is still [menu_win] - neither copy, menu_es
-                                ; nor KES touches it (kernel size pass 15). The
-                                ; About handler's offset, 0 = none: this was
-                                ; wm_about_get (kernel size pass 16)
-    xor bx, bx                  ; BX = Close's index
-    or ax, ax
-    jz .noab
+    xor bx, bx                  ; (SPEC.md 11.104) - SI is reloaded below.
+    mov bp, WC_ABOUT            ; BX was still [menu_win] - neither copy,
+    call wm_hnd                 ; menu_es nor KES touches it (kernel size pass
+    jz .noab                    ; 15) - and is Close's index now; wm_hnd's ZF
+                                ; is the answer, offset unread (kernel size
+                                ; pass 19, -6 with kent_bp/kret_es)
     mov word [menu_abitems], menu_abstr
     inc bx
 .noab:
@@ -740,8 +737,7 @@ menu_relayout:
     mov [menu_abcell], ax
     inc word [menu_nbar]
 .out:
-    pop es
-    jmp kret_di
+    jmp kret_es                 ; ES, then kent_bp's bank
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)

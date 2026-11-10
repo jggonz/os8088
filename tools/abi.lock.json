@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "7fbe4cf0f313a3fea9ebc6c65b32e21d41a24743f06b41f6824a510d70fb7fcf",
+  "fingerprint": "835794952cdf690d45c6520d1731f8b1c0507c21020379ae57017663bc23ee3c",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "389b2781880f70fb628234212b4ad79e29cfb0cbd6c3c8a9060f94ab9f1ee5c2",
+  "fingerprint": "4c6efa3627fc82186709b793e690d027addbea44f40d72593f8aa402cac0d891",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2133,6 +2133,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of nogrow: R2 and R12 reverted, the snapshots' unread AX answers withdrawn, OSAPI_MEM_P's KB arm (MEMP_KB/MEMP_KBH) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "4c6efa3627fc82186709b793e690d027addbea44f40d72593f8aa402cac0d891",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "STKL_D_CLICK..WAKE withdrawn from the Sticky App block: unread since R14's class; STKL_XCP.. move down 10 (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "835794952cdf690d45c6520d1731f8b1c0507c21020379ae57017663bc23ee3c",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "STKL_D_CLICK..WAKE withdrawn from the Sticky App block: unread since R14's class; STKL_XCP.. move down 10 (kernel size pass 19)",
    "to": 14
   }
  ]

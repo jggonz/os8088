@@ -1727,8 +1727,9 @@ wm_kind_now:
 ; wm_pref_now - take this window's preference for the adapter it is standing on
 ; in:  BX = window ptr
 ; out: CF = 0 and W_W/W_H written when a preference was declared for that
-;      kind; CF = 1 = nothing to say, record untouched. Every register
-;      preserved.
+;      kind; CF = 1 = nothing to say, record untouched. AL = WC_NDISP - the
+;      tail is wm_create's, which answers in AL (SPEC.md 11.104), and all
+;      three callers bank AX round it - every other register preserved.
 ;
 ; The pair wm_refit's replay and wm_apply_wh both want, in one place so the two
 ; cannot disagree about which display's kind decides: wm_kind_now's answer,
@@ -2162,11 +2163,12 @@ wm_close_req:
                                 ; forgotten post, which the tick's sweep turns
                                 ; into 55 ms of latency (ui.inc, 13.12)
     ret
-    nop                         ; PARITY PAD, never executed: the slot's bit
-                                ; above (SPEC.md 75.2.1) is 13 bytes longer
-                                ; than the pointer it replaced, and everything
-                                ; from wm_wake to ui_task and wm_paint_all
-                                ; sits at the parity t_hotpar pins
+                                ; (the PARITY PAD that sat here - the slot's
+                                ; bit, SPEC.md 75.2.1, being 13 bytes longer
+                                ; than the pointer it replaced - went in
+                                ; kernel size pass 19: wm_lk written into
+                                ; wm_lk_go, -5, is its pair ahead of
+                                ; wm_paint_all)
 
 ; -----------------------------------------------------------------------------
 ; wm_close_pass - spend every deferred close (SPEC.md 75.2)
@@ -3149,42 +3151,19 @@ wm_destroy_seg:
 ; anybody else's waits, free is taken. Unlike fprog's (12.8.4) this one may
 ; block - all four run on the UI task and never inside dsk_xfer's [sch_lock].
 ;
-; in:  nothing;  out: AL = 1 we took it and owe gfx_unlock (wm_lk_go pays it),
-;      0 it was ours. Touches no other register.
+; WRITTEN INTO ITS ONE CALLER, wm_lk_go below (kernel size pass 19, -5 and
+; faster both ways: the `ret`s and the call went, and "ours" is a `mov al, 0`
+; that writes no flag ahead of the branch). AL = 1 we took it and owe
+; gfx_unlock, 0 it was ours; nothing else is touched.
+;
+; fpg_arm (12.8.4) has the same seven instructions, and they are NOT one
+; routine however identical the bytes: the two jump targets are the semantics,
+; and they partition the three lock states differently - fpg_arm asks
+; {free,mine} against {other}, this asks {free,other} against {mine}, and no
+; single flag out of a shared helper can carry both. A helper returning ZF
+; gets THIS site exactly backwards: it would call gfx_lock recursively in the
+; common case and run wm_show_b with no lock at all when the lock is foreign.
 ; -----------------------------------------------------------------------------
-wm_lk:
-    cmp byte [gfx_lock_flag], 0
-    je wm_lk_take               ; free: take it
-    mov al, [sch_cur]           ; AL is an OUTPUT of this routine, so banking
-    cmp al, [gfx_lock_own]      ; it round these two instructions protected
-    jne wm_lk_take              ; nothing: `mov al,[sch_cur]` writes AL and not
-                                ; AH, and AL is overwritten on every path out
-                                ; (wm_lk_take's `mov al,1`, or the `xor al,al`
-                                ; below). The header's "Touches no other
-                                ; register" is about AH and is unaffected.
-                                ; SOMEBODY ELSE'S: gfx_lock waits for them,
-                                ; which is what a mutex is for.
-                                ;
-                                ; fpg_arm (12.8.4) has these same seven
-                                ; instructions and had the same dead pair, and
-                                ; they are NOT one routine however identical
-                                ; the bytes: the two jump targets are the
-                                ; semantics, and they partition the three lock
-                                ; states differently - fpg_arm asks
-                                ; {free,mine} against {other}, this asks
-                                ; {free,other} against {mine}, and no single
-                                ; flag out of a shared helper can carry both.
-                                ; A helper returning ZF gets THIS site exactly
-                                ; backwards: it would call gfx_lock
-                                ; recursively in the common case and run
-                                ; wm_show_b with no lock at all when the lock
-                                ; is foreign
-    xor al, al                  ; ours: the caller's hold covers all of it
-    ret
-wm_lk_take:
-    call gfx_lock
-    mov al, 1
-    ret
 
 ; (wm_unlk - give back what wm_lk took, AL as wm_lk answered - is written
 ; into its one caller, wm_lk_go below: kernel size pass 16, -4)
@@ -3228,7 +3207,16 @@ wm_show:
 wm_lk_go:
     push bp
     xchg ax, bp                 ; BP = the body
-    call wm_lk
+    cmp byte [gfx_lock_flag], 0 ; wm_lk, written here (its banner above)
+    je .take                    ; free: take it
+    mov al, [sch_cur]
+    cmp al, [gfx_lock_own]      ; SOMEBODY ELSE'S: gfx_lock waits for them,
+    mov al, 0                   ; which is what a mutex is for. OURS: the
+    je .have                    ; caller's hold covers all of it (a `mov`
+.take:                          ; writes no flag)
+    call gfx_lock
+    mov al, 1
+.have:
     push ax
     call bp
     pop ax                      ; AL as wm_lk answered: 1 = we took it
@@ -10701,7 +10689,9 @@ wm_draw_win:
     call task_cycles            ; DX:AX = start stamp
     push dx
     push ax
-    mov si, bx                  ; SI = window ptr for the paint proc
+                                ; SI = window ptr for the paint proc: still
+                                ; .paint's, which every call above preserves
+                                ; (kernel size pass 19, -2)
     call wm_pkgcall             ; near for a kernel window, far into the
                                 ; package's dispatcher otherwise (SPEC 20.1)
     mov bx, si                  ; (wm_pkgcall preserves both, but the paint
@@ -11286,9 +11276,14 @@ wm_flag:
     test dl, WF_NOSNAP          ; back IN to alignment: snapped now, where it
     jz .keeph                   ; costs nothing before the window is shown
     call wm_snap_win
+%if WF_KEEPH != 80h
+  %error "wm_flag asks for WF_KEEPH as DL's sign"
+%endif
 .keeph:
-    test dl, WF_KEEPH           ; either edge re-fits from the size the
-    jz .out                     ; template asked for
+    or dl, dl                   ; either edge of WF_KEEPH (DL's sign: a byte
+    jns .out                    ; under `test dl, WF_KEEPH`, kernel size pass
+                                ; 19) re-fits from the size the template
+                                ; asked for
     call wm_apply_wh
 .out:
     pop dx

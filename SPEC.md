@@ -227118,7 +227118,7 @@ the same register contracts - and three things change underneath:
   carries `OS88_F_ICON` and `OS88_F_STIK` and no association block or glyph):
   a descriptor assembled from the package's defines - its state file's
   buffer, payload length and version, flags, tag width, `STIK_RIGHT`, the
-  layouts, the band, its strings, its callbacks and its thunks - then
+  layouts, the band, its strings and its callbacks - then
   `'SYSTEM'`, `'APPDATA'` and the handle's two bit records, the far pointers
   to the library's 26 entries, and every byte of `os88stik.inc`'s and
   `os88gfx.inc`'s state, in the inline arm's order (`apps/os88api.inc`'s
@@ -227152,9 +227152,10 @@ is `OSAPI_MEM_CODESEL`'s answer for DS, asked at each callback: DS itself on
 every real-mode kernel, the code alias (or a pair's code half above 1MB) on
 kern_mega, where a far call through DS was one `mega_gpfix` fixup a callback
 (KERN-MEGA-PLAN 14.46). The
-kernel's callbacks are near procs in the package's segment (§20.2), so
-`stik_made` installs the package's thunks, read from the descriptor, and
-§20.8 rule 5 holds: the kernel calls package procs, and only thunks far-call.
+kernel's callbacks are near procs in the package's segment (§20.2), so the
+window's class (§11.104) names the package's thunks - the descriptor no longer
+carries them (kernel size pass 19, 10 bytes a Sticky App) - and §20.8 rule 5
+holds: the kernel calls package procs, and only thunks far-call.
 
 **One shape is different, and the gates read it.** The header the poll and
 the save work on - the place on record - is the block's copy (`stik_hd`):

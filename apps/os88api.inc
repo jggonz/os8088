@@ -4798,21 +4798,19 @@ STKL_D_ONTICK   equ 40
 STKL_D_ONCLOSE  equ 42
 STKL_D_SIZEUP   equ 44
 STKL_D_PACK     equ 46
-STKL_D_UNPACK   equ 48
-STKL_D_CLICK    equ 50           ; ...and its thunks the kernel calls
-STKL_D_MUP      equ 52
-STKL_D_TICK     equ 54
-STKL_D_CLOSE    equ 56
-STKL_D_WAKE     equ 58
-STKL_XCP        equ 60           ; dd the package's trampoline: offset, and
+STKL_D_UNPACK   equ 48           ; (the five thunk words the kernel's
+                                 ; installs read went with the installs: the
+                                 ; window's CLASS names the thunks now,
+                                 ; SPEC.md 11.104 - kernel size pass 19)
+STKL_XCP        equ 50           ; dd the package's trampoline: offset, and
                                  ; the segment the library writes from DS
                                  ; (OSAPI_MEM_CODESEL's code selector for it)
-STKL_FW         equ 64           ; dw the face's width now (born the widest)
-STKL_DSYS       equ 66           ; 'SYSTEM', 0
-STKL_DAPP       equ 73           ; 'APPDATA', 0
-STKL_XBITS      equ 81           ; the handle's x, a GFXE_BITS record (13)
-STKL_GRIP       equ 94           ; ...and its grip (15)
-STKL_LE         equ 110          ; dd x STIKLIB_NENT: the library's entries
+STKL_FW         equ 54           ; dw the face's width now (born the widest)
+STKL_DSYS       equ 56           ; 'SYSTEM', 0
+STKL_DAPP       equ 63           ; 'APPDATA', 0
+STKL_XBITS      equ 71           ; the handle's x, a GFXE_BITS record (13)
+STKL_GRIP       equ 84           ; ...and its grip (15)
+STKL_LE         equ 100          ; dd x STIKLIB_NENT: the library's entries
 STKL_XT         equ STKL_LE + 4 * STIKLIB_NENT  ; dw the trampoline's target
 STKL_HD         equ STKL_XT + 2  ; 16: the state file's header, as known
 STKL_REC        equ STKL_HD + 16 ; then os88stik.inc's state, in its order:
@@ -4860,7 +4858,6 @@ os88_stiklib:                   ; the base: a label, so os88rdiff sees relocatio
     dw STIKD_PAINTCARD, STIKD_COMPOSE, STIKD_ONCARD, STIKD_ONCARDUP
     dw STIKD_ONFOCUS, STIKD_ONTICK, STIKD_ONCLOSE, STIKD_SIZEUP
     dw STIKD_PACK, STIKD_UNPACK
-    dw STIKD_CLICK, STIKD_MUP, STIKD_TICK, STIKD_CLOSE, STIKD_WAKE
     dw STIKD_XCB, 0
     dw STIKD_FW
     db 'SYSTEM', 0, 'APPDATA', 0

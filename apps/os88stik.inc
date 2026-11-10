@@ -332,11 +332,6 @@ stik_d_onclose  equ os88_stiklib + STKL_D_ONCLOSE
 stik_d_sizeup   equ os88_stiklib + STKL_D_SIZEUP
 stik_d_pack     equ os88_stiklib + STKL_D_PACK
 stik_d_unpack   equ os88_stiklib + STKL_D_UNPACK
-stik_d_click    equ os88_stiklib + STKL_D_CLICK
-stik_d_mup      equ os88_stiklib + STKL_D_MUP
-stik_d_tick     equ os88_stiklib + STKL_D_TICK
-stik_d_close    equ os88_stiklib + STKL_D_CLOSE
-stik_d_wake     equ os88_stiklib + STKL_D_WAKE
 stik_xcp        equ os88_stiklib + STKL_XCP
 stik_dsys       equ os88_stiklib + STKL_DSYS
 stik_dapp       equ os88_stiklib + STKL_DAPP
