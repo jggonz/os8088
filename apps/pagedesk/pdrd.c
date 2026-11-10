@@ -234,20 +234,33 @@ static void fill_path(pdw rule)
     emit_fill_edges(rule, PK_FILL);
 }
 
-/* W / W*: intersect the clip with the path. A polygon clip goes in a POOL that
- * lives for the pass (8 polygons, 96 edges): an entry is never rewritten while
- * the pass's list can name it, because the list is walked after the whole pass
- * is interpreted - a slot reused after a Q would cut the earlier records by the
- * later polygon. The state names the innermost entry (`clid`, 0xFF none) and
- * each entry its parent, so q/Q nesting is a chain, not a prefix. */
-static struct pdr_clip { pdi x0, y0, x1, y1; pdw e0, ne, rule, parent; } g_cl[PDR_NCLIP];
-static pdw g_cetop, g_ncl;          /* edges and entries used this pass (pass_begin) */
+/* W / W*: intersect the clip with the path. A polygon clip is a RECORD of the
+ * pass's display list (DLR_CLIP: rule in aux, its rows in y0/y1, then parent, ne
+ * and the edges): it lives exactly as long as the records it cuts, is never
+ * rewritten while the list can name it (the list is walked after the whole pass
+ * is interpreted - a slot reused after a Q would cut earlier records by the later
+ * polygon), and its size is the list's, so a page whose clips do not fit one pass
+ * is drawn in narrower passes like any page whose marks do not (QA: SYNTH's 88
+ * clips and KBMIDI2's 170-edge one outgrew the old 8-entry, 96-edge pool). Only
+ * the edges that cross the pass's rows are kept - an edge wholly above or below
+ * them adds no crossing on any row the pass draws - and a clip whose box misses
+ * the rows, or the clip it is in, is not stored at all: nothing under it reaches
+ * the list. The state names its innermost clip (`clid`, an index into the
+ * workspace's table of the records' offsets, WS_CL) and each record its parent,
+ * so nesting is a chain the walker ANDs. */
+typedef char pdr_ck_wscl[WS_CL + PDR_NCLIP * 2 <= PDR_WSB ? 1 : -1];
+static pdw g_ncl;                   /* clips of this pass (pass_begin)        */
+static pdb g_cbody[4];
 
+#ifdef PD_HOST
+extern void pdrh_cliphist(pdw ne);      /* PDR_CLIPHIST: what a pass's clips take (host only) */
+#define PDRH_CLIPHIST(n) pdrh_cliphist(n)
+#endif
 /* rule: bit 0 even-odd; bit 1 (rect_clip_user) a form's /BBox, see below */
 static void clip_apply(pdw rule)
 {
-    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v, g = (pdi)(rule >> 1);
-    pdw s, e, i, j, ne, ci, ok;
+    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v, g = (pdi)(rule >> 1), lo, hi, ya, yb, cy0, cy1;
+    pdw s, e, i, j, ne, pass;
     if (g_nv < 2) { GS.cx1 = GS.cx0 - 1; return; }
     if (path_is_rect()) {
         /* OUTWARD (20.3.2): every pixel the rectangle touches, PDF's own rule for a clip. A
@@ -266,34 +279,47 @@ static void clip_apply(pdw rule)
         v = (pdi)(((g_rqy1 + 3) >> 2) - 1); if (v < GS.cy1) GS.cy1 = v;
         return;
     }
-    ok = g_ncl < PDR_NCLIP;
-    if (!ok) inc_note(PDF_INC_LIMIT, "clip depth");
-    ne = g_cetop;
-    for (s = 0; s < g_nv; s = e) {
-        for (e = s + 1; e < g_nv && !(g_vf[e] & 1); e++) ;
-        if (e - s < 2) continue;
-        for (i = s; i < e; i++) {
-            j = (i + 1 == e) ? s : i + 1;
-            if (g_vx[i] < bx0) bx0 = g_vx[i]; if (g_vx[i] > bx1) bx1 = g_vx[i];
-            if (g_vy[i] < by0) by0 = g_vy[i]; if (g_vy[i] > by1) by1 = g_vy[i];
-            if (!ok || g_vy[i] == g_vy[j]) continue;
-            if (ne >= PDR_NCLIPE) { inc_note(PDF_INC_LIMIT, "clip path size"); ok = 0; continue; }
-            g_etmp[0] = g_vx[i]; g_etmp[1] = g_vy[i];
-            g_etmp[2] = g_vx[j]; g_etmp[3] = g_vy[j];
-            pd_fcopy_out(g_etmp, g_ws, (pdw)(WS_CE + ne * 8), 8);
-            ne++;
+    /* a crossing of row y is sampled at qpx 4y + 2: an edge [ya, yb) can only cross a row of the pass inside (lo, hi) */
+    lo = g_gy0 < -7000 ? -32000 : (pdi)(4 * g_gy0 - 3); hi = g_gy1 > 7000 ? 32000 : (pdi)(4 * g_gy1 + 7);
+    ne = 0;
+    for (pass = 0; pass < 2; pass++) {          /* 0: the box and the edges to keep; 1: write them */
+        for (s = 0; s < g_nv; s = e) {
+            for (e = s + 1; e < g_nv && !(g_vf[e] & 1); e++) ;
+            if (e - s < 2) continue;
+            for (i = s; i < e; i++) {
+                j = (i + 1 == e) ? s : i + 1;
+                ya = g_vy[i]; yb = g_vy[j];
+                if (!pass) {
+                    if (g_vx[i] < bx0) bx0 = g_vx[i]; if (g_vx[i] > bx1) bx1 = g_vx[i];
+                    if (ya < by0) by0 = ya; if (ya > by1) by1 = ya;
+                }
+                if (ya == yb || (ya < yb ? ya : yb) >= hi || (ya > yb ? ya : yb) <= lo) continue;
+                if (!pass) { ne++; continue; }
+                g_etmp[0] = g_vx[i]; g_etmp[1] = ya; g_etmp[2] = g_vx[j]; g_etmp[3] = yb;
+                pd_fcopy_out(g_etmp, g_dls, g_dllen, 8);
+                g_dllen += 8;
+            }
         }
+        if (pass) break;
+#ifdef PD_HOST
+        PDRH_CLIPHIST(ne);
+#endif
+        /* the bounding box always cuts */
+        v = q_lo(bx0); if (v > GS.cx0) GS.cx0 = v;
+        v = q_hi(bx1); if (v < GS.cx1) GS.cx1 = v;
+        v = q_lo(by0); if (v > GS.cy0) GS.cy0 = v;
+        v = q_hi(by1); if (v < GS.cy1) GS.cy1 = v;
+        cy0 = GS.cy0 > g_gy0 ? GS.cy0 : g_gy0; cy1 = GS.cy1 < g_gy1 ? GS.cy1 : g_gy1;
+        if (g_mode != PDR_INTERP || GS.cx1 < GS.cx0 || cy1 < cy0) return;     /* nothing under it reaches this pass */
+        /* the WHOLE record is reserved before any of it is written (emit_fill_edges' rule); a pass
+         * whose clips do not fit is a full list, and narrows */
+        if (g_ncl >= PDR_NCLIP || g_dlfull || !dl_room(DLH + 4 + ne * 8)) { g_dlfull = 1; return; }
+        pd_fcopy_out(&g_dllen, g_ws, (pdw)(WS_CL + g_ncl * 2), 2);
+        w16(g_cbody, (pdi)GS.clid); w16(g_cbody + 2, (pdi)ne);
+        hdr_set(DLR_CLIP, rule & 1, DLH + 4 + ne * 8, cy0, cy1);
+        dl_put(g_hdr, DLH, g_cbody, 4);
     }
-    /* the bounding box always cuts (a polygon the pool cannot hold is its box) */
-    v = q_lo(bx0); if (v > GS.cx0) GS.cx0 = v;
-    v = q_hi(bx1); if (v < GS.cx1) GS.cx1 = v;
-    v = q_lo(by0); if (v > GS.cy0) GS.cy0 = v;
-    v = q_hi(by1); if (v < GS.cy1) GS.cy1 = v;
-    if (!ok) return;
-    ci = g_ncl++;
-    g_cl[ci].e0 = g_cetop; g_cl[ci].ne = ne - g_cetop; g_cetop = ne;
-    g_cl[ci].rule = rule & 1; g_cl[ci].parent = GS.clid;
-    GS.clid = (pdb)ci;
+    GS.clid = (pdb)g_ncl++;
 }
 
 /* ============================================================================
@@ -414,13 +440,16 @@ static void mask_paint(pdi y)
         } else x++;
     }
 }
+static pdb g_chd[DLH + 4];          /* the clip record being ANDed: header, parent, ne */
 static void clips_and(pdi y)
 {
-    pdw ci, b;
-    for (ci = g_sclid; ci < PDR_NCLIP; ci = g_cl[ci].parent) {     /* the chain ends at 0xFF */
+    pdw ci, b, o;
+    for (ci = g_sclid; ci < PDR_NCLIP; ci = (pdw)r16(g_chd + DLH)) {     /* the chain ends at 0xFF */
+        o = pd_fpeekw(g_ws, (pdw)(WS_CL + ci * 2));
+        pd_fcopy_in(g_dls, o, g_chd, DLH + 4);
         mask_clear(1);
         g_rmode = 2;
-        rast_edges(g_ws, (pdw)(WS_CE + g_cl[ci].e0 * 8), g_cl[ci].ne, (pdw)g_cl[ci].rule, y, y);
+        rast_edges(g_dls, (pdw)(o + DLH + 4), (pdw)r16(g_chd + DLH + 2), (pdw)g_chd[1], y, y);
         g_rmode = 1;
         for (b = 0; b < g_mstride; b++) g_mk[0][b] &= g_mk[1][b];
     }

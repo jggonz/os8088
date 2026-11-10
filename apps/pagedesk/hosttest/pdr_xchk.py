@@ -322,6 +322,23 @@ for ad in ('cga', 'herc'):
     rc, im, st, _ = render(noap, 0, ad, env=an)
     check('noap.pdf on %s: drawn clean, ink in the note and the shapes' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None
           and int((im < 128).sum()) > 2000)
+print('-- polygon clips as display-list records (clips.pdf; SYNTH and KBMIDI2 outgrew the 8-entry, 96-edge pool)')
+clips = os.path.join(fx, 'clips.pdf')
+for pg, what in ((0, '100 circle clips on a page'), (1, 'one clip of 180 edges'), (2, 'a 80-edge star nested in a disc')):
+    rc, im, st, _ = render(clips, pg, 'vga')
+    rck, imk, stk, _ = render(clips, pg, 'vga', dl=12)
+    ref = mutool(clips, pg)
+    pct = cellmatch(im, ref, 60) if im is not None else 100.0
+    check('%s: drawn clean and as MuPDF (%.1f%% of cells off; %s passes, %s with a 12 KiB list, the same pixels)' % (what, pct, st.get('passes'), stk.get('passes')),
+          rc == 0 and rck == 0 and num(st, 'incomplete') == 0 and num(stk, 'incomplete') == 0 and pct < 1.5
+          and im is not None and imk is not None and int((im != imk).sum()) == 0)
+rc, im, st, _ = render(clips, 0, 'vga')
+check('... a disc, not its box: each square\'s corners are paper and its centre ink (100 of 100)',
+      im is not None and all(im[400 - (31 + j * 36), 31 + i * 36] > 200 and im[400 - (45 + j * 36), 45 + i * 36] < 60
+                             for i in range(10) for j in range(10)))
+for ad in ('cga', 'herc'):
+    rc, im, st, _ = render(clips, 0, ad)
+    check('clips.pdf on %s: clean, the discs drawn' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 128).sum()) > 5000)
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

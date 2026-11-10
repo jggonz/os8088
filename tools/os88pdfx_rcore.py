@@ -406,6 +406,37 @@ def noap_pdf(path):
     d.write(path)
 
 
+def clips_pdf(path):
+    """Polygon clips past the old pool (QA SYNTH/KBMIDI2, PAGEDESK-SPEC 20.3.2): page
+    1 is 100 discs, each a circle clip (4 curves) over a black square - 100 clips a
+    pass where the pool held 8; page 2 is ONE clip of 180 edges (a 90-pointed star)
+    over stripes - the pool held 96 edges; page 3 nests a star in a disc."""
+    import math
+    d = Pdf()
+    def circ(cx, cy, r):
+        k = 0.5523 * r
+        return ('%.2f %.2f m %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c '
+                '%.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f %.2f %.2f %.2f %.2f c h' % (
+                    cx + r, cy, cx + r, cy + k, cx + k, cy + r, cx, cy + r, cx - k, cy + r, cx - r, cy + k, cx - r, cy,
+                    cx - r, cy - k, cx - k, cy - r, cx, cy - r, cx + k, cy - r, cx + r, cy - k, cx + r, cy))
+    def star(cx, cy, r0, r1, n):
+        pts = []
+        for i in range(2 * n):
+            a = math.pi * i / n; r = r1 if i & 1 else r0
+            pts.append('%.2f %.2f %s' % (cx + r * math.cos(a), cy + r * math.sin(a), 'm' if not i else 'l'))
+        return ' '.join(pts) + ' h'
+    c = []
+    for i in range(10):
+        for j in range(10):
+            x, y = 30 + i * 36, 30 + j * 36
+            c.append('q %s W n 0 g %d %d 30 30 re f Q' % (circ(x + 15, y + 15, 14), x, y))
+    d.page(' '.join(c))
+    stripes = ' '.join('0 g 20 %d 360 6 re f' % (20 + k * 12) for k in range(30))
+    d.page('q %s W n %s Q' % (star(200, 200, 180, 120, 90), stripes))
+    d.page('q %s W n q %s W n %s Q Q 0.5 g 10 10 20 20 re f' % (circ(200, 200, 170), star(200, 200, 190, 90, 40), stripes))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -419,7 +450,8 @@ def main():
     small_pdf(os.path.join(out, 'small.pdf'))
     park_pdf(os.path.join(out, 'park.pdf'))
     noap_pdf(os.path.join(out, 'noap.pdf'))
-    print('os88pdfx_rcore: 10 fixtures in %s' % out)
+    clips_pdf(os.path.join(out, 'clips.pdf'))
+    print('os88pdfx_rcore: 11 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

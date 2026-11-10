@@ -107,8 +107,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_WSB         6912u   /* workspace at the tail of dl_seg: saved gstates + font cache */
 #define PDR_MINDL       256u    /* the least list room BEGIN accepts (D13): 7 KiB of dl_seg */
 #define PDR_NEDGE       256     /* staged edges                               */
-#define PDR_NCLIPE      96      /* edges in the clip pool                     */
-#define PDR_NCLIP       8       /* non-rectangular clips in the pool          */
+#define PDR_NCLIP       255     /* non-rectangular clips a pass (DLR_CLIP records, 20.3.2); clid 0xFF is none */
 #define PDR_NFONT       4
 #define PDR_NRUN        64      /* glyphs per DL run record                   */
 #define PDR_NSPAN       128     /* crossings per scanline; a row with more is NOT
@@ -131,6 +130,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define DLR_GROUP   7           /* a transparency group begins or ends (aux 0x80)     */
 #define DLR_MASKB   8           /* a soft-mask definition: len spans to its MASKE     */
 #define DLR_MASKE   9
+#define DLR_CLIP    16          /* [rcore] a polygon clip: rule in aux, its rows; parent, ne, edges (20.3.2) */
 #define DLH         8           /* header: type aux len y0 y1                 */
 #define DLI_BODY    28          /* DLR_IMAGE's body (20.3.2, 20.22.7); inline rows follow */
 

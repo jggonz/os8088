@@ -171,7 +171,7 @@ static void gs_reset(void)
     g->cy1 = g_vcy1 < g_pgy1 ? g_vcy1 : g_pgy1;
     g_lstv = 0;
 }
-static void gs_init(void) { gs_reset(); g_ncl = 0; g_cetop = 0; }
+static void gs_init(void) { gs_reset(); g_ncl = 0; }
 
 /* ============================================================================
  * TEXT

@@ -32,7 +32,7 @@ static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) 
 #define WS_GS   0u                  /* PD_MAXGSTACK x sizeof(struct pdr_gs)    */
 #define WS_FN   1344u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 84 */
 #define WS_ED   4096u               /* PDR_NEDGE staged edges, 8 bytes each    */
-#define WS_CE   6144u               /* PDR_NCLIPE clip edges, 8 bytes each     */
+#define WS_CL   6144u               /* PDR_NCLIP clip records' list offsets, 2 bytes each (to 6,654) */
 /* the 16 saved states end before the font table: held by the compiler on both builds */
 typedef char pdr_ck_gs[PD_MAXGSTACK * sizeof(struct pdr_gs) <= WS_FN ? 1 : -1];
 static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }

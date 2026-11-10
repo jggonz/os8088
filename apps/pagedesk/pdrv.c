@@ -459,7 +459,10 @@ static pdw pass_begin(void)
 {
     img_close();                        /* a held image is not the top stream any more */
     g_eylo = (pdi)(g_gy0 * 4); g_eyhi = (pdi)(g_gy1 * 4 + 3);
-    g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
+    g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_ncl = 0;
+#ifdef PD_HOST
+    { extern long pdrh_clipnow, pdrh_clipn; pdrh_clipnow = 0; pdrh_clipn = 0; }
+#endif
     x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
     g_iknd[0] = g_iknd[1] = 0; g_ikb = 0;
     g_passes++; g_pstamp++;

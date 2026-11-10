@@ -231,6 +231,13 @@ int  os88_wm_clip_set(void *win) { (void)win; return 0; }
  * n ticks later than the last - PDR_SLICETICK=4 ends a slice after EVERY
  * operator, and the picture must not change */
 unsigned pdrh_tickstep, pdrh_tick;
+long pdrh_clipone, pdrh_clipnow, pdrh_cliptot, pdrh_clipn, pdrh_clipnmax;
+void pdrh_cliphist(unsigned short ne)
+{
+    if (ne > pdrh_clipone) pdrh_clipone = ne;
+    pdrh_clipnow += ne; if (pdrh_clipnow > pdrh_cliptot) pdrh_cliptot = pdrh_clipnow;
+    if (++pdrh_clipn > pdrh_clipnmax) pdrh_clipnmax = pdrh_clipn;
+}   /* PDR_CLIPHIST (pdrd.c clip_apply) */
 unsigned os88_ticks(void) { pdrh_tick += pdrh_tickstep; return pdrh_tick; }
 pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
 {

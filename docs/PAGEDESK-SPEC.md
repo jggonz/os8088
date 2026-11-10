@@ -1343,7 +1343,7 @@ Claims it expects from `PDV_REND_INIT` (16.2 revised by this section):
 
 | `pdxb_init` field | size | holds |
 |---|---|---|
-| `dl_seg`, `dl_kb` | **29 KiB** (<= 63): 22 KiB of list + the WORKSPACE (`PDR_WSB` = 6,912 bytes) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds, by offset: saved graphics states 0 (16 x 78), the four-entry font cache 1,280 (4 x 684; one font is resident in bss at a time), staged edges 4,096 (256 x 8) and clip edges 6,144 (96 x 8). A claim with less than `PDR_WSB` + 256 bytes (`dl_kb` < 7) is treated as NO claim: `BEGIN`, `TEXTMAP` and `THUMB` refuse `PDE_NOMEM` and nothing is written to it (before verify-rend a 1-6 KiB claim had the workspace written past its end) |
+| `dl_seg`, `dl_kb` | **29 KiB** (<= 63): 22 KiB of list + the WORKSPACE (`PDR_WSB` = 6,912 bytes) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds, by offset: saved graphics states 0 (16 x 78), the four-entry font cache 1,280 (4 x 684; one font is resident in bss at a time), staged edges 4,096 (256 x 8) and the polygon clips' list offsets 6,144 (255 x 2; the clips themselves are `DLR_CLIP` records of the list). A claim with less than `PDR_WSB` + 256 bytes (`dl_kb` < 7) is treated as NO claim: `BEGIN`, `TEXTMAP` and `THUMB` refuse `PDE_NOMEM` and nothing is written to it (before verify-rend a 1-6 KiB claim had the workspace written past its end) |
 | `band_seg`, `band_bytes` | `16 x stride`, stride = `ceil(w/8)` (1bpp) or `ceil(w/2)` (4bpp) of the canvas width rounded out to 8 pixels: 1.5 KiB at 720 px 1bpp, 5.1 KiB at 640 px 4bpp | one band |
 | `glyph_seg`, `glyph_kb` | **24 KiB** (16.2 said 12; 20.3.4 carves it; more than 63 counts as 63) | image row buffer, PDFONTX index, transformed glyphs, the strike cache |
 | `bank_seg`, `bank_kb` | ignored | (D3: the bank arrives through `PDV_REND_FONTBANK`) |
@@ -1411,14 +1411,25 @@ before writing any), so a list that fills up holds only complete records and the
 walker stops at the first that does not lie inside the list. A scan line with more
 than 128 crossings is not painted (`PDF_INC_LIMIT` "crossings per row"): a dropped
 crossing would pair the rest wrongly and paint a false span. A
-**non-rectangular clip** (W/W* of anything but an axis-aligned rectangle) goes in
-a pool of up to 8 polygons / 96 edges that lives for the PASS: an entry is never
-rewritten while the pass's list can name it (the list is walked after the whole
-pass is interpreted, so a slot reused after a `Q` would cut EARLIER records by the
-later polygon - before verify-rend the first of two clipped fills vanished). A state
-names its innermost entry (`clid`) and each entry its parent, so nesting is a chain
-that the walker ANDs. A polygon the pool cannot hold cuts by its bounding box
-(`PDF_INC_LIMIT` "clip depth" / "clip path size"). A fill or rectangle under one is
+**non-rectangular clip** (W/W* of anything but an axis-aligned rectangle) is a
+RECORD of the pass's list, `DLR_CLIP` (16: the rule in `aux`, its rows in `y0`/`y1`,
+then its parent's index, its edge count and the edges). It lives exactly as long as
+the records it cuts and is never rewritten while the list can name them (the list is
+walked after the whole pass is interpreted, so a slot reused after a `Q` would cut
+EARLIER records by the later polygon - before verify-rend the first of two clipped
+fills vanished). A state names its innermost clip (`clid`, 0xFF none: an index into
+the workspace's table of the records' offsets, up to `PDR_NCLIP` = 255 a pass) and
+each record its parent, so nesting is a chain that the walker ANDs. Only the edges
+that can cross a row of the PASS are kept (an edge wholly above or below adds no
+crossing to any row the pass draws), and a clip whose box misses the pass's rows,
+or the clip it sits in, is not stored at all: nothing under it reaches the list.
+A pass whose clips do not fit is a full list and narrows (20.3.2's group plan), like
+one whose marks do not, so there is no clip limit short of one row. This replaced a
+pool of 8 polygons / 96 edges in the workspace, which SYNTH.PDF (88 clips a pass)
+and KBMIDI2.PDF (a 170-edge clip) outgrew - both drew those clips as their boxes,
+`PDF_INC_LIMIT` "clip depth" / "clip path size"; `pdr_xchk`'s `clips.pdf` holds 100
+circle clips on a page, a 180-edge star and a nested pair to MuPDF, the same pixels
+from a 12 KiB list. A fill or rectangle under one is
 painted one scan line at a time through two 96-byte masks. Text and images under a
 polygon clip are cut to its bounding box only (20.3.8).
 
