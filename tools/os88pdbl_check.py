@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """os88pdbl_check - PDXI's bilevel decoders against their reference encoders (20.22.12).
 
-    python3 tools/os88pdbl_check.py [--bin build-bl/pdbl] [--seed N] ccitt
+    python3 tools/os88pdbl_check.py build        # the host binaries into build-bl/ (gitignored): pdbl, pdbl_b, pdbl_fuzz
+    python3 tools/os88pdbl_check.py [--seed N] LEG...
+    legs: ccitt jb2-generic jb2-text jb2-huff jb2-halftone jb2-multi      (the decoder against the model)
+          mutool-ccitt mutool-jb2-generic mutool-jb2-text mutool-jb2-huff mutool-jb2-halftone mutool-jb2-multi
+                                                                         (MuPDF against the same model)
+          fuzz                                                           (ASan/UBSan, the committed seeds)
+          all                                                            (every leg above, build first)
 
-Builds random bilevel images, codes them with tools/os88pdfx_bilevel.py in every CCITT
-shape, runs the host decoder and compares to the source (and, reduced, to the model)."""
+Builds random bilevel images, codes them with tools/os88pdfx_bilevel.py, runs the host decoder
+(pdbl_host.c: the shipped band size once, a 400-byte band with streaming off once) and compares the
+delivered samples to the model, at scale 0 and reduced."""
 import sys, os, random, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import os88pdfx_bilevel as F
@@ -381,6 +388,66 @@ def check_jb2_halftone(rnd, bins, use_mutool=False):
     print('jbig2 halftone%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
     return fails
 
+
+def check_jb2_multi(rnd, bins, use_mutool=False):
+    """two dictionaries (the second imports the first and exports a subset), segment numbers above 256
+    (two-byte references), a text region referring to both"""
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(25):
+            W, H = 90, 70
+            na, nb = rnd.randint(2, 5), rnd.randint(2, 5)
+            A = sorted((glyph(rnd.randint(2, 9), rnd.randint(4, 10), rnd) for _ in range(na)), key=lambda g: len(g))
+            B = sorted((glyph(rnd.randint(2, 9), rnd.randint(4, 10), rnd) for _ in range(nb)), key=lambda g: len(g))
+            exp = [rnd.random() < .6 for _ in range(na)] + [True] * nb
+            if not any(exp): exp[-1] = True
+            d1 = F.segment(300, 0, F.symdict_segment(A, 0), page=0)
+            d2 = F.segment(301, 0, F.symdict_segment(B, rnd.randint(0, 3), exported=exp, ref_syms=na), refs=[300], page=0)
+            syms2 = [x for x, e in zip(A + B, exp) if e]
+            both = rnd.random() < .5
+            allsyms = (A + syms2) if both else syms2
+            insts = [(rnd.randrange(len(allsyms)), rnd.randint(0, W - 10), rnd.randint(0, H - 12)) for _ in range(rnd.randint(2, 14))]
+            refs = [300, 301] if both else [301]
+            region = [[0] * W for _ in range(H)]
+            for it in sorted(insts, key=lambda it: (it[2] // 1, it[1])):
+                compose(region, allsyms[it[0]], it[1], it[2], 0)
+            tx = F.segment(302, 6, F.text_segment(allsyms, insts, W, H), refs=refs, page=1)
+            pg = F.segment(299, 48, F.page_info(W, H))
+            globs, segs = [d1, d2], [pg, tx]
+            if use_mutool:
+                total += 1
+                if mutool_pgm(segs, globs, W, H, td) != region: print('MUTOOL differs multi case', case); fails += 1
+                continue
+            for want in (0, W // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, b''.join(segs), b''.join(globs), W, H, want, td)
+                    total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(region, W, H, sc): print('FAIL multi case', case, both, exp); fails += 1
+    print('jbig2 multi%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
+CC_FLAGS = ['-O1', '-g', '-Wall', '-Wno-unused-function', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
+            '-fsanitize=address,undefined', '-DPD_HOST']
+def build_host():
+    os.makedirs('build-bl', exist_ok=True)
+    H = 'apps/pagedesk/hosttest/'
+    for out, src, extra in (('pdbl', 'pdbl_host.c', []), ('pdbl_b', 'pdbl_host.c', ['-DJB_BANDMAX=400u', '-DJB_NOSTREAM']),
+                            ('pdbl_fuzz', 'pdbl_fuzz.c', ['-fno-sanitize-recover=undefined'])):
+        r = subprocess.run(['cc'] + CC_FLAGS + extra + ['-o', 'build-bl/' + out, H + src, 'apps/pagedesk/pdmath.c'], capture_output=True, text=True)
+        if r.returncode: print(r.stderr); sys.exit(1)
+
+def run_fuzz(n=1500):
+    D = 'tests/pdfany/bilevel/'
+    seeds = ['c:%sccitt_g4.bin:-1:200:4:48' % D, 'c:%sccitt_g3_1d.bin:0:200:5:48' % D, 'c:%sccitt_g3_2d.bin:4:200:5:48' % D,
+             'c:%sccitt_g4_align.bin:-1:200:6:48' % D, 'j:%sjb2_generic.jb2:64' % D, 'j:%sjb2_mmr.jb2:64' % D,
+             'j:%sjb2_text.jb2:%sjb2_text.glob:64' % (D, D), 'j:%sjb2_huff.jb2:%sjb2_huff.glob:64' % (D, D),
+             'j:%sjb2_halftone.jb2:%sjb2_halftone.glob:64' % (D, D)]
+    r = subprocess.run(['build-bl/pdbl_fuzz', '-n', str(n), '-s', '1'] + seeds, capture_output=True, text=True)
+    print(r.stdout.strip() or r.stderr[-400:])
+    return r.returncode
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     seed = 1
@@ -391,7 +458,13 @@ if __name__ == '__main__':
         else: break
     rnd = random.Random(seed)
     f = 0
+    if a == ['build']: build_host(); sys.exit(0)
+    if a == ['all']:
+        build_host()
+        a = ['ccitt', 'jb2-generic', 'jb2-text', 'jb2-huff', 'jb2-halftone', 'jb2-multi', 'mutool-ccitt', 'mutool-jb2-generic',
+             'mutool-jb2-text', 'mutool-jb2-huff', 'mutool-jb2-halftone', 'mutool-jb2-multi', 'fuzz']
     for what in a or ['ccitt']:
+        if what == 'fuzz': f += run_fuzz()
         if what == 'ccitt': f += check_ccitt(rnd)
         if what == 'jb2-generic': f += check_jb2_generic(rnd, BINS)
         if what == 'jb2-text': f += check_jb2_text(rnd, BINS)
@@ -401,6 +474,8 @@ if __name__ == '__main__':
         if what == 'jb2-halftone': f += check_jb2_halftone(rnd, BINS)
         if what == 'mutool-jb2-halftone': f += check_jb2_halftone(rnd, BINS, True)
         if what == 'mutool-jb2-generic': f += check_jb2_generic(rnd, BINS, True)
+        if what == 'jb2-multi': f += check_jb2_multi(rnd, BINS)
+        if what == 'mutool-jb2-multi': f += check_jb2_multi(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)
     sys.exit(1 if f else 0)
 

@@ -5064,7 +5064,7 @@ answers `PDE_LIMIT` for that region), custom tables of at most 21 lines, symbol 
 the free part of the workspace (about 18 KB: a dictionary or a halftone grid that does not fit is
 `PDE_LIMIT` and its regions are skipped).
 
-**Checks.** `tools/os88pdbl_check.py` (host, python3) drives `build-bl/pdbl` built from
+**Checks.** `python3 tools/os88pdbl_check.py all` (host, python3; `build` makes the binaries, the legs are named in its docstring) drives `build-bl/pdbl` built from
 `apps/pagedesk/hosttest/pdbl_host.c` (once with the shipped band size and once with a 400-byte band): ccitt
 (576 shapes against the encoder), jb2-generic, jb2-text, jb2-huff, jb2-halftone (random pages from the reference
 encoders of `tools/os88pdfx_bilevel.py`, compared as delivered samples at scale 0 and reduced). The same
