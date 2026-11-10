@@ -9324,7 +9324,7 @@ MX_NBLK     equ 96                  ; entries (KERN-MEGA-PLAN 14.49): every
 MEGA_USTN   equ 8                   ; mega_useg's selectors over real segments
 mega_ustab  equ 0                   ; at or above A000h: {segment, selector}
 mega_ustab_end equ mega_ustab + MEGA_USTN * 4 ; a row, 0 a free one
-MEGA_WTN    equ 64                  ; OSAPI_SEG's windows (mega_segf): a row
+MEGA_WTN    equ 32                  ; OSAPI_SEG's windows (mega_segf): a row
                                     ; (32 until kernel size pass 19, R2-3: the
                                     ; rows are in this tail, above 1MB since
                                     ; msp2, so 32 more cost 128 bytes of the
