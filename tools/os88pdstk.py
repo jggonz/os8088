@@ -118,7 +118,7 @@ OVL = 8                     # cc_ovthunk / cc_ovmthunk's stash path + far frame
 OCCUPANTS = ["pdxk", "pdxg", "pdxf", "pdxi", "pdxj"]
 # an occupant whose door and dispatcher predate the rule: (door, dispatcher)
 OCC_NAMES = {"pdxk": ("pdk_entry", "_pdk_verb"), "pdxg": ("pdx_entry", "_pdx_verb"),
-             "pdxf": ("pdx_entry", "_pdxf_verb"), "pdxi": ("pdi_entry", "_pdi_verb")}
+             "pdxi": ("pdi_entry", "_pdi_verb")}
 
 
 def occupant_segments(root=ROOT, names=OCCUPANTS):
