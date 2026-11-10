@@ -511,8 +511,7 @@ static void syn_adopt(pdw seg, pdw kb)
     g_gseg = seg; g_gkb = kb > 63 ? 63 : kb;
     if (!g_gseg) g_gkb = 0;
     if (g_bk_seg[1]) g_bk_seg[1] = (pdw)(g_bk_seg[1] + (g_gseg - og));
-    if (g_scbump > (syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10))) { g_scn = 0; g_scbump = SC_BASE; }
-    g_pkfam = 0xFF;
+    if (g_scbump > syn_hdr()) { g_scn = 0; g_scbump = SC_BASE; }
 }
 
 static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)

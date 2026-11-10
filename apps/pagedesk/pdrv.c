@@ -215,7 +215,7 @@ static void x_answered(void)
      * alone, and PDMEM_SLOT is the occupant's own question (it asks once per stream or font) */
     if (a & 0x80) {
         if (a == (0x80 | PDMEM_GLYPH)) { if (!syn_cap()) x_ref |= XR_GLYPH; }
-        else if (a == (0x80 | PDMEM_XC) ? !g_ini.xc_seg : a == (0x80 | PDMEM_X8) ? !g_ini.x8_seg : 0) x_ref |= XR_MEM;
+        else if (a != (0x80 | PDMEM_SLOT) && !(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM;
     }
     else if (a && !x_have(a)) x_refuse(a);
 }
@@ -571,6 +571,7 @@ static void xc_adopt(void)
 }
 #define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
 typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
+#define INI_GLYW 13                     /* glyph_seg's word, glyph_kb the next (fonts, 20.22.8; held by hosttest/pdx_xmod.c) */
 static pdw verb_init(pdw xbseg)
 {
     pdw bound = pdr_eng_seg, i;         /* 0 on the FIRST INIT: the bss */
@@ -579,8 +580,7 @@ static pdw verb_init(pdw xbseg)
     if (bound && (x_ask & 0x80)) {
         /* the glyph claim may have been regrown and moved (PDMEM_GLYPH): its two words may differ */
         for (i = 0; i < INI_OLDW; i++)
-            if (&((pdw *)&g_ini)[i] != &g_ini.glyph_seg && &((pdw *)&g_ini)[i] != &g_ini.glyph_kb &&
-                pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
+            if ((i - INI_GLYW) > 1 && pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
         if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb); return PDE_OK; }
     }
     g_xb = xbseg;

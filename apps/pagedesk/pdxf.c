@@ -454,7 +454,7 @@ static pdw blk_slot(struct pdxb_fglyph *g, pdw boff)
         if (k == g->code) break;
         if (k == 0xFFFF) { pd_fpokew(seg, kp, g->code); break; }
     }
-    if (i == 128) return PDE_LIMIT;                                   /* the block's keys are full */
+    if (i == 128) return 0;                     /* the block's keys are full: slot 0, the code is not made (PDREND notes it) */
     g->slot = (pdw)(h + 1);
     ip = (pdw)(boff + PDFB_INFO + h * 4);
     flags = pd_fpeekb(seg, (pdw)(ip + 3));

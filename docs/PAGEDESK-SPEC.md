@@ -5821,13 +5821,15 @@ page with 88 distinct glyphs, which does not fit its block)**; the Type 3 fixtur
 glyph-level check is therefore 6 % at any size and for an outline page 8 %.
 
 **Budgets** (image + bss): PDXF at most 65,024 (the part limit, the lead 23:56); it measures
-40,686 + 20,126 = **60,812**. PDREND is two caps since 20.22.7.9: what is entered once per font
-load, per glyph MISS, per Type 3 glyph proc or per glyph-claim regrow is in PDRENDC (`pdrovl.h`'s
-`[fonts]` block: `font_get`, `font_encoding`, `font_classify`, `words_hit`, `emb_miss`, `t3_drain`,
-`syn_adopt`), and the per-glyph HIT stays near (`emb_hit`, `emb_glyph`, `syn_find`/`cap`/`hdr`/`off`,
-`t3_queue`, the branches in `text_glyph`, `text_show` and `strike_load`). With Type 3 ON, PDREND
-measures 44,826 + 6,116 = **50,942** near against rcore's 51,164 without any of it (fonts' near share
--222: the font loader's 2,135 bytes left with it) and PDRENDC **14,475** against 11,159 (+3,316).
+40,686 + 20,126 = **60,812**. PDREND: fonts' share is at most **+2,700** near (the lead, once
+20.22.7.9's second code segment was decided; moving code there is optional under it). Measured against
+PDREND built at rcore's 27bb5f290 (no fonts code: 54,792 + 5,948 = 60,740), fonts' PDREND is 57,328 +
+6,076 = 63,404, **+2,664 with Type 3 included**, and nothing is moved. Per glyph: `emb_hit`,
+`emb_glyph`, `syn_find`/`cap`/`hdr`/`off`, `t3_queue`, the branches in `text_glyph`, `text_show` and
+`strike_load`; per miss, per Type 3 proc or per regrow (the candidates for `pdrovl.h` should the
+room be wanted): `emb_miss`, `t3_drain`, `syn_adopt`, `font_get`'s probe. A code that finds its
+block's 128 keys full answers no slot (not a refusal of the font): PDREND notes `PDF_INC_LIMIT` and
+draws that code in the substitute face; `PDE_LIMIT` from GLYPH means `PDFE_SIZE` only.
 Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` > `_v_glyph` >
 `_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
 deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.

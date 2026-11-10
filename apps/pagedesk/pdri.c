@@ -334,7 +334,7 @@ static void t3_queue(pdw blk, pdw slot);
 static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
 {
     pdw boff, h, i, k, ip;
-    g_ek = syn_find(g_fk[GS.font].objnum, g_fk[GS.font].gen, px);
+    g_ek = syn_find(f->objnum, f->gen, px);
     if (g_ek == 0xFFFF) return 0;
     boff = syn_off(g_ek);
     h = (pdw)((code ^ (code >> 7)) & 127);
@@ -348,7 +348,7 @@ static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
     if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
     return 1;
 }
-/* the miss, once per code and size (PDREND's second code segment): the glyph claim's growth
+/* the miss, once per code and size (once rcore's PDRENDC lands, a candidate for it: pdrovl.h): the glyph claim's growth
  * (PDMEM_GLYPH: a 24 KiB claim has no blocks), the module (the ladder), then ONE PDXF call that
  * finds or makes the block, rasterises the glyph into it and answers; PDE_NEEDMEM from PDXF is its
  * workspace (PDMEM_SLOT) and is relayed. A refusal draws the font in the substitute face */
@@ -361,14 +361,17 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
         goto refuse;
     }
     if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
-    g_fgl.objnum = g_fk[GS.font].objnum; g_fgl.gen = g_fk[GS.font].gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+    g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
     g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_passes;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
     r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
     if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
-    if (!x_cf) return emb_hit(f, code, px);
-    pd_fcopy_in(g_xb, 0, &g_fgl, sizeof g_fgl);
-    if (g_fgl.err == PDFE_SIZE) bit = PDF_INC_APPROX;
+    if (!x_cf) {
+        if (emb_hit(f, code, px)) return 1;
+        inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face */
+        return 0;
+    }
+    if (r == PDE_LIMIT) bit = PDF_INC_APPROX;          /* PDFE_SIZE: the program is larger than the workspace */
 refuse:
     if (f->emb == 2) f->ok = 0;
     f->emb = 0; g_fwdirty = 1;
