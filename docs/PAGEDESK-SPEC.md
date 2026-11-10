@@ -4954,16 +4954,16 @@ with no job running, Esc closes the popover and the answer is -1.
 
 | mode | rows | keys |
 |---|---|---|
-| `AU_PW` asking | `Password: ***_` / blank / blank / `Enter: open  Esc: cancel` | printable ASCII appends (at most 39), Backspace deletes, Enter answers (an empty entry is ignored: the empty password was already tried), Esc cancels |
+| `AU_PW` asking | `Password: ***_` / blank / blank / `Enter: open  Esc: cancel` | printable ASCII appends (at most 127), Backspace deletes, Enter answers (an empty entry is ignored: the empty password was already tried), Esc cancels |
 | `AU_PWBAD` | the same with `Wrong password.` in row 2 | the same; typing leaves the line until Enter |
 | `AU_R6` the question | `This file's encryption takes` / `about N minutes on this machine.` / `Open anyway?` / `Enter: open  Esc: cancel` | Enter or Y answers Yes, Esc or N answers No |
 | `AU_CHECK` working | `Checking...  NN%` / blank / blank / `Esc: cancel` | Esc cancels |
 
 The wording of the question is the owner's (O6), verbatim apart from N, which
 is whole minutes, rounded up, at least 1, from `PDV_KEY_COST`'s seconds
-(`pdu_au_askr6` does the conversion). A password is at most **39 bytes** when
-typed: the buffer is `pdu_needle` (40 bytes, otherwise Find's, free while a
-popover of another kind is up), so the primary pays no bytes for it. Stars are
+(`pdu_au_askr6` does the conversion). A password is at most **127 bytes** when
+typed (R6's limit): the buffer is `pdu_au_pw[128]`, resident bss (an overlay's
+data stays resident, so only code can move), 128 bytes of the primary. Stars are
 drawn for the last 22 characters at most. The buffer is zeroed when the popover
 closes by any route, when a new ask begins and when the answer is taken
 (`pdu_au_close`).

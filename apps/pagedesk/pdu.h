@@ -444,8 +444,8 @@ static void ovl_au_ky(int ascii);
 #define AU_CHECK 4
 #define AU_COLS  36
 
-#define pdu_au_pw  pdu_needle
-#define pdu_au_len pdu_nlen
+static char pdu_au_pw[128];             /* the typed password (resident bss: an overlay's data is resident) */
+static int  pdu_au_len;
 
 static char pdu_au_mode;                /* AU_*: the popover is asking/working */
 static signed char pdu_au_ans;          /* 0 waiting, 1 answered, -1 cancelled */

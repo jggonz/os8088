@@ -96,7 +96,7 @@ static void ovl_au_ky(int ascii)
         ok = pdu_au_len > 0;
     else if (ascii == 8 && pdu_au_len)
         pdu_au_pw[--pdu_au_len] = 0;
-    else if (ascii >= 32 && ascii < 127 && pdu_au_len < 39) {
+    else if (ascii >= 32 && ascii < 127 && pdu_au_len < 127) {
         pdu_au_pw[pdu_au_len++] = ascii;
         pdu_au_pw[pdu_au_len] = 0;
     } else
