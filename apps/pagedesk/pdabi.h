@@ -687,6 +687,57 @@ struct pdxb_img {
 /* [crypt 20.22.5]  */
 /* [wrt 20.22.4]    */
 /* [rcore 20.22.7]  */
+/* PDV_GFX_DASH (0xCE, PDXG; the walker is rcore's pdxdash.c, 20.22.7): BX:CX =
+ * this block (PDREND puts it at XB offset 0), DX unused. The core fills `in`
+ * with st = 0 and calls; AX = 1: one piece is in `out` (stroke it as an OPEN
+ * polyline and call again), 2: the pattern is too fine to tell from solid
+ * (stroke the subpath whole), 0: done. CF = 1 is a failure: stroke solid. */
+#define PDXD_NPT    12      /* points in a piece                           */
+struct pdxb_dashout {
+    pdw  on;                /* points in ox/oy (1 = a dot)                  */
+    pdi  ox[12], oy[12];     /* qpx (PDXD_NPT)                           */
+};
+struct pdxb_dashin {
+    pdw  vseg, xs, ys;      /* the subpath: vseg:xs and vseg:ys, pdi, qpx   */
+    pdw  n, closed;         /* vertices (>= 1); 1 = closed                  */
+    struct pd_fx scale;     /* qpx per user unit (the CTM's)                */
+    pdw  dph;               /* GS.dph: phase, quarter points, reduced       */
+    pdb  dn, pad_;          /* elements 1..4                                */
+    pdb  dash[4];           /* lengths, quarter points                      */
+    pdw  st;                /* 0 on the first call; the walker's after      */
+};
+struct pdxb_dash {
+    struct pdxb_dashout out;
+    struct pdxb_dashin in;
+    pdw  i, didx, don, dpc, dpn;       /* the walker's state between calls */
+    pdi  drem, pos, slen, qx, qy, x0, y0, x1, y1;
+    pdi  len[4];
+    pdi  dpx[12], dpy[12];  /* PDXD_NPT */
+};
+typedef char pdabi_sz_dsh[sizeof(struct pdxb_dash) <= PD_XB_BYTES ? 1 : -1];
+/* PDV_GFX_EDIT (0xCF provisionally, PDXG; rcore's pdxedit.c, 20.22.7): the
+ * marks of ONE edit-store record (13.3) as a list of drawing ops. BX:CX = this
+ * block (XB offset 0), DX unused. The core fills it with skip = 0 and st[] = 0
+ * at the record's start and hands the block back unchanged between calls; each
+ * call writes `n` words of ops at XB offset PDXE_OPS - ending at the first
+ * PAINT, so the core may stroke (and dash, which uses the XB) last - with
+ * more = 1 while the record goes on. AX 0; CF = 1 a failure (the record is
+ * dropped). The ops, a word each and its arguments (page space, pt16): 1
+ * MOVE x y, 2 LINE x y, 3 INK x y (a LINE that strokes what is there first
+ * when the core's path is near full), 4 CURVE x1 y1 x2 y2 x3 y3, 5 CLOSE,
+ * 6 PAINT (bit 8 fill, 9 stroke, 10 the close flag), 7 SETB v (bits 8-15 a
+ * field of the graphics state: 0 stroke lum, 1 stroke c4, 2 fill lum, 3 fill
+ * c4, 4 dash count, 5-6 dash lengths, 7-8 dash phase low/high, 9 cap, 10
+ * join), 8 LW w16. */
+#define PDXE_OPS    64      /* XB offset of the ops                        */
+struct pdxb_emark {
+    pdw  eseg;              /* the edit store's records (pdxb_render)      */
+    pdw  rec;               /* this record's index                         */
+    pdw  bpp, mono;         /* the page's depth; pdxb_render.mono_mark     */
+    pdw  skip;              /* ops the core already has of this record     */
+    pdw  st[4];             /* the generator's place, 0 at the start       */
+    pdw  n, more;           /* out: words of ops; 1 = call again           */
+};
 /* [gfx 20.22.9]    */
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */

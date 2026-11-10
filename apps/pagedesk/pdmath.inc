@@ -157,6 +157,7 @@ _pdm_u32_add:                           ; (r, a, b)
         call    pdmi_setovf
         jmp     pdmi_ret_r
 
+%ifndef PDM_SKIP_U32X                   ; the u32 ops a module may leave out (PDREND)
 _pdm_u32_sub:                           ; (r, a, b)
         push    bp
         mov     bp, sp
@@ -212,6 +213,7 @@ _pdm_u32_mul16:                         ; (r, a, b): r = a*b, never overflows
         mul     word [bp+8]
         jmp     pdmi_ret_r
 
+%endif ; PDM_SKIP_U32X
 _pdm_u32_divmod16:                      ; (q, a, d) -> a % d
         push    bp
         mov     bp, sp
@@ -238,6 +240,7 @@ _pdm_u32_divmod16:                      ; (q, a, d) -> a % d
         pop     bp
         ret
 
+%ifndef PDM_SKIP_U32X
 _pdm_u32_shr:                           ; (r, a, n)
         push    bp
         mov     bp, sp
@@ -331,6 +334,7 @@ _pdm_u32_todec:                         ; STKBALANCE-LOOP: digits pushed in one 
         pop     bp
         ret
 
+%endif ; PDM_SKIP_U32X
 %endif ; PDM_SKIP_U32
 
 ; -----------------------------------------------------------------------------
@@ -896,6 +900,7 @@ _pdm_fx_todec:                          ; STKBALANCE-LOOP: digits pushed in a co
 
 %endif ; PDM_SKIP_PARSE
 
+%ifndef PDM_SKIP_TOPT16                 ; PDREND never writes pt16
 _pdm_fx_to_pt16:                        ; (a) -> pt16, nearest, saturating
         push    bp
         mov     bp, sp
@@ -926,6 +931,7 @@ _pdm_fx_to_pt16:                        ; (a) -> pt16, nearest, saturating
 .r:     pop     bp
         ret
 
+%endif ; PDM_SKIP_TOPT16
 _pdm_pt16_to_fx:                        ; (r, p)
         push    bp
         mov     bp, sp
@@ -1246,6 +1252,7 @@ pdmi_scy:
         pop     si
         jmp     pdmi_flsign
 
+%ifndef PDM_SKIP_VIEWX                  ; pdm_view_inv's helpers
 ; ceil(s * 1600 / zoom).  In DX:AX = s, BX = view (zoom != 0).
 pdmi_icx:
         call    pdmi_absw
@@ -1278,6 +1285,8 @@ pdmi_icy:
         pop     si
         jmp     pdmi_clsign
 
+%endif ; PDM_SKIP_VIEWX
+%ifndef PDM_SKIP_VIEWX                  ; view_fwd: PDREND builds its own base matrix
 ; (px*, py*, v, x, y)
 _pdm_view_fwd:
         push    bp
@@ -1340,6 +1349,7 @@ _pdm_view_fwd:
         pop     bp
         ret
 
+%endif ; PDM_SKIP_VIEWX
 ; (w*, h*, v)
 _pdm_view_size:
         push    bp
@@ -1385,6 +1395,7 @@ _pdm_view_size:
         ret
 
 ; (x*, y*, v, px, py): the smallest pt16 that lands on the pixel
+%ifndef PDM_SKIP_VIEWX                  ; view_inv: PDREND maps page -> device only
 %macro PDMI_INV_OUT 4                   ; slot lo, slot hi, negate?, box field
         mov     ax, [bp+%1]
         mov     dx, [bp+%2]
@@ -1465,6 +1476,7 @@ _pdm_view_inv:
         pop     bp
         ret
 
+%endif ; PDM_SKIP_VIEWX
 %endif ; PDM_SKIP_VIEW
 
 ; -----------------------------------------------------------------------------
@@ -1662,6 +1674,7 @@ _pd_fpokeb:                             ; (seg, off, v)
         pop     bp
         ret
 
+%ifndef PDM_SKIP_POKEW                  ; PDREND writes no far words
 _pd_fpokew:                             ; (seg, off, v); off = 0xFFFF undefined
         push    bp
         mov     bp, sp
@@ -1674,6 +1687,7 @@ _pd_fpokew:                             ; (seg, off, v); off = 0xFFFF undefined
         pop     bp
         ret
 
+%endif ; PDM_SKIP_POKEW
 _pd_ffill:                              ; (seg, off, v, n)
         push    bp
         mov     bp, sp
