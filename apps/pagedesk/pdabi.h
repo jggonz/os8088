@@ -690,6 +690,8 @@ struct pdxb_img {
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
+#define PDJ_ALPHA 0x0100    /* jpx: flags bit - deliver the codestream's own alpha
+                               channel as PDIM_GREY8 (/SMaskInData, 20.22.13.7) */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];

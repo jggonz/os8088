@@ -5152,7 +5152,7 @@ DC offset `2^(depth-1)` is added at the end, in the grey conversion.
 ##### 20.22.13.5 Fixed-point arithmetic
 
 No `float` and no `long` exist on the machine and none is used. The 9/7
-constants in Q14 are `alpha = -25988`, `beta = -868`, `gamma = 14465`, `delta =
+constants in Q14 are `alpha = -25987`, `beta = -868`, `gamma = 14466`, `delta =
 7266`, `K = 20155`, `1/K = 13318` (each `round(x * 2^14)`). A lifting step is
 
     dst[i] -= ((a[i] + b[i]) * k + 8192) >> 14        (k signed, sum in int16)
