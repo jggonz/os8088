@@ -536,7 +536,7 @@ def own(pde, work):
         "n_xref_off_eof": "repaired", "n_prev_inside": "repaired", "n_prev_cycle3": "repaired", "n_page_twice": "open:4", "n_no_pages": "open:1",
         "n_kid_not_page": "open:1", "n_kid_dangling": "ok", "n_kid_wrong_gen": "open:1", "n_tree_30": "ok", "n_tree_33": "open:5",
         "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:16", "n_a85": "ok", "n_dct": "stream:17",
-        "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
+        "n_crypt": "ok", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
         "n_encrypt": "open:23", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "repaired",
         "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "open:33", "n_subsec_65540": "open:33",
     }

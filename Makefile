@@ -21814,6 +21814,47 @@ pdwrt-enc: | $(BUILD)
 	$(BUILD)/pdw-enc/pdw_encfuzz 100000
 	python3 apps/pagedesk/hosttest/pdw_encrun.py $(BUILD)/pdw-enc/run $(BUILD)/pdw-enc/pdw_enc
 # ---- end PageDesk: wrt ------------------------------------------------------
+# ---- PageDesk: crypt ----------------------------------------------------------
+# PDXK.MOD (PAGEDESK-SPEC 20.22.5): the key occupant - the Standard security handler's
+# password side (algorithms 2, 4-7, 2.A, 2.B) over the crypto library's assembly
+# (pdcmd5/pdcrc4/pdcaes/pdcsha2.inc). pdwrt's shape. `make pdxk` builds the module
+# and runs the library's differential test (tests/pdcrypt/pdc_diff.py); the part
+# rules that pack it into PAGEDESK.O88 are plat's.
+PDK_C   := apps/pagedesk/pdxk.c apps/pagedesk/pdcsum.c
+PDK_H   := apps/pagedesk/pdcrypto.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDK_CAP := 32768
+.PHONY: pdxk pdxk-host
+$(BUILD)/pdxk.raw.asm: $(PDK_C) $(PDK_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I apps/pagedesk \
+		apps/pagedesk/pdxk.c -o $@
+$(BUILD)/pdxk.gen.asm: $(BUILD)/pdxk.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDXK.MOD: apps/pagedesk/pdxk.asm $(BUILD)/pdxk.gen.asm $(CC_RUNTIME) \
+                   apps/pagedesk/pdcmd5.inc apps/pagedesk/pdcrc4.inc apps/pagedesk/pdcaes.inc apps/pagedesk/pdcsha2.inc \
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxk.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDXK.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 32)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDK_CAP) else 0)"
+pdxk: $(BUILD)/PDXK.MOD
+	python3 tests/pdcrypt/pdc_diff.py
+# `make pdcrypt`: the whole encryption check (PAGEDESK-SPEC 20.22.5) - the library's assembly against the
+# vectors and the host twins, the REAL PDENG + PDXK (host) against qpdf over 17 fixtures, the COMPILED
+# PDENG.MOD + PDXK.MOD in Unicorn against the host, the ASan/UBSan fuzz. Not in `all`.
+PDC_E2E_SRC := apps/pagedesk/pdeng.c apps/pagedesk/pdxk.c apps/pagedesk/pdecrypt.c apps/pagedesk/pdcsum.c apps/pagedesk/pdctwin.c \
+               apps/pagedesk/pdcrypto.h apps/pagedesk/hosttest/pdc_e2e.c $(PDE_SRC)
+$(BUILD)/pdc_e2e: $(PDC_E2E_SRC) apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c apps/pagedesk/pdmath.c | $(BUILD)
+	$(CC) -g -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest apps/pagedesk/pdeng.c apps/pagedesk/pdxk.c \
+		apps/pagedesk/hosttest/pdc_e2e.c apps/pagedesk/hosttest/pde_host.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+.PHONY: pdcrypt
+pdcrypt: pdxk $(BUILD)/pdc_e2e $(BUILD)/PDENG.MOD
+	python3 tests/pdcrypt/pdc_e2e.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
+	python3 tests/pdcrypt/pdc_plain.py $(BUILD)/pdc_e2e $(BUILD)/pdcrypt/e2e
+	python3 tests/pdcrypt/pdc_target.py
+	python3 tests/pdcrypt/pdk_stack.py
+	python3 tests/pdcrypt/pdc_fuzz.py 300 1
+# ---- end PageDesk: crypt ------------------------------------------------------
 
 # ---- PageDesk: gfx ----------------------------------------------------------
 # PDXG.MOD (PAGEDESK-SPEC 20.22.9): colour spaces, functions, shading, patterns -

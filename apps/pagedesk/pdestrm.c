@@ -14,6 +14,12 @@ static int raw_get(struct sctx *c)
 {
     pdw want, n;
     if (c->rbi >= c->rbn) {
+        if (c->cmode) {
+            n = cr_read(c, c->rb, PDE_RB);
+            if (!n) return -1;
+            c->rbn = n; c->rbi = 0;
+            return c->rb[c->rbi++];
+        }
         want = PDE_RB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return -1;
@@ -216,6 +222,7 @@ static pdw st_decode(struct sctx *c)
     int b;
     if (lx_err) return 0;
     if (c->nflt == 0) {
+        if (c->cmode) return cr_read(c, c->ib, PDE_IB);
         want = PDE_IB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return 0;
@@ -254,9 +261,12 @@ static pdw flt_bit(pdw k) { return k < 6 ? flt_bits[k] : 0; }
 /* One /Filter name onto sp_flt. A codec ends the chain (the caller reads its
  * coded bytes) when sp_accept says the caller takes them. */
 static pdw sp_accept, sp_codec;
+static pdw sp_crypt;                            /* the chain names /Crypt (20.22.5) */
 static pdw flt_add(const pdb *name)
 {
-    pdw k = flt_kind(name);
+    pdw k;
+    if (str_eq(name, "Crypt")) { sp_crypt = 1; return PDE_OK; }
+    k = flt_kind(name);
     if (!k || sp_codec) return PDE_FILTER;              /* unknown, or a stage after a codec */
     if (k >= PDF_K_CODEC) {
         if (!(sp_accept & PDSA_CODEC)) return PDE_FILTER;
@@ -346,7 +356,7 @@ static pdw ob_filters1(pdw num)
 {
     pdw rc, rn, rg;
     int hops;
-    sp_nflt = 0; sp_filters = 0; sp_codec = 0;
+    sp_nflt = 0; sp_filters = 0; sp_codec = 0; sp_crypt = 0;
     lx_seek(&ds_pos);
     rc = ob_dict_find("F");                           /* an external file stream */
     if (rc == PDE_OK) { err_obj = num; return PDE_FILTER; }
@@ -463,8 +473,9 @@ static pdw st_push(pdw filtered, pdw num, pdw gen)
     if (nctx >= PDE_MAXCTX) return PDE_LIMIT;
     c = &ctxs[nctx];
     ctx_init(c, &sp_dstart, &sp_len, filtered ? sp_nflt : 0, sp_flt, sp_filters);
-    c->onum = num; c->ogen = gen;               /* crypt's key (20.22.5) */
     fl_drop(c);
+    i = cr_ctx_open(c);                         /* cr_sn/cr_sg: the caller's (20.22.5) */
+    if (i) return i;
     if (c->nflt && (sp_filters & (PDFL_FLATE | PDFL_LZW))) {
         i = fl_attach(c);
         if (i) return i;
@@ -541,9 +552,10 @@ static pdw v_strm_open(void)
     rc = ob_filters(num);
     sp_accept = 0;
     if (rc) return rc;
+    cr_sn = num; cr_sg = gen; cr_skip = cr_skipchk();
     rc = st_push(1, num, gen);
     if (rc) return rc;
-    if (sp_nflt == 0) u32_cp(&sx.declen, &sp_len);
+    if (sp_nflt == 0 && ctxs[nctx - 1].cmode != PDCM_AESV2 && ctxs[nctx - 1].cmode != PDCM_AESV3) u32_cp(&sx.declen, &sp_len);
     else { sx.declen.lo = 0xFFFF; sx.declen.hi = 0xFFFF; }
     sx.filters = sp_filters;
     sx.codec = sp_codec;
@@ -577,7 +589,13 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
     }
     while (got < dmax) {
         want = (pdw)(dmax - got);
-        if (c->nflt == 0) {
+        if (c->nflt == 0 && c->cmode) {
+            if (want > 128) want = 128;
+            k = cr_read(c, tmpb, want);
+            if (!k) break;
+            if (!pd_fcopy_out(tmpb, dseg, (pdw)(doff + got), k)) return PDE_RANGE;
+            got = (pdw)(got + k);
+        } else if (c->nflt == 0) {
             if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
             if (!want) break;
             k = fl_read_far(&c->rpos, dseg, (pdw)(doff + got), want);

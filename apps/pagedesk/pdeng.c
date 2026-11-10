@@ -82,6 +82,8 @@ static struct pd_u32 tr_dict;   /* newest trailer dict, just after "<<"       */
 static pdb   tr_id[32];         /* /ID[0] whole, up to 32 bytes (20.22.3.4)     */
 static pdw   tr_idlen, tr_hasid;
 static pdw   doc_ver, doc_flags;
+static pdw   cr_curn, cr_curg;  /* the object the lexer is in (0: none, the trailer, a member) */
+static pdw   cr_sn, cr_sg, cr_skip;  /* st_push's caller: the stream's object, 0 = plain; skip */
 
 /* ---- any PDF: the flat index, cross-reference streams, the trailer's
  * /Encrypt (pdexref.c, PAGEDESK-SPEC 20.22.3) ---------------------------- */
@@ -166,6 +168,7 @@ static pdw kw_ix(const pdb *t, const char *l)
 #include "pdexref.c"
 #include "pdepage.c"
 #include "pdestrm.c"
+#include "pdecrypt.c"           /* encryption: 20.22.5 */
 #include "pdeflate.c"
 #include "pdeostm.c"             /* object streams (20.22.3.3) */
 #include "pderepr.c"             /* repair (20.22.3.5) */

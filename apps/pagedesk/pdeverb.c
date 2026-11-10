@@ -13,6 +13,7 @@ static void doc_reset(void)
     ix_on = 0; ix_n = 0; tr_maxsize = 0; tr_tflags = 0; tr_enc_k = 0; tr_nodict = 0;
     fd_on = 0; rp_on = 0;
     os_reset();
+    cr_reset();
     u32_zero(&xr_next); u32_zero(&tr_start); u32_zero(&tr_dict);
     fobj.buf = fo_buf; fobj.mode = 0; fobj.n = 0; fobj.i = 0; fobj.smode = 0;
     u32_zero(&fobj.fpos);
@@ -50,16 +51,6 @@ static pdw v_init(pdw xbseg)
     doc_reset();
     return PDE_OK;
 }
-
-/* ---- crypt's hooks: 20.22.5 fills their bodies -------------------------------- */
-/* OPEN found /Encrypt (tr_enc_k 1: the reference tr_enc_n/tr_enc_g; 2: a direct
- * dictionary just inside at tr_enc_pos): PDE_OK once a key is set, else
- * PDE_PASSWORD (or PDE_ENCRYPT for a handler PageDesk does not implement). */
-static pdw cr_open(void) { return PDE_PASSWORD; }
-/* RAW_COPY with PDRC_PLAIN of an object in no object stream, on a file with
- * /Encrypt: rw in and out as v_raw_copy's, ob_extent's sp_off/ex_len/sp_kind
- * set. Until 20.22.5 the file's bytes, as PDRC_EXACT. */
-static pdw cr_raw_plain(struct pdxb_rawcopy *rw) { (void)rw; return PDE_NOTFOUND; }
 
 static pdw open_step(void)
 {
@@ -137,6 +128,11 @@ static pdw v_open(void)
     if (rc == PDE_BUSY || rc == PDE_NEEDMEM || (rc == PDE_PASSWORD && op_state == OPS_CRYPT)) {
         /* PDE_PASSWORD keeps the document half open: SETKEY, then OPEN with
          * this state resumes at the key (20.22.3.4, 20.22.4.4) */
+        xo.state = op_state;
+        pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
+        return rc;
+    }
+    if (rc == PDE_PASSWORD) {                           /* not a failure of the file: OPEN resumes after SETKEY */
         xo.state = op_state;
         pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
         return rc;
@@ -344,6 +340,7 @@ static pdw v_dict_get(void)
     pdw rc, k, j;
     int idx;
     pd_fcopy_in(g_xb, 0, &dg, sizeof(struct pdxb_dictget));
+    cr_curn = dg.objnum; cr_curg = dg.gen;                 /* strings read below are this object's */
     dg.kind = PDK_NULL; dg.refnum = 0; dg.refgen = 0; dg.len = 0; dg.count = 0; dg.text[0] = 0;
     dg.num.lo = 0; dg.num.hi = 0;
     dg.key[0][31] = 0; dg.key[1][31] = 0; dg.key[2][31] = 0;
@@ -364,6 +361,7 @@ static pdw v_dict_get(void)
             for (j = 0; dg.key[0][j]; j++) ;
             u32_cp(&dc_a, &dk_pos);                     /* L is fobj: pde_verb set it */
             u32_sub16(&dc_a, (pdw)(j + 1));
+            if (dc_a.hi & 0x8000) cr_curn = 0;          /* a member: its strings are the stream's, decrypted */
             lx_seek(&dc_a);
             if (lx_token() == 0 && tk.kind == PDT_NAME && str_eq(tk.text, dg.key[0])) {
                 lx_tell(&dc_a);
@@ -520,6 +518,9 @@ static pdw v_trailer(void)
         tr.id0_hi[i] = tr_hasid ? tr_id[16 + i] : 0;     /* /ID[0] whole (20.22.3.4) */
     }
     tr.id0_len = tr_idlen;
+    for (i = 0; i < 16; i++) tr.id0_hi[i] = (tr_hasid && tr_idlen > 16) ? tr_id[16 + i] : 0;
+    tr.encrypt_num = (tr_enc_k == 1) ? tr_enc_n : 0; tr.encrypt_gen = (tr_enc_k == 1) ? tr_enc_g : 0;   /* eng's (20.22.3.4) */
+    tr.tflags = (tr_enc_k == 2) ? PDTR_ENCDIRECT : 0;
     tr.version = doc_ver;
     tr.encrypt_num = tr_enc_k == 1 ? tr_enc_n : 0;
     tr.encrypt_gen = tr_enc_k == 1 ? tr_enc_g : 0;
@@ -719,6 +720,8 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             rc = fl_fingerprint(&fp);
             if (!rc) pd_fcopy_out(&fp, g_xb, 0, sizeof(struct pdxb_fingerprint));
             break;
+        case PDV_ENG_CRYPTINFO:   rc = g_filed ? cr_info() : PDE_RANGE; break;     /* 20.22.5 */
+        case PDV_ENG_SETKEY:      rc = cr_setkey(); break;
         case PDV_ENG_ARENA_MARK:  pde_ax = arena_top; rc = PDE_OK; break;
         case PDV_ENG_ARENA_REL:
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }

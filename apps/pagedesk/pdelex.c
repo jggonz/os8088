@@ -347,6 +347,7 @@ static pdw ob_value(void)
             if ((pdw)(ov.len + tk.len) >= ov.len) ov.len = (pdw)(ov.len + tk.len);
             else ov.len = 0xFFFF;
         }
+        cr_string();
         return PDE_OK;
     case PDT_NUM:
         ov.neg = tk.neg; ov.range = tk.range; ov.fxr = tk.fxr;
@@ -445,6 +446,7 @@ static pdw ob_find1(pdw num, pdw gen)
 {
     pdw rc;
     ob_null = 0;
+    cr_curn = num; cr_curg = gen;
     rc = xr_find(num);
     if (rc) { err_obj = num; return rc; }
     if (xo_state == 3) return OB_INSTM;
@@ -469,7 +471,10 @@ bad:
 static pdw ob_enter(pdw num, pdw gen)
 {
     pdw rc = ob_find1(num, gen);
-    if (rc == OB_INSTM) rc = ox_enter(num, gen);
+    if (rc == OB_INSTM) {
+        rc = ox_enter(num, gen);
+        cr_curn = 0;                            /* a member's strings are not encrypted (7.6.3) */
+    }
     ob_cur_n = num; ob_cur_g = gen;
     return rc;
 }
@@ -477,15 +482,16 @@ static pdw ob_enter(pdw num, pdw gen)
 /* Follow references (ov is a REF) until a value: ov holds its head. */
 static pdw ob_follow(void)
 {
-    pdw rc, hops = 0;
+    pdw rc, hops = 0, sn = cr_curn, sg = cr_curg;
     while (ov.kind == PDK_REF) {
         if (++hops > PDE_RESHOPS) return PDE_CYCLE;
         rc = ob_enter(ov.rnum, ov.rgen);
         if (rc) return rc;
-        if (ob_null) { ov_clear(); return PDE_OK; }
+        if (ob_null) { ov_clear(); cr_curn = sn; cr_curg = sg; return PDE_OK; }
         rc = ob_value();
         if (rc) return rc;
     }
+    cr_curn = sn; cr_curg = sg;
     return PDE_OK;
 }
 

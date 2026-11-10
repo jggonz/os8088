@@ -97,7 +97,12 @@ struct sctx {
     pdw wlo, whi;           /* bytes every filter stage produced (sget)   */
     pdw filters;            /* PDFL_* of the chain                        */
     pdw fhi[PD_MAXFILTERS]; /* ASCII85: the group's high word (fbyte the low) */
-    pdw onum, ogen;         /* the stream's object (crypt's key, 20.22.5)  */
+    /* any PDF: decryption of the raw bytes (pdecrypt.c, 20.22.5) */
+    pdw cmode;              /* 0 plain, else the PDCM_* the raw bytes are in */
+    pdw civ;                /* AES: the IV has been read                   */
+    pdw cn, cg;             /* the stream's object, for its key            */
+    pdb *crs;               /* the cipher state: an RC4 slot, or cv        */
+    pdb cv[16];             /* AES: the chaining block                     */
 };
 
 struct pde_tok {
@@ -137,5 +142,15 @@ struct osgeo {
     pdw first, n;           /* /First, /N                                 */
     pdw flate;              /* /FlateDecode, or no filter at all          */
 };
+/* ---- any PDF: encryption (pdecrypt.c, PAGEDESK-SPEC 20.22.5) ------------- */
+static pdw cr_read(struct sctx *c, pdb *buf, pdw want);
+static pdw cr_ctx_open(struct sctx *c);
+static void cr_string(void);
+static pdw cr_skipchk(void);
+static pdw cr_open(void);
+static pdw cr_raw_plain(struct pdxb_rawcopy *rw);
+static void cr_reset(void);
+static pdw cr_info(void);
+static pdw cr_setkey(void);
 
 #endif

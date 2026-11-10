@@ -250,6 +250,8 @@ PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
 PDRL_DIRECT              equ 0x0001
+PDRC_STRCIPHER           equ 0x0100
+PDV_KEY_PARAMS           equ 0xC3
 PDV_WRT_KEYS             equ 0x85
 PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12

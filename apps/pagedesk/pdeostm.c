@@ -146,7 +146,9 @@ static void os_rewind(pdw i)
     static const pdb og_fl[PD_MAXFILTERS] = { PDF_K_FLATE };
     struct osgeo *g = &og[i];
     ctx_init(&osc, &g->dstart, &g->len, g->flate, og_fl, g->flate ? PDFL_FLATE : 0);
-    osc.onum = g->stm; osc.ogen = 0;
+    cr_sn = g->stm; cr_sg = 0; cr_skip = 0; cr_win = 1;   /* an object stream is gen 0 (7.5.7) */
+    cr_ctx_open(&osc);                          /* the window's own RC4 state: no refusal */
+    cr_win = 0;
     if (g->flate) {
         fl_sc[FL_OSLOT] = &osc; fl_fresh[FL_OSLOT] = 1;
         fl_pp[FL_OSLOT][0] = 0; fl_pp[FL_OSLOT][1] = 0; fl_pp[FL_OSLOT][2] = 1; fl_pp[FL_OSLOT][3] = 8;
