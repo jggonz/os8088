@@ -474,8 +474,8 @@ ITEMS = [
      "changes, which it saves under a new name and never over the original. "
      "It is made for a PC with 640KB of memory. Each disk carries the program and eight sample "
      "PDFs, one of them a guide to PageDesk itself; all but the 360KB disk "
-     "also carry the extra font sizes. At 360KB the program and two samples "
-     "fill one disk, and the second 360KB disk carries every sample. PDFONTS.TXT on the disk is the "
+     "also carry the extra font sizes. At 360KB the program fills one disk "
+     "with one sample, and the second 360KB disk carries every sample. PDFONTS.TXT on the disk is the "
      "licence of the fonts it uses. PageDesk is on the everything sets and "
      "the live media too.",
      [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),

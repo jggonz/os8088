@@ -1741,6 +1741,12 @@ checks them alone). Nothing is looked up at run time. All little-endian.
 A size is in exactly one of the two resource files. A missing `PDFONTX.RES` is not an
 error and not Incomplete rendering: the renderer scales a core strike (D5).
 
+**20.22.14 amends this section (O8).** Both files' strikes are LZ4 streams,
+each record giving its unpacked and packed lengths, and the icon atlas is one
+stream. Inside `PAGEDESK.O88`, `PDRES.BIN` is two rows: the INDEX packed and
+the strikes stored. The figures below are the version-1 files, which
+`os88pdfont.py build --stored` still writes.
+
 #### 20.4.1 Layout and the directory (D3)
 
 Each file is laid out INDEX first. Every offset in a file - the directory's, and the
@@ -5244,24 +5250,31 @@ store:
   without one. Its worth: VIDEO-XMS-PLAN's 0.345 ms a KB on a real 286 makes a
   64 KiB swap about 23 ms against 1.2-3 s off a floppy (scout-platform 1).
 
-**20.22.2.8 The disks (O7).** Every geometry carries the one `PAGEDESK.O88`
-with all thirteen rows. The 360KB set becomes two floppies:
-`pagedesk360.img` (the program, `README.TXT`, `PDFONTS.TXT`, and the two
-samples the empty view and PD-29's XT proof open, `HELLO.PDF` and
-`XTGUIDE.PDF`) and **`pagedesk360b.img`** (every sample, and `README.TXT`).
-THE ARITHMETIC THAT BINDS: a 360KB disk is 354 clusters of 1,024 bytes, and
-one file cannot span two floppies, so `PAGEDESK.O88` itself must stay under
-about 350,000 bytes. It is 225,778 at the round's start; the occupants add
-their PACKED bytes (stand-ins about 100 each). Should the five real
-occupants pass ~120 KB packed, the 360KB answer is to ship PDRES (82,084
-bytes, stored) beside the program as `PDRES.BIN`: the INDEX loader and
-PDREND both reach it through `pdxb_fontbank.pkgname` and `part_off`, so the
-move is primary-side only. That is the lead's call when the figures exist.
-**The 720KB disk is the next to bind**: it carries every sample with the
-program and has 100 of 713 clusters free with the stand-ins (613 in use), so
-occupants past about 100 KB packed overflow it too, and its answer is the
-same pair (the samples to a second disk) or the same `PDRES.BIN`. The 1.44MB
-and 1.2MB disks have 1,631 and 1,155 clusters free.
+**20.22.2.8 The disks (O7, O8).** Every geometry carries the one
+`PAGEDESK.O88` with all thirteen rows. One file cannot span two floppies, so
+the program must fit a 360KB disk (354 clusters of 1,024 bytes). With every
+real occupant it measured 372,717 bytes, and `pagedesk360.img` needed 414
+clusters and `pagedesk720.img` 754 of 713. 20.22.14 (O8) packs the core font
+bank inside the program and `PDFONTX.RES` beside it. What each disk carries
+now (`make pagedeskdisk`):
+
+| image | carries | clusters before | after |
+|---|---|---:|---:|
+| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,139 / 2,847 |
+| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,139 / 2,371 |
+| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 574 / 713 |
+| `pagedesk360.img` | the program, `README.TXT`, `PDFONTS.TXT` (the OFL rides with the fonts inside the program), and `HELLO.PDF` WHEN IT FITS | 414 / 354 (refused) | 354 / 354 |
+| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 72 / 354 |
+
+`HELLO.PDF` fits on `pagedesk360.img` with no cluster to spare. The recipe
+tries it, and when the program has grown past it, it says so and builds the
+disk without it. That is not an error, since the second disk carries it.
+The program not fitting IS the error, from the second attempt. On a 360KB
+pair the empty view's Sample guide (`XTGUIDE.PDF` beside the program) finds
+nothing until the guide is opened from the second disk with File > Open.
+The 360KB XT proof (`tests/pagedeskxt.py`, PD-29) opens `XTGUIDE.PDF` from
+B:, which now holds the program and not the guide. It needs a 720KB B:, a
+third drive or a disk of its own. That is open.
 
 **20.22.2.9 Room in the primary.** The `.o88` header's image + bss (the
 cap is 65,024):
@@ -5280,8 +5293,9 @@ cap is 65,024):
 | release before refuse (20.22.2.4: the three releases and `xr_reinit`, factored out of `pdu_region`); a new GLYPH region's word at +62 cleared | 64,733 | +156 |
 | the Flate release built on eng's shrinking INIT; XC's release only under PDREND's own NEEDMOD | 64,817 | +84 |
 | each region's window cut once and reused (`xr_wseg`/`xr_wcl`/`xr_wl`) | 64,889 | +72 |
+| `pdu_bank_load` for a packed INDEX row (20.22.14): `part_off` worked out from row 5, the 65,024 adjacency check and the read cap gone | 64,875 | -14 |
 
-**135 bytes stay under the cap.**
+**149 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
@@ -7843,8 +7857,21 @@ about 160 ms, against about 6.4 KB (thirteen sectors) less to read.
 | | before | after |
 |---|---:|---:|
 | `PDRES.BIN` | 82,084 | 55,236 |
-| rows 4 + 5 on disk | 82,084 | 48,812 |
-| `PAGEDESK.O88` | 372,717 | (20.22.14.1) |
+| rows 4 + 5 on disk | 82,084 | 48,813 |
+| `PAGEDESK.O88` | 372,717 | 339,755 |
 | `PDFONTX.RES` | 311,732 | 160,676 |
+| primary image + bss | 64,889 | 64,875 |
+| PDREND image (cap 65,024) | 53,982 | 54,222 |
 
-20.22.2.8 has the disks.
+20.22.2.8 has the disks. Every other module (PDENG, PDWRT, the six slot
+occupants) assembles byte-identical: the gate's staged DS is assembled only
+where `pdr_lzdec` is named.
+
+**Verified** (host): `make pdrend-host` (21 checks) and `pdr_primtest` pass
+on the packed files, among them the strikes read at 512 B, 1 KiB and 4 KiB
+clusters. Of `pdr_check`'s renders, all but one are byte-identical to the
+same check run on `build --stored` files. The exception is the 8 KiB glyph
+claim (3 KiB of strike cache), which draws "what its cache holds" and says
+Incomplete either way: a slot's room is not the same number packed as
+stored, so a cache that tight holds a different set of strikes (476
+pixels of 307,200). `t_pdkgate` and `t_pdstk` pass.
