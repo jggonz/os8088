@@ -546,7 +546,9 @@ def check_shade(build_dir, work, exe, verbose):
         L = pat.get(k, [])
         l1 = " ".join(L[0][2:6]) if L else ""
         l2 = " ".join(L[1]) if len(L) > 1 else ""
-        if e1 not in " ".join(L[0]) if L else True:
+        if L and " type 1 " in " ".join(L[0]) + " " and " obj 0 " in " ".join(L[0]) + " ":
+            print("FAIL %s: a tiling pattern's object number is 0 (the core could not replay it)" % k); bad += 1
+        elif e1 not in " ".join(L[0]) if L else True:
             print("FAIL %s: %s" % (k, " ".join(L[0]) if L else "nothing")); bad += 1
         elif e2 and e2 not in l2:
             print("FAIL %s tiles: %s (wanted %s)" % (k, l2, e2)); bad += 1
