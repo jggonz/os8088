@@ -2787,7 +2787,29 @@ rmk_1:            ; (a real-mode bracket keeps it: fsx_rkeep)
 rmk_1e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT wm_obscured        ; 0x0096
 apic_task_yield:
-    OSAPI_SLOT task_yield         ; 0x009E
+%ifdef KERN_EMU
+    OSAPI_SLOT task_yield         ; 0x009E - kern_emu keeps the SLOT: its
+                                  ;          task_yield polls the VMware
+                                  ;          pointer BEFORE the frame (9.11.3)
+%else
+    ; 0x009E - THE CELL ENTERS THE YIELD ITSELF (ABI-BREAK-LIST V2, kernel
+    ; size pass 19). It builds task_yield's int 08h frame UNDER the caller's
+    ; far return - pushf / cli / push cs / call .save - so the scheduler's
+    ; iret resumes at the `retf` below and goes straight back to the package.
+    ; The SLOT it was paid push ds / push cs / pop ds, a near call and ret
+    ; and a pop ds round the same frame: .save banks the caller's DS on the
+    ; frame and KDS loads the kernel's, so none of that bought anything.
+    ; ~95 clocks a yield (PREDICTED). Seven bytes of eight: the length is
+    ; the ABI, so the eighth is a nop nothing reaches. kern_mega too - the
+    ; frame is the near task_yield's own, which its scheduler already irets.
+    ; STKBALANCE-OK: the int 08h frame task_yield fabricates, as there
+    pushf                         ; FLAGS slot - carries the caller's IF
+    cli
+    push cs                       ; CS slot
+    call task_yield.save          ; IP slot: the iret resumes at the retf
+    retf
+    nop
+%endif
     OSAPI_SLOT task_sleep         ; 0x00A6
 rmk_2:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x00AE

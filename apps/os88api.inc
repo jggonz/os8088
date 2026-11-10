@@ -1447,11 +1447,12 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
                                  ; with a kind or a volume nobody can have.
                                  ; remove: a driver its own service item
                                  ; (withdraw at detach); a package the link
-                                 ; in zone AH, ES:SI = the record it added -
-                                 ; CF=1 if that zone no longer holds it (a
-                                 ; zone is reused). AH = 0xFF: the Sticky App row
-                                 ; whose path's FINAL component is your
-                                 ; record's - a zone does not survive a boot.
+                                 ; ES:SI = the record it added NAMES - the
+                                 ; row with its volume and path; CF=1 if none
+                                 ; holds it. No zone: a zone is reused and
+                                 ; does not survive a boot. A Sticky App
+                                 ; record's row is found by its path's FINAL
+                                 ; component, then the same check.
                                  ; Both strings are terminated by the kernel
                                  ; whatever you put in them.
                                  ; A Sticky App record (+3 = OSAPI_STIK_MARK) is ONE
@@ -2752,8 +2753,11 @@ FSKP_DONE   equ 7
 ; but note what they cost: SYS_SNAPSHOT runs with interrupts off for the length
 ; a table copy, so it is a twice-a-second call, not a per-frame one.
 %define OSAPI_SYS_SNAPSHOT      KERNEL_SEG:0x0210   ; ES:DI = a SYS_SNAPSHOT_SIZE
-                                 ; buffer; out AX = MAX_TASKS, BX = INST_MAX.
-                                 ; The scheduler header (SS_*) then INST_MAX
+                                 ; buffer, CX >= 1 = the instance records it
+                                 ; holds (INST_MAX); out CX = the records
+                                 ; written, min(CX, the kernel's count) - THE
+                                 ; WALK'S BOUND. Clobbers AX, BX, DX.
+                                 ; The scheduler header (SS_*) then CX
                                  ; records of SSI_RECSZ (SSI_*), all inside ONE
                                  ; cli window - which is the point: an instance
                                  ; record is freed atomically with its task
@@ -2761,7 +2765,9 @@ FSKP_DONE   equ 7
                                  ; together or a cycle diff lands on the wrong
                                  ; row
 %define OSAPI_CLAIM_SNAPSHOT    KERNEL_SEG:0x0216   ; ES:DI = a CLAIM_SNAPSHOT_SIZE
-                                 ; buffer; out AX = MEM_MAX. MEM_MAX records of
+                                 ; buffer, CX >= 1 = the records it holds
+                                 ; (MEM_MAX); out CX = the records written,
+                                 ; min(CX, the kernel's count). Records of
                                  ; CLS_RECSZ: base segment (0 = a free record),
                                  ; paragraphs, owner word (SPEC.md 50.2)
 %define OSAPI_SYS_KB        KERNEL_SEG:0x021C   ; ES:DI = a SYSKB_SIZE buffer;
@@ -2785,8 +2791,9 @@ FSKP_DONE   equ 7
 SS_TICKS   equ 0                ; word: the tick counter at the snapshot
 SS_CUR     equ 2                ; byte: the running task slot
 SS_COOP    equ 3                ; byte: 0 pre-emptive, 1 cooperative
-SS_NTASK   equ 4                ; byte: MAX_TASKS, the same figure AX answers
-SS_NINST   equ 5                ; byte: INST_MAX, likewise BX
+SS_NTASK   equ 4                ; byte: the KERNEL's MAX_TASKS
+SS_NINST   equ 5                ; byte: the KERNEL's INST_MAX (CX out is the
+                                ; records written, which may be fewer)
 SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
                                 ; ONE VALUE THAT IS THE SNAPSHOT'S OWN: 3 is
                                 ; the idle task (SPEC.md 8.1.2, 28.7), which

@@ -27,6 +27,9 @@ can simply be decoded:
 
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
                                                call near/pop ds/retf (hot, 8)
+    (YSLOT)      9C FA 0E  E8 lo hi  CB 90     pushf/cli/push cs/call near
+                                               task_yield.save/retf/nop - the
+                                               yield cell (V2, 8)
     OSAPI_XCELL  55 BD tt tt E9 lo hi          push bp/mov bp,<target>/
                                                jmp near api_x   (hot, 7)
     OSAPI_R*     55 E8 lo hi tt tt             push bp/call api_r<kind>/
@@ -386,6 +389,11 @@ def decode(blob, addr, bodies, cold_seg):
 
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
         return "SLOT", rel(addr + 6, 4), ".text"
+    if c[0:4] == b"\x9c\xfa\x0e\xe8" and c[6:8] == b"\xcb\x90":
+        # OSAPI_TASK_YIELD's own cell (ABI-BREAK-LIST V2, kernel size pass
+        # 19): pushf / cli / push cs / call task_yield.save / retf / nop -
+        # it builds the yield's int 08h frame under the far return
+        return "YSLOT", rel(addr + 6, 4), ".text"
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xEA:
         # the SLOT's DS switch with a FAR JUMP for its call (SPEC.md 20.3):
         # the .cold body pops the DS the cell pushed and returns for it
@@ -469,7 +477,7 @@ def main():
             label_at.setdefault((sect[n], o), []).append(n)
     equ = os88sym.equates()
     bodies = {b: off[b] for b in ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")}
-    LEN = {"SLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
+    LEN = {"SLOT": 8, "YSLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
            "XCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
     tend = off["osapi_table_end"]
     starts = []
@@ -545,6 +553,8 @@ def main():
         s = name[len("OSAPI_"):].lower()
         want = {ALIAS[name]} if name in ALIAS else {s, "osapi_" + s, "api_" + s}
         seen = set(names)
+        if kind == "YSLOT":                   # task_yield.save: the routine
+            seen |= {n.split(".")[0] for n in names}
         if where == ".cold":
             seen |= {stem(n) for n in names}
         check(bool(seen & want),

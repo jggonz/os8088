@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9c1432e0917b82e7d3b0e80c116cc8db02ca6c4c68be48e0dc1dda704edfb347",
+  "fingerprint": "741f5f63671c3dc0c124872e9ef37e9e452283d976352e0d1b98fd84d4485997",
   "version": 14
  },
  "PKG_FMT": {
-  "fingerprint": "9dac927c840ce0d1a390f143af39abfd8220a0cecd6c3ed5f0796a5ccfa6a53a",
+  "fingerprint": "89347b525aa187f424b2b106d05254cfe184fb1baca626ce67f5c369309c23c4",
   "version": 13
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1981,6 +1981,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "Kernel size pass 19 opens the flag day (docs/plans/ksp19/BRIEF.md, docs/plans/ABI-BREAK-LIST.md 13.3): the table renumbers (T5's software-interrupt door for the rare cells), the window class moves into the package (R14), the KB memory doors and duplicate file doors are withdrawn (C1, C2, C4'), and further re-contracts follow on this branch. Nothing built at PKG_FMT 10 or DRV_VER 12 runs on this kernel. 11 and 12 are drivers' numbers, so packages go to 13 and drivers to 14 (SPEC.md 20.2.0).",
+   "to": 14
+  },
+  {
+   "fingerprint": "89347b525aa187f424b2b106d05254cfe184fb1baca626ce67f5c369309c23c4",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "R2 snapshots bounded by the caller's CX, C10 desk-item remove by record (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "741f5f63671c3dc0c124872e9ef37e9e452283d976352e0d1b98fd84d4485997",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "R2 snapshots bounded by the caller's CX, C10 desk-item remove by record (kernel size pass 19)",
    "to": 14
   }
  ]

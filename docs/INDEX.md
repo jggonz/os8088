@@ -214,7 +214,7 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 | `0x04E3` | `OSAPI_SEG` | BL = the verb: SEG_LIN DX = a segment or selector -> DX:AX = its LINEAR base (for the 8237, a DMA page check, anything physical) SEG_REAL DX = a... |
 | `0x04E9` | `OSAPI_MEM_P` | X: BL = the verb: MEMP_CLAIM / MEMP_CLAIM_HI AX = paragraphs, CX = the 64KB-page-safe HEAD in paragraphs (0 = none) -> CF=0, DX = the base, AX = the... |
 | `0x04D7` | `OSAPI_IMG_NAME` | AX = the segment an image is loaded at - the base of a MEM_K_DRV or MEM_K_MOD claim - with BX = 0... |
-| `0x0216` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; out AX = MEM_MAX... |
+| `0x0216` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer, CX >= 1 = the records it holds (MEM_MAX); out CX = the records written, min(CX, the kernel's count)... |
 | `0x021C` | `OSAPI_SYS_KB` | ES:DI = a SYSKB_SIZE buffer; every register preserved... |
 | `0x015A` | `OSAPI_XMEM_CAPS` | no inputs; out AX = extended- memory KB the pool can still hand out (0 = none, and the three below will all refuse), DX:CX = the pool's 32-bit linear... |
 | `0x0160` | `OSAPI_XMEM_ALLOC` | DX:AX = bytes wanted, rounded up to 1KB; out CF=0 and DX:AX = the block's TOKEN, never 0 (opaque... |
@@ -265,7 +265,7 @@ Read first: [§31 ctrl.inc — the Control Panel window](../SPEC.md#31-ctrlinc--
 | `0x0127` | `OSAPI_VIDEO` | the screen this machine actually has (SPEC.md 39.2). No inputs... |
 | `0x020A` | `OSAPI_DRV_CFG` | AL = 0 read / anything else write, ES:SI = the driver's buffer, CX = bytes (<= YOUR blob's size)... |
 | `0x032E` | `OSAPI_DRV_DLG` | AL = FDLG_OPEN / FDLG_SAVE, ES:SI = a default name (NUL, <= 12) or 0, DI = your near completion proc... |
-| `0x0210` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer; out AX = MAX_TASKS, BX = INST_MAX... |
+| `0x0210` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer, CX >= 1 = the instance records it holds (INST_MAX)... |
 | `0x0155` | `OSAPI_CPU_INFO` | no inputs; out AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (the CPU_F_* below): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal... |
 | `0x038B` | `OSAPI_DRV_CALL_AT` | OSAPI_DRV_CALL, EXCEPT ES IS YOURS (SPEC.md 20.11.2)... |
 | `0x0419` | `OSAPI_DRV_SUSPEND` | AL = 1 suspend / 0 resume / 2 handoff (above). ES:DI = a buffer of DQ_SIZE records or DI = 0 (suspend), ES:SI = a KDH_* record (handoff). out CF=0... |

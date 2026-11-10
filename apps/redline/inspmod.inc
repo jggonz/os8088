@@ -1140,9 +1140,9 @@ ri_p_dev:
     push ds
     pop es
     mov di, ri_claims
-    call OSAPI_CLAIM_SNAPSHOT
-    mov si, ri_claims
     mov cx, MEM_MAX
+    call OSAPI_CLAIM_SNAPSHOT       ; CX = the records written
+    mov si, ri_claims
 .claim:
     cmp word [si + CLS_SEG], 0
     je .cnext
@@ -1190,6 +1190,7 @@ ri_p_dev:
     add si, CLS_RECSZ
     loop .claim
     mov di, ri_snap                 ; the running programs
+    mov cx, INST_MAX
     call OSAPI_SYS_SNAPSHOT
     pop es
     call OSAPI_CLK_GET
