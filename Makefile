@@ -18477,13 +18477,13 @@ PD_WRT_MOD   ?= $(BUILD)/PDWRT.MOD
 # THE SLOT'S OCCUPANTS (PAGEDESK-SPEC 20.22.2.3), one variable each, the
 # stand-ins until each owner's module lands (PD_REND_MOD's shape): dct writes
 # PDXI, crypt PDXK, gfx PDXG, fonts PDXF, jpx PDXJ
-PD_XK_MOD    ?= $(PDSTUBDIR)/PDXK.MOD
-PD_XG_MOD    ?= $(PDSTUBDIR)/PDXG.MOD
+PD_XK_MOD    ?= $(BUILD)/PDXK.MOD
+PD_XG_MOD    ?= $(BUILD)/PDXG.MOD
 PD_XF_MOD    ?= $(PDSTUBDIR)/PDXF.MOD
-PD_XI_MOD    ?= $(PDSTUBDIR)/PDXI.MOD
-PD_XJ_MOD    ?= $(PDSTUBDIR)/PDXJ.MOD
+PD_XI_MOD    ?= $(BUILD)/PDXI.MOD
+PD_XJ_MOD    ?= $(BUILD)/PDXJ.MOD
 # ...and PDX8, the part read into the X8 region (20.22.10.11), blend's
-PD_X8_MOD    ?= $(PDSTUBDIR)/PDX8.MOD
+PD_X8_MOD    ?= $(BUILD)/PDX8.MOD
 PD_XMODS      = $(PD_XK_MOD) $(PD_XG_MOD) $(PD_XF_MOD) $(PD_XI_MOD) $(PD_XJ_MOD) \
                 $(PD_X8_MOD)
 PD_EMPTY     :=
