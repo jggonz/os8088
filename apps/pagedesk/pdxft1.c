@@ -293,34 +293,26 @@ static pdw t1_run(pdw o, pdw n)
         case 0x10C:                                                      /* div */
             if (g_tsp >= 2 && g_ts[g_tsp - 1]) { g_ts[g_tsp - 2] = pdx_muldiv(g_ts[g_tsp - 2], 1, g_ts[g_tsp - 1]); g_tsp--; }
             break;
-        case 0x110: {                                                    /* callothersubr: arg n othersubr# */
-            pdw on, na, k;
+        case 0x110: {                                                    /* callothersubr: arg1 .. argn n othersubr# */
+            pdw on, na, k, base;
             if (g_tsp < 2) { ok = 0; break; }
             on = (pdw)g_ts[--g_tsp]; na = (pdw)g_ts[--g_tsp];
             if (na > g_tsp) { ok = 0; break; }
+            base = (pdw)(g_tsp - na);                           /* the arguments leave the Type 1 stack for the PostScript one */
             if (on == 1) { g_tflex = 1; g_tnfp = 0; g_tpsp = 0; }
-            else if (on == 2) { /* a flex point was recorded by the rmoveto */ }
             else if (on == 0 && g_tflex) {
                 g_tflex = 0;
                 if (g_tnfp >= 7) {
-                    pdi x1, y1, x2, y2, x3, y3;
                     /* the 7 points: reference, c1, c2, e1, c3, c4, e2 (absolute) */
-                    x1 = (pdi)(g_tfx[1] + g_t1ox); y1 = (pdi)(g_tfy[1] + g_t1oy);
-                    x2 = (pdi)(g_tfx[2] + g_t1ox); y2 = (pdi)(g_tfy[2] + g_t1oy);
-                    x3 = (pdi)(g_tfx[3] + g_t1ox); y3 = (pdi)(g_tfy[3] + g_t1oy);
-                    ol_cubic(x1, y1, x2, y2, x3, y3);
-                    x1 = (pdi)(g_tfx[4] + g_t1ox); y1 = (pdi)(g_tfy[4] + g_t1oy);
-                    x2 = (pdi)(g_tfx[5] + g_t1ox); y2 = (pdi)(g_tfy[5] + g_t1oy);
-                    x3 = (pdi)(g_tfx[6] + g_t1ox); y3 = (pdi)(g_tfy[6] + g_t1oy);
-                    ol_cubic(x1, y1, x2, y2, x3, y3);
+                    ol_cubic((pdi)(g_tfx[1] + g_t1ox), (pdi)(g_tfy[1] + g_t1oy), (pdi)(g_tfx[2] + g_t1ox), (pdi)(g_tfy[2] + g_t1oy),
+                             (pdi)(g_tfx[3] + g_t1ox), (pdi)(g_tfy[3] + g_t1oy));
+                    ol_cubic((pdi)(g_tfx[4] + g_t1ox), (pdi)(g_tfy[4] + g_t1oy), (pdi)(g_tfx[5] + g_t1ox), (pdi)(g_tfy[5] + g_t1oy),
+                             (pdi)(g_tfx[6] + g_t1ox), (pdi)(g_tfy[6] + g_t1oy));
                     g_tx = g_tfx[6]; g_ty = g_tfy[6];
                 }
-                /* leave y, x for the two pops and setcurrentpoint */
-                g_tps[0] = g_ts[g_tsp + 2]; g_tps[1] = g_ts[g_tsp + 1]; g_tpsp = 2;
-                na = 0;
-            } else if (on == 3) { g_tps[0] = g_ts[g_tsp]; g_tpsp = 1; na = 0; }
-            else { for (k = 0; k < na; k++) g_tps[g_tpsp++ & 7] = g_ts[g_tsp + k]; }
-            g_tsp = (pdw)(g_tsp);
+                if (na >= 3) { g_tps[0] = g_ts[base + 2]; g_tps[1] = g_ts[base + 1]; g_tpsp = 2; }   /* y, x: pop gives x then y */
+            } else if (on != 2) { for (k = 0; k < na && k < 8; k++) g_tps[(pdw)(g_tpsp++ & 7)] = g_ts[(pdw)(base + k)]; }
+            g_tsp = base;
             break;
         }
         case 0x111: if (g_tpsp && g_tsp < T1_STK) { g_ts[g_tsp++] = g_tps[--g_tpsp]; } break;     /* pop */
