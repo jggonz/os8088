@@ -6671,6 +6671,50 @@ Flate page) must draw the same with one slot as with two, to the pixel and
 clean. Page 2 puts an inline image before the `Do` and must note `form stream`
 with one slot and draw clean with two.
 
+**An occupant's stream (the generalised park).** The same refusal meets a
+slot occupant that reads a stream of its own while the interpreter holds the
+one Flate slot: PDXG's Indexed lookup table, a sampled function, a mesh
+shading's data (QA's R10/R12 and the shadings of real pages). PDREND parks
+for it, ONE mechanism in the core, so no module carries an inflater of its
+own for the case:
+
+* **Interpretation.** Every PDXG verb goes through `xg_req` (`pdrxg.c`). When
+  one FAILS (CF, not `PDE_BUSY`), `strm_park` (`pdri.c`) closes the top
+  frame's stream if it can be parked (the rule above: opened by the
+  interpreter, no raw bytes read) and marks it `park = 2`, and the verb is
+  asked again from the same block. The frame is reopened and replayed by
+  the next `tok_next`, AFTER the operator has used the answer: a replay's
+  tokens are written into the exchange block, where PDXG's records are.
+  One operator that asks several times (a shading answering `PDE_BUSY`)
+  is replayed once. A page that never needs it never pays: there is no
+  park before a call, only after a refusal, and with two slots there is
+  no refusal.
+* **Band time.** Nothing of the content is open then, but the core reads a
+  plain image's own stream while PDX8 reads its `/SMask` (or `/Mask`) for
+  the strip, and a Flate image with a Flate mask needs two slots.
+  `img_mask_park` (`pdrv.c`) opens the mask itself first (PDENG's streams
+  are a stack, so the probe leaves the image's alone); refused, it closes
+  the image's stream, PDX8 reads the mask, and the image's rows are read
+  again from the first (`img_reopen`). PDXI and PDXJ open their streams at
+  band time with nothing of the core's held (`img_xopen` closes it), so
+  they need nothing.
+* **Not PDXF.** A font program, ToUnicode or CMap read with no free slot is
+  copied raw and inflated in PDXF's own workspace (20.22.8, *Streams
+  without a Flate slot*); parking around a glyph build would only add a
+  re-inflate.
+
+**The cost** is one re-inflate of the parked stream up to the operator
+(`ntok` TOKEN calls) per operator that needed it, per pass - the same
+bytes the pass had already read, without drawing - and for a masked image,
+the image's rows again from the first, once per band strip that draws it.
+`pdr_test`'s `PDR_NOPARK` is the A/B, and `PDR_XSHADE_OBJ=<n>` makes its
+stand-in PDXG read stream `n` for every shading. `pdr_xchk`'s `park.pdf`:
+30 shadings on a Flate page (page 1) and in a Flate Form on a Flate page
+(page 2), each making the stand-in read a Flate function stream, draw with
+one slot as with two, clean, against `shading` noted without the park; a
+Flate image with a Flate `/SMask` (page 3) draws with one slot as with two
+and as MuPDF, against `transparency` noted without it.
+
 #### 20.22.8 Fonts from their programs (`fonts`)
 
 AP-14 and AP-15. A font whose program is embedded (`/FontFile2` TrueType, `/FontFile` Type 1,

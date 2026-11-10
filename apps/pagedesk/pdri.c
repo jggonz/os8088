@@ -53,10 +53,12 @@ static pdw strm_open(pdw obj, pdw gen, pdw page, pdw index)
 }
 static void strm_close(void) { pdr_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 
+static pdw frame_reopen(pdw d);
 /* the next content token into g_tk; returns 0 or a PDE code */
 static pdw tok_next(void)
 {
     pdw err;
+    if (g_fr[g_nfr].park == 2 && !frame_reopen(g_nfr)) { g_fr[g_nfr].park = 1; g_fr[g_nfr].ok = 0; }  /* an occupant's park (20.22.7.12) */
     if (g_fr[g_nfr].park) { g_tk.kind = PDT_EOF; g_tk.len = 0; return 0; }  /* parked and not reopened: it ended */
     err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
     if (g_fr[g_nfr].ntok < 0xFFFE) g_fr[g_nfr].ntok++;    /* the replay count (20.22.7.12) */
@@ -607,6 +609,28 @@ static pdw frame_reopen(pdw d)
     for (n = g_fr[d].ntok; n; n--) if (pdr_eng(PDV_ENG_TOKEN, 0, 0, 0)) break;
     g_fr[d].park = 0;
     if (n) { strm_close(); return 0; }
+    return 1;
+}
+/* AN OCCUPANT'S PARK (20.22.7.12). A slot occupant that opens a stream of
+ * its own - PDXG's Indexed lookup, sampled function or mesh shading - while
+ * the interpreter holds the one Flate slot fails for want of it. The caller
+ * then parks the frame (its stream closed, park = 2) and asks again; the
+ * frame is reopened and replayed by the next tok_next, AFTER the operator
+ * has used the answer (a replay's tokens overwrite the exchange block). 1 if
+ * it parked. Only on a failure: a page that never needs it never pays a
+ * re-inflate. */
+#ifdef PD_HOST
+extern int pdrh_nopark;                     /* hosttest PDR_NOPARK: the A/B */
+#endif
+static pdw strm_park(void)
+{
+    pdw d = g_nfr;
+#ifdef PD_HOST
+    if (pdrh_nopark) return 0;
+#endif
+    if (g_mode == PDR_IDLE || g_idone || g_fr[d].park || !g_fr[d].ok || g_fr[d].ntok == 0xFFFF || (!d && !g_pgopen)) return 0;
+    strm_close();
+    g_fr[d].park = 2;
     return 1;
 }
 static pdw form_open(pdw obj, pdw gen)

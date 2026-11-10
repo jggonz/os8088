@@ -238,7 +238,7 @@ static void report(void)
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
     printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
            rs.mods, rs.swaps, g_loads);
-    if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax; printf("xshade calls=%ld stepmax=%ld\n", pdrh_xshades, pdrh_xstepmax); }
+    if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail; printf("xshade calls=%ld stepmax=%ld fails=%ld\n", pdrh_xshades, pdrh_xstepmax, pdrh_xshfail); }
 }
 
 /* one page's text map to `o`. PDR_TMSTALE: a slice the ladder answered is sent again with the
@@ -267,11 +267,13 @@ static int text_run(int page, FILE *o)
     return 0;
 }
 
-int pdrh_noshcull, pdrh_dlhist;      /* PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
+int pdrh_noshcull, pdrh_dlhist, pdrh_nopark;
+/* PDR_NOPARK: no occupant park (20.22.7.12); PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
     pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
+    pdrh_nopark = getenv("PDR_NOPARK") != 0;
     pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
     pd_host_ds = 0x1000;
     if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
