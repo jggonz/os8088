@@ -21759,6 +21759,8 @@ endif
 # a separate `nasm -f bin`. `make pdxi` builds the module AND runs the host check
 # against libjpeg (tools/os88pdfx_dct.py); the host side is not in `all`.
 PDI_BIT  := $(if $(wildcard apps/pagedesk/pdxiccit.c),-DPDXI_CCIT) $(if $(wildcard apps/pagedesk/pdxijb2.c),-DPDXI_JB2)
+# the hand-written JBIG2 MQ decoder and template-0 row (bilevel's pdxijb2.inc), when it is on the branch
+PDI_JBA  := $(if $(wildcard apps/pagedesk/pdxijb2.inc),-DJB_ASM)
 PDI_C    := apps/pagedesk/pdxi.c apps/pagedesk/pdxidct.c $(wildcard apps/pagedesk/pdxiccit.c apps/pagedesk/pdxijb2.c)
 PDI_H    := apps/pagedesk/pdxi.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
 PDI_SDK  ?=
@@ -21766,14 +21768,14 @@ PDI_OUT  := $(BUILD)/pdi
 PDI_CAP  := 65024   # image + bss (PAGEDESK-SPEC 20.22.11): DCT <= 24,576 of it, bilevel <= 36,864
 .PHONY: pdxi pdxi-host
 $(BUILD)/pdxi.raw.asm: $(PDI_C) $(PDI_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_DEFS) \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S $(PDI_BIT) $(PDI_JBA) $(PDI_DEFS) \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDI_SDK),$(PDI_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
 		apps/pagedesk/pdxi.c -o $@
 $(BUILD)/pdxi.gen.asm: $(BUILD)/pdxi.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
 	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
 $(BUILD)/PDXI.MOD: apps/pagedesk/pdxi.asm apps/pagedesk/pdxidct.inc $(BUILD)/pdxi.gen.asm $(CC_RUNTIME) \
-                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
-	$(NASM) -f bin -w+error $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
+                   $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc apps/pagedesk/pdxijb2.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(PDI_JBA) $(PDI_DEFS) $(if $(PDI_SDK),-I $(PDI_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdxi.asm
 	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
 	    assert i==len(d), (i,len(d)); t=i+b; print('PDXI.MOD: image %d + bss %d = %d bytes (%.1f KiB; cap 63.5)'%(i,b,t,t/1024)); \
 	    sys.exit(1 if t>$(PDI_CAP) else 0)"
