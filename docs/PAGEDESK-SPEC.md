@@ -5057,12 +5057,12 @@ Incomplete: a dither).
 | 0xCB | `PDV_GFX_SHADE` | `pdxb_gfx`: header + ramp, or triangles; resumable |
 | 0xCC | `PDV_GFX_PAT` | `pdxb_gfx`: tiling pattern parameters |
 | 0xCD | `PDV_GFX_FN` | `pdxb_gfx`: evaluate ONE function (`fn` text, `comp[]` in, `rgb`-free out `val[]`); for the host harness and the core's `sh` operands |
-| 0xCE-0xCF | | reserved (gfx) |
+| 0xCE | `PDV_GFX_DASH` | rcore's `pdxdash.c` dash walker, `#include`d |
+| 0xCF | | reserved (gfx) |
 
-Blend's ExtGState (`pdxgtr.c`, 0xD0-0xD7) and rcore's dash walker (`pdxdash.c`,
-0xC8-0xCF is NOT theirs: it takes the first free verb of blend's range as
-blend decides) are `#include`d by `pdxg.c` and given a case in its door's
-`switch`, in the order of the verb numbers.
+Blend's ExtGState (`pdxgtr.c`, 0xD0-0xD7) and rcore's dash walker
+(`pdxdash.c`, 0xCE) are `#include`d by `pdxg.c` and given a case in its door's
+`switch`.
 
 **Workspace** (declared for 20.22.2's table): 16 KiB parse arena + 4 KiB
 function and calculator state + 2 KiB result staging = **22 KiB** beyond image
