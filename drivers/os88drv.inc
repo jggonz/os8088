@@ -709,7 +709,7 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ; re-contracted in place, 9 until the RAM disk's class moved, 11 until the
 ; heap's granule became 512 bytes and the strip rung with it (SPEC.md 50.2.1),
 ; 12 now. Mirrored in kernel/driver.inc and tools/os88drv.py.
-DRV_VER equ 12
+DRV_VER equ 14
 
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry [, dsvlen] - open the driver and emit its

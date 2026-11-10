@@ -382,7 +382,7 @@ DRV_H_BSSP  equ 31              ; byte: THE BSS SIZE IN PARAGRAPHS
                                 ; run only to the 512-byte rung, so a driver
                                 ; this tree built always fits (SPEC.md 51.1.2)
 DRV_HDR_SZ  equ 0x20
-DRV_VER     equ 12              ; 4 until the API table moved, 7 until two
+DRV_VER     equ 14              ; 4 until the API table moved, 7 until two
                                 ; cells were re-contracted, 9 until the RAM
                                 ; disk's class moved, 11 until the heap's
                                 ; granule became 512 bytes and a driver's

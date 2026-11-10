@@ -4440,7 +4440,7 @@ OS88_HIGHMEM       equ 0x40
 ; package" instead. 6 until SPEC.md 34.4 and 34.11 re-contracted two cells
 ; in place, 8 until the RAM disk's class moved 5 -> 8 under RD_CLASS
 ; (20.2.0). Mirrored in kernel/loader.inc and tools/os88pkg.py.
-PKG_FMT equ 10
+PKG_FMT equ 13
 
 %macro OS88_HEADER 2-4
     cpu 8086

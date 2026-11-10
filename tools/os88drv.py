@@ -45,7 +45,7 @@ HDR = 32
 # has read the header, so raising it costs every driver load on every machine.
 BSS_MAX_PARA = 255
 MAGIC = 0x384F                  # 'O','8'
-DRV_VER = 12  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19, 11 until 50.2.1 (SPEC.md 20.2.0)
+DRV_VER = 14  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19, 11 until 50.2.1 (SPEC.md 20.2.0)
 DRV_RUNG = 512                  # the strip rung: kernel/memory.inc's
                                 # mem_bytes_gp_x claims an image to 512 bytes
                                 # on every granule (SPEC.md 50.2.1)
