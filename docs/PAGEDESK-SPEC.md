@@ -6094,18 +6094,22 @@ least):
 | 12 characters | 69.0 | 16,445 | 1,449 | 1,389 | 534 (455 to 652) |
 | 24 characters | 71.2 | 20,452 | 1,733 | 1,750 | 665 (560 to 821) |
 
-That is `9.1 x (password + 48)` seconds, the formula in `PDV_KEY_COST`
-(`pdk_cycles.py --stats`). A run is a **seventh of an hour for the empty
-password**; the attempts are runs: a correct user password is **two** (the check
-and the key salt: 14.6 minutes for the empty one, 13 to 15 on a file's own
-salts), a wrong password typed in is 2.7 (the user key, then the owner key, whose
-`udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 22 to 24
-minutes),
-and the silent empty attempt on a file that has a user password is 1 (7.3
-minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
-therefore "about 15 minutes" for a file that opens, and the prompt that follows a
-failed silent attempt another 15. On a 286 (a sixth) it is 2.5 and on a 386 well
-under a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
+That is `9.1 x (password + 48)` seconds as priced. **MartyPC's 5150 measured
+it 1.4 times longer** (QA F23: 1,212 s and 1,213 s on CGA and Hercules for the
+two runs of an empty user password, priced at 874), the real 8088's prefetch and
+bus costs that the pricing rule does not see, so `PDV_KEY_COST` returns
+**`12.75 x (password + 48)` seconds** on an 8088 (612 for the empty one) and the
+table above is the priced figure. A faster class divides by 6, 24 or 60 as
+before; the 1.4 has not been measured there, so those estimates err long. A run is
+**ten minutes for the empty password**; the attempts are runs: a correct user
+password is **two** (the check and the key salt: 20.4 minutes for the empty one,
+measured 20.2), a wrong password typed in is 2.7 (the user key, then the owner
+key, whose `udata` is `/U`'s 48 bytes, makes its run 1.7 times as long: about 30
+minutes), and the silent empty attempt on a file that has a user password is 1
+(10 minutes, to learn that a prompt is needed). The question O6 asks on an 8088 is
+therefore "about 20 minutes" for a file that opens, and the prompt that follows a
+failed silent attempt another 20. On a 286 (a sixth) it is 3.4 and on a 386 about
+a minute. The other algorithms, whole `KEY_AUTH` calls on an 8088 (the parse through
 `DICT_GET` included): R2 0.17 s, R3 and R4 1.8 s (50 MD5 passes and 20 RC4
 passes), a wrong password on R3 5.1 s (the owner key as well).
 

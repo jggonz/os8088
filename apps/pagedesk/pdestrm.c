@@ -266,6 +266,7 @@ static pdw flt_add(const pdb *name)
 {
     pdw k;
     if (str_eq(name, "Crypt")) { sp_crypt = 1; return PDE_OK; }
+    if (cr_peek) return PDE_OK;                         /* (a PLAIN copy needs no slot, whatever the chain) */
     k = flt_kind(name);
     if (!k || sp_codec) return PDE_FILTER;              /* unknown, or a stage after a codec */
     if (k >= PDF_K_CODEC) {

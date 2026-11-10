@@ -83,6 +83,7 @@ static pdb   tr_id[32];         /* /ID[0] whole, up to 32 bytes (20.22.3.4)     
 static pdw   tr_idlen, tr_hasid;
 static pdw   doc_ver, doc_flags;
 static pdw   cr_curn, cr_curg;  /* the object the lexer is in (0: none, the trailer, a member) */
+static pdw   cr_peek;           /* ob_filters1 is only after /Crypt (cr_raw_plain): accept any filter */
 static pdw   cr_sn, cr_sg, cr_skip;  /* st_push's caller: the stream's object, 0 = plain; skip */
 
 /* ---- any PDF: the flat index, cross-reference streams, the trailer's
