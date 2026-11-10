@@ -25,6 +25,7 @@ static int pdu_fst;                     /* 0 begin a page, 1 streaming it */
 static int pdu_fnew;                    /* the next SEARCH call starts a page */
 static unsigned pdu_frun0, pdu_fbefore;
 static int pdu_fcand, pdu_fwrap;
+static int pdu_funread;                 /* the first page whose fonts the text pass could not read, -1 none */
 static unsigned pdu_fclo, pdu_fchi;
 
 /* the Find popover's Enter and F3 / Shift+F3 */
@@ -63,6 +64,7 @@ static void ovl_find_begin(void)
     }
     pdu_fcnt = 0;
     pdu_fwrap = 0;
+    pdu_funread = -1;
     pdu_fst = 0;
     pdu_flim = pdu_npages;
     if (pdu_frun0 || pdu_fbefore != 0xFFFF)
@@ -95,10 +97,22 @@ static void ovl_find_hit(unsigned lo, unsigned hi)
 
 static void ovl_find_miss(void)
 {
+    char *p;
     pdu_job = J_NONE;
     os88_strcpy(pdu_line, "No match for \"", sizeof(pdu_line));
     pdu_cat(pdu_line, pdu_needle, sizeof(pdu_line));
     pdu_cat(pdu_line, "\"", sizeof(pdu_line));
+    /* a page whose fonts the text pass could not read (no font module beside the overlay, PAGEDESK-SPEC
+     * 20.22.8): "not found" would be a guess, so say which page to draw first. The words are STORED by
+     * code, not a literal: this overlay's literals are resident and the primary is at its cap */
+    if (pdu_funread >= 0 && os88_strlen(pdu_line) < sizeof(pdu_line) - 24) {
+        p = pdu_line + os88_strlen(pdu_line);
+        p[0] = ' '; p[1] = '-'; p[2] = ' '; p[3] = 'd'; p[4] = 'r'; p[5] = 'a'; p[6] = 'w';
+        p[7] = ' '; p[8] = 'p'; p[9] = 'a'; p[10] = 'g'; p[11] = 'e'; p[12] = ' ';
+        os88_utoa(pdu_funread + 1, p + 13);
+        p += os88_strlen(p);
+        p[0] = ' '; p[1] = 'f'; p[2] = 'i'; p[3] = 'r'; p[4] = 's'; p[5] = 't'; p[6] = 0;
+    }
     pdu_wsay(pdu_line);
 }
 
@@ -153,6 +167,8 @@ static void ovl_find_step(void)
         return;
     }
     pd_fcopy_in(pdu_xb, 0, &pdu_xtm, sizeof(pdu_xtm));
+    if ((pdu_xtm.done & PDTM_UNREAD) && pdu_funread < 0)
+        pdu_funread = pdu_fpg;
     n = pdu_xtm.count;
     glyph = pdu_frun0;
     while (n > 0) {

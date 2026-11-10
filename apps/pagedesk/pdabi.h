@@ -946,14 +946,18 @@ struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
                                    /W width in 1/1000 em, u8 PD Latin, u8 flags PDFB_F_*) at +3584. The
                                    slot of a code is its index in keys + 1, found from hash(code) =
                                    (code ^ code >> 7) & 127 by linear probing                  */
-#define PDFB_HDR    64          /* the 64 bytes just below the blocks: SYN_MAX (4) entries of 4 words
+#define PDFB_HDR    64          /* the 64 bytes just below the blocks: SYN_MAX (PDFB_NBLK, 6) entries of 4 words
                                    (font obj, gen, px, pass last used) at +0, the block count at +60 and
                                    the magic PDFB_MAGIC at +62. PDREND finds, PDXF makes and evicts      */
 #define PDFB_MAGIC  0x5342
-#define PDFB_NBLK   4           /* blocks at most: a 40 KiB glyph claim holds four, 32 KiB two, 24 none */
+#define PDFB_NBLK   6           /* blocks at most: (glyph_kb - 24) / 4, so 48 KiB six, 40 four, 32 two, 24 none */
 #define PDFB_GLYPHKB 40         /* the glyph claim PDREND asks for (PDMEM_GLYPH) the first time a page
-                                   needs a block; the primary gives 40, else 32, else refuses (the
-                                   font is then drawn in the substitute face, PDF_INC_APPROX)      */
+                                   needs a block (its MIN); the primary gives 40, else 32, else refuses
+                                   (the font is then drawn in the substitute face, PDF_INC_APPROX)  */
+#define PDTM_UNREAD 2            /* pdxb_textmap.done, with 1: a font's codes on the page could not be
+                                   read (PDXF refused, the view never drew them): Find says so (QA R17) */
+#define PDFB_GLYPHWANT 48       /* its WANT: asked once a pass finds every block in use (a fifth
+                                   (font, size) on one page, QA R24); refused, "glyph block full"   */
 #define PDFB_KEYS   3328
 #define PDFB_INFO   3584
 #define PDFB_T3REC  512         /* a Type 3 block (em64 = 0 only, so no bitmaps): CharProc (u16 obj, u16 gen) of slot s at
