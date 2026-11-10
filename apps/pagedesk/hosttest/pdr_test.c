@@ -144,7 +144,11 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
-    in.bpp = (pdw)bpp; in.adapter = 0; in.eng_seg = 1;   /* nonzero: PDREND treats a later INIT as a re-hand (the host engine ignores the vector) */
+    in.bpp = (pdw)bpp; in.adapter = 0;
+    /* the engine's vector, nonzero as the primary's is: verb_init takes a 0 one
+     * for the FIRST INIT, so without it a re-INIT after PDE_NEEDMEM restarted the
+     * view instead of adding the region (the host's pdr_eng never reads it) */
+    in.eng_off = 0x0008; in.eng_seg = 0x9000;
 #ifdef PDR_X8
     if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 60; }          /* blend (20.22.10.2) */
 #endif
