@@ -369,6 +369,39 @@ _pdr_blit:
     pop bp
     ret
 
+%ifdef CC_U__pdr_lzdec
+; -----------------------------------------------------------------------------
+; unsigned pdr_lzdec(sseg, soff, plen, dseg, ulen) - OSAPI_DECOMP (SPEC.md
+; 20.13.3) of the LZ4 stream of plen bytes at sseg:soff onto dseg:0, exactly
+; ulen bytes (PAGEDESK-SPEC 20.22.14: a packed strike, in place). 0 = done,
+; 0xFFFF = refused. DS is the cell's ARGUMENT, so it is STAGED in pdk_xds and
+; the gate loads it after its own statics (pdkgate.inc) and puts ours back.
+; -----------------------------------------------------------------------------
+_pdr_lzdec:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [bp+4]
+    mov [pdk_xds], ax
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    mov es, [bp+10]
+    xor di, di
+    xor bx, bx
+    mov dx, [bp+12]
+    mov ax, OSAPI_LZ_LZ4
+    call OSAPI_DECOMP               ; pdk_k_DECOMP: DS = the stream for the cell
+    mov word [pdk_xds], 0           ; DS is ours again (pdk_dn)
+    sbb ax, ax                      ; CF -> 0 / 0xFFFF
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; void pdr_glyph(void) - the block _pdr_gp (pdrend.h). Preconditions the C
 ; checked: the glyph and its shear margin lie inside the band row.

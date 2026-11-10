@@ -18550,15 +18550,15 @@ $(BUILD)/pdxj.part: $(PD_XJ_MOD) $(PDMODSTAMP) | $(BUILD)
 $(BUILD)/pdx8.part: $(PD_X8_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 
-# PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
-# TWO adjacent rows cut at 65,024 - a multiple of 16, so the second row's
-# bytes follow the first's in the file and D3's offsets hold across the cut
-# (pagedesk.asm's table; pdumod.c's pdu_bank_load checks the adjacency)
-$(BUILD)/pdres1.part: $(PD_RES_BIN) | $(BUILD)
-	@python3 -c "d=open('$<','rb').read(); open('$@','wb').write(d[:65024])"
-$(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
-	@python3 -c "d=open('$<','rb').read(); assert 65024 < len(d) <= 2*65024, len(d); \
-	    open('$@','wb').write(d[65024:])"
+# PDRES.BIN rides as TWO rows cut where its strike region starts (PAGEDESK-SPEC
+# 20.22.14): row 4 is the INDEX - directory, bank, kit - which the primary reads
+# whole and os88pkg PACKS (OP_COMP, expanded by pdu_part_rd), and row 5 the
+# strikes, stored (OP_SELF), each strike its own LZ4 stream that PDREND reads by
+# file offset and expands. The cut is a multiple of 16, so pdu_bank_load finds
+# PDRES byte 0's file offset as row 5's less row 4's unpacked length
+$(BUILD)/pdres1.part: $(PD_RES_BIN) tools/os88pdfont.py | $(BUILD)
+	python3 tools/os88pdfont.py cut $< $@ $(BUILD)/pdres2.part
+$(BUILD)/pdres2.part: $(BUILD)/pdres1.part ;
 
 # the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
 # so every one of them is a prerequisite or an edit rebuilds nothing
@@ -18634,14 +18634,24 @@ $(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,1200,$(PD_FONTX_RES))
 $(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
 	$(call PDDISK,720,$(PD_FONTX_RES))
-# O7 (PAGEDESK-SPEC 20.22.2.8): THE 360KB SET IS TWO FLOPPIES. The first is
-# the program with the two samples the empty view and PD-29's XT proof open;
-# the second carries every sample. One file cannot span two floppies, so
-# PAGEDESK.O88 itself must fit a 360KB disk - os88disk.py refuses one that
-# does not, which is the gate.
-PD_SAMPLES360 := $(filter %/HELLO.PDF %/XTGUIDE.PDF,$(PD_SAMPLES))
+# O7, O8 (PAGEDESK-SPEC 20.22.2.8, 20.22.14): THE 360KB SET IS TWO FLOPPIES.
+# The first is the program, README.TXT, PDFONTS.TXT (the OFL rides with the
+# fonts inside the program) and HELLO.PDF WHEN IT FITS; the second carries
+# every sample. One file cannot span two floppies, so PAGEDESK.O88 itself must
+# fit a 360KB disk - os88disk.py refuses one that does not, which is the gate,
+# and the second attempt (no HELLO.PDF) is where it bites. The first failing
+# says so and is not an error: HELLO.PDF is on the second disk either way.
+PD_SAMPLES360 := $(filter %/HELLO.PDF,$(PD_SAMPLES))
 $(BUILD)/pagedesk360.img: $(PDDISKDEPS)
-	$(call PDDISK,360,,$(PD_SAMPLES360))
+	python3 tools/checkreadme.py $(PDDIR)/README.TXT
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pagedesk.o88 \
+	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(PD_SAMPLES360) \
+	    --folder SYSTEM/APPDATA 2>/dev/null || { \
+	  echo "pagedesk360.img: HELLO.PDF does not fit beside PAGEDESK.O88;" \
+	       "it rides pagedesk360b.img (PAGEDESK-SPEC 20.22.2.8)"; \
+	  python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pagedesk.o88 \
+	      $(PDDIR)/README.TXT $(PD_FONT_TXT) --folder SYSTEM/APPDATA; }
+	python3 tools/os88disk.py --verify $@
 $(BUILD)/pagedesk360b.img: $(PD_SAMPLES) $(PDDIR)/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(PDDIR)/README.TXT $(PD_SAMPLES)
 	python3 tools/os88disk.py --verify $@
@@ -22089,7 +22099,7 @@ PD_FONT_LIC  := apps/pagedesk/fonts/LICENSES.txt apps/pagedesk/fonts/OFL-Liberat
                 apps/pagedesk/fonts/AUTHORS-Liberation.txt apps/pagedesk/fonts/AFM-NOTICE.txt
 PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
                 $(wildcard apps/pagedesk/art/*.art) apps/pagedesk/art/face.kit $(PD_FONT_LIC) \
-                tools/os88pdfont.py tools/os88pdart.py tools/os88pdkit.py
+                tools/os88pdfont.py tools/os88pdart.py tools/os88pdkit.py tools/os88lz.py
 
 # the face kit's names for the C (PAGEDESK-SPEC 20.21.2): the icons in
 # art/face.kit's order. --selfcheck holds the kit to its own format first

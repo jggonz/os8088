@@ -7728,3 +7728,123 @@ tens of seconds on an XT, a 2x larger result takes four times the transform and
 about three times the tier-1 time. PDREND runs it once per image per page view and
 the result is cached by the caller (20.22.7). A faster machine scales as its
 clock; nothing here is memory-bound.
+
+#### 20.22.14 The core font bank, packed inside the program (`pdres`, O8)
+
+**Why.** With every real occupant `PAGEDESK.O88` measured 372,717 bytes, and
+a 360KB floppy is 354 clusters of 1,024 bytes: `pagedesk360.img` needed 414,
+and `pagedesk720.img` 754 of 713. The owner's answer (DECISIONS O8) keeps
+PDRES (20.4) INSIDE the program and stores its bulk as LZ4 blocks, rather
+than moving it beside the program as 20.22.2.8 had planned. Its 82,084 bytes
+were rows 4 and 5, stored (OP_SELF), so that PDREND could read a strike by
+file offset.
+
+**The block is the STRIKE.** A strike is what PDREND reads on a miss and
+keeps in its cache (20.3.4, `pdrd.c`'s `strike_fetch`), whole and
+contiguous. Fixed 4 KiB blocks would have split strikes (2,886 to 4,692
+bytes in PDRES, up to 11,790 in `PDFONTX.RES`) across two or three blocks,
+so one miss would have read and decoded several blocks into a strike that
+still had to be put back together. One stream a strike means one miss reads
+one stream and decodes it once. It also packs no worse: the 18 distinct core
+strikes are 66,784 bytes, which become 41,349 packed one stream each,
+against 41,885 as 4 KiB blocks of the same region (the owner's measure of
+the whole file in 4 KiB blocks was 49,229).
+
+**The format (20.4.1, 20.4.2, as amended here).** `tools/os88pdfont.py
+build` writes:
+
+* **A strike record's `u32 length` is two words**: bytes 12-13 the strike's
+  UNPACKED length, bytes 14-15 its PACKED length, 0 = stored. The high word
+  was always 0 (every strike must fit the 16 KiB cache). A packed strike is
+  an LZ4 stream in SPEC.md 20.13.7's shape (`T` word, the symbols, `T` raw
+  bytes; no near-call escape), starting 16-bit aligned, and the record's
+  offset names the stream. A strike is packed only when that pays (every one
+  does today). A bank with any packed record is **`PDFB` version 2**.
+  Synthesised italics still share their upright strike's offset, and so its
+  stream.
+* **The icon atlas (kind 4) is one LZ4 stream**, said by the directory
+  entry's `flags` bit 0, whose `length` is then `unpacked << 16 | packed`
+  (2,708 and 1,287 bytes). No other kind carries a flag. Nothing on the
+  machine reads the atlas today (the face's kit, kind 9, replaced it), so
+  this is only file bytes. The directory stays `PDRS` version 1, and the
+  primary's walk (`pdu_bank_dir`) is unchanged.
+* **The INDEX, the kit and the notice stay stored in the file.** The INDEX
+  is read whole and is not a strike, and the notice is for a person to read.
+* **`PDFONTX.RES` is packed the same way.** It is the same reader and the same
+  record, so it costs no code, and the file goes from 311,732 bytes to
+  160,676. That is what lets the 720KB disk carry every sample (below).
+* `build --stored` writes the version-1 files, and its `PDRES.BIN` is
+  byte-identical to the round's start. It is the A/B. `check` decodes every
+  packed strike and the atlas against their sources. It holds each strike's
+  cache room (below) to the 16 KiB glyph cache: 8,802 bytes at most in
+  PDRES and 15,900 in `PDFONTX.RES`.
+
+**In the package: two rows, cut where the strikes start.** `os88pdfont.py
+cut` splits `PDRES.BIN` at kind 6's offset (`data_off`, a multiple of 16,
+12,048 today):
+
+| row | bytes of `PDRES.BIN` | flags | on disk |
+|---|---|---|---|
+| 4 | `[0, data_off)`: the directory, the bank (records, widths, names) and the kit | `OP_ASSET`, `OP_LAZY \| OP_SELF \| OP_COMP` | 12,048 -> 5,624 (os88pkg packs it, like any `OP_COMP` row) |
+| 5 | `[data_off, end)`: the strike streams, the atlas stream, the notice | `OP_ASSET`, `OP_LAZY \| OP_SELF` (stored) | 43,188 |
+
+Row 5 is stored, so its offsets are real. The file offset of `PDRES.BIN`'s
+byte 0, D3's `part_off`, is therefore **row 5's offset less row 4's
+UNPACKED length**. That byte is no longer in the file at all (row 4 is
+packed), but every strike offset counts from it. `pdu_bank_load` works it
+out (`bk_para`). It refuses a row 4 that is not a paragraph multiple, or
+that is longer than `pdu_rescap` (`PDU_INDEX_MAX + PDU_KIT_MAX`, 12,800),
+with `PDE_LIMIT`. It reads row 4 with `pdu_part_rd`, the slot's own reader,
+which expands a packed row in place (`R = roundup512(len - packed)` above
+the claim's base, SPEC.md 20.13.7). Before, a cap could stop the read short
+of the row. A packed row cannot be cut, so the cap is now a refusal. The
+two rows are no longer adjacent in the file, and the adjacency check went
+with the 65,024 cut.
+
+**PDREND on a miss** (`strike_fetch`, `pdrd.c`). With `U` the unpacked
+length, `P` the packed length, `head` the stream's offset into its first
+cluster and `rd = roundup(head + P, cluster)` the read:
+
+* the stream is read into the strike's own cache slot at `R' = ceil16(U - P
+  - head)` (0 when that is negative), so it starts at or above `U - P` from
+  the slot's base. That is SPEC.md 20.13.7's condition for a decoder writing
+  from the base never to overtake its source;
+* the slot's room is `max(roundup512(U), R' + rd)` (at most `U + 14 +` a
+  cluster), and the cache's own wrap rule applies to that room;
+* `OSAPI_DECOMP` expands it onto the slot's base. It goes through a new gate
+  slot `DECOMP` (`pdkgate.inc`) by `pdr_lzdec`, `pdrprim.inc`'s thunk
+  (`DS:SI` is the stream in the glyph claim, not the module's own segment,
+  so it is assembly). A refusal counts as a failed read: `g_fioerr`, the
+  strike unavailable, and `pdri.c` steps down a size as it already does.
+* The strike cache IS the cache of decoded blocks: a decoded strike stays in
+  its slot, keyed by its record, until the cache wraps (`SC_NENT` = 8
+  entries, or the room). INIT and FONTBANK clear it. No further cache is
+  added, and no claim.
+
+`pdr_host.c` carries the host twin of `pdr_lzdec` (an LZ4 decoder in this
+shape, refusing what the kernel refuses), so `make pdrend-host` and every
+`pdr_*.py` harness read the packed `PDRES.BIN` exactly as the machine does.
+
+**What it costs an XT.** The kernel's LZ4 arm decodes at about 64 cycles an
+output byte (SPEC.md 20.13.6: Note Pad's launch on MartyPC's 5150, 63.8,
+filter included) and no worse than 92.2 (the same stream before kernel
+hot-paths pass 1). A core strike of 2,886-4,692 bytes is therefore
+**40-90 ms** of decode on a 4.77 MHz 8088, and `PDFONTX.RES`'s largest
+(11,790) 160-230 ms. The read it rides on shrinks by 40%: 4,692 bytes
+become 2,675, five clusters become three. At about 400 ms a call, a miss
+costs what it did plus the decode. A miss is once per (family, style, size)
+a document first draws, and again only after the 8-entry cache wraps:
+`HELLO.PDF` draws two or three strikes, and so pays two or three decodes
+per open. The INDEX row decodes once per instance at launch: 12,048 bytes,
+about 160 ms, against about 6.4 KB (thirteen sectors) less to read.
+
+**What it buys** (`make pagedeskdisk`):
+
+| | before | after |
+|---|---:|---:|
+| `PDRES.BIN` | 82,084 | 55,236 |
+| rows 4 + 5 on disk | 82,084 | 48,812 |
+| `PAGEDESK.O88` | 372,717 | (20.22.14.1) |
+| `PDFONTX.RES` | 311,732 | 160,676 |
+
+20.22.2.8 has the disks.

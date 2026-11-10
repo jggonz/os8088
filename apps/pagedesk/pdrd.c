@@ -530,26 +530,39 @@ static void syn_adopt(pdw seg, pdw kb)
     if (g_scbump > syn_hdr()) { g_scn = 0; g_scbump = SC_BASE; }
 }
 
-static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
+/* PAGEDESK-SPEC 20.22.14: `plen` != 0 is a PACKED strike, an LZ4 stream of plen
+ * bytes that expands to len. It is read into its own slot at rr = ceil16(len - plen
+ * - head) (0 when negative), so the stream starts at or above len - plen from the
+ * slot's base (SPEC.md 20.13.7: the decoder then never overtakes its source), and
+ * OSAPI_DECOMP expands it onto the base; the slot's room is the larger of the two */
+static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len, pdw plen)
 {
     static struct pd_u32 u, p;
-    pdw cb, head, cap, room, seg, got, i;
+    pdw cb, head, cap, room, seg, got, i, rr, need, n;
     room = syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10);         /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
-    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u) return 0;   /* cap below cannot wrap */
+    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len) return 0;   /* cap below cannot wrap */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
     cb = file_enter();
     if (!cb) { g_fioerr = 1; return 0; }
     head = u.lo & (cb - 1);
-    cap = (pdw)((head + len + cb - 1) & ~(cb - 1));   /* len < 60K and cb <= 4K: no wrap */
+    n = plen ? plen : len;                      /* the bytes on disk */
+    cap = (pdw)((head + n + cb - 1) & ~(cb - 1));   /* n < 60K and cb <= 4K: no wrap */
+    rr = 0;
+    if (plen && len - plen > head) rr = (pdw)((len - plen - head + 15) & ~15u);
+    need = (pdw)(rr + cap);                     /* <= len + 14 + cb: no wrap */
+    if (need < len) need = len;
     /* every comparison by subtraction: g_scbump <= room, so none of them wraps */
-    if (cap > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
-    if (cap > room - g_scbump) { file_leave(); return 0; }       /* a strike larger than the cache */
+    if (need > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
+    if (need > room - g_scbump) { file_leave(); return 0; }      /* a strike larger than the cache */
     seg = (pdw)(g_gseg + (g_scbump >> 4));
-    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, seg, cap);
+    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, (pdw)(seg + (rr >> 4)), cap);
     file_leave();
-    if (got < head + len) { g_fioerr = 1; return 0; }
-    pd_fcopy(seg, 0, seg, head, len);          /* the strike down to the paragraph */
+    if (got < head + n) { g_fioerr = 1; return 0; }
+    if (plen) {
+        if (pdr_lzdec((pdw)(seg + (rr >> 4)), head, plen, seg, len)) { g_fioerr = 1; return 0; }
+    } else
+        pd_fcopy(seg, 0, seg, head, len);      /* the strike down to the paragraph */
     i = g_scn++;
     g_scb[i] = (pdb)b; g_scolo[i] = olo; g_scohi[i] = ohi;
     g_scoff[i] = g_scbump; g_sclen[i] = len;
@@ -578,7 +591,7 @@ static pdw strike_load(pdw id)
     g_sid = id;
     for (i = 0; i < g_scn; i++)
         if (g_scb[i] == b && g_scolo[i] == lo && g_scohi[i] == hi) goto found;
-    if (!strike_fetch(b, lo, hi, len)) return 0;
+    if (!strike_fetch(b, lo, hi, len, (pdw)(g_srec[14] | (g_srec[15] << 8)))) return 0;     /* 20.22.14: packed */
     i = g_scn - 1;
 found:
     g_sseg = (pdw)(g_gseg + (g_scoff[i] >> 4)); g_soff = 0;

@@ -32,6 +32,9 @@ void pdr_fill4(pdw seg, pdw rowoff, pdi x0, pdi x1, pdw col);
 pdw  pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx);
 /* the kernel's blit: kind 1 = BLIT1, 4 = BLIT4. Returns 0 taken, else -1.   */
 pdi  pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows);
+/* OSAPI_DECOMP (PAGEDESK-SPEC 20.22.14): the LZ4 stream of plen bytes at sseg:soff
+ * expanded onto dseg:0, exactly ulen bytes; 0 = done, nonzero = refused */
+pdw  pdr_lzdec(pdw sseg, pdw soff, pdw plen, pdw dseg, pdw ulen);
 /* glyph and image row composers read this block (offsets in pdrprim.inc,
  * pinned by the assertion in pdrend.c).                                     */
 struct pdr_gp {

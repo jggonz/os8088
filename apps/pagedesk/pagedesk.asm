@@ -14,15 +14,17 @@
 ;   part 1  PDREND  eager  the renderer: interpreter, bands, glyphs
 ;   part 2  PDWRT   lazy   the writer: an occupant of the SLOT (20.22.2),
 ;                          read by offset at a save, freed after
-;   part 3  PDRES   lazy   the font bank, widths and art - OP_SELF: read by
-;   part 4                 OFFSET out of PAGEDESK.O88 itself (pdumod.c), never
-;                          fetched whole by the standard. TWO ROWS: PDRES.BIN
-;                          is 77,828 bytes and a part's ceiling is 65,024
-;                          (os88pkg.py, SPEC.md 20.12.11), so the Makefile
-;                          cuts it there - a multiple of 16, so os88pkg's
-;                          paragraph layout puts row 4's bytes straight after
-;                          row 3's and every PDRES file offset (D3) is still
-;                          part_off + offset. pdu_bank_load checks it.
+;   part 4  PDRES   lazy   the font bank, widths and art - OP_SELF: read by
+;   part 5                 OFFSET out of PAGEDESK.O88 itself (pduslot.inc),
+;                          never fetched whole by the standard. TWO ROWS, cut
+;                          where the strikes start (PAGEDESK-SPEC 20.22.14):
+;                          row 4 the INDEX (directory, bank, kit), OP_COMP,
+;                          read whole and expanded by pdu_part_rd; row 5 the
+;                          strikes, stored, each its own LZ4 stream that
+;                          PDREND reads by file offset and expands. Every
+;                          PDRES offset (D3) is part_off + offset, part_off
+;                          being row 5's offset less row 4's unpacked length
+;                          (a multiple of 16) - pdu_bank_load works it out.
 ;   part 5  PDXK    lazy   the slot's occupants (PAGEDESK-SPEC 20.22.2.3):
 ;   part 6  PDXG           OP_SELF | OP_COMP, read by offset and expanded
 ;   part 7  PDXF           onto claim S's base by pduslot.c, one at a time:
@@ -92,9 +94,9 @@
       %assign PD_PART_WRT_ASM OS88_PART_N
       OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 3 PDWRT (the slot's)
       %assign PD_PART_RES_ASM OS88_PART_N
-      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 4 PDRES [0, 65024)
-      %assign PD_PART_RES2_ASM OS88_PART_N
-      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 5 PDRES [65024, end)
+      OS88_PART OP_ASSET, OP_LAZY | OP_SELF | OP_COMP  ; 4 PDRES's INDEX
+      %assign PD_PART_RES2_ASM OS88_PART_N         ;   (20.22.14), packed
+      OS88_PART OP_ASSET, OP_LAZY | OP_SELF        ; 5 PDRES's strikes, stored
       %assign PD_PART_XK_ASM OS88_PART_N
       OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 6 PDXK
       OS88_PART OP_SEG,   OP_LAZY | OP_SELF | OP_COMP  ; 7 PDXG

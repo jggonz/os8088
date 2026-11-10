@@ -245,6 +245,42 @@ pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
     return 0;
 }
 
+/* OSAPI_DECOMP's LZ4 arm (SPEC.md 20.13.3, 20.13.7) for pdr_lzdec (PAGEDESK-SPEC
+ * 20.22.14): T word, symbols, T raw bytes; exactly ulen out; every length, offset
+ * and run bounded as the kernel bounds it. It reads the source AS IT GOES, so a
+ * stream expanded in place from above its output is held to 20.13.7's rule here
+ * too: a decoder that overtook its source would read bytes it had overwritten */
+pdw pdr_lzdec(pdw sseg, pdw soff, pdw plen, pdw dseg, pdw ulen)
+{
+    unsigned long s = ((unsigned long)sseg << 4) + soff, d = (unsigned long)dseg << 4;
+    unsigned long p, end, o = 0, t;
+    unsigned ll, ml, off, e, k;
+#define SB(i) pd_host_mem[s + (i)]
+    if (plen < 2) return 0xFFFF;
+    t = (unsigned)(SB(0) | SB(1) << 8);
+    if (t == 0xFFFF || t > plen - 2u) return 0xFFFF;          /* the filter escape: not ours */
+    p = 2; end = plen - t;
+    while (p < end) {
+        k = SB(p); p++;
+        ll = k >> 4;
+        if (ll == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ll += e; } while (e == 255 && ll < 65535u);
+        if (p + ll > end || o + ll > ulen) return 0xFFFF;
+        while (ll--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+        if (p + 2 > end) return 0xFFFF;                     /* symbols end in a match */
+        off = (unsigned)(SB(p) | SB(p + 1) << 8); p += 2;
+        if (!off || off > o) return 0xFFFF;
+        ml = k & 15;
+        if (ml == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ml += e; } while (e == 255 && ml < 65535u);
+        ml += 4;
+        if (o + ml > ulen) return 0xFFFF;
+        while (ml--) { pd_host_mem[d + o] = pd_host_mem[d + o - off]; o++; }
+    }
+    if (o + t != ulen) return 0xFFFF;
+    while (t--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+#undef SB
+    return 0;
+}
+
 struct pdr_gp pdr_gp;
 struct pdr_ip pdr_ip;
 pdw pdr_eng_ax, pdr_eng_dx, pdr_eng_off, pdr_eng_seg;

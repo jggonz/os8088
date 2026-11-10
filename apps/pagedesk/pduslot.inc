@@ -1878,11 +1878,11 @@ _pdu_mod_launch:
 
 ; =============================================================================
 ; int pdu_bank_load(void) - the PDRES INDEX and the face's kit, once per
-; instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2). The part is read BY
-; OFFSET out of PAGEDESK.O88 itself (an OP_SELF row, stored unpacked so the
-; offsets are real), from the launch folder - and ONLY its prefix, the INDEX
-; and the kit (pdumod.c's pdu_rescap): PDREND reads each strike's bitmaps
-; itself, at part_off + the record's offset. The face's band rides after
+; instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1, 20.21.2, 20.22.14). Row 4 is
+; exactly the INDEX and the kit, PACKED (OP_COMP): read out of PAGEDESK.O88
+; itself from the launch folder and expanded by pdu_part_rd, whole (at most
+; pdumod.c's pdu_rescap). PDREND reads each strike itself out of row 5, which
+; is stored, at part_off + the record's offset. The face's band rides after
 ; what is read. 0, or a PDE_*; only PDE_NOMEM refuses the launch - a missing
 ; bank leaves the band and the kernel's face (D3). It was C until the slot's
 ; regions wanted the room (20.22.2)
@@ -1902,32 +1902,26 @@ _pdu_bank_load:
 .go:
     mov al, PDU_PART_RES_A
     call op_row
-    mov di, [si+OP_R_OFF]           ; para
-    mov cx, [si+OP_R_LEN]
-    mov ax, PDE_NOTFOUND
+    mov cx, [si+OP_R_LEN]           ; the INDEX, UNPACKED (20.22.14): the
+    mov ax, PDE_NOTFOUND            ; strike region's offset in PDRES
     jcxz .out
-    or di, di
-    jz .out
-    mov ax, PDE_LIMIT               ; RES2 must be RES's next byte in the
-    test cl, 15                     ; file, or a strike past 65,024 is read
-    jnz .out                        ; from the wrong place (pagedesk.asm)
-    mov [bk_para], di
+    mov ax, PDE_LIMIT               ; a paragraph multiple, and a read the
+    test cl, 15                     ; INDEX claim was sized for
+    jnz .out
+    cmp cx, [_pdu_rescap]
+    ja .out
     push cx
-    mov dx, cx
-    mov cl, 4
-    shr dx, cl
-    add di, dx
     mov al, PDU_PART_RES_A + 1
     call op_row
-    pop dx
-    cmp [si+OP_R_OFF], di
+    mov di, [si+OP_R_OFF]           ; row 5's paragraph...
+    pop si                          ; SI = the INDEX's length, the read
+    mov dx, si
+    mov cl, 4
+    shr dx, cl
     mov ax, PDE_LIMIT
-    jne .out
-    mov si, dx                      ; RES's length, capped
-    cmp si, [_pdu_rescap]
-    jbe .l
-    mov si, [_pdu_rescap]
-.l:
+    sub di, dx                      ; ...less the INDEX's: PDRES byte 0, where
+    jbe .out                        ; every strike offset counts from (D3)
+    mov [bk_para], di
     push si
     mov ax, PDU_PART_RES_A
     push ax
