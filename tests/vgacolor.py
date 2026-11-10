@@ -17,12 +17,12 @@ emulator's own port doors - and then lets the machine boot.
 
 Four legs, on MartyPC's VGA and on a two-card machine with none:
 
-  1. the box CLEAR (a stock disk, no 'VC' record): the desktop must still be
+  1. the box CLEAR (a stock disk, no Force Color bit): the desktop must still be
      grey and the record still mono. The default must not force anything -
      on a real 8503 the BIOS was right;
   2. the panel, same boot: Display page, a click on Force Color. drv_cfg's
      byte goes to 1 and the DAC is the EGA table NOW, exactly; the close
-     writes 'VC' ver 1 len 1 = 1 to SYSTEM.CFG;
+     writes 'VM' with its mode byte's bit 7 (CFG_VGCB) to SYSTEM.CFG;
   3. the WRITTEN disk booted with the same grey verdict planted: the desktop
      comes up on the EGA table and 40:89h's two bits are clear;
   4. a CGA + Hercules machine: the Display page is shown (two adapters) and
@@ -140,7 +140,7 @@ def main(argv=None):
     m, grey = boot_grey(a.image, a.apps, a.machine)
     with m:
         if byte(m, VGC) & VGCB:
-            sys.exit("vgacolor: the disk already carries a 'VC' record")
+            sys.exit("vgacolor: the disk already carries Force Color")
         if dac(m) != grey or not byte(m, BDA_VGAF) & 6:
             fail.append("leg 1: the box is CLEAR and the desktop is not grey "
                         "- the default forced colour on a mono verdict")
@@ -177,8 +177,14 @@ def main(argv=None):
             cfg = f.volume(0).read("SYSTEM.CFG")
         except os88flush.FlushError:
             cfg = b""
-        if b"VC\x01\x01\x01" not in cfg:
-            fail.append("leg 2: SYSTEM.CFG carries no 'VC' ver 1 len 1 = 1")
+        # FORCE COLOR is BIT 7 OF 'VM''s mode byte (CFG_VGCB) since kernel
+        # size pass 19's F1 - it was a record of its own, 'VC' ver 1 len 1:
+        # 'VM', ver, len, then the adapter and the mode byte
+        i = cfg.find(b"VM")
+        vm = cfg[i:i + 6] if i >= 0 else b""
+        if len(vm) < 6 or vm[3] < 2 or not vm[5] & 0x80:
+            fail.append("leg 2: SYSTEM.CFG's 'VM' record carries no Force "
+                        "Color bit (CFG_VGCB): %r" % vm)
         f.save(0, written)
 
     # --- 3: the written disk, the same verdict -------------------------------
@@ -186,7 +192,7 @@ def main(argv=None):
     with m:
         got = dac(m)
         if not byte(m, VGC) & VGCB:
-            fail.append("leg 3: the 'VC' record did not load")
+            fail.append("leg 3: the Force Color bit did not load")
         elif got != EGA or byte(m, BDA_VGAF) & 6:
             fail.append("leg 3: the box is ticked and the desktop came up "
                         "grey (40:89 = %02X)" % byte(m, BDA_VGAF))
