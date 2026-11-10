@@ -67,6 +67,7 @@ static pdw xb_gs(void)
     pdw n0, t, cn, cg;
     static pdw dt[3];
     if (g_mode != PDR_INTERP || !g_havename) return 0;
+    if (g_aph == 1) return 0;           /* a source highlight is drawn BEFORE the page, on paper: its Multiply is the identity, and the grey band would lose its colour */
     if (res_lookup("ExtGState", g_name)) return 0;
     cn = g_rl.objnum; cg = g_rl.gen;
     if (!cn) {                                          /* a DIRECT dictionary (PDRL_DIRECT, 20.22.3.8): RES_LOOKUP's tail is still in XB */

@@ -238,11 +238,43 @@ static void report(void)
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
     printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
            rs.mods, rs.swaps, g_loads);
+    if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail; printf("xshade calls=%ld stepmax=%ld fails=%ld\n", pdrh_xshades, pdrh_xstepmax, pdrh_xshfail); }
 }
 
+/* one page's text map to `o`. PDR_TMSTALE: a slice the ladder answered is sent again with the
+ * block as it was sent, as the primary's Find and selection passes do (QA R17) */
+static int text_run(int page, FILE *o)
+{
+    int guard = 0, total = 0, i; struct pdxb_textmap tq; pdw e;
+    memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
+    for (;;) {
+        struct pdtm_glyph *g; int n;
+        memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
+        e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
+        if (ladder(e)) { if (!getenv("PDR_TMSTALE")) memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
+        if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
+        memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
+        g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
+        n = tq.count;
+        for (i = 0; i < n; i++) {
+            if ((g[i].flags & 1) && total + i) fputc('\n', o);
+            fputc(g[i].code, o);
+        }
+        total += n;
+        if (tq.done || ++guard > 100000) break;
+    }
+    fputc('\n', o);
+    return 0;
+}
+
+int pdrh_noshcull, pdrh_dlhist, pdrh_nopark;
+/* PDR_NOPARK: no occupant park (20.22.7.12); PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
+    pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
+    pdrh_nopark = getenv("PDR_NOPARK") != 0;
+    pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
     pd_host_ds = 0x1000;
     if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
     if (getenv("PDR_GLYPHKB")) g_glykb = atoi(getenv("PDR_GLYPHKB"));
@@ -333,6 +365,16 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+        if (!seqp && getenv("PDR_TEXTAFTER")) {
+            /* the page's text right after drawing it, the font module refused (QA R17: Find under the
+             * overlay on a 640 KB machine): the strike blocks the draw left carry it */
+            FILE *o = fopen(getenv("PDR_TEXTAFTER"), "w"); int r;
+            if (!o) return 2;
+            setenv("PDR_NOSLOT", "3", 1); setenv("PDR_TMSTALE", "1", 1);
+            pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0);        /* the slot given back after the draw */
+            r = text_run(page, o); fclose(o);
+            if (r) return r;
+        }
 #ifdef PDR_X8
         if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
 #endif
@@ -367,28 +409,10 @@ int main(int argc, char **argv)
         return worst <= 1 ? 0 : 4;
     }
     if (!strcmp(argv[1], "text") && argc >= 5) {
-        int page = atoi(argv[3]), kb, np, guard = 0; struct pdxb_textmap tq; pdw e; int total = 0, i;
+        int page = atoi(argv[3]), kb, np;
         np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[4]); do_init(1, kb, 22);
-        memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
-        for (;;) {
-            struct pdtm_glyph *g; int n;
-            memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
-            e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
-            if (ladder(e)) { memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
-            if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
-            memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
-            g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
-            n = tq.count;
-            for (i = 0; i < n; i++) {
-                if ((g[i].flags & 1) && total + i) putchar('\n');
-                putchar(g[i].code);
-            }
-            total += n;
-            if (tq.done || ++guard > 100000) break;
-        }
-        putchar('\n');
-        return 0;
+        return text_run(page, stdout);
     }
     if (!strcmp(argv[1], "thumb") && argc >= 8) {
         int page = atoi(argv[3]), w = atoi(argv[4]), h = atoi(argv[5]), kb, np, guard = 0, y, x, bytes;

@@ -863,6 +863,7 @@ struct pdgx_pat {
 #define PDGXI_CAT_SH  0x0200
 #define PDGXI_CAT_PAT 0x0300
 #define PDGXI_TILES  0x0004     /* PDV_GFX_PAT step 2 */
+#define PDGXI_IMGCS  0x0008     /* the source is the /ColorSpace VALUE of the image dictionary objnum/gen (PDV_GFX_LUT) */
 #define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
                                    index is bpc), the name is at tseg:toff               */
 typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];

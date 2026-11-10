@@ -67,7 +67,12 @@ static void ovl_au_pnt(void)
         pdu_line[10 + n] = '_';
         pdu_line[11 + n] = 0;
         ovl_au_put(0);
-        ovl_au_row(1, 0);
+        if (pdu_pfl && pdu_pfk < PDM_NSLOT) {   /* the pre-flight's file is not the one being saved: say which (F13) */
+            os88_strcpy(pdu_line, "For ", sizeof(pdu_line));
+            pdu_cat(pdu_line, pdu_xopen.name, sizeof(pdu_line));
+            ovl_au_put(1);
+        } else
+            ovl_au_row(1, 0);
         ovl_au_row(2, m == AU_PWBAD ? "Wrong password." : 0);
     }
     ovl_au_row(3, m == AU_CHECK ? pdu_au_hint + 13 : pdu_au_hint);

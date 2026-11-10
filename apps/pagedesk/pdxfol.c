@@ -225,6 +225,52 @@ static pdi tx_y(pdi y, pdw asc) { return pdx_clamp((pdi)((pdi)(asc << 6) - pdx_m
 
 /* returns the bytes written (rows*wb), 0 for an empty glyph (g_rwpx = 0),
  * 0xFFFF when it does not fit (wider than 32 px, or too tall) */
+/* DROPOUT CONTROL (QA R24): a stem or bar thinner than a pixel that straddles two of them gives each
+ * less than half coverage and vanished whole at 5-8 px (h, i, j, l gone, '#' read as 'v'). After the
+ * pack, pdx_acc is made coverage and every run of covered cells - along a row, then down a column -
+ * that has NO pixel on (the columns counting the pixels the rows added) and is at most PDXF_DROPRUN
+ * cells long - a stroke crossing the line, not an edge running along it - gets its fullest cell: one
+ * pixel, so a stroke never disappears and nothing that already drew is thickened. PDXF_DROPMIN (of 256) is the least coverage that earns it */
+#ifndef PDXF_DROPMIN
+#define PDXF_DROPMIN 40
+#endif
+#ifndef PDXF_DROPRUN
+#define PDXF_DROPRUN 2
+#endif
+static pdw g_dwb, g_dseg, g_doff;
+static pdw dr_bit(pdw r, pdw x, pdw set)     /* the bitmap's pixel (r, x): read, or set */
+{
+    pdw o = (pdw)(g_doff + r * g_dwb + (x >> 3)), m = (pdw)(0x80u >> (x & 7)), v = pd_fpeekb(g_dseg, o);
+    if (set) pd_fpokeb(g_dseg, o, (pdb)(v | m));
+    return v & m;
+}
+static void pdx_drop(pdw dseg, pdw doff)
+{
+    pdw r, x, n, i, k, best, bi, on, step, cnt, len;
+    pdi s, *a;
+    g_dwb = (pdw)((pdx_acw + 7) >> 3); g_dseg = dseg; g_doff = doff;
+    for (a = pdx_acc, r = 0; r < pdx_ach; r++, a += AC_W)
+        for (s = 0, x = 0; x < pdx_acw; x++) { s = (pdi)(s + a[x]); a[x] = pdx_abs(s); }
+    for (k = 0; k < 2; k++) {                       /* 0: along the rows, 1: down the columns */
+        n = k ? pdx_acw : pdx_ach; cnt = k ? pdx_ach : pdx_acw; step = k ? AC_W : 1;
+        for (i = 0; i < n; i++) {
+            a = pdx_acc + i;
+            if (!k) a = pdx_acc + i * AC_W;
+            best = 0; bi = 0; on = 0; len = 0;
+            for (x = 0; x <= cnt; x++, a += step) {
+                if (x < cnt && *a > 0) {
+                    len++;
+                    if (k ? dr_bit(x, i, 0) : dr_bit(i, x, 0)) on = 1;      /* the columns see the rows' pixels */
+                    if ((pdw)*a > best) { best = (pdw)*a; bi = x; }
+                    continue;
+                }
+                if (!on && len <= PDXF_DROPRUN && best >= PDXF_DROPMIN) { if (k) dr_bit(bi, i, 1); else dr_bit(i, bi, 1); }
+                best = 0; on = 0; len = 0;
+            }
+        }
+    }
+}
+
 static pdw rs_glyph(pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
 {
     pdw i, n, k, nc, wb;
@@ -275,5 +321,7 @@ static pdw rs_glyph(pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
         }
     }
     if (g_sxc != g_fx || g_syc != g_fy) pdx_accline(g_fx, g_fy, g_sxc, g_syc);
-    return pdx_pack(dseg, doff);
+    n = pdx_pack(dseg, doff);
+    pdx_drop(dseg, doff);
+    return n;
 }

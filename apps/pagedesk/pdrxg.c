@@ -11,6 +11,8 @@
 static pdw g_xcsk[16][2];           /* colour-space slot -> its cache key (k0, k1); slot 0 = a device space */
 static pdw g_xcsn;                  /* slots in use (1..15)                                                */
 static pdw g_xslot;                 /* xg_entry's slot                                                     */
+static pdw g_xcrr;                  /* the slot a 16th space takes (round robin)                           */
+static pdw g_xcrcap;                /* xg_alloc's room                                                      */
 static struct pdxb_gfx g_gx;
 #define XG_RES   256                /* the XB offset of a shading's records, and their room */
 #define XG_RCAP  760
@@ -43,6 +45,10 @@ static pdw xg_req(pdw verb)
     pdw r;
     pd_fcopy_out(&g_gx, g_xb, 0, sizeof g_gx);
     r = x_call(verb, g_xb, 0, 0);
+    if (x_cf && r != PDE_BUSY && strm_park()) {     /* its stream wanted our Flate slot (20.22.7.12) */
+        pd_fcopy_out(&g_gx, g_xb, 0, sizeof g_gx);
+        r = x_call(verb, g_xb, 0, 0);
+    }
     pd_fcopy_in(g_xb, 0, &g_gx, sizeof g_gx);
     return x_cf && r != PDE_BUSY ? 0xFFFFu : r;
 }
@@ -53,7 +59,8 @@ static pdw xg_ask(pdw verb, pdw cat, pdw rseg, pdw roff, pdw rcap, pdw state)
     g_gx.rseg = rseg; g_gx.roff = roff; g_gx.rcap = rcap; g_gx.state = state;
     return xg_req(verb);
 }
-static void xg_nc(void) { inc_note(PDF_INC_COLOUR, "colour space"); }
+#define xg_nc() inc_note(PDF_INC_COLOUR, "colour space")
+#define xg_ncx(w) inc_note(PDF_INC_COLOUR, w)
 
 /* the colour of cache entry e's space for the last `nop` operands (0: its initial colour) */
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
@@ -64,29 +71,43 @@ static void xg_color(pdw st, pdw e, pdw nop)
     xg_begin(0);
     g_gx.cseg = g_xcseg; g_gx.coff = e; g_gx.ncomp = nop;
     for (i = 0; i < nop && i < 8; i++) pdr_cpy(&g_gx.comp[i], &g_opn[g_nop - nop + i], 4);
-    if (xg_req(PDV_GFX_COLOR) != PDE_OK) { xg_nc(); return; }
+    if (xg_req(PDV_GFX_COLOR) != PDE_OK) { xg_ncx("colour value"); return; }
     col_set(st, g_gx.rgb[0], g_gx.rgb[1], g_gx.rgb[2]);
 }
 
 /* ---- slots: a gstate names its fill and stroke space by a 4-bit slot (GS.pad_) ----------------------------- */
+/* an XC entry of up to `size` bytes: when the cache has less room, what it has (>= 128), which a small entry fits */
+static pdw xg_alloc(pdw kind, pdw k0, pdw k1, pdw size)
+{
+    pdw room = g_xccap > g_xctop + 8 ? (pdw)(g_xccap - g_xctop - 8) : 0;
+    if (!g_xcseg) return xc_alloc(kind, k0, k1, size);
+    g_xcrcap = size;
+    if (room < size && kind == XCK_CS && room >= 128) g_xcrcap = room;
+    else if (room < size) { g_xcfull = 1; return 0; }
+    return xc_alloc(kind, k0, k1, g_xcrcap);
+}
 /* the cache entry of a resource of `kind` (XCK_CS / XCK_PAT), asked for when it is not there; g_xslot is its
  * slot. Answers the entry's offset, 0 for none (skipped: the ladder, or a note) */
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
 static pdw xg_entry(pdw kind, pdw verb, pdw cat, pdw size)
 {
-    pdw k0 = g_reso ? g_reso : (pdw)(0x8000u | g_resp), k1 = 0x5A5Au, e;
+    pdw k0 = g_reso ? g_reso : (pdw)(0x8000u | g_resp), k1 = 0x5A5Au, e, ra;
     const char *s = g_name;
     while (*s) k1 = (pdw)(((k1 << 5) | (k1 >> 11)) ^ (pdb)*s++);
     if (kind == XCK_PAT) k1 ^= 0x5555u;
     e = xc_find(kind, k0, k1);
     if (!e) {
         if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return 0; }
-        e = xc_alloc(kind, k0, k1, size);
-        if (!e || xg_ask(verb, cat, g_xcseg, e, size, 0) != PDE_OK) { xg_nc(); return 0; }
+        e = xg_alloc(kind, k0, k1, size);
+        if (!e) { if (g_xcseg) xg_ncx("colour cache"); return 0; }       /* no cache yet: x_mem asked, the pass reruns */
+        ra = xg_ask(verb, cat, g_xcseg, e, g_xcrcap, 0);
+        if (ra != PDE_OK) { if (ra == PDE_NOMEM) g_xcfull = 1; xg_ncx(ra == PDE_NOMEM ? "colour space size" : "colour space source"); return 0; }
+        if (kind == XCK_CS) xc_trim(e, g_gx.rlen);                 /* only a table space keeps its 768 bytes */
     }
     for (g_xslot = 1; g_xslot <= g_xcsn; g_xslot++) if (g_xcsk[g_xslot][0] == k0 && g_xcsk[g_xslot][1] == k1) return e;
-    if (g_xcsn >= 15) { inc_note(PDF_INC_LIMIT, "colour spaces"); return 0; }
-    g_xcsk[g_xslot][0] = k0; g_xcsk[g_xslot][1] = k1; g_xcsn = g_xslot;
+    if (g_xcsn < 15) g_xslot = ++g_xcsn;                              /* a 16th space reuses the oldest slot: the gstates   */
+    else { g_xslot = (pdw)(g_xcrr % 15 + 1); g_xcrr++; }              /* that named it are long gone on any real page       */
+    g_xcsk[g_xslot][0] = k0; g_xcsk[g_xslot][1] = k1;
     return e;
 }
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
@@ -125,7 +146,7 @@ static pdw xg_sc(pdw st, pdw nop)
         if (e) xg_setslot(st, g_xslot);
         return 1;
     }
-    if (g_havename) { xg_nc(); return 1; }
+    if (g_havename) { xg_ncx("colour name"); return 1; }
     if (fl & (PDGX_F_RGBLIKE | PDGX_F_CMYKLIKE)) {            /* ICC N=3 / N=4: the device operator */
         col_apply(st, pd_fpeekb(g_xcseg, (pdw)(e + 1)));
         xg_setslot(st, slot);
@@ -135,6 +156,53 @@ static pdw xg_sc(pdw st, pdw nop)
     return 1;
 }
 
+/* ---- an image's colour space: its LUT (struct pdgx_lut) in the XC cache, asked of PDXG when it is not there ---- */
+/* do_image's hook: g_dg still holds the image's /ColorSpace (a NAME: a resource of the current scope; otherwise
+ * PDXG reads the value out of the image dictionary). Answers the XC offset, or 0 (asked for, or noted) */
+/* [gfx far-candidate: per image] */
+static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc)
+{
+    pdw e, k1 = (pdw)(((gen << 5) | bpc) ^ 0x4C55u), n = 0;
+    e = xc_find(XCK_LUT, obj, k1);
+    if (e) return e;
+    if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return 0; }
+    if (!(e = xg_alloc(XCK_LUT, obj, k1, PDGX_LUTBYTES))) { if (g_xcseg) xg_ncx("colour cache"); return 0; }
+    xg_begin(0);
+    if (g_dg.kind == PDK_NAME) {                        /* a resource of this scope: "ColorSpace\0Name" */
+        while (g_dg.text[n] && n < 32) n++;
+        pd_fcopy_out(g_dg.text, g_xb, 128, n);
+        pd_fcopy_out("", g_xb, (pdw)(128 + n), 1);
+        g_gx.objnum = g_reso; g_gx.gen = g_resg; g_gx.bpc = g_resp == 0xFFFFu ? 0 : g_resp;
+        g_gx.flags = (pdw)(PDGXI_RES | PDGXI_CAT_CS); g_gx.tseg = g_xb; g_gx.toff = 128; g_gx.tlen = (pdw)(n + 1);
+    } else { g_gx.objnum = obj; g_gx.gen = gen; g_gx.flags = PDGXI_IMGCS; }
+    g_gx.kind = bpc;                                    /* the sample depth (PDV_GFX_LUT's input) */
+    g_gx.rseg = g_xcseg; g_gx.roff = e; g_gx.rcap = g_xcrcap;
+    if (xg_req(PDV_GFX_LUT) != PDE_OK) { xg_nc(); return 0; }
+    xc_trim(e, g_gx.rlen);                              /* the header and the tables the space has */
+    return e;
+}
+
+/* QA R15: a shading paints nothing outside the clip, so one whose clip
+ * misses this pass's rows costs no module call at all - SYNTH.PDF asked
+ * PDXG for every knob on the page in every band's pass - and one in a
+ * small clip is cut into no more bands than the clip has pixels across
+ * (PDXG's floor is 4): 32 levels of a 3-pixel knob were 32 STATEs for 9
+ * pixels. Answers the steps (0: PDXG's 32), or 0xFFFF: nothing to paint */
+#ifdef PD_HOST
+extern int pdrh_noshcull;                   /* hosttest PDR_NOSHCULL: the A/B */
+#endif
+static pdw xg_steps(void)
+{
+    pdi d;
+#ifdef PD_HOST
+    if (pdrh_noshcull) return 0;
+#endif
+    if (GS.cx1 < GS.cx0 || GS.cy1 < GS.cy0 || !span_hit(GS.cy0, GS.cy1, g_gy0, g_gy1) || !span_hit(GS.cx0, GS.cx1, g_vcx0, g_vcx1))
+        return 0xFFFFu;
+    d = GS.cx1 - GS.cx0;
+    if (GS.cy1 - GS.cy0 > d) d = GS.cy1 - GS.cy0;
+    return d < 31 ? (pdw)(d + 1) : 0;
+}
 /* ---- sh: the polygons PDXG answers, each an ordinary fill (a /BBox record is a clip) ------------------------ */
 /* the shading `obj gen` (0: the resource of the current name), under the current CTM */
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
@@ -143,9 +211,12 @@ static void xg_shade(pdw obj, pdw gen)
     pdw n, st = 0, p, np, k, n1;
     static pdb rec[PDGX_REC_HDR];
     static pdi pt[2];
+    pdw steps = xg_steps();
+    if (steps == 0xFFFFu) return;
     gs_push();
     do {
         xg_begin(obj ? 0 : PDGXI_CAT_SH);
+        g_gx.steps = steps;
         g_gx.rseg = g_xb; g_gx.roff = XG_RES; g_gx.rcap = XG_RCAP; g_gx.state = st;
         if (obj) { g_gx.objnum = obj; g_gx.gen = gen; }
         n = xg_req(PDV_GFX_SHADE);
@@ -173,6 +244,7 @@ static void xg_shade(pdw obj, pdw gen)
 static void xg_sh(void)
 {
     if (!g_havename || g_mode != PDR_INTERP) return;
+    if (xg_steps() == 0xFFFFu) return;          /* nothing on this pass's rows: no PDXG either */
     if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return; }
     xg_shade(0, 0);
 }

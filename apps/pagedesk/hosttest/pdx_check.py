@@ -92,10 +92,19 @@ def main():
             ref = bytearray(1 if v < 128 else 0 for v in aa)
             ref0 = bytearray(1 if v < 128 else 0 for v in a0)
             ink = sum(ref); d = sum(1 for x, y in zip(mine, ref) if x != y); d0 = sum(1 for x, y in zip(mine, ref0) if x != y)
-            rate = 100.0 * d / max(1, ink); rate0 = 100.0 * d0 / max(1, sum(ref0))
-            print("%-14s %2dpx  ink %5d  diff %5d (%5.1f%% of ink) vs AA@50%%   %5d (%5.1f%%) vs -A 0   refused %d" % (n, size, ink, d, rate, d0, rate0, miss))
-            tot_ref += ink; tot_diff += d; worst = max(worst, rate)
-    print("total: %d differing of %d ink pixels (%.1f%%); worst size %.1f%%" % (tot_diff, tot_ref, 100.0 * tot_diff / max(1, tot_ref), worst))
+            rate0 = 100.0 * d0 / max(1, sum(ref0))
+            # the strokes (QA R24): LOST = a pixel MuPDF covers at least a quarter with no ink of ours within one
+            # pixel; STRAY = ink of ours with MuPDF covering under 1/8 everywhere within one pixel. A 1-bit
+            # picture differs from AA@50% at every edge, which is no defect; these two are the defects
+            def near(img, i, test):
+                y, x = divmod(i, W)
+                return any(test(img[yy * W + xx]) for yy in range(max(0, y - 1), min(H, y + 2)) for xx in range(max(0, x - 1), min(W, x + 2)))
+            lost = sum(1 for i in range(W * H) if aa[i] < 192 and not near(mine, i, lambda v: v))
+            stray = sum(1 for i in range(W * H) if mine[i] and not near(aa, i, lambda v: v < 224))
+            rate = 100.0 * (lost + stray) / max(1, ink)
+            print("%-14s %2dpx  ink %5d  lost %4d stray %4d (%5.1f%% of ink)  diff %5d vs AA@50%%, %5d (%5.1f%%) vs -A 0   refused %d" % (n, size, ink, lost, stray, rate, d, d0, rate0, miss))
+            tot_ref += ink; tot_diff += lost + stray; worst = max(worst, rate)
+    print("total: %d lost or stray of %d ink pixels (%.1f%%); worst size %.1f%%" % (tot_diff, tot_ref, 100.0 * tot_diff / max(1, tot_ref), worst))
     if a.limit is not None and worst > a.limit: return 1
     return 0
 

@@ -1377,7 +1377,18 @@ CGA's y axis below about 80% and 120%). A rectangle with no area clips everythin
 A polygon clip stays on sample points. (square, verify-square; `pdr_annot`'s "an
 appearance stroking at its BBox edge".) Beziers are flattened by de Casteljau subdivision until both second
 differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
-curve), depth 6 (64 pieces) - the operation limit. Arithmetic is `pdmath`
+curve), depth 6 (64 pieces) - the operation limit. A stroke of one pixel
+(a half width of 2 qpx or less, which every `w` at or below one device pixel
+is) is not offset across the line: a band one pixel wide ACROSS a slanted
+line holds a pixel centre only on a knife edge, and `pdr_scan` truncates each
+crossing from its own edge's start, so a third of a slanted hairline's rows
+were dropped and a flattened curve came out dotted (QA R11). Each piece is
+swept instead by a span along the sampled axis - horizontal when the piece is
+steep, vertical when it is shallow - 4 qpx for an axis-aligned piece, whose
+crossings are exact, and 5 for a slanted one. That is one pixel a row or a
+column, sometimes two (1.25 on average), and never a gap. Every piece is
+wound the same way. `pdr_xchk`'s `hair.pdf` holds a fan of 1 w lines to it
+and a 1 w square to one-pixel sides. Arithmetic is `pdmath`
 (16.16) for everything that is user space; a transform that overflows sets
 `PDF_INC_RANGE` and the coordinate clamps, never wraps.
 
@@ -1422,12 +1433,39 @@ horizontal or vertical (the table-rule case) become `DLR_RECT`s directly.
 band is blitted opaque, so a second pass could not paint over a band already
 shown. Instead one **pass** interprets the whole content stream for the rows of a
 *group of bands*, culling at emit time everything outside them. The first group is
-every band of the canvas. When the list fills (`dl_kb`), the group is **halved**
-(bands `[b0, b0+n/2)`), the content is **rescanned from its first byte**, the group
-is drawn and the next group follows; the group width stays halved. When one band
-still overflows, that band is composed in **sub-passes of halving row ranges**
-onto the same band buffer and blitted once. Only when even one *row* overflows is
-the rest of that row dropped, with `PDF_INC_LIMIT`. The result is the identical image
+every band of the canvas. When the list fills (`dl_kb`), the group is **narrowed**
+and the content is **rescanned from its first byte**; the group is drawn and the
+next group follows. When one band still overflows, that band is composed in
+**sub-passes of narrower row ranges** onto the same band buffer and blitted once.
+Only when even one *row* overflows is the rest of that row dropped, with
+`PDF_INC_LIMIT`.
+
+How far to narrow is read off the list that filled (QA R15, `group_plan`): every
+record carries its rows, so the bytes a group of the first *k* bands (or rows)
+would have held so far are those of the records whose first row lies in them - a
+STATE, emitted only for the mark after it, counting with that mark. The next
+group is the most bands whose share is at most half the list, never more than
+half of the old group (halving's own progress) and never fewer than one. A group
+that leaves the list less than half full makes the next one twice as wide, and
+less than a quarter full four times (`group_grow`), because every group is a
+whole interpretation - but never past a **ceiling**, half the last width that
+filled the list, which only a group using under a quarter of the list *at* the
+ceiling doubles: growing straight back to a width that had overflowed traded
+every pass it saved for a wasted one.
+
+**A shading costs nothing outside its clip** (QA R15, `pdrxg.c`'s `xg_steps`). A
+`sh` whose clip misses the pass's rows or the view is skipped before PDXG is
+asked - or loaded - and one in a clip under 32 pixels across is asked for no more
+bands (`pdxb_gfx.steps`, 20.22.9) than the clip has pixels. SYNTH.PDF's keys and
+knobs are hundreds of `sh` in clips a few pixels across: every pass asked PDXG for
+every one and took 32 levels of each, a 22-byte STATE and a RECT a level, so a
+16-row group held 470 STATEs (10 KB of the list) and the dense bands went one row
+a pass. At 243% on QEMU it was 32 passes and about 2,770 BIOS ticks under
+`-icount shift=4`; it is 15 passes and 431 ticks (instructions, not QEMU's wall
+clock, which host load moves by 2x either way). `pdr_xchk`'s
+`small.pdf` page 2 - 96 knobs, `pdr_test`'s `PDR_XSHADE` standing in for PDXG -
+holds one call a knob and at most ten bands, the same pixels from a 29, 16 and 12
+KiB list, against `PDR_NOSHCULL` (every shading asked, 32 bands). The result is the identical image
 whatever the list size (`pdr_check`: 4, 8, 12 and 16 KiB lists (claims 4 KiB larger) against 22 KiB,
 byte for byte, 11 to 63 passes). `pdxb_rstatus.passes` counts them.
 
@@ -1471,7 +1509,9 @@ specifies them:
   `PDE_RANGE` (the end); `{objnum, gen}` for a Form or an image; `STRM_CLOSE`
   pops. Up to 6 streams (a page, 4 forms and one image) are open at once.
 * `TOKEN`: `PDE_RANGE` with CF = 1 means "number saturated, token valid" and sets
-  `PDF_INC_RANGE`; any other error ends the page (`PDF_INC_LIMIT`, "content stream
+  `PDF_INC_RANGE`, named "number range" like every other note (QA R16: an
+  unnamed first note left the status line `Incomplete rendering - ` with
+  nothing after it); any other error ends the page (`PDF_INC_LIMIT`, "content stream
   error"). Names and operators are NUL-terminated after `len` here.
 * `DICT_GET` with paths of names and `"[n]"`; a **final reference is followed by
   PDREND** (a second call with no names). `/Widths` is read element by element, on
@@ -6377,7 +6417,18 @@ more). The pinned helpers:
   the page view, the document's fonts and the cache. Any other INIT is a new
   document (D2).
 * The text map (`PDV_REND_TEXTMAP`) runs the same ladder: after an answer
-  the walk restarts and the glyphs the primary already has are skipped.
+  the walk restarts and the glyphs the primary already has are skipped. The
+  primary copies its `pdxb_textmap` out before every slice and reads it back
+  only from a slice that was not a ladder answer, so the slice after an answer
+  arrives with the `state` it was first sent with, 0. PDREND therefore takes a
+  `state` 0 while it waits for an answer on that page (`PDR_XWAIT`, text mode,
+  the same `page`) as the answered slice, not a new pass, and writes `state` 1
+  back on every slice. Before QA R17 it began again: `mode_reset` forgot the
+  refusal, the pass asked for the same module, and a module that could not be
+  had was asked for until `PDU_LADMAX`, so Find and Copy answered "exceeds one
+  of PageDesk's limits". A pass abandoned in `PDR_XWAIT` without `PDV_REND_ABORT`
+  and followed by a new pass on the same page is taken for that continuation;
+  the primary's passes call ABORT whenever they stop early.
 * Codes PDREND's door answers with CF = 0: `PDE_BUSY` 65, `PDE_NEEDMOD` 66,
   `PDE_NEEDMEM` 67; CX and DX come from `pdr_out_cx` / `pdr_out_dx`.
 
@@ -6612,6 +6663,77 @@ then draw the same page to the pixel. `pdr_xchk`
 requires such a view to finish, every band blitted, with `PDF_INC_LIMIT` and
 never `PDF_INC_MODULE`. Before this rule the view ended at the re-INIT.
 
+**20.22.7.12 A Form inside a Flate stream, with one Flate slot: parking.**
+A Form's stream opened while its parent's Flate stream is open needs a
+second Flate slot. With one slot (an XT, or a low-memory claim that gave
+the second back) `PDV_ENG_STRM_OPEN` answers `PDE_LIMIT` (20.13.3). A
+Quartz page is one Flate Form inside a Flate content stream, so before this
+rule such a page drew nothing and noted `form stream` (QA R14).
+
+Each frame of the interpreter keeps the stream it reads (`obj`, `gen`; the
+page's `cidx`) and how many tokens it has taken (`ntok`). When a Form's open
+answers `PDE_LIMIT` and the parent can be parked, the parent's stream is
+closed, the frame is marked `park`, and the Form is opened in the freed
+slot. At the Form's end the parent is opened again and `ntok`
+`PDV_ENG_TOKEN` calls read past what it had already given. The same
+decoded bytes give the same tokens, so the parent resumes at the operator
+after its `Do`. Nesting parks each parent in turn.
+
+A parent cannot be parked once it has read raw bytes, because an inline
+image's data is not replayed by tokens. Such a frame is marked unparkable
+and the Form notes `form stream` (`PDF_INC_FILTER`), as before. A
+parent that cannot be opened again notes the same and ends there, as if
+its stream were over, and the frames under it go on. The cost is the re-inflate of the parent up to
+the `Do`, once per parked Form. `pdr_test`'s `PDR_FLATE=1` gives the
+host one Flate slot. `forms.pdf` page 1 (Flate Forms two deep inside a
+Flate page) must draw the same with one slot as with two, to the pixel and
+clean. Page 2 puts an inline image before the `Do` and must note `form stream`
+with one slot and draw clean with two.
+
+**An occupant's stream (the generalised park).** The same refusal meets a
+slot occupant that reads a stream of its own while the interpreter holds the
+one Flate slot: PDXG's Indexed lookup table, a sampled function, a mesh
+shading's data (QA's R10/R12 and the shadings of real pages). PDREND parks
+for it, ONE mechanism in the core, so no module carries an inflater of its
+own for the case:
+
+* **Interpretation.** Every PDXG verb goes through `xg_req` (`pdrxg.c`). When
+  one FAILS (CF, not `PDE_BUSY`), `strm_park` (`pdri.c`) closes the top
+  frame's stream if it can be parked (the rule above: opened by the
+  interpreter, no raw bytes read) and marks it `park = 2`, and the verb is
+  asked again from the same block. The frame is reopened and replayed by
+  the next `tok_next`, AFTER the operator has used the answer: a replay's
+  tokens are written into the exchange block, where PDXG's records are.
+  One operator that asks several times (a shading answering `PDE_BUSY`)
+  is replayed once. A page that never needs it never pays: there is no
+  park before a call, only after a refusal, and with two slots there is
+  no refusal.
+* **Band time.** Nothing of the content is open then, but the core reads a
+  plain image's own stream while PDX8 reads its `/SMask` (or `/Mask`) for
+  the strip, and a Flate image with a Flate mask needs two slots.
+  `img_mask_park` (`pdrv.c`) opens the mask itself first (PDENG's streams
+  are a stack, so the probe leaves the image's alone); refused, it closes
+  the image's stream, PDX8 reads the mask, and the image's rows are read
+  again from the first (`img_reopen`). PDXI and PDXJ open their streams at
+  band time with nothing of the core's held (`img_xopen` closes it), so
+  they need nothing.
+* **Not PDXF.** A font program, ToUnicode or CMap read with no free slot is
+  copied raw and inflated in PDXF's own workspace (20.22.8, *Streams
+  without a Flate slot*); parking around a glyph build would only add a
+  re-inflate.
+
+**The cost** is one re-inflate of the parked stream up to the operator
+(`ntok` TOKEN calls) per operator that needed it, per pass - the same
+bytes the pass had already read, without drawing - and for a masked image,
+the image's rows again from the first, once per band strip that draws it.
+`pdr_test`'s `PDR_NOPARK` is the A/B, and `PDR_XSHADE_OBJ=<n>` makes its
+stand-in PDXG read stream `n` for every shading. `pdr_xchk`'s `park.pdf`:
+30 shadings on a Flate page (page 1) and in a Flate Form on a Flate page
+(page 2), each making the stand-in read a Flate function stream, draw with
+one slot as with two, clean, against `shading` noted without the park; a
+Flate image with a Flate `/SMask` (page 3) draws with one slot as with two
+and as MuPDF, against `transparency` noted without it.
+
 #### 20.22.8 Fonts from their programs (`fonts`)
 
 AP-14 and AP-15. A font whose program is embedded (`/FontFile2` TrueType, `/FontFile` Type 1,
@@ -6660,6 +6782,27 @@ the notdef), the CMap tokeniser's 512-byte staging window, and three 2,048-byte 
 Encoding CMap, `/W` ranges). PDXF's own image + bss (the outline buffer, the 34 x 48 accumulator,
 the Type 1 name tables, the stacks) is under 61,440 (the cap, 20.22 L6).
 
+**Streams without a Flate slot** (`apps/pagedesk/pdxfz.c`; QA R13, F19). PDENG decodes a Flate
+stream in a Flate slot (20.22.3), and a machine with ONE slot - the 640 KB VGA machine is one - has
+given it to the page's content stream while PDREND interprets the page, so PDXF's `STRM_OPEN` of
+a Flate font program, ToUnicode, Encoding CMap or CIDToGIDMap answers `PDE_LIMIT` (`fl_attach`,
+"a third Flate stream open at once"); every Quartz, Word and MuPDF page is a Flate content stream,
+so before this no real document's embedded font drew there (the fixtures drew: their content
+streams are uncompressed). On `PDE_LIMIT` or `PDE_FLATE` from `STRM_OPEN`, a stream whose
+`/Filter` is `/FlateDecode` alone is copied with `RAW_COPY PDRC_PLAIN` (decrypted by PDENG's own
+hook) into the workspace's free area - `[0, program)` for the program, above the program for the
+others - moved to that area's TOP, and inflated into its BOTTOM. The decoder needs no window (the
+output is whole in the area, so a match is a copy within it) and reads its input through a
+512-byte near buffer, so output may overwrite any input byte already taken; output that would
+reach unread input or pass the area is "too large" (`PDFE_SIZE` for a program, the growth above;
+a truncated table for the others). The callers then read the bytes as they would PDENG's
+(`pdx_sread`, `pdx_sclose`). Its tables borrow the TrueType point arrays (a font activates between
+glyphs, never inside one): **+3,282 of PDXF**, 64,094 of 65,024. The decoder is puff's (canonical
+Huffman a bit at a time): small, and run once per activation. Another filter in that position
+(ASCIIHex, LZW, a chain) still fails as before. Not covered here: a Type 3 CharProc or a form in a
+Flate content stream opens through rcore's `do_form` and meets the same wall
+(`hosttest/pdx_page.py --oneslot type3` shows it).
+
 **Verbs** (`pdabi.h`'s `[fonts 20.22.8]` block; PDXF copies the exchange block's struct to its bss at
 entry because PDENG reuses the block):
 
@@ -6681,7 +6824,12 @@ the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset)
 linear probing) and info[128] (the `/W` width in 1/1000 em, the PD Latin byte of the code's
 ToUnicode, flags). A block is a (font, size): up to `PDFB_NBLK` (4) of them sit at the TOP of the glyph claim,
 under a 64-byte header (font object and generation, the size, the pass number last used; PDREND
-FINDS, PDXF MAKES and evicts a block not used in this pass). `(glyph_kb - 24) / 4` blocks fit: a
+FINDS, PDXF MAKES and evicts a block not used in this pass). That number is PDREND's `g_pstamp`, a
+pass count that is NOT reset with each render: `g_passes` restarts at 1 every verb, and a stamp of it
+made every block a previous page or thumbnail used look "used in this pass" to the next render's
+pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
+block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
+ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit: a
 24 KiB claim has none, 32 KiB has two, 40 four. **The glyph claim grows lazily** (the lead, 23:38):
 it stays 24 KiB until a page first needs a block; then PDREND (`emb_miss`) answers `PDE_NEEDMEM`
 with CX = `PDMEM_GLYPH` (5) and DX = `PDFB_GLYPHKB` (40), and the primary regrows it to 40, else 32,
@@ -6716,6 +6864,17 @@ base encoding as before and a Type0 font maps nothing. A `bfrange` with an array
 with a ligature become singles (a ligature keeps its first unit). Search (PDENG) and select/copy
 therefore find the text of a font whose codes are glyph indices.
 
+**The text map without PDXF** (`pdrd.c`'s `syn_next`; QA R17). A text pass asks for the strike block of
+(font, 0), and PDXF makes it. Under Find or a selection the overlay is running and cannot be dropped,
+so on a 640 KB machine PDXF (its image and bss near 65,024, plus a workspace of at least 32 KiB) is
+refused. The pass first looks up the code in the font's blocks at the sizes this view has drawn,
+because every slot of a block carries the code's Latin byte. A page on the screen therefore yields its
+text with no module. A page that was never drawn still needs PDXF, and while PDXF cannot be loaded, its
+Type0 codes map to nothing and its simple codes map through the base encoding.
+`hosttest/pdx_page.py --text` is the check. Each fixture page's text is taken three ways. The first has
+PDXF. The second refuses PDXF and re-sends every slice the ladder answered with the stale block; it
+must finish. The third refuses PDXF just after drawing the page, and it must equal the first.
+
 **Type 3** (`pdrt3.c`; ON, `PDR_NO_TYPE3` leaves it out). Not by C recursion (`pdstk` refuses a
 cycle): `text_glyph` QUEUES (pass, block, slot, pen) in the glyph claim's image row buffer (64
 entries of 12 bytes; free while a page is interpreted) and rcore's `PDR_T3_DRAIN()` hook in
@@ -6734,9 +6893,22 @@ hooks; the third site is the `emb == 3` branch of `text_glyph`.
 intermediate (`pdx_muldiv`), quadratic and cubic curves flattened by uniform subdivision (no
 recursion, no stack: `n` from the control polygon's second difference), and the signed AREA of every
 edge accumulated per cell (a pixel is 256), then packed to one bit where the coverage is at least
-`PDXF_THR` = **128**. The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
+`PDXF_THR` = **128**. Then **dropout control** (`pdx_drop`, C; QA R24): a stem or bar thinner than
+a pixel that straddles two gives each under half and vanished whole at 5-8 px (`h i j l` gone, `#`
+read as `v`). The coverage is recomputed from the accumulator, and every run of covered cells along
+a row, then down a column (the columns seeing the pixels the rows added), that has NO pixel on and
+is at most `PDXF_DROPRUN` = 2 cells long - a stroke crossing that line, not an edge running along
+it - gets its fullest cell if that holds at least `PDXF_DROPMIN` = 40 of 256: one pixel, so a stroke
+never disappears and nothing that already drew is thickened. 614 bytes of PDXF (64,714). The edge accumulation and the pack are assembly (`pdxfrs.inc`) held to their
 C twins by `hosttest/pdx_primtest.py` under Unicorn (muldiv, `accline`, `pack`: identical on every
 case). A glyph wider than 32 px does not bitmap (`PDFB_F_BIG`).
+
+**Strokes against MuPDF** (`hosttest/pdx_check.py`'s limit since the dropout control): LOST is a
+pixel MuPDF's anti-aliased render covers at least a quarter with no ink of ours within one pixel,
+STRAY ink of ours where MuPDF covers under 1/8 everywhere within one pixel; a 1-bit picture differs
+from the AA picture at every edge, which is no defect, and these two are the defects. With dropout
+control: **1.5 % of ink at 8 px, 0.3 at 10, 0 at 12-16, no stray pixel**; without it (A/B,
+`PDXF_DROPMIN` 9999) 16 % at 8 px. The figures below are the threshold's, measured before it.
 
 **Measured against MuPDF** (`hosttest/pdx_check.py`, glyph for glyph at the same pen position, the
 reference being `mutool draw -r 72` anti-aliased and thresholded at 50 %, so the question is only
@@ -6769,7 +6941,10 @@ Chains: PDXF's deepest is **578** including PDENG (`pdxf_entry` > `_pdxf_verb` >
 `_blk_slot` > `_t3_info` > ... > `pde_entry`), PDREND's worst is 820, so an occupant door under the
 deepest PDREND chain stays under 1,776; PDXF's far edge is `_pdx_eng [_pdx_engvec]` -> PDENG.
 
-**Checks.** `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
+**Checks.** `hosttest/pdx_page.py --oneslot` renders every fixture with its content streams
+Flate-compressed and ONE Flate slot (`--noz`, PDXF built without the in-place inflate, must fail:
+the fonts come out substituted), and `pdx_fuzz -z` inflates each fixture's program at zlib levels
+0, 1 and 9 exactly, then mutated under ASan and UBSan. `make pdxf` (the module, `pdx_check.py`, `pdx_chain.py`), `hosttest/pdx_fuzz.c` (the
 parsers under ASan + UBSan on mutated programs and CMaps), `hosttest/pdx_chain.py` (the
 chain through the REAL PDENG: Flate-compressed font streams, the encoding rules, CIDToGIDMap,
 ToUnicode, an embedded CMap, `/W`, and the strike block's bitmaps against a direct raster),
@@ -6858,7 +7033,8 @@ Incomplete bit.
 records and the core appends each as an ordinary `FILL` through the existing filler, so PDREND carries no shading
 rasteriser. The request is `pdxb_gfx` with the resource (`PDGXI_RES | PDGXI_CAT_SH`, the Form or page, the name at
 `tseg:toff`; or `objnum:gen` of a shading object), the CTM (`ctm`: user space to device quarter-pixels), the device
-clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32), and the result buffer
+clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32 - PDREND passes the clip's
+largest side in pixels when that is under 32, 20.3.2), and the result buffer
 (`rseg:roff`, `rcap`; the core uses 760 bytes of the exchange block). The answer is `ntri` records in `rlen` bytes
 (`pdabi.h`, `PDGX_REC_*`): `r g b flags npts n1` then `npts` points of two `pdi` device quarter-pixels,
 already through the CTM and clamped to +-16,000, filled non-zero. `n1` is the length of a first contour when a
