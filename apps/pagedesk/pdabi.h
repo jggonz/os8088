@@ -741,7 +741,7 @@ struct pdxb_fglyph {
     pdw dseg, doff, cap;    /* in: where the bitmap goes                                   */
     pdw w;                  /* out: width px (0 = empty glyph); 0xFFFF = not bitmapped    */
     pdi lb;                 /* out: left bearing px                                        */
-    pdw bytes;              /* out: written                                                */
+    pdw nb;                 /* out: bytes written                                          */
     pdw adv64;              /* out: the program's advance, 1/64 px                         */
 };
 #define PDFP_M 1                /* PDV_FNT_PATH ops: M x y | L x y | C x1 y1 x2 y2 x y | Z (i16 font units) */

@@ -11,6 +11,9 @@
  * two to each other byte for byte).
  * ==========================================================================*/
 
+#define X6(x)  ((pdw)((((pdw)(x)) << 2) + (((pdw)(x)) << 1)))
+#define X10(x) ((pdw)((((pdw)(x)) << 3) + (((pdw)(x)) << 1)))
+
 /* ---- the outline recorder ------------------------------------------------ */
 #define OL_CAP 3072                 /* pdi words: ~600 points                  */
 #define OLM 1                       /* M x y                                   */

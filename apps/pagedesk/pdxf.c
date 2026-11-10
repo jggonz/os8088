@@ -11,6 +11,9 @@
  *   [pcap, pcap + 4096)     the CIDToGIDMap window (CIDs 0..2047)
  *   [pcap + 4096, + 512)    the staging window of the CMap tokeniser
  * ==========================================================================*/
+#ifndef PD_HOST
+#include "os88.h"
+#endif
 #include "pdabi.h"
 #include "pdmath.h"
 
@@ -18,7 +21,11 @@
 pdi pdx_muldiv(pdi a, pdi b, pdi c);
 /* one far call into PDENG's door; 0 or the PDE_ code, AX in pdx_eng_ax */
 pdw pdx_eng(pdw verb, pdw bx, pdw cx, pdw dx);
+#ifdef PD_HOST
 extern pdw pdx_eng_ax;
+#else
+pdw pdx_eng_ax;                     /* the AX of the last successful pdx_eng (the door sets it) */
+#endif
 
 static pdw g_upem, g_em64;          /* units per em; the size in 1/64 px         */
 
@@ -114,7 +121,7 @@ static pdw nm_numbered(const char *n)
     else if (n[0] == 'g') i = 1;
     else return 0xFFFF;
     if (!n[i]) return 0xFFFF;
-    for (; n[i]; i++) { if (n[i] < '0' || n[i] > '9') return 0xFFFF; v = (pdw)(v * 10 + (n[i] - '0')); }
+    for (; n[i]; i++) { if (n[i] < '0' || n[i] > '9') return 0xFFFF; v = (pdw)(X10(v) + (n[i] - '0')); }
     return v;
 }
 static pdw enc_gid(pdw code)
@@ -231,7 +238,8 @@ static union {
     struct pdxb_fload ld; struct pdxb_fenc en; struct pdxb_fgid gi; struct pdxb_fglyph gl;
     struct pdxb_fpath pa; struct pdxb_fcmap cm; struct pdxb_fwid wi; struct pdxb_init in;
 } g_a;
-static pdw g_cf;                    /* the carry flag of the last verb (the door reads it) */
+pdw pdx_cf;                         /* the carry flag of the last verb (the door reads it) */
+pdw pdx_engvec[2];                  /* PDENG's door, offset then segment (PDV_X_INIT)       */
 static pdw g_pdetail;
 
 #include "pdxfwd.c"
@@ -278,8 +286,8 @@ static pdw v_glyph(void)
     if (g_kind == PDFK_NONE) return PDE_NOTFOUND;
     r = fnt_glyph(g->gid, g->em64, g->asc, g->rows, g->dseg, g->doff, g->cap);
     g->adv64 = g_gadv;
-    if (r == 0xFFFF) { g->w = 0xFFFF; g->lb = 0; g->bytes = 0; return 0; }
-    g->w = g_rwpx; g->lb = g_rlb; g->bytes = r;
+    if (r == 0xFFFF) { g->w = 0xFFFF; g->lb = 0; g->nb = 0; return 0; }
+    g->w = g_rwpx; g->lb = g_rlb; g->nb = r;
     return 0;
 }
 
@@ -309,7 +317,7 @@ static pdw v_cmap(void)
     r = cm_parse(c->kind, c->dseg, c->doff, c->cap);
     pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
     if (r) return r;
-    c->len = (pdw)(4 + g_cmcnt * 6); c->flags = g_cmflags;
+    c->len = (pdw)(4 + X6(g_cmcnt)); c->flags = g_cmflags;
     return 0;
 }
 
@@ -318,19 +326,20 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
 {
     pdw r = 0;
     (void)cx; (void)dx;
-    g_cf = 0;
+    pdx_cf = 0;
     if (verb == PDV_X_INIT) {
         pd_fcopy_in(bx, 0, &g_a.in, sizeof g_a.in);
         g_xb = g_a.in.xb_seg;
+        pdx_engvec[0] = g_a.in.eng_off; pdx_engvec[1] = g_a.in.eng_seg;
         g_ws = g_a.in.slot_seg;
         g_wslen = (pdw)(g_a.in.slot_kb >= 64 ? 0xFFF0u : (pdw)(g_a.in.slot_kb << 10));
-        if (!g_ws || g_wslen < PDXF_CIDWIN + PDXF_STG + 4096) { g_cf = 1; return PDE_NOSLOT; }
+        if (!g_ws || g_wslen < PDXF_CIDWIN + PDXF_STG + 4096) { pdx_cf = 1; return PDE_NOSLOT; }
         g_pcap = (pdw)(g_wslen - PDXF_CIDWIN - PDXF_STG);
         g_stgseg = g_ws; g_stgoff = (pdw)(g_pcap + PDXF_CIDWIN);
         g_kind = PDFK_NONE;
         return 0;
     }
-    if (!g_ws) { g_cf = 1; return PDE_NOSLOT; }
+    if (!g_ws) { pdx_cf = 1; return PDE_NOSLOT; }
     pdx_zero(&g_a, sizeof g_a);
     switch (verb) {
     case PDV_FNT_LOAD:   pd_fcopy_in(g_xb, 0, &g_a.ld, sizeof g_a.ld); r = v_load(); pd_fcopy_out(&g_a.ld, g_xb, 0, sizeof g_a.ld); break;
@@ -346,6 +355,6 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_FNT_WIDTHS: pd_fcopy_in(g_xb, 0, &g_a.wi, sizeof g_a.wi); r = v_widths(); pd_fcopy_out(&g_a.wi, g_xb, 0, sizeof g_a.wi); break;
     default: r = PDE_RANGE; break;
     }
-    if (r) g_cf = 1;
+    if (r) pdx_cf = 1;
     return r;
 }

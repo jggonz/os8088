@@ -54,6 +54,7 @@ static pdw g_dn, g_dreal_is;
 static pdw g_dwhich;                /* 0 Top / FD, 1 Private                        */
 static pdw g_dsubrs, g_dmatd;
 
+static pdw g_dp;
 static pdi cf_real(pdw *pp, pdw end)
 {
     pdw p = *pp, mant = 0, nd = 0, frac = 0, dot = 0, ex = 0, esign = 0, inexp = 0, nib, k, stop = 0, drop = 0, b;
@@ -63,8 +64,8 @@ static pdi cf_real(pdw *pp, pdw end)
         for (k = 0; k < 2 && !stop; k++) {
             nib = k ? (pdw)(b & 15) : (pdw)(b >> 4);
             if (nib <= 9) {
-                if (inexp) ex = (pdw)(ex * 10 + nib);
-                else if (nd < 4) { mant = (pdw)(mant * 10 + nib); if (mant) nd++; if (dot) frac++; }
+                if (inexp) ex = (pdw)(X10(ex) + nib);
+                else if (nd < 4) { mant = (pdw)(X10(mant) + nib); if (mant) nd++; if (dot) frac++; }
                 else if (!dot) drop++;
             }
             else if (nib == 10) dot = 1;
@@ -102,7 +103,9 @@ static void cf_dict_op(pdw op)
 }
 static pdw cf_dict(pdw o, pdw len, pdw which)
 {
-    pdw p = o, end = (pdw)(o + len), b;
+    pdw end = (pdw)(o + len), b;
+    #define p g_dp
+    p = o;
     pdi v;
     g_dn = 0; g_dwhich = which;
     if (end > g_plen || end < o) return 0;
@@ -114,7 +117,7 @@ static pdw cf_dict(pdw o, pdw len, pdw which)
         }
         if (b == 28) { v = P16s(p); p += 2; }
         else if (b == 29) { v = (pdi)(P16(p) ? 32767 : P16((pdw)(p + 2))); p += 4; }
-        else if (b == 30) v = cf_real(&p, end);
+        else if (b == 30) v = cf_real(&g_dp, end);
         else if (b >= 32 && b <= 246) v = (pdi)((pdi)b - 139);
         else if (b >= 247 && b <= 250) { v = (pdi)(((pdi)b - 247) * 256 + (pdi)P8(p) + 108); p++; }
         else if (b >= 251 && b <= 254) { v = (pdi)(-((pdi)b - 251) * 256 - (pdi)P8(p) - 108); p++; }
@@ -123,6 +126,7 @@ static pdw cf_dict(pdw o, pdw len, pdw which)
     }
     return 1;
 }
+#undef p
 
 /* the Private DICT at (psize, poff): subrs, widths. 0 = bad */
 static pdw cf_private(pdw psize, pdw poff)
@@ -265,7 +269,7 @@ static pdw g_seac, g_sb, g_sa, g_sax, g_say;       /* a pending seac: base, acce
 static pdi g_wid;                                   /* the glyph's advance, font units */
 static pdi g_ox2, g_oy2;                            /* the glyph's own offset (seac)   */
 
-static pdw cf_bias(pdw n) { return n < 1240 ? 107 : n < 33900 ? 1131 : 32768; }
+static pdw cf_bias(pdw n) { return n < 1240 ? 107 : n < 0x846C ? 1131 : (pdw)(32767 + 1); }
 
 static void cf_mv(pdi dx, pdi dy) { g_cx = (pdi)(g_cx + dx); g_cy = (pdi)(g_cy + dy); }
 static void cf_ln(pdi dx, pdi dy) { cf_mv(dx, dy); ol_line((pdi)(g_cx + g_ox2), (pdi)(g_cy + g_oy2)); }

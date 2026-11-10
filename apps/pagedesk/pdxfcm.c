@@ -35,6 +35,7 @@ static pdw cm_tok(void)
 {
     pdi c;
     pdw n, h, v, nib;
+again:
     for (;;) {
         c = cm_peek();
         if (c < 0) return T_EOF;
@@ -44,7 +45,7 @@ static pdw cm_tok(void)
     }
     if (c == '<') {
         cm_eat();
-        if (cm_peek() == '<') { cm_eat(); return cm_tok(); }                       /* a dict open: skip */
+        if (cm_peek() == '<') { cm_eat(); goto again; }                       /* a dict open: skip */
         v = 0; n = 0; h = 0; g_hexs[0] = g_hexs[1] = g_hexs[2] = g_hexs[3] = 0; nib = 0;
         while ((c = cm_peek()) >= 0 && c != '>') {
             cm_eat();
@@ -59,13 +60,13 @@ static pdw cm_tok(void)
         if (n >= 2) g_tv = (pdw)((g_hexs[0] << 8) | g_hexs[1]); else g_tv = g_hexs[0];
         return T_HEX;
     }
-    if (c == '>') { cm_eat(); if (cm_peek() == '>') cm_eat(); return cm_tok(); }
+    if (c == '>') { cm_eat(); if (cm_peek() == '>') cm_eat(); goto again; }
     if (c == '[') { cm_eat(); return T_LB; }
     if (c == ']') { cm_eat(); return T_RB; }
     if (c == '(') {                                                                /* a string: skip */
         pdw depth = 0;
         do { c = cm_peek(); cm_eat(); if (c == '\\') { cm_peek(); cm_eat(); } else if (c == '(') depth++; else if (c == ')') depth--; } while (depth && c >= 0);
-        return cm_tok();
+        goto again;
     }
     if (c == '/') {
         cm_eat(); n = 0;
@@ -74,13 +75,13 @@ static pdw cm_tok(void)
     }
     if ((c >= '0' && c <= '9') || c == '-' || c == '+') {
         v = 0; n = 0;
-        while ((c = cm_peek()) >= 0 && ((c >= '0' && c <= '9') || c == '-' || c == '.')) { if (c >= '0' && c <= '9') v = (pdw)(v * 10 + (c - '0')); cm_eat(); n++; }
+        while ((c = cm_peek()) >= 0 && ((c >= '0' && c <= '9') || c == '-' || c == '.')) { if (c >= '0' && c <= '9') v = (pdw)(X10(v) + (c - '0')); cm_eat(); n++; }
         g_tv = v; return T_INT;
     }
     n = 0;
     while ((c = cm_peek()) > ' ' && c != '/' && c != '[' && c != ']' && c != '<' && c != '>' && c != '(' && c != '%') { if (n < 22) g_tk[n++] = (char)c; cm_eat(); }
     g_tk[n] = 0;
-    if (!n) { cm_eat(); return cm_tok(); }
+    if (!n) { cm_eat(); goto again; }
     return T_KW;
 }
 
@@ -89,13 +90,13 @@ static void cm_add(pdw lo, pdw hi, pdw val)
 {
     pdw n = g_cmcnt, a = 0, b = n, m, e;
     if (hi < lo) return;
-    if ((pdw)(4 + (n + 1) * 6) > g_cmcap) { g_cmflags |= PDFC_TRUNC; return; }
+    if ((pdw)(4 + X6(n + 1)) > g_cmcap) { g_cmflags |= PDFC_TRUNC; return; }
     while (a < b) {                                                     /* the first entry with lo > ours */
         m = (pdw)((a + b) >> 1);
-        if (pd_fpeekw(g_cmseg, (pdw)(g_cmoff + 4 + m * 6)) <= lo) a = (pdw)(m + 1); else b = m;
+        if (pd_fpeekw(g_cmseg, (pdw)(g_cmoff + 4 + X6(m))) <= lo) a = (pdw)(m + 1); else b = m;
     }
-    if (a < n) pd_fcopy(g_cmseg, (pdw)(g_cmoff + 4 + (a + 1) * 6), g_cmseg, (pdw)(g_cmoff + 4 + a * 6), (pdw)((n - a) * 6));
-    e = (pdw)(g_cmoff + 4 + a * 6);
+    if (a < n) pd_fcopy(g_cmseg, (pdw)(g_cmoff + 4 + X6(a + 1)), g_cmseg, (pdw)(g_cmoff + 4 + X6(a)), X6(n - a));
+    e = (pdw)(g_cmoff + 4 + X6(a));
     pd_fpokew(g_cmseg, e, lo); pd_fpokew(g_cmseg, (pdw)(e + 2), hi); pd_fpokew(g_cmseg, (pdw)(e + 4), val);
     g_cmcnt++;
 }
@@ -105,7 +106,8 @@ static pdw cm_is(const char *a) { return nm_eq(g_tk, a); }
 /* parse the open stream. kind PDFC_ENC / PDFC_UNI. 0 = ok */
 static pdw cm_parse(pdw kind, pdw dseg, pdw doff, pdw cap)
 {
-    pdw t, mode = 0, k = 0, ops[3], oh[3], inarr = 0, arrcode = 0;
+    static pdw ops[3], oh[3];
+    pdw t, mode = 0, k = 0, inarr = 0, arrcode = 0;
     g_cmn = g_cmp = g_cmeof = 0; g_cmc = -2; g_cmflags = 0; g_cmnb = 0; g_cmcnt = 0;
     g_cmcap = cap; g_cmseg = dseg; g_cmoff = doff; g_cmuni = (pdw)(kind == PDFC_UNI);
     if (cap < 8) return PDE_LIMIT;

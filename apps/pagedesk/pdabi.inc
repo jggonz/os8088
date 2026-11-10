@@ -803,7 +803,7 @@ PDXB_FGLYPH_DOFF               equ 10
 PDXB_FGLYPH_CAP                equ 12
 PDXB_FGLYPH_W                  equ 14
 PDXB_FGLYPH_LB                 equ 16
-PDXB_FGLYPH_BYTES              equ 18
+PDXB_FGLYPH_NB                 equ 18
 PDXB_FGLYPH_ADV64              equ 20
 PDXB_FGLYPH_BYTES              equ 22
 

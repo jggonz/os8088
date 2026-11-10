@@ -33,7 +33,7 @@ static const char *wd_key(pdw slot, pdw n)           /* "[n]" */
 {
     char *t = g_wk[slot];
     pdw k = 0, i;
-    char d[6];
+    static char d[6];
     t[0] = '[';
     do { d[k++] = (char)('0' + n % 10); n /= 10; } while (n);
     for (i = 0; i < k; i++) t[1 + i] = d[k - 1 - i];
@@ -46,11 +46,11 @@ static void wd_put(pdw first, pdw last, pdw w)
 {
     pdw o;
     if (g_wn) {                                       /* merge into the previous triple when contiguous and equal */
-        o = (pdw)(g_woff + (g_wn - 1) * 6);
+        o = (pdw)(g_woff + X6(g_wn - 1));
         if (pd_fpeekw(g_wseg, (pdw)(o + 4)) == w && (pdw)(pd_fpeekw(g_wseg, (pdw)(o + 2)) + 1) == first) { pd_fpokew(g_wseg, (pdw)(o + 2), last); return; }
     }
-    if ((pdw)((g_wn + 1) * 6) > g_wcap || g_wn >= 512) { g_wover = 1; return; }
-    o = (pdw)(g_woff + g_wn * 6);
+    if (X6(g_wn + 1) > g_wcap || g_wn >= 512) { g_wover = 1; return; }
+    o = (pdw)(g_woff + X6(g_wn));
     pd_fpokew(g_wseg, o, first); pd_fpokew(g_wseg, (pdw)(o + 2), last); pd_fpokew(g_wseg, (pdw)(o + 4), w);
     g_wn++;
 }
@@ -85,6 +85,6 @@ static pdw v_widths(void)
             i += 3; items += 2;
         } else i += 2;
     }
-    wv->len = (pdw)(g_wn * 6); wv->more = g_wover;
+    wv->len = X6(g_wn); wv->more = g_wover;
     return 0;
 }

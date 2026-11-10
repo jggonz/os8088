@@ -28,12 +28,13 @@ static pdw t1_find(const char *pat, pdw from, pdw to)
     }
     return 0xFFFF;
 }
-static pdw t1_num(pdw *pp, pdw to)          /* decimal at *pp (spaces skipped); 0xFFFF if none */
+static pdw g_tq;                                    /* the cursor t1_num advances (a file-scope object: C rule 1) */
+static pdw t1_num(pdw to)                           /* decimal at g_tq (spaces skipped); 0xFFFF if none */
 {
-    pdw p = *pp, v = 0, any = 0, c;
+    pdw p = g_tq, v = 0, any = 0, c;
     while (p < to && (P8(p) == ' ' || P8(p) == '\n' || P8(p) == '\r' || P8(p) == '\t')) p++;
-    while (p < to && (c = P8(p)) >= '0' && c <= '9') { v = (pdw)(v * 10 + (c - '0')); p++; any = 1; if (v > 6000) break; }
-    *pp = p;
+    while (p < to && (c = P8(p)) >= '0' && c <= '9') { v = (pdw)(X10(v) + (c - '0')); p++; any = 1; if (v > 6000) break; }
+    g_tq = p;
     return any ? v : 0xFFFF;
 }
 static void t1_decrypt(pdw o, pdw n, pdw r, pdw skip)
@@ -42,7 +43,7 @@ static void t1_decrypt(pdw o, pdw n, pdw r, pdw skip)
     for (i = 0; i < n; i++) {
         c = P8((pdw)(o + i));
         p = (pdw)(c ^ (r >> 8));
-        r = (pdw)((c + r) * 52845u + 22719u);
+        r = (pdw)((c + r) * 0xCE6D + 0x58BF);
         P8w((pdw)(o + i), p);
     }
     /* the first `skip` bytes are random lead: leave them, callers step over them */
@@ -90,7 +91,7 @@ static pdw t1_open(void)
                 df = t1_find(" def", q, e);
                 if (rd != 0xFFFF && rd < d) break;
                 q = (pdw)(d + 3);
-                c2 = t1_num(&q, e);
+                g_tq = q; c2 = t1_num(e); q = g_tq;
                 while (q < e && P8(q) == ' ') q++;
                 if (c2 != 0xFFFF && c2 < 256 && P8(q) == '/') { nm = (pdw)(q + 1); g_t1_encoff[c2] = nm; }
                 (void)df;
@@ -112,12 +113,12 @@ static pdw t1_open(void)
         g_plen = w;
     }
     to = g_plen;
-    t1_decrypt(p, (pdw)(to - p), 55665, 4);
+    t1_decrypt(p, (pdw)(to - p), 0xD971, 4);
     p = (pdw)(p + 4);
     endc = to;
     /* lenIV */
     k = t1_find("/lenIV", p, endc);
-    if (k != 0xFFFF) { pdw q = (pdw)(k + 6); n = t1_num(&q, endc); if (n != 0xFFFF && n < 8) g_t1_leniv = n; }
+    if (k != 0xFFFF) { g_tq = (pdw)(k + 6); n = t1_num(endc); if (n != 0xFFFF && n < 8) g_t1_leniv = n; }
     /* /Subrs */
     k = t1_find("/Subrs", p, endc);
     ci = t1_find("/CharStrings", p, endc);
@@ -128,7 +129,7 @@ static pdw t1_open(void)
             pdw d = t1_find("dup ", q, ci);
             if (d == 0xFFFF) break;
             q = (pdw)(d + 4);
-            idx = t1_num(&q, ci); len = t1_num(&q, ci);
+            g_tq = q; idx = t1_num(ci); len = t1_num(ci); q = g_tq;
             if (idx == 0xFFFF || len == 0xFFFF) break;
             while (q < ci && P8(q) == ' ') q++;
             while (q < ci && P8(q) != ' ') q++;          /* RD or -| */
@@ -148,7 +149,7 @@ static pdw t1_open(void)
             if (q >= endc || P8(q) != '/') break;
             nm = (pdw)(q + 1); q = nm;
             while (q < endc && P8(q) != ' ') q++;
-            len = t1_num(&q, endc);
+            g_tq = q; len = t1_num(endc); q = g_tq;
             if (len == 0xFFFF) break;
             while (q < endc && P8(q) == ' ') q++;
             while (q < endc && P8(q) != ' ') q++;
@@ -171,7 +172,7 @@ static pdw t1_open(void)
             while (q < e && P8(q) == ' ') q++;
             while (q < e && ((c = P8(q)) == '.' || (c >= '0' && c <= '9'))) {
                 if (c == '.') dot = 1;
-                else if (nd < 4) { mant = (pdw)(mant * 10 + (c - '0')); if (mant) nd++; if (dot) frac++; }
+                else if (nd < 4) { mant = (pdw)(X10(mant) + (c - '0')); if (mant) nd++; if (dot) frac++; }
                 q++;
             }
             if (mant && frac <= 9) { v = inv_pow10(mant, frac); if (v >= 16 && v <= 16384) g_upem = v; }
@@ -228,7 +229,6 @@ static pdw g_t1_seac, g_t1_sa, g_t1_sb, g_t1_sax, g_t1_say, g_t1_open;
 static pdi g_t1_wid;
 static pdi g_t1ox, g_t1oy;
 
-static void t1_pt(pdi *x, pdi *y) { *x = (pdi)(g_tx + g_t1ox); *y = (pdi)(g_ty + g_t1oy); }
 static void t1_move(pdi dx, pdi dy)
 {
     g_tx = (pdi)(g_tx + dx); g_ty = (pdi)(g_ty + dy);
@@ -236,9 +236,9 @@ static void t1_move(pdi dx, pdi dy)
         if (g_tnfp < 7) { g_tfx[g_tnfp] = g_tx; g_tfy[g_tnfp] = g_ty; g_tnfp++; }
         return;
     }
-    { pdi x, y; t1_pt(&x, &y); ol_move(x, y); }
+    ol_move((pdi)(g_tx + g_t1ox), (pdi)(g_ty + g_t1oy));
 }
-static void t1_line(pdi dx, pdi dy) { pdi x, y; g_tx = (pdi)(g_tx + dx); g_ty = (pdi)(g_ty + dy); t1_pt(&x, &y); ol_line(x, y); }
+static void t1_line(pdi dx, pdi dy) { g_tx = (pdi)(g_tx + dx); g_ty = (pdi)(g_ty + dy); ol_line((pdi)(g_tx + g_t1ox), (pdi)(g_ty + g_t1oy)); }
 static void t1_curve(pdi a, pdi b, pdi c, pdi d, pdi e, pdi f)
 {
     pdi x1 = (pdi)(g_tx + a), y1 = (pdi)(g_ty + b), x2 = (pdi)(x1 + c), y2 = (pdi)(y1 + d);

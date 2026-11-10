@@ -16,7 +16,7 @@ static pdw P32(pdw o) { return P16(o) ? 0xFFFFu : P16((pdw)(o + 2)); }
 /* 10^e10 / mant, saturating at 32767 (mant 1..9999, e10 0..9): the 1/value of a decimal */
 static pdw inv_pow10(pdw mant, pdw e10)
 {
-    struct pd_u32 u, t, q;
+    static struct pd_u32 u, t, q;
     pdw i;
     if (!mant || e10 > 9) return 0;
     pdm_u32_set(&u, 0, 1);
@@ -157,6 +157,7 @@ static pdb g_gpf[SF_NPT];
 static pdw g_gend[96];
 static pdw g_gnc, g_gnp;
 
+static pdw g_sflen;
 static pdw sf_loc(pdw gid, pdw *len)    /* glyph offset in the program, 0 = none */
 {
     pdw a, b;
@@ -291,7 +292,7 @@ static pdw sf_glyph(pdw gid)
     while (sp && ok) {
         sp--;
         for (i = 0; i < 6; i++) g_cm[i] = g_stm[sp][i];
-        o = sf_loc(g_stg[sp], &len);
+        o = sf_loc(g_stg[sp], &g_sflen); len = g_sflen;
         if (!o || len < 10) continue;                       /* empty (a space) */
         nc = P16s(o);
         if (nc >= 0) {
