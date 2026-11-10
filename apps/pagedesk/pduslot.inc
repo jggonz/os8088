@@ -221,8 +221,8 @@ _pdu_slot_load:
     je .q1
     cmp al, 2
     ja .nos2
-    call sl_rel_xc
-    jmp short .qr
+    call sl_rel_xc                  ; and asked again either way: W takes
+    jmp short .qz                   ; its min once all three have run
 .q1:
     call sl_rel_fl2
     jmp short .qr
@@ -230,6 +230,7 @@ _pdu_slot_load:
     call sl_rel_ovl
 .qr:
     jc .nos
+.qz:
     jmp .sz                         ; the same claim, asked again
 .nos2:
     mov ax, PDE_NOSLOT
@@ -246,14 +247,17 @@ pd_claimhi:
     xor cx, cx
     mov bl, MEMP_CLAIM_HI
     call OSAPI_MEM_P
-    sbb ax, ax
-    not ax
-    and ax, dx
+    jnc .r
+    xor dx, dx
+.r:
+    xchg ax, dx
     ret
 
 ; sl_wsize - W's KiB for [sl_wmin] (want) / [sl_wmin+1] (min): want while
-; PD-29's 32 KiB stays free beside the largest run, else the most that fits,
-; never under min (its claim then refuses). CX = its paragraphs (0: none)
+; PD-29's 32 KiB stays free beside the largest run, else the most that fits;
+; under min, min + 32 KiB, a claim that refuses so the loader's releases run
+; before the reserve is spent (QA F24), and min once all three have run.
+; CX = its paragraphs (0: none)
 sl_wsize:
     call _os88_mem_largest_p
     mov cl, 6
@@ -272,8 +276,11 @@ sl_wsize:
     xor ch, ch
     cmp ax, cx
     jae .c2
-    xchg ax, cx
-.c2:
+    xchg ax, cx                     ; under min with the 32 KiB kept: ask for
+    cmp byte [sl_rel], 3            ; min AND the reserve, which refuses, so
+    jae .c2                         ; the releases run first (QA F24); with
+    add ax, PDU_RESV_P >> 6         ; all three tried, min (the page before
+.c2:                                ; the reserve: QA R21)
     call sl_wsset
     xchg ax, cx
     ret

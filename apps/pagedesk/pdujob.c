@@ -588,7 +588,7 @@ static void pdu_save_step(void)
     /* PDWRT in at the first slice, HERE and not in the overlay that began
      * the save: no overlay code stands on the stack, so release-before-refuse
      * may give the overlay's 51.5 KiB to the writer (QA F25, 20.22.2.4) */
-    if (pdu_socc != PDU_OCC_WRT && (r = pdu_slot_load(PDU_OCC_WRT)) != 0) {
+    if ((r = pdu_slot_load(PDU_OCC_WRT)) != 0) {    /* (resident: 0 at once) */
         pdu_job = J_NONE;
         pdu_save_done(r);
         return;

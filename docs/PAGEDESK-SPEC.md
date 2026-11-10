@@ -5014,10 +5014,13 @@ occupant gets is its image + bss, rounded up to a paragraph (claim S), and its
 WORKSPACE in claim W (PDWRT: following the image in S, 20.22.2.1) (`slot_seg`/`slot_kb` at `PDV_X_INIT`; for PDWRT `wbuf_seg`/
 `wbuf_kb` at `PDV_WRT_INIT`), at most 64 KiB. **A workspace is a RANGE, WANT
 and MIN**: W is sized at the largest free run less PD-29's 32 KiB, no more
-than WANT and no less than MIN (a load that cannot have MIN is `PDE_NOSLOT`;
-QA F24: the rule that took WANT when 32 KiB were left and otherwise the
-whole run left 512 bytes on a 640 KiB XT), and `slot_kb` says what was
-granted. An occupant that needs
+than WANT. Where that is under MIN, W first asks for MIN and the 32 KiB
+together, a claim that refuses, so release-before-refuse (20.22.2.4) runs
+before the reserve is spent; once all three releases have run it takes MIN
+and the page is drawn below the reserve (a load that cannot have MIN is
+`PDE_NOSLOT`). QA F24: taking MIN at once left 5.5 KiB on a 640 KiB XT with
+the overlay and the second Flate slot still held; now JB2TEXT and CCITTG4
+leave 62 KiB there. `slot_kb` says what was granted. An occupant that needs
 more for one stream answers `PDE_NEEDMEM` with CX = `PDMEM_SLOT` (0) and DX =
 the KiB: the ladder regrows S toward WANT (never past it, and only while the
 32 KiB stays free) and re-INITs the occupant either way, so an unchanged
@@ -5333,9 +5336,9 @@ cap is 65,024):
 | QA R7: W its own claim (`sl_wsize`, PDWRT's buffers still in S), the release before a region or a growth refuses (`sl_relmem`), `pdu_ovl_room` (crt0's `CC_OVL_ROOM`), a failed bind freeing S and W | 64,959 | +84 |
 
 | QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
-| QA F25/F22/F24: every claim from the top (`pd_claimhi`: XB, the bank, A, B, X, S, W), the writer loaded by the save job (`pdu_save_step`) and freed before its overlay call, `pdu_wrt_in_now` and `pdu_wrt_out` gone (a call and a macro), the second Flate slot's own reserve, W sized to leave 32 KiB | 65,021 | +18 |
+| QA F25/F22/F24: every claim from the top (`pd_claimhi`: XB, the bank, A, B, X, S, W), the writer loaded by the save job (`pdu_save_step`) and freed before its overlay call, `pdu_wrt_in_now` and `pdu_wrt_out` gone (a call and a macro), the second Flate slot's own reserve, W sized to leave 32 KiB and asked with it while a release remains, the claim asked again after the XC release | 65,023 | +20 |
 
-**3 bytes stay under the cap.**
+**1 byte stays under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
