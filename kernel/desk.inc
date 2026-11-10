@@ -2284,10 +2284,14 @@ osapi_desk_item_x:
     je .no
     jmp short .ok
 .pdel:
-    mov ah, SC_OP_PDEL          ; THE RECORD ALONE, DX:CX (ABI-BREAK-LIST C10,
+    mov ax, (SC_OP_PDEL << 8) | 0xFF ; THE RECORD ALONE, DX:CX (ABI-BREAK-LIST C10,
     call sc_modcall             ; kernel size pass 19): CTRL.DRV finds the row
     or al, al                   ; by it - a zone is reused, and renumbered at
     jnz .no                     ; boot, so it named nothing the record did not.
+                                ; AL = 0xFF going in: a module that cannot be
+                                ; read (no system disk) answers nothing, and
+                                ; that is a REFUSAL - 0 was "removed", and a
+                                ; Sticky App closed with its row stranded
                                 ; AL = 0 removed; 0xFF is a refusal, or no disk
                                 ; to read the module from
 .ok:
