@@ -97,6 +97,38 @@ static pdw img_row(pdw seg, pdw off, pdw row, pdw *cf)
     return 0;
 }
 
+/* PDR_XSHADE=1: a FAKE PDV_GFX_SHADE for the pass-cost checks (QA R15) -
+ * whatever the shading, an axial ramp down the device clip: `steps` (0 =
+ * 32) bands across its whole width, one record each, as PDXG cuts an axial
+ * gradient; pdrh_xshades counts the calls, pdrh_xstepmax the most bands */
+long pdrh_xshades, pdrh_xstepmax;
+static pdw shade_fake(void)
+{
+    static struct pdxb_gfx g;
+    int n, k, x0, x1, y0, h;
+    unsigned off;
+    unsigned char *d;
+    memcpy(&g, XMEM(pdrh_xbseg(), 0), sizeof g);
+    n = g.steps ? g.steps : 32; if (n < 4) n = 4; if (n > 96) n = 96;
+    if (n > pdrh_xstepmax) pdrh_xstepmax = n;
+    x0 = g.clip[0] * 4 - 4; x1 = g.clip[2] * 4 + 8;                     /* qpx, a pixel past each side */
+    y0 = g.clip[1] * 4 - 4; h = (g.clip[3] - g.clip[1] + 3) * 4;
+    if ((long)n * (PDGX_REC_HDR + 16) > (long)g.rcap) n = g.rcap / (PDGX_REC_HDR + 16);
+    d = XMEM(g.rseg, g.roff);
+    for (k = 0, off = 0; k < n; k++, off += PDGX_REC_HDR + 16) {
+        short pt[8];
+        int ya = y0 + (h * k) / n, yb = y0 + (h * (k + 1)) / n;
+        d[off] = d[off + 1] = d[off + 2] = (unsigned char)((k * 255) / n); d[off + 3] = 0; d[off + 4] = 4; d[off + 5] = 0;
+        pt[0] = (short)x0; pt[1] = (short)ya; pt[2] = (short)x1; pt[3] = (short)ya;
+        pt[4] = (short)x1; pt[5] = (short)yb; pt[6] = (short)x0; pt[7] = (short)yb;
+        memcpy(d + off + PDGX_REC_HDR, pt, 16);
+    }
+    g.rlen = (pdw)off; g.ntri = (pdw)n; g.ok = 1; g.state = 0; g.kind = 0;
+    memcpy(XMEM(pdrh_xbseg(), 0), &g, sizeof g);
+    pdrh_xshades++;
+    return 0;
+}
+
 pdw pdrh_xmod(pdw verb, pdw bx, pdw cx, pdw dx, pdw *cf, pdw *dxo);
 /* pdrprim.inc's pdr_xfar, twinned: the far call to the occupant's door */
 pdw pdr_x_off, pdr_x_seg, pdr_x_cf, pdr_x_dx, pdr_out_cx, pdr_out_dx;
@@ -117,6 +149,7 @@ pdw pdrh_xmod(pdw verb, pdw bx, pdw cx, pdw dx, pdw *cf, pdw *dxo)
     case PDX_GFX:
         if (verb == 0xCE) return xd_verb(bx, cx);
         if (verb == 0xCF) return xe_verb(bx, cx);
+        if (verb == PDV_GFX_SHADE && getenv("PDR_XSHADE")) return shade_fake();
         break;
     case PDX_IMG: case PDX_JPX:
         if (verb == PDV_IMG_OPEN) return img_open(cf);

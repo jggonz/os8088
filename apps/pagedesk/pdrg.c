@@ -431,6 +431,29 @@ static void stroke_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
     for (i = 0; i < nseg; i++) {
         j = (i + 1 == n) ? 0 : i + 1;
         x0 = xs[i]; y0 = ys[i]; x1 = xs[j]; y1 = ys[j];
+        if (g_shw <= 2) {
+            /* A HAIRLINE (one pixel): a band one pixel wide ACROSS the line
+             * holds a pixel centre only on a knife edge, so a slanted curve's
+             * pieces dropped out (QA R11). One pixel a row when steep, one a
+             * column when shallow, swept along the segment. A slanted
+             * piece's span is 5 qpx on the sampled axis, not 4: pdr_scan
+             * truncates each crossing from its own edge's start, so two
+             * crossings 4 apart can land 3 apart, and a quarter of the rows
+             * went missing. An axis-aligned piece's crossings are exact, so
+             * it keeps 4 and stays one pixel. Every piece is wound the same
+             * way, so nonzero keeps their overlaps. */
+            mx = (pdi)(x1 - x0); my = (pdi)(y1 - y0);
+            if (!mx && !my) continue;
+            s = mx && my ? 3 : 2;
+            if ((my < 0 ? -my : my) >= (mx < 0 ? -mx : mx)) {
+                if (my > 0) poly4((pdi)(x0 - 2), y0, (pdi)(x1 - 2), y1, (pdi)(x1 + s), y1, (pdi)(x0 + s), y0);
+                else        poly4((pdi)(x0 + s), y0, (pdi)(x1 + s), y1, (pdi)(x1 - 2), y1, (pdi)(x0 - 2), y0);
+            } else {
+                if (mx > 0) poly4(x0, (pdi)(y0 + s), x1, (pdi)(y1 + s), x1, (pdi)(y1 - 2), x0, (pdi)(y0 - 2));
+                else        poly4(x0, (pdi)(y0 - 2), x1, (pdi)(y1 - 2), x1, (pdi)(y1 + s), x0, (pdi)(y0 + s));
+            }
+            continue;
+        }
         unit_dir((pdi)(x1 - x0), (pdi)(y1 - y0), &g_ux1, &g_uy1, &len);
         if (len == 0) continue;
         nx = pdr_muldiv((pdi)(y1 - y0), g_shw, len);

@@ -1377,7 +1377,18 @@ CGA's y axis below about 80% and 120%). A rectangle with no area clips everythin
 A polygon clip stays on sample points. (square, verify-square; `pdr_annot`'s "an
 appearance stroking at its BBox edge".) Beziers are flattened by de Casteljau subdivision until both second
 differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
-curve), depth 6 (64 pieces) - the operation limit. Arithmetic is `pdmath`
+curve), depth 6 (64 pieces) - the operation limit. A stroke of one pixel
+(a half width of 2 qpx or less, which every `w` at or below one device pixel
+is) is not offset across the line: a band one pixel wide ACROSS a slanted
+line holds a pixel centre only on a knife edge, and `pdr_scan` truncates each
+crossing from its own edge's start, so a third of a slanted hairline's rows
+were dropped and a flattened curve came out dotted (QA R11). Each piece is
+swept instead by a span along the sampled axis - horizontal when the piece is
+steep, vertical when it is shallow - 4 qpx for an axis-aligned piece, whose
+crossings are exact, and 5 for a slanted one. That is one pixel a row or a
+column, sometimes two (1.25 on average), and never a gap. Every piece is
+wound the same way. `pdr_xchk`'s `hair.pdf` holds a fan of 1 w lines to it
+and a 1 w square to one-pixel sides. Arithmetic is `pdmath`
 (16.16) for everything that is user space; a transform that overflows sets
 `PDF_INC_RANGE` and the coordinate clamps, never wraps.
 
@@ -1422,12 +1433,39 @@ horizontal or vertical (the table-rule case) become `DLR_RECT`s directly.
 band is blitted opaque, so a second pass could not paint over a band already
 shown. Instead one **pass** interprets the whole content stream for the rows of a
 *group of bands*, culling at emit time everything outside them. The first group is
-every band of the canvas. When the list fills (`dl_kb`), the group is **halved**
-(bands `[b0, b0+n/2)`), the content is **rescanned from its first byte**, the group
-is drawn and the next group follows; the group width stays halved. When one band
-still overflows, that band is composed in **sub-passes of halving row ranges**
-onto the same band buffer and blitted once. Only when even one *row* overflows is
-the rest of that row dropped, with `PDF_INC_LIMIT`. The result is the identical image
+every band of the canvas. When the list fills (`dl_kb`), the group is **narrowed**
+and the content is **rescanned from its first byte**; the group is drawn and the
+next group follows. When one band still overflows, that band is composed in
+**sub-passes of narrower row ranges** onto the same band buffer and blitted once.
+Only when even one *row* overflows is the rest of that row dropped, with
+`PDF_INC_LIMIT`.
+
+How far to narrow is read off the list that filled (QA R15, `group_plan`): every
+record carries its rows, so the bytes a group of the first *k* bands (or rows)
+would have held so far are those of the records whose first row lies in them - a
+STATE, emitted only for the mark after it, counting with that mark. The next
+group is the most bands whose share is at most half the list, never more than
+half of the old group (halving's own progress) and never fewer than one. A group
+that leaves the list less than half full makes the next one twice as wide, and
+less than a quarter full four times (`group_grow`), because every group is a
+whole interpretation - but never past a **ceiling**, half the last width that
+filled the list, which only a group using under a quarter of the list *at* the
+ceiling doubles: growing straight back to a width that had overflowed traded
+every pass it saved for a wasted one.
+
+**A shading costs nothing outside its clip** (QA R15, `pdrxg.c`'s `xg_steps`). A
+`sh` whose clip misses the pass's rows or the view is skipped before PDXG is
+asked - or loaded - and one in a clip under 32 pixels across is asked for no more
+bands (`pdxb_gfx.steps`, 20.22.9) than the clip has pixels. SYNTH.PDF's keys and
+knobs are hundreds of `sh` in clips a few pixels across: every pass asked PDXG for
+every one and took 32 levels of each, a 22-byte STATE and a RECT a level, so a
+16-row group held 470 STATEs (10 KB of the list) and the dense bands went one row
+a pass. At 243% on QEMU it was 32 passes and about 2,770 BIOS ticks under
+`-icount shift=4`; it is 15 passes and 431 ticks (instructions, not QEMU's wall
+clock, which host load moves by 2x either way). `pdr_xchk`'s
+`small.pdf` page 2 - 96 knobs, `pdr_test`'s `PDR_XSHADE` standing in for PDXG -
+holds one call a knob and at most ten bands, the same pixels from a 29, 16 and 12
+KiB list, against `PDR_NOSHCULL` (every shading asked, 32 bands). The result is the identical image
 whatever the list size (`pdr_check`: 4, 8, 12 and 16 KiB lists (claims 4 KiB larger) against 22 KiB,
 byte for byte, 11 to 63 passes). `pdxb_rstatus.passes` counts them.
 
@@ -1471,7 +1509,9 @@ specifies them:
   `PDE_RANGE` (the end); `{objnum, gen}` for a Form or an image; `STRM_CLOSE`
   pops. Up to 6 streams (a page, 4 forms and one image) are open at once.
 * `TOKEN`: `PDE_RANGE` with CF = 1 means "number saturated, token valid" and sets
-  `PDF_INC_RANGE`; any other error ends the page (`PDF_INC_LIMIT`, "content stream
+  `PDF_INC_RANGE`, named "number range" like every other note (QA R16: an
+  unnamed first note left the status line `Incomplete rendering - ` with
+  nothing after it); any other error ends the page (`PDF_INC_LIMIT`, "content stream
   error"). Names and operators are NUL-terminated after `len` here.
 * `DICT_GET` with paths of names and `"[n]"`; a **final reference is followed by
   PDREND** (a second call with no names). `/Widths` is read element by element, on
@@ -6604,6 +6644,33 @@ then draw the same page to the pixel. `pdr_xchk`
 requires such a view to finish, every band blitted, with `PDF_INC_LIMIT` and
 never `PDF_INC_MODULE`. Before this rule the view ended at the re-INIT.
 
+**20.22.7.12 A Form inside a Flate stream, with one Flate slot: parking.**
+A Form's stream opened while its parent's Flate stream is open needs a
+second Flate slot. With one slot (an XT, or a low-memory claim that gave
+the second back) `PDV_ENG_STRM_OPEN` answers `PDE_LIMIT` (20.13.3). A
+Quartz page is one Flate Form inside a Flate content stream, so before this
+rule such a page drew nothing and noted `form stream` (QA R14).
+
+Each frame of the interpreter keeps the stream it reads (`obj`, `gen`; the
+page's `cidx`) and how many tokens it has taken (`ntok`). When a Form's open
+answers `PDE_LIMIT` and the parent can be parked, the parent's stream is
+closed, the frame is marked `park`, and the Form is opened in the freed
+slot. At the Form's end the parent is opened again and `ntok`
+`PDV_ENG_TOKEN` calls read past what it had already given. The same
+decoded bytes give the same tokens, so the parent resumes at the operator
+after its `Do`. Nesting parks each parent in turn.
+
+A parent cannot be parked once it has read raw bytes, because an inline
+image's data is not replayed by tokens. Such a frame is marked unparkable
+and the Form notes `form stream` (`PDF_INC_FILTER`), as before. A
+parent that cannot be opened again notes the same and ends there, as if
+its stream were over, and the frames under it go on. The cost is the re-inflate of the parent up to
+the `Do`, once per parked Form. `pdr_test`'s `PDR_FLATE=1` gives the
+host one Flate slot. `forms.pdf` page 1 (Flate Forms two deep inside a
+Flate page) must draw the same with one slot as with two, to the pixel and
+clean. Page 2 puts an inline image before the `Do` and must note `form stream`
+with one slot and draw clean with two.
+
 #### 20.22.8 Fonts from their programs (`fonts`)
 
 AP-14 and AP-15. A font whose program is embedded (`/FontFile2` TrueType, `/FontFile` Type 1,
@@ -6903,7 +6970,8 @@ Incomplete bit.
 records and the core appends each as an ordinary `FILL` through the existing filler, so PDREND carries no shading
 rasteriser. The request is `pdxb_gfx` with the resource (`PDGXI_RES | PDGXI_CAT_SH`, the Form or page, the name at
 `tseg:toff`; or `objnum:gen` of a shading object), the CTM (`ctm`: user space to device quarter-pixels), the device
-clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32), and the result buffer
+clip (`clip[4]`, pixels, inclusive), `steps` (bands across a gradient's range; 0 = 32 - PDREND passes the clip's
+largest side in pixels when that is under 32, 20.3.2), and the result buffer
 (`rseg:roff`, `rcap`; the core uses 760 bytes of the exchange block). The answer is `ntri` records in `rlen` bytes
 (`pdabi.h`, `PDGX_REC_*`): `r g b flags npts n1` then `npts` points of two `pdi` device quarter-pixels,
 already through the CTM and clamped to +-16,000, filled non-zero. `n1` is the length of a first contour when a

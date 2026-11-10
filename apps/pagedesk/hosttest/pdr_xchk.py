@@ -19,7 +19,7 @@ to itself, through the host harness's stand-in occupants (hosttest/pdr_xmod.c):
 
     pdr_xchk.py <pdr_test_real> <scratch> <resdir> [--hostile <pdr_test_real_asan>] [-n SEEDS]
 """
-import argparse, os, shutil, subprocess, sys
+import argparse, os, re, shutil, subprocess, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument('exe'); ap.add_argument('scratch'); ap.add_argument('resdir')
@@ -53,17 +53,24 @@ def check(name, cond, why=''):
     else: fails.append(name + ' ' + why); print('  FAIL ' + name + ' ' + why)
 
 ADAPT = {'vga': (1, 1, 640, 4), 'herc': (29, 45, 720, 1), 'cga': (5, 12, 640, 1)}
-def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700):
+def render(pdf, page=0, adapter='vga', zoom=100, env=None, binary=None, H=700, dl=29):
     num, den, w, bpp = ADAPT[adapter]
     out = os.path.join(scratch, 'o.ppm')
     if os.path.exists(out): os.remove(out)
     e = dict(os.environ, PDR_GLYPHKB='24', ASAN_OPTIONS='detect_leaks=0')
     e.update(env or {})
     r = subprocess.run([binary or exe, 'render', pdf, str(page), str(zoom), '0', str(bpp), '%d/%d' % (num, den), str(w), str(H),
-                        '0', '0', out, bank, '29'], capture_output=True, text=True, env=e, timeout=300)
+                        '0', '0', out, bank, str(dl)], capture_output=True, text=True, env=e, timeout=300)
     st = dict(kv.split('=', 1) for l in r.stdout.split('\n') if l.startswith('status') for kv in l.split()[1:] if '=' in kv)
+    m = re.search(r"^xshade calls=(\d+) stepmax=(\d+)", r.stdout, re.M)
+    if m: st['xcalls'], st['xstepmax'] = m.group(1), m.group(2)
+    m = re.search(r"^status .*first='([^']*)'", r.stdout, re.M)
+    if m: st['first'] = m.group(1)
     im = np.asarray(Image.open(out).convert('L')).astype(int) if r.returncode == 0 and os.path.exists(out) else None
+    if int(st.get('incomplete', '0'), 0) and not st.get('first'):    # QA R16: the status line would say nothing
+        unnamed.append('%s p%d %s' % (os.path.basename(pdf), page, st))
     return r.returncode, im, st, r.stderr
+unnamed = []
 def num(st, k):
     v = st.get(k, '0')
     return int(v, 16) if v.startswith('0x') else int(v)
@@ -135,6 +142,20 @@ for ad in ('vga', 'herc'):
           rc == 0 and rc0 == 0 and same and num(st, 'passes') > num(st0, 'passes') and num(st, 'incomplete') == 0
           and im0 is not None and int((im0 < 128).sum()) > 500,
           'rc=%d diff=%s %s %s' % (rc, None if im is None or im0 is None else int((im != im0).sum()), st, err[-200:]))
+# Flate Forms in a Flate page with ONE Flate slot (QA R14, 20.22.7.12): each parent is
+# parked and replayed, and the page draws as with two slots (where the nesting of three
+# Flate streams parks too) - and as mutool draws it
+forms = os.path.join(fx, 'forms.pdf')
+r1 = render(forms, 0, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 0, 'vga', env={'PDR_FLATE': '2'})
+same = r1[1] is not None and r2[1] is not None and int((r1[1] != r2[1]).sum()) == 0
+check('Flate Forms nested in a Flate page, ONE slot: = two slots to the pixel, clean', r1[0] == 0 and same
+      and num(r1[2], 'incomplete') == 0 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
+ref = mutool(forms, 0)
+pct = cellmatch(r1[1], ref, 40) if r1[1] is not None else 100
+check('forms.pdf (one slot) vs mutool (<= 3% of cells off by 40)', pct <= 3.0, '%.2f%%' % pct)
+r1 = render(forms, 1, 'vga', env={'PDR_FLATE': '1'}); r2 = render(forms, 1, 'vga', env={'PDR_FLATE': '2'})
+check('an inline image before the Do, ONE slot: not replayable, noted (form stream); two slots clean',
+      num(r1[2], 'incomplete') & 0x0002 and num(r2[2], 'incomplete') == 0, '%s %s' % (r1[2], r2[2]))
 rc, im, st, _ = render(ramp, 6, 'vga', env={'PDR_XCKB': '2'})
 check('both decoders and a 2 KiB XC: what fits is stashed, the rest PDF_INC_LIMIT, nothing MODULE', rc == 0
       and not num(st, 'incomplete') & INC_MODULE, str(st))
@@ -188,6 +209,56 @@ if a.hostile:
                     if bad < 5: print('    seed %d p%d %s rc=%d %s' % (seed, pg, ad, rc, err[-300:]))
     check('hostile IMG_OPEN / IMG_ROW: every render finishes clean', bad == 0, '%d bad' % bad)
 
+print('-- one-pixel strokes (hair.pdf, QA R11)')
+import math
+rc, im, st, _ = render(os.path.join(fx, 'hair.pdf'), 0, 'vga')
+gaps = steps = cover = 0
+if im is not None:
+    dark = im < 128
+    for k in range(0, 360, 7):
+        t = math.radians(k + 0.37); c, s_ = math.cos(t), math.sin(t)
+        x0, y0, x1, y1 = 200 + 30 * c, 400 - (200 + 30 * s_), 200 + 160 * c, 400 - (200 + 160 * s_)
+        steep = abs(s_) >= abs(c)
+        a0, a1 = (y0, y1) if steep else (x0, x1)
+        for v in range(int(min(a0, a1)) + 1, int(max(a0, a1))):
+            if steep:
+                u = int(math.floor(x0 + (v + 0.5 - y0) * (x1 - x0) / (y1 - y0)))
+                n, m = int(dark[v, u - 1:u + 2].sum()), int(dark[v, u - 2:u + 3].sum())
+            else:
+                u = int(math.floor(y0 + (v + 0.5 - x0) * (y1 - y0) / (x1 - x0)))
+                n, m = int(dark[u - 1:u + 2, v].sum()), int(dark[u - 2:u + 3, v].sum())
+            steps += 1; cover += m; gaps += n == 0
+check('a fan of 1 w lines at every 7 degrees: a pixel on every row (steep) or column (shallow)',
+      rc == 0 and steps > 5000 and gaps == 0, '%d gaps of %d' % (gaps, steps))
+check('... and no thicker than 1.5 pixels on the average (%.2f)' % (cover / max(steps, 1)), steps and cover / steps <= 1.5)
+check('an axis-aligned 1 w square keeps one-pixel sides', im is not None and
+      int((im[2:28, 2:28] < 128).sum()) == 80, None if im is None else str(int((im[2:28, 2:28] < 128).sum())))
+print('-- the group plan and the shading cull (small.pdf, QA R15)')
+small = os.path.join(fx, 'small.pdf')
+for ad in ('vga', 'herc', 'cga'):
+    rc, im, st, _ = render(small, 0, ad)
+    rc8, im8, st8, _ = render(small, 0, ad, dl=12)
+    check('hundreds of shapes a few rows tall (%s): a 12 KiB list draws what a 29 KiB one does, clean (%s and %s passes)'
+          % (ad, st.get('passes'), st8.get('passes')),
+          rc == 0 and rc8 == 0 and im is not None and im8 is not None and int((im != im8).sum()) == 0
+          and num(st, 'incomplete') == 0 and num(st8, 'incomplete') == 0)
+# page 2: 96 knobs, each a shading in a clip 3 to 9 pixels across (SYNTH.PDF's buttons), PDXG stood in for by PDR_XSHADE
+xs = {'PDR_XSHADE': '1'}
+rc, im, st, _ = render(small, 1, 'vga', env=xs)
+rcn, imn, stn, _ = render(small, 1, 'vga', env=dict(xs, PDR_NOSHCULL='1'))
+check('96 knobs: one PDXG call each in one pass (%s calls, %s passes; %s without the cull)' % (st.get('xcalls'), st.get('passes'), stn.get('xcalls')),
+      rc == 0 and num(st, 'incomplete') == 0 and num(st, 'xcalls') == 96 and num(st, 'passes') <= 2 and num(stn, 'xcalls') > 5 * 96)
+check('... each cut into no more bands than its clip has pixels (%s, against %s)' % (st.get('xstepmax'), stn.get('xstepmax')),
+      num(st, 'xstepmax') <= 10 and num(stn, 'xstepmax') == 32)
+for dlk in (16, 12):
+    rck, imk, stk, _ = render(small, 1, 'vga', env=xs, dl=dlk)
+    check('... a %d KiB list draws them to the pixel, asking PDXG only for a pass\'s own rows (%s calls, %s passes)' % (dlk, stk.get('xcalls'), stk.get('passes')),
+          rck == 0 and imk is not None and im is not None and int((imk != im).sum()) == 0 and num(stk, 'incomplete') == 0
+          and num(stk, 'xcalls') <= 2 * 96 and num(stk, 'passes') <= 8)
+rc, im, st, _ = render(forms, 2, 'vga')
+check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
+      and st.get('first') == 'number range', str(st))
+check('every Incomplete render names its first reason (QA R16)', not unnamed, '; '.join(unnamed[:4]))
 print('pdr_xchk: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAILED ' + f)
 sys.exit(1 if fails else 0)

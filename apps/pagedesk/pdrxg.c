@@ -178,6 +178,27 @@ static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc)
     return e;
 }
 
+/* QA R15: a shading paints nothing outside the clip, so one whose clip
+ * misses this pass's rows costs no module call at all - SYNTH.PDF asked
+ * PDXG for every knob on the page in every band's pass - and one in a
+ * small clip is cut into no more bands than the clip has pixels across
+ * (PDXG's floor is 4): 32 levels of a 3-pixel knob were 32 STATEs for 9
+ * pixels. Answers the steps (0: PDXG's 32), or 0xFFFF: nothing to paint */
+#ifdef PD_HOST
+extern int pdrh_noshcull;                   /* hosttest PDR_NOSHCULL: the A/B */
+#endif
+static pdw xg_steps(void)
+{
+    pdi d;
+#ifdef PD_HOST
+    if (pdrh_noshcull) return 0;
+#endif
+    if (GS.cx1 < GS.cx0 || GS.cy1 < GS.cy0 || !span_hit(GS.cy0, GS.cy1, g_gy0, g_gy1) || !span_hit(GS.cx0, GS.cx1, g_vcx0, g_vcx1))
+        return 0xFFFFu;
+    d = GS.cx1 - GS.cx0;
+    if (GS.cy1 - GS.cy0 > d) d = GS.cy1 - GS.cy0;
+    return d < 31 ? (pdw)(d + 1) : 0;
+}
 /* ---- sh: the polygons PDXG answers, each an ordinary fill (a /BBox record is a clip) ------------------------ */
 /* the shading `obj gen` (0: the resource of the current name), under the current CTM */
 /* [gfx far-candidate: per operator, once per cs/sc/scn/sh] */
@@ -186,9 +207,12 @@ static void xg_shade(pdw obj, pdw gen)
     pdw n, st = 0, p, np, k, n1;
     static pdb rec[PDGX_REC_HDR];
     static pdi pt[2];
+    pdw steps = xg_steps();
+    if (steps == 0xFFFFu) return;
     gs_push();
     do {
         xg_begin(obj ? 0 : PDGXI_CAT_SH);
+        g_gx.steps = steps;
         g_gx.rseg = g_xb; g_gx.roff = XG_RES; g_gx.rcap = XG_RCAP; g_gx.state = st;
         if (obj) { g_gx.objnum = obj; g_gx.gen = gen; }
         n = xg_req(PDV_GFX_SHADE);
@@ -216,6 +240,7 @@ static void xg_shade(pdw obj, pdw gen)
 static void xg_sh(void)
 {
     if (!g_havename || g_mode != PDR_INTERP) return;
+    if (xg_steps() == 0xFFFFu) return;          /* nothing on this pass's rows: no PDXG either */
     if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return; }
     xg_shade(0, 0);
 }
