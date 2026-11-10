@@ -130,10 +130,8 @@ static void pdu_job_abort(void)
 {
     int reopen;
     reopen = 0;
-    if (pdu_opauth == 1 && pdu_au_mode) {   /* ui: an open ask goes - the */
-        ovl_au_cancel();                /* leaf the shut path uses (D21); the */
-        pdu_pop_close_soon();           /* ask IS Preferences' second face */
-    }
+    if (pdu_opauth == 1 && pdu_au_mode)     /* ui: an open ask goes: closed, */
+        pdu_au_close();                 /* and painting nothing meanwhile (F3) */
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
@@ -728,8 +726,9 @@ void os88_onwake(void *win)
         pdu_nt_idle();
 
     pdu_rc_wake();                      /* recov */
-    if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
-        pdu_kick();
+    if ((pdu_job != J_NONE && !pdu_au_waits()) || pdu_pgwant || pdu_argp
+        || pdu_nav_owed())
+        pdu_kick();                     /* a job waiting for the user's key does not spin (F4) */
 }
 
 /* ---------------------------------------------------------------------------

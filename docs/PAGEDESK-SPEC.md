@@ -6165,6 +6165,17 @@ cancel when a job is running (`pdu_jcancel`, the order of PD-03): **the open
 job's cancel path must call `pdu_au_close()`**, which also zeroes the buffer;
 with no job running, Esc closes the popover and the answer is -1.
 
+Fix round (QA F3-F5): the prompt is centred in the canvas (the overlay moves
+the popover's rectangle after `pdu_pop_open` places it); a close paints
+nothing while it is going (`pdu_au_mode` 5, set by the leaves `ovl_au_end` and
+the keys' cancel), so no Preferences rows are painted over the canvas; and a
+job that waits for the person (`pdu_au_wait`, set while asking, wrong or
+asking the R6 question) does not re-post its wake: the key, the close or the
+answer posts it. Re-posting made the wake spin on disk work and kept the
+kernel's file-progress clock on the pointer for as long as the prompt waited.
+`pdu_au_close()` is now `ovl_au_end()`, a leaf (no path to the code that opens
+popovers, pdstk D21), and `pdu_job_abort` uses it.
+
 | mode | rows | keys |
 |---|---|---|
 | `AU_PW` asking | `Password: ***_` / blank / blank / `Enter: open  Esc: cancel` | printable ASCII appends (at most 127), Backspace deletes, Enter answers (an empty entry is ignored: the empty password was already tried), Esc cancels |
@@ -6205,9 +6216,9 @@ over while the mode is set. A refused overlay fetch makes ask, askr6 and busy
 answer 0 and shows nothing.
 
 **Errors.** `pdu_errtext` has one plain sentence for every code the round
-adds or re-means: `PDE_PASSWORD` "A password is needed.", `PDE_NOSLOT` the
-`PDE_NOMEM` sentence ("Not enough memory. Close a window and try again."), `PDE_ENCRYPT`
-"Its encryption handler is not supported." and `PDE_XREFSTM` "Its
+adds or re-means: `PDE_PASSWORD` "Password needed.", `PDE_NOSLOT` the
+`PDE_NOMEM` sentence ("Out of memory. Close a window, retry."), `PDE_ENCRYPT`
+"Its encryption is not supported." and `PDE_XREFSTM` "Its
 cross-reference stream is damaged." `PDE_NEEDMOD`/`PDE_NEEDMEM` are statuses
 the ladder consumes and never reach a sentence. The primary names no
 `PDF_INC_*` reason of its own: the module that sets the bit supplies the name
