@@ -401,6 +401,7 @@ void     pdu_pg_apply(const void *delta, unsigned len, int undo);
 #define pdu_tool_hint ovl_tool_hint
 #define pdu_undo_cmd ovl_undo_cmd
 int      pdu_tool_click(int x, int y);
+int      pdu_ovl_in(void);              /* pduslot.inc: the overlay is fetched */
 int      pdu_tool_hilite(void);         /* nav calls it when a Highlight selection ends */
 int      pdu_tool_delete(void);
 int      pdu_tool_enter(void);

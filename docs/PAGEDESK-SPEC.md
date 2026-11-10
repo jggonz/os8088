@@ -5171,6 +5171,11 @@ The primary:
   what they were (`xr_wseg`): kern_mega's `SEG_SUBC` makes a fresh descriptor
   per ask, and PDREND reads a changed `glyph_seg` as a new page view. The occupant is re-INITed
   only after a GLYPH grant;
+* hands PDREND the font bank again (`PDV_REND_FONTBANK`) after every such
+  re-INIT (`dc_inits`, shared with the open): an INIT that is not answering
+  PDREND's own ladder is a new document to it and forgets the bank, so the
+  XIDX and OSW that PDENG's OPEN asks for left every base-14 font of an
+  xref-stream file with no strike (QA R1, "font strike unavailable");
 * refuses by re-INITing anyway: a region never held has its field 0, and a
   held region asked to grow keeps its segment and KiB unchanged (a refusal is
   not an error).
@@ -5313,7 +5318,9 @@ cap is 65,024):
 | `pdu_bank_load` for a packed INDEX row (20.22.14): `part_off` worked out from row 5, the 65,024 adjacency check and the read cap gone | 64,875 | -14 |
 | QA R7: W its own claim (`sl_wsize`, PDWRT's buffers still in S), the release before a region or a growth refuses (`sl_relmem`), `pdu_ovl_room` (crt0's `CC_OVL_ROOM`), a failed bind freeing S and W | 64,959 | +84 |
 
-**65 bytes stay under the cap.**
+| QA R1/F8: `dc_inits` (ENG + REND INIT + the font bank) shared by the open and every region's re-INIT (-12); `pdu_ovl_in` and the tool's memory sentence when its overlay fetch was refused | 65,003 | +44 |
+
+**21 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key

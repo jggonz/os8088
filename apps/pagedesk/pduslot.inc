@@ -1175,6 +1175,15 @@ _pdu_region:
 xr_reinit:
     call xr_segs
     call x8_fix
+    ; (falls into dc_inits)
+
+; dc_inits - PDENG then PDREND INITed with pdu_xinit, then the font bank
+; handed to PDREND again: an INIT that is not answering PDREND's own ladder
+; is a new document to it and forgets the bank (pdrv.c verb_init), so a
+; region granted to PDENG's OPEN (XIDX, OSW: every xref-stream file) left
+; every base-14 font with no strike (QA R1). AX = 0 or the refusing INIT's
+; PDE_*, ZF set on 0
+dc_inits:
     xor ax, ax
     mov bx, PDV_ENG_INIT
     call dc_init
@@ -1182,6 +1191,29 @@ xr_reinit:
     mov ax, 1
     mov bx, PDV_REND_INIT
     call dc_init
+    jnz .r
+    cmp word [_pdu_bank], 0
+    je .r
+    mov ax, PDXB_FONTBANK_BYTES
+    push ax
+    xor ax, ax
+    push ax
+    push word [_pdu_xb]
+    mov ax, _pdu_xfb
+    push ax
+    call _pd_fcopy_out
+    add sp, 8
+    xor ax, ax
+    push ax
+    push ax
+    push ax
+    mov al, PDV_REND_FONTBANK
+    push ax
+    mov al, 1                       ; PDU_M_REND
+    push ax
+    call _pdu_mcall
+    add sp, 10
+    xor ax, ax                      ; (a refused bank is PDREND's own note)
 .r:
     ret
 
@@ -1209,6 +1241,16 @@ sl_relmem:
 pdu_ovl_room:
     cmp word [_pdu_socc], PDU_OCC_WRT_A
     jne _pdu_slot_free
+    ret
+
+; int pdu_ovl_in(void) - 1 when the overlay is here: a tool whose ovl_ call
+; answered "not handled" because its fetch was refused says MEMORY (QA F8)
+_pdu_ovl_in:
+    xor ax, ax
+    test byte [cc_ovrow + OP_R_FLAG], OP_FETCHED
+    jz .r
+    inc ax
+.r:
     ret
 
 ; (1) the overlay: a lazy part, fetched again by its next ovl_ call. Not
@@ -1642,35 +1684,8 @@ _pdu_doc_claim:
     mov ax, [_pdu_bankkb]
 .bk:
     mov [_pdu_xinit + PDXB_INIT_BANK_KB], ax
-    xor ax, ax
-    mov bx, PDV_ENG_INIT
-    call dc_init
+    call dc_inits
     jnz .limit
-    mov ax, 1
-    mov bx, PDV_REND_INIT
-    call dc_init
-    jnz .limit
-    cmp word [_pdu_bank], 0
-    je .ok
-    mov ax, PDXB_FONTBANK_BYTES
-    push ax
-    xor ax, ax
-    push ax
-    push word [_pdu_xb]
-    mov ax, _pdu_xfb
-    push ax
-    call _pd_fcopy_out
-    add sp, 8
-    xor ax, ax
-    push ax
-    push ax
-    push ax
-    mov al, PDV_REND_FONTBANK
-    push ax
-    mov al, 1                       ; PDU_M_REND
-    push ax
-    call _pdu_mcall
-    add sp, 10
 .ok:
     xor ax, ax
     jmp short .out
@@ -1683,6 +1698,7 @@ _pdu_doc_claim:
     push ax
     call _pdu_doc_free
     pop ax
+
 .out:
     add sp, 8
     pop bp
