@@ -4941,7 +4941,202 @@ round's final pass, not before.
 
 #### 20.22.8 Fonts from their programs (`fonts`)
 
-*Reserved; written by its agent before its code.*
+AP-14 and AP-15. A font whose program is embedded (`/FontFile2` TrueType,
+`/FontFile` Type 1, `/FontFile3` Type1C, CIDFontType0C and OpenType) is drawn
+from its OUTLINES; a Type0 font works through its CMap; a Type 3 font is drawn
+from its own glyph procedures. Per L1 the work is done at INTERPRETATION time by
+the slot occupant **PDXF**, and its results live in core: a font record in the
+XC cache and the glyph bitmaps in a SYNTHETIC STRIKE of the glyph cache. Band
+drawing never needs PDXF, and a later pass or page needs it only for a glyph or a
+size it has not yet seen.
+
+**Files.** `apps/pagedesk/pdxf.asm` (the door, `PDM_MAGIC_FNT`, door at +8, the
+`pdk_*` gate, `pdx_muldiv` and the edge-fill inner loops), `pdxf.c` (the verb
+dispatcher) and the `#include`d `pdxfsf.c` (sfnt: cmap, `glyf`, composites),
+`pdxfcf.c` (CFF and the Type 2 charstring machine), `pdxft1.c` (Type 1: eexec,
+charstrings, `seac`, flex), `pdxfrs.c` (flatten + coverage + 1-bit pack),
+`pdxfcm.c` (CMap and ToUnicode parsing), `pdxfnm.c` (glyph names). Every one has
+a host twin harness in `apps/pagedesk/hosttest/pdx_*.c`. PDREND's side is
+`pdrf.c` (font records, encodings, widths), and `pdri.c`'s text arms
+(`font_res`, `text_show`, `text_glyph`, `glyph_emit` and the text operators) and
+`pdrd.c`'s `strike_pick`/`strike_load`/`draw_glyphs`. Generator and reader:
+`tools/os88pdfx_fonts.py`; fixtures `tests/pdfany/fonts/`.
+
+**What is read.** TrueType (`glyf`/`loca`/`cmap` formats 0, 4, 6 and 12/`hmtx`/
+`head`/`maxp`, `post` format 2 names, composite glyphs with offsets and 2x2
+scales, point-to-point composites refused as the notdef), CFF (INDEX, Top DICT,
+charset and Encoding formats 0/1/2, the Type 2 charstring machine without hint
+interpretation but with `hintmask` byte skipping, local and global subrs with
+bias, flex and its variants, `endchar` with four operands as `seac`, CID-keyed
+fonts through FDSelect 0/3 and FDArray), OpenType with a `CFF ` table, Type 1
+(PFA/PFB and the PDF raw form: `Length1/2/3`, eexec binary or hex, `lenIV`,
+`/Subrs`, `/CharStrings`, `hsbw`/`sbw`, `seac`, `callothersubr` flex 0-3 and
+hint replacement, `div`, the font's own `/Encoding` array). **No hinting
+interpreter** (TrueType instructions and Type 1/CFF hints are skipped). Not
+read, each answering `PDF_INC_FONT` with a named note and the substitute face:
+a program larger than the workspace, TrueType collections, point-to-point
+composites, CFF2 / variations, `glyf` with hostile counts (bounded and refused),
+Type 1 multiple-master, Type42, a CMap with three- or four-byte codes, predefined
+CJK CMaps by name (`UniJIS-UCS2-H`..., no data on this machine; `Identity-H/V`
+is built in).
+
+**The program is parsed once, in PDXF's workspace.** `PDV_FNT_LOAD` reads the
+`/FontFile*` stream (PDENG `STRM_OPEN`/`STRM_READ` into the workspace) and keeps
+it there; the format is detected from the bytes, not from the key. One program is
+resident at a time (the one last loaded); a glyph of another font asks for a
+reload (a second `LOAD`, no change to the XC record). Workspace: **40 KiB**
+declared in 20.22.2's table (`PDXF_WS_KB`), laid out as the program (the
+workspace less 4,096 bytes) and a 4,096-byte CIDToGIDMap window (entries for CIDs
+0-2047 of a non-identity map; later CIDs answer the notdef with a note). A
+program that does not fit is refused (`PDE_LIMIT`, then the substitute face).
+PDXF's own image + bss is at most 61,440 including its scratch: the outline
+point buffer (512 points), the contour ends, the edge/accumulator rows (48 rows x
+(40 + 1) cells of i16) and the Type 2/Type 1 stacks.
+
+**Verbs** (reserved 0xD8-0xE7; the structs are in `pdabi.h`'s `[fonts 20.22.8]`
+block, the exchange block holds one at offset 0; PDXF copies it to its bss at
+entry because it calls PDENG through `pdxb_init.eng_off/seg` and PDENG reuses
+the block):
+
+| verb | in | out |
+|---|---|---|
+| `PDV_FNT_LOAD` 0xD8 | `pdxf_load`: stream object/generation, a hint (0 detect, `PDFK_*`), `cidtogid` object (0 none) | kind (`PDFK_TT`, `PDFK_CFF`, `PDFK_T1`), glyph count, units per em, the font bbox top/bottom per 1000 em, flags (`PDFKF_CID`, `PDFKF_CIDMAP`), `PDE_LIMIT`/`PDE_FONT` |
+| `PDV_FNT_ENC` 0xD9 | `pdxf_enc`: the font's base encoding as 224 PD Latin bytes (codes 32-255), up to 8 `/Differences` (code, name) pairs per call (`more` = continued), a `symbolic` flag, a far buffer for the 224 u16 gids | the buffer filled (gid 0 = no glyph) |
+| `PDV_FNT_GLYPH` 0xDA | `pdxf_glyph`: gid, em in 1/64 px, the strike's ascent/descent rows, a far buffer (seg, off, cap) | width px, left bearing px (i8), bytes written, the advance in 1/64 px, `PDE_LIMIT` if it does not fit 32 px wide or the buffer |
+| `PDV_FNT_PATH` 0xDB | `pdxf_path`: gid, a far buffer | the outline as `PDFP_*` ops in font units (cubic only), its length, units per em |
+| `PDV_FNT_CMAP` 0xDC | `pdxf_cmap`: a stream object, kind (`PDFC_ENC` an Encoding CMap, `PDFC_UNI` a ToUnicode), a far buffer (seg, off, cap) | the compact table (below) and its byte length, `PDE_LIMIT` when it does not fit |
+| `PDV_FNT_WIDTHS` 0xDD | `pdxf_widths`: a CIDFont dictionary object, a far buffer | `/DW` and the `/W` ranges as (first, last, width) u16 triples, sorted, at most 512 |
+| `PDV_FNT_ADV` 0xDE | `pdxf_glyph`: gid | the program's advance in 1/1000 em (for a font with no `/Widths`/`/W`) |
+
+Only `GLYPH` is hot. A verb that finds PDXF's program is not the one it was given
+answers `PDE_NOTFOUND` and the caller `LOAD`s again (PDREND keeps what to load in
+the font record). All verbs are bounded slices: one glyph is one verb; `ENC` and
+`WIDTHS` walk at most 1,024 items a call and say `more`.
+
+**The CMap table** (a PDREND-readable far buffer, `XCK_CMAP`): `+0` u8 code bytes
+(1 or 2), `+1` u8 flags (`PDFC_IDENT` built-in identity, `PDFC_VERT` -V),
+`+2` u16 range count n, `+4` n x 6 bytes `lo u16, hi u16, value u16` sorted by
+`lo`, ranges disjoint (a later definition wins). For `PDFC_ENC` the value is the
+CID of `lo`, `lo+1`... ; for `PDFC_UNI` it is the first UTF-16 unit of `lo`, `lo+1`,
+... A `bfrange` with an array and a `bfchar` with a ligature become singles
+(ligatures keep their first unit). `PDREND` looks a code up by binary search in
+far memory (`cmap_find`, about 90 bytes); there is no PDXF call at draw time.
+
+**The font record** (XC cache, `XCK_FONT`, key = the font dictionary's object
+and generation), laid out by PDREND (`pdrf.c`):
+
+```
++0  u8 kind            0 base-14 face, 1 TT, 2 CFF, 3 T1, 4 Type3, 5 unsupported
++1  u8 flags           bit0 Type0, bit1 vertical, bit2 symbolic, bit3 has ToUnicode,
+                       bit4 CIDToGIDMap stream, bit5 program loaded ok
++2  u16 prog_obj, prog_gen     the FontFile stream (re-LOAD)
++6  u16 upem                  units per em (1000 for Type 1/CFF)
++8  u16 asc, desc             1/1000 em, from the program's bbox
++12 u16 cmap_off, uni_off     XC offsets of XCK_CMAP entries (0 = none)
++16 u16 w_off, dw             XC offset of the /W triples, the /DW
++20 u16 cidmap_obj            the CIDToGIDMap stream
++22 u16 gid[224]              simple fonts: code 32..255 -> gid (448 bytes)
++470 u16 slot[128]            the slot table: gid+1 of the glyph holding that
+                              strike slot (0 empty), an open-addressed hash
+```
+
+A record is built when `Tf` first names the font. While PDXF is absent the font is
+`kind` 0 with `PDF_INC_FONT` "font substituted" NOT yet raised: `x_need(PDX_FNT)`
+is recorded, the run draws in the substitute face (the family/style guessed from
+`/BaseFont` and the descriptor's `/Flags`), and the ladder (L2) re-runs the pass
+with PDXF resident. If PDXF cannot be had, the substitute stays and
+`PDF_INC_FONT` says so.
+
+**The synthetic strike.** Glyph slot numbers are the position in the record's slot
+table (1-127). A strike is `(font, size)`: strike id `0x0200 | k`, bank 2, `k` in
+the synthetic table `g_syn[8]` of {font key, px, asc, desc, offset}. Its image is
+the PDFB strike layout of 11.2 verbatim: 127 x 4-byte glyph records (first = 1,
+last = 127), then the bitmap base, rows `asc + desc`, at most 4 bytes a row, each
+glyph's rows MSB first. Synthetic strikes live in the TOP **8 KiB of the glyph
+claim** (the bank strikes keep the rest), each in a 2,048-byte block (4,096 above
+20 px): 512 bytes of records and the bitmaps bump-allocated after them, bitmap
+offsets u16 from the base. A strike block is zeroed when made. The area is
+emptied whole at `pass_begin` when more than 6 KiB of it is in use (all its
+glyphs are then re-made, with PDXF resident, by the ladder). A glyph that does not
+fit its block (more than 40 bytes of bitmap left at 12 px for ~75 glyphs...) is
+dropped with `PDF_INC_FONT` "font cache full". The glyph claim must be **32 KiB**
+(`glyph_kb`) for this: asked of plat, 20.22.2.
+
+A run (`DLR_GLYPHS`) of such a font carries the strike id and, in each glyph's
+`code` byte, the SLOT. `draw_glyphs` reads the synthetic strike exactly as it
+reads a bank strike; the transformed-glyph cache, rotation by a quarter turn and
+the `scale` field all apply unchanged. The glyph's raster is made when
+`text_glyph` first sees it: if its slot is empty and `x_have(PDX_FNT)`, `GLYPH`
+fills it; if PDXF is absent, `x_need(PDX_FNT)` and the glyph is skipped this
+pass.
+
+**The rasteriser.** Outline points in font units are scaled to 26.6 pixels with
+a 32-bit intermediate (`pdx_muldiv`), quadratic and cubic curves are flattened by
+iterative subdivision on an explicit stack (no recursion; flat when the control
+points are within 1/4 px of the chord), and the area coverage of every edge is
+accumulated per cell in 8.8 (the signed-area method), then packed to one bit at a
+coverage threshold of `PDXF_THR` (the host comparison against `mutool draw` sets
+it; 21.3 records the numbers). The edge accumulation and the pack are assembly
+(`pdxf.asm`) with a C twin (`pdxfrs.c`) held byte for byte to it. A glyph wider
+than 32 px or taller than the rows, or a font drawn at more than 32 px, is not
+bitmapped: it goes out as a PATH (`PDV_FNT_PATH` -> the interpreter's
+`path_move/path_line/path_curve` -> the existing filler), transformed by
+`FontMatrix x text matrix`, and that is also the route for text under a
+non-quarter rotation.
+
+**Encodings.** A simple font's `gid[224]` is built by `PDV_FNT_ENC` from the base
+encoding PDREND already computed (PD Latin per code), the `/Differences` names
+(resolved by PDXF, which carries the Adobe glyph names for PD Latin and the
+`uniXXXX`/`gNN`/`cidNN` forms), and the program: TrueType per PDF 9.6.6.4
+(non-symbolic: the `(3,1)` cmap by Unicode, else `(1,0)`; symbolic: `(3,0)` at
+`0xF000+code`, `0x0000+code`, then `(1,0)`; a name present in `post` wins over the
+cmap for a name-addressed glyph), Type 1 and CFF by glyph name (the `/Encoding`
+of the program when the PDF's is absent), a CFF CID font by CID. A Type0 font maps
+code -> CID through its CMap (`Identity-H/V` built in), CID -> gid through
+`CIDToGIDMap` (Identity, or the stream window) for CIDFontType2, and CID -> glyph
+through the charset for CIDFontType0; vertical writing (`-V`) uses the vertical
+origin `0.88 em` and `W2`/`DW2` default metrics (-1000), without `W2` ranges.
+
+**ToUnicode and the text map.** `glyph_emit`'s text-map record keeps its
+12 bytes and its `code` = PD Latin byte (20.22.1). For a font with a `/ToUnicode`
+the byte is the Latin-1/cp1252 byte of the mapped Unicode when it has one (U+0020-
+007E and A0-FF directly, U+20AC, U+2013, U+2014, the quotes and bullet through the
+32 cp1252 specials), else 0 (the glyph is selectable and skipped by Find). Without
+a ToUnicode a simple font uses its base encoding as today; a Type0 font with none
+maps nothing (`code` 0). Search (PDENG) and select/copy therefore find the text of
+a font whose codes are glyph indices.
+
+**Type 3.** Not by C recursion (`pdstk` refuses a cycle). A show operator on a
+Type 3 font QUEUES each (code, pen, matrix) in a small ring (`g_t3q`, 16 entries
+of 12 bytes: code, pen x/y in 16.16, the glyph-space-to-device scale and the
+colour) and pushes the glyph's `/CharProcs` stream as a frame of the interpreter's
+form machine (`isform` = 2): the frame's CTM is `FontMatrix x text matrix at the
+pen`, the operators of the proc run in the same `interp_run`, `d0` leaves the
+colour free, `d1` LOCKS it (the interpreter ignores colour operators until the
+frame ends), and `frame_end` starts the next queued glyph. The advance is
+`/Widths` (x `FontMatrix`) as for any simple font. Depth: Type 3 within Type 3 uses
+the form frames and `PDF_INC_LIMIT` at `PD_MAXFORMDEPTH`. A glyph proc's image
+mask (`BI`, `Do`) is the common case and needs nothing more. The hook is in
+`interp_run`, which is rcore's: the Type 3 drain hook (`t3_drain()` before
+reading each token, `t3_end_frame()` in `frame_end`) is requested of rcore in
+DECISIONS.
+
+**Budgets.** PDREND +1,100 (the font record builder, the synthetic-strike
+branches of `strike_pick`/`strike_load`, the slot and CMap lookups, the Type 3
+queue). PDXF at most 61,440 image + bss. Chains: `text_glyph` -> PDXF `GLYPH` is
+the text path (about 10 frames of PDREND, the 34-byte door, then PDXF's deepest
+frame) and must stay under 1,776 with `GLYPH`'s own deepest frame under 600 (the
+Type 2 machine is iterative; flattening uses a static stack).
+
+**Checks.** Host: `tools/os88pdfx_fonts.py` makes the fixtures (TrueType,
+CFF/OpenType, Type 1, Type0/Identity, Type0 with an embedded CMap and a
+`CIDToGIDMap` stream, a ToUnicode, a Type 3), each from an OFL font on this host
+with its provenance beside it; `hosttest/pdx_check.py` renders every fixture
+through PDXF's host build and `mutool draw` at 8, 10, 12, 14 and 16 px and reports
+the differing-pixel rate per size. An ASan/UBSan fuzz (`hosttest/pdx_fuzz.c`)
+mutates the program bytes of each fixture. Suite rows (named, not run by agents):
+the `pdfany` fonts row, `pdxf` fuzz row, `t_pdstk`, `t_pdkgate`, the PDREND size
+assertion.
 
 #### 20.22.9 Colour spaces, functions, shading, patterns (`gfx`)
 
