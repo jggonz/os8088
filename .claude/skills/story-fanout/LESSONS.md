@@ -207,3 +207,15 @@ fixing the bugs that come up during testing."*
 DONE, with `make` after every merge. When every feature is in, run one QA pass
 in emulation over the whole feature, list the bugs, fix them, and only then run
 the soak union and `test-full` (SKILL.md, Steps 4-6).
+
+## The completion line reported rc=0 for a failed build
+
+**PageDesk any-PDF (#354), 2026-11-09.** The brief's background wrapper was
+`(cmd > out 2>&1; echo "... $(date +%H:%M) ... rc=$?")`. The lead's own `make`
+logged `finished rc=0` with `make: *** [test-fast] Error 1` in its output: the
+`$(date)` command substitution ran first and reset `$?`. Every agent using the
+wrapper could report a failed command as passed.
+
+**Rule:** capture the status before anything else runs: `cmd > out 2>&1;
+rc=$?; echo "... rc=$rc"`. A status line is a claim; grep the `.out` for
+`Error`/`FAIL` before relying on a zero.

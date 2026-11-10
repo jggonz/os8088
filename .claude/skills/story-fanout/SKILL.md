@@ -101,8 +101,9 @@ first. `COMMON.md` carries:
   minutes before calling the agent stalled);
 - **the completion rule**: an agent never goes idle waiting for its own
   command. A long command runs in the foreground with a timeout, or in the
-  background as `(cmd > <logs>/<key>-<what>.out 2>&1; echo "[<key>] $(date
-  +%H:%M) STATUS: PROGRESS <what> finished rc=$?" >> <logs>/<key>.log)`, so
+  background as `(cmd > <logs>/<key>-<what>.out 2>&1; rc=$?; echo "[<key>]
+  $(date +%H:%M) STATUS: PROGRESS <what> finished rc=$rc" >> <logs>/<key>.log)`
+  (capture `rc` FIRST: the `$(date)` substitution resets `$?`), so
   that the finish is itself a log line the agent's own Monitor (or the lead's)
   sees. "Waiting for the build" with no such line is a stall;
 - **no `git stash`, ever**: the stash stack is shared by every worktree of the
