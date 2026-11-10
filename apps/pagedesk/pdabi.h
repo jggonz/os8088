@@ -690,6 +690,9 @@ struct pdxb_img {
 /* [blend 20.22.10] */
 /* [fonts 20.22.8]  */
 /* [img 20.22.11-13]*/
+#define PDIMG_NATIVE 0x0004 /* in: the /ColorSpace is not a device space: deliver
+                               PDIM_N8 in the image's own components (20.22.11) */
+/* [img end]        */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];
