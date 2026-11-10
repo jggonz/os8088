@@ -347,6 +347,8 @@ make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # room for; the 1.44MB disk alone is
                                       # released, as PROGRAMS/PIXEL/PIXEL144.IMG
 make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
+make pagedeskdisk                     # pagedesk*.img -- PageDesk and its eight
+                                      # sample PDFs, PROGRAMS/PAGEDESK
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live

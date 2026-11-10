@@ -468,6 +468,17 @@ ITEMS = [
      "software disk and the 360KB music disk; at 1.2MB and 720KB it is "
      "here.",
      [("xtmp3120.img", "1.2MB", ""), ("xtmp3720.img", "720KB", "")]),
+    ("progs", "PageDesk", False,
+     "A PDF viewer and editor. It opens a PDF, draws its pages, finds text "
+     "in it, and adds highlights, notes, text boxes, drawings and page "
+     "changes, which it saves under a new name and never over the original. "
+     "It is made for a PC with 640KB of memory. Each disk carries the program and eight sample "
+     "PDFs, one of them a guide to PageDesk itself; all but the 360KB disk "
+     "also carry the extra font sizes. PDFONTS.TXT on the disk is the "
+     "licence of the fonts it uses. PageDesk is on the everything sets and "
+     "the live media too.",
+     [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
+      ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", "")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -582,6 +593,7 @@ PROGRAMS = {
     "WaveRack": ("WAVERACK", "WAVE"),
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
+    "PageDesk": ("PAGEDESK", "PDESK"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),
