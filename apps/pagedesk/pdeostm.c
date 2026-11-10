@@ -232,6 +232,19 @@ static pdw os_pair(void)
 /* Member `idx` of stream `stm`, which must be object `num`, into os_pos
  * (ob_null when the stream does not hold it): pair idx first, then every
  * pair (the index in the cross-reference is a hint, 7.5.7). */
+/* Every pair os_find reads goes into the offset cache, tagged with its
+ * stream (QA R6): a member found later needs no read of the header, which
+ * is at the stream's start and so, past the ring, a decode from the start */
+static void os_note(pdw stm, pdw first)
+{
+    pdw slot, k = (pdw)(first + os_po);
+    if (k < first || k == 0xFFFF || os_pn == 0xFFFF) return;
+    slot = (pdw)(PDE_TBL_CACHE + (os_pn & (PDE_OFFCACHE - 1)) * PDE_OCBYTES);
+    pd_fpokew(g_tseg, slot, os_pn);
+    pd_fpokew(g_tseg, (pdw)(slot + 2), k);
+    pd_fpokew(g_tseg, (pdw)(slot + 4), (pdw)(0x8000 | stm));
+}
+
 static pdw os_find(pdw stm, pdw idx, pdw num)
 {
     pdw rc, k;
@@ -243,12 +256,17 @@ static pdw os_find(pdw stm, pdw idx, pdw num)
     os_pos.hi = (pdw)(0x8000 | stm); os_pos.lo = 0;
     lx_seek(&os_pos);
     if (idx < g->n) {
-        for (k = 0; k < idx && !os_pair(); k++) ;
-        if (k == idx && !os_pair() && os_pn == num) goto found;
+        for (k = 0; k < idx && !os_pair(); k++) os_note(stm, g->first);
+        if (k == idx && !os_pair()) {
+            os_note(stm, g->first);
+            if (os_pn == num) goto found;
+        }
         lx_seek(&os_pos);
     }
-    for (k = 0; k < g->n && !os_pair(); k++)
+    for (k = 0; k < g->n && !os_pair(); k++) {
+        os_note(stm, g->first);
         if (os_pn == num) goto found;
+    }
     if (lx_err) return lx_err;
     ob_null = 1;
     return PDE_OK;
@@ -266,15 +284,12 @@ static pdw ox_enter(pdw num, pdw gen)
     pdw rc, slot, stm = (pdw)(xo_off.hi & 0x7FFF), idx = xo_off.lo;
     if (gen) { ob_null = 1; return PDE_OK; }          /* a member's generation is 0 */
     slot = (pdw)(PDE_TBL_CACHE + (num & (PDE_OFFCACHE - 1)) * PDE_OCBYTES);
-    if (pd_fpeekw(g_tseg, slot) == num && num != 0xFFFF) {
-        os_pos.lo = pd_fpeekw(g_tseg, (pdw)(slot + 2));
-        os_pos.hi = pd_fpeekw(g_tseg, (pdw)(slot + 4));
-    } else {
-        rc = os_find(stm, idx, num);
+    os_pos.hi = pd_fpeekw(g_tseg, (pdw)(slot + 4));
+    if (pd_fpeekw(g_tseg, slot) == num && num != 0xFFFF && os_pos.hi == (pdw)(0x8000 | stm))
+        os_pos.lo = pd_fpeekw(g_tseg, (pdw)(slot + 2));    /* this stream's pair, read before */
+    else {
+        rc = os_find(stm, idx, num);                    /* (which caches it) */
         if (rc || ob_null) return rc;
-        pd_fpokew(g_tseg, slot, num);
-        pd_fpokew(g_tseg, (pdw)(slot + 2), os_pos.lo);
-        pd_fpokew(g_tseg, (pdw)(slot + 4), os_pos.hi);
     }
     L = &fobj;
     lx_seek(&os_pos);

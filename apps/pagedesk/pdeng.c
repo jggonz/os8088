@@ -106,6 +106,11 @@ static pdw   npages;
 static struct pw_frame pw_st[PD_MAXDEPTH];
 static pdw   pw_sp, pw_visits, pw_root_n, pw_root_g;
 static pdw   arena_top;
+/* ANNOTS' cursor (QA R6): page + 1 (0 = none), the next index, and where the
+ * element before it ended - so a walk of /Annots in order is not O(n^2) and
+ * does not re-enter an object-stream page dictionary for every element */
+static pdw   an_pg1, an_k;
+static struct pd_u32 an_pos;
 
 /* ---- streams (pdestrm.c) ------------------------------------------------- */
 static struct sctx ctxs[PDE_MAXCTX];
