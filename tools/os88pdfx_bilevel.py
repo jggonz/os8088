@@ -348,6 +348,12 @@ def segment(num, typ, data, refs=(), page=1):
     out += struct.pack('>I', page) if page > 255 else bytes([page])
     return out + struct.pack('>I', len(data)) + data
 
+def segment_unknown(num, typ, data, trailer_rows, mmr=False, page=1):
+    """a generic region segment of UNKNOWN length (7.2.7): the length field is FFFFFFFF, the data ends with
+    the marker (FF AC for MQ, which the encoder's flush already wrote; 00 00 for MMR) and the true row count"""
+    seg = segment(num, typ, b'', page=page)[:-4] + struct.pack('>I', 0xFFFFFFFF)
+    return seg + data + (b'\x00\x00' if mmr else b'') + struct.pack('>I', trailer_rows)
+
 def page_info(w, h, default=0, comb=0, striped=0):
     f = (default << 2) | (comb << 3)
     return struct.pack('>IIIIBH', w, h, 0, 0, f, striped)

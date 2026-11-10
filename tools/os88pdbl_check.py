@@ -1,3 +1,4 @@
+import struct
 #!/usr/bin/env python3
 """os88pdbl_check - PDXI's bilevel decoders against their reference encoders (20.22.12).
 
@@ -351,6 +352,37 @@ def check_jb2_refagg(rnd, bins, use_mutool=False):
 
 
 
+def check_jb2_unknown(rnd, bins, use_mutool=False):
+    """generic regions of unknown length (7.2.7) between ordinary ones; the region's stated height is provisional"""
+    fails = total = 0
+    with tempfile.TemporaryDirectory() as td:
+        for case in range(40):
+            w = rnd.choice([8, 33, 100, 200]); h = rnd.choice([10, 31, 64]); mmr = rnd.random() < .3
+            img = rimg(w, h, 0.2, rnd); other = rimg(w, h, 0.2, rnd)
+            y2 = h
+            page = [[0] * w for _ in range(2 * h)]
+            compose(page, other, 0, 0, 0); compose(page, img, 0, y2, 0)
+            d = bytearray(F.generic_segment(img, 0, y2, 0, 0, 0, None, mmr))
+            d[4:8] = struct.pack('>I', h + rnd.randint(0, 9))          # provisional height
+            segs = [F.segment(0, 48, F.page_info(w, 2 * h)), F.segment(1, 38, F.generic_segment(other, 0, 0)),
+                    F.segment_unknown(2, 38, bytes(d), h, mmr), F.segment(3, 38, F.generic_segment([[0] * w], 0, 0))]
+            if use_mutool:
+                mp = mutool_pgm(segs, None, w, 2 * h, td); total += 1
+                if mp != page: print('MUTOOL differs unknown case', case, w, h, mmr); fails += 1
+                continue
+            data = b''.join(segs)
+            for want in (0, w // 2):
+                for bn in bins:
+                    res, err = run_jb2(bn, data, None, w, 2 * h, want, td); total += 1
+                    if res is None: print('FAIL run', case, err); fails += 1; continue
+                    got, sc = res
+                    if got != jb2_expect(page, w, 2 * h, sc):
+                        open('/tmp/failu_%d.jb2' % case, 'wb').write(data); print('FAIL unknown case', case, w, h, mmr, 'want', want); fails += 1
+    print('jbig2 unknown%s: %d runs, %d failed' % (' (mutool)' if use_mutool else '', total, fails))
+    return fails
+
+
+
 def custom_table(rnd, oob, name):
     """-> (segment data, HuffTab) for a custom table covering -64..63 in 8 lines"""
     lines = [(4, 4)] * 8
@@ -564,6 +596,8 @@ if __name__ == '__main__':
         if what == 'mutool-jb2-generic': f += check_jb2_generic(rnd, BINS, True)
         if what == 'jb2-refagg': f += check_jb2_refagg(rnd, BINS)
         if what == 'mutool-jb2-refagg': f += check_jb2_refagg(rnd, BINS, True)
+        if what == 'jb2-unknown': f += check_jb2_unknown(rnd, BINS)
+        if what == 'mutool-jb2-unknown': f += check_jb2_unknown(rnd, BINS, True)
         if what == 'jb2-multi': f += check_jb2_multi(rnd, BINS)
         if what == 'mutool-jb2-multi': f += check_jb2_multi(rnd, BINS, True)
         if what == 'mutool-ccitt': f += check_mutool_ccitt(rnd)

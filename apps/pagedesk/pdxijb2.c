@@ -100,14 +100,31 @@ static pdb jb_unb;              /* the segment's length is unknown (unbounded)  
 static pdb jb_sub;              /* a sub-limit inside the segment (MMR / refinement data of a stated size) */
 static pdw jb_subn;
 
+/* An unknown-length segment (generic regions only, 7.2.7): its end is the marker FF AC (MQ) or 00 00 (MMR)
+ * followed by the true row count. jb_open scans every such segment once (jb_skip) and keeps its length and
+ * rows (jb_ut_*); later passes see an ordinary bounded segment with the true height. */
+static pdw jb_uh, jb_un, jb_uch, jb_ucl;    /* last two bytes, bytes read (saturating), the 32-bit count */
+static pdb jb_umm;
+#define JB_NU 4
+static pdw jb_ut_sn[JB_NU], jb_ut_h[JB_NU], jb_ut_l[JB_NU], jb_ut_rh[JB_NU], jb_ut_rl[JB_NU];
+static pdb jb_nut;
 static int jb_getb(void)
 {
+    int c;
     if (jb_sub) { if (!jb_subn) return -1; jb_subn--; }
     if (!jb_unb) {
         if (!jb_lh && !jb_ll) return -1;
         if (!jb_ll) { jb_lh--; jb_ll = 0xFFFF; } else jb_ll--;
+        return ix_get();
     }
-    return ix_get();
+    c = ix_get();
+    if (c >= 0) {
+        jb_uh = (pdw)((jb_uh << 8) | (pdw)c);
+        if (jb_un < 255) jb_un++;
+        if (jb_un == 18) jb_umm = (pdb)(c & 1);
+        if (!++jb_ucl) jb_uch++;
+    }
+    return c;
 }
 
 /* ---- the MQ decoder (T.88 annex E, hardware convention) -------------------- */
@@ -931,11 +948,26 @@ static int jb_hdr(void)
     if (jb_eof) return 1;
     jb_lh = jb_hi; jb_ll = jb_lo;
     jb_unb = (pdb)(jb_hi == 0xFFFFu && jb_lo == 0xFFFFu);
+    if (jb_unb) {
+        pdw k;
+        jb_uh = 0; jb_un = 0; jb_uch = jb_ucl = 0; jb_umm = 0;
+        for (k = 0; k < jb_nut; k++)
+            if (jb_ut_sn[k] == jb_sn) { jb_unb = 0; jb_lh = jb_ut_h[k]; jb_ll = jb_ut_l[k]; }
+    }
     return 0;
 }
 static void jb_skip(void)
 {
-    if (jb_unb) return;
+    if (jb_unb) {
+        while (jb_un < 20 || jb_uh != (jb_umm ? 0x0000u : 0xFFACu)) { if (jb_getb() < 0) return; }
+        jb_b32();
+        if (jb_nut < JB_NU && jb_st >= 36 && jb_st <= 39) {
+            jb_ut_sn[jb_nut] = (pdw)jb_sn; jb_ut_h[jb_nut] = jb_uch; jb_ut_l[jb_nut] = jb_ucl;
+            jb_ut_rh[jb_nut] = jb_hi; jb_ut_rl[jb_nut] = jb_lo; jb_nut++;
+            jb_unb = 0; jb_lh = jb_ll = 0;
+        }
+        return;
+    }
     while (jb_lh || jb_ll) { if (jb_getb() < 0) { jb_lh = jb_ll = 0; break; } }
 }
 
@@ -969,6 +1001,7 @@ static int jb_region(void)
     jb_b32(); jb_ry = jb_lo; if (jb_hi) jb_ry = 0xFFFFu;
     f = jb_b();
     jb_rop = (pdw)(f & 7);
+    { pdw k; for (k = 0; k < jb_nut; k++) if (jb_ut_sn[k] == jb_sn) { jb_rh = jb_ut_rl[k]; if (jb_ut_rh[k]) jb_rh = 0xFFFFu; } }
     return jb_eof ? 1 : 0;
 }
 static int jb_inband(void)
@@ -1672,7 +1705,7 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
     pdw e, n, s, segn = 0, nreg = 0, cand = 0;
     jb_globals = globals; jb_ih = ih; jb_inc = 0; jb_pw = 0; jb_stream = 0;
     ix_open(0);
-    jb_by0 = 0; jb_brows = 0; jb_rb = 0;
+    jb_by0 = 0; jb_brows = 0; jb_rb = 0; jb_nut = 0;
     for (;;) {                  /* find the page information */
         if (jb_hdr()) return PDE_SYNTAX;
         segn++;
@@ -1691,8 +1724,8 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
             nreg++;
             if ((jb_st == 38 || jb_st == 39) && !jb_unb) cand = segn;
         }
-        if (jb_unb) { nreg = 2; break; }
         jb_skip();
+        if (jb_unb) { nreg = 2; break; }
     }
     jb_wsz = JW_SIZE;
 #ifdef PD_HOST
