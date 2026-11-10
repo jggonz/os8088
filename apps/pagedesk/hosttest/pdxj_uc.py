@@ -2,11 +2,14 @@
 """pdxj_uc - the REAL PDXJ.MOD (cc8086's output, nasm'd) run in Unicorn's real-mode
 x86 and held to the host build, row for row (PAGEDESK-SPEC 20.22.13.8).
 
-    python3 apps/pagedesk/hosttest/pdxj_uc.py [-k substr] [--count] [--kb N]
+    python3 apps/pagedesk/hosttest/pdxj_uc.py [-k substr] [--count] [--kb N] [--eng]
 
 The host build proves the algorithm; this proves the 16-bit module: the compiler's
 arithmetic, the segment discipline (SS != DS, far workspace) and the door. The
-codestream is passed inline (the PDENG path is the primary's integration test).
+codestream is passed inline, or with --eng through a stand-in PDENG door
+(hosttest/pdxj_engstub.asm: STRM_OPEN with accept = PDSA_CODEC, STRM_READ into the
+module's buffer, STRM_CLOSE), which exercises the module's engine path and its
+register contract; the real PDENG is the lead's integration test.
 --count hooks every instruction and prints, per fixture, instructions, bytes
 fetched and the 8088 cycle estimate (docs in PAGEDESK-SPEC 20.22.13.10).
 Exits 77 without Unicorn, and 77 when build/PDXJ.MOD is not built (make pdxj).
@@ -29,6 +32,8 @@ FIX = os.path.join(ROOT, 'tests', 'pdfany', 'jpx')
 HOST = os.path.join(ROOT, 'build', 'pdxj', 'pdxj_test')
 
 SEG_MOD, SEG_STK, SEG_XB, SEG_WS, SEG_SRC, SEG_ROW = 0x1000, 0x2000, 0x2400, 0x3000, 0x4000, 0x5F00
+SEG_ENG = 0x7000
+ENG_SRCLEN, ENG_OPENS, ENG_CLOSES = None, None, None
 RETSEG, RETOFF = 0x0050, 0x0000
 img = open(MOD, 'rb').read()
 magic, abi, isz, bsz = struct.unpack_from('<HHHH', img)
@@ -37,9 +42,13 @@ assert isz == len(img), 'PDXJ.MOD header'
 
 class Mod:
     def __init__(self, kb=60):
+        global ENG_SRCLEN, ENG_OPENS, ENG_CLOSES
         self.uc = Uc(UC_ARCH_X86, UC_MODE_16)
         self.uc.mem_map(0, 0x110000)
         self.uc.mem_write(SEG_MOD << 4, img)
+        eng = open(os.path.join(ROOT, 'build', 'pdxj', 'engstub.bin'), 'rb').read()
+        self.uc.mem_write(SEG_ENG << 4, eng)
+        ENG_SRCLEN = len(eng) - 10; ENG_OPENS = len(eng) - 4; ENG_CLOSES = len(eng) - 2
         self.uc.mem_write((RETSEG << 4) + RETOFF, b'\xf4')
         self.kb = kb
         self.hook = None
@@ -47,7 +56,7 @@ class Mod:
         self.call(0xC0, SEG_XB, 0, 0, pre=self._init)
 
     def _init(self):
-        w = [0] * 64; w[24] = SEG_WS; w[25] = self.kb
+        w = [0] * 64; w[1] = 0; w[2] = SEG_ENG; w[24] = SEG_WS; w[25] = self.kb
         self.uc.mem_write(SEG_XB << 4, struct.pack('<64H', *w))
 
     def _count(self, uc, addr, size, user):
@@ -76,11 +85,14 @@ class Mod:
         cf = uc.reg_read(UC_X86_REG_EFLAGS) & 1
         return ax, cf
 
-    def run(self, path, ww, wh, flags=0, ncomp=0, count=False):
+    def run(self, path, ww, wh, flags=0, ncomp=0, count=False, eng=False):
         data = open(path, 'rb').read()
         assert len(data) < 0xF000
         self.uc.mem_write(SEG_SRC << 4, data)
         w = [0] * 20; w[2] = SEG_SRC; w[3] = 0; w[4] = len(data); w[5] = 4; w[9] = ncomp; w[10] = ww; w[11] = wh; w[12] = flags
+        if eng:                                    # the stream comes from the stand-in PDENG door
+            w[0] = 5; w[1] = 0; w[2] = w[3] = w[4] = 0
+            self.uc.mem_write((SEG_ENG << 4) + ENG_SRCLEN, struct.pack('<H', len(data)))
         self.uc.mem_write(SEG_XB << 4, struct.pack('<20H', *w))
         ax, cf = self.call(0xE8, SEG_XB, 0, 0)
         o = struct.unpack('<20H', bytes(self.uc.mem_read(SEG_XB << 4, 40)))
@@ -97,17 +109,21 @@ class Mod:
         if self.hook is not None:
             self.uc.hook_del(self.hook); self.hook = None
         self.call(0xEA, 0, 0, 0)
+        if eng:
+            op, cl = struct.unpack('<HH', bytes(self.uc.mem_read((SEG_ENG << 4) + ENG_OPENS, 4)))
+            assert cl >= 1, 'the module never closed the engine stream (opens %d closes %d)' % (op, cl)
         return (scale, ow, oh, mode, onc, rb), bytes(rows)
 
 
 def main():
-    key = None; count = False; kb = 60
+    key = None; count = False; kb = 60; eng = False
     a = sys.argv[1:]
     while a:
         x = a.pop(0)
         if x == '-k': key = a.pop(0)
         elif x == '--count': count = True
         elif x == '--kb': kb = int(a.pop(0))
+        elif x == '--eng': eng = True
         else: sys.exit(__doc__)
     man = json.load(open(os.path.join(FIX, 'MANIFEST.json')))['fixtures']
     m = Mod(kb)
@@ -117,7 +133,7 @@ def main():
         path = os.path.join(FIX, e['file'])
         for r in (0, 2):
             ww, hh = (e['w'] + (1 << r) - 1) >> r, (e['h'] + (1 << r) - 1) >> r
-            res, rows = m.run(path, ww, hh, count=count)
+            res, rows = m.run(path, ww, hh, count=count, eng=eng)
             p = subprocess.run([HOST, path, os.path.join(ROOT, 'build', 'pdxj', 'uc.raw'), str(ww), str(hh)],
                                capture_output=True, text=True, env=dict(os.environ, PDXJ_KB=str(kb)))
             hout = p.stdout.strip()
