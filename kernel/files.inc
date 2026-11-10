@@ -2274,7 +2274,9 @@ fm_tpl:     dw 110, 80, 320, 200, fm_ttl, fm_cls
                                 ; `.cold` (SPEC.md 2.6.3), so each is a near
                                 ; proc there and none has a resident thunk.
                                 ; The CLASS (SPEC.md 11.104) is .text, read
-                                ; through DS by wm_hnd; resizable is its style
+                                ; by wm_hnd from segment 0 (the record's
+                                ; W_CLASS is biased, 11.104.1; kern_mega's
+                                ; through DS); resizable is its style
 fm_cls:     dw fm_cls_end - fm_cls, WF_SIZABLE
             dw fm_paint_x, fm_onkey_x, fm_onclick_x
 %ifdef KERN_BIG

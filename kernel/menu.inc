@@ -698,15 +698,18 @@ menu_relayout:
                                 ; --- the items: About if it is offered, then
                                 ; Close, which every application gets (12.7):
     mov si, bx                  ; the About slot of the window's CLASS
-    xor bx, bx                  ; (SPEC.md 11.104) - SI is reloaded below.
-    mov bp, WC_ABOUT            ; BX was still [menu_win] - neither copy,
-    call wm_hnd                 ; menu_es nor KES touches it (kernel size pass
-    jz .noab                    ; 15) - and is Close's index now; wm_hnd's ZF
-                                ; is the answer, offset unread (kernel size
-                                ; pass 19, -6 with kent_bp/kret_es)
+    xor dx, dx                  ; (SPEC.md 11.104) - SI is reloaded below.
+    mov bp, WC_ABOUT            ; DX is Close's index: BX comes back from
+    call wm_hnd                 ; wm_hnd as the window (its output, kernel
+    jz .noab                    ; size pass 19), and DX is dead in this body
+                                ; (kent_bp banked it). wm_hnd's ZF is the
+                                ; answer, offset unread (kernel size pass 19,
+                                ; -6 with kent_bp/kret_es; +2 here, even, for
+                                ; wm_hnd's -19 clocks a callback)
     mov word [menu_abitems], menu_abstr
-    inc bx
+    inc dx
 .noab:
+    mov bx, dx
     mov cx, bx                  ; CX = item count = Close's index + 1, which
     inc cx                      ; is MENU_ABMAX when About is offered (kernel
                                 ; size pass 10: 5 bytes over two immediates)

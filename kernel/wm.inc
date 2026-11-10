@@ -34,6 +34,11 @@ W_CLASS equ 12                  ; word: near ptr, in the window's OWN segment
                                 ; past the length is "no handler". Kernel size
                                 ; pass 19 (R14): thirteen words a record were
                                 ; this one
+%ifdef KERN_MEGA                ; A KERNEL WINDOW'S W_CLASS is its class's
+WM_KCLS_BIAS equ 0              ; offset from SEGMENT 0 on the real-mode
+%else                           ; kernels - W_SEG is 0 for it, so the pair is
+WM_KCLS_BIAS equ KERNEL_SEG * 16 ; a far pointer and wm_hnd tests no kind
+%endif                          ; (wm_create adds it; SPEC.md 11.104.1)
 W_MENUS equ 14                  ; word: near ptr to this window's app menu set
                                 ; (SPEC.md 12.2), 0 = no menus of its own.
                                 ; NOT a template word - wm_create zeroes it;
@@ -359,13 +364,21 @@ wm_strseg:
 ; wm_hnd - one of a window's handlers, read out of its CLASS (SPEC.md 11.104)
 ; in:  SI = window record, BP = the slot, a WC_* offset; DS = KERNEL_SEG
 ; out: BP = the handler's near offset in the window's own segment, 0 = none,
-;      and ZF = 1 exactly when it is 0. Every other register preserved.
+;      and ZF = 1 exactly when it is 0. BX = SI (the window: every caller
+;      had it there or had BX dead - kernel size pass 19, wmrec). Every other
+;      register preserved.
 ;
 ; THE ONE PLACE A HANDLER IS FOUND. The record holds a near pointer to the
 ; class (W_CLASS) and the class lives in the window's OWN segment - W_SEG's
-; for a package, the kernel's `.text` for a kernel window (W_SEG = 0, whose
-; tables are DS's here). A slot at or past the class's length is "no
-; handler", so a package pays nothing for the events it never named.
+; for a package, the kernel's `.text` for a kernel window. A slot at or past
+; the class's length is "no handler", so a package pays nothing for the
+; events it never named.
+;
+; A KERNEL WINDOW'S W_CLASS IS RELATIVE TO SEGMENT 0 on the real-mode kernels
+; (WM_KCLS_BIAS, which wm_create adds): W_SEG is 0 there, so {W_CLASS, W_SEG}
+; is a true far pointer to the class for EVERY window and the read below loads
+; DS from W_SEG with no test for which kind it is. kern_mega cannot - segment 0
+; is the null selector there - and keeps the test and an unbiased pointer.
 ;
 ; **AND THE RECORD IS ASKED WHETHER IT IS STILL A WINDOW** (BR-28,
 ; synth/bugs.md): a content click, a right click and a drag read the handler
@@ -375,20 +388,22 @@ wm_strseg:
 ; each site that held its own copy dropped it. wm_destroy zeroes W_FLAGS, so
 ; bit 0 is the answer.
 ;
-; Cost (MEASURED by count, 8088 clocks with the fetch floor ignored): the
-; call and the body are ~200 against the ~21 of the `mov bp, [si+W_ONx]` each
-; site had - the price of 13 words a record (kernel size pass 19's note).
+; Cost (8088 clocks by count; docs/plans/ksp19/wmrec.md): call, body and ret
+; are 182 (214 at the 4-clocks-a-byte fetch floor) on the real-mode kernels,
+; where they were 234 (264) before the bias and the BX output - against the
+; ~24 (37) of the `mov bp, [si+W_ONx]` / `or bp, bp` each site had before R14.
 ; -----------------------------------------------------------------------------
 wm_hnd:
     push ds
-    push bx
-    mov bx, [si+W_CLASS]        ; ...read through the KERNEL's DS, first
     test byte [si+W_FLAGS], 1   ; BR-28: freed under us, or never ours
     jz .none
+    mov bx, [si+W_CLASS]        ; ...read through the KERNEL's DS, first
+%ifdef KERN_MEGA
     cmp word [si+W_SEG], 0      ; a kernel window's class is in DS already
-    je .ds
-    mov ds, [si+W_SEG]          ; a package's is in its own segment
-.ds:
+    je .ds                      ; (segment 0 is the null selector here)
+%endif
+    mov ds, [si+W_SEG]          ; the window's own segment - 0 for a kernel
+.ds:                            ; window, whose W_CLASS is biased to match
     cmp bp, [bx+WC_LEN]         ; past the length: not named, no handler
     jae .none
     add bx, bp
@@ -396,9 +411,11 @@ wm_hnd:
     db 0xA9                     ; test ax, imm16: the `xor` below is its imm
 .none:                          ; (flags only - and they are rewritten below)
     xor bp, bp
-    pop bx
     pop ds
-    or bp, bp                   ; ZF = no handler (a pop writes no flag)
+    mov bx, si                  ; BX = the window, the output (kernel size
+                                ; pass 19: was a push/pop of the caller's BX,
+                                ; 19 clocks dearer at the same two bytes)
+    or bp, bp                   ; ZF = no handler (pop and mov write no flag)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1487,7 +1504,13 @@ wm_create:
 %endif
     jne .pkgseg                     ; W_SEG = 0 says (SPEC.md 20.1)
 .kwin:
-    xor si, si
+%if WM_KCLS_BIAS
+    add byte [bx+W_CLASS+1], WM_KCLS_BIAS >> 8 ; a kernel class is .text,
+ %if WM_KCLS_BIAS & 0xFF        ; and W_SEG is about to be 0: {W_CLASS, 0}
+  %error "WM_KCLS_BIAS is added to W_CLASS's high byte alone"
+ %endif                         ; names it (wm_hnd, SPEC.md 11.104.1). The
+%endif                          ; HIGH BYTE alone, a byte under the word add:
+    xor si, si                  ; the bias's low byte is 0 (KERNEL_SEG * 16)
 .pkgseg:
 %ifdef HMA_DRV
     mov ax, PKG_DISP                ; (the offset, once AX is spent above)
@@ -2325,14 +2348,15 @@ wm_wake_disp:
 ; handler ever can: by its own pending flag.
 ; -----------------------------------------------------------------------------
 wm_wake_call:
-    mov bx, si
     mov bp, WC_ONWAKE           ; wm_hnd asks first whether the record is a
     call wm_hnd                 ; window at all - free, the entry proc's
                                 ; window having failed or gone (or a wake for
                                 ; the dead) - and then the class (11.104)
-    jz wm_wk_none               ; never asked to be woken (SI is still the
-    jmp ui_bill                 ; window: `mov si, bx` here went in size 17)              ; SI = window, BP = the handler; CX/DX are
-                                ; carried and meaningless here
+    jz wm_wk_none               ; never asked to be woken. SI is the window,
+    jmp ui_bill                 ; and BX is too - wm_hnd's output, the
+                                ; handler's BX, which a wake handler may read
+                                ; (kernel size pass 19: the `mov bx, si` in
+                                ; front went, -2); CX/DX carried, meaningless
 wm_wk_none:
     ret
 
@@ -10677,12 +10701,15 @@ wm_draw_win:
     cmp byte [wm_dmg_cullq], 0  ; SPEC.md 11.3.3: inside wm_dmg_wins, W_PAINT
     je .nocull                  ; is confined to what nothing above will cover
     mov byte [wm_dmg_cull], 1   ; (wm_dw_cull, above). BEFORE the arm:
-    mov bx, di                  ; wm_clip_set reads it, and a drop there would
+                                ; wm_clip_set reads it, and a drop there would
     call wm_clip_set            ; spend a cache wm_su_try has already
 .nocull:                        ; answered from (11.96.4)
 %endif
-    mov bx, di                  ; the paint is the owning instance's CPU
-    call inst_win_owner         ; time, not the painting task's (SPEC.md 8.1)
+                                ; BX = SI = DI, the window: wm_hnd's output,
+                                ; which wm_clip_set keeps (kernel size pass
+                                ; 19, two `mov bx, di` gone, -4)
+    call inst_win_owner         ; the paint is the owning instance's CPU
+                                ; time, not the painting task's (SPEC.md 8.1)
     push di
     push word [snd_inst]        ; stamp the dispatched instance for sound
     call snd_disp_set           ; grants made inside the paint (SPEC 34.3)
