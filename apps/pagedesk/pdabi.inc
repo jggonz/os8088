@@ -248,38 +248,26 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
-PDV_FNT_LOAD             equ 0xD8
-PDV_FNT_ENC              equ 0xD9
-PDV_FNT_GID              equ 0xDA
-PDV_FNT_GLYPH            equ 0xDB
-PDV_FNT_PATH             equ 0xDC
-PDV_FNT_CMAP             equ 0xDD
-PDV_FNT_WIDTHS           equ 0xDE
+PDV_FNT_GLYPH            equ 0xD8
+PDV_FNT_PATH             equ 0xD9
 PDFK_NONE                equ 0
 PDFK_TT                  equ 1
 PDFK_CFF                 equ 2
 PDFK_T1                  equ 3
-PDFKF_CID                equ 0x0001
-PDFKF_OTTO               equ 0x0002
-PDFKF_MAPPED             equ 0x0004
-PDFKF_CHOP               equ 0x0008
-PDXF_E_SIZE              equ 1
-PDXF_E_FORMAT            equ 2
-PDXF_E_READ              equ 3
-PDFE_SYMBOLIC            equ 0x0001
-PDFE_HASENC              equ 0x0002
-PDFE_FIRST               equ 0x0004
-PDFE_MORE                equ 0x0008
+PDFG_INFO                equ 0x0001
+PDFG_LATIN               equ 0x0002
+PDFG_T0                  equ 0x0004
+PDFG_VERT                equ 0x0008
+PDFG_CHOP                equ 0x0010
+PDFE_NOPROG              equ 1
+PDFE_FORMAT              equ 2
+PDFE_SIZE                equ 3
+PDFE_READ                equ 4
+PDFE_CMAP                equ 5
 PDFP_M                   equ 1
 PDFP_L                   equ 2
 PDFP_C                   equ 3
 PDFP_Z                   equ 4
-PDFC_ENC                 equ 0
-PDFC_UNI                 equ 1
-PDFC_IDENT               equ 0x0001
-PDFC_VERT                equ 0x0002
-PDFC_TRUNC               equ 0x0004
-PDFC_MIXED               equ 0x0008
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -754,92 +742,41 @@ PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
 
-; ---- struct pdxb_fload (24 bytes) ------------------------------------------
-PDXB_FLOAD_OBJNUM              equ 0
-PDXB_FLOAD_GEN                 equ 2
-PDXB_FLOAD_HINT                equ 4
-PDXB_FLOAD_CIDMAP_OBJ          equ 6
-PDXB_FLOAD_CIDMAP_GEN          equ 8
-PDXB_FLOAD_KIND                equ 10
-PDXB_FLOAD_NGLYPHS             equ 12
-PDXB_FLOAD_UPEM                equ 14
-PDXB_FLOAD_BBOX_TOP            equ 16
-PDXB_FLOAD_BBOX_BOT            equ 18
-PDXB_FLOAD_FLAGS               equ 20
-PDXB_FLOAD_DETAIL              equ 22
-PDXB_FLOAD_BYTES               equ 24
+; ---- struct pdxb_fglyph (42 bytes) -----------------------------------------
+PDXB_FGLYPH_OBJNUM             equ 0
+PDXB_FGLYPH_GEN                equ 2
+PDXB_FGLYPH_CODE               equ 4
+PDXB_FGLYPH_FLAGS              equ 6
+PDXB_FGLYPH_EM64               equ 8
+PDXB_FGLYPH_ASC                equ 10
+PDXB_FGLYPH_ROWS               equ 12
+PDXB_FGLYPH_DSEG               equ 14
+PDXB_FGLYPH_DOFF               equ 16
+PDXB_FGLYPH_CAP                equ 18
+PDXB_FGLYPH_W                  equ 20
+PDXB_FGLYPH_LB                 equ 22
+PDXB_FGLYPH_NB                 equ 24
+PDXB_FGLYPH_ADV64              equ 26
+PDXB_FGLYPH_ADV1000            equ 28
+PDXB_FGLYPH_LAT                equ 30
+PDXB_FGLYPH_GID                equ 32
+PDXB_FGLYPH_CID                equ 34
+PDXB_FGLYPH_KIND               equ 36
+PDXB_FGLYPH_OFLAGS             equ 38
+PDXB_FGLYPH_ERR                equ 40
+PDXB_FGLYPH_BYTES              equ 42
 
-; ---- struct pdxb_fdiff (24 bytes) ------------------------------------------
-PDXB_FDIFF_CODE                equ 0
-PDXB_FDIFF_NAME                equ 2
-PDXB_FDIFF_NAME_N              equ 22
-PDXB_FDIFF_NAME_ESZ            equ 1
-PDXB_FDIFF_BYTES               equ 24
-
-; ---- struct pdxb_fenc (516 bytes) -------------------------------------------
-PDXB_FENC_FLAGS                equ 0
-PDXB_FENC_NDIFF                equ 2
-PDXB_FENC_LAT                  equ 4
-PDXB_FENC_LAT_N                equ 224
-PDXB_FENC_LAT_ESZ              equ 1
-PDXB_FENC_DIFF                 equ 228
-PDXB_FENC_DIFF_N               equ 12
-PDXB_FENC_DIFF_ESZ             equ 24
-PDXB_FENC_BYTES                equ 516
-
-; ---- struct pdxb_fgid (6 bytes) -------------------------------------------
-PDXB_FGID_CODE                 equ 0
-PDXB_FGID_KIND                 equ 2
-PDXB_FGID_GID                  equ 4
-PDXB_FGID_BYTES                equ 6
-
-; ---- struct pdxb_fglyph (22 bytes) -----------------------------------------
-PDXB_FGLYPH_GID                equ 0
-PDXB_FGLYPH_EM64               equ 2
-PDXB_FGLYPH_ASC                equ 4
-PDXB_FGLYPH_ROWS               equ 6
-PDXB_FGLYPH_DSEG               equ 8
-PDXB_FGLYPH_DOFF               equ 10
-PDXB_FGLYPH_CAP                equ 12
-PDXB_FGLYPH_W                  equ 14
-PDXB_FGLYPH_LB                 equ 16
-PDXB_FGLYPH_NB                 equ 18
-PDXB_FGLYPH_ADV64              equ 20
-PDXB_FGLYPH_BYTES              equ 22
-
-; ---- struct pdxb_fpath (14 bytes) ------------------------------------------
-PDXB_FPATH_GID                 equ 0
-PDXB_FPATH_DSEG                equ 2
-PDXB_FPATH_DOFF                equ 4
-PDXB_FPATH_CAP                 equ 6
-PDXB_FPATH_LEN                 equ 8
-PDXB_FPATH_UPEM                equ 10
-PDXB_FPATH_ADV                 equ 12
-PDXB_FPATH_BYTES               equ 14
-
-; ---- struct pdxb_fcmap (40 bytes) ------------------------------------------
-PDXB_FCMAP_OBJNUM              equ 0
-PDXB_FCMAP_GEN                 equ 2
-PDXB_FCMAP_KIND                equ 4
-PDXB_FCMAP_DSEG                equ 6
-PDXB_FCMAP_DOFF                equ 8
-PDXB_FCMAP_CAP                 equ 10
-PDXB_FCMAP_LEN                 equ 12
-PDXB_FCMAP_FLAGS               equ 14
-PDXB_FCMAP_NAME                equ 16
-PDXB_FCMAP_NAME_N              equ 24
-PDXB_FCMAP_NAME_ESZ            equ 1
-PDXB_FCMAP_BYTES               equ 40
-
-; ---- struct pdxb_fwid (16 bytes) -------------------------------------------
-PDXB_FWID_OBJNUM               equ 0
-PDXB_FWID_GEN                  equ 2
-PDXB_FWID_DSEG                 equ 4
-PDXB_FWID_DOFF                 equ 6
-PDXB_FWID_CAP                  equ 8
-PDXB_FWID_DW                   equ 10
-PDXB_FWID_LEN                  equ 12
-PDXB_FWID_MORE                 equ 14
-PDXB_FWID_BYTES                equ 16
+; ---- struct pdxb_fpath (20 bytes) ------------------------------------------
+PDXB_FPATH_OBJNUM              equ 0
+PDXB_FPATH_GEN                 equ 2
+PDXB_FPATH_CODE                equ 4
+PDXB_FPATH_DSEG                equ 6
+PDXB_FPATH_DOFF                equ 8
+PDXB_FPATH_CAP                 equ 10
+PDXB_FPATH_LEN                 equ 12
+PDXB_FPATH_UPEM                equ 14
+PDXB_FPATH_ADV1000             equ 16
+PDXB_FPATH_ERR                 equ 18
+PDXB_FPATH_BYTES               equ 20
 
 %endif ; PDABI_INC

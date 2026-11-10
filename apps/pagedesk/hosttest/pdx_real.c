@@ -74,8 +74,7 @@ static pdw cm_lookup(pdw seg, pdw len, pdw code, pdw *found)
 
 int main(int argc, char **argv)
 {
-    struct pdxb_init in; struct pdxb_open op; struct pdxb_reslookup rl; struct pdxb_fload ld; struct pdxb_fenc en;
-    struct pdxb_fgid gi; struct pdxb_fcmap cm; struct pdxb_fwid wi;
+    struct pdxb_init in; struct pdxb_open op; struct pdxb_reslookup rl;
     pdw fobj, fgen, dobj = 0, dgen = 0, ffobj = 0, ffgen = 0, tuobj = 0, tugen = 0, encobj = 0, encgen = 0, cmobj = 0, cmgen = 0, is0, i, r, nb;
     int cid, symbolic = 0, n = 0;
     if (argc < 4) return 2;
@@ -118,73 +117,24 @@ int main(int argc, char **argv)
     else if (!dget(dobj, dgen, "FontDescriptor", "FontFile3", 0) && dg.kind == PDK_REF) { ffobj = dg.refnum; ffgen = dg.refgen; }
     else if (!dget(dobj, dgen, "FontDescriptor", "FontFile", 0) && dg.kind == PDK_REF) { ffobj = dg.refnum; ffgen = dg.refgen; }
     if (!dget(dobj, dgen, "FontDescriptor", "Flags", 0)) symbolic = (pdm_fx_round(&dg.num) & 4) != 0;
-    /* the PDXF side */
+    /* the PDXF side: one GLYPH call (info only) per code does everything from the font dictionary */
     memset(&in, 0, sizeof in); in.xb_seg = SEG_XB; in.slot_seg = SEG_WS; in.slot_kb = PDXF_WS_KB;
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     r = pdxf_verb(PDV_X_INIT, SEG_XB, 0, 0);
     if (r) { printf("INIT %u\n", r); return 1; }
-    memset(&ld, 0, sizeof ld); ld.objnum = ffobj; ld.gen = ffgen;
-    if (!dget(dobj, dgen, "CIDToGIDMap", 0, 0) && dg.kind == PDK_REF) { ld.cidmap_obj = dg.refnum; ld.cidmap_gen = dg.refgen; }
-    pd_fcopy_out(&ld, SEG_XB, 0, sizeof ld);
-    r = call(PDV_FNT_LOAD);
-    pd_fcopy_in(SEG_XB, 0, &ld, sizeof ld);
-    printf("KIND %u NG %u UPEM %u FLAGS %u RC %u TOP %u BOT %u\n", ld.kind, ld.nglyphs, ld.upem, ld.flags, r, ld.bbox_top, ld.bbox_bot);
-    if (r) return 1;
-    if (!is0) {                                       /* the encoding context: base = WinAnsi, which is the identity on 32..255 here */
-        memset(&en, 0, sizeof en);
-        en.flags = PDFE_FIRST | PDFE_HASENC | (symbolic ? PDFE_SYMBOLIC : 0);
-        for (i = 0; i < 224; i++) en.lat[i] = (pdb)(i + 32);
-        for (i = 0x80; i < 0xA0; i++) en.lat[i - 32] = (pdb)i;
-        en.ndiff = 0;
-        if (!dget(fobj, fgen, "Encoding", "Differences", 0) && dg.kind == PDK_ARR) {      /* [127 /flexdemo] */
-            pdw k, code = 0, nd = dg.count;
-            for (k = 0; k < nd && en.ndiff < 12; k++) {
-                char key[8]; sprintf(key, "[%u]", k);
-                if (dget(fobj, fgen, "Encoding", "Differences", key)) break;
-                if (dg.kind == PDK_INT) code = (pdw)pdm_fx_round(&dg.num);
-                else if (dg.kind == PDK_NAME) { en.diff[en.ndiff].code = code++; strncpy(en.diff[en.ndiff].name, dg.text, 21); en.ndiff++; }
-            }
-        }
-        pd_fcopy_out(&en, SEG_XB, 0, sizeof en);
-        call(PDV_FNT_ENC);
-    }
+    (void)ffobj; (void)ffgen; (void)tuobj; (void)tugen; (void)cmobj; (void)cmgen; (void)symbolic; (void)is0; (void)dobj; (void)dgen;
     for (i = 3; (int)i < argc; i++) {
-        cid = atoi(argv[i]);
-        memset(&gi, 0, sizeof gi); gi.code = (pdw)cid; gi.kind = is0 ? 1 : 0;
-        pd_fcopy_out(&gi, SEG_XB, 0, sizeof gi);
-        r = call(PDV_FNT_GID);
-        pd_fcopy_in(SEG_XB, 0, &gi, sizeof gi);
-        printf("GID %d %u\n", cid, r ? 0xFFFF : gi.gid);
-        n++;
-    }
-    if (tuobj) {
-        memset(&cm, 0, sizeof cm); cm.objnum = tuobj; cm.gen = tugen; cm.kind = PDFC_UNI; cm.dseg = SEG_OUT; cm.doff = 0; cm.cap = 4096;
-        pd_fcopy_out(&cm, SEG_XB, 0, sizeof cm);
-        r = call(PDV_FNT_CMAP);
-        pd_fcopy_in(SEG_XB, 0, &cm, sizeof cm);
-        printf("TOUNICODE rc %u len %u flags %u\n", r, cm.len, cm.flags);
-        for (i = 3; (int)i < argc; i++) { pdw f, v = cm_lookup(SEG_OUT, cm.len, (pdw)atoi(argv[i]), &f); printf("UNI %s %u\n", argv[i], f ? v : 0); }
-    }
-    if (cmobj) {
-        memset(&cm, 0, sizeof cm); cm.objnum = cmobj; cm.gen = cmgen; cm.kind = PDFC_ENC; cm.dseg = SEG_OUT; cm.doff = 0; cm.cap = 4096;
-        pd_fcopy_out(&cm, SEG_XB, 0, sizeof cm);
-        r = call(PDV_FNT_CMAP);
-        pd_fcopy_in(SEG_XB, 0, &cm, sizeof cm);
-        printf("ENCCMAP rc %u len %u flags %u\n", r, cm.len, cm.flags);
-        for (i = 3; (int)i < argc; i++) { pdw f, v = cm_lookup(SEG_OUT, cm.len, (pdw)atoi(argv[i]), &f); printf("CIDMAP %s %u\n", argv[i], f ? v : 0xFFFF); }
-    }
-    if (is0) {
-        memset(&wi, 0, sizeof wi); wi.objnum = dobj; wi.gen = dgen; wi.dseg = SEG_OUT; wi.doff = 8192; wi.cap = 4096;
-        pd_fcopy_out(&wi, SEG_XB, 0, sizeof wi);
-        r = call(PDV_FNT_WIDTHS);
-        pd_fcopy_in(SEG_XB, 0, &wi, sizeof wi);
-        printf("WIDTHS rc %u dw %u len %u more %u\n", r, wi.dw, wi.len, wi.more);
-        for (i = 3; (int)i < argc; i++) {
-            pdw k, c = (pdw)atoi(argv[i]), w = wi.dw;
-            for (k = 0; k < wi.len / 6; k++)
-                if (c >= pd_fpeekw(SEG_OUT, 8192 + k * 6) && c <= pd_fpeekw(SEG_OUT, 8192 + k * 6 + 2)) w = pd_fpeekw(SEG_OUT, 8192 + k * 6 + 4);
-            printf("WID %s %u\n", argv[i], w);
-        }
+        struct pdxb_fglyph gl;
+        memset(&gl, 0, sizeof gl); gl.objnum = fobj; gl.gen = fgen; gl.code = (pdw)atoi(argv[i]); gl.flags = PDFG_INFO;
+        pd_fcopy_out(&gl, SEG_XB, 0, sizeof gl);
+        r = call(PDV_FNT_GLYPH);
+        pd_fcopy_in(SEG_XB, 0, &gl, sizeof gl);
+        if (i == 3) printf("KIND %u RC %u ERR %u FLAGS %u\n", gl.kind, r, gl.err, gl.oflags);
+        if (r) { printf("GID %s 65535\n", argv[i]); continue; }
+        printf("GID %s %u\n", argv[i], gl.gid);
+        printf("UNI %s %u\n", argv[i], gl.oflags & PDFG_LATIN ? gl.lat : 0);
+        printf("WID %u %u\n", gl.cid, gl.adv1000);
+        printf("CIDMAP %s %u\n", argv[i], gl.cid);
     }
     (void)n; (void)nb;
     return 0;

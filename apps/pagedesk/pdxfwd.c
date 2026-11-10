@@ -7,6 +7,7 @@
  * merged.
  * ==========================================================================*/
 static struct pdxb_dictget g_dg;
+static pdw g_wdraw;                                  /* 1: a final reference is NOT followed (the caller wants its number) */
 static pdw wd_get(pdw obj, pdw gen, const char *k0, const char *k1, const char *k2)
 {
     pdw err, n;
@@ -18,7 +19,7 @@ static pdw wd_get(pdw obj, pdw gen, const char *k0, const char *k1, const char *
     pd_fcopy_out(&g_dg, g_xb, 0, sizeof g_dg);
     err = pdx_eng(PDV_ENG_DICT_GET, 0, 0, 0);
     if (!err) pd_fcopy_in(g_xb, 0, &g_dg, sizeof g_dg);
-    if (!err && g_dg.kind == PDK_REF) {               /* the FINAL value is not followed by PDENG */
+    if (!err && g_dg.kind == PDK_REF && !g_wdraw) {   /* the FINAL value is not followed by PDENG */
         obj = g_dg.refnum; gen = g_dg.refgen;
         pdx_zero(&g_dg, sizeof g_dg);
         g_dg.objnum = obj; g_dg.gen = gen;
@@ -56,13 +57,15 @@ static void wd_put(pdw first, pdw last, pdw w)
 }
 static pdw wd_int(void) { pdi v = pdm_fx_round(&g_dg.num); return v < 0 ? 0 : (pdw)v; }
 
-static pdw v_widths(void)
+/* /DW and /W of the CIDFont dictionary (obj, gen) -> triples at (seg, off), at most cap bytes.
+ * Returns the bytes written; *dw gets /DW (1000 when absent) */
+static pdw g_wdw;
+static pdw wd_ranges(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
 {
-    struct pdxb_fwid *wv = &g_a.wi;
-    pdw obj = wv->objnum, gen = wv->gen, n, i, j, c1, c2, cnt, items = 0;
-    g_wn = 0; g_wover = 0; g_wseg = wv->dseg; g_woff = wv->doff; g_wcap = wv->cap;
-    wv->dw = 1000; wv->more = 0; wv->len = 0;
-    if (!wd_get(obj, gen, "DW", 0, 0) && (g_dg.kind == PDK_INT || g_dg.kind == PDK_REAL)) wv->dw = wd_int();
+    pdw n, i, j, c1, c2, cnt, items = 0;
+    g_wn = 0; g_wover = 0; g_wseg = seg; g_woff = off; g_wcap = cap;
+    g_wdw = 1000;
+    if (!wd_get(obj, gen, "DW", 0, 0) && (g_dg.kind == PDK_INT || g_dg.kind == PDK_REAL)) g_wdw = wd_int();
     if (wd_get(obj, gen, "W", 0, 0) || g_dg.kind != PDK_ARR) return 0;
     n = g_dg.count;
     for (i = 0; i < n && items < 1024; ) {
@@ -85,6 +88,5 @@ static pdw v_widths(void)
             i += 3; items += 2;
         } else i += 2;
     }
-    wv->len = X6(g_wn); wv->more = g_wover;
-    return 0;
+    return X6(g_wn);
 }

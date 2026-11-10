@@ -7,9 +7,10 @@
  * (pdmath.c).
  *
  * The program lives in the WORKSPACE (slot_seg, 20.22.2.3):
- *   [0, pcap)               the font program (one at a time)
- *   [pcap, pcap + 4096)     the CIDToGIDMap window (CIDs 0..2047)
- *   [pcap + 4096, + 512)    the staging window of the CMap tokeniser
+ *   [0, pcap)               the font program (one at a time), pcap = 48 KiB - 10,752
+ *   [pcap, + 4096)          the CIDToGIDMap window (CIDs 0..2047)
+ *   [.., + 512)             the staging window of the CMap tokeniser
+ *   [.., + 3 x 2048)        the ToUnicode, Encoding-CMap and /W tables
  * ==========================================================================*/
 #ifndef PD_HOST
 #include "os88.h"
@@ -29,9 +30,10 @@ pdw pdx_eng_ax;                     /* the AX of the last successful pdx_eng (th
 
 static pdw g_upem, g_em64;          /* units per em; the size in 1/64 px         */
 
-#define PDXF_WS_KB   48             /* the workspace this module asks for (20.22.2.3) */
-#define PDXF_CIDWIN  4096
-#define PDXF_STG     512
+#define PDXF_WS_KB   48             /* the workspace this module asks for (20.22.2.3)  */
+#define PDXF_CIDWIN  4096           /* the CIDToGIDMap window (CIDs 0..2047)             */
+#define PDXF_STG     512            /* the CMap tokeniser's staging window               */
+#define PDXF_TAB     2048           /* each of the ToUnicode, Encoding-CMap and /W tables */
 
 #include "pdxfol.c"
 static pdw g_cf_base;
@@ -40,10 +42,20 @@ static pdw g_cf_base;
 #include "pdxfcf.c"
 #include "pdxft1.c"
 
+/* CMap table flags (a PDXF-private table: +1 u8 flags) */
+#define PDFC_ENC   0
+#define PDFC_UNI   1
+#define PDFC_IDENT 0x0001       /* codes not listed map to themselves (usecmap of an identity CMap) */
+#define PDFC_VERT  0x0002
+#define PDFC_TRUNC 0x0004       /* the table did not fit: covered codes are right                    */
+#define PDFC_MIXED 0x0008       /* a mixed-length codespace: read as 2 bytes                         */
+#define EC_SYM 0x0001           /* the descriptor says symbolic                                      */
+#define EC_HAS 0x0002           /* the font dictionary has an /Encoding                              */
+
 /* ---- the engine: streams and dictionaries ------------------------------------ */
 static pdw g_xb;                    /* the exchange block                         */
-static pdw g_ws, g_wslen, g_pcap, g_cidwin;
-static pdw g_kind, g_pobj, g_pgen, g_cmaplen;
+static pdw g_ws, g_wslen, g_pcap;
+static pdw g_kind, g_cmaplen;
 static pdw g_stgseg, g_stgoff;      /* the staging window                          */
 
 static pdw pdx_zero(void *p, pdw n) { pdw i; pdb *b = (pdb *)p; for (i = 0; i < n; i++) b[i] = 0; return n; }
@@ -80,39 +92,24 @@ static pdw pdx_slurp(pdw obj, pdw gen, pdw seg, pdw off, pdw cap)
 }
 
 #include "pdxfcm.c"
+#include "pdxfwd.c"
+#include "pdrenc.h"
 
-/* ---- the encoding context (a simple font) ------------------------------------- */
+/* ---- the encoding context (a simple font) ---------------------------------------- */
 static pdb g_elat[224];
 static pdw g_eflags;
 static pdw g_edcode[64], g_edoff[64], g_ednd;
 static char g_epool[1024];
 static pdw g_epn;
 
-static void enc_set(const struct pdxb_fenc *e)
-{
-    pdw i, k;
-    if (e->flags & PDFE_FIRST) { g_ednd = 0; g_epn = 0; }
-    g_eflags = (pdw)(e->flags & (PDFE_SYMBOLIC | PDFE_HASENC));
-    for (i = 0; i < 224; i++) g_elat[i] = e->lat[i];
-    for (i = 0; i < e->ndiff && i < 12; i++) {
-        pdw n = 0;
-        while (n < 21 && e->diff[i].name[n]) n++;
-        if (g_ednd >= 64 || g_epn + n + 1 > sizeof g_epool) break;
-        g_edcode[g_ednd] = e->diff[i].code; g_edoff[g_ednd] = g_epn;
-        for (k = 0; k < n; k++) g_epool[g_epn++] = e->diff[i].name[k];
-        g_epool[g_epn++] = 0;
-        g_ednd++;
-    }
-}
 static const char *enc_name(pdw code)
 {
-    pdw i;
-    pdw lat;
+    pdw i, lat;
     for (i = 0; i < g_ednd; i++) if (g_edcode[i] == code) return g_epool + g_edoff[i];
     lat = code >= 32 ? g_elat[code - 32] : 0;
     return lat >= 32 ? nm_nth(pdx_latnames, (pdw)(lat - 32)) : 0;
 }
-/* a name of the forms gNN, cidNN, glyphNN, indexNN -> the number (0xFFFF: no) */
+/* a name of the forms gNN, cidNN, glyphNN -> the number (0xFFFF: no) */
 static pdw nm_numbered(const char *n)
 {
     pdw v = 0, i = 0;
@@ -129,7 +126,7 @@ static pdw enc_gid(pdw code)
     const char *nm = enc_name(code);
     pdw g = 0, u, c;
     if (g_kind == PDFK_TT) {
-        if (g_eflags & PDFE_SYMBOLIC || (!(g_eflags & PDFE_HASENC) && !nm)) {
+        if (g_eflags & EC_SYM || (!(g_eflags & EC_HAS) && !nm)) {
             if (g_cm_sym) { g = cm_get(g_cm_sym, (pdw)(0xF000 + code)); if (!g) g = cm_get(g_cm_sym, code); if (!g) g = cm_get(g_cm_sym, (pdw)(0xF100 + code)); }
             if (!g && g_cm_mac) g = cm_get(g_cm_mac, code);
             if (!g && g_cm_uni) g = cm_get(g_cm_uni, lat_uni(code));
@@ -152,13 +149,12 @@ static pdw enc_gid(pdw code)
             g = cf_find_name(nm);
             if (!g && (c = nm_numbered(nm)) != 0xFFFF && c < g_cf_ng) g = c;
         }
-        if (!g && (!nm || !(g_eflags & PDFE_HASENC))) g = cf_enc_gid(code);
-        if (!g && !nm) g = cf_enc_gid(code);
+        if (!g && (!nm || !(g_eflags & EC_HAS))) g = cf_enc_gid(code);
         return g;
     }
     if (g_kind == PDFK_T1) {
         if (nm) g = t1_find_name(nm);
-        if (!g && (!nm || !(g_eflags & PDFE_HASENC))) g = t1_enc_gid(code);
+        if (!g && (!nm || !(g_eflags & EC_HAS))) g = t1_enc_gid(code);
         return g;
     }
     return 0;
@@ -166,14 +162,17 @@ static pdw enc_gid(pdw code)
 static pdw cid_gid(pdw cid)
 {
     if (g_kind == PDFK_TT) {
-        if (g_cmaplen) { if (cid >= (pdw)(g_cmaplen >> 1) || cid >= PDXF_CIDWIN / 2) return 0; return pd_fpeekw(g_ws, (pdw)(g_pcap + cid * 2)) >> 0 ? (pdw)((pd_fpeekb(g_ws, (pdw)(g_pcap + cid * 2)) << 8) | pd_fpeekb(g_ws, (pdw)(g_pcap + cid * 2 + 1))) : 0; }
+        if (g_cmaplen) {
+            if (cid >= (pdw)(g_cmaplen >> 1) || cid >= PDXF_CIDWIN / 2) return 0;
+            return (pdw)((pd_fpeekb(g_ws, (pdw)(g_pcap + cid * 2)) << 8) | pd_fpeekb(g_ws, (pdw)(g_pcap + cid * 2 + 1)));
+        }
         return cid < g_sf_ng ? cid : 0;
     }
     if (g_kind == PDFK_CFF) return cf_cid_gid(cid);
     return 0;
 }
 
-/* ---- the resident program -------------------------------------------------------- */
+/* ---- the resident program ------------------------------------------------------------ */
 static pdw fnt_open(void)
 {
     pdw r;
@@ -185,8 +184,6 @@ static pdw fnt_open(void)
     else if (!r && ((P8(0) == '%' && P8(1) == '!') || P8(0) == 0x80) && t1_open()) g_kind = PDFK_T1;
     return g_kind != PDFK_NONE;
 }
-
-/* one glyph's outline -> the recorder; 0 on a refusal */
 static pdw fnt_outline(pdw gid)
 {
     if (g_kind == PDFK_TT) return sf_glyph(gid);
@@ -194,21 +191,22 @@ static pdw fnt_outline(pdw gid)
     if (g_kind == PDFK_T1) return t1_glyph(gid);
     return 0;
 }
-
 static pdw g_gadv;                  /* the last glyph's advance, 1/64 px         */
+static pdw fnt_adv(pdw gid)         /* the program's advance in font units        */
+{
+    return g_kind == PDFK_TT ? sf_adv(gid) : g_kind == PDFK_CFF ? (pdw)g_wid : (pdw)g_t1_wid;
+}
 /* rasterise: em64 = size in 1/64 px. Returns bytes, 0 = empty, 0xFFFF = refused */
 static pdw fnt_glyph(pdw gid, pdw em64, pdw asc, pdw rows, pdw dseg, pdw doff, pdw cap)
 {
-    pdw adv;
     g_em64 = em64;
     if (!fnt_outline(gid)) return 0xFFFF;
     ol_close();
-    adv = g_kind == PDFK_TT ? sf_adv(gid) : g_kind == PDFK_CFF ? (pdw)g_wid : (pdw)g_t1_wid;
-    g_gadv = (pdw)pdx_muldiv((pdi)adv, (pdi)em64, (pdi)g_upem);
+    g_gadv = (pdw)pdx_muldiv((pdi)fnt_adv(gid), (pdi)em64, (pdi)g_upem);
     return rs_glyph(asc, rows, dseg, doff, cap);
 }
 
-/* ---- PDV_FNT_PATH: the recorded outline as PDFP_* ops (quadratics raised to cubics) --- */
+/* ---- PDV_FNT_PATH: the recorded outline as PDFP_* ops (quadratics raised to cubics) ---- */
 static pdw pdx_path(pdw dseg, pdw doff, pdw cap)
 {
     pdw i = 0, n = 0, k, nc;
@@ -233,95 +231,210 @@ static pdw pdx_path(pdw dseg, pdw doff, pdw cap)
     return n;
 }
 
-/* ---- the verbs ---------------------------------------------------------------------- */
-static union {
-    struct pdxb_fload ld; struct pdxb_fenc en; struct pdxb_fgid gi; struct pdxb_fglyph gl;
-    struct pdxb_fpath pa; struct pdxb_fcmap cm; struct pdxb_fwid wi; struct pdxb_init in;
-} g_a;
-pdw pdx_cf;                         /* the carry flag of the last verb (the door reads it) */
-pdw pdx_engvec[2];                  /* PDENG's door, offset then segment (PDV_X_INIT)       */
-static pdw g_pdetail;
+/* ---- the font dictionary: activate a font (read its program and its tables) ------------ */
+static pdw g_fobj, g_fgen;          /* the font whose program is resident (objnum 0 = none) */
+static pdw g_ft0, g_fvert, g_ftu, g_fcm, g_fwl, g_fdw, g_fwrc, g_ferr;
+static pdw g_tuoff, g_cmoff2, g_wdoff, g_dobj, g_dgen, g_ffobj, g_ffgen, g_cmapobj, g_cmapgen, g_nmode;
+static struct pdxb_dictget g_dg2;
 
-#include "pdxfwd.c"
-
-static pdw v_load(void)
+/* a dictionary value that is a name: compare it to s */
+static pdw fd_name_is(const char *s) { return g_dg.kind == PDK_NAME && nm_eq(g_dg.text, s); }
+static pdw fd_ref(pdw obj, pdw gen, const char *a, const char *b, const char *c)      /* 1 + the reference in g_ro/g_rg */
 {
-    struct pdxb_fload *l = &g_a.ld;
-    pdw n, k, bot;
-    g_kind = PDFK_NONE; g_cmaplen = 0; g_pobj = g_pgen = 0;
-    l->flags = 0; l->kind = 0; l->nglyphs = 0; l->upem = 0; l->detail = 0;
-    n = pdx_slurp(l->objnum, l->gen, g_ws, 0, g_pcap);
-    if (n == 0xFFFF) {
-        l->detail = PDXF_E_SIZE; l->flags |= PDFKF_CHOP;
-        return PDE_LIMIT;
+    pdw r;
+    g_wdraw = 1; r = wd_get(obj, gen, a, b, c); g_wdraw = 0;
+    return !r && g_dg.kind == PDK_REF;
+}
+static pdw g_ro, g_rg;
+static pdw fd_refs(pdw obj, pdw gen, const char *a, const char *b, const char *c)
+{
+    if (!fd_ref(obj, gen, a, b, c)) return 0;
+    g_ro = g_dg.refnum; g_rg = g_dg.refgen;
+    return 1;
+}
+/* the base encoding: 0 Standard, 1 WinAnsi, 2 MacRoman, applied to g_elat (PD Latin, as pdrf.c's font_encoding) */
+static void fd_baseenc(pdw mode)
+{
+    pdw c, v;
+    for (c = 32; c < 256; c++) {
+        v = c;
+        if (mode == 0) {
+            if (c == 0x27) v = 0x92; else if (c == 0x60) v = 0x91;
+            else if (c >= 0xA0) v = enc_std_hi[c - 0xA0];
+            else if (c >= 0x80) v = 0;
+        } else if (mode == 2) { if (c >= 0x80) v = enc_mac_hi[c - 0x80]; }
+        g_elat[c - 32] = (pdb)v;
     }
-    if (!n) { l->detail = PDXF_E_READ; return PDE_FONT; }
+}
+static pdw fd_enc_name(void)                       /* g_dg is a name: its mode, 3 = something else */
+{
+    if (nm_eq(g_dg.text, "WinAnsiEncoding")) return 1;
+    if (nm_eq(g_dg.text, "MacRomanEncoding")) return 2;
+    if (nm_eq(g_dg.text, "StandardEncoding")) return 0;
+    return 3;
+}
+static void fd_simple_enc(pdw fobj, pdw fgen, pdw symbolic)
+{
+    pdw mode = 0, nd, i, code = 0, n, k;
+    g_eflags = (pdw)(symbolic ? EC_SYM : 0); g_ednd = 0; g_epn = 0;
+    if (!wd_get(fobj, fgen, "Encoding", 0, 0)) {
+        if (g_dg.kind == PDK_NAME) { g_eflags |= EC_HAS; mode = fd_enc_name(); if (mode == 3) mode = 0; }
+        else if (g_dg.kind == PDK_DICT || g_dg.kind == PDK_REF) {
+            g_eflags |= EC_HAS; mode = 1;
+            if (!wd_get(fobj, fgen, "Encoding", "BaseEncoding", 0) && g_dg.kind == PDK_NAME) { mode = fd_enc_name(); if (mode == 3) mode = 1; }
+        }
+    }
+    fd_baseenc(mode);
+    if (wd_get(fobj, fgen, "Encoding", "Differences", 0) || g_dg.kind != PDK_ARR) return;
+    nd = g_dg.count;
+    for (i = 0; i < nd && i < 400; i++) {
+        if (wd_get(fobj, fgen, "Encoding", "Differences", wd_key(0, i))) break;
+        if (g_dg.kind == PDK_INT || g_dg.kind == PDK_REAL) code = (pdw)pdm_fx_floor(&g_dg.num);
+        else if (g_dg.kind == PDK_NAME) {
+            if (g_ednd < 64) {
+                n = 0; while (n < 30 && g_dg.text[n]) n++;
+                if (g_epn + n + 1 <= sizeof g_epool) {
+                    g_edcode[g_ednd] = code; g_edoff[g_ednd] = g_epn;
+                    for (k = 0; k < n; k++) g_epool[g_epn++] = g_dg.text[k];
+                    g_epool[g_epn++] = 0; g_ednd++;
+                }
+            }
+            code++;
+        }
+    }
+}
+
+/* load the font (its dictionary, program and tables); 0 ok, else a PDFE_* in g_ferr */
+static pdw fd_activate(pdw fobj, pdw fgen)
+{
+    pdw n, sym = 0, cidobj = 0, cidgen = 0, tuobj = 0, tugen = 0;
+    g_fobj = 0; g_kind = PDFK_NONE; g_cmaplen = 0; g_ft0 = 0; g_fvert = 0; g_ftu = 0; g_fcm = 0; g_fdw = 1000; g_fwl = 0; g_ferr = 0;
+    g_dobj = fobj; g_dgen = fgen; g_cmapobj = 0;
+    if (!wd_get(fobj, fgen, "Subtype", 0, 0) && fd_name_is("Type0")) {
+        g_ft0 = 1;
+        if (!fd_refs(fobj, fgen, "DescendantFonts", "[0]", 0)) { g_ferr = PDFE_NOPROG; return PDE_FONT; }
+        g_dobj = g_ro; g_dgen = g_rg;
+        if (fd_refs(fobj, fgen, "Encoding", 0, 0)) { g_cmapobj = g_ro; g_cmapgen = g_rg; }
+        else if (!wd_get(fobj, fgen, "Encoding", 0, 0) && g_dg.kind == PDK_NAME) {
+            if (nm_eq(g_dg.text, "Identity-H") || nm_eq(g_dg.text, "Identity-V")) { if (g_dg.text[9] == 'V') g_fvert = 1; }
+            else { g_ferr = PDFE_CMAP; }                      /* a predefined CJK CMap: codes read as 2-byte identity */
+        }
+        if (fd_refs(g_dobj, g_dgen, "CIDToGIDMap", 0, 0)) { cidobj = g_ro; cidgen = g_rg; }
+    }
+    if (fd_refs(fobj, fgen, "ToUnicode", 0, 0)) { tuobj = g_ro; tugen = g_rg; }
+    if (!wd_get(g_dobj, g_dgen, "FontDescriptor", "Flags", 0) && (g_dg.kind == PDK_INT)) sym = (pdw)((pdm_fx_floor(&g_dg.num) & 4) != 0);
+    g_ffobj = 0;
+    if (fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile2", 0) || fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile3", 0) ||
+        fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile", 0)) { g_ffobj = g_ro; g_ffgen = g_rg; }
+    if (!g_ffobj) { g_ferr = PDFE_NOPROG; return PDE_FONT; }
+    n = pdx_slurp(g_ffobj, g_ffgen, g_ws, 0, g_pcap);
+    if (n == 0xFFFF) { g_ferr = PDFE_SIZE; return PDE_LIMIT; }
+    if (!n) { g_ferr = PDFE_READ; return PDE_FONT; }
     g_pseg = g_ws; g_plen = n;
-    if (l->cidmap_obj) {
-        k = pdx_slurp(l->cidmap_obj, l->cidmap_gen, g_ws, g_pcap, PDXF_CIDWIN);
-        if (k != 0xFFFF) { g_cmaplen = k; l->flags |= PDFKF_MAPPED; }
-        else { g_cmaplen = PDXF_CIDWIN; l->flags |= PDFKF_MAPPED; }          /* the first 2,048 CIDs */
+    if (cidobj) {
+        n = pdx_slurp(cidobj, cidgen, g_ws, g_pcap, PDXF_CIDWIN);
+        g_cmaplen = n == 0xFFFF ? PDXF_CIDWIN : n;
     }
-    if (!fnt_open()) { l->detail = PDXF_E_FORMAT; return PDE_FONT; }
-    g_pobj = l->objnum; g_pgen = l->gen;
-    l->kind = g_kind;
-    l->upem = g_upem;
-    if (g_kind == PDFK_TT) l->nglyphs = g_sf_ng;
-    else if (g_kind == PDFK_CFF) { l->nglyphs = g_cf_ng; if (g_cf_cid) l->flags |= PDFKF_CID; if (g_cf_base) l->flags |= PDFKF_OTTO; }
-    else l->nglyphs = (pdw)(g_t1_ng + 1);
-    l->bbox_top = 900; bot = 250;
-    if (g_kind == PDFK_TT && g_upem) {
-        pdi t = pdx_muldiv(g_sf_asc, 1000, (pdi)g_upem), b = pdx_muldiv((pdi)-g_sf_desc, 1000, (pdi)g_upem);
-        if (t > 0 && t < 2000) l->bbox_top = (pdw)t;
-        if (b >= 0 && b < 1000) bot = (pdw)b;
+    if (!fnt_open()) { g_ferr = PDFE_FORMAT; return PDE_FONT; }
+    /* the tables */
+    g_tuoff = (pdw)(g_pcap + PDXF_CIDWIN + PDXF_STG); g_cmoff2 = (pdw)(g_tuoff + PDXF_TAB); g_wdoff = (pdw)(g_cmoff2 + PDXF_TAB);
+    if (tuobj && !pdx_sopen(tuobj, tugen)) {
+        if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
+        pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
     }
-    l->bbox_bot = bot;
+    if (g_ft0) {
+        if (g_cmapobj && !pdx_sopen(g_cmapobj, g_cmapgen)) {
+            if (!cm_parse(PDFC_ENC, g_ws, g_cmoff2, PDXF_TAB)) g_fcm = 1;
+            pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+        }
+        g_fwl = wd_ranges(g_dobj, g_dgen, g_ws, g_wdoff, PDXF_TAB); g_fdw = g_wdw;
+    } else fd_simple_enc(fobj, fgen, sym);
+    g_fobj = fobj; g_fgen = fgen;
     return 0;
 }
+
+/* value of the table at (off) for `code`: found in g_tfound */
+static pdw g_tfound;
+static pdw tab_find(pdw off, pdw code)
+{
+    pdw n = pd_fpeekw(g_ws, (pdw)(off + 2)), lo = 0, hi = n, m, e;
+    g_tfound = 0;
+    if (n > PDXF_TAB / 6) n = hi = (pdw)(PDXF_TAB / 6 - 1);
+    while (lo < hi) {
+        m = (pdw)((lo + hi) >> 1);
+        if (pd_fpeekw(g_ws, (pdw)(off + 4 + X6(m))) <= code) lo = (pdw)(m + 1); else hi = m;
+    }
+    if (!lo) return 0;
+    e = (pdw)(off + 4 + X6(lo - 1));
+    if (code <= pd_fpeekw(g_ws, (pdw)(e + 2))) { g_tfound = 1; return (pdw)(pd_fpeekw(g_ws, (pdw)(e + 4)) + (code - pd_fpeekw(g_ws, e))); }
+    return 0;
+}
+/* the /W range table: (first, last, width) triples, sorted */
+static pdw cid_width(pdw cid)
+{
+    pdw n = (pdw)(g_fwl / 6), k;
+    for (k = 0; k < n; k++)
+        if (cid >= pd_fpeekw(g_ws, (pdw)(g_wdoff + X6(k))) && cid <= pd_fpeekw(g_ws, (pdw)(g_wdoff + X6(k) + 2))) return pd_fpeekw(g_ws, (pdw)(g_wdoff + X6(k) + 4));
+    return g_fdw;
+}
+
+/* the common front of GLYPH and PATH: the font resident, the code mapped to a glyph index */
+static pdw g_cid, g_adv1000, g_lat, g_gid;
+static pdw fd_map(pdw fobj, pdw fgen, pdw code)
+{
+    pdw gid, v;
+    if (g_fobj != fobj || g_fgen != fgen) { pdw r = fd_activate(fobj, fgen); if (r) return r; }
+    g_cid = 0; g_adv1000 = 0; g_lat = 0xFFFF;
+    if (g_ft0) {
+        v = code;
+        if (g_fcm) { v = tab_find(g_cmoff2, code); if (!g_tfound) v = (pdw)((pd_fpeekb(g_ws, (pdw)(g_cmoff2 + 1)) & PDFC_IDENT) ? code : 0); }
+        g_cid = v; g_adv1000 = cid_width(v);
+        gid = cid_gid(v);
+    } else gid = enc_gid(code);
+    if (g_ftu) { v = tab_find(g_tuoff, code); g_lat = g_tfound ? uni_lat(v) : 0; }
+    g_gid = gid;
+    return 0;
+}
+
+/* ---- the verbs --------------------------------------------------------------------------- */
+pdw pdx_cf;                         /* the carry flag of the last verb (the door reads it)   */
+pdw pdx_engvec[2];                  /* PDENG's door, offset then segment (PDV_X_INIT)         */
+static union { struct pdxb_fglyph gl; struct pdxb_fpath pa; struct pdxb_init in; } g_a;
 
 static pdw v_glyph(void)
 {
     struct pdxb_fglyph *g = &g_a.gl;
-    pdw r;
-    if (g_kind == PDFK_NONE) return PDE_NOTFOUND;
-    r = fnt_glyph(g->gid, g->em64, g->asc, g->rows, g->dseg, g->doff, g->cap);
+    pdw r, n;
+    g->w = 0; g->lb = 0; g->nb = 0; g->adv64 = 0; g->err = 0; g->oflags = 0;
+    r = fd_map(g->objnum, g->gen, g->code);
+    if (r) { g->err = g_ferr; return r; }
+    g->gid = g_gid; g->cid = g_cid; g->adv1000 = g_adv1000; g->kind = g_kind;
+    g->lat = g_lat == 0xFFFF ? 0 : g_lat;
+    g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
+    if (g->flags & PDFG_INFO) return 0;
+    if (!g_gid) { g->w = 0; return 0; }                         /* no glyph: nothing to draw */
+    n = fnt_glyph(g_gid, g->em64, g->asc, g->rows, g->dseg, g->doff, g->cap);
     g->adv64 = g_gadv;
-    if (r == 0xFFFF) { g->w = 0xFFFF; g->lb = 0; g->nb = 0; return 0; }
-    g->w = g_rwpx; g->lb = g_rlb; g->nb = r;
+    if (n == 0xFFFF) { g->w = 0xFFFF; return 0; }
+    g->w = g_rwpx; g->lb = g_rlb; g->nb = n;
     return 0;
 }
-
 static pdw v_path(void)
 {
     struct pdxb_fpath *p = &g_a.pa;
-    pdw n;
-    if (g_kind == PDFK_NONE) return PDE_NOTFOUND;
-    if (!fnt_outline(p->gid)) { p->len = 0; return PDE_FONT; }
+    pdw r, n;
+    p->len = 0; p->err = 0;
+    r = fd_map(p->objnum, p->gen, p->code);
+    if (r) { p->err = g_ferr; return r; }
+    if (!g_gid || !fnt_outline(g_gid)) return 0;
     n = pdx_path(p->dseg, p->doff, p->cap);
     if (n == 0xFFFF) return PDE_LIMIT;
     p->len = n; p->upem = g_upem;
-    p->adv = (pdw)pdx_muldiv((pdi)(g_kind == PDFK_TT ? sf_adv(p->gid) : g_kind == PDFK_CFF ? (pdw)g_wid : (pdw)g_t1_wid), 1000, (pdi)g_upem);
+    p->adv1000 = (pdw)pdx_muldiv((pdi)fnt_adv(g_gid), 1000, (pdi)g_upem);
     return 0;
 }
 
-static pdw v_cmap(void)
-{
-    struct pdxb_fcmap *c = &g_a.cm;
-    pdw r;
-    c->len = 0; c->flags = 0;
-    if (!c->objnum) {                                              /* a predefined CMap: Identity-H/V only */
-        if (nm_eq(c->name, "Identity-H") || nm_eq(c->name, "Identity-V")) { c->flags = (pdw)(PDFC_IDENT | (c->name[9] == 'V' ? PDFC_VERT : 0)); return 0; }
-        return PDE_NOTFOUND;
-    }
-    if (pdx_sopen(c->objnum, c->gen)) return PDE_FONT;
-    r = cm_parse(c->kind, c->dseg, c->doff, c->cap);
-    pdx_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0);
-    if (r) return r;
-    c->len = (pdw)(4 + X6(g_cmcnt)); c->flags = g_cmflags;
-    return 0;
-}
-
-/* the module's entry point: the door passes AL, BX, CX, DX. Returns AX; g_cf = the carry */
+/* the module's entry point: the door passes AL, BX, CX, DX. Returns AX; pdx_cf = the carry */
 pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
 {
     pdw r = 0;
@@ -333,26 +446,16 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
         pdx_engvec[0] = g_a.in.eng_off; pdx_engvec[1] = g_a.in.eng_seg;
         g_ws = g_a.in.slot_seg;
         g_wslen = (pdw)(g_a.in.slot_kb >= 64 ? 0xFFF0u : (pdw)(g_a.in.slot_kb << 10));
-        if (!g_ws || g_wslen < PDXF_CIDWIN + PDXF_STG + 4096) { pdx_cf = 1; return PDE_NOSLOT; }
-        g_pcap = (pdw)(g_wslen - PDXF_CIDWIN - PDXF_STG);
+        if (!g_ws || g_wslen < PDXF_CIDWIN + PDXF_STG + 3 * PDXF_TAB + 4096) { pdx_cf = 1; return PDE_NOSLOT; }
+        g_pcap = (pdw)(g_wslen - PDXF_CIDWIN - PDXF_STG - 3 * PDXF_TAB);
         g_stgseg = g_ws; g_stgoff = (pdw)(g_pcap + PDXF_CIDWIN);
-        g_kind = PDFK_NONE;
+        g_kind = PDFK_NONE; g_fobj = 0;
         return 0;
     }
     if (!g_ws) { pdx_cf = 1; return PDE_NOSLOT; }
-    pdx_zero(&g_a, sizeof g_a);
     switch (verb) {
-    case PDV_FNT_LOAD:   pd_fcopy_in(g_xb, 0, &g_a.ld, sizeof g_a.ld); r = v_load(); pd_fcopy_out(&g_a.ld, g_xb, 0, sizeof g_a.ld); break;
-    case PDV_FNT_ENC:    pd_fcopy_in(g_xb, 0, &g_a.en, sizeof g_a.en); enc_set(&g_a.en); break;
-    case PDV_FNT_GID:
-        pd_fcopy_in(g_xb, 0, &g_a.gi, sizeof g_a.gi);
-        if (g_kind == PDFK_NONE) { r = PDE_NOTFOUND; break; }
-        g_a.gi.gid = g_a.gi.kind ? cid_gid(g_a.gi.code) : enc_gid(g_a.gi.code);
-        pd_fcopy_out(&g_a.gi, g_xb, 0, sizeof g_a.gi); break;
-    case PDV_FNT_GLYPH:  pd_fcopy_in(g_xb, 0, &g_a.gl, sizeof g_a.gl); r = v_glyph(); pd_fcopy_out(&g_a.gl, g_xb, 0, sizeof g_a.gl); break;
-    case PDV_FNT_PATH:   pd_fcopy_in(g_xb, 0, &g_a.pa, sizeof g_a.pa); r = v_path(); pd_fcopy_out(&g_a.pa, g_xb, 0, sizeof g_a.pa); break;
-    case PDV_FNT_CMAP:   pd_fcopy_in(g_xb, 0, &g_a.cm, sizeof g_a.cm); r = v_cmap(); pd_fcopy_out(&g_a.cm, g_xb, 0, sizeof g_a.cm); break;
-    case PDV_FNT_WIDTHS: pd_fcopy_in(g_xb, 0, &g_a.wi, sizeof g_a.wi); r = v_widths(); pd_fcopy_out(&g_a.wi, g_xb, 0, sizeof g_a.wi); break;
+    case PDV_FNT_GLYPH: pd_fcopy_in(g_xb, 0, &g_a.gl, sizeof g_a.gl); r = v_glyph(); pd_fcopy_out(&g_a.gl, g_xb, 0, sizeof g_a.gl); break;
+    case PDV_FNT_PATH:  pd_fcopy_in(g_xb, 0, &g_a.pa, sizeof g_a.pa); r = v_path(); pd_fcopy_out(&g_a.pa, g_xb, 0, sizeof g_a.pa); break;
     default: r = PDE_RANGE; break;
     }
     if (r) pdx_cf = 1;

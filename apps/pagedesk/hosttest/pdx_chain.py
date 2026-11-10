@@ -34,7 +34,7 @@ def main():
         if out.returncode: errs.append("harness rc %d: %s" % (out.returncode, (out.stdout + out.stderr)[:200]))
         isc = "cmap" in n
         for c, g in zip(j["codes"], j["gids"]):
-            if not isc and gid.get(c) != g: errs.append("gid(%d)=%s want %d" % (c, gid.get(c), g))
+            if gid.get(c) != g: errs.append("gid(%d)=%s want %d" % (c, gid.get(c), g))
         for c, u in j.get("unicode", {}).items():
             if uni.get(int(c)) != u: errs.append("uni(%s)=%s want %d" % (c, uni.get(int(c)), u))
         for c, w in j.get("widths", {}).items():
