@@ -533,79 +533,66 @@ static pdw rf_tpl, rf_tpgr;
 static pdi rf_at[2][2];
 static pdw rf_w, rf_rw;
 
-static int rf_cur(const pdb *r, pdi x)
+/* the context pixels of a refinement, table-driven: {row, dx} where row 0 = the row being made,
+ * 1 = the row above it, 2/3/4 = the reference rows y-1, y, y+1 (before the offsets are applied); the AT
+ * pixels (entries 3 and 12 of template 0) are patched per segment */
+#define RF_AT0 3
+#define RF_AT1 12
+static signed char rf_t0[13][2] = {
+    { 0, -1 }, { 1, 1 }, { 1, 0 }, { 1, -1 }, { 4, 1 }, { 4, 0 }, { 4, -1 }, { 3, 1 }, { 3, 0 }, { 3, -1 }, { 2, 1 }, { 2, 0 }, { 2, -1 } };
+static const signed char rf_t1[10][2] = {
+    { 0, -1 }, { 1, 1 }, { 1, 0 }, { 1, -1 }, { 4, 1 }, { 4, 0 }, { 3, 1 }, { 3, 0 }, { 3, -1 }, { 2, 0 } };
+static pdb *rf_rows[5];
+static int rf_pix(pdw row, pdi x)
 {
-    if (x < 0 || x >= (pdi)rf_w) return 0;
-    return (r[x >> 3] >> (7 - (x & 7))) & 1;
-}
-static int rf_ref(const pdb *r, pdi x)
-{
-    if (x < 0 || x >= (pdi)rf_rw) return 0;
-    return (r[x >> 3] >> (7 - (x & 7))) & 1;
+    pdi lim = row < 2 ? (pdi)rf_w : (pdi)rf_rw;
+    if (x < 0 || x >= lim) return 0;
+    return (rf_rows[row][x >> 3] >> (7 - (x & 7))) & 1;
 }
 
 /* dst: a bitmap of w x h in the workspace; ref at (x - dx, y - dy) of the reference.
  * mq_init done and the refinement contexts cleared by the caller. */
 static pdw rf_decode(pdw dst, pdw w, pdw h, pdw ref, pdw rw, pdw rh, pdi dx, pdi dy)
 {
-    pdw rb = (pdw)((w + 7) >> 3), rrb = (pdw)((rw + 7) >> 3), x, y, i, ctx, ltp = 0, cen;
+    pdw rb = (pdw)((w + 7) >> 3), rrb = (pdw)((rw + 7) >> 3), x, y, i, j, nt, ctx, ltp = 0, cen;
     pdb *cur = jb_srow, *up = tr_row;
-    pdb *r0 = gb_r0, *r1 = gb_r1, *r2 = gb_r2;
-    pdi ry;
-    int bit, a, b, c, d, e, f, g, hh, ii;
+    pdi ry, rx;
+    int bit, a;
+    const signed char *t;
     if (w > RF_MAXW || rw > RF_MAXW) return PDE_LIMIT;
     rf_w = w; rf_rw = rw;
     cen = rf_tpl ? 0x80u : 0x100u;
+    rf_rows[0] = cur; rf_rows[1] = up; rf_rows[2] = gb_r0; rf_rows[3] = gb_r1; rf_rows[4] = gb_r2;
+    if (rf_tpl == 0) {          /* patch the AT pixels: a current-image one (row 0 or 1) and a reference one (rows 2-4) */
+        rf_t0[RF_AT0][0] = rf_at[0][1] == 0 ? 0 : 1; rf_t0[RF_AT0][1] = (signed char)rf_at[0][0];
+        rf_t0[RF_AT1][0] = (signed char)(rf_at[1][1] + 3); rf_t0[RF_AT1][1] = (signed char)rf_at[1][0];
+        t = &rf_t0[0][0]; nt = 13;
+    } else { t = &rf_t1[0][0]; nt = 10; }
     for (i = 0; i < GB_MAXRB; i++) up[i] = 0;
     for (y = 0; y < h; y++) {
-        if (mq_eofn > MQ_DEAD) return PDE_SYNTAX;
-        for (i = 0; i < GB_MAXRB; i++) { cur[i] = 0; r0[i] = r1[i] = r2[i] = 0; }
+        for (i = 0; i < GB_MAXRB; i++) { cur[i] = 0; gb_r0[i] = gb_r1[i] = gb_r2[i] = 0; }
         ry = (pdi)((pdi)y - dy);
-        if (ry - 1 >= 0 && ry - 1 < (pdi)rh) jw_get(r0, (pdw)(ref + (pdw)(ry - 1) * rrb), rrb);
-        if (ry >= 0 && ry < (pdi)rh) jw_get(r1, (pdw)(ref + (pdw)ry * rrb), rrb);
-        if (ry + 1 >= 0 && ry + 1 < (pdi)rh) jw_get(r2, (pdw)(ref + (pdw)(ry + 1) * rrb), rrb);
+        if (ry - 1 >= 0 && ry - 1 < (pdi)rh) jw_get(gb_r0, (pdw)(ref + (pdw)(ry - 1) * rrb), rrb);
+        if (ry >= 0 && ry < (pdi)rh) jw_get(gb_r1, (pdw)(ref + (pdw)ry * rrb), rrb);
+        if (ry + 1 >= 0 && ry + 1 < (pdi)rh) jw_get(gb_r2, (pdw)(ref + (pdw)(ry + 1) * rrb), rrb);
         if (rf_tpgr) ltp ^= (pdw)mq_bit((pdw)(JW_GR + cen));
         for (x = 0; x < w; x++) {
-            pdi rx = (pdi)((pdi)x - dx);
-            a = rf_ref(r1, rx);
+            rx = (pdi)((pdi)x - dx);
+            a = rf_pix(3, rx);
             if (ltp) {          /* typical prediction: a uniform 3 x 3 reference neighbourhood is the pixel */
-                b = rf_ref(r0, (pdi)(rx - 1)); c = rf_ref(r0, rx); d = rf_ref(r0, (pdi)(rx + 1));
-                e = rf_ref(r1, (pdi)(rx - 1)); f = rf_ref(r1, (pdi)(rx + 1));
-                g = rf_ref(r2, (pdi)(rx - 1)); hh = rf_ref(r2, rx); ii = rf_ref(r2, (pdi)(rx + 1));
-                if (b == a && c == a && d == a && e == a && f == a && g == a && hh == a && ii == a) {
+                int same = 1;
+                for (j = 2; j < 5 && same; j++)
+                    for (i = 0; i < 3; i++) if (rf_pix(j, (pdi)(rx + (pdi)i - 1)) != a) { same = 0; break; }
+                if (same) {
                     if (a) cur[x >> 3] |= (pdb)(0x80 >> (x & 7));
                     continue;
                 }
             }
-            if (rf_tpl == 0) {
-                pdi ax = (pdi)((pdi)x + rf_at[0][0]), ay = rf_at[0][1];
-                ctx = (pdw)(rf_cur(cur, (pdi)(x - 1)));
-                ctx |= (pdw)(rf_cur(up, (pdi)(x + 1)) << 1);
-                ctx |= (pdw)(rf_cur(up, (pdi)x) << 2);
-                ctx |= (pdw)((ay == 0 ? rf_cur(cur, ax) : rf_cur(up, ax)) << 3);
-                ctx |= (pdw)(rf_ref(r2, (pdi)(rx + 1)) << 4);
-                ctx |= (pdw)(rf_ref(r2, rx) << 5);
-                ctx |= (pdw)(rf_ref(r2, (pdi)(rx - 1)) << 6);
-                ctx |= (pdw)(rf_ref(r1, (pdi)(rx + 1)) << 7);
-                ctx |= (pdw)(a << 8);
-                ctx |= (pdw)(rf_ref(r1, (pdi)(rx - 1)) << 9);
-                ctx |= (pdw)(rf_ref(r0, (pdi)(rx + 1)) << 10);
-                ctx |= (pdw)(rf_ref(r0, rx) << 11);
-                {
-                    pdi qx = (pdi)(rx + rf_at[1][0]), qy = rf_at[1][1];
-                    ctx |= (pdw)((qy == -1 ? rf_ref(r0, qx) : qy == 0 ? rf_ref(r1, qx) : rf_ref(r2, qx)) << 12);
-                }
-            } else {
-                ctx = (pdw)(rf_cur(cur, (pdi)(x - 1)));
-                ctx |= (pdw)(rf_cur(up, (pdi)(x + 1)) << 1);
-                ctx |= (pdw)(rf_cur(up, (pdi)x) << 2);
-                ctx |= (pdw)(rf_cur(up, (pdi)(x - 1)) << 3);
-                ctx |= (pdw)(rf_ref(r2, (pdi)(rx + 1)) << 4);
-                ctx |= (pdw)(rf_ref(r2, rx) << 5);
-                ctx |= (pdw)(rf_ref(r1, (pdi)(rx + 1)) << 6);
-                ctx |= (pdw)(a << 7);
-                ctx |= (pdw)(rf_ref(r1, (pdi)(rx - 1)) << 8);
-                ctx |= (pdw)(rf_ref(r0, rx) << 9);
+            ctx = 0;
+            for (j = 0; j < nt; j++) {
+                pdw row = (pdw)t[j * 2];
+                pdi px = (pdi)(row < 2 ? (pdi)x : rx) + (pdi)t[j * 2 + 1];
+                ctx |= (pdw)((pdw)rf_pix(row, px) << j);
             }
             bit = mq_bit((pdw)(JW_GR + ctx));
             if (bit) cur[x >> 3] |= (pdb)(0x80 >> (x & 7));
@@ -1400,6 +1387,25 @@ static void jb_rg_add(pdw kind, pdw ofs, pdw cnt, pdw a, pdw b)
 }
 
 
+/* the symbols of the dictionaries the segment refers to: their number (0xFFFF if one is unusable);
+ * with base != 0 their records are also copied there, in order */
+static pdw jb_syms(pdw base)
+{
+    pdw i, g, k, n = 0;
+    for (i = 0; i < jb_nref && i < 32; i++) {
+        g = jb_rg_find(jb_ref[i]);
+        if (g == 0xFFFFu) continue;
+        if (jb_rg_kind[g] == RGK_BAD) return 0xFFFFu;
+        if (jb_rg_kind[g] != RGK_SYM) continue;
+        if (base) for (k = 0; k < jb_rg_cnt[g]; k++) {
+            jb_getrec(jb_rg_ofs[g], k);
+            jb_setrec(base, (pdw)(n + k), jb_rec_off, jb_rec_w, jb_rec_h);
+        }
+        n = (pdw)(n + jb_rg_cnt[g]);
+    }
+    return n;
+}
+
 static void jb_collect_tabs(void)
 {
     pdw i, g;
@@ -1435,24 +1441,14 @@ static pdw jb_segment_symdict(void)
     else for (k = 0; k < 4; k++) { sd_at[k][0] = gb_atnomv[0][k * 2]; sd_at[k][1] = gb_atnomv[0][k * 2 + 1]; }
     jb_b32(); sd_numex = jb_lo; if (jb_hi) return PDE_LIMIT;
     jb_b32(); sd_numnew = jb_lo; if (jb_hi || sd_numnew > JB_MAXSYMS) return PDE_LIMIT;
-    for (i = 0; i < jb_nref && i < 32; i++) {
-        j = jb_rg_find(jb_ref[i]);
-        if (j != 0xFFFFu && jb_rg_kind[j] == RGK_SYM) nin = (pdw)(nin + jb_rg_cnt[j]);
-        else if (j != 0xFFFFu && jb_rg_kind[j] == RGK_BAD) return PDE_LIMIT;
-    }
+    nin = jb_syms(0);
+    if (nin == 0xFFFFu) return PDE_LIMIT;
     total = (pdw)(nin + sd_numnew);
     if (total > JB_MAXSYMS) return PDE_LIMIT;
     sd_all = jb_recs(total ? total : 1);
     if (!sd_all) return PDE_LIMIT;
-    sd_nin = nin; j = 0;
-    for (i = 0; i < jb_nref && i < 32; i++) {
-        pdw g = jb_rg_find(jb_ref[i]);
-        if (g != 0xFFFFu && jb_rg_kind[g] == RGK_SYM)
-            for (k = 0; k < jb_rg_cnt[g]; k++) {
-                jb_getrec(jb_rg_ofs[g], k);
-                jb_setrec(sd_all, j, jb_rec_off, jb_rec_w, jb_rec_h); j++;
-            }
-    }
+    sd_nin = nin;
+    jb_syms(sd_all);
     e = sd_run();
     if (e) { jb_sp = msp; jb_hp = mhp; return e; }
     M = sd_numex;
@@ -1494,24 +1490,14 @@ static pdw jb_segment_text(void)
         if (rf_at[0][1] < -1 || rf_at[0][1] > 0 || rf_at[1][1] < -1 || rf_at[1][1] > 1) return PDE_LIMIT;
     }
     jb_b32(); if (jb_hi) return PDE_LIMIT; tr_ninst = jb_lo;
-    for (i = 0; i < jb_nref && i < 32; i++) {
-        j = jb_rg_find(jb_ref[i]);
-        if (j != 0xFFFFu && jb_rg_kind[j] == RGK_SYM) nsy = (pdw)(nsy + jb_rg_cnt[j]);
-        else if (j != 0xFFFFu && jb_rg_kind[j] == RGK_BAD) return PDE_LIMIT;
-    }
+    nsy = jb_syms(0);
+    if (nsy == 0xFFFFu) return PDE_LIMIT;
     if (nsy > JB_MAXSYMS) return PDE_LIMIT;
     if (!nsy) return PDE_OK;
     tr_recs = jb_recs(nsy);
     if (!tr_recs) return PDE_LIMIT;
-    tr_nsyms = nsy; j = 0;
-    for (i = 0; i < jb_nref && i < 32; i++) {
-        g = jb_rg_find(jb_ref[i]);
-        if (g != 0xFFFFu && jb_rg_kind[g] == RGK_SYM)
-            for (k = 0; k < jb_rg_cnt[g]; k++) {
-                jb_getrec(jb_rg_ofs[g], k);
-                jb_setrec(tr_recs, j, jb_rec_off, jb_rec_w, jb_rec_h); j++;
-            }
-    }
+    tr_nsyms = nsy;
+    jb_syms(tr_recs);
     jb_idlen = jb_codelen(nsy);
     if (jb_idlen > 11 && !jb_huff) { jb_sp = msp; jb_hp = mhp; return PDE_LIMIT; }
     e = jb_cv_open((pdw)(!tr_defpix && jb_rop == 0 && tr_comb == 0), tr_defpix);
