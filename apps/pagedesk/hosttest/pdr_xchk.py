@@ -296,6 +296,32 @@ for pdf, pg, env in cases:
             bad.append('%s p%d %s: rc %s/%s inc %s/%s diff %s' % (os.path.basename(pdf), pg, ad, rca, rcb, sta.get('incomplete'),
                        stb.get('incomplete'), 'n/a' if ima is None or imb is None or ima.shape != imb.shape else int((ima != imb).sum())))
 check('%d pages x 2 adapters, a slice per operator: the same picture and the same Incomplete bits' % len(cases), not bad, '; '.join(bad[:4]))
+print('-- annotations with no appearance stream, drawn from the dictionary (QA R6b, noap.pdf)')
+noap = os.path.join(fx, 'noap.pdf')
+an = {'PDR_RFLAGS': '1'}
+rc, im, st, _ = render(noap, 0, 'vga', env=an)
+rcn, imn, stn, _ = render(noap, 0, 'vga', env={'PDR_RFLAGS': '0'})
+ref = mutool(noap, 0)
+def ink(a, x0, y0, x1, y1): return int((a[400 - y1:400 - y0, x0:x1] < 200).sum()) if a is not None else -1
+pct = cellmatch(im, ref, 90) if im is not None else 100.0     # 90: the page's own palette (10.5) maps pure blue to light blue
+check('Text, Square (/C /IC /BS), Circle (/Border), Line (/L), Highlight, Underline, StrikeOut: as MuPDF (%.1f%% of cells off)' % pct,
+      rc == 0 and num(st, 'incomplete') == 0 and pct < 3.0)
+check('... each one inked where MuPDF inks it', im is not None and all(ink(im, *b) > 20 and ink(ref, *b) > 20 for b in (
+      (40, 330, 60, 350), (80, 330, 100, 350), (40, 200, 140, 280), (180, 200, 300, 280), (40, 100, 360, 180), (40, 40, 160, 70), (200, 40, 360, 70))))
+check('... the Highlight is under the page: the bar over it stays black, yellow round it',
+      im is not None and int((im[400 - 338:400 - 332, 205:315] < 40).all()) == 1 and 150 < int(im[400 - 342, 260]) < 250)
+check('... a Hidden Square, a Square with neither /C nor /IC and a Popup draw nothing',
+      im is not None and ink(im, 340, 198, 392, 392) == ink(ref, 340, 198, 392, 392) == 0)
+check('... and without PDRF_ANNOTS none of it is drawn (the page alone)',
+      rcn == 0 and imn is not None and ink(imn, 40, 330, 100, 350) == 0 and ink(imn, 40, 200, 300, 280) == 0)
+rc, im, st, _ = render(noap, 1, 'vga', env=an)
+miss = [i for i in range(80) if ink(im, 20 + (i // 16) * 75, 360 - (i % 16) * 22, 40 + (i // 16) * 75, 380 - (i % 16) * 22) < 20] if im is not None else ['all']
+check('80 Text notes on one page (BIG_OS\'s shape): every icon drawn, in one pass of a 29 KiB list (%s passes)' % st.get('passes'),
+      rc == 0 and not miss and num(st, 'passes') == 1, 'missing %r' % miss[:8])
+for ad in ('cga', 'herc'):
+    rc, im, st, _ = render(noap, 0, ad, env=an)
+    check('noap.pdf on %s: drawn clean, ink in the note and the shapes' % ad, rc == 0 and num(st, 'incomplete') == 0 and im is not None
+          and int((im < 128).sum()) > 2000)
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))

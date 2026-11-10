@@ -3324,8 +3324,8 @@ The clip pool of the pass is kept across phases (a state is reset with `gs_reset
 `ANNOTS(page, index)` (20.2.6) is walked in order; PDREND reads the answer straight out of the
 exchange block (`objnum` +0, `gen` +2, `subtype` +4, `rect` +20, `flags` +52, `has_ap` +54 -
 held to the struct by `static_assert`s in the host build) and calls nothing else on the
-annotation until it has them. An annotation is SKIPPED when it is a hole (`objnum` 0), has no
-`/AP /N`, has `/F` bit 2 (Hidden) or 6 (NoView, value 32), is not of this phase's kind (the
+annotation until it has them. An annotation is SKIPPED when it is a hole (`objnum` 0), has
+`/F` bit 2 (Hidden) or 6 (NoView, value 32), is not of this phase's kind (the
 subtype is `Highlight` or it is not), or when `PDRF_EDITS` is set and a record of the store names
 it in `src_num`/`src_gen` (a deletion, a move or a replacement: the record draws it, or nothing
 does). `/N` is a form XObject by reference (an object with a `/BBox`), or a state dictionary of which
@@ -3339,7 +3339,27 @@ first version took two opposite corners, which collapsed a 45-degree appearance 
 the matrix A that maps that rectangle onto the annotation's `/Rect` (a scale and a translation)
 is applied BEFORE the form's own `/Matrix`. A degenerate box, rectangle or an
 unreadable `/BBox` draws nothing and is not Incomplete. `Widget` is drawn like any other: a
-field's appearance is a form. No annotation without an appearance gets a made-up icon.
+field's appearance is a form.
+
+**An annotation with no usable `/AP /N` is drawn from its dictionary** (QA R6b; PDF 1.7 12.5.5
+lets a viewer do so and MuPDF does - BIG_OS's 160 notes were the case). `pdra.c annot_synth`
+draws, with the page's own path, paint and colour machinery (`col_apply`, so a colour lands on
+the palette exactly as page content's would), straight into the list - nothing is opened:
+
+| `/Subtype` | drawn |
+|---|---|
+| `Text` | a framed card with three lines, 20 x 18 pt at the `/Rect`'s top-left (a viewer's fixed-size note), filled with `/C` (none: white; 1bpp: white), framed black at 0.8 pt |
+| `Square`, `Circle` | the `/Rect` inset by half the width, filled with `/IC` and stroked with `/C`; the width is `/BS /W`, else `/Border`'s third number, else 1; no `/C` (or a width of 0) is no stroke, and neither is nothing |
+| `Line` | `/L`'s two points, stroked with `/C` at that width, butt caps; `/LE` (endings) is not drawn |
+| `Highlight` | each of the first `AN_NQ` = 8 quads of `/QuadPoints` (UL UR LL LR) filled with `/C` (none: yellow) - in the highlight phase, before the page, so text stays on top |
+| `Underline`, `StrikeOut` | a rule along each quad's foot (a 16th of its height up) or through its middle, a 16th of its height thick (at least 0.5 pt), in `/C` (none: not drawn) |
+
+Anything else with no appearance (Popup, FreeText, Ink, Squiggly, Polygon, a Widget with no
+`/AP`) draws nothing, as before, and is not Incomplete. The cost is one `DICT_GET` per value
+read (a colour is its count and its components): 4-6 for a note, up to 65 for a highlight. The
+card is 4 edges filled, 4 stroked and 3 rules, so BIG_OS's 80 notes on a page fit one pass of a
+29 KiB list (an earlier speech-bubble icon of curves took nine). `pdr_xchk`'s `noap.pdf` is the
+check: every kind against MuPDF, three that must not draw, 80 notes in one pass, three adapters.
 
 #### 20.12.3 The edit store's marks (13.3, 17.4)
 

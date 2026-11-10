@@ -369,6 +369,43 @@ def park_pdf(path):
     d.write(path)
 
 
+def noap_pdf(path):
+    """Annotations with NO appearance stream (QA R6b, PAGEDESK-SPEC 20.12.2): a
+    viewer draws them from the dictionary, as MuPDF does. Page 1: two Text notes
+    (one yellow by /C, one with no /C), a Square with /C, /IC and /BS /W 3, a
+    Circle with /Border [0 0 2], a Line with /L, a Highlight over a black bar
+    (it goes first: the bar must stay black on top), an Underline and a
+    StrikeOut, and three that must NOT draw: a Hidden Square (/F 2), a Square
+    with neither /C nor /IC and a Popup. Page 2: 80 Text notes in a column
+    grid, BIG_OS's shape."""
+    d = Pdf()
+    ann = []
+    def a(body):
+        ann.append(d.add('<< /Type /Annot %s >>' % body))
+    a('/Subtype /Text /Rect [40 330 60 350] /C [1 1 0] /Contents (yellow)')
+    a('/Subtype /Text /Rect [80 330 100 350] /Contents (no colour)')
+    a('/Subtype /Square /Rect [40 200 140 280] /C [1 0 0] /IC [0 0 1] /BS << /W 3 >>')
+    a('/Subtype /Circle /Rect [180 200 300 280] /C [0 0.6 0] /Border [0 0 2]')
+    a('/Subtype /Line /Rect [40 100 360 180] /L [50 110 350 170] /C [0 0 0] /BS << /W 2 >>')
+    a('/Subtype /Highlight /Rect [190 320 330 350] /QuadPoints [195 345 330 345 195 325 330 325] /C [1 1 0]')
+    a('/Subtype /Underline /Rect [40 40 160 70] /QuadPoints [40 70 160 70 40 50 160 50] /C [1 0 0]')
+    a('/Subtype /StrikeOut /Rect [200 40 360 70] /QuadPoints [200 70 360 70 200 50 360 50] /C [0 0 1]')
+    a('/Subtype /Square /Rect [320 200 380 280] /C [0 0 0] /F 2')
+    a('/Subtype /Square /Rect [320 290 380 310]')
+    a('/Subtype /Popup /Rect [300 300 390 390]')
+    c = d.stream('', '0 g 200 330 120 10 re f 0.5 g 45 55 110 10 re f 205 55 150 10 re f')
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R /Annots [%s] >>'
+                         % (c, ' '.join('%d 0 R' % o for o in ann))))
+    ann2 = []
+    for i in range(80):
+        x, y = 20 + (i // 16) * 75, 360 - (i % 16) * 22
+        ann2.append(d.add('<< /Type /Annot /Subtype /Text /Rect [%d %d %d %d] /C [1 1 0] /NM (n%d) >>' % (x, y, x + 20, y + 20, i)))
+    c2 = d.stream('', '')
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R /Annots [%s] >>'
+                         % (c2, ' '.join('%d 0 R' % o for o in ann2))))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -381,7 +418,8 @@ def main():
     hair_pdf(os.path.join(out, 'hair.pdf'))
     small_pdf(os.path.join(out, 'small.pdf'))
     park_pdf(os.path.join(out, 'park.pdf'))
-    print('os88pdfx_rcore: 9 fixtures in %s' % out)
+    noap_pdf(os.path.join(out, 'noap.pdf'))
+    print('os88pdfx_rcore: 10 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

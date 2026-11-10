@@ -69,5 +69,10 @@
 #define ed_text         ovl_ed_text
 #define ed_textline     ovl_ed_textline
 #define font_synth      ovl_font_synth
+/* [rcore] an annotation with no appearance: drawn from its dictionary (QA R6b) */
+#define annot_synth     ovl_annot_synth
+#define an_num          ovl_an_num
+#define an_col          ovl_an_col
+#define an_prog         ovl_an_prog
 
 #endif

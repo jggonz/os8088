@@ -134,6 +134,128 @@ static pdw ap_find(void)
     return 1;
 }
 
+/* ---- an annotation with no appearance stream (QA R6b, 20.12.2) -------------------
+ * PDF 1.7 12.5.5 lets a viewer draw one from its dictionary, and MuPDF does: a
+ * Text note as an icon at its /Rect's top-left, Square, Circle and Line from /C
+ * (the stroke; none = not stroked), /IC (the interior), /BS /W or /Border's third
+ * number (the width, 1 by default) and /L, and a Highlight, Underline or StrikeOut
+ * from its /QuadPoints (the first AN_NQ quads). Drawn at once into the list with
+ * the page's own path, paint and colour machinery - nothing is opened */
+#define AN_NQ 8
+static const pdi an_note[] = {          /* MuPDF's note: a framed card with three lines, in a 20 x 18 pt box (a 40 x 36 grid) */
+    -1, 4, 2, -2, 36, 2, -2, 36, 34, -2, 4, 34, -4, -5,
+    -1, 10, 26, -2, 30, 26, -1, 10, 20, -2, 30, 20, -1, 10, 14, -2, 30, 14, -6, -7 };
+static const pdi an_ell[] = {           /* four curves, kappa 0.5523, on a 1000 grid */
+    -1, 1000, 500, -3, 1000, 776, 776, 1000, 500, 1000, -3, 224, 1000, 0, 776, 0, 500,
+    -3, 0, 224, 224, 0, 500, 0, -3, 776, 0, 1000, 224, 1000, 500, -4, -7 };
+static const pdi an_box[] = { -1, 0, 0, -2, 1, 0, -2, 1, 1, -2, 0, 1, -4, -7 };
+static struct pd_fx g_anv, g_an16;
+/* a number of the annotation's dictionary as pt16: k0 alone (idx 0xFFFF) or element
+ * idx of the array k0 (k1 a sub-key: /BS /W); dflt when it is not there */
+static pdi an_num(const char *k0, const char *k1, pdw idx, pdi dflt)
+{
+    pdw e;
+    if (k1) e = dict_get(g_aob, g_agn, k0, k1, 0);
+    else if (idx == 0xFFFF) e = dict_get(g_aob, g_agn, k0, 0, 0);
+    else e = dict_get(g_aob, g_agn, k0, idx_key(idx), 0);
+    if (e || (g_dg.kind != PDK_INT && g_dg.kind != PDK_REAL)) return dflt;
+    pdm_fx_int(&g_an16, 16); pdm_fx_mul(&g_anv, &g_an16, &g_dg.num);   /* points to pt16 (no fx_to_pt16 in this segment) */
+    return (pdi)pdm_fx_round(&g_anv);
+}
+/* /C or /IC as the fill (stroke 0) or stroke colour, through the page's own
+ * col_apply; 0 = the array is absent or empty (transparent) */
+static pdw an_col(const char *k, pdw stroke)
+{
+    pdw n, i;
+    if (dict_get(g_aob, g_agn, k, 0, 0) || g_dg.kind != PDK_ARR) return 0;
+    n = g_dg.count;
+    if (n != 1 && n != 3 && n != 4) return 0;
+    for (i = 0; i < n; i++) {
+        if (dict_get(g_aob, g_agn, k, idx_key(i), 0) || (g_dg.kind != PDK_INT && g_dg.kind != PDK_REAL)) return 0;
+        pdr_cpy(&g_opn[i], &g_dg.num, 4);
+    }
+    g_nop = n;
+    col_apply(stroke, n);
+    g_nop = 0;
+    return 1;
+}
+/* a path program (pdxedit.c's language) over the box bx, by, bw, bh (pt16) */
+static void an_prog(const pdi *p, pdi n, pdi bx, pdi by, pdi bw, pdi bh, pdw fill, pdw stroke)
+{
+    static pdi a[6];
+    pdi op, k, m;
+    while (*p != -7) {
+        op = *p++;
+        if (op == -4) { path_close(); continue; }
+        if (op == -5 || op == -6) { paint(op == -5 && fill, 0, stroke, 0); continue; }
+        m = op == -3 ? 6 : 2;
+        for (k = 0; k < m; k += 2, p += 2) {
+            a[k] = (pdi)(bx + pdr_muldiv(p[0], bw, n));
+            a[k + 1] = (pdi)(by + pdr_muldiv(p[1], bh, n == 40 ? 36 : n));
+        }
+        if (op == -3) {
+            edev(a[0], a[1]); a[0] = g_dx; a[1] = g_dy;
+            edev(a[2], a[3]); a[2] = g_dx; a[3] = g_dy;
+            edev(a[4], a[5]);
+            path_curve(a[0], a[1], a[2], a[3], g_dx, g_dy);
+        } else ep(a[0], a[1], op == -1);
+    }
+    if (p[-1] == -4) paint(fill, 0, stroke, 0);
+}
+/* 1 = it was one of the kinds drawn here (drawn, or nothing to draw) */
+static pdw annot_synth(pdw hl)
+{
+    pdi w, x0 = g_ar.x0, y0 = g_ar.y0, x1 = g_ar.x1, y1 = g_ar.y1, h;
+    pdw k, q, nq, fill, stroke, j;
+    static pdi qp[8];
+    k = pdr_seq(g_name, "Text") ? 1 : pdr_seq(g_name, "Square") ? 2 : pdr_seq(g_name, "Circle") ? 3
+      : pdr_seq(g_name, "Line") ? 4 : hl ? 5 : pdr_seq(g_name, "Underline") ? 6 : pdr_seq(g_name, "StrikeOut") ? 7 : 0;
+    if (!k) return 0;
+    gs_reset(); path_reset(); g_plimit = 0; op_clear();
+    if (k == 1) {                                           /* the note: a fixed 20 x 18 pt icon, as a viewer draws one */
+        if (g_bpp == 1 || !an_col("C", 0)) col_set(0, 255, 255, 255);     /* none: white, as MuPDF */
+        col_set(1, 0, 0, 0); ed_lw(13);
+        an_prog(an_note, 40, x0, (pdi)(y1 - 288), 320, 288, 1, 1);
+        return 1;
+    }
+    if (k >= 5) {                                           /* quads: (x1 y1 x2 y2 x3 y3 x4 y4) = UL UR LL LR */
+        if (!an_col("C", k == 5 ? 0 : 1)) { if (k != 5) return 1; col_set(0, 255, 255, 0); }
+        if (dict_get(g_aob, g_agn, "QuadPoints", 0, 0) || g_dg.kind != PDK_ARR) return 1;
+        nq = (pdw)(g_dg.count >> 3); if (nq > AN_NQ) nq = AN_NQ;
+        for (q = 0; q < nq; q++) {
+            for (j = 0; j < 8; j++) qp[j] = an_num("QuadPoints", 0, (pdw)(q * 8 + j), 0);
+            if (k == 5) {
+                ep(qp[0], qp[1], 1); ep(qp[2], qp[3], 0); ep(qp[6], qp[7], 0); ep(qp[4], qp[5], 0);
+                paint(1, 0, 0, 1);
+            } else {                                        /* a rule a 16th of the quad's height up, or across its middle */
+                h = (pdi)((qp[1] - qp[5]) >> 4); if (h < 0) h = (pdi)-h;
+                ed_lw(h < 8 ? 8 : h);
+                if (k == 6) { ep(qp[4], (pdi)(qp[5] + h), 1); ep(qp[6], (pdi)(qp[7] + h), 0); }
+                else { ep(qp[4], (pdi)((qp[5] + qp[1]) >> 1), 1); ep(qp[6], (pdi)((qp[7] + qp[3]) >> 1), 0); }
+                paint(0, 0, 1, 0);
+            }
+        }
+        return 1;
+    }
+    w = an_num("BS", "W", 0xFFFF, (pdi)-1);
+    if (w < 0) w = an_num("Border", 0, 2, 16);
+    stroke = w > 0 && an_col("C", 1);
+    if (k == 4) {                                           /* Line: /L, butt caps */
+        if (!stroke) return 1;
+        ed_lw(w);
+        ep(an_num("L", 0, 0, 0), an_num("L", 0, 1, 0), 1); ep(an_num("L", 0, 2, 0), an_num("L", 0, 3, 0), 0);
+        paint(0, 0, 1, 0);
+        return 1;
+    }
+    fill = an_col("IC", 0);
+    if (!fill && !stroke) return 1;
+    ed_lw(stroke ? w : 0);
+    if (!stroke) w = 0;                                     /* inset by half the border: the stroke stays inside /Rect */
+    an_prog(k == 3 ? an_ell : an_box, k == 3 ? 1000 : 1, (pdi)(x0 + (w >> 1)), (pdi)(y0 + (w >> 1)),
+            (pdi)(x1 - x0 - w), (pdi)(y1 - y0 - w), fill, stroke);
+    return 1;
+}
+
 /* the next source annotation of this phase (1 = highlights, 2 = the rest):
  * 1 = its form is open and interpretation goes on, 0 = not this one, 2 = no more.
  * ANNOTS answers in the exchange block (pdxb_annot): objnum 0, gen 2, subtype 4,
@@ -148,10 +270,10 @@ static pdw annot_try(void)
     pd_fcopy_in(g_xb, 4, g_name, 16); g_name[15] = 0;
     pd_fcopy_in(g_xb, 20, &g_ar, 8);
     hl = pdr_seq(g_name, "Highlight");
-    if (!g_aob || !ap || (fl & 34)) return 0;                                   /* Hidden (2), NoView (32) */
+    if (!g_aob || (fl & 34)) return 0;                                          /* Hidden (2), NoView (32) */
     if ((g_aph == 1) != (hl != 0)) return 0;
     if ((g_aflags & PDRF_EDITS) && g_rq.edits_seg && ed_replaced(g_aob, g_agn)) return 0;
-    if (!ap_find()) return 0;
+    if (!ap || !ap_find()) { annot_synth(hl); return 0; }                     /* none, or none usable: from the dictionary */
     gs_reset();
     g_resp = g_page; g_reso = 0; g_resg = 0;
     path_reset(); op_clear(); g_inbt = 0; g_tjlive = 0;
