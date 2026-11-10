@@ -42,6 +42,7 @@ scouts' reports (`~/Repos/pdany-logs/scout-*.md`):
 | O5 | the `/P` permission bits | **ignored** | honour them, with the owner password lifting them; honour them with no override |
 | O6 | AES-256 (R6) on an 8088, estimated at 5-15 minutes of hashing | **ask first, with the estimate** | run it with progress |
 | O7 | the 360KB disk, which has 48 KB free for about 60-110 KB of modules | **a second 360KB disk** | leave JPX/JBIG2 off the 360KB disk; move the samples off |
+| O8 | the font bank (PDRES) on the 360KB disk (2026-11-10) | **packed inside PAGEDESK.O88 as LZ4 blocks, one stream a strike** | a third disk; fewer strikes |
 
 ### 2.2 The lead's
 
@@ -144,7 +145,23 @@ primary 64,147 of 65,024; overlay 48,490; PDENG 47,152; PDREND 61,308; PDWRT
 Links per story as they are taken. Until the final pass the evidence is the
 agents' reports in `~/Repos/pdany-logs/` (`*-report.md`, `*-verify.md`).
 
-## 7. Log
+## 7. Open items
+
+Deferred in the fix round, each with what it would cost. None is a defect
+that draws a page wrongly without saying so: every one is either a slow path
+on the XT or a limit that writes its note.
+
+| # | item | where it bites | cost and shape |
+|---|---|---|---|
+| OI-1 | the display list sized to the page, so W gets more than its 32 KiB minimum on 640 KB | a 20-40 KB embedded font subset (QUARTZ.PDF) is drawn in PageDesk's own face on a 640 KB XT ("font substituted"; PAGEDESK-SPEC 20.22.2) | rcore's side of the claim-B shrink; plat took the edits store at the first edit (the other half) |
+| OI-2 | a resumable font-program inflate in PDXF | one embedded font load is a single 15-28 s verb on a 4.77 MHz XT, and the keyboard waits for it | PDXF ~150-250 of its 268 free bytes, plus PDREND re-issuing the same GLYPH after a busy answer: keep the text operator's string and glyph index across a slice (~0.5 KB) or rewind and skip drawn glyphs. PDREND has 18 bytes free, so something moves to PDRENDC first. Restarting the pass works today with no change, at the cost of re-interpreting up to the glyph |
+| OI-3 | PDENG and disk-bound slices on the XT | an open's slices, the first read of a page stream and a module load from floppy take 4-7 s each | not measured per operation yet |
+| OI-4 | an open with EVERY part fetch refused sits at "Opened X" for 150 s with no toast | artificial (plat forced it); no real machine refuses every fetch | the occupant ladder's give-up path |
+| OI-5 | colour on VGA under transparency | a direct-ExtGState alpha or blend on a coloured mark is composed in the 8-bit grey band (O4) and loses its colour | a colour band; the owner chose 8-bit (O4) |
+| OI-6 | coloured tiling patterns of more than 40 tiles, and pattern strokes | drawn as a flat grey approximation, and black (PAGEDESK-SPEC 20.22.9) | PDXG has 18 bytes free |
+| OI-7 | Find on a page not yet drawn, on 640 KB | answers "No match ... - draw page N first" because PDXF does not fit beside the overlay | PDXF's workspace minimum |
+
+## 8. Log
 
 - 2026-11-09: goal; four scouts (platform, engine, render, writer); owner
   decisions O1-O7; ABI and contract (20.22) pinned; wave 1 launched.
