@@ -1219,7 +1219,7 @@ section .cold                   ; ...and the two that stay resident
     call cp_live
 %else
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind
+    KDOOR inst_find_kind
 %endif
 %endmacro
 
@@ -2637,7 +2637,7 @@ cp_promise:
     push bx
     push di
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind   ; CF = 1: no live panel, nothing to
+    KDOOR inst_find_kind                ; CF = 1: no live panel, nothing to
     jc .out                             ; promise about - cp_page runs from
                                         ; the paint, and the record is what
                                         ; carries the flag
@@ -3168,7 +3168,7 @@ cp_thm_click:
     pop si
     jmp short .donej
 .nowinj:
-    call KERNEL_SEG:cw_snd_beep ; DRVE_OK = the image loaded and SSV_CFG itself
+    KDOOR snd_beep              ; DRVE_OK = the image loaded and SSV_CFG itself
                                 ; refused, which today is wm_create finding the
                                 ; table full - no window, and NOT ABOUT THE
                                 ; DISK, so it does not say the disk. cp_open_x's
@@ -3210,7 +3210,7 @@ cp_thm_click:
     pop si
     jmp short .donej
 .cnowin:
-    call KERNEL_SEG:cw_snd_beep  ; DRVE_OK = the image loaded and THMV_OPEN
+    KDOOR snd_beep               ; DRVE_OK = the image loaded and THMV_OPEN
     jmp short .donej             ; itself refused (wm_create's table full)
 .groups:
 %endif
@@ -3607,7 +3607,7 @@ cp_fdd_click:
     lea cx, [di+CPF_BX1]
                                 ; ...from its left edge
     call cp_fdstg               ; BX = the item array, AX = the count
-    call KERNEL_SEG:cw_menu_popup ; CF = 1 nothing chosen, else AL = the pick
+    KDOOR menu_popup              ; CF = 1 nothing chosen, else AL = the pick
     pop bx
     jc .done
 
@@ -4818,7 +4818,7 @@ cp_tick_x:
     cmp byte [cp_sel], CP_ITIME
     jne .out
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind         ; CF = 1: no live Control Panel
+    KDOOR inst_find_kind                      ; CF = 1: no live Control Panel
     jc .out
     mov bx, [di+I_WIN]
     test byte [bx+W_FLAGS], 2   ; visible?
@@ -7705,7 +7705,7 @@ cpf_shutdown:
     call cp_unpin               ; cancellation must not pin the image, unless
 %else                           ; an open panel still owns it (driver.inc)
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind
+    KDOOR inst_find_kind
     jnc .kept                  ; an open panel still owns CTRL.DRV
     mov al, MOD_CTRL
     call mod_drop              ; cancellation must not pin the image
@@ -7839,12 +7839,12 @@ cp_open_x:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
     jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jnc .out                    ; the panel itself refused - no instance slot,
                                 ; no window. app_launch's own answer, and it
                                 ; is not about the disk, so it keeps the beep
                                 ; the three call sites used to give it
-    call ct_cw_snd_beep         ; audible refusal (SPEC.md 34.3), which is
+    KDOOR snd_beep              ; audible refusal (SPEC.md 34.3), which is
                                 ; what every one of these call sites did with
                                 ; a CF=1 from app_launch before cp_open owned
                                 ; the decision

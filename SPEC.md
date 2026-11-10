@@ -45922,6 +45922,11 @@ kern_emu keeps the plain SLOT, because its `task_yield` polls the VMware
 pointer before the frame (§9.11.3). `tests/unit/t_api_abi.py` decodes it as
 `YSLOT`.
 
+**A rare cell may be called with interrupts off, and runs with the caller's
+IF** — a far call to it always gave that, and the rare door (§20.3.4), which
+an `int` enters with IF = 0, puts the caller's FLAGS back before the body
+runs. Three rare cells are called with IF = 0 on purpose (§20.3.4's audit).
+
 Kernel size pass 4 took the table from 179 uniform cells and 1,432 bytes to
 171 cells and 1,115: 48 plain SLOTs and 11 X cells hot, 105 rare cells, six
 jump cells and the one far cell. Its last change (C3, below) then made fifteen
@@ -46700,6 +46705,136 @@ upper-case and the driver SDK's) and at no other; a rare name under `jmp`
 does not assemble; and `os88pkg` packs a real package with the gate unarmed
 and refuses it with the gate armed early (`OS88_RARE_GATE=1`), since every
 package far-calls rare cells until T5.
+
+### 20.3.4 The rare door — `int OS88_RARE` and an index byte (kernel size pass 19)
+
+**A call through the door is three bytes at the site, `CD 81 nn`**: `int
+OS88_RARE` (`OS88_RARE equ 0x81`, in `kernel/kernel.asm` and
+`apps/os88api.inc`, which `tests/unit/t_mirror.py` pairs) and the INDEX byte
+`nn`. The kernel keeps one word per index, `rd_tab`, beside the door
+(`os88_door`, `.text`, below the includes); a rare cell in the table is six
+bytes and its far call five. ABI-BREAK-LIST 13.2 T5 is the row that puts the
+package's rare cells here; kernel size pass 19's P4 put the kernel's own `cw_`
+shims here first, so the door ran on every kernel before any package depended
+on it.
+
+**The door, step by step.** The `int` pushes FLAGS, CS and an IP that names
+the index byte, and clears IF and TF.
+
+1. It pushes the caller's BP (every body's tail pops it) and **puts the
+   caller's FLAGS back** — `push [bp+6] / popf` — so IF is what the caller
+   had. See *IF* below.
+2. It banks DS and BX, reads the index through the caller's CS:IP (`lds bx,
+   [bp+2]`) and **steps the stacked IP past the index**, so the return lands
+   on the instruction after the site.
+3. **An index this kernel has no word for is refused: CF = 1, AX = 1**, every
+   other register kept — `OSAPI_XREFUSE`'s answer (§20.3). This is the
+   run-time refusal of a newer package's rare cell on an older kernel. It
+   covers rare indices only: a hot cell past `osapi_table_end` is still a
+   far call into whatever follows the table, which A4's level guards
+   (ABI-BREAK-LIST 13.2).
+4. It loads BP with the index's word and enters the body of the index's
+   **KIND**, and the kind is the index's **RANGE**: `rd_tab` is written in
+   kind order — RS (0), RCS (1), RX (2), RCX (3), RN (4) — and the `RDENT`
+   macro that declares an entry refuses to assemble one out of order, so no
+   kind byte is stored anywhere. 128 entries at most: the range compares are
+   on index × 2 in one byte.
+
+The five bodies are the rare cells' (`api_rs`, `api_rsc`, `api_rx`,
+`api_rxc`, `api_rn`) past their `pop bp / mov bp, [cs:bp]` heads, and each
+ends in **`retf 2`**: the FLAGS slot is dropped and the BODY's flags — a CF
+answer, a ZF answer — are the caller's. Only the kinds `rd_tab` has entries
+for are assembled. The RN body builds `api_rn`'s frame exactly, so
+`dwsf_dskw_write_seq`'s read of the caller's DS (§18.4.9) is one equate for
+both, `API_RN_DSOFF` (10, beside `api_rn`).
+
+**The register contract is the kind's** — every register but the documented
+outputs preserved, BP included. What changes is **stack**: during the body a
+door call holds FLAGS, CS, IP, BP and DS, ten bytes, two more than a six-byte
+rare cell and six more than a far call to a `cw_` shim.
+
+**IF.** The owner's answer was *audit, then decide* (ABI-BREAK-LIST 13.3).
+Every `OSAPI_*` and `cw_` call site in the tree was tagged by whether IF can be
+0 there (inside a `cli` before its `sti`/`popf`, or in a routine that ends in
+`iret`). Three rare cells **are** called with IF = 0, all deliberately:
+`OSAPI_FSX_SPK` (`apps/os88spk.inc`, six sites: IF = 0 from the door until
+IRQ0 is the ISR's, §34.11.1), `OSAPI_MEM_COMPACT` and `OSAPI_MEM_P`
+(`apps/taskmgr/taskmgr.asm`'s one-moment snapshot), and the kernel's own
+`task_spawn` from `drv_task_x` (count-then-spawn in one IF = 0 window). No
+interrupt handler and no FSX rate hook calls a cell (§53.2.2 forbids it). So
+the lean door's `sti` would have opened four critical sections, and **the
+door restores IF from the stacked FLAGS**: four bytes against one. **The
+rule: a rare cell may be called with interrupts off, and runs with the
+caller's IF** — exactly what a far call to it always gave.
+
+**The vector is 81h**, and SPEC.md names it so nobody else takes it. 00h–1Fh
+are the CPU's and the BIOS's; 20h–3Fh DOS's; 40h–5Fh the BIOS's again (the
+relocated floppy and video services, the disk tables, the EGA font, the AT's
+alarm, NETBIOS at 5Ch); 60h–67h are for programs, with EMS at 67h, and os8088
+DOS's packet driver takes the first free vector in 60h–80h
+(`apps/dos/dospktabi.inc`); 70h–77h are the AT's second 8259 (the kernel
+hooks 74h, and kern_mega leaves them there); **86h–F0h are ROM BASIC's while
+it runs**, written directly by a DOS program that starts it; and F1h–FFh are
+left for programs, which is where a DOS program's own vector goes. **80h–85h
+are IBM's "reserved for BASIC" block, which nothing uses**, and 80h is the
+packet driver's last candidate — so 81h. Nothing in this tree hooks it, and
+the interrupts page (`tools/os88intguide.py`) carries it with an anchor.
+
+**Where it is installed.** `sched_init` writes IVT 81h in the same IF = 0
+window as IRQ0's vector — boot-only code, no resident byte — before anything
+can reach the door. A hibernation image carries the whole IVT (§87), so a
+resume brings it back with everything else. **kern_mega** builds its IDT from
+the IVT (`mega_idt_build`), so gate 81h is an interrupt gate to the kernel's
+code selector and `os88_door` with no line of its own; the gate clears IF and
+the door puts it back, which is the real-mode contract exactly — a trap gate
+would save nothing, the restore running either way. The package's CS is a
+readable code selector there (`0x9A`), so `lds` fetches the index through it.
+**The real-mode FSX bracket (§53.2.3) refuses every index**: `fsx_rdownf`
+writes 0 over the door's bound (`rd_lim`'s immediate) and `fsx_rupf` puts
+`RD_N` back, because the bodies name `.cold` and the kernel's selectors,
+neither of which real mode has there. **T5 inherits a rule from that**: a
+cell the bracket KEEPS (`fsx_rkeep`, `fsx_rkeepm` — today `OSAPI_SND_CAPS`,
+`OSAPI_XMEM_CAPS`, `OSAPI_FONT_GLYPHS`, `OSAPI_FILE_READ_SEQ`,
+`OSAPI_FSX_SPK` and `OSAPI_SEG` are rare) stays a TABLE cell, or the
+bracket's door learns to serve it.
+
+**DOS shares the vector** (§96.12): `AH=25h` and `AH=35h` on 81h are
+virtualised by the DOS core in both of DOS.O88's modes, so the live IVT keeps
+the door — DOS.O88's own `INT 21h` is package code that calls the kernel.
+kern_dos runs the same core and virtualises it the same way.
+
+**What it costs, PREDICTED** (8088 clocks, each instruction at the larger of
+its clocks and four a byte fetched; the table is
+`docs/plans/ksp19/door.md`): 420 clocks around the routine on the RS path,
+against 227 for the six-byte rare cell (**+193, 40 µs**) and 93 for a far
+call to a `cw_` shim (+327, 69 µs). Each kind range the index passes adds a
+compare and a branch, +20. **The door is 51 bytes with the RS body alone**
+(kern_big, refusal included; 54 on kern_mega, whose `KDS` is a selector load),
+and each further kind adds its compare and its body: 132 with all five
+(a scratch assembly with one entry of each kind, kernel size pass 19), of
+which T5 recovers 74 - the five old bodies (`api_rx`'s head, `api_rxc`,
+`api_rsc`, `api_rs`, `api_rn`; `api_x` stays for the hot X cells) - when the
+last six-byte cell goes, so the door costs T5 about +58.
+Only the RS kind runs today; the other four were checked by disassembling
+that assembly, and T5's first boot is their first run.
+
+**What P4 put behind it** (kernel-private, no `PKG_FMT` or `DRV_VER`
+meaning): twenty-seven of the forty-five `cw_` shim bodies — the
+once-an-operation doors (`app_launch`, `app_close_win`, the instance store's,
+the menu's five, `wm_hit`, `wm_paint_all`, `wm_paint_dmg`, the saver's
+three, `snd_beep`, `task_spawn` ...) — and the two `ct_` trampolines that
+reached two of them, since a near call is the three bytes the door's site
+is. A shim was `call X / retf`, four bytes; its entry is two, and every far
+site two shorter. **Left as shims**: the drawing doors a repaint calls by the
+dozen (`gfx_fill`, `gfx_frame`, `gfx_fill_pat`, `font_run`, the icons, the
+clip rows, the damage tests, the blit doors), where 69 µs would be paid per
+primitive; `wm_pkgcall`, which takes BP as its input; and `clk_snapshot`,
+which kern_dos's disk layer reaches through a stub of its own. The kernel's
+spelling is `KDOOR <routine>`, the index the symbol `rix_<routine>` that
+`RDENT` makes, so a site naming a routine with no entry fails to assemble.
+`make RARECNT=1` compiles a 32-bit count into the door (one an index) and into
+the five rare cell bodies (one a cell) — the reading that draws T5's hot/rare
+line (ABI-BREAK-LIST 13.2 V7).
 
 ### 20.4 osapi helpers (kernel.asm)
 
@@ -109642,6 +109777,11 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
   is a slide of `stc` into the next `retf`. The return copies the bank back
   whole. It costs no conventional byte and no disk read, and the list is
   labels in the table itself, so it cannot drift from the cells' lengths.
+  **The rare door (§20.3.4) refuses every index here**: the drop writes 0
+  over its bound and the return puts the kernel's count back, so a
+  door call answers CF = 1, AX = 1 for the bracket - its bodies name `.cold`
+  and the kernel's selectors. A cell the list keeps must therefore stay a
+  table cell (kernel size pass 19).
 - **A fault inside is a real-mode fault**: no `kern_mega FAULT` line, and the
   machine stops as kern_big's would (the owner's ruling,
   MEGA-VIDEO-REALMODE-PLAN 5.1.3).
@@ -185525,6 +185665,23 @@ it likes — its own `INT 60h`, the timer, `INT 1Bh` — and the machine still
 comes back. This is the pair a program installing a handler needs before it
 will run at all, and refusing it is not survivable the way refusing an
 obscure call is.
+
+**…except `OS88_RARE`, 81h, which both of them VIRTUALISE** (kernel size pass
+19, §20.3.4). It is the kernel's rare door, and DOS.O88's own `INT 21h` is
+package code that goes through it — so does every other package while a
+windowed program runs. `AH=25h` with `AL = 81h` stores the program's DS:DX in
+the core's own slot (`dos_rarev`, four bytes of padding in the core's image;
+`dos_vslot`, the walk to a vector's slot both calls now share, points the
+store there, and the core came out two bytes SHORTER) and leaves the live IVT alone, and
+`AH=35h` reads that slot back — `0000:0000` until a program sets it, and,
+like any vector in DOS, what a program set outlives it. Both modes, one path.
+kern_dos runs the same core (§96.44, one binary for both hosts) and so
+virtualises 81h too: there the live vector is the parked kernel's door, a
+stale pointer into the image kern_dos was loaded over, which only a program
+that reads `0000:0204` directly can see. That direct read, or an `INT 81h`
+that expects the program's own handler, is the residual an 8088 cannot fence;
+nulling the live vector under kern_dos would cost a kilobyte of the program's
+memory (`KD_IMG_KB`, 22 bytes of slack) and is not taken.
 
 **`19h` — the current drive**, answered from the volume the program was
 launched from, which is the drive map's identity with our hole in it (§96.6).

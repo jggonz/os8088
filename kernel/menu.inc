@@ -2214,7 +2214,7 @@ menu_kbnav:
     jmp short .place            ; dismisses (SPEC.md 9.6.3)
 .live:
     mov ax, di
-    call KERNEL_SEG:cw_menu_item_dis          ; a greyed item or a separator is not a place
+    KDOOR menu_item_dis                       ; a greyed item or a separator is not a place
     jc .step                    ; to stop. DI only ever moves one way, so this
                                 ; walks off an end rather than looping
 
@@ -2230,7 +2230,7 @@ menu_kbnav:
                                 ; so a pointer the user has put in a column
                                 ; stays in it - and otherwise it is where the
                                 ; item text starts (.beside)
-    call KERNEL_SEG:cw_mou_clamp              ; the clamp the ISR itself uses, so the
+    KDOOR mou_clamp                           ; the clamp the ISR itself uses, so the
     mov [mouse_x], ax           ; two-display seam is honoured by construction
     mov [mouse_y], bx           ; rather than by a rectangle known here
     mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)

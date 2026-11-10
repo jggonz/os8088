@@ -3895,7 +3895,7 @@ dwsf_dskw_write_seq:
     push bx
     push bp
     mov bp, sp
-    mov bx, [bp+10]             ; the caller's DS (SS: the stack's own)
+    mov bx, [bp+API_RN_DSOFF]   ; the caller's DS (SS: the stack's own)
     call drv_owns_seg_x         ; CF = 0: a loaded driver's segment
     pop bp
     pop bx

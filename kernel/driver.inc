@@ -2271,7 +2271,7 @@ cp_unpin:
     jmp mod_drop
 cp_live:
     mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind
+    KDOOR inst_find_kind
 .ret:
     ret
 
@@ -2320,7 +2320,7 @@ drv_row_x:
 drv_nostamp:
     push di
     xor di, di                  ; 0 = no instance record, which snd_disp_set
-    call KERNEL_SEG:cw_snd_disp_set  ; stores as 0xFF - inst_caller's "the
+    KDOOR snd_disp_set               ; stores as 0xFF - inst_caller's "the
                                 ; kernel". FAR, because this module is .cold
                                 ; and snd.inc is resident (SPEC.md 2.6)
     pop di
@@ -4515,7 +4515,7 @@ drv_task_x:
     pushf
     cli                         ; count-then-spawn in one IF=0 window: counted
     inc byte [drv_wcnt]         ; BEFORE the task can run, so the count never
-    call KERNEL_SEG:cw_task_spawn             ; lags a worker that spawned and died at once
+    KDOOR task_spawn                          ; lags a worker that spawned and died at once
     jc .spfail                  ; (task_spawn preserves IF, so nothing runs
                                 ; until our popf)
     mov bl, al                  ; AL = the slot: a driver's worker is service

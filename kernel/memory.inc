@@ -2192,7 +2192,7 @@ mem_can_move:
 .frameless:                     ; (mem_can_move.frameless: the name SPEC.md
                                 ; 66.6.1 and 66.4.3.2 use for this predicate)
     mov ax, bx                  ; the slot to its record - inst_ptr's own job
-    call KERNEL_SEG:cw_inst_ptr ; (mem_is_region's own shim); AH is 0 by the
+    KDOOR inst_ptr              ; (mem_is_region's own shim); AH is 0 by the
                                 ; cmp bx, INST_MAX / jae above
     cmp byte [di+I_TASK], 0xFF
     je .fmseg                   ; no worker at all: SPEC.md 66.6.1's own case
@@ -2390,7 +2390,7 @@ mem_is_region:
     push ax
     push di
     mov ax, bx                  ; the slot to its record - inst_ptr's own job
-    call KERNEL_SEG:cw_inst_ptr ; (SPEC.md 29.4), and the shim already exists.
+    KDOOR inst_ptr              ; (SPEC.md 29.4), and the shim already exists.
                                 ; mem_can_move has tested cmp bx, INST_MAX /
                                 ; jae before calling, so AH is 0 - and inst_ptr
                                 ; zeroes it anyway

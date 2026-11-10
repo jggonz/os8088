@@ -988,7 +988,7 @@ desk_zones_paint_x:
                                 ; zone whole, [wm_dmg_zb] owes those windows
     mov byte [wm_dmg_npro], 1   ; ...and so nothing was PROMOTED: the front
                                 ; window is the one it was. Both kernels
-    call KERNEL_SEG:cw_wm_paint_dmg
+    KDOOR wm_paint_dmg
 .n:
     inc si
     cmp si, DSL_SLOT            ; ...and "no cell" is never painted
@@ -1543,7 +1543,7 @@ desk_zone_redraw:
     jmp short .done
 .full:
     pop ax
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     jmp short .done
 .nonep:
     pop ax

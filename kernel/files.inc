@@ -741,7 +741,7 @@ fm_svp_set:                     ; ...with the window in SI (BX comes back
     mov bx, si                  ; holding it, as the callers had it)
 fm_vp_set:
     push bx
-    call ct_cw_inst_win_owner         ; DI = record, or 0; BX preserved
+    KDOOR inst_win_owner              ; DI = record, or 0; BX preserved
     mov [fm_vinst], di
     or di, di
     jz .none
@@ -2096,7 +2096,7 @@ fm_focus_x:
     jz .none                    ; no front window (wm_top answers 0)
     call kentc_di
     mov ch, al                  ; bank the mode: AL is about to carry drives
-    call ct_cw_inst_win_owner         ; DI = its instance record, 0 = unowned
+    KDOOR inst_win_owner              ; DI = its instance record, 0 = unowned
     or di, di
     jz .clean
     cmp byte [di+I_KIND], KIND_FILES
@@ -2784,7 +2784,7 @@ fm_choose:
     jc .notopen
     call ct_cw_gfx_lock         ; front + un-minimize, exactly as app_launch's
 %ifdef WM_ANIM                  ; own at-cap path does (SPEC.md 29.4)
-    call KERNEL_SEG:cw_inst_unmin   ; ...and SPEC.md 11.100.3's other half
+    KDOOR inst_unmin                ; ...and SPEC.md 11.100.3's other half
 %else
     and byte [di+I_FLAGS], 0xFE
 %endif
@@ -2797,7 +2797,7 @@ fm_choose:
     jae .inplace
     call fm_seed                ; park the target for fm_kinit
     mov al, KIND_FILES
-    call KERNEL_SEG:cw_app_launch ; was a tail jmp; it takes its own locks
+    KDOOR app_launch              ; was a tail jmp; it takes its own locks
     ret                             ; (the far shim cannot be jumped through)
 .inplace:
     call ct_cw_gfx_lock
@@ -2817,7 +2817,7 @@ fm_choose:
 .znext:
     dec si                      ; front to back (SPEC.md 11)
     mov al, [si]
-    call KERNEL_SEG:cw_wm_idx2ptr ; BX = window ptr
+    KDOOR wm_idx2ptr              ; BX = window ptr
     test byte [bx+W_FLAGS], 2   ; visible?
     jz .zcont
     cmp word [bx+W_MENUS], fm_menus
@@ -2916,7 +2916,7 @@ fm_bar_gate_x:
     jne .set                    ; not a Disk window (fm_choose's test, and
                                 ; exact for its reason - fm_kinit is the only
                                 ; thing that ever stores fm_menus)
-    call ct_cw_inst_win_owner           ; DI = its instance record
+    KDOOR inst_win_owner                ; DI = its instance record
     or di, di
     jz .set
     mov di, [di+I_SPTR]
@@ -3048,7 +3048,7 @@ fm_seed:
 ; -----------------------------------------------------------------------------
 files_refresh_x:
     call ct_cw_gfx_lock
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     jmp ct_cw_gfx_unlock
 
 ; -----------------------------------------------------------------------------
@@ -6158,7 +6158,7 @@ fm_nw_none:                     ; we hold. The NEW window is what draws; this
     mov byte [fm_cmdchg], FMD_NONE  ; one is untouched, and so it is not
     ret                             ; redrawn (SPEC.md 22.13)
 fm_nw_full:
-    call ct_cw_snd_beep         ; at the cap app_launch would front an
+    KDOOR snd_beep              ; at the cap app_launch would front an
     jmp short fm_nw_none        ; existing window and silently drop the seed,
                                 ; which reads as "the menu did nothing". The
                                 ; window is untouched either way, so the beep
@@ -6444,7 +6444,7 @@ fm_rclick_x:
 
     mov bx, [di+MC_ITEMS]
     mov ax, [di+MC_NITEM]
-    call KERNEL_SEG:cw_menu_popup ; CF = 1 nothing chosen; CF = 0 and AL = the
+    KDOOR menu_popup              ; CF = 1 nothing chosen; CF = 0 and AL = the
     jc .out                     ; item index (DI, the descriptor, survives)
 
     cbw                         ; AL is bounded by MC_NITEM (menu_hover), so
@@ -7001,7 +7001,7 @@ fm_drag:
     call fm_dgxor               ; the outline is up from here on
 .track:
     mov di, ui_ev
-    call KERNEL_SEG:cw_evq_mup  ; the discard owes the wake bookkeeping
+    KDOOR evq_mup               ; the discard owes the wake bookkeeping
     jnc .drop                   ; (74.1.1), exactly as fm_dgwait's
 .nomup:
     test byte [mouse_btn], 1    ; the fallback ui_drag documents: a dropped
@@ -7044,7 +7044,7 @@ fm_dgwait:
     je .click
 .wait:
     mov di, ui_ev
-    call KERNEL_SEG:cw_evq_mup  ; the discard owes the wake bookkeeping
+    KDOOR evq_mup               ; the discard owes the wake bookkeeping
     jnc .click                  ; (74.1.1), exactly as fm_drag's .track's
     test byte [mouse_btn], 1
     jz .click                   ; released without moving: a click
@@ -7138,7 +7138,7 @@ fm_dgxor:
 fm_dgdrop:
     mov cx, [mouse_x]
     mov dx, [mouse_y]
-    call KERNEL_SEG:cw_wm_hit   ; BX = the window under the point, 0 = none
+    KDOOR wm_hit                ; BX = the window under the point, 0 = none
     or bx, bx
 %ifdef OS88_SHORTCUTS
     jz .desk                    ; the bare desktop: a SHORTCUT (SPEC.md 26.8)
@@ -7147,7 +7147,7 @@ fm_dgdrop:
 %endif
                                 ; is it a DISK window? fmv_winof goes the
                                 ; other way (block -> window), so the test is
-    call ct_cw_inst_win_owner   ; the instance that owns it - which clobbers
+    KDOOR inst_win_owner        ; the instance that owns it - which clobbers
                                 ; DI alone, so CX and DX are not banked round
                                 ; it (kernel size pass 17)
     or di, di
@@ -7330,7 +7330,7 @@ fm_paste_res:
     mov si, [si+I_WIN]          ; a HIDDEN window has no pixels to correct -
     test byte [si+W_FLAGS], 2   ; fm_focus rebuilds those when it is shown
     jz .nopix
-    call KERNEL_SEG:cw_wm_win_rect ; AX/BX/CX/DX = its frame, inclusive
+    KDOOR wm_win_rect              ; AX/BX/CX/DX = its frame, inclusive
     mov si, fmv_ux1             ; (the window is spent: SI is popped below)
     cmp ax, [si]                ; ...grown into the pending union: screen
     jae .g1                     ; coordinates, so unsigned throughout
@@ -7433,7 +7433,7 @@ fm_paste_res:
     rep movsw                   ; and none is needed, because every rect
     pop es                      ; folded in came from wm_win_rect and a window
                                 ; is already on the screen (SPEC.md 11)
-    call KERNEL_SEG:cw_wm_dmg_wins
+    KDOOR wm_dmg_wins
 %if wm_dmg_y1 != wm_dmg_x1+2 || wm_dmg_x2 != wm_dmg_x1+4 || wm_dmg_y2 != wm_dmg_x1+6
   %error "fm_paste_res moves its union into wm_dmg_x1..y2 as FOUR WORDS in that order"
 %endif

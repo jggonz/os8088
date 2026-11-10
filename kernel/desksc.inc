@@ -543,7 +543,7 @@ sc_rclick_x:
     mov cx, di
     mov dx, si
     mov ax, 1
-    call KERNEL_SEG:cw_menu_popup
+    KDOOR menu_popup
     pop ax                      ; `pop` writes no flag: the pick's CF stands
     jc .u
 %ifdef OS88_IMG
@@ -1391,7 +1391,7 @@ sc_m_move:
     call sc_m_xor    ; the outline is up from here on
 .track:
     mov di, ui_ev               ; THE RELEASE IS AN EVENT, and the mouse ISR
-    call KERNEL_SEG:cw_evq_mup  ; queued it with the point it happened at -
+    KDOOR evq_mup               ; queued it with the point it happened at -
     jnc .drop                   ; which matters most HERE, because the hand
                                 ; drags WHILE this image is read off the
                                 ; floppy and has often let go before the

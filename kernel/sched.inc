@@ -446,7 +446,10 @@ sched_init:
     mov [sch_old08+2], ax
     mov word [es:0x20], sch_isr
     mov word [es:0x22], KERNEL_SEG
-    popf
+    mov word [es:OS88_RARE*4], os88_door ; ...and THE RARE DOOR (SPEC.md
+    mov word [es:OS88_RARE*4+2], KERNEL_SEG ; 20.3.4), in the same window:
+    popf                        ; nothing has called through it yet - the
+                                ; first callers are .cold's, after the boot
 
     pop es
     pop cx
@@ -865,7 +868,7 @@ sch_idle_start:
     mov bp, task_spawn          ; other caller, so spw_near's `call bp` (kmain_o
     call KERNEL_SEG:spw_near    ; holds nothing in BP); kern_big shares the
 %else                           ; shim driver.inc's task path needs anyway
-    call KERNEL_SEG:cw_task_spawn
+    KDOOR task_spawn
 %endif
     jc .out
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the

@@ -2531,6 +2531,9 @@ fsx_rdownf:
 .kn:
     or bx, bx
     jnz .keep
+    mov byte [os88_door.lim+2], 0      ; ...and THE RARE DOOR refuses every index:
+                                ; its bodies name `.cold` and the kernel's
+                                ; selectors (SPEC.md 20.3.4, 53.2.3)
     mov al, 0x8D                ; NMI off across the switch, LAST
     out 0x70, al
     mov byte [mega_drop], 2     ; ...landing at fsx_rland
@@ -2984,6 +2987,7 @@ fsx_rupf:
     mov ds, ax
     rep movsb
     pop ds
+    mov byte [os88_door.lim+2], RD_N   ; ...and the rare door's bound
 %ifdef VID_EXT
     mov ax, [ss:fsx_rvxep]      ; ...and the VESA hook
     mov [vx_ep], ax

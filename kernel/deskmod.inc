@@ -186,8 +186,8 @@ dkd_verb:
     jne .ok                     ; not the bar's owner: nothing to give back
     push bx
     call KERNEL_SEG:apic_wm_top ; BX = the front APPLICATION window, 0 =
-    call KERNEL_SEG:cw_menu_activate ; Locator (SPEC.md 11.103.2)
-    call KERNEL_SEG:cw_menu_draw_bar
+    KDOOR menu_activate              ; Locator (SPEC.md 11.103.2)
+    KDOOR menu_draw_bar
     pop bx
 .ok:
     clc
@@ -328,12 +328,12 @@ dkd_show:
     push si
     or byte [bx+W_FLAGS], 2
     mov si, bx
-    call KERNEL_SEG:cw_wm_win_rect  ; AX..DX = its frame (no shadow: chromeless)
+    KDOOR wm_win_rect               ; AX..DX = its frame (no shadow: chromeless)
     mov byte [wm_dmg_npro], 1   ; ...and PROMOTES NOBODY: a desk window is
                                 ; never wm_top, so the front window is the one
                                 ; it was and its title is right (SPEC.md
                                 ; 11.103.3) - or .promote re-titles it
-    call KERNEL_SEG:cw_wm_paint_dmg ; under wm_show's lock
+    KDOOR wm_paint_dmg              ; under wm_show's lock
     pop si
     pop dx
     pop cx
