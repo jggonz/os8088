@@ -4763,7 +4763,7 @@ dskw_czknow:
     call dskw_czsniff           ; ...or it said nothing: ask the file, and
 .judge:                         ; judge again on whatever that wrote
     mov al, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub al, DSK_CZ_MARK             ; 20.14.1), so 0x5A and 0x5B pass
+    sub al, DSK_CZ_MARK             ; 20.14.1), so 0xA4 and 0xA5 pass
     cmp al, LZ_LZB
 .out:
     ret

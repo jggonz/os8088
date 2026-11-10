@@ -126,7 +126,8 @@ def main(argv=None):
     a.image = os.path.abspath(os88build.at(a.image))
     a.apps = os.path.abspath(os88build.at(a.apps))
     eq = os88sym.equates()
-    VGC = S("drv_cfg") + eq["CFG_VGC"]
+    VGC = S("drv_cfg") + eq["CFG_VGC"]  # 'VM's mode byte since kernel size
+    VGCB = eq["CFG_VGCB"]               # pass 19 (F1): Force Color is its bit
     page = eq["CP_IVID"]
     settle = os88marty.settle
     written = os.path.abspath(os.path.join("build", "vgacolor-written.img"))
@@ -138,7 +139,7 @@ def main(argv=None):
     # --- 1 and 2: a stock disk, the verdict planted --------------------------
     m, grey = boot_grey(a.image, a.apps, a.machine)
     with m:
-        if byte(m, VGC):
+        if byte(m, VGC) & VGCB:
             sys.exit("vgacolor: the disk already carries a 'VC' record")
         if dac(m) != grey or not byte(m, BDA_VGAF) & 6:
             fail.append("leg 1: the box is CLEAR and the desktop is not grey "
@@ -152,7 +153,7 @@ def main(argv=None):
         settle(m)
         click_box(m, mo)
         try:
-            os88marty.until(m, lambda mm: byte(mm, VGC) == 1,
+            os88marty.until(m, lambda mm: byte(mm, VGC) & VGCB,
                             "Force Color's byte to tick", poll=0.05,
                             guest=10.0)
         except os88marty.MartyError as e:
@@ -184,7 +185,7 @@ def main(argv=None):
     m, _ = boot_grey(written, a.apps, a.machine)
     with m:
         got = dac(m)
-        if byte(m, VGC) != 1:
+        if not byte(m, VGC) & VGCB:
             fail.append("leg 3: the 'VC' record did not load")
         elif got != EGA or byte(m, BDA_VGAF) & 6:
             fail.append("leg 3: the box is ticked and the desktop came up "
@@ -204,7 +205,7 @@ def main(argv=None):
         settle(m)
         click_box(m, mo)
         settle(m)
-        if byte(m, VGC) or byte(m, S("cp_wdirty")):
+        if byte(m, VGC) & VGCB or byte(m, S("cp_wdirty")):
             fail.append("leg 4: no VGA, and the greyed box took the click")
         else:
             print("leg 4: no VGA, greyed box refuses               ok")

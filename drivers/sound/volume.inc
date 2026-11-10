@@ -63,7 +63,8 @@ mix_speaker:
     db 0F8h,0B6h,0FFh, 0F8h,0B6h,0FFh, 0F8h,0AEh,0FFh, 0FEh,0BDh,0FFh
     db 0FFh,3Bh,0FFh, 0FFh,0BFh,0FFh, 0FFh,0FFh,0FFh, 0FFh,0FFh,0FFh
 
-; CX=the press's x, DX=the speaker's x, ES:DI=kernel's far bridge. No lock on
+; CX=the press's x, DX=the speaker's x, DI=the bridge's offset in KERNEL_SEG
+; (ES = the kernel's, which is the test below). No lock on
 ; entry/return. Out: CF = 1 the press was not on the speaker, else CF = 0.
 ; The bridge (ui.inc's ui_volume_service) preserves DS and nothing else but
 ; what a verb returns (2: AL buttons, CX/DX position): nothing here holds a
@@ -97,10 +98,10 @@ volume_popup:
                                 ; selector, never at or below 60h
     cmp byte [volume_live], 0   ; (no mix_kind test: snd_pkg made it)
     jne .out
-    mov ax, [es:di]
-    mov [volume_bridge], ax
-    mov ax, [es:di+2]
-    mov [volume_bridge+2], ax
+    mov [volume_bridge], di     ; THE BRIDGE IS DI ITSELF, in KERNEL_SEG
+    mov word [volume_bridge+2], KERNEL_SEG  ; (kernel size pass 19, ABI-BREAK-
+                                ; LIST R3): the kernel used to hand ES:DI ->
+                                ; a far pointer in a 4-byte table of its own
     mov [volume_iconx], dx
     mov byte [volume_drag], 0
     call OSAPI_VIDEO

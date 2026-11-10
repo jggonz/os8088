@@ -895,7 +895,53 @@ hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
                                 ; constant one does (hddabi.inc's HDM_*)
 
 ; =============================================================================
-; hd_at_dup, hd_at_new, hd_at_geom and hd_twins are ATTACH-ONLY too (the last
+; The service table (SPEC.md 51.2). OUT HERE, in the padding before hd_mbr's
+; window, and NOT with the attach-only code it was beside until kernel size
+; pass 19: the kernel READS IT IN PLACE now, for as long as we are published
+; (histsys-7, drivers/os88drv.inc's DSV_FLOOR), where it used to copy it once
+; - and hd_mbr's 512 bytes become the partition table at the first
+; hd_part_load, which would have handed it a sector of somebody's MBR.
+; =============================================================================
+hd_services:
+    dw BLKCAP_SEL               ; DSV_CAPS    - DSV_BLK takes a selector as it
+                                ; is (SPEC.md 51.8.1): rung 1 is `rep insw`
+                                ; through ES, and rung 0 answers 09h for a
+                                ; buffer its ROM cannot reach (hd_bios_run)
+    dw 0                        ; DSV_FM
+    dw 0                        ; DSV_STREAM
+    dw 0                        ; DSV_TICK
+    dw 0                        ; DSV_RELINST
+    dw 0                        ; DSV_NAME
+    dw 0                        ; DSV_TONE
+    dw 0                        ; DSV_TIERS
+    dw hd_blk                   ; DSV_BLK
+    dw hd_s_page                ; DSV_CPNAME  - and so the page exists. The
+                                ; STRING stays resident: the panel reads it
+                                ; out of our segment whenever it lists pages
+    dw hd_cp_paint              ; DSV_CPPAINT - a THUNK now (SPEC.md 52.13):
+    dw hd_cp_click              ; DSV_CPCLICK   the page is in HDDTOOL.DRV
+    dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
+                                ; tool's 11KB goes with it (SPEC.md 52.11.7)
+    dw 0                        ; DSV_FS      - a file redirector's, not ours
+    dw hd_cp_key                ; DSV_CPKEY   - the arrows move the drive
+                                ; highlight and the C/H/S field; the geometry
+                                ; itself is still set with - and + (52.4)
+    dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
+    dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
+                                ;               between the edges (13.8.4)
+    dw hd_pkg                   ; DSV_PKGCALL - THE DOOR, and it reaches three
+                                ; verbs, none naming a sector: HDV_ARM and
+                                ; HDV_DISARM (52.1.4) and HDV_TOOL (117.4),
+                                ; whose HDI_GO can erase a partition through
+                                ; the install engine. No package reaches
+                                ; DSV_BLK through it
+hd_svc_end:                     ; ...AND STOPS HERE, its length in the header
+                                ; (OS88_DRIVER's fourth argument, +15), which
+                                ; OS88_DRV_END holds to DSV_FLOOR
+
+
+; =============================================================================
+; hd_at_dup and hd_twins are ATTACH-ONLY too (the last
 ; READY-only), and they are out here for one reason: the run below that IS
 ; hd_mbr is longer than 512 bytes without them, and its excess would sit past
 ; the window as image anyway - while out here they fill padding the window's
@@ -991,46 +1037,6 @@ hd_at_dup:
     or ch, ch                   ; CF = 0, and ZF = 1 only when it is the one
 .out:
     pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_at_new - the next free device row
-; in:  nothing
-; out: CF = 0 and DI = the row; CF = 1 = the table is full
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-hd_at_new:
-    push ax
-    mov al, [hd_ndev]
-    cmp al, HD_MAXDEV
-    cmc                         ; CF = 1 = full
-    jc .out
-    call hd_dev_row
-    inc byte [hd_ndev]
-    clc
-.out:
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_at_geom - put a probed geometry in a fresh row
-; in:  DI = the row, CX = cylinders, DX = heads, AX = sectors/track
-; out: nothing; HDD_FLAGS bit 0 set when all three are usable
-; clobbers: flags
-;
-; A geometry is KNOWN only when every field is inside what CHS addressing can
-; carry - 1..1024 cylinders, 1..255 heads, 1..63 sectors. Anything else is
-; the user's to type in, which is an ordinary state and not a failure. The
-; row is fresh off hd_at_new, so its flags are already zero.
-; -----------------------------------------------------------------------------
-hd_at_geom:
-    mov [di+HDD_CYL], cx
-    mov [di+HDD_HEADS], dx
-    mov [di+HDD_SPT], ax
-    call hd_geom_ok
-    jc .out
-    or byte [di+HDD_FLAGS], 1
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1253,7 +1259,7 @@ hd_at_bios:
     mov byte [di+HDD_KIND], HDK_BIOS
     mov [di+HDD_UNIT], bl
     mov [di+HDD_BIOS], bl       ; ...which is what rung 0 transfers ask by
-    jmp hd_at_geom              ; (near: it is out in hd_mbr's padding)
+    jmp hd_at_geom              ; (in the run with us since kernel size pass 19)
 .out:
     ret
 
@@ -1540,49 +1546,50 @@ hd_ready:
     pop ax
     jmp hd_cfg_automount        ; NOT a call: see above
 
-; =============================================================================
-; The service table (SPEC.md 51.2) - read ONCE, by drv_publish, the moment
-; hd_attach returns, and never again: the kernel keeps its own copy. So it is
-; attach-only data and lives with the attach-only code.
-; =============================================================================
-hd_services:
-    dw BLKCAP_SEL               ; DSV_CAPS    - DSV_BLK takes a selector as it
-                                ; is (SPEC.md 51.8.1): rung 1 is `rep insw`
-                                ; through ES, and rung 0 answers 09h for a
-                                ; buffer its ROM cannot reach (hd_bios_run)
-    dw 0                        ; DSV_FM
-    dw 0                        ; DSV_STREAM
-    dw 0                        ; DSV_TICK
-    dw 0                        ; DSV_RELINST
-    dw 0                        ; DSV_NAME
-    dw 0                        ; DSV_TONE
-    dw 0                        ; DSV_TIERS
-    dw hd_blk                   ; DSV_BLK
-    dw hd_s_page                ; DSV_CPNAME  - and so the page exists. The
-                                ; STRING stays resident: the panel reads it
-                                ; out of our segment whenever it lists pages
-    dw hd_cp_paint              ; DSV_CPPAINT - a THUNK now (SPEC.md 52.13):
-    dw hd_cp_click              ; DSV_CPCLICK   the page is in HDDTOOL.DRV
-    dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
-                                ; tool's 11KB goes with it (SPEC.md 52.11.7)
-    dw 0                        ; DSV_FS      - a file redirector's, not ours
-    dw hd_cp_key                ; DSV_CPKEY   - the arrows move the drive
-                                ; highlight and the C/H/S field; the geometry
-                                ; itself is still set with - and + (52.4)
-    dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
-    dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
-                                ;               between the edges (13.8.4)
-    dw hd_pkg                   ; DSV_PKGCALL - THE DOOR, and it reaches three
-                                ; verbs, none naming a sector: HDV_ARM and
-                                ; HDV_DISARM (52.1.4) and HDV_TOOL (117.4),
-                                ; whose HDI_GO can erase a partition through
-                                ; the install engine. No package reaches
-                                ; DSV_BLK through it
-hd_svc_end:                     ; ...AND STOPS HERE, its length in the header
-                                ; (OS88_DRIVER's fourth argument, +15). A cell
-                                ; added to DSV_* later is 0 for this driver
-                                ; until it writes one
+; hd_at_new and hd_at_geom are IN THE RUN since kernel size pass 19: the
+; service table left it (the kernel reads that in place now, so it lives out in
+; the resident), and the resident it joined was then 34 bytes past 3,584 - the
+; 4KB image's line. These two are attach-only and 38 bytes, so they swap places
+; with it.
+; -----------------------------------------------------------------------------
+; hd_at_new - the next free device row
+; in:  nothing
+; out: CF = 0 and DI = the row; CF = 1 = the table is full
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_at_new:
+    push ax
+    mov al, [hd_ndev]
+    cmp al, HD_MAXDEV
+    cmc                         ; CF = 1 = full
+    jc .out
+    call hd_dev_row
+    inc byte [hd_ndev]
+    clc
+.out:
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+; hd_at_geom - put a probed geometry in a fresh row
+; in:  DI = the row, CX = cylinders, DX = heads, AX = sectors/track
+; out: nothing; HDD_FLAGS bit 0 set when all three are usable
+; clobbers: flags
+;
+; A geometry is KNOWN only when every field is inside what CHS addressing can
+; carry - 1..1024 cylinders, 1..255 heads, 1..63 sectors. Anything else is
+; the user's to type in, which is an ordinary state and not a failure. The
+; row is fresh off hd_at_new, so its flags are already zero.
+; -----------------------------------------------------------------------------
+hd_at_geom:
+    mov [di+HDD_CYL], cx
+    mov [di+HDD_HEADS], dx
+    mov [di+HDD_SPT], ax
+    call hd_geom_ok
+    jc .out
+    or byte [di+HDD_FLAGS], 1
+.out:
+    ret
 
 hd_pcnt:     db 0               ; how many fixed disks the BIOS said it has
 hd_dupd:     db 0               ; bit n = rung 0's row n is the same drive as

@@ -2153,14 +2153,16 @@ fsx_rdrvf:
     mov [es:bp+RMD_CLS], bl
     mov [es:bp+RMD_SEL], dx
     mov word [es:bp+RMD_DSP], PKG_DISP
-    mov ax, [drv_fptr7]         ; DRVC_EMS: its door in drv_fptr7's offset
-    cmp bl, DRVC_EMS            ; half, and no service table
-    je .pk
     push dx
+    push es
     mov al, bl
-    call COLD_SEG:drvf_drv_cls_svc  ; DI = the class's table
-    pop dx
+    call COLD_SEG:drvf_drv_cls_svc  ; ES:DI = the class's table - in place,
+    mov si, es                  ; SOUND's the kernel's copy (kernel size pass
+    pop es                      ; 19) - and ES the row's again (mov and pop
+    pop dx                      ; write no flag)
     jc .nx
+    push ds
+    mov ds, si
     mov ax, [di+DSV_BLK]
     mov [es:bp+RMD_BLK], ax
     mov ax, [di+DSV_TICK]       ; (a disk driver's are 0: never read)
@@ -2168,7 +2170,7 @@ fsx_rdrvf:
     mov ax, [di+DSV_STREAM]
     mov [es:bp+RMD_STR], ax
     mov ax, [di+DSV_PKGCALL]
-.pk:
+    pop ds
     mov [es:bp+RMD_PKG], ax
     push ds
     mov ds, dx

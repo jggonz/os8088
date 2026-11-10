@@ -166,9 +166,13 @@ DSK_R_ATTR   equ 11              ; attribute byte
 DSK_R_CZM    equ 12              ; THE COMPRESSION HINT (SPEC.md 20.14,
 DSK_R_CZH    equ 13              ; docs/plans/O88-COMPRESSION-PLAN.md 15): a mark
 DSK_R_CZL    equ 20              ; byte, then the UNPACKED size as a high byte
-DSK_CZ_MARK  equ 0x5A            ; and a low word. **THE MARK CARRIES THE
-                                 ; FORMAT**: 0x5A + the LZ_* id, so 0x5A is
-                                 ; LZ4 and 0x5B is LZB (SPEC.md 20.14.1). It
+DSK_CZ_MARK  equ 0xA4            ; and a low word. **THE MARK CARRIES THE
+                                 ; FORMAT**: 0xA4 + the LZ_* id, so 0xA4 is
+                                 ; LZ4 and 0xA5 is LZB (SPEC.md 20.14.1) -
+                                 ; BITS 3 AND 4 CLEAR, which NT, Linux vfat and
+                                 ; macOS read as lower-case flags: 5Ah/5Bh
+                                 ; listed every packed file in lower case
+                                 ; there until kernel size pass 19 (F3). It
                                  ; had to when the two formats got different
                                  ; answers at the capacity decision, which
                                  ; happens BEFORE any data I/O; they get the
@@ -1616,8 +1620,10 @@ dsk_xfer:
                                 ; served blocks and silently wrong the moment
                                 ; two did: a network volume's sectors would
                                 ; have been handed to the hard-disk driver
-    call drv_cls_svc_x          ; CLSCF: a volume's class serves blocks, so it has a slot
-    mov bp, [di+DSV_BLK]
+    push es                     ; (the caller's buffer)
+    call drv_cls_svc_x          ; CLSCF: a volume's class serves blocks, so it has a table
+    mov bp, [es:di+DSV_BLK]     ; ...read in place (kernel size pass 19)
+    pop es
 %ifdef KERN_MEGA
     pop ax
 %endif
@@ -2234,10 +2240,12 @@ dsk_xfer:
 .drvhi:
     push ax
     push di
+    push es
     mov al, [drv_blkcls]
     call drv_cls_svc_x          ; CLSCF: .drv read BP off this same class's table
-    test byte [di+DSV_CAPS], BLKCAP_SEL
-    pop di                      ; (pop writes no flag)
+    test byte [es:di+DSV_CAPS], BLKCAP_SEL
+    pop es                      ; (pop writes no flag)
+    pop di
     pop ax
     jz .dhbnc
     push ax
@@ -2582,7 +2590,10 @@ dsk_xfer:
     jmp short .ijf              ; CF = 0 off the `or`, and .success's one test
                                 ; - [dsk_bnc_si] - is 0 by the note above, so
                                 ; it is skipped rather than taken
-    nop                         ; PARITY PAD, never executed: the exits above
+%ifndef OS88_DRIVERS            ; (kern_big's went with kernel size pass 19's
+    nop                         ; odd +3 at .drv's in-place read - a pad
+%endif                          ; moved to disk_mount_x's OS88_REDIR arm)
+                                ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
                                 ; (t_hotpar.py). DSK_PMHD's bytes in dsk_xfer
@@ -4734,12 +4745,13 @@ disk_mount_x:
                                     ; to peek at, and reading an ASSOC.DAT over
                                     ; a cable is the one thing this may not do
     push di                     ; WHICH file class serves it (62.9.19):
-    call drv_fs_seg             ; DI = its drv_svc copy
-    test byte [di+DSV_CAPS], FSCAP_LOCAL
-    pop di                      ; (pop writes no flag)
+    call drv_fs_seg             ; ES:DI = its table, in place - and ES needs
+    test byte [es:di+DSV_CAPS], FSCAP_LOCAL ; no bank: both paths below
+    pop di                      ; reload it from SS (pop writes no flag)
     jnz .harvloc                ; ...UNLESS ITS READS ARE MEMORY (SPEC.md
                                 ; 62.9.2.2), in which case it takes the real
     jmp .fsicons                ; harvest below - the peek is a `rep movsw`
+    nop                         ; (a PARITY PAD, never executed: below)
 %endif                          ; and the pass was refusing, on the CABLE's
 .harvest0:                      ; grounds, a read the RAM disk serves faster
                                 ; than the floppy it is being denied. **THE
@@ -4747,7 +4759,11 @@ disk_mount_x:
                                 ; the OS88_REDIR above is the whole gate now
                                 ; (SPEC.md 62.9.2.3): the drv_svc read it was
                                 ; protecting is exactly as impossible as the
-                                ; volume it asks about, so one symbol says it
+                                ; volume it asks about, so one symbol says it.
+                                ; THE `nop` is kernel size pass 19's: the
+                                ; `es:` above is odd, and dsk_next_clus_x
+                                ; keeps an EVEN shift with the byte dsk_xfer's
+                                ; own pad gave up (t_hotpar.py)
 
     push ss                     ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     pop es                      ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
@@ -8234,7 +8250,7 @@ dsk_find_x:
 %endif
     mov al, [DSKF_RAW+DSK_R_CZM]   ; whether it is COMPRESSED, which is the +22
     sub al, DSK_CZ_MARK         ; word: the mark LESS its format (20.14.2.4),
-    cmp al, LZ_LZB              ; so 0x5A and 0x5B both pass and nothing else.
+    cmp al, LZ_LZB              ; so 0xA4 and 0xA5 both pass and nothing else.
                                 ; Asked FIRST, so the flags ride the four
                                 ; moves below and AX needs no bank around it
                                 ; (size pass 10, -2)
