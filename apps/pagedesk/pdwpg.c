@@ -102,7 +102,7 @@ static void rs_walk(pdw a, pdw b, pdw emit)
                     if (r < b && g_pg[r] == 'R' && (r + 1 >= b || sc_ws((pdb)g_pg[r + 1]) || sc_delim((pdb)g_pg[r + 1]))) {
                         n = sc_ref(p, (pdw)(r + 1), &g);
                         if (emit) {
-                            pb_n(g_pg + m, (pdw)(p - m));
+                            pb_src(g_pg + m, (pdw)(p - m));
                             nn = n ? rs_map(n) : 0;
                             if (nn) { pb_u(nn); pb_s(" 0 R"); } else pb_s("null");
                             m = (pdw)(r + 1);
@@ -115,7 +115,7 @@ static void rs_walk(pdw a, pdw b, pdw emit)
             p = q;
         } else p++;
     }
-    if (emit) pb_n(g_pg + m, (pdw)(b - m));
+    if (emit) pb_src(g_pg + m, (pdw)(b - m));
 }
 
 /* the dictionary at ds written again, but for the keys in `skip`; the value of
@@ -128,7 +128,7 @@ static pdw dk_copy(pdw ds, pdw skip, pdw map)
     for (r = dk_first(ds); r == 1; r = dk_next()) {
         if (dk_bit() & skip) continue;
         pb_c(' '); pb_n(g_pg + dk_np, (pdw)(dk_ne - dk_np)); pb_c(' ');
-        if (map) rs_walk(dk_vs, dk_ve, 1); else pb_n(g_pg + dk_vs, (pdw)(dk_ve - dk_vs));
+        if (map) rs_walk(dk_vs, dk_ve, 1); else pb_src(g_pg + dk_vs, (pdw)(dk_ve - dk_vs));
     }
     return r == 0 ? PDE_OK : PDE_SYNTAX;
 }
@@ -291,7 +291,7 @@ static pdw pm_dup(pdw i, pdw rot)
         pb_s("<<");
         for (f = dk_first(ds); f == 1; f = dk_next()) {
             if (dk_bit() == PGK_NM) {
-                pb_s(" /NM (PD-"); pb_hex4(g_nm_hi); pb_hex4(g_nm_lo); pb_c('-'); pb_hex4((pdw)(0x8000u + newp + k)); pb_c(')');
+                pb_s(" /NM "); pb_nmstr((pdw)(0x8000u + newp + k));
                 continue;
             }
             pb_c(' '); pb_n(g_pg + dk_np, (pdw)(dk_ne - dk_np)); pb_c(' ');

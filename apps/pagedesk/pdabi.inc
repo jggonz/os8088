@@ -98,6 +98,7 @@ PDX_FNT                  equ 3
 PDX_IMG                  equ 4
 PDX_JPX                  equ 5
 PDX_COUNT                equ 6
+PDMEM_SLOT               equ 0
 PDMEM_XIDX               equ 1
 PDMEM_OSW                equ 2
 PDMEM_XC                 equ 3
@@ -248,6 +249,10 @@ PDIMG_INVERT             equ 0x0002
 PDIM_GREY8               equ 0
 PDIM_BITS1               equ 1
 PDIM_N8                  equ 2
+PDV_WRT_KEYS             equ 0x85
+PDRC_ENCDICT             equ 0xFFFE
+PDXD_NPT                 equ 12
+PDXE_OPS                 equ 64
 PDV_FNT_GLYPH            equ 0xD8
 PDV_FNT_PATH             equ 0xD9
 PDFK_NONE                equ 0
@@ -279,6 +284,8 @@ PDFP_M                   equ 1
 PDFP_L                   equ 2
 PDFP_C                   equ 3
 PDFP_Z                   equ 4
+PDIMG_NATIVE             equ 0x0004
+PDJ_ALPHA                equ 0x0100
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -752,6 +759,92 @@ PDXB_IMG_ROWBYTES              equ 34
 PDXB_IMG_SCALE                 equ 36
 PDXB_IMG_STATE                 equ 38
 PDXB_IMG_BYTES                 equ 40
+
+; ---- struct pdxb_wkey (44 bytes) -------------------------------------------
+PDXB_WKEY_SLOT                 equ 0
+PDXB_WKEY_KEY_LEN              equ 2
+PDXB_WKEY_STM                  equ 4
+PDXB_WKEY_STR                  equ 6
+PDXB_WKEY_EFF                  equ 8
+PDXB_WKEY_ENCMETA              equ 10
+PDXB_WKEY_KEY                  equ 12
+PDXB_WKEY_KEY_N                equ 32
+PDXB_WKEY_KEY_ESZ              equ 1
+PDXB_WKEY_BYTES                equ 44
+
+; ---- struct pdxb_wkeys (134 bytes) ------------------------------------------
+PDXB_WKEYS_N                   equ 0
+PDXB_WKEYS_K                   equ 2
+PDXB_WKEYS_K_N                 equ 3
+PDXB_WKEYS_K_ESZ               equ 44
+PDXB_WKEYS_BYTES               equ 134
+
+; ---- struct pdxb_dashout (50 bytes) ----------------------------------------
+PDXB_DASHOUT_ON                equ 0
+PDXB_DASHOUT_OX                equ 2
+PDXB_DASHOUT_OX_N              equ 12
+PDXB_DASHOUT_OX_ESZ            equ 2
+PDXB_DASHOUT_OY                equ 26
+PDXB_DASHOUT_OY_N              equ 12
+PDXB_DASHOUT_OY_ESZ            equ 2
+PDXB_DASHOUT_BYTES             equ 50
+
+; ---- struct pdxb_dashin (24 bytes) -----------------------------------------
+PDXB_DASHIN_VSEG               equ 0
+PDXB_DASHIN_XS                 equ 2
+PDXB_DASHIN_YS                 equ 4
+PDXB_DASHIN_N                  equ 6
+PDXB_DASHIN_CLOSED             equ 8
+PDXB_DASHIN_SCALE              equ 10
+PDXB_DASHIN_DPH                equ 14
+PDXB_DASHIN_DN                 equ 16
+PDXB_DASHIN_PAD_               equ 17
+PDXB_DASHIN_DASH               equ 18
+PDXB_DASHIN_DASH_N             equ 4
+PDXB_DASHIN_DASH_ESZ           equ 1
+PDXB_DASHIN_ST                 equ 22
+PDXB_DASHIN_BYTES              equ 24
+
+; ---- struct pdxb_dash (158 bytes) -------------------------------------------
+PDXB_DASH_OUT                  equ 0
+PDXB_DASH_IN                   equ 50
+PDXB_DASH_I                    equ 74
+PDXB_DASH_DIDX                 equ 76
+PDXB_DASH_DON                  equ 78
+PDXB_DASH_DPC                  equ 80
+PDXB_DASH_DPN                  equ 82
+PDXB_DASH_DREM                 equ 84
+PDXB_DASH_POS                  equ 86
+PDXB_DASH_SLEN                 equ 88
+PDXB_DASH_QX                   equ 90
+PDXB_DASH_QY                   equ 92
+PDXB_DASH_X0                   equ 94
+PDXB_DASH_Y0                   equ 96
+PDXB_DASH_X1                   equ 98
+PDXB_DASH_Y1                   equ 100
+PDXB_DASH_LEN                  equ 102
+PDXB_DASH_LEN_N                equ 4
+PDXB_DASH_LEN_ESZ              equ 2
+PDXB_DASH_DPX                  equ 110
+PDXB_DASH_DPX_N                equ 12
+PDXB_DASH_DPX_ESZ              equ 2
+PDXB_DASH_DPY                  equ 134
+PDXB_DASH_DPY_N                equ 12
+PDXB_DASH_DPY_ESZ              equ 2
+PDXB_DASH_BYTES                equ 158
+
+; ---- struct pdxb_emark (22 bytes) ------------------------------------------
+PDXB_EMARK_ESEG                equ 0
+PDXB_EMARK_REC                 equ 2
+PDXB_EMARK_BPP                 equ 4
+PDXB_EMARK_MONO                equ 6
+PDXB_EMARK_SKIP                equ 8
+PDXB_EMARK_ST                  equ 10
+PDXB_EMARK_ST_N                equ 4
+PDXB_EMARK_ST_ESZ              equ 2
+PDXB_EMARK_N                   equ 18
+PDXB_EMARK_MORE                equ 20
+PDXB_EMARK_BYTES               equ 22
 
 ; ---- struct pdxb_fglyph (48 bytes) -----------------------------------------
 PDXB_FGLYPH_OBJNUM             equ 0

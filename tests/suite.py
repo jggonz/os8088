@@ -22385,6 +22385,18 @@ SOAK = [
         " output qpdf --check clean and its page tree checked "
         "(pdw_pgcheck.py). Measured 4.2s",
         needs=(), builds=True),
+    Row("pdwrtenc", "soak", py("tests/pagedeskhost.py", "pdwrt-enc"), 25.0,
+        "PAGEDESK-SPEC 20.22.4 / AP-06: `make pdwrt-enc` - PDWRT's saves "
+        "(every mark kind, a second save over the first, Extract, Insert "
+        "with an encrypted foreign file pausing on PDE_PASSWORD) over qpdf-"
+        "made sources: xref stream + object stream, AES-128 (empty and user "
+        "password, classic table), AES-256, RC4-128, RC4-40; each output "
+        "qpdf --check clean, decrypted by qpdf to the plain control's "
+        "annotations and appearance-stream bytes, drawn by mutool with no "
+        "encryption complaint; a wrong held key fails the verify. The PDENG "
+        "verbs eng/crypt own are stood in for (hosttest/pdw_enc.c); needs "
+        "qpdf, mutool and libcrypto. Measured 18s",
+        needs=("cc",), builds=True),
     Row("pdnav", "soak", py("tests/pagedeskhost.py", "pdnav"), 6.0,
         "PAGEDESK-SPEC 20.10 / PD-10, PD-11: `make pdnav` - PDENG's SEARCH "
         "matcher against a reference over 400 random pages and piece sizes "

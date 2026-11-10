@@ -291,7 +291,8 @@ static pdw g_sclid;               /* the walker's innermost polygon clip, 0xFF n
 static pdb g_spat[4];
 static pdb g_sc4;
 static pdw g_rmode;                 /* 0 paint, 1 mask A, 2 mask B             */
-static pdb g_mk[2][PDR_MAXSTRIDE];                 /* one row each (20.3.2) */
+/* two mask rows of PDR_MAXSTRIDE (20.3.2), lent by the path (pdrg.c, 20.22.7) */
+#define g_mk ((pdb (*)[PDR_MAXSTRIDE])g_vy)
 static pdw g_mstride;
 static pdw g_mkok;
 
@@ -344,9 +345,10 @@ static void span_out(pdi y, pdi xa, pdi xb)
 
 /* scan-convert edges e[0..ne) over pixel rows y0..y1 (absolute) */
 static pdw g_fe;                    /* offset of the current FILL record's edges in dl_seg */
-static pdw g_act[PDR_NEDGE];
-static pdi g_cx[PDR_NSPAN];
-static pdb g_cd[PDR_NSPAN];
+/* lent by the interpreter's arrays (pdrg.c, PAGEDESK-SPEC 20.22.7's room) */
+#define g_act ((pdw *)g_str)                     /* PDR_NEDGE entries          */
+#define g_cx  g_vx                               /* PDR_NSPAN crossings        */
+#define g_cd  ((pdb *)(g_vx + PDR_NSPAN))        /* PDR_NSPAN directions       */
 static void rast_edges(pdw eseg, pdw eoff, pdw ne, pdw rule, pdi y0, pdi y1)
 {
     pdw na, nc, j;

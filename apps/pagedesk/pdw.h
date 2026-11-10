@@ -11,6 +11,10 @@
 #include "pdabi.h"
 #include "pdmath.h"
 #include "pdwmap.h"
+#ifndef PDRC_STRCIPHER
+#define PDRC_STRCIPHER 0x0100 /* RAW_COPY answer (rc.mode high byte; input mode = rc.mode & 0xFF): the dictionary's strings are ciphertext; crypt's name wins (20.22.4.2) */
+#endif
+#include "pdcrypto.h"         /* crypt's primitives, shared source (20.22.5): the writer enciphers itself */
 
 /* ---- writer-private numbers (PAGEDESK-SPEC 20.5.1, 20.5.2) -------------- */
 #define PDW_OUTMIN   4096u   /* the output region of the writer buffer, bytes

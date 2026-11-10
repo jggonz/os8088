@@ -27,15 +27,13 @@ unsigned pdu_part_off(int i);
 unsigned pdu_part_len(int i);
 unsigned pdu_part_flags(int i);
 char    *pdu_pkgname(void);
-unsigned pdu_read_at_seg(const char *name, unsigned seg, unsigned cap,
-                         unsigned off_lo, unsigned off_hi);
+unsigned pdu_part_need(int row, unsigned cap);  /* pduslot.inc (20.22.2.4) */
+unsigned pdu_part_rd(int row, unsigned claim, unsigned cap);
 unsigned pdu_muldiv(unsigned a, unsigned b, unsigned c);
 int      pdu_clk(unsigned *w);
 void     pdu_sbar(int *blk);
 void     pdu_sbmove(int *blk, int oldpos);
 int      pdu_sbhit(int *blk, int x, int y);
-/* apps/weave/wfetch.inc */
-int      w_partfetch(int part);
 /* pdkit.inc: the face's composer (PAGEDESK-SPEC 20.21.3) */
 #include "pdkit.h"
 void     pk_init(unsigned kitseg, unsigned bandseg);
@@ -169,6 +167,28 @@ static void pdu_reopen_begin(void);
 static void pdu_tell(const char *s);
 static void pdu_say2(const char *a, const char *b);
 /* ---- end pages ---- */
+/* ---- the slot (PAGEDESK-SPEC 20.22.2, pduslot.c) ----
+ * ui: when pduauth.c and pdupref.c carry the real pdu_auth_reset/_step and
+ * pdp_xcache, #define PDU_AUTH_UI and PDP_XCACHE_UI HERE, so pduslot.c's
+ * stand-ins drop out (20.22.2.6, 20.22.2.7) */
+int  pdu_slot_load(int occ);             /* pduslot.inc */
+void pdu_slot_free(void);
+void pdu_region_free(void);
+void pdu_cache_drop(void);
+unsigned pdu_ladck(int mod, unsigned r);
+void pdu_lad_begin(void);
+int  pdu_doc_claim(void);               /* the document set (20.6.2) */
+void pdu_doc_free(void);
+int  pdu_minit(int m, unsigned verb);
+int  pdu_bank_dir(unsigned len);        /* 20.4.1's directory */
+extern unsigned pdu_kitoff, pdu_kitlen;
+#ifdef PDU_LADTEST
+extern unsigned pdu_tdisk, pdu_tcache, pdu_ckind;
+#endif
+static void pdu_auth_reset(void);       /* ui's pduauth.c */
+static unsigned pdu_auth_step(void);
+int  pdp_xcache(void);                  /* ui's pdupref.c: 1 Auto, 0 Off */
+/* ---- end the slot ---- */
 
 /* About PageDesk (os88_about, SPEC.md 20.5.1.1) */
 static const char *pdu_abtext[] = {
@@ -186,6 +206,7 @@ static const char *pdu_abtext[] = {
 #include "pdulay.c"             /* 17.1: the pure layout */
 #include "pduerr.c"             /* 3.6: one sentence per PDE_* */
 #include "pdumod.c"             /* 3.1-3.4, 16.2: modules and claims */
+#include "pduslot.c"            /* 20.22.2: the slot, its cache, the ladder */
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
 #include "pdupage.c"            /* pages: 13.7, 20.11: the page map (resident part) */
@@ -201,6 +222,7 @@ static const char *pdu_abtext[] = {
 #include "pdunotes.c"           /* 17.3: Notes & edits, the note popover */
 #include "pduinsp.c"            /* 17.3: Text properties */
 #include "pdupref.c"            /* prefs: the settings (20.18) */
+#include "pduauth.c"            /* auth: the password prompt, R6 question (20.22.6) */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
 
 /* ============================================================================

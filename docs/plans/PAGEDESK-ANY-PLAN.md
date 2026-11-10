@@ -124,13 +124,20 @@ primary 64,147 of 65,024; overlay 48,490; PDENG 47,152; PDREND 61,308; PDWRT
   subsection first, then builds and proves its piece on the host against the
   pinned ABI. Where a piece it needs is not yet built, it works against the
   lead's stand-ins (`pdrxc.c`; the primary's slot, once plat lands it).
-* **Integration.** As each branch is verified by an Opus reviewer, the lead
-  merges it in this order: docs/tools, then PDENG (eng, crypt), then the
+* **Integration.** No review between steps (the owner's word, 2026-11-09).
+  As each agent reports DONE, the lead merges its branch in this order: docs/tools, then PDENG (eng, crypt), then the
   primary and slot (plat, ui), then PDREND (rcore, fonts, gfx, blend), then the
   occupants (dct, bilevel, jpx), then the writer. After each merge: `make`, the
   size checks, `kernsize`.
-* **Final pass, once.** The deduplicated soak union, `test-full`, the
-  AP-18 corpus, AP-20 on MartyPC, and screenshots of the merged head.
+* **QA in emulation, once every feature is in** (the owner's word,
+  2026-11-09): one testing run on the merged head. QEMU on VGA, CGA and
+  Hercules, and MartyPC for the XT, open a corpus with every new kind of file.
+  Each page is compared with MuPDF, and saves, the password prompt, the R6
+  question and memory are checked. Every bug found goes into a list in
+  section 6.
+* **Fix round.** The QA list is fixed, the failing cases are re-run, and the
+  deduplicated soak union and `test-full` run once. Then AP-20 on MartyPC, and
+  screenshots of the merged head.
 
 ## 6. Evidence
 

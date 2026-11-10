@@ -112,6 +112,7 @@ _pdu_mcall:
     popf
     call far [si]
     mov [_pdu_mdx], dx
+    mov [_pdu_mcx], cx              ; PDE_NEEDMEM's region (20.22.2.6)
     sbb dx, dx                      ; CF -> 0 / -1
     neg dx                          ; -> 0 / 1
     mov [_pdu_mcf], dx
@@ -148,6 +149,7 @@ _pdu_mcall:
 .flat:
     call far [si]
     mov [_pdu_mdx], dx
+    mov [_pdu_mcx], cx
     sbb dx, dx
     neg dx
     mov [_pdu_mcf], dx

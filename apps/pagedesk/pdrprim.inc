@@ -12,6 +12,8 @@
 ;   pdr_glyph    one glyph bitmap into 1bpp (clear/set) or 4bpp (nibble)
 ;   pdr_imgrow   one image row, nearest sample, dithered, into the band
 ;   pdr_eng      far call into PDENG's door through the vector in pdr_eng_off
+;   pdr_xfar     far call into the slot occupant's door (PAGEDESK-SPEC 20.22.7)
+;   pdr_xcfind   the extension cache's entry (kind, k0, k1), a scan
 ;   pdr_blit     OSAPI_GFX_BLIT1 / BLIT4 on a band in a far segment
 ;
 ; REGISTERS: cdecl as SPEC.md 73.3 - the caller cleans, BP/DS/SS/SP are
@@ -55,7 +57,12 @@ IP_INV    equ 24
 IP_DMODE  equ 26
 IP_DYROW  equ 28
 IP_COL    equ 30
-IP_SIZE_  equ 32
+IP_NC     equ 32
+IP_BPC    equ 34
+IP_LSEG   equ 36
+IP_LOFF   equ 38
+IP_LFLAGS equ 40
+IP_SIZE_  equ 42
 
 
 ; PDM_MAGIC_REND, PDM_ABI and PDE_BUSY come from pagedesk/pdabi.inc (generated
@@ -68,6 +75,12 @@ _pdr_eng_off:   resw 1              ; the far vector into PDENG: offset, then se
 _pdr_eng_seg:   resw 1
 _pdr_eng_ax:    resw 1
 _pdr_eng_dx:    resw 1
+_pdr_x_off:     resw 1              ; the slot occupant's door: offset, then segment
+_pdr_x_seg:     resw 1              ;   (PDV_REND_SLOT; 0 = none)
+_pdr_x_cf:      resw 1              ; the last pdr_xfar's carry flag (0/1) and DX
+_pdr_x_dx:      resw 1
+_pdr_out_cx:    resw 1              ; the door's CX and DX on PDE_NEEDMOD/NEEDMEM
+_pdr_out_dx:    resw 1
 _pdr_gp:        resb GP_SIZE_
 _pdr_ip:        resb IP_SIZE_
 gl_row:         resw 1
@@ -262,6 +275,67 @@ _pdr_eng:
     mov [_pdr_eng_dx], dx
     xor ax, ax
 .err:
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned pdr_xfar(verb, bx, cx, dx) - the slot occupant's door (20.22.7).
+; AX back whatever the carry; CF lands in pdr_x_cf, DX in pdr_x_dx. The C
+; side (pdrxc.c x_call) refuses before calling when no vector is set.
+; -----------------------------------------------------------------------------
+_pdr_xfar:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov bx, [bp+6]
+    mov cx, [bp+8]
+    mov dx, [bp+10]
+    push ds
+    call far [_pdr_x_off]
+    pop ds
+    mov [_pdr_x_dx], dx
+    sbb dx, dx                      ; CF -> 0 / FFFF (pop leaves the flags)
+    neg dx
+    mov [_pdr_x_cf], dx
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned pdr_xcfind(seg, top, kind, k0, k1) - pdrxc.c's cache (20.22.7):
+; entries from seg:0 up to top, each an 8-byte header (kind, flags, len, k0,
+; k1; len = the bytes after it) and its bytes. AX = the offset of the found
+; entry's BYTES, 0 = none. A header or a length that runs past top ends it.
+; -----------------------------------------------------------------------------
+_pdr_xcfind:
+    push bp
+    mov bp, sp
+    push si
+    push es
+    mov es, [bp+4]
+    xor si, si
+.l: mov ax, si
+    add ax, 8
+    jc .no
+    cmp ax, [bp+6]
+    ja .no                          ; the header is not below top
+    mov bl, [es:si]
+    cmp bl, [bp+8]
+    jne .n
+    mov bx, [es:si+4]
+    cmp bx, [bp+10]
+    jne .n
+    mov bx, [es:si+6]
+    cmp bx, [bp+12]
+    je .out                         ; AX = si + 8
+.n: add ax, [es:si+2]
+    jc .no
+    mov si, ax
+    jmp short .l
+.no:
+    xor ax, ax
+.out:
+    pop es
+    pop si
     pop bp
     ret
 
@@ -543,6 +617,10 @@ _pdr_imgrow:
     je .grey
     cmp al, 2
     je .rgb
+    cmp al, 4
+    jne .bit1
+    jmp .lut
+.bit1:
     ; ---- 1 bit: AL = the bit ------------------------------------------------
     mov di, si
     mov cl, 3
@@ -715,6 +793,96 @@ _pdr_imgrow:
     pop bp
     ret
 
+    ; ---- smode 4: nc samples of bpc bits through tables or weights -----------
+.lut:
+    push bx
+    push dx
+    push bp
+    push es
+    mov ax, si
+    mul word IPV(IP_NC)
+    mov di, ax                      ; DI = the pixel's first sample (< 16384)
+    xor bp, bp                      ; BP = the sum, x 256, saturating
+    xor bx, bx                      ; BX = c
+    mov es, IPV(IP_LSEG)
+.lc:
+    mov cx, IPV(IP_BPC)
+    mov si, di
+    cmp cl, 8
+    je .l8
+    cmp cl, 16
+    jne .lbits
+    shl si, 1                       ; 16 bits: the high byte comes first
+.l8:
+    add si, IPV(IP_SOFF)
+    mov al, [si]
+    jmp short .lhave
+.lbits:                             ; 1, 2 or 4 bits, MSB first
+    mov ax, di
+    mul cx                          ; AX = the bit offset
+    mov si, ax
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    add si, IPV(IP_SOFF)
+    and al, 7
+    add al, cl
+    mov ch, cl                      ; CH = bpc
+    mov cl, 8
+    sub cl, al                      ; 8 - bpc - (offset & 7)
+    mov al, [si]
+    shr al, cl
+    mov cl, ch
+    mov ah, 1
+    shl ah, cl
+    dec ah
+    and al, ah                      ; the sample
+    mov si, cx
+    and si, 7
+    mul byte [cs:gi_scl + si]       ; to 0..255: x 255, 85 or 17
+.lhave:                             ; AL = the sample, 0..255
+    xor ah, ah
+    cmp word IPV(IP_LSEG), 0
+    je .lw
+    mov si, IPV(IP_LOFF)
+    add si, ax
+    mov ah, bl                      ; + c x 256
+    xor al, al
+    add si, ax
+    mov ah, [es:si]
+    xor al, al                      ; the table's value x 256
+    jmp short .ladd
+.lw:
+    cmp word IPV(IP_NC), 1
+    jne .lw3
+    mov ah, al                      ; x 256
+    xor al, al
+    jmp short .ladd
+.lw3:
+    mov si, bx
+    shl si, 1
+    mul word [cs:gi_w + si]         ; < 65,536
+.ladd:
+    add bp, ax
+    jnc .lnx
+    mov bp, 0xFFFF
+.lnx:
+    inc di
+    inc bx
+    cmp bx, IPV(IP_NC)
+    jb .lc
+    mov ax, bp
+    mov al, ah
+    test byte IPV(IP_LFLAGS), 1
+    jz .lout
+    not al                          ; 255 - the sum
+.lout:
+    pop es
+    pop bp
+    pop dx
+    pop bx
+    jmp .sampled
+
 ; -----------------------------------------------------------------------------
 ; int pdr_act(eseg, eoff, ne, qlo, qhi, act)   edges at eseg:eoff, 8 bytes each
 ; (x0 y0 x1 y1). Writes the index of every edge that can touch rows qlo..qhi
@@ -882,6 +1050,8 @@ _pdr_fcopy:
 ; ---- tables and the primitives' private state ------------------------------
 gi_bayer: db 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
 gi_pal:   db 0, 8, 7, 15
+gi_scl:   db 0, 255, 85, 0, 17, 0, 0, 0     ; smode 4: a 1, 2 or 4-bit sample to 0..255
+gi_w:     dw 77, 150, 29, 256               ; smode 4 without tables: RGB, then CMYK's K
 
 ; -----------------------------------------------------------------------------
 ; perf: pdrg.c's near zero and copy, which were a byte loop of C apiece - a
