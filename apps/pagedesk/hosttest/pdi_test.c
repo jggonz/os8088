@@ -65,6 +65,12 @@ int main(int argc, char **argv)
     }
     pd_fcopy_out(&rq, XB, 0, sizeof rq);
     r = pdi_verb(PDV_IMG_OPEN, XB, 0, 0);
+    if (r == PDE_NEEDMEM) {            /* plat regrows the slot (PDI_REGROW=1) or the same call is made again */
+        printf("NEEDMEM %u KiB\n", (unsigned)pdi_rdx);
+        if (getenv("PDI_REGROW")) { in.slot_kb = pdi_rdx; pd_fcopy_out(&in, XB, 0, sizeof in); pdi_verb(PDV_X_INIT, XB, 0, 0); }
+        pd_fcopy_out(&rq, XB, 0, sizeof rq);
+        r = pdi_verb(PDV_IMG_OPEN, XB, 0, 0);
+    }
     if (r) { printf("OPEN %u\n", r); return 1; }
     pd_fcopy_in(XB, 0, &out, sizeof out);
     printf("%u %u %u %u %u %u\n", out.out_w, out.out_h, out.out_mode, out.out_ncomp, out.rowbytes, out.scale);
