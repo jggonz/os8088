@@ -311,7 +311,10 @@ sl_row_at:
 
 ; pdu_home_rd - AX = a lazy row, DX = the claim, CX = its cap (0 = all): the
 ; row read out of the package from the LAUNCH folder (3.1's bracket - the
-; folder stood in comes back after) with pdu_part_rd. AX = 0 or a PDE_*
+; folder stood in comes back after) with pdu_part_rd. AX = 0 or a PDE_*. A
+; read that fails says so (QA F21: on the 360 KB pair the program disk has
+; been swapped for the samples disk, and every part, strike and module then
+; degraded without a word): SI, CX and ES go with the toast
 pdu_home_rd:
     push cx
     push dx
@@ -332,7 +335,15 @@ pdu_home_rd:
     pop ax
 .r:
     add sp, 6
+    cmp ax, PDE_IO
+    jne .q
+    push ax
+    mov si, pd_s_disk
+    call op_say
+    pop ax
+.q:
     ret
+TOASTSTR pd_s_disk, 'Insert the PageDesk disk'
 
 ; sl_fetch - [sl_row]/[sl_len] = a lazy module row, AX = the segment it is
 ; expanded onto, DX = its magic. Read from the launch folder (3.1's bracket)

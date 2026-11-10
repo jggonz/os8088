@@ -5094,7 +5094,11 @@ callback's chain: only from the wake, 20.22.2.6):
    onto S:0 (the stream is above its output, so the writer never overtakes
    the reader: SPEC.md 20.13.7). A row that is stored (a `PKGZ=` A/B build)
    is read at S:0 and moved down by its slack. Then back to the document's
-   folder.
+   folder. A read that fails (`PDE_IO`: on the 360 KB pair, the program disk
+   swapped for the samples disk) toasts `Insert the PageDesk disk` before
+   the occupant, the X8 region or the bank degrades (QA F21) - a sentence and
+   not a retry: a prompt that waits for the disk costs the primary room it
+   does not have (20.22.2.9).
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
