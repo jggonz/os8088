@@ -394,7 +394,7 @@ static pdw pass_begin(void)
     g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
     x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
     g_iknd[0] = g_iknd[1] = 0; g_ikb = 0;
-    g_passes++;
+    g_passes++; g_pstamp++;
     gs_init();
     xb_pass();
     g_ph = PDR_INTERP;
@@ -670,11 +670,12 @@ static pdw verb_status(void)
  * slice that skipped the work, and is then run again from the page's start,
  * dropping the g_tmdel glyphs the primary already has: they came out before
  * the need, so the second pass makes the same ones */
-static pdw g_tmdel, g_tmskip;
+static pdw g_tmdel, g_tmskip, g_tmpg;
 static pdw tm_start(void)
 {
     static struct pd_fx s16;
     close_streams();
+    g_tmpg = g_tmq.page;
     g_mode = PDR_TEXT; g_ph = PDR_TEXT;
     g_tmwr = g_tmrd = g_tmrun = 0; g_tmoverflow = 0; g_tmfirst = 1;
     pdm_fx_int(&s16, 16);
@@ -695,16 +696,18 @@ static pdw verb_textmap(void)
     if (!g_dls) return PDE_NOMEM;
     if (g_tmq.dmax < 12) return PDE_RANGE;          /* no room for one record: it would never finish */
     err = 0;
-    if (g_tmq.state == 0) {
+    /* a slice the ladder answered (20.22.2.6) comes back with the state the primary
+     * sent first: the pass waiting for its module on this page goes on (QA R17) */
+    if (g_tmq.state == 0 && !(g_ph == PDR_XWAIT && g_mode == PDR_TEXT && g_tmq.page == g_tmpg)) {
         mode_reset();
         g_tmdel = g_tmskip = 0;
         err = tm_start();
-        g_tmq.state = 1;
     } else if (g_ph == PDR_XWAIT) {
         x_answered();
         g_tmskip = g_tmdel;
         err = tm_start();
     }
+    g_tmq.state = 1;
     if (err) { g_tmq.done = 1; g_tmq.count = 0; pd_fcopy_out(&g_tmq, g_xb, 0, sizeof g_tmq); return err; }
     if (g_ph != PDR_TEXT) return PDE_CANCEL;
     /* drain what is waiting, else interpret one more slice */

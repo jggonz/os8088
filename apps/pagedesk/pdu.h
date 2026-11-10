@@ -447,6 +447,8 @@ static void ovl_pf_save(void);
 static void ovl_pf_load(void);
 static void ovl_pf_wake(void);
 static int  ovl_au_do(int op, int val);
+static int  ovl_sample(void);           /* the sample guide: 0 = the overlay was refused */
+static void ovl_au_end(void);           /* a leaf, like ovl_au_cancel */
 static void ovl_au_cancel(void);        /* a leaf: pdu_pop_shut calls it */
 static void ovl_au_pnt(void);
 static void ovl_au_ky(int ascii);
@@ -459,11 +461,14 @@ static void ovl_au_ky(int ascii);
 static char pdu_au_pw[128];             /* the typed password (resident bss: an overlay's data is resident) */
 static int  pdu_au_len;
 
+static char pdu_au_wait;                /* the prompt waits for a person (F4) */
 static char pdu_au_mode;                /* AU_*: the popover is asking/working */
 static signed char pdu_au_ans;          /* 0 waiting, 1 answered, -1 cancelled */
 static int  pdu_au_val;                 /* AU_R6: minutes; AU_CHECK: permille */
 
 #define pdu_au_poll() (pdu_au_ans)
+/* the open waits for a person (asking, wrong, the R6 question): the wake need not re-post itself; a key or the close posts it (F4) */
+#define pdu_au_waits() (pdu_au_wait)
 
 /* the popover is going by some other road (pdu_pop_shut): a question still
  * open is a cancel (the overlay's ovl_au_cancel, which wipes the buffer) */
@@ -475,7 +480,7 @@ static int  pdu_au_val;                 /* AU_R6: minutes; AU_CHECK: permille */
 #define pdu_au_askr6(s)  ovl_au_do(3, (int)(((s) + 59u) / 60u))
 #define pdu_au_busy()    ovl_au_do(4, 0)
 #define pdu_au_prog(p)   ovl_au_do(5, (p))
-#define pdu_au_close()   ovl_au_do(6, 0)
+#define pdu_au_close()   ovl_au_end()
 #endif
 /* ---- end prefs ---- */
 /* ---- recov ---- */

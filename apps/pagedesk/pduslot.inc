@@ -151,9 +151,8 @@ _pdu_slot_load:
     jbe .sz
     mov [sl_need], ax
 .sz:
-    push word [sl_need]
-    call _os88_mem_claim_p
-    pop cx
+    mov ax, [sl_need]
+    call pd_claimhi                 ; S from the TOP: B's tail faces the free run
     or ax, ax
     jz .nos
     mov [_pdu_sclaim], ax
@@ -161,9 +160,8 @@ _pdu_slot_load:
     je .wok
     call sl_wsize                   ; W: sized from what is left now
     jcxz .wok
-    push cx
-    call _os88_mem_claim_p
-    pop cx
+    xchg ax, cx
+    call pd_claimhi                 ; W from the TOP too
     or ax, ax
     jnz .wgot
     call sl_sfree                   ; W refused at min: S back, and release
@@ -223,8 +221,8 @@ _pdu_slot_load:
     je .q1
     cmp al, 2
     ja .nos2
-    call sl_rel_xc
-    jmp short .qr
+    call sl_rel_xc                  ; and asked again either way: W takes
+    jmp short .qz                   ; its min once all three have run
 .q1:
     call sl_rel_fl2
     jmp short .qr
@@ -232,37 +230,57 @@ _pdu_slot_load:
     call sl_rel_ovl
 .qr:
     jc .nos
+.qz:
     jmp .sz                         ; the same claim, asked again
 .nos2:
     mov ax, PDE_NOSLOT
     jmp short .out
 
+; pd_claimhi - AX paragraphs claimed from the TOP of the heap (MEMP_CLAIM_HI):
+; AX = the base or 0. Every claim PageDesk makes comes from the top - XB,
+; the bank, A and B held under the carve, then X, S and W - and only the
+; overlay (op_fetch's low door) from the bottom: a save drops the overlay
+; (release-before-refuse, run from the job and not from the overlay) and its
+; room then joins the one free run above it. QA F25: 87.5 KiB free as 19 +
+; 30 + 38.5 with every claim bottom-up, and a save needs 77 in one
+pd_claimhi:
+    xor cx, cx
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P
+    jnc .r
+    xor dx, dx
+.r:
+    xchg ax, dx
+    ret
+
 ; sl_wsize - W's KiB for [sl_wmin] (want) / [sl_wmin+1] (min): want while
-; PD-29's 32 KiB stays free beside the largest run, else the most that fits,
-; never under min (its claim then refuses). CX = its paragraphs (0: none)
+; PD-29's 32 KiB stays free beside the largest run, else the most that fits;
+; under min, min + 32 KiB, a claim that refuses so the loader's releases run
+; before the reserve is spent (QA F24), and min once all three have run.
+; CX = its paragraphs (0: none)
 sl_wsize:
     call _os88_mem_largest_p
     mov cl, 6
     shr ax, cl                      ; KiB
     mov dl, [sl_wmin]
     xor dh, dh
-    mov bx, ax
-    sub bx, PDU_RESV_P >> 6
-    jb .cut
-    cmp bx, dx
-    jae .want
-.cut:
+    sub ax, PDU_RESV_P >> 6         ; what leaves PD-29's 32 KiB free (QA
+    jnb .k                          ; F24), up to want, never under min
+    xor ax, ax
+.k:
     cmp ax, dx
     jb .c1
-.want:
     mov ax, dx
 .c1:
     mov cl, [sl_wmin + 1]
     xor ch, ch
     cmp ax, cx
     jae .c2
-    xchg ax, cx
-.c2:
+    xchg ax, cx                     ; under min with the 32 KiB kept: ask for
+    cmp byte [sl_rel], 3            ; min AND the reserve, which refuses, so
+    jae .c2                         ; the releases run first (QA F24); with
+    add ax, PDU_RESV_P >> 6         ; all three tried, min (the page before
+.c2:                                ; the reserve: QA R21)
     call sl_wsset
     xchg ax, cx
     ret
@@ -293,7 +311,10 @@ sl_row_at:
 
 ; pdu_home_rd - AX = a lazy row, DX = the claim, CX = its cap (0 = all): the
 ; row read out of the package from the LAUNCH folder (3.1's bracket - the
-; folder stood in comes back after) with pdu_part_rd. AX = 0 or a PDE_*
+; folder stood in comes back after) with pdu_part_rd. AX = 0 or a PDE_*. A
+; read that fails says so (QA F21: on the 360 KB pair the program disk has
+; been swapped for the samples disk, and every part, strike and module then
+; degraded without a word): SI, CX and ES go with the toast
 pdu_home_rd:
     push cx
     push dx
@@ -314,7 +335,15 @@ pdu_home_rd:
     pop ax
 .r:
     add sp, 6
+    cmp ax, PDE_IO
+    jne .q
+    push ax
+    mov si, pd_s_disk
+    call op_say
+    pop ax
+.q:
     ret
+TOASTSTR pd_s_disk, 'Insert the PageDesk disk'
 
 ; sl_fetch - [sl_row]/[sl_len] = a lazy module row, AX = the segment it is
 ; expanded onto, DX = its magic. Read from the launch folder (3.1's bracket)
@@ -1104,18 +1133,17 @@ _pdu_region:
     jb .no
     mov ax, [xr_para]
     add ax, [sl_need]
+    mov cx, [xr_claim]
+    jcxz .cl
     push ax
-    mov ax, [xr_claim]
-    or ax, ax
-    jz .cl
-    push ax
-    call _os88_mem_regrow_p         ; may MOVE X: its bytes come with it
+    push cx
+    call _os88_mem_regrow_p         ; may MOVE X (highest fit): its bytes
+    pop cx                          ; come with it
     pop cx
     jmp short .c1
 .cl:
-    call _os88_mem_claim_p
+    call pd_claimhi                 ; X from the top (pd_claimhi)
 .c1:
-    pop cx
     or ax, ax
     jz .no
     mov [xr_claim], ax
@@ -1267,10 +1295,15 @@ sl_rel_ovl:
     ret
 
 ; (2) the second Flate slot (two only where D17 chose two by RAM). PDENG is
-; re-INITed with flate_kb one slot less (PAGEDESK-SPEC 20.22.3.9): AX = 1 it
-; took it, keeping the document and any OPEN, and B's tail - slot 2 - is
-; given back in place; PDE_BUSY (a stream lives in slot 2) or anything else
-; changed nothing. PDREND is not told: it reads no Flate slot
+; re-INITed with flate_kb one slot less (PAGEDESK-SPEC 20.22.3.9) and B's
+; tail - slot 2 - is given back in place when the INIT succeeded: PDENG's AX
+; = 1 (it took it, keeping the document and any OPEN) does not survive
+; pdu_minit, which answers 0 for every success, and the only other success
+; is a fresh INIT at one slot with nothing open, which loses nothing. QA F25:
+; testing AX = 1 never took a slot, and PDENG was left at one slot while the
+; block said two - the next INIT of any region then reset the document.
+; PDE_BUSY (a stream lives in slot 2) changed nothing. PDREND is not told:
+; it reads no Flate slot
 sl_rel_fl2:
     cmp word [_pdu_flslots], 2
     jne sl_rel_no
@@ -1278,8 +1311,7 @@ sl_rel_fl2:
     xor ax, ax
     mov bx, PDV_ENG_INIT
     call dc_init
-    cmp ax, 1
-    je sl_fl2_took
+    jz sl_fl2_took
     add word [_pdu_xinit + PDXB_INIT_FLATE_KB], 43
 sl_rel_no:
     stc
@@ -1487,7 +1519,8 @@ PDU_DC_DSTK_A   equ 11
 PDU_NDC_A       equ 12
 PDU_DC_SPLIT_A  equ 4               ; rows 0..3 in claim A, 4.. in B
 PDU_FL_PARA_A   equ 2752            ; one Flate slot, 43 KiB
-PDU_FL_RESV_A   equ 5120            ; PD-29's 32 KiB + a save's peak
+PDU_FL_RESV_A   equ 2048            ; PD-29's 32 KiB after the first slot (QA F22)
+PDU_FL_RESV2_A  equ 3072            ; ...and 48 KiB more for the second
 
 ; int pdu_doc_claim(void) - the document set: 0, or PDE_NOMEM with
 ; pdu_needkb set, or PDE_LIMIT when a module refused its INIT
@@ -1565,7 +1598,7 @@ _pdu_doc_claim:
     cmp ax, bx
     jb .fl
     inc cx
-    add bx, PDU_FL_PARA_A
+    add bx, PDU_FL_PARA_A + PDU_FL_RESV2_A
     cmp ax, bx
     jb .fl
     inc cx
@@ -1581,9 +1614,7 @@ _pdu_doc_claim:
     je .ta
     mov [dc_bpara], ax              ; B's paragraphs: sl_rel_fl2 cuts its tail
 .ta:
-    push ax
-    call _os88_mem_claim_p
-    pop cx
+    call pd_claimhi                 ; A and B from the TOP (QA F25)
     or ax, ax
     jz .nomem
     mov bx, [bp-2]                  ; 0 or 8: pdu_dclaim[0] or [1]
@@ -1879,9 +1910,7 @@ _pdu_mod_launch:
     call _pdu_mcall
     add sp, 10
     mov ax, PD_XB_BYTES / 16
-    push ax
-    call _os88_mem_claim_p
-    pop cx
+    call pd_claimhi
     mov [_pdu_xb], ax
     mov si, ml_nomem
     or ax, ax
@@ -2000,9 +2029,7 @@ _pdu_bank_load:
     mov ax, PDE_IO
     jz .out
     lea ax, [di+PDU_BAND_P]
-    push ax
-    call _os88_mem_claim_p
-    pop cx
+    call pd_claimhi
     mov dx, ax
     or ax, ax
     mov ax, PDE_NOMEM

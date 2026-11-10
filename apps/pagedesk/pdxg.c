@@ -175,8 +175,15 @@ static pdw gx_source(void)
     gx_reset();
     fn_n = 0; fn_sused = 0; fn_cused = 0;
     if (G.flags & PDGXI_RES) {
-        pdw n = gx_fulltxt(gx_txt);
-        return n ? gx_res_lookup(gx_txt, n) : GN_NIL;
+        pdw n = gx_fulltxt(gx_txt), r;
+        if (!n) return GN_NIL;
+        r = gx_res_lookup(gx_txt, n);
+        if (r == GN_NIL && ((G.flags >> 8) & 15) == 1 && n == 19 && gx_txt[11] == 'P' && gx_txt[12] == 'a' && gx_txt[16] == 'r' && gx_txt[17] == 'n') r = gx_parse("/Pattern", 8);   /* the bare name */
+        return r;
+    }
+    if ((G.flags & PDGXI_IMGCS) && G.objnum) {
+        pdw d = gx_fetch_parse(G.objnum, G.gen);
+        return d == GN_NIL ? GN_NIL : gx_dres(d, "ColorSpace");
     }
     if (G.objnum) return gx_fetch_parse(G.objnum, G.gen);
     if (!G.tlen || G.tlen > GX_TB) return GN_NIL;
@@ -200,7 +207,7 @@ static pdb gx_flags_of(pdw row)
 
 static pdw v_cs(void)
 {
-    pdw node, row, i, k, n;
+    pdw node, row, i, k, n, nrow = 0;
     static struct pd_fx c, rgb[3];
     node = gx_source();
     if (node == GN_NIL || cs_compile(node)) return PDE_GRAPHICS;
@@ -225,11 +232,14 @@ static pdw v_cs(void)
     if (cs_t[0].kind == GC_PAT && cs_n < 2) goto done;
     n = cs_t[row].n;
     if (n == 1) {
+        /* a table space: an Indexed one keeps its hival+1 rows, any other 65 samples that v_color interpolates (the entry
+         * is 16 + 3 x rows bytes, which is why twelve spaces no longer fill the 16 KiB extension cache) */
         R_cs.flags |= PDGX_F_TABLE;
-        for (k = 0; k < 256; k++) {
+        nrow = cs_t[row].kind == GC_IDX ? (R_cs.hival > 255 ? 256 : (pdw)(R_cs.hival + 1)) : 65;
+        for (k = 0; k < nrow; k++) {
             if (cs_t[row].kind == GC_IDX) fx_i(&c, (pdi)k);
-            else if (k == 255) fx_i(&c, 1);
-            else fx_raw(&c, 0, (pdw)((k << 8) + k));
+            else if (k == 64) fx_i(&c, 1);
+            else fx_raw(&c, 0, (pdw)(k << 10));
             if (cs_conv(row, &c, rgb)) { R_cs.flags |= PDGX_F_NONE; break; }
             R_cs.rgb[k * 3] = (pdb)fx_to255(&rgb[0]);
             R_cs.rgb[k * 3 + 1] = (pdb)fx_to255(&rgb[1]);
@@ -237,9 +247,18 @@ static pdw v_cs(void)
         }
     } else R_cs.flags |= gx_flags_of(row);
 done:
-    if (G.rcap < sizeof R_cs) return PDE_NOMEM;
-    pd_fcopy_out(&R_cs, G.rseg, G.roff, sizeof R_cs);
-    G.rlen = sizeof R_cs; G.ncomp = R_cs.n; G.kind = R_cs.kind; G.ok = 1;
+    /* a table space keeps all of it; any other only the header and its source (the entry is trimmed to rlen) */
+    if (R_cs.flags & PDGX_F_TABLE) {
+        k = (pdw)(16 + 3 * nrow);
+        if (G.rcap < k) return PDE_NOMEM;
+        pd_fcopy_out(&R_cs, G.rseg, G.roff, 16);
+        pd_fcopy_out(R_cs.rgb, G.rseg, (pdw)(G.roff + 16), (pdw)(3 * nrow));
+    } else {
+        k = (pdw)(16 + R_cs.srclen);
+        if (G.rcap < k) return PDE_NOMEM;
+        pd_fcopy_out(&R_cs, G.rseg, G.roff, k);
+    }
+    G.rlen = k; G.ncomp = R_cs.n; G.kind = R_cs.kind; G.ok = 1;
     return PDE_OK;
 }
 
@@ -250,16 +269,16 @@ static pdw v_color(void)
 {
     pdw node, row, i, k;
     static struct pd_fx rgb[3], t;
-    pd_fcopy_in(G.cseg, G.coff, &R_cs, 16 + 480);
+    pd_fcopy_in(G.cseg, G.coff, &R_cs, 16);
+    if (!(R_cs.flags & PDGX_F_TABLE) && R_cs.srclen && R_cs.srclen <= 480) pd_fcopy_in(G.cseg, (pdw)(G.coff + 16), R_cs.src, R_cs.srclen);
     if (R_cs.flags & PDGX_F_TABLE) {
-        k = (R_cs.kind == PDGX_K_SEP || R_cs.kind == PDGX_K_DEVN) ? 255 : 0;
-        if (G.ncomp) {
-            if (R_cs.kind == PDGX_K_INDEXED) k = (pdw)pdm_fx_round(&G.comp[0]);
-            else { fx_i(&t, 255); fx_mul(&t, &t, &G.comp[0]); k = (pdw)pdm_fx_round(&t); }
-            if (G.comp[0].hi < 0) k = 0;
-            if (k > 255) k = 255;
-        }
-        pd_fcopy_in(G.cseg, (pdw)(G.coff + 496 + k * 3), G.rgb, 3);
+        pdw nr = R_cs.kind == PDGX_K_INDEXED ? (pdw)(R_cs.hival > 255 ? 256 : R_cs.hival + 1) : 65;
+        if (R_cs.kind == PDGX_K_INDEXED) k = G.ncomp ? (pdw)pdm_fx_round(&G.comp[0]) : 0;
+        else if (!G.ncomp) k = (R_cs.kind == PDGX_K_SEP || R_cs.kind == PDGX_K_DEVN) ? 64 : 0;     /* a tint's initial colour is 1 */
+        else { fx_i(&t, 64); fx_mul(&t, &t, &G.comp[0]); k = (pdw)pdm_fx_round(&t); }         /* the nearest of 65 samples */
+        if (G.ncomp && G.comp[0].hi < 0) k = 0;
+        if (k >= nr) k = (pdw)(nr - 1);
+        pd_fcopy_in(G.cseg, (pdw)(G.coff + 16 + k * 3), G.rgb, 3);
         G.rgb[3] = (R_cs.flags & PDGX_F_NONE) ? 1 : 0;
         G.ok = 1;
         return PDE_OK;
@@ -298,7 +317,7 @@ static pdw gx_grey(pdw row, const struct pd_fx *comps)
 /* PDV_GFX_LUT: the tables of an image's space (20.22.9) */
 static pdw v_lut(void)
 {
-    pdw node, row, n, i, v, bpc = G.bpc ? G.bpc : 8, maxv, ix;
+    pdw node, row, n, i, v, k, bpc = G.kind ? G.kind : 8, maxv, ix;        /* in: kind = the sample depth */
     static struct pd_fx comps[4], dmin[4], dmax[4], t, f;
     pdb inv = 0;
     node = gx_source();
@@ -358,9 +377,10 @@ static pdw v_lut(void)
         }
         R_lut.flags = inv;
     }
-    if (G.rcap < sizeof R_lut) return PDE_NOMEM;
-    pd_fcopy_out(&R_lut, G.rseg, G.roff, sizeof R_lut);
-    G.rlen = sizeof R_lut; G.ncomp = n; G.ok = 1;
+    k = (pdw)(4 + 256 * n);                              /* the header and the tables the space has */
+    if (G.rcap < k) return PDE_NOMEM;
+    pd_fcopy_out(&R_lut, G.rseg, G.roff, k);
+    G.rlen = k; G.ncomp = n; G.ok = 1;
     return PDE_OK;
 }
 

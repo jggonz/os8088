@@ -36,6 +36,8 @@ static void ovl_au_pnt(void)
     struct os88_rect *p;
     int m, n;
 
+    if (pdu_au_mode == 5)               /* closing (F3) */
+        return;
     p = &pdu_poprect;
     pdu_fill(p->x1, p->y1, p->x2, p->y2, OS88_WHITE);
     os88_set_color(OS88_BLACK);
@@ -65,7 +67,12 @@ static void ovl_au_pnt(void)
         pdu_line[10 + n] = '_';
         pdu_line[11 + n] = 0;
         ovl_au_put(0);
-        ovl_au_row(1, 0);
+        if (pdu_pfl && pdu_pfk < PDM_NSLOT) {   /* the pre-flight's file is not the one being saved: say which (F13) */
+            os88_strcpy(pdu_line, "For ", sizeof(pdu_line));
+            pdu_cat(pdu_line, pdu_xopen.name, sizeof(pdu_line));
+            ovl_au_put(1);
+        } else
+            ovl_au_row(1, 0);
         ovl_au_row(2, m == AU_PWBAD ? "Wrong password." : 0);
     }
     ovl_au_row(3, m == AU_CHECK ? pdu_au_hint + 13 : pdu_au_hint);
@@ -84,10 +91,11 @@ static void ovl_au_ky(int ascii)
     m = pdu_au_mode;
     if (ascii == 27 || (m == AU_R6 && (ascii == 'n' || ascii == 'N'))) {
         ovl_au_cancel();
+        pdu_au_mode = 5;                /* closing: paints nothing (F3) */
         pdu_pop_close_soon();
         return;
     }
-    if (m == AU_CHECK)
+    if (m >= AU_CHECK)
         return;
     ok = 0;
     if (m == AU_R6) {
@@ -105,6 +113,7 @@ static void ovl_au_ky(int ascii)
         return;
     if (ok) {
         pdu_au_ans = 1;
+        pdu_au_wait = 0;
         pdu_au_mode = AU_CHECK;
         pdu_au_val = 0;
     }
@@ -117,8 +126,24 @@ static void ovl_au_ky(int ascii)
 static void ovl_au_cancel(void)
 {
     ovl_au_wipe();
+    pdu_au_wait = 0;
+    if (pdu_au_mode != 5)               /* 5 = closed by the caller: not a cancel */
+        pdu_au_ans = -1;
     pdu_au_mode = 0;
-    pdu_au_ans = -1;
+}
+
+/* the work is over, or the open is abandoned: close the popover at the next
+ * wake, painting nothing meanwhile (F3). A LEAF - no path to the code that
+ * opens popovers - because pdu_job_abort reaches it from deep in a key (D21) */
+static void ovl_au_end(void)
+{
+    ovl_au_wipe();
+    pdu_au_wait = 0;
+    pdu_au_mode = 0;
+    if (pdu_pop == P_PREFS) {
+        pdu_au_mode = 5;
+        pdu_pop_close_soon();
+    }
 }
 
 /* show the popover in this mode, or repaint it in place */
@@ -132,6 +157,7 @@ static int ovl_au_shw(int mode, int val)
     pdu_au_mode = mode;
     pdu_au_ans = 0;
     pdu_au_val = val;
+    pdu_au_wait = mode < AU_CHECK;
     if (was) {
         pdu_popown = 1;
         pdu_kick();
@@ -140,12 +166,18 @@ static int ovl_au_shw(int mode, int val)
     pdu_pop_open(P_PREFS, C_NONE);      /* its second face (20.22.6) */
     if (pdu_pop != P_PREFS)
         pdu_au_mode = 0;
+    else {                              /* centred in the canvas (F5) */
+        was = pdu_poprect.y2 - pdu_poprect.y1;
+        pdu_poprect.y1 = pdu_L.canvas.y1
+            + (pdu_L.canvas.y2 - pdu_L.canvas.y1 - was) / 2;
+        pdu_poprect.y2 = pdu_poprect.y1 + was;
+    }
     return pdu_pop == P_PREFS;
 }
 
 /* THE ONE ENTRY (one thunk in the primary): op 1..4 is the mode to show
  * (AU_PW, AU_PWBAD, AU_R6, AU_CHECK; val is the minutes), 5 the progress in
- * permille, 6 the close. The paint and the
+ * permille. The paint and the
  * keys are Preferences' own entries, which hand over while pdu_au_mode is set. A refused fetch answers 0 */
 static int ovl_au_do(int op, int val)
 {
@@ -160,11 +192,29 @@ static int ovl_au_do(int op, int val)
             pdu_popown = 1;
             pdu_kick();
         }
-    } else if (op == 6) {
-        ovl_au_wipe();
-        pdu_au_mode = 0;
-        if (pdu_pop == P_PREFS)
-            pdu_pop_close_soon();
     }
+    return 1;
+}
+
+/* Help > Open sample guide (L1, F20): the guide is on the disk PageDesk came
+ * from, and on the 360 KB pair that is the SECOND disk. A missing guide is
+ * said so, not opened to fail as a damaged file */
+static int ovl_sample(void)
+{
+    int ord;
+
+    ord = 0;
+    if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) == 0)
+        for (;;) {
+            ord = os88_file_find(ord, &pdp_fd);
+            if (ord < 0)
+                break;
+            if (pdp_fd.type != OS88_FT_DIR && pdp_fd.name[0] == 'X'
+                && pdp_fd.name[1] == 'T' && pdp_fd.name[2] == 'G') {
+                pdu_open_begin("XTGUIDE.PDF");
+                return 1;
+            }
+        }
+    pdu_tell("XTGUIDE.PDF is on the second disk: put it in, then Open.");
     return 1;
 }

@@ -2,6 +2,8 @@
  *
  *   pdx_fuzz [-n ITER] [-s SEED] file...           font programs (TrueType, CFF, Type 1: found by their bytes)
  *   pdx_fuzz -c [-n ITER] [-s SEED]                two CMap texts (ToUnicode, Encoding) parsed through cm_parse
+ *   pdx_fuzz -z [-n ITER] [-s SEED] file...        the in-place inflater (pdxfz.c, 20.22.8, "Streams without a Flate slot"): each file zlib-compressed
+ *                                                  at levels 0, 1 and 9, inflated whole (must equal the file) then mutated
  *
  * Each iteration mutates a few bytes (flips, repeats, truncations, 0xFF/0x00 runs) of a seed, puts it in the
  * workspace, opens it and rasterises every glyph at 12 px. The run must finish; a sanitizer report is the failure.
@@ -11,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 #include "../pdxf.c"
 
 unsigned char pd_host_mem[1 << 20];
@@ -67,9 +70,42 @@ int main(int argc, char **argv)
         if (!strcmp(argv[ai], "-n")) iters = atoi(argv[++ai]);
         else if (!strcmp(argv[ai], "-s")) seed = atol(argv[++ai]);
         else if (!strcmp(argv[ai], "-c")) cmaps = 1;
+        else if (!strcmp(argv[ai], "-z")) cmaps = 2;
     }
     rs = (unsigned long)seed * 2654435761UL + 12345;
     g_ws = 0x3000; g_pcap = 37376; g_stgseg = g_ws; g_stgoff = (pdw)(g_pcap + PDXF_CIDWIN); g_xb = 0x2000;
+    if (cmaps == 2) {                                  /* the inflater: the zlib stream at the region's top, out from its bottom */
+        static unsigned char zb[70000];
+        for (; ai < argc; ai++) {
+            FILE *f = fopen(argv[ai], "rb"); long it; unsigned n0, n, lv, ok = 0, more = 0; uLongf zl;
+            if (!f) { perror(argv[ai]); return 2; }
+            n0 = (unsigned)fread(buf, 1, sizeof buf, f); fclose(f);
+            for (lv = 0; lv < 3; lv++) {
+                zl = sizeof zb;
+                if (compress2(zb, &zl, buf, n0, lv == 0 ? 0 : lv == 1 ? 1 : 9) != Z_OK) return 2;
+                if ((unsigned)zl + n0 > 65000u - 0x400) continue;
+                for (it = 0; it < iters; it++) {
+                    pdw top, got;
+                    memcpy(mut, zb, zl); n = (unsigned)zl;
+                    if (it) mutate(mut, &n);
+                    g_pcap = (pdw)(n0 + n + (it ? rnd() % 64 : 0));
+                    top = (pdw)(g_pcap - n);
+                    memcpy(pd_host_mem + (0x3000UL << 4) + top, mut, n);
+                    g_zseg = 0x3000; g_zin = top; g_zinend = g_pcap; g_zout = g_zstart = 0; g_zlim = g_pcap;
+                    got = z_inflate();
+                    if (!it && (got != n0 || g_zmore || memcmp(pd_host_mem + (0x3000UL << 4), buf, n0))) {
+                        fprintf(stderr, "pdx_fuzz -z: %s level %u: inflated %u of %u bytes wrong (more %u err %u)\n", argv[ai], lv, got, n0, g_zmore, g_zerr);
+                        return 1;
+                    }
+                    if (!it) ok++;
+                    more += g_zmore;
+                }
+            }
+            printf("pdx_fuzz -z: %-24s %u levels exact, %ld mutations each, clean\n", argv[ai], ok, (long)iters);
+        }
+        g_pcap = 37376;
+        return 0;
+    }
     if (cmaps) {
         long it; unsigned n; int which;
         for (it = 0; it < iters * 20L; it++) {

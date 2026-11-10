@@ -511,9 +511,23 @@ static pdw syn_find(pdw obj, pdw gen, pdw px)
     for (i = pd_fpeekw(g_gseg, (pdw)(h + 60)); i--; ) {
         e = (pdw)(h + (i << 3));
         if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4)) == px) {
-            pd_fcopy_out(&g_passes, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
+            pd_fcopy_out(&g_pstamp, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
             return i;
         }
+    }
+    return 0xFFFF;
+}
+
+/* a text pass (px 0): the next block from `i` up of (font, ANY size) the page view has drawn, or
+ * 0xFFFF. Its slots carry each code's Latin byte, so Find and Copy need no font module for the
+ * codes the page drew (QA R17: under the overlay, a 640 KB machine cannot load PDXF) */
+static pdw syn_next(pdw obj, pdw gen, pdw i)
+{
+    pdw h = syn_hdr(), e;
+    if (!syn_cap() || !g_gseg || pd_fpeekw(g_gseg, (pdw)(h + 62)) != PDFB_MAGIC) return 0xFFFF;
+    for (; i < pd_fpeekw(g_gseg, (pdw)(h + 60)); i++) {
+        e = (pdw)(h + (i << 3));
+        if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4))) return i;
     }
     return 0xFFFF;
 }

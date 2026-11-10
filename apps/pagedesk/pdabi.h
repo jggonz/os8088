@@ -863,6 +863,7 @@ struct pdgx_pat {
 #define PDGXI_CAT_SH  0x0200
 #define PDGXI_CAT_PAT 0x0300
 #define PDGXI_TILES  0x0004     /* PDV_GFX_PAT step 2 */
+#define PDGXI_IMGCS  0x0008     /* the source is the /ColorSpace VALUE of the image dictionary objnum/gen (PDV_GFX_LUT) */
 #define PDGXI_RES    0x0002     /* the source is a RESOURCE: objnum/gen = the Form (0 = the page whose
                                    index is bpc), the name is at tseg:toff               */
 typedef char pdgx_sz_cs [sizeof(struct pdgx_cs)    == PDGX_CSBYTES  ? 1 : -1];
@@ -874,6 +875,7 @@ typedef char pdgx_sz_pat[sizeof(struct pdgx_pat)   == PDGX_PATBYTES ? 1 : -1];
  * tuple pool and the record writers (interpretation time) and the compositor (raster
  * time). 0xD0 is free again (PDXG no longer carries pdxgtr.c). */
 #define PDM_MAGIC_X8    0x3850  /* 'P8' */
+#define PDX8_DIRECT     0xFFFD  /* PDV_X8_GS DX / DICT_GET gen: the dictionary is DIRECT in object CX; XB+0 (GS) or XB+sizeof(pdxb_dictget) (DICT_GET) holds { real gen, coff lo, coff hi } (RES_LOOKUP's PDRL_DIRECT answer) */
 #define PDX8_RES        16384   /* the part's image + bss at most; the planes follow it */
 #define PDX8_ENGVEC     12      /* header +12: eng_off, +14: eng_seg (plat binds them at load) */
 #define PDV_X8_INIT     0xD1    /* BX = the region's segment, CX = its KiB, DX = the XB seg */

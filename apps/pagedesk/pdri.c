@@ -181,6 +181,7 @@ static pdw g_inbt;
 static pdw g_em;                    /* device em height of the current font, px  */
 static pdw g_pem;                   /* the em the strike is picked by (D16), px  */
 static pdw g_eslot, g_elat, g_ek = 0xFFFF, g_escale;   /* an embedded font's glyph (emb_glyph, 20.22.8) */
+static pdw g_esub;              /* a code with no slot: its ToUnicode Latin byte for the substitute, 0xFFFF none (QA R13) */
 static pdw g_hem;                   /* device em WIDTH (text space's x axis), px */
 static pdw g_tupright;
 static pdb g_tmchan;
@@ -343,9 +344,10 @@ static void t3_queue(pdw blk, pdw slot);
 /* the hit: the code's slot in the block of (font, px), as PDXF left it. Per glyph, so near */
 static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
 {
-    pdw boff, h, i, k, ip;
+    pdw boff, h, i, k, ip, nx = 0;
     g_ek = syn_find(f->objnum, f->gen, px);
-    if (g_ek == 0xFFFF) return 0;
+again:
+    if (g_ek == 0xFFFF) goto other;
     boff = syn_off(g_ek);
     h = (pdw)((code ^ (code >> 7)) & 127);
     for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
@@ -353,7 +355,12 @@ static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
         if (k == code || k == 0xFFFF) break;
     }
     ip = (pdw)(boff + PDFB_INFO + h * 4);
-    if (k != code || (px && !(pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) return 0;
+    if (k != code || (px && !(pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
+other:
+        if (px || (g_ek = syn_next(f->objnum, f->gen, nx)) == 0xFFFF) return 0;
+        nx = (pdw)(g_ek + 1);
+        goto again;                     /* a text pass: the font's strikes at the sizes drawn */
+    }
     g_ewv = 1; g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
     if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
     return 1;
@@ -372,13 +379,14 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
     }
     if (!x_have(PDX_FNT)) { x_need(PDX_FNT); return 0; }
     g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
-    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_passes;
+    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_pstamp;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
     r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
     if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
     if (!x_cf) {
         if (emb_hit(f, code, px)) return 1;
-        inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face */
+        inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face, */
+        if (pd_fpeekw(g_xb, 38) & PDFG_LATIN) g_esub = pd_fpeekw(g_xb, 30);   /* as its ToUnicode says (oflags, lat) */
         return 0;
     }
     if (r == PDE_LIMIT) bit = PDF_INC_APPROX;          /* PDFE_SIZE: the program is larger than the workspace */
@@ -465,7 +473,7 @@ static void text_glyph(pdw code)
     pdw lat, w, vis, is2 = 0;
     struct pdr_font *f;
     pdi px, py;
-    g_ek = 0xFFFF; g_ewv = 0;
+    g_ek = 0xFFFF; g_ewv = 0; g_esub = 0xFFFF;
     if (GS.font == 255) { w = 556; lat = code; vis = 1; }
     else {
         f = font_sel(GS.font);
@@ -475,10 +483,10 @@ static void text_glyph(pdw code)
             vis = g_mode == PDR_TEXT ? (pdw)(lat >= 32) : (pdw)(f->emb != 3);
             if (f->emb == 3 && g_mode != PDR_TEXT && GS.tr != 3) T3_QUEUE(g_ek, g_eslot);      /* a Type 3 proc runs between operators */
             w = font_width(GS.font, code);
-        } else if (f->emb == 2) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = 1000; }
+        } else if (f->emb == 2 && g_esub == 0xFFFF) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = 1000; }
         else {
             g_ek = 0xFFFF;
-            lat = code >= 32 ? f->enc[code - 32] : 0;
+            lat = g_esub != 0xFFFF ? g_esub : code >= 32 ? f->enc[code - 32] : 0;
             vis = (pdw)(lat >= 32);
             w = font_width(GS.font, code);
         }
@@ -741,8 +749,13 @@ typedef char pdr_ck_lut[offsetof(struct pdgx_lut, ncomp) == PDR_LUT_NC && offset
  * (XCK_LUT), 0 when there is none yet - it asks for the module itself.
  * Until it lands, a colour space that is not a device one is not drawn */
 #ifndef XG_IMAGE_LUT
+#ifndef PDR_NOXG
+static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc);          /* pdrxg.c */
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_image_lut(obj, gen, bpc)
+#else
 static pdw xg_nolut(void) { inc_note(PDF_INC_COLOUR, "image colour space"); return 0; }
-#define XG_IMAGE_LUT(obj, gen) xg_nolut()
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_nolut()
+#endif
 #endif
 /* blend's (20.22.10), from pdrxb.c: an image with a /SMask (kind 32), a
  * /Mask stream (64) or a colour-key /Mask (128). Until its 8-bit path is in
@@ -768,7 +781,7 @@ static void do_image(pdw obj, pdw gen)
             ncomp = 0;                                 /* JPX: the codec's own */
         } else if (g_dg.kind == PDK_NAME && (ncomp = ci_has(g_dg.text, "gray") ? 1 : ci_has(g_dg.text, "rgb") ? 3 : ci_has(g_dg.text, "cmyk") ? 4 : 0) != 0) ;
         else {
-            lut = XG_IMAGE_LUT(obj, gen);
+            lut = XG_IMAGE_LUT(obj, gen, bpcv);
             if (!lut) return;                          /* asked for, or noted, by the hook */
             ncomp = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_NC));
             if (ncomp < 1 || ncomp > 4) return;
@@ -1020,7 +1033,7 @@ static void exec_op(const char *s, pdw n)
         if (k == ('B' | ('M' << 8)) && c2 == 'C') return;
         if (k == ('B' | ('D' << 8)) && c2 == 'C') return;
         if (k == ('E' | ('M' << 8)) && c2 == 'C') return;
-        if ((k == ('S' | ('C' << 8)) || k == ('s' | ('c' << 8))) && c2 == 'N') {
+        if ((k == ('S' | ('C' << 8)) && c2 == 'N') || (k == ('s' | ('c' << 8)) && c2 == 'n')) {   /* SCN and scn */
             pdw st = (s[0] == 'S');
             if (XG_SC(st, g_nop)) return;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);

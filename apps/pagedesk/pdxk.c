@@ -356,15 +356,17 @@ got:
 
 /* ---- PDV_KEY_COST: seconds for ONE run of 2.B on this CPU (20.22.5.1) ------
  * 71 rounds on average, each 4 L AES blocks and 64 L bytes through SHA-256, -384
- * or -512 (L = password + K (32 to 64, 48 on average) + user data). Measured on an
- * 8088 in 20.22.5.1: ms = 127 L a round. Faster classes divide. */
+ * or -512 (L = password + K (32 to 64, 48 on average) + user data). Priced on an 8088
+ * in 20.22.5.1 at 127 L ms a round, times 1.4: MartyPC's 5150 took 1,212 s for the two
+ * runs of an empty user password (QA F23) where the price said 874. 12.75 L seconds.
+ * Faster classes divide (the 1.4 is unmeasured there, so they err long). */
 static const pdb cpu_div[4] = { 1, 6, 24, 60 };
 static pdw kx_cost(void)
 {
     pdw l = (pdw)(cr.pw_len + 48), s, d;
     if (cr.r < 6) return 0;
     if (cr.pw_len > K6_MAXPW) l = K6_MAXPW + 48;
-    s = (pdw)((l << 3) + l);               /* seconds on an XT: 71 * 127 L / 1000 = 9.0 L */
+    s = (pdw)((l << 3) + (l << 2) + (pdw)((l << 1) + l) / 4);   /* seconds on an XT: 12.75 L */
     d = cpu_div[g_cpu > 3 ? 3 : g_cpu];
     s = (pdw)(s / d);
     return s ? s : 1;

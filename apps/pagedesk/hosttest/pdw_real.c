@@ -298,6 +298,39 @@ int main(int argc, char **argv)
         for (j = 0; j < 12; j++) { pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
             printf("     page %d: obj %u rotate %u media %d x %d\n", j, q.objnum, q.rotate, q.media.x1 / 16, q.media.y1 / 16); }
         printf("PDW-INSERT I1.PDF PAGES.PDF FOREIGN.PDF\n");
+        /* Insert from an ENCRYPTED foreign file (F12): the same twelve pages with slot 0 enciphered by qpdf (an empty user
+           password, so PDENG keys it itself); the inserted pages must carry the same decoded contents and annotation strings */
+        {   static const char *fv[3] = { "--allow-weak-crypto --encrypt '' owner 40 --", "--allow-weak-crypto --encrypt '' owner 128 --use-aes=n --", "--encrypt '' owner 128 --use-aes=y --" };
+
+            static const char *fn[3] = { "RC4-40", "RC4-128", "AES-128" };
+            char cmd[300]; int v, zz;
+            for (zz = 0; zz < 6; zz++) { v = zz % 3;
+                snprintf(cmd, sizeof cmd, "qpdf %s %s FOREIGNKEEP.PDF FENC.PDF", zz < 3 ? "--compress-streams=n" : "--compress-streams=y", fv[v]);
+                CK(system(cmd) == 0, "qpdf encrypts the foreign file (%s)", fn[v]);
+                cp("DOCKEEP.PDF", "DOC.PDF"); remove("IE.PDF");
+                CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF for the encrypted Insert");
+                map_set(map, 12); ins_slot(0, "FENC.PDF", 0, 1); ins_slot(1, "FOREIGN2.PDF", 1, 1);
+                g_big = 1; wrt_init(); es_reset();
+                {   /* plat's pre-flight (20.22.4.5), played by qpdf: the file key and the methods */
+                    FILE *q = popen("qpdf --show-encryption --show-encryption-key FENC.PDF", "r"); char ln[200]; struct pdxb_wkeys wk; unsigned b; int kl = 0;
+                    memset(&wk, 0, sizeof wk);
+                    while (q && fgets(ln, sizeof ln, q)) if (!strncmp(ln, "Encryption key = ", 17)) {
+                        char *h = ln + 17; while (sscanf(h, "%2x", &b) == 1 && kl < 32) { wk.k[0].key[kl++] = (pdb)b; h += 2; } }
+                    if (q) pclose(q);
+                    wk.n = 1; wk.k[0].slot = 0; wk.k[0].key_len = (pdw)kl; wk.k[0].stm = wk.k[0].str = (pdw)(v == 2 ? PDCM_AESV2 : PDCM_RC4); wk.k[0].eff = wk.k[0].stm; wk.k[0].encmeta = 1;
+                    CK(kl >= 5, "(%s) the pre-flight key is %d bytes", fn[v], kl);
+                    pd_fcopy_out(&wk, SEG_XB, 0, sizeof wk);
+                    CK(pdw_verb(PDV_WRT_KEYS, SEG_XB, 0, 0) == PDE_OK, "PDV_WRT_KEYS takes the foreign key");
+                }
+                r = save("IE.PDF");
+                /* stored streams must insert; Flate ones need PDENG's Flate slot only to be read, never to be copied (crypt: PLAIN must not
+                   fail for want of it), and until it does the job must REFUSE rather than save a blank page (F12) */
+                if (zz < 3) CK(r == PDE_OK, "Insert from an encrypted foreign file (%s, stored streams) answers %u", fn[v], r);
+                else CK(r == PDE_OK || (r == PDE_FLATE && access("IE.PDF", F_OK) != 0), "Insert from an encrypted foreign file (%s, Flate streams) saves or refuses cleanly (%u)", fn[v], r);
+                if (r == PDE_OK) CK(system("python3 ../../apps/pagedesk/hosttest/pdw_cmppages.py IE.PDF I1.PDF") == 0, "(%s) every inserted page has the plain control's content stream and annotation strings", fn[v]);
+            }
+            cp("DOCKEEP.PDF", "DOC.PDF");
+        }
         /* the refusals and rollbacks: each leaves no PDSAVE.$$$ and PDENG to be re-opened */
         cp("DOCKEEP.PDF", "DOC.PDF");
         CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF again");
@@ -360,6 +393,49 @@ int main(int argc, char **argv)
             CK(ph >= PH_XROOT && access(PDW_TEMPNAME, F_OK) != 0 && access("I2.PDF", F_OK) != 0 && (g_lastmode & PDW_OUT_REOPEN) != 0
                && g_lastdetail < 20, "a full disk inside a window (phase %u) removes the temp file, leaves the re-open to the primary "
                "and does not blame the foreign file (detail %u)", ph, g_lastdetail);
+        }
+        g_big = 0; map_set(0, 0);
+    }
+
+    /* ---- Insert FROM AN ENCRYPTED FOREIGN FILE, through the REAL engine (QA F12): the foreign pages must keep
+       their /Contents. The key is the one plat's pre-flight hands over (qpdf's own, empty password). ---- */
+    {   static const struct { const char *name, *args; unsigned stm; } enc[3] = {
+            { "FER4.PDF", "--allow-weak-crypto --encrypt '' '' 40 --", PDCM_RC4 },
+            { "FER128.PDF", "--allow-weak-crypto --encrypt '' '' 128 --use-aes=n --", PDCM_RC4 },
+            { "FEA128.PDF", "--encrypt '' '' 128 --use-aes=y --", PDCM_AESV2 } };
+        unsigned map[3]; int t; char cmd[512], line[256]; FILE *fp;
+        g_big = 1;
+        for (t = 0; t < 3; t++) {
+            struct pdxb_wkeys wk; unsigned char key[32]; int kl = 0, j;
+            snprintf(cmd, sizeof cmd, "qpdf %s FOREIGN.PDF %s", enc[t].args, enc[t].name);
+            if (system(cmd)) { printf("FAIL: %s\n", cmd); fails++; continue; }
+            snprintf(cmd, sizeof cmd, "qpdf --password= --check --show-encryption-key %s", enc[t].name);
+            fp = popen(cmd, "r");
+            while (fp && fgets(line, sizeof line, fp)) if (!strncmp(line, "Encryption key = ", 17) || !strncmp(line, "encryption key = ", 17)) {
+                for (j = 17; line[j] && line[j + 1] && line[j] != '\n' && kl < 32; j += 2) { unsigned v; sscanf(line + j, "%2x", &v); key[kl++] = (unsigned char)v; }
+            }
+            if (fp) pclose(fp);
+            CK(kl >= 5, "%s: qpdf's file key is %d bytes", enc[t].name, kl);
+            cp("DOCKEEP.PDF", "DOC.PDF");
+            map[0] = PDM_MK(PDM_SRC, 0, 0); map[1] = PDM_MK(PDM_FOREIGN, 0, PDM_FORE(0, 1)); map[2] = PDM_MK(PDM_SRC, 0, 1);
+            map_set(map, 3); ins_slot(0, enc[t].name, 0, 1);
+            CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); wrt_init();
+            memset(&wk, 0, sizeof wk); wk.n = 1; wk.k[0].slot = 0; wk.k[0].key_len = (pdw)kl; memcpy(wk.k[0].key, key, (size_t)kl);
+            wk.k[0].stm = enc[t].stm; wk.k[0].str = enc[t].stm; wk.k[0].encmeta = 1;
+            pd_fcopy_out(&wk, SEG_XB, 0, sizeof wk);
+            CK(pdw_verb(PDV_WRT_KEYS, SEG_XB, 0, 0) == PDE_OK, "%s: PDV_WRT_KEYS", enc[t].name);
+            remove("IE.PDF"); r = save("IE.PDF");
+            CK(r == PDE_OK, "%s: Insert answers %u", enc[t].name, r);
+            snprintf(cmd, sizeof cmd, "qpdf --check IE.PDF >/dev/null 2>&1 && mutool draw -q -r 30 -o IEE.png IE.PDF 2 && mutool draw -q -r 30 -o IEP.png I1.PDF 2 "
+                     "&& qpdf --show-npages IE.PDF | grep -qx 3 && qpdf --qdf --object-streams=disable IE.PDF - | grep -a -c '/Contents' | grep -qv '^0$'");
+            CK(system(cmd) == 0, "%s: IE.PDF checks, has /Contents", enc[t].name);
+            /* page 2 of IE (the foreign page 1) must equal the same page inserted from the plain foreign file */
+            cp("DOCKEEP.PDF", "DOC.PDF");
+            CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF"); map_set(map, 3); ins_slot(0, "FOREIGN.PDF", 0, 1); wrt_init();
+            remove("IP.PDF"); r = save("IP.PDF");
+            CK(r == PDE_OK, "plain Insert answers %u", r);
+            CK(system("mutool draw -q -r 30 -o IPP.png IP.PDF 2 && mutool draw -q -r 30 -o IEE.png IE.PDF 2 && cmp -s IPP.png IEE.png") == 0,
+               "%s: the inserted page draws exactly as the same page inserted from the plain file", enc[t].name);
         }
         g_big = 0; map_set(0, 0);
     }

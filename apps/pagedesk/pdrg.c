@@ -21,6 +21,7 @@ struct pdr_gs {
     pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
     pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 2,040) */
     pdb  dn, dash[4];               /* dash pattern: elements (0 = solid) and lengths, quarter points */
+    pdb  xt;                        /* blend: the transparency tuple in force (20.22.10; pad_ is gfx's colour-space slots) */
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
  * the workspace at the tail of dl_seg (PDR_WSB bytes, PAGEDESK-SPEC 20.3.1) */
@@ -47,6 +48,10 @@ static pdw g_pkfam = 0xFF, g_pksty, g_pkem, g_pkres, g_pkscale;
 static pdw g_inc;                   /* PDF_INC_* seen                        */
 static char g_incname[32];
 static pdw g_ops, g_passes;
+/* the strike blocks' stamp (20.22.8): a pass count that is NOT reset with each verb - g_passes restarts
+ * at 1 every render, so a block a previous page's pass 1 used looked "used in this pass" to the next
+ * page's pass 1 and no block could be reused (QA R24: "glyph block full" on pages 2 and later) */
+static pdw g_pstamp;
 
 #ifdef PD_HOST
 static void pdr_cpy(void *d, const void *s, pdw n)
