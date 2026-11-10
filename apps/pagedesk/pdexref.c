@@ -212,9 +212,10 @@ static pdw op_start(void)
     n = fl_read(&s_c, tailbuf, 16);
     if (n < 8) return eof_err();
     if (tailbuf[0] == 'C' && tailbuf[1] == 'Z') { err_detail = PDX_PACKED; return PDE_SYNTAX; }
-    if (tailbuf[0] != '%' || tailbuf[1] != 'P' || tailbuf[2] != 'D' || tailbuf[3] != 'F' ||
-        tailbuf[4] != '-' || tailbuf[5] < '0' || tailbuf[5] > '9' || tailbuf[6] != '.' ||
-        tailbuf[7] < '0' || tailbuf[7] > '9') { err_detail = PDX_NOHEADER; return PDE_SYNTAX; }
+    for (i = 0; i < 8; i++) {                       /* "%PDF-d.d" */
+        j = (pdw)"%PDF-0.0"[i];
+        if (j == '0' ? (pdw)(tailbuf[i] - '0') > 9 : tailbuf[i] != j) { err_detail = PDX_NOHEADER; return PDE_SYNTAX; }
+    }
     doc_ver = (pdw)((tailbuf[5] - '0') * 10 + (tailbuf[7] - '0'));
     /* the last PDE_TAIL bytes: find the LAST "startxref" */
     u32_cp(&s_c, &fl_size);
