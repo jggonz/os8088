@@ -4929,7 +4929,124 @@ round's final pass, not before.
 
 #### 20.22.5 Encryption (`crypt`)
 
-*Reserved; written by its agent before its code.*
+Owner decisions O3 (empty user password silently, a prompt otherwise; RC4-40,
+RC4-128, AES-128, AES-256) and O5 (`/P` is ignored: every action is allowed
+once the file opens, and a save keeps the source's `/P` and `/Encrypt`) bind
+this section. AP-04 is the story; AP-05 (the R6 question) takes
+`PDV_KEY_COST` from here and builds its sentence in 20.22.6.
+
+**Split by when the work runs (L1).** What runs per byte or per object is in
+PDENG; what runs once at open is in PDXK.
+
+| where | what | why there |
+|---|---|---|
+| PDENG (`pdecrypt.c` + `pdcmd5.inc` `pdcrc4.inc` `pdcaesd.inc`) | parsing `/Encrypt`; the per-object key (MD5 for RC4 and AESV2, none for AESV3); RC4; AES-CBC decrypt of strings and streams; `PDV_ENG_CRYPT` | a stream is decrypted while a page is drawn, when the one slot may hold a codec |
+| PDXK (`pdxk.asm`, `pdxk.c`, `pdcsha2.inc`, `pdcaese.inc`, the same MD5/RC4/AES sources) | algorithms 2, 2.A, 2.B (and 4, 5, 6, 7, 8 of ISO 32000-2 as authentication), the file key from `/UE` `/OE`, the cost estimate | at open only, and large (SHA-2 and AES encryption) |
+
+**The library.** Every primitive has a C twin written in the engine's number
+style (`pdw` words, a 32-bit quantity is two words, no `long`) and an 8086
+assembly body for the target. The host harness (`apps/pagedesk/hosttest/
+pdc_test.c`) runs the C twins against the published vectors (RFC 1321, FIPS
+180-4, FIPS 197 and NIST SP 800-38A CBC, the RC4 vectors of RFC 6229's
+predecessors); `tests/pdcrypt/pdc_diff.py` runs the assembly bodies in
+Unicorn against the same vectors and against the twins on random inputs.
+
+| primitive | C twin | assembly | called |
+|---|---|---|---|
+| MD5 block | `pdc_md5_block(st, blk)` | `pdcmd5.inc` | per 64 bytes |
+| RC4 | `pdc_rc4(s, buf, n)` | `pdcrc4.inc` | per run of up to 255 bytes |
+| AES key expansion | `pdc_aes_ks(rk, key, nk)` (128 and 256) | `pdcaes.inc` | per key |
+| AES block, either way | `pdc_aes_enc(rk, nr, in, out)`, `pdc_aes_dec` | `pdcaese.inc`, `pdcaesd.inc` | per 16 bytes |
+| AES-CBC over a run | `pdc_cbc_enc`, `pdc_cbc_dec` (the chaining in the proc) | same | per run |
+| SHA-256 / SHA-512 block (SHA-384 is SHA-512 with other constants) | `pdc_sha256_block`, `pdc_sha512_block` | `pdcsha2.inc` | per 64 or 128 bytes |
+
+All take NEAR buffers (the module's DS); the far data is moved through
+`pd_fcopy_in` / `pd_fcopy_out` by the caller in runs of at most 256 bytes.
+
+**PDXK.** `apps/pagedesk/pdxk.asm` (the door at +8, `PDM_MAGIC_KEY`, shaped
+as `pdwrt.asm`) and `pdxk.c`, which includes `pdxk*.c`. Image + bss at most
+32,768; its workspace is 0 beyond that (the R6 buffer of 4,096 bytes is bss).
+Verbs, all with CF = 1 on a failure:
+
+* `PDV_X_INIT` 0xC0: stores `pdxb_init` (the XB segment, PDENG's door from
+  `eng_off/eng_seg` for `PDV_ENG_CRYPTINFO`).
+* `PDV_KEY_AUTH` 0xC1: XB = `pdxb_crypt`. With `state` 0 it fills the
+  parameters by calling PDENG (`PDV_ENG_CRYPTINFO`) when `v` is 0, then
+  tries the USER password (`pw`, `pw_len`; 0 = the empty password), then the
+  OWNER password. `AX = PDE_BUSY` (CF = 0) while an R6 attempt is part way,
+  with `progress` 0..1000; the caller calls again with `state` unchanged.
+  Success: `AX = PDE_OK`, `key` and `key_len` set, `auth` = `PDCA_USER` or
+  `PDCA_OWNER`. A wrong password: CF = 1, `PDE_PASSWORD`. A parameter set
+  PageDesk does not implement (`/V` or `/R` unknown): CF = 1, `PDE_ENCRYPT`.
+  One call is a slice of at most 8 block operations of the R6 loop (a SHA
+  block or an AES run), so the primary's job loop stays responsive and
+  Cancel works between slices (the caller simply stops calling).
+* `PDV_KEY_COST` 0xC2: XB = `pdxb_crypt` with `r`, `pw_len`; `AX` = the
+  estimated seconds of ONE attempt (see below), 0 for R2-R4 (about a
+  second, not worth a question).
+
+**PDENG.** Three verbs.
+
+* `PDV_ENG_CRYPTINFO` 0x13 reads the `/Encrypt` dictionary eng recorded
+  (the trailer's value: a reference or a direct dictionary, from the newest
+  trailer or xref-stream dictionary) into `pdxb_crypt`: `/Filter` must be
+  `/Standard`, `/V` in {1, 2, 4, 5}, `/R` in {2, 3, 4, 5, 6}, `/Length`,
+  `/P`, `/O` `/U` (32 bytes, or 48 for R5-R6, the rest of a longer string
+  ignored), `/OE` `/UE` `/Perms`, `/EncryptMetadata`, and for V4 and V5 the
+  crypt filters `/CF` named by `/StmF` and `/StrF` (`/EFF` too): `/CFM` of
+  `/V2` is `PDCM_RC4`, `/AESV2` `PDCM_AESV2`, `/AESV3` `PDCM_AESV3`,
+  `/None` or `/Identity` `PDCM_IDENTITY`. `id0` is the whole `/ID[0]`
+  (up to 32 bytes; a file with no `/ID` has an empty one). Anything else is
+  `PDE_ENCRYPT`.
+* `PDV_ENG_SETKEY` 0x14 takes `key`, `key_len`, `stm`, `str`, `eff`,
+  `encmeta` from the XB, derives nothing, and makes OPEN resume. From then
+  on `PDO_ENCRYPTED` is set and decryption is automatic.
+* `PDV_ENG_CRYPT` 0x15 encrypts or decrypts a far buffer with an explicit
+  key and object for the writer. `phase` bit 0 is the first chunk, bit 1 the
+  last; a decrypt of an AES run strips the padding on the last chunk, an
+  encrypt writes the IV first (the caller's `iv`, the engine has no random
+  source) and pads at the end; `room` is the most `len` may grow to.
+
+Where decryption sits (and nowhere else):
+
+| place | what is decrypted |
+|---|---|
+| `pdestrm.c` `raw_get`, `st_decode`'s `nflt == 0` branch, `v_strm_read`'s `nflt == 0` branch | the raw bytes of a stream, at the lowest layer, so every filter sits above plaintext. AES-CBC holds back the last 16 bytes until the stream's end so the padding is stripped; RC4 is a keystream |
+| `pdelex.c` `ob_value`'s `PDT_STR` case | a string lexed from the FILE in object mode; never the `/Encrypt` dictionary's own strings, nor a member of an object stream (the stream is what was encrypted) |
+| `v_raw_copy` when `mode == PDRC_PLAIN` (eng leaves the hook) | the object's strings and stream, for Extract and Insert |
+
+A stream is left as it is when it is an xref stream (`/Type /XRef`), when
+its filter chain names `/Crypt` with `/Name /Identity` (or no name), or when
+it is the `/Metadata` stream and `/EncryptMetadata` is false, or when
+`/StmF` is the identity. The per-object key is MD5 of the file key, the
+object number's low three bytes and the generation's low two (little
+endian), then `sAlT` for AESV2, cut to `min(key_len + 5, 16)`; AESV3 uses the
+file key. Every length is clamped before use: a stream whose AES ciphertext
+is shorter than 32 bytes or not a multiple of 16 yields the bytes that
+decrypt, never more than the stream holds, and a padding byte above 16 or a
+padding that does not match leaves the plaintext untouched at the end.
+
+**R6 cost (`PDV_KEY_COST`).** Algorithm 2.B hashes `K1 = (password ‖ K ‖
+udata) x 64` with AES-128-CBC under `K[0:16]`, `IV = K[16:32]`, then takes
+`K` as SHA-256, SHA-384 or SHA-512 of the cipher text by the sum of its first
+16 bytes mod 3. It runs at least 64 rounds and stops when the last byte of
+the cipher text is no more than `round - 32`, so about 71 on average. With
+the empty password and no user data (`udata` is empty for the user password),
+a round encrypts `64 x |K|` bytes, 128 to 256 AES blocks, and hashes the same
+bytes. Checking a USER password is one run of 2.B; deriving the file key from
+a user password that was right is a SECOND run (the key salt); trying the
+OWNER password as well adds `udata` = `/U`'s 48 bytes (a round is then 3,072
+bytes larger) and its own two runs. So the empty password on a file whose
+owner password it is not costs two runs; a wrong typed password costs one
+run to find it wrong, then one more for the owner password.
+
+*Counts and cycles to be filled by the measurement of this section (the
+library's assembly, costed by instruction in Unicorn with the 8088's
+`max(4.34 x bytes, clocks)` rule of `tests/pdmath/pdcycles.py`); see 20.22.5.1.*
+
+#### 20.22.5.1 R6 cost, measured
+
+*Pending the library.*
 
 #### 20.22.6 The password prompt, the R6 question, errors and preferences (`ui`)
 
