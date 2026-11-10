@@ -101,7 +101,9 @@ static pdw gc_disc(void)
             root = gc_root(n);
             r = gc_first(n);
             if (r == PDE_IO || r == PDE_TRUNC || (r && root)) return r;  /* a chosen page must copy */
-            if (r) { gc_exclude(gc_w, b); return PDE_OK; }              /* a dangling reference */
+            if (r == PDE_NOTFOUND || r == PDE_XREF) { gc_exclude(gc_w, b); return PDE_OK; }   /* a dangling reference */
+            if (r) return r;            /* any other refusal (a missing Flate slot, a key, memory) is the JOB's: a content stream dropped
+                                           silently leaves a blank page that saves as `Saved` (F12) */
             ds = sc_body();
             if (ds == SC_BAD) { if (root) return PDE_SYNTAX; gc_exclude(gc_w, b); return PDE_OK; }
             if (gc_isdict(ds)) {
