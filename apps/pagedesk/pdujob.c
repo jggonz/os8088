@@ -146,6 +146,7 @@ static void pdu_job_abort(void)
 
 static void pdu_job_start(int kind)
 {
+    pdu_lad_begin();                    /* 20.22.2.6: a page view's counts */
     pdu_job = kind;
     pdu_jcancel = 0;
     pdu_jslices = 0;
@@ -201,6 +202,7 @@ static void pdu_title_set(void)
  * not - it draws nothing itself, it owes a repaint. */
 static int pdu_dirty_all;               /* the wake repaints everything */
 static int pdu_opfirst;                 /* the open's first slice is ours */
+static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
 static void pdu_open_begin(const char *name)
 {
     pdu_job_abort();
@@ -224,6 +226,8 @@ static void pdu_open_begin(const char *name)
     os88_strcpy(pdu_xopen.name, name, sizeof(pdu_xopen.name));
     pdu_doc = D_OPENING;
     pdu_opfirst = 1;
+    pdu_opauth = 0;
+    pdu_auth_reset();                   /* ui (20.22.2.6) */
     pdu_say2("Opening ", name);
     pdu_dirty_all = 1;
     pdu_job_start(J_OPEN);
@@ -288,15 +292,30 @@ static void pdu_open_step(void)
         pdu_open_first();
         return;
     }
+    if (pdu_opauth) {                   /* the key, ui's slices (20.22.2.6) */
+        r = pdu_auth_step();
+        if (r == PDE_BUSY)
+            return;
+        pdu_opauth = 0;
+        pdu_mcf = r != 0;
+        if (r)
+            goto failed;
+    }
     pd_fcopy_out(&pdu_xopen, pdu_xb, 0, sizeof(pdu_xopen));
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_OPEN, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
+    r = pdu_ladck(PDU_M_ENG, r);        /* a region, or PDXK: then OPEN again */
+    if (r == 0xFFFF) {
+        pdu_opauth = pdu_ladkey;
+        return;
+    }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */
             pdu_progress("Opening ", pdu_name);
         return;
     }
+failed:
     pdu_job = J_NONE;
     if (pdu_mcf || pdu_xopen.npages == 0
         || (pdu_reopening && pdu_xopen.npages != pdu_srcn)) {       /* pages */
@@ -315,6 +334,27 @@ static void pdu_open_step(void)
         pdu_kick();
         return;
     }
+    if (pdu_socc == PDX_KEY)            /* the key is set: PDXK's RAM back */
+        pdu_slot_free();
+#ifdef PDU_LADTEST
+    {   /* A DEVELOPER'S LOOK at 20.22.2 (define PDU_LADTEST in pagedesk.c and
+         * pagedesk.asm): every occupant in and out of the slot at each open,
+         * then a toast - loads off the disk, copies back from the cache, the
+         * cache's kind (1 XMS, 2 EMS), the last answer, the largest free KiB */
+        static char m[28];
+        unsigned o, q = 0;
+        for (o = 1; o <= PDU_OCC_WRT && !q; o++)
+            q = pdu_slot_load(o);
+        pdu_slot_free();
+        m[0] = 0;
+        pdu_cat(m, "d", sizeof(m)); os88_utoa(pdu_tdisk, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " c", sizeof(m)); os88_utoa(pdu_tcache, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " x", sizeof(m)); os88_utoa(pdu_ckind, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " r", sizeof(m)); os88_utoa(q, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " f", sizeof(m)); os88_utoa(os88_mem_largest_p() >> 6, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        os88_toast(m, 0);
+    }
+#endif
     pdu_npages = pdu_xopen.npages;
     pdu_srcn = pdu_npages;              /* pages */
     pdu_rdonly = (pdu_xopen.flags & PDO_READONLY) != 0;
@@ -431,6 +471,8 @@ static void pdu_render_step(void)
     unsigned r;
     r = pdu_mcall(PDU_M_REND, PDV_REND_STEP, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: STEP again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
         pdu_progress("Drawing page ", "");
         return;

@@ -20,8 +20,9 @@ unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
                             unsigned cap, unsigned *cursor);
 #endif
 
+#include "pdrxc.c"   /* the slot and the extension cache (20.22.2, 20.22.7): first,
+                        so that every pdr*.c file and the agents' glue can call it */
 #include "pdrg.c"
-#include "pdrxc.c"   /* the slot and the extension cache (20.22.2, 20.22.7) */
 #include "pdrd.c"
 #include "pdrf.c"
 #include "pdri.c"

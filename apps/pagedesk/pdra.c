@@ -31,20 +31,10 @@ static struct pd_rect g_ar;         /* the annotation's /Rect (pt16)          */
 static pdw g_aob, g_agn;            /* the annotation's object                */
 static pdw g_apobj, g_apgen;        /* its appearance stream                  */
 #define ED_SZ 48
-#define ED_PENUP ((pdi)(-32767 - 1))     /* PD_PENUP, which SmallerC cannot spell */
 
 /* ---- helpers --------------------------------------------------------------- */
 /* luminance of the 16 palette colours (D9: the EGA 4-level triple, 6 is brown) */
 static const pdb ed_lum[16] = { 0, 19, 99, 118, 51, 70, 100, 170, 85, 104, 184, 203, 136, 155, 235, 255 };
-/* a palette index as the colour of a fill or a stroke; a 1bpp page draws strokes
- * and text black (10.5) */
-static void ed_col(pdw stroke, pdw c)
-{
-    pdw lum = ed_lum[c & 15];
-    c &= 15;
-    if (g_bpp == 1 && stroke) lum = 0;
-    if (stroke) { GS.slum = (pdb)lum; GS.sc4 = (pdb)c; } else { GS.flum = (pdb)lum; GS.fc4 = (pdb)c; }
-}
 static void ed_lw(pdi w16) { pdm_pt16_to_fx(&GS.lw, (pd_pt)w16); }
 /* a point of page space (pt16) to device, into g_dx / g_dy */
 static void edev(pdi x, pdi y)
@@ -57,21 +47,7 @@ static void ep(pdi x, pdi y, pdw mv)
     edev(x, y);
     if (mv) path_move(g_dx, g_dy); else path_line(g_dx, g_dy);
 }
-static void ec(pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
-{
-    pdi a, b, c, d;
-    edev(x1, y1); a = g_dx; b = g_dy;
-    edev(x2, y2); c = g_dx; d = g_dy;
-    edev(x3, y3);
-    path_curve(a, b, c, d, g_dx, g_dy);
-}
-/* coordinate `yy` (0 x, 1 y) of the record's point `i` (pt16) */
-static pdi ept(pdw i, pdw yy)
-{
-    return (pdi)pd_fpeekw(g_rq.edits_seg, (pdw)(g_ed.pts_off + i * 4 + (yy ? 2 : 0)));
-}
 static pdw ebyte(pdw i) { return pd_fpeekb(g_rq.edits_seg, (pdw)(g_ed.text_off + i)); }
-static void ed_dash(pdw on, pdw off) { GS.dn = 2; GS.dash[0] = (pdb)on; GS.dash[1] = (pdb)off; GS.dph = 0; }
 
 /* does a record replace or delete the source annotation obj gen? (src_num, src_gen at +12, +14) */
 static pdw ed_replaced(pdw obj, pdw gen)
@@ -217,108 +193,61 @@ static pdw annot_next(void)
 }
 
 /* ---- the edit store's marks (13.3) ------------------------------------------- */
-/* A small path language for the marks that fill a box: pairs of coordinates in a
- * grid of n cells over the box (the note's y grid is 36); -1 move, -2 line,
- * -3 curve (3 pairs), -4 close, -5 fill+stroke, -6 stroke, -7 end */
-static const pdi note_prog[] = {        /* PDWRT's speech bubble (pdwap.c ap_note) in a 20 x 18 pt box, half points */
-    -1, 6, 34, -2, 34, 34, -3, 37, 34, 38, 33, 38, 30, -2, 38, 14, -3, 38, 11, 37, 10, 34, 10,
-    -2, 18, 10, -2, 10, 2, -2, 12, 10, -2, 6, 10, -3, 3, 10, 2, 11, 2, 14, -2, 2, 30,
-    -3, 2, 33, 3, 34, 6, 34, -4, -5,
-    -1, 8, 26, -2, 32, 26, -1, 8, 21, -2, 32, 21, -1, 8, 16, -2, 22, 16, -6, -7 };
-static const pdi rect_prog[] = { -1, 0, 0, -2, 1, 0, -2, 1, 1, -2, 0, 1, -4, -6, -7 };
-static const pdi ell_prog[] = {         /* four curves, kappa 0.5523, on a 1000 grid */
-    -1, 1000, 500, -3, 1000, 776, 776, 1000, 500, 1000, -3, 224, 1000, 0, 776, 0, 500,
-    -3, 0, 224, 224, 0, 500, 0, -3, 776, 0, 1000, 224, 1000, 500, -4, -6, -7 };
-static void ed_prog(const pdi *p, pdi n, pdi bx, pdi by, pdi bw, pdi bh)
+/* Every mark but the Text tool's box is computed in PDXG (pdxedit.c, 20.22.7):
+ * PDV_GFX_EDIT hands back a batch of drawing ops in page space, ending at the
+ * first PAINT, and ed_exec runs it through the page's own path and paint. A
+ * page view whose PDXG cannot be had draws the Text boxes alone and notes
+ * PDF_INC_MODULE (the ladder, x_need). */
+#ifndef PDV_GFX_EDIT
+#define PDV_GFX_EDIT 0xCF
+#endif
+static struct pdxb_emark g_xem;
+static const pdb ed_na[9] = { 0, 2, 2, 2, 6, 0, 0, 1, 1 };
+/* SETB's fields (pdxedit.c XF_*): the state a mark sets */
+static pdb *const ed_f[11] = { &GS.slum, &GS.sc4, &GS.flum, &GS.fc4, &GS.dn, &GS.dash[0], &GS.dash[1],
+                               (pdb *)&GS.dph, (pdb *)&GS.dph + 1, &GS.cap, &GS.join };
+static pdi ed_px, ed_py;                /* the last point op's point (an ink stroke's split) */
+static void ed_exec(void)
 {
-    static pdi v[6];
-    pdi op, k, m;
-    if (bw <= 0 || bh <= 0) return;
-    while (*p != -7) {
-        op = *p++;
-        if (op == -4) { path_close(); continue; }
-        if (op == -5) { paint(1, 0, 1, 0); continue; }
-        if (op == -6) { paint(0, 0, 1, 0); continue; }
-        m = op == -3 ? 6 : 2;
-        for (k = 0; k < m; k += 2, p += 2) {
-            v[k] = (pdi)(bx + pdr_muldiv(p[0], bw, n));
-            v[k + 1] = (pdi)(by + pdr_muldiv(p[1], bh, n == 40 ? 36 : n));
+    static pdi v[7];                    /* the op word and up to six arguments */
+    static pdw o, n, w, a;
+    o = PDXE_OPS; n = g_xem.n;
+    while (n && !g_dlfull) {
+        pd_fcopy_in(g_xb, o, v, 14);    /* PDXG leaves 14 bytes of the XB past its last op */
+        w = (pdw)v[0] & 0xFF; a = (pdw)v[0] >> 8;
+        if (w > 8 || n <= ed_na[w]) return;
+        n = (pdw)(n - ed_na[w] - 1); o = (pdw)(o + ed_na[w] * 2 + 2);
+        if (w == 7) { if (a < 11) *ed_f[a] = (pdb)v[1]; }
+        else if (w == 8) ed_lw(v[1]);
+        else if (w == 6) paint(a & 1, 0, (pdw)((a >> 1) & 1), (pdw)((a >> 2) & 1));
+        else if (w == 5) path_close();
+        else if (w == 4) {
+            edev(v[1], v[2]); v[1] = g_dx; v[2] = g_dy;
+            edev(v[3], v[4]); v[3] = g_dx; v[4] = g_dy;
+            edev(v[5], v[6]);
+            path_curve(v[1], v[2], v[3], v[4], g_dx, g_dy);
+        } else if (w) {
+            /* INK: a long stroke draws what is there and goes on FROM its last point */
+            if (w == 3 && g_nv >= PDR_NPATH - 3) { paint(0, 0, 1, 0); ep(ed_px, ed_py, 1); }
+            ep(v[1], v[2], w == 1); ed_px = v[1]; ed_py = v[2];
         }
-        if (op == -3) ec(v[0], v[1], v[2], v[3], v[4], v[5]);
-        else ep(v[0], v[1], op == -1);
     }
 }
-
-/* the quads' vertex orders: UL UR LR LL for a fill or a frame, LL LR for the underline */
-static const char q_fill[] = { 0, 1, 3, 2, 9 };
-static const char q_under[] = { 2, 3, 9 };
-/* mode 0 an open stroke, 1 a fill, 2 a closed stroke */
-static void ed_quad(pdw b, const char *o, pdw mode)
+/* record g_aedi's marks, through PDXG */
+static void ed_marks(void)
 {
     pdw k;
-    for (k = 0; o[k] < 4; k++) ep(ept((pdw)(b + o[k]), 0), ept((pdw)(b + o[k]), 1), !k);
-    if (mode == 0) paint(0, 0, 1, 0); else paint(mode == 1, 0, mode == 2, 1);
-}
-/* the quads: filled in a light form of the colour on 4bpp (drawn FIRST, so the
- * text stays on top); on 1bpp 17.4's marks by `mono_mark`: 0 underline and a dotted
- * frame, 1 underline, 2 dotted frame, 3 a light hatch (a dither, drawn first too) */
-static void ed_highlight(void)
-{
-    pdw nq = (pdw)(g_ed.pts_n >> 2), q, mm = g_rq.mono_mark, c = g_ed.colour;
-    if (nq > 64) nq = 64;
-    if (g_bpp == 4) ed_col(0, (c == 0 || c == 7 || c == 15) ? 14 : (c | 8));
-    else if (mm == 3) ed_col(0, 7);
-    else { ed_col(1, 0); ed_lw(16); }
-    for (q = 0; q < nq; q++) {
-        if (g_bpp == 4 || mm == 3) { ed_quad((pdw)(q * 4), q_fill, 1); continue; }
-        if (mm != 2) { GS.dn = 0; ed_quad((pdw)(q * 4), q_under, 0); }
-        if (mm != 1) { ed_dash(4, 8); ed_quad((pdw)(q * 4), q_fill, 2); }
+    if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return; }
+    pdr_zero(&g_xem, sizeof g_xem);
+    g_xem.eseg = g_rq.edits_seg; g_xem.rec = g_aedi; g_xem.bpp = g_bpp; g_xem.mono = g_rq.mono_mark;
+    for (k = 0; k < 4000; k++) {
+        pd_fcopy_out(&g_xem, g_xb, 0, sizeof g_xem);
+        x_call(PDV_GFX_EDIT, g_xb, 0, 0);
+        if (x_cf) return;
+        pd_fcopy_in(g_xb, 0, &g_xem, sizeof g_xem);
+        ed_exec();
+        if (!g_xem.more || g_dlfull) return;
     }
-}
-
-/* ink and signature strokes: round caps and joins, a one-point stroke is a dot */
-static void ed_ink(void)
-{
-    pdw i, n = g_ed.pts_n, pen = 0;           /* pen: 0 between strokes, 1 one point so far, 2 more */
-    pdi x, y, lx = 0, ly = 0, px = 0, py = 0;
-    if (n > 4096) n = 4096;
-    ed_col(1, g_ed.colour); ed_lw((pdi)((g_ed.size ? g_ed.size : 4) * 8)); GS.cap = 1; GS.join = 1;
-    for (i = 0; i <= n && !g_dlfull; i++) {
-        x = i < n ? ept(i, 0) : ED_PENUP;
-        if (x == ED_PENUP) { if (pen == 1) ep(lx, ly, 0); pen = 0; continue; }
-        y = ept(i, 1);
-        if (pen && g_nv >= PDR_NPATH - 3) { paint(0, 0, 1, 0); ep(px, py, 1); }   /* a long stroke: draw what is there and go on FROM its last point */
-        ep(x, y, !pen);
-        if (!pen) { pen = 1; lx = x; ly = y; } else pen = 2;
-        px = x; py = y;
-    }
-    paint(0, 0, 1, 0);
-}
-
-/* the arrowhead at (tx, ty) of a line from (fx, fy): two barbs 25 degrees off the
- * line, 8 pt + 2 widths long (PDWRT's recipe), as one open stroke */
-static void ed_head(pdi tx, pdi ty, pdi fx, pdi fy, pdi lw16)
-{
-    pdi dx = (pdi)((tx >> 1) - (fx >> 1)), dy = (pdi)((ty >> 1) - (fy >> 1)), len = pdr_hypot(dx, dy);
-    pdi ux, uy, L = (pdi)(128 + 2 * lw16), a, b, c, d;
-    if (!len) return;
-    ux = pdr_muldiv(dx, 1000, len); uy = pdr_muldiv(dy, 1000, len);
-    a = pdr_muldiv(906, ux, 1000); b = pdr_muldiv(423, uy, 1000);
-    c = pdr_muldiv(906, uy, 1000); d = pdr_muldiv(423, ux, 1000);
-    ep((pdi)(tx - pdr_muldiv(L, (pdi)(a - b), 1000)), (pdi)(ty - pdr_muldiv(L, (pdi)(c + d), 1000)), 1);
-    ep(tx, ty, 0);
-    ep((pdi)(tx - pdr_muldiv(L, (pdi)(a + b), 1000)), (pdi)(ty - pdr_muldiv(L, (pdi)(c - d), 1000)), 0);
-    paint(0, 0, 1, 0);
-}
-static void ed_line(void)
-{
-    pdi lw = g_ed.style ? g_ed.style : 1, x0 = ept(0, 0), y0 = ept(0, 1), x1 = ept(1, 0), y1 = ept(1, 1);
-    if (g_ed.pts_n < 2) return;
-    lw = (pdi)(lw << 4);
-    ed_col(1, g_ed.colour); ed_lw(lw);                        /* butt caps: a plain rule stays a rule */
-    ep(x0, y0, 1); ep(x1, y1, 0); paint(0, 0, 1, 0);
-    if (g_ed.align & 1) ed_head(x0, y0, x1, y1, lw);
-    if (g_ed.align & 2) ed_head(x1, y1, x0, y0, lw);
 }
 
 /* the Text tool's box: the writer's layout (PDWRT 20.5.6) - 2 pt of padding, leading
@@ -362,7 +291,7 @@ static void ed_text(void)
     if (!len) return;
     if (fam > 2) fam = 0;
     fi = font_synth(fam, (pdw)(g_ed.style & 3));
-    ed_col(0, g_ed.colour);
+    GS.flum = ed_lum[g_ed.colour & 15]; GS.fc4 = (pdb)(g_ed.colour & 15);
     GS.font = (pdb)fi; pdm_fx_int(&GS.fs, (pdi)size); GS.tr = 0; fs_changed();
     avail = (pdw)(g_ed.rect.x1 - g_ed.rect.x0);
     avail = avail > 64u ? (pdw)(avail - 64u) : 0;
@@ -408,7 +337,6 @@ static void ed_text(void)
 static pdw annot_edits(pdw post)
 {
     pdw k, work = 0;
-    pdi lw;
     if (!(g_aflags & PDRF_EDITS) || !g_rq.edits_seg) return 0;
     for (; g_aedi < g_rq.edits_count && !g_dlfull; g_aedi++) {
         if (work >= 1024) return 1;
@@ -420,24 +348,7 @@ static pdw annot_edits(pdw post)
         if ((k == PDA_HIGHLIGHT) == (post != 0)) continue;
         work += (pdw)(16 + (g_ed.pts_n > 4096 ? 4096 : g_ed.pts_n) + (g_ed.text_len > 1024 ? 1024 : g_ed.text_len));
         gs_reset(); path_reset(); g_plimit = 0;
-        lw = g_ed.style ? g_ed.style : 1; lw = (pdi)(lw << 4);      /* a frame's border, pt16 */
-        switch (k) {
-        case PDA_NOTE:
-            ed_col(0, g_bpp == 1 ? 15 : g_ed.colour); ed_col(1, 0); ed_lw(13); GS.join = 1;
-            ed_prog(note_prog, 40, g_ed.rect.x0, g_ed.rect.y0, (pdi)(g_ed.rect.x1 - g_ed.rect.x0), (pdi)(g_ed.rect.y1 - g_ed.rect.y0));
-            break;
-        case PDA_HIGHLIGHT: ed_highlight(); break;
-        case PDA_TEXT: ed_text(); break;
-        case PDA_INK: case PDA_SIGN: ed_ink(); break;
-        case PDA_LINE: ed_line(); break;
-        default:                                                   /* Area mark, Rect, Ellipse: inset by half the border */
-            ed_col(1, g_ed.colour); ed_lw(lw);
-            if (k == PDA_AREA && (g_ed.align & 1)) ed_dash(12, 12);
-            ed_prog(k == PDA_ELLIPSE ? ell_prog : rect_prog, k == PDA_ELLIPSE ? 1000 : 1,
-                    (pdi)(g_ed.rect.x0 + (lw >> 1)), (pdi)(g_ed.rect.y0 + (lw >> 1)),
-                    (pdi)(g_ed.rect.x1 - g_ed.rect.x0 - lw), (pdi)(g_ed.rect.y1 - g_ed.rect.y0 - lw));
-            break;
-        }
+        if (k == PDA_TEXT) ed_text(); else ed_marks();
     }
     path_reset();
     return 0;

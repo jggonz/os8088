@@ -8,14 +8,22 @@
 /* ---- images, drawn from the engine's stream as the bands go by ------------ */
 static pdi g_icur;                  /* source row held in the buffer            */
 static pdw g_iobj, g_igen, g_ibytes, g_iopen;
+static pdw g_icodec;                /* the open image is an occupant's (PDX_IMG/JPX), 0 the engine's */
+static struct pdxb_img g_xi;        /* IMG_OPEN's answer (20.22.7)              */
 static const pdb dpal4[4] = { 0, 8, 7, 15 };
 
-static void img_close(void) { if (g_iopen) { strm_close(); g_iopen = 0; } }
+static void img_close(void)
+{
+    if (!g_iopen) return;
+    if (!g_icodec) strm_close();
+    else if (x_have(g_icodec)) x_call(PDV_IMG_CLOSE, 0, 0, 0);
+    g_iopen = 0;
+}
 static pdw img_reopen(void)
 {
     img_close();
     if (strm_open(g_iobj, g_igen, 0, 0)) return 0;
-    g_iopen = 1; g_icur = -1;
+    g_iopen = 1; g_icur = -1; g_icodec = 0;
     return 1;
 }
 /* read the next source row into the row buffer; 0 on a short stream */
@@ -31,38 +39,78 @@ static pdw img_row(void)
     g_icur++;
     return 1;
 }
+/* IMG_OPEN at the occupant `m` for the record body b (20.22.7); 0 = refused.
+ * What it answers is hostile until checked: sizes the DDA takes, and a row
+ * of at least the bytes its mode reads, inside the 1 KiB row buffer */
+typedef char pdr_ck_imgf[PDIMG_MASK == 1 && PDIMG_INVERT == 2 ? 1 : -1];  /* = the record's flags 1, 2 */
+static pdw img_xopen(pdw m, const pdb *b, pdi wq, pdi hq)
+{
+    pdw need;
+    img_close();
+    pdr_zero(&g_xi, sizeof g_xi);
+    g_xi.objnum = g_iobj; g_xi.gen = g_igen; g_xi.codec = b[19];
+    pdr_cpy(&g_xi.w, b + 8, 4);
+    g_xi.bpc = b[16]; g_xi.ncomp = b[17];
+    g_xi.want_w = (pdw)((wq + 3) >> 2); g_xi.want_h = (pdw)((hq + 3) >> 2);
+    g_xi.flags = b[18] & 3;
+    pd_fcopy_out(&g_xi, g_xb, 0, sizeof g_xi);
+    x_call(PDV_IMG_OPEN, g_xb, 0, 0);
+    if (x_cf) return 0;
+    pd_fcopy_in(g_xb, 0, &g_xi, sizeof g_xi);
+    g_iopen = 1; g_icodec = m; g_icur = -1;
+    need = g_xi.out_mode == PDIM_BITS1 ? (pdw)((g_xi.out_w + 7) >> 3)
+         : (pdw)(g_xi.out_w * (g_xi.out_mode == PDIM_N8 ? g_xi.out_ncomp : 1));
+    if (!g_xi.out_w || g_xi.out_w > 4096 || !g_xi.out_h || g_xi.out_h > 0x7FFF || g_xi.out_mode > PDIM_N8
+        || (pdw)(g_xi.out_ncomp - 1) > 3 || need > g_xi.rowbytes || g_xi.rowbytes > 1024) { img_close(); return 0; }
+    return 1;
+}
 
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
 {
-    static pdb b[20];
+    static pdb b[DLI_BODY];
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
-    pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen, inl;
+    pdw W, H, bpc, ncomp, flags, rb, sm, obj, gen, inl, m;
     (void)len;
-    pd_fcopy_in(g_dls, off + DLH, b, 20);
+    pd_fcopy_in(g_dls, off + DLH, b, DLI_BODY);
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
     W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
     obj = (pdw)r16(b + 12); gen = (pdw)r16(b + 14);
     bpc = b[16]; ncomp = b[17]; flags = b[18];
-    stencil = flags & 1;
+    m = b[19] ? (b[19] == PDCD_JPX ? PDX_JPX : PDX_IMG) : 0;    /* a codec: the occupant decodes it */
     inl = flags & 16;                          /* an inline image: its rows follow the body in the list */
     if (!inl && (!g_gseg || g_gkb < 2)) { inc_note(PDF_INC_IMAGE, "no image buffer"); return; }
     wq = (pdi)(xr - xl); hq = (pdi)(yb - yt);
     if (wq < 1) wq = 1;
     if (hq < 1) hq = 1;
     if (!W || !H || W > 4096 || H > 0x7FFF) return;
-    /* the row in bytes, without a 16-bit product that can wrap (do_image allows
-     * 8 bits of 1 or 3 components, or 1 bit of one) */
-    rb = bpc == 8 ? (pdw)(W * ncomp) : (pdw)((W + 7) >> 3);
-    if (rb > 1024) { inc_note(PDF_INC_LIMIT, "image row size"); return; }
-    /* the stream stays open from band to band while the same image is drawn
-     * further down: each band reads on from the row the last one stopped at,
-     * instead of decoding the image from its first row again */
-    if (!inl && (!g_iopen || g_iobj != obj || g_igen != gen || g_ibytes != rb)) {
-        g_iobj = obj; g_igen = gen; g_ibytes = rb;
-        if (!img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
+    if (m) {
+        if (!x_have(m)) { inc_note(PDF_INC_MODULE, x_name[m]); return; }   /* refused, or the band's other decoder (x_rneed) */
+        if (!g_iopen || g_icodec != m || g_iobj != obj || g_igen != gen) {
+            g_iobj = obj; g_igen = gen;
+            if (!img_xopen(m, b, wq, hq)) { inc_note(PDF_INC_IMAGE, "image decoder"); return; }
+        }
+        W = g_xi.out_w; H = g_xi.out_h; rb = g_xi.rowbytes;
+        sm = g_xi.out_mode == PDIM_GREY8 ? 1 : g_xi.out_mode == PDIM_BITS1 ? ((flags & 1) ? 3 : 0) : 4;
+        if (g_xi.out_ncomp != ncomp) flags &= ~8;  /* a LUT is for the space's own samples */
+        ncomp = g_xi.out_ncomp; bpc = 8;
+        flags &= ~2;                           /* the occupant applied /Decode */
+    } else {
+        /* the row in bytes, without a 16-bit product that can wrap: W x ncomp
+         * <= 16,384 samples of 1 to 16 bits (do_image's bounds) */
+        rb = (pdw)(W * ncomp);
+        rb = (pdw)((rb >> 3) * bpc + (((rb & 7) * bpc + 7) >> 3));
+        if (rb > 1024) { inc_note(PDF_INC_LIMIT, "image row size"); return; }
+        /* the stream stays open from band to band while the same image is drawn
+         * further down: each band reads on from the row the last one stopped at,
+         * instead of decoding the image from its first row again */
+        if (!inl && (!g_iopen || g_icodec || g_iobj != obj || g_igen != gen || g_ibytes != rb)) {
+            g_iobj = obj; g_igen = gen; g_ibytes = rb;
+            if (!img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
+        }
+        sm = (flags & 1) ? 3 : ((flags & 8) || ncomp == 4 || (bpc != 8 && bpc != 1)) ? 4
+           : (ncomp == 3 ? 2 : (bpc == 1 ? 0 : 1));
     }
-    sm = stencil ? 3 : (ncomp == 3 ? 2 : (bpc == 1 ? 0 : 1));
     /* destination columns: first/last pixel the rectangle and the clip share */
     x0 = q_lo(xl); x1 = q_hi(xr);
     if (x1 < x0) x1 = x0;
@@ -75,6 +123,9 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
+    pdr_ip.nc = ncomp; pdr_ip.bpc = bpc;
+    pdr_ip.lseg = (flags & 8) ? g_xcseg : 0; pdr_ip.loff = (pdw)r16(b + 24);
+    pdr_ip.lflags = (flags & 8) ? b[26] : (ncomp == 4);
     for (y = ry0; y <= ry1; y++) {
         pdi qy = (pdi)(y * 4 + 2);
         if (y < g_scy0 || y > g_scy1) continue;
@@ -82,7 +133,14 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
         else if (qy >= yb) sr = (pdi)(H - 1);
         else sr = pdr_muldiv((pdi)(qy - yt), (pdi)H, hq);
         if (sr >= (pdi)H) sr = (pdi)(H - 1);
-        if (!inl) {
+        if (m) {
+            if (sr < g_icur && !img_xopen(m, b, wq, hq)) return;
+            if (sr != g_icur) {
+                x_call(PDV_IMG_ROW, g_gseg, 0, (pdw)sr);
+                if (x_cf) { img_close(); inc_note(PDF_INC_IMAGE, "image decoder"); return; }
+                g_icur = sr;
+            }
+        } else if (!inl) {
             if (sr < g_icur) { if (!img_reopen()) return; }
             while (g_icur < sr) if (!img_row()) { img_close(); return; }
             if (g_icur < 0 && !img_row()) { img_close(); return; }
@@ -92,7 +150,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_ip.bseg = g_bseg;
             pdr_ip.boff = (pdw)(y - g_by0) * g_bstride;
             pdr_ip.x0 = (pdi)(x0 - g_bx0); pdr_ip.x1 = (pdi)(x1 - g_bx0);
-            if (inl) { pdr_ip.sseg = g_dls; pdr_ip.soff = (pdw)(off + DLH + 20 + (pdw)sr * rb); }
+            if (inl) { pdr_ip.sseg = g_dls; pdr_ip.soff = (pdw)(off + DLH + DLI_BODY + (pdw)sr * rb); }
             else { pdr_ip.sseg = g_gseg; pdr_ip.soff = 0; }
             pdr_ip.sw = W;
             pdr_ip.xlo = 0; pdr_ip.xhi = (pdw)s0;
@@ -119,6 +177,69 @@ static struct pdxb_thumb g_thq;
 static struct pdxb_pageinfo g_pi;
 static pdw g_flatscale;
 
+/* ---- the ladder (PAGEDESK-SPEC 20.22.2 L2, 20.22.7) ------------------------
+ * ONE answer at a time: a region (NEEDMEM) first, then the highest-numbered
+ * module needed (fonts before graphics, so the graphics module - whose dash
+ * work is never cached - is the one left resident), and the pass is run
+ * again after each. A codec image asks before the first band it touches is
+ * drawn. A page view makes at most PDR_XASKS answers. */
+static pdw x_ask;                   /* the last answer: PDX_*, or 0x80 | PDMEM_*; 0 none */
+static pdw x_asks;                  /* answers this page view                   */
+static pdw g_xph;                   /* after it: PDR_INTERP re-runs the pass, PDR_RAST draws the band */
+static pdw x_answer(pdw what, pdw cx, pdw dx, pdw ph)
+{
+    x_ask = what; pdr_out_cx = cx; pdr_out_dx = dx; x_asks++;
+    g_xph = ph; g_ph = PDR_XWAIT;
+    return (what & 0x80) ? PDE_NEEDMEM : PDE_NEEDMOD;
+}
+/* the end of an interpretation pass: something to ask for, or 0 */
+static pdw x_resolve(void)
+{
+    pdw id, w = x_pend & ~x_ref;
+    if (x_mwant && !(x_ref & XR_MEM)) {
+        if (x_asks < PDR_XASKS) return x_answer((pdw)(0x80 | x_mwant), x_mwant, x_mkb, PDR_INTERP);
+        x_ref |= XR_MEM;
+    }
+    for (id = PDX_COUNT - 1; id; id--) if (w & (1u << id)) {
+        if (x_asks < PDR_XASKS) return x_answer(id, 0, id, PDR_INTERP);
+        x_refuse(id);
+    }
+    return 0;
+}
+/* the primary has answered: what did not come is refused for the page view */
+static void x_answered(void)
+{
+    pdw a = x_ask;
+    x_ask = 0; x_mwant = 0;
+    if (a & 0x80) { if (!(a == (0x80 | PDMEM_XC) ? g_ini.xc_seg : g_ini.x8_seg)) x_ref |= XR_MEM; }
+    else if (a && !x_have(a)) x_refuse(a);
+}
+/* before band g_bcur is drawn: the occupant its codec images need (20.22.7).
+ * The band's DLR_IMAGE records say which; when the resident occupant is one
+ * of them the band is drawn with it, else the lowest is asked for. A band
+ * whose images need BOTH decoders draws one decoder's: draw_image notes the
+ * other's as PDF_INC_MODULE (one slot) */
+static pdw x_rneed(void)
+{
+    static pdb h[DLH];
+    pdw off = 0, need = 0, len, id;
+    pdi y0 = (pdi)(g_vcy0 + (pdi)g_bcur * PD_BANDROWS), y1 = (pdi)(y0 + PD_BANDROWS - 1);
+    if (!g_xrm) return 0;
+    while (off < g_dllen) {
+        pd_fcopy_in(g_dls, off, h, DLH);
+        len = (pdw)r16(h + 2);
+        if (len < DLH || len > g_dllen - off) break;
+        if (h[0] == DLR_IMAGE && r16(h + 6) >= y0 && r16(h + 4) <= y1 && (id = pd_fpeekb(g_dls, (pdw)(off + DLH + 19))) != 0)
+            need |= (pdw)(1u << (id == PDCD_JPX ? PDX_JPX : PDX_IMG));
+        off = (pdw)(off + len);
+    }
+    need &= ~x_ref;
+    if (!need || (need >> x_res) & 1) return 0;
+    id = (need & (1u << PDX_IMG)) ? PDX_IMG : PDX_JPX;
+    if (x_asks >= PDR_XASKS) { x_refuse(id); return 0; }
+    img_close();
+    return x_answer(id, 0, id, PDR_RAST);
+}
 static void close_streams(void)
 {
     img_close();
@@ -134,6 +255,7 @@ static pdw pass_begin(void)
     img_close();                        /* a held image is not the top stream any more */
     g_eylo = (pdi)(g_gy0 * 4); g_eyhi = (pdi)(g_gy1 * 4 + 3);
     g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
+    x_pend = 0; x_mwant = 0; g_xrm = 0; g_xcfull = 0;
     g_passes++;
     gs_init();
     g_ph = PDR_INTERP;
@@ -164,6 +286,7 @@ static void mode_reset(void)
     g_inc = 0; g_incname[0] = 0; g_ops = 0; g_passes = 0;
     g_ierr = 0; g_ndl = 0;
     g_pkfam = 0xFF; g_aflags = 0;
+    x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0;
 }
 
 static pd_px vb_w, vb_h;
@@ -220,12 +343,35 @@ static pdw verb_step(void)
 {
     pdw done, err;
     if (g_ph == PDR_DONE || g_ph == PDR_IDLE) return PDE_OK;
+    if (g_ph == PDR_XWAIT) {            /* the primary answered (20.22.7) */
+        x_answered();
+        g_ph = g_xph;
+        if (g_ph == PDR_INTERP) {
+            err = pass_begin();
+            if (err) { g_ph = PDR_DONE; return err; }
+            return PDE_BUSY;
+        }
+    }
     if (g_ph == PDR_INTERP) {
         done = interp_run(PD_SLICE_OPS);
         if (g_dlfull) { group_narrow(); return PDE_BUSY; }
-        if (done) { close_streams(); g_ph = PDR_RAST; g_bcur = g_b0; }
+        if (done) {
+            close_streams();
+            /* the extension cache filled: empty it and run the pass again, once a view */
+            if (g_xcfull && !g_xcflush) {
+                g_xcflush = 1; g_xctop = 0;
+                err = pass_begin();
+                if (err) { g_ph = PDR_DONE; return err; }
+                return PDE_BUSY;
+            }
+            if (g_xcfull) inc_note(PDF_INC_LIMIT, "extension cache");
+            err = x_resolve();
+            if (err) return err;
+            g_ph = PDR_RAST; g_bcur = g_b0;
+        }
         return PDE_BUSY;
     }
+    if (g_ph == PDR_RAST && (err = x_rneed()) != 0) return err;
     if (g_ph == PDR_RAST && g_subm) {
         /* one sub-range of the band is interpreted: draw its rows into the band */
             g_wlo = g_gy0; g_whi = g_gy1;
@@ -281,48 +427,71 @@ static pdw verb_status(void)
     rs.incomplete = g_inc;
     pdr_scpy(rs.first, g_incname, 32);
     rs.ops = g_ops; rs.passes = g_passes;
+    rs.mods = x_used; rs.swaps = x_swaps;
     pd_fcopy_out(&rs, g_xb, 0, sizeof rs);
     return PDE_OK;
 }
 
 /* ---- the text map ----------------------------------------------------------- */
+/* A text pass that needs a module (20.22.7) answers before it hands over the
+ * slice that skipped the work, and is then run again from the page's start,
+ * dropping the g_tmdel glyphs the primary already has: they came out before
+ * the need, so the second pass makes the same ones */
+static pdw g_tmdel, g_tmskip;
+static pdw tm_start(void)
+{
+    static struct pd_fx s16;
+    close_streams();
+    g_mode = PDR_TEXT; g_ph = PDR_TEXT;
+    g_tmwr = g_tmrd = g_tmrun = 0; g_tmoverflow = 0; g_tmfirst = 1;
+    pdm_fx_int(&s16, 16);
+    pdr_zero(&g_base, sizeof g_base);
+    pdr_cpy(&g_base.a, &s16, 4); pdr_cpy(&g_base.d, &s16, 4);
+    g_vcx0 = 0; g_vcy0 = 0; g_vcx1 = 32000; g_vcy1 = 32000;
+    g_pgx0 = g_pgy0 = -32000; g_pgx1 = g_pgy1 = 32000;
+    g_gy0 = -32000; g_gy1 = 32000;
+    gs_init();
+    GS.cx0 = GS.cy0 = -32000; GS.cx1 = GS.cy1 = 32000;
+    x_pend = 0; x_mwant = 0;
+    return interp_start(g_tmq.page);
+}
 static pdw verb_textmap(void)
 {
-    static struct pd_fx s16, z;
     pdw n, room, err;
     pd_fcopy_in(g_xb, 0, &g_tmq, sizeof g_tmq);
     if (!g_dls) return PDE_NOMEM;
     if (g_tmq.dmax < 12) return PDE_RANGE;          /* no room for one record: it would never finish */
+    err = 0;
     if (g_tmq.state == 0) {
-        close_streams();
         mode_reset();
-        g_mode = PDR_TEXT; g_ph = PDR_TEXT;
-        g_tmwr = g_tmrd = g_tmrun = 0; g_tmoverflow = 0; g_tmfirst = 1;
-        pdm_fx_int(&s16, 16); pdm_fx_int(&z, 0);
-        pdr_zero(&g_base, sizeof g_base);
-        pdr_cpy(&g_base.a, &s16, 4); pdr_cpy(&g_base.d, &s16, 4);
-        g_vcx0 = 0; g_vcy0 = 0; g_vcx1 = 32000; g_vcy1 = 32000;
-        g_pgx0 = g_pgy0 = -32000; g_pgx1 = g_pgy1 = 32000;
-        g_gy0 = -32000; g_gy1 = 32000;
-        gs_init();
-        GS.cx0 = GS.cy0 = -32000; GS.cx1 = GS.cy1 = 32000;
-        err = interp_start(g_tmq.page);
+        g_tmdel = g_tmskip = 0;
+        err = tm_start();
         g_tmq.state = 1;
-        if (err) { g_tmq.done = 1; g_tmq.count = 0; pd_fcopy_out(&g_tmq, g_xb, 0, sizeof g_tmq); return err; }
-        (void)z;
+    } else if (g_ph == PDR_XWAIT) {
+        x_answered();
+        g_tmskip = g_tmdel;
+        err = tm_start();
     }
+    if (err) { g_tmq.done = 1; g_tmq.count = 0; pd_fcopy_out(&g_tmq, g_xb, 0, sizeof g_tmq); return err; }
     if (g_ph != PDR_TEXT) return PDE_CANCEL;
     /* drain what is waiting, else interpret one more slice */
     if (g_tmrd >= g_tmwr && !g_idone) {
         g_tmrd = g_tmwr = 0;
         interp_run(PD_SLICE_OPS);
+        if ((err = x_resolve()) != 0) {
+            g_tmq.count = 0; g_tmq.done = 0;
+            pd_fcopy_out(&g_tmq, g_xb, 0, sizeof g_tmq);
+            return err;
+        }
     }
+    n = g_tmwr - g_tmrd;
+    if (g_tmskip) { if (n > g_tmskip) n = g_tmskip; g_tmrd += n; g_tmskip -= n; }
     room = g_tmq.dmax / 12;
     n = g_tmwr - g_tmrd;
     if (n > room) n = room;
     if (n) {
         pd_fcopy(g_tmq.dseg, g_tmq.doff, g_dls, (pdw)((g_tmrd << 3) + (g_tmrd << 2)), (pdw)((n << 3) + (n << 2)));
-        g_tmrd += n;
+        g_tmrd += n; g_tmdel += n;
     }
     g_tmq.count = n;
     g_tmq.done = (g_idone && g_tmrd >= g_tmwr) ? 1 : 0;
@@ -387,9 +556,25 @@ static pdw verb_thumb(void)
 }
 
 /* ---- INIT and the dispatcher -------------------------------------------------- */
+/* the extension cache's region from g_ini (20.22.7); a new region is empty */
+static void xc_adopt(void)
+{
+    pdw kb = g_ini.xc_kb > 63 ? 63 : g_ini.xc_kb, seg = kb ? g_ini.xc_seg : 0;
+    if (seg != g_xcseg) g_xctop = 0;
+    g_xcseg = seg; g_xccap = (pdw)(kb << 10);
+    if (g_xctop > g_xccap) g_xctop = 0;
+}
+#define INI_OLDW 24                     /* pdxb_init's words before slot_seg (20.22.1) */
+typedef char pdr_ck_ini[sizeof(struct pdxb_init) == INI_OLDW * 2 + 26 ? 1 : -1];
 static pdw verb_init(pdw xbseg)
 {
-    pdw bound = pdr_eng_seg;            /* 0 on the FIRST INIT: the bss */
+    pdw bound = pdr_eng_seg, i;         /* 0 on the FIRST INIT: the bss */
+    /* the answer to a PDE_NEEDMEM (20.22.7): the same claims with a region
+     * added. The page view and the document's caches go on */
+    if (bound && (x_ask & 0x80)) {
+        for (i = 0; i < INI_OLDW; i++) if (pd_fpeekw(xbseg, (pdw)(i << 1)) != ((pdw *)&g_ini)[i]) break;
+        if (i == INI_OLDW) { pd_fcopy_in(xbseg, 0, &g_ini, sizeof g_ini); xc_adopt(); return PDE_OK; }
+    }
     g_xb = xbseg;
     /* the engine's vector first, before anything can call the engine. The
      * first INIT then closes nothing: its g_idone = 0 is the bss, not an open
@@ -415,8 +600,25 @@ static pdw verb_init(pdw xbseg)
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0;
+    g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }
+
+/* PDV_REND_SLOT (20.22.2, 20.22.7): BX = the PDX_* in the slot now, CX:DX its
+ * door (off:seg); 0 = none. An occupant that leaves under an open image of
+ * its own leaves that image's ONE engine stream on top of the engine's stack:
+ * the core closes it itself (the occupant cannot any more) */
+static pdw verb_slot(pdw id, pdw off, pdw seg)
+{
+    if (id >= PDX_COUNT || !seg) id = 0;
+    if (id != x_res || seg != pdr_x_seg) {
+        if (g_iopen && g_icodec) { strm_close(); g_iopen = 0; }
+        if (id) x_swaps++;
+    }
+    x_res = id; pdr_x_off = off; pdr_x_seg = id ? seg : 0;
+    return PDE_OK;
+}
+static pdw xb_seg(void) { return g_xb; }
 
 /* PDV_REND_FONTBANK (D3): the primary's INDEX claim of PDRES, where the package
  * is, and where the PDRES part starts in it. The optional PDFONTX.RES beside
@@ -457,8 +659,8 @@ static pdw verb_fontbank(void)
 
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx)
 {
-    (void)dx;
     switch (verb) {
+    case PDV_REND_SLOT:     return verb_slot(bx, cx, dx);
     case PDV_REND_INIT:     return verb_init(bx);
     case PDV_REND_BEGIN:    return verb_begin();
     case PDV_REND_STEP:     return verb_step();

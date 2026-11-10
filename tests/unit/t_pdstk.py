@@ -145,7 +145,81 @@ def run(cbframe=20, stepframe=40, leafbody=""):
         return fails, g, buf.getvalue()
 
 
+# 20.22.2.4: an OCCUPANT of the slot, entered by PDREND's "slot" far call,
+# and calling PDENG alone - here a door, a dispatcher and one verb whose frame
+# the control sets, and its far call into a PDENG that is only a door
+REND_SLOT = """
+section .text
+pdr_entry:
+    push bp
+    call _pdr_verb
+    pop bp
+    retf
+_pdr_verb:
+    push bp
+    mov bp, sp
+    call far [_pdr_slot_off]
+    pop bp
+    ret
+"""
+
+OCC = """
+section .text
+pdxg_entry:
+    push bp
+    call _pdxg_verb
+    pop bp
+    retf
+_pdxg_verb:
+    push bp
+    mov bp, sp
+    sub sp, %(occframe)d
+    call far [_pdxg_eng]
+    mov sp, bp
+    pop bp
+    ret
+"""
+
+ENG = """
+section .text
+pde_entry:
+    push bp
+    call _pde_verb
+    pop bp
+    retf
+_pde_verb:
+    ret
+"""
+
+
+def run_occ(occframe):
+    segs = [("PDENG", "eng.asm", "pde_entry", "_pde_verb"),
+            ("PDREND", "rend.asm", "pdr_entry", "_pdr_verb"),
+            ("PDXG", "pdxg.asm", "pdxg_entry", "_pdxg_verb")]
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, body in (("eng.asm", ENG), ("rend.asm", REND_SLOT),
+                           ("pdxg.asm", OCC % {"occframe": occframe})):
+            with open(os.path.join(tmp, name), "w") as f:
+                f.write(body)
+        buf = io.StringIO()
+        fails, g = P.analyse(tmp, out=lambda s: buf.write(s + "\n"), segments=segs, root=tmp)
+        return fails, g
+
+
 def controls():
+    fails, g = run_occ(100)
+    c, p = g.cost(("PDREND", "pdr_entry"), "deep")
+    j = " ".join(p)
+    check(fails == [] and "pdxg_entry" in j and "pde_entry" in j,
+          "PDREND's \"slot\" far call is followed into the occupant, and the "
+          "occupant's far call into PDENG's door (20.22.2.4)", got=(fails, p))
+    fails, g = run_occ(1900)
+    check(any(f.startswith("DEEP PDREND pdr_entry") and "_pdxg_verb" in f for f in fails),
+          "an occupant deeper than the private stack FAILS under PDREND, naming "
+          "the occupant's verb", got=fails,
+          why="the occupant runs on PDREND's verb's stack: its frames are "
+              "PDREND's to pay")
+
     fails, g, txt = run()
     check(fails == [], "the clean synthetic tree passes the gate", got=fails, want=[])
     deep, _ = g.cost(("PDREND", "pdr_entry"), "deep")
@@ -192,7 +266,8 @@ def real():
           % (P.DEEP_BUDGET, P.UI_BUDGET), got=fails, want=[],
           why="D21/D23: the UI task's stack is 512 bytes and the kernel's menu bar "
               "is the next thing under it")
-    for seg, door in (("PDENG", "pde_entry"), ("PDREND", "pdr_entry"), ("PDWRT", "pdw_entry")):
+    for seg, door in [("PDENG", "pde_entry"), ("PDREND", "pdr_entry"), ("PDWRT", "pdw_entry")] + \
+            [(seg, door) for seg, _, door, _ in P.occupant_segments(ROOT)]:
         check((seg, door) in g.funcs, "%s's door %s is found" % (seg, door),
               why="a renamed door would make every chain under it read as zero")
     c, p = g.cost(("PDREND", "pdr_entry"), "deep")

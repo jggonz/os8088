@@ -24,6 +24,9 @@ pdw pdw_engcf;                          /* CF of the last PDENG call          */
 pdw pdw_cf;                             /* CF of this door's answer           */
 pdw pdw_engvec[2];                      /* PDENG's door, offset then segment  */
 
+#ifdef PD_HOST
+#include "pdctwin.c"             /* the host twins of pdcrypto.h (weak symbols) */
+#endif
 #include "pdwio.c"
 #include "pdwser.c"
 #include "pdwap.c"
@@ -43,6 +46,13 @@ static pdw v_init(pdw bx)
     g_wseg = in.wbuf_seg; g_wkb = in.wbuf_kb;
     if (sv_active || g_created) pdw_io_delete(g_tmp);   /* 20.5.1: an INIT drops a job */
     job_clear();
+    return PDE_OK;
+}
+
+static pdw v_keys(void)                 /* the foreign files' keys (20.22.4.5), kept until the job ends */
+{
+    pd_fcopy_in(g_xb, 0, &g_fk, sizeof g_fk);
+    if (g_fk.n > 3) { g_fk.n = 0; return PDE_RANGE; }
     return PDE_OK;
 }
 
@@ -103,6 +113,7 @@ unsigned pdw_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
     case PDV_WRT_NEWDOC:  r = v_job(1); break;
     case PDV_WRT_EXTRACT: r = v_job(2); break;
     case PDV_WRT_ABORT:   r = v_abort(); break;
+    case PDV_WRT_KEYS:    r = v_keys(); break;
     default:              r = PDE_RANGE; break;
     }
     pdw_cf = (pdw)(r != PDE_OK && r != PDE_BUSY);

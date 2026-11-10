@@ -31,9 +31,10 @@ subprocess.check_call(["cc", "-O1", "-shared", "-fPIC", "-DPD_HOST", "-Wl,-w", "
 image = open(asm_bin, "rb").read()
 
 DSEG, SSEG, ESEG = 0x2000, 0x1000, 0x3000
+LSEG, XSEG = 0x8000, 0x9000                         # smode 4's tables / the extension cache
 BSEG, GSEG, ISEG = 0x4000, 0x5000, 0x6000          # band / glyph / image-row arenas
 MEM = 0x120000
-names = ["muldiv", "fill1", "fill4", "glyph", "imgrow", "gp", "ip", "act", "scan", "fcopy"]
+names = ["muldiv", "fill1", "fill4", "glyph", "imgrow", "gp", "ip", "act", "scan", "fcopy", "xcfind"]
 tab = dict(zip(names, [int.from_bytes(image[3 + 2 * i:5 + 2 * i], "little") for i in range(len(names))]))
 HALT = 3 + 2 * len(names)
 assert image[HALT] == 0xF4
@@ -71,12 +72,13 @@ hmem = (ctypes.c_ubyte * 0x110000).in_dll(lib, "pd_host_mem")
 class GP(ctypes.Structure):
     _fields_ = [(n, ctypes.c_ushort) for n in "bseg boff stride x nrow skip gseg goff wbytes wpx mode col shear rowstep".split()]
 class IP(ctypes.Structure):
-    _fields_ = [(n, ctypes.c_ushort) for n in "bseg boff x0 x1 sseg soff sw xlo xhi slo shi smode inv dmode dyrow col".split()]
+    _fields_ = [(n, ctypes.c_ushort) for n in "bseg boff x0 x1 sseg soff sw xlo xhi slo shi smode inv dmode dyrow col nc bpc lseg loff lflags".split()]
 gp = GP.in_dll(lib, "pdr_gp"); ip = IP.in_dll(lib, "pdr_ip")
 U16, S16 = ctypes.c_ushort, ctypes.c_short
 lib.pdr_act.argtypes = [U16, U16, U16, S16, S16, ctypes.c_void_p]; lib.pdr_act.restype = U16
 lib.pdr_scan.argtypes = [U16, U16, ctypes.c_void_p, U16, S16, ctypes.c_void_p, ctypes.c_void_p, U16]; lib.pdr_scan.restype = U16
 lib.pdr_fcopy.argtypes = [U16, U16, U16, U16, U16]
+lib.pdr_xcfind.argtypes = [U16, U16, U16, U16, U16]; lib.pdr_xcfind.restype = U16
 lib.pdr_muldiv.argtypes = [ctypes.c_short] * 3; lib.pdr_muldiv.restype = ctypes.c_short
 lib.pdr_fill1.argtypes = [ctypes.c_ushort, ctypes.c_ushort, ctypes.c_short, ctypes.c_short, ctypes.c_ushort]
 lib.pdr_fill4.argtypes = [ctypes.c_ushort, ctypes.c_ushort, ctypes.c_short, ctypes.c_short, ctypes.c_ushort]
@@ -92,7 +94,7 @@ def agree(name, desc, a, b, extra=""):
 
 def run(seed, n, img):
     R = random.Random(seed); A = Asm(img)
-    st = {"muldiv": 0, "fill1": 0, "fill4": 0, "glyph": 0, "imgrow": 0, "act": 0, "scan": 0, "fcopy": 0}
+    st = {"muldiv": 0, "fill1": 0, "fill4": 0, "glyph": 0, "imgrow": 0, "act": 0, "scan": 0, "fcopy": 0, "xcfind": 0}
     # ---- muldiv ---------------------------------------------------------------
     edge = [0, 1, -1, 2, -2, 100, -100, 16000, -16000, 32767, -32767, -32768]
     def rv(): return R.choice(edge) if R.random() < .35 else R.randint(-32768, 32767)
@@ -160,10 +162,16 @@ def run(seed, n, img):
               A.r((BSEG << 4) + BO, len(band)), bytes(hmem[(BSEG << 4) + BO:(BSEG << 4) + BO + len(band)]))
     # ---- imgrow ------------------------------------------------------------------
     for _ in range(n * 3):
-        smode = R.choice([0, 1, 2, 3]); sw = R.randint(1, 40)
+        smode = R.choice([0, 1, 2, 3, 4, 4, 4]); sw = R.randint(1, 40)
         flip = R.random() < .3; inv = R.random() < .3; dmode = R.choice([1, 4]); dyrow = R.randint(0, 3)
-        srcbytes = ((sw + 7) // 8) if smode in (0, 3) else (sw if smode == 1 else sw * 3)
+        # smode 4 (PAGEDESK-SPEC 20.22.7.5): nc components of bpc bits, through tables or the device weights
+        nc = R.choice([1, 3, 4]); bpc = R.choice([1, 2, 4, 8, 16]); lut = R.random() < .5; lfl = R.randint(0, 1)
+        srcbytes = ((sw + 7) // 8) if smode in (0, 3) else (sw if smode == 1 else sw * 3 if smode == 2 else (sw * nc * bpc + 7) // 8)
         src = bytearray(R.getrandbits(8) for _ in range(srcbytes + 4))
+        if smode == 4 and lut:
+            tabs = bytes(R.getrandbits(8) for _ in range(nc * 256)); LO = 0x40
+            A.w((LSEG << 4) + LO, tabs)
+            hmem[(LSEG << 4) + LO:(LSEG << 4) + LO + len(tabs)] = (ctypes.c_ubyte * len(tabs)).from_buffer_copy(tabs)
         stride = 20 if dmode == 1 else 40
         pxw = stride * (8 if dmode == 1 else 2)
         x0 = R.randint(0, pxw - 2); x1 = R.randint(x0, pxw - 1)
@@ -175,15 +183,16 @@ def run(seed, n, img):
         hmem[(BSEG << 4) + BO:(BSEG << 4) + BO + len(band)] = (ctypes.c_ubyte * len(band)).from_buffer_copy(bytes(band))
         hmem[(ISEG << 4) + SO:(ISEG << 4) + SO + len(src)] = (ctypes.c_ubyte * len(src)).from_buffer_copy(bytes(src))
         fields = dict(bseg=BSEG, boff=BO, x0=x0, x1=x1, sseg=ISEG, soff=SO, sw=sw, xlo=0, xhi=start, slo=step & 0xFFFF, shi=step >> 16,
-                      smode=smode | (0x100 if flip else 0), inv=1 if inv else 0, dmode=dmode, dyrow=dyrow, col=R.randint(0, 15))
-        order = "bseg boff x0 x1 sseg soff sw xlo xhi slo shi smode inv dmode dyrow col".split()
+                      smode=smode | (0x100 if flip else 0), inv=1 if inv else 0, dmode=dmode, dyrow=dyrow, col=R.randint(0, 15),
+                      nc=nc, bpc=bpc, lseg=LSEG if (smode == 4 and lut) else 0, loff=0x40, lflags=lfl)
+        order = "bseg boff x0 x1 sseg soff sw xlo xhi slo shi smode inv dmode dyrow col nc bpc lseg loff lflags".split()
         A.w((DSEG << 4) + tab["ip"], b"".join((fields[k] & 0xFFFF).to_bytes(2, "little") for k in order))
         for k, v in fields.items(): setattr(ip, k, v)
         got, bad = A.call(tab["imgrow"], [])
         lib.pdr_imgrow()
         st["imgrow"] += 1
         if bad: fails.append("imgrow convention %s" % bad)
-        agree("imgrow", "smode=%d flip=%d inv=%d dmode=%d sw=%d x=%d..%d step=%x" % (smode, flip, inv, dmode, sw, x0, x1, step),
+        agree("imgrow", "smode=%d flip=%d inv=%d dmode=%d sw=%d x=%d..%d step=%x nc=%d bpc=%d lut=%d lfl=%d" % (smode, flip, inv, dmode, sw, x0, x1, step, nc, bpc, lut, lfl),
               A.r((BSEG << 4) + BO, len(band)), bytes(hmem[(BSEG << 4) + BO:(BSEG << 4) + BO + len(band)]))
     # ---- act / scan / fcopy: edges in a far arena, near arrays in the module's own segment ----
     ESEG2 = 0x7000; EO = 0x30
@@ -234,6 +243,28 @@ def run(seed, n, img):
         st["fcopy"] += 1
         if bad: fails.append("fcopy convention %s" % bad)
         agree("fcopy", "n=%d" % cnt, A.r((0x7800 << 4) + 0x20, len(dst0)), bytes(hmem[(0x7800 << 4) + 0x20:(0x7800 << 4) + 0x20 + len(dst0)]))
+    # ---- xcfind: the extension cache's scan over packed entries (20.22.7.3) -------------------
+    for _ in range(n):
+        arena = bytearray(); keys = []
+        top_cap = R.choice([64, 600, 4096, 65535])
+        while len(arena) < top_cap - 8 and R.random() < .95:
+            kind = R.choice([1, 2, 5, 8, 0, 255]); k0 = R.choice([0, 1, 7, 0xFFFF, R.getrandbits(16)]); k1 = R.choice([0, 1, R.getrandbits(16)])
+            ln = R.choice([0, 2, 16, 40, R.randint(0, 300)])
+            if R.random() < .03: ln = R.getrandbits(16)          # a damaged length
+            arena += bytes((kind, 0)) + ln.to_bytes(2, "little") + k0.to_bytes(2, "little") + k1.to_bytes(2, "little")
+            keys.append((kind, k0, k1))
+            arena += bytes(R.getrandbits(8) for _ in range(min(ln, 400)))
+            if len(arena) > 0xF000: break
+        top = R.choice([len(arena), len(arena), max(len(arena) - R.randint(0, 20), 0), min(len(arena) + 9, 0xFFFF)])
+        arena = arena[:0x10000]
+        A.w(XSEG << 4, arena); hmem[(XSEG << 4):(XSEG << 4) + len(arena)] = (ctypes.c_ubyte * len(arena)).from_buffer_copy(bytes(arena))
+        for _q in range(6):
+            kind, k0, k1 = R.choice(keys) if keys and R.random() < .7 else (R.randint(0, 9), R.getrandbits(16), R.getrandbits(16))
+            got, bad = A.call(tab["xcfind"], [XSEG, top, kind, k0, k1])
+            want = lib.pdr_xcfind(XSEG, top, kind, k0, k1)
+            st["xcfind"] += 1
+            if bad: fails.append("xcfind convention %s" % bad)
+            agree("xcfind", "top=%d kind=%d k0=%x k1=%x" % (top, kind, k0, k1), got, want)
     return st
 
 ap = argparse.ArgumentParser(); ap.add_argument("-n", type=int, default=400); ap.add_argument("--seed", type=int, default=7)
@@ -260,6 +291,14 @@ else:
     before = len(fails); run(args.seed, 120, bytes(mut)); caught = len(fails) > before; del fails[before:]
     if not caught: fails.append("negative control: a mutated pdr_scan was NOT caught")
     else: print("pdr_primtest: negative control caught (a mutated scan insertion disagrees)")
+mut = bytearray(image)
+k = mut.find(bytes([0x4D, 0x00, 0x96, 0x00, 0x1D, 0x00, 0x00, 0x01]))     # gi_w: smode 4's device weights
+if k < 0: print("pdr_primtest: smode 4 negative control skipped (pattern not found)")
+else:
+    mut[k + 2] = 0x97                              # 150 -> 151: RGB's green weight
+    before = len(fails); run(args.seed, 120, bytes(mut)); caught = len(fails) > before; del fails[before:]
+    if not caught: fails.append("negative control: a mutated smode 4 weight was NOT caught")
+    else: print("pdr_primtest: negative control caught (a mutated smode 4 weight disagrees)")
 if fails:
     for f in fails[:25]: print("FAIL", f)
     print("pdr_primtest: %d FAILED" % len(fails)); sys.exit(1)
