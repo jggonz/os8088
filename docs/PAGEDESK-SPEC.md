@@ -5621,9 +5621,10 @@ when its band is drawn (refused, or the band's other decoder, 20.22.7.2):
 **20.22.7.5 Sample depths and colour (smode 4).** Images of 1, 2, 4, 8 and 16
 bits a component in DeviceGray, DeviceRGB and DeviceCMYK are drawn, and in
 any other space through gfx's LUT: the hook `XG_IMAGE_LUT(obj, gen)` answers
-the `XC` offset of an `XCK_LUT` entry (`ncomp` at +0, `flags` at +2 - bit 0:
-the grey is 255 minus the sum, CMYK-shaped - and `ncomp` tables of 256 bytes
-at +16, `/Decode` folded in), or 0 having asked for PDXG or noted
+the `XC` offset of an `XCK_LUT` entry, gfx's `struct pdgx_lut` of 20.22.9
+(`ncomp` byte at +0, `flags` byte at +1 - `PDGX_LUT_INVERT`: the grey is 255
+minus the sum, CMYK-shaped - and `ncomp` tables of 256 bytes at +4,
+`/Decode` folded in), or 0 having asked for PDXG or noted
 `PDF_INC_COLOUR`. `pdr_imgrow`'s smode 4 unpacks a sample of any of those
 depths (16 bits: the high byte), maps it through the table of its component
 (or the device weights 77, 150, 29 for RGB and an equal share for CMYK when
@@ -5676,6 +5677,61 @@ codec ramp, depths and their 8-bit grey equivalent, masks);
 `hosttest/pdr_xchk.py` (`make pdrend-xchk`) holds them to MuPDF and to each
 other: a codec page draws to the pixel as the plain image does, `depth.pdf`
 as `depthg.pdf` does, and `depthg.pdf` and `dash.pdf` as mutool does.
+
+**20.22.7.9 PDREND's second code segment (`PDRENDC`).** The round's demand
+on PDREND (the ladder, gfx's colour glue, blend's 8-bit sinks, fonts' Type3
+and program hooks) is about 68.6K against the part's 65,024, so PDREND has
+two code segments, the shape SPEC.md 73.14 gives a C package, cut for a
+module:
+
+* **What moves.** A C function whose name starts `ovl_` has its CODE emitted
+  by `tools/cc8086.py` into `.modc`; every global, literal and bss byte it
+  names stays in PDREND's DS. `apps/pagedesk/pdrovl.h` renames the moved
+  functions (`#define verb_init ovl_verb_init`), so their files keep their
+  spelling; each agent adds its own block there. A function may move when
+  it runs once per VERB, OPERATOR, RECORD or ANNOTATION: per span, pixel,
+  glyph or band record stays resident, and nothing whose address is taken
+  may move (cc8086 refuses it).
+* **The cost.** A resident call into the part is a far call through a
+  4-byte `cc_ovm_*` vector (~10 us on an 8088). A call from the part to
+  resident code - `pdm_*`, `pd_f*`, `dict_get`, any routine not moved - goes
+  through a 6-byte shim, a 4-byte `cc_ovv_*` vector and `cc_ovthunk`
+  (~40 us). A part-to-part call goes through `cc_ovmthunk`. The deep stack
+  pays 4 bytes a far frame and the thunk's path; `os88pdstk.py` follows the
+  vectors (PDREND's worst rose 734 -> 816 of 1,776).
+* **The cut.** `pdrend.asm` declares `.modc follows=.data vstart=0`, so its
+  bytes start where the image ends (`.bss` is nobits); the Makefile cuts the
+  assembly at the header's image size into `PDREND.MOD` and `PDRENDC.MOD`
+  (and `pdrendc.part`), and refuses a cut whose head is not
+  `dw 0x4352, <size>`. The part has no header and no bss.
+* **The bind, `PDV_REND_CODE` 0x49.** BX = the part's CODE selector (the
+  primary passes its claim through `OS88_CODESEL`; on a real-mode kernel it
+  is the segment), CX = the same claim as DATA, where the door checks the
+  stamp: magic `0x4352` and the size, which ties the part to this build of
+  PDREND.MOD. Bound, it writes BX into every `cc_ovm_*` vector and PDREND's
+  own CS into every `cc_ovv_*` one. Until a bind succeeds every other verb
+  answers `PDE_RANGE` with CF = 1, so an unbound part is a refusal and never
+  a far call into nothing. The primary loads the part with PDREND, into a
+  claim of its own (11,159 bytes at this writing), binds it before INIT,
+  and binds it again after anything that moves the claim - or pins it.
+  The bind is idempotent and costs ~0.5 ms.
+* **No kernel call in the part.** The gate's slot (20.15) is a NEAR call to
+  `pdk_up`, so moved code reaches the kernel only through a resident routine;
+  `tests/unit/t_pdkgate.py` refuses a far call to `KERNEL_SEG` in
+  `PDRENDC.MOD`.
+* **Checks.** `hosttest/pdr_ovltest.py` (`make pdrend-ovl`, part of `make
+  pdrend`) runs the built pair in Unicorn in claims of their own: the
+  refusals before a bind and of a part that is not this build's, INIT, SLOT
+  and STATUS bound (moved code both ways across the cut, SLOT's effect read
+  back through STATUS), the part moved and bound again with the old claim
+  filled with `int3`, and a wrong code selector caught as the negative
+  control. The host harness compiles the renamed functions natively, so the
+  host checks are unchanged by the split.
+
+At the split: PDREND.MOD 45,180 image + 5,984 bss = 51,164 (was 60,742), and
+PDRENDC.MOD 11,159, holding 35 functions of `pdrv.c`, `pdri.c` and `pdra.c`
+(the non-band verbs, the ladder's answers, the image and XObject operators,
+the annotations and the edit store's records).
 
 #### 20.22.8 Fonts from their programs (`fonts`)
 

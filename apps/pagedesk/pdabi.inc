@@ -252,6 +252,7 @@ PDIM_N8                  equ 2
 PDV_WRT_KEYS             equ 0x85
 PDRC_ENCDICT             equ 0xFFFE
 PDXD_NPT                 equ 12
+PDV_REND_CODE            equ 0x49
 PDXE_OPS                 equ 64
 PDV_FNT_GLYPH            equ 0xD8
 PDV_FNT_PATH             equ 0xD9

@@ -22,6 +22,12 @@ section .text   start=0
 section .rodata follows=.text   align=2
 section .data   follows=.rodata align=2
 section .bss    follows=.data   align=2 nobits
+; the second code segment (PAGEDESK-SPEC 20.22.7.9, pdrovl.inc): the ovl_* code
+; FOLLOWS .data, as .bss does - .bss is nobits, so .modc's first byte is the
+; image's end and the Makefile cuts it there into PDRENDC.MOD. vstart=0: it
+; runs at offset 0 of its own claim; align=1: no pad before the cut
+%define CC_HAS_OVL
+section .modc   follows=.data   align=1 vstart=0
 
 %include "os88api.inc"
 %include "pagedesk/pdabi.inc"       ; PDM_MAGIC_REND, PDM_ABI, PDE_* (generated)
@@ -62,6 +68,17 @@ pdr_entry:
     pop cx
     pop ax
 .go:
+    cmp al, PDV_REND_CODE           ; the second code segment (20.22.7.9): bind
+    jne .bound                      ; it, before anything that could run it
+    call pdr_ovcode
+    jmp short .out                  ; CF and AX as pdr_ovcode left them
+.bound:
+    cmp word [pdr_ovok], 0          ; no verb runs on an unbound part
+    jne .run
+    mov ax, PDE_RANGE
+    stc
+    jmp short .out
+.run:
     xor ah, ah
     push dx                         ; cdecl, right to left:
     push cx                         ;   unsigned dx
@@ -107,6 +124,7 @@ section .text
 ; =============================================================================
 ; THE COMPILED C
 ; =============================================================================
+%include "pagedesk/pdrovl.inc"     ; the second code segment's runtime: FIRST in .modc
 %include "pdrend.gen.asm"           ; found through -I build/
 
 ; the API bridge, gated: only the thunks the C names (os88_gfx_lock/unlock,
@@ -148,6 +166,8 @@ _os88_file_read_seq:
 
 section .bss
 pdr_bss_end:
+section .modc
+pdr_modc_end:                       ; vstart=0: this label's value is the part's size
 section .data
 align 2, db 0
 pdr_image_end:
