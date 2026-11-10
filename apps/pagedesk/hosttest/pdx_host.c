@@ -40,6 +40,10 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "-u")) { byuni = 1; continue; }
         gid = (unsigned)strtoul(argv[i], 0, 0);
         if (byuni) gid = cm_get(g_cm_uni, gid);
+        if (getenv("PDX_OL")) {
+            pdw k, q; fnt_outline(gid); ol_close();
+            for (k = 0; k < g_oln; ) { printf("%d:", g_ol[k]); q = g_ol[k] == OLM || g_ol[k] == OLL ? 2 : g_ol[k] == OLQ ? 4 : g_ol[k] == OLC ? 6 : 0; k++; while (q--) printf(" %d", g_ol[k++]); printf("\n"); }
+        }
         got = fnt_glyph(gid, (pdw)(px * 64), (pdw)asc, (pdw)rows, 0x2000, 0, 4096);
         if (bin) {
             printf("%u %u %d %u %u\n", gid, (unsigned)g_rwpx, (int)g_rlb, (unsigned)g_gadv, got == 0xFFFF ? 0xFFFFu : (unsigned)got);

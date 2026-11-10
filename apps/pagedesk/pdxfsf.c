@@ -13,6 +13,18 @@ static pdi P16s(pdw o) { return (pdi)P16(o); }
 /* a 32-bit field that must fit 16 bits (the program is < 64 KiB): 0xFFFF if not */
 static pdw P32(pdw o) { return P16(o) ? 0xFFFFu : P16((pdw)(o + 2)); }
 
+/* 10^e10 / mant, saturating at 32767 (mant 1..9999, e10 0..9): the 1/value of a decimal */
+static pdw inv_pow10(pdw mant, pdw e10)
+{
+    struct pd_u32 u, t, q;
+    pdw i;
+    if (!mant || e10 > 9) return 0;
+    pdm_u32_set(&u, 0, 1);
+    for (i = 0; i < e10; i++) { pdm_u32_shl(&t, &u, 3); pdm_u32_shl(&u, &u, 1); pdm_u32_add(&u, &u, &t); }
+    pdm_u32_divmod16(&q, &u, mant);
+    return q.hi || q.lo > 32767 ? 32767 : q.lo;
+}
+
 /* ---- tables ----------------------------------------------------------------- */
 static pdw g_sfbase;                /* the sfnt's start (0 for a bare font)      */
 static pdw g_tlen;
@@ -39,14 +51,12 @@ static pdi g_sf_asc, g_sf_desc;             /* head yMax / yMin in font units   
 
 static pdw sf_open(void)
 {
-    pdw head, maxp, hhea, loca, cm, n, i, r, pl, enc, off, t, loc_len;
+    pdw head, maxp, hhea, loca, cm, n, i, r, pl, enc, off, t, loc_len, otto;
     g_sf_glyf = g_sf_loca = g_sf_hmtx = g_sf_cmap = 0;
     g_cm_uni = g_cm_sym = g_cm_mac = 0;
     t = P16(0);
-    if (t == 0x4F54) {                              /* 'OT' 'TO': OpenType with CFF: caller uses the CFF table */
-        g_sfbase = 0; return 2;
-    }
-    if (!((t == 0x0001 && P16(2) == 0) || (t == 0x7472 && P16(2) == 0x7565))) return 0;   /* 00010000 or 'true' */
+    otto = (pdw)(t == 0x4F54 && P16(2) == 0x544F);   /* 'OTTO': OpenType with a CFF table */
+    if (!otto && !((t == 0x0001 && P16(2) == 0) || (t == 0x7472 && P16(2) == 0x7565))) return 0;   /* 00010000 or 'true' */
     g_sfbase = 0;
     head = sf_tab(0x6865, 0x6164);                  /* 'head' */
     if (!head || g_tlen < 54) return 0;
@@ -57,13 +67,16 @@ static pdw sf_open(void)
     maxp = sf_tab(0x6D61, 0x7870);                  /* 'maxp' */
     if (!maxp) return 0;
     g_sf_ng = P16((pdw)(maxp + 4));
-    g_sf_glyf = sf_tab(0x676C, 0x7966); g_sf_glyfl = g_tlen;       /* 'glyf' */
-    loca = sf_tab(0x6C6F, 0x6361); loc_len = g_tlen;             /* 'loca' */
-    if (!g_sf_glyf || !loca) return 0;
-    g_sf_loca = loca;
-    n = (pdw)(loc_len / (g_sf_lfmt ? 4 : 2));
-    if (n > 0) n--;
-    if (g_sf_ng > n) g_sf_ng = n;
+    if (otto) { g_cf_base = sf_tab(0x4346, 0x4620); if (!g_cf_base) return 0; }          /* 'CFF ' */
+    else {
+        g_sf_glyf = sf_tab(0x676C, 0x7966); g_sf_glyfl = g_tlen;       /* 'glyf' */
+        loca = sf_tab(0x6C6F, 0x6361); loc_len = g_tlen;             /* 'loca' */
+        if (!g_sf_glyf || !loca) return 0;
+        g_sf_loca = loca;
+        n = (pdw)(loc_len / (g_sf_lfmt ? 4 : 2));
+        if (n > 0) n--;
+        if (g_sf_ng > n) g_sf_ng = n;
+    }
     hhea = sf_tab(0x6868, 0x6561);                  /* 'hhea' */
     g_sf_hmtx = sf_tab(0x686D, 0x7478);             /* 'hmtx' */
     g_sf_nhm = hhea ? P16((pdw)(hhea + 34)) : 0;
@@ -83,7 +96,7 @@ static pdw sf_open(void)
             else if (pl == 1 && enc == 0) g_cm_mac = off;
         }
     }
-    return 1;
+    return otto ? 2 : 1;
 }
 
 static pdw sf_adv(pdw gid)          /* font units */
