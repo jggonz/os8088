@@ -690,6 +690,11 @@ def main():
                 check_good(pde, pth, 2, (), noflate=True)
                 check_members(pde, pth, ("-F", "2"), work)
                 check_members(pde, pth, (), work)
+                if f == "XTGUI_OZ.PDF":                 # 20.22.3.9: INIT cut to one Flate slot between streams
+                    l = [x for x in lines(pde, "flshrink", pth, (42, 43), ("-F", "2")) if not x.startswith("NEEDMEM")]
+                    want = [x for x in lines(pde, "strm", pth, (42, 0), ("-F", "2")) if x.startswith("STRM")]
+                    expect(l[1:] == ["FLSHRINK busy ax=65 cf=0", "FLSHRINK taken ax=1 cf=0"] + want,
+                           "%s: flshrink %s, strm %s" % (f, l, want))
                 if f.startswith("RESDI"):               # 20.22.3.8: the direct value, where RAW_COPY puts it
                     l = lines(pde, "res", pth, (0, "ExtGState", "GS1"))[-1]
                     m = re.match(r"RES obj=0,0 kind=7 direct=(\d+),0\+(\d+)$", l)

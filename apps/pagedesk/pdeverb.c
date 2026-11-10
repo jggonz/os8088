@@ -38,8 +38,19 @@ static pdw v_init(pdw xbseg)
      * keeps the document and OPEN's state (it amends 20.2.2) */
     if (g_ready && (g_open || op_state) && ini.cache_seg == g_cseg && ini.cache_kb == g_ckb &&
         ini.arena_seg == g_aseg && ini.arena_kb == g_akb && ini.tables_seg == g_tseg &&
-        ini.tables_kb == g_tkb && ini.flate_seg == g_ifs && ini.flate_kb == g_ifk && ini.flags == g_iff)
-        return PDE_OK;
+        ini.tables_kb == g_tkb && ini.flate_seg == g_ifs && ini.flags == g_iff) {
+        if (ini.flate_kb == g_ifk) return PDE_OK;
+        /* ...and so does a Flate claim cut to ONE slot at the same segment
+         * (PDE_NFL is 2), when the second holds no live stream (20.22.3.9):
+         * AX = 1, or PDE_BUSY and nothing changed */
+        if (ini.flate_kb >= PDE_FLSLOT_KB && ini.flate_kb < 2 * PDE_FLSLOT_KB && g_nfl == 2) {
+            if (fl_sc[1] && fl_sc[1] < ctxs + nctx) return PDE_BUSY;
+            fl_sc[1] = 0;
+            if (fl_ld == 1) fl_ld = FL_NONE;
+            g_nfl = 1; g_ifk = ini.flate_kb; pde_ax = 1;
+            return PDE_OK;
+        }
+    }
     g_ifs = ini.flate_seg; g_ifk = ini.flate_kb; g_iff = ini.flags;
     g_cseg = ini.cache_seg; g_ckb = ini.cache_kb;
     g_aseg = ini.arena_seg; g_akb = ini.arena_kb;
