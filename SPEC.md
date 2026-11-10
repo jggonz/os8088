@@ -25682,7 +25682,7 @@ kern_small) became one: `WIN_SIZE` 74 -> 50 and 65 -> 47, 288 bytes of `.bss`
 on kern_big and kern_mega and 108 on kern_small; and the ten handler-setter
 cells, `OSAPI_ABOUT_SET`, six of the seven flag setters and kern_mega's six
 `MEGA_ICWB` stubs left the table (97 bytes of cells; §20.3). The measured
-totals are `docs/plans/ksp19/class.md`'s. A package pays a class (4 + 2 bytes
+totals are `docs/plans/completed/ksp19/class.md`'s. A package pays a class (4 + 2 bytes
 a named slot) where it used to pay a `mov ax, proc` / `call OSAPI_*` pair per
 handler, so packages shrank too.
 
@@ -25722,7 +25722,7 @@ clocks (214 at the 4-clocks-a-byte fetch floor) on the real-mode kernels and
 that is itself at least one billing bracket (`ui_bill`'s `task_cycles` and
 `inst_win_owner`) and usually a drawing call of 756 us. It is not on any
 per-pixel or per-glyph path. R14 landed it at 234 (264); kernel size pass
-19's `wmrec` took the bias and the BX output (docs/plans/ksp19/wmrec.md, with
+19's `wmrec` took the bias and the BX output (docs/plans/completed/ksp19/wmrec.md, with
 why the record was NOT reordered for an `lds`).
 
 #### 11.104.2 kern_small's answer: `OSAPI_WM_CREATE` says how many slots it dispatches
@@ -46923,17 +46923,17 @@ kern_dos runs the same core and virtualises it the same way.
 
 **What it costs, PREDICTED** (8088 clocks, each instruction at the larger of
 its clocks and four a byte fetched; the table is
-`docs/plans/ksp19/door.md`): 420 clocks around the routine on the RS path
+`docs/plans/completed/ksp19/door.md`): 420 clocks around the routine on the RS path
 as P4 built it, against 227 for the six-byte rare cell (**+193, 40 µs**)
 and 93 for a far call to a `cw_` shim (+327, 69 µs); T5's `add bl, RD_P`
-is three more bytes, **432 (+205)** (docs/plans/ksp19/t5.md). Each kind range the index passes adds a
+is three more bytes, **432 (+205)** (docs/plans/completed/ksp19/t5.md). Each kind range the index passes adds a
 compare and a branch, +20. **The door is 51 bytes with the RS body alone**
 (kern_big, refusal included; 54 on kern_mega, whose `KDS` is a selector load),
 and each further kind adds its compare and its body: 132 with all five
 (a scratch assembly with one entry of each kind, kernel size pass 19), of
 which T5 recovered the five old bodies (`api_rx`'s head, `api_rxc`,
 `api_rsc`, `api_rs`, `api_rn`; `api_x` stays for the hot X cells). T5's
-measured totals are docs/plans/ksp19/t5.md's.
+measured totals are docs/plans/completed/ksp19/t5.md's.
 
 **What P4 put behind it** (kernel-private, no `PKG_FMT` or `DRV_VER`
 meaning): twenty-seven of the forty-five `cw_` shim bodies — the
@@ -101306,7 +101306,7 @@ the KB doors (kernel size pass 19) the arm is ASKED for: `OSAPI_MEM_P`'s
 that was a KB DMA door with a head at the base carries; a head without the
 bit is conventional. C1 made every such
 head conventional for one pass and its wave C deleted this machinery as dead;
-`megacmp` restored both (docs/plans/ksp19/megacmp.md). A driver never takes
+`megacmp` restored both (docs/plans/completed/ksp19/megacmp.md). A driver never takes
 the arm - its own 8237 or bus-master code may not take a selector's
 base, so a driver's head claim is conventional whatever its header says. CX =
 0 is the plain claim and conventional as always. The answer is a selector,
@@ -101760,7 +101760,7 @@ and a site that computes its head an `or`. Every site converted from a
 `OSAPI_MEM_CLAIM_DMA`/`_DMA_HI` call with a head at the base carries it
 (the Audio Player's look-ahead, WIN16's `w16mm.inc`, WireFleet's, 1942's and
 Arcade's rings, MIDIRack, PiXEL's `px_dmaclaim`, the Recorder, both WaveRack
-rings, XT-MP3's, `os88type.inc`'s read buffer; docs/plans/ksp19/mcmerge.md is
+rings, XT-MP3's, `os88type.inc`'s read buffer; docs/plans/completed/ksp19/mcmerge.md is
 the table). So this door WITHOUT the bit is the one a package names for
 a page-safe buffer that a real-mode path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a

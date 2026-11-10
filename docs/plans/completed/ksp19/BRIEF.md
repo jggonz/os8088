@@ -7,7 +7,7 @@ are `docs/plans/completed/ksp18/`.
 
 Each agent works in a git worktree of its own at `/home/user/wt/<name>`, on a
 branch `ksp19-<name>` cut from the commit that adds this file, and writes its
-record to `docs/plans/ksp19/<name>.md`. **Agents do not push**; the
+record to `docs/plans/completed/ksp19/<name>.md`. **Agents do not push**; the
 coordinator merges.
 
 Read before writing any code, in this order:
@@ -177,7 +177,7 @@ General sweeps over the files the flag day touched, non-ABI, as in passes
 * `apps/wireball/art/wbfront.inc` regenerates with different bytes on every
   build: `git checkout` it before you commit.
 
-## 3. The note (`docs/plans/ksp19/<name>.md`)
+## 3. The note (`docs/plans/completed/ksp19/<name>.md`)
 
 As ksp14 section 4: TAKEN (each row, bytes per kernel MEASURED off spans and
 `kernsize`, packages' bytes, cycles where a path changed), REFUSED (with the

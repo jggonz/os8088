@@ -592,7 +592,7 @@ endif
 # SPEC.md 20.3.4) and into the five rare cell bodies (one a cell, keyed by the
 # cell's offset in the table), in `.lowbss`: the reading that draws T5's
 # hot/rare line by measured frequency rather than by site count
-# (docs/plans/ksp19/door.md). A knob kernel, so guard 2 alone binds it.
+# (docs/plans/completed/ksp19/door.md). A knob kernel, so guard 2 alone binds it.
 ifneq ($(RARECNT),)
 VIDDEF += -DRARE_COUNTERS
 endif

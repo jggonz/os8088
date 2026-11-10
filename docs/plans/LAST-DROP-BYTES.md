@@ -1226,7 +1226,7 @@ boot time on the 5150 (docs/FIELD-MACHINES.md), not in an emulator.
 
 ### 7.13 The FAT window and the sector buffer under the kernel - one rounding fewer, WAITING FOR THE NEXT ABI BREAK
 
-**TAKEN WITHOUT THE ABI BREAK, kernel size pass 19 (`docs/plans/ksp19/l1.md`).**
+**TAKEN WITHOUT THE ABI BREAK, kernel size pass 19 (`docs/plans/completed/ksp19/l1.md`).**
 The pad below exists because guard 6 made the FAT window and `dsk_secbuf`
 512-aligned, and 512-alignment is only the way to rule out a 64KB-page
 straddle for a base not known until run time. These two are assembly-time

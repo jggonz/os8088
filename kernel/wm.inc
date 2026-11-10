@@ -388,7 +388,7 @@ wm_strseg:
 ; each site that held its own copy dropped it. wm_destroy zeroes W_FLAGS, so
 ; bit 0 is the answer.
 ;
-; Cost (8088 clocks by count; docs/plans/ksp19/wmrec.md): call, body and ret
+; Cost (8088 clocks by count; docs/plans/completed/ksp19/wmrec.md): call, body and ret
 ; are 182 (214 at the 4-clocks-a-byte fetch floor) on the real-mode kernels,
 ; where they were 234 (264) before the bias and the BX output - against the
 ; ~24 (37) of the `mov bp, [si+W_ONx]` / `or bp, bp` each site had before R14.

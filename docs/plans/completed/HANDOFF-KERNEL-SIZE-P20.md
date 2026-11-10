@@ -2,7 +2,7 @@
 
 **PASS 19 HAS LANDED** on `kernel-size-19`, cut from `elendilon` at
 `4beca096`. Named `-P20` for the pass it hands to, as every record before it.
-The brief is `docs/plans/ksp19/BRIEF.md`; each agent's note is beside it and
+The brief is `docs/plans/completed/ksp19/BRIEF.md`; each agent's note is beside it and
 is the authority on its rows. `docs/plans/ABI-BREAK-LIST.md` section 15 is the
 row-by-row status this pass leaves.
 
@@ -136,7 +136,7 @@ R2, R2-3, R12 (no net-negative form), R15, R16, V1; refusing KB counts of
   run `20261110-101855`, 656 rows with Bochs and the automation-enabled 86Box
   present; the four WIN16 rows and `hmahiber` left out for missing fixtures):
   **554 ok, 102 FAIL**. The failures were triaged by `fix` and `fix2`
-  (`docs/plans/ksp19/fix.md`, `fix2.md`): ~38 test scripts reading W_SEG at
+  (`docs/plans/completed/ksp19/fix.md`, `fix2.md`): ~38 test scripts reading W_SEG at
   R14's old offset 22; R14 removing a CF-clearing call at Clear Skies' entry
   (every first launch refused, ~40 rows, +1 byte); kbpara's conversion
   clobbering PiXEL's CL and ExciteBike's BX; INSTALL's fixed-offset kernel
@@ -151,7 +151,7 @@ R2, R2-3, R12 (no net-negative form), R15, R16, V1; refusing KB counts of
   resize; taught, green.
 - `make budget-check` on all four kernels: met (section 0).
 - **The MartyPC before/after against `4beca096`, run after the field trip**
-  (`docs/plans/ksp19/timing.md`, every table): `os88hot time` every scenario
+  (`docs/plans/completed/ksp19/timing.md`, every table): `os88hot time` every scenario
   on CGA, Hercules and VGA (kern_big) and on kern_small at 640KB and 128KB;
   gfxbench, sysbench and REDLINE; and three games in play - Clear Skies'
   pinned frame, WireBall's timed rallies, ExciteBike's whole first course.

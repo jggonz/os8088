@@ -2,7 +2,7 @@
 
 Branch `ksp19-fix2`, cut from `kernel-size-19` at `5b413f66`. Every row
 here turned out to be a cause `fix` had already found (its note,
-`docs/plans/ksp19/fix.md`, "SHARED CAUSES") or a stale row; nothing in this
+`docs/plans/completed/ksp19/fix.md`, "SHARED CAUSES") or a stale row; nothing in this
 note changes a shipped byte of its own.
 
 **Shared with `fix`**: this branch CHERRY-PICKS three of `ksp19-fix`'s

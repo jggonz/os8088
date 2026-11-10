@@ -1673,11 +1673,11 @@ VIEW_KB     equ 2               ; each cache: 1,536 bytes of entries and 64 of
 ; CONSTANTS, so guard 6 proves the stronger fact directly - neither window
 ; crosses a page - and the 0-511-byte pad a 512-byte image rung carried is
 ; gone, with KERNEL_SEG where it always was and no ABI moved (ABI-BREAK-LIST
-; L1's saving, without its flag day: docs/plans/ksp19/l1.md). It used to round
+; L1's saving, without its flag day: docs/plans/completed/ksp19/l1.md). It used to round
 ; to 512, and before THAT every base in the map was a round constant like
 ; 0x0300 or 0x2A00 and nothing said why that mattered. kern_mega still rounds
 ; to 512: its ladder is unpacked, so the heap base above it would otherwise
-; lose guard 6's alignment (docs/plans/ksp19/l1.md).
+; lose guard 6's alignment (docs/plans/completed/ksp19/l1.md).
 %ifdef KERN_MEGA
 KIMG_PARA   equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; image + scratch,
                                 ; still to 512 on kern_mega: its ladder is not
@@ -6979,7 +6979,7 @@ cw_wm_pkgcall:          call wm_pkgcall
 ; kinds rd_tab has entries for are assembled.
 ;
 ; CYCLES (8088 clocks, each instruction at max(its clocks, 4 x its bytes),
-; PREDICTED; docs/plans/ksp19/door.md has the table): the RS path is 420
+; PREDICTED; docs/plans/completed/ksp19/door.md has the table): the RS path is 420
 ; clocks around the routine - `int`, the door, the body's DS bank and
 ; `call bp`, its tail and `retf 2` - against 227 for the six-byte rare cell
 ; it replaces (+193, 40 us at 4.77 MHz) and 93 for a far call to a `cw_`
