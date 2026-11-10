@@ -2730,9 +2730,12 @@ sbl_dma_get:
     mov ax, SBL_DMASZ           ; THE HMA FIRST (SPEC.md 2.10.8): on a 286 with
     call OSAPI_MEM_HMA          ; `.cold` up there, 8KB the heap never sees -
     jnc .got                    ; one 64KB physical page, as the chip needs
-    mov ax, SBL_WANT
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
+    mov ax, SBL_WANT * 64       ; (paragraphs), all of it the page-safe
+    mov cx, ax                  ; head, from the top
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; out CF, DX = base segment
+    pop bx
     jc .fail
     xor ax, ax                  ; (a heap claim starts at its offset 0)
 .got:

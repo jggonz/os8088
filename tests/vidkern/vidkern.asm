@@ -846,7 +846,7 @@ vk_claim:
     cmp word [vk_seg], 0
     jne .have
     mov ax, VK_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [vk_seg], dx
 .have:

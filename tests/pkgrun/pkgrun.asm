@@ -179,7 +179,7 @@ pr_onwake:
 
     ; --- the image, off the disk beside us --------------------------------
     mov ax, PR_CLAIM_KB
-    call OSAPI_MEM_CLAIM            ; out CF=1 refused, DX = the base segment
+    MEMKB_CLAIM                     ; out CF=1 refused, DX = the base segment
     jc .done
     mov [pr_seg], dx
     mov es, dx

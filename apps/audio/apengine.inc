@@ -120,9 +120,9 @@ ap_ensure_bufs:
     push cx
     mov ax, 32                     ; AP_LA_SZ / 1024
     mov cx, 32                     ; ALL OF IT PAGE-SAFE: the floppy's 8237
-    call OSAPI_MEM_CLAIM_DMA       ; writes every gulp straight into it, and
+    MEMKB_DMA                      ; writes every gulp straight into it, and
     jnc .got                       ; a run across a 64KB page is split there,
-    call OSAPI_MEM_CLAIM           ; a revolution lost a pass (KERN-MEGA-PLAN
+    MEMKB_CLAIM                    ; a revolution lost a pass (KERN-MEGA-PLAN
 .got:                              ; 14.160: on kern_mega a pool block). No
     pop cx                         ; page-safe run: the plain claim, as before
     jc .fail                       ; (out CF, DX = base segment; `mov cx, 32`

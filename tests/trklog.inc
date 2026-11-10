@@ -167,7 +167,7 @@ tlog_key:
     cmp word [tlog_seg], 0
     jne .off
     mov ax, TLOG_KB                 ; AX = KB in, DX = the base segment OUT
-    call OSAPI_MEM_CLAIM            ; (SPEC.md 50.3 - the answer moves
+    MEMKB_CLAIM                     ; (SPEC.md 50.3 - the answer moves
     jc .nomem                       ; register, and reading it out of AX
     mov [tlog_seg], dx              ; writes 16KB of records over the IVT)
     mov word [tlog_n], 0
@@ -690,7 +690,7 @@ tlog_save:
     call trk_repaint_done           ; the notice has to reach the glass BEFORE
                                     ; twenty seconds of floppy, not after
     mov ax, TLOG_TXTKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [tlog_txt], dx              ; DX, not AX (SPEC.md 50.3)
     mov es, dx

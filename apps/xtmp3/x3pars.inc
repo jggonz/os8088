@@ -1233,7 +1233,7 @@ x3p_probe:
     mov word [x3p_pboff], X3P_PTAIL ; that runs past it is answered with its
     mov ax, 32768 / 1024 + X3P_PTAIL / 1024     ; tail moved down in front
 .claim:                             ; of the next one (.rd): 36 KB
-    call OSAPI_MEM_CLAIM            ; AX = KB
+    MEMKB_CLAIM                     ; AX = KB
     jc .nomem
     mov [x3p_pseg], dx
     mov di, [x3p_pinfo]

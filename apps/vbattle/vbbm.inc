@@ -65,7 +65,7 @@ vb_bmbuild:
     jnz .kb
     inc ax
 .kb:
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [vb_bmseg], dx
     xor bx, bx                      ; the targets: every clip's head, then

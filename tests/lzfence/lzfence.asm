@@ -37,7 +37,7 @@ LF_WANT     equ 12              ; what `good` must produce
 ; -----------------------------------------------------------------------------
 lf_entry:
     mov ax, 1                   ; a kilobyte to expand into
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [lf_seg], dx
 

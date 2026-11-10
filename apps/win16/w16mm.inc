@@ -2234,7 +2234,7 @@ w16mm_wimake:
     push cx
     mov ax, W16MM_IRL / 1024 + 1    ; the ring and its words, all the head
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    MEMKB_DMA_HI                    ; DX = its segment
     pop cx
     jc .nomem
     push dx

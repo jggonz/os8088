@@ -1170,7 +1170,7 @@ pt_alloc_scratch:
     cmp word [pt_scseg], 0          ; held already (a second click on the
     jne .have                       ; tool in hand): it is funded
     mov byte [pt_havefill], 0
-    call OSAPI_MEM_AVAIL            ; AX = the largest run a claim is served
+    MEMKB_AVAIL                     ; AX = the largest run a claim is served
     mov cx, PT_SC_KB                ; from, BX = the total (not ours)
     cmp ax, cx
     jae .ask
@@ -1182,7 +1182,7 @@ pt_alloc_scratch:
     jb .out                         ; not even the 2KB tier: the tool greys
 .ask:
     xchg ax, cx                     ; AX = the tier
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [pt_scseg], dx              ; AX = the KB actually granted, which is
     mov cl, 7                       ; the only place the tier is now read from
@@ -1240,7 +1240,7 @@ pt_alloc:
     ; everything else takes what is left.
     mov cx, [pt_needp]
     call pt_kb_of
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [pt_base], dx
     call pt_movable                 ; the biggest claim on the machine, and
@@ -1443,7 +1443,7 @@ pt_alloc_undo:
     mov word [pt_unseg], 0
     mov cx, [pt_smaxp]
     call pt_kb_of
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [pt_unseg], dx
     call pt_movable
@@ -1540,7 +1540,7 @@ pt_uwinof:
 pt_alloc_clip:
     push ax
     push bx                         ; MEM_AVAIL answers in AX and BX
-    call OSAPI_MEM_AVAIL            ; AX = the largest run a claim is served
+    MEMKB_AVAIL                     ; AX = the largest run a claim is served
     cmp ax, PT_CLIPMINP >> 6        ; from - and the floor is in paragraphs
     sbb al, al                      ; FF under the floor, 0 at or over it...
     inc ax                          ; ...so AL = 1 exactly when it is funded
@@ -1572,7 +1572,7 @@ pt_clip_need:
     jbe .ok
     mov cx, ax
     call pt_kb_of
-    call OSAPI_MEM_CLAIM            ; the bigger one first...
+    MEMKB_CLAIM                     ; the bigger one first...
     jc .no
     push dx
     call pt_free_clip               ; ...then give the smaller one back
@@ -1649,7 +1649,7 @@ pt_alloc_lzw:
     push dx
     mov word [pt_lzwseg], 0
     mov ax, PT_LZW_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .no
     mov [pt_lzwseg], dx
     pop dx
@@ -1711,7 +1711,7 @@ pt_free_clip:
 pt_growmax:
     push ax
     push cx
-    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    MEMKB_AVAIL                     ; AX = largest free run, KB
     cmp word [pt_scseg], 0          ; --- HOLD BACK A FLOOR'S WORTH OF SPAN
     jne .capped                     ; STACK (SPEC.md 42.6.2) while there is
                                     ; not one held - which, since 42.6.2.1,
@@ -11253,7 +11253,7 @@ pt_menufix:
     ; fund PT_LZW_KB at all, which is also what pt_save will ask.
     push ax
     push bx                         ; MEM_AVAIL answers in AX *and* BX, and
-    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    MEMKB_AVAIL                     ; AX = largest free run, KB
     cmp ax, PT_LZW_KB               ; this routine promises to preserve both
     pop bx
     pop ax
@@ -11345,7 +11345,7 @@ pt_gate_g:
     mov si, pt_s_ng
     push ax
     push bx                         ; MEM_AVAIL answers in AX and BX
-    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    MEMKB_AVAIL                     ; AX = largest free run, KB
     cmp ax, PT_LZW_KB
     sbb ax, ax
     inc ax                          ; ZF = 1 exactly when the tables cannot fit
@@ -12433,7 +12433,7 @@ pt_resize:
 %endif
     call pt_kb_of                   ; AX = KB for CX paragraphs
     push ax
-    call OSAPI_MEM_CLAIM            ; DX = the new base, CF = refused
+    MEMKB_CLAIM                     ; DX = the new base, CF = refused
     pop bx                          ; BX = the KB, for the fallback below
     jnc .moved
 
@@ -12445,7 +12445,7 @@ pt_resize:
     ; and not the first move.
     mov ax, bx
     mov dx, [pt_base]
-    call OSAPI_MEM_REGROW           ; DX = where it is now (same = in place)
+    MEMKB_REGROW                    ; DX = where it is now (same = in place)
     jc .refit
     mov [pt_base], dx               ; unchanged unless it had to move, and the
     mov ax, bx                      ; picture came with it either way
@@ -13311,7 +13311,7 @@ pt_qcompose:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0362)
+; pt_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1, API 0x0341)
 ; in:  SI = our window; the UI task, gfx lock HELD
 ; out: CF = 0 close me, CF = 1 not yet
 ;
@@ -13771,7 +13771,7 @@ pt_ondlg:
     cmp ax, PT_STAGE_MAX
     ja .toobig
     push ax
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
+    MEMKB_AVAIL                     ; AX = the largest free run, KB
     pop bx
     cmp ax, bx
     jb .toobig
@@ -14102,7 +14102,7 @@ pt_stage:
     push ax
     push bx
     mov [pt_stgkb], ax              ; the caller's cap, across the AVAIL call
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, in KB
+    MEMKB_AVAIL                     ; AX = the largest free run, in KB
     cmp ax, [pt_stgkb]
     jbe .kb
     mov ax, [pt_stgkb]
@@ -14110,7 +14110,7 @@ pt_stage:
     or ax, ax
     jz .no
     mov [pt_stgkb], ax
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
     jc .no
     mov [pt_gseg], dx
     mov ax, [pt_stgkb]              ; DX:CX = KB * 1024, 32-bit
@@ -14165,7 +14165,7 @@ pt_stagefit:
     cmp ax, [pt_stgkb]              ; ...and only ever a SHRINK: a file that
     jae .out                        ; filled the claim keeps it as it is
     mov dx, [pt_gseg]
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     jc .out
     mov [pt_gseg], dx
 .out:
@@ -15003,7 +15003,7 @@ pt_cvgrow:
     call pt_free_undo               ; the undo image is sized from [pt_smaxp]
     mov ax, bx                      ; and comes back at the new one. A no-op on
     mov dx, [pt_base]               ; this build - PTF_UNDO is off - and called
-    call OSAPI_MEM_REGROW           ; anyway, so the arm reads the same as the
+    MEMKB_REGROW                    ; anyway, so the arm reads the same as the
     jc .shrno                       ; grow path above it
     mov [pt_base], dx               ; SPEC.md 50.3: a shrink "always succeeds
     mov ax, bx                      ; in place". TESTING CF is what makes that
@@ -15022,7 +15022,7 @@ pt_cvgrow:
                                     ; [pt_smaxp], which is about to move
     mov ax, bx
     mov dx, [pt_base]
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     jc .keep
     mov [pt_base], dx               ; the same segment when it grew where it
     mov ax, bx                      ; stood, a different one when it moved

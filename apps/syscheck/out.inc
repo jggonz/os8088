@@ -28,7 +28,7 @@ sc_act_report:
     mov cx, 9
     div cx
     add ax, 3
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    MEMKB_CLAIM                     ; DX = the segment
     jnc .claimed
     mov si, sc_t_nomem
     jmp .toast
@@ -540,7 +540,7 @@ sc_rmone:
     jz .no
     mov cx, dx
     mov ax, dx
-    call OSAPI_MEM_CLAIM            ; DX = a buffer the engine reads it into
+    MEMKB_CLAIM                     ; DX = a buffer the engine reads it into
     jc .out
     mov di, dx
     mov ah, FSKD_REFUSED

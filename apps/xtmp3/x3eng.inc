@@ -352,7 +352,7 @@ x3_e_init:
 %endif
     push ax                         ; THE PEAK'S ZERO (SPEC.md 121.10): the
     push bx                         ; heap's free total now, with the region
-    call OSAPI_MEM_AVAIL            ; and the eager parts already out of it
+    MEMKB_AVAIL                     ; and the eager parts already out of it
     mov [x3_free0], bx
     pop bx
     pop ax
@@ -1931,7 +1931,7 @@ x3_ringget:
     push dx
     mov ax, X3_XRL / 1024 + 1       ; the ring and its control words, all in
     mov cx, ax                      ; the page-safe head
-    call OSAPI_MEM_CLAIM_DMA_HI
+    MEMKB_DMA_HI
     jc .no
     mov [x3_xseg], dx
     pop dx
@@ -4497,7 +4497,7 @@ x3_shrink:
     pop ax
     or dx, dx
     jz .out
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     jc .out
     mov byte [x3_bshr], 1
 .out:
@@ -4526,7 +4526,7 @@ x3_memck:
 ; the heap's fall since launch (x3_memck's sample). keeps the rest
 x3_curkb:
     push bx
-    call OSAPI_MEM_AVAIL            ; BX = total free KB
+    MEMKB_AVAIL                     ; BX = total free KB
     mov ax, [x3_free0]
     sub ax, bx
     jnc .p

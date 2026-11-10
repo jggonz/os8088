@@ -2243,7 +2243,7 @@ op_hilift:
                                 ; conventional heap, and what this wants is
                                 ; the plain door's pool block above 1MB, which
                                 ; counts in KB anyway (SPEC.md 50.3.7)
-    call OSAPI_MEM_CLAIM        ; DX = a claim, and is it ABOVE 1MB? Every
+    MEMKB_CLAIM                 ; DX = a claim, and is it ABOVE 1MB? Every
     pop ax                      ; claim is a selector there (MC7), so its
     jc .out                     ; linear base says
     push ax

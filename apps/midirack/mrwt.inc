@@ -194,7 +194,7 @@ mwt_load:
     mov byte [mwt_run], 1
 .hrun:
 %else
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov word [mr_msg], mr_s_bankmem
     jc .no
 %endif
@@ -500,7 +500,7 @@ mwt_open:
     cmp word [mwt_xseg], 0
     jne .have
     mov ax, MWT_MIXKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .no
     mov [mwt_xseg], dx
     mov es, dx                      ; the volume pages: page p maps the signed

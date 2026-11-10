@@ -766,7 +766,7 @@ sc_entry:
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
     mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
-    call OSAPI_MEM_CLAIM            ; 256 x 4 bytes, session-lived. Zeroed by
+    MEMKB_CLAIM                     ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [sc_pseg], dx               ; must BE Normal, all zero
     push cx
@@ -4819,7 +4819,7 @@ sc_itinit:
                                     ; for the whole of its pass, and the
                                     ; claim below may compact
     mov ax, SC_ITKB                 ; the table AND the staging area
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .let
     mov [sc_iseg], dx
 .let:
@@ -7267,7 +7267,7 @@ sc_stghold:
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
 .kb:
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
     jc .no
     mov [sc_stgseg], dx
     mov es, dx
@@ -7361,7 +7361,7 @@ sc_stgread:
     mov cx, dx
 .kb:
     mov ax, cx
-    call OSAPI_MEM_CLAIM            ; preserves all but DX
+    MEMKB_CLAIM                     ; preserves all but DX
     jc .nomem
     mov [sc_stgseg], dx
     mov es, dx
@@ -17002,7 +17002,7 @@ sc_pictload:
     mov ax, [sc_stgseg]
     mov [si+IMG_SRCSEG], ax
     mov ax, SC_PICKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [sc_picseg], dx
     mov si, sc_imgblk

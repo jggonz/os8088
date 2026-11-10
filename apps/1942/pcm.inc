@@ -16,7 +16,7 @@ n_pcm_open:
 .claim:
     mov ax,13
     mov cx,13
-    call OSAPI_MEM_CLAIM_DMA_HI
+    MEMKB_DMA_HI
     jc .out
     mov [n_pcmseg],dx
     ; Optional, and fetched inside the bracket: ask first, so a busy heap is

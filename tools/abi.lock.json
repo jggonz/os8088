@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "68c6a489be5a0a90f7c4b0bccc9fa8125e9e5233969a3a22f52dab478b38a762",
+  "fingerprint": "2d6367972129e748a459b4d5a261d0f1a76e1e26902e8d1b3035efdd7d328bf7",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "59953a422e5c9401114aa19d7e3fbf351818ec7d00bb11436e6588ee7efb04bd",
+  "fingerprint": "941fdd7ee8dfdcfa6b92c6dac9d35f97a3f0d8d1f010d995c3166a4e20c186a0",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2049,6 +2049,34 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of drvtab: service tables read in place (histsys-7), DSV/FSV floors (D4) with the 28-byte fallbacks gone (N1), the volume bridge in DI (R3), MEGA_WTN 64 (R2-3) (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "9da9cd52f736ab24bef100cd3c5349dbec15dd6f4f50960c79ec7bca59c1527b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of memdoors: the KB memory doors (C1), FILE_APPEND (C2), FILE_APPEND_SYS (C4') withdrawn and REHOME's bytes form gone (R1); the table renumbered down by the deleted cells (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "8cc6f812296e88ce173197f2a3892b95e3abf8ec3d4653b1f17ac4b6a3838868",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of memdoors: the KB memory doors (C1), FILE_APPEND (C2), FILE_APPEND_SYS (C4') withdrawn and REHOME's bytes form gone (R1); the table renumbered down by the deleted cells (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "941fdd7ee8dfdcfa6b92c6dac9d35f97a3f0d8d1f010d995c3166a4e20c186a0",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "Merge of memdoors (C1, C2, C4', R1): cell kinds block regenerated (kernel size pass 19)",
+   "to": 13
+  },
+  {
+   "fingerprint": "2d6367972129e748a459b4d5a261d0f1a76e1e26902e8d1b3035efdd7d328bf7",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "Merge of memdoors (C1, C2, C4', R1): cell kinds block regenerated (kernel size pass 19)",
    "to": 14
   }
  ]

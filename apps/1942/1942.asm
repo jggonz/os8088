@@ -38,7 +38,7 @@ n_entry:
     call op_load                    ; SI is the kernel's: the name, FIRST.
                                     ; Every part is lazy, so this is the copy
     mov ax, N_CANVAS_KB             ; The sprite banks are fetched on the way
-    call OSAPI_MEM_CLAIM            ; into fullscreen and dropped on the way
+    MEMKB_CLAIM                     ; into fullscreen and dropped on the way
     jc .out                         ; out (n_loadgfx, n_dropgfx), so the
     mov [n_canvas], dx              ; desktop holds the canvas and nothing else
     mov ax, n_canvasmv              ; ...and on the desktop it MOVES (SPEC.md

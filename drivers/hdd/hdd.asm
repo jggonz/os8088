@@ -1076,12 +1076,17 @@ hd_twins:
     jne .next
     cmp word [di+HDD_BASE], 0
     je .next                    ; not paired: nothing to prove
-    mov ax, 1
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA    ; DX = 1 KB, int 13h's to fill (CX kept: the
-    jc .back                    ; one-sector count both reads below take)
-    mov es, dx
-    xor bx, bx                  ; LBA 0 through the BIOS, into 0
+    mov al, 64                  ; 1 KB, in paragraphs (AH is the row
+                                ; index's, 0)
+    mov cx, 1                   ; the one-sector count both reads below take,
+                                ; and the HEAD: a paragraph, which no page
+                                ; boundary can split - each read is one
+                                ; 512-aligned sector, which none can either -
+                                ; and it marks the claim the chip's (pinned)
+    xor bx, bx                  ; BL = MEMP_CLAIM, and BX = 0 is the first
+    call OSAPI_MEM_P            ; read's offset: OSAPI_MEM_P keeps BX
+    jc .back                    ; DX = 1 KB, int 13h's to fill
+    mov es, dx                  ; LBA 0 through the BIOS, into 0
     xor ax, ax
     cwd
     mov [hd_rawop], al

@@ -288,7 +288,7 @@ dsl_w16:
     mov ax, bx
     inc ax
     shr ax, 1                       ; KB, at least one
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    MEMKB_CLAIM                     ; DX = the block
     jc .home
     mov bp, dx
     mov cl, 9

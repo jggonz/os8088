@@ -581,7 +581,7 @@ vb_coverload:
     jnz .kb
     mov ax, 64                      ; (60 KB and up: vb_round's 0xF000)
 .kb:
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     pop cx
     jc .no
     mov [vb_cvseg], dx
@@ -1625,7 +1625,7 @@ vb_play:
 vb_cpask:
     push bx
     push cx
-    call OSAPI_MEM_AVAIL            ; AX = the largest run now, KB
+    MEMKB_AVAIL                     ; AX = the largest run now, KB
     mov cx, ax
     mov ax, MEM_LVL_TOP             ; AH = MEMC_WHATIF: if we moved too (every
     call OSAPI_MEM_COMPACT          ; cache counted free - the play purges
@@ -2183,7 +2183,7 @@ vb_load:
     call vb_p2kb                    ; RAM-PLAN R1)
     mov word [vb_err], vb_s_nomem
     xor cx, cx                      ; (the DMA door, no head: CONVENTIONAL on
-    call OSAPI_MEM_CLAIM_DMA_HI     ; kern_mega, where the bracket sums it -
+    MEMKB_DMA_HI                    ; kern_mega, where the bracket sums it -
                                     ; 126.4.5) FROM THE TOP: claimed from the bottom it
     jc .fail1                       ; landed just over the desktop's caches
                                     ; and left them a pocket no ring could
@@ -2789,11 +2789,11 @@ vb_ringclm:
 ; door's KB went to that gap (KERN-MEGA-PLAN 14.187). AX, BX, CX, DX spent;
 ; CF=1 and [vb_err] when there is not room for VB_CRMIN each
 vb_rclaim:
-    call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
+    MEMKB_AVAIL                     ; THE ARENA PACKED FIRST: the whole of the
     sub ax, [vb_rkeep]              ; largest run claimed and given back. The
     jc vb_rcpair.no                 ; kernel can serve that only by shedding
     xor cx, cx                      ; (conventional: the DMA door, no head)
-    call OSAPI_MEM_CLAIM_DMA        ; the caches and packing what moves - a
+    MEMKB_DMA                       ; the caches and packing what moves - a
     jc .pk                          ; claim that fits a free run as it stands
     call OSAPI_MEM_FREE             ; does neither, and on a USED machine the
 .pk:                                ; directory read-ahead's 31.5 KB was left
@@ -2802,7 +2802,7 @@ vb_rclaim:
     sub ax, VB_RKEEP                ; none on a real-mode kernel's door
     jbe .rc
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA        ; (CX = 0: plain, bottom-up, conventional
+    MEMKB_DMA                       ; (CX = 0: plain, bottom-up, conventional
     jc .rc                          ; - the door's own placement; refused, the
     mov word [vb_rkeep], VB_RKEEP   ; KB are left as they were)
     push dx
@@ -2818,14 +2818,14 @@ vb_rclaim:
     pop word [vb_rkeep]             ; (POP keeps CF)
     ret
 vb_rcpair:
-    call OSAPI_MEM_AVAIL            ; Then THE PAIR, half and half
+    MEMKB_AVAIL                     ; Then THE PAIR, half and half
     call .pair
     jc .no                          ; of what OSAPI_MEM_AVAIL says - which is
                                     ; exactly what a claim gets (it was
                                     ; checked against the heap at the instant:
                                     ; 298 KB said, 298 KB there)
 .room:
-    call OSAPI_MEM_AVAIL            ; ROOM STILL: ring 1 went to another run
+    MEMKB_AVAIL                     ; ROOM STILL: ring 1 went to another run
     mov dx, [vb_rkeep]
     add dx, VB_RGROW
     cmp ax, dx                      ; (a used machine's second hole), and ring
@@ -2835,7 +2835,7 @@ vb_rcpair:
     xor dx, dx
     xchg dx, [vb_rclm]
     call OSAPI_MEM_FREE
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     sub ax, [vb_rkeep]
     mov bx, vb_rg0
     call .claim
@@ -2878,7 +2878,7 @@ vb_rcpair:
 .p0:                                ; which fits does not shed (kern_mega's
     call .claim                     ; pinned read-ahead, 9 KB) left ring 1
     jc .pno                         ; short when ring 0 went first
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     sub ax, [vb_rkeep]
     jc .pfree
     mov bx, vb_rg1
@@ -2907,7 +2907,7 @@ vb_rcpair:
     push ax
     add ax, dx
     xor cx, cx                      ; (CONVENTIONAL: a ring is read and summed
-    call OSAPI_MEM_CLAIM_DMA        ; inside a real-mode bracket, 126.4.5)
+    MEMKB_DMA                       ; inside a real-mode bracket, 126.4.5)
     pop ax
     jc .cno
     cmp bx, vb_rg0

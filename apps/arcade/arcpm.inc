@@ -221,7 +221,7 @@ pm_voices:                          ; the volume's register, the frequency's
 ; freed after. pm_setup clears it in every bracket
 pm_on:
     mov ax, 64
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .r
     mov [pm_shseg], dx
     mov dx, [pm_shseg]              ; MOVABLE (SPEC.md 66): pm_shmv
@@ -269,7 +269,7 @@ pm_build:
     call ar_fill
     push bx
     mov ax, PM_PRTKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [pm_rclaim], dx
     mov [ar_rseg], dx

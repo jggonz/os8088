@@ -11582,7 +11582,7 @@ vp_sstart:
     push di
     push es
 %ifdef VP_DIAG
-    call OSAPI_MEM_AVAIL            ; THE HEAP AS PLAY FOUND IT, for the
+    MEMKB_AVAIL                     ; THE HEAP AS PLAY FOUND IT, for the
     mov [vp_mrun0], ax              ; card's memory lines (98.3): the
     mov [vp_mfre0], bx              ; largest claim, and all that is free
     mov word [vp_mrun], 0           ; ...and nothing from the ring's sizing
@@ -12106,7 +12106,7 @@ vp_rbhold:
     mov ax, VP_RBRKB
 .h:
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA_HI
+    MEMKB_DMA_HI
     jc .n
     mov [vp_rbh], dx
 .n:
@@ -24161,12 +24161,12 @@ vp_rclk1:
 vp_mclaim:                          ; OSAPI_MEM_CLAIM, IN CONVENTIONAL MEMORY:
     push cx                         ; the DMA door with no head IS the plain
     xor cx, cx                      ; claim (os88api.inc), and OS88_HIGHMEM
-    call OSAPI_MEM_CLAIM_DMA        ; does not reach it - every claim but the
+    MEMKB_DMA                       ; does not reach it - every claim but the
     pop cx                          ; ring's is paragraph arithmetic somewhere
     ret                             ; (KERN-MEGA-PLAN 14.41)
 %else
 vp_mclaim:                          ; OSAPI_MEM_CLAIM
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     ret
 %endif
 vp_ticks:                           ; OSAPI_GET_TICKS
@@ -24189,11 +24189,11 @@ vp_clips:                           ; ...or BX as it is
 vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI, in conventional
     push cx                         ; memory as vp_mclaim's
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA_HI
+    MEMKB_DMA_HI
     pop cx
 %else
 vp_mclhi:                           ; OSAPI_MEM_CLAIM_HI
-    call OSAPI_MEM_CLAIM_HI
+    MEMKB_CLAIM_HI
 %endif
     ret
 ; vp_mclp / vp_mclhip - OSAPI_MEM_P's claim, from the bottom / the TOP: AX =
@@ -24230,7 +24230,7 @@ vp_mmov:                            ; OSAPI_MEM_MOVABLE
     call OSAPI_MEM_MOVABLE
     ret
 vp_mavail:                          ; OSAPI_MEM_AVAIL
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     ret
 vp_xcaps:                           ; OSAPI_XMEM_CAPS
     call OSAPI_XMEM_CAPS

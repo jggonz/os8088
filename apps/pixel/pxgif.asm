@@ -2048,8 +2048,10 @@ av_free:
 av_start:
     cmp word [px_anseg], 0
     jne .have
-    mov ax, 1
-    call OSAPI_MEM_CLAIM
+    mov ax, 64                      ; 1 KB, in paragraphs (SPEC.md 50.3.7)
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [px_anseg], dx
     mov word [px_anpara], 64

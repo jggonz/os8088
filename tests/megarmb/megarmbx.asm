@@ -103,7 +103,7 @@ mx_tick:
     mov [mx_hdrv], bl
     mov ax, MX_CHUNK / 1024         ; the buffer: CONVENTIONAL (the DMA door,
     xor cx, cx                      ; CX = 0, for an OS88_HIGHMEM package)
-    call OSAPI_MEM_CLAIM_DMA
+    MEMKB_DMA
     jc .nomem
     mov [mx_buf], dx
     mov ax, MX_XKB * 1024 & 0xFFFF  ; the XMS block

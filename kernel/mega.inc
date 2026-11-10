@@ -6289,8 +6289,8 @@ mega_hugebf:
     cmp ax, bp
     jb .no                          ; ...less the reserve: short
     mov ax, bp                      ; --- the CONVENTIONAL piece, first: it
-    xor cx, cx                      ; is the one a compaction may take time
-    call COLD_SEG:mmf_osapi_mem_claim_dma_hi ; over, and nothing is held yet.
+                                    ; is the one a compaction may take time
+    call COLD_SEG:mmf_mem_claim_ownhi ; over, and nothing is held yet.
     jc .no                          ; From the TOP (14.169): the heap's end,
                                     ; never the fill point, where what the
                                     ; bottom stack sheds under it would cut
@@ -6380,7 +6380,7 @@ mega_hgcnt:
     ret
 
 ; mega_hugec - OSAPI_MEM_HUGE's CONVENTIONAL arm in protected mode (KERN-MEGA-
-; MEMORY-PLAN MC7.4): DX = the claim osapi_mem_claim_dma_x has just made (its
+; MEMORY-PLAN MC7.4): DX = the claim mmf_mem_claim_own has just made (its
 ; pair's data selector), AX = its KB, BX = the ask (8000h a window every 32KB,
 ; 4000h every 16KB, else every 64KB) -> CF = 0, DX = the first of a RUN of
 ; data selectors over it, a 64KB window each (the last its end), CX = 8, BX =

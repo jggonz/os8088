@@ -256,7 +256,7 @@ aps_setup:
     cmp word [aps_rseg], 0
     jne .have
     mov ax, (APS_RL + SPKFX_RINGEND + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [aps_rseg], dx
 .have:

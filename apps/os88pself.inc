@@ -102,7 +102,7 @@ op_self:
     jae .kb                     ; banked with the format; [bp] is SS's, and
     mov al, [bp+1]              ; so is this frame)
 .kb:
-    call OSAPI_MEM_CLAIM        ; DX = the claim
+    MEMKB_CLAIM                 ; DX = the claim
     jc .no6
     push dx                     ; [bp-8]
     mov es, dx

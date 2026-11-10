@@ -385,9 +385,10 @@ wf_pcm_open:
     call OSAPI_MEM_P
     cmp ax, dx
     jb .out
-    mov ax, 13
-    mov cx, 13
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov ax, 13 * 64             ; the ring, all of it page-safe, from
+    mov cx, ax                  ; the top (BX is MEMP_AVAIL's already, and
+    mov bl, MEMP_CLAIM_HI       ; op_fetch clobbers CX)
+    call OSAPI_MEM_P
     jc .out
     mov [wf_pcmseg], dx
     mov al, WF_P_SFX

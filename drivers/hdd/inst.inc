@@ -1244,7 +1244,11 @@ hd_ibuf_get:
     mov ax, [si]
     or ax, ax
     jz .no                      ; the ladder ran out: not even the smallest
-    call OSAPI_MEM_CLAIM
+    mov cl, 6                   ; KB -> paragraphs, OSAPI_MEM_P's unit
+    shl ax, cl
+    xor cx, cx                  ; no head...
+    mov bl, MEMP_CLAIM          ; (os88_ent saved BX and CX)
+    call OSAPI_MEM_P
     jnc .got
     add si, 2
     jmp short .try

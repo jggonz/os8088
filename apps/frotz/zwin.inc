@@ -2844,10 +2844,10 @@ zw_setup:
     call zw_bounds
 
     mov ax, ZW_SBKB
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    MEMKB_CLAIM                     ; out CF=0 and DX = the base segment
     jnc .got
     mov ax, ZW_SBKB2
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .none
     mov ax, ZW_SBKB2
     jmp short .have

@@ -339,7 +339,7 @@
    "file": "drivers/hdd/hdtool.inc",
    "old_text": "; and a driver has no way to ask which. It does not need one: drv_load",
    "new_text": "; and OSAPI_VOL_SYS would name it (SPEC.md 19.8). It does not need to: drv_load",
-   "why": "OSAPI_VOL_SYS (slot 0x0328, apps/os88api.inc:3282) answers the boot volume and the tool's own page calls it (cppage.inc:1014); the bank's reasoning still holds."
+   "why": "OSAPI_VOL_SYS (slot 0x0307, apps/os88api.inc:3282) answers the boot volume and the tool's own page calls it (cppage.inc:1014); the bank's reasoning still holds."
   },
   {
    "file": "drivers/hdd/hdtool.inc",
@@ -417,7 +417,7 @@
    "file": "SPEC.md",
    "old_text": "the boot partition on an installed one (§52.10.3) — and a driver cannot ask\n  which. It does not need to:",
    "new_text": "the boot partition on an installed one (§52.10.3) — and `OSAPI_VOL_SYS`\n  (§19.8) would name it. It does not need to:",
-   "why": "OSAPI_VOL_SYS (0x0328) answers the boot volume, and the tool's own page uses it (cppage.inc:1014); the bank's reasoning is unchanged."
+   "why": "OSAPI_VOL_SYS (0x0307) answers the boot volume, and the tool's own page uses it (cppage.inc:1014); the bank's reasoning is unchanged."
   },
   {
    "file": "SPEC.md",

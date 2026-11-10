@@ -114,7 +114,7 @@ mr_entry:
     call mr_dump
     mov dx, [mr_a]
     mov ax, 256
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+14], si
     jc .l1x
@@ -149,7 +149,7 @@ mr_entry:
     inc ax
     call mr_fill
     mov ax, 384
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+22], si
     jc .l1f
@@ -170,7 +170,7 @@ mr_entry:
 .l2b:
     mov [mr_res+26], ax
     mov ax, 160
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+28], si
     jc .l1f
@@ -234,7 +234,7 @@ mr_entry:
     call mr_fill
     mov ax, [mr_m]
     sub ax, 128
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+40], si
     jc .l3f
@@ -245,7 +245,7 @@ mr_entry:
     mov [mr_res+42], ax
     mov ax, [mr_m]
     sub ax, 64
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+44], si
     jc .l3f
@@ -279,7 +279,7 @@ mr_entry:
     dec ax
     mov cl, 6
     shl ax, cl
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     sbb si, si
     mov [mr_res+48], si
     jc .l3f

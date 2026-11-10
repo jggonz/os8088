@@ -29,7 +29,7 @@
 
 mr_entry:
     mov ax, 64
-    call OSAPI_MEM_CLAIM        ; OS88_HIGHMEM: a pool selector in protected
+    MEMKB_CLAIM                 ; OS88_HIGHMEM: a pool selector in protected
     jc .no                      ; mode, a segment everywhere else
     mov [mr_hi], dx
     mov ax, 64 * 64             ; 64KB in paragraphs, CONVENTIONAL on every

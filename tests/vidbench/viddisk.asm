@@ -885,7 +885,7 @@ vk_claim:
     push dx
     mov ax, VK_BUFKB
     mov cx, VK_BUFKB
-    call OSAPI_MEM_CLAIM_DMA
+    MEMKB_DMA
     jc .no
     mov [vk_buf], dx
 .no:
@@ -1234,7 +1234,8 @@ vk_wrun:
 .app:
     cmp byte [vk_wmode], 0
     jne .seq
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; WRITE_AT at the END: the append
+    call OSAPI_FILE_WRITE_AT
     jmp short .wrote
 .seq:
     mov di, [vk_wtok]               ; ES:BX = the bytes, DI = the token
@@ -1732,7 +1733,7 @@ vk_xconv:
     cmp bx, VK_XCN * 2
     jae .run
     mov ax, 64
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    MEMKB_CLAIM                     ; DX = the block
     jc .run
     mov [vk_xcsegs + bx], dx
     inc bx

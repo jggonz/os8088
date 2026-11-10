@@ -139,7 +139,7 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
 %ifdef PKG_MEGA
     call %1
 %else
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
 %endif
 %endmacro
 

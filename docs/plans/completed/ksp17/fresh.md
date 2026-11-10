@@ -177,7 +177,7 @@ writes only DH.)
 
 ## WANTS AN ABI BREAK
 
-None. `OSAPI_VOL_CHECK` (0x04F5) is not on `main` and was left as its
+None. `OSAPI_VOL_CHECK` (0x04C8) is not on `main` and was left as its
 contract reads; the stub's frame is one far call shallower, which no caller
 can see.
 

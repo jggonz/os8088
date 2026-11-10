@@ -2653,7 +2653,7 @@ sh_entry:
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
     mov ax, SH_CLAIM_CELLS_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [sh_cellseg], dx
     mov ax, sh_reloc                     ; ...and MOVABLE (SPEC.md 66.2). SHEET
@@ -2662,13 +2662,13 @@ sh_entry:
                                       ; alone and no park is involved
     call OSAPI_MEM_MOVABLE
     mov ax, SH_CLAIM_TXT_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [sh_txtseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
     mov ax, SH_CLAIM_STG_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [sh_stgseg], dx
     mov ax, sh_reloc                   ; ...MOVABLE too (NO-PINNING 1): every
@@ -2679,7 +2679,7 @@ sh_entry:
     ; nowhere to come from. The note table is the claim's second part, and
     ; sh_reloc derives its segment from the border table's after a move
     mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [sh_bordseg], dx
     mov ax, sh_reloc                   ; DX IS THE CLAIM HERE: MEM_MOVABLE
@@ -2709,13 +2709,13 @@ sh_entry:
     call sh_colw_clear                 ; every column the standard width (81.56)
     mov word [sh_nnote], 0
     mov ax, SH_CLAIM_CHART_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .fail
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
     mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
-    call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
+    MEMKB_CLAIM                        ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
     mov [sh_undoseg], dx
     mov ax, sh_reloc
@@ -43764,7 +43764,7 @@ shm_gs_h:
     sub ax, MBAR_H
     jmp shm_anum
 shm_gs_mem:
-    call OSAPI_MEM_AVAIL              ; BX = total free KB
+    MEMKB_AVAIL                       ; BX = total free KB
     mov ax, bx
     jmp shm_anum
 shm_gs_fpu:

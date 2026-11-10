@@ -3366,7 +3366,7 @@ dsk_vol_slot_x:
 ; dsk_vol_kind lived here: [dsk_vkind], set at mount, is the byte it answered
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; osapi_vol_at - is this PARTITION already a volume? (slot 0x02F6, SPEC 52.10.3)
+; osapi_vol_at - is this PARTITION already a volume? (slot 0x02D5, SPEC 52.10.3)
 ; in:  DL = an int 13h drive number, BX:CX = the partition's 32-bit base LBA
 ;      (BX = the high word, CX = the low - dsk_boot_from's own argument shape)
 ; out: CF = 0 and AL = the volume index that covers it; CF = 1 = none does
@@ -3767,7 +3767,7 @@ osapi_vol_fence:
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_add - slot 0x01F8 (X: ES = the caller's segment)
+; osapi_vol_add - slot 0x01E0 (X: ES = the caller's segment)
 ; in:  AL = the driver's volume handle, CX = sectors, ES:SI = a NUL label or
 ;      SI = 0, DX = 0 (the listing claim it used to take, SPEC.md 22.6)
 ;      ...OR DX != 0: TAKE the BIOS volume whose index is DL - the one
@@ -3828,7 +3828,7 @@ osapi_vol_add_x:
                                 ; refuses every call there - driver.inc's
                                 ; `xor ax, ax / stc / retf` is the same answer)
 ; -----------------------------------------------------------------------------
-; osapi_fs_ent - slot 0x02D9 (X: ES = the caller's segment), SPEC.md 62.9.1
+; osapi_fs_ent - slot 0x02B8 (X: ES = the caller's segment), SPEC.md 62.9.1
 ; in:  ES:SI -> a DSK_DE_SIZE-byte staged SPEC.md 19.1 entry, in the DRIVER's
 ;      own segment
 ; out: CF = 0 and AX = the index it landed at; CF = 1 = the listing is full,
@@ -3901,7 +3901,7 @@ osapi_fs_ent_x:
 %endif                          ; OS88_REDIR
 %ifdef OS88_DRIVERS
 ; -----------------------------------------------------------------------------
-; osapi_vol_del - slot 0x01FE (X).  in AL = volume index
+; osapi_vol_del - slot 0x01E6 (X).  in AL = volume index
 ; -----------------------------------------------------------------------------
 osapi_vol_del_x:
     call osapi_vol_fence
@@ -3911,7 +3911,7 @@ osapi_vol_del_x:
     retf
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_mount - slot 0x0204 (X).  in AL = volume index; out CF = 1 refused
+; osapi_vol_mount - slot 0x01EC (X).  in AL = volume index; out CF = 1 refused
 ;
 ; The Mount button (SPEC.md 51.8). UI-task context only, exactly like every
 ; other file slot: it takes [sch_lock] around int 13h and rewrites the one
@@ -3936,7 +3936,7 @@ osapi_vol_mount_x:
 %endif                          ; OS88_DRIVERS
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_paint lived here: slot 0x0288 is dropped (kernel.asm's API table)
+; osapi_vol_paint lived here: slot 0x026A is dropped (kernel.asm's API table)
 ; -----------------------------------------------------------------------------
 
 ; =============================================================================

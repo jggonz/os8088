@@ -3237,7 +3237,7 @@ tw_scmem:
     jne .out                        ; (already held)
     push ax
     mov ax, TW_SCKB
-    call OSAPI_MEM_CLAIM            ; DX = the band
+    MEMKB_CLAIM                     ; DX = the band
     jc .none
     mov [tw_scseg], dx
     mov ax, trk_reloc               ; movable: trk_reloc knows this word too

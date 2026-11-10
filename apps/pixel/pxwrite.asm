@@ -1857,7 +1857,7 @@ pu_start:
     cbw
     or ax, ax
     jz .r
-    call OSAPI_MEM_CLAIM            ; (all but DX kept)
+    MEMKB_CLAIM                     ; (all but DX kept)
     jc .no
     mov [px_ewseg], dx
 .r:
@@ -2307,6 +2307,9 @@ pu_tnum:
     pop dx
     pop bx
     ret
+
+OS88KB_BODIES                       ; the MEMKB_* entries this part named (a
+                                    ; part has no OS88_IMAGE_END to do it)
 
 pu_tdig:    times 5 db 0
 pu_ctext:   times 128 db 0          ; the line, before it is put

@@ -290,18 +290,18 @@ it_entry:
     mov byte [it_state], ST_TITLE
     mov byte [it_tier], 1
     mov byte [it_snd], 1
-    call OSAPI_MEM_AVAIL            ; ASK BEFORE CLAIMING (os88api.inc): a
+    MEMKB_AVAIL                     ; ASK BEFORE CLAIMING (os88api.inc): a
     cmp ax, IT_CANVKB               ; claim that fails SHEDS the disk caches on
     jb .nomem                       ; its way down, and kern_small - the
     mov ax, IT_CANVKB               ; machine this refusal is for - would pay
-    call OSAPI_MEM_CLAIM            ; that on every launch. The CF test stays:
+    MEMKB_CLAIM                     ; that on every launch. The CF test stays:
     jc .nomem                       ; the answer is the deliverable, not a vow
     mov [it_cseg], dx               ; THE CANVAS, then the work claim
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     cmp ax, IT_CLAIMKB
     jb .nomem2
     mov ax, IT_CLAIMKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem2
     mov [it_seg], dx
     mov bx, [it_win]
@@ -389,7 +389,7 @@ it_nomem_msg:
     call it_putdec
     mov si, it_s_nomem2
     call it_strcpy
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
+    MEMKB_AVAIL                     ; AX = the largest free run, KB
     call it_putdec
     mov si, it_s_nomem3
     call it_strcpy

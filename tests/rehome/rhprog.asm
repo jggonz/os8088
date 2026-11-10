@@ -72,7 +72,7 @@ rp_entry:
     ; source as the passing arm on purpose: the checks above all run first, so
     ; a failure here cannot be a package that never got going.
     mov ax, RP_CLAIM_KB             ; ...and leave one of our OWN claims
-    call OSAPI_MEM_CLAIM            ; outstanding, so the [ld_base] sweep has
+    MEMKB_CLAIM                     ; outstanding, so the [ld_base] sweep has
     xor bx, bx                      ; something to find too
     stc
     jmp short .out
@@ -117,7 +117,7 @@ rp_check:
     ; exists. The claim's last byte is written and read back too: a fence that
     ; answered CF=0 with a segment of nothing would otherwise pass.
     mov ax, RP_CLAIM_KB
-    call OSAPI_MEM_CLAIM            ; out DX = base segment
+    MEMKB_CLAIM                     ; out DX = base segment
     jc .n3
     mov [rp_cseg], dx
     mov es, dx

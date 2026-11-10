@@ -5524,7 +5524,7 @@ br_claim:
     xor ax, ax
     call br_pagepin
     pop ax
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jmp short br_pageunpin
 br_claimp:                          ; ...and OSAPI_MEM_P's claim verbs, BL
     push ax                         ; and CX the caller's (SPEC.md 50.3.7)
@@ -5545,7 +5545,7 @@ br_regrow:
     je .grow                        ; test inline, so an 8088's regrow (one
     call br_wdrop                   ; a KB of document) pays a compare
 .grow:
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     jc .back
     call br_reloc                   ; its word follows it (DX = where it is),
     clc                             ; and br_pageunpin declares it again: a
@@ -6480,7 +6480,7 @@ br_avail:
     pop cx
     jnc .r
 .conv:
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
 .r:
     ret
 
@@ -6887,7 +6887,8 @@ br_savesourceems:
     mov bx, si
     mov si, br_name
     mov cx, [br_saveamount]
-    call OSAPI_FILE_APPEND
+    mov dx, -1                      ; at the file's END (SPEC.md 18.4.7.3)
+    call OSAPI_FILE_WRITE_AT
     jc .fail
     jmp short .advanced
 .seqok:

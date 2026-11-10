@@ -729,7 +729,7 @@ px_claims:
     pop cx
     pop bx
 %else
-    call OSAPI_MEM_CLAIM            ; the master first: the largest
+    MEMKB_CLAIM                     ; the master first: the largest
 %endif
     jc .nomem
     mov [px_cur + PXR_MSEG], dx
@@ -855,7 +855,7 @@ px_avail:
     pop bx
     jnc .o
 .conv:
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
 .o:
     pop dx
     pop cx

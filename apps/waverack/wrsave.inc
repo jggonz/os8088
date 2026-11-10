@@ -371,7 +371,7 @@ ws_go:
     mov ax, WS_OUTKB
 .okb:
     push ax
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     pop ax
     mov si, ww_e15
     jc ws_no

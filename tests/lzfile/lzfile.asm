@@ -45,7 +45,7 @@ LZ_CAP      equ 4096           ; each buffer's capacity - and a multiple of
 ; -----------------------------------------------------------------------------
 lz_entry:
     mov ax, LZ_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [lz_seg], dx
 

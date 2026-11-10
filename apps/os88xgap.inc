@@ -57,7 +57,7 @@ xg_gap:
     push dx
     mov ax, XG_LEN / 1024
     xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = the scratch
+    MEMKB_DMA_HI                    ; DX = the scratch
     mov es, dx
     pop dx
     pop ax

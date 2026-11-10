@@ -63,7 +63,7 @@ qb_on:
     mov word [qb_sclaim], 0
     mov word [qbs_seg], 0
     mov ax, 64
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .r
     mov [qb_gseg], dx
     mov [qb_gcs], dx                ; G as CODE: itself, but on kern_mega
@@ -78,7 +78,7 @@ qb_on:
     or ax, ax                       ;   it can be heard here: one claim, not
     jz .shadow                      ;   two (ARCADE-SPEC 13.3)
     mov ax, QB_SHPL * 4 / 1024 + QBS_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .shadow
     mov [qb_shseg], dx
     mov ax, QB_SHPL * 4 / 16        ; the 6503's memory: a segment of its
@@ -89,7 +89,7 @@ qb_on:
     jmp short .shmv
 .shadow:
     mov ax, QB_SHPL * 4 / 1024      ; (the shadow alone: the board silent)
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .noshadow
     mov [qb_shseg], dx
 .silent:
@@ -250,12 +250,12 @@ qb_build:
     je .rom                         ;   image when qb_on made the board room
     add ax, QBS_CHIPKB              ;   - ARCADE-SPEC 13.3)
 .rom:
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [qb_rclaim], dx
     mov [ar_rseg], dx
     mov ax, QB_SPRKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .nomem
     mov [qb_sclaim], dx
     mov [ar_aseg], dx

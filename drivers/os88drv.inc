@@ -32,7 +32,7 @@
 ;   once it has read your header and does not grow anything (SPEC.md 51.1.2,
 ;   50.2.1). Anything bulk
 ;   (a DMA buffer,
-;   a ring) is still your own OSAPI_MEM_CLAIM at attach, freed at detach: the
+;   a ring) is still your own OSAPI_MEM_P claim at attach, freed at detach: the
 ;   header's byte caps a bss at 255 paragraphs.
 ;
 ; - **You have no window, no instance and no menu.** You are not an app: no
@@ -648,7 +648,7 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ;      before it frees your image; a worker that never exits leaves the
 ;      image claimed and the row loaded - a leak, never a free under a CS
 ;      that still points into it.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x01C7
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
@@ -712,11 +712,11 @@ BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
 ; Everything in the app SDK's memory section applies to you unchanged - your
 ; IMAGE segment is your owner word, exactly as a package's region is its own -
-; so OSAPI_MEM_CLAIM and OSAPI_MEM_FREE need no driver variant. One thing does:
+; so OSAPI_MEM_P and OSAPI_MEM_FREE need no driver variant. One thing does:
 ; a buffer the ISA DMA controller addresses must not cross a 64KB PHYSICAL
 ; boundary, because the 8237 has no register for address bits 16..19 and never
 ; carries into the page port that does. Ask for that up front with
-; OSAPI_MEM_CLAIM_DMA (AX = KB, CX = KB of the head the chip will see) rather
+; OSAPI_MEM_P's head (CX = the paragraphs of the head the chip will see) rather
 ; than claiming, testing the address, and claiming again while holding the
 ; block that failed - that pattern can hold four buffers to find one, and
 ; refuse on a machine that had the room all along.
@@ -765,7 +765,7 @@ DRV_VER equ 14
 ; of +15, which every kernel masks or clamps to its own table length, so the
 ; bit is invisible to a kernel that does not place drivers high.
 ; OS88_DRV_HICLAIM - %define it as well to say that the driver's own claims
-; of 64KB or less (OSAPI_MEM_CLAIM / _CLAIM_HI, never the DMA cells) may be
+; of 64KB or less (OSAPI_MEM_P with no head, never with one) may be
 ; pool SELECTORS above 1MB, as a package's are under OS88_HIGHMEM: no
 ; paragraph arithmetic on one, no BIOS call or DMA engine handed one, and a
 ; relocation proc on any it declares movable, because the kernel MOVES those

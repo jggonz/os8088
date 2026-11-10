@@ -249,7 +249,7 @@ ar_zread:
     mov byte [ar_zrun], 1
 .hno:                               ; (CF: the claim's - or's and cmp's 0)
 %else
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
 %endif
     pop si
     jc .nomem
@@ -651,7 +651,7 @@ ar_impmake:
     mov cl, 6
     shl dx, cl
     or ax, dx
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jnc .claimed
     ret
 .claimed:

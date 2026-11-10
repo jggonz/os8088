@@ -1865,7 +1865,7 @@ dos_run:
     je .unmount                     ; NO CAP: we want the maximum, so the
                                     ; question is only whether a pass adds any
     push bx                         ; ...A CAP, and the cheaper road: a program
-    call OSAPI_MEM_AVAIL            ; that asked for 200K on a machine with
+    MEMKB_AVAIL                     ; that asked for 200K on a machine with
     pop bx                          ; 300K free needs no compaction and no
                                     ; silence. Net of the floor, like every
                                     ; AVAIL on this task from .sized on
@@ -1873,7 +1873,7 @@ dos_run:
     jae .ask                        ; it fits: claim it and ask nothing more
 .unmount:
     push bx
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     mov [dos_akb], ax               ; what the heap gives WITHOUT a pass...
     pop bx
     push bx
@@ -1909,7 +1909,7 @@ dos_run:
                                     ; it on purpose
 .ask:
     push bx
-    call OSAPI_MEM_AVAIL            ; AX = the largest run a claim can HAVE at
+    MEMKB_AVAIL                     ; AX = the largest run a claim can HAVE at
     pop bx                          ; the floor - already net of every
                                     ; purgeable cache BELOW it and of what a
                                     ; compaction would recover (SPEC.md 50.6.3,
@@ -1928,7 +1928,7 @@ dos_run:
                                     ; slot promises nothing about AX, so the KB
                                     ; figure has to survive the call somewhere
                                     ; other than in a register
-    call OSAPI_MEM_CLAIM_HI         ; AX = KB -> DX = base segment, at the
+    MEMKB_CLAIM_HI                  ; AX = KB -> DX = base segment, at the
                                     ; floor .sized set - the same one the
                                     ; number above was answered at, or the plan
                                     ; is not the one the claim carries out.
@@ -7024,7 +7024,7 @@ dos_hk_bind:
 ; to claim from, which is why these two are a HOOK and not a door (SPEC.md
 ; 96.44.6). They were the last four `OSAPI_*` far calls in the core.
 dos_hk_claim:
-    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = the base segment
+    MEMKB_CLAIM                     ; AX = KB -> DX = the base segment
     ret
 dos_hk_free:
     call OSAPI_MEM_FREE             ; DX = the segment
@@ -15389,7 +15389,7 @@ dos_pkt_bufs:
 %else
     mov ax, cx
     push cx
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     pop cx                          ; (the size, for the zeroing below)
     jc .out                         ; **A REFUSAL IS SURVIVABLE**: the program
     mov [dos_pkt_bseg], dx          ; still runs, the interface is simply not

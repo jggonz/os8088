@@ -110,7 +110,7 @@ KIND_HIBER   equ 3              ; the Hibernate window (SPEC.md 87.1): the
 %endif
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
-; --- osapi_sys_snapshot's buffer, API slot 0x0210 (SPEC.md 20.9) ------------------
+; --- osapi_sys_snapshot's buffer, API slot 0x01F8 (SPEC.md 20.9) ------------------
 ; A scheduler header, then one record per instance. Both halves are copied in
 ; one cli window, which is the whole reason this is a snapshot rather than a
 ; getter - see the routine at the foot of this file. ABI: mirrored in
@@ -517,7 +517,7 @@ inst_park_mk:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_parksafe_set - API slot 0x0312: "you may park me while I am blocked in
+; inst_parksafe_set - API slot 0x02F1: "you may park me while I am blocked in
 ;                     the kernel" (SPEC.md 66.5.4)
 ; in:  AL = 1 declare / 0 withdraw, ES = the caller's segment (the X stub's)
 ; out: CF = 0 recorded; CF = 1 the caller is not a live package instance
@@ -535,7 +535,7 @@ inst_parksafe_set:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_restart_set - API slot 0x03EC: "if you have to move my region, throw my
+; inst_restart_set - API slot 0x03BF: "if you have to move my region, throw my
 ;                    worker's stack away and re-enter it here" (SPEC.md 66.6.2)
 ; in:  AX = a near offset in the caller's own image, 0 to withdraw;
 ;      ES = the caller's segment (the X stub's)
@@ -747,7 +747,7 @@ inst_seg_parked:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; inst_task_park - API slot 0x0318: a DRIVER's worker parks here (SPEC.md
+; inst_task_park - API slot 0x02F7: a DRIVER's worker parks here (SPEC.md
 ;                  66.5.5), the way a package's parks at OSAPI_TASK_ALIVE
 ; in:  nothing
 ; out: nothing (all registers and the flags preserved)
@@ -2253,7 +2253,7 @@ inst_launch_post:
     retf
 
 ; =============================================================================
-; osapi_sys_snapshot_x - API slot 0x0210's COLD body: the scheduler and the
+; osapi_sys_snapshot_x - API slot 0x01F8's COLD body: the scheduler and the
 ;                        instance table, in
 ;                  ONE cli window (SPEC.md 20.9/28.2)
 ;

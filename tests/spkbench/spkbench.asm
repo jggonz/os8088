@@ -321,7 +321,7 @@ sp_setup:
     cmp word [sp_rseg], 0
     jne .src
     mov ax, (SP_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .out
     mov [sp_rseg], dx
 .src:

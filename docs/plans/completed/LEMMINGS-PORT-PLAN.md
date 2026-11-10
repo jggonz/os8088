@@ -412,7 +412,7 @@ CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/me
 
 **Need.** The rect the bracket owns on a two-display machine
 
-- *Slot:* OSAPI_FSX_SURF (0x03F8), no C thunk
+- *Slot:* OSAPI_FSX_SURF (0x03CB), no C thunk
 - *Action:* Add int os88_fsx_surf(struct os88_rect *r) behind CC_HAS_FSX, using the existing os88_rect. Costs a single-display machine one call and stops the fullscreen landing on the monitor we are not on
 
 ---

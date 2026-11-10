@@ -69,7 +69,7 @@ mo_entry:
 .h:
     mov ax, MO_KB
 %ifdef MO_LOWHOLE
-    call OSAPI_MEM_CLAIM_HI     ; conventional, TOP-DOWN: the ceiling
+    MEMKB_CLAIM_HI              ; conventional, TOP-DOWN: the ceiling
     jc .held
     mov si, cx                  ; one is enough: the hole is above the carve
     shl si, 1
@@ -77,7 +77,7 @@ mo_entry:
     inc cx
     jmp short .held
 %else
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .held
 %endif
     mov si, cx
@@ -126,12 +126,12 @@ mo_tick:                        ; under the gfx lock: post a wake
 ; 'MEGALOWB: c SSSS PPPP OOOO' - segment, paragraphs, owner
 mo_wake:
     call mo_snap
-    call OSAPI_MEM_AVAIL
+    MEMKB_AVAIL
     mov si, mo_s_avail
     call mo_say
     call mo_hex4
     call mo_nl
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov si, mo_s_no
     jc .say
     mov [mo_big], dx
@@ -231,7 +231,7 @@ mo_run:
     cmp bp, MO_MAX
     jae .filled
     mov ax, MO_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .filled
     test dl, 4
     jnz .sel
@@ -257,7 +257,7 @@ mo_run:
     mov ax, 32                      ; ...and the tail, ever smaller
 .tail:
     push ax
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .tnext
     test dl, 4
     jnz .tkeep
@@ -293,7 +293,7 @@ mo_run:
     cmp bx, ax
     jb .free
     mov ax, 64                      ; --- 3. the claim no hole holds -------
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov cl, 2
     jc .no
     mov [mo_big], dx
@@ -451,7 +451,7 @@ mo_bwin:
     push si
     mov cl, 1
     mov ax, MO_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .say
     test dl, 4
     jz .cfree                       ; conventional: not a pool block

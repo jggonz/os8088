@@ -503,7 +503,7 @@ ar_romtry:
     mov ax, dx                      ; the KB it needs, and one over
     inc ax
     push ax
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     pop cx
     jc .nomem
     mov [ar_rimgc], dx

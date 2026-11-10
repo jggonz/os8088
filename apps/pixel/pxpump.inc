@@ -46,7 +46,7 @@ px_dmaclaim:
     push ax
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA
+    MEMKB_DMA
     jc .out
     mov bx, dx
     push dx

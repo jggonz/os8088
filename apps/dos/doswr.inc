@@ -119,7 +119,7 @@ dvw_pfetch:
     add ax, 1023                    ; op_self claimed for its read's slack
     mov cl, 10                      ; too, and a shrink is always in place
     shr ax, cl                      ; (OSAPI_MEM_REGROW), DX unchanged
-    call OSAPI_MEM_REGROW
+    MEMKB_REGROW
     call dvw_preloc                 ; [dvw_pseg] = DX, and the stubs
     call dvw_relax                  ; movable until a program runs in it
     clc

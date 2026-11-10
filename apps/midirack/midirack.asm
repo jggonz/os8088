@@ -596,7 +596,7 @@ mra_load:
     push ax
     push dx
     mov ax, MRA_CLAIM / 1024
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    MEMKB_CLAIM                     ; DX = the segment
     mov bp, dx
     pop dx
     pop ax

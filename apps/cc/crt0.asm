@@ -1805,6 +1805,9 @@ section .text                       ; leave the assembler in .text - the next
 ; -----------------------------------------------------------------------------
 %macro CC_IMAGE_END 0
 section .text
+    OS88KB_BODIES               ; the MEMKB_* entries an asm include of the
+                                ; package named (os88type.inc's, SPEC.md
+                                ; 50.3.7.1) - nothing for most C packages
 %ifdef CC_OVL_PART
   ; --- THE OVERLAY'S PART (SPEC.md 73.14.2) --------------------------------
   ; HERE, after the compiled C, for two reasons: a package whose overlay is

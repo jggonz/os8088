@@ -411,11 +411,11 @@ vb_load:
     cmp word [vb_dseg], 0
     jne .ok
     mov ax, VB_DATKB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .err
     mov [vb_dseg], dx
     mov ax, 16
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .err
     mov [vb_rseg], dx
     push es

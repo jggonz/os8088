@@ -899,7 +899,7 @@ mrb_start:
     jne .have
     mov ax, (MRB_RL + 16 + 1023) / 1024
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    MEMKB_DMA_HI
     jc .have                        ; REFUSED: no external ring, [mrb_seg]
     mov [mrb_seg], dx               ; still 0 - the grant ring plays (.grant)
 .have:
@@ -1320,7 +1320,7 @@ mrk_start:
     cmp word [mrk_seg], 0
     jne .have
     mov ax, (MRK_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     mov word [mr_msg], mr_s_spkmem
     jc .no
     mov [mrk_seg], dx

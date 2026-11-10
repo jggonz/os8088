@@ -532,7 +532,7 @@ xb_tclaim:
     push ax
     push dx
     mov ax, XB_TCLAIM_KB
-    call OSAPI_MEM_CLAIM
+    MEMKB_CLAIM
     jc .no
     mov [xb_tseg], dx
 .no:

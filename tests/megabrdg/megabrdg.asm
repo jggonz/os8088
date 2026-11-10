@@ -118,7 +118,7 @@ mb_entry:
     call mb_free
 .nb3:
     mov ax, 80                      ; --- a conventional claim under it ---
-    call OSAPI_MEM_CLAIM            ; (over 64KB: never the pool's)
+    MEMKB_CLAIM                     ; (over 64KB: never the pool's)
     jc .nob1
     mov [mb_b1], dx
     call mb_lin

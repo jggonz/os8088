@@ -432,7 +432,7 @@ sb_rec:
     mov ax, SB_RKB
     mov cx, ax                      ; all of it is the card's: page-safe
     mov word [sb_rtmp], 0           ; (nothing to free if this refuses)
-    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = the ring's segment
+    MEMKB_DMA_HI                    ; DX = the ring's segment
     mov al, 9
     jc .freefail
     mov [sb_rtmp], dx               ; a candidate, like the grant: an open

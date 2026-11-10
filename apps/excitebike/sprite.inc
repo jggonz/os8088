@@ -28,14 +28,14 @@ xb_spr_load:
     mov ax, XS_CLAIM_CC             ; the compiled poses ride in the claim after the blobs; a machine
     mov [xb_sprkb], ax              ; without the room for them plays on the interpreted draw
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD, both claims: the plain claim
-    call OSAPI_MEM_CLAIM_DMA        ; on every kernel, and CONVENTIONAL on kern_mega for this
+    MEMKB_DMA                       ; on every kernel, and CONVENTIONAL on kern_mega for this
 xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim refuses the big claim here)
     jnc .got
     mov ax, XS_CLAIM_C
 .claim:
     mov [xb_sprkb], ax              ; OS88_HIGHMEM package - the compiled poses are far-called
     xor cx, cx                      ; IN this claim, and a claim above 1MB is a data-only
-    call OSAPI_MEM_CLAIM_DMA        ; selector with no code view (os88api.inc, OS88_HIGHMEM)
+    MEMKB_DMA                       ; selector with no code view (os88api.inc, OS88_HIGHMEM)
     jc .nomem
 .got:
     mov [xb_sprseg], dx
