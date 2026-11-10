@@ -31,52 +31,16 @@
  *              (offset, width, height), growing down from the top.
  * ==========================================================================*/
 
-/* ---- the workspace ----------------------------------------------------------------------- */
+/* ---- the workspace: jw_* are defined in pdxiccit.c, which comes first and keeps its code tables there ---- */
 #define JW_SIZE   64000u        /* the bytes of the slot's workspace this file uses (20.22.12)      */
-#ifdef PD_HOST
-/* host stand-in: a flat array (the shell can define JW_SHELL to bring its own functions) */
-#ifndef JW_SHELL
-static pdb jw_mem[65536];
-#define jw_rb(o)     (jw_mem[(pdw)(o)])
-#define jw_wb(o, v)  (jw_mem[(pdw)(o)] = (pdb)(v))
-static pdw jw_rw(pdw o) { return (pdw)(jw_mem[o] | (jw_mem[(pdw)(o + 1)] << 8)); }
-static void jw_ww(pdw o, pdw v) { jw_mem[o] = (pdb)v; jw_mem[(pdw)(o + 1)] = (pdb)(v >> 8); }
-static void jw_get(pdb *dst, pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) dst[i] = jw_mem[(pdw)(o + i)]; }
-static void jw_put(pdw o, const pdb *src, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = src[i]; }
-static void jw_zero(pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = 0; }
-static void jw_move(pdw d, pdw sr, pdw n) { pdw i; if (d < sr) for (i = 0; i < n; i++) jw_mem[(pdw)(d + i)] = jw_mem[(pdw)(sr + i)]; else for (i = n; i; i--) jw_mem[(pdw)(d + i - 1)] = jw_mem[(pdw)(sr + i - 1)]; }
-#endif
-#else
-/* the target: the slot's workspace is the far segment g_wseg (the shell's), reached only through
- * pdmath's movers (PAGEDESK-SPEC 4.3) */
-extern pdw g_wseg, g_wbytes;
-#define jw_rb(o)     pd_fpeekb(g_wseg, (pdw)(o))
-#define jw_wb(o, v)  pd_fpokeb(g_wseg, (pdw)(o), (pdb)(v))
-#define jw_rw(o)     pd_fpeekw(g_wseg, (pdw)(o))
-#define jw_ww(o, v)  pd_fpokew(g_wseg, (pdw)(o), (pdw)(v))
-#define jw_get(d, o, n) pd_fcopy_in(g_wseg, (pdw)(o), (d), (pdw)(n))
-#define jw_put(o, sr, n) pd_fcopy_out((sr), g_wseg, (pdw)(o), (pdw)(n))
-static void jw_zero(pdw o, pdw n)
-{
-    static pdb z[32];       /* statics are zero */
-    while (n) { pdw k = n > 32 ? 32 : n; pd_fcopy_out(z, g_wseg, o, k); o = (pdw)(o + k); n = (pdw)(n - k); }
-}
-static void jw_move(pdw d, pdw sr, pdw n)
-{
-    static pdb t[32];
-    pdw k;
-    if (d < sr) while (n) { k = n > 32 ? 32 : n; pd_fcopy_in(g_wseg, sr, t, k); pd_fcopy_out(t, g_wseg, d, k); d = (pdw)(d + k); sr = (pdw)(sr + k); n = (pdw)(n - k); }
-    else while (n) { k = n > 32 ? 32 : n; pd_fcopy_in(g_wseg, (pdw)(sr + n - k), t, k); pd_fcopy_out(t, g_wseg, (pdw)(d + n - k), k); n = (pdw)(n - k); }
-}
-#endif
-
 #define JW_GB     0x0000u
 #define JW_GBHS   0x2000u       /* hash states; tags are words at JW_GB          */
 #define JW_GR     0x3000u
 #define JW_INT    0x5000u
 #define JW_IAID   0x6A00u
 #define JW_BAND   0x7200u       /* where the band starts in a page that needs the tables above   */
-#define JW_BANDS  0x3000u       /* ... and where the one row of a streamed page starts (GB only) */
+#define JW_CFT    0x3000u       /* the CCITT code tables (2,048 bytes) while an MMR region runs: they share the refinement contexts' room */
+#define JW_BANDS  0x3800u       /* ... and where the one row of a streamed page starts (GB and the tables) */
 #ifndef JB_BANDMAX
 #define JB_BANDMAX 16384u       /* the most a band is given (the WANT size)                      */
 #endif
@@ -486,7 +450,7 @@ static pdb gb_mmr_cont;         /* a later bitplane of a halftone: the bit reade
 static void cf_mmr_begin(pdw w)
 {
     pdw i;
-    cf_build();
+    cf_toff = JW_CFT; cf_built = 0; cf_build();
     cf_k = 0xFFFFu; cf_cols = w; cf_flags = 0; cf_nb = (pdw)((w + 7) >> 3);
     cf_cur = cf_rowa; cf_ref = cf_rowb;
     for (i = 0; i < BL_ROW; i++) cf_rowa[i] = cf_rowb[i] = 0;

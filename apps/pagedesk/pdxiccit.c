@@ -127,9 +127,51 @@ static const pdw cf_run_of[104] = {
 
 /* Primary lookup on 8 bits; entry = run << 4 | length. A code longer than 8
  * bits points (length field 15) into a second table on the next 5 bits. */
+/* ---- the slot workspace (shared by both files, 20.22.12): reached only through jw_* ------------ */
+#define JW_SIZE   64000u        /* the bytes of the slot's workspace this file uses (20.22.12)      */
+#ifdef PD_HOST
+/* host stand-in: a flat array (the shell can define JW_SHELL to bring its own functions) */
+#ifndef JW_SHELL
+static pdb jw_mem[65536];
+#define jw_rb(o)     (jw_mem[(pdw)(o)])
+#define jw_wb(o, v)  (jw_mem[(pdw)(o)] = (pdb)(v))
+static pdw jw_rw(pdw o) { return (pdw)(jw_mem[o] | (jw_mem[(pdw)(o + 1)] << 8)); }
+static void jw_ww(pdw o, pdw v) { jw_mem[o] = (pdb)v; jw_mem[(pdw)(o + 1)] = (pdb)(v >> 8); }
+static void jw_get(pdb *dst, pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) dst[i] = jw_mem[(pdw)(o + i)]; }
+static void jw_put(pdw o, const pdb *src, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = src[i]; }
+static void jw_zero(pdw o, pdw n) { pdw i; for (i = 0; i < n; i++) jw_mem[(pdw)(o + i)] = 0; }
+static void jw_move(pdw d, pdw sr, pdw n) { pdw i; if (d < sr) for (i = 0; i < n; i++) jw_mem[(pdw)(d + i)] = jw_mem[(pdw)(sr + i)]; else for (i = n; i; i--) jw_mem[(pdw)(d + i - 1)] = jw_mem[(pdw)(sr + i - 1)]; }
+#endif
+#else
+/* the target: the slot's workspace is the far segment g_wseg (the shell's), reached only through
+ * pdmath's movers (PAGEDESK-SPEC 4.3) */
+extern pdw g_wseg, g_wbytes;
+#define jw_rb(o)     pd_fpeekb(g_wseg, (pdw)(o))
+#define jw_wb(o, v)  pd_fpokeb(g_wseg, (pdw)(o), (pdb)(v))
+#define jw_rw(o)     pd_fpeekw(g_wseg, (pdw)(o))
+#define jw_ww(o, v)  pd_fpokew(g_wseg, (pdw)(o), (pdw)(v))
+#define jw_get(d, o, n) pd_fcopy_in(g_wseg, (pdw)(o), (d), (pdw)(n))
+#define jw_put(o, sr, n) pd_fcopy_out((sr), g_wseg, (pdw)(o), (pdw)(n))
+static void jw_zero(pdw o, pdw n)
+{
+    static pdb z[32];       /* statics are zero */
+    while (n) { pdw k = n > 32 ? 32 : n; pd_fcopy_out(z, g_wseg, o, k); o = (pdw)(o + k); n = (pdw)(n - k); }
+}
+static void jw_move(pdw d, pdw sr, pdw n)
+{
+    static pdb t[32];
+    pdw k;
+    if (d < sr) while (n) { k = n > 32 ? 32 : n; pd_fcopy_in(g_wseg, sr, t, k); pd_fcopy_out(t, g_wseg, d, k); d = (pdw)(d + k); sr = (pdw)(sr + k); n = (pdw)(n - k); }
+    else while (n) { k = n > 32 ? 32 : n; pd_fcopy_in(g_wseg, (pdw)(sr + n - k), t, k); pd_fcopy_out(t, g_wseg, (pdw)(d + n - k), k); n = (pdw)(n - k); }
+}
+#endif
+
 #define CF_NSEC 24
-static pdb cf_pri[2][256];      /* index + 1 into the 104 codes, or 0; a long code: 0x80 | block */
-static pdb cf_sec[2][CF_NSEC * 32];
+/* the two tables live in the workspace at cf_toff: pri[2][256] (index + 1 into the 104 codes, or 0; a long
+ * code: 0x80 | block), then sec[2][CF_NSEC * 32]; 2,048 bytes */
+static pdw cf_toff;
+#define CF_PRI(c, i)    ((pdw)(cf_toff + (c) * 256u + (i)))
+#define CF_SEC(c, i)    ((pdw)(cf_toff + 512u + (c) * (CF_NSEC * 32u) + (i)))
 static pdw cf_nsec[2];
 static pdb cf_built;
 
@@ -140,8 +182,8 @@ static void cf_build(void)
     if (cf_built) return;
     for (c = 0; c < 2; c++) {
         cf_nsec[c] = 0;
-        for (i = 0; i < 256; i++) cf_pri[c][i] = 0;
-        for (i = 0; i < CF_NSEC * 32; i++) cf_sec[c][i] = 0;
+        jw_zero(CF_PRI(c, 0), 256);
+        jw_zero(CF_SEC(c, 0), CF_NSEC * 32);
         for (i = 0; i < 104; i++) {
             code = c ? cf_black_code[i] : cf_white_code[i];
             ln = c ? cf_black_len[i] : cf_white_len[i];
@@ -149,18 +191,18 @@ static void cf_build(void)
             if (ln <= 8) {
                 fill = (pdw)(1u << (8 - ln));
                 base = (pdw)(code << (8 - ln));
-                for (k = 0; k < fill; k++) cf_pri[c][base + k] = e;
+                for (k = 0; k < fill; k++) jw_wb(CF_PRI(c, base + k), e);
             } else {
                 pdw pre = (pdw)(code >> (ln - 8));
-                if (!(cf_pri[c][pre] & 0x80)) {
-                    cf_pri[c][pre] = (pdb)(0x80 | cf_nsec[c]);
+                if (!(jw_rb(CF_PRI(c, pre)) & 0x80)) {
+                    jw_wb(CF_PRI(c, pre), 0x80 | cf_nsec[c]);
                     cf_nsec[c]++;
                 }
-                base = (pdw)((cf_pri[c][pre] & 0x7F) << 5);
+                base = (pdw)((jw_rb(CF_PRI(c, pre)) & 0x7F) << 5);
                 ex = (pdw)(ln - 8);
                 fill = (pdw)(1u << (5 - ex));
                 base += (pdw)((code & ((1u << ex) - 1)) << (5 - ex));
-                for (k = 0; k < fill; k++) cf_sec[c][base + k] = e;
+                for (k = 0; k < fill; k++) jw_wb(CF_SEC(c, base + k), e);
             }
         }
     }
@@ -217,8 +259,8 @@ static int cf_run(pdw c, pdw cols)
     pdw total = 0, e, v, run;
     for (;;) {
         v = cf_peek(13);
-        e = cf_pri[c][v >> 5];
-        if (e & 0x80) e = cf_sec[c][((e & 0x7F) << 5) + (v & 31)];
+        e = jw_rb(CF_PRI(c, v >> 5));
+        if (e & 0x80) e = jw_rb(CF_SEC(c, ((e & 0x7F) << 5) + (v & 31)));
         if (!e) return -1;
         e--;
         run = cf_run_of[e];
@@ -412,6 +454,10 @@ static pdw cf_open(pdw k, pdw cols, pdw rows, pdw flags, pdw ih, pdw want_w)
     if (!cols) cols = 1728;
     e = bl_pick(cols, ih, want_w);
     if (e) return e;
+    cf_toff = 0; cf_built = 0;
+#ifndef PD_HOST
+    if (g_wbytes < 2048u) return PDE_LIMIT;       /* the code tables need 2 KiB of the slot workspace */
+#endif
     cf_build();
     cf_k = k; cf_cols = cols; cf_flags = flags; cf_nb = (pdw)((cols + 7) >> 3);
     cf_cur = cf_rowa; cf_ref = cf_rowb;
