@@ -5033,7 +5033,7 @@ refuses gets). Nothing is silent.
 | 10 `PART2` | Rsiz bit 15 (Part-2 extensions) |
 | 11 `ORDER` | tiles out of raster order, or a tile's tile-parts interleaved with another's |
 | 12 `LIMIT` | more than 768 precincts in a tile; more than 255 layers; a precinct with more than 384 kept code-blocks in a packet at every reduction up to the limit; a code-block segment over 65535 bytes |
-| 13 `MEM` | not even the lowest resolution fits the workspace (20.22.13.3) |
+| 13 `MEM` | not even the lowest resolution fits the workspace (20.22.13.3); answered `PDE_LIMIT`, the others `PDE_FILTER` |
 | 14 `SOURCE` | the stream could not be opened, or ends before the first tile |
 | 15 `NOALPHA` | `PDJ_ALPHA` asked and the file has no alpha channel (20.22.13.7) |
 
@@ -5071,19 +5071,35 @@ a segment.
 
 | bss (always) | bytes |
 |---|---|
-| tier-1 flags, 66 x 66 words | 8,712 |
-| tier-1 magnitudes, 64 x 64 words | 8,192 |
-| one code-block's coded bytes (a longer one is cut: fewer passes) | 8,192 |
-| context states, the MQ state | 64 |
-| row work for the horizontal transform (E and O arrays, two rows + 2 pads) | 4,100 |
+| tier-1 flags, 66 x 66 words (the horizontal transform's interleave buffer, 2,048, overlays it) | 8,712 |
+| scratch, 64 x 64 words: the tier-1 magnitudes; the packet's code-block list (3 x 384 words) and the horizontal transform's E and O rows (2 x 514 words) overlay it | 8,192 |
+| one code-block's coded bytes (a longer one is cut: fewer passes; `JX_CBDATA` 4,096) | 4,098 |
+| tier-1 context tables and the MQ state | about 1,100 |
 | row map of the tile-component, 1024 words | 2,048 |
 | precinct table, 768 entries x 4 (state offset, record base) | 3,072 |
-| packet code-block list, 384 x 6 | 2,304 |
 | source buffer; depth-below-8 sample tables (4 x 128) | 512; 512 |
-| scalars, geometry, the tile and component records, MQ state | about 1,100 |
+| scalars, geometry, the tile and component records | about 1,400 |
 
-*Measured:* **image 22,384 + bss 40,111 = 62,495 bytes** against the cap of 65,024
-(2,529 spare), `make build/PDXJ.MOD`.
+The tier-1 arrays are the decoder's inner loop, so they stay in the module's own
+segment and are reached with near pointers; moving them into the workspace would
+make every flag and magnitude access a far call (about three times the 74 s of
+20.22.13.10) and would not shrink the slot, which is image + bss + workspace
+whichever side holds them. The saving is taken by overlay instead: three arrays
+that are never live at once share the scratch array (6,148 bytes) and one
+the tier-1 flags, and the code-block buffer is halved (4,096).
+
+*Measured:* **image 22,514 + bss 29,607 = 52,121 bytes** against the cap of 65,024
+(was 62,495), `make build/PDXJ.MOD`.
+
+**Workspace range (want, min) = (60 KiB, 12 KiB).** `PDV_X_INIT` answers `PDE_NOMEM`
+below 12 KiB. `plan(r)` already walks `r` upward until the regions fit, so a smaller
+workspace costs resolution, not correctness: a 1,600 x 1,200 JPEG 2000 (grey, and
+three-component at the same size, 38-48 KB coded) decodes at **r5 (50 x 38) from 12
+KiB**, **r4 (100 x 75) from about 24 KiB** and what the want asked for from 60 KiB
+(measured with `PDXJ_KB`). Below what an image needs at its coarsest level `open`
+answers `PDE_LIMIT` (refusal 13 `MEM`), and the renderer draws the grey box with
+APPROX. The slot a 640 KiB XT must find is therefore 52.1 + 12 = **about 64 KiB**
+at the least and 112 KiB at the want.
 
 | workspace, in this order (`plan(r)` computes the sizes) | bytes |
 |---|---|

@@ -18,7 +18,7 @@
 #define T1_NEG   0x8000u                /* the sample's own sign                */
 
 static pdw t1_f[66 * 66];               /* flags, a border of one all round     */
-static pdw t1_m[64 * 64];               /* magnitudes with one fraction bit     */
+#define t1_m jx_scr                     /* magnitudes with one fraction bit (64 x 64 words) */
 static pdb t1_cb[JX_CBDATA + 2];        /* the code-block's bytes, then 0xFF 0xFF */
 static pdb t1_zc[3][256];               /* zero-coding contexts by neighbours   */
 static pdb t1_sc[256];                  /* sign-coding context | xor << 7       */

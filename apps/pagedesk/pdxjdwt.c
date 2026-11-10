@@ -7,8 +7,11 @@
 #define K97_K     20155
 #define K97_IK    13318
 
-static pdi jx_E[JX_MAXDIM / 2 + 2], jx_O[JX_MAXDIM / 2 + 2];
-static pdi jx_R[JX_MAXDIM];
+/* the transform's row work overlays the scratch array after the packet lists, and the
+ * interleave buffer overlays the tier-1 flags (both dead while a stage runs) */
+#define jx_E ((pdi *)(jx_scr + 3 * JX_NCBPKT))
+#define jx_O (jx_E + (JX_MAXDIM / 2 + 2))
+#define jx_R ((pdi *)t1_f)
 static pdw jx_rowmap[JX_MAXDIM];
 static pdw g_pstride;                   /* bytes in a row of the plane          */
 

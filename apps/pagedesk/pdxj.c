@@ -154,6 +154,7 @@ static pdw v_init(pdw bx)
     g_xb = bx;
     pd_fcopy_in(bx, 0, &in, sizeof in);
     pdxj_engvec[0] = in.eng_off; pdxj_engvec[1] = in.eng_seg;
+    if (in.slot_kb < JX_WS_MIN) return PDE_NOMEM;
     g_ws = in.slot_seg;
     g_wsend = in.slot_kb >= 64 ? 0xFFF0u : (pdw)(in.slot_kb << 10);
     g_open = 0;

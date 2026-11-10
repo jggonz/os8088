@@ -125,7 +125,15 @@ static pdw tt_dec(pdw base, pdw ncx, pdw ncy, pdw i, pdw j, pdw thr)
 }
 
 /* ---- the packet --------------------------------------------------------------- */
-static pdw pl_rec[JX_NCBPKT], pl_np[JX_NCBPKT], pl_len[JX_NCBPKT];
+/* One scratch array serves three phases that never overlap (20.22.13.3): the packet's
+ * code-block list (tier-2), the horizontal transform's rows (DWT), and the tier-1
+ * magnitudes (t1_m). Each is dead between uses: a packet is parsed and put away before
+ * any block decodes, and a block's result is dequantised into the plane before the next
+ * stage. */
+static pdw jx_scr[64 * 64];
+#define pl_rec  (jx_scr)
+#define pl_np   (jx_scr + JX_NCBPKT)
+#define pl_len  (jx_scr + 2 * JX_NCBPKT)
 static pdw g_pls;                       /* a packet's status for the loops      */
 
 static pdw ilog2(pdw v) { pdw k = 0; while (v > 1) { v >>= 1; k++; } return k; }

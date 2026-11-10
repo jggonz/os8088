@@ -269,7 +269,7 @@ fail:
     im.out_w = g_why;
     pd_fcopy_out(&im, g_xb, 0, sizeof im);
     close_src();
-    return PDE_FILTER;
+    return g_why == PDJ_R_MEM ? PDE_LIMIT : PDE_FILTER;
 }
 
 static pdw v_row(pdw dseg, pdw doff, pdw y)

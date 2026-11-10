@@ -16,7 +16,9 @@
 #define JX_MAXRES    13
 #define JX_PTAB      768
 #define JX_NCBPKT    384
-#define JX_CBDATA    8192
+#define JX_WS_WANT   60               /* the workspace asked for, KiB (20.22.13.3)     */
+#define JX_WS_MIN    12               /* the least that still decodes 1600 x 1200 at r5 */
+#define JX_CBDATA    4096
 #ifndef JX_ARENA_MIN
 #define JX_ARENA_MIN 4096u            /* the host fuzz lowers it to reach the arena-full path */
 #endif
