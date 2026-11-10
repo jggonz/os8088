@@ -20,7 +20,7 @@
 
 unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
 unsigned pdk_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
-extern unsigned pde_fail;
+extern unsigned pde_fail, pde_cx, pde_dx;
 extern pdw pdk_cf, pdk_engcf, pdk_engvec[2];
 extern int pdh_load(const char *path);
 extern int pdh_cluster;
@@ -32,6 +32,8 @@ extern unsigned long pdh_reads;
 #define SEG_TBL   0x5000
 #define SEG_BUF   0x6000
 #define SEG_FLATE 0x8000
+#define SEG_XIDX  0xA000    /* up to 256 KiB: the flat index (PDE_NEEDMEM, 20.22.3.1) */
+#define SEG_OSW   0xE000    /* 43 KiB: the object-stream window (PDE_NEEDMEM, 20.22.3.3) */
 
 static int cf;
 static unsigned call(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
@@ -56,6 +58,7 @@ pdw pdk_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
 static void xb_put(const void *p, unsigned n) { pd_fcopy_out(p, SEG_XB, 0, (pdw)n); }
 static void xb_get(void *p, unsigned n) { pd_fcopy_in(SEG_XB, 0, p, (pdw)n); }
 
+static unsigned xidx_kb, osw_kb;
 static int do_init(void)
 {
     struct pdxb_init in;
@@ -63,6 +66,8 @@ static int do_init(void)
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = 16;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
     in.flags = PDXI_FLATE; in.flate_seg = SEG_FLATE; in.flate_kb = 86;
+    if (xidx_kb) { in.xidx_seg = SEG_XIDX; in.xidx_kb = (pdw)xidx_kb; }
+    if (osw_kb) { in.osw_seg = SEG_OSW; in.osw_kb = (pdw)osw_kb; }
     xb_put(&in, sizeof in);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);
     if (cf) return (int)pde_fail;
@@ -82,6 +87,13 @@ static int open_loop(void)
         r = call(PDV_ENG_OPEN, 0, 0, 0);
         xb_get(&op, sizeof op);
         if (!cf && r == PDE_BUSY) { if (++n > 5000) { fprintf(stderr, "OPEN never ends\n"); exit(96); } continue; }
+        if (!cf && r == PDE_NEEDMEM && ++n <= 5000) {    /* claim it, re-INIT keeping the rest, OPEN again */
+            if (pde_cx == PDMEM_XIDX && pde_dx >= 1 && pde_dx <= 256) xidx_kb = pde_dx;
+            else if (pde_cx == PDMEM_OSW && pde_dx == 43) osw_kb = pde_dx;
+            else { fprintf(stderr, "NEEDMEM bad region %u kb %u\n", pde_cx, pde_dx); exit(94); }
+            do_init();
+            continue;
+        }
         return cf ? (int)r : 0;
     }
 }

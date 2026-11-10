@@ -87,6 +87,12 @@ pde_entry:
     call _pde_verb
     add sp, 8
     mov dx, [_pde_dx]
+    cmp ax, 67                      ; PDE_NEEDMEM (PAGEDESK-SPEC 20.22.1): CX =
+    jne .cx                         ;   the PDMEM_* region, in place of the
+    mov bp, sp                      ;   caller's CX - BP is restored below,
+    mov cx, [_pde_cx]               ;   and [bp] is the stack (SS)
+    mov [bp], cx
+.cx:
     cmp word [_pde_fail], 1         ; CF = (fail == 0) ...
     cmc                             ; ... CF = (fail != 0); pops keep the flags
     pop cx

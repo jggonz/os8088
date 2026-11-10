@@ -9,7 +9,10 @@ static void doc_reset(void)
     g_open = 0; nctx = 0; nxs = 0; nrev = 0; npages = 0; pw_sp = 0; arena_top = 0;
     op_state = 0;
     tr_size = 0; tr_root_n = 0; tr_root_g = 0; tr_info_n = 0; tr_info_g = 0; tr_has_root = 0;
-    tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0; tr_enc_k = 0;
+    tr_hasid = 0; tr_idlen = 0; doc_flags = 0; doc_ver = 0;
+    ix_on = 0; ix_n = 0; tr_maxsize = 0; tr_tflags = 0; tr_enc_k = 0; tr_nodict = 0;
+    fd_on = 0; rp_on = 0;
+    os_reset();
     cr_reset();
     u32_zero(&xr_next); u32_zero(&tr_start); u32_zero(&tr_dict);
     fobj.buf = fo_buf; fobj.mode = 0; fobj.n = 0; fobj.i = 0; fobj.smode = 0;
@@ -20,11 +23,24 @@ static void doc_reset(void)
 
 /* ---- INIT / OPEN / CLOSE ----------------------------------------------------- */
 
+static pdw g_ifs, g_ifk, g_iff;         /* the Flate claim INIT was given */
 static pdw v_init(pdw xbseg)
 {
     static struct pdxb_init ini;
+    pdw os = g_oseg;
     pd_fcopy_in(xbseg, 0, &ini, sizeof(struct pdxb_init));
     g_xb = xbseg;
+    /* any PDF (20.22.3.4): the regions OPEN asked for with PDE_NEEDMEM */
+    g_xseg = ini.xidx_seg; g_xkb = ini.xidx_kb;
+    g_oseg = ini.osw_kb >= PDE_OSW_KB ? ini.osw_seg : 0; g_okb = ini.osw_kb;
+    if (g_oseg != os) os_release();
+    /* ...and a re-INIT that brings them, with every other claim the same,
+     * keeps the document and OPEN's state (it amends 20.2.2) */
+    if (g_ready && (g_open || op_state) && ini.cache_seg == g_cseg && ini.cache_kb == g_ckb &&
+        ini.arena_seg == g_aseg && ini.arena_kb == g_akb && ini.tables_seg == g_tseg &&
+        ini.tables_kb == g_tkb && ini.flate_seg == g_ifs && ini.flate_kb == g_ifk && ini.flags == g_iff)
+        return PDE_OK;
+    g_ifs = ini.flate_seg; g_ifk = ini.flate_kb; g_iff = ini.flags;
     g_cseg = ini.cache_seg; g_ckb = ini.cache_kb;
     g_aseg = ini.arena_seg; g_akb = ini.arena_kb;
     g_tseg = ini.tables_seg; g_tkb = ini.tables_kb;
@@ -38,33 +54,52 @@ static pdw v_init(pdw xbseg)
 
 static pdw open_step(void)
 {
-    pdw rc, k;
+    pdw rc;
     switch (op_state) {
     case 0:
-        for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0xFFFF);
+        pd_ffill(g_tseg, PDE_TBL_CACHE, 0xFF, PDE_OFFCACHE * PDE_OCBYTES);   /* every slot empty */
         rc = op_start();
         if (rc) return rc;
-        op_state = 2;
+        op_state = OPS_REV;
         return PDE_BUSY;
-    case 2:
+    case OPS_REV:
         rc = op_rev();
         if (rc) return rc;
-        op_state = u32_is0(&xr_next) ? (tr_enc_k ? 7 : 3) : 2;
+        if (u32_is0(&xr_next)) op_state = ix_on ? OPS_FOLD : tr_enc_k ? OPS_CRYPT : OPS_CAT;
         return PDE_BUSY;
-    case 7:                                             /* /Encrypt: a key first (20.22.5) */
-        rc = cr_open();
+    case OPS_FOLD:                              /* 20.22.3.1 */
+        rc = op_fold();
         if (rc) return rc;
-        op_state = 3;
+        op_state = OPS_WIN;
         return PDE_BUSY;
-    case 3:
+    case OPS_SCAN1: case OPS_SCANIX: case OPS_SCAN2:    /* 20.22.3.5 */
+        rc = op_repair();
+        if (rc) return rc;
+        op_state = OPS_WIN;
+        /* fall through */
+    case OPS_WIN:                               /* 20.22.3.3 */
+        if ((doc_flags & PDO_OBJSTM) && !g_oseg) {
+            pde_needmem = PDMEM_OSW; pde_needkb = PDE_OSW_KB;
+            return PDE_NEEDMEM;
+        }
+        op_state = OPS_CRYPT;
+        /* fall through */
+    case OPS_CRYPT:                             /* 20.22.3.4, 20.22.5 */
+        if (tr_enc_k) {
+            rc = cr_open();
+            if (rc) return rc;
+        }
+        op_state = OPS_CAT;
+        /* fall through */
+    case OPS_CAT:
         rc = op_catalog();
         if (rc) return rc;
         pw_begin();
         rc = pw_visit(pw_root_n, pw_root_g, 0);
         if (rc) return rc;
-        op_state = 4;
+        op_state = OPS_TREE;
         return PDE_BUSY;
-    case 4:
+    case OPS_TREE:
         rc = pw_step();
         if (rc) return rc;
         pw_end();
@@ -89,10 +124,13 @@ static pdw v_open(void)
         return PDE_RANGE;
     }
     rc = open_step();
-    if (rc == PDE_BUSY) {
+    if (rc && rc != PDE_BUSY && rc != PDE_NEEDMEM && rp_start(rc)) rc = PDE_BUSY;   /* repair (20.22.3.5) */
+    if (rc == PDE_BUSY || rc == PDE_NEEDMEM || (rc == PDE_PASSWORD && op_state == OPS_CRYPT)) {
+        /* PDE_PASSWORD keeps the document half open: SETKEY, then OPEN with
+         * this state resumes at the key (20.22.3.4, 20.22.4.4) */
         xo.state = op_state;
         pd_fcopy_out(&xo, g_xb, 0, sizeof(struct pdxb_open));
-        return PDE_BUSY;
+        return rc;
     }
     if (rc == PDE_PASSWORD) {                           /* not a failure of the file: OPEN resumes after SETKEY */
         xo.state = op_state;
@@ -160,30 +198,93 @@ static pdw v_obj_find(void)
     return PDE_OK;
 }
 
+/* RAW_COPY (20.2.6, 20.22.3.3): the bytes of an object from `done`. A member
+ * of an object stream is its value's bytes, framed "n 0 obj\n" ... "\nendobj\n"
+ * with PDRC_PLAIN; any other object is the file's bytes (crypt's hook makes
+ * PLAIN of an encrypted file's object). */
+static char rc_text[24];                /* the synthesised text: digits, " 0 obj\n", "\nendobj\n" */
+static struct pd_u32 rs_pos[3], rs_len[3];      /* RAW_COPY's text as up to three pieces */
+static pdw rs_txt;                              /* bit i: piece i is rc_text from rs_pos[i].lo */
+
+/* RAW_COPY (20.2.6, 20.22.3.3): the bytes of an object from `done`, as up to
+ * three pieces of the file, an object stream or rc_text. PDRC_PLAIN frames
+ * an object-stream member "n 0 obj\n" ... "\nendobj\n" and writes an
+ * indirect stream /Length as the number (20.22.4.2); an encrypted file's
+ * other objects are crypt's hook. */
 static pdw v_raw_copy(void)
 {
     static struct pdxb_rawcopy rw;
-    pdw rc, want;
-    rw.got = 0;
+    static struct pd_u32 p, e;
+    pdw rc, want, i, k, t;
     pd_fcopy_in(g_xb, 0, &rw, sizeof(struct pdxb_rawcopy));
-    rc = ob_extent(rw.objnum, rw.gen);
+    rw.got = 0;
+    if (rw.objnum == PDRC_ENCDICT) {                    /* a direct /Encrypt's text (20.22.4.1) */
+        if (tr_enc_k != 2) return PDE_NOTFOUND;
+        L = &fobj;
+        lx_seek(&tr_enc_pos);                           /* just inside its "<<" */
+        rc = ob_skipc();
+        if (rc) return rc;
+        lx_tell(&s_c);
+        u32_cp(&sp_off, &tr_enc_pos);
+        u32_sub16(&sp_off, 2);
+        pdm_u32_sub(&ex_len, &s_c, &sp_off);
+        if (ex_len.hi || ex_len.lo > 640) return PDE_LIMIT;
+        sp_kind = PDK_DICT;
+        rw.mode = PDRC_EXACT;
+    } else rc = ob_extent(rw.objnum, rw.gen);
     if (rc) return rc;
     if (sp_kind == PDK_NULL) return PDE_NOTFOUND;
-    if ((rw.mode & 0xFF) == PDRC_PLAIN && tr_enc_k) {          /* an encrypted document (20.22.5; eng's hook; the flag bits ride in mode's high byte) */
-        rc = cr_raw_plain(&rw);
-        if (rc != PDE_NOTFOUND) return rc;
+    rs_txt = 0;
+    u32_cp(&rs_pos[0], &sp_off); u32_cp(&rs_len[0], &ex_len);
+    u32_zero(&rs_len[1]); u32_zero(&rs_len[2]);
+    if ((rw.mode & 0xFF) == PDRC_PLAIN) {          /* crypt ORs PDRC_STRCIPHER into the high byte */
+        if (sp_off.hi & 0x8000) {                       /* a member: its frame */
+            pdm_u32_set(&p, 0, rw.objnum);
+            k = pdm_u32_todec(rc_text, &p, 0);
+            for (i = 0; i < 15; i++) rc_text[k + i] = " 0 obj\n\nendobj\n"[i];
+            rs_txt = 5;
+            u32_zero(&rs_pos[0]); pdm_u32_set(&rs_len[0], 0, (pdw)(k + 7));
+            u32_cp(&rs_pos[1], &sp_off); u32_cp(&rs_len[1], &ex_len);
+            pdm_u32_set(&rs_pos[2], 0, (pdw)(k + 7)); pdm_u32_set(&rs_len[2], 0, 8);
+        } else if (tr_enc_k) {
+            rc = cr_raw_plain(&rw);
+            if (rc != PDE_NOTFOUND) return rc;
+        } else if (sp_kind == PDK_STRM && sp_lref) {   /* /Length n g R -> the number */
+            pdm_u32_sub(&rs_len[0], &sp_lpos, &sp_off);
+            rs_txt = 2;
+            u32_zero(&rs_pos[1]); pdm_u32_set(&rs_len[1], 0, pdm_u32_todec(rc_text, &sp_len, 0));
+            u32_cp(&rs_pos[2], &sp_lend);
+            pdm_u32_add(&e, &sp_off, &ex_len);
+            pdm_u32_sub(&rs_len[2], &e, &sp_lend);
+        }
     }
-    if (pdm_u32_cmp(&rw.done, &ex_len) > 0) return PDE_RANGE;
-    pdm_u32_sub(&s_c, &ex_len, &rw.done);              /* bytes left */
+    pdm_u32_add(&e, &rs_len[0], &rs_len[1]);
+    pdm_u32_add(&e, &e, &rs_len[2]);                    /* the whole text */
+    if (pdm_u32_cmp(&rw.done, &e) > 0) return PDE_RANGE;
+    pdm_u32_sub(&s_c, &e, &rw.done);                    /* bytes left */
     want = rw.dmax;
     if (want > 0xFFF0) want = 0xFFF0;                   /* pd_fcopy's largest move */
     if (s_c.hi == 0 && s_c.lo < want) want = s_c.lo;
     /* the copy must not cross the end of the destination's segment: fl_copy
      * adds its progress to doff in 16 bits, so a wrap would land at dseg:0 */
     if (rw.doff != 0 && want > (pdw)(0 - rw.doff)) return PDE_RANGE;
-    pdm_u32_add(&s_c, &sp_off, &rw.done);
-    rw.got = fl_read_far(&s_c, rw.dseg, rw.doff, want);
-    if (rw.got < want) return pde_ioerr ? PDE_IO : PDE_TRUNC;
+    u32_cp(&p, &rw.done);                               /* where in the pieces */
+    for (i = 0; i < 3 && rw.got < want; i++) {
+        if (pdm_u32_cmp(&p, &rs_len[i]) >= 0) { pdm_u32_sub(&p, &p, &rs_len[i]); continue; }
+        pdm_u32_sub(&e, &rs_len[i], &p);                /* left in this piece */
+        k = (pdw)(want - rw.got);
+        if (e.hi == 0 && e.lo < k) k = e.lo;
+        t = (pdw)(rw.doff + rw.got);
+        if (rs_txt & (1 << i)) {
+            pd_fcopy_out(rc_text + rs_pos[i].lo + p.lo, rw.dseg, t, k);
+        } else {
+            pdm_u32_add(&p, &p, &rs_pos[i]);
+            if ((p.hi & 0x8000 ? os_copy(&p, 0, rw.dseg, t, k) : fl_read_far(&p, rw.dseg, t, k)) != k)
+                return lx_err ? lx_err : eof_err();
+        }
+        rw.got = (pdw)(rw.got + k);
+        u32_zero(&p);                                   /* the next piece from its start */
+    }
     pdm_u32_add16(&rw.done, rw.got);
     pd_fcopy_out(&rw, g_xb, 0, sizeof(struct pdxb_rawcopy));
     return PDE_OK;
@@ -245,6 +346,7 @@ static pdw v_dict_get(void)
     dg.key[0][31] = 0; dg.key[1][31] = 0; dg.key[2][31] = 0;
     k = 0;
     if (dg.objnum == 0 && dg.gen == 0) {
+        if (tr_nodict) return PDE_NOTFOUND;            /* a repaired file with no trailer */
         L = &fobj;
         lx_seek(&tr_dict);
         ov_clear(); ov.kind = PDK_DICT;
@@ -259,11 +361,13 @@ static pdw v_dict_get(void)
             for (j = 0; dg.key[0][j]; j++) ;
             u32_cp(&dc_a, &dk_pos);                     /* L is fobj: pde_verb set it */
             u32_sub16(&dc_a, (pdw)(j + 1));
+            if (dc_a.hi & 0x8000) cr_curn = 0;          /* a member: its strings are the stream's, decrypted */
             lx_seek(&dc_a);
             if (lx_token() == 0 && tk.kind == PDT_NAME && str_eq(tk.text, dg.key[0])) {
                 lx_tell(&dc_a);
                 if (pdm_u32_cmp(&dc_a, &dk_pos) == 0 && ob_value() == 0) { rc = 0; k = 1; }
             }
+            if (rc) lx_err = 0;                         /* a window that cannot be re-read (20.22.3.3) */
         }
         if (rc) {
             rc = ob_enter(dg.objnum, dg.gen);
@@ -332,6 +436,7 @@ static pdw v_dict_get(void)
 
 /* ---- RES_LOOKUP ------------------------------------------------------------------ */
 
+static struct pdxb_reslookup_x rx;     /* its tail: rflags, cnum, cgen, coff */
 static pdw v_res_lookup(void)
 {
     static struct pdxb_reslookup rl;
@@ -377,8 +482,11 @@ static pdw v_res_lookup(void)
     if (ov.kind != PDK_DICT) return PDE_NOTFOUND;
     rc = ob_dict_find(rl.name);
     if (rc) return rc;
+    lx_skipws();
+    lx_tell(&rds);
     rc = ob_value();
     if (rc) return rc;
+    rx.rflags = 0;
     if (ov.kind == PDK_REF) {
         rl.objnum = ov.rnum; rl.gen = ov.rgen;
         rc = ob_kind_of(rl.objnum, rl.gen);
@@ -388,8 +496,11 @@ static pdw v_res_lookup(void)
     } else {
         if (ov.kind == PDK_CLOSE || ov.kind == PDK_WORD || ov.kind == PDK_EOF) return PDE_SYNTAX;
         rl.objnum = 0; rl.gen = 0; rl.kind = ov.kind;
+        rx.rflags = PDRL_DIRECT; rx.cnum = ob_cur_n; rx.cgen = ob_cur_g;   /* 20.22.3.8 */
+        pdm_u32_sub(&rx.coff, &rds, &ob_hdr);
     }
     pd_fcopy_out(&rl, g_xb, 0, sizeof(struct pdxb_reslookup));
+    pd_fcopy_out(&rx.rflags, g_xb, sizeof(struct pdxb_reslookup), sizeof rx - sizeof(struct pdxb_reslookup));
     return PDE_OK;
 }
 
@@ -402,12 +513,18 @@ static pdw v_trailer(void)
     tr.size = tr_size; tr.root_num = tr_root_n; tr.root_gen = tr_root_g;
     tr.info_num = tr_info_n; tr.info_gen = tr_info_g;
     u32_cp(&tr.startxref, &tr_start);
-    for (i = 0; i < 16; i++) tr.id0[i] = tr_hasid ? tr_id[i] : 0;
+    for (i = 0; i < 16; i++) {
+        tr.id0[i] = tr_hasid ? tr_id[i] : 0;
+        tr.id0_hi[i] = tr_hasid ? tr_id[16 + i] : 0;     /* /ID[0] whole (20.22.3.4) */
+    }
     tr.id0_len = tr_idlen;
     for (i = 0; i < 16; i++) tr.id0_hi[i] = (tr_hasid && tr_idlen > 16) ? tr_id[16 + i] : 0;
     tr.encrypt_num = (tr_enc_k == 1) ? tr_enc_n : 0; tr.encrypt_gen = (tr_enc_k == 1) ? tr_enc_g : 0;   /* eng's (20.22.3.4) */
     tr.tflags = (tr_enc_k == 2) ? PDTR_ENCDIRECT : 0;
     tr.version = doc_ver;
+    tr.encrypt_num = tr_enc_k == 1 ? tr_enc_n : 0;
+    tr.encrypt_gen = tr_enc_k == 1 ? tr_enc_g : 0;
+    tr.tflags = (pdw)(tr_tflags | (tr_enc_k == 2 ? PDTR_ENCDIRECT : 0));
     pd_fcopy_out(&tr, g_xb, 0, sizeof(struct pdxb_trailer));
     return PDE_OK;
 }
@@ -610,7 +727,10 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             if (bx > arena_top) rc = PDE_RANGE; else { arena_top = (pdw)bx; rc = PDE_OK; }
             break;
         default:
-            if (!g_open && !(op_state == 7 && (verb == PDV_ENG_DICT_GET || verb == PDV_ENG_TRAILER))) { rc = PDE_RANGE; break; }    /* PDXK reads /Encrypt at the password pause (20.22.5) */
+            /* a half-open document (PDE_PASSWORD) answers DICT_GET and TRAILER:
+             * PDXK reads /Encrypt through them (20.22.3.8, 20.22.5) */
+            if (!g_open && !(op_state == OPS_CRYPT &&
+                             (verb == PDV_ENG_DICT_GET || verb == PDV_ENG_TRAILER))) { rc = PDE_RANGE; break; }
             switch (verb) {
             case PDV_ENG_PAGEINFO:   rc = v_pageinfo((pdw)bx); break;
             case PDV_ENG_OBJ_FIND:   rc = v_obj_find(); break;
@@ -635,6 +755,10 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
      * the file cache all go */
     if (rc != PDE_BUSY && pde_ioerr) { rc = PDE_IO; fl_invalidate(); }
     if (rc == PDE_BUSY) { pde_fail = 0; return PDE_BUSY; }  /* D11: more to do is not a failure - CF = 0, AX = PDE_BUSY */
+    if (rc == PDE_NEEDMEM) {                    /* nor is a region to claim: CX = PDMEM_*, DX = KiB (20.22.1) */
+        pde_fail = 0; pde_cx = pde_needmem; pde_dx = pde_needkb;
+        return PDE_NEEDMEM;
+    }
     pde_fail = rc;
     return rc ? rc : pde_ax;
 }

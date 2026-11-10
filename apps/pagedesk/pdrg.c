@@ -207,6 +207,19 @@ static pdw g_nv, g_cur, g_sub;      /* vertices, have a current point, start */
 static pdi g_cpx, g_cpy;            /* current point in qpx                  */
 static pdw g_pclip;                 /* W / W* pending: 1 nonzero, 2 even-odd */
 static pdw g_plimit;
+/* the string operand (pdri.c's Tj/TJ/'/"), here so that pdrd.c can borrow it */
+static pdb g_str[PDR_NSTR];
+/* ROOM (PAGEDESK-SPEC 20.22.7): the path, g_str and the band rasteriser's
+ * scratch are never live at once. Interpretation and rasterisation never
+ * interleave inside a pass: a pass interprets to its end (or is restarted,
+ * which empties the path) before any band of it is drawn, and a raster step
+ * is followed by a fresh pass. So pdrd.c's active-edge list, crossings and
+ * clip masks are LENT the interpretation-only arrays below (1,088 bytes of
+ * bss). Anything new that runs at raster time and wants scratch may borrow
+ * them too, under the same rule; nothing that runs while interpreting may. */
+typedef char pdr_ck_lend1[PDR_NEDGE * 2 <= PDR_NSTR ? 1 : -1];               /* g_act on g_str */
+typedef char pdr_ck_lend2[PDR_NSPAN * 3 <= PDR_NPATH * 2 ? 1 : -1];          /* g_cx, g_cd on g_vx */
+typedef char pdr_ck_lend3[PDR_MAXSTRIDE * 2 <= PDR_NPATH * 2 ? 1 : -1];      /* g_mk on g_vy */
 
 static void path_reset(void) { g_nv = 0; g_cur = 0; g_sub = 0; g_pclip = 0; }
 
@@ -504,85 +517,45 @@ static void ctm_scale(struct pd_fx *out)
 }
 
 
-/* ---- dash patterns (the `d` operator; PAGEDESK-SPEC 20.12.4) ---------------
- * GS.dash holds up to four lengths in quarter points. A polyline is walked
- * in device qpx, cut where the pattern changes, and every "on" piece is
- * stroked as its own open polyline (so each carries the line's caps). An odd
- * count cycles with on and off swapped, as PDF says. */
-#define PDR_NDASHBUF 12
-static pdi g_dpx[PDR_NDASHBUF], g_dpy[PDR_NDASHBUF];
-static pdw g_dpn, g_dpc;
-static pdi g_dlen[4];
-static pdw g_didx, g_don;
-static pdi g_drem;
-/* THE UI TASK'S STACK IS 512 BYTES (STK0_SIZE) and PDREND runs on it below the
- * primary's chain: every local of the dash walker is static (it is not
- * re-entered), and the helpers reach stroke_poly in ONE call, so a dashed
- * stroke costs the stack no more than a solid one plus dash_poly's frame
- * (verify-annotr's walker: 470 -> the solid path's depth) */
-static void dash_piece_flush(void)
+/* ---- dash patterns (the `d` operator; PAGEDESK-SPEC 20.12.4, 20.22.7) -------
+ * GS.dash holds up to four lengths in quarter points. The WALK - cutting a
+ * polyline where the pattern changes - is PDXG's (pdxdash.c, PDV_GFX_DASH):
+ * the core hands it a subpath in the exchange block and strokes every "on"
+ * piece it hands back as its own open polyline (so each carries the line's
+ * caps). The module absent, the stroke is skipped and the pass asks for it
+ * (the ladder, 20.22.2); refused, the subpath is stroked solid. */
+static pdw xb_seg(void);            /* pdrv.c: the exchange block (pdrf.c's g_xb) */
+#ifndef PDV_GFX_DASH
+#define PDV_GFX_DASH 0xCE           /* gfx's (20.22.9); defined here until its block lands */
+#endif
+#define XD_XS 160u                  /* the subpath's x in the XB, after the block, then its y */
+#define XD_YS (XD_XS + PDR_NPATH * 2)
+typedef char pdr_ck_xd[sizeof(struct pdxb_dash) <= XD_XS && XD_YS + PDR_NPATH * 2 <= PD_XB_BYTES ? 1 : -1];
+static struct pdxb_dashin g_din;
+static struct pdxb_dashout g_dout;
+static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
 {
-    if (g_dpn == 2 && g_dpx[0] == g_dpx[1] && g_dpy[0] == g_dpy[1]) g_dpn = 1;      /* a zero-length dash is a dot */
-    if (g_dpn) stroke_poly(g_dpx, g_dpy, g_dpn, 0);
-    g_dpn = 0;
-}
-static pdi g_dqx, g_dqy;            /* dash_piece_add's point (no arguments: no frame) */
-static void dash_piece_add(void)
-{
-    if (g_dpn >= PDR_NDASHBUF) {    /* full: stroke what is there, go on from its last point */
-        stroke_poly(g_dpx, g_dpy, g_dpn, 0);
-        g_dpx[0] = g_dpx[g_dpn - 1]; g_dpy[0] = g_dpy[g_dpn - 1]; g_dpn = 1;
+    pdw r, k, xb;
+    if (!x_have(PDX_GFX)) {
+        x_need(PDX_GFX);
+        if (x_gone(PDX_GFX)) stroke_poly(xs, ys, n, closed);
+        return;
     }
-    g_dpx[g_dpn] = g_dqx; g_dpy[g_dpn] = g_dqy; g_dpn++;
-}
-static void dash_next(void)
-{
-    g_don ^= 1; g_didx++;
-    if (g_didx >= GS.dn) g_didx = 0;
-    g_drem = g_dlen[g_didx];
-}
-static const pdi *g_dxs, *g_dys;    /* dash_poly's subpath (globals, not arguments: no frame) */
-static pdw g_dn, g_dclosed;
-static void dash_poly(void)
-{
-    static pdw i, k;
-    static pdi x0, y0, x1, y1, len, pos, ph, sum;
-    ctm_scale(&t0);
-    sum = 0;
-    for (k = 0; k < GS.dn; k++) {
-        pdm_fx_int(&t1, (pdi)GS.dash[k]);
-        pdm_fx_mul(&t1, &t1, &t0);
-        g_dlen[k] = (pdi)(t1.hi >> 2);                   /* quarter points -> qpx */
-        sum = (pdi)(sum + g_dlen[k]);
+    xb = xb_seg();
+    pd_fcopy_out(xs, xb, XD_XS, (pdw)(n << 1));
+    pd_fcopy_out(ys, xb, XD_YS, (pdw)(n << 1));
+    g_din.vseg = xb; g_din.xs = XD_XS; g_din.ys = XD_YS; g_din.n = n; g_din.closed = closed;
+    ctm_scale(&g_din.scale);
+    g_din.dph = GS.dph; g_din.dn = GS.dn; pdr_cpy(g_din.dash, GS.dash, 4); g_din.st = 0;
+    pd_fcopy_out(&g_din, xb, sizeof(struct pdxb_dashout), sizeof g_din);
+    for (k = 0; k < 4000; k++) {
+        r = x_call(PDV_GFX_DASH, xb, 0, 0);
+        if (x_cf || r == 2) { if (!k) stroke_poly(xs, ys, n, closed); return; }
+        if (r != 1) return;
+        pd_fcopy_in(xb, 0, &g_dout, sizeof g_dout);
+        if (g_dout.on < 1 || g_dout.on > PDXD_NPT) return;
+        stroke_poly(g_dout.ox, g_dout.oy, g_dout.on, 0);
     }
-    if (sum < 6) { stroke_poly(g_dxs, g_dys, g_dn, g_dclosed); return; }      /* too fine to tell from solid */
-    g_didx = 0; g_don = 1; g_drem = g_dlen[0]; g_dpn = 0; g_dpc = 0;
-    pdm_fx_int(&t1, (pdi)GS.dph);                        /* the phase moves the start along the pattern */
-    pdm_fx_mul(&t1, &t1, &t0);
-    ph = (pdi)(t1.hi >> 2);
-    for (k = 0; ph > 0 && k < 64; k++) {
-        if (ph >= g_drem) { ph = (pdi)(ph - g_drem); dash_next(); }
-        else { g_drem = (pdi)(g_drem - ph); ph = 0; }
-    }
-    if (g_don) { g_dqx = g_dxs[0]; g_dqy = g_dys[0]; dash_piece_add(); }
-    for (i = 0; i < g_dn && g_dpc < 3000; i++) {
-        if (i + 1 == g_dn) { if (!g_dclosed) break; x1 = g_dxs[0]; y1 = g_dys[0]; }
-        else { x1 = g_dxs[i + 1]; y1 = g_dys[i + 1]; }
-        x0 = g_dxs[i]; y0 = g_dys[i];
-        len = pdr_hypot((pdi)(x1 - x0), (pdi)(y1 - y0));
-        pos = 0;
-        while ((pdi)(len - pos) > g_drem && g_dpc++ < 3000) {
-            pos = (pdi)(pos + g_drem);
-            g_dqx = (pdi)(x0 + pdr_muldiv((pdi)(x1 - x0), pos, len));
-            g_dqy = (pdi)(y0 + pdr_muldiv((pdi)(y1 - y0), pos, len));
-            if (g_don) { dash_piece_add(); dash_piece_flush(); }
-            dash_next();
-            if (g_don) dash_piece_add();
-        }
-        g_drem = (pdi)(g_drem - (pdi)(len - pos));
-        if (g_don) { g_dqx = x1; g_dqy = y1; dash_piece_add(); }
-    }
-    if (g_don) dash_piece_flush();
 }
 
 static void stroke_path(void)
@@ -612,7 +585,7 @@ static void stroke_path(void)
             pdw m = n;
             if (closed && m > 1 && g_vx[s] == g_vx[s + m - 1] && g_vy[s] == g_vy[s + m - 1]) m--;
             for (i = s + n; i < e; i++) { g_vx[i] = g_vx[s + n - 1]; g_vy[i] = g_vy[s + n - 1]; }
-            if (GS.dn) { g_dxs = g_vx + s; g_dys = g_vy + s; g_dn = m; g_dclosed = closed && m > 1; dash_poly(); }
+            if (GS.dn) dash_poly(g_vx + s, g_vy + s, m, closed && m > 1);
             else stroke_poly(g_vx + s, g_vy + s, m, closed && m > 1);
         }
     }

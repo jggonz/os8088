@@ -248,8 +248,8 @@ static int pdu_pop_rows(void)
         return pdu_nt_prows();          /* notes */
     if (pdu_pop == P_PAGES)
         return (pdu_npages + 7) / 8 + 1;
-    if (pdu_pop == P_PREFS)             /* prefs */
-        return 8;
+    if (pdu_pop == P_PREFS)             /* prefs; auth is its second face */
+        return pdu_au_mode ? 4 : 8;
     return 0;
 }
 
@@ -313,7 +313,7 @@ static void pdu_pop_paint(void)
         pdu_nt_ppaint();
         return;
     }
-    if (pdu_pop == P_PREFS) {           /* prefs */
+    if (pdu_pop == P_PREFS) {           /* prefs (or the auth prompt) */
         ovl_pf_paint();
         return;
     }
@@ -392,7 +392,7 @@ static void pdu_pop_open(int kind, int src)
     if (kind == P_PAGES) w = 32;
     if (kind == P_PREFS) {              /* prefs */
         pdp_load();
-        w = 28;
+        w = 36;
     }
     if (kind == P_HELP) {
         pdu_hpage = 0;
@@ -449,6 +449,7 @@ static void pdu_pop_shut(void)
         return;
     pdu_nt_pclose();                    /* notes */
     pdp_closed();                       /* prefs */
+    pdu_au_closed();                    /* auth: an unanswered ask is a cancel */
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
@@ -872,6 +873,12 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
     ascii = ascii & 0xFF;
+#ifdef PD_AUTHDEMO                      /* a look at the prompt with no encrypted file (20.22.6) */
+    if (ascii == 17) { pdu_au_ask(0); return; }             /* ^Q  asking */
+    if (ascii == 20) { pdu_au_ask(1); return; }             /* ^T  wrong */
+    if (ascii == 18) { pdu_au_askr6(1500u); return; }       /* ^R  the R6 question */
+    if (ascii == 21) { pdu_au_busy(); pdu_au_prog(450); return; }   /* ^U  working */
+#endif
     if (pdu_pg_key(ascii, scan))        /* pages: a prompt owns the keys */
         return;
     if (pdu_rc_key(ascii))              /* recov: so does the recovery offer */

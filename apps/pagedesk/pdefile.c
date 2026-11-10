@@ -166,9 +166,22 @@ static pdw fl_read_far(struct pd_u32 *pos, pdw dseg, pdw doff, pdw n) { return f
  * fl_size is put back afterwards and the cache dropped again: what was read
  * under the new size is not the document that was parsed. */
 static struct pd_u32 fp_keep;
+/* The CRC of PDE_TAIL bytes from s_c, read 128 at a time through tmpb (any
+ * PDF: the 1 KiB tail buffer is gone - OPEN borrows the stream contexts). */
+static pdw fp_crc(void)
+{
+    pdw crc = 0xFFFF, k, n;
+    for (k = 0; k < PDE_TAIL / 128; k++) {
+        n = fl_read(&s_c, tmpb, 128);
+        crc = pdm_crc16(crc, tmpb, n);
+        if (n < 128) break;
+    }
+    return crc;
+}
+
 static pdw fl_fingerprint(struct pdxb_fingerprint *fp)
 {
-    pdw n, rc;
+    pdw rc;
     fl_invalidate();
     pde_ioerr = 0;
     rc = fl_find();
@@ -177,17 +190,12 @@ static pdw fl_fingerprint(struct pdxb_fingerprint *fp)
     fl_size.lo = fl_fnd.size_lo; fl_size.hi = fl_fnd.size_hi;
     fp->size.lo = fl_size.lo; fp->size.hi = fl_size.hi;
     u32_zero(&s_c);
-    n = fl_read(&s_c, tailbuf, PDE_TAIL);
-    if (!pde_ioerr) {
-        fp->crc_head = pdm_crc16(0xFFFF, tailbuf, n);
-        if (fl_size.hi == 0 && fl_size.lo <= PDE_TAIL) {
-            fp->crc_tail = fp->crc_head;
-        } else {
-            u32_cp(&s_c, &fl_size);
-            u32_sub16(&s_c, PDE_TAIL);
-            n = fl_read(&s_c, tailbuf, PDE_TAIL);
-            fp->crc_tail = pdm_crc16(0xFFFF, tailbuf, n);
-        }
+    fp->crc_head = fp_crc();
+    if (fl_size.hi == 0 && fl_size.lo <= PDE_TAIL) fp->crc_tail = fp->crc_head;
+    else {
+        u32_cp(&s_c, &fl_size);
+        u32_sub16(&s_c, PDE_TAIL);
+        fp->crc_tail = fp_crc();
     }
     u32_cp(&fl_size, &fp_keep);
     fl_invalidate();

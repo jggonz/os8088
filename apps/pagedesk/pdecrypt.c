@@ -34,7 +34,10 @@ static pdw   cr_meta;           /* /EncryptMetadata                             
 static pdb   cr_rk[240];        /* the AES schedule in use                       */
 static pdw   pl_ok;             /* the borrowed ctx of cr_raw_plain stands at pl_n/pl_g/pl_pos */
 static pdw   cr_rkn, cr_rkg;    /* ...whose it is: an object (0 none), or 0xFFFF/0xFFFF the file's key */
-static pdb   cr_rc[PDE_RC4N][258];  /* RC4 states of open streams                */
+static pdb   cr_rc[PDE_RC4N + 2][258];  /* RC4 states: open streams, the object-stream window's, a string's */
+#define CR_RCWIN PDE_RC4N       /* the window's: it outlives the pushes (20.22.3.3) */
+#define CR_RCSTR (PDE_RC4N + 1) /* a string's, while a stream may be open (the engine has no tail buffer) */
+static pdw   cr_win;            /* os_rewind's call: the ctx is the window's (20.22.3.3) */
 
 #define CRI ((struct pdxb_crypt *)ctxs)        /* SETKEY uses the idle ctxs as its buffer */
 
@@ -70,8 +73,8 @@ static pdw cr_ctx_open(struct sctx *c)
     c->cmode = cr_stm;
     c->crs = c->cv;
     if (cr_stm == PDCM_RC4) {
-        if (nctx >= PDE_RC4N) return PDE_LIMIT;
-        c->crs = cr_rc[nctx];
+        if (!cr_win && nctx >= PDE_RC4N) return PDE_LIMIT;
+        c->crs = cr_rc[cr_win ? CR_RCWIN : nctx];
         n = cr_objkey(c->cn, c->cg, 0);
         pdc_rc4_ks(c->crs, pdc_ok, n);
     }
@@ -128,8 +131,8 @@ static void cr_string(void)
     n = ov.len < PDE_VT - 1 ? ov.len : PDE_VT - 1;
     if (cr_str == PDCM_RC4) {
         p = cr_objkey(cr_curn, cr_curg, 0);
-        pdc_rc4_ks(tailbuf, pdc_ok, p);
-        pdc_rc4(tailbuf, ov.text, n);
+        pdc_rc4_ks(cr_rc[CR_RCSTR], pdc_ok, p);
+        pdc_rc4(cr_rc[CR_RCSTR], ov.text, n);
         return;
     }
     if (n < 32) { ov.len = 0; ov.text[0] = 0; return; }    /* an IV and nothing, or less */

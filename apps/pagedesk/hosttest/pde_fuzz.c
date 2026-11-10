@@ -28,6 +28,7 @@
 #include "../pdmath.h"
 
 unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
+extern unsigned pde_cx, pde_dx;
 extern unsigned pde_fail;
 extern void pdh_set(unsigned char *buf, unsigned long n);
 extern int pdh_cluster;
@@ -39,6 +40,9 @@ extern unsigned char pd_host_mem[];
 #define SEG_ARENA 0x4000
 #define SEG_TBL   0x5000
 #define SEG_BUF   0x6000
+#define SEG_FLATE 0x7000    /* 0, 1 or 2 Flate slots of 43 KiB, a case's choice        */
+#define SEG_XIDX  0x9000    /* any PDF (20.22.3): the flat index, up to 256 KiB        */
+#define SEG_OSW   0xE000    /* ...and the object-stream window, 43 KiB                  */
 #define CACHE_KB  16
 #define CANARY    0xA5
 #define CAN_N     64
@@ -100,9 +104,13 @@ static void cans_set(void)
     can_set(SEG_BUF, 64 + 1024);                /* ...and above it                     */
     can_set(SEG_BUF, 0xFFF0 - CAN_N);           /* below a destination at the top      */
 }
+static unsigned fz_flate, fz_xkb, fz_okb;       /* this case's claims (PDE_NEEDMEM grows the last two) */
 static int cans_ok(void)
 {
-    return can_ok(SEG_XB, PD_XB_BYTES, "after XB") & can_ok(SEG_CACHE, CACHE_KB * 1024, "after cache") &
+    return (!fz_flate || can_ok(SEG_FLATE, fz_flate * 43u * 1024u, "after flate")) &
+           (!fz_xkb || can_ok(SEG_XIDX, fz_xkb * 1024u, "after xidx")) &
+           (!fz_okb || can_ok(SEG_OSW, fz_okb * 1024u, "after osw")) &
+           can_ok(SEG_XB, PD_XB_BYTES, "after XB") & can_ok(SEG_CACHE, CACHE_KB * 1024, "after cache") &
            can_ok(SEG_ARENA, 8192, "after arena") & can_ok(SEG_TBL, 11264, "after tables") &
            can_ok(SEG_BUF, 0, "below dest") & can_ok(SEG_BUF, 64 + 1024, "above dest") &
            can_ok(SEG_BUF, 0xFFF0 - CAN_N, "below top dest");
@@ -115,6 +123,9 @@ static int do_init(unsigned cluster)
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = CACHE_KB;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
+    if (fz_flate) { in.flags |= PDXI_FLATE; in.flate_seg = SEG_FLATE; in.flate_kb = (pdw)(43 * fz_flate); }
+    if (fz_xkb) { in.xidx_seg = SEG_XIDX; in.xidx_kb = (pdw)fz_xkb; }
+    if (fz_okb) { in.osw_seg = SEG_OSW; in.osw_kb = (pdw)fz_okb; }
     pdh_cluster = (int)cluster;
     xb_put(&in, sizeof in);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);
@@ -122,9 +133,10 @@ static int do_init(unsigned cluster)
 }
 
 static struct pdxb_open op;
+static unsigned fz_cluster;
 static int do_open(void)
 {
-    unsigned r, n = 0;
+    unsigned r, n = 0, nm = 0;
     memset(&op, 0, sizeof op);
     strcpy(op.name, "DOC.PDF");
     for (;;) {
@@ -133,7 +145,17 @@ static int do_open(void)
         xb_get(&op, sizeof op);
         if (!cf && r == PDE_BUSY) {                 /* D11: CF = 0, AX = PDE_BUSY */
             /* 8 revisions + 1024 pages / 16 nodes a slice + slack */
-            if (++n > 400) { fprintf(stderr, "OPEN never ends: %s case %lu\n", curfile, curcase); exit(96); }
+            if (++n > 20000) { fprintf(stderr, "OPEN never ends: %s case %lu\n", curfile, curcase); exit(96); }
+            continue;
+        }
+        if (!cf && r == PDE_NEEDMEM) {              /* 20.22.3: claim it, re-INIT keeping the rest, again */
+            if (++nm > 4) { fprintf(stderr, "NEEDMEM loops: %s case %lu\n", curfile, curcase); exit(96); }
+            if (pde_cx == PDMEM_XIDX && pde_dx >= 1 && pde_dx <= 256) fz_xkb = pde_dx;
+            else if (pde_cx == PDMEM_OSW && pde_dx == 43) fz_okb = pde_dx;
+            else { fprintf(stderr, "NEEDMEM %u %u: %s case %lu\n", pde_cx, pde_dx, curfile, curcase); exit(94); }
+            if (fz_xkb) can_set(SEG_XIDX, fz_xkb * 1024u);
+            if (fz_okb) can_set(SEG_OSW, fz_okb * 1024u);
+            if (do_init(fz_cluster)) { fprintf(stderr, "re-INIT refused: %s case %lu\n", curfile, curcase); exit(94); }
             continue;
         }
         return cf ? (int)r : 0;
@@ -224,7 +246,8 @@ static void objs_walk(unsigned size)
         if (cf) continue;
         xb_get(&oi, sizeof oi);
         memset(&rw, 0, sizeof rw);
-        rw.objnum = (pdw)n; rw.gen = 0; rw.dseg = SEG_BUF; rw.doff = 64; rw.dmax = 1024;
+        rw.objnum = (pdw)n; rw.gen = 0; rw.dseg = SEG_BUF; rw.doff = 64; rw.dmax = (pdw)(1 + rnd(1024));
+        rw.mode = (pdw)rnd(2);                      /* PDRC_EXACT or PDRC_PLAIN (20.22.3.3) */
         for (k = 0; k < 400; k++) {
             xb_put(&rw, sizeof rw);
             call(PDV_ENG_RAW_COPY, 0, 0, 0);
@@ -270,7 +293,9 @@ static int run_case(unsigned char *buf, unsigned long n, unsigned cluster, unsig
     pdh_failat = fault ? pdh_reads + fault : 0;      /* the fault-th READ_SEQ of the case fails */
     pdh_budget = pdh_reads + 2000000UL;
     alarm(PDF_WATCHDOG);
+    fz_flate = rnd(3); fz_xkb = 0; fz_okb = 0; fz_cluster = cluster;
     cans_set();
+    if (fz_flate) can_set(SEG_FLATE, fz_flate * 43u * 1024u);
     do_init(cluster);
     rc = do_open();
     if (rc == 0) {
