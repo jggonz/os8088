@@ -12,6 +12,7 @@ int pdrh_in_doc(void);
 void os88_gfx_lock(void);
 void os88_gfx_unlock(void);
 int  os88_wm_clip_set(void *win);
+unsigned os88_ticks(void);              /* the slice's clock (pdri.c interp_run, QA R27) */
 void os88_file_here(struct os88_place *p);
 int  os88_file_goto_q_mark(unsigned clus, int vol);
 int  os88_disk_cluster_sectors(void);

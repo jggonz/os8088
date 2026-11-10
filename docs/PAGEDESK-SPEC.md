@@ -1532,6 +1532,20 @@ specifies them:
 * **A slice is bounded in tokens** as well as operators (16 x `PD_SLICE_OPS`): a
   stream of numbers, or an array or dictionary that never closes, has no operator
   to count.
+* **...and in time** (QA R27): `interp_run` reads `os88_ticks` after every
+  operator and ends the slice once `PDR_SLICE_TICKS` = 4 BIOS ticks (~220 ms)
+  have passed since it began. The UI task takes no input until a slice returns,
+  and 256 operators of embedded-font text are **5-6 s** on a 4.77 MHz 8088
+  (LICEN.PDF page 1 on MartyPC's 5150: every slice of the page was that long).
+  With the bound, 1,533 of that page's 1,701 slices are under 0.5 s and every
+  slice spent in PDREND itself is under 1.5 s. A slice that ends on time ends
+  where 256 operators would have ended it, so the picture cannot change:
+  `pdr_xchk` draws fourteen pages on two adapters with `PDR_SLICETICK=4` (the
+  host's clock moving four ticks a read, so EVERY operator ends a slice) and
+  holds them to the pixel against the ordinary run. What is left above a
+  second is not interpretation: an occupant's own long verb (PDXF inflating a
+  font program, 15-28 s) and disk-bound PDENG calls (an open's slices, a
+  stream's first read, a module's load: 4-7 s).
 
 #### 20.3.4 Fonts, text and the text map
 
@@ -1625,7 +1639,8 @@ calls (`state` 0 -> 1 -> 2; `PDE_BUSY` while stepping). A new `BEGIN`, `THUMB` o
 | `STATUS` | `pdxb_rstatus`: the `PDF_INC_*` bits, the first skipped feature's name, operators interpreted, passes |
 | `TEXTMAP`, `THUMB` | as above |
 
-A `STEP` slice is one of: up to `PD_SLICE_OPS` (256) operators of interpretation, or
+A `STEP` slice is one of: up to `PD_SLICE_OPS` (256) operators of interpretation
+(and no more than `PDR_SLICE_TICKS` of the clock, 20.3.3), or
 **one band** composed and blitted (one gfx lock). On the 8088 a band of dense text
 is the long one: see 20.3.7. Cancel is `ABORT` between slices.
 
