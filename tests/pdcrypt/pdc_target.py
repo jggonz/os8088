@@ -176,7 +176,7 @@ def host_lines(fx, pw):
 
 def main():
     names = sys.argv[1:] or ["RC4_40.PDF", "RC4_128.PDF", "RC4_V4.PDF", "AES_128.PDF", "AES_128_NM.PDF", "AES_256_R5.PDF",
-                              "AES_128_PW.PDF", "GUIDE_RC4.PDF", "AES_256_R6.PDF"]
+                              "AES_128_PW.PDF", "GUIDE_RC4.PDF", "AES_256_R6.PDF", "FORM_RC4_40.PDF"]
     fails = 0
     for fx in names:
         pw = "secret" if fx.endswith("_PW.PDF") else ""

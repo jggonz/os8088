@@ -5951,6 +5951,17 @@ caught) and every call checked for BP, SI, DI, DS, ES, SS:SP and DF.
   **`DICT_GET` and `TRAILER` are allowed in that pause** so PDXK can read the
   dictionary.
   Closing, re-INIT or a new OPEN forgets the key.
+  **The cipher area.** `Td0` (1,024), the AES schedule in use (240) and the
+  five RC4 states (`PDE_RC4N` streams, the object-stream window's, a string's:
+  258 each) are not in PDENG's image or bss: they are the first `CR_AREA` =
+  2,560 bytes of the ARENA, and every cipher routine reaches them through ES =
+  `_pdc_cseg`. SETKEY sets `_pdc_cseg` to the arena's segment, marks `Td0` for
+  rebuilding (the arena held the page walk's bits, or another document's
+  table), moves `arena_top` past the area (so the walk's 8 KiB of visited bits
+  go above it), and answers `PDE_NOMEM` on an arena under 11 KiB;
+  `ARENA_REL` may not release below it. An unset `_pdc_cseg` is ES = 0, which
+  writes the table over the interrupt vectors: `tests/pdcrypt/pdc_target.py`
+  fails any module write below `KERNEL_SEG:0500`.
 * `PDV_ENG_CRYPT` is **withdrawn**.
 
 Where decryption sits (and nowhere else):
