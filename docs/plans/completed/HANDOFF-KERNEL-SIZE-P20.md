@@ -150,10 +150,33 @@ R2, R2-3, R12 (no net-negative form), R15, R16, V1; refusing KB counts of
   the Win16 fixtures). The failure was `pins` not knowing `MEMH_REGROW` is a
   resize; taught, green.
 - `make budget-check` on all four kernels: met (section 0).
-- **Not run**: the MartyPC `os88hot ab` timing against `4beca096` - the owner
-  took the disks to the field first. The cycle figures in section 2 are
-  PREDICTED. `ftpd` stalled once at STOR-after-LIST and passed on re-run; not
-  checked at the base.
+- **The MartyPC before/after against `4beca096`, run after the field trip**
+  (`docs/plans/ksp19/timing.md`, every table): `os88hot time` every scenario
+  on CGA, Hercules and VGA (kern_big) and on kern_small at 640KB and 128KB;
+  gfxbench, sysbench and REDLINE; and three games in play - Clear Skies'
+  pinned frame, WireBall's timed rallies, ExciteBike's whole first course.
+  **No meaningful regression.** CGA/VGA desktop operations within +-0.2%
+  except typing (+0.4% CGA, +0.9% VGA: the priced callback and door costs,
+  ~0.1 ms a key); gfxbench 71/74 (CGA) and 70/74 (VGA) rows within 0.5%,
+  REDLINE's CPU/RAM rows within 0.01% and graphics identical or faster; Clear
+  Skies' render work 0.0 to -0.12% on every adapter, WireBall and ExciteBike
+  frame for frame identical. The section 2 figures, MEASURED: the rare door
+  **+222 to +228 clocks a call** (WM_BAND, FILE_HERE, FILE_DFREE; predicted
+  +205), `OSAPI_TASK_YIELD` **-109** (predicted ~-95); boot -100 to -205 ms
+  on CGA and Hercules. Disk-bound rows move with the platter only (same int
+  13h calls, sectors and seeks on both arms).
+- **Hercules on MartyPC is not a kernel measurement until the card's phase is
+  pinned** - the P19 section 7 mystery, solved: MartyPC's MDA model indexes
+  its wait-state table by the card's clock mod 16, and in graphics mode that
+  clock steps by 16, so the residue left at the last text-to-graphics switch
+  prices every VRAM access for the session. The same BASE build, with only a
+  5-cycle text excursion poked in, reproduces the tip's Hercules gfxbench to
+  0.1% (VRAM write word +7.1%, a loop inside the bench package); averaged over
+  residues the tip is equal or faster on Hercules too (timing.md section 6).
+- `tests/skiesperf.py` was fixed on the way: it could not find a call site
+  once `call` became the `OSAPI_RARE` macro.
+- `ftpd` stalled once at STOR-after-LIST and passed on re-run; not checked at
+  the base.
 
 ## 8. Method lessons
 
