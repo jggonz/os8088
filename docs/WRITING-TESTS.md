@@ -114,10 +114,12 @@ of these sends a row to `soak`, whatever it costs:
    kernel-side row stays if code OUTSIDE the kernel has to agree with it (a
    package, a driver, the SDK, a Makefile recipe). Ask whose else's file must
    agree, not which directory the test reads. A kernel-internal row that
-   `make` used to run for you - `hotpar`, `chromesites`, `clscf`,
-   `khpknobs` - is now yours to name when you edit what it guards:
-   `python3 tools/os88test.py soak -k hotpar` after touching a kernel hot
-   path is 0.07 s.
+   `make` used to run for you - `chromesites`, `clscf`, `khpknobs` - is
+   now yours to name when you edit what it guards. **`hotpar` is the
+   exception and stays fast** (owner, 2026-11-11): ANY kernel edit upstream
+   of a hot routine can shift it by an odd byte count, so the thing that
+   breaks it is not "an edit of what it guards" but nearly every kernel
+   edit, and 0.07 s is the cheapest place to catch it.
 3. **It is about the suite itself** - the harness, the emulator drivers, a
    row's fixtures, a tool's own selfcheck (`machines`, `qemuown`,
    `fixtures`, `artpath`, `coldsym`, `bochssleep`, `knobself`). Those

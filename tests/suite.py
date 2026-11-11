@@ -1773,12 +1773,11 @@ FAST = [
         "build/os8088.img: the cost of the leak is paid by an unrelated row, "
         "hours later, wearing a message about the wrong subject "
         ""),
-    Row("hotpar", "soak", py("tests/unit/t_hotpar.py"), 0.1,
-        "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
-        "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1) "
-        "- so whoever touches a kernel hot path runs `python3 "
-        "tools/os88test.py soak -k hotpar` (0.07 s); `make` no longer does "
-        "it for them. "
+    Row("hotpar", "fast", py("tests/unit/t_hotpar.py"), 0.1,
+        "FAST (owner, 2026-11-11, moved back from soak): ANY kernel edit "
+        "upstream of a hot routine can shift it by an odd byte count, so "
+        "it trips on unrelated work, not on edits of what it guards - and "
+        "0.07 s at the edit beats finding it at the release soak. "
         "every HOT routine - gfx_blit4, gfx_blit1_x, font_run, both mouse "
         "ISRs, kbm_isr, cur_move, sch_isr, sch_switch, ui_task, dsk_xfer, "
         "dsk_runcap, dsk_next_clus_x, wm_paint_all - starts at the address "

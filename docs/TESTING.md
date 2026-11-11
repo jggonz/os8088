@@ -285,8 +285,8 @@ short form and points here; nothing else in the tree may say otherwise.**
 answer "did you break the build or the OS, or critical documentation
 maintenance" and nothing else; one package, kernel internals and the suite's
 own harness and fixtures are `soak`. So `make` no longer checks a kernel
-internal for you: edit a hot path and name `hotpar`
-(`python3 tools/os88test.py soak -k hotpar`, 0.07 s), the WF_FULL sites and
+internal for you - except `hotpar` (fast, 0.07 s), which any upstream kernel
+edit can trip, so it stays in `make` - so edit the WF_FULL sites and
 name `chromesites`, a `drv_cls_*` call and name `clscf`, a `KHP_*` arm and
 name `khpknobs`.**
 

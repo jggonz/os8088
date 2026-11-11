@@ -224,9 +224,11 @@ What `make help` cannot tell you:
   its knob with `tools/os88knob.py`, whose `merge` is the safe form.
   **`make` does not check kernel internals any more** (the owner, 2026-11-11:
   the fast and full tiers are for "did you break the build or the OS"), so
-  touching a kernel HOT PATH means naming and running `hotpar` yourself -
-  `python3 tools/os88test.py soak -k hotpar -k khpknobs`, seconds - rather
-  than relying on `make` to catch a parity slip.
+  touching a `KHP_*` arm means naming and running `khpknobs` yourself -
+  `python3 tools/os88test.py soak -k khpknobs`, seconds. The ONE kernel
+  internal `make` still checks is `hotpar` (fast, 0.07 s): an edit anywhere
+  upstream moves a hot routine by an odd byte count far more often than
+  anyone notices, so it is caught at the edit, not at the release soak.
 - **Nothing in `build/` is tracked - never commit a binary.** The toolchain is
   deterministic (`os88disk.py` pins the volume serial and every FAT
   timestamp), so any image can be rebuilt byte for byte.
