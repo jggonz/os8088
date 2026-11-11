@@ -12197,7 +12197,7 @@ SOAK = [
     Row("lzglyph", "soak", py("tests/lzcomp.py", "--glyph"), 65.0,
         "SPEC.md 20.15.3, 22.22.1, 54.3.2: File > Uncompress and Compress "
         "on the packages whose CLEAR PREFIX carries the 16-byte document "
-        "glyph (flags 0x2B), which lzcomp's CALC.O88 (flags 0x09) cannot "
+        "glyph (flags 0x2B), which lzcomp's package (flags 0x09) cannot "
         "reach. DOS.O88 goes on a scratch B: exactly as the "
         "build ships it - LZ4 - and goes round Uncompress (== "
         "os88pkg.image_unwrap of the shipped file, byte for byte), a launch, "
