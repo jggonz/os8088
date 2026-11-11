@@ -206,6 +206,44 @@ Row("lzmod", "soak", py("tests/lzmod.py"), 30.0,
 | `alone` | its ANSWER needs the cores - a rate or a frames-per-second (§4.1) |
 | `locks` | a named HOST resource it cannot share - `("port:8090",)` for a QEMU row whose fixture server the guest reaches at a fixed 10.0.2.2 port. The lane never runs two rows holding one name at once; nothing else about the row is serialised (§9.1) |
 | `timeout` | defaults to `max(60, 4 x secs + 30)`; raise it for a row whose shape is slow, never to cover a wait |
+| `inputs` | repo-relative globs (`**` recurses) of every file the row READS - a `fast` row only, and only a pure source scan (§3.1) |
+
+### 3.1 `inputs=`: the fast tier's cache
+
+A `fast` row that declares `inputs=` is skipped as **`cached ok`** when it
+last PASSED and nothing it depends on has changed. The key
+(`tools/os88test.py` `cache_key`) hashes CONTENTS, never mtimes: the row's
+command, `needs` and declaration; its script and every repo-local module the
+script imports, transitively; every `*.txt` registry those sources name; every
+file the globs match; the Python version, and `nasm -v` when the row needs or
+names nasm. The record is `build/testcache/fast.json`, so `make clean` drops
+it; a failure deletes the row's entry. **`full` and `soak` never consult it**,
+a row with no `inputs=` always runs, and `--no-cache` (or `OS88_TESTCACHE=0`)
+reruns everything.
+
+**The risk is a STALE PASS.** A row that reads a file its declaration does not
+match is not rerun when that file changes, and it reports `cached ok` over
+code it never saw. So:
+
+- **Declare WIDE.** The shape of the row's walk, not the files it cares about
+  today: `_src(("apps", "drivers"))` for an `os.walk` of those trees, every
+  extension the walk accepts. `suite.py`'s `_src` and `_ASM_TREE` are the
+  helpers.
+- **Name every tool the row RUNS.** A subprocess is not an import, so
+  `tools/stkbalance.py` is in `stkapps`' declaration by hand.
+- **Never declare a row that reads `build/`** (an image, a map, a listing) or
+  that walks `git ls-files` - its real input is the build or the whole tree,
+  and no glob says that honestly. Leave it undeclared; it runs every time.
+- **Prove it**: edit one input and see the row rerun, and edit a file outside
+  the declaration and see it stay cached only where that is right.
+
+Declared today, all pure source scans: `asmrules`, `ovlchk`, `bits` and
+`btnrules` (`_ASM_TREE`, and `.c`/`.h` for `btnrules`), `stkapps` (apps/ and
+drivers/ plus `tools/stkbalance.py` and `tools/weavesim.py`), `stkbalance`
+(kernel/), `stkwalker` (`tools/stkbalance.py`), and `mirror` (every source tree
+plus all of `tools/**/*.py` and `tests/**/*.py`). `checkdocs`, `nulldev` and
+`partoff` read `git ls-files`, and `stik`, `stkclass`, `diskverify` and the
+image rows read `build/`; none of them is declared.
 
 ---
 

@@ -160,11 +160,12 @@ class Row:
     """One registered test."""
 
     __slots__ = ("name", "tier", "cmd", "secs", "needs", "serial", "why",
-                 "timeout", "builds", "alone", "wants", "cpus", "locks")
+                 "timeout", "builds", "alone", "wants", "cpus", "locks",
+                 "inputs")
 
     def __init__(self, name, tier, cmd, secs, why, needs=(), serial=False,
                  timeout=None, builds=False, alone=False, wants=(), cpus=1,
-                 locks=()):
+                 locks=(), inputs=()):
         self.name, self.tier, self.cmd = name, tier, cmd
         self.secs, self.why = secs, why
         self.needs = tuple(needs)
@@ -238,6 +239,16 @@ class Row:
         # rather than parking a lane on the wait. tests/os88qemu.py's
         # `lease_port` is the cross-runner half (another checkout's soak).
         self.locks = tuple(locks)
+        # INPUTS: repo-relative globs (`**` recurses) naming EVERY file the
+        # row reads besides its own script, the script's repo-local imports
+        # and the `*.txt` registries it names - those three the runner finds
+        # itself. With them declared, `os88test.py fast` skips the row as
+        # "cached ok" when it last PASSED against byte-identical contents
+        # (tools/os88test.py `cache_key`); `full` and `soak` never consult the
+        # cache, and a row with no inputs always runs. A declaration NARROWER
+        # than what the row really reads is a STALE PASS, so declare wide and
+        # never declare a row that reads build/ (docs/WRITING-TESTS.md 3.1).
+        self.inputs = tuple(inputs)
         # A generous default: the point of the per-row timeout is to stop a
         # hung emulator eating the tier, not to police a slow machine.
         self.timeout = timeout or max(60, int(secs * 4) + 30)
@@ -245,6 +256,16 @@ class Row:
 
 def py(*a):
     return ["python3"] + list(a)
+
+
+def _src(dirs, exts=(".asm", ".inc")):
+    """`inputs=` globs for every file with one of `exts` anywhere under each
+    of `dirs` - the shape of a source scan's os.walk."""
+    return tuple("%s/**/*%s" % (d, e) for d in dirs for e in exts)
+
+
+# What a whole-tree assembly scan reads. Wide on purpose (Row.inputs).
+_ASM_TREE = _src(("kernel", "boot", "apps", "drivers", "kerndos", "dostools"))
 
 
 def _kernel_sources():
@@ -1013,7 +1034,10 @@ FAST = [
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice. 1.5s warm, ~5s on a fresh build: the cost is "
         "ast-parsing ~200 host scripts, and os88geom keeps each one's answer "
-        "under the file's SHA-1 in build/.os88geom-assigns.json"),
+        "under the file's SHA-1 in build/.os88geom-assigns.json",
+        inputs=_src(("kernel", "boot", "apps", "drivers", "kerndos",
+                     "dostools", "tests"), (".asm", ".inc", ".c", ".h"))
+        + ("tools/**/*.py", "tests/**/*.py")),
     Row("chromesites", "soak", py("tests/unit/t_chromesites.py"), 0.2,
         "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
         "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1)."
@@ -1067,7 +1091,8 @@ FAST = [
         "source is a bare constant enrols that constant in that field - so a "
         "flag added tomorrow is covered tomorrow. A PREFIX IS NOT A FAMILY "
         "and grouping by one reports 81 false positives in this tree. "
-        "VERIFIED TO FAIL by putting FHF_DEV back on 32."),
+        "VERIFIED TO FAIL by putting FHF_DEV back on 32.",
+        inputs=_ASM_TREE),
     Row("artpath", "soak", py("tests/unit/t_artpath.py"), 1.1,
         "SOAK (owner, 2026-11-11): about the suite's own harness and "
         "fixtures, not the OS - the release soak runs every row "
@@ -1900,7 +1925,8 @@ FAST = [
         "\"is there a label between the jump and this line\" and a label only "
         "helps if something reaches it, which is how the DMA staging arm of "
         "both file pipelines rotted for a year with this row green "
-        "(SPEC.md 18.4.2.1)"),
+        "(SPEC.md 18.4.2.1)",
+        inputs=_ASM_TREE),
     Row("resident", "soak", py("tests/unit/t_resident.py"), 9.5,
         "nothing the splash's first tick runs may jump to SPEC.md 15.1.2's "
         "epilogue ladder - the ladder is at the far end of .text and the "
@@ -2165,7 +2191,9 @@ FAST = [
         "It is STATIC because a press-fired button and a release-fired one are "
         "the same pixels in every still: the difference exists only while a "
         "button is physically held, which is why this survived ten packages "
-        "and a written survey"),
+        "and a written survey",
+        inputs=_src(("apps", "drivers", "kernel"),
+                    (".asm", ".inc", ".c", ".h"))),
     Row("deps", "fast", py("tests/unit/t_deps.py"), 0.1,
         "`make` MUST mean `all`. Adding the `deps` target near the top of the "
         "Makefile made it the default goal, so `make` printed a dependency "
@@ -2275,7 +2303,8 @@ FAST = [
         "fault"),
     Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 4.4,
         "no near call crosses a section boundary - it assembles cleanly and "
-        "runs wrong"),
+        "runs wrong",
+        inputs=_ASM_TREE),
     Row("dsegaudit", "soak", py("tools/dsegaudit.py"), 0.2,
         "no path holding [dsk_dseg] can reach a claim, and a claim COMPACTS "
         "(SPEC.md 50.6.2). It is a 0/1 gate with no harness around it and "
@@ -2340,7 +2369,8 @@ FAST = [
         "caught by the batch that introduces it instead of by a bisect. "
         "One gap "
         "is left and is counted in the tool's own summary line: loop back-edge "
-        "conflicts are suppressed, because the count lives in a register"),
+        "conflicts are suppressed, because the count lives in a register",
+        inputs=_src(("kernel",))),
 
     Row("stkapps", "fast", py("tests/unit/t_stkapps.py"), 5.3,
         "every `ret` in EVERY SHIPPED PACKAGE AND DRIVER is reached at the "
@@ -2360,7 +2390,8 @@ FAST = [
         "os88api.inc. The KERNEL is the `stkbalance` row above, not this one: "
         "the two file lists have nothing in common and were arrived at from "
         "opposite ends (docs/plans/completed/STKBALANCE-KERNEL.md 4)",
-        ),
+        inputs=_src(("apps", "drivers"))
+        + ("tools/stkbalance.py", "tools/weavesim.py")),
 
     Row("gifdrag", "soak", py("tests/gifdrag.py"), 50.0,
         "THE FIELD'S OWN FREEZE, driven end to end (SPEC.md 8.7.4): the Task "
@@ -2418,7 +2449,8 @@ FAST = [
         "are QUIET and LOUD rows too (the walker expands them; before, no "
         "adopter passed `stkapps`), and the COUNTED rows ask for an exact "
         "number: Video seeded two broken jumps into one shared epilogue and "
-        "the walker reported ONE, both ending at the same `ret`"),
+        "the walker reported ONE, both ending at the same `ret`",
+        inputs=("tools/stkbalance.py",)),
     Row("win16ne", "soak", py("tests/unit/t_win16ne.py"), 0.3,
         "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
         " whoever changes it (docs/WRITING-TESTS.md 2.1). "
