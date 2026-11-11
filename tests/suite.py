@@ -1611,7 +1611,9 @@ FAST = [
         "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
         "from the CURRENT package keeps 4 of 354 clusters free - "
         "pagedesk360.img is on demand and went stale while the fix round "
-        "grew the program to 359 of 354"),
+        "grew the program to 359 of 354. It SKIPS on a tree that has not "
+        "built the package, which `all` does not",
+        needs=("pagedesk",)),
     Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
         "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
         "model - the filters (This page / All pages / Changes), order, "
