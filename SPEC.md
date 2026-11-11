@@ -4125,6 +4125,16 @@ sector. `os88ovlchk` rule B8 learned the one shape this needs: a `B2CALL`
 written in a non-kern_small arm to a body whose non-kern_small arm is the
 blob (`_walk_big`, with a positive control and two crossed fixtures).
 
+**...and on 2026-11-10 `font_init` left the blob again, on all three**, which
+is the trade the paragraph above priced. §39.1's plain-MDA probe must run in
+`vid_detect`, in the splash's first tick and so in the blob, and it wanted
+about 70 bytes the blob did not have (24 free on kern_big, 9 on kern_emu).
+Kernel size pass 19 had meanwhile taken more than `font_init`'s 236 bytes off
+the packed file, so moving them back into it moves no stage 2 call: 10 / 10 /
+7 / 6 on kern_big's four disks before and after (tests/unit/t_blobruns.py).
+`font_init` is `.boot3`'s on every kernel again, `B3CALL`ed by `kmain_o`, and
+`RESIDUE_MAX` is 1 / 1 / 1 / 0 (`ovl_fdd_cylok` is the one row left).
+
 #### 2.9.15 `.boot3`: the boot's third home
 
 **The contract for docs/plans/completed/BOOT3-PLAN.md.** The boot has three boot-only
@@ -4161,7 +4171,7 @@ called by `B3CALL` from `kmain_o`:
 
 | kernel | bodies |
 |---|---|
-| kern_small | `font_init` with its clock `.fi_time` and `.fi_pit` (§6.0.1) - all four kernels' until BOOT3-PLAN 16.16 put it back in the blob on the other three (§2.9.14.2) |
+| every kernel | `font_init` with its clock `.fi_time` and `.fi_pit` (§6.0.1) - all four kernels' since wave 1, except the three big kernels' blob copy from BOOT3-PLAN 16.16 to 2026-11-10 (§2.9.14.2) |
 | kern_big, kern_emu, kern_mega | `hb_probe_x` (§87.5); `cfx_grid`, `cfx_ctxcap`, `cfx_cfgname` (kern_mega's were the blob's `bvw_rowcalc` instance, `bvs_ctxcap` and `ovc_cfgname` until its `.boot3` came on) |
 | kern_big, kern_emu | the slide prefix (`cfx_slide`, `cfx_grp`, `cfx_tab`); `as_boot` with `as_s_dir`, `as_s_skip`, `as_find` (§26.10.5) |
 | kern_mega | `mega_wrprobe`, `mega_gateb`, `mega_gwset` |
@@ -76897,7 +76907,7 @@ clk_sec  resb 1   ; 0..59      clk_day   resb 1   ; 1..31
 clk_min  resb 1   ; 0..59      clk_mon   resb 1   ; 1..12
 clk_hour resb 1   ; 0..23      clk_year  resw 1   ; 1980..2099
 clk_last resw 1   ; last [ticks] sample      clk_rtc   resb 1  ; 1 = RTC found
-clk_acc  resw 1   ; tenth-of-tick remainder  clk_dirty resb 1  ; write RTC
+clk_acc  resw 1   ; 1/1167-tick remainder    clk_dirty resb 1  ; write RTC
 clk_h12  resb 1   ; 0 = 24-hour (boot default), 1 = 12-hour + AM/PM
 clk_secs resb 1   ; 0 = the bar hides seconds (boot default), 1 = shows them
 clk_barq resb 1   ; sticky "the bar's text is stale" request
@@ -76944,12 +76954,19 @@ mid-format while the UI task carries a second. Two rules make that safe, and bot
 Nothing in an ISR touches any of it; the clock is derived from `[ticks]`,
 which the PIT hook already owns (§8).
 
-**Advancing.** `clk_tick` uses the §14 accumulator idiom verbatim, which is
-what makes 18.2 Hz add up to real seconds: delta = `[ticks]` − `clk_last`
-(wrap-safe subtraction), `clk_last` = `[ticks]`, `clk_acc` += delta×10 as a
-32-bit value (a long lock starvation — a held-open menu — can owe more than
-65535 tenths), then `DIV 182` gives whole seconds owed and the new
-remainder. Each owed second is carried through sec → min → hour → day →
+**Advancing.** `clk_tick` uses the §14 accumulator idiom, which is what
+makes the tick add up to real seconds: delta = `[ticks]` − `clk_last`
+(wrap-safe subtraction), `clk_last` = `[ticks]`, `clk_acc` += delta×1,167 as
+a 32-bit value (a long lock starvation — a held-open menu — owes more than
+65535 units), then `DIV 21,247` gives whole seconds owed and the new
+remainder. **The ratio is binding**: the tick is 1,193,182 / 65,536 =
+18.206482 Hz, and 21,247 / 1,167 = 18.206512 is the closest ratio with a
+16-bit divisor, 0.0001 s a day. The 182 / 10 (18.2 Hz) that stood until
+2026-11-10 counted each second 0.99964 s long and gained **31 s a day** on
+every machine — nothing re-reads a clock chip after boot, and a 5150 has
+none (big review BR-15). Worst case: delta 65,535 and remainder 21,246 is
+76,500,591 / 21,247 = 3,600, so the DIV cannot fault; the Timer (§111) uses
+the same pair. Each owed second is carried through sec → min → hour → day →
 month → year, with month lengths from `clk_mlen` (below) and February 29 in a
 leap year (`year AND 3 = 0`, exact over the 1980..2099 range the page
 allows).
@@ -78354,16 +78371,51 @@ Probe order is binding, and the equipment word is consulted **last**:
 
 1. `int 10h AX=1A00h` (VGA/MCGA Display Combination Code). A pre-VGA BIOS
    does not implement `AH=1Ah` and returns with AL as we set it, 00h;
-   `AL = 1Ah` means VGA. → `VID_VGA`.
+   `AL = 1Ah` means VGA. → `VID_VGA`. **Except an MCGA** (PS/2 Models 25
+   and 30, 8086 machines in the target class): BL, the active display's
+   code, is 0Ah..0Ch, and an MCGA has no mode 12h and no Graphics Controller
+   or Sequencer, so the planar renderer would draw garbage. It goes on to
+   step 3 and runs as a CGA in mode 6, which the MCGA emulates. Every other
+   code stays `VID_VGA` - in particular 01h, a VGA with a mono card beside it,
+   which a wider test would have sent to the Hercules (BR-55).
 2. `int 10h AH=12h BL=10h` (EGA "get EGA info"). An EGA or VGA BIOS
    overwrites BL with the card's memory size; an XT BIOS leaves 10h alone.
    Step 1 has already claimed every VGA, so a card that answers *here* and
    not there is an EGA — and an IBM EGA has **no mode 12h**, only mode 10h
-   (640x350). → `VID_EGA`.
-3. `int 11h` equipment word bits 5:4. `11b` = a monochrome card at B000 →
-   `VID_HERC`; anything else → `VID_CGA`.
+   (640x350). → `VID_EGA`. **Except a 64KB EGA** (BL = 0): its mode 10h has
+   two planes, and the four-plane writer's other two are ignored, so the
+   sixteen colours would collapse toward black. It goes on to step 3 and
+   runs as a CGA in mode 6, which every EGA BIOS serves. One test answers
+   both refusals: BL is 0..3 on an EGA and 10h when unanswered, so `test bl, 3`
+   is zero for exactly "unanswered or 64KB".
+3. `int 11h` equipment word bits 5:4. Anything but `11b` → `VID_CGA`.
+   `11b` = a monochrome card at B000, which is a Hercules **or a plain MDA**,
+   and step 4 tells them apart.
+4. **Hercules or MDA (binding, 2026-11-10, big review BR-6).** Write
+   **3BFh = 1** first — an unconfigured Hercules aliases like an MDA
+   (§39.11.1.1), and an MDA has no 3BFh, so the write reaches nothing there —
+   then `vid_memchk`'s two-offset probe at B000 (0x55 at 0, 0xAA at 1000h, read
+   0 back): kept apart → `VID_HERC`. Aliased → a plain MDA, and the same probe
+   at B800: RAM there → `VID_CGA` (an MDA and a CGA in one machine with the
+   switches at mono; `vid_setmode`'s `vid_cga_equip` turns 40:10 to colour so
+   the BIOS mode set reaches the CGA, §39.19.4). Nothing there → the line
+   **`MDA cannot run os8088`** on the MDA's own text screen, through the
+   loader's teletype-and-halt (`read_run.halt`, boot/boot2.asm), and the
+   machine stops. Nothing has touched a CRTC at that point: the BIOS's mode 7
+   is still running. The probe puts nothing back, because every answer is
+   followed by a mode set or by the halt.
 
-Step 3 is last because a **VGA** driving a monochrome monitor also reports
+   **Why it is binding**: `vid_setmode` programs the Hercules graphics table
+   (R0 = 35h) into the 6845. On a Hercules in graphics mode that is 16-dot
+   characters and about 18.8 kHz; on an MDA it is 9-dot characters at about
+   33.4 kHz, against the 5151's 18.4 kHz — a dead screen at best, and period
+   documentation warns of damage to the fixed-frequency monitor (the owner,
+   2026-11-08: halt, or switch to the usable CGA). Until 2026-11-10 this was
+   a scope cut ("driving it as a Hercules is strictly less wrong than driving
+   it as a CGA at B800"), which was about an MDA alone and ignored both the
+   monitor and the CGA sitting idle beside it.
+
+Steps 3 and 4 are last because a **VGA** driving a monochrome monitor also reports
 `11b`, and that machine belongs on the planar path: mode 12h is a VGA mode
 whatever monitor is on the end of it, and it comes out as grey levels.
 
@@ -78377,21 +78429,11 @@ in that card's table, so claiming it would set a mode that does not exist
 and then paint `A000`, which is a *blank tube* rather than a degraded
 picture — and `vid_probe_avail` would go on to offer mode 6 as well, which
 that machine also does not have. So `BH = 1` falls through to step 3 and is
-handled as the mono card it is presenting as. That is not a good answer, it
+handled as the mono card it is presenting as (step 4 passes it as a Hercules:
+an EGA in mode 7 keeps B000's offsets apart). That is not a good answer, it
 is an honest one; the right answer is **mode 0Fh** (640x350 mono, planes 0
 and 2, at `B000`), which is a second setup and not this one. Untested and
 unclaimed rather than asserted — see `EGA-PLAN.md §7`.
-
-**Documented scope cut:** no Hercules-versus-plain-MDA discrimination (the
-0x3BA vertical-sync toggle). A plain MDA is text-only, so no better action
-exists; driving it as a Hercules is strictly less wrong than driving it as a
-CGA at B800.
-
-**Documented scope cut:** a 64KB EGA is driven as if it had 128KB. Mode 10h
-on a 64KB card is 640x350x4 (two planes), and the four-plane writer's upper
-two planes are ignored, so the sixteen colours collapse toward black. The
-card the port is calibrated against (Issue #136) has 128KB; a 64KB EGA is
-untested and unsupported rather than refused.
 
 `VID_FORCE` (build-time, `-DVID_FORCE=1|2|3|4`) skips the probe: `4` forces
 `VID_EGA`, which lets the 640x350 geometry be exercised on a VGA or under
@@ -79356,15 +79398,17 @@ does not) was considered and rejected, because it trades a card nobody has
 built for a CGA that does not mirror.
 
 **The second offset is 0x1000, and that is also the Hercules-versus-MDA
-discrimination §39.1 recorded as a scope cut.** A plain MDA has 4KB at B000
+discrimination §39.1 once recorded as a scope cut.** A plain MDA has 4KB at B000
 and aliases it upward, so its 0x1000 *is* its 0x0000: the 0xAA lands on top
 of the 0x55 and the probe fails — which is the right answer, because an MDA
 is text-only and has no 720x348 mode to offer. A Hercules has 32KB in page
 0 and a CGA 16KB at B800, and both keep the two offsets apart. So the one
 probe that rejects an empty bus rejects a text-only card for free, and
-nothing here needs the 3BAh vertical-sync timing loop. §39.1's fallback
-behaviour is unchanged: that cut still stands for *detection*, where driving
-an MDA as a Hercules remains strictly less wrong than driving it as a CGA.
+nothing here needs the 3BAh vertical-sync timing loop. §39.1's step 4 uses
+the same idiom for *detection* since 2026-11-10 (a copy in the blob, because
+`vid_memchk` itself is `.ovl`/`.boot3` and the first tick runs before either
+exists), so a plain MDA is never driven as a Hercules: it runs on a CGA beside
+it or halts with a message.
 
 ##### 39.11.1.1 A Hercules that has never been told it may do graphics
 
@@ -82060,8 +82104,9 @@ over an EGA desktop keeps all four planes.
 **Out of scope**, recorded so the next reader does not re-open it: `VID_EGA`
 as a member of a `KERN_BIG` per-display pair (§39.12 — it may be the primary
 that *ends* one, per the paragraph above, but never a half of one), an EGA on
-a **monochrome display** (§39.1's second scope cut — mode 0Fh is the right
-answer and is a second setup), and a 64KB EGA. (The Colour system theme
+a **monochrome display** (§39.1's scope cut — mode 0Fh is the right
+answer and is a second setup), and a 64KB EGA as `VID_EGA` (§39.1 step 2
+sends it to the CGA path instead). (The Colour system theme
 *is* supported on EGA — §76.12, a depth capability now.)
 
 ## 40. apps/fractal — the progressive renderer and its restore cache

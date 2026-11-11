@@ -47,7 +47,7 @@
 
 # --- resident: knob-only arms ------------------------------------------------
 15 0 kernel/sched.inc  # sch_isr under KFZTRACE=1, a knob: the heartbeat's IP capture (khb_*) writes kernel variables before DS is the kernel's
-4 1 kernel/font.inc  # an audit counter %macro (GFXAUDIT=1, a knob) stores through CS while DS is the caller's, and one pair is in the .boot2 font probe
+4 1 kernel/font.inc  # an audit counter %macro (GFXAUDIT=1, a knob) stores through CS while DS is the caller's, and one pair is in the boot font probe (font_init, `.boot3`, real mode before mega_enter)
 2 0 kernel/vga12.inc  # the BAND=1 1bpp band pen (a knob): state through CS while DS is a source band
 5 0 kernel/hbmark.inc  # DOSRMARK=1's resume trace (%macro), which no shipped kernel assembles
 
@@ -61,6 +61,7 @@
 37 3 kernel/splash.inc  # the loading screen's state, all of it in stage 2 (SPEC.md 2.9.4)
 3 1 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
 0 1 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now, and AUTOSTART's walk is `.cold` on kern_mega with no CS idiom in it (KERN-MEGA-MEMORY-PLAN MC8) - the blob's three stay in its %else arm, which kern_mega does not assemble
+0 1 kernel/viddet.inc  # vid_detect's plain-MDA halt (SPEC.md 39.1) points DS at the blob for read_run.halt's lodsb: `.boot2`, stage 2, real mode before mega_enter, and it never returns
 
 # --- .mod*: an on-demand module writing its own image -----------------------
 28 10 kernel/hiber.inc  # HIBER.DRV (.modh); real mode by design and replaced on kern_mega (KERN-MEGA-PLAN 2.6) - -24 for the DOS trip's own path, which kern_mega DOES run in protected mode (hbm_dosrun step 3c, hbm_extat, hbm_sweep, hbm_drvsusp, hbm_xcap: ~310 mega_gpw fixups a trip, now CSDO, KERN-MEGA-PLAN 14.46). The hibernate's own nine (hbm_wrimg, hbm_ptrfix_set, the ask's paint) stay: one fixup each a hibernate, against the 77 bytes CSDO would add - which took the image's claim over a KB (MODH_UNPAD's dead zone, 10KB -> 11KB while it is loaded)

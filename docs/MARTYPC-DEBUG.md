@@ -1348,17 +1348,17 @@ under turbo** — its video clock is derived from the CPU clock and
 VGA one (`os8088_xt_vga_sb`); the MDA is untested for the same reason. **No
 PERFORMANCE.md number may be taken off it.**
 
-### `subtype = "Hercules"` is load-bearing and its absence is silent
+### `subtype = "Hercules"` is load-bearing
 
 Without it MartyPC builds a plain MDA whose `mem_mask` is 0x0FFF: the card
-decodes **4 KB and mirrors it eight times** across the 32 KB aperture. The
-kernel's own probe still reports Hercules (`[vid_w]`/`[vid_h]`/`[vid_stride]`
-= 720/348/90, `[vid_mono]` = 1), so **everything on the guest side looks
-right** while every write above 0x0FFF aliases on top of the first 4 KB. What
-it looks like: `shot` returns a **sheared** picture with the desktop repeated
-down the screen, and `shot --rendered` an **all-black** 720x350. The
-one-command diagnosis: `dump 0xB0000 32768 -o x.bin` and test whether byte
-*i* equals byte *i*+4096.
+decodes **4 KB and mirrors it eight times** across the 32 KB aperture. Since
+2026-11-10 the kernel's probe sees that (SPEC.md 39.1 step 4): the boot stops
+at once with `MDA cannot run os8088` on the text screen, or - with a CGA in
+the profile too - comes up on the CGA. Before that the probe reported
+Hercules and every write above 0x0FFF aliased on top of the first 4 KB: a
+**sheared** `shot` with the desktop repeated down the screen and an
+**all-black** `shot --rendered`. A profile WITHOUT the subtype is therefore
+the plain-MDA machine, and the way to test step 4.
 
 ### The hard-disk machines test RUNG 0, and that is the point
 
