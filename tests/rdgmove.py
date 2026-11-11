@@ -210,10 +210,16 @@ def leg(a, disk, MAP, lab, static):
                    "carve": "rw_partsmv"}[a.red]
             m.write(seg0 * 16 + lab[bug], b"\xC3")
             print("  RED RUN: a ret over %s" % bug)
+        # THE POST IS AN OFFSET, a window pointer as the kernel holds one:
+        # wptr is LINEAR (os88sym.linear), and posting it woke "the window"
+        # 0x600 past the record - a .bss word that read as no window until a
+        # one-byte .bss shift (BR-11) made it one, whose W_DISP was two
+        # spaces of menu_bcell, and the wake far-called 2020:2020
+        woff = wptr - os88sym.KERNEL_SEG * 16
         try:
             for _ in range(2):          # TWO passes: the first lifts the region
                 m.write(S("mem_cpq_lvl"), bytes([0xFC]))    # into Calc's hole,
-                m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+                m.write(S("mem_cpq"), bytes([woff & 0xFF, woff >> 8]))
                 M.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                         "the posted compaction", poll=0.2, guest=30.0)
                 M.ui_done(m)            # and the restart that re-enters the

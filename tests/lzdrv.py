@@ -120,7 +120,8 @@ def strike(src):
     for i in range(nent):
         e = off + i * 32
         if d[e:e + 11] == b"RAMDISK DRV":
-            if not 0x5A <= d[e + 12] <= 0x5B:
+            if d[e + 12] not in (0xA4, 0xA5):   # os88disk.CZ_HINT + the
+                # format (5Ah/5Bh until kernel size pass 19's F3)
                 sys.exit("lzdrv: RAMDISK.DRV carries no hint to strike - "
                          "the fixture stopped compressing it")
             d[e + 12] = d[e + 13] = d[e + 20] = d[e + 21] = 0
