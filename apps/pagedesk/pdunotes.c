@@ -307,7 +307,10 @@ static void pdu_notes_page(void)
 }
 
 /* the source cache, once a page, when the panel or its popover will show it
- * and no job is using the engine (an ANNOTS call moves its object state) */
+ * and no job is using the engine (an ANNOTS call moves its object state) -
+ * a thumbnail between its slices aside, with the overlay already in:
+ * PDREND keeps its state in its own globals and its streams are their own
+ * contexts, which its resource lookups already interleave with */
 static void pdu_nt_srcload(void)
 {
     if (pdu_doc != D_OPEN || pdu_nt_spage == pdu_page + 1
@@ -315,7 +318,7 @@ static void pdu_nt_srcload(void)
         pdu_nt_late = 0;                /* nothing owed: up to date, or */
         return;                         /* loaded when it is shown */
     }
-    if (pdu_job != J_NONE) {
+    if (pdu_job != J_NONE && (pdu_job != J_THUMB || !pdu_ovl_in())) {
         pdu_nt_late = 1;
         return;
     }

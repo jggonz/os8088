@@ -22,6 +22,12 @@ section .text   start=0
 section .rodata follows=.text   align=2
 section .data   follows=.rodata align=2
 section .bss    follows=.data   align=2 nobits
+; the second code segment (PAGEDESK-SPEC 20.22.7.9, pdrovl.inc): the ovl_* code
+; FOLLOWS .data, as .bss does - .bss is nobits, so .modc's first byte is the
+; image's end and the Makefile cuts it there into PDRENDC.MOD. vstart=0: it
+; runs at offset 0 of its own claim; align=1: no pad before the cut
+%define CC_HAS_OVL
+section .modc   follows=.data   align=1 vstart=0
 
 %include "os88api.inc"
 %include "pagedesk/pdabi.inc"       ; PDM_MAGIC_REND, PDM_ABI, PDE_* (generated)
@@ -62,6 +68,17 @@ pdr_entry:
     pop cx
     pop ax
 .go:
+    cmp al, PDV_REND_CODE           ; the second code segment (20.22.7.9): bind
+    jne .bound                      ; it, before anything that could run it
+    call pdr_ovcode
+    jmp short .out                  ; CF and AX as pdr_ovcode left them
+.bound:
+    cmp word [pdr_ovok], 0          ; no verb runs on an unbound part
+    jne .run
+    mov ax, PDE_RANGE
+    stc
+    jmp short .out
+.run:
     xor ah, ah
     push dx                         ; cdecl, right to left:
     push cx                         ;   unsigned dx
@@ -69,10 +86,14 @@ pdr_entry:
     push ax                         ;   unsigned bx, unsigned verb
     call _pdr_verb
     add sp, 8
+    mov cx, [_pdr_out_cx]           ; PDE_NEEDMEM's region, PDE_NEEDMOD's and
+    mov dx, [_pdr_out_dx]           ; NEEDMEM's DX (20.22.7); scratch otherwise
     or ax, ax
     jz .ok
-    cmp ax, PDE_BUSY
-    je .ok
+    mov bx, ax                      ; PDE_BUSY, PDE_NEEDMOD and PDE_NEEDMEM
+    sub bx, PDE_BUSY                ; (65..67) are not failures: CF = 0
+    cmp bx, PDE_NEEDMEM - PDE_BUSY + 1
+    jb .ok
     stc
     jmp short .out
 .ok:
@@ -103,6 +124,7 @@ section .text
 ; =============================================================================
 ; THE COMPILED C
 ; =============================================================================
+%include "pagedesk/pdrovl.inc"     ; the second code segment's runtime: FIRST in .modc
 %include "pdrend.gen.asm"           ; found through -I build/
 
 ; the API bridge, gated: only the thunks the C names (os88_gfx_lock/unlock,
@@ -121,6 +143,12 @@ section .text
 ; this segment never parses or prints a number and never checksums (PDENG's and PDWRT's work)
 %define PDM_SKIP_PARSE
 %define PDM_SKIP_CRC
+; nor uses these (20.22.7's room): the base matrix is its own (pdrv.c view_base),
+; it maps no device point back to the page, writes no pt16 and no far word
+%define PDM_SKIP_U32X
+%define PDM_SKIP_TOPT16
+%define PDM_SKIP_VIEWX
+%define PDM_SKIP_POKEW
 %include "pagedesk/pdmath.inc"
 %endif
 
@@ -135,9 +163,14 @@ _os88_file_read_seq:
 %endif
 
 %include "pagedesk/pdrprim.inc"
+%ifdef PDR_X8                           ; blend: PDX8's far calls (20.22.10.11); the Makefile passes -DPDR_X8 to nasm and the compiler together
+%include "pagedesk/pdrx8h.inc"
+%endif
 
 section .bss
 pdr_bss_end:
+section .modc
+pdr_modc_end:                       ; vstart=0: this label's value is the part's size
 section .data
 align 2, db 0
 pdr_image_end:

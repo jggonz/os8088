@@ -2,12 +2,12 @@
  * os8088 - apps/pagedesk/pdovlpref.c   THE PREFERENCES DIALOG (20.18.2, 20.18.3)
  *
  * #included by pdovl.c, so every ovl_* here is cut into the overlay (2.2).
- * A popover of eight text rows: a title, the five settings, the selected
- * one's description and the key line. Its paints run at the wake
+ * A popover of eight text rows: a title, the six settings and one line of
+ * keys and when changes apply. Its paints run at the wake
  * (pdu_popown), never in the key's chain (t_pdstk).
  * ==========================================================================*/
 #define PDP_NAME "PAGEDESK.CFG"
-#define PDP_LEN  10
+#define PDP_LEN  11                     /* version 2; version 1 is the first 10 */
 
 static struct os88_place pdp_pl;
 static struct os88_find  pdp_fd;
@@ -71,39 +71,41 @@ static int ovl_pf_panels(void)
 /* read the file; a bad one changes nothing (20.18.1) */
 static void ovl_pf_load(void)
 {
-    int i, ok;
+    int i, n, ok;
 
     if (!ovl_pf_enter())
         return;
     i = os88_file_read(PDP_NAME, pdu_line, 16);
     ovl_pf_leave();
-    if (i != PDP_LEN || pdu_line[0] != 'P' || pdu_line[1] != 'D'
-        || pdu_line[2] != 'C' || pdu_line[3] != 'F' || pdu_line[4] != 1)
+    n = i;                              /* 10: version 1, 11: version 2 (20.22.6) */
+    if ((n != 10 && n != 11) || pdu_line[0] != 'P' || pdu_line[1] != 'D'
+        || pdu_line[2] != 'C' || pdu_line[3] != 'F' || pdu_line[4] != n - 9)
         return;
     ok = 1;                             /* each setting in its range */
-    for (i = 5; i < PDP_LEN; i++)
-        if (pdu_line[i] < 0 || pdu_line[i] > (i == 5 ? 2 : i == 9 ? 1 : 3))
+    for (i = 5; i < n; i++)
+        if (pdu_line[i] < 0 || pdu_line[i] > (i == 5 ? 2 : i >= 9 ? 1 : 3))
             ok = 0;
     if (!ok)
         return;
-    for (i = 5; i < PDP_LEN; i++)
+    for (i = 5; i < n; i++)
         pdp_cfg[i] = pdu_line[i];
     ovl_pf_panels();
 }
 
-#define PDP_COLS 28
+#define PDP_COLS 36
 
-static const char *pdp_label[5] = { "Default view ", "Full panels  ",
+static const char *pdp_label[6] = { "Default view ", "Full panels  ",
                                     "Mid panels   ", "Mono marks   ",
-                                    "Flate cache  " };
-static const char *pdp_val[5][4] = {
+                                    "Flate cache  ", "Module cache " };
+static const char *pdp_val[6][4] = {
     { "Fit width", "Fit page", "100%", 0 },
     { "None", "Pages", "Notes", "Both" },
     { "None", "Pages", "Notes", "Both" },
     { "Line+frame", "Line", "Frame", "Hatch" },
+    { "Auto", "Off", 0, 0 },
     { "Auto", "Off", 0, 0 }
 };
-static const char pdp_cnt[5] = { 3, 4, 4, 4, 2 };
+static const char pdp_cnt[6] = { 3, 4, 4, 4, 2, 2 };
 
 /* one row of exactly PDP_COLS cells: the ground comes with the glyphs */
 static void ovl_pf_row(int y, const char *a, const char *b, int sel)
@@ -130,6 +132,10 @@ static void ovl_pf_paint(void)
     struct os88_rect *p;
     int k, y;
 
+    if (pdu_au_mode) {                  /* the password prompt (20.22.6) */
+        ovl_au_pnt();
+        return;
+    }
     p = &pdu_poprect;
     pdu_fill(p->x1, p->y1, p->x2, p->y2, OS88_WHITE);
     os88_set_color(OS88_BLACK);
@@ -137,11 +143,10 @@ static void ovl_pf_paint(void)
     os88_gfx_frame(p->x1 + 1, p->y1 + 1, p->x2 - 1, p->y2 - 1);
     y = p->y1 + 6;
     ovl_pf_row(y, "Preferences", 0, 0);
-    for (k = 0; k < 5; k++)
+    for (k = 0; k < 6; k++)
         ovl_pf_row(y + (k + 1) * PDU_POP_ROW, pdp_label[k],
                    pdp_val[k][(int)pdp_cfg[5 + k]], k == pdp_row);
-    ovl_pf_row(y + 6 * PDU_POP_ROW, "View, Flate: next open", 0, 0);
-    ovl_pf_row(y + 7 * PDU_POP_ROW, "Arrows  Enter  Esc", 0, 0);
+    ovl_pf_row(y + 7 * PDU_POP_ROW, "Arrows Esc  View, caches: next open", 0, 0);
 }
 
 static void ovl_pf_owe(void)
@@ -170,12 +175,16 @@ static void ovl_pf_step(int dir)
 
 static void ovl_pf_move(int dir)
 {
-    pdp_row = (pdp_row + dir + 5) % 5;
+    pdp_row = (pdp_row + dir + 6) % 6;
     ovl_pf_owe();
 }
 
 static void ovl_pf_key(int ascii, int scan)
 {
+    if (pdu_au_mode) {
+        ovl_au_ky(ascii);
+        return;
+    }
     if (ascii == 13 || ascii == ' ')
         ovl_pf_step(1);
     else if (ascii == 9)
@@ -197,7 +206,7 @@ static void ovl_pf_click(int x, int y)
     int k;
 
     k = (y - pdu_poprect.y1 - 6) / PDU_POP_ROW - 1;
-    if (k < 0 || k > 4)
+    if (k < 0 || k > 5 || pdu_au_mode)
         return;
     pdp_row = k;
     ovl_pf_step(1);

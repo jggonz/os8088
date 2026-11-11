@@ -14,6 +14,12 @@ static int raw_get(struct sctx *c)
 {
     pdw want, n;
     if (c->rbi >= c->rbn) {
+        if (c->cmode) {
+            n = cr_read(c, c->rb, PDE_RB);
+            if (!n) return -1;
+            c->rbn = n; c->rbi = 0;
+            return c->rb[c->rbi++];
+        }
         want = PDE_RB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return -1;
@@ -62,10 +68,51 @@ static int sg_add(struct sctx *c, pdw n)
  * Run length: fcnt > 0 literal bytes still to copy, fcnt < 0 repeats of fbyte
  * still to give, fcnt 0 a length byte to read - fbyte bit 8 set when it has been
  * read (its low byte) and the byte after it is wanted. */
+/* ASCII85 (7.4.3, 20.22.3.6): fcnt 0..4 digits held, the group in fbyte (low
+ * word) and fhi; fcnt -1..-4 bytes of the group still to give, the next in
+ * fhi's high byte; -9..-12 the same with the data ended after them, -8 ended. */
+static int st_a85(struct sctx *c, int i, int in)
+{
+    int *n = c->fcnt + i, d = 0, m = 0;
+    pdw *lo = c->fbyte + i, *hi = c->fhi + i;
+    if (*n >= 0) {
+        if (in == SG_ASK || (in >= 0 && is_ws(in))) return SG_NEED;
+        if (in == 'z' && *n == 0) { *lo = 0; *hi = 0; *n = -4; }
+        else {
+            if (in < 0 || in == '~') {                  /* the end: a last group of 2..4 */
+                if (*n == 0) { *n = -8; return -1; }
+                if (*n == 1) { lx_err = PDE_SYNTAX; return -1; }
+                m = *n - 1;                             /* the bytes it gives; padded with 'u' */
+                d = 'u';
+            } else if (in < '!' || in > 'u') { lx_err = PDE_SYNTAX; return -1; }
+            else d = in;
+            do {
+                pdm_ovf_clear();
+                pdm_u32_mul16(&m_a, *lo, 85);
+                pdm_u32_mul16(&m_b, *hi, 85);
+                pdm_u32_set(&m_c, m_b.lo, 0);
+                pdm_u32_add(&m_a, &m_a, &m_c);
+                pdm_u32_add16(&m_a, (pdw)(d - '!'));
+                if (m_b.hi || pdm_ovf()) { lx_err = PDE_SYNTAX; return -1; }   /* over 2^32 - 1 */
+                *lo = m_a.lo; *hi = m_a.hi;
+            } while (++*n < 5 && m);
+            if (*n < 5) return SG_NEED;
+            *n = m ? -8 - m : -4;
+        }
+    }
+    if (*n == -8) return -1;
+    d = (int)(*hi >> 8);                                /* the group's next byte, big-endian */
+    *hi = (pdw)((*hi << 8) | (*lo >> 8));
+    *lo = (pdw)(*lo << 8);
+    (*n)++;
+    return d;
+}
+
 static int st_step(struct sctx *c, int i, int in)
 {
     int v, *n = c->fcnt + i;
     pdw *fb = c->fbyte + i;
+    if (c->flt[i] == PDF_K_A85) return st_a85(c, i, in);
     if (c->flt[i] == PDF_K_HEX) {
         if (in == SG_ASK || (in >= 0 && is_ws(in))) return SG_NEED;
         if (in < 0 || in == '>') {
@@ -148,8 +195,8 @@ static int sget(struct sctx *c, int top)
 {
     int k = top, r = SG_ASK;
     if (top < 0) return raw_get(c);
-    if (c->filters & PDFL_FLATE)
-        while (k >= 0 && c->flt[k] != PDF_K_FLATE) k--;
+    if (c->filters & (PDFL_FLATE | PDFL_LZW))          /* the one slot stage: Flate or LZW */
+        while (k >= 0 && !FLK_SLOT(c->flt[k])) k--;
     else k = -1;
     if (k < 0) return sget_lo(c, top);
     if (k == top) return sg_flate(c, k);
@@ -175,6 +222,7 @@ static pdw st_decode(struct sctx *c)
     int b;
     if (lx_err) return 0;
     if (c->nflt == 0) {
+        if (c->cmode) return cr_read(c, c->ib, PDE_IB);
         want = PDE_IB;
         if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
         if (!want) return 0;
@@ -187,7 +235,7 @@ static pdw st_decode(struct sctx *c)
         b = sget(c, (int)c->nflt - 1);
         if (b < 0) break;
         c->ib[n++] = (pdb)b;
-        if (c->flt[c->nflt - 1] == PDF_K_FLATE) n = (pdw)(n + fl_take(c, c->ib + n, (pdw)(PDE_IB - n)));
+        if (FLK_SLOT(c->flt[c->nflt - 1])) n = (pdw)(n + fl_take(c, c->ib + n, (pdw)(PDE_IB - n)));
     }
     if (n && st_account(c, n)) return 0;
     return n;
@@ -195,21 +243,68 @@ static pdw st_decode(struct sctx *c)
 
 /* ---- a stream object's header --------------------------------------------- */
 
+/* A filter's name to its kind (20.22.3.6): 0 unknown; PDF_K_CODEC + PDCD_*
+ * an image codec, which the chain may stop before */
+static const pdb flt_kinds[16] = {
+    PDF_K_HEX, PDF_K_HEX, PDF_K_RLE, PDF_K_RLE, PDF_K_FLATE, PDF_K_FLATE, PDF_K_LZW, PDF_K_LZW,
+    PDF_K_A85, PDF_K_A85, PDF_K_CODEC + PDCD_DCT, PDF_K_CODEC + PDCD_DCT, PDF_K_CODEC + PDCD_CCITT,
+    PDF_K_CODEC + PDCD_CCITT, PDF_K_CODEC + PDCD_JBIG2, PDF_K_CODEC + PDCD_JPX };
+static const pdb flt_bits[6] = { 0, PDFL_HEX, PDFL_RLE, PDFL_FLATE, PDFL_LZW, PDFL_A85 };
 static pdw flt_kind(const pdb *name)
 {
-    if (str_eq(name, "ASCIIHexDecode") || str_eq(name, "AHx")) return PDF_K_HEX;
-    if (str_eq(name, "RunLengthDecode") || str_eq(name, "RL")) return PDF_K_RLE;
-    if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return g_nfl ? PDF_K_FLATE : 100 + PDE_FLATE;
-    return 100 + PDE_FILTER;
+    pdw k = kw_ix(name, "ASCIIHexDecode\0AHx\0RunLengthDecode\0RL\0FlateDecode\0Fl\0LZWDecode\0LZW\0"
+                        "ASCII85Decode\0A85\0DCTDecode\0DCT\0CCITTFaxDecode\0CCF\0JBIG2Decode\0JPXDecode\0");
+    return k ? flt_kinds[k - 1] : 0;
 }
+static pdw flt_bit(pdw k) { return k < 6 ? flt_bits[k] : 0; }
+
+/* One /Filter name onto sp_flt. A codec ends the chain (the caller reads its
+ * coded bytes) when sp_accept says the caller takes them. */
+static pdw sp_accept, sp_codec;
+static pdw sp_crypt;                            /* the chain names /Crypt (20.22.5) */
 static pdw flt_add(const pdb *name)
 {
-    pdw k = flt_kind(name);
-    if (k > 100) return (pdw)(k - 100);
+    pdw k;
+    if (str_eq(name, "Crypt")) { sp_crypt = 1; return PDE_OK; }
+    if (cr_peek) return PDE_OK;                         /* (a PLAIN copy needs no slot, whatever the chain) */
+    k = flt_kind(name);
+    if (!k || sp_codec) return PDE_FILTER;              /* unknown, or a stage after a codec */
+    if (k >= PDF_K_CODEC) {
+        if (!(sp_accept & PDSA_CODEC)) return PDE_FILTER;
+        sp_codec = (pdw)(k - PDF_K_CODEC);
+        return PDE_OK;
+    }
+    if (FLK_SLOT(k)) {
+        if (!g_nfl && !flt_osw) return PDE_FLATE;       /* no slot on this machine */
+        if (sp_filters & (PDFL_FLATE | PDFL_LZW)) return PDE_FILTER;   /* one slot stage a chain */
+    }
     if (sp_nflt >= PD_MAXFILTERS) return PDE_LIMIT;
-    if (k == PDF_K_FLATE && (sp_filters & PDFL_FLATE)) return PDE_FILTER;   /* one Flate stage a chain */
     sp_flt[sp_nflt++] = (pdb)k;
-    sp_filters |= (k == PDF_K_HEX) ? PDFL_HEX : (k == PDF_K_FLATE) ? PDFL_FLATE : PDFL_RLE;
+    sp_filters |= flt_bit(k);
+    return PDE_OK;
+}
+
+/* "stream" just read: its end of line, and where the data starts into *ds */
+static pdw st_eol(struct pd_u32 *ds)
+{
+    int c = lx_getc();
+    if (c == 13 && lx_peek() == 10) c = lx_getc();
+    if (c != 10) return PDE_SYNTAX;
+    lx_tell(ds);
+    return PDE_OK;
+}
+/* The data at *ds for *len ends inside the file, at "endstream" */
+static pdw st_end(const struct pd_u32 *ds, const struct pd_u32 *len)
+{
+    pdw rc;
+    pdm_ovf_clear();
+    pdm_u32_add(&s_a, ds, len);
+    if (pdm_ovf() || pdm_u32_cmp(&s_a, &fl_size) > 0) return PDE_TRUNC;
+    L = &fobj;
+    lx_seek(&s_a);
+    rc = lx_token();
+    if (rc == PDE_IO) return rc;
+    if (rc || tk.kind != PDT_OP || !str_eq(tk.text, "endstream")) return PDE_SYNTAX;
     return PDE_OK;
 }
 
@@ -220,7 +315,6 @@ static pdw flt_add(const pdb *name)
 static pdw ob_stream_dict(pdw num, pdw gen)
 {
     pdw rc;
-    int c;
     lx_tell(&ds_pos);
     rc = ob_skipc();
     if (rc) return rc;
@@ -228,29 +322,27 @@ static pdw ob_stream_dict(pdw num, pdw gen)
     if (rc) return rc;
     if (tk.kind != PDT_OP || !str_eq(tk.text, "stream")) { sp_kind = PDK_DICT; return PDE_OK; }
     sp_kind = PDK_STRM;
-    c = lx_getc();
-    if (c == 13) { if (lx_peek() == 10) L->i++; else { err_obj = num; return PDE_SYNTAX; } }
-    else if (c != 10) { err_obj = num; return PDE_SYNTAX; }
-    lx_tell(&sp_dstart);
+    rc = st_eol(&sp_dstart);
+    if (rc) goto bad;
     lx_seek(&ds_pos);
     rc = ob_dict_find("Length");
-    if (rc == PDE_NOTFOUND) { err_obj = num; return PDE_SYNTAX; }
+    if (rc == PDE_NOTFOUND) { rc = PDE_SYNTAX; goto bad; }
     if (rc) return rc;
+    lx_skipws();
+    lx_tell(&sp_lpos);
     rc = ob_value();
     if (rc) return rc;
-    if (ov.kind == PDK_REF) { rc = ob_follow(); if (rc) return rc; }
-    if (ov.kind != PDK_INT || ov.neg || ov.range) { err_obj = num; return PDE_SYNTAX; }
+    lx_tell(&sp_lend);
+    sp_lref = (pdw)(ov.kind == PDK_REF);
+    if (sp_lref) { rc = ob_follow(); if (rc) return rc; }
+    if (ov.kind != PDK_INT || ov.neg || ov.range) { rc = PDE_SYNTAX; goto bad; }
     u32_cp(&sp_len, &ov.iv);
-    pdm_ovf_clear();
-    pdm_u32_add(&s_a, &sp_dstart, &sp_len);
-    if (pdm_ovf() || pdm_u32_cmp(&s_a, &fl_size) > 0) { err_obj = num; return PDE_TRUNC; }
-    L = &fobj;
-    lx_seek(&s_a);
-    rc = lx_token();
+    rc = st_end(&sp_dstart, &sp_len);
     if (rc == PDE_IO) return rc;
-    if (rc || tk.kind != PDT_OP || !str_eq(tk.text, "endstream")) { err_obj = num; return PDE_SYNTAX; }
     (void)gen;
-    return PDE_OK;
+bad:
+    if (rc) err_obj = num;
+    return rc;
 }
 
 /* The stream's /Filter chain into sp_flt (needs sp_kind == PDK_STRM). */
@@ -258,14 +350,14 @@ static pdw ob_filters1(pdw num);
 static pdw ob_filters(pdw num)
 {
     pdw rc = ob_filters1(num);
-    if (!rc && (sp_filters & PDFL_FLATE)) rc = fl_parms(num);
+    if (!rc && (sp_filters & (PDFL_FLATE | PDFL_LZW))) rc = fl_parms(num);
     return rc;
 }
 static pdw ob_filters1(pdw num)
 {
     pdw rc, rn, rg;
     int hops;
-    sp_nflt = 0; sp_filters = 0;
+    sp_nflt = 0; sp_filters = 0; sp_codec = 0; sp_crypt = 0;
     lx_seek(&ds_pos);
     rc = ob_dict_find("F");                           /* an external file stream */
     if (rc == PDE_OK) { err_obj = num; return PDE_FILTER; }
@@ -323,6 +415,15 @@ static pdw ob_extent(pdw num, pdw gen)
     if (rc) return rc;
     if (ov.kind == PDK_CLOSE || ov.kind == PDK_WORD || ov.kind == PDK_EOF) { err_obj = num; return PDE_SYNTAX; }
     sp_kind = ov.kind;
+    if (ob_hdr.hi & 0x8000) {                   /* a member: its value's bytes (20.22.3.3) */
+        if (ov.kind == PDK_ARR || ov.kind == PDK_DICT) {
+            rc = ob_skipc();
+            if (rc) return rc;
+        }
+        lx_tell(&s_c);
+        pdm_u32_sub(&ex_len, &s_c, &sp_off);
+        return PDE_OK;
+    }
     if (ov.kind == PDK_DICT) {
         rc = ob_stream_dict(num, gen);
         if (rc) return rc;
@@ -346,26 +447,37 @@ static pdw ob_extent(pdw num, pdw gen)
 
 /* ---- the open-stream stack -------------------------------------------------- */
 
-static pdw st_push(pdw filtered)
+/* A stream context, fresh: the raw bytes at ds for len, the chain flt. */
+static void nz(void *p, pdw n)
+{
+    pdb *q = (pdb *)p;
+    while (n--) *q++ = 0;
+}
+static void ctx_init(struct sctx *c, const struct pd_u32 *ds, const struct pd_u32 *len,
+                     pdw nflt, const pdb *flt, pdw filters)
+{
+    pdw i;
+    nz(&c->lx, sizeof(struct lxs));             /* all but the lookahead buffer, zero */
+    nz(&c->rpos, (pdw)((pdb *)(c + 1) - (pdb *)&c->rpos));
+    c->lx.buf = c->ib; c->lx.mode = 1;
+    u32_cp(&c->rpos, ds);
+    u32_cp(&c->rrem, len);
+    c->nflt = nflt;
+    for (i = 0; i < PD_MAXFILTERS; i++) c->flt[i] = flt[i];
+    c->filters = filters;
+}
+
+static pdw st_push(pdw filtered, pdw num, pdw gen)
 {
     struct sctx *c;
     pdw i;
     if (nctx >= PDE_MAXCTX) return PDE_LIMIT;
     c = &ctxs[nctx];
-    c->lx.buf = c->ib; c->lx.n = 0; c->lx.i = 0; c->lx.mode = 1; c->lx.gen = 0;
-    c->lx.smode = 0; c->lx.sdepth = 0;
-    u32_zero(&c->lx.fpos);
-    u32_cp(&c->rpos, &sp_dstart);
-    u32_cp(&c->rrem, &sp_len);
-    u32_zero(&c->outc);
-    c->nflt = filtered ? sp_nflt : 0;
-    for (i = 0; i < PD_MAXFILTERS; i++) {
-        c->flt[i] = sp_flt[i]; c->fcnt[i] = 0; c->fbyte[i] = 0; c->fdone[i] = 0;
-    }
-    c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
-    c->filters = sp_filters;
+    ctx_init(c, &sp_dstart, &sp_len, filtered ? sp_nflt : 0, sp_flt, sp_filters);
     fl_drop(c);
-    if (c->nflt && (sp_filters & PDFL_FLATE)) {
+    i = cr_ctx_open(c);                         /* cr_sn/cr_sg: the caller's (20.22.5) */
+    if (i) return i;
+    if (c->nflt && (sp_filters & (PDFL_FLATE | PDFL_LZW))) {
         i = fl_attach(c);
         if (i) return i;
     }
@@ -437,13 +549,17 @@ static pdw v_strm_open(void)
     rc = ob_stream_dict(num, gen);
     if (rc) return rc;
     if (sp_kind != PDK_STRM) { err_obj = num; return PDE_SYNTAX; }
+    sp_accept = sx.accept;                      /* the codec pass-through (20.22.3.6) */
     rc = ob_filters(num);
+    sp_accept = 0;
     if (rc) return rc;
-    rc = st_push(1);
+    cr_sn = num; cr_sg = gen; cr_skip = cr_skipchk();
+    rc = st_push(1, num, gen);
     if (rc) return rc;
-    if (sp_nflt == 0) u32_cp(&sx.declen, &sp_len);
+    if (sp_nflt == 0 && ctxs[nctx - 1].cmode != PDCM_AESV2 && ctxs[nctx - 1].cmode != PDCM_AESV3) u32_cp(&sx.declen, &sp_len);
     else { sx.declen.lo = 0xFFFF; sx.declen.hi = 0xFFFF; }
     sx.filters = sp_filters;
+    sx.codec = sp_codec;
     pd_fcopy_out(&sx, g_xb, 0, sizeof(struct pdxb_strm));
     return PDE_OK;
 }
@@ -474,7 +590,13 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
     }
     while (got < dmax) {
         want = (pdw)(dmax - got);
-        if (c->nflt == 0) {
+        if (c->nflt == 0 && c->cmode) {
+            if (want > 128) want = 128;
+            k = cr_read(c, tmpb, want);
+            if (!k) break;
+            if (!pd_fcopy_out(tmpb, dseg, (pdw)(doff + got), k)) return PDE_RANGE;
+            got = (pdw)(got + k);
+        } else if (c->nflt == 0) {
             if (c->rrem.hi == 0 && c->rrem.lo < want) want = c->rrem.lo;
             if (!want) break;
             k = fl_read_far(&c->rpos, dseg, (pdw)(doff + got), want);
@@ -488,7 +610,7 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
                 b = sget(c, (int)c->nflt - 1);
                 if (b < 0) break;
                 tmpb[k++] = (pdb)b;
-                if (c->flt[c->nflt - 1] == PDF_K_FLATE) k = (pdw)(k + fl_take(c, tmpb + k, (pdw)(want - k)));
+                if (FLK_SLOT(c->flt[c->nflt - 1])) k = (pdw)(k + fl_take(c, tmpb + k, (pdw)(want - k)));
             }
             if (k) {
                 if (st_account(c, k)) return lx_err;

@@ -99,6 +99,12 @@ static void os88_gfx_lock(void) {}
 static void os88_gfx_unlock(void) {}
 static void os88_gfx_xor_fill(int a, int b, int c, int d) { }
 static int os88_wm_clip_set(void *w) { return 0; }
+/* QA F26: the edit store is a claim of its own, taken at the first edit
+ * (ovl_ed_need): the document's claims and the store, as pdumod.c holds them */
+static unsigned pdu_dc[12];             /* PDU_NDC */
+static unsigned pdu_dclaim[3] = { 0x1000, 0x1800, 0x2000 };
+static unsigned claimhi_ans = 0x2000, claimhi_n;
+static unsigned pdu_claimhi(unsigned paras) { claimhi_n++; return paras == 1024 ? claimhi_ans : 0; }
 static unsigned pdu_dcseg(int row)
 {
     return row == PDU_DC_EDITS ? 0x2000 : row == PDU_DC_UNDO ? 0x3000 : 0;
@@ -247,9 +253,24 @@ static int os88_mem_free(unsigned seg)
 static char *os88_utoa(unsigned v, char *dst) { sprintf(dst, "%u", v); return dst; }
 
 static void ovl_rc_wake(void);
+/* pdujob.c's idle hold (QA SYNTH toast). The target's ovl_ thunk answers a
+ * refused fetch by not running the function: jr_refuse plays that here, and
+ * pdurecov.c's call is counted with the idle kind it was made under */
+static char pdu_ovidle, pdu_ovhold;
+static int jr_refuse, jr_calls, jr_kind;
+int pdu_ovl_in(void) { return !jr_refuse; }
+static void jr_rc_wake(void)
+{
+    jr_calls++;
+    jr_kind = pdu_ovidle;
+    if (!jr_refuse)
+        ovl_rc_wake();
+}
 #include "../pduedit.c"
 #include "../pduundo.c"
+#define ovl_rc_wake jr_rc_wake
 #include "../pdurecov.c"
+#undef ovl_rc_wake
 #include "../pdovlrecov.c"
 
 /* ---- the harness ------------------------------------------------------------- */
@@ -592,12 +613,12 @@ static void test_grow(void)
     CHECK(pdu_ed_count() == 1 && (int)r.text_len == n, "...the last text that fit (%u)", r.text_len);
     /* more than one write stages: off, said, the document unharmed */
     fresh();
-    for (i = 0; i < 38; i++) {
+    for (i = 0; i < 60; i++) {         /* O9's 8 KiB store: 60 x (52 + 85) > 8 KiB */
         mk(PDA_NOTE, 0, 1, 1, 90, 90);
-        pdu_ed_new(&E, tx, 200, (pd_pt *)0, 0);
+        pdu_ed_new(&E, tx, 85, (pd_pt *)0, 0);
     }
     idle();
-    CHECK((rc_f & RCF_OFF) && pdu_ed_count() == 38, "a store too big for one write: off, said");
+    CHECK((rc_f & RCF_OFF) && pdu_ed_count() == 60, "a store too big for one write: off, said (%d)", pdu_ed_count());
 }
 
 static void test_pages(void)
@@ -806,6 +827,29 @@ static void test_close(void)
     CHECK(pdu_rc_close() == 1, "no document: closes");
 }
 
+/* a refused look after an open is idle work: said as such (kind 2), held
+ * until the user acts, and not retried on every wake; a write is the user's
+ * own (kind 0) */
+static void test_hold(void)
+{
+    fresh();
+    rc_f |= RCF_CHECK;
+    jr_refuse = 1; jr_calls = 0; pdu_ovhold = 0;
+    wake();
+    CHECK(jr_calls == 1 && jr_kind == 2 && pdu_ovhold == 1 && pdu_ovidle == 0,
+          "refused look: one call, kind 2, held (calls %d kind %d hold %d)", jr_calls, jr_kind, pdu_ovhold);
+    wake(); wake();
+    CHECK(jr_calls == 1 && (rc_f & RCF_CHECK), "held: not retried, still owed (calls %d)", jr_calls);
+    jr_refuse = 0; pdu_ovhold = 0;          /* a key, a click, a command */
+    wake();
+    CHECK(jr_calls == 2 && !(rc_f & RCF_CHECK) && !pdu_ovhold, "after the user acts it runs (calls %d)", jr_calls);
+    rc_f |= RCF_DIRTY;
+    jr_refuse = 1;
+    wake();
+    CHECK(jr_calls == 3 && jr_kind == 0 && pdu_ovhold == 1, "a refused write keeps the plain refusal (kind %d)", jr_kind);
+    jr_refuse = 0; pdu_ovhold = 0;
+}
+
 int main(void)
 {
     unsigned s;
@@ -826,6 +870,7 @@ int main(void)
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "seed")) test_seed();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "other")) test_other();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "close")) test_close();
+    if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "hold")) test_hold();
     for (s = 1; s <= 24 && !getenv("JRONLY"); s++)
         test_walk(s, s & 1 ? 1 : 2);
     printf("%d checks, %d failed\n", checks, fails);

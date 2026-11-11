@@ -101,7 +101,9 @@ static pdw gc_disc(void)
             root = gc_root(n);
             r = gc_first(n);
             if (r == PDE_IO || r == PDE_TRUNC || (r && root)) return r;  /* a chosen page must copy */
-            if (r) { gc_exclude(gc_w, b); return PDE_OK; }              /* a dangling reference */
+            if (r == PDE_NOTFOUND || r == PDE_XREF) { gc_exclude(gc_w, b); return PDE_OK; }   /* a dangling reference */
+            if (r) return r;            /* any other refusal (a missing Flate slot, a key, memory) is the JOB's: a content stream dropped
+                                           silently leaves a blank page that saves as `Saved` (F12) */
             ds = sc_body();
             if (ds == SC_BAD) { if (root) return PDE_SYNTAX; gc_exclude(gc_w, b); return PDE_OK; }
             if (gc_isdict(ds)) {
@@ -173,12 +175,46 @@ static void gc_head(void)
     pb_s(" >>\n"); pw_endobj();
 }
 
+/* an encrypting target (20.22.4.3): a copied stream is written by its decrypted
+ * /Length (PLAIN's contract, 20.22.4.2) - gc_left bytes of data to go through
+ * the cipher; the writer writes the keyword, the EOL and the tail itself */
+static struct pd_u32 gc_left, gc_st;
+static pdw gc_digits(pdw a, pdw b, struct pd_u32 *o)    /* g_pg[a,b) as a decimal; 0 if it is not one */
+{
+    static struct pd_u32 t8, t2;
+    pdm_u32_set(o, 0, 0);
+    if (a >= b) return 0;
+    for (; a < b; a++) {
+        if (g_pg[a] < '0' || g_pg[a] > '9') return 0;
+        pdm_u32_shl(&t8, o, 3); pdm_u32_shl(&t2, o, 1); pdm_u32_add(o, &t8, &t2);
+        pdm_u32_add16(o, (pdw)(g_pg[a] - '0'));
+    }
+    return 1;
+}
+static pdw gc_data(pdw p)           /* g_pg[p,sc_n) of the data; 1 = all of it is written */
+{
+    static struct pd_u32 tk;
+    pdw take = (pdw)(sc_n - p);
+    if (!gc_left.hi && gc_left.lo < take) take = gc_left.lo;
+    pb_flush(); pw_n(g_pg + p, take);
+    pdm_u32_set(&tk, 0, take); pdm_u32_sub(&gc_left, &gc_left, &tk);
+    if (gc_left.hi || gc_left.lo) return 0;
+    cs_end(); pb_s("\nendstream\nendobj\n");
+    return 1;
+}
+
 /* PH_XCOPY: one object, or one piece of a stream, a call. GC_DONE = all copied */
 static pdw gc_copy(void)
 {
-    static pdw w, v, b, k, n, r, ds, de, q, root, e;
+    static pdw w, v, b, k, n, r, ds, de, q, root, e, ls, le;
     if (gc_sub) {                                   /* the rest of a stream object */
         r = eng_chunk(gc_cur, 0, &gc_pos); if (r) return r;
+        if (g_ence) {
+            if (gc_data(0)) { gc_sub = 0; return PDE_OK; }
+            if (sc_n < PDW_PGBUF) return PDE_SYNTAX;        /* shorter than its /Length */
+            pdm_u32_add16(&gc_pos, sc_n);
+            return PDE_OK;
+        }
         if (sc_n) { pb_flush(); pw_n(g_pg, sc_n); pdm_u32_add16(&gc_pos, sc_n); }
         if (sc_n < PDW_PGBUF) { pb_s("\n"); gc_sub = 0; }
         return PDE_OK;
@@ -215,8 +251,26 @@ static pdw gc_copy(void)
     ds = sc_body(); if (ds == SC_BAD) return PDE_SYNTAX;
     de = sc_val(ds, 1); if (de == SC_BAD) return sv_bad(14);
     pw_obj(gc_k++, 0);
-    rs_walk(ds, de, 1);
     q = sc_skip(de);
+    if (g_ence && q + 6 <= sc_n && g_pg[q] == 's' && g_pg[q + 1] == 't' && g_pg[q + 2] == 'r' && g_pg[q + 3] == 'e'
+        && g_pg[q + 4] == 'a' && g_pg[q + 5] == 'm') {
+        if (dict_find(ds, "Length") != 1) return sv_bad(19);
+        ls = sc_vs; le = sc_ve;
+        if (!gc_digits(ls, le, &gc_left)) return sv_bad(19);        /* PLAIN gives a direct /Length */
+        rs_walk(ds, ls, 1);
+        u32cp(&gc_st, &gc_left); cs_len(&gc_st); pb_u32(&gc_st, 0);     /* the stored length in its place */
+        rs_walk(le, de, 1);
+        pb_s("\nstream\n");
+        w = (pdw)(q + 6);
+        if (w < sc_n && g_pg[w] == '\r') w++;
+        if (w < sc_n && g_pg[w] == '\n') w++;
+        cs_begin();
+        if (gc_data(w)) return PDE_OK;
+        if (sc_n < PDW_PGBUF) return PDE_SYNTAX;
+        pdm_u32_set(&gc_pos, 0, sc_n); gc_sub = 1;
+        return PDE_OK;
+    }
+    rs_walk(ds, de, 1);
     if (q + 6 <= sc_n && g_pg[q] == 's' && g_pg[q + 1] == 't' && g_pg[q + 2] == 'r' && g_pg[q + 3] == 'e'
         && g_pg[q + 4] == 'a' && g_pg[q + 5] == 'm') {
         pb_c('\n'); pb_flush(); pw_n(g_pg + q, (pdw)(sc_n - q));

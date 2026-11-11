@@ -361,8 +361,19 @@ static void ovl_th_step(void)
     int k;
 
     if (pdu_thst == 0) {
+        if (pdu_pg_kind(pdu_thpage) != PDM_SRC) {   /* F29: paper until Save As */
+            pdu_job = J_NONE;
+            pdu_thpg[pdu_thslot] = (pdu_thpage + 1) | 0x8000;
+            k = pdu_thpage - pdu_sidetop;
+            if (pdu_sbtab == 0 && k >= 0 && k < pdu_side_rows() * 2) {
+                os88_gfx_lock();
+                pdu_cell_paint(k);
+                os88_gfx_unlock();
+            }
+            return;
+        }
         os88_memset(&pdu_xth, 0, sizeof(pdu_xth));
-        pdu_xth.page = pdu_thpage;
+        pdu_xth.page = pdu_pg_id(pdu_thpage);
         pdu_xth.w = PDU_CELL_W;
         pdu_xth.h = PDU_CELL_H;
         pdu_xth.dseg = pdu_dcseg(PDU_DC_THUMB);
@@ -372,6 +383,8 @@ static void ovl_th_step(void)
     pd_fcopy_out(&pdu_xth, pdu_xb, 0, sizeof(pdu_xth));
     r = pdu_mcall(PDU_M_REND, PDV_REND_THUMB, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
         pd_fcopy_in(pdu_xb, 0, &pdu_xth, sizeof(pdu_xth));
         return;

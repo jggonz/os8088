@@ -227,9 +227,38 @@ def check_chain(E, rng):
         fail("a claim under one slot: rc=%r" % rc)
     rc, got = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=43)
     compare("one slot", got, data, rc)
-    rc, _ = E.run(build_pdf([(b"/Filter /LZWDecode", z)]))
+    check_lzw(E, data, z)
+
+
+def check_lzw(E, data, z):
+    """LZWDecode (20.22.3.6), the slot's other stage: held to qpdf and to tools/os88pdfx_eng.py's encoder."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    from os88pdfx_eng import lzw_encode
+    long = (data * (1 + 60000 // max(1, len(data))))[:60000]     # every width and a table reset
+    for name, extra, raw, body in (
+            ("lzw", b"/Filter /LZWDecode", data, lzw_encode(data)),
+            ("lzw long", b"/Filter /LZW", long, lzw_encode(long)),
+            ("lzw early0", b"/Filter /LZWDecode /DecodeParms << /EarlyChange 0 >>", long, lzw_encode(long, early=0)),
+            ("hex+lzw", b"/Filter [/AHx /LZW]", data, lzw_encode(data).hex().encode() + b">")):
+        pdf = build_pdf([(extra, body)])
+        for chunk in (1, 37, 4096):
+            rc, got = E.run(pdf, chunk=chunk)
+            if not compare("%s/%d" % (name, chunk), got, raw, rc):
+                break
+        q = E.qpdf(pdf)
+        if q is not None and q != raw:
+            fail("%s: qpdf disagrees with the encoder" % name)
+    # one slot stage a chain: LZW with Flate is refused, as two Flates are
+    rc, _ = E.run(build_pdf([(b"/Filter [/LZWDecode /FlateDecode]", lzw_encode(z))]))
     if rc != FILTER:
-        fail("lzw: rc=%r" % rc)
+        fail("lzw+flate: rc=%r" % rc)
+    # Flate's bytes read as LZW codes are not LZW: a code past the table is PDE_SYNTAX, after what
+    # qpdf also decodes before it gives up (a byte a read: a read the failure ends answers the failure)
+    pdf = build_pdf([(b"/Filter /LZWDecode", z)])
+    rc, got = E.run(pdf, chunk=1)
+    q = E.qpdf(pdf)
+    if rc != SYNTAX or (q is not None and got != q):
+        fail("lzw on Flate bytes: rc=%r, %d bytes (qpdf %r)" % (rc, len(got), None if q is None else len(q)))
 
 
 def check_predictors(E, rng):
@@ -542,8 +571,15 @@ def check_asm_layout():
         want.pop(k, None)
     for k in want:
         fail("pdeflate.inc does not define %s" % k)
-    if off + 0 and offs["ib"] + consts["PDE_FLIB"] != off:
-        fail("struct flst parse: size mismatch")
+    # pdeflate.inc reaches no further than ib: the fields after it (LZW's, 20.22.3.6) start where ib
+    # ends, so its offsets did not move; and the parse accounted for every byte up to the end
+    names = list(offs)
+    after = names[names.index("ib") + 1:]
+    ib_end = offs["ib"] + consts["PDE_FLIB"]
+    if (offs[after[0]] if after else off) != ib_end:
+        fail("struct flst parse: ib does not end where the next field starts")
+    if after and offs[after[-1]] + 2 != off:
+        fail("struct flst parse: size mismatch after ib (%s)" % ", ".join(after))
     if PDE_FLSAVE_END(consts, off) > consts["PDE_FLSLOT_KB"] * 1024:
         fail("the saved decoder state does not fit its slot")
 

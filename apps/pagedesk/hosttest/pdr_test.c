@@ -25,6 +25,7 @@ extern pdw pd_host_ds;
 extern unsigned char pdrh_fb[];
 extern int pdrh_fbw, pdrh_fbh, pdrh_blits;
 extern int pdrh_open(const char *path);
+void pdb_dump_write(const char *path, int w, int h);
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 /* every verb is called through here: PDREND must hand the working folder back
  * where it found it (the document's), and no read by name may have been made
@@ -48,6 +49,7 @@ static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
 #define SEG_BANK 0x6000
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
+#define SEG_X8   0xB000          /* the 8-bit band, layers and mask (PDMEM_X8) */
 #define SEG_EDIT 0x9000          /* the edit store (PAGEDESK-SPEC 13.1.1) when PDR_EDITS names a file */
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 pdw pdrh_xbseg(void) { return SEG_XB; }
@@ -84,18 +86,156 @@ static int send_fontbank(void)
 {
     return (int)vcall(PDV_REND_FONTBANK, 0, 0, 0);
 }
+/* ---- the primary's side of the ladder (PAGEDESK-SPEC 20.22.2, 20.22.7) ----
+ * PDE_NEEDMOD: "load" the stand-in occupant (hosttest/pdr_xmod.c) unless
+ * PDR_NOSLOT lists its id ("all" = every one), and tell PDREND with
+ * PDV_REND_SLOT. PDE_NEEDMEM for PDMEM_XC: claim it (PDR_XCKB overrides the
+ * size; PDR_NOXC refuses) and re-INIT with it, as the primary does. Either
+ * way the verb is called again. */
+#define SEG_XC   0xA000
+#define SEG_GLY2 0xC000             /* where PDR_GLYPHGROW (fonts, 20.22.8) and PDR_GLYMOVE (20.22.7.11) move the glyph claim */
+static unsigned g_glyold;           /* the moved claim's old size: its old place must stay 0xCD */
+extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
+static struct pdxb_init g_lastinit;
+extern void pdrh_xload(void) __attribute__((weak));     /* pdx_xmod.c: the occupant is loaded afresh */
+static int g_loads, g_memasks;
+static unsigned g_clsize[5];        /* the claims' sizes, for the canaries below */
+static int ladder(pdw e)
+{
+    static unsigned char xb[1024];
+    const char *no = getenv("PDR_NOSLOT");
+    if (e == PDE_NEEDMOD) {
+        pdw id = pdr_out_dx;
+        g_loads++;
+        if (g_loads > 64) { fprintf(stderr, "LADDER: more than 64 module answers\n"); exit(9); }
+        /* PDR_XCDROP: the primary's release-before-refuse (plat's pdu_slot_load):
+         * the slot's claim is short, so XC is released and PDREND re-INITed with
+         * xc_seg 0 under this NEEDMOD answer, mid-view (20.22.7.11) */
+        /* PDR_GLYMOVE: PDXF's GLYPH grant (plat): the glyph claim moves to a new,
+         * bigger region under this answer, once, mid-view (20.22.7.11) */
+        if (getenv("PDR_GLYMOVE") && g_lastinit.glyph_seg == SEG_GLY) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = 40;
+            memset(MEM(SEG_GLY2, 0), 0xA5, 40u << 10);   /* a new region holds anything */
+            memset(MEM(SEG_GLY, 0), 0xCD, 8192);         /* the old one is gone: a write there is a canary */
+            g_clsize[3] = 0;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
+        if (getenv("PDR_XCDROP") && g_lastinit.xc_seg) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.xc_seg = 0; g_lastinit.xc_kb = 0;
+            g_lastinit.flate_kb = 43; g_lastinit.cache_kb += 1;   /* PDENG's words move with it (plat) */
+            g_clsize[4] = 0;                            /* no claim: the canary from byte 0 */
+            memset(MEM(SEG_XC, 0), 0xCD, 8192);         /* = CANARY, below */
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
+        if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { if (id != pdrh_slot && pdrh_xload) pdrh_xload(); pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
+        return 1;
+    }
+    if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_SLOT && getenv("PDR_XNEEDMEM")) {   /* the decoder's workspace (QA F15) */
+        extern int pdrh_xgrant;
+        if (++g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 memory answers\n"); exit(9); }
+        if (strcmp(getenv("PDR_XNEEDMEM"), "refuse")) pdrh_xgrant = 1;   /* sl_grow: W regrown, the occupant re-INITed */
+        return 1;
+    }
+    if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_X8) {      /* blend: the region (PDX8 is linked in) */
+        memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+        g_memasks++;
+        if (getenv("PDB_X8REFUSE")) { g_lastinit.x8_seg = 0; g_lastinit.x8_kb = 0; }     /* the primary refused the region */
+        else { g_lastinit.x8_seg = SEG_X8; g_lastinit.x8_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx; }
+        memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+        if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+        memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        return 1;
+    }
+    if (e == PDE_NEEDMEM) {
+        g_memasks++;
+        if (g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 memory answers\n"); exit(9); }
+        if (pdr_out_cx == PDMEM_XC && !getenv("PDR_NOXC")) {
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            g_lastinit.xc_seg = SEG_XC;
+            g_lastinit.xc_kb = getenv("PDR_XCKB") ? (pdw)atoi(getenv("PDR_XCKB")) : pdr_out_dx;
+            if (g_lastinit.xc_kb > 63) g_lastinit.xc_kb = 63;
+            g_clsize[4] = (unsigned)g_lastinit.xc_kb << 10;
+            memset(MEM(SEG_XC, g_clsize[4]), 0xCD, 0x10000u - g_clsize[4] < 8192 ? 0x10000u - g_clsize[4] : 8192);
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        }
+        /* fonts (20.22.8): PDR_GLYPHGROW regrows the glyph claim to what PDREND asked AND MOVES it, as
+         * OSAPI_MEM_REGROW may; the old place is filled with 0xCD and checked at the end (canary_check) */
+        if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW") && g_lastinit.glyph_seg == SEG_GLY
+            && !(getenv("PDR_GLYPHMAX") && (unsigned)atoi(getenv("PDR_GLYPHMAX")) <= g_lastinit.glyph_kb)) {
+            unsigned old = (unsigned)g_lastinit.glyph_kb << 10;
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            memcpy(MEM(SEG_GLY2, 0), MEM(SEG_GLY, 0), old);
+            memset(MEM(SEG_GLY, 0), 0xCD, old); g_glyold = old;
+            g_lastinit.glyph_seg = SEG_GLY2; g_lastinit.glyph_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+        } else if (pdr_out_cx == PDMEM_GLYPH && getenv("PDR_GLYPHGROW")) {
+            /* the claim's WANT (QA R24): grown in place, to at most PDR_GLYPHMAX KiB; no more is a refusal,
+             * which the primary answers with the same INIT */
+            unsigned kb = pdr_out_dx > 63 ? 63 : pdr_out_dx, mx = getenv("PDR_GLYPHMAX") ? (unsigned)atoi(getenv("PDR_GLYPHMAX")) : 63;
+            memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
+            if (kb > mx) kb = mx;
+            if (kb > g_lastinit.glyph_kb) g_lastinit.glyph_kb = (pdw)kb;
+            g_memasks++;
+            memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
+            if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
+            memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
+            if (g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 region answers\n"); exit(9); }
+        }
+        return 1;
+    }
+    return 0;
+}
 static void do_init(int bpp, int bankkb, int dlkb)
 {
     struct pdxb_init in; static unsigned char keep[sizeof(struct pdxb_fontbank)];
     memcpy(keep, MEM(SEG_XB, 0), sizeof keep);
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
+    in.eng_seg = 0xF000;    /* never called on the host (pdr_host.c twins PDENG), but nonzero as on the
+                             * machine: verb_init reads 0 as "never INITed" and a NEEDMEM's re-INIT would
+                             * otherwise start a new document instead of keeping the page view */
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
+    /* PDR_GLYREUSE: the next document's claim is where the last one's ended, its bytes kept - the heap
+     * hands a freed claim back, and a 24 KiB claim at a 40 KiB one's base holds that claim's block header
+     * at +24,512, which a growth in place then keeps (QA R24 round 2) */
+    if (getenv("PDR_GLYREUSE") && g_lastinit.glyph_seg) in.glyph_seg = g_lastinit.glyph_seg;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
+    /* the engine's vector, nonzero as the primary's is: verb_init takes a 0 one
+     * for the FIRST INIT, so without it a re-INIT after PDE_NEEDMEM restarted the
+     * view instead of adding the region (the host's pdr_eng never reads it) */
+    in.eng_off = 0x0008; in.eng_seg = 0x9000;
+#ifdef PDR_X8
+    if (!getenv("PDB_NOX8")) { in.x8_seg = SEG_X8; in.x8_kb = 60; }          /* blend (20.22.10.2) */
+#endif
+    if (getenv("PDR_XCKB0")) { in.xc_seg = SEG_XC; in.xc_kb = (pdw)atoi(getenv("PDR_XCKB0")); }   /* the claim from the start */
+    g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
+    /* PDR_SYNPLANT: the glyph claim comes with the LAST document's synthetic blocks in it, as a
+     * File > Open keeps the claim (QA R26 c): the directory's magic and one entry (7 0 R at 20 px) */
+    unsigned synhdr = 0;
+    if (getenv("PDR_SYNPLANT") && g_glykb >= 28) {
+        unsigned cap = (unsigned)((g_glykb - 24) >> 2); if (cap > PDFB_NBLK) cap = PDFB_NBLK;
+        synhdr = (unsigned)(g_glykb << 10) - cap * PDFB_SIZE - PDFB_HDR;
+        unsigned char *h = MEM(SEG_GLY, synhdr);
+        memset(h, 0, PDFB_HDR); h[0] = 7; h[4] = 20; h[60] = 1; h[62] = PDFB_MAGIC & 255; h[63] = PDFB_MAGIC >> 8;
+    }
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
+    /* a document's close gives the slot back (plat's pdu_doc_free): the next one loads and INITs its
+     * occupant afresh, so nothing PDXF cached of the last file's font objects survives (QA R24) */
+    if (pdrh_slot) { pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0); if (pdrh_xload) pdrh_xload(); }
+    if (synhdr) printf("synmagic=%04x\n", MEM(SEG_GLY, synhdr)[62] | (MEM(SEG_GLY, synhdr)[63] << 8));
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
@@ -103,20 +243,23 @@ static void do_init(int bpp, int bankkb, int dlkb)
  * next); a renderer that writes past its claim shows up here - 8 KiB, not a few bytes, because the
  * workspace's regions start up to 6 KiB in, so an overrun need not touch a claim's first bytes */
 #define CANARY 8192
-static const struct { pdw seg; unsigned size; const char *name; } g_cl[4] = {
-    { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" } };
-static unsigned g_clsize[4];
+static const struct { pdw seg; unsigned size; const char *name; } g_cl[5] = {
+    { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" },
+    { SEG_XC, 0, "extension cache" } };
+static unsigned g_clsize[5];
 static unsigned canary_len(int i) { unsigned room = 0x10000u - g_clsize[i]; return room < CANARY ? room : CANARY; }
 static void canary_set(int dlkb)
 {
     int i;
     g_clsize[0] = 1024; g_clsize[1] = dlkb >= 63 ? 0xFC00u : (unsigned)dlkb << 10; g_clsize[2] = 9600; g_clsize[3] = (unsigned)g_glykb << 10;
-    for (i = 0; i < 4; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, canary_len(i));
+    g_clsize[4] = g_lastinit.xc_seg ? (unsigned)g_lastinit.xc_kb << 10 : 0xFC00u;   /* ladder() moves it to a grant */
+    for (i = 0; i < 5; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, canary_len(i));
 }
 static int canary_check(void)
 {
     int i, j, bad = 0;
-    for (i = 0; i < 4; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (i = 0; i < 5; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (j = 0; j < (int)g_glyold; j++) if (MEM(SEG_GLY, 0)[j] != 0xCD) { fprintf(stderr, "CANARY: the moved glyph claim's old place written at +%d\n", j); bad = 1; break; }
     return bad;
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)
@@ -131,12 +274,50 @@ static void report(void)
     struct pdxb_rstatus rs;
     vcall(PDV_REND_STATUS, 0, 0, 0);
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
-    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits);
+    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d mods=0x%x swaps=%u loads=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits,
+           rs.mods, rs.swaps, g_loads);
+    if (getenv("PDR_PATHHIST")) { extern long pdrh_pamax, pdrh_psmax, pdrh_pover; printf("path most=%ld subpath most=%ld past the table=%ld\n", pdrh_pamax, pdrh_psmax, pdrh_pover); }
+    if (getenv("PDR_CLIPHIST")) { extern long pdrh_clipone, pdrh_cliptot, pdrh_clipnmax; printf("clips one=%ld pass=%ld entries=%ld\n", pdrh_clipone, pdrh_cliptot, pdrh_clipnmax); }
+    if (getenv("PDR_XSHADE")) { extern long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail; printf("xshade calls=%ld stepmax=%ld fails=%ld\n", pdrh_xshades, pdrh_xstepmax, pdrh_xshfail); }
 }
 
+/* one page's text map to `o`. PDR_TMSTALE: a slice the ladder answered is sent again with the
+ * block as it was sent, as the primary's Find and selection passes do (QA R17) */
+static int text_run(int page, FILE *o)
+{
+    int guard = 0, total = 0, i; struct pdxb_textmap tq; pdw e;
+    memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
+    for (;;) {
+        struct pdtm_glyph *g; int n;
+        memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
+        e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
+        if (ladder(e)) { if (!getenv("PDR_TMSTALE")) memcpy(&tq, MEM(SEG_XB, 0), sizeof tq); continue; }
+        if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
+        memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
+        g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
+        n = tq.count;
+        for (i = 0; i < n; i++) {
+            if ((g[i].flags & 1) && total + i) fputc('\n', o);
+            fputc(g[i].code, o);
+        }
+        total += n;
+        if (tq.done || ++guard > 100000) break;
+    }
+    if (tq.done & PDTM_UNREAD) fprintf(stderr, "textmap: UNREAD\n");   /* Find says which page to draw (QA R17) */
+    fputc('\n', o);
+    return 0;
+}
+
+int pdrh_noshcull, pdrh_dlhist, pdrh_nopark, pdrh_xasks = 8;
+/* PDR_NOPARK: no occupant park (20.22.7.12); PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
+    pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
+    if (getenv("PDR_XASKS")) pdrh_xasks = atoi(getenv("PDR_XASKS"));
+    pdrh_nopark = getenv("PDR_NOPARK") != 0;
+    { extern unsigned pdrh_tickstep; pdrh_tickstep = getenv("PDR_SLICETICK") ? (unsigned)atoi(getenv("PDR_SLICETICK")) : 0; }
+    pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
     pd_host_ds = 0x1000;
     if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
     if (getenv("PDR_GLYPHKB")) g_glykb = atoi(getenv("PDR_GLYPHKB"));
@@ -147,7 +328,7 @@ int main(int argc, char **argv)
         struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e; long esz = 0; static unsigned char ekeep[65536];
         static char seqbuf[8192], curf[600], outbase[600], outp[700];
         char *seqp = 0;
-        int seqk = 0;
+        int seqk = 0, seqabort = 0;          /* FILE:PAGE:A - abort at the first ladder ask, unanswered (QA R26 c) */
         sscanf(argv[7], "%d/%d", &an, &ad);
         if (getenv("PDR_SEQ")) {
             strncpy(seqbuf, getenv("PDR_SEQ"), sizeof seqbuf - 1); seqp = seqbuf;
@@ -161,7 +342,8 @@ int main(int argc, char **argv)
             ent = seqp; while (*seqp && *seqp != ' ') seqp++;
             if (*seqp) *seqp++ = 0;
             c = strrchr(ent, ':'); mode = 0;
-            if (c && (c[1] == 'R' || c[1] == 'F')) { mode = c; *c = 0; c = strrchr(ent, ':'); }
+            if (c && (c[1] == 'R' || c[1] == 'F' || c[1] == 'A')) { mode = c; *c = 0; c = strrchr(ent, ':'); }
+            seqabort = mode && mode[1] == 'A';
             if (!c) { fprintf(stderr, "PDR_SEQ: %s is not FILE:PAGE\n", ent); return 1; }
             *c = 0; page = atoi(c + 1);
             if (strcmp(curf, ent) || (mode && mode[1] == 'R')) {
@@ -219,7 +401,9 @@ int main(int argc, char **argv)
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
-        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
+        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (getenv("PDB_TRACE")) fprintf(stderr, "step e=%u cx=%u dx=%u\n", e, pdr_out_cx, pdr_out_dx);
+             if (seqabort && (e == PDE_NEEDMOD || e == PDE_NEEDMEM)) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status aborted at ask %u\n", e); fflush(stdout); goto seq_next; }
+             if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
         if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
@@ -227,6 +411,19 @@ int main(int argc, char **argv)
         if (canary_check()) return 5;
         if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
+        if (!seqp && getenv("PDR_TEXTAFTER")) {
+            /* the page's text right after drawing it, the font module refused (QA R17: Find under the
+             * overlay on a 640 KB machine): the strike blocks the draw left carry it */
+            FILE *o = fopen(getenv("PDR_TEXTAFTER"), "w"); int r;
+            if (!o) return 2;
+            setenv("PDR_NOSLOT", "3", 1); setenv("PDR_TMSTALE", "1", 1);
+            pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0);        /* the slot given back after the draw */
+            r = text_run(page, o); fclose(o);
+            if (r) return r;
+        }
+#ifdef PDR_X8
+        if (getenv("PDB_DUMP")) pdb_dump_write(getenv("PDB_DUMP"), W, H);
+#endif
         if (seqp) { fflush(stdout); goto seq_next; }
         return 0;
     }
@@ -258,27 +455,16 @@ int main(int argc, char **argv)
         return worst <= 1 ? 0 : 4;
     }
     if (!strcmp(argv[1], "text") && argc >= 5) {
-        int page = atoi(argv[3]), kb, np, guard = 0; struct pdxb_textmap tq; pdw e; int total = 0, i;
+        int page = atoi(argv[3]), kb, np;
         np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[4]); do_init(1, kb, 22);
-        memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
-        for (;;) {
-            struct pdtm_glyph *g; int n;
-            memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
-            e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
-            if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
-            memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
-            g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
-            n = tq.count;
-            for (i = 0; i < n; i++) {
-                if ((g[i].flags & 1) && total + i) putchar('\n');
-                putchar(g[i].code);
-            }
-            total += n;
-            if (tq.done || ++guard > 100000) break;
+        if (!strcmp(argv[3], "all")) {          /* every page in ONE process, as a Find job runs (QA R17) */
+            int r = 0;
+            for (page = 0; page < np && !r; page++) r = text_run(page, stdout);
+            fprintf(stderr, "textmap: loads=%d\n", g_loads);
+            return r;
         }
-        putchar('\n');
-        return 0;
+        return text_run(page, stdout);
     }
     if (!strcmp(argv[1], "thumb") && argc >= 8) {
         int page = atoi(argv[3]), w = atoi(argv[4]), h = atoi(argv[5]), kb, np, guard = 0, y, x, bytes;
@@ -291,6 +477,7 @@ int main(int argc, char **argv)
             memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
             e = vcall(PDV_REND_THUMB, 0, 0, 0);
             memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
+            if (ladder(e)) e = PDE_BUSY;
         } while (e == PDE_BUSY && ++guard < 100000);
         if (e) { fprintf(stderr, "thumb -> %u\n", e); return 3; }
         bytes = (w + 7) / 8;

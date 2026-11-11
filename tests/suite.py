@@ -1596,6 +1596,22 @@ FAST = [
         "8-pixel grid, the kind from the thresholds, every mode's tools on "
         "the glass. ~15M checks in ~0.4 s",
         needs=("cc",)),
+    Row("pderrlen", "fast", py("tests/unit/t_pderrlen.py"), 0.1,
+        "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
+        "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
+        "narrowest canvas (39 cells) - the card cuts a longer one"),
+    Row("pdssarg", "fast", py("tests/unit/t_pdssarg.py"), 0.1,
+        "QA F32 / CLAUDE.md's near model: PageDesk's assembly reads a stack "
+        "slot after `mov bx, sp` as [ss:bx+n] - _pdu_claimhi read its size "
+        "through DS, the edit store came out 0.5 KiB, and a typed note was "
+        "overwritten by the page's content stream. A negative control takes "
+        "the override out and must be caught"),
+    Row("pd360", "fast", py("tests/unit/t_pd360.py"), 0.2,
+        "PAGEDESK-SPEC 20.22.2.8: the 360KB program disk (the Makefile's "
+        "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
+        "from the CURRENT package keeps 4 of 354 clusters free - "
+        "pagedesk360.img is on demand and went stale while the fix round "
+        "grew the program to 359 of 354"),
     Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
         "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
         "model - the filters (This page / All pages / Changes), order, "
@@ -22385,6 +22401,18 @@ SOAK = [
         " output qpdf --check clean and its page tree checked "
         "(pdw_pgcheck.py). Measured 4.2s",
         needs=(), builds=True),
+    Row("pdwrtenc", "soak", py("tests/pagedeskhost.py", "pdwrt-enc"), 25.0,
+        "PAGEDESK-SPEC 20.22.4 / AP-06: `make pdwrt-enc` - PDWRT's saves "
+        "(every mark kind, a second save over the first, Extract, Insert "
+        "with an encrypted foreign file pausing on PDE_PASSWORD) over qpdf-"
+        "made sources: xref stream + object stream, AES-128 (empty and user "
+        "password, classic table), AES-256, RC4-128, RC4-40; each output "
+        "qpdf --check clean, decrypted by qpdf to the plain control's "
+        "annotations and appearance-stream bytes, drawn by mutool with no "
+        "encryption complaint; a wrong held key fails the verify. The PDENG "
+        "verbs eng/crypt own are stood in for (hosttest/pdw_enc.c); needs "
+        "qpdf, mutool and libcrypto. Measured 18s",
+        needs=("cc",), builds=True),
     Row("pdnav", "soak", py("tests/pagedeskhost.py", "pdnav"), 6.0,
         "PAGEDESK-SPEC 20.10 / PD-10, PD-11: `make pdnav` - PDENG's SEARCH "
         "matcher against a reference over 400 random pages and piece sizes "
@@ -22429,7 +22457,9 @@ SOAK = [
     Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
         "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
         "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
-        "thread each - HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "thread each, B: an 80-cylinder 720 KB drive with pagedesk720.img "
+        "(every sample; the 360 KB pair's first disk holds the program alone) "
+        "- HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
         "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
         "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
         "reachable at every trough with the caches shed, task 0's stack <= "
@@ -22439,8 +22469,8 @@ SOAK = [
         "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
         "beside another session's MartyPC",
         needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
-        wants=("build/os8088-360.img", "build/pagedesk360.img",
-               "build/pagedesk.bin")),
+        wants=("build/os8088-360.img", "build/os8088-720.img",
+               "build/pagedesk720.img", "build/pagedesk.bin")),
 ]
 
 

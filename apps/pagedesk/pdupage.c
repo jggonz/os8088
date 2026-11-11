@@ -35,6 +35,11 @@ static int pdu_pgmap;           /* the view is a page map, not the source's orde
 static unsigned pdu_srcn;       /* pages in the source document */
 static int pdu_pk;              /* PK_* */
 static int pdu_pgfd;            /* the file dialog was raised for 1 New, 2 Extract or 3 Insert */
+/* Insert's page prompt waits for the render the file dialog's close owes
+ * (2: asked, a wake to pass; 1: shown at the first quiet wake end) - said
+ * at once, the prompt stood over a live render with its occupant in the
+ * slot, under PD-29's reserve (os88_onwake, QA O9) */
+static unsigned char pdu_pkdefer;
 static int pdu_savekind;        /* the running job: 0 Save As, 1 New, 2 Extract */
 static char pdu_pkbuf[24];
 static int pdu_pklen;

@@ -14,7 +14,7 @@ static struct pd_fx g_opn[PDR_NOPS];
 static pdw g_nop;
 static char g_name[PDR_NNAME];
 static pdw g_havename;
-static pdb g_str[PDR_NSTR];
+/* g_str is in pdrg.c (20.22.7's room: the rasteriser borrows it) */
 static pdw g_slen, g_smore;
 static pdw g_arrd, g_dictd, g_arr0, g_tjlive, g_tjany, g_arrseen;
 static struct pdxb_token g_tk;
@@ -30,7 +30,11 @@ struct pdr_frame {
     pdw isform, gsbase;             /* a Form frame; the gs index it started at */
     pdw resp, reso, resg;           /* resource context to restore               */
     pdw cidx;                       /* /Contents element (page frame)             */
-    pdw gsover, pad1, pad2;         /* g_gsover at entry; 16 bytes: an index is a shift */
+    pdw gsover;                     /* g_gsover at entry                          */
+    pdw obj, gen;                   /* a Form frame's stream (to open it again)   */
+    pdw ntok;                       /* TOKEN calls on its stream; 0xFFFF = raw bytes read (inline image) */
+    pdw ok, park;                   /* ok: page_open/do_form made it (it can be parked);
+                                       park: its stream is closed under a Form (20.22.7.12) */
 };
 static struct pdr_frame g_fr[PDR_NFORM];
 static pdw g_nfr;
@@ -38,6 +42,7 @@ static pdw g_resp, g_reso, g_resg;  /* current resource context                 
 static pdw g_page;
 static pdw g_idone;                 /* interpretation finished                    */
 static pdw g_ierr;                  /* a stream error stopped it                  */
+static pdw g_pgopen;                /* the page's own content stream is open      */
 
 static struct pdxb_strm g_sm;
 static pdw strm_open(pdw obj, pdw gen, pdw page, pdw index)
@@ -48,11 +53,17 @@ static pdw strm_open(pdw obj, pdw gen, pdw page, pdw index)
 }
 static void strm_close(void) { pdr_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 
+static pdw frame_reopen(pdw d);
 /* the next content token into g_tk; returns 0 or a PDE code */
 static pdw tok_next(void)
 {
-    pdw err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
-    if (err == PDE_RANGE) { g_inc |= PDF_INC_RANGE; err = 0; }    /* a number saturated: the token is valid */
+    pdw err;
+    if (g_fr[g_nfr].park == 2 && !frame_reopen(g_nfr)) { g_fr[g_nfr].park = 1; g_fr[g_nfr].ok = 0; }  /* an occupant's park (20.22.7.12) */
+    if (g_fr[g_nfr].park) { g_tk.kind = PDT_EOF; g_tk.len = 0; return 0; }  /* parked and not reopened: it ended */
+    err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
+    if (g_fr[g_nfr].ntok < 0xFFFE) g_fr[g_nfr].ntok++;    /* the replay count (20.22.7.12) */
+    else g_fr[g_nfr].ntok = 0xFFFF;
+    if (err == PDE_RANGE) { inc_note(PDF_INC_RANGE, "number range"); err = 0; }    /* a number saturated: the token is valid */
     if (err) return err;
     pd_fcopy_in(g_xb, 0, &g_tk, 8);
     if (g_tk.len > 255) g_tk.len = 255;
@@ -111,6 +122,7 @@ static void col_set(pdw stroke, pdw r, pdw g, pdw b)
 static void col_apply(pdw stroke, pdw nop)
 {
     pdw a, b, c, k, base;
+    XG_DEVCOL(stroke);                        /* a device colour ends a non-device space (pdrxg.c) */
     if (g_nop < nop) return;                 /* too few operands: ignored (10.6 is for features) */
     base = g_nop - nop;
     if (nop == 1) { a = fx_u8(&g_opn[base]); col_set(stroke, a, a, a); }
@@ -159,7 +171,7 @@ static void gs_reset(void)
     g->cy1 = g_vcy1 < g_pgy1 ? g_vcy1 : g_pgy1;
     g_lstv = 0;
 }
-static void gs_init(void) { gs_reset(); g_ncl = 0; g_cetop = 0; }
+static void gs_init(void) { gs_reset(); g_ncl = 0; }
 
 /* ============================================================================
  * TEXT
@@ -170,6 +182,9 @@ static pdw g_tdirty;
 static pdw g_inbt;
 static pdw g_em;                    /* device em height of the current font, px  */
 static pdw g_pem;                   /* the em the strike is picked by (D16), px  */
+static pdw g_eslot, g_elat, g_ek = 0xFFFF, g_escale;   /* an embedded font's glyph (emb_glyph, 20.22.8) */
+static pdw g_tmunread;           /* a text pass met codes it could not read: PDTM_UNREAD (QA R17) */
+static pdw g_esub;              /* a code with no slot: its ToUnicode Latin byte for the substitute, 0xFFFF none (QA R13) */
 static pdw g_hem;                   /* device em WIDTH (text space's x axis), px */
 static pdw g_tupright;
 static pdb g_tmchan;
@@ -290,15 +305,23 @@ static pdw run_begin(void)
     f = font_sel(GS.font);
     if (!f->ok) return 0;
     sty = f->sty;
+    if (f->emb && g_ek != 0xFFFF) {             /* an embedded font: its synthetic strike (20.22.8) */
+        idx = (pdw)(0x0200 | g_ek); g_pkscale = g_escale; strike_load(idx);
+    } else {
     idx = strike_pick(f->fam, sty, g_pem, &g_synth);
     {   /* a strike the cache cannot hold (or a failed read): the next one down */
         pdw tries = 0, em = g_pem;
         while (idx == 0xFFFF || !strike_load(idx)) {
-            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, "font strike unavailable"); return 0; }
+            /* a read that failed is the program disk out of its drive (the 360 KB
+             * pair, QA F21): the user puts it back and draws the page again. No
+             * strike is read again in this page view (strike_fetch): one floppy
+             * error a run made the XT's degraded page 457 s */
+            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, g_fioerr ? "insert the PageDesk disk" : "font strike unavailable"); return 0; }
             em = (pdw)(g_ssize - 1);
             idx = strike_pick(f->fam, sty, em, &g_synth);
             g_pkem = 0xFFFF; g_pkfam = 0xFF;      /* do not let the memo pin the retry */
         }
+    }
     }
     g_rid = idx; g_rscale = g_pkscale;
     g_rfam = f->fam; g_rsty = (pdb)sty; g_rpx = (pdb)g_ssize;
@@ -311,6 +334,93 @@ static pdw run_begin(void)
     else g_rasc = g_rdesc = g_rext;
     g_rn = 0; g_ropen = 1;
     return 1;
+}
+
+/* ---- an embedded font's glyph (PAGEDESK-SPEC 20.22.8): the code's slot in the font's strike
+ * block (pdrd.c), made by PDXF the first time. A block holds the width and the Latin byte of every
+ * code it has seen, so a later pass or page needs no module. 1 = g_eslot / g_ew / g_elat set;
+ * 0 = not available: PDXF absent (x_need: the ladder re-runs the pass) or it refused the font
+ * (this font is drawn in the substitute face from here on) ----------------------------------- */
+static struct pdxb_fglyph g_fgl;
+#ifdef PDR_TYPE3
+static void t3_queue(pdw blk, pdw slot);
+#define T3_QUEUE(b, s) t3_queue(b, s)
+#else
+#define T3_QUEUE(b, s) ((void)0)
+#endif
+/* the hit: the code's slot in the block of (font, px), as PDXF left it. Per glyph, so near */
+static pdw emb_hit(struct pdr_font *f, pdw code, pdw px)
+{
+    pdw boff, h, i, k, ip, nx = 0;
+    g_ek = syn_find(f->objnum, f->gen, px);
+again:
+    if (g_ek == 0xFFFF) goto other;
+    boff = syn_off(g_ek);
+    h = (pdw)((code ^ (code >> 7)) & 127);
+    for (i = 0; i < 128; i++, h = (pdw)((h + 1) & 127)) {
+        k = pd_fpeekw(g_gseg, (pdw)(boff + PDFB_KEYS + h * 2));
+        if (k == code || k == 0xFFFF) break;
+    }
+    ip = (pdw)(boff + PDFB_INFO + h * 4);
+    if (k != code || (px && !(pd_fpeekb(g_gseg, (pdw)(ip + 3)) & 3))) {
+other:
+        if (px || (g_ek = syn_next(f->objnum, f->gen, nx)) == 0xFFFF) return 0;
+        nx = (pdw)(g_ek + 1);
+        goto again;                     /* a text pass: the font's strikes at the sizes drawn */
+    }
+    g_ewv = 1; g_eslot = (pdw)(h + 1); g_ew = pd_fpeekw(g_gseg, ip); g_elat = pd_fpeekb(g_gseg, (pdw)(ip + 2));
+    if (g_elat == 255) g_elat = code >= 32 && code < 256 ? f->enc[code - 32] : 0;   /* no /ToUnicode: the base encoding */
+    return 1;
+}
+/* the miss, once per code and size (once rcore's PDRENDC lands, a candidate for it: pdrovl.h): the glyph claim's growth
+ * (PDMEM_GLYPH: a 24 KiB claim has no blocks), the module (the ladder), then ONE PDXF call that
+ * finds or makes the block, rasterises the glyph into it and answers; PDE_NEEDMEM from PDXF is its
+ * workspace (PDMEM_SLOT) and is relayed. A refusal draws the font in the substitute face */
+static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
+{
+    pdw r, bit = PDF_INC_FONT;
+    if (!syn_cap()) {
+        if (!(x_ref & XR_GLYPH) && x_mem(PDMEM_GLYPH, PDFB_GLYPHKB)) return 0;    /* the pass runs again */
+        bit = PDF_INC_APPROX;
+        goto refuse;
+    }
+    if (!x_have(PDX_FNT)) { x_need(PDX_FNT); if (x_gone(PDX_FNT)) g_tmunread = PDTM_UNREAD; return 0; }
+    g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = f->esub ? PDFG_BLOCK | PDFG_NOPROG : PDFG_BLOCK;
+    g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_pstamp;
+    pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
+    r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
+    if (!x_cf && r == PDE_NEEDMEM) { x_mem(PDMEM_SLOT, x_dx); return 0; }
+    if (!x_cf) {
+        if (emb_hit(f, code, px)) return 1;
+        if (pd_fpeekw(g_xb, 44) == 0xFFFF && syn_grow()) return 0;   /* blk: no block free this pass */
+        inc_note(PDF_INC_LIMIT, "glyph block full");      /* this code is drawn in the substitute face, */
+        if (pd_fpeekw(g_xb, 38) & PDFG_LATIN) g_esub = pd_fpeekw(g_xb, 30);   /* as its ToUnicode says (oflags, lat) */
+        return 0;
+    }
+    if (r == PDE_LIMIT) bit = PDF_INC_APPROX;          /* PDFE_SIZE: the program is larger than the workspace */
+    if (f->emb == 2) {      /* a Type0 font with no usable program keeps its Latin: each code in the substitute face, from the
+                             * size-0 block entry PDXF made (the next pass needs no module), else the answer's own (QA R13) */
+        f->esub = 1; g_fwdirty = 1;
+        inc_note(bit, "font substituted");
+        if (emb_hit(f, code, 0)) return 1;
+        if (pd_fpeekw(g_xb, 38) & PDFG_LATIN) { g_esub = pd_fpeekw(g_xb, 30); g_ew = pd_fpeekw(g_xb, 28); g_ewv = 1; }
+        return 0;
+    }
+refuse:
+    if (f->emb == 2) f->ok = 0;
+    f->emb = 0; g_fwdirty = 1;
+    inc_note(bit, "font substituted");
+    return 0;
+}
+static pdw emb_glyph(struct pdr_font *f, pdw code)
+{
+    pdw px = 0, n = 1;
+    if (g_mode != PDR_TEXT && f->emb != 3 && !f->esub) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
+    g_escale = n;
+    if (!emb_hit(f, code, px) && !emb_miss(f, code, px)) return 0;
+    if (!f->esub || g_mode == PDR_TEXT) return 1;
+    g_esub = g_elat; inc_note(PDF_INC_FONT, "font substituted");       /* no program: its Latin in the substitute face */
+    return 0;
 }
 
 /* text too small for a bitmap (em < 5 px) is GREEKED: one hairline per show
@@ -379,16 +489,28 @@ static void glyph_emit(pdw code, pdw lat, pdi px, pdi py)
 /* one glyph: draw it (unless invisible), advance the pen */
 static void text_glyph(pdw code)
 {
-    pdw lat, w;
+    pdw lat, w, vis, is2 = 0;
     struct pdr_font *f;
     pdi px, py;
-    if (GS.font == 255) { w = 556; lat = code; }
+    g_ek = 0xFFFF; g_ewv = 0; g_esub = 0xFFFF;
+    if (GS.font == 255) { w = 556; lat = code; vis = 1; }
     else {
         f = font_sel(GS.font);
-        lat = code >= 32 ? f->enc[code - 32] : 0;
-        w = font_width(GS.font, code);
+        if (f->emb && emb_glyph(f, code)) {
+            is2 = (pdw)(f->emb == 2);
+            lat = g_mode == PDR_TEXT ? g_elat : g_eslot;
+            vis = g_mode == PDR_TEXT ? (pdw)(lat >= 32) : (pdw)(f->emb != 3);
+            if (f->emb == 3 && g_mode != PDR_TEXT && GS.tr != 3) T3_QUEUE(g_ek, g_eslot);      /* a Type 3 proc runs between operators */
+            w = font_width(GS.font, code);
+        } else if (f->emb == 2 && g_esub == 0xFFFF) { g_ek = 0xFFFF; is2 = 1; lat = 0; vis = 0; w = 1000; }
+        else {
+            g_ek = 0xFFFF;
+            lat = g_esub != 0xFFFF ? g_esub : code >= 32 ? f->enc[code - 32] : 0;
+            vis = (pdw)(lat >= 32);
+            w = font_width(GS.font, code);
+        }
     }
-    if (GS.tr != 3 && lat >= 32 && g_em >= 1) {
+    if (GS.tr != 3 && vis && g_em >= 1) {
         px = q2p(pdr_clampq(pdm_fx_round(&g_penx)));
         py = q2p(pdr_clampq(pdm_fx_round(&g_peny)));
         if (g_mode == PDR_TEXT || g_pem >= 5) glyph_emit(code, lat, px, py);
@@ -396,12 +518,12 @@ static void text_glyph(pdw code)
             if (!g_gkhave) { g_gkhave = 1; g_gkx0 = px; g_gky = (pdi)(py - (pdi)((g_em + 2) / 3)); }
             g_gkx1 = (pdi)(px + (pdi)((w * g_hem) / 1000));
         }
-    } else if (g_mode == PDR_TEXT && lat >= 32) glyph_emit(code, lat, 0, 0);
+    } else if (g_mode == PDR_TEXT && vis) glyph_emit(code, lat, 0, 0);
     /* advance: ((w/1000) fs + Tc + Tw if space) * Th */
     pdm_fx_int(&t0, (pdi)w);
     pdm_fx_mul(&t0, &t0, &g_fsk);
     pdm_fx_add(&t0, &t0, &GS.tc);
-    if (code == 32) pdm_fx_add(&t0, &t0, &GS.tw);
+    if (code == 32 && !is2) pdm_fx_add(&t0, &t0, &GS.tw);
     if (GS.tz.hi != 100 || GS.tz.lo) pdm_fx_mul(&t0, &t0, &g_thk);
     pdm_fx_add(&g_tadv, &g_tadv, &t0);
     pdm_fx_mul(&t1, &t0, &g_M.a); pdm_fx_add(&g_penx, &g_penx, &t1);
@@ -426,6 +548,10 @@ static void text_end_show(void)
 static void text_show(const pdb *s, pdw n)
 {
     pdw i;
+    if (GS.font != 255 && font_sel(GS.font)->emb == 2) {         /* a Type0 font: 2-byte codes (20.22.8) */
+        for (i = 0; i + 1 < n; i += 2) text_glyph((pdw)((s[i] << 8) | s[i + 1]));
+        return;
+    }
     for (i = 0; i < n; i++) text_glyph(s[i]);
 }
 /* a TJ number: move left by n/1000 em */
@@ -485,6 +611,56 @@ static pdw g_afm;                   /* drawing an annotation's appearance: pdra.
 static pdw ap_fit(const struct pd_mat *m, const struct pd_fx *bx0, const struct pd_fx *by0,
                   const struct pd_fx *bx1, const struct pd_fx *by1);
 static struct pd_mat g_am;          /* the matrix A of PDF 1.7 12.5.5 */
+/* PARKING (20.22.7.12). A Form's stream opened inside a Flate stream needs a
+ * second Flate slot; with one (an XT, a low-memory claim) STRM_OPEN answers
+ * PDE_LIMIT - and a Quartz page is ONE Flate Form inside a Flate content
+ * stream. Then the parent's stream is CLOSED, the Form runs in its slot, and
+ * at the Form's end the parent is opened again and the tokens it had given
+ * are read past (ntok TOKEN calls: the same decoded bytes give the same
+ * tokens). A parent that read raw bytes (an inline image) cannot be replayed
+ * by tokens and is not parked. */
+static pdw frame_reopen(pdw d)
+{
+    pdw n;
+    if (d ? strm_open(g_fr[d].obj, g_fr[d].gen, 0, 0) : strm_open(0, 0, g_page, g_fr[0].cidx)) return 0;
+    for (n = g_fr[d].ntok; n; n--) if (pdr_eng(PDV_ENG_TOKEN, 0, 0, 0)) break;
+    g_fr[d].park = 0;
+    if (n) { strm_close(); return 0; }
+    return 1;
+}
+/* AN OCCUPANT'S PARK (20.22.7.12). A slot occupant that opens a stream of
+ * its own - PDXG's Indexed lookup, sampled function or mesh shading - while
+ * the interpreter holds the one Flate slot fails for want of it. The caller
+ * then parks the frame (its stream closed, park = 2) and asks again; the
+ * frame is reopened and replayed by the next tok_next, AFTER the operator
+ * has used the answer (a replay's tokens overwrite the exchange block). 1 if
+ * it parked. Only on a failure: a page that never needs it never pays a
+ * re-inflate. */
+#ifdef PD_HOST
+extern int pdrh_nopark;                     /* hosttest PDR_NOPARK: the A/B */
+#endif
+static pdw strm_park(void)
+{
+    pdw d = g_nfr;
+#ifdef PD_HOST
+    if (pdrh_nopark) return 0;
+#endif
+    if (g_mode == PDR_IDLE || g_idone || g_fr[d].park || !g_fr[d].ok || g_fr[d].ntok == 0xFFFF || (!d && !g_pgopen)) return 0;
+    strm_close();
+    g_fr[d].park = 2;
+    return 1;
+}
+static pdw form_open(pdw obj, pdw gen)
+{
+    pdw d = g_nfr, e = strm_open(obj, gen, 0, 0);
+    if (!e) return 1;
+    if (e != PDE_LIMIT || !g_fr[d].ok || g_fr[d].ntok == 0xFFFF || (!d && !g_pgopen)) return 0;
+    strm_close();                           /* the parent's stream: its slot is the Form's */
+    g_fr[d].park = 1;
+    if (!strm_open(obj, gen, 0, 0)) return 1;
+    if (!frame_reopen(d)) { g_fr[d].park = 1; g_fr[d].ok = 0; }   /* it cannot come back: frame_end sees it ended */
+    return 0;
+}
 static void do_form(pdw obj, pdw gen)
 {
     static struct pd_mat m;
@@ -503,9 +679,10 @@ static void do_form(pdw obj, pdw gen)
     }
     hasres = (dict_get(obj, gen, "Resources", 0, 0) == 0 && g_dg.kind != PDK_NULL);
     if (g_afm && (!hasbox || !ap_fit(&m, &bx0, &by0, &bx1, &by1))) return;
-    if (strm_open(obj, gen, 0, 0)) { inc_note(PDF_INC_FILTER, "form stream"); return; }
+    if (!form_open(obj, gen)) { inc_note(PDF_INC_FILTER, "form stream"); return; }
     ressave_p = g_resp; ressave_o = g_reso; ressave_g = g_resg;
     g_nfr++;
+    g_fr[g_nfr].obj = obj; g_fr[g_nfr].gen = gen; g_fr[g_nfr].ntok = 0; g_fr[g_nfr].ok = 1; g_fr[g_nfr].park = 0;
     g_fr[g_nfr].isform = 1; g_fr[g_nfr].gsbase = g_gsn; g_fr[g_nfr].gsover = g_gsover;
     g_gsover = 0;
     g_fr[g_nfr].resp = ressave_p; g_fr[g_nfr].reso = ressave_o; g_fr[g_nfr].resg = ressave_g;
@@ -515,6 +692,7 @@ static void do_form(pdw obj, pdw gen)
     if (g_afm) pdm_mat_mul(&GS.ctm, &g_am, &GS.ctm);
     pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
     if (hasbox) rect_clip_user(&bx0, &by0, &bx1, &by1);
+    xb_group_begin(obj, gen);               /* blend: a soft mask's /G or a transparency group (20.22.10.4) */
 }
 
 /* ---- images ---------------------------------------------------------------- */
@@ -522,14 +700,26 @@ static void do_form(pdw obj, pdw gen)
  * destination rectangle, and one DLR_IMAGE record names the picture (an XObject
  * by number, or - with flag 16 - an inline image whose `extra` data bytes
  * follow the body in the record). 0 = nothing to draw here (outside the group,
- * clipped, or refused and noted), 1 = the record is begun. */
+ * clipped, or refused and noted), 1 = the record is begun.
+ * The body (DLI_BODY, 20.3.2 and 20.22.7): xl yt xr yb (qpx), W H, obj gen,
+ * bpc ncomp flags codec (bytes 16-19), the /SMask or /Mask stream's obj gen
+ * (20, 22: blend's 20.22.10.3), the LUT's tables (XC offset, 24) and the
+ * LUT's flags (26). Flags: 1
+ * stencil, 2 /Decode inverts, 4 mirrored, 8 a LUT, 16 inline, 32 /SMask,
+ * 64 a /Mask stream. g_ipx's extras are taken and cleared by each call. */
+static struct { pdw codec, lut, lfl, mobj, mgen; } g_ipx;
 static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pdw gen, pdw extra)
 {
-    static pdb body[20];
+    static pdb body[DLI_BODY];
     static struct pd_fx one, zero;
     pdi x00, y00, x10, y10, x01, y01, xl, xr, yt, yb;
     static pdi py0, py1, px0, px1;
     pdi pa, pb;
+    pdw codec = g_ipx.codec;
+    pdr_zero(body, DLI_BODY);
+    w16(body + 20, (pdi)g_ipx.mobj); w16(body + 22, (pdi)g_ipx.mgen);    /* blend's 20.22.10.3 */
+    w16(body + 24, (pdi)g_ipx.lut); body[26] = (pdb)g_ipx.lfl;
+    pdr_zero(&g_ipx, sizeof g_ipx);
     pdm_fx_int(&zero, 0); pdm_fx_int(&one, 1);
     to_dev(&zero, &zero); x00 = g_dx; y00 = g_dy;
     to_dev(&one, &zero);  x10 = g_dx; y10 = g_dy;
@@ -549,38 +739,107 @@ static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pd
     if (py1 < GS.cy0 || py0 > GS.cy1 || px1 < GS.cx0 || px0 > GS.cx1) return 0;
     if (py1 < g_gy0 || py0 > g_gy1 || px1 < g_vcx0 || px0 > g_vcx1) return 0;
     if (g_mode != PDR_INTERP) return 0;
-    if (extra && !dl_room((pdw)(DLH + 20 + extra))) { g_dlfull = 1; return 0; }
+    if (extra && !dl_room((pdw)(DLH + DLI_BODY + extra))) { g_dlfull = 1; return 0; }
     emit_state(PK_TEXT);
     w16(body, xl); w16(body + 2, yt); w16(body + 4, xr); w16(body + 6, yb);
     w16(body + 8, (pdi)W); w16(body + 10, (pdi)H);
     w16(body + 12, (pdi)obj); w16(body + 14, (pdi)gen);
-    body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = 0;
-    hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
-    return dl_put(g_hdr, DLH, body, 20);
+    body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = (pdb)codec;
+    if (py0 < GS.cy0) py0 = GS.cy0;
+    if (py1 > GS.cy1) py1 = GS.cy1;
+    if (flags & 0x60) xb_rows(py0, py1);   /* blend: an image with a mask (20.22.10.3) */
+    if (codec) {                                /* its occupant draws it */
+        x_rmark(codec == PDCD_JPX ? PDX_JPX : PDX_IMG);
+        ik_note((pdw)(codec == PDCD_JPX), (pdi)(py1 - py0 + 1), (pdw)(W * ncomp));
+    }
+    hdr_set(DLR_IMAGE, 0, (pdw)(DLH + DLI_BODY + extra), py0, py1);
+    return dl_put(g_hdr, DLH, body, DLI_BODY);
 }
 
+/* the codec a stream's LAST filter names, PDCD_*: DCTDecode, CCITTFaxDecode,
+ * JBIG2Decode, JPXDecode by their first two letters (names are exact; the
+ * other filters - ASCIIHex, ASCII85, LZW, Flate, RunLength, Crypt - differ) */
+static const char ic_name[] = "DCCCJBJP";
+static const pdb ic_code[] = { PDCD_DCT, PDCD_CCITT, PDCD_JBIG2, PDCD_JPX };
+static pdw img_codec(pdw obj, pdw gen)
+{
+    pdw i;
+    if (dict_get(obj, gen, "Filter", 0, 0)) return 0;
+    if (g_dg.kind == PDK_ARR && (!g_dg.count || dict_get(obj, gen, "Filter", idx_key(g_dg.count - 1), 0))) return 0;
+    if (g_dg.kind != PDK_NAME) return 0;
+    for (i = 0; i < 4; i++) if (g_dg.text[0] == ic_name[i * 2] && g_dg.text[1] == ic_name[i * 2 + 1]) return ic_code[i];
+    return 0;
+}
+/* gfx's struct pdgx_lut (20.22.9, gfx's pdabi block) is the XCK_LUT entry:
+ * ncomp byte, flags byte (PDGX_LUT_INVERT: grey = 255 - the sum), a pad word,
+ * then four tables of 256. Until gfx's block is merged, its twin here */
+#ifndef PDGX_LUTBYTES
+#define PDGX_LUTBYTES   1028
+#define PDGX_LUT_INVERT 0x01
+struct pdgx_lut { pdb ncomp, flags; pdw pad; pdb t[1024]; };
+#endif
+#define PDR_LUT_NC 0                    /* the offsets this file reads, held to the struct below */
+#define PDR_LUT_FL 1
+#define PDR_LUT_T  4
+#ifdef PD_HOST
+#include <stddef.h>
+typedef char pdr_ck_lut[offsetof(struct pdgx_lut, ncomp) == PDR_LUT_NC && offsetof(struct pdgx_lut, flags) == PDR_LUT_FL
+                        && offsetof(struct pdgx_lut, t) == PDR_LUT_T && sizeof(struct pdgx_lut) == PDGX_LUTBYTES ? 1 : -1];
+#endif
+/* gfx's (20.22.9), from pdrxg.c: the XC offset of an image's struct pdgx_lut
+ * (XCK_LUT), 0 when there is none yet - it asks for the module itself.
+ * Until it lands, a colour space that is not a device one is not drawn */
+#ifndef XG_IMAGE_LUT
+#ifndef PDR_NOXG
+static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc);          /* pdrxg.c */
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_image_lut(obj, gen, bpc)
+#else
+static pdw xg_nolut(void) { inc_note(PDF_INC_COLOUR, "image colour space"); return 0; }
+#define XG_IMAGE_LUT(obj, gen, bpc) xg_nolut()
+#endif
+#endif
+/* blend's (20.22.10), from pdrxb.c: an image with a /SMask (kind 32), a
+ * /Mask stream (64) or a colour-key /Mask (128). Until its 8-bit path is in
+ * the image is drawn opaque and the page says so */
+#ifndef XB_IMAGE_MASK
+#define XB_IMAGE_MASK(obj, gen, kind) inc_note(PDF_INC_TRANSP, (kind) == 32 ? "soft mask" : "image mask")
+#endif
 static void do_image(pdw obj, pdw gen)
 {
     static struct pd_fx w, h, bpc, dec0;
-    pdw ncomp = 1, stencil = 0, inv = 0, bpcv;
+    pdw ncomp = 1, flags = 0, bpcv = 1, codec, lut = 0;
     if (dict_num(obj, gen, "Width", 0xFFFF, &w) || dict_num(obj, gen, "Height", 0xFFFF, &h)) return;
-    if (dict_get(obj, gen, "ImageMask", 0, 0) == 0 && g_dg.kind == PDK_BOOL && (g_dg.num.hi || g_dg.num.lo)) stencil = 1;
-    bpcv = 1;
-    if (!stencil) {
-        if (dict_num(obj, gen, "BitsPerComponent", 0xFFFF, &bpc)) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
+    if (dict_get(obj, gen, "ImageMask", 0, 0) == 0 && g_dg.kind == PDK_BOOL && (g_dg.num.hi || g_dg.num.lo)) flags = 1;
+    codec = img_codec(obj, gen);
+    if (!flags) {
+        if (dict_num(obj, gen, "BitsPerComponent", 0xFFFF, &bpc)) {
+            if (codec != PDCD_JPX) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
+            pdm_fx_int(&bpc, 8);                       /* JPX: the codec says */
+        }
         bpcv = (pdw)pdm_fx_floor(&bpc);
-        if (dict_get(obj, gen, "ColorSpace", 0, 0)) { inc_note(PDF_INC_COLOUR, "image colour space"); return; }
-        if (g_dg.kind == PDK_NAME) {
-            if (ci_has(g_dg.text, "rgb")) ncomp = 3;
-            else if (ci_has(g_dg.text, "gray")) ncomp = 1;
-            else { inc_note(PDF_INC_COLOUR, "image colour space"); return; }
-        } else { inc_note(PDF_INC_COLOUR, "image colour space"); return; }
-        if (!(bpcv == 8 || (bpcv == 1 && ncomp == 1))) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
+        if (dict_get(obj, gen, "ColorSpace", 0, 0)) {
+            if (codec != PDCD_JPX) { inc_note(PDF_INC_COLOUR, "image colour space"); return; }
+            ncomp = 0;                                 /* JPX: the codec's own */
+        } else if (g_dg.kind == PDK_NAME && (ncomp = ci_has(g_dg.text, "gray") ? 1 : ci_has(g_dg.text, "rgb") ? 3 : ci_has(g_dg.text, "cmyk") ? 4 : 0) != 0) ;
+        else {
+            lut = XG_IMAGE_LUT(obj, gen, bpcv);
+            if (!lut) return;                          /* asked for, or noted, by the hook */
+            ncomp = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_NC));
+            if (ncomp < 1 || ncomp > 4) return;
+            g_ipx.lut = (pdw)(lut + PDR_LUT_T); g_ipx.lfl = pd_fpeekb(g_xcseg, (pdw)(lut + PDR_LUT_FL)) & PDGX_LUT_INVERT;
+            flags |= 8;
+        }
+        if (!(bpcv == 1 || bpcv == 2 || bpcv == 4 || bpcv == 8 || bpcv == 16)) { inc_note(PDF_INC_IMAGE, "image bit depth"); return; }
     }
-    if (dict_get(obj, gen, "SMask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "soft mask");
-    if (dict_get(obj, gen, "Mask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "image mask");
-    if (dict_num(obj, gen, "Decode", 0, &dec0) == 0 && dec0.hi >= 1) inv = 1;
-    image_place((pdw)pdm_fx_floor(&w), (pdw)pdm_fx_floor(&h), bpcv, ncomp, (pdw)((stencil ? 1 : 0) | (inv ? 2 : 0)), obj, gen, 0);
+    if (dict_get(obj, gen, "SMask", 0, 0) == 0 && g_dg.kind != PDK_NULL) {
+        g_ipx.mobj = g_dg.refnum; g_ipx.mgen = g_dg.refgen; flags |= 32; XB_IMAGE_MASK(obj, gen, 32);
+    } else if (dict_get(obj, gen, "Mask", 0, 0) == 0 && g_dg.kind != PDK_NULL) {
+        if (g_dg.kind == PDK_ARR) { XB_IMAGE_MASK(obj, gen, 128); }
+        else { g_ipx.mobj = g_dg.refnum; g_ipx.mgen = g_dg.refgen; flags |= 64; XB_IMAGE_MASK(obj, gen, 64); }
+    }
+    if (!(flags & 8) && dict_num(obj, gen, "Decode", 0, &dec0) == 0 && dec0.hi >= 1) flags |= 2;
+    g_ipx.codec = codec;
+    image_place((pdw)pdm_fx_floor(&w), (pdw)pdm_fx_floor(&h), bpcv, ncomp, flags, obj, gen, 0);
 }
 
 static void do_xobject(void)
@@ -607,12 +866,31 @@ static struct pd_fx *opn(pdw back)    /* the operand `back` from the end (1 = la
 }
 
 static void setfx(struct pd_fx *d, pdw back) { pdr_cpy(d, opn(back), 4); }
+#ifndef PDR_NOXG
+#include "pdrxg.c"            /* gfx: colour spaces and shading (20.22.9) */
+#endif
+#ifndef XG_CS
+#define XG_CS(st) 0
+#endif
+#ifndef XG_SC
+#define XG_SC(st, nop) 0
+#endif
+#ifndef XG_SH
+#define XG_SH() inc_note(PDF_INC_SHADE, "shading")
+#endif
+#ifndef XG_FILL
+#define XG_FILL(rule, st) (fill_path(rule), 0)
+#endif
+#ifndef XG_TILE_NEXT
+#define XG_TILE_NEXT() 0
+#endif
+
 static void paint(pdw fill, pdw rule, pdw stroke, pdw close)
 {
     if (close) path_close();
     if (g_plimit) { inc_note(PDF_INC_LIMIT, "path size"); g_plimit = 0; }
     if (g_mode == PDR_INTERP) {
-        if (fill) fill_path(rule);
+        if (fill && XG_FILL(rule, stroke)) stroke = 0;       /* a pattern fill strokes first and answers 1 */
         if (stroke) stroke_path();
     }
     if (g_pclip) clip_apply(g_pclip - 1);
@@ -651,6 +929,7 @@ static pdw dash_ph(const struct pd_fx *v)
     q = (pdw)v->hi % per;
     return (pdw)((q * 4u + (v->lo >> 14)) % per);
 }
+
 static void exec_op(const char *s, pdw n)
 {
     pdw k = (pdw)((pdb)s[0] | (n > 1 ? ((pdb)s[1] << 8) : 0));
@@ -665,11 +944,11 @@ static void exec_op(const char *s, pdw n)
         case 'J': GS.cap = (pdb)pdm_fx_floor(opn(1)); break;
         case 'j': GS.join = (pdb)pdm_fx_floor(opn(1)); break;
         case 'M': setfx(&GS.miter, 1); break;
-        case 'd': {                     /* [lengths] phase: up to four, in quarter points (20.12.4) */
+        case 'd': {                     /* [lengths] phase: up to eight, in quarter points (20.12.4) */
             pdw ne = 0, j;
             GS.dn = 0;
             if (g_arrseen && g_nop > g_arr0) ne = g_nop - 1 - g_arr0;
-            if (ne > 4) { inc_note(PDF_INC_LIMIT, "dash array"); ne = 4; }
+            if (ne > PDXD_NDASH) { inc_note(PDF_INC_LIMIT, "dash array"); ne = PDXD_NDASH; }
             for (j = 0; j < ne; j++) GS.dash[j] = dash_q(&g_opn[g_arr0 + j]);
             if (ne) { GS.dn = (pdb)ne; GS.dph = dash_ph(opn(1)); }     /* the phase MODULO the period */
             break; }
@@ -721,7 +1000,8 @@ static void exec_op(const char *s, pdw n)
             pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
             break;
         case 'r' | ('e' << 8): op_re(); break;
-        case 'g' | ('s' << 8): case 'r' | ('i' << 8): break;
+        case 'g' | ('s' << 8): xb_gs(); break;                    /* blend (20.22.10.4); a no-op without PDR_X8 */
+        case 'r' | ('i' << 8): break;
         case 'f' | ('*' << 8): paint(1, 1, 0, 0); break;
         case 'B' | ('*' << 8): paint(1, 1, 1, 0); break;
         case 'b' | ('*' << 8): paint(1, 1, 1, 1); break;
@@ -730,6 +1010,7 @@ static void exec_op(const char *s, pdw n)
         case 'r' | ('g' << 8): col_apply(0, 3); GS.fncs = 3; break;
         case 'C' | ('S' << 8): case 'c' | ('s' << 8): {
             pdw st = (s[0] == 'C');
+            if (XG_CS(st)) break;
             if (g_havename && ci_has(g_name, "devicegray")) { if (st) GS.sncs = 1; else GS.fncs = 1; }
             else if (g_havename && ci_has(g_name, "devicergb")) { if (st) GS.sncs = 3; else GS.fncs = 3; }
             else if (g_havename && ci_has(g_name, "devicecmyk")) { if (st) GS.sncs = 4; else GS.fncs = 4; }
@@ -738,6 +1019,7 @@ static void exec_op(const char *s, pdw n)
             break; }
         case 'S' | ('C' << 8): case 's' | ('c' << 8): {
             pdw st = (s[0] == 'S');
+            if (XG_SC(st, g_nop)) break;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "colour space");
             break; }
@@ -782,7 +1064,7 @@ static void exec_op(const char *s, pdw n)
         case 'D' | ('o' << 8): do_xobject(); break;
         case 'B' | ('I' << 8): case 'I' | ('D' << 8): case 'E' | ('I' << 8): break;   /* pdri handles */
         case 'E' | ('X' << 8): case 'B' | ('X' << 8): case 'M' | ('P' << 8): case 'D' | ('P' << 8): break;
-        case 's' | ('h' << 8): inc_note(PDF_INC_SHADE, "shading"); break;
+        case 's' | ('h' << 8): XG_SH(); break;
         case 'd' | ('0' << 8): case 'd' | ('1' << 8): break;
         default: goto unknown;
         }
@@ -792,8 +1074,9 @@ static void exec_op(const char *s, pdw n)
         if (k == ('B' | ('M' << 8)) && c2 == 'C') return;
         if (k == ('B' | ('D' << 8)) && c2 == 'C') return;
         if (k == ('E' | ('M' << 8)) && c2 == 'C') return;
-        if ((k == ('S' | ('C' << 8)) || k == ('s' | ('c' << 8))) && c2 == 'N') {
+        if ((k == ('S' | ('C' << 8)) && c2 == 'N') || (k == ('s' | ('c' << 8)) && c2 == 'n')) {   /* SCN and scn */
             pdw st = (s[0] == 'S');
+            if (XG_SC(st, g_nop)) return;
             if (g_nop == 1 || g_nop == 3 || g_nop == 4) col_apply(st, g_nop);
             else inc_note(PDF_INC_COLOUR, "pattern colour");
             return;
@@ -886,6 +1169,7 @@ static void inl_token(void)
 static void inl_start(void)
 {
     pdw bits, extra;
+    g_fr[g_nfr].ntok = 0xFFFF;              /* raw bytes follow: tokens cannot replay this stream */
     g_inl = 3; g_ist = 0; g_icap = 0;
     if (!g_gseg) { g_inl = 0; return; }             /* no scratch: the lexer goes on in the data */
     if (!g_if && g_iw && g_ih && g_ics && g_iw <= 4096 &&
@@ -980,7 +1264,6 @@ static pdw inl_skip(void)
 static pdw g_aph;                   /* 5 edit highlights, 1 source highlights, 0 page content, 2 other source annotations, 3 other edits, 4 done */
 static pdw g_aidx;                  /* the next /Annots index of phase 1 or 2 */
 static pdw g_aflags;                /* PDRF_* in force: 0 for a thumbnail or the text map */
-static pdw g_pgopen;                /* the page's own content stream is open  */
 static pdw g_await;                 /* the walk yielded with no stream open: annot_go again at the next turn */
 static pdw annot_next(void);        /* 1 = a stream is open and interpretation goes on (or g_await) */
 static pdw g_aedi;                  /* the next edit record of phase 5 or 3 */
@@ -993,31 +1276,58 @@ static pdw annot_go(void)
     return 0;
 }
 
+/* fonts' Type 3 hooks (20.22.8, the lead's 23:38): PDR_T3_DRAIN() before each
+ * token is read and PDR_T3_FRAME_END() as a frame ends; pdrf.c defines them */
+#ifndef PDR_T3_DRAIN
+#define PDR_T3_DRAIN()
+#endif
+#ifndef PDR_T3_FRAME_END
+#define PDR_T3_FRAME_END()
+#endif
 /* a frame ended: pop to its parent, or move to the next /Contents element */
 static pdw frame_end(void)
 {
-    strm_close();
+again:                                                  /* a loop, not a call: D21 (the UI task's stack) */
+    PDR_T3_FRAME_END();
+    if (!g_fr[g_nfr].park) strm_close();               /* a parked frame's stream is closed already */
+    g_fr[g_nfr].park = 0;
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
+        if (XG_TILE_NEXT()) return 1;
+        xb_group_end();                                 /* blend: the group or mask block ends */
         while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
         g_gsover = g_fr[g_nfr].gsover;
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;
+        g_fr[g_nfr].ok = 0;
         g_nfr--;
         g_gsfloor = g_nfr > 0 && g_fr[g_nfr].isform ? g_fr[g_nfr].gsbase + 1 : 0;
+        if (g_fr[g_nfr].park && !frame_reopen(g_nfr)) {  /* the parent parked under this Form (20.22.7.12) */
+            inc_note(PDF_INC_FILTER, "form stream");
+            g_fr[g_nfr].park = 1;                        /* nothing open: its own end closes nothing */
+            goto again;
+        }
         if (!g_nfr && !g_pgopen) return annot_go();      /* an annotation's form: the next one */
         return 1;
     }
     /* the page: next element of /Contents */
-    g_fr[0].cidx++;
+    g_fr[0].cidx++; g_fr[0].ntok = 0; g_fr[0].ok = 1;
     if (strm_open(0, 0, g_page, g_fr[0].cidx) == 0) return 1;
     g_pgopen = 0;
     return annot_go();
 }
 
 /* run at most `maxops` operators. Returns 1 when the page is finished */
+#ifdef PDR_TYPE3
+#include "pdrt3.c"
+#endif
+
+/* a slice is bounded in TIME as well (QA R27): the UI task takes no input
+ * until it returns, and on a 4.77 MHz 8088 256 text operators are 5 s */
+#define PDR_SLICE_TICKS 4               /* ~220 ms of the BIOS tick */
 static pdw interp_run(pdw maxops)
 {
-    pdw err, ops = 0, kind, toks = 0;
+    pdw err, ops = 0, kind, toks = 0, t0;
     if (g_idone) return 1;
+    t0 = (pdw)os88_ticks();
     while (ops < maxops) {
         if (g_dlfull) return 0;
         /* a slice is bounded in TOKENS too: a stream of a million numbers, or an
@@ -1030,11 +1340,13 @@ static pdw interp_run(pdw maxops)
             continue;
         }
         if (g_inl >= 2) { if (!inl_skip()) return 0; continue; }
+        PDR_T3_DRAIN();
         err = tok_next();
         if (err) {                                /* this stream is over; the annotations and the marks after it are not */
             g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error");
-            while (g_nfr) { strm_close(); g_nfr--; }
-            if (g_pgopen) strm_close();
+            while (g_nfr) { if (!g_fr[g_nfr].park) strm_close(); g_fr[g_nfr].park = 0; g_fr[g_nfr].ok = 0; g_nfr--; }
+            if (g_pgopen && !g_fr[0].park) strm_close();
+            g_fr[0].park = 0;
             g_pgopen = 0;                         /* the next stream clears the lexer's state (annot_try, page_open) */
             if (annot_go()) continue;
             return 1;
@@ -1095,6 +1407,7 @@ static pdw interp_run(pdw maxops)
             op_clear();
             g_tjlive = 0;
             ops++;
+            if ((pdw)((pdw)os88_ticks() - t0) >= PDR_SLICE_TICKS) return 0;
             break;
         case PDT_EOF:
         eof:
@@ -1113,7 +1426,7 @@ static pdw page_open(void)
     pdw err;
     gs_reset();
     g_resp = g_page; g_reso = 0; g_resg = 0;
-    g_fr[0].isform = 0; g_fr[0].cidx = 0;
+    g_fr[0].isform = 0; g_fr[0].cidx = 0; g_fr[0].ntok = 0; g_fr[0].ok = 1; g_fr[0].park = 0;
     g_inl = 0; g_dictd = 0; op_clear();
     err = strm_open(0, 0, g_page, 0);
     if (!err) g_pgopen = 1;
@@ -1126,6 +1439,7 @@ static pdw interp_start(pdw page)
     pdw err;
     op_clear(); g_tjlive = 0; g_inl = 0; g_icap = 0; g_dictd = 0; g_inbt = 0;
     path_reset(); g_plimit = 0; g_nfr = 0; g_idone = 0; g_ierr = 0;
+    pdr_zero(g_fr, sizeof g_fr);            /* no frame is parked or parkable from a pass before */
     g_page = page;
     g_ops = 0;
     g_rn = 0; g_ropen = 0;

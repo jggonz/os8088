@@ -11,8 +11,8 @@ assembly already refuses a slot it does not know (KERNEL_SEG is re-defined to
 an undefined symbol after the table); this reads the BUILT modules and holds
 the shape that cannot be seen in the source: every far call to KERNEL_SEG
 (9A off 60 00) sits in a slot - a near call before it to ONE routine (pdk_up)
-and a jump after it to ONE routine (pdk_dn) - in PDENG, PDREND, PDWRT and the
-stand-ins, whichever are built. ~0.1 s. SKIPs when no module is built.
+and a jump after it to ONE routine (pdk_dn) - in PDENG, PDREND, PDWRT, the slot's
+occupants (PDXK PDXG PDXF PDXI PDXJ) and the stand-ins, whichever are built. ~0.1 s. SKIPs when no module is built.
 """
 import os
 import struct
@@ -48,7 +48,9 @@ def main():
     build = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build")
     mods = [os.path.join(build, n) for n in
             ("PDENG.MOD", "PDREND.MOD", "PDWRT.MOD",
-             "pdstub/PDENG.MOD", "pdstub/PDREND.MOD", "pdstub/PDWRT.MOD")]
+             "pdstub/PDENG.MOD", "pdstub/PDREND.MOD", "pdstub/PDWRT.MOD")
+            # the slot's occupants (PAGEDESK-SPEC 20.22.2.4), real and stand-in
+            + tuple(d + "PDX%s.MOD" % k for d in ("", "pdstub/") for k in "KGFIJ")]
     seen = [m for m in mods if os.path.exists(m)]
     # PageDesk is not in `all`, so a module under build/ can be a leftover
     # from before the gate existed; one older than pdkgate.inc is that, and
@@ -76,6 +78,16 @@ def main():
               "%s: %d slot(s), one pdk_up and one pdk_dn (%s / %s)"
               % (name, len(s), sorted(hex(u) for u in ups if u is not None),
                  sorted(hex(d) for d in dns if d is not None)))
+    # PDREND's second code segment (PAGEDESK-SPEC 20.22.7.9) runs under a
+    # different CS, so a near call to pdk_up cannot reach the gate from it:
+    # moved code reaches the kernel only through a resident routine (its
+    # cc_ovv_* shims), and the part must hold no far call to KERNEL_SEG at all
+    for c in (os.path.join(build, "PDRENDC.MOD"),):
+        if os.path.exists(c) and os.path.getmtime(c) >= gm:
+            s = slots(open(c, "rb").read())
+            check(not s, "%s: no kernel call in the second code segment%s"
+                  % (os.path.relpath(c, build),
+                     "" if not s else " - at " + ", ".join(hex(i) for i, _, _ in s)))
     return done("t_pdkgate")
 
 

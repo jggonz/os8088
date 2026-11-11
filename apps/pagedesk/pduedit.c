@@ -2,7 +2,7 @@
  * os8088 - apps/pagedesk/pduedit.c   THE EDIT STORE (PAGEDESK-SPEC 13.1, 13.1.1,
  *                                    20.8; PD-12..PD-16)
  *
- * The document's changes live in ONE segment, pdu_dcseg(PDU_DC_EDITS), 16 KiB:
+ * The document's changes live in ONE segment, pdu_dcseg(PDU_DC_EDITS), 8 KiB:
  *
  *     0 ........ ED_MAX records of 48 bytes (struct pd_edit), in z-order
  *     ED_TEXT0 . the text heap, growing UP    (ED_TEXT0 .. pdu_ed_tt)
@@ -25,15 +25,16 @@
  * any stored copy (a new command discards the redo branch before it writes).
  *
  * THE LIMITS, said in words (13.1 asks for 256 records and a swap file; this
- * build keeps 128 records and the 10 KiB between the heaps, and refuses the
- * rest with PDE_LIMIT / PDE_NOMEM rather than losing what is typed):
- *   records 128, one text 1,024 bytes, text + points together ~10 KiB.
+ * build keeps 64 records and the 5 KiB between the heaps in an 8 KiB claim -
+ * O9: 16 KiB of it took a 640 KiB XT under PD-29's reserve at the first
+ * edit - and refuses the rest with PDE_LIMIT / PDE_NOMEM rather than losing
+ * what is typed): records 64, one text 1,024 bytes, text + points ~5 KiB.
  * ==========================================================================*/
 
 #define ED_REC    48
-#define ED_MAX    128
-#define ED_TEXT0  (ED_MAX * ED_REC)     /* 6,144 */
-#define ED_END    16384u
+#define ED_MAX    64                  /* O9: 64 marks a document */
+#define ED_TEXT0  (ED_MAX * ED_REC)     /* 3,072 */
+#define ED_END    8192u                 /* O9: the store is 8 KiB */
 #define ED_TMAX   1024
 #define ED_PMAX   2000                  /* points in one record */
 #define ED_PENUP  (-32767 - 1)          /* PD_PENUP; SmallerC refuses the literal -32768 */
@@ -186,6 +187,21 @@ static int ovl_ed_room(unsigned tbytes, unsigned pbytes)
 /* ============================================================================
  * 20.8
  * ==========================================================================*/
+/* the edit store at the FIRST edit (QA F26, claim B): a claim of its own from
+ * the top, not 16 KiB of B held from the open. 1 = no store (no document, or
+ * no room): the edit is refused. Every writer of ed_seg() asks first: a new
+ * record goes in only where it is (pdu_ed_new: a note's commit is too deep
+ * a chain for a claim, pdstk), so it is asked for at an edit tool's PRESS on
+ * the page (ovl_tool_click) and by a journal's replay (recov), and picking an
+ * edit tool asks first - that click also gives the slot's occupant back when
+ * the store will not fit (ovl_tool_hint): the ladder loads it again at need */
+static int ovl_ed_need(void)
+{
+    if (!pdu_dclaim[2] && pdu_dclaim[0])
+        pdu_dc[PDU_DC_EDITS] = pdu_dclaim[2] = pdu_claimhi(ED_END >> 4);
+    return !pdu_dclaim[2];
+}
+
 int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
                const pd_pt *pts, unsigned npts)
 {
@@ -193,7 +209,7 @@ int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
     int idx;
 
     pdu_ed_err = 0;
-    if (ed_seg() == 0) {
+    if (!pdu_dclaim[2]) {               /* asked for at the press (ovl_ed_need) */
         pdu_ed_err = PDE_NOMEM;
         return -1;
     }

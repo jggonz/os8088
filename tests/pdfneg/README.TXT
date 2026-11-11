@@ -30,12 +30,12 @@ byte-identical, no claim is left open, and a following valid file opens.
 
 trunc_header.pdf           open    PDE_TRUNC     file is only the five bytes "%PDF-"
 bad_header.pdf             open    PDE_SYNTAX    no %PDF- header in the first 1024 bytes
-trunc_xref.pdf             open    PDE_TRUNC     cut in the middle of the xref table; no trailer or startxref
-trunc_startxref.pdf        open    PDE_TRUNC     startxref has no offset
-xref_wrong_offset.pdf      open    PDE_XREF      startxref points inside the xref keyword, not at it
-xref_swapped_entries.pdf   open    PDE_XREF      two xref entries swapped: "N 0 obj" is not at the offset
-xref_size_huge.pdf         open    PDE_XREF      /Size claims 99,999,999 objects, the table has a handful
-no_root.pdf                open    PDE_XREF      trailer has no /Root
+trunc_xref.pdf             open    PDE_OK        cut in the middle of the xref table; no trailer or startxref (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+trunc_startxref.pdf        open    PDE_OK        startxref has no offset (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+xref_wrong_offset.pdf      open    PDE_OK        startxref points inside the xref keyword, not at it (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+xref_swapped_entries.pdf   open    PDE_OK        two xref entries swapped: "N 0 obj" is not at the offset (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+xref_size_huge.pdf         open    PDE_OK        /Size claims 99,999,999 objects, the table has a handful (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+no_root.pdf                open    PDE_OK        trailer has no /Root (the scan finds the /Type /Catalog, PAGEDESK-SPEC 20.22.3.5)
 stream_length_short.pdf    stream  PDE_SYNTAX    /Length 3 is shorter than the data; endstream is not where it says (file length unchanged)
 stream_length_long.pdf     stream  PDE_SYNTAX    /Length overshoots endstream but stays inside the file
 stream_length_past_eof.pdf stream  PDE_TRUNC     /Length runs past the end of the file
@@ -58,11 +58,11 @@ xref_subsec_300.pdf        open    PDE_LIMIT     a VALID file whose xref has 301
 objnum_70000.pdf           open    PDE_LIMIT     the page content is object 70000: an xref subsection and a reference above 65535 (DECISIONS D8)
 runlength_bomb.pdf         render  PDE_LIMIT     80,000 bytes of RunLength that expand to about 5 MB
 flate_unsupported.pdf      render  PDE_FLATE     FlateDecode content on the XT build
-lzw_unsupported.pdf        render  PDE_FILTER    LZWDecode content
+lzw_unsupported.pdf        render  PDE_OK        LZWDecode content (decoded on the Flate tier, PAGEDESK-SPEC 20.22.3.6; PDE_FLATE without it)
 filter_chain_5.pdf         render  PDE_FILTER    a five-stage filter pipeline (limit 4)
-prev_loop.pdf              open    PDE_XREF      /Prev points at the xref section it is in
-prev_broken.pdf            open    PDE_XREF      /Prev points at an offset with no xref section
-prev_past_eof.pdf          open    PDE_XREF      /Prev beyond the end of the file
+prev_loop.pdf              open    PDE_OK        /Prev points at the xref section it is in (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+prev_broken.pdf            open    PDE_OK        /Prev points at an offset with no xref section (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
+prev_past_eof.pdf          open    PDE_OK        /Prev beyond the end of the file (the scan rebuilds it, PAGEDESK-SPEC 20.22.3.5)
 prev_chain_10.pdf          open    PDE_LIMIT     ten revisions chained by /Prev (limit 8)
 annot_no_rect.pdf          render  PDE_OK        open succeeds; the Square without /Rect is skipped, not drawn, no crash
 annot_bad_rect.pdf         render  PDE_OK        /Rect has three numbers: skipped
@@ -80,6 +80,6 @@ dct_image.pdf              render  PDE_FILTER    a DCTDecode (JPEG) image
 zero_pages.pdf             open    PDE_SYNTAX    a page tree with no pages
 encrypted.pdf              open    PDE_ENCRYPT   /Encrypt in the trailer (the dictionary is a stub; the code must be PDE_ENCRYPT before anything is decrypted)
 signed_perms.pdf           open    PDE_SIGNED    catalog carries /Perms: opens READ-ONLY with a label, not refused
-xrefstm_objstm.pdf         open    PDE_XREFSTM   a PDF 1.5 file with a cross-reference STREAM and an object stream (valid, but outside the XT profile)
+xrefstm_objstm.pdf         open    PDE_OK        a PDF 1.5 file with a cross-reference STREAM and an object stream (read since PAGEDESK-SPEC 20.22.3)
 
 53 files.

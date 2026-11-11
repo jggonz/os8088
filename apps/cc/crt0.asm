@@ -1145,6 +1145,12 @@ cc_ovneed:
     push si
     push di
     push es
+%ifdef CC_OVL_ROOM
+    call CC_OVL_ROOM                ; the package makes room first (PAGEDESK's
+                                    ; occupant gives back what the overlay
+                                    ; left when it was dropped for it); BP is
+                                    ; the hook's to keep, the rest is pushed
+%endif
     ; GO HOME FOR IT (SPEC.md 73.14.2.2). op_fetch reads the part out of the
     ; package's FILE by name, and a name resolves in the folder the instance
     ; stands in - which the file dialog, and a document launch's goto, move
@@ -1198,6 +1204,11 @@ cc_ovneed:
     mov si, op_s_disk               ; way back to take - only the reason
     call op_say
 .refused:
+%ifdef CC_OVL_FAIL
+    call CC_OVL_FAIL                ; SI = the refusal op_say put up: the
+                                    ; package may say it in its own words
+                                    ; (PAGEDESK's "Insert the PageDesk disk")
+%endif
     pop es
     pop di
     pop si

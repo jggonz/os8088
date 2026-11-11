@@ -54,6 +54,14 @@
 ; which is what this file restores. pdrprim.inc's pdr_blit calls with DS ours
 ; too, and BP is an argument there: nothing here touches BP.
 ;
+; A CALL WHOSE DS IS AN ARGUMENT. OSAPI_DECOMP reads its stream at DS:SI, and
+; the slot needs DS = ours on both sides of the far call (the statics). So the
+; caller (pdrprim.inc's pdr_lzdec, PAGEDESK-SPEC 20.22.14) STAGES the segment
+; in pdk_xds: pdk_up loads it as its last act, after every static it writes,
+; and pdk_dn puts DS back from CS before it touches one - a module's CS is its
+; DS at every kernel call (each door's `push cs / pop ds`). Assembled only in
+; a module whose C names pdr_lzdec, so every other module is byte-identical.
+;
 ; COST: 10 bytes a slot, 74 bytes of body; about 90 clocks of instructions a
 ; kernel call on top of the kernel's own (8088: ~70 us) - against 756 us for
 ; the cheapest drawing call and ~400 ms for a disk one.
@@ -104,8 +112,17 @@ pdk_up:
     push word [pdk_zero]            ; zero: "made where it stood"
 .go:
     push word [pdk_fl]
+%ifdef CC_U__pdr_lzdec              ; a call whose DS is an ARGUMENT (below)
+    cmp word [pdk_xds], 0
+    je .nx
+    mov ds, [pdk_xds]               ; the caller's staged segment, loaded LAST:
+.nx:                                ; every static above was ours
+    popf
+    jmp word [cs:pdk_ra]            ; a module's CS is its DS (the doors)
+%else
     popf                            ; IF and every flag as the slot had them
     jmp word [pdk_ra]
+%endif
 
 ; -----------------------------------------------------------------------------
 ; pdk_dn - jumped to by a slot after the API returned: take the word pdk_up
@@ -115,6 +132,10 @@ pdk_up:
 pdk_dn:
     ; STKBALANCE-OK: a STACK SWITCH (PAGEDESK-SPEC 20.15) - SS:SP move between the
     ; UI stack and the private module stack; each side is balanced on its own stack
+%ifdef CC_U__pdr_lzdec
+    push cs                         ; DS back to ours before a static is
+    pop ds                          ; touched (the staged one came back)
+%endif
     pushf
     pop word [pdk_fl]               ; the API's answer flags
     pop word [pdk_dss]
@@ -136,6 +157,9 @@ pdk_fl:     dw 0
 pdk_dsp:    dw 0
 pdk_dss:    dw 0
 pdk_zero:   dw 0
+%ifdef CC_U__pdr_lzdec
+pdk_xds:    dw 0                    ; staged DS for the next call, 0 = none
+%endif
 
 ; THE SLOTS, after the body: `jmp pdk_dn` reaches back short from most of them
 ; --- the table: a slot, then every caller that names it --------------------
@@ -176,11 +200,13 @@ PDK_SLOT FILE_DELETE,    _os88_file_delete
 PDK_SLOT FILE_RENAME,    _os88_file_rename
 PDK_SLOT FILE_WRITE,     _os88_file_write_segoff, _os88_file_write
 PDK_SLOT FILE_WRITE_SEQ, _os88_file_write_seq
+PDK_SLOT GET_TICKS,      _os88_ticks
 PDK_SLOT GFX_LOCK,       _os88_gfx_lock
 PDK_SLOT GFX_UNLOCK,     _os88_gfx_unlock
 PDK_SLOT WM_CLIP_SET,    _os88_wm_clip_set
 PDK_SLOT GFX_BLIT1,      _pdr_blit         ; pdrprim.inc, directly
 PDK_SLOT GFX_BLIT4,      _pdr_blit
+PDK_SLOT DECOMP,         _pdr_lzdec        ; pdrprim.inc: DS staged (20.22.14)
 PDK_SLOT SET_COLOR,      _pds_stub
 PDK_SLOT GFX_HLINE,      _pds_stub
 

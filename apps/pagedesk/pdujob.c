@@ -57,6 +57,7 @@ static void pdu_at_doc(void)
 }
 
 /* union r into the rect a render is owed for */
+static void ovl_pg_ask(const char *what);   /* pdovlpage.c: Insert's deferred prompt */
 static void pdu_render_want(struct os88_rect *r)
 {
     if (!pdu_rwant) {
@@ -119,18 +120,30 @@ static void pdu_job_shift(int dy)
     }
 }
 
+static int pdu_opauth;                  /* 20.22.2.6: PDXK in, ui's steps owed */
+static unsigned char pdu_pfl;           /* 20.22.4.5: the pre-flight - 1 the next
+                                         * file owed, 2 opening it */
+static unsigned char pdu_pfk;           /* its slot; PDM_NSLOT = the document */
+static unsigned char pdu_pfm;           /* the foreign slots the map names */
+
 /* Escape and every way out: stop what runs, release what it held */
 static void pdu_job_abort(void)
 {
     int reopen;
     reopen = 0;
+    if (pdu_opauth == 1 && pdu_au_mode)     /* ui: an open ask goes: closed, */
+        pdu_au_close();                 /* and painting nothing meanwhile (F3) */
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
         pdu_doc_release();
         pdu_doc = D_EMPTY;
     } else if (pdu_job == J_SAVE) {
-        pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        if (pdu_pfl)                    /* the pre-flight's file (PDENG */
+            pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);   /* owes the document) */
+        else
+            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        pdu_pfl = 0;
         pdu_wrt_out();
         reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;          /* pages */
     } else if (pdu_job >= J_FIND) {     /* nav: find, text pass, thumbnail */
@@ -146,6 +159,7 @@ static void pdu_job_abort(void)
 
 static void pdu_job_start(int kind)
 {
+    pdu_lad_begin();                    /* 20.22.2.6: a page view's counts */
     pdu_job = kind;
     pdu_jcancel = 0;
     pdu_jslices = 0;
@@ -172,10 +186,10 @@ static void pdu_progress(const char *verb, const char *what)
     pdu_pshown = 1;
     os88_strcpy(pdu_line, verb, sizeof(pdu_line));
     pdu_cat(pdu_line, what, sizeof(pdu_line));
-    pdu_cat(pdu_line, " ", sizeof(pdu_line));
-    os88_utoa(pdu_jslices, pdu_num);
+    pdu_cat(pdu_line, " (", sizeof(pdu_line));     /* QA R15: the slices, in brackets - */
+    os88_utoa(pdu_jslices, pdu_num);                /* never read as the page */
     pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-    pdu_cat(pdu_line, " - Esc cancels", sizeof(pdu_line));
+    pdu_cat(pdu_line, ") - Esc cancels", sizeof(pdu_line));
     pdu_wsay(pdu_line);
     pdu_pshown = 1;                     /* polish: after the say, which clears it */
 }
@@ -210,6 +224,8 @@ static void pdu_open_begin(const char *name)
     pdu_rwant = 0;
     pdu_pgwant = 0;
     pdu_changes = 0;
+    pdu_stale = 0;                      /* QA F31: a new file */
+    pdu_dskout = 0;                     /* QA F21: nothing missed yet */
     pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_nav_reset();                    /* nav: history, selection, panels */
@@ -224,6 +240,7 @@ static void pdu_open_begin(const char *name)
     os88_strcpy(pdu_xopen.name, name, sizeof(pdu_xopen.name));
     pdu_doc = D_OPENING;
     pdu_opfirst = 1;
+    pdu_opauth = 0;
     pdu_say2("Opening ", name);
     pdu_dirty_all = 1;
     pdu_job_start(J_OPEN);
@@ -259,11 +276,17 @@ static int pdu_open_first(void)
 }
 
 /* PAGEINFO for page n, then the view. 0 or a PDE_*. No lock: a disk read. */
+static char pdu_opsaid;                 /* "Opened X" stands: the first draw's line replaces it (R16) */
+char pdu_ovidle;                        /* pdu_ovl_fail: idle work is fetching the overlay - 1 the
+                                         * panels', 2 the recovery look after an open */
+static char pdu_ovhold;                 /* that fetch was refused: the ladder waits for the user */
 static int pdu_incpg;                   /* page + 1 whose incompleteness
                                          * was said; 0 = not yet */
 static int pdu_page_load(int n)
 {
     unsigned r;
+    if (pdu_stale)
+        return PDE_CHANGED;             /* QA F31: never the changed bytes */
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_PAGEINFO, pdu_pg_id(n), 0, 0);   /* pages */
     if (pdu_mcf)
         return r ? r : PDE_LIMIT;
@@ -288,15 +311,41 @@ static void pdu_open_step(void)
         pdu_open_first();
         return;
     }
+    if (pdu_opauth == 1) {              /* the key, ui's prompt (20.22.2.6) */
+        r = ovl_au_slice(0);
+        if (r == PDE_BUSY)
+            return;
+        pdu_opauth = 2;                 /* once an open */
+        pdu_mcf = r != 0;
+        if (r)
+            goto failed;
+    }
     pd_fcopy_out(&pdu_xopen, pdu_xb, 0, sizeof(pdu_xopen));
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_OPEN, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
+    r = pdu_ladck(PDU_M_ENG, r);        /* a region: then OPEN again */
+    if (r == 0xFFFF)
+        return;
+    if (pdu_mcf && r == PDE_PASSWORD && !pdu_opauth) {
+        pdu_opauth = 1;                 /* OPEN paused at its state 7 (20.22.5) */
+        if ((r = ovl_au_slice(1)) == PDE_BUSY)
+            return;
+        pdu_opauth = 2;
+        pdu_mcf = r != 0;
+        if (!r) {
+            if (pdu_ovl_in())
+                return;                 /* no question, no prompt: OPEN again */
+            pdu_mcf = 1;                /* QA F21: the overlay could not be read */
+            r = PDE_IO;                 /* (its toast said why); an OPEN with no */
+        }                               /* key left the next open refused */
+    }
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         if (!pdu_reopening)             /* pages: the save's outcome stays said */
             pdu_progress("Opening ", pdu_name);
         return;
     }
+failed:
     pdu_job = J_NONE;
     if (pdu_mcf || pdu_xopen.npages == 0
         || (pdu_reopening && pdu_xopen.npages != pdu_srcn)) {       /* pages */
@@ -304,7 +353,7 @@ static void pdu_open_step(void)
         pdu_pgsaved = 0;
         pdu_doc_release();
         pdu_doc = D_FAILED;
-        pdu_err = (pdu_mcf && r) ? r : PDE_SYNTAX;
+        pdu_err = pdu_dskout ? PDE_IO : (pdu_mcf && r) ? r : PDE_SYNTAX;   /* QA F21: never 'damaged' for our disk */
         pdu_say2("Could not open ", pdu_name);
         pdu_dirty_all = 1;
         return;
@@ -315,6 +364,27 @@ static void pdu_open_step(void)
         pdu_kick();
         return;
     }
+    if (pdu_socc == PDX_KEY)            /* the key is set: PDXK's RAM back */
+        pdu_slot_free();
+#ifdef PDU_LADTEST
+    {   /* A DEVELOPER'S LOOK at 20.22.2 (define PDU_LADTEST in pagedesk.c and
+         * pagedesk.asm): every occupant in and out of the slot at each open,
+         * then a toast - loads off the disk, copies back from the cache, the
+         * cache's kind (1 XMS, 2 EMS), the last answer, the largest free KiB */
+        static char m[28];
+        unsigned o, q = 0;
+        for (o = 1; o <= PDU_OCC_WRT && !q; o++)
+            q = pdu_slot_load(o);
+        pdu_slot_free();
+        m[0] = 0;
+        pdu_cat(m, "d", sizeof(m)); os88_utoa(pdu_tdisk, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " c", sizeof(m)); os88_utoa(pdu_tcache, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " x", sizeof(m)); os88_utoa(pdu_ckind, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " r", sizeof(m)); os88_utoa(q, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        pdu_cat(m, " f", sizeof(m)); os88_utoa(os88_mem_largest_p() >> 6, pdu_num); pdu_cat(m, pdu_num, sizeof(m));
+        os88_toast(m, 0);
+    }
+#endif
     pdu_npages = pdu_xopen.npages;
     pdu_srcn = pdu_npages;              /* pages */
     pdu_rdonly = (pdu_xopen.flags & PDO_READONLY) != 0;
@@ -344,6 +414,7 @@ static void pdu_open_step(void)
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
         pdu_say(pdu_line);
+        pdu_opsaid = 1;                 /* QA R16: the first page's own line replaces it */
     }
     pdu_dirty_all = 1;
 }
@@ -391,7 +462,7 @@ static void ovl_render_rest(int ask)
 
 static int pdu_render_begin(void)
 {
-    unsigned r;
+    unsigned r, bad;
 
     if (!pdu_isect(&pdu_rr, &pdu_L.canvas, &pdu_rrun) || pdu_pg_kind(pdu_page) != PDM_SRC) {   /* pages: a blank is paper */
         pdu_rwant = 0;
@@ -413,9 +484,18 @@ static int pdu_render_begin(void)
     pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     pdu_rend_sync();                    /* an owed abort before a new begin */
-    r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
-    if (pdu_mcf) {
-        pdu_say2("Could not draw the page: ", pdu_errtext(r));
+    if (pdu_stale) {                    /* QA F31: paper, not the changed file */
+        r = PDE_CHANGED;
+        bad = 1;
+    } else {
+        r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
+        bad = pdu_mcf;
+    }
+    if (bad) {
+        if (pdu_stale != 1)             /* the save's refusal stands the first time */
+            pdu_say2("Could not draw the page: ", pdu_errtext(r));
+        if (pdu_stale)
+            pdu_stale = 2;
         os88_gfx_lock();
         pdu_status_paint();
         os88_gfx_unlock();
@@ -431,8 +511,11 @@ static void pdu_render_step(void)
     unsigned r;
     r = pdu_mcall(PDU_M_REND, PDV_REND_STEP, 0, 0, 0);
     pdu_jslices++;
+    if ((r = pdu_ladck(PDU_M_REND, r)) == 0xFFFF)
+        return;                         /* 20.22.2.6: STEP again, next slice */
     if (!pdu_mcf && r == PDE_BUSY) {
-        pdu_progress("Drawing page ", "");
+        os88_utoa(pdu_page + 1, pdu_num);       /* QA R15: the page it IS */
+        pdu_progress("Drawing page ", pdu_num);
         return;
     }
     pdu_job = J_NONE;
@@ -461,8 +544,9 @@ static void pdu_render_step(void)
             pdu_say2("Incomplete rendering - ", pdu_incwhy);
             pdu_wsay(pdu_msg);
         }
-    } else if (pdp_form || pdu_jslices > 8 || pdu_pshown) /* prefs: a form's note; polish: never leave "Esc cancels" */
+    } else if (pdp_form || pdu_jslices > 8 || pdu_pshown || pdu_opsaid) /* prefs: a form's note; polish: never leave "Esc cancels" */
         pdu_wsay(pdp_done());
+    pdu_opsaid = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -472,25 +556,25 @@ static void pdu_render_step(void)
  * a PIT clock since boot was never set, and a date of 1980 is a fact the
  * file would carry as if it were true. dst holds at least 17 bytes. */
 static unsigned pdu_clkw[4];
-static void pdu_d2(char *p, unsigned v)
+static void ovl_d2(char *p, unsigned v)
 {
     p[0] = (char)('0' + v / 10);
     p[1] = (char)('0' + v % 10);
 }
-static void pdu_datestamp(char *dst)
+static void ovl_datestamp(char *dst)   /* save only: the overlay's */
 {
     dst[0] = 0;
     if (!pdu_clk(pdu_clkw))
         return;
     dst[0] = 'D';
     dst[1] = ':';
-    pdu_d2(dst + 2, pdu_clkw[0] / 100);
-    pdu_d2(dst + 4, pdu_clkw[0] % 100);
-    pdu_d2(dst + 6, pdu_clkw[1] >> 8);
-    pdu_d2(dst + 8, pdu_clkw[1] & 0xFF);
-    pdu_d2(dst + 10, pdu_clkw[2] >> 8);
-    pdu_d2(dst + 12, pdu_clkw[2] & 0xFF);
-    pdu_d2(dst + 14, pdu_clkw[3] & 0xFF);
+    ovl_d2(dst + 2, pdu_clkw[0] / 100);
+    ovl_d2(dst + 4, pdu_clkw[0] % 100);
+    ovl_d2(dst + 6, pdu_clkw[1] >> 8);
+    ovl_d2(dst + 8, pdu_clkw[1] & 0xFF);
+    ovl_d2(dst + 10, pdu_clkw[2] >> 8);
+    ovl_d2(dst + 12, pdu_clkw[2] & 0xFF);
+    ovl_d2(dst + 14, pdu_clkw[3] & 0xFF);
     dst[16] = 0;
 }
 
@@ -501,13 +585,10 @@ static const unsigned pdu_savemode[3] = { PDSV_INCREMENTAL, PDSV_FRESH,
 
 static void pdu_save_done(unsigned err)
 {
-    if (!ovl_save_done(err)) {           /* the overlay could not be had: PDENG still needs its document */
-        pdu_wrt_out();
-        if (pdu_xsave.mode & PDW_OUT_REOPEN)
-            pdu_reopen_begin();
-    }
+    pdu_wrt_out();                      /* the writer's room is the overlay's (QA F25) */
+    if (!ovl_save_done(err) && (pdu_xsave.mode & PDW_OUT_REOPEN))
+        pdu_reopen_begin();             /* the overlay could not be had: PDENG still needs its document */
 }
-static void pdu_wrt_out(void);
 
 /* PDENG gets the source back: OPEN again with the claims it still holds
  * (CLOSE keeps them), nothing of ours released - the edits and the page map
@@ -518,12 +599,23 @@ static void pdu_reopen_begin(void)
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
     os88_strcpy(pdu_xopen.name, pdu_name, sizeof(pdu_xopen.name));
     pdu_reopening = 1;
+    pdu_opauth = 0;                     /* the held key answers (20.22.2.10) */
     pdu_job_start(J_OPEN);
 }
 
 static void pdu_save_step(void)
 {
     unsigned r;
+    if (pdu_pfl && ovl_ifl_step())       /* the Insert's keys first (20.22.4.5) */
+        return;
+    /* PDWRT in at the first slice, HERE and not in the overlay that began
+     * the save: no overlay code stands on the stack, so release-before-refuse
+     * may give the overlay's 51.5 KiB to the writer (QA F25, 20.22.2.4) */
+    if ((r = pdu_slot_load(PDU_OCC_WRT)) != 0) {    /* (resident: 0 at once) */
+        pdu_job = J_NONE;
+        pdu_save_done(r);
+        return;
+    }
     pdu_rc_fin();                       /* recov */
     if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
         pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));
@@ -551,6 +643,26 @@ static void pdu_save_step(void)
 /* ---------------------------------------------------------------------------
  * THE WAKE HANDLER: one slice, then re-post while there is work
  * -------------------------------------------------------------------------*/
+/* The idle ladder's work is the overlay's, and the overlay is the one part
+ * a render drops for its occupants (20.22.2.4). A refused fetch used to be
+ * retried on every wake - the same "Not enough memory" toast again and again
+ * while nothing on the machine had changed, and the page drawn all along.
+ * Now the thumbnails' and notes' refusal says what waits (pdu_ovl_fail), and
+ * the ladder holds until the user does something: a key, a click or a
+ * command clears the hold, as does the overlay arriving by another path */
+static void pdu_idle_ovl(int notes)
+{
+    pdu_ovidle = notes || !(pdu_txwant || pdu_fwant || pdu_lkact || pdu_selshow
+                            || (pdu_selq < 0 && pdu_selpg >= 0));
+    if (notes)
+        pdu_nt_idle();
+    else
+        ovl_nav_work();
+    pdu_ovidle = 0;
+    if (!pdu_ovl_in())
+        pdu_ovhold = 1;
+}
+
 void os88_onwake(void *win)
 {
     int r;
@@ -558,6 +670,8 @@ void os88_onwake(void *win)
     if (win != pdu_win)
         return;
     pdu_stk_wake();                     /* deepstk */
+    if (pdu_ovl_in())
+        pdu_ovhold = 0;                 /* the panels' work can run again */
     pdu_rend_sync();                    /* an abort a view change owed */
     pdu_pg_wake();                      /* pages: an undone/redone page op */
     if (pdu_job == J_SAVE)              /* pages: a save stands in the TARGET's folder (D14) */
@@ -657,15 +771,43 @@ void os88_onwake(void *win)
         && pdu_pop == P_NONE && !pdu_about && pdu_gs != 2)
         pdu_render_begin();
     else if (pdu_job == J_NONE && !pdu_pgwant && !pdu_argp && !pdu_rwant
-             && pdu_nav_owed())
-        ovl_nav_work();                 /* nav: the idle ladder */
+             && !pdu_ovhold && pdu_nav_owed())
+        pdu_idle_ovl(0);                /* nav: the idle ladder */
 
-    if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
-        pdu_nt_idle();
+    /* notes: between two thumbnail slices too (the engine keeps no object
+     * state across a slice), when the overlay is in - never fetched for it */
+    if ((pdu_job == J_NONE || (pdu_job == J_THUMB && pdu_ovl_in())) && !pdu_ovhold && pdu_nt_owed())
+        pdu_idle_ovl(1);
 
     pdu_rc_wake();                      /* recov */
-    if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
-        pdu_kick();
+    /* 16.1: the reserve is held after every step. A step ends quiet - no
+     * job, no page owed - and an occupant kept past it (S + W, up to ~78
+     * KiB) is what took the 640 KiB XT under 32 KiB after every step once
+     * the ninth claim stopped refusing it: give it back then; the next
+     * NEEDMOD loads it again (the XMS/EMS copy, or the floppy). A parked
+     * Replace's PDWRT holds state and leaves by pdu_wrt_out alone */
+    if (pdu_job == J_NONE && pdu_socc && pdu_socc != PDU_OCC_WRT
+        && !pdu_rwant && !pdu_pgwant && !pdu_argp && pdu_unclaimed_kb() < 32)
+        pdu_slot_free();
+    /* Insert's page prompt, once the render the file dialog's close owed
+     * has run and the occupant has gone: a wake end first passes, so a
+     * repaint that arrives after the dialog's answer is begun before it */
+    if (pdu_pkdefer) {
+        if (pdu_pk != PK_INSERT)
+            pdu_pkdefer = 0;            /* Esc'd before it was said */
+        else if (pdu_pkdefer == 2 || (pdu_job != J_NONE && pdu_job != J_THUMB) || pdu_rwant || pdu_pgwant) {   /* not a thumbnail's 107 s on an XT */
+            pdu_pkdefer = 1;
+            pdu_kick();
+        } else {
+            pdu_pkdefer = 0;            /* pdu_line is the status strip's scratch too: built again */
+            os88_gfx_lock();
+            ovl_pg_ask((const char *)0);
+            os88_gfx_unlock();
+        }
+    }
+    if ((pdu_job != J_NONE && !pdu_au_waits()) || pdu_pgwant || pdu_argp
+        || (!pdu_ovhold && pdu_nav_owed()))
+        pdu_kick();                     /* a job waiting for the user's key does not spin (F4) */
 }
 
 /* ---------------------------------------------------------------------------

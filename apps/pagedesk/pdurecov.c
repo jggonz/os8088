@@ -103,9 +103,16 @@ void pdu_rc_wake(void)
 {
     if (!(rc_f & (RCF_DIRTY | RCF_CHECK | RCF_RETIRE | RCF_ANS | RCF_BYE))
         || pdu_job != J_NONE || pdu_pop != P_NONE || pdu_tx >= 0 || pdu_gs
-        || pdu_about)
+        || pdu_about || pdu_ovhold)
         return;
+    /* the look after an open is idle work like the panels' (pdu_idle_ovl):
+     * refused, it says what waits and holds until the user acts. A write or
+     * an answer is the user's own and keeps the plain refusal */
+    pdu_ovidle = (rc_f & (RCF_DIRTY | RCF_RETIRE | RCF_ANS | RCF_BYE)) ? 0 : 2;
     ovl_rc_wake();
+    pdu_ovidle = 0;
+    if (!pdu_ovl_in())
+        pdu_ovhold = 1;
     if (rc_f & RCF_BYE) {               /* Discard (20.17.8): the journal went
                                          * first (RETIRE outranks the rest).
                                          * No job runs - the key waited - so

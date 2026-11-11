@@ -19,8 +19,9 @@ struct pdr_gs {
     pdb  fncs, sncs;                /* colour components of the space (1,3,4)*/
     pdb  tr, font;                  /* render mode, font cache index (255=none)*/
     pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
-    pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 2,040) */
-    pdb  dn, dash[4];               /* dash pattern: elements (0 = solid) and lengths, quarter points */
+    pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 3,570) */
+    pdb  dn, dash[PDXD_NDASH];       /* dash pattern: elements (0 = solid) and lengths, quarter points */
+    pdb  xt;                        /* blend: the transparency tuple in force (20.22.10; pad_ is gfx's colour-space slots) */
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
  * the workspace at the tail of dl_seg (PDR_WSB bytes, PAGEDESK-SPEC 20.3.1) */
@@ -29,9 +30,9 @@ static pdw g_gsn;                   /* depth: saved states below the current */
 #define GS g_gcur
 static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) */
 #define WS_GS   0u                  /* PD_MAXGSTACK x sizeof(struct pdr_gs)    */
-#define WS_FN   1344u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 84 */
-#define WS_ED   4096u               /* PDR_NEDGE staged edges, 8 bytes each    */
-#define WS_CE   6144u               /* PDR_NCLIPE clip edges, 8 bytes each     */
+#define WS_FN   1408u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 88 */
+#define WS_ED   4160u               /* PDR_NEDGE staged edges, 8 bytes each (the 4 fonts end at 4,152) */
+#define WS_CL   6208u               /* PDR_NCLIP clip records' list offsets, 2 bytes each (to 6,718) */
 /* the 16 saved states end before the font table: held by the compiler on both builds */
 typedef char pdr_ck_gs[PD_MAXGSTACK * sizeof(struct pdr_gs) <= WS_FN ? 1 : -1];
 static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }
@@ -47,6 +48,10 @@ static pdw g_pkfam = 0xFF, g_pksty, g_pkem, g_pkres, g_pkscale;
 static pdw g_inc;                   /* PDF_INC_* seen                        */
 static char g_incname[32];
 static pdw g_ops, g_passes;
+/* the strike blocks' stamp (20.22.8): a pass count that is NOT reset with each verb - g_passes restarts
+ * at 1 every render, so a block a previous page's pass 1 used looked "used in this pass" to the next
+ * page's pass 1 and no block could be reused (QA R24: "glyph block full" on pages 2 and later) */
+static pdw g_pstamp;
 
 #ifdef PD_HOST
 static void pdr_cpy(void *d, const void *s, pdw n)
@@ -126,22 +131,23 @@ static pdw fx_u8(const struct pd_fx *a)
 /* VGA palette index (PAGEDESK-SPEC 10.5) from RGB 0..255 */
 static pdb rgb_c4(pdw r, pdw g, pdw b)
 {
-    pdw mx = r, mn = r, lum, bright, idx;
+    pdw mx = r, mn = r, lum, d, t, idx = 0;
     if (g > mx) mx = g; if (b > mx) mx = b;
     if (g < mn) mn = g; if (b < mn) mn = b;
     lum = (pdw)((r * 77u + g * 150u + b * 29u) >> 8);
-    if (mx - mn < 40) {             /* a grey: the four the palette has      */
+    d = (pdw)(mx - mn);
+    if (d < 40 || d * 4u < mx) {    /* a grey, or a pale colour: the four greys the palette has */
         if (lum < 48) return 0;     /* black                                 */
         if (lum < 128) return 8;    /* dark grey                             */
         if (lum < 208) return 7;    /* light grey                            */
         return 15;                  /* white                                 */
     }
-    bright = mx >= 192;
-    idx = 0;
-    if (r * 2 >= mx) idx |= 4;
-    if (g * 2 >= mx) idx |= 2;
-    if (b * 2 >= mx) idx |= 1;
-    if (bright) idx |= 8;
+    t = (pdw)(d + (mn >> 2));       /* a channel is "on" from half of the way from the smallest to the largest (a little more
+                                     * for a washed-out colour): brown stays brown, salmon is light red, not white */
+    if ((r - mn) * 2u >= t) idx |= 4;
+    if ((g - mn) * 2u >= t) idx |= 2;
+    if ((b - mn) * 2u >= t) idx |= 1;
+    if (mx >= 192) idx |= 8;
     return (pdb)idx;
 }
 
@@ -207,11 +213,36 @@ static pdw g_nv, g_cur, g_sub;      /* vertices, have a current point, start */
 static pdi g_cpx, g_cpy;            /* current point in qpx                  */
 static pdw g_pclip;                 /* W / W* pending: 1 nonzero, 2 even-odd */
 static pdw g_plimit;
+/* the string operand (pdri.c's Tj/TJ/'/"), here so that pdrd.c can borrow it */
+static pdb g_str[PDR_NSTR];
+/* ROOM (PAGEDESK-SPEC 20.22.7): the path, g_str and the band rasteriser's
+ * scratch are never live at once. Interpretation and rasterisation never
+ * interleave inside a pass: a pass interprets to its end (or is restarted,
+ * which empties the path) before any band of it is drawn, and a raster step
+ * is followed by a fresh pass. So pdrd.c's active-edge list, crossings and
+ * clip masks are LENT the interpretation-only arrays below (1,088 bytes of
+ * bss). Anything new that runs at raster time and wants scratch may borrow
+ * them too, under the same rule; nothing that runs while interpreting may. */
+typedef char pdr_ck_lend1[PDR_NEDGE * 2 <= PDR_NSTR ? 1 : -1];               /* g_act on g_str */
+typedef char pdr_ck_lend2[PDR_NSPAN * 3 <= PDR_NPATH * 2 ? 1 : -1];          /* g_cx, g_cd on g_vx */
+typedef char pdr_ck_lend3[PDR_MAXSTRIDE * 2 <= PDR_NPATH * 2 ? 1 : -1];      /* g_mk on g_vy */
 
-static void path_reset(void) { g_nv = 0; g_cur = 0; g_sub = 0; g_pclip = 0; }
+#ifdef PD_HOST
+long pdrh_pa, pdrh_ps, pdrh_pamax, pdrh_psmax, pdrh_pover;   /* PDR_PATHHIST: what a page's paths would take (host only) */
+#endif
+static void path_reset(void) { g_nv = 0; g_cur = 0; g_sub = 0; g_pclip = 0;
+#ifdef PD_HOST
+    if (pdrh_pa > PDR_NPATH) pdrh_pover++; pdrh_pa = 0;
+#endif
+}
 
 static void path_add(pdi x, pdi y, pdb flag)
 {
+#ifdef PD_HOST
+    if (flag & 1) pdrh_ps = 0;
+    if (++pdrh_pa > pdrh_pamax) pdrh_pamax = pdrh_pa;
+    if (++pdrh_ps > pdrh_psmax) pdrh_psmax = pdrh_ps;
+#endif
     if (g_nv >= PDR_NPATH) { g_plimit = 1; return; }
     g_vx[g_nv] = x; g_vy[g_nv] = y; g_vf[g_nv] = flag; g_nv++;
     g_cpx = x; g_cpy = y;
@@ -251,12 +282,16 @@ static pdi g_bz[PDR_BZMAX * 8];      /* pending pieces: x0 y0 x1 y1 x2 y2 x3 y3 
 static pdw g_bzd[PDR_BZMAX];         /* ...and each one's depth               */
 static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
-    pdi a, b, c, e, f, m1, m2;
+    pdi a, b, c, e, f, m1, m2, tol;
     pdi *p, *r, *t;
     pdw n, d;
     g_bz[0] = x0; g_bz[1] = y0; g_bz[2] = x1; g_bz[3] = y1;
     g_bz[4] = x2; g_bz[5] = y2; g_bz[6] = x3; g_bz[7] = y3;
     g_bzd[0] = 0;
+    /* the bound loosens as the path table fills - 1 qpx for its first 128 vertices, 2 (0.38
+     * pixel) to 255, 3 (0.56) past them; the pieces go as 1/sqrt(bound), so a big path of
+     * curves fits (QA KBMIDI2: four discs in one path, 372 vertices at 100% and 405 at 200%) */
+    tol = (pdi)(1 + (g_nv >> 7));
     n = 1;
     while (n) {
         n--;
@@ -267,7 +302,7 @@ static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
             m1 = (pdi)(m1 + pdr_abs((pdi)(r[0] - 2 * r[2] + r[4])));
             m2 = (pdi)(m2 + pdr_abs((pdi)(r[2] - 2 * r[4] + r[6])));
         }
-        if (d >= 6 || (m1 <= 1 && m2 <= 1) || g_nv >= PDR_NPATH || n + 2 > PDR_BZMAX) {
+        if (d >= 6 || (m1 <= tol && m2 <= tol) || g_nv >= PDR_NPATH || n + 2 > PDR_BZMAX) {
             path_add(p[6], p[7], 0);
             continue;
         }
@@ -413,6 +448,29 @@ static void stroke_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
     for (i = 0; i < nseg; i++) {
         j = (i + 1 == n) ? 0 : i + 1;
         x0 = xs[i]; y0 = ys[i]; x1 = xs[j]; y1 = ys[j];
+        if (g_shw <= 2) {
+            /* A HAIRLINE (one pixel): a band one pixel wide ACROSS the line
+             * holds a pixel centre only on a knife edge, so a slanted curve's
+             * pieces dropped out (QA R11). One pixel a row when steep, one a
+             * column when shallow, swept along the segment. A slanted
+             * piece's span is 5 qpx on the sampled axis, not 4: pdr_scan
+             * truncates each crossing from its own edge's start, so two
+             * crossings 4 apart can land 3 apart, and a quarter of the rows
+             * went missing. An axis-aligned piece's crossings are exact, so
+             * it keeps 4 and stays one pixel. Every piece is wound the same
+             * way, so nonzero keeps their overlaps. */
+            mx = (pdi)(x1 - x0); my = (pdi)(y1 - y0);
+            if (!mx && !my) continue;
+            s = mx && my ? 3 : 2;
+            if ((my < 0 ? -my : my) >= (mx < 0 ? -mx : mx)) {
+                if (my > 0) poly4((pdi)(x0 - 2), y0, (pdi)(x1 - 2), y1, (pdi)(x1 + s), y1, (pdi)(x0 + s), y0);
+                else        poly4((pdi)(x0 + s), y0, (pdi)(x1 + s), y1, (pdi)(x1 - 2), y1, (pdi)(x0 - 2), y0);
+            } else {
+                if (mx > 0) poly4(x0, (pdi)(y0 + s), x1, (pdi)(y1 + s), x1, (pdi)(y1 - 2), x0, (pdi)(y0 - 2));
+                else        poly4(x0, (pdi)(y0 - 2), x1, (pdi)(y1 - 2), x1, (pdi)(y1 + s), x0, (pdi)(y0 + s));
+            }
+            continue;
+        }
         unit_dir((pdi)(x1 - x0), (pdi)(y1 - y0), &g_ux1, &g_uy1, &len);
         if (len == 0) continue;
         nx = pdr_muldiv((pdi)(y1 - y0), g_shw, len);
@@ -504,86 +562,18 @@ static void ctm_scale(struct pd_fx *out)
 }
 
 
-/* ---- dash patterns (the `d` operator; PAGEDESK-SPEC 20.12.4) ---------------
- * GS.dash holds up to four lengths in quarter points. A polyline is walked
- * in device qpx, cut where the pattern changes, and every "on" piece is
- * stroked as its own open polyline (so each carries the line's caps). An odd
- * count cycles with on and off swapped, as PDF says. */
-#define PDR_NDASHBUF 12
-static pdi g_dpx[PDR_NDASHBUF], g_dpy[PDR_NDASHBUF];
-static pdw g_dpn, g_dpc;
-static pdi g_dlen[4];
-static pdw g_didx, g_don;
-static pdi g_drem;
-/* THE UI TASK'S STACK IS 512 BYTES (STK0_SIZE) and PDREND runs on it below the
- * primary's chain: every local of the dash walker is static (it is not
- * re-entered), and the helpers reach stroke_poly in ONE call, so a dashed
- * stroke costs the stack no more than a solid one plus dash_poly's frame
- * (verify-annotr's walker: 470 -> the solid path's depth) */
-static void dash_piece_flush(void)
-{
-    if (g_dpn == 2 && g_dpx[0] == g_dpx[1] && g_dpy[0] == g_dpy[1]) g_dpn = 1;      /* a zero-length dash is a dot */
-    if (g_dpn) stroke_poly(g_dpx, g_dpy, g_dpn, 0);
-    g_dpn = 0;
-}
-static pdi g_dqx, g_dqy;            /* dash_piece_add's point (no arguments: no frame) */
-static void dash_piece_add(void)
-{
-    if (g_dpn >= PDR_NDASHBUF) {    /* full: stroke what is there, go on from its last point */
-        stroke_poly(g_dpx, g_dpy, g_dpn, 0);
-        g_dpx[0] = g_dpx[g_dpn - 1]; g_dpy[0] = g_dpy[g_dpn - 1]; g_dpn = 1;
-    }
-    g_dpx[g_dpn] = g_dqx; g_dpy[g_dpn] = g_dqy; g_dpn++;
-}
-static void dash_next(void)
-{
-    g_don ^= 1; g_didx++;
-    if (g_didx >= GS.dn) g_didx = 0;
-    g_drem = g_dlen[g_didx];
-}
-static const pdi *g_dxs, *g_dys;    /* dash_poly's subpath (globals, not arguments: no frame) */
-static pdw g_dn, g_dclosed;
-static void dash_poly(void)
-{
-    static pdw i, k;
-    static pdi x0, y0, x1, y1, len, pos, ph, sum;
-    ctm_scale(&t0);
-    sum = 0;
-    for (k = 0; k < GS.dn; k++) {
-        pdm_fx_int(&t1, (pdi)GS.dash[k]);
-        pdm_fx_mul(&t1, &t1, &t0);
-        g_dlen[k] = (pdi)(t1.hi >> 2);                   /* quarter points -> qpx */
-        sum = (pdi)(sum + g_dlen[k]);
-    }
-    if (sum < 6) { stroke_poly(g_dxs, g_dys, g_dn, g_dclosed); return; }      /* too fine to tell from solid */
-    g_didx = 0; g_don = 1; g_drem = g_dlen[0]; g_dpn = 0; g_dpc = 0;
-    pdm_fx_int(&t1, (pdi)GS.dph);                        /* the phase moves the start along the pattern */
-    pdm_fx_mul(&t1, &t1, &t0);
-    ph = (pdi)(t1.hi >> 2);
-    for (k = 0; ph > 0 && k < 64; k++) {
-        if (ph >= g_drem) { ph = (pdi)(ph - g_drem); dash_next(); }
-        else { g_drem = (pdi)(g_drem - ph); ph = 0; }
-    }
-    if (g_don) { g_dqx = g_dxs[0]; g_dqy = g_dys[0]; dash_piece_add(); }
-    for (i = 0; i < g_dn && g_dpc < 3000; i++) {
-        if (i + 1 == g_dn) { if (!g_dclosed) break; x1 = g_dxs[0]; y1 = g_dys[0]; }
-        else { x1 = g_dxs[i + 1]; y1 = g_dys[i + 1]; }
-        x0 = g_dxs[i]; y0 = g_dys[i];
-        len = pdr_hypot((pdi)(x1 - x0), (pdi)(y1 - y0));
-        pos = 0;
-        while ((pdi)(len - pos) > g_drem && g_dpc++ < 3000) {
-            pos = (pdi)(pos + g_drem);
-            g_dqx = (pdi)(x0 + pdr_muldiv((pdi)(x1 - x0), pos, len));
-            g_dqy = (pdi)(y0 + pdr_muldiv((pdi)(y1 - y0), pos, len));
-            if (g_don) { dash_piece_add(); dash_piece_flush(); }
-            dash_next();
-            if (g_don) dash_piece_add();
-        }
-        g_drem = (pdi)(g_drem - (pdi)(len - pos));
-        if (g_don) { g_dqx = x1; g_dqy = y1; dash_piece_add(); }
-    }
-    if (g_don) dash_piece_flush();
-}
+/* ---- dash patterns (the `d` operator; PAGEDESK-SPEC 20.12.4, 20.22.7) -------
+ * GS.dash holds up to PDXD_NDASH (8) lengths in quarter points. The WALK - cutting a
+ * polyline where the pattern changes - is PDXG's (pdxdash.c, PDV_GFX_DASH):
+ * the core hands it a subpath in the exchange block and strokes every "on"
+ * piece it hands back as its own open polyline (so each carries the line's
+ * caps). The module absent, the stroke is skipped and the pass asks for it
+ * (the ladder, 20.22.2); refused, the subpath is stroked solid. */
+static pdw xb_seg(void);            /* pdrv.c: the exchange block (pdrf.c's g_xb) */
+#ifndef PDV_GFX_DASH
+#define PDV_GFX_DASH 0xCE           /* gfx's (20.22.9); defined here until its block lands */
+#endif
+static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed);   /* pdrd.c: it lends the list */
 
 static void stroke_path(void)
 {
@@ -612,7 +602,7 @@ static void stroke_path(void)
             pdw m = n;
             if (closed && m > 1 && g_vx[s] == g_vx[s + m - 1] && g_vy[s] == g_vy[s + m - 1]) m--;
             for (i = s + n; i < e; i++) { g_vx[i] = g_vx[s + n - 1]; g_vy[i] = g_vy[s + n - 1]; }
-            if (GS.dn) { g_dxs = g_vx + s; g_dys = g_vy + s; g_dn = m; g_dclosed = closed && m > 1; dash_poly(); }
+            if (GS.dn) dash_poly(g_vx + s, g_vy + s, m, closed && m > 1);
             else stroke_poly(g_vx + s, g_vy + s, m, closed && m > 1);
         }
     }

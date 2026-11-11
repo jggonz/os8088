@@ -43,18 +43,20 @@ static pdw fl_next[16];
 /* ---- slots -------------------------------------------------------------------- */
 
 #define FL_NONE 0xFFFFu
-static struct sctx *fl_sc[PDE_NFL];     /* the context that owns slot k, 0 = free     */
-static pdw fl_fresh[PDE_NFL];           /* attached, not yet loaded                   */
-static pdw fl_pp[PDE_NFL][4];           /* its predictor: kind, row bytes, bpp, bpc   */
+static struct sctx *fl_sc[PDE_NFL + 1]; /* the context that owns slot k, 0 = free     */
+static pdw fl_fresh[PDE_NFL + 1];       /* attached, not yet loaded                   */
+static pdw fl_pp[PDE_NFL + 1][5];       /* its predictor: kind, row bytes, bpp, bpc; LZW's EarlyChange */
 static pdw fl_ld;                       /* the slot whose state is in `fl`, or FL_NONE */
 
-#define fl_segof(k) ((pdw)(g_fseg + (k) * PDE_FLSLOT_PARA))
+/* slot k's segment: the Flate tier's claim, or (FL_OSLOT) the object-stream
+ * window's, which is a slot of the same shape (20.22.3.3) */
+#define fl_segof(k) ((k) == FL_OSLOT ? g_oseg : (pdw)(g_fseg + (k) * PDE_FLSLOT_PARA))
 
 static void fl_init(pdw flags, pdw seg, pdw kb)
 {
     pdw k;
     g_fseg = 0; g_nfl = 0; fl_ld = FL_NONE;
-    for (k = 0; k < PDE_NFL; k++) fl_sc[k] = 0;
+    for (k = 0; k <= FL_OSLOT; k++) fl_sc[k] = 0;
     if (!(flags & PDXI_FLATE) || !seg) return;
     k = (pdw)(kb / PDE_FLSLOT_KB);
     if (!k) return;
@@ -83,9 +85,11 @@ static void fl_load(pdw k)
     fl.seg = fl_segof(k);
     if (!fl_fresh[k]) { pd_fcopy_in(fl.seg, PDE_FLSAVE, &fl, (pdw)sizeof(struct flst)); return; }
     fl_fresh[k] = 0;
-    for (fl.stage = 0; fl_sc[k]->flt[fl.stage] != PDF_K_FLATE; fl.stage++) ;
+    for (fl.stage = 0; !FLK_SLOT(fl_sc[k]->flt[fl.stage]); fl.stage++) ;
     for (w = &fl.zero_from; w <= &fl.zero_to; w++) *w = 0;     /* state = FS_HDR = 0, no tables, empty */
     fl.pred = fl_pp[k][0]; fl.prow = fl_pp[k][1]; fl.bpp = fl_pp[k][2]; fl.bpc = fl_pp[k][3];
+    fl.lzw = (pdw)(fl_sc[k]->flt[fl.stage] == PDF_K_LZW);
+    fl.lwid = 9; fl.lnext = 258; fl.lprev = 0xFFFF; fl.learly = fl_pp[k][4]; fl.lsp = 0; fl.lspos = 0;
     fl.ppos = fl.prow; fl.pcur = 1;                  /* the first call starts a row */
     if (fl.pred) {                                   /* the row above the first is zeros */
         pd_ffill(fl.seg, PDE_FLROWA, 0, fl.prow);
@@ -95,13 +99,14 @@ static void fl_load(pdw k)
 
 /* ---- /DecodeParms ------------------------------------------------------------- */
 
-static pdw fp[4];                       /* Predictor, Colors, BitsPerComponent, Columns */
+static pdw fp[5];                       /* Predictor, Colors, BitsPerComponent, Columns, EarlyChange */
 #define fp_pred fp[0]
 #define fp_colors fp[1]
 #define fp_bpc fp[2]
 #define fp_cols fp[3]
+#define fp_early fp[4]
 static struct pd_fx fp_fx;
-static const char *const fp_name[4] = { "Predictor", "Colors", "BitsPerComponent", "Columns" };
+static const char *const fp_name[5] = { "Predictor", "Colors", "BitsPerComponent", "Columns", "EarlyChange" };
 
 static pdw fl_dict(void)
 {
@@ -113,8 +118,8 @@ static pdw fl_dict(void)
         if (tk.kind == PDT_EOF) return eof_err();
         if (tk.kind != PDT_NAME) return PDE_SYNTAX;
         if (++items > PD_MAXITEMS) return PDE_LIMIT;
-        for (w = 0; w < 4 && !str_eq(tk.text, fp_name[w]); w++) ;
-        if (w == 4) {
+        for (w = 0; w < 5 && !str_eq(tk.text, fp_name[w]); w++) ;
+        if (w == 5) {
             rc = ob_skipval();
             if (rc) return rc;
             continue;
@@ -122,7 +127,8 @@ static pdw fl_dict(void)
         rc = ob_num(&fp_fx);
         if (rc == PDE_SYNTAX || rc == PDE_RANGE) return PDE_FILTER;
         if (rc) return rc;
-        if (fp_fx.lo != 0 || fp_fx.hi < 1) return PDE_FILTER;   /* not a positive integer */
+        if (fp_fx.lo != 0 || fp_fx.hi < (w == 4 ? 0 : 1) || (w == 4 && fp_fx.hi > 1))
+            return PDE_FILTER;                      /* not a positive integer; EarlyChange 0 or 1 */
         fp[w] = (pdw)fp_fx.hi;
     }
 }
@@ -131,8 +137,8 @@ static pdw fl_dict(void)
 static pdw fl_parms(pdw num)
 {
     pdw rc, k, idx = 0;
-    fp_pred = 1; fp_colors = 1; fp_bpc = 8; fp_cols = 1;
-    for (k = 0; k < sp_nflt; k++) if (sp_flt[k] == PDF_K_FLATE) idx = k;
+    fp_pred = 1; fp_colors = 1; fp_bpc = 8; fp_cols = 1; fp_early = 1;
+    for (k = 0; k < sp_nflt; k++) if (FLK_SLOT(sp_flt[k])) idx = k;
     lx_seek(&ds_pos);
     rc = ob_dict_find("DecodeParms");               /* ("DP" is an inline image's abbreviation, not a stream's) */
     if (rc == PDE_NOTFOUND) return PDE_OK;
@@ -158,13 +164,17 @@ static pdw fl_parms(pdw num)
 static pdw fl_attach(struct sctx *c)
 {
     pdw k;
-    for (k = 0; k < g_nfl; k++) if (!fl_sc[k]) break;
-    if (k >= g_nfl) return PDE_LIMIT;               /* a third Flate stream open at once */
+    if (flt_osw) k = FL_OSLOT;                      /* OPEN's xref stream with no Flate tier (20.22.3.2) */
+    else {
+        for (k = 0; k < g_nfl; k++) if (!fl_sc[k]) break;
+        if (k >= g_nfl) return PDE_LIMIT;           /* a third Flate stream open at once */
+    }
     fl_sc[k] = c; fl_fresh[k] = 1;
     fl_pp[k][0] = fp_pred == 1 ? 0 : (fp_pred == 2 ? 2 : 1);
     fl_pp[k][1] = (pdw)((pdw)(fp_cols * (pdw)(fp_colors * fp_bpc) + 7) >> 3);
     fl_pp[k][2] = (pdw)((pdw)(fp_colors * fp_bpc + 7) >> 3);
     fl_pp[k][3] = fp_bpc;
+    fl_pp[k][4] = fp_early;
     return PDE_OK;
 }
 
@@ -413,11 +423,77 @@ static void fl_match(void)
 
 /* ---- the decoder -------------------------------------------------------------------- */
 
+/* ---- LZW (7.4.4, 20.22.3.6): the other slot stage ------------------------------- */
+
+/* The next code, fl.lwid bits, most significant first; 0xFFFF at the end. */
+static pdw lz_code(void)
+{
+    pdw need = fl.lwid, code = 0, take;
+    while (need) {
+        if (!fl.bn) {
+            if (fl.ii >= fl.in && !fl_infill()) return 0xFFFF;
+            fl.bb = fl.ib[fl.ii++]; fl.bn = 8;
+        }
+        take = need < fl.bn ? need : fl.bn;
+        code = (pdw)((code << take) | ((fl.bb >> (fl.bn - take)) & (pdw)((1u << take) - 1)));
+        fl.bn = (pdw)(fl.bn - take); need = (pdw)(need - take);
+    }
+    return code;
+}
+
+/* Code p's string into the stack, ending at `top`: where it starts. The
+ * table is 4 bytes a code - its prefix code, then its last byte. */
+static pdw lz_str(pdw p, pdw top)
+{
+    while (p >= 256) {
+        pd_fpokeb(fl.seg, --top, pd_fpeekb(fl.seg, (pdw)(4 * p + 2)));
+        p = pd_fpeekw(fl.seg, (pdw)(4 * p));
+    }
+    pd_fpokeb(fl.seg, --top, (pdb)p);
+    return top;
+}
+
+/* A fill of LZW: the codes' strings into ob, a long one across fills. The
+ * table is the slot's window area, so nothing is flushed to a history. */
+static void lz_fill(void)
+{
+    pdw code, pos, k;
+    while (fl.on < PDE_FLOB && fl.state != FS_END) {
+        if (fl.lsp) {                               /* a string still being given */
+            k = fl.lsp;
+            if (k > (pdw)(PDE_FLOB - fl.on)) k = (pdw)(PDE_FLOB - fl.on);
+            pd_fcopy_in(fl.seg, fl.lspos, fl.ob + fl.on, k);
+            fl.on = (pdw)(fl.on + k); fl.lspos = (pdw)(fl.lspos + k); fl.lsp = (pdw)(fl.lsp - k);
+            continue;
+        }
+        code = lz_code();
+        if (code == 0xFFFF || code == 257) { fl.state = FS_END; break; }   /* the data ended (without EOD: as qpdf) */
+        if (code == 256) { fl.lwid = 9; fl.lnext = 258; fl.lprev = 0xFFFF; continue; }
+        if (code > fl.lnext || (code == fl.lnext && fl.lprev == 0xFFFF)) {
+            fl_fail(PDE_SYNTAX); break;
+        }
+        if (code < fl.lnext) pos = lz_str(code, LZ_TOP);
+        else {                                      /* KwKwK: the previous string and its first byte */
+            pos = lz_str(fl.lprev, LZ_TOP - 1);
+            pd_fpokeb(fl.seg, LZ_TOP - 1, pd_fpeekb(fl.seg, pos));
+        }
+        if (fl.lprev != 0xFFFF && fl.lnext < 4096) {
+            pd_fpokew(fl.seg, (pdw)(4 * fl.lnext), fl.lprev);
+            pd_fpokeb(fl.seg, (pdw)(4 * fl.lnext + 2), pd_fpeekb(fl.seg, pos));
+            fl.lnext++;
+            if ((pdw)(fl.lnext + fl.learly) >= (pdw)(1u << fl.lwid) && fl.lwid < 12) fl.lwid++;
+        }
+        fl.lprev = code;
+        fl.lsp = (pdw)(LZ_TOP - pos); fl.lspos = pos;
+    }
+}
+
 static void fl_fill(void)
 {
     int s;
     pdw v, len, ds, nb = 0, lon = 0;
     fl.on = 0; fl.oi = 0;
+    if (fl.lzw) { lz_fill(); return; }
     while (fl.on < PDE_FLOB && fl.state != FS_END) {
 #ifdef FL_ASM
         if (fl.state == FS_CODES) {                 /* pdeflate.inc: symbols, matches, to a full buffer */
@@ -587,7 +663,7 @@ static pdw fl_take(struct sctx *c, pdb *dst, pdw max)
 {
     pdb *src;
     pdw k;
-    if (fl_ld >= PDE_NFL || fl_sc[fl_ld] != c) return 0;
+    if (fl_ld > FL_OSLOT || fl_sc[fl_ld] != c) return 0;
     if (fl.pred) { src = fl.pout + fl.pi; k = (pdw)(fl.pe - fl.pi); fl.pi = (pdw)(fl.pi + (k > max ? max : k)); }
     else { src = fl.ob + fl.oi; k = (pdw)(fl.on - fl.oi); fl.oi = (pdw)(fl.oi + (k > max ? max : k)); }
     if (k > max) k = max;
@@ -601,8 +677,8 @@ static pdw fl_take(struct sctx *c, pdb *dst, pdw max)
 static int fl_get(struct sctx *c)
 {
     pdw k;
-    for (k = 0; k < PDE_NFL && fl_sc[k] != c; k++) ;
-    if (k >= PDE_NFL) return -1;
+    for (k = 0; k <= FL_OSLOT && fl_sc[k] != c; k++) ;
+    if (k > FL_OSLOT) return -1;
     if (fl_ld != k) fl_load(k);
     if (!fl.pred) return fl_rawb();
     if (fl.pi >= fl.pe && !fl_prfill()) return -1;

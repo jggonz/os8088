@@ -138,7 +138,12 @@ static int ovl_pg_apply(const unsigned *d, int undo)
     pdu_pgwant = n + 1;
     if (n < (unsigned)pdu_sidetop || n >= (unsigned)pdu_sidetop + 2 * pdu_side_rows())
         pdu_sidetop = n - n % 2;
+    if (pdu_job == J_THUMB)             /* F29: the pictures follow the map */
+        pdu_job_abort();
+    for (k = 0; k < PDU_TH_SLOTS; k++)
+        pdu_thpg[k] = 0;
     pdu_side_paint();
+    pdu_ctl_repaint(C_PGOF);            /* F29: the toolbar's "of N" */
     pdu_menusync();
     pdu_kick();
     return 1;
@@ -176,7 +181,10 @@ static void ovl_pg_ask(const char *what)
     }
     pdu_cat(pdu_line, pdu_pkbuf, sizeof(pdu_line));
     pdu_cat(pdu_line, "_", sizeof(pdu_line));
+    if (pdu_pkdefer)                    /* Insert's: the wake says it (os88_onwake) */
+        return;
     pdu_tell(pdu_line);
+    pdp_form = 2;                       /* the render a dialog's close owes does not wipe the prompt */
 }
 
 static void ovl_pg_prompt(int kind, const char *what, int seed)
@@ -254,6 +262,8 @@ static int ovl_ins_file(const char *name)
     pd_fpokew(seg, 1004 + 4 * k, pdu_tgtplace.vol + 1u);
     pdu_insmask |= 1u << k;             /* named: kept while the history can name it */
     pdu_inslot = k;
+    pdu_pkdefer = 2;                    /* said after the dialog-close render (os88_onwake) */
+    pdu_kick();
     ovl_pg_prompt(PK_INSERT, 0, 0);
     return 1;
 }
@@ -535,10 +545,57 @@ static int ovl_pg_onfile(const char *name)
  * kind 0 Save As (14.2), 1 New (14.6), 2 Extract (13.8). The writer reads
  * the SOURCE in its own folder (D14) and writes here, so a job stands in the
  * TARGET's folder: the dialog left the instance there. */
+
+/* a refusal before the job starts: the same sentence the finished job speaks (ovl_save_done) - WITH the file's name (F18) */
+static void ovl_savefail(const char *name, unsigned err)
+{
+    os88_strcpy(pdu_line, "Could not save ", sizeof(pdu_line));
+    pdu_cat(pdu_line, name, sizeof(pdu_line));
+    pdu_cat(pdu_line, ": ", sizeof(pdu_line));
+    pdu_cat(pdu_line, pdu_errtext(err), sizeof(pdu_line));
+    pdu_say(pdu_line);
+}
+
+/* an 8.3 name: the kernel's Standard File field takes a base of any length
+ * and keeps 12 characters (F30), so the save says so before it starts */
+static int ovl_name_ok(const char *n)
+{
+    int b, e, dot, c;
+    const char *x;
+
+    b = 0;
+    e = 0;
+    dot = 0;
+    for (; (c = *n) != 0; n++) {
+        if (c == '.' && !dot) {
+            dot = 1;
+            continue;
+        }
+        if (c <= ' ' || c == '.' || c > '~')
+            return 0;
+        for (x = "\"*+,/:;<=>?[\\]|"; *x; x++)
+            if (*x == c)
+                return 0;
+        if (dot)
+            e++;
+        else
+            b++;
+    }
+    return b >= 1 && b <= 8 && e <= 3;
+}
+
 static int ovl_save_begin(const char *name, int kind)
 {
     int r;
 
+    if (!ovl_name_ok(name)) {
+        os88_strcpy(pdu_line, name, sizeof(pdu_line));
+        pdu_cat(pdu_line, " is not a valid file name (8 letters, a dot, 3).", sizeof(pdu_line));
+        pdu_tell(pdu_line);
+        pdp_form = 2;                   /* the render the dialog's close owes does not wipe it */
+        pdu_at_doc();
+        return 1;
+    }
     pdu_job_abort_render();
     if (kind != 1 && pdu_doc != D_OPEN)
         return 1;
@@ -553,7 +610,8 @@ static int ovl_save_begin(const char *name, int kind)
             if (pd_fpeekw(pdu_xb, 0) != pdu_xopen.size.lo
                 || pd_fpeekw(pdu_xb, 2) != pdu_xopen.size.hi) {
                 os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
-                pdu_say2("Could not save ", pdu_errtext(PDE_CHANGED));
+                pdu_stale = 1;          /* QA F31: the view reads it no more */
+                ovl_savefail(name, PDE_CHANGED);
                 pdu_status_paint();
                 return 1;
             }
@@ -572,12 +630,11 @@ static int ovl_save_begin(const char *name, int kind)
         if (pdu_wkb > 40)
             pdu_wkb = 40;
     }
-    r = pdu_wrt_in_now();
-    if (r) {
-        pdu_say2("Could not save ", pdu_errtext(r));
-        pdu_status_paint();
-        return 1;
-    }
+    if (pdu_kseg)                       /* plat: no foreign key yet (20.22.4.5) */
+        pd_fpokew(pdu_kseg, PDU_KS_WKEYS, 0);
+    pdu_pfm = kind == 0 && pdu_pgmap ? ovl_ifl_need() : 0;
+    pdu_pfk = 0;
+    pdu_pfl = pdu_pfm != 0;             /* PDWRT comes in at the job's first slice */
     for (r = 0; r < (int)sizeof(pdu_xsave); r++)
         ((char *)&pdu_xsave)[r] = 0;
     os88_strcpy(pdu_xsave.target, name, sizeof(pdu_xsave.target));
@@ -585,8 +642,12 @@ static int ovl_save_begin(const char *name, int kind)
      * source is the open document's 8.3 name; author stays "" (no author
      * preference in wave 1). */
     os88_strcpy(pdu_xsave.source, pdu_name, sizeof(pdu_xsave.source));
-    pdu_datestamp(pdu_xsave.date);
+    ovl_datestamp(pdu_xsave.date);
     pdu_xsave.mode = pdu_savemode[kind];
+    if (pdu_pfl) {                      /* plat: the pre-flight owns PDENG from */
+        pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);       /* here (20.22.4.5) */
+        pdu_xsave.mode |= PDW_OUT_REOPEN;
+    }
     pdu_savekind = kind;
     if (kind == 0) {                    /* edit (13.1.1): the user's marks */
         pdu_xsave.edits_seg = pdu_ed_seg();
@@ -639,6 +700,8 @@ static int ovl_save_done(unsigned err)
                 : err == PDE_LIMIT && err_d == 18 ? "forms or scripts."
                 : pdu_errtext(err), sizeof(pdu_line));
         pdu_wsay(pdu_line);
+        if (err == PDE_CHANGED)
+            pdu_stale = 1;              /* QA F31: the writer found it moved */
         if (reopen)
             pdu_reopen_begin();
         return 1;

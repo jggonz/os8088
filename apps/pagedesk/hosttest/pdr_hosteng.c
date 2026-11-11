@@ -55,6 +55,7 @@ static int g_np;
 #define SEG_ECACHE 0x7000
 #define SEG_EARENA 0x7800
 #define SEG_ETBL   0x7C00
+#define SEG_EFLATE 0xD000         /* PDR_FLATE's slots: 86 KiB, clear of every other claim */
 /* open `path` through the engine: INIT (claims 16 + 8 + 11 KiB), OPEN until it stops answering BUSY */
 int pdrh_open(const char *path)
 {
@@ -64,6 +65,10 @@ int pdrh_open(const char *path)
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_ECACHE; in.cache_kb = 16; in.arena_seg = SEG_EARENA; in.arena_kb = 8;
     in.tables_seg = SEG_ETBL; in.tables_kb = 11;
+    /* PDR_FLATE=<1|2>: Flate slots (D17), as the primary gives PDENG, so a file as
+     * it was written (not qpdf-decoded) opens - the QA corpus's real files; one
+     * slot is the XT's and the low-memory claim's (20.22.7.12's parking) */
+    if (getenv("PDR_FLATE")) { in.flate_seg = SEG_EFLATE; in.flate_kb = atoi(getenv("PDR_FLATE")) == 1 ? 43 : 86; in.flags = PDXI_FLATE; }
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pde_verb(PDV_ENG_INIT, SEG_XB, 0, 0);
     if (pde_fail) { fprintf(stderr, "engine INIT failed %u\n", pde_fail); return 0; }

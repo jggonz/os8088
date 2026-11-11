@@ -33,6 +33,7 @@ static pdw g_filed;             /* the file layer has a file                  */
 unsigned pde_fail;                 /* the current verb's PDE_* (0 = success)     */
 static pdw pde_ax;              /* ...or its answer                           */
 unsigned pde_dx;                /* DX out (read by the door)                  */
+unsigned pde_cx;                /* CX out with PDE_NEEDMEM (read by the door) */
 static pdw pde_ioerr;           /* sticky I/O error of the current verb       */
 static pdw err_obj, err_detail; /* what OPEN reports on failure               */
 
@@ -49,7 +50,6 @@ static pdw   fl_blk, fl_shift, fl_nblk, fl_clock;
 static pdw   fl_blo[PDE_MAXBLK], fl_bhi[PDE_MAXBLK];
 static pdw   fl_valid[PDE_MAXBLK];      /* valid bytes in the slot, 0 = empty */
 static pdw   fl_stamp[PDE_MAXBLK];
-static pdb   tailbuf[PDE_TAIL];
 static pdw   fl_reads;          /* READ_SEQ calls: a counter, for the harness */
 
 /* ---- lexer (pdelex.c) ---------------------------------------------------- */
@@ -62,6 +62,7 @@ static struct pde_val ov;
 static struct pd_u32 ob_pos;    /* tell() scratch (ob_value's lookahead)      */
 static struct pd_u32 on_pos;    /* ob_num's saved place                       */
 static struct pd_u32 ob_hdr;    /* offset of the current object's "n g obj"   */
+static pdw ob_cur_n, ob_cur_g;  /* ...and its number (RES_LOOKUP's PDRL_DIRECT) */
 static pdw   ob_null;           /* the last ob_enter found a free/absent obj  */
 
 /* ---- xref (pdexref.c) ---------------------------------------------------- */
@@ -78,15 +79,38 @@ static pdw   xo_gen;
 static pdw   tr_size, tr_root_n, tr_root_g, tr_info_n, tr_info_g, tr_has_root;
 static struct pd_u32 tr_start;  /* newest startxref                           */
 static struct pd_u32 tr_dict;   /* newest trailer dict, just after "<<"       */
-static pdb   tr_id[16];
+static pdb   tr_id[32];         /* /ID[0] whole, up to 32 bytes (20.22.3.4)     */
 static pdw   tr_idlen, tr_hasid;
 static pdw   doc_ver, doc_flags;
+static pdw   cr_curn, cr_curg;  /* the object the lexer is in (0: none, the trailer, a member) */
+static pdw   cr_peek;           /* ob_filters1 is only after /Crypt (cr_raw_plain): accept any filter */
+static pdw   cr_sn, cr_sg, cr_skip;  /* st_push's caller: the stream's object, 0 = plain; skip */
+
+/* ---- any PDF: the flat index, cross-reference streams, the trailer's
+ * /Encrypt (pdexref.c, PAGEDESK-SPEC 20.22.3) ---------------------------- */
+static pdw   g_xseg, g_xkb, g_oseg, g_okb;  /* PDMEM_XIDX, PDMEM_OSW (0 = none) */
+static pdw   ix_on;             /* the flat index resolves                     */
+static pdw   ix_n;              /* its entries (object numbers 0..ix_n-1)      */
+static struct pd_u32 ix_v;      /* ix_get's answer                             */
+static pdb   rv_kind[PD_MAXREV];        /* 1: the revision is an xref stream    */
+static struct pd_u32 rv_xstm[PD_MAXREV];/* a hybrid section's /XRefStm, 0 none  */
+static pdw   tr_maxsize;        /* the largest /Size of the chain              */
+static pdw   tr_tflags;         /* PDTR_*                                      */
+static pdw   tr_enc_k, tr_enc_n, tr_enc_g;  /* /Encrypt: 0 none, 1 a ref, 2 direct */
+static struct pd_u32 tr_enc_pos;    /* ...a direct one: just inside its "<<"   */
+static pdw   tr_nodict;         /* a repaired file with no trailer dictionary  */
+static pdw   pde_needkb, pde_needmem;  /* PDE_NEEDMEM's DX and CX              */
 
 /* ---- pages (pdepage.c) --------------------------------------------------- */
 static pdw   npages;
 static struct pw_frame pw_st[PD_MAXDEPTH];
 static pdw   pw_sp, pw_visits, pw_root_n, pw_root_g;
 static pdw   arena_top;
+/* ANNOTS' cursor (QA R6): page + 1 (0 = none), the next index, and where the
+ * element before it ended - so a walk of /Annots in order is not O(n^2) and
+ * does not re-enter an object-stream page dictionary for every element */
+static pdw   an_pg1, an_k;
+static struct pd_u32 an_pos;
 
 /* ---- streams (pdestrm.c) ------------------------------------------------- */
 static struct sctx ctxs[PDE_MAXCTX];
@@ -95,6 +119,8 @@ static pdb   tmpb[128];
 /* the stream header parse (ob_stream) */
 static pdw   sp_kind;
 static struct pd_u32 sp_off, sp_dstart, sp_len;
+static struct pd_u32 sp_lpos, sp_lend;  /* an indirect /Length's "n g R" (PDRC_PLAIN, 20.22.3.3) */
+static pdw sp_lref;
 static pdw   sp_nflt, sp_filters;
 static pdb   sp_flt[PD_MAXFILTERS];
 
@@ -128,11 +154,29 @@ int str_eq(const pdb *a, const char *b);    /* pdelex.inc (perf) */
 #endif
 static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 
+/* forward: the parts call across their include order (any PDF, 20.22.3) */
+static pdw ob_stream_dict(pdw num, pdw gen);
+static pdw ob_filters(pdw num);
+/* t's place in a list of names ("A\0B\0...\0"): 1, 2, ..., or 0 */
+static pdw kw_ix(const pdb *t, const char *l)
+{
+    pdw i = 1;
+    while (*l) {
+        if (str_eq(t, l)) return i;
+        while (*l++) ;
+        i++;
+    }
+    return 0;
+}
+
 #include "pdefile.c"
 #include "pdelex.c"
 #include "pdexref.c"
 #include "pdepage.c"
 #include "pdestrm.c"
+#include "pdecrypt.c"           /* encryption: 20.22.5 */
 #include "pdeflate.c"
+#include "pdeostm.c"             /* object streams (20.22.3.3) */
+#include "pderepr.c"             /* repair (20.22.3.5) */
 #include "pdesrch.c"             /* nav: SEARCH (20.10.1) */
 #include "pdeverb.c"

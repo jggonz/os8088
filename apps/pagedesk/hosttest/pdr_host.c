@@ -59,6 +59,18 @@ pdw pdr_scan(pdw eseg, pdw eoff, const pdw *act, pdw na, pdi ys, pdi *cx, unsign
     }
     return nc;
 }
+/* the extension cache's scan (pdrprim.inc pdr_xcfind, PAGEDESK-SPEC 20.22.7) */
+pdw pdr_xcfind(pdw seg, pdw top, pdw kind, pdw k0, pdw k1)
+{
+    unsigned long o = 0;
+    while (o + 8 <= top) {
+        const unsigned char *h = MEM(seg, (pdw)o);
+        if (h[0] == (kind & 255) && (h[4] | h[5] << 8) == k0 && (h[6] | h[7] << 8) == k1) return (pdw)(o + 8);
+        o += 8 + (unsigned)(h[2] | h[3] << 8);
+        if (o > 0xFFFF) break;
+    }
+    return 0;
+}
 void pdr_fcopy(pdw dseg, pdw doff, pdw sseg, pdw soff, pdw n)
 {
     memmove(MEM(dseg, doff), MEM(sseg, soff), n);
@@ -113,6 +125,26 @@ void pdr_imgrow(void)
         if (flip) idx = pdr_ip.sw - 1 - idx;
         if (mode == 0 || mode == 3) { bit = (src[idx >> 3] >> (7 - (idx & 7))) & 1; v = bit ? 255 : 0; }
         else if (mode == 1) v = src[idx];
+        else if (mode == 4) {
+            /* nc samples of bpc bits: tables (lseg:loff) or weights; saturating */
+            static const unsigned short w3[4] = { 77, 150, 29, 256 };
+            unsigned c, e = (idx * pdr_ip.nc) & 0xFFFF, sum = 0, s8, t;
+            for (c = 0; c < pdr_ip.nc; c++, e++) {
+                unsigned b = pdr_ip.bpc;
+                if (b == 8) s8 = src[e];
+                else if (b == 16) s8 = src[(e << 1) & 0xFFFF];
+                else {
+                    unsigned bo = (e * b) & 0xFFFF, raw = src[bo >> 3];
+                    s8 = (raw >> (8 - b - (bo & 7))) & ((1u << b) - 1);
+                    s8 *= b == 1 ? 255 : b == 2 ? 85 : 17;
+                }
+                if (pdr_ip.lseg) t = (unsigned)*MEM(pdr_ip.lseg, (pdw)(pdr_ip.loff + s8 + (c << 8))) << 8;
+                else t = pdr_ip.nc == 1 ? s8 << 8 : s8 * w3[c];
+                sum += t; if (sum > 0xFFFF) sum = 0xFFFF;
+            }
+            v = sum >> 8;
+            if (pdr_ip.lflags & 1) v = 255 - v;
+        }
         else v = (77u * src[idx * 3] + 150u * src[idx * 3 + 1] + 29u * src[idx * 3 + 2]) >> 8;
         if (mode == 3) {
             int paint = pdr_ip.inv ? bit : !bit;
@@ -195,6 +227,18 @@ int pdrh_blits;
 void os88_gfx_lock(void) {}
 void os88_gfx_unlock(void) {}
 int  os88_wm_clip_set(void *win) { (void)win; return 0; }
+/* the slice's clock (QA R27): still, unless PDR_SLICETICK=<n> makes every call
+ * n ticks later than the last - PDR_SLICETICK=4 ends a slice after EVERY
+ * operator, and the picture must not change */
+unsigned pdrh_tickstep, pdrh_tick;
+long pdrh_clipone, pdrh_clipnow, pdrh_cliptot, pdrh_clipn, pdrh_clipnmax;
+void pdrh_cliphist(unsigned short ne)
+{
+    if (ne > pdrh_clipone) pdrh_clipone = ne;
+    pdrh_clipnow += ne; if (pdrh_clipnow > pdrh_cliptot) pdrh_cliptot = pdrh_clipnow;
+    if (++pdrh_clipn > pdrh_clipnmax) pdrh_clipnmax = pdrh_clipn;
+}   /* PDR_CLIPHIST (pdrd.c clip_apply) */
+unsigned os88_ticks(void) { pdrh_tick += pdrh_tickstep; return pdrh_tick; }
 pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
 {
     pdw r; int c;
@@ -210,6 +254,42 @@ pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
             pdrh_fb[(y + r) * pdrh_fbw + px] = (unsigned char)v;
         }
     }
+    return 0;
+}
+
+/* OSAPI_DECOMP's LZ4 arm (SPEC.md 20.13.3, 20.13.7) for pdr_lzdec (PAGEDESK-SPEC
+ * 20.22.14): T word, symbols, T raw bytes; exactly ulen out; every length, offset
+ * and run bounded as the kernel bounds it. It reads the source AS IT GOES, so a
+ * stream expanded in place from above its output is held to 20.13.7's rule here
+ * too: a decoder that overtook its source would read bytes it had overwritten */
+pdw pdr_lzdec(pdw sseg, pdw soff, pdw plen, pdw dseg, pdw ulen)
+{
+    unsigned long s = ((unsigned long)sseg << 4) + soff, d = (unsigned long)dseg << 4;
+    unsigned long p, end, o = 0, t;
+    unsigned ll, ml, off, e, k;
+#define SB(i) pd_host_mem[s + (i)]
+    if (plen < 2) return 0xFFFF;
+    t = (unsigned)(SB(0) | SB(1) << 8);
+    if (t == 0xFFFF || t > plen - 2u) return 0xFFFF;          /* the filter escape: not ours */
+    p = 2; end = plen - t;
+    while (p < end) {
+        k = SB(p); p++;
+        ll = k >> 4;
+        if (ll == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ll += e; } while (e == 255 && ll < 65535u);
+        if (p + ll > end || o + ll > ulen) return 0xFFFF;
+        while (ll--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+        if (p + 2 > end) return 0xFFFF;                     /* symbols end in a match */
+        off = (unsigned)(SB(p) | SB(p + 1) << 8); p += 2;
+        if (!off || off > o) return 0xFFFF;
+        ml = k & 15;
+        if (ml == 15) do { if (p >= end) return 0xFFFF; e = SB(p); p++; ml += e; } while (e == 255 && ml < 65535u);
+        ml += 4;
+        if (o + ml > ulen) return 0xFFFF;
+        while (ml--) { pd_host_mem[d + o] = pd_host_mem[d + o - off]; o++; }
+    }
+    if (o + t != ulen) return 0xFFFF;
+    while (t--) { pd_host_mem[d + o] = SB(p); o++; p++; }
+#undef SB
     return 0;
 }
 
@@ -607,3 +687,36 @@ pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx)
 int pdrh_npages(void) { return npages; }
 int pdrh_nstreams(void) { return nst; }
 #endif /* PDR_REAL_ENG */
+
+/* ---- the 8-bit band's quantiser (pdrx8.inc, PAGEDESK-SPEC 20.22.10) ---------------- */
+struct pdr_xq pdr_xq;
+static unsigned xq_level(unsigned v, unsigned par)      /* 20.19.2: seven levels of the four greys */
+{
+    if (v < 21) return 0;
+    if (v < 64) return par ? 8 : 0;
+    if (v < 106) return 8;
+    if (v < 149) return par ? 7 : 8;
+    if (v < 191) return 7;
+    if (v < 234) return par ? 15 : 7;
+    return 15;
+}
+void pdr_x8quant(void)
+{
+    const unsigned char *src = MEM(pdr_xq.sseg, pdr_xq.soff);
+    unsigned char *dst = MEM(pdr_xq.dseg, pdr_xq.doff);
+    unsigned i, x;
+    for (i = 0; i < pdr_xq.n; i++) {
+        unsigned v = src[i];
+        x = pdr_xq.x0 + i;
+        if (pdr_xq.bpp == 4) {
+            unsigned k = xq_level(v, (pdr_xq.par + i) & 1), b = (x & 1) + i - (pdr_xq.x0 & 1);     /* byte (x0&1 + i) >> 1 */
+            unsigned bi = ((pdr_xq.x0 & 1) + i) >> 1; (void)b;
+            if (x & 1) dst[bi] = (unsigned char)((dst[bi] & 0xF0) | k);
+            else       dst[bi] = (unsigned char)((dst[bi] & 0x0F) | (k << 4));
+        } else {
+            unsigned bi = ((pdr_xq.x0 & 7) + i) >> 3, m = 0x80 >> (x & 7);
+            if (((v * 17u) >> 8) > bayer_t[pdr_xq.par | (x & 3)]) dst[bi] |= (unsigned char)m;
+            else dst[bi] &= (unsigned char)~m;
+        }
+    }
+}

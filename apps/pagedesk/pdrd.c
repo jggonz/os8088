@@ -41,6 +41,9 @@ static pdw dl_put(const pdb *h, pdw nh, const pdb *b, pdw nb)
 {
     pdw tot = nh + nb;
     if (g_dlfull || !dl_room(tot)) { g_dlfull = 1; return 0; }
+#ifdef PDR_X8
+    if (h[0] >= DLR_RECT && h[0] <= DLR_IMAGE) xb_mark(r16(h + 4), r16(h + 6));   /* 20.22.10.3 */
+#endif
     pd_fcopy_out(h, g_dls, g_dllen, nh);
     if (nb) pd_fcopy_out(b, g_dls, g_dllen + nh, nb);
     g_dllen += tot; g_ndl++;
@@ -89,6 +92,9 @@ static void grey_mix(pdw lum, pdw c4)
 static void emit_state(pdw kind)
 {
     pdw lum, c4;
+#ifdef PDR_X8
+    xb_state(kind);                     /* DLR_XSTATE, when the transparency changed (20.22.10.3) */
+#endif
     if (kind == PK_STROKE) { lum = GS.slum; c4 = GS.sc4; }
     else                   { lum = GS.flum; c4 = GS.fc4; }
     w16(g_stl + 0, GS.cx0); w16(g_stl + 2, GS.cy0);
@@ -100,9 +106,16 @@ static void emit_state(pdw kind)
         if (kind == PK_FILL)
             grey_mix(lum, c4);
     }
+#ifdef PDR_X8
+    g_stl[14] = (pdb)lum;               /* the colour's luminosity rides in aux (20.22.10.3) */
+    if (g_lstv && pdr_memeq(g_stl, g_lst, 15)) return;
+    hdr_set(DLR_STATE, lum, DLH + 14, 0, 0);
+    if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 15); g_lstv = 1; }
+#else
     if (g_lstv && pdr_memeq(g_stl, g_lst, 14)) return;
     hdr_set(DLR_STATE, 0, DLH + 14, 0, 0);
     if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 14); g_lstv = 1; }
+#endif
 }
 
 /* a rectangle in qpx -> pixel rows/columns by the sample-point rule, thin
@@ -175,6 +188,40 @@ static void emit_fill_edges(pdw rule, pdw kind)
     g_dllen += ne * 8;
 }
 
+/* ---- a dashed subpath (pdrg.c's dash_poly; PAGEDESK-SPEC 20.12.4, 20.22.7) ---- */
+/* the subpath goes to the walker in the TOP of the display list's free room, which is
+ * lent for the walk (the cap lowered by it, so the pieces' records cannot reach it): the
+ * exchange block holds only 216 vertices after the walker's state, the path table more */
+static struct pdxb_dashin g_din;
+static struct pdxb_dashout g_dout;
+static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
+{
+    pdw r, k, xb, cap = g_dlcap, nb = (pdw)(n << 1);
+    if (!x_have(PDX_GFX)) {
+        x_need(PDX_GFX);
+        if (x_gone(PDX_GFX)) stroke_poly(xs, ys, n, closed);
+        return;
+    }
+    if (g_mode != PDR_INTERP) return;                   /* a stroke draws nothing here */
+    if (!dl_room((pdw)(nb << 1))) { g_dlfull = 1; return; }
+    g_dlcap -= nb; pd_fcopy_out(ys, g_dls, g_dlcap, nb); g_din.ys = g_dlcap;
+    g_dlcap -= nb; pd_fcopy_out(xs, g_dls, g_dlcap, nb); g_din.xs = g_dlcap;
+    xb = xb_seg();
+    g_din.vseg = g_dls; g_din.n = n; g_din.closed = closed;
+    ctm_scale(&g_din.scale);
+    g_din.dph = GS.dph; g_din.dn = GS.dn; pdr_cpy(g_din.dash, GS.dash, PDXD_NDASH); g_din.st = 0;
+    pd_fcopy_out(&g_din, xb, sizeof(struct pdxb_dashout), sizeof g_din);
+    for (k = 0; k < 4000; k++) {
+        r = x_call(PDV_GFX_DASH, xb, 0, 0);
+        if (x_cf || r == 2) { if (!k) stroke_poly(xs, ys, n, closed); break; }
+        if (r != 1) break;
+        pd_fcopy_in(xb, 0, &g_dout, sizeof g_dout);
+        if (g_dout.on < 1 || g_dout.on > PDXD_NPT) break;
+        stroke_poly(g_dout.ox, g_dout.oy, g_dout.on, 0);
+    }
+    g_dlcap = cap;
+}
+
 /* ---- path painting ------------------------------------------------------- */
 /* is the whole path one axis-aligned rectangle? bounds in qpx */
 static pdi g_rqx0, g_rqy0, g_rqx1, g_rqy1;
@@ -206,7 +253,8 @@ static void path_edges(void)
         if (e - s < 2) continue;
         for (i = s; i < e; i++) {
             j = (i + 1 == e) ? s : i + 1;
-            if (g_ne >= PDR_NEDGE) { emit_fill_edges(g_fillrule, PK_FILL); }
+            /* one record or none: a fill split in two loses the crossings' parity across the cut */
+            if (g_ne >= PDR_NEDGE) { g_ne = 0; if (g_mode == PDR_INTERP) g_dlfull = 1; return; }
             edge_add(g_vx[i], g_vy[i], g_vx[j], g_vy[j]);
         }
     }
@@ -221,20 +269,33 @@ static void fill_path(pdw rule)
     emit_fill_edges(rule, PK_FILL);
 }
 
-/* W / W*: intersect the clip with the path. A polygon clip goes in a POOL that
- * lives for the pass (8 polygons, 96 edges): an entry is never rewritten while
- * the pass's list can name it, because the list is walked after the whole pass
- * is interpreted - a slot reused after a Q would cut the earlier records by the
- * later polygon. The state names the innermost entry (`clid`, 0xFF none) and
- * each entry its parent, so q/Q nesting is a chain, not a prefix. */
-static struct pdr_clip { pdi x0, y0, x1, y1; pdw e0, ne, rule, parent; } g_cl[PDR_NCLIP];
-static pdw g_cetop, g_ncl;          /* edges and entries used this pass (pass_begin) */
+/* W / W*: intersect the clip with the path. A polygon clip is a RECORD of the
+ * pass's display list (DLR_CLIP: rule in aux, its rows in y0/y1, then parent, ne
+ * and the edges): it lives exactly as long as the records it cuts, is never
+ * rewritten while the list can name it (the list is walked after the whole pass
+ * is interpreted - a slot reused after a Q would cut earlier records by the later
+ * polygon), and its size is the list's, so a page whose clips do not fit one pass
+ * is drawn in narrower passes like any page whose marks do not (QA: SYNTH's 88
+ * clips and KBMIDI2's 170-edge one outgrew the old 8-entry, 96-edge pool). Only
+ * the edges that cross the pass's rows are kept - an edge wholly above or below
+ * them adds no crossing on any row the pass draws - and a clip whose box misses
+ * the rows, or the clip it is in, is not stored at all: nothing under it reaches
+ * the list. The state names its innermost clip (`clid`, an index into the
+ * workspace's table of the records' offsets, WS_CL) and each record its parent,
+ * so nesting is a chain the walker ANDs. */
+typedef char pdr_ck_wscl[WS_CL + PDR_NCLIP * 2 <= PDR_WSB ? 1 : -1];
+static pdw g_ncl;                   /* clips of this pass (pass_begin)        */
+static pdb g_cbody[4];
 
+#ifdef PD_HOST
+extern void pdrh_cliphist(pdw ne);      /* PDR_CLIPHIST: what a pass's clips take (host only) */
+#define PDRH_CLIPHIST(n) pdrh_cliphist(n)
+#endif
 /* rule: bit 0 even-odd; bit 1 (rect_clip_user) a form's /BBox, see below */
 static void clip_apply(pdw rule)
 {
-    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v, g = (pdi)(rule >> 1);
-    pdw s, e, i, j, ne, ci, ok;
+    pdi bx0 = 32000, by0 = 32000, bx1 = -32000, by1 = -32000, v, g = (pdi)(rule >> 1), lo, hi, ya, yb, cy0, cy1;
+    pdw s, e, i, j, ne, pass;
     if (g_nv < 2) { GS.cx1 = GS.cx0 - 1; return; }
     if (path_is_rect()) {
         /* OUTWARD (20.3.2): every pixel the rectangle touches, PDF's own rule for a clip. A
@@ -253,34 +314,47 @@ static void clip_apply(pdw rule)
         v = (pdi)(((g_rqy1 + 3) >> 2) - 1); if (v < GS.cy1) GS.cy1 = v;
         return;
     }
-    ok = g_ncl < PDR_NCLIP;
-    if (!ok) inc_note(PDF_INC_LIMIT, "clip depth");
-    ne = g_cetop;
-    for (s = 0; s < g_nv; s = e) {
-        for (e = s + 1; e < g_nv && !(g_vf[e] & 1); e++) ;
-        if (e - s < 2) continue;
-        for (i = s; i < e; i++) {
-            j = (i + 1 == e) ? s : i + 1;
-            if (g_vx[i] < bx0) bx0 = g_vx[i]; if (g_vx[i] > bx1) bx1 = g_vx[i];
-            if (g_vy[i] < by0) by0 = g_vy[i]; if (g_vy[i] > by1) by1 = g_vy[i];
-            if (!ok || g_vy[i] == g_vy[j]) continue;
-            if (ne >= PDR_NCLIPE) { inc_note(PDF_INC_LIMIT, "clip path size"); ok = 0; continue; }
-            g_etmp[0] = g_vx[i]; g_etmp[1] = g_vy[i];
-            g_etmp[2] = g_vx[j]; g_etmp[3] = g_vy[j];
-            pd_fcopy_out(g_etmp, g_ws, (pdw)(WS_CE + ne * 8), 8);
-            ne++;
+    /* a crossing of row y is sampled at qpx 4y + 2: an edge [ya, yb) can only cross a row of the pass inside (lo, hi) */
+    lo = g_gy0 < -7000 ? -32000 : (pdi)(4 * g_gy0 - 3); hi = g_gy1 > 7000 ? 32000 : (pdi)(4 * g_gy1 + 7);
+    ne = 0;
+    for (pass = 0; pass < 2; pass++) {          /* 0: the box and the edges to keep; 1: write them */
+        for (s = 0; s < g_nv; s = e) {
+            for (e = s + 1; e < g_nv && !(g_vf[e] & 1); e++) ;
+            if (e - s < 2) continue;
+            for (i = s; i < e; i++) {
+                j = (i + 1 == e) ? s : i + 1;
+                ya = g_vy[i]; yb = g_vy[j];
+                if (!pass) {
+                    if (g_vx[i] < bx0) bx0 = g_vx[i]; if (g_vx[i] > bx1) bx1 = g_vx[i];
+                    if (ya < by0) by0 = ya; if (ya > by1) by1 = ya;
+                }
+                if (ya == yb || (ya < yb ? ya : yb) >= hi || (ya > yb ? ya : yb) <= lo) continue;
+                if (!pass) { ne++; continue; }
+                g_etmp[0] = g_vx[i]; g_etmp[1] = ya; g_etmp[2] = g_vx[j]; g_etmp[3] = yb;
+                pd_fcopy_out(g_etmp, g_dls, g_dllen, 8);
+                g_dllen += 8;
+            }
         }
+        if (pass) break;
+#ifdef PD_HOST
+        PDRH_CLIPHIST(ne);
+#endif
+        /* the bounding box always cuts */
+        v = q_lo(bx0); if (v > GS.cx0) GS.cx0 = v;
+        v = q_hi(bx1); if (v < GS.cx1) GS.cx1 = v;
+        v = q_lo(by0); if (v > GS.cy0) GS.cy0 = v;
+        v = q_hi(by1); if (v < GS.cy1) GS.cy1 = v;
+        cy0 = GS.cy0 > g_gy0 ? GS.cy0 : g_gy0; cy1 = GS.cy1 < g_gy1 ? GS.cy1 : g_gy1;
+        if (g_mode != PDR_INTERP || GS.cx1 < GS.cx0 || cy1 < cy0) return;     /* nothing under it reaches this pass */
+        /* the WHOLE record is reserved before any of it is written (emit_fill_edges' rule); a pass
+         * whose clips do not fit is a full list, and narrows */
+        if (g_ncl >= PDR_NCLIP || ne > PDR_NEDGE || g_dlfull || !dl_room(DLH + 4 + ne * 8)) { g_dlfull = 1; return; }
+        pd_fcopy_out(&g_dllen, g_ws, (pdw)(WS_CL + g_ncl * 2), 2);
+        w16(g_cbody, (pdi)GS.clid); w16(g_cbody + 2, (pdi)ne);
+        hdr_set(DLR_CLIP, rule & 1, DLH + 4 + ne * 8, cy0, cy1);
+        dl_put(g_hdr, DLH, g_cbody, 4);
     }
-    /* the bounding box always cuts (a polygon the pool cannot hold is its box) */
-    v = q_lo(bx0); if (v > GS.cx0) GS.cx0 = v;
-    v = q_hi(bx1); if (v < GS.cx1) GS.cx1 = v;
-    v = q_lo(by0); if (v > GS.cy0) GS.cy0 = v;
-    v = q_hi(by1); if (v < GS.cy1) GS.cy1 = v;
-    if (!ok) return;
-    ci = g_ncl++;
-    g_cl[ci].e0 = g_cetop; g_cl[ci].ne = ne - g_cetop; g_cetop = ne;
-    g_cl[ci].rule = rule & 1; g_cl[ci].parent = GS.clid;
-    GS.clid = (pdb)ci;
+    GS.clid = (pdb)g_ncl++;
 }
 
 /* ============================================================================
@@ -291,7 +365,8 @@ static pdw g_sclid;               /* the walker's innermost polygon clip, 0xFF n
 static pdb g_spat[4];
 static pdb g_sc4;
 static pdw g_rmode;                 /* 0 paint, 1 mask A, 2 mask B             */
-static pdb g_mk[2][PDR_MAXSTRIDE];                 /* one row each (20.3.2) */
+/* two mask rows of PDR_MAXSTRIDE (20.3.2), lent by the path (pdrg.c, 20.22.7) */
+#define g_mk ((pdb (*)[PDR_MAXSTRIDE])g_vy)
 static pdw g_mstride;
 static pdw g_mkok;
 
@@ -337,6 +412,9 @@ static void span_out(pdi y, pdi xa, pdi xb)
     row = (pdi)(y - g_by0);
     xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
     if (g_rmode) { mask_span(g_rmode - 1, xa, xb); return; }
+#ifdef PDR_X8
+    if (g_xs) { x8_span(y, xa, xb); return; }                                    /* the 8-bit strip */
+#endif
     if (g_bpp == 1) pdr_fill1(g_bseg, (pdw)row * g_bstride, xa, xb, g_spat[y & 3]);
     else if (g_spat[0]) fill4_mix((pdw)row * g_bstride, xa, xb, y);
     else            pdr_fill4(g_bseg, (pdw)row * g_bstride, xa, xb, g_sc4);
@@ -344,9 +422,10 @@ static void span_out(pdi y, pdi xa, pdi xb)
 
 /* scan-convert edges e[0..ne) over pixel rows y0..y1 (absolute) */
 static pdw g_fe;                    /* offset of the current FILL record's edges in dl_seg */
-static pdw g_act[PDR_NEDGE];
-static pdi g_cx[PDR_NSPAN];
-static pdb g_cd[PDR_NSPAN];
+/* lent by the interpreter's arrays (pdrg.c, PAGEDESK-SPEC 20.22.7's room) */
+#define g_act ((pdw *)g_str)                     /* PDR_NEDGE entries          */
+#define g_cx  g_vx                               /* PDR_NSPAN crossings        */
+#define g_cd  ((pdb *)(g_vx + PDR_NSPAN))        /* PDR_NSPAN directions       */
 static void rast_edges(pdw eseg, pdw eoff, pdw ne, pdw rule, pdi y0, pdi y1)
 {
     pdw na, nc, j;
@@ -396,13 +475,16 @@ static void mask_paint(pdi y)
         } else x++;
     }
 }
+static pdb g_chd[DLH + 4];          /* the clip record being ANDed: header, parent, ne */
 static void clips_and(pdi y)
 {
-    pdw ci, b;
-    for (ci = g_sclid; ci < PDR_NCLIP; ci = g_cl[ci].parent) {     /* the chain ends at 0xFF */
+    pdw ci, b, o;
+    for (ci = g_sclid; ci < PDR_NCLIP; ci = (pdw)r16(g_chd + DLH)) {     /* the chain ends at 0xFF */
+        o = pd_fpeekw(g_ws, (pdw)(WS_CL + ci * 2));
+        pd_fcopy_in(g_dls, o, g_chd, DLH + 4);
         mask_clear(1);
         g_rmode = 2;
-        rast_edges(g_ws, (pdw)(WS_CE + g_cl[ci].e0 * 8), g_cl[ci].ne, (pdw)g_cl[ci].rule, y, y);
+        rast_edges(g_dls, (pdw)(o + DLH + 4), (pdw)r16(g_chd + DLH + 2), (pdw)g_chd[1], y, y);
         g_rmode = 1;
         for (b = 0; b < g_mstride; b++) g_mk[0][b] &= g_mk[1][b];
     }
@@ -471,26 +553,121 @@ static pdw file_read(const char *name, pdw alo, pdw ahi, pdw seg, pdw cap)
     return os88_file_read_seq(name, seg, 0, cap, g_cur8);
 }
 
-static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
+/* ---- the synthetic strikes (PAGEDESK-SPEC 20.22.8): embedded fonts. The TOP of the glyph
+ * claim holds up to SYN_MAX blocks of PDFB_SIZE (pdabi.h's [fonts] block), one a (font, size);
+ * PDXF fills them (PDV_FNT_GLYPH with PDFG_BLOCK), the walker reads them like any strike
+ * (bank 2). (glyph_kb - 24) / 4 blocks: a 24 KiB claim has none and embedded fonts are not
+ * drawn from their programs. A block is reused only when it was not used in THIS pass: the
+ * display list being built refers to the ones it used. ------------------------------------ */
+#define SYN_MAX PDFB_NBLK
+static pdw syn_cap(void)
+{
+    pdw n = (pdw)((g_gkb - 24) >> 2);
+    return g_gkb < 28 ? 0 : n > SYN_MAX ? SYN_MAX : n;
+}
+static pdw syn_hdr(void) { return (pdw)(((g_gkb << 10) - syn_cap() * PDFB_SIZE) - PDFB_HDR); }     /* PDXF keeps the header (PDFB_HDR) */
+static pdw syn_off(pdw i) { return (pdw)(syn_hdr() + PDFB_HDR + i * PDFB_SIZE); }
+/* the block of (font, px), or 0xFFFF: PDXF makes it (PDV_FNT_GLYPH with PDFG_BLOCK) */
+static pdw syn_find(pdw obj, pdw gen, pdw px)
+{
+    pdw h = syn_hdr(), i, e;
+    if (!syn_cap() || !g_gseg || pd_fpeekw(g_gseg, (pdw)(h + 62)) != PDFB_MAGIC) return 0xFFFF;
+    for (i = pd_fpeekw(g_gseg, (pdw)(h + 60)); i--; ) {
+        e = (pdw)(h + (i << 3));
+        if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4)) == px) {
+            pd_fcopy_out(&g_pstamp, g_gseg, (pdw)(e + 6), 2);   /* used in this pass: not to be reused (PDREND has no pd_fpokew) */
+            return i;
+        }
+    }
+    return 0xFFFF;
+}
+
+/* every block is in use by this pass: grow the claim to its want (PDFB_GLYPHWANT), once per claim
+ * size a growth was refused at (QA R24: LICRU's last page has five fonts). 1 = asked, the pass runs again */
+static pdw g_gnogrow;
+static pdw syn_grow(void)
+{
+    if (g_gkb >= PDFB_GLYPHWANT || g_gkb == g_gnogrow || (x_ref & XR_GLYPH)) return 0;
+    return x_mem(PDMEM_GLYPH, PDFB_GLYPHWANT);
+}
+
+/* a text pass (px 0): the next block from `i` up of (font, ANY size) the page view has drawn, or
+ * 0xFFFF. Its slots carry each code's Latin byte, so Find and Copy need no font module for the
+ * codes the page drew (QA R17: under the overlay, a 640 KB machine cannot load PDXF) */
+static pdw syn_next(pdw obj, pdw gen, pdw i)
+{
+    pdw h = syn_hdr(), e;
+    if (!syn_cap() || !g_gseg || pd_fpeekw(g_gseg, (pdw)(h + 62)) != PDFB_MAGIC) return 0xFFFF;
+    for (; i < pd_fpeekw(g_gseg, (pdw)(h + 60)); i++) {
+        e = (pdw)(h + (i << 3));
+        if (pd_fpeekw(g_gseg, e) == obj && pd_fpeekw(g_gseg, (pdw)(e + 2)) == gen && pd_fpeekw(g_gseg, (pdw)(e + 4))) return i;
+    }
+    return 0xFFFF;
+}
+
+/* WHOSE directory is in the claim (QA R26 c). It names fonts by OBJECT NUMBER, which the next
+ * file reuses for another font, and the region it lives in outlives a File > Open: the X glyph
+ * region a document was granted is handed again to the next one's ladder ask, not afresh (whose
+ * +62 the primary clears). FTYPE3 then found FTTCIDMA's TrueType block for 7 0 R and read a glyph
+ * bitmap as its Type 3 CharProc's object number: "form stream", a blank page. So the first claim
+ * with room for blocks that a document sees has its magic cleared - what a fresh claim has - and
+ * PDXF starts the directory again; one this document has already written into keeps it */
+static pdw g_syndoc;                /* the claim's directory is this document's */
+static void syn_doc(void)
+{
+    if (!g_gseg || !syn_cap()) { g_syndoc = 0; return; }
+    if (!g_syndoc) pd_ffill(g_gseg, (pdw)(syn_hdr() + 62), 0, 2);
+    g_syndoc = 1;
+}
+
+/* the glyph claim was REGROWN for the strike blocks (PDMEM_GLYPH, 20.22.8): the page view goes on in
+ * the claim at its new place and size. The bank's PDFONTX.RES index lives in it, so its segment moves
+ * with it; the strike cache keeps its entries unless the blocks' header now covers them */
+static void syn_adopt(pdw seg, pdw kb)
+{
+    pdw og = g_gseg, oc = syn_cap();
+    g_gseg = seg; g_gkb = kb > 63 ? 63 : kb;
+    if (!g_gseg) g_gkb = 0;
+    /* the claim's first blocks: their header is whatever the claim held - after a document's close the
+     * heap hands its 40 KiB claim back as the next one's 24, header and all (QA R24 round 2) */
+    if (!oc && syn_cap()) pd_ffill(g_gseg, syn_hdr(), 0, PDFB_HDR);
+    if (g_bk_seg[1]) g_bk_seg[1] = (pdw)(g_bk_seg[1] + (g_gseg - og));
+    if (g_scbump > syn_hdr()) { g_scn = 0; g_scbump = SC_BASE; }
+}
+
+/* PAGEDESK-SPEC 20.22.14: `plen` != 0 is a PACKED strike, an LZ4 stream of plen
+ * bytes that expands to len. It is read into its own slot at rr = ceil16(len - plen
+ * - head) (0 when negative), so the stream starts at or above len - plen from the
+ * slot's base (SPEC.md 20.13.7: the decoder then never overtakes its source), and
+ * OSAPI_DECOMP expands it onto the base; the slot's room is the larger of the two */
+static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len, pdw plen)
 {
     static struct pd_u32 u, p;
-    pdw cb, head, cap, room, seg, got, i;
-    room = (pdw)(g_gkb << 10);                 /* g_gkb <= 63 (INIT) */
-    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u) return 0;   /* cap below cannot wrap */
+    pdw cb, head, cap, room, seg, got, i, rr, need, n;
+    room = syn_cap() ? syn_hdr() : (pdw)(g_gkb << 10);         /* g_gkb <= 63 (INIT); the synthetic blocks sit above */
+    if (!g_gseg || room <= SC_BASE + 512u || !len || len > 0xE000u || plen >= len || g_fioerr) return 0;   /* cap below cannot wrap; a failed read ends the page view's (QA F21) */
     pdm_u32_set(&u, ohi, olo);
     if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
     cb = file_enter();
     if (!cb) { g_fioerr = 1; return 0; }
     head = u.lo & (cb - 1);
-    cap = (pdw)((head + len + cb - 1) & ~(cb - 1));   /* len < 60K and cb <= 4K: no wrap */
+    n = plen ? plen : len;                      /* the bytes on disk */
+    cap = (pdw)((head + n + cb - 1) & ~(cb - 1));   /* n < 60K and cb <= 4K: no wrap */
+    rr = 0;
+    if (plen && len - plen > head) rr = (pdw)((len - plen - head + 15) & ~15u);
+    need = (pdw)(rr + cap);                     /* <= len + 14 + cb: no wrap */
+    if (need < len) need = len;
     /* every comparison by subtraction: g_scbump <= room, so none of them wraps */
-    if (cap > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
-    if (cap > room - g_scbump) { file_leave(); return 0; }       /* a strike larger than the cache */
+    if (need > room - g_scbump || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
+    if (need > room - g_scbump) { file_leave(); return 0; }      /* a strike larger than the cache */
     seg = (pdw)(g_gseg + (g_scbump >> 4));
-    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, seg, cap);
+    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, (pdw)(seg + (rr >> 4)), cap);
     file_leave();
-    if (got < head + len) { g_fioerr = 1; return 0; }
-    pd_fcopy(seg, 0, seg, head, len);          /* the strike down to the paragraph */
+    if (got < head + n) { g_fioerr = 1; return 0; }
+    if (plen) {
+        if (pdr_lzdec((pdw)(seg + (rr >> 4)), head, plen, seg, len)) { g_fioerr = 1; return 0; }
+    } else
+        pd_fcopy(seg, 0, seg, head, len);      /* the strike down to the paragraph */
     i = g_scn++;
     g_scb[i] = (pdb)b; g_scolo[i] = olo; g_scohi[i] = ohi;
     g_scoff[i] = g_scbump; g_sclen[i] = len;
@@ -503,6 +680,13 @@ static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
 static pdw strike_load(pdw id)
 {
     pdw b = id >> 8, idx = id & 255, i, lo, hi, len;
+    if (b == 2) {                                   /* a synthetic strike: (font, size) block idx */
+        if (idx >= pd_fpeekw(g_gseg, (pdw)(syn_hdr() + 60))) return 0;
+        g_sseg = (pdw)(g_gseg + (syn_off(idx) >> 4)); g_soff = 0;
+        g_ssize = pd_fpeekw(g_gseg, (pdw)(syn_hdr() + (idx << 3) + 4)); g_sasc = g_ssize; g_sdesc = (pdw)((g_ssize >> 2) + 1);
+        g_sfirst = 1; g_slast = 128; g_sflags = 0; g_sid = id;
+        return 1;
+    }
     if (b > 1 || !g_bk_seg[b] || idx >= g_bk_n[b]) return 0;
     pd_fcopy_in(g_bk_seg[b], 8 + idx * 16, g_srec, 16);
     g_ssize = g_srec[2]; g_sasc = g_srec[3]; g_sdesc = g_srec[4];
@@ -512,7 +696,7 @@ static pdw strike_load(pdw id)
     g_sid = id;
     for (i = 0; i < g_scn; i++)
         if (g_scb[i] == b && g_scolo[i] == lo && g_scohi[i] == hi) goto found;
-    if (!strike_fetch(b, lo, hi, len)) return 0;
+    if (!strike_fetch(b, lo, hi, len, (pdw)(g_srec[14] | (g_srec[15] << 8)))) return 0;     /* 20.22.14: packed */
     i = g_scn - 1;
 found:
     g_sseg = (pdw)(g_gseg + (g_scoff[i] >> 4)); g_soff = 0;
@@ -570,6 +754,29 @@ static pdw strike_pick(pdw fam, pdw sty, pdw em, pdw *synth)
 static pdb g_gl[4];
 static pdw g_synth;                 /* strike_pick: italic by shear           */
 /* one glyph through a slow, fully clipped path (partial glyphs) */
+#ifdef PDR_X8   /* runs of ink, not pixels: the 8-bit strip pays a span's setup each */
+static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
+{
+    pdw r, c, ink;
+    pdi yy, xa, xb, sh, rs;
+    for (r = 0; r < nrows; r++) {
+        yy = (pdi)(top + r);
+        if (yy < g_scy0 || yy > g_scy1) continue;
+        sh = 0;
+        if (shear) sh = (pdi)(((pdi)g_sasc - (pdi)r + 8) >> 2) - 2;
+        rs = -1;
+        for (c = 0; c <= wpx; c++) {            /* one span a run of ink pixels */
+            ink = c < wpx && (pd_fpeekb(gseg, (pdw)(goff + r * wb + (c >> 3))) & (0x80 >> (c & 7)));
+            if (ink) { if (rs < 0) rs = (pdi)c; continue; }
+            if (rs < 0) continue;
+            xa = (pdi)(gx + rs + sh); xb = (pdi)(gx + (pdi)c - 1 + sh); rs = -1;
+            if (xa < g_scx0) xa = g_scx0;
+            if (xb > g_scx1) xb = g_scx1;
+            if (xb >= xa) span_out(yy, xa, xb);
+        }
+    }
+}
+#else
 static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw nrows, pdw shear)
 {
     pdw r, c;
@@ -589,6 +796,7 @@ static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw
         }
     }
 }
+#endif
 
 /* ---- the transformed-glyph cache (20.3.4): a direct-mapped table of 14
  * slots in the glyph claim, keyed by (strike, rotation, scale, code); a slot
@@ -722,6 +930,9 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
             /* the composer writes the bytes under [gx + shl, gx + gw - 1 + shr]
              * and reads at most 4 bitmap bytes a row: anything else is clipped
              * pixel by pixel */
+#ifdef PDR_X8
+            if (g_xs) { glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear); continue; }
+#endif
             if (wb > 4 || (pdi)(gx + shl) < mn || (pdi)(gx + (pdi)gw - 1 + shr) > mx) {
                 glyph_slow(gx, top, gw, wb, gseg, goff, grows, shear);
                 continue;
@@ -747,6 +958,10 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 /* ---- images (pdri.c supplies the row source) ------------------------------ */
 static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1);
 
+#ifdef PDR_X8
+/* ---- the DL walker for one band: pdrx8.c (it grew the transparency records) ----- */
+static void walk_band(pdi ry0, pdi ry1);
+#else
 /* ---- the DL walker for one band ------------------------------------------ */
 static void walk_band(pdi ry0, pdi ry1)
 {
@@ -791,6 +1006,7 @@ static void walk_band(pdi ry0, pdi ry1)
         off += len;
     }
 }
+#endif
 
 /* ---- one band: compose, then lock / clip / blit / unlock ----------------- */
 static pdw g_winoff;

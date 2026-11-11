@@ -248,8 +248,8 @@ static int pdu_pop_rows(void)
         return pdu_nt_prows();          /* notes */
     if (pdu_pop == P_PAGES)
         return (pdu_npages + 7) / 8 + 1;
-    if (pdu_pop == P_PREFS)             /* prefs */
-        return 8;
+    if (pdu_pop == P_PREFS)             /* prefs; auth is its second face */
+        return pdu_au_mode ? 4 : 8;
     return 0;
 }
 
@@ -313,7 +313,7 @@ static void pdu_pop_paint(void)
         pdu_nt_ppaint();
         return;
     }
-    if (pdu_pop == P_PREFS) {           /* prefs */
+    if (pdu_pop == P_PREFS) {           /* prefs (or the auth prompt) */
         ovl_pf_paint();
         return;
     }
@@ -387,12 +387,12 @@ static void pdu_pop_open(int kind, int src)
     pdu_popsrc = src;
     rows = pdu_pop_rows();
     w = 12;
-    if (kind == P_FIND) w = 30;
+    if (kind == P_FIND) w = 37;         /* "Find: " + 30 + the cursor (R18) */
     if (kind == P_NOTES || kind == P_NOTE) w = pdu_nt_pw();  /* notes */
     if (kind == P_PAGES) w = 32;
     if (kind == P_PREFS) {              /* prefs */
         pdp_load();
-        w = 28;
+        w = 36;
     }
     if (kind == P_HELP) {
         pdu_hpage = 0;
@@ -449,6 +449,7 @@ static void pdu_pop_shut(void)
         return;
     pdu_nt_pclose();                    /* notes */
     pdp_closed();                       /* prefs */
+    pdu_au_closed();                    /* auth: an unanswered ask is a cancel */
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
@@ -479,11 +480,8 @@ static void pdu_pop_close(void)
  * ==========================================================================*/
 static void pdu_sample(void)
 {
-    if (os88_file_goto_q_mark(pdu_home.clus, pdu_home.vol) != 0) {
-        pdu_tell("The disk PageDesk came from is not in a drive.");
-        return;
-    }
-    pdu_open_begin("XTGUIDE.PDF");
+    if (!ovl_sample())                  /* its overlay body says what is missing */
+        pdu_tell(pdu_errtext(PDE_NOMEM));
 }
 
 static void pdu_open_dlg(void)
@@ -652,6 +650,7 @@ static void pdu_cmd(int id)
 void os88_oncmd(int item, int menu, void *win)
 {
     int pg;
+    pdu_ovhold = 0;                     /* the user acted: the panels try again */
     pdu_about_off();
     pg = pdu_pg_menucmd(menu, item);   /* pages: the page commands' rows */
     if (pg) {
@@ -866,12 +865,19 @@ static void pdu_find_key(int ascii)
 void os88_onkey(int ascii, int scan, void *win)
 {
     int ch;
+    pdu_ovhold = 0;
 
     if (pdu_about) {
         pdu_about_off();
         return;
     }
     ascii = ascii & 0xFF;
+#ifdef PD_AUTHDEMO                      /* a look at the prompt with no encrypted file (20.22.6) */
+    if (ascii == 17) { pdu_au_ask(0); return; }             /* ^Q  asking */
+    if (ascii == 20) { pdu_au_ask(1); return; }             /* ^T  wrong */
+    if (ascii == 18) { pdu_au_askr6(1500u); return; }       /* ^R  the R6 question */
+    if (ascii == 21) { pdu_au_busy(); pdu_au_prog(450); return; }   /* ^U  working */
+#endif
     if (pdu_pg_key(ascii, scan))        /* pages: a prompt owns the keys */
         return;
     if (pdu_rc_key(ascii))              /* recov: so does the recovery offer */
@@ -1057,6 +1063,7 @@ void os88_onclick(int x, int y, void *win)
 {
     int id, k, r;
     struct os88_rect *o;
+    pdu_ovhold = 0;
 
     if (pdu_about) {
         pdu_about_off();
@@ -1108,7 +1115,8 @@ void os88_onclick(int x, int y, void *win)
         else if (pdu_tool == C_T_SELECT || pdu_tool == C_T_HILITE)
             pdu_nav_press(x, y);        /* nav: a link, or a text selection */
         else
-            pdu_tell(pdu_why(pdu_tool) ? pdu_why(pdu_tool)
-                                       : "That tool is not in this build yet.");
+            pdu_tell(!pdu_ovl_in() ? "Not enough memory for that tool."
+                     : pdu_why(pdu_tool) ? pdu_why(pdu_tool)
+                     : "That tool is not in this build yet.");
     }
 }

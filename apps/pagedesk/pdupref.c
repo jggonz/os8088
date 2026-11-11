@@ -11,7 +11,7 @@
  * close need without calling it.
  * ==========================================================================*/
 static char pdp_loaded;                 /* the file has been read (or refused) */
-static int  pdp_row;                    /* the dialog's selected setting, 0..4 */
+static int  pdp_row;                    /* the dialog's selected setting, 0..5 */
 static char pdp_chg;                    /* bit 0 any, 1 panels, 2 marks: since the dialog opened */
 static char pdp_owe;                    /* the same bits, owed to the wake */
 
@@ -41,8 +41,9 @@ static const char *pdp_done(void)
 {
     int n;
     if (pdp_form) {
+        n = pdp_form;
         pdp_form = 0;
-        return pdp_formmsg;
+        return n == 1 ? pdp_formmsg : pdu_msg;  /* 2: a message the first render's end keeps (F30) */
     }
     if (!pdu_dirty())
         return "No changes";

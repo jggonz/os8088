@@ -34,7 +34,18 @@ disk in four geometries from `make pagedeskdisk` (`build/pagedesk.img` at
 1.44 MB, `pagedesk720.img`, `pagedesk120.img` at 1.2 MB, `pagedesk360.img`).
 The disk's root holds the program, `README.TXT`, `PDFONTS.TXT` (the font
 licence), the eight sample PDFs and, on every geometry but 360 KB,
-`PDFONTX.RES` (the other font sizes, optional). It is also in the everything
+`PDFONTX.RES` (the other font sizes, optional). At 360 KB the program fills
+a disk, so it is a PAIR: `pagedesk360.img` holds the program and
+`PDFONTS.TXT`, and **`pagedesk360b.img`** `README.TXT` and every sample. Put
+the second disk in a drive and open from it with File > Open. PageDesk reads
+its fonts and modules from the program disk while it draws, so keep that disk
+in its drive and put the second one in the other drive. When the program disk
+is out at the moment a part is needed, a toast says `Insert the PageDesk disk`
+(a page's status line says `insert the PageDesk disk` for its fonts): put it
+back and do the same thing again - open the file again, or go back to the
+page. The empty
+window's Sample guide looks beside the program, so on the 360 KB pair open
+`XTGUIDE.PDF` from the second disk instead. It is also in the everything
 set (`make allapps`) and on the live media.
 
 To open a document:
@@ -163,6 +174,17 @@ to page 5, Shift+F3 back to page 2 (VGA); `small` on CGA.
 
 A search of a long document is slow on an XT (every page is read and
 interpreted for its text). Not timed on a 4.77 MHz machine.
+
+**Embedded fonts on a 640 KB machine.** To read the text of a page set in an
+embedded font, Find needs PageDesk's font module. While Find is running, a
+640 KB machine may not have room for it. A page that has already been drawn
+does not need the module: its text comes from the glyphs drawn on it. A page
+that has not been drawn cannot be read without it. When Find finds nothing and
+such a page was skipped, it does not say only "No match". It names the first
+page it could not read, for example `No match for "telnet" - draw page 7 first`.
+Go to that page, let it draw, and press F3. A machine with more memory loads
+the font module and reads every page. **Seen** on QEMU (VGA, 640 KB): Find for
+a word that is not in PDFKIT.PDF says `No match for "zzqqx" - draw page 3 first`.
 
 ### Select and Copy
 
@@ -348,7 +370,7 @@ The offer is **host-checked only**; it was not seen on the glass.
 
 ## 9. Preferences
 
-View > Preferences... opens a pop-up on every layout (it fits compact's 136
+View > Preferences... opens a pop-up on every layout (eight text rows, which fit compact's 136
 pixels). Rows:
 
 | row | values |
@@ -358,10 +380,11 @@ pixels). Rows:
 | Mid panels | None, Pages, Notes, Both |
 | Mono marks | Line+frame, Line, Frame, Hatch |
 | Flate cache | Auto, Off (applies at the next open) |
+| Module cache | Auto, Off: keep the decoder modules' images in XMS or EMS when the machine has it, so a swap is a copy and not a disk read (applies at the next open) |
 
 Up/Down or Tab select a row, Left/Right/Enter/Space change it, a click on a
-row advances it, Esc or a click outside closes and saves. Settings live in ten
-bytes at `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched from
+row advances it, Esc or a click outside closes and saves. Settings live in eleven
+bytes (format version 2; a version-1 file of ten still loads, with the module cache on Auto) at `SYSTEM/APPDATA/PAGEDESK.CFG` on the volume PageDesk was launched from
 and are read at the first document open or the first time the dialog paints,
 so an empty window shows the defaults. A damaged file is ignored whole. When
 the disk cannot be written (no APPDATA folder, write-protected, full) the choices
@@ -397,7 +420,13 @@ instruction counts (about 63 instructions per output byte of text, 190 for a
 predicted image, plus 188,000 instructions to start a dynamic block): a few
 KB a second, so a Flate page is slow. Not measured on a 4.77 MHz machine.
 
-## 12. Complex PDFs: the host preparation tool
+## 12. The host preparation tool (optional)
+
+PageDesk opens a modern PDF by itself (section 15; PAGEDESK-SPEC 20.22): no
+file has to be prepared first. `tools/os88pdprep.py` stays as an option for
+the cases section 15 still lists as slow or limited on an XT, for example a
+page whose embedded fonts do not fit beside the decoders in 640 KB, or a
+JPEG 2000 page that takes a minute on a 4.77 MHz machine.
 
 `tools/os88pdprep.py IN.pdf OUT.pdf` (PD-22) runs on a PC with `qpdf` and
 `mutool` installed. It rewrites a file into the XT profile:
@@ -439,7 +468,7 @@ Every segment is full: **no feature can be added without removing one**.
 Per-document claims (SPEC 16.2, 20.6.2): the kernel allows a program only 8
 claims on kern_big, so the primary carves its rows from two large claims. On
 VGA and EGA the second claim is 63 KiB (60 KiB on CGA and Hercules), holding
-the display list and its workspace (29 KiB), the band, the edit store (16 KiB),
+the display list and its workspace (29 KiB), the band, the edit store (8 KiB, at the first edit),
 the undo log (4 KiB), page map, thumbnails, scratch and the 2 KiB private
 module stack. A save adds the writer's buffers (18 KiB, up to 40 KiB for an
 Extract). Flate adds 43 KiB when it is used.
@@ -497,18 +526,28 @@ inline images (1, 2, 4 and 8 bits, grey and RGB, with the exact length). It draw
 dash patterns of up to four elements. It displays any annotation with a usable
 `/AP /N` appearance.
 
-| capability | native XT | enhanced (RAM, any CPU) | host-prepared | not implemented |
-|---|---|---|---|---|
-| classic xref, incremental chains | yes | | | |
-| xref/object streams | refused (`PDE_XREFSTM`) | | converted by `os88pdprep.py` | |
-| ASCIIHex, RunLength | yes | | | |
-| Flate (+ PNG/TIFF predictors) | refused (`PDE_FLATE`) | decoded with a 43 KiB slot | normalised | colours above 4, TIFF below 8 bits, inline-image `/DP` |
-| LZW, ASCII85, JPEG, CCITT, JBIG2, JPX | refused (`PDE_FILTER`) | refused | rasterised | |
-| base-14 Latin text | yes (bitmap faces, PDF widths) | | | |
-| other fonts (TrueType, CFF, CID, Type 3, Symbol, ZapfDingbats) | drawn with a substitute and marked **Incomplete rendering** | same | rasterised | |
-| shading, patterns, transparency, soft masks, ICC/Indexed colour, JPEG | page drawn **Incomplete**, naming the feature | same | rasterised | |
-| annotations created: Text, Highlight, Square, Circle, Line, Ink, FreeText | yes | | | |
-| encryption | refused (`PDE_ENCRYPT`) | refused | decrypted with `--password` | |
+Since PAGEDESK-SPEC 20.22 the package reads far more than that profile. The
+decoders are modules loaded into one shared slot when a page needs them (and
+copied to XMS or EMS where there is some, so the second load is not a floppy
+read). The matrix says what each kind of file does on a 640 KB 4.77 MHz XT;
+`docs/plans/PAGEDESK-ANY-PLAN.md` section 6 has the measured times.
+
+| capability | on a 640 KB XT | limit | not implemented |
+|---|---|---|---|
+| classic xref, incremental chains | yes | | |
+| xref and object streams, hybrid files | yes | | |
+| a damaged xref | rebuilt by a scan of the file | | |
+| ASCIIHex, RunLength, LZW, ASCII85 | yes | | |
+| Flate (+ PNG/TIFF predictors) | yes, with a 43 KiB slot taken at the first Flate stream | Preferences can set it Off | colours above 4, TIFF below 8 bits, inline-image `/DP` |
+| JPEG (baseline, progressive, CMYK/YCCK) | at a reduced scale | tens of seconds a photo on an XT | |
+| CCITT G3/G4, JBIG2 with globals | yes | | |
+| JPEG 2000 | at a reduced resolution level | about a minute a page on an XT | |
+| base-14 Latin text | yes (bitmap faces, PDF widths) | | |
+| embedded TrueType, Type 1, CFF, CID, Type 3; `/ToUnicode` for Find and Copy | drawn from the font's own outlines | a large subset may not fit beside the decoders on 640 KB and is drawn in a substitute face, saying so | CJK glyphs (no CJK face) |
+| Indexed, ICC, Cal, Lab, Separation, DeviceN; functions 0/2/3/4; shadings 1-7; patterns | yes, quantised to the adapter | coloured tiling of more than 40 tiles is a flat grey, pattern strokes are black | |
+| `/ca /CA`, blend modes, soft masks, groups | through an 8-bit grey band | a coloured mark under transparency loses its colour on VGA | |
+| annotations created: Text, Highlight, Square, Circle, Line, Ink, FreeText | yes | | |
+| encryption: RC4-40/128, AES-128, AES-256 (R5/R6) | the empty password silently, a prompt otherwise; a save is encrypted with the file's own key | an R6 file on an 8088 asks first, with an estimate (about 12.75 x (password length + 48) seconds a try) | public-key handlers |
 | signed documents | open read-only | | | no verification, no signing |
 | AcroForm | shown as printed | | | **filling** (PD-26) |
 | printing | | | | no print service on os8088 |
@@ -523,7 +562,9 @@ rendering`. PageDesk does **not** currently disable editing or saving on an
 incomplete page (see section 16); do not treat an incomplete page as proof of
 what the file looks like elsewhere.
 
-**Text.** Text is drawn in bundled bitmap faces, Liberation (Helvetica/Arial,
+**Text.** A font embedded in the file is drawn from its own outlines by the
+PDXF module (PAGEDESK-SPEC 20.22.8). The base-14 fonts, and an embedded font
+that does not fit beside the decoders, are drawn in bundled bitmap faces, Liberation (Helvetica/Arial,
 Times, Courier equivalents) under the SIL OFL, 8, 10 and 12 pixels in the
 package and 6, 7, 9, 14, 16, 20 and 24 in the optional `PDFONTX.RES`. Layout
 uses the PDF fonts' own widths (Adobe AFM data), so line breaks match the
@@ -538,21 +579,23 @@ it.
 
 | code | message | what it means and what to do |
 |---|---|---|
-| `PDE_SYNTAX` | The file is damaged: it does not parse as PDF. | no `%PDF-` header at byte 0, a bad stream length, a document with no pages, or a packed copy of the file (a `.PDF` that the OS has compressed on disk and that PageDesk would read as its wrapper). Re-copy the file from the original. |
-| `PDE_XREF` | The file's cross-reference table is damaged. | a damaged or looping xref chain, no `/Root`, an offset the file does not hold. PageDesk never repairs a file; repair it first with `qpdf` on a PC. |
+| `PDE_SYNTAX` | Damaged: it does not parse as a PDF. | no `%PDF-` header at byte 0, a bad stream length, a document with no pages, or a packed copy of the file (a `.PDF` that the OS has compressed on disk and that PageDesk would read as its wrapper). Re-copy the file from the original. |
+| `PDE_XREF` | Its cross-reference table is damaged. | a damaged or looping xref chain, no `/Root`, an offset the file does not hold. PageDesk never repairs a file; repair it first with `qpdf` on a PC. |
 | `PDE_TRUNC` | The file is truncated. | no `startxref`, or data past the end. Copy the file again. |
-| `PDE_CYCLE` | The file's page or resource tree loops. | a page-tree node reached twice or a `/Parent` loop. |
-| `PDE_DEPTH` | The file nests objects deeper than PageDesk reads. | more than 32 levels. |
-| `PDE_FLATE` | No Flate cache (low RAM, or set Off). | free memory could not hold the 43 KiB slot with 32 KiB to spare, or Preferences has Flate Off. Close windows, set Flate cache to Auto, reopen; or prepare the file with `os88pdprep.py` on a PC. |
-| `PDE_FILTER` | It uses a stream filter PageDesk cannot decode. | LZW, ASCII85, JPEG, CCITT, JBIG2, JPX, a crypt filter, or a fifth stage. Prepare on a PC. |
+| `PDE_CYCLE` | Its page or resource tree loops. | a page-tree node reached twice or a `/Parent` loop. |
+| `PDE_DEPTH` | Objects nest too deep for PageDesk. | more than 32 levels. |
+| `PDE_FLATE` | No Flate cache (low RAM, or set Off). | free memory could not hold the 43 KiB slot with 32 KiB to spare, or Preferences has Flate Off. Close windows, set Flate cache to Auto, reopen. |
+| `PDE_FILTER` | Its stream filter is not supported. | a filter that is not in section 15's matrix, or a fifth stage. |
 | `PDE_FONT` | It uses a font PageDesk cannot draw. | reserved for a font with nothing to substitute; normal unsupported fonts draw with a substitute and say Incomplete. |
-| `PDE_GRAPHICS` | It uses graphics outside the XT profile. | shadings, patterns and similar; normally shown as Incomplete rendering. Prepare with `--raster`. |
-| `PDE_ENCRYPT` | The file is encrypted; PageDesk cannot open it. | decrypt on a PC with `os88pdprep.py --password`. |
-| `PDE_XREFSTM` | It uses cross-reference streams (PDF 1.5+ packing). | the commonest modern layout. Prepare with `os88pdprep.py`. |
+| `PDE_GRAPHICS` | Its graphics are outside the profile. | normally shown as Incomplete rendering, naming the feature (section 15's limits). |
+| `PDE_PASSWORD` | Password needed. | the file is encrypted and the empty password did not open it. PageDesk asks for the password in a small prompt (Enter tries it, Esc cancels the open, a wrong one says so and asks again). |
+| `PDE_ENCRYPT` | Its encryption is not supported. | a security handler other than the standard one (a public-key file, say). |
+| `PDE_XREFSTM` | Its cross-reference stream is damaged. | the stream that replaces the xref table cannot be read. |
+| `PDE_NOSLOT` | Out of memory. Close a window, retry. | no RAM for a decoder module's slot; the page is drawn without that feature and says Incomplete. |
 | `PDE_SIGNED` | The file is signed: it opens read-only. | a signature or `/Perms`: you can read it, search it and copy from it; annotation tools are greyed. |
-| `PDE_RANGE` | A page or number is outside PageDesk's range. | a page box beyond +/-2,047 points, a zero-area box, a rotation that is not a multiple of 90, or in Insert, a page past the other file's end ("no such page."). |
-| `PDE_LIMIT` | The file exceeds one of PageDesk's limits. | more than 1,024 pages, more than 8 revisions, an object number above 65,535, a file of 2 GiB, more than 256 xref subsections across the chain, one decoded stream over 1 MiB, or an Insert of a file with forms or scripts ("forms or scripts."). |
-| `PDE_NOMEM` | Not enough memory. Close a window and try again. | a claim was refused (the open says `Not enough memory: PageDesk needs N KB.`). Close other windows. |
+| `PDE_RANGE` | A number is outside PageDesk's range. | a page box beyond +/-2,047 points, a zero-area box, a rotation that is not a multiple of 90, or in Insert, a page past the other file's end ("no such page."). |
+| `PDE_LIMIT` | It exceeds one of PageDesk's limits. | more than 1,024 pages, more than 8 revisions, an object number above 65,535, a file of 2 GiB, more than 256 xref subsections across the chain, one decoded stream over 1 MiB, or an Insert of a file with forms or scripts ("forms or scripts."). |
+| `PDE_NOMEM` | Out of memory. Close a window, retry. | a claim was refused (the open says `Not enough memory: PageDesk needs N KB.`). Close other windows. |
 | `PDE_STACK` | Out of module stack: the document was closed. | the safety check on the private stack fired; reopen. Report it with the file if you can. |
 | `PDE_IO` | The disk could not be read. | also "the file is not in this folder". Check the disk. |
 | `PDE_DISKFULL` | The disk is full. | choose another disk; the temporary file was removed. |
@@ -568,7 +611,8 @@ Other messages you may see:
 - `Could not open NAME`, `Could not save NAME: <reason>`, `Could not draw the
   page: <reason>`.
 - `Page operations handle up to 240 pages.`, `The edit store is full: save,
-  then continue.` (128 marks; the same text heap limit is 1,024 characters a
+  then continue.` and `The change limit (64) is reached.` (64 marks a
+  document, in an 8 KiB store; the same text heap limit is 1,024 characters a
   note), `Stroke limit: the stroke is kept.` (126 points an ink stroke),
   `Too small: 4 points at least.`, `Too large to undo: the history was
   cleared.`
@@ -638,6 +682,10 @@ harness) in waves 1 and 2 for the shell and the renderer.
 - **Adapters.** The whole open, page, zoom, Find, mark, Save As and reopen
   session runs on VGA, CGA and Hercules on MartyPC's real Hercules model.
 - **Memory.** 81-97 KiB is free after a session.
+- **Embedded fonts.** A small embedded font draws from its own outlines. A
+  large subset - a Mac-made PDF's TrueType, for one - is drawn in PageDesk's
+  own face on a 640 KiB XT: the status line says `Incomplete rendering - font
+  substituted` and the text stays legible.
 
 **Still not verified**, and left to hardware or later work:
 

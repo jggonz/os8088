@@ -2,7 +2,7 @@
 ; os8088 - apps/pagedesk/stubs/pdstub.asm     STAND-IN MODULES (PAGEDESK-SPEC
 ;                                              3.1, 20.6)
 ;
-; One source, three images: assembled with -DSTUB_ENG, -DSTUB_REND or
+; One source, eight images: assembled with -DSTUB_ENG, -DSTUB_REND or
 ; -DSTUB_WRT into a module with the real one's header and door (PAGEDESK-SPEC
 ; 3.1, apps/loom/lmpvmod.asm's shape), so the primary - its parts table, its
 ; header checks, its far vectors, its job scheduler and its three layouts - is
@@ -21,6 +21,13 @@
 ;           STATUS, which says the page is an INCOMPLETE rendering by "stub
 ;           renderer" - so the picture can never be mistaken for a render.
 ;   PDWRT   INIT; everything else PDE_NOTFOUND (the save path's error text).
+;   PDXK PDXG PDXF PDXI PDXJ (-DSTUB_XK ... -DSTUB_XJ, PAGEDESK-SPEC
+;           20.22.2.3): the slot's occupants until each owner's lands -
+;           PDV_X_INIT, everything else PDE_NOTFOUND, and 1 KiB of bss so the
+;           OP_COMP row packs. The Makefile's PD_XK_MOD ... PD_XJ_MOD.
+;   PDX8    (-DSTUB_X8, 20.22.10.11): the X8 region's part until blend's
+;           lands - its 16-byte header (+8 a jmp short, +10/+12/+14 the words
+;           plat writes), PDV_X8_INIT and nothing else. PD_X8_MOD.
 ;
 ; It touches no file. Constants are spelled out here rather than taken from
 ; apps/pagedesk/pdabi.inc, which is the math agent's and had not landed when
@@ -35,19 +42,44 @@ PDE_OK       equ 0
 PDE_RANGE    equ 32
 PDE_NOTFOUND equ 53
 PDE_BUSY     equ 65
-PDM_ABI      equ 1
+PDM_ABI      equ 2                  ; pdabi.h: any PDF (20.22)
+%define PDS_BSS 256
 
 %ifdef STUB_ENG
   PDS_MAGIC equ 0x4550
   PDS_BASE  equ 0x00
+  %define PDS_HAVEBASE
 %elifdef STUB_REND
   PDS_MAGIC equ 0x5250
   PDS_BASE  equ 0x40
+  %define PDS_HAVEBASE
 %elifdef STUB_WRT
   PDS_MAGIC equ 0x5750
   PDS_BASE  equ 0x80
+  %define PDS_HAVEBASE
+%elifdef STUB_XK
+  PDS_MAGIC equ 0x4B50              ; 'PK'
+%elifdef STUB_XG
+  PDS_MAGIC equ 0x4750              ; 'PG'
+%elifdef STUB_XF
+  PDS_MAGIC equ 0x4650              ; 'PF'
+%elifdef STUB_XI
+  PDS_MAGIC equ 0x4950              ; 'PI'
+%elifdef STUB_XJ
+  PDS_MAGIC equ 0x4A50              ; 'PJ'
+%elifdef STUB_X8
+  PDS_MAGIC equ 0x3850              ; 'P8': the X8 region's part (20.22.10.11)
+  PDS_BASE  equ 0xD1                ; PDV_X8_INIT
+  %define PDS_HAVEBASE
+  %define STUB_OCC
+  %define PDS_BSS 1024
 %else
-  %error "assemble with -DSTUB_ENG, -DSTUB_REND or -DSTUB_WRT"
+  %error "assemble with -DSTUB_ENG/REND/WRT or -DSTUB_XK/XG/XF/XI/XJ/X8"
+%endif
+%ifndef PDS_HAVEBASE                ; (an equ is no macro: %ifndef cannot see it)
+  %define STUB_OCC                  ; an occupant: its verbs start at 0xC0
+  PDS_BASE  equ 0xC0                ; PDV_X_INIT
+  %define PDS_BSS 1024
 %endif
 
 org 0
@@ -55,11 +87,16 @@ pds_hdr:
     dw PDS_MAGIC                    ; +0 magic
     dw PDM_ABI                      ; +2 the ABI
     dw pds_end                      ; +4 image size
-    dw 256                          ; +6 bss: unused, declared so the part
+    dw PDS_BSS                      ; +6 bss: unused, declared so the part
                                     ;    (image + bss as zeros) compresses the
                                     ;    way a real module's does (OP_COMP)
 %if ($ - $$) != 8
   %error "the door is not at +8"
+%endif
+%ifdef STUB_X8
+    jmp short pds_door              ; +8: PDX8's header is 16 bytes, and
+    dw 0                            ; +10 the code selector (plat writes it)
+    dw 0, 0                         ; +12 PDENG's door (plat writes it)
 %endif
 
 ; the door: AL = verb, BX/CX/DX args; AX out, CF = 1 + AX = PDE_* on failure.
@@ -308,6 +345,13 @@ pds_x1:     dw 0
 ; ---------------------------------------------------------------------------
 pds_tab:
     dw pds_init
+pds_tab_end:
+%endif
+
+%ifdef STUB_OCC
+; ---------------------------------------------------------------------------
+pds_tab:
+    dw pds_init                     ; PDV_X_INIT
 pds_tab_end:
 %endif
 

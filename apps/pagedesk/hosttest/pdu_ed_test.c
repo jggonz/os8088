@@ -68,6 +68,12 @@ static void os88_gfx_unlock(void) {}
 static int nxor;
 static void os88_gfx_xor_fill(int a, int b, int c, int d) { nxor++; }
 static int os88_wm_clip_set(void *w) { return 0; }
+/* QA F26: the edit store is a claim of its own, taken at the first edit
+ * (ovl_ed_need): the document's claims and the store, as pdumod.c holds them */
+static unsigned pdu_dc[12];             /* PDU_NDC */
+static unsigned pdu_dclaim[3] = { 0x1000, 0x1800, 0x2000 };
+static unsigned claimhi_ans = 0x2000, claimhi_n;
+static unsigned pdu_claimhi(unsigned paras) { claimhi_n++; return paras == 512 ? claimhi_ans : 0;   /* ED_END >> 4: 8 KiB (O9) */ }
 static unsigned pdu_dcseg(int row)
 {
     return row == PDU_DC_EDITS ? 0x2000 : row == PDU_DC_UNDO ? 0x3000 : 0;
@@ -249,11 +255,11 @@ static void test_limits(void)
         if (pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) < 0)
             break;
     }
-    CHECK(n == ED_MAX, "128 records fit (%d)", n);
+    CHECK(n == ED_MAX, "%d records fit (%d)", ED_MAX, n);
     mk(PDA_RECT, 0, 0, 0, 100, 100);
     tt = pdu_ed_tt; pt = pdu_ed_pt;
-    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == -1 && pdu_ed_err == PDE_LIMIT, "129th record: PDE_LIMIT");
-    CHECK(tt == pdu_ed_tt && pt == pdu_ed_pt && pdu_ed_count() == 128, "...and no top moved");
+    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == -1 && pdu_ed_err == PDE_LIMIT, "one record past ED_MAX: PDE_LIMIT");
+    CHECK(tt == pdu_ed_tt && pt == pdu_ed_pt && pdu_ed_count() == ED_MAX, "...and no top moved");
     /* heap exhaustion */
     fresh();
     for (i = 0; i < 64; i++) P[i] = 7;
@@ -266,7 +272,7 @@ static void test_limits(void)
         }
         n++;
     }
-    CHECK(n > 5 && n < 100, "the heaps filled after %d records of 1 KB + 128 B", n);
+    CHECK(n >= 3 && n < 100, "the heaps filled after %d records of 1 KB + 128 B (O9: 5 KiB of heaps)", n);
     CHECK(pdu_ed_tt <= pdu_ed_pt, "the heaps never cross (%u %u)", pdu_ed_tt, pdu_ed_pt);
     /* a failed edit leaves the record and the history alone */
     pdu_ed_get(0, &r);
@@ -526,10 +532,18 @@ static void test_history(void)
 
     fresh();
     nsaid = 0;
+    /* 70 commands over 64 records at most (O9): six creates, then moves */
     for (i = 0; i < 70; i++) {
-        mk(PDA_RECT, 0, i, i, i + 100, i + 100);
-        pdu_undo_begin(UL_RECT);
-        a = pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+        if (i < 6) {
+            mk(PDA_RECT, 0, i, i, i + 100, i + 100);
+            pdu_undo_begin(UL_RECT);
+            a = pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+        } else {
+            pdu_ed_get(0, &r);
+            r.rect.x0 += 1; r.rect.x1 += 1;
+            pdu_undo_begin(UL_MOVE);
+            pdu_ed_set(0, &r);
+        }
         pdu_undo_end();
         if (i == 63)
             CHECK(nsaid == 0, "no truncation yet at 64 commands");
@@ -546,7 +560,7 @@ static void test_history(void)
     for (i = 0; i < 70; i++)
         if (pdu_redo() != 0)
             break;
-    CHECK(i == 64 && pdu_ed_count() == 70, "and all 64 come back (%d, n=%d)", i, pdu_ed_count());
+    CHECK(i == 64 && pdu_ed_count() == 6, "and all 64 come back (%d, n=%d)", i, pdu_ed_count());
     /* entries run out before commands do */
     fresh();
     mk(PDA_INK, 0, 0, 0, 5, 5);
@@ -815,6 +829,30 @@ static void test_walk(unsigned s, int steps)
     CHECK(bad == 0, "random walk seed %u: %d bad states", s, bad);
 }
 
+/* QA F26: the store is claimed at the first edit, once, from the top, and an
+ * edit with no store is refused (never written through segment 0) */
+static void test_lazy_store(void)
+{
+    unsigned keep = pdu_dclaim[2];
+    fresh();
+    pdu_dclaim[2] = 0;
+    claimhi_n = 0;
+    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == -1 && pdu_ed_err == PDE_NOMEM,
+          "no store: the record is refused with PDE_NOMEM");
+    pdu_dclaim[0] = 0;
+    CHECK(ovl_ed_need() == 1 && claimhi_n == 0, "no document: nothing is claimed");
+    pdu_dclaim[0] = 0x1000;
+    claimhi_ans = 0;
+    CHECK(ovl_ed_need() == 1 && claimhi_n == 1 && !pdu_dclaim[2], "no room: refused");
+    claimhi_ans = 0x2000;
+    CHECK(ovl_ed_need() == 0 && pdu_dclaim[2] == 0x2000 && pdu_dc[PDU_DC_EDITS] == 0x2000,
+          "the first edit claims 8 KiB (O9) and the row names it");
+    CHECK(ovl_ed_need() == 0 && claimhi_n == 2, "held: not claimed again");
+    mk(PDA_HIGHLIGHT, 0, 0, 0, 100, 100);
+    CHECK(pdu_ed_new(&E, "", 0, (pd_pt *)0, 0) == 0 && pdu_ed_n == 1, "and the edit goes in");
+    pdu_dclaim[2] = keep;
+}
+
 int main(void)
 {
     unsigned s;
@@ -833,6 +871,7 @@ int main(void)
     test_gen();
     test_src();
     test_pageop();
+    test_lazy_store();
     for (s = 1; s <= 40; s++)
         test_walk(s, 400);
     printf("%d checks, %d failed\n", checks, fails);

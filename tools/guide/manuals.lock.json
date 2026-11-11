@@ -837,6 +837,14 @@
   "strings": "860c9413154506bd",
   "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
+ "PAGEDESK_O88": {
+  "sources": [
+   "apps/pagedesk"
+  ],
+  "stamped": "d378b70c5",
+  "strings": "9dcb17f2e9f46ff6",
+  "why": "first manual, written from docs/PAGEDESK-GUIDE.md, menus and pduerr"
+ },
  "PAINT_O88": {
   "sources": [
    "apps/paint"
