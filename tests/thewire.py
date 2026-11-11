@@ -774,9 +774,8 @@ def post(m, win):
     the root walk, and B:'s FAT window - a MED cache - landed directly under
     the catalog: nothing could move and assertions 17 and 18 proved nothing.
     What they prove is the relocation procs, which this rank still drives."""
-    wp = os88geom.winptr(m, win, S)
-    os88qemu.poke(m.hmp, S("mem_cpq_lvl"), bytes([0xFE]))
-    os88qemu.poke(m.hmp, S("mem_cpq"), bytes([wp & 0xFF, (wp >> 8) & 0xFF]))
+    os88geom.post_compact(m, win, 0xFE, S,
+                          poke=lambda a, d: os88qemu.poke(m.hmp, a, d))
     return os88qemu.acted(m, lambda: u16(m.read(S("mem_cpq"), 2)) == 0,
                           secs=10, what="the posted compaction", poll=0.1)
 

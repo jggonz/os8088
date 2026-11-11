@@ -612,9 +612,7 @@ def main():
                   % (cfg["title"], wall[0][0], wall[0][1] // 64))
             if not close_hf(hf2_win, hf2_seg):
                 return 1
-            wptr = os88geom.winptr(m, win, S)
-            m.write(S("mem_cpq_lvl"), bytes([0xFC]))   # pkgmove's rank
-            m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+            os88geom.post_compact(m, win, 0xFC, S)    # pkgmove's rank
             os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                             "the posted compaction", poll=0.2, limit=30)
             os88marty.ui_done(m)
