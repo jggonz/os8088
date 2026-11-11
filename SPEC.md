@@ -41015,7 +41015,8 @@ caller had already coalesced. Slots are a knee rather than a slope: 1 → 156,
   served is what it has itself just read off the platter.
 - **The fill re-enters `dsk_xfer`**, with `[dsk_rah_busy]` stopping it caching
   its own fill. That is why it needs no CHS conversion, no retry ladder and no
-  EOT handling of its own. The claim is page-safe by construction
+  EOT handling of its own - and it does not run `dsk_xfer`'s either: a fill
+  is a guess, tried ONCE (18.95.14). The claim is page-safe by construction
   (`mem_claim_dma` takes the whole of it as the head), so `dsk_runcap` never
   splits a fill and **a fill is exactly one `int 13h`**.
 - **It reads FORWARD from the sector that missed, not from the track's
@@ -42032,6 +42033,60 @@ bounce) nor kern_dos: `DSK_RAHINT` is undefined there and both are
 byte-identical. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
 cap as a byte inside `dsk_rah_fill`
 (`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch`).
+
+#### 18.95.14 …and a SPECULATIVE read is tried once, not laddered
+
+A fill (18.95) and the loader's prefetch (18.95.13) read sectors nobody has
+asked for yet. Both re-entered `dsk_xfer` and so ran its whole retry ladder
+(§18.91): three attempts at the run, a controller reset after each, then three
+at one sector. On a failing disk the guess failed SIX times, abandoned the
+slot, and the real read behind it ran the same ladder again for the sectors it
+wanted - twelve failed `int 13h` data calls where six do the work, each one
+at least a revolution and often a timeout on an XT (~400 ms+, PERFORMANCE.md
+Part 2): seconds of grinding per bad read, spent on a guess.
+
+So a speculative read raises `[dsk_rah_busy]` to **`DSK_RAH_SPEC` (80h)**
+rather than to 1, and `dsk_xfer`'s ladder leaves after its FIRST failure when
+it sees that value - after the reset that follows it, so the real read's first
+attempt meets a reset controller exactly as a retry would. The fill then
+answers CF=1 (no record stamped, as before), `dsk_rah_serve` falls through to
+the direct path, and the real read runs the full ladder for its own sectors. A
+failed prefetch still flushes the cache (18.95.13). The writers are the two
+that read speculatively: `dsk_rah_rdst` (the fill's one slot and the prefetch,
+kern_big, kern_emu, kern_small) and `dsk_rah_fill`'s own read where there is no
+`DSK_RAHINT` (kern_mega, kern_dos). Each writes the byte with `mov` and puts
+0 back with `mov` - it is 0 on the way in, the cache's gate refusing a fill
+while anything has raised it, and `mov` leaves the read's CF alone.
+
+**Every other reader that stands the cache aside keeps its ladder.** They raise
+the byte with `inc` to 1, and 1 is not 80h: the mount's boot-sector read that
+detects a swap (§18.8.2), the cloner's same-disk check (§18.99.3), the format
+probe and the cylinder-crossing probe. Those are REAL reads - the swap
+detector's answer is which disk is in the drive - so a marginal sector there
+must still be retried. That is why the speculative mark is a value of its
+own and not "no retries while the byte is set". The listing mount's LBA 0 read
+(18.95.11) is the one place a mount's boot-sector read IS a fill: there the
+fill is tried once and the real one-sector read behind it is laddered.
+
+**Calls, counted** (`czto`'s `arm` leg: a folder opened on a disk whose every
+read fails, MartyPC, kern_big): **9 failed data calls before, 4 after** - the
+listing mount's eight-sector fill went 3 x 8 sectors + 3 x 1 before giving up
+and is now 1 x 8, and the boot-sector read behind it is the same 3 x 1. The
+`ioerr` leg (a join whose reads fail from the root directory on, the disk
+staying bad while the Disk window re-reads it after the verdict): **18 failed
+calls before, 8 after** - 9 -> 4 up to the `Disk error` and 9 -> 4 after it.
+`hopfail`'s 6 are a real read's ladder and stay 6. Measured, not predicted:
+the count is the guest's; the seconds are ~0.4 s a call or more on the 5150
+(PERFORMANCE.md Part 2), so about 2 s saved per failing read there.
+
+Resident: **10 bytes of `.cold` on every kernel** (kern_big, kern_emu,
+kern_small, kern_mega; `tools/os88rdiff.py` against `b8844d56`): `dsk_xfer`
+992 -> 1000 on kern_big and kern_emu, 542 -> 550 on kern_small, 1092 -> 1100
+on kern_mega - the test and its branch (7) and a never-executed PARITY byte,
+so `dsk_runcap` and `dsk_next_clus_x` behind it keep their measured parity
+(`hotpar`) - and the two `mov`s, one byte each over `inc`/`dec`
+(`dsk_rah_rdst` 57 -> 59; kern_mega's `dsk_rah_fill` 238 -> 240). No `.text`,
+no `.bss`.
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 

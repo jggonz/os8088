@@ -2129,6 +2129,20 @@ dsk_xfer:
 %ifdef DISK_COUNTERS
     inc word [dsk_dbg_rst]
 %endif
+    cmp byte [dsk_rah_busy], DSK_RAH_SPEC
+    je .wpfail                  ; A SPECULATIVE READ GETS ONE ATTEMPT (SPEC.md
+                                ; 18.95.14): a read-ahead fill or the loader's
+                                ; prefetch fails here, abandoned, and the real
+                                ; read behind it runs this whole ladder for
+                                ; the sectors it wants. Laddered, a failing
+                                ; disk paid six failed calls for the guess and
+                                ; six for the read. ZF = 1 rides .wpfail's
+                                ; `jbe`; the reset above stays, so the real
+                                ; read's first attempt meets a reset drive as
+                                ; a retry does. Every OTHER reader that stands
+                                ; the cache aside - the swap detector, the
+                                ; cloner, the format probe - raises the byte
+                                ; with `inc` to 1 and keeps its ladder
     dec bp
     jnz .attempt
     ; Three strikes at this run length. If it WAS a run, drop to a single
@@ -2148,7 +2162,11 @@ dsk_xfer:
                                 ; for somebody else. Written plainly, this
                                 ; grows a byte rather than failing to
                                 ; assemble (fprog.inc's idiom, for its reason)
-
+    nop                         ; PARITY, never executed: the speculative
+                                ; read's 7-byte test above is odd, and .ok,
+                                ; the run loop and the hot routines behind
+                                ; it (dsk_runcap, dsk_next_clus_x) keep the
+                                ; parity they were measured at (t_hotpar)
 .ok:
     ; CF=0 IS the BIOS saying the whole request completed, and AL is not.
     ;
@@ -7003,8 +7021,13 @@ dsk_rah_seg:  dw 0               ; the claim, 0 = none. In .text with a real
   %error "ico_seg and dsk_rah_seg must stay adjacent (mem_rr_tab names them as one row)"
 %endif
 %endif
-dsk_rah_busy: db 0               ; ...and 1 while a fill is in dsk_xfer, so the
-                                 ; fill's own read is not itself cached
+dsk_rah_busy: db 0               ; ...and nonzero while a read stands the cache
+                                 ; aside: DSK_RAH_SPEC for a SPECULATIVE one (a
+                                 ; fill, the loader's prefetch), which is also
+                                 ; tried once and not laddered (SPEC.md
+                                 ; 18.95.14); `inc` to 1 for every real one
+                                 ; (the swap detector, the cloner, the probes)
+DSK_RAH_SPEC equ 0x80
 %ifdef OS88_BIGVOL
 dsk_lbahi:   dw 0                ; the HIGH word of the next transfer's LBA
                                 ; (SPEC.md 18.7.5): one-shot, armed by a data
@@ -7307,7 +7330,9 @@ dsk_rah_serve:
 ;
 ; **The read re-enters `dsk_xfer`**, with `[dsk_rah_busy]` stopping it caching
 ; its own fill - so no CHS conversion, no retry ladder and no EOT handling of
-; its own.
+; its own. Raised to DSK_RAH_SPEC, it also stops dsk_xfer's ladder after the
+; first failure (SPEC.md 18.95.14): a fill is a guess, and the real read
+; behind a failed one retries for itself.
 ; -----------------------------------------------------------------------------
 dsk_rah_fill:
     push ax
@@ -7409,11 +7434,11 @@ dsk_rah_fill:
 .direct:
 %endif
     mov ax, di
-    inc byte [dsk_rah_busy]     ; ...so this read is not itself cached
-    call disk_read_x
-    dec byte [dsk_rah_busy]     ; (dec leaves CF alone)
+    mov byte [dsk_rah_busy], DSK_RAH_SPEC   ; ...so this read is not itself
+    call disk_read_x            ; cached, and is tried ONCE (18.95.14)
+    mov byte [dsk_rah_busy], 0  ; (`mov` leaves CF alone)
 %ifdef KERN_MEGA
-    pop di                      ; DI = the slot's run: the LBA is in the
+    pop di                     ; DI = the slot's run: the LBA is in the
                                 ; record already and the epilogue restores DI
     jc .out
     cmp byte [dsk_rah_hi], 0
@@ -7470,9 +7495,12 @@ dsk_rah_fill:
 ; -----------------------------------------------------------------------------
 dsk_rah_rdst:
     mov ax, di
-    inc byte [dsk_rah_busy]     ; ...so this read is not itself cached
-    call disk_read_x
-    dec byte [dsk_rah_busy]     ; (dec leaves CF alone)
+    mov byte [dsk_rah_busy], DSK_RAH_SPEC   ; ...so this read is not itself
+    call disk_read_x            ; cached, and is tried ONCE (18.95.14): a
+    mov byte [dsk_rah_busy], 0  ; fill and the prefetch are both guesses.
+                                ; (`mov` leaves CF alone.) The byte is 0
+                                ; here: the cache's gate refuses a fill
+                                ; while anything has raised it
     jc .r
     mov bx, si
 .st:
