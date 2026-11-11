@@ -2569,8 +2569,9 @@ ui_dispatch:
                                 ; window can be destroyed by a command
                                 ; picked from its own bar while the lock
                                 ; was down - and a package's own worker
-                                ; (SPEC.md 20.6) can tear its window down
-                                ; from inst_task_die in that same gap.
+                                ; (SPEC.md 20.6) could tear its window down
+                                ; from inst_task_die in that same gap (until
+                                ; BR-4 posted that teardown to this task).
                                 ; wm_destroy clears the bit under the lock
                                 ; we hold, and only the UI task (us) calls
                                 ; wm_create, so the slot cannot be recycled

@@ -14025,9 +14025,9 @@ property altogether: `app_close_win` takes its task-owned path and sets a
 die flag nobody reads, so the window hides, the instance record never
 frees, and the package's region leaks for the rest of the session (§20.6
 rule 2, §29.2 rule 5). In cooperative mode a worker's teardown latency also
-grows, because `inst_task_die`'s `gfx_lock` may wait a watchdog period
-behind a non-yielding UI-side callback; the window is already hidden by
-then, so this is invisible.
+grows, because the close it posts waits for the UI task's next idle pass
+(§20.6, BR-4); the window is already hidden by then, so this is
+invisible.
 
 ### 8.3 Every slice is filled with 0xCC at spawn, and the shipping kernel does it
 
@@ -23797,12 +23797,12 @@ Sticky App kept 5 KB pinned for the session, reported off the field. The drop
 rule is `desk_drop_x` (`kernel/deskmod.inc`, resident `.cold`, far):
 given a record that is not a widget from here on, it clears that record's
 `IF_DESK` and, when NO record in `inst_tab` carries `IF_DESK`, calls
-`mod_drop MOD_DESK`. Five callers:
+`mod_drop MOD_DESK`. Five callers, all on the UI task:
 
 | caller | why there |
 |---|---|
 | `app_close_win`'s task-less branch | a widget's close, normally: a `STIK_DESKONLY` build (kern_big's) hires no worker |
-| `inst_task_die`, under the gfx lock | a Sticky App on its worker arm (`os88stik.inc`'s `stik_painted`), whose record is freed on that worker |
+| `app_close_now`'s `.dying` arm (the task-less branch's tail) | a Sticky App on its worker arm (`os88stik.inc`'s `stik_painted`), once the worker has left: it posts its close and the UI task frees the record (§20.6, BR-4). It was `inst_task_die`, on that worker, until BR-4 - the one drop that ran off the UI task |
 | step 9, for a launch whose window is NOT `WF_DESK` | an `OS88_F_DESK` package that came up titled, so step 5's load is spent |
 | `ld_unreserve` | a launch that failed after step 5 loaded the image |
 | `ld_alloc`'s region refusal | `mem_claim_hi_x` refused after `desk_need` loaded the module: DI is the unpublished record, `IF_DESK` still clear, so a near-full heap is not left 5 KB shorter. A full `inst_tab` keeps it: every record is live, and a live widget holds it anyway |
@@ -23810,9 +23810,10 @@ given a record that is not a widget from here on, it clears that record's
 **"Any record", not "any live record"**, and `ld_alloc` marks an
 `OS88_F_DESK` launch's record `IF_DESK` as soon as its region is claimed,
 still unpublished. The entry proc runs with the gfx lock FREE (§20.2), so a
-widget's worker dying mid-launch would otherwise drop the image between step
-5's load and the entry proc's MAKE - or while the UI task is inside
-`dkd_verb`. With the mark, the launch in flight is a widget to the scan.
+widget closing while another launches would otherwise drop the image between step
+5's load and the entry proc's MAKE. Every drop runs on the UI task since
+BR-4 (§20.6), so none can land while the UI task is inside `dkd_verb` or
+its lock-free `DKD_HOVER` call. With the mark, the launch in flight is a widget to the scan.
 Every free path clears its own record's bit, so a stale one cannot pin the
 image; `inst_alloc` zeroes a reused record anyway. No entry calls anything
 that can destroy a window, so the image is never freed under its own code.
@@ -25693,8 +25694,8 @@ none, ZF = none, BX = SI; every other register kept) is the only place a
 handler is found. It reads `W_CLASS` through the kernel's DS, then the class
 through W_SEG, compares the slot against the length and loads it. **It tests
 `W_FLAGS` bit 0 first**: a record freed while the caller waited on the gfx
-lock - a dying worker's `inst_task_die` destroys its window and frees its
-region under the lock - has no handler, so the content click, the right
+lock - a teardown destroys its window and frees its region under the lock
+(a dying worker's own, in `inst_task_die`, until BR-4) - has no handler, so the content click, the right
 click, the drag edge, the timer and the wake all re-test liveness in one
 place (big-review BR-28; the timer pass's and the wake's own copies of the
 test were dropped). Kernel windows' classes are `.text` tables beside their
@@ -27799,9 +27800,9 @@ consequences, both binding:
   `fm_oncmd` command able to destroy the window (Close Window, Restart) is
   *deferred* through `ui_post_cmd` and drained in step 3 — the same task,
   after `ui_dispatch` has returned — so no kernel window dies inside that
-  gap on its own. But a package's worker task can: `inst_pkg_alive` →
-  `inst_task_die` destroys its own window from another task entirely, and
-  `[menu_win]` may name it. The check is sufficient because `wm_destroy`
+  gap on its own. But a package's worker task could: `inst_pkg_alive` →
+  `inst_task_die` destroyed its own window from another task entirely until
+  BR-4 (§20.6), and `[menu_win]` may name it. The check is sufficient because `wm_destroy`
   clears the visible bit under the gfx lock and `.app` re-reads it *after*
   taking that same lock, and because only the UI task calls `wm_create` —
   so the slot cannot have been recycled behind us while we are the UI task
@@ -30545,10 +30546,12 @@ that wants to be poked once, shortly, and then left alone.
 **`ui_timer_pass` tests the record twice: once to find a due timer, and
 again after `gfx_lock` returns, before the handler is called.** The first
 test is what makes the walk cheap; the second is what makes it safe,
-because `gfx_lock` can BLOCK - and the holder it waits on may be a package's
-dying WORKER. `inst_task_die` destroys the window under the lock
-(`inst_unwin`, `wm_destroy` writing `W_FLAGS` = 0) and frees the region the
-moment it lets go (`mem_free_rec`). The pass resumed and called the handler
+because `gfx_lock` can BLOCK - and the holder it waits on was, until BR-4
+(§20.6), a package's dying WORKER, whose `inst_task_die` destroyed the window
+under the lock (`inst_unwin`, `wm_destroy` writing `W_FLAGS` = 0) and freed
+the region the moment it let go (`mem_free_rec`). A worker posts its close
+to the UI task now; a driver or a mega fault-kill holding the lock still
+can stand there. The pass resumed and called the handler
 anyway, through a `W_SEG` that names memory the heap had already got back:
 a wild far call. The handler word is read again under the lock for the same
 reason - a record re-used meanwhile is another window's, and its
@@ -32938,8 +32941,9 @@ onkey. Kind behavior:
   lengths cost nothing. No onkey. Singleton (cap 1).
 
 A package's worker reaches §29's close protocol — the UI task sets I_STATE = 2
-and hides, the task notices at its next wake and tears itself down through
-`inst_task_die` → `task_exit` — through `OSAPI_TASK_ALIVE`, whose whole job is
+and hides, the task notices at its next wake, posts the close and leaves
+through `inst_task_die` → `task_exit`, and the UI task tears down (BR-4) —
+through `OSAPI_TASK_ALIVE`, whose whole job is
 to be the worker's "next wake" check; the latency bound is whatever the
 worker's own sleep is, which is why §20.6 rule 2 makes the call mandatory
 once per outer-loop iteration. The Bounce package (§112) is the worked
@@ -46549,8 +46553,9 @@ OSAPI_TASK_SPAWN         in AX = near entry inside the package image, BX =
                          refused, else CF=0 and AL = the task slot (§20.6).
 OSAPI_TASK_ALIVE         in BX = the package's own window ptr; lock NOT
                          held. Returns with everything preserved while the
-                         instance lives; otherwise NEVER RETURNS — it tears
-                         the instance down through inst_task_die (§29.4).
+                         instance lives; otherwise NEVER RETURNS — it leaves
+                         through inst_task_die, and the UI task tears the
+                         instance down (§20.6, §29.4).
 OSAPI_WM_CLIP_SET        in BX = the package's own window ptr; lock HELD.
                          Arms the window's visible region for every
                          gfx_*/font_* call until the next gfx_unlock. out
@@ -47849,7 +47854,7 @@ both are instance-lifecycle verbs.
 | 0x0150 | `inst_pkg_spawn` | in AX = near entry point inside the package image, BX = the package's own window ptr (what `wm_create` returned). **Caller holds the gfx lock.** out CF=1 refused and nothing created — BX names no live instance; that instance is not a package (`I_KIND` bit 7 clear); AX is not inside that record's own image (the fence is ES — the caller's
 own segment, put there by the X stub of §20.3 — matching `[I_SPTR]`, plus
 AX < I_SIZE); the instance already owns a task (`I_TASK != 0xFF`); or the task table is full. Else CF=0 and AL = the task slot. Preserves every register except AL and the flags. |
-| 0x0158 | `inst_pkg_alive` | in BX = the package's own window ptr; **called from the worker**, with the gfx lock **NOT** held. Returns with every register **and the flags** preserved while the owning instance is live — and also, unconditionally, when the caller is the UI task (§8: task 0 never exits, so a wrong-context call is refused rather than obeyed). Otherwise **never returns**: it tears the instance down via `inst_task_die` (gfx_lock, `wm_destroy`, gfx_unlock, `mem_free_rec` — every heap claim, region included (§50.4) — then `task_exit` with BX = the record, which frees the record and the task slot inside one IF=0 window). |
+| 0x0158 | `inst_pkg_alive` | in BX = the package's own window ptr; **called from the worker**, with the gfx lock **NOT** held. Returns with every register **and the flags** preserved while the owning instance is live — and also, unconditionally, when the caller is the UI task (§8: task 0 never exits, so a wrong-context call is refused rather than obeyed). Otherwise **never returns**: the worker leaves via `inst_task_die` — `I_TASK` ← 0xFF, its window's close request posted (`wm_close_req`, §75.2), `task_exit` with BX = 0, all inside one IF=0 window — and ui_task's close pass tears the instance down on its own stack (`app_close_now`: `toast_owner_gone`, `inst_rel_rec`, `wm_destroy`, `mem_free_rec` — every heap claim, region included (§50.4) — `desk_drop_x`, `I_STATE` ← 0). |
 
 `inst_wchk` (module-internal, in BX; out CF=1 if BX is not a
 record-aligned pointer inside `wm_wins`) fences both. These are the first
@@ -47899,10 +47904,39 @@ at a different base, so the caller's relocated entry is not inside it.
 **The invariant everything rests on.** Once `I_TASK != 0xFF`,
 `app_close_win` can only take its task-owned path: `I_STATE ← 2` plus
 `wm_hide`. It frees nothing — not the record, not the window slot, not the
-region. The task-less path, the only other place the UI task frees a
-record, is unreachable. **So while a worker exists, only the worker's own
-`task_exit` frees its instance record**, and the worker only reaches
-`task_exit` through `OSAPI_TASK_ALIVE`. Everything below is a corollary.
+region. The task-less path, the only place the UI task frees a record, is
+unreachable. **So while a worker exists, nothing frees its instance
+record**, and the worker only stops existing through `OSAPI_TASK_ALIVE`.
+Everything below is a corollary.
+
+**The worker LEAVES; the UI task tears down (big-review BR-4).** The worker
+does not run the teardown. `inst_task_die` writes `I_TASK` ← 0xFF, posts its
+bound window's close request (`wm_close_req`, the §75.2 bit a slot) and
+`task_exit`s with **BX = 0, no release byte** — the `.orphan` precedent —
+and the three run in **one IF=0 window** (a `cli` ahead of them; `task_exit`
+switches away without ever re-enabling), so the UI task cannot see
+`I_TASK = 0xFF` while the task that wrote it still runs. ui_task's close
+pass (§75.2) then reaches `app_close_now`, whose **`.dying` arm** takes a
+record at `I_STATE` 2 with `I_TASK` = 0xFF exactly as it takes a task-less
+record at 1: `toast_owner_gone`, `inst_rel_rec`, `inst_unwin` (the window,
+then the region's unbound others), `mem_free_rec`, `desk_drop_x`,
+`I_STATE` ← 0, under the lock and **on the UI task's stack**. A record still
+at 2 with its worker in it is re-hidden, as before. Until BR-4 the worker
+ran all of that itself, under `gfx_lock`, on its own slice: the destroy's
+repaint ends in `wm_dock_under` and `menu_draw_bar`, which can far-call
+**another package's** `W_PAINT` for a window over the dock strip, and a
+128-byte slice (Bounce's, §8.7.2) keeps 64 bytes after its interrupt floor,
+so a close could end in §8's STACK OVERFLOW panel; `desk_drop_x` dropped
+`DESK.DRV` from a worker while the UI task might be in its lock-free
+`DKD_HOVER` call; and the worker's claims could not compact. `I_STATE` is
+left as the worker found it: 2 after a close or a kern_mega fault-kill
+(`mega_fkill` sets it), 1 when ALIVE was handed a BX that is not its own
+window — and the 1 takes `app_close_now`'s ordinary task-less path to the
+same tail. On kern_mega's fault-kill the worker enters `inst_task_die` on
+the stack that faulted, so nothing deep runs there either. Price: kern_big
+`.text` −14, kern_small −8 (the worker's 31 bytes become 16, the `.dying`
+arm is +2, and kern_big's `app_close_win` parity form, the byte-longer
+`jnc`/`ret`, went with it — `t_hotpar`).
 
 **The liveness question and the teardown identity are asked of different
 things, deliberately.** ALIVE asks about BX, per the ABI, but takes the
@@ -47921,13 +47955,17 @@ worker to someone else's record" impossible.
 
 Two teardown corollaries, both about not trading a crash for a leak:
 
-- **The record is released even when it has no window.** `I_WIN = 0` (a
-  corrupt table; not otherwise reachable) means there is nothing to
-  `wm_destroy` — `wm_destroy` with BX = 0 would zero the cold-entry `jmp` at
-  `0800:0000` — but the record itself is real, so the exit still passes it
-  to `task_exit` as the release byte. Only a `T_INST` outside the table
-  exits with no release byte at all, the `sbl_refill_task` precedent
-  (§34.5).
+- **A worker's record always has a bound window**, so its close has a slot
+  to post. `inst_pkg_spawn`'s fence wants a live window the record owns,
+  and `I_WIN` is written only by `inst_bind_win` and cleared only by the
+  teardowns, which a record with a worker never takes. The `I_WIN = 0` leg
+  this routine used to carry for a corrupt table is gone with the teardown
+  it guarded (BR-4). A package that destroys its OWN bound window with
+  `OSAPI_WM_DESTROY` breaks the record's binding and is outside the
+  contract: its close is posted to a dead slot and spent unread, and the
+  record leaks (before BR-4 the worker destroyed whatever then held the
+  slot). A `T_INST` outside the table exits with no release byte and posts
+  nothing, the `sbl_refill_task` precedent (§34.5).
 - **The UI task is never exited.** Task 0's `T_INST` is a hard 0xFF, so a
   package that calls ALIVE from a *window callback* with a stale BX would
   otherwise reach `task_exit` on slot 0 — and §8's `task_exit` rests on task
@@ -47964,9 +48002,10 @@ Two teardown corollaries, both about not trading a crash for a leak:
    on `gfx_lock` in *both* scheduler modes — a livelock the watchdog cannot
    break (§8.2).
 4. **`gfx_lock` is not reentrant.** Calling `OSAPI_TASK_ALIVE` while
-   holding it deadlocks, because `inst_task_die` takes the lock: the
-   machine keeps scheduling, but nothing ever draws again and the cursor
-   never returns. `gfx_lock` records its owner (`gfx_lock_own`) but does not
+   holding it wedges the machine: a dying worker leaves holding it (since
+   BR-4 `inst_task_die` takes no lock, and gives none back), and the close
+   it posted waits on that lock with every other draw — the machine keeps
+   scheduling, but nothing ever draws again and the cursor never returns. `gfx_lock` records its owner (`gfx_lock_own`) but does not
    consult it when taken, so there is no kernel defence — the same reason a `W_PAINT` proc has always been
    forbidden to take it.
 5. **Re-check visibility under the lock, then set a clip.** Before
@@ -52638,11 +52677,11 @@ on entry. Steps:
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy, `mem_free_rec`
 (the region with every claim), then I_STATE ← 0 frees the record. With a
-§20.6 worker it is the die-flag path, and the worker's next
-`OSAPI_TASK_ALIVE` runs `inst_task_die`: `mem_free_rec` on the worker, then
-`task_exit`'s release byte frees the record and the task slot inside one
-IF=0 window (§29.2 rules 2 and 7). Identical effect, different
-task and different fence. `mem_free_rec` (§50.2) returns every heap claim
+§20.6 worker it is the die-flag path: the worker's next
+`OSAPI_TASK_ALIVE` runs `inst_task_die`, which posts the close and leaves,
+and the posted close takes the same task-less teardown on the UI task
+(§29.2 rules 2 and 7; BR-4). Identical effect, one task and one fence -
+it ran on the worker until BR-4. `mem_free_rec` (§50.2) returns every heap claim
 the instance held — that is what makes
 `OSAPI_MEM_CLAIM` safe to use without a teardown hook. The Task Manager's
 RAM readout sums package records' I_SIZE under one cli (§28) and no longer
@@ -69858,14 +69897,14 @@ without its twin, which is the standing arrangement `MAX_TASKS`, `INST_MAX` and
    store, which must be the LAST write when creating an instance (the
    task_spawn precedent, §8).
 2. **Free points**: task-less instances are freed (I_STATE ← 0) by the UI
-   task under the gfx lock (inside `app_close_win`); task-owned instances
-   are freed by `task_exit`'s release byte — interrupt-atomically, and
-   simultaneously with the task slot (§8). **Both apply to package
-   instances**, which since §20.6 can be on either side: for a package
-   either free point also frees its region (rule 7), so a worker-owning
-   package's region is released on its own worker, by `inst_task_die`'s
-   `mem_free_rec` after the lock is given back and just before `task_exit`,
-   not from the UI task under the lock.
+   task under the gfx lock (inside `app_close_win`); a task-owned instance
+   is freed the same way once its task has left — the task writes
+   `I_TASK` ← 0xFF, posts its window's close and `task_exit`s with no
+   release byte in one IF=0 window, and `app_close_now`'s `.dying` arm frees
+   it (§20.6, BR-4). `task_exit`'s release byte remains for any other task
+   that owns a record and passes it. For a package the free also frees its
+   region (rule 7), so a worker-owning package's region is released on the
+   UI task under the lock, never on its own worker.
 3. **Lock-held readers** (dock, wm paint paths) may only dereference
    I_WIN/I_ICON/I_NAME of records read as I_STATE = 1 *during the same
    lock hold*; records read as I_STATE = 2 (dying) must be skipped.
@@ -69954,26 +69993,26 @@ its own (Hibernate's follows it on kern_big):
 | `inst_set_name_x` | in DI = record, **ES:SI** = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Byte I_NAME+15 is always 0 and the tail after a short name is NUL-padded by the same 15-step loop. Safe on a package header's 16-byte name field. The DS-relative `inst_set_name` was a thunk with one caller and is gone (kernel size pass 9): `app_launch` sets ES = DS and calls this. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
 | `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance or window table full, or the kind at its cap — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → the template's x/y cascaded +16·s in place, put back after → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → gfx_lock, wm_show, gfx_unlock. (It spawned a kind's `KD_TASK` here, with a rollback for a full task table, until §14.8 left no kind with a task; a package's worker is its own to spawn, §20.6.) |
-| `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, `mem_free_rec`, I_STATE ← 0 — for a package instance `mem_free_rec` is what frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake — and for a package instance that took a §20.6 worker, `inst_task_die`'s `mem_free_rec` frees the region and `task_exit`'s release byte the record. A package instance reaches this second branch exactly when it owns a worker. |
+| `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, `mem_free_rec`, I_STATE ← 0 — for a package instance `mem_free_rec` is what frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task leaves at its next wake and posts the close again (`inst_task_die`), and that close finds I_STATE = 2 with I_TASK = 0xFF and takes the **`.dying` arm** into the task-less branch's tail - the teardown above, on the UI task (§20.6, BR-4). I_STATE = 2 with a task still in it → wm_hide (idempotent). A package instance reaches the task-owned branch exactly when it owns a worker. |
 | `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
-| `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: `inst_rel_rec`, `toast_owner_gone`, gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, `inst_sweep_seg`, gfx_unlock, `mem_free_rec`, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). **I_WIN = 0 is a case it answers itself** — the destroy is skipped and everything else runs, because `wm_destroy` with BX = 0 would zero the cold-entry `jmp` at 0800:0000 — so `inst_pkg_alive` has one leg where it used to carry a second copy of this routine. Reached from Timer's and Bounce's own loops (§14) and, for packages, from `inst_pkg_alive` (§20.6). |
+| `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**, and **tears nothing down**: `cli`, I_TASK ← 0xFF, `wm_close_req` on I_WIN (never 0 for a worker's record, §20.6), then `jmp task_exit` with BX = 0 — one IF=0 window, so the UI task's close pass, which does the teardown on its own stack, cannot run while this task does (BR-4). Until BR-4 it ran `inst_rel_rec`, `toast_owner_gone`, gfx_lock, `inst_unwin`, `desk_drop_x`, gfx_unlock and `mem_free_rec` on the worker's slice and passed the record as `task_exit`'s release byte. Reached from `inst_pkg_alive` (§20.6) and from kern_mega's fault-kill of a worker (`mega_fkill`, on the stack that faulted). |
 | `inst_wchk` | module-internal (§20.6). in BX = an untrusted window ptr; out CF=0 if BX lies inside `wm_wins`, is record-aligned and is owned by a live (I_STATE 1) instance, with DI = that record; CF=1 otherwise. Clobbers DI and the flags. The fence in front of `inst_of_win` for package-supplied pointers, whose `div cl` would otherwise fault. |
 | `inst_pkg_fence` | module-internal (§20.6, §53.1). in AX = a near entry offset, BX = an untrusted window ptr, ES = the caller's DS; out CF=1 refused, or CF=0 and DI = the instance record. `inst_wchk`, `inst_of_win`, I_STATE = 1, I_KIND bit 7, `ES == I_SPTR`, `AX < I_SIZE`. Clobbers DX (the ES scratch) and DI; both callers write DX immediately after it, which is why the scratch costs no bank. Written out twice until size pass 2 — `inst_pkg_spawn` below and `fsx_run` (§53.1), whose copy carried the comment "the fence is `inst_pkg_spawn`'s, verbatim". `inst_pkg_spawn`'s own `I_TASK = 0xFF` test is NOT part of it and now runs after it rather than between the I_STATE and I_KIND arms; every arm answers the same CF=1 with nothing changed, so the order is not observable. |
 | `inst_pkg_spawn` | a door cell (§20.6). in AX = near worker entry, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **ownership fence** rejects it — the record must be a package (I_KIND bit 7) and the caller's segment (ES, the stub's stamp) must be I_SPTR with AX < I_SIZE, which is what ties the spawn to the *calling* instance — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, DX = instance index, off `inst_fhome_idx` — the one place that `(record − inst_tab) >> 5` lives), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
-| `inst_pkg_alive` | API slot 0x00E1 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 0800:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released — that case is `inst_task_die`'s own guard now rather than a second copy of it here, which also means such a record's toast goes with it like any other's. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
+| `inst_pkg_alive` | API slot 0x00E1 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns; the record is closed whatever BX said, by the close it posts. T_INST ≥ INST_MAX exits straight to `task_exit` with BX = 0 and posts nothing — there is no record — the `sbl_refill_task` precedent (§34.5). |
 | `inst_launch_post` | no input: one atomic byte store of `KIND_FILES`+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13), which since §14.8 is the Disk window's New Window alone, so the kind is a constant (kernel size pass 13: it took AL = kind and stored a word while the Builtins menu posted the Timer and Bounce through it). Rapid double posts coalesce. |
 
 **Sound teardown (§34.3, Phase 1).** Both free points release the
 instance's sound grants inside the teardown window they already own:
 `app_close_win`'s task-less path calls `snd_release_inst` (in: AL =
-instance index) before its final `I_STATE ← 0` store, and `inst_task_die`
-calls it before `task_exit` — so tone ownership, FM channel bits, stream
+instance index) before its final `I_STATE ← 0` store — a worker's close
+included, which ends in that path since BR-4 (§20.6) — so tone ownership, FM channel bits, stream
 ownership and staging grants (§34) join the window, the task slot and the
 package region on the list of what teardown must free. Closing a live
 stream ends its refill task. A closed package can never leave a tone
-droning or a dangling SB stream — including a worker-owning one, which
-rides `inst_task_die`'s call to the same routine, so a package with a
+droning or a dangling SB stream — including a worker-owning one, whose
+close ends in the same call once the worker has left, so a package with a
 worker is safe to close mid-tone.
 
 #### 29.4.1 At a kind's cap: a singleton fronts, anything else refuses
@@ -70531,7 +70570,9 @@ dying record to be offered a menu.
 
 **A record pointer does not survive the tracker; a slot does.** `menu_popup`
 holds the button and `task_yield`s (§12.4), so a package worker can reach
-`inst_task_die` and free the very record the menu is about. `dock_rclick`
+`inst_task_die` and leave the record the menu is about (the UI task frees
+it at its next close pass since BR-4, §20.6: after this menu, not during
+it - the re-test below stays). `dock_rclick`
 banks the **slot index**, re-resolves it with `inst_ptr` after the popup
 returns and re-tests `I_STATE` = 1 before touching anything. Nothing can
 refill the slot in that window — `inst_alloc` runs on the UI task, which is
@@ -86489,8 +86530,9 @@ one here.** A package's second window is never bound to its instance record:
 only the window the entry proc returns goes through `inst_bind_win` (§21), so
 `wm_owner` says nothing owns it, it gets no dock tile and no Task Manager row,
 and there is no `OSAPI_WM_DESTROY` for the package to clean it up with. It is
-*safe*, though: every teardown site — `app_close_win`'s task-less branch,
-`inst_task_die`, the winless worker death and the loader's abort — runs
+*safe*, though: every teardown site — `app_close_win`'s task-less branch
+(a worker's close ends there too since BR-4, §20.6), `mega_fkclose` and the
+loader's abort — runs
 `wm_destroy_seg` over the dying region's segment **before** the region is
 freed, destroying every window whose `W_SEG` stamp names it. So an extra window can never outlive the segment its
 callback procs live in — it just makes a poor citizen of the ones that manage
@@ -101124,9 +101166,10 @@ Neither is a boot failure.
 compaction, which holds `[sch_lock]` across its plan and its moves with
 interrupts as the caller had them, and disables them only to move a driver
 image (§66.3, §66.6.3.1). Claims are
-made from the UI task in practice, but `mem_free_owner` runs on a dying
-package's own worker task inside `inst_task_die` (§29.4), so the two really
-can meet.
+made from the UI task in practice; `mem_free_owner` ran on a dying
+package's own worker task inside `inst_task_die` until BR-4 (§20.6) moved
+that teardown to the UI task, and a driver verb can still claim from a
+worker, so the two really can meet.
 
 ### 50.2.1 The granule: `MEM_GRAN`, and the doors that can ask for less than a KB
 
@@ -102246,9 +102289,10 @@ be silent.
 
 ### 50.4 Teardown
 
-`mem_free_rec` sits beside `inst_rel_rec` at all three §29.4 teardown
-sites — `app_close_win`'s task-less path, `inst_task_die`, and
-`inst_pkg_alive`'s window-less case — and releases every claim the dying
+`mem_free_rec` sits beside `inst_rel_rec` at the §29.4 teardown —
+`app_close_win`'s task-less path, which a worker's close ends in too since
+BR-4 (§20.6; `inst_task_die` and `inst_pkg_alive`'s window-less case were
+the other two sites) — and `mega_fkclose`, and releases every claim the dying
 instance holds. (`inst_rel_rec` is the sound release and the extended-memory
 one as one call: they were always adjacent and in that order at all three, and
 each separately converted the same record pointer into the same slot. It is
@@ -121097,9 +121141,10 @@ another task's stack would move that claim under it, and a shed would free
 it. §20.6 rule 7 says a worker may not claim, but nothing enforces it, and
 two non-UI paths really do reach the allocator:
 
-- **a dying worker**: `OSAPI_TASK_ALIVE` → `inst_task_die` → `wm_destroy`'s
-  repaint → `wm_su_bank` → `wm_su_take` → `mem_claim`, banking the raise
-  caches of the windows the closing one uncovered;
+- **a dying worker**, until BR-4 (§20.6): `OSAPI_TASK_ALIVE` →
+  `inst_task_die` → `wm_destroy`'s repaint → `wm_su_bank` → `wm_su_take` →
+  `mem_claim`, banking the raise caches of the windows the closing one
+  uncovered. The repaint runs on the UI task now;
 - **Fractal's worker**: `OSAPI_MEM_REGROW` on its row cache (§28's precedent
   for a growing cache), which can shed.
 

@@ -382,8 +382,9 @@ wm_strseg:
 ;
 ; **AND THE RECORD IS ASKED WHETHER IT IS STILL A WINDOW** (BR-28,
 ; synth/bugs.md): a content click, a right click and a drag read the handler
-; before the lock, and the lock can wait on a dying worker that destroys this
-; record and frees its region (inst_task_die); the timer pass and the wake
+; before the lock, and the lock can wait on a teardown that destroys this
+; record and frees its region (a dying worker's own, in inst_task_die, until
+; BR-4; a command or a posted close still can); the timer pass and the wake
 ; asked the same question in place. One test here answers all of them, and
 ; each site that held its own copy dropped it. wm_destroy zeroes W_FLAGS, so
 ; bit 0 is the answer.
@@ -3078,7 +3079,7 @@ wm_destroy:
 ; wm_create more windows than the one it returned to the loader (SPEC.md
 ; 20.2), and those carry no instance record - only the W_SEG creator stamp
 ; ties them to the region. Called with the dying instance's I_SPTR
-; (app_close_win / inst_task_die / the winless worker death) and with an
+; (app_close_win, a worker's close included, and mega_fkclose) and with an
 ; aborted or dying load's region segment, always BEFORE the region is freed:
 ; an orphan still carries W_SEG/W_DISP into it, and the next repaint would
 ; far-call whatever claims that memory. main enforced this with the wm_wseg

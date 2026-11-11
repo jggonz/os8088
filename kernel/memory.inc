@@ -26,8 +26,10 @@
 ; Concurrency (binding): the table is read and written under one
 ; pushf/cli..popf window per operation, the task_spawn precedent (SPEC.md
 ; 8). Claims are made from the UI task in practice - window callbacks,
-; kmain, the loader - but mem_free_owner runs on a dying package's own
-; worker task inside inst_task_die, so the two really can meet.
+; kmain, the loader - and mem_free_owner ran on a dying package's own
+; worker task inside inst_task_die until BR-4 posted that teardown to the UI
+; task (SPEC.md 20.6); the window stays, for driver verbs that claim from a
+; worker.
 ; =============================================================================
 
 %ifdef KERN_SMALL
@@ -1093,10 +1095,10 @@ mem_claim_x:
                                 ; UI task holds in a register while it is
                                 ; pre-empted (an ONWAKE handler runs with no
                                 ; gfx lock at all), and a shed could free one.
-                                ; The callers this reaches are a dying
-                                ; worker's repaint banking raise caches
-                                ; (inst_task_die), which declines a copy -
-                                ; never a wrong pixel - and a driver verb that
+                                ; The callers this reaches are a worker's
+                                ; own drawing banking raise caches (a dying
+                                ; worker's repaint was one until BR-4), which
+                                ; declines a copy - never a wrong pixel - and a driver verb that
                                 ; claims from a worker, which is first fit
     call mem_compact            ; not one, and a package load loses to nothing
     jnc .retry                  ; - so both are on mem_claim_hi's path too.

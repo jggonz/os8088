@@ -474,8 +474,8 @@ snd_tick:
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
-; Called from both SPEC.md 29.4 teardown paths (app_close_win's task-less
-; path and inst_task_die). Releases the tone channel and flags down a clip
+; Called from the SPEC.md 29.4 teardown (app_close_win's task-less path,
+; which a worker's close also ends in since BR-4). Releases the tone channel and flags down a clip
 ; the instance owns - the whole of what a speaker-only layer can hold. The
 ; release ignores priority: the owner is gone.
 ; -----------------------------------------------------------------------------
