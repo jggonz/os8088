@@ -135,6 +135,12 @@ static int ladder(pdw e)
         if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
         return 1;
     }
+    if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_SLOT && getenv("PDR_XNEEDMEM")) {   /* the decoder's workspace (QA F15) */
+        extern int pdrh_xgrant;
+        if (++g_memasks > 64) { fprintf(stderr, "LADDER: more than 64 memory answers\n"); exit(9); }
+        if (strcmp(getenv("PDR_XNEEDMEM"), "refuse")) pdrh_xgrant = 1;   /* sl_grow: W regrown, the occupant re-INITed */
+        return 1;
+    }
     if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_X8) {      /* blend: the region (PDX8 is linked in) */
         memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
         g_memasks++;

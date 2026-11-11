@@ -564,6 +564,7 @@ static int ovl_save_begin(const char *name, int kind)
             if (pd_fpeekw(pdu_xb, 0) != pdu_xopen.size.lo
                 || pd_fpeekw(pdu_xb, 2) != pdu_xopen.size.hi) {
                 os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
+                pdu_stale = 1;          /* QA F31: the view reads it no more */
                 ovl_savefail(name, PDE_CHANGED);
                 pdu_status_paint();
                 return 1;
@@ -653,6 +654,8 @@ static int ovl_save_done(unsigned err)
                 : err == PDE_LIMIT && err_d == 18 ? "forms or scripts."
                 : pdu_errtext(err), sizeof(pdu_line));
         pdu_wsay(pdu_line);
+        if (err == PDE_CHANGED)
+            pdu_stale = 1;              /* QA F31: the writer found it moved */
         if (reopen)
             pdu_reopen_begin();
         return 1;
