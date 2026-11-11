@@ -613,12 +613,12 @@ static void test_grow(void)
     CHECK(pdu_ed_count() == 1 && (int)r.text_len == n, "...the last text that fit (%u)", r.text_len);
     /* more than one write stages: off, said, the document unharmed */
     fresh();
-    for (i = 0; i < 38; i++) {
+    for (i = 0; i < 60; i++) {         /* O9's 8 KiB store: 60 x (52 + 85) > 8 KiB */
         mk(PDA_NOTE, 0, 1, 1, 90, 90);
-        pdu_ed_new(&E, tx, 200, (pd_pt *)0, 0);
+        pdu_ed_new(&E, tx, 85, (pd_pt *)0, 0);
     }
     idle();
-    CHECK((rc_f & RCF_OFF) && pdu_ed_count() == 38, "a store too big for one write: off, said");
+    CHECK((rc_f & RCF_OFF) && pdu_ed_count() == 60, "a store too big for one write: off, said (%d)", pdu_ed_count());
 }
 
 static void test_pages(void)

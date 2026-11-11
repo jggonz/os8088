@@ -6,7 +6,7 @@
 Compiles apps/pagedesk/hosttest/pdu_ed_test.c with the host's `cc` - it
 #includes apps/pagedesk/pduedit.c and pduundo.c, the SAME files the package
 compiles, over pdmath.c's real-mode arena - and runs it: every annotation kind
-in 13.1.1's layout, the limits (128 records, 1,024 bytes of text, the heaps),
+in 13.1.1's layout, the limits (64 records - O9 -, 1,024 bytes of text, the heaps),
 undo and redo of create/set/move/delete/text/points and the typing session
 against snapshots, coalescing, the 64-command history and its announced
 truncation, the save point, source annotations, page-operation deltas, and 40

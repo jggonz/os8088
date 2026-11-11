@@ -779,6 +779,15 @@ void os88_onwake(void *win)
         pdu_idle_ovl(1);
 
     pdu_rc_wake();                      /* recov */
+    /* 16.1: the reserve is held after every step. A step ends quiet - no
+     * job, no page owed - and an occupant kept past it (S + W, up to ~78
+     * KiB) is what took the 640 KiB XT under 32 KiB after every step once
+     * the ninth claim stopped refusing it: give it back then; the next
+     * NEEDMOD loads it again (the XMS/EMS copy, or the floppy). A parked
+     * Replace's PDWRT holds state and leaves by pdu_wrt_out alone */
+    if (pdu_job == J_NONE && pdu_socc && pdu_socc != PDU_OCC_WRT
+        && !pdu_rwant && !pdu_pgwant && !pdu_argp && pdu_unclaimed_kb() < 32)
+        pdu_slot_free();
     if ((pdu_job != J_NONE && !pdu_au_waits()) || pdu_pgwant || pdu_argp
         || (!pdu_ovhold && pdu_nav_owed()))
         pdu_kick();                     /* a job waiting for the user's key does not spin (F4) */

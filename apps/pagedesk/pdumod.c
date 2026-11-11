@@ -73,7 +73,7 @@ static struct pdxb_init pdu_xinit;
  * every document: A cannot grow in place once PDENG holds its rows */
 /* the edit store (QA F26, the lead's claim-B ruling) is NOT carved: it is a
  * claim of its own, taken at the FIRST edit (ovl_ed_need, pduedit.c), so a
- * document only read leaves its 16 KiB to an XT's font occupant. Its row is
+ * document only read leaves its 8 KiB (O9) to an XT's font occupant. Its row is
  * 0 KiB here, and pdu_dc[PDU_DC_EDITS] is the claim's base once it is held */
 const unsigned pdu_dckb[PDU_NDC] = { 16, 11, 11, 12, 29, 0,
                                             0, 4, 1, 4, 2, 2 };
