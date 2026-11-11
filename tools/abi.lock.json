@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c3fc6e3e13b55af13e0b5eac6a40aa8ed467ff559bd50654479c827a296031da",
+  "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "e525a39b56edeb56b4f7c0cf5fb738304ec24afcaa94d76c27adf287d8d874db",
+  "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2175,6 +2175,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of megacmp (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
    "to": 14
   }
  ]

@@ -5158,7 +5158,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | symbol          | in                                   | effect                                |
 |-----------------|--------------------------------------|---------------------------------------|
 | `gfx_color`     | byte variable                        | current drawing color                 |
-| `gfx_pixel`     | CX=x, DX=y                           | plot pixel                            |
+| `gfx_pixel_n`   | CX=x, DX=y                           | plot pixel; clobbers AX, BX (§5.7.3: the cell's entry - the preserving `gfx_pixel` is gone) |
 | `gfx_hline`     | AX=x1, BX=x2, DX=y                   | horizontal line, inclusive            |
 | `gfx_vline`     | AX=x, BX=y1, DX=y2                   | vertical line, inclusive              |
 | `gfx_fill`      | AX=x1, BX=y1, CX=x2, DX=y2           | solid rect, inclusive corners         |
@@ -8228,7 +8228,8 @@ Together those took a `gfx_pixel` from 196 instructions to 158 and a
 `GFX_FILL 64x64` by 14.5%, with the output byte-identical on all three
 adapters and both renderers (PERFORMANCE.md Part 9, Set 3). What is left is
 mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
-push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
+push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract (§5.7.3:
+the LINE cells let theirs go, the rect cells keep it), and
 `vga_rect_setup`'s clipping is the clipping.
 
 Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the
@@ -8368,6 +8369,90 @@ is the byte loop's bus traffic with fewer instructions, so it is never slower.
 Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
 `GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
 `GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
+
+### 5.7.3 The line cells clobber AX..DX — and the rect cells do not, yet
+
+**`OSAPI_GFX_PIXEL`, `OSAPI_GFX_HLINE` and `OSAPI_GFX_VLINE` clobber AX,
+BX, CX and DX** (PKG_FMT 13's round, ABI-BREAK-LIST V1). Every other register
+and DS are kept as before. A package that needs a coordinate after one of
+these calls must save it or load it again. Every caller in the tree was
+changed before the kernel was. `OSAPI_GFX_FILL` and `OSAPI_GFX_FRAME` still
+**preserve every register**, so a fill can still leave its rect in AX..DX for
+the next edge (Solitaire's card face draws its three edges as 1-pixel fills
+for that reason). §5.7.3.2 explains why the rect cells were left alone.
+
+#### 5.7.3.1 What the kernel does with it
+
+The three line cells enter `gfx_pixel_n`, `gfx_hline_n` and `gfx_vline_n`,
+placed between `gfx_fill`'s clipped arm and its entry. Each one is the
+register move that turns its arguments into a 1-pixel rect, followed by a
+**jump** into `gfx_fill` (`gfx_vline_n` falls through into it). The old
+preserving shims saved what they changed and **called** the fill. The new
+entries drop those push/pop pairs and the call/return around the work. The
+saving, PREDICTED from the 8088 timings in PERFORMANCE.md Part 2 and against
+the ~2,300-cycle small call measured in §5.7, is:
+
+| cell | the old shim spent, and the new entry does not | clocks saved a call |
+|---|---|---:|
+| PIXEL | two push/pop pairs, call/ret | ~80 |
+| HLINE | one push/pop pair, `mov bx, cx`, call/ret | ~65 |
+| VLINE | one push/pop pair, call/ret | ~55 |
+
+That is 2.5% to 3.5% of a small line. A package that has to save one
+register around the call pays about 27 clocks of that back. The kernel's own
+callers keep a preserving entry. `gfx_hline` is unchanged.
+`gfx_vline` is now `push cx / call gfx_vline_n / pop cx`, the same
+instructions in two fewer bytes. The preserving `gfx_pixel` was **deleted**.
+Its only kernel caller was `gfx_points`' slow arm, which saves every register
+in its prologue and now calls `gfx_pixel_n` itself, saving ~80 clocks a
+point. The kernel's **far** calls into a line cell have to meet the package
+contract too: `cw_gfx_hline` *is* the HLINE cell (size pass 9), and
+WIN95.DRV, CTRL.DRV (through `os88ui.inc`) and `gfx_b4piece` call these
+cells. Those call sites are checked as well (§5.7.3.3).
+
+#### 5.7.3.2 Why the rect cells keep their registers
+
+V1 as proposed let all five rect cells clobber AX..DX and priced the gain
+at ~120 clocks: the four push/pop pairs of AX..DX in `sw_rect` and
+`vga_solid_rect`. Those pairs are not the cell's. They belong to the shared
+body, which every kernel caller reaches through `GFXCLIP`, `GFXDISP`,
+`VXMONO` and the `.vga` rung, and some kernel code depends on them:
+`gfx_xor_strips` keeps x1/x2 in AX/CX across its four strips, and many
+kernel `gfx_fill` callers keep a register across the call. A body that
+skipped the pairs only for a package would need a second, non-preserving
+path through all four hooks, measured at **~49 bytes on kern_big**. The
+body's exit is also shared, so that second path could drop only the pushes
+(`sub sp, 8` in place of four pushes, followed by the same pops), which is
+**~47 clocks** a package fill. That is too many resident bytes for 2% of a
+call, so it was not taken. The contract stays "preserves every register"
+until a kernel pass audits its own fill callers and the body can stop
+preserving for everyone. Changing the contract after this release would be
+an ABI break.
+
+#### 5.7.3.3 The gate: `tests/unit/t_gfxclob.py`
+
+A missed site gives no error. The next line is simply drawn in the wrong
+place, and only on the cell and build whose body uses that register. So
+the contract is checked **at each call site**. From every call to a line
+cell, in `apps/`, `drivers/`, `tests/`, and the kernel's far calls into
+the cells, the check walks every path forward. It treats AX..DX as
+eight junk half-registers and requires each half to be written before it
+is read. The walk follows:
+
+- fall-through, and both branches of every jump;
+- both arms of every `%if`, with a symbol that this path has already decided
+  kept the same way;
+- calls into near routines;
+- the push/pop stack, so `push ax / call OSAPI_GFX_HLINE / pop ax` is clean;
+- macros, including the routines that `os88ui.inc`'s body macros write;
+- the documented inputs of every later cell;
+- every caller, when a `ret` is reached with junk still live.
+
+When the walk loses sight of a path (an indirect call, a depth limit, an
+unknown macro), it does not fail. `--report` lists every such place, so the
+completeness of the audit is visible. A finding that is not a defect goes
+in `tests/gfxclob.txt` with its reason, and that list only shrinks. Removing
+one fix makes the row fail at the line that reads the clobbered register.
 
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
