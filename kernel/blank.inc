@@ -545,41 +545,8 @@ blk_set:
 ; -----------------------------------------------------------------------------
 blk_relit:
     call menu_force
-    call dock_force
-%ifdef KHP_RELIT
-%ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1     ; TWO DISPLAYS: the other card's desktop is
-    ja .all                     ; wm_paint_all's EXT_DESK, whole
-%endif
-    call wm_fs_vis              ; ...and a fullscreen window still up: its
-    jc .all                     ; walk starts at it (wm_paint_all's .fswins)
-    ; THE WHOLE BAND IS THE DAMAGE (SPEC.md 11.91.7). wm_paint_all draws the
-    ; desktop and then every window back to front WHOLE, so a pixel under the
-    ; top window was written once per layer - seven to eight times over in
-    ; deskbench's scene - and every covered window put its whole content back
-    ; only for the windows above to paint over it. The damage pass draws each
-    ; window where nothing above will (11.3.3's cull, 11.96.15's pieces,
-    ; 11.97's chrome) and dithers only the ground no window holds (11.91.1),
-    ; and its marking needs no vacated rect: [wm_dmg_stwin] is 0 here, so
-    ; every window the rect touches is marked. The bar and the strip are
-    ; forced above and drawn by the pass; a window over the strip owes it
-    ; through wm_dmg_dk as on any pass. AX..DX are the callers': banked.
-    push ax
-    push bx
-    push cx
-    push dx
-    xor ax, ax                  ; x 0 .. the right edge, MBAR_H .. the bottom:
-    mov bx, MBAR_H              ; wm_paint_dmg clamps the far corner onto the
-    mov cx, 7FFFh               ; live screen, and its dither keeps to the
-%ifdef KERN_BIG                 ; bands (wm_dmg_bands), off the dock
-    mov dx, cx
-%else
-    mov dx, 7FFFh               ; a byte longer than `mov dx, cx` ON PURPOSE:
-%endif                          ; kern_small's wm_paint_all and ui_task parity
-    call wm_paint_dmg
-    jmp kret_dx                 ; once a relight: the shared ladder, 3 bytes
-.all:                           ; for 5 (kernel hot-paths pass 1, size)
-%endif
+    call dock_force             ; ...and the world: the damage pass over the
+                                ; whole desktop (SPEC.md 11.91.7)
     jmp wm_paint_all            ; a tail jump: both callers are near (fsx.inc
                                 ; is .text, and kernel.asm's cw_blk_relit is
                                 ; `call blk_relit / retf`), so wm_paint_all's
@@ -743,20 +710,11 @@ ss_open:
 ;
 ; THE DESKTOP IS OWED A FULL REPAINT AND THERE IS NO CHEAPER ANSWER. A session
 ; has drawn over the menu bar, the drive column, the dock and every window, so
-%ifdef KHP_RELIT
-; there is no damage rect to be clever with - the whole band IS the damage
-%else
-; there is no damage rect to be clever with - wm_paint_all IS the damage
-%endif
+; there is no damage rect to be clever with - the whole desktop IS the damage
 ; (PERFORMANCE.md rule 1's one legitimate exemption, because the whole screen
-%ifdef KHP_RELIT
 ; really did change). It is paid once per wake, on the far side of a period
-; measured in minutes - and since SPEC.md 11.91.7 through the damage pass,
-; which writes each pixel about once rather than once per window layer.
-%else
-; really did change). It is ~0.4s on the 5150 and it is paid once per wake, on
-; the far side of a period measured in minutes.
-%endif
+; measured in minutes - and through the damage pass (SPEC.md 11.91.7), which
+; writes each pixel about once rather than once per window layer.
 ;
 ; **AND wm_paint_all ALONE IS NOT ENOUGH**, which is what cw_blk_relit is for
 ; and is worth stating because it looks like it should be. That routine forces

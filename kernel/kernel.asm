@@ -262,7 +262,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
 ; assembles to the body it replaced, byte for byte. kern_mega carries the
-; first eleven: it runs on a 286 or 386, almost always with VGA or EGA, its
+; first ten: it runs on a 286 or 386, almost always with VGA or EGA, its
 ; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
 ; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
 ; decoders' saving is CPU, the same on every medium, and on a hard disk it is
@@ -278,7 +278,6 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_VGABLITP  gfx_blitp's wide rows by words (vga-5)
 ;   KHP_FRAME     gfx_frame's clip questions once a frame (gfxcall-3)
 ;   KHP_FPG       fpg_finish's unarmed unlock answered first (gfxcall-4)
-;   KHP_RELIT     blk_relit by the damage pass: fullscreen exit (wm-4)
 ;   KHP_CAPTION   the title bar's caption: no gap fill on an inactive bar,
 ;                 one font_run_x when unclipped (wm-2, wm-3)
 ;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
@@ -306,7 +305,6 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %define KHP_VGABLITP
  %define KHP_FRAME
  %define KHP_FPG
- %define KHP_RELIT
  %define KHP_CAPTION
  %define KHP_DMGSTALE
  %define KHP_RAISEOL
@@ -6112,7 +6110,7 @@ EXTF_CAPS   equ 4               ;   fsx_caps: DL = window BX's display's kind
 EXT_DISPLAY equ 7               ; wm_display's secondary arm, behind its gate
 EXT_SPAN    equ 8               ; wm_disp_span: registers kept = the primary
 EXT_FSRECT  equ 9               ; wm_fs_setrect's arm: CF = 1 one display
-EXT_DESK    equ 10              ; vid_disp_desk: CF = 1 nothing painted
+                                ; (10: EXT_DESK, retired - SPEC.md 11.91.7)
 EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
                                 ; 13 are the seam cuts, font.inc/vga12.inc)

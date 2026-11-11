@@ -17,8 +17,8 @@
 ; 30.4): a minimized one restores, an ACTIVE one minimizes, any other comes
 ; to the front.
 ;
-; dock_paint runs inside wm_paint_all right after desk_paint, under the
-; caller's gfx lock - windows paint over the dock exactly like they cover
+; dock_paint runs inside the damage pass right after the zones (wm_paint_dmg,
+; and wm_paint_all through it), under the caller's gfx lock - windows paint over the dock exactly like they cover
 ; the desktop icons (SPEC.md 26/30). dock_click is called by the UI task
 ; with no lock held, only after wm_hit declined the click, and takes the
 ; lock itself around wm calls.

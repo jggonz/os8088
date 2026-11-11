@@ -51,14 +51,16 @@ import os88sym  # noqa: E402
 
 # symbol -> the parity of its entry (0 = even, 1 = odd), per kernel. Set at
 # kernel size pass 13's close, every one at an even SHIFT against that pass's
-# base (aedadd25), which is where its loops were measured.
+# base (aedadd25), which is where its loops were measured. wm_paint_all left
+# both lists when its layered walk did (SPEC.md 11.91.7): it is a call into
+# wm_paint_dmg now, with no loop of its own for a parity to price.
 HOT = {
     "big": {
         "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 1, "font_run_x": 1,
         "font_run_cell": 1, "mou_isr": 0, "mou_isr_body": 0,
         "mou_p2_isr": 0, "kbm_isr": 1, "cur_move": 0, "cur_move_1": 1,
         "sch_isr": 1, "sch_switch": 1, "ui_task": 0, "dsk_xfer": 1,
-        "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
+        "dsk_runcap": 1, "dsk_next_clus_x": 0,
         # the VGA rung's busiest bodies, pinned where kernel hot-paths pass 1
         # measured them (docs/plans/khp1/vga.md). The rung starts on a
         # paragraph, so only `.vga` bytes above them can move these
@@ -71,7 +73,6 @@ HOT = {
         "font_run_cell": 0, "mou_isr": 0, "mou_isr_body": 0, "kbm_isr": 0,
         "cur_move": 0, "sch_isr": 0, "sch_switch": 1, "ui_task": 1,
         "dsk_xfer": 0, "dsk_runcap": 0, "dsk_next_clus_x": 1,
-        "wm_paint_all": 1,
     },
 }
 

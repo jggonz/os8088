@@ -1231,7 +1231,7 @@ Bounce was already taking 3.7–4.4% of. The frame RATE cannot move, because
 round that is most of what it buys: `fdlg.inc` joining turned its calls to
 `fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double crossing into a near
 call, and `assoc.inc` joining did the same for `ld_run_name`,
-`files_refresh` and `dskw_stat`. A call that leaves cold code for a resident
+`files_refresh` (since retired, §22.17.1) and `dskw_stat`. A call that leaves cold code for a resident
 *thunk* is a double crossing — out through a `cw_` shim and straight back in
 through the thunk, six segment transitions where a near call would do — so
 when a target joins the set, **its callers inside the set must be pointed at
@@ -19576,7 +19576,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_win_rect`  | in SI = win ptr; out AX,BX,CX,DX = its occupied rect, inclusive, drop shadow included (WF_FULL: no shadow). Clobbers only those four. |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none. Takes no lock, touches no VRAM and reads only `wm_zord`, so a **worker task** may call it — which is what a door cell (§20.3) is for: a package is told when it *gains* the front (`W_ONCLICK`, `W_PAINT`) and never when it loses it, and `W_FLAGS` bit 1 answers *visible*, which a covered window still is. apps/arkanoid pauses on it (§44.8) — together with `menu_owner` (§12.6), which answers the other half: a click on the bare desktop changes the active application without touching `wm_zord`, so this routine correctly reports that nothing moved. |
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
-| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT) — **except** one `wm_covered` answers yes about, which is skipped whole (§11.91). Caller holds gfx lock. |
+| `wm_paint_all` | full repaint: `wm_paint_dmg` over the whole virtual desktop, `(0, 0)` to the far corner (§11.91.7) — the dither where no window stands, every zone, the dock and the menu bar, and every visible window back→front, each drawn only where nothing above it will be. Forces neither the bar nor the strip. Caller holds gfx lock; all registers preserved. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
 | `wm_flag`      | `OSAPI_WM_FLAG`: in BX = win ptr, AH = a W_FLAGS bit number (`WFB_*`), AL = 0 clear / non-zero set. The run-time half of the style word, and the seven flag setters it replaced (§11.104.3). Every register and the flags kept. |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call; **every register preserved**. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through a door cell (§20.3). |
@@ -19789,10 +19789,11 @@ shadow, title bar, boxes or grow box; the content area is the whole frame
 rect, white-filled, then W_PAINT as usual. `wm_content` returns (W_X, W_Y).
 `wm_hit` reports every point as content, so clicks flow to W_ONCLICK and
 keys to W_ONKEY exactly as in a window (the app needs no second input
-model). `wm_paint_all` skips the desktop fill, desk_paint, dock_paint and
-menu_draw_bar whenever `[wm_fs]` names a **visible** window — painting
-chrome under an opaque surface is pure waste and the §12.1 "nothing covers
-the bar" assumption is suspended — and the window loop itself is unchanged.
+model). The damage pass (`wm_paint_dmg`, and so `wm_paint_all`, §11.91.7)
+skips the desktop fill, the zones, dock_paint and menu_draw_bar on display 0
+whenever `[wm_fs]` names a **visible** window — painting chrome under an
+opaque surface is pure waste and the §12.1 "nothing covers the bar"
+assumption is suspended — and the window pass itself is unchanged.
 
 The two drawers wm_obscured does not govern get explicit `[wm_fs]` gates
 (§13): the UI task's unbidden menu-bar clock redraw (step 4) is skipped,
@@ -21496,40 +21497,75 @@ was otherwise exposed — §11.91.3's "several hundred bytes" was for keying the
 marking on REDRAWN regions; this keys it on the vacated rect, which is a rect,
 against occluders that do not move, and is 36 bytes.
 
-#### 11.91.7 A screen given back is the damage pass over the whole band
+#### 11.91.7 "Repaint everything" is the damage pass over the whole desktop
 
-> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_RELIT` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
-
-Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the
-whole desktop, and both reached `wm_paint_all` through `blk_relit`: the dither
-under the bar, every zone, and then every window back to front **whole**. With
-four overlapping windows a pixel under the top one was written once per layer —
-deskbench's fullscreen exit read **7.03 transient pixels per changed one** on
-CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's deskbench table) — and
-every covered window put its whole content back off its cache for the windows
-above it to paint over.
+`wm_paint_all` was a layered walk of its own: the dither under the bar, every
+zone, the dock and the bar, and then every visible window back to front
+**whole**. With four overlapping windows a pixel under the top one was written
+once per layer — deskbench's fullscreen exit read **7.03 transient pixels per
+changed one** on CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's
+deskbench table) — and every covered window put its whole content back off its
+cache for the windows above it to paint over.
 
 None of that is needed to answer "what does the screen look like now", because
-the damage pass already answers it for any rect: `blk_relit` hands
-`wm_paint_dmg` the band, `(0, MBAR_H)` to the far corner (clamped onto the live
-screen there). `[wm_dmg_stwin]` is 0 — nothing was vacated — so every window
-the rect touches is marked; each draws its chrome where nothing above covers it
-(§11.97), its cache in the pieces nothing above covers (§11.96.15) and its
-`W_PAINT` under the cull (§11.3.3); the dither lays only the ground no window
-holds (§11.91.1) and keeps to the bands (§39.16.2.1); the bar and the strip are
-forced first and drawn by the pass, and a window over the strip owes it through
-`[wm_dmg_dk]` as on every other pass. The settled screen is the one
-`wm_paint_all` leaves — the incremental-equals-full property every damage path
-rests on (`tests/dispcorner.py`).
+the damage pass already answers it for any rect. **`wm_paint_all` is now
+`wm_paint_dmg` over `(0, 0)` to `(7FFFh, 7FFFh)`**, a call and its register
+bank. `[wm_dmg_stwin]` is 0 outside a pass — nothing was vacated — so every
+window the rect touches is marked; each draws its chrome where nothing above
+covers it (§11.97), its cache in the pieces nothing above covers (§11.96.15)
+and its `W_PAINT` under the cull (§11.3.3); the dither lays only the ground no
+window holds (§11.91.1) and keeps to each display's band (§39.16.2.1), which
+floors display 0 at `MBAR_H` and stops it above the strip. It forces neither
+the bar nor the strip: a caller whose app drew over them says so first
+(`blk_relit`, hibernation's resume). The settled screen is the one the walk
+left — the incremental-equals-full property every damage path rests on
+(`tests/dispcorner.py`).
 
-**Two cases keep `wm_paint_all`.** A second display (`kern_big`, `[vid_ndisp]`
-above 1): its desktop is `EXT_DESK`'s, drawn whole in that routine and nowhere
-in the damage pass. And a fullscreen window still up (`wm_fs_vis`), whose walk
-starts at the fullscreen window (`.fswins`). Both are tested before anything is
-drawn.
+Every caller takes it: leaving an exclusive bracket (§53.6) and the saver's
+wake (§79.6) through `blk_relit`, a fullscreen window put down (§11.2),
+hibernation's resume (§87), the boot's first desktop (§15), the scheduler-mode
+change (§31.2), the desk-zone fallback (§26) and the API cell. The walk and
+its z-order helper are deleted; `KHP_RELIT`, which put `blk_relit` alone on
+this path on kern_mega, went with them.
+
+**The y origin is 0, not `MBAR_H`**, for the second display: it carries no
+bar, so its top rows are desktop (§39.16.2), and `wm_dmg_bands` gives display
+0 its chrome floor on its own.
+
+**Neither of the two cases that once kept the walk needs it.**
+
+- **A second display** (`kern_big`, `[vid_ndisp]` above 1). The walk painted
+  it through `EXT_DESK`, the other card's ground whole. The damage pass's far
+  corner clamps to `[vid_wm1]`/`[vid_hm1]`, which are the **union** (§39.16),
+  and `wm_dmg_bands` already seeds every display's own band — so the dither
+  covers it and the window marking reaches every window on it. `EXT_DESK`
+  (EXTD.DRV's `vid_disp_desk`) lost its one caller and its slot is retired.
+- **A fullscreen window up** (`wm_fs_vis`). The walk started at that window,
+  skipping everything below it for free. The damage pass marks every window
+  and asks `wm_covered` of each before drawing it, so the windows under the
+  fullscreen one each cost one region pass and draw nothing — a seed and one
+  subtraction per window above it, stopped at the first that empties the
+  list, which the fullscreen window always does. **Measured** on MartyPC's
+  5150/CGA, deskbench's four windows with the front one (Paint) made
+  fullscreen and the repaint forced through `[cp_dirty]`: the fullscreen
+  window's own `wm_draw_win` starts **6.7 ms** after entry — the marking pass
+  1.5 ms, then 1.9, 1.2 and 1.0 ms for the three windows under it, then its
+  own `wm_covered` (0.5 ms, which the walk paid too). Against the walk's
+  ~0.9 ms to the same point that is **~5.8 ms, ~1.5–2 ms a window behind**,
+  on a repaint of **313–462 ms** (cache warm / cold): 1.3–1.9%, and a gate
+  to buy it back would be the walk's `.zscan` again. **And one fix fell
+  out**: under a fullscreen window the pass
+  skipped the dither outright, which is right on display 0 and wrong on a
+  second display the window does not cover (§39.17.1) — a window closing
+  there left its pixels behind. On `kern_big` with two displays it now
+  dithers through `wm_dmg_gray` as on any pass; display 0's band comes out
+  of the region empty, the fullscreen window being one of the windows it
+  subtracts.
 
 Measured on MartyPC's 5150/CGA, deskbench's scene, Paint's fullscreen bracket
-left with `f`: see docs/plans/khp1/wm.md for the figures on each adapter.
+left with `f`, while this was `blk_relit`'s alone: see docs/plans/khp1/wm.md
+for the figures on each adapter (CGA 781 → 629 ms, Hercules 984 → 727, VGA
+1,203 → 706).
 
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
@@ -27863,7 +27899,12 @@ Shut Down... sits immediately below Restart in both kernels. Its modal
 confirmation offers Shut Down and Cancel; Enter confirms, Escape cancels,
 and a mouse button must be pressed and released inside the same control.
 The prompt reminds the user to save their work. Cancel restores the desktop
-and preserves queued package wakes. The confirmation and terminal screen
+and preserves queued package wakes. **It restores it the way any window
+closing does**: the panel is not a window, but it covered one 320 × 96 rect
+and nothing else, so it hands that rect to `wm_paint_dmg` (§11.91) — the
+ground, the zones and every window the rect touches, drawn where it shows. It
+was `wm_paint_all` (the whole desktop) until §11.91.7 made that the same pass
+over a larger rect; there was never more than the rect to put back. The confirmation and terminal screen
 live in CTRL.DRV's `.modu` UI tail, loaded before the desktop is disturbed;
 a missing module uses the Control Panel's existing system-disk refusal.
 
@@ -52693,11 +52734,11 @@ on entry. Steps:
     another format - reads `Wrong os8088 version` on every build, because it
     is the one other refusal a user can act on. The `Bad package` sections elsewhere in this spec
     describe a `LDDIAG` build, or the verdict as it read before the pass.
-    Then draw nothing, with one exception: `LD_EABORT` calls
-    `files_refresh` (§22), the full pass, because an entry proc that
-    declared itself broken may have put pixels anywhere before it did.
-    Every other outcome — success or failure — leaves the poster's window
-    exactly as it was, because posting a load never wrote on it (§22.17).
+    Then draw nothing. Every outcome — success, failure or an entry
+    proc's refusal (`LD_EABORT`) — leaves the poster's window exactly as
+    it was, because posting a load never wrote on it (§22.17), and the
+    rest of the screen too: a refusing entry proc's windows go through
+    the abort sweep's `wm_destroy`, each its own damage pass (§22.17.1).
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy, `mem_free_rec`
@@ -52962,8 +53003,8 @@ finds a DOCUMENT post (`[assoc_dapp]` below `ASSOC_FLUSH`, §54.7.6.3)
 standing again after `ld_run_name` returns - it consumed the slot before the
 load, so only a post made since can have put one back - and treats the
 refusal as a hand-on: no `ld_say_status` (so no `Load
-failed` toast), no `files_refresh` (so no whole-screen repaint, which
-`ld_owed` charges any other `LD_EABORT`), only `assoc_back`. The loader's
+failed` toast), only `assoc_back` - and no repaint, as on every other
+outcome (§22.17.1). The loader's
 abort path still sweeps the instance's windows and frees its region and
 every claim (§20.2), so nothing of the refusing package outlives it.
 
@@ -53630,7 +53671,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
 
-Calling `app_launch`, `files_open`, `files_open_drive`, `files_refresh` or
+Calling `app_launch`, `files_open`, `files_open_drive` or
 `ui_cmd` from here hangs the machine permanently — no beep, no watchdog, no
 recovery — so each entry in the jump table carries a one-line comment
 saying which column of that table it is in.
@@ -53887,14 +53928,10 @@ window silently jumps to the root.
 3. else at cap → navigate the **frontmost** file-manager window in place.
    Nothing can fail, so there is no error path and no dialog.
 
-`files_refresh` (called by `loader_run` when `[ld_painted]` is 0, no lock
-held) is just gfx_lock / `wm_paint_all` / gfx_unlock. It used to look up
-"the" Disk instance with `inst_find_kind` and check its visibility; with N
-instances "the first one" is the wrong window, and `wm_paint_all` repaints
-every visible window anyway — which is what the call was always for (the
-loaded program's window may overlap any of them). It no longer runs on the
-**successful** path at all: `ld_run_body`'s own `wm_show` is that pass, and
-running both was the second whole-screen redraw a launch used to show.
+`files_refresh` — gfx_lock / `wm_paint_all` / gfx_unlock after a load that
+drew no window — is retired (§22.17.1): nothing a load leaves behind is owed a
+whole-screen repaint. A successful launch's `wm_show` draws the new window
+and nothing else (§11.90).
 
 ### 22.2 Selecting costs two bands, and re-selecting costs nothing
 
@@ -56229,6 +56266,34 @@ was measured on its own: double-click a non-package (`SYSTEM/DOS/OS88NET.COM`
 `fm_repaint` with a there-and-back view toggle, compare — **0 of 43,248
 pixels**, with a power check that the toggle moved 5,389 of them so the
 comparison is not two captures of a window nothing redrew.
+
+#### 22.17.1 …and `files_refresh`, the last whole-screen repaint a load paid
+
+**A load drew `wm_paint_all` whenever it did not draw a window of its own**:
+`ld_owed` (both of the loader's far entries) on an entry proc's refusal,
+`LD_EABORT`, and `assoc_run_x` on *every* failure — a missing program's
+`Needs X.O88`, a `Bad package`, a refusal — through `files_refresh`, which was
+nothing but the lock and that call. Opening a document whose program would not
+start repainted the whole desktop, every window in it back to front.
+
+Its history says what it was for, and none of it is left. It was the Disk
+window's status line, which drew `[ld_status]` — `Loading...` and then the
+verdict — so the poster was owed a line, and with four Disk windows "the
+poster" was guessed as "everything". §22.17 retired the line and the toast
+says the verdict; the poster's window is untouched by a load from beginning to
+end. The **refusing entry proc** was the one case argued since — "it may have
+put pixels anywhere before it said no" — and what it can have put anywhere is
+a window: the loader's abort path destroys every window the region stamped
+(§20.2, `wm_destroy_seg`), and each `wm_destroy` is its own damage pass over
+the rect it vacated (§11.91). A package drawing outside a window of its own is
+the trusted-package rule's case, not a guard's. **We only ever draw new
+windows on top**, and what a window that went away uncovered is the damage
+path's whole job.
+
+So `files_refresh`, `ld_owed` and `assoc_run_x`'s `.refresh` are gone, and so
+are the loader's two `[ld_painted]` stores that only `ld_owed` read;
+`assoc_run_x` still reads the flag, to know there is a window to hand its
+document to (§54.10).
 
 ### 22.18 The two header buttons — one description, and the release
 
@@ -79736,8 +79801,9 @@ reads, and an origin is not renderer state.
 
 #### 39.14.4 What still draws in display 0's coordinates, and why that is safe
 
-**Only `wm_paint_all`'s desktop dither is issued in virtual coordinates
-today.** Every other caller in the kernel draws inside the chrome or inside a
+**Only the desktop dither is issued in virtual coordinates today** — the
+damage pass's, through `wm_dmg_bands` (§39.16.2.1), and so `wm_paint_all`'s
+(§11.91.7). Every other caller in the kernel draws inside the chrome or inside a
 window, and both are on the primary — `[vid_w]`/`[vid_h]` are still display
 0's extent, so the window manager, the menu bar, the dock and the drive
 column all place things exactly where they placed them before. Virtual and
@@ -79750,10 +79816,11 @@ Growing `[vid_w]`/`[vid_h]` to the union — docs/plans/completed/DUAL-DISPLAY-P
 is what makes a window's clip region reach the second display, and that step
 owes the translation.
 
-The dither itself is one `gfx_fill_gray` per display, each in virtual
-coordinates: display 0's is the call that was always there (menu bar to dock),
-and every other display's is its whole extent, since §39.14's chrome lives on
-the primary alone.
+The dither itself is one themed fill confined by a region seeded with each
+display's band, in virtual coordinates: display 0's is menu bar to dock, and
+every other display's is its whole extent, since §39.14's chrome lives on the
+primary alone. (It was one fill per display, the second `EXT_DESK`'s, while
+`wm_paint_all` was a walk of its own; §11.91.7 retired that slot.)
 
 #### 39.14.5 The three paths the sweep missed, and what a FIELD run found
 
@@ -110400,9 +110467,9 @@ The app's proc returning is the only exit. In order:
 3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, in one word store.
 4. Bring the desktop back under the still-held lock: a full repaint
    with the bar and the strip forced (the save-under-overdraw precedent,
-   §12.05) — `blk_relit`, which on kern_mega (`KHP_RELIT`) with one
-   display and no fullscreen window up is the damage pass over the whole
-   band (§11.91.7) and otherwise `wm_paint_all`. It writes VRAM direct:
+   §12.05) — `blk_relit`: `menu_force`, `dock_force` and `wm_paint_all`,
+   which is the damage pass over the whole desktop (§11.91.7). It writes
+   VRAM direct:
    there is no back buffer (§53.5).
 
    **A snapshot is not an option here, and §53.6.1 records why one was
@@ -112679,8 +112746,8 @@ rest.
 because every reader of the global snapshot now consults `[dsk_lstale]`. The
 audit for this path, since it is the one that decides:
 
-- **`files_refresh`**, which runs immediately after, paints from the
-  WINDOW's cache and not the globals (22.1).
+- **`files_refresh`**, which ran immediately after, painted from the
+  WINDOW's cache and not the globals (22.1) - and is retired (22.17.1).
 - **`fdlg`** is the bullet above now: the chooser is a Disk window and lists
   into its own window cache (38.1, 22.1). The retired dialog read the
   snapshot directly and was safe for a different reason - its `fdlg_home_go`
@@ -112717,7 +112784,8 @@ folder**, which is the audit rather than the hope:
 
 - `assoc_locate` navigates itself, rung by rung (§54.4).
 - `assoc_back` returns to what was banked here, not to what was mounted.
-- `files_refresh` paints from the **window's** cache (§22.1).
+- every Disk window paints from its **own** cache (§22.1) - and a load
+  repaints none of them (§22.17.1).
 - the document is handed over by PULL (§54.5), so nothing has to be standing
   in its directory when the entry proc runs.
 
@@ -144457,9 +144525,8 @@ session has drawn over the menu bar, the drive column, the dock and every
 window, so there is no damage rect to be clever with — the whole band *is* the
 damage. It is PERFORMANCE.md rule 1's legitimate exemption, because the whole
 screen really did change, and it is paid once per wake on the far side of a
-period measured in minutes. On kern_mega (`KHP_RELIT`) it is paid through
-the damage pass rather than `wm_paint_all` (§11.91.7), which writes each pixel about once instead of
-once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
+period measured in minutes. It is paid through the damage pass (§11.91.7),
+which writes each pixel about once instead of once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
 so nothing inside a UI pass's worth of drawing still believes the overlay owns
 the screen.
 

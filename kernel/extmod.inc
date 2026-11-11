@@ -116,7 +116,9 @@ modx_hdr:
     dw ext_e_display            ; EXT_DISPLAY
     dw wm_disp_span             ; EXT_SPAN
     dw ext_e_fsrect             ; EXT_FSRECT
-    dw vid_disp_desk            ; EXT_DESK
+    dw ext_e_apply.r            ; (10: EXT_DESK, retired with its one caller
+                                ; - SPEC.md 11.91.7. A bare retf, never called;
+                                ; kept so the numbering never moves)
     dw ext_e_ylow               ; EXT_YLOW
 %ifdef SEAMCUT                  ; ...and the two seam CUTS, whose bodies are
     dw ext_fcut                 ; EXT_FCUT   this image's since kernel size
@@ -547,56 +549,10 @@ wm_disp_span:                   ; (far: EXT_SPAN is its only caller)
 .out:
     retf
 
-; -----------------------------------------------------------------------------
-; vid_disp_desk - the desktop ground of every display but the primary
-;                 (SPEC.md 39.14.4)
-; in:       nothing
-; out:      CF = 0 it painted one; CF = 1 there is one display and nothing to
-;           paint - mod_gone's answer too, which wm_paint_all's fullscreen
-;           arm reads in place of the [vid_ndisp] test it used to make
-; clobbers: flags
-;
-; A secondary display gets its ground WHOLE, because SPEC.md 39.14's chrome -
-; the menu bar, the dock, the drive column - lives on the primary alone.
-;
-; **IT IS thm_desk AND NOT gfx_fill_gray, AND THE NAME IS WHY IT WAS NOT**
-; (SPEC.md 76.2.1). This routine was called vid_disp_dither, SPEC.md 76.1's own
-; list of the four themed desktop sites NAMES it, and 76.2 says thm_desk
-; replaced gfx_fill_gray at all of them - and this one kept the dither, so
-; switching to Dark left the second monitor in Bright's ground for ever. A
-; routine whose name says DITHER does not read as a themed site to whoever is
-; converting them.
-;
-; wm_paint_all draws display 0's band itself - menu bar to dock, the call that
-; has always been there - and this is the rest: ONE ground fill in VIRTUAL
-; coordinates, and GFXDISP is what puts it on the right card. This is the only
-; caller in the kernel that draws in virtual coordinates. Everything else is
-; inside the chrome or inside a window, and both are on display 0, where
-; virtual and local are the same numbers (39.14.4).
-; -----------------------------------------------------------------------------
-vid_disp_desk:
-    call ext_one
-    jb .r                       ; CF = 1: one display
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, 1                   ; NOT A LOOP: VID_NDISP_MAX is 2 (the %if at
-                                ; its equ), the guard above has already
-                                ; returned for [vid_ndisp] <= 1, and display 0
-                                ; is wm_paint_all's own - so the general loop
-                                ; ran exactly once by construction
-    EXK vid_ctx_rect            ; AX/BX/CX/DX = its inclusive virtual rect
-    call KERNEL_SEG:cw_thm_desk ; the THEME's ground (SPEC.md 76.2), not a
-                                ; hard-coded dither
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-.r: retf                        ; (far: EXT_DESK is its only caller)
+; (vid_disp_desk - EXT_DESK, every display but the primary's ground, whole -
+; stood here. Its one caller was the layered wm_paint_all, and the damage pass
+; that replaced it dithers each display's own band through wm_dmg_bands
+; (SPEC.md 39.16.2.1, 11.91.7), so slot 10 is retired: see the table above.)
 
 ; ==== the drop, the landing and the straddle (SPEC.md 11.100.3/.4, 39.16.3) ==
 ; -----------------------------------------------------------------------------
@@ -665,7 +621,7 @@ vid_disp_desk:
 ; -----------------------------------------------------------------------------
 ui_drag_size:
     call ext_one                ; one display - mod_gone's case, or this image
-    jb vid_disp_desk.r          ; over a collapsed desktop: a drag can never
+    jb ext_e_apply.r            ; over a collapsed desktop: a drag can never
                                 ; change a kind, and CF = 1 is "not moved"
     push ax
     push cx
