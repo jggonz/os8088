@@ -78146,7 +78146,13 @@ Probe order is binding, and the equipment word is consulted **last**:
 
 1. `int 10h AX=1A00h` (VGA/MCGA Display Combination Code). A pre-VGA BIOS
    does not implement `AH=1Ah` and returns with AL as we set it, 00h;
-   `AL = 1Ah` means VGA. → `VID_VGA`.
+   `AL = 1Ah` means VGA. → `VID_VGA`. **Except an MCGA** (PS/2 Models 25
+   and 30, 8086 machines in the target class): BL, the active display's
+   code, is 0Ah..0Ch, and an MCGA has no mode 12h and no Graphics Controller
+   or Sequencer, so the planar renderer would draw garbage. It goes on to
+   step 3 and runs as a CGA in mode 6, which the MCGA emulates. Every other
+   code stays `VID_VGA` - in particular 01h, a VGA with a mono card beside it,
+   which a wider test would have sent to the Hercules (BR-55).
 2. `int 10h AH=12h BL=10h` (EGA "get EGA info"). An EGA or VGA BIOS
    overwrites BL with the card's memory size; an XT BIOS leaves 10h alone.
    Step 1 has already claimed every VGA, so a card that answers *here* and

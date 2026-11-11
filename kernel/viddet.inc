@@ -635,6 +635,11 @@ vid_detect:                     ; in it - the splash's first tick, and vid_init
     ret
 %ifdef GFX_VGA
 .vga:
+    sub bl, 0x0A                ; BL = the ACTIVE display's code: 0Ah..0Ch is
+    cmp bl, 3                   ; an MCGA (PS/2 Models 25 and 30) - no mode
+    jb .equip                   ; 12h, no GC or Sequencer - which runs as a
+                                ; CGA in mode 6 (SPEC.md 39.1, BR-55). Below
+                                ; 0Ah wraps high: every other code is a VGA
     mov al, VID_VGA
 %endif
 .set:
