@@ -92,8 +92,9 @@ eth_entry:
     je  eth_detach
     cmp al, DRVV_READY
     je  eth_ready
-    clc
-    ret
+    stc                         ; any other verb is REFUSED: CF = 0 is "I did
+    ret                         ; it", and HWINFO's would hand OSAPI_DRV_SUSPEND
+                                ; three words of garbage (SPEC.md 51.2.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_ATTACH - find a card, and hook NOTHING

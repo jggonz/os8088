@@ -126,10 +126,8 @@ um_entry:
     jb um_attach                ; DRVV_ATTACH, which is 0
     je um_detach
     cmp al, DRVV_READY
-    je um_ready
-um_ok:
-    CLC_OR_STC um_no            ; a verb we do not implement is not an error
-    ret
+    jne um_no                   ; any other verb is REFUSED: CF = 0 is "I did
+                                ; it" (SPEC.md 51.2.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_READY - the earliest point OSAPI_DRV_TASK's fence answers (SPEC.md
@@ -149,6 +147,9 @@ um_ready:
                                 ; instruction must know a worker exists and
                                 ; leave the chip to it. CF = 0 from the spawn:
                                 ; neither `mov` nor `inc` writes CF
+um_ok:
+    CLC_OR_STC um_no
+    ret
 
 ; -----------------------------------------------------------------------------
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6)

@@ -416,7 +416,10 @@ DRVV_READY  equ 3               ; "your services are published and the kernel
                                 ; back through the API - a slot's fence tests
                                 ; the publication slot, and attach runs before
                                 ; it is armed (SPEC.md 51.2.2). Optional: a
-                                ; driver that does not implement it returns.
+                                ; driver with nothing to do answers CF = 0.
+                                ; Every verb a driver does NOT implement it
+                                ; answers CF = 1 (SPEC.md 51.2.2), so CF = 0
+                                ; off any verb here is never a false yes
 ; --- the record drv_suspend fills, one per driver that answered ---------------
 DQ_CLASS    equ 0               ; db: the DRVC_* this row is about
 DQ_FLAGS    equ 1               ; db: bit 0 = it went

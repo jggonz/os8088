@@ -233,8 +233,8 @@ net_entry:
     je  net_detach
     cmp al, DRVV_READY
     je  net_ready
-    clc                         ; a verb we do not implement is not an error
-    ret
+    stc                         ; a verb we do not implement is REFUSED: CF = 0
+    ret                         ; is "I did it" (SPEC.md 51.2.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_ATTACH - find a parallel port, and hook NOTHING

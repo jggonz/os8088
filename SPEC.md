@@ -104201,6 +104201,11 @@ DRVV_TIER   (2)  in AH = how much of yourself the user wants (SND_RT_*,
                  because a tier change alters it; CF=1 and AL = a DRVE_*
                  saying why not, with the table untouched. OPTIONAL - the
                  kernel sends it only when a setting asks for one.
+DRVV_READY  (3)  your services are published (51.2.2). Sent to EVERY
+                 driver; nothing to do is CF=0, and CF=1 + AL = a DRVE_*
+                 is banked as the row's reason.
+DRVV_HWINFO (4)  where is your hardware (51.11.2). OPTIONAL.
+any other        REFUSED: CF=1, nothing done, AL not read (51.2.2).
 ```
 
 **Attach must be all-or-nothing** and **detach cannot fail.** The first
@@ -104444,6 +104449,34 @@ bug is written by the *kernel* gaining a verb rather than by the driver
 changing. `hd_entry` is the shape to copy: one `cmp`/`je` per verb it wants,
 then `cmp al, DRVV_ATTACH` / `jne .refuse`, so an unrecognised verb answers
 `CF = 1` and probes nothing. Do not write a default case that does work.
+
+**…and a default case that answers `CF = 0` is the same bug pointing the other
+way.** `CF = 0` means *I did it*, and the kernel acts on it: `DRVV_TIER`'s
+re-publishes SI as the service table, and `DRVV_HWINFO`'s is written into
+`OSAPI_DRV_SUSPEND`'s record as the hardware's three words and counted.
+`ETHER.DRV`/`PCIETHER.DRV` (one `ethdrv.inc`), `NET.DRV`, `RAMDISK.DRV` and
+`USBMOUSE.DRV` ended their dispatch in a bare `clc` (*"a verb we do not
+implement is not an error"*), so DOS's suspend through them got a `DRVC_NET`
+record of whatever AX/BX/CX held; `CDROM.DRV`, `EMS.DRV` and `HTTPFS.DRV`
+split the verb space at `cmp al, DRVV_HWINFO` / `cmc` and so answered `TIER`
+`CF = 0`. **The rule: a verb a driver does not implement is answered `CF = 1`,
+with no work done; AL carries no code and no caller reads it.** There is no
+"unsupported" `DRVE_*` and none is wanted: it would be a resident string in
+`drv_errstr` for an answer only a kernel bug could produce, and every verb that
+names a reason on refusal (`ATTACH`, `TIER`, `READY`) is one a driver either
+implements or is never sent. The two verbs every driver receives are the
+exceptions by contract, not by default: `DRVV_DETACH` cannot fail, and
+`DRVV_READY` with nothing to do answers `CF = 0`, because its `CF = 1` is banked
+as the row's `DRVE_*` and the Drivers page prints it. That is what makes a
+future OPT-IN verb safe to add - a wake, a query - without touching a driver
+that does not know it: every one of them already says no.
+
+`tests/unit/t_drvverb.py` (fast) holds it on the BINARY: each built drv_tab
+driver is entered at its header's entry with every verb its class does not
+implement (`TIER` and `HWINFO` outside the sound class, and 5 to 63), and
+stepped over the dispatch subset (`cmp`, the conditional jumps, `stc`/`clc`/
+`cmc`, `CLC_OR_STC`'s `test`, `ret`); each must reach `ret` with `CF = 1`, and
+reaching any other instruction is work on a verb nobody implements.
 
 ### 51.2.3 A driver asks as the KERNEL, not as whoever was dispatching
 
