@@ -1,5 +1,5 @@
-20261111
-* PageDesk opens almost any PDF
-* JPEG, JPEG 2000, JBIG2 and fax images
-* Embedded fonts, colour, transparency
-* Encrypted PDFs, with a password prompt
+20261112
+* Browser shows GIF, PNG and JPEG
+* Animated GIFs and image maps
+* Save Image As from the page
+* Browser is now a Wire download
