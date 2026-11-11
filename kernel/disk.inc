@@ -6716,6 +6716,9 @@ dsk_dirw_cwd:                   ; ...of the CURRENT directory: the two
 dsk_dirw_start_x:
     mov [dsk_wclus], ax
     and word [dsk_wsec], 0
+%ifndef KD_BUILD                ; (kern_dos grows no folder: KD_IMG_KB)
+    and word [dsk_wlast], 0     ; no step taken yet: 0 is no cluster
+%endif
     mov word [dsk_wguard], DSK_DIRW_MAX
     ret
 
@@ -6746,7 +6749,14 @@ dsk_dirw_next_x:
     mov ax, [dsk_wclus]
     call dsk_next_clus_x          ; CF=1 only if the CURRENT link is invalid
     jc .end
+%ifdef KD_BUILD
     mov [dsk_wclus], ax         ; the new link is validated by clus2lba
+%else
+    xchg ax, [dsk_wclus]        ; the new link is validated by clus2lba -
+    mov [dsk_wlast], ax         ; and the one it came FROM is banked: at the
+%endif                          ; chain's end it is the folder's LAST
+                                ; cluster, which dskw_dirgrow links a new one
+                                ; to (SPEC.md 18.5.2, BR-60)
     and word [dsk_wsec], 0
 .have:
     mov ax, [dsk_wclus]
@@ -11444,11 +11454,19 @@ dsk_chwr:     resb 1            ; ...and which way it is moving (SPEC.md
 %endif
 
 ; --- the directory walker's scratch (SPEC.md 19.2) --------------------------
-; Safe in .bss: dsk_dirw_start writes all three before any walk reads them.
+; Safe in .bss: dsk_dirw_start writes all four before any walk reads them.
 ; [dsk_cwd] and [dsk_keepcwd] are NOT - see the module data block up top.
 dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
+%ifndef KD_BUILD
+dsk_wlast:    resw 1            ; dirw: the cluster the last step LEFT, 0 =
+                                ; none yet - at a subdirectory's end, its last
+                                ; one (BR-60). A step is taken only from a
+                                ; cluster dsk_next_clus_x accepted, so a
+                                ; non-zero value is in range; the root, and a
+                                ; folder whose first cluster is not, stay 0
+%endif
 
 ; --- the read-ahead cache's bookkeeping (SPEC.md 18.95) ---------------------
 ; Safe in .bss because nothing reads any of it while [dsk_rah_seg] is 0, and

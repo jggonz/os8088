@@ -699,43 +699,12 @@ dskw_mkbody:
     jne dskw_mounted.ret        ; FERR_IO: the scan itself failed (CF = 1, as
                                 ; 2 < 4). The `ret` just above this routine,
                                 ; where .fail's is past short reach (-3)
-    cmp word [DSKW_FNONE], 0xFFFF
-    je .dirfull                 ; scanned to the end with no reusable slot
+    call dskw_dirgrow           ; a slot - the folder GROWN for one if it
+    jc .fail                    ; had none (BR-60) - or the refusal
 
-    call dskw_alloc             ; AX = cluster, already marked end-of-chain
-    jnc .haveclus
-    inc ax                      ; 0xFFFF -> 0: the mark could not be written,
-    jz .wfail                   ; which is an I/O failure and not a full disk
-    jmp .nospace                ; - and it takes the ROLLBACK path, because a
-                                ; half-marked cluster must not survive in RAM
-                                ; to be flushed by a later unrelated write
-.haveclus:
-    mov [dskw_first], ax
-    call dsk_clus2lba_x ; AX = its first LBA
-    jc .badclus
-    DSKW_CLBA_SET               ; ...in the data walk's own cursor, which
-                                ; nothing else is using between here and the
-                                ; commit - all 32 bits of it (SPEC.md 18.7.5)
-
-    call dskw_dotents           ; '.' and '..' built in dsk_secbuf, and ES =
-                                ; LOW_SEG (SPEC.md 2.1), which is what SS names
-    DSK_WR1D dskw_clba
-    jc .wfail
-
-    call dskw_zerobuf           ; the cluster's remaining sectors
-    mov al, [dsk_spc]           ; (<= 64: cbw is a zero extension, and AX
-    cbw                         ; is dead until the flush's answer)
-    xchg ax, cx
-    dec cx
-    jcxz .zeroed
-.zsec:
-    DSKW_CLBA_INC
-    push cx
-    DSK_WR1D dskw_clba
-    pop cx
-    jc .wfail
-    loop .zsec
-.zeroed:
+    mov bp, dskw_dotents        ; '.' and '..' in the cluster's first sector
+    call dskw_mkclus            ; ...the rest zero: [dskw_first] = it
+    jc .fail                    ; (rolled back already)
 
     call dskw_flush_x           ; the FAT, THEN the entry (SPEC.md 18.4)
     jc .rollax
@@ -775,6 +744,115 @@ dskw_mkbody:
     pop ax
     stc
 .fail:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_mkclus - allocate a DIRECTORY cluster and write it whole: sector 0 as
+;               the routine at BP builds it in dsk_secbuf, every other zero
+; in:  BP = dskw_dotents (a new folder) or dskw_zerobuf (a folder's growth)
+; out: CF=0 with [dskw_first] = the cluster, marked end-of-chain in the FAT
+;      window and NOT flushed - and DX = it too when BP is dskw_zerobuf
+;      (dskw_dotents spends DX); CF=1 with AX = FERR_* and the FAT window
+;      already rolled back (dskw_mkbody's tails, which `ret` for the caller)
+; clobbers: AX, BX, CX, DX, SI, DI, ES, flags
+;
+; The REST of a directory cluster is written zero: a slot search reaching
+; uninitialised sectors would read whatever the disk last held there and could
+; match a name that is not in this directory at all. Both directory clusters
+; the kernel makes go through here - mkdir's and dskw_dirgrow's - so that is
+; one loop (BR-60).
+; -----------------------------------------------------------------------------
+dskw_mkclus:
+    call dskw_alloc             ; AX = cluster, already marked end-of-chain
+    jnc .haveclus
+    inc ax                      ; 0xFFFF -> 0: the mark could not be written,
+    jz dskw_mkbody.wfail        ; which is an I/O failure and not a full disk
+    jmp short dskw_mkbody.nospace   ; - and it takes the ROLLBACK path, because
+                                ; a half-marked cluster must not survive in RAM
+                                ; to be flushed by a later unrelated write
+.haveclus:
+    mov [dskw_first], ax
+    mov dx, ax                  ; ...and in DX, which survives to the `ret`
+    call dsk_clus2lba_x         ; when BP is dskw_zerobuf. AX = its first LBA
+    jc dskw_mkbody.badclus
+    DSKW_CLBA_SET               ; ...in the data walk's own cursor, which
+                                ; nothing else is using between here and the
+                                ; commit - all 32 bits of it (SPEC.md 18.7.5)
+    call bp                     ; sector 0 built in dsk_secbuf, and ES =
+                                ; LOW_SEG (SPEC.md 2.1), which is what SS names
+    DSK_WR1D dskw_clba
+    jc dskw_mkbody.wfail
+    call dskw_zerobuf           ; the cluster's remaining sectors
+    mov al, [dsk_spc]           ; (<= 64: cbw is a zero extension)
+    cbw
+    xchg ax, cx
+    dec cx
+    jcxz .zeroed                ; CF = 0: the write's `jc` was not taken, and
+.zsec:                          ; nothing since writes it
+    DSKW_CLBA_INC
+    push cx
+    DSK_WR1D dskw_clba
+    pop cx
+    jc dskw_mkbody.wfail
+    loop .zsec
+.zeroed:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_dirgrow - a free slot in the current directory, GROWING a subdirectory
+;                that has none (SPEC.md 18.5.2, BR-60)
+; in:  dskw_find's NOENT answer: [dskw_fsec]/[dskw_foff]/[dskw_fend], and the
+;      directory walker as that scan left it ([dsk_wlast], [dsk_wguard])
+; out: CF=0 with [dskw_fsec]/[dskw_foff]/[dskw_fend] a free slot, as
+;      dskw_find leaves one; CF=1 with AX = FERR_*
+;      (FERR_DIRFULL: the ROOT, which FAT12/16 fixes in size, or a folder the
+;      walk could not reach the end of)
+; clobbers: AX, BX, CX, DX, SI, DI, BP, ES, [dskw_first], flags - the two
+;      callers, dskw_mkbody and dskw_wbody, are module-internal bodies whose
+;      registers dskw_wrp banked, and set [dskw_first] afresh after this
+;
+; DOS has grown subdirectories since 2.0; this kernel refused at the end of
+; the first cluster - 14 entries in a kernel-made folder on a 512-byte-cluster
+; disk (1.44MB, 1.2MB, the 360KB system disk), and RunCPM's save failed on the
+; glass for it. The order is SPEC.md 18.4's: the new cluster is written zero
+; and its end mark flushed BEFORE the folder's last cluster is linked to it
+; and that flushed, so a crash between the two leaves a lost cluster, never
+; a folder whose chain runs into garbage. Then dskw_find runs again and finds
+; the new cluster's first entry - a 00h, so the slot it publishes is exactly
+; the one a folder with room would have handed over. Every pass either finds
+; a slot or spends a cluster, so the loop ends at one or at Disk full.
+; -----------------------------------------------------------------------------
+dskw_dirgrow:
+    cmp word [DSKW_FNONE], 0xFFFF   ; CF = 1 exactly when a slot was found
+    cmc                         ; (below FFFFh), so CF = 0 out of the `cmc`
+    jnc .ret                    ; is "there is one": answered as it stands
+%ifdef KD_BUILD                 ; kern_dos refuses as before: its image is at
+    jmp short dskw_mkbody.dirfull   ; KD_IMG_KB's edge (kdlayout.inc)
+%else
+    mov ax, [dsk_wguard]        ; THE ROOT, AND A WALK THAT DID NOT REACH THE
+    mul word [dsk_wlast]        ; END, NEVER GROW: [dsk_wlast] is 0 for the
+    or ax, dx                   ; root (no step is taken there) and the guard
+    jz dskw_mkbody.dirfull      ; 0 when the walk was capped short of the end
+                                ; - either factor 0 makes the product 0, and
+                                ; growing either would link a cluster the
+                                ; volume's chain does not end at
+    mov bp, dskw_zerobuf
+    call dskw_mkclus            ; [dskw_first] = the new cluster, zeroed
+    jc .ret
+    call dskw_flush_x           ; ...its end mark durable FIRST
+    jc dskw_mkbody.rollax
+    mov ax, [dsk_wlast]         ; the folder's last cluster -> the new one,
+    call dskw_setfat            ; DX (dskw_mkclus's); preserves every register
+    jc dskw_mkbody.wfail        ; a FAT window that would not load
+    call dskw_flush_x           ; ...then the link
+    jc dskw_mkbody.rollax
+    call dskw_find              ; THE SEARCH AGAIN: it now walks into the new
+    cmp ax, FERR_NOENT          ; cluster and stops at its first entry, the
+    je dskw_dirgrow             ; slot, which the test above then answers.
+                                ; Its directory sectors are the read-ahead
+                                ; cache's still; FERR_IO is CF = 1 (2 < 4)
+%endif
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1556,9 +1634,9 @@ dskw_wbody:
     stc                         ; a read error mid-scan: report it as is
     ret
 .create:
-    cmp word [DSKW_FNONE], 0xFFFF
-    jne .newslot
-    jmp dskw_mkbody.dirfull
+    call dskw_dirgrow           ; the slot dskw_find spotted, or the folder
+    jnc .newslot                ; grown for one (BR-60) - or the refusal
+    ret
 .newslot:
     mov byte [dskw_new], 1      ; the slot dskw_find already spotted
     and word [dskw_oldclus], 0
