@@ -4810,13 +4810,11 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 ; -----------------------------------------------------------------------------
 cur_restoreu:
 %ifdef KHP_VGASAVE
-    mov ch, [cur_rows]
-    or ch, ch
-    jz .out                     ; wholly off the bottom: nothing was saved
-%endif
+    call cur_vspan              ; BL = second byte?, BP = the row step, CH =
+    jz .out                     ; the rows - none: wholly off the bottom,
+%endif                          ; nothing was saved
     push es
 %ifdef KHP_VGASAVE
-    call cur_vspan              ; BL = second byte?, BP = the row step
     mov si, cur_save
     mov di, [cur_off]
     VSEG ax, VGA_SEG
@@ -4840,8 +4838,8 @@ cur_restoreu:
     shl ah, 1                   ; next plane bit
     cmp ah, 0x10
     jb .plane
-    mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
-    out dx, ax
+    mov ah, 0x0F                ; SEQ2: Map Mask back to all planes (AL is
+    out dx, ax                  ; still 2: one byte shorter than the word)
 %else
     push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
     call cur_rect               ; (SPEC.md 11.96.17, 32 - cur_rect disarms the
@@ -4929,13 +4927,11 @@ section .vga                    ; cur_put_1 and cur_move_1 reach them through
 ; -----------------------------------------------------------------------------
 cur_saveu:
 %ifdef KHP_VGASAVE
-    mov ch, [cur_rows]
-    or ch, ch
+    call cur_vspan              ; (CH = the rows, ZF = none)
     jz .out
 %endif
     push es
 %ifdef KHP_VGASAVE
-    call cur_vspan
     push ds
     pop es
     mov di, cur_save            ; movsb dest = the buffer, in kernel .bss
@@ -4960,10 +4956,10 @@ cur_saveu:
     jnz .row
     pop si
     inc ah
-    cmp ah, 4
+    cmp ah, al                  ; four planes: AL is GC4's index, 4
     jb .plane
-    mov ax, 0x0004              ; GC4 back to plane 0 (default)
-    out dx, ax
+    mov ah, 0                   ; GC4 back to plane 0 (default); AL is
+    out dx, ax                  ; still 4
     pop ds
 %else
     push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
@@ -4985,21 +4981,25 @@ cur_saveu:
 ; took the second, which is cur_geom's [cur_b1ok] answer for the same cell.
 ; One place for the save and the restore, because the two disagreeing by a
 ; byte smears the arrow (cur_rect's reason, before it).
-; out: BL = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken;
-;      clobbers AX
+; out: BX = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken,
+;      CH = [cur_rows] and ZF = it is 0 (wholly off the bottom: nothing to
+;      walk) - the test both callers made first, written once here (the size
+;      pass that turned KHP_VGASAVE on for kern_big, -6 bytes; a cell off the
+;      bottom now pays the span too, which no on-screen packet does);
+;      BH = 0. Preserves AX
 %if CUR_GW != 8
   %error "cur_vspan assumes an 8px cell: one byte aligned, two otherwise"
 %endif
 cur_vspan:
-    mov bl, [cur_cellx]
-    and bl, 7
+    xor bx, bx                  ; BH = 0 for the subtract below: BX is the
+    test byte [cur_cellx], 7    ; flag as a word, where AL/cbw made one (-3)
     jz .one                     ; aligned: x2 lands in the same byte
-    mov bl, [cur_b1ok]
+    mov bl, [cur_b1ok]          ; (0 or 1: cur_geom's sbb/inc)
 .one:
-    mov al, bl
-    cbw
     mov bp, ROW_BYTES - 1
-    sub bp, ax
+    sub bp, bx
+    mov ch, [cur_rows]
+    or ch, ch
 %else
 ; cur_rect - the cell the two above save and restore, as a rect. ONE place,
 ; because a save and a restore that disagree about it by a byte smear the

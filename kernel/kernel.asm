@@ -264,9 +264,11 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; assembles to the body it replaced, byte for byte. kern_mega carries the
 ; first ten: it runs on a 286 or 386, almost always with VGA or EGA, its
 ; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
-; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
-; decoders' saving is CPU, the same on every medium, and on a hard disk it is
-; most of a launch. kern_small carries none; its machines are floppy-only.
+; kern_emu, which is kern_big) carries KHP_LZ and the four VGA knobs, at the
+; owner's word: the decoders' saving is CPU, the same on every medium, and on
+; a hard disk it is most of a launch; the VGA four are `.vga` bytes, which
+; only a VGA or EGA machine keeps. kern_small carries none; it assembles no
+; planar body at all.
 ; Enabling another for kern_big is a %define below and a re-measure.
 ; tools/os88knob.py is how a rewrite is put behind a knob (and checked);
 ; docs/plans/khp1/patches/tools/equivalence/ holds each knob's harness.
@@ -299,10 +301,6 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_STRRUN     font_str_run, a transparent string in one pass (text-6)
 ;   KHP_LAZYEND    cur_lazyend's early "not moved" (pointer-6; pays with O4)
 %ifdef KERN_MEGA
- %define KHP_VGASAVE
- %define KHP_VGAFILL
- %define KHP_VGAEDGE
- %define KHP_VGABLITP
  %define KHP_FRAME
  %define KHP_FPG
  %define KHP_CAPTION
@@ -311,7 +309,11 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 %ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
  %define KHP_LZ                 ; (+190 .cold: LAST-DROP-PERF.md 7.1 row 1)
-%endif
+ %define KHP_VGASAVE            ; the four VGA items, at the owner's word
+ %define KHP_VGAFILL            ; (2026-11-10, "size pass it as well"): all
+ %define KHP_VGAEDGE            ; in the `.vga` rung, which a CGA, Hercules
+ %define KHP_VGABLITP           ; or MDA machine slides `.cold` over (7.1
+%endif                          ; rows 3, 6, 8, 9; LOG L.6)
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
 ; the PicoMEM's queue, the DOS trip's times, the native floppy's fallbacks and

@@ -3016,11 +3016,17 @@ gfx_blitp_v:
     mov al, 2
     out dx, ax                  ; SEQ2: Map Mask = this plane alone
     mov dx, bx
+%ifdef KHP_VGABLITP
+    mov cx, [ss:vga_pr_n]       ; the width in a register for the advance and
+    mov ax, [ss:vga_pr_rs]      ; the test (-1 byte, ~8 clocks a plane, the
+    sub ax, cx                  ; size pass that turned the knob on for
+                                ; kern_big); AX = a row's source advance
+    cmp cx, 8                   ; WIDE rows go as words, chosen once a plane
+    jae .wrow1                  ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7),
+                                ; entered past the first row's reload
+%else
     mov ax, [ss:vga_pr_rs]
     sub ax, [ss:vga_pr_n]       ; AX = a row's source advance past it
-%ifdef KHP_VGABLITP
-    cmp word [ss:vga_pr_n], 8   ; WIDE rows go as words, chosen once a plane
-    jae .wrow                   ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7)
 %endif
 .frow:
     mov cx, [ss:vga_pr_n]
@@ -3052,6 +3058,7 @@ gfx_blitp_v:
     jmp short .fpe
 .wrow:                          ; ...and from 8 bytes the words win: `rep
     mov cx, [ss:vga_pr_n]       ; movsw` is 25 clocks a word against `rep
+.wrow1:
     shr cx, 1                   ; movsb`'s 17 a byte, a Map Mask'd plane
     rep movsw                   ; takes a word write's two CPU bytes as they
     jnc .weven                  ; stand, and the odd byte is the carry the
@@ -3456,7 +3463,14 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
+%ifdef KHP_VGAEDGE
+    mov dx, cx                  ; DX = the row step LESS what the rep advances
+                                ; DI by, so one add ends the row (SPEC.md
+                                ; 5.7.1) - CX still holds the step the edge
+                                ; columns used (-1 byte, -2 clocks)
+%else
     mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
+%endif
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
@@ -3792,10 +3806,12 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 section .vga                    ; 2): VIDEXTM above is its door, and on a
     nop                         ; PARITY, never executed (kernel hot-paths
                                 ; pass 1, kernel-hotpaths-lean): vga-4's +3 in
-                                ; vga_solid_rect_v above, without the fill
-                                ; rewrites that balanced it, put this body and
-                                ; the save/restore pair at an odd shift
-gfx_fill_gray_raw_v:     ; machine with neither card never falls here
+                                ; vga_solid_rect_v above put this body and the
+                                ; save/restore pair at an odd shift. With the
+                                ; four VGA knobs on (kern_big since 2026-11-10)
+                                ; and their size pass's -8 above, it still
+                                ; keeps the three where t_hotpar pins them
+gfx_fill_gray_raw_v:
 %endif
     push ax
     push bx
@@ -3805,7 +3821,13 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     push di
     push es
     call gfx_rect_setup
-    jc .done
+%ifdef COLD_SLIDE                ; clipped away: out through vga_solid_rect's
+    jc vga_solid_rect_v.done    ; .done, the same seven pops in the same
+%else                           ; order a few bytes above, which a SHORT jc
+    jc vga_solid_rect.done      ; reaches - this body's own is 142 bytes on,
+%endif                          ; a `jnc +3 / jmp near` pair that every fill
+                                ; that draws paid as a TAKEN jump (-3 bytes,
+                                ; -12 clocks a gray fill)
     mov bl, 0xAA                ; pattern for the top clipped row
     test byte [gfx_ry1], 1
     jz .parity
@@ -3854,35 +3876,34 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 %ifdef KHP_VGAFILL
-    shr bx, 1                   ; WORDS, vga_solid_rect's shape (SPEC.md
-    jc .orow                    ; 5.7.2): a row is ONE dither byte, so AL =
-.irow:                          ; AH is the word, and the odd byte is the
-    mov al, ah                  ; loop's, chosen once
-%else
-.irow:
-    mov al, ah
-%endif
-    mov cx, bx
-%ifdef KHP_VGAFILL
-    rep stosw
-%else
-    rep stosb
-%endif
-    add di, dx
-    not ah
+    mov al, ah                  ; WORDS, vga_solid_rect's shape (SPEC.md
+    shr bx, 1                   ; 5.7.2): a row is ONE dither byte, so AL =
+    jc .orow                    ; AH is the word, and the odd byte is the
+.irow:                          ; loop's, chosen once. AX is the word for
+    mov cx, bx                  ; good: `not ax` turns both halves a row,
+    rep stosw                   ; where a `mov al, ah` a row copied it back
+    add di, dx                  ; (the size pass that turned the knob on
+    not ax                      ; for kern_big: -2 bytes, 8 cycles a row)
     dec si
     jnz .irow
-%ifdef KHP_VGAFILL
     jmp short .reset
 .orow:
-    mov al, ah
     mov cx, bx
     rep stosw
     stosb
     add di, dx
-    not ah
+    not ax
     dec si
     jnz .orow
+%else
+.irow:
+    mov al, ah
+    mov cx, bx
+    rep stosb
+    add di, dx
+    not ah
+    dec si
+    jnz .irow
 %endif
 .reset:                         ; its OWN teardown, and not vga_solid_rect's
     call vga_gc_reset           ; through a jump (-5) as gfx_fill_pat's is:

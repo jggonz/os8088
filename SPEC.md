@@ -7053,7 +7053,7 @@ the first Live pass, every primitive after it believing it was nested and
 
 #### 5.4.3.7 A WIDE row on the fast path is copied as words; a narrow one stays bytes
 
-> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGABLITP` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+> **kern_big, kern_emu and kern_mega**, behind `KHP_VGABLITP` (`kernel/kernel.asm`'s KHP block; kern_big and kern_emu since 2026-11-10, docs/plans/khp1/LOG.md L.6). kern_small assembles no planar body at all. docs/plans/LAST-DROP-PERF.md section 7.1 is the record of what it buys and costs.
 
 `gfx_blitp`'s plane-major fast path (§5.4.3.5) moves **words when the row is
 8 bytes or wider**, and bytes below that. `rep movsw` is 25 clocks a word on
@@ -8327,6 +8327,12 @@ drawing in general.
 
 ### 5.7.2 The planar fill's inner loops: what kernel hot-paths pass 1 changed in them
 
+> The XOR interior below is plain code on every planar kernel. The edge
+> columns are behind `KHP_VGAEDGE` and the word interiors behind `KHP_VGAFILL`
+> (`kernel/kernel.asm`'s KHP block), which kern_big, kern_emu and kern_mega
+> define (kern_big and kern_emu since 2026-11-10, docs/plans/khp1/LOG.md L.6);
+> kern_small assembles no planar body at all.
+
 Each paragraph below is one change to `vga_solid_rect` or `gfx_fill_gray` on
 VGA/EGA, priced on MartyPC's `os8088_xt_vga` (gfxbench, guest time). None of
 them changes a pixel, a register contract or a refusal.
@@ -8468,7 +8474,7 @@ back.
 
 #### 5.8.1 The planar save and restore move WORDS, in a loop chosen once a plane
 
-> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGASAVE` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+> **kern_big, kern_emu and kern_mega**, behind `KHP_VGASAVE` (`kernel/kernel.asm`'s KHP block; kern_big and kern_emu since 2026-11-10, docs/plans/khp1/LOG.md L.6). kern_small assembles no planar body at all. docs/plans/LAST-DROP-PERF.md section 7.1 is the record of what it buys and costs.
 
 `vga_save_vram` and `vga_restore_vram` are the VGA's busiest bodies by time,
 not by calls: the window manager's save-under (§11.96) banks and returns whole
@@ -11942,8 +11948,8 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there. **On kern_mega
-  (`KHP_VGASAVE`) the save and the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
+  now (§7.1), which was the larger of the two windows there. **With
+  `KHP_VGASAVE` (kern_big, kern_emu, kern_mega) the save and the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
   hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
   already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
   loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
