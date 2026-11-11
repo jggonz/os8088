@@ -132,8 +132,11 @@ WIRE_CELL_LEVELS = ()
 # osapi_table_end) - at PKG_FMT 13, the flag day's table. A call at or past it
 # is newer than any Wire in the field can be told about, so --verify refuses
 # it: the release that first publishes one adds a row, moves this, and raises
-# WIRE_LEVEL here and in wcat.inc.
-WIRE_TABLE_END = 0x0233
+# WIRE_LEVEL here and in wcat.inc. 0x0236 since OSAPI_FILE_FIND_SEQ (SPEC.md
+# 19.7.1.1) was appended at 0x0233: no kernel at PKG_FMT 13 has been released,
+# so the flag day's table is not in the field yet and the new cell joins the
+# same unreleased generation - the end moves, and no row or level is cut.
+WIRE_TABLE_END = 0x0236
 # ...and the DOOR's (SPEC.md 20.3.4): a rare cell is `int 81h` and an index
 # byte, and a kernel that has no word for an index REFUSES it - CF = 1, AX =
 # 1, the caller's registers kept - rather than jumping anywhere. So a package
