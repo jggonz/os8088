@@ -75,6 +75,22 @@ A row that can only fail for one narrowly-scoped reason belongs in `soak`,
 next to the change that would break it.  docs/WRITING-TESTS.md section 2.2 is
 this rule written for somebody adding a row rather than moving one.
 
+THE OWNER'S RULE (2026-11-11), which the rest of this docstring argues and
+which wins wherever it and an older justification disagree: `fast` and `full`
+are for ONE thing - did you break the BUILD or the OS, or critical
+documentation maintenance (checkdocs, the generated index, the registry).
+Anything about ONE package, about kernel internals, or about the suite's own
+harness and fixtures is `soak`. That is not a demotion: the release soak runs
+every row, and the person who touches a subject runs its rows with `-k`.
+A rule over every line that costs over a second goes to `full` rather than
+`soak` (textrules, toast, movable, megapkg, registry, cswrite, seg0,
+megagrid). Two rows stay in `fast` as the owner's named exceptions:
+`btnrules`, because authors kept breaking it and the owner then fixed the
+packages by hand, and `guidelock`, because it is the only thing that keeps
+the guide current - whoever integrates new work has the knowledge and the
+responsibility to update the guide at that moment, so it is a constant, not
+a rare fix.
+
 WHAT EARNS A `fast` ROW, which is the harder question and the one this list
 got wrong for a long time.  `fast` is the only tier NOBODY OPTS INTO - `all`
 depends on it - so every second of it is charged to the contributor who is
@@ -117,15 +133,20 @@ one it is joining:
                         different people, with neither side's build saying
                         so - api-abi, stkclass, drvovl, fonts, pkgdeps
   RULES OVER EVERY LINE  what any assembly in this tree must obey, kernel
-                        and package alike - asmrules, ovlchk, textrules,
-                        stkbalance, stkapps, swallow
+                        and package alike - asmrules, ovlchk, stkbalance,
+                        stkapps, swallow. The ratchets of this family that
+                        cost over a second each - textrules, toast,
+                        movable, megapkg, cswrite, seg0, megagrid - run in
+                        `full` (the owner, 2026-11-11)
   THE SHIPPED ARTIFACTS  the floppies themselves, which anybody adding a
                         file reaches - image, pkg, diskverify, canary,
                         checkreadme
-  THE TREE AND ITS SUITE duplication, generated docs, and the gates'
-                        own integrity - mirror, checkdocs, docindex,
-                        registry, machines, qemuown, fixtures, layout,
-                        deps, stkwalker
+  THE TREE AND ITS DOCS  duplication, generated docs - mirror,
+                        checkdocs, docindex, layout, deps, stkwalker
+                        (`registry` itself is `full` for its cost). The suite's HARNESS and
+                        FIXTURES are not this family: machines, qemuown,
+                        fixtures, artpath, coldsym, bochssleep and
+                        knobself are `soak` (the owner, 2026-11-11)
 
 The membership is whatever carries the tier `fast` below; the families are
 how to argue about a new one.  docs/WRITING-TESTS.md section 2.1 is the same
@@ -264,7 +285,10 @@ FAST = [
         "when the unit moved assembles cleanly and reads 32 times too far "
         "into the file. Tracks the loaded VALUE, so a later unrelated shift "
         "is not one; red on rw_jpart's old conversion put back"),
-    Row("coldsym", "fast", py("tests/unit/t_coldsym.py"), 1.2,
+    Row("coldsym", "soak", py("tests/unit/t_coldsym.py"), 1.2,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "NO SCRIPT RESOLVES A `.cold` LABEL THROUGH os88sym.linear(). On a "
         "machine with neither a VGA nor an EGA - MartyPC's default CGA among "
         "them - kmain_o slides `.cold` down by VGA_PARA at boot (SPEC.md "
@@ -274,7 +298,10 @@ FAST = [
         "int 19h they existed to read it at, and passed. m.sym() follows the "
         "slide; a deliberate unslid use is a line in tests/coldsym.txt. "
         "VERIFIED TO FAIL on the three rows' old forms"),
-    Row("bochssleep", "fast", py("tests/unit/t_bochssleep.py"), 1.5,
+    Row("bochssleep", "soak", py("tests/unit/t_bochssleep.py"), 1.5,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "NO ROW THAT RUNS UNDER BOCHS PACES ITS SCENARIO IN HOST SECONDS. "
         "Bochs's guest clock is its instruction count capped at real time "
         "(docs/BOCHS.md, *The clock*), so a Bochs short of CPU - four to a "
@@ -539,7 +566,9 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
-    Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.3,
+    Row("wrsim", "soak", py("tests/unit/t_wrsim.py"), 0.3,
+        "SOAK (owner, 2026-11-11): WaveRack's; one package's own check, run"
+        " by whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "WaveRack's host reference (SPEC.md 123.3-123.5, tools/wrsim.py) "
         "and its art's selfcheck (tools/os88wrart.py: the pictures, the "
         "layouts, the small caps complete for every caption, every status "
@@ -553,7 +582,9 @@ FAST = [
         "the stereo spike survive the coarse envelope at Fit. A drifted "
         "reference would let tests/waverack.py compare the guest with the "
         "wrong answer and pass. Standard library, milliseconds"),
-    Row("x3xttab", "fast", py("tools/x3xttab.py", "--selfcheck"), 0.25,
+    Row("x3xttab", "soak", py("tools/x3xttab.py", "--selfcheck"), 0.25,
+        "SOAK (owner, 2026-11-11): XTMP3's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "XTMP3's XT table packs (SPEC.md 121.10, docs/xtmp3/XT-STUDY.md): "
         "every product row, encoder table, byte-split table and requantiser "
         "row is rebuilt by the EXACT integer recurrence the 8088 runs at "
@@ -564,8 +595,8 @@ FAST = [
         "is what --derive's formulas round to. Negative controls prove the "
         "checks can fail (an unbiased row, c16 + 1, a ties-up walk, and a "
         "mirrored error a plain word sum cannot see but fl32 must). Host "
-        "only, standard library, so FAST: the generator is the one source "
-        "of the bytes phase 2's x3xt.asm expands"),
+        "only, standard library: the generator is the one source of the "
+        "bytes phase 2's x3xt.asm expands"),
     Row("x3xtdesign", "soak", py("tools/x3xtstudy.py", "--check-design"), 8.0,
         "the XT study's chosen design (docs/xtmp3/XT-STUDY.md) against "
         "tools/x3xttab.py's literals: the code maps, the 8- and 4-term tap "
@@ -983,14 +1014,17 @@ FAST = [
         "linker here to notice. 1.5s warm, ~5s on a fresh build: the cost is "
         "ast-parsing ~200 host scripts, and os88geom keeps each one's answer "
         "under the file's SHA-1 in build/.os88geom-assigns.json"),
-    Row("chromesites", "fast", py("tests/unit/t_chromesites.py"), 0.2,
+    Row("chromesites", "soak", py("tests/unit/t_chromesites.py"), 0.2,
+        "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
+        "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1)."
+        " "
         "SPEC.md 11.103.5: every WF_FULL test in kernel/ is REGISTERED as "
         "CHROMELESS (written WM_CHROMELESS - on kern_big a word test of "
         "WF_FULL|WF_DESK, so a desk window draws no chrome either) or "
         "FULL-ONLY (the machine's one fullscreen latch, which a widget must "
         "never see), each with its reason - the two look identical in a diff "
         "and the next one is written by copying the last; an unregistered or "
-        "a vanished site fails make"),
+        "a vanished site fails this row"),
     Row("stik", "fast", py("tests/unit/t_stik.py"), 0.5,
         "SPEC.md 110.10: a Sticky App's shared half between MartyPC runs - "
         "tools/os88stik.py --selfcheck, tests/stikprob ASSEMBLED so the SDK's "
@@ -1034,7 +1068,10 @@ FAST = [
         "flag added tomorrow is covered tomorrow. A PREFIX IS NOT A FAMILY "
         "and grouping by one reports 81 false positives in this tree. "
         "VERIFIED TO FAIL by putting FHF_DEV back on 32."),
-    Row("artpath", "fast", py("tests/unit/t_artpath.py"), 0.1,
+    Row("artpath", "soak", py("tests/unit/t_artpath.py"), 0.1,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "a row that opens a BUILD ARTEFACT must resolve it through "
         "os88build.at(), or it reads build/ while the soak is reading its own "
         "frozen tree (docs/plans/SOAK-PARALLEL.md 14.2). It works standalone - "
@@ -1043,9 +1080,8 @@ FAST = [
         "cause. TEN rows failed one 368-row run this way and the count had "
         "grown every soak, because a `wants=` they already had looked like "
         "the answer: prebuild builds the artefact INTO THE TREE and the row "
-        "then opens build/. FAST because it is a whole-suite invariant that "
-        "costs a directory walk, and because the alternative to catching it "
-        "here is catching it in ninety minutes"),
+        "then opens build/. It is a whole-suite invariant that costs a "
+        "directory walk, and the soak runs it beside the rows it guards"),
     Row("p2restore", "soak", py("tests/unit/t_p2restore.py"), 0.3,
         "SPEC.md 9.9.7: the PS/2 probe's FAILURE paths must put the 8042's"
         " command byte back UNDOCTORED. [mou_p2cmd0] is banked with bit 5"
@@ -1653,7 +1689,10 @@ FAST = [
     Row("diskverify", "fast", py("tests/unit/t_diskverify.py"), 0.5,
         "the tree's own fsck, pointed at the seven images `make` ships and "
         "never ran on"),
-    Row("qemuown", "fast", py("tests/unit/t_qemuown.py"), 0.1,
+    Row("qemuown", "soak", py("tests/unit/t_qemuown.py"), 0.1,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "every test that LAUNCHES a QEMU registers a teardown for it. `make "
         "test` daemonises the emulator and returns, so for most of this tree's "
         "life a row that FAILED simply left its running - and the only thing "
@@ -1664,7 +1703,12 @@ FAST = [
         "build/os8088.img: the cost of the leak is paid by an unrelated row, "
         "hours later, wearing a message about the wrong subject "
         ""),
-    Row("hotpar", "fast", py("tests/unit/t_hotpar.py"), 0.1,
+    Row("hotpar", "soak", py("tests/unit/t_hotpar.py"), 0.1,
+        "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
+        "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1) "
+        "- so whoever touches a kernel hot path runs `python3 "
+        "tools/os88test.py soak -k hotpar` (0.07 s); `make` no longer does "
+        "it for them. "
         "every HOT routine - gfx_blit4, gfx_blit1_x, font_run, both mouse "
         "ISRs, kbm_isr, cur_move, sch_isr, sch_switch, ui_task, dsk_xfer, "
         "dsk_runcap, dsk_next_clus_x, wm_paint_all - starts at the address "
@@ -1714,7 +1758,10 @@ FAST = [
         "cylinder 34 of the 360KB apps floppy, straddling; RED on that layout "
         "on three of the shipped apps disks. Its own FAT reader, not the "
         "writer's"),
-    Row("debugdisk", "fast", py("tests/unit/t_debugdisk.py"), 0.6,
+    Row("debugdisk", "soak", py("tests/unit/t_debugdisk.py"), 0.6,
+        "SOAK (owner, 2026-11-11): SOUND.DRV's and the debug disks'; one "
+        "package's own check, run by whoever changes it (docs/WRITING-"
+        "TESTS.md 2.1). "
         "THE DEBUG DISKS (SPEC.md 127). The shipped SOUND.DRV is "
         "byte-identical to one assembled from sound.asm and sb.inc with every "
         "SDG_* hook, every %ifdef SNDDIAG block and the snddiag.inc include "
@@ -1819,10 +1866,16 @@ FAST = [
         "the answers with $OS88_TREE set and ratchets the build/ fallback "
         "out of tools/ and tests/. SOAK: it is about the emulator harness",
         needs=()),
-    Row("registry", "fast", py("tests/unit/t_registry.py"), 0.2,
+    Row("registry", "full", py("tests/unit/t_registry.py"), 0.2,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "every test in tests/ is registered in a tier or says why not - the row "
         "that stops this suite going back to a directory nobody can enumerate"),
-    Row("machines", "fast", py("tests/unit/t_machines.py"), 0.3,
+    Row("machines", "soak", py("tests/unit/t_machines.py"), 0.3,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "no row names a machine whose ROM this tree has not got. MartyPC "
         "falls back to glabios_pc when a romset is absent and says NOTHING, "
         "so nine rows spent months reporting passes about a machine they "
@@ -1830,7 +1883,10 @@ FAST = [
         "GLaBIOS twin still differs from its IBM original in `rom_set` alone "
         "- a drifted twin measures the config's difference and calls it the "
         "kernel's"),
-    Row("clscf", "fast", py("tests/unit/t_clscf.py"), 0.1,
+    Row("clscf", "soak", py("tests/unit/t_clscf.py"), 0.1,
+        "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
+        "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1)."
+        " "
         "every call to drv_cls_svc / drv_cls_fp tests the carry, or says in a "
         "CLSCF: comment why its class has a slot. A missed test reads another "
         "class's services and does not crash, and since kernel size pass 8 "
@@ -1901,7 +1957,9 @@ FAST = [
         "compilers agree - `soak -k 'lmpack'`, which is what a change to "
         "either one runs",
         needs=()),
-    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 0.6,
+    Row("lemdat", "soak", py("tests/unit/t_lemdat.py"), 0.6,
+        "SOAK (owner, 2026-11-11): Lemmings'; one package's own check, run "
+        "by whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "SPEC.md 116.2's standing check, and it is a SECOND READER rather "
         "than a repeat of the first: the 26 DOS Lemmings data files decoded "
         "again from Lemmings.ts's semantics - its container walk, its bit "
@@ -1928,7 +1986,10 @@ FAST = [
         "second review's MEASURED figure (0.44s alone, 0.6s in the tier; it "
         "was 2.4 when registered)",
         needs=()),
-    Row("movable", "fast", py("tests/unit/t_movable.py"), 0.6,
+    Row("movable", "full", py("tests/unit/t_movable.py"), 0.6,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "SPEC.md 66.6.1's ratchet: a package's region is born PINNED, so a "
         "package that never declares OS88_REGION_MOVABLE is a WALL in the "
         "arena for the life of the instance - and it is invisible from "
@@ -1938,10 +1999,7 @@ FAST = [
         "declares or carries a line in tests/movable.txt saying why not, and "
         "the list only turns one way. Checks the WORKER half too (66.6.2): a "
         "region declaration on a package that hires a worker is INERT, which "
-        "is the most expensive shape there is because it reads as done. FAST "
-        "and not soak on t_textrules.py's argument - it is a rule about how "
-        "every package is written, so the place it belongs is in front of "
-        "the next `make` rather than the next soak run"),
+        "is the most expensive shape there is because it reads as done"),
     Row("gfxclob", "soak", py("tests/unit/t_gfxclob.py"), 6.0,
         "THE LINE CELLS CLOBBER AX..DX (SPEC.md 5.7.3, ABI-BREAK-LIST V1): "
         "OSAPI_GFX_PIXEL/HLINE/VLINE jump into gfx_fill with their argument "
@@ -1972,7 +2030,10 @@ FAST = [
         "arriving as modules, a new mod_tab row is the one path every one of "
         "them takes, and the place to refuse it is the next `make`. It reads "
         "that a drop is WRITTEN; that it is reached is stiknodesk's G"),
-    Row("toast", "fast", py("tests/unit/t_toast.py"), 2.0,
+    Row("toast", "full", py("tests/unit/t_toast.py"), 2.0,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "EVERY STRING THAT CAN REACH A TOAST IS A TOASTSTR (SPEC.md 59.10.1). "
         "toast_show keeps TOAST_MAX = 24 characters and drops the rest "
         "SILENTLY, and the cap is geometry. The LENGTH is the assembler's: "
@@ -2000,12 +2061,18 @@ FAST = [
         "wrapper, a stale toastdyn.txt line, an unclosed TOASTRUN, and the "
         "two macro blocks made to differ. Measured at 1.9s",
         ),
-    Row("textrules", "fast", py("tests/unit/t_textrules.py"), 0.7,
+    Row("textrules", "full", py("tests/unit/t_textrules.py"), 0.7,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "SPEC.md 6.6's ratchet: transparent text (font_char/font_str) draws every "
         "pixel twice and flashes on the target machine, so every call site is "
         "registered in tests/textsites.txt with a reason and the count can only "
         "go down"),
-    Row("cswrite", "fast", py("tests/unit/t_cswrite.py"), 0.5,
+    Row("cswrite", "full", py("tests/unit/t_cswrite.py"), 0.5,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "docs/plans/KERN-MEGA-PLAN.md 2.4's ratchet: a write through CS and a "
         "`push cs / pop ds|es` are free in real mode and a #GP in 286 "
         "protected mode, where code is read-only. kern_mega shares most of "
@@ -2013,29 +2080,36 @@ FAST = [
         "runs here while it breaks a build nobody can boot yet. Every file "
         "under kernel/ and drivers/ that uses either idiom is registered in "
         "tests/cswrites.txt with its count and a reason, and the count can "
-        "only go down. FAST on t_textrules.py's argument - a rule about how "
-        "every kernel file is written belongs in front of the next `make`"),
-    Row("seg0", "fast", py("tests/unit/t_seg0.py"), 0.5,
+        "only go down"),
+    Row("seg0", "full", py("tests/unit/t_seg0.py"), 0.5,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "docs/plans/KERN-MEGA-PLAN.md 10.1 item 11's ratchet: segment 0 in DS "
         "or ES is how real mode reads the IVT and the BIOS data area, and in "
         "286 protected mode it is the NULL selector, #GP(0) on the first "
         "access - the Victory 286's keyboard pointer died of it, and QEMU does "
         "not fault on it at all. Every file under kernel/ and drivers/ that "
         "loads one on an arm kern_mega assembles is registered in "
-        "tests/seg0.txt with its count and a reason. FAST for cswrite's "
-        "reason, on the same walker"),
-    Row("megagrid", "fast", py("tests/unit/t_megagrid.py"), 0.6,
+        "tests/seg0.txt with its count and a reason. Same walker as "
+        "cswrite"),
+    Row("megagrid", "full", py("tests/unit/t_megagrid.py"), 0.6,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "docs/plans/KERN-MEGA-PLAN.md 14.39's ratchet: under kern_mega's "
         "protected mode only a multiple of EIGHT paragraphs is a segment, so "
         "a far pointer normalised to one paragraph (`and si, 15`), a byte "
         "count rounded up to paragraphs, or a one-paragraph segment step is a "
         "fault - or an LDT alias of OTHER memory, read with no fault at all. "
         "Every file of a package that says OS88_HIGH that builds one is "
-        "registered in tests/megagrid.txt with its count and a reason. FAST "
-        "on cswrite's argument one tree over: it is a rule about how fifty "
-        "packages are written, and the writer who breaks it has never booted "
-        "kern_mega"),
-    Row("megapkg", "fast", py("tests/unit/t_megapkg.py"), 1.6,
+        "registered in tests/megagrid.txt with its count and a reason. It "
+        "is a rule about how fifty packages are written, and the writer who "
+        "breaks it has never booted kern_mega"),
+    Row("megapkg", "full", py("tests/unit/t_megapkg.py"), 1.6,
+        "FULL (owner, 2026-11-11): each costs over a second, so it runs "
+        "where a merge is checked rather than on every `make` - the rule it"
+        " gates is unchanged. "
         "docs/plans/KERN-MEGA-PLAN.md 14.66, the owner's rule: 'mega specific "
         "work that more than trivially increases the disk size is gated to "
         "mega builds only.' kern_mega-only code is under %ifdef PKG_MEGA "
@@ -2048,8 +2122,8 @@ FAST = [
         "package naming PKG_MEGA has an arm in $(MEGAPKGS); and a current "
         "build/megaapps*.img carries the arms. Red on 2e77a97e six ways "
         "(VIDEO's vblkpm part three times, VIDEO's live CPU_F_PM/XMEM_RUN/"
-        "CODESEL, os88spkfx.inc's and MIDIRack's PM copies). FAST: host-side "
-        "and 1.6s, and the writer who breaks it never builds kern_mega"),
+        "CODESEL, os88spkfx.inc's and MIDIRack's PM copies). Host-side, and "
+        "the writer who breaks it never builds kern_mega"),
     Row("btngesture", "soak", py("tests/btngesture.py"), 20.0,
         "SPEC.md 13.7/13.8 ON THE GLASS: a standard button goes DOWN while "
         "held, comes UP when the pointer slides off it, goes down again on the "
@@ -2110,7 +2184,10 @@ FAST = [
         "early - on real code, silently. Five readers got it wrong "
         "independently: two rows dead since 2.9, two reporting .cold as "
         "corrupt every run, and stkwater recognising 126 of 3,000 call sites"),
-    Row("fixtures", "fast", py("tests/unit/t_fixtures.py"), 0.1,
+    Row("fixtures", "soak", py("tests/unit/t_fixtures.py"), 0.1,
+        "SOAK (owner, 2026-11-11): about the suite's own harness and "
+        "fixtures, not the OS - the release soak runs every row "
+        "(docs/WRITING-TESTS.md 2.1). "
         "a row's scratch floppy is a BUILD PRODUCT: os88disk.py behind a bare "
         "`not os.path.exists` builds it once and every run after boots "
         "whatever build/ held that minute, which is the stale kernel.bin trap "
@@ -2226,8 +2303,10 @@ FAST = [
         "the RTL8139 backend and rt_es puts an OSAPI_SEG call on the "
         "receive and transmit path. Measured 2026-11-04: 12 dropped saves "
         "across 5 routines, all holding"),
-    Row("sheetfmtlib", "fast",
+    Row("sheetfmtlib", "soak",
         py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
+        "SOAK (owner, 2026-11-11): SHEET's host-side reader; one package's "
+        "own check, run by whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
         "DIF and BIFF2 reader that gives SHEET's file formats a SECOND "
         "OPINION (SPEC.md 81.38). It is written from the published grammars "
@@ -2344,7 +2423,9 @@ FAST = [
         "adopter passed `stkapps`), and the COUNTED rows ask for an exact "
         "number: Video seeded two broken jumps into one shared epilogue and "
         "the walker reported ONE, both ending at the same `ret`"),
-    Row("win16ne", "fast", py("tests/unit/t_win16ne.py"), 0.3,
+    Row("win16ne", "soak", py("tests/unit/t_win16ne.py"), 0.3,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "WIN16's census (tools/os88ne.py, SPEC.md 124.4) gives the CPU verdict "
         "S2's loader refuses on, and it must come from code REACHED by "
         "recursive descent: an 8088 running a 186 program does not fault, it "
@@ -2357,7 +2438,9 @@ FAST = [
         "every prefix and some noise must not raise, and, when present, the "
         "Open Watcom fixtures (`make win16fixtures`) and the reference "
         "programs (the win16-reference skill) must give the plan's verdicts"),
-    Row("w16fp", "fast", py("tests/unit/t_w16fp.py"), 1.5,
+    Row("w16fp", "soak", py("tests/unit/t_w16fp.py"), 1.5,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "WIN16's 8087 emulator (SPEC.md 124.5.1, part W16P_FPU) under unicorn "
         "against EXACT arithmetic: apps/win16/w16fp.inc assembled alone and "
         "fed the int 34h-3Dh the loader leaves where a program's x87 was, "
@@ -2372,7 +2455,9 @@ FAST = [
         "must be exactly X87_EMU_LACKS, so the census's report about a "
         "program is the emulator's own answer",
         needs=("nasm", "unicorn")),
-    Row("w16cens", "fast", py("tests/unit/t_w16cens.py"), 1.0,
+    Row("w16cens", "soak", py("tests/unit/t_w16cens.py"), 1.0,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "WIN16's IN-GUEST census (SPEC.md 124.4.1, apps/win16/w16cens.inc) "
         "against tools/os88ne.py's: the whole of WIN16 assembled and run under "
         "unicorn, its own w16_census called on each program in build/win16/ "
@@ -2385,7 +2470,9 @@ FAST = [
         "`make win16fixtures`'s, which `make clean` removes, so it needs them "
         "rather than failing a clean tree's `make` on its own SKIP",
         needs=("nasm", "unicorn", "win16fixtures")),
-    Row("w16xsec", "fast", py("tests/unit/t_w16xsec.py"), 3.0,
+    Row("w16xsec", "soak", py("tests/unit/t_w16xsec.py"), 3.0,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "WIN16 is one nasm run emitting the image and its code parts, each at "
         "vstart=0, so a near call from a part to an image label (or back) "
         "assembles cleanly and lands on whatever the CALLER's segment holds "
@@ -2396,7 +2483,9 @@ FAST = [
         "not read its own data without cs:. S14 moves handlers into the "
         "library part, and this is what keeps that move honest",
         needs=("nasm",)),
-    Row("w16wrap", "fast", py("tests/unit/t_w16wrap.py"), 3.0,
+    Row("w16wrap", "soak", py("tests/unit/t_w16wrap.py"), 3.0,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "A near call or jmp adds a 16-bit displacement to IP modulo 64 KB, "
         "and QEMU (11.0) skips that wrap when the jump stays on one 4 KB "
         "page of a segment whose base is not page-aligned - which a call "
@@ -2533,13 +2622,15 @@ FULL = [
         "and a stale line for a package that declares. FULL and not fast "
         "because the owner asked for it there; host-side, 2s measured",
         needs=()),
-    Row("w16censall", "full", py("tests/unit/t_w16cens.py", "--all"), 3.5,
+    Row("w16censall", "soak", py("tests/unit/t_w16cens.py", "--all"), 3.5,
+        "SOAK (owner, 2026-11-11): WIN16's; one package's own check, run by"
+        " whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "w16cens over EVERY program under win16ref/samples/ as well - the "
         "whole of Windows 3.0's directory (CLOCK and REVERSI, S11's stock-8088 "
         "programs, among them), Windows 3.1's CALC and WINMINE and WinMine "
         "2.6-2.9: 43 programs, the guest's walk byte-identical to the host's "
-        "and every verdict the same. Full and not fast for its 3 s; it runs "
-        "only where the win16-reference skill has put the samples",
+        "and every verdict the same. It runs only where the win16-reference "
+        "skill has put the samples",
         needs=("nasm", "unicorn", "win16samples")),
     Row("sysfree", "full", py("tests/unit/t_sysfree.py"), 0.2,
         "at the owner's word: every SYSTEM disk keeps room for what the "
@@ -2553,25 +2644,29 @@ FULL = [
         "and not fast because the owner asked for it there; host-side, "
         "0.03s measured",
         needs=()),
-    Row("knobself", "full", py("tools/os88knob.py", "--selfcheck"), 0.5,
+    Row("knobself", "soak", py("tools/os88knob.py", "--selfcheck"), 0.5,
+        "SOAK (owner, 2026-11-11): a host tool's own selfcheck "
+        "(tools/os88knob.py), not the OS (docs/WRITING-TESTS.md 2.2). "
         "tools/os88knob.py's merge, fuzzed: 400 random NASM-shaped files with "
         "nested conditionals, two knobs' edits merged, and every knob "
         "combination's view must equal its variant with every arm balanced. "
         "Red, tried, twice: with regions that TOUCH widened instead of merged "
         "(9 wrong), and with the balancing switched off (28 wrong) - the two "
-        "defects the merge had in kernel hot-paths pass 1. FULL: a tool's "
-        "own check, 0.4s measured",
+        "defects the merge had in kernel hot-paths pass 1. 0.4s measured",
         needs=()),
-    Row("khpknobs", "full", py("tests/unit/t_khpknobs.py"), 4.0,
+    Row("khpknobs", "soak", py("tests/unit/t_khpknobs.py"), 4.0,
+        "SOAK (owner, 2026-11-11): only a kernel edit can break it, and "
+        "whoever edits that subsystem names it (docs/WRITING-TESTS.md 2.1) "
+        "- knob arms no shipped kernel assembles. "
         "every KHP_* knob in the kernel sources (kernel/kernel.asm's KHP "
         "block: kernel hot-paths pass 1's rewrites of hot paths, eleven on "
         "kern_mega and seven on NO kernel) assembles on kern_big and "
         "kern_small with ALL of them on, so an arm no shipped build "
         "assembles cannot rot unseen. Red, tried: one call in KHP_STRRUN's "
         "arm aimed at a label that does not exist fails here while the "
-        "shipped kern_big still assembles. FULL and not fast: two kernel "
-        "assemblies, ~3.7s measured, and stkbalance's knobs-on walk already "
-        "reads these arms on every make",
+        "shipped kern_big still assembles. Two kernel assemblies, ~3.7s "
+        "measured; stkbalance's knobs-on walk reads these arms on every "
+        "make, but only this row ASSEMBLES them",
         needs=("nasm",)),
     Row("noovl", "full", py("tests/unit/t_noovl.py"), 0.1,
         "at the owner's word (SPEC.md 19.11): no shipped disk carries an "
@@ -21876,7 +21971,9 @@ SOAK = [
         needs=("bochs", "nasm"),
         wants=("build/mega.img", "build/megak/kernel.map", "build/browser.o88",
                "build/megarun.o88")),
-    Row("brcapacity-fixtures", "fast", py("tests/brcapacity.py", "--fixtures"), 0.2,
+    Row("brcapacity-fixtures", "soak", py("tests/brcapacity.py", "--fixtures"), 0.2,
+        "SOAK (owner, 2026-11-11): the Browser's; one package's own check, "
+        "run by whoever changes it (docs/WRITING-TESTS.md 2.1). "
         "SPEC.md 71.18.1: the manual 96 KiB source/document, 2,200-row, "
         "400-link, doubled-form and aggregate-frameset pages have the exact "
         "sizes and counts the Browser capacity gate expects. builds=True only "

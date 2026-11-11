@@ -85,6 +85,13 @@ identify the site, and re-run the red arm whenever the code under it changes.
 | `full` | **180s, enforced** | one question: *did you obviously break the OS?* |
 | `soak` | **none, deliberately** | everything else, one `-k` away. |
 
+**The owner's rule (2026-11-11), and it binds both gates: `fast` and `full`
+are for "did you break the BUILD or the OS, or critical documentation
+maintenance" - nothing else.** A row about ONE package, about KERNEL
+INTERNALS, or about the SUITE'S OWN harness and fixtures is `soak`, however
+cheap it is. That does not lose it: the release soak runs every row, and
+whoever touches the subject runs its rows with `-k`.
+
 **Choose by what the row costs and how broadly it fails, never by how
 important it is.** Neither expensive tier runs per commit: `full` runs when
 major work reaches the integration branch, and `soak` runs scoped to the rows
@@ -97,7 +104,7 @@ in doubt, `soak`.**
 `fast` is the one tier nobody opts into, so every second of it is charged to
 somebody who never touched its subject. The question is not "is this worth
 having" but "is it worth having to somebody who did not touch this?" Either
-of these sends a row to `soak`:
+of these sends a row to `soak`, whatever it costs:
 
 1. **It is about ONE package, driver or host tool.** Whoever changes it runs
    its row. Being a build input (a generated include, a committed asset) is
@@ -106,20 +113,38 @@ of these sends a row to `soak`:
    rank is defended by whoever edits that subsystem. The exception: a
    kernel-side row stays if code OUTSIDE the kernel has to agree with it (a
    package, a driver, the SDK, a Makefile recipe). Ask whose else's file must
-   agree, not which directory the test reads.
+   agree, not which directory the test reads. A kernel-internal row that
+   `make` used to run for you - `hotpar`, `chromesites`, `clscf`,
+   `khpknobs` - is now yours to name when you edit what it guards:
+   `python3 tools/os88test.py soak -k hotpar` after touching a kernel hot
+   path is 0.07 s.
+3. **It is about the suite itself** - the harness, the emulator drivers, a
+   row's fixtures, a tool's own selfcheck (`machines`, `qemuown`,
+   `fixtures`, `artpath`, `coldsym`, `bochssleep`, `knobself`). Those
+   defend the SOAK, so the soak is where they run.
 
 What survives is four families; a new `fast` row should name the one it joins:
 
 | family | what it is | some of its rows |
 |---|---|---|
 | **The boundary** | the kernel and the code loaded onto it, edited by different people | `api-abi`, `stkclass`, `drvovl`, `drvmem`, `fonts`, `pkgdeps` |
-| **Rules over every line** | what any assembly in this tree must obey | `asmrules`, `ovlchk`, `textrules`, `stkbalance`, `stkapps`, `swallow` |
+| **Rules over every line** | what any assembly in this tree must obey | `asmrules`, `ovlchk`, `stkbalance`, `stkapps`, `swallow` |
 | **The shipped artifacts** | the floppies themselves | `image`, `pkg`, `diskverify`, `canary`, `checkreadme` |
-| **The tree and its suite** | duplicated constants, generated docs, the gates' own integrity | `mirror`, `checkdocs`, `docindex`, `registry`, `machines`, `qemuown` |
+| **The tree and its docs** | duplicated constants, generated docs - critical documentation maintenance | `mirror`, `checkdocs`, `docindex`, `layout` |
 
-Two named exceptions are the owner's decisions and are **not precedents**:
-`kernbudget` stays for the size line it prints on every build, and
-`readme8088` because the owner wants it. Moving a row down to `soak` is not
+**A rule over every line that costs OVER A SECOND goes to `full`, not
+`fast`** (the owner, 2026-11-11): `textrules`, `toast`, `movable`,
+`megapkg`, `registry`, `cswrite`, `seg0` and `megagrid`. The rule each one
+gates is unchanged; `make test-full` is where it is checked, not every
+`make`.
+
+Named exceptions are the owner's decisions and are **not precedents**:
+`kernbudget` stays for the size line it prints on every build,
+`readme8088` because the owner wants it, `btnrules` because authors kept
+actually breaking it and the owner then had to fix the packages by hand,
+and `guidelock` because it is the only reason the guide stays current -
+the people integrating new work have the knowledge and the responsibility
+to update the guide at integration, so it is a constant, not a rare fix. Moving a row down to `soak` is not
 deleting it; it changes who pays for it.
 
 ### 2.2 What earns a `full` row
@@ -147,9 +172,13 @@ in the source declares itself movable or has a line in `tests/pins.txt`) and
 `pinsrt` (the same buckets read back out of `mem_tab` on MartyPC,
 docs/plans/NO-PINNING-PLAN.md 4.1).
 
-Three more sit in `full` against the rules above and are `soak` candidates:
+Eight more are the fast tier's rules over every line that cost over a
+second each, moved here by the owner on 2026-11-11 (§2.1): `textrules`,
+`toast`, `movable`, `megapkg`, `registry`, `cswrite`, `seg0`, `megagrid`.
+
 `w16censall` (one program family), `knobself` (a tool's own check) and
-`khpknobs` (knob builds).
+`khpknobs` (knob builds) sat here against these rules until the owner moved
+them to `soak` on 2026-11-11.
 
 ---
 

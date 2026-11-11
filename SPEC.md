@@ -11788,7 +11788,8 @@ once. docs/plans/completed/TEXT-PLAN.md §3.1 is the worked example.
 
 #### 6.6.3 The gate — `tests/unit/t_textrules.py`
 
-A **`fast`-tier row**, so it runs on every `make`. It walks `kernel/`,
+A **`full`-tier row** (it was `fast` until the owner moved it on 2026-11-11
+for its cost), so `make test-full` runs it. It walks `kernel/`,
 `drivers/`, `apps/` and `tests/` for every call to a transparent text entry —
 `OSAPI_FONT_*_XPARENT`, `os88_font_*_xparent`, and the kernel-internal
 `font_char` / `font_str` / `font_str_x` and their `cw_` shims — and compares the
@@ -19049,8 +19050,8 @@ a rare cell is six bytes (§20.3).*
   **docs/plans/LAST-DROP-BYTES.md §7.7.8**, gate first and size change second,
   because the same walk covers `drv_cls_fp_x`'s identical refusal and is worth
   more than the 38 bytes that motivated it.
-  **BUILT, kernel size pass 8**: the gate is `tests/unit/t_clscf.py` (fast
-  tier, row `clscf`) - a `jc`/`jnc` within four CF-neutral instructions of
+  **BUILT, kernel size pass 8**: the gate is `tests/unit/t_clscf.py` (soak
+  row `clscf`) - a `jc`/`jnc` within four CF-neutral instructions of
   every call, or a `; CLSCF: <why>` naming why that site's class has a slot
   (three sites: a block volume's class, and a loaded row's for the two
   `drv_cls_fp` stores). Then `drv_cls_svc_x` refuses `DRVC_POINT` (`cmp` /
@@ -23708,12 +23709,12 @@ the same store, for every window (§11.103.6).
 `WF_FULL` (§11.2) was already the kernel's "no title, no border, no shadow"
 and most of its byte tests mean exactly that; a few mean THE LATCH - the one
 fullscreen window of the machine - and must not see a widget. **Each test is
-classified**, and `tests/unit/t_chromesites.py` (fast tier) is the ratchet:
+classified**, and `tests/unit/t_chromesites.py` (soak row `chromesites`) is the ratchet:
 every `WF_FULL` reference in `kernel/` is registered by its enclosing routine
 as CHROMELESS (it must read `test word [..+W_FLAGS], WF_FULL | WF_DESK`,
 `0x0408`, one byte longer than the byte test) or FULL-ONLY (it must not name
 `WF_DESK`), each with its reason, and an unregistered or a stale entry fails
-`make`.
+the row - name it after touching a `WF_FULL` test in `kernel/`.
 
 | routine | class | why |
 |---|---|---|
@@ -52907,7 +52908,7 @@ through a run of selectors and its block decoder's protected-mode part
    every real-mode kernel as it did, so `PKG_FMT` does not refuse it; it
    must be REBUILT for kern_mega, and kern_mega pairs with its own release's
    apps disk (§41.16).
-3. **`tests/unit/t_megapkg.py` is the gate** (fast tier): every shipped
+3. **`tests/unit/t_megapkg.py` is the gate** (full tier): every shipped
    build's live source — the shipped recipe's defines, `PKG_MEGA` and
    `KERN_MEGA` unset, through every `%include` the package names — may name a
    kern_mega marker (`CPU_F_PM`, `OSAPI_MEM_CODESEL`, `OSAPI_MEM_SUBSEG`,
@@ -123788,7 +123789,7 @@ is **invisible from inside the package**: nothing refuses, nothing warns, the
 program runs perfectly and the heap quietly cannot pack. That is §6.6's
 transparent-text failure one mechanism along, and it gets §6.6's answer.
 
-`tests/unit/t_movable.py` (fast tier) walks every package under `apps/` and
+`tests/unit/t_movable.py` (full tier) walks every package under `apps/` and
 fails the build for one that does not declare, or that hires a worker and never
 declares it restartable. **Both halves, because half a declaration buys
 nothing**: §66.6.2's frame pins the region however it is declared, so a region
@@ -232244,7 +232245,7 @@ rather than merely describing it — §116.3.2.
 |---|---:|---|
 | 1.44MB and 1.2MB | — | everything: all 120 levels, all five styles, all four special pictures |
 | 720KB | 713 | everything **except the four VGASPEC pictures** — 116 of the 120 levels and all five sets. The pictures are 309,248 bytes = 304 clusters as banks, and the rest takes the disk to **710 of 713** clusters as `make lemmingsdisk` builds it after wave 6's third review (709 after its review and the spray, 700 after wave 5's second review, 695 after wave 4; the planner drops levels here too when a disk is short, never refusing, so `LEVEL_PIN` holds this disk to 116 as well) — the converter's manifest says the same 700, being handed the built package (`--pkg`), and `--check-image` holds the two equal |
-| 360KB | 354 | **two graphic sets — Squasher and Pillar — and 53 of the 55 levels that use them** after wave 5, unchanged at wave 6 and kept through the spray (**352 of 354** since wave 6's third review: `LEMMAIN.LEM` +8 clusters at the review, the package **42** since the third review's nuke fallback, `LEVELS.TXT` in its compact form - **NO cluster of headroom** before the next step loses 15 levels, §116.6; it was 351 and one cluster from the review to the second). **The count is RATCHETED** (the third review): `tools/os88lem.py`'s `LEVEL_PIN` pins every disk's playable levels - 120, 120, 116, and 53 with sets 2 and 3 here - and refuses a plan that answers otherwise with the cluster arithmetic, so `make lemmingsdisk` fails rather than shipping 38 levels; `tests/unit/t_lemdat.py` holds the built bands to its own copy of the pin in the fast tier. Dropping a level is the owner's call, and the pin changes only by a written decision; `--unpinned` is for the headroom measurement. Before the spray: the package with its module packed inside it is **40,680 bytes = 40 clusters** at wave 6 (40,633 after wave 5's second review, 37,627 = 37 after wave 4), and those three clusters cost the disk a group of level records, so Mayhem 28 and 29 are back to `MISS_ROOM` and say so in the chooser and in `LEVELS.TXT` (wave 4's second review had fitted them, at 352 of 354). The disk is **348 of 354 clusters** — two of the six left are LEMMINGS.SAV's, which every plan holds back (`SAV_CLUSTERS`) and which no image as built uses, and the other four are short of the next group of records. With those two levels gone the names fit again, so this disk's `LEVELS.TXT` NAMES its levels, as the others do; at wave 4 it listed them by number, because there the names cost it a level (below) |
+| 360KB | 354 | **two graphic sets — Squasher and Pillar — and 53 of the 55 levels that use them** after wave 5, unchanged at wave 6 and kept through the spray (**352 of 354** since wave 6's third review: `LEMMAIN.LEM` +8 clusters at the review, the package **42** since the third review's nuke fallback, `LEVELS.TXT` in its compact form - **NO cluster of headroom** before the next step loses 15 levels, §116.6; it was 351 and one cluster from the review to the second). **The count is RATCHETED** (the third review): `tools/os88lem.py`'s `LEVEL_PIN` pins every disk's playable levels - 120, 120, 116, and 53 with sets 2 and 3 here - and refuses a plan that answers otherwise with the cluster arithmetic, so `make lemmingsdisk` fails rather than shipping 38 levels; `tests/unit/t_lemdat.py` (soak row `lemdat`) holds the built bands to its own copy of the pin. Dropping a level is the owner's call, and the pin changes only by a written decision; `--unpinned` is for the headroom measurement. Before the spray: the package with its module packed inside it is **40,680 bytes = 40 clusters** at wave 6 (40,633 after wave 5's second review, 37,627 = 37 after wave 4), and those three clusters cost the disk a group of level records, so Mayhem 28 and 29 are back to `MISS_ROOM` and say so in the chooser and in `LEVELS.TXT` (wave 4's second review had fitted them, at 352 of 354). The disk is **348 of 354 clusters** — two of the six left are LEMMINGS.SAV's, which every plan holds back (`SAV_CLUSTERS`) and which no image as built uses, and the other four are short of the next group of records. With those two levels gone the names fit again, so this disk's `LEVELS.TXT` NAMES its levels, as the others do; at wave 4 it listed them by number, because there the names cost it a level (below) |
 
 **LEMMINGS.SAV KEEPS TWO CLUSTERS, NOT ONE** (`SAV_CLUSTERS` = 2): one for the
 file and one for the replace. §18.4's write order puts a file's new chain down
@@ -240587,7 +240588,7 @@ A line that is right for a reason the gate cannot see says so with
 #### 124.19.4 The gate rows
 
 The rows stay as they were: every `win16*` row from S1–S13, plus
-`w16xsec` (fast) and `w16cens`, which reads the no-return bit out of the
+`w16xsec` and `w16cens`, which reads the no-return bit out of the
 bind table now. A program's bind table and the library part change no
 behaviour a row can see. The library part's residency changes the claims a
 program holds while no dialog is up, which `win16desk` reads.
@@ -244631,7 +244632,7 @@ rewritten to a thunk would end its walk there, and the code reached only
 through it would not be swept: a 186 instruction in it would run as something
 else. `w16c_far` reads a call into the module block's thunk paragraph as the
 (segment, offset) the thunk names, an entry's thunk too, whose code is a seed
-anyway. `t_w16cens` (fast) runs every program a second time with its far calls
+anyway. `t_w16cens` runs every program a second time with its far calls
 laid out through thunks, and fails without it.
 
 **The segment a thunk loads is held while the segments it kept are read.**
@@ -245947,7 +245948,7 @@ claim landed, which is why a 1 KB task stack, by moving the heap, hid it. So
 in `.w16dlg` (`w16v_sx` = d) `W16V_CALL` is `call word [cs:thunk_p]`, a
 word `W16PM_PART` writes beside each thunk: 2 bytes a site, 79 sites, 164
 bytes of the arm's library part. The real-mode build is unchanged, byte for
-byte. **`tests/unit/t_w16wrap.py`** (fast) holds both builds, image and every
+byte. **`tests/unit/t_w16wrap.py`** (soak) holds both builds, image and every
 part, to the rule: no E8/E9 whose IP wraps with a displacement under 4 KB.
 It reads the maps the Makefile writes beside each `win16.bin`.
 
