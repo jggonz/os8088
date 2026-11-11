@@ -940,6 +940,7 @@ static pdw verb_init(pdw xbseg)
             o = g_ini.glyph_seg ? (g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb) : 0;
             i = g_ini.glyph_seg != g_gseg || o != g_gkb;
             syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb);
+            syn_doc();
             if (i) { glyph_fresh(); g_xclost = 1; }
             return PDE_OK;
         }
@@ -970,12 +971,7 @@ static pdw verb_init(pdw xbseg)
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0; g_gnogrow = 0; g_tmref = 0;
-    /* ...and the glyph claim's synthetic strike blocks (20.22.8) are the last document's: their
-     * directory names fonts by OBJECT NUMBER, which the next file reuses for another font. The
-     * claim outlives a File > Open, so FTYPE3 found FTTCIDMA's TrueType block for 7 0 R and read
-     * a glyph bitmap as its Type 3 CharProc's number: "form stream", a blank page (QA R26 c).
-     * Clearing the magic is what a fresh claim has (+62 = 0): PDXF starts the directory again */
-    if (g_gseg && syn_cap()) pd_ffill(g_gseg, (pdw)(syn_hdr() + 62), 0, 2);
+    g_syndoc = 0; syn_doc();            /* ...and the synthetic strike blocks are the last one's */
     g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }
