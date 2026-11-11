@@ -16,12 +16,18 @@ font program cannot be opened beside the page's content stream and PDXF inflates
 with PDXF, then the text with PDXF refused and every slice the ladder answered sent again
 stale (as the primary does: it must finish, not ladder forever), then the text right after
 drawing the page with PDXF refused, which the strike blocks carry and must equal the first.
+--docs renders every fixture's page 1 one file after another in one process (QA R24 on VGA: a strike
+block of the last file's font matched the next file's object numbers); each must equal its render alone.
 --small runs each fixture with one Flate slot and a 32 KiB workspace (QA R13's QZTEXT scatter): grown
 to its want it must draw as at 48 KiB; refused, it draws the same or notes the font, never a
 truncated program silently.
 --grow checks the glyph claim's want (QA R24): a page with five embedded fonts needs five strike blocks;
 from a 40 KiB claim (four) it must grow to 48 and draw as a 48 KiB claim does, and a refused growth must
 finish with "glyph block full" noted, never ladder forever.
+--nopr draws each fixture page with every font program unusable (QA R13: MUHTML, LICJA, LICZH were
+BLANK when their CID programs did not fit): PDXF still reads the font's tables, so the page must draw its
+text in the substitute face - ink on every page whose text map is not empty - with "font substituted"
+noted, and its text map must equal the one with the programs.
 --seq renders every page of each fixture and then page 1 again in ONE process (PDR_SEQ): the
 glyph claim and its strike blocks carry over from page to page as they do on the machine
 (QA R24), so no page may say "glyph block full" and the second page 1 must equal the first.
@@ -64,6 +70,8 @@ def main():
     ap.add_argument("--seq", action="store_true"); ap.add_argument("--text", action="store_true")
     ap.add_argument("--grow", action="store_true")
     ap.add_argument("--small", action="store_true")
+    ap.add_argument("--docs", action="store_true")
+    ap.add_argument("--nopr", action="store_true")
     a = ap.parse_args()
     from PIL import Image
     import numpy as np
@@ -75,6 +83,56 @@ def main():
     open(os.path.join(bank, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + res)
     shutil.copy(os.path.join(ROOT, "build", "PDFONTX.RES"), bank)
     names = a.fixtures or sorted(f[:-5] for f in os.listdir(FIX) if f.endswith(".json"))
+    if a.docs:
+        # QA R24's VGA "glyph block full": every fixture's page 1, one file after another in ONE process,
+        # as a session opens them. Object numbers repeat across files, so a strike block left by the last
+        # file matched the next one's (font, size) - its glyphs, or its full keys. Each render must equal
+        # the same page rendered alone
+        # Twice: with a 40 KiB claim from the start (the INIT clears the header), and as the machine runs it -
+        # a 24 KiB claim GROWN to 40 for each file's first block, into memory the last file's grown claim
+        # left, header and all (the primary's heap hands the freed claim back; QA R24 round 2)
+        W, H = 600, 800
+        bad = 0
+        for how, genv in (("40 KiB", {"PDR_GLYPHKB": "40"}), ("grown", {"PDR_GLYPHKB": "24", "PDR_GLYPHGROW": "1", "PDR_GLYREUSE": "1"})):
+            with tempfile.TemporaryDirectory() as t:
+                seq = " ".join("%s:0" % os.path.join(FIX, json.load(open(os.path.join(FIX, n + ".json")))["pdf"]) for n in names)
+                ob = os.path.join(t, "s")
+                r = subprocess.run([exe, "render", "x", "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0", ob, bank, "29"],
+                                   capture_output=True, text=True, env=dict(os.environ, PDR_SEQ=seq, **genv))
+                incs = [int(l.split("incomplete=")[1].split()[0], 16) for l in r.stdout.split("\n") if "incomplete=" in l]
+                for k, n in enumerate(names):
+                    one = os.path.join(t, "one.ppm")
+                    subprocess.run([exe, "render", os.path.join(FIX, json.load(open(os.path.join(FIX, n + ".json")))["pdf"]), "0", "100", "0", "4", "1/1",
+                                    str(W), str(H), "0", "0", one, bank, "29"], capture_output=True, env=dict(os.environ, **genv))
+                    same = os.path.exists(ob + ".%d.ppm" % k) and open(one, "rb").read() == open(ob + ".%d.ppm" % k, "rb").read()
+                    full = k < len(incs) and incs[k] & 0x0080
+                    ok = same and not full
+                    print("%-14s %-6s after %d other files: %s%s  %s" % (n, how, k, "as alone" if same else "DIFFERS",
+                          ", glyph block full" if full else "", "ok" if ok else "FAIL"))
+                    bad += not ok
+        return 1 if bad else 0
+    if a.nopr:
+        bad = 0
+        for n in names:
+            j = json.load(open(os.path.join(FIX, n + ".json")))
+            pdf = os.path.join(FIX, j["pdf"]); W, H = j["page"]
+            for pg, size in enumerate(j["sizes"]):
+                env = dict(os.environ, PDR_GLYPHKB="40")
+                ref = subprocess.run([exe, "text", pdf, str(pg), bank], capture_output=True, env=env)
+                txt = subprocess.run([exe, "text", pdf, str(pg), bank], capture_output=True, env=dict(env, PDX_NOPROG="1"))
+                with tempfile.TemporaryDirectory() as t:
+                    ob = os.path.join(t, "o.ppm")
+                    r = subprocess.run([exe, "render", pdf, str(pg), "100", "0", "4", "1/1", str(W), str(H), "0", "0", ob, bank, "29"],
+                                       capture_output=True, text=True, env=dict(env, PDX_NOPROG="1"))
+                    ink = int((np.asarray(Image.open(ob).convert("L"))[:H, :W] < 128).sum()) if os.path.exists(ob) else -1
+                inc = [int(l.split("incomplete=")[1].split()[0], 16) for l in r.stdout.split("\n") if "incomplete=" in l]
+                words = sum(c > 32 for c in ref.stdout)
+                ok = (r.returncode == 0 and inc and (inc[0] & 0x0401 or n == "type3") and txt.returncode == 0 and txt.stdout == ref.stdout
+                      and (ink > 0 or not words))
+                print("%-14s p%d  no programs: ink %5d for %4d chars of text, inc=0x%04x, text map %s  %s" % (
+                    n, pg + 1, ink, words, inc[0] if inc else 0, "same" if txt.stdout == ref.stdout else "DIFFERS", "ok" if ok else "FAIL"))
+                bad += not ok
+        return 1 if bad else 0
     if a.small:
         # QA R13 residue (the QZTEXT scatter): ONE Flate slot and a 32 KiB workspace, whose 22,016-byte
         # program area is smaller than t1-hex's program. The in-place inflate runs out of room; that must

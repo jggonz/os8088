@@ -138,7 +138,7 @@ int main(int argc, char **argv)
         printf("CIDMAP %s %u\n", argv[i], gl.cid);
     }
     if (getenv("PDX_PX")) {                           /* the strike block: slots, info and bitmaps */
-        pdw px = (pdw)atoi(getenv("PDX_PX")), hdr = (pdw)(40u * 1024 - PDFB_NBLK * PDFB_SIZE - PDFB_HDR), blk = 0, k;   /* INIT's 40 KiB claim */
+        pdw px = (pdw)atoi(getenv("PDX_PX")), hdr = (pdw)(40u * 1024 - 4 * PDFB_SIZE - PDFB_HDR), blk = 0, k;   /* INIT's 40 KiB claim: (40 - 24) / 4 = 4 blocks */
         pd_ffill(SEG_OUT, hdr, 0, PDFB_HDR + PDFB_SIZE * 4);
         for (i = 3; (int)i < argc; i++) {
             struct pdxb_fglyph gl;
@@ -148,6 +148,7 @@ int main(int argc, char **argv)
             r = call(PDV_FNT_GLYPH);
             pd_fcopy_in(SEG_XB, 0, &gl, sizeof gl);
             if (r || !gl.slot) { printf("BLK %s none\n", argv[i]); continue; }
+            if (gl.doff != hdr) { printf("BLK %s header at %u, not %u\n", argv[i], gl.doff, hdr); continue; }
             blk = hdr + PDFB_HDR + gl.blk * PDFB_SIZE;
             {
                 pdw rows = px + (px >> 2) + 1;
