@@ -1,5 +1,12 @@
 # KHP_MONORECT: what it would affect, and by how much (2026-11-10)
 
+**Owner's decision (2026-11-11): LEFT OFF.** *"Slower games in exchange for
+slightly faster desktop is not really optimal. The most interesting thing here
+is the herc drag outline, which today does feel slow; but even that is not
+worth this many bytes."* The knob stays defined by no kernel. A narrower item
+aimed only at the Hercules drag outline (the XOR outline's columns and rows)
+is the one piece of this report worth re-proposing, at far fewer bytes.
+
 A MEASUREMENT of one tree, for one decision. The owner asked, of
 `KHP_MONORECT` (the 1bpp rect walked a bank at a time, plus mono-5's XOR
 column): *"This seems very big in bytes (+344 kern_big, +16 for mono-5). Get
