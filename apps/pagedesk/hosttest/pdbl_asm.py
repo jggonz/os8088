@@ -23,7 +23,7 @@ bits 16
 org 0
         jmp  short start
         times 8-($-$$) db 0
-hdr:    dw _gb_row0, _mq_bit, t_init, _mq_chi, _mq_clo, _mq_a, _mq_ct, _gb_c, _gb_p1, _gb_p2, _gb_w, _gb_fail, _inp, _inend, _mq_cur, _mq_nxt, _g_wseg, _mq_eofn
+hdr:    dw _gb_row0, _mq_bit, t_init, _mq_chi, _mq_clo, _mq_a, _mq_ct, _gb_c, _gb_p1, _gb_p2, _gb_w, _gb_fail, _inp, _inend, _mq_cur, _mq_nxt, _g_wseg, _mq_eofn, _jb_hmask
 start:  hlt
 _mq_chi: dw 0
 _mq_clo: dw 0
@@ -37,6 +37,7 @@ _gb_p1:  dw 0
 _gb_p2:  dw 0
 _gb_w:   dw 0
 _gb_fail: dw 0
+_jb_hmask: dw 4095
 _g_wseg: dw 0
 _inp:    dw 0
 _inend:  dw 0
@@ -86,9 +87,9 @@ class M:
         open(a, 'w').write(src)
         subprocess.check_call(['nasm', '-f', 'bin', '-w-all', '-o', b, a])
         s.code = open(b, 'rb').read()
-        h = [int.from_bytes(s.code[8 + 2 * i:10 + 2 * i], 'little') for i in range(18)]
+        h = [int.from_bytes(s.code[8 + 2 * i:10 + 2 * i], 'little') for i in range(19)]
         (s.row0, s.mqbit, s.init, s.chi, s.clo, s.a, s.ct, s.gbc, s.p1, s.p2, s.w, s.fail,
-         s.inp, s.inend, s.cur, s.nxt, s.wseg, s.eofn) = h
+         s.inp, s.inend, s.cur, s.nxt, s.wseg, s.eofn, s.hmask) = h
         s.uc = Uc(UC_ARCH_X86, UC_MODE_16)
         s.uc.mem_map(0x10000, 0x10000); s.uc.mem_map(0x20000, 0x10000); s.uc.mem_map(0x30000, 0x10000)
         s.uc.mem_write(0x10000, s.code)
@@ -137,6 +138,7 @@ def test_bits(m, rng, n):
     return bad, len(seq)
 
 KIND = None
+HN = 4096
 KINDS = ('text', 'noise', 'blank', 'lines', 'scan')
 
 def rand_img(rng, w, h):
@@ -162,13 +164,13 @@ def test_rows(m, rng, w, h):
     e = B.MQEnc(); B.enc_generic(e, img, 0, 0)
     data = e.flush()
     m.uc.mem_write(0x30000, bytes(0x10000))
-    m.uc.mem_write(0x32000, b'\x80')   # context 0 owns slot 0
+    m.uc.mem_write(0x30002, b'\x80')   # context 0 owns slot 0
     m.feed(data); m.call(m.init)
     nb = (w + 7) >> 3
     R0, R1, R2 = 0x6000, 0x6400, 0x6800
     for r in (R0, R1, R2): m.uc.mem_write(0x10000 + r, bytes(0x400))
     c, p1, p2 = R0, R1, R2
-    m.setw(s_w := m.w, w); m.setw(m.fail, 0)
+    m.setw(m.w, w); m.setw(m.fail, 0); m.setw(m.hmask, HN - 1)
     bad = 0; ins0 = m.ins; cyc0 = m.cyc
     for y in range(h):
         m.uc.mem_write(0x10000 + c, bytes(nb))
@@ -188,6 +190,7 @@ if __name__ == '__main__':
     if '--cases' in sys.argv: n = int(sys.argv[sys.argv.index('--cases') + 1])
     rng = random.Random(88)
     m = M(); fails = 0
+    if '--hash' in sys.argv: HN = int(sys.argv[sys.argv.index('--hash') + 1])
     for i in range(n):
         bad, tot = test_bits(m, rng, rng.choice((200, 2000, 6000)))
         if bad: fails += 1; print('mq_bit case', i, 'bad', bad, 'of', tot)

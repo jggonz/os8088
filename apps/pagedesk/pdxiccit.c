@@ -452,17 +452,19 @@ static void cf_sample(void)
  * /JBIG2Globals was never found), so the module asks for them itself. The codec is the LAST stage of the
  * chain: when /Filter is an array, its /DecodeParms entry is the last element. */
 #ifndef PD_HOST
-static struct pdxb_dictget bl_dg;
+#define bl_dg (*(struct pdxb_dictget *)bl_pool)    /* open-time only: the shared row buffers are free then (nothing is decoding) */
 static pdb bl_idx;                  /* 0 = /DecodeParms is a dictionary, else (index + 1) of its array element */
 static pdw bl_get(pdw obj, pdw gen, const char *name)
 {
     pdb *q = (pdb *)&bl_dg;
-    pdw i = 0, n = 0;
+    pdw i, n = 0;
+    const char *k0 = "DecodeParms";
     for (i = 0; i < sizeof bl_dg; i++) q[i] = 0;
     bl_dg.objnum = obj; bl_dg.gen = gen;
-    for (i = 0; "DecodeParms"[i]; i++) bl_dg.key[0][i] = "DecodeParms"[i];
+    if (!name) { k0 = "Filter"; name = ""; bl_idx = 0; }      /* the chain: array or one name */
+    for (i = 0; k0[i]; i++) bl_dg.key[0][i] = k0[i];
     if (bl_idx) { bl_dg.key[1][0] = '['; bl_dg.key[1][1] = (char)('0' + bl_idx - 1); bl_dg.key[1][2] = ']'; n = 1; }
-    if (name) for (i = 0; name[i] && i < 31; i++) bl_dg.key[1 + n][i] = name[i];
+    for (i = 0; name[i] && i < 31; i++) bl_dg.key[1 + n][i] = name[i];
     pd_fcopy_out(&bl_dg, g_xb, 0, sizeof bl_dg);
     pdi_engcall(PDV_ENG_DICT_GET, 0, 0, 0);
     if (pdi_engcf) return PDK_NULL;
@@ -476,20 +478,8 @@ static void bl_params(struct pdxb_imgx *p, pdw obj, pdw gen, pdw codec)
     for (i = 0; i < sizeof *p; i++) q[i] = 0;
     p->flags = CCF_EOB;
     if (!obj) return;
-    bl_idx = 0;
-    bl_dg.objnum = obj; bl_dg.gen = gen;
-    {   /* /Filter as an array: the last stage's parameters */
-        pdb *z = (pdb *)&bl_dg;
-        for (i = 0; i < sizeof bl_dg; i++) z[i] = 0;
-        bl_dg.objnum = obj; bl_dg.gen = gen;
-        for (i = 0; "Filter"[i]; i++) bl_dg.key[0][i] = "Filter"[i];
-        pd_fcopy_out(&bl_dg, g_xb, 0, sizeof bl_dg);
-        pdi_engcall(PDV_ENG_DICT_GET, 0, 0, 0);
-        if (!pdi_engcf) {
-            pd_fcopy_in(g_xb, 0, &bl_dg, sizeof bl_dg);
-            if (bl_dg.kind == PDK_ARR && bl_dg.count > 0 && bl_dg.count < 5) bl_idx = (pdb)bl_dg.count;
-        }
-    }
+    /* /Filter as an array: the last stage's parameters */
+    if (bl_get(obj, gen, 0) == PDK_ARR && bl_dg.count > 0 && bl_dg.count < 5) bl_idx = (pdb)bl_dg.count;
     if (codec == PDCD_JBIG2) {
         if (bl_get(obj, gen, "JBIG2Globals") == PDK_REF) p->globals = bl_dg.refnum;
         return;

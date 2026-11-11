@@ -33,14 +33,16 @@
 
 /* ---- the workspace: jw_* are defined in pdxiccit.c, which comes first and keeps its code tables there ---- */
 #define JW_SIZE   64000u        /* the bytes of the slot's workspace this file uses (20.22.12)      */
+/* The layout is chosen by jb_open from the workspace it was granted (20.22.12):
+ *   0        generic-region contexts, jw_gbsz bytes: a hash of jb_hn 4-byte entries (tag word, state byte, pad) for
+ *            template 0, direct arrays for 1 to 3
+ *   jw_int   the 13 integer decoders' contexts (6,656) then the IAID contexts (2,048); the CCITT code tables
+ *            (2,048) alias the integer contexts while an MMR region runs
+ *   jw_gr    refinement contexts (8,192), only when the workspace can spare them (else refinement is PDE_LIMIT)
+ *   jb_bandoff, the band; then symbols and grids up, records down from jb_wsz */
 #define JW_GB     0x0000u
-#define JW_GBHS   0x2000u       /* hash states; tags are words at JW_GB          */
-#define JW_GR     0x3000u
-#define JW_INT    0x5000u
-#define JW_IAID   0x6A00u
-#define JW_BAND   0x7200u       /* where the band starts in a page that needs the tables above   */
-#define JW_CFT    0x3000u       /* the CCITT code tables (2,048 bytes) while an MMR region runs: they share the refinement contexts' room */
-#define JW_BANDS  0x3800u       /* ... and where the one row of a streamed page starts (GB and the tables) */
+static pdw jw_gbsz, jw_int, jw_iaid, jw_gr;
+#define JW_CFT    jw_int
 #ifndef JB_BANDMAX
 #define JB_BANDMAX 16384u       /* the most a band is given (the WANT size)                      */
 #endif
@@ -49,7 +51,8 @@ static pdw jb_wsz, jb_bandoff, jb_bandmax, jb_symbase;
 #ifdef PD_HOST
 unsigned jb_host_wsz;           /* the harness shrinks the slot to test the range */
 #endif
-#define JB_HASH   4096u
+pdw jb_hn, jb_hmask;            /* the context hash: entries, entries - 1 (jb_hmask is read by pdxijb2.inc) */
+static pdb gb_nofit;             /* the contexts of the region do not fit the generic area */
 
 #define JBE_OK      0
 #define JBF_UNSUP   1           /* jb_inc: something was skipped (intermediate region, too large, ...) */
@@ -204,7 +207,7 @@ static pdb  jb_ovf;             /* a value too large for 16 bits                
 /* returns 1 for OOB, else 0 with the value in jb_ival */
 static int ia_dec(pdw which)
 {
-    pdw prev = 1, base = (pdw)(JW_INT + which * 512u), v = 0, n, off;
+    pdw prev = 1, base = (pdw)(jw_int + which * 512u), v = 0, n, off;
     int s, b, k;
     #define IA_BIT() (b = mq_bit((pdw)(base + prev)), prev = (prev < 256) ? (pdw)((prev << 1) | b) : (pdw)((((prev << 1) | b) & 511) | 256), b)
     s = IA_BIT();
@@ -231,7 +234,7 @@ static pdw jb_idlen;            /* SBSYMCODELEN                                 
 static pdw ia_id(void)
 {
     pdw prev = 1, k;
-    for (k = 0; k < jb_idlen; k++) prev = (pdw)((prev << 1) | mq_bit((pdw)(JW_IAID + prev)));
+    for (k = 0; k < jb_idlen; k++) prev = (pdw)((prev << 1) | mq_bit((pdw)(jw_iaid + prev)));
     return (pdw)(prev - (1u << jb_idlen));
 }
 
@@ -323,12 +326,12 @@ static int gb_px(const pdb *r, pdi x)
 /* the state byte for context ctx; the hash for template 0 */
 static pdw gb_cx(pdw ctx)
 {
-    pdw h = (pdw)((ctx ^ (ctx >> 8)) & (JB_HASH - 1)), n;
-    for (n = 0; n < JB_HASH; n++) {
-        pdw st = jw_rb((pdw)(JW_GBHS + h));
-        if (!st) { jw_ww((pdw)(JW_GB + h * 2), ctx); jw_wb((pdw)(JW_GBHS + h), 0x80); return (pdw)(JW_GBHS + h); }
-        if (jw_rw((pdw)(JW_GB + h * 2)) == ctx) return (pdw)(JW_GBHS + h);
-        h = (pdw)((h + 1) & (JB_HASH - 1));
+    pdw h = (pdw)((ctx ^ (ctx >> 8)) & jb_hmask), n;
+    for (n = 0; n < jb_hn; n++) {
+        pdw o = (pdw)(JW_GB + h * 4u);
+        if (jw_rw(o) == ctx && jw_rb((pdw)(o + 2))) return (pdw)(o + 2);
+        if (!jw_rb((pdw)(o + 2))) { jw_ww(o, ctx); jw_wb((pdw)(o + 2), 0x80); return (pdw)(o + 2); }
+        h = (pdw)((h + 1) & jb_hmask);
     }
     return 0xFFFFu;             /* full: the caller fails the region */
 }
@@ -365,7 +368,9 @@ static void gb_sink(pdw y)
 static void gb_cinit(void)
 {
     gb_hash = (pdb)(gb_tpl == 0);
-    if (gb_hash) { jw_zero(JW_GB, (pdw)(JB_HASH * 3)); jw_wb(JW_GBHS, 0x80); } /* context 0 owns slot 0 */ else jw_zero(JW_GB, (pdw)(1u << (gb_tpl == 1 ? 13 : 10)));
+    gb_nofit = 0;
+    if (gb_hash) { jw_zero(JW_GB, jw_gbsz); jw_wb((pdw)(JW_GB + 2), 0x80); }   /* context 0 owns slot 0 */
+    else { pdw n = (pdw)(1u << (gb_tpl == 1 ? 13 : 10)); if (n > jw_gbsz) gb_nofit = 1; else jw_zero(JW_GB, n); }
 }
 static pdw gb_y, gb_ltp, gb_nb;
 static void gb_begin(void)
@@ -436,7 +441,7 @@ rowdone:
 static pdw gb_arith(void)
 {
     pdw e;
-    if (gb_w > BL_MAXW) return PDE_LIMIT;
+    if (gb_w > BL_MAXW || gb_nofit) return PDE_LIMIT;
     gb_begin();
     while (gb_y < gb_h && !gb_stop && mq_eofn <= MQ_DEAD) {
         e = gb_nextrow();
@@ -514,7 +519,7 @@ static void jb_getrec(pdw base, pdw i)
 }
 
 /* ---- the segment registry (decoded once, kept across bands) ------------------------------ */
-#define JB_NRG 24
+#define JB_NRG 16
 #define RGK_SYM   1     /* symbol dictionary: ofs = records, cnt = exported symbols */
 #define RGK_PAT   2     /* pattern dictionary: ofs = bitmaps, cnt = patterns, a = w, b = h */
 #define RGK_TAB   3     /* custom Huffman table: ofs = the table in the workspace    */
@@ -575,7 +580,7 @@ static pdw rf_decode(pdw dst, pdw w, pdw h, pdw ref, pdw rw, pdw rh, pdi dx, pdi
     pdi ry, rx;
     int bit, a;
     const signed char *t;
-    if (w > RF_MAXW || rw > RF_MAXW) return PDE_LIMIT;
+    if (w > RF_MAXW || rw > RF_MAXW || !jw_gr) return PDE_LIMIT;
     rf_w = w; rf_rw = rw;
     cen = rf_tpl ? 0x80u : 0x100u;
     rf_rows[0] = cur; rf_rows[1] = up; rf_rows[2] = gb_r0; rf_rows[3] = gb_r1; rf_rows[4] = gb_r2;
@@ -591,7 +596,7 @@ static pdw rf_decode(pdw dst, pdw w, pdw h, pdw ref, pdw rw, pdw rh, pdi dx, pdi
         if (ry - 1 >= 0 && ry - 1 < (pdi)rh) jw_get(gb_r0, (pdw)(ref + (pdw)(ry - 1) * rrb), rrb);
         if (ry >= 0 && ry < (pdi)rh) jw_get(gb_r1, (pdw)(ref + (pdw)ry * rrb), rrb);
         if (ry + 1 >= 0 && ry + 1 < (pdi)rh) jw_get(gb_r2, (pdw)(ref + (pdw)(ry + 1) * rrb), rrb);
-        if (rf_tpgr) ltp ^= (pdw)mq_bit((pdw)(JW_GR + cen));
+        if (rf_tpgr) ltp ^= (pdw)mq_bit((pdw)(jw_gr + cen));
         for (x = 0; x < w; x++) {
             rx = (pdi)((pdi)x - dx);
             a = rf_pix(3, rx);
@@ -610,7 +615,7 @@ static pdw rf_decode(pdw dst, pdw w, pdw h, pdw ref, pdw rw, pdw rh, pdi dx, pdi
                 pdi px = (pdi)(row < 2 ? (pdi)x : rx) + (pdi)t[j * 2 + 1];
                 ctx |= (pdw)((pdw)rf_pix(row, px) << j);
             }
-            bit = mq_bit((pdw)(JW_GR + ctx));
+            bit = mq_bit((pdw)(jw_gr + ctx));
             if (bit) cur[x >> 3] |= (pdb)(0x80 >> (x & 7));
         }
         jw_put((pdw)(dst + y * rb), cur, rb);
@@ -734,9 +739,9 @@ static pdi sd_at[4][2];
 
 static void sd_contexts(void)
 {
-    jw_zero(JW_INT, (pdw)(IA_N * 512u));
-    jw_zero(JW_IAID, (pdw)(1u << jb_idlen));
-    jw_zero(JW_GR, 8192);
+    jw_zero(jw_int, (pdw)(IA_N * 512u));
+    jw_zero(jw_iaid, (pdw)(1u << jb_idlen));
+    if (jw_gr) jw_zero(jw_gr, 8192);
 }
 static pdw jb_codelen(pdw n)            /* ceil(log2(n)), at least 0 */
 {
@@ -1647,7 +1652,8 @@ static pdw jb_segment_refine(void)
     dst = inter ? jb_intbm : jb_alloc(jb_rw, jb_rh);
     if (!dst) { jb_sp = mark; return PDE_LIMIT; }
     mq_init();
-    jw_zero(JW_GR, 8192);
+    if (!jw_gr) return PDE_LIMIT;
+    jw_zero(jw_gr, 8192);
     e = rf_decode(dst, jb_rw, jb_rh, ref, rw, rh, 0, 0);
     if (!e && !inter) {
         jb_cv_band();
@@ -1768,7 +1774,7 @@ static pdw jb_stream_setup(pdw cand)
     if (!jb_rw || !jb_rh || jb_rw > BL_MAXW) return PDE_LIMIT;
     gb_w = jb_rw; gb_h = jb_rh; gb_sinkmode = 2; gb_skip = 0;
     if (jb_smmr) cf_mmr_begin(gb_w);
-    else { mq_init(); gb_cinit(); gb_begin(); }
+    else { mq_init(); gb_cinit(); if (gb_nofit) return PDE_LIMIT; gb_begin(); }
     return PDE_OK;
 }
 
@@ -1806,31 +1812,40 @@ static pdw jb_open(pdw globals, pdw ih, pdw want_w)
 #else
     if (g_wbytes < jb_wsz) jb_wsz = g_wbytes;
 #endif
-    jb_bandoff = JW_BAND;
     jb_gnext = 0xFFFFu;
     jb_nrg = 0;
 #ifndef JB_NOSTREAM
-    if (nreg == 1 && cand && !jb_globals) {
-        if ((pdw)(JW_BANDS + jb_rb) <= jb_wsz && jb_stream_setup(cand) == PDE_OK) {
-            jb_bandoff = JW_BANDS;
+    if (nreg == 1 && cand && !jb_globals && (pdw)(4096u + 2048u + jb_rb) <= jb_wsz) {
+        /* a streamed page needs the context hash, the 2 KiB tables and one row */
+        pdw avail = (pdw)(jb_wsz - 2048u - jb_rb);
+        jb_hn = avail >= 16384u ? 4096u : avail >= 8192u ? 2048u : 1024u; jb_hmask = (pdw)(jb_hn - 1);
+        jw_gbsz = (pdw)(jb_hn * 4u); jw_int = jw_gbsz; jw_iaid = jw_gbsz; jw_gr = 0;
+        jb_bandoff = (pdw)(jw_int + 2048u);
+        if (jb_stream_setup(cand) == PDE_OK) {
             jb_stream = 1; jb_sy = 0; jb_brows = 1; jb_by0 = 0;
             return PDE_OK;
         }
     }
 #endif
     n = (pdw)(1u << bl_scale);
+    /* the layout (see the top of the file): the hash is 2,048 entries (8 KiB) when the slot has 34,000 bytes,
+     * else 1,024; the refinement contexts are only there when there are 6 KiB over them for a band and symbols */
+    jb_hn = 2048u; jb_hmask = (pdw)(jb_hn - 1);
+    jw_gbsz = (pdw)(jb_hn * 4u); jw_int = jw_gbsz; jw_iaid = (pdw)(jw_int + 6656u);
+    jb_bandoff = (pdw)(jw_int + 8704u); jw_gr = 0;
+    if (jb_wsz >= (pdw)(jb_bandoff + 8192u + 6144u + n * jb_rb)) { jw_gr = jb_bandoff; jb_bandoff = (pdw)(jb_bandoff + 8192u); }
     /* band: a third of what is above the tables, between one block of rows and the want size;
      * the symbols and the grids get the rest */
-    if (jb_wsz < (pdw)(JW_BAND + n * jb_rb + 1024u)) {
+    if (jb_wsz < (pdw)(jb_bandoff + n * jb_rb + 1024u)) {
         /* too small for this page: ask the slot to grow to want (63 KiB holds 64,000) unless that is what it has */
         if (jb_wsz < JW_SIZE) { jb_need_kb = 63; jb_need_cx = PDMEM_SLOT; return PDE_NEEDMEM; }
         return PDE_LIMIT;
     }
-    jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 3);
-    if (jb_pgref) jb_bandmax = (pdw)((jb_wsz - JW_BAND) / 2);      /* a page refinement wants its region inside one band */
+    jb_bandmax = (pdw)((jb_wsz - jb_bandoff) / 3);
+    if (jb_pgref) jb_bandmax = (pdw)((jb_wsz - jb_bandoff) / 2);      /* a page refinement wants its region inside one band */
     if (jb_bandmax > (jb_pgref ? 40000u : JB_BANDMAX)) jb_bandmax = jb_pgref ? 40000u : JB_BANDMAX;
     if (jb_bandmax < n * jb_rb) jb_bandmax = (pdw)(n * jb_rb);
-    jb_symbase = (pdw)(JW_BAND + jb_bandmax); jb_sp = jb_symbase; jb_hp = jb_wsz;
+    jb_symbase = (pdw)(jb_bandoff + jb_bandmax); jb_sp = jb_symbase; jb_hp = jb_wsz;
     s = (pdw)(jb_bandmax / jb_rb);
     s = (pdw)(s - s % n);
     if (!s) return PDE_LIMIT;
