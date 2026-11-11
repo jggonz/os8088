@@ -153,6 +153,13 @@ os88_drv_foot equ 1
 %endmacro
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
+; A VERB YOU DO NOT IMPLEMENT IS REFUSED: CF = 1, no work done, AL not read
+; (SPEC.md 51.2.2). CF = 0 means "I did it" and the kernel acts on it - TIER's
+; re-publishes SI, HWINFO's becomes a suspend record - so a default `clc` is a
+; false yes to every verb a later kernel adds. Name each verb you handle, then
+; refuse. The two every driver is sent are the exceptions: DETACH cannot fail,
+; and READY with nothing to do answers CF = 0 (its CF = 1 is banked as your
+; row's DRVE_*). tests/unit/t_drvverb.py walks every built driver's dispatch.
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
 DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
 DQ_FLAGS     equ 1              ; db: bit 0 = it went

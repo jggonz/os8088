@@ -1506,6 +1506,16 @@ FAST = [
         "FAST as THE BOUNDARY (docs/WRITING-TESTS.md 2.1): a tool and the "
         "kernel edited apart, and a driver stripped below its claim does "
         "not fail the build, it fails to LOAD (.nofit) on the machine"),
+    Row("drvverb", "fast", py("tests/unit/t_drvverb.py"), 0.1,
+        "every built drv_tab driver REFUSES a verb it does not implement "
+        "(SPEC.md 51.2.2): entered at its header's entry with TIER/HWINFO "
+        "outside the sound class and verbs 5..63, its dispatch must reach "
+        "ret with CF = 1 and do no work. CF = 0 is 'I did it' - ETHER, "
+        "PCIETHER, NET, RAMDISK and USBMOUSE answered every unknown verb "
+        "CF = 0, so OSAPI_DRV_SUSPEND took a garbage DRVC_NET record off "
+        "HWINFO, and a future opt-in verb would have read yes off all of "
+        "them. FAST as THE BOUNDARY, drvmem's reason: the contract is the "
+        "kernel's and the dispatchers are the drivers', edited apart"),
     Row("drvmem", "fast", py("tests/unit/t_drvmem.py"), 0.1,
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "

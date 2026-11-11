@@ -110,12 +110,8 @@ hf_entry:
     je hf_detach
     cmp al, DRVV_READY
     je hf_ready
-    cmp al, DRVV_HWINFO         ; nothing to say: CF = 1 from HWINFO up
-    cmc
-    ret
-%if DRVV_DETACH != 1 || DRVV_TIER != 2 || DRVV_READY != 3 || DRVV_HWINFO != 4
-  %error "hf_entry's cmc answers CF = 0 below DRVV_HWINFO and CF = 1 from it"
-%endif
+    stc                         ; TIER, HWINFO and any later verb: REFUSED,
+    ret                         ; with nothing to say (SPEC.md 51.2.2)
 
 ; DRVV_ATTACH - nothing to find: it owns no hardware. out: CF=0, SI = svc
 hf_attach:
