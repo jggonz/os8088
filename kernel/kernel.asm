@@ -4942,8 +4942,11 @@ kmain_o:
     B3CALL   hb_probe_x         ; ...and is there a hibernation to resume?
                                 ; (SPEC.md 87.5) After drv_boot, so a driver
                                 ; volume is mounted to be looked at; before
-                                ; the first paint, because the answer is a
-                                ; window ui_task's first pass puts up
+                                ; the first paint, because on kern_big and
+                                ; kern_emu a valid image is resumed from
+                                ; INSIDE it and none of what follows is ever
+                                ; spent on a session about to be overwritten
+                                ; (kern_mega posts the check for ui_task)
 %endif
     call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
                                 ; mouse's pointer half out of `.boot3m` into a

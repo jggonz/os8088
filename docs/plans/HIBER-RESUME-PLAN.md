@@ -623,3 +623,15 @@ saving waits for the field (docs/FIELD-MACHINES.md).
   `hibernatem` (the Discard pass is a Shift pass with red arms in its
   header), `hibsumok`/`hibsumbad`, `hmahiber`, `p2hiber`, `win16hiber`,
   `megahiber`, `megap2hiber` (no click: the resume comes by itself).
+- **B1** — on kern_big and kern_emu `hb_probe_x` no longer leaves its post
+  for `ui_task`: it spends it there and then (`hb_spend`: read and cleared,
+  then `hbf_perform`), and on `UI_RBQ_RESUME` calls `spl_finish` and spends
+  that too, so a valid image is resumed from inside `kmain_o` with no first
+  paint, no autostart and no `ui_task` pass. No new module entry was needed:
+  the chain is two calls of the existing perform entry, and the module is
+  unchanged. A refusal comes back with nothing posted, so the boot carries on
+  as one with no hibernation, autostart included (better than §2.1's
+  recorded cost). kern_mega keeps the post. MEASURED, kern_big: resident
+  **0**, `.boot3` **+32** (6,190 -> 6,222), HIBER.DRV **0**. `stikhiber` is
+  kern_mega's row for the stand-down now; on kern_big its bogus pointer is
+  refused before `stik_boot` and the row asserts the relaunch instead.

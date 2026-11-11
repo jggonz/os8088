@@ -13686,10 +13686,13 @@ SOAK = [
         needs=("marty",), timeout=600, wants=("build/stikshort360.img",)),
     Row("stikhiber", "soak", py("tests/stikhiber.py"), 15.0,
         "SPEC.md 110.4: a pending RESUME stands the relaunch down. A hard "
-        "disk of this process's own with HIBERNAT.PTR in its root, so "
-        "hb_probe posts UI_RBQ_ASK: stik_boot is entered with [ui_rebootq] = "
-        "5, and twenty guest seconds later no StikProbe has launched and its "
-        "row still carries the mark - kept for the next ordinary boot.",
+        "disk of this process's own with HIBERNAT.PTR in its root. Under "
+        "OS88_MEGA (kern_mega's late check) hb_probe posts UI_RBQ_ASK: "
+        "stik_boot is entered with [ui_rebootq] = 5, and twenty guest seconds "
+        "later no StikProbe has launched and its row still carries the mark. "
+        "On kern_big the boot checks the pointer itself before stik_boot "
+        "(SPEC.md 87.5): the bogus pointer is refused, [ui_rebootq] = 0 and "
+        "StikProbe IS relaunched.",
         needs=("marty",), serial=True, timeout=900,
         wants=("build/stikhiber360.img",)),
     Row("stikregister", "soak", py("tests/stikregister.py"), 50.0,

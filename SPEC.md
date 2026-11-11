@@ -61942,8 +61942,11 @@ IRQ0 frames, which that has stopped, and `.boot3` lives until kmain's
   resume is posted (§87.5), and that image IS the session: a link opened now
   would run in a session about to be overwritten and could write the disk
   under the image (the big review's hiber-21). `stik_boot`'s test (§110.4).
-  On kern_mega it is `.cold`'s `as_bootc`, so the test is 7 resident bytes
-  there and transient everywhere else;
+  On kern_mega it is `.cold`'s `as_bootc`, so the test is 10 bytes of
+  `.cold` there (above 1MB once the machine switches) and transient
+  everywhere else. On kern_big and kern_emu a hibernation is checked and
+  resumed from inside `kmain_o` before this runs (§87.5), so there the test
+  meets a post only on a path that has none today;
 - stands at the boot volume's root and `dskw_stat`s `AUTOSTRT`. No folder, or
   a FILE of that name, is the end of it;
 - walks the folder with `dsk_find` (stateless by ordinal, §19.7.1, so a
@@ -161769,8 +161772,14 @@ volume in `[hb_vol]`, and then:
   a corrupt one or one that failed to load does, which is also how other
   systems treat the idea (Linux's swsusp drops an image the boot did not
   resume; Windows offers to delete restoration data). Nothing is set aside.
-- Otherwise it posts `UI_RBQ_ASK`, which `ui_task`'s first pass spends with
-  nothing held by loading the module and running `hbm_ask`: read the pointer
+- Otherwise the image is checked — **on kern_big and kern_emu there and
+  then**, from inside `kmain_o` (`hb_spend`: the post read and cleared as
+  `ui_task` spends one, then `hbf_perform`), on task 0's stack with nothing
+  held, which is `ui_task` step 0's context in every respect `hbm_perform`
+  asks about; **on kern_mega** by `ui_task`'s first pass after `mega_enter`,
+  because a protected-mode image can only be judged once the boot has
+  decided whether to switch (§87.9) — by loading the module and running
+  `hbm_ask`: read the pointer
   (a pointer this kernel can never read — `FERR_BIG`, kern_mega's 28 bytes
   met by kern_big's 18, §87.9 — is `other build` and deleted, rather than
   re-read on every boot), validate it (§87.3), find `HIBERNAT.IMG` beside it
@@ -161783,7 +161792,14 @@ volume in `[hb_vol]`, and then:
   `HB_M_RESUME` and looked for a window to repaint, which pinned the module
   for the session (hiber-8).
 
-`hbm_perform` then spends the `UI_RBQ_RESUME`:
+`hbm_perform` then spends the `UI_RBQ_RESUME` — on kern_big and kern_emu
+straight away, from the same place in `kmain_o` (so no desktop is painted, no
+autostart runs and no `ui_task` pass is spent on a session about to be
+overwritten), **after `spl_finish`**: the loading screen animates from IRQ0
+and `vid_setmode` is refused while `[spl_live]` stands (§15.3.8), and a frame
+landing in the text page would land in the stub staged there. A refusal from
+here on leaves the bar at 100% for the rest of that boot. On kern_mega, at
+`ui_task`'s next pass:
 
 1. Asks the transport facts. For the boot partition (§52.10.3) they are the
    kernel's own — `DV_UNIT`, `dsk_vbase`, `dsk_bootspt`/`dsk_boothds`; for a

@@ -374,12 +374,15 @@ section .cold
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; hb_probe - is there a hibernation to offer? (SPEC.md 87.5; kmain, after
+; hb_probe - is there a hibernation to resume? (SPEC.md 87.5; kmain_o, after
 ;            drv_boot and before the first paint)
 ; in:  nothing
 ; out: nothing; AX, DX and SI kept, BP clobbered (kmain_o holds nothing in
-;      it). A hit records the volume in [hb_vol]
-;      and posts UI_RBQ_ASK, which ui_task's first pass spends.
+;      it). A hit records the volume in [hb_vol]; with either Shift held it
+;      deletes both files and toasts, and otherwise the image is checked and
+;      RESUMED from here (kern_big, kern_emu - it does not come back) or, on
+;      kern_mega, UI_RBQ_ASK is posted for ui_task's first pass after
+;      mega_enter. A refused image has been toasted and deleted on return.
 ;
 ; The ONE root a pointer can be in - hb_pick's volume, the one a hibernate
 ; writes to - in a drv_vol_bank/back bracket (SPEC.md 51.5.2) so the machine
@@ -461,10 +464,49 @@ hb_probe_x:
 .back:
     call COLD_SEG:drvf_drv_vol_back
 .out:
+%ifndef KERN_MEGA
+    ; --- ...AND RESUME IT FROM HERE (SPEC.md 87.5, HIBER-RESUME-PLAN B1) ---
+    ; There is no question to put on a desktop any more, so nothing is gained
+    ; by building one first: the check and the resume run now, from inside
+    ; kmain_o on task 0's stack with nothing held - ui_task's step 0 context
+    ; in every respect hbm_perform asks about (it banks its own SP) - and the
+    ; first paint, autostart and a ui_task pass are never spent on a session
+    ; that is about to be overwritten. kern_mega keeps the late check: its
+    ; protected-mode images can only be judged after mega_enter (87.9).
+    ;
+    ; The post above is the hit's marker and is spent here, read and cleared
+    ; as ui_task spends one. hbm_ask answers by posting UI_RBQ_RESUME, or
+    ; refuses (a toast, both files deleted, the module dropped) and the boot
+    ; carries on exactly as a boot with no hibernation does - autostart
+    ; included, since nothing is posted any more.
+    cmp byte [ui_rebootq], UI_RBQ_ASK
+    jne .ret
+    mov al, UI_RBQ_ASK
+    call hb_spend
+    cmp byte [ui_rebootq], UI_RBQ_RESUME
+    jne .ret
+    ; THE LOADING SCREEN STOPS FIRST (SPEC.md 15.3.8): its spinner animates
+    ; from IRQ0 until spl_finish, and vid_setmode - which hbm_down's
+    ; vid_reboot is - is refused while [spl_live] stands. A frame landing in
+    ; the text page would land in the stub staged there. A refusal past this
+    ; point leaves the bar at 100% for the rest of the boot, and kmain_o's
+    ; own spl_finish is then a compare
+    B2CALL spl_finish
+    mov al, UI_RBQ_RESUME       ; ...and the resume, which returns only on a
+    call hb_spend               ; refusal (hbm_res's, 87.5)
+.ret:
+%endif
     pop si
     pop dx
     pop ax
     retf
+%ifndef KERN_MEGA
+hb_spend:                       ; AL = the post: cleared, then spent. A NEAR
+    mov byte [ui_rebootq], 0    ; routine of its own, not a local of the far
+                                ; hb_probe_x (drv_boot_want's reason)
+    call COLD_SEG:hbf_perform
+    ret
+%endif
 TOASTSTR hb_s_skip, 'Hibernation skipped'
 section .cold
 
