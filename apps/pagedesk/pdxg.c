@@ -174,7 +174,7 @@ static pdw gx_res_lookup(const char *txt, pdw len)
         if (!hops) { tr = got == GX_TB; o0 = obj; g0 = gen; }
         if (gx_sub(gx_tb, got, "Resources", gx_tb2, &rp, &rl) && gx_sub(rp, rl, cat, rp == gx_tb2 ? gx_tb : gx_tb2, &cp, &cl)
             && gx_find(cp, cl, nm, &s, &e))
-            return gx_parse(cp + s, e - s);
+            return tr && cp + e + 8 >= gx_tb + got ? gx_win(o0, g0, nm) : gx_parse(cp + s, e - s);   /* a value cut by the buffer's end: the window */
         if (!gx_find(gx_tb, got, "Parent", &s, &e) || !gx_refat(gx_tb, s, e, &o, &g)) break;
         obj = o; gen = g;
     }

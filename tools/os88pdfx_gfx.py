@@ -194,7 +194,7 @@ def write_cases(path, d, cs, page=None):
         # an inline /Resources much longer than the fetch buffer (1,024 bytes): the colour space is named after byte 2,000
         # and again after byte 3,500, and must be found by the windowed scan (object 3600, 3700; the name's digits pick the object)
         calrgb = [t for n_, t, _ in cs if n_ == "calrgb_a"][0]
-        for on, pad in ((3600, 2000), (3700, 3500)):
+        for on, pad in ((3600, 2000), (3700, 3500), (3800, 900)):   # 3800: the value itself straddles the first 1,024 bytes
             fonts = " ".join("/F%d %d 0 R" % (k, 100 + k) for k in range(pad // 12))
             f.write("O %d %s\n" % (on, ("<< /Type /Page /Parent 2 0 R /Resources << /Font << %s >> /ColorSpace << /C%d %s >> >> >>" % (fonts[:pad], on - 3000, calrgb)).encode().hex()))
             f.write("R big_%d %s 3 0.2 0.5 0.8\n" % (on, ("C%d" % (on - 3000)).encode().hex()))
@@ -276,7 +276,7 @@ def check(build_dir, verbose):
         if got.get("res_" + name, "m") != got.get(name, "d"):
             print("FAIL res_%s: %s != %s" % (name, got.get("res_" + name), got.get(name)))
             bad += 1
-    for k in ("big_3600", "big_3700"):      # the windowed scan of a long inline /Resources finds the same colour
+    for k in ("big_3600", "big_3700", "big_3800"):      # the windowed scan of a long inline /Resources finds the same colour
         if got.get(k) != got.get("calrgb_a"):
             print("FAIL %s: %s != %s" % (k, got.get(k), got.get("calrgb_a"))); bad += 1
     worst = {}

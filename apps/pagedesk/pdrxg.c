@@ -89,7 +89,7 @@ static void xg_color(pdw st, pdw e, pdw nop)
     xg_begin(0);
     g_gx.cseg = g_xcseg; g_gx.coff = e; g_gx.ncomp = nop;
     for (i = 0; i < nop && i < 8; i++) pdr_cpy(&g_gx.comp[i], &g_opn[g_nop - nop + i], 4);
-    if (xg_req(PDV_GFX_COLOR) != PDE_OK) { xg_ncx("colour value"); return; }
+    if (xg_req(PDV_GFX_COLOR) != PDE_OK) { xg_nc(); return; }
     col_set(st, g_gx.rgb[0], g_gx.rgb[1], g_gx.rgb[2]);
 }
 
@@ -117,9 +117,9 @@ static pdw xg_entry(pdw kind, pdw verb, pdw cat, pdw size)
     if (!e) {
         if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return 0; }
         e = xg_alloc(kind, k0, k1, size);
-        if (!e) { if (g_xcseg) xg_ncx("colour cache"); return 0; }       /* no cache yet: x_mem asked, the pass reruns */
+        if (!e) { if (g_xcseg || (x_ref & XR_MEM)) xg_ncx("colour cache"); return 0; }       /* no cache yet: x_mem asked, the pass reruns */
         ra = xg_ask(verb, cat, g_xcseg, e, g_xcrcap, 0);
-        if (ra != PDE_OK) { if (ra == PDE_NOMEM) g_xcfull = 1; xg_ncx(ra == PDE_NOMEM ? "colour space size" : "colour space source"); return 0; }
+        if (ra != PDE_OK) { if (ra == PDE_NOMEM) g_xcfull = 1; xg_nc(); return 0; }
         if (kind == XCK_CS) xc_trim(e, g_gx.rlen);                 /* only a table space keeps its 768 bytes */
     }
     for (g_xslot = 1; g_xslot <= g_xcsn; g_xslot++) if (g_xcsk[g_xslot][0] == k0 && g_xcsk[g_xslot][1] == k1) return e;
@@ -153,7 +153,7 @@ static pdw xg_cs(pdw st)
 static pdw xg_sc(pdw st, pdw nop)
 {
     pdw slot = st ? (pdw)(GS.pad_ >> 4) : (pdw)(GS.pad_ & 15), e, fl;
-    if (!slot) return 0;
+    if (!slot) return (x_pend | x_mwant) != 0;                           /* no slot yet because PDXG is still to load: the pass reruns, say nothing */
     e = xc_find(XCK_CS, g_xcsk[slot][0], g_xcsk[slot][1]);
     if (!e || g_nop < nop) return 1;
     fl = pd_fpeekb(g_xcseg, (pdw)(e + 2));
@@ -164,7 +164,7 @@ static pdw xg_sc(pdw st, pdw nop)
         if (e) xg_setslot(st, g_xslot);
         return 1;
     }
-    if (g_havename) { xg_ncx("colour name"); return 1; }
+    if (g_havename) { xg_nc(); return 1; }
     if (fl & (PDGX_F_RGBLIKE | PDGX_F_CMYKLIKE)) {            /* ICC N=3 / N=4: the device operator */
         col_apply(st, pd_fpeekb(g_xcseg, (pdw)(e + 1)));
         xg_setslot(st, slot);
@@ -184,7 +184,7 @@ static pdw xg_image_lut(pdw obj, pdw gen, pdw bpc)
     e = xc_find(XCK_LUT, obj, k1);
     if (e) return e;
     if (!x_have(PDX_GFX)) { x_need(PDX_GFX); return 0; }
-    if (!(e = xg_alloc(XCK_LUT, obj, k1, PDGX_LUTBYTES))) { if (g_xcseg) xg_ncx("colour cache"); return 0; }
+    if (!(e = xg_alloc(XCK_LUT, obj, k1, PDGX_LUTBYTES))) { if (g_xcseg || (x_ref & XR_MEM)) xg_ncx("colour cache"); return 0; }
     xg_begin(0);
     if (g_dg.kind == PDK_NAME) {                        /* a resource of this scope: "ColorSpace\0Name" */
         while (g_dg.text[n] && n < 32) n++;
@@ -347,6 +347,10 @@ static pdw xg_tile_next(void)
 static pdw xg_fill(pdw rule, pdw stroke)
 {
     pdw slot = GS.pad_ & 15, e;
+    if (slot && (e = xc_find(XCK_CS, g_xcsk[slot][0], g_xcsk[slot][1])) != 0 && (pd_fpeekb(g_xcseg, (pdw)(e + 2)) & PDGX_F_NONE)) {
+        if (stroke) stroke_path();                                /* Separation /None paints nothing */
+        return 1;
+    }
     if (slot && g_mode == PDR_INTERP && (e = xc_find(XCK_PAT, g_xcsk[slot][0], g_xcsk[slot][1])) != 0) {
         if (stroke) stroke_path();
         xg_pfill(rule, e);
