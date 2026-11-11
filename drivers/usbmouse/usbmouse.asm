@@ -41,6 +41,7 @@
 ; reports through OSAPI_MOUSE_FEED and calls none of its services.
 ; =============================================================================
 
+%define OS88_DRV_WAKES          ; SLEEP/WAKE on the PicoMEM path (51.2.5)
 %include "os88drv.inc"
 
     OS88_DRIVER 'USB Mouse', DRVC_POINT, um_entry
@@ -125,6 +126,10 @@ um_entry:
     cmp al, DRVV_DETACH
     jb um_attach                ; DRVV_ATTACH, which is 0
     je um_detach
+    cmp al, DRVV_SLEEP
+    je um_dsleep
+    cmp al, DRVV_WAKE
+    je um_dwake
     cmp al, DRVV_READY
     jne um_no                   ; any other verb is REFUSED: CF = 0 is "I did
                                 ; it" (SPEC.md 51.2.2)
@@ -150,6 +155,32 @@ um_ready:
 um_ok:
     CLC_OR_STC um_no
     ret
+
+; -----------------------------------------------------------------------------
+; DRVV_SLEEP / DRVV_WAKE - a hibernate or a DOS trip (SPEC.md 51.2.5), the
+; PicoMEM's path alone
+;
+; SLEEP is detach's PicoMEM half: the card's mouse off and int 33h given back
+; - which a DOS handoff needs, since the program gets the vector table - and
+; the image kept. WAKE is attach's: the card detected again (a POST or a DOS
+; program re-hooked or re-masked its line), int 33h hooked, the mouse on.
+; um_pmattach's own `inc` re-arms [um_pm]; a refusal leaves it 0 and
+; [um_alive] 1, so the DETACH that follows takes the CH375 arm and finds a
+; "worker" to leave the chip to - it touches nothing.
+;
+; The CH375 REFUSES SLEEP and is unloaded as before: a parked worker, the
+; attach code it would need again (um_buf is written over it) and a USB
+; re-enumeration were more bytes than a 3-sector reload costs
+; (docs/plans/B4-WAKE-PLAN.md).
+; -----------------------------------------------------------------------------
+um_dsleep:
+    cmp byte [um_pm], 0
+    je um_no
+    jmp um_pmdetach             ; CF = 0
+um_dwake:
+    dec byte [um_pm]
+    mov byte [um_alive], 1
+    jmp um_pmattach
 
 ; -----------------------------------------------------------------------------
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6)
