@@ -268,7 +268,7 @@ def _kernel_sources():
 # fast - host-side, no emulator, no build. Runs on every `make`.
 # --------------------------------------------------------------------------
 FAST = [
-    Row("nulldev", "fast", py("tests/unit/t_nulldev.py"), 0.3,
+    Row("nulldev", "fast", py("tests/unit/t_nulldev.py"), 1.0,
         "NOTHING HANDS /dev/null TO NASM AS -o OR -l. NASM unlinks a failed "
         "-o target and replaces a -l target even on success, so as root "
         "either one turns the container's /dev/null into a regular file - "
@@ -1025,7 +1025,7 @@ FAST = [
         "never see), each with its reason - the two look identical in a diff "
         "and the next one is written by copying the last; an unregistered or "
         "a vanished site fails this row"),
-    Row("stik", "fast", py("tests/unit/t_stik.py"), 0.5,
+    Row("stik", "fast", py("tests/unit/t_stik.py"), 1.7,
         "SPEC.md 110.10: a Sticky App's shared half between MartyPC runs - "
         "tools/os88stik.py --selfcheck, tests/stikprob ASSEMBLED so the SDK's "
         "os88stik.inc is built by every `make` (only `make stiktest` built it), "
@@ -1068,7 +1068,7 @@ FAST = [
         "flag added tomorrow is covered tomorrow. A PREFIX IS NOT A FAMILY "
         "and grouping by one reports 81 false positives in this tree. "
         "VERIFIED TO FAIL by putting FHF_DEV back on 32."),
-    Row("artpath", "soak", py("tests/unit/t_artpath.py"), 0.1,
+    Row("artpath", "soak", py("tests/unit/t_artpath.py"), 1.1,
         "SOAK (owner, 2026-11-11): about the suite's own harness and "
         "fixtures, not the OS - the release soak runs every row "
         "(docs/WRITING-TESTS.md 2.1). "
@@ -1686,7 +1686,7 @@ FAST = [
         "decoder is that shape again. "
         "SOAK and not fast: the stub is one artifact of one tool, and no "
         "other build reaches it"),
-    Row("diskverify", "fast", py("tests/unit/t_diskverify.py"), 0.5,
+    Row("diskverify", "fast", py("tests/unit/t_diskverify.py"), 1.5,
         "the tree's own fsck, pointed at the seven images `make` ships and "
         "never ran on"),
     Row("qemuown", "soak", py("tests/unit/t_qemuown.py"), 0.1,
@@ -1866,7 +1866,7 @@ FAST = [
         "the answers with $OS88_TREE set and ratchets the build/ fallback "
         "out of tools/ and tests/. SOAK: it is about the emulator harness",
         needs=()),
-    Row("registry", "full", py("tests/unit/t_registry.py"), 0.2,
+    Row("registry", "full", py("tests/unit/t_registry.py"), 1.7,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -1892,7 +1892,7 @@ FAST = [
         "class's services and does not crash, and since kernel size pass 8 "
         "drv_cls_svc refuses a real class, DRVC_POINT "
         "(docs/plans/LAST-DROP-BYTES.md 7.7.8)"),
-    Row("asmrules", "fast", py("tests/unit/t_asmrules.py"), 2.8,
+    Row("asmrules", "fast", py("tests/unit/t_asmrules.py"), 3.8,
         "unreachable code after an unconditional jump, a prologue restored in "
         "the WRONG ORDER (SPEC.md 1's register discipline: balanced depth, "
         "swapped pair, nothing faults), a `cpu 8086` reachable from every "
@@ -1986,7 +1986,7 @@ FAST = [
         "second review's MEASURED figure (0.44s alone, 0.6s in the tier; it "
         "was 2.4 when registered)",
         needs=()),
-    Row("movable", "full", py("tests/unit/t_movable.py"), 0.6,
+    Row("movable", "full", py("tests/unit/t_movable.py"), 1.7,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -2061,7 +2061,7 @@ FAST = [
         "wrapper, a stale toastdyn.txt line, an unclosed TOASTRUN, and the "
         "two macro blocks made to differ. Measured at 1.9s",
         ),
-    Row("textrules", "full", py("tests/unit/t_textrules.py"), 0.7,
+    Row("textrules", "full", py("tests/unit/t_textrules.py"), 1.8,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -2069,7 +2069,7 @@ FAST = [
         "pixel twice and flashes on the target machine, so every call site is "
         "registered in tests/textsites.txt with a reason and the count can only "
         "go down"),
-    Row("cswrite", "full", py("tests/unit/t_cswrite.py"), 0.5,
+    Row("cswrite", "full", py("tests/unit/t_cswrite.py"), 3.9,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -2081,7 +2081,7 @@ FAST = [
         "under kernel/ and drivers/ that uses either idiom is registered in "
         "tests/cswrites.txt with its count and a reason, and the count can "
         "only go down"),
-    Row("seg0", "full", py("tests/unit/t_seg0.py"), 0.5,
+    Row("seg0", "full", py("tests/unit/t_seg0.py"), 1.1,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -2093,7 +2093,7 @@ FAST = [
         "loads one on an arm kern_mega assembles is registered in "
         "tests/seg0.txt with its count and a reason. Same walker as "
         "cswrite"),
-    Row("megagrid", "full", py("tests/unit/t_megagrid.py"), 0.6,
+    Row("megagrid", "full", py("tests/unit/t_megagrid.py"), 1.4,
         "FULL (owner, 2026-11-11): each costs over a second, so it runs "
         "where a merge is checked rather than on every `make` - the rule it"
         " gates is unchanged. "
@@ -2273,7 +2273,7 @@ FAST = [
         "it plain, `make PKGZ=lzb` leaves it LZB, and one older than the "
         "source would report the same edit a second time dressed as a build "
         "fault"),
-    Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 1.4,
+    Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 4.4,
         "no near call crosses a section boundary - it assembles cleanly and "
         "runs wrong"),
     Row("dsegaudit", "soak", py("tools/dsegaudit.py"), 0.2,
@@ -2316,7 +2316,7 @@ FAST = [
         "self-consistent; tests/sheetfmt.py is the one that points it at "
         "SHEET"),
     Row("stkbalance", "fast",
-        py("tools/stkbalance.py", *_kernel_sources()), 1.5,
+        py("tools/stkbalance.py", *_kernel_sources()), 1.8,
         "every `ret` in the KERNEL is reached at "
         "the depth it started at. Packages were in scope here too: wd_pictload "
         "pushed seven registers and popped six, and while Word was outside the "
@@ -2342,7 +2342,7 @@ FAST = [
         "is left and is counted in the tool's own summary line: loop back-edge "
         "conflicts are suppressed, because the count lives in a register"),
 
-    Row("stkapps", "fast", py("tests/unit/t_stkapps.py"), 3.8,
+    Row("stkapps", "fast", py("tests/unit/t_stkapps.py"), 5.3,
         "every `ret` in EVERY SHIPPED PACKAGE AND DRIVER is reached at the "
         "depth it started at. `ch_legend` pushed SI and never popped it, so its `ret` "
         "jumped to the saved register: a black canvas and a wedged app, with "
