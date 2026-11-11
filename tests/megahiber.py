@@ -181,6 +181,11 @@ def main():
             if not box.wait_resumed(300):
                 fails.append("no `kern_mega: resumed`")
             box.ui_done("the resumed desktop")
+            # ...AND THE MOUSE CAPTURED, which the Resume click's box.up() /
+            # box.capture() pair used to do before the question went: a Box
+            # never captured is never re-grabbed after a debugger stop, so
+            # X's pointer and keys (the sentinels) went to no Bochs at all
+            box.capture()
             box.shot(os.path.join(out, "resumed.png"))
             box.click(140, 330, "MEGAHIB to the front")  # ...and a key
             box.xd("key", "a")
