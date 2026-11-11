@@ -481,8 +481,9 @@ driver: its device). The wake calls it per row instead of `hbm_reload`.
   do not know (`ethdrv.inc` ~88-96, `net.asm` ~230-238, `usbmouse.asm`
   ~131-132), so a driver's ANSWER cannot say whether it implements the verb.
   Any future opt-in must be DECLARED - a header flag - and never inferred from
-  the answer. (Those four drivers are being made to refuse unknown verbs
-  separately.)
+  the answer. Since `9a3a6b67` every driver refuses a verb it does not
+  implement (SPEC.md §51.2.2, gated by `drvverb`), so a CF = 0 is now an
+  honest yes; the header flag is still the cheaper, safer declaration.
 - **Verdict**: a real saving on the floppy-booted machine, orthogonal to B2,
   and the larger change. Record as the follow-up after B2; not this round.
 
