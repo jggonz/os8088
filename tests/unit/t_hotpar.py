@@ -61,13 +61,8 @@ HOT = {
         "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
         # the VGA rung's busiest bodies, pinned where kernel hot-paths pass 1
         # measured them (docs/plans/khp1/vga.md). The rung starts on a
-        # paragraph, so only `.vga` bytes above them can move these.
-        # gfx_fill_gray_raw_v moved to EVEN on purpose when kern_big took
-        # the four VGA KHP knobs (docs/plans/khp1/LOG.md L.6): KHP_VGAFILL
-        # rewrites its own interior loop, so the odd entry no longer
-        # describes the code it was measured with (an 8088 fetches a byte
-        # at a time, so the target machine pays nothing either way)
-        "vga_solid_rect_v": 0, "gfx_fill_gray_raw_v": 0,
+        # paragraph, so only `.vga` bytes above them can move these
+        "vga_solid_rect_v": 0, "gfx_fill_gray_raw_v": 1,
         "vga_save_vram_v": 0, "vga_restore_vram_v": 1,
         "vga_blit_span": 0, "gfx_blitp_v": 0,
     },

@@ -3804,18 +3804,13 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 %ifdef COLD_SLIDE
     jmp gfx_fill_gray_raw_v ; the body is the VGA rung's (MOVABLE-COLD-PLAN
 section .vga                    ; 2): VIDEXTM above is its door, and on a
-%ifndef KHP_VGAFILL             ; machine with neither card never falls here
     nop                         ; PARITY, never executed (kernel hot-paths
                                 ; pass 1, kernel-hotpaths-lean): vga-4's +3 in
-                                ; vga_solid_rect_v above, without the fill
-                                ; rewrites that balanced it, put this body and
-                                ; the save/restore pair at an odd shift. With
-                                ; the four VGA knobs on (kern_big since their
-                                ; size pass) the rewrites and that pass's
-                                ; shrinks above put the save/restore pair back
-                                ; on t_hotpar's parities WITHOUT it (this body
-                                ; even: KHP_VGAFILL rewrote its loop)
-%endif
+                                ; vga_solid_rect_v above put this body and the
+                                ; save/restore pair at an odd shift. With the
+                                ; four VGA knobs on (kern_big since 2026-11-10)
+                                ; and their size pass's -8 above, it still
+                                ; keeps the three where t_hotpar pins them
 gfx_fill_gray_raw_v:
 %endif
     push ax
@@ -3826,7 +3821,13 @@ gfx_fill_gray_raw_v:
     push di
     push es
     call gfx_rect_setup
-    jc .done
+%ifdef COLD_SLIDE                ; clipped away: out through vga_solid_rect's
+    jc vga_solid_rect_v.done    ; .done, the same seven pops in the same
+%else                           ; order a few bytes above, which a SHORT jc
+    jc vga_solid_rect.done      ; reaches - this body's own is 142 bytes on,
+%endif                          ; a `jnc +3 / jmp near` pair that every fill
+                                ; that draws paid as a TAKEN jump (-3 bytes,
+                                ; -12 clocks a gray fill)
     mov bl, 0xAA                ; pattern for the top clipped row
     test byte [gfx_ry1], 1
     jz .parity
