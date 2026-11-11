@@ -57689,7 +57689,11 @@ Seven packages are **core**: `NOTEPAD.O88`, `FONTVIEW.O88`, `PAINT.O88`,
 **system** disks in addition to the apps disks, each in the folder it already
 occupies over there — `APPS/` for the first five, `GAMES/` for Mines. **A
 second copy, never a move:** the roomier apps disks carry every package there
-is exactly as before.
+is exactly as before. **Except the Browser since §71.30**, whose PNG and JPEG
+parts put the 360 KB and 720 KB apps disks over: at 720 KB it is on the system
+disk alone, with `BROWSER.HTM` still in `apps720.img`'s `MEDIA/`, and at
+360 KB it is on `network360.img` alone (§24.6), program and page, the 360 KB
+system disk having left it off since §24.3.1.2.
 
 **FONT VIEWER IS THE ONE EXCEPTION AND IT IS NOW A DECISION RATHER THAN A
 CAPACITY** (§90.3). It is core, so it is in `APPS/` on all four system disks
@@ -58989,7 +58993,7 @@ contents are DERIVED from those omissions rather than listed again:
 
 | Folder | Carries |
 |---|---|
-| `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy |
+| `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy; `REDLINE.O88`, `TELNET.O88` and `CDRACK.O88`, which the 720 KB system disk leaves off (`SYS720OMIT`, §24.3.2) |
 | `GAMES/` | `REALDMG.O88`, `DRMARCO.O88` |
 | `MEDIA/` | `GBDEMO.GB` (packed), `OS8088.V88`, and in `MIDI/` the eight songs `apps720.img` does not carry |
 | `PICTURES/` | PiXEL's 360 KB gallery selection, five pictures (§106.7) |
@@ -131804,9 +131808,11 @@ its code the services. A decoder part reads its host's variables through DS
 and calls its services far on `[cs:PXP_PKG]`; nothing says that host must be
 a package. So part 1 (§71.26) is the host: the 27 variables the two parts
 name (`px_spal`, `px_plan`, `px_cur`, `px_k` and the rest, 2.5 KB) are part
-1's own data, `build/brpxlink.inc` is written from part 1's symbol map by
-`tools/pxlink.py --host` (the same refusal as PiXEL's: the map must describe
-the `browser.imgpart.bin` it is beside), and a decoder is called with DS =
+1's own data, `$(BUILD)/brpx/pxlink.inc` is written from part 1's symbol map
+by `tools/brpxlink.py` (the same refusal as PiXEL's: the map must describe
+the `browser.imgpart.bin` it is beside) - in a directory of its own, because
+PiXEL's decoders `%include "pxlink.inc"` and PiXEL's own
+`$(BUILD)/pxlink.inc` must not be on their include path - and a decoder is called with DS =
 part 1's data segment, `PXP_PKG` = part 1's code, `PXP_PKGD` = its data and
 `PXP_SELF` = the decoder's own. The services are part 1's procs that end in
 `retf` and set DS to the Browser themselves. **The resident Browser grows by
@@ -131902,8 +131908,20 @@ decoder parts are PiXEL's sizes, 12,018 and 19,101 bytes (9,486 and 14,000
 packed). BROWSER.O88 is 79,616 bytes on the disk, 25,504 more. **The disks
 paid for it** (the owner's decision of 2026-11-11): REDLINE leaves the 720 KB
 system disk for `more720.img` (§24.3.2), and the Browser leaves
-`apps720.img` (the 720 KB system disk carries it) and `apps360.img`
-(`network360.img` carries it). The row is `brpx` (`tests/brpx.py`, QEMU).
+`apps720.img` (the 720 KB system disk carries it; `BROWSER.HTM` stays in
+`apps720.img`'s `MEDIA/`) and `apps360.img` (`network360.img` carries it).
+The row is `brpx` (`tests/brpx.py`, QEMU).
+
+**A release obligation, The Wire's.** This takes BROWSER.O88 past
+`WIRE_FILEMAX` (64,512 bytes, §92.2) - about 100 KB once §71.31 and §71.32
+are in - and a plain record over that bound refuses the WHOLE catalog on
+every Wire in the field. The Browser's Wire record is a plain one (no flags,
+`needs_wire` 7), and the disk decisions above lean on The Wire to give it
+back to a machine whose disks leave it off (§24.3.1.2). So the release that
+first ships 1.7 publishes the Browser as a **version 2 archive** (`WF_ARC`,
+§92.13.1), as C64 and APPLE2 were when they crossed the same bound, with
+`needs_wire` at 7 or above. `tools/os88wire.py` refuses the plain record
+rather than pack it, so the obligation cannot be missed, only met late.
 
 ### 71.31 Browser 1.7 — the older formats
 

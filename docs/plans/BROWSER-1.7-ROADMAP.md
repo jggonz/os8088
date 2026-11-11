@@ -78,6 +78,15 @@ Delivery 4.5 (PNG and JPEG through PiXEL's parts, hosted by part 1, SPEC.md
 Part 1 is 29,881 bytes; parts 2 and 3 are 12,018 and 19,101. BROWSER.O88 is
 79,616 bytes on the disk.
 
+**Release obligation (The Wire).** That is past `WIRE_FILEMAX`, 64,512 bytes,
+and a plain Wire record over it refuses the whole catalog on every Wire in the
+field. The Browser's live record is a plain one (no flags, `needs_wire` 7).
+The release that first ships 1.7 publishes it as a version 2 archive
+(`WF_ARC`, SPEC.md 92.13.1), as C64 and APPLE2 were when they crossed the
+same bound, with `needs_wire` at 7 or above (SPEC.md 71.30).
+`tools/os88wire.py` refuses the plain record, so the release stops on it
+rather than shipping a broken catalog.
+
 Delivery 4.6 (the older formats: PiXEL's EXTRAS and SIMPLE parts and an XBM
 part, SPEC.md 71.31) took 28: image + BSS **58,525** (46,056 + 12,469),
 **6,499 free**. Part 1 is 30,637 bytes; parts 4, 5 and 6 are 20,696, 10,550

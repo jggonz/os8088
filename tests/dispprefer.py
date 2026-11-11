@@ -36,11 +36,17 @@ THREE LEGS, and the third is the one that is not about browser at all:
      preference may not break.
   F  `apps/word` and  G  `apps/frotz`, which ride disks of their own (SPEC.md
      68.5, 61.9) - so those two legs run only when the package is on whatever
-     `--apps` mounted, and say so when it is not:
+     `--apps` mounted, and say so when it is not. A, B and C are the
+     Browser's and are NOT optional - a disk without it FAILS the row:
 
-         python3 tests/os88disk.py ... build/word.o88 build/frotz.o88 \
-                                       -o build/wz360.img
+         python3 tests/os88disk.py ... build/browser.o88 build/word.o88 \
+                                       build/frotz.o88 -o build/wz360.img
          python3 tests/dispprefer.py --apps build/wz360.img
+
+  The default B: is a scratch disk of the Browser, Paint and TeXPad: no
+  shipped 360KB disk carries all three since the Browser left apps360.img
+  for network360.img (SPEC.md 71.30), and network360.img has no Paint or
+  TeXPad.
 
   E  `apps/texpad`, which is the third shape again: a per-adapter WIDTH (the
      Hercules has 720 columns and a two-pane editor is the one window with
@@ -224,8 +230,13 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga_herc")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None)
     a = ap.parse_args(argv)
+    if a.apps is None:                  # A-C, D and E on one disk (header)
+        a.apps = os88marty.scratch_disk("build/dispprefer.img",
+                                        "APPS:build/browser.o88",
+                                        "APPS:build/paint.o88",
+                                        "APPS:build/texpad.o88")
 
     fail = []
     say = lambda s: print("  " + s)
@@ -253,7 +264,8 @@ def main(argv):
         # --- A: launched on the VGA, switched to the CGA and back ------------
         dwbr, ok = find_app(m, mo, settle, "BROWSER.O88")
         if not ok:
-            say("BROWSER.O88 is not on this disk - skipped")
+            fail.append("A-C: BROWSER.O88 is not on %s, so the three "
+                        "legs this row exists for tested nothing" % a.apps)
         else:
             print("\nA. launched on the VGA, then Activate Mode both ways")
             sl = open_here(m, mo, settle, dwbr, "BROWSER.O88")

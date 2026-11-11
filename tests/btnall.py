@@ -66,13 +66,14 @@ def pkg_syms(src, inc, defines=()):
 # the very drift this control exists to end (docs/WRITING-TESTS.md).
 # Telnet is False only because tests/btngesture.py already drives it in
 # depth; every other row is driven here.
+BROWSER = "B:/BROWSER.O88"        # network360.img's root (SPEC.md 71.30)
 ROWS = [
     ("A:/APPS/DOS.O88", "dos_btrec", "/apps/dos/dos.asm",
      ["/apps/", "/apps/dos/", "/drivers/net/", "/kerndos/"],
      ("-DDOSKPART", "-DDOS_EXTCORE", "-DDOS_WIN16"), (556, 26)),
     ("B:/APPS/TELNET.O88", "te_btrec", "/apps/telnet/telnet.asm",
      ["/apps/", "/apps/telnet/", "/drivers/net/"], (), False),
-    ("B:/APPS/BROWSER.O88", "br_btrec", "/apps/browser/browser.asm",
+    ("B:/BROWSER.O88", "br_btrec", "/apps/browser/browser.asm",
      ["/apps/", "/apps/browser/", "/drivers/net/"], (), True),
     ("B:/APPS/AUDIO.O88", "apu_btrec", "/apps/audio/audio.asm",
      ["/apps/", "/apps/audio/"], (), True),
@@ -113,10 +114,10 @@ def close_menu(ui, w):
 
 def run():
     fails = []
-    with os88ui.boot(ROOT + "/build/os8088-360.img",
-                     apps=ROOT + "/build/apps360.img") as ui:
+
+    def drive(ui, rows):
         m, mo = ui.m, ui.mo
-        for path, rec, src, inc, defs, at in ROWS:
+        for path, rec, src, inc, defs, at in rows:
             name = path.rsplit("/", 1)[-1]
             syms = pkg_syms(ROOT + src, inc, defs)
             w = ui.path(path)
@@ -233,6 +234,17 @@ def run():
                 os88marty.settle(m)
                 ui.menu_pick(close_menu(ui, w), "Close")
             ui.settle()
+
+    # TWO BOOTS, because no 360KB apps disk carries all four any more: the
+    # Browser left apps360.img for network360.img, at its ROOT (SPEC.md
+    # 71.30), and Audio and Artful are not on that disk
+    for apps, rows in (("apps360.img",
+                        [r for r in ROWS if r[0] != BROWSER]),
+                       ("network360.img",
+                        [r for r in ROWS if r[0] == BROWSER])):
+        with os88ui.boot(ROOT + "/build/os8088-360.img",
+                         apps=ROOT + "/build/" + apps) as ui:
+            drive(ui, rows)
 
     for f in fails:
         print("FAIL " + f)

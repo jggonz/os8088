@@ -4223,12 +4223,14 @@ SYSDOCRAW := $(BUILD)/readme-plain.txt
 # stays in SYSTEM/ on this disk and whose catalog carries both. So the "a
 # network machine's system disk should carry the programs that use its
 # driver" argument further up is spent at this geometry: the one network
-# program it carries is the one that fetches the others. Both stay on the
-# 720KB, 1.44MB and 1.2MB system disks and on every apps disk, and
-# BROWSER.HTM is in MEDIA/ on build/apps360.img beside the browser that
-# opens it - this disk never carried the page. The 360KB gate disks
-# (ether360, thewire360, the usbm pair) take the same list; every network
-# row opens the browser off B:.
+# program it carries is the one that fetches the others. The Browser stays
+# on the 720KB, 1.44MB and 1.2MB system disks, Telnet on the 1.44MB and
+# 1.2MB ones (SPEC.md 24.3.2). At 360KB the Browser and
+# BROWSER.HTM are on build/network360.img, the program at the root and the
+# page in MEDIA/, and no longer on apps360.img (SPEC.md 71.30) - this disk
+# never carried the page. The 360KB gate disks (ether360, thewire360, the
+# usbm pair) take the same list; every network row opens the browser off B:,
+# off a disk that carries it.
 #
 # **AND MINES IS THE NEXT** (SPEC.md 24.3.1.3): STIKMENU.DRV, Locator's Sticky
 # Apps menu (SPEC.md 110.12), took four of the nine clusters left, and five
@@ -17911,7 +17913,8 @@ APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
                     $(BUILD)/waverack.o88 $(BUILD)/browser.o88,$(APPS_TOOLS))
 # (BROWSER.HTM is the Browser's manual and goes where it goes: not here since
-# SPEC.md 71.30 - network360.img carries both)
+# SPEC.md 71.30 - at 360KB network360.img carries both, and at 720KB the
+# system disk carries the program and apps720.img the page)
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) \
            $(filter-out %/BROWSER.HTM %/browser.htm,$(APPS_DATA_360)) $(APPS_SYS)
 
@@ -17985,13 +17988,15 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # owner's decision of 2026-11-11): its PNG and JPEG parts (71.30) are 25 KB
 # and put this disk 20 clusters over. The 720KB system disk carries it, as a
 # core package (24.3), so every 720KB machine has it from the disk it boots.
+# BROWSER.HTM stays in MEDIA/ here (3 clusters): the system disk carries the
+# program and not its manual (SPEC.md 71.12), so the page rides the disk in
+# B: beside the other documents rather than on no 720KB disk at all.
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
-             $(BUILD)/browser.o88 %/BROWSER.HTM %/browser.htm \
+             $(BUILD)/browser.o88 \
              $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
                  APPS:$(BUILD)/waverack.o88 APPS:$(BUILD)/browser.o88 \
-                 MEDIA:%/BROWSER.HTM MEDIA:%/browser.htm \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
