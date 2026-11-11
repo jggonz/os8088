@@ -1,7 +1,8 @@
 # Hibernate resume: no question, Shift to skip, and a boot that does only what the resume needs
 
 > **STATUS (2026-11-11): (A) AND B2 (waves B1, B2) BUILT, not yet run on the
-> emulator rows or the iron; B3, B4 and B5 not taken** — see §5 for the
+> emulator rows or the iron; B3 and B5 not taken, B4 taken separately
+> (docs/plans/B4-WAKE-PLAN.md)** — see §5 for the
 > owner's decisions and what landed, commit by commit. The text below is the
 > proposal as researched on `117cd5b8`, kept as written except where §5 says
 > a decision overrode it.
@@ -608,6 +609,12 @@ saving waits for the field (docs/FIELD-MACHINES.md).
    running on that; the driver-pass split below is kept compatible with it
    (the two passes are the keep-set and the rest, which is exactly B4's
    line).
+   **B4 HAS SINCE BEEN TAKEN, as its own batch**: docs/plans/B4-WAKE-PLAN.md
+   is the costing, the owner's scope (ETHER, PCIETHER, the PicoMEM's USB
+   mouse, HTTPFS, VMMOUSE; SOUND deferred) and what landed - `DRVV_SLEEP`/
+   `DRVV_WAKE` and `OS88_DRV_WAKES` (SPEC.md 51.2.5), the lease kept across
+   a wake (72.5.3), and the wake's drivers back before the paint with the
+   rest behind the busy pointer (87.6 steps 4b-6).
 
 **What landed**
 
