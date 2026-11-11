@@ -1942,7 +1942,7 @@ FAST = [
         "and not soak on t_textrules.py's argument - it is a rule about how "
         "every package is written, so the place it belongs is in front of "
         "the next `make` rather than the next soak run"),
-    Row("gfxclob", "fast", py("tests/unit/t_gfxclob.py"), 6.0,
+    Row("gfxclob", "soak", py("tests/unit/t_gfxclob.py"), 6.0,
         "THE LINE CELLS CLOBBER AX..DX (SPEC.md 5.7.3, ABI-BREAK-LIST V1): "
         "OSAPI_GFX_PIXEL/HLINE/VLINE jump into gfx_fill with their argument "
         "registers spent, where they used to bank them. A caller that kept a "
@@ -1956,8 +1956,10 @@ FAST = [
         "routine that returns with junk live - and fails on a read of a "
         "clobbered half before a write. tests/gfxclob.txt is the reasoned "
         "allowlist and only turns one way; --report names every place the "
-        "walk could not see. FAST and not soak on t_movable's argument: it "
-        "is a rule about how every package is written"),
+        "walk could not see. SOAK, not fast or full (owner, 2026-11-11): a "
+        "miss is a visual bug in one package's drawing, not a broken OS, "
+        "and the release soak runs every row; 6 s was too dear for a tier "
+        "every build or integration pays"),
     Row("moddrop", "fast", py("tests/unit/t_moddrop.py"), 0.2,
         "SPEC.md 2.8.3's ratchet: every mod_tab row is DROPPED somewhere, "
         "or tests/moddrop.txt says why it is held until restart. A module "
