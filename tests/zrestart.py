@@ -127,12 +127,19 @@ class Frotz:
         return u16(self.m.read(self.lin(self.seg(), self.P[name]), 2))
 
     def inst(self):
-        """(instance index, task slot) of the record whose base is ours."""
+        """(instance index, task slot) of the LIVE record whose base is ours.
+
+        I_STATE first, as the kernel's own inst_of_seg walks (inst_next skips
+        a free row): a closed record keeps its I_KIND and its I_SPTR, and the
+        hole a Calculator leaves is exactly where the move puts Frotz - so a
+        lower free row naming that base answered for us, its restart word 0
+        read as [MORE] up, and the Space sent to dismiss it raised the restore
+        dialog (the row stuck at restore B with the Open chooser showing)."""
         seg = self.seg()
         raw = self.m.read(S("inst_tab"), 12 * 32)
         for i in range(12):
             r = raw[i * 32:(i + 1) * 32]
-            if r[2] & 0x80 and u16(r, 6) == seg:
+            if r[0] and r[2] & 0x80 and u16(r, 6) == seg:
                 return i, r[3]
         raise RuntimeError("no instance record at %04x" % seg)
 
@@ -176,9 +183,11 @@ class Frotz:
 
     def until(self, cond, what, limit=40, more=True):
         """Wait for `cond`, answering every [MORE] on the way (more=False to
-        stop at one) - [zw_more] counts rows since the last [MORE] and NOT
-        since the last input (zwin.inc), so one can come up in the middle of
-        @read's own echo, and does, at the same row in both boots."""
+        stop at one). [zw_more] counts rows since the last key taken
+        (zio.inc's zi_getkey) and zw_morechk never pages inside a parked wait,
+        so only a command that prints a screenful - `more` - meets one; until
+        2026-11 the count ran on across input and one came up in @read's own
+        echo of RETURN, where its unlock/lock pair froze the desktop."""
         try:
             while True:
                 os88marty.until(self.m, lambda _: cond() or
