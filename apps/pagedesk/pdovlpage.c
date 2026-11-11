@@ -138,7 +138,12 @@ static int ovl_pg_apply(const unsigned *d, int undo)
     pdu_pgwant = n + 1;
     if (n < (unsigned)pdu_sidetop || n >= (unsigned)pdu_sidetop + 2 * pdu_side_rows())
         pdu_sidetop = n - n % 2;
+    if (pdu_job == J_THUMB)             /* F29: the pictures follow the map */
+        pdu_job_abort();
+    for (k = 0; k < PDU_TH_SLOTS; k++)
+        pdu_thpg[k] = 0;
     pdu_side_paint();
+    pdu_ctl_repaint(C_PGOF);            /* F29: the toolbar's "of N" */
     pdu_menusync();
     pdu_kick();
     return 1;
@@ -177,6 +182,7 @@ static void ovl_pg_ask(const char *what)
     pdu_cat(pdu_line, pdu_pkbuf, sizeof(pdu_line));
     pdu_cat(pdu_line, "_", sizeof(pdu_line));
     pdu_tell(pdu_line);
+    pdp_form = 2;                       /* the render a dialog's close owes does not wipe the prompt */
 }
 
 static void ovl_pg_prompt(int kind, const char *what, int seed)
@@ -546,10 +552,46 @@ static void ovl_savefail(const char *name, unsigned err)
     pdu_say(pdu_line);
 }
 
+/* an 8.3 name: the kernel's Standard File field takes a base of any length
+ * and keeps 12 characters (F30), so the save says so before it starts */
+static int ovl_name_ok(const char *n)
+{
+    int b, e, dot, c;
+    const char *x;
+
+    b = 0;
+    e = 0;
+    dot = 0;
+    for (; (c = *n) != 0; n++) {
+        if (c == '.' && !dot) {
+            dot = 1;
+            continue;
+        }
+        if (c <= ' ' || c == '.' || c > '~')
+            return 0;
+        for (x = "\"*+,/:;<=>?[\\]|"; *x; x++)
+            if (*x == c)
+                return 0;
+        if (dot)
+            e++;
+        else
+            b++;
+    }
+    return b >= 1 && b <= 8 && e <= 3;
+}
+
 static int ovl_save_begin(const char *name, int kind)
 {
     int r;
 
+    if (!ovl_name_ok(name)) {
+        os88_strcpy(pdu_line, name, sizeof(pdu_line));
+        pdu_cat(pdu_line, " is not a valid file name (8 letters, a dot, 3).", sizeof(pdu_line));
+        pdu_tell(pdu_line);
+        pdp_form = 2;                   /* the render the dialog's close owes does not wipe it */
+        pdu_at_doc();
+        return 1;
+    }
     pdu_job_abort_render();
     if (kind != 1 && pdu_doc != D_OPEN)
         return 1;
