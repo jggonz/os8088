@@ -141,7 +141,7 @@ static pdw xg_cs(pdw st)
     pdw e;
     if (!g_havename || ci_has(g_name, "device")) return 0;
     e = xg_entry(XCK_CS, PDV_GFX_CS, PDGXI_CAT_CS, PDGX_CSBYTES);
-    if (!e) return 1;
+    if (!e) { xg_setslot(st, 0); return 1; }
     xg_setslot(st, g_xslot);
     GS.sncs = GS.fncs = pd_fpeekb(g_xcseg, (pdw)(e + 1));              /* the space's component count (struct pdgx_cs.n) */
     xg_color(st, e, 0);
@@ -153,9 +153,11 @@ static pdw xg_cs(pdw st)
 static pdw xg_sc(pdw st, pdw nop)
 {
     pdw slot = st ? (pdw)(GS.pad_ >> 4) : (pdw)(GS.pad_ & 15), e, fl;
-    if (!slot) return (x_pend | x_mwant) != 0;                           /* no slot yet because PDXG is still to load: the pass reruns, say nothing */
-    e = xc_find(XCK_CS, g_xcsk[slot][0], g_xcsk[slot][1]);
-    if (!e || g_nop < nop) return 1;
+    if (!slot || !(e = xc_find(XCK_CS, g_xcsk[slot][0], g_xcsk[slot][1]))) {    /* no space to hold the operands (not loaded yet, or its entry gone): the device colour */
+        if (g_nop == 1 || g_nop == 3 || g_nop == 4) { col_apply(st, g_nop); return 1; }
+        return slot || (x_pend | x_mwant) ? 1 : 0;
+    }
+    if (g_nop < nop) return 1;
     fl = pd_fpeekb(g_xcseg, (pdw)(e + 2));
     if (fl & PDGX_F_PATTERN) {                                 /* scn /Name: a pattern (an uncoloured one has components first) */
         if (!g_havename) return 1;

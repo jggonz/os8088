@@ -246,7 +246,7 @@ def tol_of(name):
 
 
 def check_quant(work):
-    """PDREND's rgb_c4 (pdrg.c, the VGA palette index of an RGB) against the colours COLOUR.PDF's five cells once drew wrong
+    """PDREND's rgb_c4 (pdrg.c, the VGA palette index of an RGB) against the colours COLOUR.PDF's cells once drew wrong (the five of R10, then C39's brown, which a first cut made dark red)
     (QA R10: salmon was white, a pale green yellow, lavender-grey white, a mid green brown): the function's own source is
     compiled, so a change to it is what is tested."""
     import re
@@ -256,6 +256,7 @@ def check_quant(work):
         print("FAIL rgb_c4 not found in pdrg.c")
         return 1
     want = [((247, 151, 122), 12), ((126, 220, 100), 10), ((153, 153, 197), 7), ((77, 153, 46), 2), ((127, 204, 64), 10),
+            ((127, 64, 0), 6), ((15, 15, 15), 0), ((47, 128, 205), 9), ((63, 135, 191), 3), ((165, 91, 171), 5),
             ((255, 0, 0), 12), ((0, 0, 0), 0), ((255, 255, 255), 15), ((128, 128, 128), 7)]
     prog = "typedef unsigned short pdw; typedef unsigned char pdb;\n#include <stdio.h>\n" + m.group(0) + "int main(void){int v[][3]={"
     prog += ",".join("{%d,%d,%d}" % c for c, _ in want) + "};for(int i=0;i<%d;i++)printf(\"%%d \",rgb_c4(v[i][0],v[i][1],v[i][2]));return 0;}\n" % len(want)
