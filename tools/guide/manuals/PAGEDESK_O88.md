@@ -10,7 +10,7 @@ Double-click **PAGEDESK.O88**, or double-click any `.PDF` file and PageDesk open
 
 The empty window has an **Open...** button and a **Sample guide** button. File > Open... (Ctrl+O) chooses a file. Esc stops a document that is still opening.
 
-PageDesk keeps its fonts and decoders in the PageDesk folder beside the program, and reads them while it draws. Keep that disk in its drive.
+PageDesk reads its decoders out of PAGEDESK.O88 while it draws, and its extra font sizes from [[PDFONTX.RES]] beside it. Keep that disk in its drive.
 
 On a 360 KB floppy machine the program fills a disk of its own, and the samples are on a second disk. Keep the PageDesk disk in one drive, put the other disk in the second drive and choose the file with File > Open.... If the PageDesk disk is out when a page needs it, PageDesk says **Insert the PageDesk disk**. Put it back and do the same thing again.
 
