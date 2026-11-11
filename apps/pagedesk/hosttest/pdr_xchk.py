@@ -400,6 +400,16 @@ check('a new document\'s INIT forgets the glyph claim\'s synthetic blocks (their
 check('docB opened while docA\'s view waited on its ask (aborted, never answered) draws ITS font: the same pixels as docB opened first (%s px differ)'
       % (int((ab != fb).sum()) if ab is not None and fb is not None else '?'),
       'aborted at ask' in out and ab is not None and fb is not None and int((ab != fb).sum()) == 0, out[-200:])
+print('-- one slot, two occupants by turns (alt.pdf; QA QZ1035 "colour space" after eight loads)')
+alt = os.path.join(fx, 'alt.pdf')
+rc, im, st, _ = render(alt, 0, 'vga', dl=20)
+rcw, imw, stw, _ = render(alt, 0, 'vga', dl=29)
+check('PDXG and the decoder by turns, twelve loads that each drew something: clean, and the same pixels as the 29 KiB list\'s eight loads (%s loads; %s px differ)'
+      % (st.get('loads'), int((im != imw).sum()) if im is not None and imw is not None else '?'),
+      rc == 0 and num(st, 'incomplete') == 0 and int(st.get('loads', 0)) > 8 and im is not None and imw is not None and int((im != imw).sum()) == 0, str(st))
+rc, im, st, _ = render(alt, 0, 'vga', dl=8)
+check('...and a page that needs more than PDR_XASKS + PDR_XFREE (24) loads still stops and says so (%s loads, first=%s)' % (st.get('loads'), st.get('first')),
+      rc == 0 and int(st.get('loads', 99)) <= 24 and st.get('first') == 'graphics module', str(st))
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))
