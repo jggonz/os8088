@@ -15,7 +15,7 @@
 ;                etherui, ethcfg, ethstate), none of it copied
 ;
 ; --- THE NIC SEAM -----------------------------------------------------------
-; The stack calls nic_rx / nic_tx / nic_init / nic_stop. Here they are one
+; The stack calls nic_rx / nic_tx / nic_init / nic_stop / nic_sleep. Here they are one
 ; `jmp` each through the vectors of the backend the PCI probe chose, so the
 ; next card (a row in pce_tab and a <card>.inc beside rtl8139.inc) is not a new
 ; driver. ETHER.DRV's are the 8390's (drivers/ether/nicne2k.inc).
@@ -47,12 +47,15 @@
 %define nic_rx      pce_rx
 %define nic_tx      pce_tx
 %define nic_stop    pce_stop
+%define nic_sleep   pce_halt    ; SLEEP: silenced, the ring KEPT (51.2.5)
 PCE_ROW     equ 8               ; a pce_tab row: vendor, device, name, vectors
 PCEV_CLAIM  equ 0               ; ...the vectors, in order
 PCEV_INIT   equ 2
 PCEV_RX     equ 4
 PCEV_TX     equ 6
 PCEV_STOP   equ 8
+PCEV_HALT   equ 10              ; stop's first half: the card silenced, its
+                                ; memory kept - DRVV_SLEEP's (SPEC.md 51.2.5)
 
 %macro NIC_DATA 0
 pce_tab:                        ; the backends, in the order they are tried

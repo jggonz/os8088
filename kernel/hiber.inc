@@ -116,13 +116,13 @@ HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
   %endif
 %endif
 ; HBM_KEEPS - a driver that says OS88_DRV_WAKES is put to SLEEP by a
-; hibernate's sweep and kept, then WAKEd (SPEC.md 51.2.5). NOT kern_mega: its
-; drivers run above 1MB, where a kept image and its claims would be extra runs
-; in the picture's extended section against HBX_HMAX, and a park needs none of
-; it - that kernel keeps today's unload and reload (docs/plans/B4-WAKE-PLAN.md)
-%ifndef KERN_MEGA
-  %define HBM_KEEPS 1
-%endif
+; hibernate's sweep and kept, then WAKEd (SPEC.md 51.2.5). EVERY kernel with
+; a hibernate, kern_mega's included: there a kept driver's pool blocks ride
+; the image's extended section, which hbm_xplan lists by contiguous SPAN
+; rather than by block, so they do not spend HBX_HMAX; the DOS park leaves
+; the pool where it stands and puts the HMA back, so a kept image is simply
+; there when the trip comes home (docs/plans/B4-WAKE-PLAN.md, "kern_mega")
+%define HBM_KEEPS 1
 
 ; --- the DOS handoff's own fields (SPEC.md 96.40.1) -------------------------
 ; They sit ABOVE HS_SLAVE and BELOW HS_IVT, which the DOS stub never uses: it
@@ -4190,19 +4190,57 @@ hbm_xplan:
     mov [mega_hbxl], ax
     mov word [mega_hbxl + 2], 0
     add di, MPK_CPYSZ           ; so KERNEL.SYS's bytes, as a boot makes them
+    ; --- THE POOL'S BLOCKS, ONE RUN PER CONTIGUOUS SPAN (SPEC.md 51.2.5) ----
+    ; Every block the pool has given out, the kernel's own among them (track
+    ; 1's modules and caches: hbm_wake flushes the caches), the HMA's too
+    ; since it is pool (MC4) - but a run is a SPAN, not a block: a block that
+    ; another block ends exactly at is the tail of that block's run, so only a
+    ; span's HEAD starts one, and the run grows block by block until nothing
+    ; starts where it ends. The table is in slot order, not address order,
+    ; so both questions walk it whole: ~96 x 96 reads, milliseconds on a 286,
+    ; once a hibernate. It is what lets a driver kept across the trip (B4, a
+    ; kept ETHER.DRV's image and socket pool) ride the section without
+    ; spending HBX_HMAX: a compacted pool is a handful of spans whatever its
+    ; block count. The stub and hbm_xruns take any whole-KB run in the pool
     mov si, mx_tab
 .mx:
-    push ds                     ; the entry, through DS for two reads: ES is
-    mov ax, MEGA_SEL_MXT        ; the list's, and the pool's table is the
-    mov ds, ax                  ; tables' tail (kern_mega size pass 2)
-    mov ax, [si+MX_KB]
-    mov bx, [si+MX_OFF]
+    push ds                     ; the entry, through DS: ES is the list's,
+    mov ax, MEGA_SEL_MXT        ; and the pool's table is the tables' tail
+    mov ds, ax                  ; (kern_mega size pass 2)
+    mov ax, [si+MX_KB]          ; AX = the run's KB so far
+    or ax, ax
+    jz .skip                    ; a free entry
+    mov bx, [si+MX_OFF]         ; BX = where it starts, KB from the pool
+    push si
+    mov si, mx_tab              ; --- a HEAD? nothing ends where it starts --
+.hd:
+    mov cx, [si+MX_KB]
+    jcxz .hn
+    add cx, [si+MX_OFF]
+    cmp cx, bx
+    je .tail                    ; ...another block's run carries this one
+.hn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .hd
+.grow:                          ; --- ...then every block that starts where
+    mov dx, bx                  ; the run so far ends, until none does
+    add dx, ax
+    mov si, mx_tab
+.gl:
+    cmp word [si+MX_KB], 0
+    je .gn
+    cmp [si+MX_OFF], dx
+    jne .gn
+    add ax, [si+MX_KB]
+    jmp short .grow
+.gn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .gl
+    pop si
     pop ds
-                                ; every block the pool has given out, the
-    or ax, ax                   ; kernel's own among them (track 1's modules
-    jz .next                    ; and caches: hbm_wake flushes the caches),
-                                ; the HMA's too since it is pool (MC4)
-    mov dx, ax
+    mov dx, ax                  ; the run: AX KB from BX KB
     mov cl, 10
     shl ax, cl
     mov cl, 6
@@ -4221,6 +4259,11 @@ hbm_xplan:
     mov [es:di+4], ax
     mov [es:di+6], dx
     add di, MPK_CPYSZ
+    jmp short .next
+.tail:
+    pop si
+.skip:
+    pop ds
 .next:
     add si, MX_BLKSZ
     cmp si, mx_tab_end

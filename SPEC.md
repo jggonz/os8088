@@ -105014,12 +105014,42 @@ taken with the declared drivers ASLEEP and loaded; `hbm_down`'s
 `drv_shutdown` after the picture detaches them as it detaches the disk
 driver, which changes nothing the picture holds.
 
-**Not kern_mega.** Its drivers run above 1MB (`OS88_DRV_HIGHOK`, `_HICLAIM`):
-a kept `ETHER.DRV` and its socket pool would be pool blocks the picture's
-extended section must carry, each a run against `HBX_HMAX` (§87.9) on a
-hibernate that fitted before, and the park (§96 on kern_mega) restores
-nothing it would save. `HBM_KEEPS` is undefined there and that kernel's
-sweep is today's, byte for byte.
+**kern_mega too** (the owner: *"Mega needs general feature parity"*).
+`HBM_KEEPS` is defined on every kernel with a hibernate, and each of
+kern_mega's three routes carries a kept driver as it stands:
+
+- **The DOS park** (§96 on kern_mega) leaves the pool where it is, puts the
+  HMA back from its save, restores conventional memory, and since
+  `[mega_dparked]` skips `hbm_down`'s `drv_shutdown` - so a kept driver's
+  image, claims and selectors are exactly as SLEEP left them when the trip
+  comes home, and `hbm_wake` wakes them. It costs the park nothing: the
+  in-use pool is never copied, and nothing runs a sleeping driver's code to
+  move the in-place sum the park checks.
+- **The image** (§87.9, a hibernate or a `Save the session` trip) carries
+  every pool block in use in its extended section - a kept `ETHER.DRV`'s
+  image (~17KB) and its socket pool (up to ~16.5KB) among them, written,
+  summed and read again each trip: ~34KB, **~0.1-0.3 s PREDICTED on a 286's
+  hard disk**, against the reload it replaces (the file, its decode, the
+  probe and READY's DHCP wait of 0.2-6 s). It would have cost RUNS as well -
+  one per block, against `HBX_HMAX` = 62 where a full `INST_MAX` is ~60 - so
+  `hbm_xplan` lists the pool by CONTIGUOUS SPAN, not by block: a block some
+  other block ends exactly at is that block's run's tail, so only a span's
+  head starts a run, grown block by block. Every hibernate on kern_mega
+  spends fewer runs for it, kept drivers or not; the resume's stub and
+  `hbm_xruns` already take any whole-KB run inside the pool.
+- **A refused write's unwind** (`hbm_reload`) wakes what it put to sleep,
+  as on every kernel.
+
+`PCIETHER.DRV`'s ring was the other obstacle, and is fixed on every kernel:
+SLEEP's stop is `nic_sleep` (`rt_halt` - the bus master off and the chip
+reset, the ring, its window and its claim KEPT), and WAKE's `rt_claim`
+finds `[rt_seg]` standing and claims nothing, so `rt_init` points RBSTART
+at the same ring. It used to free the ring at SLEEP and claim a fresh one at
+WAKE, which on kern_mega leaked one per trip: a boot claim is named by its
+paragraph, and `OSAPI_MEM_FREE` cannot find it under protected mode. The
+ring is `MEMP_CONV` and pinned (§125.4), so it is in every picture and no
+compaction moves it while the card sleeps. `ETHER.DRV`'s 8390 holds no
+memory of its own, so its `nic_sleep` is `nic_stop`.
 
 **Who declares it, and what each wake does** (B4, docs/plans/B4-WAKE-PLAN.md):
 
@@ -105030,6 +105060,20 @@ sweep is today's, byte for byte.
 | `USBMOUSE.DRV`, the CH375 path (§9.12.3) | DETACH's stop byte, then the wait `drv_unload` would do: the WORKER EXITS at a transaction boundary (a held button released, `ABORT_NAK`, `RESET_ALL` - device mode, bus released) and brings the byte back down under the IF = 0 that carries it into `drv_task`'s exit, so the picture holds no task in the image and a chip with nothing in flight. Nothing hooks a vector on this path | a FULL re-init whatever came between: `ABORT_NAK`, `CHECK_EXIST` as the identity, and attach's own question - a device the chip calls READY was configured by somebody (a BIOS serving a boot flash drive), so CF = 1 and the reload's attach reads its descriptor and decides. Then `US_IDLE` with a fresh set of enumerations and a NEW worker, which sets host mode and enumerates. A refusal leaves `[um_alive]` 1 and no worker, so DETACH touches nothing |
 | `HTTPFS.DRV` (§122) | nothing: no hardware | its kept connection FORGOTTEN, not aborted - the card's sleep reset every socket and its slot may be somebody else's now. The index, the volume and the folder the user stands in stay: dropping the index would put the driver at the root under a window standing in a folder (`hf_fetch` starts there, and the kernel moves inside a volume without a chdir) |
 | `VMMOUSE.DRV` (kern_emu, §9.11) | the aux stream stopped (`vmm_detach`, 0xF5) | the backdoor re-armed - `vmm_probe` under `vmm_atom` and the 8042's 0xF4/0xF5 - which is its attach: a resumed QEMU or VMware has reset the device, and before B4 the reload read the image back and attached nothing. It NEVER refuses: a host with no backdoor now is a still pointer either way, and a refusal would unload the row under a standing `[vmm_on]` |
+
+**What `ETHER.DRV`'s pair cost, and how it was paid.** SLEEP/WAKE took the
+image + bss from 17,345 to 17,510 bytes, across the heap's 512-byte granule
+(34 to 35 sectors, `DRVM_IMG_ETH`). A size pass over cold code only - nothing
+on the per-packet paths - took it to **17,389, 34 sectors again** (and
+`PCIETHER.DRV`, which shares every line of it, from 17,179 to 17,058): three
+strings the pane and the Setup window both drew now exist once,
+`os88line_resync` is left out (`OS88LINE_NORESYNC`, §83.4), the RESET a
+going socket's peer is sent is one routine (`sk_rst`, entering `tcp_ack`'s
+tail) where `eth_dropall` and `eth_v_gone` each carried it, the OFFER's
+server address is copied by one `mem_cp4` from either source, a NAK no longer
+stores the `DH_IDLE` that `dhcp_start` overwrites, `dhcp_timer` tests its two
+live states and picks BOUND or FAIL arithmetically, and `ec_apply` sets the
+mode and flushes ARP once for both arms.
 
 `SOUND.DRV` does NOT declare it: its attach gives its probes back
 (`DRV_H_KEEP`) and a re-arm would be resident bytes on every Sound Blaster
@@ -158735,6 +158779,12 @@ a package that sets it and calls `os88line_set` does not assemble. DOS
 (§96.44.16) and the Desk Calendar (§110.6.2) set it; Browser, ftpd,
 Sheet, Weave, `ETHER.DRV` and `SAVER.DRV` call it.
 
+`OS88LINE_NORESYNC` is the same opt-out for the other end: `os88line_resync`
+(43 bytes) re-derives a field whose buffer was written behind its back, and a
+client that fills every field through `os88line_set` never reaches it.
+`ETHER.DRV` and `PCIETHER.DRV`'s Setup window set it (§51.2.5's size pass);
+every client that does not is byte-identical.
+
 ### 83.5 `OS88LINE_PENS` — a field in the package's colours
 
 `os88line.inc` letters black on white, the colours of a dialog. A package
@@ -162521,7 +162571,8 @@ of its pass with nothing held, in `hbm_perform`:
    row: sound, the NIC; never the VESA renderer's row, §120.4), recording the
    rows in `[hb_drvmask]` - **unless the driver declares `OS88_DRV_WAKES`**
    (§51.2.5): that one is sent `DRVV_SLEEP` and KEPT, noted in the module's
-   `[hbm_kept]`, and only a refused SLEEP is detached (not kern_mega). Their hardware state
+   `[hbm_kept]`, and only a refused SLEEP is detached (every kernel, kern_mega's
+   included). Their hardware state
    cannot cross a power cycle and their claims would be restored to addresses
    a fresh boot has given to somebody else; the disk driver, the parallel
    cable and the RAM disk own no hardware the BIOS does not already own, and
@@ -162977,7 +163028,7 @@ size pass 2) as one range (`[mega_tbllin]`, `[mega_ldtend]` +
 which a restore requires exactly - an image from before it, or from a machine
 whose RAM puts the tables elsewhere, is refused; `.cold`'s copy is not in it, being a
 code selector whose bytes are `KERNEL.SYS`'s), and every `mx_tab` block in
-use is one more - the keyboard mouse's adopted pointer half (§2.8.8) among
+use is in one more (a run per contiguous span, below) - the keyboard mouse's adopted pointer half (§2.8.8) among
 them on a mouseless machine, `mod_hiboot` having moved it above 1MB at the
 switch. They go down through a 32KB conventional bounce claimed
 AFTER the picture, so the image does not hold it, and Fletcher's sums are
@@ -162999,7 +163050,10 @@ when it could not. The same refusal when the runs are more than the head can
 list: 12 bytes and then 8 a run in its one sector is **`HBX_HMAX` = 62**, run
 0 among them, where `mx_tab` holds 96 blocks — past it run 0's bytes, which
 start at the head's byte 512, would overwrite the list's tail and the image
-would be written and refuse its own resume.
+would be written and refuse its own resume. **A run is a contiguous SPAN of
+in-use blocks, not a block** (§51.2.5): only a block no other block ends at
+starts one, grown through every block that starts where it ends, so a
+compacted pool is a handful of runs whatever its block count.
 
 **The write is one bar** (§12.8.8): `hbm_wrimg` opens an in-hold operation of
 exactly what it writes - the conventional chunks, chunk 0 a second time, the
@@ -195187,8 +195241,8 @@ drive, kern_emu's absolute pointer - was put to SLEEP rather than unloaded
 before the picture and is WOKEN before the paint, with `ETHER.DRV` keeping
 its lease rather than sitting through READY's DHCP (§72.5.3); and what
 still has to be read off the disk is read behind the busy pointer rather
-than behind a desktop that looks ready. Not kern_mega, whose park restores
-nothing it would save (§51.2.5).
+than behind a desktop that looks ready. kern_mega's park route lands in
+`hbm_wake` too and wakes them the same way (§51.2.5).
 
 **MEASURED: 996 bytes, and this one crosses the rung.** The image goes 35,476
 → 36,472, `KD_IMG_KB` 35 → 36, and the DOS program **585 KB → 584**. 392 bytes

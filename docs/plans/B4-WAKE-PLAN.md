@@ -73,27 +73,111 @@ Six commits on `speed-and-fix` after `256b0cac`:
    MartyPC, and no row hibernates that disk; the field is the first to see a
    CH375 WAKE.
 
-**kern_mega keeps today's route** (`HBM_KEEPS` undefined, its sweep byte for
-byte): the costing suggested that for drivers placed above 1MB, and every
-driver this batch declares is either HIGHOK there (ETHER, PCIETHER: image and
-socket pool in the pool, extra runs against `HBX_HMAX` = 62 on a hibernate
-that fitted before) or worth nothing on that machine's park, which restores
-nothing a wake would save. PCIETHER's ring is also a boot claim named by a
-paragraph, which `rt_stop`'s free cannot find under protected mode - a kept
-PCIETHER there would leak a ring per trip.
+**kern_mega took the same route afterwards** (the owner: *"Mega needs
+general feature parity; the driver reloads need to [go] there too"*; SPEC.md
+51.2.5). The batch had left it on the old one (`HBM_KEEPS` undefined) for
+two reasons, and each was answered rather than accepted - see *kern_mega*
+below. `HBM_KEEPS` is now defined on every kernel with a hibernate.
 
 ### Bytes, MEASURED against `256b0cac`
 
 | | before | after | |
 |---|---|---|---|
 | kernel resident, kern_big / kern_small / kern_emu / kern_mega | | | **0** (`kernsize --json` identical; `kernel.bin` the same length on all four, the build number apart) |
-| ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crosses its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`): +512 bytes of heap while it is loaded. No cheap 102-byte trim was found; dropping `os88_ent`/`ep_bp` from the two verbs is ~12 |
-| PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors |
+| ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crossed its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`) - and the trim below took it to **17,389, 34 sectors again** (19 bytes under the rung; -121 against 17,510) |
+| PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors; **17,058** after the trim (-121), **17,074** with the kept ring (+16) |
 | USBMOUSE.DRV | 1,431 | 1,464 | +33, 3 sectors; the CH375 path (7.) 1,521, +57 more, still 3 |
 | HTTPFS.DRV image + bss | 5,539 | 5,553 | +14, 11 sectors |
 | VMMOUSE.DRV (kern_emu) | 362 | 375 | +13, 1 sector |
 | HIBER.DRV kern_big / kern_emu | 7,567 | 7,715 | +148 (keep branch, `hbm_wakem`, the clock), 22 sectors |
 | HIBER.DRV kern_mega | 11,346 | 11,354 | +8 (the clock alone) |
+
+### The ETHER trim (the owner: "Try to trim ether")
+
+Cold code only, every one behaviour-neutral, measured on `ether.bin`
+(image + bss) against 17,510; PCIETHER.DRV takes every line (shared source):
+
+| change | bytes |
+|---|---|
+| `OS88LINE_NORESYNC` - `os88line_resync` was assembled and never called (SPEC.md 83.4) | -43 |
+| one copy of `Manual`, `Router`, `Name` (the pane's and the Setup window's) | -19 |
+| `sk_rst` - the RST `eth_dropall` and `eth_v_gone` each carried, entering `tcp_ack`'s tail; `eth_dropall`'s slot in AL | -40 |
+| DHCP: the OFFER's server copy once from either source; a NAK's dead `DH_IDLE` store; `dhcp_timer`'s two live states in one compare, BOUND/FAIL by `adc` | -25 |
+| `ec_apply`: the mode stored and ARP flushed once for both arms | -6 |
+| **total** | **-121 -> 17,389, 34 sectors** |
+
+Nothing on the per-packet paths moved: `tcp_ack` (per segment) runs the same
+instructions in a different order, and `dhcp_timer` (per pump) runs fewer.
+The option the brief named and this did not need - code moved past a
+`DRV_H_KEEP` point and given back after attach - was costed and is worse
+here: WAKE re-runs `NIC_WAKE_FIND` and `nic_init`, so only `eth_attach`'s own
+body (~107 bytes) and READY could go, and the 96 (PCIETHER 272) bss bytes the
+loader makes today would have to move before the cut and ship as zeros.
+
+### kern_mega (the parity round)
+
+**What a kept driver costs each route there, read off the code:**
+
+- **The DOS park** (`hbm_dosrun`'s `.parked`/`.held`): the pool is never
+  copied - the park claims its arena out of what is FREE, saves the HMA and
+  conventional memory, and since `[mega_dparked]` `hbm_down` skips
+  `drv_shutdown`. A kept driver's image, claims and LDT selectors are simply
+  where SLEEP left them when the trip comes home to `hbm_wake`, and nothing
+  runs a sleeping driver's code to move the in-place sum the park checks.
+  **Cost: 0.** The previous reading - "the park restores nothing a wake
+  would save" - was wrong: the return still READ every swept driver back
+  (`hbm_reload_m`), DHCP wait included.
+- **The image** (a hibernate, a `Save the session` trip, or a park with no
+  room): every pool block in use rides the extended section. A kept
+  `ETHER.DRV` is its image (17,389 bytes, 17KB) plus its socket pool (held
+  while a package uses the network: up to 33 half-KB, ~16.5KB) - **~34KB
+  more written, Fletcher-summed and read back per trip, ~0.1-0.3 s
+  PREDICTED on a 286's hard disk** - against the reload it replaces: an
+  11KB file, its decode, the probe and READY's DHCP wait (0.2-6 s). Not
+  measured; the field's Victory 286 is the machine to time it on.
+- **Runs**: one per `mx_tab` block was the old list, against `HBX_HMAX` = 62
+  where twelve programs are ~60 (`MX_NBLK`'s note) - a kept NIC was up to
+  two more. **`hbm_xplan` now lists contiguous SPANS**: a block another
+  block ends exactly at is that run's tail, so only a span's head starts a
+  run, grown block by block until nothing starts where it ends. Two passes
+  over the 96-entry table per head (~96 x 96 reads, milliseconds on a 286,
+  once a hibernate). It helps every kern_mega hibernate, kept drivers or
+  not; the stub (megares.inc) and `hbm_xruns` already took any whole-KB run
+  inside the pool, and the head's format is unchanged. The cap was not
+  raised: the head is one sector, and spans make it moot.
+- **PCIETHER's ring**: SLEEP no longer frees it on ANY kernel. `nic_sleep`
+  (a new optional seam name, `nic_stop` when undefined) is `rt_halt` - the
+  bus master off and the chip reset, the claim, `[rt_seg]` and `[rt_win]`
+  kept - and WAKE's `rt_claim` returns at once when `[rt_seg]` stands, so
+  `rt_init` re-points RBSTART at the same ring. The ring is `MEMP_CONV` and
+  pinned (`rt_claim`), so it is in every picture and no compaction moves it;
+  a PCI bus master has no 64KB-page rule. A refused wake's DETACH frees it
+  as before (and `drv_release` sweeps it where a paragraph name cannot be
+  found under protected mode). ETHER.DRV's 8390 holds no memory: its
+  `nic_sleep` is `nic_stop`, byte for byte.
+
+**Bytes, MEASURED against `a84b3933`** (after the trim commit):
+
+| | before | after | |
+|---|---|---|---|
+| kernel resident, all four kernels | | | **0** (`kernsize --json` identical; `kernel.bin` the same length) |
+| HIBER.DRV kern_mega, image + bss | 14,602 | 14,829 | **+227** (file 9,131 -> 9,296): the keep branch, `hbm_wakem` and the span lister; a module, read when asked for |
+| HIBER.DRV kern_big | 10,963 | 10,963 | 0 |
+| PCIETHER.DRV image + bss | 17,058 | 17,074 | **+16** (`rt_halt`'s vector and its door, `rt_claim`'s test), 34 sectors |
+| ETHER.DRV | 17,389 | 17,389 | 0 |
+
+**Rows** (NOT run here; the final pass names them): kern_mega's are Bochs
+or 86Box - QEMU lets code write through CS and never runs kern_mega's 286
+reset path (docs/BOCHS.md, docs/86BOX.md): `megahiber`, `megahibfull`
+(the span lister against a pool covered by pinned records), `megap2hiber`,
+`megahma`, `megadosroom` (the image route of a trip), `megakbtrip` (the
+park route), `megadosp`. On QEMU: `pciether` and `pcibig` (the attach and
+the claim), and `b4ether`/`b4ethswap`/`b4lease` (kern_big, ETHER.DRV).
+**Not covered by any row**: a kept NIC on kern_mega (no Bochs or 86Box
+harness here pairs kern_mega with a NIC: Bochs's ne2k and the
+`pentium-pciether` 86Box machine are the candidates), and PCIETHER's
+SLEEP/WAKE on any kernel (a `b4wake.py` arm on the `pentium-pciether`
+profile, or QEMU's `-device rtl8139` beside `pciether.py`'s machine).
 
 ### Seconds saved, PREDICTED
 

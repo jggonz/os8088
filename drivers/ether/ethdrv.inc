@@ -12,6 +12,9 @@
 ;                          nic_init may spend AX, BX, CX, SI and DI and keeps
 ;                          DX (eth_attach banks the five); nic_stop may spend
 ;                          any register (eth_detach has banked them all)
+;   nic_sleep              optional: DRVV_SLEEP's stop - the card silenced
+;                          and its memory KEPT for the wake (PCIETHER's ring,
+;                          rtl8139.inc's rt_halt); nic_stop when undefined
 ;   nic_rx, nic_tx         the stack's two verbs (nic_rx: CF=1 = empty, CX =
 ;                          the length in eth_rxb; nic_tx: CX bytes of eth_txb)
 ;   NIC_FRAME              the largest frame, bytes
@@ -21,6 +24,10 @@
 ;   NIC_UI_CARD/_STRINGS   macros: the card's row on the Control Panel page
 ;   NIC_RING_CONSTS        macro: NIC_RINGSZ, NIC1_RINGSZ, SK_RINGSLK + proof
 ; =============================================================================
+
+ %ifndef nic_sleep
+  %define nic_sleep nic_stop    ; the 8390 holds no memory of its own
+ %endif
 
 DHCP_WAIT   equ 110             ; ticks - six seconds for the whole exchange,
                                 ; which is four DISCOVERs at DHCP_TMO
@@ -104,8 +111,8 @@ eth_entry:
 ; DRVV_SLEEP - a hibernate or a DOS trip, and we stay loaded (SPEC.md 51.2.5)
 ;
 ; Every connection is reset (its peer is told, as at detach), the card is
-; stopped - which on the RTL8139 is its bus master off and its ring claim
-; given back BEFORE the picture is taken - and the mutex is TAKEN AND HELD
+; stopped - which on the RTL8139 is its bus master off BEFORE the picture is
+; taken, its ring KEPT for the wake (nic_sleep) - and the mutex is TAKEN AND HELD
 ; until WAKE, so no verb pumps a stopped card. The rings, the address and the
 ; page stay: they are the picture's, and the lease is what WAKE spends.
 ; -----------------------------------------------------------------------------
@@ -113,7 +120,7 @@ eth_sleep:
     call os88_ent
     mov byte [eth_busy], 1
     call eth_dropall
-    call nic_stop
+    call nic_sleep
     clc
     jmp ep_bp
 
@@ -122,7 +129,7 @@ eth_sleep:
 ;
 ; Found again at the place attach found it (NIC_WAKE_FIND: [eth_base] for the
 ; 8390, the PCI bus for the RTL8139 - whose BAR a POST may move, and whose
-; ring is claimed afresh), brought up, and its MAC held against the one the
+; ring SLEEP kept, so rt_claim finds it held), brought up, and its MAC held against the one the
 ; picture knew: another card is a refusal, and the kernel then detaches us and
 ; reads a fresh driver for it. A refusal leaves [eth_up] 0, so that DETACH
 ; touches no port that may no longer be a card's - after stopping whatever
@@ -357,28 +364,16 @@ eth_dropall:
     push ax
     push bx
     push cx
-    push dx
-    xor dl, dl
+    xor al, al
     mov cx, NET_SOCKS
 .l:
-    mov al, dl
     call sk_ptr
-    cmp byte [bx+SKO_TS], TS_ESTAB
-    jb  .kill
-    mov al, TF_RST | TF_ACK
-    push cx
-    push dx                     ; DL is the slot: the RST carries SND.NXT,
-    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
-    xor cx, cx                  ; does - a peer takes a reset at no other
-    call tcp_out                ; sequence number (RFC 5961)
-    pop dx
-    pop cx
-.kill:
+    call sk_rst                 ; a peer is told (tcp.inc), every register kept
     mov byte [bx+SKO_TS], TS_CLOSED
     mov byte [bx+SKO_ST], NSK_FREE
-    inc dl
+    inc ax                      ; AL is the slot (never past NET_SOCKS)
     loop .l
-    jmp ep_dx
+    jmp ep_cx
 
 ; =============================================================================
 ; THE PACKAGE DOOR - the socket verbs (netpkg.inc)
@@ -621,6 +616,7 @@ eth_v_state:
 %define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
 %define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
+%define OS88LINE_NORESYNC       ; ...nor os88line_resync: every field is set
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)
