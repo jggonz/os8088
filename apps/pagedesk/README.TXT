@@ -53,13 +53,13 @@ The layout follows the window. A big window (VGA, Hercules) shows the Pages pane
 WHAT IT CAN OPEN
 ----------------
 
-The XT PDF profile: classic cross-reference tables with updates, ASCIIHex and RunLength streams, Helvetica, Times and Courier text, paths and simple grey images. Help > The XT PDF profile lists it.
+Any PDF, on the machine itself: cross-reference streams and damaged files, every common filter (Flate, LZW, ASCII85, JPEG, CCITT, JBIG2, JPEG 2000), embedded fonts, colour spaces, shadings, patterns and transparency, and files with a password (RC4 and AES). Help > The XT PDF profile lists it.
 
-Flate (zip) streams open when memory has room for the 43KB decoder, which PageDesk takes by itself; Preferences can switch it off. Without it, or for a file with cross-reference streams, JPEG, an encrypted file or a font PageDesk cannot draw, the status line says which feature stopped it. A page it can only partly draw says Incomplete rendering and names what is missing.
+The decoders are modules PageDesk loads when a page needs them. Flate (zip) needs a 43KB decoder, which PageDesk takes by itself; Preferences can switch it off. A page it can only partly draw says Incomplete rendering and names what is missing. On a 4.77 MHz XT a photo or a JPEG 2000 page takes from seconds to a minute, and an AES-256 file asks before the long password check.
 
 A signed file opens read-only. Form fields are shown as printed; filling them is not supported.
 
-A harder file can be prepared on a PC first with tools/os88pdprep.py in the source tree. It writes a copy in the profile and reports what changed.
+tools/os88pdprep.py in the source tree is optional: it can turn a slow page into a picture on a PC first.
 
 SAVING
 ------
