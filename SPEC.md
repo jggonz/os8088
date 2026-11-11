@@ -248282,6 +248282,16 @@ which it adds a frame to `[vb_due]`, so the time booked is the next frame's
 or the write position, whichever is later (`vb_ftitle` leaves the opening to
 the hook's `vb_ogo` for that, a frame on). `vbtownsnd`.
 
+**The chunk that starts a clip's sound keeps its length** (`vb_chunk`'s CX
+across `vb_asound`). `vb_asound` reaches `vb_crec`, whose `CL = 4` replaced
+the chunk's low byte: a chunk cut to 512 bytes at the card ring's wrap went
+in as 516, four bytes past the ring onto its control words, so
+`SND_EXT_TOTAL` and the card's count read sample bytes (0x9090). The clock
+jumped a dozen frames on and the picture with it, then held while the sound
+caught up - an own-sound clip heard ~5 frames (0.3 s) late, whenever its
+sound began in the ring's last block: one title-leaving keypress in twenty.
+`vbtownsnd` sweeps that keypress in lockstep until a leg lands there.
+
 **A clip's sound is read from the clip's own ring by a cursor of its own**,
 a frame's worth (spf samples) a record. It runs ahead of the picture by the
 card's lead, so the ring keeps everything past the EARLIER of the two

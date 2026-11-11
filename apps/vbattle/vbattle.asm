@@ -4738,7 +4738,17 @@ vb_chunk:
     mov cx, ax
     jmp short .cur
 .go:
-    call vb_asound
+    push cx                         ; (CX KEPT: vb_crec's CL = 4 made it the
+    call vb_asound                  ; chunk's length less its low byte, plus
+    pop cx                          ; 4 - a cut at the ring's wrap lost, and
+                                    ; 4 bytes written over its control words
+                                    ; past the ring: SND_EXT_TOTAL and the
+                                    ; card's own count, 0x9090, the clock a
+                                    ; dozen frames on and the picture with it,
+                                    ; then held while the sound caught up -
+                                    ; an own-sound clip heard ~0.3 s late,
+                                    ; when its sound began 512 bytes short of
+                                    ; the wrap. vbtownsnd's sweep finds one)
 .cur:
     ; the clip's sound playing: to the end of its frame
     mov byte [vb_aown], 0

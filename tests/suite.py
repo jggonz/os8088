@@ -17922,14 +17922,18 @@ SOAK = [
         "on CGA, MYFIGHTH.VBT on Hercules). Broken (vb_docnames not "
         "called) both arms red",
         wants=("build/vbattle.o88",)),
-    Row("vbtownsnd", "soak", py("tests/vbtownsnd.py"), 75.0,
+    Row("vbtownsnd", "soak", py("tests/vbtownsnd.py"), 70.0,
         "SPEC.md 126.3: a clip with its OWN sound - the first opening after "
         "the title's fade, an end clip victory joins - has its sound WITH "
         "its picture: the record on the glass against the record heard "
-        "(fed, less what the card has queued) within a frame and a half. "
-        "It was booked at the frame's own time, which the ring had already "
-        "passed: heard a lead late (the owner's '~0.3-0.5 s late'). Broken "
-        "(the old booking) the picture 3-4.5 frames ahead, red",
+        "(fed, less what the card has queued) within two frames. IN "
+        "LOCKSTEP (tests/vbtstep.py: opened by \\AUTOSTRT, every wait and "
+        "key at a guest cycle) - the title-leaving Enter swept from one "
+        "snapshot until a leg's sound starts in the card ring's last block, "
+        "where vb_asound's CL clobber cost the chunk its cut at the wrap and "
+        "4 bytes landed on SND_EXT_TOTAL/CONS. Broken (CX not kept) that leg "
+        "+5.5 frames, red; (the old booking at [vb_due]) every leg +3-5, red",
+        needs=("marty", "ffmpeg", "mtools"),
         wants=("build/vbattle.o88",)),
     Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
         "SPEC.md 126.3: an action whose only anchor is nearer than the "
@@ -17949,14 +17953,17 @@ SOAK = [
         "party's own values, so HP's widest-possible 11 cells do not warn of "
         "an overlap that is not there. Broken (every character reachable) 3 "
         "red; the widths at their widest, 1 red"),
-    Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
+    Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 40.0,
         "SPEC.md 126.3: the card's stream ENDED under the battle (SOUND.DRV's "
         "watchdog made to fire) - the owner's 'no sound causes a permanent "
         "freeze'. The stream closed and opened again on the same timeline, "
         "the music on, and the next action (streamed, more than its ring) "
-        "played to its end. Broken (ENDED as silence, the ring's room by a "
-        "sound cursor that never moves): no card, and the action froze",
-        needs=("marty", "ffmpeg"),
+        "played to its end. IN LOCKSTEP (tests/vbtstep.py), and SOUND.DRV's "
+        "segment read by name AT the poke (read at the window's open it was "
+        "32 bytes stale after the play's compaction, the watchdog never "
+        "fired, red every run). Broken (ENDED as silence) 1 red; (the ring's "
+        "room by a sound cursor that never moves) the action froze",
+        needs=("marty", "ffmpeg", "mtools"),
         wants=("build/vbattle.o88",)),
     Row("vbtram", "soak", py("tests/vbtram.py"), 200.0,
         "SPEC.md 126.4.4, VBATTLE-RAM-PLAN R1: what a battle holds, on "

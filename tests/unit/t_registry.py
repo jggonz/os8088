@@ -44,6 +44,10 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "vbtstep.py": "not a test: Video Battle on MartyPC in LOCKSTEP (the "
+                  "battle opened by the boot's \\AUTOSTRT, every wait and "
+                  "key at a guest cycle), a module tests/vbtownsnd.py and "
+                  "tests/vbtsndend.py both import",
     "vbtrulesdemo.py": "not a test: the Video Battle RULES test battle, a "
                        "module tests/vbtrules.py and tests/vbtengine.py both "
                        "import (the battle, its plan, the reference's moves)",
