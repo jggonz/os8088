@@ -92,9 +92,79 @@ eth_entry:
     je  eth_detach
     cmp al, DRVV_READY
     je  eth_ready
+    cmp al, DRVV_SLEEP
+    je  eth_sleep
+    cmp al, DRVV_WAKE
+    je  eth_wake
     stc                         ; any other verb is REFUSED: CF = 0 is "I did
     ret                         ; it", and HWINFO's would hand OSAPI_DRV_SUSPEND
                                 ; three words of garbage (SPEC.md 51.2.2)
+
+; -----------------------------------------------------------------------------
+; DRVV_SLEEP - a hibernate or a DOS trip, and we stay loaded (SPEC.md 51.2.5)
+;
+; Every connection is reset (its peer is told, as at detach), the card is
+; stopped - which on the RTL8139 is its bus master off and its ring claim
+; given back BEFORE the picture is taken - and the mutex is TAKEN AND HELD
+; until WAKE, so no verb pumps a stopped card. The rings, the address and the
+; page stay: they are the picture's, and the lease is what WAKE spends.
+; -----------------------------------------------------------------------------
+eth_sleep:
+    call os88_ent
+    mov byte [eth_busy], 1
+    call eth_dropall
+    call nic_stop
+    clc
+    jmp ep_bp
+
+; -----------------------------------------------------------------------------
+; DRVV_WAKE - the same card, where SLEEP left it, or CF = 1 (SPEC.md 51.2.5)
+;
+; Found again at the place attach found it (NIC_WAKE_FIND: [eth_base] for the
+; 8390, the PCI bus for the RTL8139 - whose BAR a POST may move, and whose
+; ring is claimed afresh), brought up, and its MAC held against the one the
+; picture knew: another card is a refusal, and the kernel then detaches us and
+; reads a fresh driver for it. A refusal leaves [eth_up] 0, so that DETACH
+; touches no port that may no longer be a card's - after stopping whatever
+; nic_init started on the card that was not ours.
+;
+; THE LEASE IS KEPT (SPEC.md 72.5.3): an address a server gave is asked for
+; once more, by name, in RFC 2131's INIT-REBOOT form, and nothing waits.
+; -----------------------------------------------------------------------------
+eth_wake:
+    call os88_ent
+    mov si, eth_mac             ; the picture's MAC, banked over dhcp_off and
+    mov di, dhcp_off            ; half of dhcp_srv: both are written before
+    call mem_cp6                ; they are read again, the first below
+    NIC_WAKE_FIND .gone
+    call nic_init               ; ...which reads the card's MAC into eth_mac
+    mov si, eth_mac             ; (and keeps neither register: rt_init
+    mov di, dhcp_off            ; walks SI over the MAC)
+    call ip_eq                  ; four bytes...
+    jne .other
+    mov ax, [si+4]              ; ...and two
+    cmp ax, [di+4]
+    jne .other
+    call arp_flush              ; the gateway may be another box now
+    mov byte [eth_busy], 0
+    cmp byte [dhcp_st], DH_BOUND
+    jne .ok
+    cmp byte [eth_mode], ECM_MAN
+    je  .ok                     ; no server owns a manual address
+    mov si, eth_ip              ; THE LEASE BYPASS: the address we hold,
+    call mem_cp4                ; asked for by name (DI = dhcp_off still),
+    mov byte [dhcp_try], 0      ; and no wait
+    mov byte [dhcp_wk], 1
+    call dhcp_request
+.ok:
+    clc
+    jmp ep_bp
+.other:
+    call nic_stop               ; not ours: stop what nic_init started
+.gone:
+    mov byte [eth_up], 0        ; ...and DETACH leaves the ports alone
+    stc
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; DRVV_ATTACH - find a card, and hook NOTHING

@@ -60,6 +60,13 @@ pce_tab:                        ; the backends, in the order they are tried
     dw 0
 %endmacro
 
+; NIC_WAKE_FIND gone - DRVV_WAKE's find (SPEC.md 51.2.5): the attach's own,
+; because the BAR may have moved across a POST and SLEEP's rt_stop gave the
+; ring's claim back - so the bus is asked again and the ring claimed afresh
+%macro NIC_WAKE_FIND 1
+    call pce_find
+    jc  %1
+%endmacro
 %macro NIC_ATTACH_FIND 2
     call pce_find               ; CF=1 = no PCI card of ours
     jc  %2
@@ -96,6 +103,7 @@ SK_RINGSLK  equ 1536            ; one frame, rounded up
 %endif
 %endmacro
 
+%define OS88_DRV_WAKES           ; SLEEP/WAKE: kept across a hibernate (51.2.5)
 %include "os88drv.inc"
 %include "netpkg.inc"
 

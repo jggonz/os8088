@@ -1661,7 +1661,7 @@ DRVM_IMG_SND equ 21             ; ceil(build/sound.drv / 512) - t_drvmem
                                 ; the tail back, with a mixer or without -
                                 ; SPEC.md 34.15.1)
 DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv / 512)   checks
-DRVM_IMG_ETH equ 34             ; ceil(build/ether.drv / 512)   every one
+DRVM_IMG_ETH equ 35             ; ceil(build/ether.drv / 512)   every one
 DRVM_IMG_RAM equ 11              ; ceil(build/ramdisk.drv / 512)   of these
 DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
                                 ; since SPEC.md 62.11.3's size pass, the
@@ -1673,8 +1673,10 @@ DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
 DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
-DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,153 =
-                                ; 16,897 + 256 bss, 255 bytes under the rung
+DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,179 =
+                                ; 16,907 + 272 bss, 229 bytes under the rung
+                                ; (ETHER.DRV's SLEEP/WAKE crossed ITS rung:
+                                ; 17,345 -> 17,510, SPEC.md 51.2.5)
 
 DRVM_SND     equ DRVM_IMG_SND + 16*2      ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no

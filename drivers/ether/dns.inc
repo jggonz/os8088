@@ -222,6 +222,7 @@ dhcp_start:
     push cx
     push si
     push di
+    mov byte [dhcp_wk], 0               ; a DISCOVER is nobody's wake (72.5.3)
     mov byte [dns_cnm], 0               ; a new lease: names asked again
     call OSAPI_RAND                     ; a fresh transaction: a reply to the
     mov [dhcp_xid], ax                  ; PREVIOUS one must not be mistaken for
@@ -247,11 +248,14 @@ dhcp_request:
     mov si, dhcp_off
     mov cx, 4
     call dh_emitn
-    mov si, dh_o_sid
-    call dh_emit
+    cmp byte [dhcp_wk], 0       ; A WAKE'S IS INIT-REBOOT (SPEC.md 72.5.3):
+    jne .reboot                 ; no server is being chosen, so option 54
+    mov si, dh_o_sid            ; goes - RFC 2131 4.3.2, the form a server
+    call dh_emit                ; may NAK
     mov si, dhcp_srv
     mov cx, 4
     call dh_emitn
+.reboot:
     mov al, DH_REQUEST
     ; ...and fall through
 
@@ -379,6 +383,11 @@ dhcp_in:
     je  .nak
     jmp .out
 .nak:
+    mov di, eth_ip                      ; REFUSED - and a wake's address goes
+    mov cx, 16                          ; with it, the router and the name
+    call mem_zero                       ; server too (SPEC.md 72.5.3): the
+                                        ; machine is on another network, or
+                                        ; the lease was given away
     mov byte [dhcp_st], DH_IDLE         ; start over rather than sit refused
     call dhcp_start
     jmp .out
@@ -460,6 +469,11 @@ dhcp_timer:
     mov al, [dhcp_try]
     cmp al, DHCP_TRIES
     jb  .again
+    cmp byte [dhcp_wk], 0       ; a wake's REQUEST nobody answered keeps
+    je  .fail                   ; the address it asked for (SPEC.md 72.5.3)
+    mov byte [dhcp_st], DH_BOUND
+    jmp short .out
+.fail:
     mov byte [dhcp_st], DH_FAIL         ; the page says so, and `make ETHIP=`
     jmp short .out                      ; is the answer on a LAN with no server
 .again:

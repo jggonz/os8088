@@ -49,6 +49,7 @@
                                 ; DMA buffer in it)
 %include "nicne2k.inc"           ; ...the NIC seam, as the 8390 (SPEC.md 125.2)
 
+%define OS88_DRV_WAKES           ; SLEEP/WAKE: kept across a hibernate (51.2.5)
 %include "os88drv.inc"
 %include "netpkg.inc"
 
