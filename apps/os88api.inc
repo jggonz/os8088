@@ -2887,6 +2887,7 @@ MEM_K_FONT  equ 0xFF10          ; the 8x8 glyph table copied out of an option RO
 MEM_K_SC    equ 0xFF11          ; the desktop shortcuts' table (SPEC.md 26.8)
 MEM_K_IMG   equ 0xFF12          ; a mounted image's run table (SPEC.md 18.101)
 MEM_K_MTBL  equ 0xFF13          ; kern_mega's descriptor tables in conventional memory (KERN-MEGA-PLAN 14.1)
+MEM_K_SEAM  equ 0xFF14          ; kern_mega's huge read's seam, held for one OSAPI_FILE_READ (SPEC.md 20.14.5.4)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is

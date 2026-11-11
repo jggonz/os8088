@@ -1969,8 +1969,8 @@ inst_task_die:
                                 ; run (SPEC.md 20.6, BR-4): its repaint ends
                                 ; in wm_dock_under and menu_draw_bar, which
                                 ; can far-call ANOTHER package's W_PAINT,
-                                ; and a 128-byte worker slice (Bounce's) has
-                                ; 64 bytes of it after the interrupt floor.
+                                ; and a worker slice as small as Bounce's
+                                ; has 64 bytes left after the interrupt floor.
                                 ; ui_task's close pass runs app_close_now
                                 ; on its own stack: toast_owner_gone,
                                 ; inst_rel_rec, inst_unwin, mem_free_rec,

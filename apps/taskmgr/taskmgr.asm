@@ -1588,6 +1588,7 @@ tm_ktab:
     dw MEM_K_SC,    'Shortcut'
     dw MEM_K_IMG,   'Disk img'
     dw MEM_K_MTBL,  'DescTbl'
+    dw MEM_K_SEAM,  'HugeSeam'
     dw MEM_P_DIRW,  'DirRead'
     dw MEM_P_RAHB,  'RdLand', 0
     dw MEM_P_FLIST, 'FileClp'

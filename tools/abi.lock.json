@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "20ba54b666de9c12b726c842b323f501c3b2dc594b7b42f6c75c20015377387b",
+  "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "6b8e77467249e6f7b16dce2e8d3c06fe5309e075989a3e7ea49d8b9c9133e76b",
+  "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2224,6 +2224,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "B4: DRVV_SLEEP (5) / DRVV_WAKE (6) and OS88_DRV_WAKES (bit 15 of header +10, the written-not-read FSV word) - opt-in verbs every older driver already refuses (SPEC.md 51.2.2, 51.2.5); DRV_VER 14 is unreleased, so no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
+   "to": 13
+  },
+  {
+   "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
    "to": 14
   }
  ]
