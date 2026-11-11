@@ -46,7 +46,7 @@ To copy text, drag across it with the Select tool, or press Ctrl+A for the whole
 
 A document with a password asks for it in a small box. Type it and press Enter. A wrong password says so and asks again. Esc cancels the open.
 
-Some of the newest password protection takes a long time to check on a slow machine. PageDesk then asks first, with an estimate: "This file's encryption takes about N minutes on this machine. Open anyway?" Answer No to leave the file shut.
+Some of the newest password protection takes a long time to check on a slow machine. PageDesk then asks first, with an estimate: "This file's encryption takes about N minutes on this machine. Open anyway?" Enter opens it; Esc leaves the file shut.
 
 A document that was saved with a password is saved with the same password protection.
 
