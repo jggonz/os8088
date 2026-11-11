@@ -520,6 +520,51 @@ FAST = [
         needs=("qemu", "qemu9", "nasm"), timeout=240,
         wants=("build/os8088.img", "build/apps.img", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
+    Row("b4ether", "soak", py("tests/b4wake.py", "ether"), 15.0,
+        "SPEC.md 51.2.5, 72.5.3 (B4): ETHER.DRV declares OS88_DRV_WAKES, so "
+        "a hibernate puts it to SLEEP and KEEPS it, and the resume WAKES it "
+        "instead of reading it off the disk and sitting through READY's DHCP. "
+        "WHY QEMU: the closed list, entry 5 (MartyPC has no NIC). p2hiber's "
+        "machine plus an ne2k_isa on a -netdev socket whose other end is the "
+        "row's own network (ARP + a DHCP server that logs every message), "
+        "so: [hb_drvmask] has no row-2 bit (SOUND's is set), the row is "
+        "loaded with the station address it hibernated with, the wire saw NO "
+        "DISCOVER after the wake and ONE INIT-REBOOT REQUEST (option 50 the "
+        "held address, no option 54), and eth_ip is still the lease before "
+        "anything pumps. The failing case is `--red`: the header bit cleared "
+        "in the running driver before the hibernate - row 2 in the mask and a "
+        "DISCOVER (reasoned, not yet run). secs ESTIMATED from p2hiber's 6.9, "
+        "not measured: the first run is the measurement",
+        needs=("qemu", "qemu9", "nasm"), timeout=300,
+        wants=("build/os8088.img", "build/network360.img", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys", "build/ether.bin")),
+    Row("b4ethswap", "soak", py("tests/b4wake.py", "swap"), 15.0,
+        "SPEC.md 51.2.5's fallback (B4): b4ether, resumed on a card with "
+        "ANOTHER station address. DRVV_WAKE must refuse it (the MAC compare), "
+        "the row is detached and a fresh ETHER.DRV read: the row holds the "
+        "new address, the wire saw a DISCOVER (the fresh READY) and no "
+        "INIT-REBOOT REQUEST, and [hb_drvmask] still has no row-2 bit (it was "
+        "kept at the sweep). The failing case is reasoned: eth_wake's compare "
+        "skipped - no DISCOVER, and an INIT-REBOOT REQUEST from the wrong "
+        "card. secs ESTIMATED, not measured",
+        needs=("qemu", "qemu9", "nasm"), timeout=300,
+        wants=("build/os8088.img", "build/network360.img", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys", "build/ether.bin")),
+    Row("b4lease", "soak", py("tests/b4wake.py", "lease"), 60.0,
+        "SPEC.md 72.5.3 (B4): the wake's lease bypass against a server that "
+        "ANSWERS - slirp never NAKs and cannot be silenced, which is why the "
+        "network is the row's own. Three hibernate/resume cycles in one "
+        "session, the wake's INIT-REBOOT REQUEST answered ACK (DH_BOUND, same "
+        "address, no DISCOVER), NAK (the address cleared, a DISCOVER, the new "
+        "offer 10.7.0.16 bound) and silence (retried, then DH_BOUND on the "
+        "address held where an ordinary REQUEST's silence is DH_FAIL). "
+        "BROWSER.O88 off network360.img fetching a dropped SYN is the pump - "
+        "nothing reads a reply a package does not ask for (72.2.1). The "
+        "failing case is reasoned: dhcp_timer without its dhcp_wk arm reads "
+        "DH_FAIL on the silent cycle. secs ESTIMATED, not measured",
+        needs=("qemu", "qemu9", "nasm"), timeout=600,
+        wants=("build/os8088.img", "build/network360.img", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys", "build/ether.bin")),
     Row("hmadosret", "soak", py("tests/hmadosret.py"), 20.0,
         "SPEC.md 96.49.9: the DOS live resume with `.cold` and HDD.DRV in "
         "the HMA. WHY QEMU: the closed list, entry 1. hmadrv's machine, "
