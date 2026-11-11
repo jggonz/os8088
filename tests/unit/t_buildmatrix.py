@@ -431,6 +431,12 @@ KNOBS = [
     # the pre-merge gate, and an instrument that stopped assembling is found
     # at the moment somebody needs it to answer a question.
     ("gfxaudit",    ["GFXAUDIT=1"]),
+    # RARECNT= is the rare door's per-index and per-cell counters (SPEC.md
+    # 20.3.4, kernel size pass 19's V7) - the reading that drew T5's hot/rare
+    # line. No gate builds it at all, so it is GFXAUDIT's sentence with nobody
+    # behind it: the instrument somebody reaches for the next time a cell
+    # moves across the door, found broken at that moment.
+    ("rarecnt",     ["RARECNT=1"]),
     # NOSEAMCUT= is SPEC.md 39.14.11's A/B: font_char's whole-cell drop at a
     # display seam, which the cut replaced. Its gate (tests/dispseam.py) builds
     # it - and that gate is on SOAK, which is not the pre-merge one, so this is
