@@ -302,7 +302,7 @@ int main(int argc, char **argv)
         struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e; long esz = 0; static unsigned char ekeep[65536];
         static char seqbuf[8192], curf[600], outbase[600], outp[700];
         char *seqp = 0;
-        int seqk = 0;
+        int seqk = 0, seqabort = 0;          /* FILE:PAGE:A - abort at the first ladder ask, unanswered (QA R26 c) */
         sscanf(argv[7], "%d/%d", &an, &ad);
         if (getenv("PDR_SEQ")) {
             strncpy(seqbuf, getenv("PDR_SEQ"), sizeof seqbuf - 1); seqp = seqbuf;
@@ -316,7 +316,8 @@ int main(int argc, char **argv)
             ent = seqp; while (*seqp && *seqp != ' ') seqp++;
             if (*seqp) *seqp++ = 0;
             c = strrchr(ent, ':'); mode = 0;
-            if (c && (c[1] == 'R' || c[1] == 'F')) { mode = c; *c = 0; c = strrchr(ent, ':'); }
+            if (c && (c[1] == 'R' || c[1] == 'F' || c[1] == 'A')) { mode = c; *c = 0; c = strrchr(ent, ':'); }
+            seqabort = mode && mode[1] == 'A';
             if (!c) { fprintf(stderr, "PDR_SEQ: %s is not FILE:PAGE\n", ent); return 1; }
             *c = 0; page = atoi(c + 1);
             if (strcmp(curf, ent) || (mode && mode[1] == 'R')) {
@@ -374,7 +375,9 @@ int main(int argc, char **argv)
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e && seqp) { printf("status begin %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
-        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (getenv("PDB_TRACE")) fprintf(stderr, "step e=%u cx=%u dx=%u\n", e, pdr_out_cx, pdr_out_dx); if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
+        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; if (getenv("PDB_TRACE")) fprintf(stderr, "step e=%u cx=%u dx=%u\n", e, pdr_out_cx, pdr_out_dx);
+             if (seqabort && (e == PDE_NEEDMOD || e == PDE_NEEDMEM)) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status aborted at ask %u\n", e); fflush(stdout); goto seq_next; }
+             if (ladder(e)) e = PDE_BUSY; } while (e == PDE_BUSY && steps < 100000);
         if (e && seqp) { vcall(PDV_REND_ABORT, 0, 0, 0); printf("status step %u\n", e); goto seq_next; }
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);

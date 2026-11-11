@@ -478,6 +478,22 @@ def bigpath_pdf(path):
     d.write(path)
 
 
+def newdoc_pdf(path, base, shade):
+    """A new document after an ABORTED ask (QA R26 (c)): two files whose one font is the
+    same object (3 0 R) under the same name (/F1) - Courier in docA, Helvetica-Bold in
+    docB, as FTTCIDMA's Type 0 and FTYPE3's Type 3 are both 7 0 R. docA's shading makes
+    the pass ask for PDXG; a viewer that opens docB before answering must not draw it
+    with docA's font."""
+    d = Pdf()
+    f = d.add('<< /Type /Font /Subtype /Type1 /BaseFont /%s >>' % base)
+    fn = d.add('<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>')
+    sh = d.add('<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 400 0] /Function %d 0 R >>' % fn)
+    c = d.stream('', 'BT /F1 36 Tf 20 300 Td (Hello iiii WWWW) Tj ET' + (' q 20 20 360 100 re W n /S0 sh Q' if shade else ''))
+    d.pages.append(d.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents %d 0 R '
+                         '/Resources << /Font << /F1 %d 0 R >> /Shading << /S0 %d 0 R >> >> >>' % (c, f, sh)))
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -493,7 +509,9 @@ def main():
     noap_pdf(os.path.join(out, 'noap.pdf'))
     clips_pdf(os.path.join(out, 'clips.pdf'))
     bigpath_pdf(os.path.join(out, 'bigpath.pdf'))
-    print('os88pdfx_rcore: 12 fixtures in %s' % out)
+    newdoc_pdf(os.path.join(out, 'docA.pdf'), 'Courier', True)
+    newdoc_pdf(os.path.join(out, 'docB.pdf'), 'Helvetica-Bold', False)
+    print('os88pdfx_rcore: 14 fixtures in %s' % out)
 
 
 if __name__ == '__main__':

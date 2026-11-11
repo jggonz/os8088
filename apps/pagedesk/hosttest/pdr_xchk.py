@@ -364,6 +364,25 @@ ref = mutool(big, 5)
 pct = cellmatch(im, ref, 60) if im is not None else 100.0
 check('six discs in one path (KBMIDI2\'s shape; 360 vertices at the fine bound): the bound loosens as the table fills, so it fits, clean and as MuPDF (%.1f%% of cells off)' % pct,
       rc == 0 and num(st, 'incomplete') == 0 and pct < 1.5, str(st.get('first')))
+print('-- a new document after a view left its ask unanswered (QA R26 c: FTYPE3 after FTTCIDMA, "form stream")')
+def seqrun(seq):
+    base = os.path.join(scratch, 'seq')
+    r = subprocess.run([exe, 'render', 'x', '0', '100', '0', '4', '1/1', '400', '400', '0', '0', base, bank, '29'], capture_output=True, text=True,
+                       env=dict(os.environ, PDR_GLYPHKB='24', PDR_SEQ=seq, ASAN_OPTIONS='detect_leaks=0'), timeout=300)
+    n = len(seq.split())
+    return r.stdout, [np.asarray(Image.open('%s.%d.ppm' % (base, k)).convert('L')) if os.path.exists('%s.%d.ppm' % (base, k)) else None for k in range(n)]
+docA, docB = os.path.join(fx, 'docA.pdf'), os.path.join(fx, 'docB.pdf')
+for k in range(3):
+    p_ = os.path.join(scratch, 'seq.%d.ppm' % k)
+    if os.path.exists(p_): os.remove(p_)
+_, (fb,) = seqrun(docB + ':0')
+_, (fa,) = seqrun(docA + ':0')
+out, (_x, ab) = seqrun(docA + ':0:A ' + docB + ':0')
+check('negative control: docA draws its one font (Courier) unlike docB (Helvetica-Bold), the same object 3 0 R as /F1',
+      fa is not None and fb is not None and int((fa != fb).sum()) > 500)
+check('docB opened while docA\'s view waited on its ask (aborted, never answered) draws ITS font: the same pixels as docB opened first (%s px differ)'
+      % (int((ab != fb).sum()) if ab is not None and fb is not None else '?'),
+      'aborted at ask' in out and ab is not None and fb is not None and int((ab != fb).sum()) == 0, out[-200:])
 rc, im, st, _ = render(forms, 2, 'vga')
 check('a number past 16.16: drawn, PDF_INC_RANGE named (first=number range)', rc == 0 and num(st, 'incomplete') & 0x0100
       and st.get('first') == 'number range', str(st))
