@@ -625,6 +625,19 @@ section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
 ; the gfx lock HELD (sc_modcall's contract).
 
 modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
+%ifdef MOD_CACHE
+    ; THIS COPY IS KEPT AT ITS DROP iff it is the settings core's (MOD_SETS's
+    ; row), never the panel's (SPEC.md 2.8.3): the header word mod_drop reads
+    ; is 0 on the disk, and only here does it become the core's scratch tail.
+    ; Image bytes, not resident ones - the test mod_drop no longer makes
+    push ax
+    mov ax, cs
+    cmp ax, [mod_tab + MOD_SETS * MODR_SIZE]
+    jne .whole                  ; the open panel's copy (sc_modcall's .full)
+    CSDO mov word [CSEG MOD_H_SCR], MODC_SCR
+.whole:
+    pop ax
+%endif
     push bp                     ; wm_cbd takes its routine in BP
     or ah, ah
     jz .new

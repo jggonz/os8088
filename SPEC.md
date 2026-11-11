@@ -1970,13 +1970,20 @@ nothing.
   `MEM_PG_LOW` (§50.6.4). It does not free it. The drop still ends the
   feature's hold: from here the heap may take the bytes, which is what a
   drop is for.
-- **`mod_need`** on a row whose `MODR_SEG` is held asks the heap for a record
-  of that tag (`mem_find_own`, interrupts off across the find and the
-  re-tag). None: the row is LIVE, and the answer is CF = 0 as it always was.
-  Found: the image is **re-adopted** — re-tagged `MEM_K_MOD` first, then its
-  slots armed by the same loop a load arms them with (`mod_check`'s
+- **`mod_need`** on a row whose `MODR_SEG` is held looks at the row's first
+  slot. Naming that segment: the row is LIVE, and the answer is CF = 0 as it
+  always was - no walk on a thunk's hot path. Naming `mod_gone`: the image is
+  KEPT, and is **re-adopted** — its record found by base
+  (`mem_find_own`'s own-segment arm) and re-tagged `MEM_K_MOD` first, then
+  its slots armed by the same loop a load arms them with (`mod_check`'s
   `.arming`). No disk, no system volume, no stamp check: the stamps were
   checked on the read the image came from.
+- **A kept image is re-adopted on the UI task alone**, and an image opts in
+  only when every `mod_need` for it is the UI task's (both today's are:
+  `menu_track`'s, and `sc_modcall`'s desktop gestures and SYSTEM.CFG-writing
+  desk verbs, which a worker may not make, §20.6 rule 7). That is what lets
+  the find and the re-tag run with interrupts ON: only the UI task sheds or
+  compacts (§66.3.1), so nothing can take the block between them.
 - **A shed** — or a compaction that dissolves a pinned cache in its way
   (§66.10) — zeroes the row's `MODR_SEG` through `mem_pg_own` and frees the
   block, and the next `mod_need` is an ordinary load. The tag is a RANGE of
@@ -2012,10 +2019,13 @@ that state with their code (`DISKOPS.DRV`'s compressor, `FORMAT.DRV`'s
 | image | its scratch tail | what it holds |
 |---|---|---|
 | `STIKMENU.DRV` | `stm_cellx` to the end | every byte the menu writes: the geometry, the census, the entries, the band |
-| `CTRL.DRV`, for `MOD_SETS` | `mods_scr` - the core's last bytes, `sc_*` and `cp_fdno`/`cp_fdn` gathered there by `SC_SCRATCH`/`CPC_SCRATCH` - to the image's end | the core's gesture state; past it, the panel and `.modcb`, which a core-only read never brought in |
+| `CTRL.DRV`, for `MOD_SETS` (written by the core itself, above) | `mods_scr` - the core's last bytes, `sc_*` and `cp_fdno`/`cp_fdn` gathered there by `SC_SCRATCH`/`CPC_SCRATCH` - to the image's end | the core's gesture state; past it, the panel and `.modcb`, which a core-only read never brought in |
 
-`MOD_CTRL`'s row — the whole panel, the same file — is **never kept**:
-`mod_drop` frees it by name. Its state is not in the tail, and `mod_live`'s
+`MOD_CTRL`'s row — the whole panel, the same file — is **never kept**, with
+no test for it in the kernel: `CTRL.DRV`'s header carries 0 on the disk, and
+the core's entry `modc_e_sc` writes `MODC_SCR` into its OWN copy's header
+when that copy is `MOD_SETS`'s claim (image bytes, not resident ones). The
+panel's state is not in the tail, and `mod_live`'s
 two callers (`sc_modcall`, `hbf_onup`, §13.8.3) read a held `MODR_SEG` as
 "armed", which a kept row is not. `HIBER.DRV`, `mod_live`'s other row, asks
 for no tail.
@@ -2067,22 +2077,25 @@ build number (`2cf57256`):
 
 | | `.text` | `.cold` | in all |
 |---|---:|---:|---:|
-| `kern_big`, `kern_emu` | +6 (the `mem_pg_own` row) | +98 (`mod_drop` 12 -> 67, `mod_need` 228 -> 271) | **+104** |
+| `kern_big`, `kern_emu` | +6 (the `mem_pg_own` row) | +78 (`mod_drop` 12 -> 61, `mod_need` 228 -> 257, its one-byte parity pad included) | **+84** |
 | `kern_small` (O5 open) | 0 | 0 | 0 |
 | `kern_mega` | 0 | 0 | 0 conventional |
 
-Every module image is 2 bytes longer on the disk (`MOD_H_SCR`). It is
-**over** the review's +60..+85, by what the review's estimate did not
-include: the review assumed a module's only mutable bytes are its `nobits`
-bss, and they are not - modules write state interleaved with their code
-(above), so an image has to OPT IN (the header word, read through ES, and the
-tail's length: 9 bytes) and `MOD_CTRL`'s row has to be excluded by name (6);
-the drop has to find the claim's record to re-tag it (`mem_find_own`, 9) and
-the hit has to find it by tag to tell kept from live (13). Two cuts were
-weighed and not taken: re-zeroing nothing (each opted-in module audited to
-write before it reads, ~20 bytes) gives up the guarantee that a re-adopted
-image is the file's own; dropping the interrupt window round the hit's find
-and re-tag (4) leaves a worker's `mod_need` racing the UI task's shed.
+Every module image is 2 bytes longer on the disk (`MOD_H_SCR`). It is inside
+the review's +60..+85, after a size pass of its own: the first cut was +104,
+because the review's estimate assumed a module's only mutable bytes are its
+`nobits` bss, and they are not - modules write state interleaved with their
+code (above), so an image has to OPT IN, and the drop has to find the
+claim's record to re-tag it. The pass took 20 bytes out of the kernel: the
+`MOD_CTRL` test went into `CTRL.DRV`'s own bytes (-6), the hit tells kept
+from live by its first slot and finds the record by base rather than by a
+computed tag (-6), `drv_vol_bank` is called once ahead of the hit test
+rather than on both arms (-3), and the interrupt window round the find and
+the re-tag went, by the UI-task rule above (-6); one byte back is the
+parity pad that keeps `dsk_xfer`'s even shift (`t_hotpar`). Re-zeroing the
+scratch tail was kept: without it each opted-in module would have to be
+audited to write before it reads, and a re-adopted image would no longer be
+the file's own.
 
 The second Sticky Apps press and the second shortcut gesture read **no**
 sectors while the claim stands (PREDICTED: the `int 13h` calls they made

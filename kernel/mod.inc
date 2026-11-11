@@ -442,8 +442,11 @@ mod_need:
                                 ; deriving the id back out of the row pointer
     call mod_row
 %ifdef MOD_CACHE
+    call drv_vol_bank           ; FIRST here, so .held's re-adopt leaves
+                                ; through .back like a load (it only
+                                ; records: no volume moves until a read)
     mov dx, [bx+MODR_SEG]
-    or dx, dx                   ; CF = 0, which .held's live arm answers with
+    or dx, dx                   ; CF = 0, which a LIVE row answers with
     jnz .held                   ; ...held: LIVE, or KEPT by a drop (2.8.3)
 %else
     cmp word [bx+MODR_SEG], 0
@@ -453,8 +456,9 @@ mod_need:
                                 ; jumped here)
 %endif
 
+%ifndef MOD_CACHE
     call drv_vol_bank                      ; this goes to the system volume to find the
-                                ; file, and the user may have been anywhere
+%endif                          ; file, and the user may have been anywhere
 %ifdef ROM_ADOPT
     ; THE ROM FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a ROM that
     ; adopted this kernel may carry the image too, cut from the same build, so
@@ -561,29 +565,28 @@ mod_need:
 ; the boot, which slides it before the heap exists. DX = the segment, BX =
 ; the row
 .held:
-    mov ax, bx
-    shr ax, 1                   ; the row's tag, mod_fpr's `>> 1` trick: row
-    add ax, MEM_P_MOD - (MOD_TAB_OFF >> 1) ; i is mod_tab + 4i, so this is
-    xchg bx, ax                 ; MEM_P_MOD + 2i. BX = that tag, AX = the row
-    pushf
-    cli                         ; the find and the re-tag in ONE window: a
-                                ; shed between them (the UI task's, while a
-                                ; worker is here) would hand the arm a freed
-                                ; block
-    call mem_find_own           ; SI = the record; CF = 1, no claim of that
-    jc .live                    ; tag: it is LIVE, and armed already
+    call mod_fpr                ; DI = its slot block. LIVE: the slots name
+    cmp [di+2], dx              ; its segment, and that is the whole test -
+    je .out                     ; no walk on a thunk's hot path. KEPT: they
+                                ; read mod_gone's, `.cold`'s
+                                ; NO IF = 0 WINDOW round the find and the
+                                ; re-tag, and none is owed: only the UI task
+                                ; sheds or compacts (SPEC.md 66.3.1), and a
+                                ; KEPT image is re-adopted on the UI task
+                                ; alone - an image opts in only when every
+                                ; mod_need for it is the UI task's (2.8.3)
+    push bx
+    mov bx, dx                  ; mem_find_own's own-segment arm: the record
+    call mem_find_own           ; AT that base - a held MODR_SEG names one
+    pop bx
     mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
-    popf
-    xchg bx, ax                 ; BX = the row
     mov es, dx
     or bp, -1                   ; no bound on the entries: this image's were
-                                ; bounded by the read it came from
-    call drv_vol_bank           ; .back's drv_vol_back compares against it:
-    jmp .arming                 ; nothing moved, so nothing is remounted
-.live:
-    popf                        ; CF = 0, `or dx, dx`'s, banked by the pushf
-    jmp short .out
-%endif
+    jmp .arming                 ; bounded by the read it came from
+    nop                         ; PARITY PAD, never executed: the cache's
+%endif                          ; .cold is odd without it, and dsk_xfer,
+                                ; dsk_runcap and dsk_next_clus_x keep an EVEN
+                                ; shift (t_hotpar.py)
 
 .check:
 
@@ -1056,9 +1059,11 @@ mod_free_row:
 ; disk read, and that a claim needing the room sheds (mem_pg_own zeroes
 ; MODR_SEG; the slots already read mod_gone). The drop still ENDS the
 ; feature's hold - the heap may take the bytes from here on, which is the
-; thing a drop is for. MOD_CTRL's row is never kept: the panel's own state is
-; not in a scratch tail, and mod_live's two callers read a held MODR_SEG as
-; "armed" (SPEC.md 13.8.3) - the settings core's row, the same file, is kept.
+; thing a drop is for. MOD_CTRL's row is never kept: CTRL.DRV's header carries
+; 0, and only the settings core's own copy writes its tail into its header
+; (modc_e_sc, desksc.inc) - so the panel's state, which is not in a tail, and
+; mod_live's two callers, which read a held MODR_SEG as "armed", are both safe
+; with no test here (SPEC.md 2.8.3).
 ; -----------------------------------------------------------------------------
 mod_drop:
 %ifdef MOD_CACHE
@@ -1068,8 +1073,6 @@ mod_drop:
     mov dx, [bx+MODR_SEG]
     or dx, dx
     jz .free                    ; nothing held: mod_free_row's own no-op
-    cmp bx, mod_tab + MOD_CTRL * MODR_SIZE
-    je .free                    ; the panel: freed, as ever (the banner)
     mov es, dx
     mov cx, [es:MOD_H_SCR]
     jcxz .free                  ; an image that does not opt in: freed
