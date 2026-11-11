@@ -1606,9 +1606,8 @@ dskw_wbody:
     jmp dskw_relold
 .out:
     ret
-.rollback:
-    call dskw_refat             ; drop the half-built chain: invalidate the
-    stc                         ; FAT window. It keeps AX, the error
+.rollback:                      ; the half-built chain FREED and flushed,
+    jmp dskw_wabody.rbfree      ; as an append's is (SPEC.md 18.4, Rollback)
 .rbret:                         ; (dskw_wdata's nothing-to-write exit, pass 16)
     ret
 
@@ -4560,26 +4559,32 @@ dskw_wabody:
     ret
 .rollback:
     pop cx                      ; the banked last cluster, into a dead register
-%ifdef DSKW_WSEQ
-    test byte [dws_flg], WSQF_HELD  ; A FAILED HELD CALL LOSES ITSELF AND
-    jz .rbdrop                  ; NOTHING ELSE (SPEC.md 18.4.9), as a failed
-    push ax                     ; APPEND does. Dropping the window would take
-    mov ax, [dskw_first]        ; **ITS OWN SUB-CHAIN FREED FIRST** (SPEC.md
-    call dskw_free_chain        ; 18.4.9.1): never linked, so it is this
-                                ; call's alone, and a flush of it would leak
-                                ; every cluster it took - on a DISK FULL,
-                                ; every free cluster the volume had left
-    call dskw_flush_x           ; the held chain's unflushed allocations with
-    pop ax                      ; it, and the commit would then link the file
-    jnc .rbkept                 ; into clusters the disk calls free. So FLUSH
-    call dws_hlose              ; it: the held chain is unreachable until the
-                                ; commit; this call's own half-built
-                                ; sub-chain is freed above rather than left
-                                ; as lost clusters. Only a
-                                ; flush that ALSO fails loses the stream: it
-                                ; is POISONED, as a lost bank is, so its next
-                                ; call answers FERR_IO rather than appending
-                                ; past what never reached the disk
+.rbfree:                        ; (dskw_wbody's rollback too: one arm, BR-17)
+    push ax                     ; **THE HALF-BUILT CHAIN FREED, THEN FLUSHED**
+    mov ax, [dskw_first]        ; (SPEC.md 18.4's Rollback, 18.4.9.1). Never
+    call dskw_free_chain        ; linked, it is this call's alone - and an
+                                ; invalidate alone cannot take it back: on a
+                                ; FAT longer than the window the scan and the
+                                ; links moved the window, dsk_fat_window
+                                ; flushed before it evicted, and what it
+                                ; flushed is allocated on the disk and
+                                ; reachable from nothing. On a DISK FULL that
+                                ; was every free cluster the volume had left,
+                                ; and it stayed "full" until a repair. Freed
+                                ; in RAM, those windows fault back in with
+                                ; their links, so the walk frees exactly what
+                                ; was built; [dskw_first] = 0 (nothing taken)
+                                ; is no walk at all.
+    call dskw_flush_x           ; FLUSH it, rather than dropping the window:
+    pop ax                      ; for a HELD stream the drop would take the
+    jnc .rbkept                 ; held chain's unflushed allocations with it
+%ifdef DSKW_WSEQ                ; and the commit would then link the file
+    test byte [dws_flg], WSQF_HELD  ; into clusters the disk calls free. Only
+    jz .rbdrop                  ; a flush that ALSO fails drops the window,
+    call dws_hlose              ; and a HELD stream with it: POISONED, as a
+                                ; lost bank is, so its next call answers
+                                ; FERR_IO rather than appending past what
+                                ; never reached the disk (SPEC.md 18.4.9)
 %endif
 .rbdrop:
     call dskw_refat             ; drop the half-built sub-chain; it keeps AX
@@ -5502,9 +5507,10 @@ dskw_flush_x:
 ;
 ; What the window DOES change is the reach of the rollback: an eviction may
 ; already have flushed part of a half-built chain to the disk, and no
-; invalidate can take that back. It costs LOST CLUSTERS and never a
-; cross-link - the same guarantee the commit order gives a crash (18.4) - and
-; that is the whole of the difference.
+; invalidate can take that back. So the write bodies' rollback FREES the
+; chain and flushes first (dskw_wabody.rbfree), and comes here only when that
+; flush fails - then it costs LOST CLUSTERS and never a cross-link, the same
+; guarantee the commit order gives a crash (18.4).
 ; -----------------------------------------------------------------------------
 dskw_refat:
     mov word [dsk_fatw0], 0xFFFF

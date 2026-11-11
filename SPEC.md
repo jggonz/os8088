@@ -35847,12 +35847,23 @@ by any host `fsck`/`chkdsk`, and never a cross-link and never lost data.
 The reverse order (free first, then write) would risk exactly that, so it
 is forbidden.
 
-**Rollback.** Any failure *before* the commit invalidates the FAT window and
-clears the dirty range (`dskw_refat`, no I/O: the next access faults a clean
-window in off the disk), so a partially allocated chain never survives in
-RAM to be flushed by a later, unrelated operation. An eviction may already
-have flushed part of that chain (§18.8), which costs lost clusters, never a
-cross-link. Failures at or after the commit
+**Rollback.** Any failure *before* the commit FREES the half-built chain
+(`[dskw_first]`, never linked, so the write's alone) and flushes the FAT
+(`dskw_wabody.rbfree`, which `dskw_wbody` shares). Freeing is needed, not
+tidy: on a FAT longer than the window (§18.8) the allocator's scan and the
+links moved the window, and `dsk_fat_window` flushed before it evicted, so
+part of the chain is already allocated on the disk - and on a **Disk full**
+that part is every free cluster the volume had, which then read "full" until
+a repair, even after the user deleted the file they were saving (BR-17).
+The held stream's rollback already freed its sub-chain (18.4.9.1); the plain
+arms now run the same code, which costs kern_big **-1 byte** (`dskw_wbody`
+jumps to it) and kern_small, with no held streams, **+12**.
+Only if that flush also fails does it invalidate the FAT window and clear the
+dirty range (`dskw_refat`, no I/O: the next access faults a clean window in
+off the disk), so a partially allocated chain never survives in RAM to be
+flushed by a later, unrelated operation; what an eviction flushed then costs
+lost clusters, never a cross-link. On a whole-window FAT12 floppy the free
+costs one FAT write (both copies) on a failed save. Failures at or after the commit
 report the error but leave the file switched over — that is what the
 ordering above buys.
 
@@ -37043,7 +37054,9 @@ clean window in off the disk, which is precisely what re-reading the whole FAT
 used to buy, and it can no longer fail — so the write gate has no reason to
 close there any more. What the window *does* change is the rollback's reach:
 an eviction may already have flushed part of a half-built chain to the disk,
-and no invalidate takes that back. **It costs lost clusters and can never
+and no invalidate takes that back, which is why the write bodies' rollback
+frees the chain and flushes FIRST (§18.4, *Rollback*) and invalidates only
+when that flush fails. **Then it costs lost clusters and can never
 cross-link** — the same guarantee §18.4's commit order gives a crash — and
 that is the whole of the difference. It is written down here because it is
 exactly what a later reordering of the flush would break.
