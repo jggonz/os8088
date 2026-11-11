@@ -64,6 +64,16 @@ def fx_clipimg():
     c += "q 120 0 0 120 20 20 cm 0.5 1 m 0.776 1 1 0.776 1 0.5 c 1 0.224 0.776 0 0.5 0 c 0.224 0 0 0.224 0 0.5 c 0 0.776 0.224 1 0.5 1 c h W* n /Im0 Do Q\n"
     return page(c, "/XObject << /Im0 5 0 R >>", {5: img})
 
+def fx_smaskref():
+    # QA R9 (OVERLAY): Illustrator writes /SMask n 0 R and /BC n 0 R, and the mask applies to a Form's group
+    mask = "".join("%.2f g %d 4 7 56 re f " % (i / 7.0, 4 + i * 7) for i in range(8))
+    form = "/Type /XObject /Subtype /Form /BBox [0 0 160 160] /Group << /S /Transparency /CS /DeviceGray >>"
+    c = rect(0, 0, 160, 160, 1.0) + "q /GS gs /F0 Do Q\n"
+    objs = {5: "<< /Type /ExtGState /SMask 8 0 R >>", 8: "<< /Type /Mask /S /Luminosity /G 6 0 R /BC 9 0 R >>", 9: "[0]",
+            6: (form, "".join(rect(20 + i * 15, 10, 15, 140, i / 7.0) for i in range(8)).encode()),
+            7: (form.replace("DeviceGray", "DeviceRGB") + " /Resources << >>", b"0 g 20 10 120 140 re f")}
+    return page(c, "/ExtGState << /GS 5 0 R >> /XObject << /F0 7 0 R >>", objs)
+
 BMS = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "ColorDodge", "ColorBurn",
        "HardLight", "SoftLight", "Difference", "Exclusion", "Hue", "Saturation", "Color", "Luminosity"]
 def fx_blend():
@@ -114,7 +124,7 @@ def fx_image():
     return page(c, "/XObject << /I1 5 0 R /I2 7 0 R >>", objs)
 
 FIXTURES = {"alpha": fx_alpha, "blend": fx_blend, "group": fx_group,
-            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image, "direct": fx_direct, "clipimg": fx_clipimg}
+            "smask_lum": lambda: fx_smask("lum"), "smask_alpha": lambda: fx_smask("alpha"), "image": fx_image, "direct": fx_direct, "clipimg": fx_clipimg, "smaskref": fx_smaskref}
 
 def write(d):
     os.makedirs(d, exist_ok=True)

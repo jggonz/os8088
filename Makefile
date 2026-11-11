@@ -22220,7 +22220,7 @@ pdnotes: $(BUILD)/pdu_nt
 # for the header, the door and the primitives. `make pdx8` builds it and prints its size against
 # PDX8_RES. PDREND carries the hooks under -DPDR_X8 (pdrx8.c, pdrxb.c, pdrx8h.inc).
 PDX8_C   := apps/pagedesk/pdx8.c
-PDX8_H   := apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDX8_H   := apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdx8i.c
 PDX8_CAP := 16384
 .PHONY: pdx8
 $(BUILD)/pdx8.raw.asm: $(PDX8_C) $(PDX8_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain

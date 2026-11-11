@@ -169,7 +169,7 @@ static void gt_parse(void)
     }
     if (gt_get("SMask", 0) == 0) {
         gt_g.present |= GSP_SMASK;
-        if (gt_q.kind == PDK_DICT) {
+        if (gt_q.kind == PDK_DICT || gt_q.kind == PDK_REF) {      /* Illustrator writes /SMask n 0 R: the path walk follows it */
             if (gt_get("SMask", "S") == 0 && gt_is("Alpha")) gt_g.smode = 2;
             else gt_g.smode = 1;
             if (gt_get("SMask", "G") == 0 && gt_q.kind == PDK_REF) { gt_g.gnum = gt_q.refnum; gt_g.ggen = gt_q.refgen; }
