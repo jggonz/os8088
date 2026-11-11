@@ -13,14 +13,14 @@
 ;   _gb_row0     C: void gb_row0(void): one row of a template-0 generic region
 ;                with nominal AT pixels, no skip, into [_gb_c] from rows
 ;                [_gb_p1], [_gb_p2]; the 4,096-entry context hash of pdxijb2.c
-;                (tags at JW_GB, states at JW_GBHS); sets [_gb_fail] when full.
+;                (4-byte entries at offset 0: tag word, state byte, pad; [_jb_hmask] + 1 of them);
+;                sets [_gb_fail] when full.
 ;
 ; State byte: bit 7 = occupied (hash), bits 6..1 = index in the Qe table,
 ; bit 0 = MPS. mqd (internal): BX = state offset, ES = workspace; returns AL =
 ; the bit; BX = the offset; AX, CX, DX, SI, DI trashed.
 ; =============================================================================
-GBH_STATES  equ 0x2000              ; JW_GBHS; the tags (words) are at JW_GB = 0
-GBH_MASK    equ 0x0FFF              ; JB_HASH - 1
+; the hash: [_jb_hmask] + 1 entries of 4 bytes at workspace offset 0: tag word, state byte, pad
 
 section .bss
 gr_ctx:     resw 1
@@ -234,15 +234,17 @@ _gb_row0:
     mov bl, bh
     xor bh, bh
     xor bx, ax
-    and bx, GBH_MASK                ; h = (ctx ^ ctx >> 8) & 0FFFh
-    mov di, GBH_MASK + 1
+    and bx, [_jb_hmask]             ; h = (ctx ^ ctx >> 8) & mask
+    mov di, [_jb_hmask]
+    inc di
 .pr:
     mov si, bx
+    shl si, 1
     shl si, 1
     cmp ax, [es:si]
     jne .miss
 .fnd:
-    add bx, GBH_STATES
+    lea bx, [si + 2]
     call mqd                        ; AL = the bit
     mov dx, [gr_ctx]
     test al, al
@@ -252,26 +254,26 @@ _gb_row0:
     or [di], cl
     jmp .nb
 .miss:
-    cmp byte [es:bx + GBH_STATES], 0
+    cmp byte [es:si + 2], 0
     je .new
     inc bx
-    and bx, GBH_MASK
+    and bx, [_jb_hmask]
     dec di
     jnz .pr
     mov word [_gb_fail], 1
     jmp .out
 .new:
     mov [es:si], ax
-    mov byte [es:bx + GBH_STATES], 0x80
+    mov byte [es:si + 2], 0x80
     jmp .fnd
 
 ; ---- the all-white run: context 0 whose MPS is 0 is the bulk of a scan. While the
 ; MPS path needs no renormalisation and no 1 pixel comes into the window, decide
 ; and move on with everything in registers (the context stays 0).
 .zero:
-    test byte [es:GBH_STATES], 1
+    test byte [es:2], 1
     jnz .gen
-    mov bl, [es:GBH_STATES]
+    mov bl, [es:2]
     xor bh, bh
     and bl, 0x7E
     mov cx, [cs:mq_qe + bx]
