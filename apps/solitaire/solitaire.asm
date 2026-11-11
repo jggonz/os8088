@@ -1303,7 +1303,8 @@ sol_maskrun:
     jmp sol_pop4
 
 .emit:                              ; the open run is [BP .. CX-1]
-    push bx
+    push bx                         ; the line cell takes AX..DX (SPEC.md
+    push cx                         ;   5.7.3): CX is the column walk's
     push dx
     mov ax, bp
     add ax, [sol_mrx]
@@ -1313,6 +1314,7 @@ sol_maskrun:
     mov dx, [sol_mry]
     call OSAPI_GFX_HLINE            ; AX = x1, BX = x2, DX = y
     pop dx
+    pop cx
     pop bx
     mov bp, -1
     ret

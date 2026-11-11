@@ -95,6 +95,10 @@ if os.environ.get("GFXCLOB_SET"):            # an experiment: "PIXEL=ax,bx;..."
             if regs else frozenset()
 TOKRE = re.compile(r"\b(ax|bx|cx|dx|al|ah|bl|bh|cl|ch|dl|dh)\b", re.I)
 
+# Macros whose first argument is a near routine they run through a thunk
+# (winmod.inc's WNK: `call wnk_go / dw %1`) - walked as a call to it.
+CALL_MACROS = ("WNK",)
+
 MAXDEPTH = 8          # nested calls / caller climbs
 MAXSTEPS = 20000      # instructions per walk from one site
 
@@ -463,6 +467,10 @@ class Walker:
         self.draw_macros = {n for n, bodies in self.macros.items()
                             if any(self.body_draws(b) for b in bodies)}
 
+    def cell_reads(self, c):
+        """The documented inputs of drawing cell `c` (FILL, HLINE, ...)."""
+        return self.cells.get("OSAPI_GFX_" + c, (frozenset(),))[0]
+
     def body_draws(self, body, seen=None):
         seen = seen or set()
         for line in body:
@@ -513,6 +521,7 @@ class Walker:
                 if mn == "call":
                     tg = target(mops[0]) if mops else ""
                     if cell_name(tg):
+                        reads |= self.cell_reads(cell_name(tg)) & live
                         live -= CLOBBER.get(cell_name(tg),
                                             frozenset())
                         continue
@@ -537,7 +546,10 @@ class Walker:
                 if mn == "pop" and mops and mops[0].lower() in REG16:
                     eff = (set(), set(REG16[mops[0].lower()]))
                 if mn == "push" and mops:
-                    eff = (regs_in(mops[0]), set())
+                    # saving a register is not reading it (a macro that
+                    # banks BX and pops it back keeps the junk as junk)
+                    eff = (set() if is_reg(mops[0]) else regs_in(mops[0]),
+                           set())
                 if eff is None:
                     continue
                 rd, wr = eff
@@ -678,13 +690,23 @@ class Walker:
                 if i in src.macro_body:
                     self.report("macro-body", src, i, text)
                     break
+                if mn.upper() in CALL_MACROS and ops:
+                    mn = "call"         # a thunk to a near routine: its
+                                        # argument is what runs
                 if mn == "call":
                     t = target(ops[0]) if ops else ""
                     if cell_name(t):
-                        # ANOTHER drawing call: what it clobbers is its own
+                        # ANOTHER drawing call: it READS its documented
+                        # inputs (a second line drawn off the first one's
+                        # AX/BX is the commonest miss - os88ui_sbar's arrow
+                        # rules were one), and what it clobbers is its own
                         # site's finding, so this walk keeps only what it
                         # pushed (a push/pop around that call carries this
                         # site's junk through it)
+                        bad = self.cell_reads(cell_name(t)) & junk
+                        if bad:
+                            self.report("read", src, i, text + "   <- reads "
+                                        + ",".join(sorted(bad)))
                         i += 1
                         junk = junk - CLOBBER.get(cell_name(t), frozenset())
                         continue
@@ -867,6 +889,25 @@ class Walker:
         if not lab:
             self.report("ret-unknown", src, i, "ret outside any label")
             return
+        # A LOCAL subroutine (`.arrow: ... ret`, reached by `call .arrow`
+        # inside its own routine) returns to those calls, not to the
+        # routine's callers: the nearest local label above that is CALLED
+        # in its scope owns this ret.
+        for j in range(i, -1, -1):
+            if src.glob_at[j] != lab:
+                break
+            m = LABEL_RE.match(strip_comment(src.raw[j]))
+            if not m or not m.group(1).startswith(".") or \
+                    m.group(1).startswith(".."):
+                continue
+            pat = re.compile(r"^\s*(?:[.\w]+:\s*)?call\s+" +
+                             re.escape(m.group(1)) + r"\s*(?:;|$)", re.I)
+            sites = [k for k, line in enumerate(src.raw)
+                     if src.glob_at[k] == lab and pat.match(line)]
+            if sites:
+                for k in sites:
+                    self.walk(src, k + 1, junk, depth + 1, (), top=True)
+                return
         self.escape_label(src, i, lab, junk, depth)
 
     def escape_label(self, src, i, lab, junk, depth):

@@ -6309,19 +6309,13 @@ wd_drawrun:
     add dx, [wd_gh1]                       ; the cell's last row
     test byte [wd_runa], WDAT_UL
     jz .nul
-    push dx
-    call OSAPI_GFX_HLINE
-    pop dx
+    call .hl
 .nul:
     test byte [wd_runa], WDAT_DUL
     jz .ndul
-    push dx
-    call OSAPI_GFX_HLINE            ; double underline: rows 7 and 6
-    pop dx
+    call .hl                        ; double underline: rows 7 and 6
     dec dx
-    push dx
-    call OSAPI_GFX_HLINE
-    pop dx
+    call .hl
     inc dx
 .ndul:
     test byte [wd_runa], WDAT_WUL
@@ -6346,10 +6340,19 @@ wd_drawrun:
     mov bx, ax                      ; BX = x2, the span's last column
     mov ax, di
     call wd_cx                      ; AX = x1
-    call OSAPI_GFX_HLINE
+    call .hl
 .wnext:
     inc si
     jmp short .ws
+.hl:                                ; the line cell takes AX..DX (SPEC.md
+    push ax                         ; 5.7.3): every rule here is drawn off
+    push bx                         ; the same x pair or the same row
+    push dx
+    call OSAPI_GFX_HLINE
+    pop dx
+    pop bx
+    pop ax
+    ret
 .done:
     jmp wd_rdisdcba
 
@@ -16701,7 +16704,11 @@ wd_sheet:
     add bx, [wd_ctop]
     mov dx, [wd_bot]
     mov ax, [wd_shl]
+    push bx                         ; the line cell takes AX..DX (5.7.3)
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
     mov ax, [wd_shr]
     push ax
     call OSAPI_GFX_VLINE
@@ -16750,7 +16757,9 @@ wd_pgmarks:
     sub ax, 4
     mov bx, [wd_shl]
     dec bx
+    push dx                         ; the line cell takes AX..DX (5.7.3)
     call OSAPI_GFX_HLINE
+    pop dx
     mov ax, [wd_shr]                ; ...and the right margin's
     inc ax
     mov bx, ax
@@ -16909,7 +16918,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 7
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 9
     call OSAPI_GFX_HLINE
@@ -16926,7 +16939,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 5
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 11
     call OSAPI_GFX_HLINE

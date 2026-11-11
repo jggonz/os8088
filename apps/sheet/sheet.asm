@@ -7182,16 +7182,24 @@ sh_drawbar:
     mov bx, ax
     add bx, SH_REF_W - 1
     mov dx, [sh_goy]
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     push dx
     call OSAPI_GFX_HLINE
     pop dx
+    pop bx
+    pop ax
     add dx, SH_FB_H - 1
     call OSAPI_GFX_HLINE
     mov ax, [sh_ox]
     mov bx, [sh_goy]
     mov dx, [sh_goy]
     add dx, SH_FB_H - 1
+    push bx                         ; the line cell takes AX..DX (5.7.3)
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
     mov ax, [sh_ox]
     add ax, SH_REF_W - 1
     call OSAPI_GFX_VLINE               ; also the content box's own left edge
@@ -7203,9 +7211,13 @@ sh_drawbar:
     add bx, [sh_cw]
     dec bx
     mov dx, [sh_goy]
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     push dx
     call OSAPI_GFX_HLINE
     pop dx
+    pop bx
+    pop ax
     add dx, SH_FB_H - 1
     call OSAPI_GFX_HLINE
     mov ax, [sh_ox]

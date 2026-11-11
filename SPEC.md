@@ -8618,8 +8618,14 @@ is read. The walk follows:
 - calls into near routines;
 - the push/pop stack, so `push ax / call OSAPI_GFX_HLINE / pop ax` is clean;
 - macros, including the routines that `os88ui.inc`'s body macros write;
-- the documented inputs of every later cell;
-- every caller, when a `ret` is reached with junk still live.
+- the documented inputs of every later cell — a drawing call is itself a
+  reader, and until this was modelled the gate passed the commonest miss
+  of all: a second line drawn off the first one's AX/BX (the shared scroll
+  bar's arrow-cell rules and glyph rows, `sbar`/`sbardlg`, and twenty more
+  sites in Word, Scribe, Sheet, RealDMG and Solitaire);
+- a thunk macro whose argument is a near routine (`WNK`), as a call to it;
+- every caller, when a `ret` is reached with junk still live — and for a
+  LOCAL subroutine (`call .emit` inside its own routine), the calls to it.
 
 When the walk loses sight of a path (an indirect call, a depth limit, an
 unknown macro), it does not fail. `--report` lists every such place, so the

@@ -5221,19 +5221,13 @@ sc_drawrun:
     add dx, [sc_gh1]                       ; the cell's last row
     test byte [sc_runa], SCAT_UL
     jz .nul
-    push dx
-    call OSAPI_GFX_HLINE
-    pop dx
+    call .hl
 .nul:
     test byte [sc_runa], SCAT_DUL
     jz .ndul
-    push dx
-    call OSAPI_GFX_HLINE            ; double underline: rows 7 and 6
-    pop dx
+    call .hl                        ; double underline: rows 7 and 6
     dec dx
-    push dx
-    call OSAPI_GFX_HLINE
-    pop dx
+    call .hl
     inc dx
 .ndul:
     test byte [sc_runa], SCAT_WUL
@@ -5258,10 +5252,19 @@ sc_drawrun:
     mov bx, ax                      ; BX = x2, the span's last column
     mov ax, di
     call sc_cx                      ; AX = x1
-    call OSAPI_GFX_HLINE
+    call .hl
 .wnext:
     inc si
     jmp short .ws
+.hl:                                ; the line cell takes AX..DX (SPEC.md
+    push ax                         ; 5.7.3): every rule here is drawn off
+    push bx                         ; the same x pair or the same row
+    push dx
+    call OSAPI_GFX_HLINE
+    pop dx
+    pop bx
+    pop ax
+    ret
 .done:
     pop di
     pop si
@@ -14991,7 +14994,11 @@ sc_sheet:
     add bx, [sc_ctop]
     mov dx, [sc_bot]
     mov ax, [sc_shl]
+    push bx                         ; the line cell takes AX..DX (SPEC.md
+    push dx                         ;   5.7.3)
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
     mov ax, [sc_shr]
     call OSAPI_GFX_VLINE
     call sc_pgmarks
@@ -15041,7 +15048,9 @@ sc_pgmarks:
     sub ax, 4
     mov bx, [sc_shl]
     dec bx
+    push dx                         ; the line cell takes AX..DX (5.7.3)
     call OSAPI_GFX_HLINE
+    pop dx
     mov ax, [sc_shr]                ; ...and the right margin's
     inc ax
     mov bx, ax
@@ -15204,7 +15213,11 @@ sc_ruler:
     add bx, 9
     mov dx, di
     add dx, 7
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 9
     call OSAPI_GFX_HLINE
@@ -15221,7 +15234,11 @@ sc_ruler:
     add bx, 9
     mov dx, di
     add dx, 5
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 11
     call OSAPI_GFX_HLINE
