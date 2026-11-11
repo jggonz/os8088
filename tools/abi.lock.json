@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "a9e905fe4c29606e74dac42d36200281c08cd898708e03905395827e1a869aca",
+  "fingerprint": "20ba54b666de9c12b726c842b323f501c3b2dc594b7b42f6c75c20015377387b",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -2217,6 +2217,13 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 14
+  },
+  {
+   "fingerprint": "20ba54b666de9c12b726c842b323f501c3b2dc594b7b42f6c75c20015377387b",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "B4: DRVV_SLEEP (5) / DRVV_WAKE (6) and OS88_DRV_WAKES (bit 15 of header +10, the written-not-read FSV word) - opt-in verbs every older driver already refuses (SPEC.md 51.2.2, 51.2.5); DRV_VER 14 is unreleased, so no bump",
    "to": 14
   }
  ]

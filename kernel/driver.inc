@@ -451,6 +451,11 @@ DRVV_HWINFO equ 4               ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11).
                                 ; Optional, and asked ONLY by drv_suspend, on
                                 ; the way past: a driver that is about to be
                                 ; unloaded is the last thing that knows.
+DRVV_SLEEP  equ 5               ; ...and the two a hibernate and a DOS handoff
+DRVV_WAKE   equ 6               ; send a driver whose header says
+DRV_H_WAKES equ DRV_H_FSV + 1   ; OS88_DRV_WAKES - bit 7 of this byte, +10's
+                                ; bit 15 (SPEC.md 51.2.5). HIBER.DRV is their
+                                ; one sender: equs, so no resident byte
 DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
                                 ; user wants (SPEC.md 34.8). out CF=0 and
                                 ; SI = its service table, RE-COPIED because

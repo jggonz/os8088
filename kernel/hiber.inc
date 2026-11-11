@@ -115,6 +115,14 @@ HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
     %define HBM_HMACHK 1
   %endif
 %endif
+; HBM_KEEPS - a driver that says OS88_DRV_WAKES is put to SLEEP by a
+; hibernate's sweep and kept, then WAKEd (SPEC.md 51.2.5). NOT kern_mega: its
+; drivers run above 1MB, where a kept image and its claims would be extra runs
+; in the picture's extended section against HBX_HMAX, and a park needs none of
+; it - that kernel keeps today's unload and reload (docs/plans/B4-WAKE-PLAN.md)
+%ifndef KERN_MEGA
+  %define HBM_KEEPS 1
+%endif
 
 ; --- the DOS handoff's own fields (SPEC.md 96.40.1) -------------------------
 ; They sit ABOVE HS_SLAVE and BELOW HS_IVT, which the DOS stub never uses: it
@@ -2318,6 +2326,9 @@ hbm_hfree:
 hbm_sweep:
     mov word [si], 0
     CSDO mov byte [CSEG hbm_swn], 0
+%ifdef HBM_KEEPS
+    CSDO mov word [CSEG hbm_kept], 0 ; ...and nothing kept yet (51.2.5)
+%endif
     xor cx, cx
 .row:
     mov al, cl
@@ -2361,6 +2372,42 @@ hbm_sweep:
     pop cx                      ; ...which does not touch the ZF `test` set
     jz .next
 .take:
+%ifdef HBM_KEEPS
+    ; --- A DRIVER THAT SAYS IT CAN SLEEP STAYS (SPEC.md 51.2.5) -------------
+    ; Only on a hibernate's own sweep (DL = 0, both callers): OSAPI_DRV_SUSPEND
+    ; passes DRVC_NET and is today's. OS88_DRV_WAKES is bit 7 of the byte
+    ; before the dispatcher, wherever the row says the image runs (a heap
+    ; claim, or the HMA's copy at DRV_HMA_ORG); SLEEP is the driver's own
+    ; quiesce, and a refusal falls through to today's unload. Kept rows go in
+    ; the module's [hbm_kept], which the picture carries, and not in [SI]
+    or dl, dl
+    jnz .gone
+    push es
+    push si
+    les si, [bx+DRVR_DISP]      ; ES:SI = the image's dispatcher
+    test byte [es:si-PKG_DISP+DRV_H_WAKES], 0x80
+    pop si
+    pop es
+    jz .gone
+    push cx                     ; the row, the skip, the mask's word and DI:
+    push dx                     ; the driver is not ours to trust with any of
+    push si                     ; them
+    push di
+    mov al, DRVV_SLEEP
+    mov bp, [bx+DRVR_ENT]
+    call hbg_cgo
+    dw drv_call
+    pop di
+    pop si
+    pop dx
+    pop cx
+    jc .gone                    ; "unload me as before"
+    mov ax, 1
+    shl ax, cl
+    CSDO or [CSEG hbm_kept], ax
+    jmp short .next
+.gone:
+%endif
     mov ax, 1
     shl ax, cl
     or [si], ax
@@ -2401,9 +2448,67 @@ hbm_sweep:
 hbm_reload:
     push dx
     mov dx, [hb_drvmask]
+%ifdef HBM_KEEPS
+    call hbm_wakem              ; the KEPT rows first: woken, or added to DX
+%endif
     call hbm_reload_m
     pop dx
     ret
+
+%ifdef HBM_KEEPS
+; hbm_wakem - DRVV_WAKE every row hbm_sweep kept, in row order (SPEC.md 51.2.5)
+; in:  DX = rows to reload; [cs:hbm_kept] = the kept ones, SPENT here
+; out: DX |= every kept row whose WAKE refused - unloaded already, so
+;      hbm_reload_m's ordinary load is its fallback: a card gone, swapped or
+;      disabled while the machine was away comes back exactly as it did
+;      before B4, off the disk
+; clobbers: nothing else (flags)
+hbm_wakem:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    xor ax, ax
+    CSDO xchg ax, [CSEG hbm_kept]
+    xor cx, cx
+.row:
+    shr ax, 1
+    jnc .next
+    push ax
+    push cx
+    push dx
+    mov al, cl
+    call hbg_cgo                ; BX = the row
+    dw drv_row_x
+    mov al, DRVV_WAKE
+    mov bp, [bx+DRVR_ENT]
+    call hbg_cgo
+    dw drv_call
+    pop dx
+    pop cx
+    jnc .woke
+    mov al, cl                  ; NOT THE SAME CARD, OR NONE: DETACH, free,
+    call hbg_cgo                ; and the row joins the reload
+    dw drv_unload_x
+    mov ax, 1
+    shl ax, cl
+    or dx, ax
+.woke:
+    pop ax
+.next:
+    inc cx
+    or ax, ax
+    jnz .row
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; hbm_reload_m - load the rows in DX again, in row order
 ; in:  DX = the rows; out: nothing; clobbers DX
@@ -5282,6 +5387,9 @@ hbm_wake:
     mov dx, [hb_drvmask]
     or dx, [hb_susp]
     mov word [hb_susp], 0
+%ifdef HBM_KEEPS
+    call hbm_wakem              ; ...and the KEPT rows woken, a refusal
+%endif                          ; joining the load (SPEC.md 51.2.5)
     call hbm_reload_m
     ; 5b. ...and the DOS program's exit code, to the DOS.O88 that asked ---
     ; **THIS IS THE ONLY THING THE RETURN ADDS TO THE WAKE**
@@ -5879,6 +5987,13 @@ hbm_swn:        resb 1          ; hbm_sweep's record count, across the ask
 hbm_spm:        resb 1          ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
                                 ; 51.11.4), banked by hbm_drvsusp off the
                                 ; slot's own BL - the kernel keeps nothing
+%ifdef HBM_KEEPS
+hbm_kept:       resw 1          ; the rows hbm_sweep put to SLEEP and kept
+                                ; (SPEC.md 51.2.5): written before the
+                                ; picture, read by the restored hbm_wake or
+                                ; by a failed write's unwind - hbm_imr's
+                                ; reasoning. hbm_sweep zeroes it first
+%endif
 %ifndef KERN_MEGA
 hbm_imr:        resb 2          ; the 8259 masks the image wakes with (hiber-14):
                                 ; banked by hbm_wrimg after the sweep, read by

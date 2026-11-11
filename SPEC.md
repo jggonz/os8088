@@ -104591,6 +104591,12 @@ DRVV_READY  (3)  your services are published (51.2.2). Sent to EVERY
                  driver; nothing to do is CF=0, and CF=1 + AL = a DRVE_*
                  is banked as the row's reason.
 DRVV_HWINFO (4)  where is your hardware (51.11.2). OPTIONAL.
+DRVV_SLEEP  (5)  the machine is going away and coming back: quiesce,
+                 unhook, STAY LOADED (51.2.5). Sent only to a driver whose
+                 header says OS88_DRV_WAKES. CF=1 = unload me as before.
+DRVV_WAKE   (6)  it came back: find the hardware again and re-arm (51.2.5).
+                 CF=1 = not there / not the same one: DETACH and a reload
+                 off the disk follow.
 any other        REFUSED: CF=1, nothing done, AL not read (51.2.2).
 ```
 
@@ -104942,6 +104948,84 @@ then `pop word [snd_inst]`. So the rule is the general one, and it binds
 shape: **anything banked in kernel memory across a call that changes `DS` is
 pushed before `DS` and popped after it is back.** All three still end in
 flag-writing-free instructions, so a callback's `CF` comes out untouched.
+
+### 51.2.5 `DRVV_SLEEP` / `DRVV_WAKE` — a driver that stays loaded across a hibernate and a DOS trip
+
+A hibernate (§87.4 step 1) and the DOS handoff (§96.40, which writes the same
+image) used to **unload** every driver that owns hardware and, at the wake,
+**read each one off the disk again** — the file, its decode, its probe, and
+for `ETHER.DRV` its READY's blocking DHCP of up to `DHCP_WAIT` (6 s). Most of
+that is work the image has already done: the driver's code, its state and
+its claims are *in the picture*. What cannot cross a power cycle or a DOS
+program is the hardware's state, and that is what these two verbs are for
+(docs/plans/B4-WAKE-PLAN.md is the costing and the record).
+
+**OPT-IN, DECLARED IN THE HEADER.** `%define OS88_DRV_WAKES` before
+`OS88_DRIVER` (or `OS88_OVERLAY`) sets **bit 15 of header +10** — the word
+§62.9.1.1's `FSV_*` length lives in, written and not read, so the bit costs
+no header byte and an undeclared driver's header is byte for byte what it
+was. `HIBER.DRV` is the one reader (`DRV_H_WAKES`, the byte at +11, bit 7),
+and reads it through the row's dispatcher pointer, so a driver running from
+the HMA's copy (§2.10.8) is read where it runs. Every driver that does not
+declare it — every one built before, and every one whose wake is not worth
+its bytes — is unloaded and reloaded exactly as before; and an undeclared
+driver still REFUSES both verbs, by §51.2.2's rule
+(`tests/unit/t_drvverb.py` holds both halves: a declared driver must not
+refuse them at its dispatch, an undeclared one must).
+
+```
+DRVV_SLEEP (5)  in: nothing. Stop the hardware (a bus master stops its DMA
+                NOW: the picture is about to be taken), close what a peer
+                holds open, unhook every vector you hooked - a DOS program
+                gets the machine next - and keep your image and claims.
+                out CF=0 kept; CF=1 = "unload me as before", NOTHING done.
+DRVV_WAKE  (6)  in: nothing. The same image, after a POST (a resume) or a
+                DOS program (the return), neither of which you saw. Find
+                the hardware where SLEEP left it, prove it is the same one
+                (a MAC, a signature), re-arm it.
+                out CF=0 woken; CF=1 = it is not there or not the same one.
+                The kernel then sends DETACH and frees the image, so a
+                refusal MUST leave DETACH safe to run; and the row is
+                loaded afresh off the disk, which is the fallback for a
+                card that was removed, swapped or disabled meanwhile.
+```
+
+**Who sends them.** `hbm_sweep`, on a hibernate's own sweep (`DL` = 0: both
+`hbm_wrimg` callers — Hibernate, and the DOS handoff's image) and never on
+`OSAPI_DRV_SUSPEND`'s (§51.11, which passes `DRVC_NET` and is unchanged):
+a declared row is sent `SLEEP` and noted in the module's `[hbm_kept]`
+instead of `[hb_drvmask]`. `hbm_wakem` spends it — `WAKE` per kept row in
+row order, a refusal unloaded and added to the reload set — at each place
+the reload ran: `hbm_wake` (§87.6), which is both the resume and the DOS
+return, and `hbm_reload`, the unwind of a write that did not happen
+(§87.4), so a failed hibernate wakes what it put to sleep. The image is
+taken with the declared drivers ASLEEP and loaded; `hbm_down`'s
+`drv_shutdown` after the picture detaches them as it detaches the disk
+driver, which changes nothing the picture holds.
+
+**Not kern_mega.** Its drivers run above 1MB (`OS88_DRV_HIGHOK`, `_HICLAIM`):
+a kept `ETHER.DRV` and its socket pool would be pool blocks the picture's
+extended section must carry, each a run against `HBX_HMAX` (§87.9) on a
+hibernate that fitted before, and the park (§96 on kern_mega) restores
+nothing it would save. `HBM_KEEPS` is undefined there and that kernel's
+sweep is today's, byte for byte.
+
+**Who declares it, and what each wake does** (B4, docs/plans/B4-WAKE-PLAN.md):
+
+| driver | SLEEP | WAKE |
+|---|---|---|
+| `ETHER.DRV`, `PCIETHER.DRV` (one `ethdrv.inc`) | the card's mutex HELD, every socket RST (`eth_dropall`), the card stopped (`nic_stop`: the RTL8139's bus master off, its ring claim freed) | the card found again at `[eth_base]` (NE2000) or on the PCI bus with its ring claimed afresh (RTL8139, whose BAR may move across a POST), `nic_init`, the MAC compared (another card is CF=1), the ARP cache forgotten, the mutex freed - and **the lease kept**: one non-blocking RFC 2131 INIT-REBOOT `DHCPREQUEST` for the address it holds (§72.5.3). An ACK keeps it, a NAK starts the ordinary DISCOVER, and silence keeps it |
+| `USBMOUSE.DRV`, the PicoMEM path (§9.12.7) | `um_pmdetach`: the card's mouse off, int 33h given back | `um_pmattach`: the card detected, int 33h hooked, the mouse on; a refusal leaves DETACH touching nothing. The CH375 path REFUSES SLEEP and is unloaded as before (its worker and its USB enumeration are not worth the bytes, B4-WAKE-PLAN) |
+| `HTTPFS.DRV` (§122) | nothing: no hardware | its index and its connection forgotten (the sockets died with the card's sleep); the volume stays mounted, and the next open fetches the index again |
+| `VMMOUSE.DRV` (kern_emu, §9.11) | the aux stream stopped (`vmm_detach`, 0xF5) | the backdoor re-armed - `vmm_probe` under `vmm_atom` and the 8042's 0xF4/0xF5 - which is its attach: a resumed QEMU or VMware has reset the device |
+
+`SOUND.DRV` does NOT declare it: its attach gives its probes back
+(`DRV_H_KEEP`) and a re-arm would be resident bytes on every Sound Blaster
+machine, behind the highest-risk wake in the tree (B4-WAKE-PLAN). Nor is
+there a generic "re-attach in place": every attach assumes a freshly read,
+zeroed image (§51.2's *Attach is the first verb an image ever gets*), the
+kernel does not know a driver's state span to re-zero it, and a re-run READY
+is the DHCP wait the whole feature exists to skip.
 
 ### 51.3 Loading, and what happens when it fails
 
@@ -133900,6 +133984,34 @@ move it. Reproduced on 86Box (mr286, NE1000, slirp): a warm reboot with a
 connection kept open, then the drive's first fetch never reached the server
 until a later retry. 34 bytes of `ETHER.DRV`.
 
+#### 72.5.3 A wake keeps the lease, and asks once without waiting
+
+`DRVV_WAKE` (§51.2.5) brings `ETHER.DRV` back from a hibernate or a DOS trip
+with its address still in `eth_ip` - and READY's blocking acquisition is
+exactly the cost the verb exists to skip. So a woken driver that was
+`DH_BOUND` by a server (not `ECM_MAN`, whose address no server owns) sends
+**one** `DHCPREQUEST` for the address it holds and returns at once, in RFC
+2131's INIT-REBOOT form (its section 4.3.2): `ciaddr` zero, option 50 the address, and
+NO option 54 - the server is not being chosen, it is being asked whether the
+address is still right for this network. `dhcp_wk` is the flag that marks the
+exchange, and it changes three answers and nothing else:
+
+- an **ACK** is the ordinary one: `DH_BOUND`, the mask, the router, the name
+  server - the same address, re-confirmed;
+- a **NAK** is the machine on another network, or the lease given away: the
+  address is cleared and the ordinary DISCOVER starts, non-blocking like any
+  retry (sockets refuse for want of an address until it binds);
+- **silence**, `DHCP_TRIES` unanswered, is `DH_BOUND` again with the address
+  kept, where an ordinary REQUEST's silence is `DH_FAIL`. A machine that was
+  carried to a network whose server ACKs nothing keeps a stale address; one
+  whose server answers at all is told.
+
+Nothing pumps a driver no package is using (§72.2.1), so the answer is read
+by the first socket verb after the wake, or by the page; until then the
+address is the one the picture held, which is the point.
+`tests/b4lease.py` drives all three against a host-side DHCP server, since
+QEMU's slirp never refuses.
+
 ### 72.6 The page says which half is missing
 
 `drivers/ether/etherui.inc`, and it is the **fifth** driver row — which is why
@@ -162395,7 +162507,9 @@ of its pass with nothing held, in `hbm_perform`:
 1. **Detach every loaded driver whose class is not `DRVC_DISK`,
    `DRVC_FILE`, `DRVC_FILE2`, `DRVC_CD` or `DRVC_EMS`** (`drv_unload` per
    row: sound, the NIC; never the VESA renderer's row, §120.4), recording the
-   rows in `[hb_drvmask]`. Their hardware state
+   rows in `[hb_drvmask]` - **unless the driver declares `OS88_DRV_WAKES`**
+   (§51.2.5): that one is sent `DRVV_SLEEP` and KEPT, noted in the module's
+   `[hbm_kept]`, and only a refused SLEEP is detached (not kern_mega). Their hardware state
    cannot cross a power cycle and their claims would be restored to addresses
    a fresh boot has given to somebody else; the disk driver, the parallel
    cable and the RAM disk own no hardware the BIOS does not already own, and
@@ -162431,7 +162545,7 @@ of its pass with nothing held, in `hbm_perform`:
    restarts the machine into the question below.
 
 A failure at 3, 3b, 5 or 6 - or a serial port still leased once the sweep
-has run (`Disconnect serial first`) - undoes 1, 2 and 4 — the pool's claim freed, the drivers loaded again from the mask, the user's volume and folder
+has run (`Disconnect serial first`) - undoes 1, 2 and 4 — the pool's claim freed, the kept drivers woken (§51.2.5) and the rest loaded again from the mask, the user's volume and folder
 put back (`drv_vol_bank`/`back`, as `hbm_arm` and a refused resume do),
 the lock and `sch_lock` released — and toasts `Hibernate failed`, or
 `Not enough memory` when 3b's claim was refused; the window goes back to
@@ -162685,9 +162799,11 @@ still up from step 3 of §87.4 and the gfx lock still held:
 5. The pointer and the image are deleted, which is the one mount the resume
    makes. Both files, because a resumed hibernation is spent, and 640KB of a
    32MB disk is not nothing.
-6. The drivers in `[hb_drvmask]`, and those a standing `OSAPI_DRV_SUSPEND`
-   took out (`[hb_susp]`, spent here, §51.11.5), are loaded again, in row
-   order, exactly as `drv_boot` would have loaded them.
+6. The drivers step 1 KEPT are sent `DRVV_WAKE` (`hbm_wakem`, §51.2.5), a
+   refusal unloaded and added to the set below; then the drivers in
+   `[hb_drvmask]`, and those a standing `OSAPI_DRV_SUSPEND` took out
+   (`[hb_susp]`, spent here, §51.11.5), are loaded again, in row order,
+   exactly as `drv_boot` would have loaded them.
 7. `blk_wake`, `[hb_resumes]` += 1, `gfx_unlock`,
    **`[sch_lock]` = 0** — set, not decremented: the image holds the count as
    the write left it, and `dsk_xfer` raises it around every int 13h, so it
