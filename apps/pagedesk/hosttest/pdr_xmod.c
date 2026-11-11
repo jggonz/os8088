@@ -15,7 +15,10 @@
  *
  * PDR_XFAKE = grey (default) | n8 (RGB, out_ncomp 3) | bits (1-bit checker)
  * picks the rows; PDR_XHOSTILE = <seed> answers IMG_OPEN and IMG_ROW with
- * hostile sizes, modes and failures, for the sanitizer run.
+ * hostile sizes, modes and failures, for the sanitizer run. PDR_XNEEDMEM =
+ * grant | refuse: IMG_OPEN answers PDE_NEEDMEM, CF clear, DX = 63 (PDXI's
+ * JBIG2 when its workspace is short) until pdr_test.c's ladder grants
+ * PDMEM_SLOT - which `refuse` never does (QA F15).
  * ==========================================================================*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +35,7 @@ extern pdw pdrh_xbseg(void);
 
 pdw pdrh_slot;                      /* the occupant the harness "loaded"     */
 long pdrh_xcalls, pdrh_xopens, pdrh_xrows;
+int pdrh_xgrant;                    /* PDR_XNEEDMEM: the slot's workspace was granted */
 static struct pdxb_img g_im;
 static int g_iopen, g_ilast;
 static unsigned long g_rng;
@@ -164,6 +168,7 @@ pdw pdrh_xmod(pdw verb, pdw bx, pdw cx, pdw dx, pdw *cf, pdw *dxo)
         if (verb == PDV_GFX_SHADE && getenv("PDR_XSHADE")) return shade_fake(cf);
         break;
     case PDX_IMG: case PDX_JPX:
+        if (verb == PDV_IMG_OPEN && getenv("PDR_XNEEDMEM") && !pdrh_xgrant) { *dxo = 63; return PDE_NEEDMEM; }
         if (verb == PDV_IMG_OPEN) return img_open(cf);
         if (verb == PDV_IMG_ROW) return img_row(bx, cx, dx, cf);
         if (verb == PDV_IMG_CLOSE) { g_iopen = 0; return 0; }

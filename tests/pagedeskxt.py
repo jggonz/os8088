@@ -244,7 +244,11 @@ class Leg(object):
     """PageDesk on one adapter; every number lands in self.rows."""
 
     def __init__(self, name, machine, P):
-        (self.machine, self.sysimg), self.name, self.P = machine, name, P
+        # (machine, A: system disk) from MACHINES; tests/pagedesk.py's QLeg
+        # passes a bare "qemu" and boots its own disks
+        self.machine, self.sysimg = (machine if isinstance(machine, tuple)
+                                     else (machine, None))
+        self.name, self.P = name, P
         self.rows = []              # (what, guest seconds, heap min, note)
         self.fails = []
         self.notes = []

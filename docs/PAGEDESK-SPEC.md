@@ -729,7 +729,34 @@ shed. D28 raised VGA's in-save trough from 5.5 KiB. The rows below are the
 design budget; the claims as measured are the row's printout
 (`python3 tools/os88test.py soak -v -k pagedeskxt`).
 
-### 16.2 Claims
+**The floor where the reserve does not hold (QA F24, measured on MartyPC,
+5150 Hercules 640 KiB, 720 KiB B:, 2026-11-10).** Every claim PageDesk sizes
+itself keeps PD-29's 32 KiB: W (`sl_wsize`), a W regrown for a decoder's
+`PDMEM_SLOT` (`sl_grow`), a region (`pdu_region`) and the second Flate slot.
+What it cannot size is an occupant's IMAGE, and the open's fixed claims leave
+less than an occupant plus 32 KiB beside the overlay:
+
+| claim | KiB |
+|---|---|
+| the instance (primary image + bss) | 63.0 |
+| the carve: PDENG, PDREND and PDRENDC | 145.5 |
+| XB and the bank | 17.0 |
+| A and B (block cache, arena, display list, edit store, one or two Flate slots) | 180.0 |
+| the overlay | 52.5 |
+| S: PDXK (an encrypted open) / PDXI (JBIG2, CCITT) | 22.0 / 65.0 |
+
+of 546 KiB of heap - 523 with PDXI in S, and the desktop's instance and the
+kernel's purgeable caches hold most of the rest. Measured: at `A256R6.PDF`'s R6 question (PDXK in S, two
+Flate slots) **16.5 KiB unclaimed, 31.5 KiB with the caches shed**; with
+`JB2TEXT.PDF`'s page drawn, 74 KiB, falling to **9.0 KiB (13.5 with the caches
+shed)** while the Pages panel's thumbnail loads PDXI again. QA's run at
+3061605fe recorded 32,256 bytes, 32,256 bytes and a 23,552-byte trough in the
+same places. Keeping the reserve beside S as W does would release the overlay
+before each occupant load, and the next `ovl_` call reads its 52.5 KiB back off
+the floppy - the reserve held for a moment and paid for with a disk read per
+image page, so it is not done. The room is OI-1's: a display list sized to the
+page shrinks B, which is the one claim here that is larger than its page needs.
+
 
 | claim | owner | size | when |
 |---|---|---|---|
@@ -2210,7 +2237,15 @@ SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
    folder needs the primary to copy across folders (or the module to hop the
    current directory between the source read and the write), which is not built.
 3. **14.4 `PDE_CHANGED`**: the primary holds the open-time fingerprint and the
-   writer compares it with `FINGERPRINT` at `job_begin`.
+   writer compares it with `FINGERPRINT` at `job_begin`. **A refused save makes
+   the document STALE (QA F31)**: `pdu_stale` is set by the fingerprint check
+   and by a save answered `PDE_CHANGED`, and cleared by the next open. A stale
+   document is never handed to PDREND again - its offsets describe a file that
+   is no longer there - so a page load answers `PDE_CHANGED`, a draw paints
+   paper, and navigation owes nothing. The refusal (`Could not save X: The
+   file changed since it was opened.`) stays on the status line; the first
+   draw after it says `Could not draw the page: The file changed since it was
+   opened.` once, and never "damaged". The cure is to open the file again.
 4. **14.2 step 4 through PDENG**: re-reading the trailer and three new objects
    needs a second open document in PDENG (or a re-open after the rename);
    `pdw_real.c` does the re-open on the host.
@@ -5521,8 +5556,9 @@ cap is 65,024):
 | QA F21: an encrypted open whose prompt's overlay could not be read fails (`PDE_IO`) instead of opening again with no key, which left the NEXT open refused | 63,535 | +18 |
 | QA R15/R16: the page number in the drawing line, and the first draw's line replacing `Opened X` (`pdu_opsaid`); the merges up to d6495e85e | 63,597 | +62 |
 | QA SYNTH toast: the idle hold (`pdu_idle_ovl`, `pdu_ovhold`, the recovery look through it) and `pdu_ovl_fail`'s two idle sentences | 63,947 | +350 |
+| QA F31: `pdu_stale` (14.4) - the page load, the draw and the navigation owe nothing to a document whose file changed under it | 64,023 | +76 |
 
-**1,077 bytes stay under the cap.**
+**1,001 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
 in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
@@ -7821,6 +7857,17 @@ tables, never under one block of 2^s rows) and the symbol area gets the rest: co
 (a dictionary, a halftone grid, an intermediate region) is `PDE_LIMIT` for that segment alone, reported
 `JBF_UNSUP`, and the rest of the page is drawn. The workspace is reached only through `jw_*`, which on the
 target are pdmath's far movers over the shell's `g_wseg`:
+
+**A short workspace is ASKED for, at raster time (QA F15).** When the text regions' figure does not fit what
+the shell was granted, `jb_open` answers `PDE_NEEDMEM` with CF clear and DX = the KiB it wants (63).
+PDREND's `img_xopen` (`pdrv.c`) forwards that ONCE per page as a `PDMEM_SLOT` ask to the primary, which
+regrows W while PD-29's 32 KiB stays free beside it (`sl_grow`, 20.22.2.4); the band is drawn again from the
+image (`g_imem`). Only when the grant still leaves the decoder short - or the ask budget `PDR_XASKS` is spent -
+is the image a `PDF_INC_IMAGE` note, "image decoder". Before this, PDREND treated the answer as the decoder
+failing: on a 640 KiB VGA machine W was 21 KiB and `JB2TEXT.PDF` drew a blank page with that note.
+`make pdrend-xchk` holds both arms (`PDR_XNEEDMEM=grant|refuse`: granted pixel-identical and clean, refused
+`INC_IMAGE` and the page finished). It was paid for by moving `mode_reset` into `PDRENDC`
+(`pdrovl.h`): PDREND 64,970 (image 57,562 + bss 7,408) of the part's 65,024, PDRENDC 18,185.
 
 | offset | size | content |
 |---|---|---|

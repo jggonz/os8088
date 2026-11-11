@@ -149,6 +149,11 @@ static int pdu_popcls;                  /* pducmd.c: a popover close owed to the
 static int pdu_popdmg_on;               /* pducmd.c: a switch's repaint is owed */
 static int pdu_popown;                  /* pducmd.c: a new popover's paint is owed */
 static int pdu_rabort;                  /* pdujob.c: PDREND owes an abort (pdu_rend_sync) */
+/* QA F31: the document's file changed on the disk under it (a save found
+ * PDE_CHANGED). Nothing reads the file again until another is opened: a
+ * render of the changed bytes called the user's file damaged and blanked
+ * the page. 1 = just found (the save's sentence stands), 2 = said again */
+static char pdu_stale;
 static struct os88_rect pdu_popdmg;
 static void pdu_render_want(struct os88_rect *r);
 static void pdu_canvas_full(void);

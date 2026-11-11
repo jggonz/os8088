@@ -223,6 +223,7 @@ static void pdu_open_begin(const char *name)
     pdu_rwant = 0;
     pdu_pgwant = 0;
     pdu_changes = 0;
+    pdu_stale = 0;                      /* QA F31: a new file */
     pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_nav_reset();                    /* nav: history, selection, panels */
@@ -282,6 +283,8 @@ static int pdu_incpg;                   /* page + 1 whose incompleteness
 static int pdu_page_load(int n)
 {
     unsigned r;
+    if (pdu_stale)
+        return PDE_CHANGED;             /* QA F31: never the changed bytes */
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_PAGEINFO, pdu_pg_id(n), 0, 0);   /* pages */
     if (pdu_mcf)
         return r ? r : PDE_LIMIT;
@@ -457,7 +460,7 @@ static void ovl_render_rest(int ask)
 
 static int pdu_render_begin(void)
 {
-    unsigned r;
+    unsigned r, bad;
 
     if (!pdu_isect(&pdu_rr, &pdu_L.canvas, &pdu_rrun) || pdu_pg_kind(pdu_page) != PDM_SRC) {   /* pages: a blank is paper */
         pdu_rwant = 0;
@@ -479,9 +482,18 @@ static int pdu_render_begin(void)
     pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     pdu_rend_sync();                    /* an owed abort before a new begin */
-    r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
-    if (pdu_mcf) {
-        pdu_say2("Could not draw the page: ", pdu_errtext(r));
+    if (pdu_stale) {                    /* QA F31: paper, not the changed file */
+        r = PDE_CHANGED;
+        bad = 1;
+    } else {
+        r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
+        bad = pdu_mcf;
+    }
+    if (bad) {
+        if (pdu_stale != 1)             /* the save's refusal stands the first time */
+            pdu_say2("Could not draw the page: ", pdu_errtext(r));
+        if (pdu_stale)
+            pdu_stale = 2;
         os88_gfx_lock();
         pdu_status_paint();
         os88_gfx_unlock();

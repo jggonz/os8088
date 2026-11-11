@@ -164,6 +164,18 @@ for ad in ('vga', 'cga'):
     rcw, imw, _, _ = render(ramp, 0, ad)
     check('DCT with the image module refused (%s): PDF_INC_MODULE, nothing drawn' % ad,
           rc == 0 and num(st, 'incomplete') & INC_MODULE and im is not None and imw is not None and int((im != imw).sum()) > 5000, str(st))
+# a decoder whose workspace is short answers IMG_OPEN with PDE_NEEDMEM (PDXI's JBIG2 on a
+# 640 KiB VGA, QA F15): PDREND asks the primary for PDMEM_SLOT and draws the band again, so
+# the page is the plain one; refused, the page says "image decoder" and finishes
+for pg in (1, 6):
+    rcw, imw, stw, _ = render(ramp, pg, 'vga')
+    rc, im, st, _ = render(ramp, pg, 'vga', env={'PDR_XNEEDMEM': 'grant'})
+    check('page %d: IMG_OPEN answers NEEDMEM, the slot is granted: = no ask, to the pixel, clean' % pg,
+          rc == 0 and rcw == 0 and im is not None and imw is not None and int((im != imw).sum()) == 0
+          and num(st, 'incomplete') == 0, 'diff=%s %s' % (None if im is None or imw is None else int((im != imw).sum()), st))
+    rc, im, st, _ = render(ramp, pg, 'vga', env={'PDR_XNEEDMEM': 'refuse'})
+    check('page %d: the slot refused: PDF_INC_IMAGE ("image decoder"), finishes' % pg,
+          rc == 0 and num(st, 'incomplete') & INC_IMAGE, str(st))
 rc, im, st, _ = render(ramp, 1, 'vga', env={'PDR_XFAKE': 'n8'})
 check('DCT delivering RGB (PDIM_N8): drawn, clean', rc == 0 and num(st, 'incomplete') == 0 and im is not None and int((im < 250).sum()) > 1000, str(st))
 rc, im, st, _ = render(ramp, 1, 'vga', env={'PDR_XFAKE': 'bits'})

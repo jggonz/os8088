@@ -81,5 +81,8 @@
 #define an_num          ovl_an_num
 #define an_col          ovl_an_col
 #define an_prog         ovl_an_prog
+/* [plat] a page view's reset: called by three verbs, all already here (QA F15
+ * paid for the image decoder's workspace ask with it) */
+#define mode_reset      ovl_mode_reset
 
 #endif
