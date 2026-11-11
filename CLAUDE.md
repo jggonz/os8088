@@ -218,10 +218,15 @@ What `make help` cannot tell you:
   undefined, the source assembles to the body it replaced, byte for byte.
   Which kernel carries which is set in `kernel/kernel.asm`'s KHP block - the
   list and the authority - not on the command line, and
-  `tests/unit/t_khpknobs.py` (fast) assembles kern_big and kern_small with
+  `tests/unit/t_khpknobs.py` (soak) assembles kern_big and kern_small with
   every knob on so the ones shipped OFF cannot rot. Turning one on for another
   kernel is a `%define` in that block and a re-measure; a new one goes behind
   its knob with `tools/os88knob.py`, whose `merge` is the safe form.
+  **`make` does not check kernel internals any more** (the owner, 2026-11-11:
+  the fast and full tiers are for "did you break the build or the OS"), so
+  touching a kernel HOT PATH means naming and running `hotpar` yourself -
+  `python3 tools/os88test.py soak -k hotpar -k khpknobs`, seconds - rather
+  than relying on `make` to catch a parity slip.
 - **Nothing in `build/` is tracked - never commit a binary.** The toolchain is
   deterministic (`os88disk.py` pins the volume serial and every FAT
   timestamp), so any image can be rebuilt byte for byte.
@@ -359,7 +364,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `TOASTSTR label, 'text'` (or `TOASTRUN label` ... `TOASTEND` round a run
   with fields poked at run time) emits the same bytes and FAILS THE BUILD at
   that line past `TOAST_MAX` (24) - the bar drops the rest silently. In C,
-  hand `os88_toast` a literal. `tests/unit/t_toast.py` follows every toast
+  hand `os88_toast` a literal. `tests/unit/t_toast.py` (a `full` row since
+  2026-11-11, so `make test-full`, not every `make`) follows every toast
   argument back and fails on anything else; text only the running program
   knows (a name, a number) goes in `tests/toastdyn.txt` with its reason.
 - **Text is `font_run`, not `font_str` (§6.1, §6.6).** `font_char`/`font_str`
@@ -367,7 +373,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   one of them writes every pixel twice, and the gap between the two passes is
   *visible* on the target machine. `font_run` draws the ground and the glyph in
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
-  `tests/textsites.txt` is the ratchet: a new call site fails the build until it
+  `tests/textsites.txt` is the ratchet: a new call site fails `textrules` (a
+  `full` row since 2026-11-11 - `make test-full`, not every `make`) until it
   is registered with a reason, and the count can only go down. **The sweep is
   finished** (§6.6.5): the registry stands at 70 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
@@ -500,8 +507,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   disks. On kern_mega a claim is an LDT SELECTOR, so a package asks
   `OSAPI_SEG` (§50.6.11) for a derived segment rather than adding to one. The shipped build must still be CORRECT on kern_mega: run low and
   plain, refuse the one tier, or refuse to start with `OS88_MEGA_REFUSE`,
-  and say which at the place. `tests/unit/t_megapkg.py` (fast) fails the
-  build when a shipped build assembles a kern_mega marker (`CPU_F_PM`, the
+  and say which at the place. `tests/unit/t_megapkg.py` (full: `make
+  test-full`, not every `make`) fails when a shipped build assembles a kern_mega marker (`CPU_F_PM`, the
   selector cells) beyond `tests/megapkg.txt`'s per-file allowance - which
   turns one way - or takes a part assembled `-DVB_PM`/`-DPKG_MEGA`, or names
   `PKG_MEGA` with no arm in `$(MEGAPKGS)`. A new arm is a `$(MEGAAPPDIR)`
@@ -524,7 +531,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `OS88_REGION_MOVABLE` where its window exists — and, if it hires a worker,
   `OS88_WORKER_RESTARTABLE` at the spawn, because §66.6.2's frame pins the
   region however it is declared and a region declaration alone is **inert**.
-  `tests/unit/t_movable.py` (fast tier) fails the build otherwise; the way out
+  `tests/unit/t_movable.py` (full tier: `make test-full`, not every
+  `make`) fails otherwise; the way out
   is a line in `tests/movable.txt` with a reason, and the list only turns one
   way. **Before declaring, ask what segment words the package holds that point
   INSIDE itself** — almost always none, which is why the proc is a `ret`; the

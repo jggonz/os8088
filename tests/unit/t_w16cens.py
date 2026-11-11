@@ -77,7 +77,7 @@ STOP = 0xFFF0           # w16_census returns here
 def assemble():
     """WIN16's image and its symbols, as `make win16` assembles it. Cached in
     build/win16/ under a hash of every file the assembly can include, so the
-    fast tier pays nasm's three seconds only after an edit"""
+    row pays nasm's three seconds only after an edit"""
     import hashlib
     h = hashlib.sha256()
     for f in sorted(glob.glob(os.path.join(ROOT, "apps", "win16", "*.*"))

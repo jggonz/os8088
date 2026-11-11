@@ -198,8 +198,9 @@ are the coordinator's final pass, not yours.
   Part 2), not 8086 book clocks. A change that wins on the 8088 and loses on
   a 286 says so, and both numbers are in the note. Use 86Box for the 286 and
   386 side.
-* **Parity.** `hotpar` (fast tier) fails `make` when a pinned hot routine
-  moves parity. In this pass rewriting a hot routine is expected. When you
+* **Parity.** `hotpar` (a soak row since 2026-11-11, so `make` no longer
+  runs it: name it, `python3 tools/os88test.py soak -k hotpar`) fails when a
+  pinned hot routine moves parity. In this pass rewriting a hot routine is expected. When you
   move one ON PURPOSE, edit the table in `tests/unit/t_hotpar.py` in the
   same commit and say in the commit message what you measured. When you move
   one by accident (a cold edit upstream of it), pad it back. Prefer
