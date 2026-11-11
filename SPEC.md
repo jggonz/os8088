@@ -162793,17 +162793,28 @@ still up from step 3 of §87.4 and the gfx lock still held:
    heap copy refilled, a ROM pointer replaced), then `[hb_mode]` = `HB_M_GONE` and the Hibernate window
    closed with `app_close_win` — GONE first, so §87.1's hook leaves this
    image, which is the code running, to the thunk — then
-   `menu_force`, `dock_force`, `wm_paint_all` — `fsx_restore`'s return from a
-   foreign mode (§53), which is what a text screen is. Before any disk work,
-   so the widget the next step arms has a graphics mode to draw in.
-5. The pointer and the image are deleted, which is the one mount the resume
-   makes. Both files, because a resumed hibernation is spent, and 640KB of a
-   32MB disk is not nothing.
-6. The drivers step 1 KEPT are sent `DRVV_WAKE` (`hbm_wakem`, §51.2.5), a
-   refusal unloaded and added to the set below; then the drivers in
-   `[hb_drvmask]`, and those a standing `OSAPI_DRV_SUSPEND` took out
-   (`[hb_susp]`, spent here, §51.11.5), are loaded again, in row order,
-   exactly as `drv_boot` would have loaded them.
+   `menu_force`, `dock_force`, then
+4b. **the drivers step 1 KEPT are sent `DRVV_WAKE`** (`hbm_wakem`, §51.2.5) -
+   BEFORE the paint, because a wake is milliseconds of port I/O and no disk,
+   so the desktop the paint shows is one whose card, mouse and Web drive are
+   already back (the Wire's icon too: its paint verb is `ETHER.DRV`'s, and a
+   reloaded driver registered it after the paint, a second paint). A refusal
+   is unloaded and joins the rows to load at step 6. Then `wm_paint_all` —
+   `fsx_restore`'s return from a foreign mode (§53), which is what a text
+   screen is. Before any disk work, so the widget the next step arms has a
+   graphics mode to draw in.
+5. **The busy pointer** (`cur_busy_on`, §7.5), from the frame the paint
+   finished: from here to step 7's `gfx_unlock` the machine takes no input -
+   the deletes and the loads are disk work with the lock held - and a desktop
+   that looked ready and then ignored the user for seconds was the DOS
+   return's whole complaint (docs/plans/B4-WAKE-PLAN.md). `gfx_unlock` takes
+   it off, as it does every clock. Then the pointer and the image are
+   deleted, which is the one mount the resume makes. Both files, because a
+   resumed hibernation is spent, and 640KB of a 32MB disk is not nothing.
+6. The drivers in `[hb_drvmask]`, those whose wake refused at 4b, and those a
+   standing `OSAPI_DRV_SUSPEND` took out (`[hb_susp]`, spent here, §51.11.5),
+   are loaded again, in row order, exactly as `drv_boot` would have loaded
+   them.
 7. `blk_wake`, `[hb_resumes]` += 1, `gfx_unlock`,
    **`[sch_lock]` = 0** — set, not decremented: the image holds the count as
    the write left it, and `dsk_xfer` raises it around every int 13h, so it
@@ -162814,7 +162825,8 @@ still up from step 3 of §87.4 and the gfx lock still held:
 
 **What deliberately does not survive**: the BIOS data area (the ROM's, and
 a key typed during the restore is in its buffer, not the kernel's); the
-state of any driver that owns hardware (loaded fresh); extended memory (the
+state of any driver that owns hardware (loaded fresh - or, for one that
+declares `OS88_DRV_WAKES`, re-armed in place by its WAKE, §51.2.5); extended memory (the
 item greys while any is held) — the HMA's pool apart, which step 0b puts
 back; and the disk caches (rebuilt). The mouse
 is re-armed by `hbm_wake`'s step 3d (§96.45.2): the drain, MCR and IER, the
@@ -195155,6 +195167,16 @@ the handoff sums what runs above 1MB, and `kd_resume` sums it again before it
 jumps. A difference — a DOS program that wrote up there or shut A20 — is
 `int 19h`, where XMEM.DRV installs `.cold` afresh. A ROM-adopted `.cold`
 (F4000) cannot be overwritten and needs no check.
+
+**The drivers come home before the desktop does** (§87.6 steps 4b-6,
+§51.2.5): the live route lands in `hbm_wake` like any resume, so a driver
+that declares `OS88_DRV_WAKES` - the NIC, the PicoMEM's USB mouse, the Web
+drive, kern_emu's absolute pointer - was put to SLEEP rather than unloaded
+before the picture and is WOKEN before the paint, with `ETHER.DRV` keeping
+its lease rather than sitting through READY's DHCP (§72.5.3); and what
+still has to be read off the disk is read behind the busy pointer rather
+than behind a desktop that looks ready. Not kern_mega, whose park restores
+nothing it would save (§51.2.5).
 
 **MEASURED: 996 bytes, and this one crosses the rung.** The image goes 35,476
 → 36,472, `KD_IMG_KB` 35 → 36, and the DOS program **585 KB → 584**. 392 bytes

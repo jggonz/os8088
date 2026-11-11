@@ -5350,9 +5350,13 @@ hbm_wake:
     call hbm_kd                
     mov bp, dock_force
     call hbm_kd                
-    KDOOR wm_paint_all
-    ; 5. the two files are spent, and the drivers come back -----------------
-    call hbm_forget
+    ; 4b. THE DRIVERS, BEFORE THE PAINT (SPEC.md 87.6 step 4b, 51.2.5). The
+    ; kept ones are WOKEN here - milliseconds each, and the desktop the
+    ; paint below shows is then one whose card, mouse and Web drive are
+    ; already back, the Wire's icon included (its paint verb is ETHER.DRV's
+    ; own, and a reloaded ETHER re-registered it after the paint: a second
+    ; paint). A wake that refuses joins the rows to LOAD, which is disk work
+    ; and waits for the paint, behind the busy pointer.
     ; **AND A SUSPEND'S ROWS COME BACK THROUGH THIS DOOR TOO** (SPEC.md
     ; 51.11.5). `[hb_drvmask]` is what `hbm_wrimg`'s sweep found still MOUNTED when it
     ; swept, so a row `OSAPI_DRV_SUSPEND` had ALREADY unmounted is not in it -
@@ -5388,8 +5392,21 @@ hbm_wake:
     or dx, [hb_susp]
     mov word [hb_susp], 0
 %ifdef HBM_KEEPS
-    call hbm_wakem              ; ...and the KEPT rows woken, a refusal
-%endif                          ; joining the load (SPEC.md 51.2.5)
+    call hbm_wakem              ; the KEPT rows woken, a refusal joining DX
+%endif
+    push dx
+    KDOOR wm_paint_all
+    ; 5. the busy pointer, then the two files spent and the drivers loaded.
+    ; **THE CLOCK FROM THE FIRST FRAME** (SPEC.md 87.6 step 5): from here to
+    ; step 6's gfx_unlock the machine takes no input - the deletes and every
+    ; reload are disk work with the lock held - and a desktop that looks
+    ; ready and then ignores the user for seconds was the DOS return's whole
+    ; complaint. gfx_unlock takes it off (SPEC.md 7.5), so nothing here has to
+    ; - and the reload's own file reads find it worn (cur_busy_on.wornh)
+    mov bp, cur_busy_on
+    call hbm_kd
+    call hbm_forget
+    pop dx
     call hbm_reload_m
     ; 5b. ...and the DOS program's exit code, to the DOS.O88 that asked ---
     ; **THIS IS THE ONLY THING THE RETURN ADDS TO THE WAKE**
