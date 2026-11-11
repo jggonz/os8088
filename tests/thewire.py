@@ -1082,8 +1082,22 @@ def main():
         pseg = u16(rec, dispcp.W_SEG)
         say("The Wire at %04X, image %d bytes" % (pseg, img))
 
+        def wseg():
+            """The Wire's segment NOW, out of its window record's W_SEG.
+
+            **NOT `pseg`, READ ONCE.** The Wire's region is declared movable
+            (OS88_REGION_MOVABLE_NOKEEP, and its worker restartable - SPEC.md
+            66.6.1, 66.6.2), and assertions 17 and 18 POST compactions at
+            MEM_PG_HIGH, which move it. A segment banked at launch then reads
+            the bytes the region left behind: wr_sel, wr_grey and wr_msg came
+            back as plausible junk (wr_sel 13961, wr_grey 255, a status cell
+            of bitmap bytes) and every assertion after the archive chain
+            failed about the Wire rather than about the row."""
+            return u16(m.read(S("wm_wins") + ww * dispcp.WIN_SIZE
+                              + dispcp.W_SEG, 2))
+
         def b(name, n=1):
-            return m.readseg(pseg, img + off[name], n)
+            return m.readseg(wseg(), img + off[name], n)
 
         def w(name):
             return u16(b(name, 2))
@@ -1132,7 +1146,7 @@ def main():
         # the machine's own wr_count. Reading it is reading what the LIST says
         # rather than what the catalog holds.
         def shown():
-            return u16(m.readseg(pseg, img + off["wr_sb"] + 8, 2))
+            return u16(m.readseg(wseg(), img + off["wr_sb"] + 8, 2))
 
         say("the list shows %d of %d" % (shown(), n))
         if shown() != NREC:
@@ -1224,7 +1238,7 @@ def main():
             missed the Load Program button by nothing visible and reported
             OSAPI_PKG_START as broken.
             """
-            return [u16(m.readseg(pseg, img + off[name] + i * 2, 2))
+            return [u16(m.readseg(wseg(), img + off[name] + i * 2, 2))
                     for i in range(4)]
 
         def press(name):
@@ -1826,7 +1840,7 @@ def main():
         # THE STATUS CELL IS READ ON BOTH ARMS, and the failing one needs it
         # more: wr_pkgrun writes the LD_* code into it in words, because `it
         # did not start` with no number is a bug report nobody can act on.
-        msg = m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+        msg = m.readseg(wseg(), w("wr_msg"), 48).split(b"\0")[0]
         say("the status cell says %r" % msg.decode("latin1", "replace"))
         if len(after) <= len(before):
             no("Load Program on the archive opened no window, and the tree "
@@ -1869,7 +1883,7 @@ def main():
                    "<title> from the Wire`" % msg)
 
         def cell():
-            return m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+            return m.readseg(wseg(), w("wr_msg"), 48).split(b"\0")[0]
 
         # --- 14: A PACKAGE FOR A NEWER os8088, GREYED (SPEC.md 92.2) -------
         # The catalog's WC_PKGFMT is one past ours, so both buttons grey on
