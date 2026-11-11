@@ -778,6 +778,15 @@ not, and `dsk_xfer` calls `spl_step` once per sector — so they are inside the
 bar that §15.3 went to some trouble to make honest, instead of ahead of it on
 a blank screen.
 
+**On kern_big and kern_emu the first mount is the hibernation probe's, not
+`drv_boot`'s** (§87.5's P1, docs/plans/HIBER-RESUME-PLAN.md B2). It runs
+straight after the last `.ovl` call (`snd_init`) and mounts the boot root it
+looks in, so `.ovl`'s deadline moved up to it — and `mouse_init`, which now
+runs after it, is `.boot3`'s on those kernels (`MOU_IN_BLOB`, kern_small's
+arrangement): `.ovl` 3,172 -> 2,050 on kern_big and `.boot3` +1,122 for it,
+both transient. `os88ovlchk`'s rule 2e marker is whichever of `drv_boot_x`
+and `hb_probe_x` comes first in `kmain_o`.
+
 ##### 2.5.3.1 Three rules, because the deadline is now a property of the half
 
 `tools/os88ovlchk.py` gained all three before a body moved, and each of the
@@ -15537,6 +15546,16 @@ not footprint. (Kernel size pass 8 took the five shims out of `.text` too: the
 probe's calls are near calls to overlay-side stubs, `mou_ov_*`, that share one
 far call through §2.9.4's `spw_near` with BP naming the routine — 20 resident
 bytes on kern_big and 8 on kern_small, for 11 fewer bytes of overlay.)
+
+**…and on kern_big and kern_emu it is `.boot3`'s now, and runs AFTER the
+hibernation probe** (§87.5's P1, HIBER-RESUME-PLAN B2): a boot that resumes
+re-arms the IMAGE's mouse at the wake (§96.45.2) and has no use for this
+probe's waits, so `kmain_o` sets the mouse up after P1 — and P1 is the first
+mount, which takes `.ovl` with it (§2.5.3). `MOU_IN_BLOB` is defined there as
+on kern_small, so every block above assembles into `.boot3`, which lives until
+`mem_unblob`. Nothing reads mouse state before `kbm_adopt`, which still
+follows `drv_boot`; `desk_init`'s drive probe and the rest of the `.ovl`
+calls now run before it.
 
 #### 9.4.8 The first offer is timed from the desktop, and the drain ends on quiet
 
@@ -35213,6 +35232,12 @@ hard-disk boot's sixteen notches are spent before a sector is read, so 0% and 6%
 are what those phases really are — a denominator seeded from `SPL_POST` cannot
 know that `mouse_init` is a fifth of the wall clock. Naming the phase is the
 cheap half; §15.5's profile is where the case for shortening one is made.
+
+**On kern_big and kern_emu the two are the other way round** (§87.5,
+§9.4.7): the mouse is set up after the hibernation probe, which comes after
+the drive probe, so the line reads `Looking for Drives` first and `Looking
+for Mouse` second, at the notches that follow; kern_small is as the table
+says.
 
 #### 15.6.4.1 The harness built a disk that disagreed with what it asked for
 
@@ -104555,6 +104580,38 @@ resident titles - `fdlg_s_drive`'s `Drive` and the Disk window's root title
 `Disk` - carry their own bytes again. `ss_row` and `xm_row` still point
 `DRVR_TITLE` at their file names: nothing walks them for a title.
 
+### 51.3.4 Two passes on kern_big and kern_emu (`drv_boot_x`, `drv_boot2_x`)
+
+`drv_boot` loads in two passes there, with §87.5's second hibernation probe
+between them (docs/plans/HIBER-RESUME-PLAN.md B2). **Pass 1** (`drv_boot_x`) is
+everything before the loop as it always was — the mount, `xm_boot_x`, the
+settings, Force Color, the adapter — and then the loop over the rows whose
+class is in **`HB_KEEPSET`**: `DRVC_DISK`, `DRVC_FILE`, `DRVC_FILE2`,
+`DRVC_CD`, `DRVC_EMS`. That is exactly the set a hibernate keeps across the
+picture (§87.4 step 1, `hbm_sweep`'s skip list), and so the only drivers a
+resume can need to reach its image. **Pass 2** (`drv_boot2_x`) is the same
+loop over every other wanted row — sound, the network, pointing devices,
+`DRVC_OVL` rows — and then `Starting os8088`. A boot that resumes at the probe
+between them never loads a driver the image would only shut down: the wake
+loads its own from `[hb_drvmask]` (§87.6 step 6).
+
+**A normal boot is unaffected in behaviour; only the ORDER of the loads
+moves.** Every wanted row is still loaded, by the same `bdl_load`, with the
+same failure handling, and `drv_tab`'s rows do not move — `[hb_drvmask]` is a
+row mask and `hbm_reload_m` still loads in row order. What changes is which
+claim is made first (the keep-set's), so the heap of a normal boot is laid out
+differently (`heapcheck`, `memp`). The status line counts across both passes:
+the total is counted once, before pass 1, and pass 1 hands its ordinal to pass
+2 (`bdb_dx`), so `Loading Driver n/N` is numbered in LOAD order. A machine with
+no system disk takes `.nodisk` in pass 1, which marks every wanted row of both
+classes, and pass 2 then does nothing. The class test is the row's class as a
+bit (`bdb_pass`): `DRVC_OVL` (40h) shifts out to 0 on an 8086 and to bit 0 or
+1 on a 286+, which no class uses, so a non-class row is "the rest" either way.
+kern_mega loads in one pass and probes after it (§87.9); kern_small has no
+drivers. **The split is the keep-set and the rest on purpose**: it is the
+line a later step that keeps the hardware drivers in the image (the plan's B4,
+not taken) would draw too.
+
 ### 51.4 Unloading, and why detach comes first
 
 `drv_unload` detaches, then frees — never the other way round. The detach
@@ -161748,16 +161805,59 @@ samples, and anything in the kernel's own memory.
 
 ### 87.5 Resume — the probe, the question, the stub
 
-**The probe** (`hb_probe_x`, `.boot3`, transient, from `kmain_o` after
-`drv_boot` and before the first paint) looks for `HIBERNAT.PTR` in the root of the ONE
+**The probe** (`hb_probe_x`, `.boot3`, transient, from `kmain_o` before the
+first paint) looks for `HIBERNAT.PTR` in the root of the ONE
 volume a hibernate writes to — `hb_pick`'s — inside a
 `drv_vol_bank`/`drv_vol_back` bracket (§51.5.2), and reaches it the way
 `drv_load` reaches a driver: a quiet navigation (§18.9, no listing and no
 icon harvest) and `drv_find`'s walk of the directory sectors rather than the
 snapshot. A floppy-only machine pays eight compares and no I/O; a machine
 with a hard disk pays one quiet mount of its root, which on a hard-disk boot
-is the root it is already standing in. A hit records the
-volume in `[hb_vol]`, and then:
+is the root it is already standing in.
+
+**Where it runs, and why twice** (docs/plans/HIBER-RESUME-PLAN.md B2, for the
+HARD-DISK boot an installed machine makes). On kern_mega, once, after
+`drv_boot` (§87.9). On kern_big and kern_emu (`HB_EARLY`, kernel.asm) at two
+points of `kmain_o`, so a boot that resumes does only what the resume needs:
+
+```
+... desk_init, dock_init, files_init, drv_init, drv_sniff, snd_init  (.ovl: the last)
+P1   hb_probe_x        the boot volume - a hard-disk boot's own partition
+     mouse_init        moved here: §9.4.1's waits are a resume's to skip
+     drv_boot_x        PASS 1: XMEM.DRV, SYSTEM.CFG, the adapter, and the
+                       keep-set classes alone (HB_KEEPSET, §51.3.4)
+P2   hb_probe_x        only if P1 did not settle it
+     drv_boot2_x       PASS 2: sound, the network, pointing devices, the rest
+... kbm_adopt, spl_finish, as_boot, kmain
+```
+
+On the installed machine P1 finds the image on the partition it booted from
+and resumes it from there: no mouse probe, no driver loaded and shut down
+again, no paint. A floppy boot has no fixed volume at P1 (`hb_pick` sees only
+`DVK_BIOS` rows and `HDD.DRV` has not attached) and pays eight compares; its
+image, on `HDD.DRV`'s volume, is found at P2 after pass 1 — the
+`hibernatedrv` shape — which still skips pass 2 and the desktop.
+
+**P1 decides or defers; it never deletes what it cannot judge yet.** Two
+fields of the pointer's head can differ at P1 and match at P2, because pass 1
+is what changes them: `[api_coldseg]`'s high byte (`XMEM.DRV` puts `.cold` in
+the HMA) and `[vid_kind]` (SYSTEM.CFG's adapter switch); the HMA pool's table
+(`ROMF_HTAB`) does not exist before `XMEM.DRV` either. So `hbm_ask` takes a
+mismatch there as **not yet** while `[hb_down]` = 1 (P1): no toast, nothing
+deleted, the image dropped, and P2 asks again and decides — a P1 that deleted
+an HMA image would be silent data loss. `[hb_down]` is the window's armed
+button, which nothing reads until the Hibernate window opens and zeroes it,
+so it carries the state between the two calls for no resident byte: 0 before
+P1, 1 during it, 3 when P2 is still to ask, 0 during P2 and 2 once settled.
+P1 **settles** it when the boot volume holds no pointer (`hb_pick` takes that
+volume first whenever it is fixed, so P2 would ask the same root) or Shift
+skipped it; anything else - a deferral, a refusal (P2 then finds nothing), no
+fixed volume yet - leaves P2 to ask. A normal boot with no hibernation pays
+one quiet mount of the boot root at P1 on a hard disk, which `drv_boot`'s
+mount then finds already standing, and nothing else: no module is loaded and
+no claim is made.
+
+A hit records the volume in `[hb_vol]`, and then:
 
 - **Either Shift held** — the BIOS's shift byte through `int 16h` AH=02,
   `as_boot`'s read (§26.10.5) — **skips it, and deletes both files**, the
@@ -161865,7 +161965,16 @@ still up from step 3 of §87.4 and the gfx lock still held:
 1. Channel 0 back in the kernel's mode 2, divisor 0, and `[sch_pit_last]`
    re-seeded from it (the live route, §96.49, comes home in the ROM's mode 3
    that `hbm_dosrun` put back, and a DOS program may have left any divisor),
-   the speaker gate off, then `sti`. The IVT is the image's, and with
+   the speaker gate off, **the IMAGE's 8259 masks** — `hbm_wrimg` banks them
+   after its sweep (into the module's own `hbm_imr`, so they travel in the
+   picture), and they replace whatever the stub put back, which is the masks of
+   whoever staged it: the fresh boot's on the reboot route, `kern_dos`'s on the
+   live one. Since §87.5's early probe a fresh boot that resumes has opened
+   neither the mouse's line nor a driver's, so a line one of the image's KEPT
+   drivers owns would otherwise stay shut; this is kern_mega's model
+   (`mega_hbwake`) on every kernel, and step 3d and the reload then open what
+   they own (the review's hiber-14). An XT's slave mask is never written: its
+   0A1h is the NMI register's alias (§9.9.2). Then `sti`. The IVT is the image's, and with
    `sch_lock` up the tick counts and switches nobody.
 2. The clock: the ten bytes `clk_sec`..`clk_year` (not the two display
    toggles after them, which are the image's) come out of the staging

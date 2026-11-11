@@ -230,6 +230,13 @@ DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; driver (SPEC.md 9.12.5)
 %endif
 
+; HB_KEEPSET - the classes a hibernate KEEPS across the picture (SPEC.md 87.4
+; step 1: hbm_sweep's skip list, the same five) and so the only drivers a
+; resume can need to reach its image: drv_boot_x's PASS 1 on kern_big and
+; kern_emu, before the hibernation probe; everything else is pass 2
+; (drv_boot2_x, SPEC.md 51.3.4). A row's class as a bit.
+HB_KEEPSET  equ (1 << DRVC_DISK) | (1 << DRVC_FILE) | (1 << DRVC_FILE2) | (1 << DRVC_CD) | (1 << DRVC_EMS)
+
 DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
                                 ; drivers/os88drv.inc: a driver-shaped image
                                 ; its OWNER loads and attaches, with no row in
@@ -5877,6 +5884,9 @@ drv_boot_x:
     ; the loop below applies, which is the only way the two can agree about
     ; what counts as a driver being loaded; DRVR_WANT is settled by now, the
     ; settings file having been read above.
+%ifndef KERN_MEGA               ; (HB_EARLY: kern_big and kern_emu)
+    mov byte [cs:bdb_st], 1     ; PASS 1 OF TWO (SPEC.md 51.3.4): the loop
+%endif                          ; below takes the keep-set classes alone
     xor dh, dh                  ; DH = how many, DL = how many so far
     xor cl, cl
 .count:
@@ -5889,10 +5899,15 @@ drv_boot_x:
     jb .count
     xor dl, dl
 
+.pass:                          ; (drv_boot2_x enters here, DX its own)
     xor cl, cl
 .next:
     call drv_boot_want          ; a row with a file that is wanted?
     je .skip
+%ifndef KERN_MEGA
+    call bdb_pass               ; ZF = 1: a row of THIS pass's classes
+    jne .skip
+%endif
     inc dl                      ; ...and NAME it, before the sectors start
     mov al, dl
     mov ah, dh
@@ -5926,6 +5941,13 @@ drv_boot_x:
     inc cl
     cmp cl, DRV_MAX
     jb .next
+%ifndef KERN_MEGA
+    cmp byte [cs:bdb_st], 1     ; the end of PASS 1: the ordinal and the total
+    jne .p2end                  ; wait for pass 2, and the status line still
+    mov [cs:bdb_dx], dx         ; names the last driver read - the probe and
+    jmp short .out              ; the mouse come between (SPEC.md 87.5)
+.p2end:
+%endif
 
     DDG 0x0F                    ; DRVDIAG: every load returned
     B2CALL ovl_spl_msg_boot     ; the loads are done and the desktop is not up
@@ -5966,6 +5988,54 @@ drv_boot_x:
     pop bx
     pop ax
     retf
+%ifndef KERN_MEGA
+; -----------------------------------------------------------------------------
+; drv_boot2_x - PASS 2: every wanted row drv_boot_x's pass 1 left (SPEC.md
+;               51.3.4). kmain_o calls it after the hibernation probe that
+;               follows pass 1 (87.5), so a boot that resumes never loads a
+;               driver the image would only shut down: pass 1 is the KEEP-SET,
+;               the classes a hibernate keeps across the picture (HB_KEEPSET,
+;               87.4 step 1) and so the only ones a resume can need to reach
+;               its image; pass 2 is sound, the network, pointing devices,
+;               the display's helpers - everything the wake loads from its own
+;               [hb_drvmask] anyway. kern_big and kern_emu only (HB_EARLY);
+;               kern_mega loads in one pass and probes late.
+; in:  nothing; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+drv_boot2_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [cs:bdb_st], 1     ; pass 1 MOUNTED and walked: anything else
+    jne .q                      ; (no system disk) is .nodisk's, already said
+    inc byte [cs:bdb_st]        ; 2: the rest
+    mov dx, [cs:bdb_dx]         ; the status line's ordinal and total, on
+    jmp drv_boot_x.pass         ; from pass 1's
+.q:
+    jmp drv_boot_x.out
+
+; bdb_pass - is row BX this pass's? out: ZF = 1 yes. Clobbers AX
+; The class as a BIT, so the keep-set is one constant: DRVC_OVL (40h) shifts
+; out to 0 on an 8086, and on a 286+ the count is taken mod 32, leaving bit
+; 0 or 1, which no class uses - a non-class row is "the rest" either way
+bdb_pass:
+    push cx
+    mov cl, [bx+DRVR_CLASS]
+    mov ax, 1
+    shl ax, cl
+    test ax, HB_KEEPSET
+    mov al, [cs:bdb_st]         ; 1 or 2 (a `mov` keeps the test's ZF)
+    jz .r
+    inc ax                      ; keep-set: 2 in pass 1, 3 in pass 2
+.r:
+    cmp al, 2                   ; rest: 1 in pass 1, 2 in pass 2
+    pop cx
+    ret
+bdb_st:     db 0                ; 0 unrun, 1 pass 1 (mounted), 2 pass 2
+bdb_dx:     dw 0                ; pass 1's DL (so far) and DH (the total)
+%endif
 drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
     mov al, cl                  ; not wanted, else BX = it - the one question
     call b3_cgo                 ; all three walks above ask (only CL is read).

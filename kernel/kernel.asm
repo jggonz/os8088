@@ -1269,6 +1269,27 @@ DRV_HMA_SEG equ 0xF000
 %endif
 %endif
 
+; HB_EARLY - the hibernation probe runs BEFORE the drivers and the mouse
+; (SPEC.md 87.5, docs/plans/HIBER-RESUME-PLAN.md B2): kern_big and kern_emu.
+; kmain_o probes right after the last `.ovl` call (P1), then sets the mouse up,
+; loads drv_boot's PASS 1 (the classes a hibernate keeps, HB_KEEPSET), probes
+; again (P2) if P1 could not settle it, and only then loads pass 2 - so a boot
+; that resumes never runs mouse_init's waits or loads a driver the image would
+; only shut down. kern_mega keeps the late probe: its protected-mode images
+; are judged after mega_enter (87.9). kern_small has no hibernate.
+;
+; IT TAKES mouse_init OUT OF `.ovl` ON THOSE KERNELS: the probe mounts, the
+; mount takes the FAT window `.ovl` was read onto (SPEC.md 2.5.3), and the
+; mouse now runs after it - so its body is `.boot3`'s there, kern_small's
+; arrangement (MOU_IN_BLOB). `.ovl` sheds ~0.8KB and `.boot3` gains it: both
+; transient, neither resident.
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define HB_EARLY 1
+  %define MOU_IN_BLOB 1
+ %endif
+%endif
+
 ; SPEC.md 30.5-30.6's Dock PLACEMENT and AUTO-HIDE - the left and right
 ; edges, the hidden strip, the Control Panel's Dock page, SYSTEM.CFG's 'DK'
 ; key and the DOCK.DRV module that carries the advanced half - are kern_big's
@@ -4079,7 +4100,7 @@ ovw_band_init:      call band_init
 ; (ovw_dock_geom went in kernel size pass 13: vid_init, in the blob, reaches
 ; dock_geom through spw_near with the BP it already banks)
 ; ...and the MOUSE's (SPEC.md 9.4.7). mouse_init's boot half is in the
-; overlay and everything mou_hotplug or mouse_unhook can reach stayed resident,
+; overlay (`.boot3` on kern_small, kern_big and kern_emu - HIBER-RESUME-PLAN B2) and everything mou_hotplug or mouse_unhook can reach stayed resident,
 ; so the port writers the probe uses and the round counter it resets are edges
 ; that cross. They had five shims here; they go through viddet.inc's spw_near
 ; now, from overlay-side stubs in mouse.inc (kernel size pass 8), and what is
@@ -4830,6 +4851,8 @@ kmain_o:
     mov [mdg_n0], ax
 %endif
     MARKW 18
+%ifndef HB_EARLY                ; (kern_big and kern_emu set the mouse up after
+                                ; the hibernation probe, below)
     B2CALL   ovl_spl_msg_mouse  ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
@@ -4848,6 +4871,7 @@ kmain_o:
     mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 6%% frame
     mov [mdg_n1], ax
 %endif
+%endif                          ; HB_EARLY
     MARKW 20
     B2CALL   ovl_spl_msg_fdd    ; ...and the SECOND stall the hard disk exposed
                                 ; (SPEC.md 15.6.4): desk_init asks SPEC.md
@@ -4900,6 +4924,29 @@ kmain_o:
     mov [mdg_n2], ax
 %endif
     MARKW 28
+%ifdef HB_EARLY
+    ; --- P1: IS THERE A HIBERNATION TO RESUME, BEFORE ANY OF THE REST? -------
+    ; (SPEC.md 87.5) The last `.ovl` call is above, so the mount this makes is
+    ; allowed (os88ovlchk rule 2e's first mount is here now). On a hard-disk
+    ; boot the boot partition IS the volume a hibernate writes to, and a valid
+    ; image is resumed from inside this call - no mouse waits, no driver, no
+    ; paint. Anything it cannot judge yet (`.cold` in the HMA, an adapter
+    ; SYSTEM.CFG switches to) is DEFERRED to P2, never deleted; a floppy boot
+    ; has no fixed volume here and pays eight compares
+    B3CALL   hb_probe_x
+    B2CALL   ovl_spl_msg_mouse  ; ...the mouse, AFTER the probe (SPEC.md 9.4,
+                                ; 15.6.4): its two waits are the largest phase
+                                ; of a boot that is not the disk, and a resume
+                                ; re-arms the IMAGE's mouse (96.45.2)
+    B3CALL   mouse_init         ; `.boot3` here (MOU_IN_BLOB): `.ovl` is dead
+    MARKW 19
+    BPMARKW 5
+    B2CALL   splf_step
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1 (after the 12%% frame here)
+    mov [mdg_n1], ax
+%endif
+%endif
 
 %ifdef KERN_MEGA
     B3CALL   mega_wrprobe       ; a DOS session the machine was RESET out of
@@ -4911,6 +4958,13 @@ kmain_o:
                                 ; `.boot3` on every kernel: kern_big's since
                                 ; BOOT3-PLAN wave 2, kern_small's one-byte
                                 ; `retf` rung since wave 4)
+%ifdef HB_EARLY                 ; ...which was PASS 1 here, the keep-set
+    B3CALL   hb_probe_x         ; P2: only if P1 did not settle it - a floppy
+                                ; boot with the image on HDD.DRV's volume, or
+                                ; one P1 deferred - with XMEM.DRV and the disk
+                                ; drivers now attached (SPEC.md 87.5)
+    B3CALL   drv_boot2_x        ; ...and PASS 2, the rest (SPEC.md 51.3.4)
+%endif
 %ifdef KERN_EMU
     B3CALL   vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
@@ -4938,15 +4992,15 @@ kmain_o:
                                 ; settings file did not ask for - a driver is
                                 ; several seconds of floppy on this machine
     MARKW 29
-%ifdef KERN_BIG
+%ifdef KERN_MEGA
     B3CALL   hb_probe_x         ; ...and is there a hibernation to resume?
-                                ; (SPEC.md 87.5) After drv_boot, so a driver
-                                ; volume is mounted to be looked at; before
-                                ; the first paint, because on kern_big and
-                                ; kern_emu a valid image is resumed from
-                                ; INSIDE it and none of what follows is ever
-                                ; spent on a session about to be overwritten
-                                ; (kern_mega posts the check for ui_task)
+                                ; (SPEC.md 87.5, 87.9) kern_mega's LATE probe:
+                                ; after drv_boot, so a driver volume is
+                                ; mounted to be looked at, and posting the
+                                ; check for ui_task's first pass after
+                                ; mega_enter, where a protected-mode image can
+                                ; be judged. kern_big and kern_emu probe at
+                                ; P1 and P2 above (HB_EARLY)
 %endif
     call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
                                 ; mouse's pointer half out of `.boot3m` into a
