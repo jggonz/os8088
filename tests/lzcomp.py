@@ -177,6 +177,28 @@ def menu_pick(m, mo, cell, item):
 
 
 
+def close_new(m, mo, before):
+    """CLOSE what a "does it still run" leg opened, the moment it has said so.
+
+    The subject is the first of PKG_CANDIDATES the host compresses, and one
+    of them is TIMER.O88 - a stopwatch that STARTS when it opens (SPEC.md
+    111) and redraws its digits every guest second. Left on the glass it
+    makes every later `settle` a race between three captures and the next
+    second, won or lost on how much guest time the HOST spends between two
+    looks: Bochs's pace leaves the guest running while the harness reads
+    the screen, so a loaded box loses it. `mega-lzcomp` did, in a soak: leg
+    4's settle saw the digits change for 300 guest seconds, the saver came
+    up, and the row failed naming the saver. A window that is not this
+    row's subject any more has no business animating under its waits - so
+    each one is closed through os88ui (a confirmed close, off the guest's
+    own tables), and the later legs see the screen the earlier ones did."""
+    ui = _UI.get(id(m))
+    if ui is None:
+        ui = _UI[id(m)] = os88ui.UI(m, mouse=mo, sym=S)
+    for slot in [s for s in dispcp.win_list(m, S) if s not in before]:
+        ui.close(slot)
+
+
 def toast(m):
     """What the last verdict said. Empty when nothing is up."""
     raw = m.read(S("toast_buf"), TOAST_MAX + 1)
@@ -611,6 +633,10 @@ def main():
     with os88marty.launch(os88build.at("build/os8088-360.img"),
                           apps=disk, machine=MACHINE[a.adapter]) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
+        # THE SAVER IS NOT THIS ROW'S SUBJECT, and a run long in guest time
+        # (Bochs, kern_mega) can reach its five idle minutes inside one wait
+        # - after which nothing settles (os88marty.no_saver)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         fl = os88flush.Flush(marty=m)
 
@@ -714,6 +740,7 @@ def main():
         ok = len(after) > len(before)
         say("  runs       %s  (%d windows, was %d)"
             % ("ok " if ok else "BAD", len(after), len(before)))
+        close_new(m, mo, before)
         if not ok:
             fails.append("the compressed %s opened no window - "
                          % pname +
@@ -789,6 +816,7 @@ def main():
         ok = len(after) > len(before)
         say("  unruns     %s  (%d windows, was %d)"
             % ("ok " if ok else "BAD", len(after), len(before)))
+        close_new(m, mo, before)
         if not ok:
             fails.append("the EXPANDED %s opened no window - the round "
                          % pname +
@@ -817,8 +845,9 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, row)
         rx, ry = dispcp.row_xy(wx, wy, row)     # (a VISIBLE row: compress's)
         mo.click(rx, ry)        # RAISE THE DISK WINDOW FIRST. Two package
-        os88marty.settle(m)     # instances are on screen by now (3a and 7a),
-                                # and a right-press goes to whatever is under
+        os88marty.settle(m)     # instances were on screen here (3a and 7a)
+                                # before close_new, and a click is cheap
+                                # insurance: a right-press goes to whatever is under
                                 # the pointer - which was this leg's whole
                                 # failure the first time it ran: an empty
                                 # toast and an untouched file, reported
