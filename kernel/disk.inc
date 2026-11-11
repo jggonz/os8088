@@ -2088,6 +2088,21 @@ dsk_xfer:
     je .wpfail                  ; write-protected: retrying cannot help (ZF=1
                                 ; rides to a `jbe .fail` below, which takes it:
                                 ; .fail itself is out of a byte's reach)
+    ; **MEDIA CHANGED** (BR-16, SPEC.md 18.9.1): an AT BIOS's change line is
+    ; the only hardware word that the disk was swapped, and a retry that
+    ; succeeds throws it away - so a write would land on the NEW disk with
+    ; the OLD disk's FAT. While MOUNTED, `shr` takes [dsk_mntok] 1 -> 0 with
+    ; CF = 1 (which .wpfail's `jbe` takes): the gate shuts, the next operation
+    ; remounts, and this one fails with 06h unretried. Inside a mount it is
+    ; already 0, stays 0 with CF = 0, and the retry stands
+    cmp ah, 0x06
+    jne .retry
+    shr byte [dsk_mntok], 1
+    jc .wpfail
+%ifndef DSK_PMHD                ; PARITY: these 11 bytes and DSK_PMHD's 51 are
+    nop                         ; an even pair; without DSK_PMHD this is the
+%endif                          ; other half (see the note past .ijf)
+.retry:
 %ifndef KD_BUILD                ; **A FAILING DISK SAYS SO** (SPEC.md 12.8.3.2).
     dec byte [sch_lock]         ; FPG_WARM counts sectors MOVED and a retry
     push cx                     ; moves none, so a one-sector read failing on
@@ -2597,9 +2612,12 @@ dsk_xfer:
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
                                 ; (t_hotpar.py). DSK_PMHD's bytes in dsk_xfer
-%ifdef DSK_PMHD                 ; are 51 since its mask moved to .attempt -
-    nop                         ; odd, the `jmp .attempt` relaxing to near
-%endif                          ; among them - so they bring a second
+                                ; are 51 since its mask moved to .attempt -
+                                ; odd, the `jmp .attempt` relaxing to near
+                                ; among them - and the media-changed test's
+                                ; 11 (BR-16) are the other odd half, so the
+                                ; second pad that stood here is that test's
+                                ; own, on the kernels WITHOUT DSK_PMHD
 
 
 

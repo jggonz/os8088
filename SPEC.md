@@ -37775,6 +37775,21 @@ maintain the byte reads 0, which means "validate", which is what every mount
 does today. The failure mode of being wrong is a wasted mount, never a
 skipped one.
 
+**An AT BIOS's change line is believed when it SPEAKS, on top of the motor
+test (BR-16).** The change line was declined as a *replacement* for the
+motor test (docs/plans/completed/DISK-PERF-PLAN.md §4), but status `06h`
+arrives anyway on a transfer already being made, and `dsk_xfer` used to treat it as any other
+failure: reset, retry, the retry succeeds, and the one hardware word that
+the disk was swapped is gone - so a fast swap inside a passing motor test, or
+inside a batch, wrote the new disk with the old disk's FAT. Now `06h` while
+MOUNTED shuts the gate (`[dsk_mntok]` 1 -> 0, by one `shr` whose CF is the
+"was mounted" answer) and fails the transfer with `06h`, unretried; the next
+operation remounts. Inside a mount `[dsk_mntok]` is already 0 and the retry
+stands, which is what clears the line there. **11 bytes `.cold`**: +10 on
+kern_big and kern_emu, where they and `DSK_PMHD`'s odd 51 make an even pair
+and the parity pad they needed goes; +12 on kern_small and kern_mega, which
+carry that pad here instead. An XT has no change line and never answers `06h`.
+
 Three things about the implementation:
 
 - **`dsk_here_ok` preserves every register**, so the motor bit comes out of
