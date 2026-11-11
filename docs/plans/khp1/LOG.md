@@ -319,6 +319,19 @@ against tip), the instruments (`optime`, the per-instruction tracer,
 agent's finders. Paths into deleted worktrees and scratch were replaced; none
 has been re-run since. The rest of the scratch was one-offs and is dropped.
 
+### L.6 The four VGA knobs on kern_big (+214 `.vga`), then size-passed
+
+The owner's words: *"Yes, though size pass it as well."* kern_big and kern_emu
+define `KHP_VGASAVE`, `KHP_VGAFILL`, `KHP_VGAEDGE` and `KHP_VGABLITP`
+(LAST-DROP-PERF.md 7.1 rows 3, 6, 8 and 9), as kern_mega already did;
+kern_small assembles no planar body, so it cannot carry them. Every byte is in
+the `.vga` rung, which only a VGA or EGA machine keeps resident: a CGA,
+Hercules or MDA machine slides `.cold` over it at boot.
+
+Bytes as turned on, kern_big `.vga` 2,030 -> 2,244: VGASAVE +122, VGAFILL
++39, VGAEDGE +21, VGABLITP +32 (each assembled alone against the base,
+`2cf57256`). `.text`, `.bss` and `.cold` do not move.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per
