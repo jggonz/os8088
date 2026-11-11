@@ -25,18 +25,38 @@ br_cx_ctxshow:
     mov byte [br_ctxkind], 0
     mov byte [br_ctxh], BR_CTXH
     mov word [br_ctxlink], 0FFFFh
+    mov word [br_ctximg], 0FFFFh
     ; Resolve the pointer first. A retained text selection must not mask the
     ; link-specific actions when the user right-clicks directly on a link.
 .hit:
     mov cx, [br_ctxpx]
     mov dx, [br_ctxpy]
+    mov byte [br_hiflag], 0
     call far [br_dl_r_hitofs]
     jc .selection
+    cmp byte [br_hiflag], 0         ; a picture's box: Save Image As (71.32)
+    je .noimg                       ; - br_build marked the hit cell as one,
+    mov bx, [br_hiimg]              ; which a byte of 25 in the document
+    cmp bx, 32                      ; cannot fake (a link's nibble can be)
+    jae .noimg                      ; (BR_IMGTMAX)
+    cmp bx, [br_imgn]
+    jae .noimg
+    mov [br_ctximg], bx
+.noimg:
     call far [br_dl_r_linkat]
-    jc .selection
+    jc .imgonly
     mov [br_ctxlink], ax
     mov byte [br_ctxkind], 1
     mov byte [br_ctxh], BR_CTXH_LINK
+    cmp word [br_ctximg], 0FFFFh
+    je .measure
+    mov byte [br_ctxh], BR_CTXH_LINK + 12 ; a linked picture: a fourth row
+    jmp .measure
+.imgonly:
+    cmp word [br_ctximg], 0FFFFh
+    je .selection
+    mov byte [br_ctxkind], 3
+    mov byte [br_ctxh], BR_CTXH_COPY
     jmp .measure
 .selection:
     cmp byte [br_selkind], 0
@@ -48,6 +68,8 @@ br_cx_ctxshow:
     ; widths left a broad empty strip beside short menu text.
     cmp byte [br_ctxkind], 2
     je .measurecopy
+    cmp byte [br_ctxkind], 3
+    je .measureimg
     cmp byte [br_ctxkind], 1
     je .measurelink
     mov si, br_s_ctxsave
@@ -79,8 +101,21 @@ br_cx_ctxshow:
     mov si, br_s_ctxdl
     call OSAPI_FONT_WIDTH
     cmp ax, di
+    jb .measurelinkim
+    mov di, ax
+.measurelinkim:
+    mov ax, di
+    cmp word [br_ctximg], 0FFFFh
+    je .measurepad
+    mov si, br_s_ctximg
+    call OSAPI_FONT_WIDTH
+    cmp ax, di
     jae .measurepad
     mov ax, di
+    jmp .measurepad
+.measureimg:
+    mov si, br_s_ctximg
+    call OSAPI_FONT_WIDTH
     jmp .measurepad
 .measurecopy:
     mov si, br_s_ctxselcopy
@@ -258,6 +293,8 @@ br_cx_ctxdraw:
     mov cx, [br_ctxpx]
     add cx, 2
     mov dx, [br_ctxpy]
+    cmp byte [br_ctxkind], 3
+    je .onerowimg
     cmp byte [br_ctxkind], 2
     jne .tworow
     add dx, 4
@@ -305,6 +342,19 @@ br_cx_ctxdraw:
     mov si, br_s_ctxdl
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+    cmp word [br_ctximg], 0FFFFh
+    je .out
+    mov cx, [br_ctxpx]
+    add cx, 2
+    mov dx, [br_ctxpy]
+    add dx, 38
+    jmp short .imgrow
+.onerowimg:
+    add dx, 4
+.imgrow:
+    mov si, br_s_ctximg
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 .out:
     pop di
     pop si
@@ -349,6 +399,8 @@ br_cx_ctxclick:
     ja .dismiss
     cmp byte [br_ctxkind], 2
     je .copyselection
+    cmp byte [br_ctxkind], 3
+    je .saveimg
     mov ax, [br_cy]
     add ax, [br_ctxy]
     add ax, 13
@@ -359,6 +411,12 @@ br_cx_ctxclick:
     add ax, 13
     cmp dx, ax
     jb .second
+    add ax, 12
+    cmp dx, ax
+    jb .third
+    cmp word [br_ctximg], 0FFFFh
+    jne .saveimg                    ; the fourth row of a linked picture
+.third:
     mov al, 2
     jmp .action
 .second:
@@ -402,6 +460,14 @@ br_cx_ctxclick:
     call far [br_dl_r_paint_band]
     call far [br_dl_r_sbar]
     call br_copyselection
+    jmp .consumed
+.saveimg:                           ; Save Image As: the Download Manager on
+    mov byte [br_ctxopen], 0        ; the picture's own URL (71.32)
+    call br_cx_ctxerase
+    call far [br_dl_r_paint_band]
+    call far [br_dl_r_sbar]
+    mov ax, 0FFFEh
+    call br_dlx_link
     jmp .consumed
 .dismiss:
     mov byte [br_ctxopen], 0
@@ -1127,4 +1193,319 @@ br_cx_formresolve:
     ret
 .refused:
     stc
+    ret
+
+; =============================================================================
+; IMAGE MAPS (SPEC.md 71.32): a left click on a picture whose <img> named a
+; map. DX:AX = the hit (br_hitofs's); [br_mapx], [br_mapy] the pointer;
+; [br_hicell], [br_hislice], [br_hiimg] the cell's place. CF=0 always: the
+; click is the map's, whether an area answers it or not. All kept
+; =============================================================================
+br_cx_mapclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ax
+    push dx
+    mov bx, [br_hiimg]
+    mov cl, 4
+    shl bx, cl
+    mov bl, [br_itab + bx + 1]      ; IT_FLG: the border in bits 3..7
+    mov cl, 3
+    shr bl, cl
+    xor bh, bh                      ; BX = the border
+    mov al, [br_hicell]             ; x = the cell's pixels in the box, less
+    xor ah, ah                      ; the border
+    mov cl, 3
+    shl ax, cl
+    mov si, [br_mapx]
+    sub si, [br_cx]
+    and si, 7
+    add ax, si
+    sub ax, bx
+    mov [br_mapqx], ax
+    mov al, [br_hislice]
+    xor ah, ah
+    shl ax, cl
+    mov si, [br_mapy]
+    sub si, [br_cy]
+    and si, 7
+    add ax, si
+    sub ax, bx
+    mov [br_mapqy], ax
+    pop dx
+    pop ax
+    cmp word [br_mapqx], 0
+    jl .out                         ; on the border: nothing
+    cmp word [br_mapqy], 0
+    jl .out
+    mov bx, [br_hiimg]
+    shl bx, 1
+    mov bx, [br_imap + bx]
+    cmp bx, 1
+    jne .areas
+    call far [br_dl_r_linkat]       ; ISMAP: the link it sits in, ?x,y after
+    jc .out
+    mov byte [br_mapq], 1
+    call far [br_dl_r_follow]
+    jmp short .out
+.areas:                             ; USEMAP: the first area of its map that
+    xor cx, cx                      ; holds the point
+.a:
+    cmp cl, [br_arean]
+    jae .out
+    mov si, cx
+    push cx
+    mov cl, 3
+    shl si, cl
+    pop cx
+    add si, br_areas
+    cmp [si + AR_MAP], bx
+    jne .an
+    call br_cx_areain
+    jnc .hit
+.an:
+    inc cx
+    jmp .a
+.hit:
+    mov ax, [si + AR_LNK]
+    cmp ax, 0FFFFh
+    je .out                         ; nohref: the area answers nothing
+    call far [br_dl_r_follow]
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; br_cx_areain - DS:SI = an area: CF=0 the point [br_mapqx], [br_mapqy] is
+; in it. AX, DX, DI, BP, ES clobbered
+br_cx_areain:
+    push bx
+    push cx
+    push si
+    mov al, [si + AR_SHP]
+    cmp al, 3
+    je .yes                         ; default: everything
+    mov di, [si + AR_CRD]
+    cmp di, 0FFFFh
+    je .no
+    mov es, [br_lnkseg]
+    mov bl, al
+    cmp bl, 1
+    je .circle
+    cmp bl, 2
+    je .poly
+    ; --- rect: x1, y1, x2, y2, either order
+    call br_cx_crd
+    jc .no
+    mov bx, ax
+    call br_cx_crd
+    jc .no
+    mov cx, ax
+    call br_cx_crd
+    jc .no
+    mov dx, ax
+    call br_cx_crd
+    jc .no
+    mov bp, ax                      ; BX, CX = x1, y1; DX, BP = x2, y2
+    mov ax, [br_mapqx]
+    call .between                   ; BX <= AX <= DX, either way round
+    jc .no
+    mov bx, cx
+    mov dx, bp
+    mov ax, [br_mapqy]
+    call .between
+    jc .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+.between:
+    cmp bx, dx
+    jle .b1
+    xchg bx, dx
+.b1:
+    cmp ax, bx
+    jl .bn
+    cmp ax, dx
+    jg .bn
+    clc
+    ret
+.bn:
+    stc
+    ret
+.circle:                            ; cx, cy, r: dx^2 + dy^2 <= r^2
+    call br_cx_crd
+    jc .no
+    mov bx, [br_mapqx]
+    sub bx, ax
+    call br_cx_crd
+    jc .no
+    mov cx, [br_mapqy]
+    sub cx, ax
+    call br_cx_crd
+    jc .no
+    mul ax                          ; DX:AX = r^2 (r >= 0)
+    push dx
+    push ax
+    mov ax, bx
+    imul ax
+    mov bx, ax
+    mov bp, dx                      ; BP:BX = dx^2
+    mov ax, cx
+    imul ax
+    add ax, bx
+    adc dx, bp                      ; DX:AX = dx^2 + dy^2
+    pop bx
+    pop cx                          ; CX:BX = r^2
+    cmp dx, cx
+    jb .yes
+    ja .no
+    cmp ax, bx
+    jbe .yes
+    jmp .no
+.poly:                              ; crossings of a ray to the right
+    call br_cx_crd
+    jc .no
+    mov [br_mapx], ax               ; (the click's pointer is spent: these
+    call br_cx_crd                  ; two words keep the first vertex)
+    jc .no
+    mov [br_mapy], ax
+    mov bx, [br_mapx]               ; BX, CX = the vertex before
+    mov cx, ax
+    xor bp, bp                      ; BP bit 0 = inside
+.pv:
+    call br_cx_crd
+    jc .close
+    mov dx, ax
+    call br_cx_crd
+    jc .close
+    xchg ax, dx                     ; AX, DX = this vertex
+    call .edge
+    mov bx, ax
+    mov cx, dx
+    jmp .pv
+.close:
+    mov ax, [br_mapx]
+    mov dx, [br_mapy]
+    call .edge
+    test bp, 1
+    jnz .yes
+    jmp .no
+; .edge - the edge (BX, CX) -> (AX, DX): BP ^= 1 when it crosses the ray
+; from the point. All but BP kept
+.edge:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [br_mapqy]
+    cmp cx, si                      ; (yi > y) != (yj > y)?
+    jg .e1
+    cmp dx, si
+    jg .ecross
+    jmp short .eout
+.e1:
+    cmp dx, si
+    jg .eout
+.ecross:                            ; x < (xj - xi)(y - yi) / (yj - yi) + xi
+    push bx                         ; xi
+    sub ax, bx                      ; xj - xi
+    sub si, cx                      ; y - yi
+    sub dx, cx                      ; yj - yi (not 0: the test above)
+    mov cx, dx
+    imul si                         ; DX:AX
+    idiv cx                         ; |quotient| <= |xj - xi|
+    pop bx
+    add ax, bx
+    cmp [br_mapqx], ax
+    jge .eout
+    xor bp, 1
+.eout:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; br_cx_crd - ES:DI = coords text: AX = the next number (signed; anything but
+; a digit or '-' between them), DI past it. CF=1 none left. Others kept
+br_cx_crd:
+    push bx
+    push cx
+    push dx
+.sk:
+    mov al, [es:di]
+    or al, al
+    jz .none
+    cmp al, '-'
+    je .num
+    cmp al, '0'
+    jb .nx
+    cmp al, '9'
+    jbe .num
+.nx:
+    inc di
+    jmp .sk
+.num:
+    xor cx, cx                      ; CL = negative
+    cmp al, '-'
+    jne .dg
+    inc cx
+    inc di
+.dg:
+    xor bx, bx
+.d:
+    mov al, [es:di]
+    sub al, '0'
+    cmp al, 9
+    ja .end
+    inc di
+    cmp bx, 4096                    ; clamped: a picture is at most 4,096
+    jae .d                          ; wide, and the products stay in range
+    xor ah, ah
+    push ax
+    mov ax, bx
+    mov dx, 10
+    mul dx
+    pop bx
+    add bx, ax
+    jmp .d
+.end:
+    cmp bx, 4096
+    jbe .sg
+    mov bx, 4096
+.sg:
+    mov ax, bx
+    jcxz .ok
+    neg ax
+.ok:
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
     ret

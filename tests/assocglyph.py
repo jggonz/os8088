@@ -103,7 +103,8 @@ SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/apps360.img"
 S = os88sym.linear
 NAPP = 16                       # ASSOC_NAPP
-DECLARED = ("BROWSER", "TEXPAD")
+DECLARED = ("TEXPAD", "TRACKER")   # (the Browser left apps360.img, SPEC.md
+                                    # 71.30: its .HTM row went with it)
 PARK = (320, 190)               # the pointer is DRAWN, over the window like
                                 # anything else - it only has to be in the
                                 # SAME place for both captures, not clear of

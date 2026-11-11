@@ -5,8 +5,14 @@ disk or fetches them over the network, and shows them with headings, lists,
 bold, italic and underlined text, tables and simple forms. Links are
 underlined: click one to follow it.
 
-It does not show pictures, colours or styles. A picture appears as its
-description, if the page gives one. It cannot open secure (`https`) sites by
+It does not show colours or styles yet. Pictures are fetched after the page
+and drawn in it, in the colours the screen can show: GIF, PNG, JPEG, BMP,
+TIFF, PCX, TGA, ICO, IFF, MacPaint, PNM and XBM. An animated GIF plays while
+it is in view. Other pictures, and a picture file of more than 60,000 bytes,
+appear as a box of their size, with their description inside if the page
+gives one. Right-click a picture and choose Save Image As to keep its
+file. A picture that is a map takes you to the place you click on it. A picture that is a link can be clicked anywhere in its box.
+It cannot open secure (`https`) sites by
 itself, because the encryption they use would take minutes on this machine.
 The os8088 web proxy, running on a modern computer, does that work for it.
 
@@ -224,6 +230,18 @@ The toolbar says **Saved**, or **Save failed**. With no page loaded it says
   breaks, or that ends short of the length its server announced. Past 400 links it says
   **Links limited**. A table shows at most eight columns, and a page at most
   eight forms.
+- Pictures are kept in memory while their page is shown, in expanded memory
+  (EMS) too when the machine has a board, and then in a file in the
+  `SYSTEM/APPDATA/BRCACHE` folder of the Browser's disk. A picture there is
+  no room for keeps its box and description. Up to four animated pictures a
+  page stay in memory so that they keep playing; one is stopped on the frame
+  it shows only when memory is too short for anything else.
+- When the Browser runs from a hard disk, that folder also keeps the
+  pictures of the last eight pages you visited. **Back**, **Fwd** and the
+  **History** menu show them again at once, without fetching them. **Reload**
+  and an address typed in the bar ask the server whether a picture has
+  changed, and fetch it only if it has. On a floppy only the page you are
+  reading is kept. Closing the Browser empties the folder.
 - An address can be up to 159 characters long. A longer one answers **URL
   too long**.
 - The Browser follows up to three redirects from a server. More answer **Too

@@ -42,15 +42,7 @@ PX_HBST     equ PX_HBW / 8
 ; =============================================================================
 ; THE CONSTANTS
 ; =============================================================================
-px_bayer:
-    db  0, 32,  8, 40,  2, 34, 10, 42
-    db 48, 16, 56, 24, 50, 18, 58, 26
-    db 12, 44,  4, 36, 14, 46,  6, 38
-    db 60, 28, 52, 20, 62, 30, 54, 22
-    db  3, 35, 11, 43,  1, 33,  9, 41
-    db 51, 19, 59, 27, 49, 17, 57, 25
-    db 15, 47,  7, 39, 13, 45,  5, 37
-    db 63, 31, 55, 23, 61, 29, 53, 21
+%include "pxbayer.inc"
 
 ; the zoom steps, 16.16 screen pixels a source pixel (SPEC.md 106.11)
 px_zsteps:  dd 8192, 10923, 16384, 21845, 32768, 43691, 65536
@@ -70,53 +62,7 @@ px_aspd:    dw 1, 45, 12, 48
 ; px_plans below (SPEC.md 106.20). What stays is the 1bpp threshold.
 ; =============================================================================
 
-; px_t1for - the 1bpp threshold of the colour at DS:SI: AL = (64 L + 127)
-; div 255, L = (Y + (Y^2 + 127) div 255) >> 1, Y the luma. Preserves all
-; but AX
-px_t1for:
-    push bx
-    push dx
-    call px_luma                    ; AX = Y
-    mov bx, ax
-    mul ax
-    add ax, 127
-    adc dx, 0
-    push cx
-    mov cx, 255
-    div cx                          ; AX = (Y^2 + 127) div 255
-    add ax, bx
-    shr ax, 1                       ; L
-    mov dx, 64
-    mul dx
-    add ax, 127
-    adc dx, 0
-    div cx
-    pop cx
-    pop dx
-    pop bx
-    ret
-
-; px_luma - AX = (77 R + 150 G + 29 B) >> 8 of DS:SI. Preserves all but AX
-px_luma:
-    push bx
-    push dx
-    mov al, [si]
-    mov bl, 77
-    mul bl
-    mov bx, ax
-    mov al, [si + 1]
-    mov dl, 150
-    mul dl
-    add bx, ax
-    mov al, [si + 2]
-    mov dl, 29
-    mul dl
-    add ax, bx
-    mov al, ah
-    xor ah, ah
-    pop dx
-    pop bx
-    ret
+%include "pxt1.inc"
 
 ; =============================================================================
 ; px_tables - THE DISPLAY TABLES for [px_pal] at depth [px_tdepth] (SPEC.md

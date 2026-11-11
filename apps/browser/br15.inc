@@ -36,6 +36,7 @@ br_s_copied:   db 'Link copied', 0
 br_s_ctxopen:  db 'Open Link', 0
 br_s_ctxcopy:  db 'Copy Link', 0
 br_s_ctxdl:    db 'Save Link As...', 0
+br_s_ctximg:   db 'Save Image As...', 0
 br_s_ctxselcopy: db 'Copy', 0
 br_s_ctxsave:  db 'Save Page As...', 0
 br_s_ctxview:  db 'View Source', 0

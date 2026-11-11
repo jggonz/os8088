@@ -51,6 +51,43 @@ Image + BSS: 61,857 at the start, **53,650** now (42,284 + 11,366),
 **11,374 free** of 65,024 (it was 3,167). The EMS chunks, Content-Length,
 the trim and the popup fix cost 1,030 of the 12,404 S1-S5 had freed.
 
+Images delivery 4.1 (image boxes, SPEC.md 71.25) then took 1,803: image +
+BSS **55,463** (43,958 + 11,505), **9,561 free**.
+
+Delivery 4.2's conventional tier (static GIF, SPEC.md 71.26) took 1,996:
+image + BSS **57,459** (45,211 + 12,248), **7,565 free**. The decoder is
+part 1, 7,712 bytes in the file and none resident.
+
+Its EMS tier took 54: image + BSS **57,513** (45,227 + 12,286), **7,511
+free**.
+
+Delivery 4.3a (the disk tier, SPEC.md 71.27) took 433: image + BSS
+**57,946** (45,618 + 12,328), **7,078 free**.
+
+Delivery 4.3b (the kept pages and revalidation, SPEC.md 71.28) took 369:
+image + BSS **58,315** (45,912 + 12,403), **6,709 free**.
+
+Delivery 4.4 (animated GIF, SPEC.md 71.29) took 101: image + BSS
+**58,416** (45,947 + 12,469), **6,608 free**. Part 1 is 25,097 bytes.
+
+Delivery 4.4b (one fetch per animated GIF; animations held in the store
+through the spills) took no resident byte. Part 1 is 25,738 bytes.
+
+Delivery 4.5 (PNG and JPEG through PiXEL's parts, hosted by part 1, SPEC.md
+71.30) took 81: image + BSS **58,497** (46,028 + 12,469), **6,527 free**.
+Part 1 is 29,881 bytes; parts 2 and 3 are 12,018 and 19,101. BROWSER.O88 is
+79,616 bytes on the disk.
+
+Delivery 4.6 (the older formats: PiXEL's EXTRAS and SIMPLE parts and an XBM
+part, SPEC.md 71.31) took 28: image + BSS **58,525** (46,056 + 12,469),
+**6,499 free**. Part 1 is 30,637 bytes; parts 4, 5 and 6 are 20,696, 10,550
+and 628. BROWSER.O88 is 99,633 bytes on the disk; the 720 KB system disk is
+712 of 713 clusters.
+
+Delivery 4.7 (Save Image As and image maps, SPEC.md 71.32) took 962 (619 of
+code, 343 of BSS): image + BSS **59,487** (46,675 + 12,812), **5,537 free**.
+Part 0 is 12,592 bytes.
+
 **Section 3, read and fixed:**
 
 - **ES and a flush under a source pointer.** The parser was already safe:

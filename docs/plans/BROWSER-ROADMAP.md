@@ -31,7 +31,7 @@ review outcomes and engineering lessons forward after the PR is merged.
 | 1.5 | Navigation and usability: bookmarks, View Source, Windows/IE-era shortcuts, keyboard focus/selection and page/link context menus | Closed in the local 1.5 release commit; no push. Find remains deferred until it has a bounded UI and storage design |
 | 1.6 | Memory-aware page storage and render-path audit | One commit after measurement and validation. Establish the conventional-memory path first; use optional EMS/XMS only through existing contracts |
 | 1.6b | Separate Download Manager window and transfer lifecycle | One commit after validation. Add Save Link As and fixed-size disk writes without staging a whole response; Save Image As follows in 1.7 |
-| 1.7 | Inline images and adapter-aware colour output, initially static GIF/JPEG | After memory design; decode into bounded row buffers and reuse the kernel's automatic VGA/EGA/mono graphics dispatch |
+| 1.7 | Inline images and adapter-aware colour output, initially static GIF/JPEG | Delivered (SPEC.md 71.25-71.32): GIF (animated too), PNG, JPEG, BMP, TIFF, PCX, TGA, ICO, IFF, MacPaint, PNM and XBM; a store with EMS and disk tiers; kept pages; Save Image As and image maps. docs/plans/BROWSER-1.7-ROADMAP.md and BROWSER-IMAGES-PLAN.md are the record |
 | 1.8 | Compatibility and integration against early-Web pages; refine progressive rendering and interactions | Follow image and memory work |
 | 1.9 | Full audit: code reuse, allocations, binary/RAM footprint and 8088 execution cost | Broad optimization after features stabilize |
 | 2.0 | Consolidated stable Browser for early-Web use | Release milestone |

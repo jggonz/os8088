@@ -144,13 +144,19 @@ br_dl_saved:
 ; one is open, so only the page fetch is stopped (br_dlx_mainclose's
 ; close_now does that first too)
 br_dl_mainclose:
+    call br_imghalt                 ; the image engine stops, its socket closed
+                                    ; (SPEC.md 71.26); what it drew stays in
+                                    ; case the close is refused
     cmp word [br_dl_vec+BRDL_MAIN+2], 0
     jne .part
     call br_abort
+    call br_icclose                 ; the image cache files (SPEC.md 71.27)
     clc
     ret
 .part:
     call far [br_dl_vec+BRDL_MAIN]
+    jc br_dl_after                  ; refused: the page stays, and its file
+    call br_icclose                 ; (flags kept: CF=0, the close goes on)
     ; (falls into br_dl_after)
 
 ; br_dl_after - drop part 0 if nothing needs it now. Every register and the
@@ -178,6 +184,32 @@ br_dl_after:
 br_dl_ret:
     ret
 
+; br_mapchk - a left click's hit DX:AX (br_hitofs): when its cell is an image
+; box whose image has a map, part 0 answers it (SPEC.md 71.32) and CF=0; else
+; CF=1 and every register as it was
+br_mapchk:
+    cmp byte [br_hiflag], 0
+    je .no
+    push bx
+    mov bx, [br_hiimg]
+    cmp bx, BR_IMGTMAX
+    jae .nob
+    shl bx, 1
+    cmp word [br_imap + bx], 0
+    pop bx
+    je .no
+    push ax
+    push dx
+    call br_mapclick                ; CF=0 answered; CF=1 part 0 refused
+    pop dx
+    pop ax
+    ret
+.nob:
+    pop bx
+.no:
+    stc
+    ret
+
 ; --- THE RARELY USED UI IS PART 0'S TOO (SPEC.md 71.24, roadmap S3) ---------
 ; One thunk each, under the name the Browser always called: the context menu,
 ; View and Close Source, a form's submit and a bookmark's commit. br_dl_cold
@@ -197,6 +229,9 @@ br_sourcetoggle:
     jmp short br_dl_cold
 br_submit:
     mov byte [br_dl_sel], BRDL_SUBMIT
+    jmp short br_dl_cold
+br_mapclick:
+    mov byte [br_dl_sel], BRDL_MAPCLICK
     jmp short br_dl_cold
 br_bmcommit:
     mov byte [br_dl_sel], BRDL_BMCOMMIT
@@ -714,7 +749,7 @@ br_dl_sockclose:
 br_dl_s_get: db 'GET ', 0
 br_dl_s_http10: db ' HTTP/1.0', 13, 10, 0
 br_dl_s_host: db 'Host: ', 0
-br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.6c', 0
+br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.7', 0
 br_dl_s_conn: db 13, 10, 'Connection: close', 13, 10, 13, 10, 0
 
 br_dl_s_cl: db 'content-length:', 0

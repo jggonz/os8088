@@ -167,6 +167,7 @@ br_go:
     push dx
     push si
     push di
+    mov byte [br_icnav], 0          ; trusted, unless Reload or the bar says
     mov al, [br_nstate]             ; **A FETCH IN FLIGHT IS DROPPED, NOT A
     cmp al, BN_OPEN                 ; REASON TO REFUSE.** It used to answer
     jb .free                        ; `Still fetching` - and that refusal went
@@ -535,6 +536,7 @@ br_worker:
     call OSAPI_TASK_ALIVE           ; the death door: may never return
     call br_nstep
     call br_dl_step                ; Browser 1.6b's independent download socket
+    call br_im_step                ; ...and 1.7's images, after the page
     mov ax, 1
     call OSAPI_TASK_SLEEP
     jmp .loop
@@ -2866,9 +2868,9 @@ br_status:
 br_s_get:    db 'GET ', 0
 br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.6c', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.6c', 13, 10
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.7', 13, 10
                db 'Connection: close', 13, 10
                db 'Content-Type: application/x-www-form-urlencoded', 13, 10
                db 'Content-Length: ', 0

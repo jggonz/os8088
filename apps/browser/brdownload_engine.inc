@@ -63,6 +63,15 @@ br_dlx_link:
 
     cmp word [br_dl_index], 0FFFFh ; automatic non-page navigation
     je .direct
+    cmp word [br_dl_index], 0FFFEh ; Save Image As: the image's src, against
+    jne .lnk                       ; the page, as part 1 fetches it (71.32)
+    mov bx, [br_ctximg]
+    mov cl, 4
+    shl bx, cl                     ; BR_ITSZ = 16
+    mov si, [br_itab + bx + 2]     ; IT_SRC (brimage_const.inc)
+    mov es, [br_lnkseg]
+    jmp short .src
+.lnk:
     mov bx, [br_dl_index]
     mov dl, [br_lnkfrm+bx]
     test dl, dl
@@ -91,6 +100,7 @@ br_dlx_link:
     shl bx, 1
     mov si, [br_lnkoff+bx]
     mov es, [br_lnkseg]
+.src:
     ; An absolute URL needs no page/frame base. Copy it from the link arena
     ; directly before the generic resolver rewrites the Browser's address
     ; buffer; relative hrefs still use the normal frame-aware resolver.

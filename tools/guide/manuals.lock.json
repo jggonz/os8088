@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "f6151199",
-  "strings": "912b9f2b366ab844",
-  "why": "1.7 preparation: checked Good to know against the EMS arenas (board-limited), Content-Length sizing and cut detection, and the right-click-during-layout fix; added the EMS and short-body clauses, the rest unchanged"
+  "stamped": "c1055377",
+  "strings": "898c28b46ed6ec69",
+  "why": "the page names the formats, Save Image As and image maps; 1.7 version strings and part 0 toast shims are below its level"
  },
  "C64": {
   "sources": [],
@@ -885,9 +885,9 @@
   "sources": [
    "apps/pixel"
   ],
-  "stamped": "24c3d243",
-  "strings": "60dc14a5e710d600",
-  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
+  "stamped": "fc7bc763",
+  "strings": "ff4c286ecfd7d004",
+  "why": "pl_plan1, px_t1for and px_bayer moved to includes the Browser shares; PiXEL byte-identical"
  },
  "PONG_WAB": {
   "sources": [],

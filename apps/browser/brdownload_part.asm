@@ -44,6 +44,7 @@ BR_PATHMAX  equ 96
     dw br_dlf_src                   ; BRDL_SRC
     dw br_dlf_submit                ; BRDL_SUBMIT
     dw br_dlf_bmcommit              ; BRDL_BMCOMMIT
+    dw br_dlf_mapclick              ; BRDL_MAPCLICK
 %if ($ - $$) != BRDL_N * 2
 %error "part 0's entry table does not match brdownload_const.inc's BRDL_N"
 %endif
@@ -81,6 +82,8 @@ br_dlf_src:     call br_cx_srctoggle
 br_dlf_submit:  call br_cx_submit
                 retf
 br_dlf_bmcommit: call br_cx_bmcommit
+                retf
+br_dlf_mapclick: call br_cx_mapclick
                 retf
 
 %include "brdownload_paint.inc"

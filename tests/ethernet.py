@@ -457,6 +457,7 @@ class Server(threading.Thread):
         self.cookie_path_fixture = cookie_path_fixture
         self.password_fixture = password_fixture
         self.password_get_fixture = password_get_fixture
+        self.res_dir = None
 
     def run(self):
         while True:
@@ -578,6 +579,22 @@ class Server(threading.Thread):
                             b"name=\"go\" value=\"Send\"></form></body></html>")
                     response = (b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
                                 b"Content-Length: %d\r\n\r\n" % len(body) + body)
+                elif (self.res_dir and target_path.lower().rsplit(
+                        b".", 1)[-1] in (b"gif", b"png", b"jpg", b"bmp",
+                                         b"tif", b"pcx", b"tga", b"xbm")):
+                    name = os.path.basename(
+                        target_path.decode("latin-1")).upper()
+                    fp = os.path.join(self.res_dir, name)
+                    if os.path.exists(fp):
+                        with open(fp, "rb") as f:
+                            body = f.read()
+                        response = (b"HTTP/1.0 200 OK\r\n"
+                                    b"Content-Type: image/gif\r\n"
+                                    b"Content-Length: %d\r\n\r\n" % len(body)
+                                    + body)
+                    else:
+                        response = (b"HTTP/1.0 404 Not Found\r\n"
+                                    b"Content-Length: 0\r\n\r\n")
                 else:
                     response = (b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
                                 b"Content-Length: %d\r\n\r\n" % len(self.page)
@@ -634,6 +651,16 @@ def claims(m, S):
                         dma & os88geom.MC_DMA_HEAD, u16(r, 8),
                         1 if dma & os88geom.MC_DMA_HI else 0))
     return sorted(out)
+
+
+def map_offset(name):
+    """A Browser symbol's offset in its segment, out of NASM's map."""
+    with open("build/browser.map", encoding="ascii") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[-1] == name:
+                return int(fields[0], 16)
+    raise RuntimeError("%s is not in build/browser.map" % name)
 
 
 def browser_state(m, pseg, img):
@@ -760,8 +787,30 @@ def browser_state(m, pseg, img):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shot", default=None)
+    ap.add_argument("--page-shot", default=None,
+                    help="screenshot the page itself, before the browser closes")
     ap.add_argument("--page", default=None,
                     help="serve this HTML body to the NE2000 guest instead of the small default")
+    ap.add_argument("--res-dir", default=None,
+                    help="serve a request for a picture (NAME.GIF, .PNG, "
+                         ".JPG, .BMP, .TIF, .PCX, .TGA, .XBM) from this "
+                         "directory (404 when it is not there)")
+    ap.add_argument("--image-wait", type=float, default=0,
+                    help="after the page, wait up to this many seconds for "
+                         "the image engine to stop (SPEC.md 71.26)")
+    ap.add_argument("--gif-check", action="store_true",
+                    help="hold every ready copy to tests/brgifref.py's, for "
+                         "tests/brgifs.py's IMGGIF.HTM served from --res-dir")
+    ap.add_argument("--gif-fixtures", action="store_true",
+                    help="write tests/brgifs.py's page and GIFs to a scratch "
+                         "directory and serve them: --page, --res-dir, "
+                         "--gif-check and a 180 s --image-wait in one")
+    ap.add_argument("--video", choices=("cga", "herc", "ega"), default=None,
+                    help="force the adapter (a private build tree, "
+                         "tools/os88build.py): CGA is the 1bpp copy")
+    ap.add_argument("--reload-during-images", action="store_true",
+                    help="press F5 while an image is half in, and hold the "
+                         "reload's images to the reference again")
     ap.add_argument("--stream-fixture", action="store_true",
                     help="serve a generated 7 KiB HTML parser-boundary fixture")
     ap.add_argument("--cookie-fixture", action="store_true",
@@ -812,6 +861,17 @@ def main():
                     help="leave QEMU running for a look afterwards")
     a = ap.parse_args()
     fails = []
+    if a.video:                         # a forced adapter is a KERNEL knob:
+        os88build.tree("VIDEO=" + a.video,   # its own tree, never build/
+                       targets=("ether360.img", "brtest360.img")).apply()
+    if a.gif_fixtures:                  # SPEC.md 71.26's row, in one flag
+        import brgifs
+        gifdir = tempfile.mkdtemp(prefix="brgif")
+        brgifs.write(gifdir)
+        a.page = os.path.join(gifdir, "IMGGIF.HTM")
+        a.res_dir = gifdir
+        a.gif_check = True
+        a.image_wait = a.image_wait or 180
 
     # **THE SYSTEM IMAGE IS A COPY, NOT REBUILT.** QEMU mounts it WRITABLE and
     # the OS writes to it: the Setup window's `ETHER.CFG` (SPEC.md 72.7) is
@@ -908,6 +968,7 @@ def main():
                  a.cookie_path_fixture,
                  a.password_fixture or a.password_get_fixture,
                  a.password_get_fixture)
+    srv.res_dir = a.res_dir
     srv.start()
     say("http server on %s, %d byte page%s"
         % (URL, len(page), " from " + a.page if a.page else ""))
@@ -1092,6 +1153,39 @@ def main():
         os88qemu.acted(m, lambda: m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
                        in (BN_DONE, BN_ERR), secs=wait_secs, what="br_nstate",
                        poll=0.5)
+        if a.reload_during_images:      # F5 with an image half in (71.26's
+            ie_ = map_offset("br_ie")   # stop): the reload's own images must
+            if not os88qemu.acted(      # all come in again, byte for byte
+                    m, lambda: m.readseg(pseg, ie_, 1)[0] in (6, 7, 8, 10),
+                    secs=60, what="an image in flight", poll=0.05):
+                fails.append("no image was ever in flight to reload over")
+            else:
+                say("br_ie = %d: F5" % m.readseg(pseg, ie_, 1)[0])
+                subprocess.run(["python3", "tools/qmp.py", SOCK,
+                                "sendkey f5"], check=True)
+                os88qemu.acted(m, lambda: m.readseg(
+                    pseg, browser_image_size + BR_NSTATE, 1)[0] != BN_DONE,
+                    secs=10, what="the reload to start", poll=0.05)
+                os88qemu.acted(m, lambda: m.readseg(
+                    pseg, browser_image_size + BR_NSTATE, 1)[0]
+                    in (BN_DONE, BN_ERR), secs=wait_secs, what="the reload",
+                    poll=0.5)
+        if a.image_wait:                # the images after the page (71.26):
+            ie = map_offset("br_ie") - browser_image_size   # until the engine
+            ip = map_offset("br_ipend") - browser_image_size  # has stopped
+            os88qemu.acted(
+                m, lambda: m.readseg(pseg, browser_image_size + ie, 1)[0] == 0
+                and m.readseg(pseg, browser_image_size + ip, 1)[0] == 0,
+                secs=a.image_wait, what="the image engine", poll=0.5)
+        if a.gif_check:                 # every ready copy, byte for byte
+            import brgifs               # (tests/brgifref.py, SPEC.md 71.26)
+            import brgifref
+            gifs = [(n, d, at, sh) for n, (d, at, sh)
+                    in brgifs.cases().items()]
+            gifs.append(("LINK", brgifs.cases()["PLAIN"][0], "border=2",
+                         True))
+            mono = m.readseg(pseg, map_offset("br_bpp"), 1)[0] == 1
+            fails += brgifref.check(m, pseg, map_offset, mono, gifs, say)
         nstate = m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
         nlines = u16(m.readseg(pseg, browser_image_size + BR_NLINES, 2))
         # This is deliberately the byte count the guest actually retained,
@@ -1797,6 +1891,10 @@ def main():
         # - the bit, the word and the mem_tab record all three. A kernel that
         # stopped sending GONE, or a driver that ignored it, keeps 17KB for
         # the session and fails here.
+        if a.page_shot:
+            subprocess.run(["python3", "tools/shot.py", SOCK, a.page_shot],
+                           check=True)
+            say("wrote %s" % a.page_shot)
         bx_, by_ = dispcp.win_rect(m, S, bw)[:2]
         cx_, cy_ = os88geom.close_xy(bx_, by_)
         for _ in (1, 2):

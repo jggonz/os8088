@@ -122,10 +122,10 @@ def main():
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
         about = [
-            ("br_ab1", "os8088 Browser 1.6c"),
+            ("br_ab1", "os8088 Browser 1.7"),
             ("br_ab2", "Bringing the web to XT PCs"),
             ("br_ab3", "Version 1.0 contributed by Elendilon"),
-            ("br_ab4", "Version 1.2-1.6c contributed by Pentagram666"),
+            ("br_ab4", "Version 1.2-1.7 contributed by Pentagram666"),
         ]
         for symbol, expected in about:
             actual = bytes(m.readseg(pseg, sy[symbol], len(expected) + 1))
@@ -438,7 +438,25 @@ def main():
         # then the same empty cell exercises the page context menu. A click on
         # ordinary text would create a one-cell selection and correctly route
         # the next right click to Copy instead.
+        # A PICTURE'S BOX IS NOT BACKGROUND (SPEC.md 71.32: it opens the
+        # image menu), and DEMO.HTM's 466-pixel logo fills the band's width.
+        # So the cell is the first blank one of a visible line that holds no
+        # picture and starts indented (the centred heading's), off the app's
+        # own line table.
         bgx, bgy = rw("br_cx") + 3, rw("br_cy") + 3
+        top = rw("br_top")
+        for r in range(rw("br_rows")):
+            i = top + r
+            if i >= nl:
+                break
+            fl, col = tab[i * 10 + 9], tab[i * 10 + 8]
+            o0, e0 = u32(tab[i * 10:i * 10 + 4]), u32(tab[i * 10 + 4:i * 10 + 8])
+            span = bytes(m.readseg(rw("br_docseg"), o0, max(e0 - o0, 0)))
+            if fl & 8 or col == 0 or 25 in span:
+                continue
+            bgy = rw("br_cy") + r * 8 + 3
+            break
+        say("page background aimed at (%d,%d)" % (bgx, bgy))
         mo.click(bgx, bgy)
         os88marty.settle(m)
         if rb("br_selkind") != 0:

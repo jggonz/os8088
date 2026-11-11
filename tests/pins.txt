@@ -564,6 +564,15 @@ N apps/pixelstein/pxstein.asm op:PX_PART_LEV  # the 10KB levels, behind the same
                                          # fence (6.5)
 N apps/pixelstein/pxstein.asm pxl_sseg   # the 60KB sprite set, behind the same
                                          # fence (6.5)
+N apps/browser/brimage.inc op:1  # the image part (SPEC.md 71.26): its code
+                                         # is banked in br_im_vec and far-called
+                                         # by the WORKER mid-decode, and it hosts
+                                         # the decoder parts (71.30), which hold
+                                         # its segments. Dropped at IE_END
+N apps/browser/brimage.inc @br_im_rs_pxload  # a decoder part (71.30, 71.31),
+                                         # far-called by the worker with part 1's
+                                         # segments in its header; dropped with
+                                         # part 1
 N apps/browser/brdownload.inc op:0  # the Download Manager's lazy part
                                          # (SPEC.md 71.20.5): its code is banked
                                          # in br_dl_vec and far-called - by the

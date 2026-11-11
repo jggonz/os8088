@@ -10,7 +10,7 @@ The owner's target for the Browser is the early web as Netscape 2 or IE 3
 showed it - images, colours, JavaScript 1.2, no plugins - on this OS and its
 machines, the 4.77 MHz 8088 included. Images are the first step. Every
 decision below is priced against the Browser's one hard limit: image + BSS
-at most 65,024 bytes (SPEC.md 20.1.1), with 12,404 free at the start of 1.7
+at most 65,024 bytes (SPEC.md 20.1.1), with 11,374 free at the start of 1.7
 (BROWSER-1.7-ROADMAP.md).
 
 ## 1. What the OS and PiXEL already give
@@ -43,8 +43,8 @@ Each with what it was weighed against.
 | # | Decision | Against | Why |
 |---|---|---|---|
 | D1 | **Decode once, keep the image READY TO DRAW**: on VGA/EGA the four planes `OSAPI_GFX_BLITP` takes, on CGA/Hercules 1bpp for `OSAPI_GFX_BLIT1`. Scrolling is a blit per band | decode again on every repaint (the old plan); keep an 8bpp master and compose at draw time (PiXEL's way) | Re-decoding costs seconds to tens of seconds a picture on an XT. PiXEL's composer (zoom, pan) is too large to sit in the Browser's resident image, and a page never zooms. A 1bpp copy is an eighth of an 8bpp one |
-| D2 | **The ready copy goes to the best tier there is**: conventional memory inside the Browser's 20% reserve, then EMS, then a cache file on a FIXED or RAM volume, then the alt box | EMS required; disk always | EMS must never be required (owner). Most early-web images are small (a 200x60 logo is 6 KB in planes), so conventional memory carries a typical page on a 640 KB machine. A hard disk returns a picture in one or two `int 13h` calls (~0.4 s each), far below a re-decode |
-| D3 | **No floppy cache.** A machine whose only writable volume is a floppy keeps what fits in memory and shows the rest as alt boxes (a small GIF may be re-decoded instead, section 4.4) | a cache file on A:/B: | Slow, often write-protected, a 360 KB disk fills, and the user swaps disks while browsing |
+| D2 | **The ready copy goes to the best tier there is**: conventional memory inside the Browser's 20% reserve, then EMS, then a cache file (D3), then the alt box | EMS required; disk always | EMS must never be required (owner). Most early-web images are small (a 200x60 logo is 6 KB in planes), so conventional memory carries a typical page on a 640 KB machine. A hard disk returns a picture in one or two `int 13h` calls (~0.4 s each), far below a re-decode |
+| D3 | **A cache file per page view, in `SYSTEM\APPDATA\BRCACHE\` on the Browser's volume, floppy included** (owner, 2026-11-10; it replaced "no floppy cache"). On a FIXED or RAM volume it also keeps the last pages' copies, the ones in memory and EMS too, so Back and History redraw without a fetch or a decode, up to a count of pages and then oldest first, like a security camera's loop. On a floppy it holds the current page only, after a free-space check and with the disk's identity checked before every read | no floppy cache (the first plan); one `IMGCACHE.TMP` on a fixed volume only | A JPEG is about 47 s to decode on a 5150 and a 32 KB copy is 1-3 s off a floppy, so for JPEG and PNG the floppy wins; GIF alone made the first plan's case. Write protection, a full disk and a swapped disk are each checked rather than avoided |
 | D4 | **JPEG and PNG reuse PiXEL's decoder PARTS, by source**: `pxjpeg.asm` and `pxpng.asm` assembled a second time as parts of BROWSER.O88, against a link file generated from `browser.bin` (`tools/pxlink.py`'s output, with `-I` putting the Browser's first), and the seven `PXS_*` services implemented by the Browser | a Browser JPEG/PNG of its own; picojpeg | 31 KB of tuned, tested, hostile-input-safe decoder for about 1.6 KB of resident BSS (`px_spal` 768, `px_plan` 768, `px_cur` 52, a few flags) and the service thunks. Nothing is copied (WEAVE-SPEC 1.2's rule). **PiXEL is not edited** and keeps building and running standalone |
 | D5 | **GIF is a Browser part of its own**, on `apps/os88lzw.inc`, following `pixelsim`'s `gif_anim` rules frame for frame, static and ANIMATED | PiXEL's `pxgif.asm` linked the same way | `pxgif` is fused to PiXEL's model: 40-odd linked variables (`px_an*`, the master's windows, the view) and a UI renderer service. Carrying that state would cost more resident BSS than the whole GIF part costs on disk (estimated 3-4 KB, lazy, 0 resident). `pixelsim` is the reference implementation the tests hold it to |
 | D6 | **Animated GIFs play**, the visible ones, one frame at a time on the one worker; paused when scrolled off, when another window is in front, when minimised | first frame only | Owner. PiXEL already shows the engine works on an XT. With many animations a page plays slower than the file's delays, never with the UI blocked |
@@ -71,9 +71,42 @@ worst moment the Browser holds source, document, line table, links, URL
 store, image store and image part: **seven**, so part 0 (Download Manager,
 cold UI) still fits and neither waits for the other.
 
-The disk cache: one file, `SYSTEM\APPDATA\BROWSER\IMGCACHE.TMP` on the
-first fixed or RAM volume, written cluster-aligned with `OSAPI_FILE_WRITE_AT`,
-emptied at navigation and at close. UI task only (SPEC.md 20.6 rule 7).
+The disk cache (D3), UI task only (SPEC.md 20.6 rule 7):
+
+- **Where.** `SYSTEM\APPDATA\BRCACHE\` on the Browser's own volume, beside
+  `BROWSE.DAT` (`apps/os88data.inc`'s walk, `OSAPI_FILE_MKDIR` once).
+  `OSAPI_VOL_KIND` says floppy, fixed or RAM.
+- **Names are 8.3** (FAT12/16 has no long names): `Bkhhhhhh.BRC`, k the
+  instance (several Browsers may be open) and hhhhhh the page view's
+  number. The file is written cluster-aligned with `OSAPI_FILE_WRITE_AT`
+  and read with `OSAPI_FILE_READ_AT`. Its header names the page's URL, and
+  each copy's entry its `src`, COLS and ROWS, so a revisit takes a copy only
+  where all three still match.
+- **Fixed or RAM: a loop of pages.** Every ready copy of the page is written
+  as it becomes ready, whichever tier holds it, so the file is the page's
+  whole set. The last `BR_CACHEPAGES` views (8, the History menu's length)
+  are kept, within a byte cap and a free-space margin; past either, the
+  oldest view's file is deleted first. Back, Fwd and History look a URL up
+  in the loop before fetching any image.
+- **Floppy: the current page only.** Written only for copies that fit
+  neither the reserve nor EMS, after `OSAPI_FILE_DFREE` (no disk I/O) says
+  the copy and a margin fit. A refused write (write-protected, full) turns
+  the cache off for the page, with no message. The volume's serial and label
+  are kept and checked before every read, since `DFREE` cannot see a swapped
+  disk: a different disk makes the copy none rather than read the wrong
+  file or write to it. The view's file is deleted at navigation.
+- **Is the copy still the server's? (owner, 2026-11-10)** Each copy's
+  entry also keeps the image's `Last-Modified`, `ETag` and
+  `Content-Length`. Back, Fwd and History trust the file for the session,
+  as Netscape's default *Verify documents: Once per session* did, and the
+  session ends at close, when the files go. A Reload, or the same URL
+  opened again from the bar, asks again with `If-Modified-Since` /
+  `If-None-Match`: `304 Not Modified` keeps the copy with no body and no
+  decode, `200` replaces it, and an image whose server sent neither header
+  is fetched and decoded again. `Expires` and `max-age` are not read.
+- **Cleanup.** At close each instance deletes its own files. At start, a
+  Browser that finds no other instance running empties the folder, which
+  clears what a crash or a power-off left behind.
 
 ## 4. Deliveries
 
@@ -81,7 +114,14 @@ One reviewable commit each, on a branch of its own after the 1.7 preparation
 PR. Rows are named per delivery; the soak union and `test-full` run once at
 the end (CLAUDE.md, Testing).
 
-### 4.1 Image boxes and alt text
+### 4.1 Image boxes and alt text - done
+
+Done (SPEC.md 71.25): the record, the unbreakable unit, the continuation
+rows and the frames, on VGA and CGA, scroll by blit, a click in a linked
+box's top row follows the link. 1,803 bytes of image + BSS (43,958 +
+11,505 = 55,463; 9,561 free). Row: `brimages` (`tests/brtest.py --page
+IMAGES.HTM`, the fixture `tests/htm/images.htm`).
+
 
 `<img>` in the parser and layout: `width`/`height` attributes, `alt`, `align`
 left/right/middle at the level early pages use, `border`, an image inside a
@@ -92,6 +132,21 @@ Verification: a fixture page through `tools/htmsim.py` (its reference layout
 grows the same rule) and the brtest/brlink rows; the line records stay valid.
 
 ### 4.2 Static GIF
+
+Conventional tier done (SPEC.md 71.26): the fetch after the page, the
+header's size and a re-layout, part 1 with the GIF reader on `os88lzw.inc`
+and PiXEL's plan search assembled from `apps/pixel/pxplan1.inc`, the ready
+copy (four planes or 1bpp) and its blit on paint and scroll, the stop on a
+navigation. 1,996 bytes of image + BSS (45,211 + 12,248 = 57,459; 7,565
+free); part 1 is 7,712 bytes in the file. Rows: `brgif`, `brgifcga`,
+`brgifreload`.
+
+EMS tier done (SPEC.md 71.26, The EMS tier): when the store cannot grow, its
+ready copies move to an EMS arena of §71.18's shape and the store keeps only
+the scratch; the paint maps a slice's two pages into the frame. 54 bytes
+(57,513, 7,511 free). Row: `brgifems` (86Box, a 384 KB XT with a card and a
+board: ten of twelve copies in EMS, every EMS slice byte-identical through
+the frame).
 
 The resource fetch (D8), header-first sizing (a box re-laid when its header
 arrives), the GIF part, the shared colour conversion (D7), the conventional
@@ -105,13 +160,56 @@ another app launchable.
 
 ### 4.3 The disk tier
 
-The cache file on a fixed or RAM volume (D2, D3); eviction when conventional
-memory is wanted back; the floppy-only machine keeps what fits.
+4.3a done (SPEC.md 71.27): the disk as the store's last tier, floppy
+included - the copies the reserve and EMS refuse appended to
+`SYSTEM\APPDATA\BRCACHE\Bssssvvv.BRC`, read back through an 8 KB paint
+buffer, the file deleted with its page and at an accepted close, a lone
+start sweeping the folder. 433 bytes (57,946, 7,078 free). Row
+`brgifdisk`. Next, 4.3b: the loop of the last pages on a fixed or RAM
+volume and the revalidation.
 
-Verification: QEMU with `TESTHD=` (a fixed disk) and without; MartyPC's
-XT-IDE for timing in the final pass.
+4.3b done (SPEC.md 71.28): on a fixed or RAM volume every copy is kept in
+the page's file behind a 32-slot index, the last 8 pages in a loop, Back /
+Fwd / History draw them with no request, and Reload or a typed address asks
+with If-Modified-Since / If-None-Match, a 304 keeping the copy. The 4.3a
+spill writes as many whole copies as the disk holds and grows the store
+for its paint buffer when the copies are fewer than 8 KB. 369 bytes
+(58,315, 6,709 free). Row `brkeep`.
+
+The cache files of section 3 (D2, D3): a file per page view in
+`SYSTEM\APPDATA\BRCACHE\`; on a fixed or RAM volume the loop of the last
+pages, every copy written, Back/Fwd/History reading it before any fetch,
+a Reload or a typed URL asking again with `If-Modified-Since` /
+`If-None-Match`;
+on a floppy the current page's overflow only, with the free-space check, the
+write-protect refusal and the disk's identity checked before every read;
+the cleanup at close and at a lone start.
+
+Verification: QEMU with `TESTHD=` (a fixed disk): a revisit through Back
+draws every copy from the file with no image request reaching the server,
+and the ninth page deletes the first page's file; on the floppy, a page that
+outgrows memory reads its overflow back, a write-protected disk leaves alt
+boxes and no error, and a swapped disk makes the copy none; the folder empty
+after close. MartyPC's XT-IDE for timing in the final pass.
 
 ### 4.4 Animated GIF
+
+Done (SPEC.md 71.29): after the page's images, the animated ones still in
+the store are fetched again and played on the worker, a master per image
+behind the copies, each frame held to `gif_anim` - every disposal, the
+nearest-entry mapping of a frame's table, the loop count - and paused while
+nothing draws them. 101 bytes (58,416, 6,608 free). Row `brganim`. Not
+done: an animation in EMS or the file (it stays on frame 0); the dirty
+slices alone (the image is drawn whole); re-decoding a small GIF on
+exposure instead of keeping it.
+
+4.4b (SPEC.md 71.29, Set up as it arrives / Held in the store): the
+animation is set up from the fetch that drew frame 0 - the staged file is
+moved past where the copy goes, so the decode writes the copy in place and
+the file stays as the block's start - so an animated GIF is fetched once,
+not twice. The spills take only the copies no animation holds and close the
+store up round the rest (`bri_compact`); an animation is let go only when
+nothing else is left to move. No resident byte; part 1 +641 (25,738).
 
 The frame engine (D5, D6) on the worker, its 8bpp logical screen in the
 store's tiers, the dirty rect converted and blitted, pause and resume rules.
@@ -124,6 +222,20 @@ rate in the final pass.
 
 ### 4.5 JPEG and PNG
 
+Done (SPEC.md 71.30). PiXEL's `pxpng.asm` and `pxjpeg.asm` are parts 2 and 3
+of BROWSER.O88, by source, and **their host is part 1** rather than the
+resident Browser (D4 had the Browser's bss hold the 1.6 KB of names): the
+names a decoder reads are a block of part 1's own data, linked by
+`tools/brpxlink.py` from part 1's map, and the services are part 1's. The
+resident Browser grew 81 bytes (the two part rows and the fetch and drop
+shims); part 1 holds the host. PiXEL's parts are byte-identical; the one
+edit to its source is `PXP_BG` made `%ifndef`, so the Browser's assembly
+composites over white. The JPEG's scale is the coarsest the IDCT offers whose
+master still covers the box. Row `brpx`: 13 pictures, every copy byte for
+byte its reference. The 25 KB on the disk moved REDLINE to more720.img and
+the Browser off apps720.img and apps360.img (the owner's decision,
+2026-11-11).
+
 `pxjpeg.asm` and `pxpng.asm` as Browser parts (D4), the link file, the
 services, the scale chosen to the box (JPEG's DCT scaling lands near the
 page's size for free).
@@ -134,6 +246,16 @@ pass unchanged.
 
 ### 4.6 The older formats
 
+Done (SPEC.md 71.31). Not as D10 drew it: `pxsimp.asm` is reused rather
+than written again, because since PiXEL's 106.25 it names only its host's
+VARIABLES - part 1's host block grew by them - so parts 4 and 5 are PiXEL's
+EXTRAS and SIMPLE FORMATS, by source, and part 6 is the Browser's own XBM
+(`apps/browser/brxbm.asm`, 628 bytes; `pixelsim` grew `xbm_header` and
+`xbm_rows`). The signature decides and, without one, the URL's extension
+(TGA, PCX, a plain MacPaint, XBM); the media type is still not read. A PNG
+inside an ICO keeps its alt box. Row `brold`: 19 pictures, every copy byte
+for byte its reference.
+
 D10: `pxextra.asm` as a Browser part (TIFF, ICO, IFF, MacPaint), and the
 Browser's own simple part (BMP, XBM, PCX, TGA). The media type guides, the
 signature decides (XBM has none: `#define name_width` is its text).
@@ -142,9 +264,11 @@ Verification: PiXEL's generated corpus (`tools/pixcorpus.py`) for every
 format PiXEL reads, its bytes against `pixelsim`; XBM fixtures of its own,
 `pixelsim` grown a reader for it.
 
-### 4.7 Later
+### 4.7 Save Image As and image maps
 
-Save Image As through the Download Manager; image maps; colours and
+Done (SPEC.md 71.32): Save Image As from the context menu through the
+Download Manager, client-side maps (`usemap`, `<map>`, `<area>`: rect,
+circle, poly, default) and server-side `ismap`. Row `brmap`. Colours and
 backgrounds (`bgcolor`, `<font color>`) are their own plan.
 
 ## 5. Measurements to take

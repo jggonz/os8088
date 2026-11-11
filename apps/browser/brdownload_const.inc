@@ -53,5 +53,15 @@ BRDL_CTXSHOW  equ 48                ; the rarely used UI (SPEC.md 71.24): the
 BRDL_CTXCLICK equ 52                ; context menu, shown and clicked,
 BRDL_SRC      equ 56                ; View and Close Source,
 BRDL_SUBMIT   equ 60                ; a form's submit,
-BRDL_BMCOMMIT equ 64                ; and a bookmark's add or remove
-BRDL_N        equ 17
+BRDL_BMCOMMIT equ 64                ; and a bookmark's add or remove,
+BRDL_MAPCLICK equ 68                ; and a click on an image map (71.32)
+BRDL_N        equ 18
+
+; An image map's area (SPEC.md 71.32): the parser writes br_area, part 0
+; reads it. Here because both sides include this file
+BR_AREAMAX    equ 32                ; areas a page keeps
+BR_ARSZ       equ 8                 ; an area: AR_MAP, AR_LNK, AR_CRD, AR_SHP
+AR_MAP        equ 0                 ; word: its map's name hash
+AR_LNK        equ 2                 ; word: its link, FFFFh none (nohref)
+AR_CRD        equ 4                 ; word: its coords in the link arena, FFFFh
+AR_SHP        equ 6                 ; byte: 0 rect, 1 circle, 2 poly, 3 default

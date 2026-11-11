@@ -185,7 +185,7 @@ SNIFF_EXT = {"JPG": "JPEG", "JPE": "JPEG", "PNG": "PNG", "GIF": "GIF",
              "BMP": "BMP", "PCX": "PCX", "TIF": "TIFF", "TGA": "TGA",
              "PIX": "PIX", "PBM": "PNM", "PGM": "PNM", "PPM": "PNM",
              "PNM": "PNM", "ICO": "ICO", "CUR": "ICO", "LBM": "LBM",
-             "IFF": "LBM", "MAC": "MAC"}
+             "IFF": "LBM", "MAC": "MAC", "XBM": "XBM"}
 
 
 def sniff(data, ext):
@@ -221,6 +221,8 @@ def sniff(data, ext):
         return "MAC"
     if h[:2] == b"CZ":
         return "CZ"
+    if h[:7] == b"#define":
+        return "XBM"
     return fmt
 
 
@@ -2818,6 +2820,108 @@ def mac_rows(p, rd):
 
 
 # =============================================================================
+# XBM (the Browser's, SPEC.md 71.31; PiXEL does not read it): apps/browser/
+# brxbm.asm in Python, check for check
+# =============================================================================
+XBM_DIMMAX = 4096
+
+
+def xbm_header(data, fsz):
+    """The `#define name_width/_height n` lines up to the first '{'."""
+    w = h = 0
+    i = 0
+    while True:
+        if i >= fsz:
+            raise Refused(PXD_HEAD)
+        c = data[i]
+        if c == ord("{"):
+            break
+        if c != ord("#"):
+            i += 1
+            continue
+        i += 1
+        if data[i:i + 6] != b"define":
+            continue
+        i += 6
+        while i < fsz and data[i] in (32, 9):
+            i += 1
+        s = i
+        while i < fsz and data[i] > 32:
+            i += 1
+        name = data[s:i]
+        if name.endswith(b"_width"):
+            which = "w"
+        elif name.endswith(b"_height"):
+            which = "h"
+        else:
+            continue
+        while i < fsz and data[i] in (32, 9):
+            i += 1
+        v = 0
+        while i < fsz and 48 <= data[i] <= 57:
+            v = v * 10 + data[i] - 48
+            i += 1
+            if v > 0xFFFF:
+                v = 0xFFFF
+                while i < fsz and 48 <= data[i] <= 57:
+                    i += 1
+                break
+        if which == "w":
+            w = v
+        else:
+            h = v
+    if not w or not h:
+        raise Refused(PXD_HEAD)
+    if w > XBM_DIMMAX or h > XBM_DIMMAX:
+        raise Refused(PXD_BIG)
+    p = Pic()
+    p.fmt, p.w, p.h, p.bits, p.rf = "XBM", w, h, 1, RF_IDX
+    p.pal, p.npal = [(255, 255, 255), (0, 0, 0)], 2
+    p.off = i + 1
+    p.heads = 1
+    return p
+
+
+def xbm_rows(p, rd):
+    d, i, n = rd.d, p.off, len(rd.d)
+
+    def nextbyte():
+        nonlocal i
+        while True:
+            if i >= n:
+                raise Refused(PXD_TRUNC)
+            c = d[i]
+            i += 1
+            if c | 0x20 == ord("x") and i >= 2 and d[i - 2] == ord("0"):
+                break
+        v = 0
+        for _ in range(2):
+            if i >= n:
+                break
+            c = d[i]
+            if 48 <= c <= 57:
+                k = c - 48
+            elif 97 <= c | 0x20 <= 102:
+                k = (c | 0x20) - 87
+            else:
+                break
+            v = (v << 4) | k
+            i += 1
+        return v
+    for y in range(p.h):
+        row = bytearray(p.w)
+        x = 0
+        while x < p.w:
+            v = nextbyte()
+            for k in range(8):
+                if x >= p.w:
+                    break
+                row[x] = (v >> k) & 1
+                x += 1
+        p.rows.append((y, bytes(row)))
+
+
+# =============================================================================
 # GIF ANIMATION (SPEC.md 106.25): the images after the first, played on the
 # 1/1 master. gif_anim() is the first pass, frame by frame; the guest is held
 # to it a frame at a time
@@ -3146,6 +3250,9 @@ def decode(data, ext="", scale=None):
     elif fmt == "MAC":
         p = mac_header(data, fsz)
         rows = mac_rows
+    elif fmt == "XBM":
+        p = xbm_header(data, fsz)
+        rows = xbm_rows
     elif fmt == "JPEG":
         p = jpeg_header(data, fsz)
         jpeg_rows(p, Reader(data), p.smin if scale is None else scale)
