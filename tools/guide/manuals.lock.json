@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "c1055377",
-  "strings": "898c28b46ed6ec69",
-  "why": "the page names the formats, Save Image As and image maps; 1.7 version strings and part 0 toast shims are below its level"
+  "stamped": "6f1c3f426",
+  "strings": "55b6220eb09d2d45",
+  "why": "Browser 1.7 review fixes (PR 358): the page already describes 1.7's pictures, Save Image As and image maps; the fixes add two rare refusal lines (Busy decoding an image, No image during download) below the page's level of detail. Restamped because c1055377 was the contributor's pre-rebase commit and is not in main's history"
  },
  "C64": {
   "sources": [],
