@@ -94,7 +94,7 @@ The panel lists the marks on the page, on all pages, or every change. Click a ca
 | Move page earlier, later, to... | Edit menu | Reorders pages |
 | Extract pages... | File menu | Type pages such as `1,3-5`, then choose a name. The result is a new file; the source stays open. |
 | Insert from PDF... | File menu | Choose a file, then type the pages, such as `2-4`. They go after the current page. |
-| New | File menu | Starts a blank document in Letter, A4 or wide sizes |
+| New | File menu | Starts a blank document in Letter, A4 or a wide size |
 
 Inserted pages show as blank paper until you save; the saved file holds the real pages. A file with forms or scripts cannot be inserted. Page operations handle up to 240 pages.
 
