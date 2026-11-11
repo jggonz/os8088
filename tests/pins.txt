@@ -672,28 +672,16 @@ C apps/pagedesk/pdovlrecov.c rc_js     # PageDesk's recovery journal (16KB at
 C apps/pagedesk/pdovlrecov.c rc_ss     # the journal's staging block, composed
                                          # and written inside one ovl_rc_flush
                                          # and freed before it returns
-N apps/pagedesk/pdumod.c pdu_xb        # PageDesk's exchange block (1KB): its
-                                         # segment is handed to PDENG, PDREND and
-                                         # PDWRT at INIT and kept in their
-                                         # statics. A relocation proc that
-                                         # re-INITs the three with the new
-                                         # segment would retire this line
-N apps/pagedesk/pdumod.c pdu_dclaim[c] # the document's claims: block cache,
-                                         # arena, tables, display list and the
-                                         # Flate slots (PAGEDESK-SPEC 16.2, D17),
-                                         # held while a document is open, their
-                                         # segments in PDENG's and PDREND's INIT
-                                         # record; the same re-INIT would
-                                         # retire this line
-N apps/pagedesk/pdumod.c pdu_bankraw   # the PDRES resource bank (fonts and
-                                         # art), held from first use until close
-                                         # and read by PDREND through its
-                                         # segment; UI-only otherwise
-N apps/pagedesk/pdumod.c pdu_wbuf      # PDWRT's buffers (18-40KB, PAGEDESK-SPEC
-                                         # 16.2), held across a save's or an
-                                         # extract's ticks, the segment in
-                                         # PDWRT's INIT record; each write holds
-                                         # it only inside its call
+N apps/pagedesk/pduslot.inc @pd_claimhi# PageDesk's one claim door (20.22.2):
+                                         # the launch claim (exchange block,
+                                         # font index, keys), the document's
+                                         # claims (block cache, arena, tables,
+                                         # display list, Flate slots, the edit
+                                         # store), the slot's S/W/X and PDWRT's
+                                         # buffers. Their segments sit in PDENG's,
+                                         # PDREND's, PDWRT's and the occupant's
+                                         # INIT records; a relocation proc that
+                                         # re-INITs them would retire this line
 N apps/pagedesk/pdusel.c pdu_cpseg0    # Copy's text buffer (up to 32KB), held
                                          # across the copy job's slices and
                                          # freed when the clipboard has it
