@@ -78152,10 +78152,34 @@ Probe order is binding, and the equipment word is consulted **last**:
    Step 1 has already claimed every VGA, so a card that answers *here* and
    not there is an EGA — and an IBM EGA has **no mode 12h**, only mode 10h
    (640x350). → `VID_EGA`.
-3. `int 11h` equipment word bits 5:4. `11b` = a monochrome card at B000 →
-   `VID_HERC`; anything else → `VID_CGA`.
+3. `int 11h` equipment word bits 5:4. Anything but `11b` → `VID_CGA`.
+   `11b` = a monochrome card at B000, which is a Hercules **or a plain MDA**,
+   and step 4 tells them apart.
+4. **Hercules or MDA (binding, 2026-11-10, big review BR-6).** Write
+   **3BFh = 1** first — an unconfigured Hercules aliases like an MDA
+   (§39.11.1.1), and an MDA has no 3BFh, so the write reaches nothing there —
+   then `vid_memchk`'s two-offset probe at B000 (0x55 at 0, 0xAA at 1000h, read
+   0 back): kept apart → `VID_HERC`. Aliased → a plain MDA, and the same probe
+   at B800: RAM there → `VID_CGA` (an MDA and a CGA in one machine with the
+   switches at mono; `vid_setmode`'s `vid_cga_equip` turns 40:10 to colour so
+   the BIOS mode set reaches the CGA, §39.19.4). Nothing there → the line
+   **`MDA cannot run os8088`** on the MDA's own text screen, through the
+   loader's teletype-and-halt (`read_run.halt`, boot/boot2.asm), and the
+   machine stops. Nothing has touched a CRTC at that point: the BIOS's mode 7
+   is still running. The probe puts nothing back, because every answer is
+   followed by a mode set or by the halt.
 
-Step 3 is last because a **VGA** driving a monochrome monitor also reports
+   **Why it is binding**: `vid_setmode` programs the Hercules graphics table
+   (R0 = 35h) into the 6845. On a Hercules in graphics mode that is 16-dot
+   characters and about 18.8 kHz; on an MDA it is 9-dot characters at about
+   33.4 kHz, against the 5151's 18.4 kHz — a dead screen at best, and period
+   documentation warns of damage to the fixed-frequency monitor (the owner,
+   2026-11-08: halt, or switch to the usable CGA). Until 2026-11-10 this was
+   a scope cut ("driving it as a Hercules is strictly less wrong than driving
+   it as a CGA at B800"), which was about an MDA alone and ignored both the
+   monitor and the CGA sitting idle beside it.
+
+Steps 3 and 4 are last because a **VGA** driving a monochrome monitor also reports
 `11b`, and that machine belongs on the planar path: mode 12h is a VGA mode
 whatever monitor is on the end of it, and it comes out as grey levels.
 
@@ -78169,15 +78193,11 @@ in that card's table, so claiming it would set a mode that does not exist
 and then paint `A000`, which is a *blank tube* rather than a degraded
 picture — and `vid_probe_avail` would go on to offer mode 6 as well, which
 that machine also does not have. So `BH = 1` falls through to step 3 and is
-handled as the mono card it is presenting as. That is not a good answer, it
+handled as the mono card it is presenting as (step 4 passes it as a Hercules:
+an EGA in mode 7 keeps B000's offsets apart). That is not a good answer, it
 is an honest one; the right answer is **mode 0Fh** (640x350 mono, planes 0
 and 2, at `B000`), which is a second setup and not this one. Untested and
 unclaimed rather than asserted — see `EGA-PLAN.md §7`.
-
-**Documented scope cut:** no Hercules-versus-plain-MDA discrimination (the
-0x3BA vertical-sync toggle). A plain MDA is text-only, so no better action
-exists; driving it as a Hercules is strictly less wrong than driving it as a
-CGA at B800.
 
 **Documented scope cut:** a 64KB EGA is driven as if it had 128KB. Mode 10h
 on a 64KB card is 640x350x4 (two planes), and the four-plane writer's upper
@@ -79148,15 +79168,17 @@ does not) was considered and rejected, because it trades a card nobody has
 built for a CGA that does not mirror.
 
 **The second offset is 0x1000, and that is also the Hercules-versus-MDA
-discrimination §39.1 recorded as a scope cut.** A plain MDA has 4KB at B000
+discrimination §39.1 once recorded as a scope cut.** A plain MDA has 4KB at B000
 and aliases it upward, so its 0x1000 *is* its 0x0000: the 0xAA lands on top
 of the 0x55 and the probe fails — which is the right answer, because an MDA
 is text-only and has no 720x348 mode to offer. A Hercules has 32KB in page
 0 and a CGA 16KB at B800, and both keep the two offsets apart. So the one
 probe that rejects an empty bus rejects a text-only card for free, and
-nothing here needs the 3BAh vertical-sync timing loop. §39.1's fallback
-behaviour is unchanged: that cut still stands for *detection*, where driving
-an MDA as a Hercules remains strictly less wrong than driving it as a CGA.
+nothing here needs the 3BAh vertical-sync timing loop. §39.1's step 4 uses
+the same idiom for *detection* since 2026-11-10 (a copy in the blob, because
+`vid_memchk` itself is `.ovl`/`.boot3` and the first tick runs before either
+exists), so a plain MDA is never driven as a Hercules: it runs on a CGA beside
+it or halts with a message.
 
 ##### 39.11.1.1 A Hercules that has never been told it may do graphics
 

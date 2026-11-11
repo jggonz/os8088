@@ -47,6 +47,7 @@
 *       bvs_apply        probe    VID_APPLY's boot copy: the first tick's geometry publish
 *       bvs_vtab         probe    bvs_apply's own table (VID_APPLY's expansion)
 *       vid_init         probe    kmain_o's re-run of vid_detect + bvs_apply, B2CALL from `.boot3`; it near-calls both, so it lives beside them
+*       vid_mdamsg       probe    vid_detect's plain-MDA message, printed through read_run.halt before any mode set (SPEC.md 39.1)
 
 # --- status: read through the blob's CS by spl_mcs ----------------------------
 *       ovl_spl_*        status   the status line's caption entries (SPEC.md 15.6), B2CALL from kmain_o and drv_boot_x
