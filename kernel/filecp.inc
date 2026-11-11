@@ -461,6 +461,14 @@ FCPBODY fcp_paste
     mov dh, [sch_cur]           ; OSAPI_MEM_FLOOR's one store, for this task
     mov dl, MEM_PG_MED          ; (DX is banked above)
     mov [mem_pg_fl], dx
+    mov [mem_pg_finst], dl      ; ...stamped as the KERNEL's (BR-11): MED is
+                                ; no instance's slot (asserted below), so no
+                                ; window's teardown lifts it - only fcp_lend,
+                                ; which every end of the list reaches, a closed
+                                ; window's stop included (fm's .pastegone)
+%if MEM_PG_MED < INST_MAX
+  %error "fcp_paste stamps the floor's instance with MEM_PG_MED, a slot number"
+%endif
 .single:
 %endif
                                 ; fcp_stop, at the end; here, at the start, is

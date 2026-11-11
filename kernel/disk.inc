@@ -2088,6 +2088,21 @@ dsk_xfer:
     je .wpfail                  ; write-protected: retrying cannot help (ZF=1
                                 ; rides to a `jbe .fail` below, which takes it:
                                 ; .fail itself is out of a byte's reach)
+    ; **MEDIA CHANGED** (BR-16, SPEC.md 18.9.1): an AT BIOS's change line is
+    ; the only hardware word that the disk was swapped, and a retry that
+    ; succeeds throws it away - so a write would land on the NEW disk with
+    ; the OLD disk's FAT. While MOUNTED, `shr` takes [dsk_mntok] 1 -> 0 with
+    ; CF = 1 (which .wpfail's `jbe` takes): the gate shuts, the next operation
+    ; remounts, and this one fails with 06h unretried. Inside a mount it is
+    ; already 0, stays 0 with CF = 0, and the retry stands
+    cmp ah, 0x06
+    jne .retry
+    shr byte [dsk_mntok], 1
+    jc .wpfail
+%ifndef DSK_PMHD                ; PARITY: these 11 bytes and DSK_PMHD's 51 are
+    nop                         ; an even pair; without DSK_PMHD this is the
+%endif                          ; other half (see the note past .ijf)
+.retry:
 %ifndef KD_BUILD                ; **A FAILING DISK SAYS SO** (SPEC.md 12.8.3.2).
     dec byte [sch_lock]         ; FPG_WARM counts sectors MOVED and a retry
     push cx                     ; moves none, so a one-sector read failing on
@@ -2597,9 +2612,12 @@ dsk_xfer:
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
                                 ; (t_hotpar.py). DSK_PMHD's bytes in dsk_xfer
-%ifdef DSK_PMHD                 ; are 51 since its mask moved to .attempt -
-    nop                         ; odd, the `jmp .attempt` relaxing to near
-%endif                          ; among them - so they bring a second
+                                ; are 51 since its mask moved to .attempt -
+                                ; odd, the `jmp .attempt` relaxing to near
+                                ; among them - and the media-changed test's
+                                ; 11 (BR-16) are the other odd half, so the
+                                ; second pad that stood here is that test's
+                                ; own, on the kernels WITHOUT DSK_PMHD
 
 
 
@@ -6698,6 +6716,9 @@ dsk_dirw_cwd:                   ; ...of the CURRENT directory: the two
 dsk_dirw_start_x:
     mov [dsk_wclus], ax
     and word [dsk_wsec], 0
+%ifndef KD_BUILD                ; (kern_dos grows no folder: KD_IMG_KB)
+    and word [dsk_wlast], 0     ; no step taken yet: 0 is no cluster
+%endif
     mov word [dsk_wguard], DSK_DIRW_MAX
     ret
 
@@ -6728,7 +6749,14 @@ dsk_dirw_next_x:
     mov ax, [dsk_wclus]
     call dsk_next_clus_x          ; CF=1 only if the CURRENT link is invalid
     jc .end
+%ifdef KD_BUILD
     mov [dsk_wclus], ax         ; the new link is validated by clus2lba
+%else
+    xchg ax, [dsk_wclus]        ; the new link is validated by clus2lba -
+    mov [dsk_wlast], ax         ; and the one it came FROM is banked: at the
+%endif                          ; chain's end it is the folder's LAST
+                                ; cluster, which dskw_dirgrow links a new one
+                                ; to (SPEC.md 18.5.2, BR-60)
     and word [dsk_wsec], 0
 .have:
     mov ax, [dsk_wclus]
@@ -11599,11 +11627,19 @@ dsk_chwr:     resb 1            ; ...and which way it is moving (SPEC.md
 %endif
 
 ; --- the directory walker's scratch (SPEC.md 19.2) --------------------------
-; Safe in .bss: dsk_dirw_start writes all three before any walk reads them.
+; Safe in .bss: dsk_dirw_start writes all four before any walk reads them.
 ; [dsk_cwd] and [dsk_keepcwd] are NOT - see the module data block up top.
 dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
+%ifndef KD_BUILD
+dsk_wlast:    resw 1            ; dirw: the cluster the last step LEFT, 0 =
+                                ; none yet - at a subdirectory's end, its last
+                                ; one (BR-60). A step is taken only from a
+                                ; cluster dsk_next_clus_x accepted, so a
+                                ; non-zero value is in range; the root, and a
+                                ; folder whose first cluster is not, stay 0
+%endif
 
 ; --- the read-ahead cache's bookkeeping (SPEC.md 18.95) ---------------------
 ; Safe in .bss because nothing reads any of it while [dsk_rah_seg] is 0, and

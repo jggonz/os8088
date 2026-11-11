@@ -35894,12 +35894,23 @@ by any host `fsck`/`chkdsk`, and never a cross-link and never lost data.
 The reverse order (free first, then write) would risk exactly that, so it
 is forbidden.
 
-**Rollback.** Any failure *before* the commit invalidates the FAT window and
-clears the dirty range (`dskw_refat`, no I/O: the next access faults a clean
-window in off the disk), so a partially allocated chain never survives in
-RAM to be flushed by a later, unrelated operation. An eviction may already
-have flushed part of that chain (§18.8), which costs lost clusters, never a
-cross-link. Failures at or after the commit
+**Rollback.** Any failure *before* the commit FREES the half-built chain
+(`[dskw_first]`, never linked, so the write's alone) and flushes the FAT
+(`dskw_wabody.rbfree`, which `dskw_wbody` shares). Freeing is needed, not
+tidy: on a FAT longer than the window (§18.8) the allocator's scan and the
+links moved the window, and `dsk_fat_window` flushed before it evicted, so
+part of the chain is already allocated on the disk - and on a **Disk full**
+that part is every free cluster the volume had, which then read "full" until
+a repair, even after the user deleted the file they were saving (BR-17).
+The held stream's rollback already freed its sub-chain (18.4.9.1); the plain
+arms now run the same code, which costs kern_big **-1 byte** (`dskw_wbody`
+jumps to it) and kern_small, with no held streams, **+12**.
+Only if that flush also fails does it invalidate the FAT window and clear the
+dirty range (`dskw_refat`, no I/O: the next access faults a clean window in
+off the disk), so a partially allocated chain never survives in RAM to be
+flushed by a later, unrelated operation; what an eviction flushed then costs
+lost clusters, never a cross-link. On a whole-window FAT12 floppy the free
+costs one FAT write (both copies) on a failed save. Failures at or after the commit
 report the error but leave the file switched over — that is what the
 ordering above buys.
 
@@ -36455,8 +36466,9 @@ the slot would only be a way to litter the user's disk.
 
 **Commit order (binding, and it is §18.4's order for the same reason).**
 
-1. `dskw_find` the name — `FERR_EXIST` if it is taken, `FERR_DIRFULL` if
-   the scan reached the end of the directory with no reusable slot.
+1. `dskw_find` the name — `FERR_EXIST` if it is taken — and a slot: a
+   subdirectory with none GROWS by a cluster (§18.5.2); `FERR_DIRFULL` is
+   the root's answer, whose size FAT12/16 fixes.
 2. `dskw_alloc` one cluster (marked end-of-chain in the snapshot on the
    spot) and **write it in full**: sector 0 is `.` and `..` built by
    `dskw_dotents` with the rest of the sector zeroed, and every remaining
@@ -36503,6 +36515,51 @@ which is precisely why §18.4 makes both part of the gate.
 `[dsk_keepcwd]` raised (§18.4), so the new folder appears in the listing
 **and the volume stays where it was** — the whole point of creating a
 folder inside another one.
+
+#### 18.5.2 A full subdirectory GROWS (`dskw_dirgrow`, BR-60)
+
+DOS has grown subdirectories since 2.0, and this kernel refused at the end of
+the chain: a folder it made held **14 entries** on a 512-byte-cluster disk
+(1.44MB, 1.2MB, the 360KB system disk, §19.3.2) and 30 on a 1KB one, and
+RunCPM's save failed on the glass for it (§74.3's `Dir full:`). Both creators -
+`dskw_wbody`'s new file and `dskw_mkbody`'s new folder - now ask
+`dskw_dirgrow` for their slot. When `dskw_find` found one it is answered as it
+stands; otherwise, in this order:
+
+1. **Refuse the root** (`FERR_DIRFULL`): FAT12/16 fix its size. And refuse a
+   walk the hostile-FAT guard (`DSK_DIRW_MAX`, §19.2) capped short of the
+   chain's end, because the cluster it stopped at is not the last one and a
+   link there would cut the folder off. The walker banks the cluster each
+   step LEFT (`[dsk_wlast]`, 0 until a step is taken, so 0 for the root), and
+   one `mul` of it by `[dsk_wguard]` is zero exactly when either refusal holds.
+2. **`dskw_mkclus`** - mkdir's own cluster writer, factored out of
+   `dskw_mkbody` for this: allocate, then write the cluster whole, sector 0 as
+   the routine in `BP` builds it (`dskw_dotents` for a folder, `dskw_zerobuf`
+   here) and every other sector zero.
+3. **Flush** - the new cluster's end mark is durable before anything points at
+   it.
+4. **Link** the folder's last cluster to it, and **flush**. A crash between 3
+   and 4 leaves a lost cluster; never a chain into garbage.
+5. **`dskw_find` again.** The walk now reaches the new cluster and stops at its
+   first entry, a `00h`, so the slot is published exactly as a folder with room
+   would publish it - `[dskw_fend]` and the zeroed next entry included. Every
+   pass finds a slot or spends a cluster, so the loop ends at one or at
+   `FERR_FULL`. The folder's old sectors are still the read-ahead cache's
+   (§18.95); the new cluster's first sector is the one fresh read.
+
+A failure before the link rolls back as mkdir's does (`dskw_refat`). The
+folder keeps a grown cluster even when the write that wanted it then fails -
+an empty cluster the next create uses. `fcp_relink` (§22) still declines a
+full destination folder and its copy fallback goes through `dskw_wbody`,
+which grows it.
+
+**Bytes:** **+69 resident** on `kern_big`, `kern_emu` and `kern_small` (67
+`.cold` and the 2-byte `.bss` word), `kern_mega` conventional +2 (its `.cold`
+is above 1MB) - against the review's +90. What is shared is mkdir's: the allocate-and-zero loop
+(`dskw_mkclus`), its error tails and their rollback, `dskw_find` itself as the
+publisher, and the walker that already followed the chain. `kern_dos` refuses
+as before (`KD_BUILD`): its image is at `KD_IMG_KB`'s edge, and raising it is
+a layout decision (`kerndos/kdlayout.inc`).
 
 ### 18.6 `dskw_rmdir` — removing an empty subdirectory
 
@@ -37090,7 +37147,9 @@ clean window in off the disk, which is precisely what re-reading the whole FAT
 used to buy, and it can no longer fail — so the write gate has no reason to
 close there any more. What the window *does* change is the rollback's reach:
 an eviction may already have flushed part of a half-built chain to the disk,
-and no invalidate takes that back. **It costs lost clusters and can never
+and no invalidate takes that back, which is why the write bodies' rollback
+frees the chain and flushes FIRST (§18.4, *Rollback*) and invalidates only
+when that flush fails. **Then it costs lost clusters and can never
 cross-link** — the same guarantee §18.4's commit order gives a crash — and
 that is the whole of the difference. It is written down here because it is
 exactly what a later reordering of the flush would break.
@@ -37808,6 +37867,21 @@ not `dsk_batch_begin`/`end`.
 maintain the byte reads 0, which means "validate", which is what every mount
 does today. The failure mode of being wrong is a wasted mount, never a
 skipped one.
+
+**An AT BIOS's change line is believed when it SPEAKS, on top of the motor
+test (BR-16).** The change line was declined as a *replacement* for the
+motor test (docs/plans/completed/DISK-PERF-PLAN.md §4), but status `06h`
+arrives anyway on a transfer already being made, and `dsk_xfer` used to treat it as any other
+failure: reset, retry, the retry succeeds, and the one hardware word that
+the disk was swapped is gone - so a fast swap inside a passing motor test, or
+inside a batch, wrote the new disk with the old disk's FAT. Now `06h` while
+MOUNTED shuts the gate (`[dsk_mntok]` 1 -> 0, by one `shr` whose CF is the
+"was mounted" answer) and fails the transfer with `06h`, unretried; the next
+operation remounts. Inside a mount `[dsk_mntok]` is already 0 and the retry
+stands, which is what clears the line there. **11 bytes `.cold`**: +10 on
+kern_big and kern_emu, where they and `DSK_PMHD`'s odd 51 make an even pair
+and the parity pad they needed goes; +12 on kern_small and kern_mega, which
+carry that pad here instead. An XT has no change line and never answers `06h`.
 
 Three things about the implementation:
 
@@ -44854,9 +44928,9 @@ Why this disk and no other (the arithmetic is the report's, section 6):
 
 **What a user sees**: a folder this disk ships holds 16 entries rather than 32,
 as on the 1.44MB system disk — `SYSTEM/APPDATA` holds 2 of them, `SYSTEM/FONTS`
-13 — and a folder the kernel makes on it holds 14 (§18.5's `FERR_DIRFULL`,
-which a directory never grows past). The CPU that scales with the cluster count
-is a free count ~7 ms longer per mount and a first allocation ~57 ms longer
+13 — and a folder the kernel makes on it holds 14 before it grows by a
+cluster (§18.5.2; it refused with `FERR_DIRFULL` until BR-60). The CPU that
+scales with the cluster count is a free count ~7 ms longer per mount and a first allocation ~57 ms longer
 on the full disk; the `int 13h` count does not change, because contiguous
 clusters are one transfer at any cluster size (§18.4.2).
 
@@ -60934,7 +61008,23 @@ whole of the care for that reason: the harvest inside `disk_mount` reaches
 `ico_need`, which claims the icon store lazily, with the destination already
 aimed — so `mem_rr_tab` carries a `MEM_RR_ONE dsk_dseg` row that makes the
 word survive a move whatever the ordering does. The row is the backstop and
-the ordering is still the design. A window filled at a different `[dsk_nmax]` shape
+the ordering is still the design.
+
+**A MOVE is one door and a SHED is the other (BR-2).** `ico_need` is not the
+only claimer behind an aimed destination: mount step 2 claims the read-ahead
+window (`MEM_P_DIRW`, HIGH) and on a multi-window volume the FAT window
+(`MEM_P_FATW`, MED) before step 3 writes the listing, and on `kern_small` a
+Disk window's own listing is a purgeable `MEM_P_VIEW` at LOW - so the shed
+those claims make could take the very block `[dsk_dseg]` names, `fmv_demote`
+zeroing `FS_VSEG` but not the aimed word, and hand its paragraphs to the
+claimant: the listing was then written into the FAT window, which the next
+write puts on the floppy. `kern_small` has no compactor, so `MEM_RR_ONE`
+covers nothing there. `mem_shed_one` skips the record whose segment is
+`[dsk_dseg]` (`kern_small` only, where `MEM_P_VIEW` exists): 0 at rest, so
+the skip binds only inside an aimed mount and never pins a cache across the
+session, and the one door covers every claimer behind it. It is
+`mem_fatw_dirty`'s first test - the shed's other "never this one", whose
+accumulator compare it shares - so **8 bytes `.cold`, `kern_small`**. A window filled at a different `[dsk_nmax]` shape
 (§22.6.1) is handed back rather than repaired, and falls through to the
 re-list.
 
@@ -103035,10 +103125,27 @@ the read-ahead window's worth of heap, silently. So a package lifts its floor
 the moment the claim is behind it, on the refusal path as well, and the kernel
 lifts it for a package that never did: `mem_free_rec_x` stores `MEM_LVL_TOP`
 over it when an instance's claims are swept, so a DOS window closed while it waited
-on its wake leaves nothing behind. That lift is unconditional and per-instance
-rather than per-task, which is exact for the one setter in the tree and would
-cost another package's floor only if a window were closed during the split
-second DOS waits for its wake.
+on its wake leaves nothing behind.
+
+**That lift is the SETTER's instance's, never anyone's (BR-11).** The task
+stamp says whose claims a floor binds, but it cannot say whose teardown lifts
+it: every package callback, the DOS and the kernel's own paste run on the UI
+task. So a third byte, `[mem_pg_finst]`, names the instance that set it -
+`OSAPI_MEM_FLOOR` stamps `[snd_inst]`'s slot, which is `inst_caller`'s answer
+for every caller on the UI task and 0xFF outside a callback, and a multi-file
+paste (§22.27) stamps 0xFF, the kernel - and `mem_free_rec_x` lifts the floor
+only when it is the dying record's slot. It used to lift unconditionally, and
+the case that cost was not DOS's: a multi-file paste raises the floor to MED so
+each entry's copy buffer cannot shed the list it walks, and closing ANY window
+while its overwrite question was up lifted it - the next copy buffer shed
+`MEM_P_FLIST`, `fcp_lnext` read the zeroed word as the end of the list, and the
+paste stopped part-way reporting success. The paste's floor is lifted by
+`fcp_lend`, which every end of a list paste reaches (a closed window's stop
+included). **+17 bytes on kern_big** (16 `.cold` and the `.bss` byte) **and
++13 on kern_small**, which has no list paste: the setter's two stores (6), the
+teardown's compare (6), the paste's stamp (4) - the level byte itself, MED
+being no slot number. A paste still overwrites a floor DOS has standing, and `fcp_lend` lifts
+whatever stands; both cost DOS a performance tier, never data, and are left.
 
 #### 50.6.7 A cache that declares a proc MOVES, and the blanket refusal is gone
 
@@ -136817,8 +136924,10 @@ RAM? NAME.EXT` and answers 0xFF (measured in the harness, all three). A
 write-back that fails toasts its FACT — `Dir full: NAME.EXT` (**the kernel does
 not grow a directory, §18.5: `FERR_DIRFULL` when the chain has no free slot**),
 `Disk full:`, `Protected:`, else `Not saved:` — and the bytes are lost, as an
-upstream `fwrite` failure would lose them. **That directory fact shapes the
-disk**: `os88disk.py`'s own sizing left A\0 ONE free slot after the master
+upstream `fwrite` failure would lose them. (A subdirectory GROWS since BR-60,
+§18.5.2, so `Dir full:` is now a root's or `kern_dos`'s answer; the pre-sizing
+below stays, because a folder built at its size is contiguous and costs no
+growth on the first save.) **That directory fact shapes the disk**: `os88disk.py`'s own sizing left A\0 ONE free slot after the master
 disk's 77 files, and the second save of a session failed on the glass (wave
 4); so `os88disk.py --dir-slots A/0=128` (`RUNCPMSLOTS`) builds A\0's
 directory for 128 entries — the size of the cache: 126 files — on every
@@ -226602,8 +226711,9 @@ A:\SYSTEM\APPDATA\NOTES\NOTE0001.TXT  what New makes: the lowest NOTEnnnn free
   or a DOS PC. Anything else in the folder is skipped.
 - **The folder ships pre-sized** (`os88disk.py --dir-slots
   SYSTEM/APPDATA/NOTES=32`, `$(STIKNOTESARG)` / `$(STIKNOTESOPT)` beside
-  `$(STIKARGS)` in each system-disk recipe), because the kernel never grows a
-  directory (§18.5): 32 slots is `.`, `..` and 30 notes. It costs **three
+  `$(STIKARGS)` in each system-disk recipe), because the kernel did not grow a
+  directory when it was written (it does since BR-60, §18.5.2, and the
+  pre-sizing still saves the first growths): 32 slots is `.`, `..` and 30 notes. It costs **three
   clusters** on the 1.44MB, 1.2MB and 360KB system disks (two of directory at
   512 bytes, one of `WELCOME.TXT`) and **two** on the 720KB one (1 KB
   clusters) - measured, `os88disk.py --verify`. A folder that is missing (a
