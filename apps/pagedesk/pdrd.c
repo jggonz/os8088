@@ -610,9 +610,12 @@ static pdw syn_next(pdw obj, pdw gen, pdw i)
  * with it; the strike cache keeps its entries unless the blocks' header now covers them */
 static void syn_adopt(pdw seg, pdw kb)
 {
-    pdw og = g_gseg;
+    pdw og = g_gseg, oc = syn_cap();
     g_gseg = seg; g_gkb = kb > 63 ? 63 : kb;
     if (!g_gseg) g_gkb = 0;
+    /* the claim's first blocks: their header is whatever the claim held - after a document's close the
+     * heap hands its 40 KiB claim back as the next one's 24, header and all (QA R24 round 2) */
+    if (!oc && syn_cap()) pd_ffill(g_gseg, syn_hdr(), 0, PDFB_HDR);
     if (g_bk_seg[1]) g_bk_seg[1] = (pdw)(g_bk_seg[1] + (g_gseg - og));
     if (g_scbump > syn_hdr()) { g_scn = 0; g_scbump = SC_BASE; }
 }

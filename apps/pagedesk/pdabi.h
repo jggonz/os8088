@@ -939,6 +939,8 @@ struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
 #define PDFG_BLOCK  0x0004      /* in: a STRIKE BLOCK request (below): PDXF finds or makes the block of
                                    (font, em64 >> 6), then the code's slot in it, rasterises (em64 != 0)
                                    and records the width and the Latin byte; answers the slot and block */
+#define PDFG_NOPROG 0x0020      /* in: the font is known to have no usable program (PDREND draws it in the
+                                   substitute face): PDXF reads its tables, never the program (QA R13) */
 #define PDFB_SIZE   4096        /* a strike block: 128 glyph records (4 bytes: width, left bearing i8,
                                    bitmap offset u16), the bitmaps from +512 (the PDFB strike layout of
                                    11.2, slots 1..128, the record of slot s at (s-1)*4; the u16 next

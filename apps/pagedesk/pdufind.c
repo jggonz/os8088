@@ -98,6 +98,8 @@ static void ovl_find_hit(unsigned lo, unsigned hi)
 static void ovl_find_miss(void)
 {
     char *p;
+    unsigned *q;
+    int m;
     pdu_job = J_NONE;
     os88_strcpy(pdu_line, "No match for \"", sizeof(pdu_line));
     pdu_cat(pdu_line, pdu_needle, sizeof(pdu_line));
@@ -105,13 +107,33 @@ static void ovl_find_miss(void)
     /* a page whose fonts the text pass could not read (no font module beside the overlay, PAGEDESK-SPEC
      * 20.22.8): "not found" would be a guess, so say which page to draw first. The words are STORED by
      * code, not a literal: this overlay's literals are resident and the primary is at its cap */
-    if (pdu_funread >= 0 && os88_strlen(pdu_line) < sizeof(pdu_line) - 24) {
+    m = pdu_funread == (int)pdu_page;
+    if (pdu_funread >= 0 && os88_strlen(pdu_line) + (m ? 40 : 25) <= sizeof(pdu_line)) {
         p = pdu_line + os88_strlen(pdu_line);
-        p[0] = ' '; p[1] = '-'; p[2] = ' '; p[3] = 'd'; p[4] = 'r'; p[5] = 'a'; p[6] = 'w';
-        p[7] = ' '; p[8] = 'p'; p[9] = 'a'; p[10] = 'g'; p[11] = 'e'; p[12] = ' ';
-        os88_utoa(pdu_funread + 1, p + 13);
+        q = (unsigned *)p;              /* two letters a store: the overlay's own bytes, which the old message's
+                                         * byte stores spent twice as fast */
+        q[0] = 0x2D20; /* " -" */
+        if (m) {
+            /* the page on the screen (QA R28): drawing it again would not help - the font module could not
+             * be had beside the page (PDREND says UNREAD only then), which is a matter of memory */
+            q[1] = 0x6E20; q[2] = 0x206F; q[3] = 0x656D; q[4] = 0x6F6D; q[5] = 0x7972;     /* " no memory" */
+            q[6] = 0x7420; q[7] = 0x206F; q[8] = 0x6572; q[9] = 0x6461; q[10] = 0x7020;  /* " to read p" */
+            p += 22;
+        } else {
+            q[1] = 0x6420; q[2] = 0x6172; q[3] = 0x2077; p[8] = 'p';    /* " draw p" */
+            p += 9;
+        }
+        q = (unsigned *)p;
+        q[0] = 0x6761; q[1] = 0x2065;   /* "age " */
+        p += 4;
+        os88_utoa(pdu_funread + 1, p);
         p += os88_strlen(p);
-        p[0] = ' '; p[1] = 'f'; p[2] = 'i'; p[3] = 'r'; p[4] = 's'; p[5] = 't'; p[6] = 0;
+        q = (unsigned *)p;
+        if (m) {
+            q[0] = 0x7327; q[1] = 0x6620; q[2] = 0x6E6F; q[3] = 0x7374; p[8] = 0;       /* "'s fonts" */
+        } else {
+            q[0] = 0x6620; q[1] = 0x7269; q[2] = 0x7473; p[6] = 0;                      /* " first" */
+        }
     }
     pdu_wsay(pdu_line);
 }

@@ -97,6 +97,7 @@ static int send_fontbank(void)
 static unsigned g_glyold;           /* the moved claim's old size: its old place must stay 0xCD */
 extern pdw pdrh_slot, pdr_out_cx, pdr_out_dx;
 static struct pdxb_init g_lastinit;
+extern void pdrh_xload(void) __attribute__((weak));     /* pdx_xmod.c: the occupant is loaded afresh */
 static int g_loads, g_memasks;
 static unsigned g_clsize[5];        /* the claims' sizes, for the canaries below */
 static int ladder(pdw e)
@@ -132,7 +133,7 @@ static int ladder(pdw e)
             if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
             memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
         }
-        if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
+        if (!no || (strcmp(no, "all") && !strchr(no, '0' + (int)id))) { if (id != pdrh_slot && pdrh_xload) pdrh_xload(); pdrh_slot = id; vcall(PDV_REND_SLOT, id, 0x0008, 0x9800); }
         return 1;
     }
     if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_SLOT && getenv("PDR_XNEEDMEM")) {   /* the decoder's workspace (QA F15) */
@@ -204,6 +205,10 @@ static void do_init(int bpp, int bankkb, int dlkb)
                              * otherwise start a new document instead of keeping the page view */
     in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
+    /* PDR_GLYREUSE: the next document's claim is where the last one's ended, its bytes kept - the heap
+     * hands a freed claim back, and a 24 KiB claim at a 40 KiB one's base holds that claim's block header
+     * at +24,512, which a growth in place then keeps (QA R24 round 2) */
+    if (getenv("PDR_GLYREUSE") && g_lastinit.glyph_seg) in.glyph_seg = g_lastinit.glyph_seg;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
     /* the engine's vector, nonzero as the primary's is: verb_init takes a 0 one
@@ -217,6 +222,9 @@ static void do_init(int bpp, int bankkb, int dlkb)
     g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
+    /* a document's close gives the slot back (plat's pdu_doc_free): the next one loads and INITs its
+     * occupant afresh, so nothing PDXF cached of the last file's font objects survives (QA R24) */
+    if (pdrh_slot) { pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0); if (pdrh_xload) pdrh_xload(); }
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }

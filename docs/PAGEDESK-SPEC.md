@@ -6924,6 +6924,27 @@ program area (the primary says so with `PDFE_SIZE`), TrueType collections, CFF2/
 Type 1 multiple-master, a CMap with three- or four-byte codes (read as two), a predefined CJK CMap
 by name (no data on this machine; `Identity-H/V` is built in, others read as 2-byte identity).
 
+**A Type0 font whose program is not read keeps its text** (QA R13: MUHTML, LICJA and LICZH drew BLANK
+pages, not even their Latin lines, because their CID programs - 46 to 241 KB - do not fit the
+workspace). The font stays ACTIVE without a program (`fd_activate`'s `bad:`, kind `PDFK_NONE`): its
+ToUnicode, Encoding CMap and `/W` are read as for any font, so GLYPH still answers each code's width
+and Latin byte (`PDFG_LATIN`) beside the `PDFE_*`, and with `PDFG_BLOCK` it records them in the
+font's **size-0 block** - the text pass's block, one per font whatever sizes it is drawn at. PDREND
+marks the font (`pdr_font.esub`), draws every code's Latin byte in the substitute face and notes
+"font substituted", and from then on looks the code up in that block (a hit needs no module) and asks
+PDXF only for a code it has not seen, with `PDFG_NOPROG` (0x20), so PDXF re-activating the font
+between its neighbours never reads the program again (LICJA's 241 KB program was otherwise
+re-inflated up to its 43 KB stop on every font change). With no `/ToUnicode`, an Adobe CJK ordering
+(`/CIDSystemInfo /Ordering` Japan1, GB1, CNS1 or Korea1 - not Identity) gives CIDs 1-95 their
+ASCII byte, CID + 31, which is where every Adobe ordering keeps proportional Latin (LICJA's
+`Apple Inc.`). CJK codes have no PD Latin and stay invisible, advancing by their `/W` width. A
+growth of the workspace that is refused is not asked for again by any font while PDXF stays resident
+(`g_askobj` = 0xFFFF), so a page of four oversized fonts costs one answer, not four.
+`hosttest/pdx_page.py --nopr` sets `PDFG_NOPROG` on every request: each fixture page must draw ink
+for its text, note the font, and give the same text map as with the programs (with the pre-fix
+PDREND the CID fixtures draw nothing: 20 of 50 pages fail). Simple fonts were already drawn in the
+substitute face through their encoding. PDXF: image 44,674 + bss 20,350 = **65,024 of 65,024**.
+
 **The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`; 20.22.2.3's row is **want 64, min 32 KiB**):
 the program `[0, slot - 10,752)` (one at a time; a different font is a reload, the dictionary being
 named in every call): 22,016 bytes at the min, 54,768 at the want. A program larger than the area it
@@ -6976,7 +6997,9 @@ Subtype, `/DescendantFonts`, `/FontDescriptor` and its `/FontFile*`, `/Flags`, `
 dictionary with `/BaseEncoding` and `/Differences`, or a CMap stream), `/ToUnicode`,
 `/CIDToGIDMap`, `/DW` and `/W`; then the program is read through PDENG's stream stack into the
 workspace and parsed once. Only `GLYPH` is hot, and it is one glyph a call. A refusal answers
-`CF = 1` with a `PDFE_*` reason, and PDREND draws that font in the substitute face from then on.
+`CF = 1` with a `PDFE_*` reason, and PDREND draws that font in the substitute face from then on (a
+Type0 font through PDXF's map of its codes, above). PDREND's miss (`emb_miss`) runs in PDRENDC
+(`pdrovl.h`): once per code and size, its time is PDXF's raster.
 
 **The strike block** (`PDFB_SIZE` 4,096; `pdabi.h` has the layout): 128 glyph records of 4 bytes in
 the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset), the bitmaps from
@@ -6988,7 +7011,16 @@ FINDS, PDXF MAKES and evicts a block not used in this pass). That number is PDRE
 pass count that is NOT reset with each render: `g_passes` restarts at 1 every verb, and a stamp of it
 made every block a previous page or thumbnail used look "used in this pass" to the next render's
 pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
-block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
+block full`. **The block header is cleared with each new document** (`verb_init`) **and when the
+claim first holds blocks** (`syn_adopt`, a growth from under 28 KiB): object numbers repeat across
+files, so a block the last file left matched the next file's (font, size) - its glyphs, or its full
+keys. On the machine the second is the one that bites: a document's close frees its 40 KiB claim,
+the next document's 24 KiB claim is handed the same memory, and the header at +24,512 is inside it,
+so the growth in place kept the last file's blocks (QA R24 on VGA: cff-cid-cmap and tt-cid-map said
+`glyph block full` as a session's second file). `hosttest/pdx_page.py --docs` draws every fixture's
+page 1 one file after another in one process, with a 40 KiB claim and then with a 24 KiB claim
+grown for each file in the memory the last one's left (`PDR_GLYREUSE`), and holds each to its render
+alone with no `glyph block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
 ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit, at most `PDFB_NBLK` (6): a
 24 KiB claim has none, 32 KiB has two, 40 four, 48 six. **The claim is a RANGE, want 48 and min
 40** (the lead, fix round; the 20.22.2.3 pattern): a page's first block asks for the min, and
@@ -7041,7 +7073,11 @@ Type0 codes map to nothing and its simple codes map through the base encoding. *
 silent "not found"**: a text pass that met codes it could not read ends with `done` = 1 |
 `PDTM_UNREAD` (2) in `pdxb_textmap`, and Find, when it matches nothing, names the first such page:
 `No match for "x" - draw page N first`. Drawing the page leaves its strike blocks, and the next
-Find reads it. (The words are stored by overlay code rather than a literal: the overlay's
+Find reads it. When page N is the page ON THE SCREEN, drawing it again would not help - PDREND says
+UNREAD only when PDXF was refused beside the page, which is memory (QA R28: plat's R26 low-memory
+state said "draw page 1 first" over a drawn page 1) - so Find says
+`No match for "x" - no memory to read page N's fonts`. Both are stored two letters a word by overlay
+code (+146 bytes of the overlay, no primary byte). (The words are stored by overlay code rather than a literal: the overlay's
 literals are resident and the primary is at its cap; the cost is the 2-byte `pdu_funread`.) **A text pass asks for nothing but PDXF**
 (and the glyph claim and PDXF's own workspace): colour spaces, shadings and images draw no text, and
 asking for PDXG on every page made a Find swap PDXG and PDXF per page, 60 ladder answers over QZTEXT's

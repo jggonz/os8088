@@ -338,6 +338,7 @@ PDFK_T1                  equ 3
 PDFK_T3                  equ 4
 PDFG_INFO                equ 0x0001
 PDFG_BLOCK               equ 0x0004
+PDFG_NOPROG              equ 0x0020
 PDFB_SIZE                equ 4096
 PDFB_HDR                 equ 64
 PDFB_MAGIC               equ 0x5342

@@ -85,4 +85,8 @@
  * paid for the image decoder's workspace ask with it) */
 #define mode_reset      ovl_mode_reset
 
+/* [fonts] an embedded font's MISS: once per code and size (a hit never leaves the band loop), its
+ * time is PDXF's raster, not the far call and thunks (20.22.8); a font's load, once per font */
+#define emb_miss        ovl_emb_miss
+
 #endif

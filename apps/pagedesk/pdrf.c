@@ -165,7 +165,8 @@ struct pdr_font {
     pdw first, nw;                  /* /FirstChar, /Widths length (0 = none)   */
     pdb enc[224];                   /* code 32..255 -> PD Latin (0 = none)     */
     pdw wid[224];                   /* 1/1000 em, 0xFFFF = not fetched         */
-    pdb emb, epad_;                 /* 1 an embedded program, 2 a Type0 font (20.22.8) */
+    pdb emb, esub;                  /* 1 an embedded program, 2 a Type0 font (20.22.8); esub: a Type0 font
+                                     * with no usable program, drawn in the substitute face from PDXF's map */
 };
 /* the cache's 4 entries live in the workspace (WS_FN); one is resident at a time */
 static struct pdr_font g_fw;
