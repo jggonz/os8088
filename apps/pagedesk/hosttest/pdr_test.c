@@ -210,7 +210,17 @@ static void do_init(int bpp, int bankkb, int dlkb)
     if (getenv("PDR_XCKB0")) { in.xc_seg = SEG_XC; in.xc_kb = (pdw)atoi(getenv("PDR_XCKB0")); }   /* the claim from the start */
     g_lastinit = in;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
+    /* PDR_SYNPLANT: the glyph claim comes with the LAST document's synthetic blocks in it, as a
+     * File > Open keeps the claim (QA R26 c): the directory's magic and one entry (7 0 R at 20 px) */
+    unsigned synhdr = 0;
+    if (getenv("PDR_SYNPLANT") && g_glykb >= 28) {
+        unsigned cap = (unsigned)((g_glykb - 24) >> 2); if (cap > PDFB_NBLK) cap = PDFB_NBLK;
+        synhdr = (unsigned)(g_glykb << 10) - cap * PDFB_SIZE - PDFB_HDR;
+        unsigned char *h = MEM(SEG_GLY, synhdr);
+        memset(h, 0, PDFB_HDR); h[0] = 7; h[4] = 20; h[60] = 1; h[62] = PDFB_MAGIC & 255; h[63] = PDFB_MAGIC >> 8;
+    }
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
+    if (synhdr) printf("synmagic=%04x\n", MEM(SEG_GLY, synhdr)[62] | (MEM(SEG_GLY, synhdr)[63] << 8));
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }

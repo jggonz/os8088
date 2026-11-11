@@ -380,6 +380,11 @@ _, (fa,) = seqrun(docA + ':0')
 out, (_x, ab) = seqrun(docA + ':0:A ' + docB + ':0')
 check('negative control: docA draws its one font (Courier) unlike docB (Helvetica-Bold), the same object 3 0 R as /F1',
       fa is not None and fb is not None and int((fa != fb).sum()) > 500)
+r = subprocess.run([exe, 'render', 'x', '0', '100', '0', '4', '1/1', '400', '400', '0', '0', os.path.join(scratch, 'seq'), bank, '29'], capture_output=True, text=True,
+                   env=dict(os.environ, PDR_GLYPHKB='40', PDR_SYNPLANT='1', PDR_SEQ=docA + ':0 ' + docB + ':0', ASAN_OPTIONS='detect_leaks=0'), timeout=300)
+mg = re.findall(r'^synmagic=([0-9a-f]+)', r.stdout, re.M)
+check('a new document\'s INIT forgets the glyph claim\'s synthetic blocks (their directory names fonts by object number, which the next file reuses: FTYPE3 read FTTCIDMA\'s TrueType block for 7 0 R as its Type 3 one): the magic cleared at each INIT (%s)' % mg,
+      r.returncode == 0 and len(mg) == 2 and all(m == '0000' for m in mg), r.stderr[-200:])
 check('docB opened while docA\'s view waited on its ask (aborted, never answered) draws ITS font: the same pixels as docB opened first (%s px differ)'
       % (int((ab != fb).sum()) if ab is not None and fb is not None else '?'),
       'aborted at ask' in out and ab is not None and fb is not None and int((ab != fb).sum()) == 0, out[-200:])
