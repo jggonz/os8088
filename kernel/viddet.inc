@@ -564,8 +564,14 @@ vid_detect:                     ; in it - the splash's first tick, and vid_init
     mov ah, 0x12                ; "get EGA info" overwrites BL with the card's
     mov bl, 0x10                ; memory size. An XT BIOS leaves 10h alone.
     int 0x10                    ; Step 1 already claimed every VGA, so a card
-    cmp bl, 0x10                ; that answers HERE is an EGA - and an EGA has
-    je .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
+    test bl, 3                  ; that answers HERE is an EGA - and an EGA has
+    jz .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
+                                ; BL 0..3 is 64/128/192/256KB, and `test bl,3`
+                                ; is "10h OR 0" in the bytes `cmp bl,10h` was:
+                                ; a 64KB EGA's mode 10h is TWO planes, which
+                                ; the four-plane writer collapses toward black,
+                                ; so it goes to the equipment word and runs in
+                                ; mode 6 like a CGA (SPEC.md 39.1, BR-56)
     mov al, VID_EGA             ; ...BUT THE SAME CALL SAYS WHICH DISPLAY IT
     or bh, bh                   ; DRIVES, and it is free: BH = 0 colour (3Dx),
     jz .set                     ; 1 monochrome (3Bx). AL is set BEFORE the

@@ -78151,7 +78151,12 @@ Probe order is binding, and the equipment word is consulted **last**:
    overwrites BL with the card's memory size; an XT BIOS leaves 10h alone.
    Step 1 has already claimed every VGA, so a card that answers *here* and
    not there is an EGA — and an IBM EGA has **no mode 12h**, only mode 10h
-   (640x350). → `VID_EGA`.
+   (640x350). → `VID_EGA`. **Except a 64KB EGA** (BL = 0): its mode 10h has
+   two planes, and the four-plane writer's other two are ignored, so the
+   sixteen colours would collapse toward black. It goes on to step 3 and
+   runs as a CGA in mode 6, which every EGA BIOS serves. One test answers
+   both refusals: BL is 0..3 on an EGA and 10h when unanswered, so `test bl, 3`
+   is zero for exactly "unanswered or 64KB".
 3. `int 11h` equipment word bits 5:4. Anything but `11b` → `VID_CGA`.
    `11b` = a monochrome card at B000, which is a Hercules **or a plain MDA**,
    and step 4 tells them apart.
@@ -78198,12 +78203,6 @@ an EGA in mode 7 keeps B000's offsets apart). That is not a good answer, it
 is an honest one; the right answer is **mode 0Fh** (640x350 mono, planes 0
 and 2, at `B000`), which is a second setup and not this one. Untested and
 unclaimed rather than asserted — see `EGA-PLAN.md §7`.
-
-**Documented scope cut:** a 64KB EGA is driven as if it had 128KB. Mode 10h
-on a 64KB card is 640x350x4 (two planes), and the four-plane writer's upper
-two planes are ignored, so the sixteen colours collapse toward black. The
-card the port is calibrated against (Issue #136) has 128KB; a 64KB EGA is
-untested and unsupported rather than refused.
 
 `VID_FORCE` (build-time, `-DVID_FORCE=1|2|3|4`) skips the probe: `4` forces
 `VID_EGA`, which lets the 640x350 geometry be exercised on a VGA or under
@@ -81872,8 +81871,9 @@ over an EGA desktop keeps all four planes.
 **Out of scope**, recorded so the next reader does not re-open it: `VID_EGA`
 as a member of a `KERN_BIG` per-display pair (§39.12 — it may be the primary
 that *ends* one, per the paragraph above, but never a half of one), an EGA on
-a **monochrome display** (§39.1's second scope cut — mode 0Fh is the right
-answer and is a second setup), and a 64KB EGA. (The Colour system theme
+a **monochrome display** (§39.1's scope cut — mode 0Fh is the right
+answer and is a second setup), and a 64KB EGA as `VID_EGA` (§39.1 step 2
+sends it to the CGA path instead). (The Colour system theme
 *is* supported on EGA — §76.12, a depth capability now.)
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
