@@ -3016,11 +3016,17 @@ gfx_blitp_v:
     mov al, 2
     out dx, ax                  ; SEQ2: Map Mask = this plane alone
     mov dx, bx
+%ifdef KHP_VGABLITP
+    mov cx, [ss:vga_pr_n]       ; the width in a register for the advance and
+    mov ax, [ss:vga_pr_rs]      ; the test (-1 byte, ~8 clocks a plane, the
+    sub ax, cx                  ; size pass that turned the knob on for
+                                ; kern_big); AX = a row's source advance
+    cmp cx, 8                   ; WIDE rows go as words, chosen once a plane
+    jae .wrow1                  ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7),
+                                ; entered past the first row's reload
+%else
     mov ax, [ss:vga_pr_rs]
     sub ax, [ss:vga_pr_n]       ; AX = a row's source advance past it
-%ifdef KHP_VGABLITP
-    cmp word [ss:vga_pr_n], 8   ; WIDE rows go as words, chosen once a plane
-    jae .wrow                   ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7)
 %endif
 .frow:
     mov cx, [ss:vga_pr_n]
@@ -3052,6 +3058,7 @@ gfx_blitp_v:
     jmp short .fpe
 .wrow:                          ; ...and from 8 bytes the words win: `rep
     mov cx, [ss:vga_pr_n]       ; movsw` is 25 clocks a word against `rep
+.wrow1:
     shr cx, 1                   ; movsb`'s 17 a byte, a Map Mask'd plane
     rep movsw                   ; takes a word write's two CPU bytes as they
     jnc .weven                  ; stand, and the odd byte is the carry the
