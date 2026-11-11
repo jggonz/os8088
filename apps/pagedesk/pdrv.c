@@ -330,6 +330,7 @@ static pdw x_resolve(void)
     }
     if (x_mwant && !(x_ref & XR_MEM)) {
         if (x_asks < PDR_XASKS) return x_answer(x_mwant, (pdw)(x_mwant & 0x7F), x_mkb, PDR_INTERP);
+        if (x_mwant == (0x80 | PDMEM_X8)) inc_note(PDF_INC_APPROX, "no RAM for transparency");   /* asked, never answered: the marks draw opaque */
         x_ref |= XR_MEM;
     }
     for (id = PDX_COUNT - 1; id; id--) if (w & (1u << id)) {

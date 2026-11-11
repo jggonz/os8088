@@ -117,7 +117,12 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_NFORM       5       /* nested stream frames: page + 4 forms       */
 #define PDR_MAXRES      4
 #define PDR_XCKB        16      /* PDMEM_XC asked for (20.22.7); any grant >= 1 KiB is used */
+#ifdef PD_HOST
+extern int pdrh_xasks;                  /* hosttest PDR_XASKS: a small budget exercises the exhausted path */
+#define PDR_XASKS       pdrh_xasks
+#else
 #define PDR_XASKS       8       /* NEEDMOD/NEEDMEM answers a page view may make (20.22.7) */
+#endif
 #define PDR_XFREE       16      /* ...more, each after a load that answered a verb (x_answer) */
 
 /* ---- display list (PAGEDESK-SPEC 20.3.2) -------------------------------- */

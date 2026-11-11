@@ -145,7 +145,8 @@ static int ladder(pdw e)
     if (e == PDE_NEEDMEM && pdr_out_cx == PDMEM_X8) {      /* blend: the region (PDX8 is linked in) */
         memcpy(xb, MEM(SEG_XB, 0), sizeof xb);
         g_memasks++;
-        g_lastinit.x8_seg = SEG_X8; g_lastinit.x8_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx;
+        if (getenv("PDB_X8REFUSE")) { g_lastinit.x8_seg = 0; g_lastinit.x8_kb = 0; }     /* the primary refused the region */
+        else { g_lastinit.x8_seg = SEG_X8; g_lastinit.x8_kb = pdr_out_dx > 63 ? 63 : pdr_out_dx; }
         memcpy(MEM(SEG_XB, 0), &g_lastinit, sizeof g_lastinit);
         if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "re-init failed\n"); exit(2); }
         memcpy(MEM(SEG_XB, 0), xb, sizeof xb);
@@ -307,12 +308,13 @@ static int text_run(int page, FILE *o)
     return 0;
 }
 
-int pdrh_noshcull, pdrh_dlhist, pdrh_nopark;
+int pdrh_noshcull, pdrh_dlhist, pdrh_nopark, pdrh_xasks = 8;
 /* PDR_NOPARK: no occupant park (20.22.7.12); PDR_NOSHCULL: every shading asked of PDXG, 32 bands (pdrxg.c xg_steps' A/B); PDR_DLHIST: the list per pass */
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
     pdrh_noshcull = getenv("PDR_NOSHCULL") != 0;
+    if (getenv("PDR_XASKS")) pdrh_xasks = atoi(getenv("PDR_XASKS"));
     pdrh_nopark = getenv("PDR_NOPARK") != 0;
     { extern unsigned pdrh_tickstep; pdrh_tickstep = getenv("PDR_SLICETICK") ? (unsigned)atoi(getenv("PDR_SLICETICK")) : 0; }
     pdrh_dlhist = getenv("PDR_DLHIST") ? atoi(getenv("PDR_DLHIST")) : 0;
