@@ -38,7 +38,7 @@ def main():
     pkg = os.path.join(BUILD, "pagedesk.o88")
     lic = os.path.join(BUILD, "PDFONTS.TXT")
     for p in (pkg, lic):
-        check(os.path.exists(p), "%s is built (`make` builds it)" % os.path.relpath(p, ROOT))
+        check(os.path.exists(p), "%s is built (`make pagedesk` builds it)" % os.path.relpath(p, ROOT))
         if not os.path.exists(p):
             return done("t_pd360")
     with tempfile.TemporaryDirectory() as tmp:
