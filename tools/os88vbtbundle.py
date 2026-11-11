@@ -33,12 +33,7 @@ ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
          "os88disk.py", "os88hdd.py",       # (the disks, run as processes)
          "vbtprof.py")                      # (VBATTLED.O88's profiles, read)
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
-# Imported only inside the test harness's own paths, never on the builder's:
-# os88build.have_unicorn() (a guarded probe) and os88marty's QEMU arms
-# (tests/os88qemu.py, reached only when the machine IS a QEMU). The closure
-# walk follows os88marty in through the builder's emulator helpers and sees
-# both function-local imports; neither ships nor runs in the bundle.
-HARNESS_ONLY = {"unicorn", "os88qemu"}
+HARNESS_ONLY = VB.HARNESS_ONLY     # (os88vbundle says why)
 DATA = VB.DATA
 GUIDE = os.path.join(HERE, "..", "docs", "battle-guide")
 FOLDER = "os8088-battle-builder"

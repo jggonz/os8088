@@ -39,6 +39,12 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOTS = ("os88vencgui.py", "os88venc.py", "os88disk.py", "os88hdd.py")
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
+# Imported only inside the test harness's own paths, never on a bundle's:
+# os88build.have_unicorn() (a guarded probe) and os88marty's QEMU arms
+# (tests/os88qemu.py, reached only when the machine IS a QEMU). The closure
+# walk follows os88marty in through the emulator helpers and sees both
+# function-local imports; neither ships nor runs in the bundle.
+HARNESS_ONLY = {"unicorn", "os88qemu"}
 # ...and the DATA a module reads beside itself: the TEXT format's model face
 # (tools/os88txtfont.py looks beside itself first, then in fonts/)
 DATA = {"os88txtfont.py": (("tallx.f8", os.path.join("..", "fonts",
@@ -141,7 +147,7 @@ def main():
                     "boot/, so the bundle's hard disks boot")
     a = ap.parse_args()
     mods, other = closure()
-    stray = other - THIRD_PARTY
+    stray = other - THIRD_PARTY - HARNESS_ONLY
     if stray:
         sys.exit("os88vbundle: the encoder imports %s, which is neither in "
                  "tools/ nor expected (THIRD_PARTY) - add it there and to "
