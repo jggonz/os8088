@@ -1331,7 +1331,7 @@ def main():
     # --- and a module's data is its HEADER, at its head, and nothing else ---
     # A module (SPEC.md 2.8) runs with CS = a heap claim and DS = KERNEL_SEG,
     # so rule 1 binds it exactly as it binds .cold - with ONE exception, which
-    # is the 12-byte header plus its entry table: those bytes are read through
+    # is the 14-byte header plus its entry table: those bytes are read through
     # ES by mod_need, never through DS by the module, and they have to be at
     # offset 0 because that is where the loader looks.
     #

@@ -625,6 +625,19 @@ section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
 ; the gfx lock HELD (sc_modcall's contract).
 
 modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
+%ifdef MOD_CACHE
+    ; THIS COPY IS KEPT AT ITS DROP iff it is the settings core's (MOD_SETS's
+    ; row), never the panel's (SPEC.md 2.8.3): the header word mod_drop reads
+    ; is 0 on the disk, and only here does it become the core's scratch tail.
+    ; Image bytes, not resident ones - the test mod_drop no longer makes
+    push ax
+    mov ax, cs
+    cmp ax, [mod_tab + MOD_SETS * MODR_SIZE]
+    jne .whole                  ; the open panel's copy (sc_modcall's .full)
+    CSDO mov word [CSEG MOD_H_SCR], MODC_SCR
+.whole:
+    pop ax
+%endif
     push bp                     ; wm_cbd takes its routine in BP
     or ah, ah
     jz .new
@@ -2081,19 +2094,29 @@ as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
 ; and no widget's worker can make mega_enter decline either.
 %endif
 
-section .modc                   ; ...and the image's own scratch, IN the
-sc_mz       db 0                ; image: a module may write its own bytes
-sc_px       dw 0                ; (MODULE-SELFCONTAIN-PLAN), and its bss
-sc_py       dw 0                ; (`.modcb`) lies past the panel half, which
-sc_ex       db 0                ; a desktop gesture's core-only read stops
-                                ; short of - the claim covers it, the read
-                                ; does not zero it
+; ...and the image's own scratch, IN the image: a module may write its own
+; bytes (MODULE-SELFCONTAIN-PLAN), and its bss (`.modcb`) lies past the panel
+; half, which a desktop gesture's core-only read stops short of - the claim
+; covers it, the read does not zero it. A MACRO, so a kernel that KEEPS a
+; dropped image (MOD_CACHE) can put it in the core's SCRATCH TAIL at the end
+; of `.modc` (kernel.asm, SPEC.md 2.8.3); elsewhere it is emitted here.
+; Defined inside `section .modc` either way: tools/os88ovlchk.py reads the
+; section a data line sits in off the text
+section .modc
+%macro SC_SCRATCH 0
+sc_mz       db 0
+sc_px       dw 0
+sc_py       dw 0
+sc_ex       db 0
 sc_best     dw 0                ; sc_m_cell: the point, the zone it leaves
 sc_bc       db 0                ; out, the nearest distance so far and its
                                 ; cell; sc_m_ser's claim and the rows it holds
 sc_tseg     dw 0
 sc_tcnt     db 0
-
+%endmacro
+%ifndef MOD_CACHE
+    SC_SCRATCH
+%endif
 section .text
 
 %endif                          ; OS88_SHORTCUTS

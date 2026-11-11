@@ -12,7 +12,9 @@
 ; the two cold thunks below. Everything that touches a disk, draws or decides
 ; is STIKMENU.DRV, loaded when the cell is pressed and dropped when the menu
 ; is done with - so a machine that never opens the menu pays the thunks and a
-; title, and one that does pays nothing once it has closed.
+; title, and one that does pays nothing once it has closed but a PURGEABLE
+; claim: the drop keeps the image for the next press (SPEC.md 2.8.3), and any
+; claim that needs the room takes it.
 ;
 ; WHY IT QUALIFIES (docs/plans/completed/ONDEMAND-PLAN.md 1): the menu's
 ; whole job is to read STIKAPPS\ off the system disk, so the disk is required
@@ -97,6 +99,9 @@ modn_hdr:
     db MOD_VER, MOD_STIKM       ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modn_end, SMN_NENT       ; MOD_H_IMG, MOD_H_NENT
+    dw modn_end - stm_cellx     ; MOD_H_SCR: the scratch, from stm_cellx
+                                ; to the end, is all it writes - KEPT at its
+                                ; drop (SPEC.md 2.8.3)
     dw smn_track, smn_act
 
 ; SMK name - far-call the KERNEL routine `name` (a near proc in .text) from
@@ -2046,7 +2051,10 @@ stm_s_wiren: db 'The Wire', 0        ; DSV_NAMEMAX bytes
             times DSV_NAMEMAX - ($ - stm_s_wiren) db 0
 
 ; --- the image's scratch: ZEROS on the disk, which the CZ wrap packs to a few
-; bytes, and zeros again at every load - a fresh claim per drop ---------------
+; bytes, and zeros again at every use - read in, or re-zeroed by the drop that
+; KEEPS the image (MOD_H_SCR above, SPEC.md 2.8.3). EVERY byte this module
+; writes in its own image is from here to the end; a write below stm_cellx
+; would survive into the next press -----------------------------------------
 stm_cellx:  dw 0
 stm_x1:     dw 0
 stm_x2:     dw 0

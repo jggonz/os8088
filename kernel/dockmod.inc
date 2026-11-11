@@ -12,6 +12,7 @@ modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
     dw BUILD_NUM, MOD_STAMP, modk_end, DK_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw dkx_hook, dkx_unhook
 
 ; -----------------------------------------------------------------------------

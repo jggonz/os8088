@@ -767,6 +767,7 @@ modh_hdr:
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modh_end                 ; MOD_H_IMG
     dw HB_NENT                  ; MOD_H_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw modh_e_paint             ; HBE_PAINT
     dw modh_e_onclick           ; HBE_ONCLICK
     dw modh_e_onup              ; HBE_ONUP

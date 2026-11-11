@@ -216,6 +216,7 @@ modp_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modp_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FCP_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw modp_e_arm               ; the FAR entries, never the bodies: an entry
     dw modp_e_paste             ; is reached by `call far`, so it has to end in
     dw modp_e_answer            ; a retf, and every body below keeps the near

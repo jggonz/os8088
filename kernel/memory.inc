@@ -443,6 +443,20 @@ MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's MULTI-FILE
                                 ; handles, and a paste raises the floor to
                                 ; this rank so its own copy buffer cannot
                                 ; take the list it is walking
+MEM_P_MOD   equ MEM_PG_LOW<<8 | 0x40    ; a DROPPED module's image, kept
+MEM_P_MOD_N equ 32              ; (SPEC.md 2.8.3): MEM_K_MOD's claim re-tagged
+                                ; by mod_drop, and back to MEM_K_MOD by the
+                                ; mod_need that re-adopts it. A RANGE, two
+                                ; owners a ROW: the tag is MEM_P_MOD + 2 x the
+                                ; module id, so mem_pg_own's `base + 2d` lands
+                                ; on the row's MODR_SEG in a stride-4 mod_tab
+                                ; with no arm in mem_pg_forget (an odd owner
+                                ; would name a MODR_FILE word, and none is
+                                ; ever stamped). LOW: losing it is the read
+                                ; the cache saved - 1-2 int 13h, and the
+                                ; system disk in the drive - "a little I/O, or
+                                ; a visible pause"; never TRIV, which a window
+                                ; raise cache's claim could then take
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
@@ -1452,6 +1466,12 @@ mem_pg_fatwrow:                 ; NAMED: mem_pg_forget asks which ROW matched
 %ifdef FM_MSEL
     dw MEM_P_FLIST, fcp_lseg,    1
 %endif
+%ifdef MOD_CACHE
+    dw MEM_P_MOD,   mod_tab,     MEM_P_MOD_N ; a kept module: its MODR_SEG
+%endif                          ; (MODR_SEG = 0, so the row IS the word),
+                                ; zeroed by the shed - and its slots already
+                                ; read mod_gone, mod_drop having disarmed
+                                ; them before the tag went on (SPEC.md 2.8.3)
 %ifdef KERN_SMALL
 mem_pg_viewrow:
     dw MEM_P_VIEW,  0,           MEM_P_VIEW_N

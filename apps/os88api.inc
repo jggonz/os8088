@@ -2926,6 +2926,9 @@ MEM_P_VIEW_N equ 5              ; RANGE, 0x10..0x14 with the window's fm_pool
                                 ; movable, instance-owned one and this range
                                 ; simply matches nothing
 MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's multi-file clipboard (22.27), kern_big only
+MEM_P_MOD   equ MEM_PG_LOW<<8 | 0x40    ; a dropped module's KEPT image - a RANGE,
+MEM_P_MOD_N equ 32              ; 0x40..0x5F, twice the module id added
+                                ; (SPEC.md 2.8.3), kern_big and kern_emu only
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95)
 MEM_P_RAHB  equ MEM_PG_HIGH<<8 | 0x03   ; kern_mega's read-ahead LANDING: the
                                  ; conventional bounce under the store above

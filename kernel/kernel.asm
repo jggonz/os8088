@@ -1087,6 +1087,20 @@ TOAST_MAX   equ 24
   %define OS88_COMPACT 1
 %endif
 
+; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
+; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big
+; and kern_emu. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN) is open,
+; priced at this arm's bytes. NOT kern_mega: in protected mode every module
+; is copied above 1MB the moment it is loaded (mod_hi, MOD_HIOK), where no
+; mem_pg shed can reach it - the cache would only ever serve the image
+; mod_hi refused, so it spends nothing there. Resolved here for OS88_ASSOC's
+; reason: memory.inc, above mod.inc, names the tag's row
+%ifdef KERN_BIG
+  %ifndef KERN_MEGA
+    %define MOD_CACHE 1
+  %endif
+%endif
+
 ; SPEC.md 22.3-22.5's Cut/Copy/Paste is an ON-DEMAND MODULE on kern_small
 ; (SPEC.md 2.8, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
 ; `.cold` on kern_big, which keeps its speed and its one contiguous boot read:
@@ -8957,8 +8971,20 @@ MODC_BSS equ modcb_end - $$
 %endif
 
 section .modc
+%ifdef MOD_CACHE
+mods_scr:                       ; THE SETTINGS CORE'S SCRATCH TAIL (SPEC.md
+    SC_SCRATCH                  ; 2.8.3): every byte the core writes in its
+    CPC_SCRATCH                 ; own image, LAST in `.modc`, so a kept
+mods_scre:                      ; MOD_SETS re-zeroes [mods_scr, modc_end)
+MODS_SCRO equ mods_scr - $$     ; (its offset: a label in `.modu` cannot be
+%endif                          ; subtracted from one here)
     CSDO_SDOOR csd_modc          ; (the settings core's: .modu's sites use it)
 mods_end:
+%ifdef MOD_CACHE
+%if mods_end != mods_scre
+  %error "something follows the settings core's scratch tail in .modc - a kept MOD_SETS would zero it"
+%endif
+%endif
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
 %ifdef OS88_DRIVERS
@@ -8970,6 +8996,12 @@ MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
                                 ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
+%ifdef MOD_CACHE                ; ...and from mods_scr to the image's end is
+MODC_SCR equ MODS_SIZE + MODU_SIZE - MODS_SCRO ; what a kept MOD_SETS
+%else                           ; re-zeroes: the scratch, then the panel and
+MODC_SCR equ 0                  ; `.modcb` its read never brought in (MOD_CTRL's
+%endif                          ; row is never kept - mod_drop). CTRL.DRV's
+                                ; MOD_H_SCR
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
                                 ; ends of `.modu`, so there is no pad between
 

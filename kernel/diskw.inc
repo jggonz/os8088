@@ -5955,6 +5955,7 @@ modf_hdr:
     dw MOD_STAMP                ; ...and another BUILD of this one
     dw modf_end                 ; MOD_H_IMG
     dw FM_NENT                  ; MOD_H_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw dskw_fmt_probe_x         ; the FAR entries ARE the bodies: each is
     dw dskw_fmt_do_x            ; reached by `call far` - the two inside
     dw dskw_fmt_line_x          ; dskw_fmt_do_x by `push cs / call` - so each

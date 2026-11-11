@@ -1844,7 +1844,9 @@ in the tree.
 - `mod_need` — in AL = `MOD_*`; out CF = 0 loaded, CF = 1 not. **Preserves
   every register including AX**, because it sits under a thunk whose caller's
   arguments are already in them.
-- `mod_drop` — in AL = `MOD_*`. Frees the claim. Preserves every register.
+- `mod_drop` — in AL = `MOD_*`. Ends the feature's hold: frees the claim,
+  or on `kern_big`/`kern_emu` KEEPS an opted-in image as a purgeable cache
+  the next `mod_need` re-adopts (§2.8.3). Preserves every register.
 - Dispatch is `call far [mod_fp + K]` with K an assembly-time constant: no
   register, no shared scratch word, re-entrant across modules by
   construction. A slot that is not loaded points at `mod_gone`, which
@@ -1859,7 +1861,8 @@ in the tree.
   word per module plus a sentinel, so `mod_fpr` turns a row into a block (DI)
   and a count (CX) by a subtraction. `mod_check` demands the header's count
   EQUAL the kernel's, which is stricter than the old `<= MOD_NENT`, and bounds
-  every entry offset by the header's own end, `12 + 2n`. `MODFP` refuses a
+  every entry offset by the header's own end, `14 + 2n` (`MOD_H_SCR`, the
+  kept image's scratch tail, is the word before the table: §2.8.3). `MODFP` refuses a
   module declared out of `MOD_*` order and a count below one (a CX of 0 would
   make `mod_disarm`'s `loop` run 65,536 times). The host side cannot drift
   either: `kernel.bin`'s `O8MM` map carries each module's KERNEL count beside
@@ -1936,17 +1939,124 @@ costs nothing. The layout stamp is the kernel's to check — only the assembly
 knows the section sizes — but the tool does assert that every module cut out
 of one image carries the same one.
 
-#### 2.8.3 Lifetime: the feature decides, and the heap never does
+#### 2.8.3 Lifetime: the feature decides when it is done, and the heap may then keep it
 
-A module is freed by an explicit `mod_drop` from the feature's own end-of-life
-path — `cp_flush_close` for the panel — and by nothing else. It is
-deliberately **not** a purgeable claim (§50.6), attractive as that is:
-shed-and-retry fires on somebody else's refusal and takes the
-lowest-priority cache, which for a module that is on the call stack means
-freeing the code that is running. That does not fault. Making it purgeable
-needs a pin (a nesting count per module, held from entry to exit, and for the
-panel from open to close); docs/plans/completed/ONDEMAND-PLAN.md 7.1/7.2 carries that design
-and it is not built.
+A module is held by the bracket from `mod_need` to an explicit `mod_drop` on
+the feature's own end-of-life path — `cp_flush_close` for the panel, the
+posted pick's act for the Sticky Apps menu — and **that bracket is the pin**.
+Inside it the claim is `MEM_K_MOD`, which nothing sheds and nothing moves
+(`mem_can_move`), so the heap can never take an image a frame stands in.
+This used to say a module was deliberately **not** purgeable, because
+shed-and-retry fires on somebody else's refusal and would free the code that
+is running; docs/plans/completed/ONDEMAND-PLAN.md 7.1/7.2 priced a nesting
+count per module as the pin, and HEAP-UNPIN piece B a pin per thunk (49
+sites through 14 slot blocks). Neither is needed: the bracket that
+`t_moddrop` already gates below is the pin, and the heap still purges only
+an image its feature has dropped — which keeps the old reason intact.
+
+**A drop KEEPS the image on `kern_big` and `kern_emu`** (`MOD_CACHE`,
+big-review WP2a: rt-1, rt-9, shell-2). The most likely moment for a second
+use of a module is right after the first, and the first two users paid a
+disk read for every one: `STIKMENU.DRV` (7.9 KB) on **every** Sticky Apps
+press, and `CTRL.DRV`'s settings core (`MOD_SETS`, §2.8.7) on every shortcut
+gesture — 1-2 `int 13h` each (~0.4-0.8 s on the XT, PREDICTED from
+PERFORMANCE.md's per-call cost), and `Needs Sys Disk` with another floppy in
+the drive. With the image kept, the second press and the second drag read
+nothing.
+
+- **`mod_drop`**, for an image whose header opts in: zeroes its **scratch
+  tail**, disarms every slot to `mod_gone`, and re-tags the claim from
+  `MEM_K_MOD` to **`MEM_P_MOD` + 2 × the module id** — a purgeable cache at
+  `MEM_PG_LOW` (§50.6.4). It does not free it. The drop still ends the
+  feature's hold: from here the heap may take the bytes, which is what a
+  drop is for.
+- **`mod_need`** on a row whose `MODR_SEG` is held looks at the row's first
+  slot. Naming that segment: the row is LIVE, and the answer is CF = 0 as it
+  always was - no walk on a thunk's hot path. Naming `mod_gone`: the image is
+  KEPT, and is **re-adopted** — its record found by base
+  (`mem_find_own`'s own-segment arm) and re-tagged `MEM_K_MOD` first, then
+  its slots armed by the same loop a load arms them with (`mod_check`'s
+  `.arming`). No disk, no system volume, no stamp check: the stamps were
+  checked on the read the image came from.
+- **A kept image is re-adopted on the UI task alone**, and an image opts in
+  only when every `mod_need` for it is the UI task's (both today's are:
+  `menu_track`'s, and `sc_modcall`'s desktop gestures and SYSTEM.CFG-writing
+  desk verbs, which a worker may not make, §20.6 rule 7). That is what lets
+  the find and the re-tag run with interrupts ON: only the UI task sheds or
+  compacts (§66.3.1), so nothing can take the block between them.
+- **A shed** — or a compaction that dissolves a pinned cache in its way
+  (§66.10) — zeroes the row's `MODR_SEG` through `mem_pg_own` and frees the
+  block, and the next `mod_need` is an ordinary load. The tag is a RANGE of
+  two owners a row so that `mem_pg_own`'s `base + 2d` lands on the row's
+  `MODR_SEG` in the stride-4 `mod_tab` with no arm in `mem_pg_forget`; the
+  slots need no notice, because they read `mod_gone` from the drop on.
+- The kept claim is **pinned, not movable**: it was claimed top-down, where
+  a package region is, and a compaction that needs its room dissolves it
+  rather than copying it. Declaring it movable is a `mem_rr_tab` row and the
+  `MC_RLOC` store, about 10 bytes, not spent.
+
+**Rank: `MEM_PG_LOW`, decided per module rather than inherited (rt-9).**
+Losing a kept image costs the read it saved, with the system disk in the
+drive — "a little I/O, or a visible pause". Not trivial: a window's raise
+cache (`MEM_P_WSAVE`) and the menu save-under claim at `MEM_PG_TRIV`, and a
+trivial module would be theirs to take. Both modules kept today are wanted
+with the system disk at hand (ONDEMAND-PLAN 1). A module wanted with the
+user's OWN disk in the drive — `kern_small`'s `FILECP.DRV` and `FDLG.DRV` —
+would rank higher, with a range of its own; that is the `kern_small` arm,
+below.
+
+**What opts in is the IMAGE, by its header: `MOD_H_SCR`**, the count of the
+image's last bytes that are SCRATCH (offset 12; `MOD_H_ENT` moved to 14, so
+`mod_check` bounds an entry by `14 + 2n`). 0 = freed at the drop, as ever.
+A module opts in when **every byte it writes in its own image is in that
+tail** and is either written before it is read or expected as a zero —
+because a kept image is re-adopted as it was left, and the drop's zeroing of
+the tail is what makes it the file's own again. Modules write their own
+bytes freely (MODULE-SELFCONTAIN-PLAN; §2.8.6), and most still interleave
+that state with their code (`DISKOPS.DRV`'s compressor, `FORMAT.DRV`'s
+`ASSOC.DAT` writer, `WIN95.DRV`, the panel), so **two images opt in today**:
+
+| image | its scratch tail | what it holds |
+|---|---|---|
+| `STIKMENU.DRV` | `stm_cellx` to the end | every byte the menu writes: the geometry, the census, the entries, the band |
+| `CTRL.DRV`, for `MOD_SETS` (written by the core itself, above) | `mods_scr` - the core's last bytes, `sc_*` and `cp_fdno`/`cp_fdn` gathered there by `SC_SCRATCH`/`CPC_SCRATCH` - to the image's end | the core's gesture state; past it, the panel and `.modcb`, which a core-only read never brought in |
+
+`MOD_CTRL`'s row — the whole panel, the same file — is **never kept**, with
+no test for it in the kernel: `CTRL.DRV`'s header carries 0 on the disk, and
+the core's entry `modc_e_sc` writes `MODC_SCR` into its OWN copy's header
+when that copy is `MOD_SETS`'s claim (image bytes, not resident ones). The
+panel's state is not in the tail, and `mod_live`'s
+two callers (`sc_modcall`, `hbf_onup`, §13.8.3) read a held `MODR_SEG` as
+"armed", which a kept row is not. `HIBER.DRV`, `mod_live`'s other row, asks
+for no tail.
+
+**`mod_cfix` is not run on a re-adopt**, and neither is the ROM's fix; both
+now run BEFORE the slots are armed, and the re-adopt joins below them. Its
+single pass is what `tools/os88rom.py` proves, and nothing proves a second
+one; it does not need one, because `[api_coldseg]` is final before the heap
+exists — the slide runs ahead of `mem_init_x`, and a ROM or the HMA adopt
+`.cold` before the kernel starts.
+
+**The system disk changing does NOT invalidate a kept image, and that is
+reasoned rather than overlooked.** The disk caches (the FAT window, the
+directory read-ahead, `ASSOC.DAT`) cache what is ON A DISK, so a mount that
+may mean another disk drops them. A module image is not disk content: it is
+this kernel's own code, cut from the same assembly, and the two stamps
+(§2.8.2) are what make a file acceptable at all. Another system disk of the
+same build holds the same bytes; one of another build holds a file this
+kernel would REFUSE. The kept image is therefore exactly the one a read
+could give it, or better.
+
+**Not on `kern_mega`** (`MOD_CACHE` is undefined there): in protected mode
+`mod_hi` copies every module above 1MB the moment it is loaded (`MOD_HIOK`),
+where a block is freed through `mega_hifreef` and no `mem_pg` shed reaches
+it, so the cache would serve only an image `mod_hi` refused. A pool purge
+(`mx_shedf`) is what would give it one. **Not on `kern_small` (owner
+decision O5, open)**: the arm is priced and waiting — the same code, about
+the bytes below, and the rank question above for `FILECP` and `FDLG`.
+
+**What it cost**, `kern_big` and `kern_emu`: see §2.8.3.1. The header word is
+2 bytes of disk in every module image on every kernel.
 
 **Every module HAS a drop, and that is gated.** A module nothing drops holds
 its claim from first use to power-off, pinned - the bytes a module exists to
@@ -1956,7 +2066,42 @@ smaller. `DESK.DRV` shipped that way until §11.103.10's drop rule.
 build unless the row's `MOD_*` reaches a `mod_drop` in kernel code, or
 `tests/moddrop.txt` says why that module is held until restart. The list
 turns one way and is empty today. `MOD_KBM`'s drop is the one a feature does
-not decide: it belongs to the first pointer that speaks (§2.8.8).
+not decide: it belongs to the first pointer that speaks (§2.8.8). **A drop
+that keeps the image is still a drop** for this gate: it ends the pin, and
+from it on the heap may take the claim whenever anything needs the room.
+
+##### 2.8.3.1 What keeping a dropped image cost
+
+MEASURED on `build/kernel.map` against the base built alongside at the same
+build number (`2cf57256`):
+
+| | `.text` | `.cold` | in all |
+|---|---:|---:|---:|
+| `kern_big`, `kern_emu` | +6 (the `mem_pg_own` row) | +78 (`mod_drop` 12 -> 61, `mod_need` 228 -> 257, its one-byte parity pad included) | **+84** |
+| `kern_small` (O5 open) | 0 | 0 | 0 |
+| `kern_mega` | 0 | 0 | 0 conventional |
+
+Every module image is 2 bytes longer on the disk (`MOD_H_SCR`). It is inside
+the review's +60..+85, after a size pass of its own: the first cut was +104,
+because the review's estimate assumed a module's only mutable bytes are its
+`nobits` bss, and they are not - modules write state interleaved with their
+code (above), so an image has to OPT IN, and the drop has to find the
+claim's record to re-tag it. The pass took 20 bytes out of the kernel: the
+`MOD_CTRL` test went into `CTRL.DRV`'s own bytes (-6), the hit tells kept
+from live by its first slot and finds the record by base rather than by a
+computed tag (-6), `drv_vol_bank` is called once ahead of the hit test
+rather than on both arms (-3), and the interrupt window round the find and
+the re-tag went, by the UI-task rule above (-6); one byte back is the
+parity pad that keeps `dsk_xfer`'s even shift (`t_hotpar`). Re-zeroing the
+scratch tail was kept: without it each opted-in module would have to be
+audited to write before it reads, and a re-adopted image would no longer be
+the file's own.
+
+The second Sticky Apps press and the second shortcut gesture read **no**
+sectors while the claim stands (PREDICTED: the `int 13h` calls they made
+were the whole of `mod_need`'s cost - §2.8.7's measured 1,123-1,156 ms for
+the core - against one walk of the claim table and a re-arm of one or two
+slots).
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -2268,7 +2413,10 @@ that row:
 
 **`sc_modcall` picks the copy.** If a Control Panel is open (`mod_live`),
 the whole image is already in memory and the gesture runs in it, at the same
-offset, and leaves it loaded. Otherwise the core is loaded, run and dropped.
+offset, and leaves it loaded. Otherwise the core is loaded, run and dropped
+- and on `kern_big` the drop KEEPS it (§2.8.3): the core's scratch (`sc_*`,
+`cp_fdno`, `cp_fdn`) is gathered at the end of `.modc` for that, so the
+second gesture re-adopts the core with no read until a claim sheds it.
 
 **The core carries §110.2's Sticky App rules**, because the core is what writes the
 trailer they live in: `sc_m_add` stores +3 = 0 on any record that is not a
@@ -226771,6 +226919,11 @@ fallback, no `DESK.DRV`) is listed and toggled but not arranged or hidden.
 | kern_emu | +72 | +8 | +47 | image **13** (93), cold 78 (125) |
 | kern_small | 0 | 0 | +8 | image 429 (429), cold 46 (54): the card's ladder step alone |
 | `STIKMENU.DRV` (on demand) | | | | 3,556 bytes on the disk ('CZ') - **seven** 512-byte clusters, where 3,609 was eight - a 7,814-byte image: 3,552 of code, 330 of tables and strings, and the scratch - 1,760 for 8 entries, 1,960 for the band - zeros that pack to nothing and come back zero at every load. An **8 KB** claim from the press to the act, beside the save-under. It was 14,780 and 15 KB before the size pass, which took `STM_MAX` 64 -> 8, the TALL layout, the second part of the save-under, the picture re-read and most of the card check; a second pass then took the fixed row total into the layout table (`LY_REST`) and the slab flags into a register, for the 25 packed bytes the cluster wanted. LZB would pack it to 3,169 with no code change, and was refused: about +0.2 s of decode on the 8088 every time the menu opens (46.11.1's ratio) |
+
+**The image is KEPT when the menu is done with it** (§2.8.3): its scratch
+runs from `stm_cellx` to the end, so its header asks for that tail, and the
+second press re-adopts the claim with no disk read and no `Needs Sys Disk`
+until a claim needing the room sheds it.
 
 The `.text` is the title, the two set entries (one since §22.28.1 took the
 Disk window's back out, -6), `menu_track`'s test, `CMD_STIK`

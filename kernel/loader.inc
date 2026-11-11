@@ -284,7 +284,7 @@ ld_unreserve:
 ;
 ; A MODULE IS DELIBERATELY NOT A THIRD CALLER. mod_check reads the same first
 ; two fields and then diverges: offset 4 is MOD_H_BUILD rather than a link
-; word, and a module carries no dispatcher at all (offset 12 is MOD_H_ENT).
+; word, and a module carries no dispatcher at all (offset 14 is MOD_H_ENT).
 ; It fails two of these five by design, which is SPEC.md 51.1's two
 ; independent gates working, and merging it would delete them.
 ;
