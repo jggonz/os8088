@@ -293,11 +293,16 @@ def wrote(names, secs=20.0):
         time.sleep(0.5)
 
 
-def boot(driver):
-    if driver:
-        return M.launch(FLOPPY, machine=MACHINE,
-                        extra=["--mount", "hd:0:" + VHD])
-    return M.launch(None, machine=MACHINE, extra=["--mount", "hd:0:" + VHD])
+def boot(driver, desk=True):
+    """DESK=False starts the machine without waiting for a desktop: a boot
+    that finds a damaged image never paints one before its refusal - the
+    check runs inside kmain_o, before the first paint (SPEC.md 87.5) - so
+    launch's own desktop gate would wait out its budget on the sentence"""
+    m = M.launch(FLOPPY if driver else None, machine=MACHINE, boot=desk,
+                 extra=["--mount", "hd:0:" + VHD])
+    if not desk:
+        m.run()
+    return m
 
 
 def hibernate(m, mo, mouse):
@@ -572,7 +577,7 @@ def pass_sum(driver, damage):
             at = image_offset(near)
         damage_image(at, 1024)                  # four sampled lines, and
                                                 # inside a region at the top
-    with boot(driver) as m:
+    with boot(driver, desk=not damage) as m:
         mo = Mouse(marty=m)
         if not damage:
             M.until(m, lambda mm: word(mm, "hb_resumes") == 1,
