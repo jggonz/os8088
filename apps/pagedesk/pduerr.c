@@ -31,6 +31,7 @@ static const char *pdu_errtext(int code)
     case PDE_NOMEM:    return "Out of memory. Close a window, retry.";
     case PDE_STACK:    return "Out of module stack; document closed."; /* deepstk */
     case PDE_IO:       return "The disk could not be read.";
+    case PDE_WRITE:    return "The disk could not be written.";
     case PDE_DISKFULL: return "The disk is full.";
     case PDE_WPROT:    return "The disk is write-protected.";
     case PDE_EXISTS:   return "A file of that name is already there.";

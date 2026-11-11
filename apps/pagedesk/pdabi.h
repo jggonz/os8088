@@ -702,6 +702,7 @@ struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
                                  unchanged is still PDRC_PLAIN: the engine compares (mode & 0xFF) */
 #define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
 /* [wrt 20.22.4]    */
+#define PDE_WRITE 54        /* a create / write / close / rename of the OUTPUT refused for a reason that is not full, protected or exists (F30) */
 #define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
                                     before the job: the keys of the ENCRYPTED foreign
                                     files an Insert reads (plat's pre-flight, 20.22.4.5) */
