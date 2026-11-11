@@ -939,6 +939,13 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and is validated where it landed:
     ; ld_check_hdr reads it through ES.
 .peek:
+%ifdef DSK_RAHINT
+    call dsk_rah_pre            ; THE FILE IS ABOUT TO BE READ, so its first
+                                ; cylinder is read now, in one int 13h, and the
+                                ; peek and step 6 are served out of the cache
+                                ; (SPEC.md 18.95.13). An explicit call that
+                                ; leaves nothing armed; AX, the cluster, kept
+%endif
     mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
     call dsk_peek_x             ; A redirected volume has no sectors at all -
     jc .disk1                   ; dsk_xfer refuses one outright - so without
