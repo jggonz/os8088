@@ -18153,6 +18153,14 @@ packet has a FOURTH byte, the signed Z movement.
   **`[mou_p2wz]`**; every failure leaves that byte 0 and the mouse is the
   three-byte one it was. `[mou_p2id]` keeps the RESET's answer, which is what
   §9.4.4 publishes it as. The knock's result is read by symbol.
+- **The table is read where the body is.** In `.ovl` at `FAT_SEG` (a
+  `kern_small` knob build) it is inside DS's 64K and `lodsb` reaches it at
+  a shifted offset. `kern_mega`'s overlay lies past that 64K, and on the
+  `HB_EARLY` kernels (`kern_big`, `kern_emu`, §87.5) `mouse_init` runs from
+  `.boot3`, after the hibernation probe's mount. Both read it `cs lodsb`
+  (`MOU_P2KNK_CS`). The DS spelling on a `.boot3` body sent KERNEL_SEG's
+  bytes as the knock. The knock then failed safe, and no wheel was ever on
+  (`tests/p2hiber.py`'s precondition).
 - **It is a body of its own, below `mou_p2_init`'s `ret`,** and not inline.
   Placed inline it would sit inside the span of every `jc .fail` above it, and
   enough of those relaxed to cost seven bytes the knock itself did not.

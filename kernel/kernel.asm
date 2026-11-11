@@ -8902,7 +8902,8 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 ; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
 %ifdef KERN_BIG
-%ifndef KERN_MEGA               ; (kern_mega reads it through CS instead)
+%ifndef MOU_P2KNK_CS            ; (kern_mega and the HB_EARLY kernels read it
+                                ; through CS instead: mouse.inc)
 %if (FAT_SEG - KERNEL_SEG) * 16 + OVL_SIZE > 0x10000
   %error "mou_p2knock (mouse.inc) reads its table through DS = KERNEL_SEG as MOU_P2KNK_DS, so the boot overlay must lie inside KERNEL_SEG's 64K (SPEC.md 9.9.8)"
 %endif

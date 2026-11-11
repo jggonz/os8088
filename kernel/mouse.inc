@@ -1708,17 +1708,13 @@ mou_p2wr:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
-                                ; this arm is NEVER ASSEMBLED - the KERN_BIG
-                                ; conditional that opens above mou_p2wr
-                                ; encloses all of it. It is written anyway
-                                ; because tools/os88ovlchk.py cannot evaluate
-                                ; either conditional and mouse_init near-calls
-                                ; mou_p2_init: the two blocks have to land in
-                                ; ONE section in its model or that call reads
-                                ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
-                                ; same answer about the same pair of bodies
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE: the
+                                ; HB_EARLY kernels' arm (kern_big, kern_emu -
+                                ; mouse_init runs after the hibernation
+                                ; probe's mount, so from `.boot3`; kernel.asm's
+                                ; HB_EARLY block). mouse_init near-calls
+                                ; mou_p2_init, so the two blocks land in ONE
+                                ; section on every build
 %endif
                                 ; ...and the PS/2 half's first (see the block
                                 ; above mou_uart). mou_p2rd is read-only on the
@@ -1798,17 +1794,13 @@ mou_p2dw:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
-                                ; this arm is NEVER ASSEMBLED - the KERN_BIG
-                                ; conditional that opens above mou_p2wr
-                                ; encloses all of it. It is written anyway
-                                ; because tools/os88ovlchk.py cannot evaluate
-                                ; either conditional and mouse_init near-calls
-                                ; mou_p2_init: the two blocks have to land in
-                                ; ONE section in its model or that call reads
-                                ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
-                                ; same answer about the same pair of bodies
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE: the
+                                ; HB_EARLY kernels' arm (kern_big, kern_emu -
+                                ; mouse_init runs after the hibernation
+                                ; probe's mount, so from `.boot3`; kernel.asm's
+                                ; HB_EARLY block). mouse_init near-calls
+                                ; mou_p2_init, so the two blocks land in ONE
+                                ; section on every build
 %endif
                                 ; ...and the overlay's last three: mou_p2dev,
                                 ; mou_p2flush and mou_p2_init, all of which only
@@ -2166,15 +2158,29 @@ mou_p2_init:
 ; 0. Inside mou_p2_init's 0xAD window, so 60h is the device's. Overlay bytes:
 ; none of it is resident.
 ; in: nothing; out: AL spent, SI spent (mou_p2_init banks it), the rest kept
+;
+; WHERE THE TABLE IS READ FROM follows where this body is: `.ovl` at FAT_SEG
+; on a kern_small knob build, inside DS's 64K, so DS = KERNEL_SEG reaches it
+; at a shifted offset; kern_mega's `.ovl` (past DS's 64K) and the HB_EARLY
+; kernels' `.boot3` (kern_big, kern_emu - SPEC.md 87.5, where mouse_init runs
+; after the probe's mount) are reached through CS. The DS spelling on a
+; `.boot3` body read KERNEL_SEG's bytes as the knock: the wheel stayed off on
+; every IntelliMouse (tests/p2hiber.py's precondition, mou_p2wz 0).
 ; -----------------------------------------------------------------------------
+%ifdef KERN_MEGA
+ %define MOU_P2KNK_CS 1
+%elifdef MOU_IN_BLOB
+ %define MOU_P2KNK_CS 1
+%endif
 mou_p2knock:
     mov si, MOU_P2KNK_DS        ; THE TABLE THROUGH DS, which is KERNEL_SEG:
 .knock:                         ; this body runs at CS = FAT_SEG, and lodsb
-%ifdef KERN_MEGA
-    cs lodsb                    ; (kern_mega: its overlay is past DS's 64K,
-%else                           ; so the table is read through CS instead)
-    lodsb                       ; with the overlay's own offset read the
-%endif
+%ifdef MOU_P2KNK_CS
+    cs lodsb                    ; (kern_mega: its overlay is past DS's 64K;
+%else                           ; HB_EARLY kernels: this body is `.boot3`'s,
+    lodsb                       ; not FAT_SEG's - so the table is read through
+%endif                          ; CS instead) with the overlay's own offset
+                                ; read the
     call mou_p2dev              ; kernel's bytes there instead - garbage
     jc .out                     ; commands, the knock failing safe to three
     cmp si, MOU_P2KNK_DS + mou_p2knk_n  ; bytes, found by tests/wheelps2.py.
@@ -2188,7 +2194,7 @@ mou_p2knock:
 
 mou_p2knk   db 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2
 mou_p2knk_n equ $ - mou_p2knk
-%ifdef KERN_MEGA
+%ifdef MOU_P2KNK_CS
 MOU_P2KNK_DS equ mou_p2knk      ; (read through CS: see .knock)
 %else
 MOU_P2KNK_DS equ mou_p2knk + (FAT_SEG - KERNEL_SEG) * 16 ; the same bytes, as
