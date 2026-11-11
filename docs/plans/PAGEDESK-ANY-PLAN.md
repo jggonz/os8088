@@ -43,6 +43,7 @@ scouts' reports (`~/Repos/pdany-logs/scout-*.md`):
 | O6 | AES-256 (R6) on an 8088, estimated at 5-15 minutes of hashing | **ask first, with the estimate** | run it with progress |
 | O7 | the 360KB disk, which has 48 KB free for about 60-110 KB of modules | **a second 360KB disk** | leave JPX/JBIG2 off the 360KB disk; move the samples off |
 | O8 | the font bank (PDRES) on the 360KB disk (2026-11-10) | **packed inside PAGEDESK.O88 as LZ4 blocks, one stream a strike** | a third disk; fewer strikes |
+| O9 | PD-29's 32 KiB reserve, which the decoders and the real 16 KiB edit store broke on 640 KB (2026-11-10) | **restore it**: the occupant released when PageDesk is idle, the edit store 8 KiB (64 marks a document), the Save As trough fixed | relax the contract to measured floors; release the decoder only |
 
 ### 2.2 The lead's
 
