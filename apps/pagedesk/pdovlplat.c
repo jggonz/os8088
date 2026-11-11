@@ -41,7 +41,7 @@ static unsigned char pdu_au_typed;      /* a typed password has been tried */
  * document's, its /ID[0]); 0 = no claim or no answer */
 static int ovl_key_get(unsigned off)
 {
-    if (!pdu_kseg && (pdu_kseg = os88_mem_claim_p(512 / 16)) == 0)
+    if (!pdu_kseg)
         return 0;
     pdu_mcall(PDU_M_ENG, PDV_ENG_CRYPTINFO, pdu_xb, 0, 0);
     if (pdu_mcf)
@@ -139,7 +139,7 @@ static unsigned ovl_au_slice(int start)
     }
     if (!pdu_mcf || r != PDE_PASSWORD) {
         if (!pdu_mcf) {                 /* the key: PDENG resumes its OPEN */
-            h = !pdu_aufor() && (pdu_kseg || (pdu_kseg = os88_mem_claim_p(512 / 16)) != 0);
+            h = !pdu_aufor() && pdu_kseg != 0;
             if (h)                      /* its /U, while the XB has it (R20) */
                 pd_fcopy(pdu_kseg, PDU_KS_OWNU, pdu_xb, PDU_CRY(u), 16);
             r = pdu_mcall(PDU_M_ENG, PDV_ENG_SETKEY, pdu_xb, 0, 0);

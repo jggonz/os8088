@@ -5122,14 +5122,26 @@ taken at the first `PDE_NEEDMEM` and grown by `OSAPI_MEM_REGROW` (20.22.2.5).
 
 | peak | claims | count |
 |---|---|---|
-| launch | carve (primary + PDENG + PDREND), exchange block, INDEX + kit + band | 3 |
-| a document open | + A, B | 5 |
-| ...that asked for a region | + X | 6 |
-| ...whose page needed a module | + S (one occupant) | 7 |
-| open of an encrypted file at its password prompt | carve, XB, INDEX, A, B, X (XIDX/OSW), S (PDXK), overlay (the prompt) | **8** |
-| render with a panel, popover or inspector up | carve, XB, INDEX, A, B, X, S (a decoder), overlay | **8** |
-| save, extract or insert with its dialog up | carve, XB, INDEX, A, B, X, S (PDWRT + its buffers), overlay | **8** |
-| File > New, no document | carve, XB, INDEX, S (PDWRT + buffers), overlay | 5 |
+| launch | carve (primary + PDENG + PDREND), XB (the exchange block, the held keys and the INDEX + kit + band, ONE claim) | 2 |
+| a document open | + A, B | 4 |
+| ...that asked for a region | + X | 5 |
+| ...whose page needed a module | + S (one occupant) and its W | 7 |
+| open of an encrypted file at its password prompt | carve, XB, A, B, X (XIDX/OSW), S (PDXK), overlay (the prompt) | 7 |
+| render with a panel, popover or inspector up | carve, XB, A, B, X, S (a decoder), W, overlay | **8** |
+| ...with an edit made (E) | carve, XB, A, B, E, X, S, W - and the overlay is the ninth: its fetch runs the occupant's release (`pdu_ovl_room`) and a refused one waits (`Panels wait for memory`) | **8** |
+| save, extract or insert with its dialog up | carve, XB, A, B, X, S (PDWRT + its buffers), overlay | 7 |
+| File > New, no document | carve, XB, S (PDWRT + buffers), overlay | 4 |
+
+**QA R26 (measured, QEMU VGA 640 KiB).** Until 2026-11-10 the exchange block,
+the INDEX and the held keys were three claims and W (QA R7) and E (QA F26)
+had joined the table without it being re-counted: a render with the overlay
+up was 9 claims, 10 after any encrypted file, so the kernel refused S or W
+for the claim TABLE (`MEM_OWNER_MAX`) with 77 KiB free in one run. A page
+drew right only when it was drawn before the overlay was first fetched;
+after XTGUIDE, RC4_128 and XTGUI_OS every font file substituted `font
+module`, and after the five GUIDE/AES/RC4 files all ten font fixtures did.
+`bk_size` sizes the INDEX at launch so the XB, the keys and the bank are one
+claim (`pdu_mod_launch`), and the same sequences draw every font.
 
 The transient claims stay what they were and each already degrades when
 refused as a ninth: Copy's (`pdusel.c`, falls back to the THUMB row), the
@@ -5250,7 +5262,12 @@ callback's chain: only from the wake, 20.22.2.6):
    the occupant, the X8 region or the bank degrades (QA F21). The retry is
    the user's: put the disk back and do the same thing again (the lead's
    ruling, 2026-11-10 12:10 - no prompt that waits, and no overlay held
-   resident: 51.5 KiB the XT's occupants need). Every lazy read says the
+   resident: 51.5 KiB the XT's occupants need). An OPEN that fails after such a
+   read (`pdu_dskout`, set by both toasts and cleared when an open begins)
+   is `PDE_IO`, never the `PDE_SYNTAX` its missing key module or overlay
+   left behind, and the empty window's card says `Insert the PageDesk disk;
+   open again.` rather than calling the user's file damaged (QA F21, the
+   real 360 KB pair: A128 with the program disk out). Every lazy read says the
    same sentence: the overlay's fetch, through crt0's `CC_OVL_FAIL` hook
    (`pdu_ovl_fail` turns the SDK's `Cannot read my parts` and `No disk to
    read from` into it; memory refusals keep their own words), and PDREND's
@@ -5557,12 +5574,17 @@ cap is 65,024):
 | QA R15/R16: the page number in the drawing line, and the first draw's line replacing `Opened X` (`pdu_opsaid`); the merges up to d6495e85e | 63,597 | +62 |
 | QA SYNTH toast: the idle hold (`pdu_idle_ovl`, `pdu_ovhold`, the recovery look through it) and `pdu_ovl_fail`'s two idle sentences | 63,947 | +350 |
 | QA F31: `pdu_stale` (14.4) - the page load, the draw and the navigation owe nothing to a document whose file changed under it | 64,023 | +76 |
+| the merge of ui's round 2 (F29, F30) | 64,119 | +96 |
+| QA R26: the XB, the held keys and the INDEX one claim (`bk_size` factored out of `pdu_bank_load`, the keys zeroed at launch, `pdu_mod_quit` no longer frees the INDEX) | 64,161 | +42 |
+| QA F21: `pdu_dskout` and the card's disk sentence | 64,243 | +82 |
 
-**1,001 bytes stay under the cap.**
+**781 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
-in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
-and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
+in 512 bytes, `pdu_kseg` (`pduslot.inc`), cut out of the exchange block's
+claim at launch and zeroed there (QA R26: it was a claim of its own, taken
+with the first key, and that ninth claim is what refused every later font
+module - 20.22.2.2): bytes 0..133 are a `pdxb_wkeys`, 136..179 the
 document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
 `/ID[0]`, 196..211 the first 16 bytes of its `/Encrypt` `/U`.
 
