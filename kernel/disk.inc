@@ -10914,6 +10914,10 @@ FDD_MOTORW   equ 12              ; ticks (~660ms) for the motor line to take
                                  ; absent verdict ever pays it
 FDD_SELW     equ 4000            ; a short settle after the select reaches the
                                  ; cable, before ST3 means anything
+%endif                           ; NO_FDDPROBE - paused, not ended: drv_sniff's
+                                 ; DSK_PMHD branch (driver.inc) calls
+                                 ; dsk_fdd_pmemu too, so FDDPROBE=0 keeps the
+                                 ; routine and drops only the probe
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -10986,6 +10990,7 @@ dsk_fdd_pmemu:
     stc
     ret
 %endif                          ; KERN_BIG
+%ifndef NO_FDDPROBE              ; ...and the probe's own body resumes
 
 ; -----------------------------------------------------------------------------
 ; dsk_fdd_probe - is unit AL really there? (SPEC.md 18.97, 18.98)

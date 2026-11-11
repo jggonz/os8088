@@ -175966,7 +175966,9 @@ image carrying data spells `CD 81 FF` by chance.
 of the last release** (the rule the PKG_FMT 10 rows were cut by: two
 releases shared that format and both Wires were level 2, so one byte had to
 hold both back, and the older table decided).
-`WIRE_TABLE_END` (0x0233, the flag day's `osapi_table_end`) is the end of the table the TOP level's kernel
+`WIRE_TABLE_END` (0x0236, the flag day's `osapi_table_end` with `OSAPI_FILE_FIND_SEQ` (§19.7.1.1) appended
+before any kernel at `PKG_FMT` 13 was released - a cell added to an UNRELEASED generation moves the
+end and cuts no row) is the end of the table the TOP level's kernel
 has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
 --pkgdir`, because no Wire in the field can be told about it: the release
 that first publishes such a package adds a row (the next level, its first
