@@ -244,10 +244,14 @@ _pdu_slot_load:
 ; room then joins the one free run above it. QA F25: 87.5 KiB free as 19 +
 ; 30 + 38.5 with every claim bottom-up, and a save needs 77 in one
 ; unsigned pdu_claimhi(unsigned paras) - the same from C (the overlay's edit
-; store, ovl_ed_need): BX CX DX lost, as cdecl lets them be
+; store, ovl_ed_need): BX CX DX lost, as cdecl lets them be. The argument
+; is on the STACK and SS is not DS: [ss:bx+2]. Without the override the
+; size was whatever DS held at SP's offset - 0.5 KiB on TTSIMPLE - and the
+; 16 KiB store laid over claim A, so a typed note was overwritten by the
+; content stream (QA F32); tests/unit/t_pdssarg.py holds the override
 _pdu_claimhi:
     mov bx, sp
-    mov ax, [bx+2]
+    mov ax, [ss:bx+2]
 pd_claimhi:
     xor cx, cx
     mov bl, MEMP_CLAIM_HI
