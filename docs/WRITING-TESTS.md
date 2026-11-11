@@ -406,8 +406,13 @@ is the Marty and `ui.mo` the mouse.
 - **`raise_window` before `menu_pick`** on a package you just launched:
   launches are asynchronous, and the menu bar is the front window's
   (incident 43).
-- `boot()` turns the screen saver off and resolves an IBM machine name to its
-  GLaBIOS twin. A row calling `os88marty.launch` directly gets neither.
+- `boot()` resolves an IBM machine name to its GLaBIOS twin; a row calling
+  `os88marty.launch` directly does not get that. **Both turn the screen saver
+  off** - `launch` arms a guard that the row's own guest-time waits run once
+  the boot is over (once per boot, and only on the kernel os88sym describes).
+  A row ABOUT the saver, or one that reads back `[ss_mins]`/`[ss_idle]`,
+  passes `saver=True` (tests/saver.py, dispsaver, saverate, fishfit,
+  fishedge, cfgtrip's second boot).
 
 The mouse under it is `tools/os88mouse.py`: absolute and closed-loop, with a
 `dblclick` of its own. `tools/os88mouserel.py` is relative and is only for the
@@ -518,7 +523,10 @@ next press when two keys share a byte (incident 42).
 ### 7.3 `settle` is the expensive one
 
 `settle` waits for several identical screen captures, and used to be half of
-a row's time. It is right only when the next line compares PIXELS. Before a
+a row's time. It is right only when the next line compares PIXELS. Its
+captures are taken on a PAUSED guest and the window between them is run as
+exact guest cycles (`advance`), so its answer does not depend on how busy
+the host is (docs/MARTYPC-DEBUG.md, *settle*); `quiesce` likewise. Before a
 memory read use `ui_done`; after an input, before a pixel read, use
 `ui.still()`. `settle` is positively wrong during an operation that holds the
 gfx lock - the screen is *stiller* while it works than when it is done, so a

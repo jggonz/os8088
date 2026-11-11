@@ -103,7 +103,8 @@ def main():
     o = offsets()
     os.chdir(ROOT)
     out = []
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          saver=True) as m:       # the saver is its subject
         m.write(m.sym("ss_modes"), bytes([8]))      # sea life, and only it
         m.write(m.sym("ss_secs"), b"\xff")          # one long turn: no re-pick
         m.write(m.sym("ss_idle"), b"\x1c\x00")      # ~1.5s of idle
