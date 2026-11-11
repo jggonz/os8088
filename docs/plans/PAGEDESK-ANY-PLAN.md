@@ -212,3 +212,10 @@ slow path on the XT or a limit that writes its note.
 
 - 2026-11-09: goal; four scouts (platform, engine, render, writer); owner
   decisions O1-O7; ABI and contract (20.22) pinned; wave 1 launched.
+- 2026-11-10: every agent integrated; QA in emulation (qa-render, qa-flows);
+  two fix rounds and two QA re-checks. Notable fixes: F32 (a note's text
+  overwritten, a stack argument read through DS; the `pdssarg` gate), F15
+  (JBIG2 sized to the slot), R26 (the 8-claims-per-owner limit), R10 (the
+  VGA quantiser). O8 and O9 decided by the owner; O9 restored the 32 KiB
+  reserve. The soak union (32 rows) passed at dfe2bdba8; `test-full` 102 of
+  104 there, both failures registries (section 6 and the PR).
