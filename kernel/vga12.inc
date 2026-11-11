@@ -3456,7 +3456,14 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
+%ifdef KHP_VGAEDGE
+    mov dx, cx                  ; DX = the row step LESS what the rep advances
+                                ; DI by, so one add ends the row (SPEC.md
+                                ; 5.7.1) - CX still holds the step the edge
+                                ; columns used (-1 byte, -2 clocks)
+%else
     mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
+%endif
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
