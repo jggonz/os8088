@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>os8088 v1.0.20261111</title>
+<style>
+  @page { size: Letter; margin: 0.55in 0.6in 0.6in 0.6in; }
+  :root { --ink:#111; --muted:#555; --rule:#d0d0d0; --accent:#00a0a0; --soft:#f3f6f6; }
+  html, body { background:#fff; color:var(--ink); margin:0; }
+  body { font: 9.6pt/1.42 "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  h1, h2, h3, .mono, .kicker, .spec dd, th { font-family: Menlo, "SF Mono", Monaco, monospace; }
+  h1 { font-size:24pt; line-height:1.1; margin:4pt 0 6pt; letter-spacing:-0.5pt; }
+  h2 { font-size:12.5pt; margin:11pt 0 5pt; padding-bottom:3pt; border-bottom:1.5pt solid var(--ink); }
+  h3 { font-size:10.5pt; margin:0 0 3pt; }
+  p { margin:0 0 6pt; }
+  a { color:var(--ink); }
+  .kicker { display:inline-block; font-size:8pt; font-weight:bold; letter-spacing:1pt; text-transform:uppercase;
+            background:var(--accent); color:#fff; padding:2pt 6pt; }
+  .meta { color:var(--muted); font-size:9pt; margin-bottom:10pt; }
+  .lead { font-size:11pt; line-height:1.45; }
+  .page { break-after: page; }
+  .page:last-child { break-after: auto; }
+  figure { margin:0; break-inside:avoid; }
+  figure img { width:100%; display:block; border:1pt solid var(--ink); image-rendering: pixelated; }
+  figcaption { font-size:8.5pt; color:var(--muted); margin-top:3pt; }
+  .hero { margin:10pt 0 4pt; }
+  .hl { border-left:3pt solid var(--accent); padding:1pt 0 1pt 9pt; margin:0 0 7pt; break-inside:avoid; }
+  .hl h3 .pr { color:var(--muted); font-weight:normal; font-size:9pt; }
+  .note { background:var(--soft); border:1pt solid var(--rule); padding:7pt 9pt; break-inside:avoid; }
+  table { border-collapse:collapse; width:100%; font-size:9pt; }
+  th { text-align:left; font-size:8pt; text-transform:uppercase; letter-spacing:0.5pt; border-bottom:1.2pt solid var(--ink); padding:3pt 4pt; }
+  td { border-bottom:0.6pt solid var(--rule); padding:2.5pt 4pt; vertical-align:top; }
+  td.num { white-space:nowrap; font-family: Menlo, monospace; }
+  .specs { display:grid; grid-template-columns:repeat(3,1fr); border-top:1.5pt solid var(--ink); border-bottom:1.5pt solid var(--ink); margin:10pt 0 4pt; }
+  .spec { padding:6pt 8pt; border-left:0.6pt solid var(--rule); }
+  .spec:first-child { border-left:none; padding-left:0; }
+  .spec dd { margin:0; font-size:17pt; font-weight:bold; }
+  .spec dt { font-size:8.5pt; color:var(--muted); }
+  .cards { display:grid; grid-template-columns:1fr 1fr; gap:8pt 14pt; }
+  .card { border-top:0.8pt solid var(--rule); padding-top:5pt; break-inside:avoid; }
+  .gallery { display:grid; grid-template-columns:1fr 1fr; gap:10pt 14pt; }
+  ol.steps { margin:0; padding-left:16pt; }
+  ol.steps li { margin-bottom:4pt; }
+  .foot { margin-top:12pt; padding-top:5pt; border-top:0.6pt solid var(--rule); font-size:8.5pt; color:var(--muted); }
+  .two { display:grid; grid-template-columns:1.05fr 1fr; gap:14pt; align-items:start; }
+  .small { font-size:8.5pt; color:var(--muted); }
+  code { font-family: Menlo, monospace; font-size:8.8pt; }
+</style>
+</head>
+<body>
+
+<!-- ============ PAGE 1: THE RELEASE ============ -->
+<section class="page">
+  <span class="kicker">Release</span>
+  <h1>os8088 v1.0.20261111</h1>
+  <div class="meta mono">11 November 2026 &middot; commit 40d0df1 &middot; kernel 105,636 bytes</div>
+
+  <div class="two" style="grid-template-columns:1.3fr 1fr">
+  <div>
+  <p class="lead">os8088 is a graphical operating system for the original IBM PC, written in 8086 assembly and started from a floppy disk. It has overlapping windows, a mouse and programs you can run side by side.</p>
+
+  <p>This release teaches PageDesk, its PDF viewer and editor, to read PDFs as they are made today. Until now most PDFs written since 2003 had to be rewritten on a modern computer before PageDesk would open them. It now opens them on the machine itself, including encrypted files, fonts stored inside the file and JPEG pictures.</p>
+
+  </div>
+  <figure class="hero" style="margin-top:2pt">
+    <img src="pd-any-fonts@2x.png" alt="PageDesk showing a macOS print in its own embedded font">
+    <figcaption>A real print from macOS, drawn with the font stored inside the PDF. QEMU, VGA.</figcaption>
+  </figure>
+  </div>
+
+  <h2>What's new</h2>
+  <div class="hl">
+    <h3>PageDesk reads PDFs as they are made today <span class="pr">#354</span></h3>
+    <p>PDFs made since 2003 usually pack their index into compressed blocks, and many are encrypted, carry their own fonts or hold JPEG pictures. PageDesk now reads all of these itself: compressed and damaged indexes, encryption up to AES-256 with a password prompt, embedded fonts, JPEG, JPEG 2000, JBIG2 and fax-style pictures, every colour space, shadings and transparency. On an emulated 4.77 MHz IBM PC a plain page appears about 50 seconds after the double-click.</p>
+  </div>
+  <div class="hl">
+    <h3>PageDesk is two disks on a 360KB machine <span class="pr">#354</span></h3>
+    <p>Its 360KB disk now holds the program alone, and a second disk carries the sample PDFs and the README. Keep the program disk in the drive; if it is out, PageDesk asks for it back.</p>
+  </div>
+
+  <div class="note">
+    <strong>Good to know.</strong> The software disks are byte for byte the same as last release; the system disks differ only in their build number. PageDesk is on its own disk, the everything sets and the live USB and CD, and no longer needs the <code>os88pdprep.py</code> tool.
+  </div>
+  <h2>Get it</h2>
+  <table>
+    <thead><tr><th>Download</th><th>Size</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td class="num">os8088-v1.0.20261111.zip</td><td class="num">31.9MB</td><td>Every floppy, in a folder per disk size. Start with <code>1440K/OS88-144.IMG</code> in drive A and <code>APPS-144.IMG</code> in B; PageDesk is in <code>PROGRAMS/PAGEDESK</code>.</td></tr>
+      <tr><td class="num">&hellip;-live.zip</td><td class="num">14.3MB</td><td>A USB image and a CD image that start a PC or an emulator with no floppy drive, with every program on them.</td></tr>
+      <tr><td class="num">&hellip;-videos.zip</td><td class="num">316.8MB</td><td>Three ready-to-run 86Box machines with the video player's demo disks.</td></tr>
+      <tr><td class="num">&hellip;-tools.zip</td><td class="num">8.5MB</td><td>Firmware, kernel ROMs for this build, and host utilities.</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin-top:5pt">Download: github.com/jggonz/os8088/releases &middot; Single disks and the browser demo: os8088.com/run/</p>
+
+</section>
+
+<!-- ============ PAGE 2: DOWNLOADS + SPOTLIGHT START ============ -->
+<section class="page">
+  <span class="kicker">Spotlight</span>
+  <h1 style="font-size:20pt">PageDesk, a PDF reader for the IBM PC/XT</h1>
+  <p class="lead">A PDF reader and editor for a 4.77 MHz IBM PC/XT with 640KB and no maths chip. It opens PDFs as they are made today, with their own fonts, pictures and passwords, and saves your highlights and notes as a PDF any other reader opens.</p>
+
+  <dl class="specs">
+    <div class="spec"><dd>49 s</dd><dt>a plain page on a 4.77 MHz PC, from the double-click</dt></div>
+    <div class="spec"><dd>AES-256</dd><dt>the strongest encryption it opens; it asks for a password when one is set</dt></div>
+    <div class="spec"><dd>4</dd><dt>kinds of picture it decodes: JPEG, JPEG 2000, JBIG2 and fax</dt></div>
+  </dl>
+
+  <h2>What a PDF is</h2>
+  <p>PDF is the format most manuals, papers and forms are handed around in. Adobe published it in 1993, ten years after the IBM PC/XT, so no program of the XT's day could read one. A PDF describes each page as a list of drawing instructions: put this text here in this font, draw this line, place this picture. It also carries an index of where each part starts, so a reader can jump to page 400 without reading the 399 before it.</p>
+  <p>The format has grown since. Files made since 2003 usually pack that index into compressed blocks, and many carry their own fonts, photographs or a password. When PageDesk first shipped it read only the older form. It now reads them itself.</p>
+
+  <h2>What it reads</h2>
+  <div class="cards">
+    <div class="card"><h3>Today's files</h3><p>Compressed indexes, files that mix old and new forms, and files whose index is damaged, which PageDesk rebuilds by scanning the file.</p></div>
+    <div class="card"><h3>Passwords</h3><p>RC4 and AES encryption up to AES-256. A locked file asks for its password, and a save keeps the copy locked with the same key.</p></div>
+    <div class="card"><h3>Fonts</h3><p>TrueType, Type 1, CFF and Type 3 fonts stored in the PDF are drawn from their own outlines. Search and Copy use the real text.</p></div>
+    <div class="card"><h3>Pictures and colour</h3><p>JPEG and JPEG 2000 at a reduced size, JBIG2 and fax scans, every PDF colour space, smooth shadings, patterns and transparency.</p></div>
+  </div>
+  <p style="margin-top:8pt">An XT cannot hold all of that at once. Each kind of decoder is a separate piece that PageDesk reads from the disk only when a page needs it. On a machine with memory above 640KB the pieces stay there after their first use.</p>
+</section>
+
+<!-- ============ PAGE 3: PICTURES ============ -->
+<section class="page">
+  <h2 style="margin-top:0">Pictures</h2>
+  <p class="small">Taken from this build in QEMU, an emulator that is far faster than an XT, so they say nothing about speed. VGA unless noted.</p>
+  <div class="gallery">
+    <figure><img src="pd-any-guide@2x.png" alt=""><figcaption>The 12-page sample guide saved the modern way, with its index in compressed blocks. PageDesk used to refuse this file.</figcaption></figure>
+    <figure><img src="pd-any-password@2x.png" alt=""><figcaption>An encrypted PDF asks for its password before PageDesk reads it.</figcaption></figure>
+    <figure><img src="pd-any-colour@2x.png" alt=""><figcaption>48 test cells, each in a different PDF colour space.</figcaption></figure>
+    <figure><img src="pd-any-shade@2x.png" alt=""><figcaption>All seven kinds of PDF shading: ramps, radial blends, meshes and patches.</figcaption></figure>
+  </div>
+  <div class="two" style="margin-top:12pt">
+    <figure><img src="pd-any-cga@2x.png" alt=""><figcaption>The macOS print on CGA, the IBM PC's first colour card, here in its 640 by 200 black-and-white mode.</figcaption></figure>
+    <div>
+      <h3>Every screen</h3>
+      <p>PageDesk runs on VGA, EGA, CGA and Hercules, the monochrome card from 1982. Colours are turned into patterns of dots where a screen has only black and white, and the window lays itself out to fit a short CGA screen with one bar of controls.</p>
+      <h3 style="margin-top:8pt">Marking up</h3>
+      <p>Highlights, sticky notes, text boxes, freehand drawing, lines, boxes and ellipses, and page changes. PageDesk never writes into the file it opened: Save As writes a copy with your changes added at the end, which other PDF readers open.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PAGE 4: SPEED, LIMITS, RUN ============ -->
+<section class="page">
+  <h2 style="margin-top:0">How fast it is</h2>
+  <p>Measured on MartyPC, an emulator that runs an IBM PC at its real speed, cycle for cycle: a 4.77 MHz 8088 with 640KB and PageDesk on a 720KB floppy. Each time runs from the double-click on the file to the first page on screen; about 30 seconds of it is PageDesk loading from the floppy. Where two times are given, the first is on CGA and the second on Hercules.</p>
+  <table>
+    <thead><tr><th>File</th><th>Double-click to first page</th></tr></thead>
+    <tbody>
+      <tr><td>A plain page of text</td><td class="num">49 s</td></tr>
+      <tr><td>A fax-style (CCITT) scan</td><td class="num">48&ndash;51 s</td></tr>
+      <tr><td>JBIG2 text</td><td class="num">52&ndash;57 s</td></tr>
+      <tr><td>The 12-page sample guide</td><td class="num">61&ndash;63 s</td></tr>
+      <tr><td>An AES-128 encrypted file</td><td class="num">70&ndash;79 s</td></tr>
+      <tr><td>A JPEG photograph</td><td class="num">85&ndash;99 s</td></tr>
+      <tr><td>A JPEG 2000 picture</td><td class="num">97&ndash;99 s</td></tr>
+      <tr><td>A page set in an embedded TrueType font</td><td class="num">123 s</td></tr>
+      <tr><td>A macOS print with its own fonts</td><td class="num">268 s</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What it cannot do yet</h2>
+  <p>PageDesk draws as much of a page as it can and says on its status line what it left out. On a 640KB machine a large embedded font may not fit beside the other pieces, so it is drawn in PageDesk's own face instead. A coloured mark under transparency is drawn in grey, and Chinese, Japanese and Korean text has no face to draw in.</p>
+  <p>Some files are slow on an XT. While a JPEG 2000 picture decodes, the keyboard can wait up to a minute. A file locked with the newest AES-256 method takes about 21 minutes to unlock on an 8088, so PageDesk asks first, and Esc cancels. It does not fill in forms, check signatures or print.</p>
+
+  <h2>Run PageDesk</h2>
+  <ol class="steps">
+    <li>Download the release zip and start the system disk for your disk size in drive A.</li>
+    <li>Put the PageDesk disk from <code>PROGRAMS/PAGEDESK</code> in drive B. At 360KB it is two disks: the program on the first, the sample PDFs on the second.</li>
+    <li>Copy any PDF to a floppy and double-click it, or start <code>PAGEDESK.O88</code> and press <em>Sample guide</em>. A locked file asks for its password.</li>
+    <li>Keep your changes with File &gt; Save As. Saving under the file's own name asks before it replaces it.</li>
+  </ol>
+
+  <div class="foot">
+    The full write-up: os8088.com/spotlight/pagedesk/ &middot; Release notes: os8088.com/releases/ &middot; Source: github.com/jggonz/os8088 (MIT licence)
+  </div>
+</section>
+
+</body>
+</html>
