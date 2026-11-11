@@ -151,6 +151,17 @@ _pdu_slot_load:
     jbe .sz
     mov [sl_need], ax
 .sz:
+    cmp word [bp+4], PDU_OCC_WRT_A  ; a SAVE keeps PD-29's 32 KiB beside S
+    jne .sz1                        ; (16.1, O9): PDWRT's S is up to ~100
+    call _os88_mem_largest_p        ; KiB, and with the occupant given back at
+    mov dx, [sl_need]               ; the step before it the kernel shed every
+    add dx, PDU_RESV_P              ; cache to grant it, leaving 3-12 KiB on a
+    jc .sz0                         ; 640 KiB CGA. The save runs from the job
+    cmp ax, dx                      ; with no overlay code on the stack, so
+    jae .sz1                        ; the overlay goes first; its next ovl_
+.sz0:                               ; call fetches it again
+    call sl_rel_ovl
+.sz1:
     mov ax, [sl_need]
     call pd_claimhi                 ; S from the TOP: B's tail faces the free run
     or ax, ax
@@ -235,6 +246,20 @@ _pdu_slot_load:
 .nos2:
     mov ax, PDE_NOSLOT
     jmp short .out
+
+; unsigned pdu_unclaimed_kb(void) - the largest run with NO cache shed (the
+; what-if at purge level 0), a floor under the unclaimed figure PD-29's
+; reserve is: os88_mem_total_kb counts every purgeable cache as free. Its BX
+; total read 0 through the door (measured), so the largest run it is, which
+; errs towards a release. BX lost
+_pdu_unclaimed_kb:
+    mov ax, MEMC_WHATIF << 8        ; AL = 0: no tier sheds
+    clc
+    call OSAPI_MEM_COMPACT
+    jnc .r
+    xor ax, ax                      ; no answer: as if none (release)
+.r:
+    ret
 
 ; pd_claimhi - AX paragraphs claimed from the TOP of the heap (MEMP_CLAIM_HI):
 ; AX = the base or 0. Every claim PageDesk makes comes from the top - XB,
@@ -1641,6 +1666,15 @@ _pdu_doc_claim:
     jb .fl
     inc cx
     add bx, PDU_FL_PARA_A + PDU_FL_RESV2_A
+    push bx                         ; the SECOND slot against UNCLAIMED RAM
+    push cx                         ; (O9, 16.1): the largest above counts
+    push dx                         ; every purgeable cache as free, and on a
+    call _pdu_unclaimed_kb          ; 640 KiB XT VGA (WSAVE 30 + HIGH 31.5)
+    mov cl, 6                       ; two slots left 10 KiB unclaimed after
+    shl ax, cl                      ; every step. KiB to paragraphs
+    pop dx
+    pop cx
+    pop bx
     cmp ax, bx
     jb .fl
     inc cx

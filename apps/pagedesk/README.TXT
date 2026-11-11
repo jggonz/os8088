@@ -81,6 +81,6 @@ View > Preferences sets the default view, which panels show, how marks look on C
 LIMITS
 ------
 
-Up to 1,024 pages and 128 marks a document, 240 pages for page operations, 1,024 characters in a note, zoom 25% to 400%. A page can take many seconds to draw on an XT; the status line shows progress and Esc cancels. Help > Document info shows the free memory.
+Up to 1,024 pages and 64 marks a document, 240 pages for page operations, 1,024 characters in a note, zoom 25% to 400%. A page can take many seconds to draw on an XT; the status line shows progress and Esc cancels. Help > Document info shows the free memory.
 
 Full details are in docs/PAGEDESK-GUIDE.md in the source tree.

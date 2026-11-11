@@ -468,7 +468,7 @@ Every segment is full: **no feature can be added without removing one**.
 Per-document claims (SPEC 16.2, 20.6.2): the kernel allows a program only 8
 claims on kern_big, so the primary carves its rows from two large claims. On
 VGA and EGA the second claim is 63 KiB (60 KiB on CGA and Hercules), holding
-the display list and its workspace (29 KiB), the band, the edit store (16 KiB),
+the display list and its workspace (29 KiB), the band, the edit store (8 KiB, at the first edit),
 the undo log (4 KiB), page map, thumbnails, scratch and the 2 KiB private
 module stack. A save adds the writer's buffers (18 KiB, up to 40 KiB for an
 Extract). Flate adds 43 KiB when it is used.
@@ -611,7 +611,8 @@ Other messages you may see:
 - `Could not open NAME`, `Could not save NAME: <reason>`, `Could not draw the
   page: <reason>`.
 - `Page operations handle up to 240 pages.`, `The edit store is full: save,
-  then continue.` (128 marks; the same text heap limit is 1,024 characters a
+  then continue.` and `The change limit (64) is reached.` (64 marks a
+  document, in an 8 KiB store; the same text heap limit is 1,024 characters a
   note), `Stroke limit: the stroke is kept.` (126 points an ink stroke),
   `Too small: 4 points at least.`, `Too large to undo: the history was
   cleared.`

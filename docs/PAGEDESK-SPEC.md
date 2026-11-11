@@ -729,6 +729,22 @@ shed. D28 raised VGA's in-save trough from 5.5 KiB. The rows below are the
 design budget; the claims as measured are the row's printout
 (`python3 tools/os88test.py soak -v -k pagedeskxt`).
 
+**The slot's occupant is released at a step's end** (`os88_onwake`,
+pdujob.c): when a wake ends with no job and no page owed and less than 32 KiB
+is unclaimed, S and W are given back, and the next NEEDMOD loads the occupant
+again (20.22.2.4) - from the XMS/EMS copy where there is one, off the floppy
+on a bare XT. The reserve held before the fix round only because the
+occupant was the owner's ninth claim and MEM_OWNER_MAX refused it (QA R30).
+"Unclaimed" is `pdu_unclaimed_kb`: `OSAPI_MEM_COMPACT`'s what-if at purge
+level 0, whose AX (the largest run with no cache shed) is the floor used.
+Owner decision O9 restored the reserve in three more places. The edit store
+is 8 KiB, 64 marks (13.1.1). D17's second Flate slot is taken only when
+UNCLAIMED room allows it: with every purgeable cache counted as free, a
+640 KiB XT VGA took two slots and sat at 10 KiB after every step. And a
+save's PDWRT claim drops the overlay first when S would leave less than
+32 KiB in the largest run; the save runs from the job, so no overlay code is
+on the stack (QEMU CGA's Save As fell to 3 KiB without it).
+
 **The floor where the reserve does not hold (QA F24, measured on MartyPC,
 5150 Hercules 640 KiB, 720 KiB B:, 2026-11-10).** Every claim PageDesk sizes
 itself keeps PD-29's 32 KiB: W (`sl_wsize`), a W regrown for a decoder's
@@ -770,7 +786,7 @@ page shrinks B, which is the one claim here that is larger than its page needs.
 | band | PDREND | 1.25-5 KiB by adapter | open |
 | glyph cache | PDREND | 12 KiB | open |
 | thumbnails | primary | 4 KiB | panel shown |
-| edit store + undo | primary | 16 KiB | open |
+| edit store + undo | primary | 8 KiB (O9) | first edit |
 | text/search scratch | primary | 2 KiB | search |
 | private module stack | primary (every module verb runs on it, 20.15) | 2 KiB | open |
 | `PDWRT` image + bss | parts, lazy | <= 46 KiB (D18; `PDW_CAP`) | save/extract/new, freed after |
@@ -2311,7 +2327,7 @@ document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
 |---|---|---|
 | A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
 | B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 44-47 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
-| E | the edit store, 16 KiB, **at the first edit** (QA F26, the claim-B ruling): `pdu_dclaim[2]`, from the top. Its row in `pdu_dckb` is 0, so the carve gives `pdu_dc[PDU_DC_EDITS]` no room of its own until `ovl_ed_need` claims it and names it there. It is asked for when an edit tool is picked (`ovl_tool_hint`, which gives the slot's occupant back first when the store will not fit: the ladder loads it again at need) and at an edit tool's press on the page (`ovl_tool_click`) and a journal's replay; `pdu_ed_new` only refuses without it (`PDE_NOMEM`), a note's commit being too deep a chain for a claim (pdstk). `pdu_doc_free` gives it back with A and B | 16 KiB, or none for a document only read |
+| E | the edit store, 8 KiB (O9; 16 until then), **at the first edit** (QA F26, the claim-B ruling): `pdu_dclaim[2]`, from the top. Its row in `pdu_dckb` is 0, so the carve gives `pdu_dc[PDU_DC_EDITS]` no room of its own until `ovl_ed_need` claims it and names it there. It is asked for when an edit tool is picked (`ovl_tool_hint`, which gives the slot's occupant back first when the store will not fit: the ladder loads it again at need) and at an edit tool's press on the page (`ovl_tool_click`) and a journal's replay; `pdu_ed_new` only refuses without it (`PDE_NOMEM`), a note's commit being too deep a chain for a claim (pdstk). `pdu_doc_free` gives it back with A and B | 8 KiB, or none for a document only read |
 
 and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
 exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
@@ -2705,17 +2721,18 @@ in place - converted, then turned round so the first point drawn is the first st
 and the history's command table is in `PDU_DC_UNDO` after its entries. Nothing
 in `edit` recurses, and its widest frame is 16 bytes of locals (`ovl_ed_set`; D21).
 
-**The segment** (`pdu_dcseg(PDU_DC_EDITS)`, 16 KiB, never zeroed; `pdu_ed_init`
+**The segment** (`pdu_dcseg(PDU_DC_EDITS)`, 8 KiB since O9, never zeroed; `pdu_ed_init`
 sets the three tops when a document's claims exist):
 
 | bytes | what |
 |---|---|
-| 0 .. 6,143 | 128 records of 48 bytes, in z-order (index = z; a later record is on top) |
-| 6,144 .. `text top` | the text heap, grows up (one text is at most 1,024 bytes) |
-| `point top` .. 16,383 | the point heap, grows down (one record at most 2,000 points) |
+| 0 .. 3,071 | 64 records of 48 bytes, in z-order (index = z; a later record is on top) |
+| 3,072 .. `text top` | the text heap, grows up (one text is at most 1,024 bytes) |
+| `point top` .. 8,191 | the point heap, grows down (one record at most 2,000 points) |
 
-13.1's 256 records and swap file are NOT built: 128 records, and the 10 KiB the
-two heaps share, are refused with `PDE_LIMIT` / `PDE_NOMEM` (`pdu_ed_err`) and
+13.1's 256 records and swap file are NOT built: 64 records, and the 5 KiB the
+two heaps share (O9: the 16 KiB store of 128 took a 640 KiB XT under PD-29's
+32 KiB reserve at the first edit), are refused with `PDE_LIMIT` / `PDE_NOMEM` (`pdu_ed_err`) and
 the caller keeps what was typed. A heap is a bump allocator. A replaced text or
 point list is a new block and the old one is abandoned (no compaction); typing
 extends the tail of the LAST text block in place, and a backspace gives that
@@ -4449,7 +4466,7 @@ save's date, so two sessions on **different** sources never repeat a pair, and a
 saved file is a different source from the one it came from. The id alone
 restarted at 1. `pdu_ed_init` now seeds the counter with `PDU_RC_SEED()`
 (pdu.h): the tick's low ten bits times 16, a multiple of 16 **below 0x4000**,
-so 128 records stay below 0x8000 - the top half is PDWRT's, whose duplicated
+so 64 records stay below 0x8000 - the top half is PDWRT's, whose duplicated
 pages' annotations are `0x8000 + page + k` under the same nonce (pdwpg.c); the
 first build's 0x7FF0 bound let a record id reach 0x8060. Two sessions on the
 same source repeat an id only when their ticks fall within a few units of each
@@ -4481,7 +4498,7 @@ Deviations from 14.7, judged against PD-20's acceptance (verify-recov):
    launch (20.17.6).
 
 The debounce means a crash inside the half second, or inside a typing run,
-loses that run. Limits: 128 records (the store's), 8 KiB of journal (more and
+loses that run. Limits: 64 records (the store's), 8 KiB of journal (more and
 the journal turns off, said), one journal per machine. Not built:
 page-operation replay, a journal per document, recovery without opening the
 source first.
@@ -4728,7 +4745,7 @@ lead, not fixed. A section named below is not edited; this one overrides it.
 | 1.3, XObjects row | inline images "beyond 4 KiB" are refused | 20.12.5: an inline image is read by its exact length and drawn when its raw row fits 1,024 bytes and its stored form 6,144 bytes; the refused cases (CMYK, a filter, a colour-space name, a width over 4,096) are listed there |
 | 17.5 | `Ctrl++` / `Ctrl+-` zoom | the zoom keys are the plain `+`, `=` and `-` (and `Ctrl+-`); `Ctrl++` is not a separate binding |
 | 17.2 | Mode bar and file bar as drawn | COMPACT also lacks the Open button (File menu, Ctrl+O), recorded in 20.6 |
-| 13.1 | 256 records and a swap file | 128 records, no swap file (20.8.1, edit-verify 1); the heaps share 10 KiB |
+| 13.1 | 256 records and a swap file | 64 records (O9), no swap file (20.8.1, edit-verify 1); the heaps share 5 KiB |
 
 **20.20.2 Behaviour the contract promises that the build does not do.**
 
