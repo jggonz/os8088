@@ -21,20 +21,22 @@ Four subjects, and each is a different half of the verb:
   PACKED.TXT  the SAME bytes already wrapped LZ4 - what a shipped floppy
               carries. dskw_read_x hands back the unpacked bytes, so LZ4 -> LZB
               is the same code path and the result must be the same file
-  CALC.O88    a PACKAGE (SPEC.md 22.22.1), which is not a 'CZ' file at all: the
+  RECORDER.O88  a PACKAGE (SPEC.md 22.22.1), which is not a 'CZ' file at all: the
               clear prefix stays in front, flags bits 3 and 4 go on, and the
               expected bytes come from os88pkg.compress_image with the machine
               encoder passed in - so the refusals, the prefix and the in-place
               arithmetic are stated ONCE and this test carries no copy of them.
               **And then it is double-clicked**, because the only thing that
               proves a package is still a package is the machine's own loader
-              running it
+              running it. The subject is pkg_fixture()'s pick - the first
+              of PKG_CANDIDATES the HOST compresses, RECORDER.O88 today; it
+              was CALC.O88 until Calculator grew past the in-place layout
   TELNET.O88  ...one the BUILD already compressed: refused, and untouched
   (again)     PLAIN.TXT once it is LZB: refused as already compressed, and the
               file untouched
 
 ...and then UNCOMPRESS (SPEC.md 22.23), where a ROUND TRIP is the strongest
-assertion available rather than the weakest one: PLAIN.TXT and CALC.O88 both
+assertion available rather than the weakest one: PLAIN.TXT and the package both
 went in as bytes this run knows exactly, so coming back byte for byte is a
 statement about the pair that no ratio could make. The package is then opened
 again, because the only thing that proves a package is a package is the
@@ -58,7 +60,7 @@ have that matters is the one that cannot be seen from inside (docs/FIELD-NOTES.m
 A package's prefix is the header, the icon, the association block and - when
 flags bit 5 says so - the 16-byte DOCUMENT GLYPH (SPEC.md 54.3.2), and
 Compress and Uncompress must agree on it to the byte: the stream starts where
-the prefix ends. CALC.O88 above has no glyph (flags 0x09), so the main row
+the prefix ends. The package above has no glyph (flags 0x09), so the main row
 cannot reach the glyph rung of the ladder at all. DOS.O88 is the shipped
 package that has one with no parts (flags 0x2B), and it goes on a scratch B:
 EXACTLY AS THE BUILD SHIPS IT - LZ4, which is what a user has - and is taken
@@ -215,7 +217,7 @@ def stage(d, name, data):
     return path
 
 
-def pkg_want(image):
+def pkg_want(image, strict=True):
     """What the verb must write over an UNCOMPRESSED package.
 
     os88pkg.compress_image with the machine's encoder passed in: the clear
@@ -230,10 +232,58 @@ def pkg_want(image):
     out = os88pkg.compress_image(bytearray(image), img, bss, image[3], "lzb",
                                  soft=True,
                                  packer=os88lz.lzb_compress_machine)
+    if out is None and not strict:
+        return None
     if out is None:
         sys.exit("lzcomp: the host refuses to compress the package fixture, "
                  "so there is nothing for the machine to be compared against")
     return bytes(out)
+
+
+PKG_CANDIDATES = ("RECORDER.O88", "TIMER.O88", "MINES.O88")
+PKG_FLAGS = 0x01                # an icon and nothing else in the clear prefix:
+                                # no association block, no glyph (lzglyph's
+                                # subject), no parts (refused by both verbs),
+                                # no Sticky card - 96 bytes clear, which is the
+                                # off-granule body kern_mega's leg is about
+
+
+def pkg_fixture():
+    """The uncompressed PACKAGE subject: the first candidate whose image the
+    HOST compresses, as (disk name, image).
+
+    IT WAS CALC.O88, AND THE ROW WENT RED FOR A REASON THAT WAS NOT THE
+    MACHINE'S. Calculator grew until os88pkg.compress_image refused it at the
+    in-place layout check (LZB saved 519 bytes and the layout wanted 5,125 of
+    a 5,120-byte region), and pkg_want rightly stops when the host refuses -
+    there is then nothing to compare the machine against. A fixed name
+    makes the row a hostage to one package's size; so the subject is chosen
+    here, out of a short list of small shipped packages with the property
+    the legs rely on (PKG_FLAGS, and a window that opens with nothing else
+    attached), and the row stops loudly when none of them qualifies rather
+    than quietly testing a refusal.
+
+    RED with RECORDER.O88 (2026-11-11): byte 200 of pwant flipped, and both
+    `lzcomp` and `mega-lzcomp` fail `package` at byte 200 and nowhere else;
+    put back, both are green (52s on MartyPC, 193s on Bochs).
+    """
+    tried = []
+    for name in PKG_CANDIDATES:
+        path = os88build.at("build/%s" % name.lower())
+        if not os.path.exists(path):
+            tried.append("%s missing" % name)
+            continue
+        image = os88pkg.image_unwrap(open(path, "rb").read())
+        if image[3] != PKG_FLAGS or len(image) != u16(image, 8):
+            tried.append("%s flags %#x" % (name, image[3]))
+            continue
+        if pkg_want(image, strict=False) is None:
+            tried.append("%s refused by the host" % name)
+            continue
+        return name, image
+    sys.exit("lzcomp: no package fixture the host compresses (%s) - the "
+             "package legs would compare the machine against nothing"
+             % ", ".join(tried))
 
 
 def build_disk(path):
@@ -250,8 +300,7 @@ def build_disk(path):
     # the run's own tree and not in build/ (docs/plans/SOAK-PARALLEL.md 14.2) -
     # and these two ARE the fixture, so reading them out of a directory
     # somebody may be building in is a torn fixture rather than a missing one.
-    calc = os88pkg.image_unwrap(
-        open(os88build.at("build/calc.o88"), "rb").read())
+    name, pkg = pkg_fixture()
     telnet = open(os88build.at("build/telnet.o88"), "rb").read()
     if len(telnet) >= int.from_bytes(telnet[8:10], "little"):
         sys.exit("lzcomp: build/telnet.o88 is not compressed, so the "
@@ -265,10 +314,10 @@ def build_disk(path):
         path,
         stage(d, "PLAIN.TXT", plain),
         stage(d, "PACKED.TXT", packed),
-        stage(d, "CALC.O88", calc),
+        stage(d, name, pkg),
         stage(d, "TELNET.O88", telnet),
         "SUB:" + stage(sub, "RAWCOPY.TXT", packed),
-        size=360), plain, packed, calc, telnet
+        size=360), plain, packed, name, pkg, telnet
 
 
 def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
@@ -548,15 +597,15 @@ def main():
     # Per-run and removed on the way out, so two of this row at once do not
     # meet either.
     img = tempfile.gettempdir() + "/lzcomp360-%d.img" % os.getpid()
-    disk, plain, packed, calc, telnet = build_disk(img)
+    disk, plain, packed, pname, pkg, telnet = build_disk(img)
     want = cz(os88lz.lzb_compress_machine(plain), len(plain))
-    pwant = pkg_want(calc)
+    pwant = pkg_want(pkg)
     say("lzcomp: %d bytes of prose -> %d expected (%.1f%%), LZ4 on the disk "
         "is %d" % (len(plain), len(want), 100.0 * len(want) / len(plain),
                    len(packed)))
-    say("lzcomp: CALC.O88 %d -> %d expected (%.1f%%), %d bytes clear"
-        % (len(calc), len(pwant), 100.0 * len(pwant) / len(calc),
-           os88pkg.clear_prefix(calc[3])))
+    say("lzcomp: %s %d -> %d expected (%.1f%%), %d bytes clear"
+        % (pname, len(pkg), len(pwant), 100.0 * len(pwant) / len(pkg),
+           os88pkg.clear_prefix(pkg[3])))
     fails = []
 
     with os88marty.launch(os88build.at("build/os8088-360.img"),
@@ -631,33 +680,33 @@ def main():
                          % (len(got), len(want)))
 
         # --- 3. a PACKAGE, which is not a 'CZ' file (SPEC.md 22.22.1) -------
-        # ...the same bytes on kern_mega in protected mode too: CALC.O88's
-        # clear prefix is 96 bytes, so its body starts OFF the 128-byte
+        # ...the same bytes on kern_mega in protected mode too: the fixture's
+        # clear prefix is 96 bytes (PKG_FLAGS), so its body starts OFF the 128-byte
         # granule the encoder slides by, and the verb refused it there until
         # KERN-MEGA-PLAN 14.116 - every segment it computes is a REAL
         # paragraph aimed through a K scratch (KSEG), which takes any one
-        t = compress(m, mo, wx, wy, "CALC.O88", fails)
-        got = fl.volume(1).read("CALC.O88")
+        t = compress(m, mo, wx, wy, pname, fails)
+        got = fl.volume(1).read(pname)
         ok = got == pwant
         say("  package    %s  %r  (%d bytes, wanted %d)"
             % ("ok " if ok else "BAD", t, len(got), len(pwant)))
         if not ok:
             i = next((k for k in range(min(len(got), len(pwant)))
                       if got[k] != pwant[k]), min(len(got), len(pwant)))
-            fails.append("CALC.O88: the machine's package and "
+            fails.append("%s: the machine's package and "
                          "os88pkg.compress_image's first differ at byte %d "
                          "(%d bytes against %d) - byte 3 is the flags and "
                          "%d bytes should be clear in front"
-                         % (i, len(got), len(pwant),
-                            os88pkg.clear_prefix(calc[3])))
+                         % (pname, i, len(got), len(pwant),
+                            os88pkg.clear_prefix(pkg[3])))
 
         # --- 3a. ...and it still LOADS, which is the only proof that counts --
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, pname)
         try:
             os88marty.until(m,
                             lambda mm: len(dispcp.win_list(mm, S)) > len(before),
-                            "the re-compressed CALC.O88 to open a window",
+                            "the re-compressed %s to open a window" % pname,
                             poll=0.2, guest=30.0)
         except os88marty.MartyError:
             pass
@@ -666,7 +715,8 @@ def main():
         say("  runs       %s  (%d windows, was %d)"
             % ("ok " if ok else "BAD", len(after), len(before)))
         if not ok:
-            fails.append("the compressed CALC.O88 opened no window - "
+            fails.append("the compressed %s opened no window - "
+                         % pname +
                          "ld_check_hdr or ld_expand refused a package this "
                          "machine had just written")
 
@@ -712,26 +762,26 @@ def main():
                          % (t, len(back), len(plain), i))
 
         # --- 7. ...and a PACKAGE, which is the other container -------------
-        t = compress(m, mo, wx, wy, "CALC.O88", fails, item=FM_IUNCOMP)
-        back = fl.volume(1).read("CALC.O88")
-        ok = t.startswith("Uncompressed") and back == calc
+        t = compress(m, mo, wx, wy, pname, fails, item=FM_IUNCOMP)
+        back = fl.volume(1).read(pname)
+        ok = t.startswith("Uncompressed") and back == pkg
         say("  unpkg      %s  %r  (%d bytes, the original is %d)"
-            % ("ok " if ok else "BAD", t, len(back), len(calc)))
+            % ("ok " if ok else "BAD", t, len(back), len(pkg)))
         if not ok:
-            i = next((k for k in range(min(len(back), len(calc)))
-                      if back[k] != calc[k]), min(len(back), len(calc)))
-            fails.append("CALC.O88 did not survive the round trip: %r, %d "
+            i = next((k for k in range(min(len(back), len(pkg)))
+                      if back[k] != pkg[k]), min(len(back), len(pkg)))
+            fails.append("%s did not survive the round trip: %r, %d "
                          "bytes against %d, first differing byte %d - byte 3 "
                          "is the flags, and bits 3 and 4 must be OFF"
-                         % (t, len(back), len(calc), i))
+                         % (pname, t, len(back), len(pkg), i))
 
         # --- 7a. ...and the expanded package still runs --------------------
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, pname)
         try:                    # the WINDOW APPEARING is the event, on the
             os88marty.until(    # guest's clock and not the host's
                 m, lambda mm: len(dispcp.win_list(mm, S)) > len(before),
-                "the expanded CALC.O88 to open a window", poll=0.2,
+                "the expanded %s to open a window" % pname, poll=0.2,
                 guest=20.0)
         except os88marty.MartyError:
             pass
@@ -740,7 +790,8 @@ def main():
         say("  unruns     %s  (%d windows, was %d)"
             % ("ok " if ok else "BAD", len(after), len(before)))
         if not ok:
-            fails.append("the EXPANDED CALC.O88 opened no window - the round "
+            fails.append("the EXPANDED %s opened no window - the round "
+                         % pname +
                          "trip produced bytes ld_check_hdr will not start")
 
         # --- 8. a file that is not compressed at all ------------------------
@@ -765,7 +816,7 @@ def main():
         row = dispcp.row_of(m, S, "PACKED.TXT")
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, row)
         rx, ry = dispcp.row_xy(wx, wy, row)     # (a VISIBLE row: compress's)
-        mo.click(rx, ry)        # RAISE THE DISK WINDOW FIRST. Two Calculator
+        mo.click(rx, ry)        # RAISE THE DISK WINDOW FIRST. Two package
         os88marty.settle(m)     # instances are on screen by now (3a and 7a),
                                 # and a right-press goes to whatever is under
                                 # the pointer - which was this leg's whole
