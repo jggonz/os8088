@@ -1600,6 +1600,12 @@ FAST = [
         "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
         "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
         "narrowest canvas (39 cells) - the card cuts a longer one"),
+    Row("pdssarg", "fast", py("tests/unit/t_pdssarg.py"), 0.1,
+        "QA F32 / CLAUDE.md's near model: PageDesk's assembly reads a stack "
+        "slot after `mov bx, sp` as [ss:bx+n] - _pdu_claimhi read its size "
+        "through DS, the edit store came out 0.5 KiB, and a typed note was "
+        "overwritten by the page's content stream. A negative control takes "
+        "the override out and must be caught"),
     Row("pd360", "fast", py("tests/unit/t_pd360.py"), 0.2,
         "PAGEDESK-SPEC 20.22.2.8: the 360KB program disk (the Makefile's "
         "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
