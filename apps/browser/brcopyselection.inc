@@ -69,7 +69,15 @@ br_copyselection:
     mov cx, ax
     add cx, [br_dl_bufsz]
     xchg ax, cx                     ; AX = everything carved, CX = the text
+    mov byte [br_dl_ugrow], 1       ; the grow may MOVE the store: a worker
+.wbusy:                             ; copying into a transfer's buffer there
+    cmp byte [br_dl_wbusy], 0       ; finishes first (br_dlx_put)
+    je .grow
+    call OSAPI_TASK_YIELD
+    jmp short .wbusy
+.grow:
     call far [br_dl_r_urlgrow]
+    mov byte [br_dl_ugrow], 0       ; (mov keeps CF)
     jc .out
     add cx, bx
     mov [br_copycap], cx            ; DI's bound, an offset in the store

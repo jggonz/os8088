@@ -363,6 +363,9 @@ bri_recv:
     call bri_go
     jc .ret
     jcxz .ret
+    call bri_room                   ; the header's chunk bounded too
+    cmp cx, ax
+    ja .fail
 .body:
     call bri_stash                  ; CF=1 longer than BR_IFMAX
     jc .fail
@@ -1903,7 +1906,8 @@ bri_cmove:
 
 ; bri_spnew - BX = the paragraphs a spill takes out of the store: AX = the new
 ; [br_ibase] - itself, or the paint buffer's 512 paragraphs when there is none
-; yet - and the store grown to hold what stays from there. CF=1 refused.
+; yet - and the store grown to hold what stays from there and 1 KB of
+; staging. CF=1 refused.
 ; Others kept
 bri_spnew:
     push cx
@@ -1921,6 +1925,7 @@ bri_spnew:
     add ax, [br_iready]
     sub ax, [br_ibase]
     sub ax, bx                      ; what stays, after the base
+    add ax, 64                      ; and bri_ushrink's 1 KB of staging
     call bri_grow
     mov ax, dx                      ; (flags: bri_grow's answer)
     pop dx
@@ -2222,7 +2227,12 @@ bri_dspill:
     mov dx, [bri_doff+2]
     mov si, br_icname
     xor bx, bx
+    push ax                         ; ES:BX is the movable store: pinned for
+    xor ax, ax                      ; the call (SPEC.md 66.3 rule 5)
+    call far [br_im_r_pagepin]
+    pop ax
     call OSAPI_FILE_WRITE_AT
+    call far [br_im_r_pageunpin]    ; AX and the flags kept
     pop cx
     pop es
     jc .wfail
@@ -2802,7 +2812,12 @@ bri_kput:
     mov dx, [br_ifend + 2]
     push si
     mov si, br_icname
+    push ax                         ; pinned for the call, as bri_dspill's
+    xor ax, ax
+    call far [br_im_r_pagepin]
+    pop ax
     call OSAPI_FILE_WRITE_AT
+    call far [br_im_r_pageunpin]    ; AX and the flags kept
     pop si
     pop es
     jc .offback

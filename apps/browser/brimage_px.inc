@@ -506,6 +506,9 @@ bri_pxdec:
     mov [es:px_wslut], dx
     mov ax, [bri_stgs]              ; the ring: the file, one window
     mov [es:px_rsegc], ax
+    mov [es:px_flatseg], ax         ; the file where bri_ustore left it (an
+    mov [es:px_hseg], ax            ; XBM reads it whole in DECODE)
+    mov [es:px_k + PXK_HSEG], ax
     xor ax, ax
     mov [es:px_rpos], ax
     mov [es:px_rbase], ax

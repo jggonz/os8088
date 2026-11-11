@@ -7,7 +7,8 @@ BR_ITSZ     equ 16                  ; bytes an entry
 
 IT_ST       equ 0                   ; byte: IS_*
 IT_FLG      equ 1                   ; byte: IF_* bits, the border << 3
-IT_SRC      equ 2                   ; word: the src's offset in the link arena
+IT_SRC      equ 2                   ; word: the src's offset in the link arena,
+                                    ; 0FFFFh = none kept
 IT_W        equ 4                   ; word: declared width in pixels, 0 = none
 IT_H        equ 6                   ; word: ...and height
 IT_DOC      equ 8                   ; dword: its D_IMG byte in the document

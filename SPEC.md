@@ -131083,8 +131083,13 @@ disk-visible base is 512-aligned (§1). The claim's base is a heap granule.
 - **The store moves**, so a file call or `OSAPI_CLIP_PUT` whose ES:BX or
   ES:SI is in it pins it for the call (`br_pagepin`, §66.3 rule 5), as every
   page claim is pinned. The worker writes a cluster through `[br_urlseg]`,
-  which it loads each pass, so it follows a move as it did the buffer's own
-  word (§71.20).
+  which it loads each pass, so it follows a compaction, which waits for the
+  worker to park. A Copy's grow is a regrow, which can move the store with
+  the worker pre-empted mid-copy, so the two hand off (`br_dlx_put`): the UI
+  sets `br_dl_ugrow` and waits while `br_dl_wbusy` is set, and the worker
+  sets `br_dl_wbusy` over its load and copy and waits while `br_dl_ugrow`
+  is set. Each stores its own byte before it reads the other's, as
+  `br_imghalt` does.
 - **The bookmark menu reads a copy of each title** in the segment
   (`br_bmtitles`), because a menu item is a near pointer. `br_bmmenuset`
   rebuilds it after every change to the records.
@@ -131269,7 +131274,7 @@ fills it at parse time:
 |---|---|---|
 | 0 | `IT_ST` | 0 waiting, 1 ready, 2 none: the box keeps its alt text for good, 3 ready in EMS, 4 ready in the cache file (§71.27) |
 | 1 | `IT_FLG` | bit 0 no width given, bit 1 no height given, bit 2 `IF_LAID` (the last layout drew it as a box), bits 3-7 the border in pixels |
-| 2 | `IT_SRC` | the `src` value's offset in the link arena, NUL-terminated |
+| 2 | `IT_SRC` | the `src` value's offset in the link arena, NUL-terminated; `FFFFh` when none was kept (0 is an arena offset) |
 | 4 | `IT_W`, 6 `IT_H` | the declared width and height in pixels, 0 = not given |
 | 8 | `IT_DOC` | dword: the logical document offset of its `D_IMG` byte |
 | 12 | `IT_PARA` | its ready copy, in paragraphs from the store's base, from the EMS arena's first page when `IT_ST` is 3, or from the cache file's first byte when it is 4 |
@@ -131927,7 +131932,9 @@ INDEX; `br_ctximg` keeps it while the menu is up. The row hands the Download
 Manager (§71.20) the index `FFFEh`, for which `br_dlx_link` takes the
 picture's `src` (`IT_SRC`) instead of a link's href and resolves it against
 the page as part 1's fetch does. The file is fetched again, as Save Link As
-fetches: the store holds the decoded copy, not the file's bytes.
+fetches: the store holds the decoded copy, not the file's bytes. A picture
+with no `src` kept (`IT_SRC` = `FFFFh`: a frame child's, `src=""`, `Links
+limited`) is refused with the bad-URL line, as an unresolvable link is.
 
 **Image maps.** Both kinds the 1990s web used:
 

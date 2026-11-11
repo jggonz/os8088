@@ -103,6 +103,8 @@ br_imgtab:
     mov bx, ax
     call br_imgent
     mov byte [bx+IT_ST], IS_NONE
+    mov word [bx+IT_SRC], 0FFFFh    ; no src until one is copied (0 is an
+                                    ; arena offset): Save Image As refuses it
     mov al, [br_iflg]
     mov [bx+IT_FLG], al
     mov ax, [br_iw]
@@ -434,6 +436,8 @@ br_im_r_icdel:      dw br_im_rs_icdel, 0
 br_im_r_icdrop:     dw br_im_rs_icdrop, 0
 br_im_r_pxload:     dw br_im_rs_pxload, 0
 br_im_r_pxdrop:     dw br_im_rs_pxdrop, 0
+br_im_r_pagepin:    dw br_dl_rs_pagepin, 0
+br_im_r_pageunpin:  dw br_dl_rs_pageunpin, 0
 BRIM_RN equ ($ - br_im_rtab) / 4
 
 ; AL = a decoder part (71.30): fetched, CF=1 refused; else DX = its code
@@ -792,7 +796,12 @@ br_imgdisk:
     mov ax, [br_idoff]
     mov dx, [br_idoff+2]
     mov si, br_icname
+    push ax                         ; ES:BX is the movable store: pinned for
+    xor ax, ax                      ; the call (SPEC.md 66.3 rule 5)
+    call br_pagepin
+    pop ax
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
+    call br_pageunpin               ; AX and the flags kept
     jc .read
     mov [br_idlen], ax              ; (8 KB at the most: DX = 0)
 .read:

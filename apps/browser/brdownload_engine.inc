@@ -69,6 +69,10 @@ br_dlx_link:
     mov cl, 4
     shl bx, cl                     ; BR_ITSZ = 16
     mov si, [br_itab + bx + 2]     ; IT_SRC (brimage_const.inc)
+    cmp si, 0FFFFh                 ; no src kept (a frame child's, src="",
+    je .bad                        ; Links limited): no URL to save
+    cmp word [br_lnkseg], 0
+    je .bad
     mov es, [br_lnkseg]
     jmp short .src
 .lnk:
@@ -1525,6 +1529,32 @@ br_dl_close_stream:
     pop ax
     ret
 
+; br_dlx_put - CX bytes at DS:SI onto the cluster buffer at BR_URLDL +
+; [br_dl_fill], [br_dl_chunkn] = CX. Worker. A Copy's regrow can MOVE the URL
+; store while this task is pre-empted, which a compaction never does (it waits
+; for the worker to park), so [br_dl_wbusy] covers the load of [br_urlseg] and
+; the copy, and a regrow already under way ([br_dl_ugrow]) is waited out: each
+; side's byte is stored before it reads the other's, br_imghalt's handshake
+; (SPEC.md 71.23). ES = the store; AX, CX, DI clobbered, SI past the bytes
+br_dlx_put:
+    mov [br_dl_chunkn], cx
+.wait:
+    mov byte [br_dl_wbusy], 1       ; FIRST, then the UI's byte
+    cmp byte [br_dl_ugrow], 0
+    je .copy
+    mov byte [br_dl_wbusy], 0
+    call OSAPI_TASK_YIELD
+    jmp short .wait
+.copy:
+    mov ax, [br_dl_fill]
+    mov es, [br_urlseg]
+    mov di, BR_URLDL
+    add di, ax
+    cld
+    rep movsb
+    mov byte [br_dl_wbusy], 0
+    ret
+
 br_dl_freebuf:
     push ax
     push dx
@@ -1734,13 +1764,7 @@ br_dlx_step:
     jbe .stagebody
     mov cx, [br_dl_total]
 .stagebody:
-    mov ax, [br_dl_fill]
-    mov es, [br_urlseg]             ; the cluster buffer, in the URL store
-    mov di, BR_URLDL
-    add di, ax
-    mov [br_dl_chunkn], cx
-    cld
-    rep movsb
+    call br_dlx_put                 ; the cluster buffer, in the URL store
     mov ax, [br_dl_chunkn]
     add [br_dl_fill], ax
     inc byte [br_dl_recvseq]       ; odd while the 32-bit counter is changing
@@ -1816,14 +1840,8 @@ br_dlx_step:
     jc .retry
     or cx, cx
     jz .bodyend
-    mov ax, [br_dl_fill]
-    mov es, [br_urlseg]             ; the cluster buffer, in the URL store
-    mov di, BR_URLDL
-    add di, ax
     mov si, br_rxb
-    mov [br_dl_chunkn], cx
-    cld
-    rep movsb
+    call br_dlx_put                 ; the cluster buffer, in the URL store
     mov cx, [br_dl_chunkn]         ; REP MOVSB consumed CX; retain NETV_RECV's
                                     ; byte count for both counters below
     mov ax, [br_dl_fill]
