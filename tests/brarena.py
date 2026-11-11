@@ -235,6 +235,110 @@ def main():
             raise RuntimeError("high-offset select did not cycle: %r" % select_value)
         print("brarena: high-offset text/select/button records and select click ok")
 
+        # A SELECTION DRAGGED ACROSS THE 64 KiB SEAM GOES ON PAST IT, AND COPY
+        # TAKES THE TEXT ON BOTH SIDES (SPEC.md 71.19.1). The selection is
+        # dwords now. It held low words: the drag's end wrapped to the top of
+        # the page (red at e9d78a10), then stopped at FFFF (F1a), and Copy
+        # refused a page over 64 KiB or in EMS.
+        def span(i):
+            off = i * 10
+            return (int.from_bytes(line_table[off:off + 4], "little"),
+                    int.from_bytes(line_table[off + 4:off + 8], "little"),
+                    line_table[off + 8])
+        seam = next((i for i in range(lines) if span(i)[0] >= 65536), None)
+        if seam is None or seam < 2:
+            raise RuntimeError("no display line starts at the 64 KiB seam")
+        low = seam - 1
+        for _ in range(300):
+            top, rows = word(14), word(12)
+            if top <= low and seam < top + rows:
+                break
+            if top > low + rows:
+                m.key("PageUp")
+            elif top > low:
+                m.key("ArrowUp")
+            else:
+                m.key("ArrowDown")
+            settle(m)
+        else:
+            raise RuntimeError("could not scroll the seam lines %d/%d into view"
+                               % (low, seam))
+        cx, cy = word(2), word(4)
+        mo.run("down", cx + span(low)[2] * 8 + 4, cy + (low - top) * 8 + 4)
+        mo.run("to", cx + span(seam)[2] * 8 + 20, cy + (seam - top) * 8 + 4)
+        mo.run("up")
+        settle(m)
+        selkind = byte(symbol("br_selkind"))
+        anchor = dword_at(pseg, symbol("br_selanch"))
+        selend = dword_at(pseg, symbol("br_selend"))
+        if selkind != 1:
+            raise RuntimeError("a press below the seam did not start a "
+                               "selection (kind %d)" % selkind)
+        if anchor != span(low)[0]:
+            raise RuntimeError("the selection anchor is %05X, not the low "
+                               "line's first byte %05X" % (anchor, span(low)[0]))
+        if not span(seam)[0] < selend <= span(seam)[1]:
+            raise RuntimeError("a drag across the 64 KiB seam ended the "
+                               "selection at %05X (anchor %05X), not on the "
+                               "line past it [%05X, %05X)"
+                               % (selend, anchor, span(seam)[0], span(seam)[1]))
+        print("brarena: drag across the seam ends past it at %05X (anchor %05X)"
+              % (selend, anchor))
+
+        def visible(raw):
+            """brcopyselection.inc's reading of the stream: a break is CR LF,
+            a cell a tab, a marker's payload and every other marker nothing"""
+            out, i = bytearray(), 0
+            while i < len(raw):
+                c = raw[i]
+                i += 1
+                if c >= 0x20:
+                    out.append(0x20 if c == 0x7F else c)
+                elif c == 14:                   # D_LNK1, three index nibbles
+                    i += 3
+                elif c in (5, 24):              # D_HEAD's level, D_CMETA's span
+                    i += 1
+                elif c in (1, 2, 12):           # D_PARA, D_BR, D_ROW
+                    out += b"\r\n"
+                elif c == 13:                   # D_CELL
+                    out.append(9)
+            return bytes(out)
+        m.hmp("sendkey ctrl-c")
+        settle(m)
+        clipseg = int.from_bytes(m.read(S("clip_seg"), 2), "little")
+        cliplen = int.from_bytes(m.read(S("clip_bytes"), 2), "little")
+        clip = m.read(os88qemu.lin(clipseg, 0), cliplen) if cliplen else b""
+        want = visible(read_logical(docseg, anchor, selend - anchor))
+        if clip != want:
+            raise RuntimeError("Ctrl+C across the seam copied %r, not %r"
+                               % (clip[:80], want[:80]))
+        print("brarena: Copy across the seam took %d bytes from both sides"
+              % cliplen)
+
+        # TAB REACHES A LINK PAST THE 64 KiB SEAM (SPEC.md 71.19.1): Tab
+        # refused a page over 64 KiB and jumped to the address bar. It walks
+        # the document from the focus now, through br_docmap
+        wide_at = docbytes.index(WIDE_LINK)
+        seen = []
+        for _ in range(20):
+            m.key("Tab")
+            settle(m)
+            tstart = dword_at(pseg, symbol("br_tstart"))
+            tend = dword_at(pseg, symbol("br_tend"))
+            seen.append((byte(symbol("br_tfocus")), tstart))
+            if seen[-1][0] == 3 and tstart <= wide_at < tend:
+                break
+        else:
+            raise RuntimeError("Tab never focused the link at %05X past the "
+                               "seam: (focus, start) %s" % (wide_at, seen))
+        if tstart <= 65536:
+            raise RuntimeError("the focused link starts at %05X" % tstart)
+        print("brarena: Tab focused the link past the seam at [%05X, %05X)"
+              % (tstart, tend))
+        m.key("End")
+        settle(m)
+        top = word(14)
+
         link_ofs = docbytes.index(WIDE_LINK)
         link_line = None
         link_x = 0

@@ -98,8 +98,14 @@ def main():
         return 1
 
     # PIANO.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus it,
-    # on a disk of this run's own
-    apps = os88fixture.apps360_plus("APPS:build/piano.o88", tag="dosopen")
+    # on a disk of this run's own - and a font and the Font Viewer, the
+    # second document type (the Browser and BROWSER.HTM left this disk,
+    # SPEC.md 71.30, and do not fit back on it; a .F88 opens quietly, where a
+    # .MOD or a .WAV starts playing)
+    apps = os88fixture.apps360_plus("APPS:build/piano.o88",
+                                    "APPS:build/fontview.o88",
+                                    "MEDIA:build/faces/charter.f88",
+                                    tag="dosopen")
     with os88ui.boot(SYS, apps=apps, machine="os8088_5150_herc_gla",
                      quick=True) as ui:
         m = ui.m
@@ -326,12 +332,12 @@ def main():
                   % [t for t in titles() if "PAPER" in t])
         clear()
 
-        if not launch("OPEN B:\\MEDIA\\BROWSER.HTM", "Browser"):
-            fail("`OPEN` of a SECOND type opened no Browser - one extension "
+        if not launch("OPEN B:\\MEDIA\\CHARTER.F88", "Font Viewer"):
+            fail("`OPEN` of a SECOND type opened no Font Viewer - one extension "
                  "working is not an association lookup (SPEC.md 96.33.22). "
                  "Titles: %r, console: %r" % (titles(), console()[-3:]))
         else:
-            print("dosopen: C  OPEN ...BROWSER.HTM -> Browser")
+            print("dosopen: C  OPEN ...CHARTER.F88 -> Font Viewer")
         clear()
 
         # --- the negative controls -------------------------------------------

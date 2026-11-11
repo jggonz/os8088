@@ -54,7 +54,9 @@ I_NAME, I_STATE = 12, 0
 # claims is the one a user would get, and both hold several data claims that
 # the scan says are declared: Paint's canvas, undo and scratch (SPEC.md
 # 66.5.1), Note Pad's document and undo arena (66.5.7).
-OPEN = ("B:/APPS/PAINT.O88", "B:/MEDIA/PAPER.TEX", "BROWSER.HTM")
+OPEN = ("B:/APPS/PAINT.O88", "B:/MEDIA/PAPER.TEX")  # (BROWSER.HTM left
+# apps360.img with the Browser, SPEC.md 71.30: its claims are t_pins' and the
+# br* rows')
 LIVE_OK = set("MBXN")           # what may still be pinned at a quiet desktop
 
 

@@ -57689,7 +57689,11 @@ Seven packages are **core**: `NOTEPAD.O88`, `FONTVIEW.O88`, `PAINT.O88`,
 **system** disks in addition to the apps disks, each in the folder it already
 occupies over there — `APPS/` for the first five, `GAMES/` for Mines. **A
 second copy, never a move:** the roomier apps disks carry every package there
-is exactly as before.
+is exactly as before. **Except the Browser since §71.30**, whose PNG and JPEG
+parts put the 360 KB and 720 KB apps disks over: at 720 KB it is on the system
+disk alone, with `BROWSER.HTM` still in `apps720.img`'s `MEDIA/`, and at
+360 KB it is on `network360.img` alone (§24.6), program and page, the 360 KB
+system disk having left it off since §24.3.1.2.
 
 **FONT VIEWER IS THE ONE EXCEPTION AND IT IS NOW A DECISION RATHER THAN A
 CAPACITY** (§90.3). It is core, so it is in `APPS/` on all four system disks
@@ -58197,10 +58201,20 @@ roomier geometries the shipped pair did not carry it at all. 28 KB, measured
 against the free space each system disk had (82 of 713 clusters at 720 KB, far
 more at the other two) and held to `t_sysfree`'s floor.
 
-One disk leaves it off. **The 360 KB system disk** (`SYS360OMIT`):
-`util360.img` carries it there beside System Check (§24.3.1.7). The everything
-set and the live media take it through `CORE_SYSONLY`, as they take
-`FONTVIEW.O88`.
+Two disks leave it off. **The 360 KB system disk** (`SYS360OMIT`):
+`util360.img` carries it there beside System Check (§24.3.1.7). **The 720 KB
+system disk** (`SYS720OMIT`, the owner's decision of 2026-11-11): the
+Browser's PNG and JPEG parts (§71.30) are 25 KB and put that disk 17 clusters
+over, and `more720.img` (§24.7) carries REDLINE at that geometry instead. The
+everything set and the live media take it through `CORE_SYSONLY`, as they
+take `FONTVIEW.O88`. **Telnet joined it** the same day: the older formats and
+the image maps (§71.31, §71.32) took the Browser to 100 KB and that disk to
+712 of 713 clusters, under `t_sysfree`'s floor of ten. Telnet, 11 clusters,
+stays on `apps720.img`, and `more720.img` takes it too; the owner left the
+choice to the agent, The Wire (§92) fetching what a disk leaves off. **CDRack
+followed** (11 clusters, §119.6) once `main`'s tree of the same day put the
+disk back at 708 of 713: a CD-ROM drive is an AT's, whose 1.44 MB system disk
+keeps it, and `more720.img` carries it at 720 KB.
 
 **kern_mega's system disks carry it too**, in `APPS/` beside the other core
 tools, and as the same shipped build: there is no `PKG_MEGA` arm. They left it
@@ -58979,7 +58993,7 @@ contents are DERIVED from those omissions rather than listed again:
 
 | Folder | Carries |
 |---|---|
-| `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy |
+| `APPS/` | `PIXEL.O88`; `MIDIRACK.O88`, a second copy; `REDLINE.O88`, `TELNET.O88` and `CDRACK.O88`, which the 720 KB system disk leaves off (`SYS720OMIT`, §24.3.2) |
 | `GAMES/` | `REALDMG.O88`, `DRMARCO.O88` |
 | `MEDIA/` | `GBDEMO.GB` (packed), `OS8088.V88`, and in `MIDI/` the eight songs `apps720.img` does not carry |
 | `PICTURES/` | PiXEL's 360 KB gallery selection, five pictures (§106.7) |
@@ -130932,6 +130946,52 @@ the existing shared clipboard owns the copied text. Selection rendering is
 limited to the rows whose contents changed, and the normal page paint path pays
 no selection cost.
 
+#### 71.19.1 Selection, Copy and Tab across the whole document
+
+The page selection and the link focus are **document offsets, held as
+dwords**: `br_selanch`, `br_selend`, `br_seloldend`, `br_selcur`, and the
+focused link's `br_tstart` and `br_tend`. A formatted document past 64 KiB
+is selected, copied and tabbed through like a small one, in conventional
+memory, in EMS and under kern_mega. They held low words until this section,
+so on such a document a press past the seam started no selection, Select
+All and Copy were refused, and Tab did not focus links.
+
+- **One span is drawn.** `br_selspan` puts the anchor and the end in order
+  as `[br_spanlo, br_spanhi)`. A forward drag is `[anchor, end)`. A reverse
+  one is `[end, anchor + 1)`, because it includes the anchor cell. Whatever
+  moves the anchor or the end recomputes it. `br_build` marks a cell when
+  its 32-bit offset is in that span (`br_cmpdx`). The row repaint
+  (`br_selpaint`) repaints a line when it crosses the old span or the new
+  one (`br_spanline`), and the focus repaint does the same for
+  `[br_tstart, br_tend)`.
+- **Copy reads what is drawn.** It walks the span through `br_docmap` a
+  16 KiB page at a time, from part 0 through the `br_dl_r_docmap` vector
+  (71.20.5). The walk is the same in every arm: the conventional sum, EMS's
+  page maps, kern_mega's window. Copy used to read `[br_docseg]` directly,
+  which is a selector on kern_mega. A marker's payload is skipped: the three
+  `D_LNK1` index nibbles, `D_CMETA`'s span and `D_HEAD`'s level (a level of 1
+  or 2 used to read as a line break). The 32 KiB `OSAPI_CLIP_PUT` ceiling
+  still refuses a longer copy, leaving the clipboard as it was.
+- **Tab walks the document from the focus.** `br_tabfind` reads the stream
+  with `br_docnext`, a cursor that asks `br_docmap` once per 16 KiB page. It
+  starts from the focused link's end, or from the top, to the next
+  `D_LNK1`. A Tab costs the distance to the next link. It used to cost a
+  walk from byte 0 per link before it, which is O(links × document): about
+  half a second a Tab on a 48 KB page on the XT. The order is the document's,
+  which is the order the reader sees, frames included. A link index with no
+  marker (a frameset's hidden source) is never reached.
+- **A click past the seam hits the right cell.** `br_hitofs` clears both
+  words of `br_hofs` before its walk. It tests the answer for zero in a
+  register of its own. It used to OR the high word into the low word it
+  returned, which moved every hit past the seam, and to leave a stale high
+  word from the last click.
+
+`tests/brarena.py` drags from below its wide fixture's seam onto the line
+past it. It requires the end there and Ctrl+C to copy exactly the visible
+text of both sides, then Tabs to the link past the seam. `tests/brmega.py`
+does the same on the page's last rows under kern_mega, where the document
+claim is a selector.
+
 The Browser menu includes a Keyboard Shortcuts reference listing only actions
 the current build implements: Tab focus traversal, Enter, page scrolling and
 Home/End, Escape to leave the address bar, and the implemented Ctrl shortcuts.
@@ -130951,6 +131011,1033 @@ per-instance cache and records any status/star redraw for the next locked paint
 or input callback. Navigation also requests a wake refresh so the current page's
 star reflects changes made by another Browser instance. The bookmark menu is
 rebuilt from that per-instance cache after each refresh.
+
+### 71.23 Browser 1.7 preparation — the claims table and the URL store
+
+`MEM_OWNER_MAX` is 8 claims per owner word (§50, §20.12.4), and every
+Browser claim is the instance's. Inline images (1.7,
+docs/plans/BROWSER-IMAGES-PLAN.md) need two claims of their own, so the
+Browser's claims are decided here as one table, before any image code. A
+claim nobody planned is the one that refuses on a machine where every other
+claim is live, which is never the machine it was tested on.
+
+**The table.** kern_mega allows twelve (§50), but the table is cut against
+eight, the limit on every real-mode kernel.
+
+| slot | claim | taken by | held | moves (§66) |
+|---|---|---|---|---|
+| 1 | page source | `br_load`, `br_srcgrow` | while a page is | yes |
+| 2 | formatted document | `br_claimrest` | while a page is | yes |
+| 3 | line table | `br_claimrest` | while a page is | yes |
+| 4 | link arena | `br_linkensure` | while a page is | yes |
+| 5 | URL store, with a transfer's buffer and a Copy's text carved after it | `br_urlneed`, `br_urlgrow` | from first use to the close | yes |
+| 6 | part 0 (§71.20.5, §71.24): the Download Manager and the rarely used UI | `op_fetch` in `br_dl_partload` | while the manager, a transfer, an open context menu or a rare action needs it | no: its code is far-called |
+| 7 | 1.7: the image store - every image's ready-to-draw copy carved in one claim, a decode's scratch carved off its end while it runs (§71.25, BROWSER-IMAGES-PLAN 3) | 1.7 | while a page with images is | yes |
+| 8 | 1.7: the image part - part 1, the decoders' host, and while a PNG, JPEG or other PiXEL decoder runs, that decoder's own part beside it: TWO claims then, one decoder at a time (`bri_pxprep`) | 1.7, `op_fetch` | while an image decodes or animates | no |
+
+**Row 8 shares with row 6.** A decoder's part (§71.30) is a lazy row and
+`op_fetch` claims every lazy row it fetches, so a PNG or JPEG decoding on a
+page with links and a pushed URL holds rows 1 to 5, 7 and both of row 8's:
+eight, and part 0 cannot also be in. The second use is refused in words.
+Part 0 wanted while a decoder part is in (a context menu, View Source, a
+form, a bookmark, the Download Manager) is refused `Busy decoding an image`
+(`br_dl_why`), not `Browser part unavailable`, which reads as a missing
+file; the decode ends at `IE_END`, which drops both. A decoder wanted while
+part 0 is in is refused with the toast `No image during download`, and that
+image keeps its alt box. kern_mega's twelve hold both.
+
+Rules that keep it true:
+
+- **A transient claim is a row too.** Copy's text used to be a claim of its
+  own for one callback. That is a ninth claim on a page with images during a
+  download. It is carved in the URL store now.
+- **An EMS page frame is not a claim.** `[br_emsseg]` is the driver's frame.
+- **A new claim needs a row here first.** If the table is full, the new
+  thing carves into an existing row, as the transfer's buffer and Copy do.
+  Otherwise, what it shares with must be stated, and the second use refused
+  in words when both are wanted.
+- **Part 0 is one claim** whatever it carries (§71.24). The rare UI went
+  into it rather than into a part of its own for that reason.
+- **The EMS code stays resident** (`br_srcems_ensure`, `br_docems_ensure`,
+  `br_lineems_ensure`, `br_docems_release`, `br_savesourceems`, 1,779 bytes).
+  A page goes to EMS only when the conventional reserve refuses to grow
+  (§71.18), so a part read at that moment needs the conventional memory EMS
+  was there to spare. The page would be cut where it used to spill. A part of
+  their own, fetched while EMS.DRV answers, would be a ninth claim once 1.7's
+  two are in. Releasing a handle must not depend on a disk read either. This
+  was roadmap step S4, and it is not done for these reasons.
+
+**The URL store** (`[br_urlseg]`) is one movable claim. It holds what the
+segment used to carry for URLs that are read only when navigating or saving:
+
+| offset | bytes | what |
+|---|---|---|
+| `BR_URLHIST` = 0 | 1,280 | the Back stack's eight 160-byte URLs (`br_hslot`) |
+| `BR_URLBM` = 1,280 | 1,477 | the bookmark file's image, `BM01`, the count and eight records |
+| `BR_URLDL` = 3,072 | a cluster | a transfer's buffer, from `br_dl_claim` to `br_dl_freebuf` |
+| `BR_URLDL` + that | up to 32 KiB | one Copy's text, for the callback |
+
+`BR_URLSTORE` (2,768) is the first two rows, to a paragraph, and is what the
+store holds between uses. The transfer's buffer starts on the next 512-byte
+boundary because a cluster is written to the disk from there, and every
+disk-visible base is 512-aligned (§1). The claim's base is a heap granule.
+
+- **The store is claimed the first time it is needed**: a page pushed on the
+  Back stack, the first bookmark refresh, a transfer or a Copy. The kernel
+  frees it at the close. `br_entry` still claims nothing (BROWSER-PLAN 3.4).
+  If it is refused, nothing breaks. That page is not remembered, the
+  Bookmarks menu reads `(empty)` and refuses to save, and a download or a
+  Copy is refused as it would be without the room.
+- **`br_urlgrow AX`** carves AX bytes at `BR_URLDL`. `AX = 0` gives them
+  back, and a shrink succeeds in place. A grow may move the store, and
+  `br_reloc` follows it. A transfer carves its cluster. A Copy during a
+  transfer carves the cluster plus its text, and gives back only the text.
+- **Copy's text is bounded by the store's 64 KiB.** Behind a 32 KiB cluster
+  buffer, a long selection is cut to what is left (29,680 bytes), and a
+  selection that does not fit is refused as a full one always was.
+- **The store moves**, so a file call or `OSAPI_CLIP_PUT` whose ES:BX or
+  ES:SI is in it pins it for the call (`br_pagepin`, §66.3 rule 5), as every
+  page claim is pinned. The worker writes a cluster through `[br_urlseg]`,
+  which it loads each pass, so it follows a compaction, which waits for the
+  worker to park. A Copy's grow is a regrow, which can move the store with
+  the worker pre-empted mid-copy, so the two hand off (`br_dlx_put`): the UI
+  sets `br_dl_ugrow` and waits while `br_dl_wbusy` is set, and the worker
+  sets `br_dl_wbusy` over its load and copy and waits while `br_dl_ugrow`
+  is set. Each stores its own byte before it reads the other's, as
+  `br_imghalt` does.
+- **The bookmark menu reads a copy of each title** in the segment
+  (`br_bmtitles`), because a menu item is a near pointer. `br_bmmenuset`
+  rebuilds it after every change to the records.
+- **`br_bmfindurl` compares each record from the query's start.** It used to
+  leave SI where the previous record's mismatch was, so only record 0 could
+  be found. With two or more bookmarks, Ctrl+D added a duplicate and the
+  star could not remove the second.
+
+The store took the buffer's and Copy's claims out of the table, and image +
+BSS went from 56,805 to 54,425 bytes (the code grew by 288).
+
+### 71.24 Part 0 carries the rarely used UI too
+
+Four things the Browser does only when the user asks are in part 0 with the
+Download Manager (`apps/browser/brcold.inc`):
+
+- the right-button context menu: shown, drawn, clicked, erased, and Copy Link;
+- View Source and Close Source;
+- a form's submit, with the resolution of its action;
+- a bookmark's commit: adding or removing the record, then writing the file.
+
+This is roadmap step S3. The primary segment went from 43,306 to 41,251
+bytes, and image + BSS from 54,425 to 52,396. Each costs a disk read the
+first time it is used after the part was dropped, and the package disk must
+be in the drive. That is the same rule the Download Manager already follows,
+and an action the user asked for can wait for it.
+
+**What stayed resident**, because it runs on every page or every wake:
+
+- the bookmark file's refresh, its menu and `br_bmfindurl`. A navigation
+  re-reads the file, and a part read on top of every navigation would cost
+  more than the bytes it saves;
+- the menu's strings, which the kernel reads through DS;
+- the star, the status line and the request path a click takes.
+
+**The thunks** keep the names the Browser always called (`br_ctxshow`,
+`br_ctxclick`, `br_sourcetoggle`, `br_submit`, `br_bmcommit`). Each one names
+its `BRDL_*` entry and goes through `br_dl_cold`. That loads the part, calls
+the entry far, and leaves through `br_dl_after`. If the part cannot be read,
+the status line says `Browser part unavailable`. A bookmark commit then
+reports the save as failed, as any other failed save is reported.
+
+**Two more reasons to keep the part**, added to `br_dl_after`'s rule
+(§71.20.5):
+
+- `br_dl_depth` counts the cold calls that are inside the part. The context
+  menu's Save Page As opens a dialog whose callbacks can repaint (`br_paint`).
+  Its Save Link As runs the Download Manager's link entry. Either can reach
+  `br_dl_after` while the menu's click handler is still running in the part.
+- `[br_ctxopen]` keeps the part while the menu is on the glass, because the
+  next click is the part's. A full repaint closes the menu, and `br_paint`
+  then asks `br_dl_after` whether the part can go.
+
+**View Source reads and writes through the accessors now.** It used to read
+`[br_srcseg]:SI` and write `[br_docseg]:DI` with 16-bit offsets. It sized the
+document as `[br_dockb] << 10`, which wraps at 64 KiB, and ignored the
+source's high word. A page past 64 KiB, in EMS or under kern_mega was
+therefore projected from and into the wrong bytes.
+
+- It reads the source through `br_srcptr`, a chunk of at most 248 bytes at a
+  time.
+- It writes the document into `br_obuf` and empties it with `br_flushbuf`
+  before each chunk. The source and the document share EMS's frame, and
+  `br_obuf` takes 250 bytes before it would flush, so nothing remaps the frame
+  under the chunk (§71.18).
+- The document grows through `br_docensure` like a parse's. A source larger
+  than the document's ceiling is truncated and says so.
+- CR LF, a lone CR and a lone LF are each one `D_BR`. A tab is a space, and
+  any other control or high byte is `?`, as before.
+
+### 71.25 Browser 1.7 — inline images: the box, its record and its rows
+
+docs/plans/BROWSER-IMAGES-PLAN.md is the design and this is its contract.
+Delivery 4.1 lays out and draws every `<img>` as a BOX - a frame with the alt
+text in it - at its declared size, on every adapter, with no memory of its
+own. The deliveries after it fill the box with pixels (4.2 on); the box, the
+record and the rows below are what they draw into, so they do not change
+again.
+
+**The record in the document.** An `<img>` (not a close tag) writes:
+
+| bytes | what |
+|---|---|
+| 1 | `D_IMG` = 25 |
+| 14 (`BR_IMGPAY`) | base-6 digits, each 26 + its value (26..31), most significant first: COLS (3), ROWS (3), ALIGN (1), ALEN (3), INDEX (4) |
+| ALEN | the alt text: folded as page text is, whitespace collapsed to one space, ends trimmed, at most `BR_IALTMAX` = 80 bytes |
+
+- **Why 25..31.** Every walker in the Browser skips a byte below 0x20 that it
+  does not know, and none of them acts on 25..31. So the record costs no
+  change to a walker that does not draw or lay out an image: Copy, Find, Tab,
+  the anchor scroll and the table composer see the alt text as text and step
+  over the rest. `br_linkat`'s backward scan steps over 16..31, so an image
+  inside a link is inside its span.
+- **A link's nibble can be 25** (16..31). Only a walker that consumes
+  `D_LNK1`'s triple may recognise `D_IMG`, and every one that does
+  (`br_layout`, `br_imgrows`, `br_build`) consumes it first.
+- **COLS** is `ceil((width + 2 * border) / 8)`, 1 to `BR_MAXCOL` (96).
+  **ROWS** is `ceil((height + 2 * border) / 8)`, 1 to `BR_IMGRMAX` (120).
+  A width or height that is missing, zero or a percentage is unknown: an
+  unknown width is ALEN + 2 cells, 4 to 40, and an unknown height is 2 rows.
+  4.2 replaces an unknown size with the header's and lays the page out again.
+- **ALIGN**: 0 bottom (the default, and `baseline`, `absbottom`, anything
+  unknown), 1 middle (`middle`, `absmiddle`, `center`), 2 top (`top`,
+  `texttop`), 3 left, 4 right.
+- **INDEX** counts the page's images from 0. 1295 means past the 1,295th,
+  which 4.2 never fetches. The image store (§71.23 row 7) is keyed by it.
+- A pending space is spent BEFORE the marker (`br_wflush`), so the space
+  between two images is a breakpoint between them.
+
+**The layout.** An image is ONE unbreakable unit of COLS cells:
+
+- after text it does not fit beside, it starts the next line; alone and
+  wider than the band, it overflows and is drawn clipped. It is never split;
+- left and right are a line of their own (text before it ends its line, text
+  after it starts a new one), and right sits against the band's right edge.
+  Text does not flow beside a floated image in 4.1;
+- a line holding images is `above + 1 + below` rows tall, where an image of
+  ROWS `r` reaches `r - 1` rows above the text row aligned bottom, `r / 2`
+  above and `r - 1 - r / 2` below aligned middle, and `r - 1` below aligned
+  top; the line takes the largest of each.
+
+**The rows.** The text row's line record is unchanged. Each row above and
+below it is a CONTINUATION record:
+
+| field | continuation |
+|---|---|
+| `LN_FL` | `LNF_IROW` = 8, nothing else |
+| `LN_X` | the signed distance to the text row's record: +d above it, -d below |
+| `LN_OFS`, `LN_END` | both the text row's `LN_OFS` (above) or `LN_END` (below) |
+
+The span is EMPTY, so every reader that finds a line by its span - the field
+repaint, the anchor scroll, a line's hit - never lands on one, and the spans
+stay in order. `br_emitline` writes the rows above, the text row, then the
+rows below, in one call; `br_imgrows` measures the span before any record is
+written, because a line table in EMS shares the frame with the document.
+
+**The paint.** `br_build` given a continuation record builds the text row's
+cells from ITS record, as row `k` = -d of the line, and blanks every cell that
+is not an image's: text is drawn on the text row only. For each image the row
+is slice `s = k + its rows above`; when `0 <= s < r` its COLS cells are its
+box on this row:
+
+- the alt text is drawn in the TOP slice, from the box's second cell to its
+  last but one, so the frame never crosses a glyph's sides;
+- `br_imgframes`, after the row's text and underline, draws the frame: the
+  two sides, the top edge on slice 0 and the bottom edge on slice `r - 1`,
+  one `OSAPI_GFX_FILL` each - two to four calls a row, never a pixel twice.
+  A box running past the band loses its right side, not its cells;
+- at most `BR_RIMGMAX` = 8 boxes a row are framed; the rest keep their cells
+  and alt text.
+
+**The click.** A box's cells on every one of its rows name the image's
+`D_IMG` byte, so `br_linkat` finds the link an image sits in from anywhere in
+its box. A cell outside every box on a continuation row names nothing.
+
+**What 4.1 does not do**, and which delivery does:
+
+- inside a composed table the composer drops `D_IMG` as it drops every other
+  marker, so an image in a table cell is its alt text and no box (a later
+  delivery, with the composer);
+- no pixels: the store, the fetch and the decoders are 4.2 to 4.6;
+- `hspace` and `vspace` are ignored (`usemap` and `ismap`: §71.32).
+
+**What it cost**: 1,803 bytes of image + BSS, 1,664 of code and 139 of BSS
+(80 of them the alt text gathered at parse time), from 53,660 to 55,463, so
+9,561 of 65,024 are left for the deliveries after it. `brimages` is its row:
+`tests/brtest.py --page IMAGES.HTM` reads every continuation record out of
+the guest against the contract and `tools/htmsim.py`'s count, then holds a
+blitted arrival to a repainted one.
+
+### 71.26 Browser 1.7 — static GIF: the fetch, the store and the GIF part
+
+Delivery 4.2 (docs/plans/BROWSER-IMAGES-PLAN.md) puts pixels in §71.25's
+box: the first frame of a GIF fetched over HTTP after the page, decoded once
+into a copy that is ready to draw, and blitted on every paint and scroll.
+
+**The image table.** `br_itab` is `BR_IMGTMAX` = 32 entries of 16 bytes in
+the resident BSS. Entry k belongs to the image of INDEX k, and `br_image`
+fills it at parse time:
+
+| offset | field | what |
+|---|---|---|
+| 0 | `IT_ST` | 0 waiting, 1 ready, 2 none: the box keeps its alt text for good, 3 ready in EMS, 4 ready in the cache file (§71.27) |
+| 1 | `IT_FLG` | bit 0 no width given, bit 1 no height given, bit 2 `IF_LAID` (the last layout drew it as a box), bits 3-7 the border in pixels |
+| 2 | `IT_SRC` | the `src` value's offset in the link arena, NUL-terminated; `FFFFh` when none was kept (0 is an arena offset) |
+| 4 | `IT_W`, 6 `IT_H` | the declared width and height in pixels, 0 = not given |
+| 8 | `IT_DOC` | dword: the logical document offset of its `D_IMG` byte |
+| 12 | `IT_PARA` | its ready copy, in paragraphs from the store's base, from the EMS arena's first page when `IT_ST` is 3, or from the cache file's first byte when it is 4 |
+| 14 | `IT_COLS`, 15 `IT_ROWS` | the box the ready copy was made for |
+
+An entry is born none when the tag has no `src`, when INDEX is 32 or more,
+when it is in a frame's child document (its base is not the page's), or when
+the link arena refuses the `src` (the same cap as an href, `Links limited`).
+`br_layout` sets a bit in `[br_ilaid]` (32 bits) for each `D_IMG` it lays
+out as a box, and at the walk's end makes every `IF_LAID` that bit in one
+critical section (`br_imgsetlaid`) and bumps `[br_ilgen]`. The worker's
+`IE_NEXT` scan, which banks `[br_ilgen]` before it, so sees the last
+layout's boxes or this one's and never a half-walked page; when the count
+moved during a scan that found nothing, `IE_NEXT` stands and the next pass
+looks again rather than ending the engine. An image in a composed table
+cell is not a box (§71.25), so it is never fetched.
+
+**The fetch (D8).** One image at a time, on the worker, after the page has
+settled (`br_nstate` outside `BN_OPEN..BN_BODY`, the layout done), in INDEX
+order, and only images with `IF_LAID`. It has its own socket handle
+(`br_ihnd`), state (`br_ie`) and generation (`br_igen`), and it shares
+`br_reqb` and `br_rxb` with the page fetch, which is idle then. The `src` is
+resolved against the page's `<base href>` if it has one, else against the
+host and path it came from: absolute `http://`, `//host/path`, `/path`, or
+relative to the path's directory. `https://`, or a relative `src` on a page
+with no server, makes the image none. The request is an HTTP/1.0 `GET` with
+`Host` and `Connection: close`. A status other than 200, a body that does
+not start `GIF8`, or one longer than `BR_IFMAX` = 60,000 bytes makes the image
+none. The body is read to the close, or to `Content-Length` when there is one,
+and is staged whole in the store.
+
+**The engine.** `br_ie` says whose move it is. In a UI state the worker posts
+`OSAPI_WM_WAKE` on every pass until the UI task answers, as `[br_fin]` does
+(§71.14):
+
+| `br_ie` | name | who | what |
+|---|---|---|---|
+| 0 | `IE_OFF` | - | no engine, no part, no socket |
+| 1 | `IE_START` | UI | fetch part 1 and claim the store, then `IE_NEXT`; refused: every waiting image none, `IE_OFF` |
+| 2 | `IE_NEXT` | worker | the next waiting laid image, or `IE_END` |
+| 3-7 | `IE_OPEN`, `IE_WAIT`, `IE_SEND`, `IE_HEAD`, `IE_BODY` | worker | the exchange |
+| 8 | `IE_GROW` | UI | grow the staging, then `IE_BODY`; refused: the image none, `IE_NEXT` |
+| 9 | `IE_PREP` | UI | size the box (below), lay the page out again if the box changed, grow the scratch, then `IE_DEC`; refused: none, `IE_NEXT` |
+| 10 | `IE_DEC` | worker | decode, convert, move the copy down, then `IE_SHOW` |
+| 11 | `IE_SHOW` | UI | give the scratch back, draw the image, then `IE_NEXT` |
+| 12 | `IE_END` | UI | drop part 1, then `IE_OFF` |
+
+**Stopping it.** `br_free_all`, which every load and the close run first,
+stops the engine before it frees anything: it bumps `br_igen`, writes
+`IE_OFF`, waits while `br_ibusy` is set, closes the socket, frees the store,
+drops the part and clears the table. The worker stores `br_ibusy` = 1 BEFORE
+it reads `br_ie` and the UI task writes `br_ie` BEFORE it reads `br_ibusy`, so
+on one CPU either the UI task waits or the worker sees `IE_OFF` and does not
+start (§71.14's handshake). The worker checks `br_igen` after every receive
+and after every decoded row, so the wait is one row at most.
+
+**The store** (`[br_istseg]`, §71.23 row 7) is one movable claim in
+paragraphs (`OSAPI_MEM_P`), named in `br_reloc` and `br_pagepin` with the
+page's claims:
+
+| from | what |
+|---|---|
+| 0 | the ready copies not moved to EMS, each on a paragraph, `[br_iready]` paragraphs in all |
+| `[br_iready]` | while an image is fetched and decoded: its staged file, then 23,040 bytes of LZW table (`LZW_KB`) and decode scratch (a row, the column map, the 256 plans and 1bpp thresholds), then its new ready copy |
+
+When the decode ends the new copy is copied down to `[br_iready]`, and the
+UI task cuts the claim back to the ready copies (a shrink never moves). Only
+the UI task grows it, inside `br_memroom`'s 20-percent reserve, so another
+application can still be launched. The worker reaches the store only in
+`IE_BODY` and `IE_DEC`, and reloads `[br_istseg]` on every pass: a running
+worker pins the claims, and it parks only at the top of its loop. On kern_mega
+a region is reached through `OSAPI_SEG`'s `SEG_SUB`; on the real-mode kernels
+it is the sum.
+
+**The EMS tier (D2).** When the UI task cannot grow the store for the next
+file or decode (the reserve or the heap refuses) and the store holds ready
+copies, it moves them to EMS and asks once more. `bri_spill` (`bri_espill`)
+takes every ready copy that no animation holds (§71.29, `bri_spillable`):
+
+- takes the frame's four quarters (`br_emsframe`, the page's arenas' own
+  frame, §71.18) and grows `br_imgar`, an arena of §71.18's shape, to hold
+  `[br_iemsp]` paragraphs and theirs (at most 65,535, 1 MB);
+- copies each one to the arena from paragraph `[br_iemsp]` on, one after
+  another, a page at a time through quarter 0 (`bri_ecopy`);
+- marks each entry 3 with `IT_PARA` its paragraph in the arena, and adds
+  their paragraphs to `[br_iemsp]`;
+- closes the store up (`bri_compact`): what is left - the copies the
+  animations hold, their blocks, then the staged file - moves down to
+  `[br_ibase]` in its order, each `IT_PARA` and each record's paragraphs
+  with it, and `[br_iready]` is their end.
+
+The store then holds only the animations' copies and the scratch of the
+image in hand, and the cut after its decode gives that back. When the copies
+the animations hold are all that is left and the store still cannot grow, the
+last animation is let go (`bri_adrop`: it stays on the frame it shows), its
+block is given back and its copy may go too; that repeats while an animation
+is left, so an image keeps its alt box only once every animation is still. With no board, no free quarter, or an
+arena the board will not grow, nothing moves and the image is none, as
+before. So conventional memory is used first, EMS only when it runs short,
+and EMS is never required. The paint maps the two pages that hold a slice
+(at most 2,880 bytes: 90 columns, four planes, eight rows) into quarters 0
+and 1 (`br_imgmap`) and blits from the frame. The document and the line
+table reached through the same frame are mapped again by every `br_docmap`
+and `br_laddr`, and `br_paint_line` holds no pointer into the frame across
+its blits, so §71.18's rule holds. Only the UI task maps, grows or copies
+the image arena, and it is freed with the page's other arenas
+(`br_docems_release`).
+
+**The ready copy (D1)** covers the whole box, COLS x 8 by ROWS x 8 pixels:
+
+- **VGA and EGA**: four planes, row-interleaved: a row is `4 x COLS` bytes,
+  plane p at `p x COLS`. It is drawn with `OSAPI_GFX_BLITP`, `DI` = COLS with
+  bit 14 set (an armed clip is walked, §5.4.3.6), `BP` = `4 x COLS`.
+- **CGA and Hercules**: 1bpp, COLS bytes a row, 1 = lit, drawn with
+  `OSAPI_GFX_BLIT1`.
+- At most 65,520 bytes: COLS x ROWS up to 2,047 cells in colour, 8,190 in
+  1bpp. A bigger copy makes the image none (the disk tier, 4.3, is where that
+  limit moves).
+- White, the border's `border` pixels black at the box's edge, the picture at
+  (`border`, `border`), and white to the cell past it.
+
+**The size.** The natural size is the GIF's logical screen. A declared width
+and height are taken as they are. With only one of them, the other is scaled
+to the picture's aspect. With neither, it is the natural size. The result is
+cut, keeping the aspect, so that the box fits `BR_MAXCOL` and `BR_IMGRMAX`.
+If the box's COLS or ROWS differ from the record's, the UI task writes the
+new digits into the record and lays the page out again before the decode, so
+the box takes its real size first and its pixels after (header-first sizing).
+The picture is scaled to the nearest pixel: box pixel (x, y) shows logical
+pixel (x W / w, y H / h).
+
+**The colour (D7).** The rows are `tools/pixelsim.py`'s `gif_rows`: the
+first frame placed on the logical screen, the rest of the screen the
+background index (the transparent index when a graphic control extension
+gives one), with the transparent entry white. Each palette entry's mixing
+plan `(c1, c2, t)` is PiXEL's search (§106.11), `pl_plan1`, which moved to
+`apps/pixel/pxplan1.inc` so both programs assemble the same source; PiXEL's
+bytes do not change. A pixel is `c2` when `BAYER8[y & 7][x & 7] < t`,
+else `c1`, with x and y counted from the box's corner. In 1bpp it is lit when
+`BAYER8 < t1`, `t1` being PiXEL's `px_t1for` (`apps/pixel/pxt1.inc`). A
+frame that ends before its last row, a code the table never built, a frame
+of no size or no palette make the image none, as `gif_rows` refuses them.
+
+**The paint.** For every box on a row whose image is ready and whose COLS
+and ROWS still match its record, `br_paint_line` blits the box's slice (its
+eight rows) first. Then it draws the row's text as `OSAPI_FONT_RUN` runs
+around those boxes, and frames only the boxes it did not draw, so no pixel
+is written twice. A refused blit (a box across a screen edge or a display
+seam, a kernel without planes) draws that box as §71.25 does. When an image
+becomes ready the UI task runs an images-only pass over the visible rows,
+which blits that image's slices and draws nothing else. A styled row
+(`br_paintstyled`) is drawn whole and the slices blitted over it.
+
+**Part 1** of `BROWSER.O88` (`apps/browser/brimage_part.asm`, lazy and
+compressed) carries the engine's worker step, the exchange and its header
+reader, the resolver, the GIF reader, `os88lzw.inc`, the plans and the UI
+task's half of each hand-over. It is fetched at `IE_START` and dropped at
+`IE_END`. The ready copies are drawn by resident code, so a page with its
+images in needs no part. It reaches the primary's routines through far
+vectors, as part 0 does (§71.20.5), and its data through the symbols
+`tools/brdlsyms.py` exports.
+
+**What 4.2 does not do:**
+
+- a ready copy that fits neither the reserve nor EMS goes to the cache file
+  (§71.27), and one that fits none of the three leaves its image none;
+- only the first frame is shown (animation is 4.4);
+- JPEG, PNG and the older formats are 4.5 and 4.6;
+- a page loaded from a file fetches only absolute `http://` sources;
+- an image refused after its header was read (cut short, a bad code) keeps
+  the header's box, which can be too small for its alt text.
+
+**What it cost**: image + BSS went from 55,463 to 57,459 bytes (+1,996: code
++1,253, BSS +743, of which 512 are the table), so 7,565 of 65,024 are left.
+Part 1 is 14,537 bytes, 7,712 in the file: 5,376 of it are its zeroed
+tables, and PiXEL's plan search with its shipped plans is most of the rest.
+The rows are `brgif` (VGA's four planes), `brgifcga` (a forced CGA, 1bpp)
+and `brgifreload` (F5 while an image is half in): `tests/ethernet.py`
+serves `tests/brgifs.py`'s page and holds every ready copy to
+`tests/brgifref.py`'s, built from `tools/pixelsim.py`'s decode and plans.
+
+The EMS tier cost 54 bytes more: code +16 (its paint arm and `br_imgmap`,
+less what `br_emsframe` saved, the frame claim three arenas had each
+written out), BSS +38 (`br_imgar` and `[br_iemsp]`). Image + BSS is 57,513,
+7,511 free. Part 1 grew 286 bytes (`bri_spill` and the relative store
+requests). Its row is `brgifems`: twelve 256x128 GIFs on 86Box's 384 KB XT
+with an NE1000 and a Lo-tech board. Ten go to EMS, and every slice of every
+EMS copy, read through the frame where `br_imgblits` blits it, is the
+reference's.
+
+### 71.27 Browser 1.7 — the disk tier of the image store
+
+The last tier of §71.26's store (BROWSER-IMAGES-PLAN D2, D3): when the
+reserve and EMS both refuse, the ready copies go to a cache file on the
+Browser's own volume, a floppy included, and the paint reads each slice back.
+This section is delivery 4.3a. The loop of the last pages on a fixed volume
+and the revalidation of a copy (`If-Modified-Since`, `304`) are §71.28.
+
+**The file.** `SYSTEM\APPDATA\BRCACHE\Bssssvvv.BRC`, on the volume the
+Browser was launched from (`apps/os88data.inc`'s walk, then the folder
+`BRCACHE`, made with `OSAPI_FILE_MKDIR` the first time). `ssss` is the
+instance's data segment in hex and `vvv` a count of the files this instance
+has made, so two Browsers never share a name and a name is never used twice
+in a session. It is made empty with `OSAPI_FILE_WRITE` at the first spill of
+a page and deleted when the page goes (`br_imgstop`) and when a close is
+accepted (`br_dl_mainclose`). `[br_icstate]` is 0 no file, 1 the file is
+this page's, 2 the cache is off until the next page: a refused make, write
+or read sets it, and nothing is said.
+
+**The spill.** `bri_spill` (§71.26) tries EMS first. When EMS refuses and
+`[br_icstate]` is not 2, `bri_dspill`:
+
+- stands in `BRCACHE` (`br_icenter`) and asks `OSAPI_FILE_DFREE` once: the
+  copies' bytes, a cluster and 16 KB must be free. The free count is the
+  FAT snapshot's, so it is read on the volume and not remembered;
+- makes the file if `[br_icstate]` is 0;
+- chooses as many whole copies as the disk holds, the first ones in the
+  store that no animation holds (§71.29): in the store's order, until one
+  does not fit. The room is the free count less a cluster and 16 KB, and a
+  copy that starts a new run (one an animation holds lies between) costs a
+  cluster more, the last run's rounding;
+- appends each run of them that lies together in the store at `[br_ifend]`
+  with `OSAPI_FILE_WRITE_AT`, in 32 KB pieces (a whole number of any
+  cluster up to 32 KB), and sets `[br_ifend]` to the allocated end, the
+  file's size rounded up to a cluster, which is where the next append must
+  start. The file holds at most 1 MB, so a copy's place is a paragraph;
+- marks those entries 4, with `IT_PARA` their first paragraph in the file,
+  once every run is written (a failed write marks none), and closes the
+  store up to the new base (`bri_compact`, as for EMS; `bri_pmove`: 32 KB
+  at a time, from the far end when it moves up). A disk with room for none
+  of them refuses the spill and the image is none; the cache stays on.
+
+**The paint buffer.** The first disk spill keeps the store's first
+`BR_IDBUF` = 8,192 bytes as the buffer the paint reads slices into, so
+`[br_ibase]` becomes 512 and copies made afterwards follow it. When the
+copies written were fewer than 8 KB, the store is grown for the buffer
+first (`bri_spnew`), inside the reserve, and the spill is refused if it
+cannot be. The worker never writes below `[br_ibase]`.
+
+**The paint.** For an entry in state 4, `br_imgdisk` looks for the slice in
+the buffer's two windows of `BR_IDWIN` = 4,096 bytes, which hold the file's
+bytes from `[br_idoff]` for `[br_idlen]` and from `[br_idoff1]` for
+`[br_idlen1]`. On a miss it reads 4 KB from the slice's sector
+(`OSAPI_FILE_READ_AT`, whose offset and count are whole sectors on
+`kern_big`, §18.4.4.2) into the window the last hit was not in
+(`[br_idlast]`), and the slices after it come from the buffer. A slice is
+at most 2,880 bytes, so with its sector's rounding it always fits one
+window. A full box of 16 slices of a 32-column VGA copy is four reads, and
+two such boxes on the same rows are at most eight, each keeping a window:
+with one 8 KB window, which made a lone box two reads, the second box's
+miss threw out the first's slices and every row the two shared was a read
+for each. A refused read, or one that ends short, turns the cache
+off, and the box is drawn as §71.25 draws it. **Only the UI task touches the
+file**: the spill is a UI hand-over, the worker paints only while the page
+arrives, and the engine starts only after that.
+
+**A swapped floppy.** `OSAPI_FILE_GOTO_QM` mounts the volume again when the
+motor has stopped (§18.9.1.1), and the file's name is unique, so another
+disk has no such file. The read then fails, the cache is off, and nothing is
+read from or written to a disk the page did not write.
+
+**What a crash leaves.** The first time an instance starts its engine, it
+counts the live instances that bear its name (`OSAPI_SYS_SNAPSHOT`, read into
+part 1's row buffer). When there is no other, it deletes every file in
+`BRCACHE`.
+
+**What it does not do:** decode into the disk. The decode's scratch (the
+staged file, the LZW table and the new copy) is conventional memory, so an
+image whose decode does not fit there is none whatever the disk holds.
+§71.28 adds the loop of the last pages and the revalidation.
+
+**What it cost**: image + BSS went from 57,513 to 57,946 bytes (+433: code
++391, BSS +42 with part 1's 10 working bytes), so 7,078 of 65,024 are left.
+Part 1 grew 685 bytes (the disk spill, the name and the sweep). The row is
+`brgifdisk`: `tests/brgifems.py` on 86Box's 384 KB XT with no board. Seven
+copies go to B:'s cache file and every slice is the reference's through the
+paint buffer. F5 deletes the file, and a lone start sweeps one the instance
+forgot. With twelve pictures the 360 KB floppy fills after eight, the last
+spill writing the one copy of two that fits, and the last two keep their
+alt boxes: the 16 KB margin holds.
+### 71.28 Browser 1.7 — the kept pages and asking again
+
+Delivery 4.3b (BROWSER-IMAGES-PLAN D3). On a volume `OSAPI_VOL_KIND`
+answers `VK_FIXED` for (a hard disk or a RAM drive), `[br_ickeep]` is set
+at the engine's start and the cache file keeps every copy of the page, so a
+later visit draws them without a fetch or a decode. On a floppy nothing
+here applies, and §71.27 is the whole tier.
+
+**The index.** A kept page's file begins with `BRI_IXSZ` = 3,072 bytes:
+
+| offset | what |
+|---|---|
+| 0 | `BRC1` |
+| 4 | dword: the page's hash: its host, path and port (`bri_hashz`) |
+| 8 | dword: the file's allocated end |
+| 64 | `BRI_SLOTS` = 32 slots of 80 bytes |
+
+A slot is: `S_HASH` (dword, 0 = free) the hash of the image's whole request
+(`GET`, the path and the `Host` line, the port xored in), `S_GW`/`S_GH` the
+GIF's logical screen, `S_COLS`/`S_ROWS` the box its copy was made for,
+`S_MONO` 1 for a 1bpp copy, `S_PARA` the copy's first paragraph in the
+file, `S_LM` the response's `Last-Modified` (30 bytes) and `S_ETAG` its
+`ETag` (36 bytes), each NUL-ended. A longer value is cut, and a cut one
+never matches, so the server answers 200. The copies follow the index's
+cluster. The hash is a 32-bit rotate-and-xor of the bytes; a collision
+draws the wrong picture in a box of the right size, which is the risk
+taken for not keeping the URLs.
+
+**Keeping.** At `IE_SHOW`, a new copy in the store is appended to the
+file (`bri_kput`). Its slot is the one with its hash, or the first free
+one, and is written with the size and the validators. The index is then
+written back in one `WRITE_AT` inside what the file owns. `OSAPI_FILE_DFREE`
+is asked once a page, at `IE_START`, because it counts the whole FAT; each
+copy is kept only while the disk keeps a cluster and 16 KB besides. A copy
+that does not fit is not kept, and that is all. On a kept volume a disk
+spill (§71.27) only marks the copies, as they are in the file already
+(`bri_allkept`).
+
+**The loop.** When a page goes (`br_imgstop`), `br_icpush` keeps its file
+in `br_icring`, the page's hash and its file's number, and deletes the
+oldest file first when `BR_ICRING` = 8 are kept. A close deletes them all
+(`br_icclose`); the lone-start sweep takes what a crash left.
+
+**A visit.** At `IE_START`, `bri_kstart` hashes the page and looks for it
+in the loop. Found, the file's index is read back and checked (`BRC1` and
+the page's hash; anything else deletes the file), the file is the page's
+again, and the store is claimed with the paint buffer already in it. Then,
+for each image, `IE_NEXT` builds its request, hashes it and finds its slot
+(`bri_kfind`):
+
+- **Trusted** (`[br_icnav]` = 0: a link, Back, Fwd, History, a bookmark):
+  no request. `IE_CACHED` (13, the UI task's) sizes the box from the slot's
+  logical screen, as the header would. When that is the box the copy was
+  made for, in the same depth, the entry is 4 on the slot's copy, the
+  record is written and the page laid out as header-first sizing does, and
+  the image is drawn. Otherwise `bri_ixk` marks it, and the next `IE_NEXT`
+  fetches it.
+- **Asked again** (`[br_icnav]` = 1: Reload, or an address typed in the
+  bar; `br_go` clears it and those two set it after): the request carries
+  `If-Modified-Since` and `If-None-Match` from the slot, before its blank
+  line (`bri_condreq`). `304 Not Modified` closes the socket and goes to
+  `IE_CACHED`; `200` is read and decoded as always, and its copy replaces
+  the slot's. A slot with neither validator is fetched plainly. The
+  session is the trust's whole span: the files go at close, as Netscape's
+  *Verify documents: Once per session* trusted its cache until the program
+  ended.
+
+**The header reader** (`bri_hbyte`) matches `content-length:`,
+`last-modified:` and `etag:` at once, a bit each in `[bri_hmask]`, case
+blind, and keeps a validator's value as it came, without its leading
+spaces.
+
+**What it does not do:** read `Expires` or `Cache-Control`; keep the page's
+own HTML (only its pictures); cap the loop's bytes other than by the
+free-space margin. A copy kept on the disk is drawn from it on the visit,
+even when conventional memory could hold it.
+
+**What it cost**: image + BSS went from 57,946 to 58,315 bytes (+369: the
+loop's 56 bytes of BSS, the naming moved from part 1, the push, the close
+and the deletion), so 6,709 of 65,024 are left. Part 1 grew by 5,301 bytes,
+3,170 of them its zeroed index and validators. The row is `brkeep`
+(`tests/brkeep.py`, QEMU booting `build/brkeep.img` as C:). Every copy in
+the file is the reference's, by the request's hash in the index read on
+the host. Back asks for none and draws the first visit's pixels, Reload's
+are all 304 and draw the same, and the close leaves `BRCACHE` empty.
+
+**Back is not a Reload.** `br_hgo` (Back, Fwd, History) fetches through
+`br_reload`, which marks a page to be asked again, so `br_hgo` clears the
+mark after it. Until it did, Back sent every request conditional and
+`brkeep` counted ten.
+### 71.29 Browser 1.7 — animated GIF
+
+Delivery 4.4 (BROWSER-IMAGES-PLAN D5, D6). An animated GIF's first frame is
+drawn as §71.26 draws any GIF, and its animation is set up from the same
+fetch. Once every image of the page is in, the animations play, a frame at a
+time on the worker, each frame held to `tools/pixelsim.py`'s `gif_anim`.
+
+**Which play.** At `IE_PREP`, before its decode, `bri_isanim` walks past the
+first image's sub-blocks and its extensions: a second image descriptor marks
+the image animated (`gif_animated`'s rule) in part 1's `bri_amask`. On a
+kept volume the slot says so too (`S_ANIM`), and `bri_kfind` does not take a
+kept copy of an animated image, so a revisit fetches it and it plays. The
+first `BRI_AMAX` = 4 animated images play; one past them, or one whose
+block the store cannot hold, stays still on its first frame.
+
+**Set up as it arrives.** `bri_aplan` (at `IE_PREP`, UI) takes a free
+record and checks the limits: the logical screen at most `BRI_ROWMAX` wide
+and at most 65,520 bytes. It then grows the store, without letting another
+animation go (`bri_ustore0`), for the copy, the animation's block and the
+LZW table after them, and moves the staged file up past where the copy will
+be, so that the decode writes the copy in its place and the file stays
+behind it:
+
+| from `[br_iready]` | what |
+|---|---|
+| 0 | the copy |
+| after it | the file, as staged: the block's start |
+| after it | the master: the logical screen, a byte an index |
+| after it | the saved rect, as large as the master, only when a frame has disposal 3 |
+| after it | the plans and 1bpp thresholds, 1,024 bytes |
+| after it | the LZW table |
+
+A refusal decodes the image as a still one. After the decode `IE_SHOW`
+draws it, keeps the store as it is and hands over to `IE_ASET` (15,
+worker), which makes the plans, fills the master with the background index
+B (frame 0's transparent index when its GCE gives one, else the screen's
+background) and draws frame 0 on it by the frame rules: `gif_restart`, which
+is frame 0's master. The block joins the copies (`[br_iready]` past it), the
+record in `bri_arec` is written, and the next image is fetched. So an
+animated GIF is fetched once (it was fetched twice before, a second time in
+a second phase after the page's images, which `IE_APREP`, 14, served).
+
+When `IE_NEXT` finds no image waiting and an animation was set up,
+`IE_AGO` (18, UI) keeps the LZW table past the copies, and the engine stays
+in `IE_ANIM` (16, worker), with part 1 held. A refused table lets the last
+animation go and gives its block back (`bri_adrop`, `bri_compact`, the
+order `bri_ustore` takes) and asks again, so the others still play; with
+none left the pictures stay still. Part 1 is dropped by the stop
+(`br_imghalt`), so a navigation or a close ends every animation, and by
+`IE_AEND` (14, UI): when `IE_ANIM`'s scan finds no animation playing or
+paused (every one stopped on its last frame), every record is let go, the
+blocks and the LZW table are given back (`bri_compact`, `bri_ushrink`) and
+the engine ends (`IE_END`). Each copy stays on the frame it shows.
+
+**Held in the store.** The copy of an image a record holds (`A_ON` not 0),
+and the record's block, never go to EMS or the cache file: the spills of
+§71.26 and §71.27 take the other copies and close the store up round them
+(`bri_compact`, which moves each record's `A_BLK`, `A_MST`, `A_SAV` and
+`A_PLN` with its block). Only when nothing else is left to move is an
+animation let go (`bri_adrop`), from the last record back.
+
+**A frame** (`bri_aframe`, on the worker), when the record's due tick has
+come (`OSAPI_GET_TICKS`). `IE_ANIM`'s scan starts at the record after the
+last one served, so on a machine whose frame costs more than its delay
+every due animation still has its turn rather than the first in order
+alone:
+
+- the extensions are walked to the next image descriptor. A GCE sets the
+  disposal, the delay and the transparent index. A zero-sized frame is
+  skipped. The trailer, the file's end, a frame with no table, or a
+  minimum code size outside 2 to 8 ends the pass;
+- the last frame's disposal 2 sets its rect to B, and disposal 3 restores
+  it from the saved rect;
+- a frame with disposal 3 saves its own rect first;
+- its pixels are decoded onto the master, each whole row at its final y,
+  clipped, a transparent pixel left as it was. With no local table on a
+  page whose frame 0 used the global one, an index is itself. Otherwise it
+  is the nearest entry of frame 0's palette, `gif_anim`'s
+  `3 dr² + 6 dg² + db²` with the first of equals, found for each index the
+  frame uses and remembered for the frame;
+- the dirty rect is the last disposal's rect and this frame's, unioned and
+  clipped. Every box row whose logical row is inside it is made again from
+  the master (`bri_trowfill`, `bri_convrow`, the column map across the
+  whole screen), in the copy in the store. `bri_aconv` tests the
+  generation before each box row, so a stop waits for one row and not a
+  whole picture's conversion; a refused close may keep a copy part made;
+- `IE_AFRAME` (17, UI) draws the image alone, as `IE_SHOW` does, and the
+  next frame is due after its delay (`gif_delay`: hundredths to ticks,
+  under 2 read as 10).
+
+A frame that ends part-drawn is shown and ends the pass. At a pass's end,
+an image with no NETSCAPE2.0 loop count stops on its last frame. A count of
+0 plays for ever, and a count of n plays n more passes. A new pass is
+`gif_restart`: the master to B, frame 0 drawn, the whole screen dirty.
+
+**Pausing.** `br_imgblits` sets image k's bit in `[br_iseen]` (32 bits)
+when it draws one of its slices. `IE_AFRAME` clears the bit before its
+draw. When the draw draws nothing (scrolled off, the window covered or
+minimised) the animation is paused. It plays again once a paint draws it,
+so a page scrolled away costs no decode. `[br_iframes]` counts the frames
+drawn, for the rows.
+
+**What it does not do:** animate a copy in EMS or the cache file (an
+animation let go stays where it is); a logical screen past the limits
+above; draw only the dirty slices (the image is drawn whole, a slice a
+row); play an image that is not wholly fetched.
+
+**Two bugs the row found.** A kernel call does not keep `ES`, so the first
+records were written through whatever it left; `bri_now` keeps every
+register round `OSAPI_GET_TICKS`, and `br_imgsub`'s kern_mega arm keeps `ES`
+round `OSAPI_SEG`. And `bri_arp`'s `mul` wrote `DX`, which held the tick
+count: no frame was ever due.
+
+**What it cost**: image + BSS went from 58,315 to 58,416 bytes (+101: the
+dispatch, `[br_iseen]` set by `br_imgblits`, `[br_iframes]`, and part 1's
+working state, 60 bytes of it), so 6,608 of 65,024 are left. Part 1 grew by
+4,288 bytes to 25,097, 784 of them its records and index map. The row is
+`brganim` (`tests/brganim.py`, QEMU).
+
+**Delivery 4.4b** set an animation up from the fetch that drew its first
+frame, and held it in the store through the spills: no resident byte (image
+and BSS are the same 58,416; `bri_aphase` became `bri_apend`), and part 1
+grew 641 bytes to 25,738 - the compaction, the runs of the disk spill and the
+copy by copy EMS spill, less the second phase's fetch. `brganim` counts the
+requests (each GIF once), and `brgifems` and `brgifdisk` put an animated GIF
+third on their pages: fetched once, its copy still in the store after the
+spills that took the stills on both sides of it, and playing. With nine stills
+on brgifdisk's 384 KB XT the floppy holds eight copies and the store two, so
+the animation was let go, went to the file, and every still was shown: the
+order this section asks for (the row asks eight, the animation in a box half
+the stills', whose copy and block fit beside two stills there).
+
+### 71.30 Browser 1.7 — PNG and JPEG through PiXEL's decoder parts
+
+Delivery 4.5 (BROWSER-IMAGES-PLAN D4). A PNG or a JPEG is read by PiXEL's
+own decoders, `apps/pixel/pxpng.asm` and `apps/pixel/pxjpeg.asm`, assembled a
+second time as parts 2 and 3 of BROWSER.O88 (`OP_SEG | OP_COMP | OP_LAZY`).
+Nothing is copied: the source is PiXEL's, and PiXEL builds and runs as it did
+(its parts' bytes are unchanged; `PXP_BG` in `apps/pixel/pxpart.inc` became
+`%ifndef`, so the Browser's assembly composites a transparent pixel over
+white, 255, where PiXEL's is the canvas's grey, 85).
+
+**The host is part 1, not the resident Browser** - a departure from D4,
+which had the Browser's bss hold the decoders' variables (about 1.6 KB) and
+its code the services. A decoder part reads its host's variables through DS
+and calls its services far on `[cs:PXP_PKG]`; nothing says that host must be
+a package. So part 1 (§71.26) is the host: the 27 variables the two parts
+name (`px_spal`, `px_plan`, `px_cur`, `px_k` and the rest, 2.5 KB) are part
+1's own data, `$(BUILD)/brpx/pxlink.inc` is written from part 1's symbol map
+by `tools/brpxlink.py` (the same refusal as PiXEL's: the map must describe
+the `browser.imgpart.bin` it is beside) - in a directory of its own, because
+PiXEL's decoders `%include "pxlink.inc"` and PiXEL's own
+`$(BUILD)/pxlink.inc` must not be on their include path - and a decoder is called with DS =
+part 1's data segment, `PXP_PKG` = part 1's code, `PXP_PKGD` = its data and
+`PXP_SELF` = the decoder's own. The services are part 1's procs that end in
+`retf` and set DS to the Browser themselves. **The resident Browser grows by
+the two part rows and the shims that fetch and drop a part** (`br_im_r_pxload`,
+`br_im_r_pxdrop`); a decoder is dropped with part 1.
+
+**Which.** `bri_ended` sniffs the staged file: `GIF8` is §71.26's GIF, the
+eight bytes `89 50 4E 47 0D 0A 1A 0A` a PNG, `FF D8 FF` a JPEG; anything else
+keeps its alt box. The media type is not read.
+
+**IE_PREP for a decoder** (`bri_pxprep`, UI task):
+
+1. The part is fetched (`br_im_r_pxload`), the other decoder dropped first:
+   one decoder part at a time, kept while images are of its kind (106.18's
+   rule).
+2. The file is the head, whole: `px_rflat` = 1 and `px_flatseg` /
+   `px_flatlen` the stage, so a JPEG's marker past the first 2 KB is a
+   pointer moved (106.19's in-memory file) and never a read. HEAD (DI =
+   `px_k`) answers the size (upright, for a JPEG), the row format, the
+   scratch; a refusal keeps the alt box.
+3. The box (`bri_size`) and the record, as for a GIF. **The scale**: a PNG's
+   is 1/1. A JPEG's is the coarsest of 1/1, 1/2, 1/4 and 1/8 that HEAD offers
+   (`PXK_DSC` not FFFFh) whose master, `floor(S / 2^s)` each way (what
+   `pj_fsizes` emits), is still at least the box's picture each way - the
+   IDCT then does the shrinking for nothing (D4).
+4. The store is grown behind the copies for the file, the decoder's scratch
+   (`PXK_DPARA`, or `PXK_DSC` at the scale), the ROW BUFFER (the master's
+   width, three bytes a pixel for truecolour, one else) and the copy; the
+   copy is grounded as a GIF's is, then IE_DEC.
+
+**IE_DEC** (worker) calls DECODE once, with the context's scale, master size,
+row buffer, scratch and `px_spal`, and the copy moves down as a GIF's does.
+The services:
+
+| service | here |
+|---|---|
+| `K_NEXT` | the staged file, whole, on the first call; then the end (CF = 1) |
+| `K_EMIT` | master row AX in the row buffer: every box row it fills (`bri_tyof`, as a GIF frame row) is made through the column map |
+| `K_SCAT` | an Adam7 pass's row at columns `CL + k CH` of master row AX: each box pixel of that row whose column is one of them is written alone |
+| `K_COLS` | a JPEG's band turned (orientations 5-8): BX master rows of DX pixels from row AX, column CX; each box pixel inside it written alone |
+| `K_TICK` | nothing but the stop |
+| `K_PAL` | the plans, once (below) |
+| `K_RING` | never called by these two; it answers the end |
+
+Each answers CF = 1 with `PXD_ABORT` once the engine has been stopped
+(`bri_gchk`), which the part unwinds from. A refusal the part answers keeps
+the alt box, as a GIF's damaged stream does.
+
+**Pixels to the copy.** A box pixel's source index is made from the row
+buffer's pixel at its column (`bri_cmap`):
+
+- `RF_IDX`: the index itself; the plans are `px_spal`'s entries, black past
+  its entries;
+- `RF_GREY`: the grey level; the plans are the 256 greys;
+- `RF_RGB`: a point of the 6 x 6 x 6 CUBE, each channel `v` taken to
+  `q = floor(5 v / 255)`, plus one when `64 ((5 v) mod 255) / 255` exceeds
+  the pixel's `BAYER8` threshold; the plans are the cube's 216 colours.
+
+and the copy's pixel is the plan's as for a GIF (`bri_convrow`, or
+`bri_pplot` for a pixel written alone): one Bayer threshold, from the box's
+corner, for the cube's choice and the plan's. `tests/brgifref.py` makes the
+same copy from `tools/pixelsim.py`'s rows.
+
+**The plans are made where they are read.** A 256-entry search is 10.9 M
+cycles, 2.28 s on an XT (§106.17), so neither `bri_plans` (a GIF's) nor
+`bri_pxplans` (a decoder's) runs it for nothing. On a 1bpp adapter
+`bri_convrow` and `bri_pplot` read `t1` alone, so both make `t1` alone. The
+greys' and the cube's plans are the same for every picture: the greys' are
+PiXEL's shipped `px_plgrey`, copied, and either set, once made, stays in
+part 1's tables for as long as the part is loaded. `[bri_pkey]` names the
+set they hold (its `RF_*`, plus 80h on 1bpp; `RF_IDX` for none), and a
+GIF's plans, an animation's restore and an indexed picture's plans clear it.
+Both searches look at the stop every sixteen entries. A stopped
+`bri_pxplans` leaves `bri_planed` clear and its service answers
+`PXD_ABORT`.
+
+**Not done here**: a file past `BR_IFMAX` (60,000 bytes) keeps its alt box;
+progressive painting (a picture is drawn when its decode ends, as a GIF's
+is); a PNG's gamma or a JPEG's colour profile, which PiXEL does not read
+either.
+
+**A bug the row found.** `op_fetch` keeps no register it is not asked to,
+so the shim that fetched the part and then asked its segments by a part
+number held in `CX` asked for another row's on the first fetch: the first
+PNG of a page kept its alt box and every later one showed. The number is
+kept on the stack (`br_im_rs_pxload`).
+
+**What it cost**: image + BSS 58,416 -> 58,497 bytes (+81, the part rows
+and the two shims), so 6,527 of 65,024 are left. Part 1 grew by 4,143 bytes
+to 29,881 - the host block (1,704 bytes, half of it the names only PLANS
+reads), the services, the cube's table and the conversion - and the two
+decoder parts are PiXEL's sizes, 12,018 and 19,101 bytes (9,486 and 14,000
+packed). BROWSER.O88 is 79,616 bytes on the disk, 25,504 more. **The disks
+paid for it** (the owner's decision of 2026-11-11): REDLINE leaves the 720 KB
+system disk for `more720.img` (§24.3.2), and the Browser leaves
+`apps720.img` (the 720 KB system disk carries it; `BROWSER.HTM` stays in
+`apps720.img`'s `MEDIA/`) and `apps360.img` (`network360.img` carries it).
+The row is `brpx` (`tests/brpx.py`, QEMU).
+
+**A release obligation, The Wire's.** This takes BROWSER.O88 past
+`WIRE_FILEMAX` (64,512 bytes, §92.2) - about 100 KB once §71.31 and §71.32
+are in - and a plain record over that bound refuses the WHOLE catalog on
+every Wire in the field. The Browser's Wire record is a plain one (no flags,
+`needs_wire` 7), and the disk decisions above lean on The Wire to give it
+back to a machine whose disks leave it off (§24.3.1.2). So the release that
+first ships 1.7 publishes the Browser as a **version 2 archive** (`WF_ARC`,
+§92.13.1), as C64 and APPLE2 were when they crossed the same bound, with
+`needs_wire` at 7 or above. `tools/os88wire.py` refuses the plain record
+rather than pack it, so the obligation cannot be missed, only met late.
+
+### 71.31 Browser 1.7 — the older formats
+
+Delivery 4.6 (BROWSER-IMAGES-PLAN D10). Three more decoder parts, hosted by
+part 1 exactly as §71.30's two are:
+
+| part | source | formats |
+|---|---|---|
+| 4 | `apps/pixel/pxextra.asm`, PiXEL's EXTRAS | TIFF, ICO and CUR, IFF (ILBM and PBM), MacPaint |
+| 5 | `apps/pixel/pxsimp.asm`, PiXEL's SIMPLE FORMATS | BMP (1 to 32 bits, RLE4, RLE8, the masks), PCX, TGA, PNM, PIX |
+| 6 | `apps/browser/brxbm.asm`, the Browser's own | XBM, the X bitmap Netscape showed inline |
+
+**D10 had `pxsimp` written again**, on the ground that it calls PiXEL's
+resident reader. That was true before SPEC.md 106.25 made it a part; today it
+names only VARIABLES of its host, so part 1's host block grows by them
+(`px_wseg`, `px_dbpp`, `px_doff` and the rest, and the ring window's words: 108 bytes) and the source is
+PiXEL's, assembled a second time, as `pxextra`'s is. PiXEL's own parts are
+unchanged. XBM is in neither (`tools/pixelsim.py`'s `xbm_header` and
+`xbm_rows` are `brxbm.asm` in Python), so it is a part of the same shape,
+628 bytes.
+
+**Which.** `bri_pxsniff` reads the staged file in `pixelsim.sniff`'s order
+after the GIF, PNG and JPEG: `BM`; a PCX's `0A ?? 01` when the URL names
+.PCX; `II*` or `MM*`; `O8PI`; `P1`..`P6`; `FORM` with `ILBM` or `PBM `; an
+ICO's six-byte directory; a MacBinary's `PNTG` at 65; `#define` at 0. Then,
+with no signature, the URL's extension (`bri_extof`, taken from the request
+line `bri_resolve` built): .TGA, .PCX, .MAC or .PNTG, .XBM. A TGA has no
+signature at all, nor has a MacPaint outside MacBinary. The media type is
+still not read.
+
+**What the host gives these parts that the PNG and JPEG parts did not
+ask for**:
+
+- the RECORD's format and size (`px_cur + PXR_FMT`, `PXR_FSIZE` - a PCX finds
+  its 769-byte tail palette from the size), and `px_spal` cleared to black
+  first, as PiXEL's resident leaves it: a part writes only the entries it has
+  (MacPaint writes white and leaves black);
+- the RING WINDOW, the worker's stream: `px_rsegc:px_rpos..px_rend` is the
+  staged file whole, `px_rbase` 0, and `K_RING` answers the end;
+- `pxsimp`'s WORK: `px_wseg` the row buffer, `px_wslin` a PCX line and
+  `px_wslut` a KB of tables after it, carved from the scratch, whose size is
+  the line's paragraphs and 65;
+- a row buffer of PiXEL's work row, `max(3w + 4, px_drawsz)`;
+- **B, G, R rows**: a 24-bit BMP or TGA hands its row in the file's order and
+  says so (`px_bgr`), and the cube (`bri_cube`) reads the channels backwards.
+
+**Refused, keeping the alt box**: a PNG inside an ICO (`PXD_REDIR`: PiXEL
+hands that to its PNG part; the Browser does not, a favicon being the
+case and a favicon not being an `<img>`), and everything PiXEL refuses.
+
+**What it cost**: the resident Browser 28 bytes (the three part rows and the
+drop loop), image + BSS 58,525, so 6,499 of 65,024 are left. Part 1 grew
+756 bytes to 30,637 (the host block's 108, the sniff, the extension and the
+work). The three parts are 20,696, 10,550 and 628 bytes (10,104, 8,615 and
+609 packed); BROWSER.O88 is 99,633 bytes on the disk, 20,017 more. Every
+disk holds it: the 720 KB system disk is 712 of 713 clusters, so the next
+byte the Browser grows by there is a decision (§24.3.2). The row is `brold` (`tests/brold.py`, QEMU): nineteen pictures, every
+copy byte for byte `tests/brgifref.py`'s - which found that it painted a
+simple format's palette black (pixelsim keeps its count in `pal`, not
+`npal`) - and a page of PNG, JPEG and BMP after.
+
+### 71.32 Browser 1.7 — Save Image As and image maps
+
+Delivery 4.7 (BROWSER-IMAGES-PLAN 4.7, less colours and backgrounds, which
+are their own plan).
+
+**Save Image As.** A right click on a picture's box opens the context menu
+(§71.24, part 0) with **Save Image As...**: alone (`br_ctxkind` 3) on a
+picture that is not a link, and as the link menu's fourth row on one that
+is (`BR_CTXH_LINK + 12` high). Which picture: the box cell names its `D_IMG`
+byte (§71.25), so `br_cx_imgat` reads the record after it
+(`br_dl_r_imgdec`, `br_imgdec` through part 0's one new callback) for the
+INDEX; `br_ctximg` keeps it while the menu is up. The row hands the Download
+Manager (§71.20) the index `FFFEh`, for which `br_dlx_link` takes the
+picture's `src` (`IT_SRC`) instead of a link's href and resolves it against
+the page as part 1's fetch does. The file is fetched again, as Save Link As
+fetches: the store holds the decoded copy, not the file's bytes. A picture
+with no `src` kept (`IT_SRC` = `FFFFh`: a frame child's, `src=""`, `Links
+limited`) is refused with the bad-URL line, as an unresolvable link is.
+
+**Image maps.** Both kinds the 1990s web used:
+
+- **Client side** (`<img usemap="#name">` and `<map name>`/`<area>`): the
+  parser keeps up to `BR_AREAMAX` = 32 areas a page in `br_areas`, 8 bytes
+  each - the map's name hash, the area's link, its `coords` in the link arena
+  and its shape (`rect`, the default; `circle`; `poly`; `default`). An area's
+  `href` is a link like an anchor's (`br_lnknew`, which `br_anchor` now calls
+  as well: its target and frame are worked out the same way) with no run in
+  the document; with no `href` it answers nothing. A `<map>` may come
+  anywhere in the page, before or after its `<img>`.
+- **Server side** (`<a href><img ismap></a>`): the link is followed with
+  `?x,y` appended, the point in the picture (`br_mapquery`, when it fits the
+  address buffer).
+
+`br_imap` holds a word for each of the first 32 pictures: 0 no map, 1
+`ismap`, else the `usemap` name's hash (`h = 33 h + c`, `#` dropped, at
+least 2). **The click.** `br_buildimg`, rebuilding the clicked row for
+`br_hitofs`, records the hit cell's place in its box (`br_hicell`,
+`br_hislice`, `br_hiimg`), and `br_mapchk` hands a click on a picture with a
+map to part 0 (`BRDL_MAPCLICK`) before any link is looked for. The point is
+`8 cell + (pointer - band) mod 8 - border` each way, in the picture's drawn
+pixels, which are the page's (a box is drawn at its declared size); a point
+on the border answers nothing. The first area of the map holding it wins:
+`rect` with its corners in either order, both edges inside; `circle` by
+`dx^2 + dy^2 <= r^2` in 32 bits; `poly` by crossings of a ray to the right,
+the coordinates streamed out of the arena with no buffer; `default` always.
+A coordinate is clamped to 0..4,096, so every product stays in range.
+
+**What it cost**: the resident Browser 962 bytes (619 of code - the tags,
+`br_lnknew`, the hash, the query - and 343 of BSS, the area table and
+`br_imap`), image + BSS 59,487, so 5,537 of 65,024 are left. Part 0 grew 832
+bytes to 12,592: the menu row, the click and the shapes. The row is `brmap`
+(`tests/brmap.py`, QEMU): a rect, a circle, a triangle, a default with no
+`href` and the border on one map, an `ismap` link's `?13,7`, and Save Image
+As from both menus, each read off the requests the server got or the
+Download Manager's URL.
 
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 
@@ -131385,6 +132472,106 @@ show a measured reduction in conventional pressure before it is enabled by
 default. EMS/XMS capacity does not relax the 16-bit per-store limits above.
 No kernel or driver change is implied by this package contract.
 
+**The source and the document share ONE EMS frame.** `br_srcems_map` and
+`br_docmap` each map their pages into the same four quarters. So a pointer
+into the source is stale after any `br_docmap`, and the reverse holds too.
+The rule follows from that:
+
+- **The parser** copies each source slice into `br_rxb` before it emits
+  output.
+- **A `<select>` in the parse** walks its options with `br_srcptr`, which maps
+  the frame and not a slice. Two things follow:
+  - the shown option's text is gathered into `br_fval` before the field's
+    first `br_fput`;
+  - after `br_skipelem`, the parse goes back to a staged slice at SI
+    (`br_srcabs`, then `br_srcmap`).
+
+  Until both, a page with a select re-parsed with its document in EMS (Close
+  Source) read the document's own bytes as source from the select on. Bytes
+  went missing, and the read jumped 16 KiB a page later. The first parse
+  never showed it, because its document was still conventional at the select.
+- **An event-time form operation** gathers what it needs from the source
+  before it maps the document. This covers Reset of a text field, Reset of a
+  select, and a select's next option. They share one helper,
+  `br_fsetval`, which copies the value into `br_fval` first. Until it did,
+  each of the three read the source after `br_docmap`, and on a page whose
+  source and document were both in EMS it filled the field with the
+  document's bytes.
+- **A receive stays inside one EMS page.** `br_take` maps the page a chunk
+  starts in and masks every offset to it. `br_nstep` bounded only a short
+  receive to that page, so a full 512-byte chunk that crossed a 16 KiB
+  boundary wrapped onto its own page's start and left the next page's start
+  unwritten. Every receive is bounded now. This was found by reading the
+  code, and no row reproduced it.
+- **`br_flushbuf` keeps DX.** It wrote the document's high word there, and
+  View Source's walk (§71.24) held its source position in DX. Past 64 KiB of
+  output it read the source from its start again.
+- **The layout gets its document window back after every line record.** Once
+  the line table moves to its four EMS pages (`br_lineems_ensure`, when
+  conventional growth would eat the reserve), `br_laddr` maps all four frame
+  quarters to them. The layout walk holds ES:SI into the document across
+  `br_emitline`, `br_blank` and `br_emitrule`, so it then read line records,
+  whose zero bytes are `D_END`, and ended. `br_ldocback` maps `[br_docbase]`
+  again when both the table and the document are in EMS; anything
+  conventional costs two compares. Before it, View Source of a 300 KB page
+  moved the table to EMS and lost about 90 lines, and Close Source then laid
+  out two lines of thirteen, the heading and nothing under it. A page long
+  enough in LINES to move the table could lose its text on first load too.
+  `tests/brems.py --pre --kb 300` (a 300 KB one-`<pre>` page) reproduces it.
+- **The EMS arenas grow in chunks, and the board is their ceiling.** The
+  source, the formatted document and the line records each live in EMS as
+  up to eight handles (`br_ar_*`, `AR_MAX`), one logical run of pages across
+  them. Growth adds a handle and copies nothing; only the first spill copies
+  the conventional bytes in. 1.6c grew each arena by allocating a larger
+  handle, copying, then freeing the old one, so it needed the old run and the
+  new run at once, each CONTIGUOUS (`EMSV_ALLOC`). A 2 MB board refused a
+  768 KiB page's source at 512 KiB and View Source's document at 512 KiB,
+  with most of its pages free. A chunk is half what the arena already holds,
+  never less than what is missing and never less than an eighth of the
+  board's free pages (4 to 16, `br_armin`, so a 512 KB board is not handed
+  out 256 KB at a time); a run the board refuses is asked again at half its
+  size. **The slack goes back once the page stands still**: the worker's
+  last paint sets `br_trimdue` and the UI task's wake cuts each arena to
+  what it holds (`br_trimall`, `br_ar_trim`), only while the fetch is
+  `BN_DONE`; `br_free_all` clears a trim still owed, so one whose wake was
+  refused never cuts the next page's arenas mid-receive. A chunk wholly
+  past it is freed, a last chunk with four or more spare pages is replaced by one of
+  its used length, a copy of one chunk at the most, kept as it was when the
+  board has no such run. Growth can then be generous (few handles) without
+  the board paying for it after the load.
+- **A page whose server says its length is held whole at once.**
+  `Content-Length` is read a byte at a time beside `Content-Type`
+  (`br_clbyte`); an empty, non-numeric or 32-bit-overflowing value leaves
+  the length unknown. Known, the source's first growth asks for all of it
+  (`br_srcgrow`), so a page that fits is one conventional claim or one EMS
+  run instead of a regrow every 4 KiB - each of which may copy the whole
+  claim - and a refused whole length falls back to the 4 KiB step. A full
+  buffer holding every announced byte is the page's end, not a growth; a
+  body that ends short of its length is `Page truncated`. Without the field
+  nothing changes. This is the conventional path's gain as much as EMS's. None of the three has a
+  page ceiling of its own any more: the source's 1 MiB cap, the document's
+  1 MiB (`br_docensure`) and the line table's 62 KiB in EMS (6,348 lines;
+  a record is now a 32-bit offset, DX:AX) are gone. What stops a page is
+  the board (`EMSV_ALLOC`, eight handles on the machine) or 65,535 lines.
+  Without EMS nothing changes: the conventional reserve still cuts a page
+  and says `Page truncated`. Arenas a later feature needs (images, a script
+  heap) take the same `br_ar_*` routines.
+- **A broken connection is a cut page.** A socket that ends `NSK_FAILED`
+  rather than closing sets `br_trunc`, so the status says `Page truncated`
+  instead of presenting the bytes that arrived as the whole page. Pages
+  carry no `Content-Length` check (HTTP/1.0), so this is the only signal.
+
+`tests/brems.py` is the row, on `os8088_5150_cga_lpt_ems`: MartyPC's cable
+machine with a Lo-tech 2 MB board and 256 KB of conventional memory. It is
+the one machine with a network and EMS at once, and only a network fetch puts
+a source in EMS. An 80 KB page is fetched over the cable, and its source and
+document are both in EMS. The row then checks three things:
+
+- a select's next option, read out of the frame at `br_fsetval`'s last
+  instruction;
+- View Source against the source, byte for byte, past the 64 KiB seam;
+- Close Source's document and line count against the first parse's.
+
 The acceptance fixture is a deterministic 40 KB response over QEMU's NE2000
 path, plus a second launchable app. It checks the exact retained source length,
 truncation/capacity verdict, formatted bytes and lines, the grown document
@@ -131500,10 +132687,10 @@ socket handle, stream token, transfer state, and a 32-bit received-byte count.
 The record distinguishes connecting, receiving, complete, failed, and
 cancelled. The window shows the name, current state, and byte count; when a
 valid Content-Length is present it also shows the total. Cancel closes the
-socket and closes the file stream, committing the complete clusters already
-received. The partial file remains on disk with its current byte count shown;
-the Browser never launches it automatically. A second transfer starts only
-after the current one is terminal.
+socket and closes the file stream, then deletes the partial, which was
+written under a temporary name (71.20.3), so a file the user chose to replace
+is still there. The Browser never launches a download automatically. A
+second transfer starts only after the current one is terminal.
 
 The network worker owns socket calls and receives body data into a temporary
 buffer sized to one destination cluster. It parses and discards HTTP headers,
@@ -131561,8 +132748,8 @@ There is no Pause button in 1.6b: neither the socket driver nor the Browser's
 transfer state provides a safe pause contract. The active control is Cancel;
 after completion, cancellation or failure it becomes Close. Cancel is a
 request/acknowledge handshake with the network worker, so the UI never frees a
-buffer the worker may still be using. It commits a final partial cluster when
-possible and leaves a valid partial file on failure. Closing the manager hides
+buffer the worker may still be using. A failed or cancelled transfer deletes
+its temporary file and leaves the destination as it was (71.20.3). Closing the manager hides
 its secondary window; `File > Downloads` reopens it and the active transfer
 continues. Closing the Browser itself first completes any active page-fetch
 cancellation through the Browser's generation handshake, so the navigation
@@ -131594,13 +132781,16 @@ For an ordinary GET navigation, the Browser sends a URL whose final path
 component has an extension it does not render to the same Save dialog and
 Download Manager automatically. This applies to typed addresses and followed
 links. The final suffix is case-insensitive; a query or fragment is not part
-of it. `.htm`, `.html`, `.cgi`, and common server-rendered page suffixes
-(`.php`, `.phtml`, `.shtml`, `.asp`, `.aspx`, `.jsp`) remain Browser
-navigations. An extensionless URL also remains a Browser navigation because
-many sites serve their home page that way. Form submissions remain page
-navigations. The Browser does not infer file type from `Content-Type`; the
-existing response parser does not retain that header, and adding a second
-classification path would make link behavior depend on response timing.
+of it, and a dot in a directory name is ignored. `.htm`, `.html`, `.xhtml`,
+`.cgi`, and common server-rendered page suffixes (`.php`, `.phtml`, `.shtml`,
+`.asp`, `.aspx`, `.jsp`, and the period's Perl CGI `.pl` and ColdFusion
+`.cfm`) remain Browser navigations. An extensionless URL also remains a
+Browser navigation because many sites serve their home page that way.
+`tests/unit/t_brautosave.py` (fast) runs `br_dl_autosave` out of the built
+image under unicorn on 39 paths, and holds it to preserving every register. Form submissions remain page
+navigations. The suffix decides BEFORE a fetch. A page navigation whose
+response turns out not to be a page is the second route (71.20.4), decided at
+the headers by `Content-Type`.
 
 A non-rendered resource is a download action, not a page navigation. Opening
 the Save dialog and completing or cancelling the transfer must leave the
@@ -131611,14 +132801,153 @@ therefore continue to refer to the displayed page rather than the file URL.
 The `brdownload` and `brdownload-length` soak rows use a deterministic NE2000
 HTTP server to serve a binary body larger than the Browser page cap, once
 without `Content-Length` and once with it. They verify the reported total and
-compare the saved FAT file byte-for-byte. The current automated pair does not
-yet exercise redirect, cancellation, disk-full, busy refusal or repeated
-downloads; these remain acceptance checks for follow-up coverage. The
+compare the saved FAT file byte-for-byte. Cancellation and a failed transfer
+have rows of their own (71.20.3). Redirect, disk-full, busy refusal and
+repeated downloads are not exercised yet and remain acceptance checks for
+follow-up coverage. The
 `brdownload --automatic` row also checks that the location buffer and history
 remain on the displayed page through completion, then closes the manager and
 uses Reload to verify that the page is fetched again instead of reopening the
 download dialog. A later launch should open the downloaded file through the
 existing file association to verify exact bytes independently.
+
+#### 71.20.3 A download replaces the chosen file only when it completes
+
+The Save dialog never asks before replacing (§38): the name it returns is
+written over. A transfer is therefore **written under a temporary name** in
+the destination folder and renamed onto the chosen one only once it has
+completed. Before this, the transfer's first act was an empty
+`OSAPI_FILE_WRITE` of the chosen name, so an existing file was truncated
+before the first byte arrived. A failure then deleted what was left: the user
+lost the old file and got no new one.
+
+- **The name** (`br_dl_tmpmake`): the chosen base with the extension `$$$`,
+  or `$$1` to `$$9` when that one exists or *is* the chosen name.
+  - Existence is probed with a zero-capacity `OSAPI_FILE_READ`, which
+    answers from the directory entry and reads no data; `FERR_NOENT` means
+    free.
+  - With no free name, or a disk error, the transfer refuses as
+    `No writable destination` before connecting.
+- **Every write goes to it**: the creating write, every
+  `OSAPI_FILE_WRITE_SEQ` and `OSAPI_FILE_APPEND` call, and the stream's
+  close.
+- **On completion** (`br_dl_commit`, in the destination folder, bracketed
+  by `OSAPI_FILE_GOTO` as the partial delete is):
+  - it deletes the chosen name (`FERR_NOENT` is not an error), then
+    `OSAPI_FILE_RENAME`s the temporary file onto it;
+  - rename refuses an existing name, hence the delete first.
+  - If either step fails, the temporary file **stays**: from the delete on,
+    it may be the only copy. The manager says
+    `Saved as .$$$; could not rename`, and clears any pending cancel so no
+    cancel path deletes it.
+- **On failure or cancel**, only the temporary file is deleted. The chosen
+  name is never touched.
+
+**A settled download stays settled.** `DL_DONE`, `DL_FAIL` and `DL_CANCEL`
+are terminal:
+
+- The worker's `br_dl_step` acts only from `DL_OPEN` up to, but not
+  including, `DL_DONE`. A cancel request is not cleared when it completes.
+  Before this rule the worker read the request every tick and turned
+  `DL_CANCEL` back into `DL_CANCELREADY`. The UI then deleted the partial
+  that was already gone, failed, and the loop repeated for as long as the
+  Browser ran.
+- Exit on a terminal state only dismisses the manager. On `DL_FAIL` it used
+  to fall through to a cancel request, which re-deleted the gone partial and
+  stayed on `Could not delete partial file`. Under `Saved as .$$$` it would
+  have deleted the only copy.
+- The title-bar close on a settled manager dismisses it too (`br_dl_mgr_close_after`
+  = 2). It used to re-enter the raced-cancel path that keeps an error on the
+  glass, so a failed download's manager could not be closed.
+
+`tests/brdownload.py` puts a `DOWNLOAD.BIN` on its disk first. A completed
+transfer must replace it with the exact payload and leave no `.$$`*x* file.
+These legs must leave the file byte for byte, leave no temporary file, close
+the manager, and then hold the download's state for four seconds:
+
+- `--cancel-active` (`brdownload-cancel`) and `--close-active`
+  (`brdownload-close`) hold `DL_CANCEL`;
+- `--fail-exit` and `--fail-close` (`brdownload-failexit`,
+  `brdownload-failclose`) serve half of an announced body and hold
+  `DL_FAIL`.
+
+#### 71.20.4 A page fetch that answers a file becomes a download
+
+A link whose suffix is a page's, such as `download.php?id=5`, `get.cgi?f=x`,
+or one with no suffix, navigates (71.20). The period's sites serve files
+exactly that way. Such a fetch used to drain the whole body and discard it,
+then say `Response is not HTML`, so a click could not fetch the file at all.
+
+**At the headers, the worker hands the fetch to the Download Manager.** In
+`br_nstep`, on the first receive that ends the header block (`BN_BODY`) with
+`[br_nonhtml]` set, the worker:
+
+- checks that the status is 200, that the fetch is the top-level page (not a
+  frame child), that it is not a POST (which a GET cannot repeat), and that it
+  is still this fetch's (`br_gchk`);
+- if all hold, fails the fetch with `Not a page: saving it` (`BN_ERR`),
+  closes the socket at once instead of after the whole file, and only then
+  sets `[br_fin]` = 11 and wakes the UI task. Both are written before the
+  wake, so the wake always finds them.
+
+`[br_nonhtml]` is set where the Content-Type line ends, which can be mid
+header block. Until the blank line the worker keeps draining and parsing
+headers, so a `Content-Disposition` filename or a `Set-Cookie` after
+Content-Type still reaches the Download Manager.
+
+Any other status, a frame child or a POST keeps the old message.
+
+**The UI task does the rest** (`br_onwake`), only when `[br_fin]` = 11 and
+`[br_nstate]` = `BN_ERR`. A newer navigation resets both, so a stale wake
+does nothing.
+
+- It calls `br_dl_link` with `AX` = `FFFFh` on `br_ubuf`, the URL this
+  fetch was for after any redirect. That is the route a `.zip` link takes in
+  `br_go`: the Save dialog, then the Download Manager's own GET.
+- If `br_go` pushed the URL to the history (`[br_pushed]`, set by
+  `br_hpush`), it had released the page before it, so the entry is dropped
+  and `br_hgo` brings the page back the way Back does: bar resynced, no push.
+  The page fetch and the download then run on their own sockets.
+- With nothing before it in the history, or when this fetch pushed nothing
+  (Back, Forward, a History pick, Reload, or a URL store that refused), the
+  history is left as it is and the window stays empty with the status said.
+  The entry it stands on is the URL that answered the file, so fetching it
+  again would only answer the file again.
+
+The file is fetched twice, once cut at the headers, because the page fetch's
+receive claim is the page's and the Download Manager streams to disk with a
+buffer of its own. Handing a socket from one to the other would be a second
+transfer path. 146 bytes of the primary image.
+
+**The suggested name is the server's when it can be.** These URLs end in
+`get.cgi` or `download.php`, which is no name for a file. While the page
+fetch parses its headers, `br_cdbyte` watches every header line for
+`filename=` (folded; only `Content-Disposition` carries it):
+
+- it keeps the value, quoted or not, up to `"`, `;` or the line's end;
+- it drops the value when it is over 12 characters, empty, or holds any of
+  `/ \ : * ? < > |`. A path is never a name, and `../../AUTOEXEC.BAT` names
+  nothing. RFC 5987's `filename*=` does not match the key;
+- its state lives in `br_cdstate`, `br_cdlen` and `br_cdname`, and is
+  cleared at the top of every `br_go` and on every redirect.
+
+`br_dl_defaultname` offers that name only when `br_dl_index` = `FFFFh` (this
+route). A `.zip` link's `br_go` cleared it first, and a link index never
+reads it. Otherwise the name is the URL's last component, else
+`DOWNLOAD.BIN`. 213 bytes: `.text` 198 and `.bss` 15.
+`tests/unit/t_brautosave.py` feeds whole header blocks through `br_hdrb`
+under unicorn and asks `br_dl_defaultname` on 11 cases.
+
+`brdownload-ctype` (`tests/brdownload.py --content-type`) clicks
+`get.cgi?id=7`, served as `application/octet-stream` with
+`filename="DOWNLOAD.BIN"`. It requires:
+
+- the Save dialog;
+- the page URL and the history count unchanged;
+- a byte-exact file under the header's name, where the URL would have
+  suggested `get.cgi`;
+- two GETs of the link at the server. One GET would be the suffix's route,
+  not this one.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 
@@ -131671,6 +133000,57 @@ unsupported controls; a local HTTP test checks the POST request line, headers,
 exact length and body. Existing GET, formatting and frame-navigation behavior
 remains covered.
 
+#### 71.20.5 The Download Manager is part 0
+
+The Download Manager is in the Browser's lazy part 0 (§20.12): its window,
+the Save dialog's answer, the disk writes and the transfer engine
+(`apps/browser/brdownload_engine.inc`), with the painter and icons that were
+already there. A Browser that never downloads never reads it.
+
+The primary segment went from 48,189 to 43,105 bytes. Part 0 went from 3,342
+to 9,221 bytes (6,886 packed), and is claimed only while it is in. This is
+roadmap step S2 (docs/plans/BROWSER-1.7-ROADMAP.md).
+
+**What stays resident** (`brdownload.inc`) is what must answer while the part
+is out, plus what the part reads:
+
+- the strings and tables, read through DS;
+- `br_dl_autosave`, the suffix test every link click asks;
+- the button's layout proc (`br_dl_btplace`, an `os88ui` slot);
+- one **thunk** per entry the kernel or the Browser calls. A callback's
+  address is an offset in the primary's code segment, so a far call into the
+  part has to start there. The vectors are `br_dl_vec`, in the order of
+  `BRDL_*` in `brdownload_const.inc`. The part leads with its table of
+  offsets, and `br_dl_partload` sets each vector's segment from `op_cseg`;
+- `br_dl_rtab`, one far vector per primary routine the part calls back, onto
+  a `call`/`retf` shim. A near call from the part would land in the part's
+  own segment. `tools/brdlsyms.py`, which exports the primary's offsets to
+  the part, refuses a near `call` or `jmp` to an imported name.
+
+**When the part is dropped** is decided in one place, `br_dl_after`. Every
+thunk returns through it. The part is dropped when there is no manager window
+and no download between the Save dialog and its end (`DL_PICK` up to
+`DL_DONE`). The part never drops itself, because the code after an `op_drop`
+would run in freed memory. Copy of a page selection loads the part, uses it
+and is dropped the same way, where it used to stay in until a download ended.
+
+**The worker is never inside a dropped part:**
+
+- The worker enters the part only from `br_dl_step` (resident), and only in
+  `DL_OPEN` to `DL_BODY` with nothing pending and no cancel request.
+- The pending re-wake and the cancel acknowledgement (`DL_CANCELREADY`) are
+  resident.
+- Where the engine hands the UI a cluster (`DL_PENDING`) or the transfer's
+  end (`DL_ENDWAIT`), it sets `br_dl_publish` and returns. `br_dl_step`
+  stores the state and wakes the UI only after the far call is back.
+- The UI moves a transfer to an end only from a state the worker published
+  (`DL_ENDWAIT`, `DL_CANCELREADY`). It moves `DL_OPEN` to `DL_BODY` only to
+  `DL_CANCELREQ`, which still holds the part.
+
+**A link to save loads the part first**, before the Save dialog opens. If it
+cannot be read (no room, or `BROWSER.O88` is gone), the status line says
+`Download Manager unavailable` and no dialog opens.
+
 ### 71.21 Browser 1.6c — incremental HTML and classic navigation
 
 This section is the 1.6c acceptance contract, not a claim that every item has
@@ -131688,7 +133068,8 @@ Browser's other page arenas. Source growth and each worker write remain
 bounded by the allocated capacity; the worker is parked while the UI grows or
 migrates the source. Without EMS, the existing conventional-memory ceiling
 still produces a visible source cutoff. EMS source capacity grows in 256 KiB
-groups and is capped at 1 MiB by the Browser's logical source representation.
+groups, and its ceiling is the board's: the 1 MiB cap 1.6c shipped is
+withdrawn (71.18, *The EMS arenas grow in chunks*).
 The parser consumes only the newly
 available source range and retains a logical source cursor plus its compact
 semantic state between worker passes. An incomplete tag, quoted attribute or

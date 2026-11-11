@@ -351,8 +351,9 @@ ITEMS = [
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
-     "cartridge, DrMarco and the demo video. MIDIRack is on both software "
-     "disks, so its songs open from either.",
+     "cartridge, DrMarco and the demo video, and the REDLINE benchmark, "
+     "Telnet and CDRack, which the 720KB system disk has no room for. "
+     "MIDIRack is on both software disks, so its songs open from either.",
      [("more720.img", "720KB", "")]),
 
     ("emu", "Emulator system disk", True,

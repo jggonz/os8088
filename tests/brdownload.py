@@ -39,19 +39,45 @@ URL = "http://10.0.2.2:%d/index.htm" % PORT
 WITH_LENGTH = "--content-length" in sys.argv
 LONG_PERCENT = "--long-percent" in sys.argv
 AUTO = "--automatic" in sys.argv
+# --content-type: the fifth link is a PAGE suffix (.cgi) whose 200 answers
+# application/octet-stream, so the click navigates and the Browser turns the
+# fetch into a download once the headers say so (SPEC.md 71.20.4). It is
+# AUTO's click and AUTO's checks, plus two GETs of the link at the server.
+# The URL alone would suggest GET.CGI; the response's Content-Disposition says
+# filename="DOWNLOAD.BIN", so the file the row reads back proves the header
+# named it (SPEC.md 71.20.4).
+CTYPE = "--content-type" in sys.argv
+AUTO = AUTO or CTYPE
+DLPATH = b"/get.cgi?id=7" if CTYPE else b"/download-test.zip"
 CANCEL_MODE = next((arg for arg in ("--cancel-active", "--close-active",
                                     "--close-complete")
                     if arg in sys.argv), None)
+# --fail-exit / --fail-close: the server announces the whole body and sends
+# half, so the transfer FAILS ("Connection ended before file completed") and
+# its partial is deleted. Then the manager is dismissed - by its Exit button,
+# or by its title-bar close box - and must GO, with the old DOWNLOAD.BIN as it
+# was. Both used to keep the window: Exit on DL_FAIL fell through to a cancel
+# request, and the close box re-entered the raced-cancel path that keeps an
+# error visible, so a failed download's manager could not be dismissed.
+FAIL_MODE = next((arg for arg in ("--fail-exit", "--fail-close")
+                  if arg in sys.argv), None)
+WITH_LENGTH = WITH_LENGTH or bool(FAIL_MODE)
 SHOTDIR = next((arg.split("=", 1)[1] for arg in sys.argv
                 if arg.startswith("--shots=")), None)
 PAYLOAD = bytes(((i * 37 + (i >> 5) + 11) & 255)
                 for i in range(70003 if LONG_PERCENT else 8482))
+# A DOWNLOAD.BIN is already on the disk before the transfer: a download is
+# written under a temporary .$$$ name and renamed onto the chosen one only when
+# it completes (SPEC.md 71.20.3), so a completed transfer must REPLACE this and
+# a cancelled one must leave it byte for byte - where the first write used to
+# truncate it, and a failure then deleted what was left.
+OLD = b"THE FILE THIS DOWNLOAD REPLACES, KEPT UNTIL IT COMPLETES.\r\n" * 37
 PAGE = (b"<html><head><title>Download test</title></head><body>"
         b"<p><a href=\"/ems-pressure.htm\">EMS pressure</a></p>"
         b"<p><a href=\"/emsgrowth.htm\">EMS growth</a></p>"
         b"<p><a href=\"/mem96k.htm\">Memory 96K</a></p>"
         b"<p><a href=\"/mem196k.htm\">Memory 196K</a></p>"
-        b"<p><a href=\"/download-test.zip\">download-test.zip</a></p>"
+        b"<p><a href=\"" + DLPATH + b"\">download-test.zip</a></p>"
         b"</body></html>")
 
 
@@ -83,22 +109,28 @@ class Server(threading.Thread):
                 path = req.split(b" ", 2)[1] if b" " in req else b"/"
                 if path == b"/index.htm":
                     body, kind = PAGE, b"text/html"
-                elif path == b"/download-test.zip":
+                elif path == DLPATH:
                     body, kind = PAYLOAD, b"application/octet-stream"
                 else:
                     body, kind = b"missing", b"text/plain"
                 response = b"HTTP/1.0 200 OK\r\nContent-Type: " + kind
-                if path == b"/download-test.zip" and WITH_LENGTH:
+                if path == DLPATH and WITH_LENGTH:
                     response += b"\r\nContent-Length: %d" % len(body)
+                if path == DLPATH and CTYPE:
+                    response += (b"\r\nContent-Disposition: attachment; "
+                                 b"filename=\"DOWNLOAD.BIN\"")
                 response += b"\r\n\r\n"
                 conn.sendall(response)
-                if SHOTDIR and path == b"/download-test.zip":
+                if SHOTDIR and path == DLPATH:
                     cancel_test = CANCEL_MODE in ("--cancel-active", "--close-active")
                     chunk = 512 if cancel_test else 2048
                     delay = 2.0 if cancel_test else 0.15
                     for offset in range(0, len(body), chunk):
                         conn.sendall(body[offset:offset + chunk])
                         time.sleep(delay)  # host: the SERVER's dribble
+                elif FAIL_MODE and path == DLPATH:
+                    conn.sendall(body[:len(body) // 2])
+                    time.sleep(0.5)   # host: let the half land, then hang up
                 else:
                     conn.sendall(body)
             except OSError:
@@ -110,6 +142,13 @@ class Server(threading.Thread):
 def word(m, pseg, offset):
     b = m.readseg(pseg, offset, 2)
     return b[0] | b[1] << 8
+
+
+def leftovers(volume):
+    """Temporary transfer files (br_dl_tmpmake's NAME.$$$ / .$$1-.$$9) still
+    in the destination folder."""
+    return [e.name for e in volume.listdir("")
+            if not e.is_dir and e.name.rsplit(".", 1)[-1][:2] == "$$"]
 
 
 def manager_rect(m, pseg, sy, S):
@@ -192,10 +231,15 @@ def main():
         os.makedirs(SHOTDIR, exist_ok=True)
     os88fixture.need("build/browser.o88", "build/ether360.img")
     dlimg = os.path.join(ethernet.os88qemu.RUNDIR, "brdownload360.img")
+    seed = os.path.join(ethernet.os88qemu.RUNDIR, "brdlseed")
+    os.makedirs(seed, exist_ok=True)
+    with open(os.path.join(seed, "DOWNLOAD.BIN"), "wb") as f:
+        f.write(OLD)
     subprocess.run(["python3", "tools/os88disk.py", "-o",
                     dlimg, "--size", "360",
                     "--folder", "SYSTEM/APPDATA",
-                    os88build.at("build/browser.o88")],
+                    os88build.at("build/browser.o88"),
+                    os.path.join(seed, "DOWNLOAD.BIN")],
                    check=True, stdout=subprocess.DEVNULL)
     ethernet.os88qemu.make_test("ETHER=1", "TESTIMG=build/ether360.img",
                                 "TESTAPPS=" + dlimg)
@@ -306,9 +350,9 @@ def main():
                        for i in range(5)]
             hrefs = [bytes(m.readseg(word(m, pseg, sy["br_lnkseg"]), off, 64))
                      .split(b"\0", 1)[0] for off in offsets]
-            if hrefs[-1] != b"/download-test.zip":
-                failures.append("fifth href record is %r, expected /download-test.zip"
-                                % hrefs[-1])
+            if hrefs[-1] != DLPATH:
+                failures.append("fifth href record is %r, expected %r"
+                                % (hrefs[-1], DLPATH))
             line = next((i for i in range(lines_n)
                          if u32(table[i * 10:i * 10 + 4]) <= link + 4
                          < u32(table[i * 10 + 4:i * 10 + 8])), None)
@@ -334,6 +378,18 @@ def main():
                             pseg, sy["br_dl_state"], 1)[0] == 1,
                         secs=15, what="automatic Save dialog for DOWNLOAD.ZIP",
                         poll=0.2)
+                    if got_dialog and CTYPE:
+                        # The dialog opens FIRST in br_onwake's hand-over, and
+                        # the page before it comes back after (br_hgo): its
+                        # history entry dropped, the bar resynced. Asked at
+                        # once, the bar and the history are still the cut
+                        # fetch's - so the row waits for the hand-over to end
+                        ethernet.os88qemu.acted(
+                            m, lambda: word(m, pseg, sy["br_histn"])
+                            == page_history_count, secs=15,
+                            what="the page before the file to come back",
+                            poll=0.2)
+                        ethernet.settle(m)
                     if not got_dialog:
                         print("automatic click diagnostic: target index=%d line=%d xy=%d,%d nstate=%d requests=%r"
                               % (encoded_index, line, px, py,
@@ -386,6 +442,62 @@ def main():
                     ethernet.settle(m)
                 if not failures:
                     m.key("Enter")  # prefilled 8.3 name, default Save
+                    if FAIL_MODE:
+                        if not ethernet.os88qemu.acted(
+                                m, lambda: (m.readseg(
+                                    pseg, sy["br_dl_state"], 1)[0] == 12
+                                    and word(m, pseg, sy["br_dl_win"]) != 0),
+                                secs=60, what="the half-sent transfer's failure",
+                                poll=0.1):
+                            raise RuntimeError(
+                                "the short body did not end in DL_FAIL: state=%d"
+                                % m.readseg(pseg, sy["br_dl_state"], 1)[0])
+                        print("failed as expected; msg=%04X" % word(
+                            m, pseg, sy["br_dl_msg"]))
+                        ethernet.settle(m)
+                        if FAIL_MODE == "--fail-exit":
+                            rect = m.readseg(pseg, sy["br_dl_btnrects"], 8)
+                            x1, y1, x2, y2 = (int.from_bytes(rect[i:i + 2],
+                                                             "little")
+                                              for i in (0, 2, 4, 6))
+                            mo.click((x1 + x2) // 2, (y1 + y2) // 2)
+                        else:
+                            mx, my, mw, _ = manager_rect(m, pseg, sy, S)
+                            mo.click(mx + 13, my + 9)
+                        if not ethernet.os88qemu.acted(
+                                m, lambda: word(m, pseg, sy["br_dl_win"]) == 0,
+                                secs=15, what="the failed manager to close",
+                                poll=0.1):
+                            failures.append(
+                                "%s did not dismiss the failed manager: "
+                                "state=%d msg=%04X" % (
+                                    FAIL_MODE[2:], m.readseg(
+                                        pseg, sy["br_dl_state"], 1)[0],
+                                    word(m, pseg, sy["br_dl_msg"])))
+                        seen = set()
+                        deadline = time.time() + 4
+                        while time.time() < deadline:
+                            seen.add(m.readseg(pseg, sy["br_dl_state"], 1)[0])
+                            time.sleep(0.1)
+                        if seen != {12}:
+                            failures.append("the failed download did not stay "
+                                            "DL_FAIL: states %s" % sorted(seen))
+                        volume = os88flush.Volume(open(dlimg, "rb").read())
+                        try:
+                            kept = volume.read("DOWNLOAD.BIN")
+                        except os88flush.FlushError:
+                            kept = None
+                        if kept != OLD:
+                            failures.append("a failed download did not leave "
+                                            "the existing DOWNLOAD.BIN")
+                        if leftovers(volume):
+                            failures.append("a failed download left %s"
+                                            % ", ".join(leftovers(volume)))
+                        m.quit()
+                        if failures:
+                            raise RuntimeError("; ".join(failures))
+                        print("brdownload %s: ok" % FAIL_MODE[2:])
+                        return
                     if CANCEL_MODE in ("--cancel-active", "--close-active"):
                         ethernet.os88qemu.acted(
                             m,
@@ -427,12 +539,19 @@ def main():
                                      word(m, pseg, sy["br_dl_msg"]))
                         print("after input: state=%d cancel=%d close_after=%d win=%04X fail=%d msg=%04X"
                               % immediate)
+                        trace = {immediate[0]}
+                        if immediate[1]:
+                            trace.add(9)
+
+                        def cancel_settled():
+                            state = m.readseg(pseg, sy["br_dl_state"], 1)[0]
+                            trace.add(state)
+                            if m.readseg(pseg, sy["br_dl_cancel_req"], 1)[0]:
+                                trace.add(9)
+                            return (word(m, pseg, sy["br_dl_win"]) == 0
+                                    and state in (12, 13))
                         settled = ethernet.os88qemu.acted(
-                            m,
-                            lambda: (word(m, pseg, sy["br_dl_win"]) == 0
-                                     and m.readseg(
-                                         pseg, sy["br_dl_state"], 1)[0]
-                                     in (12, 13)),
+                            m, cancel_settled,
                             secs=30, what="cancel cleanup and manager close",
                             poll=0.1)
                         if not settled:
@@ -448,21 +567,46 @@ def main():
                                                          "download-cancelled.png")],
                                            check=True,
                                            stdout=subprocess.DEVNULL)
-                        if CANCEL_MODE == "--close-active" and not m.readseg(
-                                pseg, sy["br_dl_cancel_req"], 1)[0]:
+                        if CANCEL_MODE == "--close-active" and not trace & {9, 10}:
                             failures.append("closing active manager did not request cancellation")
+                        # A SETTLED cancel stays settled: the worker passes
+                        # br_dl_step every tick, and a cancel request left
+                        # standing on a terminal state turned it back into
+                        # CANCELREADY, so the UI deleted the (gone) partial
+                        # again, failed, and the two went round for as long
+                        # as the Browser ran - disk calls every lap
+                        if settled:
+                            seen = set()
+                            deadline = time.time() + 4
+                            while time.time() < deadline:
+                                seen.add(m.readseg(pseg, sy["br_dl_state"], 1)[0])
+                                time.sleep(0.1)
+                            if seen != {13}:
+                                failures.append(
+                                    "the cancelled download did not stay "
+                                    "DL_CANCEL: states %s, cancel=%d"
+                                    % (sorted(seen), m.readseg(
+                                        pseg, sy["br_dl_cancel_req"], 1)[0]))
+                            else:
+                                print("cancel settled at DL_CANCEL and stayed")
                         volume = os88flush.Volume(open(
                             dlimg, "rb").read())
                         try:
-                            volume.read("DOWNLOAD.BIN")
+                            kept = volume.read("DOWNLOAD.BIN")
                         except os88flush.FlushError:
-                            print("cancelled partial file removed from disk")
+                            kept = None
+                        if kept != OLD:
+                            failures.append(
+                                "cancel did not leave the existing DOWNLOAD.BIN "
+                                "as it was: %s" % ("gone" if kept is None else
+                                                   "%d bytes" % len(kept)))
                         else:
-                            entries = ["%s (%d bytes)" % (e.name, e.size)
-                                       for e in volume.listdir("")
-                                       if not e.is_dir]
-                            failures.append("cancel left DOWNLOAD.BIN on disk; root has %s"
-                                            % ", ".join(entries))
+                            print("existing DOWNLOAD.BIN intact after cancel")
+                        if leftovers(volume):
+                            failures.append("cancel left its temporary file: %s"
+                                            % ", ".join(leftovers(volume)))
+                        else:
+                            print("cancelled partial file removed from disk")
                         m.quit()
                         if failures:
                             raise RuntimeError("; ".join(failures))
@@ -563,7 +707,7 @@ def main():
                         failures.append("download ended in state %d, not complete"
                                         % state)
                         msgptr = word(m, pseg, sy["br_dl_msg"])
-                        seg = word(m, pseg, sy["br_dl_partpaint"] + 2)
+                        seg = word(m, pseg, sy["br_dl_vec"] + 2)
                         print("download diagnostic: fail=%d win=%04X msg=%04X text=%r part=%r vec=%r name=%r"
                               % (m.readseg(pseg, sy["br_dl_fail_reason"], 1)[0],
                                  word(m, pseg, sy["br_dl_win"]),
@@ -707,15 +851,29 @@ def main():
             failures.append("DOWNLOAD.BIN differs at byte %d: got %d bytes, expected %d"
                             % (first, len(got), len(PAYLOAD)))
         else:
-            print("exact %s file verified: %d bytes" % (
+            print("exact %s file verified: %d bytes, replacing the old one" % (
                 "known-length" if WITH_LENGTH else "unknown-length", len(got)))
+        if leftovers(volume):
+            failures.append("a completed download left its temporary file: %s"
+                            % ", ".join(leftovers(volume)))
     except Exception as exc:
         failures.append("could not read back DOWNLOAD.BIN: %s" % exc)
     if b"GET /index.htm " not in b"\n".join(server.requests):
         failures.append("the NE2000 server did not receive the index request")
-    if b"GET /download-test.zip " not in b"\n".join(server.requests):
+    gets = [r for r in server.requests if r.startswith(b"GET " + DLPATH + b" ")]
+    if not gets:
         failures.append("the NE2000 server did not receive the payload request; requests=%r"
                         % server.requests)
+    elif CTYPE and len(gets) < 2:
+        # ONE GET would be br_dl_autosave's route (the suffix), not the
+        # content type's: the page fetch that stopped at the headers, then the
+        # Download Manager's own
+        failures.append("the .cgi link was fetched %d time(s), not as a page "
+                        "and then as a download; requests=%r"
+                        % (len(gets), server.requests))
+    elif CTYPE:
+        print("content-type handoff: page fetch cut at the headers, then "
+              "the Download Manager's GET")
     for failure in failures:
         print("FAIL: " + failure)
     print("brdownload: %s" % ("FAILED" if failures else "ok"))

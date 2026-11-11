@@ -17,6 +17,7 @@ br_dl_s_receiving:  db 'Downloading...', 0
 br_dl_s_canceling:  db 'Cancelling...', 0
 br_dl_s_cancelled:  db 'Cancelled; partial deleted', 0
 br_dl_s_delerror:   db 'Could not delete partial file', 0
+br_dl_s_kept:       db 'Saved as .$$$; could not rename', 0
 br_dl_s_complete:   db 'Download complete.', 0
 br_dl_s_http:       db 'HTTP request failed', 0
 br_dl_s_headers:    db 'Invalid HTTP headers', 0
@@ -52,217 +53,525 @@ br_dl_ext_shtml:    db 'shtml', 0
 br_dl_ext_asp:      db 'asp', 0
 br_dl_ext_aspx:     db 'aspx', 0
 br_dl_ext_jsp:      db 'jsp', 0
+br_dl_ext_pl:       db 'pl', 0      ; Perl CGI and ColdFusion, the period's
+br_dl_ext_cfm:      db 'cfm', 0     ; other two page generators, and XHTML,
+br_dl_ext_xhtml:    db 'xhtml', 0   ; which br_ctbyte already renders
 br_dl_exttab:       dw br_dl_ext_htm, br_dl_ext_html, br_dl_ext_cgi
                     dw br_dl_ext_php, br_dl_ext_phtml, br_dl_ext_shtml
-                    dw br_dl_ext_asp, br_dl_ext_aspx, br_dl_ext_jsp, 0
+                    dw br_dl_ext_asp, br_dl_ext_aspx, br_dl_ext_jsp
+                    dw br_dl_ext_pl, br_dl_ext_cfm, br_dl_ext_xhtml, 0
+
+br_dl_s_nopart:     db 'Download Manager unavailable', 0
+br_dl_s_nocold:     db 'Browser part unavailable', 0
+br_dl_s_imgbusy:    db 'Busy decoding an image', 0
+
+; =============================================================================
+; THE DOWNLOAD MANAGER LIVES IN PART 0 (SPEC.md 71.20.5, roadmap S2)
+;
+; The window, the Save dialog's callback, the disk writes and the transfer
+; engine are brdownload_engine.inc, assembled into the lazy part with the
+; painter (brdownload_paint.inc). What stays here is what must answer while
+; the part is NOT in memory - the strings and tables the part reads through
+; DS, the suffix test a link click asks (br_dl_autosave), the routines the
+; part calls back (br_dl_rtab) - and one THUNK per entry the kernel or the
+; Browser calls: a callback's address is an offset in the primary's code
+; segment, so a far call into the part has to start here.
+;
+; WHO MAY DROP THE PART is decided in one place, br_dl_after, which every
+; thunk returns through: no manager window, and no download between the Save
+; dialog and its end (DL_PICK up to DL_DONE). The worker enters the part only
+; from br_dl_step, only in DL_OPEN..DL_BODY, and the UI never moves one of
+; those states to an end without the worker first publishing a hand-over from
+; HERE, after its far call has returned - so the part is never dropped under
+; the worker. And the part never drops itself: the code after an op_drop
+; would run in freed memory.
+; =============================================================================
+
+; W_PAINT for the manager window (br_dl_tpl): the window exists, so the part is in
+br_dl_paint:
+    call far [br_dl_vec+BRDL_PAINT]
+    ret
 
 ; File > Downloads is also the recovery path after the user closes the
 ; secondary manager window. It is unbound and intentionally reused.
 br_dl_show:
-    push ax
-    push bx
+    call br_dl_partload
+    jc br_dl_ret
+    call far [br_dl_vec+BRDL_OPEN]
+    jmp short br_dl_after
+
+; AX = link index, or FFFFh for br_ubuf's already-resolved URL (brdownload_
+; engine.inc's br_dlx_link). The part comes in before the Save dialog opens:
+; the dialog's answer is br_dl_saved, which is the part's
+br_dl_link:
+    call br_dl_partload
+    jc .refused
+    call far [br_dl_vec+BRDL_LINK]
+    jmp short br_dl_after
+.refused:
     push si
-    call br_dl_openwin
+    mov si, br_dl_s_nopart          ; no room for it, or BROWSER.O88 gone
+    call br_dl_why
+    call br_errst
     pop si
-    pop bx
+    ret
+
+; br_dl_why - SI = a part 0 refusal's message -> the decode's instead when a
+; decoder part (2 to 6) is in: with part 1 it holds the claims part 0 needed
+; (SPEC.md 71.23, rows 6 and 8), and that is not a missing file
+br_dl_why:
+    push ax
+    push cx
+    mov cl, 2
+.p:
+    mov al, cl
+    call op_seg
+    or ax, ax
+    jnz .busy
+    inc cl
+    cmp cl, 6
+    jbe .p
+    jmp short .out
+.busy:
+    mov si, br_dl_s_imgbusy
+.out:
+    pop cx
     pop ax
     ret
 
-; AX = link index, or FFFFh for br_ubuf's already-resolved URL. A link is
-; resolved against its owning frame without changing the Browser's base URL;
-; either route asks the standard Save dialog.
-br_dl_link:
-    push ax
+; Also called by br_onwake, to reap a cancel whose manager was closed - which
+; leaves the download mid-flight, so the part is in. Not loaded: nothing to do
+br_dl_onwake:
+    cmp word [br_dl_vec+BRDL_WAKE+2], 0
+    je br_dl_ret
+    call far [br_dl_vec+BRDL_WAKE]
+    jmp short br_dl_after
+
+; The manager window's callbacks: it exists, so the part is in
+br_dl_managerclose:
+    call far [br_dl_vec+BRDL_CLOSE]
+    jmp short br_dl_after
+br_dl_timer:
+    call far [br_dl_vec+BRDL_TIMER]
+    jmp short br_dl_after
+br_dl_onup:
+    call far [br_dl_vec+BRDL_UP]
+    jmp short br_dl_after
+br_dl_ondrag:
+    call far [br_dl_vec+BRDL_DRAG]
+    jmp short br_dl_after
+; ...and the Save dialog's: DL_PICK holds the part until it answers
+br_dl_saved:
+    call far [br_dl_vec+BRDL_SAVED]
+    jmp short br_dl_after
+
+; The Browser's own close. With no part in, no download is live: nothing of
+; one is open, so only the page fetch is stopped (br_dlx_mainclose's
+; close_now does that first too)
+br_dl_mainclose:
+    call br_imghalt                 ; the image engine stops, its socket closed
+                                    ; (SPEC.md 71.26); what it drew stays in
+                                    ; case the close is refused
+    cmp word [br_dl_vec+BRDL_MAIN+2], 0
+    jne .part
+    call br_abort
+    call br_icclose                 ; the image cache files (SPEC.md 71.27)
+    clc
+    ret
+.part:
+    call far [br_dl_vec+BRDL_MAIN]
+    jc br_dl_after                  ; refused: the page stays, and its file
+    call br_icclose                 ; (flags kept: CF=0, the close goes on)
+    ; (falls into br_dl_after)
+
+; br_dl_after - drop part 0 if nothing needs it now. Every register and the
+; flags are kept: a close negotiator's CF is its answer
+br_dl_after:
+    pushf
+    cmp byte [br_dl_depth], 0
+    jne .keep                       ; a rare action is still inside the part
+    cmp byte [br_ctxopen], 0
+    jne .keep                       ; a context menu is up: its click is ours
+    cmp word [br_dl_win], 0
+    jne .keep                       ; the manager is on the glass
+    cmp byte [br_dl_state], DL_PICK
+    je .keep                        ; the Save dialog will answer br_dl_saved
+    cmp byte [br_dl_state], DL_OPEN
+    jb .drop
+    cmp byte [br_dl_state], DL_DONE
+    jb .keep                        ; a transfer, or its end, is in flight
+.drop:
+    cmp word [br_dl_vec+2], 0
+    je .keep                        ; not in
+    call br_dl_partdrop
+.keep:
+    popf
+br_dl_ret:
+    ret
+
+; br_mapchk - a left click's hit DX:AX (br_hitofs): when its cell is an image
+; box whose image has a map, part 0 answers it (SPEC.md 71.32) and CF=0; else
+; CF=1 and every register as it was
+br_mapchk:
+    cmp byte [br_hiflag], 0
+    je .no
     push bx
+    mov bx, [br_hiimg]
+    cmp bx, BR_IMGTMAX
+    jae .nob
+    shl bx, 1
+    cmp word [br_imap + bx], 0
+    pop bx
+    je .no
+    push ax
+    push dx
+    call br_mapclick                ; CF=0 answered; CF=1 part 0 refused
+    pop dx
+    pop ax
+    ret
+.nob:
+    pop bx
+.no:
+    stc
+    ret
+
+; --- THE RARELY USED UI IS PART 0'S TOO (SPEC.md 71.24, roadmap S3) ---------
+; One thunk each, under the name the Browser always called: the context menu,
+; View and Close Source, a form's submit and a bookmark's commit. br_dl_cold
+; loads the part - a disk read the first time it is wanted - and counts the
+; call in br_dl_depth, so br_dl_after never drops the part while one of them
+; is on the stack: the menu's Save Page As opens a dialog whose callbacks can
+; repaint (br_paint), and its Save Link As runs br_dl_link's own thunk.
+; The callee's registers and CF are its answer: INC and DEC leave CF alone.
+br_ctxshow:
+    mov byte [br_dl_sel], BRDL_CTXSHOW
+    jmp short br_dl_cold
+br_ctxclick:                        ; the popup is up, so the part is in
+    mov byte [br_dl_sel], BRDL_CTXCLICK
+    jmp short br_dl_cold
+br_sourcetoggle:
+    mov byte [br_dl_sel], BRDL_SRC
+    jmp short br_dl_cold
+br_submit:
+    mov byte [br_dl_sel], BRDL_SUBMIT
+    jmp short br_dl_cold
+br_mapclick:
+    mov byte [br_dl_sel], BRDL_MAPCLICK
+    jmp short br_dl_cold
+br_bmcommit:
+    mov byte [br_dl_sel], BRDL_BMCOMMIT
+br_dl_cold:
+    call br_dl_partload
+    jc .refused
+    push bx
+    push ax
+    mov bl, [br_dl_sel]
+    xor bh, bh
+    mov ax, [br_dl_vec+bx]
+    mov [br_dl_coldvec], ax
+    mov ax, [br_dl_vec+bx+2]
+    mov [br_dl_coldvec+2], ax
+    pop ax
+    pop bx
+    inc byte [br_dl_depth]
+    call far [br_dl_coldvec]
+    dec byte [br_dl_depth]
+    jmp br_dl_after
+.refused:
+    push si
+    mov si, br_dl_s_nocold          ; no room for it, or BROWSER.O88 gone
+    call br_dl_why
+    call br_errst
+    pop si
+    stc
+    ret
+
+; Fetch and bind part 0 on the UI task (it is file I/O, SPEC.md 20.6 rule 7).
+; Its entry table's offsets become far vectors on the CODE selector - under
+; kern_mega a far call through the data one is a #GP the kernel completes per
+; call (KERN-MEGA-MEMORY-PLAN MC7) - and the table is READ through the data
+; one, as the icons are (br_dl_partdseg). Every real-mode kernel answers the
+; same word for both. br_dl_rtab's segments become ours: the part calls back
+; through them. Already in: op_fetch says so, and the words are rewritten as
+; they were
+br_dl_partload:
+    push ax
     push cx
     push dx
     push si
     push di
     push es
-    push ds
-    pop es
-    push es
-    cmp byte [br_dl_state], DL_OPEN
-    jb .available
-    cmp byte [br_dl_state], DL_DONE
-    jae .available
-    ; A close can remove the manager window just before its final WM_WAKE is
-    ; delivered. If the worker has already reached CANCELREADY, reap that
-    ; acknowledged cancellation here before deciding whether a new link is
-    ; still busy; the UI callback owns the file cleanup and partial deletion.
-    cmp byte [br_dl_cancel_req], 0
-    je .busymsg
-    cmp byte [br_dl_state], DL_CANCELREADY
-    jne .cancelling
-    cmp word [br_dl_win], 0
-    jne .cancelling
-    call br_dl_onwake
-    cmp byte [br_dl_state], DL_DONE
-    jae .available
-    cmp byte [br_dl_state], DL_OPEN
-    jb .available
-    jmp short .busymsg
-.cancelling:
-    mov si, br_dl_s_busy
-    mov si, br_dl_s_cancelling
-.busymsg:
-    cmp byte [br_dl_cancel_req], 0
-    jne .report
-    mov si, br_dl_s_busy
-.report:
-    call br_errst
-    jmp .out
-.available:
-    ; Preserve the caller's link index before AL is reused for the previous
-    ; manager state. On a second download, a terminal state is nonzero and
-    ; would otherwise corrupt the low byte of the link index.
-    mov [br_dl_index], ax
-    mov al, [br_dl_state]
-    mov [br_dl_prevstate], al
-    mov si, br_ubuf
-    mov di, br_dl_barbak
-    mov cx, BR_UBUF
-    call br_dl_copyz
-    mov si, br_host
-    mov di, br_dl_hostbak
-    mov cx, BR_HOSTMAX
-    call br_dl_copyz
-    mov si, br_path
-    mov di, br_dl_pathbak
-    mov cx, BR_PATHMAX
-    call br_dl_copyz
-    mov ax, [br_port]
-    mov [br_dl_portbak], ax
-
-    cmp word [br_dl_index], 0FFFFh ; automatic non-page navigation
-    je .direct
-    mov bx, [br_dl_index]
-    mov dl, [br_lnkfrm+bx]
-    test dl, dl
-    jz .href
-    dec dl
-    xor bx, bx
-    mov bl, dl
-    shl bx, 1
-    mov si, [br_framebaseoff+bx]
-    cmp si, 0FFFFh
-    je .bad
-    mov es, [br_lnkseg]
-    mov di, br_ubuf
-.base:
-    mov al, [es:si]
-    inc si
-    mov [di], al                    ; ES is the link arena: no stosb here
-    inc di
-    test al, al
-    jnz .base
-    mov si, br_ubuf
-    call br_split
+    mov al, 0
+    call op_fetch
     jc .bad
-.href:
-    mov bx, [br_dl_index]
-    shl bx, 1
-    mov si, [br_lnkoff+bx]
-    mov es, [br_lnkseg]
-    ; An absolute URL needs no page/frame base. Copy it from the link arena
-    ; directly before the generic resolver rewrites the Browser's address
-    ; buffer; relative hrefs still use the normal frame-aware resolver.
-    mov bx, br_s_scheme
-    call br_hrefpfx
-    jnc .absolute
-    call br_resolve
-    jc .restore
-    mov si, br_ubuf
-    mov di, br_dl_url
-    mov cx, BR_DL_URLMAX
-    push ds
-    pop es
-    call br_dl_copyz
-    jmp .resolved
-.absolute:
-    mov di, br_dl_url
-    mov cx, BR_DL_URLMAX-1
-.absloop:
-    mov al, [es:si]
+    mov al, 0                       ; op_fetch may clobber AL
+    call op_cseg
+    or ax, ax
+    jz .bad
+    mov dx, ax
+    mov al, 0
+    call op_seg
+    or ax, ax
+    jz .bad
+    mov [br_dl_partdseg], ax
+    mov es, ax
+    xor si, si
+    mov di, br_dl_vec
+    mov cx, BRDL_N
+.vec:
+    mov ax, [es:si]
+    mov [di], ax
+    mov [di+2], dx
     inc si
-    or al, al
-    jz .absterm
-    jcxz .badrestore
-    mov [di], al
-    inc di
-    loop .absloop
-    cmp byte [es:si], 0
-    jne .badrestore
-.absterm:
-    mov byte [di], 0
-    push ds
-    pop es
-    jmp .resolved
-.direct:
-    mov si, br_ubuf
-    mov di, br_dl_url
-    mov cx, BR_DL_URLMAX
-    call br_dl_copyz
-.resolved:
-    cmp byte [br_dl_url], 'h'
-    jne .badrestore
-    mov si, br_dl_url
-    mov bx, br_s_scheme
-    call br_dl_prefix
-    jc .badrestore
-    call br_dl_split
-    jc .badrestore
-    call br_dl_defaultname
-    mov byte [br_dl_state], DL_PICK
-    mov al, FDLG_SAVE
-    mov bx, [br_win]
-    mov di, br_dl_saved
-    mov si, br_dl_name
-    call OSAPI_FILE_DLG
-    jc .pickrefused
-    jmp .restore
-.pickrefused:
-    mov al, [br_dl_prevstate]
-    mov [br_dl_state], al
-    mov si, br_dl_s_nodisk
-    call br_errst
-    jmp .restore
-.badrestore:
-    push ds
-    pop es
-    mov si, br_dl_s_url
-    call br_errst
-    jmp .restore
+    inc si
+    add di, 4
+    loop .vec
+    mov di, br_dl_rtab
+    mov cx, BRDL_RN
+.back:
+    mov [di+2], cs
+    add di, 4
+    loop .back
+    clc
+    jmp short .out
 .bad:
-    mov si, br_dl_s_url
-    call br_errst
-.restore:
-    mov si, br_dl_barbak
-    mov di, br_ubuf
-    mov cx, BR_UBUF
-    call br_dl_copyz
-    mov si, br_dl_hostbak
-    mov di, br_host
-    mov cx, BR_HOSTMAX
-    call br_dl_copyz
-    mov si, br_dl_pathbak
-    mov di, br_path
-    mov cx, BR_PATHMAX
-    call br_dl_copyz
-    mov ax, [br_dl_portbak]
-    mov [br_port], ax
+    stc
 .out:
-    pop es
     pop es
     pop di
     pop si
     pop dx
     pop cx
+    pop ax
+    ret
+
+; Only through br_dl_after, which knows nothing can be inside the part
+br_dl_partdrop:
+    push ax
+    push cx
+    push di
+    push es
+    mov al, 0
+    call op_drop
+    push ds
+    pop es
+    mov di, br_dl_vec
+    mov cx, BRDL_N*2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; br_dl_step - the worker's pass over a download (br_worker, every tick).
+; The part's engine does the protocol; this decides WHETHER it runs, and
+; publishes what it hands over (see the block comment above)
+br_dl_step:
+    push ax
+    push bx
+    mov al, [br_dl_state]
+    ; ONLY A TRANSFER IN FLIGHT HAS A STEP: DL_OPEN up to, not including,
+    ; DL_DONE. A settled download - DONE, FAIL, CANCEL, or none - is left
+    ; alone, whatever request bytes it ended with: br_dl_cancel_req is not
+    ; cleared on the way out, and a cancelled download used to come back as
+    ; CANCELREADY every tick (SPEC.md 71.20.3)
+    cmp al, DL_OPEN
+    jb .out
+    cmp al, DL_DONE
+    jae .out
+    mov bx, [br_dl_win]
+    cmp byte [br_dl_pending], 0
+    jne .wake                       ; the UI has not taken the cluster yet
+    cmp byte [br_dl_cancel_req], 0
+    jne .cancel
+    cmp al, DL_BODY
+    ja .out                         ; ENDWAIT, a cancel's states: the UI's move
+    mov byte [br_dl_publish], 0
+    call far [br_dl_vec+BRDL_STEP]
+    mov al, [br_dl_publish]
+    or al, al
+    jz .out
+.publish:
+    cmp al, DL_PENDING
+    jne .state
+    mov byte [br_dl_pending], 1     ; before the state, as the UI reads them
+.state:
+    mov [br_dl_state], al
+.wake:
+    call OSAPI_WM_WAKE
+    jmp short .out
+.cancel:
+    cmp al, DL_CANCELREADY
+    je .out
+    call br_dl_sockclose
+    cmp word [br_dl_fill], 0
+    je .ready
+    mov byte [br_dl_final], 2       ; the staged cluster goes to disk first
+    mov al, DL_PENDING
+    jmp short .publish
+.ready:
+    mov byte [br_dl_state], DL_CANCELREADY
+    or bx, bx
+    jnz .wake
+    ; The manager may have been closed while the worker was reaching this
+    ; state. The Browser's UI wake reaps the acknowledged cancellation.
+    mov bx, [br_win]
+    jmp short .wake
+.out:
     pop bx
     pop ax
     ret
 
-; Bounded NUL copy, caller's CX is destination capacity including NUL.
+; --- the primary routines part 0 calls: a far vector each (the part's
+; RCALL), whose segment br_dl_partload makes our CS, onto a shim that makes
+; the near call and returns far. A near call from the part would land in the
+; part's own segment; tools/brdlsyms.py refuses one
+br_dl_rtab:
+br_dl_r_errst:      dw br_dl_rs_errst, 0
+br_dl_r_split:      dw br_dl_rs_split, 0
+br_dl_r_hrefpfx:    dw br_dl_rs_hrefpfx, 0
+br_dl_r_resolve:    dw br_dl_rs_resolve, 0
+br_dl_r_urlgrow:    dw br_dl_rs_urlgrow, 0  ; the transfer's and Copy's buffers
+br_dl_r_uibtninit:  dw br_dl_rs_uibtninit, 0
+br_dl_r_uibtn:      dw br_dl_rs_uibtn, 0
+br_dl_r_uibtnup:    dw br_dl_rs_uibtnup, 0
+br_dl_r_uibtndrag:  dw br_dl_rs_uibtndrag, 0
+br_dl_r_pagepin:    dw br_dl_rs_pagepin, 0
+br_dl_r_pageunpin:  dw br_dl_rs_pageunpin, 0
+br_dl_r_abort:      dw br_dl_rs_abort, 0
+br_dl_r_net_find:   dw br_dl_rs_net_find, 0
+br_dl_r_copyz:      dw br_dl_rs_copyz, 0
+br_dl_r_prefix:     dw br_dl_rs_prefix, 0
+br_dl_r_sockclose:  dw br_dl_rs_sockclose, 0
+br_dl_r_docmap:     dw br_dl_rs_docmap, 0   ; Copy's walk (brcopyselection.inc)
+br_dl_r_avail:      dw br_dl_rs_avail, 0    ; the reserve (br_avail)
+br_dl_r_toasturl:   dw br_dl_rs_toasturl, 0 ; a form's submit: its toasts,
+br_dl_r_toastpost:  dw br_dl_rs_toastpost, 0 ; here where their text is
+; ...and the rarely used UI's (brcold.inc, SPEC.md 71.24)
+br_dl_r_measure:       dw br_dl_rs_measure, 0
+br_dl_r_hitofs:        dw br_dl_rs_hitofs, 0
+br_dl_r_linkat:        dw br_dl_rs_linkat, 0
+br_dl_r_paint_band:    dw br_dl_rs_paint_band, 0
+br_dl_r_sbar:          dw br_dl_rs_sbar, 0
+br_dl_r_saveas:        dw br_dl_rs_saveas, 0
+br_dl_r_follow:        dw br_dl_rs_follow, 0
+br_dl_r_srcptr:        dw br_dl_rs_srcptr, 0
+br_dl_r_flushbuf:      dw br_dl_rs_flushbuf, 0
+br_dl_r_parse:         dw br_dl_rs_parse, 0
+br_dl_r_settitle:      dw br_dl_rs_settitle, 0
+br_dl_r_targetroute:   dw br_dl_rs_targetroute, 0
+br_dl_r_uput:          dw br_dl_rs_uput, 0
+br_dl_r_fld:           dw br_dl_rs_fld, 0
+br_dl_r_encb:          dw br_dl_rs_encb, 0
+br_dl_r_getattr:       dw br_dl_rs_getattr, 0
+br_dl_r_henc:          dw br_dl_rs_henc, 0
+br_dl_r_status:        dw br_dl_rs_status, 0
+br_dl_r_targetgo:      dw br_dl_rs_targetgo, 0
+br_dl_r_bmfindurl:     dw br_dl_rs_bmfindurl, 0
+br_dl_r_bcopyz:        dw br_dl_rs_bcopyz, 0
+br_dl_r_odwrite:       dw br_dl_rs_odwrite, 0
+BRDL_RN equ ($ - br_dl_rtab) / 4
+
+br_dl_rs_errst:     call br_errst
+                    retf
+br_dl_rs_split:     call br_split
+                    retf
+br_dl_rs_hrefpfx:   call br_hrefpfx
+                    retf
+br_dl_rs_resolve:   call br_resolve
+                    retf
+br_dl_rs_urlgrow:   call br_urlgrow
+                    retf
+br_dl_rs_uibtninit: call os88ui_btninit
+                    retf
+br_dl_rs_uibtn:                     ; the manager's one button, drawn by part 0
+    call os88ui_btn                 ; (tests/btnsites.txt counts THIS site: the
+    retf                            ; part's far call is invisible to a grep)
+br_dl_rs_uibtnup:   call os88ui_btnup
+                    retf
+br_dl_rs_uibtndrag: call os88ui_btndrag
+                    retf
+br_dl_rs_pagepin:   call br_pagepin
+                    retf
+br_dl_rs_pageunpin: call br_pageunpin
+                    retf
+br_dl_rs_abort:     call br_abort
+                    retf
+br_dl_rs_net_find:  call net_find
+                    retf
+br_dl_rs_copyz:     call br_dl_copyz
+                    retf
+br_dl_rs_prefix:    call br_dl_prefix
+                    retf
+br_dl_rs_sockclose: call br_dl_sockclose
+                    retf
+br_dl_rs_docmap:    call br_docmap
+                    retf
+br_dl_rs_avail:     call br_avail
+                    retf
+br_dl_rs_toasturl:                  ; the URL (the bar is 25 cells; the whole
+    mov si, br_url                  ; URL lives in br_url for the harness)
+    jmp short br_dl_rs_toast
+br_dl_rs_toastpost:
+    mov si, br_s_posting
+br_dl_rs_toast:
+    push cx
+    push es
+    mov cx, 120
+    push ds
+    pop es
+    call OSAPI_TOAST
+    pop es
+    pop cx
+    retf
+br_dl_rs_measure:   call br_measure
+                    retf
+br_dl_rs_hitofs:    call br_hitofs
+                    retf
+br_dl_rs_linkat:    call br_linkat
+                    retf
+br_dl_rs_paint_band: call br_paint_band
+                    retf
+br_dl_rs_sbar:      call br_sbar
+                    retf
+br_dl_rs_saveas:    call br_saveas
+                    retf
+br_dl_rs_follow:    call br_follow
+                    retf
+br_dl_rs_srcptr:    call br_srcptr
+                    retf
+br_dl_rs_flushbuf:  call br_flushbuf
+                    retf
+br_dl_rs_parse:     call br_parse
+                    retf
+br_dl_rs_settitle:  call br_settitle
+                    retf
+br_dl_rs_targetroute: call br_targetroute
+                    retf
+br_dl_rs_uput:      call br_uput
+                    retf
+br_dl_rs_fld:       call br_fld
+                    retf
+br_dl_rs_encb:      call br_encb
+                    retf
+br_dl_rs_getattr:   call br_getattr
+                    retf
+br_dl_rs_henc:      call br_henc
+                    retf
+br_dl_rs_status:    call br_status
+                    retf
+br_dl_rs_targetgo:  call br_targetgo
+                    retf
+br_dl_rs_bmfindurl: call br_bmfindurl
+                    retf
+br_dl_rs_bcopyz:    call br_copyz
+                    retf
+br_dl_rs_odwrite:   call od_write
+                    retf
+
 br_dl_copyz:
     push ax
     push cx
@@ -293,6 +602,7 @@ br_dl_copyz:
 br_dl_autosave:
     push ax
     push bx
+    push dx                         ; .suffix borrows it (SPEC.md 1: kept)
     push di
     push si
     xor di, di                      ; most recent extension start, if any
@@ -335,6 +645,7 @@ br_dl_autosave:
 .out:
     pop si
     pop di
+    pop dx
     pop bx
     pop ax
     ret
@@ -417,708 +728,9 @@ br_dl_prefix:
     ret
 
 ; The dialog's name pointer is transient. Copy it before directory and disk APIs.
-br_dl_defaultname:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov si, br_dl_path
-    mov bx, si
-.scan:
-    mov al, [si]
-    or al, al
-    jz .end
-    cmp al, '/'
-    jne .query
-    lea bx, [si+1]
-    jmp .next
-.query:
-    cmp al, '?'
-    je .end
-    cmp al, '#'
-    je .end
-.next:
-    inc si
-    jmp .scan
-.end:
-    mov cx, si
-    sub cx, bx
-    or cx, cx
-    jz .fallback
-    cmp cx, 12
-    ja .fallback
-    mov si, bx
-    mov di, br_dl_name
-    rep movsb
-    mov byte [di], 0
-    jmp .out
-.fallback:
-    mov si, br_dl_s_default
-    mov di, br_dl_name
-    mov cx, 13
-.copy:
-    lodsb
-    stosb
-    or al, al
-    jnz .copy
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_saved:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov [br_win], si
-    cmp byte [es:di], 0
-    jne .chosen
-    mov al, [br_dl_prevstate]
-    mov [br_dl_state], al
-    jmp .out
-.chosen:
-    mov si, di
-    mov di, br_dl_name
-    mov cx, 13
-.name:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .name
-    call br_dl_openwin
-    cmp word [br_dl_win], 0
-    je .uiunavailable
-    mov byte [br_dl_state], DL_IDLE
-    mov byte [br_dl_fail_reason], 0
-    mov byte [br_dl_have_len], 0
-    mov byte [br_dl_headers_done], 0
-    mov byte [br_dl_transfer_encoding], 0
-    mov byte [br_dl_status_seen], 0
-    mov byte [br_dl_redirs], 0
-    mov byte [br_dl_cancel_req], 0
-    mov byte [br_dl_close_after], 0
-    mov byte [br_dl_mgr_close_after], 0
-    mov byte [br_dl_pending], 0
-    mov byte [br_dl_hnd], 0
-    mov byte [br_dl_stream], 0
-    mov byte [br_dl_seq], 0
-    mov word [br_dl_linelen], 0
-    mov word [br_dl_token], 0
-    mov word [br_dl_fill], 0
-    mov word [br_dl_recvbytes], 0
-    mov word [br_dl_recvbytes+2], 0
-    mov byte [br_dl_recvseq], 0
-    mov word [br_dl_written], 0
-    mov word [br_dl_written+2], 0
-    mov word [br_dl_total], 0
-    mov word [br_dl_total+2], 0
-    mov word [br_dl_msg], 0
-    mov word [br_dl_lastmsg], br_dl_s_connect
-    call br_dl_destination
-    jc .disk
-    call br_dl_split
-    jc .url
-    call br_dl_claim
-    jc .memory
-    call br_dl_create_file
-    jc .disk
-    mov byte [br_dl_state], DL_OPEN
-    mov word [br_dl_ticks], 0
-    call OSAPI_GET_TICKS
-    mov [br_dl_starttick], ax
-    mov word [br_dl_speed], 0
-    mov byte [br_dl_anim], 0
-    call br_dl_timerarm
-    call br_dl_repaint_locked
-    jmp .out
-.memory:
-    mov si, br_dl_s_nomem
-    jmp .fail
-.uiunavailable:
-    mov si, br_dl_s_http
-    jmp .fail
-.url:
-    mov si, br_dl_s_url
-    jmp .fail
-.disk:
-    mov si, br_dl_s_nodisk
-.fail:
-    mov [br_dl_msg], si
-    call br_dl_freebuf
-    mov byte [br_dl_state], DL_FAIL
-    call br_dl_repaint_locked
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_destination:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call OSAPI_FILE_HERE
-    mov [br_dl_dir], dx
-    mov [br_dl_drive], bl
-    push ds
-    pop es
-    mov di, br_dl_dest+2
-    mov cx, BR_DL_DEST-16
-    call OSAPI_FILE_PATH
-    jc .bad
-    ; FILE_PATH returns CX bytes (without NUL) at the current dialog folder.
-    mov di, br_dl_dest+2
-    add di, cx
-    cmp byte [di-1], 0x5C
-    je .leaf
-    mov byte [di], 0x5C
-    inc di
-.leaf:
-    mov si, br_dl_name
-    mov cx, 13
-    rep movsb
-    ; br_dl_dest+2 already has room for the drive prefix. Keep the folder and
-    ; leaf in place; shifting them again duplicates the first two characters
-    ; in the displayed destination (for example B:\M\mem196k.htm at root).
-    mov al, [br_dl_drive]
-    add al, 'A'
-    mov [br_dl_dest], al
-    mov byte [br_dl_dest+1], ':'
-    clc
-    jmp .out
-.bad:
-    cld
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_split:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es                         ; ES = OURS for the stosb stores below:
-    push ds                         ; br_dl_saved is a FILE_DLG callback, and
-    pop es                          ; ES = KERNEL_SEG on entry to every callback
-                                    ; (SPEC.md 20) - so these stores used to land
-                                    ; at KERNEL_SEG:br_dl_host, inside the
-                                    ; kernel's .vga drawing code
-    mov si, br_dl_url
-    mov bx, br_s_scheme
-    call br_dl_prefix
-    jc .bad
-    add si, 7
-    mov di, br_dl_host
-    mov cx, BR_DL_HOSTMAX-1
-    mov word [br_dl_port], 80
-.host:
-    mov al, [si]
-    cmp al, ':'
-    je .port
-    cmp al, '/'
-    je .path
-    or al, al
-    jz .slash
-    or cx, cx
-    jnz .hoststore
-    jmp .bad
-.hoststore:
-    stosb
-    inc si
-    loop .host
-    jmp .bad
-.port:
-    mov byte [di], 0
-    inc si
-    xor ax, ax
-    xor cx, cx
-.pnum:
-    mov bl, [si]
-    or bl, bl
-    jz .portdone
-    cmp bl, '/'
-    je .portdone
-    cmp bl, '0'
-    jb .bad
-    cmp bl, '9'
-    ja .bad
-    sub bl, '0'
-    xor bh, bh
-    push bx
-    mov bx, 10
-    mul bx
-    pop bx
-    or dx, dx
-    jnz .bad
-    add ax, bx
-    jc .bad
-    inc cx
-    inc si
-    jmp .pnum
-.portdone:
-    or cx, cx
-    jz .bad
-    or ax, ax
-    jz .bad
-    cmp byte [si], '/'
-    je .portpath
-    cmp byte [si], 0
-    jne .bad
-    mov [br_dl_port], ax
-    mov si, br_dl_rootpath
-    mov di, br_dl_path
-    mov cx, BR_DL_PATHMAX
-    call br_dl_copyz
-    jmp .ok
-.portpath:
-    mov [br_dl_port], ax
-    jmp .path
-.slash:
-    mov byte [di], 0
-    mov si, br_dl_rootpath
-    mov di, br_dl_path
-    mov cx, BR_DL_PATHMAX
-    call br_dl_copyz
-    jmp .ok
-.path:
-    mov byte [di], 0
-    mov di, br_dl_path
-    mov cx, BR_DL_PATHMAX-1
-.pcopy:
-    mov al, [si]
-    or al, al
-    jz .pdone
-    cmp al, '?'
-    jne .pstore
-    jmp .pstore
-.pstore:
-    or cx, cx
-    jnz .locstore
-    jmp .bad
-.locstore:
-    stosb
-    inc si
-    loop .pcopy
-    cmp byte [si], 0
-    jne .bad
-.pdone:
-    mov byte [di], 0
-.ok:
-    cmp byte [br_dl_host], 0
-    je .bad
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 br_dl_rootpath: db '/', 0
 
 ; Claim one destination cluster without crossing the load-start 20% reserve.
-br_dl_claim:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call OSAPI_FILE_DFREE
-    jc .bad
-    or bx, bx
-    jz .bad
-    mov ax, bx
-    mov bx, 512
-    mul bx
-    or dx, dx
-    jnz .bad
-    mov [br_dl_clustersz], ax
-    add ax, 1023
-    mov cx, 10
-    shr ax, cl
-    or ax, ax
-    jnz .want
-    inc ax
-.want:
-    mov [br_dl_bufkb], ax
-    mov [br_dl_needkb], ax
-    mov ax, [br_membase]
-    or ax, ax
-    jnz .base
-    call br_avail
-    mov [br_dl_membase], bx
-    jmp .room
-.base:
-    mov [br_dl_membase], ax
-.room:
-    mov ax, [br_dl_needkb]
-    call br_dl_memroom
-    jc .bad
-    mov ax, [br_dl_clustersz]       ; the claim is the cluster ITSELF, in
-    mov cl, 4                       ; PARAGRAPHS (SPEC.md 50.3.7): a 512-byte
-    shr ax, cl                      ; cluster no longer holds a whole KB. The
-    xor cx, cx                      ; reserve check above stays in KB, which
-    mov bl, MEMP_CLAIM              ; only rounds it the cautious way
-    call br_claimp
-    jc .bad
-    mov [br_dl_bufseg], dx
-    call br_movable                 ; it MOVES (NO-PINNING A3): br_reloc names
-                                    ; [br_dl_bufseg], and its file writes pin
-                                    ; it for the call (br_dl_pinbuf)
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_memroom:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov [br_dl_needkb], ax
-    call br_avail
-    mov [br_dl_largest], ax
-    mov ax, [br_dl_membase]
-    mov cx, 5
-    xor dx, dx
-    div cx
-    or dx, dx
-    jz .reserve
-    inc ax
-.reserve:
-    add ax, [br_dl_needkb]
-    cmp bx, ax
-    jb .no
-    mov ax, [br_dl_largest]
-    cmp ax, [br_dl_needkb]
-    jb .no
-.yes:
-    clc
-    jmp .out
-.no:
-    stc
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_create_file:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-    push ds
-    pop es
-    mov si, br_dl_name
-    xor bx, bx
-    xor cx, cx
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_openwin:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call br_dl_partload
-    jc .out
-    mov bx, [br_dl_win]
-    or bx, bx
-    jnz .front
-    call OSAPI_VIDEO
-    mov [br_dl_screenh], bx
-    cmp bx, 460
-    jae .tall
-    cmp bx, 320
-    jae .medium
-.compact:
-    mov byte [br_dl_layout], 0
-    mov word [br_dl_tpl+6], 164
-    mov word [br_dl_yicon], 0
-    mov word [br_dl_ycaption], 49
-    mov word [br_dl_ypath], 210
-    mov word [br_dl_yprogress], 61
-    mov word [br_dl_barh], 10
-    mov word [br_dl_ydetail], 74
-    mov word [br_dl_detailstep], 8
-    mov word [br_dl_ystats], 112
-    mov word [br_dl_yspeed], 120
-    mov word [br_dl_ybutton], 130
-    jmp .widthfit
-.medium:
-    mov byte [br_dl_layout], 1
-    mov word [br_dl_tpl+6], 228
-    mov word [br_dl_yicon], 10
-    mov word [br_dl_ycaption], 66
-    mov word [br_dl_ypath], 285
-    mov word [br_dl_yprogress], 78
-    mov word [br_dl_barh], 14
-    mov word [br_dl_ydetail], 100
-    mov word [br_dl_detailstep], 13
-    mov word [br_dl_ystats], 152
-    mov word [br_dl_yspeed], 168
-    mov word [br_dl_ybutton], 168
-    jmp .widthfit
-.tall:
-    mov byte [br_dl_layout], 2
-    mov word [br_dl_tpl+6], 204
-    mov word [br_dl_yicon], 5
-    mov word [br_dl_ycaption], 66
-    mov word [br_dl_ypath], 285
-    mov word [br_dl_yprogress], 78
-    mov word [br_dl_barh], 12
-    mov word [br_dl_ydetail], 100
-    mov word [br_dl_detailstep], 12
-    mov word [br_dl_ystats], 148
-    mov word [br_dl_yspeed], 164
-    mov word [br_dl_ybutton], 164
-    mov [br_dl_w], ax                ; retain screen width before WM_GEOM
-    cmp ax, 456
-    jb .tallnarrow
-    mov word [br_dl_tpl+4], 440
-    sub ax, 440
-    shr ax, 1
-    mov [br_dl_tpl], ax
-    jmp .fitdone
-.tallnarrow:
-    sub ax, 16
-    mov [br_dl_tpl+4], ax
-    mov word [br_dl_tpl], 8
-    jmp .fitdone
-.widthfit:
-    cmp ax, 456
-    jb .narrow
-    mov word [br_dl_tpl+4], 440
-    sub ax, 440
-    shr ax, 1
-    mov [br_dl_tpl], ax
-    jmp .fitdone
-.narrow:
-    sub ax, 16
-    mov [br_dl_tpl+4], ax
-    mov word [br_dl_tpl], 8
-.fitdone:
-    ; Center in the usable desktop below the menu bar on VGA, Hercules and
-    ; CGA; OSAPI_VIDEO returns the primary height in BX.
-    mov ax, [br_dl_screenh]
-    sub ax, [br_dl_tpl+6]
-    sub ax, 20
-    shr ax, 1
-    add ax, 20
-    mov [br_dl_tpl+2], ax
-    mov si, br_dl_tpl
-    call OSAPI_WM_CREATE
-    jc .failed
-    mov [br_dl_win], bx
-    mov ax, br_dl_onwake
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONWAKE
-    mov ax, br_dl_managerclose
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONCLOSE
-    mov ax, br_dl_timer
-    mov bx, [br_dl_win]
-    call OSAPI_WM_ONTIMER
-    mov ax, [br_dl_win]
-    mov bx, br_dl_btrec
-    mov si, br_dl_onup
-    mov di, br_dl_ondrag
-    mov dx, br_dl_onclick
-    call os88ui_btninit
-    mov bx, [br_dl_win]
-    call OSAPI_WM_SHOW
-    jmp .front
-.failed:
-    mov word [br_dl_win], 0
-    jmp .out
-.front:
-    mov bx, [br_dl_win]
-    call OSAPI_WM_SHOW
-    call OSAPI_WM_FRONT
-    call br_dl_repaint_locked
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; Fetch and bind the optional painter on the UI task. The worker never enters
-; this part; it remains in the primary segment with all OS callbacks.
-br_dl_partload:
-    push ax
-    push es
-    mov al, 0
-    call op_fetch
-    jc .bad
-    mov al, 0                    ; op_fetch may clobber AL; op_cseg takes index here
-    call op_cseg                 ; THE VECTORS' SEGMENT IS THE CODE SELECTOR:
-    or ax, ax                    ; under kern_mega a far call through the data
-    jz .bad                      ; one is a #GP the kernel completes per call
-    mov [br_dl_partpaint+2], ax  ; (KERN-MEGA-MEMORY-PLAN MC7); every
-    mov [br_dl_partdoc+2], ax    ; real-mode kernel answers the same word
-    mov [br_dl_partlive+2], ax   ; op_seg does
-    mov [br_dl_partcopy+2], ax
-    mov al, 0
-    call op_seg                  ; ...and the entry table is READ through
-    or ax, ax                    ; the data one
-    jz .bad
-    mov es, ax
-    mov ax, [es:0]
-    mov [br_dl_partpaint], ax
-    mov ax, [es:2]
-    mov [br_dl_partdoc], ax
-    mov ax, [es:4]
-    mov [br_dl_partlive], ax
-    mov ax, [es:6]
-    mov [br_dl_partcopy], ax
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
-    pop es
-    pop ax
-    ret
-
-; Drop only after the manager window is destroyed and no paint/timer callback
-; can use it. op_drop is idempotent for the primary segment's UI paths.
-br_dl_partdrop:
-    push ax
-    mov al, 0
-    call op_drop
-    mov word [br_dl_partpaint], 0
-    mov word [br_dl_partpaint+2], 0
-    mov word [br_dl_partdoc], 0
-    mov word [br_dl_partdoc+2], 0
-    mov word [br_dl_partlive], 0
-    mov word [br_dl_partlive+2], 0
-    mov word [br_dl_partcopy], 0
-    mov word [br_dl_partcopy+2], 0
-    pop ax
-    ret
-
-br_dl_timerarm:
-    push ax
-    push bx
-    mov bx, [br_dl_win]
-    or bx, bx
-    jz .out
-    mov ax, 5
-    call OSAPI_WM_TIMER
-.out:
-    pop bx
-    pop ax
-    ret
-
-br_dl_redraw:
-    push ax
-    push bx
-    push si
-    mov bx, [br_dl_win]
-    or bx, bx
-    jz .out
-    call OSAPI_GFX_LOCK
-    mov bx, [br_dl_win]
-    call OSAPI_WM_CLIP_SET
-    jc .unlock
-    mov si, [br_dl_win]
-    call br_dl_paint
-.unlock:
-    call OSAPI_GFX_UNLOCK
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; Entry, menu, and FILE_DLG callbacks already hold the UI graphics lock.
-br_dl_repaint_locked:
-    push bx
-    push si
-    mov bx, [br_dl_win]
-    or bx, bx
-    jz .out
-    call OSAPI_WM_CLIP_SET
-    jc .out
-    mov si, [br_dl_win]
-    call br_dl_paint
-.out:
-    pop si
-    pop bx
-    ret
-
-br_dl_paint:
-    call far [br_dl_partpaint]
-    call br_dl_button
-    ret
-
-br_dl_redraw_doc:
-    call far [br_dl_partdoc]
-    ret
-
-br_dl_paint_live:
-    call far [br_dl_partlive]
-    ret
-
-; br_dl_btplace - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): the manager dragged by
-; its title is replayed and not painted, so the one button's rect is laid out
-; again from where the window IS before every hit test - br_dl_button's own
-; arithmetic, and the origin it reads. BX = the record, SI = the window.
-; Draws nothing, keeps every register
 br_dl_btplace:
     push ax
     push bx
@@ -1141,1003 +753,10 @@ br_dl_btplace:
     pop ax
     ret
 
-br_dl_button:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov word [br_dl_btncount], 1
-    mov word [br_dl_btrec+OS88UI_BT_N], 1
-    mov ax, [br_dl_x]
-    add ax, [br_dl_w]
-    sub ax, 64
-    mov [br_dl_btnrects], ax
-    mov bx, [br_dl_y]
-    add bx, [br_dl_ybutton]
-    mov [br_dl_btnrects+2], bx
-    add ax, 56
-    mov [br_dl_btnrects+4], ax
-    add bx, 12
-    mov [br_dl_btnrects+6], bx
-    mov word [br_dl_btnlabels], br_dl_s_exit
-    mov bl, [br_dl_state]
-    cmp bl, DL_OPEN
-    jb .draw
-    cmp bl, DL_ENDWAIT
-    jb .cancel
-    cmp bl, DL_DONE
-    jae .draw
-    ; Network transfer is over, but the last staged disk write is still
-    ; pending. Do not offer Exit until the file is fully committed.
-    mov word [br_dl_btncount], 0
-    mov word [br_dl_btrec+OS88UI_BT_N], 0
-    jmp short .draw
-.cancel:
-    ; While active, offer only cancellation. The terminal state replaces it
-    ; with Exit, which destroys this secondary window and frees its slot.
-    mov ax, [br_dl_x]
-    add ax, [br_dl_w]
-    sub ax, 64
-    mov [br_dl_btnrects], ax
-    add ax, 56
-    mov [br_dl_btnrects+4], ax
-    mov word [br_dl_btnlabels], br_dl_s_cancel
-.draw:
-    mov bx, br_dl_btrec
-    mov al, 1
-    call os88ui_btn
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_timer:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov al, [br_dl_state]
-    cmp al, DL_OPEN
-    jb .static
-    cmp al, DL_ENDWAIT
-    jae .static
-    inc byte [br_dl_anim]
-    and byte [br_dl_anim], 7
-    call br_dl_speedupdate
-    mov bx, [br_dl_win]
-    call OSAPI_WM_CLIP_SET
-    jc .hidden
-    call br_dl_redraw_doc
-    call br_dl_paint_live
-.arm:
-    mov bx, [br_dl_win]
-    mov ax, 5
-    call OSAPI_WM_TIMER
-    jmp .out
-.hidden:
-    ; Keep state and timing current while covered; the next expose paints the
-    ; current frame through the ordinary W_PAINT callback.
-    mov bx, [br_dl_win]
-    mov ax, 5
-    call OSAPI_WM_TIMER
-    jmp .out
-.static:
-    cmp al, DL_DONE
-    jne .paint
-    mov byte [br_dl_anim], 7
-.paint:
-    call br_dl_speedupdate
-    mov bx, [br_dl_win]
-    call OSAPI_WM_CLIP_SET
-    jc .out
-    mov si, [br_dl_win]
-    call br_dl_paint
-    mov bx, [br_dl_win]
-    cmp byte [br_dl_state], DL_OPEN
-    jb .out
-    cmp byte [br_dl_state], DL_ENDWAIT
-    jae .out
-    mov ax, 18
-    call OSAPI_WM_TIMER
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; Frequent updates are confined to the bar, status row and transfer counters.
-; The longer URL/name/destination rows remain static during a transfer.
-br_dl_speedupdate:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call OSAPI_GET_TICKS
-    sub ax, [br_dl_starttick]
-    jnz .elapsed
-    cmp byte [br_dl_state], DL_DONE
-    jne .out
-    ; A quick transfer may finish before one 18.2 Hz tick elapses. Use one
-    ; tick as the smallest measurable interval so the final display settles.
-    inc ax
-.elapsed:
-    mov [br_dl_ticks], ax
-    mov ax, [br_dl_recvbytes]
-    mov dx, [br_dl_recvbytes+2]
-    ; Average KiB/s over the whole transfer: timer-sized deltas lose small
-    ; chunks on slow links and can leave a fast completed transfer unmeasured.
-    mov cx, 10
-.shift:
-    shr dx, 1
-    rcr ax, 1
-    loop .shift
-    or dx, dx
-    jnz .cap
-    or ax, ax
-    jnz .scale
-    cmp word [br_dl_recvbytes], 0
-    jne .minimum
-    cmp word [br_dl_recvbytes+2], 0
-    jne .minimum
-    jmp .clear
-.minimum:
-    mov ax, 1
-.scale:
-    mov cx, 18
-    mul cx
-    mov cx, [br_dl_ticks]
-    cmp dx, cx
-    jae .cap                       ; quotient would exceed 16 bits
-    div cx
-    or ax, ax
-    jnz .store
-    mov ax, 1
-.store:
-    mov [br_dl_speed], ax
-    jmp .out
-.cap:
-    mov word [br_dl_speed], 999
-    jmp .out
-.clear:
-    mov word [br_dl_speed], 0
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_onup:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov bx, br_dl_btrec
-    call os88ui_btnup
-    or al, al
-    jz .out
-    mov al, [br_dl_state]
-    ; ENDWAIT is still in-flight: the UI has not yet committed the final
-    ; staged bytes or classified the result. Keep cancellation asynchronous
-    ; through ENDWAIT/CANCELREQ/CANCELREADY; only a terminal result may close
-    ; directly from the button callback.
-    cmp al, DL_OPEN
-    jb .hide
-    cmp al, DL_DONE
-    jb .request_cancel
-    cmp al, DL_CANCEL
-    je .hide
-    cmp al, DL_DONE
-    je .hide                       ; preserve a completed file
-.request_cancel:
-    mov byte [br_dl_cancel_req], 1
-    mov byte [br_dl_state], DL_CANCELREQ
-    mov word [br_dl_msg], br_dl_s_canceling
-    ; Match the title-bar close path: the worker finishes its current receive,
-    ; the UI callback removes the partial file, then destroys this window.
-    ; Do not repaint the full manager here; that made Cancel visibly flicker.
-    mov byte [br_dl_mgr_close_after], 1
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.hide:
-    mov bx, [br_dl_win]
-    mov word [br_dl_win], 0
-    call OSAPI_WM_DESTROY
-    call br_dl_partdrop
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_managerclose:
-    ; While active, closing is cancellation; completion destroys the manager
-    ; asynchronously so the close negotiator never frees its window inline.
-    mov al, [br_dl_state]
-    cmp al, DL_OPEN
-    jb .close_now
-    cmp al, DL_DONE
-    jae .close_now
-    cmp al, DL_ENDWAIT
-    jae .pending
-    mov byte [br_dl_cancel_req], 1
-    mov byte [br_dl_state], DL_CANCELREQ
-    mov word [br_dl_msg], br_dl_s_canceling
-    mov byte [br_dl_mgr_close_after], 1
-    call br_dl_repaint_locked
-    stc
-    ret
-.close_now:
-    mov byte [br_dl_mgr_close_after], 1
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    stc
-    ret
-.pending:
-    ; The transfer or its last disk write is completing. Wait for its terminal
-    ; wake, then destroy this window instead of leaving a hidden download.
-    mov byte [br_dl_mgr_close_after], 1
-    stc
-    ret
-br_dl_ondrag:
-    mov bx, br_dl_btrec
-    call os88ui_btndrag
-    ret
-
 br_dl_onclick:
     ret
 
 ; UI task callback: only here may the staged cluster reach the filesystem.
-br_dl_onwake:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp byte [br_dl_mgr_close_after], 0
-    je .checkpending
-    mov al, [br_dl_state]
-    cmp al, DL_OPEN
-    jb .destroy_manager
-    cmp al, DL_DONE
-    je .destroy_manager             ; completed files must be preserved
-    cmp al, DL_CANCEL
-    je .destroy_manager             ; partial was already deleted
-    cmp al, DL_FAIL
-    je .cancel_terminal_fail        ; a user cancel raced a network failure
-.checkpending:
-    ; A click may change the visible state while a committed cluster is still
-    ; pending. The cluster remains owned by the wake handler and must be
-    ; acknowledged before the worker can observe the cancellation request.
-    cmp byte [br_dl_pending], 0
-    jne .write
-    cmp byte [br_dl_state], DL_CANCELREADY
-    je .cancelled
-    cmp byte [br_dl_state], DL_PENDING
-    je .write
-    cmp byte [br_dl_state], DL_ENDWAIT
-    je .end
-    jmp .out
-.destroy_manager:
-    mov byte [br_dl_mgr_close_after], 0
-    mov bx, [br_dl_win]
-    mov word [br_dl_win], 0
-    or bx, bx
-    jz .drop_part
-    call OSAPI_WM_DESTROY
-.drop_part:
-    call br_dl_partdrop
-    jmp .out
-.cancel_terminal_fail:
-    ; The worker may report a socket failure in the same tick as Cancel.
-    ; Treat the explicit user request as cancellation and remove any partial
-    ; before closing; if deletion itself fails, keep the manager to show it.
-    cmp byte [br_dl_cancel_req], 0
-    je .keep_terminal_error
-    call br_dl_close_stream
-    call br_dl_freebuf
-    call br_dl_partial_delete
-    jc .delete_error
-    mov byte [br_dl_state], DL_CANCEL
-    mov word [br_dl_msg], br_dl_s_cancelled
-    jmp .destroy_manager
-.delete_error:
-    mov byte [br_dl_mgr_close_after], 0
-    mov word [br_dl_msg], br_dl_s_delerror
-    call br_dl_redraw
-    jmp .out
-.keep_terminal_error:
-    mov byte [br_dl_mgr_close_after], 0
-    call br_dl_redraw
-    jmp .out
-.write:
-    ; --- ONE BAR FOR THE DOWNLOAD (SPEC.md 12.8.10, 71.20): a cluster is
-    ; written a wake, so on a hard disk the widget blinked per cluster.
-    ; Begun at the FIRST write, the one moment Content-Length is known on
-    ; this task and nothing is on the disk yet; no length, no bar. The
-    ; answer is not kept: br_dl_close_stream, which every way a download
-    ; stops goes through, ends it unconditionally (an end not ours is
-    ; refused), and a close of the Browser ends it in the kernel
-    mov ax, [br_dl_written]
-    or ax, [br_dl_written+2]
-    jnz .wr
-    cmp byte [br_dl_have_len], 0
-    je .wr
-    mov cx, [br_dl_total]
-    mov dx, [br_dl_total+2]
-    call OSAPI_FS_OP
-.wr:
-    mov si, br_dl_name
-    mov es, [br_dl_bufseg]
-    xor bx, bx
-    mov cx, [br_dl_fill]
-    cmp byte [br_dl_seq], 2
-    je .append
-    xor ax, ax                      ; ES:BX is the buffer and the kernel may
-    call br_pagepin                 ; claim before its transfer pin applies
-    mov di, [br_dl_token]           ; (SPEC.md 66.3 rule 5): pinned for the
-    call OSAPI_FILE_WRITE_SEQ       ; call, AL = 0 being the verb as well
-    call br_pageunpin               ; ...and free to move again, CF kept
-    jnc .seqok
-    cmp ax, FERR_NAME
-    jne .writefail
-    ; kern_small has no WRITE_SEQ slot. Its native APPEND path remains safe,
-    ; cluster-bounded, and slower; keep the same staging protocol.
-    mov byte [br_dl_seq], 2
-.append:
-    mov si, br_dl_name
-    mov es, [br_dl_bufseg]
-    xor bx, bx
-    mov cx, [br_dl_fill]
-    xor ax, ax
-    call br_pagepin                 ; pinned for the call, as above
-    call OSAPI_FILE_APPEND
-    call br_pageunpin
-    jc .writefail
-    jmp .wrote
-.seqok:
-    mov [br_dl_token], di
-    mov byte [br_dl_seq], 1
-    mov byte [br_dl_stream], 1
-.wrote:
-    mov ax, [br_dl_fill]
-    add [br_dl_written], ax
-    adc word [br_dl_written+2], 0
-    mov word [br_dl_fill], 0
-    mov byte [br_dl_pending], 0
-    cmp byte [br_dl_final], 0
-    jne .finishwrite
-    mov byte [br_dl_state], DL_BODY
-    jmp .out
-.finishwrite:
-    cmp byte [br_dl_final], 2
-    je .cancelled
-.finishdownload:
-    mov byte [br_dl_state], DL_ENDWAIT
-    jmp .end
-.writefail:
-    mov byte [br_dl_fail_reason], 1
-    mov byte [br_dl_cancel_req], 1
-    mov byte [br_dl_pending], 0
-    mov word [br_dl_fill], 0
-    mov byte [br_dl_state], DL_CANCELREQ
-    mov word [br_dl_msg], br_dl_s_write
-    jmp .out
-.cancelled:
-    call br_dl_close_stream
-    call br_dl_freebuf
-    call br_dl_partial_delete
-    jnc .deleted
-    mov byte [br_dl_fail_reason], 2
-    mov word [br_dl_msg], br_dl_s_delerror
-    jmp .failed
-.deleted:
-    ; Explicit Cancel / title-bar close means the partial is disposable. The
-    ; stream finalizer can report an error while discarding its write handle;
-    ; once deletion succeeded, that must not strand the manager in an error
-    ; screen with a file the user asked us to remove.
-    cmp byte [br_dl_mgr_close_after], 0
-    jne .cancelled_ok
-    cmp byte [br_dl_fail_reason], 0
-    jne .failed
-.cancelled_ok:
-    mov byte [br_dl_state], DL_CANCEL
-    mov word [br_dl_msg], br_dl_s_cancelled
-    jmp .redraw
-.failed:
-    mov byte [br_dl_state], DL_FAIL
-    jmp .redraw
-
-.end:
-    call br_dl_close_stream
-    call br_dl_freebuf
-    cmp byte [br_dl_fail_reason], 0
-    jne .failedend
-    mov byte [br_dl_state], DL_DONE
-    mov byte [br_dl_anim], 7
-    call br_dl_speedupdate
-    mov word [br_dl_msg], br_dl_s_complete
-    jmp .redraw
-.failedend:
-    mov ax, [br_dl_written]         ; nothing written: no file of ours exists,
-    or ax, [br_dl_written+2]        ; so a file the user chose to replace is
-    jz .failedstate                 ; still the old one - leave it alone
-    cmp byte [br_dl_cancel_req], 0  ; a raced Cancel deletes it in
-    jne .failedstate                ; .cancel_terminal_fail instead
-    call br_dl_partial_delete       ; a failed transfer keeps no truncated file
-.failedstate:
-    mov byte [br_dl_state], DL_FAIL
-    jmp .redraw
-.redraw:
-    call br_dl_redraw
-    cmp byte [br_dl_mgr_close_after], 0
-    je .mainclose
-    ; Keep the window available to report a failed cleanup. A successfully
-    ; cancelled transfer reaches DL_CANCEL only after the partial file has
-    ; been deleted; terminal I/O errors remain visible for the user.
-    cmp byte [br_dl_state], DL_CANCEL
-    je .destroy_manager
-    cmp byte [br_dl_state], DL_DONE
-    je .destroy_done                ; Close during the final write: finished
-    cmp byte [br_dl_state], DL_FAIL
-    jne .mainclose
-    jmp .cancel_terminal_fail
-.destroy_done:
-    mov byte [br_dl_mgr_close_after], 0
-    mov bx, [br_dl_win]
-    or bx, bx
-    jz .mainclose
-    mov word [br_dl_win], 0
-    call OSAPI_WM_DESTROY
-.mainclose:
-    cmp byte [br_dl_close_after], 0
-    je .out
-    mov byte [br_dl_close_after], 0
-    mov bx, [br_win]
-    call OSAPI_WM_CLOSE
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; The save dialog's destination is br_dl_dir/br_dl_drive. Restore that exact
-; instance folder around deletion so a later directory change cannot leave
-; the partial file behind.
-br_dl_partial_delete:
-    push bx
-    push dx
-    push si
-    call OSAPI_FILE_HERE
-    mov [br_dl_dirbak], dx
-    mov [br_dl_drivebak], bl
-    mov dx, [br_dl_dir]
-    mov bl, [br_dl_drive]
-    call OSAPI_FILE_GOTO
-    jc .restore
-    mov si, br_dl_name
-    call OSAPI_FILE_DELETE
-    pushf
-    push ax
-    jmp short .restore_saved
-.restore:
-    pushf
-    push ax
-.restore_saved:
-    mov dx, [br_dl_dirbak]
-    mov bl, [br_dl_drivebak]
-    call OSAPI_FILE_GOTO
-    pop ax
-    popf
-    pop si
-    pop dx
-    pop bx
-    ret
-
-br_dl_close_stream:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    xor cx, cx                      ; the download's one bar comes down
-    xor dx, dx                      ; (.write's OSAPI_FS_OP): every terminal
-    call OSAPI_FS_OP                ; path comes through here
-    cmp byte [br_dl_seq], 2
-    je .fallback
-    cmp byte [br_dl_stream], 0
-    je .out
-    mov si, br_dl_name
-    mov al, 0
-    mov di, [br_dl_token]
-    xor cx, cx
-    call OSAPI_FILE_WRITE_SEQ
-    jc .bad
-    mov byte [br_dl_stream], 0
-    mov word [br_dl_token], 0
-    jmp .out
-.bad:
-    mov byte [br_dl_fail_reason], 1
-    mov word [br_dl_msg], br_dl_s_write
-    jmp .out
-.fallback:
-    mov byte [br_dl_seq], 0
-    clc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_freebuf:
-    push ax
-    push dx
-    mov dx, [br_dl_bufseg]
-    or dx, dx
-    jz .out
-    call OSAPI_MEM_FREE
-    mov word [br_dl_bufseg], 0
-.out:
-    pop dx
-    pop ax
-    ret
-
-; Main Browser close: synchronously close owned resources; the kernel then
-; tears down the single worker and all instance claims together.
-br_dl_mainclose:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    ; A live worker owns the socket and can be preempted between any two
-    ; instructions. Refuse this close, request cancellation, and let its
-    ; acknowledged wake finish the file cleanup before WM_CLOSE retries it.
-    mov al, [br_dl_state]
-    cmp al, DL_OPEN
-    jb .close_now
-    cmp al, DL_DONE
-    jae .close_now
-    mov byte [br_dl_close_after], 1
-    cmp al, DL_CANCELREQ
-    je .cancel_waiting
-    cmp al, DL_CANCELREADY
-    je .cancel_waiting
-    mov byte [br_dl_cancel_req], 1
-    mov byte [br_dl_state], DL_CANCELREQ
-    mov word [br_dl_msg], br_dl_s_canceling
-.cancel_waiting:
-    stc
-    jmp .out
-.close_now:
-    ; The worker also owns the ordinary page-fetch socket. The generation
-    ; handshake makes this unconditional abort safe even after a settled page.
-    call br_abort
-    mov al, [br_dl_hnd]
-    or al, al
-    jz .stream
-    mov bh, NET_CLASS
-    mov bl, NETV_CLOSE
-    call OSAPI_DRV_CALL
-    mov byte [br_dl_hnd], 0
-.stream:
-    call br_dl_close_stream
-    call br_dl_freebuf
-    mov bx, [br_dl_win]
-    or bx, bx
-    jz .done
-    mov word [br_dl_win], 0
-    call OSAPI_WM_DESTROY
-.done:
-    call br_dl_partdrop
-    clc
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; Download worker. It shares the Browser's one task but has its own URL,
-; request, socket, parser and counters. br_rxb is reused only after each
-; current receive has been consumed, and the disk cluster stays parked until
-; the UI task acknowledges it.
-; =============================================================================
-br_dl_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    cmp byte [br_dl_pending], 0
-    jne .retrywake
-    mov al, [br_dl_cancel_req]
-    or al, al
-    jz .state
-    cmp byte [br_dl_state], DL_CANCELREADY
-    je .out
-    call br_dl_sockclose
-    mov ax, [br_dl_fill]
-    or ax, ax
-    jz .cancelready
-    mov byte [br_dl_final], 2
-    mov byte [br_dl_pending], 1
-    mov byte [br_dl_state], DL_PENDING
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.cancelready:
-    mov byte [br_dl_state], DL_CANCELREADY
-    mov bx, [br_dl_win]
-    or bx, bx
-    jnz .cancelwake
-    ; The manager may have been closed while the worker was reaching this
-    ; state. The Browser's UI wake reaps the acknowledged cancellation.
-    mov bx, [br_win]
-.cancelwake:
-    call OSAPI_WM_WAKE
-    jmp .out
-.state:
-    mov al, [br_dl_state]
-    cmp al, DL_OPEN
-    je .open
-    cmp al, DL_WAIT
-    je .wait
-    cmp al, DL_SEND
-    je .send
-    cmp al, DL_HEAD
-    je .head
-    cmp al, DL_BODY
-    je .body
-    jmp .out
-.retrywake:
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.open:
-    call net_find
-    jc .nodriver
-    jz .nolink
-    mov bh, NET_CLASS
-    mov bl, NETV_OPEN
-    mov si, br_dl_host
-    mov cx, [br_dl_port]
-    call OSAPI_DRV_CALL
-    jc .retry
-    mov [br_dl_hnd], al
-    ; This socket carries a file body, not a page or control exchange. Ask
-    ; NETV_BULK for the shared large receive ring while the socket is still
-    ; empty; refusal is intentionally harmless (the driver keeps the lean
-    ; ring), matching SPEC.md 72.21.1.
-    mov bh, NET_CLASS
-    mov bl, NETV_BULK
-    call OSAPI_DRV_CALL
-    mov byte [br_dl_state], DL_WAIT
-    jmp .out
-.nodriver:
-    mov word [br_dl_msg], br_dl_s_nodriver
-    jmp .fail
-.nolink:
-    mov word [br_dl_msg], br_dl_s_nolink
-    jmp .fail
-.wait:
-    call br_dl_qstat
-    jc .retry
-    cmp ah, NSK_UP
-    je .connected
-    cmp ah, NSK_CONNECT
-    je .out
-    mov word [br_dl_msg], br_dl_s_http
-    jmp .fail
-.connected:
-    call br_dl_request
-    mov byte [br_dl_state], DL_SEND
-    jmp .out
-.send:
-    mov si, br_dl_reqb
-    add si, [br_dl_sent]
-    mov cx, [br_dl_reqn]
-    sub cx, [br_dl_sent]
-    mov al, [br_dl_hnd]
-    mov bh, NET_CLASS
-    mov bl, NETV_SEND
-    call OSAPI_DRV_CALL
-    jc .retry
-    add [br_dl_sent], cx
-    mov ax, [br_dl_sent]
-    cmp ax, [br_dl_reqn]
-    jb .out
-    mov byte [br_dl_state], DL_HEAD
-    jmp .out
-.head:
-    cmp byte [br_nstate], BN_SEND   ; br_rxb still holds the page's unsent request
-    je .out
-    mov cx, BR_CHUNK
-    call br_dl_recv
-    jc .retry
-    or cx, cx
-    jz .headend
-    mov si, br_rxb
-.hbyte:
-    lodsb
-    cmp al, 10
-    je .lineend
-    cmp al, 13
-    je .hnext
-    mov bx, [br_dl_linelen]
-    cmp bx, BR_DL_LINE-1
-    jae .badhead
-    mov [br_dl_line+bx], al
-    inc bx
-    mov [br_dl_linelen], bx
-    jmp .hnext
-.lineend:
-    call br_dl_headerline
-    jc .badhead
-    cmp byte [br_dl_state], DL_OPEN ; redirect: the rest of this receive
-    je .out                         ; belongs to the old reply, drop it
-    cmp byte [br_dl_headers_done], 0
-    jne .afterheaders
-.hnext:
-    loop .hbyte
-    jmp .out
-.afterheaders:
-    ; The LF just consumed belongs to the header. The rest of this receive
-    ; begins at the body and must be staged before the shared RX buffer moves.
-    dec cx
-    jz .out
-    cmp byte [br_dl_have_len], 0
-    je .stagebody
-    cmp word [br_dl_total+2], 0
-    jne .stagebody
-    cmp cx, [br_dl_total]
-    jbe .stagebody
-    mov cx, [br_dl_total]
-.stagebody:
-    mov ax, [br_dl_fill]
-    mov di, [br_dl_bufseg]
-    mov es, di
-    xor di, di
-    add di, ax
-    mov [br_dl_chunkn], cx
-    cld
-    rep movsb
-    mov ax, [br_dl_chunkn]
-    add [br_dl_fill], ax
-    inc byte [br_dl_recvseq]       ; odd while the 32-bit counter is changing
-    add [br_dl_recvbytes], ax
-    adc word [br_dl_recvbytes+2], 0
-    inc byte [br_dl_recvseq]       ; publish a stable even snapshot
-    mov byte [br_dl_state], DL_BODY
-    cmp byte [br_dl_have_len], 0
-    je .out
-    mov ax, [br_dl_recvbytes]
-    cmp ax, [br_dl_total]
-    jne .out
-    mov ax, [br_dl_recvbytes+2]
-    cmp ax, [br_dl_total+2]
-    jne .out
-    mov byte [br_dl_final], 1
-    mov byte [br_dl_pending], 1
-    mov byte [br_dl_state], DL_PENDING
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.badhead:
-    mov word [br_dl_msg], br_dl_s_headers
-    jmp .fail
-.headend:
-    call br_dl_qstat
-    jc .retry
-    cmp ah, NSK_CLOSING
-    je .shortreply
-    cmp ah, NSK_CLOSED
-    je .shortreply
-    cmp ah, NSK_FAILED              ; reset or broken socket: no more bytes
-    je .shortreply
-    cmp ah, NSK_UP
-    je .out
-    cmp ah, NSK_CONNECT
-    je .out
-    jmp .out
-.shortreply:
-    mov word [br_dl_msg], br_dl_s_incomplete
-    jmp .fail
-.body:
-    mov ax, [br_dl_fill]
-    cmp ax, [br_dl_clustersz]
-    jae .queue
-    mov cx, [br_dl_clustersz]
-    sub cx, ax
-    cmp cx, BR_CHUNK
-    jbe .cap
-    mov cx, BR_CHUNK
-.cap:
-    cmp byte [br_dl_have_len], 0
-    je .recvbody
-    mov ax, [br_dl_recvbytes+2]
-    cmp ax, [br_dl_total+2]
-    ja .finishbody
-    jb .remaining
-    mov ax, [br_dl_recvbytes]
-    cmp ax, [br_dl_total]
-    jae .finishbody
-.remaining:
-    mov ax, [br_dl_total]
-    mov dx, [br_dl_total+2]
-    sub ax, [br_dl_recvbytes]
-    sbb dx, [br_dl_recvbytes+2]
-    or dx, dx
-    jnz .recvbody
-    cmp ax, cx
-    jae .recvbody
-    mov cx, ax
-.recvbody:
-    or cx, cx
-    jz .finishbody
-    cmp byte [br_nstate], BN_SEND   ; ...see .head: do not receive over it
-    je .out
-    call br_dl_recv
-    jc .retry
-    or cx, cx
-    jz .bodyend
-    mov ax, [br_dl_fill]
-    mov di, [br_dl_bufseg]
-    mov es, di
-    xor di, di
-    add di, ax
-    mov si, br_rxb
-    mov [br_dl_chunkn], cx
-    cld
-    rep movsb
-    mov cx, [br_dl_chunkn]         ; REP MOVSB consumed CX; retain NETV_RECV's
-                                    ; byte count for both counters below
-    mov ax, [br_dl_fill]
-    add ax, cx
-    mov [br_dl_fill], ax
-    inc byte [br_dl_recvseq]       ; odd while the 32-bit counter is changing
-    add [br_dl_recvbytes], cx
-    adc word [br_dl_recvbytes+2], 0
-    inc byte [br_dl_recvseq]       ; publish a stable even snapshot
-    mov byte [br_dl_state], DL_BODY
-    mov ax, [br_dl_fill]
-    cmp ax, [br_dl_clustersz]
-    jae .queue
-    cmp byte [br_dl_have_len], 0
-    je .out
-    mov ax, [br_dl_recvbytes]
-    cmp ax, [br_dl_total]
-    jne .out
-    mov ax, [br_dl_recvbytes+2]
-    cmp ax, [br_dl_total+2]
-    jne .out
-    jmp .finishbody
-.queue:
-    mov byte [br_dl_final], 0
-    mov ax, [br_dl_recvbytes]
-    cmp ax, [br_dl_total]
-    jne .queueit
-    mov ax, [br_dl_recvbytes+2]
-    cmp ax, [br_dl_total+2]
-    jne .queueit
-    mov byte [br_dl_final], 1
-.queueit:
-    mov byte [br_dl_pending], 1
-    mov byte [br_dl_state], DL_PENDING
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.bodyend:
-    call br_dl_qstat
-    jc .retry
-    cmp ah, NSK_CLOSING
-    je .finishbody
-    cmp ah, NSK_CLOSED
-    je .finishbody
-    cmp ah, NSK_FAILED
-    je .shortbody
-    cmp ah, NSK_UP
-    je .out
-    cmp ah, NSK_CONNECT
-    je .out
-    jmp .out
-.finishbody:
-    cmp byte [br_dl_have_len], 0
-    je .endok
-    mov ax, [br_dl_recvbytes]
-    cmp ax, [br_dl_total]
-    jne .shortbody
-    mov ax, [br_dl_recvbytes+2]
-    cmp ax, [br_dl_total+2]
-    jne .shortbody
-.endok:
-    call br_dl_sockclose
-    mov byte [br_dl_final], 1
-    mov ax, [br_dl_fill]
-    or ax, ax
-    jz .emptyend
-    mov byte [br_dl_pending], 1
-    mov byte [br_dl_state], DL_PENDING
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.emptyend:
-    mov byte [br_dl_state], DL_ENDWAIT
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-    jmp .out
-.shortbody:
-    mov word [br_dl_msg], br_dl_s_incomplete
-    jmp .fail
-.retry:
-    cmp ax, NETE_BUSY
-    je .out
-    mov word [br_dl_msg], br_dl_s_http
-.fail:
-    call br_dl_sockclose
-    mov byte [br_dl_fail_reason], 2
-    mov byte [br_dl_state], DL_ENDWAIT
-    mov bx, [br_dl_win]
-    call OSAPI_WM_WAKE
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_qstat:
-    mov al, [br_dl_hnd]
-    mov bh, NET_CLASS
-    mov bl, NETV_STATUS
-    call OSAPI_DRV_CALL
-    ret
-
-br_dl_recv:
-    push ax
-    push bx
-    push dx
-    mov al, [br_dl_hnd]
-    mov di, br_rxb
-    mov bh, NET_CLASS
-    mov bl, NETV_RECV
-    call OSAPI_DRV_CALL
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 br_dl_sockclose:
     push ax
     push bx
@@ -2153,416 +772,15 @@ br_dl_sockclose:
     pop ax
     ret
 
-br_dl_request:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov di, br_dl_reqb
-    mov si, br_dl_s_get
-    call br_dl_rputs
-    mov si, br_dl_path
-    call br_dl_rputs
-    mov si, br_dl_s_http10
-    call br_dl_rputs
-    mov si, br_dl_s_host
-    call br_dl_rputs
-    mov si, br_dl_host
-    call br_dl_rputs
-    mov si, br_dl_s_agent
-    call br_dl_rputs
-    mov si, br_dl_s_conn
-    call br_dl_rputs
-    sub di, br_dl_reqb
-    mov [br_dl_reqn], di
-    mov word [br_dl_sent], 0
-    ; Reset only response-local fields; URL and destination survive redirects.
-    mov word [br_dl_linelen], 0
-    mov byte [br_dl_headers_done], 0
-    mov byte [br_dl_have_len], 0
-    mov byte [br_dl_transfer_encoding], 0
-    mov word [br_dl_location], 0
-    mov byte [br_dl_status_seen], 0
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_rputs:
-    push ax
-.loop:
-    lodsb
-    or al, al
-    jz .out
-    cmp di, br_dl_reqb+BR_DL_REQMAX-1
-    jae .out
-    stosb
-    jmp .loop
-.out:
-    pop ax
-    ret
-
 br_dl_s_get: db 'GET ', 0
 br_dl_s_http10: db ' HTTP/1.0', 13, 10, 0
 br_dl_s_host: db 'Host: ', 0
-br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.6c', 0
+br_dl_s_agent: db 13, 10, 'User-Agent: os8088 Browser 1.7', 0
 br_dl_s_conn: db 13, 10, 'Connection: close', 13, 10, 13, 10, 0
-
-br_dl_headerline:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, [br_dl_linelen]
-    mov byte [br_dl_line+bx], 0
-    mov word [br_dl_linelen], 0
-    or bx, bx
-    jz .blank
-    cmp byte [br_dl_status_seen], 0
-    jne .field
-    mov byte [br_dl_status_seen], 1
-    mov si, br_dl_line
-.status:
-    cmp byte [si], ' '
-    je .digits
-    or byte [si], 0
-    jz .bad
-    inc si
-    jmp .status
-.digits:
-    inc si
-    mov ax, 0
-    mov cx, 3
-.code:
-    mov bl, [si]
-    cmp bl, '0'
-    jb .bad
-    cmp bl, '9'
-    ja .bad
-    sub bl, '0'
-    mov dx, 10
-    mul dx
-    xor bh, bh
-    add ax, bx
-    inc si
-    loop .code
-    mov [br_dl_code], ax
-    jmp .ok
-.field:
-    mov si, br_dl_line
-    mov bx, br_dl_s_cl
-    call br_dl_lineprefix
-    jc .location
-    mov si, br_dl_line+15
-    call br_dl_parse_len
-    jc .bad
-    jmp .ok
-.location:
-    mov si, br_dl_line
-    mov bx, br_dl_s_loc
-    call br_dl_lineprefix
-    jc .encoding
-    mov si, br_dl_line+9
-    call br_dl_skipspace
-    mov di, br_dl_loc
-    mov cx, BR_DL_URLMAX-1
-.loccopy:
-    lodsb
-    or al, al
-    jz .locterm
-    or cx, cx
-    jnz .locstore
-    jmp .bad
-.locstore:
-    stosb
-    loop .loccopy
-    cmp byte [si], 0
-    jne .bad
-.locterm:
-    mov byte [di], 0
-    mov word [br_dl_location], 1
-    jmp .ok
-.encoding:
-    mov si, br_dl_line
-    mov bx, br_dl_s_te
-    call br_dl_lineprefix
-    jc .ok
-    mov byte [br_dl_transfer_encoding], 1
-    jmp .ok
-.blank:
-    cmp byte [br_dl_status_seen], 0
-    je .bad
-    cmp byte [br_dl_transfer_encoding], 0
-    jne .chunked
-    mov ax, [br_dl_code]
-    cmp ax, 301
-    je .redirect
-    cmp ax, 302
-    je .redirect
-    cmp ax, 303
-    je .redirect
-    cmp ax, 307
-    je .redirect
-    cmp ax, 308
-    je .redirect
-    cmp ax, 200
-    jb .httpbad
-    cmp ax, 299
-    ja .httpbad
-    mov byte [br_dl_headers_done], 1
-    mov byte [br_dl_state], DL_BODY
-    mov word [br_dl_msg], br_dl_s_receiving
-    jmp .ok
-.redirect:
-    cmp word [br_dl_location], 0
-    je .redirbad
-    cmp byte [br_dl_redirs], 3
-    jae .redirbad
-    inc byte [br_dl_redirs]
-    call br_dl_resolve_redirect
-    jc .redirbad
-    call br_dl_sockclose
-    call br_dl_split
-    jc .redirbad
-    mov byte [br_dl_state], DL_OPEN
-    mov byte [br_dl_status_seen], 0
-    mov byte [br_dl_headers_done], 0
-    mov byte [br_dl_have_len], 0
-    mov byte [br_dl_transfer_encoding], 0
-    jmp .ok
-.chunked:
-    mov word [br_dl_msg], br_dl_s_chunked
-    jmp .bad
-.httpbad:
-    mov word [br_dl_msg], br_dl_s_httpcode
-    jmp .bad
-.redirbad:
-    mov word [br_dl_msg], br_dl_s_redirect
-.bad:
-    stc
-    jmp .out
-.ok:
-    clc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-br_dl_lineprefix:
-    push ax
-    push cx
-    push dx
-.next:
-    mov al, [bx]
-    or al, al
-    jz .yes
-    mov ah, [si]
-    cmp ah, 'A'
-    jb .compare
-    cmp ah, 'Z'
-    ja .compare
-    or ah, 0x20
-.compare:
-    cmp al, ah
-    jne .no
-    inc bx
-    inc si
-    jmp .next
-.yes:
-    pop dx
-    pop cx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop ax
-    stc
-    ret
-
-br_dl_skipspace:
-    cmp byte [si], ' '
-    je .next
-    cmp byte [si], 9
-    jne .out
-.next:
-    inc si
-    jmp br_dl_skipspace
-.out:
-    ret
-
-br_dl_parse_len:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    call br_dl_skipspace
-    mov word [br_dl_numlo], 0
-    mov word [br_dl_numhi], 0
-    xor cx, cx
-.digit:
-    mov al, [si]
-    cmp al, '0'
-    jb .finish
-    cmp al, '9'
-    ja .finish
-    sub al, '0'
-    xor ah, ah
-    mov di, ax
-    mov ax, [br_dl_numlo]
-    mov bx, 10
-    mul bx
-    mov [br_dl_worklo], ax
-    mov [br_dl_workhi], dx
-    mov ax, [br_dl_numhi]
-    mul bx
-    or dx, dx
-    jnz .bad
-    add ax, [br_dl_workhi]
-    jc .bad
-    mov [br_dl_numhi], ax
-    mov ax, [br_dl_worklo]
-    add ax, di
-    adc word [br_dl_numhi], 0
-    jc .bad
-    mov [br_dl_numlo], ax
-    inc si
-    inc cx
-    jmp .digit
-.finish:
-    or cx, cx
-    jz .bad
-    call br_dl_skipspace
-    cmp byte [si], 0
-    jne .bad
-    cmp byte [br_dl_have_len], 0
-    je .store
-    mov ax, [br_dl_numlo]
-    cmp ax, [br_dl_total]
-    jne .bad
-    mov ax, [br_dl_numhi]
-    cmp ax, [br_dl_total+2]
-    jne .bad
-    jmp .ok
-.store:
-    mov ax, [br_dl_numlo]
-    mov [br_dl_total], ax
-    mov ax, [br_dl_numhi]
-    mov [br_dl_total+2], ax
-    mov byte [br_dl_have_len], 1
-.ok:
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 br_dl_s_cl: db 'content-length:', 0
 br_dl_s_loc: db 'location:', 0
 br_dl_s_te: db 'transfer-encoding:', 0
-
-br_dl_resolve_redirect:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp byte [br_dl_loc], 'h'
-    jne .relative
-    mov si, br_dl_loc
-    mov bx, br_s_scheme
-    call br_dl_prefix
-    jc .https
-    mov si, br_dl_loc
-    mov di, br_dl_url
-    mov cx, BR_DL_URLMAX
-    call br_dl_copyz
-    clc
-    jmp .out
-.https:
-    mov si, br_dl_loc
-    mov bx, br_s_schemes
-    call br_dl_prefix
-    jnc .bad
-.relative:
-    ; Start with the current absolute URL. Root-relative replaces its path;
-    ; directory-relative replaces only the last path component.
-    mov si, br_dl_url
-    mov di, br_dl_url
-    cmp byte [br_dl_loc], '/'
-    jne .directory
-    add si, 7
-.authority:
-    lodsb
-    or al, al
-    jz .bad
-    cmp al, '/'
-    jne .authority
-    mov di, si
-    dec di
-    jmp .append
-.directory:
-    mov si, br_dl_url
-    xor bx, bx
-.scan:
-    mov al, [si]
-    or al, al
-    jz .cut
-    cmp al, '/'
-    jne .scnext
-    mov bx, si
-.scnext:
-    inc si
-    jmp .scan
-.cut:
-    or bx, bx
-    jz .bad
-    mov di, bx
-    inc di
-.append:
-    mov si, br_dl_loc
-    mov cx, BR_DL_URLMAX-1
-.copy:
-    lodsb
-    or al, al
-    jz .term
-    stosb
-    loop .copy
-    jmp .bad
-.term:
-    mov byte [di], 0
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 br_dl_tpl:
     dw 40, 20, 560, 154
@@ -2576,3 +794,5 @@ OS88UI_BTNREC br_dl_btrec, br_dl_btnrects, br_dl_btnlabels, 0, 1, br_dl_btplace
                                 ; (the LIVE COUNT is the record's word, written
                                 ; with br_dl_btncount by br_dl_button: the
                                 ; label's ADDRESS here was a count of ~40,000)
+br_dl_btrecn equ br_dl_btrec + OS88UI_BT_N  ; ...named for part 0, which has
+                                ; no os88ui.inc to add the field with

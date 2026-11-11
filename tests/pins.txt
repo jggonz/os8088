@@ -464,9 +464,6 @@ X apps/imgtest/imgtest.asm @it_entry     # ...the same instrument's source claim
                                          # grown per case for the same one test
                                          # run, never on a user's machine
 
-C apps/browser/brcopyselection.inc br_copyseg  # Copy Selection's text buffer,
-                                         # claimed, handed to OSAPI_CLIP_PUT and
-                                         # freed inside br_copyselection
 C apps/xtmp3/x3pars.inc x3p_pseg         # the front end's probe scratch,
                                          # claimed and freed inside x3p_probe
 D apps/xtmp3/x3eng.inc x3_xseg           # the external ring a DSP 3.00+ plays
@@ -567,11 +564,24 @@ N apps/pixelstein/pxstein.asm op:PX_PART_LEV  # the 10KB levels, behind the same
                                          # fence (6.5)
 N apps/pixelstein/pxstein.asm pxl_sseg   # the 60KB sprite set, behind the same
                                          # fence (6.5)
-N apps/browser/brdownload.inc op:0      # the Download Manager's
-                                         # lazy part: far-called, and Copy
-                                         # Selection claims under that far call, so
-                                         # op_movable's rule (SPEC.md 20.12.12)
-                                         # refuses it; held while the manager is up
+N apps/browser/brimage.inc op:1  # the image part (SPEC.md 71.26): its code
+                                         # is banked in br_im_vec and far-called
+                                         # by the WORKER mid-decode, and it hosts
+                                         # the decoder parts (71.30), which hold
+                                         # its segments. Dropped at IE_END
+N apps/browser/brimage.inc @br_im_rs_pxload  # a decoder part (71.30, 71.31),
+                                         # far-called by the worker with part 1's
+                                         # segments in its header; dropped with
+                                         # part 1
+N apps/browser/brdownload.inc op:0  # the Download Manager's lazy part
+                                         # (SPEC.md 71.20.5): its code is banked
+                                         # in br_dl_vec and far-called - by the
+                                         # WORKER too, mid-transfer - and its
+                                         # data in br_dl_partdseg; Copy Selection
+                                         # and the Save dialog's answer claim
+                                         # under that far call, so op_movable's
+                                         # rule (SPEC.md 20.12.12) refuses it.
+                                         # Held while br_dl_after keeps it
 N apps/waverack/waverack.asm wr_bseg   # WaveRack's composing band (10KB),
                                          # claimed at entry and held for the
                                          # window's life; UI-only, so a relocation

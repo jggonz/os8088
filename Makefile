@@ -283,6 +283,7 @@ VMXTWR := $(CURDIR)/vm/xt-waverack
 VMXTCOVOX := $(CURDIR)/vm/xt-covox
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
+VM286MEGANET := $(CURDIR)/vm/286-mega-net
 VM286VID := $(CURDIR)/vm/286-video
 # ...and the three machines `make viddemo`'s hard disks are built for, one per
 # adapter - the owner's own: the mr286 for VGA's IDE disk, a 5150 on the
@@ -3936,6 +3937,21 @@ CORE_GAMES := $(BUILD)/mines.o88
 COREAPPS := $(CORE_TOOLS) $(CORE_GAMES)
 COREAPPSARGS := $(addprefix APPS:,$(CORE_TOOLS)) \
                 $(addprefix GAMES:,$(CORE_GAMES))
+# ...AND THE 720KB SYSTEM DISK LEAVES REDLINE OFF (SPEC.md 24.3.2, the owner's
+# decision of 2026-11-11): the Browser's PNG and JPEG parts (71.30) are 25 KB
+# and put this disk 17 clusters over. REDLINE, 39 KB, is the system-only core
+# package the 360KB disk already leaves off, and at 720KB more720.img carries
+# it instead (MORE720 below)
+# ...AND TELNET (2026-11-11): the older formats and the image maps (71.31,
+# 71.32) took the Browser to 100 KB and this disk to 712 of 713 clusters,
+# under t_sysfree's floor of ten. Telnet is 11 clusters and stays on
+# apps720.img; the owner left what goes to the agent ("The Wire fetches the
+# rest"). ...AND CDRACK (11 clusters), after main's tree of 2026-11-11 put
+# the disk back at 708 of 713: a CD-ROM drive is an AT's, whose 1.44MB
+# system disk keeps it, and more720.img carries it here
+SYS720OMIT := $(BUILD)/redline.o88 $(BUILD)/telnet.o88 $(BUILD)/cdrack.o88
+COREAPPS720 := $(filter-out $(SYS720OMIT),$(COREAPPS))
+COREAPPSARGS720 := $(filter-out $(addprefix APPS:,$(SYS720OMIT)),$(COREAPPSARGS))
 
 # ...and MEDIA, which every disk carries: it is where a File Open or File
 # Save starts (SPEC.md 38.10), so it has to exist on whatever volume the user
@@ -4207,12 +4223,14 @@ SYSDOCRAW := $(BUILD)/readme-plain.txt
 # stays in SYSTEM/ on this disk and whose catalog carries both. So the "a
 # network machine's system disk should carry the programs that use its
 # driver" argument further up is spent at this geometry: the one network
-# program it carries is the one that fetches the others. Both stay on the
-# 720KB, 1.44MB and 1.2MB system disks and on every apps disk, and
-# BROWSER.HTM is in MEDIA/ on build/apps360.img beside the browser that
-# opens it - this disk never carried the page. The 360KB gate disks
-# (ether360, thewire360, the usbm pair) take the same list; every network
-# row opens the browser off B:.
+# program it carries is the one that fetches the others. The Browser stays
+# on the 720KB, 1.44MB and 1.2MB system disks, Telnet on the 1.44MB and
+# 1.2MB ones (SPEC.md 24.3.2). At 360KB the Browser and
+# BROWSER.HTM are on build/network360.img, the program at the root and the
+# page in MEDIA/, and no longer on apps360.img (SPEC.md 71.30) - this disk
+# never carried the page. The 360KB gate disks (ether360, thewire360, the
+# usbm pair) take the same list; every network row opens the browser off B:,
+# off a disk that carries it.
 #
 # **AND MINES IS THE NEXT** (SPEC.md 24.3.1.3): STIKMENU.DRV, Locator's Sticky
 # Apps menu (SPEC.md 110.12), took four of the nine clusters left, and five
@@ -5227,10 +5245,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STI
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS720) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(filter-out $(addprefix SYSTEM:,$(SYS720OMIT)),$(SYSOPTIONALARGS)) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS720) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -5604,6 +5622,32 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
 emstest: $(BUILD)/emstest.img
 	@echo "emstest: build/emstest.img - EMS.DRV wanted, EMSTEST.O88 at the root"
 	@echo "              Run: python3 tests/ems.py, python3 tests/videms.py"
+
+# ETHEREMSTEST - ETHER.DRV (bit 4) AND EMS.DRV (bit 7) wanted on one 360KB
+# system disk: the Browser's EMS legs over a network card rather than
+# MartyPC's LPT cable, on 86Box (`OS88_EMU=86box python3 tests/brems.py
+# --net`, an XT with an NE1000 and a Lo-tech board, os88box86api's
+# `_ne1k_ems`). The cable fetches a 768 KiB page in tens of emulated minutes,
+# the card in seconds; the row asks "does it work", MartyPC keeps the timing
+$(BUILD)/etheremscfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/etheremscfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 7)).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/etherems360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS360) \
+            $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) \
+            $(BUILD)/etheremscfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/etheremscfg/system.cfg \
+		$(APPDATAFOLDER)
+
+.PHONY: etheremstest
+etheremstest: $(BUILD)/etherems360.img
+	@echo "etheremstest: build/etherems360.img - ETHER.DRV and EMS.DRV wanted"
+	@echo "              Run: OS88_EMU=86box python3 tests/brems.py --net"
 
 # CDROMTEST - SPEC.md 119.7's gate: the 1.44MB system disk with a SYSTEM.CFG
 # that wants CDROM.DRV (bit 8), and build/cdfix.iso, the disc tests/cdrom.py
@@ -6245,6 +6289,24 @@ $(BUILD)/ftpkeepa.img $(BUILD)/ftpkeepb.img: tools/os88disk.py | $(BUILD)
 .PHONY: ftpkeeptest
 ftpkeeptest: $(BUILD)/ftpkeep.img $(BUILD)/ftpkeepa.img $(BUILD)/ftpkeepb.img
 	@echo "ftpkeeptest: build/ftpkeep.img - run it with: python3 tests/ftpkeep.py"
+
+# BRKEEPTEST: the Browser's KEPT PAGES (SPEC.md 71.28) are a FIXED volume's,
+# so tests/brkeep.py boots a hard disk (ftpkeep.img's shape): the system, a
+# SYSTEM.CFG that wants ETHER.DRV, BROWSER.O88 and SYSTEM/APPDATA, the
+# Browser opened from C:. The row boots a scratch copy; this is only read.
+$(BUILD)/brkeep.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+                     $(DRIVERS) $(BUILD)/system.cfg $(BUILD)/browser.o88 \
+                     tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+	    --kernel $(KERNFILE) \
+	    $(DRIVERS) $(BUILD)/system.cfg $(BUILD)/browser.o88 \
+	    --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify-hdd $@
+
+.PHONY: brkeeptest
+brkeeptest: $(BUILD)/brkeep.img $(BUILD)/ether360.img $(BUILD)/brtest360.img
+	@echo "brkeeptest: build/brkeep.img - run it with: python3 tests/brkeep.py"
 
 .PHONY: ftpspeed
 ftpspeed: $(IMG) $(IMG720) $(IMG360) $(IMG120) $(BUILD)/ftpspeed.img \
@@ -7687,8 +7749,8 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/brdocmarks.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
+                      apps/browser/brimage.inc apps/browser/brimage_const.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
-                      apps/browser/assets/brdownload_icons.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
@@ -8813,30 +8875,125 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
+# The primary's CONSTANTS the rarely used UI (apps/browser/brcold.inc, SPEC.md
+# 71.24) reads: a part is assembled alone, and these are the primary's equs
+BRCOLDK := BN_ERR BR_ACTMAX BR_BMCOUNT BR_BMHEADER BR_BMMAX BR_BMREC \
+           BR_BMRECSZ BR_BMTITLE BR_BMURL BR_BMURLBASE BR_CTXGAP BR_CTXH \
+           BR_CTXH_COPY BR_CTXH_LINK BR_CTXPAD BR_HIDMAX BR_SUBSZ BR_URLBM \
+           FLD_FORM FLD_LEN FLD_NAME FLD_OFS FLD_TYPE FLD_VALUE SUB_AEND SUB_ASTART
+
 # The part's symbols are the browser's OWN tree's (-I $(BUILD)/): a BUILD=
 # tree read build/'s copy until 2026-11-04, a stale map's or none at all
 $(BUILD)/brdownload_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
-                           apps/browser/brcopyselection.inc tools/brdlsyms.py | $(BUILD)
+                           apps/browser/brdownload_engine.inc \
+                           apps/browser/brcopyselection.inc \
+                           apps/browser/brcold.inc \
+                           apps/browser/assets/brdownload_icons.inc \
+                           tools/brdlsyms.py | $(BUILD)
 	python3 tools/brdlsyms.py $(BUILD)/browser.map \
-	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
-	        -o $@
+	        apps/browser/brdownload_part.asm \
+	        apps/browser/brdownload_paint.inc apps/browser/brdownload_engine.inc \
+	        apps/browser/brcopyselection.inc apps/browser/brcold.inc \
+	        apps/browser/assets/brdownload_icons.inc \
+	        --also net_cls BN_SEND BR_CHUNK $(BRCOLDK) -o $@
 
 $(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols.inc \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
+                           apps/browser/brdownload_engine.inc \
                            apps/browser/brdownload_const.inc \
                            apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
+                           apps/browser/brcold.inc \
+                           apps/browser/assets/brdownload_icons.inc \
+                           drivers/net/netpkg.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ \
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I drivers/net/ -I $(BUILD)/ \
+	        --before "[map all $(@:.bin=.map)]" \
 	        -o $@ apps/browser/brdownload_part.asm
 	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
 
+# PART 1, the images (SPEC.md 71.26): the engine, the GIF reader on the shared
+# LZW, and PiXEL's plan search and threshold assembled from PiXEL's own source
+# (apps/pixel/pxplan1.inc, pxt1.inc, pxbayer.inc) - shared, never copied
+BRIMGK := BR_CHUNK BR_IMGRMAX BR_CELL
+$(BUILD)/brimage_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brimage_part.asm \
+                           apps/browser/brimage_anim.inc \
+                           apps/browser/brimage_px.inc \
+                           apps/browser/brimage_const.inc \
+                           tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brimage_part.asm apps/browser/brimage_anim.inc \
+	        apps/browser/brimage_px.inc apps/browser/brimage_const.inc \
+	        --also net_cls od_find $(BRIMGK) -o $@
+
+$(BUILD)/browser.imgpart.bin: $(BUILD)/browser.bin $(BUILD)/brimage_part_symbols.inc \
+                           apps/browser/brimage_part.asm \
+                           apps/browser/brimage_anim.inc \
+                           apps/browser/brimage_px.inc \
+                           apps/browser/brimage_const.inc \
+                           apps/browser/brdocmarks.inc \
+                           apps/pixel/pxpart.inc apps/pixel/pxrec.inc \
+                           apps/os88lzw.inc apps/pixel/pxplan1.inc \
+                           apps/pixel/pxplans.inc apps/pixel/pxt1.inc \
+                           apps/pixel/pxbayer.inc \
+                           drivers/net/netpkg.inc \
+                           tools/brdlsyms.py apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I apps/pixel/ \
+	        -I drivers/net/ -I $(BUILD)/ \
+	        --before "[map all $(@:.bin=.map)]" \
+	        -o $@ apps/browser/brimage_part.asm
+	@echo "browser image part: $(call FILESIZE,$@) bytes"
+
+# PARTS 2 AND 3, PNG and JPEG (SPEC.md 71.30): PiXEL's own decoders assembled
+# a second time, linked against PART 1 - their host - by tools/brpxlink.py
+# out of part 1's symbol map. -I $(BUILD)/brpx/ first: its pxlink.inc is the
+# Browser's, and PiXEL's own (in $(BUILD)/) is never on the path
+BRPXSRC := apps/pixel/pxpart.inc apps/pixel/pxrec.inc apps/pixel/pxplan.inc \
+           apps/pixel/pxplan1.inc apps/pixel/pxplans.inc apps/os88api.inc
+$(BUILD)/brpx/pxlink.inc: $(BUILD)/browser.imgpart.bin tools/brpxlink.py
+	@mkdir -p $(BUILD)/brpx
+	python3 tools/brpxlink.py $(BUILD)/browser.imgpart.map \
+	        $(BUILD)/browser.imgpart.bin -o $@
+$(BUILD)/brpxpng.bin: apps/pixel/pxpng.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
+	$(NASM) -f bin -w+error -DPXP_BG=255 -I $(BUILD)/brpx/ -I apps/ \
+	        -I apps/pixel/ -o $@ apps/pixel/pxpng.asm
+$(BUILD)/brpxjpeg.bin: apps/pixel/pxjpeg.asm apps/pixel/pxhmore.inc \
+                       $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
+	$(NASM) -f bin -w+error -DPXP_BG=255 -I $(BUILD)/brpx/ -I apps/ \
+	        -I apps/pixel/ -o $@ apps/pixel/pxjpeg.asm
+# PARTS 4, 5 AND 6 (SPEC.md 71.31): PiXEL's EXTRAS (TIFF, ICO, IFF, MacPaint)
+# and SIMPLE FORMATS (BMP, PCX, TGA, PNM, PIX) the same way, and the
+# Browser's own XBM part beside them
+$(BUILD)/brpxextra.bin: apps/pixel/pxextra.asm apps/pixel/pxhmore.inc \
+                        apps/os88lzw.inc \
+                        $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
+	$(NASM) -f bin -w+error -DPXP_BG=255 -I $(BUILD)/brpx/ -I apps/ \
+	        -I apps/pixel/ -o $@ apps/pixel/pxextra.asm
+$(BUILD)/brpxsimp.bin: apps/pixel/pxsimp.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
+	$(NASM) -f bin -w+error -DPXP_BG=255 -I $(BUILD)/brpx/ -I apps/ \
+	        -I apps/pixel/ -o $@ apps/pixel/pxsimp.asm
+$(BUILD)/brxbm.bin: apps/browser/brxbm.asm $(BRPXSRC) $(BUILD)/brpx/pxlink.inc
+	$(NASM) -f bin -w+error -I $(BUILD)/brpx/ -I apps/ \
+	        -I apps/pixel/ -o $@ apps/browser/brxbm.asm
+
 $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
+                      $(BUILD)/browser.imgpart.bin \
+                      $(BUILD)/brpxpng.bin $(BUILD)/brpxjpeg.bin \
+                      $(BUILD)/brpxextra.bin $(BUILD)/brpxsimp.bin \
+                      $(BUILD)/brxbm.bin \
                       tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(BUILD)/browser.bin -o $@ \
-	        --part $(BUILD)/browser.part.bin --part-compress lz4
+	        --part $(BUILD)/browser.part.bin \
+	        --part $(BUILD)/browser.imgpart.bin \
+	        --part $(BUILD)/brpxpng.bin \
+	        --part $(BUILD)/brpxjpeg.bin \
+	        --part $(BUILD)/brpxextra.bin \
+	        --part $(BUILD)/brpxsimp.bin \
+	        --part $(BUILD)/brxbm.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -14937,7 +15094,7 @@ BRFILES := $(BUILD)/browser.o88 $(BUILD)/ANOTE.O88 apps/browser/browser.htm $(BU
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
            $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM \
-           $(BUILD)/LINARENA.HTM $(BUILD)/DOCWIDE.HTM
+           $(BUILD)/LINARENA.HTM $(BUILD)/DOCWIDE.HTM $(BUILD)/IMAGES.HTM
 
 #> [Gate disks] browsertest :: the Browser's page disks for tests/br*.py
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
@@ -14984,6 +15141,8 @@ $(BUILD)/LINKS.HTM: tests/htm/links.htm | $(BUILD)
 $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/IMAGES.HTM: tests/htm/images.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/BR16C.HTM: tests/htm/br16ccheck.htm | $(BUILD)
 	cp $< $@
@@ -16402,6 +16561,18 @@ $(BUILD)/pciethertest.img: $(BUILD)/mega.img $(BUILD)/pciethercfg/system.cfg
 		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/pciethercfg/system.cfg $(APPDATAFOLDER)
 
+# MEGAETHER - kern_mega with ETHER.DRV already wanted (an NE2000): ethertest's
+# disk on kern_mega, mega.img's files and $(BUILD)/system.cfg. vm/286-mega-net
+# boots it with the Browser's page disk in B: (`make 286-mega-net`), the
+# machine to LOOK at the Browser's pictures on a 286 in protected mode
+# (SPEC.md 71.26-71.32); tests/brmegaimg.py is the row, on a copy of mega.img
+$(BUILD)/megaether.img: KMODDIR := $(MEGADIR)
+$(BUILD)/megaether.img: $(BUILD)/mega.img $(BUILD)/system.cfg
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/system.cfg $(APPDATAFOLDER)
+
 #> [Gate disks] pciethertest :: kern_mega with PCIETHER.DRV already wanted in SYSTEM.CFG (QEMU's RTL8139)
 .PHONY: pciethertest
 pciethertest: $(BUILD)/pciethertest.img
@@ -17730,13 +17901,22 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     Mines stay - dozens of rows boot this disk for them - while Piano,
 #     Mixer, Timer and Bounce go as main has it, and Missile to games360.img.
 #     A row that needs one of those four builds a disk of its own.
+#     THE BROWSER IS NOT CURATED ONTO IT ANY MORE (SPEC.md 24.6.1's rule,
+#     the owner's decision of 2026-11-11): its PNG and JPEG parts (71.30)
+#     are 25 KB and put this disk 17 clusters over. It rides network360.img
+#     beside Telnet, the FTP server and WireChat - the disk whose subject it
+#     is - and its rows boot their own disks (brtest360.img).
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
                     $(BUILD)/piano.o88 $(BUILD)/wirechat.o88 \
                     $(BUILD)/mixer.o88 $(BUILD)/timer.o88 \
                     $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
-                    $(BUILD)/waverack.o88,$(APPS_TOOLS))
-APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS)
+                    $(BUILD)/waverack.o88 $(BUILD)/browser.o88,$(APPS_TOOLS))
+# (BROWSER.HTM is the Browser's manual and goes where it goes: not here since
+# SPEC.md 71.30 - at 360KB network360.img carries both, and at 720KB the
+# system disk carries the program and apps720.img the page)
+APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) \
+           $(filter-out %/BROWSER.HTM %/browser.htm,$(APPS_DATA_360)) $(APPS_SYS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
@@ -17804,11 +17984,19 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # 701 to 713 of 713 - the last cluster - before a single later wave of it
 # exists. The 1.44MB and 1.2MB apps disks carry it; no 360KB disk does since
 # wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
+# ...AND THE BROWSER'S SECOND COPY IS NOT ON IT (SPEC.md 24.6.1's rule, the
+# owner's decision of 2026-11-11): its PNG and JPEG parts (71.30) are 25 KB
+# and put this disk 20 clusters over. The 720KB system disk carries it, as a
+# core package (24.3), so every 720KB machine has it from the disk it boots.
+# BROWSER.HTM stays in MEDIA/ here (3 clusters): the system disk carries the
+# program and not its manual (SPEC.md 71.12), so the page rides the disk in
+# B: beside the other documents rather than on no 720KB disk at all.
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
+             $(BUILD)/browser.o88 \
              $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
-                 APPS:$(BUILD)/waverack.o88 \
+                 APPS:$(BUILD)/waverack.o88 APPS:$(BUILD)/browser.o88 \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
@@ -17844,7 +18032,8 @@ APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
 # keeps its own copy beside the programs that use the link.
 APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
                $(addprefix GAMES:,$(APPS_GAMES_360)) \
-               $(addprefix MEDIA:,$(APPS_DATA_360)) \
+               $(addprefix MEDIA:,$(filter-out %/BROWSER.HTM %/browser.htm,\
+                                       $(APPS_DATA_360))) \
                $(APPSYSARGS) \
                $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -17982,8 +18171,9 @@ $(APPSIMG720): $(APPS720) tools/os88disk.py
 # to change - 24.6.1's rule, a decision with a date on it.
 MORE720_SONGS := $(filter-out $(MIDISONGS720),$(MIDISONGS))
 MORE720 := $(BUILD)/pixel.o88 $(BUILD)/midirack.o88 $(RDG_SHIP) $(DM_SHIP) $(RDG_DEMO) $(LOGOVID) \
-           $(MORE720_SONGS) $(PX_SAMPLES_360)
+           $(MORE720_SONGS) $(PX_SAMPLES_360) $(SYS720OMIT)
 MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
+               $(addprefix APPS:,$(SYS720OMIT)) \
                $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
@@ -20108,6 +20298,13 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 	@$(UNPROTECT) $(VMXTWIRE)/86box.cfg
 	$(BOX) -P $(VMXTWIRE) -N
 
+# THE NETWORKED 286 ON kern_mega: the owner's mr286 (16 MHz, 4 MB) with an
+# NE2000 on slirp, A: megaether.img, B: the Browser's page disk - type an
+# http:// address and the pictures are fetched and decoded in protected mode
+286-mega-net: $(BUILD)/megaether.img $(BUILD)/brtest.img
+	@$(UNPROTECT) $(VM286MEGANET)/86box.cfg
+	$(BOX) -P $(VM286MEGANET) -N
+
 286-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM286SND)/86box.cfg
 	$(BOX) -P $(VM286SND) -N
@@ -21232,7 +21429,8 @@ PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
              apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
              apps/os88rseq.inc apps/os88gfx.inc apps/pixel/pxmaster.inc \
              apps/pixel/pxpump.inc apps/pixel/pxsimple.inc \
-             apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
+             apps/pixel/pxview.inc apps/pixel/pxbayer.inc apps/pixel/pxt1.inc \
+             apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
              apps/pixel/pxfolder.inc \
              apps/pixel/pxfull.inc apps/pixel/pxfs.inc \
              apps/pixel/pxed.inc apps/pixel/pxedit.inc apps/pixel/pxtools.inc \
@@ -21247,7 +21445,7 @@ $(BUILD)/pxhelp.bin: apps/pixel/pxhelp.asm apps/pixel/pxpart.inc | $(BUILD)
 # EVERY DECODER PART IS LINKED since wave 4 (SPEC.md 106.20): each carries
 # the mixing plans (apps/pixel/pxplan.inc, shared source, with the generated
 # pxplans.inc), which read and write the package's palette and plans by name
-PIXEL_PLANS := apps/pixel/pxplan.inc apps/pixel/pxplans.inc \
+PIXEL_PLANS := apps/pixel/pxplan.inc apps/pixel/pxplan1.inc apps/pixel/pxplans.inc \
                apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc
 $(BUILD)/pxgif.bin: apps/pixel/pxgif.asm apps/pixel/pxpart.inc apps/os88lzw.inc \
                     apps/pixel/pxanim.inc apps/pixel/pxed.inc \

@@ -177,8 +177,7 @@ br_dl_blit1:
     pop cx
     pop bx
     pop ax
-    push ds
-    pop es
+    mov es, [br_dl_partdseg]        ; the icons are THIS part's bytes
     call OSAPI_GFX_BLIT1
     pop es
     ret
@@ -323,32 +322,62 @@ br_dl_drawdoc:
     pop bp
     ret
 
-; Restore old document footprint, then redraw only the moving document and
-; the fixed path beneath it. WM's active clip handles obscuring and occlusion.
+; Move the document one frame: erase ONLY the strip of its old footprint the
+; new one does not cover, put the dashed path back under that strip, then
+; blit the opaque document at its new place. Where the two footprints
+; overlap, the blit is the only write (the WireBall rule, CLAUDE.md) - this
+; filled the whole old rectangle white and blitted over most of it, so every
+; overlapping pixel went white and back each frame. Frames move along one
+; row in 8-pixel steps; the wrap from the last frame to the first does not
+; overlap, so the strip is then the whole old rectangle. WM's active clip
+; handles obscuring and occlusion.
 br_dl_redraw_doc:
     push ax
     push bx
     push cx
     push dx
     push si
+    call br_dl_groupx
+    mov ax, [br_dl_y]
+    mov [br_dl_gy], ax
+    mov ax, [br_dl_mx]              ; AX = the old left edge
+    call br_dl_setdocpos            ; [br_dl_mx] = the new one
+    mov cx, ax
+    add cx, [br_dl_filew]           ; CX = the old right edge, exclusive
+    mov bx, [br_dl_mx]
+    cmp bx, ax
+    je .draw                        ; no move: nothing is exposed
+    ja .right
+    add bx, [br_dl_filew]           ; moving LEFT: the strip starts at the
+    cmp bx, ax                      ; new right edge, unless the two do not
+    jbe .erase                      ; overlap at all
+    mov ax, bx
+    jmp short .erase
+.right:                             ; moving RIGHT: the strip ends at the new
+    cmp bx, cx                      ; left edge, unless the two do not overlap
+    jae .erase
+    mov cx, bx
+.erase:                             ; the strip is [AX, CX)
+    push ax
+    push cx
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    mov ax, [br_dl_mx]
-    mov bx, [br_dl_my]
-    mov cx, ax
-    add cx, [br_dl_filew]
+    pop cx
+    pop ax
+    push ax
+    push cx
     dec cx
+    mov bx, [br_dl_my]
     mov dx, bx
     add dx, [br_dl_fileh]
     dec dx
     call OSAPI_GFX_FILL
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    call br_dl_groupx
-    mov ax, [br_dl_y]
-    mov [br_dl_gy], ax
+    pop cx
+    pop ax
     call br_dl_restorepath
-    call br_dl_setdocpos
+.draw:
     call br_dl_drawdoc
     pop si
     pop dx
@@ -357,18 +386,18 @@ br_dl_redraw_doc:
     pop ax
     ret
 
-; Restore only the dashed line under the old opaque document rectangle.
-; The arrow and all line sections outside that 24x28 footprint stay untouched.
+; Restore only the dashed line under the strip [AX, CX) just erased. The
+; arrow and all line sections outside it stay untouched.
 br_dl_restorepath:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov ax, [br_dl_mx]
     sub ax, [br_dl_gx]
     mov [br_dl_curvex1], ax
-    add ax, [br_dl_filew]
+    mov ax, cx
+    sub ax, [br_dl_gx]
     dec ax
     mov [br_dl_curvex2], ax
     mov ax, 65
@@ -521,45 +550,7 @@ br_dl_progress:
     call OSAPI_GFX_FILL_GRAY
     pop cx
 .label:
-    ; The first paint may have shown '--' while HTTP headers were pending.
-    ; Clear this bounded label cell before writing a known percentage so the
-    ; shorter text cannot leave the old dashes or percent sign behind.
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [br_dl_barx2]
-    inc ax
-    mov bx, [br_dl_bary]
-    inc bx
-    mov cx, [br_dl_barx2]
-    add cx, 32
-    mov dx, [br_dl_bary]
-    add dx, [br_dl_barh]
-    dec dx
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov cx, [br_dl_barx2]
-    add cx, 8
-    mov dx, [br_dl_bary]
-    mov ax, [br_dl_barh]
-    sub ax, 8
-    shr ax, 1
-    add dx, ax
-    cmp byte [br_dl_have_len], 0
-    je .unknown
-    mov ax, [br_dl_pct]
-    call br_dl_percent_label
-    jmp .out
-.unknown:
-    mov si, br_dl_s_no
-    mov cx, [br_dl_barx2]
-    add cx, 8
-    mov dx, [br_dl_bary]
-    mov bx, [br_dl_barh]
-    sub bx, 8
-    shr bx, 1
-    add dx, bx
-    call OSAPI_FONT_STR_XPARENT
+    call br_dl_percent_label        ; '--' or the value, four opaque cells
 .out:
     mov al, [br_dl_have_len]
     mov [br_dl_barstate], al
@@ -598,6 +589,8 @@ br_dl_progress_live:
     jmp .out
 .incremental:
     call br_dl_percent
+    cmp ax, [br_dl_pct]             ; [br_dl_pct] is what the glass shows: an
+    je .out                         ; unchanged value earns no bar and no label
     mov [br_dl_pct], ax
     mov ax, [br_dl_barx2]
     sub ax, [br_dl_barx]
@@ -628,14 +621,6 @@ br_dl_progress_live:
     mov ax, [br_dl_barnew]
     mov [br_dl_barfill], ax
 .label:
-    mov cx, [br_dl_barx2]
-    add cx, 8
-    mov dx, [br_dl_bary]
-    mov ax, [br_dl_barh]
-    sub ax, 8
-    shr ax, 1
-    add dx, ax
-    mov ax, [br_dl_pct]
     call br_dl_percent_label
 .out:
     pop di
@@ -1011,8 +996,11 @@ br_dl_drawrun:
     pop ax
     ret
 
-; Redraw only the small percentage cell, including its paper, so transitions
-; from '--' and changes in digit count cannot leave stale glyphs behind.
+; The percentage cell: '--' before a length is known, else the value and '%',
+; padded to FOUR cells and put down in ONE opaque FONT_RUN. The run's own
+; ground erases what a longer earlier value or the dashes left behind, so no
+; fill goes down first and no pixel is written twice (SPEC.md 6.1) - where
+; this filled the cell white on every tick and lettered it after.
 br_dl_percent_label:
     push ax
     push bx
@@ -1021,29 +1009,10 @@ br_dl_percent_label:
     push si
     push di
     push es
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [br_dl_barx2]
-    inc ax
-    mov bx, [br_dl_bary]
-    inc bx
-    mov cx, [br_dl_barx2]
-    add cx, 32
-    mov dx, [br_dl_bary]
-    add dx, [br_dl_barh]
-    dec dx
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov cx, [br_dl_barx2]
-    add cx, 8
-    mov dx, [br_dl_bary]
-    mov bx, [br_dl_barh]
-    sub bx, 8
-    shr bx, 1
-    add dx, bx
+    cmp byte [br_dl_have_len], 0
+    je .unknown
     mov ax, [br_dl_pct]
-    call br_dl_fmt_word
+    call br_dl_fmt_word             ; the digits at br_dl_numtxt
     mov di, br_dl_numtxt
 .percent_scan:
     cmp byte [di], 0
@@ -1051,9 +1020,21 @@ br_dl_percent_label:
     inc di
     jmp short .percent_scan
 .percent:
-    mov al, '%'
-    mov [di], al
+    mov byte [di], '%'
     inc di
+    jmp short .pad
+.unknown:
+    mov di, br_dl_numtxt
+    mov word [di], '--'
+    inc di
+    inc di
+.pad:
+    cmp di, br_dl_numtxt + 4        ; "100%" is the widest value
+    jae .term
+    mov byte [di], ' '
+    inc di
+    jmp short .pad
+.term:
     mov byte [di], 0
     mov cx, [br_dl_barx2]
     add cx, 8
@@ -1330,13 +1311,3 @@ br_dl_paint_live_status:
     pop ax
     ret
 
-
-br_dl_part_paint:
-    call br_dl_paint
-    retf
-br_dl_part_redraw_doc:
-    call br_dl_redraw_doc
-    retf
-br_dl_part_paint_live:
-    call br_dl_paint_live
-    retf
