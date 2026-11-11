@@ -60827,7 +60827,23 @@ whole of the care for that reason: the harvest inside `disk_mount` reaches
 `ico_need`, which claims the icon store lazily, with the destination already
 aimed — so `mem_rr_tab` carries a `MEM_RR_ONE dsk_dseg` row that makes the
 word survive a move whatever the ordering does. The row is the backstop and
-the ordering is still the design. A window filled at a different `[dsk_nmax]` shape
+the ordering is still the design.
+
+**A MOVE is one door and a SHED is the other (BR-2).** `ico_need` is not the
+only claimer behind an aimed destination: mount step 2 claims the read-ahead
+window (`MEM_P_DIRW`, HIGH) and on a multi-window volume the FAT window
+(`MEM_P_FATW`, MED) before step 3 writes the listing, and on `kern_small` a
+Disk window's own listing is a purgeable `MEM_P_VIEW` at LOW - so the shed
+those claims make could take the very block `[dsk_dseg]` names, `fmv_demote`
+zeroing `FS_VSEG` but not the aimed word, and hand its paragraphs to the
+claimant: the listing was then written into the FAT window, which the next
+write puts on the floppy. `kern_small` has no compactor, so `MEM_RR_ONE`
+covers nothing there. `mem_shed_one` skips the record whose segment is
+`[dsk_dseg]` (`kern_small` only, where `MEM_P_VIEW` exists): 0 at rest, so
+the skip binds only inside an aimed mount and never pins a cache across the
+session, and the one door covers every claimer behind it. It is
+`mem_fatw_dirty`'s first test - the shed's other "never this one", whose
+accumulator compare it shares - so **8 bytes `.cold`, `kern_small`**. A window filled at a different `[dsk_nmax]` shape
 (§22.6.1) is handed back rather than repaired, and falls through to the
 re-list.
 

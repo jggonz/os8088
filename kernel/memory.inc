@@ -1556,7 +1556,9 @@ mem_shed_one:
     cmp dl, al                  ; at or above the best so far (which starts at
     jae .scan                   ; the claimant's rank): leave it
     call mem_fatw_dirty         ; ...and never the FAT window somebody is
-    jc .scan                    ; part-way through writing (SPEC.md 18.8.4)
+    jc .scan                    ; part-way through writing (SPEC.md 18.8.4) -
+                                ; nor, on kern_small, the listing a mount is
+                                ; aimed at (BR-2, the same call)
     mov al, dl                  ; a new cheapest
     mov di, si
     jmp short .scan
@@ -2653,9 +2655,23 @@ mem_in_nest:
 ; this is belt to dskw_flush's braces rather than the only thing standing
 ; there - a demote leaves [dsk_fatw0] = 0xFFFF, which dskw_flush already reads
 ; as "there is no buffer this range could be written out of" and refuses.
+;
+; **ON kern_small IT ALSO REFUSES THE LISTING A MOUNT IS AIMED AT** ([dsk_dseg],
+; SPEC.md 25.9.5, BR-2), the other block whose loss is not a cache's: a Disk
+; window's listing is a MEM_P_VIEW at LOW there, mount step 2's read-ahead and
+; FAT window claims shed it and could be HANDED it, and step 3 then wrote the
+; listing into the FAT window - which the next write put on the floppy. 0 at
+; rest, and both callers skip free records, so it binds only inside an aimed
+; mount. kern_small has no compactor, so the shed is its only caller there and
+; MEM_RR_ONE dsk_dseg (a MOVE's backstop) covers nothing.
 ; -----------------------------------------------------------------------------
 mem_fatw_dirty:
     push ax
+%ifdef KERN_SMALL
+    mov ax, [dsk_dseg]
+    cmp ax, [ss:si+MC_SEG]
+    je .yes
+%endif
     cmp word [dsk_fatd0], 0xFFFF
     je .no                      ; nothing is dirty anywhere
 %ifdef KERN_MEGA
