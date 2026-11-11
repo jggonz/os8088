@@ -15,11 +15,21 @@ process (tests/hibernate.py's lesson: a shared --mount is three emulators
 writing one file) holding nothing but a HIBERNAT.PTR. One boot on
 os8088_xt_hdd:
 
-  A  stik_boot is entered with [ui_rebootq] = UI_RBQ_ASK - the question was
+  A  stik_boot is entered with [ui_rebootq] = UI_RBQ_ASK - the check was
      posted before it ran, which is the ordering the stand-down rests on;
   B  ...and no StikProbe is ever launched: twenty guest seconds after the
      desktop there is no such window, and its row still carries the mark -
      NOT downgraded, so the next ordinary boot brings it back.
+
+THAT IS kern_mega's ROW NOW (OS88_MEGA=1, under Bochs). kern_big and kern_emu
+check and resume a hibernation from inside kmain_o, BEFORE stik_boot runs
+(SPEC.md 87.5, HIBER-RESUME-PLAN B1), so on them a pending post never reaches
+stik_boot at all: this fixture's pointer - 64 zero bytes, which the 18-byte
+read refuses as FERR_BIG - is refused at the boot (`Hibernation: other
+build`, both files deleted) and the boot carries on as one with no
+hibernation. So on those kernels A asserts [ui_rebootq] = 0 when stik_boot
+runs and B that StikProbe IS relaunched: the opposite outcome, and the
+evidence that the refusal settled the pointer before the widgets.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): take stik_boot's
 `cmp byte [ui_rebootq], 0 / jne .r0` out and B fails (the probe opens).
@@ -44,6 +54,7 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TEMPLATE = os.path.join(ROOT, "build/martypc/run/media/hdds/default_xtide.vhd")
 UI_RBQ_ASK = 5
+MEGA = bool(os.environ.get("OS88_MEGA"))
 DESK_SC0 = os88stik.DESK_SC0
 
 fails = []
@@ -81,7 +92,8 @@ def main():
 
     with os88marty.launch(floppy, machine="os8088_xt_hdd", boot=False,
                           extra=extra) as m:
-        print("A: stik_boot meets the posted question")
+        print("A: stik_boot meets %s" % ("the posted check" if MEGA else
+                                         "a pointer already refused"))
         # `.cold` MAY SLIDE AT BOOT (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
         # machine with neither a VGA nor an EGA kmain_o moves it down by
         # VGA_PARA before stik_boot runs, and m.sym() can only follow that
@@ -124,17 +136,26 @@ def main():
             hit = None
         check(hit == "breakpoint", "stik_boot was entered (%r)" % hit)
         q = m.read(m.sym("ui_rebootq"), 1)[0]
-        check(q == UI_RBQ_ASK, "[ui_rebootq] = UI_RBQ_ASK when it ran (%d)" % q)
+        want = UI_RBQ_ASK if MEGA else 0
+        check(q == want, "[ui_rebootq] = %d when it ran (%d)" % (want, q))
         m.bp_exec()
         m.run()
 
-        print("B: and launched nothing")
+        print("B: and launched %s" % ("nothing" if MEGA else "its widget"))
         ui = os88ui.UI(m)
         t0 = tick(m)                    # 20 GUEST seconds, off the BIOS tick
         end = time.time() + 600         # (memory: the liveness signal)
         while (tick(m) - t0) & 0xFFFF < 364 and time.time() < end:
             time.sleep(0.5)
         check((tick(m) - t0) & 0xFFFF >= 364, "twenty guest seconds passed")
+        if not MEGA:
+            check("StikProbe" in ui.titles(),
+                  "StikProbe was relaunched: the refused pointer stood "
+                  "nothing down (%r)" % ui.titles())
+            shutil.rmtree(tmp, ignore_errors=True)
+            print("stikhiber: %s" % ("PASS" if not fails else "FAIL (%d): %s"
+                                    % (len(fails), "; ".join(fails))))
+            return 1 if fails else 0
         check("StikProbe" not in ui.titles(),
               "no StikProbe window (%r)" % ui.titles())
         seg = ui._word("sc_seg")

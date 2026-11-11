@@ -194,9 +194,15 @@ ENDMACRO = _Pct(r'^\s*%endmacro')
 ENDMACRO_B = _Pct(r'^\s*%endmacro\b')
 LABEL = re.compile(r'^([A-Za-z_]\w*):')
 LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
-DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+drv_boot_x\b')
+DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+(?:drv_boot_x|hb_probe_x)\b')
 # (B3CALL since BOOT3-PLAN wave 2: drv_boot_x is `.boot3`'s on every kernel
 # with drivers, and kern_small's one-byte rung is still the blob's BLOBCALL)
+# ...AND hb_probe_x, whichever comes FIRST (SPEC.md 87.5, HIBER-RESUME-PLAN
+# B2): kern_big and kern_emu probe for a hibernation BEFORE drv_boot, and the
+# probe mounts the root it looks in - so on those kernels the first mount is
+# the probe's, and every `.ovl` call has to be above it. On kern_mega the probe
+# is after drv_boot and drv_boot_x is the first; the source carries both arms
+# and the earlier line is the stricter model, which is the safe direction
 OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+(\w+)')
 # ...and OVSCALL, OVBCALL's mirror (SPEC.md 2.5.3.2): it IS an OVLCALL on
 # kern_small, the model's build, since BOOT3-PLAN wave 3 gave it the clock
@@ -1156,7 +1162,8 @@ def main():
                  "rule 2e cannot say what runs after the first mount, so it "
                  "refuses rather than passing (SPEC.md 2.5.3)")
     for f, n, sym in late:
-        print("%s:%d: OVLCALL %s is AFTER drv_boot_x - the first mount has "
+        print("%s:%d: OVLCALL %s is AFTER the first mount (drv_boot_x, or "
+              "hb_probe_x where it comes first) - the mount has "
               "already taken the FAT window those bytes are in"
               % (f, n, sym), file=sys.stderr)
     if late:

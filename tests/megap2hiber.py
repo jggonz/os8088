@@ -183,12 +183,11 @@ def main():
         if not box.wait_pm(300):
             fails.append("the second boot never reached protected mode")
             return report(fails, keep, t0)
-        box.up()                        # the desktop and its Resume card
-        box.capture()
+        # NO QUESTION (SPEC.md 87.5): the resume follows mega_enter by
+        # itself, and the stub's read of the image is what leaves time to
+        # arm the breakpoint before the wake
         box.dbg(["lb 0x%x" % bp])
-        box.goto(225, 225)              # Resume
-        box.xd("click", 1)
-        if not box.wait_for("Breakpoint 1", 180):
+        if not box.wait_for("Breakpoint 1", 300):
             fails.append("hbm_wake's .nowz (linear %X) never reached" % bp)
         else:
             # stopped there: read the masks, delete it, go on - on the

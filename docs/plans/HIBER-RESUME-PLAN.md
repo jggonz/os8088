@@ -1,6 +1,12 @@
 # Hibernate resume: no question, Shift to skip, and a boot that does only what the resume needs
 
-> **PROPOSED — nothing here is built.** Two independent changes to SPEC.md
+> **STATUS (2026-11-11): (A) AND B2 (waves B1, B2) BUILT, not yet run on the
+> emulator rows or the iron; B3, B4 and B5 not taken** — see §5 for the
+> owner's decisions and what landed, commit by commit. The text below is the
+> proposal as researched on `117cd5b8`, kept as written except where §5 says
+> a decision overrode it.
+>
+> **PROPOSED** (as researched). Two independent changes to SPEC.md
 > §87.5's resume, each with its own recommendation: **(A)** the Resume/Discard
 > window goes, the boot resumes by itself, and **Shift held at startup** skips
 > it the way it skips `\AUTOSTRT` (§26.10.5); **(B)** the boot stops building a
@@ -469,8 +475,14 @@ driver: its device). The wake calls it per row instead of `hbm_reload`.
   sweep today and would not change.
 - **Format/ABI**: **a driver ABI change** — a verb in `drivers/os88drv.inc`,
   `DRV_VER` (14, unreleased this round, so no second bump: re-record
-  `tools/abilock.py`). Old drivers answer "unknown verb" and are detached as
-  today, so it can land a driver at a time.
+  `tools/abilock.py`). ~~Old drivers answer "unknown verb" and are detached as
+  today, so it can land a driver at a time.~~ **CORRECTED (2026-11-11): that
+  is false.** ETHER, PCIETHER, NET and USBMOUSE answer CF = 0 to a verb they
+  do not know (`ethdrv.inc` ~88-96, `net.asm` ~230-238, `usbmouse.asm`
+  ~131-132), so a driver's ANSWER cannot say whether it implements the verb.
+  Any future opt-in must be DECLARED - a header flag - and never inferred from
+  the answer. (Those four drivers are being made to refuse unknown verbs
+  separately.)
 - **Verdict**: a real saving on the floppy-booted machine, orthogonal to B2,
   and the larger change. Record as the follow-up after B2; not this round.
 
@@ -563,3 +575,123 @@ saving waits for the field (docs/FIELD-MACHINES.md).
 3. **The stub's sentence naming Shift** (§2.2), which costs `kern_dos`'s image
    ~35 bytes too.
 4. **(B)**: B2 in two waves (recommended), and whether B4 is wanted next.
+
+## 5. The owner's decisions, and what landed
+
+**Decided 2026-11-11** (binding on everything above):
+
+1. **(A), with the files DELETED on a Shift skip** — not set aside, not kept
+   (§2.2's three options; the recommendation there was "set aside" and is
+   overridden). The owner: *"hibernate is a 'state convenience', not a 'way
+   to save work'... a 4MB 286 with a 40MB hard drive may not be able to
+   afford the extra file. If they skip it, that is about the same as 'it was
+   corrupt' or 'it failed to load' or any other hibernate resume failure.
+   This again tracks with how other OSes treat the concept."* So the skip
+   takes the same path as any other resume failure, and `HIBERNAT.OFF`, its
+   `hbm_forget` leg and the rename are dropped entirely. **No arm-once**
+   (open decision 2: not taken). **No Shift sentence in the stub** (open
+   decision 3: `hbstub.inc` is `kern_dos`'s too, and it was not asked for).
+   The must-ride-along items are taken: hiber-8 (a refused no-question resume
+   is spent and `HB_M_GONE`, the module dropped), hiber-9 (`FERR_BIG` is
+   `other build` and forgotten), and `as_boot`'s stand-down under a pending
+   post (hiber-21's autostart half). BR-10 disappears with the face.
+2. **(B): B2, in two waves (B1 then B2), for the HARD-DISK boot.** *"a normal
+   user with a hard drive installs there, and thus is resuming from the hdd.
+   The kernel read is under half a second and so skipping it is not worth
+   the extra work (B3), where skipping the slow mouse/ether/etc's first
+   discarded runs is."* Floppy resume must keep working. kern_mega keeps
+   today's late probe and gets (A) only. hiber-14 (the image's interrupt
+   masks) rides with B2.
+3. **B4 is NOT taken this round** (open decision 4's second half). The DOS
+   return's reload may bring it back later, and a separate investigation is
+   running on that; the driver-pass split below is kept compatible with it
+   (the two passes are the keep-set and the rest, which is exactly B4's
+   line).
+
+**What landed**
+
+- **(A)** — `hb_probe_x` reads Shift and, held, deletes both files itself
+  (the kernel's one name, the image's three bytes stamped into it) and toasts
+  `Hibernation skipped`; otherwise it posts `UI_RBQ_ASK` as before, and
+  `hbm_ask` posts `UI_RBQ_RESUME` for every valid image (the DOS arm's old
+  path is everybody's). The RESUME face, its strings, `hbm_act`'s two arms
+  and the boot's keyboard drain went; the ASK face says `Restarting resumes
+  it.` `hbm_res`'s refusal (and kern_mega's `hbm_xres` `.refuse`) now joins
+  `hbm_ask`'s: toast, both files deleted, `HB_M_GONE`. `AS_WALK` stands down
+  on `[ui_rebootq]` ≠ 0. MEASURED, kern_big against `2cf57256`: resident
+  **0**, `.boot3` **+80**, HIBER.DRV image **7,741 -> 7,524 (-217)**, 6,167 ->
+  6,013 bytes on the disk packed. Rows rewritten: `hibernate`/`hibernatedrv`/
+  `hibernatem` (the Discard pass is a Shift pass with red arms in its
+  header), `hibsumok`/`hibsumbad`, `hmahiber`, `p2hiber`, `win16hiber`,
+  `megahiber`, `megap2hiber` (no click: the resume comes by itself).
+- **B1** — on kern_big and kern_emu `hb_probe_x` no longer leaves its post
+  for `ui_task`: it spends it there and then (`hb_spend`: read and cleared,
+  then `hbf_perform`), and on `UI_RBQ_RESUME` calls `spl_finish` and spends
+  that too, so a valid image is resumed from inside `kmain_o` with no first
+  paint, no autostart and no `ui_task` pass. No new module entry was needed:
+  the chain is two calls of the existing perform entry, and the module is
+  unchanged. A refusal comes back with nothing posted, so the boot carries on
+  as one with no hibernation, autostart included (better than §2.1's
+  recorded cost). kern_mega keeps the post. MEASURED, kern_big: resident
+  **0**, `.boot3` **+32** (6,190 -> 6,222), HIBER.DRV **0**. `stikhiber` is
+  kern_mega's row for the stand-down now; on kern_big its bogus pointer is
+  refused before `stik_boot` and the row asserts the relaunch instead.
+- **B2** — kern_big and kern_emu (`HB_EARLY`, kernel.asm) probe twice. **P1**
+  straight after the last `.ovl` call (`snd_init`); then `mouse_init`; then
+  `drv_boot_x` as **pass 1** (the mount, `xm_boot_x`, the settings, the
+  adapter, and only the `HB_KEEPSET` classes: disk, file, file2, CD, EMS -
+  §87.4 step 1's keep-set); then **P2** unless P1 settled it; then
+  `drv_boot2_x`, **pass 2** (everything else). `[hb_down]` carries the probe
+  state between the calls (0 / 1 = P1, "early" / 3 = P2 owed / 2 = settled),
+  so the two probes cost no resident byte. **"Not yet"**: at P1, `hbm_ask`
+  takes a head mismatch or a refused `ROMF_HTAB` as DEFERRED - no toast,
+  nothing deleted, the module dropped - because `XMEM.DRV`'s HMA `.cold` and
+  SYSTEM.CFG's adapter are pass 1's to set; P2 decides. **hiber-14**:
+  `hbm_wrimg` banks the 8259 masks after its sweep (`hbm_imr`, in the module,
+  so in the image) and `hbm_wake` step 1 writes them before its `sti` (the
+  slave's never on an XT), so a resume whose fresh boot opened no mouse or
+  driver line wakes on the image's lines - kern_mega's model on every kernel
+  (hiber-1 was NOT taken with it). **The plan's claim that `mouse_init` is
+  blob code and survives the mount was wrong for kern_big**: there its
+  OVBCALL is an OVLCALL into `.ovl`, so B2 defines `MOU_IN_BLOB` on
+  `HB_EARLY` kernels and the probe moves to `.boot3` (kern_small's
+  arrangement). `os88ovlchk` rule 2e's marker is the first of `drv_boot_x`
+  and `hb_probe_x`. kern_mega is untouched by B2.
+
+**The risks the brief named, and how each is handled**
+
+| risk | handled by |
+|---|---|
+| the splash/spinner must stop before any text-mode switch | `hb_probe_x` calls `spl_finish` after `hbm_ask` has posted the resume and before `hbm_res` (whose `hbm_down` is the `vid_reboot`); `vid_setmode` is refused while `[spl_live]` stands, so this is required, not tidy. A refusal past it leaves the bar at 100% for the rest of that boot (rare: an unreadable chain, no claim for the extents) |
+| `os88ovlchk`'s first-mount rule moving with the probe | the marker regex takes `hb_probe_x` too; the red arm was checked by hand (an `OVLCALL dock_init` after P1 is refused) |
+| two driver passes moving where claims land on a normal boot | behaviour unchanged: every wanted row is still loaded by the same `bdl_load` with the same failure handling, `drv_tab` rows and `[hb_drvmask]` are unchanged; only the ORDER of the loads (keep-set first) and so the heap layout move. `Loading Driver n/N` counts in load order. `heapcheck`/`memp` are the rows that see it |
+| mouse setup moving after `desk_init` | nothing between reads mouse state (`kbm_adopt` and every pointer probe stay after `drv_boot`); the status lines now read `Looking for Drives` then `Looking for Mouse` on kern_big (`bootstatus` rewritten); `BOOTPROF`'s phase 5 and `MOUDIAG`'s `mdg_n1` now stamp after phase 6 / `mdg_n2` (knob-only) |
+| the "not yet" arm deleting an HMA image | P1 defers; but NO row exercises it: `hmahiber` boots from a FLOPPY, so its P1 sees no fixed volume. A hard-disk-booted HMA machine is the row that is owed |
+
+**Bytes, MEASURED against `2cf57256`** (kernsize sections; HIBER.DRV image as
+`os88mod` prints it):
+
+| kernel | resident | `.boot3` | `.ovl` | HIBER.DRV image |
+|---|---:|---:|---:|---:|
+| kern_big | **0** | 6,110 -> 7,486 (+1,376: (A) +80, B1 +32, B2 +142, and +1,122 of `mouse_init` moved out of `.ovl`) | 3,172 -> 2,050 (-1,122) | 7,741 -> 7,565 (**-176**: (A) -217, B2 +41) |
+| kern_emu | **0** | 6,206 -> 7,598 (+1,392) | 3,172 -> 2,050 | as kern_big |
+| kern_mega | **0** conventional (`.cold` +10, `as_bootc`'s stand-down, above 1MB once switched) | 5,903 -> 5,967 (+64) | 0 | 11,575 -> 11,344 (-231) |
+| kern_small | 0 | 0 | 0 | - |
+
+B2's own boot-only cost is +142, over §3.3's +40-60 estimate (the two-pass
+state, the probe's state machine and the name's restamp); the plan's
+"resident 0" held on every kernel. kern_big's 128KB boot slack (guard 5)
+falls 21,504 -> 19,968 because `.boot3`'s lift rises 6,656 -> 8,192 - all
+transient.
+
+**Rows** (named, not run here): `hibernate`, `hibernatedrv`, `hibernatem`
+(the Shift pass), `hibsumok`, `hibsumbad`, `hmahiber`, `p2hiber`,
+`megahiber`, `megahibfull`, `megap2hiber`, `kdreturn`, `kdreturnf` (and the
+`kdreturn*` family through the shared wake and hiber-14), `win16hiber`,
+`stikhiber` (rewritten for B1), `autostart`, `stikboot`, `bootstatus`
+(rewritten), `b3poison`, `heapcheck`, `memp`, `mouresume`, `ps2mouse`, `mouwheel`, the driver boot rows (`hmadrv`, `ethernet`, `drvclaim`,
+`drvmem`), `buildmatrix` (the knob kernels' `.boot3` grew),
+and the fast tier's `ovlchk`, `blobruns`, `canary`, `toast`, `cswrite`
+(green here). Still owed, per §3.7: the `tools/os88boot.py` reset-to-wake
+measurement on a floppy-booted MartyPC 5150, and the hard-disk saving on the
+field machine.

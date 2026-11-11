@@ -13253,9 +13253,10 @@ SOAK = [
         needs=("marty",), serial=True, timeout=1200),
     Row("hibernate", "soak", py("tests/hibernate.py"), 70.0,
         "SPEC.md 87: Hibernate... writes the machine to the hard disk and the "
-        "next boot offers to resume it - the About box is the witness, read "
-        "out of the restored instance table; then the same again with "
-        "Discard. Builds its own VHD under build/, keyed to the PROCESS - it "
+        "next boot resumes it with no question - the About box is the witness, "
+        "read out of the restored instance table; then the same again with "
+        "Shift held through the restart, which skips the resume and deletes "
+        "both files (read on the host). Builds its own VHD under build/, keyed to the PROCESS - it "
         "was a fixed path, and three concurrent runs then mounted one hard "
         "disk read-write in three emulators (2 runs in 6, at a different leg "
         "every time; docs/WRITING-TESTS.md 5.5)",
@@ -13695,10 +13696,13 @@ SOAK = [
         needs=("marty",), timeout=600, wants=("build/stikshort360.img",)),
     Row("stikhiber", "soak", py("tests/stikhiber.py"), 15.0,
         "SPEC.md 110.4: a pending RESUME stands the relaunch down. A hard "
-        "disk of this process's own with HIBERNAT.PTR in its root, so "
-        "hb_probe posts UI_RBQ_ASK: stik_boot is entered with [ui_rebootq] = "
-        "5, and twenty guest seconds later no StikProbe has launched and its "
-        "row still carries the mark - kept for the next ordinary boot.",
+        "disk of this process's own with HIBERNAT.PTR in its root. Under "
+        "OS88_MEGA (kern_mega's late check) hb_probe posts UI_RBQ_ASK: "
+        "stik_boot is entered with [ui_rebootq] = 5, and twenty guest seconds "
+        "later no StikProbe has launched and its row still carries the mark. "
+        "On kern_big the boot checks the pointer itself before stik_boot "
+        "(SPEC.md 87.5): the bogus pointer is refused, [ui_rebootq] = 0 and "
+        "StikProbe IS relaunched.",
         needs=("marty",), serial=True, timeout=900,
         wants=("build/stikhiber360.img",)),
     Row("stikregister", "soak", py("tests/stikregister.py"), 50.0,
