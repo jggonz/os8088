@@ -13861,7 +13861,9 @@ SOAK = [
         "panel is up (SPEC.md 12.8.3.3, stm_thaw); a Disk window's bar "
         "carries no Sticky Apps cell (SPEC.md 22.28.1); releasing "
         "on its row POSTS the pick and launches it as a desk window, and the "
-        "module is dropped after; a release off the panel posts nothing; "
+        "module is dropped after (freed, or on kern_big KEPT: slots "
+        "disarmed and the claim re-tagged MEM_P_MOD + 2 x its id, SPEC.md "
+        "2.8.3); a release off the panel posts nothing; "
         "Hide All hides the widget and Show All brings it back; Arrange puts "
         "it at W_X = 7 mod 8 at the column's top; picking the RUNNING row "
         "closes it through app_close_win, so its own negotiator removes its "
@@ -22212,8 +22214,10 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("tmdmg", "soak", py("tests/tmdmg.py"), 40.0,
         "SPEC.md 28.10.2: a partial repaint of the Task Manager draws only "
-        "the part - 225 cells put on the glass became 0, against 549 for a "
-        "whole repaint. CELLS and not calls (11.3.3).",
+        "the part - 225 cells put on the glass became 0, against a forced "
+        "whole repaint of the same covered page (245 since 11.91.7 draws "
+        "only what is visible), itself held to a raised repaint's cells "
+        "outside the cover. CELLS and not calls (11.3.3).",
         needs=("marty",), serial=True),
     Row("tmgraph", "soak", py("tests/tmgraph.py"), 30.0,
         "SPEC.md 28.10.3: the Task Manager's history graph is damage-gated "

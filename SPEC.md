@@ -62135,6 +62135,18 @@ it. A package's remove therefore names the LINK and nothing else
 remove no row matches is refused. It named the zone too until kernel size
 pass 19 (ABI-BREAK-LIST C10) - which the record already identified, and
 which cost WIN16 a probe of every shortcut zone to find its own link.
+**A remove with no system disk in A: is refused before anything goes**:
+`sc_m_pdel` identifies the boot volume as the writer does (`KERNEL.SYS` in
+its root, `cpc_save`, §51.5.1) and, when it is not the system disk, takes
+nothing out and says the writer's own verdict, `Not Saved: No Sys in A:`.
+That refusal used to come free, from the settings core's load failing with
+no `CTRL.DRV` to read; once §2.8.3 kept the core in memory the remove was
+served anyway, took the row out of the table and left it in the system
+disk's `SYSTEM.CFG` behind a save that could not land - so a Sticky App's
+close (§110.5) went ahead and the widget came back at the next boot. 49
+bytes of `CTRL.DRV` on `kern_big` (15,412 -> 15,461; the core stays 7
+sectors, `MODS_SIZE` 3,260), no resident byte; `kern_small`'s image has no
+`sc_m_pdel`.
 The boot reader holds a row from SYSTEM.CFG to the same bounds as an add: a
 kind above 2 or a volume past `DVOL_MAX` comes in as a free row.
 
@@ -225384,7 +225396,7 @@ four that wave 2 added):
 | `stik_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `stik_touch` | whenever the payload changed | owe a save; the next tick makes it |
 | `stik_tick` | each timer tick (UI task, lock held) | the FIRST registers the Sticky App row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `STIK_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `stik_nx` ticks, when `STIK_ONTICK` stored a sooner beat there (the calendar's second chirp note, §110.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was - unless its OWN payload changed by itself: the calendar's FIRED marks, set by a launch that missed reminders and by a reminder going off, owe a save like an edit (§110.3, §110.5.2) |
-| `stik_close` | `W_ONCLOSE` | `STIK_ONCLOSE`; remove the row by name (AL = 0, the record); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `STIK_ONCLOSE` can therefore run twice |
+| `stik_close` | `W_ONCLOSE` | `STIK_ONCLOSE`; remove the row by name (AL = 0, the record); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: - `CTRL.DRV` cannot be read, whose own toast asks for it, or its settings core is kept (§2.8.3) and refuses before removing, toasting `Not Saved: No Sys in A:`, §26.9.6) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `STIK_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
 registers on every launch whatever the file said: missing, DAMAGED, or no
