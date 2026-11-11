@@ -4167,7 +4167,7 @@ fixtures, `pdw_pgcheck.py`'s I1 checks against qpdf and Poppler).
 
 File > **Insert from PDF...** (File row 9) raises the OS file dialog; the
 chosen file is not opened. The status line then asks for the pages of that
-file, `Insert NAME pages (3, 2-4): ` (built from the row on each key, no buffer), and Enter inserts
+file, `Insert NAME pages (3, 2-4): ` (built from the row on each key, no buffer; said only once the render the dialog's close owes has run, at a quiet wake end, `pdu_pkdefer`, so the prompt never stands over a live render with its occupant in the slot - 16.1, QA O9), and Enter inserts
 them after the page the command is for (the current page, or the Pages
 panel's selection; Move page moves them afterwards). One run of consecutive
 pages is one page operation, so one Undo takes it back. The inserted pages

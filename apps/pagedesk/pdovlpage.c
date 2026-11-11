@@ -181,6 +181,8 @@ static void ovl_pg_ask(const char *what)
     }
     pdu_cat(pdu_line, pdu_pkbuf, sizeof(pdu_line));
     pdu_cat(pdu_line, "_", sizeof(pdu_line));
+    if (pdu_pkdefer)                    /* Insert's: the wake says it (os88_onwake) */
+        return;
     pdu_tell(pdu_line);
     pdp_form = 2;                       /* the render a dialog's close owes does not wipe the prompt */
 }
@@ -260,6 +262,8 @@ static int ovl_ins_file(const char *name)
     pd_fpokew(seg, 1004 + 4 * k, pdu_tgtplace.vol + 1u);
     pdu_insmask |= 1u << k;             /* named: kept while the history can name it */
     pdu_inslot = k;
+    pdu_pkdefer = 2;                    /* said after the dialog-close render (os88_onwake) */
+    pdu_kick();
     ovl_pg_prompt(PK_INSERT, 0, 0);
     return 1;
 }

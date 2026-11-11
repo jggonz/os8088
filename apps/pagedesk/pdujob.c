@@ -57,6 +57,7 @@ static void pdu_at_doc(void)
 }
 
 /* union r into the rect a render is owed for */
+static void ovl_pg_ask(const char *what);   /* pdovlpage.c: Insert's deferred prompt */
 static void pdu_render_want(struct os88_rect *r)
 {
     if (!pdu_rwant) {
@@ -788,6 +789,22 @@ void os88_onwake(void *win)
     if (pdu_job == J_NONE && pdu_socc && pdu_socc != PDU_OCC_WRT
         && !pdu_rwant && !pdu_pgwant && !pdu_argp && pdu_unclaimed_kb() < 32)
         pdu_slot_free();
+    /* Insert's page prompt, once the render the file dialog's close owed
+     * has run and the occupant has gone: a wake end first passes, so a
+     * repaint that arrives after the dialog's answer is begun before it */
+    if (pdu_pkdefer) {
+        if (pdu_pk != PK_INSERT)
+            pdu_pkdefer = 0;            /* Esc'd before it was said */
+        else if (pdu_pkdefer == 2 || (pdu_job != J_NONE && pdu_job != J_THUMB) || pdu_rwant || pdu_pgwant) {   /* not a thumbnail's 107 s on an XT */
+            pdu_pkdefer = 1;
+            pdu_kick();
+        } else {
+            pdu_pkdefer = 0;            /* pdu_line is the status strip's scratch too: built again */
+            os88_gfx_lock();
+            ovl_pg_ask((const char *)0);
+            os88_gfx_unlock();
+        }
+    }
     if ((pdu_job != J_NONE && !pdu_au_waits()) || pdu_pgwant || pdu_argp
         || (!pdu_ovhold && pdu_nav_owed()))
         pdu_kick();                     /* a job waiting for the user's key does not spin (F4) */
