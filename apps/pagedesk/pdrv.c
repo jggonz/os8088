@@ -739,6 +739,7 @@ static pdw verb_abort(pdw cx)
     if (cx) pd_fcopy_out(&g_ydone, g_xb, 0, 2);
     close_streams();
     g_ph = PDR_IDLE; g_mode = PDR_IDLE;
+    x_ask = 0;                          /* the view is over: its ask has no answer coming (QA R26 c) */
     return PDE_OK;
 }
 
@@ -934,7 +935,11 @@ static pdw verb_init(pdw xbseg)
      * an XC that went from under the view is the cache AND the list's LUT
      * offsets and the band's stash, so the pass runs again without it, and a
      * released one is not asked for again this view */
-    if (bound && x_ask) {
+    /* ONLY while the view waits for that answer (PDR_XWAIT): an ask a view left unanswered - the
+     * user opened another file while a thumbnail job waited for PDXF - made the next document's
+     * INIT, on the same claims, look like this, and it kept the last document's fonts and
+     * names: FTYPE3's Type 3 font 7 0 R was drawn as FTTCIDMA's Type 0 7 0 R, "form stream" */
+    if (bound && x_ask && g_ph == PDR_XWAIT) {
         for (i = 0; i < sizeof ini_mine; i++)
             if (pd_fpeekw(xbseg, (pdw)(ini_mine[i] << 1)) != ((pdw *)&g_ini)[ini_mine[i]]) break;
         if (i == sizeof ini_mine) {
@@ -952,6 +957,7 @@ static pdw verb_init(pdw xbseg)
             o = g_ini.glyph_seg ? (g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb) : 0;
             i = g_ini.glyph_seg != g_gseg || o != g_gkb;
             syn_adopt(g_ini.glyph_seg, g_ini.glyph_kb);
+            syn_doc();
             if (i) { glyph_fresh(); g_xclost = 1; }
             return PDE_OK;
         }
@@ -982,7 +988,7 @@ static pdw verb_init(pdw xbseg)
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0; g_gnogrow = 0; g_tmref = 0;
-    if (syn_cap()) pd_ffill(g_gseg, syn_hdr(), 0, PDFB_HDR);   /* and its strike blocks: object numbers repeat across files (QA R24) */
+    g_syndoc = 0; syn_doc();            /* ...and the synthetic strike blocks are the last one's */
     g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }

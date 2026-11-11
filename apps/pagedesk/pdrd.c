@@ -605,6 +605,21 @@ static pdw syn_next(pdw obj, pdw gen, pdw i)
     return 0xFFFF;
 }
 
+/* WHOSE directory is in the claim (QA R26 c). It names fonts by OBJECT NUMBER, which the next
+ * file reuses for another font, and the region it lives in outlives a File > Open: the X glyph
+ * region a document was granted is handed again to the next one's ladder ask, not afresh (whose
+ * +62 the primary clears). FTYPE3 then found FTTCIDMA's TrueType block for 7 0 R and read a glyph
+ * bitmap as its Type 3 CharProc's object number: "form stream", a blank page. So the first claim
+ * with room for blocks that a document sees has its magic cleared - what a fresh claim has - and
+ * PDXF starts the directory again; one this document has already written into keeps it */
+static pdw g_syndoc;                /* the claim's directory is this document's */
+static void syn_doc(void)
+{
+    if (!g_gseg || !syn_cap()) { g_syndoc = 0; return; }
+    if (!g_syndoc) pd_ffill(g_gseg, (pdw)(syn_hdr() + 62), 0, 2);
+    g_syndoc = 1;
+}
+
 /* the glyph claim was REGROWN for the strike blocks (PDMEM_GLYPH, 20.22.8): the page view goes on in
  * the claim at its new place and size. The bank's PDFONTX.RES index lives in it, so its segment moves
  * with it; the strike cache keeps its entries unless the blocks' header now covers them */

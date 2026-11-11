@@ -58,6 +58,8 @@
 #define page_open       ovl_page_open
 /* [rcore] a dashed subpath, once a subpath: its pieces call back into stroke_poly (pdrd.c) */
 #define dash_poly       ovl_dash_poly
+/* [rcore] whose strike-block directory the glyph claim holds: once an INIT (pdrd.c) */
+#define syn_doc         ovl_syn_doc
 /* [rcore] annotations and the edit store's records (pdra.c) */
 #define annot_try       ovl_annot_try
 #define annot_next      ovl_annot_next

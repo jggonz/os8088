@@ -6594,8 +6594,22 @@ more). The pinned helpers:
 * The answer to `PDE_NEEDMEM` is a re-INIT with the same claims and a region
   added: an INIT whose first 24 words (`pdxb_init` up to `slot_seg`) are the
   current ones while a region is asked for adopts the regions only and keeps
-  the page view, the document's fonts and the cache. Any other INIT is a new
-  document (D2).
+  the page view, the document's fonts and the cache. "While asked for" is the
+  view WAITING on its answer (`PDR_XWAIT`); `ABORT` withdraws an unanswered
+  ask. Any other INIT is a new document (D2). (QA R26 (c): a thumbnail job
+  aborted while it waited on the font module left the ask standing, and the
+  next file's INIT, on the same claims, kept the last file's fonts and names -
+  FTYPE3's Type 3 `7 0 R` drawn as FTTCIDMA's Type 0 `7 0 R`, "form stream".
+  `pdr_xchk`'s docA/docB pair, through the harness's `FILE:PAGE:A`.)
+* The glyph claim's synthetic strike blocks (20.22.8) name fonts by OBJECT
+  NUMBER, and the X glyph region outlives a File > Open: a document's ladder
+  ask is handed the region the last one held, not a fresh one (whose +62 the
+  primary clears). So PDREND clears the directory's magic at the first claim
+  with room for blocks a document sees (its INIT, or the re-INIT that brings
+  the region) and PDXF starts the directory again; a claim this document has
+  written into keeps it. (QA R26 (c): FTYPE3 after FTTCIDMA found FTTCIDMA's
+  TrueType block for `7 0 R`, read a glyph bitmap as its Type 3 CharProc's
+  object number, "form stream" and a blank page; `pdr_xchk`'s `PDR_SYNPLANT`.)
 * The text map (`PDV_REND_TEXTMAP`) runs the same ladder: after an answer
   the walk restarts and the glyphs the primary already has are skipped. The
   primary copies its `pdxb_textmap` out before every slice and reads it back
