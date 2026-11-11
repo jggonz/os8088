@@ -107,8 +107,7 @@ ZXF_LOC     equ 10                  ; the locals start here
 ; --- private bss, out of ZEXEC_SLACK (84 bytes, all used: +76 is zf_sdelta, ---
 ; --- +78/+80 zx_raw/zf_pglim above, +82 ZXTRACE's zxt_n) ---------------------
 %define zx_op       (os88_image_end + ZEXEC_SLACK + 0)   ; byte: opcode number
-%define zx_rsm      (os88_image_end + ZEXEC_SLACK + 1)   ; byte: ZXR_*, the wait
-                                    ; a restart resumes (zx_restart), 0 = none
+                                                         ; +1: zx_rsm (zbss.inc)
 %define zx_seen     (os88_image_end + ZEXEC_SLACK + 2)   ; byte: last [zf_state]
                                                          ; +4: free
 %define zx_ra_l     (os88_image_end + ZEXEC_SLACK + 6)   ; word: routine address

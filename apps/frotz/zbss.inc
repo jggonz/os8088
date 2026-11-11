@@ -216,6 +216,13 @@ ZEXEC_SLACK  equ 1684                         ; 84
 
 ; zio.inc's zi_yield reads this and zexec.inc owns the region, but the define
 ; has to be HERE: zbss is included first and a %define must precede its use.
+; zx_rsm likewise: zwin.inc's zw_morechk reads it, and zwin precedes zexec.
+%define zx_rsm     (os88_image_end + ZEXEC_SLACK + 1)   ; byte: ZXR_*, the
+                                    ; wait a restart resumes (zx_restart), 0 =
+                                    ; none - and, being set by zx_park as the
+                                    ; lock goes and cleared by zx_relock once
+                                    ; it is back, the one fact that says the
+                                    ; worker is NOT holding the gfx lock
 %define zf_sdelta  (os88_image_end + ZEXEC_SLACK + 76)  ; word: the RUNNING
                                     ; total of paragraphs the heap compactor
                                     ; has slid the story by (SPEC.md 66.5.9).
