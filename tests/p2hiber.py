@@ -22,8 +22,10 @@ Enter, the power-off (QEMU killed), a fresh QEMU, which resumes by itself
 (SPEC.md 87.5: there is no question). Then:
 
   1. [hb_resumes] is 1;
-  2. the MASTER 8259's IMR is the one it had before the hibernate (`not
-     [mou_line]` was 0 for MOU_P2LINE and opened it: A8h came home 00h);
+  2. the MASTER 8259's IMR is the one it had when it hibernated - read at
+     the Hibernate window, after the pointer has spoken and the contest has
+     masked the serial lines (`not [mou_line]` was 0 for MOU_P2LINE and
+     opened it: A8h came home 00h);
   3. mou_p2wz is what it was before - 3, QEMU's mouse answering the knock
      (with IRQ12 open the ISR took the 0xF5's ACK and the wheel came home 0);
   4. the pointer moves on QEMU's relative mouse.
@@ -171,6 +173,17 @@ def main():
         ui.menu_pick("Apple", "Hibernate...")
         ui.wait_window("Hibernate")
         os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
+        # THE MASK IT HIBERNATES WITH is read HERE, after the menu walk, and
+        # not at the desktop: until the PS/2 mouse's first packet settles the
+        # contest ([mou_seen] 0) mouse_init's serial probe leaves COM1's IRQ4
+        # open, and the settle's mou_lockon masks both serial lines - 88h at
+        # the desktop, 98h once the pointer has spoken. The base matched 88h
+        # only because its resume put back the FRESH boot's masks, an
+        # unsettled contest's; since hiber-14 the image's own come home
+        # (SPEC.md 87.6 step 1), and they are the settled session's
+        m0 = master_imr(q)
+        print("   at the Hibernate window: master %s, mou_seen %d" % (
+            m0 is not None and "%02X" % m0, byte(q, "mou_seen")))
         xmcheck.qmp(q.sock, "sendkey ret")
         if not os88qemu.acted(q, lambda: q.read(0x449, 1)[0] in (3, 7),
                               secs=180, what="the hibernated sentence"):
