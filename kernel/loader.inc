@@ -552,38 +552,17 @@ ld_say_status:
     cmp byte [ld_said], 0       ; SPEC.md 20.12.4: the entry proc's own toast
     je .say                     ; is up, and it names the reason better than
     mov byte [ld_said], 0       ; `Load failed` would - record, and say nothing
-    ret
+.r: ret                         ; (ld_run_name_x's `.fail`: a bare ret)
 .say:
     mov bx, fm_stattab
     mov cx, LD_NSTAT
     jmp ct_toast_say
 
-; -----------------------------------------------------------------------------
-; ld_owed - WHAT DOES THE SCREEN STILL OWE THIS LOAD? (SPEC.md 22.17)
-; in:  AL = the LD_* status the pipeline answered with
-; out: nothing (AX and every other register preserved)
-;
-; The two far entries below - loader_run_x's and ldf_ld_pkg_start's - asked the
-; same two questions in the same order and called the same routine on the same
-; answer, and the second copy had grown its own `push ax` / `pop ax` around
-; files_refresh_x where the first leant on its own eight-deep prologue. One
-; body, banking AX itself, so neither caller has to.
-;
-; The success path drew the new window ITSELF (SPEC.md 11.90), so [ld_painted]
-; being set means nothing is owed; and a FAILED load drew nothing and the
-; poster's window never said a word about it (22.17). The ONE exception is a
-; package the loader REFUSED after running its entry proc, which may have put
-; pixels anywhere before it said no - and that is a whole-screen repaint,
-; because there is no telling where.
-; -----------------------------------------------------------------------------
-ld_owed:
-    cmp byte [ld_painted], 0
-    jne .no
-    cmp al, LD_EABORT
-    jne .no
-    call files_refresh_x        ; (clobbers nothing but the flags)
-.no:
-    ret
+; (ld_owed - the whole-screen repaint a load whose entry proc refused was
+; charged - stood here. Nothing was owed: the success path draws its window
+; itself (SPEC.md 11.90), a failure drew nothing, and a refusing entry proc's
+; windows are destroyed by .abort's sweep, each through wm_destroy's damage
+; pass. SPEC.md 22.17.1.)
 
 ; -----------------------------------------------------------------------------
 ; loader_run - load and launch the package at a directory index
@@ -611,9 +590,6 @@ loader_run_x:
 
     push es
 
-    mov byte [ld_painted], 0    ; HOISTED above the arms: the refusal below
-                                ; reaches ld_owed too, and it owes the same
-                                ; answer about whether anything was drawn
 
     ; --- STAGE THE ENTRY, and prefer the POSTER'S OWN CACHE ------------------
     ; The index means a row in the listing the window that posted it is
@@ -692,10 +668,8 @@ loader_run_x:
 .badix:
     mov al, LD_EBAD             ; ld_take.bad's verdict, reached without it:
 .said:                          ; an index past the end is not a file
-    call ld_say_status          ; record the verdict and SAY it (SPEC.md 59)
-    call ld_owed                ; ...and the repaint, if this load left one
-                                ; owed - the body both far entries share, and
-                                ; its banner is where the reasoning lives
+    call ld_say_status          ; record the verdict and SAY it (SPEC.md 59) -
+                                ; and repaint nothing (SPEC.md 22.17.1)
 
     jmp kretfc_es
 
@@ -757,7 +731,7 @@ ld_run_name_x:
     call ld_lname_cp            ; ...and AX - the cluster `.peek` takes from
                                 ; the register - is one of the four it banks
     jmp ld_run_body_x.peek      ; joins the pipeline exactly where the index
-.fail equ ld_owed.no   ; its neighbour's ret (kernel size pass 16)
+.fail equ ld_say_status.r   ; a bare ret (kernel size pass 16)
 
 ; -----------------------------------------------------------------------------
 ; ld_res_name - fill [ld_fsz]/[ld_clus] from a name (module internal)
@@ -2080,15 +2054,11 @@ ldf_ld_pkg_start:
     ; never enters loader_run_x, and every caller of loader_run sets [ld_pwin]
     ; itself before the read (ui.inc and files.inc, at the seam this used to
     ; mirror). A store nothing on either arm reads is dead weight.
-    mov byte [ld_painted], 0
-    call ld_pkg_start_x         ; AL = LD_*
-    push ds
+    call ld_pkg_start_x         ; AL = LD_* - and no repaint is owed on any
+    push ds                     ; answer (SPEC.md 22.17.1)
     pop es                      ; ld_run_body's failure exits leave ES aimed
                                 ; at LOW_SEG or a freed region, and nothing
                                 ; below may inherit that (ui.inc's note)
-    call ld_owed                ; the repaint this load still owes, if any -
-                                ; and it banks AX itself, which is what the
-                                ; `push ax` / `pop ax` around this used to be
     cmp al, 1                   ; every LD_* but LD_OK, ld_start's own
     cmc                         ; LD_EABORT included, is CF = 1 - `cmp`
     mov ah, 0                   ; borrows on 0 alone. AH = 0 writes no flag,
@@ -2127,7 +2097,7 @@ ld_pwin:    resw 1              ; -> the state block of the file-manager
                                 ; BACKGROUND window's listing is a real one it
                                 ; is entitled to act on (SPEC.md 22.1)
 ld_status:  resb 1              ; LD_* result of the last loader_run
-ld_painted: resb 1              ; 1 = ld_run_body already did the full pass
+ld_painted: resb 1              ; 1 = ld_run_body drew the new window (assoc)
                                 ; (its wm_show), so loader_run must not.
                                 ; ADJACENT TO ld_status ON PURPOSE - step 9
                                 ; writes the pair as one word

@@ -1255,8 +1255,8 @@ assoc_run_x:
                                 ; Nothing downstream needs the globals to be
                                 ; this folder: assoc_locate navigates itself,
                                 ; assoc_back comes back to what is banked
-                                ; here, and files_refresh paints from the
-                                ; WINDOW's cache (SPEC.md 22.1)
+                                ; here, and every Disk window paints from
+                                ; its own cache (SPEC.md 22.1)
 .curvol:
     mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
@@ -1331,11 +1331,12 @@ assoc_run_x:
     push ds
     pop es                      ; ld_run_body's failure exits leave ES adrift
     call assoc_back             ; the user's volume FIRST, then the window
-    cmp byte [ld_painted], 0
-    je .refresh                 ; ld_run_body's wm_show drew the new window
-                                ; and the poster's own window was never
-                                ; written on by this load at all (SPEC.md
-                                ; 22.17), so nothing here is owed a repaint
+    cmp byte [ld_painted], 0    ; no window, so no document to hand over -
+    je .out                     ; and no repaint either: a failed load drew
+                                ; nothing, a refusing entry proc's windows
+                                ; went through wm_destroy's damage pass, and
+                                ; the poster's own window was never written
+                                ; on by this load at all (SPEC.md 22.17.1)
 .handover:                      ; ...and the DOCUMENT is a second phase, now
                                 ; that there is something to look at while it
                                 ; loads (SPEC.md 54.10) - ASSOC_HANDOVER,
@@ -1360,7 +1361,7 @@ assoc_run_x:
     mov al, LD_EBAD             ; verdict ('Load failed'), which is what this
     call ld_say_status          ; double-click answered before the search
     jmp short .out              ; ...and, like that route's failed load, owes
-                                ; the screen nothing (ld_owed, SPEC.md 22.17)
+                                ; the screen nothing (SPEC.md 22.17.1)
 .nofile:
     ; THE PROGRAM THIS EXTENSION NAMES IS NOWHERE (SPEC.md 54.4.2.4). Once a
     ; run, before saying so: it may have been DELETED, with another package
@@ -1415,8 +1416,6 @@ assoc_run_x:
                                 ; for this very slot and not rebuilt since -
                                 ; so the toast is the six bytes in front of it
                                 ; and nothing is composed here (size pass 5)
-.refresh:                       ; ...and both routes end at the one repaint
-    call files_refresh_x
 .out:
     pop ax                      ; the extra word this routine banked itself...
     jmp kretfc_es               ; ...and then the canonical eight (kernel.asm)
@@ -1481,11 +1480,13 @@ assoc_ownex:
     stc
 .r:
     xchg ax, bx                 ; AX = the caller's again (XCHG keeps CF)
-    ret                         ; (NO PARITY PAD: the two that stood here, for
-                                ; dsk_xfer and its hot neighbours behind this
-                                ; in .cold, went with .banked's -3 and this
-                                ; routine's -1 - an even -6 in all, kernel
-                                ; size pass 18. t_hotpar holds the parity)
+    ret
+    nop                         ; PARITY PAD, never executed: assoc_run_x's
+                                ; repaint went (SPEC.md 22.17.1), an odd -3,
+                                ; and dsk_xfer and its hot neighbours sit
+                                ; behind this in .cold at an even shift
+                                ; (t_hotpar). (The two pads that stood here
+                                ; before went in kernel size pass 18)
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -1495,9 +1496,9 @@ assoc_ownex:
 ; followed by the epilogue - so this one is argued site by site rather than by
 ; assoc_handover's rule: AX and BX are dead at both. After the first, the only
 ; instructions before .out are `cmp byte [ld_painted],0` and a call to
-; assoc_handover (no register inputs) or files_refresh_x (takes none, clobbers
-; nothing). After the second, `pop ax` kills AX before any read, and
-; assoc_progname takes AL and preserves everything; BX is unread throughout.
+; assoc_handover (no register inputs), or nothing. After the second, `pop ax`
+; kills AX before any read, and assoc_progname takes AL and preserves
+; everything; BX is unread throughout.
 ;
 ; dsk_goto and not dsk_chdir_q, for assoc_go's reason: when the program was
 ; found on the document's own volume, coming back is a folder move inside a

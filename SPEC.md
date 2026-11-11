@@ -1231,7 +1231,7 @@ Bounce was already taking 3.7–4.4% of. The frame RATE cannot move, because
 round that is most of what it buys: `fdlg.inc` joining turned its calls to
 `fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double crossing into a near
 call, and `assoc.inc` joining did the same for `ld_run_name`,
-`files_refresh` and `dskw_stat`. A call that leaves cold code for a resident
+`files_refresh` (since retired, §22.17.1) and `dskw_stat`. A call that leaves cold code for a resident
 *thunk* is a double crossing — out through a `cw_` shim and straight back in
 through the thunk, six segment transitions where a near call would do — so
 when a target joins the set, **its callers inside the set must be pointed at
@@ -52629,11 +52629,11 @@ on entry. Steps:
     another format - reads `Wrong os8088 version` on every build, because it
     is the one other refusal a user can act on. The `Bad package` sections elsewhere in this spec
     describe a `LDDIAG` build, or the verdict as it read before the pass.
-    Then draw nothing, with one exception: `LD_EABORT` calls
-    `files_refresh` (§22), the full pass, because an entry proc that
-    declared itself broken may have put pixels anywhere before it did.
-    Every other outcome — success or failure — leaves the poster's window
-    exactly as it was, because posting a load never wrote on it (§22.17).
+    Then draw nothing. Every outcome — success, failure or an entry
+    proc's refusal (`LD_EABORT`) — leaves the poster's window exactly as
+    it was, because posting a load never wrote on it (§22.17), and the
+    rest of the screen too: a refusing entry proc's windows go through
+    the abort sweep's `wm_destroy`, each its own damage pass (§22.17.1).
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy, `mem_free_rec`
@@ -52898,8 +52898,8 @@ finds a DOCUMENT post (`[assoc_dapp]` below `ASSOC_FLUSH`, §54.7.6.3)
 standing again after `ld_run_name` returns - it consumed the slot before the
 load, so only a post made since can have put one back - and treats the
 refusal as a hand-on: no `ld_say_status` (so no `Load
-failed` toast), no `files_refresh` (so no whole-screen repaint, which
-`ld_owed` charges any other `LD_EABORT`), only `assoc_back`. The loader's
+failed` toast), only `assoc_back` - and no repaint, as on every other
+outcome (§22.17.1). The loader's
 abort path still sweeps the instance's windows and frees its region and
 every claim (§20.2), so nothing of the refusing package outlives it.
 
@@ -53566,7 +53566,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
 
-Calling `app_launch`, `files_open`, `files_open_drive`, `files_refresh` or
+Calling `app_launch`, `files_open`, `files_open_drive` or
 `ui_cmd` from here hangs the machine permanently — no beep, no watchdog, no
 recovery — so each entry in the jump table carries a one-line comment
 saying which column of that table it is in.
@@ -53823,14 +53823,10 @@ window silently jumps to the root.
 3. else at cap → navigate the **frontmost** file-manager window in place.
    Nothing can fail, so there is no error path and no dialog.
 
-`files_refresh` (called by `loader_run` when `[ld_painted]` is 0, no lock
-held) is just gfx_lock / `wm_paint_all` / gfx_unlock. It used to look up
-"the" Disk instance with `inst_find_kind` and check its visibility; with N
-instances "the first one" is the wrong window, and `wm_paint_all` repaints
-every visible window anyway — which is what the call was always for (the
-loaded program's window may overlap any of them). It no longer runs on the
-**successful** path at all: `ld_run_body`'s own `wm_show` is that pass, and
-running both was the second whole-screen redraw a launch used to show.
+`files_refresh` — gfx_lock / `wm_paint_all` / gfx_unlock after a load that
+drew no window — is retired (§22.17.1): nothing a load leaves behind is owed a
+whole-screen repaint. A successful launch's `wm_show` draws the new window
+and nothing else (§11.90).
 
 ### 22.2 Selecting costs two bands, and re-selecting costs nothing
 
@@ -56207,6 +56203,34 @@ sake (§22.4), so it has one to give.
 window has that the Control Panel does not: there can be **four** Disk
 windows. `[fm_dbtn]` is which button and `[fm_dvp]` is whose, and `fm_isdown`
 (written at its one call since kernel size pass 14) asks both — without the second, a damage repaint of a *different* Disk window
+#### 22.17.1 …and `files_refresh`, the last whole-screen repaint a load paid
+
+**A load drew `wm_paint_all` whenever it did not draw a window of its own**:
+`ld_owed` (both of the loader's far entries) on an entry proc's refusal,
+`LD_EABORT`, and `assoc_run_x` on *every* failure — a missing program's
+`Needs X.O88`, a `Bad package`, a refusal — through `files_refresh`, which was
+nothing but the lock and that call. Opening a document whose program would not
+start repainted the whole desktop, every window in it back to front.
+
+Its history says what it was for, and none of it is left. It was the Disk
+window's status line, which drew `[ld_status]` — `Loading...` and then the
+verdict — so the poster was owed a line, and with four Disk windows "the
+poster" was guessed as "everything". §22.17 retired the line and the toast
+says the verdict; the poster's window is untouched by a load from beginning to
+end. The **refusing entry proc** was the one case argued since — "it may have
+put pixels anywhere before it said no" — and what it can have put anywhere is
+a window: the loader's abort path destroys every window the region stamped
+(§20.2, `wm_destroy_seg`), and each `wm_destroy` is its own damage pass over
+the rect it vacated (§11.91). A package drawing outside a window of its own is
+the trusted-package rule's case, not a guard's. **We only ever draw new
+windows on top**, and what a window that went away uncovered is the damage
+path's whole job.
+
+So `files_refresh`, `ld_owed` and `assoc_run_x`'s `.refresh` are gone, and so
+are the loader's two `[ld_painted]` stores that only `ld_owed` read;
+`assoc_run_x` still reads the flag, to know there is a window to hand its
+document to (§54.10).
+
 behind the drag draws the same button pressed in a window nobody has touched.
 
 **The edges are installed in `fm_kinit`**, because `W_ONMOUSEUP` and
@@ -112615,8 +112639,8 @@ rest.
 because every reader of the global snapshot now consults `[dsk_lstale]`. The
 audit for this path, since it is the one that decides:
 
-- **`files_refresh`**, which runs immediately after, paints from the
-  WINDOW's cache and not the globals (22.1).
+- **`files_refresh`**, which ran immediately after, painted from the
+  WINDOW's cache and not the globals (22.1) - and is retired (22.17.1).
 - **`fdlg`** is the bullet above now: the chooser is a Disk window and lists
   into its own window cache (38.1, 22.1). The retired dialog read the
   snapshot directly and was safe for a different reason - its `fdlg_home_go`
@@ -112653,7 +112677,8 @@ folder**, which is the audit rather than the hope:
 
 - `assoc_locate` navigates itself, rung by rung (§54.4).
 - `assoc_back` returns to what was banked here, not to what was mounted.
-- `files_refresh` paints from the **window's** cache (§22.1).
+- every Disk window paints from its **own** cache (§22.1) - and a load
+  repaints none of them (§22.17.1).
 - the document is handed over by PULL (§54.5), so nothing has to be standing
   in its directory when the entry proc runs.
 

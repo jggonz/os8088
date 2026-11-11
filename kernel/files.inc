@@ -73,7 +73,7 @@
 ;
 ; The paint/onkey/onclick procs and fm_oncmd all run with the gfx lock
 ; already held by the caller (SPEC.md 11/12.2) and never lock, block or
-; spawn; files_open / files_open_drive / files_refresh take the lock
+; spawn; files_open / files_open_drive take the lock
 ; themselves.
 ;
 ; **This module is `.cold` (SPEC.md 2.6).** Its code has a CS of its own, so
@@ -3044,23 +3044,9 @@ fm_seed:
 .out:
     jmp kretc_di
 
-; -----------------------------------------------------------------------------
-; files_refresh - repaint after a load attempt (loader_run)
-; in:  nothing; no lock held on entry
-; out: nothing
-; clobbers: nothing (flags only)
-;
-; A bare wm_paint_all under its own lock. It used to look up "the" Disk
-; instance with inst_find_kind and skip when that window was hidden; with
-; four possible windows "the first one" is the wrong window, and the call was
-; never about our window anyway - loader_run makes it right after wm_show
-; raised the LOADED program's window, which may overlap any of them, so the
-; repaint has to be the full back-to-front pass regardless.
-; -----------------------------------------------------------------------------
-files_refresh_x:
-    call ct_cw_gfx_lock
-    KDOOR wm_paint_all
-    jmp ct_cw_gfx_unlock
+; (files_refresh - a bare wm_paint_all under its own lock, after a load
+; attempt - is RETIRED too, SPEC.md 22.17.1: nothing a load leaves behind is
+; owed a whole-screen repaint.)
 
 ; -----------------------------------------------------------------------------
 ; files_poster and fm_win_of are RETIRED (SPEC.md 22.17)
@@ -5051,7 +5037,7 @@ fm_menu_base:
 ; The jump table. Every entry records WHICH SIDE OF THE GFX LOCK it is on,
 ; because fm_oncmd runs under that lock and the lock is a non-recursive spin
 ; only the UI task releases (SPEC.md 7): an entry that called app_launch,
-; files_open, files_refresh or ui_cmd would hang the machine permanently -
+; files_open or ui_cmd would hang the machine permanently -
 ; no beep, no watchdog, no recovery. This is the single easiest mistake to
 ; make in this module, which is why the note is per line and not per file.
 ; fm_onkey_x's bare letters (SPEC.md 22), each the body of the menu command
