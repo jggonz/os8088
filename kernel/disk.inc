@@ -7058,6 +7058,59 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; so the DATA stays in .text at every toggle
 
 
+; THE SCAN (SPEC.md 18.95.10.1), spelled once for its two homes: inline in
+; dsk_rah_serve where there is no prefetch (kern_mega, kern_dos), and as
+; dsk_rah_find where the loader's prefetch asks the same question. In: DI =
+; the LBA. A HIT leaves SI on the record and AX = the delta, and reaches %2
+; with ZF=1 when the read is a stream moving on (no mark), or falls out of the
+; macro, the chunk marked, on a VISIT; a slot that does not hold DI goes to
+; %3, whose `add si, RAH_REC` / `loop %1` is the site's own.
+%macro RAH_SCAN 3
+    mov si, dsk_rah_tab
+    mov cx, [dsk_rah_runs]      ; the LIVE width. Reached only with a claim
+%1:                             ; live, so the count is never 0 here
+    cmp word [si+RAH_N], 0
+    je %3                       ; the slot says nothing
+    mov al, [disk_drive]
+    cmp al, [si+RAH_VOL]
+    jne %3
+    mov ax, [dsk_sigcur]
+    cmp ax, [si+RAH_SIG]
+    jne %3
+    mov ax, di
+    sub ax, [si+RAH_LBA]        ; AX = the sector's index inside the chunk
+    jc %3                       ; below this chunk (the subtract wrapped)
+    cmp ax, [si+RAH_N]
+    jae %3                      ; ...and inside it: a HIT
+    cmp al, [si+RAH_END]        ; EXACTLY where its last read ended is a stream
+    je %2                       ; moving on - the fill served the head, this is
+    mov byte [si+RAH_HIT], 1    ; the next sector - and marks nothing. Anything
+                                ; else is a VISIT - back, the same sector again
+                                ; or across a gap - so mark the chunk, and the
+%endmacro
+
+%ifdef DSK_RAHINT
+; -----------------------------------------------------------------------------
+; dsk_rah_find - is LBA DI in the cache? (the scan, for serve and the prefetch)
+; in:  DI = the LBA
+; out: CF=0 a HIT: SI = its record, AX = DI's index inside the chunk, and the
+;      chunk marked as a VISIT unless the read is a stream moving on;
+;      CF=1 no live chunk holds it
+; clobbers: AX, CX, SI, flags
+; Reached only with a claim live ([dsk_rah_seg] non-zero).
+; -----------------------------------------------------------------------------
+dsk_rah_find:
+    RAH_SCAN .slot, .hit, .next
+    clc                         ; (a VISIT: the mov kept the compare's CF)
+.hit:                           ; (a stream: `je` came on equal, CF = 0)
+    ret
+.next:
+    add si, RAH_REC
+    loop .slot
+    stc
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dsk_rah_serve - serve dsk_xfer's run out of the cache, filling if it pays
 ; in:  DI = the LBA wanted, SI = sectors still wanted, ES:BX = destination
@@ -7088,31 +7141,18 @@ dsk_rah_serve:
     push si
     push di
     mov dx, si                  ; DX = sectors still wanted
-    mov si, dsk_rah_tab
-    mov cx, [dsk_rah_runs]      ; the LIVE width. Reached only with a claim
-.slot:                          ; live, so the count is never 0 here
-    cmp word [si+RAH_N], 0
-    je .next                    ; the slot says nothing
-    mov al, [disk_drive]
-    cmp al, [si+RAH_VOL]
-    jne .next
-    mov ax, [dsk_sigcur]
-    cmp ax, [si+RAH_SIG]
-    jne .next
-    mov ax, di
-    sub ax, [si+RAH_LBA]        ; AX = the sector's index inside the chunk
-    jc .next                    ; below this chunk (the subtract wrapped)
-    cmp ax, [si+RAH_N]
-    jae .next                   ; ...and inside it: a HIT
-    cmp al, [si+RAH_END]        ; EXACTLY where its last read ended is a stream
-    je .copy                    ; moving on - the fill served the head, this is
-    mov byte [si+RAH_HIT], 1    ; the next sector - and marks nothing. Anything
-    jmp short .copy             ; else is a VISIT - back, the same sector again
-                                ; or across a gap - so mark the chunk, and the
-                                ; round robin passes it over once (18.95.10.1)
+%ifdef DSK_RAHINT
+    call dsk_rah_find           ; THE SCAN, a routine of its own because the
+    jnc .copy                   ; loader's prefetch asks it too (SPEC.md
+                                ; 18.95.13): CF=0 a HIT, SI = the record and
+                                ; AX = the delta
+%else
+    RAH_SCAN .slot, .copy, .next
+    jmp short .copy             ; ...round robin passes it over once
 .next:
     add si, RAH_REC
     loop .slot
+%endif
 
     ; --- a miss: would a fill create any SURPLUS, and does it read? ---------
     call dsk_rah_fill           ; DX in, and it answers CF=1 to BOTH questions
@@ -7292,9 +7332,18 @@ dsk_rah_fill:
 %if DSK_RAH_SECS > 255
   %error "dsk_rah_fill clears RAH_N with a BYTE store: a chunk must stay under 256 sectors"
 %endif
-    mov [si+RAH_LBA], di
+%ifndef DSK_RAHINT
+    mov [si+RAH_LBA], di        ; (dsk_rah_rdst stamps it, where there is one)
+%endif
     mov cx, dx
     mov es, [dsk_rah_seg]
+%ifdef DSK_RAHINT
+    call dsk_rah_rdst           ; THE READ AND THE STAMP, shared with the
+                                ; loader's prefetch (SPEC.md 18.95.13): one
+                                ; record here, DX being at most DSK_RAH_SECS.
+                                ; CF is the read's, and 0 out of the stamp
+    SKIPBL1                     ; over the stc (BL is kretc_dx's to restore)
+%else
 %ifdef KERN_MEGA
     push bx                     ; the slot's run of the store, for the copy
     cmp byte [dsk_rah_hi], 0
@@ -7338,12 +7387,136 @@ dsk_rah_fill:
     mov ax, [dsk_sigcur]
     mov [si+RAH_SIG], ax        ; (CF = 0: the `jc .out` above, and a `mov`
     SKIPBL1                     ; keeps it - and so does `mov bl`, over the
-.nofill:                        ; stc, BL being kretc_dx's to restore: pass
-    stc                         ; 17, -1)
+%endif                          ; stc, BL being kretc_dx's to restore: pass
+.nofill:                        ; 17, -1)
+    stc
 .out:
     pop es
     pop di
     jmp kretc_dx
+
+%ifdef DSK_RAHINT
+; -----------------------------------------------------------------------------
+; dsk_rah_rdst - read a run into the cache and stamp its records
+; in:  DI = the run's first LBA, CX = DX = its sectors, ES:BX = where in the
+;      claim, SI = the record of the slot BX is (slot n's run is n * 4,608
+;      bytes in, so the records of consecutive slots are consecutive)
+; out: CF=0 read, and every record from SI on stamped with its own nine
+;      sectors (the last with what is left); CF=1 the read failed and no
+;      record was touched
+; clobbers: AX, BX, CX, DX, DI, flags
+;
+; dsk_rah_fill's one slot and the loader's prefetch (SPEC.md 18.95.13), which
+; reads up to a cylinder into several slots in ONE int 13h. Each record still
+; describes its own slot alone, so a later fill evicts any of them on its own
+; and no record ever names storage another one owns. HIT and END are cleared
+; with the stamp: the stream's next sector is each chunk's first.
+; -----------------------------------------------------------------------------
+dsk_rah_rdst:
+    mov ax, di
+    inc byte [dsk_rah_busy]     ; ...so this read is not itself cached
+    call disk_read_x
+    dec byte [dsk_rah_busy]     ; (dec leaves CF alone)
+    jc .r
+    mov bx, si
+.st:
+    mov [bx+RAH_LBA], di
+    mov cx, DSK_RAH_SECS
+    cmp dx, cx
+    jae .n
+    mov cx, dx                  ; the last slot's share
+.n:
+    mov [bx+RAH_N], cx          ; only now may the slot say it holds anything
+    mov al, [disk_drive]
+    cbw                         ; AH = 0 (a volume index is under 80h)...
+    mov [bx+RAH_VOL], ax        ; ...so one word store is VOL and a clear HIT
+    mov [bx+RAH_END], ah
+    mov ax, [dsk_sigcur]
+    mov [bx+RAH_SIG], ax
+    add di, cx
+    add bx, RAH_REC
+    sub dx, cx
+    jnz .st                     ; (CF = 0 out of the last sub)
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_rah_pre - PREFETCH a package to its first cylinder's end (SPEC.md
+; 18.95.13): the loader's call, made just before its header peek
+; in:  AX = the file's first cluster, [ld_fsz] its byte size
+; out: nothing; every register but ES preserved, flags clobbered
+;
+; A launch peeks one sector and then reads the whole file. The peek's miss
+; FILLS only to the TRACK's end (a fill is a guess), so the read behind it
+; began a fresh int 13h on the next head, where its own direct path would
+; have run to the cylinder's end. This is not a guess - the loader is about
+; to read these sectors - so it reads from the file's first sector to the
+; CYLINDER's end, no further than the file and no more than the claim's
+; slots hold, in ONE int 13h into slots 0 .. m-1.
+; The peek and the read are then served, and the read goes on from the next
+; cylinder.
+;
+; BIOS floppies only ([dsk_vflop] 1: no partition base, no high LBA word, no
+; PicoMEM, no driver or redirected volume), and nothing when the first
+; sector is cached already - a re-launch reads it there - nor when the run
+; would cross a 64KB page (dsk_runcap would make it two calls). A failed
+; read forgets the whole cache (it may have landed in any of the slots). No
+; state is left armed: this is one call and it is done.
+; -----------------------------------------------------------------------------
+dsk_rah_pre:
+    call kentc_bp
+    cmp byte [dsk_vflop], 1
+    jne .out
+    mov bx, [dsk_rah_seg]       ; BX = the claim, kept to the read
+    or bx, bx
+    jz .out
+    call dsk_clus2lba_x
+    jc .out
+    xchg ax, di                 ; DI = the file's first LBA
+    call dsk_rah_find
+    jnc .out                    ; cached already: the peek will hit
+    mov ax, [disk_spt]
+    mul word [disk_heads]       ; AX = a cylinder's sectors
+    xchg ax, cx
+    mov ax, di
+    xor dx, dx
+    div cx
+    sub cx, dx                  ; CX = from DI to the cylinder's end. Not
+                                ; the track's on a machine whose FDC was not
+                                ; seen to cross a head ([dsk_cylrun] 0):
+                                ; dsk_xfer then cuts the read at the head,
+                                ; two calls, which is what the peek's fill
+                                ; and the read behind it cost there anyway
+    mov ax, [ld_fsz+1]          ; ...and no further than the file:
+    shr ax, 1                   ; floor(size / 512) + 1, bits 8..23 of the
+    inc ax                      ; size, so at most one sector over
+    cmp cx, ax
+    jbe .f
+    xchg ax, cx
+.f:
+    mov al, DSK_RAH_SECS        ; ...nor than the claim holds
+    mul byte [dsk_rah_runs]
+    cmp cx, ax
+    jbe .g
+    xchg ax, cx
+.g:
+    mov ax, 32                  ; NOT ACROSS A 64KB PAGE (18.95.7.1): the run's
+    mul cx                      ; paragraphs from slot 0 - which is the
+    mov es, bx                  ; claim's first - and when its end is in
+    add ax, bx                  ; another page than its start, no prefetch:
+    xor ax, bx                  ; dsk_runcap would cut it into two calls,
+    test ah, 0xF0               ; one more than a short package's peek
+    jnz .out                    ; costs. (An end exactly AT a page counts as
+                                ; across it: one claim placement in 4,096)
+    mov dx, cx
+    xor bx, bx                  ; slot 0's run, and record 0
+    mov si, dsk_rah_tab
+    call dsk_rah_rdst
+    jnc .out
+    call dsk_rah_flush
+.out:
+    jmp kretc_bp
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_rah_flush - forget every cached chunk

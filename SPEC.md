@@ -41505,12 +41505,10 @@ Calls (MartyPC FDC counters): 360KB and 720KB, open a root 4 -> 2, enter a
 folder 3 -> 2, Up 3 -> 1. 1.44MB is unchanged (its FATs run past sector 7);
 1.2MB is not measured.
 
-**The loader's header peek is NOT given a longer fill here.**
-`kernel-hotpaths` also carries one (disk-4, +208): the peek arms the cap at
-the file's length and the fill runs to the CYLINDER's end over several
-slots, saving one call on a multi-track launch. It was left out of this
-branch for its bytes, and if it is taken it is better spelled as an explicit
-prefetch call than as an armed byte.
+**The loader's header peek is NOT given a longer fill here.** It is given
+an explicit prefetch instead, which is §18.95.13: `kernel-hotpaths`' disk-4
+(+208) armed this cap at the file's length, and it was left out of this
+branch for its bytes and for the armed state.
 
 Not on kern_dos (no room in its image) and not on kern_mega (its store above
 1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
@@ -41538,6 +41536,72 @@ Measured on the CGA PicoMEM 2 twin, the owner's battle, 6 guest seconds of
 Bolt from the same menu walk, twice each (identical both times): **sound
 frames late 19 -> 4**, int 13h calls 130 -> 124, `dsk_copy_seg_x` 69 -> 0.
 Resident: **10 bytes of `.cold`**.
+
+#### 18.95.13 …and the loader PREFETCHES a package to its first cylinder's end
+
+A launch peeks the file's first sector for the header (§21 step 2) and then
+reads the whole file (step 6). The peek misses and FILLS - but a fill is a
+guess and stops at the end of the TRACK, nine sectors at most, so the read
+behind it began a fresh `int 13h` on the other head, where its own direct
+path (§18.91.1) would have run on to the end of the cylinder. A package that
+starts on head 0 and runs past its track took **one call more than the
+cylinders it occupies**; on a 1.44MB disk, whose track is eighteen sectors,
+any package over nine sectors did.
+
+The peek is not a guess: the loader knows the file is about to be read. So
+just before it, `ld_run_body_x` calls **`dsk_rah_pre`** - an explicit
+prefetch, one call with nothing left armed behind it:
+
+| routine | contract |
+|---------|----------|
+| `dsk_rah_pre` | in: AX = the file's first cluster, `[ld_fsz]` its size. Out: nothing; every register but ES preserved. Reads from the file's first sector to the CYLINDER's end, no further than the file (`floor(size/512) + 1`, at most one sector over) and no more than the claim's slots hold (`9 x [dsk_rah_runs]`), in ONE `int 13h` into slots 0 .. m-1, each record stamped with its own nine sectors. |
+| `dsk_rah_rdst` | the read and the stamp, shared with `dsk_rah_fill`'s one slot. In: DI = the LBA, CX = DX = sectors, ES:BX = where in the claim, SI = that slot's record. Out: CF=0 read and stamped, CF=1 the read failed and no record was touched. |
+| `dsk_rah_find` | the scan `dsk_rah_serve` makes, as a routine. In: DI = an LBA. Out: CF=0 SI = its record and AX its index in the chunk (marked as a visit unless it is a stream moving on); CF=1 nothing holds it. |
+
+**What it leaves alone.** Nothing when the first sector is already cached -
+a re-launch reads it there, as it always did. Only a BIOS FLOPPY
+(`[dsk_vflop]` = 1): no partition base and no high LBA word (§18.7.5), no
+PicoMEM unit (18.95.12), and no driver or redirected volume, whose reads never
+reach the cache. Each record describes its own slot alone, exactly as a fill's
+does, so a later fill evicts any of them on its own and no record names
+storage another one owns; the records carry `[disk_drive]` and `[dsk_sigcur]`
+as every fill's do, so the swap reasoning of 18.95.11 and §18.8.1 is
+unchanged. A failed read forgets the whole cache (`dsk_rah_flush`): the DMA may
+have landed in any of the slots. Nothing either when the run would cross a
+64KB page (18.95.7.1: the claim's first paragraph and its run's end in
+different pages), which `dsk_runcap` would cut into two calls - one more than
+a short package's peek costs. On a machine whose FDC was not seen to cross a
+head (`[dsk_cylrun]` = 0, §18.93.1) `dsk_xfer` cuts the cylinder's run at the
+head itself: two calls, the count the peek's fill and the read behind it made
+there anyway, so the prefetch gains nothing on such a machine and costs
+nothing. The slots spent are 0 .. m-1 rather than the round robin's
+(18.95.10), which needs no wrap; the round robin's place is not moved.
+
+**Calls, argued from the code** (a file of `n` contiguous sectors from LBA
+`L`, touching `c` cylinders, the cache cold at `L`, on a machine with
+`[dsk_cylrun]` = 1 and a claim no page crosses at the run): before, the
+peek's fill was one call covering `L` to its track's end or nine sectors,
+whichever came first, and the read began a fresh call after it - **`c + 1`**
+whenever the file ran past that fill and the fill had not reached the
+cylinder's end (any package over one track from head 0 on 360KB and 720KB;
+any over nine sectors that does not start in its cylinder's last nine on
+1.2MB and 1.44MB), `c` otherwise. After, the prefetch is one call covering `L` to its
+cylinder's end, and the read makes one per further cylinder: **`c`**, on
+360KB, 720KB, 1.2MB and 1.44MB alike, provided the claim holds the
+cylinder's remainder (a 1.44MB cylinder from head 0 wants four slots: on a
+two- or three-slot claim the prefetch takes what fits and the launch costs
+what it did). ~0.4 s a call on the 5150 (PERFORMANCE.md Part 2), PREDICTED.
+The rows: `ldcost`, `smalllaunch`, `navcalls`, `fdswap`, `imgswap`, the
+`lz*` loader rows.
+
+Resident: **138 bytes of `.cold`** on kern_big, kern_emu and kern_small
+(kernsize's section sums against `2cf57256`; no `.text`, no `.bss`). The
+scan as a routine is 7 of them, the shared read-and-stamp 24 net of the
+fill's own stamp it replaces, the prefetch and its call site the rest. Not on kern_mega (its store above 1MB lands through a nine-sector
+bounce) nor kern_dos: `DSK_RAHINT` is undefined there and both are
+byte-identical. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
+cap as a byte inside `dsk_rah_fill`
+(`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch`).
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
