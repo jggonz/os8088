@@ -472,12 +472,14 @@ ITEMS = [
      "A PDF viewer and editor. It opens a PDF, draws its pages, finds text "
      "in it, and adds highlights, notes, text boxes, drawings and page "
      "changes, which it saves under a new name and never over the original. "
-     "It is made for a PC with 640KB of memory. Each disk carries the program and eight sample "
+     "It reads PDFs as they are made today, including compressed and "
+     "encrypted ones, embedded fonts and JPEG pictures. It is made for a PC "
+     "with 640KB of memory. Each disk carries the program and eight sample "
      "PDFs, one of them a guide to PageDesk itself; all but the 360KB disk "
-     "also carry the extra font sizes. At 360KB the program fills one disk "
-     "with one sample, and the second 360KB disk carries every sample. PDFONTS.TXT on the disk is the "
-     "licence of the fonts it uses. PageDesk is on the everything sets and "
-     "the live media too.",
+     "also carry the extra font sizes. At 360KB the program fills the first "
+     "disk on its own, and the second 360KB disk carries the samples. "
+     "PDFONTS.TXT on the program disk is the licence of the fonts it uses. "
+     "PageDesk is on the everything sets and the live media too.",
      [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
       ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", ""),
       ("pagedesk360b.img", "360KB", "the samples")]),
