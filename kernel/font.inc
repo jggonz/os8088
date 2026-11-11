@@ -328,16 +328,15 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN `.boot2`, THE BLOB, ON kern_big, kern_emu AND kern_mega (SPEC.md 6.0.1,
-; 2.9.15), reached by B2CALL from kmain_o before spl_finish - its one caller.
-; It was the blob's (SPEC.md 6.0.1 grew the blob to ten sectors for exactly
-; this body), went to `.boot3` in BOOT3-PLAN wave 1, and came BACK in
-; BOOT3-PLAN 16.16: `.boot3` is inside the packed KERNEL.SYS and the blob is
-; not, so the move took 208 bytes off the file and kept the 360KB/720KB stage
-; 2 at 11 int 13h calls after the elendilon merge. It costs no resident byte
-; and no window byte; the blob's slack pays for it. ON kern_small it stays in
-; `.boot3` (B3CALL): those disks read 7 calls either way, and the blob there
-; holds no residue body (tests/blobbodies.txt, BOOT3-PLAN 16.17).
+; IN `.boot3` ON EVERY KERNEL (SPEC.md 6.0.1, 2.9.14.2), reached by B3CALL
+; from kmain_o before spl_finish - its one caller. It was the blob's (SPEC.md
+; 6.0.1 grew the blob to ten sectors for exactly this body), went to `.boot3`
+; in BOOT3-PLAN wave 1, came BACK to the blob on the three big kernels in
+; BOOT3-PLAN 16.16 to keep the 360KB/720KB stage 2 at 11 int 13h calls, and
+; left it again (2026-11-10) when the plain-MDA probe (SPEC.md 39.1) needed
+; the blob's room: kernel size pass 19 had given the packed file back more
+; than its 236 bytes, so stage 2's calls do not move (tests/unit/t_blobruns.py
+; holds them). It costs no resident byte and no window byte.
 ;
 ; THE TABLE IS READ IN PLACE (SPEC.md 6) - unless even the fastest candidate
 ; FONT_PICK timed is slower than RAM by more than a quarter. Then the 760
@@ -357,11 +356,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
 ; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL
-section .boot2                  ; the blob on kern_big, kern_emu and kern_mega
-%else                           ; ...and `.boot3` on kern_small, as since wave
-B3SECT                          ; 1: its disks read 7 calls either way, and its
-%endif                          ; blob holds no residue (BOOT3-PLAN 16.17)
+B3SECT                          ; `.boot3`, every kernel (SPEC.md 2.9.14.2)
 font_init:
     push ax
     push bx
@@ -413,10 +408,9 @@ font_init:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain_o's B2CALL (B3CALL on kern_small)
+    retf                        ; FAR: kmain_o's B3CALL
     FONT_TIMERS .fi             ; LOCAL (font_init.fi_time, .fi_pit): the
-                                ; body's own clock, so the blob's register
-                                ; (tests/blobbodies.txt) files ONE body
+                                ; body's own clock, beside it in `.boot3`
 section .text
 %endif
 

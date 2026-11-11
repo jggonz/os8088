@@ -4125,6 +4125,16 @@ sector. `os88ovlchk` rule B8 learned the one shape this needs: a `B2CALL`
 written in a non-kern_small arm to a body whose non-kern_small arm is the
 blob (`_walk_big`, with a positive control and two crossed fixtures).
 
+**...and on 2026-11-10 `font_init` left the blob again, on all three**, which
+is the trade the paragraph above priced. §39.1's plain-MDA probe must run in
+`vid_detect`, in the splash's first tick and so in the blob, and it wanted
+about 70 bytes the blob did not have (24 free on kern_big, 9 on kern_emu).
+Kernel size pass 19 had meanwhile taken more than `font_init`'s 236 bytes off
+the packed file, so moving them back into it moves no stage 2 call: 10 / 10 /
+7 / 6 on kern_big's four disks before and after (tests/unit/t_blobruns.py).
+`font_init` is `.boot3`'s on every kernel again, `B3CALL`ed by `kmain_o`, and
+`RESIDUE_MAX` is 1 / 1 / 1 / 0 (`ovl_fdd_cylok` is the one row left).
+
 #### 2.9.15 `.boot3`: the boot's third home
 
 **The contract for docs/plans/completed/BOOT3-PLAN.md.** The boot has three boot-only
@@ -4161,7 +4171,7 @@ called by `B3CALL` from `kmain_o`:
 
 | kernel | bodies |
 |---|---|
-| kern_small | `font_init` with its clock `.fi_time` and `.fi_pit` (§6.0.1) - all four kernels' until BOOT3-PLAN 16.16 put it back in the blob on the other three (§2.9.14.2) |
+| every kernel | `font_init` with its clock `.fi_time` and `.fi_pit` (§6.0.1) - all four kernels' since wave 1, except the three big kernels' blob copy from BOOT3-PLAN 16.16 to 2026-11-10 (§2.9.14.2) |
 | kern_big, kern_emu, kern_mega | `hb_probe_x` (§87.5); `cfx_grid`, `cfx_ctxcap`, `cfx_cfgname` (kern_mega's were the blob's `bvw_rowcalc` instance, `bvs_ctxcap` and `ovc_cfgname` until its `.boot3` came on) |
 | kern_big, kern_emu | the slide prefix (`cfx_slide`, `cfx_grp`, `cfx_tab`); `as_boot` with `as_s_dir`, `as_s_skip`, `as_find` (§26.10.5) |
 | kern_mega | `mega_wrprobe`, `mega_gateb`, `mega_gwset` |
