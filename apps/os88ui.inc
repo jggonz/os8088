@@ -2254,9 +2254,11 @@ os88ui_sbar:
     mov dx, [di+6]
     UI_FRAME
                                 ; --- the two arrow-cell rules: AX is still
-    lea dx, [bx+OS88UI_SBCELL]  ; x1 and CX x2, a primitive keeping its four
-    mov bx, cx                  ; registers
-    UI_HLINE
+    lea dx, [bx+OS88UI_SBCELL]  ; x1 and CX x2 (UI_FRAME keeps its four
+    mov bx, cx                  ; registers; a LINE cell does not, SPEC.md
+    UI_HLINE                    ; 5.7.3, so the second rule reloads them)
+    mov ax, [di+0]
+    mov bx, [di+4]
     mov dx, [di+6]
     sub dx, OS88UI_SBCELL
     UI_HLINE
@@ -2268,13 +2270,9 @@ os88ui_sbar:
     sub cx, 3                   ; two rows of a pass being the same width -
     xor bp, bp                  ; 1, 3, 5, 7, 9. Same rows, same pixels, half
 .ar:                            ; the loop
-    mov ax, si
-    sub ax, bp
-    mov bx, si
-    add bx, bp
-    UI_HLINE                    ; the up glyph's row...
+    call .arrow                 ; the up glyph's row...
     xchg dx, cx
-    UI_HLINE                    ; ...and the down glyph's
+    call .arrow                 ; ...and the down glyph's
     xchg dx, cx
     inc dx
     dec cx
@@ -2311,6 +2309,18 @@ os88ui_sbar:
     pop ax
     ret
 %endif
+
+.arrow:                         ; one glyph row at DX, SI +/- BP. The line
+    push cx                     ; cell takes AX..DX (SPEC.md 5.7.3), so the
+    push dx                     ; pair is rebuilt a row and CX/DX kept here
+    mov ax, si
+    sub ax, bp
+    mov bx, si
+    add bx, bp
+    UI_HLINE
+    pop dx
+    pop cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; os88ui_sbcx - the arrow glyphs' centre column (internal)
@@ -4826,7 +4836,13 @@ os88ui_drbox:
     sub ax, OS88UI_DRAW
     inc bx
     dec dx
+    push ax
+    push bx
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
     add dx, bx                  ; ...and the triangle, four rows about the
     shr dx, 1                   ; box's middle, 7 wide at the top - (y1+1 +
     dec dx                      ; y2-1) / 2 is the middle the record gives
@@ -4834,7 +4850,13 @@ os88ui_drbox:
     mov bx, ax
     add bx, 6
 .tri:
+    push ax
+    push bx
+    push dx
     UI_HLINE
+    pop dx
+    pop bx
+    pop ax
     inc ax
     dec bx
     inc dx
@@ -5863,7 +5885,9 @@ os88ui_mndraw:
     dec bx
     mov dx, di
     add dx, 2
+    push cx
     call OSAPI_GFX_HLINE
+    pop cx
     add di, OS88UI_MN_SH
     jmp .next
 .norm:

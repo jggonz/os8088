@@ -296,6 +296,7 @@ modfs_header:
     db MOD_VER, MOD_FSCK
     dw BUILD_NUM, MOD_STAMP
     dw modfs_end, FSK_NENT
+    dw 0                        ; MOD_H_SCR (2.8.3): no mod_tab row
     dw fsk_entry
 FSK_NENT    equ 1
 

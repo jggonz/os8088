@@ -916,7 +916,13 @@ px_vrule:
     mov al, [px_c_rule]
     call OSAPI_SET_COLOR
     pop ax
+    push ax
+    push bx
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; px_hrule - row DX, columns AX..BX, in the rule colour. Preserves all
@@ -925,7 +931,9 @@ px_hrule:
     mov al, [px_c_rule]
     call OSAPI_SET_COLOR
     pop ax
+    push ax
     call OSAPI_GFX_HLINE
+    pop ax
     ret
 
 ; px_btn - draw button SI (an index) if it is laid out, and RECORD what was

@@ -459,9 +459,11 @@ it_present:
 ; IT_BANDR rows at a time - the picture minus the overlays' rects, each
 ; overlay lettered in a hold OF ITS OWN once a band has passed its last row
 ; (it_bpend: a band and a 40-cell line were 50 ms) - while the hold so far
-; plus the last band's cost stays under IT_GBAND (40 ms), and always one; a
-; band left over sets it_byield and the worker yields for the next rather
-; than sleeping a tick, so the lock is let go between holds and the
+; plus the DEAREST band of this present stays under IT_GBAND (40 ms), and
+; always one (the last band's cost was the guess until a cheap band then a
+; dear one made a 54 ms hold on the EGA's way back); a band left over sets
+; it_byield and the worker yields for the next rather than sleeping a tick,
+; so the lock is let go between holds and the
 ; picture takes about what one hold took. The last band adds, after a
 ; relayout, the content around the picture, black, and settles the boxes.
 ; A step made while it goes out (a FAST harness game; a relayout in play)
@@ -473,7 +475,9 @@ it_present_band:
     cmp byte [it_full], 2
     je .go
     call it_ovl_compose
-    mov word [it_band], 0
+    xor ax, ax
+    mov [it_band], ax
+    mov [it_bmax], ax               ; (no band made yet: nothing dearest)
     mov byte [it_bpend], 0
     mov byte [it_full], 2
     mov byte [it_hudd], 0
@@ -564,7 +568,11 @@ it_present_band:
     sbb dx, [it_bt0 + 2]            ; DX:AX = the band just made
     or dx, dx
     jnz .more
-    mov si, ax
+    cmp ax, [it_bmax]               ; THE DEAREST BAND OF THIS PRESENT, not
+    jb .bm                          ; the last: bands differ by half again
+    mov [it_bmax], ax               ; with the picture's rows, and one cheap
+.bm:                                ; band then a dear one was a 54 ms hold
+    mov si, [it_bmax]               ; on the EGA (18.7 + 28.8 + a tick's turn)
     mov ax, bx
     mov dx, cx
     sub ax, [it_gt0]

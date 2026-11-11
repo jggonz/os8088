@@ -689,6 +689,13 @@ int os88_file_find(int ordinal, struct os88_find *f)
     return 1;                           /* a next ordinal; -1 ends the walk */
 }
 
+/* SPEC.md 19.7.1.1: the token walk. In this model the token IS the ordinal,
+ * which is exactly kern_small's answer - same loop, same entries */
+int os88_file_find_seq(int token, struct os88_find *f)
+{
+    return os88_file_find(token, f);
+}
+
 void os88_file_here(struct os88_place *p) { p->clus = 0; p->vol = 1; }
 
 static int h_goto(unsigned clus)

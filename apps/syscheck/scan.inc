@@ -235,7 +235,8 @@ sc_p_init:
     xor cx, cx
 .root:
     mov di, sc_fbuf
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = the next token
     jc .rootdone
     cmp word [sc_fbuf+14], OSAPI_FT_DIR
     jne .root
@@ -737,7 +738,8 @@ sc_p_left:
     xor cx, cx
 .find:
     mov di, sc_fbuf
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .noapp
     cmp word [sc_fbuf+14], OSAPI_FT_DIR
     jne .find
@@ -830,7 +832,8 @@ sc_p_walk:
     mov bx, ax                      ; BX = this level's stack entry
     mov cx, [sc_wstk+bx+WS_ORD]
     mov di, sc_fbuf
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .up                          ; the end of this folder
     mov [sc_wstk+bx+WS_ORD], cx
     mov ax, [sc_fbuf+14]

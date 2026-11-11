@@ -69,6 +69,24 @@ segment the renderer thought it was drawing into.
 A code FETCH does not trip these: MEM_BPA_BIT is checked in biu_bus_begin,
 which asserts the cycle is not a CodeFetch. So executing the carpeted code is
 free and only a data write (or read) stops it.
+
+**A READ STOPS IT TOO, AND A READ IS NOT THE BUG.** The breakpoint is "any
+access" (the debug server has no write-only kind), and `.cold` is READ as data
+legitimately: SPEC.md 20's rare door (`int OS88_RARE` followed by an index
+byte) fetches that byte with `lds bx, [bp+2]` / `mov bl, [bx]` - DS = the
+CALLER's CS - so every rare call made from carpeted code stops here, with the
+stop at os88_door+13 (just past the `mov bl, [bx]`). This row reported exactly
+that as "*** WRITE INTO .cold" on every build from the day fm code started
+calling the door, which is a third cry of wolf. A read is harmless on every
+machine, including the ones whose `.cold` is ROM or HMA (SPEC.md 2.10, 2.10.7).
+
+So a stop is CLASSIFIED rather than believed: the instruction has completed
+when the machine stops (IP is past it), so a write has already changed the
+byte - the carpeted span is compared against the built image, an unchanged
+span is a READ (counted, its site named, the guest resumed) and a changed one
+is the WRITE this row exists for. The one write that cannot be told from a
+read this way stores the byte that was already there, which is also the one
+write that cannot corrupt anything.
 """
 import os, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -128,6 +146,25 @@ assert LO < HI, "dispcold: an empty carpet %04X..%04X" % (LO, HI)
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
+
+
+CARPET_LIN = (COLD_SEG << 4) + LO           # the carpet, linear...
+CARPET_IMG = None                           # ...and its built bytes (main)
+READS = {}                                  # read stops, by site
+
+
+def sitename(r):
+    """Where a stop landed, as `seg:off (symbol+n)`."""
+    if r["cs"] == COLD_SEG:
+        where = coldname(r["ip"])
+    elif r["cs"] == 0x0060:
+        near = sorted((v, n) for n, v in SY.items()
+                      if SEC.get(n) == ".text" and v <= r["ip"])
+        where = "%s+%d" % (near[-1][1], r["ip"] - near[-1][0]) \
+            if near else "?"
+    else:
+        where = "?"
+    return "%04X:%04X %s" % (r["cs"], r["ip"], where)
 
 
 def hexd(b): return " ".join("%02X" % c for c in b)
@@ -196,7 +233,13 @@ def pump(m, mo, px, py, secs=30.0):
     while True:
         st = m.status()
         if st["state"] == "breakpoint":
-            return m.cmd(cmd="regs")
+            r = m.cmd(cmd="regs")
+            if m.read(CARPET_LIN, HI - LO) != CARPET_IMG:
+                return r                    # a byte CHANGED: the write
+            site = sitename(r)              # unchanged: a READ (see the top)
+            READS[site] = READS.get(site, 0) + 1
+            m.run()
+            continue
         c = int(st["cycles"])
         g = (c - c0) / hz
         if g >= secs * rate:
@@ -217,6 +260,13 @@ def pump(m, mo, px, py, secs=30.0):
     if not up:
         m.mouse(0, 0, l=False)
     return None
+
+
+def reads():
+    """Name the READ stops - data reads of the carpet, the rare door's index
+    byte being the expected one - so a new reader is visible, not silent."""
+    for site, n in sorted(READS.items()):
+        print("   read (not a write) x%d at %s" % (n, site))
 
 
 def main():
@@ -277,6 +327,8 @@ def main():
               "carpeting COLD_SEG:%04X..%04X with %d memory breakpoints"
               % (COLD_SEG, COLD_LEN, LO, HI - 1, HI - LO))
 
+        global CARPET_IMG
+        CARPET_IMG = img[LO - COLD_VST:HI - COLD_VST]
         m.breakpoints([{"type": "mem", "addr": (COLD_SEG << 4) + a}
                        for a in range(LO, HI)])
         clicks = [(bx + bw // 2, by + TITLE_H + 8 + r * 16) for r in
@@ -293,7 +345,8 @@ def main():
                     m.breakpoints([])
                     return 1
                 continue
-            print("\n*** WRITE INTO .cold")
+            reads()
+            print("\n*** WRITE INTO .cold (the carpet's bytes changed)")
             print("cs=%04X ip=%04X  ds=%04X es=%04X ss=%04X sp=%04X bp=%04X"
                   % (r["cs"], r["ip"], r["ds"], r["es"], r["ss"], r["sp"],
                      r["bp"]))
@@ -320,6 +373,7 @@ def main():
             return 1
         m.breakpoints([])
         m.mouse(0, 0, l=False)
+        reads()
         print("no write into COLD_SEG:%04X..%04X caught" % (LO, HI - 1))
         now = m.read(COLD_LIN, COLD_LEN)
         bad = [i for i in range(len(img)) if img[i] != now[i]]

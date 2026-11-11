@@ -230,6 +230,13 @@ DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; driver (SPEC.md 9.12.5)
 %endif
 
+; HB_KEEPSET - the classes a hibernate KEEPS across the picture (SPEC.md 87.4
+; step 1: hbm_sweep's skip list, the same five) and so the only drivers a
+; resume can need to reach its image: drv_boot_x's PASS 1 on kern_big and
+; kern_emu, before the hibernation probe; everything else is pass 2
+; (drv_boot2_x, SPEC.md 51.3.4). A row's class as a bit.
+HB_KEEPSET  equ (1 << DRVC_DISK) | (1 << DRVC_FILE) | (1 << DRVC_FILE2) | (1 << DRVC_CD) | (1 << DRVC_EMS)
+
 DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
                                 ; drivers/os88drv.inc: a driver-shaped image
                                 ; its OWNER loads and attaches, with no row in
@@ -416,7 +423,10 @@ DRVV_READY  equ 3               ; "your services are published and the kernel
                                 ; back through the API - a slot's fence tests
                                 ; the publication slot, and attach runs before
                                 ; it is armed (SPEC.md 51.2.2). Optional: a
-                                ; driver that does not implement it returns.
+                                ; driver with nothing to do answers CF = 0.
+                                ; Every verb a driver does NOT implement it
+                                ; answers CF = 1 (SPEC.md 51.2.2), so CF = 0
+                                ; off any verb here is never a false yes
 ; --- the record drv_suspend fills, one per driver that answered ---------------
 DQ_CLASS    equ 0               ; db: the DRVC_* this row is about
 DQ_FLAGS    equ 1               ; db: bit 0 = it went
@@ -441,6 +451,11 @@ DRVV_HWINFO equ 4               ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11).
                                 ; Optional, and asked ONLY by drv_suspend, on
                                 ; the way past: a driver that is about to be
                                 ; unloaded is the last thing that knows.
+DRVV_SLEEP  equ 5               ; ...and the two a hibernate and a DOS handoff
+DRVV_WAKE   equ 6               ; send a driver whose header says
+DRV_H_WAKES equ DRV_H_FSV + 1   ; OS88_DRV_WAKES - bit 7 of this byte, +10's
+                                ; bit 15 (SPEC.md 51.2.5). HIBER.DRV is their
+                                ; one sender: equs, so no resident byte
 DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
                                 ; user wants (SPEC.md 34.8). out CF=0 and
                                 ; SI = its service table, RE-COPIED because
@@ -1658,8 +1673,12 @@ DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
 DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
-DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,153 =
-                                ; 16,897 + 256 bss, 255 bytes under the rung
+DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,074
+                                ; (ETHER.DRV's SLEEP/WAKE crossed ITS rung,
+                                ; 17,345 -> 17,510, and the size pass that
+                                ; paid it back took both to 17,389 / 17,058;
+                                ; the ring kept across a SLEEP is +16 here:
+                                ; SPEC.md 51.2.5)
 
 DRVM_SND     equ DRVM_IMG_SND + 16*2      ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -5877,6 +5896,9 @@ drv_boot_x:
     ; the loop below applies, which is the only way the two can agree about
     ; what counts as a driver being loaded; DRVR_WANT is settled by now, the
     ; settings file having been read above.
+%ifndef KERN_MEGA               ; (HB_EARLY: kern_big and kern_emu)
+    mov byte [cs:bdb_st], 1     ; PASS 1 OF TWO (SPEC.md 51.3.4): the loop
+%endif                          ; below takes the keep-set classes alone
     xor dh, dh                  ; DH = how many, DL = how many so far
     xor cl, cl
 .count:
@@ -5889,10 +5911,15 @@ drv_boot_x:
     jb .count
     xor dl, dl
 
+.pass:                          ; (drv_boot2_x enters here, DX its own)
     xor cl, cl
 .next:
     call drv_boot_want          ; a row with a file that is wanted?
     je .skip
+%ifndef KERN_MEGA
+    call bdb_pass               ; ZF = 1: a row of THIS pass's classes
+    jne .skip
+%endif
     inc dl                      ; ...and NAME it, before the sectors start
     mov al, dl
     mov ah, dh
@@ -5926,6 +5953,13 @@ drv_boot_x:
     inc cl
     cmp cl, DRV_MAX
     jb .next
+%ifndef KERN_MEGA
+    cmp byte [cs:bdb_st], 1     ; the end of PASS 1: the ordinal and the total
+    jne .p2end                  ; wait for pass 2, and the status line still
+    mov [cs:bdb_dx], dx         ; names the last driver read - the probe and
+    jmp short .out              ; the mouse come between (SPEC.md 87.5)
+.p2end:
+%endif
 
     DDG 0x0F                    ; DRVDIAG: every load returned
     B2CALL ovl_spl_msg_boot     ; the loads are done and the desktop is not up
@@ -5966,6 +6000,54 @@ drv_boot_x:
     pop bx
     pop ax
     retf
+%ifndef KERN_MEGA
+; -----------------------------------------------------------------------------
+; drv_boot2_x - PASS 2: every wanted row drv_boot_x's pass 1 left (SPEC.md
+;               51.3.4). kmain_o calls it after the hibernation probe that
+;               follows pass 1 (87.5), so a boot that resumes never loads a
+;               driver the image would only shut down: pass 1 is the KEEP-SET,
+;               the classes a hibernate keeps across the picture (HB_KEEPSET,
+;               87.4 step 1) and so the only ones a resume can need to reach
+;               its image; pass 2 is sound, the network, pointing devices,
+;               the display's helpers - everything the wake loads from its own
+;               [hb_drvmask] anyway. kern_big and kern_emu only (HB_EARLY);
+;               kern_mega loads in one pass and probes late.
+; in:  nothing; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+drv_boot2_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [cs:bdb_st], 1     ; pass 1 MOUNTED and walked: anything else
+    jne .q                      ; (no system disk) is .nodisk's, already said
+    inc byte [cs:bdb_st]        ; 2: the rest
+    mov dx, [cs:bdb_dx]         ; the status line's ordinal and total, on
+    jmp drv_boot_x.pass         ; from pass 1's
+.q:
+    jmp drv_boot_x.out
+
+; bdb_pass - is row BX this pass's? out: ZF = 1 yes. Clobbers AX
+; The class as a BIT, so the keep-set is one constant: DRVC_OVL (40h) shifts
+; out to 0 on an 8086, and on a 286+ the count is taken mod 32, leaving bit
+; 0 or 1, which no class uses - a non-class row is "the rest" either way
+bdb_pass:
+    push cx
+    mov cl, [bx+DRVR_CLASS]
+    mov ax, 1
+    shl ax, cl
+    test ax, HB_KEEPSET
+    mov al, [cs:bdb_st]         ; 1 or 2 (a `mov` keeps the test's ZF)
+    jz .r
+    inc ax                      ; keep-set: 2 in pass 1, 3 in pass 2
+.r:
+    cmp al, 2                   ; rest: 1 in pass 1, 2 in pass 2
+    pop cx
+    ret
+bdb_st:     db 0                ; 0 unrun, 1 pass 1 (mounted), 2 pass 2
+bdb_dx:     dw 0                ; pass 1's DL (so far) and DH (the total)
+%endif
 drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
     mov al, cl                  ; not wanted, else BX = it - the one question
     call b3_cgo                 ; all three walks above ask (only CL is read).
@@ -6277,9 +6359,15 @@ section .modc
 ; 2.8.7). The page only sets [cp_fdbsd], a RESIDENT byte (ctrl.inc), so a
 ; save that fails and is retried on a later load still owes what it owed.
 ; =============================================================================
-cp_fdno:   db 0                 ; cpc_fdtest turned Cylinder back to Auto:
+%macro CPC_SCRATCH 0            ; (a macro, so MOD_CACHE's kernel.asm can put
+cp_fdno:   db 0                 ; it in the core's SCRATCH TAIL, SPEC.md 2.8.3)
+                                ; cpc_fdtest turned Cylinder back to Auto:
                                 ; cp_flush_x says so after the save
 cp_fdn:    db 0                 ; cpc_fdtest's track count
+%endmacro
+%ifndef MOD_CACHE               ; ...and here, where they always were, on a
+    CPC_SCRATCH                 ; kernel that keeps no dropped image
+%endif
 TOASTSTR cp_s_fdno, 'No Cylinder Here: Auto' ; ...and what it says. A toast
                                 ; copies its line (SPEC.md 59), so it may be
                                 ; read out of this image through ES = CS

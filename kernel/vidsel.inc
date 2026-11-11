@@ -1472,9 +1472,9 @@ vid_kind_of:
 ;           both ends inclusive; DI = the context record
 ; clobbers: the above, and the flags
 ;
-; Written out twice before this existed - vid_disp_desk below and wm.inc's
-; wm_dmg_bands, the same nine instructions in the same order, found as one
-; hash.  Both are inside this file's `%ifdef KERN_BIG`, which is where the
+; Written out twice before this existed - vid_disp_desk (EXTD.DRV's, retired
+; with the layered wm_paint_all, SPEC.md 11.91.7) and wm.inc's wm_dmg_bands,
+; the same nine instructions in the same order, found as one hash.  Both are inside this file's `%ifdef KERN_BIG`, which is where the
 ; whole multi-display path lives, so this must be too: on kern_small the
 ; second display does not exist and neither does vid_ctx_ptr.
 ; -----------------------------------------------------------------------------
@@ -1726,8 +1726,8 @@ fsx_vndisp  db 1                ; ...and how many displays there were. 1 means
                                 ; "no bracket state to undo", which is the
                                 ; boot value and what vid_fsx_unblank leaves
 
-; (vid_disp_desk, the second display's ground: EXTD.DRV's EXT_DESK,
-; kernel/extmod.inc - SPEC.md 39.19.6)
+; (vid_disp_desk, the second display's ground, was EXTD.DRV's EXT_DESK: the
+; damage pass's own bands answer it now - SPEC.md 11.91.7)
 
 ; -----------------------------------------------------------------------------
 ; vid_disp_of - which display holds the virtual point (AX, BX)? (SPEC.md 39.14)

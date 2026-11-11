@@ -299,26 +299,33 @@ mppu_torel:
     sub dx, [mppu_dy0]
     ret
 
-; mppu_hlr - AX=x1 BX=x2 DX=y, content-relative
+; mppu_hlr - AX=x1 BX=x2 DX=y, content-relative. Preserves AX..DX: the
+; line cells clobber them (SPEC.md 5.7.3), so the relative coordinates are
+; banked rather than translated back - six bytes of push/pop where twelve of
+; `sub` stood
 mppu_hlr:
+    push ax
+    push bx
+    push dx
     add ax, [mppu_dx0]
     add bx, [mppu_dx0]
     add dx, [mppu_dy0]
     call OSAPI_GFX_HLINE
-    sub ax, [mppu_dx0]
-    sub bx, [mppu_dx0]
-    sub dx, [mppu_dy0]
-    ret
+    jmp short mppu_lpop
 
-; mppu_vlr - AX=x BX=y1 DX=y2, content-relative
+; mppu_vlr - AX=x BX=y1 DX=y2, content-relative; preserves AX..DX likewise
 mppu_vlr:
+    push ax
+    push bx
+    push dx
     add ax, [mppu_dx0]
     add bx, [mppu_dy0]
     add dx, [mppu_dy0]
     call OSAPI_GFX_VLINE
-    sub ax, [mppu_dx0]
-    sub bx, [mppu_dy0]
-    sub dx, [mppu_dy0]
+mppu_lpop:
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

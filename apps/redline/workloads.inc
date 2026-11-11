@@ -109,7 +109,9 @@ rl_lines_many:
     mov ax, [rl_x]
     mov bx, ax
     add bx, 255
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     add dx, 4
     dec si
     jnz .row
@@ -504,7 +506,11 @@ rl_line:
 .pixel:
     mov cx, [rl_lx]
     mov dx, [rl_ly]
+    push cx
+    push dx
     call OSAPI_GFX_PIXEL
+    pop dx
+    pop cx
     cmp cx, [rl_lendx]
     jne .advance
     cmp dx, [rl_lendy]

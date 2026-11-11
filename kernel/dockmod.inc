@@ -12,6 +12,7 @@ modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
     dw BUILD_NUM, MOD_STAMP, modk_end, DK_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw dkx_hook, dkx_unhook
 
 ; -----------------------------------------------------------------------------
@@ -1244,7 +1245,8 @@ dkx_click:
 ;
 ; **The record pointer does not survive the tracker; the slot does.**
 ; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
-; can reach inst_task_die and free the very record this menu is about. So the
+; can reach inst_task_die and leave the record this menu is about (freed by
+; the UI task's close pass since BR-4, after this menu). So the
 ; SLOT is carried across it, and 'Close' re-resolves it and re-tests
 ; I_STATE = 1 before anything is done.
 ;

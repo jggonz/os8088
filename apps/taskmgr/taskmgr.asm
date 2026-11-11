@@ -1588,6 +1588,7 @@ tm_ktab:
     dw MEM_K_SC,    'Shortcut'
     dw MEM_K_IMG,   'Disk img'
     dw MEM_K_MTBL,  'DescTbl'
+    dw MEM_K_SEAM,  'HugeSeam'
     dw MEM_P_DIRW,  'DirRead'
     dw MEM_P_RAHB,  'RdLand', 0
     dw MEM_P_FLIST, 'FileClp'
@@ -1672,8 +1673,9 @@ tm_pats:
 ;      through OSAPI_TASK_ALIVE when the close box is clicked.
 ;
 ; The order of the loop is the contract of SPEC.md 20.6 rule 4:
-; OSAPI_TASK_ALIVE with the lock NOT held, because it takes the lock itself
-; and gfx_lock is not reentrant. It is also the only teardown path - as a
+; OSAPI_TASK_ALIVE with the lock NOT held, because a worker that leaves
+; holding it leaves it held, and the close it posts for the UI task then
+; waits on it for ever. It is also the only way out - as a
 ; built-in this read I_STATE off its own instance record and far-jumped to
 ; inst_task_die, which is the same operation with the kernel's side of it
 ; exposed.
@@ -5064,8 +5066,13 @@ tm_htype:
     jmp short .put
 .kern:                          ; (each range's name is loaded BEFORE its
                                 ; test, so a hit goes straight to .put)
+    mov dx, ax                  ; ...and a module KEPT by its drop (SPEC.md
+    sub dx, MEM_P_MOD           ; 2.8.3), a range by id, named the same way:
+    cmp dx, MEM_P_MOD_N         ; its file, with LOW in the TIER column to
+    jb .mod                     ; say it is a cache
     cmp ax, MEM_K_MOD           ; a module's image: its file's name, 'CTRL',
     jne .kn                     ; rather than 'ModImg' (KERN-MEGA-PLAN
+.mod:
     push ax                     ; 14.70.3) - a module has no group to be
     push bx                     ; named by, so the TYPE column is where
     xchg ax, bx                 ; it says which
@@ -7773,7 +7780,9 @@ tm_gapcol:
     mov dx, bx
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
 
     pop dx
     pop bx

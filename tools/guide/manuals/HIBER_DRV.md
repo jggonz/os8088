@@ -4,7 +4,7 @@
 on later exactly where you were. It saves all of the computer's memory,
 open windows, running programs and the clipboard included, to a file on the
 hard disk, then lets you switch off. The next start finds the file and
-offers to put everything back.
+puts everything back.
 
 ![Hibernate... in the System menu, above Restart.](shot:hiber-drv-menu){right}
 
@@ -18,17 +18,21 @@ menu bar). A window asks:
 Click **Hibernate** (or press `Enter`) to go ahead, or **Cancel** (`Esc`).
 While the memory is saved the window says `Hibernating...`. Then the screen
 goes to text and says `It is now safe to switch the machine off.` Pressing
-a key instead restarts it, straight into the question below. If saving
+a key instead restarts it and resumes at once. If saving
 fails, the menu bar says `Hibernate failed` and nothing is lost: the
 machine carries on as it was.
 
 ## Resuming
 
 Start the machine as usual. When os8088 finds a hibernation file on the hard
-disk, the desktop shows a window: `A hibernation file is on drive C:`.
+disk, it reads the memory back before the desktop appears, and you are where
+you left off. Programs set to start by themselves do not start, since the
+ones you had open come back instead.
 
-- **Resume** reads the memory back and you are where you left off.
-- **Discard** deletes the file and starts normally.
+To start fresh instead, hold either **Shift** key while the machine starts.
+The hibernation file is deleted, the menu bar says `Hibernation skipped`,
+and the machine starts normally, without the programs that start by
+themselves either.
 
 ## What it needs
 

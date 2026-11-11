@@ -159,7 +159,8 @@ sn_walk:
     push ds
     pop es
     mov di, stik_fnd
-    call OSAPI_FILE_FIND        ; CX = the next one
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ    ; CX = the next one
     jc .end
     push cx
     cmp word [stik_fnd + 14], OSAPI_FT_DIR

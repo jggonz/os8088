@@ -33,6 +33,7 @@ ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
          "os88disk.py", "os88hdd.py",       # (the disks, run as processes)
          "vbtprof.py")                      # (VBATTLED.O88's profiles, read)
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
+HARNESS_ONLY = VB.HARNESS_ONLY     # (os88vbundle says why)
 DATA = VB.DATA
 GUIDE = os.path.join(HERE, "..", "docs", "battle-guide")
 FOLDER = "os8088-battle-builder"
@@ -114,7 +115,7 @@ def main():
                     "the builder's hard disks boot")
     a = ap.parse_args()
     mods, other = VB.closure(ROOTS)
-    stray = other - THIRD_PARTY
+    stray = other - THIRD_PARTY - HARNESS_ONLY
     if stray:
         sys.exit("os88vbtbundle: the builder imports %s, which is neither in "
                  "tools/ nor expected (THIRD_PARTY) - add it there and to "

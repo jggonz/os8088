@@ -160,7 +160,9 @@ def main(argv):
             # unmistakable - and the bug this exists for is that the
             # secondary kept the DITHER whatever the theme, which is exactly
             # what a build with vid_disp_desk still calling gfx_fill_gray
-            # answers here.
+            # answered here. (That site is gone: the damage pass's own
+            # wm_dmg_gray dithers every display's band through thm_desk,
+            # SPEC.md 11.91.7.)
             gnd = band(m, dx0, dy0, 64, 16, 1)
             gfrac = dithered(gnd)
             glit = sum(sum(r) for r in gnd)
@@ -174,7 +176,7 @@ def main(argv):
             if name == "Dark" and got == 1 and glit > gtot // 4:
                 fail.append("Dark leaves the SECOND display's desktop %d of "
                             "%d lit - it is still Bright's ground. thm_desk is "
-                            "the themed fill and vid_disp_desk is the site "
+                            "the themed fill and wm_dmg_gray's is the site "
                             "(SPEC.md 76.2.1)" % (glit, gtot))
             png = os.path.join(a.out, "secondary-%s.png" % name.lower())
             fw, fh, fb = m.fbuf(card=1)

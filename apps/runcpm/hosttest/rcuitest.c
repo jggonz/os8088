@@ -389,6 +389,13 @@ int os88_file_find(int ordinal, struct os88_find *f)
     ferr = OS88_FERR_NOENT;
     return -1;
 }
+
+/* SPEC.md 19.7.1.1: the token walk. In this model the token IS the ordinal,
+ * which is exactly kern_small's answer - same loop, same entries */
+int os88_file_find_seq(int token, struct os88_find *f)
+{
+    return os88_file_find(token, f);
+}
 /* AUTOEXEC.TXT lives in the ROOT (the launch folder, clus 0) when the script
  * says so - read ONCE at launch (SPEC.md 74: upstream re-reads it on every
  * warm boot; here that is a directory walk of the launch folder per ^C and

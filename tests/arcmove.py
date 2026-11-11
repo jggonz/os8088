@@ -131,9 +131,7 @@ def main():
             return u16(bytes(m.read(v + 0x6044, 2)))
 
         def post():
-            wptr = os88geom.winptr(m, w, S)
-            m.write(S('mem_cpq_lvl'), bytes([0xFC]))
-            m.write(S('mem_cpq'), bytes([wptr & 0xFF, wptr >> 8]))
+            os88geom.post_compact(m, w, 0xFC, S)
             m.run()
             os88marty.until(m, lambda _: u16(m.read(S('mem_cpq'), 2)) == 0,
                             'the posted compaction', poll=0.2, limit=30)

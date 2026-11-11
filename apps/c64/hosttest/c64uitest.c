@@ -954,6 +954,13 @@ int os88_file_find(int ord, struct os88_find *f)
         }
     return -1;
 }
+
+/* SPEC.md 19.7.1.1: the token walk. In this model the token IS the ordinal,
+ * which is exactly kern_small's answer - same loop, same entries */
+int os88_file_find_seq(int token, struct os88_find *f)
+{
+    return os88_file_find(token, f);
+}
 int os88_file_write(const char *name, const void *buf, unsigned count)
 {
     int i = h_fold_find(name);

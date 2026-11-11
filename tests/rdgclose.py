@@ -128,7 +128,8 @@ def main():
             for i in range(G.MAX_WIN):
                 r = G.WIN_SIZE * i
                 if tab[r + G.W_FLAGS] & 1 and u16(tab, r + G.W_SEG) == seg:
-                    return b.sym("wm_wins") + r
+                    return G.kptr(b.sym("wm_wins") + r)   # AS THE KERNEL
+                                        # holds it: [mem_cpq] is wm_wake's SI
             return None
         if a.leg in (None, "move"):
             # PAUSED FIRST, and that is the finding rather than a convenience:

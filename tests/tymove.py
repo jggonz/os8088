@@ -109,9 +109,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     shot0 = m.fbuf()
 
     # post a compaction at the TRIVIAL rank, the door OSAPI_MEM_COMPACT uses
-    wptr = os88geom.winptr(m, fvslot, S)
-    m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-    m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+    os88geom.post_compact(m, fvslot, 0xFC, S)
     os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                     "the posted compaction to run", poll=0.2, limit=30)
     os88marty.ui_done(m)

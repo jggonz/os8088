@@ -6309,13 +6309,13 @@ wd_drawrun:
     add dx, [wd_gh1]                       ; the cell's last row
     test byte [wd_runa], WDAT_UL
     jz .nul
-    call OSAPI_GFX_HLINE
+    call .hl
 .nul:
     test byte [wd_runa], WDAT_DUL
     jz .ndul
-    call OSAPI_GFX_HLINE            ; double underline: rows 7 and 6
+    call .hl                        ; double underline: rows 7 and 6
     dec dx
-    call OSAPI_GFX_HLINE
+    call .hl
     inc dx
 .ndul:
     test byte [wd_runa], WDAT_WUL
@@ -6340,10 +6340,19 @@ wd_drawrun:
     mov bx, ax                      ; BX = x2, the span's last column
     mov ax, di
     call wd_cx                      ; AX = x1
-    call OSAPI_GFX_HLINE
+    call .hl
 .wnext:
     inc si
     jmp short .ws
+.hl:                                ; the line cell takes AX..DX (SPEC.md
+    push ax                         ; 5.7.3): every rule here is drawn off
+    push bx                         ; the same x pair or the same row
+    push dx
+    call OSAPI_GFX_HLINE
+    pop dx
+    pop bx
+    pop ax
+    ret
 .done:
     jmp wd_rdisdcba
 
@@ -8275,7 +8284,11 @@ wd_curshow:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     pop ax
+    push ax
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
+    pop ax
     and ax, 0xFFF8                  ; the byte column it stands in, which is
     mov [wd_csx], ax                ; what a bank is taken at
     mov ax, [wd_cury]
@@ -16440,7 +16453,9 @@ wd_ribbon:
     add bx, 5
     mov dx, di
     add dx, 11
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
 .sync:
     mov byte [wd_rbold], 0          ; every cell was just drawn UNPRESSED:
     mov byte [wd_rbok], 1           ; re-invert the ones the caret's attrs
@@ -16572,37 +16587,41 @@ wd_rbstat:
 ; in:  AX = centre x, DX = top row (3 rows tall); preserves all registers
 ; -----------------------------------------------------------------------------
 wd_rmkd:
-    push ax
-    push bx
-    push dx
-    mov bx, ax
-    sub ax, 2
-    add bx, 2
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    jmp wd_rdba
+    push si
+    push di
+    mov si, 2                       ; half-widths 2, 1, 0 down the rows
+    mov di, -1
+    jmp short wd_rmk
 wd_rmku:
+    push si
+    push di
+    xor si, si                      ; half-widths 0, 1, 2
+    mov di, 1
+wd_rmk:
     push ax
     push bx
+    push cx
     push dx
+.row:
+    push ax                         ; the line cells clobber AX..DX (SPEC.md
+    push dx                         ; 5.7.3): centre and row ride the stack
     mov bx, ax
+    sub ax, si
+    add bx, si
     call OSAPI_GFX_HLINE
+    pop dx
+    pop ax
     inc dx
-    dec ax
-    inc bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec ax
-    inc bx
-    call OSAPI_GFX_HLINE
-    jmp wd_rdba
+    add si, di                      ; -1 and 3 are both above 2 unsigned:
+    cmp si, 2                       ; three rows either way
+    jbe .row
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop di
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wd_pgcol - in Page view, narrow the text column to the sheet
@@ -16685,9 +16704,15 @@ wd_sheet:
     add bx, [wd_ctop]
     mov dx, [wd_bot]
     mov ax, [wd_shl]
+    push bx                         ; the line cell takes AX..DX (5.7.3)
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
     mov ax, [wd_shr]
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
     call wd_pgmarks
     pop si
     pop dx
@@ -16732,7 +16757,9 @@ wd_pgmarks:
     sub ax, 4
     mov bx, [wd_shl]
     dec bx
+    push dx                         ; the line cell takes AX..DX (5.7.3)
     call OSAPI_GFX_HLINE
+    pop dx
     mov ax, [wd_shr]                ; ...and the right margin's
     inc ax
     mov bx, ax
@@ -16832,7 +16859,11 @@ wd_ruler:
     xor bh, bh
     add ax, bx
     pop bx
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     pop bx
     pop ax
     add dx, 2
@@ -16887,7 +16918,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 7
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 9
     call OSAPI_GFX_HLINE
@@ -16904,7 +16939,11 @@ wd_ruler:
     add bx, 9
     mov dx, di
     add dx, 5
+    push ax                         ; the line cell takes AX..DX (5.7.3)
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
+    pop ax
     mov dx, di
     add dx, 11
     call OSAPI_GFX_HLINE
@@ -16954,7 +16993,9 @@ wd_ruler:
     add cx, 8
     mov dx, di
     add dx, 5
+    push ax
     call OSAPI_GFX_PIXEL
+    pop ax
     pop cx
 .tbn:
     add si, 3
@@ -17823,7 +17864,11 @@ wd_status:
     mov dx, [wd_ct]
     add dx, [wd_ch]
     sub dx, WD_STATUS_H
+    push ax
+    push dx
     call OSAPI_GFX_HLINE            ; the rule over the strip
+    pop dx
+    pop ax
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR

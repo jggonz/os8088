@@ -26,8 +26,10 @@
 ; Concurrency (binding): the table is read and written under one
 ; pushf/cli..popf window per operation, the task_spawn precedent (SPEC.md
 ; 8). Claims are made from the UI task in practice - window callbacks,
-; kmain, the loader - but mem_free_owner runs on a dying package's own
-; worker task inside inst_task_die, so the two really can meet.
+; kmain, the loader - and mem_free_owner ran on a dying package's own
+; worker task inside inst_task_die until BR-4 posted that teardown to the UI
+; task (SPEC.md 20.6); the window stays, for driver verbs that claim from a
+; worker.
 ; =============================================================================
 
 %ifdef KERN_SMALL
@@ -441,6 +443,20 @@ MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's MULTI-FILE
                                 ; handles, and a paste raises the floor to
                                 ; this rank so its own copy buffer cannot
                                 ; take the list it is walking
+MEM_P_MOD   equ MEM_PG_LOW<<8 | 0x40    ; a DROPPED module's image, kept
+MEM_P_MOD_N equ 32              ; (SPEC.md 2.8.3): MEM_K_MOD's claim re-tagged
+                                ; by mod_drop, and back to MEM_K_MOD by the
+                                ; mod_need that re-adopts it. A RANGE, two
+                                ; owners a ROW: the tag is MEM_P_MOD + 2 x the
+                                ; module id, so mem_pg_own's `base + 2d` lands
+                                ; on the row's MODR_SEG in a stride-4 mod_tab
+                                ; with no arm in mem_pg_forget (an odd owner
+                                ; would name a MODR_FILE word, and none is
+                                ; ever stamped). LOW: losing it is the read
+                                ; the cache saved - 1-2 int 13h, and the
+                                ; system disk in the drive - "a little I/O, or
+                                ; a visible pause"; never TRIV, which a window
+                                ; raise cache's claim could then take
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
@@ -1093,10 +1109,10 @@ mem_claim_x:
                                 ; UI task holds in a register while it is
                                 ; pre-empted (an ONWAKE handler runs with no
                                 ; gfx lock at all), and a shed could free one.
-                                ; The callers this reaches are a dying
-                                ; worker's repaint banking raise caches
-                                ; (inst_task_die), which declines a copy -
-                                ; never a wrong pixel - and a driver verb that
+                                ; The callers this reaches are a worker's
+                                ; own drawing banking raise caches (a dying
+                                ; worker's repaint was one until BR-4), which
+                                ; declines a copy - never a wrong pixel - and a driver verb that
                                 ; claims from a worker, which is first fit
     call mem_compact            ; not one, and a package load loses to nothing
     jnc .retry                  ; - so both are on mem_claim_hi's path too.
@@ -1450,6 +1466,12 @@ mem_pg_fatwrow:                 ; NAMED: mem_pg_forget asks which ROW matched
 %ifdef FM_MSEL
     dw MEM_P_FLIST, fcp_lseg,    1
 %endif
+%ifdef MOD_CACHE
+    dw MEM_P_MOD,   mod_tab,     MEM_P_MOD_N ; a kept module: its MODR_SEG
+%endif                          ; (MODR_SEG = 0, so the row IS the word),
+                                ; zeroed by the shed - and its slots already
+                                ; read mod_gone, mod_drop having disarmed
+                                ; them before the tag went on (SPEC.md 2.8.3)
 %ifdef KERN_SMALL
 mem_pg_viewrow:
     dw MEM_P_VIEW,  0,           MEM_P_VIEW_N
@@ -1556,7 +1578,9 @@ mem_shed_one:
     cmp dl, al                  ; at or above the best so far (which starts at
     jae .scan                   ; the claimant's rank): leave it
     call mem_fatw_dirty         ; ...and never the FAT window somebody is
-    jc .scan                    ; part-way through writing (SPEC.md 18.8.4)
+    jc .scan                    ; part-way through writing (SPEC.md 18.8.4) -
+                                ; nor, on kern_small, the listing a mount is
+                                ; aimed at (BR-2, the same call)
     mov al, dl                  ; a new cheapest
     mov di, si
     jmp short .scan
@@ -2653,9 +2677,23 @@ mem_in_nest:
 ; this is belt to dskw_flush's braces rather than the only thing standing
 ; there - a demote leaves [dsk_fatw0] = 0xFFFF, which dskw_flush already reads
 ; as "there is no buffer this range could be written out of" and refuses.
+;
+; **ON kern_small IT ALSO REFUSES THE LISTING A MOUNT IS AIMED AT** ([dsk_dseg],
+; SPEC.md 25.9.5, BR-2), the other block whose loss is not a cache's: a Disk
+; window's listing is a MEM_P_VIEW at LOW there, mount step 2's read-ahead and
+; FAT window claims shed it and could be HANDED it, and step 3 then wrote the
+; listing into the FAT window - which the next write put on the floppy. 0 at
+; rest, and both callers skip free records, so it binds only inside an aimed
+; mount. kern_small has no compactor, so the shed is its only caller there and
+; MEM_RR_ONE dsk_dseg (a MOVE's backstop) covers nothing.
 ; -----------------------------------------------------------------------------
 mem_fatw_dirty:
     push ax
+%ifdef KERN_SMALL
+    mov ax, [dsk_dseg]
+    cmp ax, [ss:si+MC_SEG]
+    je .yes
+%endif
     cmp word [dsk_fatd0], 0xFFFF
     je .no                      ; nothing is dirty anywhere
 %ifdef KERN_MEGA
@@ -4968,16 +5006,21 @@ mem_reown_x:
 ; out: nothing (all registers preserved) - inst_rel_rec's twin
 ; -----------------------------------------------------------------------------
 mem_free_rec_x:
-    mov byte [mem_pg_floor], MEM_LVL_TOP   ; a floor this instance set and never
-                                ; lifted goes with its claims (SPEC.md
-                                ; 50.6.6.2): left standing it would cost every
-                                ; later claim on the UI task the read-ahead
-                                ; window's worth of heap, silently
     push bx
     call ld_slot                ; BX = the record's slot - loader.inc's, and
                                 ; `.cold` like this, so the call is near.  It
                                 ; is the sixth site of an arithmetic that had
                                 ; six copies; this was the last one left
+    cmp bl, [mem_pg_finst]      ; a floor THIS instance set and never lifted
+    jne .flkeep                 ; goes with its claims (SPEC.md 50.6.6.2):
+    mov byte [mem_pg_floor], MEM_LVL_TOP   ; left standing it would cost every
+.flkeep:                        ; later claim on the UI task the read-ahead
+                                ; window's worth of heap, silently. ANOTHER's
+                                ; stays: lifted by any teardown, a multi-file
+                                ; paste's floor went when the user closed any
+                                ; window under its overwrite question, the next
+                                ; copy buffer shed the list, and the paste
+                                ; stopped part-way reporting success (BR-11)
     call mem_free_owner_x       ; a built-in's claims are stamped with its
                                 ; instance slot (the Disk window's cache)
     test byte [di+I_KIND], KIND_PKG
@@ -6037,6 +6080,12 @@ mmf_osapi_mem_floor:
     push ax
     mov ah, [sch_cur]           ; AH = whose, AL = the level...
     mov [mem_pg_fl], ax         ; ...stored as the one word mem_rank_bh reads
+    mov al, [snd_inst]          ; ...and the calling INSTANCE, whose teardown
+    mov [mem_pg_finst], al      ; lifts it (BR-11): inst_caller's answer for
+                                ; every caller on the UI task, which is every
+                                ; caller there is (a floor binds only its own
+                                ; task's claims, and no worker sets one); 0xFF
+                                ; outside a callback
     pop ax
     retf
 
@@ -6576,6 +6625,15 @@ mem_pg_rank: resb 1             ; THE RANK AT WHICH A PURGEABLE CLAIM COUNTS AS
                                 ; It spends the byte that used to sit here as
                                 ; alignment padding, so the words below are
                                 ; where they were
+mem_pg_finst: resb 1            ; WHICH INSTANCE set the floor (mem_pg_fl,
+                                ; SPEC.md 50.6.6.2; BR-11). The task stamp
+                                ; says whose claims it binds, but every package
+                                ; callback, the DOS and the kernel's paste run
+                                ; on the UI task, so it cannot say whose
+                                ; TEARDOWN lifts it: mem_free_rec_x lifts the
+                                ; floor only for this slot. .bss: 0 names slot
+                                ; 0 before any floor is set, and lifting the
+                                ; floor that is not there is no-op
 %ifdef OS88_COMPACT
 mem_pinseg:  resw 1             ; a segment a disk transfer is reading into, so
                                 ; the claim holding it may not move under the

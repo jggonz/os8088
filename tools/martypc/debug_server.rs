@@ -735,6 +735,10 @@ impl DebugServer {
                 // all answered (in order) with no Nagle stall between the
                 // replies, and a request split across reads is kept whole.
                 "pipeline": true,
+                // `advance` drains the MARTYPC_WAV sinks after every batch,
+                // as the free-running loop does - so a capture keeps the
+                // samples of a guest-time window (os88marty.settle's) too.
+                "advance_drains": true,
                 "pid": std::process::id(),
                 "port": self.listener.as_ref()
                             .and_then(|l| l.local_addr().ok())
@@ -811,7 +815,7 @@ impl DebugServer {
             "planes" => planes(machine, &req),
             "flicker" => flicker(machine, exec, &req),
             "pace" => pace(machine, exec, &req),
-            "advance" => advance(machine, exec, &req),
+            "advance" => advance(machine, exec, &req, &mut self.wavs),
             "snapshot" => { self.snap_cycles = machine.cpu_cycles(); snapshot(self) }
             "restore" => restore(self, &req),
             "key" => key(machine, &req),
@@ -2124,7 +2128,8 @@ fn restore(_server: &mut DebugServer, _req: &Value) -> Value {
 /// it is deterministic but not cycle-exact; `frames` counts completed video
 /// frames, which is the natural unit when the thing being waited for is drawn.
 /// A breakpoint ends the run early and `state` says so.
-fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Value {
+fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value,
+           wavs: &mut Vec<WavSink>) -> Value {
     let want_cycles = req.get("cycles").and_then(Value::as_u64);
     let want_frames = req.get("frames").and_then(Value::as_u64);
     if want_cycles.is_none() == want_frames.is_none() {
@@ -2162,6 +2167,15 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
     loop {
         machine.run(batch, exec);
         log_pass(machine, exec);
+        // DRAIN THE CAPTURES HERE TOO, as run_loop does after a free-running
+        // batch. Without it a capture lost every sample of an `advance`: the
+        // Sound Blaster's bounded channel dropped them and an OPL's came back
+        // all zero - and os88marty.settle spends its stillness window in
+        // `advance` (guest time, not host time), so every settle under a
+        // MARTYPC_WAV capture would have been a hole in the file.
+        for w in wavs.iter_mut() {
+            w.drain();
+        }
         if matches!(exec.get_state(), ExecutionState::BreakpointHit) {
             break;
         }

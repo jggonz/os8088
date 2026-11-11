@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c3fc6e3e13b55af13e0b5eac6a40aa8ed467ff559bd50654479c827a296031da",
+  "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "e525a39b56edeb56b4f7c0cf5fb738304ec24afcaa94d76c27adf287d8d874db",
+  "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2175,6 +2175,69 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "Merge of megacmp (kernel size pass 19)",
+   "to": 14
+  },
+  {
+   "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "e2a353505b8ef808efb6ef4f794620d8b7bbc3f4c4fee716a97dfbc26b4823db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "f5f3bb71478db1c09b4dfab7ff722e7a631a8dd7d10cdb449b02745579b5c09f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "6b8e77467249e6f7b16dce2e8d3c06fe5309e075989a3e7ea49d8b9c9133e76b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 13
+  },
+  {
+   "fingerprint": "a9e905fe4c29606e74dac42d36200281c08cd898708e03905395827e1a869aca",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 14
+  },
+  {
+   "fingerprint": "20ba54b666de9c12b726c842b323f501c3b2dc594b7b42f6c75c20015377387b",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "B4: DRVV_SLEEP (5) / DRVV_WAKE (6) and OS88_DRV_WAKES (bit 15 of header +10, the written-not-read FSV word) - opt-in verbs every older driver already refuses (SPEC.md 51.2.2, 51.2.5); DRV_VER 14 is unreleased, so no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
+   "to": 13
+  },
+  {
+   "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
    "to": 14
   }
  ]

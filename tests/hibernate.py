@@ -28,18 +28,27 @@ screenshot, because the thing under test is that memory:
      WITH THE MOUSE (the release path: its hit test once clobbered the y and
      no click ever landed - only Enter worked), the machine writes the image
      to the boot disk's root without asking where, and reaches the ROM's text
-     mode with its sentence; a key restarts it. The fresh desktop must carry
-     the question ([hb_mode] = HB_M_RESUME and a live KIND_HIBER instance), a
-     CLICK on Resume must answer it, and the desktop that comes back must be
-     the OLD one: [hb_resumes] = 1, the About instance alive with its window,
-     no Hibernate window left, and HIBERNAT.PTR gone from the volume.
+     mode with its sentence; a key restarts it. THERE IS NO QUESTION any more
+     (SPEC.md 87.5, docs/plans/HIBER-RESUME-PLAN.md (A)): the boot resumes by
+     itself, and the desktop that comes back must be the OLD one:
+     [hb_resumes] = 1, the About instance alive with its window, no
+     Hibernate window left, and HIBERNAT.PTR gone from the volume.
      A DOS handoff's post is poked in before the picture is taken and must be
      GONE after the wake (SPEC.md 96.40.6): the handoff writes its own image
      with that latch deliberately live, and a wake that does not spend it
      kills "Take the whole OS" for the rest of the restored session.
-  2. DISCARD. The same again through the KEYBOARD - Enter to hibernate, Esc at
-     the question: the desktop is a fresh boot's - no About, [hb_resumes] = 0
-     - and the pointer is gone all the same.
+  2. SHIFT. The same again through the KEYBOARD - Enter to hibernate - and
+     ShiftLeft HELD through the restart: the boot skips the resume (the
+     gesture that skips the AUTOSTRT folder), says `Hibernation skipped`, and the
+     desktop is a fresh boot's - no About, [hb_resumes] = 0 - and BOTH files
+     are gone from the volume, read on the host: a skip is a resume failure
+     like any other (the owner's rule, SPEC.md 87.5).
+
+RED ARMS (docs/WRITING-TESTS.md 1): invert hb_probe_x's Shift test (`jz` to
+`jnz`) and pass 1 goes red - no resume without Shift - and pass 2 resumes;
+take the two deletes out of the skip arm and pass 2's host checks go red with
+both files still there; make the skip post the resume anyway and pass 2's
+[hb_resumes] = 0 goes red.
 
 --driver boots the same VHD from a 360KB floppy whose SYSTEM.CFG already wants
 HDD.DRV (the ethertest shape), so C: is a DRIVER volume and the transport
@@ -284,11 +293,16 @@ def wrote(names, secs=20.0):
         time.sleep(0.5)
 
 
-def boot(driver):
-    if driver:
-        return M.launch(FLOPPY, machine=MACHINE,
-                        extra=["--mount", "hd:0:" + VHD])
-    return M.launch(None, machine=MACHINE, extra=["--mount", "hd:0:" + VHD])
+def boot(driver, desk=True):
+    """DESK=False starts the machine without waiting for a desktop: a boot
+    that finds a damaged image never paints one before its refusal - the
+    check runs inside kmain_o, before the first paint (SPEC.md 87.5) - so
+    launch's own desktop gate would wait out its budget on the sentence"""
+    m = M.launch(FLOPPY if driver else None, machine=MACHINE, boot=desk,
+                 extra=["--mount", "hd:0:" + VHD])
+    if not desk:
+        m.run()
+    return m
 
 
 def hibernate(m, mo, mouse):
@@ -313,145 +327,50 @@ def hibernate(m, mo, mouse):
           want=["HIBERNAT.PTR", "HIBERNAT.IMG"])
 
 
-def _diag(m, mo):
-    """Everything that decides whether a PROVEN click could have been acted on.
-
-    `os88mouse.click` proves both halves of itself - `to` raises if the
-    published pointer never reaches the target, `_edge` raises if the guest's
-    own `mouse_btn` never agrees - so a click that returns and changes nothing
-    is not a lost packet. What is left is where the click LANDED and whether
-    the machine could act on it, and this is that list.
-    """
-    try:
-        wins = [w for k, w in instances(m) if k == KIND_HIBER]
-        if wins:
-            r = m.readseg(0x0060, wins[0], 10)
-            rect = tuple(r[i] | (r[i + 1] << 8) for i in (2, 4, 6, 8))
-            print("      KIND_HIBER window x=%d y=%d w=%d h=%d, button1 at %s"
-                  % (rect + (button1(m),)))
-        print("      pointer now %s, mouse_btn=%02x"
-              % (mo.where()[:2], mo.where()[2]))
-        t0 = mo.ticks()
-        time.sleep(1.0)   # host: the diagnostic IS ticks per host second
-        print("      BIOS ticks +%d in a host second (0 = the machine is "
-              "stopped)" % (mo.ticks() - t0))
-        for n in ("sch_lock", "gfx_lock_flag", "gfx_lock_own",
-                  "gfx_lock_want", "ui_rebootq"):
-            try:
-                print("      %-14s %d" % (n, byte(m, n)))
-            except Exception:
-                pass
-        v = m.video()
-        print("      video %s" % {k: v[k] for k in
-                                  ("field_w", "field_h", "mode", "text")
-                                  if k in v})
-        # THE DISCRIMINATOR. A click that is proven at the pointer and at
-        # mouse_btn and still does nothing is either a machine that dispatches
-        # no input at all, or a click path that specifically does not reach
-        # this button - and the row's own header records that the second has
-        # happened here before ("its hit test once clobbered the y and no
-        # click ever landed - only Enter worked"). The keyboard answers the
-        # same window, so this tells the two apart in one press.
-        before = word(m, "hb_resumes")
-        m.key("Enter")
-        try:                            # a GUEST-time budget
-            M.until(m, lambda mm: word(mm, "hb_resumes") != before,
-                    "Enter to be acted on", poll=0.05, limit=10.0)
-            print("      *** ENTER WORKED where the click did not: the "
-                  "CLICK path is the defect, not the machine ***")
-            return
-        except M.MartyError:
-            pass
-        print("      Enter did nothing either: the machine dispatches no "
-              "input at all")
-    except Exception as e:
-        print("      (diagnostic failed: %s)" % e)
-
-
-def answer(m, mo, what, done):
-    """Click the Hibernate window's first button, and say what happened.
-
-    THE SAME SHAPE AS `restart` AND FOR THE SAME REASON. A single unconfirmed
-    input carrying the rest of the row is how this one fails: the machine
-    sits at the question, nothing this row waits for can ever come true, and
-    the message that comes out names a 720-second budget rather than a lost
-    click.
-
-    A second click is only right while the window is STILL THERE - a machine
-    that has taken the first one and is reading its image back has no button
-    under the pointer, and clicking the desktop it is about to restore is not
-    a retry, it is a new event. So the retry is gated on the KIND_HIBER
-    instance still being live, which is also what tells the two apart in the
-    report.
-    """
-    for attempt in (1, 2):
-        mo.click(*button1(m))
-        try:
-            M.until(m, done, what, poll=0.05, limit=60 if attempt == 1 else 240)
-            if attempt == 2:
-                print("   the [Resume] click needed sending TWICE")
-            return
-        except M.MartyError:
-            live = [k for k, _ in instances(m) if k == KIND_HIBER]
-            print("   answer attempt %d: %s - hb_mode=%d, hb_resumes=%d, "
-                  "KIND_HIBER live=%s" % (attempt, what, byte(m, "hb_mode"),
-                                          word(m, "hb_resumes"), bool(live)))
-            _diag(m, mo)
-            shot(m, "answer%d" % attempt)
-            if attempt == 2 or not live:
-                raise               # the window is gone: it TOOK the click
-                                    # and is working, so a second one would
-                                    # land on whatever replaced it
-
-
-def restart(m):
+def restart(m, done, what, shift=False):
     """The key that restarts a hibernated machine, and the wait it earns.
 
-    IT WAS `m.key("Space"); time.sleep(1.0)` and then one 240-second wait for
-    [hb_mode], which is two of docs/WRITING-TESTS.md 7's mistakes in three
-    lines: a host sleep before an event the guest has to reach, and a single
-    unconfirmed keystroke carrying the whole rest of the row. Rated at a lane
-    of three it failed 3 runs in 6, every one of them here, having burned 720
-    GUEST seconds - twelve emulated minutes for a reboot that takes four,
-    which is not a slow machine, it is a machine that was never going to get
-    there.
+    IT WAS `m.key("Space"); time.sleep(1.0)` and then one 240-second wait,
+    which is two of docs/WRITING-TESTS.md 7's mistakes in three lines: a host
+    sleep before an event the guest has to reach, and a single unconfirmed
+    keystroke carrying the whole rest of the row. So the key is CONFIRMED, in
+    the only way it can be: the machine has to leave the sentence.
+    `hbm_kbdrain` empties the ROM's buffer before the sentence is printed
+    (SPEC.md 87.4 step 7), so a key that arrives between the drain and
+    `int 0x16` is the one that can be dropped - and a second press costs
+    nothing when the first was taken.
 
-    So the key is CONFIRMED, in the only way it can be: the machine has to
-    leave the sentence. `hbm_kbdrain` empties the ROM's buffer before the
-    sentence is printed (SPEC.md 87.4 step 7), so a key that arrives in the
-    window between the drain and `int 0x16` is the one that can be dropped -
-    and dropping it parks the guest in the sentence for ever, where nothing
-    this row waits for will ever come true. A second press costs nothing when
-    the first was taken (the machine has already left the buffer behind), and
-    it is the whole of the failure when it was not.
+    THERE IS NO QUESTION TO WAIT FOR (SPEC.md 87.5): the boot resumes by
+    itself - from inside kmain_o, before the desktop is ever painted - so the
+    wait is for DONE, the caller's own predicate on guest memory.
 
-    On the way out it says which happened, because "the key needed sending
-    twice" is a fact about this emulator's keyboard that the next reader of a
-    720-second timeout should not have to re-derive.
+    SHIFT is pressed and HELD once the KERNEL has the screen - the first
+    frame out of text mode, which is kmain_o's mode set, long before the
+    probe (tests/autostart.py's technique: past POST, inside the loading
+    screen). NOT straight after the restart key: POST zeroes 0040:0017 and
+    resets the keyboard, and MartyPC's keyboard does not repeat a held make
+    code through that reset, so a Shift pressed then is gone by the time the
+    probe's int 16h AH=02 asks - which is how this pass failed with the skip
+    path never reached (the boot RESUMED). The caller releases it.
     """
     for attempt in (1, 2):
         m.key("Space")
         try:
-            M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                    "the fresh boot to ask the question", poll=0.05,
-                    limit=60 if attempt == 1 else 240)
+            M.until(m, lambda mm: not M.video_is_text(mm.video()),
+                    "the machine to leave the sentence", poll=0.05,
+                    limit=30 if attempt == 1 else 120)
+            if shift:
+                m.key("ShiftLeft", down=True, up=False)
             if attempt == 2:
                 print("   the restart key needed sending TWICE (the first "
                       "landed between hbm_kbdrain and int 16h)")
-            # ...AND ITS WINDOW. hb_mode says the fresh boot will ask; the
-            # KIND_HIBER instance that asks comes after the boot's own disk
-            # work, which on the driver arm (HDD.DRV wanted by SYSTEM.CFG)
-            # outlasted the 8 guest seconds every caller's quiet() allows -
-            # a progress bar on the menu bar and no window to click yet
-            M.until(m, lambda mm: any(k == KIND_HIBER
-                                      for k, _ in instances(mm)),
-                    "the question's window", poll=0.05, guest=120)
+            M.until(m, done, what, poll=0.05, guest=240)
             return
         except M.MartyError:
             v = m.video()
-            print("   restart attempt %d: no question yet - video %s, "
-                  "text=%s, hb_mode=%d, hb_resumes=%d"
-                  % (attempt, v.get("mode", v.get("field_w")),
+            print("   restart attempt %d: %s not yet - video %s, text=%s, "
+                  "hb_mode=%d, hb_resumes=%d"
+                  % (attempt, what, v.get("mode", v.get("field_w")),
                      M.video_is_text(v), byte(m, "hb_mode"),
                      word(m, "hb_resumes")))
             shot(m, "restart%d" % attempt)
@@ -498,22 +417,8 @@ def pass_resume(driver):
               got=word(m, "hb_dosseg"), want=HB_DOSSEG_SENTINEL)
 
         hibernate(m, mo, mouse=True)
-        restart(m)
-        quiet(m)                                  # ...and paint it. Not a
-                                                  # settle: the ROM's disk
-                                                  # probe holds a static
-                                                  # screen long enough to
-                                                  # pass for a quiet desktop
-        check(byte(m, "hb_mode") == HB_M_RESUME,
-              "the fresh boot asks the question",
-              got=byte(m, "hb_mode"), want=HB_M_RESUME)
-        check(any(k == KIND_HIBER for k, _ in instances(m)),
-              "the question is a live KIND_HIBER instance")
-        check(not any(k == KIND_ABOUT for k, _ in instances(m)),
-              "the fresh boot has no About box yet")
-        shot(m, "question")
-        answer(m, mo, "[hb_resumes] to reach 1",
-               lambda mm: word(mm, "hb_resumes") == 1)
+        restart(m, lambda mm: word(mm, "hb_resumes") == 1,
+                "[hb_resumes] to reach 1 with no question asked")
         quiet(m)
         inst = instances(m)
         about = [w for k, w in inst if k == KIND_ABOUT]
@@ -548,28 +453,36 @@ def pass_resume(driver):
     check(not img_present(), "...and so is HIBERNAT.IMG (SPEC.md 87.6 step 5)")
 
 
-def pass_discard(driver):
+def pass_shift(driver):
+    import os88ui
     with boot(driver) as m:
         from os88mouse import Mouse
         mo = Mouse(marty=m)
         mo.menu(CHIP_X, CHIP_Y, CHIP_X, ABOUT_Y)
         quiet(m)
         hibernate(m, mo, mouse=False)
-        restart(m)
-        quiet(m)
-        check(byte(m, "hb_mode") == HB_M_RESUME, "the question, again",
-              got=byte(m, "hb_mode"), want=HB_M_RESUME)
-        m.key("Escape")                           # Discard
-        quiet(m)
-        inst = instances(m)
-        check(not any(k == KIND_HIBER for k, _ in inst),
-              "Discard closed the window", got=inst)
-        check(not any(k == KIND_ABOUT for k, _ in inst),
-              "...and the desktop is the fresh boot's: no About", got=inst)
-        check(word(m, "hb_resumes") == 0, "nothing was resumed",
-              got=word(m, "hb_resumes"), want=0)
-    check(not ptr_present(), "HIBERNAT.PTR is gone after a discard")
-    check(not img_present(), "...and so is HIBERNAT.IMG")
+        ui = os88ui.UI(m, mouse=mo)
+        restart(m, lambda mm: byte(mm, "sch_lock") == 0
+                and byte(mm, "desk_ready") == 1,
+                "a fresh desktop with Shift held", shift=True)
+        try:
+            t = ui.wait_toast(says="Hibernation skipped", limit=60.0)
+            check(t is not None, "the bar says the resume was skipped",
+                  got=ui.toast())
+            quiet(m)
+            inst = instances(m)
+            check(not any(k == KIND_HIBER for k, _ in inst),
+                  "no Hibernate window was opened", got=inst)
+            check(not any(k == KIND_ABOUT for k, _ in inst),
+                  "...and the desktop is the fresh boot's: no About",
+                  got=inst)
+            check(word(m, "hb_resumes") == 0, "nothing was resumed",
+                  got=word(m, "hb_resumes"), want=0)
+        finally:
+            m.key("ShiftLeft", down=False, up=True)
+    check(not ptr_present(), "HIBERNAT.PTR is gone after a Shift skip")
+    check(not img_present(), "...and so is HIBERNAT.IMG: a skip is a "
+          "resume failure like any other (SPEC.md 87.5)")
 
 
 def text_screen(m):
@@ -664,14 +577,12 @@ def pass_sum(driver, damage):
             at = image_offset(near)
         damage_image(at, 1024)                  # four sampled lines, and
                                                 # inside a region at the top
-    with boot(driver) as m:
+    with boot(driver, desk=not damage) as m:
         mo = Mouse(marty=m)
-        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                "the fresh boot to ask the question", poll=0.05, limit=240)
-        quiet(m)
         if not damage:
-            answer(m, mo, "[hb_resumes] to reach 1",
-                   lambda mm: word(mm, "hb_resumes") == 1)
+            M.until(m, lambda mm: word(mm, "hb_resumes") == 1,
+                    "[hb_resumes] to reach 1 with no question asked",
+                    poll=0.05, guest=240)
             quiet(m)
             check(pkg_seg(m) == seg, "Mines came back where it was",
                   got=pkg_seg(m), want=seg)
@@ -684,9 +595,9 @@ def pass_sum(driver, damage):
         # in place (kernel/megares.inc's mrs_s_fail)
         said = ("Resume failed: the image could not be read back"
                 if near is not None else "Resume failed: the programs")
-        answer(m, mo, "the refusal's sentence",
-               lambda mm: M.video_is_text(mm.video())
-               and said in text_screen(mm))
+        M.until(m, lambda mm: M.video_is_text(mm.video())
+                and said in text_screen(mm), "the refusal's sentence",
+                poll=0.05, guest=240)
         check(word(m, "hb_resumes") == 0, "nothing was resumed",
               got=word(m, "hb_resumes"), want=0)
         m.key("Space")
@@ -694,9 +605,8 @@ def pass_sum(driver, damage):
                 and byte(mm, "sch_lock") == 0,
                 "an ordinary boot after the refusal", poll=0.05, limit=240)
         quiet(m)
-        check(byte(m, "hb_mode") != HB_M_RESUME,
-              "...which does not ask the question again",
-              got=byte(m, "hb_mode"))
+        check(word(m, "hb_resumes") == 0,
+              "...which does not resume again", got=word(m, "hb_resumes"))
         check(pkg_seg(m) is None, "...and has no program open")
     check(not ptr_present(), "HIBERNAT.PTR was deleted by the refusal")
     check(not img_present(), "...and so was HIBERNAT.IMG")
@@ -706,7 +616,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--driver", action="store_true",
                     help="boot from a floppy and reach the disk through HDD.DRV")
-    ap.add_argument("--only", choices=["resume", "discard"])
+    ap.add_argument("--only", choices=["resume", "shift"])
     ap.add_argument("--sum", choices=["clean", "damaged"],
                     help="SPEC.md 87.4.1 instead: a program open across the "
                          "hibernate, its image left alone or damaged on the "
@@ -730,7 +640,7 @@ def main():
         if a.only != "discard":
             pass_resume(a.driver)
         if a.only != "resume":
-            pass_discard(a.driver)
+            pass_shift(a.driver)
         done("hibernate" + (" (driver)" if a.driver else ""))
     finally:
         sweep()

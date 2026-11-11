@@ -85,6 +85,13 @@ identify the site, and re-run the red arm whenever the code under it changes.
 | `full` | **180s, enforced** | one question: *did you obviously break the OS?* |
 | `soak` | **none, deliberately** | everything else, one `-k` away. |
 
+**The owner's rule (2026-11-11), and it binds both gates: `fast` and `full`
+are for "did you break the BUILD or the OS, or critical documentation
+maintenance" - nothing else.** A row about ONE package, about KERNEL
+INTERNALS, or about the SUITE'S OWN harness and fixtures is `soak`, however
+cheap it is. That does not lose it: the release soak runs every row, and
+whoever touches the subject runs its rows with `-k`.
+
 **Choose by what the row costs and how broadly it fails, never by how
 important it is.** Neither expensive tier runs per commit: `full` runs when
 major work reaches the integration branch, and `soak` runs scoped to the rows
@@ -97,7 +104,7 @@ in doubt, `soak`.**
 `fast` is the one tier nobody opts into, so every second of it is charged to
 somebody who never touched its subject. The question is not "is this worth
 having" but "is it worth having to somebody who did not touch this?" Either
-of these sends a row to `soak`:
+of these sends a row to `soak`, whatever it costs:
 
 1. **It is about ONE package, driver or host tool.** Whoever changes it runs
    its row. Being a build input (a generated include, a committed asset) is
@@ -106,20 +113,40 @@ of these sends a row to `soak`:
    rank is defended by whoever edits that subsystem. The exception: a
    kernel-side row stays if code OUTSIDE the kernel has to agree with it (a
    package, a driver, the SDK, a Makefile recipe). Ask whose else's file must
-   agree, not which directory the test reads.
+   agree, not which directory the test reads. A kernel-internal row that
+   `make` used to run for you - `chromesites`, `clscf`, `khpknobs` - is
+   now yours to name when you edit what it guards. **`hotpar` is the
+   exception and stays fast** (owner, 2026-11-11): ANY kernel edit upstream
+   of a hot routine can shift it by an odd byte count, so the thing that
+   breaks it is not "an edit of what it guards" but nearly every kernel
+   edit, and 0.07 s is the cheapest place to catch it.
+3. **It is about the suite itself** - the harness, the emulator drivers, a
+   row's fixtures, a tool's own selfcheck (`machines`, `qemuown`,
+   `fixtures`, `artpath`, `coldsym`, `bochssleep`, `knobself`). Those
+   defend the SOAK, so the soak is where they run.
 
 What survives is four families; a new `fast` row should name the one it joins:
 
 | family | what it is | some of its rows |
 |---|---|---|
 | **The boundary** | the kernel and the code loaded onto it, edited by different people | `api-abi`, `stkclass`, `drvovl`, `drvmem`, `fonts`, `pkgdeps` |
-| **Rules over every line** | what any assembly in this tree must obey | `asmrules`, `ovlchk`, `textrules`, `stkbalance`, `stkapps`, `swallow` |
+| **Rules over every line** | what any assembly in this tree must obey | `asmrules`, `ovlchk`, `stkbalance`, `stkapps`, `swallow` |
 | **The shipped artifacts** | the floppies themselves | `image`, `pkg`, `diskverify`, `canary`, `checkreadme` |
-| **The tree and its suite** | duplicated constants, generated docs, the gates' own integrity | `mirror`, `checkdocs`, `docindex`, `registry`, `machines`, `qemuown` |
+| **The tree and its docs** | duplicated constants, generated docs - critical documentation maintenance | `mirror`, `checkdocs`, `docindex`, `layout` |
 
-Two named exceptions are the owner's decisions and are **not precedents**:
-`kernbudget` stays for the size line it prints on every build, and
-`readme8088` because the owner wants it. Moving a row down to `soak` is not
+**A rule over every line that costs OVER A SECOND goes to `full`, not
+`fast`** (the owner, 2026-11-11): `textrules`, `toast`, `movable`,
+`megapkg`, `registry`, `cswrite`, `seg0` and `megagrid`. The rule each one
+gates is unchanged; `make test-full` is where it is checked, not every
+`make`.
+
+Named exceptions are the owner's decisions and are **not precedents**:
+`kernbudget` stays for the size line it prints on every build,
+`readme8088` because the owner wants it, `btnrules` because authors kept
+actually breaking it and the owner then had to fix the packages by hand,
+and `guidelock` because it is the only reason the guide stays current -
+the people integrating new work have the knowledge and the responsibility
+to update the guide at integration, so it is a constant, not a rare fix. Moving a row down to `soak` is not
 deleting it; it changes who pays for it.
 
 ### 2.2 What earns a `full` row
@@ -147,9 +174,13 @@ in the source declares itself movable or has a line in `tests/pins.txt`) and
 `pinsrt` (the same buckets read back out of `mem_tab` on MartyPC,
 docs/plans/NO-PINNING-PLAN.md 4.1).
 
-Three more sit in `full` against the rules above and are `soak` candidates:
+Eight more are the fast tier's rules over every line that cost over a
+second each, moved here by the owner on 2026-11-11 (§2.1): `textrules`,
+`toast`, `movable`, `megapkg`, `registry`, `cswrite`, `seg0`, `megagrid`.
+
 `w16censall` (one program family), `knobself` (a tool's own check) and
-`khpknobs` (knob builds).
+`khpknobs` (knob builds) sat here against these rules until the owner moved
+them to `soak` on 2026-11-11.
 
 ---
 
@@ -177,6 +208,44 @@ Row("lzmod", "soak", py("tests/lzmod.py"), 30.0,
 | `alone` | its ANSWER needs the cores - a rate or a frames-per-second (§4.1) |
 | `locks` | a named HOST resource it cannot share - `("port:8090",)` for a QEMU row whose fixture server the guest reaches at a fixed 10.0.2.2 port. The lane never runs two rows holding one name at once; nothing else about the row is serialised (§9.1) |
 | `timeout` | defaults to `max(60, 4 x secs + 30)`; raise it for a row whose shape is slow, never to cover a wait |
+| `inputs` | repo-relative globs (`**` recurses) of every file the row READS - a `fast` row only, and only a pure source scan (§3.1) |
+
+### 3.1 `inputs=`: the fast tier's cache
+
+A `fast` row that declares `inputs=` is skipped as **`cached ok`** when it
+last PASSED and nothing it depends on has changed. The key
+(`tools/os88test.py` `cache_key`) hashes CONTENTS, never mtimes: the row's
+command, `needs` and declaration; its script and every repo-local module the
+script imports, transitively; every `*.txt` registry those sources name; every
+file the globs match; the Python version, and `nasm -v` when the row needs or
+names nasm. The record is `build/testcache/fast.json`, so `make clean` drops
+it; a failure deletes the row's entry. **`full` and `soak` never consult it**,
+a row with no `inputs=` always runs, and `--no-cache` (or `OS88_TESTCACHE=0`)
+reruns everything.
+
+**The risk is a STALE PASS.** A row that reads a file its declaration does not
+match is not rerun when that file changes, and it reports `cached ok` over
+code it never saw. So:
+
+- **Declare WIDE.** The shape of the row's walk, not the files it cares about
+  today: `_src(("apps", "drivers"))` for an `os.walk` of those trees, every
+  extension the walk accepts. `suite.py`'s `_src` and `_ASM_TREE` are the
+  helpers.
+- **Name every tool the row RUNS.** A subprocess is not an import, so
+  `tools/stkbalance.py` is in `stkapps`' declaration by hand.
+- **Never declare a row that reads `build/`** (an image, a map, a listing) or
+  that walks `git ls-files` - its real input is the build or the whole tree,
+  and no glob says that honestly. Leave it undeclared; it runs every time.
+- **Prove it**: edit one input and see the row rerun, and edit a file outside
+  the declaration and see it stay cached only where that is right.
+
+Declared today, all pure source scans: `asmrules`, `ovlchk`, `bits` and
+`btnrules` (`_ASM_TREE`, and `.c`/`.h` for `btnrules`), `stkapps` (apps/ and
+drivers/ plus `tools/stkbalance.py` and `tools/weavesim.py`), `stkbalance`
+(kernel/), `stkwalker` (`tools/stkbalance.py`), and `mirror` (every source tree
+plus all of `tools/**/*.py` and `tests/**/*.py`). `checkdocs`, `nulldev` and
+`partoff` read `git ls-files`, and `stik`, `stkclass`, `diskverify` and the
+image rows read `build/`; none of them is declared.
 
 ---
 
@@ -337,8 +406,13 @@ is the Marty and `ui.mo` the mouse.
 - **`raise_window` before `menu_pick`** on a package you just launched:
   launches are asynchronous, and the menu bar is the front window's
   (incident 43).
-- `boot()` turns the screen saver off and resolves an IBM machine name to its
-  GLaBIOS twin. A row calling `os88marty.launch` directly gets neither.
+- `boot()` resolves an IBM machine name to its GLaBIOS twin; a row calling
+  `os88marty.launch` directly does not get that. **Both turn the screen saver
+  off** - `launch` arms a guard that the row's own guest-time waits run once
+  the boot is over (once per boot, and only on the kernel os88sym describes).
+  A row ABOUT the saver, or one that reads back `[ss_mins]`/`[ss_idle]`,
+  passes `saver=True` (tests/saver.py, dispsaver, saverate, fishfit,
+  fishedge, cfgtrip's second boot).
 
 The mouse under it is `tools/os88mouse.py`: absolute and closed-loop, with a
 `dblclick` of its own. `tools/os88mouserel.py` is relative and is only for the
@@ -449,7 +523,10 @@ next press when two keys share a byte (incident 42).
 ### 7.3 `settle` is the expensive one
 
 `settle` waits for several identical screen captures, and used to be half of
-a row's time. It is right only when the next line compares PIXELS. Before a
+a row's time. It is right only when the next line compares PIXELS. Its
+captures are taken on a PAUSED guest and the window between them is run as
+exact guest cycles (`advance`), so its answer does not depend on how busy
+the host is (docs/MARTYPC-DEBUG.md, *settle*); `quiesce` likewise. Before a
 memory read use `ui_done`; after an input, before a pixel read, use
 `ui.still()`. `settle` is positively wrong during an operation that holds the
 gfx lock - the screen is *stiller* while it works than when it is done, so a

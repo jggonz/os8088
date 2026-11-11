@@ -283,7 +283,13 @@ rw_kbox:
     sub bx, 3
     mov dx, [rw_kby]
     inc dx
+    push ax                         ; the line cell takes AX..DX (SPEC.md
+    push bx                         ;   5.7.3)
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop bx
+    pop ax
     add dx, 9
     call OSAPI_GFX_HLINE
     mov cl, [rw_kbn]

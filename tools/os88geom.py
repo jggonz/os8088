@@ -924,9 +924,36 @@ def windows(m, sym=None):
 
 
 def winptr(m, win, sym=None):
-    """The kernel address of a window record - what wm_top answers with."""
+    """The LINEAR address of a window record, to READ it by - what top()
+    answers with. NOT what the kernel holds: hand the guest kptr()/winoff()."""
     i = win.i if hasattr(win, "i") else win
     return _sym(m, sym)("wm_wins") + i * WIN_SIZE
+
+
+def kptr(lin):
+    """A linear address in KERNEL_SEG as the kernel holds it: the DS offset."""
+    return (lin - KERNEL_SEG * 16) & 0xFFFF
+
+
+def winoff(m, win, sym=None):
+    """The window pointer AS THE KERNEL HOLDS IT (SI/BX in wm_*, [mem_cpq])."""
+    return kptr(winptr(m, win, sym))
+
+
+def post_compact(m, win, lvl=0xFC, sym=None, poke=None):
+    """Post OSAPI_MEM_COMPACT's request from outside (SPEC.md 66.4.3): the
+    rank into [mem_cpq_lvl], then the window to WAKE into [mem_cpq] - its
+    OFFSET. wm_wake_disp takes that word as SI, and the linear winptr() woke
+    a 'window' 0x600 past the record: a .bss word that was no window until a
+    one-byte .bss shift made it one, and the UI task far-called 2020:2020
+    (rdgmove, 1a42e398). Fifteen rows posted it that way. `poke(addr, data)`
+    for a machine that is not a Marty (QEMU's HMP); `win` is a slot or a Win.
+    """
+    S = _sym(m, sym)
+    w = poke or m.write
+    p = winoff(m, win, sym)
+    w(S("mem_cpq_lvl"), bytes([lvl]))
+    w(S("mem_cpq"), bytes([p & 0xFF, p >> 8]))
 
 
 def win_rect(m, slot, sym=None):

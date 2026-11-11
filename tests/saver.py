@@ -151,7 +151,7 @@ def main():
     global PLANAR
     bad = 0
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
-                          boot=False) as m:
+                          boot=False, saver=True) as m:   # its subject
         vt = m.video()["type"]
         PLANAR = vt not in ("cga", "mda", "hercules")
         m.run()                         # the boot gate on STATE, then the

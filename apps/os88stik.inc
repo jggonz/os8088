@@ -1590,7 +1590,8 @@ stik_seek:
     xor cx, cx
 .each:
     mov di, stik_fnd
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .out
     push si
 .c:

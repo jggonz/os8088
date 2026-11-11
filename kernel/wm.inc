@@ -382,8 +382,9 @@ wm_strseg:
 ;
 ; **AND THE RECORD IS ASKED WHETHER IT IS STILL A WINDOW** (BR-28,
 ; synth/bugs.md): a content click, a right click and a drag read the handler
-; before the lock, and the lock can wait on a dying worker that destroys this
-; record and frees its region (inst_task_die); the timer pass and the wake
+; before the lock, and the lock can wait on a teardown that destroys this
+; record and frees its region (a dying worker's own, in inst_task_die, until
+; BR-4; a command or a posted close still can); the timer pass and the wake
 ; asked the same question in place. One test here answers all of them, and
 ; each site that held its own copy dropped it. wm_destroy zeroes W_FLAGS, so
 ; bit 0 is the answer.
@@ -3078,7 +3079,7 @@ wm_destroy:
 ; wm_create more windows than the one it returned to the loader (SPEC.md
 ; 20.2), and those carry no instance record - only the W_SEG creator stamp
 ; ties them to the region. Called with the dying instance's I_SPTR
-; (app_close_win / inst_task_die / the winless worker death) and with an
+; (app_close_win, a worker's close included, and mega_fkclose) and with an
 ; aborted or dying load's region segment, always BEFORE the region is freed:
 ; an orphan still carries W_SEG/W_DISP into it, and the next repaint would
 ; far-call whatever claims that memory. main enforced this with the wm_wseg
@@ -4974,7 +4975,8 @@ wm_dmg_union:
 ; that rect is already correct on screen. A window on the right of the screen
 ; therefore does not redraw because a window on the left closed.
 ;
-; What is drawn, in wm_paint_all's order so the layering is identical:
+; What is drawn, in the desktop's layering order (and wm_paint_all is this
+; over the whole desktop, SPEC.md 11.91.7):
 ;   1. the desktop dither, clipped to the damage rect;
 ;   2. every drive zone the rect touches, whole (SPEC.md 26);
 ;   3. the dock and the menu bar, always - both carry state that a hide or a
@@ -5049,7 +5051,16 @@ wm_paint_dmg:
     mov [wm_dmg_y2], dx
 
     cmp byte [wm_dmg_fs], 0
+%ifdef KERN_BIG
+    je .zones                   ; fullscreen: no zones to draw - and no ground
+    cmp byte [vid_ndisp], 1     ; on display 0, which it covers. A SECOND
+    jbe .wins                   ; display is not under it (SPEC.md 39.17.1):
+    call wm_dmg_gray            ; its ground is the dither's as on any pass,
+    jmp short .wins             ; display 0's band coming out of the region
+.zones:                         ; empty under the window (SPEC.md 11.91.7)
+%else
     jne .wins                   ; fullscreen: no zones to draw
+%endif
     call COLD_SEG:desk_dmg_zones_x ; the zones the rect touched, and their
                                 ; box in [wm_dmg_zb] - NOT grown into the
                                 ; damage, which owed every window that box
@@ -5398,115 +5409,42 @@ wm_dock_under:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_paint_all - full screen repaint
+; wm_paint_all - the whole desktop, BY THE DAMAGE PASS (SPEC.md 11.91.7)
 ; in:  nothing (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
 ;
-; Desktop gray dither below the menu bar, then the menu bar, then every
-; visible window back to front: frame, white content fill, W_PAINT.
+; "Repaint everything" is wm_paint_dmg handed the whole virtual desktop. This
+; used to be a layered walk of its own - the dither under the bar, every zone,
+; then every visible window back to front WHOLE - so a pixel under the top
+; window was written once per layer, 7-8 times over in deskbench's scene, and
+; every covered window put its whole content back for the windows above it to
+; paint over. The damage pass writes each pixel about once: a window is drawn
+; where nothing above will (11.3.3, 11.96.15, 11.97) and the dither lays only
+; the ground no window holds (11.91.1). [wm_dmg_stwin] is 0 outside a pass, so
+; nothing was "vacated" and every window the rect touches is marked.
+;
+; (0, 0) and not (0, MBAR_H): wm_dmg_bands floors display 0 at the bar itself,
+; and a SECOND display has no bar - its top rows are desktop (SPEC.md
+; 39.16.2), which the layered walk's EXT_DESK used to dither whole. The far
+; corner is clamped onto the desktop - the UNION of the displays - by
+; wm_paint_dmg, and a fullscreen window is that routine's wm_dmg_fs case: the
+; windows under it are skipped by wm_covered (SPEC.md 11.91.7 prices it).
+;
+; It forces neither the bar nor the dock: a caller whose app overdrew them
+; says so first (blk_relit, hiber's resume).
 ; -----------------------------------------------------------------------------
 wm_paint_all:
     KFZ 23                      ; a WHOLE desktop repaint
-    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
-    call wm_fs_vis              ; a visible fullscreen window covers the
-    jc .fswins                  ; desktop, dock and menu bar - painting
-                                ; them under it is pure waste (SPEC.md 11.2)
-%ifdef DOCK_OPT
-    mov ax, [vid_band_x0]       ; desktop: 50% dither under the bar, and
-    mov bx, MBAR_H              ; STOPPING SHORT OF THE DOCK (SPEC.md 30.3.2,
-    mov cx, [vid_band_xe]       ; 30.5) - dock_paint is the next call but one
-    dec cx                      ; and owns the strip, on whichever edge, so
-    mov dx, [vid_dock_y0]       ; dithering it was a band drawn to be painted
-    dec dx                      ; over:
-    call thm_desk               ; the double-draw flash, and the reason
-%else
-    xor ax, ax                  ; desktop: 50% dither under the bar, and
-    mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
-    mov cx, [vid_pwm1]           ; dock_paint is the next call but one and owns
-    mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
-    dec dx                      ; was a full-width band drawn to be painted
-    call thm_desk               ; over: the double-draw flash, and the reason
-%endif
-                                ; every tile had to be rebuilt afterwards
-%ifdef KERN_BIG
-    EXTCALL EXT_DESK            ; ...and every OTHER display, whole (SPEC.md
-                                ; 39.14.4): the chrome is the primary's, so a
-                                ; second monitor is pure desktop. One far call
-                                ; to mod_gone on a machine with one card, in a
-                                ; routine that repaints the whole desktop
-%endif
-    call COLD_SEG:desk_paint_x  ; drive icons live on the desktop, under
-                                ; every window (SPEC.md 26)
-    call dock_paint             ; ...so the strip is UNTOUCHED and usually has
-                                ; nothing to do. No dock_force: nothing here
-                                ; drew on it any more
-    call menu_draw_bar          ; and no menu_force either - the dither starts
-                                ; at MBAR_H, so nothing in this routine has
-                                ; ever been able to touch the bar (SPEC 12.9).
-                                ; The one thing that covers it is a fullscreen
-                                ; window, and menu_draw_bar sees that itself
-.wins:
-    call wm_zwalk               ; BP = frontmost visible (0 if none), SI = the
-    jmp short .win              ; bottom of the z-order, DI = one past the front
-
-    ; --- ...and under a fullscreen window the walk STARTS at it ------------
-    ; Everything below a window covering the whole screen is covered by it,
-    ; entirely and by construction. wm_covered would reach the same answer
-    ; one region-arithmetic pass per window later; this is the same fact
-    ; known in advance, and it is what stops a fullscreen player from
-    ; examining - and, before wm_covered existed, redrawing - every window
-    ; parked behind it.
-.fswins:
-    call dock_paint             ; ...but both strips are still TOLD (SPEC.md
-    call menu_draw_bar          ; 30.3.2): each early-outs on wm_fs_vis without
-                                ; drawing and marks itself owed, so whatever
-                                ; repaints when the window goes puts it back
-    call wm_zwalk               ; BP = frontmost visible, SI = the bottom of
-                                ; the z-order, DI = one past the front
-%ifdef KERN_BIG
-    EXTCALL EXT_DESK            ; wm_fs_vis said display 0, so the OTHER
-                                ; display is not under it (SPEC.md 39.17.1):
-                                ; its desktop still dithers (CF = 0; CF = 1 is
-                                ; one display, mod_gone's answer too)...
-    jnc .win                    ; ...and its windows still draw - the walk
-                                ; starts at the BOTTOM, and wm_covered skips
-                                ; everything the fullscreen window really
-                                ; covers. That is one region pass per covered
-                                ; window, on a path that is already a full
-                                ; repaint; started AT the fullscreen window
-                                ; it skipped every display-1 window below it
-                                ; in z and left that monitor stale for good
-%endif
-                                ; SI = the fullscreen window's slot in wm_zord
-                                ; - or unchanged if it somehow is not in the
-                                ; order (it was wm_fs_zpos, whose AX..CX banks
-                                ; nothing below reads - kernel size pass 17)
-    mov bx, [wm_fs]
-    call wm_ptr2idx             ; AL = its window index
-    mov cx, di
-    sub cx, si
-    jcxz .win
-    push si
-.zscan:
-    cmp [si], al
-    je .zfound
-    inc si
-    loop .zscan
-    pop si                      ; not in the order: walk the lot, as before
-    db 0xA8                     ; test al, imm8 - the imm8 is the `pop cx`
-.zfound:                        ; below, so only a find drops the banked SI
-    pop cx                      ; ...into CX, which nothing below reads
-.win:
-    cmp si, di
-    je .done
-    call wm_znext
-    jz .win
-    call wm_covered             ; a window nothing shows of writes no pixel
-    jc .win                     ; that a window above it does not overwrite
-    call wm_draw_win
-    jmp .win
-.done:
-    jmp kret_bp
+    push ax
+    push bx
+    push cx
+    push dx
+    xor ax, ax
+    xor bx, bx
+    mov cx, 7FFFh
+    mov dx, cx
+    call wm_paint_dmg
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; wm_content - content-area origin of a window
@@ -8215,9 +8153,10 @@ wm_band:
 ; features are only correct together and this is where that is made true.
 ;
 ; Every other path answers "whole" by having armed nothing - a raise, a
-; wm_paint_all, a fullscreen surface - and the one path that does arm cannot
-; under-report, because a window that MOVED has its whole content inside the
-; damage by construction (the rect is the union of where it was and where it is).
+; fullscreen surface - and the one path that does arm cannot under-report,
+; because a window that MOVED has its whole content inside the damage by
+; construction (the rect is the union of where it was and where it is), and
+; wm_paint_all's damage is the whole desktop (SPEC.md 11.91.7).
 ; -----------------------------------------------------------------------------
 wm_damage:
     push si
@@ -9023,23 +8962,6 @@ wm_su_srect:
     dw wm_su_x1
     CLC_OR_STC .none            ; CF = 0 over the refusal's stc
 .out:
-    ret
-
-; wm_zwalk - wm_paint_all's z-order walk, set up (module internal)
-; in:  -
-; out: BP = the frontmost VISIBLE window (0 if none), SI = the bottom of
-;      wm_zord, DI = one past its front entry. AX and BX spent.
-;
-; Seven instructions, written out twice in wm_paint_all - once for the ordinary
-; walk and once for the one that starts under a fullscreen window.
-wm_zwalk:
-    call wm_top                 ; BX = the frontmost visible window
-    mov bp, bx
-    mov si, wm_zord
-    mov al, [wm_zn]
-    cbw                         ; (<= MAX_WIN: kernel size pass 17)
-    mov di, si
-    add di, ax
     ret
 
 ; wm_bar_span - DI = window -> AX = the first drawable column, CX = the last

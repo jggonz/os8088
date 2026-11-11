@@ -373,9 +373,15 @@ wr_entry:
 wr_tpl:
     dw 60, 24, WR_FRW, WR_HVGA
     dw wr_ttl, wr_cls
-; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; **ONCLICK IS THE LIBRARY'S, NOT wr_onclick.** os88ui_btninit no longer
+; installs a hook (R14 put the class in the package), so a class naming our
+; own handler sends every press past os88ui_btnpress: nothing is armed and
+; wr_onup's os88ui_btnup fires neither button - Load Program and Add to
+; Disk... silently did nothing. The library chains to wr_onclick through
+; OS88UI_BT_ONCLK when the press is not on a button (SPEC.md 20.5.1.3.3).
     OS88_CLASS wr_cls, 0, PAINT, wr_paint, ONKEY, wr_onkey, \
-               ONCLICK, wr_onclick, ABOUT, wr_about, ONWAKE, wr_onwake, \
+               ONCLICK, os88ui_btnclick, ABOUT, wr_about, ONWAKE, wr_onwake, \
                ONCLOSE, wr_onclose, ONMOUSEUP, wr_onup, ONTIMER, wr_ontimer, \
                ONDRAG, wr_ondrag, ONWHEEL, wr_onwheel
 
@@ -3305,7 +3311,8 @@ wr_dive:
     push ds                         ; ES too, for the same reason: it is the
     pop es                          ; find buffer's segment and an input to
     mov di, wr_fbuf                 ; every call
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .no
     cmp word [wr_fbuf+14], OSAPI_FT_DIR
     jne .l

@@ -1273,7 +1273,8 @@ x3_findsz:
     xor cx, cx
 .f:
     mov di, x3_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .no
     push si
     push cx

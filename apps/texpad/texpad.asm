@@ -901,12 +901,20 @@ tp_seg:
     cmp bx, dx
     jne .nh
     mov bx, cx                  ; hline: AX=x1, BX=x2, DX=y
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     ret
 .nh:
     cmp ax, cx
     jne .fr
+    push cx
+    push dx
     call OSAPI_GFX_VLINE        ; AX=x, BX=y1, DX=y2, which is what the clip
+    pop dx
+    pop cx
     ret                         ; already left behind
 .fr:
     call OSAPI_GFX_FRAME
@@ -1353,7 +1361,9 @@ tp_draw_stat:
     mov bx, [tp_ox]
     add bx, [tp_cw]
     dec bx
+    push ax
     call OSAPI_GFX_HLINE
+    pop ax
     mov di, tp_nbuf
     push di
     call tp_fmt_stat

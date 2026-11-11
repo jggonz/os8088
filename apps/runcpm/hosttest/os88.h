@@ -159,6 +159,7 @@ int  os88_file_mkdir(const char *name);
 unsigned os88_ticks(void);
 int  os88_ferr(void);
 int  os88_file_find(int ordinal, struct os88_find *f);
+int  os88_file_find_seq(int token, struct os88_find *f);
 void os88_file_here(struct os88_place *p);
 int  os88_file_goto_q_mark(unsigned clus, int vol);
 

@@ -86,6 +86,7 @@ mods_ser_header:
     db MOD_VER, MOD_SER
     dw BUILD_NUM, MOD_STAMP
     dw mods_ser_end, SER_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw srl_api,srl_irq,srl_release
 
 ; DS=kernel; data owned by the image is always CS-relative. No ring lives

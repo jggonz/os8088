@@ -33,6 +33,26 @@ day and 11.3.3 broke it the same evening.
             fraction of it, on BOTH counts.
   SAME      ...and the glass must be identical afterwards. That is what stops
             STRIP being won by drawing nothing.
+  FULL      ...and WHOLE must itself be honest: raise the Task Manager over
+            the cover, force a full repaint again and count it, attributing
+            each cell to inside or outside the cover's rect. WHOLE must have
+            lettered what FULL letters outside it.
+
+WHY WHOLE IS NOT ~549 ANY MORE, AND WHY FULL EXISTS. Since SPEC.md 11.91.7 a
+forced full repaint is the damage pass over the whole desktop, and that draws
+each window only where nothing above it will: the cover still stands over
+part of this window after the drag, so WHOLE letters the VISIBLE part (245
+cells, measured, against FULL's ~549 raised). That is the right comparison
+for STRIP - a band-less repaint of the strip would re-letter the visible
+part, which is WHOLE - but it made the old fixed floor ("WHOLE >= 400")
+answer a question about the cover rather than about the reference. FULL is
+the floor that asks the right one: a WHOLE that lettered less than the
+visible part of a raised whole repaint is not a whole repaint.
+
+BREAK IT ON PURPOSE (measured, 2026-11-11): `tm_dmg_hit` made to answer
+CF = 0 at once - the band never consulted - paints 400 cells for STRIP
+against WHOLE's 290, and the row goes red. Against the old reference (549, a
+covered window drawn whole) the same break passed: 400 is under 3/4 of 549.
 
 THREE THINGS THIS GATE HAS TO GET RIGHT, each of which cost a run:
 
@@ -64,7 +84,7 @@ nothing.
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
-import os88marty, os88mouse, os88geom, os88sym, dispcp, dispcorner, dispapps
+import os88marty, os88mouse, os88geom, os88sym, os88ui, dispcp, dispcorner, dispapps
 import dispcells
 
 MACHINE = "os8088_xt_vga"
@@ -185,12 +205,52 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         m.write(a, f)
     os88marty.settle(m, limit=120)
     _, _, honest = m.fbuf()
-    print("WHOLE   : %d cells painted for the same page (%d runs, %d fills)"
-          % (n_whole, r_whole, f_whole))
-    if n_whole < 400:
-        fails.append("WHOLE: only %d cells for a full repaint - the reference "
-                     "is wrong, so STRIP has nothing to be a fraction of"
-                     % n_whole)
+    print("WHOLE   : %d cells painted for the same page, the cover over it "
+          "(%d runs, %d fills)" % (n_whole, r_whole, f_whole))
+
+    # --- FULL --------------------------------------------------------------
+    # The reference for the reference: the Task Manager raised over the
+    # cover, every window's cache spoiled, the same forced repaint counted -
+    # and each cell attributed against the cover's rect, so the cells it
+    # letters OUTSIDE the cover are what WHOLE owed. Raised by os88ui's
+    # raise_window - a bare stretch of the title, or the dock tile when the
+    # cover holds the whole bar, as it does here; a raise moves no instance,
+    # so the memory page's rows hold (the docstring's first point).
+    cov = (moved.x, moved.y, moved.x + moved.w - 1, moved.y + moved.h - 1)
+    os88ui.UI(m, mouse=mo, verbose=False).raise_window(w)
+    mo.to(*dispcorner.PARK)
+    os88marty.settle(m, limit=120)
+    if view(m, seg) != 1:
+        sys.exit("SETUP: the raise left the memory page (view %d)"
+                 % view(m, seg))
+    saved = []
+    for x in dispcp.win_list(m, S):
+        a = S("wm_wins") + x * os88geom.WIN_SIZE + os88geom.W_FLAGS
+        f = m.read(a, 2)
+        saved.append((a, f))
+        m.write(a, bytes([f[0] & ~WF_SAVEU & 0xFF, f[1]]))
+    m.write(S("cp_dirty"), b"\x01")
+    c = dispcells.Cells(m, mo, land=cov)
+    c.pump()
+    r_full, f_full, n_full, n_under = c.take()
+    c.close()
+    for a, f in saved:
+        m.write(a, f)
+    owed = n_full - n_under
+    print("FULL    : %d cells painted raised over the cover (%d runs, %d "
+          "fills) - %d under the cover's rect, %d outside it"
+          % (n_full, r_full, f_full, n_under, owed))
+    if n_full < 400:
+        fails.append("FULL: only %d cells for a full repaint of the raised "
+                     "window - the reference is wrong" % n_full)
+    elif owed < 100:
+        fails.append("SETUP: the cover leaves only %d cells of the window "
+                     "bare, too few for STRIP to be a fraction of" % owed)
+    elif n_whole < owed * 9 // 10:
+        fails.append("WHOLE: %d cells for a full repaint under the cover, "
+                     "against %d the raised repaint letters outside it - the "
+                     "reference is wrong, so STRIP has nothing to be a "
+                     "fraction of" % (n_whole, owed))
     elif n_strip >= n_whole * 3 // 4:
         fails.append("STRIP: %d cells painted against a whole repaint's %d - "
                      "the damage band is not being consulted, or it is forcing "

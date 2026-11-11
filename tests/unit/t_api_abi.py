@@ -186,6 +186,12 @@ ALIAS = {
     # that OSAPI_WM_HIDE and this are different cells, since a plain hide
     # leaves a tile that does nothing (the slot's own comment has the account).
     "OSAPI_WM_MINIMIZE":  "inst_minimize",
+    # SPEC.md 5.7.3: the three LINE cells clobber AX..DX and enter their
+    # non-preserving shims above gfx_fill; gfx_hline and gfx_vline are the
+    # kernel's own preserving pair, and the preserving gfx_pixel is gone.
+    "OSAPI_GFX_PIXEL":    "gfx_pixel_n",
+    "OSAPI_GFX_HLINE":    "gfx_hline_n",
+    "OSAPI_GFX_VLINE":    "gfx_vline_n",
     # SPEC.md 11.103.9: a package asks for the DESKTOP'S GROUND and the
     # kernel's routine for it is the theme's, thm_desk (SPEC.md 76.2) - which
     # on a build with no themes (kern_small) is gfx_fill_gray itself, the

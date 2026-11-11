@@ -1875,6 +1875,30 @@ _os88_file_find:
     ret
 %endif
 
+; int os88_file_find_seq(int token, struct os88_find *f) - SPEC.md 19.7.1.1.
+; os88_file_find's twin by TOKEN: 0 to start, then what it returned; -1 at
+; the end. AL = 0, the size FIND answers. Linear where the ordinal walk is
+; N(N+1)/2 entry visits; the token is a position in the folder, not a count.
+CC_GATE _os88_file_find_seq
+%ifdef CC_U__os88_file_find_seq
+_os88_file_find_seq:
+    push bp
+    mov bp, sp
+    mov cx, [bp+4]
+    mov di, [bp+6]
+    push ds
+    pop es                          ; ES:DI - the buffer is ours
+    xor al, al                      ; the expanded size, as os88_file_find's
+    call OSAPI_FILE_FIND_SEQ
+    sbb dx, dx                      ; -1 at the end, 0 found
+    and ax, dx                      ; FERR_NOENT at the end of the listing, or 0
+    mov [cc_ferr], ax
+    or dx, cx                       ; -1, or CX = the next token
+    xchg ax, dx
+    pop bp
+    ret
+%endif
+
 ; unsigned os88_disk_free_kb(void) - OSAPI_FILE_DFREE answers DX:AX bytes and
 ; BX = SECTORS per cluster, with no disk I/O. C has no 32-bit type (73.7), so
 ; the shift happens here: ten single-bit shifts through the carry, which is

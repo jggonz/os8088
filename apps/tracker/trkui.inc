@@ -337,7 +337,9 @@ tui_hlinec:                         ; AX = x1, BX = x2, DX = y
     add ax, [tui_ox]
     add bx, [tui_ox]
     add dx, [tui_oy]
+    push cx
     call OSAPI_GFX_HLINE
+    pop cx
     pop dx
     pop bx
     pop ax
@@ -350,7 +352,9 @@ tui_vlinec:                         ; AX = x, BX = y1, DX = y2
     add ax, [tui_ox]
     add bx, [tui_oy]
     add dx, [tui_oy]
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
     pop dx
     pop bx
     pop ax

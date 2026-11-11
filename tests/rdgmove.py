@@ -123,7 +123,8 @@ def leg(a, disk, MAP, lab, static):
             return st.get("view") and wram(st["view"])[3] == 0xA5
         M.until(m, started, "GBBANK8 checking its first switch", poll=0.5,
                 guest=120.0)
-        wptr = os88geom.winptr(m, ui.window("RealDMG"), S)
+        rwin = ui.window("RealDMG")
+        wptr = os88geom.winptr(m, rwin, S)
         ui.close(calc)
 
         def pseg():                     # the region, through the window: it
@@ -212,8 +213,7 @@ def leg(a, disk, MAP, lab, static):
             print("  RED RUN: a ret over %s" % bug)
         try:
             for _ in range(2):          # TWO passes: the first lifts the region
-                m.write(S("mem_cpq_lvl"), bytes([0xFC]))    # into Calc's hole,
-                m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+                os88geom.post_compact(m, rwin, 0xFC, S)    # into Calc's hole,
                 M.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                         "the posted compaction", poll=0.2, guest=30.0)
                 M.ui_done(m)            # and the restart that re-enters the

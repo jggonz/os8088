@@ -262,11 +262,13 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
 ; assembles to the body it replaced, byte for byte. kern_mega carries the
-; first eleven: it runs on a 286 or 386, almost always with VGA or EGA, its
+; first ten: it runs on a 286 or 386, almost always with VGA or EGA, its
 ; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
-; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
-; decoders' saving is CPU, the same on every medium, and on a hard disk it is
-; most of a launch. kern_small carries none; its machines are floppy-only.
+; kern_emu, which is kern_big) carries KHP_LZ and the four VGA knobs, at the
+; owner's word: the decoders' saving is CPU, the same on every medium, and on
+; a hard disk it is most of a launch; the VGA four are `.vga` bytes, which
+; only a VGA or EGA machine keeps. kern_small carries none; it assembles no
+; planar body at all.
 ; Enabling another for kern_big is a %define below and a re-measure.
 ; tools/os88knob.py is how a rewrite is put behind a knob (and checked);
 ; docs/plans/khp1/patches/tools/equivalence/ holds each knob's harness.
@@ -278,7 +280,6 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_VGABLITP  gfx_blitp's wide rows by words (vga-5)
 ;   KHP_FRAME     gfx_frame's clip questions once a frame (gfxcall-3)
 ;   KHP_FPG       fpg_finish's unarmed unlock answered first (gfxcall-4)
-;   KHP_RELIT     blk_relit by the damage pass: fullscreen exit (wm-4)
 ;   KHP_CAPTION   the title bar's caption: no gap fill on an inactive bar,
 ;                 one font_run_x when unclipped (wm-2, wm-3)
 ;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
@@ -300,20 +301,19 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_STRRUN     font_str_run, a transparent string in one pass (text-6)
 ;   KHP_LAZYEND    cur_lazyend's early "not moved" (pointer-6; pays with O4)
 %ifdef KERN_MEGA
- %define KHP_VGASAVE
- %define KHP_VGAFILL
- %define KHP_VGAEDGE
- %define KHP_VGABLITP
  %define KHP_FRAME
  %define KHP_FPG
- %define KHP_RELIT
  %define KHP_CAPTION
  %define KHP_DMGSTALE
  %define KHP_RAISEOL
 %endif
 %ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
  %define KHP_LZ                 ; (+190 .cold: LAST-DROP-PERF.md 7.1 row 1)
-%endif
+ %define KHP_VGASAVE            ; the four VGA items, at the owner's word
+ %define KHP_VGAFILL            ; (2026-11-10, "size pass it as well"): all
+ %define KHP_VGAEDGE            ; in the `.vga` rung, which a CGA, Hercules
+ %define KHP_VGABLITP           ; or MDA machine slides `.cold` over (7.1
+%endif                          ; rows 3, 6, 8, 9; LOG L.6)
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
 ; the PicoMEM's queue, the DOS trip's times, the native floppy's fallbacks and
@@ -1087,6 +1087,20 @@ TOAST_MAX   equ 24
   %define OS88_COMPACT 1
 %endif
 
+; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
+; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big
+; and kern_emu. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN) is open,
+; priced at this arm's bytes. NOT kern_mega: in protected mode every module
+; is copied above 1MB the moment it is loaded (mod_hi, MOD_HIOK), where no
+; mem_pg shed can reach it - the cache would only ever serve the image
+; mod_hi refused, so it spends nothing there. Resolved here for OS88_ASSOC's
+; reason: memory.inc, above mod.inc, names the tag's row
+%ifdef KERN_BIG
+  %ifndef KERN_MEGA
+    %define MOD_CACHE 1
+  %endif
+%endif
+
 ; SPEC.md 22.3-22.5's Cut/Copy/Paste is an ON-DEMAND MODULE on kern_small
 ; (SPEC.md 2.8, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
 ; `.cold` on kern_big, which keeps its speed and its one contiguous boot read:
@@ -1267,6 +1281,27 @@ DRV_HMA_SEG equ 0xF000
 %ifndef KERN_KNOB
   %define MOU_IN_BLOB 1
 %endif
+%endif
+
+; HB_EARLY - the hibernation probe runs BEFORE the drivers and the mouse
+; (SPEC.md 87.5, docs/plans/HIBER-RESUME-PLAN.md B2): kern_big and kern_emu.
+; kmain_o probes right after the last `.ovl` call (P1), then sets the mouse up,
+; loads drv_boot's PASS 1 (the classes a hibernate keeps, HB_KEEPSET), probes
+; again (P2) if P1 could not settle it, and only then loads pass 2 - so a boot
+; that resumes never runs mouse_init's waits or loads a driver the image would
+; only shut down. kern_mega keeps the late probe: its protected-mode images
+; are judged after mega_enter (87.9). kern_small has no hibernate.
+;
+; IT TAKES mouse_init OUT OF `.ovl` ON THOSE KERNELS: the probe mounts, the
+; mount takes the FAT window `.ovl` was read onto (SPEC.md 2.5.3), and the
+; mouse now runs after it - so its body is `.boot3`'s there, kern_small's
+; arrangement (MOU_IN_BLOB). `.ovl` sheds ~0.8KB and `.boot3` gains it: both
+; transient, neither resident.
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define HB_EARLY 1
+  %define MOU_IN_BLOB 1
+ %endif
 %endif
 
 ; SPEC.md 30.5-30.6's Dock PLACEMENT and AUTO-HIDE - the left and right
@@ -2756,11 +2791,11 @@ apic_gfx_lock:
     OSAPI_SLOT gfx_lock           ; 0x0010
 apic_gfx_unlock:
     OSAPI_SLOT gfx_unlock         ; 0x0018
-    OSAPI_SLOT gfx_pixel          ; 0x0020
-apic_gfx_hline:
-    OSAPI_SLOT gfx_hline          ; 0x0028
-apic_gfx_vline:
-    OSAPI_SLOT gfx_vline          ; 0x0030
+    OSAPI_SLOT gfx_pixel_n        ; 0x0020 - the three LINE cells enter their
+apic_gfx_hline:                   ; non-preserving shims (SPEC.md 5.7.3): a
+    OSAPI_SLOT gfx_hline_n        ; 0x0028   package's line clobbers AX..DX,
+apic_gfx_vline:                   ; and the kernel's own callers keep the
+    OSAPI_SLOT gfx_vline_n        ; 0x0030   preserving gfx_hline/gfx_vline
 apic_gfx_fill:
     OSAPI_SLOT gfx_fill           ; 0x0038
     OSAPI_SLOT gfx_frame          ; 0x0040
@@ -3406,7 +3441,13 @@ rmk_seg:          ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          caller's own arithmetic would
 ; (OSAPI_FS_OP and OSAPI_VOL_CHECK too - each kernel that has no body for
 ; one answers its index with a refusal entry, SPEC.md 20.3.4)
-osapi_table_end:                  ; 0x046D today (0x04FB before kernel size
+    OSAPI_JCELL api_file_find_seq ; 0x0233 - OSAPI_FILE_FIND by TOKEN (SPEC.md
+                                  ;          19.7.1.1): CX resumes the walk at
+                                  ;          the slot after the last answer,
+                                  ;          so a listing is linear, not
+                                  ;          N(N+1)/2; AL = 1 the raw size
+osapi_table_end:                  ; 0x0236 today (0x0233 before FIND_SEQ;
+                                  ; 0x046D before kernel size
                                   ; pass 19's withdrawals, 0x04F5 before
                                   ; OSAPI_VOL_CHECK,
                                   ; 0x04EF before OSAPI_FS_OP,
@@ -3453,18 +3494,18 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 5*3 + 6 + 7*5 + 3*6 + 8
-%error "os8088 API jump table must be exactly 0x0223 bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 5 JCELL (3), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
+%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 6*3 + 6 + 7*5 + 3*6 + 8
+%error "os8088 API jump table must be exactly 0x0226 bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 6 JCELL (3, OSAPI_FILE_FIND_SEQ the last), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
 %endif
-    db 0                        ; PARITY PAD, never executed (kernel size
-                                ; pass 19): the flag day's withdrawals took
-                                ; 142 bytes out of the table on kern_big -
-                                ; OSAPI_WM_ONWHEEL's own parity byte among
-                                ; them - and an ODD shift in front of every
-                                ; hot routine costs a 16-bit bus a second
-                                ; cycle on each of their word operands
-                                ; (tests/unit/t_hotpar.py). Nothing falls
-                                ; into it: the table ends on a cell
+                                ; (THE PARITY PAD kernel size pass 19 left
+                                ; here went with OSAPI_FILE_FIND_SEQ's three
+                                ; bytes, SPEC.md 19.7.1.1: the flag day's
+                                ; withdrawals took 142 bytes out of the table
+                                ; on kern_big, and an ODD shift in front of
+                                ; every hot routine costs a 16-bit bus a
+                                ; second cycle on each of their word operands
+                                ; - tests/unit/t_hotpar.py. The table is EVEN
+                                ; again with the cell and without the pad)
 
 %ifdef KERN_MEGA
 ; kern_mega's DATA SEGMENT WORD (KDS/KES above, kernel/mega.inc), and it is
@@ -3853,12 +3894,16 @@ api_gfx_rest:
 ; a package, on this cell exactly as on the other one (SPEC.md 19.6.1).
 ; -----------------------------------------------------------------------------
 api_file_find_raw:
-    mov al, 1                   ; AL is not an input here (CX and ES:DI are)
+    mov ax, 1                   ; AL is not an input here (CX and ES:DI are)
     jmp short api_ff_go         ; and the fence below spends it anyway, so it
-                                ; carries the raw flag across the one prologue
-
+                                ; carries the raw flag across the one prologue;
+                                ; AH = 0 the ORDINAL walk
+api_file_find_seq:              ; SPEC.md 19.7.1.1: AL is the CALLER's raw
+    mov ah, 1                   ; choice, AH = 1 the TOKEN walk - dsk_find_x
+    db 0xA9                     ; reads it, the fence leaves AH alone. `test
+                                ; ax, imm16` over the `xor` below
 api_file_find:
-    xor al, al
+    xor ax, ax                  ; AL = 0 the expanded size, AH = 0 by ordinal
 api_ff_go:
     push ds
     push si
@@ -4079,7 +4124,7 @@ ovw_band_init:      call band_init
 ; (ovw_dock_geom went in kernel size pass 13: vid_init, in the blob, reaches
 ; dock_geom through spw_near with the BP it already banks)
 ; ...and the MOUSE's (SPEC.md 9.4.7). mouse_init's boot half is in the
-; overlay and everything mou_hotplug or mouse_unhook can reach stayed resident,
+; overlay (`.boot3` on kern_small, kern_big and kern_emu - HIBER-RESUME-PLAN B2) and everything mou_hotplug or mouse_unhook can reach stayed resident,
 ; so the port writers the probe uses and the round counter it resets are edges
 ; that cross. They had five shims here; they go through viddet.inc's spw_near
 ; now, from overlay-side stubs in mouse.inc (kernel size pass 8), and what is
@@ -4793,14 +4838,9 @@ kmain_o:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-%ifndef KERN_SMALL
-    B2CALL    font_init          ; needs int 10h, so after the mode is set;
-                                ; `.boot2` on kern_big, kern_emu and kern_mega
-                                ; (SPEC.md 6.0.1, 2.9.15), before spl_finish
-%else
-    B3CALL    font_init          ; ...and `.boot3` on kern_small (BOOT3-PLAN
-                                ; 16.17; the kern_small arm LAST, the model's)
-%endif
+    B3CALL    font_init          ; needs int 10h, so after the mode is set;
+                                ; `.boot3` on every kernel (SPEC.md 6.0.1,
+                                ; 2.9.14.2), before spl_finish
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
@@ -4830,6 +4870,8 @@ kmain_o:
     mov [mdg_n0], ax
 %endif
     MARKW 18
+%ifndef HB_EARLY                ; (kern_big and kern_emu set the mouse up after
+                                ; the hibernation probe, below)
     B2CALL   ovl_spl_msg_mouse  ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
@@ -4848,6 +4890,7 @@ kmain_o:
     mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 6%% frame
     mov [mdg_n1], ax
 %endif
+%endif                          ; HB_EARLY
     MARKW 20
     B2CALL   ovl_spl_msg_fdd    ; ...and the SECOND stall the hard disk exposed
                                 ; (SPEC.md 15.6.4): desk_init asks SPEC.md
@@ -4900,6 +4943,29 @@ kmain_o:
     mov [mdg_n2], ax
 %endif
     MARKW 28
+%ifdef HB_EARLY
+    ; --- P1: IS THERE A HIBERNATION TO RESUME, BEFORE ANY OF THE REST? -------
+    ; (SPEC.md 87.5) The last `.ovl` call is above, so the mount this makes is
+    ; allowed (os88ovlchk rule 2e's first mount is here now). On a hard-disk
+    ; boot the boot partition IS the volume a hibernate writes to, and a valid
+    ; image is resumed from inside this call - no mouse waits, no driver, no
+    ; paint. Anything it cannot judge yet (`.cold` in the HMA, an adapter
+    ; SYSTEM.CFG switches to) is DEFERRED to P2, never deleted; a floppy boot
+    ; has no fixed volume here and pays eight compares
+    B3CALL   hb_probe_x
+    B2CALL   ovl_spl_msg_mouse  ; ...the mouse, AFTER the probe (SPEC.md 9.4,
+                                ; 15.6.4): its two waits are the largest phase
+                                ; of a boot that is not the disk, and a resume
+                                ; re-arms the IMAGE's mouse (96.45.2)
+    B3CALL   mouse_init         ; `.boot3` here (MOU_IN_BLOB): `.ovl` is dead
+    MARKW 19
+    BPMARKW 5
+    B2CALL   splf_step
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1 (after the 12%% frame here)
+    mov [mdg_n1], ax
+%endif
+%endif
 
 %ifdef KERN_MEGA
     B3CALL   mega_wrprobe       ; a DOS session the machine was RESET out of
@@ -4911,6 +4977,13 @@ kmain_o:
                                 ; `.boot3` on every kernel: kern_big's since
                                 ; BOOT3-PLAN wave 2, kern_small's one-byte
                                 ; `retf` rung since wave 4)
+%ifdef HB_EARLY                 ; ...which was PASS 1 here, the keep-set
+    B3CALL   hb_probe_x         ; P2: only if P1 did not settle it - a floppy
+                                ; boot with the image on HDD.DRV's volume, or
+                                ; one P1 deferred - with XMEM.DRV and the disk
+                                ; drivers now attached (SPEC.md 87.5)
+    B3CALL   drv_boot2_x        ; ...and PASS 2, the rest (SPEC.md 51.3.4)
+%endif
 %ifdef KERN_EMU
     B3CALL   vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
@@ -4938,12 +5011,15 @@ kmain_o:
                                 ; settings file did not ask for - a driver is
                                 ; several seconds of floppy on this machine
     MARKW 29
-%ifdef KERN_BIG
+%ifdef KERN_MEGA
     B3CALL   hb_probe_x         ; ...and is there a hibernation to resume?
-                                ; (SPEC.md 87.5) After drv_boot, so a driver
-                                ; volume is mounted to be looked at; before
-                                ; the first paint, because the answer is a
-                                ; window ui_task's first pass puts up
+                                ; (SPEC.md 87.5, 87.9) kern_mega's LATE probe:
+                                ; after drv_boot, so a driver volume is
+                                ; mounted to be looked at, and posting the
+                                ; check for ui_task's first pass after
+                                ; mega_enter, where a protected-mode image can
+                                ; be judged. kern_big and kern_emu probe at
+                                ; P1 and P2 above (HB_EARLY)
 %endif
     call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
                                 ; mouse's pointer half out of `.boot3m` into a
@@ -6112,7 +6188,7 @@ EXTF_CAPS   equ 4               ;   fsx_caps: DL = window BX's display's kind
 EXT_DISPLAY equ 7               ; wm_display's secondary arm, behind its gate
 EXT_SPAN    equ 8               ; wm_disp_span: registers kept = the primary
 EXT_FSRECT  equ 9               ; wm_fs_setrect's arm: CF = 1 one display
-EXT_DESK    equ 10              ; vid_disp_desk: CF = 1 nothing painted
+                                ; (10: EXT_DESK, retired - SPEC.md 11.91.7)
 EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
                                 ; 13 are the seam cuts, font.inc/vga12.inc)
@@ -8826,7 +8902,8 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 ; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
 %ifdef KERN_BIG
-%ifndef KERN_MEGA               ; (kern_mega reads it through CS instead)
+%ifndef MOU_P2KNK_CS            ; (kern_mega and the HB_EARLY kernels read it
+                                ; through CS instead: mouse.inc)
 %if (FAT_SEG - KERNEL_SEG) * 16 + OVL_SIZE > 0x10000
   %error "mou_p2knock (mouse.inc) reads its table through DS = KERNEL_SEG as MOU_P2KNK_DS, so the boot overlay must lie inside KERNEL_SEG's 64K (SPEC.md 9.9.8)"
 %endif
@@ -8962,8 +9039,20 @@ MODC_BSS equ modcb_end - $$
 %endif
 
 section .modc
+%ifdef MOD_CACHE
+mods_scr:                       ; THE SETTINGS CORE'S SCRATCH TAIL (SPEC.md
+    SC_SCRATCH                  ; 2.8.3): every byte the core writes in its
+    CPC_SCRATCH                 ; own image, LAST in `.modc`, so a kept
+mods_scre:                      ; MOD_SETS re-zeroes [mods_scr, modc_end)
+MODS_SCRO equ mods_scr - $$     ; (its offset: a label in `.modu` cannot be
+%endif                          ; subtracted from one here)
     CSDO_SDOOR csd_modc          ; (the settings core's: .modu's sites use it)
 mods_end:
+%ifdef MOD_CACHE
+%if mods_end != mods_scre
+  %error "something follows the settings core's scratch tail in .modc - a kept MOD_SETS would zero it"
+%endif
+%endif
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
 %ifdef OS88_DRIVERS
@@ -8975,6 +9064,12 @@ MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
                                 ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
+%ifdef MOD_CACHE                ; ...and from mods_scr to the image's end is
+MODC_SCR equ MODS_SIZE + MODU_SIZE - MODS_SCRO ; what a kept MOD_SETS
+%else                           ; re-zeroes: the scratch, then the panel and
+MODC_SCR equ 0                  ; `.modcb` its read never brought in (MOD_CTRL's
+%endif                          ; row is never kept - mod_drop). CTRL.DRV's
+                                ; MOD_H_SCR
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
                                 ; ends of `.modu`, so there is no pad between
 

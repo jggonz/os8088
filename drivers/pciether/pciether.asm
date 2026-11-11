@@ -15,7 +15,7 @@
 ;                etherui, ethcfg, ethstate), none of it copied
 ;
 ; --- THE NIC SEAM -----------------------------------------------------------
-; The stack calls nic_rx / nic_tx / nic_init / nic_stop. Here they are one
+; The stack calls nic_rx / nic_tx / nic_init / nic_stop / nic_sleep. Here they are one
 ; `jmp` each through the vectors of the backend the PCI probe chose, so the
 ; next card (a row in pce_tab and a <card>.inc beside rtl8139.inc) is not a new
 ; driver. ETHER.DRV's are the 8390's (drivers/ether/nicne2k.inc).
@@ -47,12 +47,15 @@
 %define nic_rx      pce_rx
 %define nic_tx      pce_tx
 %define nic_stop    pce_stop
+%define nic_sleep   pce_halt    ; SLEEP: silenced, the ring KEPT (51.2.5)
 PCE_ROW     equ 8               ; a pce_tab row: vendor, device, name, vectors
 PCEV_CLAIM  equ 0               ; ...the vectors, in order
 PCEV_INIT   equ 2
 PCEV_RX     equ 4
 PCEV_TX     equ 6
 PCEV_STOP   equ 8
+PCEV_HALT   equ 10              ; stop's first half: the card silenced, its
+                                ; memory kept - DRVV_SLEEP's (SPEC.md 51.2.5)
 
 %macro NIC_DATA 0
 pce_tab:                        ; the backends, in the order they are tried
@@ -60,6 +63,13 @@ pce_tab:                        ; the backends, in the order they are tried
     dw 0
 %endmacro
 
+; NIC_WAKE_FIND gone - DRVV_WAKE's find (SPEC.md 51.2.5): the attach's own,
+; because the BAR may have moved across a POST and SLEEP's rt_stop gave the
+; ring's claim back - so the bus is asked again and the ring claimed afresh
+%macro NIC_WAKE_FIND 1
+    call pce_find
+    jc  %1
+%endmacro
 %macro NIC_ATTACH_FIND 2
     call pce_find               ; CF=1 = no PCI card of ours
     jc  %2
@@ -67,7 +77,8 @@ pce_tab:                        ; the backends, in the order they are tried
 
 %macro NIC_STATE 0
 pce_name:   dw 0                ; its name, for the Control Panel page
-pce_vt:     times 5 dw 0        ; the chosen backend's vectors (PCEV_*)
+pce_vt:     times PCEV_HALT/2+1 dw 0 ; the chosen backend's vectors (PCEV_*): one
+                                ; a vector, or pce_find's copy runs into rt_seg
 rt_seg:     dw 0                ; the ring's claim, as OSAPI_MEM_P named it
 rt_lin:     dw 0, 0             ; ...its linear (bus) base
 rt_par:     dw 0                ; ...that as a paragraph (below 1MB)
@@ -96,6 +107,7 @@ SK_RINGSLK  equ 1536            ; one frame, rounded up
 %endif
 %endmacro
 
+%define OS88_DRV_WAKES           ; SLEEP/WAKE: kept across a hibernate (51.2.5)
 %include "os88drv.inc"
 %include "netpkg.inc"
 

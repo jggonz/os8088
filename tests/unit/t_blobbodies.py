@@ -59,7 +59,11 @@ KINDS = ("loader", "splash", "probe", "status", "residue")
 # bytes past 166 sectors), and bvs_apply_f went - bvs_apply is FAR itself now,
 # so `.boot3` B2CALLs the probe directly. kern_small keeps font_init in
 # `.boot3` and the blob there still holds none.
-RESIDUE_MAX = {"big": 2, "emu": 2, "mega": 2, "small": 0}
+# 2026-11-10: font_init left the blob again on the three big kernels (SPEC.md
+# 2.9.14.2) - the plain-MDA probe (SPEC.md 39.1) needed the room, and kernel
+# size pass 19 had given the packed file back more than its 236 bytes - so
+# ovl_fdd_cylok is the one residue row there.
+RESIDUE_MAX = {"big": 1, "emu": 1, "mega": 1, "small": 0}
 
 
 def boot2_labels(path):

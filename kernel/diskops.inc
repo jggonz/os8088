@@ -243,6 +243,7 @@ modl_hdr:
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modl_end                 ; MOD_H_IMG
     dw CLO_NENT                 ; MOD_H_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw modl_e_disp
     dw modl_e_cmz               ; ...the compressor's (compress.inc)
 

@@ -130,6 +130,7 @@ modw_hdr:
     db MOD_VER, MOD_WIN         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modw_end, WN_NENT        ; MOD_H_IMG, MOD_H_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw wnx_set
 
 ; WNK name - far-call the KERNEL routine `name` (a near proc in .text) from
@@ -421,7 +422,9 @@ wn_by:
 wn_hl:
     mov dx, [di+W_Y]
     add dx, WN_BTY
-    call KERNEL_SEG:cw_gfx_hline    ; AX = x1, BX = x2, DX = y
+    push cx                         ; the line cell clobbers AX..DX (SPEC.md
+    call KERNEL_SEG:cw_gfx_hline    ; 5.7.3); wn_buttons keeps CX across this
+    pop cx
     ret
 ; wn_band - AX = a button's offset, SI = its art: the band, one gfx_blit1,
 ; and then its lit LEFT edge in [gfx_color] - the column the band leaves out,

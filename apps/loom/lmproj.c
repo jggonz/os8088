@@ -421,7 +421,7 @@ static int lm_dive(const char *name)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &lm_find);
+        ord = os88_file_find_seq(ord, &lm_find);
         if (ord < 0)
             break;
         if (lm_find.type != OS88_FT_DIR)
@@ -564,7 +564,7 @@ static int ovl_exists(const char *name)
 
     ord = 0;
     while (ord >= 0) {
-        ord = os88_file_find(ord, &lm_find);
+        ord = os88_file_find_seq(ord, &lm_find);
         if (ord < 0)
             break;
         if (lm_find.type >= OS88_FT_DIR)

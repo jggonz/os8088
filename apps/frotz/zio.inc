@@ -199,6 +199,13 @@ zi_putkey:
 ; zi_getkey - worker: take a keystroke, if there is one
 ; out: AL = ASCII, AH = scan code, CF = 0; CF = 1 and AX undefined if empty.
 ;      Preserves every other register.
+;
+; A KEY TAKEN IS INPUT, so it restarts the [MORE] count (zwin.inc's
+; zw_morechk): [zw_more] is rows since the last input, which is the Standard's
+; 8.4.1 and the real Frotz's, and nothing else ever zeroed it but the prompt
+; itself. Without this a player who typed every command still met [MORE]
+; every screenful of rows - in the middle of a one-line reply, or on @read's
+; own echo of RETURN (zw_morechk's zx_rsm test is what keeps THAT one safe).
 ; -----------------------------------------------------------------------------
 zi_getkey:
     push bx
@@ -211,6 +218,7 @@ zi_getkey:
     inc bl
     and bl, ZI_RING_N - 1
     mov [zi_rtail], bl
+    mov word [zw_more], 0           ; input: the [MORE] count starts again
     pop bx
     clc
     ret
@@ -1023,8 +1031,10 @@ zi_load:
                                     ; bytes went somewhere else (KERN-MEGA-PLAN
                                     ; 14.13)
     mov bx, [zf_win]
-    mov ax, zi_name
-    call OSAPI_WM_TITLE
+    mov ax, zi_story                ; zi_STORY, not zi_name: the record keeps
+    call OSAPI_WM_TITLE             ; the POINTER (OSAPI_WM_TITLE), and every
+                                    ; dialog answer since overwrote zi_name -
+                                    ; a save retitled the window ZRS2.SAV
 
     mov byte [zf_state], ZFS_RUN
     mov word [zf_why], 0            ; the last refusal is history now
@@ -2797,7 +2807,8 @@ zi_openpend:
     xor cx, cx                      ; ordinal 0 = start of this directory
 .scan:
     mov di, zi_find
-    call OSAPI_FILE_FIND            ; out CF=1 at the end, else CX = next
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; out CF=1 at the end, else CX = next
     jc .nofile
     push cx
     mov si, zi_find

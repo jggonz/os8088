@@ -398,9 +398,9 @@
   "sources": [
    "drivers/ether"
   ],
-  "stamped": "fed38237",
-  "strings": "dbf67e1a466a7b16",
-  "why": "kernel size pass 18: eth_name and eth_cpname became one 'Ethernet' string, so the string list lost a duplicate; every string a user reads is unchanged"
+  "stamped": "8daadd34",
+  "strings": "417c6be5594b43d5",
+  "why": "Checked: SLEEP/WAKE across hibernate, unknown-verb refusals, the MAC check and INIT-REBOOT lease reuse are below the page's level; the page's 'switched off/on around hibernate' and 'asks the network for an address' still hold; size still about 34K"
  },
  "EXTD_DRV": {
   "sources": [
@@ -591,9 +591,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "38069791",
-  "strings": "f80029845cffca5e",
-  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
+  "stamped": "8daadd34",
+  "strings": "7215ec1d579de451",
+  "why": "Resuming rewritten for the dialog-less resume: the boot resumes before the desktop, autostart stands down, Shift at startup deletes the file and toasts 'Hibernation skipped' (kernel/hiber.inc hb_probe_x); the off screen's key now resumes at once"
  },
  "HOUSE_PNG": {
   "sources": [],

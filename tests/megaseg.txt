@@ -204,4 +204,10 @@
 #             `push cs / pop ds` on kern_big - five bytes against two. The
 #             door is `.text` on every kernel because its bodies near-call
 #             `.text` routines and a real-mode bracket's IVT entry names it
-3763
+# 2026-11-10: -208 (the reading 3,650 -> 3,442), kern_big and kern_emu
+#             take the four VGA KHP knobs (docs/plans/khp1/LOG.md L.6):
+#             kern_mega already carried them, so kern_big's `.vga` grows
+#             +192 under the same window and kern_mega's own .text shrinks
+#             -16 with their size pass. The allowance comes down by what
+#             this change moved, keeping the slack it had
+3555

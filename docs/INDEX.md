@@ -77,9 +77,9 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 |---|---|---|
 | `0x0010` | `OSAPI_GFX_LOCK` | acquire drawing mutex + hide cursor |
 | `0x0018` | `OSAPI_GFX_UNLOCK` | show cursor + release mutex |
-| `0x0020` | `OSAPI_GFX_PIXEL` | CX=x, DX=y |
-| `0x0028` | `OSAPI_GFX_HLINE` | AX=x1, BX=x2, DX=y |
-| `0x0030` | `OSAPI_GFX_VLINE` | AX=x, BX=y1, DX=y2 |
+| `0x0020` | `OSAPI_GFX_PIXEL` | CX=x, DX=y; clobbers AX-DX |
+| `0x0028` | `OSAPI_GFX_HLINE` | AX=x1, BX=x2, DX=y; clobbers AX-DX |
+| `0x0030` | `OSAPI_GFX_VLINE` | AX=x, BX=y1, DX=y2; clobbers AX-DX |
 | `0x0038` | `OSAPI_GFX_FILL` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0040` | `OSAPI_GFX_FRAME` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0048` | `OSAPI_GFX_FILL_GRAY` | AX=x1, BX=y1, CX=x2, DX=y2 (50% dither) |
@@ -173,6 +173,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `door 0x17` | `OSAPI_FILE_GOTO_Q` | DX = a folder's first cluster (0 = the root), BL = the volume. out CF=0 and AX=0, else AX = FERR_*... |
 | `door 0x1D` | `OSAPI_FILE_GOTO_QM` | DX = a folder's first cluster (0 = the root), BL = the volume. out exactly as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else AX = FERR_* and nothing moved... |
 | `0x015F` | `OSAPI_FILE_FIND` | CX = ordinal (0 to start), ES:DI = an OSAPI_FIND_SZ buffer; out CF=0 filled with CX = the next ordinal, else CF=1 and AX = FERR_NOENT at the end |
+| `0x0233` | `OSAPI_FILE_FIND_SEQ` | OSAPI_FILE_FIND by TOKEN (SPEC.md 19.7.1.1): CX = 0 to start, then whatever CX came back as; ES:DI as FIND... |
 | `0x015C` | `OSAPI_FILE_WRITE_SYS` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count; out as OSAPI_FILE_WRITE. DRIVERS ONLY. |
 
 ### Memory
@@ -559,5 +560,5 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *How it works today - `docs/` (51):* [86BOX.md](86BOX.md), [AGENT-SKILLS.md](AGENT-SKILLS.md), [APPLE2-SPEC.md](APPLE2-SPEC.md), [ARCADE-SPEC.md](ARCADE-SPEC.md), [BIFF-NOTES.md](BIFF-NOTES.md), [BOCHS.md](BOCHS.md), [C-TOOLCHAIN.md](C-TOOLCHAIN.md), [C64-SPEC.md](C64-SPEC.md), [DOS-DEBUGGING.md](DOS-DEBUGGING.md), [FIELD-MACHINES.md](FIELD-MACHINES.md), [FIELD-NOTES.md](FIELD-NOTES.md), [HEAP-CLAIMS.md](HEAP-CLAIMS.md), [HERCULES-TESTING.md](HERCULES-TESTING.md), [HOW-ARCADE-WAS-BUILT.md](HOW-ARCADE-WAS-BUILT.md), [HOW-CDROM-WAS-BUILT.md](HOW-CDROM-WAS-BUILT.md), [HOW-DEBUG-DISKS-WERE-BUILT.md](HOW-DEBUG-DISKS-WERE-BUILT.md), [HOW-INSTALL-WAS-BUILT.md](HOW-INSTALL-WAS-BUILT.md), [HOW-MIXER-WAS-BUILT.md](HOW-MIXER-WAS-BUILT.md), [HOW-SYSCHECK-WAS-BUILT.md](HOW-SYSCHECK-WAS-BUILT.md), [HOW-VBATTLE-WAS-BUILT.md](HOW-VBATTLE-WAS-BUILT.md), [HOW-VESA-WAS-BUILT.md](HOW-VESA-WAS-BUILT.md), [HOW-WAVERACK-WAS-BUILT.md](HOW-WAVERACK-WAS-BUILT.md), [HOW-WIN16-WAS-BUILT.md](HOW-WIN16-WAS-BUILT.md), [HOW-WIREFLEET-WAS-BUILT.md](HOW-WIREFLEET-WAS-BUILT.md), [HOW-XTMP3-WAS-BUILT.md](HOW-XTMP3-WAS-BUILT.md), [IMAGER.md](IMAGER.md), [KERNEL-MEMORY.md](KERNEL-MEMORY.md), [KODAK-EXAMPLE.md](KODAK-EXAMPLE.md), [LIVE-MEDIA.md](LIVE-MEDIA.md), [MARTYPC-DEBUG.md](MARTYPC-DEBUG.md), [README.md](README.md), [REALDMG-SPEC.md](REALDMG-SPEC.md), [REDLINE.md](REDLINE.md), [TEST-INCIDENTS.md](TEST-INCIDENTS.md), [TESTING.md](TESTING.md), [UPSTREAM.md](UPSTREAM.md), [WEAVE-SPEC.md](WEAVE-SPEC.md), [WRITING-TESTS.md](WRITING-TESTS.md), [browser/screenshots/README.md](browser/screenshots/README.md), [lemband-format.md](lemband-format.md), [syscheck/design/CODEX-PROMPTS.md](syscheck/design/CODEX-PROMPTS.md), [syscheck/design/PROMPT.md](syscheck/design/PROMPT.md), [xtmp3/ENGINE.md](xtmp3/ENGINE.md), [xtmp3/FACE.md](xtmp3/FACE.md), [xtmp3/FIELD.md](xtmp3/FIELD.md), [xtmp3/NUMERICS.md](xtmp3/NUMERICS.md), [xtmp3/STD.md](xtmp3/STD.md), [xtmp3/XT-STUDY-TABLES.md](xtmp3/XT-STUDY-TABLES.md), [xtmp3/XT-STUDY.md](xtmp3/XT-STUDY.md), [xtmp3/XT.md](xtmp3/XT.md), [xtmp3/listen/README.md](xtmp3/listen/README.md)
 
-*Not reference:* 116 open plans in `docs/plans/`, 251 design records in `docs/plans/completed/`, 1 retired plans in `docs/plans/retired/`, 11 superseded files in `docs/history/`, 172 measurements in `docs/reports/`.
+*Not reference:* 118 open plans in `docs/plans/`, 251 design records in `docs/plans/completed/`, 1 retired plans in `docs/plans/retired/`, 11 superseded files in `docs/history/`, 173 measurements in `docs/reports/`.
 

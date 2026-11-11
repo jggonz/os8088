@@ -216,6 +216,7 @@ modp_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modp_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FCP_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw modp_e_arm               ; the FAR entries, never the bodies: an entry
     dw modp_e_paste             ; is reached by `call far`, so it has to end in
     dw modp_e_answer            ; a retf, and every body below keeps the near
@@ -461,6 +462,14 @@ FCPBODY fcp_paste
     mov dh, [sch_cur]           ; OSAPI_MEM_FLOOR's one store, for this task
     mov dl, MEM_PG_MED          ; (DX is banked above)
     mov [mem_pg_fl], dx
+    mov [mem_pg_finst], dl      ; ...stamped as the KERNEL's (BR-11): MED is
+                                ; no instance's slot (asserted below), so no
+                                ; window's teardown lifts it - only fcp_lend,
+                                ; which every end of the list reaches, a closed
+                                ; window's stop included (fm's .pastegone)
+%if MEM_PG_MED < INST_MAX
+  %error "fcp_paste stamps the floor's instance with MEM_PG_MED, a slot number"
+%endif
 .single:
 %endif
                                 ; fcp_stop, at the end; here, at the start, is

@@ -15717,6 +15717,19 @@ $(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS
 # kernel - not "compatible with", THE SAME - and build/apps.img pairs with it
 # unchanged. `make small` has to say this carefully because the two kernels
 # there have different feature sets; here there is nothing to say beyond it.
+# THE KERN_EMU AND KERN_MEGA KERNELS AS TARGETS OF THEIR OWN. A row's `wants=`
+# names $(EMUDIR)/kernel.bin and $(MEGADIR)/kernel.bin (api-abi-all, every
+# kernel's API table), and a soak's own frozen tree has neither until a
+# sub-make writes one - `make <tree>/emuk/kernel.bin` answered "No rule" and
+# the whole tier refused to start. The sub-make keeps every freshness decision
+# with the kernel's own rules, so the phony prerequisite only means "ask it".
+.PHONY: kernsub-force
+kernsub-force:
+$(EMUDIR)/kernel.bin: kernsub-force
+	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/kernel.bin
+$(BUILD)/megak/kernel.bin: kernsub-force
+	@$(MAKE) BUILD=$(BUILD)/megak KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(BUILD)/megak/kernel.bin
+
 #> [Kernels] emu :: kern_emu (kern_big + the VMware absolute pointer) and build/emu.img
 emu: $(BUILD)/emu.img
 	@echo "emu: $< - kern_emu on 1.44MB, VMMOUSE.DRV wanted from the first"

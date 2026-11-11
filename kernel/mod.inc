@@ -130,7 +130,17 @@ MOD_H_IMG   equ 8               ; word: image size = the file's whole size,
                                 ; the bss's zeros included (kernel.asm's
                                 ; MODB_TAIL) - and so the claim's
 MOD_H_NENT  equ 10              ; word: entries that follow
-MOD_H_ENT   equ 12              ; word[]: entry offsets, in this image
+MOD_H_SCR   equ 12              ; word: how many of the image's LAST bytes are
+                                ; SCRATCH (SPEC.md 2.8.3) - the only bytes of
+                                ; it the module ever writes, each written
+                                ; before it is read or expected as a zero. 0
+                                ; = the image is freed at its drop; non-zero =
+                                ; it is KEPT, as a purgeable claim, with those
+                                ; bytes zeroed again, so a re-adopted image is
+                                ; the file's own. A module opts in when every
+                                ; byte it writes is in that tail; the header
+                                ; says so, no kernel table does
+MOD_H_ENT   equ 14              ; word[]: entry offsets, in this image
 MOD_VER     equ 5
 MOD_MAX_KB  equ 16              ; the biggest module image we will claim,
                                 ; image + bss: mod_need bounds the BYTES
@@ -174,6 +184,11 @@ MODR_SHIFT  equ 2               ; ...still a power of two, so the id -> row
                                 ; conversion is now one-way.
 %if (1 << MODR_SHIFT) != MODR_SIZE
   %error "MODR_SHIFT and MODR_SIZE disagree: mod_row SHIFTS a module id up into a row pointer while every other site SHIFTS one back down, and a stride that is not 1<<MODR_SHIFT makes those two operations different functions - which reads one row and writes another, silently"
+%endif
+%ifdef MOD_CACHE
+%if MODR_SEG != 0 || MODR_SIZE != 4 || MOD_MAX * 2 > MEM_P_MOD_N
+  %error "MEM_P_MOD + 2 x the id must land on the row's MODR_SEG through mem_pg_own's `base + 2d` (memory.inc), inside the tag's range"
+%endif
 %endif
 section .text
 ; DATA stays in the kernel segment, reached through DS, exactly as a cold
@@ -341,6 +356,12 @@ mod_row:
 ; arm is stale and there is nothing to fire. Loading the Control Panel off a
 ; FLOPPY to answer a mouse movement would be absurd, and on the drag path
 ; mod_need would try it eighteen times a second.
+;
+; A HELD MODR_SEG IS NOT AN ARMED ROW on a kernel that KEEPS dropped images
+; (MOD_CACHE, SPEC.md 2.8.3): a kept one is held and disarmed. Both rows asked
+; here, MOD_CTRL and MOD_HIBER, are never kept - mod_drop frees the panel's by
+; name, and HIBER.DRV's header asks for no scratch tail - so the answer stands;
+; a row that opts in must not be asked here without the slot's own test
 ; -----------------------------------------------------------------------------
 mod_live:
     call mod_row
@@ -420,14 +441,24 @@ mod_need:
                                 ; itself), and mod_check reads it instead of
                                 ; deriving the id back out of the row pointer
     call mod_row
+%ifdef MOD_CACHE
+    call drv_vol_bank           ; FIRST here, so .held's re-adopt leaves
+                                ; through .back like a load (it only
+                                ; records: no volume moves until a read)
+    mov dx, [bx+MODR_SEG]
+    or dx, dx                   ; CF = 0, which a LIVE row answers with
+    jnz .held                   ; ...held: LIVE, or KEPT by a drop (2.8.3)
+%else
     cmp word [bx+MODR_SEG], 0
     jne .out                    ; already in: `cmp x, 0` cannot borrow, so CF
                                 ; = 0 is the answer (kernel size pass 17, -3:
                                 ; an `.already` arm that said `clc` and
                                 ; jumped here)
+%endif
 
+%ifndef MOD_CACHE
     call drv_vol_bank                      ; this goes to the system volume to find the
-                                ; file, and the user may have been anywhere
+%endif                          ; file, and the user may have been anywhere
 %ifdef ROM_ADOPT
     ; THE ROM FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a ROM that
     ; adopted this kernel may carry the image too, cut from the same build, so
@@ -523,6 +554,40 @@ mod_need:
 .out:
     jmp kretc_es
 
+%ifdef MOD_CACHE
+; --- A HELD ROW (SPEC.md 2.8.3): LIVE - MEM_K_MOD, armed, and the answer is
+; CF = 0 as it always was - or KEPT by its drop, MEM_P_MOD + 2 x its id, and
+; then RE-ADOPTED here with no disk read: the claim pinned again, and its
+; slots armed by the same loop a load arms them with. Nothing else a load
+; does is owed: the scratch was zeroed at the drop, the stamps were checked
+; on the read the image came from, and mod_cfix (or the ROM's fix) re-pointed
+; its `.cold` words then and is not run twice - `.cold` never moves after
+; the boot, which slides it before the heap exists. DX = the segment, BX =
+; the row
+.held:
+    call mod_fpr                ; DI = its slot block. LIVE: the slots name
+    cmp [di+2], dx              ; its segment, and that is the whole test -
+    je .out                     ; no walk on a thunk's hot path. KEPT: they
+                                ; read mod_gone's, `.cold`'s
+                                ; NO IF = 0 WINDOW round the find and the
+                                ; re-tag, and none is owed: only the UI task
+                                ; sheds or compacts (SPEC.md 66.3.1), and a
+                                ; KEPT image is re-adopted on the UI task
+                                ; alone - an image opts in only when every
+                                ; mod_need for it is the UI task's (2.8.3)
+    push bx
+    mov bx, dx                  ; mem_find_own's own-segment arm: the record
+    call mem_find_own           ; AT that base - a held MODR_SEG names one
+    pop bx
+    mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
+    mov es, dx
+    or bp, -1                   ; no bound on the entries: this image's were
+    jmp .arming                 ; bounded by the read it came from
+    nop                         ; PARITY PAD, never executed: the cache's
+%endif                          ; .cold is odd without it, and dsk_xfer,
+                                ; dsk_runcap and dsk_next_clus_x keep an EVEN
+                                ; shift (t_hotpar.py)
+
 .check:
 
 ; -----------------------------------------------------------------------------
@@ -582,10 +647,46 @@ mod_need:
     jne .freefail
 %endif
 
+    ; THE `.cold` WORDS, BEFORE THE ARM AND NOT AFTER IT (SPEC.md 2.8.3): a
+    ; KEPT image re-adopted by .held joins at .arming below, past this, so
+    ; neither fix runs twice on one image - mod_cfix's single pass is what
+    ; tools/os88rom.py proves, and the ROM's refuses a word that no longer
+    ; names COLD_RAM. Neither reads a slot, so the order is free
+%ifdef COLD_SLIDE
+    ; A MODULE WHOSE `.cold` HAS MOVED (MOVABLE-COLD-PLAN 4) - into a ROM, the
+    ; HMA, or down over a dropped VGA rung - far-calls `.cold` at COLD_SEG,
+    ; the segment it was assembled against. mod_cfix re-points those words
+    ; itself, from the bytes alone: the ROM and the HMA image used to carry
+    ; every module's list and a door to apply it (ROMF_FIX), and a kernel
+    ; that moved `.cold` by itself would have needed both resident. BX is the
+    ; ROW, BP the bytes the claim holds (the settings core reads a PART, and
+    ; a word past BP is not in this claim). AX, CX, DX, DI and ES are dead
+    ; here (mod_check clobbers them, kentc_bp/kretc_es banked and restore
+    ; them; ES comes back the image's, the scan's own). kern_small keeps the
+    ; ROM's door below instead: it has no slide, and SPEC.md 39.27.4 spends
+    ; nothing there
+    call mod_cfix               ; (it answers in no flag: the arm's `add`
+                                ; leaves CF = 0 for the success path)
+%elifdef ROM_ADOPT
+    ; A MODULE ON A ROM MACHINE (docs/plans/ROM-PLAN.md 3.4.4) far-calls
+    ; `.cold` at COLD_RAM, the segment it was assembled against, and `.cold`
+    ; runs at the ROM's. The ROM carries each module's list of those words and
+    ; re-points them; it checks every one names COLD_RAM first, so a module
+    ; it was not cut against is refused here rather than run. BX is the ROW,
+    ; BP the bytes the read brought in (the settings core reads a PART). On a
+    ; kernel whose `.cold` is in RAM rom_none answers FIX with CF = 0 and
+    ; nothing touched. ES and AX are dead here
+    mov al, ROMF_FIX
+    call far [rom_mfp]
+    jc .freefail                ; nothing armed yet: the claim goes back
+%endif
+
     ; --- arm the slots. Every entry offset is checked against the image the
     ; --- way ld_check_hdr checks a package's: inside the bytes that arrived,
     ; --- and past the header, so a malformed table cannot aim a far call at
     ; --- the header's own bytes or off the end of the claim.
+.arming:                        ; (.held's way in: BX = the row, ES = the
+                                ; image, BP = its bytes)
     call mod_fpr                ; DI = the block, CX = the KERNEL's count
     cmp cx, [es:MOD_H_NENT]     ; ...which the header must equal exactly
 %ifdef OS88_SHORTCUTS
@@ -633,42 +734,15 @@ mod_need:
     loop .arm                   ; ...and the success path goes on below
 %ifdef KERN_MEGA
     call mod_hi                 ; ...and above 1MB, if it may go (13.5)
-%endif
-%ifdef COLD_SLIDE
-    ; A MODULE WHOSE `.cold` HAS MOVED (MOVABLE-COLD-PLAN 4) - into a ROM, the
-    ; HMA, or down over a dropped VGA rung - far-calls `.cold` at COLD_SEG,
-    ; the segment it was assembled against. mod_cfix re-points those words
-    ; itself, from the bytes alone: the ROM and the HMA image used to carry
-    ; every module's list and a door to apply it (ROMF_FIX), and a kernel
-    ; that moved `.cold` by itself would have needed both resident. BX is the
-    ; ROW, BP the bytes the claim holds (the settings core reads a PART, and
-    ; a word past BP is not in this claim). AX, CX, DX, DI and ES are dead
-    ; here (mod_check clobbers them, kentc_bp/kretc_es banked and restore
-    ; them). kern_small keeps the ROM's door below instead: it has no slide,
-    ; and SPEC.md 39.27.4 spends nothing there
-    call mod_cfix
-    clc                         ; (mod_cfix answers in no flag)
-%elifdef ROM_ADOPT
-    ; A MODULE ON A ROM MACHINE (docs/plans/ROM-PLAN.md 3.4.4) far-calls
-    ; `.cold` at COLD_RAM, the segment it was assembled against, and `.cold`
-    ; runs at the ROM's. The ROM carries each module's list of those words and
-    ; re-points them; it checks every one names COLD_RAM first, so a module
-    ; it was not cut against is refused here rather than run. BX is the ROW,
-    ; BP the bytes the read brought in (the settings core reads a PART). On a
-    ; kernel whose `.cold` is in RAM rom_none answers FIX with CF = 0 and
-    ; nothing touched. ES and AX are dead here
-    mov al, ROMF_FIX
-    call far [rom_mfp]
-    jc .freefail                ; ...and falls through with CF = 0
-%else
-    clc                         ; (mod_hi, kern_mega's, answers in no flag)
-%endif
-
+    clc                         ; (mod_hi answers in no flag)
+%endif                          ; elsewhere CF = 0 is the `add di, 4`'s
     ; NO ZEROING HERE: a module's bss is zeros in its own file (kernel.asm's
     ; MODB_TAIL), so the read above - or the ROM's copy, the same bytes -
-    ; delivered them on this load, and every load is a read. It was 22
-    ; bytes of kern_small's `.cold` that zeroed from the image's end to the
-    ; claim's KB-rounded one (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.5)
+    ; delivered them on this load. It was 22 bytes of kern_small's `.cold`
+    ; that zeroed from the image's end to the claim's KB-rounded one
+    ; (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.5). A KEPT image re-adopted
+    ; through .arming is not a read, and its scratch tail (MOD_H_SCR) was
+    ; zeroed by the drop that kept it (SPEC.md 2.8.3)
 
     jmp .back                   ; CF = 0: the volume back, and the success
                                 ; answer (short on every kernel but kern_mega,
@@ -899,8 +973,9 @@ mod_hiboot:
 ; -----------------------------------------------------------------------------
 mod_disarm:
     call mod_fpr                ; DI = the block, CX = its count
-    pushf                       ; NO TORN SLOT: a drop can run on a WORKER
-    cli                         ; (inst_task_die -> desk_drop_x) while the UI
+    pushf                       ; NO TORN SLOT: a drop ran on a WORKER
+    cli                         ; (inst_task_die -> desk_drop_x, until BR-4
+                                ; posted that teardown to ui_task) while the UI
     call .slot                  ; task far-calls a slot with no lock held
     popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
     ret                         ; offset in the IMAGE's segment is garbage
@@ -973,12 +1048,56 @@ mod_free_row:
 ; feature**, because nothing here can tell whether the module is on the stack:
 ; the Control Panel's is `cp_flush_close` returning (the panel's own teardown,
 ; SPEC.md 31.8), and the formatter's is the confirmation ending, either way.
-; Dropping a module that is still executing frees the code that is running -
-; which does not fault and is why this is not, and must not become, something
-; the heap does on its own initiative. docs/plans/completed/ONDEMAND-PLAN.md 7.1/7.2 is the
-; purgeable-claim design that would need a pin; it is deliberately not built.
+; A drop is the END OF THE PIN, and the need/drop bracket is the whole of it
+; (ONDEMAND-PLAN 7.1's pin, which the bracket t_moddrop gates already is):
+; from mod_need to mod_drop the claim is MEM_K_MOD, which nothing sheds and
+; nothing moves, so the heap can never take an image a frame stands in.
+;
+; KEPT, NOT FREED, under MOD_CACHE (kern_big, kern_emu; SPEC.md 2.8.3): an
+; image whose header opts in (MOD_H_SCR, its scratch tail) has the tail
+; zeroed, every slot disarmed, and the claim re-tagged MEM_P_MOD + 2 x its id
+; - a purgeable cache at MEM_PG_LOW that the next mod_need re-adopts with no
+; disk read, and that a claim needing the room sheds (mem_pg_own zeroes
+; MODR_SEG; the slots already read mod_gone). The drop still ENDS the
+; feature's hold - the heap may take the bytes from here on, which is the
+; thing a drop is for. MOD_CTRL's row is never kept: CTRL.DRV's header carries
+; 0, and only the settings core's own copy writes its tail into its header
+; (modc_e_sc, desksc.inc) - so the panel's state, which is not in a tail, and
+; mod_live's two callers, which read a held MODR_SEG as "armed", are both safe
+; with no test here (SPEC.md 2.8.3).
 ; -----------------------------------------------------------------------------
 mod_drop:
+%ifdef MOD_CACHE
+    call kentc_bp               ; KENT: push ax..bp
+    push es                     ; ...and ES, mod_need's own ladder
+    call mod_row
+    mov dx, [bx+MODR_SEG]
+    or dx, dx
+    jz .free                    ; nothing held: mod_free_row's own no-op
+    mov es, dx
+    mov cx, [es:MOD_H_SCR]
+    jcxz .free                  ; an image that does not opt in: freed
+    mov di, [es:MOD_H_IMG]
+    sub di, cx                  ; ES:DI = its scratch tail, CX bytes
+    xor al, al
+    cld
+    rep stosb                   ; zeroed NOW, so a re-adopted image is the
+                                ; file's own (the zeros its read delivers)
+    call mod_disarm             ; every slot to mod_gone BEFORE the tag says
+                                ; the heap may take the block
+    mov ax, bx
+    shr ax, 1                   ; AX = its kept tag, MEM_P_MOD + 2 x the id
+    add ax, MEM_P_MOD - (MOD_TAB_OFF >> 1) ; (.held's sum)
+    mov bx, dx                  ; mem_find_own's own-segment arm: the
+    call mem_find_own           ; record AT that base, whoever owns it - a
+                                ; held MODR_SEG always names one
+    mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
+    jmp short .out              ; drop re-writes the same tag)
+.free:
+    call mod_free_row           ; (mod_free_row clobbers AX, BX, CX, DX, DI)
+.out:
+    jmp kretc_es
+%else
     call kentc_di               ; KENT: push ax..di
 
 
@@ -989,6 +1108,7 @@ mod_drop:
     call mod_free_row           ; (mod_free_row clobbers AX, BX, CX, DX, DI),
     jmp kretc_di                ; so no contract weakens. .cold's copy of the
                                 ; ladder, and mod_drop is .cold
+%endif
 
 ; -----------------------------------------------------------------------------
 ; mod_init - point every slot at mod_gone before anything can call one

@@ -73,6 +73,7 @@
 ; vmm_atom is a DOS program losing half a register at a moment nobody chose.
 ; =============================================================================
 
+%define OS88_DRV_WAKES          ; kept across a hibernate (SPEC.md 51.2.5)
 %include "os88drv.inc"
 %include "vmmabi.inc"
 
@@ -132,12 +133,26 @@ vmm_entry:
     je  vmm_read
     cmp al, DRVV_DETACH
     je  vmm_detach
+    cmp al, DRVV_SLEEP          ; A HIBERNATE OR A DOS TRIP (SPEC.md 51.2.5):
+    je  vmm_detach              ; the aux stream stopped, as at detach
+    cmp al, DRVV_WAKE
+    jne .attach
+    call .probe                 ; ...AND BACK: the attach again, because a
+    clc                         ; resumed host has reset its device and only
+    ret                         ; READ_ID re-enables it. NEVER A REFUSAL: a
+                                ; host with no backdoor now is a pointer that
+                                ; does not move, which is all a reload would
+                                ; give too (the kernel attaches this image at
+                                ; boot alone) - without the window a refusal
+                                ; opens, the row unloaded under [vmm_on]
+.attach:
     cmp ax, (VMM_ABI_VER << 8) | DRVV_ATTACH
     jne .no                     ; a verb from a newer kernel than this image,
                                 ; refused rather than run as another one - OR
                                 ; ATTACH from a kernel of another vintage (AH),
                                 ; refused loudly at load rather than quietly
                                 ; at the first poll. One compare asks both
+.probe:
     mov si, vmm_probe
     call vmm_atom               ; GETVERSION, READ_ID, ABSOLUTE, drain
     jnc vmm_p2both              ; ...and make v86 start delivering events.

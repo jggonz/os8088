@@ -153,6 +153,13 @@ os88_drv_foot equ 1
 %endmacro
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
+; A VERB YOU DO NOT IMPLEMENT IS REFUSED: CF = 1, no work done, AL not read
+; (SPEC.md 51.2.2). CF = 0 means "I did it" and the kernel acts on it - TIER's
+; re-publishes SI, HWINFO's becomes a suspend record - so a default `clc` is a
+; false yes to every verb a later kernel adds. Name each verb you handle, then
+; refuse. The two every driver is sent are the exceptions: DETACH cannot fail,
+; and READY with nothing to do answers CF = 0 (its CF = 1 is banked as your
+; row's DRVE_*). tests/unit/t_drvverb.py walks every built driver's dispatch.
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
 DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
 DQ_FLAGS     equ 1              ; db: bit 0 = it went
@@ -204,7 +211,23 @@ DRVV_HWINFO  equ 4              ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11.2).
                                 ; this into something a program acts on - a
                                 ; BLASTER= - and one naming a card that is
                                 ; absent is worse than none at all.
-DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
+DRVV_SLEEP   equ 5              ; THE MACHINE IS GOING AWAY AND COMING BACK
+                                ; (SPEC.md 51.2.5): a hibernate's picture, or
+                                ; the DOS handoff. Sent ONLY to a driver that
+                                ; says OS88_DRV_WAKES, and only by those two.
+                                ; Stop the hardware and unhook every vector -
+                                ; a DOS program gets the machine next - and
+                                ; STAY LOADED: your image and your claims are
+                                ; in the picture. out CF=0; CF=1 = "unload me
+                                ; as before", and nothing was done
+DRVV_WAKE    equ 6              ; ...and it came back: the same image, after a
+                                ; POST or a DOS program. Find the hardware
+                                ; again where SLEEP left it and re-arm it.
+                                ; out CF=0; CF=1 = it is not there, or not the
+                                ; same one, and the kernel then sends DETACH,
+                                ; frees you and loads a fresh copy off the disk
+                                ; - so a refusal must leave DETACH safe to run
+DRVV_TIER    equ 2             ; in AH = how much of yourself the user wants
                                 ; (SPEC.md 34.8); out CF=0 and SI = your
                                 ; service table, which the kernel RE-COPIES
                                 ; because a tier change alters it; CF=1 and
@@ -779,6 +802,17 @@ OS88_DRV_HIBIT equ 0x80
 %else
 OS88_DRV_HIBIT equ 0
 %endif
+; OS88_DRV_WAKES - %define it BEFORE OS88_DRIVER / OS88_OVERLAY to say that
+; this driver answers DRVV_SLEEP and DRVV_WAKE (SPEC.md 51.2.5), so a
+; hibernate or a DOS handoff KEEPS it loaded rather than unloading it and
+; reading it off the disk again at the wake. It is bit 15 of +10, the word
+; written and not read - except by HIBER.DRV, for this bit. Undefined, the
+; header is byte for byte what it was, and the driver is unloaded as ever
+%ifdef OS88_DRV_WAKES
+OS88_DRV_WAKEBIT equ 0x8000
+%else
+OS88_DRV_WAKEBIT equ 0
+%endif
 
 %macro OS88_DRIVER 3-4 DSV_SIZE
     %xdefine OS88_DSV_LEN (%4)
@@ -795,8 +829,10 @@ OS88_DRV_HIBIT equ 0
                             ;     or, in a copy the HMA runs, where it runs
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file, data included
-    dw FSV_SIZE             ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS BUILT
-                            ;     WITH (SPEC.md 62.9.1.1). Written and NOT READ
+    dw FSV_SIZE | OS88_DRV_WAKEBIT ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS
+                            ;     BUILT WITH (SPEC.md 62.9.1.1) - and bit 15,
+                            ;     OS88_DRV_WAKES (51.2.5), the one bit of it
+                            ;     anything reads. The length is written and NOT READ
                             ;     since kernel size pass 19: every file table
                             ;     is FSV_FLOOR long, so no verb is length-
                             ;     tested (D4). Kept because the header is 32
@@ -849,7 +885,9 @@ OS88_DRV_HIBIT equ 0
     dw 0                    ; +4  link base: 0
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file
-    dw %2                   ; +10 the private ABI version its owner checks
+    dw (%2) | OS88_DRV_WAKEBIT ; +10 the private ABI version its owner checks,
+                            ;     and bit 15 OS88_DRV_WAKES for an overlay with
+                            ;     a drv_tab row (VMMOUSE.DRV, SPEC.md 51.2.5)
     db 0FFh, 0D5h           ; +12 the dispatcher: `call bp`...
     db 0CBh                 ; +14 ...`retf`
     db OS88_DRV_HIBIT       ; +15 bit 7: OS88_DRV_HIGHOK, as a driver's

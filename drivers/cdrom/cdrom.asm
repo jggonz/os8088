@@ -100,12 +100,8 @@ cd_entry:
     je cd_detach
     cmp al, DRVV_READY
     je cd_ready
-    cmp al, DRVV_HWINFO         ; "nothing to say": there is no class-9 record
-    cmc                         ; layout (os88drv.inc), so HWINFO and any
-    ret                         ; later verb answer CF = 1, the rest CF = 0
-%if DRVV_DETACH != 1 || DRVV_TIER != 2 || DRVV_READY != 3 || DRVV_HWINFO != 4
-  %error "cd_entry's cmc answers CF = 0 below DRVV_HWINFO and CF = 1 from it"
-%endif
+    stc                         ; TIER, HWINFO and any later verb: REFUSED,
+    ret                         ; with nothing to say (SPEC.md 51.2.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_ATTACH - find the drive (SPEC.md 119.2)

@@ -625,6 +625,19 @@ section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
 ; the gfx lock HELD (sc_modcall's contract).
 
 modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
+%ifdef MOD_CACHE
+    ; THIS COPY IS KEPT AT ITS DROP iff it is the settings core's (MOD_SETS's
+    ; row), never the panel's (SPEC.md 2.8.3): the header word mod_drop reads
+    ; is 0 on the disk, and only here does it become the core's scratch tail.
+    ; Image bytes, not resident ones - the test mod_drop no longer makes
+    push ax
+    mov ax, cs
+    cmp ax, [mod_tab + MOD_SETS * MODR_SIZE]
+    jne .whole                  ; the open panel's copy (sc_modcall's .full)
+    CSDO mov word [CSEG MOD_H_SCR], MODC_SCR
+.whole:
+    pop ax
+%endif
     push bp                     ; wm_cbd takes its routine in BP
     or ah, ah
     jz .new
@@ -1454,8 +1467,41 @@ sc_m_move:
 ; Sticky App rows (SPEC.md 110.2), then held to the same check. It took the
 ; zone the add answered in AH until pass 19, which named nothing the record
 ; did not and cost WIN16 a sixteen-zone probe loop to find its own link.
+;
+; NOT THE SYSTEM DISK IN A: IS A REFUSAL, asked BEFORE anything is removed
+; (SPEC.md 110.5). The remove used to be refused there by the core's own
+; load - no CTRL.DRV to read - and a Sticky App's close declines once on
+; that, so the user can put the disk back. Since SPEC.md 2.8.3 keeps the
+; core, the remove would be served from memory, take the row out of the
+; table and leave it on the system disk for the save that cannot land: the
+; widget closed and came back at the next boot. So the volume is identified
+; first, as the writer does it (KERNEL.SYS in the root, cpc_save), and a
+; refusal says the writer's own verdict - 'Not Saved: No Sys in A:'.
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
+    push bx
+    push cx
+    push dx
+    call COLD_SEG:drvf_drv_vol_bank   ; the BOOT VOLUME, as cpc_save asks it
+    call COLD_SEG:drvf_drv_mounted
+    jc .home
+    CPSTAGE cpc_sysname
+    call COLD_SEG:dwf_dskw_stat ; CF = 1: a disk, but not the system one
+.home:
+    call COLD_SEG:drvf_drv_vol_back   ; (keeps CF)
+    pop dx
+    pop cx
+    pop bx
+    jnc .sys
+    call .say
+    jmp short .no
+.say:                           ; cp_flush_x's own verdict, [cp_dsave] = 1,
+    push ax                     ; in its frame: its kretm_cx is our ret
+    push bx
+    push cx
+    mov bl, 1
+    jmp cp_flush_x.have
+.sys:
     mov es, dx
     mov di, cx
     cmp byte [es:di+SC_R_STIK], SC_STIK
@@ -1930,6 +1976,11 @@ ovl_sc_load:
 ; before the open, which is what the 320 bytes of LNK_SPMIN are for.
 ; =============================================================================
 %macro AS_WALK 0
+    cmp byte [ui_rebootq], 0    ; A RESUME OR ITS CHECK IS POSTED: that image
+    jne .out                    ; IS the session, and a link opened now would
+                                ; run in a session about to be overwritten
+                                ; and could write the disk under the image
+                                ; (SPEC.md 26.10.5, 87.5; stik_boot's test)
     xor bx, bx
     call .go                    ; the boot volume's ROOT
     jc .out
@@ -1953,7 +2004,8 @@ ovl_sc_load:
     jz .out                     ; a FILE called AUTOSTRT starts nothing
     mov dx, bx                  ; DX = the folder, for the whole walk: nothing
                                 ; below writes it, and assoc_run_x preserves
-    xor cx, cx                  ; every register. The ordinal, 0 to start
+    xor cx, cx                  ; every register. The token, 0 to start
+                                ; (SPEC.md 19.7.1.1)
 .next:
     mov bx, dx                  ; stand there again: the open before this one
     call .go                    ; went wherever its link pointed
@@ -1963,8 +2015,8 @@ ovl_sc_load:
     mov di, sp                  ; stack, popped as soon as the name is out -
     push ss                     ; before anything opens, which is what the
     pop es                      ; 320 bytes of LNK_SPMIN are for
-    xor al, al                  ; no hidden or system entries
-    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    mov ax, 0x0100              ; no hidden or system entries, by TOKEN
+    call COLD_SEG:dsk_find_x    ; CX = the next token; CF = the end
     jc .endf
     mov si, di                  ; its 8.3 name, NUL, into the document locator
     push cx                     ; every open reads (SPEC.md 21.5)
@@ -1978,8 +2030,8 @@ ovl_sc_load:
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
                                 ; are left (LNK_SPMIN)
-    xor al, al                  ; no hidden or system entries
-    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    mov ax, 0x0100              ; no hidden or system entries, by TOKEN
+    call COLD_SEG:dsk_find_x    ; CX = the next token; CF = the end
     jc .root
     push cx
     mov si, di                  ; its 8.3 name, NUL, into the document locator
@@ -2081,19 +2133,29 @@ as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
 ; and no widget's worker can make mega_enter decline either.
 %endif
 
-section .modc                   ; ...and the image's own scratch, IN the
-sc_mz       db 0                ; image: a module may write its own bytes
-sc_px       dw 0                ; (MODULE-SELFCONTAIN-PLAN), and its bss
-sc_py       dw 0                ; (`.modcb`) lies past the panel half, which
-sc_ex       db 0                ; a desktop gesture's core-only read stops
-                                ; short of - the claim covers it, the read
-                                ; does not zero it
+; ...and the image's own scratch, IN the image: a module may write its own
+; bytes (MODULE-SELFCONTAIN-PLAN), and its bss (`.modcb`) lies past the panel
+; half, which a desktop gesture's core-only read stops short of - the claim
+; covers it, the read does not zero it. A MACRO, so a kernel that KEEPS a
+; dropped image (MOD_CACHE) can put it in the core's SCRATCH TAIL at the end
+; of `.modc` (kernel.asm, SPEC.md 2.8.3); elsewhere it is emitted here.
+; Defined inside `section .modc` either way: tools/os88ovlchk.py reads the
+; section a data line sits in off the text
+section .modc
+%macro SC_SCRATCH 0
+sc_mz       db 0
+sc_px       dw 0
+sc_py       dw 0
+sc_ex       db 0
 sc_best     dw 0                ; sc_m_cell: the point, the zone it leaves
 sc_bc       db 0                ; out, the nearest distance so far and its
                                 ; cell; sc_m_ser's claim and the rows it holds
 sc_tseg     dw 0
 sc_tcnt     db 0
-
+%endmacro
+%ifndef MOD_CACHE
+    SC_SCRATCH
+%endif
 section .text
 
 %endif                          ; OS88_SHORTCUTS
