@@ -410,6 +410,27 @@ rendered frames `quiet` seconds apart are identical, which an os8088 screen
 only is between events. `launch` uses it with a gate for the boot, and the
 gate is not optional — the two obvious ones are both wrong:
 
+**The window between two captures is RUN, not waited, and the captures are
+taken on a STOPPED guest** (`SETTLE_DET`, the owner's rule that no emulator
+row may depend on host timing). `settle` pauses the machine, reads the
+screen (and `_ui_mark`, and the gate) at one guest instant, `advance`s
+exactly the window's guest cycles, reads again, and resumes the guest when
+it returns. It used to read a RUNNING guest and pace the window by polling
+the cycle counter, so each interval overshot by however long the host took
+to look and each capture landed at a guest moment the host chose: a screen
+that animates on a guest clock - a stopwatch, a seconds field - could settle
+or not depending on the box's load. Now whether it settles is a function of
+the guest alone, on MartyPC, Bochs (whose `advance` is its time breakpoint)
+and 86Box (its `step` in emulated milliseconds) alike. `quiesce` does the
+same. It falls back to the polled path under a `bp_trace` pump (which owns
+the resumes), on a guest that is not running at entry, and on a MartyPC
+recording `MARTYPC_WAV` whose server predates `advance_drains` (see *Audio
+capture*). A breakpoint that stops the guest inside a window is raised at
+once rather than two host seconds later. `OS88_SETTLE_DET=0` is the polled
+path, for an A/B. Measured on the CGA 5150, 360KB: a settle on an idle
+desktop is 0.47 guest seconds every time (the polled path: 1.12-2.12) and
+the boot settle 18.6 guest seconds both runs (polled: 19.9).
+
 - **Stillness alone returns during the BIOS POST**, which sits perfectly
   still for seconds before the floppy is touched (measured: an 8.3-second
   "boot" showing a quarter of the desktop's lit pixels).
@@ -1622,11 +1643,14 @@ assertion — RMS, the Goertzel dominant-frequency scan, `--expect-silence` —
 works against it unchanged. Verified by programming PIT channel 2 for 880 Hz
 through `outb` alone: `sndcheck` reported dominant 891.0 Hz.
 
-**A capture fills only while the machine RUNS.** The server drains each
+**A capture fills only while the machine RUNS** - or, on a server built
+since `ping` answers `advance_drains`, inside an `advance` too: `advance`
+now drains every batch as `run_loop` does, because `settle` spends its
+windows there. On an OLDER server the server drains each
 source's channel after a free-running batch (`run_loop`), and nothing else
 does - so the time a row spends inside `advance(frames=...)` or
 `advance(cycles=...)`, which runs the machine inside one command, is never
-written: the Sound Blaster's `try_send` drops those samples outright and the
+written (and `settle` keeps its polled path under a capture there): the Sound Blaster's `try_send` drops those samples outright and the
 file comes back with **0 samples**, and an OPL's comes back full length and
 **all zero** while the chip plainly played (the driver's `opl_b0` says keyed
 on). ARCADE's sound lost an hour to it (`tests/arcsound.py`): play under
