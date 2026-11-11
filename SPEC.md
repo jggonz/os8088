@@ -227562,7 +227562,10 @@ A:\SYSTEM\APPDATA\NOTES\NOTE0001.TXT  what New makes: the lowest NOTEnnnn free
   clusters) - measured, `os88disk.py --verify`. A folder that is missing (a
   disk not built here, a user who deleted it) is made by the first access
   with `OSAPI_FILE_MKDIR`, one cluster: 14 notes at 512-byte clusters, 30 at
-  1 KB. A full folder says `Notes folder is full`.
+  1 KB. New says `Notes folder is full` when its numbers 1..32 are all in
+  use, or the write answers `FERR_DIRFULL` (a folder that cannot grow:
+  `kern_dos`, a full disk) - since BR-60 the 32 shipped slots are not the
+  limit, the folder growing by a cluster past them (`stiknotevga`'s K).
 - **The text is Note Pad's**: CR LF line ends (a lone CR or LF reads as one),
   and a byte outside 32..126 is not drawn and takes no cell - `np_nlfold`
   drops it. **Line 1 is the TITLE.**
