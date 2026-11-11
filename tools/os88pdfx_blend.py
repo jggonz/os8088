@@ -189,6 +189,14 @@ def check(d, harness, bank, shots=None):
             side = np.concatenate([o[drawn], np.full((df.shape[0], 4), 128), po[drawn], np.full((df.shape[0], 4), 128), mu[drawn],
                                    np.full((df.shape[0], 4), 128), 255 - np.clip(df * 4, 0, 255)], axis=1)
             Image.fromarray(side.astype("uint8")).save(os.path.join(shots, n + ".png"))
+    # the region asked for and never granted (the ask budget spent: PDR_XASKS=0 on the host): the masked image
+    # and the alpha marks draw opaque, so the page MUST say so (APPROX, 0x0400) - QA KBMIDI2, rcore's finding
+    for n in ("image", "alpha"):
+        r = subprocess.run([harness, "render", os.path.join(d, n + ".pdf"), "0", "100", "0", "4", "1/1", str(W), str(H), "0", "0",
+                            os.path.join(tmp, n + ".x.ppm"), bank], capture_output=True, text=True,
+                           env=dict(os.environ, PDB_NOX8="1", PDR_XASKS="0"))
+        ok = "incomplete=0x0400" in (r.stdout + r.stderr)
+        print("%-12s %s (region never granted: Incomplete, not silent)" % (n, "ok" if ok else "FAIL")); rc = rc or (0 if ok else 1)
     return rc
 
 if __name__ == "__main__":
