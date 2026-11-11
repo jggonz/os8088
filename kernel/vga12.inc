@@ -3854,35 +3854,34 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 %ifdef KHP_VGAFILL
-    shr bx, 1                   ; WORDS, vga_solid_rect's shape (SPEC.md
-    jc .orow                    ; 5.7.2): a row is ONE dither byte, so AL =
-.irow:                          ; AH is the word, and the odd byte is the
-    mov al, ah                  ; loop's, chosen once
-%else
-.irow:
-    mov al, ah
-%endif
-    mov cx, bx
-%ifdef KHP_VGAFILL
-    rep stosw
-%else
-    rep stosb
-%endif
-    add di, dx
-    not ah
+    mov al, ah                  ; WORDS, vga_solid_rect's shape (SPEC.md
+    shr bx, 1                   ; 5.7.2): a row is ONE dither byte, so AL =
+    jc .orow                    ; AH is the word, and the odd byte is the
+.irow:                          ; loop's, chosen once. AX is the word for
+    mov cx, bx                  ; good: `not ax` turns both halves a row,
+    rep stosw                   ; where a `mov al, ah` a row copied it back
+    add di, dx                  ; (the size pass that turned the knob on
+    not ax                      ; for kern_big: -2 bytes, 8 cycles a row)
     dec si
     jnz .irow
-%ifdef KHP_VGAFILL
     jmp short .reset
 .orow:
-    mov al, ah
     mov cx, bx
     rep stosw
     stosb
     add di, dx
-    not ah
+    not ax
     dec si
     jnz .orow
+%else
+.irow:
+    mov al, ah
+    mov cx, bx
+    rep stosb
+    add di, dx
+    not ah
+    dec si
+    jnz .irow
 %endif
 .reset:                         ; its OWN teardown, and not vga_solid_rect's
     call vga_gc_reset           ; through a jump (-5) as gfx_fill_pat's is:
