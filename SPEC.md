@@ -105004,12 +105004,42 @@ taken with the declared drivers ASLEEP and loaded; `hbm_down`'s
 `drv_shutdown` after the picture detaches them as it detaches the disk
 driver, which changes nothing the picture holds.
 
-**Not kern_mega.** Its drivers run above 1MB (`OS88_DRV_HIGHOK`, `_HICLAIM`):
-a kept `ETHER.DRV` and its socket pool would be pool blocks the picture's
-extended section must carry, each a run against `HBX_HMAX` (§87.9) on a
-hibernate that fitted before, and the park (§96 on kern_mega) restores
-nothing it would save. `HBM_KEEPS` is undefined there and that kernel's
-sweep is today's, byte for byte.
+**kern_mega too** (the owner: *"Mega needs general feature parity"*).
+`HBM_KEEPS` is defined on every kernel with a hibernate, and each of
+kern_mega's three routes carries a kept driver as it stands:
+
+- **The DOS park** (§96 on kern_mega) leaves the pool where it is, puts the
+  HMA back from its save, restores conventional memory, and since
+  `[mega_dparked]` skips `hbm_down`'s `drv_shutdown` - so a kept driver's
+  image, claims and selectors are exactly as SLEEP left them when the trip
+  comes home, and `hbm_wake` wakes them. It costs the park nothing: the
+  in-use pool is never copied, and nothing runs a sleeping driver's code to
+  move the in-place sum the park checks.
+- **The image** (§87.9, a hibernate or a `Save the session` trip) carries
+  every pool block in use in its extended section - a kept `ETHER.DRV`'s
+  image (~17KB) and its socket pool (up to ~16.5KB) among them, written,
+  summed and read again each trip: ~34KB, **~0.1-0.3 s PREDICTED on a 286's
+  hard disk**, against the reload it replaces (the file, its decode, the
+  probe and READY's DHCP wait of 0.2-6 s). It would have cost RUNS as well -
+  one per block, against `HBX_HMAX` = 62 where a full `INST_MAX` is ~60 - so
+  `hbm_xplan` lists the pool by CONTIGUOUS SPAN, not by block: a block some
+  other block ends exactly at is that block's run's tail, so only a span's
+  head starts a run, grown block by block. Every hibernate on kern_mega
+  spends fewer runs for it, kept drivers or not; the resume's stub and
+  `hbm_xruns` already take any whole-KB run inside the pool.
+- **A refused write's unwind** (`hbm_reload`) wakes what it put to sleep,
+  as on every kernel.
+
+`PCIETHER.DRV`'s ring was the other obstacle, and is fixed on every kernel:
+SLEEP's stop is `nic_sleep` (`rt_halt` - the bus master off and the chip
+reset, the ring, its window and its claim KEPT), and WAKE's `rt_claim`
+finds `[rt_seg]` standing and claims nothing, so `rt_init` points RBSTART
+at the same ring. It used to free the ring at SLEEP and claim a fresh one at
+WAKE, which on kern_mega leaked one per trip: a boot claim is named by its
+paragraph, and `OSAPI_MEM_FREE` cannot find it under protected mode. The
+ring is `MEMP_CONV` and pinned (§125.4), so it is in every picture and no
+compaction moves it while the card sleeps. `ETHER.DRV`'s 8390 holds no
+memory of its own, so its `nic_sleep` is `nic_stop`.
 
 **Who declares it, and what each wake does** (B4, docs/plans/B4-WAKE-PLAN.md):
 
@@ -162530,7 +162560,8 @@ of its pass with nothing held, in `hbm_perform`:
    row: sound, the NIC; never the VESA renderer's row, §120.4), recording the
    rows in `[hb_drvmask]` - **unless the driver declares `OS88_DRV_WAKES`**
    (§51.2.5): that one is sent `DRVV_SLEEP` and KEPT, noted in the module's
-   `[hbm_kept]`, and only a refused SLEEP is detached (not kern_mega). Their hardware state
+   `[hbm_kept]`, and only a refused SLEEP is detached (every kernel, kern_mega's
+   included). Their hardware state
    cannot cross a power cycle and their claims would be restored to addresses
    a fresh boot has given to somebody else; the disk driver, the parallel
    cable and the RAM disk own no hardware the BIOS does not already own, and
@@ -162986,7 +163017,7 @@ size pass 2) as one range (`[mega_tbllin]`, `[mega_ldtend]` +
 which a restore requires exactly - an image from before it, or from a machine
 whose RAM puts the tables elsewhere, is refused; `.cold`'s copy is not in it, being a
 code selector whose bytes are `KERNEL.SYS`'s), and every `mx_tab` block in
-use is one more - the keyboard mouse's adopted pointer half (§2.8.8) among
+use is in one more (a run per contiguous span, below) - the keyboard mouse's adopted pointer half (§2.8.8) among
 them on a mouseless machine, `mod_hiboot` having moved it above 1MB at the
 switch. They go down through a 32KB conventional bounce claimed
 AFTER the picture, so the image does not hold it, and Fletcher's sums are
@@ -163008,7 +163039,10 @@ when it could not. The same refusal when the runs are more than the head can
 list: 12 bytes and then 8 a run in its one sector is **`HBX_HMAX` = 62**, run
 0 among them, where `mx_tab` holds 96 blocks — past it run 0's bytes, which
 start at the head's byte 512, would overwrite the list's tail and the image
-would be written and refuse its own resume.
+would be written and refuse its own resume. **A run is a contiguous SPAN of
+in-use blocks, not a block** (§51.2.5): only a block no other block ends at
+starts one, grown through every block that starts where it ends, so a
+compacted pool is a handful of runs whatever its block count.
 
 **The write is one bar** (§12.8.8): `hbm_wrimg` opens an in-hold operation of
 exactly what it writes - the conventional chunks, chunk 0 a second time, the
@@ -195196,8 +195230,8 @@ drive, kern_emu's absolute pointer - was put to SLEEP rather than unloaded
 before the picture and is WOKEN before the paint, with `ETHER.DRV` keeping
 its lease rather than sitting through READY's DHCP (§72.5.3); and what
 still has to be read off the disk is read behind the busy pointer rather
-than behind a desktop that looks ready. Not kern_mega, whose park restores
-nothing it would save (§51.2.5).
+than behind a desktop that looks ready. kern_mega's park route lands in
+`hbm_wake` too and wakes them the same way (§51.2.5).
 
 **MEASURED: 996 bytes, and this one crosses the rung.** The image goes 35,476
 → 36,472, `KD_IMG_KB` 35 → 36, and the DOS program **585 KB → 584**. 392 bytes

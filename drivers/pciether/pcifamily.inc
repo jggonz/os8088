@@ -13,6 +13,7 @@ pce_init:   jmp [pce_vt + PCEV_INIT]
 pce_rx:     jmp [pce_vt + PCEV_RX]
 pce_tx:     jmp [pce_vt + PCEV_TX]
 pce_stop:   jmp [pce_vt + PCEV_STOP]
+pce_halt:   jmp [pce_vt + PCEV_HALT]
 
 ; -----------------------------------------------------------------------------
 ; pce_find - probe the bus, take the first card pce_tab knows, load its
@@ -40,7 +41,7 @@ pce_find:
     mov [pce_vt+bx], ax
     inc bx
     inc bx
-    cmp bl, PCEV_STOP + 2
+    cmp bl, PCEV_HALT + 2
     jb  .cp
     call [pce_vt + PCEV_CLAIM]  ; ...and its memory
 .out:
