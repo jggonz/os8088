@@ -1031,8 +1031,10 @@ zi_load:
                                     ; bytes went somewhere else (KERN-MEGA-PLAN
                                     ; 14.13)
     mov bx, [zf_win]
-    mov ax, zi_name
-    call OSAPI_WM_TITLE
+    mov ax, zi_story                ; zi_STORY, not zi_name: the record keeps
+    call OSAPI_WM_TITLE             ; the POINTER (OSAPI_WM_TITLE), and every
+                                    ; dialog answer since overwrote zi_name -
+                                    ; a save retitled the window ZRS2.SAV
 
     mov byte [zf_state], ZFS_RUN
     mov word [zf_why], 0            ; the last refusal is history now
