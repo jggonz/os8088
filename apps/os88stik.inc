@@ -332,11 +332,6 @@ stik_d_onclose  equ os88_stiklib + STKL_D_ONCLOSE
 stik_d_sizeup   equ os88_stiklib + STKL_D_SIZEUP
 stik_d_pack     equ os88_stiklib + STKL_D_PACK
 stik_d_unpack   equ os88_stiklib + STKL_D_UNPACK
-stik_d_click    equ os88_stiklib + STKL_D_CLICK
-stik_d_mup      equ os88_stiklib + STKL_D_MUP
-stik_d_tick     equ os88_stiklib + STKL_D_TICK
-stik_d_close    equ os88_stiklib + STKL_D_CLOSE
-stik_d_wake     equ os88_stiklib + STKL_D_WAKE
 stik_xcp        equ os88_stiklib + STKL_XCP
 stik_dsys       equ os88_stiklib + STKL_DSYS
 stik_dapp       equ os88_stiklib + STKL_DAPP
@@ -973,30 +968,19 @@ stik_made:
     jnc .cb                     ; hidden and nobody's yet (SPEC.md 11.103.9)
     and byte [stik_wf], ~STIK_W_DESK & 0FFh   ; refused: painted as titled
 .t:
-    mov al, 1
-    call OSAPI_WM_OWNBG         ; every pixel is ours (OSAPI_WM_DAMAGE wants it)
-%ifdef STIK_COLOR
-    mov al, OSAPI_SAVEU_ON      ; ...in the colours it is drawn in: a widget
-%else                           ; whose cards are not two-colour (STIK_COLOR,
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP   ; Sticky Note's papers) keeps
-%endif                          ; four planes; the rest two, as v1
-    call OSAPI_WM_SAVEU
+    mov ax, WFB_OWNBG * 256 + 1 ; every pixel is ours (OSAPI_WM_DAMAGE wants it)
+    call OSAPI_WM_FLAG
+%ifndef STIK_COLOR              ; ...in the colours it is drawn in: a widget
+    mov ah, WFB_1BPP            ; whose cards are not two-colour (STIK_COLOR,
+    call OSAPI_WM_FLAG          ; Sticky Note's papers) keeps four planes; the
+%endif                          ; rest two, as v1
+    mov ah, WFB_SAVEU
+    call OSAPI_WM_FLAG
 .cb:
 %endif
-%ifdef STIK_LIBRARY              ; (the package's thunks: a callback is a
-    mov ax, [stik_d_click]      ; near proc in ITS segment, SPEC.md 20.2)
-    call OSAPI_WM_ONCLICK
-    mov ax, [stik_d_mup]
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, [stik_d_wake]
-%else
-    mov ax, stik_click
-    call OSAPI_WM_ONCLICK
-    mov ax, stik_mup
-    call OSAPI_WM_ONMOUSEUP
-    mov ax, STIK_WAKE           ; the hover edge's wake - and kern_small's
-%endif
-    call OSAPI_WM_ONWAKE        ; worker kick, which stik_wake tells apart
+                                ; (the click, the release, the wake, the tick
+                                ; and the close are the PACKAGE's class's -
+                                ; STIK_CLASS below names them, SPEC.md 11.104)
     mov byte [stik_tagp], STIK_P_NONE
     call OSAPI_GET_TICKS
     mov [stik_tbeat], ax         ; the first beat is due at once
@@ -1035,26 +1019,13 @@ stik_made:
     call stik_hdr               ; save would pair this place with the old
                                 ; screen; STIK_HF_POS is left as the file had
                                 ; it, so a close still writes a missing file
-%ifdef STIK_LIBRARY
-    mov ax, [stik_d_tick]
-    call OSAPI_WM_ONTIMER
-    mov ax, [stik_d_close]
-%else
-    mov ax, stik_tick
-    call OSAPI_WM_ONTIMER
-    mov ax, stik_close
-%endif
-    call OSAPI_WM_ONCLOSE
     mov ax, 1                   ; the first tick: the window is up by then
     call OSAPI_WM_TIMER         ; CF = 1: kern_small, which has no timer -
 %ifndef STIK_DESKONLY           ; the WORKER ARM (SPEC.md 110.5.2): the
     jnc .tm                     ; first paint hires it, and its wake is
-    or byte [stik_st], STIK_S_WORKER ; the tick - a widget's W_ONWAKE is
-%ifndef STIK_WIDGET             ; STIK_WAKE already (above), which
-    mov ax, stik_wake           ; reaches stik_wake, and stik_wake reads
-    call OSAPI_WM_ONWAKE        ; STIK_S_WORKER (SPEC.md 110.11)
-%endif
-.tm:
+    or byte [stik_st], STIK_S_WORKER ; the tick - the class's WC_ONWAKE is
+                                ; STIK_WAKE, which reaches stik_wake, and
+.tm:                            ; stik_wake reads STIK_S_WORKER (110.11)
 %endif
     jmp stik_pop_8
 
@@ -1483,7 +1454,7 @@ stik_close:
     push ds
     pop es
     mov si, stik_rec
-    mov ax, 0xFF00              ; AL = 0 remove, AH = 0xFF: by NAME
+    xor al, al                  ; AL = 0 remove: the record names the row
     call OSAPI_DESK_ITEM
     jnc .gone
     test byte [stik_fl], STIK_F_KEPT

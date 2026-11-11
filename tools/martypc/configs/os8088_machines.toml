@@ -341,7 +341,7 @@ overlays = [
 # has a floor of its own, and nothing has ever squeezed one.
 #
 # It is also the only way to audit the PINNED boot claims honestly
-# (docs/plans/KERN-SMALL-CUT-PLAN.md 8.2): a claim standing on a bare desktop is
+# (docs/plans/retired/KERN-SMALL-CUT-PLAN.md 8.2): a claim standing on a bare desktop is
 # heap the machine never gets back, no assembler can see it, and its cost is
 # only real against the heap a 128KB machine actually has.
 #

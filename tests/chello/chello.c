@@ -387,11 +387,16 @@ void os88_onkey(int ascii, int scan, void *win)
  * published. Create the window and return it; 0 aborts the launch and the
  * runtime turns that into the CF the loader is owed. Do not draw here - the
  * loader shows the window, which paints it. */
+static struct os88_class ch_cls = {
+    OS88_CLASS_LEN, 0,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
 void *os88_main(void)
 {
     void *win;
 
-    win = os88_wm_create(CH_X, CH_Y, CH_W, CH_H, "C Hello");
+    win = os88_wm_create(CH_X, CH_Y, CH_W, CH_H, "C Hello", &ch_cls);
     if (win == 0)
         return 0;
 
@@ -399,7 +404,6 @@ void *os88_main(void)
      * the single-store path on the two 1bpp adapters (SPEC.md 6.1, 11.94). A
      * no-op on VGA, so it is asked for unconditionally rather than after a
      * question about the adapter. */
-    os88_wm_snap(win, 1);
 
     /* THE CLAIM IS SIZED FROM THE MACHINE and not from a constant, because
      * this file runs on the 128KB floor too (SPEC.md 24.5). A refusal is not

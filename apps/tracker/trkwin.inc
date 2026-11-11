@@ -3228,7 +3228,7 @@ tw_a_viz:
 ; given back when it is anything else (SPEC.md 45.21.5.1). The UI task, lock
 ; held: a button's action. A refused claim moves the pick ON - Scope is
 ; skipped, AL = TWV_OFF - rather than offering a mode with nothing to draw
-; it in. Keeps every register but AL
+; it in. Keeps every register but AL and BX (OSAPI_MEM_P's verb)
 tw_scmem:
     push dx
     cmp al, TWV_SCOPE
@@ -3236,8 +3236,9 @@ tw_scmem:
     cmp word [tw_scseg], 0
     jne .out                        ; (already held)
     push ax
-    mov ax, TW_SCKB
-    call OSAPI_MEM_CLAIM            ; DX = the band
+    mov ax, TW_SCKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the band
     jc .none
     mov [tw_scseg], dx
     mov ax, trk_reloc               ; movable: trk_reloc knows this word too

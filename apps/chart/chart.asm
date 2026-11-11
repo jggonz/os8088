@@ -170,8 +170,9 @@ ct_entry:
                                         ; states - it decides which arithmetic
                                         ; the session gets, and nothing else
                                         ; here can recover from it being wrong
-    mov ax, CT_CLAIM_CHART_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, CT_CLAIM_CHART_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [ct_chartseg], dx
     mov es, dx                          ; copy the constant 118-byte BMP
@@ -203,10 +204,6 @@ ct_entry:
     OS88_REGION_MOVABLE
     mov si, ct_menus
     call OSAPI_MENU_SET                 ; preserves CF (SPEC.md 20.3)
-    mov si, ct_about                    ; ...and 'About Chart' above its Close
-    call OSAPI_ABOUT_SET                ; (SPEC.md 12.2), which every other
-                                         ; package in the tree declares and
-                                         ; this one did not
     mov dx, [ct_chartseg]               ; ...AND THE CANVAS MOVES (NO-PINNING
     mov ax, ct_reloc                    ; A3, SPEC.md 82.14.1): ct_reloc's
     call OSAPI_MEM_MOVABLE              ; header. Declared once the window
@@ -454,7 +451,7 @@ ct_oncmd:
 
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; ct_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2). SI = our
+; ct_about - the WC_ABOUT handler (SPEC.md 11.104). SI = our
 ; window on entry; the UI task, gfx lock held.
 ;
 ; IT WAS A TOAST, on the argument that "an About is one line here" and that a
@@ -625,17 +622,19 @@ ct_stage:
     ja .rerr
 .claim:
     mov ax, dx                          ; AX = the KB the file needs, plus
-    inc ax                              ; the one under CT_FOFF for the series
-    call OSAPI_MEM_CLAIM                ; - and the claim leaves AX alone
-    mov si, ct_s_nomem                  ; (every slot preserves all but its
-    jc .out                             ; outputs)
+    inc ax                              ; the one under CT_FOFF for the series,
+    mov cl, 6                           ; in paragraphs - and the claim answers
+    shl ax, cl                          ; them, exactly (a multiple of 64)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    mov si, ct_s_nomem
+    jc .out
     mov [ct_stgseg], dx
     mov es, dx
-    dec ax
-    mov ch, al                          ; CX = the file's KB * 1024: AX <= 32,
-    xor cl, cl                          ; so it fits a word
-    shl cx, 1
-    shl cx, 1
+    sub ax, 64                          ; CX = the file's KB * 1024: AX <= 32
+    mov cl, 4                           ; KB, so it fits a word
+    shl ax, cl
+    xchg ax, cx
     mov bx, CT_FOFF
     xor dx, dx
     mov si, ct_name
@@ -2078,10 +2077,13 @@ ct_read_dif:
     pop ax
     jmp ct_finalize
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ct_tpl:
     dw 0, 0, CT_WIN_W, CT_WIN_H
-    dw ct_s_title, ct_paint, 0, ct_onclick  ; no onkey; the click is the About
+    dw ct_s_title, ct_cls                   ; no onkey; the click is the About
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ct_cls, 0, PAINT, ct_paint, ONCLICK, ct_onclick, \
+               ABOUT, ct_about
                                         ; card's dismissal and nothing else
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------

@@ -60,16 +60,11 @@ br_copyselection:
     mov ax, 32768
 .cap:
     mov [br_copycap], ax
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; claim only enough KB for this selection
-    or ax, ax
-    jnz .claim
-    inc ax
-.claim:
-    cmp ax, 32                      ; OSAPI_CLIP_PUT's published ceiling
-    ja .out
-    call OSAPI_MEM_CLAIM
+    mov cl, 4                       ; claim only the paragraphs this selection
+    shr ax, cl                      ; needs, and one over (the granule takes
+    inc ax                          ; it): 32KB at most, .maxcap's ceiling
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [br_copyseg], dx
     mov es, dx

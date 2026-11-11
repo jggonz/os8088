@@ -115,11 +115,14 @@ dvw_pfetch:
     xor ah, ah                      ; no floor: the image is the claim
     call dos_pself                  ; DX = the claim, CX = the part's length
     jc .out
-    mov ax, cx                      ; ...and only the image's own KB of it:
-    add ax, 1023                    ; op_self claimed for its read's slack
-    mov cl, 10                      ; too, and a shrink is always in place
-    shr ax, cl                      ; (OSAPI_MEM_REGROW), DX unchanged
-    call OSAPI_MEM_REGROW
+    mov ax, cx                      ; ...and only the image's own paragraphs
+    add ax, 15                      ; of it: op_self claimed for its read's
+    mov cl, 4                       ; slack too, and a shrink is always in
+    shr ax, cl                      ; place (OSAPI_MEM_REGROW), DX unchanged
+    push bx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
+    pop bx
     call dvw_preloc                 ; [dvw_pseg] = DX, and the stubs
     call dvw_relax                  ; movable until a program runs in it
     clc

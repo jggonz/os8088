@@ -346,7 +346,7 @@ def main():
             sys.exit("telzm: TELNET.O88 did not open a window")
         tw = wins2[-1]
         rec = m.read(S("wm_wins") + tw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("telnet at %04X" % pseg)
 
         # **AND IT IS THE PACKAGE THIS BUILD MADE.** telansi.te_syms() proves

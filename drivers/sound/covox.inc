@@ -60,7 +60,8 @@
 ; THE LATCH TEST is drivers/net/lplink.inc's lp_latch, the same test to the
 ; port access: the CONTROL register's bit 5 cleared first (a bidirectional
 ; port left in input mode reads its pins), AAh and then 55h through the data
-; latch, and both registers put back as found. Copied rather than shared
+; latch, and both registers put back - the data latch as found, the control
+; register as found WITH BIT 5 CLEAR (SPEC.md 34.14). Copied rather than shared
 ; because the two drivers are separate images and neither can reach the
 ; other's code - and written in line here, its one caller, as a loop over
 ; the two values (AAh XOR FFh is 55h, whose sign bit ends it). The verdict
@@ -90,8 +91,13 @@ cvx_probe:
     inc dx
     inc dx                          ; DX = the CONTROL register
     in al, dx
-    push ax                         ; what it held, put back below
-    and al, 0xDF
+    and al, 0xDF                    ; direction = OUT, and THAT is what is
+    push ax                         ; put back below - never bit 5 as read
+                                    ; (SPEC.md 34.14): an SPP answers its
+                                    ; unbuilt bit 5 as 1, so restoring the
+                                    ; read value switches a bidirectional
+                                    ; latch to INPUT and the BIOS's next
+                                    ; POST finds no LPT at all
     out dx, al
     dec dx
     dec dx                          ; DX = the DATA register

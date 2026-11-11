@@ -492,7 +492,6 @@ mrl_load:
     mov word [mr_fpara], 0
 .free:
     push bx
-    xor cx, cx
     mov bl, MEMP_CLAIM
     call OSAPI_MEM_P                ; DX = the segment, AX = granted
     pop bx

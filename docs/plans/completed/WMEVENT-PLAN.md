@@ -2,7 +2,7 @@
 
 > **STATUS: `W_ONMOUSEUP` IMPLEMENTED** (SPEC.md §13.7; `kernel/wm.inc`,
 > `kernel/ui.inc`, `kernel/kernel.asm`, `apps/os88api.inc`), gated by
-> `tests/muptest` on all three adapters, at **API 0x0196 — a REUSED retired
+> `tests/muptest` on all three adapters, at **the class slot `WC_ONMOUSEUP` since §11.104 — a REUSED retired
 > cell** (SPEC.md §20.3.1), which is what kept it small: `.text` +141 against
 > 168 left in the image rung, so **the footprint spare is still three steps
 > and that rung has 27 bytes left**. **The §2 withdrawals were NOT done** —
@@ -20,7 +20,7 @@ two lines on top of it.
 ## 1. A correction: the CONTENT/GEOM merge is dropped
 
 When I ranked the tiers I called merging `OSAPI_WM_CONTENT` (0x0098) and
-`OSAPI_WM_GEOM` (0x01B0) *"the real prize"* — 42 + 28 call sites, most of them
+`OSAPI_WM_GEOM` (0x01BC) *"the real prize"* — 42 + 28 call sites, most of them
 paying two crossings for origin-and-size, and a merge that the old freeze
 specifically prevented. **Measured, that is wrong, and it is wrong twice.**
 

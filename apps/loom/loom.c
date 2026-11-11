@@ -67,6 +67,19 @@
  * ==========================================================================*/
 
 #include "os88.h"
+
+/* THE WINDOW'S CLASS (SPEC.md 11.104). Resizable. The content origin is on a
+ * multiple of 8 (the default, WEAVE-SPEC 7.1.2's whole reason): every cell
+ * column is too, and every os88_font_run() takes the single-store fast path
+ * on both 1bpp adapters. The resize notice tells us when the box moves
+ * without anyone proposing it. SPEC.md 75.1's negotiator - a missing one is
+ * the quietest failure there is, a close box that throws away the user's
+ * work in silence. And the WHEEL (SPEC.md 13.18). */
+static struct os88_class lm_cls = {
+    OS88_CLASS_LEN, OS88_WF_SIZABLE,
+    os88_t_paint, os88_t_onkey, os88_t_onclick, os88_t_about, 0,
+    os88_t_onclose, 0, os88_t_onresize, 0, 0, 0, 0, os88_t_onwheel
+};
 #include "../weave/weave.h"             /* WEAVE-SPEC 2's format constants -
                                          * SHARED SOURCE (1.2), which is why
                                          * this reaches into apps/weave/ */
@@ -866,41 +879,18 @@ void *os88_main(void)
      * it. Every number comes off the LIVE screen (SPEC.md 39). */
     os88_video(&v);
     win = os88_wm_create(0, OS88_MBAR_H, v.w,
-                         v.dock_top - OS88_MBAR_H - 1, "Loom");
+                         v.dock_top - OS88_MBAR_H - 1, "Loom", &lm_cls);
     if (win == 0)
         return 0;                       /* the window table is full: abort */
     lm_win = win;
 
     os88_menu_set(win, &lm_menus);
-    os88_about_set(win);
-    os88_wm_sizable(win, 1);
-
-    /* WEAVE-SPEC 7.1.2's whole reason, and an editor is the strongest case
-     * for it in the family: with the content origin on a multiple of 8 every
-     * cell column is too, and every os88_font_run() takes the single-store
-     * fast path on both 1bpp adapters. A no-op on VGA, so it is set
-     * unconditionally rather than after asking. */
-    os88_wm_snap(win, 1);
 
     /* The floor, DECLARED rather than negotiated (SPEC.md 11.100.2): a
      * sidebar of 12 cells plus 20 cells of editor plus the scroll bar, and
      * four rows. This slot takes the OUTER frame - content plus the two side
      * borders, plus the title bar and the line under it. */
     os88_wm_minsize(win, 34 * 8 + 2, 6 * 8 + OS88_TITLE_H + 1);
-
-    /* ...and TELL US when the box moves without anyone proposing it. */
-    os88_wm_onresize(win);
-
-    /* SPEC.md 75.1's negotiator. It is a SIDE TABLE and not a template word -
-     * a missing install here is the quietest failure there is: the C
-     * compiles, the %define in the shim is satisfied, os88_onclose() exists,
-     * and the kernel simply never asks it. The symptom is a close box that
-     * throws away the user's work in silence. */
-    os88_wm_onclose(win);
-
-    /* ...and the mouse WHEEL (SPEC.md 13.18), the same kind of side table.
-     * kern_small has no wheel and the cell does nothing there. */
-    os88_wm_onwheel(win);
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked
      * here and spent in the first paint. os88_arg_file() cannot hand back the

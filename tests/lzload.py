@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88geom  # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88pkg                                         # noqa: E402
 import os88sym                                         # noqa: E402
@@ -164,7 +165,7 @@ def main():
             rec = m.read(S("wm_wins") + after[-1] * dispcp.WIN_SIZE,
                          dispcp.WIN_SIZE)
             raise_disk()
-            pseg = rec[22] | (rec[23] << 8)
+            pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
             # ...AND THE REFERENCE IS COMPRESSED TOO NOW (SPEC.md 20.13.5):
             # every shipped package is, so build/calc.o88 is a FILE and what
             # the guest holds is an IMAGE. Unwrapping is not the same as the

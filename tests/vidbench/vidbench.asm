@@ -79,8 +79,6 @@ vb_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [vb_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
     clc
 .out:
     pop si
@@ -410,12 +408,14 @@ vb_bank:
 vb_load:
     cmp word [vb_dseg], 0
     jne .ok
-    mov ax, VB_DATKB
-    call OSAPI_MEM_CLAIM
+    mov ax, VB_DATKB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .err
     mov [vb_dseg], dx
-    mov ax, 16
-    call OSAPI_MEM_CLAIM
+    mov ax, 16 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .err
     mov [vb_rseg], dx
     push es
@@ -831,7 +831,10 @@ vb_run:
 ; =============================================================================
 vb_tpl:
     dw 7, 22, 632, 448
-    dw vb_ttl, vb_paint, vb_onkey, vb_onclick
+    dw vb_ttl, vb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS vb_cls, 0, PAINT, vb_paint, ONKEY, vb_onkey, \
+               ONCLICK, vb_onclick
 
 vb_ttl:       db 'Video Bench', 0
 vb_f_dat:     db 'VIDBENCH.DAT', 0

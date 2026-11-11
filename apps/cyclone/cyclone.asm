@@ -723,9 +723,13 @@ cy_tpl:
     dw CY_WIN_W + 2                 ; WT_W   - content + the 1px sides
     dw CY_WIN_H + TITLE_H + 1       ; WT_H
     dw cy_title                     ; WT_TITLE
-    dw cy_paint                     ; WT_PAINT
-    dw cy_onkey                     ; WT_ONKEY
-    dw cy_onclick                   ; WT_ONCLICK
+    dw cy_cls                       ; WT_CLASS
+; ...and its CLASS (SPEC.md 11.104): every pixel of the content is ours (the
+; field is black - the kernel's white fill would be a full-content flash on
+; every repaint) and the content origin is snapped, the default, for the HUD's
+; font_run; the About; and the extended desktop's resize notice (39.11)
+    OS88_CLASS cy_cls, WF_OWNBG, PAINT, cy_paint, ONKEY, cy_onkey, \
+               ONCLICK, cy_onclick, ABOUT, cy_about, ONRESIZE, cy_onresize
 
 ; =============================================================================
 ; cy_entry - the package entry point (SPEC.md 20.2)
@@ -799,36 +803,14 @@ cy_entry:
     ; by the row that reads MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
 
-    ; We paint every pixel of our content ourselves - the field is black and
-    ; the kernel's white fill before W_PAINT would be a full-content flash on
-    ; every repaint, which is exactly PERFORMANCE.md's double-draw defect.
-    mov al, 1
-    call OSAPI_WM_OWNBG
-
     ; Aim by lane, not by pixel: the arrow is the wrong pointer over a tube.
     mov al, OSAPI_CUR_CROSS
     call OSAPI_WM_CURSOR
-
-    ; The content origin on a multiple of 8 earns font_run's single-store
-    ; path for the HUD (SPEC.md 6.1) - the strip is the only text drawn
-    ; during play and it is drawn on every score change.
-    mov al, 1
-    call OSAPI_WM_SNAP
 
     call cy_pal                     ; the inks for the display we opened on
     mov bx, [cy_win]                ; both take BX explicitly rather than
     mov si, cy_menus                ; trusting six intervening slots to have
     call OSAPI_MENU_SET             ; left it alone
-    mov bx, [cy_win]
-    mov si, cy_about
-    call OSAPI_ABOUT_SET
-
-    ; "Your content box CHANGED and you did not ask" - the extended-desktop
-    ; case (SPEC.md 39.11): a window moved between a CGA and a Hercules
-    ; changes size without a resize, and the whole playfield is derived from
-    ; that box. We may not draw in it, so it only marks.
-    mov ax, cy_onresize
-    call OSAPI_WM_ONRESIZE
 
     ; Arm the key-state map (SPEC.md 9.7). Asking is what arms it, and the
     ; first answer is always "up" - so ask now and throw it away, or the

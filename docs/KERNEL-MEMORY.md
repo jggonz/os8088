@@ -750,8 +750,8 @@ the safe direction; `SS_TSTATE` is `MAX_TASKS` bytes.
 `.lowbss` (`kernel/dskwin.inc`, SPEC.md §2.1.2):
 
 - `dsk_secbuf`, 512 B — one sector of scratch, written by int 13h through
-  ES:BX. First, because it is the int 13h target and takes the rung's
-  512-aligned base.
+  ES:BX. First, because it is the int 13h target and guard 6 proves the
+  rung's first 512 bytes stay inside one 64KB page.
 - `dsk_ovlpad` — **0 on `kern_big`, `kern_small` and `kern_emu` alike**, and
   non-zero only under `KERN_KNOB`, where a diagnostic joins `.ovl` and
   needs a rung to spill into. It is the boot overlay's landing ground and
@@ -814,26 +814,35 @@ the room, and never asked for unless `mem_avail` reports twice their size.
 
 ## Two invariants that are easy to break
 
-### Every disk-visible base is 512-byte aligned
+### No disk transfer straddles a 64KB page
 
 int 13h moves one sector per call, which bounds a transfer to 512 bytes —
-but **does not stop one from straddling a 64KB physical boundary**. Only
-starting on a 512-byte boundary does that, and the DMA controller answers a
-straddle with error 09h. The symptom is a **"Disk error" toast on any save
-larger than the distance from the buffer to the next 64KB boundary**: Paint's
-63KB BMP hits it immediately, a Note Pad text file never does.
+but **does not stop one from straddling a 64KB physical boundary**, and the
+DMA controller answers a straddle with error 09h. The symptom is a **"Disk
+error" toast on any save larger than the distance from the buffer to the
+next 64KB boundary**: Paint's 63KB BMP hits it immediately, a Note Pad text
+file never does.
 
-Every base an int 13h transfer can land on — the FAT window, `dsk_secbuf`,
-a package image being loaded, a package's file buffer out of the heap — has
-to be 512-aligned, so the image rung and the FAT window stay whole 512-byte
-steps (`FAT_PARA` is a multiple of 32 paragraphs) and `FAT_SEG` and `LOW_SEG`
-sit on them. Above that, `LADDER_PACK` (every kernel but kern_mega) rounds the
-top of `.lowbss`, `.vga`, `.cold` and `.vgabuf` only to the paragraph, none of
-them being a transfer target, `KERN_END` alone rounds to 512, and
-`mem_floor_ax` rounds a lower heap floor up at run time. Guard 6 proves the ladder, guard
-2d the decoder rung, and guard 6b the heap: `mem_claim` rounds every size to
-`MEM_GRAN` paragraphs (512 bytes), so every base it hands out is the floor,
-the top or a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
+Starting on a 512-byte boundary is the way to rule a straddle out for a base
+nobody knows until run time, so `KERNEL_SEG` (where the boot reads land),
+`HEAP_SEG` and every heap claim are 512-aligned: guard 6 proves the first
+two, and guard 6b the heap — `mem_claim` rounds every size to `MEM_GRAN`
+paragraphs (512 bytes), so every base it hands out is the floor, the top or
+a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
+
+**The two FIXED windows are proved directly instead** (kernel size pass 19):
+the FAT window at `FAT_SEG` and `dsk_secbuf` at `LOW_SEG:0` are
+assembly-time constants, so guard 6 asserts that each lies inside ONE 64KB
+page, which is the fact the alignment only stood in for. That let the image
+stop rounding to 512 — `KIMG_PARA` is paragraphs (kern_mega: its 128-byte
+selector granule) — and with `LADDER_PACK` rounding `.lowbss`, `.vga`,
+`.cold` and `.vgabuf` to the paragraph too, **`KERN_END` is the ONE rounding
+left on kern_big, kern_small and kern_emu**; `mem_floor_ax` rounds a lower
+heap floor up at run time. The image pad it removed was 0-511 bytes a build
+(208 on kern_big and 128 on kern_small the day it went), ABI-BREAK-LIST L1's
+whole saving with `KERNEL_SEG` left where it was. If the image ever pushes
+the FAT window across 0x10000, guard 6 says so: round `FAT_SEG` up to the
+page, never the image back to 512.
 
 ### The boot sector has to get out of the way
 
@@ -1148,7 +1157,7 @@ moves with it so the file sector does not), and its window has the 1,024-byte
 `DSK_OVLPAD` (a kern_small knob build puts the mouse probe there, kern_big's
 arrangement). Neither reaches a shipped byte.
 
-`.ovl`'s bound is the window: docs/plans/KERN-SMALL-CUT-PLAN.md §7 is why
+`.ovl`'s bound is the window: docs/plans/retired/KERN-SMALL-CUT-PLAN.md §7 is why
 `kern_small`'s two-sector FAT window could not be taken until the clock ladder
 was gated out of that half. `tools/os88ovlchk.py` is the gate for both, and
 rule 2e is the one that bit: nothing in `.ovl` may be called after the mount,
@@ -1499,10 +1508,10 @@ answer for anything a single driver consumes.
 | feature/dia merged onto main `b47de145` (SPEC.md 110, 11.103), NOT blessed: the whole Sticky App kernel half against main's baseline is big/emu `.text` **+190** `.cold` **+344** `.bss` 0 and small `.text` **+18** `.cold` **+32** - main's size pass had left kern_big and kern_emu with **0** bytes of cold rung, so both CROSS it (75 -> 76 steps, footprint +512: big 98,816 -> 99,328 of 100,864, emu 99,328 -> 99,840); kern_big image 22 left, kern_emu image 275 left; kern_small no rung crossed (image 382 / cold 54 left). An owner's decision, not a build fix | unchanged | +512 (big, emu) |
 | **the owner ACCEPTED one 512-byte `.cold` step on kern_big and kern_emu (2026-10-15)**, with `DESK.DRV`, the desk layer's code as an on-demand module (SPEC.md 11.103.10): `osapi_wm_desk_x`'s MAKE/DRAG/RELEASE, the hover edge's body, `wm_show_desk` and `fdlg_top_x`'s desk arm into the image (`MOD_DESK` 7, 4 slots, 235 bytes, a 1 KB claim held from the first QUERY until restart); `stik_boot` stays resident (SPEC.md 110.4, 110.9). Against the merge: big/emu `.text` **-3** `.cold` **-163** `.bss` **+16**. Against main `b47de145`: big/emu `.text` +187 `.cold` +181 `.bss` +16, small `.text` +18 `.cold` +32 (unchanged by the cut). Cold rung 75 -> 76 steps on big and emu, **331** bytes left in it; kern_big image **9** left (212 on main), kern_emu image 262; kern_small no rung crossed (image 382 / cold 54). Footprint big 98,816 -> **99,328** of 100,864 (3 steps spare), emu 99,328 -> **99,840** (2 spare). No second step, no image rung, `KERN_BUDGET`/`KERN_CODE_MAX` untouched. Blessed on all three. The 360 KB system disk: 343 of 354 clusters, 11 left (12 before) | unchanged | +512 (big, emu), accepted |
 | Sticky App module-cut review fixes, INSIDE the accepted step (SPEC.md 11.103.10): `desk_need` saves and restores `drv_vol_cwd`/`drv_vol_drv` round `mod_need MOD_DESK`, because the load's bracket nests inside `sc_open`'s and the pair is one static (a relaunched widget left the machine in `STIKAPPS`, or mounted on B:); the loader's step 5 calls it for an `OS88_F_DESK` package BEFORE the region claim, so the pinned 1 KB lands above the widget, not under it; QUERY's thunk calls it. big/emu `.cold` **+23** (desk_need 24, the step-5 call 3, the thunk -4), `.text`/`.bss` 0; cold **308** left in the accepted 76th step on both; kern_big image **9** left, unchanged; kern_small byte for byte unchanged. No rung crossed on any kernel. Blessed on all three | unchanged | unchanged |
-| feature/dia merged onto main `70df8a99` (#249's `OSAPI_THM_SET` at `0x046D`; the Sticky App cells move to `0x0475`/`0x047B`/`0x0481`, SPEC.md 20.3), NOT blessed: against main's own baseline the Sticky App kernel half is big/emu `.text` **+187** `.cold` **+204** `.bss` **+16**, small `.text` **+18** `.cold` **+32**. Main's #249 had left kern_big's IMAGE rung at **9** bytes (49,143 of 49,152), so kern_big CROSSES it, 96 -> 97 steps (49,346, 318 left), ON TOP of the accepted cold step (75 -> 76, 308 left): footprint 98,816 -> **99,840**, +1,024, 2 steps spare. kern_emu crosses only the accepted cold step (image 262 -> 59 left; footprint 99,328 -> 99,840). kern_small crosses nothing (image 391 -> 373, cold 86 -> 54). **The image step is the owner's decision**: 194 bytes of `.text`+`.bss` off kern_big un-cross it | unchanged | +1,024 (big), +512 (emu) |
+| feature/dia merged onto main `70df8a99` (#249's `OSAPI_THM_SET` at `0x0214`; the Sticky App cells move to `0x0475`/`0x047B`/`0x0481`, SPEC.md 20.3), NOT blessed: against main's own baseline the Sticky App kernel half is big/emu `.text` **+187** `.cold` **+204** `.bss` **+16**, small `.text` **+18** `.cold` **+32**. Main's #249 had left kern_big's IMAGE rung at **9** bytes (49,143 of 49,152), so kern_big CROSSES it, 96 -> 97 steps (49,346, 318 left), ON TOP of the accepted cold step (75 -> 76, 308 left): footprint 98,816 -> **99,840**, +1,024, 2 steps spare. kern_emu crosses only the accepted cold step (image 262 -> 59 left; footprint 99,328 -> 99,840). kern_small crosses nothing (image 391 -> 373, cold 86 -> 54). **The image step is the owner's decision**: 194 bytes of `.text`+`.bss` off kern_big un-cross it | unchanged | +1,024 (big), +512 (emu) |
 | **the owner decided "cut first, else accept" for that image step (2026-10-15), and the cut reached it: the step was NOT taken.** SPEC.md 76.14.14.1 moves #249's theme set path - `thm_set` (158 B), `api_thm_set_x` (33) and `thmv_reap_x` (32) - into `.cold`, leaving the 6-byte `api_thm_set` thunk the 8-byte SLOT cell needs, two new 4-byte shims (`cw_dock_force`, `cw_wm_su_drop_all`) and deleting `cw_thm_set`; `menu_force`'s one store is written inline. Against the merge: big/emu `.text` **-209** `.cold` **+229**, kern_small byte for byte unchanged (no theme). Against main `70df8a99`: big/emu `.text` **-22** `.cold` **+433** `.bss` **+16**, small `.text` +18 `.cold` +32. kern_big image **15** left (main 9) - no image step; cold **79** left in the accepted 76th step on big and emu - no second cold step; kern_emu image 268; kern_small image 373 / cold 54. Footprint big 98,816 -> **99,328** (3 steps spare), emu 99,328 -> **99,840** (2 spare): the accepted cold step and nothing else. `KERN_BUDGET`/`KERN_CODE_MAX` untouched. Blessed on all three | unchanged | +512 (big, emu), accepted |
 | Locator's Sticky Apps menu (SPEC.md 110.12), NOT blessed: `STIKMENU.DRV` (`MOD_STIKM` 8, 2 slots, 3,222 bytes on the disk, a 7,473-byte image and an 8 KB claim from the press to the act) - resident, the `Sticky Apps` title and its two set entries, `menu_track`'s three-instruction test, `CMD_STIK` and its handler, the module's row and name, the two cold thunks; and the Sticky App CARD's step in both clear-prefix ladders (flags bit 7, all three kernels). Against main `a123653b` built alongside: big and emu `.text` **+72** `.bss` **+8** `.cold` **+47**, small `.cold` **+8**. No rung crossed: kern_big image 352 -> **272**, cold 125 -> **78**; kern_emu image 93 -> **13**, cold 125 -> 78; kern_small image 429, cold 54 -> 46. The 360 KB system disk 345 -> 349 of 354 clusters, then 346 with Mines off it (SPEC.md 24.3.1.3) | unchanged | unchanged |
-| VESA, the packed display (SPEC.md 120), NOT blessed: `VID_VESA` and the `VIDEXT` hooks at every planar body, `vx_boot_x` in `.cold`, the mouse ISR's private stack doubled to 256 for the driver's `int 10h` (120.3.3), the four-row Display page, `OSAPI_GFX_BLITD` at `0x04AB` - kern_big `.text` **+562** `.cold` **+247** `.lowbss` **+128** `.bss` +5 `.boot2` 0 against main, the image rung crossed ONCE (`KERN_SIZE` 98,304 of 100,864, 2,560 spare), the cold rung at 98 bytes left; `NOVIDEXT=1` assembles the kernel without the hook at `.text` +16 `.cold` +101 against main (the class byte, Force Color's test in `vgcf_boot`, the fsx caps row), so the hook itself is `.text` 546 / `.cold` 146; kern_small assembles none of it and is byte for byte unchanged. The renderer is `VESA.DRV`, 3,712 bytes on the disk, an 8 KB claim, loaded only when `SYSTEM.CFG` asks (51.3) | unchanged | big +512 |
+| VESA, the packed display (SPEC.md 120), NOT blessed: `VID_VESA` and the `VIDEXT` hooks at every planar body, `vx_boot_x` in `.cold`, the mouse ISR's private stack doubled to 256 for the driver's `int 10h` (120.3.3), the four-row Display page, `OSAPI_GFX_BLITD` at `0x0224` - kern_big `.text` **+562** `.cold` **+247** `.lowbss` **+128** `.bss` +5 `.boot2` 0 against main, the image rung crossed ONCE (`KERN_SIZE` 98,304 of 100,864, 2,560 spare), the cold rung at 98 bytes left; `NOVIDEXT=1` assembles the kernel without the hook at `.text` +16 `.cold` +101 against main (the class byte, Force Color's test in `vgcf_boot`, the fsx caps row), so the hook itself is `.text` 546 / `.cold` 146; kern_small assembles none of it and is byte for byte unchanged. The renderer is `VESA.DRV`, 3,712 bytes on the disk, an 8 KB claim, loaded only when `SYSTEM.CFG` asks (51.3) | unchanged | big +512 |
 
 **The 35-move ledger of the old `KERN_BUDGET` figures is
 docs/history/KERN-BUDGET-LEDGER.md** - per move, what was asked for, what was

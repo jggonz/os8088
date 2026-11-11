@@ -234,8 +234,6 @@ mpp_entry:
     OS88_REGION_MOVABLE
     mov si, mpp_menus
     call OSAPI_MENU_SET             ; preserves registers AND flags, so the
-    mov si, mpp_about               ; loader's CF survives to the ret
-    call OSAPI_ABOUT_SET
 
     ; --- ...and the two layouts become a DECLARATION (SPEC.md 11.100.1) ------
     ; The band test above still decides the size this window OPENS at, and the
@@ -247,8 +245,6 @@ mpp_entry:
     mov bx, [mpp_win]
     mov si, mpp_pref
     call OSAPI_WM_PREFER            ; preserves the flags, like the two above
-    mov ax, mpp_onresize
-    call OSAPI_WM_ONRESIZE          ; ...and tell us, so the flag can follow
 .out:
     pop di
     pop si
@@ -2182,10 +2178,14 @@ mpp_render:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words); x/y/h set by mpp_entry --
+; --- window template (SPEC.md 11: 12 bytes, 6 words); x/y/h set by mpp_entry --
 mpp_tpl:
     dw 0, 0, MPP_FW, MPP_FHF
-    dw mpp_ttl, mpp_paint, mpp_onkey, mpp_onclick
+    dw mpp_ttl, mpp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mpp_cls, 0, PAINT, mpp_paint, ONKEY, mpp_onkey, \
+               ONCLICK, mpp_onclick, ABOUT, mpp_about, \
+               ONRESIZE, mpp_onresize
 
 ; --- the transport row's jump table -------------------------------------------
 ; Nine buttons in ModPlug Player's own order, and the four that are one line

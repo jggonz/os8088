@@ -121,11 +121,6 @@ tb_entry:
     mov si, tb_tpl
     call OSAPI_WM_CREATE
     jc .out                         ; table full: nothing to flag
-    mov al, 1
-    call OSAPI_WM_SNAP              ; ...and it preserves FLAGS, which is the
-                                    ; only reason this is safe here: the CF we
-                                    ; owe the loader is riding in them
-                                    ; (SPEC.md 11.94)
 .out:
     pop si
     ret                             ; NEAR: the kernel reaches every proc here
@@ -756,7 +751,10 @@ tb_head:
 
 tb_tpl:
     dw 120, 130, TB_CONT_W + 2, TB_CONT_H + TITLE_H + 1
-    dw tb_ttl, tb_paint, tb_onkey, tb_onclick
+    dw tb_ttl, tb_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS tb_cls, 0, PAINT, tb_paint, ONKEY, tb_onkey, \
+               ONCLICK, tb_onclick
 
 tb_ttl:     db 'Type Bench', 0
 

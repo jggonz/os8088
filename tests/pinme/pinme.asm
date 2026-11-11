@@ -169,7 +169,9 @@ pm_paint:
 
 pm_tpl:
     dw 300, 26, 128, 40
-    dw pm_ttl, pm_paint, pm_onkey, 0
+    dw pm_ttl, pm_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS pm_cls, 0, PAINT, pm_paint, ONKEY, pm_onkey
 
 pm_ttl:    db 'PinMe', 0
 pm_s_mov:  db 'movable', 0

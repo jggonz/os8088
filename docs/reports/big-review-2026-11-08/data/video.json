@@ -497,13 +497,13 @@
    "file": "kernel/fsx.inc",
    "old_text": "(SPEC.md 53.8, 0x02C0)",
    "new_text": "(SPEC.md 53.8, 0x022F)",
-   "why": "OSAPI_FSX_CAPS is KERNEL_SEG:0x022F (os88api.inc:5301, kernel.asm OSAPI_RSLOT fsx_caps ; 0x022F)."
+   "why": "OSAPI_FSX_CAPS is KERNEL_SEG:0x0200 (os88api.inc:5301, kernel.asm OSAPI_RSLOT fsx_caps ; 0x022F)."
   },
   {
    "file": "kernel/fsx.inc",
    "old_text": "(SPEC.md 53.4, 0x02D0)",
    "new_text": "(SPEC.md 53.4, 0x023B)",
-   "why": "OSAPI_FSX_MODE is KERNEL_SEG:0x023B (os88api.inc:5393)."
+   "why": "OSAPI_FSX_MODE is KERNEL_SEG:0x020C (os88api.inc:5393)."
   },
   {
    "file": "kernel/fsx.inc",
@@ -515,7 +515,7 @@
    "file": "kernel/fsx.inc",
    "old_text": "0x04E8)",
    "new_text": "0x03C5)",
-   "why": "OSAPI_FSX_PAGE is KERNEL_SEG:0x03C5 (os88api.inc:5414, kernel.asm:3851)."
+   "why": "OSAPI_FSX_PAGE is KERNEL_SEG:0x01CF (os88api.inc:5414, kernel.asm:3851)."
   },
   {
    "file": "kernel/fsx.inc",
@@ -659,7 +659,7 @@
    "file": "SPEC.md",
    "old_text": "0x022F fsx_caps   out AX = FSXM bitmask for the live adapter, DL =\n                  vid_kind. Any context. Everything else preserved.\n0x0235 fsx_run    in AX = near entry, BX = own window ptr, CX = flags\n                  (bit 0 FSXF_KEEPWORKER, bit 1 FSXF_FASTTICK). X — the\n                  fence reads the caller's DS. UI-task window callback,\n                  lock held. Does not return until the app's proc does.\n                  CF=1 refused.\n0x023B fsx_mode   in AL = FSXM_* id, ES:DI = FSI_SIZE buffer (caller's\n                  ES). Bracket-only. CF=0 mode set + block filled;\n                  CF=1 refused (id, adapter, context).\n0x0241 fsx_wait   in AL = 0 next tick / 1 vertical retrace. Bracket-only\n                  (CF=1 outside). The frame clock (§53.5).",
    "new_text": "0x022F fsx_caps   in BX = window (0 frontmost), or 1..15 = display BX-1.\n                  out AX = that display's FSXM bitmask, DL = its kind\n                  (VGA for VESA); CF=1 no such display. Any context.\n0x0235 fsx_run    in AX = near entry, BX = own window ptr, CL = flags\n                  (bit 0 FSXF_KEEPWORKER, bit 1 FSXF_FASTTICK, bit 2\n                  FSXF_RATE with DX/DI on kern_big, bit 3 FSXF_REAL),\n                  CH = display (§53.1.2). X — the\n                  fence reads the caller's DS. UI-task window callback,\n                  lock held. Does not return until the app's proc does.\n                  CF=1 refused.\n0x023B fsx_mode   in AL = FSXM_* id, ES:DI = FSI_SIZE buffer (caller's\n                  ES). Bracket-only. CF=0 mode set + block filled;\n                  CF=1 refused (id, adapter, context).\n0x0241 fsx_wait   in AL = 0 next tick / 1 vertical retrace / 2 next\n                  IRQ0, yielding (§53.5.1). Bracket-only (CF=1\n                  outside). The frame clock (§53.5).\n0x03C5 fsx_page   in AL = page index. Bracket-only, after fsx_mode in a\n                  mode that flips (§53.10). CF=0 shown, after a retrace\n                  wait; CF=1 refused, nothing written.",
-   "why": "fsx_caps takes BX and answers per display, DL = VGA for VESA, CF=1 past the last display (fsx.inc:124-168); fsx_run takes bits 2/3 and CH (221-262); fsx_wait accepts AL = 2 (920-952); fsx_page is slot 0x03C5 (kernel.asm:3851)."
+   "why": "fsx_caps takes BX and answers per display, DL = VGA for VESA, CF=1 past the last display (fsx.inc:124-168); fsx_run takes bits 2/3 and CH (221-262); fsx_wait accepts AL = 2 (920-952); fsx_page is slot 0x01CF (kernel.asm:3851)."
   }
  ]
 }

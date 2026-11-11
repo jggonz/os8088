@@ -184,7 +184,7 @@ tsp_ring:
     push cx
     push dx
     mov ax, OS88_BYTES_PARA(TSP_RL + SPKFX_RINGEND) ; the ring, its table
-    xor cx, cx                      ; and the shaper's family (34.11.9): 19,472
+                                    ; and the shaper's family (34.11.9): 19,472
     mov bl, MEMP_CLAIM              ; bytes, in PARAGRAPHS (SPEC.md 50.3.7) -
     call OSAPI_MEM_P                ; 19.5KB at the granule where a KB door
     jc .no                          ; took 20

@@ -287,7 +287,7 @@ ext_e_ylow:                     ; EXT_YLOW: ui_ylow's arm, behind its caller's
     mov ax, [ui_curx]           ; the drag's PROPOSED x, not W_X
     mov bx, MBAR_H              ; any row the primary's band contains, so a
                                 ; point on display 0 resolves to it
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     or al, al
     jz .done                    ; display 0 keeps the chrome's floor, which
                                 ; the caller loaded into SI. Anything else is
@@ -367,14 +367,14 @@ ext_e_fsx:
     push bx
     or bx, bx
     jnz .win
-    call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
+    KDOOR wm_top                ; OSAPI_WM_TOP's own cell is the door: the
     or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
 .win:
     mov al, bl                  ; BX = 1..15 IS A DISPLAY, BX-1 (SPEC.md
     dec ax                      ; 53.1.2): fsx_caps has already refused one
-    cmp bx, 16                  ; past [vid_ndisp]
-    jb .kind
+    or bh, bh                   ; past [vid_ndisp], and no window pointer is
+    jz .kind                    ; below 256 (fsx_caps' own test)
                                 ; (NOT ext_wctx: that needs DI banked
     EXK wm_disp_of              ; round it, and this is the one entry a
 .kind:
@@ -516,7 +516,7 @@ ext_org_disp:
     push bx
     mov ax, [bx+W_X]
     mov bx, [bx+W_Y]
-    call KERNEL_SEG:cw_vid_disp_of
+    KDOOR vid_disp_of
     pop bx
     or al, al
     ret

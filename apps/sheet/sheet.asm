@@ -2652,8 +2652,9 @@ sh_entry:
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
-    mov ax, SH_CLAIM_CELLS_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, SH_CLAIM_CELLS_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_cellseg], dx
     mov ax, sh_reloc                     ; ...and MOVABLE (SPEC.md 66.2). SHEET
@@ -2661,14 +2662,16 @@ sh_entry:
                                       ; passes these on I_TASK = 0xFF
                                       ; alone and no park is involved
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_TXT_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, SH_CLAIM_TXT_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_txtseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_STG_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, SH_CLAIM_STG_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_stgseg], dx
     mov ax, sh_reloc                   ; ...MOVABLE too (NO-PINNING 1): every
@@ -2678,8 +2681,9 @@ sh_entry:
     ; is eight claims an owner and SHEET held eight, so the macro module's claim had
     ; nowhere to come from. The note table is the claim's second part, and
     ; sh_reloc derives its segment from the border table's after a move
-    mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, (SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_bordseg], dx
     mov ax, sh_reloc                   ; DX IS THE CLAIM HERE: MEM_MOVABLE
@@ -2708,14 +2712,16 @@ sh_entry:
     mov word [sh_nbord], 0
     call sh_colw_clear                 ; every column the standard width (81.56)
     mov word [sh_nnote], 0
-    mov ax, SH_CLAIM_CHART_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, SH_CLAIM_CHART_KB * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .fail
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
-    mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
-    call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
+    mov ax, SH_CLAIM_UNDO_KB * 64           ; Undo's, last and optional (81.57): a
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
     mov [sh_undoseg], dx
     mov ax, sh_reloc
@@ -2789,23 +2795,9 @@ sh_entry:
     OS88_REGION_MOVABLE sh_rgnreloc   ; THE REGION MOVES (NO-PINNING P1): see
                                       ; sh_rgnreloc for the one thing that
                                       ; names this segment between callbacks
-    push ax
-    mov ax, sh_onclose                ; the close negotiator (81.118, SPEC.md
-    call OSAPI_WM_ONCLOSE             ; 75.1): a changed workbook asks first
-    pop ax
-    push ax                           ; SIZABLE (SPEC.md 11.1, 81.112). The
-    mov al, 1                         ; contract is that a resizable window's
-    call OSAPI_WM_SIZABLE             ; paint lays out from the LIVE record
-    pop ax                            ; every call, and sh_paint has always
-                                       ; done exactly that: it calls sh_geom,
-                                       ; which asks OSAPI_WM_CONTENT for the
-                                       ; content box and WALKS columns and
-                                       ; rows until the pixels run out. The
-                                       ; grid was never fixed at the
-                                       ; template's 560x380 - only the window
-                                       ; was, because nothing ever asked for
-                                       ; the flag. Notepad's np_paint carries
-                                       ; the same comment for the same reason
+                                       ; (the close negotiator, SIZABLE and
+                                       ; every edge are sh_cls's, SPEC.md
+                                       ; 11.104 - see it at sh_tpl)
     push cx                           ; ...and a FLOOR under it (SPEC.md
     push dx                           ; 11.100.2): see SH_MINW above. A window
     mov cx, SH_MINW                   ; that may be dragged can be dragged to
@@ -2835,25 +2827,6 @@ sh_entry:
     call sh_sheetmark
     call sh_recmark                    ; 81.74: both Macro items say what they
 
-    ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
-    ; answered. CF=1 means kern_small, which carries the slot and not the body
-    ; (os88api.inc: "TEST CF AND HAVE A SECOND PATH") - there is simply no
-    ; tracking on that machine, and shift+click and shift+arrows, which need
-    ; no kernel support at all, remain the way to build a range there.
-    mov ax, sh_ondrag
-    call OSAPI_WM_ONDRAG
-
-    ; The RELEASE edge, which a thumb drag needs to let go on (13.10.5). Same
-    ; kern_small caveat as the drag edge above: refused there, and a bar that
-    ; cannot be dragged never needs dropping.
-    mov ax, sh_onmouseup
-    call OSAPI_WM_ONMOUSEUP
-
-    ; The WHEEL (SPEC.md 13.18) scrolls the grid's rows. kern_small has no
-    ; wheel and the cell does nothing there; flags preserved, BX still ours.
-    mov ax, sh_onwheel
-    call OSAPI_WM_ONWHEEL
-
     ; stage 3.0b: the formula bar's content box. Only the buffer binding is
     ; set once - the rect is refreshed per draw by sh_flrect, since the window
     ; moves and resizes and a stale rect would draw and hit-test in the wrong
@@ -2870,14 +2843,6 @@ sh_entry:
 
     mov si, sh_menus
     call OSAPI_MENU_SET
-    mov bx, [sh_ownwin]               ; ...and 'About Sheet' above its Close,
-    mov si, sh_about                  ; which is the OS's own convention and
-    call OSAPI_ABOUT_SET              ; not a Help menu of one's own devising
-                                       ; (SPEC.md 12.2). Seventeen packages
-                                       ; already did this; Sheet had a Help >
-                                       ; About... item instead, which put the
-                                       ; same text somewhere nobody looks for
-                                       ; it on this system.
     clc
     jmp .out
 .fail:
@@ -9651,7 +9616,7 @@ sh_docmd_help:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2).
+; sh_about - the WC_ABOUT handler (sh_cls, SPEC.md 12.2, 11.104).
 ; in: SI = our window ptr; the UI task, gfx lock HELD, far-called at our own
 ; segment - a window callback in every respect that matters.
 ;
@@ -11633,7 +11598,8 @@ sh_chart_paint:
 
 sh_chart_tpl:
     dw 0, 0, SH_CHARTWIN_W, SH_CHARTWIN_H
-    dw sh_s_chart_title, sh_chart_paint, 0, 0
+    dw sh_s_chart_title, sh_chart_cls
+    OS88_CLASS sh_chart_cls, 0, PAINT, sh_chart_paint
 sh_s_chart_title: db 'Chart', 0
 sh_s_charted:      db 'Charted.', 0
 sh_s_coltitle:     db 'Column ', 0
@@ -13841,7 +13807,16 @@ SH_FDLG_H      equ SH_FDLG_GY1 + SH_FDLG_BOXH + SH_DLG_BMARG + TITLE_H + 1
 
 sh_fdlg_tpl:
     dw 0, 0, SH_FDLG_W, SH_FDLG_H
-    dw 0, sh_fdlg_paint_r, 0, sh_fdlg_click_r
+    dw 0, sh_fdlg_cls
+; ...and its CLASS (SPEC.md 11.104): the press is the button library's
+; (81.111), the release and drag the resident doors. KEEPH: a FIXED layout,
+; taller than a CGA's 155-row desktop band - wm_fit cut it and the buttons
+; drew through the frame, below the window and past its clicks. Hang over
+; the dock instead (SPEC.md 11.93, 81.100) - 28 + 171 still fits the 200 rows
+; the display has
+    OS88_CLASS sh_fdlg_cls, WF_KEEPH, PAINT, sh_fdlg_paint_r, \
+               ONCLICK, os88ui_btnclick, ONMOUSEUP, sh_fdlg_onup_r, \
+               ONDRAG, sh_fdlg_ondrag_r
 
 ; Stage 2.x's Edit menu Insert.../Delete... reuse this same engine as kinds
 ; 3 and 4 - just a 2-item Row/Column pick instead of a 4-item format
@@ -14221,14 +14196,7 @@ sh_fdlg_open:
     mov si, sh_fdlg_tpl
     SHK wm_create
     jc .out
-    mov [sh_fdlg_win], bx
-    push ax                           ; a FIXED layout, taller than a CGA's
-    mov al, 1                         ; 155-row desktop band: wm_fit cut it
-    call OSAPI_WM_KEEPH               ; and the buttons drew through the frame,
-    pop ax                            ; below the window and past its clicks.
-                                      ; Hang over the dock instead (SPEC.md
-                                      ; 11.93, 81.100) - 28 + 171 still fits
-                                      ; the 200 rows the display has
+    mov [sh_fdlg_win], bx             ; (KEEPH: sh_fdlg_cls's style)
     SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
@@ -15071,7 +15039,10 @@ section .text
 
 sh_bdlg_tpl:
     dw 0, 0, SH_BDLG_W, SH_BDLG_H
-    dw sh_s_bdlg_title, sh_bdlg_paint_r, 0, sh_bdlg_click_r
+    dw sh_s_bdlg_title, sh_bdlg_cls
+    OS88_CLASS sh_bdlg_cls, WF_KEEPH, PAINT, sh_bdlg_paint_r, \
+               ONCLICK, os88ui_btnclick, ONMOUSEUP, sh_bdlg_onup_r, \
+               ONDRAG, sh_bdlg_ondrag_r ; KEEPH: sh_fdlg_cls's reason (81.100)
 
 sh_s_bdlg_title: db 'Border', 0
 sh_bdlg_items: dw sh_bdlg_i0, sh_bdlg_i1, sh_bdlg_i2, sh_bdlg_i3, sh_bdlg_i4, sh_bdlg_i5
@@ -15205,11 +15176,7 @@ sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     mov si, sh_bdlg_tpl
     SHK wm_create
     jc .out
-    mov [sh_bdlg_win], bx
-    push ax                           ; over the dock rather than cut on a
-    mov al, 1                         ; CGA - sh_fdlg_open's reason (81.100)
-    call OSAPI_WM_KEEPH
-    pop ax
+    mov [sh_bdlg_win], bx             ; (KEEPH: sh_bdlg_cls's style)
     SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
@@ -15691,7 +15658,10 @@ SH_IDLG_H    equ SH_IDLG_CAY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_idlg_tpl:
     dw 0, 0, SH_IDLG_W, SH_IDLG_H
-    dw sh_s_id_tgoto, sh_idlg_paint_r, sh_idlg_key_r, sh_idlg_click_r
+    dw sh_s_id_tgoto, sh_idlg_cls
+    OS88_CLASS sh_idlg_cls, 0, PAINT, sh_idlg_paint_r, ONKEY, sh_idlg_key_r, \
+               ONCLICK, os88ui_btnclick, ONCLOSE, sh_idlg_cls_r, \
+               ONMOUSEUP, sh_idlg_onup_r, ONDRAG, sh_idlg_ondrag_r
 ; The title above is only a PLACEHOLDER: sh_idlg_open overwrites
 ; [sh_idlg_tpl + WT_TITLE] with whichever of sh_s_id_t* the kind names, before
 ; OSAPI_WM_CREATE. WT_TITLE is a pointer TO the text, so the pointer has to go
@@ -18204,7 +18174,11 @@ SH_LDLG_H    equ SH_LDLG_LY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_ldlg_tpl:
     dw 0, 0, SH_LDLG_W, SH_LDLG_H
-    dw sh_s_ld_tfunc, sh_ldlg_paint_r, 0, sh_ldlg_click_r
+    dw sh_s_ld_tfunc, sh_ldlg_cls
+    OS88_CLASS sh_ldlg_cls, 0, PAINT, sh_ldlg_paint_r, \
+               ONCLICK, os88ui_btnclick, ONCLOSE, sh_ldlg_cls_r, \
+               ONMOUSEUP, sh_ldlg_onup_r, ONDRAG, sh_ldlg_ondrag_r, \
+               ONWHEEL, sh_ldlg_wheel_r ; the wheel scrolls the list (13.18)
 ; the resident doors (81.71.6) - sh_ldlg_open_r forces the module in before
 ; the window exists, 81.71.5.1's invariant
 ; 81.74.2: the resident doors for the last two engines. Same shape and same
@@ -18248,8 +18222,7 @@ sh_dlg_bflags: dw OS88UI_DEF, 0                ; OK is button 1, Cancel 2, in
 sh_dlg_blfd:   dw sh_s_fd_ok, sh_s_fd_cancel   ; every dialog here: the flags
                                                ; are shared outright
 
-; sh_btattach - BX = the record, AX = the window, SI/DI = its release/drag
-; doors, DX = its own click door: UNLINK the record from os88ui's list, then
+; sh_btattach - BX = the record, AX = the window, DX = its own click door: UNLINK the record from os88ui's list, then
 ; os88ui_btninit. The unlink is not tidiness: btninit PREPENDS, so re-opening
 ; a dialog made its record's NEXT point at ITSELF, and a click whose walk had
 ; to pass it never returned. Preserves all registers
@@ -18259,13 +18232,14 @@ sh_dlg_blfd:   dw sh_s_fd_ok, sh_s_fd_cancel   ; every dialog here: the flags
 ; Series and Extract likewise, File Format's OK the Save As), so the attach
 ; is the open routine's own last act rather than the door's. Attaching a
 ; window that already is only re-installs the same three procs
-sh_bttab:  dw sh_fdlg_btrec, sh_fdlg_win, sh_fdlg_onup_r, sh_fdlg_ondrag_r, sh_fdlg_click_r
-           dw sh_bdlg_btrec, sh_bdlg_win, sh_bdlg_onup_r, sh_bdlg_ondrag_r, sh_bdlg_click_r
-           dw sh_idlg_btrec, sh_idlg_win, sh_idlg_onup_r, sh_idlg_ondrag_r, sh_idlg_click_r
-           dw sh_ldlg_btrec, sh_ldlg_win, sh_ldlg_onup_r, sh_ldlg_ondrag_r, sh_ldlg_click_r
-           dw sh_ndlg_btrec, sh_ndlg_win, sh_ndlg_onup_r, sh_ndlg_ondrag_r, sh_ndlg_onclick_r
-           dw sh_df_btrec, sh_df_win, sh_df_onup_r, sh_df_ondrag_r, sh_df_onclick_r
-sh_bttab_end:
+sh_bttab:  dw sh_fdlg_btrec, sh_fdlg_win, sh_fdlg_click_r
+           dw sh_bdlg_btrec, sh_bdlg_win, sh_bdlg_click_r
+           dw sh_idlg_btrec, sh_idlg_win, sh_idlg_click_r
+           dw sh_ldlg_btrec, sh_ldlg_win, sh_ldlg_click_r
+           dw sh_ndlg_btrec, sh_ndlg_win, sh_ndlg_onclick_r
+           dw sh_df_btrec, sh_df_win, sh_df_onclick_r
+sh_bttab_end:                    ; (each dialog's release and drag doors are its
+                                 ; class's, SPEC.md 11.104)
 sh_btfix:
     push ax
     push bx
@@ -18280,12 +18254,10 @@ sh_btfix:
     or ax, ax
     jz .n
     mov bx, [ds:bp]
-    mov si, [ds:bp+4]
-    mov di, [ds:bp+6]
-    mov dx, [ds:bp+8]
+    mov dx, [ds:bp+4]
     call sh_btattach
 .n:
-    add bp, 10
+    add bp, 6
     cmp bp, sh_bttab_end
     jb .l
     pop bp
@@ -18474,21 +18446,9 @@ sh_fdlg_apply_r:
     call ch_ovcall
     pop bp
     ret
-; SH_ONCLOSE win_word - install AX, a resident negotiator, on the dialog the
-; open just made, if it made one. HERE and not in the module's open: the proc
-; is a near pointer in the WINDOW's segment (SPEC.md 75.1), and the chart module runs
-; banked (81.71.5.1). pushf: an open door's caller may read CF
-%macro SH_ONCLOSE 1
-    pushf
-    push bx
-    mov bx, [%1]
-    or bx, bx
-    jz %%none
-    call OSAPI_WM_ONCLOSE
-%%none:
-    pop bx
-    popf
-%endmacro
+; (SH_ONCLOSE went with OSAPI_WM_ONCLOSE: each dialog's negotiator is its
+; class's WC_ONCLOSE, a resident door in the window's segment - SPEC.md
+; 11.104)
 sh_idlg_blab:  dw sh_s_idlg_ok, sh_s_idlg_can, sh_s_idlg_guess, sh_s_idlg_clear
 sh_idlg_bflag: dw OS88UI_DEF, 0, 0, 0     ; 81.111: OK Cancel, and Parse's two
     SH_BTRECF idlg, 4, sh_idlg_blab, sh_idlg_bflag
@@ -18501,10 +18461,6 @@ sh_idlg_open_r:
     jnc .out
     mov word [sh_msg], sh_s_noovl
 .out:
-    push ax
-    mov ax, sh_idlg_cls_r
-    SH_ONCLOSE sh_idlg_win
-    pop ax
     ret
 ; sh_idlg_cls_r / sh_ldlg_cls_r - the two dialogs' CLOSE BOXES. A package's
 ; secondary window has no owner record, so the kernel's own close only HIDES
@@ -18564,10 +18520,6 @@ sh_ldlg_open_r:
     jnc .out
     mov word [sh_msg], sh_s_noovl
 .out:
-    push ax
-    mov ax, sh_ldlg_cls_r
-    SH_ONCLOSE sh_ldlg_win
-    pop ax
     ret
 sh_ldlg_paint_r:
     push bp
@@ -18672,10 +18624,6 @@ sh_ldlg_open:
     SHK wm_create                      ; the window comes back in BX, NOT SI -
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
-    push ax
-    mov ax, sh_ldlg_wheel_r            ; the wheel scrolls the list (13.18)
-    call OSAPI_WM_ONWHEEL
-    pop ax
     SHK wm_show                        ; created HIDDEN, so the show is not
     SHOUT sh_btfix                     ; the gesture (81.111), from here
                                        ; optional. No WF_KEEPH: 147 rows from
@@ -19900,7 +19848,10 @@ SH_NDLG_H    equ SH_NDLG_BY2 + SH_DLG_BMARG + TITLE_H + 1   ; the text box is
 
 sh_ndlg_tpl:
     dw 0, 0, SH_NDLG_W, SH_NDLG_H
-    dw sh_s_ndlg_title, sh_ndlg_paint_r, sh_ndlg_onkey_r, sh_ndlg_onclick_r
+    dw sh_s_ndlg_title, sh_ndlg_cls
+    OS88_CLASS sh_ndlg_cls, 0, PAINT, sh_ndlg_paint_r, ONKEY, sh_ndlg_onkey_r, \
+               ONCLICK, os88ui_btnclick, ONCLOSE, sh_ndlg_cls_r, \
+               ONMOUSEUP, sh_ndlg_onup_r, ONDRAG, sh_ndlg_ondrag_r
 
 sh_s_ndlg_title: db 'Note', 0
 sh_s_ndlg_cell:  db 'Cell:', 0
@@ -19923,10 +19874,6 @@ sh_ndlg_open_r:
     jnc .out
     mov word [sh_msg], sh_s_noovl
 .out:
-    push ax
-    mov ax, sh_ndlg_cls_r
-    SH_ONCLOSE sh_ndlg_win
-    pop ax
     ret
 sh_ndlg_paint_r:
     push bp
@@ -20521,7 +20468,10 @@ SH_DF_VW     equ 29                  ; OSAPI_FONT_RUN erases exactly its own
 
 sh_df_tpl:                             ; the RESIDENT thunks, not the module's
     dw 0, 0, SH_DF_W, SH_DF_H          ; own labels: a template holds near
-    dw sh_s_df_title, sh_df_paint_r, sh_df_onkey_r, sh_df_onclick_r
+    dw sh_s_df_title, sh_df_cls
+    OS88_CLASS sh_df_cls, 0, PAINT, sh_df_paint_r, ONKEY, sh_df_onkey_r, \
+               ONCLICK, os88ui_btnclick, ONMOUSEUP, sh_df_onup_r, \
+               ONDRAG, sh_df_ondrag_r
 
 sh_s_df_title: db 'Form', 0
 sh_s_df_of:    db ' of ', 0
@@ -40084,20 +40034,13 @@ sh_macro_onbtn:                      ; ...and hears which one: AL, 0-based,
     jmp sh_macro_onalert
 
 ; sh_macro_arm - arm WAIT's timer: AX = ticks. CF=1 there is no timer on
-; this kernel (kern_small). RESIDENT, and it has to be: OSAPI_WM_ONTIMER takes
-; a near proc in the CALLER's segment, and a call from the chart module names the
-; module's - the timer then fires into the module at a package offset
+; this kernel (kern_small). The handler is sh_cls's WC_ONTIMER, RESIDENT and
+; in the window's own segment (SPEC.md 11.104)
 sh_macro_arm:
     push ax
     push bx
     mov bx, [sh_ownwin]
-    push ax
-    mov ax, sh_macro_ontimer
-    call OSAPI_WM_ONTIMER
-    pop ax
-    jc .out
     call OSAPI_WM_TIMER
-.out:
     pop bx
     pop ax
     ret
@@ -40148,7 +40091,10 @@ sh_macro_ontimer:
 ; OSAPI_WM_ONCLOSE takes a near proc in the CALLER's segment
 sh_dbx_tpl:
     dw 0, 0, 0, 0
-    dw sh_macro_msg, sh_dbx_paint_r, sh_dbx_key_r, sh_dbx_click_r
+    dw sh_macro_msg, sh_dbx_wcls
+    OS88_CLASS sh_dbx_wcls, 0, PAINT, sh_dbx_paint_r, ONKEY, sh_dbx_key_r, \
+               ONCLICK, os88ui_btnclick, ONCLOSE, sh_dbx_close_r, \
+               ONMOUSEUP, sh_dbx_onup_r, ONDRAG, sh_dbx_ondrag_r
 
 ; 81.111: its buttons are ITEMS among other controls rather than a group, so
 ; they take two one-button records. The PAINT record is staged per item by
@@ -40215,15 +40161,11 @@ sh_dbx_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [sh_dbx_win], bx
-    mov ax, sh_dbx_close_r
-    call OSAPI_WM_ONCLOSE
     call OSAPI_WM_SHOW
     push dx
     push di
     mov ax, bx
     mov bx, sh_dbx_btrec
-    mov si, sh_dbx_onup_r
-    mov di, sh_dbx_ondrag_r
     mov dx, sh_dbx_click_r
     call sh_btattach
     mov byte [sh_dbx_gitem], 0xFF     ; nothing staged from the LAST dialog
@@ -43764,8 +43706,11 @@ shm_gs_h:
     sub ax, MBAR_H
     jmp shm_anum
 shm_gs_mem:
-    call OSAPI_MEM_AVAIL              ; BX = total free KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P            ; BX = total free, paragraphs
     mov ax, bx
+    mov cl, 6                   ; ...answered in KB
+    shr ax, cl
     jmp shm_anum
 shm_gs_fpu:
     mov al, [fp_hw]
@@ -55476,7 +55421,21 @@ sh_strcpy_to_di:
 ; =============================================================================
 sh_tpl:
     dw 60, 40, 560, 380
-    dw sh_ttlbuf, sh_paint, sh_onkey, sh_onclick
+    dw sh_ttlbuf, sh_cls
+; its CLASS (SPEC.md 11.104). SIZABLE (11.1, 81.112): sh_paint lays out from
+; the LIVE record every call - sh_geom asks OSAPI_WM_CONTENT for the content
+; box and WALKS columns and rows until the pixels run out. 'About Sheet'
+; above its Close is the OS's own convention, not a Help menu of one's own
+; devising (12.2). The close negotiator asks about a changed workbook (81.118,
+; 75.1). Drag-to-select (stage 3.0a) and the RELEASE a thumb drag lets go on
+; (13.10.5) - kern_small dispatches no drag, and shift+click and
+; shift+arrows, which need no kernel support at all, remain the way to build
+; a range there. The WHEEL scrolls the grid's rows (13.18). The TIMER is
+; WAIT's (81.86), armed by sh_macro_arm
+    OS88_CLASS sh_cls, WF_SIZABLE, PAINT, sh_paint, ONKEY, sh_onkey, \
+               ONCLICK, sh_onclick, ABOUT, sh_about, ONCLOSE, sh_onclose, \
+               ONMOUSEUP, sh_onmouseup, ONTIMER, sh_macro_ontimer, \
+               ONDRAG, sh_ondrag, ONWHEEL, sh_onwheel
 
 ; The EMPTY kernel menu set (SPEC.md 12.2), same idea as apps/word/word.asm's
 ; wd_menus0: zero real menus, but its AM_NAME still puts 'Sheet' in the

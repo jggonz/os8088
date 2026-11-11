@@ -154,13 +154,18 @@ lp_latch:
     mov dx, ax
     add dx, 2                   ; the CONTROL register first: a bidirectional
     in  al, dx                  ; port left in INPUT mode reads its PINS rather
-    mov cl, al                  ; than its latch, so the two-value test below
-    and al, 0xDF                ; would probe a port that cannot answer. The
+    and al, 0xDF                ; than its latch, so the two-value test below
+    mov cl, al                  ; would probe a port that cannot answer. The
     out dx, al                  ; DOS machine's DIO-500 came up at ctrl = EC,
     sub dx, 2                   ; bit 5 SET - exactly that case, and it passed
                                 ; only because that card reads its latch back
                                 ; anyway. Read-modify-write, low nibble held:
-                                ; bit 2 is INIT and active low (NET-PLAN 1.4.3)
+                                ; bit 2 is INIT and active low (NET-PLAN 1.4.3).
+                                ; CL is taken AFTER the mask, so .ctl puts
+                                ; back direction = OUT, never bit 5 as read
+                                ; (SPEC.md 34.14: an SPP reads it as 1, and
+                                ; restoring that leaves a bidirectional latch
+                                ; in INPUT mode for the next POST to miss)
     in  al, dx
     mov bh, al                  ; whatever was there - put back on both paths
     mov al, 0xAA
@@ -245,9 +250,9 @@ lp_init:
     mov [lp_svdat], al
     mov dx, [lp_ctrl]
     in  al, dx
-    mov [lp_svctl], al
-    and al, 0xDF
-    out dx, al
+    and al, 0xDF                ; ...and saved AFTER the mask: lp_restore puts
+    mov [lp_svctl], al          ; back direction = OUT, never bit 5 as read
+    out dx, al                  ; (SPEC.md 34.14)
     mov dx, [lp_base]
     xor al, al
     mov byte [lp_lastop], 0     ; a fresh port owes no turnaround
@@ -260,7 +265,7 @@ lp_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; lp_restore - put the port back exactly as it was found
+; lp_restore - put the port back as it was found, direction = OUT (lp_init)
 ; clobbers: nothing
 ; -----------------------------------------------------------------------------
 lp_restore:

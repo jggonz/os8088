@@ -134,9 +134,11 @@ w16_load:
     mov ax, bx
 .csz:
     mov [w16_csz], ax
-    mov cl, 10
-    shr ax, cl
-    call OSAPI_MEM_CLAIM
+    mov cl, 4                       ; PARAGRAPHS (SPEC.md 50.3.7): the cache
+    shr ax, cl                      ; is a byte count, and the part may not
+    xor cx, cx                      ; call OSAPI_MEM_P itself (SPEC.md
+    mov bl, MEMP_CLAIM              ; 124.19.3)
+    call OSAPI_MEM_P
     jnc .cached
     mov si, w16_r_mem
     jmp .refuse0
@@ -2858,9 +2860,13 @@ w16l_rtlib:
     call OSAPI_FILE_GOTO_QM
     jc .fail
     mov ax, [w16_csz]
-    mov cl, 10
-    shr ax, cl
-    call OSAPI_MEM_CLAIM
+    mov cl, 4                       ; paragraphs, OSAPI_MEM_P's own (see
+    shr ax, cl                      ; w16_load's)
+    xor cx, cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .fail
     mov [w16_cseg], dx
     mov word [w16_clen], 0

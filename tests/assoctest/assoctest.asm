@@ -211,7 +211,9 @@ at_paint:
 
 at_tpl:
     dw 90, 90, 320, 110
-    dw at_ttl, at_paint, 0, 0
+    dw at_ttl, at_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS at_cls, 0, PAINT, at_paint
 
 at_ttl:    db 'Assoc Test', 0
 at_s_want: db 'TEST.AST', 0

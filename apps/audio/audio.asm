@@ -392,8 +392,6 @@ ap_entry:
     mov [ap_win], bx
     xchg ax, bx                     ; **THE GESTURE'S TWO SLOTS** (SPEC.md
     mov bx, apu_btrec               ; 20.5.1.3): neither is a template word
-    mov si, ap_onup
-    mov di, ap_ondrag
     mov dx, ap_onclick                ; OUR own click work; the library
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
@@ -411,15 +409,6 @@ ap_entry:
 
     mov si, ap_menus
     call OSAPI_MENU_SET
-
-    mov si, ap_about
-    call OSAPI_ABOUT_SET
-
-    mov ax, ap_onwake
-    call OSAPI_WM_ONWAKE
-
-    mov ax, ap_onclose
-    call OSAPI_WM_ONCLOSE
 
     mov word [ap_msg], ap_s_ready  ; (no card: the speaker, SPEC.md 86.21)
                                    ; ([ap_state] is AP_ST_STOP: bss is zeroed)
@@ -462,7 +451,11 @@ ap_entry:
 ; =============================================================================
 ap_tpl:
     dw 190, 90, 300, 232          ; x, y, w, h  (wm_fit clamps onto the screen)
-    dw ap_ttl, ap_paint, ap_onkey, ap_onclick
+    dw ap_ttl, ap_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ap_cls, 0, PAINT, ap_paint, ONKEY, ap_onkey, \
+               ONCLICK, os88ui_btnclick, ABOUT, ap_about, ONWAKE, ap_onwake, \
+               ONCLOSE, ap_onclose, ONMOUSEUP, ap_onup, ONDRAG, ap_ondrag
 ap_ttl:   db 'Audio Player', 0
 
     OS88_MENUSET ap_menus, ap_ttl, ap_oncmd

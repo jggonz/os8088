@@ -84,7 +84,7 @@ from trackmove import pkg_syms                         # noqa: E402
 SRC = "apps/tracker/beverly.mod"
 PACKED = "build/lzf/BEVERLY.MOD"
 IMG = "build/lzmod360.img"
-CZ_MARK, CZ_M, CZ_H, CZ_L = 0x5A, 12, 13, 20   # +fmt: 20.14.2.4
+CZ_MARK, CZ_M, CZ_H, CZ_L = 0xA4, 12, 13, 20   # +fmt: 20.14.2.4
 S = os88sym.linear
 
 
@@ -371,7 +371,7 @@ def run(a, apps, plain, P, fails):
             trackwin = wins2[-1]
         rec = m.read(S("wm_wins") + trackwin * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
+        pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
         say("  window     Tracker at %04X" % pseg)
 
         # WAIT FOR THE CLAIM, do not sleep for it. [trk_modseg] going

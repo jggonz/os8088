@@ -60,16 +60,12 @@ mo_entry:
     jc .out
     OS88_REGION_MOVABLE
     mov [mo_win], bx
-    mov ax, mo_tick
-    call OSAPI_WM_ONTIMER
-    mov ax, mo_wake
-    call OSAPI_WM_ONWAKE
 %ifdef MO_HOLE
     xor cx, cx
 .h:
     mov ax, MO_KB
 %ifdef MO_LOWHOLE
-    call OSAPI_MEM_CLAIM_HI     ; conventional, TOP-DOWN: the ceiling
+    call mo_claim_hi              ; conventional, TOP-DOWN: the ceiling
     jc .held
     mov si, cx                  ; one is enough: the hole is above the carve
     shl si, 1
@@ -77,7 +73,7 @@ mo_entry:
     inc cx
     jmp short .held
 %else
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     jc .held
 %endif
     mov si, cx
@@ -126,12 +122,12 @@ mo_tick:                        ; under the gfx lock: post a wake
 ; 'MEGALOWB: c SSSS PPPP OOOO' - segment, paragraphs, owner
 mo_wake:
     call mo_snap
-    call OSAPI_MEM_AVAIL
+    call mo_avail
     mov si, mo_s_avail
     call mo_say
     call mo_hex4
     call mo_nl
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     mov si, mo_s_no
     jc .say
     mov [mo_big], dx
@@ -155,8 +151,8 @@ mo_snap:
     push ds
     pop es
     mov di, mo_snbuf
-    call OSAPI_CLAIM_SNAPSHOT       ; AX = MEM_MAX
-    mov cx, ax
+    call OSAPI_CLAIM_SNAPSHOT       ; MEM_MAX records (kern_mega's 32)
+    mov cx, MEM_MAX
     mov di, mo_snbuf
 .l:
     cmp word [di+CLS_SEG], 0
@@ -231,7 +227,7 @@ mo_run:
     cmp bp, MO_MAX
     jae .filled
     mov ax, MO_KB
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     jc .filled
     test dl, 4
     jnz .sel
@@ -257,7 +253,7 @@ mo_run:
     mov ax, 32                      ; ...and the tail, ever smaller
 .tail:
     push ax
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     jc .tnext
     test dl, 4
     jnz .tkeep
@@ -293,7 +289,7 @@ mo_run:
     cmp bx, ax
     jb .free
     mov ax, 64                      ; --- 3. the claim no hole holds -------
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     mov cl, 2
     jc .no
     mov [mo_big], dx
@@ -451,7 +447,7 @@ mo_bwin:
     push si
     mov cl, 1
     mov ax, MO_KB
-    call OSAPI_MEM_CLAIM
+    call mo_claim
     jc .say
     test dl, 4
     jz .cfree                       ; conventional: not a pool block
@@ -558,7 +554,8 @@ mo_tpl:
 %else
     dw 230, 300, 200, 40
 %endif
-    dw mo_ttl, mo_paint, 0, 0
+    dw mo_ttl, mo_cls
+    OS88_CLASS mo_cls, 0, PAINT, mo_paint, ONWAKE, mo_wake, ONTIMER, mo_tick
 %ifdef MO_LOWBIG
 mo_ttl:     db 'MegaLowB', 0
 mo_s_c:     db 'MEGALOWB: c ', 0
@@ -586,6 +583,42 @@ mo_s_okt2:  db ' ok', 0
 mo_s_no2:   db ' no ', 0
 mo_s_not:   db ' no', 0
 %endif
+
+; mo_* - the withdrawn KB doors' registers over OSAPI_MEM_P, for a test that
+; plans in KB: AX = KB (kept), CX = a head in KB (DMA), BX and CX kept; the
+; avail answers AX/BX in KB
+mo_claim:
+    push bx
+    mov bl, MEMP_CLAIM
+    jmp short mo_kbt
+mo_claim_hi:
+    push bx
+    mov bl, MEMP_CLAIM_HI
+    jmp short mo_kbt
+mo_kbt:
+    push ax
+    push cx
+    push si
+    mov si, cx
+    mov cl, 6
+    shl ax, cl
+    shl si, cl
+    mov cx, si
+    call OSAPI_MEM_P
+    pop si
+    pop cx
+    pop ax
+    pop bx
+    ret
+mo_avail:
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
+    pop cx
+    ret
 
     OS88_BSS 2 + 1 + 2 + MO_MAX * 2 + 2 + 2 + 2 + MO_TMAX * 2 + MO_WN * XMW_SIZE + CLAIM_SNAPSHOT_SIZE
     OS88_IMAGE_END

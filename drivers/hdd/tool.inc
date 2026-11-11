@@ -123,7 +123,10 @@ HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
                                 ; important thing about that slot and the row
                                 ; is where a user looks for it
 
-hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, hd_tw_key, hd_tw_click
+hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tcls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS hd_tcls, WF_KEEPH, PAINT, hd_tw_paint, ONKEY, hd_tw_key, \
+               ONCLICK, hd_tw_click, ONMOUSEUP, hd_tw_up, ONDRAG, hd_tw_drag
 hd_s_ttitle: db 'Format', 0
 
 ; -----------------------------------------------------------------------------
@@ -159,15 +162,6 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
-    mov al, 1                   ; a FIXED layout (SPEC.md 11.93): on CGA the
-    call OSAPI_WM_KEEPH         ; 178 rows hang over the dock whole, rather
-                                ; than the frame being cut at it with the
-                                ; buttons drawn on through it and a press on
-                                ; them falling to the dock (52.2.8)
-    mov ax, hd_tw_up            ; SPEC.md 13.7/13.8.1: not template words, so
-    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
-    mov ax, hd_tw_drag
-    call OSAPI_WM_ONDRAG
     mov byte [hd_tdown], 0
 .show:
     call OSAPI_WM_SHOW

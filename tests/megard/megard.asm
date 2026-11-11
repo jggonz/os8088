@@ -28,13 +28,14 @@
     OS88_HEADER 'MEGARD', mr_entry, 0, OS88_HIGHMEM
 
 mr_entry:
-    mov ax, 64
-    call OSAPI_MEM_CLAIM        ; OS88_HIGHMEM: a pool selector in protected
+    mov ax, 64 * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; OS88_HIGHMEM: a pool selector in protected
     jc .no                      ; mode, a segment everywhere else
     mov [mr_hi], dx
     mov ax, 64 * 64             ; 64KB in paragraphs, CONVENTIONAL on every
-    mov cx, MEMP_CONV           ; kernel (WaveRack's wo_ioclaim)
-    mov bl, MEMP_CLAIM
+    xor cx, cx                  ; kernel (WaveRack's wo_ioclaim)
+    mov bl, MEMP_CLAIM + MEMP_CONV
     call OSAPI_MEM_P
     jc .no
     mov [mr_lo], dx
@@ -116,8 +117,8 @@ mr_squeeze:
     cmp si, mr_sq + 2 * MR_SQN
     jae .free
     mov ax, 8 * 64
-    mov cx, MEMP_CONV
-    mov bl, MEMP_CLAIM
+    xor cx, cx
+    mov bl, MEMP_CLAIM + MEMP_CONV
     call OSAPI_MEM_P
     jc .free
     mov [si], dx

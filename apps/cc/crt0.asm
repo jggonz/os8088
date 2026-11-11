@@ -1221,10 +1221,10 @@ cc_ovneed:
     mov cl, 4                       ; will not divide a section-relative label,
     shr ax, cl                      ; and a build that fails on arithmetic is a
                                     ; worse trade than four instructions
-    mov cx, MEMP_CONV               ; no DMA head, CONVENTIONAL on kern_mega
+    xor cx, cx                      ; no DMA head, CONVENTIONAL on kern_mega
                                     ; (a module whose base is a CS), and the
                                     ; paragraph door
-    mov bl, MEMP_CLAIM_HI           ; (SPEC.md 50.3.7): the claim is the module
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV ; (SPEC.md 50.3.7): the claim is the module
     call OSAPI_MEM_P                ; to the heap's granule, where the KB door
     mov di, ax                      ; took it to a whole KB. DI = the paragraphs
                                     ; GRANTED. CONVENTIONAL on kern_mega for an
@@ -1696,27 +1696,51 @@ section .text
 ; =============================================================================
 section .data
 
-; The wm_create template (SPEC.md 11: 16 bytes, 8 words). The first five words
-; are the C's, written by os88_wm_create(); the last three are this file's,
-; and they are why a C program never has to name an assembly label. A
-; callback the shim did not ask for is a 0 here, which is exactly how the
-; window record says "I have no key handler".
+; The wm_create template (SPEC.md 11: 12 bytes, 6 words), every word the
+; C's, written by os88_wm_create() - the sixth is the C's own CLASS (SPEC.md
+; 11.104, os88.h's struct os88_class), which names the trampolines below.
 ;
 ; It also keeps .data non-empty, which is what keeps the image-size word equal
 ; to the file size - see the note at the top of this file.
 cc_tpl:
     dw 0, 0, 0, 0                   ; WT_X, WT_Y, WT_W, WT_H
-    dw 0                            ; WT_TITLE
-    dw cc_paint                     ; WT_PAINT
+    dw 0, 0                         ; WT_TITLE, WT_CLASS: the C's
+%if WT_SIZE != 12
+  %error "cc_tpl is the six-word template os88_wm_create fills"
+%endif
+
+; THE TRAMPOLINES BY A NAME THE C CAN WRITE (SPEC.md 11.104, 73.4): a C class
+; (os88.h's struct os88_class) names its handlers as os88_t_paint and the
+; rest, and each is one of the trampolines above under the C's own leading
+; underscore - assembled only when the shim asked for it, so a class naming
+; one it did not ask for is nasm's undefined-symbol error naming it
+_os88_t_paint equ cc_paint
 %ifdef CC_HAS_ONKEY
-    dw cc_onkey                     ; WT_ONKEY
-%else
-    dw 0
+_os88_t_onkey equ cc_onkey
 %endif
 %ifdef CC_HAS_ONCLICK
-    dw cc_onclick                   ; WT_ONCLICK
-%else
-    dw 0
+_os88_t_onclick equ cc_onclick
+%endif
+%ifdef CC_HAS_ABOUT
+_os88_t_about equ cc_about
+%endif
+%ifdef CC_HAS_ONWAKE
+_os88_t_onwake equ cc_onwake
+%endif
+%ifdef CC_HAS_ONCLOSE
+_os88_t_onclose equ cc_onclose
+%endif
+%ifdef CC_HAS_ONMOUSEUP
+_os88_t_onmouseup equ cc_onmouseup
+%endif
+%ifdef CC_HAS_ONRESIZE
+_os88_t_onresize equ cc_onresize
+%endif
+%ifdef CC_HAS_ONTIMER
+_os88_t_ontimer equ cc_ontimer
+%endif
+%ifdef CC_HAS_ONWHEEL
+_os88_t_onwheel equ cc_onwheel
 %endif
 
 %ifdef CC_HAS_OVL

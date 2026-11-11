@@ -240,9 +240,10 @@ hd_cylprobe:
     jae .out
     or byte [di+HDD_FLAGS], HDF_CYLASK  ; asked, from here on, whatever it says
     push dx
-    mov ax, 2
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA    ; DX = 2 KB, DMA-safe
+    mov ax, 128                 ; 2 KB in paragraphs, all of it the
+    mov cx, ax                  ; page-safe head
+    mov bl, MEMP_CLAIM + MEMP_CONV
+    call OSAPI_MEM_P            ; DX = 2 KB, DMA-safe
     mov si, dx
     pop dx
     jc .out
@@ -517,13 +518,18 @@ hd_raw:
     push si                     ; SECTORS OF IT - not ours, and not one: the
     push di                     ; tool's HSV_RAW hands its own image (hd_mbr,
     push es                     ; hd_sec0) and the installer's three-sector
-    mov ax, cx                  ; FAT chunk (hd_kfat_get) through here, and on
-    inc ax                      ; kern_mega every one of those is a selector.
-    shr ax, 1                   ; A copy through DS:BX read HDD.DRV's own
-    call OSAPI_MEM_CLAIM        ; image at the tool's offset - #GP 0 past its
-    jc .out                     ; limit, the installer's Next on kern_mega
-    mov [hd_bseg], dx           ; (KERN-MEGA-MEMORY-PLAN MC7, as built). AX =
-    xor ax, ax                  ; KB, two sectors a KB; out DX = its segment
+    mov ax, 96                  ; FAT chunk (hd_kfat_get) through here, and on
+    push bx                     ; kern_mega every one of those is a selector.
+    mov bl, MEMP_CONV               ; A copy through DS:BX read HDD.DRV's own
+    call OSAPI_MEM_P            ; image at the tool's offset - #GP 0 past its
+    pop bx                      ; limit, the installer's Next on kern_mega
+    jc .out                     ; (KERN-MEGA-MEMORY-PLAN MC7, as built). AX =
+    mov [hd_bseg], dx           ; 96 PARAGRAPHS, the three sectors a raw
+    xor ax, ax                  ; transfer is at most, BL = MEMP_CONV, and
+                                ; CX - the sectors, 1..3 - is the HEAD: no
+                                ; page boundary can split that few
+                                ; paragraphs, and it marks the claim the
+                                ; chip's. Out DX = its segment
     mov [hd_bofs], ax           ; ...at the claim's offset 0
     mov ch, cl                  ; CX = sectors x 256 words: a raw transfer is
     mov cl, al                  ; one to three sectors, well under 256

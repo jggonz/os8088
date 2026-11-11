@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -189,7 +190,7 @@ def main():
         # and every bss read below returns a stale copy.
         def ps():
             r = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-            return r[22] | (r[23] << 8)
+            return r[os88geom.W_SEG] | (r[os88geom.W_SEG + 1] << 8)
         say("browser at %04X" % ps())
 
         # THE BROWSER'S OWN STATE, at bss offsets derived from the image

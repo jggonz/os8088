@@ -1017,12 +1017,18 @@ wt_srcbps:
 wt_claims:
     cmp word [wt_laseg], 0
     jne .ring
-    mov ax, WT_LAKB
-    call OSAPI_MEM_CLAIM
+    mov ax, WT_LAKB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     mov cx, WT_LAKB * 1024
     jnc .la
-    mov ax, WT_LAKB2
-    call OSAPI_MEM_CLAIM
+    mov ax, WT_LAKB2 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     mov cx, WT_LAKB2 * 1024
     jc .nomem
 .la:
@@ -1036,17 +1042,20 @@ wt_claims:
     mov byte [wt_ext], 0
     cmp byte [wt_noext], 0
     jne .grant
-    mov ax, WT_RINGKB + 1           ; the ring and its words, the head all of
+    mov ax, (WT_RINGKB + 1) * 64    ; the ring and its words, the head all of
     mov cl, 3                       ; it: RL's code 3, 32 KB
 .etry:
     push cx
     mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI     ; (keeps all but DX)
+    push bx
+    mov bl, MEMP_CONV + MEMP_DMAPOOL + MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; (keeps all but DX)
+    pop bx
     pop cx
     jnc .egot
-    cmp ax, WT_RINGKB2 + 1
-    je .grant                       ; no room for either: the pool's grant
-    mov ax, WT_RINGKB2 + 1
+    cmp ax, (WT_RINGKB2 + 1) * 64   ; (refused: AX = the request, which is
+    je .grant                       ; whole granules) no room for either: the
+    mov ax, (WT_RINGKB2 + 1) * 64   ; pool's grant
     mov cl, 2                       ; code 2, 16 KB
     jmp short .etry
 .egot:

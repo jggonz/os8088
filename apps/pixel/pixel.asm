@@ -212,13 +212,6 @@ px_entry:
                                     ; primary (SPEC.md 106.16): after the
                                     ; window, so a failed entry holds none
     OS88_REGION_MOVABLE             ; SPEC.md 66.6.1: our region may move
-    mov al, 1
-    call OSAPI_WM_SIZABLE           ; every paint lays out from the live box
-    mov al, 1
-    call OSAPI_WM_OWNBG             ; we paint every pixel (SPEC.md 11.90.1)
-    mov al, 1
-    call OSAPI_WM_SNAP              ; content on a byte boundary (11.94): the
-                                    ; 8-pixel grid every run is aligned to
     mov cx, PX_MINW
     mov dx, PX_MINH
     call OSAPI_WM_MINSIZE
@@ -226,28 +219,12 @@ px_entry:
     call OSAPI_WM_PREFER
     mov si, px_menus
     call OSAPI_MENU_SET
-    mov si, px_about
-    call OSAPI_ABOUT_SET
     push bx
     mov ax, bx                      ; THE GESTURE (SPEC.md 20.5.1.3): press
     mov bx, px_btns                 ; draws down, release fires, a slide off
-    mov si, px_onup                 ; cancels
-    mov di, px_ondrag
-    mov dx, px_onclick              ; ...a press on no button: ours
+    mov dx, px_onclick              ; cancels; ...a press on no button: ours
     call os88ui_btninit
     pop bx
-    mov ax, px_clickw               ; ...and the press reaches US first, so
-    call OSAPI_WM_ONCLICK           ; the rects are where the window is NOW
-    mov ax, px_onwake
-    call OSAPI_WM_ONWAKE
-    mov ax, px_onclose              ; unsaved edits are asked about (SPEC.md
-    call OSAPI_WM_ONCLOSE           ; 75.1, 106.24)
-    mov ax, px_trclick              ; the right button: the Zoom tool out,
-    call OSAPI_WM_ONRCLICK          ; the Rotate tool the other way
-    mov ax, px_onresize
-    call OSAPI_WM_ONRESIZE
-    mov ax, px_ontimer
-    call OSAPI_WM_ONTIMER
     mov ax, PX_MEMT
     call OSAPI_WM_TIMER             ; the status bar's free memory
     call px_memfield
@@ -2502,10 +2479,10 @@ px_head:
     add cx, ax                      ; a JPEG's NEXT head (SPEC.md 106.19) is
     mov [px_hcap], cx               ; read from a cluster: a cluster more
     mov ax, cx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; KB
-    inc ax                          ; ...and one KB more, which px_dmaclaim
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                      ; paragraphs
+    add ax, 64                      ; ...and one KB more, which px_dmaclaim
                                     ; no longer needs for alignment: KEPT,
                                     ; because the head is given back before
                                     ; the decode's claims (so it is no peak)
@@ -3569,7 +3546,19 @@ PX_MINW     equ 336                 ; below this the toolbar loses its tail
 PX_MINH     equ 150                 ; ...and the tool column its last tool
 
 px_tpl:     dw 0, 20, 640, 440      ; the frame; OSAPI_WM_PREFER resizes it
-            dw px_ttl, px_paint, px_onkey, 0
+            dw px_ttl, px_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with.
+; Resizable - every paint lays out from the live box; we paint every pixel
+; (11.90.1); the content is snapped to the 8-pixel grid every run is aligned
+; to (11.94, the default). The press reaches US first (px_clickw), so the
+; rects are where the window is NOW, and goes on to the buttons; unsaved
+; edits are asked about (75.1, 106.24); the right button is the Zoom tool
+; out and the Rotate tool the other way
+    OS88_CLASS px_cls, WF_SIZABLE | WF_OWNBG, PAINT, px_paint, \
+               ONKEY, px_onkey, ONCLICK, px_clickw, ABOUT, px_about, \
+               ONWAKE, px_onwake, ONCLOSE, px_onclose, ONMOUSEUP, px_onup, \
+               ONRESIZE, px_onresize, ONRCLICK, px_trclick, \
+               ONTIMER, px_ontimer, ONDRAG, px_ondrag
 
     ; As wide as each card and as tall as it will give us (os88api.inc's
     ; OS88_PREFER note): the kernel clamps the height to the desktop band

@@ -511,10 +511,6 @@ ark_entry:
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
     OS88_REGION_MOVABLE
-    mov ax, ark_onresize            ; the metric record is picked from the
-    call OSAPI_WM_ONRESIZE          ; SCREEN, so an adapter change invalidates
-                                    ; it and nothing else would say so
-                                    ; (SPEC.md 11.98)
     mov si, ark_pref                ; **AND THE WINDOW FOLLOWS THE METRICS**
     call OSAPI_WM_PREFER            ; (SPEC.md 11.100.1). ark_metrics has always
                                     ; had two records and picked the right one;
@@ -533,9 +529,6 @@ ark_entry:
                                     ; different game
     mov si, ark_menus
     call OSAPI_MENU_SET
-    mov si, ark_about
-    call OSAPI_ABOUT_SET            ; 'About Arkanoid' under our name in the
-                                    ; bar (SPEC.md 12.2); preserves the flags
 .full:
     pop di
     pop si
@@ -1031,7 +1024,7 @@ ark_refocus:
 ; it.
 
 ; -----------------------------------------------------------------------------
-; ark_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
+; ark_about - the WC_ABOUT handler: a window callback in every respect
 ; in:  SI = our window ptr; caller holds the gfx lock
 ; -----------------------------------------------------------------------------
 ark_about:
@@ -3877,11 +3870,15 @@ ark_runc:
 ; Data
 ; =============================================================================
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; --- window template (SPEC.md 11: 12 bytes, 6 words) ---------------------------
 ; x/y/w/h are computed by ark_entry from the live screen.
 ark_tpl:
     dw 0, 0, 0, 0
-    dw ark_ttl, ark_paint, ark_onkey, ark_onclick
+    dw ark_ttl, ark_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS ark_cls, 0, PAINT, ark_paint, ONKEY, ark_onkey, \
+               ONCLICK, ark_onclick, ABOUT, ark_about, \
+               ONRESIZE, ark_onresize
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_PREFER ark_pref, ARK_PREF_BW, ARK_PREF_BH,  ARK_PREF_BW, ARK_PREF_BH,  ARK_PREF_SW, ARK_PREF_SH

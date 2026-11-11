@@ -60,41 +60,10 @@
 
 %ifdef KERN_BIG
 
-XM_ABI_VER  equ 2               ; the private kernel<->overlay ABI, mirrored
-                                ; in drivers/xmem/xmem.asm and passed in AH at
-                                ; DRVV_ATTACH. A KERNEL.SYS and an XMEM.DRV of
-                                ; different vintages - a half-copied floppy -
-                                ; must fail loudly at load rather than quietly
-                                ; at the first copy (SPEC.md 52.11's +10 word,
-                                ; carried in a register because the image is
-                                ; what compares it)
-
-; --- the service table the overlay returns at attach, mirrored from it -------
-XMV_CAPS    equ 0               ; out AX = free KB, DX:CX = pool base,
-                                ;     BL = free block-table entries
-XMV_ALLOC   equ 2               ; in DX:AX = bytes, BL = owner; out CF,
-                                ;     DX:AX = base / AX = 0/1/2
-XMV_FREE    equ 4               ; in DX:AX = base, BL = owner; out CF
-XMV_COPY    equ 6               ; in ES:SI = the XMC_ block below
-XMV_RELINST equ 8               ; in AL = an instance slot being torn down
-XMV_WALK    equ 10              ; in DX:DI = room for CX records; out AX
-                                ; (ABI 2: osapi_xmem_walk on kern_big)
-XMV_SIZE    equ 12
-
-; --- the copy's parameter block (SPEC.md 41.12.2) ----------------------------
-; BOTH ENDS TRAVEL AS 32-BIT LINEAR ADDRESSES, and that is forced rather than
-; chosen: slot 0x016C takes the conventional end as ES:SI, and drv_call loads
-; ES with KERNEL_SEG on its way into the image, so the caller's segment cannot
-; survive the crossing. Folding it down here is arithmetic the resident
-; xm_copy did internally anyway - and a block rather than registers because
-; the ABI wants seven of them (two 32-bit ends, a count, a direction and an
-; instance) and there are not seven to spare.
-XMC_EXT     equ 0               ; dd: the extended end
-XMC_CONV    equ 4               ; dd: the conventional end
-XMC_LEN     equ 8               ; dw: bytes
-XMC_DIR     equ 10              ; db: 0 = conventional -> extended, 1 = back
-XMC_INST    equ 11              ; db: the requesting instance
-XMC_SIZE    equ 12
+%include "xmabi.inc"             ; XM_ABI_VER, the XMV_* service table and the
+                                ; XMC_* copy block - ONE source with
+                                ; drivers/xmem/xmem.asm, and XM_ABI_VER's
+                                ; surface for tools/abilock.py (SPEC.md 41.12.2)
 
 ; -----------------------------------------------------------------------------
 ; The overlay's row. SIXTEEN BYTES SHAPED LIKE A drv_tab ROW AND NOT IN IT -
@@ -331,7 +300,7 @@ xm_boot_x:
     and dl, CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL
     and byte [cpu_feat], ~(CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL) & 0xFF
     or [cpu_feat], dl           ; the A20/HMA/UNREAL bits, so cpu_info's AH
-                                ; (slot 0x0155) keeps meaning what it always
+                                ; (slot 0x0101) keeps meaning what it always
                                 ; meant. THREE BITS, not the whole byte: this
                                 ; runs after cpu_detect, and a plain store
                                 ; here silently wiped the coprocessor bit that
@@ -396,7 +365,7 @@ section .text
 ; xm_free, xm_copy and xm_release_rec - are published-slot or teardown bodies
 ; that promise the caller's ES back, and NOT ONE of them banks ES itself; the
 ; `push es`/`pop es` below is what they promise with. No test asserts ES
-; across slot 0x016C, so a future edit that drops it would be silent.
+; across slot 0x010D, so a future edit that drops it would be silent.
 ;
 ; drv_svc_call with the row baked in rather than taken in BX, and that is the
 ; point: BX is an ARGUMENT here (BL carries the requesting instance to ALLOC
@@ -470,7 +439,7 @@ xm_ownbl:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (osapi slot 0x015A's body)
+; xm_caps - what is left up there? (osapi slot 0x0106's body)
 ;
 ; in:       -
 ; out:      AX = KB the pool can still hand out (0 = none, and xm_alloc /
@@ -504,7 +473,7 @@ xm_caps:
 
 %ifndef KERN_MEGA
 ; -----------------------------------------------------------------------------
-; osapi_xmem_walk - slot 0x04BF's body on kern_big (SPEC.md 28.4.8): the
+; osapi_xmem_walk - a door cell's body on kern_big (SPEC.md 28.4.8): the
 ;                   overlay's block table, so the Task Manager can bill the
 ;                   pool to whoever holds it. ES:DI = room for CX records;
 ;                   out CF = 0, AX = written. CF = 1, AX = 1 no store - the
@@ -527,7 +496,7 @@ osapi_xmem_walk:
 %endif
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (osapi slot 0x0160's body)
+; xm_alloc - first-fit a run of extended memory (osapi a door cell's body)
 ;
 ; in:       DX:AX = bytes wanted (rounded up to 1KB)
 ; out:      CF = 0 and DX:AX = the block's 32-bit linear base;
@@ -553,7 +522,7 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (osapi slot 0x0166's body)
+; xm_free - give a block back (osapi a door cell's body)
 ;
 ; in:       DX:AX = a base this caller owns
 ; out:      CF = 0 freed and merged with the adjacent free runs;
@@ -580,7 +549,7 @@ xm_free:
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes between conventional and extended memory
-;           (osapi slot 0x016C's body, SPEC.md 41.5)
+;           (osapi slot 0x010D's body, SPEC.md 41.5)
 ;
 ; in:       ES:SI = the conventional end, DX:AX = the extended end (32-bit
 ;           linear), CX = bytes (even, <= XM_MAX_COPY), DI = 0 conventional
@@ -753,7 +722,7 @@ xm_cblk:    resb XMC_SIZE       ; the copy's parameter block, read by the
 ; against one kernel far-calls into whatever follows the other's table - which
 ; here is the debug registry, not code. It assembles, it loads, it launches,
 ; and it dies somewhere unrelated. So a kern_big-only slot is present here as
-; a cell pointing at a body that answers, exactly as retired slot 0x0190 is.
+; a cell pointing at a body that answers, exactly as retired a door cell is.
 ;
 ; THE ANSWERS ARE TIER 0's, BYTE FOR BYTE, and that is the safety argument
 ; rather than a convenience. The target machine is an 8088, so a kern_big
@@ -776,7 +745,7 @@ xm_cblk:    resb XMC_SIZE       ; the copy's parameter block, read by the
 section .text
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (osapi slot 0x015A's body). Nothing.
+; xm_caps - what is left up there? (osapi slot 0x0106's body). Nothing.
 ;
 ; out:      AX = 0 (no store), DX:CX = 0 (the pool base), BL = XM_MAX_BLKS
 ; clobbers: nothing else (BH is the caller's and stays that way; flags)
@@ -795,7 +764,7 @@ xm_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (slot 0x0160). There is none.
+; xm_alloc - first-fit a run of extended memory (a door cell). There is none.
 ;
 ; in:       DX:AX = bytes wanted
 ; out:      CF = 1 and AX = 0 - "no store", xm_alloc's .nostore answer
@@ -807,7 +776,7 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (slot 0x0166). You cannot hold one.
+; xm_free - give a block back (a door cell). You cannot hold one.
 ;
 ; in:       DX:AX = a base this caller owns
 ; out:      CF = 1 - not a base. DX:AX preserved, per the contract
@@ -817,7 +786,7 @@ xm_free         equ osapi_snd_fm    ; `stc` / `ret` - snd.inc's kern_small
                                 ; FM refusal, the same two bytes, named once
 
 ; -----------------------------------------------------------------------------
-; xm_copy - move bytes to or from the store (slot 0x016C). There is nowhere.
+; xm_copy - move bytes to or from the store (slot 0x010D). There is nowhere.
 ;
 ; in:       ES:SI, DX:AX, CX, DI as SPEC.md 41.8 documents them
 ; out:      CF = 1 and AX = 1 - "no store", xm_copy's .e1 answer

@@ -592,7 +592,9 @@ mh_spans_end:
 
 mh_tpl:
     dw 8, 400, 200, 40
-    dw mh_ttl, mh_paint, 0, 0
+    dw mh_ttl, mh_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mh_cls, 0, PAINT, mh_paint
 mh_ttl:     db 'MegaHW', 0
 mh_s_e9:    db 'MEGAHW: ', 0
 mh_s_k:     db 'HWK.DAT', 0

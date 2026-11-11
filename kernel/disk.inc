@@ -166,9 +166,13 @@ DSK_R_ATTR   equ 11              ; attribute byte
 DSK_R_CZM    equ 12              ; THE COMPRESSION HINT (SPEC.md 20.14,
 DSK_R_CZH    equ 13              ; docs/plans/O88-COMPRESSION-PLAN.md 15): a mark
 DSK_R_CZL    equ 20              ; byte, then the UNPACKED size as a high byte
-DSK_CZ_MARK  equ 0x5A            ; and a low word. **THE MARK CARRIES THE
-                                 ; FORMAT**: 0x5A + the LZ_* id, so 0x5A is
-                                 ; LZ4 and 0x5B is LZB (SPEC.md 20.14.1). It
+DSK_CZ_MARK  equ 0xA4            ; and a low word. **THE MARK CARRIES THE
+                                 ; FORMAT**: 0xA4 + the LZ_* id, so 0xA4 is
+                                 ; LZ4 and 0xA5 is LZB (SPEC.md 20.14.1) -
+                                 ; BITS 3 AND 4 CLEAR, which NT, Linux vfat and
+                                 ; macOS read as lower-case flags: 5Ah/5Bh
+                                 ; listed every packed file in lower case
+                                 ; there until kernel size pass 19 (F3). It
                                  ; had to when the two formats got different
                                  ; answers at the capacity decision, which
                                  ; happens BEFORE any data I/O; they get the
@@ -1616,8 +1620,10 @@ dsk_xfer:
                                 ; served blocks and silently wrong the moment
                                 ; two did: a network volume's sectors would
                                 ; have been handed to the hard-disk driver
-    call drv_cls_svc_x          ; CLSCF: a volume's class serves blocks, so it has a slot
-    mov bp, [di+DSV_BLK]
+    push es                     ; (the caller's buffer)
+    call drv_cls_svc_x          ; CLSCF: a volume's class serves blocks, so it has a table
+    mov bp, [es:di+DSV_BLK]     ; ...read in place (kernel size pass 19)
+    pop es
 %ifdef KERN_MEGA
     pop ax
 %endif
@@ -2234,10 +2240,12 @@ dsk_xfer:
 .drvhi:
     push ax
     push di
+    push es
     mov al, [drv_blkcls]
     call drv_cls_svc_x          ; CLSCF: .drv read BP off this same class's table
-    test byte [di+DSV_CAPS], BLKCAP_SEL
-    pop di                      ; (pop writes no flag)
+    test byte [es:di+DSV_CAPS], BLKCAP_SEL
+    pop es                      ; (pop writes no flag)
+    pop di
     pop ax
     jz .dhbnc
     push ax
@@ -2582,7 +2590,10 @@ dsk_xfer:
     jmp short .ijf              ; CF = 0 off the `or`, and .success's one test
                                 ; - [dsk_bnc_si] - is 0 by the note above, so
                                 ; it is skipped rather than taken
-    nop                         ; PARITY PAD, never executed: the exits above
+%ifndef OS88_DRIVERS            ; (kern_big's went with kernel size pass 19's
+    nop                         ; odd +3 at .drv's in-place read - a pad
+%endif                          ; moved to disk_mount_x's OS88_REDIR arm)
+                                ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
                                 ; (t_hotpar.py). DSK_PMHD's bytes in dsk_xfer
@@ -2896,7 +2907,7 @@ dsk_boot_from_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], dl
-    mov word [bx+DV_SECS], 0    ; unknown - see the header
+    and word [bx+DV_SECS], 0    ; unknown - see the header
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop, like any volume
     mov byte [bx+DV_LBL], 0     ; ...and named by the kernel, not by us
     mov ax, bx
@@ -3173,7 +3184,7 @@ dsk_flop_add_x:
     jmp short .scan
 .got:
     mov [bx+DV_UNIT], cl
-    mov word [bx+DV_SECS], 0    ; unknown, like every other floppy's
+    and word [bx+DV_SECS], 0    ; unknown, like every other floppy's
     mov byte [bx+DV_FLAGS], 1   ; shown on the desktop - the caller only calls
                                 ; for a drive the equipment word claims
     mov byte [bx+DV_LBL], 0     ; ...and NAMED by the kernel, not here: an
@@ -3355,7 +3366,7 @@ dsk_vol_slot_x:
 ; dsk_vol_kind lived here: [dsk_vkind], set at mount, is the byte it answered
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; osapi_vol_at - is this PARTITION already a volume? (slot 0x02F6, SPEC 52.10.3)
+; osapi_vol_at - is this PARTITION already a volume? (a door cell, SPEC 52.10.3)
 ; in:  DL = an int 13h drive number, BX:CX = the partition's 32-bit base LBA
 ;      (BX = the high word, CX = the low - dsk_boot_from's own argument shape)
 ; out: CF = 0 and AL = the volume index that covers it; CF = 1 = none does
@@ -3756,7 +3767,7 @@ osapi_vol_fence:
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_add - slot 0x01F8 (X: ES = the caller's segment)
+; osapi_vol_add - a door cell (X: ES = the caller's segment)
 ; in:  AL = the driver's volume handle, CX = sectors, ES:SI = a NUL label or
 ;      SI = 0, DX = 0 (the listing claim it used to take, SPEC.md 22.6)
 ;      ...OR DX != 0: TAKE the BIOS volume whose index is DL - the one
@@ -3817,7 +3828,7 @@ osapi_vol_add_x:
                                 ; refuses every call there - driver.inc's
                                 ; `xor ax, ax / stc / retf` is the same answer)
 ; -----------------------------------------------------------------------------
-; osapi_fs_ent - slot 0x02D9 (X: ES = the caller's segment), SPEC.md 62.9.1
+; osapi_fs_ent - a door cell (X: ES = the caller's segment), SPEC.md 62.9.1
 ; in:  ES:SI -> a DSK_DE_SIZE-byte staged SPEC.md 19.1 entry, in the DRIVER's
 ;      own segment
 ; out: CF = 0 and AX = the index it landed at; CF = 1 = the listing is full,
@@ -3890,7 +3901,7 @@ osapi_fs_ent_x:
 %endif                          ; OS88_REDIR
 %ifdef OS88_DRIVERS
 ; -----------------------------------------------------------------------------
-; osapi_vol_del - slot 0x01FE (X).  in AL = volume index
+; osapi_vol_del - a door cell (X).  in AL = volume index
 ; -----------------------------------------------------------------------------
 osapi_vol_del_x:
     call osapi_vol_fence
@@ -3900,7 +3911,7 @@ osapi_vol_del_x:
     retf
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_mount - slot 0x0204 (X).  in AL = volume index; out CF = 1 refused
+; osapi_vol_mount - a door cell (X).  in AL = volume index; out CF = 1 refused
 ;
 ; The Mount button (SPEC.md 51.8). UI-task context only, exactly like every
 ; other file slot: it takes [sch_lock] around int 13h and rewrites the one
@@ -3925,7 +3936,7 @@ osapi_vol_mount_x:
 %endif                          ; OS88_DRIVERS
 
 ; -----------------------------------------------------------------------------
-; osapi_vol_paint lived here: slot 0x0288 is dropped (kernel.asm's API table)
+; osapi_vol_paint lived here: slot 0x026A is dropped (kernel.asm's API table)
 ; -----------------------------------------------------------------------------
 
 ; =============================================================================
@@ -3978,9 +3989,8 @@ dsk_fat_ofs_x:
                                 ; are the shifts by 8 and 9, at 2-3 clocks
                                 ; where `mov cl, 9 / shr dx, cl` was ~48 - and
                                 ; this is dsk_next_clus_x's per-cluster path
-    call dsk_fat_window         ; ensure DX and DX+1 are resident
-    cmp word [dsk_fatw0], 0xFFFF
-    je .bad                     ; the load failed: there is no offset to give
+    call dsk_fat_window         ; ensure DX and DX+1 are resident - ZF = 1
+    je .bad                     ; the load failed                     ; the load failed: there is no offset to give
     mov al, dl                  ; the window-relative sector: at most
     sub al, [dsk_fatw0]         ; [dsk_fatwn]-1 <= 8, so its low byte is all
     shl al, 1                   ; of it, and x512 is x2 into the high byte -
@@ -3995,7 +4005,9 @@ dsk_fat_ofs_x:
 ; -----------------------------------------------------------------------------
 ; dsk_fat_window - make FAT sector DX (and DX+1) resident (SPEC.md 18.8)
 ; in:  DX = a FAT sector index
-; out: nothing (all registers preserved). A read failure leaves the window
+; out: ZF = 1 when the window is not resident ([dsk_fatw0] = 0xFFFF, the
+;      compare both callers made after the call - kernel size pass 19, -6),
+;      every register preserved. A read failure leaves the window
 ;      invalid, which the next access retries - and dsk_next_clus answers
 ;      CF=1 for it, which every walker already reads as "the chain ends here"
 ; -----------------------------------------------------------------------------
@@ -4044,7 +4056,8 @@ dsk_fat_window:
 .ok:
     mov [dsk_fatw0], dx
 .out:
-    pop es
+    cmp word [dsk_fatw0], 0xFFFF    ; ZF = 1: none resident (the banner)
+    pop es                      ; (pop writes no flag, nor does kretc_di)
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
@@ -4338,8 +4351,7 @@ disk_mount_x:
     call dsk_fatw_pick          ; this volume's own window, if it has one and
     jnc .fat_ok                 ; this is a quiet switch back to it (18.8.1)
     xor dx, dx
-    call dsk_fat_window
-    cmp word [dsk_fatw0], 0xFFFF
+    call dsk_fat_window         ; ZF = 0: the window is resident
     jne .fat_ok
 .jfail:                         ; relay: short jc's cannot reach .fail
     jmp .fail
@@ -4734,9 +4746,9 @@ disk_mount_x:
                                     ; to peek at, and reading an ASSOC.DAT over
                                     ; a cable is the one thing this may not do
     push di                     ; WHICH file class serves it (62.9.19):
-    call drv_fs_seg             ; DI = its drv_svc copy
-    test byte [di+DSV_CAPS], FSCAP_LOCAL
-    pop di                      ; (pop writes no flag)
+    call drv_fs_seg             ; ES:DI = its table, in place - and ES needs
+    test byte [es:di+DSV_CAPS], FSCAP_LOCAL ; no bank: both paths below
+    pop di                      ; reload it from SS (pop writes no flag)
     jnz .harvloc                ; ...UNLESS ITS READS ARE MEMORY (SPEC.md
                                 ; 62.9.2.2), in which case it takes the real
     jmp .fsicons                ; harvest below - the peek is a `rep movsw`
@@ -4747,7 +4759,12 @@ disk_mount_x:
                                 ; the OS88_REDIR above is the whole gate now
                                 ; (SPEC.md 62.9.2.3): the drv_svc read it was
                                 ; protecting is exactly as impossible as the
-                                ; volume it asks about, so one symbol says it
+                                ; volume it asks about, so one symbol says it.
+                                ; (The `es:` above is odd, and the parity pad
+                                ; that paid for it went with dsk_fat_window's
+                                ; odd -5 later in kernel size pass 19:
+                                ; dsk_next_clus_x keeps its even shift,
+                                ; t_hotpar.py)
 
     push ss                     ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     pop es                      ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
@@ -6356,10 +6373,10 @@ dsk_fatw_drop:
     pop bx
     pop ax
     ret
-%elifdef KERN_SMALL
-    nop                         ; PARITY PAD, never executed (kernel size pass
-                                ; 13): dsk_next_clus_x back at an even shift
-%endif                          ; OS88_DRIVERS
+%endif                          ; OS88_DRIVERS (kern_small's PARITY PAD here,
+                                ; kernel size pass 13's, went with
+                                ; dsk_fat_window's odd -5 in pass 19:
+                                ; dsk_next_clus_x keeps its odd shift)
 
 ; -----------------------------------------------------------------------------
 ; dsk_fc_bad - dsk_free_clus_x's first three refusals share this one near jump.
@@ -8234,7 +8251,7 @@ dsk_find_x:
 %endif
     mov al, [DSKF_RAW+DSK_R_CZM]   ; whether it is COMPRESSED, which is the +22
     sub al, DSK_CZ_MARK         ; word: the mark LESS its format (20.14.2.4),
-    cmp al, LZ_LZB              ; so 0x5A and 0x5B both pass and nothing else.
+    cmp al, LZ_LZB              ; so 0xA4 and 0xA5 both pass and nothing else.
                                 ; Asked FIRST, so the flags ride the four
                                 ; moves below and AX needs no bank around it
                                 ; (size pass 10, -2)

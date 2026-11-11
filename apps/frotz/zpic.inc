@@ -883,8 +883,9 @@ zp_probe_mg1:
     mul bx
     mov [zp_pcap], ax
 
-    mov ax, ZP_PROBE / 1024
-    call OSAPI_MEM_CLAIM
+    mov ax, (ZP_PROBE / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [zp_pseg], dx
 

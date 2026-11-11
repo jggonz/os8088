@@ -68,7 +68,7 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 ; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = PKG_FMT
-PKG_FMT     equ 10              ; the package format, and it is the API
+PKG_FMT     equ 13              ; the package format, and it is the API
                                 ; TABLE'S: a renumbering bumps it, and so
                                 ; does a cell re-contracted (SPEC.md
                                 ; 20.2.0, 20.8 rule 4). Mirrored in
@@ -234,7 +234,7 @@ ld_unreserve:
 %ifdef KERN_BIG
     COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
 %endif                          ; with it if nobody else is a widget (11.103.10)
-    call KERNEL_SEG:cw_xm_release_rec   ; DI = the record
+    KDOOR xm_release_rec                ; DI = the record
     call ld_slot
     call mem_free_owner_x
     mov bx, [ld_base]
@@ -310,7 +310,7 @@ ld_hdr_ok:
     cmp byte [es:si+LD_H_VER], PKG_FMT       ; 3: then the word is the packed
     jne ld_hdr_size.bad                      ; IMAGE's length, because with
     mov [ld_fsz], ax                         ; parts the file is not it
-    mov word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
+    and word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
     mov al, [es:si+LD_H_FLAGS]               ; BECOMES [ld_fsz] here, for
     not al                                   ; ld_check_hdr's ladder. A driver,
     test al, 0x0C                            ; or any other combination, is
@@ -890,7 +890,9 @@ ld_where:
     and bx, 0FE00h
 .rdgo:
     mov [ld_roff], bx
-    ret
+    mov es, [ld_base]           ; ...and ES:BX = the region at that offset,
+    ret                         ; which both callers loaded next (kernel size
+                                ; pass 19, -4)
 
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
@@ -990,8 +992,7 @@ ld_run_body_x:
                                 ; BX HELD to the read: dsk_bytes_secs_x spends
                                 ; CL alone (kernel size pass 18, -10)
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
-    mov ax, [ld_clus]
-    mov es, [ld_base]           ; the package's OWN segment
+    mov ax, [ld_clus]           ; (ES = the package's OWN segment: ld_where)
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
@@ -1238,7 +1239,7 @@ ld_alloc:
 .nodesk:                        ; worker dying mid-launch keeps the image the
 %endif                          ; entry proc is about to call (11.103.10)
 %ifndef KERN_SMALL
-    mov word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
+    and word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
                                 ; cleared HERE rather than by the arm that
                                 ; consumes it: an entry proc can set this word
                                 ; and then return CF=1, and the arm never runs
@@ -1350,7 +1351,7 @@ ld_start:
                                 ; written into its head (SPEC.md 20.12.10)
     push word [snd_inst]        ; the outer dispatch's stamp
     mov di, [ld_rec]
-    call KERNEL_SEG:cw_snd_disp_set     ; DI = record: this instance is asking
+    KDOOR snd_disp_set                  ; DI = record: this instance is asking
 %ifdef KERN_MEGA
     call mega_pkgok             ; kern_big's DOS.O88 refuses here, in a toast
     jnc .pkgok                  ; raised under this launch's stamp, so step
@@ -1496,7 +1497,7 @@ ld_start:
     ; untouched by this load from beginning to end, and the ordering that
     ; had to be got right no longer exists to get wrong.
     call ct_cw_gfx_lock
-    call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
+    KDOOR wm_show               ; in: BX = window ptr; repaints all
     call ct_cw_gfx_unlock
     mov word [ld_base], 0       ; ...AND NOTHING IS BEING LOADED ANY MORE
                                 ; (SPEC.md 66.6.1). mem_can_move pins the
@@ -1626,31 +1627,22 @@ ld_start:
                                 ; program, and the wrong direction to diverge in
     ; ...and the third bound, which is this arm's alone: the LOADER's word for
     ; what it actually put there, where the part's own header cannot be
-    ; trusted. DX is image + bss, as ld_hdr_size leaves it. TWO FORMS
-    ; (SPEC.md 20.12.10.5): AX non-zero is BYTES at DX and the carve stays
-    ; whole, which is every loader built before the keep; AX = 0 is the KEEP
-    ; form, CX the paragraphs at DX the program keeps, and that one figure is
-    ; both the bound and where the carve's tail is cut - so a keep that would
-    ; cut into the program's own image + bss is refused here, by the same
-    ; compare, rather than trusted
+    ; trusted. DX is image + bss, as ld_hdr_size leaves it. ONE FORM, the
+    ; KEEP (SPEC.md 20.12.10.5): CX the paragraphs at DX the program keeps,
+    ; and that one figure is both the bound and where the carve's tail is cut
+    ; - so a keep that would cut into the program's own image + bss is
+    ; refused here, by the same compare, rather than trusted. (The BYTES
+    ; form, AX non-zero and the carve kept whole, had no loader left that
+    ; built it and went at the flag day, kernel size pass 19.)
     ;
-    ; Both are asked of AX = image + bss - 1, which ld_hdr_size's entry bound
-    ; keeps above 0: `dx > bytes` is `dx - 1 >= bytes`, and the keep's
-    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, so one
-    ; `jae` serves both and the round-up add is gone (kernel size pass 12)
-    mov cx, [ld_rehsz]
+    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, which
+    ; ld_hdr_size's entry bound keeps above 0 (kernel size pass 12)
     mov ax, dx
     dec ax
-    jcxz .rhkeep                ; 0 = the KEEP form
-    cmp ax, cx                  ; ...or BYTES, and then CX = the keep: the
-    mov cx, 0xFFFF              ; carve WHOLE (`mov` writes no flag)
-    jmp short .rhbnd
-.rhkeep:
-    mov cl, 4                   ; ...or the loader's, against the program in
-    shr ax, cl                  ; PARAGRAPHS
+    mov cl, 4
+    shr ax, cl
     mov cx, [ld_rehkp]
     cmp ax, cx
-.rhbnd:
     jae .abort                  ; CX survives to mem_reown_x: ld_slot banks it
     mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
@@ -1769,14 +1761,11 @@ ld_start:
     ; --- 8b. RE-HOME HIGH (SPEC.md 20.12.10.9, KERN-MEGA-PLAN 14.38/14.44):
     ; a program whose OWN header says OS88_HIGH leaves conventional memory
     ; here, exactly as an OS88_HIGH package does at step 7 - its region is
-    ; the carve's KEEP, so only the KEEP form (AX = 0 at the cell) qualifies,
-    ; and only a keep of one segment: a pair's limit is 64KB, and what is
+    ; the carve's KEEP, and only a keep of one segment: a pair's limit is 64KB, and what is
     ; past it would need a selector of its own (14.38.4 S4). Anything else,
     ; or no room above 1MB, and it runs low as before - not a refusal.
     ; ld_hicx tests protected mode and the bit; [ld_base] comes back as the
     ; pair's DATA selector, so .call8's far call and step 9's I_SPTR follow
-    cmp word [ld_rehsz], 0      ; the KEEP form only...
-    jne .rhnohi
     mov cx, [ld_rehkp]          ; CX = the keep, in paragraphs
     mov es, ax                  ; ES = the program, whose class byte is read
     cmp cx, 0x0FFF
@@ -1924,9 +1913,8 @@ ld_pkg_start_x:
     ; this), and what it produces is a region full of something else whose
     ; PKG_DISP is not a dispatcher: step 8's far call lands at CS=0000
     ; IP=0003, in the interrupt vector table (SPEC.md 21.5.2).
-    call ld_where               ; BX = where in the region, AX = how many
-    mov es, [ld_base]           ; ES:DI = the region at that offset
-    mov di, bx
+    call ld_where               ; BX = where in the region, AX = how many,
+    mov di, bx                  ; ES:DI = the region at that offset
     xchg cx, ax                 ; CX = the count (AX is spent)
     mov si, [ld_msrc]           ; ...the source OFFSET, first and through the
                                 ; kernel's own DS
@@ -2166,14 +2154,12 @@ ld_rehome:  resw 1              ; OSAPI_PKG_REHOME's answer: the segment the
                                 ; EVERY launch, not by whoever consumed it: an
                                 ; entry proc that re-homes and then aborts must
                                 ; not hand the next launch its leftovers
-ld_rehsz:   resw 1              ; ...and the bytes it says are available there,
-                                ; which is what bounds the part's image + bss
-                                ; - 0 for the KEEP form (SPEC.md 20.12.10.5)
-ld_rehkp:   resw 1              ; ...whose figure is this: the paragraphs at
-                                ; [ld_rehome] the program keeps, the bound and
-                                ; the carve's new length at once. Read only
-                                ; when [ld_rehsz] is 0, which only the cell
-                                ; writes, so it needs no clear of its own
+ld_rehkp:   resw 1              ; ...and the paragraphs at [ld_rehome] the
+                                ; program keeps, the bound and the carve's
+                                ; new length at once (SPEC.md 20.12.10.5).
+                                ; Read only when [ld_rehome] is set, which
+                                ; only the cell writes, so it needs no clear
+                                ; of its own
 %endif
 ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
@@ -2223,13 +2209,13 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x03FE: "the program is at DX, not at me"
+; osapi_pkg_rehome - a door cell: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
-; in:  DX = the segment the program's image starts at, AX = the bytes
-;      available there - or AX = 0, the KEEP form, and then CX = the
-;      paragraphs at DX the program keeps, the carve's tail past them going
-;      back to the heap (SPEC.md 20.12.10.5) - ES = the caller's segment (the
-;      X stub's)
+; in:  DX = the segment the program's image starts at, CX = the paragraphs
+;      at DX the program keeps, the carve's tail past them going back to the
+;      heap (SPEC.md 20.12.10.5) - the KEEP form, the only one since kernel
+;      size pass 19 withdrew the bytes form (AX is no longer read) - ES = the
+;      caller's segment (the X stub's)
 ; out: CF = 0 recorded; CF = 1 refused
 ; clobbers: flags
 ;
@@ -2261,10 +2247,8 @@ osapi_pkg_rehome_x:
     jnc .no                     ; claim) has no code half and no heap record,
 %endif                          ; and the re-home runs code at its base
     mov [ld_rehome], dx
-    mov [ld_rehsz], ax          ; 0 = the KEEP form, and then...
-    mov [ld_rehkp], cx          ; ...this is its figure (SPEC.md 20.12.10.5).
-                                ; Stored either way: step 8a reads it only
-                                ; when the word above says so
+    mov [ld_rehkp], cx          ; ...and the keep (SPEC.md 20.12.10.5): step
+                                ; 8a reads it only when the word above says so
     CLC_OR_STC .no              ; CF = 0 recorded, or (.no) CF = 1 refused
     pop bx                      ; `pop` writes no flag, so the answer survives
     retf

@@ -22,6 +22,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, 'tools'))
 sys.path.insert(0, os.path.join(_ROOT, 'tests'))
 import dispcp                                          # noqa: E402
+import os88geom  # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import os88build                                       # noqa: E402
@@ -69,7 +70,7 @@ def log_state(m):
         if w not in (G.FD_W, G.FD_W_SNAP):
             continue
         r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        seg = dispcp._u16(r, 22)
+        seg = dispcp._u16(r, os88geom.W_SEG)
         o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
         return m.readseg(seg, img + 42, 12)

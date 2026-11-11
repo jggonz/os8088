@@ -547,15 +547,16 @@ _os88_font_run:
 ; WINDOWS (SPEC.md 11)
 ; =============================================================================
 
-; void *os88_wm_create(int x,int y,int w,int h,const char *title)
-; SI = a 16-byte template (WT_*). The template is crt0.asm's `cc_tpl`, whose
-; paint/onkey/onclick words are the trampolines the shim asked for and are
-; already in place; this fills the five words that are the C's business.
+; void *os88_wm_create(int x,int y,int w,int h,const char *title,
+;                      struct os88_class *cls)
+; SI = a 12-byte template (WT_*). The template is crt0.asm's `cc_tpl`, and all
+; six of its words are the C's: the frame, the title and the CLASS (SPEC.md
+; 11.104), whose slots name crt0's trampolines.
 ; Returns 0 when the window table is full, which os88_main() returns straight
 ; on as its abort (crt0 turns a 0 into the CF the loader is owed).
 CC_GATE _os88_wm_create
 %ifdef CC_U__os88_wm_create
-%if WT_X != 0 || WT_Y != 2 || WT_W != 4 || WT_H != 6 || WT_TITLE != 8
+%if WT_X != 0 || WT_Y != 2 || WT_W != 4 || WT_H != 6 || WT_TITLE != 8 || WT_CLASS != 10
   %error "the WT_* template moved: os88_wm_create copies the arguments in order"
 %endif
 _os88_wm_create:
@@ -564,11 +565,11 @@ _os88_wm_create:
     mov di, cc_tpl
     mov si, sp
     inc si
-    inc si                          ; ...SS:SI = the five arguments, which are
-    push ds                         ; WT_X, WT_Y, WT_W, WT_H and WT_TITLE in
-    push ss                         ; that order - so they are one copy
-    pop ds                          ; DS = the STACK, for this copy only
-    mov cx, 5
+    inc si                          ; ...SS:SI = the six arguments, which are
+    push ds                         ; WT_X, WT_Y, WT_W, WT_H, WT_TITLE and
+    push ss                         ; WT_CLASS in that order - so they are one
+    pop ds                          ; copy. DS = the STACK, for this copy only
+    mov cx, 6
     rep movsw                       ; the title is an offset in our segment,
     pop ds                          ; and the RECORD KEEPS THE POINTER, not the
                                     ; bytes - so it must outlive the window
@@ -596,12 +597,23 @@ CC_T_WIN  _os88_wm_close,      OSAPI_WM_CLOSE     ; ...and THIS is how you
                                                   ; you must return too. The
                                                   ; lock may be held or not
 
-; The flag setters - BX = win, AL = 0 clear / non-zero set.
-CC_T_WINF _os88_wm_sizable,    OSAPI_WM_SIZABLE
-CC_T_WINF _os88_wm_snap,       OSAPI_WM_SNAP
-CC_T_WINF _os88_wm_keeph,      OSAPI_WM_KEEPH
-CC_T_WINF _os88_wm_ownbg,      OSAPI_WM_OWNBG
-CC_T_WINF _os88_wm_saveu,      OSAPI_WM_SAVEU
+; void os88_wm_flag(void *win, int bit, int on) - BX = win, AH = the W_FLAGS
+; bit NUMBER (OS88_WFB_*), AL = 0 clear / non-zero set (SPEC.md 11.104.3). The
+; run-time half of a class's style word; the five setters it replaced
+; (os88_wm_sizable and the rest) went in kernel size pass 19.
+CC_GATE _os88_wm_flag
+%ifdef CC_U__os88_wm_flag
+_os88_wm_flag:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    mov ah, [bp+6]
+    mov al, [bp+8]
+    or al, [bp+9]                   ; any non-zero word means "set", and the
+    call OSAPI_WM_FLAG              ; slot reads AL only: fold the high half
+    pop bp                          ; in so os88_wm_flag(w, b, 256) is not
+    ret                             ; "off"
+%endif
 
 ; int os88_wm_obscured(void *win) - 1 = covered, hidden included (11.3.1).
 CC_GATE _os88_wm_obscured
@@ -878,12 +890,12 @@ _os88_win_visible:
 %endif
 
 ; -----------------------------------------------------------------------------
-; Menus, About, and the two installable callbacks (SPEC.md 12.2, 13.7, 11.98)
+; Menus, the About card, the timer and the wake (SPEC.md 12.2, 13.9, 74.1)
 ;
-; Each of these hands the kernel the address of a TRAMPOLINE in crt0.asm, so
-; each is assembled only when the shim asked for that trampoline. A C package
-; that calls one without the %define gets nasm's external-reference error
-; naming the function, which is the failure naming its own cause (73.1).
+; The handlers themselves are the C's CLASS's (SPEC.md 11.104): its slots name
+; crt0's trampolines (os88_t_*), so a class naming one the shim did not ask for
+; is nasm's undefined-symbol error naming it - the failure naming its own
+; cause (73.1). The installers that were here went with the setter cells.
 ; -----------------------------------------------------------------------------
 
 %ifdef CC_HAS_MENUS
@@ -910,18 +922,6 @@ _os88_menu_set:
 %endif
 
 %ifdef CC_HAS_ABOUT
-; void os88_about_set(void *win) - BX = win, SI = the handler. Adds
-; 'About <Name>' above the 'Close' the kernel already puts in your pull-down.
-CC_GATE _os88_about_set
-%ifdef CC_U__os88_about_set
-_os88_about_set:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov si, cc_about
-    call OSAPI_ABOUT_SET
-    ret
-%endif
-
 %ifdef OS88UI_ABOUT
 ; -----------------------------------------------------------------------------
 ; void os88_about_card(void *win, const char **lines)
@@ -962,45 +962,7 @@ _os88_about_card_d:
 %endif
 %endif
 
-%ifdef CC_HAS_ONMOUSEUP
-; void os88_wm_onmouseup(void *win) - BX = win, AX = the near proc.
-CC_GATE _os88_wm_onmouseup
-%ifdef CC_U__os88_wm_onmouseup
-_os88_wm_onmouseup:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_onmouseup
-    call OSAPI_WM_ONMOUSEUP
-    ret
-%endif
-%endif
-
-%ifdef CC_HAS_ONRESIZE
-; void os88_wm_onresize(void *win) - BX = win, AX = the near proc.
-CC_GATE _os88_wm_onresize
-%ifdef CC_U__os88_wm_onresize
-_os88_wm_onresize:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_onresize
-    call OSAPI_WM_ONRESIZE
-    ret
-%endif
-%endif
-
 %ifdef CC_HAS_ONTIMER
-; void os88_wm_ontimer(void *win) - BX = win, AX = the near proc (SPEC.md 13.9).
-; Call it AFTER os88_wm_create, once; os88_wm_timer() below is what arms it.
-CC_GATE _os88_wm_ontimer
-%ifdef CC_U__os88_wm_ontimer
-_os88_wm_ontimer:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_ontimer
-    call OSAPI_WM_ONTIMER
-    ret
-%endif
-
 ; int os88_wm_timer(void *win, int ticks) - BX = win, AX = ticks from now, 0
 ; cancels (SPEC.md 13.9). 18.2 ticks a second, the clock the system already
 ; keeps. 0 = armed, -1 = REFUSED and nothing armed - a kern_small kernel
@@ -1021,34 +983,7 @@ _os88_wm_timer:
 %endif
 %endif
 
-%ifdef CC_HAS_ONCLOSE
-; void os88_wm_onclose(void *win) - BX = win, AX = the near proc (SPEC.md 75.1).
-; Call it AFTER os88_wm_create, once, from os88_main(). From that moment every
-; door out of your window - the close box, the app-name menu's Close, the dock
-; tile's context menu - runs os88_onclose() first and takes its answer.
-CC_GATE _os88_wm_onclose
-%ifdef CC_U__os88_wm_onclose
-_os88_wm_onclose:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_onclose
-    call OSAPI_WM_ONCLOSE
-    ret
-%endif
-%endif
-
 %ifdef CC_HAS_ONWAKE
-; void os88_wm_onwake(void *win) - BX = win, AX = the near proc (SPEC.md 74.1).
-CC_GATE _os88_wm_onwake
-%ifdef CC_U__os88_wm_onwake
-_os88_wm_onwake:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_onwake
-    call OSAPI_WM_ONWAKE
-    ret
-%endif
-
 ; int os88_wm_wake(void *win) - BX = win (SPEC.md 74.1). Post the kick; the
 ; handler above runs on the UI task, lock free, some passes later. Any
 ; context. 0 = a wake is queued for this window (now or already), -1 = the
@@ -1063,21 +998,6 @@ _os88_wm_wake:
     mov bx, [ss:bx+2]
     call OSAPI_WM_WAKE
     sbb ax, ax                      ; CF -> 0 / -1
-    ret
-%endif
-%endif
-
-%ifdef CC_HAS_ONWHEEL
-; void os88_wm_onwheel(void *win) - BX = win, AX = the near proc (SPEC.md
-; 13.18). Call it AFTER os88_wm_create, once. An inline cell that preserves
-; FLAGS and does nothing on kern_small, which has no wheel - so no answer.
-CC_GATE _os88_wm_onwheel
-%ifdef CC_U__os88_wm_onwheel
-_os88_wm_onwheel:
-    mov bx, sp                      ; no frame: one argument
-    mov bx, [ss:bx+2]
-    mov ax, cc_onwheel
-    call OSAPI_WM_ONWHEEL
     ret
 %endif
 %endif
@@ -1840,8 +1760,10 @@ _os88_file_append:
     push ds
     pop es
     mov cx, [bp+8]
-    call OSAPI_FILE_APPEND
-    sbb cx, cx                      ; -1 refused, 0 done
+    mov dx, -1                      ; THE APPEND: OSAPI_FILE_WRITE_AT at the
+    call OSAPI_FILE_WRITE_AT        ; file's size (SPEC.md 18.4.7.3), the
+    sbb cx, cx                      ; cell OSAPI_FILE_APPEND was. -1 refused,
+                                    ; 0 done
     and ax, cx                      ; AX = the FERR_*, or 0
     mov [cc_ferr], ax
     xchg ax, cx                     ; the answer: 0, or -1 (see os88_ferr())
@@ -2206,7 +2128,10 @@ CC_GATE _os88_mem_claim
 _os88_mem_claim:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    call OSAPI_MEM_CLAIM
+    mov cl, 6                       ; the KB in paragraphs, OSAPI_MEM_P's one
+    shl ax, cl                      ; unit (SPEC.md 50.3.7): no head, the DISK
+    mov bl, MEMP_CLAIM              ; class
+    call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
@@ -2256,7 +2181,7 @@ _os88_mem_huge_step:
 ; claim of that shape (KERN-MEGA-MEMORY-PLAN MC5, MEGA-HUGE-PLAN F3): the most
 ; KB os88_mem_huge_w(kb, win) is given now, nothing claimed. kern_big and
 ; kern_small have no ask (CF = 1) and their huge claim is a conventional one,
-; so the answer there is OSAPI_MEM_AVAIL's largest run - the same question
+; so the answer there is MEMP_AVAIL's largest run, in KB - the same question
 CC_GATE _os88_mem_huge_ask
 %ifdef CC_U__os88_mem_huge_ask
 _os88_mem_huge_ask:
@@ -2265,7 +2190,10 @@ _os88_mem_huge_ask:
     xor ax, ax                      ; AX = 0: ask
     call OSAPI_MEM_HUGE
     jnc .r
-    call OSAPI_MEM_AVAIL            ; no ask: the heap's largest run
+    mov bl, MEMP_AVAIL              ; no ask: the heap's largest run, in KB
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
 .r:
     ret
 %endif
@@ -2387,6 +2315,8 @@ _os88_task_restartable:
 ; new size in KB; out DX = the claim's base NOW. ALWAYS TAKE THE ANSWER: a
 ; grow that had to move leaves your old segment pointing at memory that is no
 ; longer yours. 0 = refused, and the old claim is untouched at its old base.
+; 1,024KB and more is no paragraph count: OSAPI_MEM_HUGE's MEMH_REGROW (an
+; os88_mem_huge claim above 1MB on kern_mega; refused everywhere else)
 CC_GATE _os88_mem_regrow
 %ifdef CC_U__os88_mem_regrow
 _os88_mem_regrow:
@@ -2394,7 +2324,16 @@ _os88_mem_regrow:
     mov bp, sp
     mov dx, [bp+4]
     mov ax, [bp+6]
-    call OSAPI_MEM_REGROW
+    mov bx, MEMH_REGROW             ; (= MEMP_REGROW: BL, either cell's verb)
+    cmp ah, 4
+    jae .huge                       ; 1,024KB or more
+    mov cl, 6                       ; in KB: paragraphs
+    shl ax, cl
+    call OSAPI_MEM_P
+    jmp short .r
+.huge:
+    call OSAPI_MEM_HUGE
+.r:
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
     and ax, dx                      ; ...-> 0 refused, or the base NOW
@@ -2403,18 +2342,17 @@ _os88_mem_regrow:
 %endif
 
 ; unsigned os88_mem_claim_p(unsigned paras) / os88_mem_regrow_p(seg, paras) /
-; os88_mem_largest_p(void) / os88_mem_gran(void) - OSAPI_MEM_P (SPEC.md
+; os88_mem_largest_p(void) - OSAPI_MEM_P (SPEC.md
 ; 50.3.7): the same claims counted in PARAGRAPHS, for a size that is a byte
 ; count - OS88_BYTES_PARA(n) is the paragraphs to ask for. The heap rounds
-; every claim to its granule (os88_mem_gran(), 32 paragraphs today), so the
+; every claim to its granule (32 paragraphs today), so the
 ; KB calls above can never ask for less than a KB and these can
 CC_GATE _os88_mem_claim_p
 %ifdef CC_U__os88_mem_claim_p
 _os88_mem_claim_p:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
-    xor cx, cx                      ; no DMA head
-    mov bl, MEMP_CLAIM
+    mov bl, MEMP_CLAIM              ; (no head: CX is not read)
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax
@@ -2443,24 +2381,16 @@ _os88_mem_largest_p:
     call OSAPI_MEM_P                ; AX = the largest, in paragraphs
     ret
 %endif
-CC_GATE _os88_mem_gran
-%ifdef CC_U__os88_mem_gran
-_os88_mem_gran:
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P
-    xchg ax, cx                     ; AX = the granule, in paragraphs
-    ret
-%endif
 
 ; unsigned os88_mem_largest_kb(void), os88_mem_total_kb(void) - what the KB
 ; doors serve you: the largest claim os88_mem_claim() is given and the total
 ; free KB you can claim from. Size yourself from these, never int 12h. On
 ; kern_mega they count the POOL as well (MEGA-HUGE-PLAN F6): an OS88_HIGHMEM
 ; package's claims of 64KB or less go above 1MB where they can, and
-; OSAPI_MEM_AVAIL alone counts conventional memory there - the false
+; MEMP_AVAIL alone counts conventional memory there - the false
 ; refusals and the undersizing of every C package that planned from it.
 ; OSAPI_MEM_HUGE's MEMH_AVAIL ask is that answer; kern_big and kern_small
-; refuse it (CF = 1) and OSAPI_MEM_AVAIL is the same answer there.
+; refuse it (CF = 1) and MEMP_AVAIL is the same answer there.
 CC_GATE _os88_mem_largest_kb
 %ifdef CC_U__os88_mem_largest_kb
 _os88_mem_largest_kb:
@@ -2479,7 +2409,11 @@ cc_avail:                           ; out AX = largest KB, BX = total KB
     mov bx, MEMH_AVAIL
     call OSAPI_MEM_HUGE
     jnc .r
-    call OSAPI_MEM_AVAIL
+    mov bl, MEMP_AVAIL              ; in KB, rounded down
+    call OSAPI_MEM_P
+    mov cl, 6
+    shr ax, cl
+    shr bx, cl
 .r:
     ret
 %endif

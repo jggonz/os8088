@@ -367,7 +367,7 @@ def main():
             sys.exit("pciether: BROWSER.O88 did not open a window")
         rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
-        pseg = u16(rec, 22)
+        pseg = u16(rec, dispcp.W_SEG)
         say("browser at %04X (base %06X)" % (pseg, m.lin(pseg)))
 
         # THE BAR HOLDS `http://` ALREADY (tests/ethernet.py): type the rest

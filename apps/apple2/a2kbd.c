@@ -501,7 +501,7 @@ static int ovl_a2_clip_service(void)
 
     if (a2_copy_req) {
         a2_copy_req = 0;
-        seg = os88_mem_claim(A2_CLIPKB);
+        seg = os88_mem_claim_p(A2_CLIPKB * 64);
         if (seg == 0) {
             a2_say("No memory for the copy.");
         } else {
@@ -526,7 +526,7 @@ static int ovl_a2_clip_service(void)
         a2_paste_stop();                    /* a second Paste over the first:
                                              * the old claim goes back before
                                              * the new one is asked for */
-        seg = os88_mem_claim(A2_PASTEKB);
+        seg = os88_mem_claim_p(A2_PASTEKB * 64);
         if (seg == 0) {
             a2_say("No memory for the paste.");
             return 1;

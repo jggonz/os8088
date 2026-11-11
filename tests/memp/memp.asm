@@ -57,12 +57,13 @@ mp_entry:
 
 mp_suite:
     ; --- 1. the granule, and a run to claim from ---------------------------
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P
-    mov [mp_gran], cx
+    mov cx, 0x1234                  ; MEMP_AVAIL KEEPS CX (kernel size pass
+    mov bl, MEMP_AVAIL              ; 19: it no longer answers the granule,
+    call OSAPI_MEM_P                ; which checks 2 and 3 measure instead)
     mov [mp_big0], ax
-    cmp cx, 32
+    cmp cx, 0x1234
     jne .f1
+    mov word [mp_gran], 32
     or ax, ax
     jz .f1
     cmp bx, ax
@@ -154,7 +155,7 @@ mp_suite:
 .t7:
     mov ax, 288
     mov cx, ax
-    mov bl, MEMP_CLAIM
+    mov bl, MEMP_CLAIM + MEMP_CONV
     call OSAPI_MEM_P
     jc .f7
     mov [mp_c7], dx
@@ -170,8 +171,11 @@ mp_suite:
     MP_BAD 7
     ; --- 8 and 9. the KB door at 4KB and 16KB --------------------------------
 .t8:
-    mov ax, 4
-    call OSAPI_MEM_CLAIM
+    mov ax, 4 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .f8
     call OSAPI_MEM_FREE
     MP_OK 8
@@ -179,8 +183,11 @@ mp_suite:
 .f8:
     MP_BAD 8
 .t9:
-    mov ax, 16
-    call OSAPI_MEM_CLAIM
+    mov ax, 16 * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .f9
     call OSAPI_MEM_FREE
     MP_OK 9
@@ -234,7 +241,9 @@ mp_paint:
 
 mp_tpl:
     dw 40, 40, 120, 40
-    dw mp_ttl, mp_paint, 0, 0
+    dw mp_ttl, mp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mp_cls, 0, PAINT, mp_paint
 mp_ttl:     db 'MEMP', 0
 
     OS88_BSS 64

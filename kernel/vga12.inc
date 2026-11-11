@@ -3926,7 +3926,7 @@ section .text
 ; the wrong PLACE.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; osapi_gfx_fill_pat - API slot 0x0222's X body (SPEC.md 20.9)
+; osapi_gfx_fill_pat - API slot 0x0134's X body (SPEC.md 20.9)
 ; in:  AX/BX/CX/DX = the rect, ES:SI = the caller's 8 pattern bytes
 ; out: nothing; SI preserved
 ;
@@ -5361,7 +5361,7 @@ gfx_unlock:
 %endif
 
 ; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x018A)
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; OSAPI_GFX_SCROLL)
 ;
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
 ;           coords), SI = dy SIGNED: positive moves the rect's content UP dy

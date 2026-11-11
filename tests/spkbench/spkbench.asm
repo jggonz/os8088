@@ -61,10 +61,6 @@ sp_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [sp_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP
-    mov si, sp_onabout
-    call OSAPI_ABOUT_SET
     clc
 .out:
     pop si
@@ -320,8 +316,9 @@ sp_setup:
     push di
     cmp word [sp_rseg], 0
     jne .src
-    mov ax, (SP_RL + 272 + 1023) / 1024
-    call OSAPI_MEM_CLAIM
+    mov ax, ((SP_RL + 272 + 1023) / 1024) * 64
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .out
     mov [sp_rseg], dx
 .src:
@@ -754,7 +751,10 @@ sp_bbody:                           ; 4 KB read from [sp_bseg]:0
 ; =============================================================================
 sp_tpl:
     dw 7, 22, 632, 448
-    dw sp_ttl, sp_paint, sp_onkey, sp_onclick
+    dw sp_ttl, sp_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS sp_cls, 0, PAINT, sp_paint, ONKEY, sp_onkey, \
+               ONCLICK, sp_onclick, ABOUT, sp_onabout
 sp_ttl:     db 'Spk Bench', 0
 
 sp_rates:   dw 4800, 5512, 8000, 0

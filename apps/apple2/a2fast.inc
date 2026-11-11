@@ -193,8 +193,8 @@ _a2_run:
 ; which CODESEL refuses - the fast core then never ran on kern_mega.
 _a2f_claimcode:
     mov ax, 0x1000                  ; 64KB in paragraphs
-    mov cx, MEMP_CONV
-    mov bl, MEMP_CLAIM
+    xor cx, cx                      ; no head...
+    mov bl, MEMP_CLAIM + MEMP_CONV  ; ...and conventional
     call OSAPI_MEM_P
     sbb ax, ax                      ; CF -> -1 / 0...
     not ax

@@ -113,8 +113,9 @@ mr_entry:
     mov si, mr_s_e90
     call mr_dump
     mov dx, [mr_a]
-    mov ax, 256
-    call OSAPI_MEM_REGROW
+    mov ax, 256 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+14], si
     jc .l1x
@@ -148,8 +149,9 @@ mr_entry:
     call mr_fill
     inc ax
     call mr_fill
-    mov ax, 384
-    call OSAPI_MEM_REGROW
+    mov ax, 384 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+22], si
     jc .l1f
@@ -169,8 +171,9 @@ mr_entry:
     call mr_chk
 .l2b:
     mov [mr_res+26], ax
-    mov ax, 160
-    call OSAPI_MEM_REGROW
+    mov ax, 160 * 64
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     sbb si, si
     mov [mr_res+28], si
     jc .l1f
@@ -234,7 +237,8 @@ mr_entry:
     call mr_fill
     mov ax, [mr_m]
     sub ax, 128
-    call OSAPI_MEM_REGROW
+    mov bx, MEMH_REGROW             ; (in KB: past 1,023KB)
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+40], si
     jc .l3f
@@ -245,7 +249,8 @@ mr_entry:
     mov [mr_res+42], ax
     mov ax, [mr_m]
     sub ax, 64
-    call OSAPI_MEM_REGROW
+    mov bx, MEMH_REGROW             ; (in KB: past 1,023KB)
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+44], si
     jc .l3f
@@ -275,11 +280,12 @@ mr_entry:
     mov ax, 3
 .l3g:
     mov [mr_res+46], ax
-    mov ax, [mr_p]                  ; below the cut: windows 0..P-2
-    dec ax
-    mov cl, 6
+    mov ax, [mr_p]                  ; below the cut: windows 0..P-2, in
+    dec ax                          ; KB (64KB a window) - past 1,023KB, so
+    mov cl, 6                       ; MEMH_REGROW: paragraphs wrap there
     shl ax, cl
-    call OSAPI_MEM_REGROW
+    mov bx, MEMH_REGROW
+    call OSAPI_MEM_HUGE
     sbb si, si
     mov [mr_res+48], si
     jc .l3f
@@ -506,7 +512,9 @@ mr_hex2:
 
 mr_tpl:
     dw 8, 400, 200, 40
-    dw mr_ttl, mr_paint, 0, 0
+    dw mr_ttl, mr_cls
+; its CLASS (SPEC.md 11.104): every handler, and the flags it is born with
+    OS88_CLASS mr_cls, 0, PAINT, mr_paint
 mr_ttl:     db 'MegaRgw', 0
 mr_s_e9:    db 'MEGARGW: ', 0
 mr_s_e90:   db 'MEGARGW0: ', 0

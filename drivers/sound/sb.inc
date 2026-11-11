@@ -1139,7 +1139,7 @@ sbl_grant_chk:
     ret
 
 ; =============================================================================
-; The stream surface: slot 0x00EA's live body (SPEC.md 20.3/34.5/34.6).
+; The stream surface: slot 0x00CC's live body (SPEC.md 20.3/34.5/34.6).
 ; osapi_snd_stream (snd.inc) tail-jumps here. AL = verb, AH = handle or
 ; sub-op; every verb preserves all registers except its documented outputs.
 ; =============================================================================
@@ -2146,7 +2146,7 @@ sbl_dleft:
 ;
 ; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
 ;           CX = bytes, DI = destination offset in the CALLER's segment
-;           (BX, threaded per-call by slot 0x00EA's wrapper - SPEC.md 20.3)
+;           (BX, threaded per-call by slot 0x00CC's wrapper - SPEC.md 20.3)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -2164,7 +2164,7 @@ sbl_dleft:
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
 ; in:       SI = source offset in the CALLER's segment (BX, threaded
-;           per-call by slot 0x00EA's wrapper - SPEC.md 20.3), CX = bytes,
+;           per-call by slot 0x00CC's wrapper - SPEC.md 20.3), CX = bytes,
 ;           DI = destination offset in SND_SEG (inside a grant the caller
 ;           owns)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
@@ -2730,9 +2730,12 @@ sbl_dma_get:
     mov ax, SBL_DMASZ           ; THE HMA FIRST (SPEC.md 2.10.8): on a 286 with
     call OSAPI_MEM_HMA          ; `.cold` up there, 8KB the heap never sees -
     jnc .got                    ; one 64KB physical page, as the chip needs
-    mov ax, SBL_WANT
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
+    mov ax, SBL_WANT * 64       ; (paragraphs), all of it the page-safe
+    mov cx, ax                  ; head, from the top
+    push bx
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV
+    call OSAPI_MEM_P            ; out CF, DX = base segment
+    pop bx
     jc .fail
     xor ax, ax                  ; (a heap claim starts at its offset 0)
 .got:
@@ -2904,7 +2907,7 @@ sbl_pool_get:
 .min:
     mov si, ax                  ; SI = the ask, across both asks (DX is the
     mov cx, ax                  ; door's output either way). The whole pool
-    mov bl, MEMP_CLAIM_HI       ; is the chip's HEAD, and the head in
+    mov bl, MEMP_CLAIM_HI + MEMP_CONV       ; is the chip's HEAD, and the head in
     call OSAPI_MEM_P            ; paragraphs is exactly the ask. What is
     jnc .got                    ; GRANTED past it - the granule's slack - is
                                 ; page-safe too, with no head to say so: the

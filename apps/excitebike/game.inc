@@ -531,8 +531,11 @@ xb_tclaim:
     je .out
     push ax
     push dx
-    mov ax, XB_TCLAIM_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, XB_TCLAIM_KB * 64
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .no
     mov [xb_tseg], dx
 .no:

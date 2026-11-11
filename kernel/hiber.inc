@@ -293,7 +293,10 @@ MRF_SIG     equ 0x3146524D      ; 'MRF1' in the same cell: kernel/megares.inc's
 
 section .text
 ; --- resident data: the template and the title (read through DS by wm) -----
-hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hbf_paint, hbf_onkey, hbf_onclick
+hb_tpl:     dw 160, 150, 320, 100, hb_ttl, hb_cls
+hb_cls:     dw 18, 0, hbf_paint, hbf_onkey, hbf_onclick, 0, 0, 0, hbf_onup
+                                ; ...its CLASS (SPEC.md 11.104): the release
+                                ; is a COLD offset (SPEC.md 2.6.3)
 hb_ttl:     db 'Hibernate', 0
 hb_s_ptr:   db 'HIBERNAT.PTR', 0    ; THE ONE name (SPEC.md 87.3). The two
 HB_S_EXT    equ hb_s_ptr + 9        ; files differ in three bytes, so the
@@ -435,7 +438,7 @@ hb_probe_x:
 section .cold
 
 ; -----------------------------------------------------------------------------
-; drv_suspend_x - slot 0x0419's three verbs (SPEC.md 51.11): THE MACHINE, OUT
+; drv_suspend_x - a door cell's three verbs (SPEC.md 51.11): THE MACHINE, OUT
 ;                 OF MY WAY. Entered from kernel.asm's thunk under api_x, so
 ;                 ES = the caller's DS and DS = KERNEL_SEG
 ; in:  AL = 1 suspend the hardware drivers, ES:DI = a DQ_SIZE-record buffer
@@ -1008,7 +1011,7 @@ hbm_toast:
     push cs
     pop es                      ; toast_show takes ES:SI
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    KDOOR toast_show
     pop es
     pop cx
     ret
@@ -1309,7 +1312,7 @@ hbm_win:
     push ax
     push di
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_inst_find_kind   ; DI = the record
+    KDOOR inst_find_kind                ; DI = the record
     jc .no
     mov si, [di+I_WIN]
     or si, si
@@ -1605,14 +1608,9 @@ hbm_forget:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hbm_kinit:
-    push ax
-    mov byte [hb_down], 0
-    mov ax, hbf_onup            ; a COLD offset (SPEC.md 2.6.3)
-    call KERNEL_SEG:cw_wm_onmouseup
-    mov al, 1
-    call KERNEL_SEG:cw_wm_snap  ; text on cell boundaries (SPEC.md 11.94)
-    pop ax
-    ret
+    mov byte [hb_down], 0       ; (the release is hb_cls's slot, SPEC.md
+    ret                         ; 11.104, and the snap the default every
+                                ; window is born with, 11.94)
 
 ; -----------------------------------------------------------------------------
 ; hbm_open - the System menu's Hibernate... (SPEC.md 87.1): open the window
@@ -1631,9 +1629,9 @@ hbm_open:
     mov byte [hb_down], 0
 .launch:
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jnc .out
-    call KERNEL_SEG:cw_snd_beep
+    KDOOR snd_beep
 .out:
     pop si
     pop ax
@@ -1683,9 +1681,13 @@ hbm_geom:
     mov ah, [bx+DV_UNIT]        ; the driver's handle
     mov al, [bx+DV_CLASS]
     mov [drv_blkcls], al
-    call COLD_SEG:drvf_drv_cls_svc  ; DI = the class's service table
+    push es
+    call COLD_SEG:drvf_drv_cls_svc  ; ES:DI = the class's service table, in
+    jc .nogeo                   ; place (kernel size pass 19)
+    mov bp, [es:di+DSV_GEOM]    ; == DSV_BLK, and AL = 2 is the sub-function
+.nogeo:
+    pop es                      ; (pop writes no flag)
     jc .no
-    mov bp, [di+DSV_GEOM]       ; == DSV_BLK, and AL = 2 is the sub-function
     mov al, 2
     HBGC drv_blk_call_x         ; DL = unit, CX:BX = base, SI = spt,
     jc .no                      ; DI = heads; CF = 1 not int 13h
@@ -2467,7 +2469,7 @@ hbm_ask:
                                 ; ui_task's next step hands it to the front
                                 ; window - where Esc is Discard
     mov al, KIND_HIBER
-    call KERNEL_SEG:cw_app_launch
+    KDOOR app_launch
     jmp short .out
 .stale:
     mov si, hbm_s_stale
@@ -5117,7 +5119,7 @@ hbm_wake:
     call hbm_kd                
     mov bp, dock_force
     call hbm_kd                
-    call KERNEL_SEG:cw_wm_paint_all
+    KDOOR wm_paint_all
     ; 5. the two files are spent, and the drivers come back -----------------
     call hbm_forget
     ; **AND A SUSPEND'S ROWS COME BACK THROUGH THIS DOOR TOO** (SPEC.md

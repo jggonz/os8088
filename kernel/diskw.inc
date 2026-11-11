@@ -9,7 +9,7 @@
 ; dskw_read, dskw_delete, dskw_rename, dskw_dfree - were the first surface,
 ; and read and write are ONE routine each: both take a far pointer and a
 ; 32-bit count, so there is no separate big-file entry point any more
-; (SPEC.md 18.4.1; its slot 0x0190 has since gone to OSAPI_VOL_KIND),
+; (SPEC.md 18.4.1; its a door cell has since gone to OSAPI_VOL_KIND),
 ; for the OS and for packages alike (they ARE the API cells 0x0103..0x0118,
 ; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory
 ; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles and no
@@ -223,8 +223,8 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; dskw_pmask - which attribute bits refuse THIS replace (SPEC.md 19.6.2)
 ; in:  dskw_raw holds the existing entry's 32 raw bytes; [dskw_syswr] says
 ;      whose write this is
-; out: AL = the mask to test DSK_R_ATTR against; every other register and the
-;      flags preserved
+; out: AL = the mask, and ZF the entry's DSK_R_ATTR tested against it (ZF = 0
+;      refuses); every other register preserved
 ;
 ; Three tiers, and the third is the one the field paid for:
 ;
@@ -313,12 +313,13 @@ dskw_pmask:
     mov al, DSKW_KPROT
 %endif
 .out:
-    pop bx
-    ret
+    test byte [dskw_raw+DSK_R_ATTR], al ; ...and the test both callers made
+    pop bx                      ; after the call: ZF = 0 = refused (kernel
+    ret                         ; size pass 19, -4)
 %endif                          ; DSKW_SYSW
 
 ; -----------------------------------------------------------------------------
-; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0103)
+; dskw_write - create or replace a whole file (SPEC.md 18.4, a door cell)
 ; in:  SI -> NUL-terminated 8.3 name, ES:BX -> the bytes, DX:CX = byte count
 ;      (32-bit, DX high; 0 = an empty file)
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -374,7 +375,7 @@ dskw_wrp:
 ; dskw_write_sys - dskw_write, for a file that belongs to the KERNEL
 ; in/out: dskw_write's, exactly
 ;
-; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x0280) publishes it behind
+; KERNEL AND DRIVERS ONLY - OSAPI_FILE_WRITE_SYS (0x015C) publishes it behind
 ; a caller test that refuses a package FERR_PROT (SPEC.md 19.6.1), because the
 ; whole point of SPEC.md 19.6 is that a package cannot make a file the user
 ; can neither see nor delete. Two differences from the ordinary write,
@@ -396,7 +397,7 @@ dskw_wrp:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x0109)
+; dskw_read - read a whole file by name (SPEC.md 18.4, a door cell)
 ; in:  SI -> name, ES:BX -> destination, DX:CX = its capacity in bytes
 ;      (32-bit, DX high)
 ; out: CF=0, DX:AX = bytes read (the file's 32-bit size); CF=1, AX = FERR_* -
@@ -441,7 +442,7 @@ dskw_read_x:
     jmp dskw_ent_store.pdi      ; DI, SI, CX, BX (size pass 13)
 
 ; -----------------------------------------------------------------------------
-; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x010F)
+; dskw_delete - delete a file by name (SPEC.md 18.4, a door cell)
 ; in:  SI -> name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -451,7 +452,7 @@ dskw_delete_x:
     jmp short dskw_wrap7
 
 ; -----------------------------------------------------------------------------
-; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x0115)
+; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x00D3)
 ; in:  SI -> old name, DI -> new name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -477,7 +478,7 @@ dskw_wrap7:
     jmp short dskw_wrp.pop      ; the same seven pops, the same order
 
 ; -----------------------------------------------------------------------------
-; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0118)
+; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, a door cell)
 ; in:  nothing
 ; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (1..64 by mount
 ;      rule 4, so spc*512 fits a word; the cell answers sectors and callers
@@ -1568,9 +1569,8 @@ dskw_wbody:
                                 ; 18.4.3), so this path re-read the sector it
                                 ; had just been handed - a whole revolution
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be replaced here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be replaced here, and
+%else                           ; ZF = 0 if the entry carries any of it
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (no system writer: AL is
 %endif                          ; dead on both arms below)
     jnz .prot                   ; FERR_PROT, written beside .big above
@@ -3543,9 +3543,13 @@ dskw_read_at_x:
     ; offset / cluster_bytes, and one div: a REAL file's quotient fits 16 bits
     ; (a volume holds under 65,525 clusters), but the offset is bounded only
     ; by the entry's size, and a hostile size can overflow it - unguarded.
+%ifdef DSK_STREAM
+    call dwr_cidx               ; AX = clusters to skip: the cursor's own
+%else                           ; division, below (kernel size pass 19, -8)
     mov ax, [dwr_off]
     mov dx, [dwr_off+2]
     div word [dwr_clb]          ; AX = clusters to skip
+%endif
 %ifndef KERN_SMALL
     mov cl, 9                   ; ...and DX the bytes into the one it lands
     shr dx, cl                  ; in: its SECTORS, which dsk_read_chain skips
@@ -3870,7 +3874,7 @@ dwf_dskw_read_seq:
 ; -----------------------------------------------------------------------------
 %ifdef DSKW_WSEQ
 WSQF_HELD   equ 0x01            ; the caller's AL...
-WSQF_SYS    equ 0x02            ; ...and APPEND_SYS's permission (18.4.4):
+WSQF_SYS    equ 0x02            ; ...and a SYSTEM file's permission (18.4.4):
                                 ; a hidden + system file may be grown
 WSQF_KEEP   equ 0x04            ; ...the hold outlives a WAKE (18.4.9.3), on a
                                 ; fixed disk: [dws_keep] is the verdict
@@ -3883,10 +3887,10 @@ DWS_RECW    equ 8               ; and size, dskw_dsec, dskw_doff, dskw_prev,
                                 ; where declared
 
 %ifndef KD_BUILD
-; dwsf_dskw_write_seq - THE CELL's way in (slot 0x0461), and the kernel's
-; writers call the door below it. WSEQF_SYS is APPEND_SYS's permission, so it
-; takes APPEND_SYS's FENCE (api_file_sysc, SPEC.md 19.6.1): drv_owns_seg on
-; the caller's DS, which api_rn banked under the far return api_far built -
+; dwsf_dskw_write_seq - THE CELL's way in (a door cell), and the kernel's
+; writers call the door below it. WSEQF_SYS is a SYSTEM file's permission, so
+; it takes OSAPI_FILE_WRITE_SYS's FENCE (SPEC.md 19.6.1): drv_owns_seg on
+; the caller's DS, which api_nb banked under the far return api_far built -
 ; BP, BX, IP, CS, the caller's SI, the caller's DS. A close reads no flag
 dwsf_dskw_write_seq:
     jcxz dwf_dskw_write_seq
@@ -3895,7 +3899,7 @@ dwsf_dskw_write_seq:
     push bx
     push bp
     mov bp, sp
-    mov bx, [bp+10]             ; the caller's DS (SS: the stack's own)
+    mov bx, [bp+API_RN_DSOFF]   ; the caller's DS (SS: the stack's own)
     call drv_owns_seg_x         ; CF = 0: a loaded driver's segment
     pop bp
     pop bx
@@ -4158,7 +4162,7 @@ dws_hlose:
 ; out: CF=0 with AX=0; CF=1 with AX = FERR_*
 ; clobbers: AX (the output), CF
 ;
-; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4, slot 0x0286)
+; dskw_append - add CX bytes to the END of a file (SPEC.md 18.4.4; OSAPI_FILE_WRITE_AT's append form)
 ; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
 ; out/clobbers: dskw_write_at's
 ;
@@ -4199,9 +4203,9 @@ dws_hlose:
 ; bytes from past the CALLER's buffer over bytes the file owns. At or past
 ; the size the rounded tail lands on slack, so any count goes (18.4.7.2).
 ; -----------------------------------------------------------------------------
-; (The SYSTEM-file flavour, dskw_append_sys, is its far entry alone:
-; dwf_dskw_append_sys stores [dskw_syswr] = 1 and falls into dwf_dskw_append's
-; call, and dskw_wrp clears it on the way out - size pass 10, -4.)
+; (The SYSTEM-file flavour, dskw_append_sys, was its far entry alone until
+; kernel size pass 19 withdrew OSAPI_FILE_APPEND_SYS, which had no caller: a
+; driver appends to a system file through WRITE_SEQ's WSEQF_SYS.)
 dskw_append_x:
     push bx
     push cx
@@ -4262,9 +4266,8 @@ dskw_wabody:
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
 %ifdef DSKW_SYSW
-    call dskw_pmask             ; AL = what may not be written here
-    test byte [dskw_raw+DSK_R_ATTR], al
-%else
+    call dskw_pmask             ; AL = what may not be written here (ZF:
+%else                           ; the entry's attribute tested against it)
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT  ; (.args spends AX next)
 %endif
     jnz .prot
@@ -4763,7 +4766,7 @@ dskw_czknow:
     call dskw_czsniff           ; ...or it said nothing: ask the file, and
 .judge:                         ; judge again on whatever that wrote
     mov al, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
-    sub al, DSK_CZ_MARK             ; 20.14.1), so 0x5A and 0x5B pass
+    sub al, DSK_CZ_MARK             ; 20.14.1), so 0xA4 and 0xA5 pass
     cmp al, LZ_LZB
 .out:
     ret
@@ -6832,7 +6835,7 @@ dskw_fmt_low:
 .ok:
     pop dx
     mov ax, 512                 ; one unit: this track
-    call KERNEL_SEG:apic_fpg_stepb
+    KDOOR fpg_stepb
     inc bp
     mov ax, bp
     shr ax, 1                   ; AL = the next track's cylinder
@@ -7089,8 +7092,8 @@ asc_flush:
     popf
     ret
 
-; OSAPI_ASSOC_FLUSH's far entry (0x0493, SPEC.md 54.5): the rare cold slot
-; far-calls its body (api_rsc), and asc_flush ends in a near ret
+; OSAPI_ASSOC_FLUSH's far entry (a door cell, SPEC.md 54.5): the rare cold slot
+; far-calls its body (the door's RCS kind), and asc_flush ends in a near ret
 osapi_assoc_flush_x:
     call asc_flush
     retf
@@ -7309,11 +7312,16 @@ dwf_dskw_mkdir:         call dskw_mkdir_x
                     retf
 dwf_dskw_read_at:       call dskw_read_at_x
                     retf
-%ifdef DSKW_SYSW
-dwf_dskw_append_sys:    mov byte [dskw_syswr], 1    ; ...and the plain
-%endif
-dwf_dskw_append:        call dskw_append_x          ; append (dskw_wrp
-                    retf                            ; clears it)
+%ifdef KERN_SMALL
+dwf_dskw_write_at:      cmp dx, -1  ; DX = 0xFFFF IS the append (SPEC.md
+                        jne dwf_dskw_wat_no ; 18.4.7.3), which is what
+%endif                  ; OSAPI_FILE_APPEND was withdrawn for (kernel size
+dwf_dskw_append:        call dskw_append_x  ; pass 19) - so kern_small
+                    retf                    ; answers that offset and
+                                ; refuses every other: DOS.O88 does not ship
+                                ; on the small disks, os88data.inc's od_write
+                                ; takes its full arm (SPEC.md 19.9.1), and
+                                ; the INSIDE arm is kern_big's
 %ifndef KERN_SMALL
 dwf_dskw_write_at:      call dskw_write_at_x
                     retf
@@ -7331,15 +7339,9 @@ dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8
                                         ; rule 4) - falling into the refusal
-dwf_dskw_write_at:  stc         ; every caller tests CF (SPEC.md 18.4.7.4):
-                    retf        ; DOS.O88 does not ship on the small disks,
-                                ; and os88data.inc's od_write takes its full
-                                ; arm (SPEC.md 19.9.1). The INSIDE arm,
-                                ; dsk_write_chain and this door are
-                                ; kern_big's, and an append
-                                ; still has the whole body. Cold, because the
-                                ; N cell reaches the far entry by name
-                                ; (SPEC.md 20.3.2)
+dwf_dskw_wat_no:    stc         ; every caller tests CF (SPEC.md 18.4.7.4).
+                    retf        ; Cold, because the N cell reaches the far
+                                ; entry by name (SPEC.md 20.3.2)
 %endif
 ; THE AL DISPATCH IS HERE, in the COLD far entry, and not in a second resident
 ; thunk: both bodies are already cold, so branching here costs one far entry
