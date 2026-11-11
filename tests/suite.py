@@ -22212,8 +22212,10 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("tmdmg", "soak", py("tests/tmdmg.py"), 40.0,
         "SPEC.md 28.10.2: a partial repaint of the Task Manager draws only "
-        "the part - 225 cells put on the glass became 0, against 549 for a "
-        "whole repaint. CELLS and not calls (11.3.3).",
+        "the part - 225 cells put on the glass became 0, against a forced "
+        "whole repaint of the same covered page (245 since 11.91.7 draws "
+        "only what is visible), itself held to a raised repaint's cells "
+        "outside the cover. CELLS and not calls (11.3.3).",
         needs=("marty",), serial=True),
     Row("tmgraph", "soak", py("tests/tmgraph.py"), 30.0,
         "SPEC.md 28.10.3: the Task Manager's history graph is damage-gated "
