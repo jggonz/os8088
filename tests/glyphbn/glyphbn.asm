@@ -566,7 +566,15 @@ gbo_glyph:
 .col:
     shl ax, 1
     jnc .skip
+    push ax
+    push bx
+    push cx
+    push dx
     UI_PIXEL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
 .skip:
     inc cx
     dec bl

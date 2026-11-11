@@ -953,24 +953,24 @@ sol_drawface:
 
     push ax                         ; THE FACE'S OWN RECT IS THE EDGES' TOO:
     mov al, CBLACK                  ; AX..DX are still (x1,y1)-(x2,y2) out of
-    call OSAPI_SET_COLOR            ; the fill, which keeps them, so each edge
-    pop ax                          ; is a register move from it rather than
-    push bx                         ; four words re-read and re-added
-    push dx
-    mov dx, bx                      ; top edge: x1..x2 at y1
-    mov bx, cx
-    call OSAPI_GFX_HLINE
-    pop dx
-    pop bx
-    call OSAPI_GFX_VLINE            ; left edge: x1, y1..y2
-    xchg ax, cx
-    call OSAPI_GFX_VLINE            ; right edge: x2, y1..y2
-    xchg ax, cx
-    mov si, [sol_cvis]              ; bottom edge, only when this really is
-    cmp si, [sol_ch]                ; the bottom of the card - and then y2 IS
-    jb .noedge                      ; that bottom, [sol_cvis] being clamped
-    mov bx, cx                      ; to the card's height
-    call OSAPI_GFX_HLINE
+    call OSAPI_SET_COLOR            ; the fill, which keeps them (SPEC.md
+    pop ax                          ; 5.7.3), so each edge is a register move
+    mov si, [sol_cvis]              ; from it. The bottom edge only when this
+    cmp si, [sol_ch]                ; really is the bottom of the card - and
+    jb .three                       ; then y2 IS that bottom, [sol_cvis] being
+    call OSAPI_GFX_FRAME            ; clamped to the card's height: all four
+    jmp short .noedge               ; edges, the frame's pixels exactly
+.three:
+    push dx                         ; three edges, as 1-pixel FILLS: a fill
+    mov dx, bx                      ; keeps AX..DX where the line cells do
+    call OSAPI_GFX_FILL             ; not, and costs what they do. Top: x1..x2
+    pop dx                          ; at y1
+    push cx
+    mov cx, ax
+    call OSAPI_GFX_FILL             ; left edge: x1, y1..y2
+    pop cx
+    mov ax, cx
+    call OSAPI_GFX_FILL             ; right edge: x2, y1..y2
 .noedge:
 
     test byte [sol_ccard], 0x30     ; the ink: red only where red survives

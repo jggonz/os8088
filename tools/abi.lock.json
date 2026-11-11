@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "c71eb676720c986a27e808b21ad5554787decd330fd91c128778d3aa7db77c22",
+  "fingerprint": "a9e905fe4c29606e74dac42d36200281c08cd898708e03905395827e1a869aca",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "1118d7ef108e31f8399e11ddb4bee1b10b8bad094d67c6533e99e3ba8dd76141",
+  "fingerprint": "6b8e77467249e6f7b16dce2e8d3c06fe5309e075989a3e7ea49d8b9c9133e76b",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2178,17 +2178,45 @@
    "to": 14
   },
   {
-   "fingerprint": "1118d7ef108e31f8399e11ddb4bee1b10b8bad094d67c6533e99e3ba8dd76141",
+   "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
    "from": 13,
    "guard": "PKG_FMT",
-   "reason": "MEM_P_MOD/MEM_P_MOD_N added at the end of the purge tags: a dropped kernel module's kept image (SPEC.md 2.8.3); no cell moved, nothing built before stops running",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
    "to": 13
   },
   {
-   "fingerprint": "c71eb676720c986a27e808b21ad5554787decd330fd91c128778d3aa7db77c22",
+   "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
    "from": 14,
    "guard": "DRV_VER",
-   "reason": "MEM_P_MOD/MEM_P_MOD_N added at the end of the purge tags: a dropped kernel module's kept image (SPEC.md 2.8.3); no cell moved, nothing built before stops running",
+   "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "e2a353505b8ef808efb6ef4f794620d8b7bbc3f4c4fee716a97dfbc26b4823db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "f5f3bb71478db1c09b4dfab7ff722e7a631a8dd7d10cdb449b02745579b5c09f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "6b8e77467249e6f7b16dce2e8d3c06fe5309e075989a3e7ea49d8b9c9133e76b",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
+   "to": 13
+  },
+  {
+   "fingerprint": "a9e905fe4c29606e74dac42d36200281c08cd898708e03905395827e1a869aca",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "merge: V1 line cells and FILE_FIND_SEQ onto the module cache's MOD_H_SCR / MEM_P_MOD (both this unreleased round)",
    "to": 14
   }
  ]

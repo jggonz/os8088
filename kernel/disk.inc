@@ -8334,10 +8334,21 @@ dsk_find_x:
                                 ; the success tail (and a failure now answers
                                 ; it too, where CX was whatever the walk left)
 %ifdef DSK_DSCAN
-    mov ax, [dsk_cwd]
     xor cx, cx                  ; from the front, stepping over BP live
-    call dsk_dscan              ; entries (the walk is dsk_dscan's, shared
-    jc .fail                    ; with fcp_scan): FERR_NOENT or FERR_IO
+    or ah, ah                   ; entries (the walk is dsk_dscan's, shared
+    jz .ord                     ; with fcp_scan) - unless AH = 1, FILE_FIND_SEQ
+    xchg cx, bp                 ; (SPEC.md 19.7.1.1): CX is then a TOKEN, the
+    mov bx, sp                  ; slot to resume at, BP = 0 entries to step
+    mov [ss:bx], bp             ; over, and the banked answer 0 - which no
+.ord:                           ; ordinal's successor is - until the walk
+    mov ax, [dsk_cwd]           ; says where the next call starts
+    call dsk_dscan              ; FERR_NOENT or FERR_IO
+    jc .fail
+    mov bx, sp
+    cmp word [ss:bx], 0         ; the token walk answers dsk_dscan's own CX,
+    jne .ordn                   ; the slot after this entry: linear, where
+    mov [ss:bx], cx             ; the ordinal walk is N(N+1)/2 visits
+.ordn:
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
     je .stage                   ; FSV_ENUM's answer: no raw entry behind it

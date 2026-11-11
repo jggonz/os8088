@@ -490,7 +490,8 @@ rw_czprobe:
     xor cx, cx                      ; ordinal 0
 .f:
     mov di, rw_fnd
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = the next token
     jc .r                           ; (not found: a plain read finds out)
     cmp word [rw_fnd + 14], OSAPI_FT_DIR
     jae .f

@@ -50,7 +50,8 @@
 ; `call OSAPI_X` is a FAR call and you write it exactly as you always did.
 ; Register contracts are the target routines' own (SPEC.md 5, 6, 8, 11,
 ; 20.4); all of them preserve every register except their documented
-; outputs, and all of them restore DS.
+; outputs and clobbers (the three LINE cells clobber AX..DX, SPEC.md 5.7.3),
+; and all of them restore DS.
 ; =============================================================================
 
 ; --- environment ---------------------------------------------------------------
@@ -262,9 +263,15 @@ CWHITE    equ 15
 
 %define OSAPI_GFX_LOCK      KERNEL_SEG:0x0010   ; acquire drawing mutex + hide cursor
 %define OSAPI_GFX_UNLOCK    KERNEL_SEG:0x0018   ; show cursor + release mutex
-%define OSAPI_GFX_PIXEL     KERNEL_SEG:0x0020   ; CX=x, DX=y
-%define OSAPI_GFX_HLINE     KERNEL_SEG:0x0028   ; AX=x1, BX=x2, DX=y
-%define OSAPI_GFX_VLINE     KERNEL_SEG:0x0030   ; AX=x, BX=y1, DX=y2
+; THE THREE LINE CELLS CLOBBER AX, BX, CX AND DX (SPEC.md 5.7.3): unlike every
+; other drawing cell they do not keep their arguments, which is ~55-80 clocks
+; a call they no longer spend. Bank a coordinate you need after one, or load
+; it again; tests/unit/t_gfxclob.py walks every call site in the tree and
+; fails the build on a read of one of the four before a write. FILL and FRAME
+; keep every register, as before.
+%define OSAPI_GFX_PIXEL     KERNEL_SEG:0x0020   ; CX=x, DX=y; clobbers AX-DX
+%define OSAPI_GFX_HLINE     KERNEL_SEG:0x0028   ; AX=x1, BX=x2, DX=y; clobbers AX-DX
+%define OSAPI_GFX_VLINE     KERNEL_SEG:0x0030   ; AX=x, BX=y1, DX=y2; clobbers AX-DX
 %define OSAPI_GFX_FILL      KERNEL_SEG:0x0038   ; AX=x1, BX=y1, CX=x2, DX=y2
 %define OSAPI_GFX_FRAME     KERNEL_SEG:0x0040   ; AX=x1, BX=y1, CX=x2, DX=y2
 %define OSAPI_GFX_FILL_GRAY KERNEL_SEG:0x0048   ; AX=x1, BX=y1, CX=x2, DX=y2 (50% dither)
@@ -6436,6 +6443,17 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; ES:DI = an OSAPI_FIND_SZ buffer; out CF=0
                                  ; filled with CX = the next ordinal, else
                                  ; CF=1 and AX = FERR_NOENT at the end
+%define OSAPI_FILE_FIND_SEQ KERNEL_SEG:0x0233   ; OSAPI_FILE_FIND by TOKEN
+                                 ; (SPEC.md 19.7.1.1): CX = 0 to start, then
+                                 ; whatever CX came back as; ES:DI as FIND;
+                                 ; AL = 0 the size FIND answers, 1 the size
+                                 ; FIND_RAW does. Out exactly as FIND. LINEAR:
+                                 ; a listing of N entries is N entry visits
+                                 ; where FIND's is N(N+1)/2. CX is a POSITION
+                                 ; in this folder, not an ordinal - zero it
+                                 ; when the folder changes, and count entries
+                                 ; yourself. kern_small walks by ordinal and
+                                 ; answers the same
 
 ; --- the two cells a PACKAGE may not call (SPEC.md 19.6.1) --------------------
 ; It is published here because a DRIVER assembles against this same SDK, and

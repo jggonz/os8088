@@ -2191,7 +2191,8 @@ in_dive:
     push ds
     pop es
     mov di, in_find
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = the next token
     pop es
     jc .out
     cmp word [in_find+14], OSAPI_FT_DIR

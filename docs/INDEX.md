@@ -77,9 +77,9 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 |---|---|---|
 | `0x0010` | `OSAPI_GFX_LOCK` | acquire drawing mutex + hide cursor |
 | `0x0018` | `OSAPI_GFX_UNLOCK` | show cursor + release mutex |
-| `0x0020` | `OSAPI_GFX_PIXEL` | CX=x, DX=y |
-| `0x0028` | `OSAPI_GFX_HLINE` | AX=x1, BX=x2, DX=y |
-| `0x0030` | `OSAPI_GFX_VLINE` | AX=x, BX=y1, DX=y2 |
+| `0x0020` | `OSAPI_GFX_PIXEL` | CX=x, DX=y; clobbers AX-DX |
+| `0x0028` | `OSAPI_GFX_HLINE` | AX=x1, BX=x2, DX=y; clobbers AX-DX |
+| `0x0030` | `OSAPI_GFX_VLINE` | AX=x, BX=y1, DX=y2; clobbers AX-DX |
 | `0x0038` | `OSAPI_GFX_FILL` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0040` | `OSAPI_GFX_FRAME` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0048` | `OSAPI_GFX_FILL_GRAY` | AX=x1, BX=y1, CX=x2, DX=y2 (50% dither) |
@@ -173,6 +173,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `door 0x17` | `OSAPI_FILE_GOTO_Q` | DX = a folder's first cluster (0 = the root), BL = the volume. out CF=0 and AX=0, else AX = FERR_*... |
 | `door 0x1D` | `OSAPI_FILE_GOTO_QM` | DX = a folder's first cluster (0 = the root), BL = the volume. out exactly as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else AX = FERR_* and nothing moved... |
 | `0x015F` | `OSAPI_FILE_FIND` | CX = ordinal (0 to start), ES:DI = an OSAPI_FIND_SZ buffer; out CF=0 filled with CX = the next ordinal, else CF=1 and AX = FERR_NOENT at the end |
+| `0x0233` | `OSAPI_FILE_FIND_SEQ` | OSAPI_FILE_FIND by TOKEN (SPEC.md 19.7.1.1): CX = 0 to start, then whatever CX came back as; ES:DI as FIND... |
 | `0x015C` | `OSAPI_FILE_WRITE_SYS` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count; out as OSAPI_FILE_WRITE. DRIVERS ONLY. |
 
 ### Memory

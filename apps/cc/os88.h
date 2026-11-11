@@ -1193,6 +1193,13 @@ int os88_ferr(void);
  * find-first/find-next state to be destroyed. */
 int os88_file_find(int ordinal, struct os88_find *f);
 
+/* os88_file_find_seq - the same walk by TOKEN (19.7.1.1): ask for 0, then for
+ * what it returns; -1 = the end. LINEAR where os88_file_find is N(N+1)/2
+ * entry visits over a listing. The token is a POSITION in the current folder
+ * and not an ordinal: start again from 0 when the folder changes, and count
+ * entries yourself. */
+int os88_file_find_seq(int token, struct os88_find *f);
+
 unsigned os88_disk_free_kb(void);                /* the 32-bit answer, shifted
                                                   * into KB in assembly */
 int os88_disk_cluster_sectors(void);             /* chunk sizes are multiples

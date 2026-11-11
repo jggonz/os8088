@@ -293,14 +293,14 @@ stm_scanvol:
     CSDO mov [CSEG stm_vol], al
     call stm_gohome             ; CF = 0 standing in its STIKAPPS folder
     jc .ret
-    xor cx, cx                  ; the ordinal: dsk_find_x is stateless, so the
-.f:                             ; peeks between the calls cannot disturb it
-    cmp byte [cs:stm_over], 0
+    xor cx, cx                  ; the TOKEN (SPEC.md 19.7.1.1): held here and
+.f:                             ; not in the kernel, so the peeks between the
+    cmp byte [cs:stm_over], 0   ; calls cannot disturb it
     jne .ret                    ; one App past STM_MAX: no need to look on
     PUSH_CSDATA
     pop es
     mov di, stm_find
-    xor al, al
+    mov ax, 0x0100              ; AH = 1 the token walk, AL = 0 no system
     call COLD_SEG:dsk_find_x
     jc .ret                     ; the end, or a read that failed
     push cx

@@ -471,7 +471,7 @@ static int ovl_fs_find(void)
     unsigned w;
     char *nm;
 
-    for (ord = 0; (ord = os88_file_find(ord, c64_fs_f)) >= 0; ) {
+    for (ord = 0; (ord = os88_file_find_seq(ord, c64_fs_f)) >= 0; ) {
         if (c64_fs_f->type >= OS88_FT_DIR)
             continue;
         nm = c64_fs_f->name;
@@ -511,7 +511,7 @@ static unsigned ovl_fs_dir(unsigned at)
     ovl_d64_put(0);
     c64_wr(start, c64_d64_at & 0xFF);
     c64_wr(start + 1, c64_d64_at >> 8);
-    for (ord = 0; (ord = os88_file_find(ord, c64_fs_f)) >= 0; ) {
+    for (ord = 0; (ord = os88_file_find_seq(ord, c64_fs_f)) >= 0; ) {
         l = (int)os88_strlen(c64_fs_f->name);
         if (c64_fs_f->type >= OS88_FT_DIR || l < 5
                 || !ovl_streq(c64_fs_f->name + l - 4, ".PRG"))
@@ -639,7 +639,7 @@ static void ovl_fs_save(void)
         if (c64_fs_host[k] == '*' || c64_fs_host[k] == '?')
             i = 1;
     if (!at && !i) {                              /* a 1541 says 63, FILE EXISTS */
-        for (r = 0; (r = os88_file_find(r, c64_fs_f)) >= 0; )
+        for (r = 0; (r = os88_file_find_seq(r, c64_fs_f)) >= 0; )
             if (ovl_streq(c64_fs_f->name, c64_fs_host)) {
                 os88_strcpy(c64_msg, "Exists: ", C64_MSGMAX);
                 os88_strcpy(c64_msg + 8, c64_fs_host, 13);

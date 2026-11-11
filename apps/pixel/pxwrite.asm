@@ -1810,7 +1810,8 @@ pu_done:
     xor cx, cx                      ; the folder's names: is it one?
 .n:
     mov di, px_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .new
     mov si, px_find
     mov di, px_sname

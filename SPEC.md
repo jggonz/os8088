@@ -5325,7 +5325,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | symbol          | in                                   | effect                                |
 |-----------------|--------------------------------------|---------------------------------------|
 | `gfx_color`     | byte variable                        | current drawing color                 |
-| `gfx_pixel`     | CX=x, DX=y                           | plot pixel                            |
+| `gfx_pixel_n`   | CX=x, DX=y                           | plot pixel; clobbers AX, BX (§5.7.3: the cell's entry - the preserving `gfx_pixel` is gone) |
 | `gfx_hline`     | AX=x1, BX=x2, DX=y                   | horizontal line, inclusive            |
 | `gfx_vline`     | AX=x, BX=y1, DX=y2                   | vertical line, inclusive              |
 | `gfx_fill`      | AX=x1, BX=y1, CX=x2, DX=y2           | solid rect, inclusive corners         |
@@ -8395,7 +8395,8 @@ Together those took a `gfx_pixel` from 196 instructions to 158 and a
 `GFX_FILL 64x64` by 14.5%, with the output byte-identical on all three
 adapters and both renderers (PERFORMANCE.md Part 9, Set 3). What is left is
 mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
-push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
+push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract (§5.7.3:
+the LINE cells let theirs go, the rect cells keep it), and
 `vga_rect_setup`'s clipping is the clipping.
 
 Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the
@@ -8541,6 +8542,90 @@ is the byte loop's bus traffic with fewer instructions, so it is never slower.
 Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
 `GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
 `GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
+
+### 5.7.3 The line cells clobber AX..DX — and the rect cells do not, yet
+
+**`OSAPI_GFX_PIXEL`, `OSAPI_GFX_HLINE` and `OSAPI_GFX_VLINE` clobber AX,
+BX, CX and DX** (PKG_FMT 13's round, ABI-BREAK-LIST V1). Every other register
+and DS are kept as before. A package that needs a coordinate after one of
+these calls must save it or load it again. Every caller in the tree was
+changed before the kernel was. `OSAPI_GFX_FILL` and `OSAPI_GFX_FRAME` still
+**preserve every register**, so a fill can still leave its rect in AX..DX for
+the next edge (Solitaire's card face draws its three edges as 1-pixel fills
+for that reason). §5.7.3.2 explains why the rect cells were left alone.
+
+#### 5.7.3.1 What the kernel does with it
+
+The three line cells enter `gfx_pixel_n`, `gfx_hline_n` and `gfx_vline_n`,
+placed between `gfx_fill`'s clipped arm and its entry. Each one is the
+register move that turns its arguments into a 1-pixel rect, followed by a
+**jump** into `gfx_fill` (`gfx_vline_n` falls through into it). The old
+preserving shims saved what they changed and **called** the fill. The new
+entries drop those push/pop pairs and the call/return around the work. The
+saving, PREDICTED from the 8088 timings in PERFORMANCE.md Part 2 and against
+the ~2,300-cycle small call measured in §5.7, is:
+
+| cell | the old shim spent, and the new entry does not | clocks saved a call |
+|---|---|---:|
+| PIXEL | two push/pop pairs, call/ret | ~80 |
+| HLINE | one push/pop pair, `mov bx, cx`, call/ret | ~65 |
+| VLINE | one push/pop pair, call/ret | ~55 |
+
+That is 2.5% to 3.5% of a small line. A package that has to save one
+register around the call pays about 27 clocks of that back. The kernel's own
+callers keep a preserving entry. `gfx_hline` is unchanged.
+`gfx_vline` is now `push cx / call gfx_vline_n / pop cx`, the same
+instructions in two fewer bytes. The preserving `gfx_pixel` was **deleted**.
+Its only kernel caller was `gfx_points`' slow arm, which saves every register
+in its prologue and now calls `gfx_pixel_n` itself, saving ~80 clocks a
+point. The kernel's **far** calls into a line cell have to meet the package
+contract too: `cw_gfx_hline` *is* the HLINE cell (size pass 9), and
+WIN95.DRV, CTRL.DRV (through `os88ui.inc`) and `gfx_b4piece` call these
+cells. Those call sites are checked as well (§5.7.3.3).
+
+#### 5.7.3.2 Why the rect cells keep their registers
+
+V1 as proposed let all five rect cells clobber AX..DX and priced the gain
+at ~120 clocks: the four push/pop pairs of AX..DX in `sw_rect` and
+`vga_solid_rect`. Those pairs are not the cell's. They belong to the shared
+body, which every kernel caller reaches through `GFXCLIP`, `GFXDISP`,
+`VXMONO` and the `.vga` rung, and some kernel code depends on them:
+`gfx_xor_strips` keeps x1/x2 in AX/CX across its four strips, and many
+kernel `gfx_fill` callers keep a register across the call. A body that
+skipped the pairs only for a package would need a second, non-preserving
+path through all four hooks, measured at **~49 bytes on kern_big**. The
+body's exit is also shared, so that second path could drop only the pushes
+(`sub sp, 8` in place of four pushes, followed by the same pops), which is
+**~47 clocks** a package fill. That is too many resident bytes for 2% of a
+call, so it was not taken. The contract stays "preserves every register"
+until a kernel pass audits its own fill callers and the body can stop
+preserving for everyone. Changing the contract after this release would be
+an ABI break.
+
+#### 5.7.3.3 The gate: `tests/unit/t_gfxclob.py`
+
+A missed site gives no error. The next line is simply drawn in the wrong
+place, and only on the cell and build whose body uses that register. So
+the contract is checked **at each call site**. From every call to a line
+cell, in `apps/`, `drivers/`, `tests/`, and the kernel's far calls into
+the cells, the check walks every path forward. It treats AX..DX as
+eight junk half-registers and requires each half to be written before it
+is read. The walk follows:
+
+- fall-through, and both branches of every jump;
+- both arms of every `%if`, with a symbol that this path has already decided
+  kept the same way;
+- calls into near routines;
+- the push/pop stack, so `push ax / call OSAPI_GFX_HLINE / pop ax` is clean;
+- macros, including the routines that `os88ui.inc`'s body macros write;
+- the documented inputs of every later cell;
+- every caller, when a `ret` is reached with junk still live.
+
+When the walk loses sight of a path (an indirect call, a depth limit, an
+unknown macro), it does not fail. `--report` lists every such place, so the
+completeness of the audit is visible. A finding that is not a defect goes
+in `tests/gfxclob.txt` with its reason, and that list only shrinks. Removing
+one fix makes the row fail at the line that reads the clobbered register.
 
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
@@ -41014,7 +41099,8 @@ So the walkers keep their statelessness, and §19.7.1's argument for it stands
 undisturbed. What a cursor would still buy is **CPU** — the entries between
 sector 0 and the wanted one are re-classified on every call — and that is a
 different measurement against a different budget; nothing here says it is
-zero, only that it is not revolutions.
+zero, only that it is not revolutions. §19.7.1.1 took that CPU half, with no
+kernel cursor at all: the token is the caller's register.
 
 **The method is the transferable part.** A model that regrouped the surviving
 requests into maximal contiguous runs — ignoring that two calls adjacent in
@@ -45572,6 +45658,79 @@ walks from the front, `fcp_scan` still reads the one sector holding its slot
 `kern_dos` keep `dsk_find`'s own walk: on `kern_small` the shared routine
 would be RESIDENT while the scan it replaces is in `FILECP.DRV`, and
 `kern_dos` has no copy engine to share with.
+
+#### 19.7.1.1 …and `OSAPI_FILE_FIND_SEQ` (0x0233) answers in a straight line
+
+**`FILE_FIND` costs N(N+1)/2 entry visits to list N entries.** On kern_big
+`dsk_find` asks `dsk_dscan` for (slot 0, the ordinal), so every call walks
+again from the front of the folder and classifies each entry before the one
+it wants. §18.95.2 measured the disk I/O for that and found the sector cache
+had already removed it; the **CPU** cost was left as "not zero". That cost
+grows with the square of the folder size, and every package that searches
+by name pays it. Prince of Persia's load spends about 2.5 guest seconds on
+it (DISK-CPU-PLAN 3.1).
+
+`OSAPI_FILE_FIND_SEQ` uses the same walk with the other pair of arguments:
+(the caller's slot, 0). **CX is a TOKEN, not an ordinal.** Ask for 0, then
+pass back whatever CX comes back as, exactly as with `FILE_FIND`, and the
+call resumes at the raw slot after the last entry it answered. That is the
+resume-from-slot walk `fcp_scan` already uses.
+
+| | in | out |
+|---|---|---|
+| `FILE_FIND_SEQ` | CX = 0 to start, else the CX the last call answered; ES:DI = an `OSAPI_FIND_SZ` buffer; **AL = 0** answers +18 as `FILE_FIND` does (what the file expands to), **AL = 1** as `FILE_FIND_RAW` does (what it occupies) | as `FILE_FIND`: CF = 0 with the buffer filled and CX = the next token, else CF = 1 and AX = `FERR_NOENT` at the end (or `FERR_*`) |
+
+It is still **stateless in the kernel**, which is the only part of §19.7.1's
+argument that ever mattered. The state lives in the caller's CX, as it does
+for DOS's FindNext in the caller's DTA. Find, read, write, find still works,
+because nothing the caller does between calls can reach a register it holds.
+A token names a POSITION in a folder, not an entry. While a write is going
+on between calls:
+
+- an entry deleted ahead of the token is skipped, as the ordinal walk skips
+  it;
+- an entry created behind the token is not reported;
+- an entry created in a free slot ahead of it is reported.
+
+The ordinal walk was no safer: there, an insertion shifts every ordinal after
+it, and the caller sees one entry twice. A token is valid for the folder it
+was taken in. **Zero it when the folder changes.** A token is not an ordinal
+either: it cannot be used for "the fifth entry", and a caller that counts
+entries counts them itself.
+
+**The price and the saving.** The cell is a 3-byte JCELL at the end of the
+table (0x0233), and it took the place of the table's 1-byte parity pad. The
+entry and the token arms add, MEASURED with `kernsize`, **+31 on kern_big**
+(`.text` +6: the cell +3, the pad -1, `api_file_find_seq` +3, `_raw`'s
+`mov ax` +1; `.cold` +25, of which `dsk_find`'s arms are 22 and the rest
+`AUTOSTRT`'s `mov ax` and the section's alignment) and **+6 on kern_small**
+(`.text` only). The saving is PREDICTED from the 8088 tables, and
+there are two parts of it. Take a 100-entry folder, 16 entries to a sector:
+
+- **Entry visits.** The ordinal walk makes 5,050 visits and the token walk
+  100. One visit through `dsk_dscan`'s classifier is ~47 bytes of code, so
+  ~200 clocks at the fetch floor. 4,950 fewer is about **1.0 M clocks,
+  ~0.21 s on a 5150**.
+- **Directory-sector fetches.** Each call fetches the sector holding its
+  slot. Called by ordinal k, a call fetches every sector from the front:
+  364 fetches over the listing, against 100 by token. Each fetch is a
+  `disk_read` that at best hits §18.95's cache, a 512-byte copy plus the
+  transfer head, ~1.75 ms. 264 fewer is **~0.46 s**.
+
+That is about **0.65 s** per 100-entry listing, and the gap grows with the
+square of the folder size. A name search that stops at entry k makes k
+visits and k fetches (one a call), against k(k+1)/2 visits and, for each
+call i, floor(i/16) + 1 fetches.
+
+**`kern_small` and `kern_dos` answer it with the ordinal walk.** They have no
+`dsk_dscan`, so there the token simply IS the ordinal. That is the same
+opaque CX with the same loop, so the result is correct and only the
+quadratic term remains. The same cell, the same caller, the same answers.
+
+**Kernel callers.** The Sticky Apps scan (`stm_scanvol`, §110.12) and
+`AUTOSTRT`'s walk (`desksc.inc`) call `dsk_find_x` directly and pass **AH = 1**
+for the token walk. Every other kernel caller passes AH = 0, and
+`api_file_find`/`_raw` clear it.
 
 ### 19.6.2 …and it stamped three bits while forgiving two
 

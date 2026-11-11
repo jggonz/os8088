@@ -40,7 +40,8 @@ ap_filesize:
     xor cx, cx                     ; ordinal 0
 .loop:
     mov di, ap_findbuf
-    call OSAPI_FILE_FIND           ; CF=1 AX=FERR_NOENT at the end
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ       ; CF=1 AX=FERR_NOENT at the end
     jc .none
     ; compare ap_findbuf[0..] with the name at [ss? no - SI in this seg]
     push si

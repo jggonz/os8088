@@ -325,6 +325,13 @@ int os88_file_find(int ordinal, struct os88_find *f)
     ferr = OS88_FERR_NOENT;
     return -1;
 }
+
+/* SPEC.md 19.7.1.1: the token walk. In this model the token IS the ordinal,
+ * which is exactly kern_small's answer - same loop, same entries */
+int os88_file_find_seq(int token, struct os88_find *f)
+{
+    return os88_file_find(token, f);
+}
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 {
     struct ffile *f = ffind(fold(std_clus), name);

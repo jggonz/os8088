@@ -1013,7 +1013,8 @@ mpp_sizeof:
     xor cx, cx                      ; ordinal 0 starts the walk
 .next:
     mov di, mpp_find
-    call OSAPI_FILE_FIND            ; CF=1 AX=FERR_NOENT ends it; CX = the
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CF=1 AX=FERR_NOENT ends it; CX = the
     jc .no                          ; ordinal to ask for next
     cmp word [mpp_find + 14], OSAPI_FT_DIR
     jae .next                       ; a folder or the synthesized '..'

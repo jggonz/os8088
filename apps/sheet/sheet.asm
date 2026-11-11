@@ -7182,7 +7182,9 @@ sh_drawbar:
     mov bx, ax
     add bx, SH_REF_W - 1
     mov dx, [sh_goy]
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     add dx, SH_FB_H - 1
     call OSAPI_GFX_HLINE
     mov ax, [sh_ox]
@@ -7201,7 +7203,9 @@ sh_drawbar:
     add bx, [sh_cw]
     dec bx
     mov dx, [sh_goy]
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     add dx, SH_FB_H - 1
     call OSAPI_GFX_HLINE
     mov ax, [sh_ox]
@@ -8779,7 +8783,9 @@ sh_msepdraw:
     inc ax
     mov bx, [sh_mrx2]
     dec bx
+    push dx
     call OSAPI_GFX_HLINE                ; AX..BX at DX
+    pop dx
     pop cx
 .next:
     add dx, SH_MI_H

@@ -5218,7 +5218,8 @@ fd_find:
     xor cx, cx
 .l:
     mov di, fd_fbuf
-    call OSAPI_FILE_FIND_RAW        ; the size RETR will deliver (SPEC.md 77.48)
+    mov al, 1                       ; by TOKEN (SPEC.md 19.7.1.1), the raw
+    call OSAPI_FILE_FIND_SEQ        ; the size RETR will deliver (SPEC.md 77.48)
     jc .no                          ; FERR_NOENT: the end of the directory
     push cx
     push si
@@ -5343,7 +5344,8 @@ fd_do_list:
     push cx
     push di
     mov di, fd_fbuf
-    call OSAPI_FILE_FIND_RAW        ; CX = the ordinal in, the NEXT one out -
+    mov al, 1                       ; by TOKEN (SPEC.md 19.7.1.1), the raw
+    call OSAPI_FILE_FIND_SEQ        ; CX = the token in, the NEXT one out -
                                     ; and the size a LIST row prints is what
                                     ; the file occupies, which is what RETR
                                     ; will send (SPEC.md 77.48)
