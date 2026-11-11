@@ -1467,8 +1467,41 @@ sc_m_move:
 ; Sticky App rows (SPEC.md 110.2), then held to the same check. It took the
 ; zone the add answered in AH until pass 19, which named nothing the record
 ; did not and cost WIN16 a sixteen-zone probe loop to find its own link.
+;
+; NOT THE SYSTEM DISK IN A: IS A REFUSAL, asked BEFORE anything is removed
+; (SPEC.md 110.5). The remove used to be refused there by the core's own
+; load - no CTRL.DRV to read - and a Sticky App's close declines once on
+; that, so the user can put the disk back. Since SPEC.md 2.8.3 keeps the
+; core, the remove would be served from memory, take the row out of the
+; table and leave it on the system disk for the save that cannot land: the
+; widget closed and came back at the next boot. So the volume is identified
+; first, as the writer does it (KERNEL.SYS in the root, cpc_save), and a
+; refusal says the writer's own verdict - 'Not Saved: No Sys in A:'.
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
+    push bx
+    push cx
+    push dx
+    call COLD_SEG:drvf_drv_vol_bank   ; the BOOT VOLUME, as cpc_save asks it
+    call COLD_SEG:drvf_drv_mounted
+    jc .home
+    CPSTAGE cpc_sysname
+    call COLD_SEG:dwf_dskw_stat ; CF = 1: a disk, but not the system one
+.home:
+    call COLD_SEG:drvf_drv_vol_back   ; (keeps CF)
+    pop dx
+    pop cx
+    pop bx
+    jnc .sys
+    call .say
+    jmp short .no
+.say:                           ; cp_flush_x's own verdict, [cp_dsave] = 1,
+    push ax                     ; in its frame: its kretm_cx is our ret
+    push bx
+    push cx
+    mov bl, 1
+    jmp cp_flush_x.have
+.sys:
     mov es, dx
     mov di, cx
     cmp byte [es:di+SC_R_STIK], SC_STIK

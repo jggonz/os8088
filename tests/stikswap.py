@@ -18,15 +18,22 @@ user swaps A: to reach anything else, and every shipped disk carries
      STIKPROB.DAT holds the dragged place and the state is clean, and both
      floppies still pass os88disk.py --verify.
   D  the apps disk goes in again and the probe's close box is clicked: the
-     remove cannot read CTRL.DRV, whose toast asks for the system disk, and
-     the close is DECLINED once (SPEC.md 110.5) - the probe stays up rather
-     than closing with its row stranded in SYSTEM.CFG. The system disk back,
-     the next close goes ahead and the row is gone.
+     remove is REFUSED - CTRL.DRV's settings core, kept in memory since
+     SPEC.md 2.8.3, finds no KERNEL.SYS in A: before it takes the row out
+     and toasts 'Not Saved: No Sys in A:' (with the core not kept, its read
+     fails instead and the toast is 'Needs Sys Disk A:') - and the close is
+     DECLINED once (SPEC.md 110.5): the probe stays up rather than closing
+     with its row stranded in SYSTEM.CFG. The system disk back, the next
+     close goes ahead and the row is gone.
 
 **BREAK IT ON PURPOSE**: take stik_enter's own-name FIND out of os88stik.inc
 and B fails (the apps disk gains SYSTEM/APPDATA/STIKPROB.DAT); take the
 backoff out of stik_tick and B's read count fails; make stik_close ignore
-the remove's CF and D fails (the probe closes, its row left behind).
+the remove's CF and D fails (the probe closes, its row left behind); take
+the volume check out of sc_m_pdel (kernel/desksc.inc) and D fails the same
+way - the kept core removes the row in memory, the save cannot land, and
+the probe closes with the row still on the system disk (measured
+2026-11-11: the toast was 'Not Saved: No Sys in A:' and nothing declined).
 """
 import os
 import shutil
@@ -143,9 +150,14 @@ def main():
         ui.raise_window(w)
         w = ui.window("StikProbe")
         ui.mo.click(*geom.close_xy(w.x, w.y), settle=0)
-        txt = ui.wait_toast(says="Sys Disk", limit=60)
-        check("Needs Sys Disk" in txt, "CTRL.DRV's toast asks for the "
-              "system disk (%r)" % txt)
+        # TWO SENTENCES, ONE REFUSAL (SPEC.md 110.5): the core read off the
+        # disk fails with the panel's 'Needs Sys Disk A:', and the core KEPT
+        # since SPEC.md 2.8.3 - which this boot has, its registration having
+        # loaded and dropped it - identifies the volume before it removes
+        # and says the writer's 'Not Saved: No Sys in A:'
+        txt = ui.wait_toast(says="Sys", limit=60)
+        check("Needs Sys Disk" in txt or "No Sys in" in txt,
+              "CTRL.DRV's toast asks for the system disk (%r)" % txt)
         os88marty.guest_sleep(m, 3.0)
         check(any(o.title == "StikProbe" for o in ui.windows()),
               "the close was DECLINED: the probe is still up, so the row "
