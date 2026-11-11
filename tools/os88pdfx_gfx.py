@@ -245,6 +245,32 @@ def tol_of(name):
     return 4
 
 
+def check_quant(work):
+    """PDREND's rgb_c4 (pdrg.c, the VGA palette index of an RGB) against the colours COLOUR.PDF's five cells once drew wrong
+    (QA R10: salmon was white, a pale green yellow, lavender-grey white, a mid green brown): the function's own source is
+    compiled, so a change to it is what is tested."""
+    import re
+    src = open(os.path.join(PD, "pdrg.c")).read()
+    m = re.search(r"static pdb rgb_c4\(pdw r, pdw g, pdw b\)\n\{.*?\n\}\n", src, re.S)
+    if not m:
+        print("FAIL rgb_c4 not found in pdrg.c")
+        return 1
+    want = [((247, 151, 122), 12), ((126, 220, 100), 10), ((153, 153, 197), 7), ((77, 153, 46), 2), ((127, 204, 64), 10),
+            ((255, 0, 0), 12), ((0, 0, 0), 0), ((255, 255, 255), 15), ((128, 128, 128), 7)]
+    prog = "typedef unsigned short pdw; typedef unsigned char pdb;\n#include <stdio.h>\n" + m.group(0) + "int main(void){int v[][3]={"
+    prog += ",".join("{%d,%d,%d}" % c for c, _ in want) + "};for(int i=0;i<%d;i++)printf(\"%%d \",rgb_c4(v[i][0],v[i][1],v[i][2]));return 0;}\n" % len(want)
+    c = os.path.join(work, "rgbc4.c")
+    open(c, "w").write(prog)
+    subprocess.check_call(["cc", "-o", os.path.join(work, "rgbc4"), c])
+    got = [int(v) for v in subprocess.run([os.path.join(work, "rgbc4")], capture_output=True, text=True).stdout.split()]
+    bad = 0
+    for (c_, w), g in zip(want, got):
+        if g != w:
+            print("FAIL rgb_c4%s = %d, want %d" % (c_, g, w)); bad += 1
+    print("pdfx_gfx rgb_c4: %d cases, %d wrong" % (len(want), bad))
+    return bad
+
+
 def check(build_dir, verbose):
     work = os.path.join(build_dir, "pdfany-gfx")
     os.makedirs(work, exist_ok=True)
@@ -336,6 +362,7 @@ def check(build_dir, verbose):
         bad += nb
     else:
         print("pdfx_gfx 8086 (Unicorn): SKIP (no unicorn, or build/PDXG.MOD not built)")
+    bad += check_quant(work)
     bad2 = check_shade(build_dir, work, exe, verbose)
     return 1 if (bad or bad2) else 0
 

@@ -131,7 +131,7 @@ static pdw fx_u8(const struct pd_fx *a)
 /* VGA palette index (PAGEDESK-SPEC 10.5) from RGB 0..255 */
 static pdb rgb_c4(pdw r, pdw g, pdw b)
 {
-    pdw mx = r, mn = r, lum, bright, idx;
+    pdw mx = r, mn = r, lum, idx;
     if (g > mx) mx = g; if (b > mx) mx = b;
     if (g < mn) mn = g; if (b < mn) mn = b;
     lum = (pdw)((r * 77u + g * 150u + b * 29u) >> 8);
@@ -141,12 +141,12 @@ static pdb rgb_c4(pdw r, pdw g, pdw b)
         if (lum < 208) return 7;    /* light grey                            */
         return 15;                  /* white                                 */
     }
-    bright = mx >= 192;
-    idx = 0;
-    if (r * 2 >= mx) idx |= 4;
-    if (g * 2 >= mx) idx |= 2;
-    if (b * 2 >= mx) idx |= 1;
-    if (bright) idx |= 8;
+    idx = 0;                        /* a channel is "on" from two thirds of the largest: salmon is light red, not white */
+    if (r * 3u >= mx * 2u) idx |= 4;
+    if (g * 3u >= mx * 2u) idx |= 2;
+    if (b * 3u >= mx * 2u) idx |= 1;
+    if (idx == 7) return (pdb)(lum < 208 ? 7 : 15);       /* all three on: a pale colour, the grey of its luminance */
+    if (mx >= 192) idx |= 8;
     return (pdb)idx;
 }
 
