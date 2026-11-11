@@ -2868,7 +2868,15 @@ records and review replies are in no other filter.
 
 **Source annotations** (`ovl_nt_srcload`, once a page, when the panel or the
 popover shows it and no job runs - an `ANNOTS` call moves the engine's object
-state): the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
+state - or between two slices of the thumbnail job when the overlay is
+already in: PDREND keeps a thumbnail's state in its own globals and the XB
+holds only `pdxb_thumb`, which `ovl_th_step` writes back before every slice,
+and its content streams are contexts of their own, which its resource lookups
+already interleave with. So a long document, or an XT, lists the shown
+page's notes while its thumbnails are still drawing, instead of showing
+`Reading notes...` until they end (QA R6, F27). It never fetches the overlay
+for this, which could make the slot occupant give its claims back mid-job):
+the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
 listed (Text, Highlight/Underline/Squiggly/StrikeOut, FreeText, Ink, Line,
 Square, Circle - `Link`, `Popup`, `Stamp`, `Widget`, `Caret`,
 `FileAttachment`, `TrapNet` and the rest are not), each with its

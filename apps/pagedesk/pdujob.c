@@ -772,7 +772,9 @@ void os88_onwake(void *win)
              && !pdu_ovhold && pdu_nav_owed())
         pdu_idle_ovl(0);                /* nav: the idle ladder */
 
-    if (pdu_job == J_NONE && !pdu_ovhold && pdu_nt_owed())     /* notes */
+    /* notes: between two thumbnail slices too (the engine keeps no object
+     * state across a slice), when the overlay is in - never fetched for it */
+    if ((pdu_job == J_NONE || (pdu_job == J_THUMB && pdu_ovl_in())) && !pdu_ovhold && pdu_nt_owed())
         pdu_idle_ovl(1);
 
     pdu_rc_wake();                      /* recov */
