@@ -131,21 +131,22 @@ static pdw fx_u8(const struct pd_fx *a)
 /* VGA palette index (PAGEDESK-SPEC 10.5) from RGB 0..255 */
 static pdb rgb_c4(pdw r, pdw g, pdw b)
 {
-    pdw mx = r, mn = r, lum, idx;
+    pdw mx = r, mn = r, lum, d, t, idx = 0;
     if (g > mx) mx = g; if (b > mx) mx = b;
     if (g < mn) mn = g; if (b < mn) mn = b;
     lum = (pdw)((r * 77u + g * 150u + b * 29u) >> 8);
-    if (mx - mn < 40) {             /* a grey: the four the palette has      */
+    d = (pdw)(mx - mn);
+    if (d < 40 || d * 4u < mx) {    /* a grey, or a pale colour: the four greys the palette has */
         if (lum < 48) return 0;     /* black                                 */
         if (lum < 128) return 8;    /* dark grey                             */
         if (lum < 208) return 7;    /* light grey                            */
         return 15;                  /* white                                 */
     }
-    idx = 0;                        /* a channel is "on" from two thirds of the largest: salmon is light red, not white */
-    if (r * 3u >= mx * 2u) idx |= 4;
-    if (g * 3u >= mx * 2u) idx |= 2;
-    if (b * 3u >= mx * 2u) idx |= 1;
-    if (idx == 7) return (pdb)(lum < 208 ? 7 : 15);       /* all three on: a pale colour, the grey of its luminance */
+    t = (pdw)(d + (mn >> 2));       /* a channel is "on" from half of the way from the smallest to the largest (a little more
+                                     * for a washed-out colour): brown stays brown, salmon is light red, not white */
+    if ((r - mn) * 2u >= t) idx |= 4;
+    if ((g - mn) * 2u >= t) idx |= 2;
+    if ((b - mn) * 2u >= t) idx |= 1;
     if (mx >= 192) idx |= 8;
     return (pdb)idx;
 }
