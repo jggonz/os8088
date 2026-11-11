@@ -4981,25 +4981,23 @@ cur_saveu:
 ; took the second, which is cur_geom's [cur_b1ok] answer for the same cell.
 ; One place for the save and the restore, because the two disagreeing by a
 ; byte smears the arrow (cur_rect's reason, before it).
-; out: BL = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken,
+; out: BX = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken,
 ;      CH = [cur_rows] and ZF = it is 0 (wholly off the bottom: nothing to
 ;      walk) - the test both callers made first, written once here (the size
 ;      pass that turned KHP_VGASAVE on for kern_big, -6 bytes; a cell off the
 ;      bottom now pays the span too, which no on-screen packet does);
-;      clobbers AX
+;      BH = 0. Preserves AX
 %if CUR_GW != 8
   %error "cur_vspan assumes an 8px cell: one byte aligned, two otherwise"
 %endif
 cur_vspan:
-    mov bl, [cur_cellx]
-    and bl, 7
+    xor bx, bx                  ; BH = 0 for the subtract below: BX is the
+    test byte [cur_cellx], 7    ; flag as a word, where AL/cbw made one (-3)
     jz .one                     ; aligned: x2 lands in the same byte
-    mov bl, [cur_b1ok]
+    mov bl, [cur_b1ok]          ; (0 or 1: cur_geom's sbb/inc)
 .one:
-    mov al, bl
-    cbw
     mov bp, ROW_BYTES - 1
-    sub bp, ax
+    sub bp, bx
     mov ch, [cur_rows]
     or ch, ch
 %else
