@@ -116121,7 +116121,10 @@ more and the 282KB story plays.
 ### 61.5 Windows and text
 
 For v1–v5/v7/v8 the Standard's two windows are drawn into one os8088 window.
-The lower window word-wraps to the content width, pages with `[MORE]`, and
+The lower window word-wraps to the content width, pages with `[MORE]` (a
+screenful of rows since the last key the worker took, Standard 8.4.1 - and
+never inside a parked wait, `[zx_rsm]` nonzero, where the worker does not hold
+the gfx lock that `zw_morewait` drops and re-takes), and
 keeps a **scrollback ring in a heap claim**, so the scroll bar is real and
 `PgUp`/`PgDn` work. Those two keys belong to the interpreter at all times and
 are taken before the input ring, so a story reading a character cannot swallow
