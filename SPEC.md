@@ -76672,7 +76672,7 @@ clk_sec  resb 1   ; 0..59      clk_day   resb 1   ; 1..31
 clk_min  resb 1   ; 0..59      clk_mon   resb 1   ; 1..12
 clk_hour resb 1   ; 0..23      clk_year  resw 1   ; 1980..2099
 clk_last resw 1   ; last [ticks] sample      clk_rtc   resb 1  ; 1 = RTC found
-clk_acc  resw 1   ; tenth-of-tick remainder  clk_dirty resb 1  ; write RTC
+clk_acc  resw 1   ; 1/1167-tick remainder    clk_dirty resb 1  ; write RTC
 clk_h12  resb 1   ; 0 = 24-hour (boot default), 1 = 12-hour + AM/PM
 clk_secs resb 1   ; 0 = the bar hides seconds (boot default), 1 = shows them
 clk_barq resb 1   ; sticky "the bar's text is stale" request
@@ -76719,12 +76719,19 @@ mid-format while the UI task carries a second. Two rules make that safe, and bot
 Nothing in an ISR touches any of it; the clock is derived from `[ticks]`,
 which the PIT hook already owns (§8).
 
-**Advancing.** `clk_tick` uses the §14 accumulator idiom verbatim, which is
-what makes 18.2 Hz add up to real seconds: delta = `[ticks]` − `clk_last`
-(wrap-safe subtraction), `clk_last` = `[ticks]`, `clk_acc` += delta×10 as a
-32-bit value (a long lock starvation — a held-open menu — can owe more than
-65535 tenths), then `DIV 182` gives whole seconds owed and the new
-remainder. Each owed second is carried through sec → min → hour → day →
+**Advancing.** `clk_tick` uses the §14 accumulator idiom, which is what
+makes the tick add up to real seconds: delta = `[ticks]` − `clk_last`
+(wrap-safe subtraction), `clk_last` = `[ticks]`, `clk_acc` += delta×1,167 as
+a 32-bit value (a long lock starvation — a held-open menu — owes more than
+65535 units), then `DIV 21,247` gives whole seconds owed and the new
+remainder. **The ratio is binding**: the tick is 1,193,182 / 65,536 =
+18.206482 Hz, and 21,247 / 1,167 = 18.206512 is the closest ratio with a
+16-bit divisor, 0.0001 s a day. The 182 / 10 (18.2 Hz) that stood until
+2026-11-10 counted each second 0.99964 s long and gained **31 s a day** on
+every machine — nothing re-reads a clock chip after boot, and a 5150 has
+none (big review BR-15). Worst case: delta 65,535 and remainder 21,246 is
+76,500,591 / 21,247 = 3,600, so the DIV cannot fault; the Timer (§111) uses
+the same pair. Each owed second is carried through sec → min → hour → day →
 month → year, with month lengths from `clk_mlen` (below) and February 29 in a
 leap year (`year AND 3 = 0`, exact over the 1980..2099 range the page
 allows).

@@ -179,10 +179,12 @@ tm_ret:
 ; UNCONDITIONALLY - which is tm_stamp, so this calls it rather than saying
 ; it again, so a stopped interval is discarded rather than banked -
 ; leaving it alone would make Start jump forward by however long the timer
-; had been stopped. Running: tm_acc += delta * 10, and every 182 tenths is a
-; second, carried SEC -> MIN -> HRS through tm_lim's wrap limits. A long UI
-; stall (a held-open menu) is one late firing owing many seconds, which the
-; 32-bit product is for; the quotient is at most 3,602, so the DIV cannot
+; had been stopped. Running: tm_acc += delta * 1,167, and every 21,247 of
+; those is a second (21,247 / 1,167 = 18.206512 against the PIT's 18.206482
+; Hz - the kernel clock's ratio, SPEC.md 37; 182 / 10 ran 31 s a day fast),
+; carried SEC -> MIN -> HRS through tm_lim's wrap limits. A long UI stall (a
+; held-open menu) is one late firing owing many seconds, which the 32-bit
+; product is for; at delta 65,535 the quotient is 3,600, so the DIV cannot
 ; fault.
 ; -----------------------------------------------------------------------------
 tm_keep:
@@ -191,11 +193,11 @@ tm_keep:
     sub ax, dx                      ; AX = the delta
     cmp byte [tm_run], 0
     je .out                         ; stopped: the delta goes nowhere
-    mov dx, 10
-    mul dx                          ; DX:AX = delta * 10, tenths of a tick
+    mov dx, 1167
+    mul dx                          ; DX:AX = delta * 1,167
     add ax, [tm_acc]
     adc dx, 0
-    mov cx, 182
+    mov cx, 21247
     div cx                          ; AX = whole seconds owed, DX = leftover
     mov [tm_acc], dx
     xchg cx, ax
@@ -685,7 +687,7 @@ tm_abn:     db 'Jorge Gonzalez', 0
 tm_hms      equ os88_image_end + 0  ; 3 bytes: hours, minutes, seconds (TM_HRS..)
 tm_run      equ os88_image_end + 3  ; byte: 0 stopped, 1 running
 tm_last     equ os88_image_end + 4  ; word: last [ticks] sample
-tm_acc      equ os88_image_end + 6  ; word: tenth-of-tick accumulator
+tm_acc      equ os88_image_end + 6  ; word: part-tick accumulator (/1,167)
 tm_shown    equ os88_image_end + 8  ; 8: the cells this window is DISPLAYING;
                                     ; all zero = nothing here describes the glass
 tm_str      equ os88_image_end + 16 ; 9: "HH:MM:SS",0 scratch (under the lock);
