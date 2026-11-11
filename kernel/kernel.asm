@@ -2756,11 +2756,11 @@ apic_gfx_lock:
     OSAPI_SLOT gfx_lock           ; 0x0010
 apic_gfx_unlock:
     OSAPI_SLOT gfx_unlock         ; 0x0018
-    OSAPI_SLOT gfx_pixel          ; 0x0020
-apic_gfx_hline:
-    OSAPI_SLOT gfx_hline          ; 0x0028
-apic_gfx_vline:
-    OSAPI_SLOT gfx_vline          ; 0x0030
+    OSAPI_SLOT gfx_pixel_n        ; 0x0020 - the three LINE cells enter their
+apic_gfx_hline:                   ; non-preserving shims (SPEC.md 5.7.3): a
+    OSAPI_SLOT gfx_hline_n        ; 0x0028   package's line clobbers AX..DX,
+apic_gfx_vline:                   ; and the kernel's own callers keep the
+    OSAPI_SLOT gfx_vline_n        ; 0x0030   preserving gfx_hline/gfx_vline
 apic_gfx_fill:
     OSAPI_SLOT gfx_fill           ; 0x0038
     OSAPI_SLOT gfx_frame          ; 0x0040

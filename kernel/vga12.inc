@@ -1045,21 +1045,9 @@ vga_p4built db 0
 %endif
 %endif
 
-; -----------------------------------------------------------------------------
-; gfx_pixel - plot one pixel in [gfx_color]
-; in:       CX = x, DX = y
-; out:      -
-; clobbers: flags
-; -----------------------------------------------------------------------------
-gfx_pixel:
-    push ax
-    push bx
-    mov ax, cx                  ; a pixel is a 1x1 solid rect (CX/DX already
-    mov bx, dx                  ; hold x2/y2); gfx_fill clips and back-
-    call gfx_fill               ; buffer-dispatches itself
-    pop bx
-    pop ax
-    ret
+; (gfx_pixel, the preserving pixel, is gone: its two callers were
+; OSAPI_GFX_PIXEL and gfx_points' slow arm, and both enter gfx_pixel_n above
+; gfx_fill now - SPEC.md 5.7.3)
 
 ; -----------------------------------------------------------------------------
 ; gfx_hline - horizontal line in [gfx_color], inclusive endpoints
@@ -1412,7 +1400,10 @@ gfx_points:
                                 ; pass 9)
     mov dx, [es:bp+2]
     add bp, 4
-    call gfx_pixel
+    call gfx_pixel_n            ; AX and BX are this loop's to lose (the
+                                ; prologue banked them): the non-preserving
+                                ; pixel, ~80 clocks a point under the old
+                                ; push/pop wrapper (SPEC.md 5.7.3)
     dec si
     jnz .sp
     jmp .out
@@ -3287,11 +3278,10 @@ gfx_blit_run:
 ; gfx_xor_rect's verticals; gfx_xor_strips draws them as fills now.
 ; -----------------------------------------------------------------------------
 gfx_vline:
-    push cx
-    mov cx, ax                  ; rect (x,y1)-(x,y2)
-    call gfx_fill
-    pop cx
-    ret
+    push cx                     ; the kernel's own, preserving: the package's
+    call gfx_vline_n            ; cell enters gfx_vline_n itself, and this is
+    pop cx                      ; that plus the one register it spends - the
+    ret                         ; same instructions as before, two bytes less
 
 %ifdef GFX_VGA
 ; vga_solid_rect's two rare arms, placed ABOVE gfx_fill so the common path
@@ -3327,6 +3317,34 @@ vga_sr_dq:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
     GFXCLIP_ARM gfx_fill
+; -----------------------------------------------------------------------------
+; gfx_pixel_n / gfx_hline_n / gfx_vline_n - the LINE CELLS' entries
+;           (SPEC.md 5.7.3): OSAPI_GFX_PIXEL, _HLINE and _VLINE land here
+; in:       pixel CX = x, DX = y; hline AX = x1, BX = x2, DX = y; vline AX = x,
+;           BX = y1, DX = y2 - each a 1-pixel solid rect for gfx_fill
+; out:      -
+; clobbers: pixel AX, BX; hline BX, CX; vline CX (the cells' contract says
+;           AX..DX, which leaves the kernel room); flags
+;
+; The preserving gfx_hline and gfx_vline banked the registers they turned
+; into a rect and CALLED gfx_fill: a push/pop pair or two and a call/ret
+; around the one instruction pair that is the work. A package's line now
+; JUMPS into the fill with its registers spent - ~80 clocks off a pixel, ~65
+; off an hline and ~55 off a vline on the 8088, PREDICTED from the
+; instruction tables (PERFORMANCE.md Part 2), of a ~2,300-clock call. The
+; kernel's own callers keep the preserving pair: gfx_hline unchanged,
+; gfx_vline a wrapper round gfx_vline_n, which FALLS INTO gfx_fill.
+; -----------------------------------------------------------------------------
+gfx_pixel_n:
+    mov ax, cx                  ; a pixel is a 1x1 solid rect: CX/DX already
+    mov bx, dx                  ; hold x2/y2
+    jmp short gfx_fill
+gfx_hline_n:
+    mov cx, bx                  ; rect (x1,y)-(x2,y)
+    mov bx, dx
+    jmp short gfx_fill
+gfx_vline_n:
+    mov cx, ax                  ; rect (x,y1)-(x,y2), and into gfx_fill
     GFXCLIP gfx_fill
 gfx_fill_d:
     GFXDISP gfx_fill_raw
@@ -6960,7 +6978,10 @@ gfx_b4piece:
     cmp ch, cl
     je .clen
 .cemit:
-    call KERNEL_SEG:apic_gfx_vline  ; AX = x, BX..DX inclusive
+    mov cx, ax                  ; a 1-px FILL, not the vline CELL: the line
+    call KERNEL_SEG:cw_gfx_fill ; cells clobber AX..DX (SPEC.md 5.7.3) and
+                                ; the loop keeps x in AX and the run in DX;
+                                ; CX is dead until .crun reloads it
     mov bx, dx
     inc bx                      ; the next run's first row
     or di, di
