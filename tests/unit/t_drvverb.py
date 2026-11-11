@@ -68,7 +68,7 @@ DRIVERS = ["sound.drv", "hdd.drv", "ether.drv", "pciether.drv", "net.drv",
 
 # the drivers that declare OS88_DRV_WAKES (SPEC.md 51.2.5, B4). SOUND does
 # not, by decision (docs/plans/B4-WAKE-PLAN.md)
-WAKES = {"ether.drv", "pciether.drv", "usbmouse.drv"}
+WAKES = {"ether.drv", "pciether.drv", "usbmouse.drv", "httpfs.drv"}
 
 # what each class implements beyond ATTACH/DETACH/READY, which every driver
 # gets and this row does not ask about
