@@ -52,7 +52,8 @@ the wake's REQUEST three ways (SPEC.md 72.5.3). Nothing pumps a driver no
 package is using (72.2.1), so after each resume BROWSER.O88 off
 network360.img fetches http://10.7.0.1/ - ARP is answered and the SYN is
 dropped, so the browser keeps asking NETV_* (every verb pumps) while the
-answer is read:
+answer is read - and is CLOSED before the next hibernate, so every cycle's
+wake is measured with nothing pumping, against that cycle's own wire log:
   ack     -> DH_BOUND, eth_ip 10.7.0.15, no DISCOVER;
   nak     -> the address cleared and a DISCOVER: the server then offers
              10.7.0.16, so DH_BOUND on .16;
@@ -317,6 +318,27 @@ class Q(object):
     def readseg(self, seg, off, n):
         return self.read((seg << 4) + off, n)
 
+    # os88ui's scroller (`scroll_to`, which `ui.path` reaches for a package
+    # below the fold of B:'s window) drives the list with MartyPC's key names
+    # through `m.key` - the lease leg's ui.path("B:/BROWSER.O88") died with
+    # AttributeError here. ethernet.Qemu's map, sent through os88qemu.key so
+    # the release waits for the ROM to store the press (a confirmed key).
+    QKEYS = {"ArrowDown": "down", "ArrowUp": "up", "Home": "home",
+             "End": "end", "PageDown": "pgdn", "PageUp": "pgup",
+             "Tab": "tab", "Enter": "ret"}
+
+    def key(self, name):
+        os88qemu.key(self, self.QKEYS[name])
+
+    def status(self):
+        """...and the scroller's clock (os88ui reads `status()["cycles"]`, a
+        MartyPC answer): the GUEST's, off the BIOS tick count at 0040:006C,
+        counted at os88marty's rate - tests/vbt286.py's adapter, on QEMU"""
+        import os88marty
+        t = self.read(0x46C, 4)
+        n = t[0] | t[1] << 8 | t[2] << 16 | t[3] << 24
+        return {"cycles": int(n / 18.2065 * os88marty.GUEST_HZ)}
+
     def hmp(self, cmd):
         return xmcheck.qmp(self.sock, cmd)
 
@@ -405,12 +427,13 @@ def main():
                                                  dotted(LEASE1)), flush=True)
         ui = hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S, verbose=False)
         held = LEASE1
-        browser = False
         for n, mode in enumerate(modes, 1):
             if red:                     # THE FAILING CASE: the bit off, live
                 lin = (seg << 4) + DRV_H_WAKES
                 os88qemu.poke(q.hmp, lin, bytes([q.read(lin, 1)[0] & 0x7F]))
-            net.phase, net.mode = "boot", mode
+            with net.lock:              # EACH CYCLE'S OWN WIRE: "since the
+                net.log = []            # wake" is this wake's, not the sum of
+            net.phase, net.mode = "boot", mode  # every one so far
             ui.menu_pick("Apple", "Hibernate...")
             ui.wait_window("Hibernate")
             os88qemu.ui_done(q, S, cap=1.0)
@@ -479,11 +502,13 @@ def main():
             if leg != "lease":
                 continue
             # --- the pump: a package's verbs, so the answer is read --------
-            if not browser:
-                ui.path("B:/BROWSER.O88")
-                os88qemu.pace(q, 1.0)
-                os88qemu.type_text(q.sock, "10.7.0.1/")
-                browser = True
+            # OPENED EACH CYCLE AND CLOSED BEFORE THE NEXT HIBERNATE: a browser
+            # left open rides the image and pumps from the first tick of the
+            # wake, so .4 and .6 ("before anything pumps") would be measuring
+            # its fetch, not the wake
+            bw = ui.path("B:/BROWSER.O88")
+            os88qemu.pace(q, 1.0)
+            os88qemu.type_text(q.sock, "10.7.0.1/")
             xmcheck.qmp(q.sock, "sendkey ret")
             if mode == "ack":
                 ok = lambda: (db(seg, "dhcp_st") == DH_BOUND
@@ -522,6 +547,7 @@ def main():
                      "%d - DH_FAIL is %d)" % (n, dotted(held), st, DH_FAIL))
                 want(not any(e[1] == DHCPDISCOVER for e in log),
                      "%d.9 ...and never started over" % n)
+            ui.close(bw)
         q.close()
     if fails:
         print("b4wake %s: %d FAILED" % (leg, len(fails)))
