@@ -131283,9 +131283,14 @@ fills it at parse time:
 An entry is born none when the tag has no `src`, when INDEX is 32 or more,
 when it is in a frame's child document (its base is not the page's), or when
 the link arena refuses the `src` (the same cap as an href, `Links limited`).
-`br_layout` clears every `IF_LAID` and sets it for each `D_IMG` it lays out
-as a box. An image in a composed table cell is not one (§71.25), so it is
-never fetched.
+`br_layout` sets a bit in `[br_ilaid]` (32 bits) for each `D_IMG` it lays
+out as a box, and at the walk's end makes every `IF_LAID` that bit in one
+critical section (`br_imgsetlaid`) and bumps `[br_ilgen]`. The worker's
+`IE_NEXT` scan, which banks `[br_ilgen]` before it, so sees the last
+layout's boxes or this one's and never a half-walked page; when the count
+moved during a scan that found nothing, `IE_NEXT` stands and the next pass
+looks again rather than ending the engine. An image in a composed table
+cell is not a box (§71.25), so it is never fetched.
 
 **The fetch (D8).** One image at a time, on the worker, after the page has
 settled (`br_nstate` outside `BN_OPEN..BN_BODY`, the layout done), in INDEX
@@ -131510,11 +131515,18 @@ first (`bri_spnew`), inside the reserve, and the spill is refused if it
 cannot be. The worker never writes below `[br_ibase]`.
 
 **The paint.** For an entry in state 4, `br_imgdisk` looks for the slice in
-the buffer, which holds the file's bytes from `[br_idoff]` for `[br_idlen]`.
-On a miss it reads 8 KB from the slice's sector (`OSAPI_FILE_READ_AT`, whose
-offset and count are whole sectors on `kern_big`, §18.4.4.2) and the slices
-after it come from the buffer. A full box of 16 slices of a 32-column VGA
-copy is two reads. A refused read, or one that ends short, turns the cache
+the buffer's two windows of `BR_IDWIN` = 4,096 bytes, which hold the file's
+bytes from `[br_idoff]` for `[br_idlen]` and from `[br_idoff1]` for
+`[br_idlen1]`. On a miss it reads 4 KB from the slice's sector
+(`OSAPI_FILE_READ_AT`, whose offset and count are whole sectors on
+`kern_big`, §18.4.4.2) into the window the last hit was not in
+(`[br_idlast]`), and the slices after it come from the buffer. A slice is
+at most 2,880 bytes, so with its sector's rounding it always fits one
+window. A full box of 16 slices of a 32-column VGA copy is four reads, and
+two such boxes on the same rows are at most eight, each keeping a window:
+with one 8 KB window, which made a lone box two reads, the second box's
+miss threw out the first's slices and every row the two shared was a read
+for each. A refused read, or one that ends short, turns the cache
 off, and the box is drawn as §71.25 draws it. **Only the UI task touches the
 file**: the spill is a UI hand-over, the worker paints only while the page
 arrives, and the engine starts only after that.
@@ -131677,8 +131689,15 @@ a second phase after the page's images, which `IE_APREP`, 14, served).
 
 When `IE_NEXT` finds no image waiting and an animation was set up,
 `IE_AGO` (18, UI) keeps the LZW table past the copies, and the engine stays
-in `IE_ANIM` (16, worker), with part 1 held. Part 1 is dropped by the stop
-(`br_imghalt`), so a navigation or a close ends every animation.
+in `IE_ANIM` (16, worker), with part 1 held. A refused table lets the last
+animation go and gives its block back (`bri_adrop`, `bri_compact`, the
+order `bri_ustore` takes) and asks again, so the others still play; with
+none left the pictures stay still. Part 1 is dropped by the stop
+(`br_imghalt`), so a navigation or a close ends every animation, and by
+`IE_AEND` (14, UI): when `IE_ANIM`'s scan finds no animation playing or
+paused (every one stopped on its last frame), every record is let go, the
+blocks and the LZW table are given back (`bri_compact`, `bri_ushrink`) and
+the engine ends (`IE_END`). Each copy stays on the frame it shows.
 
 **Held in the store.** The copy of an image a record holds (`A_ON` not 0),
 and the record's block, never go to EMS or the cache file: the spills of
@@ -131688,7 +131707,10 @@ and the record's block, never go to EMS or the cache file: the spills of
 animation let go (`bri_adrop`), from the last record back.
 
 **A frame** (`bri_aframe`, on the worker), when the record's due tick has
-come (`OSAPI_GET_TICKS`):
+come (`OSAPI_GET_TICKS`). `IE_ANIM`'s scan starts at the record after the
+last one served, so on a machine whose frame costs more than its delay
+every due animation still has its turn rather than the first in order
+alone:
 
 - the extensions are walked to the next image descriptor. A GCE sets the
   disposal, the delay and the transparent index. A zero-sized frame is
@@ -131706,7 +131728,9 @@ come (`OSAPI_GET_TICKS`):
 - the dirty rect is the last disposal's rect and this frame's, unioned and
   clipped. Every box row whose logical row is inside it is made again from
   the master (`bri_trowfill`, `bri_convrow`, the column map across the
-  whole screen), in the copy in the store;
+  whole screen), in the copy in the store. `bri_aconv` tests the
+  generation before each box row, so a stop waits for one row and not a
+  whole picture's conversion; a refused close may keep a copy part made;
 - `IE_AFRAME` (17, UI) draws the image alone, as `IE_SHOW` does, and the
   next frame is due after its delay (`gif_delay`: hundredths to ticks,
   under 2 read as 10).
@@ -131794,9 +131818,9 @@ keeps its alt box. The media type is not read.
    scratch; a refusal keeps the alt box.
 3. The box (`bri_size`) and the record, as for a GIF. **The scale**: a PNG's
    is 1/1. A JPEG's is the coarsest of 1/1, 1/2, 1/4 and 1/8 that HEAD offers
-   (`PXK_DSC` not FFFFh) whose master, `ceil(S / 2^s)` each way, is still at
-   least the box's picture each way - the IDCT then does the shrinking for
-   nothing (D4).
+   (`PXK_DSC` not FFFFh) whose master, `floor(S / 2^s)` each way (what
+   `pj_fsizes` emits), is still at least the box's picture each way - the
+   IDCT then does the shrinking for nothing (D4).
 4. The store is grown behind the copies for the file, the decoder's scratch
    (`PXK_DPARA`, or `PXK_DSC` at the scale), the ROW BUFFER (the master's
    width, three bytes a pixel for truecolour, one else) and the copy; the

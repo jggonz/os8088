@@ -1019,7 +1019,9 @@ bri_anear:
 
 ; bri_aconv - the box rows the dirty rect [bri_dx1..bri_dy2] reaches made
 ; again from the master: each one's logical row (ty H / th) into bri_rowbuf,
-; then bri_trowfill and bri_convrow across the whole screen. All kept
+; then bri_trowfill and bri_convrow across the whole screen. CF=1 a stop
+; came first (bri_gchk, a row at a time, so br_imghalt waits for one row and
+; not the box; a refused close may keep a copy part made). Others kept
 bri_aconv:
     push ax
     push bx
@@ -1045,8 +1047,10 @@ bri_aconv:
     call bri_tyof
     mov bx, ax                      ; BX = the box row
 .r:
+    call bri_gchk
+    jc .out                         ; stopped: CF=1
     cmp bx, [bri_ty1]
-    jae .out
+    jae .out                        ; (CF=0, as at the je above)
     mov ax, bx
     mul word [bri_gh]
     div word [bri_th]               ; AX = its logical row
@@ -1111,19 +1115,29 @@ bri_aunion:
     ret
 
 ; IE_ANIM (worker) - the first animation whose frame is due, and that is not
-; paused, makes it (bri_aframe); a paused one plays again once a paint has
-; drawn it ([br_iseen])
+; paused, makes it (bri_aframe), counting round from the one after the last
+; served, so each due one has its turn on a machine slower than its delay;
+; a paused one plays again once a paint has drawn it ([br_iseen]). None left
+; playing or paused hands over to IE_AEND
 bri_astep:
     call bri_gchk
     jc .ret
     mov es, [cs:PXP_SELF]
     call bri_now
     mov dx, ax                      ; DX = now
-    xor al, al
+    xor si, si                      ; SI = those playing or paused
+    mov al, [bri_acur]
+    mov ah, BRI_AMAX                ; AH = the records left to look at
 .r:
+    inc al
     cmp al, BRI_AMAX
-    jae .ret
+    jb .in
+    xor al, al
+.in:
     call bri_arp
+    test byte [es:di + A_ON], 1     ; 1 plays, 3 paused (0 free, 2 stopped)
+    jz .n
+    inc si
     cmp byte [es:di + A_ON], 3
     jne .play
     mov cl, [es:di + A_K]
@@ -1151,8 +1165,14 @@ bri_astep:
     jc .ret
     jmp bri_kick
 .n:
-    inc al
-    jmp .r
+    dec ah
+    jnz .r
+    or si, si
+    jnz .ret
+    mov al, IE_AEND                 ; every one still: the UI lets them go
+    call bri_go
+    jc .ret
+    jmp bri_kick
 .ret:
     ret
 
@@ -1311,6 +1331,7 @@ bri_aframe:
     mov dx, [bri_ay2]
     call bri_aunion
     call bri_aconv
+    jc .stopped
     mov es, [cs:PXP_SELF]
     mov al, [bri_acur]
     call bri_arp
@@ -1354,6 +1375,7 @@ bri_aframe:
     jc .stopped
     mov [es:di + A_LEFT], ax        ; (bri_arestart refills it: kept)
     call bri_aconv
+    jc .stopped
     mov ax, [es:di + A_D0]
 .due:
     mov dx, ax
@@ -1403,16 +1425,38 @@ bri_uaframe:
     ret
 
 ; IE_AGO (UI) - every image is in: the LZW table past the copies for the
-; frames, then IE_ANIM; refused, the pictures stay still
+; frames, then IE_ANIM; refused, the last animation is let go and its block
+; given back, and it is asked again (bri_ustore's order); none left, the
+; pictures stay still
 bri_uago:
     mov ax, [br_iready]
     add ax, BRI_LZWPAR
-    jc .no
+    jc .drop
     call bri_grow
-    jc .no
+    jnc .go
+.drop:
+    call bri_adrop                  ; CF=1 none left
+    jc bri_uaend
+    mov word [bri_rx], 0            ; no stage: compact must not move the
+    mov ax, [br_ibase]              ; last file staged
+    call bri_compact                ; its block given back
+    jmp bri_uago
+.go:
+    cmp byte [bri_anum], 0          ; the last one was let go to fit it
+    je bri_uaend
     mov byte [br_ie], IE_ANIM
     ret
-.no:
+
+; IE_AEND (UI), and IE_AGO refused - every animation let go: each stays on
+; the frame it shows, its block given back with the LZW table, and part 1
+; dropped (IE_END)
+bri_uaend:
+    call bri_adrop
+    jnc bri_uaend
+    mov word [bri_rx], 0            ; no stage (bri_aload left a block's)
+    mov ax, [br_ibase]
+    call bri_compact
+    call bri_ushrink
     mov byte [bri_anum], 0
     mov byte [br_ie], IE_END
     ret

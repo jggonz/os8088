@@ -455,21 +455,12 @@ bri_pxprep:
     ret
 
 ; bri_mdim - CL = a scale: AX, DX = the master's width and height,
-; ceil(S / 2^s) each way. Others kept
+; floor(S / 2^s) each way, as pxjpeg's pj_fsizes emits it. Others kept
 bri_mdim:
-    push cx
-    push bx
-    mov bx, 1
-    shl bx, cl
-    dec bx                          ; BX = 2^s - 1
     mov ax, [cs:bri_sw]
-    add ax, bx
     shr ax, cl
     mov dx, [cs:bri_sh]
-    add dx, bx
     shr dx, cl
-    pop bx
-    pop cx
     ret
 
 ; =============================================================================

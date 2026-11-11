@@ -11542,6 +11542,7 @@ br_layout:
     mov bx, si
     mov cx, [br_nch]
     call br_emitline
+    call br_imgsetlaid              ; the boxes become IF_LAID all at once
 .out:
     cmp byte [br_lfull], 0
     je .return
@@ -16593,8 +16594,8 @@ br_iemsp         equ br_ipy + 2        ; word: paragraphs of br_imgar in use
 br_imgar         equ br_iemsp + 2      ; AR_SIZE: the copies moved to EMS
 br_ibase         equ br_imgar + AR_SIZE ; word: the store's first copy (71.27)
 br_ifend         equ br_ibase + 2      ; dword: the cache file's allocated end
-br_idoff         equ br_ifend + 4      ; dword: the paint buffer's file offset
-br_idlen         equ br_idoff + 4      ; word: ...and its bytes, 0 = empty
+br_idoff         equ br_ifend + 4      ; dword: the paint buffer's first
+br_idlen         equ br_idoff + 4      ; window's file offset; word: its bytes
 br_iccl          equ br_idlen + 2      ; word: BRCACHE's cluster, 0 = not banked
 br_icdrv         equ br_iccl + 2       ; byte: ...on this volume
 br_icstate       equ br_icdrv + 1      ; byte: ICS_* bits
@@ -16628,7 +16629,13 @@ br_hiimg         equ br_hislice + 1    ; word: ...the image's INDEX
 br_imap          equ br_hiimg + 2      ; BR_IMGTMAX words: each image's map,
                                        ; 0 none, 1 ismap, else a name hash
 br_areas         equ br_imap + BR_IMGTMAX * 2 ; BR_AREAMAX * BR_ARSZ
-br_parse_bss_end equ br_areas + BR_AREAMAX * BR_ARSZ
+br_ilaid         equ br_areas + BR_AREAMAX * BR_ARSZ ; dword: the walk's boxes,
+                                       ; bit k image k, IF_LAID at its end
+br_ilgen         equ br_ilaid + 4      ; byte: bumped as IF_LAID is set (71.26)
+br_idoff1        equ br_ilgen + 1      ; dword: the paint buffer's SECOND
+br_idlen1        equ br_idoff1 + 4     ; window, as br_idoff/br_idlen (71.27)
+br_idlast        equ br_idlen1 + 2     ; byte: the window the last hit was in
+br_parse_bss_end equ br_idlast + 1
 BR_BSS     equ (br_parse_bss_end - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------

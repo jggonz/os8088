@@ -167,7 +167,8 @@ bri_fail:
 
 ; --- IE_NEXT: the next waiting image the layout drew -------------------------
 bri_next:
-    xor bx, bx
+    mov ah, [br_ilgen]              ; AH = the layout's boxes as the scan finds
+    xor bx, bx                      ; them (br_imgsetlaid)
 .scan:
     cmp bx, BR_IMGTMAX
     jae .none
@@ -183,6 +184,8 @@ bri_next:
     inc bx
     jmp .scan
 .none:
+    cmp ah, [br_ilgen]              ; a layout set them during the scan:
+    jne .ret                        ; IE_NEXT stands, the next pass looks again
     mov al, IE_END
     cmp byte [bri_anum], 0
     je .end
@@ -1138,8 +1141,12 @@ bri_wake:
     jmp bri_uaframe
 .ago:
     cmp al, IE_AGO
-    jne .ret
+    jne .aend
     jmp bri_uago
+.aend:
+    cmp al, IE_AEND
+    jne .ret
+    jmp bri_uaend
 .ret:
     ret
 
@@ -1185,6 +1192,7 @@ bri_ustart:
     mov [br_iready], si
     mov [br_ibase], si
     mov word [br_idlen], 0
+    mov word [br_idlen1], 0
     mov byte [br_ie], IE_NEXT
     ret
 .refusep:
@@ -2282,6 +2290,7 @@ bri_dspill:
     cmp word [br_ibase], 0
     jne .moved
     mov word [br_idlen], 0          ; the paint buffer, new and empty
+    mov word [br_idlen1], 0
 .moved:
     call bri_compact                ; the rest and the stage from the new base
     clc
@@ -2940,6 +2949,7 @@ bri_ucached:
     call bri_spnew
     jc .fetch
     mov word [br_idlen], 0
+    mov word [br_idlen1], 0
     call bri_compact
 .buf:
     call bri_urecord

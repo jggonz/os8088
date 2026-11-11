@@ -25,6 +25,7 @@ IS_DISK     equ 4                   ; ready, its copy in the cache file (71.27)
 ICS_FILE    equ 1                   ; br_icstate: the page has a cache file
 ICS_OFF     equ 2                   ; ...the cache is off until the next page
 BR_IDBUF    equ 8192                ; the paint's read buffer, the store's first bytes
+BR_IDWIN    equ BR_IDBUF / 2        ; ...as two windows, each read on its own
 BR_ICRING   equ 8                   ; pages kept on a fixed volume (71.28)
 
 IF_NOW      equ 1                   ; no width given
@@ -46,6 +47,7 @@ IE_DEC      equ 10                  ; worker: decode
 IE_SHOW     equ 11                  ; UI: shrink, draw
 IE_END      equ 12                  ; UI: drop the part
 IE_CACHED   equ 13                  ; UI: a kept copy, from the file (71.28)
+IE_AEND     equ 14                  ; UI: every animation still: let them go
                                     ; (14 was IE_APREP: the second fetch is gone)
 IE_ASET     equ 15                  ; worker: its plans and master
 IE_ANIM     equ 16                  ; worker: the frames, when due

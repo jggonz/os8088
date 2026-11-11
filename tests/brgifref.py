@@ -125,7 +125,7 @@ def px_scale(p, tw, th):
         return 0
     offered = list(range(p.smin, 4))
     for s in (3, 2, 1, 0):
-        if s in offered and -(-p.w >> s) >= tw and -(-p.h >> s) >= th:
+        if s in offered and p.w >> s >= tw and p.h >> s >= th:
             return s
     return offered[0]
 

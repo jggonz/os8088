@@ -136,30 +136,63 @@ br_imgtab:
 .ret:
     ret
 
-; --- br_imglaid - the layout drew image [br_iindex] as a box. All kept ------
+; --- br_imglaid - the layout drew image [br_iindex] as a box: its bit in
+; [br_ilaid], which br_imgsetlaid makes IF_LAID at the walk's end. All kept
 br_imglaid:
     push bx
+    push cx
     mov bx, [br_iindex]
     cmp bx, BR_IMGTMAX
     jae .out
-    call br_imgent
-    or byte [bx+IT_FLG], IF_LAID
+    mov cl, bl
+    and cl, 7
+    mov ch, 1
+    shl ch, cl
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    or [br_ilaid + bx], ch
 .out:
+    pop cx
     pop bx
     ret
 
-; --- br_imgunlaid - every entry's IF_LAID cleared (br_layout's start) -------
+; --- br_imgunlaid - no box yet (br_layout's start). IF_LAID is untouched
+; until the walk ends: the worker's IE_NEXT never sees a half-laid page
 br_imgunlaid:
+    mov word [br_ilaid], 0
+    mov word [br_ilaid+2], 0
+    ret
+
+; --- br_imgsetlaid - every entry's IF_LAID := its bit in [br_ilaid], in one
+; critical section, and [br_ilgen] bumped: bri_next's scan saw the old set
+; or the new one, or a changed count tells it to look again. All kept
+br_imgsetlaid:
+    push ax
     push bx
     push cx
+    push dx
+    mov ax, [br_ilaid]
+    mov dx, [br_ilaid+2]            ; DX:AX, bit k image k
     mov bx, br_itab + IT_FLG
     mov cx, BR_IMGTMAX
+    pushf
+    cli
 .l:
     and byte [bx], ~IF_LAID & 0xFF
+    shr dx, 1
+    rcr ax, 1                       ; CF = this image's bit
+    jnc .n
+    or byte [bx], IF_LAID
+.n:
     add bx, BR_ITSZ
     loop .l
+    inc byte [br_ilgen]
+    popf
+    pop dx
     pop cx
     pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -592,6 +625,7 @@ br_icreset:
     xor ax, ax
     mov [br_icstate], al
     mov [br_idlen], ax
+    mov [br_idlen1], ax
     mov [br_ifend], ax
     mov [br_ifend+2], ax
     pop ax
@@ -745,9 +779,10 @@ br_icmkname:
 ; br_imgdisk - a slice of a copy in the cache file: AX = the copy's first
 ; paragraph in the file, SI = the slice's byte in the copy, BP = a row's
 ; bytes (the slice is eight). From the paint buffer, the store's first
-; BR_IDBUF bytes, read from the slice's sector on a miss. out ES:SI = the
-; slice; CF=1 the cache is off (a refused or short read turns it off).
-; UI task. Others kept
+; BR_IDBUF bytes as two BR_IDWIN windows, a miss read from the slice's
+; sector into the one the last hit was not in, so two pictures on a row keep
+; a window each (71.27). out ES:SI = the slice; CF=1 the cache is off (a
+; refused or short read turns it off). UI task. Others kept
 br_imgdisk:
     test byte [br_icstate], ICS_OFF
     jz .on
@@ -784,17 +819,24 @@ br_imgdisk:
     push si
     push es
     and ax, 0FE00h                  ; from its sector (whole sectors, 18.4.4.2)
-    mov [br_idoff], ax
-    mov [br_idoff+2], dx
-    mov word [br_idlen], 0
+    xor bx, bx                      ; into the window the last hit was not in
+    mov si, br_idoff
+    cmp byte [br_idlast], 0
+    jne .win
+    mov bx, BR_IDWIN
+    mov si, br_idoff1
+.win:
+    mov [si], ax
+    mov [si+2], dx
+    mov word [si+4], 0
     mov dx, [br_istseg]
     xor ax, ax
     call br_imgsub
     mov es, dx
-    xor bx, bx
-    mov cx, BR_IDBUF
-    mov ax, [br_idoff]
-    mov dx, [br_idoff+2]
+    mov cx, BR_IDWIN
+    mov ax, [si]
+    mov dx, [si+2]
+    push si
     mov si, br_icname
     push ax                         ; ES:BX is the movable store: pinned for
     xor ax, ax                      ; the call (SPEC.md 66.3 rule 5)
@@ -802,8 +844,9 @@ br_imgdisk:
     pop ax
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
     call br_pageunpin               ; AX and the flags kept
+    pop si
     jc .read
-    mov [br_idlen], ax              ; (8 KB at the most: DX = 0)
+    mov [si+4], ax                  ; (4 KB at the most: DX = 0)
 .read:
     pop es
     pop si
@@ -816,6 +859,7 @@ br_imgdisk:
 .off:
     or byte [br_icstate], ICS_OFF   ; refused, short or swapped: off for
     mov word [br_idlen], 0          ; the page, and the box is a frame
+    mov word [br_idlen1], 0
     stc
     jmp short .out
 .hit:
@@ -832,28 +876,42 @@ br_imgdisk:
     pop bx
     pop ax
     ret
-; DX:AX = a file byte, DI = bytes -> CF=0 CX = its offset in the buffer.
-; AX, DX kept
+; DX:AX = a file byte, DI = bytes -> CF=0 CX = its offset in the buffer,
+; [br_idlast] the window it is in. AX, DX kept
 .inbuf:
+    push bx
+    mov bx, br_idoff                ; window 0's offset and length, then 1's
+.ibw:
     push ax
     push dx
-    sub ax, [br_idoff]
-    sbb dx, [br_idoff+2]
+    sub ax, [bx]
+    sbb dx, [bx+2]
     jc .ibn
     or dx, dx
     jnz .ibn
     mov cx, ax
     add ax, di
     jc .ibn
-    cmp ax, [br_idlen]
+    cmp ax, [bx+4]
     ja .ibn
     pop dx
     pop ax
+    cmp bx, br_idoff
+    mov byte [br_idlast], 0
+    je .ibk
+    mov byte [br_idlast], 1
+    add cx, BR_IDWIN                ; window 1 is the buffer's second half
+.ibk:
+    pop bx
     clc
     ret
 .ibn:
     pop dx
     pop ax
+    cmp bx, br_idoff1
+    mov bx, br_idoff1
+    jne .ibw
+    pop bx
     stc
     ret
 
