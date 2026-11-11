@@ -489,7 +489,7 @@ static void pdu_empty_paint(struct os88_rect *clip)
         os88_strcpy(pdu_line, "Could not open ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
         l1 = pdu_line;
-        l2 = pdu_errtext(pdu_err);
+        l2 = pdu_dskout ? "Insert the PageDesk disk; open again." : pdu_errtext(pdu_err);
     } else if (pdu_doc == D_OPENING) {
         os88_strcpy(pdu_line, "Opening ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));

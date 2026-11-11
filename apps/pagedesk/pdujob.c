@@ -224,6 +224,7 @@ static void pdu_open_begin(const char *name)
     pdu_pgwant = 0;
     pdu_changes = 0;
     pdu_stale = 0;                      /* QA F31: a new file */
+    pdu_dskout = 0;                     /* QA F21: nothing missed yet */
     pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_nav_reset();                    /* nav: history, selection, panels */
@@ -351,7 +352,7 @@ failed:
         pdu_pgsaved = 0;
         pdu_doc_release();
         pdu_doc = D_FAILED;
-        pdu_err = (pdu_mcf && r) ? r : PDE_SYNTAX;
+        pdu_err = pdu_dskout ? PDE_IO : (pdu_mcf && r) ? r : PDE_SYNTAX;   /* QA F21: never 'damaged' for our disk */
         pdu_say2("Could not open ", pdu_name);
         pdu_dirty_all = 1;
         return;
