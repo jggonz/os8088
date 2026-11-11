@@ -2797,7 +2797,8 @@ zi_openpend:
     xor cx, cx                      ; ordinal 0 = start of this directory
 .scan:
     mov di, zi_find
-    call OSAPI_FILE_FIND            ; out CF=1 at the end, else CX = next
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; out CF=1 at the end, else CX = next
     jc .nofile
     push cx
     mov si, zi_find

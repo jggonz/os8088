@@ -1953,7 +1953,8 @@ ovl_sc_load:
     jz .out                     ; a FILE called AUTOSTRT starts nothing
     mov dx, bx                  ; DX = the folder, for the whole walk: nothing
                                 ; below writes it, and assoc_run_x preserves
-    xor cx, cx                  ; every register. The ordinal, 0 to start
+    xor cx, cx                  ; every register. The token, 0 to start
+                                ; (SPEC.md 19.7.1.1)
 .next:
     mov bx, dx                  ; stand there again: the open before this one
     call .go                    ; went wherever its link pointed
@@ -1963,8 +1964,8 @@ ovl_sc_load:
     mov di, sp                  ; stack, popped as soon as the name is out -
     push ss                     ; before anything opens, which is what the
     pop es                      ; 320 bytes of LNK_SPMIN are for
-    xor al, al                  ; no hidden or system entries
-    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    mov ax, 0x0100              ; no hidden or system entries, by TOKEN
+    call COLD_SEG:dsk_find_x    ; CX = the next token; CF = the end
     jc .endf
     mov si, di                  ; its 8.3 name, NUL, into the document locator
     push cx                     ; every open reads (SPEC.md 21.5)
@@ -1978,8 +1979,8 @@ ovl_sc_load:
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
                                 ; are left (LNK_SPMIN)
-    xor al, al                  ; no hidden or system entries
-    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    mov ax, 0x0100              ; no hidden or system entries, by TOKEN
+    call COLD_SEG:dsk_find_x    ; CX = the next token; CF = the end
     jc .root
     push cx
     mov si, di                  ; its 8.3 name, NUL, into the document locator

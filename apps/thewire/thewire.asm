@@ -3305,7 +3305,8 @@ wr_dive:
     push ds                         ; ES too, for the same reason: it is the
     pop es                          ; find buffer's segment and an input to
     mov di, wr_fbuf                 ; every call
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .no
     cmp word [wr_fbuf+14], OSAPI_FT_DIR
     jne .l

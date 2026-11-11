@@ -673,7 +673,8 @@ zp_findfile:
     push ds
     pop es
     mov di, zp_ent
-    call OSAPI_FILE_FIND            ; CX = ordinal in, the next one out
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = token in, the next one out
     jc .no
     cmp word [zp_ent + 14], OSAPI_FT_DIR
     jae .next                       ; a folder or the synthesised '..'

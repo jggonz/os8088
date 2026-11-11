@@ -1196,7 +1196,8 @@ x3p_probe:
     push ds
     pop es
     mov di, x3p_pfind
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .nofile
     mov si, x3p_pfind
     mov di, [x3p_pname]

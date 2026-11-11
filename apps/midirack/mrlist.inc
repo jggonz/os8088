@@ -593,7 +593,8 @@ mrl_ffind:
     push ds
     pop es
     mov di, mrl_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     pop es
     ret
 

@@ -40791,7 +40791,8 @@ So the walkers keep their statelessness, and §19.7.1's argument for it stands
 undisturbed. What a cursor would still buy is **CPU** — the entries between
 sector 0 and the wanted one are re-classified on every call — and that is a
 different measurement against a different budget; nothing here says it is
-zero, only that it is not revolutions.
+zero, only that it is not revolutions. §19.7.1.1 took that CPU half, with no
+kernel cursor at all: the token is the caller's register.
 
 **The method is the transferable part.** A model that regrouped the surviving
 requests into maximal contiguous runs — ignoring that two calls adjacent in
@@ -45285,6 +45286,79 @@ walks from the front, `fcp_scan` still reads the one sector holding its slot
 `kern_dos` keep `dsk_find`'s own walk: on `kern_small` the shared routine
 would be RESIDENT while the scan it replaces is in `FILECP.DRV`, and
 `kern_dos` has no copy engine to share with.
+
+#### 19.7.1.1 …and `OSAPI_FILE_FIND_SEQ` (0x0233) answers in a straight line
+
+**`FILE_FIND` costs N(N+1)/2 entry visits to list N entries.** On kern_big
+`dsk_find` asks `dsk_dscan` for (slot 0, the ordinal), so every call walks
+again from the front of the folder and classifies each entry before the one
+it wants. §18.95.2 measured the disk I/O for that and found the sector cache
+had already removed it; the **CPU** cost was left as "not zero". That cost
+grows with the square of the folder size, and every package that searches
+by name pays it. Prince of Persia's load spends about 2.5 guest seconds on
+it (DISK-CPU-PLAN 3.1).
+
+`OSAPI_FILE_FIND_SEQ` uses the same walk with the other pair of arguments:
+(the caller's slot, 0). **CX is a TOKEN, not an ordinal.** Ask for 0, then
+pass back whatever CX comes back as, exactly as with `FILE_FIND`, and the
+call resumes at the raw slot after the last entry it answered. That is the
+resume-from-slot walk `fcp_scan` already uses.
+
+| | in | out |
+|---|---|---|
+| `FILE_FIND_SEQ` | CX = 0 to start, else the CX the last call answered; ES:DI = an `OSAPI_FIND_SZ` buffer; **AL = 0** answers +18 as `FILE_FIND` does (what the file expands to), **AL = 1** as `FILE_FIND_RAW` does (what it occupies) | as `FILE_FIND`: CF = 0 with the buffer filled and CX = the next token, else CF = 1 and AX = `FERR_NOENT` at the end (or `FERR_*`) |
+
+It is still **stateless in the kernel**, which is the only part of §19.7.1's
+argument that ever mattered. The state lives in the caller's CX, as it does
+for DOS's FindNext in the caller's DTA. Find, read, write, find still works,
+because nothing the caller does between calls can reach a register it holds.
+A token names a POSITION in a folder, not an entry. While a write is going
+on between calls:
+
+- an entry deleted ahead of the token is skipped, as the ordinal walk skips
+  it;
+- an entry created behind the token is not reported;
+- an entry created in a free slot ahead of it is reported.
+
+The ordinal walk was no safer: there, an insertion shifts every ordinal after
+it, and the caller sees one entry twice. A token is valid for the folder it
+was taken in. **Zero it when the folder changes.** A token is not an ordinal
+either: it cannot be used for "the fifth entry", and a caller that counts
+entries counts them itself.
+
+**The price and the saving.** The cell is a 3-byte JCELL at the end of the
+table (0x0233), and it took the place of the table's 1-byte parity pad. The
+entry and the token arms add, MEASURED with `kernsize`, **+31 on kern_big**
+(`.text` +6: the cell +3, the pad -1, `api_file_find_seq` +3, `_raw`'s
+`mov ax` +1; `.cold` +25, of which `dsk_find`'s arms are 22 and the rest
+`AUTOSTRT`'s `mov ax` and the section's alignment) and **+6 on kern_small**
+(`.text` only). The saving is PREDICTED from the 8088 tables, and
+there are two parts of it. Take a 100-entry folder, 16 entries to a sector:
+
+- **Entry visits.** The ordinal walk makes 5,050 visits and the token walk
+  100. One visit through `dsk_dscan`'s classifier is ~47 bytes of code, so
+  ~200 clocks at the fetch floor. 4,950 fewer is about **1.0 M clocks,
+  ~0.21 s on a 5150**.
+- **Directory-sector fetches.** Each call fetches the sector holding its
+  slot. Called by ordinal k, a call fetches every sector from the front:
+  364 fetches over the listing, against 100 by token. Each fetch is a
+  `disk_read` that at best hits §18.95's cache, a 512-byte copy plus the
+  transfer head, ~1.75 ms. 264 fewer is **~0.46 s**.
+
+That is about **0.65 s** per 100-entry listing, and the gap grows with the
+square of the folder size. A name search that stops at entry k makes k
+visits and k fetches (one a call), against k(k+1)/2 visits and, for each
+call i, floor(i/16) + 1 fetches.
+
+**`kern_small` and `kern_dos` answer it with the ordinal walk.** They have no
+`dsk_dscan`, so there the token simply IS the ordinal. That is the same
+opaque CX with the same loop, so the result is correct and only the
+quadratic term remains. The same cell, the same caller, the same answers.
+
+**Kernel callers.** The Sticky Apps scan (`stm_scanvol`, §110.12) and
+`AUTOSTRT`'s walk (`desksc.inc`) call `dsk_find_x` directly and pass **AH = 1**
+for the token walk. Every other kernel caller passes AH = 0, and
+`api_file_find`/`_raw` clear it.
 
 ### 19.6.2 …and it stamped three bits while forgiving two
 

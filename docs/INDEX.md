@@ -173,6 +173,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `door 0x17` | `OSAPI_FILE_GOTO_Q` | DX = a folder's first cluster (0 = the root), BL = the volume. out CF=0 and AX=0, else AX = FERR_*... |
 | `door 0x1D` | `OSAPI_FILE_GOTO_QM` | DX = a folder's first cluster (0 = the root), BL = the volume. out exactly as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else AX = FERR_* and nothing moved... |
 | `0x015F` | `OSAPI_FILE_FIND` | CX = ordinal (0 to start), ES:DI = an OSAPI_FIND_SZ buffer; out CF=0 filled with CX = the next ordinal, else CF=1 and AX = FERR_NOENT at the end |
+| `0x0233` | `OSAPI_FILE_FIND_SEQ` | OSAPI_FILE_FIND by TOKEN (SPEC.md 19.7.1.1): CX = 0 to start, then whatever CX came back as; ES:DI as FIND... |
 | `0x015C` | `OSAPI_FILE_WRITE_SYS` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count; out as OSAPI_FILE_WRITE. DRIVERS ONLY. |
 
 ### Memory

@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "d62dfebc1a2ff2ccb7be307d06558fe9af881595783f794e0edd466ba5df2a88",
+  "fingerprint": "f5f3bb71478db1c09b4dfab7ff722e7a631a8dd7d10cdb449b02745579b5c09f",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "68d57da65a57d22f09c314b45aedc4c6f1ee35006ebabef606e6dc74b4a5d997",
+  "fingerprint": "e2a353505b8ef808efb6ef4f794620d8b7bbc3f4c4fee716a97dfbc26b4823db",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2189,6 +2189,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "SPEC.md 5.7.3 (ABI-BREAK-LIST V1): OSAPI_GFX_PIXEL/HLINE/VLINE clobber AX..DX; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 14
+  },
+  {
+   "fingerprint": "e2a353505b8ef808efb6ef4f794620d8b7bbc3f4c4fee716a97dfbc26b4823db",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "f5f3bb71478db1c09b4dfab7ff722e7a631a8dd7d10cdb449b02745579b5c09f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 19.7.1.1 (dr-5): OSAPI_FILE_FIND_SEQ appended at 0x0233; same PKG_FMT 13 round, unreleased, no bump",
    "to": 14
   }
  ]

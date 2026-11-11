@@ -2281,7 +2281,8 @@ px_walk:
     xor cx, cx
 .next:
     mov di, px_find
-    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ        ; CX = the next token
     jc .end
     cmp byte [px_find + 14], OSAPI_FT_DIR
     jae .next                       ; a folder, or '..'

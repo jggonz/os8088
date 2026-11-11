@@ -273,7 +273,7 @@ static void rc_fs_init(void)
 static int rc_fs_subdir(const char *name)
 {
     int o = 0;
-    while ((o = os88_file_find(o, &rc_ff)) >= 0) {
+    while ((o = os88_file_find_seq(o, &rc_ff)) >= 0) {
         rc_n_find++;
         if (rc_ff.type != OS88_FT_DIR)
             continue;
@@ -653,7 +653,7 @@ static int rc_dc_want(int d, int u)
     rc_tcatu(u);                             /* 0..15: the folder exists */
     rc_say_now(rc_tmsg);
     o = 0;
-    while (rc_dcc->n < RC_DC_MAX && (o = os88_file_find(o, &rc_ff)) >= 0) {
+    while (rc_dcc->n < RC_DC_MAX && (o = os88_file_find_seq(o, &rc_ff)) >= 0) {
         rc_n_find++;
         if (rc_ff.type >= OS88_FT_DIR)
             continue;

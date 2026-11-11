@@ -3406,7 +3406,13 @@ rmk_seg:          ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          caller's own arithmetic would
 ; (OSAPI_FS_OP and OSAPI_VOL_CHECK too - each kernel that has no body for
 ; one answers its index with a refusal entry, SPEC.md 20.3.4)
-osapi_table_end:                  ; 0x046D today (0x04FB before kernel size
+    OSAPI_JCELL api_file_find_seq ; 0x0233 - OSAPI_FILE_FIND by TOKEN (SPEC.md
+                                  ;          19.7.1.1): CX resumes the walk at
+                                  ;          the slot after the last answer,
+                                  ;          so a listing is linear, not
+                                  ;          N(N+1)/2; AL = 1 the raw size
+osapi_table_end:                  ; 0x0236 today (0x0233 before FIND_SEQ;
+                                  ; 0x046D before kernel size
                                   ; pass 19's withdrawals, 0x04F5 before
                                   ; OSAPI_VOL_CHECK,
                                   ; 0x04EF before OSAPI_FS_OP,
@@ -3453,18 +3459,18 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 5*3 + 6 + 7*5 + 3*6 + 8
-%error "os8088 API jump table must be exactly 0x0223 bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 5 JCELL (3), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
+%if OSAPI_TABLE_LEN != 45*8 + 15*7 + 6*3 + 6 + 7*5 + 3*6 + 8
+%error "os8088 API jump table must be exactly 0x0226 bytes: 45 SLOT (8, the yield's YSLOT among them), 15 XCELL (7, OSAPI_FILE_READ_SEQ's NCELL among them), 6 JCELL (3, OSAPI_FILE_FIND_SEQ the last), 1 FCELL (6), 11 ICELL (7 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14). Kernel size pass 19's T5 moved every RARE cell behind the door (SPEC.md 20.3.4) - the table holds no six-byte cell any more - and promoted OSAPI_GFX_DESK to a SLOT (V7)"
 %endif
-    db 0                        ; PARITY PAD, never executed (kernel size
-                                ; pass 19): the flag day's withdrawals took
-                                ; 142 bytes out of the table on kern_big -
-                                ; OSAPI_WM_ONWHEEL's own parity byte among
-                                ; them - and an ODD shift in front of every
-                                ; hot routine costs a 16-bit bus a second
-                                ; cycle on each of their word operands
-                                ; (tests/unit/t_hotpar.py). Nothing falls
-                                ; into it: the table ends on a cell
+                                ; (THE PARITY PAD kernel size pass 19 left
+                                ; here went with OSAPI_FILE_FIND_SEQ's three
+                                ; bytes, SPEC.md 19.7.1.1: the flag day's
+                                ; withdrawals took 142 bytes out of the table
+                                ; on kern_big, and an ODD shift in front of
+                                ; every hot routine costs a 16-bit bus a
+                                ; second cycle on each of their word operands
+                                ; - tests/unit/t_hotpar.py. The table is EVEN
+                                ; again with the cell and without the pad)
 
 %ifdef KERN_MEGA
 ; kern_mega's DATA SEGMENT WORD (KDS/KES above, kernel/mega.inc), and it is
@@ -3853,12 +3859,16 @@ api_gfx_rest:
 ; a package, on this cell exactly as on the other one (SPEC.md 19.6.1).
 ; -----------------------------------------------------------------------------
 api_file_find_raw:
-    mov al, 1                   ; AL is not an input here (CX and ES:DI are)
+    mov ax, 1                   ; AL is not an input here (CX and ES:DI are)
     jmp short api_ff_go         ; and the fence below spends it anyway, so it
-                                ; carries the raw flag across the one prologue
-
+                                ; carries the raw flag across the one prologue;
+                                ; AH = 0 the ORDINAL walk
+api_file_find_seq:              ; SPEC.md 19.7.1.1: AL is the CALLER's raw
+    mov ah, 1                   ; choice, AH = 1 the TOKEN walk - dsk_find_x
+    db 0xA9                     ; reads it, the fence leaves AH alone. `test
+                                ; ax, imm16` over the `xor` below
 api_file_find:
-    xor al, al
+    xor ax, ax                  ; AL = 0 the expanded size, AH = 0 by ordinal
 api_ff_go:
     push ds
     push si

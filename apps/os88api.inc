@@ -6440,6 +6440,17 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; ES:DI = an OSAPI_FIND_SZ buffer; out CF=0
                                  ; filled with CX = the next ordinal, else
                                  ; CF=1 and AX = FERR_NOENT at the end
+%define OSAPI_FILE_FIND_SEQ KERNEL_SEG:0x0233   ; OSAPI_FILE_FIND by TOKEN
+                                 ; (SPEC.md 19.7.1.1): CX = 0 to start, then
+                                 ; whatever CX came back as; ES:DI as FIND;
+                                 ; AL = 0 the size FIND answers, 1 the size
+                                 ; FIND_RAW does. Out exactly as FIND. LINEAR:
+                                 ; a listing of N entries is N entry visits
+                                 ; where FIND's is N(N+1)/2. CX is a POSITION
+                                 ; in this folder, not an ordinal - zero it
+                                 ; when the folder changes, and count entries
+                                 ; yourself. kern_small walks by ordinal and
+                                 ; answers the same
 
 ; --- the two cells a PACKAGE may not call (SPEC.md 19.6.1) --------------------
 ; It is published here because a DRIVER assembles against this same SDK, and

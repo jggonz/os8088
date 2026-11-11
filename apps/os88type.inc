@@ -228,7 +228,8 @@ ty_scan:
 .f2:
     mov [ty_ord], cx
     mov di, ty_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .end
     mov [ty_ord], cx
     cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
@@ -606,7 +607,8 @@ ty_dive:
     xor cx, cx
 .f:
     mov di, ty_find
-    call OSAPI_FILE_FIND
+    xor al, al                      ; by TOKEN (SPEC.md 19.7.1.1)
+    call OSAPI_FILE_FIND_SEQ
     jc .no
     mov [ty_ord], cx
     cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
