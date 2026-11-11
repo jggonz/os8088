@@ -27863,7 +27863,12 @@ Shut Down... sits immediately below Restart in both kernels. Its modal
 confirmation offers Shut Down and Cancel; Enter confirms, Escape cancels,
 and a mouse button must be pressed and released inside the same control.
 The prompt reminds the user to save their work. Cancel restores the desktop
-and preserves queued package wakes. The confirmation and terminal screen
+and preserves queued package wakes. **It restores it the way any window
+closing does**: the panel is not a window, but it covered one 320 × 96 rect
+and nothing else, so it hands that rect to `wm_paint_dmg` (§11.91) — the
+ground, the zones and every window the rect touches, drawn where it shows. It
+was `wm_paint_all` (the whole desktop) until §11.91.7 made that the same pass
+over a larger rect; there was never more than the rect to put back. The confirmation and terminal screen
 live in CTRL.DRV's `.modu` UI tail, loaded before the desktop is disturbed;
 a missing module uses the Control Panel's existing system-disk refusal.
 

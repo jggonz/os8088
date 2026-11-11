@@ -214,7 +214,12 @@ sd_confirm:
     mov di, ui_ev
     mov bp, evq_drain           ; modal clicks consumed, package wakes owed
     call sd_disp
-    KDOOR wm_paint_all
+    mov ax, [cs:sd_left]        ; the panel goes like any window closing: the
+    mov bx, [cs:sd_top]         ; damage pass over the rect it covered
+    lea dx, [bx+95]             ; (SPEC.md 12.3.2), and not the whole desktop
+    mov cx, ax                  ; - sd_confirm drew 320 x 96 at its top-left
+    add cx, 319
+    KDOOR wm_paint_dmg
     call KERNEL_SEG:cw_gfx_unlock
     CSDO mov byte [CSEG sd_active], 0
     pop ax
