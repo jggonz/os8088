@@ -339,19 +339,23 @@ def restart(m, done, what, shift=False):
     itself - from inside kmain_o, before the desktop is ever painted - so the
     wait is for DONE, the caller's own predicate on guest memory.
 
-    SHIFT is pressed straight after the key and HELD (tests/autostart.py's
-    technique): a held key repeats its make code through POST's keyboard
-    reset, so the probe's int 16h AH=02 reads it whenever the boot reaches it.
-    The caller releases it.
+    SHIFT is pressed and HELD once the KERNEL has the screen - the first
+    frame out of text mode, which is kmain_o's mode set, long before the
+    probe (tests/autostart.py's technique: past POST, inside the loading
+    screen). NOT straight after the restart key: POST zeroes 0040:0017 and
+    resets the keyboard, and MartyPC's keyboard does not repeat a held make
+    code through that reset, so a Shift pressed then is gone by the time the
+    probe's int 16h AH=02 asks - which is how this pass failed with the skip
+    path never reached (the boot RESUMED). The caller releases it.
     """
     for attempt in (1, 2):
         m.key("Space")
-        if shift and attempt == 1:
-            m.key("ShiftLeft", down=True, up=False)
         try:
             M.until(m, lambda mm: not M.video_is_text(mm.video()),
                     "the machine to leave the sentence", poll=0.05,
                     limit=30 if attempt == 1 else 120)
+            if shift:
+                m.key("ShiftLeft", down=True, up=False)
             if attempt == 2:
                 print("   the restart key needed sending TWICE (the first "
                       "landed between hbm_kbdrain and int 16h)")
