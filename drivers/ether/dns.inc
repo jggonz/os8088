@@ -388,8 +388,9 @@ dhcp_in:
     call mem_zero                       ; server too (SPEC.md 72.5.3): the
                                         ; machine is on another network, or
                                         ; the lease was given away
-    mov byte [dhcp_st], DH_IDLE         ; start over rather than sit refused
-    call dhcp_start
+    call dhcp_start                     ; start over rather than sit refused:
+                                        ; DISCOVER, which dhcp_send stores
+                                        ; over the state (no IDLE between)
     jmp .out
 .offer:
     cmp byte [dhcp_st], DH_DISCOVER
@@ -399,16 +400,13 @@ dhcp_in:
     call mem_cp4
     mov al, 54
     call dh_opt4
-    jc  .srvsi
-    jne .srvsi
-    mov di, dhcp_srv
-    call mem_cp4
-    jmp short .req
+    jc  .srvsi                          ; (CF first: ZF means nothing then)
+    je  .srv
 .srvsi:
     mov si, eth_rxb + IP_PAY + UD_HLEN + BP_SIADDR
-    mov di, dhcp_srv
+.srv:
+    mov di, dhcp_srv                    ; ONE copy for either source
     call mem_cp4
-.req:
     call dhcp_request
     jmp short .out
 .ack:
@@ -457,11 +455,10 @@ dhcp_timer:
                                 ; where these four sit twenty bytes into the
                                 ; chain. Pushing a save DOWN to a shallow
                                 ; callee is free depth
-    cmp byte [dhcp_st], DH_DISCOVER
-    je  .live
-    cmp byte [dhcp_st], DH_REQUEST
-    jne .out
-.live:
+    mov al, [dhcp_st]           ; DISCOVER or REQUEST, 1 or 2: one compare
+    dec ax                      ; (IDLE wraps to FFh, BOUND and FAIL stay
+    cmp al, DH_REQUEST - 1      ; above it; AH is spent below anyway)
+    ja  .out
     call OSAPI_GET_TICKS
     sub ax, [dhcp_tmo]
     js  .out
@@ -469,13 +466,14 @@ dhcp_timer:
     mov al, [dhcp_try]
     cmp al, DHCP_TRIES
     jb  .again
-    cmp byte [dhcp_wk], 0       ; a wake's REQUEST nobody answered keeps
-    je  .fail                   ; the address it asked for (SPEC.md 72.5.3)
-    mov byte [dhcp_st], DH_BOUND
-    jmp short .out
-.fail:
-    mov byte [dhcp_st], DH_FAIL         ; the page says so, and `make ETHIP=`
-    jmp short .out                      ; is the answer on a LAN with no server
+    mov al, DH_BOUND            ; a wake's REQUEST nobody answered keeps
+    cmp byte [dhcp_wk], 1       ; the address it asked for (SPEC.md 72.5.3);
+    adc al, 0                   ; any other is DH_FAIL - the page says so, and
+    mov [dhcp_st], al           ; `make ETHIP=` is the answer on a LAN with no
+    jmp short .out              ; server. [dhcp_wk] is 0 or 1, so CF = !wk
+%if DH_FAIL != DH_BOUND + 1 || DH_DISCOVER != 1 || DH_REQUEST != 2 || DH_IDLE != 0
+  %error "dhcp_timer's arithmetic reads the DH_* order"
+%endif
 .again:
     cmp byte [dhcp_st], DH_REQUEST
     je  .rereq

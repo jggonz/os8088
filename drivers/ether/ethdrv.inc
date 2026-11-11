@@ -357,28 +357,16 @@ eth_dropall:
     push ax
     push bx
     push cx
-    push dx
-    xor dl, dl
+    xor al, al
     mov cx, NET_SOCKS
 .l:
-    mov al, dl
     call sk_ptr
-    cmp byte [bx+SKO_TS], TS_ESTAB
-    jb  .kill
-    mov al, TF_RST | TF_ACK
-    push cx
-    push dx                     ; DL is the slot: the RST carries SND.NXT,
-    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
-    xor cx, cx                  ; does - a peer takes a reset at no other
-    call tcp_out                ; sequence number (RFC 5961)
-    pop dx
-    pop cx
-.kill:
+    call sk_rst                 ; a peer is told (tcp.inc), every register kept
     mov byte [bx+SKO_TS], TS_CLOSED
     mov byte [bx+SKO_ST], NSK_FREE
-    inc dl
+    inc ax                      ; AL is the slot (never past NET_SOCKS)
     loop .l
-    jmp ep_dx
+    jmp ep_cx
 
 ; =============================================================================
 ; THE PACKAGE DOOR - the socket verbs (netpkg.inc)
@@ -621,6 +609,7 @@ eth_v_state:
 %define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
 %define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
+%define OS88LINE_NORESYNC       ; ...nor os88line_resync: every field is set
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)

@@ -105020,6 +105020,20 @@ sweep is today's, byte for byte.
 | `HTTPFS.DRV` (§122) | nothing: no hardware | its kept connection FORGOTTEN, not aborted - the card's sleep reset every socket and its slot may be somebody else's now. The index, the volume and the folder the user stands in stay: dropping the index would put the driver at the root under a window standing in a folder (`hf_fetch` starts there, and the kernel moves inside a volume without a chdir) |
 | `VMMOUSE.DRV` (kern_emu, §9.11) | the aux stream stopped (`vmm_detach`, 0xF5) | the backdoor re-armed - `vmm_probe` under `vmm_atom` and the 8042's 0xF4/0xF5 - which is its attach: a resumed QEMU or VMware has reset the device, and before B4 the reload read the image back and attached nothing. It NEVER refuses: a host with no backdoor now is a still pointer either way, and a refusal would unload the row under a standing `[vmm_on]` |
 
+**What `ETHER.DRV`'s pair cost, and how it was paid.** SLEEP/WAKE took the
+image + bss from 17,345 to 17,510 bytes, across the heap's 512-byte granule
+(34 to 35 sectors, `DRVM_IMG_ETH`). A size pass over cold code only - nothing
+on the per-packet paths - took it to **17,389, 34 sectors again** (and
+`PCIETHER.DRV`, which shares every line of it, from 17,179 to 17,058): three
+strings the pane and the Setup window both drew now exist once,
+`os88line_resync` is left out (`OS88LINE_NORESYNC`, §83.4), the RESET a
+going socket's peer is sent is one routine (`sk_rst`, entering `tcp_ack`'s
+tail) where `eth_dropall` and `eth_v_gone` each carried it, the OFFER's
+server address is copied by one `mem_cp4` from either source, a NAK no longer
+stores the `DH_IDLE` that `dhcp_start` overwrites, `dhcp_timer` tests its two
+live states and picks BOUND or FAIL arithmetically, and `ec_apply` sets the
+mode and flushes ARP once for both arms.
+
 `SOUND.DRV` does NOT declare it: its attach gives its probes back
 (`DRV_H_KEEP`) and a re-arm would be resident bytes on every Sound Blaster
 machine, behind the highest-risk wake in the tree (B4-WAKE-PLAN). Nor is
@@ -158723,6 +158737,12 @@ package that does not set it is byte-identical, and it removes the symbol, so
 a package that sets it and calls `os88line_set` does not assemble. DOS
 (§96.44.16) and the Desk Calendar (§110.6.2) set it; Browser, ftpd,
 Sheet, Weave, `ETHER.DRV` and `SAVER.DRV` call it.
+
+`OS88LINE_NORESYNC` is the same opt-out for the other end: `os88line_resync`
+(43 bytes) re-derives a field whose buffer was written behind its back, and a
+client that fills every field through `os88line_set` never reaches it.
+`ETHER.DRV` and `PCIETHER.DRV`'s Setup window set it (§51.2.5's size pass);
+every client that does not is byte-identical.
 
 ### 83.5 `OS88LINE_PENS` — a field in the package's colours
 

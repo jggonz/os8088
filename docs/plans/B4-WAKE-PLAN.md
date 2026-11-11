@@ -66,13 +66,35 @@ PCIETHER there would leak a ring per trip.
 | | before | after | |
 |---|---|---|---|
 | kernel resident, kern_big / kern_small / kern_emu / kern_mega | | | **0** (`kernsize --json` identical; `kernel.bin` the same length on all four, the build number apart) |
-| ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crosses its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`): +512 bytes of heap while it is loaded. No cheap 102-byte trim was found; dropping `os88_ent`/`ep_bp` from the two verbs is ~12 |
-| PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors |
+| ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crossed its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`) - and the trim below took it to **17,389, 34 sectors again** (19 bytes under the rung; -121 against 17,510) |
+| PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors; **17,058** after the trim (-121) |
 | USBMOUSE.DRV | 1,431 | 1,464 | +33, 3 sectors |
 | HTTPFS.DRV image + bss | 5,539 | 5,553 | +14, 11 sectors |
 | VMMOUSE.DRV (kern_emu) | 362 | 375 | +13, 1 sector |
 | HIBER.DRV kern_big / kern_emu | 7,567 | 7,715 | +148 (keep branch, `hbm_wakem`, the clock), 22 sectors |
 | HIBER.DRV kern_mega | 11,346 | 11,354 | +8 (the clock alone) |
+
+### The ETHER trim (the owner: "Try to trim ether")
+
+Cold code only, every one behaviour-neutral, measured on `ether.bin`
+(image + bss) against 17,510; PCIETHER.DRV takes every line (shared source):
+
+| change | bytes |
+|---|---|
+| `OS88LINE_NORESYNC` - `os88line_resync` was assembled and never called (SPEC.md 83.4) | -43 |
+| one copy of `Manual`, `Router`, `Name` (the pane's and the Setup window's) | -19 |
+| `sk_rst` - the RST `eth_dropall` and `eth_v_gone` each carried, entering `tcp_ack`'s tail; `eth_dropall`'s slot in AL | -40 |
+| DHCP: the OFFER's server copy once from either source; a NAK's dead `DH_IDLE` store; `dhcp_timer`'s two live states in one compare, BOUND/FAIL by `adc` | -25 |
+| `ec_apply`: the mode stored and ARP flushed once for both arms | -6 |
+| **total** | **-121 -> 17,389, 34 sectors** |
+
+Nothing on the per-packet paths moved: `tcp_ack` (per segment) runs the same
+instructions in a different order, and `dhcp_timer` (per pump) runs fewer.
+The option the brief named and this did not need - code moved past a
+`DRV_H_KEEP` point and given back after attach - was costed and is worse
+here: WAKE re-runs `NIC_WAKE_FIND` and `nic_init`, so only `eth_attach`'s own
+body (~107 bytes) and READY could go, and the 96 (PCIETHER 272) bss bytes the
+loader makes today would have to move before the cut and ship as zeros.
 
 ### Seconds saved, PREDICTED
 
