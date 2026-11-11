@@ -1230,7 +1230,8 @@ db_click:
 ;
 ; **The record's STATE does not survive the tracker; its address does.**
 ; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
-; can reach inst_task_die and free the very record this menu is about. The
+; can reach inst_task_die and leave the record this menu is about (it is
+; freed by the UI task's close pass since BR-4, after this menu). The
 ; pointer itself is a slot of the static inst_tab (inst_ptr is arithmetic
 ; and nothing else), held in DI, which menu_popup preserves - so what is
 ; re-tested afterwards is I_STATE = 1, before anything is done to it. (It

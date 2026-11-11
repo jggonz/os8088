@@ -1672,8 +1672,9 @@ tm_pats:
 ;      through OSAPI_TASK_ALIVE when the close box is clicked.
 ;
 ; The order of the loop is the contract of SPEC.md 20.6 rule 4:
-; OSAPI_TASK_ALIVE with the lock NOT held, because it takes the lock itself
-; and gfx_lock is not reentrant. It is also the only teardown path - as a
+; OSAPI_TASK_ALIVE with the lock NOT held, because a worker that leaves
+; holding it leaves it held, and the close it posts for the UI task then
+; waits on it for ever. It is also the only way out - as a
 ; built-in this read I_STATE off its own instance record and far-jumped to
 ; inst_task_die, which is the same operation with the kernel's side of it
 ; exposed.

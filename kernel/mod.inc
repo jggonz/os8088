@@ -899,8 +899,9 @@ mod_hiboot:
 ; -----------------------------------------------------------------------------
 mod_disarm:
     call mod_fpr                ; DI = the block, CX = its count
-    pushf                       ; NO TORN SLOT: a drop can run on a WORKER
-    cli                         ; (inst_task_die -> desk_drop_x) while the UI
+    pushf                       ; NO TORN SLOT: a drop ran on a WORKER
+    cli                         ; (inst_task_die -> desk_drop_x, until BR-4
+                                ; posted that teardown to ui_task) while the UI
     call .slot                  ; task far-calls a slot with no lock held
     popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
     ret                         ; offset in the IMAGE's segment is garbage

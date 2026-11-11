@@ -2714,13 +2714,17 @@ mega_fkill:
     je .wnl
     cmp al, [gfx_lock_own]
     jne .wnl
-    mov bp, gfx_unlock              ; inst_task_die takes the lock itself
+    mov bp, gfx_unlock              ; a lock the dead worker held would
+                                    ; wedge every draw (and the close
+                                    ; pass inst_task_die posts takes it)
     call KERNEL_SEG:mega_tcall
 .wnl:
     mov ax, MEGA_SEL_KDATA
     mov es, ax
     cld
-    jmp KERNEL_SEG:inst_task_die    ; DI = the record; never returns
+    jmp KERNEL_SEG:inst_task_die    ; DI = the record; never returns. It
+                                    ; posts the close and exits: nothing
+                                    ; deep runs on the stack that faulted
 .ret:
     mov ax, MEGA_SEL_KDATA
     mov ds, ax
@@ -2982,7 +2986,8 @@ mega_fkdo:
     je .shut
     mov ax, [es:mega_fks]
     cmp [di+I_SPTR], ax
-    je .keep                        ; its worker has not left yet
+    je .keep                        ; not closed yet (its worker, or the
+                                    ; close it posted, still to come)
 .shut:
     mov byte [es:mega_fkslot], 0
 .clr:
@@ -2993,8 +2998,9 @@ mega_fkdo:
     ret
 
 ; mega_fkclose - DI = a live package record: what app_close_win does to it,
-; without asking it (its code is what faulted) - inst_task_die's order. With
-; a worker, the die flag and the hide, and the worker leaves by itself.
+; without asking it (its code is what faulted). With a worker, the die flag
+; and the hide: the worker leaves by itself and posts the close that
+; app_close_now's .dying arm finishes (SPEC.md 20.6).
 %macro MEGA_TC 1
     mov bp, %1
     call KERNEL_SEG:mega_tcall

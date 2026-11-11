@@ -13,14 +13,16 @@
 ; freed by task_exit's release byte, atomically with the task slot.
 ; Lock-held readers only dereference records read as I_STATE=1 during the
 ; same hold; the Task Manager snapshots under pushf/cli. Only the UI task
-; allocates records. Only the owning task destroys a task-owned instance's
-; window - the UI task merely hides it and sets the die flag.
+; allocates records, and only the UI task destroys an instance's window -
+; for a task-owned one it hides it and sets the die flag, and destroys it
+; once the worker has left (SPEC.md 20.6).
 ;
 ; A package instance can be on EITHER side of that split since SPEC.md 20.6:
 ; it is born task-less, and a window callback may claim it one worker task
-; through inst_pkg_spawn. Once it has one, its region is freed by
-; mem_free_rec on the worker, in inst_task_die, and the record by task_exit's
-; release byte - not by the UI task.
+; through inst_pkg_spawn. Once it has one, nothing frees it until the worker
+; has left (inst_task_die: I_TASK = 0xFF and a posted close, then task_exit
+; with no release byte); the UI task's close pass then frees the region and
+; the record on its own stack, as for a task-less close.
 ; =============================================================================
 
 ; --- instance record, 32 bytes (SPEC.md 29.1) ---------------------------------
@@ -1319,10 +1321,12 @@ inst_icon_ptr:
     mov si, LD_HDR_SIZE
     mov di, inst_icobuf         ; ITS OWN slot, not dsk_ico: this runs out of
     mov cx, DSK_ICO_SIZE        ; dock_draw_tile, which wm_destroy reaches
-    mov ax, cs                  ; from inst_task_die ON THE WORKER, while
-    call COLD_SEG:dkf_dsk_copy_seg  ; task 0 may be inside disk_mount_x's
-    jmp short .have             ; icon pass (osapi_file_goto takes no lock) -
-                                ; so it cannot be dsk_ico's fifth tenant
+    mov ax, cs                  ; from inst_task_die ON THE WORKER (until
+    call COLD_SEG:dkf_dsk_copy_seg  ; BR-4 posted that teardown to the UI
+    jmp short .have             ; task), while task 0 may be inside
+                                ; disk_mount_x's icon pass (osapi_file_goto
+                                ; takes no lock) - so it was not dsk_ico's
+                                ; fifth tenant, and is kept apart still
 .runs:                          ; SI -> (count-1) << 6 | pool index, bytes,
     push bx                     ; until 32 rows are down (inst_ico_pool)
     mov di, inst_icobuf
@@ -1648,21 +1652,20 @@ app_launch:
 ; Unowned window: plain wm_hide (defensive fallback). Task-less instance:
 ; synchronous teardown under the held lock - destroy the window, free the
 ; record. Task-owned instance: set the die flag and hide for instant
-; feedback; the task notices at its next wake and tears itself down via
-; inst_task_die. For a PACKAGE instance the region goes with the record
-; (SPEC.md 29.2 rule 7) on either branch: mem_free_rec frees it, and every
-; claim, just before the record is freed - here, or for a package that took
-; a worker (SPEC.md 20.6) in inst_task_die on that worker, before
-; task_exit's release byte.
+; feedback; the task notices at its next wake, gives up I_TASK and posts this
+; close again (inst_task_die), and THAT close - the .dying arm - is the
+; synchronous teardown, here on the UI task (SPEC.md 20.6). For a PACKAGE
+; instance the region goes with the record (SPEC.md 29.2 rule 7) either
+; way: mem_free_rec frees it, and every claim, just before the record is
+; freed.
 ; -----------------------------------------------------------------------------
 app_close_win:
     call wm_ask_close           ; SPEC.md 75.1: the window may REFUSE, and a
-%ifdef KERN_BIG                 ; refusal means nothing at all happens - not
-    jnc app_close_now           ; (PARITY on kern_big, kernel size pass 19:
-    ret                         ; the byte longer form keeps ui_task, behind
-%else                           ; it, at its measured parity -
-    jc app_close_ret            ; tests/unit/t_hotpar.py; kern_small's is
-%endif                          ; the short one)
+    jc app_close_ret            ; refusal means nothing at all happens - not
+                                ; (kern_big's byte-longer `jnc app_close_now`
+                                ; / `ret` parity form went with BR-4, whose
+                                ; inst_task_die moved ui_task by an odd 13:
+                                ; tests/unit/t_hotpar.py)
                                 ; even the hide, because a window that is
                                 ; asking "save changes?" has to stay on screen
                                 ; to be answered. ABOVE the ownership test on
@@ -1681,15 +1684,24 @@ app_close_now:
     call inst_of_win            ; DI = record; CF = unowned
     jc .hide
     cmp byte [di+I_STATE], 1
-    jne .hide                   ; already dying: re-hide, idempotent
+    ja .dying                   ; 2: dying already - see .dying
+    jne .hide                   ; 0: nobody's, re-hide, idempotent
     inc byte [di+I_STATE]       ; 1 -> 2, dying: lock-held readers skip it
                                 ; from here (an inc of the 1 just tested, -1:
                                 ; kernel size pass 17) -
                                 ; and for a TASKED instance it is the die flag
                                 ; (SPEC.md 14/29), set ahead of the test so
                                 ; both arms share it (kernel size pass 16, -4)
-    cmp byte [di+I_TASK], 0xFF
-    jne .hide
+.dying:                         ; ...AND A DYING RECORD WHOSE WORKER HAS LEFT
+    cmp byte [di+I_TASK], 0xFF  ; (I_TASK = 0xFF, written by inst_task_die in
+    jne .hide                   ; the IF=0 window that ends in its task_exit)
+                                ; is torn down HERE, on the UI task's stack,
+                                ; by the same tail as a task-less close: the
+                                ; worker posted its window's close request
+                                ; (SPEC.md 20.6, 75.2) rather than run the
+                                ; repaint chain on a 128-byte slice. With a
+                                ; worker still in it, the die flag stands and
+                                ; this is the re-hide it always was
     call toast_owner_gone       ; ITS OLD MESSAGE GOES FIRST, before anything
                                 ; below can raise a NEW one (SPEC.md 59.6).
                                 ; cp_flush_close writes SYSTEM.CFG and says
@@ -1899,13 +1911,17 @@ inst_restore:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_task_die - teardown for a task-owned instance (SPEC.md 29.4)
-; in:  DI = the CURRENT task's instance record (I_STATE = 2); gfx lock NOT
-;      held
-; out: NEVER RETURNS - ends in task_exit
+; inst_task_die - a worker leaves its instance (SPEC.md 20.6, 29.4)
+; in:  DI = the CURRENT task's instance record; gfx lock NOT held
+; out: NEVER RETURNS - ends in task_exit, with no release byte
 ;
-; Reached from Timer's and Bounce's own loops (SPEC.md 14) and, for a
-; package that took a worker, from inst_pkg_alive below (SPEC.md 20.6).
+; Reached from inst_pkg_alive below and from kern_mega's fault-kill
+; (mega_fkill's .worker, on the stack that faulted). It TEARS NOTHING DOWN:
+; it gives up I_TASK and posts its window's close request, and ui_task's
+; close pass finishes the close on the UI task's stack (app_close_now's
+; .dying arm). Until size pass 19 it ran gfx_lock, inst_unwin, desk_drop_x
+; and mem_free_rec right here, on the worker's own slice - whose repaint can
+; reach another package's W_PAINT (BR-4).
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; inst_sweep_seg - destroy the region's OTHER windows, if it has a region
@@ -1920,9 +1936,9 @@ inst_restore:
 ; inst_unwin - the same, AFTER destroying the record's own window BX (and
 ;              clearing I_WIN) when BX is not 0. The two teardowns both wrote
 ;              the destroy, the clear and the sweep out in that order until
-;              size pass 10. BX is the caller's I_WIN; a worker's record may
-;              have none (inst_task_die's banner says why 0 must not reach
-;              wm_destroy), and app_close_win's is never 0.
+;              size pass 10. BX is the caller's I_WIN; kern_mega's
+;              mega_fkclose may pass 0 (wm_destroy with BX = 0 would zero
+;              the cold-entry jmp at 0800:0000), app_close_win's is never 0.
 inst_unwin:
     or bx, bx
     jz inst_sweep_seg
@@ -1940,31 +1956,32 @@ inst_sweep_seg:
 
 ; -----------------------------------------------------------------------------
 inst_task_die:
-    call inst_rel_rec           ; free every sound grant and every
-                                ; extended-memory block before the record goes
-                                ; (SPEC.md 29.4/34.3/41.5)
-    call toast_owner_gone       ; ...and its message (SPEC.md 59)
-    call gfx_lock
-    mov bx, [di+I_WIN]          ; A WORKER'S RECORD MAY HAVE NO BOUND WINDOW
-    call inst_unwin             ; (inst_pkg_alive's own leg, which used to be a
-                                ; second copy of this routine): wm_destroy with
-                                ; BX = 0 would zero the cold-entry jmp at
-                                ; 0800:0000, so inst_unwin skips it for 0.
-                                ; BEFORE mem_free_rec: the repaint far-calls
-                                ; every surviving window, so none whose procs
-                                ; live in the dying region may outlive it -
-                                ; and THE SWEEP runs either way, because a
-                                ; package can have made windows it never bound
-                                ; to the record (SPEC.md 20.2)
-%ifdef KERN_BIG
-    call COLD_SEG:desk_drop_x   ; DESK.DRV, if that was the last widget - a
-%endif                          ; Sticky App on its worker arm closes HERE,
-                                ; on that worker (SPEC.md 11.103.10), and
-                                ; under the lock
-    call gfx_unlock
-    call mem_free_rec           ; every heap claim, region included (50.4)
-    mov bx, di                  ; I_STATE is offset 0: the release byte
-    jmp task_exit
+    cli                         ; ONE IF=0 WINDOW from here to task_exit's
+                                ; switch (task_exit opens with its own cli):
+                                ; the UI task cannot tear the record down
+                                ; while this task still runs, so nothing it
+                                ; frees is under a live task
+    mov byte [di+I_TASK], 0xFF  ; no worker any more: app_close_now's .dying
+                                ; arm may now finish the close
+    mov bx, [di+I_WIN]          ; never 0 here: inst_pkg_spawn's fence wants a
+    call wm_close_req           ; live BOUND window, and only the teardowns
+                                ; clear I_WIN. THE TEARDOWN IS POSTED, not
+                                ; run (SPEC.md 20.6, BR-4): its repaint ends
+                                ; in wm_dock_under and menu_draw_bar, which
+                                ; can far-call ANOTHER package's W_PAINT,
+                                ; and a 128-byte worker slice (Bounce's) has
+                                ; 64 bytes of it after the interrupt floor.
+                                ; ui_task's close pass runs app_close_now
+                                ; on its own stack: toast_owner_gone,
+                                ; inst_rel_rec, inst_unwin, mem_free_rec,
+                                ; desk_drop_x - in that order, under the lock.
+                                ; I_STATE is left as it is: 2 after a close
+                                ; or a kern_mega fault-kill (mega_fkill set
+                                ; it), 1 when ALIVE was handed a BX that is
+                                ; not ours - app_close_now takes both
+    xor bx, bx                  ; no release byte: the UI task frees the
+    jmp task_exit               ; record (the .orphan precedent); never
+                                ; returns
 
 ; =============================================================================
 ; Package worker tasks (SPEC.md 20.6)
@@ -1972,11 +1989,12 @@ inst_task_die:
 ; The two API-table targets that let a LOADED PACKAGE own exactly one
 ; background task - the first time package code is pre-empted against
 ; anything but the UI task. Everything in this pair's design falls out of
-; one property: while a worker exists, the ONLY code that can free its
-; instance record is the worker's own task_exit. app_close_win reads
-; I_TASK != 0xFF and takes the die-flag path, which frees nothing; the
-; task-less path that would free the record (and with it the package
-; region, SPEC.md 29.2 rule 7) is unreachable for a worker-owning instance.
+; one property: while a worker exists, NOTHING frees its instance record.
+; app_close_win reads I_TASK != 0xFF and takes the die-flag path, which
+; frees nothing; the teardown that would free the record (and with it the
+; package region, SPEC.md 29.2 rule 7) runs only once the worker has
+; written I_TASK = 0xFF and posted its close in the IF=0 window that ends
+; in its own task_exit (inst_task_die) - and then on the UI task.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -2159,14 +2177,15 @@ inst_pkg_spawn:
 ;
 ; in:  BX = the package's own window ptr; the gfx lock must NOT be held
 ; out: returns with EVERY register AND the flags preserved if the instance
-;      is still live - otherwise NEVER RETURNS: it tears the instance down
-;      through inst_task_die (gfx_lock, inst_unwin, gfx_unlock, mem_free_rec
-;      - the region and every claim - then task_exit with BX = the record,
-;      which frees the record and the task slot inside one IF=0 window)
+;      is still live - otherwise NEVER RETURNS: it leaves through
+;      inst_task_die, which gives up I_TASK, posts the window's close and
+;      task_exits with no release byte inside one IF=0 window; ui_task's
+;      close pass then tears the instance down on its own stack (SPEC.md
+;      20.6)
 ;
-; Called by the worker at least once per outer-loop iteration. gfx_lock is
-; NOT reentrant, and inst_task_die takes it - calling this while holding the
-; lock deadlocks the drawing of the whole machine (SPEC.md 7).
+; Called by the worker at least once per outer-loop iteration, and never
+; with the gfx lock held: the lock is not reentrant and the worker that
+; leaves holding it leaves it held (SPEC.md 7, 20.6 rule 4).
 ;
 ; The liveness QUESTION is asked of BX, per the ABI. The teardown IDENTITY
 ; is taken from the running task's T_INST instead, and that split is
@@ -2231,18 +2250,13 @@ inst_pkg_alive:
     cmp al, INST_MAX
     jae .orphan                 ; no record of ours at all - cannot happen
     call inst_ptr               ; DI = inst_tab + index*32
-    jmp inst_task_die           ; never returns - AND IT ANSWERS FOR A RECORD
-                                ; WITH NO BOUND WINDOW TOO. This leg used to be
-                                ; written out again below, seven calls that
-                                ; differed from that routine only in skipping
-                                ; the wm_destroy that a zero I_WIN must not
-                                ; reach (BX = 0 there would zero the cold-entry
-                                ; jmp at 0800:0000). inst_task_die asks that
-                                ; question itself now, in four bytes, against
-                                ; the twenty this copy cost - and the record is
-                                ; released either way, or its region, dock tile
-                                ; and tm row leak for the session, which is the
-                                ; failure this routine exists to prevent
+    jmp inst_task_die           ; never returns. The record is closed
+                                ; whatever BX said, or its region, dock tile
+                                ; and tm row leak for the session, which is
+                                ; the failure this routine exists to prevent.
+                                ; Its I_WIN is never 0: the spawn's fence
+                                ; wanted a live bound window, and only the
+                                ; teardowns clear it
 .orphan:
     xor bx, bx                  ; no release byte - the sbl_refill_task
     jmp task_exit               ; precedent (SPEC.md 34.5); never returns
@@ -2439,9 +2453,9 @@ inst_tab:    resb INST_MAX * I_RECSZ ; both are defined above, so no
                                 ; which is the MB_SEG trap of SPEC.md 12.2 for
                                 ; 384 bytes
 inst_icobuf: resb DSK_ICO_SIZE  ; inst_icon_ptr's staging slot: its own, and
-                                ; not dsk_ico's, because dock_draw_tile runs
+                                ; not dsk_ico's, because dock_draw_tile ran
                                 ; on a dying package's WORKER (inst_task_die ->
-                                ; wm_destroy) while task 0 may be staging into
+                                ; wm_destroy, until BR-4) while task 0 may be staging into
                                 ; dsk_ico inside a mount (assoc_docicon_x's
                                 ; tenancy rule) - 64 bytes against a tile
                                 ; drawn with another file's icon
