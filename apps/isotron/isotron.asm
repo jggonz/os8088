@@ -1097,6 +1097,7 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_bprev                  ; ...the last band's first row, and
     BYTEV it_bpend                  ; ...an overlay it passed owed its text
     BUFV  it_bt0, 4                 ; ...and when it started, pit_now
+    WORDV it_bmax                   ; ...the dearest band of this present
     BYTEV it_byield                 ; ...more owed: the worker yields
     WORDV it_fx                     ; the frame (W_X, W_Y, W_W, W_H) when the
     WORDV it_fy                     ; content box was last asked (it_geom_ck)

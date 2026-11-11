@@ -223320,7 +223320,9 @@ GFX_UNLOCK  (bands left over: TASK_YIELD, not TASK_SLEEP)
   goes out **IN BANDS** of 4 device rows (`it_present_band`): `it_full` = 1
   starts it at row 0 with the overlays composed (their changes wait for the
   end), 2 carries on at `it_band`; a wake presents bands while the hold so
-  far plus the last band's cost is under 40 ms, and always one; each
+  far plus the DEAREST band's cost so far in this present (`it_bmax`) is
+  under 40 ms, and always one - the last band's cost was the guess until a
+  cheap band then a dear one held the EGA's way back 54 ms; each
   overlay is lettered in a hold OF ITS OWN once a band has passed its last
   row (`it_bpend`: a band and the title's 40-cell line in one hold were
   ~50 ms on the XT-VGA - wave 3) - a step made meanwhile is presented before
