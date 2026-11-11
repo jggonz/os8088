@@ -102926,10 +102926,27 @@ the read-ahead window's worth of heap, silently. So a package lifts its floor
 the moment the claim is behind it, on the refusal path as well, and the kernel
 lifts it for a package that never did: `mem_free_rec_x` stores `MEM_LVL_TOP`
 over it when an instance's claims are swept, so a DOS window closed while it waited
-on its wake leaves nothing behind. That lift is unconditional and per-instance
-rather than per-task, which is exact for the one setter in the tree and would
-cost another package's floor only if a window were closed during the split
-second DOS waits for its wake.
+on its wake leaves nothing behind.
+
+**That lift is the SETTER's instance's, never anyone's (BR-11).** The task
+stamp says whose claims a floor binds, but it cannot say whose teardown lifts
+it: every package callback, the DOS and the kernel's own paste run on the UI
+task. So a third byte, `[mem_pg_finst]`, names the instance that set it -
+`OSAPI_MEM_FLOOR` stamps `[snd_inst]`'s slot, which is `inst_caller`'s answer
+for every caller on the UI task and 0xFF outside a callback, and a multi-file
+paste (§22.27) stamps 0xFF, the kernel - and `mem_free_rec_x` lifts the floor
+only when it is the dying record's slot. It used to lift unconditionally, and
+the case that cost was not DOS's: a multi-file paste raises the floor to MED so
+each entry's copy buffer cannot shed the list it walks, and closing ANY window
+while its overwrite question was up lifted it - the next copy buffer shed
+`MEM_P_FLIST`, `fcp_lnext` read the zeroed word as the end of the list, and the
+paste stopped part-way reporting success. The paste's floor is lifted by
+`fcp_lend`, which every end of a list paste reaches (a closed window's stop
+included). **+17 bytes on kern_big** (16 `.cold` and the `.bss` byte) **and
++13 on kern_small**, which has no list paste: the setter's two stores (6), the
+teardown's compare (6), the paste's stamp (4) - the level byte itself, MED
+being no slot number. A paste still overwrites a floor DOS has standing, and `fcp_lend` lifts
+whatever stands; both cost DOS a performance tier, never data, and are left.
 
 #### 50.6.7 A cache that declares a proc MOVES, and the blanket refusal is gone
 
