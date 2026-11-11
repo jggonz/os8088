@@ -30,7 +30,7 @@
 
 HB_M_ASK    equ 0               ; the window offers Hibernate... / Cancel
 HB_M_BUSY   equ 1               ; the image is being written (or read)
-HB_M_RESUME equ 2               ; the boot-time question: Resume / Discard
+HB_M_RESUME equ 2               ; a resume is posted: keep the image (no face)
 HB_M_GONE   equ 3               ; the window closed: the thunk drops the image
 
 ; --- the module's entry slots (SPEC.md 2.8.1) - its ABI with the thunks -----
@@ -427,6 +427,36 @@ hb_probe_x:
     mov bp, drv_find            ; (wm_cbd: kmain_o holds nothing in BP)
     call COLD_SEG:wm_cbd        ; the directory sectors themselves
     jc .back
+    ; --- SHIFT HELD AT STARTUP SKIPS IT (SPEC.md 87.5, 26.10.5) -------------
+    ; The ROM's own read of 0040:0017, as_boot's idiom and the same gesture:
+    ; a user holding either Shift through the boot gets neither the old
+    ; session nor the autostart. A SKIP IS A RESUME FAILURE like any other -
+    ; the owner's rule: hibernation is a state convenience, not a way to save
+    ; work, and the file is room a small hard disk may not have - so both
+    ; files go, pointer first, here and without HIBER.DRV: the kernel carries
+    ; the one name and the three bytes that tell the pair apart are stamped
+    ; (hbm_nimg's shape). Nothing reads the stamp after this: the module
+    ; stamps its own name before every use.
+    mov ah, 2
+    int 0x16
+    test al, 3                  ; ...either Shift
+    jz .post
+    mov si, hb_s_ptr            ; drv_find spends SI
+    call COLD_SEG:dwf_dskw_delete
+    mov word [HB_S_EXT], 'IM'
+    mov byte [HB_S_EXT + 2], 'G'
+    call COLD_SEG:dwf_dskw_delete
+    push es                     ; (this routine's contract keeps them)
+    push cx
+    push cs
+    pop es
+    mov si, hb_s_skip
+    xor cx, cx
+    KDOOR toast_show            ; COPIED, so a `.boot3` string outlives it
+    pop cx
+    pop es
+    jmp short .back
+.post:
     mov byte [ui_rebootq], UI_RBQ_ASK
 .back:
     call COLD_SEG:drvf_drv_vol_back
@@ -435,6 +465,7 @@ hb_probe_x:
     pop dx
     pop ax
     retf
+TOASTSTR hb_s_skip, 'Hibernation skipped'
 section .cold
 
 ; -----------------------------------------------------------------------------
@@ -1130,10 +1161,6 @@ hbm_btnrect:
     mov [bx], ax
     add ax, dx
     mov [bx+4], ax
-    cmp byte [hb_mode], HB_M_RESUME
-    jne .out
-    add si, hbm_s_bres - hbm_s_bhib ; the RESUME face's pair, the same
-.out:                               ; distance on from each (asserted there)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1248,15 +1275,10 @@ hbm_paint:
     mov bx, hbm_lines_busy
 .notbusy:
     push ax
-    mov al, [hb_vol]            ; the letter, patched into both faces' lines
+    mov al, [hb_vol]            ; the letter, patched into the ASK face's line
     add al, 'A'
-    mov [cs:hbm_s_r1 + HBM_R1_LTR], al
     mov [cs:hbm_s_a2 + HBM_A2_LTR], al
     pop ax
-    cmp al, HB_M_RESUME
-    jne .lines
-    mov bx, hbm_lines_res
-.lines:
     push si
 .line:
     mov si, [cs:bx]
@@ -1401,25 +1423,10 @@ hbm_act:
     push dx
     push si
     push di
-    cmp byte [hb_mode], HB_M_RESUME
-    je .resume
     cmp al, 2
     je .close
     call hbm_arm                ; Hibernate: check the disk, then post
     jmp short .out
-.resume:
-    cmp al, 2
-    je .discard
-    ; --- Resume: say so, and post the restore for the top of the pass -------
-    mov byte [hb_mode], HB_M_BUSY
-    call hbm_repaint
-    mov al, UI_RBQ_RESUME
-    call hbm_post               ; ...unless a restart already stands
-    jmp short .out
-.discard:
-    call hbm_vbn                   
-    call hbm_forget             ; the pointer and the image go
-    call hbm_vbk                   
 .close:
     mov byte [hb_mode], HB_M_GONE       ; BEFORE the close: app_close_win's
     mov bx, si                          ; KIND_HIBER hook drops the image on
@@ -2361,9 +2368,11 @@ hbm_drvsusp:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_ask - the boot-time question (SPEC.md 87.5): validate the pointer,
-;           find the image, and open the window in HB_M_RESUME
+; hbm_ask - the boot-time check (SPEC.md 87.5): validate the pointer, find
+;           the image, and post UI_RBQ_RESUME in HB_M_RESUME - no question
 ; in:  [hb_vol] = the volume the probe found the pointer on; no lock
+; out: [ui_rebootq] = UI_RBQ_RESUME and the image kept, or a refusal: a
+;      toast, both files deleted and HB_M_GONE
 ; -----------------------------------------------------------------------------
 hbm_ask:
     call hbm_enter
@@ -2375,7 +2384,13 @@ hbm_ask:
     xor dx, dx
     mov cx, HBP_SIZE
     call COLD_SEG:dwf_dskw_read ; DX:AX = bytes
-    jc .gone
+    jnc .rd
+    cmp ax, FERR_BIG            ; A POINTER THIS KERNEL CAN NEVER READ (hiber-9):
+    je .stale                   ; kern_mega's 28 bytes met by kern_big's 18
+    jmp .gone                   ; buffer is the same refusal every boot, so it
+                                ; is forgotten; any other error (a transient
+                                ; read) leaves the pair for the next boot
+.rd:
     cmp ax, HBP_SIZE
     jne .stale
     call hbm_ptrfix_set         ; ONE description of the fixed head, written
@@ -2428,21 +2443,6 @@ hbm_ask:
     mov al, [hb_vol]
     call hbm_geom
     jc .nobios
-    call hbm_vbk                   
-    mov byte [hb_mode], HB_M_RESUME
-    ; --- ...AND WHETHER TO ASK AT ALL (docs/plans/KERN-DOS-PLAN.md 8) -------
-    ; An image written for a DOS handoff is not the user leaving the machine,
-    ; so there is no question to put: the session is coming back and the only
-    ; thing the user did was run a program. Everything above still runs - the
-    ; fixed head, the image's size, the geometry - because a stale or
-    ; unreadable pointer is exactly as fatal either way.
-    cmp byte [cs:hbm_ptrbuf + HBP_DOS], 0
-    je .askit
-    call hbm_dosbda             ; the exit code, out of the BDA
-    mov al, UI_RBQ_RESUME
-    call hbm_post               ; ...unless a restart already stands
-    jmp short .out
-.askit:
 %ifdef KERN_MEGA
     ; A REFUSAL THE LAST BOOT COULD NOT ACT ON (KERN-MEGA-PLAN 14.158): the
     ; streaming stub (megares.inc) checks the extended section's sum after
@@ -2463,13 +2463,22 @@ hbm_ask:
     jmp short .drop
 .ask2:
 %endif
-    mov byte [hb_down], 0
-    call hbm_kbdrain            ; a key held at the hibernate's own prompt
-                                ; repeats through int 19h into this boot, and
-                                ; ui_task's next step hands it to the front
-                                ; window - where Esc is Discard
-    mov al, KIND_HIBER
-    KDOOR app_launch
+    call hbm_vbk
+    ; --- NO QUESTION (SPEC.md 87.5): A VALID IMAGE IS RESUMED ---------------
+    ; The Resume/Discard window went (docs/plans/HIBER-RESUME-PLAN.md (A)):
+    ; somebody restarting a machine with a hibernation on it means to resume
+    ; it, and the one reason to say no - an image that cannot be got out of -
+    ; is Shift held at startup, which hb_probe_x reads before this module is
+    ; even loaded. HB_M_RESUME is the MODE that keeps this image loaded until
+    ; hbm_res spends the post: hbm_ptrbuf carries the wake address across.
+    ; An image written for a DOS handoff reads the program's exit code too.
+    mov byte [hb_mode], HB_M_RESUME
+    cmp byte [cs:hbm_ptrbuf + HBP_DOS], 0
+    je .post
+    call hbm_dosbda             ; the exit code, out of the BDA
+.post:
+    mov al, UI_RBQ_RESUME
+    call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .stale:
     mov si, hbm_s_stale
@@ -2671,13 +2680,12 @@ hbm_res:
     call hbm_cb         
     mov word [hb_xseg], 0
 .fail:
-    call hbm_vbk                   
-    mov byte [hb_mode], HB_M_RESUME
-    mov si, hbm_s_lost
-    call hbm_toast
-    call hbm_winback
-    mov sp, [hb_sp]
-    ret
+    mov si, hbm_s_lost          ; A RESUME THAT CANNOT BE PUT BACK IS SPENT
+    jmp hbm_ask.drop            ; (SPEC.md 87.5): toast, both files deleted,
+                                ; HB_M_GONE so the thunk drops this image -
+                                ; there is no window to go back to (hiber-8:
+                                ; RESUME and a winback pinned the module for
+                                ; the session)
 
 ; =============================================================================
 ; THE DOS HANDOFF (SPEC.md 96.40, docs/plans/KERN-DOS-PLAN.md §7)
@@ -4494,17 +4502,10 @@ hbm_xres:
 .bad:
     mov si, hbm_s_lost
 .refuse:
-    push si
     mov dx, [hb_xseg]
     call hbm_xfree
     mov word [hb_xseg], 0
-    call hbm_vbk
-    mov byte [hb_mode], HB_M_RESUME
-    pop si
-    call hbm_toast
-    call hbm_winback
-    mov sp, [hb_sp]
-    ret
+    jmp hbm_ask.drop            ; hbm_res's .fail: spent, GONE (hiber-8)
 .rd:                            ; HBX_CHUNK at file offset DX:AX into ES:0.
     push ax                     ; CF = 1 unless all of it came
     push dx
@@ -5680,27 +5681,17 @@ hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
 
 hbm_lines_ask:  dw hbm_s_a1, hbm_s_a2, hbm_s_a3, 0
 hbm_lines_busy: dw hbm_s_b1, 0
-hbm_lines_res:  dw hbm_s_r1, hbm_s_r2, hbm_s_r3, 0
 
 hbm_s_a1:   db 'Save everything in memory to', 0
 hbm_s_a2:   db 'C:\HIBERNAT.IMG and stop the machine?'
 HBM_A2_LTR  equ 0
             db 0
-hbm_s_a3:   db 'Restarting offers to resume it.', 0
+hbm_s_a3:   db 'Restarting resumes it.', 0
 hbm_s_b1:   db 'Hibernating...', 0
-hbm_s_r1:   db 'A hibernation file is on drive '
-HBM_R1_LTR  equ $ - hbm_s_r1
-            db 'C:.', 0        ; 34 cells: the content is 39 wide
-hbm_s_r2:   db 'Resume where you left off, or', 0
-hbm_s_r3:   db 'discard it and start normally?', 0
-
-hbm_s_bhib: db 'Hibernate', 0      ; the ASK face's two labels, then the
-hbm_s_bcan: db 'Cancel', 0, 0, 0, 0 ; RESUME face's two at one distance on
-hbm_s_bres: db 'Resume', 0, 0, 0, 0 ; from each - hbm_btnrect adds it rather
-hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
-%if hbm_s_bdis - hbm_s_bcan != hbm_s_bres - hbm_s_bhib
-  %error "hbm_btnrect: each RESUME label is one fixed distance past its ASK label"
-%endif
+                                ; (the RESUME face - 'Resume'/'Discard' - went
+                                ; with the boot-time question, SPEC.md 87.1)
+hbm_s_bhib: db 'Hibernate', 0      ; the ASK face's two labels
+hbm_s_bcan: db 'Cancel', 0
 
 TOASTSTR hbm_s_nobios, 'Needs a BIOS hard disk'
 TOASTSTR hbm_s_noroom, 'Not enough room on disk'

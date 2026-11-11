@@ -176,11 +176,9 @@ def main():
         if not box.wait_pm(300):
             fails.append("the second boot never reached protected mode")
         else:
-            box.up()                    # the desktop and its Resume card
-            box.capture()
-            box.goto(225, 225)          # Resume
-            box.xd("click", 1)
-            if not box.wait_resumed(120):
+            # NO QUESTION (SPEC.md 87.5): ui_task's first pass after
+            # mega_enter checks the image and resumes it by itself
+            if not box.wait_resumed(300):
                 fails.append("no `kern_mega: resumed`")
             box.ui_done("the resumed desktop")
             box.shot(os.path.join(out, "resumed.png"))

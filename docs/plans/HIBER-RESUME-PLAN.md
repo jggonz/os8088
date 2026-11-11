@@ -1,6 +1,11 @@
 # Hibernate resume: no question, Shift to skip, and a boot that does only what the resume needs
 
-> **PROPOSED — nothing here is built.** Two independent changes to SPEC.md
+> **STATUS (2026-11-11): (A) BUILT; B2 IN PROGRESS** — see §5 for the
+> owner's decisions and what landed, commit by commit. The text below is the
+> proposal as researched on `117cd5b8`, kept as written except where §5 says
+> a decision overrode it.
+>
+> **PROPOSED** (as researched). Two independent changes to SPEC.md
 > §87.5's resume, each with its own recommendation: **(A)** the Resume/Discard
 > window goes, the boot resumes by itself, and **Shift held at startup** skips
 > it the way it skips `\AUTOSTRT` (§26.10.5); **(B)** the boot stops building a
@@ -469,8 +474,14 @@ driver: its device). The wake calls it per row instead of `hbm_reload`.
   sweep today and would not change.
 - **Format/ABI**: **a driver ABI change** — a verb in `drivers/os88drv.inc`,
   `DRV_VER` (14, unreleased this round, so no second bump: re-record
-  `tools/abilock.py`). Old drivers answer "unknown verb" and are detached as
-  today, so it can land a driver at a time.
+  `tools/abilock.py`). ~~Old drivers answer "unknown verb" and are detached as
+  today, so it can land a driver at a time.~~ **CORRECTED (2026-11-11): that
+  is false.** ETHER, PCIETHER, NET and USBMOUSE answer CF = 0 to a verb they
+  do not know (`ethdrv.inc` ~88-96, `net.asm` ~230-238, `usbmouse.asm`
+  ~131-132), so a driver's ANSWER cannot say whether it implements the verb.
+  Any future opt-in must be DECLARED - a header flag - and never inferred from
+  the answer. (Those four drivers are being made to refuse unknown verbs
+  separately.)
 - **Verdict**: a real saving on the floppy-booted machine, orthogonal to B2,
   and the larger change. Record as the follow-up after B2; not this round.
 
@@ -563,3 +574,52 @@ saving waits for the field (docs/FIELD-MACHINES.md).
 3. **The stub's sentence naming Shift** (§2.2), which costs `kern_dos`'s image
    ~35 bytes too.
 4. **(B)**: B2 in two waves (recommended), and whether B4 is wanted next.
+
+## 5. The owner's decisions, and what landed
+
+**Decided 2026-11-11** (binding on everything above):
+
+1. **(A), with the files DELETED on a Shift skip** — not set aside, not kept
+   (§2.2's three options; the recommendation there was "set aside" and is
+   overridden). The owner: *"hibernate is a 'state convenience', not a 'way
+   to save work'... a 4MB 286 with a 40MB hard drive may not be able to
+   afford the extra file. If they skip it, that is about the same as 'it was
+   corrupt' or 'it failed to load' or any other hibernate resume failure.
+   This again tracks with how other OSes treat the concept."* So the skip
+   takes the same path as any other resume failure, and `HIBERNAT.OFF`, its
+   `hbm_forget` leg and the rename are dropped entirely. **No arm-once**
+   (open decision 2: not taken). **No Shift sentence in the stub** (open
+   decision 3: `hbstub.inc` is `kern_dos`'s too, and it was not asked for).
+   The must-ride-along items are taken: hiber-8 (a refused no-question resume
+   is spent and `HB_M_GONE`, the module dropped), hiber-9 (`FERR_BIG` is
+   `other build` and forgotten), and `as_boot`'s stand-down under a pending
+   post (hiber-21's autostart half). BR-10 disappears with the face.
+2. **(B): B2, in two waves (B1 then B2), for the HARD-DISK boot.** *"a normal
+   user with a hard drive installs there, and thus is resuming from the hdd.
+   The kernel read is under half a second and so skipping it is not worth
+   the extra work (B3), where skipping the slow mouse/ether/etc's first
+   discarded runs is."* Floppy resume must keep working. kern_mega keeps
+   today's late probe and gets (A) only. hiber-14 (the image's interrupt
+   masks) rides with B2.
+3. **B4 is NOT taken this round** (open decision 4's second half). The DOS
+   return's reload may bring it back later, and a separate investigation is
+   running on that; the driver-pass split below is kept compatible with it
+   (the two passes are the keep-set and the rest, which is exactly B4's
+   line).
+
+**What landed**
+
+- **(A)** — `hb_probe_x` reads Shift and, held, deletes both files itself
+  (the kernel's one name, the image's three bytes stamped into it) and toasts
+  `Hibernation skipped`; otherwise it posts `UI_RBQ_ASK` as before, and
+  `hbm_ask` posts `UI_RBQ_RESUME` for every valid image (the DOS arm's old
+  path is everybody's). The RESUME face, its strings, `hbm_act`'s two arms
+  and the boot's keyboard drain went; the ASK face says `Restarting resumes
+  it.` `hbm_res`'s refusal (and kern_mega's `hbm_xres` `.refuse`) now joins
+  `hbm_ask`'s: toast, both files deleted, `HB_M_GONE`. `AS_WALK` stands down
+  on `[ui_rebootq]` ≠ 0. MEASURED, kern_big against `2cf57256`: resident
+  **0**, `.boot3` **+80**, HIBER.DRV image **7,741 -> 7,524 (-217)**, 6,167 ->
+  6,013 bytes on the disk packed. Rows rewritten: `hibernate`/`hibernatedrv`/
+  `hibernatem` (the Discard pass is a Shift pass with red arms in its
+  header), `hibsumok`/`hibsumbad`, `hmahiber`, `p2hiber`, `win16hiber`,
+  `megahiber`, `megap2hiber` (no click: the resume comes by itself).

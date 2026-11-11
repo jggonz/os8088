@@ -1930,6 +1930,11 @@ ovl_sc_load:
 ; before the open, which is what the 320 bytes of LNK_SPMIN are for.
 ; =============================================================================
 %macro AS_WALK 0
+    cmp byte [ui_rebootq], 0    ; A RESUME OR ITS CHECK IS POSTED: that image
+    jne .out                    ; IS the session, and a link opened now would
+                                ; run in a session about to be overwritten
+                                ; and could write the disk under the image
+                                ; (SPEC.md 26.10.5, 87.5; stik_boot's test)
     xor bx, bx
     call .go                    ; the boot volume's ROOT
     jc .out

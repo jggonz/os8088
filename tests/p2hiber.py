@@ -18,7 +18,8 @@ The machine is hmahiber's with the serial mouse taken OUT, so the PS/2 mouse
 QEMU's i8042 carries is the pointer: the shipped system floppy with a
 SYSTEM.CFG wanting HDD.DRV (and hmadrv's other two), a FAT16 C: on IDE that
 the hibernation file is written to, -m 128. Hibernate from the System menu,
-Enter, the power-off (QEMU killed), a fresh QEMU, Enter to Resume. Then:
+Enter, the power-off (QEMU killed), a fresh QEMU, which resumes by itself
+(SPEC.md 87.5: there is no question). Then:
 
   1. [hb_resumes] is 1;
   2. the MASTER 8259's IMR is the one it had before the hibernate (`not
@@ -184,12 +185,7 @@ def main():
              "0. both hibernate files are on C: before the power-off")
         q.close()                               # the power-off
         q = Q(tmp, sysimg, apps, hd)
-        if not os88qemu.acted(q, lambda: byte(q, "hb_mode") == HB_M_RESUME,
-                              secs=120, what="the resume question"):
-            q.close()
-            sys.exit("p2hiber: the fresh boot never asked the question")
-        os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
-        xmcheck.qmp(q.sock, "sendkey ret")      # Resume
+        # NO QUESTION (SPEC.md 87.5): the fresh boot resumes by itself
         ok = os88qemu.acted(q, lambda: word(q, "hb_resumes") == 1, secs=180,
                             what="[hb_resumes] to reach 1")
         want(ok, "1. the machine resumed: [hb_resumes] %d"

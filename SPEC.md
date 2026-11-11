@@ -48398,8 +48398,8 @@ volume and the next thing they want is to boot it.
 `UI_RBQ_RESUME` and `UI_RBQ_ASK`, spent at the same top-of-pass site for the
 same reason — a hibernate detaches drivers and a resume waits on their
 workers, neither of which can be done from the callback that decided it.
-Unlike a restart these can RETURN: on a refusal, a Discard, or once the
-question is on the screen. A restart already posted wins over any of them.
+Unlike a restart these can RETURN: on a refusal, or once the check has
+posted the resume. A restart already posted wins over any of them.
 
 #### 20.10.1 …and `AL` says whether it may touch a disk
 
@@ -61938,6 +61938,12 @@ resident byte and no blob byte. A launch must not race the loading screen's
 IRQ0 frames, which that has stopped, and `.boot3` lives until kmain's
 `mem_unblob_x`. It:
 
+- **stands down while `[ui_rebootq]` is non-zero** — a hibernation's check or
+  resume is posted (§87.5), and that image IS the session: a link opened now
+  would run in a session about to be overwritten and could write the disk
+  under the image (the big review's hiber-21). `stik_boot`'s test (§110.4).
+  On kern_mega it is `.cold`'s `as_bootc`, so the test is 7 resident bytes
+  there and transient everywhere else;
 - stands at the boot volume's root and `dskw_stat`s `AUTOSTRT`. No folder, or
   a FILE of that name, is the end of it;
 - walks the folder with `dsk_find` (stateless by ordinal, §19.7.1, so a
@@ -61951,7 +61957,8 @@ IRQ0 frames, which that has stopped, and `.boot3` lives until kmain's
   **either Shift held**, says `Autostart skipped` and starts nothing. It is
   read after the whole boot, so a key held through the loading screen is a
   key held now, and only at a link, so a shipped empty folder says nothing
-  whatever is held;
+  whatever is held. **The same Shift skips a hibernation's resume** (§87.5),
+  read earlier in the same boot — one gesture, a plain boot;
 - stands the machine at the boot volume's root again.
 
 **After `spl_finish`, before the first desktop paint.** A program that opens a
@@ -161445,9 +161452,10 @@ WAV's own samples one for one, and nothing reaches 42h.
 root of the hard disk the machine booted from — or of the first hard disk
 there is, when the boot was a floppy — then stops the machine with a
 text-mode sentence saying it is safe to switch off. Nothing is asked but a
-confirmation. The next boot finds that file by itself and asks, on the
-desktop, whether to **Resume** it or **Discard** it and start normally. A
-resume puts every byte back where it was and returns into the UI task's loop
+confirmation. The next boot finds that file by itself and **resumes it,
+asking nothing**; **either Shift held at startup** skips it — the gesture
+that skips `\AUTOSTRT` (§26.10.5) — and a skipped hibernation is deleted like
+any other that cannot be resumed (§87.5). A resume puts every byte back where it was and returns into the UI task's loop
 exactly where the hibernate left it: the windows, the running packages, their
 tasks and the clipboard are all as they were.
 
@@ -161469,19 +161477,27 @@ system disk is in the drive by definition.
 ### 87.1 The Hibernate window (`KIND_HIBER`)
 
 A task-less, stateless singleton kind (§29.3), 320 px wide, with one mode byte
-`[hb_mode]` in kernel `.bss` and three faces:
+`[hb_mode]` in kernel `.bss` and two faces:
 
 ```
 HB_M_ASK     Save everything in memory to                  [Hibernate] [Cancel]
              C:\HIBERNAT.IMG and stop the machine?
-             Restarting offers to resume it.
+             Restarting resumes it.
 HB_M_BUSY    Hibernating...                                (no buttons)
-HB_M_RESUME  A hibernation file is on drive C:.            [Resume]  [Discard]
-             Resume where you left off, or discard it
-             and start normally?
 ```
 
-The drive letter in both faces is patched into the string at paint time,
+`HB_M_RESUME` is still a MODE — a resume is posted and the module image is
+kept until `hbm_res` spends it (`hbm_ptrbuf` carries the wake address across)
+— but it has no face. **There was a third, and the boot-time question went**
+(docs/plans/HIBER-RESUME-PLAN.md (A), the owner's call): `A hibernation file
+is on drive C:. Resume where you left off, or discard it and start
+normally?`, with `[Resume]` and `[Discard]`. Somebody restarting a machine
+with a hibernation on it means to resume it, and the one reason to say no —
+an image that cannot be got out of — is answered by Shift at startup (§87.5)
+without a module load. With it went the boot's keyboard drain, Esc as a
+destructive Discard (the big review's BR-10) and 165 bytes of the module.
+
+The drive letter in the face is patched into the string at paint time,
 because the disk is chosen when the window opens: `hb_pick` (`.cold`) takes
 `[dsk_bootvol]` when that row is a fixed disk (§18.7, §52.10.3) and the first
 fixed row otherwise, and the window is the confirmation — Hibernate stops
@@ -161505,7 +161521,7 @@ place is what lets the next boot find it without a pointer's path. What it
 cost the kernel was a `.text` thunk for the completion proc and 32 bytes of
 `.bss` for the folder path, both gone.
 
-`Cancel` and `Discard` close the window through `app_close_win` from inside
+`Cancel` closes the window through `app_close_win` from inside
 the release handler — safe for §38.7's reason — and set `[hb_mode]` to
 `HB_M_GONE`, which is what tells the `.cold` thunk that made the far call to
 `mod_drop` the image on the way back. The module is never freed from inside
@@ -161729,8 +161745,8 @@ samples, and anything in the kernel's own memory.
 
 ### 87.5 Resume — the probe, the question, the stub
 
-**The probe** (`hb_probe`, `.cold`, resident, from `kmain` after `drv_boot`
-and before the first paint) looks for `HIBERNAT.PTR` in the root of the ONE
+**The probe** (`hb_probe_x`, `.boot3`, transient, from `kmain_o` after
+`drv_boot` and before the first paint) looks for `HIBERNAT.PTR` in the root of the ONE
 volume a hibernate writes to — `hb_pick`'s — inside a
 `drv_vol_bank`/`drv_vol_back` bracket (§51.5.2), and reaches it the way
 `drv_load` reaches a driver: a quiet navigation (§18.9, no listing and no
@@ -161738,16 +161754,36 @@ icon harvest) and `drv_find`'s walk of the directory sectors rather than the
 snapshot. A floppy-only machine pays eight compares and no I/O; a machine
 with a hard disk pays one quiet mount of its root, which on a hard-disk boot
 is the root it is already standing in. A hit records the
-volume in `[hb_vol]` and posts `UI_RBQ_ASK`, which `ui_task`'s first pass
-spends — on the desktop, with nothing held — by loading the module and running
-`hb_ask`: read the pointer, validate it (§87.3), find `HIBERNAT.IMG` beside it
-and check its size against `[mem_top]`, ask the transport question (§87.2),
-empty the ROM's keyboard buffer — a key held at the hibernate's own "press
-any key" repeats through `int 19h` into this boot, `ui_task`'s next step
-hands it to the front window, and `Esc` there is Discard — and open the
-window in `HB_M_RESUME`. Any refusal is a toast and a deleted pointer.
+volume in `[hb_vol]`, and then:
 
-**Resume** posts `UI_RBQ_RESUME`; `hbm_perform` then:
+- **Either Shift held** — the BIOS's shift byte through `int 16h` AH=02,
+  `as_boot`'s read (§26.10.5) — **skips it, and deletes both files**, the
+  pointer first, there and then: `hb_probe_x` stamps the image's three bytes
+  into the kernel's one name (`hb_s_ptr`) itself, so declining costs no
+  module load, and toasts `Hibernation skipped`. One gesture, two skips:
+  `as_boot` reads the same byte later in the same boot, so a user holding
+  Shift through a crash loop gets neither the old session nor the autostart.
+  **A skip is a resume failure like any other** (the owner's rule, 2026-11-11):
+  hibernation is a state convenience, not a way to save work, and the file
+  is room a small hard disk may not have — so a skipped image goes exactly as
+  a corrupt one or one that failed to load does, which is also how other
+  systems treat the idea (Linux's swsusp drops an image the boot did not
+  resume; Windows offers to delete restoration data). Nothing is set aside.
+- Otherwise it posts `UI_RBQ_ASK`, which `ui_task`'s first pass spends with
+  nothing held by loading the module and running `hbm_ask`: read the pointer
+  (a pointer this kernel can never read — `FERR_BIG`, kern_mega's 28 bytes
+  met by kern_big's 18, §87.9 — is `other build` and deleted, rather than
+  re-read on every boot), validate it (§87.3), find `HIBERNAT.IMG` beside it
+  and check its size against `[mem_top]`, ask the transport question (§87.2),
+  and **post `UI_RBQ_RESUME` with `[hb_mode]` = `HB_M_RESUME` — no window, no
+  question.** Any refusal is a toast and both files deleted, and so is a
+  refusal of `hbm_res` below (`Hibernation: unreadable`): a resume that
+  cannot be put back is spent, `[hb_mode]` goes to `HB_M_GONE` and the
+  thunk drops the image — before (A) a refused no-question resume set
+  `HB_M_RESUME` and looked for a window to repaint, which pinned the module
+  for the session (hiber-8).
+
+`hbm_perform` then spends the `UI_RBQ_RESUME`:
 
 1. Asks the transport facts. For the boot partition (§52.10.3) they are the
    kernel's own — `DV_UNIT`, `dsk_vbase`, `dsk_bootspt`/`dsk_boothds`; for a
@@ -161948,14 +161984,16 @@ transport as the field machine) boots a fixture volume built by
 picks `Hibernate...` and **clicks** the window's button with the mouse — the
 release path, which once had a hit test that clobbered the click's y so that
 only `Enter` worked — watches the machine reach the text-mode sentence,
-presses a key, sees the question on the fresh desktop, clicks `Resume`, and
+presses a key — and the fresh boot resumes by itself, with no question — and
 then reads `[hb_resumes]`, the instance table, the two locks and the tick out
 of the guest: the About instance must be live with a visible window,
 `[sch_lock]` and the gfx lock must be down, the tick must advance, and both
 `HIBERNAT.PTR` and `HIBERNAT.IMG` must be gone from the volume — read on the
 host by a FAT reader that is not the kernel's, after a positive control that
 the pointer was there once the text-mode sentence was up. A second pass goes
-through the keyboard and takes `Discard`, and asserts the opposite. The driver-backed shape — a floppy boot
+through the keyboard and holds **Shift** through the restart, and asserts the
+opposite: `Hibernation skipped` toasted, nothing resumed, and BOTH files gone
+on the host. The driver-backed shape — a floppy boot
 with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
 is the same script with `--driver`, registered as `hibernatedrv`. Both write
 three rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
@@ -224249,8 +224287,8 @@ stik_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
   exist yet and no package is running.
 - **A pending hibernate or DOS question stands everything down**: `hb_probe`
   posts `UI_RBQ_ASK` (or `UI_RBQ_DOSRUN`) before this runs, and the image is
-  the session, so a Resume brings the widgets back as they were. A Discard
-  leaves them for the next boot.
+  the session, so a resume brings the widgets back as they were. An image
+  skipped with Shift or refused leaves them for the next boot.
 
 | case | what the user sees | the row |
 |---|---|---|
@@ -225050,8 +225088,8 @@ no alert.
 - **No shutdown hook.** Restart and power-off do not close windows; the row
   stays, which is what restore wants, and the last edit is what the last
   save wrote.
-- **No relaunch after a hibernate Discard**; the widgets return at the next
-  boot.
+- **No relaunch after a hibernate's check refuses its image**; the widgets
+  return at the next boot.
 - **The 12-hour display is not honoured.** `OSAPI_CLK_GET`'s AL bit 1 is
   the user's 12-hour choice (§37), and the calendar ignores it: the cards
   and the toast are always 24-hour (`09:30`, `23:00`). The entry

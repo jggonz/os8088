@@ -23,8 +23,8 @@ file is on HDD.DRV's own volume.
 
   A. -m 128. Hibernate... from the System menu, Enter: the machine reaches
      text mode and both files reach C: (read on the HOST). QEMU is killed -
-     the power-off - and a fresh QEMU boots the same disks and answers the
-     question with Enter. Then, out of the guest:
+     the power-off - and a fresh QEMU boots the same disks, which resume by
+     themselves (SPEC.md 87.5: no question). Then, out of the guest:
      1. [hb_resumes] is 1, [sch_lock] is 0;
      2. HDD.DRV's and NET.DRV's rows name the SAME HMA segments as before
         the hibernate, and the tail's hb_tab holds the same records for them
@@ -177,57 +177,53 @@ def main():
         shutil.copy(hd, hd2)
 
         q = hmadrv.boot(tmp, 128, sysimg, apps, hd)
-        if not os88qemu.acted(q, lambda: byte(q, "hb_mode") == HB_M_RESUME,
-                              secs=60, what="the resume question"):
-            want(False, "the fresh boot asked the question (hb_mode %d, "
-                 "toast %r)" % (byte(q, "hb_mode"),
-                                hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S,
-                                            verbose=False).toast()))
-        else:
-            os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): capped at it)
-            xmcheck.qmp(q.sock, "sendkey ret")      # Resume
-            ok = os88qemu.acted(q, lambda: word(q, "hb_resumes") == 1,
-                                secs=120, what="[hb_resumes] to reach 1")
-            want(ok, "A1. the machine resumed: [hb_resumes] %d"
-                 % word(q, "hb_resumes"))
-            if ok:
-                os88qemu.acted(q, lambda: byte(q, "sch_lock") == 0, secs=20,
-                               what="the wake's last step")
-                os88qemu.ui_done(q, S, cap=1.0)  # (was pace(1): capped at it)
-                want(byte(q, "sch_lock") == 0, "    ...and [sch_lock] is down")
-                r1 = hmadrv.rows(q)
-                b1 = hmadrv.blocks(q)
-                print("   the pool after:  %s"
-                      % ["%04X+%d/%04X" % b for b in b1])
-                for name in KEPT:
-                    seg = r0[name]["seg"]
-                    rec0 = [b for b in b0 if b[2] == seg]
-                    rec1 = [b for b in b1 if b[2] == seg]
-                    want(r1[name]["seg"] == seg and r1[name]["kb"] == 0
-                         and rec0 and rec1 == rec0,
-                         "A2. %s.DRV is the image's again: row %04X (was "
-                         "%04X), its records %s (were %s)"
-                         % (name, r1[name]["seg"], seg,
-                            ["%04X+%d" % b[:2] for b in rec1],
-                            ["%04X+%d" % b[:2] for b in rec0]))
-                    img = hmadrv.hma_image(name.lower())
-                    got = q.read((seg << 4) + ORG, len(img))
-                    ent = r1[name]["ent"] - ORG
-                    want(got[:32] == img[:32]
-                         and got[ent:ent + 64] == img[ent:ent + 64],
-                         "A3. ...and the pool at %04X:%04X holds its "
-                         "org-%04X code" % (seg, ORG, ORG))
-                snd = r1["SOUND"]
-                want((0xFFFF - (hmadrv.ORG - 0x10)//16) <= snd["seg"] <= (0xFFFF - (hmadrv.ORG - hmadrv.EQ["HMA_COLD_AT"])//16) and snd["kb"] == 0
-                     and any(b[2] == snd["seg"] for b in b1),
-                     "A4. SOUND.DRV, swept and reloaded, is in the pool at "
-                     "%04X" % snd["seg"])
-                hib = [c for c in claims(q) if c[2] == MEM_K_HIB]
-                want(not hib, "A5. no MEM_K_HIB claim is left: %s"
-                     % ["%04X+%dp" % c[:2] for c in hib])
-                ok, names, _ui = hmadrv.c_lists(q, "HELLO.TXT")
-                want(ok, "A6. C: lists HELLO.TXT through the restored "
-                     "HDD.DRV: %s" % names)
+        # NO QUESTION (SPEC.md 87.5): the boot resumes by itself. This
+        # machine boots from the FLOPPY and the image is on HDD.DRV's volume,
+        # so the probe before the drivers sees no fixed volume at all and it
+        # is the one after the disk drivers' pass - XMEM.DRV's `.cold` in the
+        # HMA and HDD.DRV both attached - that resumes it
+        ok = os88qemu.acted(q, lambda: word(q, "hb_resumes") == 1,
+                            secs=180, what="[hb_resumes] to reach 1")
+        want(ok, "A1. the machine resumed with no question asked: "
+             "[hb_resumes] %d" % word(q, "hb_resumes"))
+        if ok:
+            os88qemu.acted(q, lambda: byte(q, "sch_lock") == 0, secs=20,
+                           what="the wake's last step")
+            os88qemu.ui_done(q, S, cap=1.0)  # (was pace(1): capped at it)
+            want(byte(q, "sch_lock") == 0, "    ...and [sch_lock] is down")
+            r1 = hmadrv.rows(q)
+            b1 = hmadrv.blocks(q)
+            print("   the pool after:  %s"
+                  % ["%04X+%d/%04X" % b for b in b1])
+            for name in KEPT:
+                seg = r0[name]["seg"]
+                rec0 = [b for b in b0 if b[2] == seg]
+                rec1 = [b for b in b1 if b[2] == seg]
+                want(r1[name]["seg"] == seg and r1[name]["kb"] == 0
+                     and rec0 and rec1 == rec0,
+                     "A2. %s.DRV is the image's again: row %04X (was "
+                     "%04X), its records %s (were %s)"
+                     % (name, r1[name]["seg"], seg,
+                        ["%04X+%d" % b[:2] for b in rec1],
+                        ["%04X+%d" % b[:2] for b in rec0]))
+                img = hmadrv.hma_image(name.lower())
+                got = q.read((seg << 4) + ORG, len(img))
+                ent = r1[name]["ent"] - ORG
+                want(got[:32] == img[:32]
+                     and got[ent:ent + 64] == img[ent:ent + 64],
+                     "A3. ...and the pool at %04X:%04X holds its "
+                     "org-%04X code" % (seg, ORG, ORG))
+            snd = r1["SOUND"]
+            want((0xFFFF - (hmadrv.ORG - 0x10)//16) <= snd["seg"] <= (0xFFFF - (hmadrv.ORG - hmadrv.EQ["HMA_COLD_AT"])//16) and snd["kb"] == 0
+                 and any(b[2] == snd["seg"] for b in b1),
+                 "A4. SOUND.DRV, swept and reloaded, is in the pool at "
+                 "%04X" % snd["seg"])
+            hib = [c for c in claims(q) if c[2] == MEM_K_HIB]
+            want(not hib, "A5. no MEM_K_HIB claim is left: %s"
+                 % ["%04X+%dp" % c[:2] for c in hib])
+            ok, names, _ui = hmadrv.c_lists(q, "HELLO.TXT")
+            want(ok, "A6. C: lists HELLO.TXT through the restored "
+                 "HDD.DRV: %s" % names)
         q.close()
         want(host_wait(lambda: not (both & on_c(hd))),
              "A7. both files are gone from C: after the resume: %s"
