@@ -131029,7 +131029,18 @@ eight, the limit on every real-mode kernel.
 | 5 | URL store, with a transfer's buffer and a Copy's text carved after it | `br_urlneed`, `br_urlgrow` | from first use to the close | yes |
 | 6 | part 0 (§71.20.5, §71.24): the Download Manager and the rarely used UI | `op_fetch` in `br_dl_partload` | while the manager, a transfer, an open context menu or a rare action needs it | no: its code is far-called |
 | 7 | 1.7: the image store - every image's ready-to-draw copy carved in one claim, a decode's scratch carved off its end while it runs (§71.25, BROWSER-IMAGES-PLAN 3) | 1.7 | while a page with images is | yes |
-| 8 | 1.7: the image part - a decoder and its host code | 1.7, `op_fetch` | while an image decodes or animates | no |
+| 8 | 1.7: the image part - part 1, the decoders' host, and while a PNG, JPEG or other PiXEL decoder runs, that decoder's own part beside it: TWO claims then, one decoder at a time (`bri_pxprep`) | 1.7, `op_fetch` | while an image decodes or animates | no |
+
+**Row 8 shares with row 6.** A decoder's part (§71.30) is a lazy row and
+`op_fetch` claims every lazy row it fetches, so a PNG or JPEG decoding on a
+page with links and a pushed URL holds rows 1 to 5, 7 and both of row 8's:
+eight, and part 0 cannot also be in. The second use is refused in words.
+Part 0 wanted while a decoder part is in (a context menu, View Source, a
+form, a bookmark, the Download Manager) is refused `Busy decoding an image`
+(`br_dl_why`), not `Browser part unavailable`, which reads as a missing
+file; the decode ends at `IE_END`, which drops both. A decoder wanted while
+part 0 is in is refused with the toast `No image during download`, and that
+image keeps its alt box. kern_mega's twelve hold both.
 
 Rules that keep it true:
 
@@ -131859,6 +131870,19 @@ and the copy's pixel is the plan's as for a GIF (`bri_convrow`, or
 corner, for the cube's choice and the plan's. `tests/brgifref.py` makes the
 same copy from `tools/pixelsim.py`'s rows.
 
+**The plans are made where they are read.** A 256-entry search is 10.9 M
+cycles, 2.28 s on an XT (§106.17), so neither `bri_plans` (a GIF's) nor
+`bri_pxplans` (a decoder's) runs it for nothing. On a 1bpp adapter
+`bri_convrow` and `bri_pplot` read `t1` alone, so both make `t1` alone. The
+greys' and the cube's plans are the same for every picture: the greys' are
+PiXEL's shipped `px_plgrey`, copied, and either set, once made, stays in
+part 1's tables for as long as the part is loaded. `[bri_pkey]` names the
+set they hold (its `RF_*`, plus 80h on 1bpp; `RF_IDX` for none), and a
+GIF's plans, an animation's restore and an indexed picture's plans clear it.
+Both searches look at the stop every sixteen entries. A stopped
+`bri_pxplans` leaves `bri_planed` clear and its service answers
+`PXD_ABORT`.
+
 **Not done here**: a file past `BR_IFMAX` (60,000 bytes) keeps its alt box;
 progressive painting (a picture is drawn when its decode ends, as a GIF's
 is); a PNG's gamma or a JPEG's colour profile, which PiXEL does not read
@@ -132490,8 +132514,10 @@ The rule follows from that:
   out 256 KB at a time); a run the board refuses is asked again at half its
   size. **The slack goes back once the page stands still**: the worker's
   last paint sets `br_trimdue` and the UI task's wake cuts each arena to
-  what it holds (`br_trimall`, `br_ar_trim`) - a chunk wholly past it is
-  freed, a last chunk with four or more spare pages is replaced by one of
+  what it holds (`br_trimall`, `br_ar_trim`), only while the fetch is
+  `BN_DONE`; `br_free_all` clears a trim still owed, so one whose wake was
+  refused never cuts the next page's arenas mid-receive. A chunk wholly
+  past it is freed, a last chunk with four or more spare pages is replaced by one of
   its used length, a copy of one chunk at the most, kept as it was when the
   board has no such run. Growth can then be generous (few handles) without
   the board paying for it after the load.
@@ -132835,15 +132861,21 @@ exactly that way. Such a fetch used to drain the whole body and discard it,
 then say `Response is not HTML`, so a click could not fetch the file at all.
 
 **At the headers, the worker hands the fetch to the Download Manager.** In
-`br_nstep`, on the first receive after `br_ctfinish` has set `[br_nonhtml]`,
-the worker:
+`br_nstep`, on the first receive that ends the header block (`BN_BODY`) with
+`[br_nonhtml]` set, the worker:
 
 - checks that the status is 200, that the fetch is the top-level page (not a
   frame child), that it is not a POST (which a GET cannot repeat), and that it
   is still this fetch's (`br_gchk`);
-- if all hold, sets `[br_fin]` = 11, wakes the UI task, and fails the fetch
-  through `.fail` with `Not a page: saving it`. That closes the socket at
-  once instead of after the whole file.
+- if all hold, fails the fetch with `Not a page: saving it` (`BN_ERR`),
+  closes the socket at once instead of after the whole file, and only then
+  sets `[br_fin]` = 11 and wakes the UI task. Both are written before the
+  wake, so the wake always finds them.
+
+`[br_nonhtml]` is set where the Content-Type line ends, which can be mid
+header block. Until the blank line the worker keeps draining and parsing
+headers, so a `Content-Disposition` filename or a `Set-Cookie` after
+Content-Type still reaches the Download Manager.
 
 Any other status, a frame child or a POST keeps the old message.
 
@@ -132854,12 +132886,15 @@ does nothing.
 - It calls `br_dl_link` with `AX` = `FFFFh` on `br_ubuf`, the URL this
   fetch was for after any redirect. That is the route a `.zip` link takes in
   `br_go`: the Save dialog, then the Download Manager's own GET.
-- `br_go` had pushed the URL to the history and released the page before
-  it, so the entry is dropped and `br_hgo` brings the page back the way Back
-  does: bar resynced, no push. The page fetch and the download then run on
-  their own sockets.
-- With nothing before it in the history, the window stays empty with the
-  status said.
+- If `br_go` pushed the URL to the history (`[br_pushed]`, set by
+  `br_hpush`), it had released the page before it, so the entry is dropped
+  and `br_hgo` brings the page back the way Back does: bar resynced, no push.
+  The page fetch and the download then run on their own sockets.
+- With nothing before it in the history, or when this fetch pushed nothing
+  (Back, Forward, a History pick, Reload, or a URL store that refused), the
+  history is left as it is and the window stays empty with the status said.
+  The entry it stands on is the URL that answered the file, so fetching it
+  again would only answer the file again.
 
 The file is fetched twice, once cut at the headers, because the page fetch's
 receive claim is the page's and the Download Manager streams to disk with a

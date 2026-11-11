@@ -63,6 +63,7 @@ br_dl_exttab:       dw br_dl_ext_htm, br_dl_ext_html, br_dl_ext_cgi
 
 br_dl_s_nopart:     db 'Download Manager unavailable', 0
 br_dl_s_nocold:     db 'Browser part unavailable', 0
+br_dl_s_imgbusy:    db 'Busy decoding an image', 0
 
 ; =============================================================================
 ; THE DOWNLOAD MANAGER LIVES IN PART 0 (SPEC.md 71.20.5, roadmap S2)
@@ -110,8 +111,32 @@ br_dl_link:
 .refused:
     push si
     mov si, br_dl_s_nopart          ; no room for it, or BROWSER.O88 gone
+    call br_dl_why
     call br_errst
     pop si
+    ret
+
+; br_dl_why - SI = a part 0 refusal's message -> the decode's instead when a
+; decoder part (2 to 6) is in: with part 1 it holds the claims part 0 needed
+; (SPEC.md 71.23, rows 6 and 8), and that is not a missing file
+br_dl_why:
+    push ax
+    push cx
+    mov cl, 2
+.p:
+    mov al, cl
+    call op_seg
+    or ax, ax
+    jnz .busy
+    inc cl
+    cmp cl, 6
+    jbe .p
+    jmp short .out
+.busy:
+    mov si, br_dl_s_imgbusy
+.out:
+    pop cx
+    pop ax
     ret
 
 ; Also called by br_onwake, to reap a cancel whose manager was closed - which
@@ -255,6 +280,7 @@ br_dl_cold:
 .refused:
     push si
     mov si, br_dl_s_nocold          ; no room for it, or BROWSER.O88 gone
+    call br_dl_why
     call br_errst
     pop si
     stc

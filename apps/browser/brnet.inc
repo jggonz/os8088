@@ -270,6 +270,7 @@ br_go:
     mov byte [br_framecount], 0
     mov byte [br_frameidx], 0
     mov byte [br_framecut], 0
+    mov byte [br_pushed], 0         ; (br_hpush says if it stored this one)
     cmp byte [br_nopush], 0         ; the history, unless this trip IS
     jne .nohist                     ; the history: Back, Forward and Reload all
     call br_hpush                   ; come through here and none of them is a
@@ -737,7 +738,11 @@ br_nstep:
     jz .maybeend                    ; that is not ours any more
     call br_take                    ; ...CX bytes into the source claim
     cmp byte [br_nonhtml], 0        ; the headers are in and the body is not a
-    jne .handoff                    ; page: hand it to Downloads (SPEC.md 71.20.4)
+    je .parse                       ; page: hand it to Downloads (SPEC.md 71.20.4)
+    cmp byte [br_nstate], BN_BODY   ; - the whole header block, not the chunk
+    jne .out                        ; Content-Type ended in: a later line can
+    jmp short .handoff              ; still name the file or set a cookie
+.parse:
     call br_streamparse             ; parse the newly received safe prefix
     jmp .out
 .handoff:
@@ -749,11 +754,14 @@ br_nstep:
     jne .out
     call br_gchk                    ; still this fetch's, BEFORE br_fin is
     jc .out                         ; written: a newer one owns it otherwise
+    mov si, br_s_tosave             ; BN_ERR FIRST and the wake LAST: br_onwake
+    mov [br_nmsg], si               ; tests both, and a wake it ran between them
+    mov byte [br_nstate], BN_ERR    ; found BN_HEAD and dropped the hand-off
+    call br_hclose                  ; with nothing to post it again
     mov byte [br_fin], 11           ; br_onwake opens Downloads on br_ubuf - the
     mov bx, [br_win]                ; URL this fetch is for, after any redirect -
     call OSAPI_WM_WAKE              ; and the socket closes NOW, not after the
-    mov si, br_s_tosave             ; whole file was drained and thrown away
-    jmp .fail
+    jmp .redraw                     ; whole file was drained and thrown away
 .maybeend:
     call br_qstat                   ; NOTHING READ IS NOT AN END (netpkg.inc):
     jc .retry                       ; the end is NSK_CLOSING with nothing left

@@ -495,6 +495,22 @@ br_im_rs_pxload:
     clc
     retf
 .no:
+    mov al, 0                       ; REFUSED WITH PART 0 IN: the two share the
+    call op_seg                     ; claims table's last rows (SPEC.md 71.23),
+    or ax, ax                       ; so the alt box is said, not left to read
+    jz .quiet                       ; as a broken file
+    push si
+    push cx
+    push es
+    mov si, br_s_imgdl
+    mov cx, 90
+    push ds
+    pop es
+    call OSAPI_TOAST                ; ES:SI, CX ticks
+    pop es
+    pop cx
+    pop si
+.quiet:
     pop ax
     pop bp
     stc

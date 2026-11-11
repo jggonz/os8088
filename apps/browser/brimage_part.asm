@@ -3470,10 +3470,18 @@ bri_dec:
 
 ; bri_plans - each palette entry's plan (c1, c2, t) and 1bpp threshold into
 ; the part's own tables: PiXEL's search and threshold over the staged file's
-; RGB, white for the transparent entry, black past the palette. CF=1 stopped
+; RGB, white for the transparent entry, black past the palette. On a 1bpp
+; adapter the threshold alone: nothing there reads a plan. CF=1 stopped
 bri_plans:
     push es
+    push bp
     mov es, [cs:PXP_SELF]
+    mov byte [es:bri_pkey], RF_IDX  ; (the tables no longer hold a fixed set)
+    xor bp, bp                      ; BP = 1: 1bpp, the thresholds alone
+    cmp byte [br_bpp], 1
+    jne .colour
+    inc bp
+.colour:
     mov di, bri_ptab
     xor bx, bx
 .e:
@@ -3490,10 +3498,13 @@ bri_plans:
     push ds
     mov ds, cx
     push dx
+    or bp, bp
+    jnz .t1
     call pl_plan1                   ; AL = c1, AH = c2, DL = t
     mov [es:di], al
     mov [es:di+1], ah
     mov [es:di+2], dl
+.t1:
     call px_t1for                   ; AL = t1
     mov [es:bri_t1 + bx], al
     pop dx
@@ -3520,6 +3531,7 @@ bri_plans:
     jb .e
     clc
 .out:
+    pop bp
     pop es
     ret
 
@@ -4092,6 +4104,7 @@ bri_sh:     dw 0
 bri_rf:     db 0                    ; RF_*
 bri_nxt:    db 0                    ; K_NEXT has handed the file over
 bri_planed: db 0                    ; the plans are made
+bri_pkey:   db 0                    ; the fixed plans held: RF_*, +80h 1bpp
 bri_pxdp:   dw 0                    ; the decoder's scratch, paragraphs
 bri_pxrp:   dw 0                    ; the row buffer's
 bri_rseg:   dw 0                    ; ...and its segment

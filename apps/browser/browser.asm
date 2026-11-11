@@ -681,6 +681,8 @@ br_onwake:
     je .trimmed                     ; give their slack back (SPEC.md 71.18) -
     cmp byte [br_fin], 0            ; never under a worker that is still
     jne .trimmed                    ; writing them, nor mid-layout
+    cmp byte [br_nstate], BN_DONE   ; ...nor under the NEXT page's fetch: a
+    jne .trimmed                    ; trim owed to the last one is not its
     test byte [br_parse_started], BR_PARSE_LAYOUT
     jnz .trimmed
     mov byte [br_trimdue], 0
@@ -716,6 +718,8 @@ br_onwake:
     call OSAPI_GFX_LOCK             ; reset br_fin and left BN_ERR, so a stale
     mov ax, 0FFFFh                  ; wake does nothing
     call br_dl_link
+    cmp byte [br_pushed], 0         ; (only an entry THIS fetch pushed: Back,
+    je .unpage                      ; Reload or a refused store pushed none)
     mov bx, [br_histi]              ; ...and the FILE IS NOT A PLACE: br_go
     or bx, bx                       ; pushed it and released the page before
     jz .unpage                      ; it, so its entry goes and the page before
@@ -3749,6 +3753,7 @@ br_hpush:
     mov ax, [br_histn]
     mov [br_histi], ax
     inc word [br_histn]
+    mov byte [br_pushed], 1         ; (br_onwake's fin 11 drops only this)
 .nostore:
     pop es
     pop di
@@ -8072,6 +8077,7 @@ br_free_all:
     push dx
     push si
     call br_docems_release
+    mov byte [br_trimdue], 0        ; a trim owed to these arenas goes with them
     mov si, br_srcseg               ; the source, the document and the line
     call .one                       ; table, three words in a row...
     call .one
@@ -15931,6 +15937,7 @@ br_s_titlesfx_end:
 
 TOASTSTR br_s_big, 'Page too large'
 TOASTSTR br_s_bad, 'Cannot open page'
+TOASTSTR br_s_imgdl, 'No image during download'
 
                                 ; OS88UI_SBDRAG is at the TOP of this file, not
                                 ; here: SPEC.md 13.10.7.4
@@ -16222,6 +16229,7 @@ br_histn    equ br_swid + 2           ; word: entries in the stack
 br_histi    equ br_histn + 2          ; word: where we are in it
 br_nopush   equ br_histi + 2          ; byte: this br_go is a Back/Fwd/Reload
                                       ; and must not push
+br_pushed   equ br_nopush + 1         ; byte: ...and br_hpush DID push for it
 br_urlseg   equ br_nopush + 2         ; word: the URL STORE (SPEC.md 71.23) -
                                       ; the Back stack's BR_HISTN URLs and the
                                       ; bookmark file, out of the segment; 0

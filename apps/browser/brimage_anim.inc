@@ -614,6 +614,7 @@ bri_aload:
     mov ds, dx
     xor si, si
     mov di, bri_ptab
+    mov byte [es:bri_pkey], RF_IDX  ; (a GIF's own, now)
     mov cx, (256 * 3 + 256) / 2
     cld
     rep movsw

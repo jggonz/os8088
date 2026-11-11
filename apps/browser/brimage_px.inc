@@ -605,6 +605,7 @@ bri_sv_pal:
     call bri_gchk
     jc .ab
     call bri_pxplans
+    jc .ab
     pop ds
     clc
     retf
@@ -632,6 +633,7 @@ bri_sv_emit:
     call bri_gchk
     jc .ab
     call bri_pxplans
+    jc .ab
     push ds
     pop es
     push ax
@@ -682,6 +684,7 @@ bri_sv_scat:
     call bri_gchk
     jc .ab
     call bri_pxplans
+    jc .ab
     mov es, [cs:PXP_SELF]
     mov [es:bri_sx0], cl
     xor bx, bx                      ; the step's shift: CH is 1, 2, 4 or 8
@@ -769,6 +772,7 @@ bri_sv_cols:
     call bri_gchk
     jc .ab
     call bri_pxplans
+    jc .ab
     push es
     mov bp, es
     mov es, [cs:PXP_SELF]
@@ -1008,19 +1012,56 @@ bri_pplot:
 
 ; bri_pxplans - the plans, once a decode: [px_spal]'s entries (black past
 ; them) for an indexed picture, the 256 greys, or the cube's 216 points.
-; All kept
+; The greys' and the cube's are the same for every picture, so they are made
+; once a part 1 load and kept ([bri_pkey]); the greys' plans are the ones
+; PiXEL ships (px_plgrey). On a 1bpp adapter the thresholds alone: nothing
+; there reads a plan. CF=1 stopped, the plans not made. All kept
 bri_pxplans:
     cmp byte [cs:bri_planed], 0
-    jne .ret
+    je .make
+    clc
+    ret
+.make:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
+    push bp
     push es
     mov es, [cs:PXP_SELF]
-    mov byte [es:bri_planed], 1
+    xor bp, bp                      ; BP = 1: the thresholds alone
+    cmp byte [br_bpp], 1
+    jne .colour
+    inc bp
+.colour:
+    mov ah, [cs:bri_rf]             ; AH = the key, once these are made
+    cmp ah, RF_IDX
+    je .fresh                       ; a picture's own palette: every decode
+    or bp, bp
+    jz .key
+    or ah, 80h
+.key:
+    cmp ah, [cs:bri_pkey]
+    je .made                        ; the greys' or the cube's: still here
+.fresh:
+    mov byte [es:bri_pkey], RF_IDX  ; (none, until this finishes)
+    or bp, bp
+    jnz .go
+    cmp ah, RF_GREY
+    jne .go
+    push ds                         ; the greys' plans, as PiXEL ships them
+    mov ds, [cs:PXP_SELF]
+    mov si, px_plgrey
+    mov di, bri_ptab
+    mov cx, 768 / 2
+    cld
+    rep movsw
+    pop ds
+    inc bp                          ; ...so the thresholds alone
+.go:
+    push ax
     mov di, bri_ptab
     xor bx, bx
 .e:
@@ -1073,10 +1114,13 @@ bri_pxplans:
     push ds
     mov ds, [cs:PXP_SELF]
     push dx
+    or bp, bp
+    jnz .t1
     call pl_plan1                   ; AL = c1, AH = c2, DL = t
     mov [es:di], al
     mov [es:di+1], ah
     mov [es:di+2], dl
+.t1:
     call px_t1for                   ; AL = t1
     mov [es:bri_t1 + bx], al
     pop dx
@@ -1088,17 +1132,32 @@ bri_pxplans:
     mov byte [es:bri_t1 + bx], 0
 .n:
     add di, 3
+    test bl, 15
+    jnz .nx
+    call bri_gchk                   ; the stop, every sixteen
+    jc .stop
+.nx:
     inc bx
     cmp bx, 256
     jb .e
+    pop ax
+    mov [es:bri_pkey], ah           ; (RF_IDX: none kept)
+.made:
+    mov byte [es:bri_planed], 1
+    clc
+    jmp short .out
+.stop:
+    pop ax
+    stc
+.out:
     pop es
+    pop bp
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-.ret:
     ret
 
 bri_lv6:    db 0, 51, 102, 153, 204, 255
