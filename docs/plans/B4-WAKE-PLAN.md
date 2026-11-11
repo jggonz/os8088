@@ -32,12 +32,9 @@ Six commits on `speed-and-fix` after `256b0cac`:
    16-byte address block.
 3. **USBMOUSE** - the PicoMEM path (SLEEP `um_pmdetach`, WAKE
    `um_pmattach`, `[um_pm]` stepped down first, `[um_alive]` = 1 so a refused
-   wake's DETACH touches nothing). **The CH375 path refuses SLEEP and is
-   unloaded as before**: a park byte the worker honours, a second copy of
-   the CHECK_EXIST echo (attach's code is overwritten by `um_buf`), the
-   host-mode re-set and a re-enumeration - ESTIMATED 45-55 bytes and a worker
-   parked mid-transaction - to save a 3-sector reload (~0.05-0.1 s on a hard
-   disk).
+   wake's DETACH touches nothing). The CH375 path first refused SLEEP and
+   was unloaded as before (ESTIMATED 45-55 bytes and a worker parked
+   mid-transaction); **7. below took it, at +57 bytes.**
 4. **HTTPFS, VMMOUSE** - HTTPFS's WAKE **forgets its connection and KEEPS its
    index**, against the costing's "drop the index": `hf_fetch` starts from
    the root and the kernel moves inside a volume without an `FSV_CHDIR`, so a
@@ -51,6 +48,30 @@ Six commits on `speed-and-fix` after `256b0cac`:
    covering the deletes and every load still owed; `gfx_unlock` takes it off.
    Every kernel's `hbm_wake`, kern_mega's included.
 6. **The rows** - `b4ether`, `b4ethswap`, `b4lease` (tests/b4wake.py, below).
+7. **USBMOUSE's CH375 path** (the owner: *"it's one specific machine so it
+   matters less than others, but if it can work without costing a ton of
+   bytes it should"*; soft ceiling ~60). **Not a parked worker - a dead
+   one.** SLEEP raises DETACH's stop byte, so the worker leaves at a
+   transaction boundary by the path a detach already proves (`um_wait` and
+   `um_enum` give up on the byte; `.die` releases a held button, `ABORT_NAK`,
+   `RESET_ALL`), and then brings the byte back DOWN under the IF = 0 that
+   carries it into `drv_task`'s exit; SLEEP naps until it reads 0. The
+   picture then holds no task inside the image and a chip with nothing in
+   flight, and there is no park state to get wrong across a POST. WAKE is a
+   full re-init: `ABORT_NAK`, `CHECK_EXIST` (moved out of attach into a
+   resident `um_exist` both share - attach's code is `um_buf`), a READY
+   device refused so the reload's attach judges it as today (a BIOS's boot
+   flash drive), `US_IDLE` with `[um_nenum]` 0, and a new worker through
+   READY's own spawn (`um_alive` now a `mov`, not an `inc`, so trips cannot
+   wrap it). The declaration stays per driver (`OS88_DRV_WAKES`, header bit
+   15) and `t_drvverb`'s `WAKES` list already names USBMOUSE: both paths now
+   answer the pair, so nothing refuses at run time. **Bytes, MEASURED**:
+   1,464 -> **1,521 (+57)**, still 3 sectors (`DRVM_IMG_USBM`, 15 bytes of
+   slack); kernel 0. Attach's `.ok` moved above `.live` to keep `um_buf`'s
+   75 bytes clear of the code attach returns to. **Not on any emulator**:
+   none here carries a CH375 - the `usbmouse` row drives `ch375sim.inc` on
+   MartyPC, and no row hibernates that disk; the field is the first to see a
+   CH375 WAKE.
 
 **kern_mega keeps today's route** (`HBM_KEEPS` undefined, its sweep byte for
 byte): the costing suggested that for drivers placed above 1MB, and every
@@ -68,7 +89,7 @@ PCIETHER there would leak a ring per trip.
 | kernel resident, kern_big / kern_small / kern_emu / kern_mega | | | **0** (`kernsize --json` identical; `kernel.bin` the same length on all four, the build number apart) |
 | ETHER.DRV image + bss | 17,345 | 17,510 | **+165**; file 11,040 -> 11,152. **The claim crosses its rung, 34 -> 35 sectors** (`DRVM_IMG_ETH`): +512 bytes of heap while it is loaded. No cheap 102-byte trim was found; dropping `os88_ent`/`ep_bp` from the two verbs is ~12 |
 | PCIETHER.DRV image + bss | 17,014 | 17,179 | +165, 34 sectors |
-| USBMOUSE.DRV | 1,431 | 1,464 | +33, 3 sectors |
+| USBMOUSE.DRV | 1,431 | 1,464 | +33, 3 sectors; the CH375 path (7.) 1,521, +57 more, still 3 |
 | HTTPFS.DRV image + bss | 5,539 | 5,553 | +14, 11 sectors |
 | VMMOUSE.DRV (kern_emu) | 362 | 375 | +13, 1 sector |
 | HIBER.DRV kern_big / kern_emu | 7,567 | 7,715 | +148 (keep branch, `hbm_wakem`, the clock), 22 sectors |
@@ -84,11 +105,11 @@ Per kept driver, on BOTH routes (the resume and the DOS return run the same
 | driver | hard disk | floppy-booted |
 |---|---|---|
 | ETHER / PCIETHER | **~0.3-0.5 s + the DHCP wait** (READY's `eth_dhcp_wait`: typically 0.2-2 s, up to `DHCP_WAIT` 6.0 s with no server - never measured on the iron) | ~1.0-1.3 s + the DHCP wait |
-| USBMOUSE (PicoMEM) | ~0.05-0.1 s | ~0.4-0.8 s |
+| USBMOUSE (PicoMEM, and the CH375 since 7.; the CH375's re-enumeration is the worker's, after the desktop, as at a reload) | ~0.05-0.1 s | ~0.4-0.8 s |
 | HTTPFS | ~0.1-0.15 s (a 3.6KB file, ~0.03 s decode) | ~0.4-0.8 s |
 | VMMOUSE (kern_emu, a VM) | negligible - and the pointer now works after a resume | |
 
-On top of that, the stall moves: what is still read (SOUND, a CH375 mouse, a
+On top of that, the stall moves: what is still read (SOUND, a
 refused wake, a suspend's rows) is read behind the busy pointer rather than
 behind a desktop that looks ready.
 

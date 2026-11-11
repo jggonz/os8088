@@ -18915,6 +18915,15 @@ and **`RESET_ALL`** — the chip back in device mode as it powered up, so the
 BIOS after an `int 19h` finds what it expects — and exits. A detach with no
 worker resets the chip itself.
 
+**`DRVV_SLEEP` / `DRVV_WAKE`** (§51.2.5): a hibernate or a DOS trip keeps the
+image. SLEEP is DETACH's stop byte plus the wait — the worker leaves by the
+path above and, its last act under the IF = 0 that carries it into its exit,
+brings the byte back down, which is what SLEEP waits on. WAKE re-runs no
+attach (its code is `um_buf` by then): `ABORT_NAK`, `CHECK_EXIST` (`um_exist`,
+resident and shared with attach), a READY device refused for the reload's
+attach to judge, the state back to `US_IDLE`, and a new worker — a full
+re-enumeration, since a POST or a DOS program may have reset or used the chip.
+
 #### 9.12.4 Not done
 
 - **Not verified on a Book8088.** No emulator in this tree carries a CH375
@@ -19079,8 +19088,9 @@ what is left is the protocol. Three things bought most of it:
   read, and the 36-byte table and the name it pointed at — 46 bytes loaded and
   never looked at — are gone. `DSV_NAME` was read nowhere anyway.
 - **The buffer lives over attach.** Attach runs once per image (`drv_load`
-  reads the image and attaches it; a reload, hibernate's included, is a fresh
-  read), so its code is free memory the moment it returns. The 64-byte
+  reads the image and attaches it; a reload is a fresh read, and a hibernate's
+  WAKE re-runs no attach, §9.12.3), so its code is free memory the moment it
+  returns. The 64-byte
   descriptor and report buffer, and 11 bytes of state that are always written
   before they are read, sit on top of it. The one read that happens while
   attach is still running is attach's own, and it returns to a label past the
@@ -105016,7 +105026,8 @@ sweep is today's, byte for byte.
 | driver | SLEEP | WAKE |
 |---|---|---|
 | `ETHER.DRV`, `PCIETHER.DRV` (one `ethdrv.inc`) | the card's mutex HELD, every socket RST (`eth_dropall`), the card stopped (`nic_stop`: the RTL8139's bus master off, its ring claim freed) | the card found again at `[eth_base]` (NE2000) or on the PCI bus with its ring claimed afresh (RTL8139, whose BAR may move across a POST), `nic_init`, the MAC compared (another card is CF=1), the ARP cache forgotten, the mutex freed - and **the lease kept**: one non-blocking RFC 2131 INIT-REBOOT `DHCPREQUEST` for the address it holds (§72.5.3). An ACK keeps it, a NAK starts the ordinary DISCOVER, and silence keeps it |
-| `USBMOUSE.DRV`, the PicoMEM path (§9.12.7) | `um_pmdetach`: the card's mouse off, int 33h given back | `um_pmattach`: the card detected, int 33h hooked, the mouse on; a refusal leaves DETACH touching nothing. The CH375 path REFUSES SLEEP and is unloaded as before (its worker and its USB enumeration are not worth the bytes, B4-WAKE-PLAN) |
+| `USBMOUSE.DRV`, the PicoMEM path (§9.12.7) | `um_pmdetach`: the card's mouse off, int 33h given back | `um_pmattach`: the card detected, int 33h hooked, the mouse on; a refusal leaves DETACH touching nothing |
+| `USBMOUSE.DRV`, the CH375 path (§9.12.3) | DETACH's stop byte, then the wait `drv_unload` would do: the WORKER EXITS at a transaction boundary (a held button released, `ABORT_NAK`, `RESET_ALL` - device mode, bus released) and brings the byte back down under the IF = 0 that carries it into `drv_task`'s exit, so the picture holds no task in the image and a chip with nothing in flight. Nothing hooks a vector on this path | a FULL re-init whatever came between: `ABORT_NAK`, `CHECK_EXIST` as the identity, and attach's own question - a device the chip calls READY was configured by somebody (a BIOS serving a boot flash drive), so CF = 1 and the reload's attach reads its descriptor and decides. Then `US_IDLE` with a fresh set of enumerations and a NEW worker, which sets host mode and enumerates. A refusal leaves `[um_alive]` 1 and no worker, so DETACH touches nothing |
 | `HTTPFS.DRV` (§122) | nothing: no hardware | its kept connection FORGOTTEN, not aborted - the card's sleep reset every socket and its slot may be somebody else's now. The index, the volume and the folder the user stands in stay: dropping the index would put the driver at the root under a window standing in a folder (`hf_fetch` starts there, and the kernel moves inside a volume without a chdir) |
 | `VMMOUSE.DRV` (kern_emu, §9.11) | the aux stream stopped (`vmm_detach`, 0xF5) | the backdoor re-armed - `vmm_probe` under `vmm_atom` and the 8042's 0xF4/0xF5 - which is its attach: a resumed QEMU or VMware has reset the device, and before B4 the reload read the image back and attached nothing. It NEVER refuses: a host with no backdoor now is a still pointer either way, and a refusal would unload the row under a standing `[vmm_on]` |
 
