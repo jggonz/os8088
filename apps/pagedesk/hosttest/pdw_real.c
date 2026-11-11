@@ -268,6 +268,14 @@ int main(int argc, char **argv)
         printf("PDW-NEST X2.PDF\n");
     }
 
+    {
+        /* F30: a create refused by the volume (a name it cannot hold; here a folder that is not there) is a WRITE failure, not a read one */
+        cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF for the write-failure check"); wrt_init(); es_reset();
+        es_new(PDA_NOTE, 0, 10, 10, 20, 20); E.colour = PDC_RED; es_text("x"); es_add();
+        r = save("NODIR/Z.PDF");
+        CK(r == PDE_WRITE && access(PDW_TEMPNAME, F_OK) != 0, "a refused create answers PDE_WRITE (%u), not PDE_IO, and leaves no temp file", r);
+    }
     /* ---- Insert (PAGEDESK-SPEC 20.16): pages of two other PDFs whose object numbers and font names
        COLLIDE with PAGES.PDF's, one of them in another folder; the refusals; the rollbacks ---- */
     {   unsigned map[12]; static struct pdxb_pageinfo q; int j; char cwd[200];

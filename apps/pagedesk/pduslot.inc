@@ -343,12 +343,15 @@ pdu_home_rd:
     cmp ax, PDE_IO
     jne .q
     push ax
+    mov byte [_pdu_dskout], 1       ; QA F21: the open's card says it too
     mov si, pd_s_disk
     call op_say
     pop ax
 .q:
     ret
 TOASTSTR pd_s_disk, 'Insert the PageDesk disk'
+TOASTSTR pd_s_panmem, 'Panels wait for memory'
+TOASTSTR pd_s_rcmem, 'Recovery waits: memory'
 
 ; sl_fetch - [sl_row]/[sl_len] = a lazy module row, AX = the segment it is
 ; expanded onto, DX = its magic. Read from the launch folder (3.1's bracket)
@@ -1278,15 +1281,29 @@ pdu_ovl_room:
 
 ; pdu_ovl_fail - crt0's CC_OVL_FAIL: the overlay's fetch was refused and SI
 ; is the SDK's toast. A READ refused (the program disk is out of its drive,
-; the 360 KB pair's swap, QA F21) is said as pdu_home_rd says it; memory
-; and the rest keep the SDK's words. The user puts the disk back and does
-; the same thing again: the next ovl_ call fetches it (20.22.2.4 step 4)
+; the 360 KB pair's swap, QA F21) is said as pdu_home_rd says it. Memory
+; refused to the side panels' idle work says what waits; memory refused to
+; anything the user asked for, and the rest, keep the SDK's words. The user
+; puts the disk back and does the same thing again: the next ovl_ call
+; fetches it (20.22.2.4 step 4)
 pdu_ovl_fail:
     cmp si, op_s_read
     je .d
     cmp si, op_s_disk
-    jne .r
+    je .d
+    cmp si, op_s_mem                ; memory, refused to idle work - the
+    jne .r                          ; thumbnails' or the notes' (1), the
+    mov al, [_pdu_ovidle]           ; recovery look after an open (2): the
+    or al, al                       ; page is drawn, so the toast says what
+    jz .r                           ; waits rather than a bare refusal
+    mov si, pd_s_panmem
+    dec al
+    jz .s
+    mov si, pd_s_rcmem
+.s:
+    jmp op_say
 .d:
+    mov byte [_pdu_dskout], 1       ; QA F21: the open's card says it too
     mov si, pd_s_disk
     jmp op_say
 .r:
@@ -1930,12 +1947,32 @@ _pdu_mod_launch:
     push ax
     call _pdu_mcall
     add sp, 10
-    mov ax, PD_XB_BYTES / 16
+    call bk_size                    ; QA R26: the XB, the held keys and the
+    mov ax, 0                       ; bank are ONE claim - each was its own,
+    jc .nbk                         ; and with W and the overlay a decoder's
+    lea ax, [di+PDU_BAND_P]         ; slot was a NINTH (MEM_OWNER_MAX 8)
+.nbk:
+    push ax
+    add ax, (PD_XB_BYTES + 512) / 16
     call pd_claimhi
+    pop cx
     mov [_pdu_xb], ax
     mov si, ml_nomem
     or ax, ax
     jz .toast                       ; nothing to give back yet
+    add ax, PD_XB_BYTES / 16
+    mov [_pdu_kseg], ax             ; the keys (20.22.2.10): none yet
+    jcxz .nb2
+    add ax, 512 / 16
+    mov [bk_base], ax               ; the bank's (pdu_bank_load)
+.nb2:
+    push es
+    mov es, [_pdu_kseg]
+    xor di, di
+    xor ax, ax
+    mov cx, 256
+    rep stosw
+    pop es
     push es
     push ds
     pop es
@@ -2006,6 +2043,48 @@ _pdu_mod_launch:
 ; =============================================================================
 PDU_PART_RES_A  equ 4               ; pdu.h's PDU_PART_RES; RES2 is the next
 PDU_BAND_P      equ 2304 / 16       ; pdkit.inc's band: 96 x 24
+; bk_size - the bank's rows (20.22.14): DI = the INDEX + kit read's
+; paragraphs, SI = the INDEX's bytes, [bk_para] row 5's; CF and AX = a PDE_*
+; when there is no bank. No disk (pdu_part_need is pdu_pgeo's arithmetic)
+bk_size:
+    mov al, PDU_PART_RES_A
+    call op_row
+    mov cx, [si+OP_R_LEN]           ; the INDEX, UNPACKED (20.22.14): the
+    mov ax, PDE_NOTFOUND            ; strike region's offset in PDRES
+    jcxz .no
+    mov ax, PDE_LIMIT               ; a paragraph multiple, and a read the
+    test cl, 15                     ; INDEX claim was sized for
+    jnz .no
+    cmp cx, [_pdu_rescap]
+    ja .no
+    push cx
+    mov al, PDU_PART_RES_A + 1
+    call op_row
+    mov di, [si+OP_R_OFF]           ; row 5's paragraph...
+    pop si                          ; SI = the INDEX's length, the read
+    mov dx, si
+    mov cl, 4
+    shr dx, cl
+    mov ax, PDE_LIMIT
+    sub di, dx                      ; ...less the INDEX's: PDRES byte 0, where
+    jbe .no                         ; every strike offset counts from (D3)
+    mov [bk_para], di
+    push si
+    mov ax, PDU_PART_RES_A
+    push ax
+    call _pdu_part_need
+    pop cx
+    pop cx
+    mov di, ax                      ; need
+    or ax, ax
+    mov ax, PDE_IO
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
 _pdu_bank_load:
     push si
     push di
@@ -2017,43 +2096,11 @@ _pdu_bank_load:
     pop si
     ret
 .go:
-    mov al, PDU_PART_RES_A
-    call op_row
-    mov cx, [si+OP_R_LEN]           ; the INDEX, UNPACKED (20.22.14): the
-    mov ax, PDE_NOTFOUND            ; strike region's offset in PDRES
-    jcxz .out
-    mov ax, PDE_LIMIT               ; a paragraph multiple, and a read the
-    test cl, 15                     ; INDEX claim was sized for
-    jnz .out
-    cmp cx, [_pdu_rescap]
-    ja .out
-    push cx
-    mov al, PDU_PART_RES_A + 1
-    call op_row
-    mov di, [si+OP_R_OFF]           ; row 5's paragraph...
-    pop si                          ; SI = the INDEX's length, the read
-    mov dx, si
-    mov cl, 4
-    shr dx, cl
-    mov ax, PDE_LIMIT
-    sub di, dx                      ; ...less the INDEX's: PDRES byte 0, where
-    jbe .out                        ; every strike offset counts from (D3)
-    mov [bk_para], di
-    push si
-    mov ax, PDU_PART_RES_A
-    push ax
-    call _pdu_part_need
-    pop cx
-    pop cx
-    mov di, ax                      ; need
-    or ax, ax
-    mov ax, PDE_IO
-    jz .out
-    lea ax, [di+PDU_BAND_P]
-    call pd_claimhi
-    mov dx, ax
-    or ax, ax
+    call bk_size
+    jc .out
+    mov dx, [bk_base]               ; carved at launch under the XB (QA R26)
     mov ax, PDE_NOMEM
+    or dx, dx
     jz .out
     mov [_pdu_bankraw], dx
     mov ax, PDU_BAND_P
@@ -2271,8 +2318,11 @@ alignb 2
 rd_clus:        resw 1              ; pdu_home_rd's folder to go back to
 rd_vol:         resw 1
 bk_para:        resw 1              ; pdu_bank_load
+bk_base:        resw 1              ; the bank's segment in the XB claim (QA R26)
+_pdu_dskout:    resb 1              ; a program-disk read failed since the open began
+alignb 2
 bk_band:        resw 1
-_pdu_kseg:      resw 1              ; the held keys' claim (pdovlplat.c)
+_pdu_kseg:      resw 1              ; the held keys: 512 bytes of the XB claim (pdovlplat.c)
 sl_mag:         resw 1
 sl_dir:         resw 1
 sl_msk:         resw 1

@@ -8,17 +8,28 @@ behaviour from a fast-emulator demonstration. QEMU cannot say it: its CPU is
 a 386 and its clock is the host's. MartyPC is cycle-exact against the field
 5150, so this row is the instrument - one machine per adapter MartyPC has,
 each with EXACTLY 640 KiB (conventional.size = 0xA0000), no EMS, no XMS, no
-FPU, two 360 KB drives and the shipped kern_big system disk with no SYSTEM.CFG
-(so no driver is wanted - the minimal ordinary set):
+FPU, an 80-cylinder 720 KB B: and the shipped kern_big system disk with no
+SYSTEM.CFG (so no driver is wanted - the minimal ordinary set):
 
-    vga    os8088_xt_vga         an IBM 5160 (8088, 4.77 MHz) with a VGA
-    cga    os8088_5150_cga_gla   a 5150 with a CGA
-    herc   os8088_5150_herc_gla  a 5150 with a REAL Hercules card at B000h -
-                                 QEMU's HERCSEG harness cannot host PageDesk,
-                                 whose heap overruns the fake framebuffer
-                                 (docs/HERCULES-TESTING.md)
+    vga    os8088_xt_vga_720b        an IBM 5160 (8088, 4.77 MHz) with a VGA;
+                                     A: 360 KB, B: 720 KB
+    cga    os8088_5150_cga_720b_gla  a 5150 with a CGA; A: 360 KB, B: 720 KB
+    herc   os8088_5150_herc_720_gla  a 5150 with a REAL Hercules card at
+                                     B000h; both drives 720 KB, so A: is the
+                                     720 KB system disk - the tree has no
+                                     Hercules 5150 with a 360 KB A: and an
+                                     80-cylinder B:. QEMU's HERCSEG harness
+                                     cannot host PageDesk, whose heap overruns
+                                     the fake framebuffer
+                                     (docs/HERCULES-TESTING.md)
 
-B: is `make pagedeskdisk`'s 360 KB disk. On each machine the row:
+B: is `make pagedeskdisk`'s 720 KB disk, `pagedesk720.img`: the program and
+every sample on one floppy (DECISIONS 07:22). The 360 KB set is a PAIR whose
+first disk holds the program and its font licence and nothing else
+(PAGEDESK-SPEC 20.22.2.8), so neither document this row opens is on it, and
+a 720 KB image in a 40-cylinder drive reads only its first half. Each machine
+is its 360 KB profile with the B: drive changed and 640 KiB as before. On each
+machine the row:
 
   1. fills task 0's stack below its sleeping SP with 0xCC (tests/stk0water.py's
      method, which owns the explanation of every step of it);
@@ -98,12 +109,11 @@ import os88ui                                               # noqa: E402
 from os88fixture import need                                # noqa: E402
 
 HZ = M.GUEST_HZ
-SYSIMG = "build/os8088-360.img"
-APPIMG = "build/pagedesk360.img"
-MACHINES = collections.OrderedDict((
-    ("vga", "os8088_xt_vga"),
-    ("cga", "os8088_5150_cga_gla"),
-    ("herc", "os8088_5150_herc_gla"),
+APPIMG = "build/pagedesk720.img"     # every sample; DECISIONS 07:22
+MACHINES = collections.OrderedDict((   # name: (machine, its A: system disk)
+    ("vga", ("os8088_xt_vga_720b", "build/os8088-360.img")),
+    ("cga", ("os8088_5150_cga_720b_gla", "build/os8088-360.img")),
+    ("herc", ("os8088_5150_herc_720_gla", "build/os8088-720.img")),
 ))
 RESERVE = 32 * 1024                 # PAGEDESK_PROMPT 3: >= 32 KiB unclaimed
 UI_STACK_MAX = 384                  # D22 item 1
@@ -234,7 +244,11 @@ class Leg(object):
     """PageDesk on one adapter; every number lands in self.rows."""
 
     def __init__(self, name, machine, P):
-        self.name, self.machine, self.P = name, machine, P
+        # (machine, A: system disk) from MACHINES; tests/pagedesk.py's QLeg
+        # passes a bare "qemu" and boots its own disks
+        self.machine, self.sysimg = (machine if isinstance(machine, tuple)
+                                     else (machine, None))
+        self.name, self.P = name, P
         self.rows = []              # (what, guest seconds, heap min, note)
         self.fails = []
         self.notes = []
@@ -457,7 +471,7 @@ class Leg(object):
     # --- the session --------------------------------------------------------
     def run(self):
         import os88sym
-        with os88ui.boot(SYSIMG, apps=APPIMG, machine=self.machine,
+        with os88ui.boot(self.sysimg, apps=APPIMG, machine=self.machine,
                          quick=True, verbose=False) as ui:
             self.ui, self.m = ui, ui.m
             self.eq = os88sym.equates(())
@@ -711,7 +725,8 @@ def main():
     _hdr_consts()
     # ONCE, before any thread: `need` runs `make` when an image is stale, and
     # three makes of one target at once in one tree fail two of them
-    need(SYSIMG)
+    for n in (a.only or MACHINES):
+        need(MACHINES[n][1])
     need(APPIMG)
     P = pkg_syms()
     legs = [Leg(n, MACHINES[n], P) for n in (a.only or MACHINES)]

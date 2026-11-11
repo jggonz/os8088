@@ -39,7 +39,7 @@ static pdw h_put(FILE *f, pdw seg, pdw off, pdw n)
         if ((long)n > pdw_host_budget) { pdw_host_budget = 0; return PDE_DISKFULL; }
         pdw_host_budget -= (long)n;
     }
-    if (fwrite(pd_host_mem + (((unsigned long)seg << 4) + off), 1, n, f) != n) return PDE_IO;
+    if (fwrite(pd_host_mem + (((unsigned long)seg << 4) + off), 1, n, f) != n) return PDE_WRITE;
     return PDE_OK;
 }
 pdw pdw_io_create(const char *name, pdw seg, pdw off, pdw n)
@@ -49,14 +49,14 @@ pdw pdw_io_create(const char *name, pdw seg, pdw off, pdw n)
     if (h_out) fclose(h_out);
     h_out = fopen(name, "wb");
     h_short = 0;
-    if (!h_out) return PDE_IO;
+    if (!h_out) return PDE_WRITE;
     if (n % pdw_host_clu) h_short = 1;
     return h_put(h_out, seg, off, n);
 }
 pdw pdw_io_append(const char *name, pdw seg, pdw off, pdw n)
 {
     (void)name; pdw_host_calls++;
-    if (!h_out) return PDE_IO;
+    if (!h_out) return PDE_WRITE;
     if (h_short) pdw_host_viol++;
     if (n % pdw_host_clu) h_short = 1;
     return h_put(h_out, seg, off, n);
@@ -65,7 +65,7 @@ pdw pdw_io_close(const char *name)
 {
     (void)name; pdw_host_calls++;
     if (h_out && pdw_host_tamper) { fseek(h_out, -4, SEEK_END); fputs("XXX\n", h_out); }
-    if (h_out) { if (fclose(h_out)) { h_out = 0; return PDE_IO; } h_out = 0; }
+    if (h_out) { if (fclose(h_out)) { h_out = 0; return PDE_WRITE; } h_out = 0; }
     return PDE_OK;
 }
 pdw   pdw_host_delfail;         /* 1 = deleting anything but the temp file fails (a read-only target) */
@@ -79,7 +79,7 @@ pdw pdw_io_rename(const char *from, const char *to)
 {
     FILE *t = fopen(to, "rb");
     if (t) { fclose(t); return PDE_EXISTS; }
-    return rename(from, to) ? PDE_IO : PDE_OK;
+    return rename(from, to) ? PDE_WRITE : PDE_OK;
 }
 void pdw_cross(pdw clus, pdw vol) { (void)clus; h_cross = vol != 0; }
 char  pdw_host_fdir[4][128];    /* Insert: the folder of foreign slot clus (clus 1-3); empty = the current one */
@@ -134,6 +134,11 @@ pdw pdw_ferr(void)
     default:                                     return PDE_IO;
     }
 }
+static pdw pdw_ferrw(void)              /* the same, for the OUTPUT: a refusal that is none of those is a WRITE failure (F30) */
+{
+    pdw r = pdw_ferr();
+    return r == PDE_IO ? PDE_WRITE : r;
+}
 static struct os88_place g_tpl;         /* the TARGET's folder (D14)                 */
 static pdw      g_cross, g_scl, g_svol;
 void pdw_cross(pdw clus, pdw vol)       /* 20.11.3: src_vol is the volume + 1, 0 = one folder */
@@ -158,29 +163,29 @@ pdw pdw_io_clu(void)                    /* 0 = unknown; 0xFFFF = past 16 KiB */
 pdw pdw_io_create(const char *name, pdw seg, pdw off, pdw n)
 {
     g_tok = 0; g_seq = 0;
-    if (os88_file_write_segoff(name, seg, off, n)) return pdw_ferr();
+    if (os88_file_write_segoff(name, seg, off, n)) return pdw_ferrw();
     return PDE_OK;
 }
 pdw pdw_io_append(const char *name, pdw seg, pdw off, pdw n)
 {
     g_seq = 1;
-    if (os88_file_write_seq(name, seg, off, n, 1, &g_tok)) return pdw_ferr();
+    if (os88_file_write_seq(name, seg, off, n, 1, &g_tok)) return pdw_ferrw();
     return PDE_OK;
 }
 pdw pdw_io_close(const char *name)
 {
     if (!g_seq) return PDE_OK;             /* a one-write file has nothing held */
     g_seq = 0;
-    if (os88_file_write_seq(name, 0, 0, 0, 1, &g_tok)) return pdw_ferr();
+    if (os88_file_write_seq(name, 0, 0, 0, 1, &g_tok)) return pdw_ferrw();
     return PDE_OK;
 }
 pdw pdw_io_delete(const char *name)
 {
-    return os88_file_delete(name) ? pdw_ferr() : PDE_OK;
+    return os88_file_delete(name) ? pdw_ferrw() : PDE_OK;
 }
 pdw pdw_io_rename(const char *from, const char *to)
 {
-    return os88_file_rename(from, to) ? pdw_ferr() : PDE_OK;
+    return os88_file_rename(from, to) ? pdw_ferrw() : PDE_OK;
 }
 pdw pdw_src_open(const char *name)
 {

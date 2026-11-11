@@ -149,6 +149,11 @@ static int pdu_popcls;                  /* pducmd.c: a popover close owed to the
 static int pdu_popdmg_on;               /* pducmd.c: a switch's repaint is owed */
 static int pdu_popown;                  /* pducmd.c: a new popover's paint is owed */
 static int pdu_rabort;                  /* pdujob.c: PDREND owes an abort (pdu_rend_sync) */
+/* QA F31: the document's file changed on the disk under it (a save found
+ * PDE_CHANGED). Nothing reads the file again until another is opened: a
+ * render of the changed bytes called the user's file damaged and blanked
+ * the page. 1 = just found (the save's sentence stands), 2 = said again */
+static char pdu_stale;
 static struct os88_rect pdu_popdmg;
 static void pdu_render_want(struct os88_rect *r);
 static void pdu_canvas_full(void);
@@ -184,7 +189,8 @@ int  pdu_mod_launch(void);              /* launch: modules, XB, INIT, bank */
 static unsigned ovl_au_slice(int start); /* pdovlplat.c: an encrypted open's key */
 static void pdu_pop_close_soon(void); /* pducmd.c: the job abort closes an ask */
 static int  ovl_ifl_step(void);          /* pdovlplat.c: the Insert's pre-flight */
-extern unsigned pdu_kseg;               /* pduslot.inc: the held keys' claim */
+extern char pdu_dskout;                 /* pduslot.inc: the program disk was out (QA F21) */
+extern unsigned pdu_kseg;               /* pduslot.inc: the held keys, 512 bytes of the XB's claim (QA R26) */
 #define PDU_KS_WKEYS 0                  /* in it: pdxb_wkeys (134 bytes), PDV_WRT_KEYS's */
 #define PDU_KS_OWN   136                /* the document's pdxb_wkey */
 #define PDU_KS_OWNID 180                /* ...and its /ID[0]'s first 16 bytes */

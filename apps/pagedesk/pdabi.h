@@ -702,6 +702,7 @@ struct pdxb_reslookup_x {   /* RES_LOOKUP's exchange block, extended: the verb
                                  unchanged is still PDRC_PLAIN: the engine compares (mode & 0xFF) */
 #define PDV_KEY_PARAMS 0xC3 /* XB: pdxb_crypt out: the file's /Encrypt parameters, no password tried (tests, the R6 question) */
 /* [wrt 20.22.4]    */
+#define PDE_WRITE 54        /* a create / write / close / rename of the OUTPUT refused for a reason that is not full, protected or exists (F30) */
 #define PDV_WRT_KEYS        0x85 /* BX=XB seg. XB: pdxb_wkeys in. After PDV_WRT_INIT,
                                     before the job: the keys of the ENCRYPTED foreign
                                     files an Insert reads (plat's pre-flight, 20.22.4.5) */
@@ -939,6 +940,8 @@ struct pdxb_x8row {         /* pdr_ip's x0 .. inv, in that order            */
 #define PDFG_BLOCK  0x0004      /* in: a STRIKE BLOCK request (below): PDXF finds or makes the block of
                                    (font, em64 >> 6), then the code's slot in it, rasterises (em64 != 0)
                                    and records the width and the Latin byte; answers the slot and block */
+#define PDFG_NOPROG 0x0020      /* in: the font is known to have no usable program (PDREND draws it in the
+                                   substitute face): PDXF reads its tables, never the program (QA R13) */
 #define PDFB_SIZE   4096        /* a strike block: 128 glyph records (4 bytes: width, left bearing i8,
                                    bitmap offset u16), the bitmaps from +512 (the PDFB strike layout of
                                    11.2, slots 1..128, the record of slot s at (s-1)*4; the u16 next

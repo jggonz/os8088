@@ -729,7 +729,34 @@ shed. D28 raised VGA's in-save trough from 5.5 KiB. The rows below are the
 design budget; the claims as measured are the row's printout
 (`python3 tools/os88test.py soak -v -k pagedeskxt`).
 
-### 16.2 Claims
+**The floor where the reserve does not hold (QA F24, measured on MartyPC,
+5150 Hercules 640 KiB, 720 KiB B:, 2026-11-10).** Every claim PageDesk sizes
+itself keeps PD-29's 32 KiB: W (`sl_wsize`), a W regrown for a decoder's
+`PDMEM_SLOT` (`sl_grow`), a region (`pdu_region`) and the second Flate slot.
+What it cannot size is an occupant's IMAGE, and the open's fixed claims leave
+less than an occupant plus 32 KiB beside the overlay:
+
+| claim | KiB |
+|---|---|
+| the instance (primary image + bss) | 63.0 |
+| the carve: PDENG, PDREND and PDRENDC | 145.5 |
+| XB and the bank | 17.0 |
+| A and B (block cache, arena, display list, edit store, one or two Flate slots) | 180.0 |
+| the overlay | 52.5 |
+| S: PDXK (an encrypted open) / PDXI (JBIG2, CCITT) | 22.0 / 65.0 |
+
+of 546 KiB of heap - 523 with PDXI in S, and the desktop's instance and the
+kernel's purgeable caches hold most of the rest. Measured: at `A256R6.PDF`'s R6 question (PDXK in S, two
+Flate slots) **16.5 KiB unclaimed, 31.5 KiB with the caches shed**; with
+`JB2TEXT.PDF`'s page drawn, 74 KiB, falling to **9.0 KiB (13.5 with the caches
+shed)** while the Pages panel's thumbnail loads PDXI again. QA's run at
+3061605fe recorded 32,256 bytes, 32,256 bytes and a 23,552-byte trough in the
+same places. Keeping the reserve beside S as W does would release the overlay
+before each occupant load, and the next `ovl_` call reads its 52.5 KiB back off
+the floppy - the reserve held for a moment and paid for with a disk read per
+image page, so it is not done. The room is OI-1's: a display list sized to the
+page shrinks B, which is the one claim here that is larger than its page needs.
+
 
 | claim | owner | size | when |
 |---|---|---|---|
@@ -2210,7 +2237,15 @@ SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
    folder needs the primary to copy across folders (or the module to hop the
    current directory between the source read and the write), which is not built.
 3. **14.4 `PDE_CHANGED`**: the primary holds the open-time fingerprint and the
-   writer compares it with `FINGERPRINT` at `job_begin`.
+   writer compares it with `FINGERPRINT` at `job_begin`. **A refused save makes
+   the document STALE (QA F31)**: `pdu_stale` is set by the fingerprint check
+   and by a save answered `PDE_CHANGED`, and cleared by the next open. A stale
+   document is never handed to PDREND again - its offsets describe a file that
+   is no longer there - so a page load answers `PDE_CHANGED`, a draw paints
+   paper, and navigation owes nothing. The refusal (`Could not save X: The
+   file changed since it was opened.`) stays on the status line; the first
+   draw after it says `Could not draw the page: The file changed since it was
+   opened.` once, and never "damaged". The cure is to open the file again.
 4. **14.2 step 4 through PDENG**: re-reading the trailer and three new objects
    needs a second open document in PDENG (or a re-open after the rename);
    `pdw_real.c` does the re-open on the host.
@@ -2833,7 +2868,15 @@ records and review replies are in no other filter.
 
 **Source annotations** (`ovl_nt_srcload`, once a page, when the panel or the
 popover shows it and no job runs - an `ANNOTS` call moves the engine's object
-state): the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
+state - or between two slices of the thumbnail job when the overlay is
+already in: PDREND keeps a thumbnail's state in its own globals and the XB
+holds only `pdxb_thumb`, which `ovl_th_step` writes back before every slice,
+and its content streams are contexts of their own, which its resource lookups
+already interleave with. So a long document, or an XT, lists the shown
+page's notes while its thumbnails are still drawing, instead of showing
+`Reading notes...` until they end (QA R6, F27). It never fetches the overlay
+for this, which could make the slot occupant give its claims back mid-job):
+the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
 listed (Text, Highlight/Underline/Squiggly/StrikeOut, FreeText, Ink, Line,
 Square, Circle - `Link`, `Popup`, `Stamp`, `Widget`, `Caret`,
 `FileAttachment`, `TrapNet` and the rest are not), each with its
@@ -5087,14 +5130,26 @@ taken at the first `PDE_NEEDMEM` and grown by `OSAPI_MEM_REGROW` (20.22.2.5).
 
 | peak | claims | count |
 |---|---|---|
-| launch | carve (primary + PDENG + PDREND), exchange block, INDEX + kit + band | 3 |
-| a document open | + A, B | 5 |
-| ...that asked for a region | + X | 6 |
-| ...whose page needed a module | + S (one occupant) | 7 |
-| open of an encrypted file at its password prompt | carve, XB, INDEX, A, B, X (XIDX/OSW), S (PDXK), overlay (the prompt) | **8** |
-| render with a panel, popover or inspector up | carve, XB, INDEX, A, B, X, S (a decoder), overlay | **8** |
-| save, extract or insert with its dialog up | carve, XB, INDEX, A, B, X, S (PDWRT + its buffers), overlay | **8** |
-| File > New, no document | carve, XB, INDEX, S (PDWRT + buffers), overlay | 5 |
+| launch | carve (primary + PDENG + PDREND), XB (the exchange block, the held keys and the INDEX + kit + band, ONE claim) | 2 |
+| a document open | + A, B | 4 |
+| ...that asked for a region | + X | 5 |
+| ...whose page needed a module | + S (one occupant) and its W | 7 |
+| open of an encrypted file at its password prompt | carve, XB, A, B, X (XIDX/OSW), S (PDXK), overlay (the prompt) | 7 |
+| render with a panel, popover or inspector up | carve, XB, A, B, X, S (a decoder), W, overlay | **8** |
+| ...with an edit made (E) | carve, XB, A, B, E, X, S, W - and the overlay is the ninth: its fetch runs the occupant's release (`pdu_ovl_room`) and a refused one waits (`Panels wait for memory`) | **8** |
+| save, extract or insert with its dialog up | carve, XB, A, B, X, S (PDWRT + its buffers), overlay | 7 |
+| File > New, no document | carve, XB, S (PDWRT + buffers), overlay | 4 |
+
+**QA R26 (measured, QEMU VGA 640 KiB).** Until 2026-11-10 the exchange block,
+the INDEX and the held keys were three claims and W (QA R7) and E (QA F26)
+had joined the table without it being re-counted: a render with the overlay
+up was 9 claims, 10 after any encrypted file, so the kernel refused S or W
+for the claim TABLE (`MEM_OWNER_MAX`) with 77 KiB free in one run. A page
+drew right only when it was drawn before the overlay was first fetched;
+after XTGUIDE, RC4_128 and XTGUI_OS every font file substituted `font
+module`, and after the five GUIDE/AES/RC4 files all ten font fixtures did.
+`bk_size` sizes the INDEX at launch so the XB, the keys and the bank are one
+claim (`pdu_mod_launch`), and the same sequences draw every font.
 
 The transient claims stay what they were and each already degrades when
 refused as a ninth: Copy's (`pdusel.c`, falls back to the THUMB row), the
@@ -5215,7 +5270,12 @@ callback's chain: only from the wake, 20.22.2.6):
    the occupant, the X8 region or the bank degrades (QA F21). The retry is
    the user's: put the disk back and do the same thing again (the lead's
    ruling, 2026-11-10 12:10 - no prompt that waits, and no overlay held
-   resident: 51.5 KiB the XT's occupants need). Every lazy read says the
+   resident: 51.5 KiB the XT's occupants need). An OPEN that fails after such a
+   read (`pdu_dskout`, set by both toasts and cleared when an open begins)
+   is `PDE_IO`, never the `PDE_SYNTAX` its missing key module or overlay
+   left behind, and the empty window's card says `Insert the PageDesk disk;
+   open again.` rather than calling the user's file damaged (QA F21, the
+   real 360 KB pair: A128 with the program disk out). Every lazy read says the
    same sentence: the overlay's fetch, through crt0's `CC_OVL_FAIL` hook
    (`pdu_ovl_fail` turns the SDK's `Cannot read my parts` and `No disk to
    read from` into it; memory refusals keep their own words), and PDREND's
@@ -5227,6 +5287,25 @@ callback's chain: only from the wake, 20.22.2.6):
    A repeat succeeds because nothing remembers the failure: the overlay's
    row stays unfetched, PDREND's refusals end with the page view
    (`mode_reset`), and an occupant is loaded again at the next ask.
+   A refused MEMORY claim for the overlay is said by what asked for it. The
+   overlay is the part a render drops for its occupants, so the work that
+   fetches it back once a page is drawn is idle work. That work is the
+   sidebar's thumbnails and outline, the Notes panel's list, and the
+   recovery look after an open (20.17.3). When that fetch is refused,
+   `pdu_ovl_fail` toasts `Panels wait for memory` or `Recovery waits:
+   memory` (`pdu_ovidle` = 1 or 2, set around the call by `pdu_idle_ovl`
+   and `pdu_rc_wake`), not the SDK's bare `Not enough memory`. The page is
+   on the glass, and the panels show `...` and `Reading notes...`. The
+   ladder then HOLDS (`pdu_ovhold`): no idle overlay call and no kick
+   until a key, a click or a command, or until the overlay arrives by
+   another path. Before the hold, a refused fetch was retried on every
+   wake, so the window spun and repeated the toast while nothing on the
+   machine changed. QA saw this on QEMU at 640 KB with SYNTH.PDF opened
+   first. A Find, a text pass, a link and a selection are the user's own
+   requests, and so are a journal write and an answer. They are held the
+   same way but keep the plain refusal. `test_hold` in
+   `hosttest/pdu_jr_test.c` checks the hold, and its negative control
+   fails without it.
 5. The header is checked as 3.1 checks the eager modules: the occupant's
    magic, `PDM_ABI`, image >= 9 and image + bss == the row's `len`. A failure
    is `PDE_LIMIT`, and the slot is left empty.
@@ -5438,21 +5517,39 @@ now (`make pagedeskdisk`):
 
 | image | carries | clusters before | after |
 |---|---|---:|---:|
-| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,139 / 2,847 |
-| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,139 / 2,371 |
-| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 574 / 713 |
-| `pagedesk360.img` | the program, `README.TXT`, `PDFONTS.TXT` (the OFL rides with the fonts inside the program), and `HELLO.PDF` WHEN IT FITS | 414 / 354 (refused) | 354 / 354 |
-| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 72 / 354 |
+| `pagedesk.img` (1.44MB) | the program, `README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES`, every sample | 1,498 / 2,847 | 1,145 / 2,847 |
+| `pagedesk120.img` (1.2MB) | the same | 1,498 / 2,371 | 1,145 / 2,371 |
+| `pagedesk720.img` | the same: every sample fits, so there is no second 720KB disk | 754 / 713 (refused) | 577 / 713 |
+| `pagedesk360.img` | the program and `PDFONTS.TXT`: the OFL rides with the fonts inside the program, so it stays beside them | 414 / 354 (refused) | 349 / 354 |
+| **`pagedesk360b.img`** | every sample, and `README.TXT` | | 71 / 354 |
 
-`HELLO.PDF` fits on `pagedesk360.img` with no cluster to spare. The recipe
-tries it, and when the program has grown past it, it says so and builds the
-disk without it. That is not an error, since the second disk carries it.
-The program not fitting IS the error, from the second attempt. On a 360KB
-pair the empty view's Sample guide (`XTGUIDE.PDF` beside the program) finds
-nothing until the guide is opened from the second disk with File > Open.
-The 360KB XT proof (`tests/pagedeskxt.py`, PD-29) opens `XTGUIDE.PDF` from
-B:, which now holds the program and not the guide. It needs a 720KB B:, a
-third drive or a disk of its own. That is open.
+The two text files are packed (`os88lz.py --wrap`, SPEC.md 20.13.5) on
+every geometry, in `$(PDZ)` = `build/pdz-<fmt>/`. Nothing in PageDesk reads
+either one, and Note Pad's read of a packed file is the transparent one.
+`PDFONTS.TXT` goes from 9,456 bytes to 5,113 (ten clusters to five), and
+`README.TXT` from 4,446 to 3,098. The fix round's program (348,168 bytes,
+341 clusters) needed 359 of `pagedesk360.img`'s 354 clusters with
+`README.TXT` and `PDFONTS.TXT` beside it. Packing paid five of those
+clusters, and `README.TXT` moving to the second disk paid four more. The
+first disk no longer takes `HELLO.PDF` "when it fits": that spent whatever
+slack there was and hid the growth until the program itself did not fit.
+On a 360KB pair the empty view's Sample guide (`XTGUIDE.PDF` beside the
+program) finds nothing until the guide is opened from the second disk with
+File > Open.
+
+**The gate reads the current package.** `pagedeskdisk` is on demand, so its
+image goes stale; the fix round's overflow passed `t_image` and
+`t_diskverify` on an image from that morning. The Makefile's `PD360DISK1`
+is the first disk's list. The fast row `pd360` (`tests/unit/t_pd360.py`)
+builds that disk from the current `build/pagedesk.o88` on every `make` and
+fails with fewer than 4 clusters free. At this writing 5 are free.
+
+The XT proof (`tests/pagedeskxt.py`, PD-29) opens `HELLO.PDF` and
+`XTGUIDE.PDF`, so it boots `pagedesk720.img` in an 80-cylinder 720KB B:
+(DECISIONS 07:22). The machines are `os8088_xt_vga_720b`,
+`os8088_5150_cga_720b_gla` and `os8088_5150_herc_720_gla`. Each is the 360KB
+profile it replaces with only the drives changed, still 640 KiB. The
+Hercules one has two 720KB drives, so its A: is `os8088-720.img`.
 
 **20.22.2.9 Room in the primary.** The `.o88` header's image + bss (the
 cap is 65,024):
@@ -5482,12 +5579,20 @@ cap is 65,024):
 | QA F26 claim B: the edit store at the first edit (`pdu_claimhi`, the C door to `pd_claimhi`, and its overlay stub; `pdu_dclaim[3]`) | 65,023 | +22 |
 | `pdmath.inc` in the primary with `PDM_SKIP_U32`, `PDM_SKIP_PARSE`, `PDM_SKIP_TOPT16` and `PDM_SKIP_MAT`: its C names `pdm_view_size`/`fwd`/`inv` and `pdm_crc16_far` alone (the cc8086 use set), and the rest was assembled for nothing | 63,517 | -1,506 |
 | QA F21: an encrypted open whose prompt's overlay could not be read fails (`PDE_IO`) instead of opening again with no key, which left the NEXT open refused | 63,535 | +18 |
+| QA R15/R16: the page number in the drawing line, and the first draw's line replacing `Opened X` (`pdu_opsaid`); the merges up to d6495e85e | 63,597 | +62 |
+| QA SYNTH toast: the idle hold (`pdu_idle_ovl`, `pdu_ovhold`, the recovery look through it) and `pdu_ovl_fail`'s two idle sentences | 63,947 | +350 |
+| QA F31: `pdu_stale` (14.4) - the page load, the draw and the navigation owe nothing to a document whose file changed under it | 64,023 | +76 |
+| the merge of ui's round 2 (F29, F30) | 64,119 | +96 |
+| QA R26: the XB, the held keys and the INDEX one claim (`bk_size` factored out of `pdu_bank_load`, the keys zeroed at launch, `pdu_mod_quit` no longer frees the INDEX) | 64,161 | +42 |
+| QA F21: `pdu_dskout` and the card's disk sentence | 64,243 | +82 |
 
-**1,489 bytes stay under the cap.**
+**781 bytes stay under the cap.**
 
 **20.22.2.10 The keys: held, and the Insert's pre-flight.** A key is kept
-in ONE 512-byte claim, `pdu_kseg` (`pduslot.inc`), taken with the first key
-and kept for the instance: bytes 0..133 are a `pdxb_wkeys`, 136..179 the
+in 512 bytes, `pdu_kseg` (`pduslot.inc`), cut out of the exchange block's
+claim at launch and zeroed there (QA R26: it was a claim of its own, taken
+with the first key, and that ninth claim is what refused every later font
+module - 20.22.2.2): bytes 0..133 are a `pdxb_wkeys`, 136..179 the
 document's `pdxb_wkey`, 180..195 the first 16 bytes of that document's
 `/ID[0]`, 196..211 the first 16 bytes of its `/Encrypt` `/U`.
 
@@ -6863,6 +6968,27 @@ program area (the primary says so with `PDFE_SIZE`), TrueType collections, CFF2/
 Type 1 multiple-master, a CMap with three- or four-byte codes (read as two), a predefined CJK CMap
 by name (no data on this machine; `Identity-H/V` is built in, others read as 2-byte identity).
 
+**A Type0 font whose program is not read keeps its text** (QA R13: MUHTML, LICJA and LICZH drew BLANK
+pages, not even their Latin lines, because their CID programs - 46 to 241 KB - do not fit the
+workspace). The font stays ACTIVE without a program (`fd_activate`'s `bad:`, kind `PDFK_NONE`): its
+ToUnicode, Encoding CMap and `/W` are read as for any font, so GLYPH still answers each code's width
+and Latin byte (`PDFG_LATIN`) beside the `PDFE_*`, and with `PDFG_BLOCK` it records them in the
+font's **size-0 block** - the text pass's block, one per font whatever sizes it is drawn at. PDREND
+marks the font (`pdr_font.esub`), draws every code's Latin byte in the substitute face and notes
+"font substituted", and from then on looks the code up in that block (a hit needs no module) and asks
+PDXF only for a code it has not seen, with `PDFG_NOPROG` (0x20), so PDXF re-activating the font
+between its neighbours never reads the program again (LICJA's 241 KB program was otherwise
+re-inflated up to its 43 KB stop on every font change). With no `/ToUnicode`, an Adobe CJK ordering
+(`/CIDSystemInfo /Ordering` Japan1, GB1, CNS1 or Korea1 - not Identity) gives CIDs 1-95 their
+ASCII byte, CID + 31, which is where every Adobe ordering keeps proportional Latin (LICJA's
+`Apple Inc.`). CJK codes have no PD Latin and stay invisible, advancing by their `/W` width. A
+growth of the workspace that is refused is not asked for again by any font while PDXF stays resident
+(`g_askobj` = 0xFFFF), so a page of four oversized fonts costs one answer, not four.
+`hosttest/pdx_page.py --nopr` sets `PDFG_NOPROG` on every request: each fixture page must draw ink
+for its text, note the font, and give the same text map as with the programs (with the pre-fix
+PDREND the CID fixtures draw nothing: 20 of 50 pages fail). Simple fonts were already drawn in the
+substitute face through their encoding. PDXF: image 44,674 + bss 20,350 = **65,024 of 65,024**.
+
 **The workspace** (`slot_seg`/`slot_kb` at `PDV_X_INIT`; 20.22.2.3's row is **want 64, min 32 KiB**):
 the program `[0, slot - 10,752)` (one at a time; a different font is a reload, the dictionary being
 named in every call): 22,016 bytes at the min, 54,768 at the want. A program larger than the area it
@@ -6915,7 +7041,9 @@ Subtype, `/DescendantFonts`, `/FontDescriptor` and its `/FontFile*`, `/Flags`, `
 dictionary with `/BaseEncoding` and `/Differences`, or a CMap stream), `/ToUnicode`,
 `/CIDToGIDMap`, `/DW` and `/W`; then the program is read through PDENG's stream stack into the
 workspace and parsed once. Only `GLYPH` is hot, and it is one glyph a call. A refusal answers
-`CF = 1` with a `PDFE_*` reason, and PDREND draws that font in the substitute face from then on.
+`CF = 1` with a `PDFE_*` reason, and PDREND draws that font in the substitute face from then on (a
+Type0 font through PDXF's map of its codes, above). PDREND's miss (`emb_miss`) runs in PDRENDC
+(`pdrovl.h`): once per code and size, its time is PDXF's raster.
 
 **The strike block** (`PDFB_SIZE` 4,096; `pdabi.h` has the layout): 128 glyph records of 4 bytes in
 the PDFB strike layout of 11.2 (slots 1-128: width, left bearing, bitmap offset), the bitmaps from
@@ -6927,7 +7055,16 @@ FINDS, PDXF MAKES and evicts a block not used in this pass). That number is PDRE
 pass count that is NOT reset with each render: `g_passes` restarts at 1 every verb, and a stamp of it
 made every block a previous page or thumbnail used look "used in this pass" to the next render's
 pass 1, so after four (font, size) pairs no block could be had and every later page said `glyph
-block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
+block full`. **The block header is cleared with each new document** (`verb_init`) **and when the
+claim first holds blocks** (`syn_adopt`, a growth from under 28 KiB): object numbers repeat across
+files, so a block the last file left matched the next file's (font, size) - its glyphs, or its full
+keys. On the machine the second is the one that bites: a document's close frees its 40 KiB claim,
+the next document's 24 KiB claim is handed the same memory, and the header at +24,512 is inside it,
+so the growth in place kept the last file's blocks (QA R24 on VGA: cff-cid-cmap and tt-cid-map said
+`glyph block full` as a session's second file). `hosttest/pdx_page.py --docs` draws every fixture's
+page 1 one file after another in one process, with a 40 KiB claim and then with a 24 KiB claim
+grown for each file in the memory the last one's left (`PDR_GLYREUSE`), and holds each to its render
+alone with no `glyph block full` (QA R24; `hosttest/pdx_page.py --seq` renders a fixture's pages and its page 1 again in
 ONE process and fails on it). `(glyph_kb - 24) / 4` blocks fit, at most `PDFB_NBLK` (6): a
 24 KiB claim has none, 32 KiB has two, 40 four, 48 six. **The claim is a RANGE, want 48 and min
 40** (the lead, fix round; the 20.22.2.3 pattern): a page's first block asks for the min, and
@@ -6980,7 +7117,11 @@ Type0 codes map to nothing and its simple codes map through the base encoding. *
 silent "not found"**: a text pass that met codes it could not read ends with `done` = 1 |
 `PDTM_UNREAD` (2) in `pdxb_textmap`, and Find, when it matches nothing, names the first such page:
 `No match for "x" - draw page N first`. Drawing the page leaves its strike blocks, and the next
-Find reads it. (The words are stored by overlay code rather than a literal: the overlay's
+Find reads it. When page N is the page ON THE SCREEN, drawing it again would not help - PDREND says
+UNREAD only when PDXF was refused beside the page, which is memory (QA R28: plat's R26 low-memory
+state said "draw page 1 first" over a drawn page 1) - so Find says
+`No match for "x" - no memory to read page N's fonts`. Both are stored two letters a word by overlay
+code (+146 bytes of the overlay, no primary byte). (The words are stored by overlay code rather than a literal: the overlay's
 literals are resident and the primary is at its cap; the cost is the 2-byte `pdu_funread`.) **A text pass asks for nothing but PDXF**
 (and the glyph claim and PDXF's own workspace): colour spaces, shadings and images draw no text, and
 asking for PDXG on every page made a Find swap PDXG and PDXF per page, 60 ladder answers over QZTEXT's
@@ -7796,6 +7937,17 @@ tables, never under one block of 2^s rows) and the symbol area gets the rest: co
 (a dictionary, a halftone grid, an intermediate region) is `PDE_LIMIT` for that segment alone, reported
 `JBF_UNSUP`, and the rest of the page is drawn. The workspace is reached only through `jw_*`, which on the
 target are pdmath's far movers over the shell's `g_wseg`:
+
+**A short workspace is ASKED for, at raster time (QA F15).** When the text regions' figure does not fit what
+the shell was granted, `jb_open` answers `PDE_NEEDMEM` with CF clear and DX = the KiB it wants (63).
+PDREND's `img_xopen` (`pdrv.c`) forwards that ONCE per page as a `PDMEM_SLOT` ask to the primary, which
+regrows W while PD-29's 32 KiB stays free beside it (`sl_grow`, 20.22.2.4); the band is drawn again from the
+image (`g_imem`). Only when the grant still leaves the decoder short - or the ask budget `PDR_XASKS` is spent -
+is the image a `PDF_INC_IMAGE` note, "image decoder". Before this, PDREND treated the answer as the decoder
+failing: on a 640 KiB VGA machine W was 21 KiB and `JB2TEXT.PDF` drew a blank page with that note.
+`make pdrend-xchk` holds both arms (`PDR_XNEEDMEM=grant|refuse`: granted pixel-identical and clean, refused
+`INC_IMAGE` and the page finished). It was paid for by moving `mode_reset` into `PDRENDC`
+(`pdrovl.h`): PDREND 64,970 (image 57,562 + bss 7,408) of the part's 65,024, PDRENDC 18,185.
 
 | offset | size | content |
 |---|---|---|

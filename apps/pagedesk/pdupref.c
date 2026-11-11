@@ -41,8 +41,9 @@ static const char *pdp_done(void)
 {
     int n;
     if (pdp_form) {
+        n = pdp_form;
         pdp_form = 0;
-        return pdp_formmsg;
+        return n == 1 ? pdp_formmsg : pdu_msg;  /* 2: a message the first render's end keeps (F30) */
     }
     if (!pdu_dirty())
         return "No changes";

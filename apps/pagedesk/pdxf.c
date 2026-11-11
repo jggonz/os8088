@@ -57,7 +57,9 @@ static pdw g_xb;                    /* the exchange block                       
 static pdw g_ws, g_wslen, g_pcap;
 static pdw g_wskb;                  /* slot_kb at PDV_X_INIT                         */
 static pdw g_xgs, g_xgkb;            /* the glyph claim (pdxb_init's glyph_seg/glyph_kb, re-handed by every INIT) */
-static pdw g_askobj, g_askgen;      /* the font a PDMEM_SLOT growth was last asked for (20.22.8)   */
+static pdw g_askobj, g_askgen;      /* the font a PDMEM_SLOT growth was last asked for (20.22.8); 0xFFFF:
+                                     * one was REFUSED, so no font asks again while PDXF is resident (QA R13) */
+static pdw g_askpend;               /* an ask is out: the next INIT is its answer                   */
 pdw pdx_odx;                        /* DX of the answer: PDE_NEEDMEM's KiB (the door loads it)     */
 static pdw g_kind, g_cmaplen;
 static pdw g_stgseg, g_stgoff;      /* the staging window                          */
@@ -343,10 +345,13 @@ static void fd_simple_enc(pdw fobj, pdw fgen, pdw symbolic)
 }
 
 /* load the font (its dictionary, program and tables); 0 ok, else a PDFE_* in g_ferr */
+static pdw g_fbr, g_fado;           /* a font with no usable program (active, kind PDFK_NONE): fd_map's answer;
+                                     * an Adobe CJK ordering (Japan1, GB1, CNS1, Korea1): CIDs 1-95 are ASCII */
+static pdw g_fnoprog;               /* the request's PDFG_NOPROG: the program is not read             */
 static pdw fd_activate(pdw fobj, pdw fgen)
 {
     pdw n, sym = 0, cidobj = 0, cidgen = 0, tuobj = 0, tugen = 0;
-    g_fobj = 0; g_kind = PDFK_NONE; g_cmaplen = 0; g_ft0 = 0; g_fvert = 0; g_ftu = 0; g_fcm = 0; g_fdw = 1000; g_fwl = 0; g_ferr = 0;
+    g_fobj = 0; g_kind = PDFK_NONE; g_cmaplen = 0; g_ft0 = 0; g_fvert = 0; g_ftu = 0; g_fcm = 0; g_fdw = 1000; g_fwl = 0; g_ferr = 0; g_fado = 0;
     g_dobj = fobj; g_dgen = fgen; g_cmapobj = 0; g_zfree = 0;
     g_tuoff = (pdw)(g_pcap + PDXF_CIDWIN + PDXF_STG); g_cmoff2 = (pdw)(g_tuoff + PDXF_TAB); g_wdoff = (pdw)(g_cmoff2 + PDXF_TAB);
     if (!wd_get(fobj, fgen, "Subtype", 0, 0) && fd_name_is("Type3")) {         /* its glyphs are content streams: no program (20.22.8) */
@@ -369,23 +374,30 @@ static pdw fd_activate(pdw fobj, pdw fgen)
             else { g_ferr = PDFE_CMAP; }                      /* a predefined CJK CMap: codes read as 2-byte identity */
         }
         if (fd_refs(g_dobj, g_dgen, "CIDToGIDMap", 0, 0)) { cidobj = g_ro; cidgen = g_rg; }
+        if (!wd_get(g_dobj, g_dgen, "CIDSystemInfo", "Ordering", 0) && g_dg.kind == PDK_STR && g_dg.text[0] != 'I') g_fado = 1;
     }
     if (fd_refs(fobj, fgen, "ToUnicode", 0, 0)) { tuobj = g_ro; tugen = g_rg; }
     if (!wd_get(g_dobj, g_dgen, "FontDescriptor", "Flags", 0) && (g_dg.kind == PDK_INT)) sym = (pdw)((pdm_fx_floor(&g_dg.num) & 4) != 0);
     g_ffobj = 0;
     if (fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile2", 0) || fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile3", 0) ||
         fd_refs(g_dobj, g_dgen, "FontDescriptor", "FontFile", 0)) { g_ffobj = g_ro; g_ffgen = g_rg; }
-    if (!g_ffobj) { g_ferr = PDFE_NOPROG; return PDE_FONT; }
+    g_fbr = PDE_FONT;
+    if (!g_ffobj || g_fnoprog) { g_ferr = PDFE_NOPROG; goto bad; }
     n = pdx_slurp(g_ffobj, g_ffgen, g_ws, 0, g_pcap);
-    if (n == 0xFFFF) { g_ferr = PDFE_SIZE; return PDE_LIMIT; }
-    if (!n) { g_ferr = PDFE_READ; return PDE_FONT; }
+    if (n == 0xFFFF) { g_ferr = PDFE_SIZE; g_fbr = PDE_LIMIT; goto bad; }
+    if (!n) { g_ferr = PDFE_READ; goto bad; }
     g_pseg = g_ws; g_plen = n; g_zfree = n;
     if (cidobj) {
         n = pdx_slurp(cidobj, cidgen, g_ws, g_pcap, PDXF_CIDWIN);
         g_cmaplen = n == 0xFFFF ? PDXF_CIDWIN : n;
     }
-    if (!fnt_open()) { g_ferr = PDFE_FORMAT; return PDE_FONT; }
-    /* the tables */
+    if (fnt_open()) goto tables;
+    g_ferr = PDFE_FORMAT;
+bad:            /* no usable program: the font is still ACTIVE for its tables, so every code keeps its
+                 * ToUnicode Latin byte and PDREND draws it in the substitute face (QA R13: MUHTML,
+                 * LICJA, LICZH were blank); fd_map answers g_fbr with the byte */
+    g_kind = PDFK_NONE;
+tables:
     if (tuobj && !pdx_sopen(tuobj, tugen)) {
         if (!cm_parse(PDFC_UNI, g_ws, g_tuoff, PDXF_TAB)) g_ftu = 1;
         pdx_sclose();
@@ -438,9 +450,11 @@ static pdw fd_map(pdw fobj, pdw fgen, pdw code)
         if (g_fcm) { v = tab_find(g_cmoff2, code); if (!g_tfound) v = (pdw)((pd_fpeekb(g_ws, (pdw)(g_cmoff2 + 1)) & PDFC_IDENT) ? code : 0); }
         g_cid = v; g_adv1000 = cid_width(v);
         gid = cid_gid(v);
-    } else gid = g_kind == PDFK_T3 ? 1 : enc_gid(code);
+    } else gid = g_kind == PDFK_T3 ? 1 : g_kind ? enc_gid(code) : 0;
     if (g_ftu) { v = tab_find(g_tuoff, code); g_lat = g_tfound ? uni_lat(v) : 0; }
+    else if (g_fado) g_lat = (pdw)(g_cid - 1) < 95 ? (pdw)(g_cid + 31) : 0;     /* no /ToUnicode: the ordering's ASCII */
     g_gid = gid;
+    if (!g_kind) return g_fbr;     /* g_ferr is still the program's PDFE_* */
     return 0;
 }
 
@@ -516,20 +530,22 @@ static pdw v_glyph(void)
     struct pdxb_fglyph *g = &g_a.gl;
     pdw r, n;
     g->w = 0; g->lb = 0; g->nb = 0; g->adv64 = 0; g->err = 0; g->oflags = 0;
+    g_fnoprog = g->flags & PDFG_NOPROG;
     r = fd_map(g->objnum, g->gen, g->code);
-    if (r) {
+    g->gid = g_gid; g->cid = g_cid; g->adv1000 = g_adv1000; g->kind = g_kind;
+    g->lat = g_lat == 0xFFFF ? 0 : g_lat;
+    g->oflags = (pdw)((g_ftu | g_fado ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
+    if (r) {                        /* lat and oflags are the answer's too: a font with no usable program (bad:) */
         g->err = g_ferr;
         /* a program larger than this workspace: ONE growth to 64 KiB is asked for, per font (20.22.2's
          * PDMEM_SLOT; CX = 0 is the door's own, DX = the KiB). A refusal re-INITs unchanged and the next
          * call for the font answers PDFE_SIZE: PDREND draws it in the substitute face, PDF_INC_APPROX */
-        if (g_ferr == PDFE_SIZE && g_wskb < 64 && (g_askobj != g->objnum || g_askgen != g->gen)) {
-            g_askobj = g->objnum; g_askgen = g->gen; pdx_odx = 64; return PDE_NEEDMEM;
+        if (g_ferr == PDFE_SIZE && g_wskb < 64 && g_askobj != 0xFFFF && (g_askobj != g->objnum || g_askgen != g->gen)) {
+            g_askobj = g->objnum; g_askgen = g->gen; g_askpend = 1; pdx_odx = 64; return PDE_NEEDMEM;
         }
-        return r;
+        if (g_kind || !g_fobj || !(g->flags & PDFG_BLOCK)) return r;
+        g->em64 = 0;                /* no usable program: its codes' widths and Latin in the font's size-0 block, r stands */
     }
-    g->gid = g_gid; g->cid = g_cid; g->adv1000 = g_adv1000; g->kind = g_kind;
-    g->lat = g_lat == 0xFFFF ? 0 : g_lat;
-    g->oflags = (pdw)((g_ftu ? PDFG_LATIN : 0) | (g_ft0 ? PDFG_T0 : 0) | (g_fvert ? PDFG_VERT : 0));
     if (g->flags & PDFG_BLOCK) {
         /* the blocks are at the top of the glyph claim INIT named: (glyph_kb - 24) / 4 of them, at most
          * SYN_MAX, under the 64-byte header. PDREND names the claim it holds (dseg, and its KiB in cap); a
@@ -540,8 +556,9 @@ static pdw v_glyph(void)
         if (g->cap > PDFB_NBLK) g->cap = PDFB_NBLK;
         g->doff = (pdw)((g_xgkb << 10) - g->cap * PDFB_SIZE - PDFB_HDR);
         g->blk = blk_find(g);
-        if (g->blk == 0xFFFF) { g->slot = 0; return 0; }
-        return blk_slot(g, (pdw)(g->doff + PDFB_HDR + g->blk * PDFB_SIZE));
+        if (g->blk == 0xFFFF) { g->slot = 0; return r; }
+        n = blk_slot(g, (pdw)(g->doff + PDFB_HDR + g->blk * PDFB_SIZE));
+        return r ? r : n;
     }
     if (g->flags & PDFG_INFO) return 0;
     if (!g_gid) { g->w = 0; return 0; }                         /* no glyph: nothing to draw */
@@ -577,6 +594,8 @@ pdw pdxf_verb(pdw verb, pdw bx, pdw cx, pdw dx)
         g_xb = g_a.in.xb_seg;
         pdx_engvec[0] = g_a.in.eng_off; pdx_engvec[1] = g_a.in.eng_seg;
         g_ws = g_a.in.slot_seg; g_wskb = g_a.in.slot_kb;
+        if (g_askpend && g_wskb < 64) g_askobj = 0xFFFF;       /* the growth was refused */
+        g_askpend = 0;
         g_xgs = g_a.in.glyph_seg; g_xgkb = g_a.in.glyph_kb > 63 ? 63 : g_a.in.glyph_kb;
         if (!g_xgs) g_xgkb = 0;
         g_wslen = (pdw)(g_a.in.slot_kb >= 64 ? 0xFFF0u : (pdw)(g_a.in.slot_kb << 10));

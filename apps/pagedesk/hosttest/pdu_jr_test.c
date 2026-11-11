@@ -253,9 +253,24 @@ static int os88_mem_free(unsigned seg)
 static char *os88_utoa(unsigned v, char *dst) { sprintf(dst, "%u", v); return dst; }
 
 static void ovl_rc_wake(void);
+/* pdujob.c's idle hold (QA SYNTH toast). The target's ovl_ thunk answers a
+ * refused fetch by not running the function: jr_refuse plays that here, and
+ * pdurecov.c's call is counted with the idle kind it was made under */
+static char pdu_ovidle, pdu_ovhold;
+static int jr_refuse, jr_calls, jr_kind;
+int pdu_ovl_in(void) { return !jr_refuse; }
+static void jr_rc_wake(void)
+{
+    jr_calls++;
+    jr_kind = pdu_ovidle;
+    if (!jr_refuse)
+        ovl_rc_wake();
+}
 #include "../pduedit.c"
 #include "../pduundo.c"
+#define ovl_rc_wake jr_rc_wake
 #include "../pdurecov.c"
+#undef ovl_rc_wake
 #include "../pdovlrecov.c"
 
 /* ---- the harness ------------------------------------------------------------- */
@@ -812,6 +827,29 @@ static void test_close(void)
     CHECK(pdu_rc_close() == 1, "no document: closes");
 }
 
+/* a refused look after an open is idle work: said as such (kind 2), held
+ * until the user acts, and not retried on every wake; a write is the user's
+ * own (kind 0) */
+static void test_hold(void)
+{
+    fresh();
+    rc_f |= RCF_CHECK;
+    jr_refuse = 1; jr_calls = 0; pdu_ovhold = 0;
+    wake();
+    CHECK(jr_calls == 1 && jr_kind == 2 && pdu_ovhold == 1 && pdu_ovidle == 0,
+          "refused look: one call, kind 2, held (calls %d kind %d hold %d)", jr_calls, jr_kind, pdu_ovhold);
+    wake(); wake();
+    CHECK(jr_calls == 1 && (rc_f & RCF_CHECK), "held: not retried, still owed (calls %d)", jr_calls);
+    jr_refuse = 0; pdu_ovhold = 0;          /* a key, a click, a command */
+    wake();
+    CHECK(jr_calls == 2 && !(rc_f & RCF_CHECK) && !pdu_ovhold, "after the user acts it runs (calls %d)", jr_calls);
+    rc_f |= RCF_DIRTY;
+    jr_refuse = 1;
+    wake();
+    CHECK(jr_calls == 3 && jr_kind == 0 && pdu_ovhold == 1, "a refused write keeps the plain refusal (kind %d)", jr_kind);
+    jr_refuse = 0; pdu_ovhold = 0;
+}
+
 int main(void)
 {
     unsigned s;
@@ -832,6 +870,7 @@ int main(void)
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "seed")) test_seed();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "other")) test_other();
     if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "close")) test_close();
+    if (!getenv("JRONLY") || !strcmp(getenv("JRONLY"), "hold")) test_hold();
     for (s = 1; s <= 24 && !getenv("JRONLY"); s++)
         test_walk(s, s & 1 ? 1 : 2);
     printf("%d checks, %d failed\n", checks, fails);

@@ -1600,6 +1600,12 @@ FAST = [
         "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
         "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
         "narrowest canvas (39 cells) - the card cuts a longer one"),
+    Row("pd360", "fast", py("tests/unit/t_pd360.py"), 0.2,
+        "PAGEDESK-SPEC 20.22.2.8: the 360KB program disk (the Makefile's "
+        "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
+        "from the CURRENT package keeps 4 of 354 clusters free - "
+        "pagedesk360.img is on demand and went stale while the fix round "
+        "grew the program to 359 of 354"),
     Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
         "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
         "model - the filters (This page / All pages / Changes), order, "
@@ -22445,7 +22451,9 @@ SOAK = [
     Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
         "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
         "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
-        "thread each - HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "thread each, B: an 80-cylinder 720 KB drive with pagedesk720.img "
+        "(every sample; the 360 KB pair's first disk holds the program alone) "
+        "- HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
         "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
         "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
         "reachable at every trough with the caches shed, task 0's stack <= "
@@ -22455,8 +22463,8 @@ SOAK = [
         "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
         "beside another session's MartyPC",
         needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
-        wants=("build/os8088-360.img", "build/pagedesk360.img",
-               "build/pagedesk.bin")),
+        wants=("build/os8088-360.img", "build/os8088-720.img",
+               "build/pagedesk720.img", "build/pagedesk.bin")),
 ]
 
 

@@ -223,6 +223,8 @@ static void pdu_open_begin(const char *name)
     pdu_rwant = 0;
     pdu_pgwant = 0;
     pdu_changes = 0;
+    pdu_stale = 0;                      /* QA F31: a new file */
+    pdu_dskout = 0;                     /* QA F21: nothing missed yet */
     pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_nav_reset();                    /* nav: history, selection, panels */
@@ -274,11 +276,16 @@ static int pdu_open_first(void)
 
 /* PAGEINFO for page n, then the view. 0 or a PDE_*. No lock: a disk read. */
 static char pdu_opsaid;                 /* "Opened X" stands: the first draw's line replaces it (R16) */
+char pdu_ovidle;                        /* pdu_ovl_fail: idle work is fetching the overlay - 1 the
+                                         * panels', 2 the recovery look after an open */
+static char pdu_ovhold;                 /* that fetch was refused: the ladder waits for the user */
 static int pdu_incpg;                   /* page + 1 whose incompleteness
                                          * was said; 0 = not yet */
 static int pdu_page_load(int n)
 {
     unsigned r;
+    if (pdu_stale)
+        return PDE_CHANGED;             /* QA F31: never the changed bytes */
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_PAGEINFO, pdu_pg_id(n), 0, 0);   /* pages */
     if (pdu_mcf)
         return r ? r : PDE_LIMIT;
@@ -345,7 +352,7 @@ failed:
         pdu_pgsaved = 0;
         pdu_doc_release();
         pdu_doc = D_FAILED;
-        pdu_err = (pdu_mcf && r) ? r : PDE_SYNTAX;
+        pdu_err = pdu_dskout ? PDE_IO : (pdu_mcf && r) ? r : PDE_SYNTAX;   /* QA F21: never 'damaged' for our disk */
         pdu_say2("Could not open ", pdu_name);
         pdu_dirty_all = 1;
         return;
@@ -454,7 +461,7 @@ static void ovl_render_rest(int ask)
 
 static int pdu_render_begin(void)
 {
-    unsigned r;
+    unsigned r, bad;
 
     if (!pdu_isect(&pdu_rr, &pdu_L.canvas, &pdu_rrun) || pdu_pg_kind(pdu_page) != PDM_SRC) {   /* pages: a blank is paper */
         pdu_rwant = 0;
@@ -476,9 +483,18 @@ static int pdu_render_begin(void)
     pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     pdu_rend_sync();                    /* an owed abort before a new begin */
-    r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
-    if (pdu_mcf) {
-        pdu_say2("Could not draw the page: ", pdu_errtext(r));
+    if (pdu_stale) {                    /* QA F31: paper, not the changed file */
+        r = PDE_CHANGED;
+        bad = 1;
+    } else {
+        r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
+        bad = pdu_mcf;
+    }
+    if (bad) {
+        if (pdu_stale != 1)             /* the save's refusal stands the first time */
+            pdu_say2("Could not draw the page: ", pdu_errtext(r));
+        if (pdu_stale)
+            pdu_stale = 2;
         os88_gfx_lock();
         pdu_status_paint();
         os88_gfx_unlock();
@@ -626,6 +642,26 @@ static void pdu_save_step(void)
 /* ---------------------------------------------------------------------------
  * THE WAKE HANDLER: one slice, then re-post while there is work
  * -------------------------------------------------------------------------*/
+/* The idle ladder's work is the overlay's, and the overlay is the one part
+ * a render drops for its occupants (20.22.2.4). A refused fetch used to be
+ * retried on every wake - the same "Not enough memory" toast again and again
+ * while nothing on the machine had changed, and the page drawn all along.
+ * Now the thumbnails' and notes' refusal says what waits (pdu_ovl_fail), and
+ * the ladder holds until the user does something: a key, a click or a
+ * command clears the hold, as does the overlay arriving by another path */
+static void pdu_idle_ovl(int notes)
+{
+    pdu_ovidle = notes || !(pdu_txwant || pdu_fwant || pdu_lkact || pdu_selshow
+                            || (pdu_selq < 0 && pdu_selpg >= 0));
+    if (notes)
+        pdu_nt_idle();
+    else
+        ovl_nav_work();
+    pdu_ovidle = 0;
+    if (!pdu_ovl_in())
+        pdu_ovhold = 1;
+}
+
 void os88_onwake(void *win)
 {
     int r;
@@ -633,6 +669,8 @@ void os88_onwake(void *win)
     if (win != pdu_win)
         return;
     pdu_stk_wake();                     /* deepstk */
+    if (pdu_ovl_in())
+        pdu_ovhold = 0;                 /* the panels' work can run again */
     pdu_rend_sync();                    /* an abort a view change owed */
     pdu_pg_wake();                      /* pages: an undone/redone page op */
     if (pdu_job == J_SAVE)              /* pages: a save stands in the TARGET's folder (D14) */
@@ -732,15 +770,17 @@ void os88_onwake(void *win)
         && pdu_pop == P_NONE && !pdu_about && pdu_gs != 2)
         pdu_render_begin();
     else if (pdu_job == J_NONE && !pdu_pgwant && !pdu_argp && !pdu_rwant
-             && pdu_nav_owed())
-        ovl_nav_work();                 /* nav: the idle ladder */
+             && !pdu_ovhold && pdu_nav_owed())
+        pdu_idle_ovl(0);                /* nav: the idle ladder */
 
-    if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
-        pdu_nt_idle();
+    /* notes: between two thumbnail slices too (the engine keeps no object
+     * state across a slice), when the overlay is in - never fetched for it */
+    if ((pdu_job == J_NONE || (pdu_job == J_THUMB && pdu_ovl_in())) && !pdu_ovhold && pdu_nt_owed())
+        pdu_idle_ovl(1);
 
     pdu_rc_wake();                      /* recov */
     if ((pdu_job != J_NONE && !pdu_au_waits()) || pdu_pgwant || pdu_argp
-        || pdu_nav_owed())
+        || (!pdu_ovhold && pdu_nav_owed()))
         pdu_kick();                     /* a job waiting for the user's key does not spin (F4) */
 }
 

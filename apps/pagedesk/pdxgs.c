@@ -158,21 +158,28 @@ static pdw sh_header(pdw d)
  * answers 0 when the CTM is singular (nothing is visible) */
 static pdw sh_cover(void)
 {
-    static fx det, t, u, ia, ib, ic, id, ie, if_, px, py, qx, qy, cx[2], cy[2];
+    /* QA R9 (OVERLAY): the CTM is in 16.16 quarter pixels, so a unit-space shading under a big scale (Illustrator's
+     * `10.7 0 0 -10.7 cm` at 488%: 210) has det = 44,000, past the 32,767 of a 16.16, and the inverse came out
+     * singular or wrong: nothing was painted and nothing was said. The linear part is scaled by 2^-4 to fit
+     * (inv(m / 16) = 16 inv(m)), and the translation never enters a product: the corners are taken
+     * relative to it (x = ia (X - e) + ic (Y - f)) */
+    static fx det, t, ia, ib, ic, id, px, py, cx[3], cy[3], mm[4], sc;
     pdw i;
-    fx_mul(&det, &sh_m[0], &sh_m[3]); fx_mul(&t, &sh_m[1], &sh_m[2]); fx_sub(&det, &det, &t);
+    fx_raw(&sc, 0, 0x1000);                              /* 2^-4: |m| up to ~2,900 qpx (zoom 800% of a 90x scale) fits, 1 px / unit keeps 0.02% */
+    for (i = 0; i < 4; i++) fx_mul(&mm[i], &sh_m[i], &sc);
+    fx_mul(&det, &mm[0], &mm[3]); fx_mul(&t, &mm[1], &mm[2]); fx_sub(&det, &det, &t);
     if (!det.hi && !det.lo) return 0;
-    fx_div(&ia, &sh_m[3], &det); fx_div(&id, &sh_m[0], &det);
-    fx_div(&ib, &sh_m[1], &det); fx_i(&t, 0); fx_sub(&ib, &t, &ib);
-    fx_div(&ic, &sh_m[2], &det); fx_sub(&ic, &t, &ic);
-    fx_mul(&t, &sh_m[2], &sh_m[5]); fx_mul(&u, &sh_m[3], &sh_m[4]); fx_sub(&t, &t, &u); fx_div(&ie, &t, &det);
-    fx_mul(&t, &sh_m[1], &sh_m[4]); fx_mul(&u, &sh_m[0], &sh_m[5]); fx_sub(&t, &t, &u); fx_div(&if_, &t, &det);
+    fx_div(&ia, &mm[3], &det); fx_div(&id, &mm[0], &det);
+    fx_div(&ib, &mm[1], &det); fx_i(&t, 0); fx_sub(&ib, &t, &ib);
+    fx_div(&ic, &mm[2], &det); fx_sub(&ic, &t, &ic);
     fx_i(&cx[0], (pdi)(G.clip[0] * 4 - 8)); fx_i(&cx[1], (pdi)((G.clip[2] + 1) * 4 + 8));
     fx_i(&cy[0], (pdi)(G.clip[1] * 4 - 8)); fx_i(&cy[1], (pdi)((G.clip[3] + 1) * 4 + 8));
     for (i = 0; i < 4; i++) {
-        /* user = inv(dev): x = ia*X + ic*Y + ie, y = ib*X + id*Y + if */
-        fx_mul(&px, &ia, &cx[i & 1]); fx_mul(&t, &ic, &cy[i >> 1]); fx_add(&px, &px, &t); fx_add(&px, &px, &ie);
-        fx_mul(&py, &ib, &cx[i & 1]); fx_mul(&t, &id, &cy[i >> 1]); fx_add(&py, &py, &t); fx_add(&py, &py, &if_);
+        /* user = inv(dev - translation): x = ia*X' + ic*Y', y = ib*X' + id*Y' */
+        fx_sub(&cx[2], &cx[i & 1], &sh_m[4]); fx_sub(&cy[2], &cy[i >> 1], &sh_m[5]);       /* the corner minus the translation, times 2^-4 (ia..id are 16 inv) */
+        fx_mul(&cx[2], &cx[2], &sc); fx_mul(&cy[2], &cy[2], &sc);
+        fx_mul(&px, &ia, &cx[2]); fx_mul(&t, &ic, &cy[2]); fx_add(&px, &px, &t);
+        fx_mul(&py, &ib, &cx[2]); fx_mul(&t, &id, &cy[2]); fx_add(&py, &py, &t);
         if (!i) { fx_cp(&sh_cov[0], &px); fx_cp(&sh_cov[2], &px); fx_cp(&sh_cov[1], &py); fx_cp(&sh_cov[3], &py); }
         else {
             if (fx_cmp(&px, &sh_cov[0]) < 0) fx_cp(&sh_cov[0], &px);
@@ -181,7 +188,6 @@ static pdw sh_cover(void)
             if (fx_cmp(&py, &sh_cov[3]) > 0) fx_cp(&sh_cov[3], &py);
         }
     }
-    (void)qx; (void)qy;
     return 1;
 }
 

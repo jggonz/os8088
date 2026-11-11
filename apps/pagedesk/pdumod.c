@@ -140,7 +140,6 @@ static void pdu_mod_quit(void)
     pdu_cache_drop();
     if (pdu_bankraw) {
         pk_init(0, 0);                  /* no band: nothing more is drawn */
-        os88_mem_free(pdu_bankraw);
         pdu_bankraw = 0;
         pdu_bank = 0;
     }

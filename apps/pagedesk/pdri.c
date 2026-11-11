@@ -385,7 +385,7 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
         goto refuse;
     }
     if (!x_have(PDX_FNT)) { x_need(PDX_FNT); if (x_gone(PDX_FNT)) g_tmunread = PDTM_UNREAD; return 0; }
-    g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = PDFG_BLOCK;
+    g_fgl.objnum = f->objnum; g_fgl.gen = f->gen; g_fgl.code = code; g_fgl.flags = f->esub ? PDFG_BLOCK | PDFG_NOPROG : PDFG_BLOCK;
     g_fgl.em64 = (pdw)(px << 6); g_fgl.dseg = g_gseg; g_fgl.cap = g_gkb; g_fgl.pass = g_pstamp;
     pd_fcopy_out(&g_fgl, g_xb, 0, sizeof g_fgl);
     r = x_call(PDV_FNT_GLYPH, 0, 0, 0);
@@ -398,6 +398,14 @@ static pdw emb_miss(struct pdr_font *f, pdw code, pdw px)
         return 0;
     }
     if (r == PDE_LIMIT) bit = PDF_INC_APPROX;          /* PDFE_SIZE: the program is larger than the workspace */
+    if (f->emb == 2) {      /* a Type0 font with no usable program keeps its Latin: each code in the substitute face, from the
+                             * size-0 block entry PDXF made (the next pass needs no module), else the answer's own (QA R13) */
+        f->esub = 1; g_fwdirty = 1;
+        inc_note(bit, "font substituted");
+        if (emb_hit(f, code, 0)) return 1;
+        if (pd_fpeekw(g_xb, 38) & PDFG_LATIN) { g_esub = pd_fpeekw(g_xb, 30); g_ew = pd_fpeekw(g_xb, 28); g_ewv = 1; }
+        return 0;
+    }
 refuse:
     if (f->emb == 2) f->ok = 0;
     f->emb = 0; g_fwdirty = 1;
@@ -407,9 +415,12 @@ refuse:
 static pdw emb_glyph(struct pdr_font *f, pdw code)
 {
     pdw px = 0, n = 1;
-    if (g_mode != PDR_TEXT && f->emb != 3) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
+    if (g_mode != PDR_TEXT && f->emb != 3 && !f->esub) { n = (pdw)((g_pem + 31) >> 5); px = (pdw)(g_pem / n); }   /* <= 32 px, scaled n times above that */
     g_escale = n;
-    return emb_hit(f, code, px) || emb_miss(f, code, px);
+    if (!emb_hit(f, code, px) && !emb_miss(f, code, px)) return 0;
+    if (!f->esub || g_mode == PDR_TEXT) return 1;
+    g_esub = g_elat; inc_note(PDF_INC_FONT, "font substituted");       /* no program: its Latin in the substitute face */
+    return 0;
 }
 
 /* text too small for a bitmap (em < 5 px) is GREEKED: one hairline per show

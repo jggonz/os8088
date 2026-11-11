@@ -83,5 +83,12 @@
 #define an_num          ovl_an_num
 #define an_col          ovl_an_col
 #define an_prog         ovl_an_prog
+/* [plat] a page view's reset: called by three verbs, all already here (QA F15
+ * paid for the image decoder's workspace ask with it) */
+#define mode_reset      ovl_mode_reset
+
+/* [fonts] an embedded font's MISS: once per code and size (a hit never leaves the band loop), its
+ * time is PDXF's raster, not the far call and thunks (20.22.8); a font's load, once per font */
+#define emb_miss        ovl_emb_miss
 
 #endif

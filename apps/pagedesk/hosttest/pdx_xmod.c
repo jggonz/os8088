@@ -30,6 +30,8 @@ pdw pdrh_slot;                      /* the occupant the harness "loaded"     */
 long pdrh_xcalls;
 pdw pdr_x_off, pdr_x_seg, pdr_x_cf, pdr_x_dx, pdr_out_cx, pdr_out_dx;
 static pdw g_igs = 0xFFFF, g_igk;   /* the glyph claim PDXF was last handed    */
+void pdrh_xload(void) { g_igs = 0xFFFF; }   /* a load: the next GLYPH INITs PDXF (pdr_test.c) */
+long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail;   /* pdr_test.c's PDR_XSHADE report (pdr_xmod.c's; no PDXG here) */
 static pdw g_slotkb;                /* a PDMEM_SLOT grant (PDX_SLOTGROW), else PDX_SLOTKB or 48 */
 
 static void xinit(pdw gseg, pdw gkb)
@@ -61,6 +63,11 @@ pdw pdr_xfar(pdw verb, pdw bx, pdw cx, pdw dx)
         memcpy(&gseg, XMEM(xb, offsetof(struct pdxb_fglyph, dseg)), 2);
         memcpy(&gkb, XMEM(xb, offsetof(struct pdxb_fglyph, cap)), 2);
         if (gseg != g_igs || gkb != g_igk) xinit(gseg, gkb);
+        if (getenv("PDX_NOPROG")) {             /* --nopr: every font's program unusable (QA R13) */
+            pdw fl;
+            memcpy(&fl, XMEM(xb, offsetof(struct pdxb_fglyph, flags)), 2); fl |= PDFG_NOPROG;
+            memcpy(XMEM(xb, offsetof(struct pdxb_fglyph, flags)), &fl, 2);
+        }
     }
     pdx_odx = 0;
     r = pdxf_verb(verb, bx, cx, dx);

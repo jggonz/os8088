@@ -69,9 +69,16 @@ static pdw img_row(void)
  * What it answers is hostile until checked: sizes the DDA takes, and a row
  * of at least the bytes its mode reads, inside the 1 KiB row buffer */
 typedef char pdr_ck_imgf[PDIMG_MASK == 1 && PDIMG_INVERT == 2 ? 1 : -1];  /* = the record's flags 1, 2 */
+/* A decoder whose workspace is short answers IMG_OPEN with PDE_NEEDMEM, CF
+ * clear, DX = the KiB (PDXI's JBIG2 asks 63). That is a raster-time ask for
+ * PDMEM_SLOT: the band is drawn again after the primary's answer (step's
+ * PDR_RAST arm), once a page view. It used to read as a refusal - "image
+ * decoder" and a blank page on a 640 KiB VGA whose slot workspace came out
+ * at 21 KiB (QA F15) */
+static pdw g_imem, g_imask;             /* asked this band / once a page view */
 static pdw img_xopen(pdw m, const pdb *b, pdi wq, pdi hq)
 {
-    pdw need;
+    pdw need, r;
     img_close();
     pdr_zero(&g_xi, sizeof g_xi);
     g_xi.objnum = g_iobj; g_xi.gen = g_igen; g_xi.codec = b[19];
@@ -80,8 +87,12 @@ static pdw img_xopen(pdw m, const pdb *b, pdi wq, pdi hq)
     g_xi.want_w = (pdw)((wq + 3) >> 2); g_xi.want_h = (pdw)((hq + 3) >> 2);
     g_xi.flags = b[18] & 3;
     pd_fcopy_out(&g_xi, g_xb, 0, sizeof g_xi);
-    x_call(PDV_IMG_OPEN, g_xb, 0, 0);
+    r = x_call(PDV_IMG_OPEN, g_xb, 0, 0);
     if (x_cf) return 0;
+    if (r == PDE_NEEDMEM) {
+        if (!g_imask && x_mem(PDMEM_SLOT, x_dx)) g_imem = g_imask = 1;
+        return 0;
+    }
     pd_fcopy_in(g_xb, 0, &g_xi, sizeof g_xi);
     g_iopen = 1; g_icodec = m; g_icur = -1;
     need = g_xi.out_mode == PDIM_BITS1 ? (pdw)((g_xi.out_w + 7) >> 3)
@@ -178,7 +189,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             }
             if (!g_iopen || g_icodec != m || g_iobj != obj || g_igen != gen) {
                 g_iobj = obj; g_igen = gen;
-                if (!img_xopen(m, b, wq, hq)) { inc_note(PDF_INC_IMAGE, "image decoder"); return; }
+                if (!img_xopen(m, b, wq, hq)) { if (!g_imem) inc_note(PDF_INC_IMAGE, "image decoder"); return; }
             }
             W = g_xi.out_w; H = g_xi.out_h; rb = g_xi.rowbytes; mode = g_xi.out_mode; onc = g_xi.out_ncomp;
         }
@@ -366,7 +377,7 @@ static void ik_fill(pdw d, pdi y0, pdi y1)
             if (!W || !H || W > 4096 || H > 0x7FFF || (b[18] & 16)) goto next;
             g_iobj = (pdw)r16(b + 12); g_igen = (pdw)r16(b + 14);
             e->err = 1;
-            if (!img_xopen(d, b, wq, hq)) goto next;
+            if (!img_xopen(d, b, wq, hq)) { if (g_imem) e->err = 3; goto next; }
             e->w = g_xi.out_w; e->h = H = g_xi.out_h; e->rb = g_xi.rowbytes;
             e->mode = g_xi.out_mode; e->nc = g_xi.out_ncomp;
             n = (pdw)(e->y1 - e->y0 + 1);
@@ -498,6 +509,7 @@ static void mode_reset(void)
     g_pkfam = 0xFF; g_aflags = 0;
     x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0;
     g_fioerr = 0;                       /* the strikes are read again (QA F21) */
+    g_imem = g_imask = 0;
 }
 
 static pd_px vb_w, vb_h;
@@ -699,6 +711,11 @@ static pdw verb_step(void)
     }
     if (g_ph == PDR_RAST) {
         band_draw(g_bcur);
+        if (g_imem) {                   /* a decoder asked for workspace: this band again after the answer */
+            g_imem = 0;
+            if (x_asks < PDR_XASKS) { img_close(); return x_answer(x_mwant, 0, x_mkb, PDR_RAST); }
+            inc_note(PDF_INC_IMAGE, "image decoder");
+        }
         g_bcur++;
         if (g_bcur >= g_b1) {
         groupend:
@@ -971,7 +988,10 @@ static pdw verb_init(pdw xbseg)
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0; g_gnogrow = 0; g_tmref = 0;
-    g_syndoc = 0; syn_doc();            /* ...and the synthetic strike blocks are the last one's */
+    /* ...and the synthetic strike blocks are the last one's: object numbers repeat across files
+     * (QA R24, R26 c). At this INIT if the claim has room for blocks, else at the re-INIT that
+     * brings the region (syn_doc, pdrd.c): the region is handed again, not afresh */
+    g_syndoc = 0; syn_doc();
     g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }

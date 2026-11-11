@@ -359,7 +359,7 @@ static void pdu_nav_page(void)
 /* anything nav still owes (the wake handler keeps going while it is true) */
 static int pdu_nav_owed(void)
 {
-    if (pdu_doc != D_OPEN || pdu_gs)
+    if (pdu_doc != D_OPEN || pdu_gs || pdu_stale)   /* QA F31: no thumbnail of a changed file */
         return 0;
     /* a selection owed to the glass under a popover waits for the popover's
      * repair render: counting it here re-posted the wake on every wake while
