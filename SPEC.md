@@ -41973,8 +41973,9 @@ prefetch, one call with nothing left armed behind it:
 
 | routine | contract |
 |---------|----------|
-| `dsk_rah_pre` | in: AX = the file's first cluster, `[ld_fsz]` its size. Out: nothing; every register but ES preserved. Reads from the file's first sector to the CYLINDER's end, no further than the file (`floor(size/512) + 1`, at most one sector over) and no more than the claim's slots hold (`9 x [dsk_rah_runs]`), in ONE `int 13h` into slots 0 .. m-1, each record stamped with its own nine sectors. |
+| `dsk_rah_pre` | in: AX = the file's first cluster, `[ld_fsz]` its size. Out: nothing; every register but ES preserved. Reads from the file's first sector to the CYLINDER's end, no further than the file (`floor(size/512) + 1`, at most one sector over) and no more than the claim's slots from the first it spends hold, in ONE `int 13h`: the first slot is `dsk_rah_pick`'s, the round robin's as a fill spends it, and the run goes on through the slots after it up to the width, each record stamped with its own nine sectors. |
 | `dsk_rah_rdst` | the read and the stamp, shared with `dsk_rah_fill`'s one slot. In: DI = the LBA, CX = DX = sectors, ES:BX = where in the claim, SI = that slot's record. Out: CF=0 read and stamped, CF=1 the read failed and no record was touched. |
+| `dsk_rah_pick` | the round robin's pick `dsk_rah_fill` makes (18.95.10), as a routine: a slot across a 64KB page passed over, a visited chunk spared once. Out: SI = the slot's record, BX = its run's offset in the claim, CX = 9, `[dsk_rah_next]` past it. |
 | `dsk_rah_find` | the scan `dsk_rah_serve` makes, as a routine. In: DI = an LBA. Out: CF=0 SI = its record and AX its index in the chunk (marked as a visit unless it is a stream moving on); CF=1 nothing holds it. |
 
 **What it leaves alone.** Nothing when the first sector is already cached -
@@ -41987,14 +41988,24 @@ storage another one owns; the records carry `[disk_drive]` and `[dsk_sigcur]`
 as every fill's do, so the swap reasoning of 18.95.11 and §18.8.1 is
 unchanged. A failed read forgets the whole cache (`dsk_rah_flush`): the DMA may
 have landed in any of the slots. Nothing either when the run would cross a
-64KB page (18.95.7.1: the claim's first paragraph and its run's end in
+64KB page (18.95.7.1: the run's first paragraph and its end in
 different pages), which `dsk_runcap` would cut into two calls - one more than
 a short package's peek costs. On a machine whose FDC was not seen to cross a
 head (`[dsk_cylrun]` = 0, §18.93.1) `dsk_xfer` cuts the cylinder's run at the
 head itself: two calls, the count the peek's fill and the read behind it made
 there anyway, so the prefetch gains nothing on such a machine and costs
-nothing. The slots spent are 0 .. m-1 rather than the round robin's
-(18.95.10), which needs no wrap; the round robin's place is not moved.
+nothing. **The run starts where a fill would** (18.95.10): at `dsk_rah_pick`'s slot,
+the cursor moved past it and a chunk a read has come back to spared once,
+and it goes on through the following slots up to the width - so it is
+shorter than the cylinder only when the pick lands near the width's end. It
+was slots 0 .. m-1 when this landed, whatever slot 0 held and with the
+cursor left where it was: that took a visited chunk and shifted every pick
+behind it by one, and on a DOS launch the shift put the very next fill onto
+the loader's probe of the DOCUMENT the package was opening (§96.44.5.5),
+which DOS then read again off the disk as a 330 ms bar of its own outside
+any operation - `dosbar`'s third long phase. The later slots of a run are
+not spared or tested one by one; the run's page test covers them, and the
+loader reads them before any fill can come back to them.
 
 **Calls, argued from the code** (a file of `n` contiguous sectors from LBA
 `L`, touching `c` cylinders, the cache cold at `L`, on a machine with
@@ -227551,7 +227562,10 @@ A:\SYSTEM\APPDATA\NOTES\NOTE0001.TXT  what New makes: the lowest NOTEnnnn free
   clusters) - measured, `os88disk.py --verify`. A folder that is missing (a
   disk not built here, a user who deleted it) is made by the first access
   with `OSAPI_FILE_MKDIR`, one cluster: 14 notes at 512-byte clusters, 30 at
-  1 KB. A full folder says `Notes folder is full`.
+  1 KB. New says `Notes folder is full` when its numbers 1..32 are all in
+  use, or the write answers `FERR_DIRFULL` (a folder that cannot grow:
+  `kern_dos`, a full disk) - since BR-60 the 32 shipped slots are not the
+  limit, the folder growing by a cluster past them (`stiknotevga`'s K).
 - **The text is Note Pad's**: CR LF line ends (a lone CR or LF reads as one),
   and a byte outside 32..126 is not drawn and takes no cell - `np_nlfold`
   drops it. **Line 1 is the TITLE.**

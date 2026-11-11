@@ -7086,6 +7086,57 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; so the DATA stays in .text at every toggle
 
 
+; THE PICK (SPEC.md 18.95.10), spelled once for its two homes: inline in
+; dsk_rah_fill where there is no prefetch (kern_mega, kern_dos), and as
+; dsk_rah_pick where the loader's prefetch spends its first slot the same way
+; a fill does. Out: SI = the slot's record, BX = its run's offset in the
+; claim, CX = 9; [dsk_rah_next] past it. Clobbers AX, DX. %1 is the loop's
+; label, the site's own.
+%macro RAH_PICK 1
+%1:
+    mov ax, [dsk_rah_next]
+    mov bx, ax
+    inc bx
+    cmp bx, [dsk_rah_runs]      ; THE ONE BOUND THAT MUST BE DYNAMIC (SPEC.md
+    jb %%picked                  ; 18.95.5): this decides which slots are ever
+    xor bx, bx                  ; WRITTEN. The scans elsewhere are safe at any
+%%picked:                        ; width, because dsk_rah_flush clears all
+    mov [dsk_rah_next], bx      ; DSK_RAH_RUNS records and the ones above the
+                                ; live width then stay RAH_N = 0
+%ifdef KERN_MEGA
+    cmp byte [dsk_rah_hi], 0    ; a store above 1MB is never a transfer's
+    jne %%slotok                 ; target - the landing is - so no slot of it
+%endif                          ; can straddle anything that matters
+    push ax                     ; **A SLOT ACROSS A 64KB PAGE IS NOT FILLED**
+    mov cx, 288                 ; (SPEC.md 18.95.7.1). The claim has no page
+    mul cx                      ; head, so a boundary can fall inside ONE slot,
+    add ax, [dsk_rah_seg]       ; and dsk_runcap then splits that fill into two
+    and ah, 0x0F                ; int 13h - the whole point of a fill being
+    cmp ax, 0x1000 - 287        ; that it is one. The slot's first paragraph,
+    pop ax                      ; as an offset into its page: 287 more past it
+    jae %1                   ; is the next page (mem_dmaok's own test).
+                                ; The claim is under 64KB, so at most one slot
+                                ; straddles, and the width is at least
+                                ; DSK_RAH_MIN = 2, so the next one does not
+%ifdef KERN_MEGA
+%%slotok:
+%endif
+    mov cx, 9
+    mul cx                      ; AX = slot * RAH_REC, RAH_REC being 9...
+    mov bx, ax
+    add ax, dsk_rah_tab
+    xchg ax, si                 ; SI = the slot's record (the output)
+    cmp byte [si+RAH_HIT], 0    ; **A CHUNK A READ HAS COME BACK TO SINCE ITS
+    je %%take                    ; FILL IS SPARED ONCE** (SPEC.md 18.95.10): its
+    mov byte [si+RAH_HIT], 0    ; mark is spent and the pick moves on. Every
+    jmp short %1             ; slot spared clears its own, so the walk ends
+                                ; within one turn of the table
+%%take:
+    shl bx, cl                 ; ...and BX = its own run of the claim, RAH_REC
+                                ; == DSK_RAH_SECS making slot*512 it, with CL
+                                ; still the 9 the multiply was given
+%endmacro
+
 ; THE SCAN (SPEC.md 18.95.10.1), spelled once for its two homes: inline in
 ; dsk_rah_serve where there is no prefetch (kern_mega, kern_dos), and as
 ; dsk_rah_find where the loader's prefetch asks the same question. In: DI =
@@ -7136,6 +7187,18 @@ dsk_rah_find:
     add si, RAH_REC
     loop .slot
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_rah_pick - spend a slot: the round robin, sparing a visited chunk once
+; out: SI = the slot's record, BX = its run's offset in the claim, CX = 9,
+;      and [dsk_rah_next] past it
+; clobbers: AX, DX, flags
+; dsk_rah_fill's pick, and the loader prefetch's first slot (SPEC.md
+; 18.95.13). Reached only with a claim live.
+; -----------------------------------------------------------------------------
+dsk_rah_pick:
+    RAH_PICK .pick
     ret
 %endif
 
@@ -7308,48 +7371,13 @@ dsk_rah_fill:
     push ax                     ; the chunk length, over the multiply below -
                                 ; `mul` writes DX:AX and there is no third
                                 ; register free to keep it in
-.pick:
-    mov ax, [dsk_rah_next]
-    mov bx, ax
-    inc bx
-    cmp bx, [dsk_rah_runs]      ; THE ONE BOUND THAT MUST BE DYNAMIC (SPEC.md
-    jb .picked                  ; 18.95.5): this decides which slots are ever
-    xor bx, bx                  ; WRITTEN. The scans elsewhere are safe at any
-.picked:                        ; width, because dsk_rah_flush clears all
-    mov [dsk_rah_next], bx      ; DSK_RAH_RUNS records and the ones above the
-                                ; live width then stay RAH_N = 0
-%ifdef KERN_MEGA
-    cmp byte [dsk_rah_hi], 0    ; a store above 1MB is never a transfer's
-    jne .slotok                 ; target - the landing is - so no slot of it
-%endif                          ; can straddle anything that matters
-    push ax                     ; **A SLOT ACROSS A 64KB PAGE IS NOT FILLED**
-    mov cx, 288                 ; (SPEC.md 18.95.7.1). The claim has no page
-    mul cx                      ; head, so a boundary can fall inside ONE slot,
-    add ax, [dsk_rah_seg]       ; and dsk_runcap then splits that fill into two
-    and ah, 0x0F                ; int 13h - the whole point of a fill being
-    cmp ax, 0x1000 - 287        ; that it is one. The slot's first paragraph,
-    pop ax                      ; as an offset into its page: 287 more past it
-    jae .pick                   ; is the next page (mem_dmaok's own test).
-                                ; The claim is under 64KB, so at most one slot
-                                ; straddles, and the width is at least
-                                ; DSK_RAH_MIN = 2, so the next one does not
-%ifdef KERN_MEGA
-.slotok:
+%ifdef DSK_RAHINT
+    call dsk_rah_pick           ; the round robin's pick, a routine of its own
+                                ; because the loader's prefetch picks the
+                                ; same way (SPEC.md 18.95.13)
+%else
+    RAH_PICK .pick
 %endif
-    mov cx, 9
-    mul cx                      ; AX = slot * RAH_REC, RAH_REC being 9...
-    mov bx, ax
-    add ax, dsk_rah_tab
-    xchg ax, si                 ; SI = the slot's record (the output)
-    cmp byte [si+RAH_HIT], 0    ; **A CHUNK A READ HAS COME BACK TO SINCE ITS
-    je .take                    ; FILL IS SPARED ONCE** (SPEC.md 18.95.10): its
-    mov byte [si+RAH_HIT], 0    ; mark is spent and the pick moves on. Every
-    jmp short .pick             ; slot spared clears its own, so the walk ends
-                                ; within one turn of the table
-.take:
-    shl bx, cl                 ; ...and BX = its own run of the claim, RAH_REC
-                                ; == DSK_RAH_SECS making slot*512 it, with CL
-                                ; still the 9 the multiply was given
     pop dx                      ; DX = the chunk length again
     mov [si+RAH_N], ch          ; it holds nothing until the read works: CH
                                 ; is 0 (CX = 9, the multiply's), and a byte is
@@ -7495,9 +7523,8 @@ dsk_rah_pre:
     call kentc_bp
     cmp byte [dsk_vflop], 1
     jne .out
-    mov bx, [dsk_rah_seg]       ; BX = the claim, kept to the read
-    or bx, bx
-    jz .out
+    cmp word [dsk_rah_seg], 0   ; no claim, no cache
+    je .out
     call dsk_clus2lba_x
     jc .out
     xchg ax, di                 ; DI = the file's first LBA
@@ -7522,23 +7549,42 @@ dsk_rah_pre:
     jbe .f
     xchg ax, cx
 .f:
-    mov al, DSK_RAH_SECS        ; ...nor than the claim holds
-    mul byte [dsk_rah_runs]
+    push cx                     ; THE RUN STARTS WHERE A FILL WOULD: the
+    call dsk_rah_pick           ; round robin's slot, a visited chunk spared
+                                ; once (18.95.10). It used to be slot 0
+                                ; whatever slot 0 held, which took a chunk a
+                                ; read had come back to and left the cursor
+                                ; where it was - and two fills on, the cursor
+                                ; then reached the chunk of the DOCUMENT the
+                                ; package was launched to open, which DOS read
+                                ; again as a bar of its own (dosbar). SI = the
+                                ; record, BX = its run, CX = 9
+    mov al, [dsk_rah_runs]      ; ...and it runs on through the slots after
+    sub al, [dsk_rah_next]      ; it, up to the width: runs - (slot + 1),
+    cmp al, [dsk_rah_runs]      ; or none when the pick wrapped the cursor
+    jb .h
+    xor ax, ax
+.h:
+    inc ax
+    mul cl                      ; AX = 9 x the slots from the pick on
+    pop cx
     cmp cx, ax
     jbe .g
     xchg ax, cx
 .g:
     mov ax, 32                  ; NOT ACROSS A 64KB PAGE (18.95.7.1): the run's
-    mul cx                      ; paragraphs from slot 0 - which is the
-    mov es, bx                  ; claim's first - and when its end is in
-    add ax, bx                  ; another page than its start, no prefetch:
-    xor ax, bx                  ; dsk_runcap would cut it into two calls,
-    test ah, 0xF0               ; one more than a short package's peek
-    jnz .out                    ; costs. (An end exactly AT a page counts as
-                                ; across it: one claim placement in 4,096)
+    mul cx                      ; paragraphs, from its first - the claim's
+    xchg ax, dx                 ; plus BX / 16, BX being the slot x 4,608, so
+    mov al, bh                  ; BH x 16 - and when its end is in another
+    mov ah, 16                  ; page than its start, no prefetch:
+    mul ah                      ; dsk_runcap would cut it into two calls,
+    mov es, [dsk_rah_seg]       ; one more than a short package's peek costs.
+    add ax, [dsk_rah_seg]       ; (An end exactly AT a page counts as across
+    add dx, ax                  ; it: one placement in 4,096)
+    xor ax, dx
+    test ah, 0xF0
+    jnz .out
     mov dx, cx
-    xor bx, bx                  ; slot 0's run, and record 0
-    mov si, dsk_rah_tab
     call dsk_rah_rdst
     jnc .out
     call dsk_rah_flush

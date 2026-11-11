@@ -13996,9 +13996,11 @@ SOAK = [
         "read off the card's rendered framebuffer (fbuf): the TALL layout; "
         "the sheet yellow with a black edge; Color > Pink makes it pink and "
         "STIKNOTE.DAT's table says so, and the pad closed and launched again "
-        "is still pink; with 29 empty notes written into NOTES on the host "
-        "the pad counts 30 and `+` says `Notes folder is full` and makes "
-        "nothing.",
+        "is still pink; with NOTE0001..NOTE0032 written into NOTES on the "
+        "host (its directory grown past the 32 shipped slots, as the kernel "
+        "grows one since BR-60) the pad counts 33 and `+` says `Notes folder "
+        "is full` and makes nothing. VERIFIED TO FAIL with sn_new's `cmp al, "
+        "32` made 33: `+` makes NOTE0033.TXT and opens it.",
         needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
     Row("stiknotesmall", "soak", py("tests/stiknote.py", "--leg", "small"),
         45.0,
