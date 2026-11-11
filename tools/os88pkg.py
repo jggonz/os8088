@@ -27,6 +27,7 @@ kernel into its data on the first paint. Any failure exits 1 with a message
 on stderr; OUT.o88 is not written on failure.
 """
 import argparse
+import importlib
 import os
 import struct
 import sys
@@ -366,7 +367,11 @@ def farcall_gate(labels, blobs) -> None:
     there is nothing to check against, and nothing is refused."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
-        import os88cells
+        # importlib, not `import`: os88vbundle.closure follows every import
+        # statement, and os88cells reaches os88build and the emulator tools
+        # behind it - which the encoder, battle-builder and precompiler
+        # bundles must not carry. The gate needs apps/os88api.inc anyway.
+        os88cells = importlib.import_module("os88cells")
         bad = os88cells.farcall_problems(dict(zip(labels, blobs)))
     except (ImportError, OSError):
         return
