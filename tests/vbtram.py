@@ -224,9 +224,7 @@ def run(arm, tmp, syms):
             rc = [c for c in mine if c.seg == v0]
             size = (rc[0].para << 4) if rc else 0
             h0 = m.read(v0 << 4, size)
-            m.write(ui._S("mem_cpq_lvl"), bytes([0xFE]))
-            m.write(ui._S("mem_cpq"), struct.pack(
-                "<H", geom.winptr(m, cur[0].i, ui._S)))
+            geom.post_compact(m, cur[0].i, 0xFE, ui._S)
             m.run()
             until(lambda: struct.unpack_from(
                 "<H", m.read(ui._S("mem_cpq"), 2))[0] == 0,

@@ -308,7 +308,6 @@ def main():
 
         shot0 = repaint()
         tick0 = clock() if a.clock else None
-        wptr = os88geom.winptr(m, win, S)
 
         def shown():
             return any(o.i == win and o.visible
@@ -320,8 +319,7 @@ def main():
                             limit=20)
             os88marty.pace(m, 1.0)
         def post():
-            m.write(S("mem_cpq_lvl"), bytes([0xFC]))
-            m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+            os88geom.post_compact(m, win, 0xFC, S)
             os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                             "the posted compaction", poll=0.2, limit=30)
             os88marty.ui_done(m)
