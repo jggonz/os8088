@@ -47,6 +47,7 @@ static pdw x_res;               /* PDX_* in the slot now (PDV_REND_SLOT)  */
 static pdw x_pend;              /* bit (1 << PDX_*): needed, absent, this pass */
 static pdw x_ref;               /* refused for this page view (XR_* too)  */
 static pdw x_cf, x_dx;          /* the last x_call's carry flag and DX     */
+static pdw x_prog;              /* an occupant answered a verb since the last ask (pdrv.c x_answer) */
 static pdw x_used, x_swaps;     /* pdxb_rstatus.mods / .swaps              */
 static pdw x_mwant, x_mkb;      /* a region wanted (0x80 | PDMEM_*, KiB), 0 none: PDMEM_SLOT is 0 */
 #define XR_MEM  0x8000u         /* x_ref: the region asked for was refused */
@@ -99,6 +100,7 @@ static pdw x_call(pdw verb, pdw bx, pdw cx, pdw dx)
     r = pdr_xfar(verb, bx, cx, dx);
     x_cf = pdr_x_cf; x_dx = pdr_x_dx;
     x_used |= (pdw)(1u << x_res);
+    if (!x_cf) x_prog = 1;
     return r;
 }
 

@@ -300,9 +300,17 @@ static pdw x_ask;                   /* the last answer: PDX_*, or 0x80 | PDMEM_*
 static pdw x_asks;                  /* answers this page view                   */
 static pdw g_xph;                   /* after it: PDR_INTERP re-runs the pass, PDR_RAST draws the band */
 static pdw g_xclost;                /* the XC went from under an open view (20.22.7.11): re-run the pass */
+/* an ask after a load that WORKED - the occupant answered a verb since the last ask - is the
+ * page alternating between what it needs (PDXF's text, PDXG's colour, a decoder's image: one
+ * slot), and each such load moved the page on. Up to PDR_XFREE of them are not charged to
+ * PDR_XASKS (QA QZ1035: its fonts and colour spaces took eight loads, and the ninth, for the
+ * red series' colour space, was refused); an ask after a load that did nothing always is */
+static pdw x_free;
 static pdw x_answer(pdw what, pdw cx, pdw dx, pdw ph)
 {
-    x_ask = what; pdr_out_cx = cx; pdr_out_dx = dx; x_asks++;
+    if (!x_prog || x_free >= PDR_XFREE) x_asks++; else x_free++;
+    x_prog = 0;
+    x_ask = what; pdr_out_cx = cx; pdr_out_dx = dx;
     g_xph = ph; g_ph = PDR_XWAIT;
     return (what & 0x80) ? PDE_NEEDMEM : PDE_NEEDMOD;
 }
@@ -444,6 +452,7 @@ static pdw x_rneed(void)
         }
         ik_fill(x_res, y0, y1);
         img_close();
+        x_prog = 0;                     /* charged, then given back: the stash's loads are free */
         r = x_answer(id, 0, id, PDR_RAST);
         x_asks--;
         return r;
@@ -507,7 +516,7 @@ static void mode_reset(void)
     g_inc = 0; g_incname[0] = 0; g_ops = 0; g_passes = 0;
     g_ierr = 0; g_ndl = 0;
     g_pkfam = 0xFF; g_aflags = 0;
-    x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0;
+    x_ref = 0; x_asks = 0; x_ask = 0; x_used = 0; x_swaps = 0; g_xcflush = 0; g_ikask = 0; x_free = 0; x_prog = 0;
     g_fioerr = 0;                       /* the strikes are read again (QA F21) */
     g_imem = g_imask = 0;
 }

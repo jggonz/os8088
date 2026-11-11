@@ -494,6 +494,24 @@ def newdoc_pdf(path, base, shade):
     d.write(path)
 
 
+def alt_pdf(path):
+    """One slot, two occupants by turns (QA QZ1035, PDR_XFREE): a page-size codec image (the
+    image decoder at raster time) under 40 dashed rules (PDXG at interpretation) and enough
+    small fills that a 20 KiB list draws it in several groups, each loading PDXG for its
+    dashes and the decoder for its bands - twelve loads, every one of which drew something.
+    PDR_XASKS (8) alone refused the ninth: 'graphics module', the dashes solid."""
+    d = Pdf()
+    w, h = 64, 48
+    dct = image_xobj(d, w, h, jpeg_of(w, h), extra='/Filter /DCTDecode')
+    c = ['q 360 0 0 380 20 10 cm /Im Do Q', '1 w 1 0 0 RG']
+    for k in range(40):
+        y = 15 + k * 9
+        c.append('[4 2] 0 d 30 %d m 370 %d l S' % (y, y))
+        c.append(' '.join('%d %d 3 3 re f' % (30 + i * 6, y + 2) for i in range(55)))
+    d.page('\n'.join(c), {'Im': dct})
+    d.write(path)
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -511,7 +529,8 @@ def main():
     bigpath_pdf(os.path.join(out, 'bigpath.pdf'))
     newdoc_pdf(os.path.join(out, 'docA.pdf'), 'Courier', True)
     newdoc_pdf(os.path.join(out, 'docB.pdf'), 'Helvetica-Bold', False)
-    print('os88pdfx_rcore: 14 fixtures in %s' % out)
+    alt_pdf(os.path.join(out, 'alt.pdf'))
+    print('os88pdfx_rcore: 15 fixtures in %s' % out)
 
 
 if __name__ == '__main__':
