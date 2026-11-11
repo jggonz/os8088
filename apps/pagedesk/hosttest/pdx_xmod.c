@@ -31,6 +31,7 @@ long pdrh_xcalls;
 pdw pdr_x_off, pdr_x_seg, pdr_x_cf, pdr_x_dx, pdr_out_cx, pdr_out_dx;
 static pdw g_igs = 0xFFFF, g_igk;   /* the glyph claim PDXF was last handed    */
 void pdrh_xload(void) { g_igs = 0xFFFF; }   /* a load: the next GLYPH INITs PDXF (pdr_test.c) */
+int pdrh_xgrant;                    /* pdr_test.c's PDR_XNEEDMEM ladder (pdr_xmod.c's; unread here) */
 long pdrh_xshades, pdrh_xstepmax, pdrh_xshfail;   /* pdr_test.c's PDR_XSHADE report (pdr_xmod.c's; no PDXG here) */
 static pdw g_slotkb;                /* a PDMEM_SLOT grant (PDX_SLOTGROW), else PDX_SLOTKB or 48 */
 
