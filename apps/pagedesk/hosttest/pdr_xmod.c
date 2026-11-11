@@ -34,6 +34,8 @@ extern pdw pdrh_xbseg(void);
 #define XMEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 
 pdw pdrh_slot;                      /* the occupant the harness "loaded"     */
+void pdrh_xload(void) { }           /* pdx_xmod.c's has a cache to drop; this model has none (and
+                                     * Apple's linker refuses pdr_test.c's weak reference left unresolved) */
 long pdrh_xcalls, pdrh_xopens, pdrh_xrows;
 int pdrh_xgrant;                    /* PDR_XNEEDMEM: the slot's workspace was granted */
 static struct pdxb_img g_im;

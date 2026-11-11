@@ -988,10 +988,7 @@ static pdw verb_init(pdw xbseg)
     g_nfr = 0; g_idone = 1; g_pgopen = 0;
     /* perf: an INIT is a new document (D2): its fonts and Tf names are new */
     g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0; g_rcn = 0; g_gnogrow = 0; g_tmref = 0;
-    /* ...and the synthetic strike blocks are the last one's: object numbers repeat across files
-     * (QA R24, R26 c). At this INIT if the claim has room for blocks, else at the re-INIT that
-     * brings the region (syn_doc, pdrd.c): the region is handed again, not afresh */
-    g_syndoc = 0; syn_doc();
+    g_syndoc = 0; syn_doc();            /* ...and the synthetic strike blocks are the last one's */
     g_xctop = 0; xc_adopt();            /* a new document: an empty extension cache */
     return PDE_OK;
 }

@@ -231,10 +231,10 @@ static void do_init(int bpp, int bankkb, int dlkb)
         memset(h, 0, PDFB_HDR); h[0] = 7; h[4] = 20; h[60] = 1; h[62] = PDFB_MAGIC & 255; h[63] = PDFB_MAGIC >> 8;
     }
     if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
-    if (synhdr) printf("synmagic=%04x\n", MEM(SEG_GLY, synhdr)[62] | (MEM(SEG_GLY, synhdr)[63] << 8));
     /* a document's close gives the slot back (plat's pdu_doc_free): the next one loads and INITs its
      * occupant afresh, so nothing PDXF cached of the last file's font objects survives (QA R24) */
     if (pdrh_slot) { pdrh_slot = 0; vcall(PDV_REND_SLOT, 0, 0, 0); if (pdrh_xload) pdrh_xload(); }
+    if (synhdr) printf("synmagic=%04x\n", MEM(SEG_GLY, synhdr)[62] | (MEM(SEG_GLY, synhdr)[63] << 8));
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
