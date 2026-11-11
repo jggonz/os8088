@@ -838,10 +838,29 @@ def khp_view(lines):
     return out
 
 
+def _mentions_khp(files):
+    """True when any input names a KHP_ knob - the only case where the ON walk
+    can differ from the OFF one, since khp_view evaluates nothing else."""
+    for f in files:
+        try:
+            with open(f, errors="replace") as fh:
+                if "KHP_" in fh.read():
+                    return True
+        except OSError:
+            return True         # let main1 report the unreadable file
+    return False
+
+
 def main():
     global KHP_ON
     rc = 0
-    for KHP_ON in (False, True):
+    # The knobs-ON walk is skipped when no input names a KHP_ knob: khp_view
+    # then returns every line unchanged in both configurations, so the second
+    # walk is the first one again, finding for finding. That is every package
+    # and driver (t_stkapps' corpus); the kernel corpus still takes both.
+    args = sys.argv[1:]
+    both = _mentions_khp(args) if args else True
+    for KHP_ON in ((False, True) if both else (False,)):
         print("stkbalance: KHP_* knobs %s" % ("ON (every knob: kern_mega's and the ones no kernel defines)" if KHP_ON
                                               else "OFF (kern_big, kern_small)"))
         rc |= main1()

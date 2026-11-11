@@ -2316,23 +2316,19 @@ FAST = [
         "self-consistent; tests/sheetfmt.py is the one that points it at "
         "SHEET"),
     Row("stkbalance", "fast",
-        py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
-           "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
-           "apps/os88line.inc", "apps/os88img.inc",
-           "apps/scribe/scribe.asm", "apps/scribe/scdoc.inc",
-           "apps/scribe/scrtf.inc", *_kernel_sources()), 1.5,
-        "every `ret` in the KERNEL and in SHEET, CHART and the includes they "
-        "share is reached at "
-        "the depth it started at. WORD AND SCRIBE ARE IN SCOPE TOO: wd_pictload "
+        py("tools/stkbalance.py", *_kernel_sources()), 1.5,
+        "every `ret` in the KERNEL is reached at "
+        "the depth it started at. Packages were in scope here too: wd_pictload "
         "pushed seven registers and popped six, and while Word was outside the "
         "scope the suite stayed green as the machine went to 000E:00DF inside "
         "the interrupt vector table. `ch_legend` pushed SI and never popped it, so "
         "its `ret` jumped to the saved register: a black canvas and a wedged "
         "app, with no crash and no message (SPEC.md 82.7.3). The walk is "
         "path-aware because a naive push-vs-pop count flags one routine in ten "
-        "and would just be ignored. THE KERNEL ONLY: SHEET, CHART and the "
-        "four app includes it used to carry are `stkapps`' below, which walks "
-        "all of apps/ and drivers/, so they were walked twice a build. Fast "
+        "and would just be ignored. THE KERNEL ONLY: SHEET, CHART, SCRIBE "
+        "and the app includes this row used to carry are `stkapps`' below, "
+        "which walks all of apps/ and drivers/ (every one of them is in its "
+        "globs), so they were walked twice a build until 2026-11-11. Fast "
         "because any kernel edit can break it - shared epilogues, tail "
         "merges and prologue ladders are what a size pass does. The kernel "
         "was gated once the walker followed tail jmps "
