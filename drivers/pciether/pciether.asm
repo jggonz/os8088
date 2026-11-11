@@ -77,7 +77,8 @@ pce_tab:                        ; the backends, in the order they are tried
 
 %macro NIC_STATE 0
 pce_name:   dw 0                ; its name, for the Control Panel page
-pce_vt:     times 5 dw 0        ; the chosen backend's vectors (PCEV_*)
+pce_vt:     times PCEV_HALT/2+1 dw 0 ; the chosen backend's vectors (PCEV_*): one
+                                ; a vector, or pce_find's copy runs into rt_seg
 rt_seg:     dw 0                ; the ring's claim, as OSAPI_MEM_P named it
 rt_lin:     dw 0, 0             ; ...its linear (bus) base
 rt_par:     dw 0                ; ...that as a paragraph (below 1MB)
