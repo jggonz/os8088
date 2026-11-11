@@ -5221,13 +5221,19 @@ sc_drawrun:
     add dx, [sc_gh1]                       ; the cell's last row
     test byte [sc_runa], SCAT_UL
     jz .nul
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
 .nul:
     test byte [sc_runa], SCAT_DUL
     jz .ndul
+    push dx
     call OSAPI_GFX_HLINE            ; double underline: rows 7 and 6
+    pop dx
     dec dx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     inc dx
 .ndul:
     test byte [sc_runa], SCAT_WUL
@@ -13850,7 +13856,9 @@ sc_mdraw:
     dec bx
     mov dx, di
     add dx, 2
+    push cx
     call OSAPI_GFX_HLINE
+    pop cx
     add di, SC_MS_HGT
     jmp .next
 .norm:
@@ -14464,7 +14472,11 @@ sc_combo:
     call OSAPI_GFX_FRAME
     mov ax, cx
     sub ax, 12
+    push bx
+    push cx
     call OSAPI_GFX_VLINE            ; the divider in front of the arrow cell
+    pop cx
+    pop bx
     mov dx, bx
     add dx, 4
     mov si, 3                       ; the arrow: four shrinking hlines
@@ -14475,7 +14487,11 @@ sc_combo:
     mov bx, cx
     sub bx, 6
     add bx, si
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     inc dx
     dec si
     jns .ar
@@ -14858,42 +14874,40 @@ sc_rbstat:
 ; in:  AX = centre x, DX = top row (3 rows tall); preserves all registers
 ; -----------------------------------------------------------------------------
 sc_rmkd:
-    push ax
-    push bx
-    push dx
-    mov bx, ax
-    sub ax, 2
-    add bx, 2
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc ax
-    dec bx
-    call OSAPI_GFX_HLINE
-    pop dx
-    pop bx
-    pop ax
-    ret
+    push si
+    push di
+    mov si, 2                       ; half-widths 2, 1, 0 down the rows
+    mov di, -1
+    jmp short sc_rmk
 sc_rmku:
+    push si
+    push di
+    xor si, si                      ; half-widths 0, 1, 2
+    mov di, 1
+sc_rmk:
     push ax
     push bx
+    push cx
     push dx
+.row:
+    push ax                         ; the line cells clobber AX..DX (SPEC.md
+    push dx                         ; 5.7.3): centre and row ride the stack
     mov bx, ax
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec ax
-    inc bx
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec ax
-    inc bx
+    sub ax, si
+    add bx, si
     call OSAPI_GFX_HLINE
     pop dx
+    pop ax
+    inc dx
+    add si, di                      ; -1 and 3 are both above 2 unsigned:
+    cmp si, 2                       ; three rows either way
+    jbe .row
+    pop dx
+    pop cx
     pop bx
     pop ax
+    pop di
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -15082,7 +15096,9 @@ sc_ruler:
     mov bx, cx
     mov dx, di
     add dx, SC_RULER_H-1
+    push bx
     call OSAPI_GFX_HLINE            ; the rule under the ruler
+    pop bx
     ; Style: and its combo
     mov ax, SC_RL_SBX + SC_RL_SBW - 1
     call sc_wfit
@@ -15129,7 +15145,11 @@ sc_ruler:
     xor bh, bh
     add ax, bx
     pop bx
+    push cx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
+    pop cx
     pop bx
     pop ax
     add dx, 2
@@ -15241,7 +15261,9 @@ sc_ruler:
     pop bx
     mov dx, di
     add dx, 10
+    push bx
     call OSAPI_GFX_HLINE
+    pop bx
     pop ax
     pop cx
     cmp cx, 1                       ; the last cell is the decimal tab:
@@ -15251,7 +15273,11 @@ sc_ruler:
     add cx, 8
     mov dx, di
     add dx, 5
+    push ax
+    push bx
     call OSAPI_GFX_PIXEL
+    pop bx
+    pop ax
     pop cx
 .tbn:
     add si, 3
@@ -16197,7 +16223,11 @@ sc_status:
     mov dx, [sc_ct]
     add dx, [sc_ch]
     sub dx, SC_STATUS_H
+    push ax
+    push dx
     call OSAPI_GFX_HLINE            ; the rule over the strip
+    pop dx
+    pop ax
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR

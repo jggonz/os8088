@@ -421,7 +421,9 @@ wn_by:
 wn_hl:
     mov dx, [di+W_Y]
     add dx, WN_BTY
-    call KERNEL_SEG:cw_gfx_hline    ; AX = x1, BX = x2, DX = y
+    push cx                         ; the line cell clobbers AX..DX (SPEC.md
+    call KERNEL_SEG:cw_gfx_hline    ; 5.7.3); wn_buttons keeps CX across this
+    pop cx
     ret
 ; wn_band - AX = a button's offset, SI = its art: the band, one gfx_blit1,
 ; and then its lit LEFT edge in [gfx_color] - the column the band leaves out,

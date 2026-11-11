@@ -1311,7 +1311,9 @@ pn_cvline:                          ; AX=x BX=y1 DX=y2 (color set)
     add ax, [pn_ox]
     add bx, [pn_oy]
     add dx, [pn_oy]
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
     pop dx
     pop bx
     pop ax

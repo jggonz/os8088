@@ -283,7 +283,9 @@ rw_kbox:
     sub bx, 3
     mov dx, [rw_kby]
     inc dx
+    push dx
     call OSAPI_GFX_HLINE
+    pop dx
     add dx, 9
     call OSAPI_GFX_HLINE
     mov cl, [rw_kbn]

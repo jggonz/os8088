@@ -1,0 +1,6 @@
+# tests/unit/t_gfxclob.py's allowlist: drawing-cell call sites whose finding
+# is not a defect (SPEC.md 5.7.3). One line each:
+#   path  routine-the-call-is-under  CELL-or-MACRO  reason
+# The list only turns one way: a line whose site no longer finds anything
+# fails the gate until it is deleted.
+apps/texpad/texpad.asm tp_draw_stat HLINE tp_u16_di's digit loop pops exactly the digits it pushed (CX counts them); the walk cannot count, so it pops past them into the routine's own saved registers on a path no input takes

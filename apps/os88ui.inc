@@ -2272,9 +2272,17 @@ os88ui_sbar:
     sub ax, bp
     mov bx, si
     add bx, bp
+    push cx
+    push dx
     UI_HLINE                    ; the up glyph's row...
+    pop dx
+    pop cx
     xchg dx, cx
+    push cx
+    push dx
     UI_HLINE                    ; ...and the down glyph's
+    pop dx
+    pop cx
     xchg dx, cx
     inc dx
     dec cx
@@ -4826,7 +4834,13 @@ os88ui_drbox:
     sub ax, OS88UI_DRAW
     inc bx
     dec dx
+    push ax
+    push bx
+    push dx
     call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
     add dx, bx                  ; ...and the triangle, four rows about the
     shr dx, 1                   ; box's middle, 7 wide at the top - (y1+1 +
     dec dx                      ; y2-1) / 2 is the middle the record gives
@@ -4834,7 +4848,13 @@ os88ui_drbox:
     mov bx, ax
     add bx, 6
 .tri:
+    push ax
+    push bx
+    push dx
     UI_HLINE
+    pop dx
+    pop bx
+    pop ax
     inc ax
     dec bx
     inc dx
@@ -5863,7 +5883,9 @@ os88ui_mndraw:
     dec bx
     mov dx, di
     add dx, 2
+    push cx
     call OSAPI_GFX_HLINE
+    pop cx
     add di, OS88UI_MN_SH
     jmp .next
 .norm:

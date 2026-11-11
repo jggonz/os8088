@@ -7773,7 +7773,9 @@ tm_gapcol:
     mov dx, bx
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
+    push cx
     call OSAPI_GFX_VLINE
+    pop cx
 
     pop dx
     pop bx

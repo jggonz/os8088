@@ -1932,6 +1932,22 @@ FAST = [
         "and not soak on t_textrules.py's argument - it is a rule about how "
         "every package is written, so the place it belongs is in front of "
         "the next `make` rather than the next soak run"),
+    Row("gfxclob", "fast", py("tests/unit/t_gfxclob.py"), 6.0,
+        "THE LINE CELLS CLOBBER AX..DX (SPEC.md 5.7.3, ABI-BREAK-LIST V1): "
+        "OSAPI_GFX_PIXEL/HLINE/VLINE jump into gfx_fill with their argument "
+        "registers spent, where they used to bank them. A caller that kept a "
+        "coordinate across one draws the NEXT line in the wrong place - no "
+        "fault, no refusal, and only on the cells whose shim spends that "
+        "register. From every call site in apps/, drivers/, tests/ and the "
+        "kernel's far calls into the cells (cw_gfx_hline IS the cell) it "
+        "walks every path - branches, %if arms with decided symbols, the "
+        "push/pop stack, near callees, macros and os88ui.inc's macro-written "
+        "routines, later cells' documented inputs, and every caller of a "
+        "routine that returns with junk live - and fails on a read of a "
+        "clobbered half before a write. tests/gfxclob.txt is the reasoned "
+        "allowlist and only turns one way; --report names every place the "
+        "walk could not see. FAST and not soak on t_movable's argument: it "
+        "is a rule about how every package is written"),
     Row("moddrop", "fast", py("tests/unit/t_moddrop.py"), 0.2,
         "SPEC.md 2.8.3's ratchet: every mod_tab row is DROPPED somewhere, "
         "or tests/moddrop.txt says why it is held until restart. A module "

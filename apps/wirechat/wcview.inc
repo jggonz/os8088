@@ -467,7 +467,11 @@ wc_hrule2:
     add ax, [wc_ox]
     add bx, [wc_ox]
     add dx, [wc_oy]
+    push cx
+    push dx
     call OSAPI_GFX_HLINE                ; the slots are FAR: a call and a ret
+    pop dx
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1063,7 +1067,9 @@ wc_pfield:
     sub ax, 2
     mov bx, [wc_ln+LN_Y1]
     mov dx, [wc_ln+LN_Y2]
+    push ax
     call OSAPI_GFX_VLINE
+    pop ax
     mov si, wc_ln
     call os88line_draw
     call wc_holder
