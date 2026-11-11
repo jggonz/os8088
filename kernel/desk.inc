@@ -13,8 +13,9 @@
 ; the pixels are 2.4:1 tall and a drive is its 14-row picture (SPEC.md 26.4);
 ; [desk_zh1] is that box, SPEC.md 26.5's gap and the label band, minus one.
 ;
-; desk_paint runs under the caller's gfx lock (from wm_paint_all, right
-; after the desktop fill, before any window). desk_click runs with NO lock
+; The zones are drawn by the damage pass under the caller's gfx lock
+; (wm_paint_dmg, and wm_paint_all through it: after the desktop fill, before
+; any window - SPEC.md 11.91.6/11.91.7). desk_click runs with NO lock
 ; held and takes gfx_lock/gfx_unlock itself around the zones it redraws.
 ; =============================================================================
 
@@ -1171,36 +1172,19 @@ desk_caprect:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; desk_paint - draw every shown zone. Called by wm_paint_all after the desktop
-;              fill; caller holds the gfx lock. All registers preserved.
 ; desk_paint_mask - draw the zones desk_dmg_zones collected into [desk_dmgm];
 ;              AX (wm.inc's "any" word) is not read. Lock held. On kern_big
 ;              wm_dmg_gray has already drawn them into its region and emptied
 ;              the mask (desk_zones_r, SPEC.md 11.91.6), so what is left here
-;              is drawn whole; wm_paint_all's pass draws them whole too, the
-;              painter's algorithm putting every window back over them.
+;              is drawn whole and its box grown (desk_zone_whole). All
+;              registers preserved. (desk_paint, every zone whole, was the
+;              layered wm_paint_all's, and went with it: SPEC.md 11.91.7.)
 ; -----------------------------------------------------------------------------
-desk_paint_x:
-    push ax
-    mov ax, 0xFFFF
-    mov [desk_dmgm], ax
-    mov [desk_dmgm+2], ax
-%ifdef KERN_BIG
-    mov ax, desk_draw_zone      ; the routine each set bit is handed to
-%endif
-    jmp short desk_pm_body
 desk_paint_mask_x:
     push ax
-%ifdef KERN_BIG
-    mov ax, desk_zone_whole     ; what desk_zones_r left in the mask
-%endif
-desk_pm_body:
     push bx
     push cx
     push dx
-%ifdef KERN_BIG
-    xchg ax, dx                 ; DX = it, for the whole walk
-%endif
     xor cx, cx
 .next:
     shl word [desk_dmgm], 1     ; zone CL's bit, top of the dword first:
@@ -1208,7 +1192,7 @@ desk_pm_body:
     jnc .skip
     mov al, cl
 %ifdef KERN_BIG
-    call dx                     ; both preserve every register
+    call desk_zone_whole        ; what desk_zones_r left in the mask
 %else
     call desk_draw_zone         ; a zone not shown draws nothing
 %endif
@@ -1225,17 +1209,15 @@ desk_pm_body:
 ;                   and its box grown so every window over it is owed a repaint
 ;                   (11.91's per-window test) - the old answer, kept for those
 ; in:  AL = a zone desk_dmg_zones marked; the gfx lock held
-; out: nothing; keeps CX and DX, the two its one caller's loop reads after
-;      `call dx` (the zone counter and this routine's own address) - AX is
-;      reloaded from CL and BX is not read (kernel size pass 17)
+; out: nothing; keeps CX, the zone counter its one caller's loop reads - AX
+;      is reloaded from CL and BX and DX are not read (kernel size pass 17;
+;      DX was the loop's routine pointer while desk_paint shared it)
 ; -----------------------------------------------------------------------------
 desk_zone_whole:
     call desk_draw_zone         ; (the box is read by the window pass, after)
     push cx
-    push dx
     call desk_zone_rect
     call KERNEL_SEG:cw_wm_dmg_zadd
-    pop dx
     pop cx
     ret
 %endif
