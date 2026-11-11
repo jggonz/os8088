@@ -5,7 +5,9 @@
 
 A module (SPEC.md 2.8) is kernel code read into a heap claim when its feature
 is asked for - and the whole of what it buys is that the claim is given back
-when the feature is done. A module nothing ever drops is the same bytes in a
+when the feature is done. On kern_big a drop may KEEP an opted-in image as a
+purgeable cache (SPEC.md 2.8.3): that is still a drop for this gate, because
+it ends the need/drop pin and from it on the heap may take the bytes. A module nothing ever drops is the same bytes in a
 different account: resident from its first use to power-off, and PINNED,
 an island in the arena (docs/plans/completed/O88-MULTISEG-PLAN.md 1 says the
 same of a module that is never dropped).

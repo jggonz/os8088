@@ -6277,9 +6277,15 @@ section .modc
 ; 2.8.7). The page only sets [cp_fdbsd], a RESIDENT byte (ctrl.inc), so a
 ; save that fails and is retried on a later load still owes what it owed.
 ; =============================================================================
-cp_fdno:   db 0                 ; cpc_fdtest turned Cylinder back to Auto:
+%macro CPC_SCRATCH 0            ; (a macro, so MOD_CACHE's kernel.asm can put
+cp_fdno:   db 0                 ; it in the core's SCRATCH TAIL, SPEC.md 2.8.3)
+                                ; cpc_fdtest turned Cylinder back to Auto:
                                 ; cp_flush_x says so after the save
 cp_fdn:    db 0                 ; cpc_fdtest's track count
+%endmacro
+%ifndef MOD_CACHE               ; ...and here, where they always were, on a
+    CPC_SCRATCH                 ; kernel that keeps no dropped image
+%endif
 TOASTSTR cp_s_fdno, 'No Cylinder Here: Auto' ; ...and what it says. A toast
                                 ; copies its line (SPEC.md 59), so it may be
                                 ; read out of this image through ES = CS

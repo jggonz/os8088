@@ -5064,8 +5064,13 @@ tm_htype:
     jmp short .put
 .kern:                          ; (each range's name is loaded BEFORE its
                                 ; test, so a hit goes straight to .put)
+    mov dx, ax                  ; ...and a module KEPT by its drop (SPEC.md
+    sub dx, MEM_P_MOD           ; 2.8.3), a range by id, named the same way:
+    cmp dx, MEM_P_MOD_N         ; its file, with LOW in the TIER column to
+    jb .mod                     ; say it is a cache
     cmp ax, MEM_K_MOD           ; a module's image: its file's name, 'CTRL',
     jne .kn                     ; rather than 'ModImg' (KERN-MEGA-PLAN
+.mod:
     push ax                     ; 14.70.3) - a module has no group to be
     push bx                     ; named by, so the TYPE column is where
     xchg ax, bx                 ; it says which

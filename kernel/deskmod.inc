@@ -144,6 +144,7 @@ modj_hdr:
     db MOD_VER, MOD_DESK        ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modj_end, DKD_NENT       ; MOD_H_IMG, MOD_H_NENT
+    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
     dw dkd_verb, dkd_hover, dkd_show, dkd_key
 
 ; -----------------------------------------------------------------------------

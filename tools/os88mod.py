@@ -48,7 +48,8 @@ MOD_H_BUILD = 4
 MOD_H_STAMP = 6
 MOD_H_IMG = 8
 MOD_H_NENT = 10
-MOD_H_ENT = 12
+MOD_H_SCR = 12                  # the kept image's scratch tail (SPEC.md 2.8.3)
+MOD_H_ENT = 14
 MOD_VER = 5
 
 
@@ -120,6 +121,11 @@ def check_image(name, img, ident, build, knent):
         if not hdr <= ent < len(img):
             fail("%s: entry %d is offset %#x, outside the image's own code "
                  "(%#x..%#x)" % (name, i, ent, hdr, len(img)))
+    scr, = struct.unpack_from("<H", img, MOD_H_SCR)
+    if scr > len(img) - hdr:
+        fail("%s: header says the last %d bytes are scratch, and only %d "
+             "follow the header - a kept image (SPEC.md 2.8.3) would zero "
+             "its own entry table" % (name, scr, len(img) - hdr))
     # The LAYOUT stamp is the kernel's to check (SPEC.md 2.8.2) - only the
     # assembly knows the section sizes - but every module in one image must
     # carry the SAME one, and that this tool can say.

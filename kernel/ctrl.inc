@@ -1007,6 +1007,9 @@ modc_hdr:
     dw modc_end                 ; MOD_H_IMG - vstart is 0, so the end label IS
                                 ; the size
     dw CP_NENT                  ; MOD_H_NENT
+    dw MODC_SCR                 ; MOD_H_SCR: the settings core's scratch
+                                ; tail to the image's end (kernel.asm,
+                                ; SPEC.md 2.8.3) - MOD_SETS's, kept
 %ifdef OS88_SHORTCUTS
     dw modc_e_sc                ; CPE_SC - the core's, so FIRST (SPEC.md 2.8.7)
 %endif

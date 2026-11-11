@@ -3325,6 +3325,7 @@ kbmi_hdr:                       ; the module header (MOD_H_*, SPEC.md 2.8.2):
     db MOD_VER, MOD_KBM         ; reader finds a module where it looks
     dw MOD_BNUM, MOD_STAMP      ; (BUILD_NUM as an equ: mod.inc)
     dw kbmi_end, KBM_NENT
+    dw 0                        ; MOD_H_SCR: no file to come back from
     dw kbm_key, kbm_p5spend, kbm_ui
 %if KBM_E_P5 != 4 * 1 || KBM_E_UI != 4 * 2
   %error "KBM_E_* are the header's entry order, four bytes a slot"
