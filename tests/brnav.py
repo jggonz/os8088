@@ -303,7 +303,9 @@ def main():
     dispcp.open_named(m, Mouse(), S, settle, wx, wy, "BROWSER.O88")
     bw = dispcp.win_list(m, S)[-1]
     rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = u16(rec[22:24])
+    # W_SEG BY NAME (os88geom reads it off kernel/wm.inc): a literal 22 went
+    # stale when kernel size pass 19 moved it to 18, and read W_PREF instead
+    pseg = u16(rec[dispcp.W_SEG:dispcp.W_SEG + 2])
     print("browser at %04X" % pseg)
     sys.stdout.flush()
 
