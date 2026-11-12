@@ -203,7 +203,9 @@ clip_get:
                                 ; two lines down. A `push cs / pop ds` here
                                 ; wrote a register nobody read
     pop cx                      ; CF = 0 from the `xor si, si` above: neither
-    jmp short .out              ; `rep movsb` nor a pop writes a flag
+    SKIPF2                      ; `rep movsb` nor a pop writes a flag - and
+                                ; nor does test ax, imm16 over .empty's mov
+                                ; write CF (kernel size pass 20, -1)
 .empty:
     mov cx, ax                  ; 0 - clip_size's AX - and CF is still its 1:
 .out:                           ; `mov` writes no flag (kernel size pass 17, -1)

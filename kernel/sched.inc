@@ -2590,10 +2590,9 @@ sch_resume:
     pop cx
     pop ax
     iret
-    nop                         ; PARITY PAD, never executed: the scan's
-                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
-                                ; keeps everything after it at the parity it
-                                ; was measured at (t_hotpar)
+                                ; (NO PARITY PAD here since kernel size pass
+                                ; 20: clip_get's byte, below it and above
+                                ; ui_task, is the other half - t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_stkdie - a task overran its stack slice (SPEC.md 8)

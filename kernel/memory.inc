@@ -937,10 +937,10 @@ mem_floor_ax:
     and al, 0xE0                ; under the floor are paragraphs now, and a
 %endif                          ; heap base is an int 13h target (guard 6,
     ret                         ; MOVABLE-COLD-PLAN 5)
-%ifdef KERN_SMALL
-    nop                         ; PARITY PAD, never executed: the round-up is
-%endif                          ; five bytes, and dsk_xfer, dsk_runcap and
-                                ; dsk_next_clus_x sit past it in `.cold`
+                                ; (kern_small's PARITY PAD that stood here
+                                ; went in kernel size pass 20: mem_fatw_dirty's
+                                ; byte is the other half, for dsk_xfer,
+                                ; dsk_runcap and dsk_next_clus_x)
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
@@ -2690,9 +2690,9 @@ mem_in_nest:
 mem_fatw_dirty:
     push ax
 %ifdef KERN_SMALL
-    mov ax, [dsk_dseg]
-    cmp ax, [ss:si+MC_SEG]
-    je .yes
+    mov ax, [ss:si+MC_SEG]      ; THE RECORD'S BASE, once, for both of
+    cmp ax, [dsk_dseg]          ; kern_small's compares (kernel size pass
+    je .yes                     ; 20, -1)
 %endif
     cmp word [dsk_fatd0], 0xFFFF
     je .no                      ; nothing is dirty anywhere
@@ -2702,6 +2702,8 @@ mem_fatw_dirty:
     mov ax, [dsk_fatseg]
     cmp ax, bx                  ; ...and is THIS the window it is dirty in?
     pop bx
+%elifdef KERN_SMALL
+    cmp ax, [dsk_fatseg]        ; ...and is THIS the window it is dirty in?
 %else
     mov ax, [dsk_fatseg]
     cmp ax, [ss:si+MC_SEG]      ; ...and is THIS the window it is dirty in?
@@ -5891,10 +5893,14 @@ osapi_mem_p:
     mov cx, SKB_STK0            ; ...and task 0's stack. Build constants: the
     retf                        ; image row is the kernel less these, and it
                                 ; is the only one that moves at run time
+%ifndef MOD_CACHE
     nop                         ; PARITY PAD, never executed: the hot
-                                ; `.cold` routines past this - dsk_xfer,
+%endif                          ; `.cold` routines past this - dsk_xfer,
                                 ; dsk_runcap, dsk_next_clus_x - keep their
-                                ; measured parity (tests/unit/t_hotpar.py)
+                                ; measured parity (tests/unit/t_hotpar.py).
+                                ; kern_big and kern_emu need none since
+                                ; kernel size pass 20: MOD_CACHE's mod_live
+                                ; is the other byte
 
 
 ; -----------------------------------------------------------------------------

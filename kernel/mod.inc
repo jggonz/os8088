@@ -381,11 +381,10 @@ mod_live:
     push cx
     call mod_fpr
     mov ax, [bx+MODR_SEG]
-    cmp [di+2], ax              ; ZF = 1 and CF = 0: LIVE
-    pop cx
-    pop di
-    je .ret
-    stc                         ; KEPT, disarmed: not resident for a caller
+    sub ax, [di+2]              ; 0: LIVE - and `neg` sets CF iff its operand
+    neg ax                      ; is not 0, so KEPT, disarmed, answers CF = 1:
+    pop cx                      ; not resident for a caller (kernel size pass
+    pop di                      ; 20, -1: the `je` / `stc`)
 .ret:
 %endif
     ret
