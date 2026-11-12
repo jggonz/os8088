@@ -88,6 +88,28 @@ Video Player and RealDMG (their `PKG_MEGA` arms run instead).
   PICOMEM-EMU-PLAN wave 7), and
   docs/plans/completed/KERN-MEGA-DOS-PLAN.md's untested-on-iron list.
 - Task Manager dump to file (14.70.3): deferred by the owner.
+- **Hibernate's EARLY resume (HB_EARLY, SPEC.md 87.5) - the owner wants it
+  (2026-11-12), not yet.** kern_big and kern_emu probe for a hibernation
+  image before `mouse_init` and before `drv_boot`'s second pass, so a boot
+  that resumes never pays the mouse waits or loads a driver the image would
+  only shut down. kern_mega still probes late, after `mega_enter`, because
+  its image carries the pool and the LDT (87.9) and can only be JUDGED in
+  protected mode, and the switch follows `drv_boot`. The likely route
+  splits the probe: a real-mode P1 that answers only "is there an image on
+  this volume, for this kernel" (the header and its stamp, which needs no
+  selector), then `drv_boot` pass 1 and the mouse as kern_big does, and the
+  protected-mode validation after `mega_enter`. If that validation REFUSES,
+  pass 2 and the late mouse still run, which is kern_big's P2 fallback
+  today. The other route, moving `mega_enter` before `drv_boot`, reorders
+  how every boot-loaded driver reaches 1MB (`mod_hiboot`, `drv_hiboot_f`)
+  and is the larger change.
+  **ABI: none expected.** Neither route touches `apps/os88api.inc` or
+  `drivers/os88drv.inc`: the two-pass `drv_boot` (HB_KEEPSET's classes) and
+  the driver SLEEP/WAKE verbs are already the shipped driver contract on
+  kern_big under the same `DRV_VER`, and the hibernation image is a file the
+  kernel writes and reads itself, so a format change refuses an old image
+  rather than breaking a package or a driver. Whoever takes it re-checks
+  that against `tools/abi.lock.json` before the first commit.
 
 ## 0. The answer, in eight lines
 
