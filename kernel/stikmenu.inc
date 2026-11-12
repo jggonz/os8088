@@ -241,6 +241,21 @@ smn_track:
 ; clobbers: AX, BX, CX, DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 stm_scan:
+%ifdef MOD_CACHE
+    ; THE KEPT SCAN (SPEC.md 110.12.2): the list a scan left is still the
+    ; answer while the OS has written NOTHING to any volume since - every
+    ; byte of [dsk_wgen] (fsck.inc, bumped by disk_write_x) as it was then.
+    ; It lives below stm_cellx, so the drop that keeps the image keeps it
+    ; and a load - first, or after a shed - starts with stm_kok = 0 from the
+    ; file. No disk is touched here: a different floppy in the drive is the
+    ; ACTION's to find (stm_a_launch re-walks and refuses)
+    call stm_kgw                ; ES:DI = ours, DS:SI = the kernel's
+    cmp byte [cs:stm_kok], 0
+    je .scan
+    repe cmpsb
+    je .kept                    ; nothing written: the list stands
+.scan:
+%endif
     CSDO mov byte [CSEG stm_n], 0
     CSDO mov byte [CSEG stm_over], 0
     call COLD_SEG:drvf_drv_vol_bank
@@ -273,7 +288,27 @@ stm_scan:
     cmp cl, DVOL_MAX
     jb .vol
     call COLD_SEG:drvf_drv_vol_back
+%ifdef MOD_CACHE
+    call stm_kgw                ; ...and the generations it was taken under
+    rep movsb
+    CSDO mov byte [CSEG stm_kok], 1
+.kept:
+%endif
     ret
+
+%ifdef MOD_CACHE
+; stm_kgw - ES:DI = stm_kgen, DS:SI = [dsk_wgen], CX = DVOL_MAX, DF = 0: the
+; kept scan's generations and the kernel's, for one string instruction
+; clobbers: CX, SI, DI, ES
+stm_kgw:
+    PUSH_CSDATA
+    pop es
+    mov si, dsk_wgen
+    mov di, stm_kgen
+    mov cx, DVOL_MAX
+    cld
+    ret
+%endif
 
 ; stm_isfixed - CL = a volume: CF = 0 when it is a fixed disk to search.
 ; clobbers AX, BX
@@ -406,10 +441,7 @@ stm_take:
     mov al, [cs:stm_n]
     call stm_ent                ; CS:DI = the next entry
     mov al, [cs:stm_vol]
-    CSDO_ON
-    mov [CSEG di+STE_VOL], al
-    mov byte [CSEG di+STE_RUN], 0
-    CSDO_OFF
+    CSDO mov [CSEG di+STE_VOL], al ; (STE_RUN is stm_census's)
     push si
     push di
     push es                     ; the 8.3 name: image to image
@@ -530,6 +562,7 @@ stm_census:
     jae .wins
     mov al, dl
     call stm_ent
+    CSDO mov byte [CSEG di+STE_RUN], 0 ; a KEPT entry says what it said last
     call stm_find_inst          ; CF = 0: BX = its instance record
     jc .n
     CSDO_ON
@@ -2060,11 +2093,24 @@ stm_s_wiref: db 'THEWIRE.O88', 0     ; DSV_FILEMAX bytes, with the padding
 stm_s_wiren: db 'The Wire', 0        ; DSV_NAMEMAX bytes
             times DSV_NAMEMAX - ($ - stm_s_wiren) db 0
 
+; --- THE KEPT SCAN (SPEC.md 110.12.2): zeros on the disk, and NOT in the
+; scratch tail, so a drop that keeps the image keeps them and the next press
+; lists from them with no disk I/O. Written only by stm_scan (and STE_RUN by
+; stm_census, every press); a load - the first, or one after a shed - brings
+; stm_kok in as 0, and the scan runs again
+%ifdef MOD_CACHE                ; (kern_mega frees the image at every drop)
+stm_kok:    db 0                ; 1 = the three below are a scan's...
+stm_kgen:   times DVOL_MAX db 0 ; ...taken at these [dsk_wgen]
+%endif
+stm_n:      db 0
+stm_over:   db 0                ; 1 = an App past STM_MAX was left out
+stm_ents:   times STM_MAX * STE_SIZE db 0
+
 ; --- the image's scratch: ZEROS on the disk, which the CZ wrap packs to a few
 ; bytes, and zeros again at every use - read in, or re-zeroed by the drop that
 ; KEEPS the image (MOD_H_SCR above, SPEC.md 2.8.3). EVERY byte this module
-; writes in its own image is from here to the end; a write below stm_cellx
-; would survive into the next press -----------------------------------------
+; writes in its own image is from here to the end but THE KEPT SCAN above; a
+; write below stm_cellx survives into the next press ------------------------
 stm_cellx:  dw 0
 stm_x1:     dw 0
 stm_x2:     dw 0
@@ -2074,8 +2120,6 @@ stm_w:      dw 0
 stm_stridew: dw 0
 stm_stride: db 0
 stm_ly:     dw 0
-stm_n:      db 0
-stm_over:   db 0                ; 1 = an App past STM_MAX was left out
 stm_shown:  db 0
 stm_nrun:   db 0
 stm_ndesk:  db 0                ; ...and stm_nvis, the word stm_census writes
@@ -2106,7 +2150,6 @@ stm_ay:     dw 0
 stm_cnt:    times 24 db 0
 stm_find:   times DSK_FIND_SZ db 0
 stm_sl:     times STM_SLMAX * SL_SIZE db 0
-stm_ents:   times STM_MAX * STE_SIZE db 0
 stm_band:   times STM_STRMAX * STM_SLABMAX db 0
 %if STE_DESC - STE_NAME != STM_C_DESC - STM_C_NAME || STE_PIC - STE_NAME != STM_C_PIC - STM_C_NAME || STE_PIC + 128 > STE_SIZE
   %error "an entry's name, description and picture are the card's, in one copy"

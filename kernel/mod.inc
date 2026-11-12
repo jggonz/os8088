@@ -139,7 +139,10 @@ MOD_H_SCR   equ 12              ; word: how many of the image's LAST bytes are
                                 ; bytes zeroed again, so a re-adopted image is
                                 ; the file's own. A module opts in when every
                                 ; byte it writes is in that tail; the header
-                                ; says so, no kernel table does
+                                ; says so, no kernel table does. ONE result
+                                ; lives just below it on purpose: STIKMENU.
+                                ; DRV's kept scan, valid only on a claim a
+                                ; scan filled (SPEC.md 2.8.3, 110.12.2)
 MOD_H_ENT   equ 14              ; word[]: entry offsets, in this image
 MOD_VER     equ 5
 MOD_MAX_KB  equ 16              ; the biggest module image we will claim,

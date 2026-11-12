@@ -2033,9 +2033,12 @@ nothing.
   Manager's own load had evicted from §18.95's round-robin cache, and, the
   machine having a fixed disk to scan, a second boot-sector read on the way
   back from `C:\STIKAPPS` to `A:` — from wherever the cards had left the
-  head. That last one is the scan's batch (§110.12.2) and is gone; the
-  eviction is the cache doing its job and stays. `tests/modcache.py`'s E-G
-  are those steps, with nothing forced.
+  head. That last one is the scan's batch (§110.12.2) and is gone; and
+  since the KEPT SCAN (§110.12.2, the owner's "0 reads") the media check
+  and the card tracks are gone too: a press on a re-adopted image makes no
+  `int 13h` call at all, on that machine and on a floppy-only 5150.
+  `tests/modcache.py`'s E-G are those steps, with nothing forced, and H-K
+  the floppy-only machine and the actions that still read.
 
 **Rank: `MEM_PG_LOW`, decided per module rather than inherited (rt-9).**
 Losing a kept image costs the read it saved, with the system disk in the
@@ -2060,8 +2063,35 @@ that state with their code (`DISKOPS.DRV`'s compressor, `FORMAT.DRV`'s
 
 | image | its scratch tail | what it holds |
 |---|---|---|
-| `STIKMENU.DRV` | `stm_cellx` to the end | every byte the menu writes: the geometry, the census, the entries, the band |
+| `STIKMENU.DRV` | `stm_cellx` to the end | every byte the menu writes but its KEPT SCAN: the geometry, the census, the band. The scan - `stm_kok`, `stm_kgen`, `stm_n`, `stm_over`, `stm_ents` - sits just BELOW the tail on purpose, so the drop keeps it (§110.12.2) |
 | `CTRL.DRV`, for `MOD_SETS` (written by the core itself, above) | `mods_scr` - the core's last bytes, `sc_*` and `cp_fdno`/`cp_fdn` gathered there by `SC_SCRATCH`/`CPC_SCRATCH` - to the image's end | the core's gesture state; past it, the panel and `.modcb`, which a core-only read never brought in |
+
+**One image keeps a RESULT across its drop, outside its tail, and that is
+the rule's one exception (§110.12.2).** `STIKMENU.DRV`'s scan of `STIKAPPS\`
+lives below `stm_cellx`, so the drop does not zero it and the next press
+lists from it with no disk I/O. It is safe for the reason the rule exists:
+a re-adopted image must behave as a loaded one, and a load brings the scan's
+valid byte (`stm_kok`) in as 0 - so the first press after a load, the first
+press ever or the first after a shed, scans exactly as it always did, and a
+kept scan is one a press on this same claim made. The bytes are zeros on the
+disk, carry no segment, and a move copies them like the code.
+
+**Does any other module re-read DATA it already had? No - audited
+2026-11-12, the owner's question beside the kept scan.** A module's per-use
+disk work is either its own image (a freed image is read again: `CTRL.DRV`'s
+panel, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `DOCK.DRV`, `EXTD.DRV`,
+`WIN95.DRV`, `DESK.DRV` - code, and keeping it is this section's opt-in, not
+a data cache) or the ACTION's own: the panel loads a driver or `THMPAL.DRV`
+when one is asked for and reads `SYSTEM.CFG` never (the boot did; its
+settings live in the kernel); the settings core's shortcuts are a claim
+filled at boot (`ovl_sc_load`), and its only reads are a dragged package's
+header for a caption and `KERNEL.SYS`'s stat before a remove's save (the
+write's own system-disk check, §110.5.1); the formatter, the cloner and
+hibernate read and write the disks their verb names; `DOCK.DRV`,
+`EXTD.DRV`, `WIN95.DRV`, `DESK.DRV` and the serial and keyboard-mouse
+modules touch no disk at all. `kern_small`'s `FILECP.DRV` reads what it
+copies, and `FDLG.DRV` lists the folder the user is looking at - on a disk
+that may have been swapped, which is the listing's job.
 
 `MOD_CTRL`'s row — the whole panel, the same file — is **never kept**, with
 no test for it in the kernel: `CTRL.DRV`'s header carries 0 on the disk, and
@@ -227464,7 +227494,54 @@ is drawn. The owner chose the card.
 
 #### 110.12.2 Discovery: `STIKAPPS\` on the boot volume and the fixed disks
 
-Every drop scans: the BOOT volume first (`[dsk_bootvol]` - its copy is the
+**The scan runs on the first press after the image is LOADED, and a press
+on a re-adopted image lists what it found with NO disk I/O at all** - no media
+check, no directory sector, no header peek (the owner's call, 2026-11-12:
+*"Stickmenu has no reason to go back to disk at all - it already read out
+which apps were available on the first read"*). The result - `stm_kok`, the
+generations below, `stm_n`, `stm_over` and the 220-byte entries - lives in
+the image just below its scratch tail (§2.8.3's one exception), so the
+module cache's drop keeps it and a load (the first, or one after a shed)
+brings it in as zeros, `stm_kok` = 0, which is a scan. Only `STE_RUN` is
+redone every press, by `stm_census` - running is a fact about RAM.
+
+**What re-scans, within what the OS knows without a disk access**: the scan
+records `[dsk_wgen]` (§118.14.6), the per-volume WRITE GENERATION
+`disk_write_x` bumps on every sector the kernel writes, all `DVOL_MAX` bytes
+of it; a press whose generations differ by a single byte on ANY volume scans
+again. So every way the OS itself can change a `STIKAPPS\` - a copy, a
+delete, a rename, an install by The Wire, a DOS program writing through the
+OS's DOS - re-scans on the next press, because each is a write. It is
+deliberately coarse: it is the counter the OS already keeps (nothing
+resident was added), and a write that touched no `STIKAPPS\` - a
+Sticky App's own `SYSTEM.CFG` registration, a saved document - costs one
+ordinary scan on the next press, which is every press's cost before this.
+An 8-bit generation that wraps by exactly 256 writes between two presses is
+read as unchanged; the list is then merely stale, below.
+
+**What does NOT re-scan, and is the ACTION's to find**: a floppy SWAPPED in
+`A:` (a 5150 has no change line, and asking the drive is the disk access
+this removes), a write the OS never made (a raw `int 13h` from a DOS
+program, a host editing a mounted image). The list then shows what the last
+scan saw, and a pick re-walks the disk as it always did: `Add` stands in the
+entry's volume's `STIKAPPS\` by name (`stm_gohome`'s `dsk_goto`, whose mount
+reads the boot sector and so sees the other disk) and its refusals are
+today's - no such folder, the beep; no such file, the loader's own toast
+(`ld_say_status`) - and a file of that name on the other disk is that file,
+as it was when the swap fell between a scan and a pick. `On` (close),
+`Arrange`, `Hide All`/`Show All` and `More Sticky Apps...` read nothing of
+the scan's but the instance name. `tests/modcache.py` H-K is the row: a
+floppy-only 5150 makes no `int 13h` call on the second press; with the APPS
+disk in `A:` the kept list shows and `Add` beeps; with the calendar deleted
+off a re-serialled system disk `Add` is the loader's refusal; with the
+system disk back `Add` launches, and its registration's write makes the next
+press scan again. Cost: +48 bytes of the module image (code +39, the
+generations and the flag 9), +44 on the disk, still seven clusters;
+NOTHING resident on any kernel (`kernel.bin` byte-identical). Not on
+`kern_mega`, which frees the image at every drop (§2.8.3), so every press
+there is a load and a scan, as before.
+
+A scan walks the BOOT volume first (`[dsk_bootvol]` - its copy is the
 one a Sticky App row names, §110.4), then every other volume that is a FIXED
 disk - `hb_pick1`'s test (`dsk_vol_fixed_x` AL = 1, and not a redirected
 `DVK_FILE` volume, so not the RAM disk or the cable) less a mounted disk
@@ -227496,7 +227573,9 @@ program name, the loader's copy - is the App's: `stik_single`'s test (§110.5.2)
 from the kernel's side. The header says how many are (`1 Sticky App active`,
 `N Sticky Apps active`, `No Sticky Apps active`).
 
-**What a drop costs the target**, in `int 13h` calls (PERFORMANCE.md's unit):
+**What a SCANNING drop costs the target** - the first after a load, or after
+a write (above); a kept scan's costs none - in `int 13h` calls
+(PERFORMANCE.md's unit):
 the module (1-2 on a floppy, `mod_need`), the boot volume's root and folder
 (0-2: the track cache of §18.95 holds most of a floppy's directory), one
 header peek per `.O88` (often 0 - DESKCAL's first sector is in the folder's
@@ -227637,11 +227716,11 @@ room to save; §24.3.1.3 took Mines off that disk, and it is 346, 8 free.
 - **A keyboard-only drop**: like every bar menu, the panel is reached by the
   pointer or the keyboard mouse (§9.6); it does not step by item as
   `menu_kbnav` does for a pull-down.
-- **No cache of the scan**: every drop reads `STIKAPPS\` again - a directory
-  walk and one header peek per App. That is what makes a newly copied App
-  appear with no refresh; on a floppy with MANY Apps it is a peek apiece
-  (~400 ms each where the track cache misses), so the scan is the thing to
-  cache if `STM_MAX` is ever raised far past eight.
+- **No refresh for a swapped floppy**: the kept scan (§110.12.2) is
+  re-taken on any write the OS makes, not on a disk changed under it, so a
+  different system disk in `A:` shows the old list until a write or a shed;
+  the pick is what finds out. A `Refresh` item would be the cheap answer if
+  that is ever met.
 
 `tests/stikmenu.py` is the row (soak): one boot of the VGA XT on the shipped
 360 KB system disk, the panel read out of the module's own image, and every
