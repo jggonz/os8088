@@ -154,10 +154,9 @@ chunks in a fallback without a rate hook.
 serial bytes, not 4.77 MHz speed. In the final pass described below, use
 MartyPC's guest cycles with held-key motion, wall/paddle hits and no pause or
 serve countdown; report display frames and physics steps separately.
-WireBall's `wireballvideo` row checks VGA, CGA, lone Hercules and dual-card
-Hercules, page counts, exact sprite occupancy after movement, fractional
-controls and restored desktop/input state. `wireballphysics` checks swept
-contacts and their cycle budget. Include real serial traffic when changing
+WireBall's own rows (`grep -n wireball tests/suite.py`) are the worked
+example of what to check: every adapter, page counts, sprite occupancy after
+movement and the restored desktop. Include real serial traffic when changing
 the renderer's service budget. Set 160 measured 46–59 display frames/s and
 about 73 motion steps/s, not a guarantee for every game or physical XT.
 Read [Hercules testing](docs/HERCULES-TESTING.md) and
@@ -217,18 +216,11 @@ What `make help` cannot tell you:
   does not list them. Each selects the rewritten body of one kernel hot path;
   undefined, the source assembles to the body it replaced, byte for byte.
   Which kernel carries which is set in `kernel/kernel.asm`'s KHP block - the
-  list and the authority - not on the command line, and
-  `tests/unit/t_khpknobs.py` (soak) assembles kern_big and kern_small with
-  every knob on so the ones shipped OFF cannot rot. Turning one on for another
-  kernel is a `%define` in that block and a re-measure; a new one goes behind
-  its knob with `tools/os88knob.py`, whose `merge` is the safe form.
-  **`make` does not check kernel internals any more** (the owner, 2026-11-11:
-  the fast and full tiers are for "did you break the build or the OS"), so
-  touching a `KHP_*` arm means naming and running `khpknobs` yourself -
-  `python3 tools/os88test.py soak -k khpknobs`, seconds. The ONE kernel
-  internal `make` still checks is `hotpar` (fast, 0.07 s): an edit anywhere
-  upstream moves a hot routine by an odd byte count far more often than
-  anyone notices, so it is caught at the edit, not at the release soak.
+  list and the authority - not on the command line. Turning one on for
+  another kernel is a `%define` in that block and a re-measure; a new one
+  goes behind its knob with `tools/os88knob.py`, whose `merge` is the safe
+  form. The knobs shipped OFF still have to assemble: find the rows that
+  cover what you touched in `tests/suite.py` (Testing, below).
 - **Nothing in `build/` is tracked - never commit a binary.** The toolchain is
   deterministic (`os88disk.py` pins the volume serial and every FAT
   timestamp), so any image can be rebuilt byte for byte.
@@ -365,18 +357,15 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `TOASTSTR label, 'text'` (or `TOASTRUN label` ... `TOASTEND` round a run
   with fields poked at run time) emits the same bytes and FAILS THE BUILD at
   that line past `TOAST_MAX` (24) - the bar drops the rest silently. In C,
-  hand `os88_toast` a literal. `tests/unit/t_toast.py` (a `full` row since
-  2026-11-11, so `make test-full`, not every `make`) follows every toast
-  argument back and fails on anything else; text only the running program
-  knows (a name, a number) goes in `tests/toastdyn.txt` with its reason.
+  hand `os88_toast` a literal. Text only the running program knows (a name,
+  a number) goes in `tests/toastdyn.txt` with its reason.
 - **Text is `font_run`, not `font_str` (§6.1, §6.6).** `font_char`/`font_str`
   are TRANSPARENT — they leave what is underneath — so a `gfx_fill` followed by
   one of them writes every pixel twice, and the gap between the two passes is
   *visible* on the target machine. `font_run` draws the ground and the glyph in
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
-  `tests/textsites.txt` is the ratchet: a new call site fails `textrules` (a
-  `full` row since 2026-11-11 - `make test-full`, not every `make`) until it
-  is registered with a reason, and the count can only go down. **The sweep is
+  `tests/textsites.txt` is the ratchet: a new call site is registered there
+  with a reason, and the count can only go down. **The sweep is
   finished** (§6.6.5): the registry stands at 70 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
@@ -508,11 +497,9 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   disks. On kern_mega a claim is an LDT SELECTOR, so a package asks
   `OSAPI_SEG` (§50.6.11) for a derived segment rather than adding to one. The shipped build must still be CORRECT on kern_mega: run low and
   plain, refuse the one tier, or refuse to start with `OS88_MEGA_REFUSE`,
-  and say which at the place. `tests/unit/t_megapkg.py` (full: `make
-  test-full`, not every `make`) fails when a shipped build assembles a kern_mega marker (`CPU_F_PM`, the
-  selector cells) beyond `tests/megapkg.txt`'s per-file allowance - which
-  turns one way - or takes a part assembled `-DVB_PM`/`-DPKG_MEGA`, or names
-  `PKG_MEGA` with no arm in `$(MEGAPKGS)`. A new arm is a `$(MEGAAPPDIR)`
+  and say which at the place. A shipped build's kern_mega markers
+  (`CPU_F_PM`, the selector cells) are held to `tests/megapkg.txt`'s
+  per-file allowance, which turns one way. A new arm is a `$(MEGAAPPDIR)`
   rule and a `$(MEGAPKGS)` entry in the same diff.
 - **An ABI change is a written decision** (§20.2.0.1). `PKG_FMT` and
   `DRV_VER` are locked in `tools/abi.lock.json` to a fingerprint of
@@ -532,10 +519,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `OS88_REGION_MOVABLE` where its window exists — and, if it hires a worker,
   `OS88_WORKER_RESTARTABLE` at the spawn, because §66.6.2's frame pins the
   region however it is declared and a region declaration alone is **inert**.
-  `tests/unit/t_movable.py` (full tier: `make test-full`, not every
-  `make`) fails otherwise; the way out
-  is a line in `tests/movable.txt` with a reason, and the list only turns one
-  way. **Before declaring, ask what segment words the package holds that point
+  The way out is a line in `tests/movable.txt` with a reason, and the list
+  only turns one way. **Before declaring, ask what segment words the package holds that point
   INSIDE itself** — almost always none, which is why the proc is a `ret`; the
   two shapes where it is not are a segment the package **stamped** somewhere
   (scribe did, into its pre-parts `.ovl`, until SPEC.md 95.8.8 made it a part) and a **re-homed** program whose assets
