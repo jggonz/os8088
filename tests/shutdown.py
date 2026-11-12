@@ -60,8 +60,11 @@ def run(card, machine, image):
             # the row still names the patched image (kept, not freed): its
             # bytes are what the next mod_need re-adopts
             mseg = word(m, "mod_tab")
-            return (not getattr(m, "bochs", False) and mseg != 0 and
-                    where == mseg * 16 + offsets["cpc_save"])
+            if not mseg:
+                return False
+            base = (m.lin(mseg, 0) if getattr(m, "bochs", False)
+                    else mseg * 16)     # (kern_mega keeps its pool pair)
+            return where == base + offsets["cpc_save"]
 
         def prompt():
             ui.menu_pick(0, "Shut Down...")
@@ -134,8 +137,8 @@ def run(card, machine, image):
             cancelled()
             assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
             assert m.read(S.linear("cp_dsave"), 1) != b"\x00", "Failed save was not reported"
-            # ...AND THE IMAGE PUT BACK: on kern_big the drop KEEPS it (SPEC.md
-            # 2.8.3), so the next Shut Down re-adopts THESE bytes rather than
+            # ...AND THE IMAGE PUT BACK: the drop KEEPS it (SPEC.md 2.8.3,
+            # kern_mega's pool pair 2.8.3.3), so the next Shut Down re-adopts THESE bytes rather than
             # reading the file - the patched writer would fail the real flush
             # below. The claim is kept where it was (nothing claimed since)
             if seg_kept(where):

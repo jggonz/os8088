@@ -407,11 +407,12 @@ VT_FILE      equ 2               ; AH: a DRVC_FILE driver ANSWERING QUESTIONS
                                  ; question it could be asking
 
 %ifndef KD_BUILD
-%ifndef KERN_MEGA
   %define DSK_RAHINT            ; the read-ahead's FILL HINT (dsk_rah_fill,
 %endif                          ; disk_mount_x step 1, ld_run_body_x): not
-%endif                          ; kern_dos, whose image has no room, and not
-                                ; kern_mega, whose store's landing is 9 sectors
+                                ; kern_dos, whose image has no room. kern_mega
+                                ; too since its landing is DSK_BNC_SECS (18):
+                                ; a run into a store above 1MB is dsk_xfer's
+                                ; own bounce through it (SPEC.md 18.95.13)
 
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
@@ -4359,29 +4360,13 @@ disk_mount_x:
     call dsk_rah_want           ; §18.95's cache, if a shed took it - here
                                 ; rather than in the walker, because it now
                                 ; serves every read and not only a directory's
-%ifndef KD_BUILD                ; (kern_dos keeps it at step 3: its image has
-                                ; twenty bytes left, and its DOS program reads
-                                ; a root once a session - kdlayout.inc)
-%ifndef DSK_RAHINT              ; ...and step 1 drops it, where it reads LBA 0
-                                ; through the cache: here only on kern_mega
-    cmp byte [dsk_quiet], 0     ; ...AND A MOUNT THAT WILL LIST DROPS IT HERE,
-    jne .keeprah                ; before the FAT window and not after it
-    cmp word [dsk_dseg], 0      ; (kernel hot-paths pass 1): a full mount is
-    je .keeprah                 ; a navigation or a Refresh and must re-read
-    call dsk_rah_flush          ; the disk (step 3 below), and what that rule
-.keeprah:                       ; asks is that nothing it lists is older than
-                                ; this mount's own swap detector. The FAT
-                                ; window's load is a miss that FILLS to the
-                                ; track's end, so on a 360KB or 720KB disk
-                                ; it brings the root's first sectors in with
-                                ; it - read off the platter in this mount,
-                                ; after LBA 0. Dropped after it, as it was,
-                                ; they were read again by the next call: one
-                                ; int 13h on every open of a root, every
-                                ; Refresh at one, and every Up to one. The
-                                ; test is .listing's own (2b, below)
-%endif
-%endif
+                                ; (A LISTING mount's flush is step 1's, where
+                                ; LBA 0 is read THROUGH the cache on every
+                                ; kernel but kern_dos - kern_mega's arm here
+                                ; went with DSK_RAHINT reaching it, SPEC.md
+                                ; 18.95.13 - and kern_dos keeps it at step 3:
+                                ; its image has twenty bytes left, and its DOS
+                                ; program reads a root once a session)
     call dsk_fatw_want          ; ...give a floppy one first, if the machine
                                 ; can spare it (SPEC.md 18.8.2)
     call dsk_fatw_pick          ; this volume's own window, if it has one and
@@ -7110,7 +7095,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 
 
 ; THE PICK (SPEC.md 18.95.10), spelled once for its two homes: inline in
-; dsk_rah_fill where there is no prefetch (kern_mega, kern_dos), and as
+; dsk_rah_fill where there is no prefetch (kern_dos), and as
 ; dsk_rah_pick where the loader's prefetch spends its first slot the same way
 ; a fill does. Out: SI = the slot's record, BX = its run's offset in the
 ; claim, CX = 9; [dsk_rah_next] past it. Clobbers AX, DX. %1 is the loop's
@@ -7161,7 +7146,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 %endmacro
 
 ; THE SCAN (SPEC.md 18.95.10.1), spelled once for its two homes: inline in
-; dsk_rah_serve where there is no prefetch (kern_mega, kern_dos), and as
+; dsk_rah_serve where there is no prefetch (kern_dos), and as
 ; dsk_rah_find where the loader's prefetch asks the same question. In: DI =
 ; the LBA. A HIT leaves SI on the record and AX = the delta, and reaches %2
 ; with ZF=1 when the read is a stream moving on (no mark), or falls out of the
@@ -7424,42 +7409,13 @@ dsk_rah_fill:
                                 ; record here, DX being at most DSK_RAH_SECS.
                                 ; CF is the read's, and 0 out of the stamp
     SKIPBL1                     ; over the stc (BL is kretc_dx's to restore)
-%else
-%ifdef KERN_MEGA
-    push bx                     ; the slot's run of the store, for the copy
-    cmp byte [dsk_rah_hi], 0
-    je .direct
-    mov es, [dsk_rah_bnc]       ; ...and the read lands BELOW 1MB, where a
-    xor bx, bx                  ; reflected int 13h can put it
-.direct:
-%endif
+%else                           ; (kern_dos alone: kern_mega's store above
+                                ; 1MB is filled through dsk_xfer's bounce)
     mov ax, di
     mov byte [dsk_rah_busy], DSK_RAH_SPEC   ; ...so this read is not itself
     call disk_read_x            ; cached, and is tried ONCE (18.95.14)
     mov byte [dsk_rah_busy], 0  ; (`mov` leaves CF alone)
-%ifdef KERN_MEGA
-    pop di                     ; DI = the slot's run: the LBA is in the
-                                ; record already and the epilogue restores DI
     jc .out
-    cmp byte [dsk_rah_hi], 0
-    je .stamp
-    push si                     ; ...then UP: landing:0 -> store:slot, one
-    xor si, si                  ; rep movsw of the chunk (~1 ms on a 286
-    mov ax, dx                  ; against the ~400 ms call it saves)
-    xchg ah, al                 ; sectors x 256...
-    shl ax, 1                   ; ...x 2 = bytes
-    xchg ax, cx
-    mov dx, [dsk_rah_bnc]
-    mov ax, [dsk_rah_seg]
-    call dsk_copy_seg_x
-    mov dx, cx                  ; DX = the length in sectors again: CX held
-    shr dx, 1                   ; bytes, and the copy kept it
-    xchg dl, dh
-    pop si
-.stamp:
-%else
-    jc .out
-%endif
     mov [si+RAH_N], dx          ; DX still holds the length: only now is the
     mov al, [disk_drive]        ; slot allowed to claim it has anything
     cbw                         ; AH = 0 (a volume index is under 80h)...
@@ -7553,6 +7509,13 @@ dsk_rah_pre:
     jne .out
     cmp word [dsk_rah_seg], 0   ; no claim, no cache
     je .out
+%ifdef KERN_MEGA
+    cmp byte [dsk_rah_hi], 0    ; A STORE ABOVE 1MB is reached through
+    je .lo                      ; dsk_xfer's bounce, a run at a time through
+    cmp word [dsk_rah_bnc], 0   ; the landing - and without one a sector a
+    je .out                     ; call: no prefetch then, as no fill
+.lo:
+%endif
     call dsk_clus2lba_x
     jc .out
     xchg ax, di                 ; DI = the file's first LBA
@@ -7600,6 +7563,18 @@ dsk_rah_pre:
     jbe .g
     xchg ax, cx
 .g:
+%ifdef KERN_MEGA
+    mov es, [dsk_rah_seg]
+    cmp byte [dsk_rah_hi], 0
+    je .pg
+    cmp cx, DSK_BNC_SECS        ; ...a store above 1MB: ONE int 13h is the
+    jbe .go                     ; landing's run, DSK_BNC_SECS (the bounce
+    mov cx, DSK_BNC_SECS        ; would cut a longer one into two), and no
+    jmp short .go               ; DMA page to keep - the landing is page-safe
+.pg:
+    cmp byte [mega_on], 0       ; ...and a conventional store in protected
+    jne .go                     ; mode is a SELECTOR: dsk_runcap's page test
+%endif                          ; reads its base, and caps the run there
     mov ax, 32                  ; NOT ACROSS A 64KB PAGE (18.95.7.1): the run's
     mul cx                      ; paragraphs, from its first - the claim's
     xchg ax, dx                 ; plus BX / 16, BX being the slot x 4,608, so
@@ -7612,6 +7587,9 @@ dsk_rah_pre:
     xor ax, dx
     test ah, 0xF0
     jnz .out
+%ifdef KERN_MEGA
+.go:
+%endif
     mov dx, cx
     call dsk_rah_rdst
     jnc .out

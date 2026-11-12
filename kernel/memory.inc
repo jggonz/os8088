@@ -1467,6 +1467,7 @@ mem_pg_fatwrow:                 ; NAMED: mem_pg_forget asks which ROW matched
     dw MEM_P_FLIST, fcp_lseg,    1
 %endif
 %ifdef MOD_CACHE
+mem_pg_modrow:                  ; NAMED on kern_mega: mem_pg_forget's .mod arm
     dw MEM_P_MOD,   mod_tab,     MEM_P_MOD_N ; a kept module: its MODR_SEG
 %endif                          ; (MODR_SEG = 0, so the row IS the word),
                                 ; zeroed by the shed - and its slots already
@@ -1633,6 +1634,12 @@ mem_pg_forget:
     cmp si, mem_pg_viewrow      ; ...and a DISK WINDOW'S CACHE has two as well
     je .view                    ; (SPEC.md 22.1), for the reason in the table
 %endif                          ; above. The ROW that matched says which
+%ifdef MOD_CACHE
+%ifdef KERN_MEGA
+    cmp si, mem_pg_modrow       ; ...AND A KEPT MODULE ON kern_mega (SPEC.md
+    je .mod                     ; 2.8.3.3) is a POOL PAIR: its two selectors,
+%endif                          ; and DESK.DRV's library, go with the word
+%endif
     cmp si, mem_pg_fatwrow      ; A FAT WINDOW HAS MORE NAMING WORDS THAN THIS
     je .fatw                    ; PROTOCOL CARRIES (SPEC.md 18.8.4): the LIVE
                                 ; one is also [dsk_fatseg], which every access
@@ -1663,6 +1670,23 @@ mem_pg_forget:
     jmp short .out
 .view:
     call fmv_demote             ; ...and the file manager likewise, BX = owner
+%endif
+%ifdef MOD_CACHE
+%ifdef KERN_MEGA
+    jmp short .out
+.mod:                           ; ONLY mx_shedf reaches it: a kept module is a
+    shl cx, 1                   ; pool block, never a mem_tab record. CX = 2 x
+    add cx, [si+PGO_BASE]       ; the id, so the word is the row's MODR_SEG
+    push dx
+    push di
+    mov bx, cx                  ; BX = the row, mod_free_row's input: the
+    call mod_free_row           ; slots (already mod_gone's) to mod_gone, the
+    pop di                      ; word zeroed, and mega_hifreef - the block and
+    pop dx                      ; BOTH halves of the pair - and DESK.DRV's
+                                ; library selector. mx_shedf's own mx_freef
+                                ; after this finds the block gone and refuses,
+                                ; which it does not read
+%endif
 %endif
 .out:
     pop si
@@ -3584,7 +3608,9 @@ mem_rr_tab:
                                 ; HIBER.DRV, and its dialog slot is a
 %endif                          ; refusing stub with no state (62.9.15)
 %ifdef MOD_CACHE
+%ifndef KERN_MEGA               ; (kern_mega keeps only a POOL pair, which no
     MEM_RR_ROW mod_tab + MODR_SEG, MOD_MAX, MODR_SIZE ; a KEPT module image,
+%endif                          ; conventional move can name: SPEC.md 2.8.3.3)
                                 ; movable from its drop to its re-adoption
                                 ; (mod.inc, SPEC.md 2.8.3); a LIVE one is
                                 ; MEM_K_MOD and never moves, so its row never

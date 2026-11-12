@@ -20,10 +20,10 @@ about what the module DECIDED, not about pixels:
      called 'Desk Calendar' comes up, and the module is dropped after;
   C  a press released OFF the panel picks nothing: nothing posted, and the
      module dropped by the track thunk itself;
-     A DROP IS SPEC.md 2.8.3's: on kern_big the image is KEPT - its first
-     slot no longer names its segment and its claim is re-tagged MEM_P_MOD
-     + 2 x the id, purgeable - and on kern_mega, or once the heap has shed
-     it, the row holds nothing (Menu.dropped);
+     A DROP IS SPEC.md 2.8.3's: the image is KEPT - its first slot no
+     longer names its segment and its claim is re-tagged MEM_P_MOD + 2 x
+     the id, purgeable (on kern_mega its POOL block, 2.8.3.3) - and once
+     the heap has shed it, the row holds nothing (Menu.dropped);
   D  Hide All hides the widget (visible bit clear, still used), the next
      panel offers Show All, and Show All shows it again;
   E  Arrange puts its frame at W_X = 7 mod 8, at the column's top (MBAR_H +
@@ -213,7 +213,7 @@ class Menu:
 
     def dropped(self):
         """THE DROP AS SPEC.md 2.8.3 HAS IT, or None: 'freed' when the row
-        holds no segment (kern_mega, which keeps nothing, or a kept image
+        holds no segment (an image that does not opt in, or a kept image
         the heap has since shed), 'kept' when the row still names its claim
         but the module's first slot no longer names that segment - the very
         test mod_need makes - AND the claim is re-tagged MEM_P_MOD + 2 x
@@ -224,7 +224,12 @@ class Menu:
         if not seg:
             return "freed"
         if getattr(self.m, "bochs", False):
-            return None                 # kern_mega keeps nothing (2.8.3)
+            # kern_mega (SPEC.md 2.8.3.3): KEPT is the pair above 1MB with
+            # its slots on mod_gone and its POOL block marked purgeable
+            import modstate
+            return ("kept" if modstate.state(self.m, self.mod) == "kept" and
+                    modstate.kept_owner(self.m, self.mod) ==
+                    MEM_P_MOD + 2 * self.mod else None)
         fpt = self.ui._S("mod_fpt")
         blk = struct.unpack("<H", bytes(self.m.read(fpt + 2 * self.mod,
                                                     2)))[0]

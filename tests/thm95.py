@@ -96,10 +96,8 @@ def kind(m):
 def modseg(m, eq):
     """WIN95.DRV's segment while it is LIVE, 0 otherwise. A drop on kern_big
     KEEPS the image (SPEC.md 2.8.3): the row still names it, its slots rest
-    on mod_gone, and that is the "dropped" this row asks for (modstate.py).
-    kern_mega keeps nothing, and its rows may hold selectors: the raw word"""
-    if getattr(m, "bochs", False):
-        return u16(m.read(m.sym("mod_tab") + eq["MOD_WIN"] * 4, 2))
+    on mod_gone, and that is the "dropped" this row asks for (modstate.py),
+    kern_mega's pool pair included (SPEC.md 2.8.3.3)"""
     return modstate.live(m, "MOD_WIN")
 
 

@@ -2098,7 +2098,7 @@ stm_s_wiren: db 'The Wire', 0        ; DSV_NAMEMAX bytes
 ; lists from them with no disk I/O. Written only by stm_scan (and STE_RUN by
 ; stm_census, every press); a load - the first, or one after a shed - brings
 ; stm_kok in as 0, and the scan runs again
-%ifdef MOD_CACHE                ; (kern_mega frees the image at every drop)
+%ifdef MOD_CACHE                ; (kern_small frees the image at every drop)
 stm_kok:    db 0                ; 1 = the three below are a scan's...
 stm_kgen:   times DVOL_MAX db 0 ; ...taken at these [dsk_wgen]
 %endif

@@ -161,9 +161,7 @@ class Probe:
         """DISKOPS.DRV's MODR_SEG while it is LIVE - 0 when the image is not
         resident or rests KEPT after its drop (SPEC.md 2.8.3: the row names
         it, its slots on mod_gone; modstate.py), which is a drop all the
-        same"""
-        if getattr(self.m, "bochs", False):
-            return word(self.m, self.mod_tab + MOD_DISKOPS * MODR_SIZE)
+        same - kern_mega's pool pair included (2.8.3.3)"""
         return modstate.live(self.m, MOD_DISKOPS)
 
 

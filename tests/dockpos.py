@@ -85,9 +85,7 @@ def dseg(m):
     """DOCK.DRV's segment while it is LIVE, 0 otherwise. A drop on kern_big
     KEEPS the image (SPEC.md 2.8.3) - the row still names it, its slots on
     mod_gone - and that reads 0 here, the "unloaded" these checks mean
-    (modstate.py). kern_mega keeps nothing: the raw word."""
-    if getattr(m, "bochs", False):
-        return word(m, "mod_r_dock")
+    (modstate.py), on kern_mega as everywhere (SPEC.md 2.8.3.3)."""
     return modstate.live(m, "MOD_DOCK")
 
 

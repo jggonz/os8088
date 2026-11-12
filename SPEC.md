@@ -1963,8 +1963,9 @@ sites through 14 slot blocks). Neither is needed: the bracket that
 `t_moddrop` already gates below is the pin, and the heap still purges only
 an image its feature has dropped — which keeps the old reason intact.
 
-**A drop KEEPS the image on `kern_big` and `kern_emu`** (`MOD_CACHE`,
-big-review WP2a: rt-1, rt-9, shell-2), **and every image opts in** (the
+**A drop KEEPS the image on `kern_big`, `kern_emu` and `kern_mega`**
+(`MOD_CACHE`, big-review WP2a: rt-1, rt-9, shell-2; `kern_mega`'s arm is
+§2.8.3.3), **and every image opts in** (the
 owner's report, 2026-11-12: *"Control Panel ... is still doing disk reads to
 open. Opening it twice causes disk reads ... it shows up under kernel when
 loaded, then goes away entirely when unloaded"*). The most likely moment for
@@ -2186,11 +2187,9 @@ same build holds the same bytes; one of another build holds a file this
 kernel would REFUSE. The kept image is therefore exactly the one a read
 could give it, or better.
 
-**Not on `kern_mega`** (`MOD_CACHE` is undefined there): in protected mode
-`mod_hi` copies every module above 1MB the moment it is loaded (`MOD_HIOK`),
-where a block is freed through `mega_hifreef` and no `mem_pg` shed reaches
-it, so the cache would serve only an image `mod_hi` refused. A pool purge
-(`mx_shedf`) is what would give it one. **Not on `kern_small` (owner
+**On `kern_mega` the kept image is the POOL PAIR above 1MB** that `mod_hi`
+copied it to, purgeable through the pool's own shed (`mx_shedf`) - §2.8.3.3,
+which is the whole of what differs there. **Not on `kern_small` (owner
 decision O5, open)**: the arm is priced and waiting — the same code, about
 the bytes below, and the rank question above for `FILECP` and `FDLG`.
 
@@ -2267,6 +2266,86 @@ the image except where it packs):
 | `SERIAL.DRV` | +8 (911 -> 919) | `srl_release`'s lease test |
 | `DESK.DRV` | +1 (4,431 -> 4,432) | `modj_scr` |
 | `DOCK.DRV`, `EXTD.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `WIN95.DRV` | 0 | a header word's value, and cells moved to the end |
+
+##### 2.8.3.3 `kern_mega`: the kept image is the pool pair above 1MB
+
+The owner, 2026-11-12: *"Mega does need parity; we keep adding things, and
+then 'oops we don't do the work on mega', and call it by design."* Until
+this, `MOD_CACHE` was undefined on `kern_mega` on the argument that `mod_hi`
+moves every module above 1MB at its load, "where no `mem_pg` shed can reach
+it". The pool HAS a shed - `mx_shedf`, mx_alloc's, which takes the cheapest
+`MX_FPURGE` kernel block below the claimant's rank and tells its owner
+through the same `mem_pg_forget` (KERN-MEGA-MEMORY-PLAN MC1) - so the
+argument was a missing call, not a reason. Every module re-read its file on
+every use there: every Sticky Apps press, every Control Panel open.
+
+- **What is kept**: an image `mod_hi` placed above 1MB - `MODR_SEG` a pool
+  pair's CODE selector (`mem_ishidx`), which in protected mode is every
+  module (`MOD_HIOK`). An image left in conventional memory - real mode, a
+  switch refused, or a pool that refused the copy - is FREED at its drop as
+  before: in protected mode it is an LDT pair over a `mem_tab` claim, and a
+  pool that could not take a 16KB image is exactly the pressure a cache
+  should not be kept under.
+- **`mod_drop`** zeroes the scratch tail through the pair's DATA half
+  (`MODR_SEG` + 8), disarms the slots, and has **`mega_modkeepf`** mark the
+  pool block `MX_FPURGE` with `MX_AUX` = `MEM_P_MOD` + 2 × the id - the
+  same tag, so the same `mem_pg_own` row names `MODR_SEG`. No `MC_RLOC` is
+  declared: every pool block moves with its selectors (`mx_compactf`,
+  `mx_packupf` rebase every descriptor whose base is inside it), so the
+  kept pair - and `DESK.DRV`'s library selector inside it - survive any
+  pack with nothing to re-point. A `mega_modkeepf` that finds no block
+  frees the image rather than leave it held and unpurgeable.
+- **`mod_need`'s `.held`** asks the KEPT question rather than the LIVE one:
+  a live slot on `kern_mega` names the image's CODE half, which is
+  `MODR_SEG` above 1MB and `MODR_SEG` - 8 for a conventional pair, while a
+  disarmed slot names `mod_gone`'s segment, `.cold`'s CS (`COLDSEG_TO`).
+  `mod_live` asks the same. The re-adopt runs `mega_modkeepf` with BX = 0
+  (the mark off) inside the IF = 0 window - `mx_shedf` scans and forgets
+  with IF = 0 too, so a shed and a re-adopt cannot interleave - then arms
+  the slots through `.arming` with ES = the data half; `mod_hi` leaves an
+  image that is already a pool pair alone.
+- **The shed** is `mem_pg_forget`'s `.mod` arm (`kern_mega` only): the
+  row's `mod_free_row` - slots to `mod_gone` again, the word zeroed, and
+  `mega_hifreef`, which frees the block and BOTH halves of the pair (an
+  `MX_KOWN` block's selectors are not `mx_dfree`'s), and `DESK.DRV`'s
+  library selector. `mx_shedf`'s own `mx_freef` after it finds the block
+  gone and refuses, which it does not read.
+- **Hibernate and the DOS park need nothing.** A kept pair is an `mx_tab`
+  block like a live one: it rides §87.9's extended section and the park
+  copies no pool; `mod_tab`, the LDT and `mx_tab` come back together.
+
+**The tail rule found a `kern_mega` defect on its first run**: `DISKOPS.DRV`'s
+`KSEG` helpers (`ksg_es_*`, `ksg_ds_*`, kern_mega's near loaders of a
+scratch selector) were emitted at the image's END, after `cmz_ovl` - inside
+the scratch tail, so a kept image's drop would have zeroed code. They are
+`compress.inc`'s now, just below `cmz_ovl` (`tests/modkeep.py`'s HOST leg,
+run against `build/megak/`, was red on it).
+
+**What it cost** (`kernsize`, against `8ef75fa1`): `kern_mega` `.text` +8 -
+the `mem_pg_own` row's 6 and `dsk_rah_lim`'s 2 (§18.95.13 came with it) -
+and **0 bytes of `MEGA_RESIDENT`** (61,440 either way); above 1MB `.cold`
++371 (the cache's `mod_need`/`mod_drop`/`mod_live`/`mod_hi` arms and the
+`.mod` forget, and §18.95.13's prefetch with its shared routines) and `.mega`
++64 (`mega_modkeepf`). `kern_big`, `kern_emu` and `kern_small`:
+`kernel.bin` byte-identical. The images: `CTRL.DRV` takes `MOD_CACHE`'s
+layout on `kern_mega` too (its scratch in `.modcb`), and `DISKOPS.DRV`'s
+helpers moved, 0 bytes.
+
+**Measured under Bochs** (`tests/megamodcache.py`, a soak row, 16MB):
+every `int 13h` the trace caught (a breakpoint on the IDT's 13h gate) across
+one use:
+
+| use | 1st | 2nd | 3rd, after the pool's pack MOVED it | after `mx_shedf` took it |
+|---|---|---|---|---|
+| a Sticky Apps press (`STIKMENU.DRV`, the kept scan with it) | 5 | **0** | **0** | 1 (a load) |
+| the Control Panel opened and closed (`CTRL.DRV`) | 5 | **0** | | |
+
+The pack moved the kept block 16KB up (`FDA800` -> `FDE800`) with
+`MODR_SEG` the same selector; the shed freed the block and both LDT entries
+of its pair. With `mod_drop`'s arm forced to free (the behaviour before),
+the same row reads 1 `int 13h` on every later press and 3 on the panel's
+second open - and that is WITH §18.95.13's prefetch, which this change also
+brought to `kern_mega`.
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -42088,9 +42167,10 @@ an explicit prefetch instead, which is §18.95.13: `kernel-hotpaths`' disk-4
 (+208) armed this cap at the file's length, and it was left out of this
 branch for its bytes and for the armed state.
 
-Not on kern_dos (no room in its image) and not on kern_mega (its store above
-1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
-kern_mega drops the cache at step 2 instead (before the FAT window).
+Not on kern_dos (no room in its image): `DSK_RAHINT` is undefined there.
+kern_mega has it since §18.95.13 reached it - its store above 1MB is filled
+through `dsk_xfer`'s own bounce, a run at a time through the 18-sector
+landing - and the step-2 drop it kept instead went with it.
 
 #### 18.95.12 …and a PicoMEM 2's disk is never FILLED, only served (kern_big, kern_emu)
 
@@ -42186,9 +42266,24 @@ The rows: `ldcost`, `smalllaunch`, `navcalls`, `fdswap`, `imgswap`, the
 Resident: **138 bytes of `.cold`** on kern_big, kern_emu and kern_small
 (kernsize's section sums against `2cf57256`; no `.text`, no `.bss`). The
 scan as a routine is 7 of them, the shared read-and-stamp 24 net of the
-fill's own stamp it replaces, the prefetch and its call site the rest. Not on kern_mega (its store above 1MB lands through a nine-sector
-bounce) nor kern_dos: `DSK_RAHINT` is undefined there and both are
-byte-identical. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
+fill's own stamp it replaces, the prefetch and its call site the rest. Not
+on kern_dos: `DSK_RAHINT` is undefined there and it is byte-identical.
+
+**And on kern_mega** (the owner's parity rule, 2026-11-12). It was left off
+because the store above 1MB "lands through a nine-sector bounce" - the
+fill's own landing-then-copy arm, written when the landing was one chunk.
+The landing is `DSK_BNC_SECS` = 18 since KERN-MEGA-PLAN 14.167, and
+`dsk_xfer` itself bounces a run into any LDT selector above 1MB through it,
+so `dsk_rah_rdst` reads straight into the store as on every other kernel
+and the fill's private arm is gone. The prefetch there: with the store
+above 1MB its run is capped at `DSK_BNC_SECS`, ONE reflected `int 13h`
+(the bounce would cut a longer one in two), and there is no DMA page to
+keep; with no landing (a shed) it prefetches nothing, as a fill fills
+nothing. A conventional store in protected mode is a SELECTOR, so the page
+test there is `dsk_runcap`'s, on its base. With it came §18.95.11's
+listing-mount fill of eight. On 360KB and 720KB a cylinder is 18 sectors -
+the whole prefetch in one call; on 1.2MB and 1.44MB it reads the first 18
+of the cylinder, still at least the track the peek's fill would have. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
 cap as a byte inside `dsk_rah_fill`
 (`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch`).
 
@@ -42211,8 +42306,8 @@ answers CF=1 (no record stamped, as before), `dsk_rah_serve` falls through to
 the direct path, and the real read runs the full ladder for its own sectors. A
 failed prefetch still flushes the cache (18.95.13). The writers are the two
 that read speculatively: `dsk_rah_rdst` (the fill's one slot and the prefetch,
-kern_big, kern_emu, kern_small) and `dsk_rah_fill`'s own read where there is no
-`DSK_RAHINT` (kern_mega, kern_dos). Each writes the byte with `mov` and puts
+kern_big, kern_emu, kern_small, kern_mega) and `dsk_rah_fill`'s own read where there is no
+`DSK_RAHINT` (kern_dos). Each writes the byte with `mov` and puts
 0 back with `mov` - it is 0 on the way in, the cache's gate refusing a fill
 while anything has raised it, and `mov` leaves the read's CF alone.
 
@@ -227756,9 +227851,9 @@ off a re-serialled system disk `Add` is the loader's refusal; with the
 system disk back `Add` launches, and its registration's write makes the next
 press scan again. Cost: +48 bytes of the module image (code +39, the
 generations and the flag 9), +44 on the disk, still seven clusters;
-NOTHING resident on any kernel (`kernel.bin` byte-identical). Not on
-`kern_mega`, which frees the image at every drop (§2.8.3), so every press
-there is a load and a scan, as before.
+NOTHING resident on any kernel (`kernel.bin` byte-identical). On
+`kern_mega` too since §2.8.3.3: the kept pair above 1MB carries the scan
+like any kept image (`tests/megamodcache.py` B and D: no `int 13h`).
 
 A scan walks the BOOT volume first (`[dsk_bootvol]` - its copy is the
 one a Sticky App row names, §110.4), then every other volume that is a FIXED

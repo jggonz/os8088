@@ -10823,6 +10823,53 @@ mega_modhif:
     pop bx
     retf
 
+; mega_modkeepf - FAR (mod_drop, mod_need's .held; `.cold`): AX = a module
+; image's pool pair (its CODE selector, mod_hi's), BX = its kept tag MEM_P_MOD
+; + 2 x the id -> its mx_tab block becomes a purgeable kernel cache
+; (MX_FPURGE, the tag in MX_AUX), which mx_shed takes back through
+; mem_pg_forget's .mod arm; BX = 0 takes the mark off again (a re-adoption).
+; CF = 0 done, CF = 1 no block of the kernel's at that base. Under IF = 0
+; for the mark, so a shed (mx_shedf, which scans with IF = 0) sees the block
+; and its tag together or not at all (SPEC.md 2.8.3.3). Clobbers nothing else
+mega_modkeepf:
+    push ax
+    push cx
+    push dx
+    push si
+    push es
+    pushf
+    cli
+    call mega_selbase               ; DX:AX = the pair's base
+    MXT_ES                          ; (the tables' tail)
+    push bx
+    mov bl, MX_KOWN
+    call mx_find                    ; SI = its entry
+    pop bx
+    jc .out
+    mov [es:si+MX_AUX], bx
+    and byte [es:si+MX_FL], ~MX_FPURGE & 0xFF
+    or bx, bx                       ; (CF = 0)
+    jz .out
+    or byte [es:si+MX_FL], MX_FPURGE
+.out:
+    pop ax                          ; the caller's flags: IF back, CF ours
+    jc .no
+    push ax
+    popf
+    clc
+    jmp short .ret
+.no:
+    push ax
+    popf
+    stc
+.ret:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    retf
+
 ; mega_modsayf - FAR (mod_hi): DS:SI = a module's NUL file name, AX = the code
 ; selector it now runs under -> `kern_mega: above 1MB: CTRL.DRV 00FF3800` on
 ; the debug port, the driver line's shape (mega_drvsayf), so a field run and

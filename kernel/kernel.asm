@@ -509,10 +509,18 @@ TOAST_MAX   equ 24
 ; arithmetic on a register KSEG loaded (KERN-MEGA-MEMORY-PLAN MC7.6)
 ; IN DISKOPS.DRV (`.modl`, fifty of the tree's fifty-four sites) the slot and
 ; the segment-register load are a NEAR helper's, ksg_<sreg>_<slot> at the
-; image's end (below, before modl_end): the site is `push ax / mov ax, src /
+; image's end (compress.inc, below its scratch tail): the site is `push ax / mov ax, src /
 ; call / pop ax`, eight bytes or so against seventeen, and the helper keeps DI
 ; and FLAGS as the inline form does (kern_mega size pass 1). A combination no
 ; helper exists for is an undefined label at assembly - add its row there
+; KSG_ROW sreg, slot - one of those helpers: DI = the slot, then the
+; register's tail (compress.inc emits them, below DISKOPS.DRV's scratch tail)
+%macro KSG_ROW 2
+ksg_%1_%2:
+    push di
+    mov di, %2
+    jmp short ksg_%1_MEGA_SEL_K5.go
+%endmacro
 %macro KSEG 3
 %ifdef KERN_MEGA
  %ifidni __?SECT?__, [section .modl]
@@ -1088,17 +1096,17 @@ TOAST_MAX   equ 24
 %endif
 
 ; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
-; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big
-; and kern_emu. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN) is open,
-; priced at this arm's bytes. NOT kern_mega: in protected mode every module
-; is copied above 1MB the moment it is loaded (mod_hi, MOD_HIOK), where no
-; mem_pg shed can reach it - the cache would only ever serve the image
-; mod_hi refused, so it spends nothing there. Resolved here for OS88_ASSOC's
-; reason: memory.inc, above mod.inc, names the tag's row
+; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big,
+; kern_emu and kern_mega. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN)
+; is open, priced at this arm's bytes. ON kern_mega THE KEPT IMAGE IS THE
+; POOL PAIR above 1MB that mod_hi copied it to (SPEC.md 2.8.3.3): the pool
+; block is marked a purgeable kernel cache (MX_FPURGE, mega_modkeepf), so
+; mx_alloc's shed takes it back through the same mem_pg_own row; an image
+; mod_hi left low (real mode, or a pool that refused it) is freed as before.
+; Resolved here for OS88_ASSOC's reason: memory.inc, above mod.inc, names the
+; tag's row
 %ifdef KERN_BIG
-  %ifndef KERN_MEGA
     %define MOD_CACHE 1
-  %endif
 %endif
 ; SCR_B / SCR_W - one byte or word of a module's SCRATCH (SPEC.md 2.8.3):
 ; under MOD_CACHE it is declared in the image's nobits bss tail (`res*`),
@@ -9094,42 +9102,10 @@ section .modf
 modf_end:
 MODF_SIZE equ modf_end - $$
 
-section .modl
-%ifdef KERN_MEGA
-; KSEG's near helpers for this image (the macro above): ES or DS = a selector
-; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
-; answer. Each row sets DI to its slot and joins its register's tail; DI and
-; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it
-%macro KSG_ROW 2
-ksg_%1_%2:
-    push di
-    mov di, %2
-    jmp short ksg_%1_MEGA_SEL_K5.go
-%endmacro
-    KSG_ROW es, MEGA_SEL_K0
-    KSG_ROW es, MEGA_SEL_K1
-    KSG_ROW es, MEGA_SEL_K3
-    KSG_ROW es, MEGA_SEL_K4
-ksg_es_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov es, ax
-    pop di
-    ret
-    KSG_ROW ds, MEGA_SEL_K0
-    KSG_ROW ds, MEGA_SEL_K1
-    KSG_ROW ds, MEGA_SEL_K4
-ksg_ds_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov ds, ax
-    pop di
-    ret
-%endif
+section .modl                   ; (kern_mega's KSEG helpers are compress.inc's,
+                                ; BELOW the scratch tail: a kept image's drop
+                                ; zeroes everything from cmz_ovl on, SPEC.md
+                                ; 2.8.3.3)
 modl_end:
 MODL_SIZE equ modl_end - $$
 

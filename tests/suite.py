@@ -19310,6 +19310,24 @@ SOAK = [
         needs=("bochs",),
         wants=("build/mega.img", "build/megaapps.img", "build/megarun.o88",
                "build/mbr.bin")),
+    Row("megamodcache", "soak", py("tests/megamodcache.py"), 70.0,
+        "SPEC.md 2.8.3.3: kern_mega KEEPS a dropped module - the pool pair "
+        "above 1MB mod_hi put it in, its mx_tab block MX_FPURGE with the "
+        "MEM_P_MOD tag. HOST: modkeep's tail and store checks on "
+        "build/megak's own module files. Bochs at 16MB: the second Sticky "
+        "Apps press re-adopts STIKMENU.DRV with NO int 13h (the kept scan "
+        "rides it), the pool's pack (mx_packupf) moves it with its selector, "
+        "the third press re-adopts it there, mx_shedf takes it back with "
+        "both halves of the pair freed, the next press loads it again; and "
+        "the Control Panel's second open makes no int 13h. Red: mod_drop's "
+        "kern_mega arm always freeing (12 FAILs), mega_modkeepf without its "
+        "MX_FPURGE (A never sees a drop), mem_pg_forget without its .mod arm "
+        "(the pair leaks in the LDT), DISKOPS.DRV's KSEG helpers after its "
+        "tail (HOST). 70s is 64 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megaapps.img", "build/megarun.o88",
+               "build/megak/kernel.map", "build/megak/ctrl.drv",
+               "build/megak/diskops.drv", "build/megak/stikmenu.drv")),
     Row("megarehome", "soak", py("tests/megarehome.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.44, 14.48, SPEC.md 20.12.10.9: a "
         "RE-HOMED program whose own header says OS88_HIGH runs above 1MB on "
