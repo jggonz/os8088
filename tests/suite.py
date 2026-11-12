@@ -14628,9 +14628,17 @@ SOAK = [
         "and CGA, every free-or-cache paragraph one run with Paint open), "
         "paint2 (Herc, two Paint windows) and fdlgkept (CGA, Note Pad's "
         "second File > Open re-adopts FDLG.DRV - 2 int 13h, was 4). "
+        "SPEC.md 50.6.13.1 and 2.8.3.4.1 (Herc): iconmove - opening Paint "
+        "from A:/APPS MOVES the icon store and the listing into a free hole "
+        "(new base, same bytes, ico_seg / FS_VSEG re-pointed, ~8 ms of "
+        "guest cycles a move), iconrepaint - closing Paint repaints the "
+        "Disk window with 0 int 13h (11 with the move off), ctrlkept - the "
+        "second Control Panel re-adopts CTRL.DRV, 0 int 13h. "
         "VERIFIED RED with MEM_EVICT off (two runs on both adapters, "
-        "ld_status 5) and with kern_small's MOD_CACHE off (the image "
-        "loaded again). Builds nothing: `make small`'s tree",
+        "ld_status 5), with kern_small's MOD_CACHE off (the image "
+        "loaded again), with mem_evmv refusing every move (both caches "
+        "evicted, 11 int 13h) and with CTRL.DRV's MOD_H_SCR 0 (no kept "
+        "row). Builds nothing: `make small`'s tree",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
     Row("paintgrowsmall", "soak", py("tests/paintgrowsmall.py"), 10.0,

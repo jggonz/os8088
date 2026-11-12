@@ -1116,10 +1116,12 @@ ksg_%1_%2:
 ; PURGEABLE ONLY - nothing moves on this kernel (SPEC.md 66.0), so mod_drop
 ; declares no relocation proc there - and only the images that name a scratch
 ; tail are kept: FDLG.DRV and FILECP.DRV (their whole bss), FORMAT.DRV,
-; DISKOPS.DRV and SERIAL.DRV (theirs, as on kern_big). CTRL.DRV is freed as
-; before, MODC_KEEP being kern_big's (SPEC.md 2.8.3.4)
+; DISKOPS.DRV and SERIAL.DRV (theirs, as on kern_big) - and CTRL.DRV, whose
+; scratch tail `.modcb` is kern_small's too since SPEC.md 2.8.3.4.1: the
+; Floppy page's two bytes and the shutdown question's, with no cpc_buf
 %ifdef KERN_SMALL
     %define MOD_CACHE 1
+    %define MODC_KEEP 1
 %endif
 
 ; MEM_EVICT - a claim that is not itself a cache PLACES as if every cache it
@@ -2378,7 +2380,7 @@ section .modu    follows=.modc vfollows=.modc align=1 valign=1
                                 ; in `.modc`; `.modc` may name NOTHING in
                                 ; `.modu` (tools/os88ovlchk.py), because on a
                                 ; core-only load it is not there
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP
 section .modcb   nobits vstart=MODC_IMG ; CTRL.DRV's own scratch: the
                                 ; SYSTEM.CFG writer's file buffer (driver.inc,
                                 ; CFG_DATA cpc), at the image's end and NOT
@@ -9110,9 +9112,8 @@ MODK_SIZE equ modk_end - $$
 %endif
 %endif
 
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP                ; (kern_big's OS88_DRIVERS implies it)
 section .modcb
-%ifdef MODC_KEEP
 ; CTRL.DRV'S SCRATCH TAIL (SPEC.md 2.8.3), at the head of its bss: every byte
 ; the core and the panel write in their own image that a later use could read
 ; - the core's gesture state and the Floppy page's two bytes (cps_scr ..
@@ -9121,11 +9122,14 @@ section .modcb
 ; MOD_H_SCR is the WHOLE bss, cpc_buf with it, so a kept copy of EITHER row
 ; is zeroed back to the file's own at its drop
 cps_scr:
+%ifmacro SC_SCRATCH             ; (OS88_SHORTCUTS's: not on kern_small)
     SC_SCRATCH
+%endif
+%ifmacro CPC_SCRATCH            ; (OS88_DRIVERS's: not on kern_small)
     CPC_SCRATCH
+%endif
 cps_scre:
     SD_SCRATCH
-%endif
 modcb_end:
 MODC_BSS equ modcb_end - $$
 %endif
@@ -9138,7 +9142,7 @@ section .modc
 mods_end:
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
-%ifdef OS88_DRIVERS
+%ifdef MODC_KEEP
 MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
     times MODC_BSS db 0         ; vfollows the core, so the image's length is
 %endif                          ; both halves and not this section's own $$.
@@ -9156,6 +9160,10 @@ MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
                                 ; ends of `.modu`, so there is no pad between
 
 section .modf
+%ifndef OS88_ASSOC
+modf_scr:   db 0                ; FORMAT.DRV's scratch tail where it has no
+%endif                          ; ascw (SPEC.md 2.8.3.4.1): one zero, so a
+                                ; dropped image is KEPT
 modf_end:
 MODF_SIZE equ modf_end - $$
 

@@ -5950,8 +5950,9 @@ modf_hdr:
 %ifdef OS88_ASSOC
     dw modf_end - asw_v         ; MOD_H_SCR: ascw's cells, the image's last
 %else                           ; bytes and zeros in the file (2.8.3) - KEPT
-    dw 0                        ; ...or freed, on a kernel with no ASSOC.DAT
-%endif                          ; writer (none of them keeps an image)
+    dw modf_end - modf_scr      ; ...and kern_small's: ONE zero byte, the
+%endif                          ; image writing nothing else of its own
+                                ; (DESK.DRV's shape, SPEC.md 2.8.3.4.1) - KEPT
     dw dskw_fmt_probe_x         ; the FAR entries ARE the bodies: each is
     dw dskw_fmt_do_x            ; reached by `call far` - the two inside
     dw dskw_fmt_line_x          ; dskw_fmt_do_x by `push cs / call` - so each

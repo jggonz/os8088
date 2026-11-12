@@ -2429,10 +2429,8 @@ owner then turned the cache on here (2026-11-12, option C "on top of A").
   byte either writes in its own image, `tests/modkeep.py`'s HOST leg run
   with `OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk`), and
   `DISKOPS.DRV` and `SERIAL.DRV` name their tails as on `kern_big`.
-  `CTRL.DRV` and `FORMAT.DRV` name none here and are freed at their drop as
-  before: `CTRL.DRV`'s scratch tail is `.modcb`, which is `OS88_DRIVERS`'s
-  (`MODC_KEEP` is the symbol, defined beside `kern_big`'s `MOD_CACHE`), and
-  `FORMAT.DRV`'s cells are `kern_big`'s.
+  `CTRL.DRV` and `FORMAT.DRV` named none here and were freed at their drop
+  until §2.8.3.4.1.
 - **The owner's case, measured** (`tests/smallfrag.py`'s `fdlgkept`, the
   128KB CGA 5150): Note Pad, File > Open `README.TXT`, File > Open a second
   file. The second open re-adopts `FDLG.DRV` (`mod_need.held`, no
@@ -2445,6 +2443,38 @@ What it cost (`tools/os88rdiff.py`, `kern_small`): `.cold` +106
 (`mod_need` +40, `mod_drop` +49, `mod_live` +17) and `.text` +6 (the
 `mem_pg_own` row) - resident, no rung crossed. `kern_big`, `kern_emu` and
 `kern_mega`: every routine the same.
+
+###### 2.8.3.4.1 …and the Control Panel and the formatter are kept too
+
+The owner's second complaint of 2026-11-12: the Control Panel opened a
+second time on `kern_small` read `CTRL.DRV` again. Both remaining images now
+name a scratch tail on this kernel, and neither costs a resident byte:
+
+- **`CTRL.DRV`**: `MODC_KEEP` is defined beside `kern_small`'s `MOD_CACHE`,
+  so `SCR_B`/`SCR_W` declare the scratch in the image's `nobits` tail and
+  `.modcb` exists here too - holding the shutdown question's eight bytes
+  (`SD_SCRATCH`) and nothing else, the Floppy page's two (`CPC_SCRATCH`)
+  and `cpc_buf` being `OS88_DRIVERS`'s and the shortcuts' cells
+  `OS88_SHORTCUTS`'s (each `%ifmacro` in `kernel.asm`, so `kern_big`'s tail
+  is the same bytes it was). `MOD_H_SCR` = 8: those bytes moved from the
+  middle of `.modu` to zeros at the image's end, and `tests/modkeep.py`'s
+  HOST leg (`OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk`) finds no
+  direct store outside them. There is no `MOD_SETS` row on this kernel, so
+  the one kept row is the panel's.
+- **`FORMAT.DRV`**: it writes nothing in its own image here (`kern_big`'s
+  tail is `ascw`'s cells, `OS88_ASSOC`'s), so it carries DESK.DRV's shape -
+  ONE zero byte, `modf_scr`, last, and `MOD_H_SCR` = 1.
+
+**Measured** (`tests/smallfrag.py`'s `ctrlkept`, the 128KB Hercules): the
+second Control Panel re-adopts `CTRL.DRV` (`mod_need.held`, no
+`mod_need.sized`) and makes **0** `int 13h` calls. Like every kept image it
+is a `MEM_P_MOD` cache at `MEM_PG_LOW`, so a program launch that needs its
+room still evicts it (§50.6.13) - it is not in `mem_evw`'s table, and the
+next open is then an ordinary load.
+
+What it cost: `kern_small`'s resident sections nothing; `CTRL.DRV` the same
+size (8 bytes moved to its end), `FORMAT.DRV` one byte. `kern_big`,
+`kern_emu` and `kern_mega`: every routine the same.
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -104827,6 +104857,9 @@ contents more often. Opening Paint from a Disk window now evicts that
 window's listing, the read-ahead and the icon store (their room is where
 Paint's canvas belongs), so going back to the Disk window re-lists from
 the disk. Before this they survived - in the room that then walled Paint #2.
+**§50.6.13.1 takes most of that back**: the icon store and the listing are
+MOVED into a free hole when one fits, and only the read-ahead (and the
+caches nobody waits on) goes.
 
 **`kern_small` only** (`MEM_EVICT`, kernel.asm). `kern_big`, `kern_emu`
 and `kern_mega` compact, and §66.10 already takes a walling cache down
@@ -104843,6 +104876,81 @@ row (soak): with Paint open every free-or-cache paragraph is ONE run on
 both adapters (34KB Hercules, 43KB CGA), and Paint #2 opens on Hercules
 (its canvas 10.5KB, its region 20KB, 2KB left); with `MEM_EVICT` off it
 reads two runs on each and `ld_status` 5.
+
+##### 50.6.13.1 …and the icon store and the listings MOVE into a free hole instead
+
+**The owner's complaint** (2026-11-12, on top of the above): evicting the
+Disk window's icons on every program launch is painful - `kern_small` has
+no `ASSOC.DAT`, so re-fetching the store is a sector per package, seconds on
+the target - and the window's listing goes with it, which is a re-list.
+
+**So before `mem_evict` sheds a cache, `mem_evmv` tries to MOVE it**: if a
+FREE hole elsewhere fits it, the bytes are copied there (`mem_bcopy`, the
+regrow's copier), the record is re-based, and the words its owner reads it
+by are re-pointed. Only when no hole fits, or no word names it, is it
+evicted as before.
+
+- **The hole is `mem_hifit`'s** - the highest base among the heap's floor and
+  each live claim's end at which the cache fits - with two things held for
+  the search: `[mem_pg_rank]` is below every cache level, so `mem_runfree`
+  counts every cache as in the way (a move never overlaps, evicts or
+  destroys another cache to make room: only genuinely free paragraphs), and
+  the cache's own record stands over the block being placed, so the hole is
+  outside it. That covers all three callers the same: `mem_claim_1`'s block
+  (not yet published), `mem_regrowp`'s path 2 extent and its path 3
+  destination (the grower's old bytes are its own record). HIGHEST and not
+  first-fit because it is the routine there is: the hole it picks is the
+  BOTTOM of the highest free run that fits, under top-down regions and
+  above bottom-up claims. A cache placed anywhere cannot wall a pinned claim
+  (50.6.13 evicts or moves it again), and a worker's claim, which evicts
+  nothing, still sheds it by rank on a refusal (50.6.2).
+- **The words are found by VALUE** (`mem_evw`, `.text`): `[ico_seg]`, the
+  five `fm_pool` blocks' `FS_VSEG` and the `[fm_vseg]` mirror -
+  `fm_reloc`'s pair on `kern_big`. Each is 0 or its owner's live claim, so
+  the one equal to the old base is the one naming it; the mirror alone can
+  be stale (a closed window's, until `fm_vp_set`), so a hit there alone
+  does not count as a word naming it. That table IS which caches move: the
+  icon store (`MEM_P_ICO`) and the listings (`MEM_P_VIEW`). The read-ahead
+  (`MEM_P_DIRW`, 13.5KB - a copy of ~35 ms with interrupts off, against a
+  re-read of one directory), the save-unders, the menu's and a kept module
+  are still evicted; the dirty FAT window and the aimed listing never reach
+  it (`mem_pg_cheap`).
+- **The rank of the icon store is not wrong for this**: `MEM_PG_TRIV` is
+  what a SHED takes first (50.6.4), and eviction ignores rank among the
+  caches a block lands on, so re-ranking it would buy nothing here. On
+  `kern_small` it is no longer trivial to lose - seconds, with no
+  `ASSOC.DAT` - and a shed taking it before a save-under is a real
+  mis-ranking there; that is a separate decision (it would be `MEM_PG_LOW`
+  beside the listings, one byte of the tag on that kernel).
+- **Only the UI task moves**, because only it evicts (`mem_evrank`):
+  §66.3.1's reason - a cache a pre-empted task holds in a register is not
+  another task's to move any more than to free - and a UI-task routine
+  holding one across a claim of its own was already wrong under eviction.
+- **What a move costs**: under the claim's own `cli`, `mem_hifit`'s walk and
+  a copy of the cache's paragraphs - the icon store and a listing are 2KB
+  each, about 1,024 `movsw` at ~25 clocks on the 8088 (`tests/smallfrag.py`'s
+  `iconmove` leg measures the whole move in cycles), against a re-fetch
+  of seconds.
+
+**Item 3 of the same report, closed where it is not**: `fcp_arm` (Cut and
+Copy, `FILECP.DRV` on this kernel) LOADS its image top-down and then reads
+the selected name out of the acting window's listing. A top-down claim
+counts a cache as room, so it lands on a low listing only when no run above
+it - free or cache - fits 2KB, which is a heap nearly full of pinned
+claims; the listing is then moved if a hole fits it, and evicted if none
+does - and an evicted listing used to stage an ALL-ZERO entry
+(`fmv_copy_in`'s no-store arm), putting an empty name on the clipboard. The
+resident stub now refuses the arm when `[fm_vseg]` is 0 after the load
+(CF = 1, "nothing selected"; the window owes a re-list). Caches never evict
+caches (`mem_evrank` gives a cache claimant rank 0), so it is only ever a
+non-cache claim that takes one.
+
+**What it cost** (`tools/os88rdiff.py`, `kern_small`): `mem_evmv` 70 and
+`mem_evict`'s call +5, and the parity pad in front of `mem_claim_hi_x` out
+again (-1: `tests/unit/t_hotpar.py`), `.cold` +74; `mem_evw` `.text` +14;
+`fcp_arm`'s refusal `.cold` +8 - **96 bytes, resident**, inside the rung:
+`kernsize`'s `rungs kernel 57,344` with 21 left, from 117. Every other
+kernel: every routine the same.
 
 ## 51. driver.inc — loadable drivers
 

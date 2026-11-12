@@ -42,12 +42,25 @@ Two verdicts, each on a fresh boot of each machine:
             where freeing the image at its drop made it 4 - FDLG.DRV's two
             reads gone
 
+  iconmove  a fourth boot (Hercules): A:/APPS open, then PAINT.O88 - and
+            the icon store and the window's listing SURVIVE the launch that
+            used to evict them (SPEC.md 50.6.13.1): each at a new base, its
+            bytes equal, ico_seg / the window's FS_VSEG (and fm_vseg, when it
+            named it) re-pointed. The moves' guest cycles are printed
+  iconrepaint  ...then Paint closed: the Disk window repaints with 0 int 13h
+  ctrlkept  ...then the Control Panel opened and closed twice: the second
+            re-adopts CTRL.DRV (mod_need.held, no .sized) with 0 int 13h
+            (SPEC.md 2.8.3.4.1)
+
 **How to make it go red** (WRITING-TESTS 1, done at the fix): build kern_small
 with `%define MEM_EVICT` taken out of kernel/kernel.asm and both verdicts fail
 on Hercules - onehole reads two runs (17.5KB and 16.5KB) and paint2 reads
 ld_status 5 - and onehole fails on CGA (17.5KB and 25.5KB). Take kern_small's
 `%define MOD_CACHE` out and fdlgkept fails twice: no kept record after the
 first open, and the second LOADS the image (mod_need.sized, 4 int 13h).
+Make mem_evmv answer CF = 1 at once (kernel/memory.inc) and iconmove fails
+twice (both caches evicted) and iconrepaint reads 11 int 13h; put CTRL.DRV's
+MOD_H_SCR back to 0 (kernel/ctrl.inc) and ctrlkept finds no kept row.
 """
 import os
 import shutil
@@ -239,6 +252,144 @@ def fdlg_leg(machine):
     return bad
 
 
+def cache_state(m, slot):
+    """{owner: (base, bytes)} for the icon store and the listing of fm_pool
+    block `slot`, and the words that name them."""
+    eq = os88sym.equates(ARM)
+    S = lambda n: m.sym(n, ARM)                              # noqa: E731
+    want = {eq["MEM_P_ICO"]: "ICO", eq["MEM_P_VIEW"] + slot: "VIEW"}
+    out = {}
+    for seg, para, own in rows(m):
+        if own in want:
+            out[want[own]] = (seg, bytes(m.read(seg * 16, para * 16)))
+    words = {"ico_seg": u16(m.read(S("ico_seg"), 2)),
+             "FS_VSEG": u16(m.read(S("fm_pool") + slot * eq["FS_SIZE"]
+                                   + eq["FS_VSEG"], 2)),
+             "fm_vseg": u16(m.read(S("fm_vseg"), 2))}
+    return out, words
+
+
+def int13(tr):
+    return [h for h in tr.hits
+            if h.get("type") == "int" or h["name"].startswith("?")]
+
+
+def motor_off(m):
+    os88marty.until(m, lambda mm: mm.read(0x43F, 1)[0] & 3 == 0,
+                    "the floppy motor to stop", guest=30.0)
+
+
+def move_leg(machine):
+    """SPEC.md 50.6.13.1: a program launch that lands on the Disk window's
+    icon store and listing MOVES them into a free hole - same bytes, a new
+    base, the owner's words re-pointed - and closing the program repaints
+    the window with no int 13h at all. Then SPEC.md 2.8.3.4.1: the Control
+    Panel opened twice, the second open re-adopting CTRL.DRV with no read."""
+    bad = []
+    eq = os88sym.equates(ARM)
+    with os88ui.boot("build/small360.img", machine=machine, limit=240) as ui:
+        m = ui.m
+        w = ui.path("A:/APPS")
+        os88marty.ui_done(m)
+        motor_off(m)
+        slot = (ui._fsblk(w) - m.sym("fm_pool", ARM)) // eq["FS_SIZE"]
+        before, wb = cache_state(m, slot)
+        if set(before) != {"ICO", "VIEW"}:
+            return ["iconmove (%s): before Paint the icon store and the "
+                    "listing are not both standing (%r)" % (machine,
+                                                             sorted(before))]
+        with os88marty.bp_trace(m, "mem_evmv", "mem_evmv.out", "mem_bcopy",
+                                on_hit=lambda mm, r: mm.status()["cycles"],
+                                cap=4000) as tr:
+            ui.open("PAINT.O88")
+            os88marty.ui_done(m)
+        runs, txt = heap(m, "%s: Paint open, after the moves" % machine)
+        after, wa = cache_state(m, slot)
+        cyc, t0, copied = [], None, False
+        for h in tr.hits:
+            if h["name"] == "mem_evmv":
+                t0, copied = h["hit"], False
+            elif h["name"] == "mem_bcopy":
+                copied = True
+            elif h["name"] == "mem_evmv.out" and t0 is not None:
+                if copied:
+                    cyc.append(h["hit"] - t0)
+                t0 = None
+        for k, word in (("ICO", "ico_seg"), ("VIEW", "FS_VSEG")):
+            if k not in after:
+                bad.append("iconmove (%s): the launch EVICTED the %s cache "
+                           "(%04X) - it was not moved\n%s" % (
+                               machine, k, before[k][0], "\n".join(txt)))
+                continue
+            b0, d0 = before[k]
+            b1, d1 = after[k]
+            ok = (b1 != b0 and d1 == d0 and wa[word] == b1)
+            if k == "VIEW" and wb["fm_vseg"] == b0:
+                ok = ok and wa["fm_vseg"] == b1
+            if not ok:
+                bad.append("iconmove (%s): %s %04X -> %04X, %d bytes %s, "
+                           "%s %04X, fm_vseg %04X" % (
+                               machine, k, b0, b1, len(d0),
+                               "equal" if d1 == d0 else "CHANGED", word,
+                               wa[word], wa["fm_vseg"]))
+            else:
+                print("ok   iconmove (%s): %s moved %04X -> %04X, its %d "
+                      "bytes equal, %s re-pointed" % (machine, k, b0, b1,
+                                                      len(d0), word))
+        print("     mem_evmv moves: %s cycles each (%s ms at 4.77 MHz)" % (
+            cyc, ["%.1f" % (c / 4772.727) for c in cyc]))
+        motor_off(m)
+        with os88marty.bp_trace(m, {"type": "int", "addr": 0x13},
+                                regs=True, cap=4000) as tr:
+            ui.close(ui.window("Paint"))
+            os88marty.ui_done(m)
+            motor_off(m)
+        n13 = len(int13(tr))
+        if n13:
+            bad.append("iconrepaint (%s): closing Paint made %d int 13h "
+                       "call(s) - the Disk window re-fetched what the move "
+                       "kept" % (machine, n13))
+        else:
+            print("ok   iconrepaint (%s): Paint closed, the Disk window "
+                  "repainted with 0 int 13h" % machine)
+        bad += ctrl_twice(ui, machine)
+    return bad
+
+
+def ctrl_twice(ui, machine):
+    m = ui.m
+    eq = os88sym.equates(ARM)
+    ui.menu_pick("Apple", "Control Panel")
+    ui.close(ui.wait_window("Control Panel"))
+    os88marty.ui_done(m)
+    motor_off(m)
+    kept = eq["MEM_P_MOD"] + 2 * eq["MOD_CTRL"]
+    if kept not in [own for _s, _p, own in rows(m)]:
+        return ["ctrlkept (%s): after the first Control Panel no record is "
+                "MEM_P_MOD + 2 x MOD_CTRL (%04X) - CTRL.DRV was freed at "
+                "its drop" % (machine, kept)]
+    arms = ["mod_need.sized", "mod_need.held"]
+    with os88marty.bp_trace(m, {"type": "int", "addr": 0x13}, *arms,
+                            regs=True, cap=4000) as tr:
+        ui.menu_pick("Apple", "Control Panel")
+        w = ui.wait_window("Control Panel")
+        os88marty.ui_done(m)
+    n13 = len(int13(tr))
+
+    def ids(name):
+        return [h["regs"]["di"] & 0xFF for h in tr.hits
+                if h["name"] == name and h.get("regs")]
+    held, sized = ids("mod_need.held"), ids("mod_need.sized")
+    ui.close(w)
+    cp = eq["MOD_CTRL"]
+    if n13 or cp in sized or cp not in held:
+        return ["ctrlkept (%s): the second Control Panel made %d int 13h, "
+                "mod_need held %r sized %r" % (machine, n13, held, sized)]
+    print("ok   ctrlkept (%s): CTRL.DRV re-adopted, 0 int 13h for the "
+          "second Control Panel" % machine)
+    return []
+
+
 def rows(m):
     S = lambda n: m.sym(n, ARM)                              # noqa: E731
     eq = os88sym.equates(ARM)
@@ -266,6 +417,7 @@ def main(argv):
     for mach in machines or MACHINES:
         bad += leg(mach)
     bad += fdlg_leg(machines[0] if machines else MACHINES[1])
+    bad += move_leg(machines[0] if machines else MACHINES[0])
     for b in bad:
         print("FAIL " + b)
     return 1 if bad else 0

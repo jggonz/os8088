@@ -937,13 +937,12 @@ mem_floor_ax:
     and al, 0xE0                ; under the floor are paragraphs now, and a
 %endif                          ; heap base is an int 13h target (guard 6,
     ret                         ; MOVABLE-COLD-PLAN 5)
-%ifdef KERN_SMALL
-    nop                         ; PARITY PAD, never executed. Kernel size pass
-%endif                          ; 20 took it out (mem_fatw_dirty's byte the
-                                ; other half); SPEC.md 50.6.13 / 2.8.3.4 then
-                                ; moved `.cold` by an odd count and it is back:
-                                ; dsk_xfer, dsk_runcap and dsk_next_clus_x sit
-                                ; past it (tests/unit/t_hotpar.py measures)
+                                ; (kern_small's PARITY PAD that stood here,
+                                ; never executed, went again when SPEC.md
+                                ; 50.6.13.1's mem_evmv moved `.cold` by an
+                                ; odd count: dsk_xfer, dsk_runcap and
+                                ; dsk_next_clus_x sit past it, and
+                                ; tests/unit/t_hotpar.py measures them)
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
@@ -1503,6 +1502,19 @@ mem_pg_viewrow:
                                 ; MEM_P_FATW's `.fatw` arm already does and
                                 ; for the same reason
     dw 0
+%ifdef MEM_EVICT
+; mem_evw - the words mem_evmv re-points when it MOVES a cache (SPEC.md
+; 50.6.13.1), found by value: the icon store's, and each Disk window's
+; listing - FS_VSEG in every fm_pool block and the [fm_vseg] mirror
+mem_evw:
+    dw fm_vseg, ico_seg         ; the MIRROR FIRST: mem_evmv's hit test
+%assign mem_evw_i 0
+%rep MEM_P_VIEW_N
+    dw fm_pool + FS_VSEG + mem_evw_i*FS_SIZE
+%assign mem_evw_i mem_evw_i+1
+%endrep
+mem_evw_end:
+%endif
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
                                 ; so the DATA stays in .text at every toggle
@@ -2958,7 +2970,9 @@ mem_evict:
     cmp bx, dx
     jbe .n                      ; ends at or before our start
     mov bx, [ss:si+MC_OWN]
-    call mem_pg_forget          ; the owner first (every register kept)
+    call mem_evmv               ; MOVED into a free hole, when one fits and
+    jnc .n                      ; the owner reads it by a word mem_evw holds
+    call mem_pg_forget          ; ...else the owner first (every register kept)
     and word [ss:si+MC_SEG], 0
     jmp short .n
 .out:
@@ -2966,6 +2980,77 @@ mem_evict:
     pop cx
     pop bx
     ret
+
+; -----------------------------------------------------------------------------
+; mem_evmv - MOVE an overlapped cache to a FREE hole instead of evicting it
+;            (SPEC.md 50.6.13.1)
+; in:  SI = the cache's record, BX = its owner, [DX, DX + AX) = the block that
+;      is about to land on it; IF = 0 (mem_evict's caller's window)
+; out: CF = 0 moved: its bytes copied, its record re-based and every word in
+;      mem_evw that named the old base naming the new one. CF = 1 not: no
+;      hole, or no word in mem_evw names it - the record is then left based
+;      at DX, which the caller's eviction frees anyway. Every register kept
+;
+; THE HOLE IS mem_hifit's: the highest base, among the heap's floor and the
+; end of each live claim, at which the cache fits clear of every LIVE record
+; - and two things make that "genuinely free and outside the new block":
+; [mem_pg_rank] is BL for the search, the owner's low byte and below every
+; cache level, so mem_runfree counts EVERY cache as in the way (no cache is
+; destroyed or overlapped to make room); and the cache's own record stands
+; over [DX, DX + AX) while it runs, so the block being placed is in the way
+; too. That covers all three callers' blocks the same: mem_claim_1's (not
+; published yet), mem_regrowp's path 2 extent and its path 3 destination
+; (the grower's old bytes are its own record). Highest = the BOTTOM of the
+; highest run that fits: under top-down regions, above bottom-up claims.
+;
+; THE WORDS ARE FOUND BY VALUE: each of mem_evw's words is 0 or its owner's
+; live claim, so the one equal to the old base is the one that names it -
+; except the [fm_vseg] mirror, which can be stale, and so is re-pointed when
+; it matches but is not on its own a reason to move.
+; That table is the whole of WHICH caches move - the icon store and the Disk
+; windows' listings, and both of a listing's words (FS_VSEG and the
+; [fm_vseg] mirror, fm_reloc's pair). A cache with no word there is evicted
+; as before: the dirty FAT window and the aimed listing never get here
+; (mem_pg_cheap), and the read-ahead, the save-unders and a kept module are
+; cheaper to lose than to hold the machine's interrupts off to copy.
+;
+; ONLY THE UI TASK EVICTS (mem_evrank), so only it moves - SPEC.md 66.3.1's
+; reason: a cache a pre-empted task holds in a register is not another
+; task's to move any more than to free.
+; -----------------------------------------------------------------------------
+mem_evmv:
+    call kentc_di               ; KENT: push ax..di
+    xchg bl, [mem_pg_rank]      ; no cache is room for the search
+    xchg dx, [ss:si+MC_SEG]     ; DX = the old base, and the record stands
+    xchg ax, [ss:si+MC_PARA]    ; over the new block; AX = its paragraphs
+    call mem_hifit              ; CX = the hole
+    mov [ss:si+MC_PARA], ax     ; (mov and xchg write no flag)
+    xchg bl, [mem_pg_rank]
+    jc .out                     ; no hole
+    mov [ss:si+MC_SEG], cx      ; the record follows the bytes (a refusal
+    mov bx, mem_evw             ; below is evicted, which frees it)
+    mov di, bx                  ; DI = the last word that named it
+.w:
+    mov si, [bx]
+    cmp [si], dx
+    jne .wn
+    mov [si], cx                ; the owner's word follows the bytes too
+    mov di, bx
+.wn:
+    inc bx
+    inc bx
+    cmp bx, mem_evw_end
+    jb .w
+    cmp di, mem_evw + 1         ; CF = 1: none did, past the MIRROR - the
+    jc .out                     ; one word that can be stale (a closed
+                                ; window's, until fm_vp_set), so a hit there
+                                ; alone is not a cache that moves
+    mov si, dx
+    mov di, cx
+    xchg cx, ax                 ; mem_bcopy: SI to DI, CX paragraphs - and
+    call mem_bcopy              ; CF = 0 out of it: its last flag writer is
+.out:                           ; an `add`/`or` that cannot carry
+    jmp kretc_di
 %endif
 
 ; -----------------------------------------------------------------------------

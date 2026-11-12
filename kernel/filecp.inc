@@ -2316,6 +2316,16 @@ fcp_arm:                        ; files.inc reaches this one with `jmp`, and a
     call fcp_load               ; stub is as jumpable as the body it replaces
     jc fcp_pfin.keep            ; the refusal is a bare `ret` (CF = 1, the
                                 ; `jc`'s), and fcp_pfin has one
+    cmp word [fm_vseg], 0       ; ...AND THE LOAD MAY HAVE EVICTED THE VERY
+    stc                         ; LISTING the body reads the name out of
+    je fcp_fin                  ; (SPEC.md 50.6.13.1): it lands top-down and
+                                ; takes a cache where no free hole fit it,
+                                ; and with [fm_vseg] = 0 fmv_copy_in stages
+                                ; an all-zero entry - an EMPTY name on the
+                                ; clipboard. Refused instead, as "nothing
+                                ; selected"; the window owes a re-list
+                                ; (fmv_demote) and the user can Copy again.
+                                ; (stc writes no ZF; fcp_fin keeps CF)
     call far [FCPFP + FCPE_ARM*4]
     jmp short fcp_fin           ; CF is fcp_arm's answer and fcp_fin keeps it
 
