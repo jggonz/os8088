@@ -143,13 +143,22 @@ def main():
     # `shl ax, cl` before mem_claimp_x - n * 9 * 32 = n * 288 paragraphs, one
     # chunk each, exact. The multiply must come before anything writes CX,
     # and the shift count must be 5: one short claims half the width it fills
-    m = re.search(r"^\s*div cx\b(.*?)^\s*call mem_claimp_x\b", want_src,
+    #
+    # KERNEL SIZE PASS 20 made both halves BYTE-wide - `mov cl, 9 / div cl`
+    # and `mul cl` - because AX there is at most half the arena in KB (<= 511),
+    # so the quotient is under 57 and fits AL. The invariant is unchanged: the
+    # multiplier is the divide's own register, so either width is accepted
+    # - but it must be the SAME width: `div cl` then `mul cx` multiplies by
+    # a CH nothing set
+    m = re.search(r"^\s*div c([xl])\b(.*?)^\s*call mem_claimp_x\b", want_src,
                   re.S | re.M)
-    body = m.group(1) if m else ""
-    mm = re.search(r"^\s*mul cx\b", body, re.M)
+    body = m.group(2) if m else ""
+    w = m.group(1) if m else "x"
+    mm = re.search(r"^\s*mul c%s\b" % w, body, re.M)
     pre = body[:mm.start()] if mm else body
     post = body[mm.end():] if mm else ""
-    muls = len(re.findall(r"^\s*mul cx\b", body, re.M))
+    muls = len(re.findall(r"^\s*mul c%s\b" % w, body, re.M))
+    muls += 10 * len(re.findall(r"^\s*mul c%s\b" % ("l" if w == "x" else "x"), body, re.M))
     clob = re.findall(r"^\s*(?:mov|add|sub|xor|and|or|inc|dec|pop|xchg|shl|shr)"
                       r"\s+(?:cx|cl|ch)\b", pre, re.M)
     shift = re.search(r"^\s*mov cl, (\d+)\b[^\n]*\n\s*shl ax, cl\b", post,
@@ -164,21 +173,21 @@ def main():
           "int 13h landing in whatever the heap handed out next. The "
           "multiply reuses the divide's own CX, so anything writing CX "
           "between them is the one way the two can disagree",
-          got="%d x `mul cx`, shift %s, CX written before it by %s"
+          got="%d x `mul c<the divide's width>` (10 a mismatched one), shift %s, CX written before it by %s"
               % (muls, sh, clob or "nothing"),
-          want="1 x `mul cx`, `mov cl, 5 / shl ax, cl`, CX untouched before")
+          want="1 x `mul cx`/`mul cl` as wide as the divide, `mov cl, 5 / shl ax, cl`, CX untouched before")
 
     # ...and that shared divisor/multiplier is the chunk length these rows
     # assume, not a second opinion
-    m = re.search(r"mov cx, (\d+)\s*;[^\n]*\n[^\n]*div cx", want_src)
-    got = int(m.group(1)) if m else None
+    m = re.search(r"mov c([xl]), (\d+)\s*;[^\n]*\n[^\n]*div c\1", want_src)
+    got = int(m.group(2)) if m else None
     check(got == 9 and got == secs,
           "the gate's divisor is the DSK_RAH_SECS these rows assume",
           "The rows above prove the arithmetic; this one proves the kernel "
           "does that arithmetic. A divisor and a chunk size that disagree "
           "give a width the claim does not cover - and since the claim's multiply "
           "now reuses this same CX, this one literal is BOTH halves",
-          got=got if m else "no `div cx` after a `mov cx, <n>`",
+          got=got if m else "no `div cx`/`div cl` after a `mov cx/cl, <n>`",
           want="9, and == DSK_RAH_SECS (%d)" % secs)
 
     return done("dirwsize")
