@@ -1100,6 +1100,17 @@ TOAST_MAX   equ 24
     %define MOD_CACHE 1
   %endif
 %endif
+; SCR_B / SCR_W - one byte or word of a module's SCRATCH (SPEC.md 2.8.3):
+; under MOD_CACHE it is declared in the image's nobits bss tail (`res*`),
+; which a KEPT image's drop zeroes, so the next use finds it as a load
+; would; elsewhere it is a zero `db`/`dw` where it always was
+%ifdef MOD_CACHE
+  %define SCR_B resb 1
+  %define SCR_W resw 1
+%else
+  %define SCR_B db 0
+  %define SCR_W dw 0
+%endif
 
 ; SPEC.md 22.3-22.5's Cut/Copy/Paste is an ON-DEMAND MODULE on kern_small
 ; (SPEC.md 2.8, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
@@ -8998,6 +9009,7 @@ MODMAP_START equ MODSER_START + SER_IMAGE_SIZE
 
 %ifdef KERN_BIG
 section .modx
+    EXT_SCRATCH                 ; its scratch tail, LAST (extmod.inc)
 modx_end:
 MODX_SIZE equ modx_end - $$
 section .modwb
@@ -9025,6 +9037,7 @@ MODN_SIZE equ modn_end - $$
 %endif
 %ifdef DOCK_OPT
 section .modk
+    DOCK_SCRATCH                ; its scratch tail, LAST (dockmod.inc)
 modk_end:
 MODK_SIZE equ modk_end - $$
 %if MODK_SIZE > MOD_MAX_KB*1024
@@ -9034,25 +9047,30 @@ MODK_SIZE equ modk_end - $$
 
 %ifdef OS88_DRIVERS
 section .modcb
+%ifdef MOD_CACHE
+; CTRL.DRV'S SCRATCH TAIL (SPEC.md 2.8.3), at the head of its bss: every byte
+; the core and the panel write in their own image that a later use could read
+; - the core's gesture state and the Floppy page's two bytes (cps_scr ..
+; cps_scre, which the core's own entry zeroes too, modc_e_sc, because a
+; core-only read stops short of this tail), then the shutdown question's.
+; MOD_H_SCR is the WHOLE bss, cpc_buf with it, so a kept copy of EITHER row
+; is zeroed back to the file's own at its drop
+cps_scr:
+    SC_SCRATCH
+    CPC_SCRATCH
+cps_scre:
+    SD_SCRATCH
+%endif
 modcb_end:
 MODC_BSS equ modcb_end - $$
 %endif
+%if sd_down - sd_arm != 1
+%error "shutdown: sd_arm and sd_down are cleared and set with one word store"
+%endif
 
 section .modc
-%ifdef MOD_CACHE
-mods_scr:                       ; THE SETTINGS CORE'S SCRATCH TAIL (SPEC.md
-    SC_SCRATCH                  ; 2.8.3): every byte the core writes in its
-    CPC_SCRATCH                 ; own image, LAST in `.modc`, so a kept
-mods_scre:                      ; MOD_SETS re-zeroes [mods_scr, modc_end)
-MODS_SCRO equ mods_scr - $$     ; (its offset: a label in `.modu` cannot be
-%endif                          ; subtracted from one here)
     CSDO_SDOOR csd_modc          ; (the settings core's: .modu's sites use it)
 mods_end:
-%ifdef MOD_CACHE
-%if mods_end != mods_scre
-  %error "something follows the settings core's scratch tail in .modc - a kept MOD_SETS would zero it"
-%endif
-%endif
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
 %ifdef OS88_DRIVERS
@@ -9064,12 +9082,11 @@ MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
                                 ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
-%ifdef MOD_CACHE                ; ...and from mods_scr to the image's end is
-MODC_SCR equ MODS_SIZE + MODU_SIZE - MODS_SCRO ; what a kept MOD_SETS
-%else                           ; re-zeroes: the scratch, then the panel and
-MODC_SCR equ 0                  ; `.modcb` its read never brought in (MOD_CTRL's
-%endif                          ; row is never kept - mod_drop). CTRL.DRV's
-                                ; MOD_H_SCR
+%ifdef MOD_CACHE                ; ...and CTRL.DRV's MOD_H_SCR, on the disk:
+MODC_SCR equ MODC_BSS           ; its whole bss tail, for both rows
+%else
+MODC_SCR equ 0
+%endif
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
                                 ; ends of `.modu`, so there is no pad between
 

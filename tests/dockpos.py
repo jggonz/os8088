@@ -47,6 +47,7 @@ import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88ui
 import os88sym                                              # noqa: E402
+import modstate  # noqa: E402
 import dispcp                                               # noqa: E402
 
 S = os88sym.linear
@@ -80,6 +81,16 @@ def byte(m, name):
     return m.read(S(name), 1)[0]
 
 
+def dseg(m):
+    """DOCK.DRV's segment while it is LIVE, 0 otherwise. A drop on kern_big
+    KEEPS the image (SPEC.md 2.8.3) - the row still names it, its slots on
+    mod_gone - and that reads 0 here, the "unloaded" these checks mean
+    (modstate.py). kern_mega keeps nothing: the raw word."""
+    if getattr(m, "bochs", False):
+        return word(m, "mod_r_dock")
+    return modstate.live(m, "MOD_DOCK")
+
+
 def mbase(m):
     """DOCK.DRV's live segment - SPEC.md 30.5 keeps the advanced Dock's own
     geometry (the whole-strip rect, the along axis, the cap, the packing
@@ -87,7 +98,7 @@ def mbase(m):
     module mounted carries none of it. os88sym refuses a kernel-segment read
     of one rather than answering with a plausible wrong address, which is why
     these two helpers exist."""
-    seg = word(m, "mod_r_dock")
+    seg = dseg(m)
     assert seg, "DOCK.DRV is not mounted - nothing to read"
     if getattr(m, "bochs", False):      # kern_mega: a driver image's
         return m.lin(seg)               # segment is an LDT selector
@@ -102,7 +113,7 @@ def hidden(m):
     """Is the strip HIDDEN? A machine with no DOCK.DRV mounted cannot hide
     one at all (SPEC.md 30.6), and its [dock_hidden] does not exist - so the
     basic bottom Dock answers 0 without a read."""
-    return mbyte(m, "dock_hidden") if word(m, "mod_r_dock") else 0
+    return mbyte(m, "dock_hidden") if dseg(m) else 0
 
 
 def mword(m, name):
@@ -169,15 +180,15 @@ def strip_ok(px, w, h, cfg):
 
 def setting(m, mo, kind, cfg, want_cfg=None):
     """Drive the page to `cfg` and assert 1-3."""
-    before_seg = word(m, "mod_r_dock")
+    before_seg = dseg(m)
     have = byte(m, "dock_cfg")
     if (have & 3) != (cfg & 3):
         click_row(m, mo, CPK_R0Y + (cfg & 3) * CPK_ROWH)
     if (byte(m, "dock_cfg") & F_AUTO) != (cfg & F_AUTO):
         click_row(m, mo, CPK_AY)
-    check(bool(word(m, "mod_r_dock")) == bool(cfg),
+    check(bool(dseg(m)) == bool(cfg),
           "cfg %d: Dock module %s" % (cfg, "loaded" if cfg else "unloaded"))
-    seg = word(m, "mod_r_dock")
+    seg = dseg(m)
     eq = os88sym.equates()
     m.pause()
     try:
@@ -223,7 +234,18 @@ def setting(m, mo, kind, cfg, want_cfg=None):
         check(claims.get(seg) == (paras, eq["MEM_K_MOD"]),
               "advanced Dock has exactly its rounded module claim")
     elif before_seg:
-        check(before_seg not in claims, "disabling the Dock frees its old claim")
+        # kern_big KEEPS a dropped image (SPEC.md 2.8.3): purgeable, at
+        # MEM_P_MOD + 2 x the id, where the next Advanced setting re-adopts
+        # it - never still MEM_K_MOD, which nothing could take back
+        if getattr(m, "bochs", False):
+            check(before_seg not in claims,
+                  "disabling the Dock frees its old claim")
+        else:
+            own = claims.get(before_seg, (0, 0))[1]
+            check(before_seg not in claims or
+                  own == eq["MEM_P_MOD"] + 2 * eq["MOD_DOCK"],
+                  "disabling the Dock gives its claim back to the heap - "
+                  "freed, or KEPT purgeable (owner %#06x)" % own)
     got = byte(m, "dock_cfg")
     want = cfg if want_cfg is None else want_cfg
     check(got == want, "cfg %d: [dock_cfg] = %d" % (cfg, got))
@@ -264,7 +286,7 @@ def herc(a):
         m.run()
         os88marty.kernel_up(m)
         os88marty.no_saver(m)
-        check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
+        check(dseg(m) == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, _done, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)
@@ -359,7 +381,7 @@ def cga(a):
         m.run()
         os88marty.kernel_up(m)
         os88marty.no_saver(m)
-        check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
+        check(dseg(m) == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, _done, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)

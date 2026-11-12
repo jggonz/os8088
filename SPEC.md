@@ -1964,13 +1964,16 @@ sites through 14 slot blocks). Neither is needed: the bracket that
 an image its feature has dropped — which keeps the old reason intact.
 
 **A drop KEEPS the image on `kern_big` and `kern_emu`** (`MOD_CACHE`,
-big-review WP2a: rt-1, rt-9, shell-2). The most likely moment for a second
-use of a module is right after the first, and the first two users paid a
-disk read for every one: `STIKMENU.DRV` (7.9 KB) on **every** Sticky Apps
-press, and `CTRL.DRV`'s settings core (`MOD_SETS`, §2.8.7) on every shortcut
-gesture — 1-2 `int 13h` each (~0.4-0.8 s on the XT, PREDICTED from
-PERFORMANCE.md's per-call cost), and `Needs Sys Disk` with another floppy in
-the drive. With the image kept, the second press and the second drag read
+big-review WP2a: rt-1, rt-9, shell-2), **and every image opts in** (the
+owner's report, 2026-11-12: *"Control Panel ... is still doing disk reads to
+open. Opening it twice causes disk reads ... it shows up under kernel when
+loaded, then goes away entirely when unloaded"*). The most likely moment for
+a second use of a module is right after the first, and every module paid a
+disk read for every use: `STIKMENU.DRV` (7.9 KB) on **every** Sticky Apps
+press, `CTRL.DRV`'s settings core (`MOD_SETS`, §2.8.7) on every shortcut
+gesture, and the whole Control Panel - 15.5 KB, four `int 13h` calls and a
+boot-sector read, measured on MartyPC's VGA XT - on every open. With the
+image kept, the second press, the second drag and the second open read
 nothing.
 
 - **`mod_drop`**, for an image whose header opts in: zeroes its **scratch
@@ -1987,12 +1990,20 @@ nothing.
   its slots armed by the same loop a load arms them with (`mod_check`'s
   `.arming`). No disk, no system volume, no stamp check: the stamps were
   checked on the read the image came from.
-- **A kept image is re-adopted on the UI task alone**, and an image opts in
-  only when every `mod_need` for it is the UI task's (both today's are:
-  `menu_track`'s, and `sc_modcall`'s desktop gestures and SYSTEM.CFG-writing
-  desk verbs, which a worker may not make, §20.6 rule 7). That is what lets
-  the find and the re-tag run with interrupts ON: only the UI task sheds or
-  compacts (§66.3.1), so nothing can take the block between them.
+- **A kept image is re-adopted on ANY task, inside an IF = 0 window** from
+  a second read of the row to the re-tag (`.held`'s `pushf`/`cli` ...
+  `popf`). Only the UI task sheds or compacts (§66.3.1), so a re-adopt ON
+  the UI task could not race either - which is what the first cut relied
+  on, and why it let an image opt in only when every `mod_need` for it was
+  the UI task's. Not every module's is: `SERIAL.DRV`'s comes from whatever
+  task opens a lease, a package's worker included, and `FORMAT.DRV`'s from
+  an installer's `OSAPI_ASSOC_FLUSH`. So the window is the rule now and the
+  condition is gone: under it the row is read again, and a shed (`MODR_SEG`
+  0) or a move (another base) since the first read is SEEN and the row read
+  once more (`.race`) rather than re-tagged at a base the heap has taken
+  back. `mod_drop` needs no window: it stores the `MC_RLOC` declaration
+  BEFORE the purgeable tag, while `MEM_K_MOD` still pins the record, so no
+  other task can see a purgeable record without it.
 - **A shed** zeroes the row's `MODR_SEG` through `mem_pg_own` and frees the
   block, and the next `mod_need` is an ordinary load. A compaction does not:
   the kept claim is movable (below). The tag is a RANGE of
@@ -2052,19 +2063,50 @@ below.
 
 **What opts in is the IMAGE, by its header: `MOD_H_SCR`**, the count of the
 image's last bytes that are SCRATCH (offset 12; `MOD_H_ENT` moved to 14, so
-`mod_check` bounds an entry by `14 + 2n`). 0 = freed at the drop, as ever.
-A module opts in when **every byte it writes in its own image is in that
-tail** and is either written before it is read or expected as a zero —
-because a kept image is re-adopted as it was left, and the drop's zeroing of
-the tail is what makes it the file's own again. Modules write their own
-bytes freely (MODULE-SELFCONTAIN-PLAN; §2.8.6), and most still interleave
-that state with their code (`DISKOPS.DRV`'s compressor, `FORMAT.DRV`'s
-`ASSOC.DAT` writer, `WIN95.DRV`, the panel), so **two images opt in today**:
+`mod_check` bounds an entry by `14 + 2n`). 0 = freed at the drop, as ever;
+only `KBMOUSE` (§2.8.8, which has no file to come back from) and the kernels
+with no cache carry 0 now. **The rule is two halves:**
 
-| image | its scratch tail | what it holds |
+1. **The tail is ZEROS IN THE FILE**, so the drop's re-zeroing makes it the
+   file's own whatever the module did to it. Every byte the module writes
+   that a later use could read before writing is declared there - in the
+   image's nobits bss (MODULE-SELFCONTAIN-PLAN 3.5's `MODB_TAIL`), or as the
+   image's last zero bytes.
+2. **Every byte it writes OUTSIDE the tail is WRITTEN BEFORE IT IS READ** on
+   every path that reads it, so no stale value is ever seen - each one named
+   below with its reason.
+
+`tests/modkeep.py`'s HOST leg holds the source to both: each kept image's
+tail is zero in its file, and every direct `[cs:x]`/`[CSEG x]` store in a
+module section lands in the tail or in a cell named here. Its machine legs
+read every kept image back after each use and compare it with the file:
+the tail zero, every other byte equal but the cells below and the `.cold`
+words `mod_cfix` re-pointed at the load (the load's, not a use's).
+
+| image | its scratch tail | written-before-read cells outside it |
 |---|---|---|
+| `CTRL.DRV`, both rows | `.modcb`, 181 bytes: `cps_scr` (the settings core's gesture state, `sc_*`, and the Floppy page's `cp_fdno`/`cp_fdn` - `SC_SCRATCH`/`CPC_SCRATCH`), the shutdown question's state (`SD_SCRATCH`) and `cpc_buf` | `cp_s_dsdrv` (the save verdict's drive letter, stored just before the toast that reads it); `cp_vvesa_buf` (the Display page's composed VESA label, composed before every draw); shutdown's TERMINAL path - `sd_last`, `sd_l_*`, the spinner's words - which never returns, so nothing runs the image after it |
+| `FORMAT.DRV` | `asw_v` to the end: the ASSOC.DAT writer's 46 cells | - |
+| `DISKOPS.DRV` | `cmz_ovl` to the end: the join's and the pack's overlaid cells and the READ_SEQ/WRITE_SEQ cursors after them, 101 bytes | the cloner's `clo_mseg`/`clo_mvol` (re-read from `IMG_DVSEG` at the start of every operation, §18.101); the bar and the verbs' words `cmz_utot` .. `cmz_k`, `cmz_otok`, `cmz_tfp`/`cmz_tsh` and `cmz_buf` - each set by its verb before it is read, and no verb reads another's |
+| `HIBER.DRV` | `.modhb`, 598 bytes: the DOS handoff's record and the extent walk | `hbm_ptrfix`'s live fields (`hbm_ptrfix_set` and `hbm_wrimg` fill every one before each write and each compare; the magic, build and stamp are never written); `hbm_s_a2`'s drive letter (set before the question shows); `hbm_psv` (set before the image is written, read by the WAKE out of the image) |
+| `DOCK.DRV` | `DOCK_SCRATCH`, its last 44 bytes: the strip's geometry, the packing table and the hover state | - |
+| `EXTD.DRV` | `EXT_SCRATCH`, its last 3 bytes: `wm_lf_win`, `wm_lf_disp` (0 = "nothing armed", a fresh load's answer) | - |
+| `WIN95.DRV` | `.modwb`, 126 bytes | - |
+| `DESK.DRV` | `modj_scr`, ONE zero byte: it writes no byte of itself, and `MOD_H_SCR` = 0 is "freed" | - |
 | `STIKMENU.DRV` | `stm_cellx` to the end | every byte the menu writes but its KEPT SCAN: the geometry, the census, the band. The scan - `stm_kok`, `stm_kgen`, `stm_n`, `stm_over`, `stm_ents` - sits just BELOW the tail on purpose, so the drop keeps it (§110.12.2) |
-| `CTRL.DRV`, for `MOD_SETS` (written by the core itself, above) | `mods_scr` - the core's last bytes, `sc_*` and `cp_fdno`/`cp_fdn` gathered there by `SC_SCRATCH`/`CPC_SCRATCH` - to the image's end | the core's gesture state; past it, the panel and `.modcb`, which a core-only read never brought in |
+| `SERIAL.DRV` | the lease, its last 16 bytes: `srl_base` .. `srl_seen` | - (`srl_base` = 0 is "no lease"; `srl_open` writes every other cell before it sets `srl_base`, and `srl_body`, `srl_open` and now `srl_release` test it first - so `srl_owner` and `srl_div` lost their non-zero initialisers, and a `srl_release` with no lease no longer reaches `srl_close` with `srl_base` 0) |
+
+**`CTRL.DRV`'s tail serves both rows, and the core zeroes its part itself.**
+The settings core's read stops at `MODS_SIZE` (§2.8.7), so on `MOD_SETS`'s
+claim the bss is whatever the heap left there. `modc_e_sc` - the core's one
+entry - zeroes `cps_scr` .. `cps_scre` (14 bytes) on every call, before the
+operation; the drop zeroes the whole tail too, so a kept copy of either row
+starts as a load did. No state there outlives one operation: the drop that
+ended every `MOD_SETS` call always zeroed it. That replaced the first cut's
+shape - the core's scratch LAST in `.modc`, and `modc_e_sc` writing
+`MODC_SCR` into its own copy's header when it was `MOD_SETS`'s - which could
+never keep the PANEL: its tail would have run from the core's scratch
+through the whole of `.modu`.
 
 **One image keeps a RESULT across its drop, outside its tail, and that is
 the rule's one exception (§110.12.2).** `STIKMENU.DRV`'s scan of `STIKAPPS\`
@@ -2078,10 +2120,8 @@ disk, carry no segment, and a move copies them like the code.
 
 **Does any other module re-read DATA it already had? No - audited
 2026-11-12, the owner's question beside the kept scan.** A module's per-use
-disk work is either its own image (a freed image is read again: `CTRL.DRV`'s
-panel, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `DOCK.DRV`, `EXTD.DRV`,
-`WIN95.DRV`, `DESK.DRV` - code, and keeping it is this section's opt-in, not
-a data cache) or the ACTION's own: the panel loads a driver or `THMPAL.DRV`
+disk work is either its own image (every one is kept now, so a second use
+reads none of it while the claim stands) or the ACTION's own: the panel loads a driver or `THMPAL.DRV`
 when one is asked for and reads `SYSTEM.CFG` never (the boot did; its
 settings live in the kernel); the settings core's shortcuts are a claim
 filled at boot (`ovl_sc_load`), and its only reads are a dragged package's
@@ -2093,14 +2133,36 @@ modules touch no disk at all. `kern_small`'s `FILECP.DRV` reads what it
 copies, and `FDLG.DRV` lists the folder the user is looking at - on a disk
 that may have been swapped, which is the listing's job.
 
-`MOD_CTRL`'s row — the whole panel, the same file — is **never kept**, with
-no test for it in the kernel: `CTRL.DRV`'s header carries 0 on the disk, and
-the core's entry `modc_e_sc` writes `MODC_SCR` into its OWN copy's header
-when that copy is `MOD_SETS`'s claim (image bytes, not resident ones). The
-panel's state is not in the tail, and `mod_live`'s
-two callers (`sc_modcall`, `hbf_onup`, §13.8.3) read a held `MODR_SEG` as
-"armed", which a kept row is not. `HIBER.DRV`, `mod_live`'s other row, asks
-for no tail.
+`MOD_CTRL`'s row — the whole panel — **is kept like any other**, and the
+one reader of a held row that took it for a loaded one had to learn the
+difference. `mod_live` answered "resident" for any held `MODR_SEG`; its
+callers are `sc_modcall`, which runs a desktop gesture in an OPEN panel's
+copy rather than loading the core, and `hbf_onup`. With the panel kept, a
+gesture would have far-called its disarmed slot - `mod_gone`, CF = 1 - and
+done nothing. `mod_live` now makes mod_need's own LIVE test under
+`MOD_CACHE`: the row's first slot names its segment. `MOD_CTRL` and
+`MOD_SETS` are TWO rows over one file, so both may be kept at once - two
+purgeable claims, the heap's to shed in either order; neither re-adopts the
+other's.
+
+**Measured on MartyPC** (`tests/modkeep.py`, 2026-11-12), every `int 13h`
+the trace caught across one use - the action's own included - and how many
+of them read the module's file:
+
+| module | the use | 1st: calls, its file's | 2nd | 3rd, after a compaction |
+|---|---|---|---|---|
+| `CTRL.DRV` | open and close the Control Panel (VGA XT) | 5, 4 (and the boot sector's media check) | **0** | **0** |
+| `WIN95.DRV` | the Theme page's Windows row, then Bright | 2, 1 | **0** | **0** |
+| `DOCK.DRV` | the Dock page's Left row, then Bottom | 2, 1 | **0** | **0** |
+| `EXTD.DRV` | Extend Right, then Single (CGA + Hercules) | 2, 1 | **0** | **0** |
+| `HIBER.DRV` | Hibernate..., then Esc (Hercules + ST-225) | 3, 2 | **0** | **0** |
+| `FORMAT.DRV` | Disk > Format Disk..., then Esc | 9, 2 | 3, 0 - B:'s own probe | 4, 0 |
+| `DISKOPS.DRV` | File > Compress on a text file of B: | 19, 2 | 13, 0 - the compress | 12, 0 |
+| `DESK.DRV` | the Desk Calendar added, then removed | 46, 1 | 27, 0 - the package | 34, 0 |
+
+`SERIAL.DRV` has no machine leg: no package on the shipped disks opens a
+lease, and MartyPC's COM1 is the mouse. It is held to the HOST leg's two
+checks, and its lease lives wholly in its tail.
 
 **`mod_cfix` is not run on a re-adopt**, and neither is the ROM's fix; both
 now run BEFORE the slots are armed, and the re-adopt joins below them. Its
@@ -2128,7 +2190,8 @@ decision O5, open)**: the arm is priced and waiting — the same code, about
 the bytes below, and the rank question above for `FILECP` and `FDLG`.
 
 **What it cost**, `kern_big` and `kern_emu`: see §2.8.3.1. The header word is
-2 bytes of disk in every module image on every kernel.
+2 bytes of disk in every module image on every kernel; the every-module
+round is §2.8.3.2.
 
 **Every module HAS a drop, and that is gated.** A module nothing drops holds
 its claim from first use to power-off, pinned - the bytes a module exists to
@@ -2174,6 +2237,31 @@ sectors while the claim stands (PREDICTED: the `int 13h` calls they made
 were the whole of `mod_need`'s cost - §2.8.7's measured 1,123-1,156 ms for
 the core - against one walk of the claim table and a re-arm of one or two
 slots).
+
+##### 2.8.3.2 What keeping EVERY image cost
+
+MEASURED with `tools/os88rdiff.py kernel 95e39fd3` (the base, same build
+number scheme; per routine, by symbol span):
+
+| | `.text` | `.cold` | in all |
+|---|---:|---:|---:|
+| `kern_big`, `kern_emu` | 0 | +34: `mod_need` 257 -> 274 (the IF = 0 window, `.race` and the relaxed branches round it, less the parity pad it no longer needs), `mod_live` 7 -> 24 (the slot test) | **+34** |
+| `kern_small` | 0 | 0 | 0 |
+| `kern_mega` | 0 | 0 | 0 conventional |
+
+`mod_drop` is the same 67 bytes: the reorder of its two stores is free.
+`t_hotpar` holds: `mod_need` itself sits at an odd shift, `dsk_xfer` and the
+rest of the hot list after it at +34, even.
+
+The images, on every kernel that ships them (bytes of IMAGE; the file is
+the image except where it packs):
+
+| image | change | why |
+|---|---:|---|
+| `CTRL.DRV` | +4 (15,461 -> 15,465) | the core's 14 scratch bytes out of `.modc` (-14) and the shutdown question's 8 out of `.modu` (-8), into `.modcb` (+22); `modc_e_sc` zeroing its scratch instead of writing its header (+4). `MODS_SIZE` is 10 bytes shorter, so a gesture's read is too |
+| `SERIAL.DRV` | +8 (911 -> 919) | `srl_release`'s lease test |
+| `DESK.DRV` | +1 (4,431 -> 4,432) | `modj_scr` |
+| `DOCK.DRV`, `EXTD.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `WIN95.DRV` | 0 | a header word's value, and cells moved to the end |
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -2487,8 +2575,10 @@ that row:
 the whole image is already in memory and the gesture runs in it, at the same
 offset, and leaves it loaded. Otherwise the core is loaded, run and dropped
 - and on `kern_big` the drop KEEPS it (§2.8.3): the core's scratch (`sc_*`,
-`cp_fdno`, `cp_fdn`) is gathered at the end of `.modc` for that, so the
-second gesture re-adopts the core with no read until a claim sheds it.
+`cp_fdno`, `cp_fdn`) is gathered in CTRL.DRV's bss tail (`cps_scr`, `.modcb`)
+and zeroed by `modc_e_sc` on every entry, so the second gesture re-adopts
+the core with no read until a claim sheds it. The panel's own row is kept
+the same way since §2.8.3's every-module round.
 
 **The core carries §110.2's Sticky App rules**, because the core is what writes the
 trailer they live in: `sc_m_add` stores +3 = 0 on any record that is not a

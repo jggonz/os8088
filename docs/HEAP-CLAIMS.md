@@ -95,8 +95,11 @@ setting stands (§30.5) and `EXTD.DRV` for as long as the desktop is extended
 (§39.19.6) - 3KB and 2KB claims, taken top-down, so each is a small wall at the
 ceiling for the session rather than one in the middle of the arena, and neither
 has been given a relocation proc. **A DROPPED module may now stay too, as a
-cache** (§2.8.3, `kern_big`/`kern_emu`): `STIKMENU.DRV` and `CTRL.DRV`'s
-settings core are re-tagged `MEM_P_MOD` at their drop instead of freed -
+cache** (§2.8.3, `kern_big`/`kern_emu`): EVERY module image with a file -
+the Control Panel, its settings core, the formatter, DISKOPS, hibernate, the
+Dock, the extended desktop, the Windows theme, the desk layer, the Sticky
+Apps menu and SERIAL.DRV - is re-tagged `MEM_P_MOD` at its drop instead of
+freed (only `KBMOUSE`, which has no file, still frees) -
 at the ceiling and purgeable at `MEM_PG_LOW`, so a shed takes one - and
 MOVABLE while it is kept, so a compaction packs it rather than dissolving it
 (§2.8.3, §66.10.5).

@@ -48,6 +48,14 @@ def run(card, machine, image):
             return (mseg != 0 and seg() == mseg and
                     m.readseg(seg(), offsets["sd_active"], 1) == b"\x01")
 
+        def live():
+            # CTRL.DRV is LIVE while its slots name its row's segment. A row
+            # that still holds one with the slots on mod_gone is a dropped
+            # image KEPT for the next open (SPEC.md 2.8.3, kern_big), which
+            # is the release this row asks about, not a retention
+            mseg = word(m, "mod_tab")
+            return mseg != 0 and seg() == mseg
+
         def prompt():
             ui.menu_pick(0, "Shut Down...")
             M.until(m, lambda _: active(), "shutdown confirmation", limit=60)
@@ -55,13 +63,12 @@ def run(card, machine, image):
         def cancelled(retained=False):
             # The prompt closes before a confirmed shutdown flushes settings.
             # Wait for the returning thunk to finish releasing its module too.
-            M.until(m, lambda _: not active() and
-                    bool(word(m, "mod_tab")) == retained,
+            M.until(m, lambda _: not active() and live() == retained,
                     "shutdown cancellation and module lifetime", limit=30)
             before = word(m, "ticks")
             M.guest_sleep(m, .5)
             assert word(m, "ticks") != before, "Cancel stopped the scheduler"
-            assert bool(word(m, "mod_tab")) == retained, "Incorrect CTRL.DRV lifetime"
+            assert live() == retained, "Incorrect CTRL.DRV lifetime"
 
         prompt()
         w, h, rgb = m.fbuf()
@@ -91,7 +98,7 @@ def run(card, machine, image):
         cancelled(retained=True)
         assert m.read(S.linear("cp_wdirty"), 1) == b"\x01"
         ui.close(panel)
-        M.until(m, lambda _: word(m, "mod_tab") == 0, "panel module release", limit=30)
+        M.until(m, lambda _: not live(), "panel module release", limit=30)
 
         if not SMALL:
             # Only the big kernel persists SYSTEM.CFG (SPEC.md 51.5.3). The
