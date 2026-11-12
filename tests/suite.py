@@ -13873,7 +13873,7 @@ SOAK = [
         "os88sym's offsets), not out of pixels.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("modcache", "soak", py("tests/modcache.py"), 20.0,
+    Row("modcache", "soak", py("tests/modcache.py"), 30.0,
         "SPEC.md 2.8.3: a dropped module KEPT by the cache comes back from "
         "RAM, off the field report (Sticky Apps on the 5150: the second press "
         "showed a disk access, a press after the Task Manager took the whole "
@@ -13888,7 +13888,12 @@ SOAK = [
         "record still MEM_P_MOD + 2 x the id - it was a pinned BARRIER the "
         "compactor dissolved, and the ascending pass dissolved a movable "
         "top-down cache too. D: the third press re-adopts it at the new "
-        "base, not one sector of the file read, three Apps listed.",
+        "base, not one sector of the file read, three Apps listed. E-G: the "
+        "owner's own steps on the 5150 Hercules + ST-225 twin, nothing "
+        "forced - press, press, the Task Manager opened and the desktop "
+        "clicked, press: no compaction or shed runs, both later presses "
+        "re-adopt, and each reads the boot sector ONCE (stm_scan's batch, "
+        "SPEC.md 110.12.2: the return from C:\\STIKAPPS remounted A:).",
         needs=("marty",), timeout=600,
         wants=("build/os8088-360.img",)),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,

@@ -244,6 +244,16 @@ stm_scan:
     CSDO mov byte [CSEG stm_n], 0
     CSDO mov byte [CSEG stm_over], 0
     call COLD_SEG:drvf_drv_vol_bank
+    call COLD_SEG:dkf_dsk_batch_begin ; ONE BPB VALIDATION PER VOLUME for
+                                ; the walk (SPEC.md 18.9.3, 110.12.2): the
+                                ; panel is dropped inside menu_track's lock,
+                                ; so nothing can reach the drive, and the
+                                ; unlock that ends the track ends the batch.
+                                ; Without it a machine with a FIXED disk paid
+                                ; a second boot-sector read every press,
+                                ; coming back to the floppy from C:\STIKAPPS
+                                ; (drv_vol_back's mount) - and from wherever
+                                ; the cards had moved the head to
     mov al, [dsk_bootvol]
     call stm_scanvol
     xor cx, cx
