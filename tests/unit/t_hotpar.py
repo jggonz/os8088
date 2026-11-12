@@ -52,8 +52,8 @@ import os88sym  # noqa: E402
 # symbol -> the parity of its entry (0 = even, 1 = odd), per kernel. Set at
 # kernel size pass 13's close, every one at an even SHIFT against that pass's
 # base (aedadd25), which is where its loops were measured. wm_paint_all left
-# both lists when its layered walk did (SPEC.md 11.91.7): it is a call into
-# wm_paint_dmg now, with no loop of its own for a parity to price.
+# both lists when its layered walk did (SPEC.md 11.91.7): it is a second
+# entry into wm_paint_dmg now, with no loop of its own for a parity to price.
 HOT = {
     "big": {
         "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 1, "font_run_x": 1,

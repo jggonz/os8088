@@ -2257,8 +2257,10 @@ os88ui_sbar:
     lea dx, [bx+OS88UI_SBCELL]  ; x1 and CX x2 (UI_FRAME keeps its four
     mov bx, cx                  ; registers; a LINE cell does not, SPEC.md
     UI_HLINE                    ; 5.7.3, so the second rule reloads them)
-    mov ax, [di+0]
-    mov bx, [di+4]
+%ifndef OS88UI_KERNEL           ; ...except in the KERNEL, whose line is
+    mov ax, [di+0]              ; gfx_hline_n (vga12.inc), clobbering BX and
+%endif                          ; CX alone by its header: AX and DX come back
+    mov bx, [di+4]              ; as they went (kernel size pass 20, -3)
     mov dx, [di+6]
     sub dx, OS88UI_SBCELL
     UI_HLINE
@@ -2312,13 +2314,17 @@ os88ui_sbar:
 
 .arrow:                         ; one glyph row at DX, SI +/- BP. The line
     push cx                     ; cell takes AX..DX (SPEC.md 5.7.3), so the
-    push dx                     ; pair is rebuilt a row and CX/DX kept here
+%ifndef OS88UI_KERNEL           ; pair is rebuilt a row and CX/DX kept here -
+    push dx                     ; DX only in a package: the kernel's line
+%endif                          ; gives DX back (the rule above, -2)
     mov ax, si
     sub ax, bp
     mov bx, si
     add bx, bp
     UI_HLINE
+%ifndef OS88UI_KERNEL
     pop dx
+%endif
     pop cx
     ret
 

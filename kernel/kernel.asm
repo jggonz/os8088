@@ -6199,11 +6199,14 @@ EXTF_CAPS   equ 4               ;   fsx_caps: DL = window BX's display's kind
 EXT_DISPLAY equ 7               ; wm_display's secondary arm, behind its gate
 EXT_SPAN    equ 8               ; wm_disp_span: registers kept = the primary
 EXT_FSRECT  equ 9               ; wm_fs_setrect's arm: CF = 1 one display
-                                ; (10: EXT_DESK, retired - SPEC.md 11.91.7)
+EXT_PHASE   equ 10              ; ui_drag_phase's arm, UNGATED: registers kept
+                                ; (10 was EXT_DESK, retired with its one caller
+                                ; - SPEC.md 11.91.7 - and EXT_PHASE, the last
+                                ; entry, took its slot: the slot block is 4
+                                ; bytes of .bss an entry - kernel size pass 20)
 EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 EXT_DEAD    equ 14              ; ui_drag_dead, UNGATED: registers kept (12 and
                                 ; 13 are the seam cuts, font.inc/vga12.inc)
-EXT_PHASE   equ 15              ; ui_drag_phase's arm, UNGATED: registers kept
 %macro EXTCALL 1
     call far [EXFP + %1*4]
 %endmacro
