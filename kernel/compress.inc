@@ -143,6 +143,41 @@ section .modl                   ; the cloner's image (SPEC.md 2.8, 18.99) -
                                 ; diskops.inc has already laid the header, and
                                 ; kernel.asm's modl_end comes after this
 
+%ifdef KERN_MEGA
+; KSEG's near helpers for this image (kernel.asm's macro), HERE at the
+; head of its code and not at the image's end: the end is the SCRATCH TAIL,
+; which a kept image's drop zeroes (MOD_H_SCR, SPEC.md 2.8.3) - helpers
+; there were zeroed with it on kern_mega (tests/modkeep.py's host leg) - and
+; not beside cmz_buf, whose sentences are written in place: ES or DS = a selector
+; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
+; answer. Each row sets DI to its slot and joins its register's tail; DI and
+; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it.
+; KSG_ROW is kernel.asm's, beside KSEG
+    KSG_ROW es, MEGA_SEL_K0
+    KSG_ROW es, MEGA_SEL_K1
+    KSG_ROW es, MEGA_SEL_K3
+    KSG_ROW es, MEGA_SEL_K4
+ksg_es_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov es, ax
+    pop di
+    ret
+    KSG_ROW ds, MEGA_SEL_K0
+    KSG_ROW ds, MEGA_SEL_K1
+    KSG_ROW ds, MEGA_SEL_K4
+ksg_ds_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov ds, ax
+    pop di
+    ret
+%endif
+
 %ifndef NOCURDISK
 ; -----------------------------------------------------------------------------
 ; cmz_trk0 / cmz_trk1 - CMZ_TRACK's body: [cur_inxfer] = 0 / 1, through a
@@ -3800,39 +3835,6 @@ cmz_buf:    times 24 db 0       ; 'NN%' after the prefix, 'Wrong part FILEA.002'
 %if cmz_buf - cmz_s_done != 14
     %error "cmz_buf must follow cmz_s_done's 14 bytes: cmz_pct completes the sentence in place"
 %endif
-%ifdef KERN_MEGA
-; KSEG's near helpers for this image (kernel.asm's macro), HERE and not at
-; the image's end: what follows is the SCRATCH TAIL, which a kept image's
-; drop zeroes (MOD_H_SCR, SPEC.md 2.8.3) - helpers after it were zeroed with
-; it on kern_mega (tests/modkeep.py's host leg): ES or DS = a selector
-; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
-; answer. Each row sets DI to its slot and joins its register's tail; DI and
-; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it.
-; KSG_ROW is kernel.asm's, beside KSEG
-    KSG_ROW es, MEGA_SEL_K0
-    KSG_ROW es, MEGA_SEL_K1
-    KSG_ROW es, MEGA_SEL_K3
-    KSG_ROW es, MEGA_SEL_K4
-ksg_es_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov es, ax
-    pop di
-    ret
-    KSG_ROW ds, MEGA_SEL_K0
-    KSG_ROW ds, MEGA_SEL_K1
-    KSG_ROW ds, MEGA_SEL_K4
-ksg_ds_MEGA_SEL_K5:
-    push di
-    mov di, MEGA_SEL_K5
-.go:
-    call COLD_SEG:mega_kaimf
-    mov ds, ax
-    pop di
-    ret
-%endif
 ; --- THE JOIN'S STATE, AND THE PACK'S SCRATCH UNDER IT ----------------------
 ; Two verbs that never run in one call: Compress uses the pack's block from
 ; cmz_pack's entry to its verdict and the join never touches it, the join
@@ -3950,6 +3952,17 @@ cmz_jtok:   dw 0                ; the result's WRITE_SEQ token (18.4.9).
                                 ; Never reset: it is only a generation, and
                                 ; a new temporary is a WRITE, which leaves
                                 ; the last one stale
+%ifdef KERN_MEGA
+%ifdef DSK_RUN
+    ; READ_SEQ COPIES FSEQ_XSIZE BYTES IN (dwf_dskw_read_seq: a 16-byte
+    ; cursor's 6 past it are read and ignored), and on kern_mega the cursor
+    ; is read through the image's selector, whose LIMIT is the image's end:
+    ; 22 bytes from here ran 4 past it - a #GP the KSEG helpers after this
+    ; hid until they moved below the scratch tail (SPEC.md 2.8.3.3,
+    ; mega-czto). Zeros, in the tail
+    times FSEQ_XSIZE - ($ - cmz_jcur) db 0
+%endif
+%endif
 %endif
 
 section .text

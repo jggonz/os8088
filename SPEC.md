@@ -2318,34 +2318,45 @@ every use there: every Sticky Apps press, every Control Panel open.
 `KSEG` helpers (`ksg_es_*`, `ksg_ds_*`, kern_mega's near loaders of a
 scratch selector) were emitted at the image's END, after `cmz_ovl` - inside
 the scratch tail, so a kept image's drop would have zeroed code. They are
-`compress.inc`'s now, just below `cmz_ovl` (`tests/modkeep.py`'s HOST leg,
-run against `build/megak/`, was red on it).
+`compress.inc`'s now, at the head of its `.modl` code (`tests/modkeep.py`'s
+HOST leg, run against `build/megak/`, was red on it). **And moving them
+uncovered a second, latent one**: `READ_SEQ` copies `FSEQ_XSIZE` (22)
+bytes of a cursor IN (§18.4.8.3: "a 16-byte cursor's 6 past it are read and
+ignored"), and `cmz_jcur` sat 18 bytes from `DISKOPS.DRV`'s end - so on
+`kern_mega`, where the cursor is read through the image's selector, the
+copy ran 4 bytes past its limit and took a #GP (`mega-czto`'s first
+Uncompress To... rebooted the machine). The helpers had been those 4 bytes.
+`kern_mega` pads the cursor to `FSEQ_XSIZE` (4 zero bytes, in the tail).
 
 **What it cost** (`kernsize`, against `8ef75fa1`): `kern_mega` `.text` +8 -
 the `mem_pg_own` row's 6 and `dsk_rah_lim`'s 2 (§18.95.13 came with it) -
 and **0 bytes of `MEGA_RESIDENT`** (61,440 either way); above 1MB `.cold`
 +371 (the cache's `mod_need`/`mod_drop`/`mod_live`/`mod_hi` arms and the
 `.mod` forget, and §18.95.13's prefetch with its shared routines) and `.mega`
-+64 (`mega_modkeepf`). `kern_big`, `kern_emu` and `kern_small`:
-`kernel.bin` byte-identical. The images: `CTRL.DRV` takes `MOD_CACHE`'s
-layout on `kern_mega` too (its scratch in `.modcb`), and `DISKOPS.DRV`'s
-helpers moved, 0 bytes.
++64 (`mega_modkeepf`). Per routine (`tools/os88rdiff.py`): the cache is
+`mod_drop` +63, `mod_need` +51, `mod_live` +18, `mod_hi` +7 and
+`mem_pg_forget` +22; the read-ahead `disk_mount_x` +44, `dsk_rah_find` 58,
+`dsk_rah_pick` 70, `dsk_rah_rdst` 59, `dsk_rah_pre` 179, `ld_run_body_x` +3,
+less `dsk_rah_serve` -51 and `dsk_rah_fill` -152. `kern_big`, `kern_emu`
+and `kern_small`: every routine the same (`os88rdiff`; `kern_big`'s one
+"change" is the `mem_pg_modrow` label splitting a span, no byte). The
+images: `CTRL.DRV` takes `MOD_CACHE`'s layout on `kern_mega` too (its
+scratch in `.modcb`), `DISKOPS.DRV`'s helpers moved and its cursor padded
+(+4).
 
 **Measured under Bochs** (`tests/megamodcache.py`, a soak row, 16MB):
 every `int 13h` the trace caught (a breakpoint on the IDT's 13h gate) across
 one use:
 
-| use | 1st | 2nd | 3rd, after the pool's pack MOVED it | after `mx_shedf` took it |
-|---|---|---|---|---|
-| a Sticky Apps press (`STIKMENU.DRV`, the kept scan with it) | 5 | **0** | **0** | 1 (a load) |
-| the Control Panel opened and closed (`CTRL.DRV`) | 5 | **0** | | |
+| use | 1st | 2nd | 3rd, after the pool's pack MOVED it | after `mx_shedf` took it | before (`8ef75fa1`): 1st, 2nd, 3rd |
+|---|---|---|---|---|---|
+| a Sticky Apps press (`STIKMENU.DRV`, the kept scan with it) | 5 | **0** | **0** | 1 (a load) | 5, 1, 1 |
+| the Control Panel opened and closed (`CTRL.DRV`) | 5 | **0** | | | 5, 3 |
 
 The pack moved the kept block 16KB up (`FDA800` -> `FDE800`) with
 `MODR_SEG` the same selector; the shed freed the block and both LDT entries
-of its pair. With `mod_drop`'s arm forced to free (the behaviour before),
-the same row reads 1 `int 13h` on every later press and 3 on the panel's
-second open - and that is WITH §18.95.13's prefetch, which this change also
-brought to `kern_mega`.
+of its pair. The "before" column is the same row run on `8ef75fa1`'s
+`build/mega.img` (its legs that need a kept image refuse there).
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -42283,7 +42294,10 @@ nothing. A conventional store in protected mode is a SELECTOR, so the page
 test there is `dsk_runcap`'s, on its base. With it came §18.95.11's
 listing-mount fill of eight. On 360KB and 720KB a cylinder is 18 sectors -
 the whole prefetch in one call; on 1.2MB and 1.44MB it reads the first 18
-of the cylinder, still at least the track the peek's fill would have. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
+of the cylinder, still at least the track the peek's fill would have.
+Measured under Bochs off `build/megaapps.img` (1.44MB), every `int 13h` a
+launch from `B:\APPS` makes, `8ef75fa1` -> this: `NOTEPAD.O88` 13 -> 10,
+`CALC.O88` 11 -> 9, `PAINT.O88` 14 -> 11, `CHART.O88` 12 -> 10. It replaces `kernel-hotpaths`' disk-4 (+208), which armed the
 cap as a byte inside `dsk_rah_fill`
 (`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch`).
 
