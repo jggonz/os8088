@@ -57168,7 +57168,7 @@ it may have left chevrons there, and a marker that only ever draws its
 positive case is one that never goes away. It is drawn from `fm_draw_rows` (so
 `fm_repaint` and `fm_rows_only` both get it, from one body) and from
 `fm_scrollpaint` — the second is not optional and is easy to leave out,
-because the blit band stops at `[fm_by2]` and the exposed-row fill at
+because the blit band stops at its last whole row and the exposed-row fill at
 `[fm_listb] - 1`, so this band survives a scroll completely untouched.
 
 **Cost, measured.** The whole of §22.20 and §22.20.1 is `.cold` **+207** and
@@ -62515,7 +62515,7 @@ bytes); it is the primitive's now, for every caller, at 88.
 **Color's teal is a third colour a 1bpp band cannot say**, so under Color
 `desk_zones_r` draws nothing and leaves the mask whole: the dither lays its
 ground and `desk_paint_mask` draws each touched zone WHOLE over it, its box
-grown so every window over it is owed a repaint (`desk_zone_whole`) - which
+grown so every window over it is owed a repaint (its `wm_dmg_zadd`) - which
 is how every theme drew before §11.91.6. The first build drew Color's
 picture column on the glass under its per-fragment clip; Color is the one
 place this build is slower than that one, by the windows a partly covered

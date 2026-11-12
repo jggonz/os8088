@@ -7164,6 +7164,8 @@ rd_tab:
     RDENT RDK_RS, wm_idx2ptr
     RDENT RDK_RS, wm_paint_all
     RDENT RDK_RS, wm_paint_dmg
+    RDENT RDK_RS, wm_rect_empty     ; fm_paste_res's union (kernel size pass
+    RDENT RDK_RS, wm_runion         ; 20: its own seed and compares were 30)
     RDENT RDK_RS, xm_release_rec
     RDENT RDK_RS, wm_win_rect
 %assign rd_p rd_n

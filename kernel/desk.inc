@@ -1176,7 +1176,7 @@ desk_caprect:
 ;              AX (wm.inc's "any" word) is not read. Lock held. On kern_big
 ;              wm_dmg_gray has already drawn them into its region and emptied
 ;              the mask (desk_zones_r, SPEC.md 11.91.6), so what is left here
-;              is drawn whole and its box grown (desk_zone_whole). All
+;              is drawn whole and its box grown (below). All
 ;              registers preserved. (desk_paint, every zone whole, was the
 ;              layered wm_paint_all's, and went with it: SPEC.md 11.91.7.)
 ; -----------------------------------------------------------------------------
@@ -1187,40 +1187,32 @@ desk_paint_mask_x:
     push dx
     xor cx, cx
 .next:
+%if DESK_NZ > 16
     shl word [desk_dmgm], 1     ; zone CL's bit, top of the dword first:
     rcl word [desk_dmgm+2], 1   ; desk_dmg_zones rotated zone 0 in LAST
+%else
+    shl word [desk_dmgm], 1     ; ...of the WORD, on a kernel with 16 zones
+%endif                          ; or fewer (kern_small's four: size pass 20)
     jnc .skip
     mov al, cl
-%ifdef KERN_BIG
-    call desk_zone_whole        ; what desk_zones_r left in the mask
-%else
     call desk_draw_zone         ; a zone not shown draws nothing
+%ifdef KERN_BIG
+    ; ...and on kern_big, what desk_zones_r left in the mask - a touched zone
+    ; wm_dmg_gray could not draw into its region (Color's ground, or an
+    ; overflow) - is drawn WHOLE, so its box is grown and every window over
+    ; it is owed a repaint (11.91's per-window test): the old answer, kept
+    ; for those. (desk_zone_whole, written at its one call: kernel size pass
+    ; 20. desk_draw_zone keeps AL, the zone desk_zone_rect reads.)
+    push cx                     ; the zone counter: the rect takes CX
+    call desk_zone_rect
+    call KERNEL_SEG:cw_wm_dmg_zadd
+    pop cx
 %endif
 .skip:
     inc cx
     cmp cl, DESK_NZ
     jb .next
     jmp kretfc_dx
-
-%ifdef KERN_BIG
-; -----------------------------------------------------------------------------
-; desk_zone_whole - a touched zone wm_dmg_gray could not draw into its region
-;                   (desk_zones_r: Color's ground, or an overflow), drawn WHOLE
-;                   and its box grown so every window over it is owed a repaint
-;                   (11.91's per-window test) - the old answer, kept for those
-; in:  AL = a zone desk_dmg_zones marked; the gfx lock held
-; out: nothing; keeps CX, the zone counter its one caller's loop reads - AX
-;      is reloaded from CL and BX and DX are not read (kernel size pass 17;
-;      DX was the loop's routine pointer while desk_paint shared it)
-; -----------------------------------------------------------------------------
-desk_zone_whole:
-    call desk_draw_zone         ; (the box is read by the window pass, after)
-    push cx
-    call desk_zone_rect
-    call KERNEL_SEG:cw_wm_dmg_zadd
-    pop cx
-    ret
-%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_dmg_zones - which zones does the damage rect touch?
@@ -1276,8 +1268,12 @@ desk_dmg_zones_x:
     stc
 %endif
 .r:
+%if DESK_NZ > 16
     rcr word [desk_dmgm+2], 1
     rcr word [desk_dmgm], 1
+%else
+    rcr word [desk_dmgm], 1     ; (one word holds them all: desk_paint_mask)
+%endif
     or di, di
     jnz .zone
     pop di
@@ -2348,7 +2344,11 @@ desk_zdirty  resb 1             ; 1 = [desk_cdirty] holds cells that owe a
 desk_cdirty  resb (DSL_SLOT + 1) / 8    ; ...one bit a cell
 desk_zslot   resb DESK_NZ       ; THE TABLE: one byte a zone (SPEC.md 26.9).
                                 ; desk_init fills it with 0xFF, "nothing"
+%if DESK_NZ > 16
 desk_dmgm    resw 2             ; desk_dmg_zones -> desk_paint_mask, a dword
+%else
+desk_dmgm    resw 1             ; ...a word, with 16 zones or fewer
+%endif
 desk_sel     resb 1             ; selected ZONE index, 0xFF = none
 desk_clkt    resw 1             ; click birth tick (EV_C) of the last zone click
 desk_zy      resw 1             ; desk_draw_zone: current zone top

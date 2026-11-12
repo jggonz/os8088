@@ -1894,16 +1894,19 @@ fm_measure:
     mov [di+FS_USED], cx        ; the bytes themselves (SPEC.md 22.7.1): a
     mov [di+FS_USEDH], bx       ; high half of 0xFFFF would need 4GB listed
 %else
-    mov ax, cx                  ; bytes -> KB: (hi:lo) >> 10, and the result
+    xchg ax, cx                 ; bytes -> KB: (hi:lo) >> 10, and the result
     mov dx, bx                  ; is a word because a volume caps at 32MB
     mov cx, 10
 .shift:
     shr dx, 1
     rcr ax, 1
     loop .shift
-    cmp ax, 0xFFFF              ; a hostile listing could sum past the
-    je .out                     ; sentinel: leave it saying "not known"
-    mov [di+FS_USED], ax
+    mov [di+FS_USED], ax        ; A hostile listing could sum to the sentinel
+                                ; itself, 0xFFFF, and then this says "not
+                                ; known" - which is exactly what the store at
+                                ; the top left there, so the test that skipped
+                                ; this store for it went (kernel size pass 20,
+                                ; -5, and -1 for the xchg)
 %endif
 .out:
     jmp kretc_di
@@ -3614,38 +3617,33 @@ fm_onclick_x:
     jnc .nochcol
     jmp .quiet
 .nochcol:
+    cmp cx, 2                   ; BOTH buttons' rows, 2..15, asked once
+    jl .sbar                    ; (kernel size pass 20)
+    cmp cx, 15
+    jg .sbar
     ; --- Refresh button (drawn iff cw >= 76) ---
     mov ax, [fm_cw]
     cmp ax, 76
-    jl .viewbtn
+    jl .sbar                    ; neither is drawn (the toggle wants 142)
     sub ax, 68                  ; x1 = cw-68 .. x2 = cw-6
     cmp dx, ax
     jl .viewbtn
     add ax, 62
     cmp dx, ax
-    jg .viewbtn
-    cmp cx, 2
-    jl .viewbtn
-    cmp cx, 15
-    jg .viewbtn
+    jg .sbar                    ; right of it: the toggle is LEFT of it
     call fm_reload              ; re-list where we ARE, folder included
     jmp .redraw                 ; (under the gfx lock: stalls painters
                                 ;  briefly; accepted by SPEC.md 22)
 
     ; --- view toggle (drawn iff cw >= 142) ---
-.viewbtn:
-    mov ax, [fm_cw]
-    cmp ax, 142
+.viewbtn:                       ; AX = cw - 68 still
+    cmp ax, 142 - 68
     jl .sbar
-    sub ax, 136                 ; x1 = cw-136 .. x2 = cw-74
+    sub ax, 136 - 68            ; x1 = cw-136 .. x2 = cw-74
     cmp dx, ax
     jl .sbar
     add ax, 62
     cmp dx, ax
-    jg .sbar
-    cmp cx, 2
-    jl .sbar
-    cmp cx, 15
     jg .sbar
     call fm_vflip               ; flip the view, back to the top; the
                                 ; selection is kept (SPEC.md 22). The mirrors
@@ -4320,11 +4318,12 @@ fm_onkey_x:
 
 .delete:
     call fm_delrep              ; stamp it, so the CONFIRMING press can tell
-    mov bx, FMC_DELETE          ; itself from this one's typematic repeat -
-                                ; CF is ignored here, because arming twice is
+    mov bl, FMC_DELETE          ; itself from this one's typematic repeat -
+    SKIPF2                      ; CF is ignored here, because arming twice is
                                 ; the same line asked for twice and the
-                                ; keystroke is only destructive at the answer
-    jmp short .cmd
+                                ; keystroke is only destructive at the answer.
+                                ; It skips .cut's load as the three keys skip
+                                ; each other's (kernel size pass 20, -2)
 .cut:                           ; THE THREE CLIPBOARD KEYS load BL and skip
     mov bl, FMC_CUT             ; each other's load, and BH is cleared once
     SKIPF2                      ; (kernel size pass 17: they were three
@@ -6444,12 +6443,10 @@ fm_rclick_x:
     KDOOR menu_popup              ; CF = 1 nothing chosen; CF = 0 and AL = the
     jc .out                     ; item index (DI, the descriptor, survives)
 
-    cbw                         ; AL is bounded by MC_NITEM (menu_hover), so
-    mov bx, [di+MC_CMDS]        ; the parallel command array is in range
-    add bx, ax
-    mov al, [bx]
-    mov [fm_rcmdid], al
-    clc
+    mov bx, [di+MC_CMDS]        ; AL is bounded by MC_NITEM (menu_hover), so
+    xlatb                       ; the parallel command array is in range
+    mov [fm_rcmdid], al         ; (xlatb, kernel size pass 20: the index is
+    clc                         ; unsigned and AX is the ladder's to restore)
 .out:
     jmp kretfc_di
 
@@ -6495,7 +6492,7 @@ fm_editkey:
                                 ; there is no undo, and the operation is not
                                 ; one file but every one of them
     dec bx
-    je .swap                    ; the disk-swap prompt (SPEC.md 2.8.5)
+    je short .swap              ; the disk-swap prompt (SPEC.md 2.8.5)
     dec bx
     je .clone                   ; the cloner (SPEC.md 22.21.2), and the ONE
                                 ; place in this file it is answered: four
@@ -6540,9 +6537,10 @@ fm_editkey:
     ; key that is not advertised must not quietly change what it used to do.
 .confirmf:
     cmp al, ' '
-    jne .confirm
-    cmp byte [fm_fmtalt], 0xFF  ; the SAME byte the line is composed from,
-    je .confirm                 ; so the two cannot disagree
+    jne .confirme               ; Enter, or no (kernel size pass 20: straight
+    cmp byte [fm_fmtalt], 0xFF  ; to the Enter test, so .confirm is mode 3's
+    je .confirme                ; alone). The SAME byte the line is composed
+                                ; from, so the two cannot disagree
     mov ax, [fm_fmtrow]         ; the row and fm_fmtalt, the byte after it -
     xchg al, ah                 ; swapped as one word (AX is the entry's to
     mov [fm_fmtrow], ax         ; restore)
@@ -6588,22 +6586,18 @@ fm_editkey:
     jmp .out                    ; and fm_edit_end inside it is what frees the
                                 ; claim and drops the image (SPEC.md 2.8.3)
 
-.confirm:
-    cmp byte [di+FS_EDIT], 5    ; ...and the FORMAT confirmation still takes
-    je .confirme                ; ENTER (SPEC.md 22.12): what it borrows from
-                                ; format was asked for by neither Delete nor
-                                ; any other key, so there is no gesture to
-                                ; complete
-    cmp ax, 0x5300              ; the DELETE confirmation: the Delete key says
-    jne .cancel                 ; yes and EVERY other key - Enter included -
-                                ; says no (SPEC.md 22). The whole word again:
-                                ; AL = 0 is what keeps a NumLock '.' out
-    jmp short .commit
-.confirme:
-    cmp al, 13
-    jne .cancel                 ; anything but Enter means no (SPEC.md 22.12)
-.commit:
-    call fm_edit_commit
+.confirm:                       ; mode 3, the DELETE confirmation: the Delete
+    cmp ax, 0x5300              ; key says yes and EVERY other key - Enter
+    SKIPCX2                     ; included - says no (SPEC.md 22). The whole
+                                ; word again: AL = 0 is what keeps a NumLock
+                                ; '.' out. SKIPCX2 steps over the Enter test
+                                ; with ZF kept (CX is dead: every way out is
+                                ; fm_edit_commit, fm_edit_end or the ladder)
+.confirme:                      ; the FORMAT confirmation takes ENTER (SPEC.md
+    cmp al, 13                  ; 22.12): what it borrows from format was
+    jne .cancel                 ; asked for by neither Delete nor any other
+.commit:                        ; key, so there is no gesture to complete -
+    call fm_edit_commit         ; and anything but Enter means no
     jmp short .out
 .cancel:
     ; The FORMAT prompt is TWO lines (SPEC.md 22.12), so one status line
@@ -6618,25 +6612,25 @@ fm_editkey:
     ; here - it is answered at .replace. And it never showed on the Enter
     ; path, because the format's own fmv_load repaints the whole window,
     ; which is exactly how every test in this tree missed it.
-    mov al, [di+FS_EDIT]        ; 5, or 6 - the swap prompt is two lines too.
-    sub al, 5                   ; ONE range test (kernel size pass 18, -3):
-    cmp al, 6 - 5               ; AL is dead from here, every way out being
-    jbe .cancelfull             ; fm_edit_end (which loads its own) and the
-                                ; ladder
-                                ; ...and mode 7 is not tested here at all,
-                                ; deliberately: clo_call answers Esc itself
-                                ; (SPEC.md 22.21.2), so the clone's prompts
-                                ; never reach this ladder
-    call fm_edit_end
-.lineonly:
-    clc                         ; CF = 0: the typed name is ON the status line
-    jmp short .pops             ; and NOTHING else on this window moved, so a
-.cancelfull:                    ; ...two lines: the caller owes the window
-    call fm_edit_end
-.out:                           ; keystroke owes one line, not a repaint
-    stc                         ; anything else - commit, cancel, the replace
-.pops:                          ; question - changed the listing or the mode
-    jmp kretc_di                ; and still owes the whole window. `pop` does not touch flags, so CF survives to the caller
+    ;
+    ; ...and mode 7 is not tested here at all, deliberately: clo_call answers
+    ; Esc itself (SPEC.md 22.21.2), so the clone's prompts never reach this.
+    mov al, [di+FS_EDIT]        ; read BEFORE fm_edit_end clears it, which
+    call fm_edit_end            ; keeps every register (its ladder)
+    sub al, 5                   ; ONE range test, and its CARRY is the answer:
+    cmp al, 6 - 5 + 1           ; CF = 1 for 5 and 6, the two-line prompts -
+    jmp short .pops             ; the swap prompt is two lines too - so the
+                                ; window is owed; CF = 0 for the rest, whose
+                                ; one line is all that moved (kernel size
+                                ; pass 20: the two arms and their two
+                                ; fm_edit_end calls were one)
+.lineonly:                      ; CF = 0: the typed name is ON the status line
+    CLC_OR_STC .out             ; and NOTHING else on this window moved, so a
+.pops:                          ; keystroke owes one line, not a repaint. .out:
+    jmp kretc_di                ; anything else - commit, cancel, the replace
+                                ; question - changed the listing or the mode
+                                ; and still owes the whole window. `pop` does
+                                ; not touch flags, so CF survives to the caller
 
     ; Mode 6's answers, AFTER the exit (size pass 8): the ladder's other
     ; targets are then nearer
@@ -6646,17 +6640,20 @@ fm_editkey:
     ; and step 1 asks for the disk to be formatted, so the SECOND Enter is the
     ; one that reaches the probe.
     cmp al, 13
-    jne .cancel                 ; two lines, so .cancel takes .cancelfull
+    jne .cancel                 ; two lines: .cancel answers CF = 1
     cmp byte [fm_fmtstep], 0
     jne .swapgo
     mov al, MOD_FMT             ; ...or the CLONER's, which is the whole of
-    cmp byte [fm_swapwho], 0    ; what SPEC.md 22.21.4 costs this prompt: one
-    je .swapneed                ; byte and one branch, rather than a second
-    mov al, MOD_DISKOPS           ; mode every ladder in this file would have to
-.swapneed:                      ; learn about
+    add al, [fm_swapwho]        ; what SPEC.md 22.21.4 costs this prompt: one
+%if MOD_DISKOPS - MOD_FMT != 1  ; byte (0 the formatter, 1 the cloner - so
+  %error "fm_editkey's .swap picks the module as MOD_FMT + [fm_swapwho]"
+%endif                          ; one add, kernel size pass 20), rather than
+                                ; a second mode every ladder in this file
+                                ; would have to learn about
     call mod_need               ; the system disk is in NOW - or it is not
     jc .swapno                  ; (both arms load AL afresh)
-    mov byte [fm_fmtstep], 1    ; FORMATTER AND CLONER ALIKE: re-arm the same
+    inc byte [fm_fmtstep]       ; 0 to 1, as .swapgo's test just said it was
+                                ; 0. FORMATTER AND CLONER ALIKE: re-arm the same
     mov al, 6                   ; mode at step 1, only the line changes. The
     call fm_edit_arm            ; cloner asks for its OWN disks itself, so it
                                 ; has no second step - and it wants step 1 for
@@ -6670,8 +6667,8 @@ fm_editkey:
     mov al, 1                   ; and leave the window as it was (SPEC.md 59).
     mov bx, fm_swaptab          ; BX/CX are banked
     mov cx, FM_NSWAP
-    call ct_toast_say
-    jmp short .cancelfull
+    call ct_toast_say           ; (keeps DI, and FS_EDIT is still 6, so
+    jmp short .cancel           ; .cancel answers the two lines)
 .swapgo:
     call fm_edit_end            ; the prompt is spent; each of these arms its
     cmp byte [fm_swapwho], 0    ; own prompt, or toasts what it could not read
@@ -6709,27 +6706,25 @@ fm_editkey:
     jc .nochg
 .store:
     mov [fm_ebuf+bx], al
-    inc bx                      ; the new length, and the NUL goes after it
-    jmp short .term
-
+    inc bx                      ; the new length, and the NUL goes after it -
+    inc bx                      ; plus one for .back's `dec`, which this falls
+                                ; into (kernel size pass 20: BX is at least 2
+                                ; there, so its `js` is never taken)
 .back:
-    or bl, bl
-    jz .nochg                   ; ...and a BACKSPACE THAT REMOVED NOTHING owes
-                                ; the same as a refused character: the prompt
-                                ; is already empty. `.out` answers CF=1, which
-                                ; fm_onkey_x now reads as "repaint the whole
-                                ; window" - so holding Backspace on an empty
-                                ; Rename or New Folder box repainted the
-                                ; listing at every typematic repeat
-    dec bx                      ; BH is 0 and BL is not, so BX is the NEW
-.term:                          ; length and the terminator lands on the
-    mov [fm_elen], bl           ; character just dropped - the -1 that used
-    mov byte [fm_ebuf+bx], 0    ; to be here punched a NUL one byte EARLIER,
-    jmp .lineonly               ; so the name displayed short and every
-                                ; character typed after a backspace landed
-                                ; behind that NUL and never appeared. NEAR:
-                                ; the swap prompt (SPEC.md 2.8.5) sits
-                                ; between here and .lineonly
+    dec bx                      ; BH is 0, so BX is the NEW length - and -1
+    js .nochg                   ; when it was 0: a BACKSPACE THAT REMOVED
+                                ; NOTHING owes the same as a refused
+                                ; character, the prompt being already empty.
+                                ; `.out` answers CF=1, which fm_onkey_x reads
+                                ; as "repaint the whole window" - so holding
+                                ; Backspace on an empty Rename or New Folder
+                                ; box repainted the listing at every typematic
+                                ; repeat. The terminator lands on the
+.term:                          ; character just dropped - the -1 that used
+    mov [fm_elen], bl           ; to be here punched a NUL one byte EARLIER,
+    mov byte [fm_ebuf+bx], 0    ; so the name displayed short and every
+    jmp short .nochg            ; character typed after a backspace landed
+                                ; behind that NUL and never appeared
 
 
 ; -----------------------------------------------------------------------------
@@ -7303,12 +7298,12 @@ fm_paste_res:
     ;     Free figure (SPEC.md 22.7) is the volume's, so a window on another
     ;     folder of it is stale too.
     ; A window neither describes is left exactly as it was, cache and pixels.
-    xor ax, ax                  ; the repaint owes exactly what is re-listed:
-    mov [fmv_ux2], ax           ; the union starts EMPTY - x1/y1 at the top
-    mov [fmv_uy2], ax           ; of the unsigned range and x2/y2 at its
-    dec ax                      ; floor, so the first rect folded in takes
-    mov [fmv_ux1], ax           ; all four by the same compares as the rest
-    mov [fmv_uy1], ax           ; (fmv_repaint_all reads y2 = 0 as empty)
+    mov si, fmv_ux1             ; the repaint owes exactly what is re-listed:
+    KDOOR wm_rect_empty         ; the union starts EMPTY - wm.inc's own empty
+                                ; box, x1/y1 7FFFh and x2/y2 -1, which the
+                                ; first rect wm_runion folds in takes whole
+                                ; (kernel size pass 20: wm.inc's two, by the
+                                ; door, for the open-coded seed and compares)
     call fmv_ifirst
     jc .rdone
 .scan:
@@ -7329,21 +7324,8 @@ fm_paste_res:
     jz .nopix
     KDOOR wm_win_rect              ; AX/BX/CX/DX = its frame, inclusive
     mov si, fmv_ux1             ; (the window is spent: SI is popped below)
-    cmp ax, [si]                ; ...grown into the pending union: screen
-    jae .g1                     ; coordinates, so unsigned throughout
-    mov [si], ax
-.g1:
-    cmp bx, [si+2]
-    jae .g2
-    mov [si+2], bx
-.g2:
-    cmp cx, [si+4]
-    jbe .g3
-    mov [si+4], cx
-.g3:
-    cmp dx, [si+6]
-    jbe .nopix
-    mov [si+6], dx
+    KDOOR wm_runion             ; ...grown into the pending union (signed, as
+                                ; every rect wm.inc unions)
 .nopix:
     pop si
 %ifndef KERN_SMALL
@@ -7420,8 +7402,8 @@ fm_paste_res:
     ; into the union as it goes, and this commits it. A window the paste did not
     ; touch is not repainted, and it keeps exactly the pixels it had.
     cmp word [fmv_uy2], 0       ; still fmv_reload_all's EMPTY union: no
-    je .out                     ; window's bottom edge is row 0 - the menu bar
-    push es                     ; is there - so 0 means nothing folded in
+    jl .out                     ; window's bottom edge is above row 0 - the
+    push es                     ; menu bar is there - so -1 is nothing folded
     push ds
     pop es
     mov si, fmv_ux1             ; seed 11.91's rect directly: the pass below
@@ -7618,11 +7600,15 @@ fm_edit_end:
     cmp al, 6                   ; order: CLV_FREE before the drop, because
     jne .clrit                  ; dropping first frees the code that frees
                                 ; the claim
-    cmp byte [fm_swapwho], 0    ; mode 6 serves TWO modules (SPEC.md 22.21.4)
-    je .fmtgone                 ; and a cancel owes the one that was ASKED FOR
-    cmp byte [fm_fmtstep], 0    ; the cloner's: step 1 means the step-0 Enter
-    je .clrit                   ; loaded DISKOPS.DRV - dropping MOD_FMT here
-    jmp short .clonegone        ; instead left its 4KB claim resident forever.
+    mov ax, [fm_swapwho]        ; mode 6 serves TWO modules (SPEC.md 22.21.4)
+    dec al                      ; and a cancel owes the one that was ASKED FOR:
+    jnz .fmtgone                ; [fm_swapwho] 0, the formatter's. Then the
+    dec ah                      ; cloner's, AH = [fm_fmtstep] (0 or 1, the
+    jnz .clrit                  ; byte after): step 1 means the step-0 Enter
+    jmp short .clonegone        ; loaded DISKOPS.DRV - dropping MOD_FMT here
+                                ; instead left its 4KB claim resident forever.
+                                ; (One word read, kernel size pass 20: AX is
+                                ; reloaded at .clr for the next block.)
                                 ; Step 0 loaded NOTHING, and .clonegone's
                                 ; clo_call would LOAD the module to free it
 .pastegone:
@@ -7924,38 +7910,19 @@ fm_draw_core:
     ; control is KERN_BIG's (SPEC.md 13.8), and so is os88ui.inc's body
     cmp word [fm_cw], 76
     jl .nobtns
-    mov ax, [fm_rgt]
-    sub ax, 67                  ; abs x1 = cx + cw - 68 = rgt - 67
-    mov bx, [fm_cy]
-    inc bx
-    inc bx
-    mov cx, [fm_rgt]
-    sub cx, 5                   ; abs x2 = rgt - 5
-    mov dx, [fm_cy]
-    add dx, 15
     mov byte [gfx_color], CBLACK ; the frame's pen, set HERE: the header's
-    call ct_cw_gfx_frame        ; font_run spent it (and an empty truncated
+                                ; font_run spent it (and an empty truncated
                                 ; header run leaves it whatever it was)
-    mov cx, ax
+    mov ax, 67                  ; abs x1 = cx + cw - 68 = rgt - 67
+    call .sbtn
     add cx, 3                   ; 56px label centered in the 63px rect
-    mov dx, [fm_cy]
-    add dx, 4
     mov si, fm_s_refresh
     call fm_brun                ; OPAQUE: the content's own white
 
     cmp word [fm_cw], 142
     jl .nobtns
-    mov ax, [fm_rgt]
-    sub ax, 135                 ; abs x1 = rgt - 135
-    mov bx, [fm_cy]
-    inc bx
-    inc bx
-    mov cx, [fm_rgt]
-    sub cx, 73                  ; abs x2 = rgt - 73
-    mov dx, [fm_cy]
-    add dx, 15
-    call ct_cw_gfx_frame
-    mov cx, ax
+    mov ax, 135                 ; abs x1 = rgt - 135
+    call .sbtn
     add cx, 11                  ; "Icons" = 40px -> x1+11
     mov si, fm_s_icons
     call fm_isicon
@@ -7963,8 +7930,6 @@ fm_draw_core:
     add cx, 4                   ; "List" = 32px -> x1+15
     mov si, fm_s_list
 .vlabel:
-    mov dx, [fm_cy]
-    add dx, 4
     call fm_brun                ; OPAQUE: the content's own white
 .nobtns:
 %endif
@@ -7983,6 +7948,27 @@ fm_draw_core:
 %endif
 
     jmp kretc_bp
+
+%ifndef KERN_BIG
+; .sbtn - one of kern_small's two header buttons' frames, the two being the
+; same 63x14 rectangle 68px apart (kernel size pass 20: they were two copies)
+; in:  AX = how far its left edge is in from [fm_rgt]; [gfx_color] the pen
+; out: AX = CX = that left edge, BX = [fm_cy] + 2, DX = [fm_cy] + 4 - the
+;      label's pen, fm_brun's registers but SI. gfx_frame keeps them all
+.sbtn:
+    neg ax
+    add ax, [fm_rgt]            ; x1 = rgt - in
+    mov bx, [fm_cy]
+    inc bx
+    inc bx                      ; y1 = cy + 2
+    mov cx, ax
+    add cx, 62                  ; x2 = x1 + 62: rgt - 5, and rgt - 73
+    lea dx, [bx+13]             ; y2 = cy + 15
+    call ct_cw_gfx_frame
+    mov cx, ax
+    lea dx, [bx+2]              ; the label's baseline row, cy + 4
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fm_draw_rows - the row area, the selection and the scroll bar
@@ -8954,26 +8940,30 @@ fm_scroll_by:
 fm_scrollpaint:
     ; --- the band the blit may move ---
     call fm_tiles               ; x1, IN to a byte column, and x2, stopping
-    mov [fm_bx1], ax            ; short of the scroll bar's left column - the
-    mov [fm_bx2], cx            ; more-mark's band exactly. A window
+    push cx                     ; short of the scroll bar's left column - the
+    push ax                     ; more-mark's band exactly - ON THE STACK for
+                                ; the blit, with y2 in DX and y1 in BX
+                                ; from here to it (kernel size pass 20: they
+                                ; were three words of .bss). A window
                                 ; too narrow to hold a whole byte column
                                 ; needs no test of its own: it lands x1 > x2
                                 ; or x2 off the screen, and gfx_scroll's own
                                 ; contract refuses both
     mov ax, [fm_cy]
     add ax, FM_ROW_Y0
-    mov [fm_by1], ax
+    mov [fm_by1], ax            ; (fm_row16's base, three calls)
     mov ax, [fm_fit]            ; whole rows only: a content height with a
     call fm_row16               ; remainder leaves a sliver below the last
     dec ax                      ; row that no row painter would ever erase
-    mov [fm_by2], ax
+    xchg ax, dx                 ; DX = y2
 
     call fm_cxrgt               ; the whole band, tested against an armed
     mov bx, [fm_by1]            ; clip region (11.3) - the blit tests its own
-    mov dx, [fm_by2]            ; rect, but the exposed rows below are wider
-                                ; than it and are a fill plus glyphs
+                                ; rect, but the exposed rows below are wider
+                                ; than it and are a fill plus glyphs. It,
+                                ; fm_cxrgt and fm_lsel_bar keep BX and DX
     call ct_cw_wm_clip_test
-    jc .refj
+    jc .refp
 
     ; --- the selection comes off where it is now ---
     mov ax, [fm_sdlt]
@@ -8986,10 +8976,8 @@ fm_scrollpaint:
     mov si, ax
     mov cl, 4
     shl si, cl                  ; SI = dy = d * FM_ROW_H, sign and all
-    mov ax, [fm_bx1]
-    mov bx, [fm_by1]
-    mov cx, [fm_bx2]
-    mov dx, [fm_by2]
+    pop ax                      ; x1
+    pop cx                      ; x2 (BX = y1 and DX = y2 still)
     mov bp, gfx_scroll          ; cw_mem_disp is `call bp / retf` and neither
     call ct_cw_mem_disp         ; touches the flags, so gfx_scroll's CF is
                                 ; still its answer here (SPEC.md 2.6)
@@ -9005,6 +8993,9 @@ fm_scrollpaint:
     sub bx, ax
     mov [fm_rlo], bx
     jmp short .expfill
+.refp:                          ; (the clip's refusal: the band's x1 and x2
+    pop ax                      ; are still on the stack)
+    pop ax
 .refj:                          ; ...and the two refusals above take it
                                 ; rather than a five-byte inverted pair - the
     ret                         ; refusal ITSELF, where a jump to it was
@@ -9029,11 +9020,11 @@ fm_scrollpaint:
 .expfill:
     mov ax, [fm_rlo]
     call fm_row16
-    mov bx, ax                  ; y1 = the first exposed row's top
+    xchg ax, bx                 ; y1 = the first exposed row's top
     mov ax, [fm_rhi]
     call fm_row16
     dec ax
-    mov dx, ax                  ; y2 = the last one's bottom
+    xchg ax, dx                 ; y2 = the last one's bottom
     call fm_cxrgt
     sub cx, FM_SB_W             ; the column left of the bar
     call fm_wfill
@@ -9101,8 +9092,8 @@ fm_draw_status:
     neg al                      ; draw one, so a fourth two-line prompt is a
                                 ; row in fm_2line and nothing else: CF -> 0/1
     mov [fm_l2up], al           ; the mirror, and the window's own byte
-    mov di, [fm_vp]
-    mov [di+FS_2UP], al
+    mov bx, [fm_vp]             ; (BX = the window for .fs_st_space too:
+    mov [bx+FS_2UP], al         ; nothing writes it before that `js`)
     ; --- status line at (6, staty): the precedence is binding (SPEC.md 22),
     ;     because both of these can be true at the same moment. There used to
     ;     be FIVE rungs and three of them were the wrong species. Two were
@@ -9133,7 +9124,7 @@ fm_draw_status:
     dec ax
     je .fs_st_fmt
     dec ax
-    je .fs_st_swap              ; the disk-swap prompt (SPEC.md 2.8.5)
+    je short .fs_st_swap        ; the disk-swap prompt (SPEC.md 2.8.5)
     dec ax
     je .fs_st_clone             ; the cloner's four (SPEC.md 22.21.1), all of
                                 ; which the IMAGE composes: the ladder is
@@ -9156,10 +9147,12 @@ fm_draw_status:
     mov si, fm_s_reppr          ; line one: 'Replace NAME?', in the row area
     call fm_scat_onam           ; (a repaint redraws both, and the question
     mov si, fm_s_repq           ; is only up between two of them)
-    call fm_scat                ; (which stores the NUL fm_staty2 draws to)
-    call fm_staty2              ; ...and line two, the answers, where every
-    mov si, fm_s_repk           ; other status line goes
-    jmp short .fs_stat          ; (short since the swap prompt moved out)
+    call fm_scat                ; (which stores the NUL fm_staty2 draws to,
+    call fm_staty2              ; and leaves SI on fm_s_repk, the string after
+%if fm_s_repk - fm_s_repq != 2  ; it, which fm_staty2 keeps - kernel size
+  %error "fm_draw_status's .fs_st_rep reads fm_s_repk as the string after fm_s_repq"
+%endif                          ; pass 20) ...and line two, the answers, where
+    jmp short .fs_stat          ; every other status line goes
     ; "Format A: as 720K?" over "Spc=size  Enter=yes  Esc=no" (SPEC.md 22.12),
     ; the replace question's own two-line shape. The SIZE is the point of
     ; naming it: dskw_fmt_probe cannot always tell 360K media from
@@ -9171,19 +9164,17 @@ fm_draw_status:
     ; the code that letters them. The image is loaded by construction: the
     ; confirmation was armed by a probe that loaded it and is taken down by
     ; the fm_edit_end that drops it.
-.fs_st_fmt:
+.fs_st_clone:                   ; THE TWO IMAGES' TWO-LINE PROMPTS, one body
+    mov bx, fm_cloline          ; with the line's composer in BX (kernel size
+    jmp short .fs_st_two        ; pass 20): fm_cloline leaves an EMPTY line,
+.fs_st_fmt:                     ; never the previous one, if DISKOPS.DRV
+    mov bx, dskw_fmt_line       ; cannot be re-read (its header). Both keep
+.fs_st_two:                     ; BX, and so does fm_staty2 (a ladder)
     xor al, al                  ; line one, in the row area
-    call dskw_fmt_line
-    call fm_staty2              ; ...and line two, the answers, where every
-    mov al, 1                   ; other status line goes
-    call dskw_fmt_line
-    jmp .fs_stat_drawn
-.fs_st_clone:
-    xor al, al                  ; line one, in the row area
-    call fm_cloline             ; ...and an EMPTY line, never the previous
-    call fm_staty2              ; ...and line two, the keys, where every other
-    mov al, 1                   ; status line goes
-    call fm_cloline
+    call bx
+    call fm_staty2              ; ...and line two, the answers or the keys,
+    mov al, 1                   ; where every other status line goes
+    call bx
     jmp short .fs_stat_drawn
 
 .fs_st_del:
@@ -9201,8 +9192,8 @@ fm_draw_status:
     ;     doubled through 2, 4, 8, 16, failed the bound and fell out of a
     ;     branch that draws nothing. toast_say carries that bound now, in one
     ;     place, for both tables.
-.fs_st_space:
-    mov bx, [fm_vp]             ; (BX is banked: kretc_di gives it back)
+.fs_st_space:                   ; BX = [fm_vp], from the top (banked:
+                                ; kretc_di gives it back)
     mov si, fm_s_size
     call fm_scat                ; ...which leaves SI on fm_s_free, the string
                                 ; after it (asserted there), and both figure
@@ -9628,7 +9619,7 @@ section .bss
 fmv_ux1:    resw 1              ; fmv_repaint_all's pending union: the rect
 fmv_uy1:    resw 1              ; every Disk window's frame is folded into,
 fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
-fmv_uy2:    resw 1              ; is painted twice; 0 = nothing folded in
+fmv_uy2:    resw 1              ; is painted twice; -1 = nothing folded in
 %ifdef FM_MSEL
 fm_pool:    resb 5*61           ; FM_NSLOT x FS_SIZE: SPEC.md 22.27's 8 a
  %if FM_NSLOT*FS_SIZE != 5*61   ; block went into the listing claim (22.6.4)
@@ -9830,10 +9821,9 @@ fm_rhi:     resw 1              ; is to letter, [lo, hi) - every one of them
 fm_sdlt:    resw 1              ; scroll scratch: the signed row delta the
                                 ; clamp actually took, which is what all of
                                 ; the drawing below it is a function of
-fm_bx1:     resw 1              ; scroll scratch: the blit band, rounded in
-fm_bx2:     resw 1              ; to byte columns and stopping short of the
-fm_by1:     resw 1              ; scroll bar; y covers whole rows only
-fm_by2:     resw 1
+fm_by1:     resw 1              ; scroll scratch: the blit band's top row,
+                                ; fm_row16's base (its x1, x2 and y2 are
+                                ; fm_scrollpaint's registers and stack)
                                 ; change (fm_sb_thumb)
 fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes (lo word)
 fm_fsizeh:  resw 1              ; ...and its high word (SPEC.md 19)

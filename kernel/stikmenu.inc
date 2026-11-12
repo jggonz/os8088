@@ -76,17 +76,16 @@ stm_track_x:
 
 ; -----------------------------------------------------------------------------
 ; stm_act_x - ui_cmd's CMD_STIK: do the posted pick, then drop the image
-; in:  nothing; UI task, no lock held. out: nothing; AX preserved (ui_cmd
-;      clobbers it anyway, but the far call below is the image's to keep)
+; in:  nothing; UI task, no lock held. out: nothing; clobbers AX, which
+;      ui_cmd - its one caller, through .stik - clobbers itself (kernel size
+;      pass 20: it was banked here)
 ; With no image held - the post outlived it, which nothing here does - the
 ; slot is mod_gone's refusal and the drop finds no claim.
 ; -----------------------------------------------------------------------------
 stm_act_x:
-    push ax
     call far [SMNFP + SMN_ACT]
     mov al, MOD_STIKM
     call mod_drop
-    pop ax
     retf
 section .text
 
