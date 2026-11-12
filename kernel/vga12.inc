@@ -676,10 +676,9 @@ gfx_disp_run:
     sub cx, [di+VID_CTX_VX]
     sub bx, [di+VID_CTX_VY]
     sub dx, [di+VID_CTX_VY]
-    push ax                     ; activate it (vid_ctx_act keeps DI, SI, BP)
-    mov ax, bp
-    call vid_ctx_act
-    pop ax
+    xchg ax, bp                 ; activate it (vid_ctx_act keeps DI, SI, BP
+    call vid_ctx_act            ; and AX): AL = the index, and both back after
+    xchg ax, bp                 ; (kernel size pass 20, -2, a push/pop fewer)
     call word [si+8]            ; [gfx_dfn]: the raw body keeps every register
 .next:
     inc bp
@@ -5162,10 +5161,14 @@ gfx_lock:
     mov ah, al                  ; this one outlives the hold (SPEC 7.3) - and
     mov al, 1                   ; the flag and the owner go in ONE word store
     mov [gfx_lock_flag], ax     ; (the pair is adjacent: toast_now's %error),
-    pop ax                      ; inside the cli window, so they can never
+                                ; inside the cli window, so they can never
                                 ; disagree (kernel size pass 17, -1)
-    sti
-    mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
+    mov [cur_lazy], al          ; PROMISE the hide (SPEC.md 7.1.4) - AL is
+                                ; the 1 just stored, and the promise now lands
+                                ; inside the same cli window as the flag
+                                ; (kernel size pass 20, -2 and 4 clocks)
+    pop ax
+    sti                         ; - the ISR
     CURLOG 'L'
     ret                         ; will not move the arrow while the flag is
                                 ; set, so it is frozen where it is until

@@ -1586,9 +1586,8 @@ osapi_mouse:
     je .live                        ; the IRQ: every ordinary caller stops here
     push ax
     push bx
-    push si
-    push di
-    push es
+    push di                         ; (no SI bank: DI becomes the vector's
+    push es                         ; pointer below - kernel size pass 20)
     mov bl, [mou_port]
     cmp bl, MOU_PEND                ; the PS/2 row (and the driver row) are not
     jae .done                       ; a UART and index no serial table
@@ -1599,7 +1598,11 @@ osapi_mouse:
     inc di                          ; (two `inc`s, not `mov di, 2`: a byte
     inc di                          ; less and no slower on an 8088, kernel
 .row:                               ; size pass 18 - the re-hook arm only)
-    mov si, [di+mou_ivecs]
+    mov dx, [di+mou_isrs]           ; DX = our ISR and DI = the vector, the row
+    mov di, [di+mou_ivecs]          ; index spent: DX and CX are this call's
+                                    ; outputs, loaded at .live, so neither needs
+                                    ; a bank and SI's push and pop went (kernel
+                                    ; size pass 20, -2 and ~10 clocks a pass)
 %ifdef KERN_MEGA
     MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
 %else                           ; zero: AX is popped or reloaded below)
@@ -1607,13 +1610,12 @@ osapi_mouse:
     mov es, ax
 %endif
     mov cx, cs
-    cmp [es:si+2], cx               ; still ours? ONE compare, which is what
+    cmp [es:di+2], cx               ; still ours? ONE compare, which is what
     je .done                        ; every pass but a theft pays
     pushf                           ; ...and one critical section over the
     cli                             ; vector AND the mask, not two
-    mov [es:si+2], cx
-    mov ax, [di+mou_isrs]
-    mov [es:si], ax
+    mov [es:di+2], cx
+    mov [es:di], dx
     mov ax, 0x040B                  ; MCR: DTR|RTS|OUT2 - a program that took
     call mou_pout                   ; the vector took the UART with it, and
     mov ax, 0x0101                  ; Battle Chess leaves MCR = 08h, which is a
@@ -1627,7 +1629,6 @@ osapi_mouse:
 .done:
     pop es
     pop di
-    pop si
     pop bx
     pop ax
     jmp short .live
@@ -2971,13 +2972,12 @@ KSC_ALT     equ 0x38            ; to name. Spelled as apps/os88api.inc spells
 kbd_bit:
     push cx
     mov bl, al
-    and bl, 0x7F                ; make and break index the SAME bit
-    mov cl, bl
-    and cl, 7
-    shr bl, 1                   ; 8086: no shr reg, imm - and three of these is
-    shr bl, 1                   ; smaller than loading CL to shift by 3
-    shr bl, 1
-    mov bh, 0
+    and bx, 0x7F                ; make and break index the SAME bit - and BH
+    mov cl, bl                  ; is cleared by the same `and` (a sign-extended
+    and cl, 7                   ; imm8, as short as the byte form: kernel size
+    shr bl, 1                   ; pass 20, its `mov bh, 0` went, -2). 8086: no
+    shr bl, 1                   ; shr reg, imm - and three of these is smaller
+    shr bl, 1                   ; than loading CL to shift by 3
     mov ah, 1
     shl ah, cl
     pop cx
@@ -5782,28 +5782,27 @@ cur_busy_on:
 cur_move_multi:
     push cx
     push dx
-    mov dl, [vid_cur]           ; the display to come back to...
-    mov dh, [cur_disp]          ; ...and the one the arrow is on
-    mov [cur_dprev], dl
-    push ax
+    mov dh, [vid_cur]           ; the display to come back to...
+    mov dl, [cur_disp]          ; ...and the one the arrow is on - in DL, so
+    mov [cur_dprev], dh         ; that an `xchg ax, dx` hands it to
+    push ax                     ; vid_ctx_act below (kernel size pass 20)
     call vid_disp_of            ; AL = the display the NEW position is on
     mov cl, al
     pop ax
-    cmp cl, dh
+    cmp cl, dl
     jne .jump
 
-    push ax                     ; --- same display: the fused pass ----------
-    mov al, dh
-    call vid_ctx_act
-    pop ax
-    call cur_move_1
+    xchg ax, dx                 ; --- same display: the fused pass ----------
+    call vid_ctx_act            ; AL = the arrow's display, and AX back after
+    xchg ax, dx                 ; (vid_ctx_act keeps both): -2, and a push
+    call cur_move_1             ; and a pop fewer a packet
     jmp short .out
 
 .jump:                          ; --- erase whole, then draw whole ----------
     mov [cur_drawn_x], ax       ; the new position FIRST: cur_get_1 reads the
     mov [cur_drawn_y], bx       ; OLD cell out of cur_geom's bank, not these
     push cx                     ; (size pass 9: AX/BX need no banking)
-    mov al, dh
+    mov al, dl
     call vid_ctx_act
     call cur_get_1              ; the arrow leaves the display it was on...
     pop cx

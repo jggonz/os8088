@@ -109,14 +109,13 @@ icon_draw_x:
                                 ; rather than spent. Without this the record
                                 ; staged perfectly and drew at a byte count
 %ifdef KERN_SMALL
-    mov cl, ah                  ; CX = 2 + h * 4: the header, h mask words
-    xor ch, ch                  ; and h data words
-    shl cx, 1
-    shl cx, 1
-    inc cx                      ; ...+ the header. Two `inc`s are 2 bytes to
-    inc cx                      ; `add cx,2`'s 3 and cost the same 6 clocks,
-                                ; so it is shorter on both terms of the 8088's
-                                ; max(clocks, 4.34 x bytes)
+    mov al, 0x80                ; CX = 2 + h * 4: the header, h mask words
+    mov cl, 6                   ; and h data words - AX = h * 256 + 128 (AH =
+    shr ax, cl                  ; h, the kind byte replaced), and that over 64
+    xchg ax, cx                 ; is exactly 4h + 2 (kernel size pass 20, -3:
+                                ; it was `mov cl, ah / xor ch, ch`, two shifts
+                                ; and two `inc`s; ~30 clocks dearer once a
+                                ; record, never per row). AX is dead below
     mov di, ico_stage
     push di                     ; ...and the stage base comes back off the
                                 ; stack below rather than out of an immediate
