@@ -41,6 +41,16 @@ Now a re-adopting press makes no int 13h call on either drive.
 H-K, a third boot (floppy_steps): a floppy-only 5150, the kept scan, and
 the ACTIONS that still go to the disk and refuse as they always did.
 
+L onward: EVERY OTHER MODULE (tests/modkeep.py, run from main below):
+CTRL.DRV, WIN95.DRV, DOCK.DRV, FORMAT.DRV, DISKOPS.DRV and DESK.DRV on the
+VGA XT, HIBER.DRV on the Hercules + ST-225 twin, EXTD.DRV on CGA + Hercules -
+each used twice, KEPT after each use with its bytes the file's, re-adopted on
+the second with none of its sectors read (CTRL.DRV, WIN95.DRV, DOCK.DRV and
+EXTD.DRV with no int 13h at all), still KEPT across a compaction posted with a
+hole above it, and re-adopted a third time wherever the pass put it; and the
+HOST half: every opted-in image's tail is zeros in its file and every direct
+store its source makes is in that tail or a written-before-read cell.
+
 Every count is EVERY int 13h the trace caught (nint): the floppy-read
 filter hid the fixed disk's calls, two or three a press on E-G's machine.
 
@@ -460,6 +470,8 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
     owner_steps()
     floppy_steps()
+    import modkeep                  # ...and EVERY module (SPEC.md 2.8.3):
+    fails.extend(modkeep.run())     # tests/modkeep.py's docstring
     print("modcache: %s" % ("PASS" if not fails else
                            "FAIL (%d): %s" % (len(fails), "; ".join(fails))))
     return 1 if fails else 0

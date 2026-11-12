@@ -626,16 +626,26 @@ section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
 
 modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
 %ifdef MOD_CACHE
-    ; THIS COPY IS KEPT AT ITS DROP iff it is the settings core's (MOD_SETS's
-    ; row), never the panel's (SPEC.md 2.8.3): the header word mod_drop reads
-    ; is 0 on the disk, and only here does it become the core's scratch tail.
-    ; Image bytes, not resident ones - the test mod_drop no longer makes
+    ; THE CORE'S SCRATCH, ZEROED ON EVERY ENTRY (SPEC.md 2.8.3): it lives in
+    ; CTRL.DRV's bss tail (cps_scr, kernel.asm), past what a core-only read
+    ; brings in, so on MOD_SETS's claim it is whatever the heap left there
+    ; until this. A drop zeroes it too, so a kept copy of either row starts
+    ; a gesture as a load did; no state in it outlives one operation - the
+    ; drop that ends each MOD_SETS call always zeroed it
     push ax
-    mov ax, cs
-    cmp ax, [mod_tab + MOD_SETS * MODR_SIZE]
-    jne .whole                  ; the open panel's copy (sc_modcall's .full)
-    CSDO mov word [CSEG MOD_H_SCR], MODC_SCR
-.whole:
+    push cx
+    push di
+    push es
+    PUSH_CSDATA
+    pop es
+    mov di, cps_scr
+    mov cx, cps_scre - cps_scr
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
     pop ax
 %endif
     push bp                     ; wm_cbd takes its routine in BP
@@ -2143,15 +2153,15 @@ as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
 ; section a data line sits in off the text
 section .modc
 %macro SC_SCRATCH 0
-sc_mz       db 0
-sc_px       dw 0
-sc_py       dw 0
-sc_ex       db 0
-sc_best     dw 0                ; sc_m_cell: the point, the zone it leaves
-sc_bc       db 0                ; out, the nearest distance so far and its
+sc_mz       SCR_B
+sc_px       SCR_W
+sc_py       SCR_W
+sc_ex       SCR_B
+sc_best     SCR_W               ; sc_m_cell: the point, the zone it leaves
+sc_bc       SCR_B               ; out, the nearest distance so far and its
                                 ; cell; sc_m_ser's claim and the rows it holds
-sc_tseg     dw 0
-sc_tcnt     db 0
+sc_tseg     SCR_W
+sc_tcnt     SCR_B
 %endmacro
 %ifndef MOD_CACHE
     SC_SCRATCH

@@ -73,6 +73,9 @@ import os88ui      # noqa: E402
 import os88stik    # noqa: E402
 import os88flush   # noqa: E402
 import os88geom as geom  # noqa: E402
+import heapmap     # noqa: E402
+import modstate    # noqa: E402
+import stikmenu as SM  # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -256,8 +259,16 @@ def leg(name, tmp):
             raw = bytes(m.read(ui._S("DKDFP"), DKD_NENT * 4))
             back = [struct.unpack_from("<HH", raw, k * 4)
                     for k in range(DKD_NENT)]
-            check(seg2 == 0, "mod_tab's MOD_DESK row is 0 again (%#06x): "
-                  "the 5 KB claim is given back" % seg2)
+            # GIVEN BACK is freed (kern_mega) or KEPT (kern_big, SPEC.md
+            # 2.8.3): the row still names the image, re-tagged MEM_P_MOD + 2
+            # x the id - purgeable, for the next widget to re-adopt
+            kept = (not getattr(m, "bochs", False) and seg2 != 0 and
+                    modstate.state(m, MOD_DESK) == "kept" and
+                    [c.own for c in heapmap.Map(m, SM._Syms(ui)).claims
+                     if c.seg == seg2] == [modstate.kept_tag(MOD_DESK)])
+            check(seg2 == 0 or kept, "mod_tab's MOD_DESK row is 0 again, or "
+                  "KEPT purgeable (%#06x): the 5 KB claim is given back"
+                  % seg2)
             check(all(flat(m, sg, off) == gone for off, sg in back),
                   "every DKDFP slot names mod_gone again (%r)"
                   % ["%05X" % flat(m, sg, off) for off, sg in back])

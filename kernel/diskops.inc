@@ -243,7 +243,9 @@ modl_hdr:
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modl_end                 ; MOD_H_IMG
     dw CLO_NENT                 ; MOD_H_NENT
-    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+    dw modl_end - cmz_ovl       ; MOD_H_SCR: the pack's and the join's cells
+                                ; and the cursors after them, zeros in the
+                                ; file (2.8.3) - KEPT
     dw modl_e_disp
     dw modl_e_cmz               ; ...the compressor's (compress.inc)
 

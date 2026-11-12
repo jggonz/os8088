@@ -137,9 +137,12 @@ MOD_H_SCR   equ 12              ; word: how many of the image's LAST bytes are
                                 ; = the image is freed at its drop; non-zero =
                                 ; it is KEPT, as a purgeable claim, with those
                                 ; bytes zeroed again, so a re-adopted image is
-                                ; the file's own. A module opts in when every
-                                ; byte it writes is in that tail; the header
-                                ; says so, no kernel table does. ONE result
+                                ; the file's own. A module opts in when its
+                                ; tail is zeros in its file and every byte it
+                                ; writes outside it is written before it is
+                                ; read (every image with a file does now);
+                                ; the header says so, no kernel table does.
+                                ; ONE result
                                 ; lives just below it on purpose: STIKMENU.
                                 ; DRV's kept scan, valid only on a claim a
                                 ; scan filled (SPEC.md 2.8.3, 110.12.2)
@@ -361,14 +364,30 @@ mod_row:
 ; mod_need would try it eighteen times a second.
 ;
 ; A HELD MODR_SEG IS NOT AN ARMED ROW on a kernel that KEEPS dropped images
-; (MOD_CACHE, SPEC.md 2.8.3): a kept one is held and disarmed. Both rows asked
-; here, MOD_CTRL and MOD_HIBER, are never kept - mod_drop frees the panel's by
-; name, and HIBER.DRV's header asks for no scratch tail - so the answer stands;
-; a row that opts in must not be asked here without the slot's own test
+; (MOD_CACHE, SPEC.md 2.8.3): a kept one is held and disarmed. So there the
+; answer is mod_need's own LIVE test - the row's first slot names its
+; segment - which a KEPT row (its slots on mod_gone's, `.cold`'s) fails.
+; Both rows asked here, MOD_CTRL and MOD_HIBER, are kept since every image
+; opted in; without the test sc_modcall would run a desktop gesture through
+; a kept panel's disarmed slot and do nothing. DI and CX are banked round
+; mod_fpr, which spends them
 ; -----------------------------------------------------------------------------
 mod_live:
     call mod_row
     cmp word [bx+MODR_SEG], 1   ; CF = 1 iff the word is 0 - see the banner
+%ifdef MOD_CACHE
+    jc .ret                     ; nothing held
+    push di
+    push cx
+    call mod_fpr
+    mov ax, [bx+MODR_SEG]
+    cmp [di+2], ax              ; ZF = 1 and CF = 0: LIVE
+    pop cx
+    pop di
+    je .ret
+    stc                         ; KEPT, disarmed: not resident for a caller
+.ret:
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -448,7 +467,8 @@ mod_need:
     call drv_vol_bank           ; FIRST here, so .held's re-adopt leaves
                                 ; through .back like a load (it only
                                 ; records: no volume moves until a read)
-    mov dx, [bx+MODR_SEG]
+.reread:                        ; (.held's: a KEPT image the UI task shed or
+    mov dx, [bx+MODR_SEG]       ; moved between this read and its IF = 0)
     or dx, dx                   ; CF = 0, which a LIVE row answers with
     jnz .held                   ; ...held: LIVE, or KEPT by a drop (2.8.3)
 %else
@@ -572,12 +592,14 @@ mod_need:
     cmp [di+2], dx              ; its segment, and that is the whole test -
     je .out                     ; no walk on a thunk's hot path. KEPT: they
                                 ; read mod_gone's, `.cold`'s
-                                ; NO IF = 0 WINDOW round the find and the
-                                ; re-tag, and none is owed: only the UI task
-                                ; sheds or compacts (SPEC.md 66.3.1), and a
-                                ; KEPT image is re-adopted on the UI task
-                                ; alone - an image opts in only when every
-                                ; mod_need for it is the UI task's (2.8.3)
+    pushf                       ; AN IF = 0 WINDOW from the check to the re-tag
+    cli                         ; (SPEC.md 2.8.3): a mod_need on ANY task may
+    cmp dx, [bx+MODR_SEG]       ; re-adopt - a package worker's SERIAL.DRV
+    jne .race                   ; included - and only the UI task sheds or
+                                ; compacts (66.3.1), so a shed (MODR_SEG 0)
+                                ; or a move (another base) since the read
+                                ; above is seen here and read again, and
+                                ; none can land between this and the tag
     push bx
     mov bx, dx                  ; mem_find_own's own-segment arm: the record
     call mem_find_own           ; AT that base - a held MODR_SEG names one
@@ -589,13 +611,14 @@ mod_need:
                                 ; left in the record, inert until the next
                                 ; drop re-tags it. Withdrawing it was 5 bytes
                                 ; here and 4 more of relaxed branches below
+    popf
     mov es, dx
     or bp, -1                   ; no bound on the entries: this image's were
     jmp .arming                 ; bounded by the read it came from
-    nop                         ; PARITY PAD, never executed: the cache's
-%endif                          ; .cold is odd without it, and dsk_xfer,
-                                ; dsk_runcap and dsk_next_clus_x keep an EVEN
-                                ; shift (t_hotpar.py)
+.race:
+    popf
+    jmp .reread
+%endif
 
 .check:
 
@@ -1069,11 +1092,11 @@ mod_free_row:
 ; disk read, and that a claim needing the room sheds (mem_pg_own zeroes
 ; MODR_SEG; the slots already read mod_gone). The drop still ENDS the
 ; feature's hold - the heap may take the bytes from here on, which is the
-; thing a drop is for. MOD_CTRL's row is never kept: CTRL.DRV's header carries
-; 0, and only the settings core's own copy writes its tail into its header
-; (modc_e_sc, desksc.inc) - so the panel's state, which is not in a tail, and
-; mod_live's two callers, which read a held MODR_SEG as "armed", are both safe
-; with no test here (SPEC.md 2.8.3).
+; thing a drop is for. EVERY image with a file opts in now (SPEC.md 2.8.3's
+; table: each one's tail is zeros in its file, and what it writes outside it
+; is written before it is read); KBMOUSE alone, with no file to come back
+; from, carries 0 and is freed. mod_live tells a kept row from a live one by
+; its slot, so the panel's kept row is not mistaken for an open panel.
 ; -----------------------------------------------------------------------------
 mod_drop:
 %ifdef MOD_CACHE
@@ -1100,9 +1123,7 @@ mod_drop:
     mov bx, dx                  ; mem_find_own's own-segment arm: the
     call mem_find_own           ; record AT that base, whoever owns it - a
                                 ; held MODR_SEG always names one
-    mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
-                                ; drop re-writes the same tag)
-    mov word [ss:si+MC_RLOC], mem_region_reloc ; ...and MOVABLE (SPEC.md
+    mov word [ss:si+MC_RLOC], mem_region_reloc ; MOVABLE (SPEC.md
                                 ; 2.8.3, 66.2): a KEPT image is a disarmed CS
                                 ; that writes nothing outside its zeroed
                                 ; scratch, and the ONE word naming it is its
@@ -1114,7 +1135,11 @@ mod_drop:
                                 ; .pinned) - so the next press read the whole
                                 ; file again although nothing had needed its
                                 ; bytes (the Task Manager report, tests/
-                                ; modcache.py)
+                                ; modcache.py). STORED FIRST, while the tag
+                                ; still pins it, so no task the drop is not
+                                ; on can see a purgeable record without it
+    mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
+                                ; drop re-writes the same tag)
     jmp short .out
 .free:
     call mod_free_row           ; (mod_free_row clobbers AX, BX, CX, DX, DI)

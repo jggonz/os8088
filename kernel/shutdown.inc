@@ -331,15 +331,22 @@ sd_save     db 'Save your work before continuing.', 0
 sd_shutdown db 'Shut Down', 0
 sd_cancel   db 'Cancel', 0
 sd_safe     db 'You can now turn off your computer.', 0
-sd_left     dw 0
-sd_top      dw 0
-sd_active   db 0
-sd_arm      db 0
-sd_down     db 0                ; THE BYTE AFTER sd_arm: written as one word
-%if sd_down - sd_arm != 1
-%error "shutdown: sd_arm and sd_down are cleared and set with one word store"
+; THE CONFIRMATION'S STATE, a macro so a kernel that KEEPS a dropped image
+; (MOD_CACHE) declares it in CTRL.DRV's scratch tail (`.modcb`, kernel.asm):
+; a Cancel returns, and these are the bytes it leaves behind (SPEC.md 2.8.3).
+; The terminal path below them (sd_last, sd_l_*, the spinner's) never
+; returns, so what it writes no later use of the image can read
+%macro SD_SCRATCH 0
+sd_left     SCR_W
+sd_top      SCR_W
+sd_active   SCR_B
+sd_arm      SCR_B
+sd_down     SCR_B               ; THE BYTE AFTER sd_arm: written as one word
+sd_prev     SCR_B
+%endmacro
+%ifndef MOD_CACHE
+    SD_SCRATCH
 %endif
-sd_prev     db 0
 sd_last     db 0
 sd_l_cx     dw 0
 sd_l_spn    dw 0

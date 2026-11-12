@@ -106,7 +106,8 @@ modx_hdr:
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modx_end, EXT_NENT       ; MOD_H_IMG, MOD_H_NENT
-    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+    dw modx_end - wm_lf_win     ; MOD_H_SCR: its two cells, the image's last
+                                ; bytes (2.8.3) - KEPT
     dw ext_extend_b             ; EXT_EXTEND - far procs, the six whose only
     dw ui_drag_size             ; EXT_LAND     caller is their slot (or a
     dw ext_e_strads             ; EXT_STRADS   `push cs` + call in here) and
@@ -1078,8 +1079,13 @@ wm_fit_box:
 ; right - wm_disp_now is asked from the first press after an Extend, long
 ; before any landing, and 0 is "nothing armed" only because wm_wins is well
 ; above it. CS: on every access, DS being the kernel's here.
+; A MACRO, emitted LAST in the image by kernel.asm: the two are its scratch
+; tail, so a KEPT image's drop zeroes them back to that fresh load's "nothing
+; armed" (SPEC.md 2.8.3)
+%macro EXT_SCRATCH 0
 wm_lf_win:  dw 0
 wm_lf_disp: db 0
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; wm_disp_now - WHICH DISPLAY IS THIS WINDOW'S? (SPEC.md 39.16.4.1)

@@ -12,7 +12,8 @@ modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
     dw BUILD_NUM, MOD_STAMP, modk_end, DK_NENT
-    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+    dw modk_end - dock_sx1      ; MOD_H_SCR: its geometry and state, the
+                                ; image's last bytes (2.8.3) - KEPT
     dw dkx_hook, dkx_unhook
 
 ; -----------------------------------------------------------------------------
@@ -82,6 +83,11 @@ dkx_vset:
 ; the segment that needs naming. The kernel keeps only what IT reads: the
 ; live rect, its two crosses, [dock_side], [dock_up], [dock_c0] and
 ; [dock_thk].
+; THE BLOCK IS A MACRO, emitted LAST in the image by kernel.asm (DOCK_SCRATCH):
+; every byte here is written by the image and zero in the file, so it is the
+; image's scratch tail and a KEPT image's drop zeroes it back to what a load
+; brings in (SPEC.md 2.8.3)
+%macro DOCK_SCRATCH 0
 dock_sx1:   dw 0                ; the strip's whole rect - SEVEN CONSECUTIVE
 dock_sy1:   dw 0                ; WORDS, which dkx_live_set copies over the
 dock_sx2:   dw 0                ; kernel's live block in one rep movsw
@@ -107,6 +113,7 @@ dock_timer_tick: dw 0           ; modular start tick; survives cancellation
 %if dock_ffar - dock_sx1 != 14 || dock_la1 - dock_sx1 != 16 || dock_la2 - dock_sx1 != 18 || dock_a0 - dock_sx1 != 20 || dock_astep - dock_sx1 != 22 || dock_alen - dock_sx1 != 24 || dock_cap - dock_sx1 != 26
   %error "dkx_geom writes dock_sx1 through dock_cap as one run of stosw, in this order"
 %endif
+%endmacro
 
 dkb_tab:                        ; the KERNEL's bodies, in dock.inc's DKI_* order
     dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit

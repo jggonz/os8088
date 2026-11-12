@@ -1007,10 +1007,11 @@ modc_hdr:
     dw modc_end                 ; MOD_H_IMG - vstart is 0, so the end label IS
                                 ; the size
     dw CP_NENT                  ; MOD_H_NENT
-    dw 0                        ; MOD_H_SCR: 0 ON THE DISK, so the PANEL's
-                                ; row is freed at its drop; the settings
-                                ; core's own copy writes MODC_SCR here when it
-                                ; runs (modc_e_sc), and is KEPT (SPEC.md 2.8.3)
+    dw MODC_SCR                 ; MOD_H_SCR: the whole bss tail, `.modcb`,
+                                ; where every byte either row writes lives -
+                                ; so a dropped panel AND a dropped settings
+                                ; core are KEPT (SPEC.md 2.8.3); 0 on a kernel
+                                ; with no cache
 %ifdef OS88_SHORTCUTS
     dw modc_e_sc                ; CPE_SC - the core's, so FIRST (SPEC.md 2.8.7)
 %endif

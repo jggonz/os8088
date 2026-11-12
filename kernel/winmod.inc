@@ -130,7 +130,7 @@ modw_hdr:
     db MOD_VER, MOD_WIN         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modw_end, WN_NENT        ; MOD_H_IMG, MOD_H_NENT
-    dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+    dw MODW_BSS                 ; MOD_H_SCR: its bss, .modwb (2.8.3) - KEPT
     dw wnx_set
 
 ; WNK name - far-call the KERNEL routine `name` (a near proc in .text) from
