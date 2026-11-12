@@ -780,23 +780,18 @@ dskw_mkclus:
                                 ; commit - all 32 bits of it (SPEC.md 18.7.5)
     call bp                     ; sector 0 built in dsk_secbuf, and ES =
                                 ; LOW_SEG (SPEC.md 2.1), which is what SS names
-    DSK_WR1D dskw_clba
-    jc dskw_mkbody.wfail
-    call dskw_zerobuf           ; the cluster's remaining sectors
     mov al, [dsk_spc]           ; (<= 64: cbw is a zero extension)
     cbw
-    xchg ax, cx
-    dec cx
-    jcxz .zeroed                ; CF = 0: the write's `jc` was not taken, and
-.zsec:                          ; nothing since writes it
-    DSKW_CLBA_INC
-    push cx
-    DSK_WR1D dskw_clba
-    pop cx
-    jc dskw_mkbody.wfail
-    loop .zsec
-.zeroed:
-    ret
+    xchg ax, si                 ; SI = the cluster's sectors, all written by
+.zsec:                          ; ONE loop: sector 0 as BP built it, then the
+    DSK_WR1D dskw_clba          ; buffer zeroed for the rest. SI survives the
+    jc dskw_mkbody.wfail        ; write and the zeroing; the last pass zeroes
+    DSKW_CLBA_INC               ; and steps the cursor once more than it uses,
+    call dskw_zerobuf           ; and nothing reads either before setting its
+    dec si                      ; own (dskw_xclus sets the cursor; the buffer
+    jnz .zsec                   ; is scratch). CF = 0: the write's `jc` was
+    ret                         ; not taken, and nothing since writes it
+                                ; (kernel size pass 20, -11)
 
 ; -----------------------------------------------------------------------------
 ; dskw_dirgrow - a free slot in the current directory, GROWING a subdirectory
@@ -1629,15 +1624,12 @@ dskw_wbody:
     ; --- the directory entry: replace an existing one, or take a slot -----
     call dskw_find              ; CF=0 found; CF=1 AX = NOENT / IO
     jnc .replace
-    cmp ax, FERR_NOENT
-    je .create
-    stc                         ; a read error mid-scan: report it as is
-    ret
-.create:
+    cmp ax, FERR_NOENT          ; a read error mid-scan is reported as is:
+    jne .out                    ; FERR_IO is CF = 1 out of this compare (2 <
+                                ; 4), and `jne` keeps it (kernel size pass
+                                ; 20, -2, as dskw_mkbody's does)
     call dskw_dirgrow           ; the slot dskw_find spotted, or the folder
-    jnc .newslot                ; grown for one (BR-60) - or the refusal
-    ret
-.newslot:
+    jc .out                     ; grown for one (BR-60) - or the refusal
     mov byte [dskw_new], 1      ; the slot dskw_find already spotted
     and word [dskw_oldclus], 0
     jmp short .data
