@@ -87690,6 +87690,54 @@ until the fill tool is picked up and something is copied: what is left is the
 canvas and, on the full build, the undo image — the two that hold the
 picture.
 
+#### 42.6.7 What scales with the canvas's HEIGHT is a heap claim, not bss
+
+Three tables are sized by the canvas's rows: the **row table** (a segment and
+an offset per row, `pt_layout`'s), §42.18's **inked table** (an `(x1, x2)`
+pair per 16-row band) and §42.8.6's **undo mask** (a byte per row,
+`PTF_UNDO`). They were bss, sized for the `PT_CH_MAX` = 464 ceiling, so every
+Paint paid for the tallest canvas any screen allows whatever it held:
+2,440 bytes on the full build and 1,976 on the small arm, where `PTF_UNDO` is
+off. That is also why §42.22 once traded the small arm's growing for bss.
+
+They are **one heap claim**, `[pt_tabseg]`, sized to the rows there are:
+
+| offset | holds |
+|---|---|
+| 0 | the row table: entry `y` is the 4 bytes at `y * 4`, offset then segment |
+| `[pt_tbib]` | the inked table: `[pt_tbnb]` pairs, `(rows >> 4) + 1` of them |
+| `[pt_tbum]` | the undo mask: a byte a row and one spare, for `pt_undo_new`'s word stores |
+
+- **`pt_tbset`** sizes it for DX rows. Only the inked table has contents to
+  keep, and it is the one that moves: a grow extends the claim
+  (`MEMP_REGROW`, which carries the bytes when it must move the block) and
+  moves the table up from its last word; a shrink moves it down from its
+  first word and then hands back the spare when it is a granule or more
+  (`MEM_GRAN`, 32 paragraphs). New bands are empty, which is what rows a
+  canvas gains are. The row table and the mask are rebuilt by whoever changed
+  the height (`pt_layout`, `pt_undo_new`).
+- **When it is sized.** `pt_alloc` claims it after the canvas (§42.6.1's
+  order: `pt_fit` sized the canvas against the whole run), and frees the
+  canvas and takes §42.6's notice if it is refused. `pt_resize` grows it to
+  the TALLER of the old and new heights before the in-place passes, which lay
+  out every height between, and trims it to the new height at the end. A load
+  sizes it before `pt_layout`. A refused grow keeps the rows the claim holds:
+  the resize stops there (never below the canvas it has) and a load reports
+  it as a crop.
+- **Reaching it.** `pt_rowset` loads ES from `[pt_tabseg]` and then from the
+  entry, so a row costs two instructions more and still nothing a pixel; the
+  inked table's four users and the mask's three load ES around their walks.
+  The claim is movable: `pt_reloc` re-aims `[pt_tabseg]` through `pt_rltab`,
+  and the row table's segment halves are shifted through it when the CANVAS
+  moves (the compactor moves one block and notifies before the next, so the
+  word is current). With no claim (§42.6's notice window) `pt_layout` builds
+  no table and every user is a no-op.
+
+`pt_line` is the one width-sized buffer left in bss (`PT_CW_MAX` bytes): its
+loops address it through DS while ES is the canvas, and it doubles as the
+staging area for the palette band and the icons, so moving it is a change of
+its own.
+
 ### 42.7 Full Screen — the §53 bracket, and why NOT the §11.2 surface
 
 View ▸ Full Screen, or Ctrl+F. `pt_cmd_fs` calls `OSAPI_FSX_RUN` and nothing
@@ -89016,6 +89064,38 @@ Paint's own strip and onto the desktop — §49's tamegram lesson exactly.
 
 At the floor a 22-row canvas still shows one row of tools, and the picture is
 its own size on every adapter.
+
+#### 42.9.1 ...and the canvas CEILING is the screen's bottom, not the dock's row
+
+The kernel lets any window's grow box be dragged to the last row of the
+display (`ui_grow_clamp` caps at `[vid_h]` less `W_Y`), over the dock. Paint's
+height ceiling `[pt_chmax]` came from the DOCK row instead (`pt_screen`, since
+Paint first arrived), so its negotiator (`pt_onsize`) clamped every such drag
+back above the strip. Measured on `os8088_5150_herc_gla`, kern_big, before
+this: Note Pad's grow box dragged to row 346 left Note Pad's frame ending on
+row 348, while Paint's ended on 323 (the canvas held at 258 rows).
+
+So the ceiling is now the display: `[pt_chmax]` = the screen's height less
+the band's top less `PT_CHROME_H`, which is a frame from the menu bar to the
+bottom row (`vid_h - MBAR_H` tall). On Hercules that is a 286-row canvas
+against 258; on CGA 138 against 110; on VGA 418 against 390. Measured
+after, both kernels on Hercules: the grow box dragged to the bottom leaves the
+frame ending on row 348, and Apply with a height of 999 gives a 328-row frame
+(`348 - MBAR_H`) at `y` = 20 over a 286-row canvas. `tests/paintdock.py` is
+the row. Two things go with it:
+
+- **Paint is `WF_KEEPH`** (§11.93, §11.93.1). The size boxes commit through
+  `OSAPI_WM_RESIZE`, and `wm_resize` holds a window without the flag to the
+  dock row, so Apply would have grown the canvas and then cut the frame back
+  under it. With the flag both `wm_fit` and `wm_resize` take the display's
+  bottom as the floor, and `wm_resize` pulls `W_Y` up to the menu bar when the
+  frame needs it.
+- **A FRESH window still opens above the dock.** `[pt_chband]` keeps the old
+  figure (the band from `PT_WIN_Y` to the dock row) and `pt_geom` clamps the
+  starting canvas to it, so a new Paint is placed exactly as before and only
+  a user's grow takes it over the strip. §11.93's argument against hanging
+  over the dock by default is about every boot; this is about a size somebody
+  asked for.
 
 ### 42.10 A window that resizes itself inside its own paint must re-derive its layout
 
@@ -91313,7 +91393,7 @@ further, and until then full-size pictures are not expected of this arm.
 | `PTF_GIF` | the GIF codec both directions (§42.14, §42.21), its LZW claim, both Save Gif verbs | **−2,587 image, −302 bss** |
 | `PTF_ABOUT` | Paint's own About card | −365 image |
 | `PTF_FSX` | the full-screen surface (§42.7) and the View menu | −377 image |
-| `PT_CW_MAX`/`PT_CH_MAX` | the row-table ceiling drops 736×464 → the default canvas | **−1,256 bss** |
+| `PT_CW_MAX`/`PT_CH_MAX` | the row-table ceiling drops 736×464 → the default canvas | **−1,256 bss** — **REVERSED by §42.22.5** |
 
 **23,307 + 3,900 = 26,465 bytes, 15.6% off**, reported by
 `tools/os88pkgsize.py` on every `make smallapps`.
@@ -91333,7 +91413,8 @@ Three things worth stating because they are otherwise silent:
   is `pt_geom` holding the canvas inside them, and `pt_fit` shrinks it again
   to what the heap will fund — so a fresh Paint here is the same 448×280 it
   always was, and what the small build gives up is *growing or loading past
-  it*.
+  it*. **That trade turned out to be every grow at all**, because a fresh
+  Paint opens AT the ceiling — §42.22.5 took it back.
 
 **Kept on purpose**, so this stays a paint program: every drawing tool, the
 palette, BMP load and save, undo, the clipboard, flood fill, filled shapes,
@@ -91715,6 +91796,49 @@ fund `PT_LZW_KB` — before anything else happens, and refuses with the GIF
 toast, **"No RAM for GIF here"**. `pt_save`'s own refusal stays behind it, for
 a heap that changes between the two. **+21 image, +19 file**, the one change
 in this pass that spends; the small arm has no GIF writer.
+
+#### 42.22.5 The small arm's canvas ceiling is the screen again (2026-11-12)
+
+§42.22's first pass dropped `PT_CW_MAX`/`PT_CH_MAX` under `APP_SMALL` from
+736×464 to the default canvas, 448×280, for 1,256 bytes of bss. The table
+called that "growing or loading past" the default. **It was every grow.** A
+fresh Paint opens at the default (`pt_geom` clamps `PT_CW_DEF`×`PT_CH_DEF`
+to the screen and to memory, and the screen and memory both allow it), so
+`[pt_cwmax]` came out EQUAL to `[pt_cw]` and `pt_sizeask` clamped every
+larger request (a drag of the grow box, or a size typed into the boxes and
+applied) back to the size the canvas already had. The grow box and the size
+boxes stayed, and nothing they asked for ever moved the canvas.
+
+**And it said nothing**, because `pt_sizeask` reports two refusals: memory
+(`[pt_szmem]`, from `pt_fit`) and ink (`[pt_kept]`, from the crop guards).
+A ceiling clamp is neither, so "nothing moved" arrived with neither flag set
+and no toast. Shrinks still worked, which is why the defect read as "it will
+not resize" rather than as a ceiling.
+
+Memory was never the reason. Measured on `os8088_5150_herc_gla` under
+`kern_small`: `[pt_growp]` is 20,352 paragraphs (`PT_WANT_KB`'s cap; the
+heap's largest run is bigger) against the 992 a 464×258 one-bit canvas
+needs. `pt_fit` is what bounds a canvas by the heap and it still does, on
+every request. The ceiling only has to bound the four bss buffers it sizes
+(`pt_rowseg`, `pt_rowoff`, `pt_line`, the inked-band tables), and those are
+the package's claim, not kernel-resident bytes.
+
+So both arms carry the screen-sized ceiling, and the canvas on a given screen
+is bounded by that screen (`pt_screen`'s `[pt_cwmax]`/`[pt_chmax]`) and the
+heap. A one-bit 736×464 canvas is 42,750 bytes, so §42.22's "the small arm's
+canvas always fits 64KB" still holds and none of the `%ifndef APP_SMALL`
+arms that lean on it change.
+
+| | image | bss | one instance |
+|---|---|---|---|
+| before | 17,248 | 3,219 | 20,467 |
+| after | 17,248 | **4,291** | **21,539 (+1,072)** |
+
+The full build is byte-identical (its ceiling never moved). The floor machine
+(`os8088_5150_gla_128k`) pays the 1,072 bytes in the package's own claim.
+`tests/paintgrowsmall.py` (soak) is the row: it grows the small build's
+canvas 16 columns through the size boxes and then shrinks it. It reads 448 →
+448 against the old build.
 
 ### 42.23 The canvas may hold ONE BIT a pixel
 

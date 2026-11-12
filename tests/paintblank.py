@@ -60,17 +60,11 @@ def _bss(m, seg, name):
     return int.from_bytes(m.read(_boff(seg, name), 2), "little")
 
 
-PT_NBAND = 30                   # SPEC.md 42.18: (PT_CH_MAX >> 4) + 1
-
-
 def _bands(m, seg):
-    """[(band, x1, x2)] for every band the inked table has marked."""
-    lo = m.read(_boff(seg, "pt_ibx1"), PT_NBAND * 2)
-    hi = m.read(_boff(seg, "pt_ibx2"), PT_NBAND * 2)
+    """[(band, x1, x2)] for every band the inked table has marked - every
+    band the table claim holds (SPEC.md 42.6.7), not a PT_CH_MAX count."""
     out = []
-    for b in range(PT_NBAND):
-        x1 = int.from_bytes(lo[b * 2:b * 2 + 2], "little")
-        x2 = int.from_bytes(hi[b * 2:b * 2 + 2], "little")
+    for b, (x1, x2) in enumerate(dispapps.pt_bands(m, lambda n: _boff(seg, n))):
         if x1 <= x2:
             out.append((b, x1, x2))
     return out
