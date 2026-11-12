@@ -937,13 +937,13 @@ mem_floor_ax:
     and al, 0xE0                ; under the floor are paragraphs now, and a
 %endif                          ; heap base is an int 13h target (guard 6,
     ret                         ; MOVABLE-COLD-PLAN 5)
-                                ; (kern_small's PARITY PAD that stood here
-                                ; went in kernel size pass 20, with
-                                ; mem_fatw_dirty's byte the other half, and
-                                ; SPEC.md 50.6.13 / 2.8.3.4 then moved
-                                ; `.cold` again: tests/unit/t_hotpar.py is
-                                ; what measures dsk_xfer, dsk_runcap and
-                                ; dsk_next_clus_x)
+%ifdef KERN_SMALL
+    nop                         ; PARITY PAD, never executed. Kernel size pass
+%endif                          ; 20 took it out (mem_fatw_dirty's byte the
+                                ; other half); SPEC.md 50.6.13 / 2.8.3.4 then
+                                ; moved `.cold` by an odd count and it is back:
+                                ; dsk_xfer, dsk_runcap and dsk_next_clus_x sit
+                                ; past it (tests/unit/t_hotpar.py measures)
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
