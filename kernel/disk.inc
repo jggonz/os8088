@@ -3706,15 +3706,14 @@ dsk_img_next:
 ; -----------------------------------------------------------------------------
 ; dsk_vol_drop_drv - drop every driver-backed volume (drv_release, SPEC 51.8)
 ; in:  nothing
-; out: nothing (all registers preserved)
+; out: nothing (all registers preserved but AX)
 ;
 ; Called BEFORE the driver's claims are freed: a mounted volume whose
 ; transport has been freed is a read into whatever claims that memory next.
 ; -----------------------------------------------------------------------------
 dsk_vol_drop_drv_x:
-    push ax
-    push bx
-    push cx
+    push bx                     ; (AX is not banked: its one caller, drv_free,
+    push cx                     ; zeroes it next - kernel size pass 20, -1)
     mov cl, al                  ; the class being torn down
     mov al, 2
 .next:
@@ -3733,7 +3732,9 @@ dsk_vol_drop_drv_x:
     inc al
     cmp al, DVOL_MAX
     jb .next
-    jmp kretc_cx
+    pop cx
+    pop bx
+    ret
 
 %endif                          ; OS88_DRIVERS
 %endif                          ; KD_BUILD
@@ -5974,11 +5975,12 @@ dsk_fatw_pick:                  ; (no bank: disk_mount_x reads neither AX nor
     mov ax, [bx]                ; (the equal compare left CF = 0, and `mov`
     mov [dsk_fatw0], ax         ; keeps it) still resident, and nothing can
 %ifdef DSK_STREAM               ; have overwritten it: this window is ours
-    call dws_hret               ; ...and so is a held stream's dirt (18.8.5)
-%endif
-    ret                         ; (-1: held for parity since pass 14, and the
-                                ; odd byte this pass's window wants - kernel
-                                ; size pass 20)
+    jmp dws_hret                ; ...and so is a held stream's dirt (18.8.5):
+%else                           ; its tail, CF = 0 as the equal compare left
+    ret                         ; it (kernel size pass 20: -1, paired in the
+%endif                          ; parity window with dsk_vol_drop_drv_x's -1;
+                                ; the `ret` was a held -1 since pass 14, and
+                                ; the odd byte this pass's window wanted)
 .homeless:                      ; ABOUT TO WRITE THE KERNEL'S OWN WINDOW
     call dsk_fatw_evict         ; WITHOUT HOLDING THE PIN (SPEC.md 18.8.3), so
                                 ; nobody may go on believing they hold it: the
@@ -7765,7 +7767,8 @@ section .cold                   ; ...and back, or every routine below joins it
 
 ; -----------------------------------------------------------------------------
 ; dsk_rah_redo - give the cache back and solve for it again (SPEC.md 18.95.8)
-; preserves every register and the flags
+; preserves every register but AX (kern_mega's dsk_rah_dropf alone reads it
+; back, and only kern_mega keeps it), and the flags
 ;
 ; mem_shed_one's ending without its scan, and NOT reached through it: the shed
 ; picks the cheapest cache the CLAIMANT outranks, and this is a named block
@@ -7787,7 +7790,9 @@ section .cold                   ; ...and back, or every routine below joins it
 ; -----------------------------------------------------------------------------
 dsk_rah_redo:
     pushf
-    push ax
+%ifdef KERN_MEGA                ; (AX is read after the call by dsk_rah_dropf
+    push ax                     ; alone - osapi_dsk_cache_x loads it - kernel
+%endif                          ; size pass 20, -2 elsewhere)
     push bx
     push dx
     cli
@@ -7832,7 +7837,9 @@ dsk_rah_redo:
 .out:                           ; is the whole of what a shed leaves behind
     pop dx                      ; too (mem_pg_forget zeroes the seg; the width
     pop bx                      ; is stale after one, which is why everything
-    pop ax                      ; that reads it tests the seg first)
+%ifdef KERN_MEGA                ; that reads it tests the seg first)
+    pop ax
+%endif
     popf
                                 ; ...and falls through
 

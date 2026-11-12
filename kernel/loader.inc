@@ -1479,7 +1479,10 @@ ld_start:
     call ct_cw_gfx_lock
     KDOOR wm_show               ; in: BX = window ptr; repaints all
     call ct_cw_gfx_unlock
-    mov word [ld_base], 0       ; ...AND NOTHING IS BEING LOADED ANY MORE
+    xor ax, ax                  ; (AX = 0 is LD_OK as well, which every
+    mov [ld_base], ax           ; caller reads out of AL alone and no caller
+                                ; asks a flag of - kernel size pass 20, -3)
+                                ; ...AND NOTHING IS BEING LOADED ANY MORE
                                 ; (SPEC.md 66.6.1). mem_can_move pins the
                                 ; region whose base this names, so a value left
                                 ; standing after a successful launch pins the
@@ -1488,7 +1491,9 @@ ld_start:
                                 ; the session. It was cleared on the ABORT path
                                 ; alone, where ld_undo frees by it, and never
                                 ; here, where nothing had asked
-    mov al, LD_OK
+%if LD_OK != 0
+  %error "ld_start's success answers LD_OK out of the xor that clears [ld_base]"
+%endif
     ret
 
 .abort:                         ; HERE, between step 9 and the re-home, and
