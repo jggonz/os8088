@@ -4806,7 +4806,7 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 ; to force on the shared routine.
 ; in:       [cur_off], [cur_rows], [cur_cellx], [cur_b1ok] - the drawn cell's,
 ;           as cur_geom banked them; the GC/Sequencer in their default state
-; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
+; clobbers: ax, bx, cx, dx, si, di, bp, es
 %else
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
 ;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
@@ -4819,8 +4819,18 @@ cur_restoreu:
 %ifdef KHP_VGASAVE
     call cur_vspan              ; BL = second byte?, BP = the row step, CH =
     jz .out                     ; the rows - none: wholly off the bottom,
-%endif                          ; nothing was saved
+                                ; nothing was saved
+                                ; ES IS SPENT, NOT BANKED (kernel size pass
+                                ; 20, -2 here and -2 in cur_saveu, and a push
+                                ; and a pop off every planar packet): every
+                                ; caller's contract already clobbers it -
+                                ; cur_put_1 and cur_move_1 load it again in
+                                ; cur_draw, cur_vis banks it, cur_move_mono
+                                ; spends it on the 1bpp arm of the same
+                                ; doors - and nothing between reads it
+%else
     push es
+%endif
 %ifdef KHP_VGASAVE
     mov si, cur_save
     mov di, [cur_off]
@@ -4867,8 +4877,8 @@ cur_restoreu:
                                 ; branch is inside vga_restore_vram, below this
     call vga_restore_vram
     pop word [vga_pn]           ; ...and the caller's arm is its own again
-%endif
     pop es
+%endif
 %ifdef KHP_VGASAVE
 .out:
 %endif
@@ -4923,7 +4933,7 @@ section .vga                    ; cur_put_1 and cur_move_1 reach them through
 ;             for the same reason (vga_save_vram's rect machinery was 5,800
 ;             cycles a save on the XT's VGA). The buffer is the layout
 ;             vga_save_vram wrote and cur_restoreu reads.
-; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
+; clobbers: ax, bx, cx, dx, si, di, bp, es
 %else
 ; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
 ;             vga_save_vram. vga_save_vram clips the rect at the screen edges
@@ -4935,9 +4945,10 @@ section .vga                    ; cur_put_1 and cur_move_1 reach them through
 cur_saveu:
 %ifdef KHP_VGASAVE
     call cur_vspan              ; (CH = the rows, ZF = none)
-    jz .out
-%endif
+    jz .out                     ; (ES spent, not banked: cur_restoreu's reason)
+%else
     push es
+%endif
 %ifdef KHP_VGASAVE
     push ds
     pop es
@@ -4974,8 +4985,8 @@ cur_saveu:
                                 ; the restore disagree about the buffer
     call vga_save_vram
     pop word [vga_pn]
-%endif
     pop es
+%endif
 %ifdef KHP_VGASAVE
 .out:
 %endif
@@ -5257,11 +5268,10 @@ cur_lazyck:
     pop ax
     jmp short cur_unlazy
 .clear:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp kret_si                 ; the same five pops and the `ret` (kernel
+                                ; size pass 20, -2; a jump, ~15 clocks, on a
+                                ; wm_clip_set whose region misses the arrow -
+                                ; once a window paint, never per rect)
 %endif
 %else
     cmp word [wm_clip_n], 0

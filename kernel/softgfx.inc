@@ -1312,19 +1312,15 @@ sw_patcol:
     mov bx, [gfx_ry1]
     and bx, 7
 .row:
-%ifdef KHP_MONOPAT
     mov al, [gfx_patbuf+bx]     ; dest ^= (pat ^ dest) & mask, ONE store
     xor al, [es:di]             ; (SPEC.md 39.25.1's idiom: the bits outside
     and al, cl                  ; the mask are never written back with a
-    xor [es:di], al             ; value read before an interrupt)
-%else
-    mov al, [gfx_patbuf+bx]
-    mov ah, [es:di]
-    xor al, ah
-    and al, cl
-    xor al, ah
-    mov [es:di], al
-%endif
+    xor [es:di], al             ; value read before an interrupt). KHP_MONOPAT's
+                                ; form on every kernel since kernel size pass
+                                ; 20: 12 bytes where the load/merge/store was
+                                ; 16, and on the 8088's byte bus 15 bus cycles
+                                ; a row where it was 18 (one more data read,
+                                ; four fewer instruction bytes), -4 bytes
     inc bx
     and bx, 7
 %ifdef KHP_MONOPAT

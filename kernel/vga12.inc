@@ -1124,14 +1124,12 @@ PT_2ND      equ 2               ; ...and the second pass has been spent
     mov bx, [cs:gfx_pt_rtab]
 %endmacro
 %else
-%define gfx_ls_d1   gfx_ls_zero
-%define gfx_ls_d3   gfx_ls_zero
+; gfx_ls_d1 and gfx_ls_d3 are ZERO here and are not words at all: gfx_ls_box
+; writes and clamps against a register 0 (kernel size pass 20 - gfx_ls_zero,
+; the word that held it, went with its three readers)
 %define gfx_ls_d2   vid_cwm1
 %define gfx_ls_d4   vid_chm1
 %define gfx_pt_rmax vid_rowmax
-gfx_ls_zero dw 0                ; .text with a real initialiser: -f bin zeroes
-                                ; nothing, and the clamp above reads it before
-                                ; anything on this build ever writes one
 %macro GFXPT_RTAB 0
     mov bx, vid_rowtab          ; one display, so the table is never biased
 %endmacro
@@ -1600,12 +1598,11 @@ gfx_ls_box:
                                 ; unarmed ones, none of which writes the box
 %else
     jne .armed
-    mov ax, [gfx_ls_d1]
-    mov [gfx_ls_bx1], ax
+    xor ax, ax                  ; gfx_ls_d1 and d3 are 0 on this build: a
+    mov [gfx_ls_bx1], ax        ; register zero, not a load of a zero word
+    mov [gfx_ls_by1], ax        ; (kernel size pass 20, -4 and faster)
     mov ax, [gfx_ls_d2]
     mov [gfx_ls_bx2], ax
-    mov ax, [gfx_ls_d3]
-    mov [gfx_ls_by1], ax
     mov ax, [gfx_ls_d4]
     mov [gfx_ls_by2], ax
     jmp short .oobck
@@ -1637,9 +1634,15 @@ gfx_ls_box:
     ; clamps below are what the old code's two gfx_ls_lx calls and two
     ; cwm1/chm1 compares already cost.
     mov ax, [bx + WCR_X1]
+%ifdef KERN_BIG
     cmp ax, [gfx_ls_d1]
     jge .x1ok
     mov ax, [gfx_ls_d1]
+%else
+    or ax, ax                   ; gfx_ls_d1 is 0 here: max(AX, 0) as a sign test
+    jns .x1ok                  ; (kernel size pass 20, -3 and no load)
+    xor ax, ax
+%endif
 .x1ok:
     mov [gfx_ls_bx1], ax
     mov ax, [bx + WCR_X2]
@@ -1649,9 +1652,15 @@ gfx_ls_box:
 .x2ok:
     mov [gfx_ls_bx2], ax
     mov ax, [bx + WCR_Y1]
+%ifdef KERN_BIG
     cmp ax, [gfx_ls_d3]
     jge .y1ok
     mov ax, [gfx_ls_d3]
+%else
+    or ax, ax                   ; gfx_ls_d3 is 0 here: max(AX, 0) as a sign test
+    jns .y1ok                  ; (kernel size pass 20, -3 and no load)
+    xor ax, ax
+%endif
 .y1ok:
     mov [gfx_ls_by1], ax
     mov ax, [bx + WCR_Y2]
@@ -4634,13 +4643,8 @@ gfx_sub_ps  dw 0                ; ...and past each plane
 ; every refusal has a correct fallback one branch away.
 ; -----------------------------------------------------------------------------
 gfx_sub_arm:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp: per restore,
+                                ; never per row (kernel size pass 20, -4)
     cmp ax, [si]                ; inside the saved rect on all four sides, or
     jl .no                      ; the arithmetic below indexes outside the
     cmp bx, [si+2]              ; buffer - which is a claim of a few KB, so it
@@ -4654,50 +4658,38 @@ gfx_sub_arm:
     cmp bx, dx
     jg .no
 
-    ; EVERY TERM IS DERIVED IN REGISTERS (size pass 10). This parked S.x1, S.x2
-    ; and S.y2 in the three result words and read them back, because CL has
-    ; to be the shift count (an 8086 shifts by 1 or by CL) - but only CL, so
-    ; S.x2 moves to BX first, and DX, which holds S.y2, is not touched until
-    ; the first `mul`. 19 bytes, and three stores and three loads.
-    push bx                     ; S.y1
-    mov bx, cx                  ; BX = S.x2, so CL is free for the count
+    ; EVERY TERM IS DERIVED IN REGISTERS (size pass 10), and the rows FIRST
+    ; (kernel size pass 20, -13 with the bank above): the rows need no shift,
+    ; so BX and DX are spent on them before CL becomes the count (an 8086
+    ; shifts by 1 or by CL), and nothing is parked on the stack.
+    sub bx, [si+2]              ; BX = the sub-rect's first row as an offset
+                                ; into the buffer
+    neg dx                      ; DX = the saved rows this rect does NOT
+    add dx, [si+6]              ; cover: (S2.y2 - y2) + (y1 - S2.y1), which is
+    add dx, bx                  ; the saved height less sub_rows
+    mov bp, cx                  ; BP = S.x2, so CL is free for the count
     mov cl, 3
     shr ax, cl                  ; AX = S.x1's byte column
-    shr bx, cl
-    mov bp, bx                  ; BP = sub_row, the bytes to move per row
-    sub bp, ax
-    inc bp
-    mov di, [si+4]              ; DI = full_row, the buffer's bytes per row;
-    shr di, cl                  ; BX = the saved rect's own left byte column
-    mov bx, [si]
-    shr bx, cl
-    sub ax, bx                  ; AX = the sub-rect's byte column within a
-    sub di, bx                  ; buffer row
-    inc di
-
-    pop bx                      ; CX = sub_rows, BX = the sub-rect's first row
-    mov cx, dx                  ; as an offset into the buffer. (CL was the
-    sub cx, bx                  ; shift count and every shift is done.)
-    inc cx
-    sub bx, [si+2]
-
-    push ax                     ; start = that row x full_row + that column.
-    mov ax, bx                  ; No overflow to worry about: wm_su_kb has
-    mul di                      ; already refused a buffer bigger than one
-    pop bx                      ; segment, so every offset in it fits a word
-    add ax, bx
-    mov [gfx_sub_st], ax
-
+    shr bp, cl
+    sub bp, ax                  ; BP = sub_row - 1, the bytes moved per row
+    mov di, [si+4]              ; DI = full_row - 1, the buffer's bytes per
+    shr di, cl                  ; row; SI = the saved rect's own left byte
+    mov si, [si]                ; column
+    shr si, cl
+    sub ax, si                  ; AX = the sub-rect's byte column within a
+    sub di, si                  ; buffer row
+    xchg ax, si                 ; (SI = it)
     mov ax, di                  ; row_skip: what the row loop must step past
-    sub ax, bp                  ; after each rep movsb
-    mov [gfx_sub_rs], ax
-
-    mov ax, [si+6]              ; plane_skip: the saved rows this rect does not
-    sub ax, [si+2]              ; cover, one whole buffer row each
-    inc ax
-    sub ax, cx
-    mul di
+    sub ax, bp                  ; after each rep movsb - full_row - sub_row,
+    mov [gfx_sub_rs], ax        ; which the two "- 1"s leave alone
+    inc di                      ; DI = full_row
+    xchg ax, dx                 ; plane_skip: the uncovered rows, one whole
+    mul di                      ; buffer row each
     mov [gfx_sub_ps], ax
+    xchg ax, bx                 ; start = the first row x full_row + the
+    mul di                      ; column. No overflow to worry about: wm_su_kb
+    add ax, si                  ; has already refused a buffer bigger than one
+    mov [gfx_sub_st], ax        ; segment, so every offset in it fits a word
     CLC_OR_STC .no              ; (kernel size pass 15: its one caller reads
 .out:                           ; CF alone)
     jmp kret_bp
@@ -5453,12 +5445,14 @@ gfx_scroll:
     jns .pos
     neg di
 .pos:
-    push dx
-    sub dx, bx
-    inc dx                      ; DX = height
-    cmp di, dx
-    pop dx
-    jae .no
+    neg di                      ; DI = rows to copy = height - |dy|, formed
+    add di, dx                  ; ONCE: none left (|dy| >= height) is the
+    sub di, bx                  ; refusal, on the `inc`'s own flags (kernel
+    inc di                      ; size pass 20: it was a compare against the
+    jle .no                     ; height here and the same sum again below,
+    mov [vgas_rows], di         ; -6). Stored before the clip test - scratch
+                                ; under the gfx lock that nothing reads on a
+                                ; refusal
     call wm_clip_test           ; whole-shape clip (SPEC.md 11.3): CF=1 =
     jc .no                      ; armed and not wholly inside one fragment
     mov [vgas_sdy], si
@@ -5471,11 +5465,6 @@ gfx_scroll:
     shr ax, cl
     sub ax, [vgas_col]
     mov [vgas_nb], ax            ; bytes per row
-    mov ax, dx
-    sub ax, bx
-    inc ax
-    sub ax, di
-    mov [vgas_rows], ax          ; rows to copy = height - |dy|
     mov [vgas_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
     mov ax, 1                   ; (source below destination - forward-safe)
 %ifdef KERN_SMALL
