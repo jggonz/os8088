@@ -2010,16 +2010,32 @@ nothing.
   disarmed CS that writes nothing outside its zeroed scratch, so a move is a
   copy and nothing else.
 
-  **It was pinned, and that was the field report** (Sticky Apps on the
-  5150: a press after a visit to the Task Manager took the whole load time
-  again). A pinned cache is a BARRIER, and the compactor dissolves every
-  barrier cheaper than the rank it runs at (§66.10) — `MEM_PG_LOW` is under
-  any ordinary claim's — whether or not its room was needed, so the image
-  went at the first compaction after the drop. Movable, it has to be SHED to
-  go, which is what a cache is for; and §66.10.5 is the half that made
-  "movable" true for a top-down cache at all. 6 bytes of `.cold` (the
-  store) and 4 of `.text` (the row), on `kern_big` and `kern_emu` alone.
+  **It was pinned, and a compaction dissolved it.** A pinned cache is a
+  BARRIER, and the compactor dissolves every barrier cheaper than the rank
+  it runs at (§66.10) — `MEM_PG_LOW` is under any ordinary claim's —
+  whether or not its room was needed, so the image went at the first
+  compaction after the drop. Movable, it has to be SHED to go, which is
+  what a cache is for; and §66.10.5 is the half that made "movable" true
+  for a top-down cache at all. 6 bytes of `.cold` (the store) and 4 of
+  `.text` (the row), on `kern_big` and `kern_emu` alone.
   `tests/modcache.py` is the row.
+
+  **That was NOT the field report, and the record says so** (Sticky Apps
+  on the owner's 5150: a press after a visit to the Task Manager took the
+  whole load time again, the Task Manager listing the image as a kept
+  purgeable). Traced on MartyPC's twin of that machine (Hercules, 640KB,
+  the 360KB system disk, an ST-225 as `C:`) at `df6578b2`, before either
+  fix: in the owner's steps **no compaction runs and nothing is shed** —
+  the heap had no reason to, with 500KB free — and the third press
+  RE-ADOPTS the image (`mod_need.held`, not one sector of the file read).
+  The time was the menu's SCAN (§110.12.2): the media check that starts
+  every press on a machine with no change line, the card tracks the Task
+  Manager's own load had evicted from §18.95's round-robin cache, and, the
+  machine having a fixed disk to scan, a second boot-sector read on the way
+  back from `C:\STIKAPPS` to `A:` — from wherever the cards had left the
+  head. That last one is the scan's batch (§110.12.2) and is gone; the
+  eviction is the cache doing its job and stays. `tests/modcache.py`'s E-G
+  are those steps, with nothing forced.
 
 **Rank: `MEM_PG_LOW`, decided per module rather than inherited (rt-9).**
 Losing a kept image costs the read it saved, with the system disk in the
@@ -227464,7 +227480,12 @@ an unprintable byte as a space - so a hostile card can letter garbage but
 cannot widen the panel past `STM_STRMAX`. A NAME already listed is skipped,
 so the boot volume's copy wins over a hard disk's. **Up to `STM_MAX` = 8 are
 listed** - the tree ships three - and the machine's own place is banked
-round the whole walk (`drv_vol_bank`). An entry is the WHOLE card bar its
+round the whole walk (`drv_vol_bank`) - **inside one BATCH** (§18.9.3,
+`dsk_batch_begin`: the panel drops under `menu_track`'s lock, whose unlock
+ends it), so coming back to the boot volume from a fixed disk's folder takes
+its banked BPB instead of a second boot-sector read every press, measured
+on the owner's 5150 twin with an ST-225 (`tests/modcache.py` E-G; 5 bytes of
+the module image, nothing resident). An entry is the WHOLE card bar its
 magic (220 bytes: the volume, the file, the program name, then the name, the
 description and the 32x32 picture in one copy, the card's own order), so
 the scan is the only disk work: a page turn reads nothing. Raising
