@@ -605,8 +605,8 @@ fsx_mode:
     jne fsx_mfail
     cmp al, FSXM_COUNT
     jae fsx_mfail
-    mov bl, [vid_kind]          ; the caps bit - the same predicate the
-%ifdef KERN_BIG                 ; app's greying used (SPEC.md 47), and for
+%ifdef KERN_BIG                 ; the caps bit - the same predicate the
+    mov bl, [vid_kind]          ; app's greying used (SPEC.md 47), and for
     mov ah, EXTF_KIND           ; THE DISPLAY THIS BRACKET IS ON rather than
     EXTCALL EXT_FSX             ; the primary (SPEC.md 39.18.3/39.18.2). Once
                                 ; the collapse below has run there is only one
@@ -614,10 +614,16 @@ fsx_mode:
                                 ; second fsx_mode call keeps BL - as does one
                                 ; display, mod_gone's answer. AH is free: the
                                 ; id is AL, and AX is restored at .out
-%endif
     xor bh, bh
     shl bx, 1
     mov bx, [bx+fsx_capstab]    ; the mask itself, in BX...
+%else
+    push ax                     ; ...which on kern_small IS fsx_caps' answer,
+    xor bx, bx                  ; one card and no window to ask about: BX = 0
+    call fsx_caps               ; asks, AX = the mask and DL = the kind (DX
+    xchg ax, bx                 ; is kent_di's to restore). The routine, not
+    pop ax                      ; its four lines again (kernel size pass 20,
+%endif                          ; -4; a call dearer, once a mode set)
     mov cl, al
     shr bx, cl                  ; ...the id's bit down to bit 0...
     shr bx, 1                   ; ...and into CF. TWO shifts, not one variable

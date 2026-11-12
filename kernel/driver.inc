@@ -3297,7 +3297,7 @@ drv_dlg_done_x:
     mov bp, [drv_dlg_cb]
     or bp, bp
     jz .out
-    mov word [drv_dlg_row], 0
+    and word [drv_dlg_row], 0   ; (`and`: flags are dead, -1)
     call drv_call               ; BX = the row, BP = its near proc; AL, DX:CX
 .out:                           ; and ES:DI are the page's own arguments
     jmp kretc_bp
@@ -3495,7 +3495,7 @@ drv_load_at:
     mov bx, MEM_K_DRV           ; because every word that names a driver image
     mov ax, mem_region_reloc    ; is the kernel's - mem_region_reloc's table
     call mem_movable_x          ; walk is all of them - and the claim's owner is
-    pop bx                      ; a kernel tag, so mem_reloc_call dispatches it
+                                ; a kernel tag, so mem_reloc_call dispatches it
                                 ; through cw_mem_disp and not through a driver's
                                 ; dispatcher. NO DECLARATION IS ASKED OF THE
                                 ; DRIVER: mem_can_move asks the three facts
@@ -3508,8 +3508,11 @@ drv_load_at:
                                 ; PARA store above was its last reader and
                                 ; dskw_read_x below takes no AX
 
-    push bx                     ; the row - BX is the read's own destination
-    mov es, dx                  ; offset, and the claim starts at ES:0000.
+                                ; THE ROW STAYS BANKED from the push above to
+                                ; the pop past the read (kernel size pass 20:
+                                ; its `pop bx / push bx` here, -2) - BX is the
+    mov es, dx                  ; read's own destination offset, and the claim
+                                ; starts at ES:0000.
     mov cx, bp                  ; ...and NO second `mov si, [bx+DRVR_FILE]`:
     xor bx, bx                  ; SI is still the one loaded for drv_find, and
                                 ; mem_claim_x banks SI/DI around everything
@@ -4202,12 +4205,12 @@ drv_release:
     push di                     ; (the owner slot, for the store below)
     call drv_cls_fp_x           ; CLSCF: a loaded row's class - every class has an fptr
                                 ; AL survives drv_cls_idx, which writes DI
-    mov word [di+2], 0          ; alone. (The OFFSET half is left as it is:
+    and word [di+2], 0          ; alone. (The OFFSET half is left as it is:
                                 ; with HMA_DRV drv_publish writes it ahead of
                                 ; the segment on every load, so nothing reads
                                 ; it while the segment is 0)
     pop di                      ; --- what was drv_svc_clear, written at its
-    mov word [di+drv_owner], 0  ; one call (kernel size pass 15, -19): the
+    and word [di+drv_owner], 0  ; one call (kernel size pass 15, -19): the
     or di, di                   ; owner - which is what drv_cls_svc_x refuses
     jnz .nosvc                  ; an unpublished class by, its offset word
     mov di, drv_svc             ; left as it is (kernel size pass 19) - and
@@ -4547,8 +4550,11 @@ drv_task_x:
     popf                        ; (no bank of BX round the stamp: .out pops
                                 ; the caller's, and nothing between reads it -
                                 ; kernel size pass 17, -2)
-    clc
-    jmp short .out
+    CLC_OR_STC .fail            ; CF = 0 spawned, or (.fail) CF = 1 - the
+.out:                           ; refusals are BELOW the exit now, so the
+    pop dx                      ; success falls into it (kernel size pass
+    pop bx                      ; 20, -2: its `clc` / `jmp short .out`)
+    retf
 .spfail:
     dec byte [drv_wcnt]         ; refused: no task was made
     popf
@@ -4565,12 +4571,6 @@ drv_task_x:
                                 ; this call leaves. A `jmp` to a cw_ shim
                                 ; happens to work only while the target never
                                 ; comes back; a call works either way
-.fail:
-    stc
-.out:
-    pop dx
-    pop bx
-    retf
 
 drv_cfg_macros:                 ; NOT CALLED, and not a routine: it ENDS
                                 ; drv_task_x's extent. tools/os88ovlchk.py
@@ -4806,8 +4806,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov [drv_cfg+CFG_ANS], dx
 %endif
     pop dx
-    call KERNEL_SEG:sched_mode_get
-    mov [drv_cfg+CFG_SCH], al
+    mov al, [sch_coop]          ; the live mode, through DS (kernel size
+    mov [drv_cfg+CFG_SCH], al   ; pass 20: the far call to sched_mode_get, -2)
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
     mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
                                 ; exactly what vid_detect chose - so the file
@@ -6854,11 +6854,8 @@ section .cold
 ; ...and the four the live arm ends in `retf`, because their callers reach
 ; them with `call COLD_SEG:` from a module or from .text (SPEC.md 2.6.1).
 ; tools/os88ovlchk.py checks the pairing both ways and named all four.
-drv_notice_x:
-drv_cp_closed_x:
-drv_shutdown_x:
-drv_task_x:
-    retf
+                                ; (THEIR `retf` is the refusals' below, past
+                                ; its `stc`: kernel size pass 20)
 section .modu                   ; ...and the stub goes where the body went, or
 drv_status_x:                   ; the two builds would put one name in two
 drv_errstg:                     ; different segments (the one status a row
@@ -6889,11 +6886,25 @@ osapi_vol_del_x:                ; 51.8), whose fence refuses every caller here:
 osapi_vol_mount_x:              ; CF = 1 is what each answered, AL untouched
 osapi_desk_item_x:              ; (kernel size pass 11) - and desk.inc's item
 osapi_mem_hma_x:                ; door, whose driver arm is gone with them and
-    stc                         ; whose package arm is kern_big's (SPEC.md
-    retf                        ; 26.9); and OSAPI_MEM_HMA, which only a LOADED
+                                ; whose package arm is kern_big's (SPEC.md
+                                ; 26.9); and OSAPI_MEM_HMA, which only a LOADED
                                 ; driver may ask and kern_small has no HMA to
                                 ; answer from (SPEC.md 2.10.8, kernel size
-                                ; pass 12)
+                                ; pass 12) - and the Drivers page's five
+                                ; below, one `stc` / `retf` for all of them
+                                ; (kernel size pass 20, -3 with the four bare
+                                ; `retf`s, which enter past the `stc`)
+drvf_drv_cls_svc:
+drvf_drv_cp_class:
+drvf_drv_cp_call:
+drvf_drv_row:
+drvf_drv_unload:
+    stc
+drv_notice_x:
+drv_cp_closed_x:
+drv_shutdown_x:
+drv_task_x:
+    retf
 
 ; ...and "what is this class holding" (SPEC.md 51.12), which on a machine with
 ; no driver layer is NOTHING, of no class, for ever. AX is the answer, so the
@@ -6914,14 +6925,8 @@ osapi_fs_ent_x:                 ; ...and OSAPI_FS_ENT, legal only inside an
 ; and none of these is reachable. They are stubbed rather than gated because
 ; the page lives in CTRL.DRV - an on-demand MODULE on both builds - so gating
 ; its eleven interleaved regions would move no resident byte and would put a
-; %ifdef through the middle of the Sound page, which stays.
-drvf_drv_cls_svc:
-drvf_drv_cp_class:
-drvf_drv_cp_call:
-drvf_drv_row:
-drvf_drv_unload:
-    stc
-    retf
+; %ifdef through the middle of the Sound page, which stays. (The stubs, drvf_*,
+; are the refusals' `stc` / `retf` above.)
 section .modu                   ; ...and the panel's two names for drv_load and
 cdl_load:                       ; drv_tier, which are DRV_ATTACH's in CTRL.DRV
 cdl_tier:                       ; itself on kern_big (kernel size pass 13) and

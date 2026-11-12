@@ -841,7 +841,7 @@ hbf_perform:
     ; one clears the latch on every arm it has. Unconditional because
     ; `[hb_dosseg]` is zero unless a DOS handoff is what was posted, and
     ; `ui_rebootq` holds one post at a time.
-    mov word [hb_dosseg], 0
+    and word [hb_dosseg], 0     ; (`and`, flags dead: -1)
     cmp al, UI_RBQ_ASK          ; a question that cannot be asked is not
     je .quiet                   ; worth a toast: the pointer stays for a
 .toast:                         ; boot that has the system disk in (and
