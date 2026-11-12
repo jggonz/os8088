@@ -4,8 +4,8 @@
 
     make small smallapps && python3 tests/shedrelist.py
 
-On the 128KB floor machine Missile running and then Gorillas' launch are
-the heap pressure that sheds the GAMES window's MEM_P_VIEW claim: fmv_demote zeroes FS_VSEG and owes an
+On the 128KB floor machine Paint's launch is the heap pressure that EVICTS
+the GAMES window's MEM_P_VIEW claim (SPEC.md 50.6.13): fmv_demote zeroes FS_VSEG and owes an
 FSD_CACHE re-list, which fm_focus pays with fmv_hload when the window is
 raised. The re-list used to name its destination from FS_VSEG BEFORE
 fmv_store's fmv_fit re-claimed the store, so the mount went quiet into a 0
@@ -16,16 +16,19 @@ BREAK IT ON PURPOSE (docs/WRITING-TESTS.md 1), measured: take the `call
 fmv_fit` out of fmv_load and the raise leaves 0 entries of 10
 (measured 2026-10-14, with Missile as the pressure).
 
-Gorillas ALONE was the pressure until the 2026-10 size passes: kern_small
-gave 2.5KB of heap back and Gorillas' image + bss fell 57,695 -> 46,031, so
-its launch now fits beside the store and the row read "no longer reaches the
-case". Missile (~16KB) is launched from the same window first; the shed
-check below stays, so a machine that stops reaching the case still says so
-rather than passing.
+THE PRESSURE IS PAINT, opened from A: (SPEC.md 50.6.13). It was Gorillas
+alone until the 2026-10 size passes, then Missile and Gorillas - two REGIONS,
+which come down from the top - and since a claim that is not a cache evicts
+only the caches it LANDS on, a region no longer reaches a store at the
+floor: Gorillas' 46KB evicted the read-ahead and the icon store above GAMES'
+listing and left the listing alone (dirty FSD_ICONS, the store intact). A
+DATA claim lands at the floor, so Paint's canvas evicts the GAMES store
+(measured: 0E80, FSD_CACHE, then 13 of 13 entries after the raise). The
+shed check below stays, so a machine that stops reaching the case still says
+so rather than passing.
 
 Every reading is guest state - the window's own FS_DIRTY/FS_VSEG and the
-listing os88ui reads off its cache - and the pauses are GUEST seconds:
-Gorillas' setup screen blinks a cursor, so a screen settle never ends.
+listing os88ui reads off its cache - and the pauses are GUEST seconds.
 """
 import os
 import sys
@@ -65,11 +68,8 @@ def main():
                     int.from_bytes(m.read(b + eq["FS_VSEG"], 2), "little"),
                     len(ui.listing(w)))
         before = state()[2]
-        ui.open("MISSILE.O88")          # the pressure Gorillas no longer is
-        os88marty.pace(m, 3)            # alone (docstring)
-        ui.raise_window(games())
-        ui.open("GORILLAS.O88")
-        os88marty.pace(m, 3)
+        ui.path("A:/APPS/PAINT.O88")    # the pressure: its canvas lands at
+        os88marty.ui_done(m)            # the floor, on GAMES' store (doc)
         shed = state()
         print("  before %d entries; after the launch dirty %d, store %04x, "
               "%d entries" % ((before,) + shed))

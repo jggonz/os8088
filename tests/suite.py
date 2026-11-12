@@ -4933,9 +4933,11 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("shedrelist", "soak", py("tests/shedrelist.py"), 60.0,
         "SPEC.md 50.6: a Disk window whose listing cache the SHED took "
-        "re-lists on its next focus. On the 128KB machine Missile running and "
-        "then Gorillas' launch shed the GAMES window's store (Gorillas alone "
-        "stopped reaching the case after the 2026-10 size passes); the re-list named its destination "
+        "re-lists on its next focus. On the 128KB machine Paint's launch "
+        "from A: EVICTS the GAMES window's store - its canvas lands at the "
+        "floor (SPEC.md 50.6.13); Missile and Gorillas, two regions from the "
+        "top, stopped reaching a store at the floor once a claim evicts only "
+        "what it lands on. The re-list named its destination "
         "before fmv_fit re-claimed it, so the window read 'Drive B: 0 files' "
         "until Refresh (a field report). Red with fmv_load's `call fmv_fit` "
         "taken out: 0 of 10 entries after the raise.",
@@ -12536,7 +12538,9 @@ SOAK = [
         wants=("build/small360.img",)),
     Row("fdlgdrop", "soak", py("tests/fdlgdrop.py"), 20.0,
         "...and the module comes BACK on every route a dialog ends by "
-        "(SPEC.md 38.0.1). The row above drives the dialog and never asks "
+        "(SPEC.md 38.0.1) - freed, or since SPEC.md 2.8.3.4 KEPT as a "
+        "purgeable MEM_P_MOD cache, but never left the pinned MEM_K_MOD a "
+        "leak holds. The row above drives the dialog and never asks "
         "what happened to its image. Today the commit and the two cancels "
         "POST from inside the chooser's own callbacks (SPEC.md 38.6) and the "
         "close box is found by fdlg_gate - two roads to fdlg_reap's mod_drop. "
