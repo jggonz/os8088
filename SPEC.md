@@ -88922,6 +88922,38 @@ Paint's own strip and onto the desktop — §49's tamegram lesson exactly.
 At the floor a 22-row canvas still shows one row of tools, and the picture is
 its own size on every adapter.
 
+#### 42.9.1 ...and the canvas CEILING is the screen's bottom, not the dock's row
+
+The kernel lets any window's grow box be dragged to the last row of the
+display (`ui_grow_clamp` caps at `[vid_h]` less `W_Y`), over the dock. Paint's
+height ceiling `[pt_chmax]` came from the DOCK row instead (`pt_screen`, since
+Paint first arrived), so its negotiator (`pt_onsize`) clamped every such drag
+back above the strip. Measured on `os8088_5150_herc_gla`, kern_big, before
+this: Note Pad's grow box dragged to row 346 left Note Pad's frame ending on
+row 348, while Paint's ended on 323 (the canvas held at 258 rows).
+
+So the ceiling is now the display: `[pt_chmax]` = the screen's height less
+the band's top less `PT_CHROME_H`, which is a frame from the menu bar to the
+bottom row (`vid_h - MBAR_H` tall). On Hercules that is a 286-row canvas
+against 258; on CGA 138 against 110; on VGA 418 against 390. Measured
+after, both kernels on Hercules: the grow box dragged to the bottom leaves the
+frame ending on row 348, and Apply with a height of 999 gives a 328-row frame
+(`348 - MBAR_H`) at `y` = 20 over a 286-row canvas. `tests/paintdock.py` is
+the row. Two things go with it:
+
+- **Paint is `WF_KEEPH`** (§11.93, §11.93.1). The size boxes commit through
+  `OSAPI_WM_RESIZE`, and `wm_resize` holds a window without the flag to the
+  dock row, so Apply would have grown the canvas and then cut the frame back
+  under it. With the flag both `wm_fit` and `wm_resize` take the display's
+  bottom as the floor, and `wm_resize` pulls `W_Y` up to the menu bar when the
+  frame needs it.
+- **A FRESH window still opens above the dock.** `[pt_chband]` keeps the old
+  figure (the band from `PT_WIN_Y` to the dock row) and `pt_geom` clamps the
+  starting canvas to it, so a new Paint is placed exactly as before and only
+  a user's grow takes it over the strip. §11.93's argument against hanging
+  over the dock by default is about every boot; this is about a size somebody
+  asked for.
+
 ### 42.10 A window that resizes itself inside its own paint must re-derive its layout
 
 `pt_track` runs at the top of every `W_PAINT` (there is no resize callback in

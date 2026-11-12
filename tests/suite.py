@@ -14605,6 +14605,23 @@ SOAK = [
         "PAINT.O88: 448 -> 448. 7s measured",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
+    Row("paintdock", "soak", py("tests/paintdock.py"), 40.0,
+        "SPEC.md 42.9.1: Paint grows OVER THE DOCK to the screen's bottom, as "
+        "the kernel lets any window's grow box. Its ceiling [pt_chmax] came "
+        "from the dock row, so the negotiator clamped the drag back above the "
+        "strip (bottom 323 of Hercules' 348) and Apply could not get there. "
+        "Checks a fresh window still opens above the dock, the grow box to "
+        "the last row, and Apply 999 = a vid_h - MBAR_H frame at the menu "
+        "bar. VERIFIED TO FAIL with WF_KEEPH dropped (Apply: frame 304, cut "
+        "at the dock) and against the old ceiling (drag: bottom 323). 40s "
+        "measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img")),
+    Row("paintdocksmall", "soak", py("tests/paintdock.py", "--small"), 40.0,
+        "paintdock's three checks on kern_small with the APP_SMALL Paint off "
+        "small360 (SPEC.md 42.9.1)",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
     Row("paint1blit", "soak",
         py("tests/paint1blit.py"), 60.0,
         "SPEC.md 42.23.4: the TWO paths a one-bit canvas reaches the screen"

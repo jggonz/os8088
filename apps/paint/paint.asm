@@ -770,10 +770,25 @@ pt_screen:
                                     ; and no dock, so its band is its whole
                                     ; height (SPEC.md 39.16.4)
     sub cx, PT_WIN_Y - MBAR_H + PT_CHROME_H
-    cmp cx, PT_CH_MAX               ; ...the tallest canvas from PT_WIN_Y, the
-    jle .h_cap                      ; margin above the frame being the same 4px
-    mov cx, PT_CH_MAX               ; on either card
+    cmp cx, PT_CH_MAX               ; ...the tallest canvas a FRESH window
+    jle .b_cap                      ; opens with, from PT_WIN_Y down to the
+    mov cx, PT_CH_MAX               ; dock - the margin above the frame the
+.b_cap:                             ; same 4px on either card
+    mov [pt_chband], cx
+    ; --- ...AND THE CEILING IS THE SCREEN'S BOTTOM, NOT THE DOCK (SPEC.md
+    ; 42.9.1). Paint is WF_KEEPH, so the kernel lets the frame run from the
+    ; band's top to the last row of the display - over the dock, as any other
+    ; window may be dragged - and a size typed into the boxes commits through
+    ; wm_resize on the same floor. Bounding the CANVAS by the dock instead
+    ; clamped every grow box drag and every Apply 24 rows (Hercules, VGA) or
+    ; 24 (CGA) short of where the kernel would have let the frame go.
+    sub bx, si                      ; BX = the screen less the band's top...
+    sub bx, PT_CHROME_H             ; ...less the frame around the canvas
+    cmp bx, PT_CH_MAX
+    jle .h_cap
+    mov bx, PT_CH_MAX
 .h_cap:
+    mov cx, bx                      ; (CX = pt_chmax out, as pt_geom expects)
     mov [pt_chmax], cx
     sub ax, PT_CHROME_W             ; ...and the widest the screen leaves
     cmp ax, PT_CW_MAX
@@ -877,7 +892,7 @@ pt_geom:
     call pt_ncolset                 ; even the two bytes that would say so
 %endif
     mov ax, [pt_cwmax]              ; (SPEC.md 11.98, pt_onresize below)
-    mov cx, [pt_chmax]
+    mov cx, [pt_chband]             ; the band a fresh window opens in
     cmp cx, PT_CH_MIN
     jl .small
     cmp ax, PT_CW_MIN
@@ -886,6 +901,7 @@ pt_geom:
     mov byte [pt_mode], PT_M_SMALL
     mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
     mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
+    mov word [pt_chband], PT_CH_MIN
     ; --- what memory allows -------------------------------------------------
     ; Four claims (SPEC.md 50.3), each independently refusable, and each
     ; refusal costs exactly the feature it funds. That is the tier system the
@@ -897,9 +913,9 @@ pt_geom:
     mov ax, [pt_cwmax]
 .dw_ok:
     mov dx, PT_CH_DEF
-    cmp dx, [pt_chmax]
+    cmp dx, [pt_chband]
     jle .dh_ok
-    mov dx, [pt_chmax]
+    mov dx, [pt_chband]
 .dh_ok:
     call pt_growmax                 ; what one canvas could be, given the heap
     call pt_fit                     ; ...and shrink the request until it fits
@@ -917,9 +933,9 @@ pt_geom:
     mov ax, [pt_cwmax]
 .cw_ok:
     mov dx, PT_CH_DEF
-    cmp dx, [pt_chmax]
+    cmp dx, [pt_chband]
     jle .ch_ok
-    mov dx, [pt_chmax]
+    mov dx, [pt_chband]
 .ch_ok:
     call pt_fit                     ; shrink it until memory can hold it
     mov byte [pt_fitsq], 0
@@ -16385,7 +16401,7 @@ pt_tpl:
 ; afford. ...ON A COLOUR ADAPTER. On a 1bpp one the whole content IS ~9KB
 ; and Paint takes the lot - and it is a fact about the SCREEN, so
 ; pt_onresize re-asks.
-    OS88_CLASS pt_wcls, WF_OWNBG, PAINT, pt_paint, ONKEY, pt_onkey, \
+    OS88_CLASS pt_wcls, WF_OWNBG | WF_KEEPH, PAINT, pt_paint, ONKEY, pt_onkey, \
                ONCLICK, pt_click, ABOUT, 0, ONWAKE, pt_onwake, \
                ONCLOSE, pt_onclose, ONMOUSEUP, pt_onup, ONRESIZE, pt_onresize, \
                ONSIZE, 0, ONDRAG, pt_ondrag
@@ -16981,7 +16997,9 @@ pt_ic_text:
     PTWORD pt_pspan
     PTWORD pt_cvparas               ; what the canvas costs, in paragraphs
     PTWORD pt_cwmax                 ; the biggest canvas this SCREEN can show
-    PTWORD pt_chmax
+    PTWORD pt_chmax                 ; ...to the display's bottom (SPEC.md 42.9.1)
+    PTWORD pt_chband                ; ...and the band a FRESH one opens in,
+                                    ; above the dock
     PTWORD pt_smaxp                 ; ...and what the canvas CLAIM holds, paras
     PTWORD pt_growp                 ; ...and what a NEW claim could hold, paras
     PTWORD pt_needp                 ; pt_alloc scratch: paragraphs per canvas
