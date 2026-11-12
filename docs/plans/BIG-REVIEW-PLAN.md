@@ -398,7 +398,7 @@ round is in force). The ids are kept, so a reference to O1..O18 still lands.
 
 | id | the question | bytes | blocks |
 |---|---|---|---|
-| **O5** | rt-6: kern_small's own module caching ("keep FDLG as purgeable"). The owner finds it interesting, "might be worth ~100 bytes" (owner, 2026-11-08); not yet a yes | +60..+85 kern_small | S09's kern_small arm |
+| **O5** | rt-6: kern_small's own module caching ("keep FDLG as purgeable"). The owner finds it interesting, "might be worth ~100 bytes" (owner, 2026-11-08). **Decided yes 2026-11-12**, on top of SPEC.md 50.6.13's eviction (owner option C); landed as SPEC.md 2.8.3.4 at +112 resident bytes | +112 kern_small (measured) | S09's kern_small arm |
 | **O8b** | WP11's other half: delete kern_small's losing KHP arms, or keep them under `%else` | +74 kern_small if deleted (source only otherwise) | S18 |
 | **O9** | dw-14: rewrite SPEC 18.4's "no attempt to defragment while writing" as a dated decision, and allocate contiguous runs | +100..+160 `.cold` kern_big | S15's dw-14 |
 | **O10** | gkm-6: retire kern_emu (VMMOUSE.DRV as a DRVC_POINT worker driver); prototype first | about +40 kern_big, -385 kern_emu-only, one kernel build retired | S12's gkm-6 |

@@ -1965,7 +1965,8 @@ an image its feature has dropped — which keeps the old reason intact.
 
 **A drop KEEPS the image on `kern_big`, `kern_emu` and `kern_mega`**
 (`MOD_CACHE`, big-review WP2a: rt-1, rt-9, shell-2; `kern_mega`'s arm is
-§2.8.3.3), **and every image opts in** (the
+§2.8.3.3; **and on `kern_small` since §2.8.3.4**, purgeable only), **and
+every image opts in** (the
 owner's report, 2026-11-12: *"Control Panel ... is still doing disk reads to
 open. Opening it twice causes disk reads ... it shows up under kernel when
 loaded, then goes away entirely when unloaded"*). The most likely moment for
@@ -2406,6 +2407,44 @@ above 1MB and **0 bytes of `MEGA_RESIDENT`** (61,440 either way), `.text`
 and `.mega` unchanged; `kern_big`, `kern_emu` and `kern_small` every
 routine the same. The +53 is odd, so `.cold` from `lz_decomp_x` on sits one
 byte off its old parity on `kern_mega`.
+
+##### 2.8.3.4 `kern_small`: the kept image is purgeable only, and it cannot wall anything
+
+`MOD_CACHE` was off on `kern_small` (owner decision O5, BIG-REVIEW-PLAN),
+priced at this arm's bytes and at one risk the bytes did not show: with no
+compactor (§66.0) a kept image is a PINNED-PLACE block, and anything placed
+around it would be walled by it after the shed took it. §50.6.13 removed
+the risk - a claim that is not a cache evicts any cache it outranks that
+stands where it lands, so a kept image is never in anybody's way - and the
+owner then turned the cache on here (2026-11-12, option C "on top of A").
+
+- **Purgeable only.** Nothing moves on this kernel, so `mod_drop` declares
+  no `MC_RLOC` (the store is `OS88_COMPACT`'s) and there is no `mem_rr_tab`
+  row: the kept claim is `MEM_P_MOD` + 2 × the id at `MEM_PG_LOW`, and it
+  goes by a shed (a refusal, §50.6.2) or an eviction (§50.6.13). Either way
+  `mem_pg_forget` zeroes `MODR_SEG` first and the next `mod_need` is an
+  ordinary load.
+- **Which images are kept** is still each header's `MOD_H_SCR`: `FDLG.DRV`
+  and `FILECP.DRV` name their whole bss (`MODD_BSS`, `MODP_BSS` - every
+  byte either writes in its own image, `tests/modkeep.py`'s HOST leg run
+  with `OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk`), and
+  `DISKOPS.DRV` and `SERIAL.DRV` name their tails as on `kern_big`.
+  `CTRL.DRV` and `FORMAT.DRV` name none here and are freed at their drop as
+  before: `CTRL.DRV`'s scratch tail is `.modcb`, which is `OS88_DRIVERS`'s
+  (`MODC_KEEP` is the symbol, defined beside `kern_big`'s `MOD_CACHE`), and
+  `FORMAT.DRV`'s cells are `kern_big`'s.
+- **The owner's case, measured** (`tests/smallfrag.py`'s `fdlgkept`, the
+  128KB CGA 5150): Note Pad, File > Open `README.TXT`, File > Open a second
+  file. The second open re-adopts `FDLG.DRV` (`mod_need.held`, no
+  `mod_need.sized`) and makes **2** `int 13h` calls - the 5150's media
+  check and the root's fill - where freeing the image at its drop made it
+  **4**, the two more being the image's own sectors. Opening another
+  PROGRAM generally evicts it, which is §50.6.13 doing what it is for.
+
+What it cost (`tools/os88rdiff.py`, `kern_small`): `.cold` +106
+(`mod_need` +40, `mod_drop` +49, `mod_live` +17) and `.text` +6 (the
+`mem_pg_own` row) - resident, no rung crossed. `kern_big`, `kern_emu` and
+`kern_mega`: every routine the same.
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -87896,6 +87935,28 @@ loops address it through DS while ES is the canvas, and it doubles as the
 staging area for the palette band and the icons, so moving it is a change of
 its own.
 
+##### 42.6.7.1 …and the canvas is sized out of the run LESS the table's paragraphs
+
+`pt_alloc` claims the canvas and then the table, and refuses Paint if the
+table finds no hole (a canvas with no row table is not one anything can
+draw in). But `pt_growmax`, which `pt_fit` sizes the canvas against, held
+back only the fill stack's 2KB - and only while the run was over 3KB - so on
+a tight heap the canvas took the whole run, the table claim (about 1.5KB
+for a Hercules-tall canvas) found nothing, and Paint said *Not enough
+memory* with the memory for a smaller canvas AND its table sitting there.
+
+`pt_growmax` now takes the table out of the run FIRST: `pt_tbpar` (the
+arithmetic `pt_tbset` sizes the claim with, factored out) at `[pt_chmax]`,
+the tallest canvas this screen allows, to the 32-paragraph granule, less
+`[pt_tbparas]` - what the table already holds, so a GROW holds back only the
+difference. It is not a prediction like the stack's below it: no table, no
+Paint. On a roomy heap `PT_WANT_KB`'s cap binds first and nothing changes.
+It is the tallest canvas rather than this one's because `pt_growmax` is
+asked before the height is known, and the overstatement is at most the
+table for the rows the window cannot show - under a granule on every
+adapter here. Cost: 37 bytes on either build (`pt_tbpar` 28/25,
+`pt_growmax` +28, `pt_tbset` -19/-16).
+
 ### 42.7 Full Screen — the §53 bracket, and why NOT the §11.2 surface
 
 View ▸ Full Screen, or Ctrl+F. `pt_cmd_fs` calls `OSAPI_FSX_RUN` and nothing
@@ -104681,6 +104742,101 @@ was - by a selector - and not by its segment:
   `pop es` (KERN-MEGA-PLAN 14.135).
 
 kern_big and kern_small are byte-identical; it is kern_mega's alone.
+
+#### 50.6.13 `kern_small`: a claim that is not a cache EVICTS the caches it lands on
+
+**The field report** (the owner, 2026-11-12, a 128KB Hercules): *boot, open
+the file manager, open Paint, open Paint again -> "Out of memory".*
+Reproduced on MartyPC's `os8088_5150_herc_gla_128k` (the 128KB 5150 on a
+Hercules card, added for it). Navigating to `PAINT.O88` makes three caches
+low - the Disk window's listing (`MEM_P_VIEW`, 2KB), the read-ahead
+(`MEM_P_DIRW`, 13.5KB) and the icon store (`MEM_P_ICO`, 2KB) - and Paint's
+canvas and row tables, pinned, landed ABOVE them:
+
+| base | KB | owner | |
+|---|---|---|---|
+| `0E80` | 2.0 | `MEM_P_VIEW` | cache |
+| `0F00` | 13.5 | `MEM_P_DIRW` | cache |
+| `1260` | 2.0 | `MEM_P_ICO` | cache |
+| `12E0` | 14.5 | Paint's canvas | pinned |
+| `1680` | 1.5 | Paint's tables | pinned |
+| `16E0` | 8.0 | `MEM_P_WSAVE` | cache |
+| `18E0` | 8.5 | — | free |
+| `1B00` | 20.0 | Paint's region | pinned |
+
+Paint #2's REGION is 20KB, top-down, and the shed-and-retry (§50.6.2) can
+make 17.5KB under the canvas or 16.5KB over it - never 20 - so the loader
+answered `LD_ENOMEM` with 34KB free or purgeable. On the CGA twin the same
+walk leaves 17.5KB + 25.5KB and the region fits, which is why it was met on
+Hercules. Paint's own table claim (§42.6.7.1) was a second, smaller defect
+on the same path and is not what failed here.
+
+**The cause is not where the caches go but that their PLACE survives them.**
+On `kern_big` a cache that walls a pinned claim is DISSOLVED by the
+compactor under pressure (§66.10), and the movable claims slide into its
+room. `kern_small` has no compactor (§66.0), so a shed gives the bytes back
+and the hole they leave is bounded by whatever was placed around the cache
+while it lived - permanently, for the life of that pinned claim.
+
+**So a claim that is not a cache places as if the caches it outranks were
+not there, and evicts the ones it lands on.** The pinned claim lands
+exactly where it would on a heap with no caches, and a cache can never be
+the reason a pinned claim sits mid-heap. Three places, one predicate:
+
+- **`mem_claim_1`'s overlap scan** steps over a record `mem_pg_cheap`
+  calls takeable, and **`.publish` calls `mem_evict`** on `[DX, DX + AX)`
+  under the same `cli` - each overlapped cache's owner told through
+  `mem_pg_forget` first, then its record freed: `mem_shed_one`'s tail, per
+  record. Both doors (bottom-up `mem_claim_x` / `mem_claimp_x`, top-down
+  `mem_claimp_hi_x` for regions and modules) are this one scan.
+- **`mem_regrow`'s path 2** (grow in place) asks `mem_runfree`, which steps
+  over the same records, and evicts the new extent before it extends. This
+  is the owner's own walk-through: Note Pad's document claim at the bottom,
+  the read-ahead re-claimed directly above it at the next mount, then a
+  grow for `README.TXT` - which now evicts `DIRW` and grows where it stands
+  rather than falling to path 3 and moving HIGHEST-fit into the middle of
+  the heap. Path 3 (`mem_hifit`, the same `mem_runfree`) evicts its
+  destination before the copy.
+- **`mem_pg_cheap` refuses the dirty FAT window and the aimed listing**
+  (`mem_fatw_dirty`, the shed's own exception, §18.8.4 and BR-2), so the
+  eviction cannot take what the shed may not - and `mem_avail`, asking the
+  same door, stops counting either as room.
+
+**Who evicts** is `mem_evrank`, which sets `[mem_pg_rank]` for the scan:
+`mem_rank_bh`'s rank (net of the caller's floor, §50.6.6) for an ordinary
+claim **on the UI task**; 0 - evict nothing - for a claimant that is itself
+a cache, and for any other task. A cache asking for room is an optimisation
+and must not destroy another cache's contents while a hole fits it (§50.6:
+it still sheds by rank on a REFUSAL, which is `mem_claim_x`'s loop); and
+§66.3.1's rule for the shed on `kern_big` is the reason for the task test -
+a cache the pre-empted UI task holds in a register is not a worker's to
+free. Every consumer's "my word was zeroed" path is the one the shed
+already exercised (§50.6's contract): `fmv_demote` owes the window a
+re-list, `ico_demote` an icon pass, `dsk_fatw_demote` re-reads the window,
+the read-ahead and the save-unders are re-claimed at their next use, and a
+kept module (§2.8.3.4) is an ordinary load again.
+
+**What it costs the user, and it is a real cost**: the caches lose their
+contents more often. Opening Paint from a Disk window now evicts that
+window's listing, the read-ahead and the icon store (their room is where
+Paint's canvas belongs), so going back to the Disk window re-lists from
+the disk. Before this they survived - in the room that then walled Paint #2.
+
+**`kern_small` only** (`MEM_EVICT`, kernel.asm). `kern_big`, `kern_emu`
+and `kern_mega` compact, and §66.10 already takes a walling cache down
+under pressure there - and keeps the movable claims' contents by moving
+them where this has to destroy a cache's. The same code there would trade
+§66.10's "only under pressure" for "on every claim", and buy nothing the
+compactor does not.
+
+**What it cost** (`tools/os88rdiff.py`, `kern_small`): `.cold` +113,
+resident, no rung crossed - `mem_claim_1` +11, `mem_runfree` +5,
+`mem_pg_cheap` +3, `mem_regrowp` +15, `mem_evrank` 27, `mem_evict` 52.
+Every other kernel: every routine the same. `tests/smallfrag.py` is the
+row (soak): with Paint open every free-or-cache paragraph is ONE run on
+both adapters (34KB Hercules, 43KB CGA), and Paint #2 opens on Hercules
+(its canvas 10.5KB, its region 20KB, 2KB left); with `MEM_EVICT` off it
+reads two runs on each and `ld_status` 5.
 
 ## 51. driver.inc — loadable drivers
 
@@ -122392,6 +122548,13 @@ ArtfulType's and Fractal's are all on the small apps disk (§24.5). The owner's
 decision is that **a 48.5KB machine runs one program at a time and the user
 manages that space**, which is the same judgement §24.5 already makes about
 what ships there.
+
+**A CACHE is not on that list, and since §50.6.13 it cannot be.** Without a
+compactor a pinned claim placed around a cache was walled by it once the
+shed took it - the cache's bytes came back and its place did not, which is
+how Paint #2 met *Out of memory* on a 128KB Hercules with 34KB free or
+purgeable. So on this kernel a claim that is not a cache evicts the caches
+it outranks where it lands, and lands where it would on a heap with none.
 
 **`+1,536 bytes of heap`**, measured: `.text` −667, `.bss` −52, `.cold` −936,
 `.lowbss` −4, `KERN_SIZE` 79,872 → 78,336, free heap on the floor machine

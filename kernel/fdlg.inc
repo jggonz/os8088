@@ -231,7 +231,11 @@ modd_hdr:                       ; is at offset 0 because vstart is 0 and
     dw MOD_STAMP                ; ...and this build's LAYOUT
     dw modd_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
     dw FD_NENT
+%ifdef MOD_CACHE
+    dw MODD_BSS                 ; MOD_H_SCR: its whole bss, .moddb - KEPT
+%else                           ; at its drop (2.8.3.4)
     dw 0                        ; MOD_H_SCR: freed at its drop (2.8.3)
+%endif
     dw fdlg_open_x_m            ; EVERY ENTRY IS ITS OWN BODY: each ends in a
     dw fdlg_hook_x_m            ; `retf` here (fdk_di, FDRET), so the table
     dw fdlg_reap_x_m            ; needs no `call body / retf` wrapper between

@@ -1201,6 +1201,7 @@ mod_drop:
     mov bx, dx                  ; mem_find_own's own-segment arm: the
     call mem_find_own           ; record AT that base, whoever owns it - a
                                 ; held MODR_SEG always names one
+%ifdef OS88_COMPACT
     mov word [ss:si+MC_RLOC], mem_region_reloc ; MOVABLE (SPEC.md
                                 ; 2.8.3, 66.2): a KEPT image is a disarmed CS
                                 ; that writes nothing outside its zeroed
@@ -1216,6 +1217,8 @@ mod_drop:
                                 ; modcache.py). STORED FIRST, while the tag
                                 ; still pins it, so no task the drop is not
                                 ; on can see a purgeable record without it
+%endif                          ; (kern_small: nothing moves, so the KEPT
+                                ; image is purgeable only - SPEC.md 2.8.3.4)
     mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
                                 ; drop re-writes the same tag)
     jmp short .out

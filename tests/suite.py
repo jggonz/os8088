@@ -4933,9 +4933,11 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("shedrelist", "soak", py("tests/shedrelist.py"), 60.0,
         "SPEC.md 50.6: a Disk window whose listing cache the SHED took "
-        "re-lists on its next focus. On the 128KB machine Missile running and "
-        "then Gorillas' launch shed the GAMES window's store (Gorillas alone "
-        "stopped reaching the case after the 2026-10 size passes); the re-list named its destination "
+        "re-lists on its next focus. On the 128KB machine Paint's launch "
+        "from A: EVICTS the GAMES window's store - its canvas lands at the "
+        "floor (SPEC.md 50.6.13); Missile and Gorillas, two regions from the "
+        "top, stopped reaching a store at the floor once a claim evicts only "
+        "what it lands on. The re-list named its destination "
         "before fmv_fit re-claimed it, so the window read 'Drive B: 0 files' "
         "until Refresh (a field report). Red with fmv_load's `call fmv_fit` "
         "taken out: 0 of 10 entries after the raise.",
@@ -12536,7 +12538,9 @@ SOAK = [
         wants=("build/small360.img",)),
     Row("fdlgdrop", "soak", py("tests/fdlgdrop.py"), 20.0,
         "...and the module comes BACK on every route a dialog ends by "
-        "(SPEC.md 38.0.1). The row above drives the dialog and never asks "
+        "(SPEC.md 38.0.1) - freed, or since SPEC.md 2.8.3.4 KEPT as a "
+        "purgeable MEM_P_MOD cache, but never left the pinned MEM_K_MOD a "
+        "leak holds. The row above drives the dialog and never asks "
         "what happened to its image. Today the commit and the two cancels "
         "POST from inside the chooser's own callbacks (SPEC.md 38.6) and the "
         "close box is found by fdlg_gate - two roads to fdlg_reap's mod_drop. "
@@ -14607,6 +14611,26 @@ SOAK = [
         "is the state that kernel shipped in until wave 1 of "
         "docs/plans/completed/GFX-EMBEDDABLE-PLAN.md. It builds nothing: `make small` "
         "is what it reads, the same tree small128 and smallboot want",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
+    Row("smallfrag", "soak", py("tests/smallfrag.py"), 40.0,
+        "SPEC.md 50.6.13, 42.6.7.1 and 2.8.3.4: on kern_small a cache never "
+        "walls a pinned claim, and Paint opens TWICE on the 128KB Hercules. "
+        "The owner's field report (2026-11-12): boot, a Disk window, Paint, "
+        "Paint again -> Out of memory. kern_small has no compactor, so a "
+        "pinned claim placed AROUND a cache is a wall a shed cannot take "
+        "down - the cache's bytes come back, its place does not: navigating "
+        "to PAINT.O88 left VIEW, DIRW and ICO low, Paint's canvas and table "
+        "landed above them, and the room a shed could make was 17.5KB + "
+        "16.5KB against Paint #2's 20KB region (LD_ENOMEM). Now a claim "
+        "that is not a cache places as if every cache it outranks were "
+        "free and EVICTS the ones it lands on. Three verdicts: onehole (Herc "
+        "and CGA, every free-or-cache paragraph one run with Paint open), "
+        "paint2 (Herc, two Paint windows) and fdlgkept (CGA, Note Pad's "
+        "second File > Open re-adopts FDLG.DRV - 2 int 13h, was 4). "
+        "VERIFIED RED with MEM_EVICT off (two runs on both adapters, "
+        "ld_status 5) and with kern_small's MOD_CACHE off (the image "
+        "loaded again). Builds nothing: `make small`'s tree",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
     Row("paintgrowsmall", "soak", py("tests/paintgrowsmall.py"), 10.0,

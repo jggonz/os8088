@@ -1097,8 +1097,8 @@ ksg_%1_%2:
 
 ; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
 ; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big,
-; kern_emu and kern_mega. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN)
-; is open, priced at this arm's bytes. ON kern_mega IN PROTECTED MODE THE
+; kern_emu and kern_mega - and kern_small, below (owner decision O5 settled
+; 2026-11-12, on top of SPEC.md 50.6.13). ON kern_mega IN PROTECTED MODE THE
 ; IMAGE IS KEPT WHEREVER IT IS (SPEC.md 2.8.3.3): above 1MB the pool pair
 ; mod_hi copied it to, its block a purgeable kernel cache (MX_FPURGE,
 ; mega_modkeepf) that mx_alloc's shed takes back through the same mem_pg_own
@@ -1108,12 +1108,36 @@ ksg_%1_%2:
 ; tag's row
 %ifdef KERN_BIG
     %define MOD_CACHE 1
+    %define MODC_KEEP 1         ; ...CTRL.DRV's kept copy with it: its scratch
+%endif                          ; tail is `.modcb`, which is OS88_DRIVERS's
+; ...AND kern_small, since SPEC.md 50.6.13 made a kept image unable to wall
+; anything (owner decisions O5, A + C, 2026-11-12): a pinned claim that wants
+; its room EVICTS it, so keeping it costs nothing but the rank it sheds at.
+; PURGEABLE ONLY - nothing moves on this kernel (SPEC.md 66.0), so mod_drop
+; declares no relocation proc there - and only the images that name a scratch
+; tail are kept: FDLG.DRV and FILECP.DRV (their whole bss), FORMAT.DRV,
+; DISKOPS.DRV and SERIAL.DRV (theirs, as on kern_big). CTRL.DRV is freed as
+; before, MODC_KEEP being kern_big's (SPEC.md 2.8.3.4)
+%ifdef KERN_SMALL
+    %define MOD_CACHE 1
+%endif
+
+; MEM_EVICT - a claim that is not itself a cache PLACES as if every cache it
+; outranks were free, and evicts the ones its block lands on (SPEC.md
+; 50.6.13). kern_small only: with no compactor (SPEC.md 66.0) a pinned claim
+; placed AROUND a cache is a wall the shed cannot take down - the cache goes
+; and its room stays split - so there the cache must lose its PLACE, not
+; only its bytes. kern_big, kern_emu and kern_mega dissolve such a barrier
+; under pressure instead (SPEC.md 66.10). Resolved here for OS88_ASSOC's
+; reason: memory.inc reads it
+%ifdef KERN_SMALL
+    %define MEM_EVICT 1
 %endif
 ; SCR_B / SCR_W - one byte or word of a module's SCRATCH (SPEC.md 2.8.3):
 ; under MOD_CACHE it is declared in the image's nobits bss tail (`res*`),
 ; which a KEPT image's drop zeroes, so the next use finds it as a load
 ; would; elsewhere it is a zero `db`/`dw` where it always was
-%ifdef MOD_CACHE
+%ifdef MODC_KEEP
   %define SCR_B resb 1
   %define SCR_W resw 1
 %else
@@ -9056,7 +9080,7 @@ MODK_SIZE equ modk_end - $$
 
 %ifdef OS88_DRIVERS
 section .modcb
-%ifdef MOD_CACHE
+%ifdef MODC_KEEP
 ; CTRL.DRV'S SCRATCH TAIL (SPEC.md 2.8.3), at the head of its bss: every byte
 ; the core and the panel write in their own image that a later use could read
 ; - the core's gesture state and the Floppy page's two bytes (cps_scr ..
@@ -9091,7 +9115,7 @@ MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
                                 ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
-%ifdef MOD_CACHE                ; ...and CTRL.DRV's MOD_H_SCR, on the disk:
+%ifdef MODC_KEEP                ; ...and CTRL.DRV's MOD_H_SCR, on the disk:
 MODC_SCR equ MODC_BSS           ; its whole bss tail, for both rows
 %else
 MODC_SCR equ 0

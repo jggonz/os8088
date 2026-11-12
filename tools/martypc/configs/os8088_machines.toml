@@ -2355,6 +2355,34 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+# ...and the same 128KB 5150 on a HERCULES card: kern_small's floor machine
+# as the owner's field report met it (2026-11-12: boot, a Disk window, Paint,
+# Paint again -> "Out of Memory" on a 128KB Hercules). A Hercules desktop is
+# 720x348, so the window-raise caches and Paint's own canvas are sized from a
+# bigger screen than the CGA twin above, and the heap runs out in a different
+# place. tests/smallfrag.py is the row that boots it.
+[[machine]]
+name = "os8088_5150_herc_gla_128k"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
 # A MIXED FLOPPY PAIR: 360KB IN A:, 1.44MB IN B: (SPEC.md 96.40.5)
 #
 # **EVERY OTHER MACHINE IN THIS FILE HAS TWO DRIVES OF ONE TYPE** - two 360KB

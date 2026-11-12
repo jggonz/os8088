@@ -1209,6 +1209,35 @@ pt_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
+; pt_tbpar - what the TABLE CLAIM costs for DX rows (SPEC.md 42.6.7)
+; in:  DX = rows
+; out: AX = paragraphs (not rounded to a granule), BX = the inked table's bands
+; clobbers: AX, BX (the outputs) and the flags
+;
+; pt_tbset's arithmetic, and pt_growmax's: the canvas may not be sized out of
+; the paragraphs this claim is about to need (SPEC.md 42.6.7.1).
+; -----------------------------------------------------------------------------
+pt_tbpar:
+    push cx
+    mov ax, dx
+    mov cl, PT_IBSH
+    shr ax, cl
+    inc ax
+    mov bx, ax                      ; the bands DX rows need
+    add ax, dx
+    add ax, ax
+    add ax, ax                      ; 4 * (rows + bands)
+%ifdef PTF_UNDO
+    add ax, dx                      ; ...and the mask's byte a row, plus the
+    inc ax                          ; spare pt_undo_new's word store reaches
+%endif
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                      ; AX = paragraphs
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_tbset - size the TABLE CLAIM for a canvas of DX rows (SPEC.md 42.6.7)
 ; in:  DX = rows
 ; out: CF=0: [pt_tabseg] holds a row table, an inked table and (PTF_UNDO) an
@@ -1238,21 +1267,8 @@ pt_tbset:
     push di
     push es
     mov [pt_tbncap], dx
-    mov ax, dx
-    mov cl, PT_IBSH
-    shr ax, cl
-    inc ax
-    mov [pt_tbnnb], ax              ; the bands DX rows need
-    add ax, dx
-    add ax, ax
-    add ax, ax                      ; 4 * (rows + bands)
-%ifdef PTF_UNDO
-    add ax, dx                      ; ...and the mask's byte a row, plus the
-    inc ax                          ; spare pt_undo_new's word store reaches
-%endif
-    add ax, 15
-    mov cl, 4
-    shr ax, cl                      ; AX = paragraphs
+    call pt_tbpar                   ; AX = paragraphs, BX = bands
+    mov [pt_tbnnb], bx              ; the bands DX rows need
     mov [pt_tbnpar], ax
     mov dx, [pt_tabseg]
     or dx, dx
@@ -1817,6 +1833,20 @@ pt_growmax:
     push cx
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P            ; AX = largest free run, paragraphs
+    push dx                         ; --- THE TABLE CLAIM COMES OUT OF THE RUN
+    xchg ax, cx                     ; FIRST (SPEC.md 42.6.7.1): pt_alloc asks
+    mov dx, [pt_chmax]              ; for it straight after the canvas and
+    call pt_tbpar                   ; refuses Paint without it, and a canvas
+    add ax, 31                      ; sized out of the whole run left it no
+    and al, 0E0h                    ; hole on a tight heap. Its paragraphs at
+    sub ax, [pt_tbparas]            ; the tallest canvas this screen allows,
+    jbe .tbheld                     ; in whole granules, less what is already
+    sub cx, ax                      ; held - a GROW's table regrows only by
+    jnc .tbheld                     ; the difference. NOT a prediction like
+    xor cx, cx                      ; the stack's below: no table, no Paint
+.tbheld:
+    xchg ax, cx                     ; AX = the run the canvas may have
+    pop dx
     cmp word [pt_scseg], 0          ; --- HOLD BACK A FLOOR'S WORTH OF SPAN
     jne .capped                     ; STACK (SPEC.md 42.6.2) while there is
                                     ; not one held - which, since 42.6.2.1,

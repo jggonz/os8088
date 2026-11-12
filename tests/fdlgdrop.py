@@ -19,6 +19,13 @@ the old dialog leaked the image on exactly three of them, because `mod_drop`
 sat behind a compare of the very word those three had just cleared. A 16KB
 claim held for the rest of the session on the machine with 128KB in it.
 
+"GIVEN BACK" IS THE DROP, and since SPEC.md 2.8.3.4 a drop KEEPS the image
+on kern_small too: MODR_SEG still names it, but its claim is re-tagged from
+the pinned MEM_K_MOD to MEM_P_MOD + 2 x the id - a purgeable cache the next
+claim that wants its room evicts. So the check is "freed, or KEPT", and the
+leak it exists for - the image left MEM_K_MOD after the chooser is gone -
+still fails it.
+
 THE ASSERTION IS THE TABLE WORD AND NOT A PICTURE, because the leak is
 invisible: the chooser really is gone, the window really is destroyed, and the
 next chooser reuses the image it never gave back. Only `mod_r_fdlg` (mod_tab's
@@ -45,6 +52,7 @@ os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 import os88build                                           # noqa: E402
 os88build.use_build("build/smallk")
 import os88geom as geom                                    # noqa: E402
+import os88sym                                             # noqa: E402
 import os88ui                                              # noqa: E402
 from os88fixture import need                               # noqa: E402
 
@@ -86,7 +94,26 @@ with os88ui.boot("build/small360.img", apps="build/muptest.img",
         """MODR_SEG of the FDLG row - 0 = the image is not in RAM."""
         return int.from_bytes(m.read(row, 2), "little")
 
-    check("nothing held at the desktop", held() == 0, "(seg=%04X)" % held())
+    EQ = os88sym.equates(("KERN_SMALL",))
+    KEPT = EQ["MEM_P_MOD"] + 2 * MOD_FDLG
+
+    def owner():
+        """The owner word of the claim MODR_SEG names, None if no record."""
+        seg = held()
+        sz = geom.MC_SIZE
+        tab = m.read(ui._S("mem_tab"), EQ["MEM_MAX"] * sz)
+        for i in range(EQ["MEM_MAX"]):
+            r = tab[i * sz:(i + 1) * sz]
+            if seg and int.from_bytes(r[0:2], "little") == seg:
+                return int.from_bytes(r[4:6], "little")
+        return None
+
+    def dropped():
+        """GIVEN BACK: freed, or KEPT as a purgeable cache (SPEC.md 2.8.3.4)
+        - anything but the pinned MEM_K_MOD claim a leak holds."""
+        return held() == 0 or owner() == KEPT
+
+    check("nothing held at the desktop", dropped(), "(seg=%04X)" % held())
 
     # --- put muptest up; its button Two is what opens a chooser -------------
     ui.path("B:/MUPTEST.O88")
@@ -103,16 +130,17 @@ with os88ui.boot("build/small360.img", apps="build/muptest.img",
         check("%s: the chooser is the Save form" % label,
               w.title == "Save As", "(%r)" % w.title)
         check("%s: the image is held while the chooser is up" % label,
-              held() != 0, "(seg=%04X)" % held())
+              held() != 0 and owner() == EQ["MEM_K_MOD"],
+              "(seg=%04X)" % held())
         act(w)
         ui.chooser_gone()
         try:                            # the drop is the reap's, one pass on
-            ui._wait(lambda: held() == 0, "the image given back",
-                     os88ui.T_NAV)
+            ui._wait(dropped, "the image given back", os88ui.T_NAV)
         except os88ui.UIError:
             pass                        # ...the check below says so
         check("%s: ...and given back when it ends" % label,
-              held() == 0, "(seg=%04X)" % held())
+              dropped(), "(seg=%04X, owner %s)" % (
+                  held(), "%04X" % owner() if owner() is not None else "-"))
 
     def commit(w):
         # a single click on a FILE fills the Save box (SPEC.md 38.4), and the
