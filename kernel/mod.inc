@@ -580,6 +580,12 @@ mod_need:
     call mem_find_own           ; AT that base - a held MODR_SEG names one
     pop bx
     mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
+                                ; - by the TAG: mem_can_move refuses
+                                ; MEM_K_MOD whatever MC_RLOC says, so the
+                                ; drop's declaration (mem_region_reloc) is
+                                ; left in the record, inert until the next
+                                ; drop re-tags it. Withdrawing it was 5 bytes
+                                ; here and 4 more of relaxed branches below
     mov es, dx
     or bp, -1                   ; no bound on the entries: this image's were
     jmp .arming                 ; bounded by the read it came from
@@ -1092,7 +1098,21 @@ mod_drop:
     call mem_find_own           ; record AT that base, whoever owns it - a
                                 ; held MODR_SEG always names one
     mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
-    jmp short .out              ; drop re-writes the same tag)
+                                ; drop re-writes the same tag)
+    mov word [ss:si+MC_RLOC], mem_region_reloc ; ...and MOVABLE (SPEC.md
+                                ; 2.8.3, 66.2): a KEPT image is a disarmed CS
+                                ; that writes nothing outside its zeroed
+                                ; scratch, and the ONE word naming it is its
+                                ; MODR_SEG - a mem_rr_tab row, so the kernel's
+                                ; half of every move re-points it and the proc
+                                ; is the driver image's (driver.inc). PINNED,
+                                ; it was a BARRIER the compactor DISSOLVES for
+                                ; any claim that outranks LOW (mem_cp_walk's
+                                ; .pinned) - so the next press read the whole
+                                ; file again although nothing had needed its
+                                ; bytes (the Task Manager report, tests/
+                                ; modcache.py)
+    jmp short .out
 .free:
     call mod_free_row           ; (mod_free_row clobbers AX, BX, CX, DX, DI)
 .out:

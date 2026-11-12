@@ -97,8 +97,9 @@ ceiling for the session rather than one in the middle of the arena, and neither
 has been given a relocation proc. **A DROPPED module may now stay too, as a
 cache** (§2.8.3, `kern_big`/`kern_emu`): `STIKMENU.DRV` and `CTRL.DRV`'s
 settings core are re-tagged `MEM_P_MOD` at their drop instead of freed -
-still pinned and still at the ceiling, but purgeable at `MEM_PG_LOW`, so a
-shed takes one and a compaction that needs its room dissolves it (§66.10).
+at the ceiling and purgeable at `MEM_PG_LOW`, so a shed takes one - and
+MOVABLE while it is kept, so a compaction packs it rather than dissolving it
+(§2.8.3, §66.10.5).
 
 **On `kern_small` NOTHING in this file moves** (§66.0). The compactor is
 `kern_big`'s: every claim there is born pinned and stays pinned, `mem_can_move`
@@ -128,7 +129,7 @@ waiting and outranks it (§66.10.1), which is the same room at none of the copy.
 | `MEM_K_COPY` copy buffer | one Cut/Copy/Paste | **PINNED**, and `N` in `tests/pins.txt` | claimed through `mem_claim_dma` with the whole buffer as the page-safe head (§22.5.1). The transfer is pinned by `mem_in_xfer` anyway; what is not momentary is that it is held across a suspended overwrite QUESTION, a user wait - NO-PINNING-PLAN K4b, a one-word proc (~17 bytes), waiting for a size pass |
 | `MEM_K_DRV` driver image | per loaded driver | **MOVABLE** | §66.6.3. Its base is the driver's CS, and a CS moves when nothing anywhere refers to it — which for a driver image means the kernel's own tables (`mem_region_reloc` walks all 66 words in 9 of them), the sixteen hardware IRQ vectors and int 33h (§66.6.3.1) and nothing else, because no driver declares anything and none can forget to. Refused only while a frame is standing in it or `[drv_wcnt]` is non-zero. `tests/drvmove.py` and `tests/sndmove.py` are the gates |
 | `MEM_K_MOD` on-demand module | per loaded module | **PINNED (forever)** | its base is the module's CS. Claimed top-down |
-| `MEM_P_MOD` + 2 × id, a dropped module KEPT | per kept image, from its drop to the next `mod_need` or a shed | **PINNED**, purgeable at LOW | §2.8.3: the same claim re-tagged by `mod_drop`; `mem_pg_own` zeroes its `MODR_SEG` when it is shed. Not declared movable: a `mem_rr_tab` row and the `MC_RLOC` store (~10 bytes) were not spent - the compactor dissolves it instead |
+| `MEM_P_MOD` + 2 × id, a dropped module KEPT | per kept image, from its drop to the next `mod_need` or a shed | **MOVABLE** (`mem_region_reloc`), purgeable at LOW | §2.8.3: the same claim re-tagged by `mod_drop`, which declares it movable - `mod_tab`'s `MODR_SEG` words are a `mem_rr_tab` row - and `mod_need`'s re-adoption pins it again by the `MEM_K_MOD` tag alone; `mem_pg_own` zeroes its `MODR_SEG` when it is shed. It was pinned, and the compactor dissolved it at every ranked pass: the field report `tests/modcache.py` is for |
 | `MEM_K_CLONE` disk cloner buffer | up to 640KB, one clone | **UNDECLARED** | transient, and the `int 13h` target throughout — cannot be a barrier longer than the clone |
 | `MEM_K_CMPR` Compress working block | twice the file plus up to 40KB, one compress | **UNDECLARED** | transient; three segments are paragraph arithmetic off one base |
 | `MEM_K_SEAM` kern_mega's huge read's seam | 64KB, one `OSAPI_FILE_READ` | **UNDECLARED** | transient: a packed stream's copy either side of a bridge's cut, aimed at by linear base through the decode (SPEC.md 20.14.5.4), claimed and freed inside the one read |

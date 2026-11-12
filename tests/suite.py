@@ -13873,6 +13873,24 @@ SOAK = [
         "os88sym's offsets), not out of pixels.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
+    Row("modcache", "soak", py("tests/modcache.py"), 20.0,
+        "SPEC.md 2.8.3: a dropped module KEPT by the cache comes back from "
+        "RAM, off the field report (Sticky Apps on the 5150: the second press "
+        "showed a disk access, a press after the Task Manager took the whole "
+        "load). VGA XT, the shipped 360KB system disk, the Task Manager open "
+        "first so its region is above STIKMENU.DRV's. A: the first press "
+        "loads the file (mod_need.sized, int 13h on its sectors). B: the "
+        "second re-adopts it (mod_need.held) for EXACTLY ONE int 13h, the "
+        "boot sector - the scan's media check (18.9.1.1), with the motor let "
+        "stop first; drv_vol_back's remount out of STIKAPPS made it two. C: "
+        "the Task Manager closes and a compaction is posted at rank 0FFh: "
+        "the kept image MOVES into the hole, MODR_SEG re-pointed and its "
+        "record still MEM_P_MOD + 2 x the id - it was a pinned BARRIER the "
+        "compactor dissolved, and the ascending pass dissolved a movable "
+        "top-down cache too. D: the third press re-adopts it at the new "
+        "base, not one sector of the file read, three Apps listed.",
+        needs=("marty",), timeout=600,
+        wants=("build/os8088-360.img",)),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
         "byte spare and every drag-made shortcut carries `\\` there. Three "
