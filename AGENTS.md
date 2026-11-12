@@ -486,6 +486,13 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   a discussion to have with whoever asked for the feature, never a build fix
   and never a reason to quietly cut the design down. Slack here
   has never gone unspent, so its expected cost is 100%.
+- **kern_mega is a SHIPPED kernel, not a beta or a side kernel** (the
+  owner, 2026-11-12). A new feature's design INCLUDES its kern_mega work:
+  where kern_mega's memory model differs (selectors, the HMA, images above
+  1MB), the design says how the feature works there and the work lands with
+  the feature. "kern_mega frees it instead" or "not on mega" is a gap to
+  close, never "by design" - unless the owner has agreed to that one gap.
+  Name kern_mega's rows beside kern_big's when you verify.
 - **kern_mega-only package code is the ARM's, never the shipped build's**
   (SPEC.md 20.18). The owner's rule:
   *"mega specific work that more than trivially increases the disk size is
