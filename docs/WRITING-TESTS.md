@@ -15,7 +15,9 @@ then the section for the part you are writing.
 
 1. **Break the thing on purpose and watch the row go red** (§1). A row that
    cannot fail is worse than no row.
-2. **Put it in `soak`** unless it clearly earns `fast` or `full` (§2).
+2. **Put it in `soak`.** `fast` and `full` are closed: a row joins either
+   only with the owner's permission, and `tests/tierlock.txt` enforces it
+   (§2.0).
 3. **Drive with `tools/os88ui.py`**, never a remembered coordinate (§6).
 4. **Wait on the guest's state, never on a clock** - no `time.sleep`, no
    `advance(frames=N)`, no `launch(boot=N)` (§7).
@@ -31,7 +33,7 @@ then the section for the part you are writing.
 
 | you are... | read |
 |---|---|
-| choosing a tier | §2 (`fast` §2.1, `full` §2.2) |
+| choosing a tier | §2 (the lock §2.0, `fast` §2.1, `full` §2.2) |
 | filling in the `Row(...)` | §3 |
 | needing a disk image, package or knob kernel | §5 |
 | booting, clicking, typing, using breakpoints | §6 |
@@ -91,6 +93,49 @@ maintenance" - nothing else.** A row about ONE package, about KERNEL
 INTERNALS, or about the SUITE'S OWN harness and fixtures is `soak`, however
 cheap it is. That does not lose it: the release soak runs every row, and
 whoever touches the subject runs its rows with `-k`.
+
+### 2.0 The tier lock: `fast` and `full` are closed
+
+**A row joins `fast` or `full` only with the owner's permission** (the owner,
+2026-11-12). Both tiers are paid by everybody - `fast` on every `make`,
+`full` at every integration - and both had to be recut by hand once rows had
+drifted in, one plausible reason at a time. `tests/tierlock.txt` lists every
+row in the two tiers; the `tierlock` row (fast) fails when a fast or full row
+has no line there, or a line names a row no longer in that tier. Adding a
+line is the owner's decision, written as
+`<tier> <row>  # owner YYYY-MM-DD: <reason>`; moving a row DOWN to `soak`
+needs nobody's permission - delete its line. **The default for a new row is
+`soak`.** To argue for more, name which of the reasons below it meets, and
+ask.
+
+**Valid in `fast`** - all three, not one of them:
+
+- it is fast and runs on the host;
+- it checks something a WIDE range of changes can affect - stack balance,
+  parity bytes, common UI-element mistakes, documentation that covers the
+  whole system, kernel byte costs;
+- it is commonly forgotten or broken, which is what makes the range wide.
+
+**Valid in `full`:**
+
+- any of the above that takes longer to run, or has to be checked against a
+  build;
+- the "go no further" arm of a `fast` check - `guidelock` only warns on
+  `fast`, so an author mid-feature is not made to pay the guide on every
+  commit, and `guidelock-full` fails, so it is paid at integration;
+- *did we break the OS in some fundamental way?*
+
+**Always invalid, in either:**
+
+- it tests something under one package;
+- it tests something internal to one kernel subsystem;
+- it runs documentation checks for one package;
+- it is not commonly broken, not easy to break, and not wide-ranging;
+- it tests something specific that its author would meet in a scoped soak
+  anyway, because the scope is obvious from what they changed.
+
+The sections below are the detail and the history behind those rules; where
+they name an exception, it is the owner's and is listed in the lock.
 
 **Choose by what the row costs and how broadly it fails, never by how
 important it is.** Neither expensive tier runs per commit: `full` runs when
@@ -167,7 +212,7 @@ The five rows: `bootsmoke` (boots to a desktop on both 1bpp adapters),
 (kern_small builds and boots on its floor machine), `ps2mouse` (mouse and
 keyboard work), `ctoolchain` (the C toolchain produces a package).
 
-Six more are the owner's ratchets, put in `full` at his word rather than by
+Six more are the owner's ratchets, put in `full` at the owner's word rather than by
 the rules above, and **not precedents**: `megahigh`, `sysfree`,
 `guidelock-full`, `noovl` (SPEC.md 19.11), and the pin ratchet's two halves - `pins` (every heap claim
 in the source declares itself movable or has a line in `tests/pins.txt`) and

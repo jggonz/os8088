@@ -777,7 +777,10 @@ the preflight, frozen tree, parallel lanes, journal, `--resume` and pollable
 build-number-only commit is three bytes of `.text` moving because the commit
 count moved (SPEC.md §14.2) and no row in any tier can see it.
 
-**ADDING A ROW IS `docs/WRITING-TESTS.md`, and it is worth reading BEFORE the
+**`fast` AND `full` ARE CLOSED** (the owner, 2026-11-12): a row joins either
+only with the owner's permission and a reason, and the `tierlock` row fails
+the build until its line is in `tests/tierlock.txt` - the default is `soak`
+(docs/WRITING-TESTS.md 2.0). **ADDING A ROW IS `docs/WRITING-TESTS.md`, and it is worth reading BEFORE the
 first line rather than at the review.** Everything below is how to drive the
 machine; that is how to write something worth driving it for — the tier and
 the registry fields, a `secs` you measured, `wants=` and private trees instead

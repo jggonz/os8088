@@ -1612,6 +1612,17 @@ FAST = [
         "FAST as THE BOUNDARY (docs/WRITING-TESTS.md 2.1): a tool and the "
         "kernel edited apart, and a driver stripped below its claim does "
         "not fail the build, it fails to LOAD (.nofit) on the machine"),
+    Row("tierlock", "fast", py("tests/unit/t_tierlock.py"), 0.1,
+        "THE TIER LOCK (docs/WRITING-TESTS.md 2.0): every fast and full row "
+        "has a line in tests/tierlock.txt, and every line names a row still "
+        "in that tier. Both tiers are paid by everybody, so a row joins "
+        "either only with the OWNER's permission and a written reason - the "
+        "two tiers had to be recut by hand on 2026-11-11 after drifting in "
+        "one plausible reason at a time. FAST as THE TREE AND ITS DOCS: any "
+        "author adding a row can break it, and it reads two text files",
+        needs=(), inputs=("tests/suite.py", "tests/tierlock.txt",
+                          "tests/unit/t_tierlock.py",
+                          "tests/unit/harness.py")),
     Row("drvverb", "fast", py("tests/unit/t_drvverb.py"), 0.1,
         "every built drv_tab driver REFUSES a verb it does not implement "
         "(SPEC.md 51.2.2): entered at its header's entry with TIER/HWINFO "
