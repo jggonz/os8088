@@ -9,7 +9,7 @@ hands to) and its brief and agent notes are `docs/plans/completed/ksp19/`.
 
 Each agent works in a git worktree of its own, created by the coordinator at
 `/home/user/wt/<name>` on a branch `ksp20-<name>` cut from the commit that
-adds this file, and writes its record to `docs/plans/ksp20/<name>.md`. The
+adds this file, and writes its record to `docs/plans/completed/ksp20/<name>.md`. The
 coordinator merges the branches; **agents do not push**.
 
 Read before writing any code, in this order:
@@ -18,7 +18,7 @@ Read before writing any code, in this order:
 2. **`docs/plans/completed/ksp14/BRIEF.md` sections 2, 3 and 4** - the
    method, the environment and the note's shape carry over UNCHANGED except
    where this file says otherwise. Substitute `ksp20` for `ksp14`,
-   `docs/plans/ksp20/` for its note directory, and `(kernel size pass 20)`
+   `docs/plans/completed/ksp20/` for its note directory, and `(kernel size pass 20)`
    for the commit suffix everywhere. Its section 1 (rules) is replaced by
    section 1 below;
 3. **`docs/plans/completed/HANDOFF-KERNEL-SIZE-P20.md` in full** - pass 19's

@@ -1,6 +1,6 @@
 # ksp20 agent "files" - the file manager, the desk, the chooser, Sticky Apps' thunks
 
-Kernel size pass 20 (`docs/plans/ksp20/BRIEF.md`, row `files`): `files.inc`,
+Kernel size pass 20 (`docs/plans/completed/ksp20/BRIEF.md`, row `files`): `files.inc`,
 `fdlg.inc`, `filecp.inc`, `desk.inc`, `desksc.inc`, `stikmenu.inc`,
 `assoc.inc`, `ascw.inc`, `dskwin.inc`. Branch `ksp20-files`, base `9c785cf3`
 (the brief; its kernel is `8ef75fa1`'s). Figures are ASSEMBLED,

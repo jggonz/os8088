@@ -1,6 +1,6 @@
 # ksp20 agent "wmui" - the window manager, the UI task's helpers, the menu bar, the Dock, fprog, the Control Panel's resident half
 
-Kernel size pass 20 (`docs/plans/ksp20/BRIEF.md`), section 2's `wmui` row:
+Kernel size pass 20 (`docs/plans/completed/ksp20/BRIEF.md`), section 2's `wmui` row:
 `wm.inc`, `ui.inc`, `menu.inc`, `dock.inc`, `dockmod.inc`, `fprog.inc`,
 `ctrl.inc`, `winmod.inc`, `extmod.inc`, `deskmod.inc`, `spinner.inc` and the
 kernel's use of `apps/os88ui.inc`. Branch `ksp20-wmui`, base `9c785cf3` (the

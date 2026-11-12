@@ -1,6 +1,6 @@
 # ksp20 agent "draw" - the drawing, cursor, mouse, video and fsx files
 
-Kernel size pass 20 (`docs/plans/ksp20/BRIEF.md`), section 2's `draw` row:
+Kernel size pass 20 (`docs/plans/completed/ksp20/BRIEF.md`), section 2's `draw` row:
 `vga12.inc`, `softgfx.inc`, `font.inc`, `mouse.inc`, `mouproto.inc`,
 `vmmouse.inc`, `viddet.inc`, `vidsel.inc`, `vidext.inc`, `blank.inc`,
 `fsx.inc`, `band.inc`, `icons.inc`, `splash.inc`. Branch `ksp20-draw`, base
