@@ -4216,7 +4216,12 @@ api_copyname:
     pop ax
     ret
 
-api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
+api_name:                       ; ...and the STACK-OVERFLOW PANEL's two
+sch_dpcol:  dw 0                ; words (SPEC.md 8.8): the pen x and one hex
+sch_dphc:   db 0, 0             ; digit as a string. The panel ends in `hlt`
+            times 13 - 4 db 0   ; with nothing after it to stage a name, so
+                                ; they live here and not in .bss (kernel size
+                                ; pass 20, -4). Staged names (.text, not .bss: the file
 api_name2:  times 13 db 0       ; slots are not reached before kmain, and
                                 ; by then .bss is zero as well)
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The

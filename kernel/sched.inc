@@ -3010,9 +3010,10 @@ section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
-sch_dpcol:  resw 1                      ; the death panel's pen x (SPEC.md
-                                        ; 8.8); its y is the constant SDP_Y
-sch_dphc:   resb 2                      ; one hex digit, as an ASCIIZ string
+                                        ; (sch_dpcol and sch_dphc, the death
+                                        ; panel's pen x and hex digit, live in
+                                        ; api_name since kernel size pass 20:
+                                        ; kernel.asm)
 %ifndef NO_CHAINPRIV
 sch_chskip: resw 1                      ; how many chains a nested tick has
                                         ; skipped (SPEC.md 8.5.1), so the
