@@ -415,10 +415,11 @@ ico_core:
     add dx, [ico_h]             ; DX is STILL y - nothing between the bank at
     dec dx                      ; `mov bx,dx` and here writes it - so y2 is
                                 ; one add rather than a load and an add
-    call wm_clip_test
-    mov cx, [ico_x]
-    mov dx, [ico_y]
-    jnc .noclip
+    call wm_clip_test           ; (CX and DX are NOT put back: nothing from
+    jnc .noclip                 ; .noclip on reads either before writing it -
+                                ; the walk re-reads [ico_x]/[ico_y], and the
+                                ; packed driver's VX_ICON reads the cells, not
+                                ; registers. Kernel size pass 20, -8)
 .ret:                           ; a `ret` within short reach of the three
     ret                         ; refusals above .rows_ok, where `.none` at the
 .noclip:                        ; foot was a relaxed five-byte jcc away
@@ -453,16 +454,19 @@ ico_core:
     xor ax, ax                  ; AX is dead after the two adds, and zeroing a
     mov [ico_y], ax             ; register to store it is a byte shorter than
                                 ; the immediate form
-.top_ok:
+.top_ok:                        ; AX = [ico_y] on BOTH ways in - the load above
+                                ; and the zero just stored - so it is not read
+                                ; again (kernel size pass 20, -3)
     mov dx, [vid_ch]            ; ...held across the bottom clip rather than
-    mov ax, [ico_y]             ; read three times. DX has been scratch since
-    cmp ax, dx                  ; the `mul` above
-    jae .none                   ; fully below the screen
+    cmp ax, dx                  ; read three times. DX has been scratch since
+    jae .none                   ; the `mul` above. Fully below the screen
     add ax, bx
     cmp ax, dx
     jbe .rows_ok
-    mov bx, dx
-    sub bx, [ico_y]             ; hang off the bottom edge: draw what fits
+    sub ax, dx                  ; hang off the bottom edge: draw what fits,
+    sub bx, ax                  ; h - (y + h - ch) = ch - y (kernel size pass
+                                ; 20: two registers where a move and a memory
+                                ; subtract were, -2)
 .rows_ok:
     mov [ico_rows], bx
 
