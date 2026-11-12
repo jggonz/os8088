@@ -210,10 +210,13 @@ toast_show:
                                 ; Free of side effects: the pushf above and the
                                 ; popf on both exits restore the caller's DF
                                 ; exactly as they restore its IF
-    or cx, cx
-    jnz .ttl
-    mov cx, TOAST_TICKS
-.ttl:
+%if TOAST_TICKS > 0xFF
+  %error "toast_show's default TTL is loaded into CL alone (CH is 0 there)"
+%endif
+    jcxz .ttl                   ; CX = 0, the default: CH is 0, so CL is the
+    SKIPF2                      ; whole store - and any other CX steps over it
+.ttl:                           ; (test ax, imm16: flags only, -2, kernel size
+    mov cl, TOAST_TICKS         ; pass 20)
     or ch, ch                   ; toast_pass measures expiry with a SIGNED
     jns .ttlok                  ; subtract (the modular-clock compare), so a
     mov cx, 0x7FFF              ; TTL past 32767 ticks would read as already

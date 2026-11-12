@@ -3297,7 +3297,7 @@ drv_dlg_done_x:
     mov bp, [drv_dlg_cb]
     or bp, bp
     jz .out
-    mov word [drv_dlg_row], 0
+    and word [drv_dlg_row], 0   ; (`and`: flags are dead, -1)
     call drv_call               ; BX = the row, BP = its near proc; AL, DX:CX
 .out:                           ; and ES:DI are the page's own arguments
     jmp kretc_bp
@@ -3495,7 +3495,7 @@ drv_load_at:
     mov bx, MEM_K_DRV           ; because every word that names a driver image
     mov ax, mem_region_reloc    ; is the kernel's - mem_region_reloc's table
     call mem_movable_x          ; walk is all of them - and the claim's owner is
-    pop bx                      ; a kernel tag, so mem_reloc_call dispatches it
+                                ; a kernel tag, so mem_reloc_call dispatches it
                                 ; through cw_mem_disp and not through a driver's
                                 ; dispatcher. NO DECLARATION IS ASKED OF THE
                                 ; DRIVER: mem_can_move asks the three facts
@@ -3508,8 +3508,11 @@ drv_load_at:
                                 ; PARA store above was its last reader and
                                 ; dskw_read_x below takes no AX
 
-    push bx                     ; the row - BX is the read's own destination
-    mov es, dx                  ; offset, and the claim starts at ES:0000.
+                                ; THE ROW STAYS BANKED from the push above to
+                                ; the pop past the read (kernel size pass 20:
+                                ; its `pop bx / push bx` here, -2) - BX is the
+    mov es, dx                  ; read's own destination offset, and the claim
+                                ; starts at ES:0000.
     mov cx, bp                  ; ...and NO second `mov si, [bx+DRVR_FILE]`:
     xor bx, bx                  ; SI is still the one loaded for drv_find, and
                                 ; mem_claim_x banks SI/DI around everything
@@ -4202,12 +4205,12 @@ drv_release:
     push di                     ; (the owner slot, for the store below)
     call drv_cls_fp_x           ; CLSCF: a loaded row's class - every class has an fptr
                                 ; AL survives drv_cls_idx, which writes DI
-    mov word [di+2], 0          ; alone. (The OFFSET half is left as it is:
+    and word [di+2], 0          ; alone. (The OFFSET half is left as it is:
                                 ; with HMA_DRV drv_publish writes it ahead of
                                 ; the segment on every load, so nothing reads
                                 ; it while the segment is 0)
     pop di                      ; --- what was drv_svc_clear, written at its
-    mov word [di+drv_owner], 0  ; one call (kernel size pass 15, -19): the
+    and word [di+drv_owner], 0  ; one call (kernel size pass 15, -19): the
     or di, di                   ; owner - which is what drv_cls_svc_x refuses
     jnz .nosvc                  ; an unpublished class by, its offset word
     mov di, drv_svc             ; left as it is (kernel size pass 19) - and

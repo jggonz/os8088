@@ -4743,10 +4743,11 @@ mem_regrow:
     ret
 .conv:
 %endif
-    stc                         ; CF = 1: AX is KB
-    jmp short mem_regrowp.e     ; (a `mov cl, imm8` swallowing the clc would
-mem_regrowp:                    ; be a byte less and would push the caller a
-    clc                         ; CL it never had). mem_regrowp: AX in
+    stc                         ; CF = 1: AX is KB - and SKIPCY1 is `jnc`
+    SKIPCY1                     ; over the clc, never taken with CF = 1: no
+mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
+    clc                         ; where a `mov cl` would push the caller a
+                                ; CL it never had). mem_regrowp: AX in
 .e:                             ; PARAGRAPHS (SPEC.md 50.2.1), CF = 0. Its
                                 ; callers are the driver KEEP and OSAPI_MEM_P,
                                 ; neither of which names a kern_mega POOL

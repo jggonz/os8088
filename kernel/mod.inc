@@ -1018,6 +1018,7 @@ mod_disarm:
     COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
+.ret:                           ; (mod_free_row's nothing-held answer)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1035,7 +1036,7 @@ mod_disarm:
 ; -----------------------------------------------------------------------------
 mod_free_row:
     cmp word [bx+MODR_SEG], 0   ; ...and no outer bank: nothing between here
-    je .out                     ; and `.out` writes BX except the inner
+    je mod_disarm.ret           ; and the free writes BX except the inner
     call mod_disarm             ; mod_disarm preserves BX since it stopped
     xor dx, dx                  ; forming the id, and READ-AND-CLEAR is one
     xchg dx, [bx+MODR_SEG]      ; instruction on the 8086 - DX comes out the
@@ -1066,10 +1067,13 @@ mod_free_row:
 %endif
 %endif
     mov bx, MEM_K_MOD           ; old segment and the word is left 0. NO bank
-    call mem_free_x             ; round BX either: neither caller reads it
-.out:                           ; after the call - mod_need's .freefail falls
-    ret                         ; into .fail and out through kretc_es, and
-                                ; mod_drop goes straight to its own pop run
+    jmp mem_free_x              ; round BX either: neither caller reads it
+                                ; after the call - mod_need's .freefail falls
+                                ; into .fail and out through kretc_es, and
+                                ; mod_drop goes straight to its own pop run.
+                                ; A TAIL: mem_free_x's ret is ours, and the
+                                ; held-nothing `ret` is mod_disarm's, just
+                                ; above (kernel size pass 20, -1)
 
 ; -----------------------------------------------------------------------------
 ; mod_drop - the feature is finished with its module (SPEC.md 2.8.3)

@@ -1311,10 +1311,13 @@ inst_icon_ptr:
     push dx
     push di
     mov si, [di+I_ICON]
-    or si, si
-    jz .none
-    cmp si, I_ICO_PKG
-    jne .runs                   ; a built-in's RUN record: expand it below
+%if I_ICO_PKG != 1
+  %error "inst_icon_ptr's one compare tells 0 (none), 1 (the package's own) and a run pointer apart"
+%endif
+    cmp si, I_ICO_PKG           ; ONE compare, three answers (kernel size
+    jb .none                    ; pass 20, -2): 0 is no icon, 1 the package's
+    jne .runs                   ; own, anything else a built-in's RUN record:
+                                ; expand it below
     cmp word [di+I_SIZE], 0
     je .none                    ; not a package: I_SPTR is a state block
     mov dx, [di+I_SPTR]         ; the REGION, and byte 32 of it is the body
@@ -1954,34 +1957,6 @@ inst_sweep_seg:
 .out:
     ret
 
-; -----------------------------------------------------------------------------
-inst_task_die:
-    cli                         ; ONE IF=0 WINDOW from here to task_exit's
-                                ; switch (task_exit opens with its own cli):
-                                ; the UI task cannot tear the record down
-                                ; while this task still runs, so nothing it
-                                ; frees is under a live task
-    mov byte [di+I_TASK], 0xFF  ; no worker any more: app_close_now's .dying
-                                ; arm may now finish the close
-    mov bx, [di+I_WIN]          ; never 0 here: inst_pkg_spawn's fence wants a
-    call wm_close_req           ; live BOUND window, and only the teardowns
-                                ; clear I_WIN. THE TEARDOWN IS POSTED, not
-                                ; run (SPEC.md 20.6, BR-4): its repaint ends
-                                ; in wm_dock_under and menu_draw_bar, which
-                                ; can far-call ANOTHER package's W_PAINT,
-                                ; and a worker slice as small as Bounce's
-                                ; has 64 bytes left after the interrupt floor.
-                                ; ui_task's close pass runs app_close_now
-                                ; on its own stack: toast_owner_gone,
-                                ; inst_rel_rec, inst_unwin, mem_free_rec,
-                                ; desk_drop_x - in that order, under the lock.
-                                ; I_STATE is left as it is: 2 after a close
-                                ; or a kern_mega fault-kill (mega_fkill set
-                                ; it), 1 when ALIVE was handed a BX that is
-                                ; not ours - app_close_now takes both
-    xor bx, bx                  ; no release byte: the UI task frees the
-    jmp task_exit               ; record (the .orphan precedent); never
-                                ; returns
 
 ; =============================================================================
 ; Package worker tasks (SPEC.md 20.6)
@@ -2252,18 +2227,50 @@ inst_pkg_alive:
     call sch_currec             ; our OWN record, via the task record's
     mov al, [bx+sch_tasks+T_INST] ; T_INST
     cmp al, INST_MAX
-    jae .orphan                 ; no record of ours at all - cannot happen
-    call inst_ptr               ; DI = inst_tab + index*32
-    jmp inst_task_die           ; never returns. The record is closed
-                                ; whatever BX said, or its region, dock tile
-                                ; and tm row leak for the session, which is
-                                ; the failure this routine exists to prevent.
-                                ; Its I_WIN is never 0: the spawn's fence
-                                ; wanted a live bound window, and only the
-                                ; teardowns clear it
-.orphan:
-    xor bx, bx                  ; no release byte - the sbl_refill_task
-    jmp task_exit               ; precedent (SPEC.md 34.5); never returns
+    jae inst_task_die.x         ; no record of ours at all - cannot happen:
+                                ; no release byte - the sbl_refill_task
+                                ; precedent (SPEC.md 34.5); never returns
+    call inst_ptr               ; DI = inst_tab + index*32 - and INTO
+                                ; inst_task_die, below: never returns. The
+                                ; record is closed whatever BX said, or its
+                                ; region, dock tile and tm row leak for the
+                                ; session, which is the failure this routine
+                                ; exists to prevent. Its I_WIN is never 0: the
+                                ; spawn's fence wanted a live bound window,
+                                ; and only the teardowns clear it
+
+; -----------------------------------------------------------------------------
+; inst_task_die - HERE, under inst_pkg_alive's .die, which falls into it
+; (kernel size pass 20: its `jmp` and .orphan's own tail, -8)
+inst_task_die:
+    cli                         ; ONE IF=0 WINDOW from here to task_exit's
+                                ; switch (task_exit opens with its own cli):
+                                ; the UI task cannot tear the record down
+                                ; while this task still runs, so nothing it
+                                ; frees is under a live task
+    mov byte [di+I_TASK], 0xFF  ; no worker any more: app_close_now's .dying
+                                ; arm may now finish the close
+    mov bx, [di+I_WIN]          ; never 0 here: inst_pkg_spawn's fence wants a
+    call wm_close_req           ; live BOUND window, and only the teardowns
+                                ; clear I_WIN. THE TEARDOWN IS POSTED, not
+                                ; run (SPEC.md 20.6, BR-4): its repaint ends
+                                ; in wm_dock_under and menu_draw_bar, which
+                                ; can far-call ANOTHER package's W_PAINT,
+                                ; and a worker slice as small as Bounce's
+                                ; has 64 bytes left after the interrupt floor.
+                                ; ui_task's close pass runs app_close_now
+                                ; on its own stack: toast_owner_gone,
+                                ; inst_rel_rec, inst_unwin, mem_free_rec,
+                                ; desk_drop_x - in that order, under the lock.
+                                ; I_STATE is left as it is: 2 after a close
+                                ; or a kern_mega fault-kill (mega_fkill set
+                                ; it), 1 when ALIVE was handed a BX that is
+                                ; not ours - app_close_now takes both
+.x:                             ; (inst_pkg_alive's .orphan too, which has
+    xor bx, bx                  ; no record to post: kernel size pass 20)
+    jmp task_exit               ; no release byte: the UI task frees the
+                                ; record (the .orphan precedent); never
+                                ; returns
 
 ; -----------------------------------------------------------------------------
 ; inst_launch_post - post a deferred launch of a DISK WINDOW (SPEC.md 29.4)

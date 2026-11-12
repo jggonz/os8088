@@ -2796,6 +2796,9 @@ OS88_RARE   equ 0x81            ; SPEC.md 20.3.4: 81h-85h are BASIC's
 %macro SKIPAX2 0                ; mov ax, imm16 over two bytes: AX, no flag
     db 0xB8
 %endmacro
+%macro SKIPCY1 0                ; jnc rel8 over ONE byte, and only where
+    db 0x73                     ; CF = 1 is PROVED: never taken, so it writes
+%endmacro                       ; no register and NO flag (kernel size pass 20)
 
 osapi_table:
 apic_gfx_lock:
