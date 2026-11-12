@@ -87595,6 +87595,54 @@ until the fill tool is picked up and something is copied: what is left is the
 canvas and, on the full build, the undo image — the two that hold the
 picture.
 
+#### 42.6.7 What scales with the canvas's HEIGHT is a heap claim, not bss
+
+Three tables are sized by the canvas's rows: the **row table** (a segment and
+an offset per row, `pt_layout`'s), §42.18's **inked table** (an `(x1, x2)`
+pair per 16-row band) and §42.8.6's **undo mask** (a byte per row,
+`PTF_UNDO`). They were bss, sized for the `PT_CH_MAX` = 464 ceiling, so every
+Paint paid for the tallest canvas any screen allows whatever it held:
+2,440 bytes on the full build and 1,976 on the small arm, where `PTF_UNDO` is
+off. That is also why §42.22 once traded the small arm's growing for bss.
+
+They are **one heap claim**, `[pt_tabseg]`, sized to the rows there are:
+
+| offset | holds |
+|---|---|
+| 0 | the row table: entry `y` is the 4 bytes at `y * 4`, offset then segment |
+| `[pt_tbib]` | the inked table: `[pt_tbnb]` pairs, `(rows >> 4) + 1` of them |
+| `[pt_tbum]` | the undo mask: a byte a row and one spare, for `pt_undo_new`'s word stores |
+
+- **`pt_tbset`** sizes it for DX rows. Only the inked table has contents to
+  keep, and it is the one that moves: a grow extends the claim
+  (`MEMP_REGROW`, which carries the bytes when it must move the block) and
+  moves the table up from its last word; a shrink moves it down from its
+  first word and then hands back the spare when it is a granule or more
+  (`MEM_GRAN`, 32 paragraphs). New bands are empty, which is what rows a
+  canvas gains are. The row table and the mask are rebuilt by whoever changed
+  the height (`pt_layout`, `pt_undo_new`).
+- **When it is sized.** `pt_alloc` claims it after the canvas (§42.6.1's
+  order: `pt_fit` sized the canvas against the whole run), and frees the
+  canvas and takes §42.6's notice if it is refused. `pt_resize` grows it to
+  the TALLER of the old and new heights before the in-place passes, which lay
+  out every height between, and trims it to the new height at the end. A load
+  sizes it before `pt_layout`. A refused grow keeps the rows the claim holds:
+  the resize stops there (never below the canvas it has) and a load reports
+  it as a crop.
+- **Reaching it.** `pt_rowset` loads ES from `[pt_tabseg]` and then from the
+  entry, so a row costs two instructions more and still nothing a pixel; the
+  inked table's four users and the mask's three load ES around their walks.
+  The claim is movable: `pt_reloc` re-aims `[pt_tabseg]` through `pt_rltab`,
+  and the row table's segment halves are shifted through it when the CANVAS
+  moves (the compactor moves one block and notifies before the next, so the
+  word is current). With no claim (§42.6's notice window) `pt_layout` builds
+  no table and every user is a no-op.
+
+`pt_line` is the one width-sized buffer left in bss (`PT_CW_MAX` bytes): its
+loops address it through DS while ES is the canvas, and it doubles as the
+staging area for the palette band and the icons, so moving it is a change of
+its own.
+
 ### 42.7 Full Screen — the §53 bracket, and why NOT the §11.2 surface
 
 View ▸ Full Screen, or Ctrl+F. `pt_cmd_fs` calls `OSAPI_FSX_RUN` and nothing

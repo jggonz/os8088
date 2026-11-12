@@ -5,7 +5,8 @@
 
 heapfrag proves the mechanism against a package written for it. This proves it
 against a real one, and Paint is the case worth proving: its canvas base is not
-held in one word at all - `[pt_base]`, then ONE SEGMENT PER ROW in `pt_rowseg`
+held in one word at all - `[pt_base]`, then ONE SEGMENT PER ROW in the row table
+(a claim of its own since SPEC.md 42.6.7, at `[pt_tabseg]`)
 because a canvas can be bigger than a segment, then `[pt_undelta]` linking it
 to the undo image. `pt_reloc` has to put all three right, and only two of them
 can be checked by reading memory. The third is checked by looking.
@@ -23,7 +24,7 @@ Three assertions, and the third is the one a memory dump cannot make:
      this script says so rather than passing.
   2. Its CONTENTS survived the move, hashed either side at the two addresses.
   3. Paint REPAINTS THE SAME PICTURE afterwards - which is the only thing that
-     tests `pt_rowseg`, because the row table is what a repaint draws through
+     tests the row table, because the row table is what a repaint draws through
      and a stale one produces a plausible-looking wrong picture rather than a
      crash.
 """
@@ -304,8 +305,9 @@ def main():
             return u16(m.read(lin(m, pt_seg, P[name]), 2))
 
         def rowdeltas(base):
-            rows = m.read(lin(m, pt_seg, P["pt_rowseg"]), nrows * 2)
-            return [(seg_key(m, u16(rows, i * 2)) - base) & 0xFFFF
+            tab = pword("pt_tabseg")            # SPEC.md 42.6.7: the row
+            rows = m.read(tab << 4, nrows * 4)  # table is a claim, entry
+            return [(seg_key(m, u16(rows, i * 4 + 2)) - base) & 0xFFFF  # y*4
                     for i in range(nrows)]
 
         cbase = seg_key(m, pword("pt_base"))
@@ -407,7 +409,7 @@ def main():
         print("  4 undo delta correct  %s" % ("OK" if ok4 else "WRONG"))
         bad += not ok4
 
-        # --- raise Paint: the repaint is what reads pt_rowseg ---------------
+        # --- raise Paint: the repaint is what reads the row table -----------
         # ON AN UNCOVERED PIXEL OF ITS TITLE: the second heapfrag opens over
         # the left of Paint's title bar on a 640x480 screen, and a click at
         # (x+60, y+9) raised heapfrag and captured it over the canvas

@@ -111,11 +111,8 @@ def main(argv):
             an empty one is x1=1, x2=0 (pt_iclear).
             """
             nband = (_bss(m, seg, "pt_ch") >> 4) + 1     # PT_IBSH is 4, and
-            x1 = m.read(_boff(seg, "pt_ibx1"), nband * 2)  # a band past the
-            x2 = m.read(_boff(seg, "pt_ibx2"), nband * 2)  # canvas is empty
-            for i in range(nband):
-                a = int.from_bytes(x1[i * 2:i * 2 + 2], "little")
-                b = int.from_bytes(x2[i * 2:i * 2 + 2], "little")
+            for a, b in dispapps.pt_bands(              # a band past the
+                    m, lambda n: _boff(seg, n), nband): # canvas is empty
                 if a <= b:
                     return 1
             return 0
