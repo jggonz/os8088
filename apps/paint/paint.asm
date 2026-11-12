@@ -342,32 +342,17 @@ PT_LZW_KB   equ 16                  ; the claim both directions run in
 ; from the live geometry rather than from a constant.
 PT_CW_DEF   equ 448                 ; the canvas a fresh Paint starts with...
 PT_CH_DEF   equ 280                 ; ...clamped to the screen and to memory
-%ifdef APP_SMALL
-PT_CW_MAX   equ PT_CW_DEF           ; THE SMALL BUILD'S CANVAS CEILING IS THE
-PT_CH_MAX   equ PT_CH_DEF           ; DEFAULT CANVAS (SPEC.md 42.22). These
-                                    ; two size four bss buffers between them -
-                                    ; pt_umask, pt_rowseg, pt_rowoff and
-                                    ; pt_line, plus pt_ibx1/pt_ibx2 through
-                                    ; PT_NBAND - and at 736x464 that is 1,256
-                                    ; bytes of a package whose whole resident
-                                    ; claim is what keeps it off the floor
-                                    ; machine.
-                                    ;
-                                    ; NOTHING IS WRONG AT THIS SIZE, because
-                                    ; every use of the pair is a CLAMP:
-                                    ; pt_geom holds the canvas inside them and
-                                    ; pt_fit shrinks it again to what the heap
-                                    ; will fund. So a fresh Paint here is the
-                                    ; SAME 448x280 it always was, and what the
-                                    ; small build gives up is only growing or
-                                    ; LOADING past it - which is the trade the
-                                    ; floor machine is being asked to make,
-                                    ; and it is why full-size pictures are not
-                                    ; expected of this arm
-%else
+; THE CANVAS CEILING IS THE SAME ON BOTH ARMS (SPEC.md 42.22.5). The small
+; build used to drop it to the default canvas, 448x280, to save 1,256 bytes of
+; bss - and since a fresh Paint OPENS at the default, every grow was clamped
+; back to the size it already had: the grow box and the size boxes stayed,
+; and every resize they asked for was refused with no message, because a
+; clamp is not a refusal pt_sizeask knows how to report. The four buffers it
+; sizes (pt_rowseg, pt_rowoff, pt_line, pt_ibx1/2) are package bss, not
+; kernel-resident bytes, and the heap is the bound on a canvas anyway: pt_fit
+; still shrinks every request to what memory will fund.
 PT_CW_MAX   equ 736                 ; row-table sizing: the widest screen
 PT_CH_MAX   equ 464                 ; os8088 drives is 720, the tallest 480
-%endif
 PT_IBSH     equ 4                   ; SPEC.md 42.18: the inked table's band is
 PT_IBH      equ 1 << PT_IBSH        ; 16 rows, so a row's band is y >> 4
 PT_NBAND    equ (PT_CH_MAX >> PT_IBSH) + 1

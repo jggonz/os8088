@@ -91218,7 +91218,7 @@ further, and until then full-size pictures are not expected of this arm.
 | `PTF_GIF` | the GIF codec both directions (§42.14, §42.21), its LZW claim, both Save Gif verbs | **−2,587 image, −302 bss** |
 | `PTF_ABOUT` | Paint's own About card | −365 image |
 | `PTF_FSX` | the full-screen surface (§42.7) and the View menu | −377 image |
-| `PT_CW_MAX`/`PT_CH_MAX` | the row-table ceiling drops 736×464 → the default canvas | **−1,256 bss** |
+| `PT_CW_MAX`/`PT_CH_MAX` | the row-table ceiling drops 736×464 → the default canvas | **−1,256 bss** — **REVERSED by §42.22.5** |
 
 **23,307 + 3,900 = 26,465 bytes, 15.6% off**, reported by
 `tools/os88pkgsize.py` on every `make smallapps`.
@@ -91238,7 +91238,8 @@ Three things worth stating because they are otherwise silent:
   is `pt_geom` holding the canvas inside them, and `pt_fit` shrinks it again
   to what the heap will fund — so a fresh Paint here is the same 448×280 it
   always was, and what the small build gives up is *growing or loading past
-  it*.
+  it*. **That trade turned out to be every grow at all**, because a fresh
+  Paint opens AT the ceiling — §42.22.5 took it back.
 
 **Kept on purpose**, so this stays a paint program: every drawing tool, the
 palette, BMP load and save, undo, the clipboard, flood fill, filled shapes,
@@ -91620,6 +91621,49 @@ fund `PT_LZW_KB` — before anything else happens, and refuses with the GIF
 toast, **"No RAM for GIF here"**. `pt_save`'s own refusal stays behind it, for
 a heap that changes between the two. **+21 image, +19 file**, the one change
 in this pass that spends; the small arm has no GIF writer.
+
+#### 42.22.5 The small arm's canvas ceiling is the screen again (2026-11-12)
+
+§42.22's first pass dropped `PT_CW_MAX`/`PT_CH_MAX` under `APP_SMALL` from
+736×464 to the default canvas, 448×280, for 1,256 bytes of bss. The table
+called that "growing or loading past" the default. **It was every grow.** A
+fresh Paint opens at the default (`pt_geom` clamps `PT_CW_DEF`×`PT_CH_DEF`
+to the screen and to memory, and the screen and memory both allow it), so
+`[pt_cwmax]` came out EQUAL to `[pt_cw]` and `pt_sizeask` clamped every
+larger request (a drag of the grow box, or a size typed into the boxes and
+applied) back to the size the canvas already had. The grow box and the size
+boxes stayed, and nothing they asked for ever moved the canvas.
+
+**And it said nothing**, because `pt_sizeask` reports two refusals: memory
+(`[pt_szmem]`, from `pt_fit`) and ink (`[pt_kept]`, from the crop guards).
+A ceiling clamp is neither, so "nothing moved" arrived with neither flag set
+and no toast. Shrinks still worked, which is why the defect read as "it will
+not resize" rather than as a ceiling.
+
+Memory was never the reason. Measured on `os8088_5150_herc_gla` under
+`kern_small`: `[pt_growp]` is 20,352 paragraphs (`PT_WANT_KB`'s cap; the
+heap's largest run is bigger) against the 992 a 464×258 one-bit canvas
+needs. `pt_fit` is what bounds a canvas by the heap and it still does, on
+every request. The ceiling only has to bound the four bss buffers it sizes
+(`pt_rowseg`, `pt_rowoff`, `pt_line`, the inked-band tables), and those are
+the package's claim, not kernel-resident bytes.
+
+So both arms carry the screen-sized ceiling, and the canvas on a given screen
+is bounded by that screen (`pt_screen`'s `[pt_cwmax]`/`[pt_chmax]`) and the
+heap. A one-bit 736×464 canvas is 42,750 bytes, so §42.22's "the small arm's
+canvas always fits 64KB" still holds and none of the `%ifndef APP_SMALL`
+arms that lean on it change.
+
+| | image | bss | one instance |
+|---|---|---|---|
+| before | 17,248 | 3,219 | 20,467 |
+| after | 17,248 | **4,291** | **21,539 (+1,072)** |
+
+The full build is byte-identical (its ceiling never moved). The floor machine
+(`os8088_5150_gla_128k`) pays the 1,072 bytes in the package's own claim.
+`tests/paintgrowsmall.py` (soak) is the row: it grows the small build's
+canvas 16 columns through the size boxes and then shrinks it. It reads 448 →
+448 against the old build.
 
 ### 42.23 The canvas may hold ONE BIT a pixel
 

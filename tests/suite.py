@@ -14593,6 +14593,18 @@ SOAK = [
         "is what it reads, the same tree small128 and smallboot want",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
+    Row("paintgrowsmall", "soak", py("tests/paintgrowsmall.py"), 10.0,
+        "SPEC.md 42.22.5: the SMALL build of Paint grows its canvas. "
+        "APP_SMALL used to drop the canvas ceiling to the default canvas, "
+        "which is the size Paint opens at, so on kern_small every grow - the "
+        "grow box or the size boxes - was clamped back to the size it had, "
+        "with no message (a clamp is neither a memory cut nor an ink guard, "
+        "the two refusals pt_sizeask reports). Opens the small Paint on "
+        "small360, asks for 16 columns more through the size boxes' Enter "
+        "path, then a shrink. VERIFIED TO FAIL against the pre-fix "
+        "PAINT.O88: 448 -> 448. 7s measured",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
     Row("paint1blit", "soak",
         py("tests/paint1blit.py"), 60.0,
         "SPEC.md 42.23.4: the TWO paths a one-bit canvas reaches the screen"
