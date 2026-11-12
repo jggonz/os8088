@@ -56,6 +56,13 @@ def run(card, machine, image):
             mseg = word(m, "mod_tab")
             return mseg != 0 and seg() == mseg
 
+        def seg_kept(where):
+            # the row still names the patched image (kept, not freed): its
+            # bytes are what the next mod_need re-adopts
+            mseg = word(m, "mod_tab")
+            return (not getattr(m, "bochs", False) and mseg != 0 and
+                    where == mseg * 16 + offsets["cpc_save"])
+
         def prompt():
             ui.menu_pick(0, "Shut Down...")
             M.until(m, lambda _: active(), "shutdown confirmation", limit=60)
@@ -119,12 +126,20 @@ def run(card, machine, image):
                       if k.startswith("cpc_save.") and v >= at]
             assert not inside or min(inside) >= at + len(patch), \
                 "the injected writer would overwrite a label inside cpc_save"
-            m.write(m.lin(seg(), at) if getattr(m, "bochs", False)
-                    else seg() * 16 + at, patch)   # (a selector: kern_mega)
+            where = (m.lin(seg(), at) if getattr(m, "bochs", False)
+                     else seg() * 16 + at)          # (a selector: kern_mega)
+            original = m.read(where, len(patch))
+            m.write(where, patch)
             m.key("Enter")
             cancelled()
             assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
             assert m.read(S.linear("cp_dsave"), 1) != b"\x00", "Failed save was not reported"
+            # ...AND THE IMAGE PUT BACK: on kern_big the drop KEEPS it (SPEC.md
+            # 2.8.3), so the next Shut Down re-adopts THESE bytes rather than
+            # reading the file - the patched writer would fail the real flush
+            # below. The claim is kept where it was (nothing claimed since)
+            if seg_kept(where):
+                m.write(where, original)
 
         # Pending settings must be written before stopping the OS.
         m.write(S.linear("cp_wdirty"), b"\x01")

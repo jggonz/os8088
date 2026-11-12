@@ -2149,16 +2149,21 @@ other's.
 the trace caught across one use - the action's own included - and how many
 of them read the module's file:
 
-| module | the use | 1st: calls, its file's | 2nd | 3rd, after a compaction |
+| module | the use | 1st: calls, its file's | 2nd | 3rd, after a compaction moved it |
 |---|---|---|---|---|
-| `CTRL.DRV` | open and close the Control Panel (VGA XT) | 5, 4 (and the boot sector's media check) | **0** | **0** |
-| `WIN95.DRV` | the Theme page's Windows row, then Bright | 2, 1 | **0** | **0** |
-| `DOCK.DRV` | the Dock page's Left row, then Bottom | 2, 1 | **0** | **0** |
-| `EXTD.DRV` | Extend Right, then Single (CGA + Hercules) | 2, 1 | **0** | **0** |
-| `HIBER.DRV` | Hibernate..., then Esc (Hercules + ST-225) | 3, 2 | **0** | **0** |
-| `FORMAT.DRV` | Disk > Format Disk..., then Esc | 9, 2 | 3, 0 - B:'s own probe | 4, 0 |
-| `DISKOPS.DRV` | File > Compress on a text file of B: | 19, 2 | 13, 0 - the compress | 12, 0 |
-| `DESK.DRV` | the Desk Calendar added, then removed | 46, 1 | 27, 0 - the package | 34, 0 |
+| `CTRL.DRV` | open and close the Control Panel (VGA XT) | 7, 4 (the rest the boot sector, the root and B:'s) | **0** | **0** |
+| `WIN95.DRV` | the Theme page's Windows row, then Bright | 3, 1 | **0** | **0** |
+| `DOCK.DRV` | the Dock page's Left row, then Bottom | 3, 1 | **0** | **0** |
+| `EXTD.DRV` | Extend Right, then Single (CGA + Hercules) | 3, 1 | **0** | **0** |
+| `HIBER.DRV` | Hibernate..., then Esc (Hercules + ST-225) | 5, 2 | **0** | **0** |
+| `FORMAT.DRV` | Disk > Format Disk..., then Esc | 9, 2 | 3, 0 - B:'s own probe | 5, 0 (it sat above the hole: not moved) |
+| `DISKOPS.DRV` | File > Compress on a text file of B: | 19, 2 | 12, 0 - the compress | 13, 0 |
+| `DESK.DRV` | the Desk Calendar added, then removed | 46, 1 | 27, 0 - the package and its SYSTEM.CFG rows | 34, 0 |
+
+**`FORMAT.DRV` is loaded by more than the formatter**: its ASSOC.DAT writer
+(`ascw`, §54.7.6.4) is what a mount's flush calls, so the leg that opens B:
+before anything else finds it already KEPT - and every later mount's flush
+re-adopts it rather than reading 3KB of the system disk.
 
 `SERIAL.DRV` has no machine leg: no package on the shipped disks opens a
 lease, and MartyPC's COM1 is the mouse. It is held to the HOST leg's two

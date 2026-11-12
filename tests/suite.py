@@ -13884,7 +13884,7 @@ SOAK = [
         "os88sym's offsets), not out of pixels.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("modcache", "soak", py("tests/modcache.py"), 46.0,
+    Row("modcache", "soak", py("tests/modcache.py"), 195.0,
         "SPEC.md 2.8.3: a dropped module KEPT by the cache comes back from "
         "RAM, off the field report (Sticky Apps on the 5150: the second press "
         "showed a disk access, a press after the Task Manager took the whole "
@@ -13909,9 +13909,25 @@ SOAK = [
         "calendar deleted off a re-serialled system disk Add is the loader's "
         "own refusal; with the system disk back Add launches, and its "
         "SYSTEM.CFG write moves [dsk_wgen] so the next press SCANS again "
-        "and lists it running.",
+        "and lists it running. L on (tests/modkeep.py, the owner's Control "
+        "Panel report): EVERY module - HOST: each opted-in image's tail is "
+        "zeros in its file and every direct store its source makes lands in "
+        "it or a written-before-read cell; VGA XT: CTRL.DRV, WIN95.DRV, "
+        "DOCK.DRV, FORMAT.DRV, DISKOPS.DRV and DESK.DRV, the 5150 Hercules + "
+        "ST-225: HIBER.DRV, CGA + Hercules: EXTD.DRV - each used twice, KEPT "
+        "after each use with its file's bytes, the second use re-adopting it "
+        "with none of its sectors read (CTRL/WIN95/DOCK/EXTD/HIBER with no "
+        "int 13h at all), a compaction with the Calculator's hole above them "
+        "MOVES every kept image below it and keeps it, and a third use "
+        "re-adopts it there; with the panel kept, the calendar's "
+        "registration runs in the settings core (mod_live's slot test). Red "
+        "2026-11-12: CTRL.DRV's MOD_H_SCR 0 (11 FAILs, the second open 4 int "
+        "13h - the report), mod_live's slot test out (the registration "
+        "check: MOD_SETS never loaded), EXT_SCRATCH back mid-image (HOST: "
+        "EXTD.DRV's tail not zero). 195s is 193 measured, alone.",
         needs=("marty", "mtools"), timeout=900,
-        wants=("build/os8088-360.img",)),
+        wants=("build/os8088-360.img", "build/util360.img",
+               "build/calc.o88")),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
         "byte spare and every drag-made shortcut carries `\\` there. Three "

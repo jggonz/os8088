@@ -42,15 +42,19 @@ SERIAL.DRV has no leg: no package on the shipped disks opens a lease, and
 MartyPC's COM1 is the mouse. Its image is held to HOST's two checks; its
 lease lives wholly in its tail (srl_base = 0 is "no lease").
 
-**BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1), measured red 2026-11-12:
-CTRL.DRV's MOD_H_SCR back to 0 (ctrl.inc) and VGA's CTRL.DRV legs FAIL -
-the second open reads the file (sized 1, 3 int 13h) and the row is 'none';
-mod_live's slot test out (mod.inc) and nothing here sees it but
-desksc/modcache's gesture legs - so the kept-panel GESTURE check below
-(a shortcut drag-out with the panel kept) FAILs; the SD_SCRATCH emission
-moved out of `.modcb` (kernel.asm) and HOST FAILs, sd_left a store outside
-the tail; srl_close's base store taken out and HOST still passes - the
-WBR argument is SERIAL's own (2.8.3), which is why it is named there.
+**BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1), each measured red on
+2026-11-12 with MODKEEP_ONLY=MOD_CTRL (CTRL.DRV and DESK.DRV alone):
+
+  * CTRL.DRV's header back to MOD_H_SCR 0 (ctrl.inc) - the owner's report
+    reproduced: 11 FAILs, HOST's two, the row 'none' after every use, the
+    second open LOADING it again (4 int 13h, 2 runs of its sectors), and
+    the settings core never kept;
+  * mod_live's slot test out (mod.inc) - one FAIL, the registration check:
+    MOD_SETS 'none' with the panel kept, the gesture having far-called the
+    kept panel's disarmed slot (and the calendar's first use made 23 int 13h
+    calls where it makes 46: no SYSTEM.CFG was written);
+  * EXT_SCRATCH emitted where the cells used to be, mid-image (extmod.inc) -
+    HOST: EXTD.DRV's 1004-byte "tail" is not zeros in its file.
 """
 import argparse
 import os
