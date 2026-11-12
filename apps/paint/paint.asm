@@ -745,8 +745,9 @@ pt_ncolset:
 
 ; -----------------------------------------------------------------------------
 pt_screen:
-    or bx, bx
-    jz .prim                        ; no window yet (pt_geom, at launch): the
+    push bx                         ; BX is the window in and the screen's
+    or bx, bx                       ; height below (SPEC.md 42.9.1); the
+    jz .prim                        ; caller's comes back                        ; no window yet (pt_geom, at launch): the
                                     ; primary is where one is about to be born
     call OSAPI_WM_DISPLAY           ; **THE DISPLAY THIS WINDOW IS ON**, not
     jmp short .got                  ; the primary (SPEC.md 39.16.4). The two
@@ -797,6 +798,7 @@ pt_screen:
     mov ax, PT_CW_MAX
 .w_cap:
     mov [pt_cwmax], ax
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
