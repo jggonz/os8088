@@ -24,7 +24,7 @@
 ; (init 0 = Scheduler) so nothing has to be zeroed at boot; it persists
 ; across opens, which with one item is indistinguishable from resetting.
 ; The scheduler PAGE keeps no state at all: it reads the global mode live
-; with sched_mode_get, so the panel can never disagree with the kernel (or
+; from [sch_coop], so the panel can never disagree with the kernel (or
 ; with the About box and the Task Manager, which read the same byte) and a
 ; mode changed from anywhere else still paints correctly.
 ;
@@ -3869,7 +3869,7 @@ cp_sched_click:
     call cp_ctli                ; ...and it IS the control: id 1 or 2
     jc .done                    ; (SPEC.md 13.8.3)
 %endif
-    call KERNEL_SEG:sched_mode_get         ; AL = the live mode
+    mov al, [sch_coop]          ; AL = the live mode (SPEC.md 8.2)
     cmp al, ah
     je .done                    ; that row is already live: change nothing
     mov al, ah
@@ -3897,7 +3897,7 @@ cp_sched_click:
 cp_radios:
     call kentm_si                ; KENT: push ax..si
 
-    call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    mov al, [sch_coop]          ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
     lea cx, [di+CP_PGX]         ; the pen is os88ui_glyph's now, taken from
@@ -4612,7 +4612,7 @@ cp_vid_click:
 ; page keeps exactly one byte of state (cp_tsel, which field is selected):
 ; the values themselves are always read live through clk_fld_str, so the
 ; page can no more disagree with the clock than the Scheduler page can with
-; sched_mode_get. Nothing here knows what a month is - clk_fld_adj owns the
+; [sch_coop]. Nothing here knows what a month is - clk_fld_adj owns the
 ; ranges, the wrap and the day clamp - and nothing here calls BIOS: writing
 ; the hardware RTC is cp_flush_close_x's job at the panel's close, off the
 ; [clk_dirty] flag (SPEC.md 37.94).

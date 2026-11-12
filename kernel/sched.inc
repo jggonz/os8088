@@ -1436,25 +1436,6 @@ cp_schset:
 section .text
 
 ; -----------------------------------------------------------------------------
-; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)
-;
-; The only sanctioned reader of sch_coop: the Control Panel's radio glyphs,
-; the About box's third line and the Task Manager's SCHED field all come
-; through here. A one-byte read needs no critical section - the store side is
-; a single atomic byte write (sched_mode_set).
-;
-; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through
-; run, for the reason spelled out on sch_account.
-;
-; in:       nothing
-; out:      AL = 0 pre-emptive, 1 cooperative
-; clobbers: AL (it is the output); flags untouched
-; -----------------------------------------------------------------------------
-sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
-    mov al, [sch_coop]          ; of its own, so the shim that used to `call`
-    retf                        ; this and `retf` is gone
-
-; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
 ;
 ; Chains to the BIOS tick FIRST (it maintains its own count and sends the

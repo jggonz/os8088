@@ -8188,7 +8188,9 @@ section .text
 ; whose CALL count falls to 2 is paying for its trampoline and goes back to
 ; the plain far call (3 is a wash) - on that build alone, through the
 ; %define block above the includes. ct_cw_font_run's are mostly TAILS, which
-; a far call cannot replace for less, so it stays at 2.
+; a far call cannot replace for less, so it stays at 2 on kern_big; on
+; kern_small its one caller, fm_brun, makes the far call itself (kernel size
+; pass 20).
 section .cold
 osapi_vol_kind_x:               ; (see osapi_vol_kind's header above)
     push bx
@@ -8203,8 +8205,10 @@ ct_cw_gfx_unlock:   call KERNEL_SEG:cw_gfx_unlock
                     ret                     ; 11 / 8 sites
 ct_cw_gfx_lock:     call KERNEL_SEG:cw_gfx_lock
                     ret                     ; 12 / 8 sites
+%ifndef KERN_SMALL
 ct_cw_font_run:     call KERNEL_SEG:cw_font_run
-                    ret                     ; 2 / 3 sites
+                    ret                     ; 2 / - sites
+%endif
 ct_cw_wm_content:   call KERNEL_SEG:cw_wm_content
                     ret                     ; 3 / 3 sites
 ct_cw_mem_disp:     call KERNEL_SEG:cw_mem_disp

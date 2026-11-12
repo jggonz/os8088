@@ -9435,7 +9435,14 @@ fm_pen8:                        ; CX = the content's left edge + 8: the pen
 
 fm_brun:                        ; a BLACK-on-WHITE opaque run (SPEC.md 6.1):
     mov ax, (CWHITE << 8) | CBLACK ; CX/DX/SI as font_run takes them, AX the
+%ifdef KERN_SMALL
+    call KERNEL_SEG:cw_font_run ; colours - every run in this file is these
+    ret                         ; (kern_small: the .cold trampoline's one
+                                ; caller, written here - kernel size pass 20,
+                                ; -3; kern_big keeps it for os88ui's UI_RUN)
+%else
     jmp ct_cw_font_run          ; colours - every run in this file is these
+%endif
 
 fm_vpdrv:                       ; DI = the acting window's block, AL = its
     mov di, [fm_vp]             ; drive: five callers' opening pair
