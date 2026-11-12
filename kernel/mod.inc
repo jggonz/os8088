@@ -580,14 +580,19 @@ mod_need:
     call mem_find_own           ; AT that base - a held MODR_SEG names one
     pop bx
     mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
-    and word [ss:si+MC_RLOC], 0 ; ...and no longer movable: its drop's
-                                ; declaration withdrawn, so the record reads
-                                ; as what it is again - a live CS (MEM_K_MOD
-                                ; pins it in mem_can_move all the same)
+                                ; - by the TAG: mem_can_move refuses
+                                ; MEM_K_MOD whatever MC_RLOC says, so the
+                                ; drop's declaration (mem_region_reloc) is
+                                ; left in the record, inert until the next
+                                ; drop re-tags it. Withdrawing it was 5 bytes
+                                ; here and 4 more of relaxed branches below
     mov es, dx
     or bp, -1                   ; no bound on the entries: this image's were
     jmp .arming                 ; bounded by the read it came from
-%endif
+    nop                         ; PARITY PAD, never executed: the cache's
+%endif                          ; .cold is odd without it, and dsk_xfer,
+                                ; dsk_runcap and dsk_next_clus_x keep an EVEN
+                                ; shift (t_hotpar.py)
 
 .check:
 

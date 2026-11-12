@@ -2003,8 +2003,10 @@ nothing.
   stores `mem_region_reloc` in its `MC_RLOC` beside the tag, and `mod_tab`'s
   `MODR_SEG` words are a `mem_rr_tab` row, so the kernel's half of every move
   re-points the one word that names it (a LIVE image is `MEM_K_MOD`, which
-  `mem_can_move` pins, so its row never matches a moving base). `mod_need`'s
-  re-adoption withdraws the declaration with the tag. A kept image is a
+  `mem_can_move` pins whatever its `MC_RLOC` says, so its row never matches
+  a moving base - and that tag is the whole of the re-adoption's pin: the
+  declaration stays in the record, inert, rather than spend 9 bytes
+  withdrawing it). A kept image is a
   disarmed CS that writes nothing outside its zeroed scratch, so a move is a
   copy and nothing else.
 
@@ -2015,9 +2017,9 @@ nothing.
   any ordinary claim's — whether or not its room was needed, so the image
   went at the first compaction after the drop. Movable, it has to be SHED to
   go, which is what a cache is for; and §66.10.5 is the half that made
-  "movable" true for a top-down cache at all. 6 + 5 bytes of `.cold` (the
-  store and the withdrawal), 4 of `.text` (the row), on `kern_big` and
-  `kern_emu` alone. `tests/modcache.py` is the row.
+  "movable" true for a top-down cache at all. 6 bytes of `.cold` (the
+  store) and 4 of `.text` (the row), on `kern_big` and `kern_emu` alone.
+  `tests/modcache.py` is the row.
 
 **Rank: `MEM_PG_LOW`, decided per module rather than inherited (rt-9).**
 Losing a kept image costs the read it saved, with the system disk in the
