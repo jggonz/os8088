@@ -8040,6 +8040,7 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
 .lim:                         ; kern_mega's real-mode FSX bracket writes
     cmp bl, rd_n                ; RD_P + RD_RK over this immediate
     jae .ref                  ; (fsx_rdownf), SPEC.md 53.2.3
+.in:
     add bx, bx
 %ifdef RARE_COUNTERS            ; `make RARECNT=1` (kernel size pass 19, V7):
     add word [ss:bx+rd_clo], 1  ; one 32-bit count an index
@@ -8061,6 +8062,7 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
     pop bp
     retf 2
 .ref:
+%ifdef KERN_MEGA
     popf
     pop bx
     pop ds
@@ -8068,6 +8070,18 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
     mov ax, 1                   ; OSAPI_XREFUSE's answer
     stc
     retf 2
+%else
+    mov bl, RD_P + rdp_XMEM_SEL ; ...AS THE REFUSED CELL ITS INDEX IS ON
+    jmp short .in               ; EVERY KERNEL BUT kern_mega: api_refuse's
+                                ; RS entry answers OSAPI_XREFUSE's CF = 1,
+                                ; AX = 1, every other register and DS kept -
+                                ; the exit this spelled out a second time
+                                ; (kernel size pass 20, -7). Off the hot
+                                ; path: `jae` is still not taken there
+%if RD_P + rdp_XMEM_SEL >= rd_c0
+  %error "the door's .ref borrows XMEM_SEL's index, which must be an RS entry"
+%endif
+%endif
 .k1:
 %if rd_c1                       ; RCS: COLD_SEG:BP through api_far
  %if rd_n > rd_b2

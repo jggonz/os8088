@@ -23705,7 +23705,13 @@ partition: a package asks for a size, `task_spawn` gives it the smallest free
 slice at least that big, and a request no free slice can meet is a refusal
 (CF=1) that 20.6 already requires a package to degrade on. So re-cutting the
 slices cannot renumber what a package asked for, and cannot hand it a slice
-smaller than it declared.
+smaller than it declared. (Kernel size pass 20: on kern_small, whose partition is one
+slice of each class smallest first, the table's class 1-4 rows ARE the
+partition's own `sch_stksize` words, and class 0 has no row on any kernel -
+`inst_pkg_spawn` wraps it onto the out-of-range arm, which is CX = 0, the
+largest. That shares BYTES, not the vocabulary: re-cutting kern_small's
+partition means giving `sch_clsbytes` its own rows back, and `SCH_C1`..`SCH_C3`
+are the one spelling both lists are written from.)
 
 
 ### 11.103 The desk layer (`WF_DESK`): windows that live under every application

@@ -2132,9 +2132,9 @@ inst_pkg_spawn:
                                 ; attributes the task to this instance (SPEC.md
                                 ; 8/28). BX is written by the next instruction
                                 ; and inst_fhome_idx banks AX itself
-    mov bx, [di+I_SPTR]         ; the worker runs in the package's segment...
-    push bx                     ; ...and ITS OWN HEADER says how much stack it
-    mov es, bx                  ; wants (SPEC.md 8.7). Byte +15, which padded
+    mov es, [di+I_SPTR]         ; the worker runs in the package's segment,
+                                ; ...and ITS OWN HEADER says how much stack it
+                                ; wants (SPEC.md 8.7). Byte +15, which padded
     mov bl, [es:LD_H_CLASS]     ; the dispatcher and is 0 on every package
     and bx, 0x3F                ; (bits 7 and 6 are OS88_HIGH and OS88_HIGHMEM
                                 ; and not the class; BH goes with them)
@@ -2146,12 +2146,16 @@ inst_pkg_spawn:
                                 ; whole body, and inst_pkg_fence above was the
                                 ; last reader of the stamped value
     xor cx, cx                  ; task_spawn's own spelling of "no opinion"
-    cmp bx, SCH_NCLASS          ; AN INDEX OUT OF RANGE IS NOT A REFUSAL: a
+    dec bx                      ; ...which class 0 IS: it wraps to FFFFh and
+                                ; takes the refusal arm (kernel size pass 20:
+                                ; sch_clsbytes starts at class 1)
+    cmp bx, SCH_NCLASS - 1      ; AN INDEX OUT OF RANGE IS NOT A REFUSAL: a
     jae .havecls                ; package with a byte we do not understand gets
     shl bx, 1                   ; the largest class and launches, where a
     mov cx, [bx+sch_clsbytes]   ; refused launch would be a hostile-input
 .havecls:                       ; failure over a field nobody validated
-    pop bx                      ; the segment back
+    mov bx, [di+I_SPTR]         ; the segment (kernel size pass 20: read
+                                ; twice rather than banked, -1)
     call task_spawn             ; in AX = entry, BX = seg, CX = stack, DX = arg
     pop cx                      ; the banked AX...
     mov ah, ch                  ; ...and the caller's AH out of its high half
