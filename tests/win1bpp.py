@@ -72,7 +72,16 @@ def open_under(folder, pkg):
             w = dispcp.win_list(m, S)
             wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
             dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name)
-            os88marty.settle(m)
+            # ON THE RECORDS, NOT THE SCREEN: everything below reads window
+            # records, and Missile Command is a GAME - it plays inside its
+            # window until its cities fall, so a screen settle only returned
+            # when that game happened to end inside 360 guest seconds, which
+            # timing (and so the build number) decides. Kernel size pass 20
+            # met it at one build in two with no kernel cause.
+            os88marty.quiesce(
+                m, lambda: [(x.title, x.flags, x.shape)
+                            for x in os88geom.windows(m)],
+                what="the window records to stop changing")
         return os88geom.windows(m)
 
 
