@@ -3614,38 +3614,33 @@ fm_onclick_x:
     jnc .nochcol
     jmp .quiet
 .nochcol:
+    cmp cx, 2                   ; BOTH buttons' rows, 2..15, asked once
+    jl .sbar                    ; (kernel size pass 20)
+    cmp cx, 15
+    jg .sbar
     ; --- Refresh button (drawn iff cw >= 76) ---
     mov ax, [fm_cw]
     cmp ax, 76
-    jl .viewbtn
+    jl .sbar                    ; neither is drawn (the toggle wants 142)
     sub ax, 68                  ; x1 = cw-68 .. x2 = cw-6
     cmp dx, ax
     jl .viewbtn
     add ax, 62
     cmp dx, ax
-    jg .viewbtn
-    cmp cx, 2
-    jl .viewbtn
-    cmp cx, 15
-    jg .viewbtn
+    jg .sbar                    ; right of it: the toggle is LEFT of it
     call fm_reload              ; re-list where we ARE, folder included
     jmp .redraw                 ; (under the gfx lock: stalls painters
                                 ;  briefly; accepted by SPEC.md 22)
 
     ; --- view toggle (drawn iff cw >= 142) ---
-.viewbtn:
-    mov ax, [fm_cw]
-    cmp ax, 142
+.viewbtn:                       ; AX = cw - 68 still
+    cmp ax, 142 - 68
     jl .sbar
-    sub ax, 136                 ; x1 = cw-136 .. x2 = cw-74
+    sub ax, 136 - 68            ; x1 = cw-136 .. x2 = cw-74
     cmp dx, ax
     jl .sbar
     add ax, 62
     cmp dx, ax
-    jg .sbar
-    cmp cx, 2
-    jl .sbar
-    cmp cx, 15
     jg .sbar
     call fm_vflip               ; flip the view, back to the top; the
                                 ; selection is kept (SPEC.md 22). The mirrors
@@ -4320,11 +4315,12 @@ fm_onkey_x:
 
 .delete:
     call fm_delrep              ; stamp it, so the CONFIRMING press can tell
-    mov bx, FMC_DELETE          ; itself from this one's typematic repeat -
-                                ; CF is ignored here, because arming twice is
+    mov bl, FMC_DELETE          ; itself from this one's typematic repeat -
+    SKIPF2                      ; CF is ignored here, because arming twice is
                                 ; the same line asked for twice and the
-                                ; keystroke is only destructive at the answer
-    jmp short .cmd
+                                ; keystroke is only destructive at the answer.
+                                ; It skips .cut's load as the three keys skip
+                                ; each other's (kernel size pass 20, -2)
 .cut:                           ; THE THREE CLIPBOARD KEYS load BL and skip
     mov bl, FMC_CUT             ; each other's load, and BH is cleared once
     SKIPF2                      ; (kernel size pass 17: they were three
@@ -7301,12 +7297,12 @@ fm_paste_res:
     ;     Free figure (SPEC.md 22.7) is the volume's, so a window on another
     ;     folder of it is stale too.
     ; A window neither describes is left exactly as it was, cache and pixels.
-    xor ax, ax                  ; the repaint owes exactly what is re-listed:
-    mov [fmv_ux2], ax           ; the union starts EMPTY - x1/y1 at the top
-    mov [fmv_uy2], ax           ; of the unsigned range and x2/y2 at its
-    dec ax                      ; floor, so the first rect folded in takes
-    mov [fmv_ux1], ax           ; all four by the same compares as the rest
-    mov [fmv_uy1], ax           ; (fmv_repaint_all reads y2 = 0 as empty)
+    mov si, fmv_ux1             ; the repaint owes exactly what is re-listed:
+    KDOOR wm_rect_empty         ; the union starts EMPTY - wm.inc's own empty
+                                ; box, x1/y1 7FFFh and x2/y2 -1, which the
+                                ; first rect wm_runion folds in takes whole
+                                ; (kernel size pass 20: wm.inc's two, by the
+                                ; door, for the open-coded seed and compares)
     call fmv_ifirst
     jc .rdone
 .scan:
@@ -7327,21 +7323,8 @@ fm_paste_res:
     jz .nopix
     KDOOR wm_win_rect              ; AX/BX/CX/DX = its frame, inclusive
     mov si, fmv_ux1             ; (the window is spent: SI is popped below)
-    cmp ax, [si]                ; ...grown into the pending union: screen
-    jae .g1                     ; coordinates, so unsigned throughout
-    mov [si], ax
-.g1:
-    cmp bx, [si+2]
-    jae .g2
-    mov [si+2], bx
-.g2:
-    cmp cx, [si+4]
-    jbe .g3
-    mov [si+4], cx
-.g3:
-    cmp dx, [si+6]
-    jbe .nopix
-    mov [si+6], dx
+    KDOOR wm_runion             ; ...grown into the pending union (signed, as
+                                ; every rect wm.inc unions)
 .nopix:
     pop si
 %ifndef KERN_SMALL
@@ -7418,8 +7401,8 @@ fm_paste_res:
     ; into the union as it goes, and this commits it. A window the paste did not
     ; touch is not repainted, and it keeps exactly the pixels it had.
     cmp word [fmv_uy2], 0       ; still fmv_reload_all's EMPTY union: no
-    je .out                     ; window's bottom edge is row 0 - the menu bar
-    push es                     ; is there - so 0 means nothing folded in
+    jl .out                     ; window's bottom edge is above row 0 - the
+    push es                     ; menu bar is there - so -1 is nothing folded
     push ds
     pop es
     mov si, fmv_ux1             ; seed 11.91's rect directly: the pass below
@@ -7926,38 +7909,19 @@ fm_draw_core:
     ; control is KERN_BIG's (SPEC.md 13.8), and so is os88ui.inc's body
     cmp word [fm_cw], 76
     jl .nobtns
-    mov ax, [fm_rgt]
-    sub ax, 67                  ; abs x1 = cx + cw - 68 = rgt - 67
-    mov bx, [fm_cy]
-    inc bx
-    inc bx
-    mov cx, [fm_rgt]
-    sub cx, 5                   ; abs x2 = rgt - 5
-    mov dx, [fm_cy]
-    add dx, 15
     mov byte [gfx_color], CBLACK ; the frame's pen, set HERE: the header's
-    call ct_cw_gfx_frame        ; font_run spent it (and an empty truncated
+                                ; font_run spent it (and an empty truncated
                                 ; header run leaves it whatever it was)
-    mov cx, ax
+    mov ax, 67                  ; abs x1 = cx + cw - 68 = rgt - 67
+    call .sbtn
     add cx, 3                   ; 56px label centered in the 63px rect
-    mov dx, [fm_cy]
-    add dx, 4
     mov si, fm_s_refresh
     call fm_brun                ; OPAQUE: the content's own white
 
     cmp word [fm_cw], 142
     jl .nobtns
-    mov ax, [fm_rgt]
-    sub ax, 135                 ; abs x1 = rgt - 135
-    mov bx, [fm_cy]
-    inc bx
-    inc bx
-    mov cx, [fm_rgt]
-    sub cx, 73                  ; abs x2 = rgt - 73
-    mov dx, [fm_cy]
-    add dx, 15
-    call ct_cw_gfx_frame
-    mov cx, ax
+    mov ax, 135                 ; abs x1 = rgt - 135
+    call .sbtn
     add cx, 11                  ; "Icons" = 40px -> x1+11
     mov si, fm_s_icons
     call fm_isicon
@@ -7965,8 +7929,6 @@ fm_draw_core:
     add cx, 4                   ; "List" = 32px -> x1+15
     mov si, fm_s_list
 .vlabel:
-    mov dx, [fm_cy]
-    add dx, 4
     call fm_brun                ; OPAQUE: the content's own white
 .nobtns:
 %endif
@@ -7985,6 +7947,27 @@ fm_draw_core:
 %endif
 
     jmp kretc_bp
+
+%ifndef KERN_BIG
+; .sbtn - one of kern_small's two header buttons' frames, the two being the
+; same 63x14 rectangle 68px apart (kernel size pass 20: they were two copies)
+; in:  AX = how far its left edge is in from [fm_rgt]; [gfx_color] the pen
+; out: AX = CX = that left edge, BX = [fm_cy] + 2, DX = [fm_cy] + 4 - the
+;      label's pen, fm_brun's registers but SI. gfx_frame keeps them all
+.sbtn:
+    neg ax
+    add ax, [fm_rgt]            ; x1 = rgt - in
+    mov bx, [fm_cy]
+    inc bx
+    inc bx                      ; y1 = cy + 2
+    mov cx, ax
+    add cx, 62                  ; x2 = x1 + 62: rgt - 5, and rgt - 73
+    lea dx, [bx+13]             ; y2 = cy + 15
+    call ct_cw_gfx_frame
+    mov cx, ax
+    lea dx, [bx+2]              ; the label's baseline row, cy + 4
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fm_draw_rows - the row area, the selection and the scroll bar
@@ -9630,7 +9613,7 @@ section .bss
 fmv_ux1:    resw 1              ; fmv_repaint_all's pending union: the rect
 fmv_uy1:    resw 1              ; every Disk window's frame is folded into,
 fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
-fmv_uy2:    resw 1              ; is painted twice; 0 = nothing folded in
+fmv_uy2:    resw 1              ; is painted twice; -1 = nothing folded in
 %ifdef FM_MSEL
 fm_pool:    resb 5*61           ; FM_NSLOT x FS_SIZE: SPEC.md 22.27's 8 a
  %if FM_NSLOT*FS_SIZE != 5*61   ; block went into the listing claim (22.6.4)
