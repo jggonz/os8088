@@ -118,6 +118,9 @@ SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; stacks"). apps/taskmgr's bss map used to be
                                 ; hand-chained literals and was the other half
                                 ; of why nobody could; it derives now
+SCH_C1      equ 128             ; the stack CLASSES 1-3 (SPEC.md 8.7.2); 4 is
+SCH_C2      equ 192             ; SCH_STACK. Named once for sch_clsbytes and
+SCH_C3      equ 256             ; kern_small's SCH_PARTITION, which shares it
 %if (SCH_STACK % 128) != 0
   %error "SCH_STACK must be a multiple of 128 - it is the largest class and every class is one"
 %endif
@@ -196,10 +199,11 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 ;
 ; THREE USABLE, the idle task owning the fourth. A 43KB heap holds about two
 ; packages, so the binding resource is not this table.
-%macro SCH_PARTITION 0
-    SCH_SLOT 128                ; the idle task's, for the life of the machine
-    SCH_SLOT 192                ; the modal class (STACK-SLOTS-PLAN 12.1)
-    SCH_SLOT 256                ; the Task Manager's declared class, and
+%macro SCH_PARTITION 0          ; (ALSO sch_clsbytes' classes 1-4, in order:
+                                ; kern_small's table is these four words)
+    SCH_SLOT SCH_C1             ; the idle task's, for the life of the machine
+    SCH_SLOT SCH_C2             ; the modal class (STACK-SLOTS-PLAN 12.1)
+    SCH_SLOT SCH_C3             ; the Task Manager's declared class, and
                                 ; Missile's, Word's, Pac-Man's, Tamegram's
     SCH_SLOT SCH_STACK          ; ...and the top class, here for CC_STACK's
 %endmacro                       ; sake rather than for a program's
@@ -938,15 +942,11 @@ section .text
 ; clobbers: AX (AL is an output), flags
 ; -----------------------------------------------------------------------------
 task_spawn:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push bp                     ; BP is the new task's SEGMENT below - a
-                                ; VALUE, never an address, so no [bp+..] is
-                                ; introduced and SS != DS is untouched
+    call kent_bp                ; KENT: push ax..bp - AX too, and the answer
+    push es                     ; is written over its slot at .done (kernel
+                                ; size pass 20: -3, the seven pops' ladder).
+                                ; BP is the new task's SEGMENT below - a
+                                ; VALUE until .done makes it the frame
     pushf                       ; the caller's IF, banked across the window
     cli
     or bx, bx                   ; BX = 0 means the kernel's own segment
@@ -984,17 +984,14 @@ task_spawn:
                                 ; degrade on
 
 .found:
-    mov cx, si                  ; the scan left SI = slot * 2, which is the
-    shr cx, 1                   ; index BOTH tables take - so the slice costs
-    mov di, ax                  ; two loads and no arithmetic. CX becomes the
-    mov ax, [si+sch_stksize]    ; slot index again (AL returns it and the cycle
-    mov si, [si+sch_stkbase]    ; counter below wants it); the entry is parked
-    xchg si, di                 ; in DI and comes back as SI, where the rest of
-                                ; this routine expects it. DI = the slice BASE,
-                                ; where the canary goes, and AX = its SIZE
-    push cx                     ; ...all three banked across the fill, which
-    push di                     ; wants CX for its own count and walks DI
-    push ax
+    mov di, [si+sch_stkbase]    ; the scan left SI = slot * 2, which is the
+    push si                     ; index BOTH tables take - so the slice costs
+    mov cx, [si+sch_stksize]    ; two loads and no arithmetic. DI = the slice
+    xchg si, ax                 ; BASE, CX its SIZE - the fill's own count -
+                                ; and the entry comes back as SI, where the
+                                ; rest of this routine expects it. The slot
+                                ; index is banked (as slot * 2) across the
+                                ; fill, which wants CX and walks DI
     push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
     pop es
     ; --- THE 0xCC FILL, and it is NOT a debug build's (SPEC.md 8.3) --------
@@ -1014,27 +1011,27 @@ task_spawn:
     ;
     ; THE FILL IS DONE FIRST, before the top is worked out, and that ordering
     ; is what keeps this register-clean now that the size is per-slot: the
-    ; count IS the size, so taking it while AX still holds it costs one `mov`
-    ; and no second table read.
-    mov cx, ax
+    ; count IS the size, so it is loaded straight into CX, and the top is
+    ; where the fill leaves DI.
     shr cx, 1                   ; ...as WORDS. SCH_SLOT's own %error is what
                                 ; keeps every size even, which this and the
                                 ; word canary below both need
     mov ax, 0xCCCC
     cld
+    push di                     ; the base...
     rep stosw                   ; ES:DI = the slice base, upwards - words,
                                 ; 1.76 us a byte measured (PERFORMANCE.md), and
-                                ; this whole fill runs inside the spawn's cli
-    pop ax                      ; the size...
-    pop di                      ; ...the base...
-    pop cx                      ; ...and the slot index, which is NOT dead: the
-                                ; cycle counter and the return value both want
-                                ; it
+                                ; this whole fill runs inside the spawn's cli.
+                                ; It leaves DI = base + size, the slice TOP
+    pop ax
+    xchg ax, di                 ; ...DI = the base for the canary, AX the top
     mov word [es:di], SCH_MAGIC
-    add ax, di                  ; base + size = the slice TOP...
     sub ax, SCH_FRAME           ; ...and the fake frame is carved from it
-    mov di, ax
-    mov [bx+T_SP], di
+    xchg di, ax                 ; (kernel size pass 20: the top is where the
+    mov [bx+T_SP], di           ; fill stopped, so no size is banked, -13)
+    pop cx                      ; ...and the slot index, which is NOT dead: the
+    shr cx, 1                   ; cycle counter and the return value both want
+                                ; it
 
                                 ; the frame lives in LOW_SEG, so it is built
                                 ; through ES - DS cannot reach it. ES IS
@@ -1086,15 +1083,10 @@ task_spawn:
     popf                        ; IF back - and the caller's CF with it, so
     cmp al, 1                   ; the answer is re-derived from AL here:
                                 ; AL = 0 -> CF = 1 (table full), else CF = 0.
-                                ; The pops below touch no flags.
-    pop bp
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+                                ; Nothing below touches a flag
+    mov bp, sp                  ; [bp] ES, BP, DI, SI, DX, CX, BX, [bp+14] AX:
+    mov [bp+14], ax             ; the answer replaces the banked AX
+    jmp kret_es
 
 ; -----------------------------------------------------------------------------
 ; sch_frame - write a task's initial register frame (module internal)
@@ -1442,25 +1434,6 @@ cp_schset:
     pop ax
     ret
 section .text
-
-; -----------------------------------------------------------------------------
-; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)
-;
-; The only sanctioned reader of sch_coop: the Control Panel's radio glyphs,
-; the About box's third line and the Task Manager's SCHED field all come
-; through here. A one-byte read needs no critical section - the store side is
-; a single atomic byte write (sched_mode_set).
-;
-; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through
-; run, for the reason spelled out on sch_account.
-;
-; in:       nothing
-; out:      AL = 0 pre-emptive, 1 cooperative
-; clobbers: AL (it is the output); flags untouched
-; -----------------------------------------------------------------------------
-sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
-    mov al, [sch_coop]          ; of its own, so the shim that used to `call`
-    retf                        ; this and `retf` is gone
 
 ; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
@@ -2598,10 +2571,9 @@ sch_resume:
     pop cx
     pop ax
     iret
-    nop                         ; PARITY PAD, never executed: the scan's
-                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
-                                ; keeps everything after it at the parity it
-                                ; was measured at (t_hotpar)
+                                ; (NO PARITY PAD here since kernel size pass
+                                ; 20: clip_get's byte, below it and above
+                                ; ui_task, is the other half - t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_stkdie - a task overran its stack slice (SPEC.md 8)
@@ -2809,9 +2781,10 @@ sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
 sch_s_in    equ fm_s_colsp + 1  ; '  ', 0 - the tail of the Disk window's
                                 ; ':  ' (files.inc), both .text (kernel size
                                 ; pass 13)
-%ifdef KERN_BIG
-            db 0                ; PARITY PAD (kernel size pass 13):
-%endif                          ; wm_paint_all at an even shift on kern_big
+                                ; (kern_big's PARITY PAD that stood here went
+                                ; in kernel size pass 20: wm_paint_all left the
+                                ; pinned list, and toast_pass's byte is the
+                                ; other half for ui_task - t_hotpar)
 sch_s_ui:   db 'UI TASK', 0
 
 ; -----------------------------------------------------------------------------
@@ -2911,13 +2884,26 @@ sch_stksize:
 ; free to adopt: every package built before it has 0 there, and 0 gets exactly
 ; the stack it always had.
 ; -----------------------------------------------------------------------------
+;
+; CLASS 0 HAS NO ROW (kernel size pass 20): it meant SCH_STACK, which is what
+; task_spawn gives CX = 0, so inst_pkg_spawn's `dec` wraps it onto the
+; out-of-range arm and the table starts at class 1. And on kern_small the
+; four rows ARE sch_stksize's slots 1 to 4 - its partition is one slice of
+; each class, smallest first - so the table is those words and costs nothing
+; (SCH_C* below are the one spelling both lists are written from)
+SCH_NCLASS  equ 5               ; classes 0 (no opinion) to 4
+%ifdef KERN_SMALL
+sch_clsbytes equ sch_stksize + 2
+%else
 sch_clsbytes:
-    dw SCH_STACK                ; 0: unspecified - the largest class
-    dw 128                      ; 1: a sleeper - the idle task, Bounce
-    dw 192                      ; 2: most workers, the modal class
-    dw 256                      ; 3: a worker that draws through a deep chain
+    dw SCH_C1                   ; 1: a sleeper - the idle task, Bounce
+    dw SCH_C2                   ; 2: most workers, the modal class
+    dw SCH_C3                   ; 3: a worker that draws through a deep chain
     dw SCH_STACK                ; 4: the largest, asked for on purpose
-SCH_NCLASS  equ ($ - sch_clsbytes) / 2
+%if ($ - sch_clsbytes) / 2 != SCH_NCLASS - 1
+  %error "sch_clsbytes holds classes 1 to SCH_NCLASS - 1"
+%endif
+%endif
 %if SCH_NCLASS > 0x3F
   %error "sched: LD_H_CLASS is 6 bits - bits 7 and 6 are OS88_HIGH and OS88_HIGHMEM - and inst_pkg_spawn masks it with 3Fh"
 %endif
@@ -3006,9 +2992,10 @@ section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
-sch_dpcol:  resw 1                      ; the death panel's pen x (SPEC.md
-                                        ; 8.8); its y is the constant SDP_Y
-sch_dphc:   resb 2                      ; one hex digit, as an ASCIIZ string
+                                        ; (sch_dpcol and sch_dphc, the death
+                                        ; panel's pen x and hex digit, live in
+                                        ; api_name since kernel size pass 20:
+                                        ; kernel.asm)
 %ifndef NO_CHAINPRIV
 sch_chskip: resw 1                      ; how many chains a nested tick has
                                         ; skipped (SPEC.md 8.5.1), so the

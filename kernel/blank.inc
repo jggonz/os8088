@@ -409,7 +409,8 @@ blk_pass:
 ;
 ; in:       AL = 1 to save, 0 to restore
 ; out:      [blk_on] follows
-; clobbers: flags
+; clobbers: flags; and AX on kern_small, whose one-card arm is vid_bk's tail
+;           (kernel size pass 20) - both callers bank AX around the call
 ;
 ; THE ANIMATION IS TRIED FIRST AND THE BLANKER IS WHAT HAPPENS WHEN IT CANNOT
 ; RUN (SPEC.md 79.1). Every refusal ss_start_x can answer - no mode ticked, no
@@ -450,8 +451,8 @@ blk_pass:
 ; -----------------------------------------------------------------------------
 blk_set:
     mov [blk_on], al
-    push ax
 %ifdef KERN_BIG                 ; CX is the loop's and the loop is KERN_BIG's:
+    push ax
     push cx                     ; the %else arm below names no CX, and
                                 ; vid_bk, which banks ax/es/dx, never writes it
     push si                     ; SI = the routine the walk calls, chosen once
@@ -511,18 +512,24 @@ blk_set:
 .pop:
     pop si
     pop cx
-%else
-    or al, al                   ; the direction (`mov` writes no flag)...
-    mov al, [vid_kind]          ; kern_small is single-display by construction
-    jz .lit                     ; - vidsel.inc's whole multi-display half is
-    call vid_blank_kind
-    jmp short .one
-.lit:
-    call vid_unblank_kind
-.one:
-%endif                          ; inside one %ifdef KERN_BIG
     pop ax
     ret
+%else
+    ; kern_small is single-display by construction - vidsel.inc's whole
+    ; multi-display half is inside one %ifdef KERN_BIG - so this is ONE card,
+    ; and vid_bk's own body, ENTERED WITH vid_blank_kind's FRAME: DX banked
+    ; and DH = the direction byte, which its epilogue pops before its `ret`
+    ; returns to our caller. 0 dark and 8 lit is exactly the byte the two
+    ; doors load (kernel size pass 20, -4: it was a test, two calls and a
+    ; jump). AX IS SPENT HERE, and on this build alone - AL comes back as
+    ; [vid_kind]; both callers bank AX around the call (blk_wake, blk_pass)
+    push dx
+    cmp al, 1                   ; CF = AL is 0, "light"...
+    sbb dh, dh
+    and dh, 8                   ; ...so DH = 8 lit, 0 dark
+    mov al, [vid_kind]
+    jmp vid_bk
+%endif                          ; inside one %ifdef KERN_BIG
 
 ; (blk_one, which turned [blk_on] into one of these two jumps per display, is
 ; gone: blk_set chooses once - kernel size pass 17, -2 on kern_big, -4 on

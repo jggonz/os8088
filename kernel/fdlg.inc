@@ -1364,12 +1364,10 @@ fdlg_reap_x:
     cmp word [fdlg_win], 0
     jne .no                     ; still up - or a callback opened another -
 .drop:                          ; so the image stays
-    push ax
-    mov al, MOD_FDLG
-    call mod_drop
-    pop ax
-.no:
-    retf
+    mov al, MOD_FDLG            ; AX is not banked (kernel size pass 20, -2):
+    call mod_drop               ; ui_task's ladder, the one caller, reads no
+.no:                            ; register after it - its next rung writes
+    retf                        ; AX before any read
 
 fdlg_grab_x:
     cmp word [fdlg_win], 0      ; CF=0 either way, which with no chooser is

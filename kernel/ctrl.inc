@@ -24,7 +24,7 @@
 ; (init 0 = Scheduler) so nothing has to be zeroed at boot; it persists
 ; across opens, which with one item is indistinguishable from resetting.
 ; The scheduler PAGE keeps no state at all: it reads the global mode live
-; with sched_mode_get, so the panel can never disagree with the kernel (or
+; from [sch_coop], so the panel can never disagree with the kernel (or
 ; with the About box and the Task Manager, which read the same byte) and a
 ; mode changed from anywhere else still paints correctly.
 ;
@@ -1239,7 +1239,13 @@ section .cold                   ; ...and the two that stay resident
 ; Control Panel exists, so in the module it would read CTRL.DRV off the floppy
 ; every second forever. It is also its own gate - the whole body is the test -
 ; so there is nothing here that wanted to be in the image.
+;
+; FAR, and cpf_cp_tick_due IS it: that slot's once-a-second call lands in the
+; body, where it went through a `call / retf` thunk, and cpf_cp_tick - the one
+; near caller, once a minute - pushes CS for the `retf` (kernel size pass 20:
+; -3, and a near call and its `ret` off every second's tick)
 ; -----------------------------------------------------------------------------
+cpf_cp_tick_due:
 cp_tick_due_x:
     push ax
     push bx
@@ -1258,7 +1264,7 @@ cp_tick_due_x:
     pop di
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_gone_x - a driver's page is on screen no longer (SPEC.md 31.9)
@@ -3863,7 +3869,7 @@ cp_sched_click:
     call cp_ctli                ; ...and it IS the control: id 1 or 2
     jc .done                    ; (SPEC.md 13.8.3)
 %endif
-    call KERNEL_SEG:sched_mode_get         ; AL = the live mode
+    mov al, [sch_coop]          ; AL = the live mode (SPEC.md 8.2)
     cmp al, ah
     je .done                    ; that row is already live: change nothing
     mov al, ah
@@ -3891,7 +3897,7 @@ cp_sched_click:
 cp_radios:
     call kentm_si                ; KENT: push ax..si
 
-    call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    mov al, [sch_coop]          ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
     lea cx, [di+CP_PGX]         ; the pen is os88ui_glyph's now, taken from
@@ -4606,7 +4612,7 @@ cp_vid_click:
 ; page keeps exactly one byte of state (cp_tsel, which field is selected):
 ; the values themselves are always read live through clk_fld_str, so the
 ; page can no more disagree with the clock than the Scheduler page can with
-; sched_mode_get. Nothing here knows what a month is - clk_fld_adj owns the
+; [sch_coop]. Nothing here knows what a month is - clk_fld_adj owns the
 ; ranges, the wrap and the day clamp - and nothing here calls BIOS: writing
 ; the hardware RTC is cp_flush_close_x's job at the panel's close, off the
 ; [clk_dirty] flag (SPEC.md 37.94).
@@ -7809,7 +7815,8 @@ cpf_cp_flush_close:
 ; out of resident data, and answers CF = 1 only when there is something to
 ; draw. Without it the machine loaded CTRL.DRV once a minute for ever.
 cpf_cp_tick:
-    call cp_tick_due_x
+    COLDCALL cp_tick_due_x      ; a FAR frame: cp_tick_due_x is the far
+                                ; cpf_cp_tick_due (kernel size pass 20)
     jnc .t_gone
     call cpf_need
     jc .t_gone
@@ -7818,13 +7825,15 @@ cpf_cp_tick:
     retf
 
 ; ...and the one that never leaves: cp_tick_due runs once a second forever, so
-; it is a resident body with the plain thunk it always had. cp_drv_gone was
-; the second of a pair here and its far entry had no caller - the body is
-; `.cold` and so is drv_release, its only caller, which reaches it near.
-cpf_cp_tick_due:       call cp_tick_due_x
-                    retf
+; it is a resident body - and its own far entry since kernel size pass 20
+; (cp_tick_due_x, above). cp_drv_gone was the second of a pair here and its
+; far entry had no caller - the body is `.cold` and so is drv_release, its
+; only caller, which reaches it near. cp_open_x keeps a thunk where drv_notice
+; near-calls it too (OS88_DRIVERS); on kern_small the body is the far entry
+%ifdef OS88_DRIVERS
 cpf_cp_open:           call cp_open_x
                     retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_open_x - open the Control Panel, or say why not (SPEC.md 2.8.4)
@@ -7843,6 +7852,9 @@ cpf_cp_open:           call cp_open_x
 ; stays loaded from here until cp_flush_close - so every other cp thunk finds
 ; the image already there and its mod_need is six compares.
 ; -----------------------------------------------------------------------------
+%ifndef OS88_DRIVERS
+cpf_cp_open:                    ; (FAR: its one caller is the slot - kernel
+%endif                          ; size pass 20, -4 on kern_small)
 cp_open_x:
     push ax                     ; the bank is the BODY's, not the load's:
     call cp_open_need           ; cpf_need banks AX itself, but `mov al,
@@ -7861,7 +7873,11 @@ cp_open_x:
     stc
 .out:
     pop ax                      ; (POP keeps CF: one epilogue for all three)
+%ifdef OS88_DRIVERS
     ret
+%else
+    retf
+%endif
 
 cp_open_need:
     call cpf_need

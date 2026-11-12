@@ -487,13 +487,17 @@ FCPBODY fcp_paste
 %ifdef FM_MSEL
     call fcp_lnext              ; ...and the list's other entries after it
 %endif
-    jmp short .out
+    SKIPF2                      ; over .empty's load, AL kept (the flags are
+                                ; a clobber: kernel size pass 20, -1)
 %if FCP_NONE != 0 || FCP_CBSZ > 255
   %error "fcp_paste writes FCP_NONE and a zero [fcp_all] out of CH = FCP_CBSZ >> 8"
 %endif
 .empty:
     mov al, FCPS_DONE           ; nothing on the clipboard is not an error,
-.out:                           ; it is a menu item that does nothing
+                                ; it is a menu item that does nothing
+%if FCPS_DONE > 255
+  %error "fcp_paste's SKIPF2 steps over a two-byte `mov al, FCPS_DONE`"
+%endif
     jmp fcp_x5
 
 %ifdef FM_MSEL

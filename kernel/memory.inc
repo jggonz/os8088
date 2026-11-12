@@ -937,12 +937,13 @@ mem_floor_ax:
     and al, 0xE0                ; under the floor are paragraphs now, and a
 %endif                          ; heap base is an int 13h target (guard 6,
     ret                         ; MOVABLE-COLD-PLAN 5)
-                                ; (kern_small's PARITY PAD stood here - a
-                                ; `nop` for dsk_xfer, dsk_runcap and
-                                ; dsk_next_clus_x past it in `.cold` - and
-                                ; went when SPEC.md 50.6.13 and 2.8.3.4 added
-                                ; an odd 219 bytes between: tests/unit/
-                                ; t_hotpar.py is what measures it)
+                                ; (kern_small's PARITY PAD that stood here
+                                ; went in kernel size pass 20, with
+                                ; mem_fatw_dirty's byte the other half, and
+                                ; SPEC.md 50.6.13 / 2.8.3.4 then moved
+                                ; `.cold` again: tests/unit/t_hotpar.py is
+                                ; what measures dsk_xfer, dsk_runcap and
+                                ; dsk_next_clus_x)
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
@@ -2737,9 +2738,9 @@ mem_in_nest:
 mem_fatw_dirty:
     push ax
 %ifdef KERN_SMALL
-    mov ax, [dsk_dseg]
-    cmp ax, [ss:si+MC_SEG]
-    je .yes
+    mov ax, [ss:si+MC_SEG]      ; THE RECORD'S BASE, once, for both of
+    cmp ax, [dsk_dseg]          ; kern_small's compares (kernel size pass
+    je .yes                     ; 20, -1)
 %endif
     cmp word [dsk_fatd0], 0xFFFF
     je .no                      ; nothing is dirty anywhere
@@ -2749,6 +2750,8 @@ mem_fatw_dirty:
     mov ax, [dsk_fatseg]
     cmp ax, bx                  ; ...and is THIS the window it is dirty in?
     pop bx
+%elifdef KERN_SMALL
+    cmp ax, [dsk_fatseg]        ; ...and is THIS the window it is dirty in?
 %else
     mov ax, [dsk_fatseg]
     cmp ax, [ss:si+MC_SEG]      ; ...and is THIS the window it is dirty in?
@@ -4872,10 +4875,11 @@ mem_regrow:
     ret
 .conv:
 %endif
-    stc                         ; CF = 1: AX is KB
-    jmp short mem_regrowp.e     ; (a `mov cl, imm8` swallowing the clc would
-mem_regrowp:                    ; be a byte less and would push the caller a
-    clc                         ; CL it never had). mem_regrowp: AX in
+    stc                         ; CF = 1: AX is KB - and SKIPCY1 is `jnc`
+    SKIPCY1                     ; over the clc, never taken with CF = 1: no
+mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
+    clc                         ; where a `mov cl` would push the caller a
+                                ; CL it never had). mem_regrowp: AX in
 .e:                             ; PARAGRAPHS (SPEC.md 50.2.1), CF = 0. Its
                                 ; callers are the driver KEEP and OSAPI_MEM_P,
                                 ; neither of which names a kern_mega POOL
@@ -5622,16 +5626,13 @@ mmf_mem_claim_own:
     push cx
     push bx
     call mem_own                ; BX = owner word = the calling segment
-    jc .fail
-%ifdef KERN_MEGA
-    call mem_claim_x.low        ; (past the arm that offers a KERNEL cache
-%else                           ; the pool: an owner is no cache's tag)
-    call mem_claim_x
-%endif
-    jmp short .out
-.fail:
-    xor dx, dx
-    stc
+    mov dx, 0                   ; THE REFUSAL'S DX, ahead of the test: `mov`
+    jc .out                     ; keeps mem_own's CF = 1, and DX is no input
+%ifdef KERN_MEGA                ; of the claim, which answers it (kernel size
+    call mem_claim_x.low        ; pass 20, -2: a `.fail` arm and the jump over
+%else                           ; it). (.low: past the arm that offers a
+    call mem_claim_x            ; KERNEL cache the pool: an owner is no
+%endif                          ; cache's tag)
 .out:
     pop bx                      ; pop leaves CF alone, and so does retf
     pop cx
@@ -5641,7 +5642,8 @@ mmf_mem_claim_ownhi:            ; ...and from the TOP: the bridge's
     push cx                     ; conventional piece (mega.inc, MC5 and
     push bx                     ; 14.169)
     call mem_own
-    jc mmf_mem_claim_own.fail
+    mov dx, 0
+    jc mmf_mem_claim_own.out
     call mem_claim_hi_x
     jmp short mmf_mem_claim_own.out
 %endif
@@ -6033,10 +6035,14 @@ osapi_mem_p:
     mov cx, SKB_STK0            ; ...and task 0's stack. Build constants: the
     retf                        ; image row is the kernel less these, and it
                                 ; is the only one that moves at run time
+%ifndef MOD_CACHE
     nop                         ; PARITY PAD, never executed: the hot
-                                ; `.cold` routines past this - dsk_xfer,
+%endif                          ; `.cold` routines past this - dsk_xfer,
                                 ; dsk_runcap, dsk_next_clus_x - keep their
-                                ; measured parity (tests/unit/t_hotpar.py)
+                                ; measured parity (tests/unit/t_hotpar.py).
+                                ; kern_big and kern_emu need none since
+                                ; kernel size pass 20: MOD_CACHE's mod_live
+                                ; is the other byte
 
 
 ; -----------------------------------------------------------------------------

@@ -382,19 +382,22 @@ mod_live:
     call mod_fpr
 %ifdef KERN_MEGA
     COLDSEG_TO ax               ; kern_mega: a LIVE slot names the image's
-%else                           ; code half - MODR_SEG above 1MB, MODR_SEG - 8
-    mov ax, [bx+MODR_SEG]       ; below it - so the test is the KEPT one: a
-%endif                          ; disarmed slot names mod_gone's segment,
+                                ; code half - MODR_SEG above 1MB, MODR_SEG - 8
+                                ; below it - so the test is the KEPT one: a
+                                ; disarmed slot names mod_gone's segment,
     cmp [di+2], ax              ; `.cold`'s, which is this CS (COLDSEG_TO)
-    pop cx
-    pop di
+%else
+    mov ax, [bx+MODR_SEG]
+    sub ax, [di+2]              ; 0: LIVE - and `neg` sets CF iff its operand
+    neg ax                      ; is not 0, so KEPT, disarmed, answers CF = 1:
+%endif                          ; not resident for a caller (kernel size pass
+    pop cx                      ; 20, -1: the `je` / `stc`). A pop keeps the
+    pop di                      ; flags
 %ifdef KERN_MEGA
     clc
     jne .ret                    ; kern_mega LIVE: not mod_gone's, CF = 0
-%else
-    je .ret                     ; ZF = 1 and CF = 0: LIVE
-%endif
     stc                         ; KEPT, disarmed: not resident for a caller
+%endif
 .ret:
 %endif
     ret
@@ -479,13 +482,94 @@ mod_need:
 .reread:                        ; (.held's: a KEPT image the UI task shed or
     mov dx, [bx+MODR_SEG]       ; moved between this read and its IF = 0)
     or dx, dx                   ; CF = 0, which a LIVE row answers with
-    jnz .held                   ; ...held: LIVE, or KEPT by a drop (2.8.3)
+    jz .load                    ; ...held: LIVE, or KEPT by a drop (2.8.3).
+                                ; HELD FALLS THROUGH, here and not below the
+                                ; answers (kernel size pass 20: -3, and the
+                                ; LIVE path two taken jumps fewer) - which
+                                ; also brings the arming loop's two .badarm
+                                ; jumps back into short range
 %else
     cmp word [bx+MODR_SEG], 0
     jne .out                    ; already in: `cmp x, 0` cannot borrow, so CF
                                 ; = 0 is the answer (kernel size pass 17, -3:
                                 ; an `.already` arm that said `clc` and
                                 ; jumped here)
+%endif
+%ifdef MOD_CACHE
+; --- A HELD ROW (SPEC.md 2.8.3): LIVE - MEM_K_MOD, armed, and the answer is
+; CF = 0 as it always was - or KEPT by its drop, MEM_P_MOD + 2 x its id, and
+; then RE-ADOPTED here with no disk read: the claim pinned again, and its
+; slots armed by the same loop a load arms them with. Nothing else a load
+; does is owed: the scratch was zeroed at the drop, the stamps were checked
+; on the read the image came from, and mod_cfix (or the ROM's fix) re-pointed
+; its `.cold` words then and is not run twice - `.cold` never moves after
+; the boot, which slides it before the heap exists. DX = the segment, BX =
+; the row
+.held:
+    call mod_fpr                ; DI = its slot block. LIVE: the slots name
+%ifdef KERN_MEGA                ; its segment, and that is the whole test -
+    COLDSEG_TO ax               ; no walk on a thunk's hot path. KEPT: they
+    cmp [di+2], ax              ; read mod_gone's, `.cold`'s. kern_mega asks
+    je .kept                    ; the KEPT question (mod_live's note): a
+    clc                         ; live slot there names a code half, which is
+%else                           ; MODR_SEG or MODR_SEG - 8
+    cmp [di+2], dx
+    jne .kept
+%endif
+    jmp kretc_es                ; LIVE: CF = 0
+.kept:
+    pushf                       ; AN IF = 0 WINDOW from the check to the re-tag
+    cli                         ; (SPEC.md 2.8.3): a mod_need on ANY task may
+    cmp dx, [bx+MODR_SEG]       ; re-adopt - a package worker's SERIAL.DRV
+    jne .race                   ; included - and only the UI task sheds or
+                                ; compacts (66.3.1), so a shed (MODR_SEG 0)
+                                ; or a move (another base) since the read
+                                ; above is seen here and read again, and
+                                ; none can land between this and the tag
+%ifdef KERN_MEGA
+    call mem_ishidx             ; A POOL PAIR (SPEC.md 2.8.3.3), or the
+    jc .hlow                    ; conventional claim every other kernel keeps
+    push bx                     ; THE POOL PAIR: its block's
+    xchg ax, dx                 ; purgeable mark comes off - BX = 0 - so no
+    xor bx, bx                  ; shed can take it from here; still under
+    call MEGA_SEL_CODE:mega_modkeepf ; the IF = 0 the shed's whole scan runs
+    xchg ax, dx                 ; under (mx_shedf). DX = the code selector
+    pop bx
+    add dx, 8                   ; ...and ES its DATA half: .arming stores
+    jmp short .hset             ; ES - 8, the code half, in every slot
+.hlow:                          ; BELOW 1MB in protected mode: MODR_SEG is
+                                ; already the record's DATA selector, and the
+                                ; re-adopt is every kernel's, below
+%endif
+    push bx
+    mov bx, dx                  ; mem_find_own's own-segment arm: the record
+    call mem_find_own           ; AT that base - a held MODR_SEG names one
+    pop bx
+    mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
+                                ; - by the TAG: mem_can_move refuses
+                                ; MEM_K_MOD whatever MC_RLOC says, so the
+                                ; drop's declaration (mem_region_reloc) is
+                                ; left in the record, inert until the next
+                                ; drop re-tags it. Withdrawing it was 5 bytes
+                                ; here and 4 more of relaxed branches below
+%ifdef KERN_MEGA
+.hset:
+%endif
+    popf
+    mov es, dx
+%ifdef KERN_MEGA
+    mov bp, [es:MOD_H_IMG]      ; the image's bytes, as its read had them:
+                                ; mod_hi below COPIES a low one above 1MB now
+                                ; that the pool may have room (mod_hiboot's
+                                ; BP), and -1 would copy nothing
+%else
+    or bp, -1                   ; no bound on the entries: this image's were
+%endif                          ; bounded by the read it came from
+    jmp .arming
+.race:
+    popf
+    jmp .reread
+.load:
 %endif
 
 %ifndef MOD_CACHE
@@ -586,79 +670,6 @@ mod_need:
 .out:
     jmp kretc_es
 
-%ifdef MOD_CACHE
-; --- A HELD ROW (SPEC.md 2.8.3): LIVE - MEM_K_MOD, armed, and the answer is
-; CF = 0 as it always was - or KEPT by its drop, MEM_P_MOD + 2 x its id, and
-; then RE-ADOPTED here with no disk read: the claim pinned again, and its
-; slots armed by the same loop a load arms them with. Nothing else a load
-; does is owed: the scratch was zeroed at the drop, the stamps were checked
-; on the read the image came from, and mod_cfix (or the ROM's fix) re-pointed
-; its `.cold` words then and is not run twice - `.cold` never moves after
-; the boot, which slides it before the heap exists. DX = the segment, BX =
-; the row
-.held:
-    call mod_fpr                ; DI = its slot block. LIVE: the slots name
-%ifdef KERN_MEGA                ; its segment, and that is the whole test -
-    COLDSEG_TO ax               ; no walk on a thunk's hot path. KEPT: they
-    cmp [di+2], ax              ; read mod_gone's, `.cold`'s. kern_mega asks
-    clc                         ; the KEPT question (mod_live's note): a
-    jne .out                    ; live slot there names a code half, which is
-%else                           ; MODR_SEG or MODR_SEG - 8
-    cmp [di+2], dx
-    je .out
-%endif
-    pushf                       ; AN IF = 0 WINDOW from the check to the re-tag
-    cli                         ; (SPEC.md 2.8.3): a mod_need on ANY task may
-    cmp dx, [bx+MODR_SEG]       ; re-adopt - a package worker's SERIAL.DRV
-    jne .race                   ; included - and only the UI task sheds or
-                                ; compacts (66.3.1), so a shed (MODR_SEG 0)
-                                ; or a move (another base) since the read
-                                ; above is seen here and read again, and
-                                ; none can land between this and the tag
-%ifdef KERN_MEGA
-    call mem_ishidx             ; A POOL PAIR (SPEC.md 2.8.3.3), or the
-    jc .hlow                    ; conventional claim every other kernel keeps
-    push bx                     ; THE POOL PAIR: its block's
-    xchg ax, dx                 ; purgeable mark comes off - BX = 0 - so no
-    xor bx, bx                  ; shed can take it from here; still under
-    call MEGA_SEL_CODE:mega_modkeepf ; the IF = 0 the shed's whole scan runs
-    xchg ax, dx                 ; under (mx_shedf). DX = the code selector
-    pop bx
-    add dx, 8                   ; ...and ES its DATA half: .arming stores
-    jmp short .hset             ; ES - 8, the code half, in every slot
-.hlow:                          ; BELOW 1MB in protected mode: MODR_SEG is
-                                ; already the record's DATA selector, and the
-                                ; re-adopt is every kernel's, below
-%endif
-    push bx
-    mov bx, dx                  ; mem_find_own's own-segment arm: the record
-    call mem_find_own           ; AT that base - a held MODR_SEG names one
-    pop bx
-    mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
-                                ; - by the TAG: mem_can_move refuses
-                                ; MEM_K_MOD whatever MC_RLOC says, so the
-                                ; drop's declaration (mem_region_reloc) is
-                                ; left in the record, inert until the next
-                                ; drop re-tags it. Withdrawing it was 5 bytes
-                                ; here and 4 more of relaxed branches below
-%ifdef KERN_MEGA
-.hset:
-%endif
-    popf
-    mov es, dx
-%ifdef KERN_MEGA
-    mov bp, [es:MOD_H_IMG]      ; the image's bytes, as its read had them:
-                                ; mod_hi below COPIES a low one above 1MB now
-                                ; that the pool may have room (mod_hiboot's
-                                ; BP), and -1 would copy nothing
-%else
-    or bp, -1                   ; no bound on the entries: this image's were
-%endif                          ; bounded by the read it came from
-    jmp .arming
-.race:
-    popf
-    jmp .reread
-%endif
 
 .check:
 
@@ -1053,16 +1064,16 @@ mod_disarm:
     pushf                       ; NO TORN SLOT: a drop ran on a WORKER
     cli                         ; (inst_task_die -> desk_drop_x, until BR-4
                                 ; posted that teardown to ui_task) while the UI
-    call .slot                  ; task far-calls a slot with no lock held
-    popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
-    ret                         ; offset in the IMAGE's segment is garbage
-                                ; (its parity pad cancelled memory.inc's at
-                                ; mem_bytes_kb_x, kernel size pass 14)
-.slot:                          ; a CALLED loop, not a fall-through:
-    mov word [di], mod_gone     ; (kmain_o's `.boot3` loop is this, written out)
-    COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
-    add di, 4
-    loop .slot
+                                ; task far-calls a slot with no lock held
+                                ; (cur_shape_pass's DKD_HOVER), and mod_gone's
+                                ; offset in the IMAGE's segment is garbage
+.slot:                          ; THE LOOP INSIDE THE WINDOW, falling to its
+    mov word [di], mod_gone     ; popf - it was a `call .slot` there and a
+    COLDSEG_TO word [di+2]      ; second `ret` (kernel size pass 20, -4).
+    add di, 4                   ; mod_gone is .cold's own (ROM-PLAN 3.2);
+    loop .slot                  ; kmain_o's `.boot3` loop is this, written out
+    popf
+.ret:                           ; (mod_free_row's nothing-held answer)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1080,7 +1091,7 @@ mod_disarm:
 ; -----------------------------------------------------------------------------
 mod_free_row:
     cmp word [bx+MODR_SEG], 0   ; ...and no outer bank: nothing between here
-    je .out                     ; and `.out` writes BX except the inner
+    je mod_disarm.ret           ; and the free writes BX except the inner
     call mod_disarm             ; mod_disarm preserves BX since it stopped
     xor dx, dx                  ; forming the id, and READ-AND-CLEAR is one
     xchg dx, [bx+MODR_SEG]      ; instruction on the 8086 - DX comes out the
@@ -1111,10 +1122,13 @@ mod_free_row:
 %endif
 %endif
     mov bx, MEM_K_MOD           ; old segment and the word is left 0. NO bank
-    call mem_free_x             ; round BX either: neither caller reads it
-.out:                           ; after the call - mod_need's .freefail falls
-    ret                         ; into .fail and out through kretc_es, and
-                                ; mod_drop goes straight to its own pop run
+    jmp mem_free_x              ; round BX either: neither caller reads it
+                                ; after the call - mod_need's .freefail falls
+                                ; into .fail and out through kretc_es, and
+                                ; mod_drop goes straight to its own pop run.
+                                ; A TAIL: mem_free_x's ret is ours, and the
+                                ; held-nothing `ret` is mod_disarm's, just
+                                ; above (kernel size pass 20, -1)
 
 ; -----------------------------------------------------------------------------
 ; mod_drop - the feature is finished with its module (SPEC.md 2.8.3)

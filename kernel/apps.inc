@@ -86,7 +86,7 @@ section .cold
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; Four black lines, each centered in the content. The third line's
-; scheduling word tracks the live mode (sched_mode_get) and the fourth names
+; scheduling word tracks the live mode ([sch_coop]) and the fourth names
 ; the video adapter the boot probe found (SPEC.md 39.1). app_about_center
 ; re-measures every string, so unequal lengths are fine.
 ; -----------------------------------------------------------------------------
@@ -107,9 +107,10 @@ app_about_paint_x:
     mov si, app_about_s2
     call app_about_center_x
     mov si, app_about_s3p       ; third line follows the live scheduler mode
-    call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
-    or al, al
-    jz .s3
+    cmp byte [sch_coop], 0      ; 0 pre-emptive, 1 cooperative: the byte
+    je .s3                      ; itself, through DS, where a far call to
+                                ; the deleted sched_mode_get read it (kernel
+                                ; size pass 20, -2)
     mov si, app_about_s3c
 .s3:
     call app_about_center_x

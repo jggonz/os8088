@@ -14555,11 +14555,11 @@ watchdog hits; and a task that dies clears it for its successor.
 | symbol | contract |
 |--------|----------|
 | `sched_mode_set` | in AL = 0 pre-emptive, any non-zero = cooperative. Out: nothing; **preserves every register**, clobbers flags only. Under `pushf`/`cli` … `popf`: normalize AL to 0/1 into `[sch_coop]` and store `SCH_WD_TICKS` to `[sch_hold]` (the incoming mode starts with a full budget). Callable from any task at any time. |
-| `sched_mode_get` | out AL = `[sch_coop]` (0 or 1); preserves every other register, clobbers flags only. Readers that only display the mode (§14 About, §28 Task Manager, §31) call this — nobody reads `sch_coop` directly. |
+| `[sch_coop]` | the live mode, 0 or 1, read directly as one byte through DS = `KERNEL_SEG` by every reader that only displays it (§14 About, §28 Task Manager, §31, the settings writer). A byte read needs no critical section: the store side is one atomic byte write. **No reader routine** - `sched_mode_get` (`mov al, [sch_coop]` / `retf`) cost 4 resident bytes and 2 at each of its far call sites, and went in kernel size pass 20. |
 
-**PLACEMENT (safety-critical).** `sched_mode_get` (resident, far-entered,
-ending `retf`) must sit **outside** the `sch_isr` → `sch_switch` →
-`sch_resume` fall-through run, as every resident routine near it must.
+**PLACEMENT (safety-critical).** Every resident routine near `sch_isr`
+must sit **outside** the `sch_isr` → `sch_switch` → `sch_resume`
+fall-through run.
 `sched_mode_set`'s body is `cp_schset` in CTRL.DRV (`section .modu`), and
 the settings reader in the boot blob writes its two stores itself. A
 routine dropped between `sch_isr` and `sch_switch` sends every unlocked tick through its `ret` with no return
@@ -22168,7 +22168,8 @@ bar, so its top rows are desktop (§39.16.2), and `wm_dmg_bands` gives display
   corner clamps to `[vid_wm1]`/`[vid_hm1]`, which are the **union** (§39.16),
   and `wm_dmg_bands` already seeds every display's own band — so the dither
   covers it and the window marking reaches every window on it. `EXT_DESK`
-  (EXTD.DRV's `vid_disp_desk`) lost its one caller and its slot is retired.
+  (EXTD.DRV's `vid_disp_desk`) lost its one caller and its slot is retired
+  - `EXT_PHASE`, the last entry, holds slot 10 since kernel size pass 20 (§39.19.6's table).
 - **A fullscreen window up** (`wm_fs_vis`). The walk started at that window,
   skipping everything below it for free. The damage pass marks every window
   and asks `wm_covered` of each before drawing it, so the windows under the
@@ -23883,7 +23884,13 @@ partition: a package asks for a size, `task_spawn` gives it the smallest free
 slice at least that big, and a request no free slice can meet is a refusal
 (CF=1) that 20.6 already requires a package to degrade on. So re-cutting the
 slices cannot renumber what a package asked for, and cannot hand it a slice
-smaller than it declared.
+smaller than it declared. (Kernel size pass 20: on kern_small, whose partition is one
+slice of each class smallest first, the table's class 1-4 rows ARE the
+partition's own `sch_stksize` words, and class 0 has no row on any kernel -
+`inst_pkg_spawn` wraps it onto the out-of-range arm, which is CX = 0, the
+largest. That shares BYTES, not the vocabulary: re-cutting kern_small's
+partition means giving `sch_clsbytes` its own rows back, and `SCH_C1`..`SCH_C3`
+are the one spelling both lists are written from.)
 
 
 ### 11.103 The desk layer (`WF_DESK`): windows that live under every application
@@ -33600,8 +33607,8 @@ onkey. Kind behavior:
   number after it — a commit count generated into the image, §14.2; a build
   that could not determine one shows the bare "os8088 1.0"),
   "a graphical OS for the 8086", the bare
-  scheduling word, which **tracks the live mode** (§8.2, read with
-  `sched_mode_get`): "pre-emptive" or "cooperative", and the adapter the
+  scheduling word, which **tracks the live mode** (§8.2, read from
+  `[sch_coop]`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
   "Hercules - 720x348 - mono", "CGA - 640x200 - mono" or, on kern_big,
   "EGA - 640x350 - 16 colors" (a VESA desktop, kind 4, has no row yet:
@@ -57364,7 +57371,7 @@ it may have left chevrons there, and a marker that only ever draws its
 positive case is one that never goes away. It is drawn from `fm_draw_rows` (so
 `fm_repaint` and `fm_rows_only` both get it, from one body) and from
 `fm_scrollpaint` — the second is not optional and is easy to leave out,
-because the blit band stops at `[fm_by2]` and the exposed-row fill at
+because the blit band stops at its last whole row and the exposed-row fill at
 `[fm_listb] - 1`, so this band survives a scroll completely untouched.
 
 **Cost, measured.** The whole of §22.20 and §22.20.1 is `.cold` **+207** and
@@ -62711,7 +62718,7 @@ bytes); it is the primitive's now, for every caller, at 88.
 **Color's teal is a third colour a 1bpp band cannot say**, so under Color
 `desk_zones_r` draws nothing and leaves the mask whole: the dither lays its
 ground and `desk_paint_mask` draws each touched zone WHOLE over it, its box
-grown so every window over it is owed a repaint (`desk_zone_whole`) - which
+grown so every window over it is owed a repaint (its `wm_dmg_zadd`) - which
 is how every theme drew before §11.91.6. The first build drew Color's
 picture column on the glass under its per-fragment clip; Color is the one
 place this build is slower than that one, by the windows a partly covered
@@ -67619,7 +67626,7 @@ full text cache would need. Three rules keep it honest:
   `[0..7]` `"CPU nnn%"` (n right-aligned, space-padded, 0..100), `[8]`
   space, `[9..19]` the **read-only** scheduler-mode field, left-justified
   and space-padded to 11 chars — `"SCH preempt"` or `"SCH coop   "` — from
-  `sched_mode_get` (§8.2). The Task Manager only *displays* the mode; it is
+  `[sch_coop]` (§8.2). The Task Manager only *displays* the mode; it is
   changed from the Control Panel (§31). The padding is what erases the
   longer word when the mode changes, so the field must always be written
   full-width.
@@ -72102,7 +72109,7 @@ MENU_LOGO_Y, and `icon_draw16` wants a 16 mask + 16 data word body (§25).
 They were `cp_radio_off`/`cp_radio_on` behind a module-internal `cp_glyph`
 that took a bitmap POINTER, which is precisely why no package could draw a
 radio button: the pictures had no names outside this file. The glyph for the
-**live** mode is the filled one; the other is the ring. `sched_mode_get`
+**live** mode is the filled one; the other is the ring. `[sch_coop]`
 (§8.2) is the only source of that truth — the page keeps no state of its
 own, so a mode changed from anywhere else still paints correctly.
 
@@ -72362,7 +72369,7 @@ every setting-change redraw leave it at — so `cp_radios`, `cp_snd_radios`,
 | `cp_list` | module-internal, in DI/BP = content origin, lock held. Preserves all registers. White-fills the whole left pane, then draws every item name with the `cp_sel` row barred — the whole-pane paint, for when every row moved; a moved selection redraws two rows instead (§31.1.4). |
 | `cp_divider` | module-internal, in DI/BP, lock held: the 1px black rule at content x = CP_DIVX. Preserves all registers. |
 | `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then — for a static page — draws the page's HEADING, which is its list name, black at (CP_PMX, CP_PHY), and calls the record's `CP_I_PAINT` with DI advanced by CP_RX and `[gfx_color]` = CBLACK — the redraw path when the selection moves. A static page body draws no heading of its own (kernel size pass 8); a driver's page still does. |
-| `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `sched_mode_get`) and the caption. |
+| `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `[sch_coop]`) and the caption. |
 | `cp_sched_click` | Scheduler page click (page contract above). x is ignored — the two hit bands span the whole pane. A hit on the row whose mode is already live does nothing; a hit that changes the mode calls `sched_mode_set` with AL = the row index (0 = pre-emptive, 1 = cooperative), sets `[cp_dirty]` = 1, then redraws **only the two radio glyphs**. A click outside both bands does nothing. |
 | `os88ui_glyph` | **the shared control's** (§20.5.1) 12×12 check or radio: in CX = x, DX = y, AL = `OS88UI_G*`, AH non-zero = disabled. Preserves all registers, white-fills its own box, and leaves the pen live. It was `cp_glyph`, module-internal and taking a bitmap POINTER in SI — which no package could name, and which is why the widget stayed the Control Panel's for as long as it did. |
 | `cp_sel` | byte, initialised `.text` data, init 0 (Scheduler). Written by `cp_onclick`, by the menu bar's clock click (`CP_ITIME`, ui.inc), by `drv_notice` (`CP_IDRV`) and by `cp_drv_gone_x`, which puts it back to 0 when a driver's page goes; it names a RECORD, so a driver's page is `CP_ITEMS` + its class (§31.9). |
@@ -73429,7 +73436,7 @@ direction would have a fourth state that means nothing. `Single` /
 actually be in.
 
 It reads the two bytes **live**, the way the Scheduler page reads
-`sched_mode_get` — there is no page-local copy to fall out of step — and a
+`[sch_coop]` — there is no page-local copy to fall out of step — and a
 click **applies on the spot** and sets `[cp_wdirty]`, which is §31.8 as
 written: the thing happens now, only the record of it waits for the close.
 
@@ -83291,12 +83298,11 @@ every register kept (§2.8.1) — and every call site is either behind a
 | 7 | `EXT_DISPLAY` — `wm_display`'s secondary arm | `wm_display`, GATED: Tracker asks `OSAPI_WM_DISPLAY` at the top of every draw | never reached; CF = 1 from the image means display 0, whose numbers the caller loads |
 | 8 | `EXT_SPAN` — `wm_disp_span` | `wm_zoom` | registers kept = the primary's standard state |
 | 9 | `EXT_FSRECT` — `wm_fs_setrect`'s arm | `wm_fs_setrect` | CF = 1 → the primary's rect, written by the caller |
-| 10 | `EXT_DESK` — `vid_disp_desk` | `wm_paint_all` ×2 | CF = 1 = nothing painted, which the fullscreen arm reads in place of the `[vid_ndisp]` test it made |
+| 10 | `EXT_PHASE` — `ext_e_phase`, `ui_drag_phase`'s second-display arm (§11.96.13). Slot 10 was `EXT_DESK` (`vid_disp_desk`) until it retired with its one caller, the layered `wm_paint_all` (§11.91.7); the last entry moved into it rather than leave a 4-byte hole in the slot block (kernel size pass 20) | `ui_drag_phase`, UNGATED (once, at the release) | every register kept: on one display the phase stands |
 | 11 | `EXT_YLOW` — `ui_ylow`'s arm | `ui_drag`, GATED (the release) | never reached; the caller loaded `MBAR_H` into SI |
 | 12 | `EXT_FCUT` — `ext_fcut`, §39.14.11's cell cut | `font_ch_spill`, GATED (`[gfx_dnest]` = 1) | never reached; CF = 1 would be §39.14.2's whole-cell drop |
 | 13 | `EXT_BCUT` — `ext_bcut`, §39.14.7.2's blit cut | `gfx_blit4`, GATED (`[vid_ndisp]` > 1, a straddle) | never reached; CF = 1 (and an ODD cut) is §39.14.7's run-splitting path |
 | 14 | `EXT_DEAD` — `ext_e_dead`, §39.16.1's dead-zone pull (was `ui_drag_dead`) | `ui_drag`, UNGATED (once, at the release) | every register kept: one display has no dead zone |
-| 15 | `EXT_PHASE` — `ext_e_phase`, `ui_drag_phase`'s second-display arm (§11.96.13) | `ui_drag_phase`, UNGATED (once, at the release) | every register kept: on one display the phase stands |
 
 `mod_init_x` rests the slots on `mod_gone` before `wm_init`, which is before
 the first of these can run; the early `vid_disp_init` in `kmain_o`, before

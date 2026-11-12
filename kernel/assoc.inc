@@ -1077,8 +1077,12 @@ assoc_sweep:
                                 ; 4.77MHz machine those are seconds
     mov al, 1                   ; AL = the row's pass: 1 until shown otherwise
     mov ah, [bx+DV_KIND]
-    cmp ah, DVK_BIOS
-    jne .two
+    test ah, ah                 ; DVK_BIOS, which is 0 (disk.inc, included
+    jne .two                    ; after this file, so no %if can pin it here:
+                                ; kernel size pass 20, -1 - with .rfno's -3
+                                ; below, an EVEN -4: dsk_xfer and its hot
+                                ; neighbours sit behind this in .cold,
+                                ; t_hotpar)
     test byte [bx+DV_UNIT], 0x80 ; dsk_media_ok's test, for its reason: the
     jz .kind                    ; KIND says the transport, the UNIT the medium
 .two:                           ; ONE `inc` for both 2s, and a BIOS fixed disk
@@ -1475,18 +1479,13 @@ assoc_ownex:
     call assoc_slot_of          ; AL = the extension's slot
     pop bx                      ; BL = the caller's (POP keeps CF)
     jc .r
-    cmp al, bl
-    je .r                       ; (equal: CF = 0)
-    stc
-.r:
-    xchg ax, bx                 ; AX = the caller's again (XCHG keeps CF)
-    ret
-    nop                         ; PARITY PAD, never executed: assoc_run_x's
-                                ; repaint went (SPEC.md 22.17.1), an odd -3,
-                                ; and dsk_xfer and its hot neighbours sit
-                                ; behind this in .cold at an even shift
-                                ; (t_hotpar). (The two pads that stood here
-                                ; before went in kernel size pass 18)
+    xor al, bl                  ; 0 when they are equal (CF = 0)...
+    add al, 0FFh                ; ...and CF = 1 from any other (kernel size
+.r:                             ; pass 20, -1 - which took the parity pad
+    xchg ax, bx                 ; that stood after the `ret` with it: dsk_xfer
+    ret                         ; and its hot neighbours behind this in .cold
+                                ; stay at an even shift, t_hotpar)
+                                ; AX = the caller's again (XCHG keeps CF)
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -2042,9 +2041,13 @@ asc_use_x:
     shl ax, cl                  ; overflow: AX = what the file actually is
     sub ax, ASC_HDR
     cmp bx, ax
-    ja .out                     ; short: the clean "no cache" answer - asc_drop
-                                ; at .out zeroes both counts, and every lookup
-                                ; already answers an empty cache with a miss
+    ja .rfno                    ; the clean "no cache" answer - asc_drop at
+                                ; .out zeroes both counts, and every lookup
+                                ; already answers an empty cache with a miss.
+                                ; Through .rfno's `jmp .out`, BACK and short:
+                                ; .out is past a short jump's reach and NASM
+                                ; had relaxed this to five bytes (kernel
+                                ; size pass 20, -3)
 .parse:
     ; THE DECLARATIONS THIS VOLUME KNOWS ABOUT, then WHERE each of them is
     ; (SPEC.md 54.7.1), what it LOOKS like (54.7.3) and its BODY into the

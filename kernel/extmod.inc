@@ -100,7 +100,7 @@ section .modx
     call exk_go
     dw %1
 %endmacro
-EXT_NENT    equ 16
+EXT_NENT    equ 15
 modx_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
@@ -118,9 +118,11 @@ modx_hdr:
     dw ext_e_display            ; EXT_DISPLAY
     dw wm_disp_span             ; EXT_SPAN
     dw ext_e_fsrect             ; EXT_FSRECT
-    dw ext_e_apply.r            ; (10: EXT_DESK, retired with its one caller
-                                ; - SPEC.md 11.91.7. A bare retf, never called;
-                                ; kept so the numbering never moves)
+    dw ext_e_phase              ; EXT_PHASE (kernel size pass 14) - in slot
+                                ; 10, EXT_DESK's, since that entry retired
+                                ; with its one caller (SPEC.md 11.91.7): the
+                                ; last entry moved in rather than leave a hole
+                                ; four bytes of .bss wide (kernel size pass 20)
     dw ext_e_ylow               ; EXT_YLOW
 %ifdef SEAMCUT                  ; ...and the two seam CUTS, whose bodies are
     dw ext_fcut                 ; EXT_FCUT   this image's since kernel size
@@ -133,9 +135,8 @@ modx_hdr:
     dw ext_refuse
 %endif
     dw ext_e_dead               ; EXT_DEAD  (kernel size pass 14)
-    dw ext_e_phase              ; EXT_PHASE (kernel size pass 14)
-%if EXT_YLOW != 11 || EXT_DEAD != 14 || EXT_PHASE != 15 || EXT_NENT != 16
-  %error "extmod: EXT_FCUT and EXT_BCUT are entries 12 and 13, after EXT_YLOW, then EXT_DEAD and EXT_PHASE (kernel.asm)"
+%if EXT_PHASE != 10 || EXT_YLOW != 11 || EXT_DEAD != 14 || EXT_NENT != 15
+  %error "extmod: EXT_PHASE is entry 10, EXT_YLOW 11, EXT_FCUT and EXT_BCUT 12 and 13, then EXT_DEAD, the last (kernel.asm)"
 %endif
 %ifdef SEAMCUT
  %if EXT_FCUT != 12
