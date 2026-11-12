@@ -104,6 +104,11 @@ MODS = {
     "MOD_DESK": ("DESK.DRV", (".modj",), ()),
     "MOD_STIKM": ("STIKMENU.DRV", (".modn",), None),   # its own row's
     "MOD_SER": ("SERIAL.DRV", (".mods",), ()),
+    # kern_small's two (SPEC.md 2.8.3.4): their whole bss is the tail. Not in
+    # kern_big's equates, so the default leg skips them; the host leg on
+    # kern_small (OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk) reads them
+    "MOD_FCP": ("FILECP.DRV", (".modp", ".modpb"), ()),
+    "MOD_FDLG": ("FDLG.DRV", (".modd", ".moddb"), ()),
 }
 fails = []
 
@@ -131,6 +136,8 @@ def spans(names):
     sy, sec = os88sym.syms(), os88sym.sections()
     out = []
     for n in names:
+        if n not in sec:
+            continue                    # a cell this kernel does not build
         s = sec[n]
         nxt = sorted(o for k, o in sy.items()
                      if sec.get(k) == s and "." not in k and o > sy[n])
@@ -176,11 +183,16 @@ def host():
     eq = os88sym.equates()
     sy, sec = os88sym.syms(), os88sym.sections()
     st = stores()
+    small = "KERN_SMALL" in os.environ.get("OS88_DEFINES", "")
     for mid, (fname, sects, wbr) in MODS.items():
         if mid not in eq:
             continue
         img = image(fname)
         h = hdr(img)
+        if small and not h["scr"]:
+            print("   --   %s names no tail on kern_small: freed at its "
+                  "drop there (SPEC.md 2.8.3.4)" % fname)
+            continue
         check(h["scr"] > 0 and h["img"] == len(img),
               "%s opts in: MOD_H_SCR %d, MOD_H_IMG %d of %d bytes"
               % (fname, h["scr"], h["img"], len(img)))

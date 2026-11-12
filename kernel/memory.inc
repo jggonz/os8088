@@ -937,10 +937,12 @@ mem_floor_ax:
     and al, 0xE0                ; under the floor are paragraphs now, and a
 %endif                          ; heap base is an int 13h target (guard 6,
     ret                         ; MOVABLE-COLD-PLAN 5)
-%ifdef KERN_SMALL
-    nop                         ; PARITY PAD, never executed: the round-up is
-%endif                          ; five bytes, and dsk_xfer, dsk_runcap and
-                                ; dsk_next_clus_x sit past it in `.cold`
+                                ; (kern_small's PARITY PAD stood here - a
+                                ; `nop` for dsk_xfer, dsk_runcap and
+                                ; dsk_next_clus_x past it in `.cold` - and
+                                ; went when SPEC.md 50.6.13 and 2.8.3.4 added
+                                ; an odd 219 bytes between: tests/unit/
+                                ; t_hotpar.py is what measures it)
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
@@ -1121,7 +1123,9 @@ mem_claim_x:
                                 ; 66.4 and is the whole of what SPEC.md 66.0
                                 ; gives up: the shed still reaches every cache
                                 ; in priority order, and a barrier stays where
-                                ; it is
+                                ; it is - but a CACHE is never one there, a
+                                ; claim that outranks it having evicted it
+                                ; out of its way (MEM_EVICT, SPEC.md 50.6.13)
     call mem_shed_one           ; Compaction goes FIRST because a shed can
     jnc .retry                  ; destroy MEM_P_DIRW, priced at "a long
                                 ; operation getting much longer" - seconds of
@@ -1219,6 +1223,9 @@ mem_claim_1:
     push bp
     pushf
     cli                         ; the whole scan-and-publish, one window -
+%ifdef MEM_EVICT
+    call mem_evrank             ; (and the rank its scan may evict below,
+%endif                          ; SPEC.md 50.6.13, inside the same window)
     mov [mem_dma], si           ; the operation's PARAMETERS included. The
     mov bp, di                  ; entries stage them in registers because a
                                 ; global stored BEFORE the cli is another
@@ -1330,6 +1337,12 @@ mem_claim_1:
 .scan:                          ; the only register free, so it doubles as
     call mem_next               ; the claim-end scratch and is rebuilt after
     jc .publish
+%ifdef MEM_EVICT
+    call mem_pg_cheap           ; A CACHE THIS CLAIM OUTRANKS IS NOT IN THE WAY
+    jnc .scan                   ; (SPEC.md 50.6.13): the block lands where it
+%endif                          ; would on a heap with no caches, and .publish
+                                ; evicts what it lands on. CX is untouched, so
+                                ; it is still the candidate end there
     cmp [ss:si+MC_SEG], cx         ; claim starts at/past our end: no overlap
     jae .scan
     mov cx, [ss:si+MC_SEG]
@@ -1351,6 +1364,9 @@ mem_claim_1:
     jmp short .scan
 
 .publish:
+%ifdef MEM_EVICT
+    call mem_evict              ; [DX, DX + AX): the caches it lands on go
+%endif                          ; first, owners told, under this same cli
 %if MC_SEG != 0 || MC_PARA != 2 || MC_OWN != 4 || MC_DMA != 6 || MC_RLOC != 8 || MC_SIZE != 10
   %error "mem_claim_1 publishes the record as five words in order through ES:DI"
 %endif
@@ -1879,6 +1895,10 @@ mem_runfree:
     jnc .out
     cmp si, [mem_skip]
     je .next
+%ifdef MEM_EVICT
+    call mem_pg_cheap           ; a cache the grower outranks is room (SPEC.md
+    jnc .next                   ; 50.6.13): mem_regrowp evicts it if it lands
+%endif                          ; there, and set the rank before asking
     mov ax, [ss:si+MC_SEG]
     cmp ax, di
     jae .next                   ; it starts at or past our end
@@ -2859,9 +2879,88 @@ mem_pg_cheap:
     jb .no
     cmp al, [mem_pg_rank]
     jae .no
+%ifdef MEM_EVICT
+    pop ax                      ; ...AND NOT THE DIRTY FAT WINDOW OR THE AIMED
+    jmp mem_fatw_dirty          ; LISTING (mem_shed_one's own exception): on
+%endif                          ; kern_small this predicate EVICTS (SPEC.md
+                                ; 50.6.13), so it has to refuse what the shed
+                                ; refuses - and mem_avail, asking the same
+                                ; door, then stops counting either as room
     CLC_OR_STC .no              ; CF = 0 takeable, or (.no) CF = 1
     pop ax
     ret
+
+%ifdef MEM_EVICT
+; -----------------------------------------------------------------------------
+; mem_evrank - [mem_pg_rank] for a claim about to be PLACED (SPEC.md 50.6.13)
+; in:  BH = the claimant's owner word's high byte
+; out: [mem_pg_rank] = mem_rank_bh's answer for an ordinary claim on the UI
+;      task, 0 (evict nothing) for a claimant that is itself a cache or is on
+;      any other task; every register kept, the flags not
+;
+; A cache asking for room does not move another cache out of its PLACE: it
+; is an optimisation, and an optimisation must not be the reason anything
+; is lost while the heap has a hole it fits (50.6). It still sheds by rank on
+; a refusal, which mem_claim_x's loop is.
+; -----------------------------------------------------------------------------
+mem_evrank:
+    push ax
+    xor ax, ax                  ; AL = 0: evict nothing
+    cmp [sch_cur], al           ; ...ON ANY TASK BUT THE UI TASK, SPEC.md
+    jne .c                      ; 66.3.1's rule for the shed on kern_big: a
+                                ; cache the pre-empted UI task holds in a
+                                ; register is not another task's to free
+    mov al, bh
+    sub al, MEM_PG_MIN          ; a cache level is MEM_PG_MIN..MEM_PG_MAX, so
+    cmp al, MEM_PG_MAX - MEM_PG_MIN + 1  ; one unsigned compare: below it,
+    mov al, 0                   ; a cache, which evicts nothing (mov writes
+    jb .c                       ; no flag)
+    call mem_rank_bh            ; ...else the rank net of the caller's floor
+.c:                             ; (SPEC.md 50.6.6), as the shed takes it
+    mov [mem_pg_rank], al
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_evict - shed every cache [mem_pg_rank] outranks that [DX, DX + AX)
+;             overlaps (SPEC.md 50.6.13)
+; in:  DX = the first paragraph, AX = paragraphs; IF = 0 (the caller's
+;      window: mem_claim_1's publish, mem_regrowp's paths 2 and 3)
+; out: nothing; every register kept, the flags not (no caller reads them)
+;
+; mem_shed_one's tail for each record it meets: the owner told through
+; mem_pg_forget BEFORE the record goes, so no word ever names memory a new
+; claim holds. mem_pg_cheap is the same door the placement scan asked, so
+; exactly the records the scan stepped over are the ones that go.
+; -----------------------------------------------------------------------------
+mem_evict:
+    push bx
+    push cx
+    push si
+    mov cx, dx
+    add cx, ax                  ; CX = one past the block
+    mov si, MEM_FIRST
+.n:
+    call mem_next
+    jc .out
+    call mem_pg_cheap
+    jc .n                       ; not a cache this claim outranks
+    mov bx, [ss:si+MC_SEG]
+    cmp bx, cx
+    jae .n                      ; starts at or past our end
+    add bx, [ss:si+MC_PARA]
+    cmp bx, dx
+    jbe .n                      ; ends at or before our start
+    mov bx, [ss:si+MC_OWN]
+    call mem_pg_forget          ; the owner first (every register kept)
+    and word [ss:si+MC_SEG], 0
+    jmp short .n
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 %ifdef OS88_COMPACT
@@ -4789,6 +4888,9 @@ mem_regrowp:                    ; be a byte less and would push the caller a
     mov cl, 6                   ; LAST bit out alone (bit 10), so 2049KB was
     shl ax, cl                  ; 64 paragraphs, CF = 0 - a SHRINK to 1KB.
 .para:                          ; AX = paragraphs wanted
+%ifdef MEM_EVICT
+    call mem_evrank             ; the rank paths 2 and 3 may evict below
+%endif                          ; (SPEC.md 50.6.13), past CF's last reader
     add ax, MEM_GRAN - 1        ; ...a whole number of granules, and 0 asks
     jc .fail                    ; for nothing (the `or ax, ax / jz` that sat
     and ax, -MEM_GRAN           ; before the shift is this jz now)
@@ -4817,7 +4919,13 @@ mem_regrowp:                    ; be a byte less and would push the caller a
     mov cx, dx
     add cx, [ss:si+MC_PARA]        ; CX = our end = the extension's start
     call mem_runfree            ; ([mem_skip] is left naming us: the only
+%ifdef MEM_EVICT
+    jc .move                    ; EXTEND IN PLACE OVER AN OUTRANKED CACHE
+    call mem_evict              ; (SPEC.md 50.6.13): [DX, DX + AX) is the
+    jmp short .set              ; whole new extent, and we are not a cache
+%else                           ; anything here outranks
     jnc .set                    ; other reader is mem_hifit, which zeroes it
+%endif
                                 ; first - kernel size pass 16, -6). It does:
                                 ; extend, copy nothing
 
@@ -4850,6 +4958,11 @@ mem_regrowp:                    ; be a byte less and would push the caller a
                                 ; 16, -6). The whole op is IF=0
     jc .shed                    ; no run: SHED AND RETRY (.shed, past the
                                 ; `ret` below)
+%ifdef MEM_EVICT
+    xchg cx, dx                 ; the destination's caches go before the copy
+    call mem_evict              ; lands on them (SPEC.md 50.6.13)
+    xchg cx, dx
+%endif
     push ax
     push cx
     push si                     ; BANK the record. SI is about to be spent as

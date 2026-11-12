@@ -14609,6 +14609,26 @@ SOAK = [
         "is what it reads, the same tree small128 and smallboot want",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
+    Row("smallfrag", "soak", py("tests/smallfrag.py"), 40.0,
+        "SPEC.md 50.6.13, 42.6.7.1 and 2.8.3.4: on kern_small a cache never "
+        "walls a pinned claim, and Paint opens TWICE on the 128KB Hercules. "
+        "The owner's field report (2026-11-12): boot, a Disk window, Paint, "
+        "Paint again -> Out of memory. kern_small has no compactor, so a "
+        "pinned claim placed AROUND a cache is a wall a shed cannot take "
+        "down - the cache's bytes come back, its place does not: navigating "
+        "to PAINT.O88 left VIEW, DIRW and ICO low, Paint's canvas and table "
+        "landed above them, and the room a shed could make was 17.5KB + "
+        "16.5KB against Paint #2's 20KB region (LD_ENOMEM). Now a claim "
+        "that is not a cache places as if every cache it outranks were "
+        "free and EVICTS the ones it lands on. Three verdicts: onehole (Herc "
+        "and CGA, every free-or-cache paragraph one run with Paint open), "
+        "paint2 (Herc, two Paint windows) and fdlgkept (CGA, Note Pad's "
+        "second File > Open re-adopts FDLG.DRV - 2 int 13h, was 4). "
+        "VERIFIED RED with MEM_EVICT off (two runs on both adapters, "
+        "ld_status 5) and with kern_small's MOD_CACHE off (the image "
+        "loaded again). Builds nothing: `make small`'s tree",
+        needs=("marty",), serial=True,
+        wants=("build/small360.img",)),
     Row("paintgrowsmall", "soak", py("tests/paintgrowsmall.py"), 10.0,
         "SPEC.md 42.22.5: the SMALL build of Paint grows its canvas. "
         "APP_SMALL used to drop the canvas ceiling to the default canvas, "

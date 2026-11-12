@@ -344,7 +344,7 @@ sd_arm      SCR_B
 sd_down     SCR_B               ; THE BYTE AFTER sd_arm: written as one word
 sd_prev     SCR_B
 %endmacro
-%ifndef MOD_CACHE
+%ifndef MODC_KEEP
     SD_SCRATCH
 %endif
 sd_last     db 0

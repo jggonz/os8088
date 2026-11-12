@@ -6365,7 +6365,7 @@ cp_fdno:   SCR_B                ; it in CTRL.DRV's SCRATCH TAIL, SPEC.md 2.8.3)
                                 ; cp_flush_x says so after the save
 cp_fdn:    SCR_B                ; cpc_fdtest's track count
 %endmacro
-%ifndef MOD_CACHE               ; ...and here, where they always were, on a
+%ifndef MODC_KEEP               ; ...and here, where they always were, on a
     CPC_SCRATCH                 ; kernel that keeps no dropped image
 %endif
 TOASTSTR cp_s_fdno, 'No Cylinder Here: Auto' ; ...and what it says. A toast
