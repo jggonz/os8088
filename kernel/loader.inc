@@ -922,7 +922,7 @@ ld_run_body_x:
 %endif
     mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
     call dsk_peek_x             ; A redirected volume has no sectors at all -
-    jc .disk1                   ; dsk_xfer refuses one outright - so without
+    jnc .hdr                    ; dsk_xfer refuses one outright - so without
                                 ; the arm inside dsk_peek_x every package on
                                 ; one is "Bad package"; FSV_READAT at offset 0
                                 ; is exactly the same 512 bytes and lands in
@@ -939,6 +939,18 @@ ld_run_body_x:
                                 ; verdict on a directory entry naming a
                                 ; cluster this volume has not got, and the
                                 ; only behaviour this factoring moved
+    mov al, LD_EDISK            ; (the tails HERE, where the peek's refusal
+.ret1:                          ; falls into them and the steps below jump
+    ret                         ; back: no `jmp short .read` over them -
+.ret2:                          ; kernel size pass 20, -2) step 6 or 6a
+    jmp ld_unreserve            ; failed with a region already
+                                ; (AL is the status): give it back, or a
+                                ; failed load would hold heap for the session.
+                                ; The record itself is unpublished, so it
+                                ; needs nothing - and AL is NOT banked:
+                                ; ld_unreserve preserves AX (its banner, and
+                                ; every callee down to mem_free_owner_x's
+                                ; "all registers preserved")
 .hdr:
 
     ; --- 3. validate the peeked header -----------------------------------------
@@ -951,19 +963,6 @@ ld_run_body_x:
     call ld_alloc               ; --- 4 and 5, shared with OSAPI_PKG_START
     jc .ret1                    ; (SPEC.md 21.5): AL = LD_ENOMEM, and no
                                 ; region was left claimed
-    jmp short .read
-.disk1:
-    mov al, LD_EDISK
-.ret1:
-    ret
-.ret2:                          ; step 6 or 6a failed with a region already
-    jmp ld_unreserve            ; (AL is the status): give it back, or a
-                                ; failed load would hold heap for the session.
-                                ; The record itself is unpublished, so it
-                                ; needs nothing - and AL is NOT banked:
-                                ; ld_unreserve preserves AX (its banner, and
-                                ; every callee down to mem_free_owner_x's
-                                ; "all registers preserved")
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:

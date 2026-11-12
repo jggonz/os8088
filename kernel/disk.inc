@@ -1711,12 +1711,13 @@ dsk_xfer:
     xor al, al
     shl ax, 1                   ; x 512
     add bx, ax
-    jmp .sector
 %else
     add bx, 512                 ; DI was advanced by the bounced pass, and the
     dec si                      ; notch counted it: only the caller's own
-    jmp .sector                 ; cursor and count are left to move
-%endif
+%endif                          ; cursor and count are left to move - and
+                                ; .sector is the next line: the `jmp .sector`
+                                ; each arm ended in was a jump of 0 (kernel
+                                ; size pass 20, -2)
 
 .sector:
     test si, si
@@ -2683,7 +2684,10 @@ dsk_img_swap:
 ; in:  BP = the run the track and the caller allow, ES:BX = the buffer
 ; out: BP = that, capped by the 64KB DMA page and by BX's own 16 bits; 0 =
 ;      not even one sector fits the page (an unaligned base at its edge)
-; clobbers: nothing but BP (the output) and flags
+; clobbers: BP (the output), flags - and AX but on kern_mega, whose bounce
+;      reads the run the track allowed back out of it; dsk_xfer, the one
+;      caller, otherwise pops AX over it on both ways out (kernel size pass
+;      20, -2 and ~27 clocks a run)
 ;
 ; Two limits, and the first is the one this optimisation INTRODUCES: a single
 ; 512-aligned sector cannot straddle a 64KB physical page, a run can, and the
@@ -2700,7 +2704,9 @@ dsk_img_swap:
 ; no branch: 4 bytes and ~19 clocks fewer a limit than the jz/128 arms were.
 ; -----------------------------------------------------------------------------
 dsk_runcap:
+%ifdef KERN_MEGA
     push ax
+%endif
     push cx
     push dx
     mov ax, es                  ; the low 16 bits of the physical address:
@@ -2748,7 +2754,9 @@ dsk_runcap:
 .out:
     pop dx
     pop cx
+%ifdef KERN_MEGA
     pop ax
+%endif
     ret
 %ifdef HMA_DRV
  %define DSK_RCHMA
@@ -6216,16 +6224,21 @@ dsk_fatw_scan:
 ; The claim's bytes are intact here - mem_pg_forget is called BEFORE its
 ; record goes, and the walk moves nothing over it until after.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_COMPACT
+  %define DFD_OUT .out
+%else
+  %define DFD_OUT dsk_fatw_scan.ret
+%endif
 dsk_fatw_demote:
     mov ax, bx
     sub ax, MEM_P_FATW          ; AX = the volume this owner names
     call dsk_fatw_slota
-    jc .out
+    jc DFD_OUT
     xor ax, ax                  ; the claim that is going, read and zeroed
     xchg ax, [bx+DVOL_MAX*2]    ; in one - mem_pg_forget's own store, done here
     or word [bx], -1            ; because it does not make the other two
     cmp ax, [dsk_fatseg]
-    jne .out                    ; BANKED: no other word ever named it
+    jne DFD_OUT                 ; BANKED: no other word ever named it
     call dsk_fatw_evict         ; LIVE: take the pin off whoever holds it -
     mov word [bx+DVOL_MAX*2], FAT_SEG   ; which is never this volume, its
 %ifdef OS88_COMPACT                     ; record having just been cleared -
@@ -6261,11 +6274,10 @@ dsk_fatw_demote:
                                 ; pass 18: a register store, -2)
     ret
 .home:                              ; IF = 0: falls into dsk_fatw_home below
-%else
-    call dsk_fatw_home
-.out:
-    ret
-%endif
+%else                           ; ...and without a compactor it falls into
+%endif                          ; dsk_fatw_home whatever IF is, its refusals
+                                ; taking dsk_fatw_scan's `ret` just above
+                                ; (kernel size pass 20, -4 there)
 
 ; dsk_fatw_home - the PIN is the live window again, with nothing resident in
 ; it: the two stores dsk_fatw_demote and dsk_fatw_drop both end on. Word
@@ -7241,7 +7253,9 @@ dsk_rah_pick:
 ; dsk_rah_serve - serve dsk_xfer's run out of the cache, filling if it pays
 ; in:  DI = the LBA wanted, SI = sectors still wanted, ES:BX = destination
 ; out: CF=0 with AX = sectors copied (>= 1); CF=1 = read it off the platter
-; clobbers: AX (the output), flags
+; clobbers: AX (the output), CX, DX, flags - dsk_xfer, the one caller, loads
+;      CX at .count and both at .nocache before reading either (kernel size
+;      pass 20: the three banks went, -3, and BX is never written here)
 ;
 ; ONE SCAN. This was `dsk_rah_have` + `dsk_rah_take` + four instructions at the
 ; call site, and the shape cost two table walks on every miss that filled: the
@@ -7261,9 +7275,6 @@ dsk_rah_pick:
 ; and AX is the scratch every compare needs.
 ; -----------------------------------------------------------------------------
 dsk_rah_serve:
-    push bx
-    push cx
-    push dx
     push si
     push di
     mov dx, si                  ; DX = sectors still wanted
@@ -7316,14 +7327,18 @@ dsk_rah_serve:
     pop ax                      ; sectors copied
     clc
 .fin:                           ; a pop leaves CF alone, so both answers share
-    jmp dskw_find.pdi           ; one epilogue - dskw_find's, the same pops
+    pop di                      ; one epilogue
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dsk_rah_fill - cache the rest of LBA DI's track, if a fill would pay
 ; in:  DI = the LBA that missed, DX = sectors the caller still wants
 ; out: CF=0 the chunk is cached and SI = its record; CF=1 there is nothing to
 ;      serve - no surplus, or the read failed
-; clobbers: SI (the output), flags
+; clobbers: SI (the output), AX, CX, DI, flags - dsk_rah_serve, the one
+;      caller, reads BX, DX and ES after it and loads the other three
+;      (kernel size pass 20, -4)
 ;
 ; The length is the track's remainder from DI, capped by the chunk and by the
 ; volume's extent. Not the track's START: a chunk that begins before the sector
@@ -7347,11 +7362,8 @@ dsk_rah_serve:
 ; behind a failed one retries for itself.
 ; -----------------------------------------------------------------------------
 dsk_rah_fill:
-    push ax
     push bx
-    push cx
     push dx
-    push di
     push es
     mov bx, dx                  ; BX = what the caller still wants: the divide
                                 ; below wants DX and the gate wants this
@@ -7435,7 +7447,7 @@ dsk_rah_fill:
                                 ; loader's prefetch (SPEC.md 18.95.13): one
                                 ; record here, DX being at most DSK_RAH_SECS.
                                 ; CF is the read's, and 0 out of the stamp
-    SKIPBL1                     ; over the stc (BL is kretc_dx's to restore)
+    SKIPBL1                     ; over the stc (BL is the epilogue's to restore)
 %else
 %ifdef KERN_MEGA
     push bx                     ; the slot's run of the store, for the copy
@@ -7451,7 +7463,7 @@ dsk_rah_fill:
     mov byte [dsk_rah_busy], 0  ; (`mov` leaves CF alone)
 %ifdef KERN_MEGA
     pop di                     ; DI = the slot's run: the LBA is in the
-                                ; record already and the epilogue restores DI
+                                ; record already and DI is the caller's to load
     jc .out
     cmp byte [dsk_rah_hi], 0
     je .stamp
@@ -7480,13 +7492,14 @@ dsk_rah_fill:
     mov ax, [dsk_sigcur]
     mov [si+RAH_SIG], ax        ; (CF = 0: the `jc .out` above, and a `mov`
     SKIPBL1                     ; keeps it - and so does `mov bl`, over the
-%endif                          ; stc, BL being kretc_dx's to restore: pass
+%endif                          ; stc, BL being the epilogue's to restore: pass
 .nofill:                        ; 17, -1)
     stc
 .out:
     pop es
-    pop di
-    jmp kretc_dx
+    pop dx
+    pop bx
+    ret
 
 %ifdef DSK_RAHINT
 ; -----------------------------------------------------------------------------
@@ -8579,8 +8592,11 @@ dsk_find_x:
 %ifndef DSK_DSCAN
     pop es
 %endif
-    jmp short .staged
-.stage:
+%ifdef OS88_REDIR               ; (.stage's two ways in, the FSV_ENUM arm and
+    jmp short .staged           ; DSK_DSCAN's redirected test, are both
+.stage:                         ; OS88_REDIR's: kern_small has neither, so
+                                ; this falls into .staged - kernel size pass
+                                ; 20, -13)
     ; ...AND FSV_ENUM's ANSWER ARRIVES HERE (SPEC.md 62.9.17), with dsk_ent
     ; already staged by the driver. There is no raw entry behind it, so the
     ; two fields the sector arm reads out of one come from the staged form
@@ -8593,6 +8609,7 @@ dsk_find_x:
     mov ax, [dsk_ent+20]
     mov dx, [dsk_ent+22]
     mov cl, [dsk_ent+24]
+%endif
 .staged:
     push ax
     push dx
@@ -8616,18 +8633,20 @@ dsk_find_x:
     mov [es:di+4], ax           ; +18 the size, all 32 bits of it
     mov [es:di+6], dx
     clc                         ; (CX, the ordinal to ask for next, is .out's)
-    jmp short .out
 %ifndef DSK_DSCAN
+    jmp short .out
 .ioerr:
     mov al, FERR_IO
     SKIPF2                      ; over .end's `mov al` (pass 17, -2 on
-%endif                          ; kern_small; kern_big is the same 3 bytes)
-.end:
+.end:                           ; kern_small)
     mov al, FERR_NOENT
     cbw                         ; AH = 0: both are under 80h
 .fail:
     stc
-.out:
+%else                           ; DSK_DSCAN: dsk_dscan answers the FERR_*
+.fail:                          ; itself and its `jc` is the one way here, CF
+%endif                          ; already 1 - so success falls in as well
+.out:                           ; (kernel size pass 20, -6)
     pop cx                      ; the next ordinal, banked at entry
     pop di
     pop bp
@@ -9164,7 +9183,8 @@ dsk_path_x:
 ; out: CF=0: SI -> its raw 32-byte entry in dsk_secbuf (SS:SI), and dsk_ent
 ;      holds its display name with CX = the name's length (dsk_synth_name);
 ;      CF=1: no such entry, or the directory would not read
-; clobbers: CX, SI (the outputs), BP, flags
+; clobbers: CX, SI (the outputs), BP, flags - and on kern_small AX, BX and DI
+;      as well (its one caller there banks them)
 ;
 ; ONE PASS over the directory's sectors, which is the difference from asking
 ; across the API: OSAPI_FILE_FIND is ordinal-based and restarts the walk on
@@ -9180,9 +9200,11 @@ dsk_path_x:
 ; wants ES = LOW_SEG: one push and pop of ES here rather than at each site.
 ; -----------------------------------------------------------------------------
 dsk_byclus_x:
-    push ax
-    push bx
-    push di
+%ifndef KERN_SMALL              ; (kern_small has no dsk_path_x, and its other
+    push ax                     ; caller, dskw_rt_byclus, banks AX..DI under
+    push bx                     ; its own KENT frame: only ES is owed there -
+    push di                     ; kernel size pass 20, -6)
+%endif
     push es
     call dsk_dirw_start_x
 .sector:
@@ -9217,9 +9239,11 @@ dsk_byclus_x:
     stc
 .out:
     pop es
+%ifndef KERN_SMALL
     pop di
     pop bx
     pop ax
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
