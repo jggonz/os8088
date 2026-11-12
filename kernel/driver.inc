@@ -4809,8 +4809,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov [drv_cfg+CFG_ANS], dx
 %endif
     pop dx
-    call KERNEL_SEG:sched_mode_get
-    mov [drv_cfg+CFG_SCH], al
+    mov al, [sch_coop]          ; the live mode, through DS (kernel size
+    mov [drv_cfg+CFG_SCH], al   ; pass 20: the far call to sched_mode_get, -2)
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
     mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
                                 ; exactly what vid_detect chose - so the file
