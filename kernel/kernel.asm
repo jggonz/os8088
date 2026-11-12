@@ -2796,6 +2796,9 @@ OS88_RARE   equ 0x81            ; SPEC.md 20.3.4: 81h-85h are BASIC's
 %macro SKIPAX2 0                ; mov ax, imm16 over two bytes: AX, no flag
     db 0xB8
 %endmacro
+%macro SKIPCY1 0                ; jnc rel8 over ONE byte, and only where
+    db 0x73                     ; CF = 1 is PROVED: never taken, so it writes
+%endmacro                       ; no register and NO flag (kernel size pass 20)
 
 osapi_table:
 apic_gfx_lock:
@@ -4213,7 +4216,12 @@ api_copyname:
     pop ax
     ret
 
-api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
+api_name:                       ; ...and the STACK-OVERFLOW PANEL's two
+sch_dpcol:  dw 0                ; words (SPEC.md 8.8): the pen x and one hex
+sch_dphc:   db 0, 0             ; digit as a string. The panel ends in `hlt`
+            times 13 - 4 db 0   ; with nothing after it to stage a name, so
+                                ; they live here and not in .bss (kernel size
+                                ; pass 20, -4). Staged names (.text, not .bss: the file
 api_name2:  times 13 db 0       ; slots are not reached before kmain, and
                                 ; by then .bss is zero as well)
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The
@@ -5478,8 +5486,19 @@ osapi_segr:
     je .sub                     ; ...a pair's data half: the same sum
     cmp bl, SEG_BWIN
     ja .no                      ; SEG_AIM is protected mode's alone - a real-
+%if SEG_LIN != 0
+  %error "osapi_seg tests SEG_LIN as BL = 0"
+%endif
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define SEG_LIN_CMP           ; (kern_big and kern_emu: gfx_blit1_x follows
+ %endif                         ; in `.cold`, and this byte is its parity)
+%endif
+%ifdef SEG_LIN_CMP
     cmp bl, SEG_LIN             ; mode caller's own sum is its answer - and
-                                ; an unknown verb is refused
+%else                           ; an unknown verb is refused. SEG_LIN is 0,
+    test bl, bl                 ; so a test (kernel size pass 20, -1)
+%endif
     jne .ok                     ; SEG_REAL, SEG_WIN, SEG_BWIN: the value is
     push cx                     ; the answer, and SEG_FREE has nothing to free
     mov ax, dx
@@ -5488,22 +5507,12 @@ osapi_segr:
     mov cl, 12
     shr dx, cl                  ; DX:AX = DX x 16
     pop cx
-%ifdef KERN_BIG                 ; (kern_small: the old shape, for the parity
-    SKIPF2                      ; of gfx_blit1_x right after this routine)
-.sub:                           ; test ax, imm16 over .sub's add: flags only,
-    add dx, ax                  ; and the clc below is the answer (kernel size
-.ok:                            ; pass 15: one `clc / retf` for both)
-    clc
-    retf
-%else
-.ok:
-    clc
-    retf
-.sub:
-    add dx, ax
-    clc
-    retf
-%endif
+    SKIPF2                      ; (every kernel since kernel size pass 20:
+.sub:                           ; kern_small's old shape was its parity pad,
+    add dx, ax                  ; and the test above is the other byte)
+.ok:                            ; test ax, imm16 over .sub's add: flags only,
+    clc                         ; and the clc below is the answer (kernel size
+    retf                        ; pass 15: one `clc / retf` for both)
 .no:
     stc
     retf                        ; (an EVEN body: dsk_xfer, dsk_runcap,
@@ -8045,6 +8054,7 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
 .lim:                         ; kern_mega's real-mode FSX bracket writes
     cmp bl, rd_n                ; RD_P + RD_RK over this immediate
     jae .ref                  ; (fsx_rdownf), SPEC.md 53.2.3
+.in:
     add bx, bx
 %ifdef RARE_COUNTERS            ; `make RARECNT=1` (kernel size pass 19, V7):
     add word [ss:bx+rd_clo], 1  ; one 32-bit count an index
@@ -8066,6 +8076,7 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
     pop bp
     retf 2
 .ref:
+%ifdef KERN_MEGA
     popf
     pop bx
     pop ds
@@ -8073,6 +8084,18 @@ os88_door:  ; STKBALANCE-OK: entered by `int`, not by a call - FLAGS, CS and IP 
     mov ax, 1                   ; OSAPI_XREFUSE's answer
     stc
     retf 2
+%else
+    mov bl, RD_P + rdp_XMEM_SEL ; ...AS THE REFUSED CELL ITS INDEX IS ON
+    jmp short .in               ; EVERY KERNEL BUT kern_mega: api_refuse's
+                                ; RS entry answers OSAPI_XREFUSE's CF = 1,
+                                ; AX = 1, every other register and DS kept -
+                                ; the exit this spelled out a second time
+                                ; (kernel size pass 20, -7). Off the hot
+                                ; path: `jae` is still not taken there
+%if RD_P + rdp_XMEM_SEL >= rd_c0
+  %error "the door's .ref borrows XMEM_SEL's index, which must be an RS entry"
+%endif
+%endif
 .k1:
 %if rd_c1                       ; RCS: COLD_SEG:BP through api_far
  %if rd_n > rd_b2

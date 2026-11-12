@@ -107,9 +107,10 @@ app_about_paint_x:
     mov si, app_about_s2
     call app_about_center_x
     mov si, app_about_s3p       ; third line follows the live scheduler mode
-    call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
-    or al, al
-    jz .s3
+    cmp byte [sch_coop], 0      ; 0 pre-emptive, 1 cooperative: the byte
+    je .s3                      ; itself, through DS, where a far call to
+                                ; sched_mode_get read it (kernel size pass 20,
+                                ; -2)
     mov si, app_about_s3c
 .s3:
     call app_about_center_x

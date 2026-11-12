@@ -197,13 +197,20 @@ spk_tone:
                                 ; spk_pcm_idle latches it back (34.4)
     mov al, bh
     out 0x42, al
+%ifdef KERN_BIG
     call spk_gate_on            ; gate + speaker data on; upper bits kept
     jmp short .pf
+%else                           ; (kern_small: spk_gate_on's one caller, so
+    in al, 0x61                 ; written here, and the arms share the `out`
+    or al, 0x03                 ; - kernel size pass 20, -6)
+    jmp short .out61
+%endif
 .off:
     pushf
     cli
     in al, 0x61
     and al, 0xFC
+.out61:
     out 0x61, al                ; both arms end in the popf that closes
 .pf:                            ; SPEC.md 34.1's window and the CF=0 answer
     popf
@@ -222,15 +229,15 @@ spk_tone:
 ; clobbers: AL
 ; -----------------------------------------------------------------------------
 %ifdef KERN_BIG                 ; (kern_small plays no PWM at all: SPEC.md
-spk_pwm_on:                     ; 34.4.1 - only the tone's second half is its)
-    mov al, 0x90
+spk_pwm_on:                     ; 34.4.1 - only the tone's second half is its,
+    mov al, 0x90                ; and spk_tone writes that out itself)
     out 0x43, al
-%endif
 spk_gate_on:
     in al, 0x61
     or al, 0x03
     out 0x61, al
     ret
+%endif
 
 %ifdef KERN_BIG                 ; the clip is kern_big's (SPEC.md 34.4.1)
 ; =============================================================================
@@ -724,10 +731,14 @@ osapi_snd_stream:
 
 ; ...and the interlock the exclusive-clip tier asks before it takes the
 ; speaker (SPEC.md 34.9): with no streaming sink there is never one to
-; collide with, so the answer is a constant "not busy".
+; collide with, so the answer is a constant "not busy". kern_big's clip is
+; its only asker, so a kern_small, which plays no clip, carries none (kernel
+; size pass 20, -2)
+%ifdef KERN_BIG
 snd_str_busy:
     clc
     ret
+%endif
 %else
 osapi_snd_fm_x:
     cmp al, 2
