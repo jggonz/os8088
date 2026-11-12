@@ -772,7 +772,9 @@ font_char_bb:
     mov ax, dx                  ; goes. Three single shifts cost 6 bytes to
     call gfx_rowbase            ; `mov cl,3 / shr ax,cl`'s 4 and win in place
     add ax, bx                  ; because four other moves go with them
-    mov di, ax                  ; (~121.9 -> 100.9 clocks). DX is dead here.
+    xchg ax, di                 ; (~121.9 -> 100.9 clocks). DX is dead here,
+                                ; and so is AX: `xchg` for `mov` (kernel size
+                                ; pass 20, -1 and a clock)
     pop cx
     and cl, 7                   ; CL = right shift for the 16-bit window; CH is
                                 ; x's high byte and is overwritten by
@@ -818,33 +820,11 @@ font_char_bb:
     test ch, 1                  ; this plane's ink, decided ONCE rather than
     jnz .srow                   ; once per row - and so is the disabled
     cmp byte [cs:font_dith], 0  ; dither, which is mono-only and therefore
-    jne .dstart                 ; always on the clear-bits side
-    jmp short .crow
-.srow:
-    mov ah, [es:si]             ; glyph row in the window's high byte
-%ifdef KERN_BIG
-    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
-%endif                          ; KERN_BIG only, so the floor machine's glyph
-                                ; loops are byte-identical (11.3.4.1)
-    inc si
-    or ah, ah                   ; a blank row ors in nothing, whatever the
-    jz .snext                   ; shift does to it
-    xor al, al
-    shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
-    or [di], ah
-    or al, al                   ; ...and nothing spilled into the second byte
-    jz .snext                   ; at all when x is byte-aligned
-    or [di+1], al
-.snext:
-    add di, dx                  ; gfx_nextrow, inlined (see the note above),
-    test di, bp                 ; out of DX and BP
-    jz .snw
-    add di, [cs:vid_wrapfix]
-.snw:
-    dec bh
-    jnz .srow
-    pop bp
-    ret                         ; one plane, so the cell is finished
+    jne .dstart                 ; always on the clear-bits side - and the
+                                ; CLEAR loop is the one that follows, so ink
+                                ; 0 reaches it falling through where it took
+                                ; a `jmp short` (kernel size pass 20, -2 and
+                                ; ~15 clocks a black-ink glyph)
 .crow:
     mov ah, [es:si]
 %ifdef KERN_BIG
@@ -884,6 +864,31 @@ font_char_bb:
 ; always the cell's first (SPEC.md 11.3.2): a clip edge cutting a cell biases
 ; both the glyph pointer and the screen row, and an unbiased seed would flip
 ; the checkerboard's phase against the rows drawn either side of it.
+.srow:
+    mov ah, [es:si]             ; glyph row in the window's high byte
+%ifdef KERN_BIG
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
+    inc si
+    or ah, ah                   ; a blank row ors in nothing, whatever the
+    jz .snext                   ; shift does to it
+    xor al, al
+    shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
+    or [di], ah
+    or al, al                   ; ...and nothing spilled into the second byte
+    jz .snext                   ; at all when x is byte-aligned
+    or [di+1], al
+.snext:
+    add di, dx                  ; gfx_nextrow, inlined (see the note above),
+    test di, bp                 ; out of DX and BP
+    jz .snw
+    add di, [cs:vid_wrapfix]
+.snw:
+    dec bh
+    jnz .srow
+    pop bp
+    ret                         ; one plane, so the cell is finished
 .dstart:
     mov ch, 0xAA                ; CH is the checkerboard: the ink was decided
     test byte [cs:wm_clip_r0], 1 ; by the `test ch, 1` above and is not read
@@ -1016,10 +1021,9 @@ font_ink:
     mov [font_dith], al         ; AL = 0 on the `jz` here: cleared on the VGA
     jmp short .out              ; path too - the glyph loop reads it, so it
 %endif                          ; is stored on every path, not assumed
-%ifdef KERN_SMALL
-    nop                         ; PARITY, never executed (kernel size pass
-%endif                          ; 13): font_ink's test and font_str leave font_run_x
-                                ; an odd 17 bytes up on kern_small
+                                ; (kern_small's PARITY nop that stood here went
+                                ; with font_char_bb's odd -3, kernel size pass
+                                ; 20: font_run_x is back at its measured parity)
 %ifndef KERN_SMALL
     nop                         ; PARITY, never executed (kernel hot-paths
 %endif                          ; pass 1): font_ink and font_char_bb came out

@@ -109,14 +109,13 @@ icon_draw_x:
                                 ; rather than spent. Without this the record
                                 ; staged perfectly and drew at a byte count
 %ifdef KERN_SMALL
-    mov cl, ah                  ; CX = 2 + h * 4: the header, h mask words
-    xor ch, ch                  ; and h data words
-    shl cx, 1
-    shl cx, 1
-    inc cx                      ; ...+ the header. Two `inc`s are 2 bytes to
-    inc cx                      ; `add cx,2`'s 3 and cost the same 6 clocks,
-                                ; so it is shorter on both terms of the 8088's
-                                ; max(clocks, 4.34 x bytes)
+    mov al, 0x80                ; CX = 2 + h * 4: the header, h mask words
+    mov cl, 6                   ; and h data words - AX = h * 256 + 128 (AH =
+    shr ax, cl                  ; h, the kind byte replaced), and that over 64
+    xchg ax, cx                 ; is exactly 4h + 2 (kernel size pass 20, -3:
+                                ; it was `mov cl, ah / xor ch, ch`, two shifts
+                                ; and two `inc`s; ~30 clocks dearer once a
+                                ; record, never per row). AX is dead below
     mov di, ico_stage
     push di                     ; ...and the stage base comes back off the
                                 ; stack below rather than out of an immediate
@@ -416,10 +415,11 @@ ico_core:
     add dx, [ico_h]             ; DX is STILL y - nothing between the bank at
     dec dx                      ; `mov bx,dx` and here writes it - so y2 is
                                 ; one add rather than a load and an add
-    call wm_clip_test
-    mov cx, [ico_x]
-    mov dx, [ico_y]
-    jnc .noclip
+    call wm_clip_test           ; (CX and DX are NOT put back: nothing from
+    jnc .noclip                 ; .noclip on reads either before writing it -
+                                ; the walk re-reads [ico_x]/[ico_y], and the
+                                ; packed driver's VX_ICON reads the cells, not
+                                ; registers. Kernel size pass 20, -8)
 .ret:                           ; a `ret` within short reach of the three
     ret                         ; refusals above .rows_ok, where `.none` at the
 .noclip:                        ; foot was a relaxed five-byte jcc away
@@ -454,16 +454,19 @@ ico_core:
     xor ax, ax                  ; AX is dead after the two adds, and zeroing a
     mov [ico_y], ax             ; register to store it is a byte shorter than
                                 ; the immediate form
-.top_ok:
+.top_ok:                        ; AX = [ico_y] on BOTH ways in - the load above
+                                ; and the zero just stored - so it is not read
+                                ; again (kernel size pass 20, -3)
     mov dx, [vid_ch]            ; ...held across the bottom clip rather than
-    mov ax, [ico_y]             ; read three times. DX has been scratch since
-    cmp ax, dx                  ; the `mul` above
-    jae .none                   ; fully below the screen
+    cmp ax, dx                  ; read three times. DX has been scratch since
+    jae .none                   ; the `mul` above. Fully below the screen
     add ax, bx
     cmp ax, dx
     jbe .rows_ok
-    mov bx, dx
-    sub bx, [ico_y]             ; hang off the bottom edge: draw what fits
+    sub ax, dx                  ; hang off the bottom edge: draw what fits,
+    sub bx, ax                  ; h - (y + h - ch) = ch - y (kernel size pass
+                                ; 20: two registers where a move and a memory
+                                ; subtract were, -2)
 .rows_ok:
     mov [ico_rows], bx
 
