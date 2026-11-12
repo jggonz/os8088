@@ -1014,16 +1014,15 @@ mod_disarm:
     pushf                       ; NO TORN SLOT: a drop ran on a WORKER
     cli                         ; (inst_task_die -> desk_drop_x, until BR-4
                                 ; posted that teardown to ui_task) while the UI
-    call .slot                  ; task far-calls a slot with no lock held
-    popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
-    ret                         ; offset in the IMAGE's segment is garbage
-                                ; (its parity pad cancelled memory.inc's at
-                                ; mem_bytes_kb_x, kernel size pass 14)
-.slot:                          ; a CALLED loop, not a fall-through:
-    mov word [di], mod_gone     ; (kmain_o's `.boot3` loop is this, written out)
-    COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
-    add di, 4
-    loop .slot
+                                ; task far-calls a slot with no lock held
+                                ; (cur_shape_pass's DKD_HOVER), and mod_gone's
+                                ; offset in the IMAGE's segment is garbage
+.slot:                          ; THE LOOP INSIDE THE WINDOW, falling to its
+    mov word [di], mod_gone     ; popf - it was a `call .slot` there and a
+    COLDSEG_TO word [di+2]      ; second `ret` (kernel size pass 20, -4).
+    add di, 4                   ; mod_gone is .cold's own (ROM-PLAN 3.2);
+    loop .slot                  ; kmain_o's `.boot3` loop is this, written out
+    popf
 .ret:                           ; (mod_free_row's nothing-held answer)
     ret
 

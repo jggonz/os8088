@@ -5482,16 +5482,13 @@ mmf_mem_claim_own:
     push cx
     push bx
     call mem_own                ; BX = owner word = the calling segment
-    jc .fail
-%ifdef KERN_MEGA
-    call mem_claim_x.low        ; (past the arm that offers a KERNEL cache
-%else                           ; the pool: an owner is no cache's tag)
-    call mem_claim_x
-%endif
-    jmp short .out
-.fail:
-    xor dx, dx
-    stc
+    mov dx, 0                   ; THE REFUSAL'S DX, ahead of the test: `mov`
+    jc .out                     ; keeps mem_own's CF = 1, and DX is no input
+%ifdef KERN_MEGA                ; of the claim, which answers it (kernel size
+    call mem_claim_x.low        ; pass 20, -2: a `.fail` arm and the jump over
+%else                           ; it). (.low: past the arm that offers a
+    call mem_claim_x            ; KERNEL cache the pool: an owner is no
+%endif                          ; cache's tag)
 .out:
     pop bx                      ; pop leaves CF alone, and so does retf
     pop cx
@@ -5501,7 +5498,8 @@ mmf_mem_claim_ownhi:            ; ...and from the TOP: the bridge's
     push cx                     ; conventional piece (mega.inc, MC5 and
     push bx                     ; 14.169)
     call mem_own
-    jc mmf_mem_claim_own.fail
+    mov dx, 0
+    jc mmf_mem_claim_own.out
     call mem_claim_hi_x
     jmp short mmf_mem_claim_own.out
 %endif
