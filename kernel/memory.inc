@@ -3117,7 +3117,16 @@ mem_cp_walk:
     mov ax, [ss:si+MC_DMA]      ; move (66.4)? Bit 15 is the door it came in
     xor ax, [mem_cp_msk]        ; by, complemented coming down, so it is 0
     add ax, ax                  ; exactly when it agrees with this pass - and
-    jc .pinned                  ; `add` lifts that bit straight into the carry.
+    jc .barrier                 ; `add` lifts that bit straight into the carry.
+                                ; A BARRIER and NOT .pinned: the claim is
+                                ; MOVABLE, only not this pass's, so the other
+                                ; pass packs it - and .pinned would DISSOLVE
+                                ; it when it is a cheap cache. A kept module
+                                ; image (top-down, MEM_P_MOD) was dropped by
+                                ; every ascending pass that way before the
+                                ; descending one could move it (SPEC.md
+                                ; 2.8.3, tests/modcache.py). A truly pinned
+                                ; cache still dissolves: mem_can_move's arm
                                 ; AX IS THIS WALK'S SCRATCH: the entry banks
                                 ; it, and nothing in the loop carries a value
                                 ; in it from one claim to the next (it was
@@ -3574,6 +3583,13 @@ mem_rr_tab:
                                 ; image; kern_small has neither - no
                                 ; HIBER.DRV, and its dialog slot is a
 %endif                          ; refusing stub with no state (62.9.15)
+%ifdef MOD_CACHE
+    MEM_RR_ROW mod_tab + MODR_SEG, MOD_MAX, MODR_SIZE ; a KEPT module image,
+                                ; movable from its drop to its re-adoption
+                                ; (mod.inc, SPEC.md 2.8.3); a LIVE one is
+                                ; MEM_K_MOD and never moves, so its row never
+                                ; matches a moving base
+%endif
     MEM_RR_ROW dskw_seg, 2, 2   ; a CALLER's segment and the advancing one,
     MEM_RR_ONE dskw_czseg       ; banked across a whole file transfer
     ; ...and the driver words that are NOT in drv_tab. Three of them are rows

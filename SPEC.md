@@ -1993,16 +1993,31 @@ nothing.
   desk verbs, which a worker may not make, §20.6 rule 7). That is what lets
   the find and the re-tag run with interrupts ON: only the UI task sheds or
   compacts (§66.3.1), so nothing can take the block between them.
-- **A shed** — or a compaction that dissolves a pinned cache in its way
-  (§66.10) — zeroes the row's `MODR_SEG` through `mem_pg_own` and frees the
-  block, and the next `mod_need` is an ordinary load. The tag is a RANGE of
+- **A shed** zeroes the row's `MODR_SEG` through `mem_pg_own` and frees the
+  block, and the next `mod_need` is an ordinary load. A compaction does not:
+  the kept claim is movable (below). The tag is a RANGE of
   two owners a row so that `mem_pg_own`'s `base + 2d` lands on the row's
   `MODR_SEG` in the stride-4 `mod_tab` with no arm in `mem_pg_forget`; the
   slots need no notice, because they read `mod_gone` from the drop on.
-- The kept claim is **pinned, not movable**: it was claimed top-down, where
-  a package region is, and a compaction that needs its room dissolves it
-  rather than copying it. Declaring it movable is a `mem_rr_tab` row and the
-  `MC_RLOC` store, about 10 bytes, not spent.
+- **The kept claim is MOVABLE** from its drop to its re-adoption: `mod_drop`
+  stores `mem_region_reloc` in its `MC_RLOC` beside the tag, and `mod_tab`'s
+  `MODR_SEG` words are a `mem_rr_tab` row, so the kernel's half of every move
+  re-points the one word that names it (a LIVE image is `MEM_K_MOD`, which
+  `mem_can_move` pins, so its row never matches a moving base). `mod_need`'s
+  re-adoption withdraws the declaration with the tag. A kept image is a
+  disarmed CS that writes nothing outside its zeroed scratch, so a move is a
+  copy and nothing else.
+
+  **It was pinned, and that was the field report** (Sticky Apps on the
+  5150: a press after a visit to the Task Manager took the whole load time
+  again). A pinned cache is a BARRIER, and the compactor dissolves every
+  barrier cheaper than the rank it runs at (§66.10) — `MEM_PG_LOW` is under
+  any ordinary claim's — whether or not its room was needed, so the image
+  went at the first compaction after the drop. Movable, it has to be SHED to
+  go, which is what a cache is for; and §66.10.5 is the half that made
+  "movable" true for a top-down cache at all. 6 + 5 bytes of `.cold` (the
+  store and the withdrawal), 4 of `.text` (the row), on `kern_big` and
+  `kern_emu` alone. `tests/modcache.py` is the row.
 
 **Rank: `MEM_PG_LOW`, decided per module rather than inherited (rt-9).**
 Losing a kept image costs the read it saved, with the system disk in the
@@ -105760,6 +105775,14 @@ Three things about it are load-bearing:
   the table says while the mount counts are unchanged; §18.4 carries the
   current measurement of the path this sits on.
 
+  **Inside one volume it is no remount at all** (the module cache's field
+  report, §2.8.3): `drv_vol_back` goes back through `dsk_goto`, not
+  `dsk_chdir_q`, so a bracket that only changed FOLDER on the volume it
+  started on - the Sticky Apps menu stands in `STIKAPPS\` - moves `[dsk_cwd]`
+  with no I/O when the medium cannot have changed (§18.9.1.1), and is
+  `dsk_chdir_q` otherwise. It was a boot-sector read on every Sticky Apps
+  press, with the motor still spinning from the scan. Same bytes.
+
   So the fix **adds one floppy remount, and only when the volume actually
   moved**. That is not a side effect to be optimised away later — putting the
   volume back *is* a remount, because navigation in this OS is a remount by
@@ -124883,6 +124906,27 @@ is one compaction pass that does not fit, followed by the shed that does.
 
 `kern_small` was never affected: it has no compactor, so `mem_avail_lvl_x` takes
 `mem_bigrun`, whose `mem_pg_cheap` test is the correct one.
+
+#### 66.10.5 ...and a movable cache through the OTHER door was still dissolved
+
+*"A cache that can move is moved. It is never dissolved, at any rank"* held
+for `MEM_P_DIRW` because it is a bottom-up claim. The walk sends a claim to
+`.pinned` from TWO tests: `mem_can_move`'s refusal, and the door test
+(`mem_cp_mine`, inline) that says the claim is not THIS pass's to move - a
+top-down claim in the ascending pass, a bottom-up one in the descending. The
+second is not a pin: the other pass packs that claim. But `.pinned` is where
+a cheap cache is dissolved, and the ascending pass runs FIRST (§66.4), so a
+movable TOP-DOWN cache was dissolved before the descending pass could move
+it. The first such cache was the kept module image (§2.8.3), dropped by every
+ranked compaction.
+
+The door test goes to `.barrier` now, which is where every non-cache claim of
+the other door already ended up (`mem_pg_cheap` refuses it): the gap beside
+it is a hole this pass cannot close, and the claims past it still pack
+against it. Nothing changes for a claim `mem_can_move` refuses, a cache
+included - a pinned cache in the way is still dissolved under pressure. The
+plan and the run are the same walk, so they still agree. No bytes: the jump
+changes its target and stays short.
 
 
 ## 67. Cyclone 88 — the seventeenth package (`apps/cyclone/cyclone.asm`)
