@@ -8937,16 +8937,24 @@ dsk_goto:
     call drv_fs_call
     pop bp
     jnc .quiet                  ; (a refusal falls into .bad)
-%endif
 .bad:
     mov ax, FERR_IO
     jmp short .eout
+%endif
 .full:
     mov ax, bx                  ; (DL = the volume, from the top)
     call dsk_chdir_q_x
     jnc .ok
 .ferr:
+%ifdef OS88_REDIR
     mov ax, FERR_NODISK
+%else                           ; ...and with nothing falling into .bad, it
+    mov al, FERR_NODISK         ; follows .full here: SKIPF2 is `test ax,
+    SKIPF2                      ; imm16` over its `mov al`, and `cbw` AH = 0
+.bad:                           ; for both (kernel size pass 20, -2)
+    mov al, FERR_IO
+    cbw
+%endif
 .eout:
     pop dx
     stc
