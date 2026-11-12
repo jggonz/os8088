@@ -887,8 +887,9 @@ wm_dmg_rebands:                         ; ...the SAME damage again: nothing
 .disp:
 %ifdef KERN_BIG
     mov al, [vid_ndisp]
-    xor ah, ah
-    cmp si, ax
+    cbw                                 ; (at most VID_NDISP_MAX, 2: a byte and
+    cmp si, ax                          ; a clock under `xor ah, ah` - kernel
+                                        ; size pass 20)
     jae .done
     mov ax, si
     call vid_ctx_rect                   ; AX/BX/CX/DX = its inclusive virtual
@@ -1037,8 +1038,9 @@ wm_dmg_rebands:                         ; ...the SAME damage again: nothing
 .disp:
 %ifdef KERN_BIG
     mov al, [vid_ndisp]
-    xor ah, ah
-    cmp si, ax
+    cbw                                 ; (at most VID_NDISP_MAX, 2: a byte and
+    cmp si, ax                          ; a clock under `xor ah, ah` - kernel
+                                        ; size pass 20)
     jae .done
     mov ax, si
     call vid_ctx_rect                   ; AX/BX/CX/DX = its inclusive virtual
@@ -3562,8 +3564,9 @@ wm_dock_clear:
     mov ax, [bx+W_Y]
     add ax, [bx+W_H]            ; the drop shadow's own row, y+h
     cmp ax, [vid_dock_y0]
-    jae .dirty
-.next:
+    cmc                         ; CF = 1 at or below the strip: that is the
+    jc .out                     ; answer, out as it stands (kernel size pass
+.next:                          ; 20, -2: it was `jae` to an `stc / jmp`)
     loop .scan
 .clear:
     clc
@@ -3573,9 +3576,6 @@ wm_dock_clear:
     pop bx
     pop ax
     ret
-.dirty:
-    stc
-    jmp short .out
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -4455,14 +4455,13 @@ wm_hit:
     push bp
     push ax                     ; AH is preserved; AL patched on the way out
     mov al, [wm_zn]
-%ifdef KERN_BIG
     cbw                         ; AH = 0: [wm_zn] <= MAX_WIN, under 128 - a
                                 ; byte and two clocks under `mov ah, 0`, and
                                 ; the byte that puts everything below back at
                                 ; the parity wm_top's took (kernel size pass
-%else                           ; 13). kern_small's wm_top did not move, so
-    mov ah, 0                   ; neither does this: its hot .text stays even
-%endif
+                                ; 13). kern_small kept `mov ah, 0` for its hot
+                                ; .text's parity until kernel size pass 20
+                                ; paired the byte with menu_draw_bar's `mov dl`
     mov si, wm_zord
     add si, ax                  ; walk front to back
     mov di, 1                   ; 1 until the first visible window is passed
@@ -4964,6 +4963,40 @@ wm_dmg_union:
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
+; wm_paint_all - the whole desktop, BY THE DAMAGE PASS (SPEC.md 11.91.7)
+; in:  nothing (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; "Repaint everything" is wm_paint_dmg handed the whole virtual desktop. This
+; used to be a layered walk of its own - the dither under the bar, every zone,
+; then every visible window back to front WHOLE - so a pixel under the top
+; window was written once per layer, 7-8 times over in deskbench's scene, and
+; every covered window put its whole content back for the windows above it to
+; paint over. The damage pass writes each pixel about once: a window is drawn
+; where nothing above will (11.3.3, 11.96.15, 11.97) and the dither lays only
+; the ground no window holds (11.91.1). [wm_dmg_stwin] is 0 outside a pass, so
+; nothing was "vacated" and every window the rect touches is marked.
+;
+; (0, 0) and not (0, MBAR_H): wm_dmg_bands floors display 0 at the bar itself,
+; and a SECOND display has no bar - its top rows are desktop (SPEC.md
+; 39.16.2), which the layered walk's EXT_DESK used to dither whole. The far
+; corner is clamped onto the desktop - the UNION of the displays - by
+; wm_paint_dmg, and a fullscreen window is that routine's wm_dmg_fs case: the
+; windows under it are skipped by wm_covered (SPEC.md 11.91.7 prices it).
+;
+; It forces neither the bar nor the dock: a caller whose app overdrew them
+; says so first (blk_relit, hiber's resume).
+; -----------------------------------------------------------------------------
+wm_paint_all:
+    KFZ 23                      ; a WHOLE desktop repaint
+    call kent_bp                ; wm_paint_dmg's own bank, taken HERE and the
+    xor ax, ax                  ; entry's skipped: this was four pushes, the
+    xor bx, bx                  ; rect, a near call into wm_paint_dmg - whose
+    mov cx, 7FFFh               ; kent_bp banked all seven again - and
+    mov dx, cx                  ; `jmp kret_dx` (kernel size pass 20, -5, and
+    jmp short wm_paint_dmg.go   ; a call, four pushes and four pops faster)
+
+; -----------------------------------------------------------------------------
 ; wm_paint_dmg - repaint only what a rectangle's worth of change touched
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive; may hang off the screen)
 ;      caller holds the gfx lock
@@ -4998,6 +5031,8 @@ wm_dmg_union:
 ; merely reached the bottom of the screen. It is a per-window test instead.
 ; -----------------------------------------------------------------------------
 wm_paint_dmg:
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp - FIRST, so that
+.go:                            ; wm_paint_all (above) can enter after it
     mov byte [cur_shchk], 1     ; ...and the other way (SPEC.md 7.2): a window
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13). `inc`
                                 ; and not `mov byte ..., 1`, a byte less: the
@@ -5010,7 +5045,6 @@ wm_paint_dmg:
                                 ; of those pays a repaint through here, which
                                 ; is why this is the second store and not the
                                 ; fifth
-    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
 
     mov word [wm_dmg_fs], 0     ; ...and wm_dmg_dk beside it, ONE store (the
                                 ; %if at wm_dmg_j). A visible fullscreen window
@@ -5408,43 +5442,6 @@ wm_dock_under:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; wm_paint_all - the whole desktop, BY THE DAMAGE PASS (SPEC.md 11.91.7)
-; in:  nothing (caller holds the gfx lock)
-; out: nothing (all registers preserved)
-;
-; "Repaint everything" is wm_paint_dmg handed the whole virtual desktop. This
-; used to be a layered walk of its own - the dither under the bar, every zone,
-; then every visible window back to front WHOLE - so a pixel under the top
-; window was written once per layer, 7-8 times over in deskbench's scene, and
-; every covered window put its whole content back for the windows above it to
-; paint over. The damage pass writes each pixel about once: a window is drawn
-; where nothing above will (11.3.3, 11.96.15, 11.97) and the dither lays only
-; the ground no window holds (11.91.1). [wm_dmg_stwin] is 0 outside a pass, so
-; nothing was "vacated" and every window the rect touches is marked.
-;
-; (0, 0) and not (0, MBAR_H): wm_dmg_bands floors display 0 at the bar itself,
-; and a SECOND display has no bar - its top rows are desktop (SPEC.md
-; 39.16.2), which the layered walk's EXT_DESK used to dither whole. The far
-; corner is clamped onto the desktop - the UNION of the displays - by
-; wm_paint_dmg, and a fullscreen window is that routine's wm_dmg_fs case: the
-; windows under it are skipped by wm_covered (SPEC.md 11.91.7 prices it).
-;
-; It forces neither the bar nor the dock: a caller whose app overdrew them
-; says so first (blk_relit, hiber's resume).
-; -----------------------------------------------------------------------------
-wm_paint_all:
-    KFZ 23                      ; a WHOLE desktop repaint
-    push ax
-    push bx
-    push cx
-    push dx
-    xor ax, ax
-    xor bx, bx
-    mov cx, 7FFFh
-    mov dx, cx
-    call wm_paint_dmg
-    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; wm_content - content-area origin of a window

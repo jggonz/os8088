@@ -2433,7 +2433,7 @@ ui_grow_clamp:
 ;   AH = 0                  the System menu - identical in every
 ;                           application; cmd = CMD_ABOUT + item
 ;   AM_ONCMD = 0            a kernel-dispatched set, i.e. Locator;
-;                           cmd = ui_loc_base[cell] + item
+;                           cmd = CMD_CLOSE + item (cell 1, File)
 ;   otherwise               the active application's own handler, called
 ;                           exactly like W_ONCLICK: under the gfx lock, on
 ;                           this task, billed to the owning instance
@@ -2534,15 +2534,15 @@ ui_dispatch:
     pop es
     jne .app
 .kernel:
-    mov bl, ah                  ; cmd = the cell's base + the item index
-    xor bh, bh
-    cmp bx, UI_LOC_N            ; ui_loc_base's own length (two cells on
-    jae .ret                    ; kern_small, SPEC.md 14.6); a set with more
-                                ; cells must have had a handler
-    shl bx, 1
-    cbw                         ; AH = 0: AL is an item index, below the
-    add ax, [ui_loc_base + bx]  ; 16 a popup holds (kernel size pass 18, -1)
-    jmp ui_cmd
+    cmp ah, 1                   ; cmd = the cell's base + the item index, for
+    ja .ret                     ; the two kernel-dispatched cells (SPEC.md
+    jb .sys                     ; 14.6); a set with more cells must have had
+    add al, CMD_CLOSE - CMD_ABOUT ; a handler. Locator's File is CMD_CLOSE's,
+.sys:                           ; the System menu CMD_ABOUT's - the base as
+    cbw                         ; arithmetic, where it was a two-word table
+    inc ax                      ; and its index (kernel size pass 20, -9).
+    jmp ui_cmd                  ; AH = 0: AL is an item index, below the 16 a
+                                ; popup holds, and CMD_ABOUT is the `inc`
 .ret:
     ret
 
@@ -2620,12 +2620,14 @@ ui_dispatch:
     jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
-; System menu, then Locator's File. There is no Builtins cell on either
-; build (SPEC.md 14.6, 14.8): its two launches are packages now and its
-; third, Disk, is the desktop's own drive zones
-ui_loc_base:
-    dw CMD_ABOUT, CMD_CLOSE
-UI_LOC_N equ 2
+; System menu, CMD_ABOUT, then Locator's File, CMD_CLOSE - ui_dispatch's
+; `.kernel` arithmetic, which was a table here (ui_loc_base) until kernel size
+; pass 20. There is no Builtins cell on either build (SPEC.md 14.6, 14.8): its
+; two launches are packages now and its third, Disk, is the desktop's own
+; drive zones
+%if CMD_ABOUT != 1 || CMD_CLOSE <= CMD_ABOUT + MENU_LOGO_N - 1 || CMD_CLOSE - CMD_ABOUT > 127
+  %error "ui_dispatch's .kernel builds cmd as item + 1 (CMD_ABOUT) and adds CMD_CLOSE - CMD_ABOUT to AL for Locator's File cell"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; [ui_pcmd] - one of the kernel's own menu commands, DEFERRED (SPEC.md 13)
@@ -3043,8 +3045,8 @@ ui_cmd:
                                 ; (SPEC.md 12.3)
 
 .tab:                           ; data in .text, reached only by the indirect
-                                ; jump above - ui_loc_base's pattern, and
-                                ; fm_jmp's. os88ovlchk cannot see an indirect
+                                ; jump above - fm_jmp's pattern too.
+                                ; os88ovlchk cannot see an indirect
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS

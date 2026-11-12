@@ -21990,7 +21990,8 @@ bar, so its top rows are desktop (§39.16.2), and `wm_dmg_bands` gives display
   corner clamps to `[vid_wm1]`/`[vid_hm1]`, which are the **union** (§39.16),
   and `wm_dmg_bands` already seeds every display's own band — so the dither
   covers it and the window marking reaches every window on it. `EXT_DESK`
-  (EXTD.DRV's `vid_disp_desk`) lost its one caller and its slot is retired.
+  (EXTD.DRV's `vid_disp_desk`) lost its one caller and its slot is retired
+  - `EXT_PHASE`, the last entry, holds slot 10 since kernel size pass 20 (§39.19.6's table).
 - **A fullscreen window up** (`wm_fs_vis`). The walk started at that window,
   skipping everything below it for free. The damage pass marks every window
   and asks `wm_covered` of each before drawing it, so the windows under the
@@ -83094,12 +83095,11 @@ every register kept (§2.8.1) — and every call site is either behind a
 | 7 | `EXT_DISPLAY` — `wm_display`'s secondary arm | `wm_display`, GATED: Tracker asks `OSAPI_WM_DISPLAY` at the top of every draw | never reached; CF = 1 from the image means display 0, whose numbers the caller loads |
 | 8 | `EXT_SPAN` — `wm_disp_span` | `wm_zoom` | registers kept = the primary's standard state |
 | 9 | `EXT_FSRECT` — `wm_fs_setrect`'s arm | `wm_fs_setrect` | CF = 1 → the primary's rect, written by the caller |
-| 10 | `EXT_DESK` — `vid_disp_desk` | `wm_paint_all` ×2 | CF = 1 = nothing painted, which the fullscreen arm reads in place of the `[vid_ndisp]` test it made |
+| 10 | `EXT_PHASE` — `ext_e_phase`, `ui_drag_phase`'s second-display arm (§11.96.13). Slot 10 was `EXT_DESK` (`vid_disp_desk`) until it retired with its one caller, the layered `wm_paint_all` (§11.91.7); the last entry moved into it rather than leave a 4-byte hole in the slot block (kernel size pass 20) | `ui_drag_phase`, UNGATED (once, at the release) | every register kept: on one display the phase stands |
 | 11 | `EXT_YLOW` — `ui_ylow`'s arm | `ui_drag`, GATED (the release) | never reached; the caller loaded `MBAR_H` into SI |
 | 12 | `EXT_FCUT` — `ext_fcut`, §39.14.11's cell cut | `font_ch_spill`, GATED (`[gfx_dnest]` = 1) | never reached; CF = 1 would be §39.14.2's whole-cell drop |
 | 13 | `EXT_BCUT` — `ext_bcut`, §39.14.7.2's blit cut | `gfx_blit4`, GATED (`[vid_ndisp]` > 1, a straddle) | never reached; CF = 1 (and an ODD cut) is §39.14.7's run-splitting path |
 | 14 | `EXT_DEAD` — `ext_e_dead`, §39.16.1's dead-zone pull (was `ui_drag_dead`) | `ui_drag`, UNGATED (once, at the release) | every register kept: one display has no dead zone |
-| 15 | `EXT_PHASE` — `ext_e_phase`, `ui_drag_phase`'s second-display arm (§11.96.13) | `ui_drag_phase`, UNGATED (once, at the release) | every register kept: on one display the phase stands |
 
 `mod_init_x` rests the slots on `mod_gone` before `wm_init`, which is before
 the first of these can run; the early `vid_disp_init` in `kmain_o`, before
