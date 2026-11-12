@@ -14,7 +14,6 @@
 
 fast  abilock                # as reviewed 2026-11-12
 fast  api-abi                # as reviewed 2026-11-12
-fast  arcprebuilt-stamp      # as reviewed 2026-11-12
 fast  ascplace               # as reviewed 2026-11-12
 fast  asmrules               # as reviewed 2026-11-12
 fast  bits                   # as reviewed 2026-11-12
@@ -41,12 +40,10 @@ fast  heapgran               # as reviewed 2026-11-12
 fast  hotpar                 # as reviewed 2026-11-12
 fast  image                  # as reviewed 2026-11-12
 fast  installabi             # as reviewed 2026-11-12
-fast  isotronclean           # as reviewed 2026-11-12
 fast  kernbudget             # as reviewed 2026-11-12
 fast  layout                 # as reviewed 2026-11-12
 fast  livefull               # as reviewed 2026-11-12
 fast  mirror                 # as reviewed 2026-11-12
-fast  moddrop                # as reviewed 2026-11-12
 fast  nulldev                # as reviewed 2026-11-12
 fast  ovlchk                 # as reviewed 2026-11-12
 fast  partoff                # as reviewed 2026-11-12
@@ -56,8 +53,6 @@ fast  pkgzrules              # as reviewed 2026-11-12
 fast  readme8088             # as reviewed 2026-11-12
 fast  retired                # as reviewed 2026-11-12
 fast  romtool                # as reviewed 2026-11-12
-fast  stik                   # as reviewed 2026-11-12
-fast  stikcard               # as reviewed 2026-11-12
 fast  stkapps                # as reviewed 2026-11-12
 fast  stkbalance             # as reviewed 2026-11-12
 fast  stkclass               # as reviewed 2026-11-12

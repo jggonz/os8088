@@ -334,8 +334,8 @@ FAST = [
         "literal under 0.1 s, or marked `# host: <why>`; a scenario step is "
         "Box.guest_sleep / os88marty.guest_sleep / pace. VERIFIED TO FAIL "
         "on the tree before it (45 sites, 38 of them scenario steps)"),
-    Row("arcprebuilt-stamp", "fast", py("tests/unit/t_arcprebuilt.py"), 0.1,
-        "ARCADE's committed ROM-free parts (apps/arcade/prebuilt/, ARCADE-SPEC 1.6) "
+    Row("arcprebuilt-stamp", "soak", py("tests/unit/t_arcprebuilt.py"), 0.1,
+        "SOAK (owner, 2026-11-12: one package (ARCADE): solid until someone changes it, and then a scoped soak finds it). ARCADE's committed ROM-free parts (apps/arcade/prebuilt/, ARCADE-SPEC 1.6) "
         "are the state of their inputs: STAMP's hashes of the translator, the "
         "seeds, Q*bert's patch and the pins match the tree, so `make arcade` "
         "never ships an old translation under new source. No ROM needed. Red "
@@ -375,8 +375,8 @@ FAST = [
         "Makefile block reads no reference directory. SOAK: it is about ONE "
         "package (docs/WRITING-TESTS.md 2.1 rule 1), so whoever touches "
         "Excitebike runs `soak -k 'excitebike*'`"),
-    Row("isotronclean", "fast", py("tests/unit/t_isotron_clean.py"), 0.2,
-        "isoTron carries nothing from the game it remakes (SPEC.md 108.1, "
+    Row("isotronclean", "soak", py("tests/unit/t_isotron_clean.py"), 0.2,
+        "SOAK (owner, 2026-11-12: one package (isoTron): whoever changes it meets it in a scoped soak). isoTron carries nothing from the game it remakes (SPEC.md 108.1, "
         "docs/plans/ISOTRON-PLAN.md section 0). It is a remake from OBSERVED "
         "RULES and the reference footage and the original executable live "
         "outside the tree; this walks every file the game owns "
@@ -1094,8 +1094,8 @@ FAST = [
         "never see), each with its reason - the two look identical in a diff "
         "and the next one is written by copying the last; an unregistered or "
         "a vanished site fails this row"),
-    Row("stik", "fast", py("tests/unit/t_stik.py"), 1.7,
-        "SPEC.md 110.10: a Sticky App's shared half between MartyPC runs - "
+    Row("stik", "soak", py("tests/unit/t_stik.py"), 1.7,
+        "SOAK (owner, 2026-11-12: Sticky Apps' own shared half). SPEC.md 110.10: a Sticky App's shared half between MartyPC runs - "
         "tools/os88stik.py --selfcheck, tests/stikprob ASSEMBLED so the SDK's "
         "os88stik.inc is built by every `make` (only `make stiktest` built it), "
         "the Sticky App header's offsets in the include where the host tool writes "
@@ -1743,8 +1743,8 @@ FAST = [
         "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
         "version 2 with the glyph in DOS's row. Host-only, one package format "
         "and three tools, which is why it is here beside `pkg` and not in soak"),
-    Row("stikcard", "fast", py("tests/unit/t_stikcard.py"), 0.6,
-        "a Sticky App carries a CARD (SPEC.md 110.12) - name, description and "
+    Row("stikcard", "soak", py("tests/unit/t_stikcard.py"), 0.6,
+        "SOAK (owner, 2026-11-12: Sticky Apps' card format). a Sticky App carries a CARD (SPEC.md 110.12) - name, description and "
         "32x32 picture in the clear prefix behind flags bit 7: the validator's "
         "refusals, the card kept verbatim through compression, the kernel's two "
         "clear-prefix ladders stepping over it, the menu's offsets equal to the "
@@ -2099,8 +2099,8 @@ FAST = [
         "miss is a visual bug in one package's drawing, not a broken OS, "
         "and the release soak runs every row; 6 s was too dear for a tier "
         "every build or integration pays"),
-    Row("moddrop", "fast", py("tests/unit/t_moddrop.py"), 0.2,
-        "SPEC.md 2.8.3's ratchet: every mod_tab row is DROPPED somewhere, "
+    Row("moddrop", "soak", py("tests/unit/t_moddrop.py"), 0.2,
+        "SOAK (owner, 2026-11-12: kernel-internal ratchet over mod_tab). SPEC.md 2.8.3's ratchet: every mod_tab row is DROPPED somewhere, "
         "or tests/moddrop.txt says why it is held until restart. A module "
         "nothing drops holds its claim from first use to power-off and "
         "PINNED - exactly the bytes a module exists to give back - and "

@@ -235,7 +235,7 @@ What `make help` cannot tell you:
   **One sanctioned exception, the owner's (2026-11-05)**: ARCADE's
   ROM-free translated parts in `apps/arcade/prebuilt/`, so neither `make`
   nor a release needs the ROMs or archive.org. `make arcadeprebuilt`
-  refreshes them, and the fast-tier `arcprebuilt-stamp` fails `make` when
+  refreshes them, and the soak row `arcprebuilt-stamp` fails when
   their inputs move without them (ARCADE-SPEC 1.6).
 - **Fetched data is never committed** (Frotz stories, Lemmings, the Apple II
   ROMs, RunCPM's master disk, the soundfont): the targets fetch it at pinned
@@ -462,8 +462,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   item, the greying predicate and the thunks; everything else goes in the
   module. Moving code to `.cold` or the boot overlay relieves `KERN_CODE_MAX`
   but not `KERN_BUDGET` — a module relieves both.
-  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
-  fails `make` for a `mod_tab` row nothing drops, unless
+  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (soak - name it when you add a module)
+  fails for a `mod_tab` row nothing drops, unless
   `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
   5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
   drop rule. A new module needs its drop on the day it lands.
