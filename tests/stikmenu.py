@@ -133,6 +133,26 @@ class Menu:
             return 0
         return lin
 
+    def armed(self):
+        """base(), once the image's slots NAME its segment - mod_check's
+        arming, after the read and the stamps. Before that the claim holds
+        whatever its last holder left, and a nonzero byte at stm_live's
+        offset read as a panel that was not up: drop() returned while the
+        file was still being read, the release landed in the scan, and the
+        panel stayed up for a click nobody made (modcache A, two runs in
+        five, once the kept scan moved stm_live; SPEC.md 110.12.2). Under
+        Bochs base() already refuses a claim mod_hi has not copied."""
+        lin = self.base()
+        if not lin or getattr(self.m, "bochs", False):
+            return lin
+        seg = struct.unpack("<H", bytes(self.m.read(
+            self.ui._S("mod_tab") + self.mod * MODR_SIZE, 2)))[0]
+        blk = struct.unpack("<H", bytes(self.m.read(
+            self.ui._S("mod_fpt") + 2 * self.mod, 2)))[0]
+        sseg = struct.unpack("<H", bytes(self.m.read(
+            (geom.KERNEL_SEG << 4) + blk + 2, 2)))[0]
+        return lin if sseg == seg else 0
+
     def rd(self, name, n):
         return bytes(self.m.read(self.base() + self.off[name], n))
 
@@ -157,7 +177,7 @@ class Menu:
         # before the close, so the last drop's image - a reload lands in the
         # same claim, whose memory still holds its bytes until this one's
         # read overwrites them - always left it 0
-        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+        self.ui._wait(lambda: self.armed() and self.b("stm_live"),
                       "the Sticky Apps panel to drop", T)
         n = self.b("stm_nsl")
         raw = self.rd("stm_sl", n * SL_SIZE)
@@ -175,7 +195,7 @@ class Menu:
         self.ui.mo.to(self.cell(), geom.MBAR_H // 2)
         self.ui.mo._edge(True)
         self.ui.mo.to(self.cell() + 40, 120, l=True)
-        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+        self.ui._wait(lambda: self.armed() and self.b("stm_live"),
                       "the Sticky Apps panel to drop", T)
 
     def release_on(self, slabs, k):

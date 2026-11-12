@@ -13880,21 +13880,26 @@ SOAK = [
         "load). VGA XT, the shipped 360KB system disk, the Task Manager open "
         "first so its region is above STIKMENU.DRV's. A: the first press "
         "loads the file (mod_need.sized, int 13h on its sectors). B: the "
-        "second re-adopts it (mod_need.held) for EXACTLY ONE int 13h, the "
-        "boot sector - the scan's media check (18.9.1.1), with the motor let "
-        "stop first; drv_vol_back's remount out of STIKAPPS made it two. C: "
+        "second re-adopts it (mod_need.held) and makes NO int 13h call at "
+        "all, the motor let stop first: the scan is KEPT below the scratch "
+        "tail (SPEC.md 110.12.2). C: "
         "the Task Manager closes and a compaction is posted at rank 0FFh: "
         "the kept image MOVES into the hole, MODR_SEG re-pointed and its "
         "record still MEM_P_MOD + 2 x the id - it was a pinned BARRIER the "
         "compactor dissolved, and the ascending pass dissolved a movable "
         "top-down cache too. D: the third press re-adopts it at the new "
-        "base, not one sector of the file read, three Apps listed. E-G: the "
+        "base, no int 13h, three Apps listed. E-G: the "
         "owner's own steps on the 5150 Hercules + ST-225 twin, nothing "
         "forced - press, press, the Task Manager opened and the desktop "
         "clicked, press: no compaction or shed runs, both later presses "
-        "re-adopt, and each reads the boot sector ONCE (stm_scan's batch, "
-        "SPEC.md 110.12.2: the return from C:\\STIKAPPS remounted A:).",
-        needs=("marty",), timeout=600,
+        "re-adopt with no int 13h on either drive. H-K: a floppy-only "
+        "Hercules 5150 - the second press makes no call; with the APPS disk "
+        "in A: the kept list shows and Add beeps (no STIKAPPS); with the "
+        "calendar deleted off a re-serialled system disk Add is the loader's "
+        "own refusal; with the system disk back Add launches, and its "
+        "SYSTEM.CFG write moves [dsk_wgen] so the next press SCANS again "
+        "and lists it running.",
+        needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "

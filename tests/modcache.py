@@ -16,11 +16,11 @@ region is the top-down claim above where STIKMENU.DRV's image lands:
   A  the first press LOADS the image: mod_need takes its disk arm
      (mod_need.sized) and int 13h reads >0 sectors of STIKMENU.DRV;
   B  closed, it is KEPT (MEM_P_MOD + 2 x its id, slots disarmed); the second
-     press re-adopts it (mod_need.held) and spends EXACTLY ONE int 13h: the
-     boot sector, which is the scan's own media check (SPEC.md 18.9.1.1 -
-     a 5150 has no change line, and a human gap stops the motor). It was
-     TWO: drv_vol_back remounted the volume to come back out of STIKAPPS\\
-     (dsk_chdir_q where dsk_goto moves with no I/O);
+     press re-adopts it (mod_need.held) and makes NO int 13h call: the scan
+     is kept below the image's scratch tail (SPEC.md 110.12.2), so there is
+     no media check to make. It was ONE (the boot sector - a 5150 has no
+     change line, and a human gap stops the motor), and before that TWO,
+     drv_vol_back remounting the volume to come back out of STIKAPPS\\;
   C  the Task Manager closes - a hole ABOVE the kept image - and a
      compaction is posted at rank 0FFh, the rank that DISSOLVES every
      cheaper pinned cache: the image MOVES into the hole (its MODR_SEG
@@ -36,9 +36,21 @@ E-G, a second boot (owner_steps): the owner's steps as reported, on the
 owner's own machine's twin (5150, Hercules, an ST-225 as C:), with NOTHING
 forced. No compaction or shed runs there at all; the "whole load time" was
 the menu's scan, and a fixed disk made it read the boot sector twice a press.
+Now a re-adopting press makes no int 13h call on either drive.
+
+H-K, a third boot (floppy_steps): a floppy-only 5150, the kept scan, and
+the ACTIONS that still go to the disk and refuse as they always did.
+
+Every count is EVERY int 13h the trace caught (nint): the floppy-read
+filter hid the fixed disk's calls, two or three a press on E-G's machine.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1), each measured red on
-2026-11-12: drv_vol_back back on dsk_chdir_q_x and B reads [(0, 1), (0, 1)]
+2026-11-12: stm_scan's `je .kept` made `jmp short .scan` (every press
+scans, the old behaviour) and B, D, E's second press, G and H's second
+press all FAIL (1, 4, 3, 4 and 1 int 13h calls), and I and J with them;
+`je .kept` made an unconditional jump (the kept flag alone, no [dsk_wgen]
+compare) and K FAILS - no rescan after SYSTEM.CFG's write. Before the kept
+scan: drv_vol_back back on dsk_chdir_q_x and B reads [(0, 1), (0, 1)]
 - the second the remount; mod_drop's `mov word [ss:si+MC_RLOC], ...` out,
 or mem_cp_walk's direction test back on `jc .pinned`, and C finds MODR_SEG
 0 - the compaction DISSOLVED the image - so D has nothing to re-adopt; the
@@ -48,6 +60,7 @@ record, the image moved from under it.
 import os
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 
@@ -101,6 +114,14 @@ def reads(tr, spt, heads):
     return out
 
 
+def nint(tr):
+    """EVERY int 13h the trace caught - any function, either drive. A kept
+    scan (SPEC.md 110.12.2) owes none at all, so the floppy-only filter
+    above would let a fixed disk's reads, or a reset, hide in the count."""
+    return sum(1 for h in tr.hits
+               if h.get("type") == "int" or h["name"].startswith("?"))
+
+
 def desktop(ui):
     """Make the DESKTOP the active surface - its bar carries the Sticky Apps
     cell (SPEC.md 22.28.1) - by clicking a point no window covers, left of
@@ -129,21 +150,22 @@ def press(m, menu, label, spt, heads, drv):
     os88marty.until(m, lambda mm: mm.read(0x43F, 1)[0] & 1 == 0,
                     "drive A's motor to stop", guest=30.0)
     with os88marty.bp_trace(m, {"type": "int", "addr": 0x13},
-                            "mod_need.sized", "mod_need.held", *HEAP,
-                            regs=True, cap=4000) as tr:
+                            "mod_need.sized", "mod_need.held", "dsk_find_x",
+                            *HEAP, regs=True, cap=4000) as tr:
         slabs = menu.drop()
         n = menu.b("stm_n")
         menu.release_off()
         menu.gone()
     rd = reads(tr, spt, heads)
     mine = sum(1 for lba, k in rd for x in range(lba, lba + k) if x in drv)
-    print("  %s: %d int 13h read(s) %r, %d of them STIKMENU.DRV's sectors; "
-          "mod_need.sized %d, .held %d; %d listed"
-          % (label, len(rd), rd, mine, tr.count("mod_need.sized"),
+    print("  %s: %d int 13h call(s), %d floppy read(s) %r, %d of them "
+          "STIKMENU.DRV's sectors; mod_need.sized %d, .held %d; %d listed"
+          % (label, nint(tr), len(rd), rd, mine, tr.count("mod_need.sized"),
              tr.count("mod_need.held"), n))
     return dict(rd=rd, mine=mine, sized=tr.count("mod_need.sized"),
                 held=tr.count("mod_need.held"), n=n, slabs=slabs,
-                heap=sum(tr.count(h) for h in HEAP))
+                heap=sum(tr.count(h) for h in HEAP), n13=nint(tr),
+                scan=tr.count("dsk_find_x"))
 
 
 def owner_steps():
@@ -188,9 +210,6 @@ def owner_steps():
             def seg():
                 return struct.unpack("<H", bytes(m.read(row, 2)))[0]
 
-            def boots(r):
-                return sum(1 for x in r["rd"] if x == (0, 1))
-
             print("E: the first press loads, the second re-adopts")
             e1 = press(m, menu, "first", spt, heads, drv)
             check(e1["sized"] == 1 and e1["mine"] > 0,
@@ -202,8 +221,9 @@ def owner_steps():
             check(e2["sized"] == 0 and e2["held"] == 1 and e2["mine"] == 0,
                   "the second re-adopted it (sized %d, held %d)"
                   % (e2["sized"], e2["held"]))
-            check(boots(e2) == 1, "ONE boot-sector read, the media check, "
-                  "with C: scanned too (%d: %r)" % (boots(e2), e2["rd"]))
+            check(e2["n13"] == 0 and e2["n"] == 3, "NO int 13h, with C: "
+                  "in the kept scan too (%d call(s), %r; %d listed)"
+                  % (e2["n13"], e2["rd"], e2["n"]))
 
             print("F: the Task Manager opens; the desktop is clicked")
             with os88marty.bp_trace(m, *HEAP, cap=100) as tr:
@@ -224,8 +244,137 @@ def owner_steps():
                                            g["held"]))
             check(e2["heap"] + g["heap"] == 0,
                   "no compaction and no shed in either press")
-            check(boots(g) == 1, "ONE boot-sector read (%d: %r)"
-                  % (boots(g), g["rd"]))
+            check(g["n13"] == 0, "NO int 13h after the Task Manager's "
+                  "visit (%d call(s), %r)" % (g["n13"], g["rd"]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def pick_app(m, ui, menu, fname):
+    """Drop the panel, release on FNAME's row (its Add) and let the posted
+    act run and drop the image. The panel's own drop is traced like a press;
+    the act's refusals - stm_a_launch's beep when STIKAPPS\\ is not on the
+    disk now in the drive, the loader's toast when the file is not - are
+    counted."""
+    os88marty.until(m, lambda mm: mm.read(0x43F, 1)[0] & 1 == 0,
+                    "drive A's motor to stop", guest=30.0)
+    with os88marty.bp_trace(m, {"type": "int", "addr": 0x13},
+                            cap=4000) as tp:
+        slabs = menu.drop()
+    ents = SM.entries(menu)
+    k = [i for i, e in enumerate(ents) if e["file"] == fname]
+    apps = [i for i, x in enumerate(slabs) if x["kind"] == SM.SK_APP]
+    if not k or not apps:
+        menu.release_off()
+        menu.gone()
+        return dict(n13=nint(tp), ok=False, ents=ents)
+    with os88marty.bp_trace(m, "snd_beep", "ld_say_status",
+                            "mod_need.sized", cap=100) as ta:
+        menu.release_on(slabs, apps[k[0] - menu.b("stm_top")])
+        menu.gone()
+        ui.settle()
+    return dict(n13=nint(tp), ok=True, ents=ents, beep=ta.count("snd_beep"),
+                said=ta.count("ld_say_status"),
+                sized=ta.count("mod_need.sized"))
+
+
+def floppy_steps():
+    """H-K: a FLOPPY-ONLY 5150 (Hercules, the 360KB system disk in A:, no C:)
+    - the kept scan, and the ACTIONS that must still go to the disk:
+
+      H  the first press loads and scans; the second, after the motor has
+         stopped, makes NO int 13h call at all - not the media check, not a
+         directory sector (SPEC.md 110.12.2's kept scan);
+      I  a copy of the APPS disk goes in A: (no STIKAPPS\\ on it). A press
+         still makes no call and lists the kept three; Add on the Desk
+         Calendar walks to the disk - which is NOT the one scanned - and
+         refuses as it always has: stm_a_launch's beep, no window;
+      J  a copy of the system disk with a new serial and STIKAPPS\\
+         DESKCAL.O88 DELETED: Add finds the folder, the loader finds no file,
+         and says so (ld_say_status's toast); no window;
+      K  the system disk back: Add LAUNCHES it - the act's reads find the
+         file - and its registration WRITES SYSTEM.CFG to A:, which moves
+         [dsk_wgen]: the next press SCANS again (dsk_find_x runs) and lists
+         it running.
+
+    **BREAK IT ON PURPOSE**: stm_scan's `je .kept` out (every press scans)
+    and H's second press makes int 13h calls again; the stm_kgen compare out
+    (the kept flag alone) and K's press does not rescan."""
+    tmp = tempfile.mkdtemp(prefix="modcache-fd-")
+    img = os.path.join(tmp, "sys.img")
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                img)
+    apps = os.path.join(tmp, "apps.img")
+    shutil.copy(os88marty.apps_disk(os.path.join(BDIR, "apps360.img")), apps)
+    gone = os.path.join(tmp, "gone.img")
+    shutil.copy(img, gone)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+    subprocess.run(["mdel", "-i", gone, "::/STIKAPPS/DESKCAL.O88"],
+                   check=True, env=env)
+    with open(gone, "r+b") as f:            # a NEW serial: another disk to
+        f.seek(0x27)                        # the mount's swap detector
+        ser = bytearray(f.read(4))
+        ser[0] ^= 0x5A
+        f.seek(0x27)
+        f.write(ser)
+    drv, spt, heads = lba_set(img, "STIKMENU.DRV")
+    try:
+        with os88marty.launch(img, machine=os88marty.machine(
+                "os8088_5150_herc_gla", None), boot=True) as m:
+            ui = os88ui.UI(m)
+            ui.up(limit=180.0)
+            os88marty.no_saver(m)
+            menu = SM.Menu(m, ui)
+
+            print("H: a floppy-only 5150 - the first press scans, the second "
+                  "reads nothing")
+            h1 = press(m, menu, "first", spt, heads, drv)
+            check(h1["sized"] == 1 and h1["n"] == 3 and h1["n13"] > 0,
+                  "the first press loaded and scanned (%d int 13h)"
+                  % h1["n13"])
+            menu.gone()
+            h2 = press(m, menu, "second", spt, heads, drv)
+            check(h2["held"] == 1 and h2["n13"] == 0 and h2["n"] == 3,
+                  "the second: re-adopted, NO int 13h, three listed "
+                  "(%d, %r)" % (h2["n13"], h2["rd"]))
+
+            print("I: the apps disk in A:, then Add")
+            m.mount(0, apps)
+            r = pick_app(m, ui, menu, b"DESKCAL.O88")
+            check(r["ok"] and r["n13"] == 0,
+                  "the press made no call and listed the kept three "
+                  "(%d int 13h, %r)" % (r["n13"],
+                                        [e["file"] for e in r["ents"]]))
+            check(r.get("beep") == 1 and not SM.is_open(ui, SM.TITLE),
+                  "Add refused - the act's walk found no STIKAPPS\\: "
+                  "%d beep(s), no Desk Calendar" % r.get("beep", 0))
+
+            print("J: the calendar deleted off a system disk, then Add")
+            m.mount(0, gone)
+            r = pick_app(m, ui, menu, b"DESKCAL.O88")
+            txt, on = ui.toast()
+            check(r["ok"] and r["n13"] == 0 and r.get("said") == 1
+                  and not SM.is_open(ui, SM.TITLE),
+                  "Add refused by the loader, which says so: %r "
+                  "(%d int 13h at the press, %d said)"
+                  % (txt, r["n13"], r.get("said", 0)))
+
+            print("K: the system disk back; Add launches, and the write it "
+                  "makes stales the scan")
+            m.mount(0, img)
+            r = pick_app(m, ui, menu, b"DESKCAL.O88")
+            w = ui.wait_window(SM.TITLE, limit=T)
+            check(r["ok"] and w is not None, "the Desk Calendar is up")
+            ui._wait(lambda: SM.stik_rows(m, ui), "its row registered", T)
+            ui.settle()
+            desktop(ui)
+            k = press(m, menu, "after the write", spt, heads, drv)
+            ents = SM.entries(menu)
+            run = [e["run"] for e in ents if e["file"] == b"DESKCAL.O88"]
+            check(k["scan"] > 0 and k["n13"] > 0,
+                  "SYSTEM.CFG's write moved [dsk_wgen]: the press scanned "
+                  "(%d dsk_find_x, %d int 13h)" % (k["scan"], k["n13"]))
+            check(run == [1], "...and lists the calendar running (%r)" % run)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -272,8 +421,8 @@ def main():
             check(b["sized"] == 0 and b["held"] == 1 and b["mine"] == 0,
                   "re-adopted, no load (sized %d, held %d)"
                   % (b["sized"], b["held"]))
-            check(len(b["rd"]) == 1 and b["rd"][0] == (0, 1),
-                  "ONE int 13h, the boot sector's media check (%r)" % b["rd"])
+            check(b["n13"] == 0, "NO int 13h at all: the scan is KEPT "
+                  "(SPEC.md 110.12.2) - %d call(s), %r" % (b["n13"], b["rd"]))
             check(seg() == s0 and b["n"] == 3, "same claim, three listed")
 
             print("C: the Task Manager goes; a compaction must MOVE the image")
@@ -305,9 +454,12 @@ def main():
                 check(seg() == s1 and d["n"] == 3,
                       "the moved image ran: %d listed at %#06x"
                       % (d["n"], seg()))
+                check(d["n13"] == 0, "...out of the scan the MOVE carried: "
+                      "no int 13h (%d, %r)" % (d["n13"], d["rd"]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     owner_steps()
+    floppy_steps()
     print("modcache: %s" % ("PASS" if not fails else
                            "FAIL (%d): %s" % (len(fails), "; ".join(fails))))
     return 1 if fails else 0
