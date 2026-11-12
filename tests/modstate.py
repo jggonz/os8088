@@ -10,8 +10,8 @@ LIVE is mod_need's own test (kernel/mod.inc's .held, and mod_live): the
 row holds a segment AND its first slot names it. KEPT is a held segment
 whose slots rest on mod_gone - the drop disarmed them and re-tagged the
 claim MEM_P_MOD + 2 x the id, purgeable. NONE is an empty row: never
-loaded, freed (kern_small, kern_mega, an image that does not opt in), or
-a kept image the heap has since shed.
+loaded, freed (kern_small, kern_mega in real mode, an image that does
+not opt in), or a kept image the heap has since shed.
 
 `m` is an os88marty.Marty; symbols come from m.sym and os88sym's equates,
 so a row asks the kernel it booted.
@@ -22,7 +22,9 @@ half - MODR_SEG itself for mod_hi's pool pair above 1MB, MODR_SEG - 8 for a
 conventional pair in protected mode - so the test there is the KEPT one
 mod_need makes: a disarmed slot names mod_gone's segment, COLD_SEG. A kept
 image there is a POOL block marked purgeable (MX_FPURGE, its tag in
-MX_AUX), not a mem_tab record: kept_owner() reads whichever the kernel has.
+MX_AUX) above 1MB, and below it - in protected mode, where the pool refused
+the copy - a mem_tab record re-tagged as on every other kernel:
+kept_owner() reads whichever the kernel has.
 """
 import os
 import struct
@@ -96,15 +98,31 @@ def pool_block(m, s):
     return None
 
 
+def mem_owner(m, lin):
+    """kern_mega: the owner of the live mem_tab record based at linear LIN
+    (a conventional claim, whose holders hold a selector), or None"""
+    n = os88sym.equates().get("MEM_MAX", 32)
+    raw = bytes(m.read(m.sym("mem_tab"), n * 10))
+    for k in range(n):
+        sg, _pa, ow = struct.unpack_from("<HHH", raw, k * 10)
+        if sg and sg * 16 == lin:
+            return ow
+    return None
+
+
 def kept_owner(m, mid, claims=None):
     """The tag the kept image's memory carries, or None: on kern_mega its
-    POOL block's MX_AUX when that block is MX_FPURGE (mega_modkeepf); on
-    every other kernel its mem_tab record's owner, out of CLAIMS (a
+    POOL block's MX_AUX when that block is MX_FPURGE (mega_modkeepf), or -
+    an image the pool refused, kept below 1MB - its mem_tab record's owner;
+    on every other kernel its mem_tab record's owner, out of CLAIMS (a
     heapmap.Map's .claims - the caller has one) when given"""
     s = seg(m, mid)
     if not s:
         return None
     if mega(m):
+        lin = m.lin(s, 0)
+        if lin < 0x100000:              # kept LOW in protected mode: the
+            return mem_owner(m, lin)    # mem_tab record at its base
         b = pool_block(m, s)
         return b[1] if b and b[0] & MX_FPURGE else None
     own = [c.own for c in (claims or ()) if c.seg == s]

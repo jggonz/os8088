@@ -10824,7 +10824,8 @@ mega_modhif:
     retf
 
 ; mega_modkeepf - FAR (mod_drop, mod_need's .held; `.cold`): AX = a module
-; image's pool pair (its CODE selector, mod_hi's), BX = its kept tag MEM_P_MOD
+; image's pool pair (either half: mod_drop hands the DATA one, .held the CODE
+; one, and the two share one base), BX = its kept tag MEM_P_MOD
 ; + 2 x the id -> its mx_tab block becomes a purgeable kernel cache
 ; (MX_FPURGE, the tag in MX_AUX), which mx_shed takes back through
 ; mem_pg_forget's .mod arm; BX = 0 takes the mark off again (a re-adoption).

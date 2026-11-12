@@ -1098,11 +1098,12 @@ ksg_%1_%2:
 ; MOD_CACHE - a DROPPED module stays in memory as a purgeable claim, and the
 ; next mod_need for it is a hit with no disk read (SPEC.md 2.8.3). kern_big,
 ; kern_emu and kern_mega. NOT kern_small: owner decision O5 (BIG-REVIEW-PLAN)
-; is open, priced at this arm's bytes. ON kern_mega THE KEPT IMAGE IS THE
-; POOL PAIR above 1MB that mod_hi copied it to (SPEC.md 2.8.3.3): the pool
-; block is marked a purgeable kernel cache (MX_FPURGE, mega_modkeepf), so
-; mx_alloc's shed takes it back through the same mem_pg_own row; an image
-; mod_hi left low (real mode, or a pool that refused it) is freed as before.
+; is open, priced at this arm's bytes. ON kern_mega IN PROTECTED MODE THE
+; IMAGE IS KEPT WHEREVER IT IS (SPEC.md 2.8.3.3): above 1MB the pool pair
+; mod_hi copied it to, its block a purgeable kernel cache (MX_FPURGE,
+; mega_modkeepf) that mx_alloc's shed takes back through the same mem_pg_own
+; row; below 1MB (a pool that refused it) the mem_tab claim every other
+; kernel keeps, whose pair moves with it. In real mode it is freed.
 ; Resolved here for OS88_ASSOC's reason: memory.inc, above mod.inc, names the
 ; tag's row
 %ifdef KERN_BIG

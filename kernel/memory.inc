@@ -1674,9 +1674,9 @@ mem_pg_forget:
 %ifdef MOD_CACHE
 %ifdef KERN_MEGA
     jmp short .out
-.mod:                           ; ONLY mx_shedf reaches it: a kept module is a
-    shl cx, 1                   ; pool block, never a mem_tab record. CX = 2 x
-    add cx, [si+PGO_BASE]       ; the id, so the word is the row's MODR_SEG
+.mod:                           ; mx_shedf (a kept POOL pair) or mem_shed_one
+    shl cx, 1                   ; (a kept image left below 1MB, a mem_tab
+    add cx, [si+PGO_BASE]       ; record). CX = 2 x the id: the row's MODR_SEG
     push dx
     push di
     mov bx, cx                  ; BX = the row, mod_free_row's input: the
@@ -1685,7 +1685,10 @@ mem_pg_forget:
     pop dx                      ; BOTH halves of the pair - and DESK.DRV's
                                 ; library selector. mx_shedf's own mx_freef
                                 ; after this finds the block gone and refuses,
-                                ; which it does not read
+                                ; which it does not read. A LOW one's
+                                ; mem_free_x refuses instead (the record is
+                                ; the kept tag's, not MEM_K_MOD's) and
+                                ; mem_shed_one frees it and its pair after
 %endif
 %endif
 .out:
@@ -3608,9 +3611,10 @@ mem_rr_tab:
                                 ; HIBER.DRV, and its dialog slot is a
 %endif                          ; refusing stub with no state (62.9.15)
 %ifdef MOD_CACHE
-%ifndef KERN_MEGA               ; (kern_mega keeps only a POOL pair, which no
+%ifndef KERN_MEGA               ; (kern_mega keeps only in protected mode,
     MEM_RR_ROW mod_tab + MODR_SEG, MOD_MAX, MODR_SIZE ; a KEPT module image,
-%endif                          ; conventional move can name: SPEC.md 2.8.3.3)
+%endif                          ; where a move rebases the selector MODR_SEG
+                                ; holds and tells nobody: SPEC.md 2.8.3.3)
                                 ; movable from its drop to its re-adoption
                                 ; (mod.inc, SPEC.md 2.8.3); a LIVE one is
                                 ; MEM_K_MOD and never moves, so its row never

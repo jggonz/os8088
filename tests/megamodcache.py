@@ -42,6 +42,22 @@ pair lands:
   G  the Control Panel opened and closed twice: the second open re-adopts
      CTRL.DRV (MOD_CTRL .held, no .sized) with no int 13h.
 
+  H  RAM IS RAM (the owner, 2026-11-12): an image the pool REFUSED stays in
+     conventional memory, and in protected mode it is kept there too.
+     CTRL.DRV's pool pair is shed (mx_shedf), every free KB of the pool
+     covered with pinned blocks and every pool cache made unpurgeable, so
+     mod_hi's copy is refused. With the Task Manager open, the Control Panel
+     loads CTRL.DRV LOW (MODR_SEG an LDT selector based below 1MB); closed,
+     it is KEPT: the slots on mod_gone, its mem_tab record re-tagged
+     MEM_P_MOD + 2 x the id and MOVABLE (MC_RLOC != 0). The second open
+     re-adopts it with NO int 13h, still low. Closed again, the Task Manager
+     goes and a conventional compaction (posted at rank 0FFh) MOVES the
+     record: the same selector, based at the new place, still kept; the
+     third open re-adopts it there with no int 13h. Then mem_shed_one - the
+     conventional shed - is run until it goes: MODR_SEG 0, its record free,
+     BOTH halves of its pair free in the LDT, no fault. The pool is given
+     back and the next open loads it again, above 1MB.
+
 Every count is EVERY int 13h the trace caught: a breakpoint on the IDT's
 13h gate, which every disk call the kernel makes in protected mode enters.
 
@@ -52,7 +68,11 @@ C, D and G FAIL; mega_modkeepf's `or byte [es:si+MX_FL], MX_FPURGE` out (kept
 but never purgeable) - A's and C's tag checks FAIL and E never sheds it;
 mem_pg_forget's `.mod` arm out (the shed zeroes the word and leaks the pair)
 - E's "both halves free" FAILs; compress.inc's KSEG helpers back after
-cmz_ovl - HOST FAILs (DISKOPS.DRV's tail is not zeros).
+cmz_ovl - HOST FAILs (DISKOPS.DRV's tail is not zeros). H, the same way:
+mod_drop's kern_mega arm freeing a low image again (`call mem_ishidx / jc
+.free` before the scratch is zeroed, the pre-2026-11-12 behaviour) - H's
+kept checks, the second open's held/0 int 13h, the compaction and the
+third open FAIL.
 
 It reads build/ (wants=) and writes only its own scratch directory.
 """
@@ -71,6 +91,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty   # noqa: E402
 import os88ui      # noqa: E402
 import os88sym     # noqa: E402
+import os88geom as geom  # noqa: E402
 import modstate    # noqa: E402
 import stikmenu as SM  # noqa: E402
 
@@ -156,7 +177,25 @@ def _call(seg, off):
                   0x1F, 0x90])
 
 
-PACK_AT, SHED_AT = 0x60, 0x80
+PACK_AT, SHED_AT, CSHED_AT = 0x60, 0x80, 0xA0
+
+
+def _ncall(seg, off, gadget):
+    """`_call`'s frame round a NEAR routine in another segment: push a far
+    return, then the offset of a `retf` in SEG (GADGET: mod_gone + 1, whose
+    `stc / retf` is `.cold`'s), and far-JUMP in - the routine's `ret` lands
+    on the `retf`, which comes home. (`push imm16` is a 186 opcode: Bochs's
+    CPU is a 386, and this stub is the harness's, never the kernel's)"""
+    lock = os88sym.syms()["sch_lock"]
+    return bytes([0x1E, 0x50, 0xB8, 0x10, 0x00, 0x8E, 0xD8, 0x58,  # push ds..
+                  0xFE, 0x06, lock & 0xFF, lock >> 8,              # inc lock
+                  0x0E,                                            # push cs
+                  0xE8, 0x02, 0x00,                                # call +2
+                  0xEB, 0x08,                                      # jmp home
+                  0x68, gadget & 0xFF, gadget >> 8,                # push R
+                  0xEA, off & 0xFF, off >> 8, seg & 0xFF, seg >> 8,
+                  0xFE, 0x0E, lock & 0xFF, lock >> 8,              # dec lock
+                  0x1F, 0x90])
 
 
 def _blob(m):
@@ -170,8 +209,10 @@ def _blob(m):
     sy = os88sym.syms()
     pad = bytes(PACK_AT - len(type(m)._STUBS))
     pack = _call(EQ["MEGA_SEL_CODE"], sy["mx_packupf"])
+    shed = _call(EQ["COLD_SEG"], sy["mx_shedf"])
     return (type(m)._STUBS + pad + pack + bytes(SHED_AT - PACK_AT - len(pack))
-            + _call(EQ["COLD_SEG"], sy["mx_shedf"]))
+            + shed + bytes(CSHED_AT - SHED_AT - len(shed))
+            + _ncall(EQ["COLD_SEG"], sy["mem_shed_one"], sy["mod_gone"] + 1))
 
 
 def far_stub(m, at, regs):
@@ -183,8 +224,9 @@ def far_stub(m, at, regs):
             break
         os88marty.guest_sleep(m, 0.05)
     m._STUBS = _blob(m)
+    n = len(_ncall(0, 0, 0) if at == CSHED_AT else _call(0, 0))
     try:
-        m._stub(at, regs, [at + len(_call(0, 0)) - 1])
+        m._stub(at, regs, [at + n - 1])
     finally:
         del m._STUBS
 
@@ -196,6 +238,84 @@ def packup(m):
 
 def shed_one(m):
     far_stub(m, SHED_AT, {"ebx": 0xFF00})
+
+
+def cshed_one(m):
+    """mem_shed_one for a claimant of the top rank: the conventional heap's
+    cheapest purgeable record goes"""
+    far_stub(m, CSHED_AT, {"ebx": 0xFF00})
+
+
+# --- the conventional heap and the pool, read and covered -------------------
+MC_SIZE = 10
+
+
+def mem_rec(m, lin):
+    """mem_tab's live record based at linear LIN, as (index, para, owner,
+    rloc), or None"""
+    n = EQ.get("MEM_MAX", 32)
+    raw = bytes(m.read(m.sym("mem_tab"), n * MC_SIZE))
+    for k in range(n):
+        sg, pa, ow, _dma, rl = struct.unpack_from("<HHHHH", raw, k * MC_SIZE)
+        if sg and sg * 16 == lin:
+            return k, pa, ow, rl
+    return None
+
+
+def pool_rows(m):
+    n, z = modstate.MX_NBLK, modstate.MX_BLKSZ
+    raw = bytes(m.read(m.tail("mx_tab"), n * z))
+    return [(k, raw[k * z:(k + 1) * z]) for k in range(n)]
+
+
+def cover_pool(m):
+    """megashed's cover: every free KB of the pool under a pinned block
+    (owner FEh, MX_FPIN), and every purgeable pool block's MX_FPURGE taken
+    off, so no mx_alloc - mod_hi's copy - can succeed or shed. Answers what
+    uncover_pool undoes"""
+    xkb = struct.unpack("<H", bytes(m.read(m.sym("xm_kb"), 2)))[0]
+    rows = pool_rows(m)
+    mxa = m.tail("mx_tab")
+    used = sorted((struct.unpack_from("<H", e, 0)[0],
+                   sum(struct.unpack_from("<HH", e, 0)))
+                  for _, e in rows if struct.unpack_from("<H", e, 2)[0])
+    gaps, at = [], 0
+    for a, b in used:
+        if a > at:
+            gaps.append((at, a - at))
+        at = max(at, b)
+    if at < xkb:
+        gaps.append((at, xkb - at))
+    free = [k for k, e in rows if not struct.unpack_from("<H", e, 2)[0]]
+    dummies, unpurged = [], []
+    for (o, kb), k in zip(gaps, free):
+        a = mxa + k * modstate.MX_BLKSZ
+        m.write(a, struct.pack("<H", o))
+        m.write(a + 4, struct.pack("<HHH", 0x08FE, 0, 0))
+        m.write(a + 2, struct.pack("<H", kb))
+        dummies.append((a, o, kb))
+    for k, e in rows:
+        if struct.unpack_from("<H", e, 2)[0] and e[5] & modstate.MX_FPURGE:
+            a = mxa + k * modstate.MX_BLKSZ
+            m.write(a + 5, bytes([e[5] & ~modstate.MX_FPURGE & 0xFF]))
+            unpurged.append((a, bytes(e)))
+    print("  the pool covered: %d free run(s), %d KB; %d cache(s) made "
+          "unpurgeable" % (len(dummies), sum(d[2] for d in dummies),
+                           len(unpurged)), flush=True)
+    return dummies, unpurged
+
+
+def uncover_pool(m, undo):
+    """Take the cover off: each pinned block written that still reads as
+    written, and each cache's MX_FPURGE where the block is still the same"""
+    dummies, unpurged = undo
+    for a, o, kb in dummies:
+        if bytes(m.read(a, 6)) == struct.pack("<HHH", o, kb, 0x08FE):
+            m.write(a + 2, struct.pack("<H", 0))
+    for a, e in unpurged:
+        now = bytes(m.read(a, modstate.MX_BLKSZ))
+        if now[:5] == e[:5] and now[6:] == e[6:]:
+            m.write(a + 5, bytes([now[5] | modstate.MX_FPURGE]))
 
 
 def block_at(m, lin):
@@ -335,12 +455,161 @@ def main():
                           "the second open re-adopted it with NO int 13h "
                           "(%d, sized %d, held %d)" % (n13, sz, hd))
                 kept_ok(m, MOD_CTRL, "the panel closed")
+
+            low_leg(m, ui)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("megamodcache: %s" % ("PASS" if not fails else
                                "FAIL (%d): %s" % (len(fails),
                                                   "; ".join(fails))))
     return 1 if fails else 0
+
+
+def cp_open(m, ui, label):
+    """Open the Control Panel under the int 13h trace: the window, and what
+    the trace and CTRL.DRV's row say"""
+    os88marty.guest_sleep(m, 2.0)
+    with os88marty.bp_trace(m, {"type": "int", "addr": 0x13},
+                            "mod_need.sized", "mod_need.held",
+                            regs=True, cap=4000) as tr:
+        ui.menu_pick("Apple", "Control Panel")
+        w = ui.wait_window("Control Panel", limit=T)
+        ui.settle()
+    r = dict(n13=nint(tr), sized=ids(tr, "mod_need.sized").count(MOD_CTRL),
+             held=ids(tr, "mod_need.held").count(MOD_CTRL),
+             seg=row_seg(m, MOD_CTRL))
+    r["lin"] = m.lin(r["seg"], 0) if r["seg"] else 0
+    print("  %s: %d int 13h, CTRL.DRV sized %d held %d, MODR_SEG %#06x "
+          "based %06X" % (label, r["n13"], r["sized"], r["held"], r["seg"],
+                          r["lin"]), flush=True)
+    return w, r
+
+
+def cp_close(m, ui, w):
+    ui.close(w)
+    ui._wait(lambda: modstate.state(m, MOD_CTRL) != "live",
+             "CTRL.DRV dropped", T)
+
+
+def kept_low(m, what):
+    """KEPT BELOW 1MB: MODR_SEG an LDT selector based in conventional
+    memory, its slots on mod_gone, and the mem_tab record at that base
+    re-tagged MEM_P_MOD + 2 x the id and declared MOVABLE"""
+    s = row_seg(m, MOD_CTRL)
+    st = modstate.state(m, MOD_CTRL)
+    lin = m.lin(s, 0) if s else 0
+    rec = mem_rec(m, lin) if s else None
+    want = modstate.kept_tag(MOD_CTRL)
+    ok = bool(s and s & 4 and st == "kept" and 0 < lin < 0x100000
+              and rec is not None and rec[2] == want and rec[3] != 0)
+    check(ok, "%s: KEPT LOW - MODR_SEG %#06x based %06X, slots on mod_gone "
+          "(%s), its mem_tab record %s (want owner %#06x, MC_RLOC != 0)"
+          % (what, s, lin, st,
+             "owner %#06x MC_RLOC %#06x" % (rec[2], rec[3]) if rec else None,
+             want))
+    return s, lin, rec
+
+
+def low_leg(m, ui):
+    print("H: a module the pool refused is kept BELOW 1MB (RAM is RAM)")
+    n = 0
+    while row_seg(m, MOD_CTRL) and n < 40:
+        shed_one(m)                 # CTRL.DRV's kept pool pair goes
+        n += 1
+    check(row_seg(m, MOD_CTRL) == 0,
+          "CTRL.DRV's kept pool pair shed (%d shed(s))" % n)
+    undo = cover_pool(m)
+    try:
+        ui.menu_pick("Apple", "Task Manager")
+        tm = ui.wait_window("Task Manager", limit=T)
+        SM_desktop(ui)
+        w, r = cp_open(m, ui, "open 1, the pool full")
+        check(r["sized"] == 1 and 0 < r["lin"] < 0x100000,
+              "CTRL.DRV loaded and LEFT LOW: mod_hi's copy refused (sized "
+              "%d, based %06X)" % (r["sized"], r["lin"]))
+        cp_close(m, ui, w)
+        s0, lin0, _ = kept_low(m, "the panel closed")
+
+        w, r = cp_open(m, ui, "open 2")
+        check(r["sized"] == 0 and r["held"] >= 1 and r["n13"] == 0,
+              "the second open re-adopted the LOW image with NO int 13h "
+              "(%d, sized %d, held %d)" % (r["n13"], r["sized"], r["held"]))
+        check(r["seg"] == s0 and r["lin"] == lin0,
+              "...the same selector %#06x at %06X" % (s0, lin0))
+        cp_close(m, ui, w)
+        kept_low(m, "closed again")
+
+        print("  the Task Manager goes; a conventional compaction must MOVE "
+              "the kept record", flush=True)
+        ui.close(tm)
+        SM_desktop(ui)
+        dw = ui.open_drive("A")         # the window the pass wakes
+        geom.post_compact(m, dw, 0xFF, ui._S)
+        ui._wait(lambda: ui._word("mem_cpq") == 0, "the posted compaction "
+                 "to run", T)
+        ui.settle()
+        s1, lin1, _ = kept_low(m, "after the compaction")
+        check(s1 == s0, "MODR_SEG is the same selector (%#06x)" % s1)
+        check(lin1 != lin0, "...and the record MOVED: %06X -> %06X"
+              % (lin0, lin1))
+        ui.close(dw)
+        SM_desktop(ui)
+
+        w, r = cp_open(m, ui, "open 3, after the move")
+        check(r["sized"] == 0 and r["held"] >= 1 and r["n13"] == 0
+              and r["seg"] == s1 and r["lin"] == lin1,
+              "re-adopted where the compaction put it: %d int 13h, %#06x at "
+              "%06X (sized %d, held %d)" % (r["n13"], r["seg"], r["lin"],
+                                           r["sized"], r["held"]))
+        cp_close(m, ui, w)
+        s2, lin2, rec2 = kept_low(m, "closed a third time")
+
+        print("  mem_shed_one takes it back", flush=True)
+        code = s2 & ~7
+        n = 0
+        while row_seg(m, MOD_CTRL) and n < 40:
+            cshed_one(m)
+            n += 1
+        check(row_seg(m, MOD_CTRL) == 0, "MODR_SEG 0 after %d shed(s)" % n)
+        check(rec2 is not None and mem_rec(m, lin2) is None,
+              "its mem_tab record at %06X is free" % lin2)
+        check(code != 0 and not ldt_present(m, code)
+              and not ldt_present(m, code + 8),
+              "both halves of the pair %#06x/%#06x are free in the LDT"
+              % (code, code + 8))
+        faults = [ln for ln in m.box.said()
+                  if ln.startswith("kern_mega FAULT")] \
+            if hasattr(m, "box") and hasattr(m.box, "said") else []
+        check(not faults, "no fault (%r)" % faults[:2])
+
+        w, r = cp_open(m, ui, "open 4, the pool still full")
+        check(r["sized"] == 1 and 0 < r["lin"] < 0x100000,
+              "loaded from the disk again, low (sized %d, %06X)"
+              % (r["sized"], r["lin"]))
+        cp_close(m, ui, w)
+        kept_low(m, "closed")
+    finally:
+        uncover_pool(m, undo)
+    # the re-adopt of a LOW image runs mod_hi, which now has room: it copies
+    # the image's MOD_H_IMG bytes up (mod_need's .held hands it BP, where a
+    # load's read did) - a copy of nothing would fault the panel's first call
+    w, r = cp_open(m, ui, "open 5, the pool given back")
+    check(r["sized"] == 0 and r["held"] >= 1 and r["n13"] == 0
+          and r["lin"] >= 0x100000,
+          "re-adopted with NO int 13h and copied above 1MB (%d int 13h, "
+          "sized %d, held %d, %06X)" % (r["n13"], r["sized"], r["held"],
+                                        r["lin"]))
+    cp_close(m, ui, w)
+    kept_ok(m, MOD_CTRL, "the panel closed")
+    w, r = cp_open(m, ui, "open 6")
+    check(r["sized"] == 0 and r["n13"] == 0 and r["lin"] >= 0x100000,
+          "...and re-adopted from the pool after that (%d int 13h)"
+          % r["n13"])
+    cp_close(m, ui, w)
+    faults = [ln for ln in m.box.said()
+              if ln.startswith("kern_mega FAULT")] \
+        if hasattr(m, "box") and hasattr(m.box, "said") else []
+    check(not faults, "no fault after the copy up (%r)" % faults[:2])
 
 
 def SM_desktop(ui):

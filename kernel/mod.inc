@@ -616,15 +616,20 @@ mod_need:
                                 ; above is seen here and read again, and
                                 ; none can land between this and the tag
 %ifdef KERN_MEGA
-    push bx                     ; THE POOL PAIR (SPEC.md 2.8.3.3): its block's
+    call mem_ishidx             ; A POOL PAIR (SPEC.md 2.8.3.3), or the
+    jc .hlow                    ; conventional claim every other kernel keeps
+    push bx                     ; THE POOL PAIR: its block's
     xchg ax, dx                 ; purgeable mark comes off - BX = 0 - so no
     xor bx, bx                  ; shed can take it from here; still under
     call MEGA_SEL_CODE:mega_modkeepf ; the IF = 0 the shed's whole scan runs
     xchg ax, dx                 ; under (mx_shedf). DX = the code selector
     pop bx
     add dx, 8                   ; ...and ES its DATA half: .arming stores
-                                ; ES - 8, the code half, in every slot
-%else
+    jmp short .hset             ; ES - 8, the code half, in every slot
+.hlow:                          ; BELOW 1MB in protected mode: MODR_SEG is
+                                ; already the record's DATA selector, and the
+                                ; re-adopt is every kernel's, below
+%endif
     push bx
     mov bx, dx                  ; mem_find_own's own-segment arm: the record
     call mem_find_own           ; AT that base - a held MODR_SEG names one
@@ -636,11 +641,20 @@ mod_need:
                                 ; left in the record, inert until the next
                                 ; drop re-tags it. Withdrawing it was 5 bytes
                                 ; here and 4 more of relaxed branches below
+%ifdef KERN_MEGA
+.hset:
 %endif
     popf
     mov es, dx
+%ifdef KERN_MEGA
+    mov bp, [es:MOD_H_IMG]      ; the image's bytes, as its read had them:
+                                ; mod_hi below COPIES a low one above 1MB now
+                                ; that the pool may have room (mod_hiboot's
+                                ; BP), and -1 would copy nothing
+%else
     or bp, -1                   ; no bound on the entries: this image's were
-    jmp .arming                 ; bounded by the read it came from
+%endif                          ; bounded by the read it came from
+    jmp .arming
 .race:
     popf
     jmp .reread
@@ -1128,12 +1142,16 @@ mod_free_row:
 ; is written before it is read); KBMOUSE alone, with no file to come back
 ; from, carries 0 and is freed. mod_live tells a kept row from a live one by
 ; its slot, so the panel's kept row is not mistaken for an open panel.
-; ON kern_mega (SPEC.md 2.8.3.3) the kept image is the POOL PAIR mod_hi put
-; it in: the pool block, not a mem_tab record, is marked purgeable
-; (mega_modkeepf), mx_alloc's shed takes it through mem_pg_forget's .mod arm
-; (the word zeroed, the pair and DESK.DRV's library freed), and every pool
-; move keeps its selectors - so there is no MOVABLE to declare. An image
-; mod_hi left in conventional memory is freed, as before.
+; ON kern_mega IN PROTECTED MODE (SPEC.md 2.8.3.3) RAM IS RAM: the image is
+; kept wherever it is. Above 1MB it is the POOL PAIR mod_hi put it in, so the
+; pool block, not a mem_tab record, is marked purgeable (mega_modkeepf),
+; mx_alloc's shed takes it through mem_pg_forget's .mod arm (the word zeroed,
+; the pair and DESK.DRV's library freed), and every pool move keeps its
+; selectors. Below 1MB (a pool that refused the copy) it is THIS kernel's
+; arm exactly: a mem_tab claim re-tagged and declared MOVABLE - its pair is
+; the record's own (mega_mpnewf), the compactor rebases both halves with the
+; block (mega_mpmovef) and tells nobody, and mem_shed_one frees both
+; (mega_mpfreef). In REAL MODE (no switch) the image is freed, as it was.
 ; -----------------------------------------------------------------------------
 mod_drop:
 %ifdef MOD_CACHE
@@ -1144,21 +1162,21 @@ mod_drop:
     or dx, dx
     jz .free                    ; nothing held: mod_free_row's own no-op
 %ifdef KERN_MEGA
-    call mem_ishidx             ; kern_mega KEEPS ONLY A POOL PAIR (SPEC.md
-    jc .free                    ; 2.8.3.3): an image mod_hi left low - real
-                                ; mode, or a pool that refused it - is freed
-    mov es, dx                  ; (the CODE half: readable, for the header)
-%else
-    mov es, dx
+    cmp byte [ss:mega_pm], 0    ; kern_mega in REAL MODE frees (SPEC.md
+    je .free                    ; 2.8.3.3): it would be kept across the switch
 %endif
-    mov cx, [es:MOD_H_SCR]
+    mov es, dx                  ; (kern_mega: a pool pair's CODE half,
+    mov cx, [es:MOD_H_SCR]      ; readable, or a low record's DATA half)
     jcxz .free                  ; an image that does not opt in: freed
     mov di, [es:MOD_H_IMG]
     sub di, cx                  ; ES:DI = its scratch tail, CX bytes
 %ifdef KERN_MEGA
-    mov ax, dx                  ; ...stored through the pair's DATA half
-    add ax, 8
-    mov es, ax
+    call mem_ishidx             ; CF = 1 below 1MB, CARRIED to the tag below
+    pushf
+    jc .wr
+    add dx, 8                   ; ...a pool pair's stored through its DATA
+    mov es, dx                  ; half, which mega_modkeepf takes as well as
+.wr:                            ; the code one (the pair shares one base)
 %endif
     xor al, al
     cld
@@ -1170,14 +1188,16 @@ mod_drop:
     shr ax, 1                   ; AX = its kept tag, MEM_P_MOD + 2 x the id
     add ax, MEM_P_MOD - (MOD_TAB_OFF >> 1) ; (.held's sum)
 %ifdef KERN_MEGA
-    push bx                     ; THE POOL BLOCK IS MARKED A PURGEABLE KERNEL
-    xchg ax, bx                 ; CACHE (MX_FPURGE, its tag in MX_AUX): the
-    xchg ax, dx                 ; next mx_alloc that needs the room sheds it
-    call MEGA_SEL_CODE:mega_modkeepf ; through mem_pg_forget's .mod arm. Not
-    pop bx                      ; MOVABLE to declare: every pool block moves
-    jnc .out                    ; with its selectors (mx_compactf). CF = 1:
-    jmp short .free             ; no block found - freed, never left held
-%else                           ; and unpurgeable
+    popf                        ; mem_ishidx's answer: CF = 0 above 1MB
+    jnc .pool
+                                ; BELOW 1MB IN PROTECTED MODE the arm is the
+                                ; one every kernel takes: the record's pair
+                                ; moves with it (mega_mpmovef rebases both
+                                ; halves) and no holder is told, so no
+                                ; mem_rr_tab row is owed there - the
+                                ; declaration is what lets the compactor move
+                                ; it rather than dissolve it
+%endif
     mov bx, dx                  ; mem_find_own's own-segment arm: the
     call mem_find_own           ; record AT that base, whoever owns it - a
                                 ; held MODR_SEG always names one
@@ -1199,7 +1219,15 @@ mod_drop:
     mov [ss:si+MC_OWN], ax      ; KEPT: CF = 0, mem_find_own's (a second
                                 ; drop re-writes the same tag)
     jmp short .out
-%endif
+%ifdef KERN_MEGA
+.pool:
+    push bx                     ; THE POOL BLOCK IS MARKED A PURGEABLE KERNEL
+    xchg ax, bx                 ; CACHE (MX_FPURGE, its tag in MX_AUX): the
+    xchg ax, dx                 ; next mx_alloc that needs the room sheds it
+    call MEGA_SEL_CODE:mega_modkeepf ; through mem_pg_forget's .mod arm. Not
+    pop bx                      ; MOVABLE to declare: every pool block moves
+    jnc .out                    ; with its selectors (mx_compactf). CF = 1:
+%endif                          ; no block found - freed, never left held
 .free:
     call mod_free_row           ; (mod_free_row clobbers AX, BX, CX, DX, DI)
 .out:

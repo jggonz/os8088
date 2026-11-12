@@ -19310,7 +19310,7 @@ SOAK = [
         needs=("bochs",),
         wants=("build/mega.img", "build/megaapps.img", "build/megarun.o88",
                "build/mbr.bin")),
-    Row("megamodcache", "soak", py("tests/megamodcache.py"), 70.0,
+    Row("megamodcache", "soak", py("tests/megamodcache.py"), 140.0,
         "SPEC.md 2.8.3.3: kern_mega KEEPS a dropped module - the pool pair "
         "above 1MB mod_hi put it in, its mx_tab block MX_FPURGE with the "
         "MEM_P_MOD tag. HOST: modkeep's tail and store checks on "
@@ -19319,11 +19319,18 @@ SOAK = [
         "rides it), the pool's pack (mx_packupf) moves it with its selector, "
         "the third press re-adopts it there, mx_shedf takes it back with "
         "both halves of the pair freed, the next press loads it again; and "
-        "the Control Panel's second open makes no int 13h. Red: mod_drop's "
+        "the Control Panel's second open makes no int 13h. H: with the pool "
+        "covered so mod_hi's copy is refused, CTRL.DRV is kept BELOW 1MB "
+        "(its mem_tab record re-tagged and MOVABLE), re-adopted with no "
+        "int 13h, moved by a conventional compaction under the same "
+        "selector and re-adopted there, shed by mem_shed_one with both "
+        "halves of its pair freed, and copied above 1MB by a re-adopt once "
+        "the pool has room. Red: mod_drop freeing a low image (12 FAILs in "
+        "H), .held's BP -1 (the copy up kills the panel). Red: mod_drop's "
         "kern_mega arm always freeing (12 FAILs), mega_modkeepf without its "
         "MX_FPURGE (A never sees a drop), mem_pg_forget without its .mod arm "
         "(the pair leaks in the LDT), DISKOPS.DRV's KSEG helpers after its "
-        "tail (HOST). 70s is 64 measured",
+        "tail (HOST). 140s is 130 measured (64 before leg H)",
         needs=("bochs",),
         wants=("build/mega.img", "build/megaapps.img", "build/megarun.o88",
                "build/megak/kernel.map", "build/megak/ctrl.drv",

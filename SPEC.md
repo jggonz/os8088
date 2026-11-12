@@ -2187,9 +2187,11 @@ same build holds the same bytes; one of another build holds a file this
 kernel would REFUSE. The kept image is therefore exactly the one a read
 could give it, or better.
 
-**On `kern_mega` the kept image is the POOL PAIR above 1MB** that `mod_hi`
-copied it to, purgeable through the pool's own shed (`mx_shedf`) - §2.8.3.3,
-which is the whole of what differs there. **Not on `kern_small` (owner
+**On `kern_mega` in protected mode the image is kept wherever it is**: the
+POOL PAIR above 1MB that `mod_hi` copied it to, purgeable through the pool's
+own shed (`mx_shedf`), or - when the pool refused the copy - the
+conventional claim every other kernel keeps. §2.8.3.3 is the whole of what
+differs there. **Not on `kern_small` (owner
 decision O5, open)**: the arm is priced and waiting — the same code, about
 the bytes below, and the rank question above for `FILECP` and `FDLG`.
 
@@ -2267,7 +2269,7 @@ the image except where it packs):
 | `DESK.DRV` | +1 (4,431 -> 4,432) | `modj_scr` |
 | `DOCK.DRV`, `EXTD.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV`, `WIN95.DRV` | 0 | a header word's value, and cells moved to the end |
 
-##### 2.8.3.3 `kern_mega`: the kept image is the pool pair above 1MB
+##### 2.8.3.3 `kern_mega`: the kept image is kept above or below 1MB
 
 The owner, 2026-11-12: *"Mega does need parity; we keep adding things, and
 then 'oops we don't do the work on mega', and call it by design."* Until
@@ -2279,15 +2281,44 @@ through the same `mem_pg_forget` (KERN-MEGA-MEMORY-PLAN MC1) - so the
 argument was a missing call, not a reason. Every module re-read its file on
 every use there: every Sticky Apps press, every Control Panel open.
 
-- **What is kept**: an image `mod_hi` placed above 1MB - `MODR_SEG` a pool
-  pair's CODE selector (`mem_ishidx`), which in protected mode is every
-  module (`MOD_HIOK`). An image left in conventional memory - real mode, a
-  switch refused, or a pool that refused the copy - is FREED at its drop as
-  before: in protected mode it is an LDT pair over a `mem_tab` claim, and a
-  pool that could not take a 16KB image is exactly the pressure a cache
-  should not be kept under.
-- **`mod_drop`** zeroes the scratch tail through the pair's DATA half
-  (`MODR_SEG` + 8), disarms the slots, and has **`mega_modkeepf`** mark the
+- **What is kept**: in PROTECTED MODE, every image that opts in, above or
+  below 1MB (the owner, 2026-11-12: *"If mega is in protected mode and the
+  modules made their claims through the right interface it should see 'ram
+  is ram', above or below 1MB"*). Above 1MB is what `mod_hi` placed there -
+  `MODR_SEG` a pool pair's CODE selector (`mem_ishidx`), which is every
+  module (`MOD_HIOK`) the pool has room for. Below 1MB is an image whose
+  copy the pool refused (extended memory full, or a 1MB machine with no
+  pool at all) - `MODR_SEG` the DATA half of its `mem_tab` record's pair.
+  In REAL MODE (the switch refused) an image is FREED at its drop as
+  before: kept, it would cross the switch as a real-mode segment that
+  `mod_hiboot` and `mega_mpall` would each have to know is a cache.
+- **Below 1MB it is every other kernel's arm, not a third one.** The
+  reason first given for freeing it - that keeping it "would mean keeping
+  an LDT pair (the code alias and the data selector) over a conventional
+  claim alive across conventional compaction" - was not true of the code:
+  that pair IS the record's own (`mega_mpnewf` makes the code half at the
+  data selector - 8 for every claim, and `mod_need` arms the slots with
+  it), every compaction move rebases BOTH halves (`mem_cp_walk` ->
+  `mem_mpmove` -> `mega_mpmovef`, which rebases every LDT descriptor based
+  in the old block and tells no holder in protected mode), and freeing the
+  record frees both (`mega_mpfreef`). So `mod_drop` does exactly what
+  `kern_big` does - the scratch zeroed through `MODR_SEG` (already the data
+  half), the slots disarmed, the record declared MOVABLE (`MC_RLOC` =
+  `mem_region_reloc`) and re-tagged `MEM_P_MOD` + 2 × the id - and
+  `mem_tab`'s `MODR_SEG` row (`mem_rr_tab`) is NOT owed: a protected-mode
+  move re-points no word, the selector being what moved. `mod_need`'s
+  `.held` re-adopts it with `mem_find_own` and the `MEM_K_MOD` tag as on
+  `kern_big`, and hands `.arming` BP = the image's `MOD_H_IMG`: `mod_hi`
+  runs after the arming and now COPIES a re-adopted low image above 1MB
+  when the pool has room again, which a BP of -1 (the other kernels'
+  "unbounded") would make a copy of nothing. The shed is `mem_shed_one`,
+  whose `mem_pg_forget` reaches the `.mod` arm below: `mod_free_row`
+  disarms, zeroes `MODR_SEG` and frees `DESK.DRV`'s library selector, its
+  `mem_free_x` refuses (the record is the kept tag's, not `MEM_K_MOD`'s),
+  and `mem_shed_one` then frees the record and both halves of its pair.
+- **`mod_drop`** above 1MB zeroes the scratch tail through the pair's DATA
+  half (`MODR_SEG` + 8), disarms the slots, and has **`mega_modkeepf`**
+  (handed that data half: the pair shares one base) mark the
   pool block `MX_FPURGE` with `MX_AUX` = `MEM_P_MOD` + 2 × the id - the
   same tag, so the same `mem_pg_own` row names `MODR_SEG`. No `MC_RLOC` is
   declared: every pool block moves with its selectors (`mx_compactf`,
@@ -2304,7 +2335,8 @@ every use there: every Sticky Apps press, every Control Panel open.
   with IF = 0 too, so a shed and a re-adopt cannot interleave - then arms
   the slots through `.arming` with ES = the data half; `mod_hi` leaves an
   image that is already a pool pair alone.
-- **The shed** is `mem_pg_forget`'s `.mod` arm (`kern_mega` only): the
+- **The shed** above 1MB is `mem_pg_forget`'s `.mod` arm (`kern_mega`
+  only, and below 1MB it is reached from `mem_shed_one`, above): the
   row's `mod_free_row` - slots to `mod_gone` again, the word zeroed, and
   `mega_hifreef`, which frees the block and BOTH halves of the pair (an
   `MX_KOWN` block's selectors are not `mx_dfree`'s), and `DESK.DRV`'s
@@ -2357,6 +2389,23 @@ The pack moved the kept block 16KB up (`FDA800` -> `FDE800`) with
 `MODR_SEG` the same selector; the shed freed the block and both LDT entries
 of its pair. The "before" column is the same row run on `8ef75fa1`'s
 `build/mega.img` (its legs that need a kept image refuse there).
+
+**Kept below 1MB** (leg H of the same row): the pool covered with pinned
+blocks and its caches made unpurgeable, so `mod_hi`'s copy is refused and
+`CTRL.DRV` stays at `098200`. The Control Panel's second open makes **0**
+`int 13h` (it was **3**, a whole load, when the drop freed it - the same
+leg on `1022713d`'s arm, measured red); a conventional compaction moved the
+kept record `098200` -> `09BE00` under the same selector and the third open
+re-adopted it there with 0; `mem_shed_one` took it back with its record and
+both LDT entries free; with the pool given back, the next re-adopt made 0
+`int 13h` and `mod_hi` copied it above 1MB. **What it cost**
+(`os88rdiff`, against `1022713d`): `kern_mega` `.cold` +53 - `mod_need`
++28 (the `.held` arm's pool/low branch and BP off the header), `mod_drop`
++25 (the real-mode test, the pool/low branch carried in FLAGS) - which is
+above 1MB and **0 bytes of `MEGA_RESIDENT`** (61,440 either way), `.text`
+and `.mega` unchanged; `kern_big`, `kern_emu` and `kern_small` every
+routine the same. The +53 is odd, so `.cold` from `lz_decomp_x` on sits one
+byte off its old parity on `kern_mega`.
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
