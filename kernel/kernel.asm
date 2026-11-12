@@ -5481,8 +5481,19 @@ osapi_segr:
     je .sub                     ; ...a pair's data half: the same sum
     cmp bl, SEG_BWIN
     ja .no                      ; SEG_AIM is protected mode's alone - a real-
+%if SEG_LIN != 0
+  %error "osapi_seg tests SEG_LIN as BL = 0"
+%endif
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define SEG_LIN_CMP           ; (kern_big and kern_emu: gfx_blit1_x follows
+ %endif                         ; in `.cold`, and this byte is its parity)
+%endif
+%ifdef SEG_LIN_CMP
     cmp bl, SEG_LIN             ; mode caller's own sum is its answer - and
-                                ; an unknown verb is refused
+%else                           ; an unknown verb is refused. SEG_LIN is 0,
+    test bl, bl                 ; so a test (kernel size pass 20, -1)
+%endif
     jne .ok                     ; SEG_REAL, SEG_WIN, SEG_BWIN: the value is
     push cx                     ; the answer, and SEG_FREE has nothing to free
     mov ax, dx
@@ -5491,22 +5502,12 @@ osapi_segr:
     mov cl, 12
     shr dx, cl                  ; DX:AX = DX x 16
     pop cx
-%ifdef KERN_BIG                 ; (kern_small: the old shape, for the parity
-    SKIPF2                      ; of gfx_blit1_x right after this routine)
-.sub:                           ; test ax, imm16 over .sub's add: flags only,
-    add dx, ax                  ; and the clc below is the answer (kernel size
-.ok:                            ; pass 15: one `clc / retf` for both)
-    clc
-    retf
-%else
-.ok:
-    clc
-    retf
-.sub:
-    add dx, ax
-    clc
-    retf
-%endif
+    SKIPF2                      ; (every kernel since kernel size pass 20:
+.sub:                           ; kern_small's old shape was its parity pad,
+    add dx, ax                  ; and the test above is the other byte)
+.ok:                            ; test ax, imm16 over .sub's add: flags only,
+    clc                         ; and the clc below is the answer (kernel size
+    retf                        ; pass 15: one `clc / retf` for both)
 .no:
     stc
     retf                        ; (an EVEN body: dsk_xfer, dsk_runcap,

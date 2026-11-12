@@ -470,13 +470,62 @@ mod_need:
 .reread:                        ; (.held's: a KEPT image the UI task shed or
     mov dx, [bx+MODR_SEG]       ; moved between this read and its IF = 0)
     or dx, dx                   ; CF = 0, which a LIVE row answers with
-    jnz .held                   ; ...held: LIVE, or KEPT by a drop (2.8.3)
+    jz .load                    ; ...held: LIVE, or KEPT by a drop (2.8.3).
+                                ; HELD FALLS THROUGH, here and not below the
+                                ; answers (kernel size pass 20: -3, and the
+                                ; LIVE path two taken jumps fewer) - which
+                                ; also brings the arming loop's two .badarm
+                                ; jumps back into short range
 %else
     cmp word [bx+MODR_SEG], 0
     jne .out                    ; already in: `cmp x, 0` cannot borrow, so CF
                                 ; = 0 is the answer (kernel size pass 17, -3:
                                 ; an `.already` arm that said `clc` and
                                 ; jumped here)
+%endif
+%ifdef MOD_CACHE
+; --- A HELD ROW (SPEC.md 2.8.3): LIVE - MEM_K_MOD, armed, and the answer is
+; CF = 0 as it always was - or KEPT by its drop, MEM_P_MOD + 2 x its id, and
+; then RE-ADOPTED here with no disk read: the claim pinned again, and its
+; slots armed by the same loop a load arms them with. Nothing else a load
+; does is owed: the scratch was zeroed at the drop, the stamps were checked
+; on the read the image came from, and mod_cfix (or the ROM's fix) re-pointed
+; its `.cold` words then and is not run twice - `.cold` never moves after
+; the boot, which slides it before the heap exists. DX = the segment, BX =
+; the row
+.held:
+    call mod_fpr                ; DI = its slot block. LIVE: the slots name
+    cmp [di+2], dx              ; its segment, and that is the whole test -
+    jne .kept                   ; no walk on a thunk's hot path. KEPT: they
+    jmp kretc_es                ; read mod_gone's, `.cold`'s
+.kept:
+    pushf                       ; AN IF = 0 WINDOW from the check to the re-tag
+    cli                         ; (SPEC.md 2.8.3): a mod_need on ANY task may
+    cmp dx, [bx+MODR_SEG]       ; re-adopt - a package worker's SERIAL.DRV
+    jne .race                   ; included - and only the UI task sheds or
+                                ; compacts (66.3.1), so a shed (MODR_SEG 0)
+                                ; or a move (another base) since the read
+                                ; above is seen here and read again, and
+                                ; none can land between this and the tag
+    push bx
+    mov bx, dx                  ; mem_find_own's own-segment arm: the record
+    call mem_find_own           ; AT that base - a held MODR_SEG names one
+    pop bx
+    mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
+                                ; - by the TAG: mem_can_move refuses
+                                ; MEM_K_MOD whatever MC_RLOC says, so the
+                                ; drop's declaration (mem_region_reloc) is
+                                ; left in the record, inert until the next
+                                ; drop re-tags it. Withdrawing it was 5 bytes
+                                ; here and 4 more of relaxed branches below
+    popf
+    mov es, dx
+    or bp, -1                   ; no bound on the entries: this image's were
+    jmp .arming                 ; bounded by the read it came from
+.race:
+    popf
+    jmp short .reread
+.load:
 %endif
 
 %ifndef MOD_CACHE
@@ -577,48 +626,6 @@ mod_need:
 .out:
     jmp kretc_es
 
-%ifdef MOD_CACHE
-; --- A HELD ROW (SPEC.md 2.8.3): LIVE - MEM_K_MOD, armed, and the answer is
-; CF = 0 as it always was - or KEPT by its drop, MEM_P_MOD + 2 x its id, and
-; then RE-ADOPTED here with no disk read: the claim pinned again, and its
-; slots armed by the same loop a load arms them with. Nothing else a load
-; does is owed: the scratch was zeroed at the drop, the stamps were checked
-; on the read the image came from, and mod_cfix (or the ROM's fix) re-pointed
-; its `.cold` words then and is not run twice - `.cold` never moves after
-; the boot, which slides it before the heap exists. DX = the segment, BX =
-; the row
-.held:
-    call mod_fpr                ; DI = its slot block. LIVE: the slots name
-    cmp [di+2], dx              ; its segment, and that is the whole test -
-    je .out                     ; no walk on a thunk's hot path. KEPT: they
-                                ; read mod_gone's, `.cold`'s
-    pushf                       ; AN IF = 0 WINDOW from the check to the re-tag
-    cli                         ; (SPEC.md 2.8.3): a mod_need on ANY task may
-    cmp dx, [bx+MODR_SEG]       ; re-adopt - a package worker's SERIAL.DRV
-    jne .race                   ; included - and only the UI task sheds or
-                                ; compacts (66.3.1), so a shed (MODR_SEG 0)
-                                ; or a move (another base) since the read
-                                ; above is seen here and read again, and
-                                ; none can land between this and the tag
-    push bx
-    mov bx, dx                  ; mem_find_own's own-segment arm: the record
-    call mem_find_own           ; AT that base - a held MODR_SEG names one
-    pop bx
-    mov word [ss:si+MC_OWN], MEM_K_MOD ; PINNED again before a slot names it
-                                ; - by the TAG: mem_can_move refuses
-                                ; MEM_K_MOD whatever MC_RLOC says, so the
-                                ; drop's declaration (mem_region_reloc) is
-                                ; left in the record, inert until the next
-                                ; drop re-tags it. Withdrawing it was 5 bytes
-                                ; here and 4 more of relaxed branches below
-    popf
-    mov es, dx
-    or bp, -1                   ; no bound on the entries: this image's were
-    jmp .arming                 ; bounded by the read it came from
-.race:
-    popf
-    jmp .reread
-%endif
 
 .check:
 
