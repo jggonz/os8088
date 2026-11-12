@@ -4550,8 +4550,11 @@ drv_task_x:
     popf                        ; (no bank of BX round the stamp: .out pops
                                 ; the caller's, and nothing between reads it -
                                 ; kernel size pass 17, -2)
-    clc
-    jmp short .out
+    CLC_OR_STC .fail            ; CF = 0 spawned, or (.fail) CF = 1 - the
+.out:                           ; refusals are BELOW the exit now, so the
+    pop dx                      ; success falls into it (kernel size pass
+    pop bx                      ; 20, -2: its `clc` / `jmp short .out`)
+    retf
 .spfail:
     dec byte [drv_wcnt]         ; refused: no task was made
     popf
@@ -4568,12 +4571,6 @@ drv_task_x:
                                 ; this call leaves. A `jmp` to a cw_ shim
                                 ; happens to work only while the target never
                                 ; comes back; a call works either way
-.fail:
-    stc
-.out:
-    pop dx
-    pop bx
-    retf
 
 drv_cfg_macros:                 ; NOT CALLED, and not a routine: it ENDS
                                 ; drv_task_x's extent. tools/os88ovlchk.py
@@ -6857,11 +6854,8 @@ section .cold
 ; ...and the four the live arm ends in `retf`, because their callers reach
 ; them with `call COLD_SEG:` from a module or from .text (SPEC.md 2.6.1).
 ; tools/os88ovlchk.py checks the pairing both ways and named all four.
-drv_notice_x:
-drv_cp_closed_x:
-drv_shutdown_x:
-drv_task_x:
-    retf
+                                ; (THEIR `retf` is the refusals' below, past
+                                ; its `stc`: kernel size pass 20)
 section .modu                   ; ...and the stub goes where the body went, or
 drv_status_x:                   ; the two builds would put one name in two
 drv_errstg:                     ; different segments (the one status a row
@@ -6892,11 +6886,25 @@ osapi_vol_del_x:                ; 51.8), whose fence refuses every caller here:
 osapi_vol_mount_x:              ; CF = 1 is what each answered, AL untouched
 osapi_desk_item_x:              ; (kernel size pass 11) - and desk.inc's item
 osapi_mem_hma_x:                ; door, whose driver arm is gone with them and
-    stc                         ; whose package arm is kern_big's (SPEC.md
-    retf                        ; 26.9); and OSAPI_MEM_HMA, which only a LOADED
+                                ; whose package arm is kern_big's (SPEC.md
+                                ; 26.9); and OSAPI_MEM_HMA, which only a LOADED
                                 ; driver may ask and kern_small has no HMA to
                                 ; answer from (SPEC.md 2.10.8, kernel size
-                                ; pass 12)
+                                ; pass 12) - and the Drivers page's five
+                                ; below, one `stc` / `retf` for all of them
+                                ; (kernel size pass 20, -3 with the four bare
+                                ; `retf`s, which enter past the `stc`)
+drvf_drv_cls_svc:
+drvf_drv_cp_class:
+drvf_drv_cp_call:
+drvf_drv_row:
+drvf_drv_unload:
+    stc
+drv_notice_x:
+drv_cp_closed_x:
+drv_shutdown_x:
+drv_task_x:
+    retf
 
 ; ...and "what is this class holding" (SPEC.md 51.12), which on a machine with
 ; no driver layer is NOTHING, of no class, for ever. AX is the answer, so the
@@ -6917,14 +6925,8 @@ osapi_fs_ent_x:                 ; ...and OSAPI_FS_ENT, legal only inside an
 ; and none of these is reachable. They are stubbed rather than gated because
 ; the page lives in CTRL.DRV - an on-demand MODULE on both builds - so gating
 ; its eleven interleaved regions would move no resident byte and would put a
-; %ifdef through the middle of the Sound page, which stays.
-drvf_drv_cls_svc:
-drvf_drv_cp_class:
-drvf_drv_cp_call:
-drvf_drv_row:
-drvf_drv_unload:
-    stc
-    retf
+; %ifdef through the middle of the Sound page, which stays. (The stubs, drvf_*,
+; are the refusals' `stc` / `retf` above.)
 section .modu                   ; ...and the panel's two names for drv_load and
 cdl_load:                       ; drv_tier, which are DRV_ATTACH's in CTRL.DRV
 cdl_tier:                       ; itself on kern_big (kernel size pass 13) and
