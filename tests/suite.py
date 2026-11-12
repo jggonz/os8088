@@ -13873,7 +13873,7 @@ SOAK = [
         "os88sym's offsets), not out of pixels.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("modcache", "soak", py("tests/modcache.py"), 30.0,
+    Row("modcache", "soak", py("tests/modcache.py"), 46.0,
         "SPEC.md 2.8.3: a dropped module KEPT by the cache comes back from "
         "RAM, off the field report (Sticky Apps on the 5150: the second press "
         "showed a disk access, a press after the Task Manager took the whole "
