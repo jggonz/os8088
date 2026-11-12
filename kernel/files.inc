@@ -6440,12 +6440,10 @@ fm_rclick_x:
     KDOOR menu_popup              ; CF = 1 nothing chosen; CF = 0 and AL = the
     jc .out                     ; item index (DI, the descriptor, survives)
 
-    cbw                         ; AL is bounded by MC_NITEM (menu_hover), so
-    mov bx, [di+MC_CMDS]        ; the parallel command array is in range
-    add bx, ax
-    mov al, [bx]
-    mov [fm_rcmdid], al
-    clc
+    mov bx, [di+MC_CMDS]        ; AL is bounded by MC_NITEM (menu_hover), so
+    xlatb                       ; the parallel command array is in range
+    mov [fm_rcmdid], al         ; (xlatb, kernel size pass 20: the index is
+    clc                         ; unsigned and AX is the ladder's to restore)
 .out:
     jmp kretfc_di
 
@@ -8939,26 +8937,30 @@ fm_scroll_by:
 fm_scrollpaint:
     ; --- the band the blit may move ---
     call fm_tiles               ; x1, IN to a byte column, and x2, stopping
-    mov [fm_bx1], ax            ; short of the scroll bar's left column - the
-    mov [fm_bx2], cx            ; more-mark's band exactly. A window
+    push cx                     ; short of the scroll bar's left column - the
+    push ax                     ; more-mark's band exactly - ON THE STACK for
+                                ; the blit, with y2 in DX and y1 in BX
+                                ; from here to it (kernel size pass 20: they
+                                ; were three words of .bss). A window
                                 ; too narrow to hold a whole byte column
                                 ; needs no test of its own: it lands x1 > x2
                                 ; or x2 off the screen, and gfx_scroll's own
                                 ; contract refuses both
     mov ax, [fm_cy]
     add ax, FM_ROW_Y0
-    mov [fm_by1], ax
+    mov [fm_by1], ax            ; (fm_row16's base, three calls)
     mov ax, [fm_fit]            ; whole rows only: a content height with a
     call fm_row16               ; remainder leaves a sliver below the last
     dec ax                      ; row that no row painter would ever erase
-    mov [fm_by2], ax
+    xchg ax, dx                 ; DX = y2
 
     call fm_cxrgt               ; the whole band, tested against an armed
     mov bx, [fm_by1]            ; clip region (11.3) - the blit tests its own
-    mov dx, [fm_by2]            ; rect, but the exposed rows below are wider
-                                ; than it and are a fill plus glyphs
+                                ; rect, but the exposed rows below are wider
+                                ; than it and are a fill plus glyphs. It,
+                                ; fm_cxrgt and fm_lsel_bar keep BX and DX
     call ct_cw_wm_clip_test
-    jc .refj
+    jc .refp
 
     ; --- the selection comes off where it is now ---
     mov ax, [fm_sdlt]
@@ -8971,10 +8973,8 @@ fm_scrollpaint:
     mov si, ax
     mov cl, 4
     shl si, cl                  ; SI = dy = d * FM_ROW_H, sign and all
-    mov ax, [fm_bx1]
-    mov bx, [fm_by1]
-    mov cx, [fm_bx2]
-    mov dx, [fm_by2]
+    pop ax                      ; x1
+    pop cx                      ; x2 (BX = y1 and DX = y2 still)
     mov bp, gfx_scroll          ; cw_mem_disp is `call bp / retf` and neither
     call ct_cw_mem_disp         ; touches the flags, so gfx_scroll's CF is
                                 ; still its answer here (SPEC.md 2.6)
@@ -8990,6 +8990,9 @@ fm_scrollpaint:
     sub bx, ax
     mov [fm_rlo], bx
     jmp short .expfill
+.refp:                          ; (the clip's refusal: the band's x1 and x2
+    pop ax                      ; are still on the stack)
+    pop ax
 .refj:                          ; ...and the two refusals above take it
                                 ; rather than a five-byte inverted pair - the
     ret                         ; refusal ITSELF, where a jump to it was
@@ -9014,11 +9017,11 @@ fm_scrollpaint:
 .expfill:
     mov ax, [fm_rlo]
     call fm_row16
-    mov bx, ax                  ; y1 = the first exposed row's top
+    xchg ax, bx                 ; y1 = the first exposed row's top
     mov ax, [fm_rhi]
     call fm_row16
     dec ax
-    mov dx, ax                  ; y2 = the last one's bottom
+    xchg ax, dx                 ; y2 = the last one's bottom
     call fm_cxrgt
     sub cx, FM_SB_W             ; the column left of the bar
     call fm_wfill
@@ -9815,10 +9818,9 @@ fm_rhi:     resw 1              ; is to letter, [lo, hi) - every one of them
 fm_sdlt:    resw 1              ; scroll scratch: the signed row delta the
                                 ; clamp actually took, which is what all of
                                 ; the drawing below it is a function of
-fm_bx1:     resw 1              ; scroll scratch: the blit band, rounded in
-fm_bx2:     resw 1              ; to byte columns and stopping short of the
-fm_by1:     resw 1              ; scroll bar; y covers whole rows only
-fm_by2:     resw 1
+fm_by1:     resw 1              ; scroll scratch: the blit band's top row,
+                                ; fm_row16's base (its x1, x2 and y2 are
+                                ; fm_scrollpaint's registers and stack)
                                 ; change (fm_sb_thumb)
 fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes (lo word)
 fm_fsizeh:  resw 1              ; ...and its high word (SPEC.md 19)

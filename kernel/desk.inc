@@ -1187,8 +1187,12 @@ desk_paint_mask_x:
     push dx
     xor cx, cx
 .next:
+%if DESK_NZ > 16
     shl word [desk_dmgm], 1     ; zone CL's bit, top of the dword first:
     rcl word [desk_dmgm+2], 1   ; desk_dmg_zones rotated zone 0 in LAST
+%else
+    shl word [desk_dmgm], 1     ; ...of the WORD, on a kernel with 16 zones
+%endif                          ; or fewer (kern_small's four: size pass 20)
     jnc .skip
     mov al, cl
 %ifdef KERN_BIG
@@ -1276,8 +1280,12 @@ desk_dmg_zones_x:
     stc
 %endif
 .r:
+%if DESK_NZ > 16
     rcr word [desk_dmgm+2], 1
     rcr word [desk_dmgm], 1
+%else
+    rcr word [desk_dmgm], 1     ; (one word holds them all: desk_paint_mask)
+%endif
     or di, di
     jnz .zone
     pop di
@@ -2348,7 +2356,11 @@ desk_zdirty  resb 1             ; 1 = [desk_cdirty] holds cells that owe a
 desk_cdirty  resb (DSL_SLOT + 1) / 8    ; ...one bit a cell
 desk_zslot   resb DESK_NZ       ; THE TABLE: one byte a zone (SPEC.md 26.9).
                                 ; desk_init fills it with 0xFF, "nothing"
+%if DESK_NZ > 16
 desk_dmgm    resw 2             ; desk_dmg_zones -> desk_paint_mask, a dword
+%else
+desk_dmgm    resw 1             ; ...a word, with 16 zones or fewer
+%endif
 desk_sel     resb 1             ; selected ZONE index, 0xFF = none
 desk_clkt    resw 1             ; click birth tick (EV_C) of the last zone click
 desk_zy      resw 1             ; desk_draw_zone: current zone top

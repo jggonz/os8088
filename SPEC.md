@@ -57167,7 +57167,7 @@ it may have left chevrons there, and a marker that only ever draws its
 positive case is one that never goes away. It is drawn from `fm_draw_rows` (so
 `fm_repaint` and `fm_rows_only` both get it, from one body) and from
 `fm_scrollpaint` — the second is not optional and is easy to leave out,
-because the blit band stops at `[fm_by2]` and the exposed-row fill at
+because the blit band stops at its last whole row and the exposed-row fill at
 `[fm_listb] - 1`, so this band survives a scroll completely untouched.
 
 **Cost, measured.** The whole of §22.20 and §22.20.1 is `.cold` **+207** and
