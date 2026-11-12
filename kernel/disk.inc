@@ -4802,6 +4802,9 @@ disk_mount_x:
                                 ; dsk_next_clus_x keeps its even shift,
                                 ; t_hotpar.py)
 
+%ifdef OS88_ASSOC               ; (kern_small has no call below, and the
+                                ; pair after it is this one: kernel size pass
+                                ; 20, -2 there)
     push ss                     ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     pop es                      ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
                                 ; the redundant load Fdisk-15 removed: asc_use_x
@@ -4816,6 +4819,7 @@ disk_mount_x:
                                 ; the two would be silent. tools/dsegaudit.py
                                 ; refuses the WINDOW rather than the read, and
                                 ; it is the reason those five bytes are back
+%endif
 
     ; --- 4. icon harvest (SPEC.md 18.3 step 4; failures are NON-fatal) ---
     ; Type-1 entries carry a validated first cluster: peek the file's first
@@ -5314,9 +5318,6 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     mov cx, 80
     mul cx                          ; AX = spt*heads*80 (<= 5760)
     jmp short .r13c             ; ...and the SAME compare as a driver's
-.jfail2:                        ; the second relay, .jfail1 having gone out of
-    stc                         ; range half way down - the answer itself, as
-    ret                         ; there (-1). Reached only by a jump
 .r13d:
     mov ax, [dsk_vsecs]
     test ax, ax
@@ -5418,6 +5419,11 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     add ax, dx
     call dsk_bytes_secs_x       ; ...as whole sectors. DX comes back a copy of
     jmp short .capcmp           ; AX and .capcmp reads AX alone
+.jfail2:                        ; the second relay, .jfail1 having gone out of
+.fail:                          ; range half way down - the answer itself, as
+    stc                         ; there (-1), and the routine's own refusal
+    ret                         ; too, HERE where every jump from rule 13 on
+                                ; reaches it short (kernel size pass 20, -2)
 .cap16:
     test al, al                 ; FAT16: 256 entries a sector, so the count
     mov al, ah                  ; is entries>>8 rounded up - written as a
@@ -5464,9 +5470,6 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
                                 ; canary" are one answer and it is the cautious
                                 ; one.
     clc
-    ret
-.fail:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5965,7 +5968,9 @@ dsk_fatw_pick:                  ; (no bank: disk_mount_x reads neither AX nor
 %ifdef DSK_STREAM               ; have overwritten it: this window is ours
     call dws_hret               ; ...and so is a held stream's dirt (18.8.5)
 %endif
-    jmp short .out
+    ret                         ; (-1: held for parity since pass 14, and the
+                                ; odd byte this pass's window wants - kernel
+                                ; size pass 20)
 .homeless:                      ; ABOUT TO WRITE THE KERNEL'S OWN WINDOW
     call dsk_fatw_evict         ; WITHOUT HOLDING THE PIN (SPEC.md 18.8.3), so
                                 ; nobody may go on believing they hold it: the
@@ -6491,15 +6496,15 @@ dsk_free_clus_x:
                                 ; figure means, and a wrapped one would read
                                 ; as a nearly full volume on the emptiest
                                 ; possible remote disk
-%else                           ; kern_small and kern_dos: no redirected
-    jmp short .fat              ; volume can exist (SPEC.md 62.9.2.3), so over
-%endif                          ; the relays - 15 cycles where the compare and
-                                ; its taken `jne` were ~36 (kernel size pass 11)
-.jcounted:
+.jcounted:                      ; (the arm above falls into this relay)
     jmp .counted
 .slowj:                         ; ...and the FAT12 fast path's two vetoes:
     jmp .slow                   ; the window IS whole on every floppy, so
                                 ; this is the arm that does not run (-3)
+%endif                          ; kern_small and kern_dos: no redirected
+                                ; volume can exist (SPEC.md 62.9.2.3), so the
+                                ; relays sit at .c12 below, where nothing
+                                ; jumps over them (kernel size pass 20, -6)
 .fat:
     xor di, di                  ; DI = free clusters
     mov si, 2                   ; SI = cluster under test
@@ -6541,29 +6546,31 @@ dsk_free_clus_x:
                                 ; left a tick's window for the window to move
                                 ; under a stale ES (and cost 2 bytes a site)
 .pair:
-    mov ax, [es:bx]             ; b0 | b1<<8 - the even entry's 12 bits are
-    mov dx, ax                  ; the bottom of it, the odd entry's low
-    and dx, 0x0FFF              ; nibble the top
-    jnz .odd
+    test word [es:bx], 0x0FFF   ; b0 | b1<<8 - the even entry's 12 bits are
+    jnz .odd                    ; the bottom of it
     inc di
 .odd:
     inc si
     cmp si, cx           
     ja .c12                     ; an odd cluster count ends on the even half
-    mov dl, [es:bx+2]           ; odd entry = (ax >> 12) | b2 << 4, and it is
-    or dl, dl                   ; zero exactly when both halves are
-    jnz .pnext
-    test ah, 0xF0
-    jnz .pnext
-    inc di
-.pnext:
+    test word [es:bx+1], 0xFFF0 ; b1 | b2<<8 - the odd entry is its top 12
+    jnz .pnext                  ; bits, (b1 >> 4) | b2 << 4: a test of the
+    inc di                      ; word each, nothing loaded (kernel size pass
+.pnext:                         ; 20, -9)
     inc si
     add bx, 3
     cmp si, cx           
     jbe .pair
 .c12:
     dec byte [sch_lock]         ; ...and ES is nobody's again
+%ifndef OS88_REDIR
+.jcounted:                      ; (this IS the relay: in reach of both)
+%endif
     jmp short .counted
+%ifndef OS88_REDIR
+.slowj:
+    jmp short .slow
+%endif
 
     ; --- FAT16: a plain word array, and NOT gated on residency - a hard-disk
     ;     partition's FAT is 64 sectors against a 9-sector window (SPEC.md
