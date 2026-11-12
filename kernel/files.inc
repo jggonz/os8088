@@ -1894,16 +1894,19 @@ fm_measure:
     mov [di+FS_USED], cx        ; the bytes themselves (SPEC.md 22.7.1): a
     mov [di+FS_USEDH], bx       ; high half of 0xFFFF would need 4GB listed
 %else
-    mov ax, cx                  ; bytes -> KB: (hi:lo) >> 10, and the result
+    xchg ax, cx                 ; bytes -> KB: (hi:lo) >> 10, and the result
     mov dx, bx                  ; is a word because a volume caps at 32MB
     mov cx, 10
 .shift:
     shr dx, 1
     rcr ax, 1
     loop .shift
-    cmp ax, 0xFFFF              ; a hostile listing could sum past the
-    je .out                     ; sentinel: leave it saying "not known"
-    mov [di+FS_USED], ax
+    mov [di+FS_USED], ax        ; A hostile listing could sum to the sentinel
+                                ; itself, 0xFFFF, and then this says "not
+                                ; known" - which is exactly what the store at
+                                ; the top left there, so the test that skipped
+                                ; this store for it went (kernel size pass 20,
+                                ; -5, and -1 for the xchg)
 %endif
 .out:
     jmp kretc_di
