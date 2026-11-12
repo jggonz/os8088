@@ -17,22 +17,19 @@ fast  api-abi                # as reviewed 2026-11-12
 fast  ascplace               # as reviewed 2026-11-12
 fast  asmrules               # as reviewed 2026-11-12
 fast  bits                   # as reviewed 2026-11-12
-fast  blobbodies             # as reviewed 2026-11-12
-fast  blobruns               # as reviewed 2026-11-12
-fast  bootfence              # as reviewed 2026-11-12
+fast  blobbodies             # owner 2026-11-12: guards boot correctness that common kernel changes break; quick
+fast  blobruns               # owner 2026-11-12: guards boot correctness that common kernel changes break; quick
+fast  bootfence              # owner 2026-11-12: guards boot correctness that common kernel changes break; quick
 fast  btnrules               # as reviewed 2026-11-12
 fast  canary                 # as reviewed 2026-11-12
 fast  catdisk                # as reviewed 2026-11-12
-fast  ccvoid                 # as reviewed 2026-11-12
 fast  cellgate               # as reviewed 2026-11-12
 fast  checkdocs              # as reviewed 2026-11-12
 fast  checkreadme            # as reviewed 2026-11-12
-fast  deps                   # as reviewed 2026-11-12
+fast  deps                   # owner 2026-11-12: sessions keep breaking what it guards, and only a guard stops that
 fast  diskverify             # as reviewed 2026-11-12
-fast  docglyph               # as reviewed 2026-11-12
 fast  docindex               # as reviewed 2026-11-12
 fast  drvmem                 # as reviewed 2026-11-12
-fast  drvovl                 # as reviewed 2026-11-12
 fast  drvverb                # as reviewed 2026-11-12
 fast  fonts                  # as reviewed 2026-11-12
 fast  guidelock              # as reviewed 2026-11-12
@@ -52,15 +49,13 @@ fast  pkgdeps                # as reviewed 2026-11-12
 fast  pkgzrules              # as reviewed 2026-11-12
 fast  readme8088             # as reviewed 2026-11-12
 fast  retired                # as reviewed 2026-11-12
-fast  romtool                # as reviewed 2026-11-12
+fast  romtool                # owner 2026-11-12: it kept breaking with nothing checking it, and we shipped bad ROMs
 fast  stkapps                # as reviewed 2026-11-12
 fast  stkbalance             # as reviewed 2026-11-12
 fast  stkclass               # as reviewed 2026-11-12
-fast  stkwalker              # as reviewed 2026-11-12
 fast  swallow                # as reviewed 2026-11-12
-fast  sysman                 # as reviewed 2026-11-12
-fast  treesweep              # as reviewed 2026-11-12
-fast  vidext                 # as reviewed 2026-11-12
+fast  treesweep              # owner 2026-11-12: very quick, and guards the build tool it is part of
+fast  vidext                 # owner 2026-11-12: quick, crosses the whole drawing path, and broke because nobody boots VESA
 fast  volsig                 # as reviewed 2026-11-12
 
 full  api-abi-all            # as reviewed 2026-11-12

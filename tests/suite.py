@@ -1021,8 +1021,8 @@ FAST = [
         "noticed; this is the noticing as a gate. Also proves the "
         "fingerprint moves for a moved cell, a changed contract and a header "
         "field, and stands for SDK prose", needs=()),
-    Row("ccvoid", "fast", py("tests/unit/t_ccvoid.py"), 0.1,
-        "SPEC.md 73: tools/ccpeep.py's void_functions() reads a C "
+    Row("ccvoid", "soak", py("tests/unit/t_ccvoid.py"), 0.1,
+        "SOAK (owner, 2026-11-12: one tool, the C optimiser). SPEC.md 73: tools/ccpeep.py's void_functions() reads a C "
         "function's OWN return type out of SmallerC's nested `; glb` "
         "comment - not a function-pointer parameter's `) void`, and not a "
         "function that RETURNS a void function pointer. Either misread "
@@ -1036,8 +1036,8 @@ FAST = [
         "it does not break a build - so it answers neither tier's question, "
         "and both are paid for by people it is not about",
         needs=()),
-    Row("drvovl", "fast", py("tests/unit/t_drvovl.py"), 0.1,
-        "SPEC.md 20.13/62.9.9: a driver-loaded OVERLAY may not be COMPRESSED. "
+    Row("drvovl", "soak", py("tests/unit/t_drvovl.py"), 0.1,
+        "SOAK (owner, 2026-11-12: scoped to changes to two specific drivers). SPEC.md 20.13/62.9.9: a driver-loaded OVERLAY may not be COMPRESSED. "
         "RAMPAGE.DRV and HDDTOOL.DRV are read by RAMDISK.DRV and HDD.DRV "
         "themselves, with OSAPI_FILE_READ - which expands a 'CZ' FILE and NOT "
         "a v4 driver container, the only thing that expands one being "
@@ -1736,8 +1736,8 @@ FAST = [
     Row("pkg", "fast", py("tests/unit/t_pkg.py"), 0.1,
         "package/driver/module headers, and every file on every image proved "
         "identical to the artifact it was built from"),
-    Row("docglyph", "fast", py("tests/unit/t_docglyph.py"), 0.6,
-        "a package may SHIP the 8x8 its documents wear (SPEC.md 54.3.2): the "
+    Row("docglyph", "soak", py("tests/unit/t_docglyph.py"), 0.6,
+        "SOAK (owner, 2026-11-12: DOS's glyph only; a generic check could be full). a package may SHIP the 8x8 its documents wear (SPEC.md 54.3.2): the "
         "validator's four refusals, the clear prefix keeping the block verbatim "
         "through compression, os88mini baking the shipped bytes and not the "
         "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
@@ -1810,8 +1810,8 @@ FAST = [
         "would send every `.boot3` call into the wrong RAM with no error. "
         "Breaks red with one byte of boot360.bin's far jump changed",
         needs=("nasm",)),
-    Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
-        "SPEC.md 118.2.1: System Check's manifest is written from the system "
+    Row("sysman", "soak", py("tests/unit/t_sysman.py"), 0.3,
+        "SOAK (owner, 2026-11-12: the generation is its own guard). SPEC.md 118.2.1: System Check's manifest is written from the system "
         "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "
         "file is read back off all four built system disks with a walker of "
         "its own and held to its size and sum - and SYSTEM\\SYSCHECK.O88 is "
@@ -2486,8 +2486,8 @@ FAST = [
         "at a time (t_stkclass.JOBS), in worker processes",
         cpus=4),
 
-    Row("stkwalker", "fast", py("tests/unit/t_stkbalance.py"), 1.5,
-        "the stack walker itself, against eleven idioms it must stay QUIET "
+    Row("stkwalker", "soak", py("tests/unit/t_stkbalance.py"), 1.5,
+        "SOAK (owner, 2026-11-12: scoped to whoever changes the walker, which cannot break without being changed). the stack walker itself, against eleven idioms it must stay QUIET "
         "about and six defect shapes it must catch. A gate that reports "
         "nothing passes every build and defends nothing; one that reports a "
         "routine in ten gets ignored and defends nothing either, which is why "

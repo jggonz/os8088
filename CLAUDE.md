@@ -235,8 +235,7 @@ What `make help` cannot tell you:
   **One sanctioned exception, the owner's (2026-11-05)**: ARCADE's
   ROM-free translated parts in `apps/arcade/prebuilt/`, so neither `make`
   nor a release needs the ROMs or archive.org. `make arcadeprebuilt`
-  refreshes them, and the soak row `arcprebuilt-stamp` fails when
-  their inputs move without them (ARCADE-SPEC 1.6).
+  refreshes them when their inputs move (ARCADE-SPEC 1.6).
 - **Fetched data is never committed** (Frotz stories, Lemmings, the Apple II
   ROMs, RunCPM's master disk, the soundfont): the targets fetch it at pinned
   hashes, and `make clean` spares what it fetched.
@@ -462,11 +461,11 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   item, the greying predicate and the thunks; everything else goes in the
   module. Moving code to `.cold` or the boot overlay relieves `KERN_CODE_MAX`
   but not `KERN_BUDGET` — a module relieves both.
-  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (soak - name it when you add a module)
-  fails for a `mod_tab` row nothing drops, unless
-  `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
-  5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
-  drop rule. A new module needs its drop on the day it lands.
+  **"Freed when it is done" is a rule, not a hope**: every `mod_tab` row is
+  dropped somewhere, or `tests/moddrop.txt` says why it is held until
+  restart - `DESK.DRV` held 5KB pinned after the last Sticky App closed,
+  until SPEC.md 11.103.10's drop rule. A new module needs its drop on the
+  day it lands.
   **`.cold` IS RESIDENT, and the name is the trap**: it means a cold PATH, not
   a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like
   `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA
@@ -777,10 +776,7 @@ the preflight, frozen tree, parallel lanes, journal, `--resume` and pollable
 build-number-only commit is three bytes of `.text` moving because the commit
 count moved (SPEC.md §14.2) and no row in any tier can see it.
 
-**`fast` AND `full` ARE CLOSED** (the owner, 2026-11-12): a row joins either
-only with the owner's permission and a reason, and the `tierlock` row fails
-the build until its line is in `tests/tierlock.txt` - the default is `soak`
-(docs/WRITING-TESTS.md 2.0). **ADDING A ROW IS `docs/WRITING-TESTS.md`, and it is worth reading BEFORE the
+**ADDING A ROW IS `docs/WRITING-TESTS.md`, and it is worth reading BEFORE the
 first line rather than at the review.** Everything below is how to drive the
 machine; that is how to write something worth driving it for — the tier and
 the registry fields, a `secs` you measured, `wants=` and private trees instead
