@@ -4937,7 +4937,10 @@ SOAK = [
         "from A: EVICTS the GAMES window's store - its canvas lands at the "
         "floor (SPEC.md 50.6.13); Missile and Gorillas, two regions from the "
         "top, stopped reaching a store at the floor once a claim evicts only "
-        "what it lands on. The re-list named its destination "
+        "what it lands on. Since SPEC.md 50.6.13.1 the launch MOVES the "
+        "store into a free hole, which this machine always has, so the row "
+        "pokes mem_evmv's entry to `stc / ret` (the no-hole arm) in guest "
+        "RAM first. The re-list named its destination "
         "before fmv_fit re-claimed it, so the window read 'Drive B: 0 files' "
         "until Refresh (a field report). Red with fmv_load's `call fmv_fit` "
         "taken out: 0 of 10 entries after the raise.",
@@ -14613,7 +14616,7 @@ SOAK = [
         "is what it reads, the same tree small128 and smallboot want",
         needs=("marty",), serial=True,
         wants=("build/small360.img",)),
-    Row("smallfrag", "soak", py("tests/smallfrag.py"), 40.0,
+    Row("smallfrag", "soak", py("tests/smallfrag.py"), 60.0,
         "SPEC.md 50.6.13, 42.6.7.1 and 2.8.3.4: on kern_small a cache never "
         "walls a pinned claim, and Paint opens TWICE on the 128KB Hercules. "
         "The owner's field report (2026-11-12): boot, a Disk window, Paint, "

@@ -25,7 +25,10 @@ listing and left the listing alone (dirty FSD_ICONS, the store intact). A
 DATA claim lands at the floor, so Paint's canvas evicts the GAMES store
 (measured: 0E80, FSD_CACHE, then 13 of 13 entries after the raise). The
 shed check below stays, so a machine that stops reaching the case still says
-so rather than passing.
+so rather than passing - and since SPEC.md 50.6.13.1 the launch MOVES the
+store into a free hole instead (tests/smallfrag.py's iconmove), so the row
+turns the move off in guest RAM first: the no-hole arm, which a full heap
+takes.
 
 Every reading is guest state - the window's own FS_DIRTY/FS_VSEG and the
 listing os88ui reads off its cache - and the pauses are GUEST seconds.
@@ -68,6 +71,13 @@ def main():
                     int.from_bytes(m.read(b + eq["FS_VSEG"], 2), "little"),
                     len(ui.listing(w)))
         before = state()[2]
+        # SPEC.md 50.6.13.1 MOVES a listing the launch lands on into a free
+        # hole when one fits, and on this machine one always does - so the
+        # case this row is about (no hole: the store EVICTED, the window
+        # owing a re-list) is reached by answering "no hole" from mem_evmv
+        # itself, in guest RAM: `stc / ret` at its entry, its refusal arm
+        # exactly. A full heap reaches that arm the same way
+        m.write(m.sym("mem_evmv", ("KERN_SMALL",)), b"\xF9\xC3")
         ui.path("A:/APPS/PAINT.O88")    # the pressure: its canvas lands at
         os88marty.ui_done(m)            # the floor, on GAMES' store (doc)
         shed = state()
