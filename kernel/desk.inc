@@ -1176,7 +1176,7 @@ desk_caprect:
 ;              AX (wm.inc's "any" word) is not read. Lock held. On kern_big
 ;              wm_dmg_gray has already drawn them into its region and emptied
 ;              the mask (desk_zones_r, SPEC.md 11.91.6), so what is left here
-;              is drawn whole and its box grown (desk_zone_whole). All
+;              is drawn whole and its box grown (below). All
 ;              registers preserved. (desk_paint, every zone whole, was the
 ;              layered wm_paint_all's, and went with it: SPEC.md 11.91.7.)
 ; -----------------------------------------------------------------------------
@@ -1195,36 +1195,24 @@ desk_paint_mask_x:
 %endif                          ; or fewer (kern_small's four: size pass 20)
     jnc .skip
     mov al, cl
-%ifdef KERN_BIG
-    call desk_zone_whole        ; what desk_zones_r left in the mask
-%else
     call desk_draw_zone         ; a zone not shown draws nothing
+%ifdef KERN_BIG
+    ; ...and on kern_big, what desk_zones_r left in the mask - a touched zone
+    ; wm_dmg_gray could not draw into its region (Color's ground, or an
+    ; overflow) - is drawn WHOLE, so its box is grown and every window over
+    ; it is owed a repaint (11.91's per-window test): the old answer, kept
+    ; for those. (desk_zone_whole, written at its one call: kernel size pass
+    ; 20. desk_draw_zone keeps AL, the zone desk_zone_rect reads.)
+    push cx                     ; the zone counter: the rect takes CX
+    call desk_zone_rect
+    call KERNEL_SEG:cw_wm_dmg_zadd
+    pop cx
 %endif
 .skip:
     inc cx
     cmp cl, DESK_NZ
     jb .next
     jmp kretfc_dx
-
-%ifdef KERN_BIG
-; -----------------------------------------------------------------------------
-; desk_zone_whole - a touched zone wm_dmg_gray could not draw into its region
-;                   (desk_zones_r: Color's ground, or an overflow), drawn WHOLE
-;                   and its box grown so every window over it is owed a repaint
-;                   (11.91's per-window test) - the old answer, kept for those
-; in:  AL = a zone desk_dmg_zones marked; the gfx lock held
-; out: nothing; keeps CX, the zone counter its one caller's loop reads - AX
-;      is reloaded from CL and BX and DX are not read (kernel size pass 17;
-;      DX was the loop's routine pointer while desk_paint shared it)
-; -----------------------------------------------------------------------------
-desk_zone_whole:
-    call desk_draw_zone         ; (the box is read by the window pass, after)
-    push cx
-    call desk_zone_rect
-    call KERNEL_SEG:cw_wm_dmg_zadd
-    pop cx
-    ret
-%endif
 
 ; -----------------------------------------------------------------------------
 ; desk_dmg_zones - which zones does the damage rect touch?

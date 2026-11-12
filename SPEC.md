@@ -62514,7 +62514,7 @@ bytes); it is the primitive's now, for every caller, at 88.
 **Color's teal is a third colour a 1bpp band cannot say**, so under Color
 `desk_zones_r` draws nothing and leaves the mask whole: the dither lays its
 ground and `desk_paint_mask` draws each touched zone WHOLE over it, its box
-grown so every window over it is owed a repaint (`desk_zone_whole`) - which
+grown so every window over it is owed a repaint (its `wm_dmg_zadd`) - which
 is how every theme drew before §11.91.6. The first build drew Color's
 picture column on the glass under its per-fragment clip; Color is the one
 place this build is slower than that one, by the windows a partly covered
