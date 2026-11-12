@@ -2800,9 +2800,10 @@ sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
 sch_s_in    equ fm_s_colsp + 1  ; '  ', 0 - the tail of the Disk window's
                                 ; ':  ' (files.inc), both .text (kernel size
                                 ; pass 13)
-%ifdef KERN_BIG
-            db 0                ; PARITY PAD (kernel size pass 13):
-%endif                          ; wm_paint_all at an even shift on kern_big
+                                ; (kern_big's PARITY PAD that stood here went
+                                ; in kernel size pass 20: wm_paint_all left the
+                                ; pinned list, and toast_pass's byte is the
+                                ; other half for ui_task - t_hotpar)
 sch_s_ui:   db 'UI TASK', 0
 
 ; -----------------------------------------------------------------------------

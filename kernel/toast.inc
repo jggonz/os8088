@@ -611,10 +611,10 @@ toast_pass:
     pop di
     pop si
     pop cx
-.nq:
-    popf
-    or al, al                   ; (AX is toast_pass's: banked at its head)
-    jnz .up
+    popf                        ; ...and up it goes: the `jz` above already
+    jmp short .up               ; asked, so the arm says so itself (kernel
+.nq:                            ; size pass 20, -1: the second `or` / `jnz`,
+    popf                        ; which the pass with no queue no longer runs)
 %endif
 .chk:                           ; ...and FALLS INTO the test, where it used to
                                 ; step over `.up` with a `jmp short`. `.up` is
