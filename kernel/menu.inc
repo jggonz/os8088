@@ -1136,8 +1136,8 @@ menu_bar_text:
     stc                         ; CF = 1: the menus too
 menu_bt_raw:
 %endif
-    call kent_di                ; = push ax/bx/cx/dx/si/di (flags untouched)
-    push es
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp (flags
+    push es                     ; untouched). BP too, for menu_bent's cell
     pushf                       ; ...the choice, across the prologue
 
     test byte [fpg_on], FPG_SHOWN   ; --- is SPEC.md 12.8's widget on the
@@ -1295,7 +1295,7 @@ menu_bt_raw:
     jbe .piece
 .out:
     pop es
-    jmp kret_di
+    jmp kret_bp
 
 ; -----------------------------------------------------------------------------
 ; menu_bemit - letter cells BX..DX of the menus segment in one font_run
@@ -1438,16 +1438,18 @@ menu_bent:
     mov al, MB_ENTSZ            ; `mul bl` is byte by byte, so AL alone
     mul bl                      ; needs loading. BX <= MENU_BARMAX, so BL is
     add ax, menu_bar            ; the whole index; the base goes on before the
-    xchg ax, si                 ; one-byte move into SI (size pass 10: 2).
-                                ; (menu_bar is .lowbss: read through SS)
-    cmp word [ss:si + MB_TITLE], 0
+    xchg ax, bp                 ; one-byte move into BP (size pass 10: 2).
+                                ; (menu_bar is .lowbss: read through SS,
+                                ; which [bp+] is with no override - menu_bt_raw
+                                ; banks BP for it, kernel size pass 20, -2)
+    cmp word [bp + MB_TITLE], 0
     je menu_bpadc.d             ; the logo cell has no text (that `ret`,
                                 ; just above)
-    mov ax, [ss:si + MB_XL]
+    mov ax, [bp + MB_XL]
     add ax, MENU_TITLE_PAD / 2  ; the cell's pen x (SPEC.md 12.2: no MB_TX)
-    call menu_bpad              ; spaces up to this cell's pen (SI it keeps)
-    mov cx, [ss:si + MB_SEG]
-    mov si, [ss:si + MB_TITLE]  ; read last, into the register it is used
+    call menu_bpad              ; spaces up to this cell's pen (BP it keeps)
+    mov cx, [bp + MB_SEG]
+    mov si, [bp + MB_TITLE]     ; read last, into the register it is used
     KES                         ; from: no AX bank (pass 14: 2 bytes)
                                 ; this cell's own segment (SPEC.md 12.2)
     or cx, cx
@@ -2195,6 +2197,10 @@ menu_kbnav:
     cbw
     mov si, ax                  ; SI = the direction, and the sign the scan
                                 ; below walks in
+    mov di, -1                  ; DI = -1, "above the menu", ONCE for both
+                                ; arms below that start from it: nothing
+                                ; between here and either reads or writes DI
+                                ; first (kernel size pass 20, -3)
 
     ; --- which row is the pointer on? -1 above the menu, [menu_cnt] below ----
     mov dx, [mouse_x]           ; the same x test menu_hover makes, so the two
@@ -2207,9 +2213,9 @@ menu_kbnav:
                                 ; what it uses, and DX is this frame's
 .beside:                        ; the pointer is off to one side: come back in
     mov dx, [menu_x1]           ; ...at the x where the item text starts, and
-    add dx, 8
-    mov di, -1                  ; at the end this key is heading AWAY from, so
-    or si, si                   ; Down enters at the first item and Up at the
+    add dx, 8                   ; DI = -1: at the end this key is heading
+    or si, si                   ; AWAY from, so Down enters at the first item
+                                ; and Up at the
     jns .step                   ; last
     mov di, [menu_cnt]
     jmp short .step
@@ -2223,9 +2229,9 @@ menu_kbnav:
     mov ax, [mouse_y]
     sub ax, [menu_y1]           ; the top frame row is not a cell (menu_hover):
     dec ax                      ; y - y1 - 1, the `dec` setting the SF the
-    mov di, -1                  ; `js` reads (kernel size pass 17, -2: BX is
+                                ; `js` reads (kernel size pass 17, -2: BX is
                                 ; .place's to load)
-    js .step                    ; above the first cell
+    js .step                    ; above the first cell: DI is still -1
     mov cl, 4
     shr ax, cl                  ; / MENU_ITEM_H -> the cell under the pointer
     mov di, ax
@@ -2271,11 +2277,9 @@ menu_kbnav:
     jmp kretfc_di               ; FAR: kbm_move reaches this across the segment
                                 ; boundary now, and no thunk stands in between
                                 ; (SPEC.md 2.6.1). (The `.no: stc / retf` that
-                                ; stood here is .noj's now: -2, even, so the
-                                ; pad below keeps its job)
-    nop                         ; PARITY, never executed or read (kernel size
-                                ; pass 15): `.cold` between here and dsk_xfer
-                                ; came out an odd number of bytes shorter
+                                ; stood here is .noj's now. Pass 15's parity
+                                ; `nop` that followed went with pass 20's -3
+                                ; above: -4, even, for `.cold` down to dsk_xfer)
 section .text
 
 ; -----------------------------------------------------------------------------
