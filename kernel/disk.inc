@@ -7126,36 +7126,38 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 %%picked:                        ; width, because dsk_rah_flush clears all
     mov [dsk_rah_next], bx      ; DSK_RAH_RUNS records and the ones above the
                                 ; live width then stay RAH_N = 0
+    mov cx, 9
+    mul cl                      ; AX = slot * RAH_REC, RAH_REC being 9 - a
+    mov bx, ax                  ; byte multiply, the slot being under 14
 %ifdef KERN_MEGA
     cmp byte [dsk_rah_hi], 0    ; a store above 1MB is never a transfer's
     jne %%slotok                 ; target - the landing is - so no slot of it
 %endif                          ; can straddle anything that matters
-    push ax                     ; **A SLOT ACROSS A 64KB PAGE IS NOT FILLED**
-    mov cx, 288                 ; (SPEC.md 18.95.7.1). The claim has no page
-    mul cx                      ; head, so a boundary can fall inside ONE slot,
-    add ax, [dsk_rah_seg]       ; and dsk_runcap then splits that fill into two
-    and ah, 0x0F                ; int 13h - the whole point of a fill being
-    cmp ax, 0x1000 - 287        ; that it is one. The slot's first paragraph,
-    pop ax                      ; as an offset into its page: 287 more past it
-    jae %1                   ; is the next page (mem_dmaok's own test).
-                                ; The claim is under 64KB, so at most one slot
-                                ; straddles, and the width is at least
-                                ; DSK_RAH_MIN = 2, so the next one does not
+    mov ah, 32                  ; **A SLOT ACROSS A 64KB PAGE IS NOT FILLED**
+    mul ah                      ; (SPEC.md 18.95.7.1). The claim has no page
+    add ax, [dsk_rah_seg]       ; head, so a boundary can fall inside ONE slot,
+    and ah, 0x0F                ; and dsk_runcap then splits that fill into two
+    cmp ax, 0x1000 - 287        ; int 13h - the whole point of a fill being
+    jae %1                      ; that it is one. The slot's first paragraph
+                                ; (slot * 9 * 32 = slot * 288), as an offset
+                                ; into its page: 287 more past it is the next
+                                ; page (mem_dmaok's own test). The claim is
+                                ; under 64KB, so at most one slot straddles,
+                                ; and the width is at least DSK_RAH_MIN = 2,
+                                ; so the next one does not
 %ifdef KERN_MEGA
 %%slotok:
 %endif
-    mov cx, 9
-    mul cx                      ; AX = slot * RAH_REC, RAH_REC being 9...
-    mov bx, ax
-    add ax, dsk_rah_tab
-    xchg ax, si                 ; SI = the slot's record (the output)
-    cmp byte [si+RAH_HIT], 0    ; **A CHUNK A READ HAS COME BACK TO SINCE ITS
-    je %%take                    ; FILL IS SPARED ONCE** (SPEC.md 18.95.10): its
-    mov byte [si+RAH_HIT], 0    ; mark is spent and the pick moves on. Every
-    jmp short %1             ; slot spared clears its own, so the walk ends
-                                ; within one turn of the table
-%%take:
-    shl bx, cl                 ; ...and BX = its own run of the claim, RAH_REC
+    lea si, [bx+dsk_rah_tab]    ; SI = the slot's record (the output)
+    shr byte [si+RAH_HIT], 1    ; **A CHUNK A READ HAS COME BACK TO SINCE ITS
+    jc %1                       ; FILL IS SPARED ONCE** (SPEC.md 18.95.10): its
+                                ; mark (0 or 1) is spent by the shift and the
+                                ; pick moves on. Every slot spared clears its
+                                ; own, so the walk ends within one turn of the
+                                ; table (kernel size pass 20: the shift is the
+                                ; test and the clear, -7, and the paragraph
+                                ; test multiplies slot * 9 by 32, -3)
+    shl bx, cl                  ; ...and BX = its own run of the claim, RAH_REC
                                 ; == DSK_RAH_SECS making slot*512 it, with CL
                                 ; still the 9 the multiply was given
 %endmacro
@@ -7170,10 +7172,13 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 %macro RAH_SCAN 3
     mov si, dsk_rah_tab
     mov cx, [dsk_rah_runs]      ; the LIVE width. Reached only with a claim
-%1:                             ; live, so the count is never 0 here
-    cmp word [si+RAH_N], 0
-    je %3                       ; the slot says nothing
-    mov al, [disk_drive]
+%1:                             ; live, so the count is never 0 here. A
+    mov al, [disk_drive]        ; slot that says nothing (RAH_N = 0) needs no
+                                ; test of its own: the extent's `jae` below
+                                ; refuses every delta against a 0 length
+                                ; (kernel size pass 20, -6, and a filled
+                                ; slot - the cache's steady state - is a test
+                                ; and a branch cheaper)
     cmp al, [si+RAH_VOL]
     jne %3
     mov ax, [dsk_sigcur]
@@ -7588,13 +7593,11 @@ dsk_rah_pre:
                                 ; again as a bar of its own (dosbar). SI = the
                                 ; record, BX = its run, CX = 9
     mov al, [dsk_rah_runs]      ; ...and it runs on through the slots after
-    sub al, [dsk_rah_next]      ; it, up to the width: runs - (slot + 1),
-    cmp al, [dsk_rah_runs]      ; or none when the pick wrapped the cursor
-    jb .h
-    xor ax, ax
-.h:
-    inc ax
-    mul cl                      ; AX = 9 x the slots from the pick on
+    mul cl                      ; it, up to the width: 9 x (runs - slot) is
+    add ax, dsk_rah_tab         ; the live table's end less the record's
+    sub ax, si                  ; offset, a record being 9 bytes (kernel size
+                                ; pass 20, -8 against the cursor's arithmetic)
+                                ; AX = 9 x the slots from the pick on
     pop cx
     cmp cx, ax
     jbe .g
@@ -7677,10 +7680,12 @@ dsk_rah_wr:
     mov bx, dsk_rah_tab
     mov dh, [disk_drive]        ; DH = the volume and DL = the slots left: the
     mov dl, [dsk_rah_runs]      ; width is a byte (<= DSK_RAH_RUNS), which buys
-.slot:                          ; the volume a register it can keep
-    cmp word [bx+RAH_N], 0
-    je .next
-    cmp dh, [bx+RAH_VOL]
+.slot:                          ; the volume a register it can keep. An
+    cmp dh, [bx+RAH_VOL]        ; empty slot (RAH_N = 0) needs no test of its
+                                ; own: the first overlap test cannot pass a 0
+                                ; length, and the second only DROPS it again
+                                ; - an `and` of 0 into 0 (kernel size pass
+                                ; 20, -6)
     jne .next
     mov di, ax
     sub di, [bx+RAH_LBA]
@@ -7903,14 +7908,18 @@ dsk_rah_want:
     jbe .solve
     xchg ax, bx                 ; the machine's share binds before the moment's
 .solve:
-    xor dx, dx                  ; n = AX/9 - and n = 14 still wants the same
-    mov cx, 9                   ; 126KB it always did, while 40KB of free run
-    div cx                      ; now buys four slots instead of nothing
-    cmp ax, DSK_RAH_RUNS
+    mov cl, 9                   ; n = AX/9 - and n = 14 still wants the same
+    div cl                      ; 126KB it always did, while 40KB of free run
+    cbw                         ; now buys four slots instead of nothing. A
+                                ; BYTE divide: AX is at most BX here, half the
+                                ; arena in KB (<= 511), so the quotient is
+                                ; under 57 and AL holds it; `cbw` is AH = 0
+                                ; over the remainder (kernel size pass 20, -4
+                                ; with the byte compares and `mul cl` below)
+    cmp al, DSK_RAH_RUNS
     jbe .cap
-    mov ax, DSK_RAH_RUNS        ; the ceiling: 18.95.4's segment-offset bound
-.cap:                           ; - AND the one that makes AH zero, so the two
-                                ; bounds below are a byte wide
+    mov al, DSK_RAH_RUNS        ; the ceiling: 18.95.4's segment-offset bound
+.cap:
     cmp al, [dsk_rah_cap]       ; ...and A CEILING SOMEBODY ELSE SET (18.95.8),
     jbe .width                  ; which is a third minimum and needs no
     mov al, [dsk_rah_cap]       ; special case: DSK_RAH_AUTO is above every
@@ -7921,7 +7930,7 @@ dsk_rah_want:
     push ax                     ; eats the cache. THE WIDTH THIS CLAIM WANTS -
                                 ; banked, because it is only WRITTEN once the
                                 ; memory is really there (below)
-    mul cx                      ; AX = n*9, CX being the 9 the divide left
+    mul cl                      ; AX = n*9, CL being the 9 the divide left
                                 ; there and nothing between having touched it
     mov cl, 5
     shl ax, cl                  ; ...and PARAGRAPHS = n * 288, a chunk being
@@ -8412,17 +8421,18 @@ dsk_find_x:
     or ah, ah                   ; entries (the walk is dsk_dscan's, shared
     jz .ord                     ; with fcp_scan) - unless AH = 1, FILE_FIND_SEQ
     xchg cx, bp                 ; (SPEC.md 19.7.1.1): CX is then a TOKEN, the
-    mov bx, sp                  ; slot to resume at, BP = 0 entries to step
-    mov [ss:bx], bp             ; over, and the banked answer 0 - which no
+    pop bx                      ; slot to resume at, BP = 0 entries to step
+    push bp                     ; over, and the banked answer 0 - which no
 .ord:                           ; ordinal's successor is - until the walk
     mov ax, [dsk_cwd]           ; says where the next call starts
     call dsk_dscan              ; FERR_NOENT or FERR_IO
     jc .fail
-    mov bx, sp
-    cmp word [ss:bx], 0         ; the token walk answers dsk_dscan's own CX,
-    jne .ordn                   ; the slot after this entry: linear, where
-    mov [ss:bx], cx             ; the ordinal walk is N(N+1)/2 visits
-.ordn:
+    pop bx                      ; the token walk answers dsk_dscan's own CX,
+    or bx, bx                   ; the slot after this entry: linear, where
+    jnz .ordn                   ; the ordinal walk is N(N+1)/2 visits. BX is
+    mov bx, cx                  ; nobody's from here (kernel size pass 20: a
+.ordn:                          ; pop and a push where the frame was addressed
+    push bx                     ; through SP, -6)
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
     je .stage                   ; FSV_ENUM's answer: no raw entry behind it
