@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "84f3034b8d7a05ec9b438400a8ff83895e7523919554d79bdaa6a3c89046b226",
+  "fingerprint": "656c4d3e833541a611013b08fcb90cc38806ad506fedec67f45aebef1324010f",
   "version": 14
  },
  "HD_ABI_VER": {
@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "9cf163fa5251d2493ec9eb4d9854898576ff734685e668bbce89a8313856d825",
+  "fingerprint": "f6c2cf20149faee82be3681877c01727821c71336bbcd768c3f24ac704cec33d",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2238,6 +2238,20 @@
    "from": 14,
    "guard": "DRV_VER",
    "reason": "MEM_K_SEAM (kern_mega's huge-read seam claim tag) mirrored into the SDK for the Task Manager's heap page; a constant added, nothing built before changes",
+   "to": 14
+  },
+  {
+   "fingerprint": "f6c2cf20149faee82be3681877c01727821c71336bbcd768c3f24ac704cec33d",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 50.6.13.2: two owner tags added (MEM_P_ICO_SM, MEM_P_DIRW_SM), kern_small's spellings of the icon store's and the read-ahead's tags for the Task Manager; nothing built before changes meaning, no bump",
+   "to": 13
+  },
+  {
+   "fingerprint": "656c4d3e833541a611013b08fcb90cc38806ad506fedec67f45aebef1324010f",
+   "from": 14,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 50.6.13.2: two owner tags added (MEM_P_ICO_SM, MEM_P_DIRW_SM), kern_small's spellings of the icon store's and the read-ahead's tags for the Task Manager; nothing built before changes meaning, no bump",
    "to": 14
   }
  ]

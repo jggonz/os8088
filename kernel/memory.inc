@@ -187,8 +187,12 @@ MEM_P_MSAVE equ MEM_PG_TRIV<<8 | 0x02   ; THE MENU SAVE-UNDER (SPEC.md 12.4.2):
                                 ; back to - and a SAVE-UNDER IS NEVER A WALL,
                                 ; the mem_avail plan and a compacting claim
                                 ; both dissolve it (mem_pg_cheap, mem_cp_drop)
+%ifndef KERN_SMALL
 MEM_P_ICO  equ MEM_PG_TRIV<<8 | 0x01    ; THE MACHINE-WIDE ICON STORE (SPEC.md
-MEM_P_ICO_N equ 1               ; 25.9), and TRIV because losing it costs a
+%else                           ; 25.9) - and on kern_small its own spelling,
+MEM_P_ICO  equ MEM_P_ICO_SM     ; MEM_P_ICO_SM below (SPEC.md 50.6.13.2)
+%endif
+MEM_P_ICO_N equ 1               ; TRIV (but on kern_small) because losing it costs a
                                 ; REDRAW and not a read: every reference then
                                 ; resolves to SPEC.md 25's generic icon, and
                                 ; the next mount fills the rows back from the
@@ -199,6 +203,16 @@ MEM_P_ICO_N equ 1               ; 25.9), and TRIV because losing it costs a
                                 ; binds this machine
                                 ; (docs/reports/DOS-GAMES-2026-09-16.md has
                                 ; Chip 'n Dale losing by three kilobytes)
+MEM_P_ICO_SM equ MEM_PG_LOW<<8 | 0x01   ; kern_small's tag for the store
+                                ; (SPEC.md 50.6.13.2): LOW, beside the
+                                ; listings and above the save-unders and the
+                                ; read-ahead, because that kernel has no
+                                ; ASSOC.DAT - losing the store there is a
+                                ; sector PER PACKAGE at the next listing,
+                                ; seconds on the target, not one file read.
+                                ; Not MED: an icon claim would then outrank,
+                                ; and shed, the Disk windows' listings that
+                                ; its icon passes are filling it for
 MEM_K_ICO_UNUSED equ 0xFF0E     ; ...the ordinary tag it had before, kept as a
                                 ; number nobody may reuse while a hibernation
                                 ; image written with it could still be read
@@ -457,7 +471,18 @@ MEM_P_MOD_N equ 32              ; (SPEC.md 2.8.3): MEM_K_MOD's claim re-tagged
                                 ; system disk in the drive - "a little I/O, or
                                 ; a visible pause"; never TRIV, which a window
                                 ; raise cache's claim could then take
+MEM_P_DIRW_SM equ MEM_PG_TRIV<<8 | 0x03 ; kern_small's tag for the read-ahead
+                                ; (SPEC.md 50.6.13.2): TRIV there and BELOW
+                                ; the icon store, so a refusal sheds it
+                                ; first - losing it costs the next reads
+                                ; their batching until the next mount, where
+                                ; the icons cost a sector per package. 0x03
+                                ; because MEM_P_MSAVE holds TRIV's 0x02
+%ifdef KERN_SMALL
+MEM_P_DIRW  equ MEM_P_DIRW_SM
+%else
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
+%endif
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
                                 ; (SPEC.md 18.95), which on the target machine
@@ -940,7 +965,8 @@ mem_floor_ax:
                                 ; (kern_small's PARITY PAD that stood here,
                                 ; never executed, went again when SPEC.md
                                 ; 50.6.13.1's mem_evmv moved `.cold` by an
-                                ; odd count: dsk_xfer, dsk_runcap and
+                                ; odd count; 50.6.13.2 moved it by an even
+                                ; one. dsk_xfer, dsk_runcap and
                                 ; dsk_next_clus_x sit past it, and
                                 ; tests/unit/t_hotpar.py measures them)
 
@@ -1223,6 +1249,7 @@ mem_claim_1:
     push bp
     pushf
     cli                         ; the whole scan-and-publish, one window -
+.ifoff:                         ; (a label, no byte: smallfrag's IF = 0 meter)
 %ifdef MEM_EVICT
     call mem_evrank             ; (and the rank its scan may evict below,
 %endif                          ; SPEC.md 50.6.13, inside the same window)
@@ -1413,6 +1440,7 @@ mem_claim_1:
     SKIPF2                      ; ...over .fail's `xor dx, dx`: DX is the base
 .fail:                          ; here, a segment above [mem_base] and so never
     xor dx, dx                  ; 0, and 0 on every refusal - so ONE compare
+.pf:                            ; (smallfrag's IF = 0 meter: the window's end)
     popf                        ; after the shared popf IS the answer, CF = 1
     cmp dx, 1                   ; iff DX = 0 (kernel size pass 17, -1: the
 .out:                           ; success arm's own popf / clc / jmp)
@@ -1507,7 +1535,11 @@ mem_pg_viewrow:
 ; 50.6.13.1), found by value: the icon store's, and each Disk window's
 ; listing - FS_VSEG in every fm_pool block and the [fm_vseg] mirror
 mem_evw:
-    dw fm_vseg, ico_seg         ; the MIRROR FIRST: mem_evmv's hit test
+    dw fm_vseg, ico_seg         ; the MIRROR FIRST, index 0: mem_evmv's test
+    dw dsk_rah_seg              ; ...and the read-ahead (SPEC.md 50.6.13.2):
+                                ; one word, its table holds LBAs and lengths
+                                ; and no address, so the word is all a move
+                                ; has to re-point (dsk_rah_reloc's argument)
 %assign mem_evw_i 0
 %rep MEM_P_VIEW_N
     dw fm_pool + FS_VSEG + mem_evw_i*FS_SIZE
@@ -2024,6 +2056,19 @@ mem_bcopy:
     push ax
     push cx
     push di
+%ifdef MEM_EVICT
+    inc byte [sch_lock]         ; kern_small: THE COPY RUNS AT IF = 1 UNDER
+    sti                         ; THE SCHEDULER LOCK (SPEC.md 50.6.13.2).
+.ifon:                          ; (labels, no byte: smallfrag's IF = 0 meter)
+                                ; Both callers are IF = 0 windows with the
+                                ; heap mid-operation, and only a TASK could
+                                ; see that - no ISR claims, frees or reads a
+                                ; heap record or a cache this moves - so an
+                                ; interrupt is serviced and no task runs: the
+                                ; compactor's own terms on kern_big. A 13.5KB
+                                ; read-ahead is ~35 ms of copy, and an 8250
+                                ; holds ONE byte, 8.3 ms at 1200 baud
+%endif
     cld                         ; DF is 0 except inside .uchunk below
     xor dx, dx                  ; a forward chunk starts at its first word
     cmp di, si
@@ -2036,6 +2081,11 @@ mem_bcopy:
     add di, ax
     jmp short .chunk
 .done:
+%ifdef MEM_EVICT
+.ifoff:
+    cli                         ; IF = 0 again, as both callers' windows are,
+    dec byte [sch_lock]         ; before the lock goes (dec writes no CF:
+%endif                          ; mem_evmv reads it)
     pop di
     pop cx
     pop ax
@@ -2747,6 +2797,27 @@ mem_in_nest:
 ; mount. kern_small has no compactor, so the shed is its only caller there and
 ; MEM_RR_ONE dsk_dseg (a MOVE's backstop) covers nothing.
 ; -----------------------------------------------------------------------------
+%ifdef MEM_EVICT
+; mem_pg_cheap - kern_small's (its banner is below, at the other kernels').
+; The same two compares, and then ...AND NOT THE DIRTY FAT WINDOW OR THE AIMED
+; LISTING (mem_shed_one's own exception): on kern_small this predicate EVICTS
+; (SPEC.md 50.6.13), so it has to refuse what the shed refuses - and
+; mem_avail, asking the same door, then stops counting either as room. It is
+; HERE so that it FALLS INTO mem_fatw_dirty rather than popping AX to jump to
+; it, and its refusals ARE mem_fatw_dirty's `.yes` (stc / pop ax / ret) -
+; kernel size, -6, SPEC.md 50.6.13.2
+%ifndef KERN_SMALL
+  %error "mem_pg_cheap's SKIPAL1 needs mem_fatw_dirty's KERN_SMALL arm, which reloads AX first"
+%endif
+mem_pg_cheap:
+    push ax
+    mov al, [ss:si+MC_OWN+1]
+    cmp al, MEM_PG_MIN
+    jb mem_fatw_dirty.yes       ; not a cache at all
+    cmp al, [mem_pg_rank]
+    jae mem_fatw_dirty.yes      ; not cheaper than the claimant
+    SKIPAL1                     ; over mem_fatw_dirty's `push ax` - pushed
+%endif                          ; above - writing only AL, which it reloads
 mem_fatw_dirty:
     push ax
 %ifdef KERN_SMALL
@@ -2890,23 +2961,18 @@ mem_in_xfer:                    ; TWO WORDS (docs/plans/NO-PINNING-PLAN.md
 ; (mem_shed_one's own copy is deliberately NOT merged: it is inside the scan
 ; and holds its candidate's level in AL rather than reading the global.)
 ; -----------------------------------------------------------------------------
-mem_pg_cheap:
+%ifndef MEM_EVICT                ; (kern_small's is IN FRONT OF
+mem_pg_cheap:                   ; mem_fatw_dirty, and falls into it)
     push ax
     mov al, [ss:si+MC_OWN+1]
     cmp al, MEM_PG_MIN
     jb .no
     cmp al, [mem_pg_rank]
     jae .no
-%ifdef MEM_EVICT
-    pop ax                      ; ...AND NOT THE DIRTY FAT WINDOW OR THE AIMED
-    jmp mem_fatw_dirty          ; LISTING (mem_shed_one's own exception): on
-%endif                          ; kern_small this predicate EVICTS (SPEC.md
-                                ; 50.6.13), so it has to refuse what the shed
-                                ; refuses - and mem_avail, asking the same
-                                ; door, then stops counting either as room
     CLC_OR_STC .no              ; CF = 0 takeable, or (.no) CF = 1
     pop ax
     ret
+%endif
 
 %ifdef MEM_EVICT
 ; -----------------------------------------------------------------------------
@@ -2923,16 +2989,18 @@ mem_pg_cheap:
 ; -----------------------------------------------------------------------------
 mem_evrank:
     push ax
-    xor ax, ax                  ; AL = 0: evict nothing
-    cmp [sch_cur], al           ; ...ON ANY TASK BUT THE UI TASK, SPEC.md
-    jne .c                      ; 66.3.1's rule for the shed on kern_big: a
-                                ; cache the pre-empted UI task holds in a
-                                ; register is not another task's to free
     mov al, bh
     sub al, MEM_PG_MIN          ; a cache level is MEM_PG_MIN..MEM_PG_MAX, so
     cmp al, MEM_PG_MAX - MEM_PG_MIN + 1  ; one unsigned compare: below it,
     mov al, 0                   ; a cache, which evicts nothing (mov writes
-    jb .c                       ; no flag)
+    jb .c                       ; no flag)...
+    cmp [sch_cur], al           ; ...AND NOTHING ON ANY TASK BUT THE UI TASK,
+    jne .c                      ; SPEC.md 66.3.1's rule for the shed on
+                                ; kern_big: a cache the pre-empted UI task
+                                ; holds in a register is not another task's
+                                ; to free. (The task test second and AL's
+                                ; zero shared: kernel size, -2, SPEC.md
+                                ; 50.6.13.2)
     call mem_rank_bh            ; ...else the rank net of the caller's floor
 .c:                             ; (SPEC.md 50.6.6), as the shed takes it
     mov [mem_pg_rank], al
@@ -2943,7 +3011,7 @@ mem_evrank:
 ; mem_evict - shed every cache [mem_pg_rank] outranks that [DX, DX + AX)
 ;             overlaps (SPEC.md 50.6.13)
 ; in:  DX = the first paragraph, AX = paragraphs; IF = 0 (the caller's
-;      window: mem_claim_1's publish, mem_regrowp's paths 2 and 3)
+;      window: mem_claim_1's publish, mem_regrowp's .set and its path 3)
 ; out: nothing; every register kept, the flags not (no caller reads them)
 ;
 ; mem_shed_one's tail for each record it meets: the owner told through
@@ -2952,17 +3020,17 @@ mem_evrank:
 ; exactly the records the scan stepped over are the ones that go.
 ; -----------------------------------------------------------------------------
 mem_evict:
-    push bx
-    push cx
-    push si
-    mov cx, dx
+    call kentc_di               ; KENT: push ax..di (a byte under its own
+    mov cx, dx                  ; three pushes and pops: SPEC.md 50.6.13.2)
     add cx, ax                  ; CX = one past the block
-    mov si, MEM_FIRST
-.n:
-    call mem_next
-    jc .out
-    call mem_pg_cheap
-    jc .n                       ; not a cache this claim outranks
+    mov di, MEM_P_DIRW          ; TWO PASSES, THE READ-AHEAD IN THE SECOND
+.p:                             ; (SPEC.md 50.6.13.2): the first passes over
+    mov si, MEM_FIRST           ; the owner in DI, so the icon store and the
+.n:                             ; listings take the free holes first - table
+    call mem_next               ; order would hand one hole to whichever
+    jc .end                     ; record is lower, and the read-ahead's, the
+    call mem_pg_cheap           ; boot mount's, is usually the lowest.
+    jc .n                       ; Not a cache this claim outranks
     mov bx, [ss:si+MC_SEG]
     cmp bx, cx
     jae .n                      ; starts at or past our end
@@ -2970,22 +3038,29 @@ mem_evict:
     cmp bx, dx
     jbe .n                      ; ends at or before our start
     mov bx, [ss:si+MC_OWN]
+    cmp bx, di
+    je .n                       ; the first pass's one exception
     call mem_evmv               ; MOVED into a free hole, when one fits and
     jnc .n                      ; the owner reads it by a word mem_evw holds
     call mem_pg_forget          ; ...else the owner first (every register kept)
     and word [ss:si+MC_SEG], 0
     jmp short .n
-.out:
-    pop si
-    pop cx
-    pop bx
-    ret
+.end:                           ; MEM_P_DIRW is NEGATIVE as a word, so `neg`
+    neg di                      ; makes it a positive one, which no cache's
+    jns .p                      ; owner is - the second pass skips nothing -
+    jmp short mem_evmv.out      ; and the second makes it negative: done.
+                                ; (mem_evmv's own `jmp kretc_di`, two bytes
+                                ; away where kretc_di is three)
+%if (MEM_P_DIRW & 0x8000) == 0 || MEM_P_DIRW == 0x8000
+  %error "mem_evict's pass word: MEM_P_DIRW must be negative, and not -32768"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; mem_evmv - MOVE an overlapped cache to a FREE hole instead of evicting it
 ;            (SPEC.md 50.6.13.1)
 ; in:  SI = the cache's record, BX = its owner, [DX, DX + AX) = the block that
-;      is about to land on it; IF = 0 (mem_evict's caller's window)
+;      is about to land on it; IF = 0 (mem_evict's caller's window) - and
+;      the COPY at IF = 1 under [sch_lock] (mem_bcopy, SPEC.md 50.6.13.2)
 ; out: CF = 0 moved: its bytes copied, its record re-based and every word in
 ;      mem_evw that named the old base naming the new one. CF = 1 not: no
 ;      hole, or no word in mem_evw names it - the record is then left based
@@ -3007,12 +3082,13 @@ mem_evict:
 ; live claim, so the one equal to the old base is the one that names it -
 ; except the [fm_vseg] mirror, which can be stale, and so is re-pointed when
 ; it matches but is not on its own a reason to move.
-; That table is the whole of WHICH caches move - the icon store and the Disk
-; windows' listings, and both of a listing's words (FS_VSEG and the
-; [fm_vseg] mirror, fm_reloc's pair). A cache with no word there is evicted
-; as before: the dirty FAT window and the aimed listing never get here
-; (mem_pg_cheap), and the read-ahead, the save-unders and a kept module are
-; cheaper to lose than to hold the machine's interrupts off to copy.
+; That table is the whole of WHICH caches move - the icon store, the Disk
+; windows' listings, both of a listing's words (FS_VSEG and the [fm_vseg]
+; mirror, fm_reloc's pair), and since SPEC.md 50.6.13.2 the read-ahead,
+; whose 13.5KB is copied with the interrupts on. A cache with no word there
+; is evicted as before: the dirty FAT window and the aimed listing never get
+; here (mem_pg_cheap), and the save-unders and a kept module are cheaper to
+; lose than to copy.
 ;
 ; ONLY THE UI TASK EVICTS (mem_evrank), so only it moves - SPEC.md 66.3.1's
 ; reason: a cache a pre-empted task holds in a register is not another
@@ -3028,23 +3104,26 @@ mem_evmv:
     xchg bl, [mem_pg_rank]
     jc .out                     ; no hole
     mov [ss:si+MC_SEG], cx      ; the record follows the bytes (a refusal
-    mov bx, mem_evw             ; below is evicted, which frees it)
-    mov di, bx                  ; DI = the last word that named it
+                                ; below is evicted, which frees it)
+    mov bx, mem_evw_end - mem_evw - 2   ; the table walked DOWN by index
+    xor di, di                  ; DI = the OR of every index that named it
 .w:
-    mov si, [bx]
+    mov si, [bx+mem_evw]
     cmp [si], dx
     jne .wn
     mov [si], cx                ; the owner's word follows the bytes too
-    mov di, bx
+    or di, bx
 .wn:
-    inc bx
-    inc bx
-    cmp bx, mem_evw_end
-    jb .w
-    cmp di, mem_evw + 1         ; CF = 1: none did, past the MIRROR - the
-    jc .out                     ; one word that can be stale (a closed
-                                ; window's, until fm_vp_set), so a hit there
-                                ; alone is not a cache that moves
+    dec bx
+    dec bx
+    jns .w                      ; ...down to index 0, the MIRROR, whose 0
+    cmp di, 1                   ; ORs in nothing: CF = 1 when no word but
+    jc .out                     ; the mirror named it - the one word that can
+                                ; be stale (a closed window's, until
+                                ; fm_vp_set), so a hit there alone is not a
+                                ; cache that moves. (Indexed and walked down,
+                                ; an OR for the hit: kernel size, -3, SPEC.md
+                                ; 50.6.13.2)
     mov si, dx
     mov di, cx
     xchg cx, ax                 ; mem_bcopy: SI to DI, CX paragraphs - and
@@ -4975,6 +5054,7 @@ mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
     push di                     ; size pass 10)
     pushf                       ; (no push, pushf or cli writes CF)
     cli
+.ifoff:                         ; (a label, no byte: smallfrag's IF = 0 meter)
     jnc .para
     cmp ax, 1024                ; 1MB and more refused BEFORE the shift, as
     jae .fail                   ; mem_claim_x does: the shift's CF is the
@@ -5012,13 +5092,7 @@ mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
     mov cx, dx
     add cx, [ss:si+MC_PARA]        ; CX = our end = the extension's start
     call mem_runfree            ; ([mem_skip] is left naming us: the only
-%ifdef MEM_EVICT
-    jc .move                    ; EXTEND IN PLACE OVER AN OUTRANKED CACHE
-    call mem_evict              ; (SPEC.md 50.6.13): [DX, DX + AX) is the
-    jmp short .set              ; whole new extent, and we are not a cache
-%else                           ; anything here outranks
     jnc .set                    ; other reader is mem_hifit, which zeroes it
-%endif
                                 ; first - kernel size pass 16, -6). It does:
                                 ; extend, copy nothing
 
@@ -5084,6 +5158,16 @@ mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
 %endif
     mov dx, cx                  ; ...and the caller is told where it went
 .set:                           ; (all three paths: the new length)
+%ifdef MEM_EVICT
+    call mem_evict              ; EXTEND IN PLACE OVER AN OUTRANKED CACHE
+%endif                          ; (SPEC.md 50.6.13): [DX, DX + AX) is the
+                                ; whole new extent, and we are not a cache
+                                ; anything here outranks. HERE, for every
+                                ; path, and not in path 2 alone: path 1's
+                                ; extent is inside its own record and path
+                                ; 3's was cleared before its copy, so both
+                                ; find nothing - a walk, for two bytes
+                                ; (SPEC.md 50.6.13.2)
     mov [ss:si+MC_PARA], ax
 %ifdef KERN_MEGA
     MEM_MP mem_mpsync           ; (its pair's window, MC7.4) - and in
@@ -5092,6 +5176,7 @@ mem_regrowp:                    ; register, no flag (kernel size pass 20, -1,
     mov dx, [ss:mem_rgv]        ; change when its bytes move
 .setr:
 %endif
+.pf:                            ; (a label, no byte: smallfrag's IF = 0 meter)
     popf
     SKIPF2                      ; test ax, imm16 over .fail's popf/stc: CF = 0
 .fail:                          ; (kernel size pass 15)

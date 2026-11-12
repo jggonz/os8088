@@ -2941,6 +2941,14 @@ MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95
 MEM_P_RAHB  equ MEM_PG_HIGH<<8 | 0x03   ; kern_mega's read-ahead LANDING: the
                                  ; conventional bounce under the store above
                                  ; 1MB (docs/plans/KERN-MEGA-PLAN.md item 32)
+MEM_P_ICO_SM equ MEM_PG_LOW<<8 | 0x01  ; kern_small's spellings of MEM_P_ICO
+MEM_P_DIRW_SM equ MEM_PG_TRIV<<8 | 0x03 ; and MEM_P_DIRW (SPEC.md 50.6.13.2):
+                                 ; there the icon store OUTRANKS the
+                                 ; read-ahead - no ASSOC.DAT, so losing it is
+                                 ; a sector per package - and a refusal sheds
+                                 ; the read-ahead first. Mirrored here for
+                                 ; MEM_P_VIEW's reason: the Task Manager names
+                                 ; the claim table through the SDK
 
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
 ; THERE IS NO `SK_DSK` (SPEC.md 20.9). It was the mount's own buffers, and

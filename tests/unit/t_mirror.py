@@ -235,6 +235,16 @@ PY_MIRROR = {
 #
 # SPEC.md 51.0 took the same decision for MEM_P_FATW_N and states the rule.
 DIVERGENT = {
+    "MEM_P_ICO": "kern_small spells it MEM_P_ICO_SM, LOW and not TRIV "
+                 "(SPEC.md 50.6.13.2): with no ASSOC.DAT losing the icon "
+                 "store there is a sector per package, so it outranks the "
+                 "read-ahead and the save-unders. The SDK keeps every other "
+                 "kernel's TRIV and carries MEM_P_ICO_SM beside it, which "
+                 "the Task Manager names",
+    "MEM_P_DIRW": "kern_small spells it MEM_P_DIRW_SM, TRIV and not HIGH "
+                  "(SPEC.md 50.6.13.2): there the read-ahead is shed before "
+                  "the icon store. The SDK keeps every other kernel's HIGH "
+                  "and carries MEM_P_DIRW_SM beside it",
     "MAX_TASKS": "kern_small has 7 slots (SPEC.md 8.7, "
                  "docs/plans/retired/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
                  "taskmgr sizes SS_TSTATE from it, so a package built at 14 "

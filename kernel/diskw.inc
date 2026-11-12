@@ -3330,7 +3330,11 @@ dskw_sync_x:
                                 ; the single remount at its end has left
     cmp byte [dskw_batch], 0    ; a tree copy remounts ONCE, when it ends -
     jne .defer                  ; not after every one of its files (22.3)
-    mov word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
+%ifdef KERN_SMALL
+    and word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
+%else                           ; (`and`: the flags it leaves are the `cmp`'s
+    mov word [disk_nfiles], 0   ; above, ZF = 1 and CF = 0 - SPEC.md
+%endif                          ; 50.6.13.2's byte)
     mov byte [dsk_lstale], 1    ; the debt, exactly the state a quiet mount
                                 ; leaves (18.9): a wrong listing is worse than
                                 ; no listing, and the next listing mount pays

@@ -1535,6 +1535,9 @@ tm_s_twsav: db 'WinSave', 0
 ; MEM_P_WSAVE is NOT here: it
 ; is a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests
 ; it before it walks this. Why some rows are here at all:
+;   MEM_P_DIRW_SM, MEM_P_ICO_SM - kern_small's tags for the read-ahead and
+;                 the icon store (SPEC.md 50.6.13.2): the same two claims,
+;                 ranked the other way round there
 ;   MEM_P_ICO   - the machine-wide icon store (SPEC.md 25.9), one row per
 ;                 DISTINCT body, claimed at the first mount that harvests one
 ;                 and alive until purged: leaving it out put a permanent hex
@@ -1593,6 +1596,8 @@ tm_ktab:
     dw MEM_P_RAHB,  'RdLand', 0
     dw MEM_P_FLIST, 'FileClp'
     dw MEM_P_ICO,   'Icons', 0
+    dw MEM_P_DIRW_SM, 'DirRead'
+    dw MEM_P_ICO_SM, 'Icons', 0
     dw 0
 TMK_REC     equ 10              ; owner word + an eight-byte name
 %if ($ - tm_ktab - 2) % TMK_REC

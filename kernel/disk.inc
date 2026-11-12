@@ -7873,7 +7873,7 @@ dsk_rah_want:
     jnc .out
 .conv:
 %endif
-    mov al, MEM_PG_HIGH         ; ...at OUR OWN rank (SPEC.md 50.6.4), so a
+    mov al, MEM_P_DIRW >> 8     ; ...at OUR OWN rank (SPEC.md 50.6.4), so a
     call mem_avail_lvl_x          ; cheaper cache counts as free and a dearer one
                                 ; does not. This window is the most expensive
                                 ; cache in the system to lose and the raise

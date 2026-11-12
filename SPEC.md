@@ -104859,7 +104859,7 @@ Paint's canvas belongs), so going back to the Disk window re-lists from
 the disk. Before this they survived - in the room that then walled Paint #2.
 **§50.6.13.1 takes most of that back**: the icon store and the listing are
 MOVED into a free hole when one fits, and only the read-ahead (and the
-caches nobody waits on) goes.
+caches nobody waits on) goes - and §50.6.13.2 moves the read-ahead too.
 
 **`kern_small` only** (`MEM_EVICT`, kernel.asm). `kern_big`, `kern_emu`
 and `kern_mega` compact, and §66.10 already takes a walling cache down
@@ -104910,10 +104910,10 @@ evicted as before.
   the one equal to the old base is the one naming it; the mirror alone can
   be stale (a closed window's, until `fm_vp_set`), so a hit there alone
   does not count as a word naming it. That table IS which caches move: the
-  icon store (`MEM_P_ICO`) and the listings (`MEM_P_VIEW`). The read-ahead
-  (`MEM_P_DIRW`, 13.5KB - a copy of ~35 ms with interrupts off, against a
-  re-read of one directory), the save-unders, the menu's and a kept module
-  are still evicted; the dirty FAT window and the aimed listing never reach
+  icon store (`MEM_P_ICO`) and the listings (`MEM_P_VIEW`) - and, since
+  50.6.13.2, the read-ahead (`MEM_P_DIRW`), whose 13.5KB copy runs with the
+  interrupts on. The save-unders, the menu's and a kept module are still
+  evicted; the dirty FAT window and the aimed listing never reach
   it (`mem_pg_cheap`).
 - **The rank of the icon store is not wrong for this**: `MEM_PG_TRIV` is
   what a SHED takes first (50.6.4), and eviction ignores rank among the
@@ -104930,7 +104930,8 @@ evicted as before.
   a copy of the cache's paragraphs - the icon store and a listing are 2KB
   each, about 1,024 `movsw` at ~25 clocks on the 8088 (`tests/smallfrag.py`'s
   `iconmove` leg measures the whole move in cycles), against a re-fetch
-  of seconds.
+  of seconds. Since 50.6.13.2 the copy itself runs at IF = 1 under
+  `[sch_lock]`; what stays IF = 0 is the walk.
 
 **Item 3 of the same report, closed where it is not**: `fcp_arm` (Cut and
 Copy, `FILECP.DRV` on this kernel) LOADS its image top-down and then reads
@@ -104951,6 +104952,121 @@ again (-1: `tests/unit/t_hotpar.py`), `.cold` +74; `mem_evw` `.text` +14;
 `fcp_arm`'s refusal `.cold` +8 - **96 bytes, resident**, inside the rung:
 `kernsize`'s `rungs kernel 57,344` with 21 left, from 117. Every other
 kernel: every routine the same.
+
+##### 50.6.13.2 …and the read-ahead MOVES too, copied with the interrupts on; the icons outrank it
+
+**The owner's decisions** (2026-11-12, on top of 50.6.13.1): (1) move the
+read-ahead (`MEM_P_DIRW`, 13.5KB) as well, rather than evict it, when a free
+hole fits it - evicted, the next reads run without it until the next mount
+re-makes it, although there was room - and do it **without a long IF = 0
+window**; (2) on `kern_small` the icon store must OUTRANK the read-ahead:
+losing the icons costs seconds there (no `ASSOC.DAT`), losing the read-ahead
+one slower read before the next mount.
+
+**The move.** `dsk_rah_seg` joins `mem_evw`, so `mem_evmv` moves the
+read-ahead exactly as it moves the icon store: the bytes copied, the record
+re-based, the one word re-pointed. One word is all of it - `dsk_rah_tab`
+holds LBAs and lengths and no address, which is `dsk_rah_reloc`'s argument on
+`kern_big` - and a fill cannot be in flight into it, because only the UI task
+moves (`mem_evrank`) and a fill is that task's own synchronous `int 13h`
+under `[sch_lock]`. The claim stays 512-byte aligned (every `mem_hifit`
+candidate is a granule edge, `MEM_GRAN` = 32 paragraphs), and the one slot a
+64KB page crosses is found from the base at every fill (18.95.7.1), so a
+moved store needs nothing re-solved.
+
+**The interrupts: the copy runs at IF = 1 under the scheduler lock.** A
+13.5KB copy is ~200,000 cycles (~42 ms) on the 8088, the claim that makes it
+was one IF = 0 window, and an original 8250 holds ONE received byte - 8.3 ms
+at 1200 baud 8N1 - so five of the serial mouse's bytes would be lost: a
+garbled packet. So **`mem_bcopy` raises `[sch_lock]` and `sti`s for the whole
+copy, and `cli`s before it lowers the lock** (kern_small only). An interrupt
+is serviced the moment it arrives and no TASK runs, which is the whole of
+what has to be true: the claim is mid-operation - the record re-based, the
+words re-pointed, the new block not yet published, `[mem_pg_rank]` and
+`[mem_dma]` the claim's own - and only a task could see any of that. No ISR
+claims, frees or reads a heap record, the read-ahead, the icon store or a
+listing; an ISR loads its own DS and `cld`s, and `iret` gives `.uchunk` its
+DF back. It is the compactor's own terms on `kern_big`, which copies at
+IF = 1 under the same lock. Chunked windows between the 1KB chunks were the
+other form and cost the same two bytes; the copy at IF = 1 services an
+interrupt at once rather than up to a chunk (~2.7 ms) late. Both of
+`mem_bcopy`'s callers on this kernel get it - `mem_evmv` and
+`mem_regrowp`'s path 3, whose copy of the grower was one IF = 0 window too -
+and so do the icon store's and the listings' 2KB moves, which were ~40,000
+cycles IF = 0 each (8.4 ms, already over a byte).
+
+**Measured** (`tests/smallfrag.py`'s `ifwindow`, the 128KB Hercules, Paint
+opened from `A:/APPS`): three claims copy, five moves (the read-ahead twice,
+~200,000 cycles each), and the longest IF = 0 stretch of any of them is
+**25,005 cycles, 5.2 ms** - the claim's own scan, `mem_evict` and the first
+`mem_hifit` walk in front of the first copy - against 39,772 for a
+1200-baud byte. Those claims end to end are ~249,000, ~55,000 and ~263,000
+cycles, which is what each would hold at IF = 0 without the lock and the
+`sti` (seen: taking the `sti` out reads 260,602). The read-ahead moves TWICE
+in that launch because `mem_hifit` places a moved cache at the bottom of the
+HIGHEST run that fits, and Paint's region then comes down from the top onto
+it - a second copy rather than a loss, and a placement 50.6.13.1 chose.
+
+**The rank** (50.6.4) is chosen per kernel inside the kernel, and the SDK's
+values are not changed: on `kern_small` the icon store is `MEM_P_ICO_SM`
+(`MEM_PG_LOW<<8 | 0x01`) and the read-ahead `MEM_P_DIRW_SM`
+(`MEM_PG_TRIV<<8 | 0x03`; `MEM_P_MSAVE` holds TRIV's `0x02`), and
+`kernel/memory.inc` spells `MEM_P_ICO` / `MEM_P_DIRW` as those there. Every
+other kernel keeps `MEM_P_ICO` TRIV and `MEM_P_DIRW` HIGH - the icons re-fetch
+from `ASSOC.DAT` in one read there, so the SDK's values are not wrong. The
+shed order on `kern_small`, first taken to last:
+
+| tier | caches |
+|---|---|
+| TRIV | the read-ahead, the window save-unders, the menu's |
+| LOW | the icon store, the Disk windows' listings, a kept module |
+| MED | a clean FAT window |
+
+The read-ahead sits with the save-unders (a refusal takes whichever is lower
+in `mem_tab` of those) because what it costs is batching, not a re-read of
+anything the user is looking at. The icon store sits with the listings and
+not above them: at MED an icon claim or grow would OUTRANK the listings, and
+the icon passes that claim and grow it run while a listing is being filled,
+so a refusal there could shed the listing being filled. It is above the
+save-unders because those cost one window's redraw and the store a sector
+per package. Two consequences follow from the ranks and are wanted: the
+read-ahead's claim (`dsk_rah_want`, which asks `mem_avail_lvl_x` at its own
+rank - `MEM_P_DIRW >> 8` now, not a literal HIGH) no longer sheds the icons,
+a listing or a FAT window to make room at a mount, and an icon-store claim or
+grow that is refused sheds the read-ahead first. The Task Manager names both
+spellings (`tm_ktab`); `tests/unit/t_mirror.py` carries `MEM_P_ICO` and
+`MEM_P_DIRW` as DIVERGENT with this reason, and `tests/unit/t_pgrank.py`
+holds kern_small's order.
+
+**The move prefers the icons too.** `mem_evict` meets the overlapped caches
+in `mem_tab` order, and the read-ahead - claimed at the boot mount - is
+usually the lowest record, so it was moved first and took the one hole that
+fit both it and the icon store. **`mem_evict` now walks TWICE**: the first
+pass skips the owner `MEM_P_DIRW` (a word in DI; `neg` turns it into a
+positive one no cache's owner is, so the second pass skips nothing and the
+next `neg` ends the walk), so the icon store and the listings take the free
+holes first and the read-ahead the room that is left. A hole that fits all of
+them keeps all of them.
+
+**What it cost** (`tools/os88rdiff.py`, `kern_small`): `.text` +2 (`mem_evw`'s
+word); `.cold` +4 - `mem_bcopy`'s lock and `sti`/`cli` +10, `mem_evict`'s
+second pass +11, paid for inside kern_small's own code: `mem_pg_cheap` moved
+in front of `mem_fatw_dirty` and falling into it, its refusals that
+routine's `.yes` (-6), `mem_evmv`'s word table walked down by index with an
+OR for the hit (-3), `mem_regrowp`'s path 2 eviction moved to `.set` for
+every path (-2: path 1's extent is inside its own record and path 3's was
+cleared before its copy, so both find nothing), `mem_evrank`'s task test
+second with AL's zero shared (-2), `mem_evict` through `kentc_di` and out
+through `mem_evmv`'s own `jmp kretc_di` (-2), `fcp_arm`'s refusal a compare
+with 1 (-1), and `dskw_sync_x`'s listing reset an `and` (-1). The ranks are
+constants. `kernsize`: `rungs kernel 57,344`, the same rung - and with
+NOTHING left, because the 21 the line printed before this was a SUM: the
+ladder packs `.text`+`.bss`, `LOW` and `.cold` to the paragraph separately,
+so `.cold` had exactly 4 bytes before `VGABUF` and the 512-byte heap floor
+moved up, the image 5, and LOW's 12 are bss. `.cold` is 21,136 now, the last
+byte of its paragraph. Every other kernel: every routine the same.
+`tests/unit/t_hotpar.py`: the shift in front of `dsk_xfer` is even, and the
+parity pad 50.6.13.1 had taken out stays out.
 
 ## 51. driver.inc — loadable drivers
 
