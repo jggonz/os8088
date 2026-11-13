@@ -4,3 +4,4 @@
 # The list only turns one way: a line whose site no longer finds anything
 # fails the gate until it is deleted.
 apps/texpad/texpad.asm tp_draw_stat HLINE tp_u16_di's digit loop pops exactly the digits it pushed (CX counts them); the walk cannot count, so it pops past them into the routine's own saved registers on a path no input takes
+apps/os88ui.inc os88ui_sbar UI_HLINE the findings are the OS88UI_KERNEL arm only: there UI_HLINE is gfx_hline_n (kernel/vga12.inc), whose header clobbers BX and CX alone, so the second rule's AX and .arrow's DX survive the call (kernel size pass 20, 78d81a67); the package arm reloads AX and saves DX round every line cell
