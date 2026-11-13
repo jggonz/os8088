@@ -1655,7 +1655,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; RD_MAXKB is 16,384 - a column showing that
                                 ; would be arithmetic rather than advice
 
-DRVM_IMG_SND equ 21             ; ceil(build/sound.drv / 512) - t_drvmem
+DRVM_IMG_SND equ 22             ; ceil(build/sound.drv / 512) - t_drvmem
                                 ; (as LOADED it holds less: DRV_H_KEEP hands
                                 ; the tail back, with a mixer or without -
                                 ; SPEC.md 34.15.1)

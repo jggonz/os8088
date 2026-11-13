@@ -10,6 +10,7 @@ cpu 8086
 bits 16
 org 0x100
 %define PICOMEM
+%include "snddiag.inc"          ; the shipping no-op SDG_* hooks in a plain build
 %macro CLC_OR_STC 1
     db 0xA8
 %1: stc

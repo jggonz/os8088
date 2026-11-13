@@ -73228,7 +73228,8 @@ The high-speed regime is what an XT/286 with an SB Pro actually uses — there i
 no SB16 for an 8-bit ISA XT. It borrows the wide regime's 4 KB double buffer
 and `SBL_WD_WIDE` watchdog. Its one hardware quirk drives the last column: once
 `90h` runs the DSP accepts **no command** until a reset, so `sbl_halt` masks
-8237 channel 1 instead of writing `D0h`, `sbl_go_on` unmasks, and
+the selected 8237 channel (§34.5.8) instead of writing `D0h`,
+`sbl_go_on` unmasks, and
 `sbl_stop_stream` masks in the `cli` window then runs `sbl_f_reset` — the
 probe's own DSP reset, the driver's only one — after `popf` (the stream
 already dead) to leave high-speed mode for the next open.
@@ -73256,8 +73257,8 @@ exactly that much.
 
 `OSAPI_SND_STREAM` verb 9 (`SND_V_PPOS`) is verb 3 with `DX` = the bytes
 played **exactly**: the block-granular count plus the 8237's own progress
-into the block now sounding, read off channel 1's count register inside the
-same `cli` window. Any-task, like verb 3, and the kernel routes it through
+into the block now sounding, read off the selected DMA channel's count
+register inside the same `cli` window. Any-task, like verb 3, and the kernel routes it through
 verb 3's `.status` path so the answer in `DX` is not banked away. One race is
 handled rather than ignored: the DMA can already be in the next half while the
 ISR that counts the last one is pending behind this very `cli`, which shows as
@@ -73319,8 +73320,8 @@ record stream (the capture ring lives in it) — claims it at verb 0 or 4
 (`sbl_dma_get`) and frees it at close (`sbl_unpin`). Verbs 0 and 4 answer
 **8** when it cannot be had, verb 7's "no space"; attach no longer claims
 anything, so it can no longer fail for memory. `sbl_stop_stream` now masks
-channel 1 as well as halting the DSP, because the memory it was pointed at is
-about to be freed or allowed to move.
+the selected DMA channel (§34.5.8) as well as halting the DSP, because its
+memory is about to be freed or allowed to move.
 
 Measured on a 4.77 MHz 5150 (MartyPC, Hercules + SB), Tracker playing
 BEVERLY.MOD windowed in XT mode:
@@ -73542,8 +73543,8 @@ is what the open then forces. **+19 bytes of driver image** (6,641 →
 #### 34.5.4 Pausing an external ring (verb 10)
 
 **Verb 10, `SND_V_PAUSE`, halts an external ring's stream where it is**:
-`D0h` (or, in high speed, channel 1 masked at the 8237), the stream marked
-underrun-paused, and **verb 1 with the total resumes it** exactly as it
+`D0h` (or, in high speed, the selected channel masked at the 8237), the
+stream marked underrun-paused, and **verb 1 with the total resumes it** exactly as it
 resumes an underrun. Any other stream answers 7. It exists for the Video
 Player's Space (§98.3.4): an external ring's producer keeps the ring full, so
 a pause that waited for it to run dry would sound for up to a ring's worth -
@@ -73864,6 +73865,48 @@ before the reloc rebuilds the gates (`drv_hi_ivt`, KERN-MEGA-PLAN 14.130;
 kern_mega `.cold` +70, kern_big and kern_small byte-identical). And
 `SNDV_RMODE`'s door (AL = 2, §53.2.3) no longer runs the discovery it used
 to run for a real-mode bracket: that is `SBL_ONCE`'s now and not resident.
+
+#### 34.5.8 ESS AudioDrive resource setup
+
+At attach, a DSP reporting 3.01 is asked for its ESS `E7h` identification.
+Only `68h 8xh` followed by mixer `40h`'s four-read identity `18h 68h`
+(ES1868) or `18h 69h` (ES1869) permits ESS configuration writes. The next
+two bytes name the configuration port: it must be an eight-port-aligned
+address in `100h..FF8h`, and its audio-base registers `60h/61h` must match
+the DSP that answered. Older ESS parts and other Sound Blasters retain the
+DMA-1 path. An unconfigured PnP card that exposes no DSP still needs firmware
+or an external configurator; this is not a bus-wide ISA PnP enumerator.
+
+The direct ESS configuration interface (index at base, data at base+1)
+exposes Audio 1 DMA in `74h` and Audio 2 DMA in `75h`. Sound Blaster
+compatibility uses **Audio 1**, for recording as well as playback. Keep its
+existing channel when it is 1 or 3. Otherwise, if Audio 2 owns 1 or 3,
+disconnect Audio 2 (`75h = 4`) and route that channel to Audio 1. Reassert
+and read back Audio 1's route before publishing it. On failure restore both
+saved routes and refuse the PCM tier. DMA 0 is avoided because the XT uses
+it for refresh; DMA 2 belongs to the floppy. No unassigned DMA channel is
+claimed merely because it is the traditional Sound Blaster default.
+
+This specifically handles a BIOS assigning the ESS pair **0,3**: use 3,
+without forcing 1. A card configurator cannot fix a motherboard that does
+not deliver DMA 1. The reported AWARD 6.0/BTC failure after 1–3 seconds even
+under ESSCFG and UniSound has no verified root cause here; a host DMA routing
+fault is a hypothesis. [docs/ESS-SOUND.md](docs/ESS-SOUND.md) records the research and
+the limits of the evidence.
+
+Every 8-bit DMA operation uses the selected channel: address/count `2*n`
+and `2*n+1`, page `83h` for 1 / `82h` for 3, mode low bits, mask/unmask,
+high-speed pause/resume, stereo primer, close and consumed-count reads.
+`DRVV_HWINFO` publishes the same channel for DOS's `BLASTER` string. The
+SB16's independent 16-bit DMA path is unchanged. Discovery and ESS setup
+are attach-only, beyond `snd_keepmix`; only the channel and two port bytes
+remain resident and survive a tier toggle. A DSP software reset preserves
+the ESS resource configuration. The full load-time image claim is 11KB
+(`DRVM_IMG_SND = 22` half-KB units); the Drivers page estimate includes
+this before the attach-only tail is released. `essdma` runs the assembled
+driver against scripted ESS/configuration and 8237 ports; physical ESS playback remains a
+field check.
+
 ### 34.6 Recording and staging — back, as a driver
 
 Went with §34.5 and came back with it. Verb 7 grants out of the driver's
@@ -74055,7 +74098,8 @@ other way, and it is opened the same way.
 **What runs.** The open zeroes `SND_EXT_CONS`, publishes the record with no
 drain task and no 8KB buffer (`sbl_dma_get` is not called; `[sbl_direct]` and
 `[sbl_ext]` are both 1, so `sbl_unpin` frees nothing at the close), and
-`sbl_hw_start_in` programs channel 1 for an auto-init WRITE cycle (55h) over
+`sbl_hw_start_in` programs the selected channel for an auto-init WRITE cycle
+(55h on DMA 1, 57h on ESS DMA 3, §34.5.8) over
 the whole ring - `[sbl_xoff]`, `[sbl_xpage]`, count RL - 1, as verb 0's
 direct stream does - with `48h` set to the block and `2Ch`. The ISR's input
 leg tests `[sbl_ext]` first and, for such a stream, does exactly two things:
@@ -74072,8 +74116,8 @@ PLAYING with the same count; verb 9 answers verb 3's, as for every record
 stream; verbs 1 and 10 answer 7.
 
 **Stopping.** Verb 2 is the existing input stop, `sbl_stop_stream`: `D0h`,
-`DAh` (leave auto-init at the block edge), `D3h`, channel 1 masked, a latched
-IRQ retired, the record dead. **The watchdog still ends it**: `sbl_tick`
+`DAh` (leave auto-init at the block edge), `D3h`, the selected DMA channel
+masked, a latched IRQ retired, the record dead. **The watchdog still ends it**: `sbl_tick`
 counts down while the stream is PLAYING with an IRQ expected, which an
 external record stream always is, and every block IRQ rewinds it - so a card
 whose IRQs stop is halted and reads `SND_ST_ENDED`, with no drain task needed
@@ -74216,9 +74260,9 @@ a fifth wants). Here the ordering is not arranged, it is structural:
 `pm_init` runs three instructions before `opl_probe`, in the same routine.
 
 **The configuration is very nearly forced, which is why it asks the user
-nothing.** DMA is channel 1 because `sb.inc` programs channel 1 and no other
-(§34.5, binding — channel 2 is the floppy's). The port is 220h because that is
-the head of `sbl_bases` and every later entry costs another reset scan — unless
+nothing.** PicoMEM uses DMA 1. The ESS-specific DMA 3 path (§34.5.8) does
+not change its configuration; channel 2 is the floppy's. The port is 220h
+because that is the head of `sbl_bases` and every later entry costs another reset scan — unless
 the card's CMS emulation holds it, which §34.10.2 covers. That
 leaves the IRQ, and the card is the only thing that knows which lines are
 free: `dev_sbdsp_set_irq_dma` refuses its own multiplexed line, so the
@@ -75651,7 +75695,8 @@ around the blit (it borrowed the popup's slider band until kernel size pass
 15 moved that band into the popup's claim). Verb 10 stays in the driver for an older kernel; this kernel calls
 12 alone, so a sound driver built before the themed verb shows no speaker
 rather than costing every kernel the fallback. SOUND.DRV rounds to 11KB of
-image plus state on the heap; `DRVM_IMG_SND` is 11. **That is the IMAGE**: loaded,
+image plus state on the heap; `DRVM_IMG_SND` is 22 half-KB units.
+**That is the IMAGE**: loaded,
 the driver holds 9KB with a mixer and 6KB without, the attach-only code -
 and with no mixer the mixer verbs and this popup too - having been handed
 back after the attach (§34.15.1). The popup claims only while open: its
@@ -187376,8 +187421,8 @@ to unload it.
 A DOS program that wants the Sound Blaster wants to program it **itself** —
 reset the DSP, set its own IRQ and DMA, own the card completely — and
 `SOUND.DRV` is in the way of that three separate ways: it owns an IRQ vector,
-it owns DMA channel 1, and **its refill worker is `TF_SERVICE`, so it keeps
-running inside the bracket by design** (§53.2) and can feed the DSP while the
+it owns its selected DMA channel (1, or ESS 3 under §34.5.8), and **its refill
+worker is `TF_SERVICE`, so it keeps running inside the bracket by design** (§53.2) and can feed the DSP while the
 DOS program is resetting it.
 
 §51.11 is the door. `dos_drv_take` calls it on the way in and `dos_drv_back`
@@ -249768,6 +249813,15 @@ the layout has one source. Built with `-DSNDDIAG` the driver keeps:
 - and, read at the copy, the whole stream record (the regime, the time
   constant, the block size, the three counters, the watchdog, the 8237
   cycle) and the 8259's mask, request and in-service registers.
+
+The 174-byte record's version 2 also carries the selected low DMA channel
+(§34.5.8), without growing the caller's buffer: `SDG_O_AUTO` bit 0 is
+still auto-init; bits 2:1 are 00 = DMA 1, 01 = DMA 3, 11 = no usable DMA
+(10 reserved). Other bits are zero. Version 1 meant DMA 1 implicitly.
+Sound Debug accepts version 1 with that default, masks bit 0 for its auto-init
+label, and uses version 2's channel in both the DSP row and `BLASTER=` line.
+A refused DMA route prints `none` and omits `BLASTER=`. This diagnostic-only
+extension changes no shipped-driver bytes or public sound API.
 
 `SNDV_DIAG` = **14**, after `SNDV_RMODE`. `AL` is the sub-function:
 

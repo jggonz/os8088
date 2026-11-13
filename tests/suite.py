@@ -1242,7 +1242,7 @@ FAST = [
         "mem_regrow taken out, and red at 7K on the SB leg with snd_keep "
         "written unconditionally",
         wants=("build/covoxsys720.img", "build/mixer360.img")),
-    Row("snddiag", "soak", py("tests/snddiag.py"), 120.0,
+    Row("snddiag", "soak", py("tests/snddiag.py", "--evidence", "build/ess-sound/herc-dma3.png"), 8.0,
         "THE SOUND DEBUG DISK, BOOTED (SPEC.md 127.2-127.4): "
         "debug-sound-720.img on the SB 5150 with nobody at it. \\AUTOSTRT "
         "opens SNDDIAG.O88, the play test starts by itself and runs ten "
@@ -1250,10 +1250,23 @@ FAST = [
         "taking block IRQs, no watchdog stop, a verdict that names nothing - "
         "and pages 1 and 3 show the probe record: the -DSNDDIAG driver "
         "answering SNDV_DIAG, the DSP at 220h, a BLASTER= line, E1h in the "
-        "DSP write log. Read out of the package's own text buffer, which is "
-        "what its rows draw",
+        "DSP write log. Then, after the tone has stopped, inject reported DMA 3 "
+        "and FFh to check the DSP/BLASTER text and refusal without claiming "
+        "physical ESS playback. Read from the package's own text buffer",
         needs=("marty",),
         wants=("build/debug-sound-720.img", "build/apps720.img")),
+    Row("snddiag-vga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
+        "--apps", "build/apps360.img", "--machine", "os8088_xt_vga_sb",
+        "--evidence", "build/ess-sound/vga-dma3.png"), 10.0,
+        "SPEC.md 127.4/34.5.8: Sound Debug on VGA, including the ten-second "
+        "tone and DMA-3/refused report injection; no physical ESS claim",
+        needs=("marty",), wants=("build/debug-sound-360.img", "build/apps360.img")),
+    Row("snddiag-cga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
+        "--apps", "build/apps360.img", "--machine", "os8088_5150_sb_gla",
+        "--evidence", "build/ess-sound/cga-dma3.png"), 7.0,
+        "SPEC.md 127.4/34.5.8: Sound Debug fits the 640x200 CGA display, including "
+        "the ten-second tone and DMA-3/refused report injection",
+        needs=("marty",), wants=("build/debug-sound-360.img", "build/apps360.img")),
     Row("sndonce", "soak", py("tests/unit/t_sndonce.py"), 1.0,
         "SPEC.md 34.15.1: nothing SOUND.DRV keeps reaches into what its "
         "attach hands back - read off the assembler's own listing, no "
@@ -21623,6 +21636,15 @@ SOAK = [
         "writes, absent/stuck bus, IF and SS != DS, detach restoration and a "
         "deliberately wrong register that must fail",
         needs=("nasm", "unicorn")),
+    Row("essdma", "soak", py("tests/essdma.py"), 2.0,
+        "SPEC.md 34.5.8: the assembled SOUND.DRV identifies ES1868/ES1869, "
+        "validates its direct configuration port, reuses assigned DMA 1/3 "
+        "and moves a BIOS 0,3 pair to Audio 1 on 3 without claiming DMA 1. "
+        "Scripted ports check read-back/rollback, foreign or absent parts, "
+        "playback/capture, high-speed pause/resume, close, consumed counts "
+        "and DOS HWINFO, with IF and SS != DS. --break-dma must fail on the "
+        "old DMA-1 address port. This does not claim physical ESS playback",
+        needs=("unicorn", "nasm"), wants=("build/sound.bin",)),
     Row("sbirq5", "soak", py("tests/sbirq5.py"), 3.0,
         "SPEC.md 34.5.6: SOUND.DRV REFUSES a Sound Blaster on IRQ 5 when IRQ 5 "
         "is TAKEN on an XT - OSAPI_CPU_INFO's CPU_8086 tier and int 0Dh hooked "

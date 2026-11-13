@@ -32,13 +32,13 @@
 ; looping (SPEC.md 34.5, binding). Single-cycle DSPs (< 2.00) re-arm DMA +
 ; 14h for the other half here; auto-init DSPs have nothing to re-arm.
 ;
-; DMA recipe (SPEC.md 34.5, binding): channel 1 only - never channel 2, the
-; floppy's. Mask 0Ah=05h; each 16-bit value is flip-flop clear via 0Ch then
-; two successive byte writes (lo, hi); page 3 -> 83h; mode 49h single /
-; 59h auto-init (memory->card reads); unmask 0Ah=01h. NOTHING is multiplied
-; by 2 - address doubling is a 16-bit-channel concept the XT does not have.
-; The double buffer is 2 x 2KB at SND_SEG:0 - wholly inside 8237 physical
-; page 3, page-crossing-safe by construction (SPEC.md 2.2).
+; DMA recipe (SPEC.md 34.5/34.5.8): channel 1, or ESS channel 3.
+; Never DMA 2 (floppy) or 0 (XT refresh). Mask 0Ah = channel | 4;
+; flip-flop clear via 0Ch before each low/high byte pair; address/count
+; ports = 2*channel / 2*channel+1; page port 83h / 82h for channel 1 / 3;
+; mode = 48h single / 58h auto-init plus channel (memory -> card);
+; unmask 0Ah = channel. Byte addresses are never doubled. Every cycle
+; stays within one physical 64KB page, guaranteed by the DMA allocator.
 ;
 ; The kernel owns stream pacing (SPEC.md 34.5): verb 0 spawns a TRANSIENT
 ; kernel task from the 12-slot pool that copies grant -> double-buffer
@@ -246,7 +246,7 @@ sbl_dsp_wr:
     ret
 
 ; =============================================================================
-; DMA channel 1 + DSP transfer control (.text)
+; Selected 8-bit DMA channel + DSP transfer control (.text)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -274,28 +274,15 @@ sbl_arm_half:
                                 ; (sbl_dma_get). Nothing is doubled - address
                                 ; doubling is a 16-bit-channel concept the XT
                                 ; does not have
-    pushf
-    cli
-    mov al, 0x05
-    out 0x0A, al                ; mask channel 1
-    out 0x0C, al                ; clear the flip-flop (any value)
-    mov al, dl
-    out 0x02, al                ; address lo
-    mov al, dh
-    out 0x02, al                ; address hi
-    out 0x0C, al                ; clear the flip-flop again
-    mov al, (SBL_HALF-1) & 0xFF
-    out 0x03, al                ; count lo (len - 1)
-    mov al, (SBL_HALF-1) >> 8
-    out 0x03, al                ; count hi
-    mov al, 0x49                ; single mode, read (memory -> card), ch 1
-    out 0x0B, al
-    mov al, [sbl_page]          ; the 8237 page our claim landed in
-    out 0x83, al
-    mov al, 0x01
-    or al, [sbl_drqmask]        ; (05h, still masked, where DRQ1 runs free)
-    out 0x0A, al                ; unmask channel 1
-    popf
+    push bx
+    push cx
+    mov ax, dx
+    mov bx, SBL_HALF-1
+    mov cl, 0x49
+    mov ch, [sbl_page]
+    call sbl_dma_auto
+    pop cx
+    pop bx
     mov al, 0x14                ; DSP 14h, 8-bit single-cycle out, then the
     call sbl_dsp_wr             ; length
     mov al, (SBL_HALF-1) & 0xFF
@@ -448,7 +435,7 @@ sbl_hw_start_in:
     ret
 
 ; -----------------------------------------------------------------------------
-; sbl_dma_auto - program DMA channel 1 for an AUTO-INIT cycle: both starts'
+; sbl_dma_auto - program the selected 8-bit DMA channel: both starts'
 ;                one recipe (SPEC.md 34.5, binding)
 ; in:       AX = the address inside the page, BX = the count - 1, CL = the
 ;           mode byte (59h playback, 55h capture), CH = the page
@@ -456,33 +443,42 @@ sbl_hw_start_in:
 ;
 ; Mask, flip-flop, address lo/hi, flip-flop, count lo/hi, mode, page, unmask,
 ; under one pushf/cli: the flip-flop is shared state. Called from task
-; context at a start, never from the ISR - the single-cycle re-arms that DO
-; run in the ISR (sbl_arm_half / sbl_arm_rec) keep their own inline sequence
+; context at a start, or from the single-cycle ISR re-arm (sbl_arm_half).
+; The mode byte's low two bits are replaced with the selected channel.
 ; -----------------------------------------------------------------------------
 sbl_dma_auto:
+    push dx
     pushf
     cli
     push ax
-    mov al, 0x05
-    out 0x0A, al                ; mask channel 1
+    mov al, [sbl_dma]
+    or al, 4
+    out 0x0A, al                ; mask the selected 8-bit channel
     out 0x0C, al                ; flip-flop clear (any value)
+    mov dl, [sbl_dmaport]
+    xor dh, dh
     pop ax
-    out 0x02, al                ; address lo
+    out dx, al                 ; address lo
     mov al, ah
-    out 0x02, al                ; address hi
-    out 0x0C, al                ; flip-flop clear
+    out dx, al                 ; address hi
+    inc dx                     ; count = address port + 1
+    out 0x0C, al
     mov al, bl
-    out 0x03, al                ; count lo
+    out dx, al
     mov al, bh
-    out 0x03, al                ; count hi
+    out dx, al
     mov al, cl
-    out 0x0B, al                ; mode
+    and al, 0xFC
+    or al, [sbl_dma]            ; direction/auto-init plus channel
+    out 0x0B, al
+    mov dl, [sbl_pageport]
     mov al, ch
-    out 0x83, al                ; the page our cycle sits in
-    mov al, 0x01
-    or al, [sbl_drqmask]        ; (05h, still masked, where DRQ1 runs free)
-    out 0x0A, al                ; unmask
+    out dx, al
+    mov al, [sbl_dma]
+    or al, [sbl_drqmask]        ; PicoMEM may keep the hardware DMA masked
+    out 0x0A, al
     popf
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -647,15 +643,16 @@ sbl_dsp_wr3:
 ; in/out: nothing; clobbers nothing (flags)
 ;
 ; High-speed (SB Pro, SPEC.md 34.5): the DSP ignores D0h once 90h has run, so
-; mask DMA channel 1 at the 8237 instead - one OUT, ISR-safe, and the DSP just
-; sees its requests dry up. sbl_go_on unmasks; the transfer picks up from the
+; mask the selected channel at the 8237 instead - one OUT, ISR-safe.
+; The DSP sees its requests dry up. sbl_go_on unmasks; the transfer picks up from the
 ; 8237's live address/count with the DSP never having left high-speed mode.
 ; -----------------------------------------------------------------------------
 sbl_halt:
     push ax
     cmp byte [sbl_hisp], 0
     je .cmd
-    mov al, 0x05               ; mask 8-bit DMA channel 1
+    mov al, [sbl_dma]
+    or al, 4                   ; mask the selected 8-bit channel
     out 0x0A, al
     pop ax
     ret
@@ -703,7 +700,7 @@ sbl_go_on:
     push ax
     cmp byte [sbl_hisp], 0
     je .noths
-    mov al, 0x01               ; high-speed: unmask DMA channel 1 (the DSP
+    mov al, [sbl_dma]          ; high-speed: unmask our channel (the DSP
     or al, [sbl_drqmask]       ; never left high-speed mode - no D4h; still
     out 0x0A, al               ; masked where DRQ1 runs free)
     jmp .out
@@ -1894,7 +1891,7 @@ sbl_v_close:
 ; delivered after popf lands on the ISR's spurious path, which EOIs it.
 ;
 ; High-speed (SB Pro): the DSP takes no command until a reset, so the cli
-; window only masks DMA channel 1 (sbl_halt) and retires the IRQ; the reset
+; window masks the selected channel (sbl_halt) and retires the IRQ. The reset
 ; that actually leaves high-speed mode - a few ms of ISA polling - runs
 ; AFTER popf, on the task, with the stream already dead (act/expect clear).
 ; -----------------------------------------------------------------------------
@@ -1919,7 +1916,8 @@ sbl_stop_stream:
     mov al, 0xD3                ; speaker (DAC) off
     call sbl_dsp_wr
 .hs_ports:
-    mov al, 0x05                ; and MASK the channel: the memory it was
+    mov al, [sbl_dma]           ; MASK the channel: the memory it was
+    or al, 4
     out 0x0A, al                ; pointed at is about to be freed or let move
     test byte [sbl_fmt], SND_FMT_16 ; (below), and every start unmasks it
     jz .m8                      ; again - the 16-bit channel too, when that
@@ -2109,7 +2107,7 @@ sbl_v_ppos:
     ret
 
 ; sbl_dleft - CX = the bytes left in the open stream's DMA cycle, off the
-; 8237's count register: channel 1's, which is bytes left - 1 (FFFFh at
+; 8237's selected 8-bit count register, bytes left - 1 (FFFFh at
 ; terminal count), or THE 16-BIT CHANNEL's (SPEC.md 34.5.5), which counts
 ; WORDS - its register, at C2h + 4 x its index, is words left - 1. IF = 0:
 ; the flip-flop is shared state (verb 9, and the block IRQ's direct ring).
@@ -2117,12 +2115,17 @@ sbl_v_ppos:
 sbl_dleft:
     test byte [sbl_fmt], SND_FMT_16
     jnz .w16
+    push dx
+    mov dl, [sbl_dmaport]
+    xor dh, dh
+    inc dx
     out 0x0C, al                ; flip-flop clear (any value)
-    in al, 0x03                 ; channel 1's count: lo...
+    in al, dx                  ; selected channel's count: lo...
     mov cl, al
-    in al, 0x03                 ; ...hi
+    in al, dx                  ; ...hi
     mov ch, al
     inc cx
+    pop dx
     ret
 .w16:
     push dx
@@ -3261,6 +3264,172 @@ sbl_cell:
 ; =============================================================================
 %macro SBL_ONCE 0
 
+; ESS setup is discarded with the other attach-only code (SPEC.md 34.5.8).
+; This is the card's direct configuration interface, as used by Linux es18xx,
+; not the bus-wide ISA PnP address/write/read-data protocol. No LDN is written.
+; in: DSP/version found, default DMA 1; out: selected DMA/ports, or DMA FFh
+; clobbers AX/flags; keeps every other register. All DSP waits are bounded.
+sbl_ess_setup:
+    cmp byte [sbl_verhi], 3
+    jne .done
+    cmp byte [sbl_verlo], 1
+    jne .done
+    push bx
+    push cx
+    push dx
+    mov al, 0xE7
+    call sbl_dsp_wr
+    jc .reset
+    call sbl_dsp_rd
+    jc .reset
+    cmp al, 0x68
+    jne .reset
+    call sbl_dsp_rd
+    jc .reset
+    and al, 0xF0
+    cmp al, 0x80
+    jne .reset
+    mov cx, SBL_POLLS
+    call sbl_f_reset            ; drain/reset before any resource changes
+    jc .resetfail
+    mov dx, [sbl_base]
+    add dx, 4
+    pushf
+    cli
+    mov al, 0x40
+    out dx, al
+    inc dx
+    call sbl_ess_delay
+    in al, dx
+    cmp al, 0x18
+    jne .unlock                ; 688/1688 or another part: no config writes
+    call sbl_ess_delay
+    in al, dx
+    cmp al, 0x68
+    je .part
+    cmp al, 0x69
+    jne .unlock
+.part:
+    mov byte [sbl_dma], 0xFF    ; known part: never fall back to a guessed D1
+    call sbl_ess_delay
+    in al, dx
+    mov ch, al
+    call sbl_ess_delay
+    in al, dx
+    mov cl, al
+    mov dx, cx
+    cmp dx, 0x100
+    jb .unlock
+    cmp dx, 0xFF8
+    ja .unlock
+    test dl, 7
+    jnz .unlock
+    mov cx, [sbl_base]
+    mov al, 0x60
+    call sbl_ess_rd
+    cmp al, ch
+    jne .unlock
+    mov al, 0x61
+    call sbl_ess_rd
+    cmp al, cl
+    jne .unlock                ; floating/misdirected config port
+    mov al, 0x74
+    call sbl_ess_rd
+    mov bl, al                 ; original Audio 1 route
+    mov al, 0x75
+    call sbl_ess_rd
+    mov bh, al                 ; original Audio 2 route
+    mov cl, bl
+    cmp cl, 1
+    je .route
+    cmp cl, 3
+    je .route
+    mov cl, bh                 ; e.g. BIOS 0,3: move the allocated 3 to Audio 1
+    cmp cl, 1
+    je .second
+    cmp cl, 3
+    jne .unlock                ; no assigned channel we can safely use
+.second:
+    mov ah, 0x75
+    mov al, 4                  ; disconnect Audio 2 before assigning its DMA
+    call sbl_ess_wr
+    mov al, 0x75
+    call sbl_ess_rd
+    cmp al, 4
+    jne .undo
+.route:
+    mov ah, 0x74
+    mov al, cl
+    call sbl_ess_wr
+    mov al, 0x74
+    call sbl_ess_rd
+    cmp al, cl
+    jne .undo
+    mov [sbl_dma], cl           ; publish only the route that read back
+    mov al, cl
+    shl al, 1
+    mov [sbl_dmaport], al
+    mov al, 0x83
+    cmp cl, 1
+    je .page
+    dec ax                     ; DMA 3's page register is 82h
+.page:
+    mov [sbl_pageport], al
+    jmp short .unlock
+.undo:
+    mov ah, 0x74
+    mov al, bl
+    call sbl_ess_wr
+    mov ah, 0x75
+    mov al, bh
+    call sbl_ess_wr             ; a refused tier leaves the firmware routes
+.unlock:
+    popf
+    jmp short .out
+.reset:
+    mov cx, SBL_POLLS
+    call sbl_f_reset            ; clear a non-ESS DSP's unknown E7h state too
+    jnc .out
+.resetfail:
+    mov byte [sbl_dma], 0xFF
+.out:
+    pop dx
+    pop cx
+    pop bx
+.done:
+    ret
+
+; DX = configuration index port. AL = index -> AL = value; DX kept.
+sbl_ess_rd:
+    out dx, al
+    inc dx
+    in al, dx
+    dec dx
+    ret
+
+; DX = configuration index port, AH = index, AL = value; AX/DX kept.
+sbl_ess_wr:
+    xchg al, ah
+    out dx, al
+    inc dx
+    xchg al, ah
+    out dx, al
+    dec dx
+    ret
+
+; At least 10 us between the identity's sequential reads, including fast hosts.
+; ISA I/O cycles, not a CPU-speed-dependent delay loop. AX/CX/DX kept.
+sbl_ess_delay:
+    push ax
+    push cx
+    mov cx, 32
+.delay:
+    in al, 0x80
+    loop .delay
+    pop cx
+    pop ax
+    ret
+
 sbl_bases:                      ; the pinned scan order (SPEC.md 34.2)
     dw 0x220, 0x240, 0x210, 0x230, 0x250, 0x260, 0
 
@@ -3335,9 +3504,18 @@ sbl_stub_c:
 ;      usable line), [sbl_hdma]; clobbers: AX (flags)
 ; -----------------------------------------------------------------------------
 sbl_find:
+    mov byte [sbl_dma], 1
+    mov byte [sbl_dmaport], 2
+    mov byte [sbl_pageport], 0x83
     call sbl_f_probe
     or al, al
     jz .ret
+    call sbl_ess_setup
+    cmp byte [sbl_dma], 0xFF
+    jne .irq
+    mov byte [sbl_irq], 0xFF     ; identified ESS with unusable resources
+    ret
+.irq:
     call sbl_f_irqdisc
     cmp byte [sbl_verhi], 4     ; a DSP 4.xx: its 16-bit channel too
     jb .ret                     ; (SPEC.md 34.5.5)
@@ -3740,6 +3918,9 @@ sbl_verhi:    db 0              ; DSP version from E1h: major
 sbl_verlo:    db 0              ;   minor
 sbl_auto:     db 0              ; 1 = auto-init strategy (DSP >= 2.00, 34.5)
 sbl_irq:      db 0              ; discovered IRQ line, 0xFF = none usable
+sbl_dma:      db 0              ; 8-bit channel 1 or 3; FFh = ESS refused
+sbl_dmaport:  db 0              ; 2 * channel (address); count is the next port
+sbl_pageport: db 0              ; 83h for channel 1, 82h for channel 3
 sbl_hdma:     db 0              ; the SB16's 16-bit DMA channel (5..7), 0 =
                                 ; none or no second 8237 (sbl_hdma_find)
 sbl_zb:                         ; --- cleared at every attach ----------------
