@@ -187,6 +187,17 @@ WAIT_STOP_NAP = float(os.environ.get("OS88_WAIT_STOP_NAP", "0.004"))
 # one knob for the whole A/B.
 SETTLE_UI = os.environ.get("OS88_SETTLE_UI", "1") != "0"
 SETTLE_UI_QUIET = 0.2
+# ...AND A UI THAT WAKES ON A CLOCK GETS THE SHORT WINDOW A BOUNDED NUMBER OF
+# TIMES. A long window is cut the moment the UI goes idle, and a cut window
+# proves nothing (run = 0) - so a UI task that sleeps and wakes every tick
+# while the screen sits still (a DOS program in its window polling INT 33h
+# and INT 16h: ~half the samples read T_STATE 1) re-cut every window for
+# ever. Under SETTLE_DET the samples land at the same guest phase every time,
+# so it was not slow but NEVER: doswmouse spent its 360 guest seconds on a
+# still screen. After this many cuts the UI is taken for one that does not
+# idle, and the settle spends whole windows on the screen alone, as it
+# always has for an animating worker.
+SETTLE_UI_CUTS = 3
 
 # SETTLE'S WINDOW IS RUN, NOT WAITED. `pace` spends AT LEAST its guest seconds
 # and polls to see that it has, so each interval overshot by however long the
@@ -4004,7 +4015,7 @@ def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
     resume = True
     try:
         last, run, seen = None, 0, None
-        fast, lastmark = False, None
+        fast, lastmark, cuts = False, None, 0
         while True:
             try:
                 prog.check()
@@ -4029,7 +4040,7 @@ def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
                 return time.time() - t0
             last, lastmark = cur, mark
             # the same three windows as the polled path, below
-            fast = mark is not None
+            fast = mark is not None and cuts < SETTLE_UI_CUTS
             if fast:
                 _gadvance(m, SETTLE_UI_QUIET)
             elif not SETTLE_UI:
@@ -4040,7 +4051,8 @@ def _settle_det(m, quiet, stable, gate, card, prog, budget, t0):
                     step = min(SETTLE_UI_QUIET, want - spent)
                     _gadvance(m, step)
                     spent += step
-                    if _ui_mark(m) is not None:
+                    if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                        cuts += 1
                         last, run = None, 0
                         break
     except _SettleStopped:
@@ -4157,7 +4169,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
     if _settle_det_ok(m):
         return _settle_det(m, quiet, stable, gate, card, prog, budget, t0)
     last, run, seen = None, 0, None
-    fast, lastmark = False, None
+    fast, lastmark, cuts = False, None, 0
     chg = t0
     while True:
         # A STOPPED guest is reported by `check` at once; a SPENT budget is
@@ -4205,7 +4217,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         # draw (SETTLE_UI above). The next capture only counts as "the same"
         # if the UI was still idle and the drive still unmoved at its end, so
         # a short interval can never be the one that hides a load.
-        fast = mark is not None
+        fast = mark is not None and cuts < SETTLE_UI_CUTS
         if fast:
             pace(m, SETTLE_UI_QUIET / (GUEST_PACE or 4.5))
         elif not SETTLE_UI or GUEST_PACE <= 0:
@@ -4227,7 +4239,8 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
             while (prog._cycles() - c0) / GUEST_HZ < want:
                 if pace(m, SETTLE_UI_QUIET / GUEST_PACE) < SETTLE_UI_QUIET / 2:
                     break                   # the guest stopped: pace's rule
-                if _ui_mark(m) is not None:
+                if cuts < SETTLE_UI_CUTS and _ui_mark(m) is not None:
+                    cuts += 1               # (SETTLE_UI_CUTS: a UI on a clock)
                     last, run = None, 0
                     break
 
