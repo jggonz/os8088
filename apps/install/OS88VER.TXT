@@ -1,5 +1,5 @@
-20261112
-* Browser shows GIF, PNG and JPEG
-* Animated GIFs and image maps
-* Save Image As from the page
-* Browser is now a Wire download
+20261113
+* ESS AudioDrive cards on DMA 1 or 3
+* Sound driver sets the ESS DMA route
+* Sound Debug shows the DMA in use
+* DOS gets the right BLASTER setting
