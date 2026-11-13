@@ -12681,6 +12681,17 @@ clip whole-shape through `wm_clip_test`, so under an armed region they too are
 confined - but unarmed they draw wherever they are told. `fnt_unlazy` is that
 one test.
 
+`gfx_points` (§5.6.9) is the fourth, and takes `fnt_unlazy` itself: every
+point goes through `gfx_ls_box`, which under an armed region answers only the
+region's own rects, so a point set is confined exactly as a glyph is. It spent
+the promise unconditionally until 2026-11-13, under the comment *"this may
+write any pixel on the screen"* - true of an unarmed call only. What that
+cost was a pointer that BLINKED on the other card of an extended desktop
+while a game drew points on this one: Missile Command on the Hercules hid the
+arrow parked on the VGA in 7 of 40 one-second samples (tests/dispmcfs.py),
+every explosion a hide and a `cursor_show` across a display the game could
+not reach.
+
 **The safety argument is a measurement, not an audit.** A debug build
 snapshots the drawn cell at `gfx_lock` and compares it at `gfx_unlock`
 whenever the promise survived: if any path wrote there while the arrow was up,
@@ -12697,7 +12708,9 @@ registers for the life of the task, which is why they were the ones that
 stopped. It also arms a region (`mc_render` calls `OSAPI_WM_CLIP_SET`), so it
 takes §7.1.4's deferred hide correctly — though a player's pointer is inside
 the window by definition, so the promise is spent every frame and the win is
-not one this game can collect.
+not one this game can collect while it is being played. The pointer that is
+NOT on it - parked on the other display of an extended desktop - keeps its
+arrow, since `gfx_points` stopped spending the promise under a region.
 
 **One trap, and it cost the boot.** `vid_setmode` looks like it wants
 `cur_unlazy` - a mode set clears the screen under the arrow. It must NOT have

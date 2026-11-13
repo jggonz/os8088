@@ -1291,6 +1291,11 @@ gfx_pt_miss:
     ret
 
 %endif
+    nop                         ; PARITY, never executed (both kernels end a
+                                ; `ret` above): gfx_points' hide below went
+                                ; from CURUNLAZY's ten bytes to a three-byte
+                                ; call, an odd 7 that put every hot routine
+                                ; after it at the wrong parity (t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; gfx_points - draw a set of pixels the CALLER computed (SPEC.md 5.6.9)
@@ -1318,10 +1323,18 @@ gfx_points:
                                 ; conditional jump on an 8086 is rel8 and the
                                 ; body below is longer than one reaches
 .work:
-    CURUNLAZY                   ; this may write any pixel on the screen, so
-                                ; the deferred hide is owed (SPEC.md 7.1.4) -
-                                ; and owed HERE, above everything that reads
-                                ; state the arrow's removal could change
+    call fnt_unlazy             ; UNARMED this may write any pixel on the
+                                ; screen and the deferred hide is owed; ARMED,
+                                ; gfx_ls_box confines every point to the
+                                ; region, which wm_clip_set already asked
+                                ; cur_lazyck about - a glyph's contract, so
+                                ; the glyph's test (SPEC.md 7.1.4). Spent
+                                ; unconditionally it hid an arrow parked on
+                                ; the OTHER display of an extended desktop on
+                                ; every explosion a game drew (tests/
+                                ; dispmcfs.py). Owed HERE, above everything
+                                ; that reads state the arrow's removal could
+                                ; change
     push ax
     push bx
     push cx

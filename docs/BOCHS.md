@@ -476,7 +476,11 @@ it maps:
   that cache, so a row that patches a package's code after the code has
   executed runs the OLD bytes (tests/uidrdis.py, measured by single-stepping
   a patched `stc` that executed as the `push ax` it replaced). Patch before
-  the code first runs - uidrdis takes a second boot for it.
+  the code first runs - uidrdis takes a second boot for it - or break the
+  code through DATA it reads: kern_mega KEEPS a dropped module and
+  re-adopts it in place (SPEC.md 2.8.3.3), so a module routine that ran
+  once stays decoded across a close and a reopen, and tests/shutdown.py's
+  failing settings writer is a renamed KERNEL.SYS there, not a patch.
 - **a row's OWN fixed disk** - what MartyPC is handed, the shim takes:
   `extra=["--mount", "hd:0:PATH"]` (os88marty.launch's own argument), or a
   `run_dir=` from `os88marty.stage_run_dir()` on an `_hdd` machine, whose
