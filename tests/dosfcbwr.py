@@ -92,10 +92,23 @@ def ours(img):
         mo.click(*dosmap.centre(m, dosmap.instance(m), dosmap.package(),
                                 "dos_pln"))
         os88marty.settle(m)
-        for _ in range(140):
-            m.type_text("\b")
-        m.type_text("B:\\FCBWR.COM " + ARGS)
-        os88marty.settle(m)
+        # **TYPED IN CHUNKS THE GUEST CONFIRMS TAKING**, never as one burst.
+        # 166 keys sent at host speed against ~10 guest ms a key in the path
+        # box overran the BIOS's 15-entry ring whenever the emulator ran
+        # slower than the keys arrived - the box then held `FB.MOXZBAR`, the
+        # run said `It could not be read.`, and this row reported the probe
+        # as never finishing. Ten at a time fits the ring however the host
+        # paces them, and text_taken waits on the ring's own tail.
+        for _ in range(14):
+            os88marty.text_taken(m, "\b" * 10)
+        line = "B:\\FCBWR.COM " + ARGS
+        for i in range(0, len(line), 10):
+            os88marty.text_taken(m, line[i:i + 10])
+        got = bytes(dosmap.cellread(m, dosmap.package(),
+                                    dosmap.lin(m, dosmap.instance(m)),
+                                    "dos_path", 64)).split(b"\0")[0]
+        if got.decode("latin-1") != line:
+            fail("the path box holds %r and %r was typed" % (got, line))
         m.key("Enter")
         got = done(m, 1)
         m.type_text("x")
