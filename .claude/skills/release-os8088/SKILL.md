@@ -50,6 +50,10 @@ a program that broke goes there and on the WIN16 Spotlight page,
 source commit, and a release that ships new disks under last release's Docs is
 a guide describing software nobody can download any more.
 
+**Every release ends with a shareable PDF** (step 6b): the release page and
+any Spotlight page as one white-background document with a screenshot of
+every new addition, saved to `~/Documents` for the user to post in Discord.
+
 **Read "Writing the copy" below before writing a word of any of them.**
 
 ## Writing the copy
@@ -347,6 +351,8 @@ make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # room for; the 1.44MB disk alone is
                                       # released, as PROGRAMS/PIXEL/PIXEL144.IMG
 make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
+make pagedeskdisk                     # pagedesk*.img -- PageDesk and its eight
+                                      # sample PDFs, PROGRAMS/PAGEDESK
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
@@ -1213,13 +1219,75 @@ to every installed machine. Leave the last release's prefix in the bucket;
 deleting it is the maintainer's, and a machine mid-install is still reading
 it.
 
+### 6b. The shareable PDF, every time
+
+The release also goes out as **one PDF the user can drop into Discord** or
+any chat, for people who will never open the website. Write it last, once the
+notes, the Spotlight page and the zip sizes are final, because it carries all
+three. It is never committed and never attached to the GitHub release.
+
+`pdf/example-20261111.html` is the worked example: PageDesk's release, four
+Letter pages. Copy it into a work folder in your scratchpad, rewrite every
+section for this release, and keep its stylesheet. Three things are fixed by
+the user and are not a matter of taste:
+
+- **A white background.** The page is printed on white with dark ink.
+  `body` sets `background:#fff`, and nothing replaces it with the site's dark
+  theme.
+- **A screenshot of every new addition.** A new program, a new feature or a
+  new look each gets a picture. Take them from what steps 4b and 4e already
+  captured and looked at (`$WEB_REPO/public/img/<subject>/*@2x.png` are the
+  crisp ones). A change with nothing to see gets no picture, and a picture of
+  something that did not change is not added to fill the space. The same rule
+  as a Spotlight page applies: never use a screenshot you have not looked at,
+  and name the emulator and adapter under each.
+- **A Spotlight section for every Spotlight page this release has**, built the
+  way the web page is: the kicker and the title, the lead, a strip of three
+  facts with numbers, cards for what it does, a gallery, what it cannot do
+  yet, and the steps to run it. Take the facts and the words from the page
+  step 4b wrote. Do not write new claims for the PDF.
+
+The shape, from the example:
+
+| page | holds |
+|---|---|
+| 1, Release | the version, date, commit and kernel size; what os8088 is, in one sentence; `summary`; each highlight from `releases.json` with its PR number; a *Good to know* box for `notes`; a *Get it* table of the four zips with their real packed sizes, and where to download them |
+| 2+, Spotlight | one section per Spotlight page, starting on a page of its own |
+| Pictures | a gallery of the new additions, two to a row, each with a caption |
+| last | speed tables, limits and *Run it* steps when the Spotlight page has them, and a footer with the Spotlight URL, the releases page and the source |
+
+A release with no Spotlight page is the release page plus a gallery of what
+changed, and it is fine at two pages.
+
+"Writing the copy" applies to every word, as it does to the website.
+
+```bash
+W=<scratchpad>/relpdf; mkdir -p "$W"
+cp .claude/skills/release-os8088/pdf/example-20261111.html "$W/release.html"
+cp "$WEB_REPO"/public/img/<subject>/<shot>@2x.png "$W"/      # the new additions
+# ...rewrite $W/release.html for this release...
+python3 .claude/skills/release-os8088/mkpdf.py "$W/release.html" --version v1.0.YYYYMMDD
+```
+
+`mkpdf.py` prints the page with headless Chrome. Chrome is the printer
+because it is already installed and needs no Python package; pip was broken
+on this Mac's Python 3.15. The script refuses a page that names a picture
+missing from the folder, warns about a background that is not white, renders
+every page to `$W/pg-N.png`, and copies the PDF to
+`~/Documents/os8088-v1.0.YYYYMMDD-release.pdf`. **Look at every page PNG it
+lists.** The two defects to look for are a section split across a page break
+and a gallery spilling one picture onto a page of its own. Fix those in the
+HTML (`break-inside:avoid` is already on figures, cards and highlights; size
+the grid or cut a picture) and print again.
+
 ### 7. Report
 
 Tell the user: the version, the version-file PR step 1a merged, the PR URL,
 the release URL, the kernel size and its delta, each zip's packed size and
 how many images went into the main one, what step 6a's `--verify` printed
 for each of the three trees, the
-Spotlight page's URL if step 4b ran, the Windows gallery cards step 4e
+Spotlight page's URL if step 4b ran, the PDF step 6b wrote (its path and
+page count), the Windows gallery cards step 4e
 added or changed (or that WIN16 needed none), the Docs snapshot commit step 4d moved
 to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk or companion zip that did not
@@ -1266,6 +1334,9 @@ them in a status line is how they get lost.
   crop of an old shot, or a scene whose click was lost are all the same defect
   to a reader: a picture of something that did not happen. The same goes for
   step 4e's Windows gallery.
+- **Never put a screenshot in the PDF that you have not looked at**, and
+  never commit the PDF or attach it to the GitHub release. It is the user's
+  to share, and it is written from copy that has already been published.
 - **Never commit a Microsoft binary**, in either repository. Step 4e's
   programs come from a private folder, and only the screenshots are
   published.

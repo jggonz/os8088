@@ -14,17 +14,22 @@ What it asserts is the whole promise of the disk with nobody at the machine:
 \\AUTOSTRT opened the program, the -DSNDDIAG driver answered SNDV_DIAG, the
 play test started by itself, ran ten seconds and named nothing as stopped,
 and pages 1 and 3 show the probe record (the DSP at 220h, a BLASTER= line,
-the version command in the DSP write log).
+the version command in the DSP write log). After the tone finishes, an
+injected reported DMA 3 and a refused route exercise the actual displayed
+text; this is not a claim that the emulator played through DMA 3. Optional
+--image/--apps/--machine select an adapter, and --evidence saves its report.
 """
 import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 os.chdir(ROOT)
 import os88marty as M          # noqa: E402
+import os88drvsym
 import os88geom as G           # noqa: E402
 
 IMG = "build/debug-sound-720.img"
@@ -57,6 +62,10 @@ def show(rows, what):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--image", default=IMG)
+    ap.add_argument("--apps", default=APPS)
+    ap.add_argument("--machine", default=MACHINE)
+    ap.add_argument("--evidence")
     a = ap.parse_args()
     fails = []
 
@@ -65,11 +74,11 @@ def main():
         if not cond:
             fails.append(what)
 
-    for p in (IMG, APPS):
+    for p in (a.image, a.apps):
         if not os.path.exists(p):
             print("snddiag: %s missing - make" % p)
             return 1
-    with M.launch(IMG, apps=APPS, machine=MACHINE) as m:
+    with M.launch(a.image, apps=a.apps, machine=a.machine) as m:
         rows = None
         for _ in range(60):                 # ~a minute of guest time at most
             m.advance(frames=50)
@@ -109,6 +118,45 @@ def main():
         check("base 220h" in p1[4], "the DSP at 220h")
         check(p1[11].startswith("BLASTER=A220"), "a BLASTER= line")
         check("tier attached" in p1[13], "the verdict says the tier is up")
+
+        # The real tone has finished. Change only the driver's reported DMA
+        # byte to exercise the diagnostic on a card the emulator cannot model;
+        # never start playback with this injection in place.
+        dsym = os88drvsym.symbols("snddiag/sound.bin")
+        row = int.from_bytes(m.read(m.sym("drv_owner"), 2), "little")
+        seg = int.from_bytes(m.readseg(M.KERNEL_SEG, row + 2, 2), "little")
+        dma_addr = (seg << 4) + dsym["sbl_dma"]
+        original = m.read(dma_addr, 1)
+        try:
+            m.write(dma_addr, bytes([3]))
+            m.key("Digit1")
+            m.go()                         # advance() above left the guest paused
+            M.until(m, lambda mm: " D3" in page(mm)[11],
+                    "the diagnostic's selected DMA 3", limit=30, guest=5)
+            selected = page(m)
+            check("DMA 3 HDMA" in selected[4], "DSP row reports selected DMA 3")
+            check(" D3" in selected[11], "BLASTER reports D3 (injected state, no DMA-3 audio)")
+            if a.evidence:
+                M.ui_done(m)
+                M.guest_sleep(m, 0.06)
+                path = Path(a.evidence)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if "vga" in a.machine:
+                    M.write_png_rgb(str(path), *m.fbuf())
+                else:
+                    M.write_png(str(path), *m.vram())
+                print("DMA-3 report injection screenshot: " + str(path))
+            m.write(dma_addr, bytes([255]))
+            m.key("Digit1")
+            m.go()                         # advance() above left the guest paused
+            M.until(m, lambda mm: "DMA none" in page(mm)[4],
+                    "a refused DMA route", limit=30, guest=5)
+            refused = page(m)
+            check(not refused[11].startswith("BLASTER="), "refused DMA omits BLASTER")
+            check("DMA route is unusable" in refused[13],
+                  "a refused DMA route's verdict names the DMA, not the IRQ")
+        finally:
+            m.write(dma_addr, original)
 
         m.key("Digit3")
         m.advance(frames=25)

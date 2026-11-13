@@ -566,7 +566,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.6c":
+    if line != "User-Agent: os8088 Browser 1.7":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -664,7 +664,11 @@ def main():
                 fails.append("frogfind submit: " + err)
             else:
                 wait_done("submit")
-                got = srv.log[-1] if len(srv.log) > before else None
+                # (the page's own picture is fetched after it, so the
+                # submit is looked for among everything since, SPEC.md 71.26)
+                new = srv.log[before:]
+                got = next((r for r in new if "q=os8088" in r),
+                           new[-1] if new else None)
                 print("  the server saw: %r" % got)
                 if not got or "q=os8088" not in got:
                     fails.append("submitting a form whose action is `/` did "

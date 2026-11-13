@@ -59,16 +59,13 @@ def state(m, br):
     return bool(flags & 0x20), flags          # WF_SAVEU
 
 
-with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+with os88marty.launch("build/os8088-360.img", apps="build/network360.img",
                       machine=MACHINE, boot=False) as m:
     m.run()                             # the boot gate on state: the first
     os88marty.kernel_up(m)              # act is a verb that confirms
     os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-    w = dispcp.win_list(m, S)
-    wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BROWSER.O88")

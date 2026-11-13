@@ -65,6 +65,77 @@ def say(*a):
     sys.stdout.flush()
 
 
+LN_SIZE, LNF_IROW = 10, 8
+
+
+def bss_offset(name, image):
+    """A Browser BSS symbol's offset past the image, out of build/browser.map."""
+    with open(os88build.at("build/browser.map"), encoding="ascii") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[-1] == name:
+                return int(fields[0], 16) - image
+    sys.exit("brtest: %s is missing from build/browser.map" % name)
+
+
+def image_rows(m, win):
+    """SPEC.md 71.25 on IMAGES.HTM, read out of the guest's line table.
+
+    Every continuation row (LNF_IROW) must name, by its signed LN_X, a text
+    row that is not one itself, carry an EMPTY span at that row's start
+    (above it) or end (below it), and the line table must hold as many of
+    them as tools/htmsim.py's reference layout does at the same width."""
+    import htmsim
+    fails = []
+    rec = m.read(S("wm_wins") + win * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
+    pseg = rec[22] | (rec[23] << 8)
+    image = os.path.getsize(os88build.at("build/browser.bin"))
+
+    def word(off):
+        raw = m.readseg(pseg, image + off, 2)
+        return raw[0] | (raw[1] << 8)
+
+    os88marty.until(m, lambda _m: word(38) > 0, "the image page's layout",
+                    limit=60)
+    cols, nlines = word(10), word(38)
+    lseg = word(bss_offset("br_lseg", image))
+    raw = m.readseg(lseg, 0, nlines * LN_SIZE)
+    recs = []
+    for i in range(nlines):
+        r = raw[i * LN_SIZE:(i + 1) * LN_SIZE]
+        recs.append((int.from_bytes(r[0:4], "little"),
+                     int.from_bytes(r[4:8], "little"), r[8], r[9]))
+    irows = 0
+    for i, (ofs, end, x, fl) in enumerate(recs):
+        if not fl & LNF_IROW:
+            continue
+        irows += 1
+        d = x - 256 if x >= 128 else x
+        t = i + d
+        if fl != LNF_IROW or d == 0 or not 0 <= t < nlines:
+            fails.append("line %d: a continuation row naming line %d" % (i, t))
+            continue
+        tofs, tend, _, tfl = recs[t]
+        want = tofs if d > 0 else tend
+        if tfl & LNF_IROW:
+            fails.append("line %d names line %d, itself a continuation"
+                         % (i, t))
+        elif ofs != end or ofs != want:
+            fails.append("line %d: span %d..%d, want empty at %d"
+                         % (i, ofs, end, want))
+    ops, _ = htmsim.parse(open(os88build.at("tests/htm/images.htm"),
+                               "rb").read())
+    ops, _, _, _ = htmsim.simplify(ops)
+    model = sum(1 for line in htmsim.layout(ops, cols)
+                if line.kind == "irow")
+    say("image rows: %d continuation rows of %d lines at %d cols "
+        "(htmsim: %d)" % (irows, nlines, cols, model))
+    if irows != model:
+        fails.append("%d continuation rows, the reference layout has %d"
+                     % (irows, model))
+    return fails
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="cga", choices=sorted(MACHINE))
@@ -133,6 +204,9 @@ def main():
                 fails.append("line arena did not grow enough for its records")
             if b"END OF 3000 LINE ARENA TEST" not in doc:
                 fails.append("the local formatted stream lost its final sentinel")
+
+        if args.page.upper() == "IMAGES.HTM":
+            fails += image_rows(m, wins2[-1])
 
         # --- 1: it has to have DRAWN something -------------------------------
         # Without this the comparison below passes on a blank window: two

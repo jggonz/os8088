@@ -254,7 +254,9 @@ PK_JPEGP    equ 10                  ; progressive DCT
 PK_N        equ 11
 
 PX_DIMMAX   equ 8192                ; refused above, before any arithmetic
-PXP_BG      equ 85                  ; THE VIEW BACKGROUND a transparent pixel
+%ifndef PXP_BG                      ; (the Browser's assembly of the parts
+PXP_BG      equ 85                  ; says 255: a page is white, SPEC.md 71.30)
+%endif                              ; THE VIEW BACKGROUND a transparent pixel
                                     ; shows, each channel: the canvas's own
                                     ; dark grey (SPEC.md 106.18)
 

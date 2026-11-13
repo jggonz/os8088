@@ -55,6 +55,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FIELD-MACHINES.md](docs/FIELD-MACHINES.md)** | asking for a field run — who has the hardware, what is in it, what a run costs them, and the two rules that bind whoever reads a result |
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
+| **[docs/PAGEDESK-SPEC.md](docs/PAGEDESK-SPEC.md)** | touching PageDesk (§128, `apps/pagedesk/`, the PDF viewer/editor: the primary, its overlay and the `PDENG`/`PDREND`/`PDWRT` C modules) — its binding contract, cited as `PAGEDESK-SPEC §N`; `docs/plans/PAGEDESK-PLAN.md` is the story list and `docs/PAGEDESK-GUIDE.md` the user guide. **Every segment is at its cap** (PAGEDESK-SPEC 20.20.1); `pdstk` bounds every call chain statically (the UI task's stack is 512 bytes, a module verb runs on 20.15's private stack) and `pdkgate` checks every kernel call a module makes is a gate slot |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
@@ -289,6 +290,18 @@ user gives a different workflow. The worked example is
    adapters, sound/link configurations and resource cleanup checked, and report
    hardware-only limitations honestly. Do not mark unfinished stories done.
 
+## Pull requests show the change
+
+**A pull request that changes what the machine draws carries screenshots
+of the change in its description** - the owner's rule (2026-11-09), binding
+every contributor and agent. `.github/pull_request_template.md` is the shape
+and says what each picture needs (one per adapter the change reaches, taken
+on the glass and named, hosted at a pinned SHA, never under `build/`);
+`.github/workflows/pr-screenshots.yml` fails a pull request touching `apps/`,
+`kernel/`, `drivers/`, `faces/` or `boot/` whose description has neither an
+image nor a `No visible change: <why>` line. A description rewritten after
+review shows the head being merged, not an earlier one.
+
 ## Hard rules (§1 — these break silently if violated)
 
 - **8086 only.** `cpu 8086` plus `-w+error`: no `pusha`, no `push imm`, no
@@ -319,7 +332,7 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 70 sites in 21 files, every one
+  finished** (§6.6.5): the registry stands at 69 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are

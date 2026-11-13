@@ -80,3 +80,22 @@ full  textrules              # as reviewed 2026-11-12
 full  toast                  # as reviewed 2026-11-12
 
 fast  tierlock               # owner 2026-11-12: the gate on this file itself
+
+# Rows main's owner merged at these tiers after this branch's 2026-11-12 lock
+# (brought in by the merge of origin/main at 7b802356). Host-side checks of
+# PageDesk and the Browser, each well under a second; the owner reviews them
+# at the next recut.
+fast  pdfix                  # main #342, owner-merged 2026-11-09: the sample PDFs reproducible and valid
+fast  pdstk                  # main #342, owner-merged 2026-11-09: PageDesk's static stack bound (PAGEDESK-SPEC 20.15)
+fast  pdjr                   # main #342, owner-merged 2026-11-09: PageDesk's recovery journal
+full  pdfixstress            # main #342, owner-merged 2026-11-09: t_pdfix --stress
+fast  pdprep                 # main #342, owner-merged 2026-11-09: PageDesk's host prep tool
+fast  pdlay                  # main #342, owner-merged 2026-11-09: PageDesk's three layouts on every content box
+fast  pdnotes                # main #342, owner-merged 2026-11-09: PageDesk's Notes & edits list model
+fast  pded                   # main #342, owner-merged 2026-11-09: PageDesk's edit store and undo
+fast  pdkgate                # main #342, owner-merged 2026-11-09: every PageDesk module kernel call is a gate slot
+fast  pderrlen               # main #354, owner-merged 2026-11-11: each PDE_* sentence fits the empty-view card
+fast  pdssarg                # main #354, owner-merged 2026-11-11: a stack argument read through SS, never DS
+fast  pd360                  # main #354, owner-merged 2026-11-11: PageDesk's 360KB program disk still fits
+fast  brautosave             # main #358, owner-merged 2026-11-11: which link opens as a page and which downloads
+fast  brbookmarks            # main #358, owner-merged 2026-11-11: the bookmark records in the URL store

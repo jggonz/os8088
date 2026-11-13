@@ -154,9 +154,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "3ef633c9",
-  "strings": "4d794c0f80cf14d9",
-  "why": "Checked against Browser 1.5-1.6c source: added the Ctrl keys and Keyboard Shortcuts, bookmarks (BROWSE.DAT, eight), the right-button menu and View Source, the Downloads window, password fields, and the new page/link/form limits."
+  "stamped": "6f1c3f426",
+  "strings": "55b6220eb09d2d45",
+  "why": "Browser 1.7 review fixes (PR 358): the page already describes 1.7's pictures, Save Image As and image maps; the fixes add two rare refusal lines (Busy decoding an image, No image during download) below the page's level of detail. Restamped because c1055377 was the contributor's pre-rebase commit and is not in main's history"
  },
  "C64": {
   "sources": [],
@@ -627,9 +627,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "721aaa9b5",
-  "strings": "61f0963f42a17441",
-  "why": "apps/install changed only in OS88VER.TXT (release 20261109's date and what-is-new lines); the page quotes neither, so it stands unchanged"
+  "stamped": "930837d35",
+  "strings": "cd6e7233ab771447",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261113's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -837,6 +837,14 @@
   "strings": "860c9413154506bd",
   "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
+ "PAGEDESK_O88": {
+  "sources": [
+   "apps/pagedesk"
+  ],
+  "stamped": "d378b70c5",
+  "strings": "9dcb17f2e9f46ff6",
+  "why": "first manual, written from docs/PAGEDESK-GUIDE.md, menus and pduerr"
+ },
  "PAINT_O88": {
   "sources": [
    "apps/paint"
@@ -877,9 +885,9 @@
   "sources": [
    "apps/pixel"
   ],
-  "stamped": "24c3d243",
-  "strings": "60dc14a5e710d600",
-  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
+  "stamped": "fc7bc763",
+  "strings": "ff4c286ecfd7d004",
+  "why": "pl_plan1, px_t1for and px_bayer moved to includes the Browser shares; PiXEL byte-identical"
  },
  "PONG_WAB": {
   "sources": [],

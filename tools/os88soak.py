@@ -325,6 +325,11 @@ def requirements(rows=None):
                 "wireflick and uilat. ONE OF THOSE IS A RATE ROW, so without "
                 "it a soak skips part of its rate lane silently.",
                 "make wiredisk"))
+    # PageDesk's package: a C package (SPEC.md 73) `all` does not build
+    add('cap:pagedesk', ("pagedesk", lambda: os.path.exists(B("pagedesk.o88")),
+                "pd360, which repacks the 360KB PageDesk program disk from "
+                "the current package (PAGEDESK-SPEC 20.22.2.8).",
+                "tools/setup-cc.sh && make pagedesk"))
     # ...and the one that proves the list is worth keeping by hand:
     # skiesdiag's is a private -DCSDIAG TREE rather than a disk `all` chose
     # not to build, so nothing above would ever have named it. It went

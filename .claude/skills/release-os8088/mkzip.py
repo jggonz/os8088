@@ -351,8 +351,9 @@ ITEMS = [
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
-     "cartridge, DrMarco and the demo video. MIDIRack is on both software "
-     "disks, so its songs open from either.",
+     "cartridge, DrMarco and the demo video, and the REDLINE benchmark, "
+     "Telnet and CDRack, which the 720KB system disk has no room for. "
+     "MIDIRack is on both software disks, so its songs open from either.",
      [("more720.img", "720KB", "")]),
 
     ("emu", "Emulator system disk", True,
@@ -468,6 +469,21 @@ ITEMS = [
      "software disk and the 360KB music disk; at 1.2MB and 720KB it is "
      "here.",
      [("xtmp3120.img", "1.2MB", ""), ("xtmp3720.img", "720KB", "")]),
+    ("progs", "PageDesk", False,
+     "A PDF viewer and editor. It opens a PDF, draws its pages, finds text "
+     "in it, and adds highlights, notes, text boxes, drawings and page "
+     "changes, which it saves under a new name and never over the original. "
+     "It reads PDFs as they are made today, including compressed and "
+     "encrypted ones, embedded fonts and JPEG pictures. It is made for a PC "
+     "with 640KB of memory. Each disk carries the program and eight sample "
+     "PDFs, one of them a guide to PageDesk itself; all but the 360KB disk "
+     "also carry the extra font sizes. At 360KB the program fills the first "
+     "disk on its own, and the second 360KB disk carries the samples. "
+     "PDFONTS.TXT on the program disk is the licence of the fonts it uses. "
+     "PageDesk is on the everything sets and the live media too.",
+     [("pagedesk.img", "1.44MB", ""), ("pagedesk120.img", "1.2MB", ""),
+      ("pagedesk720.img", "720KB", ""), ("pagedesk360.img", "360KB", ""),
+      ("pagedesk360b.img", "360KB", "the samples")]),
     ("progs", "Windows 3.x programs", True,
      "WIN16, which runs Windows 3.0 and 3.1 programs in an os8088 window. "
      "The disk carries WIN16 and is otherwise empty: copy your Windows "
@@ -528,6 +544,7 @@ DEST = {
     "os8088-720.img": "720K/OS88-720.IMG",
     "apps720.img": "720K/APPS-720.IMG",
     "more720.img": "720K/MORE-720.IMG",
+    "pagedesk360b.img": "PROGRAMS/PAGEDESK/PDESK36B.IMG",   # PDESK360's second
     "small720.img": "720K/128K-RAM/OS88-720.IMG",
     "os8088-360.img": "360K/OS88-360.IMG",
     "apps360.img": "360K/APPS-360.IMG",
@@ -582,6 +599,7 @@ PROGRAMS = {
     "WaveRack": ("WAVERACK", "WAVE"),
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
+    "PageDesk": ("PAGEDESK", "PDESK"),
     "Weave": ("WEAVE", "WEAVE"),
     "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),

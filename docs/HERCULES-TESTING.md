@@ -120,6 +120,18 @@ Not covered: the detection probe (forced, not run) and the 6845 register
 programming (written to ports nothing is listening on). Those run on
 MartyPC, and on 86Box.
 
+**Nor a package with a big heap.** `HERCSEG` is ordinary RAM that the kernel
+draws into and the heap does NOT know about: nothing reserves those 32KB from
+the claim arena, so whatever claim lands on `HERCSEG:0000` is overwritten by
+the next repaint and every paint scribbles over the claim. A desktop and a
+small window never reach that high, so the harness looks sound until a
+package claims a few hundred KB - PageDesk does (its modules, caches and
+display list), and under `HERCSEG=0x7000` its claims are the framebuffer: the
+picture fills with page data and the document's state fills with pixels.
+Look at such a package on Hercules in **MartyPC** (`os8088_5150_herc_gla`,
+a real Hercules card at B000h, which `tests/pagedeskxt.py` drives), never
+under the QEMU harness.
+
 ---
 
 ## Rebuilding, and not shipping a forced kernel

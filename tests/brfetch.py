@@ -352,8 +352,12 @@ def main():
         # Ctrl+D adds idempotently; unlike the toolbar star it never toggles
         # a record out. The page has its parsed title now, so this first save
         # also checks the human-facing menu label.
-        bm = sy["br_bmdata"]
-        bm_count = lambda: m.readseg(pseg, bm + 4, 1)[0]  # noqa: E731
+        # The bookmark file's image is in the URL store (SPEC.md 71.23), a
+        # claim of its own: [br_urlseg], at BR_URLBM = 1280
+        bm = 1280
+        bmseg = lambda: sym_w("br_urlseg")  # noqa: E731
+        bm_count = lambda: (m.readseg(bmseg(), bm + 4, 1)[0]  # noqa: E731
+                            if bmseg() else 0)
         m.ctrl("KeyD")
         os88marty.settle(m)
         m.ctrl("KeyD")
@@ -369,11 +373,11 @@ def main():
         if bm_count() != 1:
             fails.append("saving the same page twice stored %d bookmarks, not 1"
                          % bm_count())
-        stored = bytes(m.readseg(pseg, bm + 5 + 24, 160)).split(b"\0", 1)[0]
+        stored = bytes(m.readseg(bmseg(), bm + 5 + 24, 160)).split(b"\0", 1)[0]
         if stored.decode("ascii", "replace") != url:
             fails.append("bookmark stored %r instead of the address bar URL %r"
                          % (stored, url))
-        stored_title = bytes(m.readseg(pseg, bm + 5, 24)).split(b"\0", 1)[0]
+        stored_title = bytes(m.readseg(bmseg(), bm + 5, 24)).split(b"\0", 1)[0]
         if stored_title != b"Over the wire":
             fails.append("bookmark label stored %r instead of the page title"
                          % stored_title)

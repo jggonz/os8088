@@ -8,7 +8,7 @@
   "version": 7
  },
  "PKG_FMT": {
-  "fingerprint": "f6c2cf20149faee82be3681877c01727821c71336bbcd768c3f24ac704cec33d",
+  "fingerprint": "3aa521518ca9666207043f9bb9ab4301d88bf99a85d47317f1d6423962921241",
   "version": 13
  },
  "VX_ABI_VER": {
@@ -2253,6 +2253,13 @@
    "guard": "DRV_VER",
    "reason": "SPEC.md 50.6.13.2: two owner tags added (MEM_P_ICO_SM, MEM_P_DIRW_SM), kern_small's spellings of the icon store's and the read-ahead's tags for the Task Manager; nothing built before changes meaning, no bump",
    "to": 14
+  },
+  {
+   "fingerprint": "3aa521518ca9666207043f9bb9ab4301d88bf99a85d47317f1d6423962921241",
+   "from": 13,
+   "guard": "PKG_FMT",
+   "reason": "merge of origin/main 7b802356 (PageDesk, Browser 1.7): the C SDK gains os88_gfx_blit1_seg, os88_file_read_seq, os88_file_write_seq, os88_vol_kind and os88_ferr_text (thunks over existing cells) and crt0's optional CC_OVL_ROOM/CC_OVL_FAIL hooks - additions within this unreleased PKG_FMT 13 round, nothing built before changes meaning, no bump",
+   "to": 13
   }
  ]
 }

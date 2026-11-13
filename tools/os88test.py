@@ -406,6 +406,14 @@ def capabilities():
     # one outcome a probed capability exists to prevent.
     if os.path.exists(os88build.at("build/wire360.img")):
         caps.add("wiredisk")
+    # PageDesk's package, which `all` does not build: it is a C package
+    # (SPEC.md 73) and `make pagedesk`, `pagedeskdisk`, `allapps` and `live`
+    # build it on demand. `pd360` repacks the 360KB program disk from it, and
+    # on a clean tree it FAILED `make` on "build/pagedesk.o88 is built" -
+    # the release build of 20261111 hit it first, because every tree it had
+    # run on had built the package already.
+    if os.path.exists(os88build.at("build/pagedesk.o88")):
+        caps.add("pagedesk")
     # Microsoft's Windows programs, which WIN16's rows play (SPEC.md 124.15)
     # and which this tree never carries: the win16-reference skill puts them
     # in build/win16/ on a box that has them, and every other box SKIPS.

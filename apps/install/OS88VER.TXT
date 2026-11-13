@@ -1,5 +1,5 @@
-20261109
-* ARCADE plays Space Invaders and more
-* Video Battle: a battle told in video
-* 286+ kernel ships on its own disks
-* Sound debug disk for field reports
+20261113
+* ESS AudioDrive cards on DMA 1 or 3
+* Sound driver sets the ESS DMA route
+* Sound Debug shows the DMA in use
+* DOS gets the right BLASTER setting

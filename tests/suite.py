@@ -1375,7 +1375,7 @@ FAST = [
         "mem_regrow taken out, and red at 7K on the SB leg with snd_keep "
         "written unconditionally",
         wants=("build/covoxsys720.img", "build/mixer360.img")),
-    Row("snddiag", "soak", py("tests/snddiag.py"), 120.0,
+    Row("snddiag", "soak", py("tests/snddiag.py", "--evidence", "build/ess-sound/herc-dma3.png"), 8.0,
         "THE SOUND DEBUG DISK, BOOTED (SPEC.md 127.2-127.4): "
         "debug-sound-720.img on the SB 5150 with nobody at it. \\AUTOSTRT "
         "opens SNDDIAG.O88, the play test starts by itself and runs ten "
@@ -1383,10 +1383,23 @@ FAST = [
         "taking block IRQs, no watchdog stop, a verdict that names nothing - "
         "and pages 1 and 3 show the probe record: the -DSNDDIAG driver "
         "answering SNDV_DIAG, the DSP at 220h, a BLASTER= line, E1h in the "
-        "DSP write log. Read out of the package's own text buffer, which is "
-        "what its rows draw",
-        needs=("marty",),
+        "DSP write log. Then, after the tone has stopped, inject reported DMA 3 "
+        "and FFh to check the DSP/BLASTER text and refusal without claiming "
+        "physical ESS playback. Read from the package's own text buffer",
+        needs=("marty", "nasm"),
         wants=("build/debug-sound-720.img", "build/apps720.img")),
+    Row("snddiag-vga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
+        "--apps", "build/apps360.img", "--machine", "os8088_xt_vga_sb",
+        "--evidence", "build/ess-sound/vga-dma3.png"), 10.0,
+        "SPEC.md 127.4/34.5.8: Sound Debug on VGA, including the ten-second "
+        "tone and DMA-3/refused report injection; no physical ESS claim",
+        needs=("marty", "nasm"), wants=("build/debug-sound-360.img", "build/apps360.img")),
+    Row("snddiag-cga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
+        "--apps", "build/apps360.img", "--machine", "os8088_5150_sb_gla",
+        "--evidence", "build/ess-sound/cga-dma3.png"), 7.0,
+        "SPEC.md 127.4/34.5.8: Sound Debug fits the 640x200 CGA display, including "
+        "the ten-second tone and DMA-3/refused report injection",
+        needs=("marty", "nasm"), wants=("build/debug-sound-360.img", "build/apps360.img")),
     Row("sndonce", "soak", py("tests/unit/t_sndonce.py"), 1.0,
         "SPEC.md 34.15.1: nothing SOUND.DRV keeps reaches into what its "
         "attach hands back - read off the assembler's own listing, no "
@@ -1702,6 +1715,94 @@ FAST = [
         "C message and a tool's help text and stands for comments and code. "
         "~2s: it walks the built disks and hashes the packages' strings",
         needs=()),
+    Row("pdfix", "fast", py("tests/unit/t_pdfix.py"), 0.3,
+        "PAGEDESK-SPEC 18 / 20.1: tools/os88pdfgen.py regenerates PageDesk's "
+        "eight sample PDFs byte-identically to the committed "
+        "apps/pagedesk/samples/, every XT-profile sample passes qpdf --check "
+        "(SKIP, never pass, without qpdf on PATH), and every negative file's "
+        "expected PDE_* code exists in pdabi.h",
+        needs=()),
+    Row("pdstk", "fast", py("tests/unit/t_pdstk.py"), 1.3,
+        "DECISIONS D21/D23 (PageDesk's stack): tools/os88pdstk.py reads every "
+        "PageDesk segment's source and build/*.gen.asm, builds the call graph "
+        "with each frame, push and return address, and fails on recursion "
+        "outside its bounded ratchet, a module verb deeper than the 2 KiB "
+        "private stack less 256, or a callback chain on the UI task's 512-byte "
+        "stack over 384 (dispatch + frames + the kernel call). bez() recursing "
+        "seven deep wrote over the kernel's menu bar. Three synthetic negative "
+        "controls always run; the real tree SKIPs, by name, until `make "
+        "pagedesk` has built it",
+        ),
+    Row("pdjr", "fast", py("tests/unit/t_pdjr.py"), 2.0,
+        "PAGEDESK-SPEC 20.17 (PD-20): PageDesk's recovery journal on the host - "
+        "the whole-store rewrite and its debounce, recovery through the 20.8 "
+        "edit-store API, a stale fingerprint, a torn or corrupt journal, a "
+        "read-only volume, the 8 KiB limit, the interrupted-save note and "
+        "its retirement on Save, and the /NM seed",
+        needs=()),
+    Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
+        "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
+        ">64 KiB stream, 64 pages, 10,000 sparse objects within "
+        "PD_MAXSUBSEC, a 3-revision chain where the newest wins, 256 "
+        "annotations - 0.45 s of image generation kept out of the fast tier",
+        needs=()),
+    Row("pdprep", "fast", py("tests/unit/t_pdprep.py"), 1.5,
+        "PAGEDESK-SPEC 20.14 / PD-22: tools/os88pdprep.py on generated "
+        "inputs - RunLength, dither, tokenizer, an objstm+Flate six-page PDF "
+        "prepared (raster of shading/alpha/poster pages, invisible text, Info "
+        "stamp, byte-reproducible), qpdf/os88pdfcheck/profile/PDENG "
+        "verification, refusals, decrypt, the input never overwritten, "
+        "negative control. SKIP without qpdf",
+        needs=()),
+    Row("pdlay", "fast", py("tests/unit/t_pdlay.py"), 0.5,
+        "PAGEDESK-SPEC 17.1 / 20.6.4: apps/pagedesk/pdulay.c - the layout "
+        "the package compiles - built on the host and swept over every "
+        "content box 320x100..720x460 in every mode and the five displays by "
+        "name (VGA, EGA, Hercules 348 and 350, CGA): regions and controls "
+        "inside the box and their own bar, no overlap, the canvas on the "
+        "8-pixel grid, the kind from the thresholds, every mode's tools on "
+        "the glass. ~15M checks in ~0.4 s",
+        needs=("cc",)),
+    Row("pderrlen", "fast", py("tests/unit/t_pderrlen.py"), 0.1,
+        "PAGEDESK-SPEC 20.22.6 / QA F14: every PDE_* sentence in "
+        "apps/pagedesk/pduerr.c fits the empty-view card's one line in the "
+        "narrowest canvas (39 cells) - the card cuts a longer one"),
+    Row("pdssarg", "fast", py("tests/unit/t_pdssarg.py"), 0.1,
+        "QA F32 / CLAUDE.md's near model: PageDesk's assembly reads a stack "
+        "slot after `mov bx, sp` as [ss:bx+n] - _pdu_claimhi read its size "
+        "through DS, the edit store came out 0.5 KiB, and a typed note was "
+        "overwritten by the page's content stream. A negative control takes "
+        "the override out and must be caught"),
+    Row("pd360", "fast", py("tests/unit/t_pd360.py"), 0.2,
+        "PAGEDESK-SPEC 20.22.2.8: the 360KB program disk (the Makefile's "
+        "PD360DISK1: PAGEDESK.O88 and the packed PDFONTS.TXT) built again "
+        "from the CURRENT package keeps 4 of 354 clusters free - "
+        "pagedesk360.img is on demand and went stale while the fix round "
+        "grew the program to 359 of 354. It SKIPS on a tree that has not "
+        "built the package, which `all` does not",
+        needs=("pagedesk",)),
+    Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
+        "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
+        "model - the filters (This page / All pages / Changes), order, "
+        "seek/step/find consistency, copy-on-edit shadowing, review state "
+        "(resolve/reopen as a reply), 256 records, the kind table and the "
+        "change words - built on the host over a fake store "
+        "(hosttest/pdu_nt.c; SKIP without cc)",
+        needs=("cc",)),
+    Row("pded", "fast", py("tests/unit/t_pded.py"), 0.5,
+        "PAGEDESK-SPEC 13.1.1 / 13.6 / 20.8: apps/pagedesk/pduedit.c and "
+        "pduundo.c - the edit store and undo the package compiles - built on "
+        "the host: every kind's layout, the limits, undo/redo against "
+        "snapshots, typing coalescing, the 64-command history, the save "
+        "point, source annotations, page-op deltas and 40 seeded random "
+        "walks. ~0.5 s",
+        needs=("cc",)),
+    Row("pdkgate", "fast", py("tests/unit/t_pdkgate.py"), 0.1,          # deepstk
+        "PAGEDESK-SPEC 20.15 (D23): every far call to KERNEL_SEG in the "
+        "BUILT PDENG/PDREND/PDWRT and the stand-ins sits in a pdkgate.inc "
+        "slot (near call to one pdk_up before, jump to one pdk_dn after), so "
+        "no kernel call runs on the private module stack. SKIP when no "
+        "module is built"),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
@@ -10350,7 +10451,8 @@ SOAK = [
         "refusal the LAUNCH earned fell through it and came back `File not "
         "found` about a document that was there. 173.2s measured.",
         needs=("marty",), serial=True,
-        wants=("build/apps360.img", "build/piano.o88")),
+        wants=("build/apps360.img", "build/piano.o88",
+               "build/fontview.o88", "build/faces/charter.f88")),
     Row("dosext", "soak", py("tests/dosext.py"), 120.0,
         "A TYPED EXTENSION, AND THE ARGUMENTS AFTER IT (SPEC.md 96.33.15.1). "
         "COMMAND.COM's rule has two halves - no extension is a search, an "
@@ -10491,8 +10593,8 @@ SOAK = [
         wants=("build/os8088.img", "build/xmtest.img")),
     Row("brpromise", "soak", py("tests/brpromise.py"), 30.0,
         "SPEC.md 71.11: the Browser's WF_SAVEU promise follows the FETCH - "
-        "withdrawn when br_go starts one, back when it settles. The plain apps "
-        "disk, so unlike the other br* rows it needs no `make browsertest`",
+        "withdrawn when br_go starts one, back when it settles. The network "
+        "disk (the Browser left apps360.img, SPEC.md 71.30), so unlike the other br* rows it needs no `make browsertest`",
         needs=("marty",), serial=True),
     # --- the Browser's page rows (SPEC.md 71). They boot `make browsertest`'s
     # disk, which `wants=` builds before the run; until the shared-wins round
@@ -10503,9 +10605,20 @@ SOAK = [
         "page parses and RENDERS, and the location bar holds the file's URL",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("brimages", "soak", py("tests/brtest.py", "--page", "IMAGES.HTM"),
+        25.0,
+        "SPEC.md 71.25: IMAGES.HTM's image boxes - every continuation row in "
+        "the line table names a text row and carries an empty span at its "
+        "edge, as many of them as tools/htmsim.py lays out, and a blitted "
+        "arrival equals a repainted one with the frames on the glass",
+        needs=("marty",), serial=True,
+        wants=("build/brtest360.img",)),
     Row("brarena", "soak", py("tests/brarena.py"), 180.0,
         "BROWSER-MEMORY-ROADMAP: a local 3,000-line page grows the Browser's "
-        "line-index arena past 16 KiB in QEMU, without NE2000 traffic",
+        "line-index arena past 16 KiB in QEMU, without NE2000 traffic; then "
+        "SPEC.md 71.19.1 on the wide page - a drag from below the 64 KiB seam "
+        "ends past it, Ctrl+C copies exactly both sides' visible text, Tab "
+        "focuses the link past the seam",
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img",)),
     Row("brcapacity", "soak", py("tests/brcapacity.py"), 45.0,
@@ -10563,6 +10676,17 @@ SOAK = [
         "server this row runs on the host, and the reply renders",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("brems", "soak", py("tests/brems.py"), 300.0,
+        "SPEC.md 71.18, 71.24: a page fetched over the cable into a 256 KB "
+        "machine with a Lo-tech EMS board (os8088_5150_cga_lpt_ems), so its "
+        "source AND its document are in EMS and share the frame. A select's "
+        "next option (br_fsetval) must put the option's text in the field's "
+        "cells, read out of the frame at br_frepaint - the document's own "
+        "bytes went in while the value was read after br_docmap; View Source "
+        "must project exactly the source's length past the 64 KiB seam, and "
+        "Close Source give the page back",
+        needs=("marty",), serial=True,
+        wants=("build/brtest360.img", "build/emstest.img")),
     Row("brrace", "soak", py("tests/brrace.py"), 90.0,
         "SPEC.md 71.14: a Reload clicked while the worker is inside br_parse "
         "must neither write through a freed buffer (the interrupt vector "
@@ -21904,6 +22028,18 @@ SOAK = [
         "writes, absent/stuck bus, IF and SS != DS, detach restoration and a "
         "deliberately wrong register that must fail",
         needs=("nasm", "unicorn")),
+    Row("essdma", "soak", py("tests/essdma.py"), 2.0,
+        "SPEC.md 34.5.8: the assembled SOUND.DRV identifies ES1868/ES1869, "
+        "validates its direct configuration port, reuses assigned DMA 1/3 "
+        "and moves a BIOS 0,3 pair to Audio 1 on 3 without claiming DMA 1. "
+        "Scripted ports check read-back/rollback, foreign or absent parts, "
+        "playback/capture, high-speed pause/resume, close, consumed counts "
+        "and DOS HWINFO, with IF and SS != DS. An unconfirmed part, port or "
+        "reset keeps DMA 1 (a slow non-ESS 3.01 reset among them), and an XT "
+        "disk on IRQ 5 keeps DMA 3. The row runs --break-dma's old DMA-1 "
+        "address port itself and fails unless that arm fails. This does not "
+        "claim physical ESS playback",
+        needs=("unicorn", "nasm"), wants=("build/sound.bin",)),
     Row("sbirq5", "soak", py("tests/sbirq5.py"), 3.0,
         "SPEC.md 34.5.6: SOUND.DRV REFUSES a Sound Blaster on IRQ 5 when IRQ 5 "
         "is TAKEN on an XT - OSAPI_CPU_INFO's CPU_8086 tier and int 0Dh hooked "
@@ -22100,6 +22236,131 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
+    Row("brgif", "soak", py("tests/ethernet.py", "--gif-fixtures"), 60.0,
+        "SPEC.md 71.26: tests/brgifs.py's page and GIFs served over HTTP - "
+        "every image fetched after the page, a box with no size taking its "
+        "header's, and each ready copy (four planes on this VGA) byte for "
+        "byte tests/brgifref.py's, made from tools/pixelsim.py's decode and "
+        "plans; cut short, a bad code, not a GIF and a 404 keep their alt "
+        "boxes. QEMU by name: MartyPC has no NIC.",
+        needs=("qemu",), serial=True,
+        wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
+        locks=("port:8090",)),
+    Row("brgifcga", "soak",
+        py("tests/ethernet.py", "--gif-fixtures", "--video", "cga"), 120.0,
+        "SPEC.md 71.26: brgif's page on a forced CGA, a private tree "
+        "(tools/os88build.py): every ready copy is the 1bpp one, byte for "
+        "byte the reference's",
+        needs=("qemu", "nasm"), serial=True, timeout=1800,
+        locks=("port:8090",)),
+    Row("brgifreload", "soak",
+        py("tests/ethernet.py", "--gif-fixtures", "--reload-during-images",
+           "--response-chunk-size", "64", "--response-delay-ms", "20"), 90.0,
+        "SPEC.md 71.26's stop: F5 while an image is half in - the engine "
+        "stopped, its socket closed and its store freed under it - and the "
+        "reload's images all in again, byte for byte",
+        needs=("qemu",), serial=True,
+        wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
+        locks=("port:8090",)),
+    Row("brgifems", "soak", py("tests/brgifems.py"), 600.0,
+        "SPEC.md 71.26's EMS tier: twelve 256x128 GIFs on 86Box's 384 KB XT "
+        "with an NE1000 and a Lo-tech board (xt_vga_ne1k_ems_384k) - the "
+        "copies outgrow the reserve and go to EMS, every picture is shown, "
+        "the store's copies are tests/brgifref.py's byte for byte, and every "
+        "slice of every EMS copy, read through the frame where br_imgblits "
+        "blits it while the page is scrolled end to end, is too. 86Box by "
+        "name: the one emulator with a card and a board",
+        needs=("86box",), serial=True, timeout=3000,
+        wants=("build/brtest360.img", "build/etherems360.img",
+               "build/browser.o88")),
+    Row("brganim", "soak", py("tests/brganim.py"), 90.0,
+        "SPEC.md 71.29: four animated GIFs (disposals 1, 2 and 3, transparent "
+        "pixels, a local table mapped to frame 0's palette, an interlaced "
+        "frame, a box scaled up, a loop for ever and one that plays once) "
+        "play; stopped every 0.4 s, each image's copy in the store is one of "
+        "tools/pixelsim.py gif_anim's frames made a ready copy, every frame "
+        "of each is seen, and a page scrolled away draws no frame until it "
+        "comes back. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8095",)),
+    Row("brpx", "soak", py("tests/brpx.py"), 120.0,
+        "SPEC.md 71.30: PNG and JPEG through PiXEL's decoder parts, hosted by "
+        "the Browser's part 1 - an indexed PNG with tRNS, a 1-bit grey, RGB "
+        "(the cube), RGBA over white, Adam7 (K_SCAT), BALLOONS.PNG scaled "
+        "down; JPEG 4:2:0, grey, progressive, EXIF orientation 6 (K_COLS), "
+        "the IDCT's 1/4 and LAKE.JPG - every copy byte for byte "
+        "tests/brgifref.py expected_px's, an arithmetic JPEG and a PNG cut "
+        "short keeping their alt boxes, each file asked for once, and a GIF "
+        "page after. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8096",)),
+    Row("brold", "soak", py("tests/brold.py"), 180.0,
+        "SPEC.md 71.31: the older formats through PiXEL's EXTRAS and SIMPLE "
+        "parts and the Browser's own XBM part, hosted by part 1 - BMP at 8, "
+        "24 (B, G, R), RLE8, 1 and 16 bits; PCX at 8 (its tail palette) and "
+        "24; TGA at 24 and colour-mapped RLE (by the URL's .TGA); TIFF LZW "
+        "and PackBits; an ICO with its mask; an ILBM; MacPaint in MacBinary "
+        "and plain (.MAC); an XBM - every copy byte for byte "
+        "tests/brgifref.py expected_px's, a BMP cut short and a JPEG-in-TIFF "
+        "keeping their alt boxes, each file asked for once, and a page of "
+        "PNG, JPEG and BMP after. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8096",)),
+    Row("brmap", "soak", py("tests/brmap.py"), 150.0,
+        "SPEC.md 71.32: image maps and Save Image As - on one usemap picture "
+        "(its <map> after it) a click in the rect, the circle and the "
+        "triangle asks for each area's href, the default with no href and "
+        "the border ask for nothing; an ismap link asks for ?13,7; a right "
+        "click opens the image menu and a linked picture's link menu with a "
+        "fourth row, and each hands the picture's URL to the Download "
+        "Manager. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/brtest360.img",
+               "build/browser.o88"),
+        locks=("port:8096",)),
+    Row("brmegaimg", "soak", py("tests/brmegaimg.py"), 300.0,
+        "SPEC.md 71.26-71.32 under kern_mega on a REAL 286 (86Box's mr286, "
+        "an NE2000 on slirp): a GIF, an animated GIF, a PNG, a JPEG, a BMP, "
+        "a TIFF, a PCX and an XBM - every decoder part fetched, hosted and "
+        "dropped with its segments selectors - each copy read out of the "
+        "store by its LDT descriptor and byte for byte tests/brgifref.py's, "
+        "the animation playing, each file asked for once",
+        needs=("86box",), serial=True, timeout=1800,
+        wants=("build/mega.img", "build/browser.o88")),
+    Row("brkeep", "soak", py("tests/brkeep.py"), 90.0,
+        "SPEC.md 71.28: the Browser opened from a hard disk (build/brkeep.img, "
+        "TESTHD=) keeps every picture of a page in C:'s BRCACHE - each copy, "
+        "found by its request's hash in the file's index read on the host, is "
+        "tests/brgifref.py's with the server's Last-Modified and ETag; Back "
+        "asks for no picture and draws the first visit's pixels from the "
+        "file; Reload asks for every one with If-None-Match and "
+        "If-Modified-Since, is answered 304 and draws the same pixels; the "
+        "close leaves BRCACHE empty. QEMU by name: MartyPC has no NIC",
+        needs=("qemu",), serial=True,
+        wants=("build/brkeep.img", "build/ether360.img",
+               "build/brtest360.img"),
+        locks=("port:8094",)),
+    Row("brgifdisk", "soak",
+        py("tests/brgifems.py", "--machine", "xt_vga_ne1k_384k", "--n", "5"),
+        600.0,
+        "SPEC.md 71.27's disk tier: brgifems' page on the same 384 KB XT with "
+        "no board - the copies the reserve refuses go to "
+        "B:\\SYSTEM\\APPDATA\\BRCACHE, every picture is shown, every "
+        "slice of every copy in the file, read through the paint buffer where "
+        "br_imgblits blits it, is the reference's; F5 deletes the page's "
+        "file, and a file the instance forgot (a crash) is swept by the next "
+        "lone start. Five stills (the B: disk also carries the 100 KB Browser) and an animated GIF third (SPEC.md 71.29): "
+        "fetched once, its copy kept in the store while the spills take the "
+        "stills round it, and playing",
+        needs=("86box",), serial=True, timeout=3000,
+        wants=("build/brtest360.img", "build/etherems360.img",
+               "build/browser.o88")),
     Row("pciether", "soak", py("tests/pciether.py"), 20.0,
         "SPEC.md 125 (docs/plans/PCIETHER-PLAN.md S8): PCIETHER.DRV on "
         "kern_mega with a PCI RTL8139 (`-device rtl8139` on slirp, "
@@ -22158,6 +22419,53 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/browser.o88", "build/ether360.img"),
         locks=("port:8090",)),
+    Row("brdownload-ctype", "soak",
+        py("tests/brdownload.py", "--content-type"), 180.0,
+        "SPEC.md 71.20.4: a link with a PAGE suffix (.cgi) whose 200 answers "
+        "application/octet-stream and filename=\"DOWNLOAD.BIN\" navigates, and the Browser turns the fetch "
+        "into a download at the headers - the Save dialog opens, the page and "
+        "history come back as they were, the file is byte-exact under the "
+        "header's name (the URL would say GET.CGI), and the "
+        "server sees the link fetched twice (the cut page fetch, then the "
+        "Download Manager's). Where it said `Response is not HTML` after "
+        "draining the whole file and throwing it away.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-cancel", "soak",
+        py("tests/brdownload.py", "--cancel-active"), 180.0,
+        "SPEC.md 71.20.3: Cancel during a transfer deletes only the temporary "
+        "file, leaves the old DOWNLOAD.BIN byte for byte, closes the manager, "
+        "and the download then STAYS DL_CANCEL - where a cancel request left "
+        "standing turned it back into CANCELREADY every tick, the UI deleted "
+        "the gone partial again and failed, for as long as the Browser ran.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-close", "soak",
+        py("tests/brdownload.py", "--close-active"), 180.0,
+        "SPEC.md 71.20.3: the title-bar close during a transfer is a cancel "
+        "request, with brdownload-cancel's checks.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-failexit", "soak",
+        py("tests/brdownload.py", "--fail-exit"), 180.0,
+        "SPEC.md 71.20.3: a body cut short ends in DL_FAIL with no file left, "
+        "and Exit then dismisses the manager. It fell through to a cancel "
+        "request, re-deleted the gone partial and stayed on `Could not delete "
+        "partial file` - and under `Saved as .$$$` would delete the only copy.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
+    Row("brdownload-failclose", "soak",
+        py("tests/brdownload.py", "--fail-close"), 180.0,
+        "SPEC.md 71.20.3: the same failed transfer, dismissed by the title-bar "
+        "close box, which did nothing: it re-entered the raced-cancel path "
+        "that keeps an error on the glass.",
+        needs=("qemu",), serial=True,
+        wants=("build/browser.o88", "build/ether360.img"),
+        locks=("port:8090",)),
     Row("brnav", "soak", py("tests/brnav.py"), 215.0,
         "SPEC.md 71.8 (BROWSER-PLAN 5): Back, Forward, Reload and Save As "
         "over the NE2000 against pages the row serves on :8091 - a navigation "
@@ -22204,6 +22512,9 @@ SOAK = [
         "page whose claims all sit above 1MB (OS88_HIGH/OS88_HIGHMEM, the "
         "region too) - the stream's tail and the line table read out by "
         "their descriptors, End painting the last lines, no CLOSED/FAULT. "
+        "On the last rows a drag selects past the seam, Ctrl+C copies its "
+        "visible text and Tab reaches the last link (SPEC.md 71.19.1); a "
+        ".zip downloads through part 0 (71.20.5). "
         "Red with br_docmap taking the sum (CLOSED BROWSER 0D) - as the "
         "pre-MC7 Browser is - and with br_take's (leg 2). 48s measured",
         needs=("bochs", "nasm"),
@@ -22217,6 +22528,30 @@ SOAK = [
         "sizes and counts the Browser capacity gate expects. builds=True only "
         "because the registry reads tests/brcapacity.py for `make`; the "
         "--fixtures mode runs no make and no QEMU.", builds=True),
+    Row("brautosave", "fast", py("tests/unit/t_brautosave.py"), 0.5,
+        "SPEC.md 71.20: which link the Browser opens as a PAGE and which it "
+        "hands to DOWNLOADS, decided by the last path component's suffix "
+        "(.htm .html .cgi .php .phtml .shtml .asp .aspx .jsp .pl .cfm "
+        ".xhtml navigate; any other suffix downloads; none navigates; the "
+        "query and fragment are not part of it). br_dl_autosave AS IT SHIPS, "
+        "out of build/browser.bin under unicorn, on 39 paths - and every "
+        "register but the flags must come back as it went in, which DX did "
+        "not until this row. Then the NAME a download suggests (SPEC.md 71.20.4): "
+        "whole header blocks through br_hdrb, Content-Disposition filename= "
+        "kept or refused, br_dl_defaultname asked on 11 cases - out of "
+        "build/browser.part.bin, where it lives since SPEC.md 71.20.5, with "
+        "CS the part's and DS the primary's", needs=("unicorn",)),
+    Row("brbookmarks", "fast", py("tests/unit/t_brbookmarks.py"), 0.5,
+        "SPEC.md 71.23: the bookmark records in the URL store, a claim of "
+        "their own, as they ship - build/browser.bin under unicorn with a "
+        "three-record store. br_bmfindurl finds EVERY record (it compared "
+        "record n with the query's tail past record n-1's mismatch, so only "
+        "record 0 could be found and Ctrl+D added duplicates), ignores case, "
+        "misses a prefix and keeps every register but AX; br_bmmenuset "
+        "copies each title into br_bmtitles and points the menu at the "
+        "copies; br_bmurlget copies a record's URL into br_ubuf and refuses "
+        "past the count; and with no store all three miss, show `(empty)` "
+        "and refuse rather than read segment 0", needs=("unicorn",)),
     Row("netcoexist", "soak", py("tests/netcoexist.py"), 20.0,
         "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
         "machine. The field lost its network the moment an MPU was added: "
@@ -22639,6 +22974,148 @@ SOAK = [
         "here) that saturate in every stage that can, so each out-of-line "
         "clamp is held to the model too. Needs `make` to have built the parts",
         needs=("qemu", "nasm", "numpy")),
+    # ---- PageDesk (rows): the host harnesses behind `make pd*`, one row a
+    # target (tests/pagedeskhost.py), and PD-29's two emulator rows ----
+    Row("pdeng", "soak", py("tests/pagedeskhost.py", "pdeng"), 10.0,
+        "PAGEDESK-SPEC 20.2 / PD-06: `make pdeng` - PDENG.MOD built (its "
+        "size line and cap) and the engine's host harness "
+        "(hosttest/pde_check.py) over its own fixtures, the shared samples,"
+        " the stress set and the negative corpus, each answer checked "
+        "against qpdf. Red when the reader opens, walks or refuses a file "
+        "differently from what the corpus pins. Measured 7.5s warm",
+        needs=("cc",), builds=True),
+    Row("pdefuzz", "soak", py("tests/pagedeskhost.py", "pdefuzz"), 40.0,
+        "PAGEDESK-SPEC 20.2.1 / PD-28: `make pdefuzz` - the engine under "
+        "AddressSanitizer + UBSan, every verb driven over 100 mutations of "
+        "each corpus file. Red on any out-of-bounds read, overflow or "
+        "undefined behaviour a hostile PDF reaches. Measured 28.3s",
+        needs=("cc",), builds=True),
+    Row("pdflate", "soak", py("tests/pagedeskhost.py", "pdflate"), 8.0,
+        "PAGEDESK-SPEC 20.13 / PD-25: `make pdflate` - FlateDecode and the "
+        "PNG/TIFF predictors in PDENG against Python's zlib, a predictor "
+        "written from the spec, and qpdf (hosttest/pde_fl_check.py). "
+        "Measured 5.8s",
+        needs=("cc",), builds=True),
+    Row("pdflatefuzz", "soak", py("tests/pagedeskhost.py", "pdflatefuzz"), 5.0,
+        "PAGEDESK-SPEC 20.13 / PD-28: `make pdflatefuzz` - the inflater "
+        "under ASan + UBSan over mutated streams at every read size: no "
+        "crash and no write outside the 43 KiB slot. Measured 2.2s warm",
+        needs=(), builds=True),
+    Row("pdrend", "soak", py("tests/pagedeskhost.py", "pdrend"), 8.0,
+        "PAGEDESK-SPEC 20.3: `make pdrend` - PDREND.MOD built, the "
+        "renderer's host harness (hosttest/pdr_check.py) and, with Unicorn,"
+        " the asm row primitives against their C twins byte for byte "
+        "(hosttest/pdr_primtest.py; a SKIP line without unicorn, which the "
+        "row prints). Measured 5.3s",
+        needs=("cc",), builds=True),
+    Row("pdrendfuzz", "soak", py("tests/pagedeskhost.py", "pdrend-fuzz"), 215.0,
+        "PAGEDESK-SPEC 20.3.6 / 20.12 / PD-28: `make pdrend-fuzz` - PDREND "
+        "under ASan + UBSan over 38 hostile content streams and 400 random "
+        "ones, again through the REAL engine, and again with a hostile edit"
+        " store (bad offsets, 60,000 points, inverted rects, no such kind)."
+        " Measured 171.4s, which is why it is soak",
+        needs=(), builds=True),
+    Row("pdrendreal", "soak", py("tests/pagedeskhost.py", "pdrend-real"), 6.0,
+        "PAGEDESK-SPEC 20.3 / PD-07: `make pdrend-real` - PDREND linked "
+        "with the REAL PDENG draws every committed sample as VGA, Hercules "
+        "and CGA see it and compares each with mutool "
+        "(hosttest/pdr_real.py, 52 renders). Needs mutool. Measured 3.2s",
+        needs=(), builds=True),
+    Row("pdrendannot", "soak", py("tests/pagedeskhost.py", "pdrend-annot"), 15.0,
+        "PAGEDESK-SPEC 20.12 / PD-12..15: `make pdrend-annot` - an edit "
+        "store of every kind saved by the REAL writer over the REAL engine "
+        "(hosttest/pdr_mkstore.c), qpdf-clean, rendered by mutool and drawn"
+        " by PDREND from the store, compared; source /AP appearances, "
+        "dashes and inline images. Needs qpdf and mutool. RED at 8e00bef0d:"
+        " pdr_mkstore.c predates PDWRT's verify-through-PDENG (14.2 step 4)"
+        " and answers PDE_IO 48 - rows-report.md carries the three-line "
+        "harness fix",
+        needs=(), builds=True),
+    Row("pdwrt", "soak", py("tests/pagedeskhost.py", "pdwrt"), 6.0,
+        "PAGEDESK-SPEC 20.5 / PD-17: `make pdwrt` - PDWRT.MOD built under "
+        "its cap and the writer's host harness (hosttest/pdw_test.c) whose "
+        "every output is read back by qpdf, mutool and Poppler "
+        "(pdw_verify.py). The harness hangs off a stamp, so the row deletes"
+        " it first: a fresh stamp ran nothing. Measured 4.0s",
+        needs=("cc",), builds=True),
+    Row("pdwrtreal", "soak", py("tests/pagedeskhost.py", "pdwrt-real"), 6.0,
+        "PAGEDESK-SPEC 20.5 / 20.11 / 20.16 / PD-17..19: `make pdwrt-real` "
+        "- PDWRT over the REAL PDENG: incremental saves twice over "
+        "MARKUP.PDF, page operations, Extract, Insert from another PDF "
+        "(foreign windows, Esc inside one, a full disk in the middle), each"
+        " output qpdf --check clean and its page tree checked "
+        "(pdw_pgcheck.py). Measured 4.2s",
+        needs=(), builds=True),
+    Row("pdwrtenc", "soak", py("tests/pagedeskhost.py", "pdwrt-enc"), 25.0,
+        "PAGEDESK-SPEC 20.22.4 / AP-06: `make pdwrt-enc` - PDWRT's saves "
+        "(every mark kind, a second save over the first, Extract, Insert "
+        "with an encrypted foreign file pausing on PDE_PASSWORD) over qpdf-"
+        "made sources: xref stream + object stream, AES-128 (empty and user "
+        "password, classic table), AES-256, RC4-128, RC4-40; each output "
+        "qpdf --check clean, decrypted by qpdf to the plain control's "
+        "annotations and appearance-stream bytes, drawn by mutool with no "
+        "encryption complaint; a wrong held key fails the verify. The PDENG "
+        "verbs eng/crypt own are stood in for (hosttest/pdw_enc.c); needs "
+        "qpdf, mutool and libcrypto. Measured 18s",
+        needs=("cc",), builds=True),
+    Row("pdnav", "soak", py("tests/pagedeskhost.py", "pdnav"), 6.0,
+        "PAGEDESK-SPEC 20.10 / PD-10, PD-11: `make pdnav` - PDENG's SEARCH "
+        "matcher against a reference over 400 random pages and piece sizes "
+        "(pde_srch.py), and the link records of the sample guide "
+        "(XTGUIDE.PDF has exactly 7). Measured 4.0s",
+        needs=(), builds=True),
+    Row("pdmathtest", "soak", py("tests/pagedeskhost.py", "pdmathtest"), 30.0,
+        "PAGEDESK-SPEC 4 / 20.7: `make pdmathtest` - pdmath.inc (8086, in "
+        "Unicorn's real mode) against pdmath.c bit for bit over 126,439 "
+        "cases: 32-bit and fixed-point arithmetic, the view transform, far "
+        "memory. Red when the target's arithmetic and the host's disagree, "
+        "which every host harness above assumes they do not. Measured 22.2s",
+        needs=("unicorn", "nasm"), builds=True),
+    Row("pdabicheck", "soak", py("tests/pagedeskhost.py", "pdabi-check"), 2.0,
+        "PAGEDESK-SPEC 20.7: `make pdabi-check` - pdabi.h against its "
+        "generated assembly mirror pdabi.inc and pdmath.inc's constants "
+        "(tools/os88pdabi.py --check). `all` runs it too; the row is so "
+        "that `soak -k 'pd*'` is the whole PageDesk host set. Measured 0.7s",
+        needs=(), builds=True),
+    Row("pdfonts", "soak", py("tests/pagedeskhost.py", "pdfonts"), 3.0,
+        "PAGEDESK-SPEC 20.4 / PD-05: `make pdfonts` - PDRES.BIN and "
+        "PDFONTX.RES rebuilt from the committed sources and checked "
+        "(os88pdfont.py check), PDFONTS.TXT, and the art atlas "
+        "(os88pdart.py check). Measured 0.4s warm",
+        needs=(), builds=True),
+    Row("pagedesk", "soak", py("tests/pagedesk.py"), 300.0,
+        "PAGEDESK-SPEC 20 / PD-28: PageDesk's user flows end to end on QEMU, "
+        "VGA (FULL layout) and a VIDEO=cga private tree (COMPACT) - XTGUIDE "
+        "opened by association, paged, zoomed, Find `Index` (page 12), an "
+        "area Mark and a typed Note, Insert from PDF (MARKUP.PDF page 1), "
+        "Preferences (Flate Off, written to SYSTEM/APPDATA/PAGEDESK.CFG) and "
+        "Save As - each step confirmed off PageDesk's statics, then the "
+        "floppy read back on the host: qpdf --check exit 0, 13 pages, one "
+        "/Square and one /Text on page 12, XTGUIDE's 7 /Link kept, the CFG's "
+        "Flate byte 1. Without qpdf the PDF half SKIPs, never passes. On "
+        "VGA, back on page 12 the re-opened mark must draw all four edges "
+        "(it drew two before PAGEDESK-SPEC 20.3.2's outward BBox clip). "
+        "Measured 122s VGA + 176s CGA with the knob tree built cold",
+        needs=("qemu", "nasm", "cc"), serial=True, timeout=1200,
+        wants=("build/os8088.img", "build/pagedesk.img",
+               "build/pagedesk.bin")),
+    Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
+        "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
+        "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
+        "thread each, B: an 80-cylinder 720 KB drive with pagedesk720.img "
+        "(every sample; the 360 KB pair's first disk holds the program alone) "
+        "- HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
+        "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
+        "reachable at every trough with the caches shed, task 0's stack <= "
+        "384 (D22) and the private module stack <= 1792 (D23) with their "
+        "canaries; REPORTS every step's guest seconds at 4.77 MHz and never "
+        "asserts them (first page ~2.3 guest minutes, Find ~24). The legs "
+        "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
+        "beside another session's MartyPC",
+        needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
+        wants=("build/os8088-360.img", "build/os8088-720.img",
+               "build/pagedesk720.img", "build/pagedesk.bin")),
 ]
 
 
