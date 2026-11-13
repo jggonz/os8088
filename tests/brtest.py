@@ -88,7 +88,7 @@ def image_rows(m, win):
     import htmsim
     fails = []
     rec = m.read(S("wm_wins") + win * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-    pseg = rec[22] | (rec[23] << 8)
+    pseg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
     image = os.path.getsize(os88build.at("build/browser.bin"))
 
     def word(off):

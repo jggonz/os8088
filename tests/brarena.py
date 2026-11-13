@@ -450,6 +450,9 @@ def main():
                 rec = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
                              dispcp.WIN_SIZE)
                 seg = rec[os88geom.W_SEG] | (rec[os88geom.W_SEG + 1] << 8)
+                if b"BROWSER" not in bytes(m.readseg(seg, 0, 32)):
+                    continue            # not a Browser: its bytes at the
+                                        # Browser's offsets are anything
                 title_off = rec[10] | (rec[11] << 8)
                 title = bytes(m.readseg(seg or 0x1000, title_off, 24)) \
                     .split(b"\\0", 1)[0].decode("latin-1", "replace")

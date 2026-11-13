@@ -180,7 +180,22 @@ def run():
 
             if at is not False:
                 cx, cy = (r0[0] + r0[2]) // 2, (r0[1] + r0[3]) // 2
+                # ABOVE the button, not below it: a clamp to the window's
+                # bottom edge can land back INSIDE a control near the foot of
+                # the content, which reads exactly like a gesture that cannot
+                # be cancelled. Artful's splash row failed this way and the
+                # product was correct.
+                off_y = max(wr[1] + 2, r0[1] - 10)
                 up0 = dark()
+                # ...and the upright button counted with the pointer WHERE
+                # THE SLIDE WILL LEAVE IT: the arrow hangs below its hot spot
+                # and over the button's top rows, so the glass after the
+                # cancel is compared with the glass of the same pointer and
+                # an unpressed button, not with a pointer elsewhere (Audio,
+                # opened one cascade step higher once the Browser left this
+                # boot, differed from `up0` by 29 pixels of arrow alone)
+                mo.to(cx, off_y); os88marty.settle(m)
+                upoff = dark()
                 mo.to(cx, cy); os88marty.settle(m)
                 mo._edge(True); m.advance(frames=10); m.run()
                 held = rd(10)                              # BT_DOWN
@@ -198,23 +213,19 @@ def run():
                                  "%s armed NOTHING (BT_DOWN=0) - the press is "
                                  "being hit-tested against rects it does not "
                                  "match" % (name, (cx, cy)))
-                # 4. sliding off UN-arms it (SPEC.md 13.8.1's cancel)
-                # ABOVE the button, not below it: a clamp to the window's
-                # bottom edge can land back INSIDE a control near the foot of
-                # the content, which reads exactly like a gesture that cannot
-                # be cancelled. Artful's splash row failed this way and the
-                # product was correct.
-                off_y = max(wr[1] + 2, r0[1] - 10)
+                # 4. sliding off UN-arms it (SPEC.md 13.8.1's cancel), to
+                # off_y above
                 mo.to(cx, off_y, l=True)
                 m.advance(frames=30); m.run()
                 off = rd(10)
                 offdark = dark()
-                if held and abs(offdark - up0) > max(8, up0 // 4):
+                if held and abs(offdark - upoff) > max(8, upoff // 4):
                     fails.append("%s: the pointer slid OFF and the button is "
                                  "still inverted on the GLASS (%d dark pixels, "
-                                 "upright was %d) - SPEC.md 13.8.1's cancel is "
-                                 "what tells the user the gesture is off"
-                                 % (name, offdark, up0))
+                                 "upright under the same pointer was %d) - "
+                                 "SPEC.md 13.8.1's cancel is what tells the "
+                                 "user the gesture is off"
+                                 % (name, offdark, upoff))
                 if held and off != 0:
                     fails.append("%s: the pointer slid OFF the button and it "
                                  "is still down (BT_DOWN=%d) - the gesture "
@@ -223,7 +234,8 @@ def run():
             print("  %-14s N=%d rect0=%s%s"
                   % (name, n, r0,
                      "" if at is False
-                     else " up=%d held=%d off=%d ok" % (up0, dn, offdark)))
+                     else " up=%d/%d held=%d off=%d ok"
+                     % (up0, upoff, dn, offdark)))
             # Esc first: a package whose button DID fire may have taken the
             # whole screen (Artful's New does), and a menu pick cannot reach a
             # window that is not there any more.
