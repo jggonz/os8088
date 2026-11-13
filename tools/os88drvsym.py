@@ -51,12 +51,27 @@ class Mismatch(RuntimeError):
     """The re-assembly is not the artefact the machine is running."""
 
 
+def _target(target):
+    """Keep a build-relative subdirectory, e.g. snddiag/sound.bin."""
+    target = os.path.normpath(target)
+    if os.path.isabs(target):           # inside the run's build/: keep the
+        rel = os.path.relpath(target,   # subdirectory; elsewhere, its name
+                              os.path.normpath(os88build.at("build")))
+        return os.path.basename(target) if rel.startswith("..") else rel
+    if target.startswith("build" + os.sep):
+        target = target[len("build") + 1:]
+    if target == ".." or target.startswith(".." + os.sep):
+        raise ValueError("driver target must be inside build/")
+    return target
+
+
 def recipe(target, args=()):
     """The shell line `make <args>` would build build/<target> with,
     pointed at the run's real build directory."""
-    target = os.path.basename(target)
+    target = _target(target)
     real = os88build.at(os.path.join("build", target))
-    rdir = os.path.dirname(real) or "."
+    rdir = (real[:-len(target)].rstrip(os.sep) or "." if real.endswith(target)
+            else os.path.dirname(real) or ".")  # the directory build/ maps to
     tmp = tempfile.mkdtemp(prefix="os88drv")
     try:
         out = subprocess.run(["make", "-n", "--always-make", "BUILD=%s" % tmp]
@@ -77,7 +92,7 @@ def symbols(target, args=(), check=True):
     """{symbol: offset in the image} for build/<target> (e.g. "sound.bin";
     a ".drv" name is taken as its ".bin"). Raises Mismatch when the
     re-assembly is not byte-identical to the artefact on disk."""
-    target = os.path.basename(target)
+    target = _target(target)
     if target.endswith(".drv"):
         target = target[:-4] + ".bin"
     key = (target, tuple(args), check)

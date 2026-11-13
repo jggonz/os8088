@@ -15193,8 +15193,9 @@ dos_xms_move:
 ; A DOS program that wants the Sound Blaster wants to program it ITSELF -
 ; reset the DSP, set its own IRQ and DMA, own the card completely - and
 ; os8088's SOUND.DRV is in the way of that in three separate ways: it owns an
-; IRQ vector, it owns DMA channel 1, and its refill worker is TF_SERVICE, so
-; it KEEPS RUNNING inside the bracket by design (SPEC.md 53.2) and can feed
+; IRQ vector, it owns its DMA channel (1, or an ESS's 3 - SPEC.md 34.5.8),
+; and its refill worker is TF_SERVICE, so it KEEPS RUNNING inside the
+; bracket by design (SPEC.md 53.2) and can feed
 ; the DSP while the DOS program is resetting it.
 ;
 ; SPEC.md 51.11 is the door: one call, and every driver that owns hardware is

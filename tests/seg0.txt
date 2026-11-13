@@ -34,7 +34,7 @@
 2 kernel/kbddiag.inc  # KBDDIAG=1's recorder
 
 # --- drivers: a driver-SDK question for kern_mega (KERN-MEGA-PLAN 10.1) -------------
-2 drivers/sound/sb.inc  # sbl_unhook and sbl_f_irqdisc. IRQ DISCOVERY IS DEFERRED TO THE FIRST STREAM, so on kern_mega it runs in protected mode: mega_null0 completes each segment-0 access (a trap apiece) and mega_ivt_sync carries the vector it hooks into the IDT (KERN-MEGA-PLAN 10.3 item 17), so a Sound Blaster stream plays; the sites stay because a driver cannot name MEGA_SEG0
+3 drivers/sound/sb.inc  # sbl_ess_setup's XT-disk test (SPEC.md 34.5.8: sbl_irq5_taken asks OSAPI_CPU_INFO before it reads through ES, so on kern_mega, a 286+, the null selector is loaded and never used), sbl_unhook and sbl_f_irqdisc. IRQ DISCOVERY IS DEFERRED TO THE FIRST STREAM, so on kern_mega it runs in protected mode: mega_null0 completes each segment-0 access (a trap apiece) and mega_ivt_sync carries the vector it hooks into the IDT (KERN-MEGA-PLAN 10.3 item 17), so a Sound Blaster stream plays; the sites stay because a driver cannot name MEGA_SEG0
 1 drivers/sound/picomem.inc  # pm_init's IVT check, at attach - the boot's real mode, unless the driver is loaded later from the Control Panel
 2 drivers/usbmouse/usbmouse.asm  # attach and detach hooking int 33h's vector
 1 drivers/usbmouse/pmsim.inc  # the PicoMEM gate MODEL (-DPMSIM, tests/megapmmouse.py, never shipped) re-hooking the card's IRQ vector as the card's function 0 does; under protected mode that store is the kernel's null-selector trap's to serve, which the row exercises (KERN-MEGA-PLAN 14.117)
