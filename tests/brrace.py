@@ -270,8 +270,10 @@ def main():
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text("\b" * 12 + url)
-        os88marty.settle(m)
+        # Typed PAUSED (text_taken), as brfetch: a socket-speed burst into a
+        # running guest overruns the 15-entry BIOS ring (SPEC.md 9.8) and the
+        # host's speed decides which keys survive.
+        os88marty.text_taken(m, "\b" * 12 + url)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)
         if typed is None:
