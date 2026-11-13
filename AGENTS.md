@@ -347,6 +347,8 @@ user gives a different workflow. The worked example is
   (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
   release. **Raising any of them is a decision to take with whoever asked for
   the feature, not a build fix.**
+  **kern_small must also leave 70.5KB of heap after boot on its 128KB
+  machine**: its `kernsize[small]: ladder` line stays at 57.5 KB or less.
 - **kern_mega is a shipped kernel.** A feature's design includes its kern_mega
   work; "not on mega" is a gap to close unless the owner agreed to it. Package
   code only kern_mega needs goes under `%ifdef PKG_MEGA` (§20.18,
@@ -703,11 +705,7 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Twenty-one images, not nine.** The system and apps disks in four geometries
-each, SIX more at 360KB alone, `more720.img` (§24.7), kern_small's
-`small360.img`/`small720.img` (§24.5.7) and WIN16's own disk in four
-geometries, `win16*.img` (§124.18.1), which left the apps disks when it
-outgrew them. `build/media360.img` —
+**`build/media360.img`** —
 `BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
 clusters before packages were compressed, so at that geometry it rides a disk
 of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot
