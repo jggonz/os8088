@@ -1583,19 +1583,27 @@ class Box(object):
                 self.xd("mousemove_relative", "--", sx, sy)
                 x2 -= sx
                 y2 -= sy
-            was, end = pos, time.time() + 2.0
+            # ...and every wait below is GUEST time. It was 30 HOST ms
+            # between the two reads that call the pointer stopped, and on a
+            # loaded box the guest runs a fraction of that: a pointer still
+            # mid-way through the packets just sent reads "stopped", the
+            # next round sends the difference AGAIN, and the overshoot lands
+            # after this returned "there" - under the double-click that
+            # follows (rdgmega's "the game to start", a full soak at lane 4).
+            was = pos
+            end = self.ptime() + int(2.0 * self.ips)
             while True:
-                time.sleep(0.03)
+                self.guest_sleep(0.03, poll=0.01)
                 pos = self.mouse()
                 if pos != was:
                     # until it STOPS: one more read the same
-                    time.sleep(0.03)
+                    self.guest_sleep(0.03, poll=0.01)
                     p2 = self.mouse()
                     if p2 == pos:
                         break
                     pos = p2
                     continue
-                if time.time() > end:
+                if self.ptime() > end:
                     break
             stuck = stuck + 1 if pos == was else 0
         raise RuntimeError("os88bochs: the pointer is at %s, not (%d, %d) - "
