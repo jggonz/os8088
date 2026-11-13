@@ -25,3 +25,11 @@ Their machines are `os8088_xt_vga_sb`, `os8088_5150_sb_gla`, and
 `os8088_5150_herc_sb_720_gla`, respectively. The tests then inject a refused
 route, check `DMA none` and no BLASTER line, and restore the original byte.
 See [the research](../ESS-SOUND.md) and SPEC.md §34.5.8 / §127.3.
+
+`vga-refused.png`, `cga-refused.png` and `herc-refused.png` are the same
+three machines after the review's fix: the real tone finished, then **FFh
+(refused)** injected into the reported DMA byte. The DSP row reads
+`DMA none`, there is no BLASTER line, and the verdict names the DMA route
+rather than an IRQ. The card is still the emulator's Sound Blaster, so the
+ESS identity row reads `no ESS id`; a real refusal happens only after that
+row has identified an ES1868/ES1869.
