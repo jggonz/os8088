@@ -65,6 +65,41 @@ def shot(m, card, name):
     return w, h, d
 
 
+def frame(m, card):
+    """(width, bytes a pixel, pixels) of one card, IN GUEST COORDINATES.
+
+    The VGA's rendered frame is its 640x480 exactly; the Hercules' is not -
+    MartyPC's MDA aperture sits at dx = -16, dy = +2 from the guest origin
+    (docs/MARTYPC-DEBUG.md, tests/dispband.py), so a rect named in guest
+    pixels and cut out of `fbuf` misses its left 16 columns and its last two
+    rows. The comparison below cuts Missile's content out by exactly such a
+    rect, and with the game still in play those 16 columns are its explosions
+    leaking in as "stale" pixels. The Hercules is read out of its VRAM
+    instead, which is the guest's own coordinate system."""
+    if m.video(card=card)["type"] in ("mda", "hercules"):
+        w, h, rows = m.vram("herc")
+        return w, 1, b"".join(bytes(r) for r in rows)
+    w, h, d = m.fbuf(card=card)
+    return w, 3, d
+
+
+def unplayed(m, card, box):
+    """Card `card`'s frame (`frame`) with the rect `box` (x1, y1, x2, y2, in
+    that card's own pixels) blanked: what `state` waits to stand still."""
+    w, bpp, d = frame(m, card)
+    h = len(d) // (w * bpp)
+    x1, y1, x2, y2 = (max(0, box[0]), max(0, box[1]),
+                      min(w - 1, box[2]), min(h - 1, box[3]))
+    if x1 > x2 or y1 > y2:
+        return d
+    d = bytearray(d)
+    blank = bytes(bpp * (x2 - x1 + 1))
+    for y in range(y1, y2 + 1):
+        i = bpp * (y * w + x1)
+        d[i:i + len(blank)] = blank
+    return bytes(d)
+
+
 def state(m, mo, label, win, cards):
     # SETTLE EVERY CARD THIS IS ABOUT TO CAPTURE, and not just one of them.
     # Each of the four call sites settled `sec` and then took a framebuffer
@@ -80,8 +115,32 @@ def state(m, mo, label, win, cards):
     # other guests, all 0/0 - so this is fixed on the code rather than on a
     # capture. What is certain either way is that a comparison is only
     # entitled to a framebuffer it settled, and this one was not.
+    #
+    # ...AND STILL EXCEPT FOR THE GAME, which is the region the comparison at
+    # the end leaves out for the same reason. `settle` cannot be the wait
+    # here: Missile's worker renders EVERY frame (mc_worker -> mc_render,
+    # under the gfx lock) whether or not a pixel changes, so the UI flips
+    # between idle and busy several times a second and settle's short-window
+    # test resets its run each time it flips - while a game still in play
+    # changes the content outright. Measured on the 2026-11-13 soak's tree:
+    # after the round trip both cards were BYTE-IDENTICAL across 1-second
+    # guest steps for two minutes, the drive did not move, and settle still
+    # ran out its 360 guest seconds; at "windowed" the same wait happened to
+    # return, which the worker's phase decides. So the wait is the same
+    # stillness test on exactly what the assertion reads: each card's frame
+    # (`frame`, in guest coordinates) with the window's content blanked, a
+    # guest second apart, twice.
+    wx, wy, ww, wh = dispcp.win_rect(m, S, win)
+    ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
     for c in cards:
-        os88marty.settle(m, card=c)
+        ox = u16(ctx, c * VID_CTX_SZ + VID_CTX_VX)
+        oy = u16(ctx, c * VID_CTX_SZ + VID_CTX_VY)
+        box = (wx + 1 - ox, wy + TITLE_H - oy,
+               wx + ww - 2 - ox, wy + wh - 2 - oy)
+        os88marty.quiesce(m, lambda c=c, box=box: unplayed(m, c, box),
+                          guest=1.0, budget=120.0,
+                          what="card %d to stop changing outside the game"
+                          % c)
     # PAUSE NEXT. vid_ctx_act writes [vid_ox] and [vid_oy] with two stores,
     # and Missile's worker draws continuously - read on a running guest they
     # disagree with each other and with [vid_cur] about which display is
@@ -111,7 +170,7 @@ def state(m, mo, label, win, cards):
                            VID_CTX_SZ + VID_CTX_VX),
                        u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ),
                            VID_CTX_SZ + VID_CTX_VY))},
-           "fb": {c: m.fbuf(card=c)[2] for c in cards},
+           "fb": {c: frame(m, c) for c in cards},
            "lit": {c: lit(m, c) for c in cards}}
     m.run()
     return out
@@ -314,8 +373,9 @@ def main():
             # The menu bar is the PRIMARY's and carries a clock, which moves
             # between two captures seconds apart - so the comparison starts
             # below it. The Hercules has no bar and is compared whole.
-            w0 = m.fbuf(card=c)[0]
-            base = skip * w0 * 3
+            w0, bpp, fa = after["fb"][c]
+            fc = forced["fb"][c][2]
+            base = skip * w0 * bpp
             ox, oy = forced["org"][c]
             skipx1, skipy1 = cx1 - ox, cy1 - oy
             skipx2, skipy2 = cx2 - ox, cy2 - oy
@@ -327,10 +387,10 @@ def main():
             # box, the count and the first row are three lines of arithmetic
             # over a comparison that is already being made.
             n, x1, y1, x2, y2 = 0, 1 << 15, 1 << 15, -1, -1
-            for i in range(base, len(after["fb"][c]), 3):
-                if after["fb"][c][i:i + 3] == forced["fb"][c][i:i + 3]:
+            for i in range(base, len(fa), bpp):
+                if fa[i:i + bpp] == fc[i:i + bpp]:
                     continue
-                px = i // 3
+                px = i // bpp
                 x, y = px % w0, px // w0
                 if (skipx1 <= x <= skipx2) and (skipy1 <= y <= skipy2):
                     continue            # the GAME's content - see above
