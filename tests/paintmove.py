@@ -306,9 +306,14 @@ def main():
 
         def rowdeltas(base):
             tab = pword("pt_tabseg")            # SPEC.md 42.6.7: the row
-            rows = m.read(tab << 4, nrows * 4)  # table is a claim, entry
+            rows = m.read(lin(m, tab), nrows * 4)   # table is a claim, entry
             return [(seg_key(m, u16(rows, i * 4 + 2)) - base) & 0xFFFF  # y*4
                     for i in range(nrows)]
+        # (THROUGH lin(), not `tab << 4`: on kern_mega the table's word is an
+        # LDT SELECTOR like every claim's, so `tab << 4` read whatever sat at
+        # that number's paragraph - other bytes after the move than before
+        # it - and check 3 read STALE over a table that had followed, while
+        # check 5's repaint, which draws through it, came out identical)
 
         cbase = seg_key(m, pword("pt_base"))
         csize = [c[1] for c in before if c[0] == cbase]

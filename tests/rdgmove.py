@@ -5,7 +5,7 @@
 
 docs/REALDMG-SPEC.md section 14.4 and docs/plans/NO-PINNING-PLAN.md A1.
 tools/gbours.py builds GBBANK8.GB - tools/gbprof/gbbank.asm at 8 banks, a
-128KB MBC5 with 32KB of battery RAM - which switches among its banks in an
+128KB MBC5 with 8KB of battery RAM - which switches among its banks in an
 LFSR's order and checks EVERY switch two ways: the bank's own bytes, and a
 routine at 4010h run from 4000-7FFF, where the core's ROMX segment, the bank
 table and the recompiler's bank keys all meet. It counts switches checked at
@@ -18,7 +18,10 @@ recorded profile and the profile's own claim is live. Each opens the game in
 RealDMG on MartyPC, records the words naming each claim and the ROM's bytes,
 then posts a compaction from OUTSIDE (tests/pkgmove.py's door: [mem_cpq] at
 the trivial purge rank, which drops the raise caches the window's opening
-put under the game's claims).
+put under the game's claims - and on the Static leg at MEM_PG_HIGH, which
+drops B:'s FAT window under all of them too: that leg's menus compact, and
+the pinned caches are what is left to open a hole with; it closes Calc only
+after its setup, for the same reason).
 
   1. the frames, the damage memory, the recompiler's claim, the ROM, the RAM
      (and Static's profile) are declared movable (MC_RLOC, read from outside);
@@ -125,11 +128,18 @@ def leg(a, disk, MAP, lab, static):
                 guest=120.0)
         rwin = ui.window("RealDMG")
         wptr = os88geom.winptr(m, rwin, S)
-        ui.close(calc)
+        if not static:                  # (Static's setup closes it LAST, so
+            ui.close(calc)              #   its menus' compaction cannot lift
+                                        #   the region and the carve early)
 
         def pseg():                     # the region, through the window: it
             return word(0, wptr + os88geom.W_SEG)       # may move as well
-        view = st["view"]
+
+        def vw():                       # ...and the view with the carve. Both
+            return word(pseg(), lab["rdg_viewseg"])     # re-read at every use:
+        view = vw()                     #   Static's setup may compact, and a
+                                        #   banked segment then reads the old
+                                        #   place ("JIT on 0", "0 blocks")
         def pick(menu, item):           # GBBANK8 never HALTs: the 8088 is
             for _ in range(5):          #   the core's with interrupts off a
                 try:                    #   budget at a time, and the 1200-
@@ -150,32 +160,46 @@ def leg(a, disk, MAP, lab, static):
                 raise M.MartyError("%s > %s never took: %s" % (menu, item, what))
 
         def weighed():                  # the profile's entries that weigh
-            ps = word(st["seg"], MAP["rw_prfseg"])      # something
+            ps = word(pseg(), MAP["rw_prfseg"])         # something
             return ps and sum(1 for i in range(3, 2048 * 4, 4)
                               if m.read(ps * 16 + i, 1)[0]) or 0
+        # STATIC'S SETUP MAY COMPACT, AND MUST NOT PACK THE GAME FOR US. Each
+        # menu pick claims a save-under (MEM_P_MSAVE, 480h paragraphs on VGA)
+        # and a claim with no free run that big COMPACTS first (SPEC.md 66.4,
+        # menu_pull the one caller a bp on mem_compact saw). With 32KB of
+        # battery RAM the game's load had already compacted, dropping the
+        # pinned caches, so Machine > Reset's pass then packed everything and
+        # the posted pass below had nothing left to move. With 8KB the load
+        # fits and B:'s FAT window (MEM_PG_MED, pinned) stays UNDER every
+        # claim of the game's and the window's raise cache (TRIV) in the
+        # middle - barriers to the setup's TRIV-rank pass, dissolved by this
+        # leg's post at MEM_PG_HIGH. Checked, so a heap that grows tighter
+        # says why instead of "did not move".
+        pre = dict((w, word(pseg(), o)) for w, o in off.items())
         if static:                      # the profile records what the
             until_picked("CPU", "Profile for Static",   # dynamic recompiler
-                         lambda: byte(st["seg"], MAP["rw_prfon"]) and
-                         word(st["seg"], MAP["rw_prfseg"]), "the profile on")
-            fr = word(view, S_FRAMES)   # translates from a reset (its
+                         lambda: byte(pseg(), MAP["rw_prfon"]) and
+                         word(pseg(), MAP["rw_prfseg"]), "the profile on")
+            fr = word(vw(), S_FRAMES)   # translates from a reset (its
             until_picked("Machine", "Reset",            # frames from 0)...
-                         lambda: word(view, S_FRAMES) < fr, "the reset")
+                         lambda: word(vw(), S_FRAMES) < fr, "the reset")
             try:
                 M.until(m, lambda _: weighed() >= 10, "ten blocks in the "
                         "profile", poll=0.5, guest=30.0)
             except M.MartyError:
                 fails.append("the profile recorded %d blocks in 30 s (S_PRFSEG "
                              "%04x rw_prfseg %04x, blocks %d, JIT on %d)"
-                             % (weighed(), word(view, S_PRFSEG),
-                                word(st["seg"], MAP["rw_prfseg"]),
-                                word(view, S_JITNB), byte(view, S_JITON)))
+                             % (weighed(), word(vw(), S_PRFSEG),
+                                word(pseg(), MAP["rw_prfseg"]),
+                                word(vw(), S_JITNB), byte(vw(), S_JITON)))
                 return fails
             until_picked("CPU", "Static Recompiler",    # ...and Static
-                         lambda: byte(view, S_JITFIX) == 1,  # preloads them
+                         lambda: byte(vw(), S_JITFIX) == 1,  # preloads them
                          "Static's table fixed")
+            ui.close(calc)              # the hole over the region and carve
         M.guest_sleep(m, 6)             # the recompiler warm: blocks in it
         M.quiesce(m, lambda: sorted(claims(m)), guest=2.0, what="the claims")
-        seg0 = pseg()
+        seg0, view = pseg(), vw()
         w0 = dict((w, word(seg0, o)) for w, o in off.items())
         carve0, core0 = word(seg0, MAP["op_base"]), word(seg0, MAP["rdg_coreseg"])
         npre0 = word(seg0, MAP["rw_npre"])
@@ -183,6 +207,13 @@ def leg(a, disk, MAP, lab, static):
         print("rdgmove %s: package %04x carve %04x core %04x view %04x  %s"
               % (name, seg0, carve0, core0, view, "  ".join(
                   "%s=%04x" % kv for kv in w0.items())))
+        early = [w for w in ("rw_romseg", "rw_jitseg")
+                 if pre[w] and w0[w] != pre[w]]
+        if static and early:
+            fails.append("%s moved during Static's setup, before the posted "
+                         "pass: a menu's save-under found no free run and "
+                         "compacted (SPEC.md 66.4), so the heap is too tight "
+                         "for this leg" % " and ".join(early))
         need = [w for w in WORDS if w0[w]]
         if not w0["rw_jitseg"] or not w0["rw_romseg"]:
             fails.append("no recompiler or no ROM claim (%s): the load did not "
@@ -213,7 +244,8 @@ def leg(a, disk, MAP, lab, static):
             print("  RED RUN: a ret over %s" % bug)
         try:
             for _ in range(2):          # TWO passes: the first lifts the region
-                os88geom.post_compact(m, rwin, 0xFC, S)    # into Calc's hole,
+                os88geom.post_compact(m, rwin, 0xFE if static else 0xFC,
+                                      S)        # into Calc's hole,
                 M.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
                         "the posted compaction", poll=0.2, guest=30.0)
                 M.ui_done(m)            # and the restart that re-enters the
