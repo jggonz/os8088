@@ -56,7 +56,7 @@ def run(card, machine, image):
             mseg = word(m, "mod_tab")
             return mseg != 0 and seg() == mseg
 
-        def seg_kept(where):
+        def seg_kept(where, at):
             # the row still names the patched image (kept, not freed): its
             # bytes are what the next mod_need re-adopts
             mseg = word(m, "mod_tab")
@@ -64,7 +64,7 @@ def run(card, machine, image):
                 return False
             base = (m.lin(mseg, 0) if getattr(m, "bochs", False)
                     else mseg * 16)     # (kern_mega keeps its pool pair)
-            return where == base + offsets["cpc_save"]
+            return where == base + at
 
         def prompt():
             ui.menu_pick(0, "Shut Down...")
@@ -122,13 +122,35 @@ def run(card, machine, image):
             # core, so five bytes there wrote two over the first of the next
             # image section's (docs/plans/completed/ksp12/ctrl.md). cpc_save opens on six
             # one-byte pushes with no label among them, and the assert says so.
-            error = eq["FERR_WPROT"]
-            patch = bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3))
-            at = offsets["cpc_save"]
-            inside = [v for k, v in offsets.items()
-                      if k.startswith("cpc_save.") and v >= at]
-            assert not inside or min(inside) >= at + len(patch), \
-                "the injected writer would overwrite a label inside cpc_save"
+            #
+            # UNDER BOCHS (kern_mega, tests/megaport.txt) THE FAILURE IS
+            # INJECTED THROUGH DATA, NOT CODE. Bochs caches decoded
+            # instructions per physical page and a debugger write does not
+            # invalidate them (docs/BOCHS.md), and cpc_save has RUN by now:
+            # closing the panel above flushed the dirty settings through it.
+            # Since kern_mega KEEPS a dropped image and re-adopts it in place
+            # (SPEC.md 2.8.3.3) this prompt runs the very bytes Bochs already
+            # decoded. Measured: the five patched bytes read back in place,
+            # yet [cp_wdirty] went to 0 and the machine sat on the terminal
+            # splash - the ORIGINAL writer ran, the save succeeded and Shut
+            # Down went through, which read as a module never released. So
+            # there the system disk's NAME is what breaks: cpc_save's own
+            # dskw_stat of KERNEL.SYS finds nothing and the writer answers
+            # FERR_NOENT, a refusal the same path carries - cp_wdirty kept,
+            # cp_dsave set, the desktop back.
+            if getattr(m, "bochs", False):
+                at = offsets["cpc_sysname"]
+                assert m.readseg(seg(), at, 10) == b"KERNEL.SYS", \
+                    "cpc_sysname is not where the map says"
+                patch = b"KERNEL.SYQ"
+            else:
+                error = eq["FERR_WPROT"]
+                patch = bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3))
+                at = offsets["cpc_save"]
+                inside = [v for k, v in offsets.items()
+                          if k.startswith("cpc_save.") and v >= at]
+                assert not inside or min(inside) >= at + len(patch), \
+                    "the injected writer would overwrite a label inside cpc_save"
             where = (m.lin(seg(), at) if getattr(m, "bochs", False)
                      else seg() * 16 + at)          # (a selector: kern_mega)
             original = m.read(where, len(patch))
@@ -141,7 +163,7 @@ def run(card, machine, image):
             # kern_mega's pool pair 2.8.3.3), so the next Shut Down re-adopts THESE bytes rather than
             # reading the file - the patched writer would fail the real flush
             # below. The claim is kept where it was (nothing claimed since)
-            if seg_kept(where):
+            if seg_kept(where, at):
                 m.write(where, original)
 
         # Pending settings must be written before stopping the OS.
