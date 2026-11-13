@@ -75,6 +75,46 @@ def view(m, seg):
                   + dispapps.bss_off("taskmgr", "tm_view"), 1)[0]
 
 
+TM_SLOW = 4                     # apps/taskmgr: intervals per memory-page paint
+
+
+def tmbss(m, seg, name, n):
+    return m.read(dispcp._lin(m, seg, dispapps.img_size("taskmgr"))
+                  + dispapps.bss_off("taskmgr", name), n)
+
+
+def figures(m, seg):
+    """What the memory page's figures are drawn FROM: [tm_usedp] (RAM below
+    1MB) and [tm_avl] (MEMP_AVAIL's pair, kern_mega's AVAIL/MAX RUN) - two
+    captures compare two paints of ONE machine only while these agree"""
+    return bytes(tmbss(m, seg, "tm_usedp", 2) + tmbss(m, seg, "tm_avl", 4))
+
+
+def current(m, seg):
+    """Wait until the page's figures are the machine's: tests/tmground.py's
+    `current`, for its reason (SPEC.md 28.11.2). The memory page samples
+    every TM_INT but PAINTS every TM_SLOW of them, and `settle`'s quiet
+    window is shorter than that 2 s cadence - so a capture lands before or
+    after the worker repaints a figure the zoom, the un-zoom or the forced
+    repaint moved, by the PHASE of that cadence against gestures whose guest
+    timing the host sets - tmground's 72 RAM-digit subpixels, and the shape
+    of the full soak's SAME at lane 4 (42 subpixels; 0 alone). TM_SLOW + 1 samples past this point include
+    a paint-due interval sampled after the change, and the settle lands it.
+    Like tmground's, it cannot hide tm_quiet's ABA (28.11.3): a repair that
+    never comes still leaves stale glass to differ."""
+    gw = (dispapps.bss_off("taskmgr", "tm_pos")
+          - dispapps.bss_off("taskmgr", "tm_hist"))
+
+    def pos(mm):
+        b = tmbss(mm, seg, "tm_pos", 2)
+        return b[0] | (b[1] << 8)
+    p0 = pos(m)
+    os88marty.until(m, lambda mm: (pos(mm) - p0) % gw >= TM_SLOW + 1,
+                    "the Task Manager to sample past a paint-due interval",
+                    limit=60)
+    os88marty.settle(m, limit=120)
+
+
 def drag(mo, x0, y0, x1, y1):
     """Press, move, release - os88mouse has click and dblclick and no drag."""
     mo.to(x0, y0)
@@ -245,6 +285,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     b.close()
     mo.to(*dispcorner.PARK)
     os88marty.settle(m, limit=120)
+    current(m, seg)                             # ...its figures TODAY's
+    fig0 = figures(m, seg)
     cw, _, after = m.fbuf()
     fin = [x for x in os88geom.windows(m) if x.i == disk][0]
     print("RESTORE : un-zoomed to %r, TM held %04X going in - %r"
@@ -268,15 +310,21 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     os88marty.settle(m, limit=120)
     for a, f in saved:
         m.write(a, f)
-    os88marty.settle(m, limit=120)
+    current(m, seg)
     _, _, honest = m.fbuf()
+    fig1 = figures(m, seg)
 
     def rect(fb):
         return b"".join(fb[(y * cw + w.x) * 3:(y * cw + w.x + w.w) * 3]
                         for y in range(w.y, w.y + w.h))
 
     diff = sum(1 for a, b2 in zip(rect(after), rect(honest)) if a != b2)
-    print("SAME    : %d subpixels differ from a forced full repaint" % diff)
+    print("SAME    : %d subpixels differ from a forced full repaint "
+          "(figures %s, %s)" % (diff, fig0.hex(), fig1.hex()))
+    if fig0 != fig1:
+        fails.append("SAME: the page's figures moved %s -> %s between the "
+                     "two captures, so they compare two machines rather than "
+                     "two paints of one" % (fig0.hex(), fig1.hex()))
     if diff:
         fails.append("SAME: %d subpixels differ - what came back off the cache "
                      "is not this window's own picture (SPEC.md 11.96.16.2 on "
