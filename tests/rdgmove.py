@@ -5,7 +5,7 @@
 
 docs/REALDMG-SPEC.md section 14.4 and docs/plans/NO-PINNING-PLAN.md A1.
 tools/gbours.py builds GBBANK8.GB - tools/gbprof/gbbank.asm at 8 banks, a
-128KB MBC5 with 32KB of battery RAM - which switches among its banks in an
+128KB MBC5 with 8KB of battery RAM - which switches among its banks in an
 LFSR's order and checks EVERY switch two ways: the bank's own bytes, and a
 routine at 4010h run from 4000-7FFF, where the core's ROMX segment, the bank
 table and the recompiler's bank keys all meet. It counts switches checked at
@@ -153,6 +153,16 @@ def leg(a, disk, MAP, lab, static):
             ps = word(st["seg"], MAP["rw_prfseg"])      # something
             return ps and sum(1 for i in range(3, 2048 * 4, 4)
                               if m.read(ps * 16 + i, 1)[0]) or 0
+        # THE STATIC LEG'S MENUS MUST NOT COMPACT. Each pick claims a menu
+        # save-under (MEM_P_MSAVE, 480h paragraphs on VGA) and a claim with
+        # no free run that big COMPACTS first (SPEC.md 66.4) - which packs
+        # the game's claims into the hole under them before Static is chosen,
+        # and leaves the posted pass below nothing to move. GBBANK8 carries
+        # 8KB of RAM rather than 32KB for exactly that headroom: with 32KB the
+        # profile's 9KB took the last run that size and Machine > Reset
+        # compacted (a bp on mem_compact: menu_pull its one caller). Checked,
+        # so a heap that grows tighter says why instead of "did not move".
+        pre = dict((w, word(pseg(), o)) for w, o in off.items())
         if static:                      # the profile records what the
             until_picked("CPU", "Profile for Static",   # dynamic recompiler
                          lambda: byte(st["seg"], MAP["rw_prfon"]) and
@@ -183,6 +193,13 @@ def leg(a, disk, MAP, lab, static):
         print("rdgmove %s: package %04x carve %04x core %04x view %04x  %s"
               % (name, seg0, carve0, core0, view, "  ".join(
                   "%s=%04x" % kv for kv in w0.items())))
+        early = [w for w in ("rw_romseg", "rw_jitseg")
+                 if pre[w] and w0[w] != pre[w]]
+        if static and early:
+            fails.append("%s moved during Static's setup, before the posted "
+                         "pass: a menu's save-under found no free run and "
+                         "compacted (SPEC.md 66.4), so the heap is too tight "
+                         "for this leg" % " and ".join(early))
         need = [w for w in WORDS if w0[w]]
         if not w0["rw_jitseg"] or not w0["rw_romseg"]:
             fails.append("no recompiler or no ROM claim (%s): the load did not "

@@ -4453,7 +4453,7 @@ SOAK = [
     Row("rdgmove", "soak", py("tests/rdgmove.py"), 85.0,
         "NO-PINNING A1: REALDMG's claims MOVE while a game runs "
         "(docs/REALDMG-SPEC.md section 14.4). GBBANK8.GB (tools/gbours.py, "
-        "ours: gbbank.asm at 8 banks with 32KB of RAM, 16 checked switches a "
+        "ours: gbbank.asm at 8 banks with 8KB of RAM, 16 checked switches a "
         "frame) checks every bank switch by its bytes and by code run from "
         "4000-7FFF, recompiled; a compaction is posted from outside at the "
         "TRIVIAL rank and the frames, the damage memory, the recompiler's "
