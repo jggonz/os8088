@@ -153,6 +153,8 @@ def main():
                     "a refused DMA route", limit=30, guest=5)
             refused = page(m)
             check(not refused[11].startswith("BLASTER="), "refused DMA omits BLASTER")
+            check("DMA route is unusable" in refused[13],
+                  "a refused DMA route's verdict names the DMA, not the IRQ")
         finally:
             m.write(dma_addr, original)
 

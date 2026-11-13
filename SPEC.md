@@ -71360,7 +71360,7 @@ function*:
 
 | row | KB | = image + what it holds to work |
 |---|---|---|
-| Sound | ~23 | 7 image + 16 (`SBL_PLAYKB`): a player's 16KB ring, which the card reads in place (§34.5.2). It was 35 — image + the 8KB double buffer + the pool's 20KB ceiling, a worst case no shipped program reaches. Recording holds 31 (a 16KB grant + the 8KB capture buffer); an idle card holds its image alone |
+| Sound | ~27 | 11 image + 16 (`SBL_PLAYKB`; `DRVM_IMG_SND` = 22 half-KB units, §34.5.8): a player's 16KB ring, which the card reads in place (§34.5.2). It was 35 — image + the 8KB double buffer + the pool's 20KB ceiling, a worst case no shipped program reaches. Recording holds 31 (a 16KB grant + the 8KB capture buffer); an idle card holds its image alone |
 | Hard Drive | ~4 | 4 image, and no heap claim at all — §22.6 retired the 4 × 6KB listing claims, and §52.13 took the Control Panel page out of the image |
 | Ethernet | ~33.5 | 17 image + 16.5, the socket RING POOL at its top rung (§72.21: the bulk pair and three lean ones, 16,896 bytes since §72.4.3's send window, where a pair per slot was 36,864), claimed in paragraphs (§50.3.7) where a KB door took 17 |
 | Ram Disk | ~20+ | 5.5 image + 6.5 directory and chain table, one claim taken at Mount (`RD_TABMAXB`, 6,400 bytes, §62.9.13.1; claimed in paragraphs, §50.3.7, where a KB door took 7) + 8 bounce (`RD_EXTMAXKB`). Loaded with nothing mounted it holds the image alone |
@@ -73222,7 +73222,7 @@ version, and all mono unsigned-8:
 |---|---|---|---|---|
 | ≤ 22,222 Hz | time-constant (any DSP) | `40h` + TC | `1Ch` (auto-init) / `14h` (single) | `D0h` / `D4h` |
 | 22,223–44,100, DSP ≥ 4.00 | wide (SB16) | `41h` + Hz | `C6h` + mode | `D0h` / `D4h` |
-| 22,223–44,100, DSP ≥ 3.00 | **high-speed (SB Pro v1/v2)** | `40h` + TC | `90h` | mask/unmask DMA ch 1; DSP **reset** on close |
+| 22,223–44,100, DSP ≥ 3.00 | **high-speed (SB Pro v1/v2)** | `40h` + TC | `90h` | mask/unmask the selected DMA channel (§34.5.8); DSP **reset** on close |
 
 The high-speed regime is what an XT/286 with an SB Pro actually uses — there is
 no SB16 for an 8-bit ISA XT. It borrows the wide regime's 4 KB double buffer
@@ -73887,6 +73887,30 @@ saved routes and refuse the PCM tier. DMA 0 is avoided because the XT uses
 it for refresh; DMA 2 belongs to the floppy. No unassigned DMA channel is
 claimed merely because it is the traditional Sound Blaster default.
 
+**DMA 3 is the XT disk's when §34.5.6 says IRQ 5 is.** An IBM/Xebec or ST11
+controller takes IRQ 5 *and* DMA 3, and an 8-bit ES1868 card exists for
+8088/V20 machines. So on the evidence `sbl_irq5_taken` already reads - a
+`CPU_8086` machine whose int 0Dh points below E000h - 3 is not a usable
+route: Audio 1 on 3 moves to Audio 2's 1 when it has one, and is refused
+otherwise. Sharing the channel would let the card's requests take a disk
+transfer's count and acknowledges.
+
+**The PCM tier is refused on evidence, never on doubt.** Only two things
+refuse it: Audio 1 read back on 0 or 2 (or the XT disk's 3) with no usable
+channel on Audio 2 to move, and a route write that did not read back (after
+the rollback). A part that does not finish identifying, a configuration port
+out of range or not naming the DSP's base, routes that read 4 (none, or a
+register that does not read back), and a DSP reset that does not answer after
+`E7h` all keep **DMA 1**, which is what the driver did for every card before
+this section - and the reset is given the attach's own 65,536 polls, so a slow
+DSP 3.01 that is not an ESS is not refused here: `sbl_attach`'s reset decides
+it, as for every other card. A refused route also skips the IRQ discovery
+(`[sbl_irq]` = 0FFh), so Sound Debug's verdict names the DMA route rather
+than an IRQ that was never looked for. The routes are not put back at unload:
+a DSP reset leaves them, `int 19h` re-runs no PnP setup, and keeping the three
+bytes to restore them is resident memory, so a moved route lasts until the
+next power-on or firmware configuration.
+
 This specifically handles a BIOS assigning the ESS pair **0,3**: use 3,
 without forcing 1. A card configurator cannot fix a motherboard that does
 not deliver DMA 1. The reported AWARD 6.0/BTC failure after 1–3 seconds even
@@ -74387,8 +74411,9 @@ Three rules now, all in the tier:
 A **PicoMEM 2.x** has a jumper per line (3, 5, 6, 7), takes the highest for
 itself, raises any other jumpered line directly and multiplexes the rest the
 1.x way — so the same three rules are right there too. It also does **real
-DMA, on the channel its DMA jumper selects**: `sb.inc` programs channel 1 and
-no other (§34.5), so that jumper must be on **1**. And a 2.x cannot DMA from
+DMA, on the channel its DMA jumper selects**: `sb.inc` programs channel 1
+for every card that is not an identified ESS (§34.5.8), so that jumper must be
+on **1**. And a 2.x cannot DMA from
 memory it is itself emulating — a ring in PicoMEM-provided conventional RAM
 would be silent there. Neither is detectable from software, so both are
 setup facts rather than code.
@@ -189026,7 +189051,10 @@ A driver about to be unloaded is the **last thing that knows where its
 hardware is**, so the suspend asks each one before it goes: `DRVV_HWINFO`,
 no inputs, `CF=0` with three class-defined words or `CF=1` for a driver with
 nothing to say. For `DRVC_SOUND` they are the DSP base port, `(IRQ | DMA<<8)`
-and the DSP version — which is what a `BLASTER=` is made of.
+and the DSP version — which is what a `BLASTER=` is made of. `SOUND.DRV` also
+answers `CF=1` for an ESS whose DMA route §34.5.8 refused: there is no channel
+the card could be named on, and a `D` that is not the card's would send a DOS
+program's own DMA to a line nothing drives.
 
 The records land in the **caller's** buffer (`ES:DI`, hence an X cell), one
 `DQ_SIZE` record per driver that answered, and `CX` counts them. A driver that
@@ -189063,8 +189091,8 @@ BLASTER=A220 D1 T1
 ```
 
 Every field of that is the wreckage of a failed scan rather than a reading of
-any hardware: `A220` is the retry's leftover, `D1` is the constant this driver
-always reports, no `I` appears because `sbl_irq` is still `sbl_state_init`'s
+any hardware: `A220` is the retry's leftover, `D1` is the channel this driver
+reported for every card until §34.5.8, no `I` appears because `sbl_irq` is still `sbl_state_init`'s
 `0FFh`, and `T1` is a DSP major version of **zero** — a number no DSP that ever
 answered `E1h` could produce. The fix is one store on `.no`; `sbl_state_init`
 cannot cover it, running *before* the probe rather than after it.
@@ -189074,7 +189102,9 @@ writing down. They differ on `sbl_attach`'s `.nomem` arm — a card that really
 is in the machine, found and version-gated, whose 12KB page-safe DMA claim the
 heap refused. Our driver cannot stream from it; a DOS program with the whole
 machine can, and does its own DMA. `BLASTER=` describes the **hardware**, so a
-card we could not use is still a card to name.
+card we could not use is still a card to name. The one exception is a card
+whose DMA is the reason it cannot be used (§34.5.8's refused ESS route): its
+hardware has no `D` to describe, so it is not named at all.
 
 #### 51.11.3 One cell, three verbs, and what it costs
 
@@ -249820,7 +249850,8 @@ still auto-init; bits 2:1 are 00 = DMA 1, 01 = DMA 3, 11 = no usable DMA
 (10 reserved). Other bits are zero. Version 1 meant DMA 1 implicitly.
 Sound Debug accepts version 1 with that default, masks bit 0 for its auto-init
 label, and uses version 2's channel in both the DSP row and `BLASTER=` line.
-A refused DMA route prints `none` and omits `BLASTER=`. This diagnostic-only
+A refused DMA route prints `none` and omits `BLASTER=`, and page 1's verdict
+and IRQ row name the route rather than an IRQ the refusal never looked for. This diagnostic-only
 extension changes no shipped-driver bytes or public sound API.
 
 `SNDV_DIAG` = **14**, after `SNDV_RMODE`. `AL` is the sub-function:

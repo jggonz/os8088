@@ -65,6 +65,24 @@ operation and DOS's BLASTER value consistently. It avoids channel 0 (XT
 refresh), channel 2 (floppy) and unassigned channels. A failed configuration
 write restores the old routes and refuses PCM instead of guessing.
 
+Refusal needs evidence. PCM is refused only when Audio 1 reads back on 0 or 2
+with no 1 or 3 on Audio 2 to move, or when a route write does not read back.
+Anything that cannot be confirmed - an unfinished identification, a
+configuration port that is out of range or does not name the DSP's base,
+routes reading 4, a DSP reset that does not answer - keeps DMA 1, which is
+what every card got before this change. A card already on DMA 1 behind an
+unreadable configuration port therefore still plays.
+
+On an XT whose disk controller holds IRQ 5 (SPEC.md §34.5.6's test: a
+`CPU_8086` machine with int 0Dh below E000h), DMA 3 is the disk's too - the
+IBM/Xebec and ST11 controllers use both. The hkzlab card above is an 8-bit
+ES1868 meant for such machines, so there 3 is never selected: Audio 1 on 3
+moves to Audio 2's 1 if it has one, and is refused otherwise.
+
+The moved routes are not restored at unload. A DSP reset leaves them and
+`int 19h` re-runs no PnP setup, so the change lasts until a power-on or a
+firmware/configurator pass; restoring them would keep three bytes resident.
+
 Only positively identified ES1868/ES1869 parts receive configuration writes.
 The audio I/O base and IRQ are preserved. Other logical devices, EEPROM and
 DMA-pin mapping are untouched. Older ESS families retain the existing generic
@@ -77,9 +95,10 @@ another device, and does not automatically switch a card already on DMA 1.
 
 `tests/essdma.py` (suite row `essdma`) executes the assembled shipping driver
 under Unicorn with scripted ESS and 8237 ports, separate stack/data segments,
-read-only configuration failures, timeouts and foreign-card controls.
-`--break-dma` deliberately restores the old DMA-1 address port on DMA-3 cases
-and must fail. This validates the protocol and register discipline, not
+read-only configuration failures, timeouts and foreign-card controls, a slow
+non-ESS DSP 3.01 reset, an XT disk on DMA 3, and `sbl_find` setting DMA 1
+from zeroed cells. `--break-dma` deliberately restores the old DMA-1 address
+port on DMA-3 cases and must fail; the row runs that arm itself. This validates the protocol and register discipline, not
 physical audio, a real southbridge or undocumented card wiring.
 
 The existing `sndfmt`, `sndfmtmarty`, `sndonce`, `sbirq5`, `picomem` and
@@ -94,8 +113,8 @@ reserve/route the corresponding channel. Read-back success is not evidence
 that the motherboard actually delivers DMA. No physical ESS result is claimed
 by the host tests or by a successful QEMU SB16 run.
 
-Against `0129de488` the raw driver image is **10,517 → 10,900 bytes**
-(+383). `snd_keep` moves 5,850 → 5,866 and `snd_keepmix` 8,679 → 8,695:
+Against `0129de488` the raw driver image is **10,517 → 10,919 bytes**
+(+402). `snd_keep` moves 5,850 → 5,866 and `snd_keepmix` 8,679 → 8,695:
 **+16 resident bytes**, including the three saved DMA bytes. Both retained
 claims round to the same 512-byte granules as before (6KB without a mixer,
 8.5KB with one). The full load-time claim crosses from 10.5KB to 11KB,

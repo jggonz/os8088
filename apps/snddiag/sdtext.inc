@@ -409,6 +409,12 @@ sd_page1:
     mov al, [sd_rec+SDG_O_IMETH]
     or al, al
     jnz .im
+    call sd_dma
+    cmp al, 0xFF
+    jne .imd
+    PUTS 'not looked for (DMA route refused)'
+    jmp .irq2
+.imd:
     PUTS 'not looked for (no DSP)'
     jmp .irq2
 .im:
@@ -626,6 +632,12 @@ sd_verdict1:
     PUTS 'no card answered: no DSP, no OPL. Check the card is in SB mode.'
     ret
 .b:
+    call sd_dma
+    cmp al, 0xFF
+    jne .bi
+    PUTS 'ESS DSP found, but its DMA route is unusable. Set DMA 1 or 3.'
+    ret
+.bi:
     cmp byte [sd_rec+SDG_O_IRQ], 0xFF
     jne .i
     cmp byte [sd_rec+SDG_O_IWIN], 5

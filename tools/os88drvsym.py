@@ -54,8 +54,10 @@ class Mismatch(RuntimeError):
 def _target(target):
     """Keep a build-relative subdirectory, e.g. snddiag/sound.bin."""
     target = os.path.normpath(target)
-    if os.path.isabs(target):
-        return os.path.basename(target)
+    if os.path.isabs(target):           # inside the run's build/: keep the
+        rel = os.path.relpath(target,   # subdirectory; elsewhere, its name
+                              os.path.normpath(os88build.at("build")))
+        return os.path.basename(target) if rel.startswith("..") else rel
     if target.startswith("build" + os.sep):
         target = target[len("build") + 1:]
     if target == ".." or target.startswith(".." + os.sep):
@@ -68,7 +70,8 @@ def recipe(target, args=()):
     pointed at the run's real build directory."""
     target = _target(target)
     real = os88build.at(os.path.join("build", target))
-    rdir = os88build.at("build")
+    rdir = (real[:-len(target)].rstrip(os.sep) or "." if real.endswith(target)
+            else os.path.dirname(real) or ".")  # the directory build/ maps to
     tmp = tempfile.mkdtemp(prefix="os88drv")
     try:
         out = subprocess.run(["make", "-n", "--always-make", "BUILD=%s" % tmp]

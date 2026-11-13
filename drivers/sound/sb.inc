@@ -335,7 +335,8 @@ sbl_hw_start:
 .dma:
     mov ax, [sbl_xoff]          ; the cycle: the double buffer's 2*half, or
     mov bx, [sbl_xcnt]          ; a DIRECT ring's RL (SPEC.md 34.5.2); verb 0
-    mov cl, 0x59                ; set all three. Auto-init, read, channel 1
+    mov cl, 0x59                ; set all three. Auto-init, read (the channel
+                                ; is sbl_dma_auto's: 59h on 1, 5Bh on 3)
     mov ch, [sbl_xpage]
     test byte [sbl_fmt], SND_FMT_16
     jz .dma8
@@ -421,7 +422,8 @@ sbl_hw_start_in:
     mov ch, [sbl_xpage]
     mov dx, [sbl_half]          ; ...and its block
     dec dx
-    mov cl, 0x55                ; auto-init, write (card -> memory), ch 1
+    mov cl, 0x55                ; auto-init, write (card -> memory); the
+                                ; channel bits are sbl_dma_auto's
     call sbl_dma_auto
     mov bx, dx
     mov al, 0x48
@@ -588,7 +590,7 @@ sbl_pro_st:
     mov byte [sbl_prime], 1
     mov ax, [sbl_xoff]
     xor bx, bx                  ; one byte: count 0
-    mov cl, 0x49                ; single-cycle, read, channel 1
+    mov cl, 0x49                ; single-cycle, read (channel: sbl_dma_auto)
     mov ch, [sbl_xpage]
     call sbl_dma_auto
     mov al, 0x14                ; 8-bit single-cycle out, length 0 (1 byte)
@@ -3269,6 +3271,9 @@ sbl_cell:
 ; not the bus-wide ISA PnP address/write/read-data protocol. No LDN is written.
 ; in: DSP/version found, default DMA 1; out: selected DMA/ports, or DMA FFh
 ; clobbers AX/flags; keeps every other register. All DSP waits are bounded.
+; FFh only on evidence: Audio 1 read back on 0/2 (or the XT disk's 3) with
+; no usable channel to move, or a route write that did not read back. A part
+; or port that cannot be confirmed keeps DMA 1, as before 34.5.8.
 sbl_ess_setup:
     cmp byte [sbl_verhi], 3
     jne .done
@@ -3277,6 +3282,7 @@ sbl_ess_setup:
     push bx
     push cx
     push dx
+    push si
     mov al, 0xE7
     call sbl_dsp_wr
     jc .reset
@@ -3289,9 +3295,15 @@ sbl_ess_setup:
     and al, 0xF0
     cmp al, 0x80
     jne .reset
-    mov cx, SBL_POLLS
+    xor cx, cx                  ; 65536 polls: the scan's slow-DSP allowance
     call sbl_f_reset            ; drain/reset before any resource changes
-    jc .resetfail
+    jc .out                     ; unanswered: sbl_attach's own reset decides
+    push es
+    xor ax, ax
+    mov es, ax
+    call sbl_irq5_taken         ; CF = 1: an XT disk controller on IRQ 5 - the
+    pop es                      ; IBM/Xebec/ST11 class, whose DMA is 3
+    sbb si, si                  ; SI = FFFFh: DMA 3 is the disk's (34.5.8)
     mov dx, [sbl_base]
     add dx, 4
     pushf
@@ -3310,7 +3322,6 @@ sbl_ess_setup:
     cmp al, 0x69
     jne .unlock
 .part:
-    mov byte [sbl_dma], 0xFF    ; known part: never fall back to a guessed D1
     call sbl_ess_delay
     in al, dx
     mov ch, al
@@ -3340,15 +3351,16 @@ sbl_ess_setup:
     call sbl_ess_rd
     mov bh, al                 ; original Audio 2 route
     mov cl, bl
-    cmp cl, 1
-    je .route
-    cmp cl, 3
+    call sbl_ess_ok
     je .route
     mov cl, bh                 ; e.g. BIOS 0,3: move the allocated 3 to Audio 1
-    cmp cl, 1
+    call sbl_ess_ok
     je .second
-    cmp cl, 3
-    jne .unlock                ; no assigned channel we can safely use
+    cmp bl, 3
+    je .refuse                 ; Audio 1 on the XT disk's DMA 3, nothing to move
+    test bl, 0xFD
+    jnz .unlock                ; not 0/2 (4 = none or unreadable): DMA 1 as before
+    jmp short .refuse          ; Audio 1 is on 0 or 2: D1 is known to be wrong
 .second:
     mov ah, 0x75
     mov al, 4                  ; disconnect Audio 2 before assigning its DMA
@@ -3383,20 +3395,31 @@ sbl_ess_setup:
     mov ah, 0x75
     mov al, bh
     call sbl_ess_wr             ; a refused tier leaves the firmware routes
+.refuse:
+    mov byte [sbl_dma], 0xFF
 .unlock:
     popf
     jmp short .out
 .reset:
-    mov cx, SBL_POLLS
-    call sbl_f_reset            ; clear a non-ESS DSP's unknown E7h state too
-    jnc .out
-.resetfail:
-    mov byte [sbl_dma], 0xFF
-.out:
+    xor cx, cx                  ; 65536 polls, as sbl_attach's reset: a slow
+    call sbl_f_reset            ; non-ESS DSP clears its unknown E7h state, and
+.out:                           ; a dead one is refused there, not guessed here
+    pop si
     pop dx
     pop cx
     pop bx
 .done:
+    ret
+
+; CL = a route, SI = FFFFh when DMA 3 is the XT disk's. ZF = 1 usable: 1, or
+; 3 when the disk does not own it. Nothing else changed.
+sbl_ess_ok:
+    cmp cl, 1
+    je .ret
+    cmp cl, 3
+    jne .ret
+    test si, si
+.ret:
     ret
 
 ; DX = configuration index port. AL = index -> AL = value; DX kept.

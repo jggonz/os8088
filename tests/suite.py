@@ -1253,20 +1253,20 @@ FAST = [
         "DSP write log. Then, after the tone has stopped, inject reported DMA 3 "
         "and FFh to check the DSP/BLASTER text and refusal without claiming "
         "physical ESS playback. Read from the package's own text buffer",
-        needs=("marty",),
+        needs=("marty", "nasm"),
         wants=("build/debug-sound-720.img", "build/apps720.img")),
     Row("snddiag-vga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
         "--apps", "build/apps360.img", "--machine", "os8088_xt_vga_sb",
         "--evidence", "build/ess-sound/vga-dma3.png"), 10.0,
         "SPEC.md 127.4/34.5.8: Sound Debug on VGA, including the ten-second "
         "tone and DMA-3/refused report injection; no physical ESS claim",
-        needs=("marty",), wants=("build/debug-sound-360.img", "build/apps360.img")),
+        needs=("marty", "nasm"), wants=("build/debug-sound-360.img", "build/apps360.img")),
     Row("snddiag-cga", "soak", py("tests/snddiag.py", "--image", "build/debug-sound-360.img",
         "--apps", "build/apps360.img", "--machine", "os8088_5150_sb_gla",
         "--evidence", "build/ess-sound/cga-dma3.png"), 7.0,
         "SPEC.md 127.4/34.5.8: Sound Debug fits the 640x200 CGA display, including "
         "the ten-second tone and DMA-3/refused report injection",
-        needs=("marty",), wants=("build/debug-sound-360.img", "build/apps360.img")),
+        needs=("marty", "nasm"), wants=("build/debug-sound-360.img", "build/apps360.img")),
     Row("sndonce", "soak", py("tests/unit/t_sndonce.py"), 1.0,
         "SPEC.md 34.15.1: nothing SOUND.DRV keeps reaches into what its "
         "attach hands back - read off the assembler's own listing, no "
@@ -21642,8 +21642,11 @@ SOAK = [
         "and moves a BIOS 0,3 pair to Audio 1 on 3 without claiming DMA 1. "
         "Scripted ports check read-back/rollback, foreign or absent parts, "
         "playback/capture, high-speed pause/resume, close, consumed counts "
-        "and DOS HWINFO, with IF and SS != DS. --break-dma must fail on the "
-        "old DMA-1 address port. This does not claim physical ESS playback",
+        "and DOS HWINFO, with IF and SS != DS. An unconfirmed part, port or "
+        "reset keeps DMA 1 (a slow non-ESS 3.01 reset among them), and an XT "
+        "disk on IRQ 5 keeps DMA 3. The row runs --break-dma's old DMA-1 "
+        "address port itself and fails unless that arm fails. This does not "
+        "claim physical ESS playback",
         needs=("unicorn", "nasm"), wants=("build/sound.bin",)),
     Row("sbirq5", "soak", py("tests/sbirq5.py"), 3.0,
         "SPEC.md 34.5.6: SOUND.DRV REFUSES a Sound Blaster on IRQ 5 when IRQ 5 "
