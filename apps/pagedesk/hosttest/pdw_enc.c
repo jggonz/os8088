@@ -16,6 +16,12 @@
  * over S1: a replaced note, a deleted highlight, new ink) and prints the line
  * `PDW-ENC S1.PDF S2.PDF` for hosttest/pdw_encverify.py.
  * ==========================================================================*/
+/* The tree's root, for the scripts and samples this harness names: the
+ * Makefile passes $(CURDIR), so a $(BUILD) at any depth (os88soak's
+ * private trees are three deep) finds them; "../.." is BUILD=build's */
+#ifndef PDW_ROOT
+#define PDW_ROOT "../.."
+#endif
 #include "../pdwrt.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +58,7 @@ static int hv(int c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 static int load_db(const char *name)
 {
     char cmd[400], line[600], k[40]; FILE *f; int a, b, c, d, e, g;
-    snprintf(cmd, sizeof cmd, "python3 %s '%s' %s '%s'", getenv("PDW_PREP") ? getenv("PDW_PREP") : "../../apps/pagedesk/hosttest/pdw_encprep.py", name, g_db, !strcmp(name, "FOREIGN.PDF") ? g_fpw : g_pw);
+    snprintf(cmd, sizeof cmd, "python3 %s '%s' %s '%s'", getenv("PDW_PREP") ? getenv("PDW_PREP") : PDW_ROOT "/apps/pagedesk/hosttest/pdw_encprep.py", name, g_db, !strcmp(name, "FOREIGN.PDF") ? g_fpw : g_pw);
     if (system(cmd)) return -1;
     { FILE *s = fopen(name, "rb"); if (!s) return -1; fseek(s, 0, SEEK_END); E_len = ftell(s); fseek(s, 0, SEEK_SET); free(E_buf); E_buf = malloc((size_t)E_len + 1); fread(E_buf, 1, (size_t)E_len, s); fclose(s); }
     snprintf(cmd, sizeof cmd, "%s/trailer.txt", g_db); f = fopen(cmd, "r"); if (!f) return -1;

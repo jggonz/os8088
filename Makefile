@@ -22093,7 +22093,7 @@ $(PDW_OUT)/.host.stamp: apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/hosttest
                         apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
 	mkdir -p $(PDW_OUT)
 	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(PDW_OUT)/pdw_test \
-		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -lm
 	PDW_OUT=$(abspath $(PDW_OUT)) $(PDW_OUT)/pdw_test > $(PDW_OUT)/files.txt || { cat $(PDW_OUT)/files.txt; exit 1; }
 	python3 apps/pagedesk/hosttest/pdw_verify.py $(abspath $(PDW_OUT)) $(PDW_SHOTS)
 	touch $@
@@ -22110,7 +22110,7 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 	mkdir -p $(BUILD)/pdw-real
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
-	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -DPDW_ROOT='"$(CURDIR)"' -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
 		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
 	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
 	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
@@ -22128,7 +22128,7 @@ endif
 .PHONY: pdwrt-enc
 pdwrt-enc: | $(BUILD)
 	mkdir -p $(BUILD)/pdw-enc
-	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
+	$(CC) -std=gnu99 -O1 -Wall -Wno-deprecated-declarations -DPD_HOST -DPDW_ROOT='"$(CURDIR)"' -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_enc \
 		apps/pagedesk/hosttest/pdw_enc.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
 	$(CC) -std=gnu99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-enc/pdw_encfuzz \
 		apps/pagedesk/hosttest/pdw_encfuzz.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
