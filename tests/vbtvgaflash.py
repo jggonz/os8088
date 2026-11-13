@@ -148,8 +148,19 @@ def glass_flashes(tmp, data, syms, n):
         m.key("Enter")
         os88marty.until(m, lambda mm: rb("vb_tplay") == 1, "the title",
                         poll=0.1, limit=600, guest=120)
-        os88marty.until(m, lambda mm: True, "a settle", poll=0.1, limit=60,
-                        guest=3)
+        # THE SAMPLES ARE PLACED ON THE EMULATED CLOCK, the machine held
+        # between them: 3 guest seconds into the loop, then one every 137
+        # emulated ms. Both waits were `until(lambda: True, guest=...)`,
+        # which returns at once - so the "settle" never happened and the
+        # gap was one PNG round trip of HOST time. On an idle box that is
+        # a sample every few guest frames; with the box full the guest
+        # runs slower, the 120 samples bunched into the title's first
+        # moments (its palette and first decode, not the loop) and the
+        # full soak read 199 a sample, worst 16,778, where alone it read
+        # under 100. 86Box's `automation_frame` copies a frame on the
+        # emulation thread as it completes, so a held machine's last frame
+        # is a whole one and the same one at any host load.
+        m.advance(cycles=int(3 * os88marty.GUEST_HZ))
         bad = []
         for _ in range(n):
             fw, fh, buf = m.fbuf()
@@ -158,8 +169,7 @@ def glass_flashes(tmp, data, syms, n):
             d = np.abs(a[:, :, None, :] - rgb[None, None, :, :]).sum(3)
             good = allowed[yy, xx, d.argmin(2)] & (d.min(2) <= 12)
             bad.append(int((~good).sum()))
-            os88marty.until(m, lambda mm: True, "a gap", poll=0.0,
-                            limit=30, guest=0.137)
+            m.advance(cycles=int(0.137 * os88marty.GUEST_HZ))
     finally:
         m.quit()
     return sum(bad) / float(n), max(bad)
