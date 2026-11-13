@@ -264,8 +264,17 @@ def main():
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text("\b" * 12 + url)
-        os88marty.settle(m)
+        # TYPED WITH THE MACHINE PAUSED (text_taken), never m.type_text on a
+        # running guest. Keys pressed into a RUNNING MartyPC arrive as fast as
+        # the host sends them, and ui_task takes ONE key a pass (SPEC.md
+        # 67.11.2) - a pass per key IRQ while they trickle in, then one a TICK
+        # once they stop arriving. 42 keys at socket speed is a burst no hand
+        # makes: the 15-entry BIOS ring fills and SPEC.md 9.8's guard drops
+        # the NEWEST, so the bar held 'neth' on one run and 'netm' on the next
+        # (kbd_ovn = 3, the overrun beeps spent) - the host's speed deciding
+        # the result. Queued while paused, MartyPC's keyboard model paces them
+        # in EMULATED time, and the count of entries taken is guest state.
+        os88marty.text_taken(m, "\b" * 12 + url)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)
         if typed is None:
