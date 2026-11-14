@@ -4754,48 +4754,49 @@ wa_overlay:
 .out:
     ret
 .fresh:
-    mov dh, dl
-    or dh, 0x80                 ; DL, DH: this frame's stamps, wall, figure
-    mov cx, [wa_ovoldn]         ; the last overlay's cells, back to the view
+    mov di, [wa_newp]
+    add di, [wa_newn]           ; DI = this frame's list's end
+    mov cx, [wa_ovoldn]         ; the last overlay's cells, back to the view:
+    jcxz .new                   ; listed and blank, unless the view drew them
     mov si, wa_ovold
 .o:
-    jcxz .new
     lodsw
-    xchg ax, bx
-    sub bx, wa_stamp            ; (the cell)
-    cmp [wa_stamp+bx], dl
+    xchg ax, bx                 ; BX = the cell's stamp's place
+    mov al, [bx]
+    and al, 0x7F
+    cmp al, dl
     je .on
-    cmp [wa_stamp+bx], dh
-    je .on
-    mov [wa_stamp+bx], dl
-    call wa_list
-    mov word [wa_cur+bx], WA_BLANK
+    mov [bx], dl
+    lea ax, [bx-wa_stamp]
+    stosw
+    mov word [bx+wa_cur-wa_stamp], WA_BLANK
 .on:
-    dec cx
-    jmp .o
+    loop .o
 .new:
     mov cx, [wa_ovn]            ; ...then this one's, every cell listed
     mov [wa_ovoldn], cx
-    mov si, wa_ov
-    mov di, wa_ovold
-.n:
     jcxz .done
+    mov si, wa_ov
+.n:
     lodsw
-    xchg ax, bx
-    lea ax, [wa_stamp+bx]       ; (its stamp's place: the frames to come)
-    stosw
-    mov ax, [si+WA_OVGD]
-    cmp [wa_stamp+bx], dl
-    je .nput
-    cmp [wa_stamp+bx], dh
+    mov bx, ax                  ; BX = the cell
+    add ax, wa_stamp            ; (its stamp's place: the frames to come)
+    mov [si+wa_ovold-wa_ov-2], ax
+    mov al, [wa_stamp+bx]
+    and al, 0x7F
+    cmp al, dl
     je .nput
     mov [wa_stamp+bx], dl
-    call wa_list
+    mov [di], bx
+    inc di
+    inc di
 .nput:
+    mov ax, [si+WA_OVGD]
     mov [wa_cur+bx], ax
-    dec cx
-    jmp .n
+    loop .n
 .done:
+    sub di, [wa_newp]
+    mov [wa_newn], di
     mov byte [wa_ovfresh], 0
     ret
 
