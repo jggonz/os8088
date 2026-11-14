@@ -49,7 +49,7 @@ _map = dispapps._map
 dispapps._map = lambda app, defines=(): (amap() if app == 'wirearena'
                                          else _map(app, defines))
 
-LENS = {1: 20, 2: 15, 3: 8, 4: 19, 5: 24, 6: 17, 7: 12}
+LENS = {1: 20, 2: 15, 3: 8, 4: 19, 5: 24, 6: 17, 7: 12, 8: 24}
 ANIM = {}
 FS = 56
 fails = []
@@ -89,18 +89,19 @@ class NetCable:
     socket` ends connect here (QEMU's stream: a 4-byte big-endian length,
     then the frame), and frames go across while `enabled` - counted, kept
     for THE WIRE, and a frame can be injected."""
-    def __init__(self):
+    def __init__(self, n=2):
         import socket as so
         import threading
+        self.n = n
         self.srv = so.socket()
         self.srv.setsockopt(so.SOL_SOCKET, so.SO_REUSEADDR, 1)
         self.srv.bind(('127.0.0.1', 0))
-        self.srv.listen(2)
+        self.srv.listen(n)
         self.port = self.srv.getsockname()[1]
-        self.socks = [None, None]
+        self.socks = [None] * n
         self.enabled = True
-        self.counts = [0, 0]
-        self.observed = [[], []]
+        self.counts = [0] * n
+        self.observed = [[] for _ in range(n)]
         self.stop = False
         self.lock = threading.Lock()
         self.threads = []
@@ -110,7 +111,7 @@ class NetCable:
 
     def start(self):
         import threading
-        for k in (0, 1):
+        for k in range(self.n):
             t = threading.Thread(target=self.run, args=(k,), daemon=True)
             t.start()
             self.threads.append(t)
@@ -204,7 +205,12 @@ class NetCable:
 
     def send(self, k, fr):
         with self.lock:
-            self.socks[k].sendall(len(fr).to_bytes(4, 'big') + fr)
+            if not self.socks[k]:
+                return
+            try:
+                self.socks[k].sendall(len(fr).to_bytes(4, 'big') + fr)
+            except OSError:             # (a machine switched off: walink4)
+                self.socks[k] = None
 
     def inject(self, k, data):
         """garbage to machine k: a frame of our EtherType, or on UDP a
@@ -261,6 +267,16 @@ class Arena(W.Machine):
         super().__init__(d, i, app='wirearena', filename='WARENA.O88',
                          disk=W.artifact('warena.img'), prefix='wa_',
                          extra=extra)
+        self.peer_names(0)
+
+    PEER = (('wa_lkpeer', 0), ('wa_lkps', 10), ('wa_lklost', 14),
+             ('wa_lkgone', 15), ('wa_lkrseen', 16))
+
+    def peer_names(self, k):
+        """the per-peer names (wa_pc's, a working copy: NET-PLAN 4) read
+        from peer record k of the table instead"""
+        for name, off in self.PEER:
+            self.sy[name] = self.sy['wa_pt'] + 32 * k + off
 
     def v(self, name, n=1, signed=False):
         return int.from_bytes(self.readseg(self.seg, self.sy[name], n),

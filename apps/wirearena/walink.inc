@@ -15,8 +15,10 @@ WL_EVENT    equ 4
 WL_HSNAP    equ 5               ; the host's, with bots: and theirs (L2)
 WL_GSNAP    equ 6               ; the guest's, with bots: and its hits on them
 WL_BSCORE   equ 7               ; the host's bots' rows of deaths by cause
-LK_NTYPES   equ 8
-lk_lens:    db 0, 20, 15, 8, 19, 24, 17, 12 ; each type's body, its CRC too
+WL_PEERS    equ 8               ; the window, on UDP: the other peers we know
+WL_PEERN    equ 2               ;   (two: the third is the one told)
+LK_NTYPES   equ 9
+lk_lens:    db 0, 20, 15, 8, 19, 24, 17, 12, 24 ; each type's body, its CRC too
 WL_BEAT     equ 9               ; OS ticks between HELLOs (WireFleet's)
 WL_QUIET    equ 55              ; ticks of silence: gone (lobby), lost (match)
 WL_EVQ      equ 8               ; events waiting for their ack
@@ -37,6 +39,26 @@ WR_Z        equ 4               ;   its height (-1: the floor's), facing,
 WR_A        equ 6               ;   its flags (SNAP byte 9's)
 WR_F        equ 8
 WR_SZ       equ 10
+WL_NPEER    equ 3               ; peers at most: four players (NET-PLAN 1)
+WP_ID       equ 0               ; A PEER'S RECORD (wa_pt; wa_pc the loaded
+WP_ADDR     equ 4               ;   one): its identity, its address (a
+WP_PS       equ 10              ;   station's, or IP and port), its lobby
+WP_PHEARD   equ 11              ;   state and when heard there, the host's
+WP_PTAG     equ 13              ;   tag as it said it; in the match: lost,
+WP_LOST     equ 14              ;   gone, seen yet, when last heard, the
+WP_GONE     equ 15              ;   damage words in and out, the last event
+WP_RSEEN    equ 16              ;   applied from it, its place in our event
+WP_HEARD    equ 17              ;   queue and when sent, who dealt our word's
+WP_DIN      equ 19              ;   last damage, its hits on the host's bots
+WP_DOUT     equ 21              ;   as last seen, its ack of our queue, its
+WP_IN       equ 23              ;   slot
+WP_QS       equ 24
+WP_QT       equ 25
+WP_ATTR     equ 27
+WP_BDIN     equ 28
+WP_ACK      equ 30
+WP_SLOT     equ 31
+WP_SZ       equ 32
 WL_ROWS     equ 14              ; the window's rows of text (the setup's
                                 ; buttons over rows 7 and 8, WS_BTNY)
 WL_COLS     equ 38
@@ -77,7 +99,9 @@ wa_lksend:
     jne .to
     mov ax, [wa_lkpeer]
     or ax, [wa_lkpeer+2]
-    jnz .to                     ; (bound: to the peer)
+    or ax, [wa_lkpmac]
+    or ax, [wa_lkpmac+2]
+    jnz .to                     ; (bound, or a PEERS named it: to it)
     mov di, wa_saddr6
     cmp byte [wa_splay], 3      ; (by address)
     je .to
@@ -172,6 +196,134 @@ wa_lknettry:
     mov byte [wa_lkfull], 1
     ret
 
+; wa_pptr - AL = a peer's index: BX = its record in the table. Keeps all
+; but BX
+wa_pptr:
+    push ax
+    push dx
+    xor ah, ah
+    mov dl, WP_SZ
+    mul dl
+    add ax, wa_pt
+    mov bx, ax
+    pop dx
+    pop ax
+    ret
+
+; wa_pload - AL = a peer's index: its record into wa_pc. wa_pstore - back.
+; Keep every register
+wa_pload:
+    push cx
+    push si
+    push di
+    push es
+    push bx
+    mov [wa_lkp], al
+    mov byte [wa_lkld], 1
+    call wa_pptr
+    mov si, bx
+    mov di, wa_pc
+.cp:
+    push ds
+    pop es
+    mov cx, WP_SZ / 2
+    cld
+    rep movsw
+    pop bx
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
+wa_pstore:
+    push cx
+    push si
+    push di
+    push es
+    push bx
+    push ax
+    mov byte [wa_lkld], 0
+    mov al, [wa_lkp]
+    call wa_pptr
+    pop ax
+    mov di, bx
+    mov si, wa_pc
+    jmp wa_pload.cp
+
+; wa_pfind - AL = a frame's type: the peer it came from (wa_lkfrom on the
+; card; on the cable, the one there is), AL = its index, CF = 0. One not in
+; the table yet takes a free record (its address set, the rest zero) - by
+; a HELLO in the window, never in a match (a stranger's would hold the
+; event queue: nobody would ack); CF = 1 when it may not, or none is free.
+; Keeps all but AX
+wa_pfind:
+    push bx
+    push cx
+    push si
+    push di
+    mov ah, al
+    xor al, al
+    cmp byte [wa_lknet], 0
+    jne .card
+    cmp byte [wa_lkpn], 0       ; (the cable: one peer, record 0)
+    jne .ok
+    jmp .new
+.card:
+    mov cl, [wa_lkpn]
+.f:
+    cmp al, cl
+    jae .new
+    call wa_pptr
+    lea si, [bx+WP_ADDR]
+    mov di, wa_lkfrom
+    push cx
+    mov cx, 3
+    push es
+    push ds
+    pop es
+    repe cmpsw
+    pop es
+    pop cx
+    je .ok
+    inc al
+    jmp .f
+.new:
+    cmp ah, WL_HELLO
+    jne .full
+    cmp byte [wa_lkon], 0
+    jne .full
+    cmp byte [wa_lkpn], WL_NPEER
+    jae .full
+    mov al, [wa_lkpn]
+    inc byte [wa_lkpn]
+    call wa_pptr
+    push ax
+    push es
+    push ds
+    pop es
+    mov di, bx
+    xor ax, ax
+    mov cx, WP_SZ / 2
+    rep stosw
+    lea di, [bx+WP_ADDR]
+    mov si, wa_lkfrom
+    movsw
+    movsw
+    movsw
+    pop es
+    pop ax
+.ok:
+    clc
+    jmp .out
+.full:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
 ; wa_lkcable - back to the cable (or nothing): the card given back
 wa_lkcable:
     call rw_close
@@ -220,19 +372,78 @@ wa_lkclose:
 ; wa_lklinked - ZF = 0 when a peer is bound and heard within WL_QUIET
 wa_lklinked:
     push ax
-    mov ax, [wa_lkpeer]
-    or ax, [wa_lkpeer+2]
-    jz .no
+    push bx
+    push cx
+    push dx
     call OSAPI_GET_TICKS
-    sub ax, [wa_lkpheard]
-    cmp ax, WL_QUIET
+    mov dx, ax
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
     jae .no
+    mov al, cl
+    call wa_prec
+    inc cx
+    mov ax, [bx+WP_ID]
+    or ax, [bx+WP_ID+2]
+    jz .p
+    mov ax, dx
+    sub ax, [bx+WP_PHEARD]
+    cmp ax, WL_QUIET
+    jae .p
     or al, 1                    ; (ZF = 0)
-    pop ax
-    ret
+    jmp .out
 .no:
     xor al, al                  ; (ZF = 1)
+.out:
+    pop dx
+    pop cx
+    pop bx
     pop ax
+    ret
+
+; wa_prec - AL = a peer's index: BX = its record - wa_pc if it is the one
+; loaded, else the table's. Keeps all but BX
+wa_prec:
+    cmp byte [wa_lkld], 0
+    je wa_pptr
+    cmp al, [wa_lkp]
+    jne wa_pptr
+    mov bx, wa_pc
+    ret
+
+; wa_pmin - DX:AX = the lowest identity of the bound peers (FFFF:FFFF none)
+wa_pmin:
+    push bx
+    push cx
+    mov ax, 0xFFFF
+    mov dx, ax
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .out
+    push ax
+    mov al, cl
+    call wa_prec
+    pop ax
+    inc cx
+    cmp word [bx+WP_ID], 0
+    jne .b
+    cmp word [bx+WP_ID+2], 0
+    je .p
+.b:
+    cmp dx, [bx+WP_ID+2]
+    jb .p
+    ja .take
+    cmp ax, [bx+WP_ID]
+    jbe .p
+.take:
+    mov ax, [bx+WP_ID]
+    mov dx, [bx+WP_ID+2]
+    jmp .p
+.out:
+    pop cx
+    pop bx
     ret
 
 ; wa_lktimer - the window's tick (ONTIMER, SI = the window, the lock held)
@@ -260,7 +471,9 @@ wa_lktimer:
     pop si
     ret
 
-; wa_lkhello - HELLO, every WL_BEAT ticks while the port is held
+; wa_lkhello - HELLO, every WL_BEAT ticks while a carrier is up: to each
+; peer bound, and to everyone (or the typed address) while there is room
+; for another (NET-PLAN 6)
 wa_lkhello:
     call wa_lkup
     jz .out
@@ -270,6 +483,229 @@ wa_lkhello:
     cmp ax, WL_BEAT
     jb .out
     mov [wa_lkbeat], bx
+    call wa_pdrop
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .anyone
+    mov al, cl
+    push cx
+    call wa_pload
+    mov ax, [wa_lkpeer]         ; (bound: to it, and whom else we know;
+    or ax, [wa_lkpeer+2]        ; a record a PEERS named, its address and
+    jnz .bound                  ; no identity yet: to it, to be bound; one
+    mov ax, [wa_lkpmac]         ; with neither waits for the HELLO to
+    or ax, [wa_lkpmac+2]        ; everyone)
+    jz .skip
+    call wa_lkhello1
+    jmp .skip
+.bound:
+    call wa_lkhello1
+    call wa_lkpeersend
+.skip:
+    call wa_pstore
+    pop cx
+    inc cx
+    jmp .p
+.anyone:
+    cmp byte [wa_lkpn], WL_NPEER ; (full: nobody new)
+    jae .out
+    cmp byte [wa_lknet], 0      ; (the cable: one peer, once bound)
+    jne .room
+    cmp byte [wa_lkpn], 0
+    jne .out
+.room:
+    push ds                     ; the HELLO to everyone: bound to nobody
+    pop es
+    mov di, wa_pc
+    xor ax, ax
+    mov cx, WP_SZ / 2
+    rep stosw
+    jmp wa_lkhello1
+.out:
+    ret
+
+; wa_lkpeersend - to the loaded peer (bound), on UDP: PEERS, the others
+; bound that we know, an identity and an address each (NET-PLAN 6.1) - so
+; three that each typed one address find each other
+wa_lkpeersend:
+    cmp byte [wa_lknet], 2
+    jne .out
+    cmp byte [wa_lkpn], 2
+    jb .out
+    push ds
+    pop es
+    mov di, wa_lkfr
+    mov ax, WL_PEERS            ; (its count, 0 so far)
+    stosw
+    push di
+    xor ax, ax
+    mov cx, WL_PEERN * 5
+    rep stosw
+    pop di
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .send
+    cmp cl, [wa_lkp]            ; (not the one told)
+    je .n
+    mov al, cl
+    call wa_pptr
+    call wa_lkbound
+    jz .n
+    cmp byte [wa_lkfr+1], WL_PEERN
+    jae .send
+    inc byte [wa_lkfr+1]
+    mov si, bx                  ; WP_ID, then WP_ADDR: ten bytes
+    push cx
+    mov cx, 5
+    rep movsw
+    pop cx
+.n:
+    inc cx
+    jmp .p
+.send:
+    cmp byte [wa_lkfr+1], 0
+    je .out
+    mov si, wa_lkfr
+    mov cl, 2 + WL_PEERN * 10
+    jmp wa_lksend
+.out:
+    ret
+
+; wa_lkpeersin - SI = a PEERS from a bound peer, in the window: each one
+; it names that we have no record of (by identity or address), a record -
+; its address, no identity, heard now - for our HELLO to bind (above)
+wa_lkpeersin:
+    mov ax, [wa_lkpeer]
+    or ax, [wa_lkpeer+2]
+    jz .out
+    mov cl, [si+1]
+    cmp cl, WL_PEERN
+    ja .out
+    add si, 2
+.e:
+    or cl, cl
+    jz .out
+    dec cx
+    push cx
+    call wa_lkpeer1
+    pop cx
+    add si, 10
+    jmp .e
+.out:
+    ret
+
+; wa_lkpeer1 - SI = a PEERS entry (identity, address): a record for it
+; unless it is us or one we have. Keeps SI
+wa_lkpeer1:
+    mov ax, [si]
+    cmp ax, [wa_lkid]
+    jne .other
+    mov ax, [si+2]
+    cmp ax, [wa_lkid+2]
+    je .out
+.other:
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .new
+    mov al, cl
+    call wa_prec
+    inc cx
+    mov ax, [si]                ; the same identity
+    cmp ax, [bx+WP_ID]
+    jne .addr
+    mov ax, [si+2]
+    cmp ax, [bx+WP_ID+2]
+    je .out
+.addr:
+    push si                     ; the same address
+    push cx
+    lea di, [bx+WP_ADDR]
+    add si, 4
+    mov cx, 3
+    push es
+    push ds
+    pop es
+    repe cmpsw
+    pop es
+    pop cx
+    pop si
+    je .out
+    jmp .p
+.new:
+    cmp byte [wa_lkpn], WL_NPEER
+    jae .out
+    mov al, [wa_lkpn]
+    inc byte [wa_lkpn]
+    call wa_pptr
+    push si
+    push ds
+    pop es
+    mov di, bx
+    xor ax, ax
+    mov cx, WP_SZ / 2
+    rep stosw
+    lea di, [bx+WP_ADDR]
+    add si, 4
+    movsw
+    movsw
+    movsw
+    pop si
+    call OSAPI_GET_TICKS
+    mov [bx+WP_PHEARD], ax
+    mov byte [wa_lkfull], 1
+.out:
+    ret
+
+; wa_pdrop - in the window, every peer quiet WL_QUIET ticks out of the
+; table (NET-PLAN 4): one that closed its window or lost its carrier would
+; otherwise hold the host's start - it waits for every peer bound to be
+; READY. Its HELLO again finds it a record. BX = the ticks now
+wa_pdrop:
+    cmp byte [wa_lkon], 0
+    jne .out
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .out
+    mov al, cl
+    push bx
+    call wa_pptr
+    mov si, bx
+    pop bx
+    mov ax, bx
+    sub ax, [si+WP_PHEARD]
+    cmp ax, WL_QUIET
+    jae .drop
+    inc cx
+    jmp .p
+.drop:
+    push cx                     ; the records after it down one
+    mov di, si
+    add si, WP_SZ
+    mov al, [wa_lkpn]
+    sub al, cl
+    dec ax
+    mov ah, WP_SZ / 2
+    mul ah
+    mov cx, ax
+    push es
+    push ds
+    pop es
+    cld
+    rep movsw
+    pop es
+    pop cx
+    dec byte [wa_lkpn]
+    mov byte [wa_lkfull], 1
+    jmp .p
+.out:
+    ret
+
+; wa_lkhello1 - one HELLO, wa_pc's peer named in it (0: to everyone)
+wa_lkhello1:
     mov di, wa_lkfr
     push ds
     pop es
@@ -299,39 +735,96 @@ wa_lkhello:
     stosb
     mov si, wa_lkfr
     mov cl, 18
-    call wa_lksend
-.out:
-    ret
+    jmp wa_lksend
 
-; wa_lkhost - ZF = 0 when we are the host (the lower identity)
+; wa_lkhost - ZF = 0 when we are the host: the lowest identity of us and
+; every peer bound (NET-PLAN 4: slot 0) - in a match, slot 0 as the match
+; began. Keeps every register
 wa_lkhost:
     push ax
-    mov ax, [wa_lkid+2]
-    cmp ax, [wa_lkpeer+2]
-    jne .c
-    mov ax, [wa_lkid]
-    cmp ax, [wa_lkpeer]
-.c:
-    jb .host
-    xor al, al
+    cmp byte [wa_lkon], 0
+    je .lobby
+    mov al, [wa_lkme]           ; (AL = FFh: slot 0)
+    cmp al, 1
+    sbb al, al
+    test al, al
     pop ax
     ret
-.host:
+.lobby:
+    push dx
+    call wa_pmin
+    cmp dx, [wa_lkid+2]
+    jne .c
+    cmp ax, [wa_lkid]
+.c:
+    jbe .guest                  ; (a peer at or below us: not the host)
     or al, 1
+    pop dx
+    pop ax
+    ret
+.guest:
+    xor al, al
+    pop dx
     pop ax
     ret
 
-; wa_lkstart - START (plan 4.1): the host draws a tag once both are ready
-; and goes in when the guest is in; the guest goes in on the host's tag
+; wa_pishost - ZF = 0 when the loaded peer is the host: the lowest
+; identity of us all. Keeps every register
+wa_pishost:
+    push ax
+    push dx
+    call wa_pmin
+    cmp ax, [wa_lkpeer]
+    jne .no
+    cmp dx, [wa_lkpeer+2]
+    jne .no
+    cmp dx, [wa_lkid+2]         ; (and below us)
+    jne .c
+    cmp ax, [wa_lkid]
+.c:
+    jae .no
+    or al, 1
+    pop dx
+    pop ax
+    ret
+.no:
+    xor al, al
+    pop dx
+    pop ax
+    ret
+
+; wa_lkstart - START (LINK-PLAN 4.1, every peer now): the host draws a tag
+; once every peer is ready and goes in when every peer is in with it; a
+; guest goes in on the host's tag
 wa_lkstart:
     call wa_lklinked
     jz .out
     cmp byte [wa_lkst], 1
     jne .out
-    cmp byte [wa_lkps], 1
-    jb .out
     call wa_lkhost
     jz .guest
+    xor cx, cx                  ; THE HOST: every peer bound ready (1), and
+    mov dl, 1                   ; DL = 1 while every one is in (2) with our
+.p:                             ; tag
+    cmp cl, [wa_lkpn]
+    jae .all
+    mov al, cl
+    call wa_pptr
+    inc cx
+    mov ax, [bx+WP_ID]
+    or ax, [bx+WP_ID+2]
+    jz .p
+    cmp byte [bx+WP_PS], 1
+    jb .out
+    cmp byte [bx+WP_PS], 2
+    jne .notin
+    mov al, [bx+WP_PTAG]
+    cmp al, [wa_lktag]
+    je .p
+.notin:
+    xor dl, dl
+    jmp .p
+.all:
     cmp byte [wa_lktag], 0
     jne .tagged
     call OSAPI_RAND
@@ -343,11 +836,15 @@ wa_lkstart:
     mov byte [wa_lkfull], 1
     ret
 .tagged:
-    cmp byte [wa_lkgo], 0       ; the guest's HELLO said 2 with our tag, or
-    jne wa_lkplay               ; its SNAP came
+    or dl, dl
+    jnz wa_lkplay
     ret
 .guest:
-    mov al, [wa_lkptag]
+    call wa_phost               ; the host's record: its tag, and it ready
+    jc .out
+    cmp byte [bx+WP_PS], 1
+    jb .out
+    mov al, [bx+WP_PTAG]
     or al, al
     jz .out
     mov [wa_lktag], al
@@ -355,11 +852,45 @@ wa_lkstart:
 .out:
     ret
 
+; wa_phost - BX = the host's record (the bound peer of the lowest
+; identity, below ours), CF = 0; CF = 1 when we are the host. AL = its
+; index. Keeps all but AX, BX
+wa_phost:
+    push cx
+    push dx
+    call wa_pmin
+    mov cx, ax
+    xor al, al
+.p:
+    cmp al, [wa_lkpn]
+    jae .none
+    call wa_prec
+    cmp cx, [bx+WP_ID]
+    jne .n
+    cmp dx, [bx+WP_ID+2]
+    je .got
+.n:
+    inc al
+    jmp .p
+.got:
+    cmp dx, [wa_lkid+2]
+    jne .c
+    cmp cx, [wa_lkid]
+.c:
+    jae .none
+    clc
+    jmp .out
+.none:
+    stc
+.out:
+    pop dx
+    pop cx
+    ret
+
 ; wa_lkplay - into the match: the host's arena, our width
 wa_lkplay:
-    mov byte [wa_lkgo], 0
     mov byte [wa_lkst], 2
-    mov word [wa_lkbeat], 0     ; (a HELLO saying 2, now)
+    mov word [wa_lkbeat], 0     ; (HELLOs saying 2, now)
     sub word [wa_lkbeat], WL_BEAT
     call wa_lkhello
     mov al, [wa_lkarena]
@@ -378,7 +909,6 @@ wa_lkplay:
 .back:
     mov byte [wa_lkon], 0       ; back in the lobby, not ready
     mov byte [wa_lkst], 0
-    mov byte [wa_lkgo], 0
     call wa_lkhost
     jz .g
     mov byte [wa_lktag], 0
@@ -463,18 +993,48 @@ wa_lkkey:
 
 ; wa_lktake - a valid frame (lk_take, os88cable.inc): AL = its type, SI it
 lk_take:
+    push ax                     ; WHO SENT IT: its record (wa_pfind - a new
+    call wa_pfind               ; address takes a free one), loaded for the
+    mov ah, al                  ; frame and stored after it (NET-PLAN 4)
+    pop bx
+    jc .out
+    mov al, ah
+    call wa_pload
+    mov al, bl
+    call wa_ltake1
+    call wa_pstore
+.out:
+    ret
+wa_ltake1:
     cmp al, WL_HELLO
     je wa_lkhtake
     cmp byte [wa_lkon], 0       ; (the match's frames: the match's, or in the
-    jne wa_lkmtake              ; window the guest's first SNAP - it is in)
+    jne wa_lkmtake              ; window a peer's first SNAP - it is in)
+    push ax                     ; (a bound peer's frame, whatever it is: it
+    mov ax, [wa_lkpeer]         ; is heard - one still in a match sends no
+    or ax, [wa_lkpeer+2]        ; HELLO, and the lobby drops the quiet)
+    jz .unb
+    call OSAPI_GET_TICKS
+    mov [wa_lkpheard], ax
+.unb:
+    pop ax
+    cmp al, WL_PEERS
+    je wa_lkpeersin
     cmp al, WL_SNAP
-    jne .out
+    jb .out
+    cmp al, WL_GSNAP
+    ja .out
+    cmp al, WL_SCORE
+    je .out
+    cmp al, WL_EVENT
+    je .out
     mov al, [si+1]
     cmp al, [wa_lktag]
     jne .out
     or al, al
     jz .out
-    mov byte [wa_lkgo], 1
+    mov byte [wa_lkps], 2       ; (as good as its HELLO saying 2 with our
+    mov [wa_lkptag], al         ; tag)
     call OSAPI_GET_TICKS
     mov [wa_lkpheard], ax
 .out:
@@ -507,8 +1067,10 @@ wa_lkhtake:
     cmp ax, [wa_lkpeer+2]
     je .peer
 .third:
-    call wa_lklinked            ; another identity: taken only once the
-    jnz .out                    ; bound one has gone quiet
+    call OSAPI_GET_TICKS        ; another identity at this address: taken
+    sub ax, [wa_lkpheard]       ; only once the bound one has gone quiet
+    cmp ax, WL_QUIET            ; (the other machine restarted WireArena)
+    jb .out
 .bind:
     mov ax, [si+4]
     mov [wa_lkpeer], ax
@@ -534,6 +1096,8 @@ wa_lkhtake:
     mov byte [lk_blk+LK_HEARD], 1
     call OSAPI_GET_TICKS
     mov [wa_lkpheard], ax
+    mov al, [si+16]             ; (its tag: the host's own, or a guest's
+    mov [wa_lkptag], al         ; echo of it)
     mov al, [si+12]
     mov [wa_lkps], al
     cmp byte [wa_lkon], 0       ; in the match: a HELLO saying it is not
@@ -544,8 +1108,8 @@ wa_lkhtake:
     mov byte [wa_ovd], 1
     ret
 .lobby:
-    call wa_lkhost
-    jnz .host
+    call wa_pishost             ; (from the host - the lowest identity of
+    jz .out                     ; us all - its match's settings)
     mov al, [si+13]             ; a guest takes the host's arena, its
     mov [wa_lkarena], al        ; difficulty and its tag
     mov al, [si+14]
@@ -556,18 +1120,6 @@ wa_lkhtake:
     mov al, 2
 .nb:
     mov [wa_lkbots], al
-    mov al, [si+16]
-    mov [wa_lkptag], al
-    ret
-.host:
-    cmp byte [si+12], 2         ; the guest in, with our tag: we go too
-    jne .out
-    mov al, [si+16]
-    or al, al
-    jz .out
-    cmp al, [wa_lktag]
-    jne .out
-    mov byte [wa_lkgo], 1
 .out:
     ret
 
@@ -665,9 +1217,16 @@ wa_lkline:
     mov si, wa_lt_onet
     cmp byte [wa_lknet], 1
     je .raw
-    mov si, wa_lt_oudp
-    call wa_lkcpy
-    mov si, wa_lkpmac
+    mov si, wa_lt_oudp          ; (the first peer bound: by address, the
+    call wa_lkcpy               ; host)
+    xor cx, cx
+.fp:
+    mov al, cl
+    call wa_pptr
+    inc cx
+    call wa_lkbound
+    jz .fp
+    lea si, [bx+WP_ADDR]
     jmp wa_lkip
 .raw:
     jmp wa_lkcpy
@@ -712,15 +1271,32 @@ wa_lkline:
 .out:
     ret
 .lobby:
-    mov bx, bp
-    sub bx, 10
+    mov dx, bp                  ; rows 10..: YOU, each peer bound, then the
+    sub dx, 10                  ; hint (NET-PLAN 4: three peers at most)
     jb .out
-    cmp bx, 4
-    jae .out
-    shl bx, 1
-    jmp [wa_lkrow+bx]
+    jz wa_lkrow.you
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .nop
+    mov al, cl
+    call wa_pptr
+    inc cx
+    call wa_lkbound
+    jz .p
+    dec dx
+    jnz .p
+    dec cx                      ; the DX'th: its row, loaded and back
+    mov al, cl
+    call wa_pload
+    call wa_lkrow.them
+    jmp wa_pstore
+.nop:
+    dec dx                      ; (the row after the last: the hint)
+    jz wa_lkrow.hint
+    ret
 
-wa_lkrow:   dw .you, .them, .out, .hint
+wa_lkrow:
 .out:
     ret
 .you:
@@ -741,8 +1317,8 @@ wa_lkrow:   dw .you, .them, .out, .hint
     mov di, wa_lkln+12
     mov al, [wa_lkps]
     call wa_lkstate
-    call wa_lkhost
-    jnz .o3
+    call wa_pishost
+    jz .o3
     mov di, wa_lkln+28
     mov si, wa_lt_host
     jmp wa_lkcpy
@@ -839,6 +1415,43 @@ wa_lkpnm:
     loop .d
     ret
 
+; wa_lksbname - BX = a figure's code here (not ours): SI = its name on a
+; linked board - a player's off its identity as wa_lkpname's, a bot's its
+; own - CF = 0; CF = 1 a slot the match has nobody in. Keeps all but SI
+wa_lksbname:
+    push ax
+    push bx
+    push cx
+    mov al, bl
+    call wa_lkcanon             ; (its slot)
+    mov ah, [wa_lknp]
+    add ah, [wa_lknb]
+    cmp al, ah
+    jae .none
+    cmp al, [wa_lknp]
+    jae .bot
+    call wa_slotpeer
+    jc .none
+    mov al, [bx+WP_ID]
+    jmp .nm
+.bot:
+    mov al, [wa_bname-1+bx]
+.nm:
+    and ax, WA_NNAME - 1
+    mov cl, 3
+    shl ax, cl
+    add ax, wa_names
+    mov si, ax
+    clc
+    jmp .out
+.none:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; wa_lkpname - the peer's robot name, 8 characters, into wa_lkpnam
 wa_lkpname:
     push di
@@ -892,20 +1505,36 @@ wa_lt_hguest:   db 'Ready, and the host starts the match.', 0
 ; counters, the other player not yet seen, the bots parked, the pickups -
 ; the host's rolls, which the guest waits for
 wa_lkmstart:
+    call wa_lkslots             ; who is who (NET-PLAN 4)
     xor ax, ax
-    mov [wa_lkdin], ax
-    mov [wa_lkdout], ax
-    mov [wa_lkin], al
     mov byte [wa_lkseq], 1
     mov [wa_lkqn], al
-    mov [wa_lkqs], al
-    mov [wa_lkrseen], al
-    mov [wa_lklost], al
-    mov [wa_lkgone], al
     mov [wa_lkpkk], al
-    mov [wa_lkattr], al
     mov [wa_lkbd], ax
-    mov [wa_lkbdin], ax
+    xor cx, cx                  ; every peer's side of the match, fresh
+.pp:
+    cmp cl, [wa_lkpn]
+    jae .ppd
+    mov al, cl
+    call wa_pptr
+    inc cx
+    xor ax, ax
+    mov [bx+WP_DIN], ax
+    mov [bx+WP_DOUT], ax
+    mov [bx+WP_BDIN], ax
+    mov [bx+WP_IN], al
+    mov [bx+WP_QS], al
+    mov [bx+WP_RSEEN], al
+    mov [bx+WP_LOST], al
+    mov [bx+WP_GONE], al
+    mov [bx+WP_ATTR], al
+    mov [bx+WP_ACK], al
+    mov ax, [wa_tkn]
+    mov [bx+WP_HEARD], ax
+    mov [bx+WP_QT], ax
+    jmp .pp
+.ppd:
+    xor ax, ax
     push ds
     pop es
     mov di, wa_lkd              ; nobody dead yet
@@ -914,15 +1543,6 @@ wa_lkmstart:
     mov di, wa_lkr              ; nothing heard of anyone
     mov cx, WR_SZ * WA_NFIG / 2
     rep stosw
-    mov al, 1                   ; who we are on the wire: the host 0, the
-    call wa_lkhost              ; guest 1
-    jz .me
-    xor al, al
-.me:
-    mov [wa_lkme], al
-    mov ax, [wa_tkn]
-    mov [wa_lkheard], ax
-    mov [wa_lkqt], ax
     mov bx, [wa_lift]           ; (the guest's lift where it starts, until
     or bx, bx                   ; the host's SNAPs say)
     js .nolift
@@ -942,7 +1562,6 @@ wa_lkmstart:
 .nf:
     add di, F_SIZE
     loop .f
-    call wa_lkpname
     mov cx, [wa_npk]
     jcxz .out
     xor bx, bx
@@ -972,6 +1591,99 @@ wa_lkmstart:
     inc bx
     inc bx
     loop .g
+    ret
+
+; wa_lkslots - the match's slots by identity, lowest first: ours
+; (wa_lkme), each bound peer's (WP_SLOT), how many players (wa_lknp), and
+; the bots the slots left room for (wa_lknb: four in all, NET-PLAN 1)
+wa_lkslots:
+    mov byte [wa_lknp], 1
+    mov byte [wa_lkme], 0
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .ours
+    mov al, cl
+    call wa_pptr
+    inc cx
+    call wa_lkbound
+    jz .p
+    inc byte [wa_lknp]
+    mov si, bx                  ; a peer below us: our slot one higher
+    mov di, wa_lkid
+    call wa_idlt
+    jnc .p
+    inc byte [wa_lkme]
+    jmp .p
+.ours:
+    xor cx, cx                  ; each peer's: how many of us all are below
+.q:                             ; it
+    cmp cl, [wa_lkpn]
+    jae .bots
+    mov al, cl
+    call wa_pptr
+    inc cx
+    call wa_lkbound
+    jz .q
+    xor dl, dl
+    mov si, wa_lkid             ; (us)
+    mov di, bx
+    call wa_idlt
+    adc dl, 0
+    push cx
+    xor cx, cx
+.r:
+    cmp cl, [wa_lkpn]
+    jae .rd
+    mov al, cl
+    push bx
+    call wa_pptr
+    mov si, bx
+    pop bx
+    inc cx
+    cmp si, bx
+    je .r
+    push bx
+    mov bx, si
+    call wa_lkbound
+    pop bx
+    jz .r
+    mov di, bx
+    call wa_idlt
+    adc dl, 0
+    jmp .r
+.rd:
+    pop cx
+    mov [bx+WP_SLOT], dl
+    jmp .q
+.bots:
+    mov al, 4                   ; the bots: what the host asked, at most
+    sub al, [wa_lknp]           ; the slots left
+    cmp al, [wa_lknb]
+    jae .out
+    mov [wa_lknb], al
+.out:
+    ret
+
+; wa_lkbound - BX = a record: ZF = 0 when a peer is bound there
+wa_lkbound:
+    push ax
+    mov ax, [bx+WP_ID]
+    or ax, [bx+WP_ID+2]
+    pop ax
+    ret
+
+; wa_idlt - SI, DI = two identities (4 bytes): CF = 1 when SI's is the
+; lower. Keeps all but the flags
+wa_idlt:
+    push ax
+    mov ax, [si+2]
+    cmp ax, [di+2]
+    jne .c
+    mov ax, [si]
+    cmp ax, [di]
+.c:
+    pop ax
     ret
 
 ; wa_lkqroll - AL = a pickup, AH = its kind: ROLL queued (the host's)
@@ -1061,6 +1773,40 @@ wa_lktick:
     mov cx, 64
     call wa_lkpoll
 .polled:
+    mov ax, [wa_tkn]            ; this tick's part: SCORE every 30th, and a
+    xor dx, dx                  ; SNAP or the next event (bit 0 SCORE, bit
+    mov cx, 30                  ; 1 SNAP)
+    div cx
+    xor bl, bl
+    or dx, dx
+    jnz .nsc
+    inc bx
+.nsc:
+    mov ax, dx
+    mov cl, WL_PSNAP
+    cmp byte [wa_lknb], 0
+    je .p
+    mov cl, WL_PSNAPB
+.p:
+    div cl                      ; (AH = the tick's place in the period)
+    or ah, ah
+    jnz .ev
+    or bl, 2
+.ev:
+    mov [wa_lkwhat], bl
+    xor cx, cx                  ; THEN EACH PEER BOUND, its record loaded
+.peer:                          ; (NET-PLAN 4): what it has heard of us
+    cmp cl, [wa_lkpn]
+    jae .all
+    mov al, cl
+    call wa_pptr
+    inc cx
+    call wa_lkbound
+    jz .peer
+    push cx
+    dec cx
+    mov al, cl
+    call wa_pload
     mov ax, [wa_tkn]
     sub ax, [wa_lkheard]
     cmp ax, WL_QUIET
@@ -1070,28 +1816,28 @@ wa_lktick:
     mov byte [wa_lklost], 1     ; LINK LOST (plan 4.3)
     mov byte [wa_ovd], 1
 .heard:
-    mov ax, [wa_tkn]
-    xor dx, dx
-    mov cx, 30
-    div cx
-    push dx
-    or dx, dx
-    jnz .nsc
+    cmp byte [wa_lkgone], 0     ; (one that left: nothing more to say)
+    jne .st
+    test byte [wa_lkwhat], 1
+    jz .nscore
     call wa_lkscore
-.nsc:
-    pop ax
-    mov cl, WL_PSNAP
-    cmp byte [wa_lknb], 0
-    je .p
-    mov cl, WL_PSNAPB
-.p:
-    div cl                      ; (AH = the tick's place in the period)
-    or ah, ah
-    jnz .ev
+.nscore:
+    test byte [wa_lkwhat], 2
+    jz .event
     call wa_lksnap
-    jmp .done
-.ev:
+    jmp .st
+.event:
     call wa_lkevent
+.st:
+    call wa_pstore
+    pop cx
+    jmp .peer
+.all:
+    test byte [wa_lkwhat], 2    ; the shot latch rides two SNAPs to every
+    jz .done                    ; peer (LINK-PLAN 12.3)
+    cmp byte [wa_lkfired], 0
+    je .done
+    dec byte [wa_lkfired]
 .done:
     pop bp
     pop si
@@ -1148,9 +1894,6 @@ wa_lksnap:
     je .f2
 .f1s:
     or al, 2
-    cmp byte [wa_lkfired], 0
-    je .f2
-    dec byte [wa_lkfired]
 .f2:
     cmp word [wa_sh], 0
     je .f3
@@ -1175,22 +1918,27 @@ wa_lksnap:
     mov cl, 13
     cmp byte [wa_lknb], 0
     je .send
-    call wa_lkhost
-    jz .guest
+    cmp byte [wa_lkme], 0       ; (slot 0: the host)
+    jne .guest
     mov byte [wa_lkfr], WL_HSNAP ; THE HOST'S, with bots: who dealt the
     mov al, [wa_lkattr]         ; damage, and where each bot is (x / 8,
-    stosb                       ; y / 8, its facing / 4, its flags)
-    mov bx, wa_figs + F_SIZE
+    stosb                       ; y / 8, its facing / 4, its flags): the
+    mov byte [wa_lkbo], 0       ; bot slots, the players' after
 .bot:
     xor ax, ax
-    xor dx, dx
-    cmp bx, wa_figs + F_SIZE * 2
-    ja .none
-    push di
-    mov di, bx
-    call wa_lkabsent
-    pop di
-    je .none
+    mov dl, [wa_lkbo]
+    cmp dl, [wa_lknb]
+    jae .none
+    add dl, [wa_lknp]
+    cmp dl, 4
+    jae .none
+    mov al, dl                  ; BX = its figure (the host's: slot - 1)
+    dec al
+    mov ah, F_SIZE
+    mul ah
+    add ax, wa_figs
+    mov bx, ax
+    xor ax, ax
     mov ax, [bx+F_X]
     mov dx, [bx+F_Y]
     push cx
@@ -1224,12 +1972,13 @@ wa_lksnap:
     stosw
     jmp .nb
 .none:
+    xor ax, ax
     stosw
     stosw
 .nb:
-    add bx, F_SIZE
-    cmp bx, wa_figs + F_SIZE * 2
-    jbe .bot
+    inc byte [wa_lkbo]
+    cmp byte [wa_lkbo], 2
+    jb .bot
     mov cl, 22
     jmp .send
 .guest:
@@ -1260,8 +2009,8 @@ wa_lkscore:
     call wa_lksend
     cmp byte [wa_lknb], 0
     je .out
-    call wa_lkhost
-    jz .out
+    cmp byte [wa_lkme], 0
+    jne .out
     mov al, WL_BSCORE
     mov ah, [wa_lktag]
     mov [wa_lkfr], ax
@@ -1320,6 +2069,8 @@ wa_lkevent:
 
 ; wa_lkmtake - a frame in the match: AL = its type, SI it
 wa_lkmtake:
+    cmp al, WL_PEERS            ; (the window's: a peer still there telling
+    je .out                     ; us whom it knows - its byte 1 no tag)
     mov ah, [si+1]
     cmp ah, [wa_lktag]
     jne .out
@@ -1338,8 +2089,7 @@ wa_lkmtake:
     je .bscore
     jmp wa_lksnapin             ; (2, 5, 6: a SNAP)
 .score:
-    mov bl, [wa_lkme]           ; the other's row: its deaths by cause
-    xor bl, 1
+    mov bl, [wa_lkpslot]        ; the sender's row: its deaths by cause
     xor bh, bh
     shl bx, 1
     shl bx, 1
@@ -1349,20 +2099,30 @@ wa_lkmtake:
     mov [wa_lkd+bx+2], ax
     jmp wa_lkboard
 .bscore:
-    cmp byte [wa_lkme], 0       ; (the host's bots' rows: to the guest)
-    je .out
-    add si, 2
-    mov di, wa_lkd + 8
-    push ds
-    pop es
-    mov cx, 4
-    rep movsw
+    cmp byte [wa_lkme], 0       ; (the host's bots' rows: to the guests -
+    je .out                     ; rows 2 and 3, those of them that are bots
+    cmp byte [wa_lkpslot], 0    ; and not players)
+    jne .out
+    cmp byte [wa_lknp], 2
+    ja .r3
+    mov ax, [si+2]
+    mov [wa_lkd+8], ax
+    mov ax, [si+4]
+    mov [wa_lkd+10], ax
+.r3:
+    cmp byte [wa_lknp], 3
+    ja .bd
+    mov ax, [si+6]
+    mov [wa_lkd+12], ax
+    mov ax, [si+8]
+    mov [wa_lkd+14], ax
+.bd:
     jmp wa_lkboard
 .out:
     ret
 
-; wa_lksnapin - the other player's SNAP: where it is, its ack, the damage
-; it dealt us
+; wa_lksnapin - a player's SNAP (the loaded peer's): where it is, its ack
+; of our events, the damage it dealt us
 wa_lksnapin:
     cmp byte [wa_lkgone], 0
     je .here
@@ -1374,75 +2134,66 @@ wa_lksnapin:
     mov byte [wa_ovd], 1
 .seen:
     mov byte [wa_lkrseen], 1
-    mov ax, [si+2]
-    mov [wa_lkr+WR_X], ax
-    mov ax, [si+4]
-    mov [wa_lkr+WR_Y], ax
-    mov al, [si+6]
+    push si                     ; its figure's record (by its slot)
+    mov bx, si
+    mov al, [wa_lkpslot]
+    call wa_slotrec
+    mov ax, [bx+2]
+    mov [si+WR_X], ax
+    mov ax, [bx+4]
+    mov [si+WR_Y], ax
+    mov al, [bx+6]
     xor ah, ah
     shl ax, 1
-    mov [wa_lkr+WR_Z], ax
-    mov al, [si+7]
+    mov [si+WR_Z], ax
+    mov al, [bx+7]
     xor ah, ah
     shl ax, 1
     shl ax, 1
-    mov [wa_lkr+WR_A], ax
-    mov al, [si+9]
-    mov [wa_lkr+WR_F], al
-    call wa_lkhost              ; the guest: the host's lift; the host: the
-    jnz .heard                  ; guest's shot, heard by its bots
+    mov [si+WR_A], ax
+    mov al, [bx+9]
+    mov [si+WR_F], al
+    mov [wa_lkrf], al           ; (its flags, for the kill's kind below)
+    pop si
+    cmp byte [wa_lkpslot], 0    ; the host's: its lift
+    jne .notlift
     mov al, [si+8]
     xor ah, ah
     shl ax, 1
     mov [wa_lklift], ax
-    jmp .lifted
-.heard:
+.notlift:
+    cmp byte [wa_lkme], 0       ; we the host: its shot, heard by our bots
+    jne .lifted
     test byte [si+9], 2
     jz .lifted
     push dx
+    mov al, [wa_lkpslot]
+    call wa_lklocal
+    mov dl, al
     mov ax, [si+2]
     mov bx, [si+4]
-    mov dl, 1
     call wa_bhear_far
     pop dx
 .lifted:
-    mov byte [wa_lkhby], 1      ; who hurt us: the other player, or (the
-    cmp byte [si], WL_HSNAP     ; host's, with bots) whom it names
+    mov al, [wa_lkpslot]        ; who hurt us: the sender, or (the host's,
+    call wa_lklocal             ; with bots) whom it names
+    mov [wa_lkhby], al
+    cmp byte [si], WL_HSNAP
     jne .who
     mov al, [si+13]
-    call wa_lkcanon             ; (the same swap, both ways)
+    call wa_lklocal             ; (the slot it names: its code here)
     mov [wa_lkhby], al
     call wa_lkbots_in
 .who:
-    cmp byte [si], WL_GSNAP
+    cmp byte [si], WL_GSNAP     ; (a guest's hits on the bots: the host's
+    jne .ack0                   ; to apply)
+    cmp byte [wa_lkme], 0
     jne .ack0
     call wa_lkbhits
 .ack0:
-    mov al, [si+12]             ; THE ACK: every event up to its sequence
-.ack:                           ; leaves the queue
-    cmp byte [wa_lkqn], 0
-    je .acked
-    mov ah, al
-    sub ah, [wa_lkseq]
-    cmp ah, 128
-    jae .acked
-    push si
-    push ax
-    push ds
-    pop es
-    mov si, wa_lkq + WL_EVSZ
-    mov di, wa_lkq
-    mov cx, (WL_EVQ - 1) * WL_EVSZ
-    rep movsb
-    pop ax
-    pop si
-    dec byte [wa_lkqn]
-    cmp byte [wa_lkqs], 0
-    je .s
-    dec byte [wa_lkqs]
-.s:
-    inc byte [wa_lkseq]
-    jmp .ack
+    mov al, [si+12]             ; THE ACK: its, then every event all the
+    mov [wa_lkack], al          ; players have acked leaves the queue
+    call wa_lkqpop
 .acked:
     mov ax, [si+10]             ; THE DAMAGE: what the word grew by
     mov dx, ax
@@ -1455,7 +2206,7 @@ wa_lksnapin:
     jne .out
     mov bl, [wa_lkhby]          ; (whose: figure 0's, or a host's bot's)
     mov [wa_hurtby], bl
-    mov bl, [wa_lkr+WR_F]       ; its kill: the shotgun's collapse, else the
+    mov bl, [wa_lkrf]           ; its kill: the shotgun's collapse, else the
     shr bl, 1                   ; fall
     shr bl, 1
     shr bl, 1
@@ -1481,6 +2232,67 @@ wa_lksnapin:
     or cx, cx
     jnz .d
 .out:
+    ret
+
+; wa_lkqpop - the head of the event queue out while every player in the
+; match (bound, not gone) has acked it - each one's place in it back one
+wa_lkqpop:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+.head:
+    cmp byte [wa_lkqn], 0
+    je .out
+    xor cx, cx
+.p:
+    cmp cl, [wa_lkpn]
+    jae .pop
+    mov al, cl
+    call wa_prec
+    inc cx
+    cmp word [bx+WP_ID], 0
+    jne .b
+    cmp word [bx+WP_ID+2], 0
+    je .p
+.b:
+    cmp byte [bx+WP_GONE], 0
+    jne .p
+    mov al, [bx+WP_ACK]
+    sub al, [wa_lkseq]
+    cmp al, 128
+    jae .out                    ; (this one has not: the head stays)
+    jmp .p
+.pop:
+    push es
+    push ds
+    pop es
+    mov si, wa_lkq + WL_EVSZ
+    mov di, wa_lkq
+    mov cx, (WL_EVQ - 1) * WL_EVSZ
+    cld
+    rep movsb
+    pop es
+    dec byte [wa_lkqn]
+    inc byte [wa_lkseq]
+    xor cx, cx                  ; every player's place in it, one less
+.q:
+    cmp cl, [wa_lkpn]
+    jae .head
+    mov al, cl
+    call wa_prec
+    inc cx
+    cmp byte [bx+WP_QS], 0
+    je .q
+    dec byte [bx+WP_QS]
+    jmp .q
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; wa_lkevin - an EVENT: applied once, in order
@@ -1588,7 +2400,7 @@ wa_lkspawn:
     shr al, 1
     shr al, 1
     shr al, 1
-    call wa_lkcanon
+    call wa_lklocal
     mov [di+RG_OWN], al
     mov word [di+RG_LIFE], WA_RKLIFE
     mov ax, 150
@@ -1617,9 +2429,13 @@ wa_lkfig:
 .fs:
     mov [di+F_FLASH], al
 .fl:
-    cmp byte [wa_lkrseen], 0
+    call wa_figslot             ; its owner (a bot's, the host): heard from
+    mov [wa_lkfs], al           ; and still here, or off the board
+    call wa_slotpeer
+    jc .hide
+    cmp byte [bx+WP_RSEEN], 0
     je .hide
-    cmp byte [wa_lkgone], 0
+    cmp byte [bx+WP_GONE], 0
     jne .hide
     test byte [si+WR_F], 1
     jz .dead
@@ -1649,10 +2465,11 @@ wa_lkfig:
     cmp ax, -1
     je .floor
     mov [di+F_Z], ax
-    cmp di, wa_figs             ; (the other player on the host's lift: a
+    cmp byte [wa_lkme], 0       ; (another player on the host's lift: a
     jne .zd                     ; rider)
-    call wa_lkhost
-    jz .zd
+    mov al, [wa_lkfs]
+    cmp al, [wa_lknp]
+    jae .zd
     call wa_lkonlift
     jmp .zd
 .floor:
@@ -1715,16 +2532,23 @@ wa_lkfig:
 wa_lkremote:
     cmp byte [wa_lkon], 0
     je .no
-    cmp di, wa_figs
-    je .out
-    jmp wa_lkhost               ; (the host: ZF = 0, its bots are its own)
+    cmp byte [wa_lkme], 0       ; (a guest: every figure the others')
+    jne .yes
+    push ax                     ; the host: a player's figure
+    call wa_figslot
+    cmp al, [wa_lknp]
+    pop ax
+    jae .no
+.yes:
+    cmp al, al
+    ret
 .no:
     or sp, sp
-.out:
     ret
 
 ; wa_lkabsent - DI = a figure: ZF = 1 when it is a bot the match has none
-; of (beyond the host's count). Keeps every register
+; of - alone, past the setup's count; linked, a slot past the players and
+; the bots. Keeps every register
 wa_lkabsent:
     cmp byte [wa_lkon], 0       ; ALONE: figures 0 to the setup's count - 1
     jne .linked                 ; are the bots
@@ -1741,34 +2565,115 @@ wa_lkabsent:
     cmp al, al
     ret
 .linked:
-    cmp di, wa_figs
-    je .here
     push ax
-    push dx
-    mov ax, di
-    sub ax, wa_figs             ; (AH = 0: under 256)
-    mov dl, F_SIZE
-    div dl                      ; AL = its index, 1 or 2
-    cmp al, [wa_lknb]
-    pop dx
+    push bx
+    call wa_figslot
+    mov bl, [wa_lknp]
+    add bl, [wa_lknb]
+    cmp al, bl
+    pop bx
     pop ax
-    jbe .here
-    cmp al, al                  ; (ZF = 1)
+    jb .here
+    cmp al, al
     ret
 .here:
     or sp, sp
     ret
 
-; wa_lkcanon - AL = a figure's code here (0 us, 1 figure 0, 2 and 3 the
-; bots): its code on the wire (0 the host's player, 1 the guest's, 2 and 3
-; the bots) - and back, the same swap. Keeps all but AL
+; wa_lkcanon - AL = a code here (0 us, 1..3 figures 0..2): the slot it is
+; on the wire (NET-PLAN 4). wa_lklocal - the other way. Our slot is
+; wa_lkme; the figures are the other slots in order. With two players
+; (LINK-PLAN v1) it is the swap of 0 and 1 for the guest. Keep all but AL
 wa_lkcanon:
-    cmp byte [wa_lkme], 0
-    je .out
-    cmp al, 2
-    jae .out
-    xor al, 1
+    or al, al
+    jnz .fig
+    mov al, [wa_lkme]
+    ret
+.fig:
+    dec al                      ; figure i: slot i, or i + 1 from ours on
+    cmp al, [wa_lkme]
+    jb .out
+    inc al
 .out:
+    ret
+wa_lklocal:
+    cmp al, [wa_lkme]
+    jne .other
+    xor al, al
+    ret
+.other:
+    jae .out                    ; (above ours: the same; below: one more)
+    inc al
+.out:
+    ret
+
+; wa_figslot - DI = a figure: AL = its slot. Keeps all but AX
+wa_figslot:
+    push dx
+    mov ax, di
+    sub ax, wa_figs
+    mov dl, F_SIZE
+    div dl
+    inc al
+    pop dx
+    jmp wa_lkcanon
+
+; wa_slotfig - AL = a slot (not ours): DI = its figure. Keeps all but AX
+wa_slotfig:
+    call wa_lklocal
+    dec al
+    push dx
+    mov dl, F_SIZE
+    mul dl
+    pop dx
+    add ax, wa_figs
+    mov di, ax
+    ret
+
+; wa_slotrec - AL = a slot: SI = its figure's remote record (wa_lkr).
+; Keeps all but AX
+wa_slotrec:
+    call wa_lklocal
+    dec al
+    push dx
+    mov dl, WR_SZ
+    mul dl
+    pop dx
+    add ax, wa_lkr
+    mov si, ax
+    ret
+
+; wa_slotpeer - AL = a slot: BX = the record of the peer that owns it (a
+; player's own; a bot's, the host), CF = 0; CF = 1 none. Keeps all but BX
+wa_slotpeer:
+    push ax
+    push cx
+    cmp al, [wa_lknp]           ; (a bot: the host's, slot 0)
+    jb .p
+    xor al, al
+.p:
+    mov ah, al
+    xor cx, cx
+.f:
+    cmp cl, [wa_lkpn]
+    jae .none
+    mov al, cl
+    call wa_prec
+    inc cx
+    cmp word [bx+WP_ID], 0
+    jne .b
+    cmp word [bx+WP_ID+2], 0
+    je .f
+.b:
+    cmp [bx+WP_SLOT], ah
+    jne .f
+    clc
+    jmp .out
+.none:
+    stc
+.out:
+    pop cx
+    pop ax
     ret
 
 ; wa_lkdeath - our player died, by [wa_hurtby]: its count in our row
@@ -1787,10 +2692,10 @@ wa_lkbdeath:
     je wa_lkboard.out
     push ax
     push bx
-    call wa_bidx
-    inc ax                      ; (its code: 2 or 3)
+    call wa_figslot             ; (its slot)
     mov bl, al
     mov al, [wa_killer]
+    call wa_lkcanon
 wa_lkcount:                     ; BL = the dead one, AL the cause (codes on
     xor bh, bh                  ; the wire): D[BL][AL] + 1, the board again
     shl bx, 1
@@ -1824,14 +2729,14 @@ wa_lkboard:
     mov cl, al                  ; CL = how many
     push bx
     mov al, bl                  ; a death to the dead one, here
-    call wa_lkcanon
+    call wa_lklocal
     xor ah, ah
     mov bx, ax
     add [wa_deaths+bx], cl
     pop bx
     push bx
     mov al, bh
-    call wa_lkcanon
+    call wa_lklocal
     xor ah, ah
     cmp bl, bh
     mov bx, ax
@@ -1864,10 +2769,17 @@ wa_lkbots_in:
     push si
     push di
     push cx
+    push bx
     add si, 14
-    mov di, wa_lkr + WR_SZ
-    mov cx, 2
+    mov cl, [wa_lknp]           ; the bot slots, the players' after
 .b:
+    cmp cl, 4                   ; (four slots: the rest of the SNAP's two
+    jae .done                   ; entries are none)
+    push si
+    mov al, cl
+    call wa_slotrec
+    mov di, si
+    pop si
     lodsb                       ; x / 8, y / 8: their middle
     xor ah, ah
     shl ax, 1
@@ -1890,8 +2802,13 @@ wa_lkbots_in:
     mov [di+WR_A], ax
     lodsb
     mov [di+WR_F], al
-    add di, WR_SZ
-    loop .b
+    inc cl
+    mov al, cl
+    sub al, [wa_lknp]
+    cmp al, 2
+    jb .b
+.done:
+    pop bx
     pop cx
     pop di
     pop si
@@ -1911,19 +2828,23 @@ wa_lkbhits:
     jz .n
     cmp al, 128
     jae .n
-    mov di, bx                  ; DI = the bot: figure 1 + BX
-    inc di
+    push ax                     ; DI = the bot: the slot the players' count
+    mov al, [wa_lknp]           ; plus BX
+    add al, bl
+    cmp al, 4
+    pop ax
+    jae .n
     push ax
-    mov ax, di
-    mov ah, F_SIZE
-    mul ah
-    add ax, wa_figs
-    mov di, ax
+    mov al, [wa_lknp]
+    add al, bl
+    call wa_slotfig
+    mov al, [wa_lkpslot]        ; (the sender: its code here, the killer)
+    call wa_lklocal
+    mov [wa_killer], al
     pop ax
     call wa_lkabsent
     je .n
-    mov byte [wa_killer], 1     ; (the guest: figure 0 here)
-    mov ah, [wa_lkr+WR_F]       ; its kill by the guest's weapon
+    mov ah, [wa_lkrf]           ; its kill by the guest's weapon
     shr ah, 1
     shr ah, 1
     shr ah, 1
@@ -2081,15 +3002,42 @@ wa_lkpktaken:
 wa_lkmsg:
     cmp byte [wa_lkon], 0
     je .out
-    mov si, wa_lm_gone
-    cmp byte [wa_lkgone], 0
-    jne .put
-    mov si, wa_lm_lost
-    cmp byte [wa_lklost], 0
-    jne .put
+    xor dx, dx                  ; over every peer bound: DL bit 0 one left,
+    xor cx, cx                  ; 1 one lost, 2 one not heard from yet
+.p:
+    cmp cl, [wa_lkpn]
+    jae .say
+    mov al, cl
+    call wa_prec
+    inc cx
+    call wa_lkbound
+    jz .p
+    cmp byte [bx+WP_GONE], 0
+    je .g
+    or dl, 1
+    jmp .p                      ; (one that left: not lost, not waited for)
+.g:
+    cmp byte [bx+WP_LOST], 0
+    je .l
+    or dl, 2
+.l:
+    cmp byte [bx+WP_RSEEN], 0
+    jne .p
+    or dl, 4
+    jmp .p
+.say:
+    mov si, wa_lm_lost          ; LOST first: a player still in the match
+    test dl, 2                  ; not heard
+    jnz .put
     mov si, wa_lm_wait
-    cmp byte [wa_lkrseen], 0
-    jne .out
+    test dl, 4
+    jnz .put
+    mov si, wa_lm_gone
+    test dl, 1
+    jz .out
+    cmp byte [wa_lknp], 2
+    je .put
+    mov si, wa_lm_left
 .put:
     mov dx, 11
     mov bx, [wa_w]
@@ -2105,5 +3053,6 @@ wa_lkmsg:
 .out:
     ret
 wa_lm_gone: db '   OPPONENT LEFT    '
+wa_lm_left: db '   A PLAYER LEFT    '
 wa_lm_lost: db '     LINK LOST      '
 wa_lm_wait: db 'WAITING FOR OPPONENT'

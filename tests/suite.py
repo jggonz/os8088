@@ -8748,6 +8748,27 @@ SOAK = [
         "the whole match follows.",
         needs=("qemu", "nasm"),
         wants=("build/warena.img", "build/os8088.img"), timeout=240),
+    Row("walink4", "soak", py("tests/walink4.py"), 46.0,
+        "WIREARENA, FOUR MACHINES (WIREARENA-NET-PLAN 4): four QEMU NE2000s "
+        "on walinkudp's hub. Each binds the other three by broadcast; one "
+        "match with slots 0..3 by identity everywhere and no room for the "
+        "host's bots; each player the right figure on the other three; a "
+        "kill dealt into the one peer's damage word and on all four tables; "
+        "a machine switched off dropped from the lobbies; then three "
+        "players and one host bot, synced; a guest's Esc marks that peer "
+        "alone as gone. Red with the damage in the shared working record, "
+        "and with the lobby's quiet-peer drop off.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=420),
+    Row("walink4ip", "soak", py("tests/walink4.py", "--ip"), 31.0,
+        "WIREARENA, THREE JOINED BY ADDRESS (WIREARENA-NET-PLAN 6.1): "
+        "walink4's relay dropping every broadcast to WireArena's port; B "
+        "and C each type A's address and nothing else. A's PEERS frames "
+        "name each to the other, they bind each other directly, and one "
+        "match of three follows with every player seen by both others. Red "
+        "with PEERS never sent.",
+        needs=("qemu", "nasm"),
+        wants=("build/warena.img", "build/os8088.img"), timeout=240),
     Row("waweapons", "soak", py("tests/waweapons.py"), 26.0,
         "WIREARENA'S WEAPONS AND PICKUPS (docs/plans/WIREARENA-WEAPONS-"
         "PLAN.md). One boot into the Heights arena, every piece checked off "
