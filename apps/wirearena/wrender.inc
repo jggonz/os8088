@@ -620,7 +620,7 @@ wa_render:
     mov byte [wa_endok], 0      ; (the corner two faces share is the second
     mov si, [wa_lrec]           ; one's START: drawing both put `││` there)
     mov ax, [si-4]              ; a -> b
-    call wa_face.made
+    call wa_face
     mov si, [wa_lrec]
     mov ax, [si-3]              ; b -> c
     jmp short .llast
@@ -629,7 +629,7 @@ wa_render:
     mov ah, [si-2]
 .llast:
     mov byte [wa_endok], 1
-    call wa_face.made
+    call wa_face
     jmp .leaves
 .lover:                         ; (no face seen: a low box's top, on heights)
     cmp byte [wa_hflat], 0
@@ -680,8 +680,15 @@ wa_render:
     mov ax, [wa_roomh]          ; (heights: the room at its own height)
     call wa_hnt
 .rflat:
-    mov ax, (6 << 8) | 0        ; its faces run the other way: c0->c3,
-    call wa_face                ; c3->c2, c2->c1, c1->c0 (vertex x 2)
+    mov bx, 6                   ; its four corners (vertices 0..3)...
+.rv:
+    call [wa_vtp]
+    call wa_vcam
+    lea bx, [di-2]
+    or bx, bx
+    jns .rv
+    mov ax, (6 << 8) | 0        ; ...and its faces, which run the other way:
+    call wa_face                ; c0->c3, c3->c2, c2->c1, c1->c0 (vertex x 2)
     mov ax, (4 << 8) | 6
     call wa_face
     mov ax, (2 << 8) | 4
@@ -1093,55 +1100,34 @@ wa_hnum:
     mov bl, 3
     ret
 
-; wa_face - AL = from vertex x 2, AH = to vertex x 2 (a face we see the front
-; of): transform, and unless every column it could reach is already closed,
-; project (an end outside the view made at the screen's edge: wa_vend) and
-; step it. A vertex's column is made with its transform (wa_vert); its top,
-; bottom and inverse depth only here, past the occlusion test, once a frame -
-; a face wholly behind nearer walls never pays for them.
-; wa_face.made - the same, both vertices made this frame (a box's: wa_render).
+; wa_face - AL = from vertex x 2, AH = to vertex x 2, both made this frame
+; (wa_vcam: a box's, the room's - wa_render): a face we see the front of.
+; Unless every column it could reach is already closed, it is projected (an
+; end outside the view made at the screen's edge: wa_vend) and stepped. A
+; vertex's column is made with its transform; its top, bottom and inverse
+; depth only here, past the occlusion test, once a frame - a face wholly
+; behind nearer walls never pays for them.
 ; One routine for a flat arena and for heights' tall faces, at the height
 ; wa_numt and wa_nsht hold (wa_hnt; a flat arena's from wa_render): the span's
 ; way on is [wa_fspp].
 wa_face:
     mov [wa_fv], ax
-    xor bh, bh
-    mov bl, al
-    mov al, [wa_frame]          ; (the room's corners: each is two faces')
-    cmp [wa_vst+bx], al
-    je .v1
-    call wa_vert
-.v1:
-    mov bl, [wa_fv+1]           ; (BH = 0: wa_vert keeps it)
-    mov al, [wa_frame]
-    cmp [wa_vst+bx], al
-    je .v2
-    call wa_vert
-    jmp short .v2
-.made:
-    mov [wa_fv], ax
-    xor bh, bh
+    xor bx, bx
     mov bl, ah
-.v2:
     mov dx, [wa_vpc+bx]         ; THE PRE-CHECK: the columns it could reach,
-    mov bl, [wa_fv]             ; x 16 (a vertex in view is its own, one
+    mov bl, al                  ; x 16 (a vertex in view is its own, one
     mov si, bx                  ; beside the view is beyond that edge -
-    mov ax, [wa_vpc+bx]         ; wa_vert's sentinels - and one BEHIND is
+    mov ax, [wa_vpc+bx]         ; wa_vcam's sentinels - and one BEHIND is
     cmp ax, dx                  ; beyond the left edge as a face's first end
     jg .rev                     ; and beyond the right as its second: we see
 .lohi:                          ; a face's front, so it runs left to right)
     mov cl, 4                   ; the first column whose centre is at or past
-    mov ch, al                  ; the near end, (c + 7) >> 4, and the last
+    add ax, 7                   ; the near end, (c + 7) >> 4, and the last
     sar ax, cl                  ; short of the far end, ((c + 7) >> 4) - 1:
-    and ch, 15                  ; EXACTLY wa_span's columns, so a face seen
-    cmp ch, 9                   ; edge-on, between two centres, ends here -
-    sbb ax, -1                  ; not after its tops, bottoms and inverse
-    mov ch, dl                  ; depths (two a frame on the play bench).
-    sar dx, cl                  ; (+7 by the remainder's carry rather than
-    and ch, 15                  ; an add: a sentinel would overflow)
-    cmp ch, 9
-    sbb dx, 0                   ; (the far end: one less)
-    cmp ax, dx
+    add dx, 7                   ; EXACTLY wa_span's columns, so a face seen
+    sar dx, cl                  ; edge-on, between two centres, ends here -
+    dec dx                      ; not after its tops, bottoms and inverse
+    cmp ax, dx                  ; depths (two a frame on the play bench)
     jg .shut
     or dx, dx                   ; wholly left of the screen, or right: off
     js .shut                    ; it, whatever is open
@@ -1178,7 +1164,7 @@ wa_face:
 .rev:                           ; c1 > c2: the ends the other way about - a
     cmp dx, 0x8000              ; face seen edge-on, no columns at all -
     jne .shut                   ; unless the second end is BEHIND
-    mov dx, 0x7FFF
+    mov dx, WA_VOFF
     jmp .lohi
 .open:                          ; SI = v1 x 2
     mov [wa_cs0], bx
@@ -1397,7 +1383,8 @@ wa_vend:
 ; wa_vert - BX = a vertex x 2 (BH = 0) not yet made this frame, AL = the
 ; frame: stamped, into camera space (the level's way: wa_vtp) and, inside
 ; the view (the guard band), its column - wa_vcam. BX and BP are kept;
-; clobbers AX, CX, DX, SI, DI.
+; clobbers AX, CX, DX, SI, DI. (wrlow.inc's corners: the tall boxes' and the
+; room's are made unstamped, by wa_render.)
 wa_vert:
     mov [wa_vst+bx], al
     call [wa_vtp]
@@ -1405,8 +1392,11 @@ wa_vert:
 ; wa_vcam - DI = a vertex x 2, AX = its camera x, CX = its z: kept, and
 ; inside the view (the guard band) its column. [wa_vok]: 0 outside, 1 the
 ; column made, 3 the rest too (wa_face). Outside, [wa_vpc] is the pre-check's
-; sentinel instead: 0x8000 behind, -32767 beside the view on the left, 32767
-; on the right. AX = [wa_vpc]; keeps BX, SI, DI, BP; clobbers CX, DX.
+; sentinel instead: 0x8000 behind, -WA_VOFF beside the view on the left,
+; WA_VOFF on the right - past any column the guard band holds (under 9,600),
+; and small enough to take a + 7. AX = [wa_vpc]; keeps BX, SI, DI, BP;
+; clobbers CX, DX.
+WA_VOFF equ 16000
 wa_vcam:
     mov [wa_vz+di], cx
     mov [wa_vx+di], ax
@@ -1431,10 +1421,10 @@ wa_vcam:
     mov ax, 0x8000
     jmp short .out
 .left:
-    mov ax, -32767
+    mov ax, -WA_VOFF
     jmp short .out
 .right:
-    mov ax, 32767
+    mov ax, WA_VOFF
 .out:
     mov byte [wa_vok+di], 0
     mov [wa_vpc+di], ax
