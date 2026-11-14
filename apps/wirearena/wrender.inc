@@ -202,6 +202,9 @@ WA_VAR wa_lrec, 2               ; box, a, b, c (wa_order, wa_sil) - the walk's
 WA_VAR wa_kr, 2                 ; place in them, and this frame's corners
 WA_VAR wa_kl, 2                 ; for the hints (wa_render)
 WA_VAR wa_bh, WA_MBOX*4         ; per box x 4: its hint
+WA_VAR wa_pang, 2               ; the view the products were made for
+WA_VAR wa_ppx, 2                ; (wa_products)
+WA_VAR wa_ppy, 2
 WA_VAR wa_mx0, 2                ; the silhouettes' cell, [mx0, mx1) x
 WA_VAR wa_mx1, 2                ; [my0, my1) (wa_sil) - the four adjacent,
 WA_VAR wa_my0, 2                ; as the order's below...
@@ -780,7 +783,8 @@ wa_geominit:
     mov word [wa_rx0], 1        ; an empty cell: the first frame orders the
     mov word [wa_rx1], 0        ; boxes (wa_order)
     mov word [wa_keye], 0x8000  ; ...and makes the eye's products
-    mov byte [wa_klook], 0xFF   ; ...and the level's choices
+    mov byte [wa_klook], 0xFF   ; ...and the level's choices (and with them
+                                ; the products: wa_lookset)
     mov word [wa_mx0], 1        ; ...and each box's silhouette, with no hint
     mov word [wa_mx1], 0        ; (wa_bh)
     mov di, wa_bh
@@ -878,6 +882,24 @@ wa_geominit:
 ; once a frame. 12 multiplies in the full arena, where there were 52; the
 ; sums are exact, so every product is the same bits as before
 wa_products:
+    mov ax, [wa_cang]           ; THE VIEW WHERE IT WAS - the angle is one of
+    mov bx, [wa_px]             ; 1024, so a slow aim holds it for frames at
+    mov cx, [wa_py]             ; a time: every product stands. The angle
+    cmp ax, [wa_pang]           ; alone where it was (walking a straight
+    jne .ang                    ; line): the steps' products stand
+    cmp bx, [wa_ppx]
+    jne .pos
+    cmp cx, [wa_ppy]
+    jne .pos
+    ret
+.pos:
+    mov [wa_ppx], bx
+    mov [wa_ppy], cx
+    jmp short .kd
+.ang:
+    mov [wa_pang], ax
+    mov [wa_ppx], bx
+    mov [wa_ppy], cx
     mov si, [wa_nk]             ; the steps: slot x 8, from 8
     mov bx, [wa_cos]
     mov cx, [wa_sinv]
@@ -1584,6 +1606,7 @@ wa_vtr:
 ; box's far-top allowance (wrlow.inc)
 wa_lookset:
     mov [wa_klook], al
+    mov byte [wa_pang+1], 0xFF  ; (the products are the level's: made again)
     mov ax, wa_vte
     test byte [wa_look], LK_ROUND
     jz .r
