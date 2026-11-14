@@ -3590,8 +3590,8 @@ wa_fchest:
 ; wa_plotf inline, every array addressed off DI (the cell's place in
 ; wa_fbuf, + 2) by a constant displacement: the stamp to match in DL and the
 ; cell's sub-pixels in DH (one word store: wa_fmask is the stamp's odd
-; byte), the glyph by XLAT off BX, the attribute in BP's high byte, the
-; list's end in SI. The sweep asks nothing about depth: what a nearer wall
+; byte), the glyph by XLAT off BX, the attribute in BP's high byte (its low
+; one the box's width), the list's end in SI. The sweep asks nothing about depth: what a nearer wall
 ; or platform hides was taken out of wa_fbuf first (wa_fhide), and only
 ; when some column of the box had a verdict at all. Ends wa_figure: pops
 ; its DI.
@@ -3621,14 +3621,16 @@ wa_femit:
     shl ax, 1
     mov [wa_fsk], ax            ; from the box's end to its start a row on
     mov ah, [wa_fatt]
-    mov bp, ax                  ; BP's high byte = the attribute
+    mov al, [wa_fbw]
+    mov bp, ax                  ; BP = the attribute, and the box's width
     mov bx, wa_fglyph
     xor ax, ax
     jmp short .first
 .row:
     add di, [wa_fsk]
 .first:
-    mov cx, [wa_fbw]
+    mov cx, bp
+    xor ch, ch
     repe scasw                  ; (only a cell's even byte is ever set)
     jne .found
 .nrow:
