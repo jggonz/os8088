@@ -2914,7 +2914,6 @@ wa_pkreset:
     shl al, cl
     dec al
     mov [wa_pkon], al
-    mov [wa_pkall], al          ; (every one: wa_pktick's "none away")
     push es
     push ds
     pop es
@@ -3975,16 +3974,29 @@ wa_pktick:
     mov bx, [wa_py]             ; THE PICKUPS WITHIN REACH OF THE PLAYER'S
     shr bx, 1                   ; CELL (wa_pkgrid: 128 units square, a bit a
     shr bx, 1                   ; pickup, made when the arena loads) - with
-    shr bx, 1                   ; none of them present and none away
-    and bx, 0x00F0              ; counting down, the usual tick, there is
-    mov ax, [wa_px]             ; nothing to do
+    shr bx, 1                   ; none of them present and no timer running,
+    and bx, 0x00F0              ; the usual tick, there is nothing to do
+    mov ax, [wa_px]
     shl ax, 1
     or bl, ah
     mov dh, [wa_pkgrid+bx]      ; DH = them
-    mov al, [wa_pkon]
-    cmp al, [wa_pkall]          ; (every one present: no timer runs)
-    jne .go
-    test dh, al
+    mov ax, [wa_pkt]            ; any timer running (the words themselves:
+    or ax, [wa_pkt+2]           ; a timer counts whatever wa_pkon says - a
+    or ax, [wa_pkt+4]           ; test sets one on a pickup that is there,
+    or ax, [wa_pkt+6]           ; for its roll)
+%if WA_MPK != 8
+ %error "wa_pktick asks WA_MPK = 8 timers, four and four"
+%endif
+    cmp cl, 4
+    jbe .t
+    or ax, [wa_pkt+8]
+    or ax, [wa_pkt+10]
+    or ax, [wa_pkt+12]
+    or ax, [wa_pkt+14]
+.t:
+    or ax, ax
+    jnz .go
+    test dh, [wa_pkon]
     jnz .go
 .q:
     ret
@@ -5759,7 +5771,6 @@ WA_VAR wa_spn,2                  ;   weapon and its reload they are for, how
 WA_VAR wa_spc,WA_SPMAX*2         ;   many, their offsets and their glyphs
 WA_VAR wa_spg,WA_SPMAX*2
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
-WA_VAR wa_pkall,1                ; wa_pkon with every pickup present
 WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
 WA_VAR wa_rkg,WA_NRK*WA_RKGSZ    ; the rockets' fractions, velocity, life
 WA_VAR wa_rkcp,1                 ; a rocket was live at the last copy
