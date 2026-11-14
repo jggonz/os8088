@@ -3644,11 +3644,9 @@ wa_femit:
     mov dh, [di-2]              ; DH = its sub-pixels, taken out of the
     mov [di-2], ah              ; scratch (AX is 0)
     mov al, [di+WA_FSTO]
-    cmp al, dl
-    je .have                    ; a figure cell already: add the bits
-    xor al, dl
-    cmp al, 0x80
-    je .listed                  ; a wall cell this frame: already listed
+    xor al, dl                  ; (its stamp against DL: 0 a figure's cell
+    shl al, 1                   ; this frame, 0x80 a wall's - one test for
+    jz .drawn                   ; the two, and the usual cell is neither)
     lea ax, [di-2-wa_fbuf]      ; the cell, onto this frame's list
     mov [si], ax
     inc si
@@ -3664,8 +3662,9 @@ wa_femit:
     repe scasw
     jne .found
     jmp .nrow
-.have:                          ; (a cell two figures share: rarer)
-    or dh, [di+WA_FMSO]
+.drawn:
+    jc .listed                  ; a wall cell this frame: already listed
+    or dh, [di+WA_FMSO]         ; (a cell two figures share: add the bits)
     jmp .listed
 
 ; wa_fhide - a figure's limbs are in wa_fbuf: out of it again the cells a
