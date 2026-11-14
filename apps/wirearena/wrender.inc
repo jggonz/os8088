@@ -450,25 +450,6 @@ wa_render:
     mov [wa_vu], ax
     call wa_moved               ; (every vertex's column is to make again)
 .uok:
-    mov ax, [wa_sinv]           ; the corners a box wholly outside the view
-    mov bx, ax                  ; is tested by (the hints, below): of its
-    sub ax, [wa_cos]            ; four, the least in x - z and the greatest
-    add bx, [wa_cos]            ; in x + z - by the signs of sin - cos and
-    xor si, si                  ; sin + cos, the same for every box
-    or ax, ax
-    jle .ka
-    inc si
-.ka:
-    or bx, bx
-    jle .kb
-    inc si
-    inc si
-.kb:
-    shl si, 1
-    mov ax, [wa_krt+si]
-    mov [wa_kr], ax
-    mov ax, [wa_klt+si]
-    mov [wa_kl], ax
 ; THE WALK over wa_order's list, a box a turn. A record is the box (x 4) and
 ; the vertices of its SILHOUETTE from where the player stands - a, the left
 ; end of the faces seen, b between them where two are seen, c, the right end
@@ -483,16 +464,17 @@ wa_render:
 ; pays nothing but the compares.
 ; THE HINT (wa_bh, a box's: it outlives the list and the silhouette): a box
 ; dropped that way is nearly always still wholly past the right edge's line
-; (1), or the
-; left's (2) - and that is ONE corner's test, the box's least in x - z
-; (wa_kr) or greatest in x + z (wa_kl), on the products' high words (their
-; rounding, or at an exact level their truncation, is inside the margin):
-; four of them, where the full test is two transforms. One dropped by a
-; column - between the 90 degrees of that test and a narrower view's edge -
-; is still off that edge when c is left of the left one (3) or a right of
-; the right one (4): one transform and a multiply. A hint that fails (0x80
-; with it) is not set again until the box has been in the view; another may
-; be.
+; (1), or the left's (2) - and that is ONE corner's test, the box's least in
+; x - z (wa_kr) or greatest in x + z (wa_kl: wa_products), on the products'
+; high words (their rounding, or at an exact level their truncation, is
+; inside the margin): four of them, where the full test is two transforms.
+; One dropped by a column - between the 90 degrees of that test and a
+; narrower view's edge - is still off that edge when c is left of the left
+; one (3) or a right of the right one (4): one transform and a multiply. A
+; hint that fails (0x80 with it) is not set again until the box has been in
+; the view; another may be.
+; ...AND A STILL VIEW: a box drawn tall keeps the view's count (wa_view) at
+; +2, and while the view stands goes straight to its faces (.lsame).
     mov si, wa_lord             ; front to back, while any column is open
     jmp short .lgo
 .leaves:                        ; (after a box that may have drawn)
@@ -707,9 +689,11 @@ wa_render:
     call [wa_vtp]
     call wa_vcam
     mov si, [wa_lrec]
+    jmp short .ltwo
 .lfaces:
     cmp byte [si-2], 0xFF
     je .lone
+.ltwo:
     mov byte [wa_endok], 0      ; (the corner two faces share is the second
                                 ; one's START: drawing both put `││` there)
     mov ax, [si-3]              ; a -> b
@@ -944,6 +928,25 @@ wa_products:
     mov [wa_pang], ax
     mov [wa_ppx], bx
     mov [wa_ppy], cx
+    mov ax, [wa_sinv]           ; the corners a box wholly outside the view
+    mov bx, ax                  ; is tested by (wa_render's hints): of its
+    sub ax, [wa_cos]            ; four, the least in x - z and the greatest
+    add bx, [wa_cos]            ; in x + z - by the signs of sin - cos and
+    xor si, si                  ; sin + cos, the same for every box
+    or ax, ax
+    jle .ka
+    inc si
+.ka:
+    or bx, bx
+    jle .kb
+    inc si
+    inc si
+.kb:
+    shl si, 1
+    mov ax, [wa_krt+si]
+    mov [wa_kr], ax
+    mov ax, [wa_klt+si]
+    mov [wa_kl], ax
     mov si, [wa_nk]             ; the steps: slot x 8, from 8
     mov bx, [wa_cos]
     mov cx, [wa_sinv]
@@ -961,7 +964,10 @@ wa_products:
     sub si, 8
     jnz .k
 .kd:
-    call wa_moved
+    inc word [wa_view]          ; (the view has moved: wa_moved)
+    jnz .kv
+    call wa_moved.lap
+.kv:
     test byte [wa_look], LK_ROUND
     jnz .round
     WA_AXIS wa_xv, wa_px, wa_xk, wa_xc, wa_xs, 0
@@ -979,6 +985,7 @@ wa_products:
 wa_moved:
     inc word [wa_view]
     jnz .out
+.lap:
     inc word [wa_view]
     xor ax, ax
     mov [wa_rview], ax
