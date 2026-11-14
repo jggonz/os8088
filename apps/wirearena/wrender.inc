@@ -1,12 +1,16 @@
 ; WireArena's renderer (docs/plans/MULTIPLAYER-FPS-PLAN.md sections 4, 16).
 ;
-; 1. The arena's walls are one-sided segments in a host-built BSP
-;    (tools/arenagen.py), walked FRONT TO BACK: the near side of a node, its
-;    own segments, the far side. A segment facing away is dropped by one
-;    compare; one facing us has its two vertices transformed (two 32-bit adds
-;    each, off per-coordinate products made once a frame - the walls are
-;    axis-aligned) and projected (cached per vertex), is clipped only when a
-;    vertex is outside the view, and is then STEPPED across its columns.
+; 1. The arena's walls are the faces of boxes in a host-built BSP
+;    (tools/arenagen.py), walked FRONT TO BACK (wa_order: the list stands
+;    while the player stays in a cell of the tree's lines). A box is its
+;    SILHOUETTE - the two or three vertices of the faces seen from where the
+;    player stands (wa_sil) - tested against the view on those vertices, with
+;    a one-corner hint while it stays out (wa_render's walk). A vertex is two
+;    sums of per-coordinate products made when the view moves (wa_products -
+;    the walls are axis-aligned) and a column; a face with an end outside the
+;    view takes an end at the screen's edge in its place (wa_vend), and is
+;    then STEPPED across its columns. While the view stands, the products,
+;    the vertices and the columns all do.
 ; 2. A column a nearer wall already drew is CLOSED (wa_cov): a wall is full
 ;    height, so nothing behind it can show there. An open column is drawn on
 ;    the spot - its inverse depth into wa_colz for the figures, the top and
@@ -904,14 +908,16 @@ wa_geominit:
 
 ; wa_products - per distinct coordinate, (v - p) x 4 cos and (v - p) x 4 sin:
 ; x 4 so a vertex's camera z and x are the HIGH words of two 32-bit sums,
-; with no shifts (wa_vert). All of them, every frame: doing it lazily per
-; coordinate was measured SLOWER (19.5 -> 19.0 fps at 40 columns) - nearly
-; every coordinate is used, so the stamp tests were pure cost. But not by a
-; multiply each: the first value of an axis is multiplied, and each after it
-; is the one before plus the products of the STEP between them - an arena
-; has few distinct steps (wa_geominit, at most WA_MAXKS), multiplied here
-; once a frame. 12 multiplies in the full arena, where there were 52; the
-; sums are exact, so every product is the same bits as before
+; with no shifts (wa_vte, wa_vtr). All of them, whenever the view has moved:
+; doing it lazily per coordinate was measured SLOWER (19.5 -> 19.0 fps at 40
+; columns) - nearly every coordinate is used, so the stamp tests were pure
+; cost. But not by a multiply each: the first value of an axis is
+; multiplied, and each after it is the one before plus the products of the
+; STEP between them - an arena has few distinct steps (wa_geominit, at most
+; WA_MAXKS), multiplied here when the angle has moved. 12 multiplies in the
+; full arena, where there were 52; the sums are exact, so every product is
+; the same bits as before. Also the view's count (wa_view) and, with the
+; angle, the hints' corners (wa_kr, wa_kl)
 wa_products:
     mov ax, [wa_cang]           ; THE VIEW WHERE IT WAS - the angle is one of
     mov bx, [wa_px]             ; 1024, so a slow aim holds it for frames at
