@@ -825,18 +825,20 @@ wa_tick:
     call wa_ptick
 .figs0:
     mov byte [wa_lbn], 0        ; (the bots on the lift this tick: the
-    mov di, wa_figs             ; lift's riders the next, wa_ltick)
-    mov cx, WA_NFIG
+                                ; lift's riders the next, wa_ltick)
+    mov bx, [wa_tkn]            ; WHOSE TURN TO LOOK (AI-PLAN 4.1): each bot
+    and bx, 7                   ; every eighth tick, 0.27 s, on the tick
+    shl bx, 1                   ; where tick + (WA_NFIG - its index) x 3 is a
+    mov ax, [wa_blkt+bx]        ; multiple of 8 - so no two on one tick
+    mov [wa_blook], ax
+    mov di, wa_figs
 .fig:
-    push cx
     call wa_figtick
-    pop cx
-    push cx
     call wa_bthink              ; (AI-PLAN 4: sees, faces, shoots)
 .c_bt:                          ; (tools' stop: its cost, by breakpoints)
-    pop cx
     add di, F_SIZE
-    loop .fig
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jb .fig
     inc word [wa_tkn]
     mov al, [wa_lbn]
     mov [wa_lbot], al
@@ -846,6 +848,12 @@ wa_tick:
     call wa_rktick
 .c_pk:
     jmp wa_pktick
+
+%if WA_NFIG != 3
+ %error "wa_blkt and wa_bidx are written for three figures"
+%endif
+wa_blkt:                        ; the figure that looks, by the tick's low
+    dw 0, 0, wa_figs + F_SIZE, 0, 0, wa_figs + 2*F_SIZE, 0, wa_figs ; bits
 
 ; wa_collide - CF = 1 when the player at [wa_px],[wa_py] may not stand
 ; there: outside the room; on a FLAT arena inside a wall (every box there is
@@ -1451,26 +1459,37 @@ wa_bacc:    db 45,  60,    75   ; % at 4 m, the player standing
 ; state, its turn (every tick, toward the bearing it looked along) and its
 ; shot. Nothing in a bench or dead. Keeps DI
 wa_bthink:
-    cmp byte [wa_bdet], 0
-    jne .out
-    call wa_lkremote            ; (linked: only the host thinks, for its
-    je .out                     ; own bots)
+    cmp word [wa_bdet], 0       ; (a bench, or - its high byte, wa_lkon - a
+    jne .rare                   ; linked match: neither, the usual tick)
+.mine:
     cmp byte [di+F_DEAD], 0
-    jne .out
-    mov ax, [wa_tkn]            ; its turn to look: (tick + index x 3) & 7,
-    add ax, cx                  ; every 0.27 s, the three bots' turns
-    add ax, cx                  ; apart
-    add ax, cx
-    test al, 7
-    jnz .acted
-    push ax
+    jne .r
+    cmp di, [wa_blook]          ; its turn to look (wa_tick: every eighth
+    je .look                    ; tick, the three bots' turns apart)
+.acted:
+    cmp byte [di+F_BST], WA_BENG
+    je .eng
+.r:
+    ret
+.rare:
+    cmp byte [wa_bdet], 0
+    jne .r
+    call wa_lkremote            ; (linked: only the host thinks, for its
+    je .r                       ; own bots)
+    jmp .mine
+.look:
     call wa_bidx                ; (its grudge runs down, 8 ticks a look)
     xchg ax, bx
-    pop ax
     sub byte [wa_grudge+bx], 8
     jnc .ng
     mov byte [wa_grudge+bx], 0
 .ng:
+    mov ax, bx                  ; AX = tick + (WA_NFIG - index) x 3, a
+    shl ax, 1                   ; multiple of 8 on its turn: its looks
+    add ax, bx                  ; counted in bits 3 up
+    neg ax
+    add ax, WA_NFIG * 3
+    add ax, [wa_tkn]
     cmp byte [di+F_BST], WA_BENG ; WHAT IT LOOKS AT (the owner, play-testing:
     jne .pick                   ; "pick a seen target"): engaged, its target,
     and al, 24                  ; but every fourth look first a nearer enemy
@@ -1539,13 +1558,12 @@ wa_bthink:
     jmp .acted
 .hunt:
     cmp byte [di+F_BST], WA_BHUNT
-    jne .acted
-    dec byte [di+F_BGAP]
-    jnz .acted
-    mov byte [di+F_BST], WA_BROAM
-.acted:
-    cmp byte [di+F_BST], WA_BENG
     jne .out
+    dec byte [di+F_BGAP]
+    jnz .out
+    mov byte [di+F_BST], WA_BROAM
+    ret
+.eng:
     mov ax, [di+F_BTA]          ; THE TURN: toward the bearing, 48 a tick,
     cmp ax, [di+F_ANG]          ; onto it when within that (on it already:
     je .on                      ; the usual tick)
@@ -2182,12 +2200,14 @@ wa_bshoot:
 
 ; wa_bidx - DI = a figure: AL = its index, 0.. Keeps all but AX
 wa_bidx:
-    push cx
-    mov ax, di
-    sub ax, wa_figs
-    mov cl, F_SIZE
-    div cl
-    pop cx
+    xor ax, ax                  ; (three compares at most: a divide by the
+    cmp di, wa_figs             ; record's size was 160 clk, and a rocket
+    je .out                     ; asks it of every figure every tick)
+    inc ax
+    cmp di, wa_figs + F_SIZE
+    je .out
+    inc ax
+.out:
     ret
 
 ; wa_blaunch - DI = a bot on target, AL = 0 a rocket, 1 a grenade: one
@@ -5378,11 +5398,11 @@ WA_VAR wa_lowf,WA_LTSZ           ;   the low ones for a dummy's feet
 WA_VAR wa_gph,WA_GPHSZ           ; the arena's route graph (AI-PLAN 3.1)...
 WA_VAR wa_gnp,2                  ; ...its nodes...
 WA_VAR wa_gep,2                  ; ...and its edges
-WA_VAR wa_bdet,1                 ; 1: the bots walk their home loops
 WA_VAR wa_gtp,2                  ; the bots' tables: the sight grid, the
 WA_VAR wa_gcp,2                  ;   cells' nearest nodes, the next hops
 WA_VAR wa_ghp,2
 WA_VAR wa_tkn,2                  ; ticks, for the bots' turns to look
+WA_VAR wa_blook,2                ; ...the figure whose turn this tick is (0: none)
 WA_VAR wa_diff,1                 ; the bots' difficulty: 0 easy..2 hard
 WA_VAR wa_phit,1                 ; ticks of the heart's hit flash
 WA_VAR wa_pdead,1                ; THE PLAYER DEAD: ticks to the respawn
@@ -5419,7 +5439,9 @@ WA_VAR wa_lktag,1                  ;   it; 1: go in (wa_lkstart)
 WA_VAR wa_lkptag,1
 WA_VAR wa_lkgo,1
 WA_VAR wa_lkfull,1                 ; the window's rows all to draw
-WA_VAR wa_lkon,1                   ; 1: in a linked match
+WA_VAR wa_bdet,1                 ; 1: the bots walk their home loops - and
+WA_VAR wa_lkon,1                   ; 1: in a linked match, ITS HIGH BYTE:
+                                   ; wa_bthink asks both in one compare
 WA_VAR wa_lklost,1                 ; silent WL_QUIET ticks; left; seen yet
 WA_VAR wa_lkgone,1
 WA_VAR wa_lkrseen,1
