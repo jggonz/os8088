@@ -52,7 +52,7 @@ def peers(m):
     """the bound records of m's table: (index, id, state, lost, gone)"""
     out = []
     for k in range(m.v('wa_lkpn')):
-        r = m.readseg(m.seg, m.sy['wa_pt'] + 32 * k, 32)
+        r = m.readseg(m.seg, m.sy['wa_pt'] + 34 * k, 34)
         pid = struct.unpack_from('<I', r, 0)[0]
         if pid:
             out.append(dict(k=k, id=pid, ps=r[10], lost=r[14], gone=r[15],
@@ -249,7 +249,7 @@ def run(ms, cable):
                     'pistol kills slot 1 on its own machine', secs=5)
     rec = {p['slot']: p for p in peers(shooter)}
     dout = {s: struct.unpack('<H', shooter.readseg(
-        shooter.seg, shooter.sy['wa_pt'] + 32 * rec[s]['k'] + 21, 2))[0]
+        shooter.seg, shooter.sy['wa_pt'] + 34 * rec[s]['k'] + 21, 2))[0]
         for s in rec}
     check(dout[1] >= 100 and dout[0] == dout[2] == 0,
           'A KILL: the damage in slot 3\'s record for slot 1 only (%r)' % dout)

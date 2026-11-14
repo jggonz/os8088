@@ -58,7 +58,9 @@ WP_ATTR     equ 27
 WP_BDIN     equ 28
 WP_ACK      equ 30
 WP_SLOT     equ 31
-WP_SZ       equ 32
+WP_NB       equ 32              ; (the lobby: how many peers it has bound,
+                                ; as its HELLO says - its byte 17)
+WP_SZ       equ 34
 WL_ROWS     equ 6               ; the window's rows of text: what the link is
                                 ; doing, then the players (wasetup.inc's
                                 ; controls between, WS_LOBY)
@@ -739,11 +741,33 @@ wa_lkhello1:
     stosb
     mov al, [wa_lktag]
     stosb
-    xor al, al
-    stosb
+    call wa_lkbcount            ; how many peers we have bound: the start
+    stosb                       ; waits until every one says what we do
     mov si, wa_lkfr
     mov cl, 18
     jmp wa_lksend
+
+; wa_lkbcount - AL = how many peers are bound. Keeps all but AX
+wa_lkbcount:
+    push bx
+    push cx
+    xor cx, cx
+    xor ah, ah
+.p:
+    cmp cl, [wa_lkpn]
+    jae .out
+    mov al, cl
+    call wa_prec
+    inc cx
+    call wa_lkbound
+    jz .p
+    inc ah
+    jmp .p
+.out:
+    mov al, ah
+    pop cx
+    pop bx
+    ret
 
 ; wa_lkhost - ZF = 0 when we are the host: the lowest identity of us and
 ; every peer bound (NET-PLAN 4: slot 0) - in a match, slot 0 as the match
@@ -809,8 +833,10 @@ wa_lkstart:
     jz .out
     cmp byte [wa_lkst], 1
     jne .out
-    call wa_lkhost
-    jz .guest
+    call wa_lkbcount            ; (AL = how many we have bound: every peer
+    mov dh, al                  ; must say the same - one that has not
+    call wa_lkhost              ; bound them all would start a match
+    jz .guest                   ; without a player, NET-PLAN 9.5)
     xor cx, cx                  ; THE HOST: every peer bound ready (1), and
     mov dl, 1                   ; DL = 1 while every one is in (2) with our
 .p:                             ; tag
@@ -825,10 +851,13 @@ wa_lkstart:
     cmp byte [bx+WP_PS], 1
     jb .out
     cmp byte [bx+WP_PS], 2
-    jne .notin
+    jne .ready
     mov al, [bx+WP_PTAG]
     cmp al, [wa_lktag]
     je .p
+.ready:
+    cmp [bx+WP_NB], dh          ; (ready, and seeing everyone we see)
+    jne .out
 .notin:
     xor dl, dl
     jmp .p
@@ -848,9 +877,11 @@ wa_lkstart:
     ret
 .guest:
     call wa_phost               ; the host's record: its tag, and it ready
-    jc .out
+    jc .out                     ; - and seeing as many as we do
     cmp byte [bx+WP_PS], 1
     jb .out
+    cmp [bx+WP_NB], dh
+    jne .out
     mov al, [bx+WP_PTAG]
     or al, al
     jz .out
@@ -1103,6 +1134,8 @@ wa_lkhtake:
     mov [wa_lkpheard], ax
     mov al, [si+16]             ; (its tag: the host's own, or a guest's
     mov [wa_lkptag], al         ; echo of it)
+    mov al, [si+17]             ; (how many it has bound)
+    mov [wa_pc+WP_NB], al
     mov al, [si+12]
     mov [wa_lkps], al
     cmp byte [wa_lkon], 0       ; in the match: a HELLO saying it is not

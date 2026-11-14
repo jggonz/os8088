@@ -22,7 +22,10 @@
 ; that could not bank) writes each pixel once, with no white first. A
 ; kernel PAINT skips the ground: the kernel filled the content white.
 
-WS_W        equ 328             ; the content box (the template: 330 x 156)
+WS_W        equ 336             ; the content box (the template: 338 x 156)
+WS_RM       equ 328             ; ...and its right margin, past every
+                                ; control and row (the owner: the drop-downs
+                                ; off the edge, as the left's 8 px are)
 WS_H        equ 137
 WS_LX       equ 0               ; the left column: a marker cell and a
 WS_LDX1     equ 56              ; label (seven cells), then its drop-down
@@ -284,33 +287,34 @@ wa_sl_p:    db ' Play  ', 0
 ; THE GROUND: every rect of the content no control and no row covers
 ; (content coordinates, inclusive). The last is the field's place, which
 ; is ground only while there is no field
-wa_sgnd:    dw 0, 0, WS_W - 1, 3
+wa_sgnd:    dw 0, 0, WS_RM - 1, 3
             dw 0, 4, 7, 11
-            dw 0, 12, WS_W - 1, WS_Y1 - 1
+            dw 0, 12, WS_RM - 1, WS_Y1 - 1
             dw 0, WS_Y1, WS_LDX1 - 1, WS_Y1 + 3
             dw 0, WS_Y1 + 12, WS_LDX1 - 1, WS_Y1 + 15
             dw WS_RX, WS_Y1, WS_RDX1 - 1, WS_Y1 + 3
             dw WS_RX, WS_Y1 + 12, WS_RDX1 - 1, WS_Y1 + 15
-            dw 0, WS_Y1 + 16, WS_W - 1, WS_Y2 - 1
+            dw 0, WS_Y1 + 16, WS_RM - 1, WS_Y2 - 1
             dw 0, WS_Y2, WS_LDX1 - 1, WS_Y2 + 3
             dw 0, WS_Y2 + 12, WS_LDX1 - 1, WS_Y2 + 15
             dw WS_RX, WS_Y2, WS_RDX1 - 1, WS_Y2 + 3
             dw WS_RX, WS_Y2 + 12, WS_RDX1 - 1, WS_Y2 + 15
-            dw 0, WS_Y2 + 16, WS_W - 1, WS_Y3 - 1
+            dw 0, WS_Y2 + 16, WS_RM - 1, WS_Y3 - 1
             dw 0, WS_Y3, WS_LDX1 - 1, WS_Y3 + 3
             dw 0, WS_Y3 + 12, WS_LDX1 - 1, WS_Y3 + 15
             dw WS_LDX2 + 1, WS_Y3, WS_FX1 - 1, WS_Y3 + 15
-            dw 0, WS_Y3 + 16, WS_W - 1, WS_BTNY - 1
+            dw 0, WS_Y3 + 16, WS_RM - 1, WS_BTNY - 1
             dw 0, WS_BTNY, 7, WS_BTNY + WS_BTNH - 1
             dw 8 + WS_BTNW, WS_BTNY, WS_B2X - 1, WS_BTNY + WS_BTNH - 1
-            dw WS_B2X + WS_BTNW, WS_BTNY, WS_W - 1, WS_BTNY + WS_BTNH - 1
-            dw 0, WS_BTNY + WS_BTNH, WS_W - 1, WS_LOBY - 1
+            dw WS_B2X + WS_BTNW, WS_BTNY, WS_RM - 1, WS_BTNY + WS_BTNH - 1
+            dw 0, WS_BTNY + WS_BTNH, WS_RM - 1, WS_LOBY - 1
             dw 0, WS_LOBY, 7, WS_H - 1
-            dw 8, WS_LOBY + 8, WS_W - 1, WS_LOBY + 9
-            dw 8, WS_LOBY + 18, WS_W - 1, WS_LOBY + 19
-            dw 8, WS_LOBY + 28, WS_W - 1, WS_LOBY + 29
-            dw 8, WS_LOBY + 38, WS_W - 1, WS_LOBY + 39
-            dw 8, WS_LOBY + 48, WS_W - 1, WS_H - 1
+            dw 8, WS_LOBY + 8, WS_RM - 1, WS_LOBY + 9
+            dw 8, WS_LOBY + 18, WS_RM - 1, WS_LOBY + 19
+            dw 8, WS_LOBY + 28, WS_RM - 1, WS_LOBY + 29
+            dw 8, WS_LOBY + 38, WS_RM - 1, WS_LOBY + 39
+            dw 8, WS_LOBY + 48, WS_RM - 1, WS_H - 1
+            dw WS_RM, 0, WS_W - 1, WS_H - 1
 WS_NGND     equ ($ - wa_sgnd) / 8
             dw WS_FX1, WS_Y3, WS_FX2, WS_Y3 + WS_DH - 1
 

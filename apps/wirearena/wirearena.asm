@@ -122,7 +122,10 @@ wa_main:
     cmp byte [wa_lkon], 0       ; a linked match: its side of things
     je .alone                   ; (walink.inc)
     call wa_lkmstart
+    jmp .go2
 .alone:
+    call wa_bpark               ; (alone: the bots the setup did not ask for)
+.go2:
     call OSAPI_MOUSE_REL        ; the desktop's motion is not ours: discard
     xor ax, ax
     mov [wa_acc], ax
@@ -873,12 +876,14 @@ wa_tick:
     mov di, wa_figs
     cmp word [wa_bdet], 0       ; (a bench or - its high byte, wa_lkon - a
     jne .lfig                   ; linked match: each figure is asked which)
-.fig:                           ; THE USUAL MATCH: each figure is ours, and
-    call wa_figtick.solo        ; has its own mind
+    cmp di, [wa_figend]         ; THE USUAL MATCH: the bots the setup asked
+    jae .figd                   ; for (wa_bpark parked the rest), each ours
+.fig:                           ; and with its own mind
+    call wa_figtick.solo
     call wa_bthink.mine         ; (AI-PLAN 4: sees, faces, shoots)
 .c_bt:                          ; (tools' stop: its cost, by breakpoints)
     add di, F_SIZE
-    cmp di, wa_figs + WA_NFIG*F_SIZE
+    cmp di, [wa_figend]
     jb .fig
 .figd:
     inc word [wa_tkn]
@@ -2711,6 +2716,34 @@ wa_figz:
     ret
 
 %include "wasin.inc"
+; wa_bpark - alone, the bots past the setup's count off the board for the
+; match, and the tick's fast loop stopped short of them (wa_figend). The
+; loop used to ask wa_lkabsent of every figure every tick; the pass that
+; took the question out of it (b38a065a) left the uncounted bots running,
+; and one bot asked for played as three. Keeps all but the flags
+wa_bpark:
+    push ax
+    push di
+    mov al, [wa_lknb]
+    mov ah, F_SIZE
+    mul ah
+    add ax, wa_figs
+    mov [wa_figend], ax
+    mov di, ax
+.p:
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jae .out
+    cmp byte [wa_lkon], 0       ; (linked: wa_lkmstart's, per figure)
+    jne .out
+    mov byte [di+F_DEAD], 250
+    mov byte [di+F_NFR], 0
+    add di, F_SIZE
+    jmp .p
+.out:
+    pop di
+    pop ax
+    ret
+
 ; wa_figtick - DI = a figure: one 30 Hz step of its patrol and its animation
 wa_figtick:
     cmp byte [wa_lkon], 0       ; (a bench alone: its three dummies, always)
@@ -4949,7 +4982,8 @@ wa_pbmeter:
     ret
 .done:
     mov byte [wa_pbon], 0
-    mov byte [wa_bdet], 0       ; (the bots roam again)
+    mov byte [wa_bdet], 0       ; (the bots roam again - the ones the setup
+    call wa_bpark               ; asked for: the bench woke all three)
     mov cx, [wa_pbfr]
     mov si, wa_tfr
     call wa_avgn                ; AX = ms x 10 a frame
@@ -5616,7 +5650,7 @@ wa_loadarena:
 %endif
 
 wa_tpl:
-    dw 120, 20, 330, 156        ; (wasetup.inc's WS_W x WS_H content)
+    dw 120, 20, 338, 156        ; (wasetup.inc's WS_W x WS_H content)
     dw wa_ttl, wa_cls
     OS88_CLASS wa_cls, 0, PAINT, wa_paint, ONKEY, wa_lkkey, \
                ONCLOSE, wa_lkclose, ONTIMER, wa_lktimer, \
@@ -5762,6 +5796,7 @@ WA_VAR wa_lkfrom,6                 ; the last frame's source
 WA_VAR wa_lkpf,1                   ; the frame the cable was last read in
 WA_VAR wa_lkfired,1                ; the guest fired since its last SNAP
 WA_VAR wa_lkwhat,1                 ; wa_lktick: this tick SCOREs (1), SNAPs (2)
+WA_VAR wa_figend,2                 ; alone: past the last bot the setup asked for
 WA_VAR wa_lkclip,1                 ; wa_lkdraw: the clip taken this tick
 WA_VAR wa_lkown,1                  ; wa_lkrows: a repaint of our own (no kernel white)
 WA_VAR wa_lkfs,1                   ; wa_lkfig: the figure's slot

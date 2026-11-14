@@ -476,3 +476,44 @@ Looked at on the 5150 CGA, the XT VGA and the 5150 Hercules.
 Estimated **~1 KB of package** (3-4% of it) and **no measurable cost in
 a frame** (one datagram every half second from the host). Not built:
 the owner's condition was the cost, so it is theirs to weigh.
+
+### 9.5 One bot means one; a wider window; the start waits for everyone (2026-11-14)
+
+The owner: *"I selected 1, but sometimes 2 bots spawn - and the bot spawn
+delay doesn't seem to work ... the next one is spawning almost instantly
+when I have 1 bot selected."* And the window a few pixels wider, so the
+drop-downs do not touch its edge.
+
+**One cause for both symptoms.** A performance pass on the game's tick
+(b38a065a) gave an ordinary solo match a fast loop that calls each
+figure's step directly - and the question it skipped, `wa_lkabsent`, was
+what kept the bots the setup did not ask for off the board. With 1 asked
+for, all three ran; the "instant respawn" was one of the uncounted bots
+walking on. The 8 s respawn itself was never wrong. **The fix keeps the
+pass's speed**: `wa_bpark` parks the uncounted bots once, when a solo
+match starts and when the play bench (which wakes all three) ends, and the
+fast loop stops at the last counted bot (`wa_figend`) rather than asking
+every figure every tick. `wasetup` now picks 1 bot from the keyboard,
+plays, and holds figures 1 and 2 parked for ten guest seconds; red without
+the park (both on the board).
+
+**The window** is 338 wide (content 336): an 8-pixel right margin to match
+the left, and the repaint's ground has the margin's strip.
+
+**A race the rows found**: `walink4` once started a guest whose table had
+dropped a peer for a moment - it played 2 + 2 while the others played
+3 + 1, and never heard the missing player again (a match takes no new
+peers). A HELLO's spare byte 17 now says how many peers its sender has
+bound (`WP_NB`, the record two bytes longer): the host starts only when
+every ready peer says the number it does, and a guest goes in only when
+the host does.
+
+**`wabotarms` failed twice and then passed eight times** on what should
+have been the same build; an A/B of the loop's end could not separate it.
+Its pokes land at guest-cycle points that depend on the boot's wall-clock
+settle, so it is recorded here as an edge in the row rather than as
+explained.
+
+**Checked**: `walink`, `walinknet`, `walinkudp`, `walinkip`, `walink4`
+(three passes), `walink4ip`, `wasetup`, `wabotarms`, and before the
+lobby change `walift`, `waroutes`, `wabots`, `wascore`, `waweapons`.

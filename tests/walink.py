@@ -276,7 +276,7 @@ class Arena(W.Machine):
         """the per-peer names (wa_pc's, a working copy: NET-PLAN 4) read
         from peer record k of the table instead"""
         for name, off in self.PEER:
-            self.sy[name] = self.sy['wa_pt'] + 32 * k + off
+            self.sy[name] = self.sy['wa_pt'] + 34 * k + off
 
     def v(self, name, n=1, signed=False):
         return int.from_bytes(self.readseg(self.seg, self.sy[name], n),

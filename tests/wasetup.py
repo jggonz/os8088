@@ -17,7 +17,9 @@ outside the window so it is not counted:
     gaps between controls);
   - A DROP-DOWN: a click on Arena's box drops its list (the
     record says open), a click outside it takes it down without a pick,
-    and the window is pixel-identical again.
+    and the window is pixel-identical again;
+  - ONE BOT MEANS ONE: Bots 1 picked from the keyboard and Play - for ten
+    guest seconds the other two figures never leave their parking.
 
 Registered as wasetup in soak; make wirearenadisk first.
 """
@@ -100,6 +102,28 @@ def main():
         check(p.byte(sym['wa_lkarena']) == 2 and region() == base,
               'A DROP-DOWN: a click outside takes it down, no pick, the '
               'window pixel-identical')
+
+        # ONE BOT MEANS ONE: Bots to 1 from the keyboard (Arena, Columns,
+        # Bots; 3, 2, 1), Enter - and for ten guest seconds only figure 0
+        # is ever on the board (b38a065a's fast tick left the other two
+        # running: the owner saw two bots, and a "respawn" at once)
+        for k in ("ArrowDown", "ArrowDown", "ArrowLeft", "ArrowLeft"):
+            m.key(k)
+        ui.settle()
+        check(p.byte(sym['wa_lkbots']) == 1, 'ONE BOT: the setup says 1')
+        f0 = p.byte(sym['wa_frame'])
+        m.key("Enter")
+        os88marty.until(m, lambda _: p.byte(sym['wa_frame']) != f0,
+                        'the match running', guest=20)
+        figs = sym['wa_figs']
+        seen = set()
+        for _ in range(20):
+            m.advance(cycles=4772727 // 2)
+            dead = [p.byte(figs + i * 56 + 17) for i in range(3)]
+            seen |= {i for i in (1, 2) if dead[i] != 250}
+        check(not seen and p.byte(sym['wa_lknb']) == 1,
+              'ONE BOT: figures 1 and 2 off the board for ten seconds (%s '
+              'were on it)' % (sorted(seen) or 'none'))
     if fails:
         print('wasetup: FAIL - %d of its checks' % len(fails))
         sys.exit(1)
