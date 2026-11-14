@@ -2732,14 +2732,13 @@ wa_fedge:
     rcr ax, 1
     shr dx, 1
     rcr ax, 1
-    mov bp, si                  ; + e1 (x 16384) + a half
+    add si, 2                   ; + e1 + a half: SI.BP = (e1 + 2) / 4
+    mov bp, si
     ror bp, 1
     ror bp, 1
     and bp, 0xC000
     sar si, 1
     sar si, 1
-    add bp, 0x8000
-    adc si, 0
     or di, di
     jnz .up
     add bp, ax
