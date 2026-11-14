@@ -1292,3 +1292,275 @@ for everything else, with ~6.6 KB to spare.
 - Rounded 16-bit product high words, ~1.4%. Not byte-identical.
 - The room's clipped walls, ~3 ms.
 - The joints' quarter-step blend for small figures, ~0.4 ms.
+
+### 16.9 Performance pass 6 — the engine looked at whole, then five areas (2026-11-14)
+
+The owner: *"Do a performance pass on wire arena. Look into the overall
+engine: what could be done differently and come out cheaper? Then study each
+individual component, and optimize it. The goal is to generally look and
+have the same featureset, not to be identical. Bring any major look or
+feature changes to me. Small optimizations can add up."*
+
+**What was new:** the picture no longer had to be byte-identical, which the
+five rounds before were held to. It still had to look the same.
+
+**How it was run.** A coordinator studied the frame whole, built three
+instruments (below, now in `tools/`), and took the floor grid and present.
+Five agents each took one area in a worktree of its own, from `f0707c6c`:
+wall geometry, spans and columns, figures and things, the low boxes
+(`wrlow.inc`), and the game (`wirearena.asm`, `walink.inc`). Their branches
+were merged one at a time, each measured on the merged tree. Another
+session was pushing four-player and UDP link work to the branch throughout;
+it was merged in seven times.
+
+**The instruments** (each a development instrument, not a suite row):
+
+- **`tools/waposes.py`: posed frames.** A fixed, seeded set of poses. The
+  camera and the three figures are written into the game's BSS at the
+  renderer's door, with the world held as a bench's (every pickup present,
+  the bots dummies). Per pose it records the text screen, the guest cycles
+  of the render, and a divide fault if one happened. A render a timer tick
+  landed in is run again, so a set's mean repeats to about 0.002%.
+  `sets` records the eight reference sets; `cmpsets` compares two
+  recordings.
+- **`tools/wabench.py`:** the game's own benches, read off the HUD.
+- **`tools/waprof.py`:** exclusive guest cycles per routine over whole
+  frames of a bench or of live play, by single-stepping.
+
+**Measured, merged** (MartyPC `os8088_5150_cga`, Medium, FOV 75; "before"
+is `f0707c6c`):
+
+| | before | after |
+|---|---|---|
+| P bench, 40 columns | 20.0 fps (MS 50.0, R 42.3, P 5.2) | **26.3** (MS 38.0, R 31.7, P 4.2) |
+| P bench, 80 columns | 16.6 | **22.3** |
+| B bench, 40 columns | 33.7 | **40.9** |
+| heights 40, A / B / C / D / E | 13.1 / 14.7 / 32.7 / 12.4 / 25.8 | **15.5 / 17.0 / 43.2 / 15.0 / 35.4** |
+| heights 80, A / B / C / D / E | 10.1 / 10.4 / 25.6 / 9.5 / 21.2 | **12.2 / 12.3 / 32.1 / 11.5 / 29.4** |
+| P bench at High (the grid), 40 columns | 14.4 | 16.7 with the grid's rewrite alone; not re-taken merged |
+
+By the profiler, a P-bench frame went from 231,288 to 169,124 clk (−26.9%)
+and heights view A from 357,156 to 304,478 (−14.8%).
+
+Posed sets, render clk a pose, a MOVED view (the renderer now skips work
+while the view stands; a still view gains about ten points more):
+
+| set | before | after | |
+|---|---|---|---|
+| full arena, 40 columns | 154,340 | 123,671 | −19.9% |
+| full arena, 80 columns | 183,945 | 144,808 | −21.3% |
+| open arena, 40 columns | 132,036 | 104,683 | −20.7% |
+| heights, 40 columns | 192,866 | 156,696 | −18.8% |
+| heights, 80 columns | 246,477 | 197,238 | −20.0% |
+| full arena, Very High | 206,302 | 151,560 | −26.5% |
+| heights, Very High | 265,838 | 198,391 | −25.4% |
+| heights, Very Low | 190,079 | 152,836 | −19.6% |
+
+**Live play** is where the game's own work shows; the benches hide it,
+because their bots are dummies. On one seeded heights match (the game
+agent's measurement, its branch alone): the sim's tick 16,414 → 11,397 clk
+walking and 13,256 → 9,415 with nobody at the keys; an overlay rebuild
+18,691 → 5,257 clk with the pistol; the frame 398,979 → 369,653 clk
+(11.96 → 12.91 fps), the game's state identical tick for tick.
+
+**What the engine study found.** After five rounds no stage dominated, and
+the frame was instruction count rather than arithmetic: about 12,500
+instructions and about 100 multiplies and divides. The changes that
+removed work rather than shaved it:
+
+- **A clipped face needs no clip** (geometry). Every wall is axis-aligned,
+  so along a face the inverse depth is linear in the screen column and
+  depends only on the face's plane. A face's end outside the view is made
+  AT THE SCREEN'S EDGE with two multiplies, where `wa_clip` and `wa_proj`
+  took up to three interpolations and two projections. The room's walls,
+  which are nearly always clipped, then take the cheap in-view path. The
+  old clip is the fallback when the plane is inside the near plane (5 of 40
+  against-the-wall poses).
+- **A box's silhouette instead of a cone test** (geometry). The order list
+  names each box's three silhouette vertices; a box is kept or dropped by
+  those vertices' columns, exactly, at any field of view, and a dropped box
+  leaves a hint that proves it still out next frame with one corner's test.
+  `wa_leaf`, `wa_box` and the cone are gone.
+- **A view that stands is not transformed again** (geometry). Products,
+  kept boxes' vertices and the room's corners stand while the position and
+  angle do: 15–20% of the P bench's frames.
+- **A span whose edges are both level is one loop** (columns): no divide, no
+  fraction, no second pass — 6 of 10 spans a frame at a COARSE level. A
+  steep span drops an edge that has left the screen for good; a pass ends
+  when its edge leaves the screen.
+- **A figure's box before its joints** (figures), from two host tables, so a
+  figure off the screen or behind walls in every column makes no joint (17%
+  of the figures in the cone); occlusion verdicts go by runs of columns
+  under one span; the emit sweep asks nothing about depth.
+- **Low boxes' shallow edges without a divide, walked in runs** (low); the
+  per-box prelude cut; an edge under the eye and under the screen leaves
+  before its clip.
+- **The floor under a square by a 16 × 16 grid of cells**, not a walk over
+  every box (game): `wa_floor` 1,419 → 508 clk a call, and it was 30% of a
+  tick. The overlay is built straight into the renderer part.
+- **The floor grid as running sums** (coordinator): no divide and one
+  multiply a dot where there were a divide and three; the lines behind the
+  player are not walked. What the grid adds to a Medium frame fell from
+  about 51,000 to about 24,000 clk on the posed sets.
+- **Present writes a listed cell without reading the glass first**
+  (coordinator): two cells in three have changed in play, so the compare
+  cost more than it saved, and the card sees fewer bus cycles.
+
+**The picture.** Over the eight reference sets (350 poses):
+
+- **Figures, pickups and the overlay are identical** in every pose.
+- **Wall edges** differ in 121 cells of 60 poses on the full arena at 40
+  columns (66 of 60 on heights): a wall running off the screen takes its
+  half-row steps a column earlier or later, because its end is now exact at
+  the screen's edge, and a low box's shallow edge can land a half-row
+  differently. No wall, post or box is missing.
+- **`tools/wacheck.py`** (edges against a host ray cast) says the edges are
+  as right as before or a little more: 5 of 30 poses with an edge two rows
+  off on the full arena (5 before); 16 of 1,460 columns off on heights at 40
+  columns (20 of 1,458 before); 19 of 2,253 at 80 (26 of 2,293).
+- **The grid's dots moved, and that is a fix.** The old grid kept x/z ×
+  65,536 in 16 signed bits, so a dot more than half way from the centre to
+  the edge of a 90-degree view wrapped to the other side of the screen: 61
+  of 180 dots in the posed set were in the wrong cell. All 162 are now where
+  the projection puts them.
+- **The HUD's `N` counts the writes made** (every listed cell and blank),
+  not the cells that changed: about 148 where it read 95 on the P bench.
+- 0 divide faults in every set, the against-the-wall sets (530 poses) and
+  the agents' larger private runs.
+
+**Checked.** The twelve WireArena suite rows (`walift`, `waroutes`,
+`wabots`, `wascore`, `wabotarms`, `waweapons`, `walink`, `walinknet`,
+`walinkudp`, `walinkip`, `walink4`, `walink4ip`) pass on the merged tree.
+`waweapons` caught one bug during the pass, in the game agent's own branch
+(a pickup's early return that took "every pickup present" for "no timer
+running"), fixed there before the merge.
+
+**Three things the merge had to settle between areas:**
+
+- The geometry pass makes the level's choices only when the level changes;
+  the columns' `wa_collook` hangs off that, and reads the sparse key too, so
+  the sparse key became a second change key (`wa_kspa`).
+- The columns' steep way reads a span's ends back off the face's vertices
+  (`wa_fv`); a face with an end at the screen's edge keeps it in a scratch
+  vertex, so `wa_face` now leaves the ends the span HAS in `wa_fv`.
+- The figures pass folded the depth queries into one (`wa_occl`), which the
+  grid now calls; its own helper is gone.
+
+**Bytes.** The renderer part 61,780 → 62,071 of 65,024 (+291, after 320
+bytes of BSS nothing read and an uncalled routine came out). The game's
+image 20,532 → 21,258 and its BSS +6,472 (the floor grids) on the game
+agent's branch, in a segment with room (34,614 of 65,024 there; the
+four-player link merged since has grown the image to 25,975).
+
+**Tried and rejected, by measurement** (the agents' reports have each
+number): whole-box culls for low boxes, a fourth time, in four forms;
+run-form flat passes; `wa_fedge`'s start with fewer bits (the staircase
+would shimmer); 16-bit product chains; lazy products; emitting figure cells
+as the limbs are walked; a cross-multiplied depth compare; the player's
+step cached by angle.
+
+**The owner's rulings and what is still the owner's:**
+
+- **FARTOP stays at Very Low alone** (the owner, 2026-11-14): it removes
+  perspective, notably half of a ramp seen from the side — "most speed,
+  least recognizable geometry". Not to be proposed for Medium again.
+- The rest of the list, and what the owner made of each, is 16.10.
+
+**Where a frame goes now** (P bench, 40 columns, 169,124 clk): the level
+spans' loop 16%, `wa_face` 12%, present 11%, the frame's fixed setup 7.5%,
+figures about 18%, vertices 6%, products 3.6%, the game about 6%. On
+heights view A (304,478 clk) the low boxes are still about a third.
+
+### 16.10 The owner's rulings on pass 6's open list, and what was built (2026-11-14)
+
+| 16.9 raised | the owner | so |
+|---|---|---|
+| far figures as markers sooner; five-limb figures at closer range | "We tried a variant of these earlier and they didn't work very well" | **declined**; not to be raised again |
+| a wider COARSE (edges moving under 1.5 or 2 half-rows drawn level) | "Lets put it on low and very low" | **built**: `LK_COARSE2` |
+| roaming bots look every 16th tick, not every 8th | "This seems good" | **built** |
+| the link's cable read skipped on the frame after an empty one | "I'd need to test this, keep it on the list, but not yet" | **open**, not built |
+| the meter's R and P sampled one frame in four | "Lets put the entire fps/render line on a key, F10; nothing shown or sampled by default" | **built**: the meter is off until asked for |
+| a floor-eye PVS in which low boxes occlude | "data in the map that tells us ahead of time what you can't see? That is a great optimization" | **built**: the PVS's low pass |
+| FARTOP at Medium | no: "most speed, least recognizable geometry" | stays at **Very Low alone** |
+
+**The meter on F10.** Row 24 shows nothing as shipped. A frame sums nothing
+and reads the clock once, for the sim. F10 cycles: the frame rate alone
+(`FPS nnn.n`), every number (the row as it was: fps, frame, render and
+present ms, video writes, and the view, level, sparse and grid marks; three
+clock reads a frame), off. The B and P benches turn every number on
+themselves, because their result is that row. `make wirearenadisk
+WAMETER=1|2` builds a game that starts with it on (a stamped knob, for a
+benchmark build). `tests/waweapons.py` checks the cycle from off.
+
+**`LK_COARSE2`**, `wa_look`'s bit 7, on Low and Very Low: with COARSE, an
+edge that moves under TWO half-rows along a wall (seven quarter half-rows
+or fewer) is drawn level at its middle, where COARSE alone takes under one.
+Measured on the posed sets, render clk a pose: Low, the full arena −2.0%
+and heights −0.6%; Very Low −0.3% and −0.2% (its room has no tops
+already). Medium and up are identical. A long shallow wall line loses its
+single step: 383 cells differ in 22 of 60 Low poses on the full arena.
+`WR_ABI` is 7. Very Low's `wa_look` is now 0xFF, so the level's change key
+is a word with the sparse key, and "none" is 0xFF in that half.
+
+**Roaming bots** look every other turn, 16 ticks apart; engaged, hunting
+and fetching bots look every eighth tick as before. A sight walk and a
+bearing fewer for each roaming bot: up to about 350 clk a tick by the game
+agent's figures (not re-measured).
+
+**What it costs in notice, corrected.** 16.9 said "up to 0.27 s later".
+That is the AVERAGE. A roaming bot's looks take turns between the player
+and the next live bot, so it looked at the player every 16 ticks and now
+does every 32: 0.27 s later on average, 0.53 s at worst (1.07 s between
+looks at the player, from 0.53). `tests/wabots.py` held a roaming bot to
+"engaged within 12 ticks" and failed 4 runs in 11 until its wait was 40;
+without the change it passed 6 of 6.
+
+**The PVS's low pass** (`tools/arenagen.py`, `pvs_low`). The PVS of
+HEIGHTS-PLAN 9.8 lets only TALL boxes hide anything, because an eye can see
+over a low one. How much it sees over depends on the eye's height, and that
+is bounded per cell:
+
+- The boxes are a heightfield, and over a heightfield a higher eye sees
+  everything a lower one does. So one test per cell, at the HIGHEST eye a
+  player can have there, covers every eye.
+- That eye (`pvs_eyes`) is the eye over the highest floor in reach of the
+  cell, a jump more, or what is left of a jump off a higher floor some
+  cells away by the time its fall has covered the cells between, by the
+  game's own gravity, jump and speed out of `waconst.inc`.
+- From each of the cell's test points, rays are cast across the box's whole
+  angle. Along a ray the box's top is hidden when a nearer box's top stands
+  at least as steep from the eye.
+- Only boxes below the tallest are looked for; a tall box stays the flat
+  test's, margins and all, and a tall box in the way hides with those same
+  margins. The low test itself has NO margin: it is the geometry's answer,
+  so that a ramp whose top edge runs along the platform's (equal, in exact
+  arithmetic) is dropped.
+
+On the heights arena it drops each ramp from the 38 cells where it lies
+behind the platform: 2.3% of box-cells more, 33.7% in all. It costs 1.7 s
+of build time, nothing at run time and no byte (the table's size is
+unchanged). `WA_PVSLOW=0` in the environment builds without it, for the A/B.
+
+Measured (MartyPC `os8088_5150_cga`, Medium):
+
+| | before | with the low pass |
+|---|---|---|
+| heights view A, 40 / 80 columns | 15.5 / 12.2 fps | **16.2 / 12.7** |
+| the other four views | | unchanged |
+| 900 poses in the culled cells, turned toward the culled ramp, the eye standing, jumping and at the cell's highest; render clk a pose | 232,602 | 218,084 (−6.2%) |
+| the same, 400 poses at 80 columns | 282,031 | 266,862 (−5.4%) |
+
+**Its picture:** of those 900 poses 873 are identical with and without it;
+27 differ by one or two cells (29 in all; 11 of 400 at 80 columns, 16
+cells). Each is a `_` the hidden ramp's top edge used to leave on the
+platform's far edge line, where rounding had let one cell of it through;
+the line is now the platform's own. 0 divide faults.
+
+**Checked:** the twelve WireArena suite rows on the final build (below);
+`waweapons` goes red with the level table's bit or F10's cycle changed.
+
+**Still open:** the link's cable read (above); the hints of 16.9's agents
+that were interface changes between areas and not taken (a byte-wide
+`wa_fbuf`, `wa_face` handing its columns to the span code in registers, a
+"clip raised" flag for the tall spans on heights).
+

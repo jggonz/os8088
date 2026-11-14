@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""waprof - WireArena's frame, PROFILED: exclusive guest cycles per routine
+over whole frames of one of its benches (or of live play), by single-stepping
+MartyPC - every instruction's cycles go to the label it sits under, in the
+game (G:name), the renderer part (name) or neither (kernel/other: the timer
+tick, the kernel's calls). About two host seconds a frame.
+
+A DEVELOPMENT INSTRUMENT, not a suite row (docs/plans/MULTIPLAYER-FPS-PLAN.md
+16.9: what a frame of the P bench is made of).
+
+    python3 tools/waprof.py [--tree DIR] [--what P40|P80|O40|H40|H80]
+            [--pose 0..4] [--frames N] [--level 1..5] [--detail PREFIX]
+            [--live SECONDS] [--out f.json]
+
+--pose picks the heights arena's view (0 = A .. 4 = E). --detail PREFIX adds
+a second table by EVERY label (local and macro-local ones too: `..@NN.name`
+is a label inside a macro) under routines whose name starts with PREFIX
+(`wa_` the renderer's, `G:` the game's). --live N profiles live play N guest
+seconds in, no bench: the bots think and shoot, so it is not repeatable to
+the cycle. The maps are assembled here and compared byte for byte with the
+build, so a stale build is refused.
+"""
+import sys, os, re, struct, subprocess, tempfile, json, argparse, collections, bisect, time
+ap = argparse.ArgumentParser()
+ap.add_argument("--tree", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ap.add_argument("--what", default="P40")
+ap.add_argument("--pose", type=int, default=0)   # heights: 0=A..4=E
+ap.add_argument("--frames", type=int, default=3)
+ap.add_argument("--level", type=int, default=0)
+ap.add_argument("--warm", type=float, default=2.0)
+ap.add_argument("--detail", default="")
+ap.add_argument("--out", default="")
+ap.add_argument("--live", type=float, default=0.0, help="no bench: profile live play after this many guest seconds (bots think and shoot)")
+a = ap.parse_args()
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88ui
+from os88pkg import PKG_FMT
+F = 4772727
+ITEM = {"P40": "Play, 40 columns", "P80": "Play, 80 columns", "O40": "Open arena, 40 columns",
+        "H40": "Heights arena, 40 columns", "H80": "Heights arena, 80 columns"}
+T = os.path.abspath(a.tree); B = os.path.join(T, "build")
+def amap(path, binp):
+    d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/", "-I", "apps/wirearena/", "-I", "drivers/net/",
+                           "-I", B + "/", "--before", "[map all %s]" % mp, "-o", bn, path], cwd=T)
+    if open(bn, "rb").read() != open(binp, "rb").read():
+        raise SystemExit("waprof: %s is not its source - make wirearenadisk first" % binp)
+    o = {}
+    for line in open(mp):
+        f = line.split()
+        if len(f) == 3 and re.match(r'^[0-9A-F]+$', f[0]) and re.match(r'^[0-9A-F]+$', f[1]):
+            o[f[2]] = int(f[0], 16)
+    return o
+g = amap("apps/wirearena/wirearena.asm", B + "/wirearena.bin")
+r = amap("apps/wirearena/wrpart.asm", B + "/wrpart.bin")
+def table(mp, glob):
+    it = sorted((v, k) for k, v in mp.items() if (("." not in k and not k.startswith("..@")) if glob else True))
+    return [x[0] for x in it], [x[1] for x in it]
+gA, gN = table(g, True); rA, rN = table(r, True)
+gA2, gN2 = table(g, False); rA2, rN2 = table(r, False)
+gRev = {v: k for v, k in zip(gA, gN)}; rRev = {v: k for v, k in zip(rA, rN)}
+gSet = set(gA); rSet = set(rA)
+W = 40 if a.what.endswith("40") else 80
+with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
+    m = ui.m
+    ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+    ui.menu_pick("Game", ITEM[a.what]); m.advance(cycles=F)
+    if a.level:
+        m.key("F%d" % a.level); m.advance(cycles=F // 4)
+    buf = m.read(0x10000, 0x90000)
+    b = [0x10000 + o for o in range(0, len(buf) - 32, 16)
+         if buf[o:o + 2] == b'O8' and buf[o + 2] == PKG_FMT and buf[o + 16:o + 22] == b'WARENA'][-1]
+    if a.live:
+        m.advance(cycles=int(F * a.live))
+    else:
+        for i in range(a.pose + 1):
+            m.key("KeyP"); m.advance(cycles=int(F * (9.2 if i < a.pose else a.warm)))
+    rs = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16
+    gimg = os.path.getsize(B + "/wirearena.bin"); rimg = os.path.getsize(B + "/wrpart.bin")
+    # run to the game's wa_render entry
+    ent = b + g["wa_render"]
+    m.bp_exec(ent); m.go(); assert m.wait_stop(30) is not None; m.bp_exec()
+    st = m.status()
+    prev = (int(st["cs"]) << 4) + int(st["ip"]); pc = int(st["cycles"])
+    excl = collections.Counter(); det = collections.Counter(); cnt = collections.Counter()
+    frames = 0; t0 = time.time(); n = 0; c0 = pc
+    def name(lin, d=False):
+        if b <= lin < b + gimg:
+            A, N = (gA2, gN2) if d else (gA, gN); o = lin - b
+            i = bisect.bisect_right(A, o) - 1
+            return "G:" + N[i]
+        if rs <= lin < rs + rimg:
+            A, N = (rA2, rN2) if d else (rA, rN); o = lin - rs
+            i = bisect.bisect_right(A, o) - 1
+            return N[i]
+        return "kernel/other"
+    while True:
+        st = m.step(1)
+        lin = (int(st["cs"]) << 4) + int(st["ip"]); c = int(st["cycles"])
+        nm = name(prev)
+        excl[nm] += c - pc
+        if a.detail and nm.startswith(a.detail):
+            det[name(prev, True)] += c - pc
+        prev, pc = lin, c; n += 1
+        if lin == ent:
+            frames += 1
+            if frames >= a.frames: break
+        # entries count
+        if b <= lin < b + gimg:
+            if (lin - b) in gSet: cnt["G:" + gRev[lin - b]] += 1
+        elif rs <= lin < rs + rimg:
+            if (lin - rs) in rSet: cnt[rRev[lin - rs]] += 1
+    tot = pc - c0
+print("frames %d instr %d cycles/frame %.0f (%.2f ms)  host %.0fs" % (frames, n, tot / frames, tot / frames / 4772.727, time.time() - t0))
+for k, v in excl.most_common(60):
+    print("  %-28s %8.0f clk/frame %5.1f%%  calls/frame %.2f" % (k, v / frames, 100.0 * v / tot, cnt[k] / frames))
+if a.detail:
+    print("--- detail", a.detail)
+    for k, v in det.most_common(60):
+        print("  %-40s %8.0f clk/frame" % (k, v / frames))
+if a.out:
+    json.dump({"excl": excl, "cnt": cnt, "frames": frames, "tot": tot}, open(a.out, "w"))

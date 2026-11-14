@@ -2147,6 +2147,11 @@ The part's descriptor gains a word at 42 (WIREARENA-PARTS-PLAN 7.5).
 `WRV_ARENA` copies the masks into `wa_pvs`, 512 bytes of BSS
 (`WA_PVSN` × `WA_PVSB`).
 
+*Since (MULTIPLAYER-FPS-PLAN 16.10, 2026-11-14): the PVS has a second, LOW
+pass - what the boxes below the tallest hide, at the highest eye a cell can
+have - which drops each ramp from the cells where it lies behind the
+platform.*
+
 **9.8.3 Measured** (MartyPC `os8088_5150_cga`, the games' own benches):
 
 Both columns were taken on the same harness and system disk; "before" is
@@ -2539,6 +2544,9 @@ view A; the session's scratch, `r5/walls/lv/vids/`):
 2. **The heights arena's rate:** 11.8–25.9 fps at 40 columns on the
    revised arena (9.7.5). The busy views are still under the forecast.
    9.7.8 has the owner's options; the pillars are the cheap one.
+   *Since:* performance pass 6 (MULTIPLAYER-FPS-PLAN 16.9, 2026-11-14) has
+   the five views at 15.5 / 17.0 / 43.2 / 15.0 / 35.4 fps at 40 columns.
+   The owner ruled there that FARTOP stays at Very Low alone.
 3. **The room corners' views** (9.1), beside the tower's.
 4. **Flights as one object:** settled as ramps (7.1.2, 7.4.2). The stepped
    look is the T option.

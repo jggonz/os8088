@@ -77,7 +77,7 @@ class Arena(Game):
                     rld=self.byte("wa_rld"), hp=self.word("wa_hp"),
                     sh=self.word("wa_sh"), pkon=self.byte("wa_pkon"),
                     level=self.byte("wa_level"), beam=self.byte("wa_beam"),
-                    look=self.byte("wa_look"))
+                    look=self.byte("wa_look"), mtr=self.byte("wa_mtr"))
 
     def kind(self, i):
         """Pickup i's kind: the game's, and the renderer's copy"""
@@ -474,15 +474,25 @@ def main():
         g.tick(600)
         check(g.arms()["pkon"] & 1, "the health pack back after its 20 s")
 
-        ramp2 = {}
+        ramp2, wide = {}, {}
         for k, lv in (("F1", 0), ("F2", 1), ("F3", 2), ("F4", 3), ("F5", 4)):
             g.press(k)
             s = g.arms()
             ramp2[lv] = (s["level"], bool(s["look"] & 32))
+            wide[lv] = bool(s["look"] & 128)
         check(ramp2 == {0: (0, True), 1: (1, True), 2: (2, False),
                         3: (3, False), 4: (4, False)},
               "F1-F5: the detail levels, RAMP2 on Very Low and Low alone "
               "(%r)" % ramp2)
+        check(wide == {0: True, 1: True, 2: False, 3: False, 4: False},
+              "the wider level edges (LK_COARSE2) on Very Low and Low alone "
+              "(MULTIPLAYER-FPS-PLAN 16.10: %r)" % wide)
+        mtr = [g.arms()["mtr"]]             # F10: the meter - off as shipped,
+        for _ in range(3):                  # the frame rate, every number, off
+            g.press("F10")
+            mtr.append(g.arms()["mtr"])
+        check(mtr == [0, 1, 2, 0], "F10 cycles the meter off, the frame rate, "
+              "every number, off - and it starts off (%r)" % mtr)
         g.press("KeyY")
         check(not g.arms()["look"] & 32, "Y: no key of its own any more")
 

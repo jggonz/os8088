@@ -987,6 +987,6 @@ wa_ab6:     db OS88UI_ABLT, 'grenades, rockets, railgun.', 0
 wa_ab7:     db OS88UI_ABLT, 'Tab: scores. -/+: 40/80 columns.', 0
 wa_ab8:     db OS88UI_ABLT, 'F1-F5 detail. F: view. V: vsync.', 0
 wa_ab9:     db OS88UI_ABLT, 'G: floor grid. T: treads. L: tops.', 0
-wa_ab10:    db OS88UI_ABLT, 'B, P: benches (HUD: fps, frame,', 0
-wa_ab11:    db OS88UI_ABLT, 'render, present ms, writes).', 0
+wa_ab10:    db OS88UI_ABLT, 'F10: fps; all the stats; off.', 0
+wa_ab11:    db OS88UI_ABLT, 'B, P: benches (the stats on).', 0
 wa_ab12:    db OS88UI_ABLT, 'Esc leaves the arena.', 0

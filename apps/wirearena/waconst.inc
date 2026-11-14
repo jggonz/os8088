@@ -32,6 +32,9 @@ LK_ROOMF    equ 8               ; the room's walls as floor lines alone
 LK_FARTOP   equ 16              ; a low box's far top only well above it
 LK_RAMP2    equ 32              ; a ramp without its foot's line
 LK_FEW      equ 64              ; J: a small figure's 7 joints, 5 limbs
+LK_COARSE2  equ 128             ; with COARSE: an edge moving under TWO
+                                ; half-rows is level (Low and Very Low: the
+                                ; owner, pass 6 - MULTIPLAYER-FPS-PLAN 16.10)
 WA_FLODV    equ 16              ; LK_FEW: fv8 below this: under ~7 half-rows tall
 
 ; per-figure record

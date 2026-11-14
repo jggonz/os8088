@@ -3,6 +3,13 @@
 (docs/plans/WIREARENA-HEIGHTS-PLAN.md 2.1: the measured unit costs that
 tools/wamodel.py prices a frame with).
 
+SUPERSEDED by tools/waprof.py (every routine, exclusive cycles) and
+tools/waposes.py (exact cycles a posed frame): performance pass 6
+(docs/plans/MULTIPLAYER-FPS-PLAN.md 16.9) removed wa_leaf and made
+wa_face's way into the span code indirect, so the breakpoints named below
+are no longer all there. Kept for the record of how HEIGHTS-PLAN 2.1's unit
+costs were taken; it refuses to run on a build without its labels.
+
 Breakpoints at the entries of the game's wa_render and the renderer part's
 wa_render, its .walked and .roomless, wa_leaf, wa_face, wa_span, wa_figures,
 wa_cross and wa_present; the P bench runs, and the cycles between stops are
@@ -101,6 +108,9 @@ with os88ui.boot("build/os8088-360.img", apps="build/warena360.img") as ui:
     m.key("KeyP"); m.advance(cycles=F // 2)
     m.pause()
     rs = struct.unpack('<H', m.read(b + g["wa_rds"], 2))[0] * 16
+    gone = [n for n in NAMES[1:] if n not in r]
+    if gone:
+        raise SystemExit("watrace: the renderer has no %s any more (pass 6) - use tools/waprof.py" % ", ".join(gone))
     pts = [b + g["wa_render"]] + [rs + r[n] for n in NAMES[1:]]
     m.bp_exec(*pts)
     rd = lambda n: struct.unpack('<h', m.read(rs + r[n], 2))[0]

@@ -121,6 +121,10 @@ rides as the player does. This is HEIGHTS-PLAN wave 4's remainder.
 
 ### 4.1 Line of sight: a grid walk, every fourth tick
 
+*Since (MULTIPLAYER-FPS-PLAN 16.10, 2026-11-14): a ROAMING bot looks every
+other turn of its own, 16 ticks apart; an engaged, hunting or fetching one as
+below.*
+
 The tall boxes are the only occluders, and they all stand on a 64-unit grid
 (arena 2's 7 tall boxes do; arenagen will refuse one that does not). So a
 bot sees the player when a walk from it to the player, a 64-unit step at a
