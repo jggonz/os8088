@@ -158,6 +158,9 @@ WA_VAR wa_fqlc, 2               ; ...a steep line's last column x 2
 WA_VAR wa_fqvs, WA_MVTX*2       ; ...a vertex's 1/z and floor quarter
 WA_VAR wa_fqvi, WA_MVTX*2       ; half-row, and their frame stamp
 WA_VAR wa_fqvq, WA_MVTX*2
+WA_VAR wa_fqps, WA_MAXSP*2      ; ...a span's foot line (wa_fqspf): its
+WA_VAR wa_fqpf, WA_MAXSP*2      ; frame stamp (a byte, at its tag), its
+WA_VAR wa_fqpk, WA_MAXSP*2      ; first row and its step
 WA_VAR wa_fqcc, WA_MAXW*8       ; ...a column's record (wa_fqmk): its tall
                                 ; face's foot (word), its entries (byte),
                                 ; the frame, two intervals (bytes)
@@ -312,6 +315,9 @@ wa_render:
     rep stosw
     mov di, wa_fqcc
     mov cx, WA_MAXW*4
+    rep stosw
+    mov di, wa_fqps             ; ...and a span's foot line's
+    mov cx, WA_MAXSP
     rep stosw
     mov byte [wa_frame], 1
 .stamped:
@@ -4046,14 +4052,10 @@ wa_fqmk:
     push di
     mov [wa_fqcc+bx+3], al
     mov word [wa_fqcc+bx], 0x8000
-    cmp word [wa_cov+si], 0
+    mov di, [wa_cov+si]
+    or di, di
     je .ent
-    push bx
-    mov bx, si
-    call wa_wallz
-    pop bx
-    mov ax, [wa_colz+si]
-    call wa_fqhr
+    call wa_fqspf               ; (its tall face's foot, off its span)
     mov [wa_fqcc+bx], ax
 .ent:
     mov cl, [wa_cstn+si]
@@ -4078,27 +4080,9 @@ wa_fqmk:
     pop cx
     ret
 .foot:                          ; AL = an entry's span tag, SI = DI = the
-    push bx                     ; column x 2: AL = the floor's half-row at
-    push cx                     ; its depth there, 0..0xFD; keeps all but
-    push dx                     ; AX
-    xor ah, ah
-    mov di, ax
-    mov ax, si                  ; its 1/z: as wa_occlow's exact one
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1
-    add ax, 8
-    sub ax, [wa_spcs+di]
-    imul word [wa_spsl+di]
-    mov cx, [wa_spsh+di]
-    jcxz .f0
-    idiv cx
-    jmp short .f1
-.f0:
-    xor ax, ax
-.f1:
-    add ax, [wa_spih+di]
-    call wa_fqhr
+    xor ah, ah                  ; column x 2: AL = the floor's half-row at
+    mov di, ax                  ; its depth there, 0..0xFD; keeps all but
+    call wa_fqspf               ; AX
     or ah, ah
     jnz .f3
     cmp al, 0xFD
@@ -4109,21 +4093,63 @@ wa_fqmk:
     mov al, 0xFD
 .f2:
     mov di, si
-    pop dx
-    pop cx
-    pop bx
     ret
 
-; wa_fqhr - AX = a floor point's 1/z: AX = its half-row. Clobbers CL, DX
-wa_fqhr:
-    imul word [wa_fqfn]
+; wa_fqspf - DI = a span's tag, SI = a column x 2 it covers: AX = the
+; floor's half-row at the span's depth there - its FOOT, where a face of it
+; meets the floor. The floor's row is linear in 1/z and 1/z in the column,
+; so the foot is linear in the column: made once a frame per span (its row
+; at its first column, quarter half-rows, and its step per sixteenth of a
+; column, 8.8), then one multiply a column - not wa_wallz's divide and a
+; multiply. Keeps all but AX
+wa_fqspf:
+    push cx
+    push dx
+    mov al, [wa_frame]
+    cmp [wa_fqps+di], al
+    je .have
+    mov [wa_fqps+di], al
+    mov ax, [wa_spih+di]        ; its two ends' quarter half-rows
+    call .q
+    mov [wa_fqpf+di], ax
+    mov ax, [wa_spih+di]
+    add ax, [wa_spsl+di]
+    call .q
+    sub ax, [wa_fqpf+di]        ; the change across it...
+    mov cx, [wa_spsh+di]
+    cmp cx, 64                  ; ...a step of it per sixteenth of a column,
+    jb .flat                    ; 8.8 (a span under four columns: level -
+    mov dx, 256                 ; its first row; a step that would not fit
+    imul dx                     ; is not divided)
+    idiv cx
+    jmp short .k
+.flat:
+    xor ax, ax
+.k:
+    mov [wa_fqpk+di], ax
+.have:
+    mov ax, si                  ; the column's centre past its first, x 16
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, 8
+    sub ax, [wa_spcs+di]
+    imul word [wa_fqpk+di]      ; x the step, / 256
+    mov al, ah
+    mov ah, dl
+    add ax, [wa_fqpf+di]
+    add ax, 2                   ; quarter half-rows to half-rows, rounded
+    sar ax, 1
+    sar ax, 1
+    pop dx
+    pop cx
+    ret
+.q:                             ; AX = a 1/z: AX = the floor's quarter
+    imul word [wa_fqfn]         ; half-row there (clobbers CL, DX)
     mov cl, [wa_fqfs]
     sar dx, cl
     mov ax, [wa_hq]
     sub ax, dx
-    add ax, 2
-    sar ax, 1
-    sar ax, 1
     ret
 
 ; wa_fqiz - DX = a half-row of the line being drawn: AX = its 1/z there
