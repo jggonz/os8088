@@ -2095,7 +2095,37 @@ wa_flat:
     jmp .l2
 .l2s:
     cmp si, [wa_end]
-    jb .l2a
+    jae .l2e
+    cmp word [wa_cov+si+2], 0   ; a shut column: the next one open? Else on
+    je .l2a                     ; to the next open one with one scan (a
+    push ax                     ; nearer box hides a run of them)
+    push cx
+    push di
+    lea di, [si+wa_cov+4]
+    mov cx, [wa_end]
+    sub cx, si
+    shr cx, 1
+    dec cx
+    dec cx
+    jle .l2n
+    xor ax, ax
+    repne scasw
+    jne .l2n
+    lea ax, [di-2-wa_cov]
+    sub ax, si
+    add si, ax
+    add bx, ax
+    add bp, ax
+    pop di
+    pop cx
+    pop ax
+    jmp .l2
+.l2n:
+    pop di
+    pop cx
+    pop ax
+    mov si, [wa_end]
+.l2e:
     mov byte [wa_cov+si+1], 0   ; (SI = the end)
     mov ax, di                  ; opened: two cells a column on the list
     sub ax, [wa_lp]
