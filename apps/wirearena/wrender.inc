@@ -1501,6 +1501,20 @@ wa_ptbib:
 ; FLATTAIL - a flat span's passes and corners, its edges made (wa_flat's
 ; general way): %1, %2 the passes, %3 = 1 the heights clip's, %4 the label.
 %macro FLATTAIL 4
+%%lev:                          ; the top level: on the screen?
+    cmp word [wa_fh], WA_HR
+    jb %%p1
+    push word [wa_dt]           ; OFF it (a near wall's, or the sparse
+    mov bx, [wa_db]             ; level's): ONE pass, the bottom's, opens
+    mov [wa_dt], bx             ; the columns
+    mov bx, [wa_vb0]
+    mov [wa_fh], bx
+    mov bp, [wa_qb]
+    mov cx, [wa_fb]
+    call %1
+    pop word [wa_dt]
+    mov byte [wa_cov+si+1], 0
+    jmp %%bp
 %4:                             ; (BX = the tag; SI.BP, CX, DI the top's)
     mov [wa_vt0], si            ; (for the corners)
     mov [wa_qt], bp
@@ -1520,6 +1534,8 @@ wa_ptbib:
     mov si, [wa_end]            ; the column past the end reads shut to pass
     mov byte [wa_cov+si+1], 1   ; 1 (a high byte: always 0 otherwise)
     mov si, [wa_cs]
+    jcxz %%lev
+%%p1:
     call %1                     ; pass 1: open, and the top (SI = the end)
     mov byte [wa_cov+si+1], 0
     mov bx, [wa_vb0]            ; pass 2: the bottom - unless it is off the
