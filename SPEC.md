@@ -19916,6 +19916,51 @@ itself (WireBall's shape, §109.1), which kern_small cannot do (no rate hook,
 there (§53.1). It is NOT in `fsx_rkeep` (§53.2.3), so a `FSXF_REAL` bracket
 on kern_mega does not have it; a protected-mode bracket does.
 
+### 9.15 The Olivetti Prodest PC1 mouse (`PC1MOUSE.DRV`)
+
+The PC1's built-in mouse is **not** a Microsoft serial mouse and is not on an
+8042 auxiliary port. It is the Yamaha V6335D's mouse interface. The DOS source
+supplied with this work (`pc1mouse.asm`, Simone Riminucci, 2016) reads signed
+movement counters by selecting registers 10h/11h at port D4h and reading port
+D5h. Its left and right buttons are presented by the PC1 keyboard controller
+as set-1 make/break codes 77h and 79h (78h is the unused middle button).
+To enable those codes, the PC1 keyboard controller receives the five-byte data
+sequence `12h, 77h, 78h, 79h, 01h` at port 60h after command 12h at port 64h
+reports that the mapping is not already active. The sequence bytes, including
+the leading 12h, are all data-port writes.
+
+`PC1MOUSE.DRV` is a `DRVC_POINT` worker driver, wanted only when the user
+selects it in the Drivers page. Its attach check uses the PC1 BIOS signature
+before touching the controller. It does not install the DOS
+driver's INT 08h/09h/33h handlers and does not program the V6335 hardware
+cursor: movement and buttons enter the existing OS cursor/event path through
+`OSAPI_MOUSE_FEED`, so os8088 retains its normal cursor, clipping and click
+semantics. The worker polls both movement counters and asks `OSAPI_KEY_DOWN`
+for the PC1 button make codes; it feeds a report only for movement or a button
+change. Attach arms the kernel's key-state map before enabling the PC1 key
+codes. While the PC1 row is attached, the kernel records 77h/78h/79h in that
+map and prevents those bytes from being enqueued as typed keys. Since the PC1
+is an XT, the kernel consumes them in INT 09h, pulses bit 7 of port 61h to
+acknowledge the 8255 byte, then sends IRQ1's EOI. Ordinary scancodes keep their
+normal path. The middle code 78h is consumed but does not map to an OS button.
+Detach feeds a release for any held button and stops the worker.
+
+The one `DRVC_POINT` publication slot means `PC1MOUSE.DRV` and
+`USBMOUSE.DRV` are alternatives: attach of the second one is refused with the
+class-in-use error. They remain separate optional rows; neither is wanted by
+default. The PC1 row is available on `kern_big` and `kern_emu`, the kernels
+with the driver framework; `kern_small` has no driver layer.
+
+The source DOS driver's comments call register 10h horizontal (negated) and
+11h vertical. The first PC1 field report found the OS pointer moving
+horizontally in response to vertical mouse movement, so `PC1MOUSE.DRV` maps
+register 11h to screen X and the negated register 10h to screen Y. It starts at
+one count per pixel. The normal arm doubles a signed delta whose magnitude is
+greater than two mickeys in a sample, matching the DOS driver's default
+`Max_speed_D2 = 2` acceleration. This mapping and sensitivity remain subject
+to field measurement; no emulator in this tree models the V6335D mouse. Record
+the result for horizontal and vertical sweeps, both buttons, simultaneous
+keyboard input, and detach/restart in `docs/plans/PC1-MOUSE-PLAN.md`.
 
 ## 10. events.inc
 

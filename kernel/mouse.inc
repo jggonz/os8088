@@ -2677,6 +2677,9 @@ mou_clamp:
 ; one press because kbm_btn's own KBM_GAP guard is what spends this.
 ; -----------------------------------------------------------------------------
 KBM_5SCAN   equ 0x4C            ; the keypad's centre key, make code
+KBM_PC1_L   equ 0x77            ; PC1MOUSE.DRV's two buttons arrive as keys
+KBM_PC1_M   equ 0x78            ; middle button is ignored by the OS
+KBM_PC1_R   equ 0x79            ; but none of the three may reach the BIOS
 
 ; KBM_SCAN exit[, mem] - ONE SCANCODE, WHEREVER IT CAME FROM: AL = the byte
 ; the keyboard sent, AH = [kbd_armed] (or, with `mem`, the byte itself is
@@ -2696,6 +2699,24 @@ KBM_5SCAN   equ 0x4C            ; the keypad's centre key, make code
 %endif
     call kbd_track              ; SPEC.md 9.7 - preserves AL
 %%p5:
+%ifdef OS88_DRIVERS
+    ; PC1 button scans must be tested before the early exits below. Otherwise
+    ; an ordinary scan (77h/78h/79h included) jumps straight to the BIOS chain
+    ; and the filter after KBM_SCAN is unreachable. kbd_track has already
+    ; recorded the make/break state, so OSAPI_KEY_DOWN still sees the button.
+    ; The shared kern_big scan body uses the `mem` form for both the XT port
+    ; peek and the AT ROM hand-off; PC1 can only attach on the XT, but its path
+    ; still reaches this same expansion.
+    cmp word [pc1_row+DRVR_SEG], 0
+    je %%not_pc1
+    cmp al, KBM_PC1_L
+    je .pc1eat
+    cmp al, KBM_PC1_M
+    je .pc1eat
+    cmp al, KBM_PC1_R
+    je .pc1eat
+%%not_pc1:
+%endif
     cmp byte [mou_ptr], 0
     jne %1                      ; a real mouse has spoken: never intercept
     cmp al, KBM_5SCAN
@@ -2789,6 +2810,31 @@ kbm_isr:
     KBM_SCAN .chain, mem
 %else
     KBM_SCAN .chain
+%endif
+%ifdef OS88_DRIVERS
+.pc1eat:
+%ifdef KBD_DIAG
+    ; Mark diagnostic rows that actually reached this filter. KBG_X bit 5
+    ; distinguishes a matched byte from one merely observed at port 60h.
+    push bx
+    mov bx, [kbg_cur]
+    or byte [bx+KR_X], 0x20
+    pop bx
+%endif
+    ; On the PC1 XT, port 60h is the 8255 latch and reading it does not
+    ; acknowledge the byte. Pulse bit 7 of port 61h as the ROM handler does,
+    ; preserving the speaker/timer bits, then send IRQ1's EOI ourselves.
+    in  al, 0x61
+    mov ah, al
+    or  al, 0x80
+    out 0x61, al
+    mov al, ah
+    out 0x61, al
+    mov al, 0x20
+    out 0x20, al
+    pop ds
+    pop ax
+    iret
 %endif
 .chain:
     ; A CHAIN TO OURSELVES IS A DEAD MACHINE, so it is refused rather than
@@ -2885,6 +2931,11 @@ kbm_isr:
     iret
 
 %ifdef KBD_I15
+    ; Keep the following shared hot routines on their original parity. The
+    ; PC1 scan filter above adds an odd-sized branch sequence to kbm_isr;
+    ; this byte is unreachable padding at the boundary before the INT 15h
+    ; entry and costs no cycles on either interrupt path.
+    db 0x90
 ; -----------------------------------------------------------------------------
 ; kbm_i15 - int 15h, for AH=4Fh alone: the AT BIOS's keyboard intercept
 ;           (SPEC.md 9.7.2)

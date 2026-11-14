@@ -295,6 +295,13 @@ summary = "Lets you use a USB mouse plugged into a Book8088's USB socket or a Pi
 short = "USB mouse on the Book8088"
 needs = "A Book8088 (CH375 USB) or a PicoMEM card"
 
+["PC1MOUSE.DRV"]
+title = "Olivetti PC1 mouse driver"
+kind = "driver"
+summary = "Adds support for the built-in mouse on an Olivetti Prodest PC1."
+short = "Built-in mouse on an Olivetti PC1"
+needs = "An Olivetti Prodest PC1"
+
 # --- programs: applications -------------------------------------------------
 
 ["CALC.O88"]

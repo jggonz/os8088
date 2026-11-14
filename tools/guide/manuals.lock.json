@@ -859,6 +859,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "PC1MOUSE_DRV": {
+  "sources": [
+   "drivers/pc1mouse/pc1mouse.asm"
+  ],
+  "stamped": "7b802356",
+  "strings": "075d3ddf5a3a826e",
+  "why": "Added the PC1 mouse driver guide page from its initial documented behavior"
+ },
  "PCIETHER_DRV": {
   "sources": [
    "drivers/pciether"
