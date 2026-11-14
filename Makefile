@@ -21326,8 +21326,10 @@ $(BUILD)/waa%.asm: tools/arenagen.py tools/wamodel.py apps/wirearena/waconst.inc
 	python3 tools/arenagen.py --arena $* $@
 $(BUILD)/waa%.bin: $(BUILD)/waa%.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ $<
-$(BUILD)/warena.o88: $(BUILD)/wirearena.bin $(BUILD)/wrpart.bin $(WAARENAS) tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $< -o $@ --part $(BUILD)/wrpart.bin $(addprefix --part ,$(WAARENAS)) --part-compress $(PKGZBFMT)
+$(BUILD)/wapose.bin: apps/wirearena/wapose.asm apps/wirearena/waconst.inc $(BUILD)/watab.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/wirearena/ -I $(BUILD)/ -o $@ $<
+$(BUILD)/warena.o88: $(BUILD)/wirearena.bin $(BUILD)/wrpart.bin $(WAARENAS) $(BUILD)/wapose.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $< -o $@ --part $(BUILD)/wrpart.bin --part $(BUILD)/wapose.bin $(addprefix --part ,$(WAARENAS)) --part-compress $(PKGZBFMT)
 #> [Applications] wirearenadisk :: its own floppies, warena{,720,120,360}.img
 wirearenadisk: $(BUILD)/warena.img $(BUILD)/warena720.img $(BUILD)/warena120.img $(BUILD)/warena360.img
 $(BUILD)/warena.img: $(BUILD)/warena.o88 tools/os88disk.py

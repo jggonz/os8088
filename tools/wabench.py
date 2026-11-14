@@ -23,9 +23,8 @@ ap.add_argument("--one", default=None)
 ap.add_argument("what", nargs="*")
 a = ap.parse_args()
 F = 4772727
-ITEM = {"P40": "Play, 40 columns", "P80": "Play, 80 columns", "B40": "Play, 40 columns",
-        "B80": "Play, 80 columns", "O40": "Open arena, 40 columns",
-        "H40": "Heights arena, 40 columns", "H80": "Heights arena, 80 columns"}
+ITEM = {"P40": (0, 40), "P80": (0, 80), "B40": (0, 40), "B80": (0, 80),
+        "O40": (1, 40), "H40": (2, 40), "H80": (2, 80)}  # (arena, width)
 def one(w):
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import os88ui
@@ -35,7 +34,10 @@ def one(w):
                      apps=os.path.join(a.tree, "build/warena360.img"), verbose=False) as ui:
         m = ui.m
         ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
-        ui.menu_pick("Game", ITEM[w]); m.advance(cycles=F)
+        sys.path.insert(0, os.path.join(ROOT, "tests"))
+        import walift             # (the setup by its keys: the Game
+        walift.start_keys(m, *ITEM[w])  # menu's Play items went)
+        m.advance(cycles=F)
         if a.level:
             m.key("F%d" % a.level); m.advance(cycles=F // 4)
         def hud():

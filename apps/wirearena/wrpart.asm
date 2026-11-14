@@ -387,8 +387,11 @@ WA_BSPROW equ 12                ; a node: db kind, box; dw value, low, high;
 %include "wrtab.inc"
 
 ; the tables this half reads, out of build/watab.inc again: the constants
-; are guarded to once, and the data blocks are asked for now
-%define WA_TAB_POSE
+; are guarded to once, and the data blocks are asked for now - each
+; keyframe's bound alone; the keyframes are the POSE part's (wapose.asm,
+; WIREARENA-PARTS-PLAN 8.6)
+%define WA_TAB_KBND
+%define WA_TAB_POSE0            ; (the hot keyframes: read in place)
 %include "watab.inc"
 
 wr_image_end:
@@ -441,6 +444,12 @@ WA_VAR wa_listb,WA_CELLS*2
 wr_end:
 %if wa_jsy != wa_jsx + WA_NJ*2
     %error "wrpart: wa_fjl's narrow loops store y at wa_jsx + 22"
+%endif
+%if wa_pose0 + WA_KHOT*WA_FRAMESZ - wr_hdr > 0x7FFF
+    %error "wrpart: the hot keyframes past 32K - wa_kfo's bit 15 says the pose part"
+%endif
+%if WR_FKA < F_PWH + 2 || WR_FKA < WA_FIGHEAD || WR_FKB + 2 > F_SIZE
+    %error "wrpart: a figure's keyframe-row keys overlap what the game sends or the projection"
 %endif
 %if (wr_end - wr_hdr) > 65024
     %error "wrpart: the renderer part passed the 65,024 bytes one part may hold"

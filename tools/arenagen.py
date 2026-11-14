@@ -8,7 +8,10 @@ each take what they read):
 
   WA_TAB_SIN     wa_sin
   WA_TAB_ARENAS  every arena's tables and wa_arenas
-  WA_TAB_POSE    wa_pose
+  WA_TAB_POSE0   wa_pose0, the HOT keyframes (IDLE, RUN: the renderer part)
+  WA_TAB_POSE1   wa_pose1, the rest (the pose part, apps/wirearena/wapose.asm)
+  WA_TAB_KBND    wa_ktop and wa_krch (the renderer part: each keyframe's
+                 bound, read before its joints)
 
 The constants come first, under a guard of their own, so a second include
 of the file adds only the data blocks the includer has asked for by then.
@@ -1102,6 +1105,7 @@ def dissolve_frame(i, n):
     return out
 
 
+HOTANIMS = ("IDLE", "RUN")     # (first in ANIMS: the renderer part's own)
 ANIMS = [                       # name, keyframes, builder, loops
     ("IDLE", 4, idle_frame, True),
     ("RUN", 8, run_frame, True),
@@ -1480,10 +1484,27 @@ def main(out):
     w("WA_NFRAMES equ %d" % first)
     w("WA_FRAMESZ equ %d                ; one frame: NFACE x NJ x 2 bytes"
       % (NFACE * NJ * 2))
-    w("%ifdef WA_TAB_POSE")
-    w("wa_pose:")
+    # THE HOT KEYFRAMES - the animations a figure is in nearly all the time
+    # - stay in the renderer part (WA_TAB_POSE0, read in place); the rest -
+    # a flinch and the deaths, a second or so at a time - are the POSE
+    # part's (WA_TAB_POSE1), copied in by wa_kfrows when a figure is in one
+    # (WIREARENA-PARTS-PLAN 8.6)
+    w("WA_KHOT equ %d                   ; the hot keyframes: %s"
+      % (sum(n for name, n, _, _ in ANIMS if name in HOTANIMS),
+         ", ".join(HOTANIMS)))
+    if [a[0] for a in ANIMS][:len(HOTANIMS)] != list(HOTANIMS):
+        raise SystemExit("arenagen: the hot animations lead ANIMS - the "
+                         "renderer part's keyframes are one run from 0")
+    w("%ifdef WA_TAB_POSE0")
+    w("wa_pose0:")
     kbnd = []
+    hot = True
     for name, n, fn, loops in ANIMS:
+        if hot and name not in HOTANIMS:
+            hot = False
+            w("%endif")
+            w("%ifdef WA_TAB_POSE1")
+            w("wa_pose1:")
         frames = []
         for i in range(n):
             pts = fn(i, n)
@@ -1535,6 +1556,8 @@ def main(out):
             if max(rch) > 127 or top > JMAXY:
                 raise SystemExit("arenagen: %s %d: a bound past a byte" % (name, i))
             kbnd.append((top, rch, "%s %d" % (name, i)))
+    w("%endif")                         # (the poses: their own part)
+    w("%ifdef WA_TAB_KBND")
     w("wa_ktop:                         ; per keyframe: its joints' top...")
     w("    db " + ", ".join("%d" % t for t, _, _ in kbnd))
     w("wa_krch:                         ; ...and per facing class, per")

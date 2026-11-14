@@ -172,13 +172,16 @@ def record(a):
             g[f[2]] = int(f[0], 16)
     src = open(os.path.join(T, "apps/wirearena/waconst.inc")).read()
     FO = {k: int(v) for k, v in re.findall(r"^(F_[A-Z]+)\s+equ\s+(\d+)", src, re.M)}
-    item = {0: "Play, %d columns", 1: "Open arena, %d columns", 2: "Heights arena, %d columns"}[a.arena] % W
     ps = json.load(open(a.poses)) if a.poses else poses(a.arena, a.n, a.seed)
     frames = []; faults = 0
     with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
         m = ui.m
-        ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
-        ui.menu_pick("Game", item); m.advance(cycles=F)
+        w = ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
+        import os88marty                # the setup's arena and width, then
+        p = os88marty.Pkg(m, w)         # Enter: its Play button (the Game
+        p.write(g["wa_lkarena"], bytes([a.arena]))  # menu's Play items went,
+        p.write(g["wa_want"], bytes([1 if W == 40 else 0]))  # NET-PLAN 9.4)
+        m.key("Enter"); m.advance(cycles=F)
         if a.level:
             m.key("F%d" % a.level); m.advance(cycles=F // 4)
         for k in [x for x in a.keys.split(",") if x]:

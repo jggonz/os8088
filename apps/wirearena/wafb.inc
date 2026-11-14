@@ -62,6 +62,10 @@ WR_NVERB    equ 6
 
 WA_FIGHEAD  equ 20                  ; figs: the bytes G -> R every frame
                                     ; (F_X..F_Z)
+WR_FKA      equ 36                  ; ...and two words of a figure's record
+WR_FKB      equ 38                  ; that are the PART's alone: which
+                                    ; keyframe rows it holds (wa_kfrows; the
+                                    ; game's F_VH/F_VX there never cross)
 
 %define WA_RAT(x) ((x) - wa_fb_cfg + WR_FB)
 
@@ -91,6 +95,8 @@ WA_FBV wa_kyh, 2
 WA_FBV wa_wf, 2
 WA_FBV wa_mono, 1
 WA_FBV wa_fbpad0, 1
+WA_FBV wa_posg, 2                   ; the POSE part's segment (the keyframes,
+                                    ; PARTS-PLAN 8.6): the primary's op_seg
 WA_FBV wa_fb_frm, 0                 ; FRAME
 WA_FBV wa_px, 2
 WA_FBV wa_py, 2

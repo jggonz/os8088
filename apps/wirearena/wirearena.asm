@@ -5380,6 +5380,9 @@ wa_rbind:
     xor al, al
     call op_cseg
     mov [wa_rcs], ax
+    mov al, WA_PPOSE            ; the keyframes' part: its segment, for the
+    call op_seg                 ; renderer's CONFIG (wa_rsync)
+    mov [wa_posg], ax
     push ds
     pop es
     clc
@@ -5405,6 +5408,11 @@ wa_partsmv:
     xor al, al
     call op_cseg
     mov [wa_rcs], ax
+    mov al, WA_PPOSE            ; (the keyframes moved with the carve: their
+    call op_seg                 ; segment here, and in the part's CONFIG
+    mov [wa_posg], ax           ; now - not at the next mode set)
+    mov es, [wa_rds]
+    mov [es:WA_RAT(wa_posg)], ax
     ret
 
 ; wa_rcall - BX = a verb (WRV_*): far-call it in the renderer part, DS = its
@@ -5594,7 +5602,9 @@ wa_geominit:
 ; copied back into ours, and dropped again: both halves keep what they need,
 ; so no claim outlives the call. CF = 1: it could not be had, and the parts
 ; standard's toast has said why. UI task (a menu command): op_fetch's rule.
-WA_PARTA equ 1                  ; arena 0's row; the renderer is row 0
+WA_PARTA equ 2                  ; arena 0's row; the renderer is row 0,
+                                ; the keyframes row 1 (WA_PPOSE: the carve's
+                                ; rows before every lazy one)
 wa_loadarena:
     mov al, [wa_arena]
     add al, WA_PARTA
@@ -5748,12 +5758,14 @@ TOASTSTR wa_t_bh, 'Bots: hard'
 ; --- the parts (SPEC.md 20.12.3): the renderer, with its BSS as zeros
 ; neither stored nor decoded (OP_ZFILL, 20.12.7.5), and an arena a row, read
 ; when a match starts and dropped again (wa_loadarena)
-    OS88_PARTS_BEGIN 1 + WA_NARENA
+    OS88_PARTS_BEGIN 2 + WA_NARENA
       OS88_PART OP_SEG, OP_COMP | OP_ZFILL  ; 0 build/wrpart.bin
-%rep WA_NARENA
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 1.. build/waa<n>.bin
-%endrep
+      OS88_PART OP_ASSET, OP_COMP           ; 1 build/wapose.bin: the figures'
+%rep WA_NARENA                              ;   keyframes (PARTS-PLAN 8.6),
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 2.. build/waa<n>.bin
+%endrep                                     ;   eager, in the carve
     OS88_PARTS_END
+WA_PPOSE    equ 1
 
 ; --- bss ------------------------------------------------------------------
 ; The parts standard's words first (OP_BSS, apps/os88parts.inc), then the

@@ -951,3 +951,78 @@ costs speed.
     is the accurate account.
   - H made no visible difference in the owner's field run (16.4), and it is
     a candidate when the toggles are tidied.
+
+### 8.6 The cold keyframes, a part of their own (2026-11-14)
+
+The owner, after the railgun's death left the renderer part 1,115 bytes
+under its 65,024: *"Might be time to look at the part layout and see what
+would be performant to move into a different part. Else pretty much
+anything is going to overrun it."*
+
+**What the renderer part held** (`build/wrpart.bin`, mapped):
+
+| | bytes | touched |
+|---|---:|---|
+| code and small tables (`wrender.inc`, `wrlow.inc`, `wrtab.inc`, header, frame block) | ~18,300 | every frame |
+| the figures' keyframes (`wa_pose`), 40 of 352 bytes | 14,080 | two facing rows a near figure a frame |
+| their bounds (`wa_ktop`, `wa_krch`) and offsets (`wa_kfo`) | ~240 | a near figure a frame, before its joints |
+| bss: five screen-sized cell buffers (`wa_lista`, `wa_listb`, `wa_fbuf`, `wa_cur`, `wa_fmask`) | 19,199 | every cell, every frame |
+| bss: the reciprocal table (`wa_rcp`) | 5,764 | every column |
+| bss: the rest | ~6,300 | |
+
+**The candidates, by what a move costs a frame.** Everything in bss and
+the code is on the per-cell or per-column path: moving any of it puts a
+segment switch where the renderer spends its time. The cold code (the
+arena loader, the init and geometry verbs) is ~1-2 KB - not enough to
+matter. **The keyframes are the one large block read rarely**: 22 bytes
+twice per near figure per frame, by two pointers (`wa_pa`, `wa_pb`) that
+`wa_figure` sets and the joint loops (`WA_FJ`, `WA_FJN`) follow. Those
+loops read with `lodsw` and write the joints with `stosw`, so ES must be
+DS there and the keyframes cannot simply be read through ES: the rows
+have to be in DS when the loops run.
+
+**As built**:
+
+- **The hot keyframes stay**: IDLE and RUN, 12 of the 40 (4,224 bytes),
+  where a figure is nearly all the time - read in place as before.
+- **The cold ones move** - a flinch and the five deaths, 28 keyframes
+  (9,856 bytes) - to `apps/wirearena/wapose.asm`, part row 1 (`OP_ASSET`,
+  `OP_COMP`, eager: the carve's rows come before every lazy row, so the
+  arenas moved to rows 2..). `tools/arenagen.py` writes the two halves as
+  `WA_TAB_POSE0` and `WA_TAB_POSE1` (`HOTANIMS`, which must lead
+  `ANIMS`), and `wa_kfo` marks a cold keyframe's offset with bit 15.
+- **`wa_kfrows`** (`wrender.inc`): a hot keyframe returns at once. A cold
+  one's two rows are copied into DS, into rows of the figure's own (two
+  per figure, either one A or B), keyed in two words of the PART's copy
+  of the figure record (`WR_FKA`, `WR_FKB`, bytes 36-39, which the game
+  never sends - `wrpart.asm` asserts it). So a figure lying dead copies
+  nothing, and an animation stepping on - its new A its old B - copies one
+  row. The joint loops are unchanged.
+- The pose part's segment is in the frame block's CONFIG (`wa_posg`);
+  `wa_partsmv` re-reads it when the carve moves and writes the part's copy
+  at once.
+
+**Measured** (MartyPC `os8088_5150_cga`, against the commit before):
+
+- **Pictures**: `tools/waposes.py`, 60 heights poses at 40 columns and 40
+  full-arena poses at 80, figures in every animation: **all 100 identical**,
+  glyph and attribute.
+- **Render cycles** (the same sets): **+0.25% and +0.28%** a pose.
+- **The play bench** (`tools/wabench.py`): **P40 26.1 fps, MS 38.2, R 31.9;
+  P80 22.2 fps, MS 44.9, R 35.4 - the same as before to the tenth.**
+- On the way: all 40 keyframes in the pose part cost **+1.2% to +1.5%** of
+  render and 0.2 fps on the play bench - every running figure copying -
+  which is why the hot ones stayed.
+
+**Bytes**: the renderer part **63,909 -> 54,354, 10,670 under its cap**; the
+pose part 9,856; `wirearena.bin` +56 (a row of the table and its glue).
+
+**Not done, and the next lever if it fills again**: moving the hot keyframes
+too gives back 4 KB more for ~1% of render (measured above). Past that, the
+bss is the renderer's working set, and the next real room is a renderer
+built for it (a smaller `wa_rcp`, cell lists sized to the width in use).
+
+**The tools**: `waposes`, `wabench`, `waprof`, `wacheck` and `watrace`
+started their matches from the Game menu's Play items, which went in
+NET-PLAN 9.4; they start from the setup now (`walift.start`, or
+`walift.start_keys` by its keys for a tree whose map they do not build).

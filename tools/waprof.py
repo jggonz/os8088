@@ -37,8 +37,8 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88ui
 from os88pkg import PKG_FMT
 F = 4772727
-ITEM = {"P40": "Play, 40 columns", "P80": "Play, 80 columns", "O40": "Open arena, 40 columns",
-        "H40": "Heights arena, 40 columns", "H80": "Heights arena, 80 columns"}
+ITEM = {"P40": (0, 40), "P80": (0, 80), "O40": (1, 40), "H40": (2, 40),
+        "H80": (2, 80)}  # (arena, width)
 T = os.path.abspath(a.tree); B = os.path.join(T, "build")
 def amap(path, binp):
     d = tempfile.mkdtemp(); mp, bn = os.path.join(d, "m"), os.path.join(d, "b")
@@ -65,7 +65,10 @@ W = 40 if a.what.endswith("40") else 80
 with os88ui.boot(os.path.join(ROOT, "build/os8088-360.img"), apps=B + "/warena360.img", verbose=False) as ui:
     m = ui.m
     ui.path("B:/WARENA.O88"); m.advance(cycles=F // 2); m.go()
-    ui.menu_pick("Game", ITEM[a.what]); m.advance(cycles=F)
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import walift             # (the setup by its keys: the Game
+    walift.start_keys(m, *ITEM[a.what])  # menu's Play items went)
+    m.advance(cycles=F)
     if a.level:
         m.key("F%d" % a.level); m.advance(cycles=F // 4)
     buf = m.read(0x10000, 0x90000)

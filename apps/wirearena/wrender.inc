@@ -126,6 +126,8 @@ WA_VAR wa_steep, 1              ; the span's edges can step >= 2 half-rows
 WA_VAR wa_crow, 2               ; this box's corner row (wa_corn)
 WA_VAR wa_ce0, 2
 WA_VAR wa_at, 10                ; this frame's attributes (A_*)
+WA_VAR wa_kfrow, WA_NJ*4*WA_NFIG ; each figure's two keyframe rows, out of
+                                ; the pose part (wa_kfrows)
 wa_cos  equ wa_fcs              ; the camera's cos and sin: the frame
 wa_sinv equ wa_fsn              ; block's (the game's wa_sincos)
 WA_VAR wa_cang, 2
@@ -3982,7 +3984,8 @@ wa_figure:
     shl si, 1
     mov si, [wa_kfo+si]
     add si, bx
-    mov [wa_pb], si             ; keyframe B at this facing
+    mov [wa_pb], si             ; keyframe B at this facing (in the pose
+                                ; part: wa_kfrows)
     mov si, ax
     mov dh, [wa_ktop+si]        ; ...DH = the top
     mov cx, dx
@@ -3990,6 +3993,7 @@ wa_figure:
     mov si, [wa_kfo+si]
     add si, bx
     mov [wa_pa], si             ; keyframe A
+    call wa_kfrows              ; (both rows into DS, if not there already)
     mov ax, [wa_fs8]            ; K = fcx fs8 + 256 W: its feet's line,
     imul word [wa_fcx]          ; sub-columns x 256 (wa_fjl's too)
     add ah, [wa_w]
@@ -4219,11 +4223,117 @@ wa_figure:
     jae .lodd                   ; first seven joints, the ends, joined by
     mov cl, 4                   ; five straight limbs (q 4: wa_fjl,
     jmp .lodd                   ; wa_fjdone)
-; a keyframe's place, and a facing's offset in one (no multiply a figure)
-wa_kfo:
-%assign wa_i 0
+; wa_kfrows - DI = a near figure, [wa_pa] and [wa_pb] its two keyframes'
+; facing rows: a HOT keyframe's (IDLE, RUN) is here already and nothing is
+; done; a cold one's (bit 15: a flinch, a death) is in the POSE part
+; (wa_posg, WIREARENA-PARTS-PLAN 8.6), and the two are brought into
+; DS, and wa_pa and wa_pb pointed at them - the joints' loops (wa_fjl) read
+; them through DS as they always did, and write the joints with STOSW, so ES
+; cannot be the pose part's there (B - A is taken from the pointers, so the
+; two may sit either way round). Each figure keeps two rows (wa_kfrow), each
+; keyed by which row it holds in the record's WR_FKA / WR_FKB (the part's
+; own bytes: the game sends 0..19), and either may be A or B: standing
+; keyframes copy nothing, and an animation stepping on - its new A its old
+; B - copies one row. Keeps every register but the flags
+wa_kfrows:
+    test byte [wa_pa+1], 0x80   ; (a hot keyframe - IDLE, RUN: read where
+    jnz .far                    ; it is, which is nearly always. A and B
+    ret                         ; are one animation's: both here, or not)
+.far:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, wa_kfrow            ; BX = this figure's first row (three
+    cmp di, wa_figs + F_SIZE    ; figures)
+    jb .b
+    add bx, WA_NJ*4
+    cmp di, wa_figs + 2*F_SIZE
+    jb .b
+    add bx, WA_NJ*4
+.b:
+    mov si, [wa_pa]             ; (a key is the row's offset + 1: never 0,
+    inc si                      ; which is what a record starts as)
+    mov ax, [wa_pb]
+    inc ax
+    mov dx, bx                  ; A: held in either row?
+    cmp si, [di+WR_FKA]
+    je .ah
+    add dx, WA_NJ*2
+    cmp si, [di+WR_FKB]
+    je .ah
+    mov dx, bx                  ; ...no: into the row not holding B
+    cmp ax, [di+WR_FKA]
+    jne .a0
+    add dx, WA_NJ*2
+    mov [di+WR_FKB], si
+    jmp short .ac
+.a0:
+    mov [di+WR_FKA], si
+.ac:
+    call .cp
+.ah:
+    mov [wa_pa], dx
+    mov cx, dx                  ; (A's row)
+    mov dx, bx                  ; B: held in either row?
+    cmp ax, [di+WR_FKA]
+    je .bh
+    add dx, WA_NJ*2
+    cmp ax, [di+WR_FKB]
+    je .bh
+    mov dx, bx                  ; ...no: into the row A is not in
+    cmp cx, bx
+    jne .b0
+    add dx, WA_NJ*2
+    mov [di+WR_FKB], ax
+    jmp short .bc
+.b0:
+    mov [di+WR_FKA], ax
+.bc:
+    mov si, ax
+    call .cp
+.bh:
+    mov [wa_pb], dx
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.cp:                            ; SI = a key, DX = a row of ours: the row
+    push cx                     ; out of the pose part, under one DS switch
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    dec si
+    and si, 0x7FFF              ; (the pose part's offset)
+    mov di, dx
+    mov cx, [wa_posg]
+    push ds
+    mov ds, cx
+    mov cx, WA_NJ
+    cld
+    rep movsw
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
+
+; a keyframe's place in the POSE part (wa_posg: WIREARENA-PARTS-PLAN 8.6),
+; and a facing's offset in one (no multiply a figure)
+wa_kfo:                         ; (the hot ones here; the rest the pose
+%assign wa_i 0                  ; part's, bit 15 set: wa_kfrows)
 %rep WA_NFRAMES
-    dw wa_pose + wa_i*WA_FRAMESZ
+  %if wa_i < WA_KHOT
+    dw wa_pose0 + wa_i*WA_FRAMESZ
+  %else
+    dw 0x8000 | ((wa_i - WA_KHOT)*WA_FRAMESZ)
+  %endif
 %assign wa_i wa_i+1
 %endrep
 wa_fco:
