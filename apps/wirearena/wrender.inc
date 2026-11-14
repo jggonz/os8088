@@ -144,8 +144,10 @@ WA_VAR wa_thw, 2                ; wa_thing's shape: half width, from and
 WA_VAR wa_th0, 2                ;   to above its z, units; attribute
 WA_VAR wa_th1, 2
 WA_VAR wa_tha, 1
+%if wa_th0 != wa_thw + 2 || wa_th1 != wa_thw + 4 || wa_tha != wa_thw + 6
+    %error "wa_thshape copies a shape row over wa_thw, wa_th0, wa_th1, wa_tha"
+%endif
 WA_VAR wa_thhb, 1               ;   a column's quadrant bits
-WA_VAR wa_pkm, 1                ;   the pickups still to draw
 WA_VAR wa_thz, 2                ;   its z
 WA_VAR wa_thdx, 2               ;   its offset from the eye, x (wa_view)
 WA_VAR wa_ovoldn, 2             ; the overlay's cells as it last came in:
@@ -3157,6 +3159,13 @@ wa_figure:
     jne .nx
     mov cx, dx
     dec cx
+    jmp short .nx
+.r16:                           ; (a figure at arm's length: 16 bits)
+    xor ah, ah
+    mul bx
+    mov al, ah
+    mov ah, dl
+    jmp short .rd8
 .nx:
     mov dl, [di+F_ANIM]
     add ax, dx
@@ -3185,10 +3194,13 @@ wa_figure:
     mov [wa_fkh], ax            ; ...and Khi
     mov bp, ax
     mov al, cl                  ; THE BOX. Its sub-columns: Khi - r to
-    xor ah, ah                  ; Khi + r + 1 (the head's 2x2 reaches one
-    mul word [wa_fs8]           ; further), r = reach x fs8 / 256 + 1
+    mov bx, [wa_fs8]            ; Khi + r + 1 (the head's 2x2 reaches one
+    or bh, bh                   ; further), r = reach x fs8 / 256 + 1 (a
+    jnz .r16                    ; byte by a byte nearly always)
+    mul bl
     mov al, ah
-    mov ah, dl
+    xor ah, ah
+.rd8:
     inc ax
     mov bx, bp
     sub bx, ax                  ; BX = the left one
@@ -3233,8 +3245,15 @@ wa_figure:
     add ah, [wa_hh]             ; (E = eye fv8 + 256 hh + 255, mod 2^16:
     mov [wa_fe], ax             ; wa_fjl's narrow sum)
     mov al, ch                  ; ...and the top's: no higher than the
-    xor ah, ah                  ; floor's less (top fv8 >> 8) + 1, and one
-    mul word [wa_fv8]           ; more for the head's 2x2
+    mov cx, [wa_fv8]            ; floor's less (top fv8 >> 8) + 1, and one
+    or ch, ch                   ; more for the head's 2x2
+    jz .t8
+    xor ah, ah
+    mul cx
+    jmp short .td8
+.t8:
+    mul cl
+.td8:
     mov al, ah
     xor ah, ah
     neg ax
@@ -4349,11 +4368,11 @@ wa_pickups:
     mov al, [si]                ; the ones this cell may see...
     and al, [wa_pkon]           ; ...that are there
     jz .out
-    mov [wa_pkm], al
     mov si, wa_pks
-.p:
-    shr byte [wa_pkm], 1
+.p:                             ; AL = the pickups still to draw, a bit each
+    shr al, 1
     jnc .next
+    push ax
     push si
     mov bl, [si+6]              ; its kind's shape
     xor bh, bh
@@ -4367,30 +4386,29 @@ wa_pickups:
     mov bx, [si+2]
     call wa_thing
     pop si
+    pop ax
 .next:
     add si, WA_PKSZ
-    cmp byte [wa_pkm], 0
-    jne .p
+    or al, al
+    jnz .p
 .out:
     ret
 
-; wa_thshape - BX = a shape row (wa_pkshape's): into wa_thw..wa_tha, the
-; attribute the adapter's. Keeps all but BX
+; wa_thshape - BX = a shape row (wa_pkshape's): into wa_thw..wa_tha (which
+; lie in its order), the attribute the adapter's. Keeps all but AX, BX, DI
 wa_thshape:
-    push ax
-    mov ax, [bx]
-    mov [wa_thw], ax
-    mov ax, [bx+2]
-    mov [wa_th0], ax
-    mov ax, [bx+4]
-    mov [wa_th1], ax
-    mov al, [bx+6]
+    xchg si, bx
+    mov di, wa_thw
+    movsw
+    movsw
+    movsw
+    lodsw                       ; (the colour's attribute, the mono one)
     cmp byte [wa_mono], 0
     je .c
-    mov al, [bx+7]
+    mov al, ah
 .c:
-    mov [wa_tha], al
-    pop ax
+    stosb
+    mov si, bx
     ret
 
 ; wa_rockets - after the figures: each rocket a bright dot, each explosion a
