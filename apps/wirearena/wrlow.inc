@@ -91,7 +91,7 @@ WA_VAR wl_ks, 2                 ; its fraction's step, what a carry takes
 WA_VAR wl_dcm, 2                ; off the fraction, and the half-row's step
 WA_VAR wl_dir, 2
 WA_VAR wl_col0, 2               ; a pass's first column x 2
-WA_VAR wl_cnt, 1                ; ...and its columns
+WA_VAR wl_sc, 2                 ; the loops' DX: the stamp, the pass's columns
 WA_VAR wl_prev, 2               ; the column before's half-row (a steep step)
 WA_VAR wl_tag, 1
 WA_VAR wl_k, 2                  ; a flight: the treads left, the count, the
@@ -275,6 +275,7 @@ wa_lowbox:
     mov [wl_need], al
     mov byte [wl_vk], 0
     mov al, [wa_frame]          ; the floor's pair, once a frame (wa_render
+    mov [wl_sc], al             ; (the loops' stamp)
     cmp al, [wl_ffr]            ; clears wl_ffr) - and the box's own
     je .hpair                   ; height's, kept for the next box of that
     mov [wl_ffr], al            ; height in the frame
@@ -444,27 +445,27 @@ wl_face:
 
 ; wl_post - SI = a corner's record (an offset into wl_c), CX = 7 for a
 ; face's start corner (the first column whose centre is past it) or 7 - 16
-; for its end (the last short of it): its post, `│` from the top to the
-; floor, against the clip
-wl_post:                        ; SI = the corner's record, CX = 7 (or 7 - 16
-    mov bx, [wl_c+si+WL_CV]     ; for the end's rule: one column less)
+; for its end (the last short of it): its post, `│` in the rows between its
+; top's and its floor's, against the clip - every cell tested (first one
+; wins). Clobbers AX, BX, CX, DX, SI, DI
+wl_post:
+    mov bx, [wl_c+si+WL_CV]
     test byte [wa_vok+bx], 1
     jz .out                     ; (not in the view: off the screen, or behind)
-    mov bx, [wl_c+si+WL_KT]     ; top and floor, half-rows, rounded
-    add bx, 2
-    sar bx, 1
-    sar bx, 1
     mov ax, [wl_c+si+WL_KF]
     add ax, 2
     sar ax, 1
-    sar ax, 1
+    sar ax, 1                   ; AX = the floor, half-rows, rounded
+    mov bx, [wl_c+si+WL_KT]
+    add bx, 2
+    sar bx, 1
+    sar bx, 1
+    sar bx, 1
+    inc bx                      ; BX = the row under the top's
     mov dx, ax                  ; (no cell between them, whatever the clip:
     sar dx, 1                   ; the floor's row at most one under the
-    mov di, bx                  ; top's - a ramp's low corners, on the
-    sar di, 1                   ; floor, and every short post - r5)
-    inc di
-    cmp dx, di
-    jle .out
+    cmp dx, bx                  ; top's - a ramp's low corners, on the
+    jle .out                    ; floor, and every short post - r5)
     mov di, [wl_c+si+WL_KC]     ; its column: as wa_span's corners
     add di, cx
     mov cl, 4
@@ -473,17 +474,32 @@ wl_post:                        ; SI = the corner's record, CX = 7 (or 7 - 16
     cmp di, [wa_w]
     jge .out
     shl di, 1                   ; DI = the column x 2
-    cmp word [wa_cov+di], 0
+    cmp byte [wa_cov+di], 0
     jne .out                    ; (shut)
-    mov si, di                  ; SI = the column x 2
-    cmp ax, [wa_cclip+si]
+    cmp ax, [wa_cclip+di]
     jle .clp
-    mov ax, [wa_cclip+si]
+    mov ax, [wa_cclip+di]
 .clp:
+    sar ax, 1                   ; the row to stop before (the clip is WA_HR
+    or bx, bx                   ; at most: never past the last)
+    jns .tok
+    xor bx, bx
+.tok:
+    sub ax, bx
+    jle .out
+    mov cx, ax                  ; CX = the rows
+    shl bx, 1
+    mov bx, [wa_rowo2+bx]
+    add bx, di
     mov di, [wa_lp]
     mov dl, [wa_frame]
-    mov cl, 1
-    call wa_corner              ; (wa_vedge: every cell tested)
+    mov al, 0xB3
+    mov ah, [wa_wcol]
+    mov si, [wa_rowo2+2]        ; (a row's offset: row 1's)
+.row:
+    WPLOT
+    add bx, si
+    loop .row
     mov [wa_lp], di
 .out:
     ret
@@ -611,7 +627,7 @@ wl_draw:
     sub dx, bx
     jl .none
     inc dx                      ; DX = the columns
-    mov [wl_cnt], dl
+    mov [wl_sc+1], dl
     mov cx, dx
     shl bx, 1                   ; (the first x 2 from here)
     push ax
@@ -649,6 +665,10 @@ wl_draw:
     add ax, 8
     sub ax, cx
     mov [wa_fs], ax
+    cmp ax, 17                  ; (wl_run: dc with the left end on the
+    sbb ax, ax                  ; screen, else 0)
+    and ax, bp
+    mov [wl_dcm], ax
     mov bx, [wa_tag]            ; its tag (wa_span.reg's): its inverse
                                 ; depth's line
     add bx, 2
@@ -680,59 +700,36 @@ wl_draw:
     mov word [wa_left], 0       ; (more spans than the table holds: drawing
     ret                         ; stops this frame - never seen)
 
-; wl_run - AX, BX = an edge's two ends (quarter half-rows, left and right),
-; CX = its loops (wl_ltop or wl_lfloor: the steep one, the shallow), [wa_dc],
-; [wa_fs], [wl_col0], [wl_cnt], [wl_tag] the pass's: the edge set up and
-; walked across the pass's columns
+; wl_run - AX = t1, BX = t2 (an edge's ends, left and right, quarter
+; half-rows), CX = its loops (wl_ltop or wl_lfloor: the steep one, the
+; shallow), the pass's [wa_dc], [wa_fs], [wl_dcm], [wl_col0], [wl_sc] and
+; [wl_tag]: the edge's start and step, and on into its loop over the pass's
+; columns (which stores the list's pointer and returns).
+; A SHALLOW edge (under a half-row a column - most): [wl_hr] its half-row
+; at the first column (rounded: a half added), BP the fraction there and
+; [wl_ks] its step, in the run loops' form - BP + k carries when the
+; half-row moves on by [wl_dir] (+1 down the screen, -1 up), and the loop
+; then takes [wl_dcm] off BP. With the left end on the screen (the first
+; centre within a column of it: [wl_dcm] is dc) that is the edge itself and
+; NO DIVIDE: the fraction counts in dc-ths of a half-row - the step is
+; 4 |t2 - t1| of them, the start (t1 + 2) / 4 half-rows and |t2 - t1| x fs / 4
+; dc-ths (one multiply) - kept less dc so that passing dc is the carry; an
+; edge going up keeps the complement (as FLATPASS's does). With the left
+; end off the screen (clipped, or a box the screen's edge cuts: fs can be
+; hundreds of columns; [wl_dcm] is 0, which sends every edge this way) it
+; is wa_span.edge's start and step, exact to a 65536th: the same form with
+; nothing to take off.
+; A STEEP one: CX.BP its value at the first column and [wl_stw].[wl_stf]
+; its step, 16.16 (wa_span.edge's).
 wl_run:
     push cx
-    call wl_edge
-    pop bx
-    jc .go                      ; (steep: CX.BP its value)
-    mov cl, [wl_tag]            ; (shallow: CL the tag, BP its fraction)
-    inc bx
-    inc bx
-.go:
-    mov si, [wl_col0]
-    mov di, [wa_lp]
-    mov dl, [wa_frame]
-    mov dh, [wl_cnt]
-    mov ah, [wa_wcol]
-    call [bx]
-    mov [wa_lp], di
-    ret
-wl_ltop:    dw wl_l01s, wl_rtop
-wl_lfloor:  dw wl_f1, wl_rfloor
-
-; wl_edge - AX = t1, BX = t2 (an edge's ends, quarter half-rows), [wa_dc]
-; the columns x 16 between them, [wa_fs] the first column's centre past the
-; left end, x 16: the edge's start and step.
-; CF = 0, a SHALLOW edge (under a half-row a column - most): [wl_hr] its
-; half-row at the first column (rounded: a half added), BP the fraction
-; there and [wl_ks] its step, in the run loops' form - BP + k carries when
-; the half-row moves on by [wl_dir] (+1 down the screen, -1 up), and the
-; loop then takes [wl_dcm] off BP. With the left end on the screen (the
-; first centre within a column of it) that is the edge itself and NO
-; DIVIDE: the fraction counts in dc-ths of a half-row - the step is 4 |t2 -
-; t1| of them, the start (t1 + 2) / 4 half-rows and |t2 - t1| x fs / 4 dc-ths
-; (one multiply) - kept less dc so that passing dc is the carry; an edge
-; going up keeps the complement (as FLATPASS's does). With the left end off
-; the screen (clipped, or a box the screen's edge cuts: fs can be hundreds
-; of columns) it is wa_span.edge's start and step, exact to a 65536th:
-; the same form with nothing to take off.
-; CF = 1, a STEEP one: CX.BP its value at the first column and
-; [wl_stw].[wl_stf] its step, 16.16 (wa_span.edge's).
-; Clobbers AX, BX, DX, SI, DI.
-wl_edge:
     mov di, ax                  ; DI = t1
     sub bx, ax
     mov ax, bx
     cwd                         ; DX = the change's sign
     xor ax, dx
     sub ax, dx                  ; AX = |t2 - t1|
-    cmp word [wa_fs], 16
-    ja .exact
-    mov cx, [wa_dc]
+    mov cx, [wl_dcm]
     mov si, ax
     shl si, 1
     jc .exact
@@ -741,7 +738,6 @@ wl_edge:
     cmp si, cx
     jae .exact                  ; (a half-row a column or more)
     mov [wl_ks], si
-    mov [wl_dcm], cx
     mov bp, dx                  ; BP = the sign...
     mul word [wa_fs]            ; (under 65536: fs is 16 at most and the
     and bp, 3                   ; change under dc / 4, dc under 9,600 with
@@ -785,11 +781,20 @@ wl_edge:
     not si                      ; (dc - 1 - a, less dc)
     mov ax, -1
 .set:
+    mov bp, si
+.set2:
     mov [wl_dir], ax
     mov [wl_hr], bx
-    mov bp, si
-    clc
-    ret
+    pop bx
+    mov cl, [wl_tag]            ; (shallow: CL the tag, BP its fraction)
+    inc bx
+    inc bx
+.go:
+    mov si, [wl_col0]
+    mov di, [wa_lp]
+    mov dx, [wl_sc]             ; DL = the stamp, DH = the columns
+    mov ah, [wa_wcol]
+    jmp [bx]
 .exact:
     mov ax, di
     add bx, di
@@ -797,27 +802,26 @@ wl_edge:
     call wa_span.edge           ; BX.CX the start, DX.AX the step
     cmp byte [wa_steep], 0
     jne .steep
-    mov [wl_hr], bx
-    mov word [wl_dcm], 0
     mov bp, cx
-    mov bx, 1
+    mov cx, 1
     or dx, dx
     jns .ex1
     neg ax                      ; (up the screen: the complement)
     not bp
-    neg bx
+    neg cx
 .ex1:
     mov [wl_ks], ax
-    mov [wl_dir], bx
-    clc
-    ret
+    xchg ax, cx
+    jmp .set2
 .steep:
     mov [wl_stw], dx
     mov [wl_stf], ax
     mov bp, cx
     mov cx, bx
-    stc
-    ret
+    pop bx
+    jmp .go
+wl_ltop:    dw wl_l01s, wl_rtop
+wl_lfloor:  dw wl_f1, wl_rfloor
 
 ; wl_rtop - a pass's TOP edge, shallow (wl_edge's): its columns from SI (x 2),
 ; DH of them, at [wl_hr] and BP stepping by [wl_ks]; CL the pass's tag, AH the
@@ -909,6 +913,7 @@ wl_rtop:
     jnc .run
     jmp .turn
 .done:
+    mov [wa_lp], di
     ret
 
 ; wl_rfloor - a pass's FLOOR edge alone, shallow (wl_draw's, r5): wl_rtop's
@@ -953,6 +958,7 @@ wl_rfloor:
     jnc .off
     jmp .turn
 .done:
+    mov [wa_lp], di
     ret
 
 ; wl_l01s - a pass's TOP edge, STEEP (a half-row a column or more): its
@@ -977,13 +983,14 @@ wl_l01s:
 .col:
     cmp byte [wa_cov+si], 0
     jne .shut                   ; (shut)
-    push cx                     ; the top's step
-    mov ax, cx
-    mov cx, [wl_prev]
-    mov [wl_prev], ax
+    mov bx, cx                  ; a step of two half-rows or more from
+    sub bx, [wl_prev]           ; the column before's is filled
+    mov [wl_prev], cx
+    inc bx                      ; (-1..+1 -> 0..2: none)
+    cmp bx, 3
+    jb .nf
     call wl_fillc
-    pop cx
-    mov ah, [wa_wcol]
+.nf:
     cmp cx, [wa_cclip+si]
     jge .next                   ; under something nearer, or below the screen
     or cx, cx
@@ -1014,6 +1021,7 @@ wl_l01s:
     inc si
     dec dh
     jnz .col
+    mov [wa_lp], di
     ret
 .full:
     mov [wa_cst+(WA_CSTK-1)*2*WA_MAXW+si+1], cl
@@ -1038,13 +1046,14 @@ wl_f1:
 .col:
     cmp byte [wa_cov+si], 0
     jne .shut                   ; (shut)
-    push cx                     ; its step
-    mov ax, cx
-    mov cx, [wl_prev]
-    mov [wl_prev], ax
+    mov bx, cx                  ; a step of two half-rows or more from
+    sub bx, [wl_prev]           ; the column before's is filled
+    mov [wl_prev], cx
+    inc bx                      ; (-1..+1 -> 0..2: none)
+    cmp bx, 3
+    jb .nf
     call wl_fillc
-    pop cx
-    mov ah, [wa_wcol]
+.nf:
     cmp cx, [wa_cclip+si]
     jae .next
     mov bx, cx
@@ -1061,18 +1070,19 @@ wl_f1:
     inc si
     dec dh
     jnz .col
+    mov [wa_lp], di
     ret
 wl_k160:    dw 0, 2*WA_MAXW, 4*WA_MAXW, 6*WA_MAXW
 
-; wl_fillc - AX = a column's edge, CX = the last column's (half-rows), SI =
-; the column x 2: a step of two half-rows or more between them filled
-; (wa_slope), unless both are at or under the clip. Clobbers AX, BX, CX
+; wl_fillc - CX = a column's edge (half-rows), BX = its step from the column
+; before's + 1 (not 0..2), SI = the column x 2: the step filled (wa_slope),
+; unless both ends are at or under the clip. Keeps CX; AH the colour again.
+; Clobbers AL, BX
 wl_fillc:
-    mov bx, ax
-    sub bx, cx
-    inc bx                      ; -1..+1 -> 0..2: no step
-    cmp bx, 3
-    jb .no
+    push cx
+    mov ax, cx
+    sub cx, bx
+    inc cx                      ; CX = the column before's
     mov bx, cx
     cmp bx, ax
     jl .min
@@ -1080,8 +1090,10 @@ wl_fillc:
 .min:
     cmp bx, [wa_cclip+si]
     jge .no
-    jmp wa_slope
+    call wa_slope
 .no:
+    pop cx
+    mov ah, [wa_wcol]
     ret
 
 ; wl_shutc - SI = a column x 2: the column covered from the screen's top -
