@@ -2627,7 +2627,7 @@ wa_eoff:
 %endif                          ; half-row in CX - a column's clip test)
     mov bx, [wa_fh]             ; (wa_fcell, inline)
     cmp bx, WA_HR
-    jae %%off
+    jae %%off0
 %if %3
     mov cx, bx
 %endif
@@ -2686,6 +2686,9 @@ wa_eoff:
     inc word [wa_ncl]
 %endif
     jmp %%adv
+%%off0:                         ; off the screen at the first column: and
+    xor bx, [%2]                ; moving further off (above it and going
+    jns %%gone                  ; up, or under it and down)?
 %%off:                          ; (the edge is off the screen here)
 %if %1
     cmp word [wa_cov+si], 0
