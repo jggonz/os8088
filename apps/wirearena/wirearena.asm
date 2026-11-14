@@ -175,51 +175,49 @@ wa_main:
     mov ax, (WA_TICK*4) & 0xFFFF
     mov dx, (WA_TICK*4) >> 16
 .owe:
+    xor cx, cx                  ; CX = the ticks owed (four at most): the
+.cnt:                           ; debt's whole ticks, counted in registers -
+    sub ax, WA_TICK             ; the rest of it is the next frame's
+    sbb dx, 0
+    jc .cntd
+    inc cx
+    jmp .cnt
+.cntd:
+    add ax, WA_TICK
+    adc dx, 0
     mov [wa_acc], ax
     mov [wa_acc+2], dx
+    jcxz .simmed
 .sim:
-    cmp word [wa_acc+2], 0
-    jne .step
-    cmp word [wa_acc], WA_TICK
-    jb .simmed
-.step:
-    sub word [wa_acc], WA_TICK
-    sbb word [wa_acc+2], 0
+    push cx
     call wa_tick
-    jmp .sim
+    pop cx
+    loop .sim
 .simmed:
     call wa_frame_input
     cmp byte [wa_quit], 0
     jne .out
-    call pit_now
-    mov [wa_t0], ax
-    mov [wa_t0+2], dx
-    call wa_render
-    call pit_now
-    mov bx, ax
-    mov cx, dx
-    sub ax, [wa_t0]
-    sbb dx, [wa_t0+2]
+    call pit_now                ; THE METER'S SUMS, as the clock's readings
+    sub [wa_trn], ax            ; themselves: render's less its start and
+    sbb [wa_trn+2], dx          ; plus its end, present's the same - whole
+    call wa_render              ; again once the frame is over, which is
+    call pit_now                ; when wa_meter reads them
     add [wa_trn], ax
     adc [wa_trn+2], dx
-    mov [wa_t0], bx
-    mov [wa_t0+2], cx
     cmp byte [wa_vsync], 0
     je .present
     mov al, FSXW_VSYNC
     call OSAPI_FSX_WAIT
     call pit_now
-    mov [wa_t0], ax
-    mov [wa_t0+2], dx
 .present:
+    sub [wa_tpr], ax
+    sbb [wa_tpr+2], dx
     call wa_present
     call pit_now
-    push dx
-    push ax
-    sub ax, [wa_t0]
-    sbb dx, [wa_t0+2]
     add [wa_tpr], ax
     adc [wa_tpr+2], dx
+    push dx
+    push ax
     call wa_meter
     pop ax
     pop dx
@@ -260,6 +258,11 @@ wa_setmode:
     inc si
     inc si
     loop .rows
+    mov ax, [wa_rowoff+WA_ROWS*2] ; (the HUD's row, a far pointer into text
+    shl ax, 1                   ; memory: wa_putc's and wa_putn's)
+    mov [wa_hudp], ax
+    mov ax, [wa_vseg]
+    mov [wa_hudp+2], ax
     call wa_rsync               ; the mode into the renderer part, and its
     mov bx, WRV_INIT            ; row tables, stamps and lists started again
     call wa_rcall
@@ -278,7 +281,8 @@ wa_setmode:
     mov [wa_ncells+2], ax
     mov si, wa_hudtpl           ; the HUD's fixed text
     call wa_hudfix
-    mov byte [wa_ovd], 1        ; (the overlay's cells move with the width)
+    mov byte [wa_ovd], 1        ; (the overlay's cells move with the width,
+    mov word [wa_spk], -1       ; the weapon's kept ones too)
     clc
 .out:
     ret
@@ -585,6 +589,7 @@ wa_frame_input:
     jc .nomouse                 ; kern_small refuses: keys only
     mov bl, al                  ; the buttons
     sub [wa_pitch], dx          ; pitch: down is +dy, the horizon rises
+    jcxz .clamp                 ; (the hand still: no turn)
     mov ax, cx                  ; yaw: right is clockwise, angle falls
     mov cx, 96
     imul cx
@@ -593,13 +598,17 @@ wa_frame_input:
 .nomouse:
     xor bl, bl
 .clamp:                         ; 112 quarter half-rows up, 290 down: 33
-    cmp word [wa_pitch], WA_PITCHU ; and 59 degrees at 75, the same reach
-    jle .lo                     ; from the tower and its foot (HEIGHTS-
-    mov word [wa_pitch], WA_PITCHU ; PLAN 7.1.1; down is a falling pitch)
-.lo:
-    cmp word [wa_pitch], -WA_PITCHD
+    mov ax, [wa_pitch]          ; and 59 degrees at 75, the same reach
+    cmp ax, WA_PITCHU           ; from the tower and its foot (HEIGHTS-
+    jg .cu                      ; PLAN 7.1.1; down is a falling pitch)
+    cmp ax, -WA_PITCHD
     jge .fire
-    mov word [wa_pitch], -WA_PITCHD
+    mov ax, -WA_PITCHD
+    jmp .cs
+.cu:
+    mov ax, WA_PITCHU
+.cs:
+    mov [wa_pitch], ax
 .fire:
     xor al, al                  ; TAB HELD: the scoreboard over the view
     KEYMAP_TEST wa_kmap, 0x0F   ; (AI-PLAN 5), rebuilt as it comes and goes
@@ -662,20 +671,50 @@ WA_K_SPACE  equ 256
 %endmacro
 
 ; wa_keys - the held keys into [wa_kbits] (WA_K_*), and the whole map into
-; wa_kmap for wa_frame_input's trigger. Keeps all but the flags.
+; wa_kmap for wa_frame_input's trigger. The map's bytes the keys are in are
+; taken into AX a word at a time - W with S and A, the arrows together - so
+; seven of the nine tests are of a register. Keeps all but AX and the flags.
+%define WA_KB(s) ((s) >> 3)             ; a scancode's byte in the map...
+%define WA_KM(s) (1 << ((s) & 7))       ; ...and its bit there
+%if WA_KB(0x1F) != WA_KB(0x11)+1 || WA_KB(0x1E) != WA_KB(0x1F) || WA_KB(KSC_LEFT) != WA_KB(KSC_UP) || WA_KB(KSC_RIGHT) != WA_KB(KSC_UP) || WA_KB(KSC_DOWN) != WA_KB(KSC_UP)+1
+ %error "wa_keys: the scancodes are not where its two words expect them"
+%endif
 wa_keys:
     push bx
     push di
     mov di, wa_kmap
     call OSAPI_KEY_MAP          ; every key at once (and the first call arms)
     xor bx, bx
-    WA_KBIT KSC_LEFT, WA_K_LEFT
-    WA_KBIT KSC_RIGHT, WA_K_RIGHT
-    WA_KBIT KSC_UP, WA_K_UP
-    WA_KBIT KSC_DOWN, WA_K_DOWN
-    WA_KBIT 0x11, WA_K_W
-    WA_KBIT 0x1F, WA_K_S
-    WA_KBIT 0x1E, WA_K_A
+    mov ax, [wa_kmap+WA_KB(KSC_UP)] ; AL: up, left, right; AH: down
+    test al, WA_KM(KSC_LEFT)
+    jz .l
+    or bl, WA_K_LEFT
+.l:
+    test al, WA_KM(KSC_RIGHT)
+    jz .r
+    or bl, WA_K_RIGHT
+.r:
+    test al, WA_KM(KSC_UP)
+    jz .u
+    or bl, WA_K_UP
+.u:
+    test ah, WA_KM(KSC_DOWN)
+    jz .d
+    or bl, WA_K_DOWN
+.d:
+    mov ax, [wa_kmap+WA_KB(0x11)] ; AL: W; AH: S and A
+    test al, WA_KM(0x11)
+    jz .w
+    or bl, WA_K_W
+.w:
+    test ah, WA_KM(0x1F)
+    jz .s
+    or bl, WA_K_S
+.s:
+    test ah, WA_KM(0x1E)
+    jz .a
+    or bl, WA_K_A
+.a:
     WA_KBIT 0x20, WA_K_D
     WA_KBIT KSC_SPACE, WA_K_SPACE
     mov [wa_kbits], bx
@@ -684,6 +723,8 @@ wa_keys:
     ret
 
 wa_tick:
+    cmp byte [wa_lkon], 0
+    je .c_lk
     call wa_lktick              ; (a linked match: the cable, LINK-PLAN 4.2)
 .c_lk:                          ; (tools' stop: the link's cost)
     mov al, [wa_frame]          ; this frame's first tick polls the keys
@@ -739,10 +780,7 @@ wa_tick:
 .walk:
     or bx, bx
     jz .jump                    ; standing: no step, nothing to collide
-    mov ax, [wa_ang]
-    mov cl, 6
-    shr ax, cl
-    call wa_sincos              ; AX = sin, DX = cos (Q14)
+    call wa_camsc               ; AX = sin, DX = cos (Q14)
     sar ax, 1                   ; Q13, so forward + strafe cannot overflow
     sar dx, 1
     ; vx = fwd*cos + right*sin ; vy = fwd*sin - right*cos
@@ -773,13 +811,13 @@ wa_tick:
     mov ax, si
     mov cx, WA_MSPD
     imul cx                     ; DX:AX = the step, 16.16 units
-    mov bx, [wa_px]
+    mov bp, [wa_px]
     mov cx, [wa_pxf]
     add [wa_pxf], ax
     adc [wa_px], dx
-    call wa_collide
+    call wa_collide             ; (keeps CX, DI, BP)
     jnc .ymove
-    mov [wa_px], bx
+    mov [wa_px], bp
     mov [wa_pxf], cx
 .ymove:
     or di, di
@@ -787,13 +825,13 @@ wa_tick:
     mov ax, di
     mov cx, WA_MSPD
     imul cx
-    mov bx, [wa_py]
+    mov bp, [wa_py]
     mov cx, [wa_pyf]
     add [wa_pyf], ax
     adc [wa_py], dx
     call wa_collide
     jnc .jump
-    mov [wa_py], bx
+    mov [wa_py], bp
     mov [wa_pyf], cx
 .jump:
     cmp byte [wa_aflat], 0      ; HEIGHTS: the floor under the feet, the
@@ -801,11 +839,10 @@ wa_tick:
     call wa_hjump               ; lift (HEIGHTS-PLAN 3.1, 3.2)
     jmp .grounded
 .flatj:
-    cmp word [wa_jz], 0
-    jne .air
-    cmp word [wa_jv], 0
-    jne .air
-    test word [wa_kbits], WA_K_SPACE
+    mov ax, [wa_jz]
+    or ax, [wa_jv]
+    jnz .air
+    test byte [wa_kbits+1], WA_K_SPACE >> 8
     jz .grounded
     mov word [wa_jv], WA_JUMPV
 .air:
@@ -833,42 +870,59 @@ wa_tick:
     call wa_ptick
 .figs0:
     mov byte [wa_lbn], 0        ; (the bots on the lift this tick: the
-    mov di, wa_figs             ; lift's riders the next, wa_ltick)
-    mov cx, WA_NFIG
-.fig:
-    push cx
-    call wa_figtick
-    pop cx
-    push cx
-    call wa_bthink              ; (AI-PLAN 4: sees, faces, shoots)
+                                ; lift's riders the next, wa_ltick)
+    mov bx, [wa_tkn]            ; WHOSE TURN TO LOOK (AI-PLAN 4.1): each bot
+    and bx, 7                   ; every eighth tick, 0.27 s, on the tick
+    shl bx, 1                   ; where tick + (WA_NFIG - its index) x 3 is a
+    mov ax, [wa_blkt+bx]        ; multiple of 8 - so no two on one tick
+    mov [wa_blook], ax
+    mov di, wa_figs
+    cmp word [wa_bdet], 0       ; (a bench or - its high byte, wa_lkon - a
+    jne .lfig                   ; linked match: each figure is asked which)
+.fig:                           ; THE USUAL MATCH: each figure is ours, and
+    call wa_figtick.solo        ; has its own mind
+    call wa_bthink.mine         ; (AI-PLAN 4: sees, faces, shoots)
 .c_bt:                          ; (tools' stop: its cost, by breakpoints)
-    pop cx
     add di, F_SIZE
-    loop .fig
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jb .fig
+.figd:
     inc word [wa_tkn]
     mov al, [wa_lbn]
     mov [wa_lbot], al
 .c_w:                           ; (the labels: tools/watrace.py's stops)
     call wa_wtick               ; the weapon's reload and its next shot,
 .c_rk:                          ; the rockets, the pickups (WEAPONS-PLAN)
+    cmp byte [wa_rkn], 0        ; (none live: the usual tick)
+    je .c_pk
     call wa_rktick
 .c_pk:
     jmp wa_pktick
+.lfig:
+    call wa_figtick
+    cmp byte [wa_bdet], 0       ; (a bench's dummies do not think)
+    jne .lnb
+    call wa_bthink
+.lnb:
+    add di, F_SIZE
+    cmp di, wa_figs + WA_NFIG*F_SIZE
+    jb .lfig
+    jmp .figd
 
-; wa_collide - CF = 1 when the player at [wa_px],[wa_py] is inside a wall.
-; Keeps every register. The player's square is widened once (x +- R, y +-
-; R), so a box is four compares against its own corners.
+%if WA_NFIG != 3
+ %error "wa_blkt and wa_bidx are written for three figures"
+%endif
+wa_blkt:                        ; the figure that looks, by the tick's low
+    dw 0, 0, wa_figs + F_SIZE, 0, 0, wa_figs + 2*F_SIZE, 0, wa_figs ; bits
+
+; wa_collide - CF = 1 when the player at [wa_px],[wa_py] may not stand
+; there: outside the room; on a FLAT arena inside a wall (every box there is
+; as tall as the tallest, so the floor under the player's square - wa_floor
+; over every box, each widened by the radius - is above 0 exactly there);
+; on the heights where that floor is more than a step above the feet (in
+; the air: above the feet at all). Keeps CX, DI, BP (its two callers' own:
+; the tick's steps in x and in y); clobbers AX, BX, DX, SI.
 wa_collide:
-    cmp byte [wa_aflat], 0
-    jne .flat
-    jmp wa_hcollide
-.flat:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push bp
     mov ax, [wa_px]
     mov bx, [wa_py]
     cmp ax, WA_ROOM_X0 + WA_RAD
@@ -879,37 +933,26 @@ wa_collide:
     jl .hit
     cmp bx, WA_ROOM_Y1 - WA_RAD
     jg .hit
-    mov dx, ax
-    add dx, WA_RAD              ; DX = x + R, AX = x - R
-    sub ax, WA_RAD
-    mov bp, bx
-    add bp, WA_RAD              ; BP = y + R, BX = y - R
-    sub bx, WA_RAD
-    mov si, wa_boxes
-    mov cx, [wa_nbox]
-.box:
-    cmp dx, [si]                ; inside x0 - R < x < x1 + R, and the same
-    jle .next                   ; for y
-    cmp ax, [si+4]
-    jge .next
-    cmp bp, [si+2]
-    jle .next
-    cmp bx, [si+6]
-    jl .hit
-.next:
-    add si, 8
-    loop .box
+    mov si, wa_allp
+    call wa_floor
+    cmp byte [wa_aflat], 0
+    jne .flat
+    call wa_fabs                ; DX = the feet, units: on the ground a
+    mov si, [wa_jz]             ; step more, in the air nothing more - a
+    or si, [wa_jv]              ; jump reaches what its feet clear (the
+    jnz .air                    ; back room's 48, not the platform's 80)
+    add dx, WA_STEPUP
+.air:
+    cmp ax, dx
+    jg .hit
+.clear:
     clc
-    jmp .out
+    ret
+.flat:
+    or ax, ax
+    jz .clear
 .hit:
     stc
-.out:
-    pop bp
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- heights: the floor, the step, the fall, the lift (HEIGHTS-PLAN 3) -----
@@ -929,22 +972,51 @@ wa_collide:
 ; (x 4, into wa_bxh) of the box it is, -1 the ground. Each entry holds its
 ; box WIDENED by r, so overlapping it is the point inside: four compares
 ; against registers. Keeps BX, CX, SI, DI, BP.
+;
+; THE GRID: a walk over every entry was the sim's largest cost (1,400 clk a
+; call, four calls a tick with the player walking and a grenade in the
+; air). A table opens with 16 x 16 cells of 128 units, each the addresses
+; of the entries whose widened box reaches into it, in the table's order
+; (so a tie is the same box's), 0 after the last: the point's cell names
+; the one or two to try. A cell that more than three reach holds 1, and
+; walks them all. The edge cells take everything beyond the room, so any
+; x and y get the whole table's answer.
 WA_LTE      equ 12              ; a table's entry: x0-r, y0-r, x1+r, y1+r,
                                 ; box x 8 (wa_boxes), box x 4 (wa_bxh)
+WA_LGC      equ 8               ; a cell: three entries' addresses and a 0
+WA_LG       equ 256*WA_LGC      ; the grid, at the table's start
+WA_LN       equ WA_LG           ; ...then its entries' count, its r, and
+WA_LR       equ WA_LG+2         ; the entries
+WA_LE       equ WA_LG+4
+WA_LTSZ     equ WA_LE+WA_MBOX*WA_LTE
+%if WA_ROOM_X0 != 0 || WA_ROOM_Y0 != 0 || WA_ROOM_X1 != 2048 || WA_ROOM_Y1 != 2048
+ %error "wa_floor's grid is 16 x 16 cells of 128 units over a room 0..2048"
+%endif
 wa_floor:
     push si
     push di
     push bp
-    push cx
-    mov [wa_qx], ax
-    mov [wa_qy], bx
-    mov cx, [si]                ; CX = its entries
-    mov di, [si+2]
-    mov [wa_qr], di             ; (its r, for a ramp's reach)
-    add si, 4
     xor bp, bp                  ; BP = the floor so far, DX its record
+    mov di, bx                  ; THE CELL: its row (y >> 7) x 16 cells x 8
+    cmp di, WA_ROOM_Y1          ; bytes is y's bits 7..10 as they are
+    jae .yout
+    and di, 0x0780
+.yc:
+    mov dx, ax                  ; ...and its column (x >> 7) x 8
+    cmp dx, WA_ROOM_X1
+    jae .xout
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    and dl, 0x78
+.xc:
+    add di, dx
+    add di, si                  ; DI = the cell
     mov dx, -1
-    jcxz .done
+    mov si, [di]
+    cmp si, 1
+    jbe .few                    ; (nothing here - or more than three)
 .box:
     cmp ax, [si]
     jle .next
@@ -954,33 +1026,91 @@ wa_floor:
     jle .next
     cmp bx, [si+6]
     jge .next
-    mov di, [si+10]
-    push si
-    mov si, [si+8]
+    mov [wa_qx], ax
+    mov [wa_qy], bx
+    push di
+    mov di, [si+8]              ; DI = its box: the entry is the box widened
+    mov ax, [di]                ; by the table's r (for a ramp's reach)
+    sub ax, [si]
+    mov [wa_qr], ax
+    mov si, [si+10]
+    xchg si, di                 ; SI = the box, DI = its record
     add di, wa_bxh
     call wa_hat                 ; AX = its height there (AX was x: again
     sub di, wa_bxh              ; after)
-    pop si
     cmp ax, bp
     jbe .again
     mov bp, ax
     mov dx, di
 .again:
+    pop di
     mov ax, [wa_qx]
 .next:
-    add si, WA_LTE
-    loop .box
+    inc di
+    inc di
+    mov si, [di]
+    or si, si
+    jnz .box
 .done:
     mov ax, bp
-    pop cx
     pop bp
     pop di
     pop si
     ret
+.yout:                          ; beyond the room: the edge's cells
+    mov di, 0x0780
+    or bx, bx
+    jns .yc
+    xor di, di
+    jmp .yc
+.xout:
+    mov dx, 0x0078
+    or ax, ax
+    jns .xc
+    xor dx, dx
+    jmp .xc
+.few:
+    jb .done
+    push cx
+    mov di, sp                  ; A CROWDED CELL: every entry of the table
+    mov si, [ss:di+6]           ; (SI as it came in)
+    mov [wa_qx], ax
+    mov [wa_qy], bx
+    mov cx, [si+WA_LR]
+    mov [wa_qr], cx
+    mov cx, [si+WA_LN]
+    add si, WA_LE
+.wbox:
+    cmp ax, [si]
+    jle .wnext
+    cmp ax, [si+4]
+    jge .wnext
+    cmp bx, [si+2]
+    jle .wnext
+    cmp bx, [si+6]
+    jge .wnext
+    mov di, [si+10]
+    push si
+    mov si, [si+8]
+    add di, wa_bxh
+    call wa_hat
+    sub di, wa_bxh
+    pop si
+    cmp ax, bp
+    jbe .wagain
+    mov bp, ax
+    mov dx, di
+.wagain:
+    mov ax, [wa_qx]
+.wnext:
+    add si, WA_LTE
+    loop .wbox
+    pop cx
+    jmp .done
 
 ; wa_lists - once an arena is loaded: its box tables (wa_floor's), every box
 ; for the player's collision and the low ones (below the tallest height,
-; and the lift) for the player's floor and a dummy's
+; and the lift) for the player's floor and a dummy's - each with its grid
 wa_lists:
     mov di, wa_allp
     mov dx, WA_RAD
@@ -995,8 +1125,16 @@ wa_lists:
     ; (falls through)
 .one:                           ; DI = the table, DX = r, BP = 1 low only
     push di
-    mov [di+2], dx
-    add di, 4
+    mov [di+WA_LR], dx
+    push es
+    push ds
+    pop es
+    xor ax, ax                  ; its grid: empty
+    mov cx, WA_LG/2
+    cld
+    rep stosw
+    pop es
+    add di, 4                   ; (DI = its entries)
     xor bx, bx                  ; BX = box x 8
     xor cx, cx                  ; CX = its entries
 .b:
@@ -1032,7 +1170,84 @@ wa_lists:
     jmp .b
 .end:
     pop di
-    mov [di], cx
+    mov [di+WA_LN], cx
+    jcxz .gdone
+    lea si, [di+WA_LE]          ; THE GRID: each entry, in order, into every
+.ge:                            ; cell a point inside it can be in - the
+    push cx                     ; cells of x0 + 1 .. x1 - 1, the same of y
+    mov ax, [si+2]
+    inc ax
+    call .cc
+    mov dl, al                  ; DL = its first row of cells...
+    mov ax, [si+6]
+    dec ax
+    call .cc
+    mov dh, al                  ; ...DH its last
+    mov ax, [si]
+    inc ax
+    call .cc
+    mov ch, al                  ; CH = its first column...
+    mov ax, [si+4]
+    dec ax
+    call .cc
+    mov cl, al                  ; ...CL its last
+.grow:
+    mov al, dl
+    mov ah, 16
+    mul ah
+    add al, ch
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, di                  ; BX = the row's first cell of them
+    mov al, ch                  ; AL = the column
+.gcell:
+    cmp word [bx], 1
+    je .gnext                   ; (crowded already: it walks them all)
+    push bx
+    cmp word [bx], 0
+    je .gput
+    inc bx
+    inc bx
+    cmp word [bx], 0
+    je .gput
+    inc bx
+    inc bx
+    cmp word [bx], 0
+    je .gput
+    pop bx
+    mov word [bx], 1            ; a fourth: crowded
+    jmp .gnext
+.gput:
+    mov [bx], si
+    pop bx
+.gnext:
+    add bx, WA_LGC
+    inc al
+    cmp al, cl
+    jbe .gcell
+    inc dl
+    cmp dl, dh
+    jbe .grow
+    pop cx
+    add si, WA_LTE
+    loop .ge
+.gdone:
+    ret
+.cc:                            ; AX = a coordinate: AL = its cell, 0..15,
+    or ax, ax                   ; the edge's beyond the room
+    jns .ccp
+    xor ax, ax
+.ccp:
+    cmp ax, WA_ROOM_X1 - 1
+    jbe .ccin
+    mov ax, WA_ROOM_X1 - 1
+.ccin:
+    push cx
+    mov cl, 7
+    shr ax, cl
+    pop cx
     ret
 
 ; wa_hat - SI = a box (wa_boxes), DI = its record, the square overlapping it
@@ -1109,57 +1324,15 @@ wa_hat:
 .out:
     ret
 
-; wa_hcollide - CF = 1 when the player at [wa_px],[wa_py] stands where the
-; floor is more than a step above the feet (in the air: above the feet at
-; all), or outside the room. Keeps every register.
-wa_hcollide:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov ax, [wa_px]
-    mov bx, [wa_py]
-    cmp ax, WA_ROOM_X0 + WA_RAD
-    jl .hit
-    cmp ax, WA_ROOM_X1 - WA_RAD
-    jg .hit
-    cmp bx, WA_ROOM_Y0 + WA_RAD
-    jl .hit
-    cmp bx, WA_ROOM_Y1 - WA_RAD
-    jg .hit
-    mov si, wa_allp
-    call wa_floor
-    call wa_fabs                ; DX = the feet, units: on the ground a
-    mov cx, [wa_jz]             ; step more, in the air nothing more - a
-    or cx, [wa_jv]              ; jump reaches what its feet clear (the
-    jnz .air                    ; back room's 48, not the platform's 80)
-    add dx, WA_STEPUP
-.air:
-    cmp ax, dx
-    jg .hit
-    clc
-    jmp .out
-.hit:
-    stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; wa_fabs - DX = the feet's height: the floor they stood on plus the jump,
 ; whole units (wa_jz is 8.8 above wa_feet). Keeps every other register.
 wa_fabs:
-    push ax
+    xchg ax, dx                 ; (AX kept in DX the while)
     mov ax, [wa_jz]
     mov al, ah
     cbw
     add ax, [wa_feet]
-    mov dx, ax
-    pop ax
+    xchg ax, dx
     ret
 
 ; wa_hjump - the tick's vertical: the floor under the player (wa_flr, and
@@ -1181,7 +1354,14 @@ wa_hjump:
     je .read                    ; still: HEIGHTS-PLAN 9.10)
 .same:
     mov ax, [wa_flr]
-    jmp .have
+.have:
+    mov cx, [wa_jz]
+    or cx, [wa_jv]
+    jnz .air
+    test byte [wa_kbits+1], WA_K_SPACE >> 8
+    jz .walk
+    mov word [wa_jv], WA_JUMPV
+    jmp .air
 .read:
     mov [wa_fpx], ax
     mov [wa_fpy], bx
@@ -1189,18 +1369,12 @@ wa_hjump:
     call wa_floor
     mov [wa_flr], ax
     mov [wa_flrb], dx
-.have:
-    mov cx, [wa_jz]
-    or cx, [wa_jv]
-    jnz .air
-    test word [wa_kbits], WA_K_SPACE
-    jz .walk
-    mov word [wa_jv], WA_JUMPV
-    jmp .air
+    jmp .have
 .walk:
-    mov dx, [wa_feet]           ; the step: up (wa_hcollide let no more
+    mov dx, [wa_feet]           ; the step: up (wa_collide let no more
     cmp ax, dx                  ; than a step through), or down a step -
-    jge .onto                   ; past that, a fall
+    je wa_ltick                 ; past that, a fall (on the same floor as
+    jg .onto                    ; before: the usual tick)
     sub dx, ax
     cmp dx, WA_STEPUP
     ja .air
@@ -1292,6 +1466,8 @@ wa_ltick:
     cmp word [wa_loff], WA_LHOLD
     jb .out
     mov ax, [wa_bxh+bx]
+    cmp ax, [wa_lrest]          ; (at rest already: the usual tick)
+    je .out
     sub ax, WA_LSPD
     cmp ax, [wa_lrest]
     jge .set
@@ -1340,26 +1516,37 @@ wa_bacc:    db 45,  60,    75   ; % at 4 m, the player standing
 ; state, its turn (every tick, toward the bearing it looked along) and its
 ; shot. Nothing in a bench or dead. Keeps DI
 wa_bthink:
-    cmp byte [wa_bdet], 0
-    jne .out
-    call wa_lkremote            ; (linked: only the host thinks, for its
-    je .out                     ; own bots)
+    cmp word [wa_bdet], 0       ; (a bench, or - its high byte, wa_lkon - a
+    jne .rare                   ; linked match: neither, the usual tick)
+.mine:
     cmp byte [di+F_DEAD], 0
-    jne .out
-    mov ax, [wa_tkn]            ; its turn to look: (tick + index x 3) & 7,
-    add ax, cx                  ; every 0.27 s, the three bots' turns
-    add ax, cx                  ; apart
-    add ax, cx
-    test al, 7
-    jnz .acted
-    push ax
+    jne .r
+    cmp di, [wa_blook]          ; its turn to look (wa_tick: every eighth
+    je .look                    ; tick, the three bots' turns apart)
+.acted:
+    cmp byte [di+F_BST], WA_BENG
+    je .eng
+.r:
+    ret
+.rare:
+    cmp byte [wa_bdet], 0
+    jne .r
+    call wa_lkremote            ; (linked: only the host thinks, for its
+    je .r                       ; own bots)
+    jmp .mine
+.look:
     call wa_bidx                ; (its grudge runs down, 8 ticks a look)
     xchg ax, bx
-    pop ax
     sub byte [wa_grudge+bx], 8
     jnc .ng
     mov byte [wa_grudge+bx], 0
 .ng:
+    mov ax, bx                  ; AX = tick + (WA_NFIG - index) x 3, a
+    shl ax, 1                   ; multiple of 8 on its turn: its looks
+    add ax, bx                  ; counted in bits 3 up
+    neg ax
+    add ax, WA_NFIG * 3
+    add ax, [wa_tkn]
     cmp byte [di+F_BST], WA_BENG ; WHAT IT LOOKS AT (the owner, play-testing:
     jne .pick                   ; "pick a seen target"): engaged, its target,
     and al, 24                  ; but every fourth look first a nearer enemy
@@ -1428,13 +1615,12 @@ wa_bthink:
     jmp .acted
 .hunt:
     cmp byte [di+F_BST], WA_BHUNT
-    jne .acted
-    dec byte [di+F_BGAP]
-    jnz .acted
-    mov byte [di+F_BST], WA_BROAM
-.acted:
-    cmp byte [di+F_BST], WA_BENG
     jne .out
+    dec byte [di+F_BGAP]
+    jnz .out
+    mov byte [di+F_BST], WA_BROAM
+    ret
+.eng:
     mov ax, [di+F_BTA]          ; THE TURN: toward the bearing, 48 a tick,
     cmp ax, [di+F_ANG]          ; onto it when within that (on it already:
     je .on                      ; the usual tick)
@@ -2072,12 +2258,14 @@ wa_bshoot:
 
 ; wa_bidx - DI = a figure: AL = its index, 0.. Keeps all but AX
 wa_bidx:
-    push cx
-    mov ax, di
-    sub ax, wa_figs
-    mov cl, F_SIZE
-    div cl
-    pop cx
+    xor ax, ax                  ; (three compares at most: a divide by the
+    cmp di, wa_figs             ; record's size was 160 clk, and a rocket
+    je .out                     ; asks it of every figure every tick)
+    inc ax
+    cmp di, wa_figs + F_SIZE
+    je .out
+    inc ax
+.out:
     ret
 
 ; wa_blaunch - DI = a bot on target, AL = 0 a rocket, 1 a grenade: one
@@ -2624,7 +2812,9 @@ wa_figtick:
     shl ax, 1
     shl ax, 1                   ; quarter keyframes in the cycle
     cmp [di+F_PH], ax
-    jb .out
+    jae .end
+    ret
+.end:
     cmp byte [di+F_LOOP], 0
     je .hold
     mov word [di+F_PH], 0
@@ -2866,18 +3056,11 @@ wa_wready:
 ; shots, a reload - which at its end tops the magazine up from the reserve
 ; - and the chaingun, which fires while the trigger is held
 wa_wtick:
-    cmp byte [wa_phit], 0       ; the heart's flash, a hit taken
-    je .h
-    dec byte [wa_phit]
-    jnz .h
-    mov byte [wa_ovd], 1
-.h:
-    cmp byte [wa_beam], 0
-    je .b
-    dec byte [wa_beam]
-    jnz .b
-    mov byte [wa_ovd], 1        ; (the beam gone from the overlay)
-.b:
+    cmp word [wa_phit], 0       ; (the heart's flash or - its high byte,
+    jne .hb                     ; wa_beam - the beam: neither, the usual
+.b:                             ; tick; and no reload or gap, wa_rld and
+    cmp word [wa_rld], 0        ; its high byte wa_cool)
+    je .auto
     cmp byte [wa_cool], 0
     je .c
     dec byte [wa_cool]
@@ -2915,6 +3098,19 @@ wa_wtick:
     cmp byte [wa_pdead], 0
     jne .out
     jmp wa_fire
+.hb:
+    cmp byte [wa_phit], 0       ; the heart's flash, a hit taken
+    je .h
+    dec byte [wa_phit]
+    jnz .h
+    mov byte [wa_ovd], 1
+.h:
+    cmp byte [wa_beam], 0
+    je .b
+    dec byte [wa_beam]
+    jnz .b
+    mov byte [wa_ovd], 1        ; (the beam gone from the overlay)
+    jmp .b
 
 ; wa_reload - R: the weapon held reloads now, if its magazine is not full
 ; and it has a reserve (the pistol's is endless) - not again while it does
@@ -3437,6 +3633,19 @@ RG_LIFE     equ 12
 RG_OWN      equ 14              ; who fired it: 0 the player, 1.. a bot
 WA_RKGSZ    equ 16
 
+; WA_RKMV axis - SI, DI = a rocket's records: the axis named (0 x, 2 y, 4 z)
+; moved by its speed, 8.8 into the whole and the fraction - in line, a
+; rocket's three every tick it flies. Clobbers AX, DX
+%macro WA_RKMV 1
+    mov dx, [di+RG_VX+%1]
+    mov al, dh
+    cbw                         ; AX = v >> 8, DX = (v & 255) << 8
+    mov dh, dl
+    xor dl, dl
+    add [di+RG_XF+%1], dx
+    adc [si+WA_RKX+%1], ax
+%endmacro
+
 ; wa_rktick - each rocket a tick: an explosion's count; a flight's step, and
 ; what it meets - out of the room (gone over the walls, or into them), the
 ; floor or a box under it (wa_floor over every box, the player's radius
@@ -3467,12 +3676,9 @@ wa_rktick:
 .rocket:
     dec word [di+RG_LIFE]
     jz .gone
-    xor bx, bx
-    call wa_rkmv
-    mov bx, 2
-    call wa_rkmv
-    mov bx, 4
-    call wa_rkmv
+    WA_RKMV 0
+    WA_RKMV 2
+    WA_RKMV 4
     mov ax, [si+WA_RKX]
     mov bx, [si+WA_RKY]
     cmp ax, WA_ROOM_X0
@@ -3506,18 +3712,22 @@ wa_rktick:
     dec word [di+RG_LIFE]       ; axis in turn - a wall (or a rise over
     jz .boom                    ; WA_GSTEP) sends it back at half its
     sub word [di+RG_VZ], WA_GRAV ; speed; the floor bounces it at half,
-    xor bx, bx                  ; and rubs a quarter off its roll
-    call .gax
+    mov bp, -1                  ; and rubs a quarter off its roll. BP = the
+    xor bx, bx                  ; floor where it is, once a step that held
+    call .gax                   ; has asked for it (.gax)
     mov bx, 2
     call .gax
-    mov bx, 4
-    call wa_rkmv
+    WA_RKMV 4
+    mov ax, bp                  ; AX = the floor under it: as its last step
+    or ax, ax                   ; that held found it, or (neither did)
+    jns .gfl                    ; asked now
     mov ax, [si+WA_RKX]
     mov bx, [si+WA_RKY]
     push si
     mov si, wa_allp
-    call wa_floor               ; AX = the floor under it
+    call wa_floor
     pop si
+.gfl:
     cmp [si+WA_RKZ], ax
     jg .hit
     mov [si+WA_RKZ], ax         ; on it
@@ -3542,9 +3752,17 @@ wa_rktick:
     sub [di+RG_VY], ax
     jmp .hit
 .gax:                           ; BX = an axis, x 2 (0 x, 2 y): moved, and
-    push word [si+WA_RKX+bx]    ; back with its speed turned and halved if
-    push word [di+RG_XF+bx]     ; that put it in a wall
-    call wa_rkmv
+    mov dx, [di+RG_VX+bx]       ; back with its speed turned and halved if
+    or dx, dx                   ; that put it in a wall. With no speed along
+    jz .gret                    ; it nothing moves, and a wall would turn
+    push word [si+WA_RKX+bx]    ; nothing: not asked (a grenade at rest)
+    push word [di+RG_XF+bx]
+    mov al, dh                  ; (WA_RKMV, by the axis in BX)
+    cbw
+    mov dh, dl
+    xor dl, dl
+    add [di+RG_XF+bx], dx
+    adc [si+WA_RKX+bx], ax
     mov ax, [si+WA_RKX]
     cmp ax, WA_ROOM_X0 + WA_RAD
     jle .gwall
@@ -3561,11 +3779,14 @@ wa_rktick:
     call wa_floor
     pop si
     pop bx
-    sub ax, WA_GSTEP
-    cmp ax, [si+WA_RKZ]
+    mov dx, ax
+    sub dx, WA_GSTEP
+    cmp dx, [si+WA_RKZ]
     jg .gwall
-    pop ax                      ; (clear)
+    mov bp, ax                  ; (clear: and this is the floor where it is)
     pop ax
+    pop ax
+.gret:
     ret
 .gw2:
     pop bx
@@ -3592,23 +3813,6 @@ wa_rktick:
 .done:
     ret
 
-; wa_rkmv - SI, DI = a rocket's records, BX = an axis x 2 (0 x, 2 y, 4 z):
-; that axis moved by its speed, 8.8 into the whole and the fraction.
-; Clobbers AX, DX
-wa_rkmv:
-    mov ax, [di+RG_VX+bx]
-    mov dl, ah
-    mov dh, 0
-    or dl, dl
-    jns .pos
-    mov dh, 0xFF                ; DX = v >> 8, AX = (v & 255) << 8
-.pos:
-    mov ah, al
-    xor al, al
-    add [di+RG_XF+bx], ax
-    adc [si+WA_RKX+bx], dx
-    ret
-
 ; wa_rkhit - SI = a rocket or a grenade: a live figure inside its square
 ; and between its feet and its head is killed outright (the bits). CF = 1
 ; then. Keeps all but AX, CX
@@ -3621,25 +3825,25 @@ wa_rkhit:
 .f:
     cmp byte [di+F_DEAD], 0
     jne .fn
-    call wa_bidx
-    inc al
-    cmp al, [wa_killer]
-    je .fn
-    mov ax, [si+WA_RKX]
-    sub ax, [di+F_X]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .fn
+    mov ax, [si+WA_RKX]         ; (|dx| < WA_HITR: dx + (WA_HITR - 1) below
+    sub ax, [di+F_X]            ; 2 WA_HITR - 1, unsigned - and the same of
+    add ax, WA_HITR - 1         ; y; the distances first: most figures are
+    cmp ax, 2*WA_HITR - 1       ; nowhere near)
+    jae .fn
     mov ax, [si+WA_RKY]
     sub ax, [di+F_Y]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .fn
+    add ax, WA_HITR - 1
+    cmp ax, 2*WA_HITR - 1
+    jae .fn
     mov ax, [si+WA_RKZ]
     sub ax, [di+F_Z]
     js .fn
     cmp ax, 120
     jg .fn
+    call wa_bidx                ; (not its owner)
+    inc al
+    cmp al, [wa_killer]
+    je .fn
     call wa_lkremote            ; (the other machine's: it goes off, and
     je .met                     ; that machine judges it - LINK-PLAN 3)
     mov ah, 2
@@ -3665,14 +3869,14 @@ wa_rkhitp:
     jne .no
     mov ax, [si+WA_RKX]
     sub ax, [wa_px]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .no
+    add ax, WA_HITR - 1         ; (|dx| < WA_HITR, as wa_rkhit asks it)
+    cmp ax, 2*WA_HITR - 1
+    jae .no
     mov ax, [si+WA_RKY]
     sub ax, [wa_py]
-    call wa_abs
-    cmp ax, WA_HITR
-    jge .no
+    add ax, WA_HITR - 1
+    cmp ax, 2*WA_HITR - 1
+    jae .no
     call wa_fabs                ; DX = the feet
     mov ax, [si+WA_RKZ]
     sub ax, dx
@@ -3788,7 +3992,33 @@ wa_pktick:
     cmp byte [wa_pdead], 0
     jne .q
     mov cx, [wa_npk]
-    or cx, cx
+    jcxz .q
+    mov bx, [wa_py]             ; THE PICKUPS WITHIN REACH OF THE PLAYER'S
+    shr bx, 1                   ; CELL (wa_pkgrid: 128 units square, a bit a
+    shr bx, 1                   ; pickup, made when the arena loads) - with
+    shr bx, 1                   ; none of them present and no timer running,
+    and bx, 0x00F0              ; the usual tick, there is nothing to do
+    mov ax, [wa_px]
+    shl ax, 1
+    or bl, ah
+    mov dh, [wa_pkgrid+bx]      ; DH = them
+    mov ax, [wa_pkt]            ; any timer running (the words themselves:
+    or ax, [wa_pkt+2]           ; a timer counts whatever wa_pkon says - a
+    or ax, [wa_pkt+4]           ; test sets one on a pickup that is there,
+    or ax, [wa_pkt+6]           ; for its roll)
+%if WA_MPK != 8
+ %error "wa_pktick asks WA_MPK = 8 timers, four and four"
+%endif
+    cmp cl, 4
+    jbe .t
+    or ax, [wa_pkt+8]
+    or ax, [wa_pkt+10]
+    or ax, [wa_pkt+12]
+    or ax, [wa_pkt+14]
+.t:
+    or ax, ax
+    jnz .go
+    test dh, [wa_pkon]
     jnz .go
 .q:
     ret
@@ -3798,9 +4028,22 @@ wa_pktick:
     mov dl, 1                   ; DL = its bit
 .p:
     cmp word [wa_pkt+bx], 0
-    je .here
+    jne .away
+    test dh, dl                 ; present: in reach?
+    jnz .here
+.n:
+    add si, WA_PKSZ
+    inc bx
+    inc bx
+    shl dl, 1
+    loop .p
+    ret
+.away:
+    cmp byte [wa_lkon], 0
+    je .count
     call wa_lkpkhold            ; (a linked guest: back when the host says)
     je .n
+.count:
     dec word [wa_pkt+bx]
     jnz .n
     or [wa_pkon], dl            ; back - a weapon spawn with its weapon
@@ -3848,14 +4091,64 @@ wa_pktick:
     mov [wa_pkt+bx], ax
     mov byte [wa_ovd], 1
     call wa_lkpktaken           ; (linked: TAKE)
-.n:
+    jmp .n
+
+; wa_pkgridmk - once an arena is loaded: wa_pkgrid, for each 128-unit cell
+; the pickups (a bit each) a player standing somewhere in it could be within
+; WA_PKR of in x and in y - x - (WA_PKR - 1) .. x + (WA_PKR - 1), the same of
+; y: a cell or two each way
+wa_pkgridmk:
+    push es
+    push ds
+    pop es
+    mov di, wa_pkgrid
+    xor ax, ax
+    mov cx, 128
+    cld
+    rep stosw
+    pop es
+    mov cx, [wa_npk]
+    jcxz .out
+    mov si, wa_pks
+    mov dl, 1                   ; DL = the pickup's bit
+.p:
+    push cx
+    mov ax, [si+2]
+    sub ax, WA_PKR - 1
+    call wa_lists.cc
+    mov bl, al                  ; BL = its first row of cells...
+    mov ax, [si+2]
+    add ax, WA_PKR - 1
+    call wa_lists.cc
+    mov bh, al                  ; ...BH its last
+    mov ax, [si]
+    sub ax, WA_PKR - 1
+    call wa_lists.cc
+    mov ch, al                  ; CH = its first column...
+    mov ax, [si]
+    add ax, WA_PKR - 1
+    call wa_lists.cc
+    mov cl, al                  ; ...CL its last
+.row:
+    mov al, bl
+    mov ah, 16
+    mul ah
+    add al, ch
+    mov di, ax                  ; DI = the row's first cell of them
+    mov al, ch
+.cell:
+    or [wa_pkgrid+di], dl
+    inc di
+    inc al
+    cmp al, cl
+    jbe .cell
+    inc bl
+    cmp bl, bh
+    jbe .row
+    pop cx
     add si, WA_PKSZ
-    inc bx
-    inc bx
     shl dl, 1
-    dec cx
-    jz .out
-    jmp .p
+    loop .p
 .out:
     ret
 
@@ -3931,6 +4224,7 @@ wa_pktake:
 ; it reloads); the health and the shield at row 23's left; the magazine and
 ; the reserve at its right.
 ; A sprite: row, column from W/2 + 3, glyph, colour attribute; 0xFF ends it
+WA_SPMAX    equ 16              ; a sprite's most cells (the rocket launcher's)
 wa_spr:     dw wa_spr0, wa_spr1, wa_spr2, wa_spr3, wa_spr4, wa_spr5
 wa_spr0:                        ; the pistol
     db 21, 1, 0xDC, 0x0F
@@ -3970,8 +4264,11 @@ wa_spr4:                        ; the rocket launcher: a green tube
 
 wa_ovbuild:
     mov byte [wa_ovd], 0
-    mov word [wa_ovfresh], 1    ; (the renderer shows it, then clears this)
-    mov word [wa_ovn], 0
+    mov es, [wa_rds]            ; ES = the part, DI = its cells so far, x 2:
+    xor di, di                  ; wa_ovput's, kept through every builder
+    cld
+    mov word [es:WA_RAT(wa_ovfresh)], 1 ; (the renderer shows it, then clears
+                                ; this)
     cmp byte [wa_sbon], 0       ; Tab held: the scoreboard (AI-PLAN 5)
     je .nosb
     call wa_ovboard
@@ -3981,36 +4278,85 @@ wa_ovbuild:
     call wa_ovrsp
 .alive:
     call wa_lkmsg               ; (linked: WAITING, LINK LOST, LEFT)
-    mov bl, [wa_wpn]            ; the weapon
+    mov al, [wa_wpn]            ; THE WEAPON: its cells as they were made
+    xor ah, ah                  ; the last time (wa_spc, wa_spg) while it is
+    cmp byte [wa_rld], 0        ; the same weapon, up or down a row for its
+    je .key                     ; reload, at the same width
+    inc ah
+.key:
+    cmp ax, [wa_spk]
+    je .sprcp
+    mov [wa_spk], ax
+    push di
+    mov bl, al
     xor bh, bh
     shl bx, 1
     mov si, [wa_spr+bx]
     mov cx, [wa_w]
     shr cx, 1
     add cx, 3                   ; CX = its column 0
+    xor di, di                  ; DI = its cells, x 2
 .spr:
     lodsb
     cmp al, 0xFF
-    je .status
-    xor dh, dh
-    mov dl, al
-    cmp byte [wa_rld], 0
-    je .up
-    inc dx                      ; (reloading: a row lower)
-.up:
-    lodsb
-    xor bh, bh
+    je .sprd
     mov bl, al
-    add bx, cx
-    lodsw
-    cmp dx, WA_ROWS-1
-    ja .spr
+    add bl, ah                  ; (reloading: a row lower)
+    xor bh, bh                  ; BX = the row
+    lodsb
+    mov dl, al
+    xor dh, dh
+    add dx, cx                  ; DX = the column
+    lodsb
+    cmp bx, WA_ROWS-1
+    ja .sprn
+    cmp dx, [wa_w]
+    jae .sprn
+    cmp di, WA_SPMAX*2
+    jae .sprn
+    shl bx, 1
+    add dx, [wa_rowoff+bx]      ; the cell, and x 2: the renderer's offset
+    shl dx, 1
+    mov [wa_spc+di], dx
+    mov bl, [si]
     cmp byte [wa_mono], 0
     je .sp
-    mov ah, 0x07
+    mov bl, 0x07
 .sp:
-    call wa_ovput
+    mov [wa_spg+di], al
+    mov [wa_spg+di+1], bl
+    inc di
+    inc di
+.sprn:
+    inc si                      ; (past its attribute)
     jmp .spr
+.sprd:
+    shr di, 1
+    mov [wa_spn], di
+    pop di
+.sprcp:
+    mov cx, WA_MOV*2            ; as many of them as the overlay has room
+    sub cx, di                  ; for (the rest dropped, as wa_ovput drops)
+    jbe .status
+    shr cx, 1
+    cmp cx, [wa_spn]
+    jbe .fit
+    mov cx, [wa_spn]
+.fit:
+    jcxz .status
+    mov bx, cx
+    mov dx, di
+    mov si, wa_spc
+    add di, WA_RAT(wa_ov)
+    rep movsw
+    mov cx, bx
+    mov si, wa_spg
+    mov di, dx
+    add di, WA_RAT(wa_ovg)
+    rep movsw
+    mov di, dx
+    shl bx, 1
+    add di, bx
 .status:
     cmp byte [wa_beam], 0       ; THE RAILGUN'S BEAM, its few ticks: from
     je .nobeam                  ; the barrel's mouth to the crosshair (a
@@ -4069,12 +4415,17 @@ wa_ovbuild:
     jnz .res
     mov ax, 0x0FEC              ; (infinity)
     call wa_ovatt
-    jmp wa_ovput
+    call wa_ovput
+    jmp short .built
 .res:
     mov al, [wa_res+si]
     xor ah, ah
     mov cx, 3
-    jmp wa_ovnum
+    call wa_ovnum
+.built:
+    shr di, 1                   ; its cells, counted
+    mov [es:WA_RAT(wa_ovn)], di
+    ret
 
 ; THE SCOREBOARD (AI-PLAN 5), while Tab is held: a box 20 cells wide over
 ; the view's middle, a header and a row each (YOU and the three robots), by
@@ -4133,6 +4484,8 @@ wa_ovboard:
     inc dx
     mov bl, [ds:bp+wa_sord]
     xor bh, bh
+    push di                     ; (the overlay's cursor and the part, kept
+    push es                     ; while the row's text is made)
     mov di, wa_sbbuf
     push ds
     pop es
@@ -4169,6 +4522,8 @@ wa_ovboard:
     mov di, wa_sbbuf+14
     call wa_sbnum
     pop ax
+    pop es
+    pop di
     mov si, wa_sbbuf
     call wa_ovrow
 .skip:
@@ -4193,25 +4548,41 @@ wa_sbnum:
     ret
 
 ; wa_ovrow - SI = WA_SBW characters, AH = their colour, AL = their mono
-; attribute: a row of the board at DX, centred
+; attribute: a row of the board at DX, centred - straight onto the overlay
+; (ES, DI: wa_ovput's), its cells one after the other, those past WA_MOV
+; dropped. Clobbers AX, BX, CX, SI
 wa_ovrow:
     cmp byte [wa_mono], 0
     je .c
     mov ah, al
 .c:
-    mov bx, [wa_w]
-    sub bx, WA_SBW
-    shr bx, 1
+    mov bx, dx
+    shl bx, 1
+    mov bx, [wa_rowoff+bx]
+    mov cx, [wa_w]
+    sub cx, WA_SBW
+    shr cx, 1
+    add bx, cx
+    shl bx, 1                   ; BX = its first cell's offset
     mov cx, WA_SBW
 .r:
-    mov al, [si]
-    inc si
-    call wa_ovput
+    cmp di, WA_MOV*2
+    jae .full
+    lodsb
+    mov [es:WA_RAT(wa_ovg)+di], ax
+    mov [es:WA_RAT(wa_ov)+di], bx
+    inc di
+    inc di
+    inc bx
+    inc bx
     loop .r
+.full:
     ret
 
 ; wa_ovrsp - dead: "RESPAWN n" over the view's middle, n its seconds
 wa_ovrsp:
+    push di                     ; (the overlay's cursor and the part, kept)
+    push es
     mov si, wa_rsptx
     mov di, wa_sbbuf
     push ds
@@ -4219,6 +4590,8 @@ wa_ovrsp:
     mov cx, 10
     cld
     rep movsb
+    pop es
+    pop di
     mov al, [wa_pdead]
     xor ah, ah
     add ax, 29
@@ -4249,61 +4622,56 @@ wa_ovatt:
     ret
 
 ; wa_ovput - AL = a glyph, AH = its attribute, at row DX, column BX: onto
-; the overlay (past the screen's edge or WA_MOV cells, dropped); BX moves on.
-; Keeps every other register
+; the overlay, in the part (ES; DI = its cells so far x 2, which moves on) -
+; past the screen's edge or WA_MOV cells, dropped; BX moves on. Keeps every
+; other register
 wa_ovput:
     cmp bx, [wa_w]
     jae .skip
-    push di
-    mov di, [wa_ovn]
-    cmp di, WA_MOV
-    jae .full
-    inc word [wa_ovn]
-    shl di, 1
-    mov [wa_ovg+di], ax
+    cmp di, WA_MOV*2
+    jae .skip
+    mov [es:WA_RAT(wa_ovg)+di], ax
     push bx
     push si
     mov si, dx
     shl si, 1
     add bx, [wa_rowoff+si]      ; the cell, and x 2: the renderer's offset
     shl bx, 1
-    mov [wa_ov+di], bx
+    mov [es:WA_RAT(wa_ov)+di], bx
     pop si
     pop bx
-.full:
-    pop di
+    inc di
+    inc di
 .skip:
     inc bx
     ret
 
-; wa_ovnum - AX = a number, CX = its digits, at row DX from column BX (BX
-; moves on past them), [wa_ovat] its attributes (colour high, mono low):
-; leading zeros are left as the view behind them. Clobbers AX, CX
+; wa_ovnum - AX = a number, CX = its digits (3 at most), at row DX from
+; column BX (BX moves on past them), [wa_ovat] its attributes (colour high,
+; mono low): leading zeros are left as the view behind them. Clobbers AX, CX
 wa_ovnum:
     push si
-    push di
-    push dx
-    mov di, cx
-    mov si, 10
-.mk:
-    dec di
-    xor dx, dx
-    div si
-    add dl, '0'
-    mov [wa_ovdig+di], dl
-    or di, di
-    jnz .mk
-    pop dx
+    or ah, ah
+    jnz .big
+    aam                         ; under 256 (as ever in play): three digits
+    add al, '0'                 ; by two AAMs, not three 16-bit divides
+    mov [wa_ovdig+3], al
+    mov al, ah
+    aam
+    add ax, '00'
+    mov [wa_ovdig+2], al
+    mov [wa_ovdig+1], ah
+.made:
+    mov si, 4
+    sub si, cx                  ; SI = its first digit's place in wa_ovdig
     mov ax, [wa_ovat]
     cmp byte [wa_mono], 0
     jne .m
     mov al, ah
 .m:
     mov ah, al                  ; AH = the attribute
-    xor si, si
-    dec cx                      ; CX = the last digit's index
 .lead:
-    cmp si, cx
+    cmp si, 3
     jae .p                      ; (the last digit always shows)
     cmp byte [wa_ovdig+si], '0'
     jne .p
@@ -4314,11 +4682,27 @@ wa_ovnum:
     mov al, [wa_ovdig+si]
     call wa_ovput
     inc si
-    cmp si, cx
-    jbe .p
-    pop di
+    cmp si, 4
+    jb .p
     pop si
     ret
+.big:                           ; (a test's 30000: its low digits, by divides)
+    push bx
+    push dx
+    push cx
+    mov bx, 10
+    mov si, 4
+.mk:
+    dec si
+    xor dx, dx
+    div bx
+    add dl, '0'
+    mov [wa_ovdig+si], dl
+    loop .mk
+    pop cx
+    pop dx
+    pop bx
+    jmp .made
 
 ; --- the bench --------------------------------------------------------------
 ; B: 64 frames from the arena's middle, turning 1/64 of a circle each, the
@@ -4756,25 +5140,45 @@ wa_put10:
     pop ax
     ret
 
-; wa_putn - AX as CX right-aligned digits at HUD column DI; DI moves on
+; wa_putn - AX as CX right-aligned digits at HUD column DI; DI moves on.
+; Written from the right straight into the HUD's row (wa_hudp); a value under
+; 256 - every one but a frame slower than a quarter second - gives up its
+; digits by AAM, not a 16-bit divide each. Clobbers AX, CX, DX
 wa_putn:
     push bx
-    add di, cx
+    push si
+    push es
+    add di, cx                  ; DI = the column after them
     push di
+    les si, [wa_hudp]
+    add si, di
+    add si, di                  ; ES:SI = that column's cell
     mov bx, 10
 .d:
     dec di
+    dec si
+    dec si
+    or ah, ah
+    jnz .big
+    aam                         ; AH = the rest, AL = its last digit
+    mov dl, al
+    mov al, ah
+    xor ah, ah
+    jmp .put
+.big:
     xor dx, dx
     div bx
-    push ax
-    push di
-    mov al, dl
-    add al, '0'
-    call wa_putc
-    pop di
-    pop ax
+.put:
+    cmp di, [wa_w]              ; (off the 40-column screen: dropped)
+    jae .np
+    add dl, '0'
+    mov dh, 0x07
+    mov [es:si], dx
+.np:
     loop .d
     pop di
+    pop es
+    pop si
     pop bx
     ret
 
@@ -4784,18 +5188,13 @@ wa_putc:
     cmp di, [wa_w]
     jae .skip
     push es
-    push di
-    push ax
-    mov es, [wa_vseg]
-    mov ax, [wa_rowoff+WA_ROWS*2]
-    add di, ax
-    shl di, 1
-    pop ax
-    push ax
-    mov ah, 0x07
-    stosw
-    pop ax
-    pop di
+    push bx
+    les bx, [wa_hudp]           ; the HUD's row in text memory (wa_setmode)
+    add bx, di
+    add bx, di
+    mov [es:bx], al
+    mov byte [es:bx+1], 0x07
+    pop bx
     pop es
 .skip:
     inc di
@@ -4958,13 +5357,8 @@ WA_FHW equ WA_FIGHEAD/2
 wa_rframe:
     push ax
     push dx
-    mov ax, [wa_ang]            ; the camera's sin and cos (the part has no
-    mov cl, 6                   ; table): wa_ang's 1024-step angle, as the
-    shr ax, cl                  ; renderer's wa_cang
-    call wa_sincos
-    mov [wa_fsn], ax
-    mov [wa_fcs], dx
-    pop dx
+    call wa_camsc               ; the camera's sin and cos, into FRAME (the
+    pop dx                      ; part has no table)
     pop ax
     mov es, [wa_rds]
     cld
@@ -4999,21 +5393,38 @@ wa_rframe:
 .norock:
     ret
 
+; wa_camsc - AX = sin, DX = cos (Q14) of the camera's angle, wa_ang's
+; 1024-step one (the renderer's wa_cang): FRAME's wa_fsn and wa_fcs, made
+; again only when that angle is another (wa_fsa: wa_ang with its fraction's
+; bits set, so never 0, which is "none yet"). A frame and the ticks of the
+; player's walk ask for the same one until the view turns. Keeps all but
+; AX, CL, DX
+wa_camsc:
+    mov ax, [wa_ang]
+    or al, 0x3F
+    cmp ax, [wa_fsa]
+    jne .make
+    mov ax, [wa_fsn]
+    mov dx, [wa_fcs]
+    ret
+.make:
+    mov [wa_fsa], ax
+    mov cl, 6
+    shr ax, cl
+    call wa_sincos
+    mov [wa_fsn], ax
+    mov [wa_fcs], dx
+    ret
+
 ; wa_render - a frame: the frame state into the part, the renderer, and back
 ; its frame number (the sim's key poll, wa_tick). Each figure's F_PZ here
 ; then says only "drawn since it last spawned" (wa_spawn zeroes it): the
 ; projection itself stays in the part, where TRACE reads it. ES = DS out, as
 ; the renderer left it.
 wa_render:
-    cmp byte [wa_ovd], 0        ; the overlay, rebuilt and copied across
-    je .ov                      ; only when something it shows changed
+    cmp byte [wa_ovd], 0        ; the overlay, rebuilt (straight into the
+    je .ov                      ; part) only when something it shows changed
     call wa_ovbuild
-    mov es, [wa_rds]
-    mov si, wa_fb_ovl
-    mov di, WA_RAT(wa_fb_ovl)
-    mov cx, (wa_fb_oend - wa_fb_ovl) / 2
-    cld
-    rep movsw
 .ov:
     call wa_rframe
     mov bx, WRV_RENDER
@@ -5080,6 +5491,7 @@ wa_loadarena:
     shl ax, cl
     mov [wa_nbox8], ax
     call wa_lists               ; the boxes the floor and the walls read
+    call wa_pkgridmk            ; ...and the cells its pickups reach
     pop ax                      ; ITS ROUTE GRAPH (AI-PLAN 3.1), straight
     push ax                     ; out of the part: descriptor words 38
     call op_seg                 ; and 40, its offset and bytes
@@ -5261,19 +5673,18 @@ WA_VAR wa_qr,2
 WA_VAR wa_nbox8,2                ; the boxes x 8 (wa_lists)
 WA_VAR wa_lon,2                  ; the lift: ticks someone has stood on it,
 WA_VAR wa_loff,2                 ;   ticks it has stood empty
-WA_VAR wa_allp,4+WA_MBOX*WA_LTE  ; wa_floor's box tables (wa_lists): every
-WA_VAR wa_lowp,4+WA_MBOX*WA_LTE  ;   box and the low ones for the player,
-WA_VAR wa_lowf,4+WA_MBOX*WA_LTE  ;   the low ones for a dummy's feet
+WA_VAR wa_allp,WA_LTSZ           ; wa_floor's box tables (wa_lists): every
+WA_VAR wa_lowp,WA_LTSZ           ;   box and the low ones for the player,
+WA_VAR wa_lowf,WA_LTSZ           ;   the low ones for a dummy's feet
 WA_VAR wa_gph,WA_GPHSZ           ; the arena's route graph (AI-PLAN 3.1)...
 WA_VAR wa_gnp,2                  ; ...its nodes...
 WA_VAR wa_gep,2                  ; ...and its edges
-WA_VAR wa_bdet,1                 ; 1: the bots walk their home loops
 WA_VAR wa_gtp,2                  ; the bots' tables: the sight grid, the
 WA_VAR wa_gcp,2                  ;   cells' nearest nodes, the next hops
 WA_VAR wa_ghp,2
 WA_VAR wa_tkn,2                  ; ticks, for the bots' turns to look
+WA_VAR wa_blook,2                ; ...the figure whose turn this tick is (0: none)
 WA_VAR wa_diff,1                 ; the bots' difficulty: 0 easy..2 hard
-WA_VAR wa_phit,1                 ; ticks of the heart's hit flash
 WA_VAR wa_pdead,1                ; THE PLAYER DEAD: ticks to the respawn
 WA_VAR wa_peye,2                 ;   (AI-PLAN 5), the eye sinking
 WA_VAR wa_hurtby,1               ; who hurt the player: 0 itself, 1.. a bot
@@ -5343,7 +5754,9 @@ WA_VAR wa_lkarena,1                ; the match: the host's arena, difficulty,
 WA_VAR wa_lkdiff,1                 ;   tag; the host's tag as the guest heard
 WA_VAR wa_lktag,1                  ;   it; 1: go in (wa_lkstart)
 WA_VAR wa_lkfull,1                 ; the window's rows all to draw
-WA_VAR wa_lkon,1                   ; 1: in a linked match
+WA_VAR wa_bdet,1                 ; 1: the bots walk their home loops - and
+WA_VAR wa_lkon,1                   ; 1: in a linked match, ITS HIGH BYTE:
+                                   ; wa_bthink asks both in one compare
 WA_VAR wa_lkseq,1                  ;   waiting, sent this pass, when
 WA_VAR wa_lkqn,1
 WA_VAR wa_lkq,WL_EVQ*WL_EVSZ
@@ -5383,8 +5796,7 @@ WA_VAR wa_pxf,2
 WA_VAR wa_pyf,2
 WA_VAR wa_jz,2
 WA_VAR wa_jv,2
-WA_VAR wa_s13,2
-WA_VAR wa_c13,2
+WA_VAR wa_fsa,2                  ; the angle wa_fsn, wa_fcs are for (wa_camsc)
 WA_VAR wa_hits,2
 WA_VAR wa_tmp,2
 WA_VAR wa_last,4
@@ -5404,6 +5816,7 @@ WA_VAR wa_pbtk,2
 WA_VAR wa_pbfr,2
 WA_VAR wa_hold,1
 WA_VAR wa_rowoff,(WA_ROWS+1)*2
+WA_VAR wa_hudp,4                 ; the HUD's row in text memory, offset:segment
 WA_VAR wa_kbits,2                ; the held keys this frame (wa_keys)
 WA_VAR wa_kfr,1                  ; ...polled in this frame
 WA_VAR wa_kmap,KEYMAP_BYTES      ; ...and the whole map they came from
@@ -5413,16 +5826,23 @@ WA_VAR wa_wpn,1                  ; the weapon held (0..2)...
 WA_VAR wa_own,1                  ; ...those had, a bit each...
 WA_VAR wa_mag,6                  ; ...each's magazine...
 WA_VAR wa_res,6                  ; ...and reserve (the pistol's unused)
-WA_VAR wa_beam,1                 ; ticks the railgun's beam has left
+WA_VAR wa_phit,1                 ; ticks of the heart's hit flash, and - ITS
+WA_VAR wa_beam,1                 ;   HIGH BYTE - those the railgun's beam has
+                                 ;   left: wa_wtick asks both in one compare
 WA_VAR wa_lt,1                   ; wa_launch's type: 0 rocket, 1 grenade
 WA_VAR wa_seed,2                 ; the weapon spawns' dice
 WA_VAR wa_pkdet,1                ; 1: each spawn its first choice (benches)
-WA_VAR wa_rld,1                  ; ticks of a reload left (0: none)
-WA_VAR wa_cool,1                 ; ticks before the next shot
+WA_VAR wa_rld,1                  ; ticks of a reload left (0: none), and - ITS
+WA_VAR wa_cool,1                 ;   HIGH BYTE - ticks before the next shot
 WA_VAR wa_ovd,1                  ; the overlay wants rebuilding
 WA_VAR wa_ovat,2                 ; wa_ovnum's attributes
-WA_VAR wa_ovdig,4                ; ...and its digits (3 at most)
+WA_VAR wa_ovdig,4                ; ...and its digits (3 at most, from +1)
+WA_VAR wa_spk,2                  ; the weapon's cells kept (wa_ovbuild): the
+WA_VAR wa_spn,2                  ;   weapon and its reload they are for, how
+WA_VAR wa_spc,WA_SPMAX*2         ;   many, their offsets and their glyphs
+WA_VAR wa_spg,WA_SPMAX*2
 WA_VAR wa_pkt,WA_MPK*2           ; a taken pickup's ticks to its return
+WA_VAR wa_pkgrid,256             ; the pickups in reach of each 128-unit cell
 WA_VAR wa_rkg,WA_NRK*WA_RKGSZ    ; the rockets' fractions, velocity, life
 WA_VAR wa_rkcp,1                 ; a rocket was live at the last copy
 WA_VAR wa_rkn,1                  ; rockets live (flying or exploding)

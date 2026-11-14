@@ -2553,13 +2553,8 @@ wa_lkabsent:
     cmp byte [wa_lkon], 0       ; ALONE: figures 0 to the setup's count - 1
     jne .linked                 ; are the bots
     push ax
-    push dx
-    mov ax, di
-    sub ax, wa_figs
-    mov dl, F_SIZE
-    div dl
+    call wa_bidx                ; AL = its index (compares: no divide)
     cmp al, [wa_lknb]
-    pop dx
     pop ax
     jb .here
     cmp al, al
