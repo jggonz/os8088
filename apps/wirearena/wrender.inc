@@ -149,7 +149,7 @@ WA_VAR wa_pkm, 1                ;   the pickups still to draw
 WA_VAR wa_thz, 2                ;   its z
 WA_VAR wa_thdx, 2               ;   its offset from the eye, x (wa_view)
 WA_VAR wa_ovoldn, 2             ; the overlay's cells as it last came in:
-WA_VAR wa_ovold, WA_MOV*2       ;   how many, and each's offset
+WA_VAR wa_ovold, WA_MOV*2       ;   how many, and each's stamp's place
 WA_VAR wa_thiz, 2               ;   its inverse depth
 WA_VAR wa_thfs, 2               ;   sub-columns a unit, 8.8
 WA_VAR wa_thl0, 2               ;   its sub-columns, first and last
@@ -3733,20 +3733,21 @@ wa_fvclr:
     rep stosw
     ret
 
-; wa_fthrs - heights, once a figure: per column of its box not behind the
-; column's tall face, the first half-row a nearer platform hides (wa_occlow)
-; + 1 into wa_fvis - 1 where nothing of it shows, which takes the column out
-; (DL the columns showing less one); DH the columns with a verdict more one.
-; SI = the figure's inverse depth. Keeps every other register.
+; wa_fthrs - heights, once a figure: per column of its box with a platform
+; in it at all (wa_cstn: `repe scasw` passes the rest, most) and not behind
+; the column's tall face, the first half-row a nearer platform hides
+; (wa_occlow) + 1 into wa_fvis - 1 where nothing of it shows, which takes
+; the column out (DL the columns showing less one); DH the columns with a
+; verdict more one. SI = the figure's inverse depth. Clobbers AX, BX, CX, DI.
 wa_fthrs:
-    push ax
-    push bx
-    push cx
-    mov bx, [wa_fbc]
+    mov di, [wa_fbc]
+    add di, wa_cstn
     mov cx, [wa_fbw]
-.c:
-    cmp byte [wa_cstn+bx], 0    ; (no platform in the column at all: most)
-    je .n
+.s:
+    xor ax, ax
+    repe scasw
+    je .out
+    lea bx, [di-2-wa_cstn]      ; BX = the column x 2
     cmp byte [wa_fvis+bx], 0
     jne .n                      ; (its tall face hid it)
     push cx
@@ -3763,12 +3764,9 @@ wa_fthrs:
     jnz .n
     dec dl                      ; (from the top: gone)
 .n:
-    inc bx
-    inc bx
-    loop .c
-    pop cx
-    pop bx
-    pop ax
+    or cx, cx
+    jnz .s
+.out:
     ret
 
 ; wa_fjl - wa_figure's joints: SI, DI = keyframes A and B at this facing.
@@ -3776,11 +3774,12 @@ wa_fthrs:
 ; was; q = 3 is worked as B + (A - B) / 4, the same number), projected:
 ; x = ((lateral + fcx) fs8 >> 8) + W, y = hh - ((height - eye) fv8 >> 8).
 ; Eight loops, one per quarter and per multiply:
-; - NARROW (fs8 and fv8 under 128: past ~1.6 m at 40 columns, most of the
-;   time): 8-bit multiplies on sums regrouped so they stay in 16 bits -
-;   K = fcx fs8 + 256 W split as 256 Khi + Klo, so x = ((lateral fs8 + Klo)
-;   >> 8) + Khi; and E = eye fv8 + 256 hh + 255, so y = (E - height fv8)
-;   >> 8. The same numbers, so the same pixels;
+; - NARROW (fs8 under 256 and fv8 under 128: past ~1.4 m at 40 columns and
+;   ~1.6 m at 80, most of the time): 8-bit multiplies on sums regrouped so
+;   they stay in 16 bits - the lateral taken + 128, unsigned, and K = (fcx -
+;   128) fs8 + 256 W split as 256 Khi + Klo, so x = (((lateral + 128) fs8 +
+;   Klo) >> 8) + Khi; and E = eye fv8 + 256 hh + 255, so y = (E - height
+;   fv8) >> 8. The same numbers, so the same pixels;
 ; - WIDE: the 16-bit multiplies, as before.
 ; The narrow loops walk keyframe A with LODSW (AL = lateral, AH = height),
 ; read B a fixed distance on (BX = B - A), blend in BYTES - B - A is a
@@ -3811,38 +3810,22 @@ wa_fthrs:
     add ax, dx
   %endif
 %endmacro
-%macro WA_FJ 2                  ; %1 = q, %2 = 1 narrow
-.j%2%1:
+%macro WA_FJ 2                  ; wide, %1 = q (%2 = 0, the label's): CX =
+.j%2%1:                         ; fs8, BP = fv8
     WA_FBLEND %1, 0             ; lateral
-  %if %2
-    imul cl
-    add ax, [wa_fk]
-    mov al, ah
-    cbw
-    add ax, bp
-  %else
     add ax, [wa_fcx]
-    imul word [wa_fs8]
+    imul cx
     mov al, ah
     mov ah, dl
     add ax, [wa_w]
-  %endif
     mov [wa_jsx+bx], ax
     WA_FBLEND %1, 1             ; height
-  %if %2
-    mul ch
-    neg ax
-    add ax, [wa_fe]
-    mov al, ah
-    cbw
-  %else
     sub ax, [wa_feye]
-    imul word [wa_fv8]
+    imul bp
     mov al, ah
     mov ah, dl
     neg ax
     add ax, [wa_hh]
-  %endif
     mov [wa_jsy+bx], ax
     inc bx
     inc bx
@@ -3882,10 +3865,11 @@ wa_fthrs:
     add dh, ah                  ; DH = the height
     %endif
   %endif
-    imul cl
+    add al, 0x80                ; (the lateral + 128, unsigned: K is less
+    mul cl                      ; 128 fs8 to match, and fs8 may be to 255)
     add ax, [wa_fk]
     mov al, ah
-    cbw
+    xor ah, ah
     add ax, bp
     stosw                       ; x
     mov al, dh
@@ -3908,22 +3892,29 @@ wa_fjl:
     shl bx, 1
     mov si, [wa_pa]
     mov ax, [wa_fs8]
-    cmp ax, 128
-    jae .wide
     mov dx, [wa_fv8]
+    or ah, ah
+    jnz .wide
     cmp dx, [wa_fvn]            ; (128, or less where the narrow sum would
     jae .wide                   ; leave 16 bits: wa_render - the bound is
     cmp word [wa_feye], 0       ; the camera's eye's, so a figure's own, at
     jl .wide                    ; most that, is under it unless below 0)
     mov cl, al
     mov ch, dl
-    mov bp, [wa_fkh]            ; (K and E: wa_figure made them)
+    mov bp, [wa_fkh]            ; (K and E: wa_figure made them.) K less
+    shr ax, 1                   ; 128 fs8, for the laterals + 128: Khi less
+    mov dh, 0                   ; fs8 >> 1, Klo less 128 when fs8 is odd,
+    rcr dh, 1                   ; and the borrow
+    sub [wa_fk], dh
+    sbb bp, ax
     mov ax, [.tab+8+bx]
     mov bx, [wa_pb]
     sub bx, si                  ; BX = B - A
     mov di, wa_jsx
     jmp ax
 .wide:
+    mov cx, ax                  ; (the scales in registers)
+    mov bp, dx
     and bx, 6                   ; (J's q 4 is q 0 here: all eleven joints)
     mov ax, [.tab+bx]
     mov di, [wa_pb]
@@ -4733,36 +4724,37 @@ wa_thocc:
 WA_OVGD equ wa_ovg - wa_ov - 2  ; (a cell's glyph, off SI past its offset)
 wa_overlay:
     mov dl, [wa_frame]
-    mov dh, dl
-    or dh, 0x80                 ; DL, DH: this frame's stamps, wall, figure
     cmp byte [wa_ovfresh], 0
     jne .fresh
-    mov cx, [wa_ovn]
+    mov cx, [wa_ovoldn]         ; (the overlay's cells, as it came in)
     jcxz .out
-    mov si, wa_ov
+    mov si, wa_ovold            ; ...each's STAMP's place
 .c:
     lodsw
     xchg ax, bx
-    mov al, [wa_stamp+bx]
+    mov al, [bx]
     and al, 0x7F
     cmp al, dl
     je .put                     ; the view drew here: listed, ours again
-    mov [wa_stamp+bx], dl       ; (kept off present's old list's blanks)
+    mov [bx], dl                ; (kept off present's old list's blanks)
     loop .c
     ret
 .put:
-    mov ax, [si+WA_OVGD]
-    mov [wa_cur+bx], ax
+    mov ax, [si+wa_ovg-wa_ovold-2]
+    mov [bx+wa_cur-wa_stamp], ax
     loop .c
 .out:
     ret
 .fresh:
+    mov dh, dl
+    or dh, 0x80                 ; DL, DH: this frame's stamps, wall, figure
     mov cx, [wa_ovoldn]         ; the last overlay's cells, back to the view
     mov si, wa_ovold
 .o:
     jcxz .new
     lodsw
     xchg ax, bx
+    sub bx, wa_stamp            ; (the cell)
     cmp [wa_stamp+bx], dl
     je .on
     cmp [wa_stamp+bx], dh
@@ -4781,10 +4773,9 @@ wa_overlay:
 .n:
     jcxz .done
     lodsw
-    mov [di], ax
-    inc di
-    inc di
     xchg ax, bx
+    lea ax, [wa_stamp+bx]       ; (its stamp's place: the frames to come)
+    stosw
     mov ax, [si+WA_OVGD]
     cmp [wa_stamp+bx], dl
     je .nput
