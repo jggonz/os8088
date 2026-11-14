@@ -253,6 +253,11 @@ wa_setmode:
     inc si
     inc si
     loop .rows
+    mov ax, [wa_rowoff+WA_ROWS*2] ; (the HUD's row, a far pointer into text
+    shl ax, 1                   ; memory: wa_putc's and wa_putn's)
+    mov [wa_hudp], ax
+    mov ax, [wa_vseg]
+    mov [wa_hudp+2], ax
     call wa_rsync               ; the mode into the renderer part, and its
     mov bx, WRV_INIT            ; row tables, stamps and lists started again
     call wa_rcall
@@ -5113,25 +5118,45 @@ wa_put10:
     pop ax
     ret
 
-; wa_putn - AX as CX right-aligned digits at HUD column DI; DI moves on
+; wa_putn - AX as CX right-aligned digits at HUD column DI; DI moves on.
+; Written from the right straight into the HUD's row (wa_hudp); a value under
+; 256 - every one but a frame slower than a quarter second - gives up its
+; digits by AAM, not a 16-bit divide each. Clobbers AX, CX, DX
 wa_putn:
     push bx
-    add di, cx
+    push si
+    push es
+    add di, cx                  ; DI = the column after them
     push di
+    les si, [wa_hudp]
+    add si, di
+    add si, di                  ; ES:SI = that column's cell
     mov bx, 10
 .d:
     dec di
+    dec si
+    dec si
+    or ah, ah
+    jnz .big
+    aam                         ; AH = the rest, AL = its last digit
+    mov dl, al
+    mov al, ah
+    xor ah, ah
+    jmp .put
+.big:
     xor dx, dx
     div bx
-    push ax
-    push di
-    mov al, dl
-    add al, '0'
-    call wa_putc
-    pop di
-    pop ax
+.put:
+    cmp di, [wa_w]              ; (off the 40-column screen: dropped)
+    jae .np
+    add dl, '0'
+    mov dh, 0x07
+    mov [es:si], dx
+.np:
     loop .d
     pop di
+    pop es
+    pop si
     pop bx
     ret
 
@@ -5141,18 +5166,13 @@ wa_putc:
     cmp di, [wa_w]
     jae .skip
     push es
-    push di
-    push ax
-    mov es, [wa_vseg]
-    mov ax, [wa_rowoff+WA_ROWS*2]
-    add di, ax
-    shl di, 1
-    pop ax
-    push ax
-    mov ah, 0x07
-    stosw
-    pop ax
-    pop di
+    push bx
+    les bx, [wa_hudp]           ; the HUD's row in text memory (wa_setmode)
+    add bx, di
+    add bx, di
+    mov [es:bx], al
+    mov byte [es:bx+1], 0x07
+    pop bx
     pop es
 .skip:
     inc di
@@ -5746,6 +5766,7 @@ WA_VAR wa_pbtk,2
 WA_VAR wa_pbfr,2
 WA_VAR wa_hold,1
 WA_VAR wa_rowoff,(WA_ROWS+1)*2
+WA_VAR wa_hudp,4                 ; the HUD's row in text memory, offset:segment
 WA_VAR wa_kbits,2                ; the held keys this frame (wa_keys)
 WA_VAR wa_kfr,1                  ; ...polled in this frame
 WA_VAR wa_kmap,KEYMAP_BYTES      ; ...and the whole map they came from
