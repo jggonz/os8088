@@ -3056,9 +3056,9 @@ wa_figures:
 ;     run by run of its columns whether the figure is in front of the wall
 ;     there: a run of columns one span drew (`repe scasw` finds its end)
 ;     takes one verdict when the span's ends bound it, and when they do not
-;     the run's two END columns are asked exactly (wa_wallz), which settles
-;     every column between them, the wall's depth being monotonic along a
-;     span. Only a hidden column is written down (wa_fvis). Off the screen,
+;     the run's END column where the wall is nearest is asked exactly
+;     (wa_wallz), which settles every column of it when the figure is in
+;     front there, the wall's depth being monotonic along a span. Only a hidden column is written down (wa_fvis). Off the screen,
 ;     or behind the walls in every column: nothing more is done, and the
 ;     figure counts as not drawn;
 ;  2. its eleven joints, blended and projected - the blend specialised per
@@ -3221,13 +3221,28 @@ wa_figure:
     shl bx, 1
     mov [wa_fbc], bx            ; ...and its left column x 2
     mov bl, al
-    mov al, ch                  ; its half-rows: one above the bound's top
-    xor ah, ah                  ; to the floor
-    call wa_fyh
+    mov ax, [wa_fv8]            ; its half-rows. The floor's: hh + (eye fv8
+    imul word [wa_feye]         ; + 255 >> 8), a joint's very number at
+    add ax, 255                 ; height 0 (wa_fjl)...
+    adc dx, 0
+    mov si, ax
+    mov al, ah
+    mov ah, dl
+    add ax, [wa_hh]
+    xchg ax, si                 ; SI = the floor's
+    add ah, [wa_hh]             ; (E = eye fv8 + 256 hh + 255, mod 2^16:
+    mov [wa_fe], ax             ; wa_fjl's narrow sum)
+    mov al, ch                  ; ...and the top's: no higher than the
+    xor ah, ah                  ; floor's less (top fv8 >> 8) + 1, and one
+    mul word [wa_fv8]           ; more for the head's 2x2
+    mov al, ah
+    xor ah, ah
+    neg ax
+    add ax, si
+    dec ax
     dec ax
     xchg ax, cx                 ; CX = the top
-    xor ax, ax
-    call wa_fyh
+    mov ax, si
     or cx, cx
     js .yoff
     cmp ax, WA_HR
@@ -3281,29 +3296,35 @@ wa_figure:
     jbe .vis                    ; nearer than the whole span
     cmp ax, bp
     ja .hid                     ; farther than the whole span
-    push cx                     ; BETWEEN: the run's two END columns, exactly
-    mov cx, bx
-    lea bx, [di-wa_cov]
-    sub bx, cx
-    sub bx, cx                  ; BX = its first column x 2
+    push cx                     ; BETWEEN: the run's END column where the
+    mov cx, bx                  ; wall is nearest, exactly - not nearer than
+    lea bx, [di-wa_cov-2]       ; the figure there, it is nowhere in the run
+    mov ax, cx                  ; (its depth is monotonic along a span)
+    dec ax
+    shl ax, 1                   ; AX = from the run's first column to its
+    cmp word [wa_spsl+si], 0    ; last, BX = the last
+    jge .nr
+    sub bx, ax                  ; (the wall comes nearer leftward: the first)
+    neg ax
+.nr:
     call wa_wallz
     cmp bp, [wa_colz+bx]
-    sbb al, al                  ; AL = 0xFF: the wall is nearer there
-    push bx
-    add bx, cx
-    add bx, cx
-    dec bx
-    dec bx                      ; ...and its last
-    call wa_wallz
+    jae .bv
+    sub bx, ax                  ; nearer there: the other end - nearer there
+    call wa_wallz               ; too, the run is hidden
     cmp bp, [wa_colz+bx]
-    sbb ah, ah
-    pop bx
-    cmp al, ah
-    jne .mix
+    jb .bh
+    or ax, ax                   ; one of each: every column, from the first
+    jns .mix
+    add bx, ax
+    jmp short .mix
+.bh:
     mov bx, cx
     pop cx
-    or al, al
-    jnz .hid
+    jmp short .hid
+.bv:
+    mov bx, cx
+    pop cx
 .vis:
     add dl, bl                  ; (wa_fvis stays 0: nothing hidden)
     or cx, cx
@@ -3873,14 +3894,7 @@ wa_fjl:
     jl .wide                    ; most that, is under it unless below 0)
     mov cl, al
     mov ch, dl
-    mov bp, [wa_fkh]            ; (K: wa_figure made it)
-    mov al, ch                  ; E = eye fv8 + 256 hh + 255 (mod 2^16: the
-    xor ah, ah                  ; difference it ends in fits)
-    mul word [wa_feye]
-    mov dh, [wa_hh]
-    mov dl, 255
-    add ax, dx
-    mov [wa_fe], ax
+    mov bp, [wa_fkh]            ; (K and E: wa_figure made them)
     mov ax, [.tab+8+bx]
     mov bx, [wa_pb]
     sub bx, si                  ; BX = B - A
@@ -4177,18 +4191,6 @@ wa_fl_xtab:
     dw wa_fxR00, wa_fxR01, wa_fxR10, wa_fxR11
     dw wa_fxL00, wa_fxL01, wa_fxL10, wa_fxL11
 
-; wa_fyh - AX = a height above the figure's floor, units: AX = the half-row
-; it projects to, hh - ((h - eye) fv8 >> 8) - a joint's very number
-; (wa_fjl). Clobbers DX.
-wa_fyh:
-    sub ax, [wa_feye]
-    imul word [wa_fv8]
-    mov al, ah
-    mov ah, dl
-    neg ax
-    add ax, [wa_hh]
-    ret
-
 ; wa_marker - DI = a figure too far for limbs: a one-sub-column bar from
 ; head to feet, its attribute already chosen. The trigger's extents too.
 wa_marker:
@@ -4200,7 +4202,12 @@ wa_marker:
     mov [di+F_PCX], ax
     mov si, ax                  ; SI = the sub-column
     mov ax, 112                 ; the head, 1.75 m
-    call wa_fyh
+    sub ax, [wa_feye]
+    imul word [wa_fv8]
+    mov al, ah
+    mov ah, dl
+    neg ax
+    add ax, [wa_hh]
     mov [di+F_PTOP], ax
     mov cx, ax                  ; CX = top half-row
     mov ax, [wa_feye]           ; the feet, the floor
