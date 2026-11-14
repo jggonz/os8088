@@ -53,3 +53,9 @@ docs/excelfileformat.pdf
 # `win16ref.py all` recreates the lot.
 /win16ref/
 /win16ref-*/
+
+# a guest disk extracted at the repo root (mcopy -s): built packages, never source
+/APPS/
+/GAMES/
+/MEDIA/
+/SYSTEM/
