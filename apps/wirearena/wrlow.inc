@@ -11,7 +11,8 @@
 ; box's own top, with an entry on the column's depth stack (its span tag,
 ; the row it covers from) for the figures, the floor grid and the pistol's
 ; ray (wa_occl):
-;  1. the posts at the visible corners, against the clip as it stood;
+;  1. the posts at the visible corners, against the clip as it stood (each
+;     with its face's pass: it stands in a column no other face's reaches);
 ;  2. the faces the player is outside of, a pass each: the floor edge drawn
 ;     against the clip as it stood, then the top edge, raising it;
 ;  3. with the eye above the box, its other faces' top edges - the far side
@@ -23,10 +24,15 @@
 ;     the first tread, its inner treads lines across it at their heights,
 ;     nearest first. The walk is the ramp either way (wa_hat).
 ; A top edge at or above the screen's top shuts its column, wa_cov holding
-; its tag as a wall's does. Each corner keeps its own height (wl_ch): a
-; ramp's low-end corners stand on the floor. A corner in
-; the view is projected once a box (wl_kc..wl_kf); an edge with a corner out
-; of it is clipped (wa_clip) and its ends projected on the spot.
+; its tag as a wall's does. Each corner keeps its own height (WL_CN, WL_CS):
+; a ramp's low-end corners stand on the floor. A corner in
+; the view is projected once a box (WL_KC..WL_KF); an edge with a corner out
+; of it is clipped (wa_clip) and its ends projected on the spot - unless it
+; lies under the screen whole (wl_face).
+; An edge is walked across its columns in RUNS of one half-row (wl_run,
+; wl_rtop, wl_rfloor): set up without a divide where its left end is on the
+; screen; a steep one, a half-row a column or more, keeps a column loop
+; (wl_l01s, wl_f1).
 
 ;
 ; LOOK OPTIONS (the detail levels, wa_look - HEIGHTS-PLAN 9.11): FARTOP
@@ -64,7 +70,7 @@ WA_VAR wl_need, 1               ; the corners projected: bits
 WA_VAR wl_abv, 1                ; ...and 1: the eye above the box (wl_need's
                                 ; high byte)
 WA_VAR wl_fneed, 1              ; ...of them, those with a floor row
-WA_VAR wl_m, 1                  ; a mask being walked
+WA_VAR wl_m, 1                  ; the seen faces drawn with a floor edge
 WA_VAR wl_pm, 1                 ; ...and the faces given a pass
 WA_VAR wl_c, 4*WL_REC           ; its corners (WL_*)
 WA_VAR wl_fn, 2                 ; the floor's pair (made in the frame
@@ -89,18 +95,17 @@ WA_VAR wl_e2i, 2
 WA_VAR wl_e2f, 2
 WA_VAR wl_stw, 2                ; a steep edge's step a column (its value:
 WA_VAR wl_stf, 2                ; CX.BP)
-WA_VAR wl_hr, 2                 ; a shallow edge (wl_edge): its half-row,
+WA_VAR wl_hr, 2                 ; a shallow edge (wl_run): its half-row,
 WA_VAR wl_ks, 2                 ; its fraction's step, what a carry takes
-WA_VAR wl_dcm, 2                ; off the fraction, and the half-row's step
-WA_VAR wl_dir, 2
+WA_VAR wl_dcm, 2                ; off the fraction (the pass's: wl_draw),
+WA_VAR wl_dir, 2                ; and the half-row's step
 WA_VAR wl_col0, 2               ; a pass's first column x 2
 WA_VAR wl_sc, 2                 ; the loops' DX: the stamp, the pass's columns
 WA_VAR wl_prev, 2               ; the column before's half-row (a steep step)
 WA_VAR wl_tag, 1
 WA_VAR wl_k, 2                  ; a flight: the treads left, the
-WA_VAR wl_rise, 2               ; rise, the low and high faces, and a
-                                ; tread's step along each side, camera
-WA_VAR wl_lo, 1                 ; space
+WA_VAR wl_rise, 2               ; rise, the low face, and a tread's step
+WA_VAR wl_lo, 1                 ; along each side, camera space
 WA_VAR wl_dxa, 2
 WA_VAR wl_dza, 2
 WA_VAR wl_dxb, 2
