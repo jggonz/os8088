@@ -81,10 +81,16 @@ WA_VAR wa_vst, WA_MVTX*2        ; a vertex's cache stamp (the frame number)
 WA_VAR wa_vok, WA_MVTX*2        ; 1: inside the view, projected below
 WA_VAR wa_vx, WA_MVTX*2         ; camera space
 WA_VAR wa_vz, WA_MVTX*2
-WA_VAR wa_vpc, WA_MVTX*2        ; projected: column x16, top, bottom,
-WA_VAR wa_vpt, WA_MVTX*2        ; inverse depth
-WA_VAR wa_vpb, WA_MVTX*2
-WA_VAR wa_vpi, WA_MVTX*2
+WA_VS1 equ WA_MVTX*2            ; ...and two more of these four: a face's
+WA_VS2 equ WA_MVTX*2+2          ; ends at the screen's edges (wa_vend)
+WA_VAR wa_vpc, WA_MVTX*2+4      ; projected: column x16, top, bottom,
+WA_VAR wa_vpt, WA_MVTX*2+4      ; inverse depth
+WA_VAR wa_vpb, WA_MVTX*2+4
+WA_VAR wa_vpi, WA_MVTX*2+4
+WA_VAR wa_vpx, 4                ; the screen edges' numerators of 1/z on a
+WA_VAR wa_vpy, 4                ; plane x = X and y = Y (wa_edges)
+WA_VAR wa_vu, 2                 ; 1 - c16 / k16, x 65536, for the
+WA_VAR wa_vuk, 4                ; projection in wa_vuk
 WA_VAR wa_fv, 2
 WA_VAR wa_bvis, 1
 WA_VAR wa_endok, 1
@@ -358,6 +364,7 @@ wa_render:
     mov [wa_left], cx
     rep stosw
     call wa_products
+    call wa_edges
     mov ax, [wa_px]             ; the boxes' order: the same from anywhere in
     cmp ax, [wa_rx0]            ; the cell of the tree's split lines the
     jl .order                   ; player stands in, so it is walked again
@@ -1008,16 +1015,11 @@ wa_boxf:
 .v2:
     mov dx, [wa_vpc+bx]         ; THE PRE-CHECK: the columns it could reach,
     mov bl, [wa_fv]             ; x 16 (a vertex in view is its own, one
-    mov si, bx                  ; beside the view is beyond that edge, one
-    mov ax, [wa_vpc+bx]         ; behind is anywhere - wa_vert's sentinels)
-    xor bp, bp                  ; (BP = 1: the ends the other way about -
-    cmp ax, dx                  ; with both in the view, no columns at all)
-    jle .lohi
-    xchg ax, dx
-    inc bp
-.lohi:
-    cmp ax, 0x8000              ; (behind: anywhere)
-    je .open
+    mov si, bx                  ; beside the view is beyond that edge -
+    mov ax, [wa_vpc+bx]         ; wa_vert's sentinels - and one BEHIND is
+    cmp ax, dx                  ; beyond the left edge as a face's first end
+    jg .rev                     ; and beyond the right as its second: we see
+.lohi:                          ; a face's front, so it runs left to right)
     mov cl, 4                   ; the first column whose centre is at or past
     mov ch, al                  ; the near end, (c + 7) >> 4, and the last
     sar ax, cl                  ; short of the far end, ((c + 7) >> 4) - 1:
@@ -1026,8 +1028,8 @@ wa_boxf:
     sbb ax, -1                  ; not after its tops, bottoms and inverse
     mov ch, dl                  ; depths (two a frame on the play bench).
     sar dx, cl                  ; (+7 by the remainder's carry rather than
-    and ch, 15                  ; an add: a sentinel, +-32767, would
-    cmp ch, 9                   ; overflow)
+    and ch, 15                  ; an add: a sentinel would overflow)
+    cmp ch, 9
     sbb dx, 0                   ; (the far end: one less)
     cmp ax, dx
     jg .shut
@@ -1063,39 +1065,70 @@ wa_boxf:
     je .open
 .shut:
     ret                         ; every one closed: nothing more
+.rev:                           ; c1 > c2: the ends the other way about - a
+    cmp dx, 0x8000              ; face seen edge-on, no columns at all -
+    jne .shut                   ; unless the second end is BEHIND
+    mov dx, 0x7FFF
+    jmp .lohi
 .open:                          ; SI = v1 x 2
     mov [wa_cs0], bx
     mov [wa_ce0], dx
-    mov bl, [wa_fv+1]           ; BX = v2 x 2
+    lea ax, [di-2-wa_cov]       ; the first open column (wa_fspan's)
+    mov [wa_cs], ax
+    mov bl, [wa_fv+1]
     xor bh, bh
+    mov di, bx                  ; DI = v2 x 2
     mov al, [wa_vok+si]
     mov [wa_e1], al
-    mov ah, [wa_vok+bx]
+    mov ah, [wa_vok+di]
     and ah, [wa_endok]          ; (the end corner, only on a silhouette)
     mov [wa_e2], ah
-    and al, [wa_vok+bx]
-    jz .clip
-    or bp, bp                   ; BOTH INSIDE THE VIEW: the cache's own
-    jnz .shut                   ; values, and the pre-check's columns
-    lea ax, [di-2-wa_cov]       ; (wa_fspan) - c1 > c2 has none
-    mov [wa_cs], ax
-    mov di, bx                  ; DI = v2 x 2
-    test byte [wa_vok+si], 2    ; their tops, bottoms and inverse depths
-    jnz .h1                     ; made the first time a face of them gets
-    call .mk                    ; this far in a frame
-.h1:
-    test byte [wa_vok+di], 2
-    jnz .h2
+    or al, al
+    jnz .in1
+    xor cx, cx                  ; THE FIRST END OUTSIDE THE VIEW: an end at
+    call wa_vend                ; the screen's left edge in its place
+    jc .clip
+    mov si, WA_VS1
+    call .miz
+    jmp short .e2
+.in1:
+    test al, 2                  ; (in the view: its top, bottom and inverse
+    jnz .e2                     ; depth made the first time a face of it
+    call .mk                    ; gets this far in a frame)
+.e2:
+    mov al, [wa_vok+di]
+    or al, al
+    jnz .in2
+    push si
+    mov si, di
+    mov cx, 2                   ; ...and the second, at the right edge
+    call wa_vend
+    jc .clip1
+    mov si, WA_VS2
+    call .miz
+    mov di, si
+    pop si
+    jmp short .go
+.in2:
+    test al, 2
+    jnz .go
     xchg si, di
     call .mk
     xchg si, di
-.h2:
+.go:
 %if %1
     jmp wa_fspanh
 %else
     jmp wa_fspan
 %endif
-.clip:
+.clip1:
+    pop si
+.clip:                          ; (an end the edge cannot stand for - the
+    mov bx, [wa_fv]             ; plane inside the near plane there: the
+    mov si, bx                  ; clip's own way)
+    and si, 0xFF
+    mov bl, bh
+    xor bh, bh
     mov ax, [wa_vx+si]
     mov [wa_x1], ax
     mov ax, [wa_vz+si]
@@ -1158,7 +1191,7 @@ wa_boxf:
     jae .mzdiv
     shl bx, 1
     mov bx, [wa_rcp+bx-WA_NEAR*2]
-.miz:
+.miz:                           ; (BX = an inverse depth: an edge end's)
     mov [wa_vpi+si], bx
     mov ax, [wa_numt]
     imul bx
@@ -1192,6 +1225,129 @@ wa_face:
     FACEBODY 0
 wa_faceh:                       ; (heights: a tall face at [wa_ntht])
     FACEBODY 1
+
+; wa_vend - a face's end OUTSIDE the view, made where the face meets the
+; screen's EDGE instead of by a clip. Every wall is axis-aligned, so along a
+; face on the plane x = X the inverse depth depends on the screen column
+; alone: 1/z = (cos + s sin) / (X - px), s the column's x/z - and on y = Y,
+; (sin - s cos) / (Y - py). At the edge s is the view's own (wa_edges: the
+; numerators, once a frame), so the end is one multiply of wa_rcp's 1 / |d| -
+; no lerp, no divide, and nothing off the screen for the span to step over
+; (wa_clip's end is at the guard band, ~150 columns out).
+; In: SI = the end's vertex x 2, [wa_fv] the face, CX = 0 its first end (the
+; left edge) or 2 its second (the right). Out: CF = 0, BX = the inverse
+; depth there; CF = 1: wa_clip's way - the plane inside the near plane on
+; that ray (the player against the wall, |d| under ~23), or the vertex
+; behind the near plane but AHEAD of the eye, where the face can end in the
+; view. Keeps SI, DI; clobbers AX, CX, DX.
+wa_vend:
+    cmp word [wa_vpc+si], 0x8000
+    jne .side
+    cmp word [wa_vz+si], 0
+    jg .no
+.side:
+    xor bh, bh
+    mov bl, [wa_fv]
+    mov ax, [wa_vtx+bx]         ; its first vertex's x and y indices (x 4)
+    mov bl, [wa_fv+1]
+    cmp al, [wa_vtx+bx]         ; both ends on one x: the plane x = X
+    jne .yp
+    mov bl, al
+    shr bx, 1
+    mov ax, [wa_xv+bx]
+    sub ax, [wa_px]             ; d
+    mov bx, wa_vpx
+    jmp short .d
+.yp:
+    mov bl, ah
+    shr bx, 1
+    mov ax, [wa_yv+bx]
+    sub ax, [wa_py]
+    mov bx, wa_vpy
+.d:
+    add bx, cx
+    mov cx, [bx]                ; the ray's numerator, Q14
+    mov dx, ax
+    xor dx, cx
+    js .no                      ; (the ray never meets the plane ahead)
+    or ax, ax
+    jns .pos
+    neg ax
+    neg cx
+.pos:
+    cmp ax, WA_NEAR
+    jb .no
+    cmp ax, WA_ZMAX
+    jae .no
+    mov bx, ax
+    shl bx, 1
+    mov ax, [wa_rcp+bx-WA_NEAR*2]
+    mul cx                      ; 0x7FFF0 / |d| x |numerator| >> 14
+    cmp dx, 0x2000
+    jae .no                     ; (nearer than the near plane)
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov bx, dx
+    cmp bx, 1                   ; (never 0: a column's "no wall")
+    adc bx, 0                   ; (CF = 0)
+    ret
+.no:
+    stc
+    ret
+
+; wa_edges - once a frame: the numerators of 1/z at the screen's two edges,
+; for a plane x = X (wa_vpx: left, right) and y = Y (wa_vpy) - cos -+ t sin
+; and sin +- t cos, t the view's half width in x/z, c16 / k16 (1 at 90
+; degrees). t sin is sin - u sin, u = 1 - t as a 16-bit fraction, made
+; again only when the projection changes.
+wa_edges:
+    mov ax, [wa_k16]
+    mov bx, [wa_c16]
+    cmp ax, [wa_vuk]
+    jne .u
+    cmp bx, [wa_vuk+2]
+    je .have
+.u:
+    mov [wa_vuk], ax
+    mov [wa_vuk+2], bx
+    mov word [wa_vpc+WA_VS1], 0 ; (the two ends' columns: the screen's own
+    mov dx, bx                  ; edges, x 16)
+    shl dx, 1
+    mov [wa_vpc+WA_VS2], dx
+    mov dx, ax
+    sub dx, bx                  ; k16 - c16, under k16: no overflow
+    jnc .ud
+    xor dx, dx                  ; (a view wider than 90: never)
+.ud:
+    xor ax, ax
+    or dx, dx
+    jz .uz
+    div word [wa_k16]
+.uz:
+    mov [wa_vu], ax
+.have:
+    mov ax, [wa_sinv]
+    mov bx, ax
+    imul word [wa_vu]
+    sub bx, dx                  ; BX = t sin
+    mov ax, [wa_cos]
+    mov cx, ax
+    sub ax, bx
+    mov [wa_vpx], ax
+    add bx, cx
+    mov [wa_vpx+2], bx
+    mov ax, cx
+    imul word [wa_vu]
+    sub cx, dx                  ; CX = t cos
+    mov ax, [wa_sinv]
+    mov bx, ax
+    add ax, cx
+    mov [wa_vpy], ax
+    sub bx, cx
+    mov [wa_vpy+2], bx
+    ret
 
 ; wa_vert - BX = a vertex x 2 (BH = 0) not yet made this frame, AL = the
 ; frame: into camera space and, inside the view (the guard band), its
