@@ -2777,7 +2777,7 @@ wa_plotf:
 ; so the column is ONE multiply, W/2 + (XK x 1/z) >> 17, with 1/z out of
 ; wa_rcp (no divide). A dot outside the view leaves on two compares; one in
 ; it asks the column's wall for its depth only when the span's two ends do
-; not settle it (wa_docc), and pays its second multiply (the row) only when
+; not settle it (wa_occl), and pays its second multiply (the row) only when
 ; it is not hidden. The first version made four products a grid line and a
 ; divide and three multiplies a dot, ~99,000 clk a frame on the play bench
 ; (docs/plans/MULTIPLAYER-FPS-PLAN.md 16.9).
@@ -2920,7 +2920,8 @@ wa_dots:
     jae .next                   ; (negative is huge, unsigned)
     mov bx, dx
     shl bx, 1                   ; BX = the column x 2
-    call wa_docc                ; AL = the first half-row hidden there
+    mov ax, cx                  ; AL = the first half-row hidden there (the
+    call wa_occl                ; span's ends before the wall's own depth)
     or al, al
     jz .next                    ; a wall is nearer
     mov [wa_dlim], al
@@ -3046,48 +3047,6 @@ wa_dots:
     rcl dx, 1
     loop .m1
     mov ax, dx
-    ret
-
-; wa_docc - BX = column x 2, CX = a floor dot's inverse depth: AL = the first
-; half-row something nearer hides in that column (0 the whole column, 0xFF
-; none), as wa_occl answers - but where the ends of the span that drew the
-; column's wall settle it (both nearer than the dot, or neither), without
-; wa_wallz's multiply and divide. Keeps every register but AX and DX.
-wa_docc:
-    push si
-    mov si, [wa_cov+bx]
-    or si, si
-    jz .open                    ; no wall in the column
-    mov ax, [wa_spih+si]
-    mov dx, [wa_spsl+si]
-    add dx, ax
-    cmp ax, dx
-    jbe .ord
-    xchg ax, dx                 ; AX = the span's farther end, DX its nearer
-.ord:
-    cmp cx, dx
-    ja .open                    ; the dot is nearer than all of it
-    cmp cx, ax
-    jb .hid                     ; ...farther than all of it
-    pop si
-    mov ax, cx                  ; between: the column's own depth
-    jmp wa_occl
-.hid:
-    pop si
-    xor al, al
-    ret
-.open:
-    pop si
-    mov al, 0xFF
-    cmp byte [wa_hflat], 0
-    jne .out
-    push cx                     ; (heights: a low box's band)
-    mov ax, cx
-    mov cl, 0xFF
-    call wa_occlow
-    mov al, cl
-    pop cx
-.out:
     ret
 
 ; --- figures ----------------------------------------------------------------
