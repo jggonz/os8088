@@ -1252,6 +1252,7 @@ def main(out):
       % (NFACE * NJ * 2))
     w("%ifdef WA_TAB_POSE")
     w("wa_pose:")
+    kbnd = []
     for name, n, fn, loops in ANIMS:
         frames = []
         for i in range(n):
@@ -1283,6 +1284,33 @@ def main(out):
                 w("    db " + ", ".join("%d,%d" % (sb(a), sb(b))
                                          for a, b in frames[i][k]) +
                   "   ; %s %d facing %d" % (name, i, k))
+        # wa_ktop and wa_krch (wa_figure's box, made BEFORE the joints are):
+        # per keyframe the highest any joint is, and - per CLASS of facing,
+        # the angle between the figure's facing and the view folded into a
+        # quarter turn (facings k, NFACE/2 - k, NFACE/2 + k and NFACE - k
+        # share one: a pose is nearly its own mirror, and the most of the
+        # four is taken) - how far any joint reaches to either side of the
+        # feet's line. Each is taken over the keyframe AND the one it can
+        # blend toward (the next; the first after the last, looping or
+        # not), since a blend lies between its two
+        half = NFACE // 2
+        def cls(k):
+            return min(k % half, half - k % half)
+        for i in range(n):
+            fr = [frames[j] for j in {i, min(i + 1, n - 1), (i + 1) % n}]
+            top = max(b for f in fr for fk in f for a, b in fk)
+            rch = [max(abs(a) for f in fr for k in range(NFACE)
+                       if cls(k) == c for a, b in f[k])
+                   for c in range(half // 2 + 1)]
+            if max(rch) > 127 or top > JMAXY:
+                raise SystemExit("arenagen: %s %d: a bound past a byte" % (name, i))
+            kbnd.append((top, rch, "%s %d" % (name, i)))
+    w("wa_ktop:                         ; per keyframe: its joints' top...")
+    w("    db " + ", ".join("%d" % t for t, _, _ in kbnd))
+    w("wa_krch:                         ; ...and per facing class, per")
+    for c in range(NFACE // 4 + 1):     # keyframe, their reach to either side
+        w("    db " + ", ".join("%d" % r[c] for _, r, _ in kbnd) +
+          "   ; class %d" % c)
     w("%endif")
     # Every constant first, once: an includer that wants the constants
     # before its own layout and the data blocks later (the renderer part,

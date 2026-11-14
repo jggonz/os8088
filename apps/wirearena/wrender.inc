@@ -188,8 +188,11 @@ WA_VAR wa_fvis, WA_MAXW*2       ;   per column x 2: 0, or the first half-row
 WA_VAR wa_fnh, 1                ;   its columns with something hidden
 WA_VAR wa_fsk, 2                ;   wa_femit: a row's bytes outside the box
 WA_VAR wa_flfn, 2               ;   wa_fline or wa_flinef
-WA_VAR wa_fon, 1                ;   1: every joint on the screen
-WA_VAR wa_fk, 2                 ; wa_fjl's narrow sums: Klo (fcx fs8 + 256 W),
+WA_VAR wa_foff, 1               ;   0: every joint on the screen (bit 0 one
+                                ;   may be off the side, bit 1 above or below)
+WA_VAR wa_fkh, 2                ;   Khi: the feet's line, sub-columns
+WA_VAR wa_fk, 2                 ; wa_fjl's narrow sums: Klo (fcx fs8 + 256 W:
+                                ;   a byte, its high byte left 0),
 WA_VAR wa_fe, 2                 ;   eye fv8 + 256 hh + 255
 WA_VAR wa_fbuf, WA_CELLS*2      ; a figure's sub-pixels by cell offset (0
                                 ; between figures: wa_figure clears its own)
@@ -2528,7 +2531,6 @@ wa_wallz:
     cmp word [wa_colz+bx], 0xFFFF
     jne .out
     push ax
-    push cx
     push dx
     push si
     mov si, [wa_cov+bx]
@@ -2548,7 +2550,6 @@ wa_wallz:
     mov [wa_colz+bx], ax
     pop si
     pop dx
-    pop cx
     pop ax
 .out:
     ret
@@ -3034,31 +3035,6 @@ wa_figures:
 .done:
     pop bp
     ret
-; WA_MINMAX t - BX, DX = the least and the most of the eleven words at t
-; (unrolled for WA_NJ = 11, which tools/arenagen.py asserts): the first, then
-; five pairs, each ordered by one compare and its smaller tried against the
-; least, its larger against the most - three compares a pair, not four.
-; Clobbers AX, CX, SI.
-%macro WA_MINMAX 1
-    mov si, %1
-    lodsw
-    mov bx, ax
-    mov dx, ax
-  %rep 5
-    lodsw
-    mov cx, ax
-    lodsw
-    cmp ax, cx
-    jle $+3                     ; (over the one-byte exchange)
-    xchg ax, cx                 ; AX = the smaller, CX = the larger
-    cmp ax, bx
-    jge $+4                     ; (over the two-byte move)
-    mov bx, ax
-    cmp cx, dx
-    jle $+4
-    mov dx, cx
-  %endrep
-%endmacro
 ; WA_LIMB a, b - a limb, joint a x 2 to joint b x 2, into wa_fbuf
 %macro WA_LIMB 2
     mov cx, [wa_jsx+%1]
@@ -3071,25 +3047,36 @@ wa_figures:
 ; wa_figure - DI = a figure, AX = its camera x, DX = its z. Clobbers every
 ; register but DI.
 ;
-; A near figure is drawn in three passes, each priced for the 8088:
-;  1. its eleven joints, blended and projected - the blend specialised per
+; A near figure is drawn in four steps, each priced for the 8088:
+;  1. ITS BOX, before a joint is made: the keyframe's bound (wa_ktop and
+;     wa_krch, tools/arenagen.py: how high any joint is, and how far any
+;     reaches to either side of the feet's line at this facing, over the
+;     two keyframes of a blend) projected - three multiplies, where finding
+;     the eleven joints' own least and most was forty-four compares - and
+;     run by run of its columns whether the figure is in front of the wall
+;     there: a run of columns one span drew (`repe scasw` finds its end)
+;     takes one verdict when the span's ends bound it, and when they do not
+;     the run's two END columns are asked exactly (wa_wallz), which settles
+;     every column between them, the wall's depth being monotonic along a
+;     span. Only a hidden column is written down (wa_fvis). Off the screen,
+;     or behind the walls in every column: nothing more is done, and the
+;     figure counts as not drawn;
+;  2. its eleven joints, blended and projected - the blend specialised per
 ;     quarter (wa_fjl), the scale in a register;
-;  2. the box the joints span, and per column of it whether the figure is
-;     in front of the wall there (wa_fvis: the span's ends bound it, and
-;     wa_wallz is asked only when they do not) - none: nothing is drawn;
-;     its nine limbs and head rasterised into wa_fbuf, a cell-mask scratch
+;  3. its nine limbs and head rasterised into wa_fbuf, a cell-mask scratch
 ;     laid out like the screen, by a Bresenham whose state is its POSITION
 ;     IN THE CODE (wa_fline: one block per sub-cell quadrant, so a sub-pixel
 ;     is one `or byte [bx], imm` and a pointer step) - ~70 clk a sub-pixel
 ;     against ~700 for the per-sub-pixel clip, depth test and plot it was;
-;     with every joint on the screen, through wa_flinef and no clip tests;
-;  3. the box swept with `repe scasw` (wa_femit): each cell the figure
-;     touched is cleared out of wa_fbuf and, where wa_fvis says so, plotted
-;     once - inline - however many of its four sub-pixels the limbs set.
-; wa_fbuf is all zeros between figures: pass 3 clears exactly what pass 2
-; set, because every sub-pixel pass 2 plots is on the screen and inside the
-; joints' box (a line stays inside its endpoints' box; the head's 2x2 reaches
-; one up and one right, which the box allows for).
+;     with the whole box on the screen, through wa_flinef and no clip tests;
+;  4. the box swept with `repe scasw` (wa_femit): each cell the figure
+;     touched is cleared out of wa_fbuf and plotted once - inline - however
+;     many of its four sub-pixels the limbs set.
+; wa_fbuf is all zeros between figures: step 4 clears exactly what step 3
+; set, because every sub-pixel step 3 plots is on the screen and inside the
+; box (a line stays inside its endpoints' box, each joint is inside the
+; bound; the head's 2x2 reaches one up and one right, which the box allows
+; for).
 wa_figure:
     mov [wa_fcx], ax
     mov [di+F_PZ], dx
@@ -3148,6 +3135,7 @@ wa_figure:
     and ax, 15
     shl ax, 1
     xchg ax, bx
+    mov si, [wa_fcl+bx]         ; SI = the facing's row of reaches (wa_krch)
     mov bx, [wa_fco+bx]         ; BX = facing's offset in a frame
     mov ax, [di+F_PH]
     mov cl, al
@@ -3173,16 +3161,199 @@ wa_figure:
     mov dl, [di+F_ANIM]
     add ax, dx
     add cx, dx
-    push di
-    mov si, ax
+    add si, ax
+    mov dl, [si]                ; DL = the reach to either side...
+    mov si, cx
     shl si, 1
     mov si, [wa_kfo+si]
-    add si, bx                  ; SI = keyframe A at this facing
-    mov di, cx
-    shl di, 1
-    mov di, [wa_kfo+di]
-    add di, bx                  ; DI = keyframe B
-    jmp wa_fjl                  ; the joints (and back to wa_fjdone)
+    add si, bx
+    mov [wa_pb], si             ; keyframe B at this facing
+    mov si, ax
+    mov dh, [wa_ktop+si]        ; ...DH = the top
+    mov cx, dx
+    shl si, 1
+    mov si, [wa_kfo+si]
+    add si, bx
+    mov [wa_pa], si             ; keyframe A
+    mov ax, [wa_fs8]            ; K = fcx fs8 + 256 W: its feet's line,
+    imul word [wa_fcx]          ; sub-columns x 256 (wa_fjl's too)
+    add ah, [wa_w]
+    adc dx, 0
+    mov [wa_fk], al             ; Klo (its high byte stays 0)...
+    mov al, ah
+    mov ah, dl
+    mov [wa_fkh], ax            ; ...and Khi
+    mov bp, ax
+    mov al, cl                  ; THE BOX. Its sub-columns: Khi - r to
+    xor ah, ah                  ; Khi + r + 1 (the head's 2x2 reaches one
+    mul word [wa_fs8]           ; further), r = reach x fs8 / 256 + 1
+    mov al, ah
+    mov ah, dl
+    inc ax
+    mov bx, bp
+    sub bx, ax                  ; BX = the left one
+    mov dx, bp
+    add dx, ax
+    inc dx                      ; DX = the right one
+    xor al, al                  ; AL = wa_foff: bit 0 a joint may be off the
+    mov si, [wa_w2]             ; side, bit 1 above or below - limbs clip
+    or bx, bx
+    js .xoff
+    cmp dx, si
+    jl .xon
+.xoff:
+    inc ax
+    or bx, bx
+    jns .xon
+    xor bx, bx
+.xon:
+    dec si
+    cmp dx, si
+    jle .cr
+    mov dx, si
+.cr:
+    sar bx, 1                   ; columns
+    sar dx, 1
+    sub dx, bx
+    jl .none                    ; all off the screen
+    inc dx
+    mov [wa_fbw], dx            ; the box's width, cells
+    shl bx, 1
+    mov [wa_fbc], bx            ; ...and its left column x 2
+    mov bl, al
+    mov al, ch                  ; its half-rows: one above the bound's top
+    xor ah, ah                  ; to the floor
+    call wa_fyh
+    dec ax
+    xchg ax, cx                 ; CX = the top
+    xor ax, ax
+    call wa_fyh
+    or cx, cx
+    js .yoff
+    cmp ax, WA_HR
+    jl .yon
+.yoff:
+    or bl, 2
+    or cx, cx
+    jns .ct
+    xor cx, cx
+.ct:
+    cmp ax, WA_HR-1
+    jle .yon
+    mov ax, WA_HR-1
+.yon:
+    mov [wa_foff], bl
+    and cl, 0xFE                ; half-rows -> row x 2 (wa_rowo2's index)
+    and al, 0xFE
+    cmp cx, ax
+    jg .none
+    mov [wa_fbr], ax            ; the last row x 2
+    mov [wa_frow], cx           ; ...and the first
+    push di                     ; (wa_fjdone pops it)
+    mov bp, [wa_fiz]            ; the box's columns: is the figure in front
+    mov di, [wa_fbc]            ; of the wall there? - and if not in one of
+    add di, wa_cov              ; them, nothing of it shows: no joints, no
+    mov cx, [wa_fbw]            ; limbs, no sweep. DI = a column's span tag
+    xor dx, dx                  ; in wa_cov, CX = columns left, DL = the
+.run:                           ; columns showing, DH = those hidden
+    mov si, [di]                ; this run's span...
+    mov ax, si
+    mov bx, cx
+    repe scasw                  ; ...to another's column, or the box's end
+    je .rl
+    inc cx                      ; (that column is the next run's)
+    dec di
+    dec di
+.rl:
+    sub bx, cx                  ; BX = the run's columns
+    or si, si
+    jz .vis                     ; no wall at all
+    mov ax, [wa_spih+si]        ; A BOUND FIRST: a span opens only columns
+    push dx                     ; whose centres lie inside its ends (wa_span),
+    mov dx, ax                  ; so wa_wallz's value there lies between its
+    add dx, [wa_spsl+si]        ; ends' inverse depths - and a figure in
+    cmp ax, dx                  ; front of both, or behind both, needs no
+    jbe .lo                     ; divide to say so
+    xchg ax, dx
+.lo:
+    cmp dx, bp
+    pop dx
+    jbe .vis                    ; nearer than the whole span
+    cmp ax, bp
+    ja .hid                     ; farther than the whole span
+    push cx                     ; BETWEEN: the run's two END columns, exactly
+    mov cx, bx
+    lea bx, [di-wa_cov]
+    sub bx, cx
+    sub bx, cx                  ; BX = its first column x 2
+    call wa_wallz
+    cmp bp, [wa_colz+bx]
+    sbb al, al                  ; AL = 0xFF: the wall is nearer there
+    push bx
+    add bx, cx
+    add bx, cx
+    dec bx
+    dec bx                      ; ...and its last
+    call wa_wallz
+    cmp bp, [wa_colz+bx]
+    sbb ah, ah
+    pop bx
+    cmp al, ah
+    jne .mix
+    mov bx, cx
+    pop cx
+    or al, al
+    jnz .hid
+.vis:
+    add dl, bl                  ; (wa_fvis stays 0: nothing hidden)
+    or cx, cx
+    jnz .run
+    jmp short .rd
+.mix:                           ; (the wall passes the figure's depth inside
+    call wa_wallz               ; the run: each column exactly)
+    cmp bp, [wa_colz+bx]
+    jae .mv
+    mov byte [wa_fvis+bx], 1
+    inc dh
+    dec dl
+.mv:
+    inc dl
+    inc bx
+    inc bx
+    loop .mix
+    pop cx
+    jmp short .rn
+.hid:
+    add dh, bl
+    push di
+    push cx
+    mov cx, bx
+    shl bx, 1
+    sub di, bx
+    add di, wa_fvis - wa_cov    ; the run's columns in wa_fvis: hidden from
+    mov ax, 1                   ; half-row 0 down
+    rep stosw
+    pop cx
+    pop di
+.rn:
+    or cx, cx
+    jnz .run
+.rd:
+    cmp byte [wa_hflat], 0      ; heights: from which row a nearer platform
+    jne .fl                     ; hides it, per column (wa_fvis)
+    mov si, bp
+    call wa_fthrs
+.fl:
+    mov [wa_fnh], dh
+    or dl, dl
+    jz .gone
+    jmp wa_fjl                  ; the joints (and on to wa_fjdone)
+.gone:
+    call wa_fvclr               ; (nothing shows: wa_fvis clean again)
+    pop di
+.none:
+    mov word [di+F_PZ], 0       ; not drawn: the trigger has nothing to hit
+    ret
 .lod:                           ; a SMALL figure (fv8 under WA_FLODV): J,
     cmp word [wa_fv8], WA_FLODV ; its keyframe as it stands and only its
     jae .lodd                   ; first seven joints, the ends, joined by
@@ -3201,6 +3372,16 @@ wa_fco:
     dw wa_i*WA_NJ*2
 %assign wa_i wa_i+1
 %endrep
+wa_fcl:                         ; ...and its class's row of wa_krch: the
+%assign wa_i 0                  ; facing folded into a quarter turn
+%rep WA_NFACE
+  %assign wa_j wa_i % (WA_NFACE/2)
+  %if wa_j > WA_NFACE/4
+    %assign wa_j WA_NFACE/2 - wa_j
+  %endif
+    dw wa_krch + wa_j*WA_NFRAMES
+%assign wa_i wa_i+1
+%endrep
 wa_fjdone:                      ; (wa_fjl comes back here)
     pop di
     mov ax, [wa_jsx+4]          ; for the trigger: centre, extent, width
@@ -3214,117 +3395,21 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     mov ax, [wa_jsy+12]
 .b:
     mov [di+F_PBOT], ax
-    mov ax, [wa_fs8]
-    mov cx, 20
-    mul cx
-    mov al, ah
-    mov ah, dl
-    or ax, ax
+    mov ax, [wa_fs8]            ; (20 units: fs8 x 5 / 64)
+    mov cx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, cx
+    mov cl, 6
+    shr ax, cl
     jnz .w
     inc ax
 .w:
     mov [di+F_PWH], ax
     push di
-    mov byte [wa_fon], 1        ; the joints' box FIRST: whether the limbs
-    WA_MINMAX wa_jsx            ; may skip their clip tests, and whether any
-    mov ax, [wa_w2]             ; of it is in front of the walls at all.
-    or bx, bx                   ; BX = min, DX = max sub-column
-    js .xoff
-    cmp dx, ax
-    jl .xon
-.xoff:
-    mov byte [wa_fon], 0        ; a joint off the side: limbs clip
-.xon:
-    inc dx                      ; (the 2x2 head reaches one further)
-    or bx, bx
-    jns .cl
-    xor bx, bx
-.cl:
-    dec ax
-    cmp dx, ax
-    jle .cr
-    mov dx, ax
-.cr:
-    sar bx, 1                   ; columns
-    sar dx, 1
-    sub dx, bx
-    jl .out                     ; all off the screen
-    inc dx
-    mov [wa_fbw], dx            ; the box's width, cells
-    shl bx, 1
-    mov [wa_fbc], bx            ; ...and its left column x 2
-    WA_MINMAX wa_jsy
-    or bx, bx
-    js .yoff
-    cmp dx, WA_HR
-    jl .yon
-.yoff:
-    mov byte [wa_fon], 0        ; above or below: limbs clip
-.yon:
-    dec bx                      ; (and one higher)
-    jns .ct
-    xor bx, bx
-.ct:
-    cmp dx, WA_HR-1
-    jle .cb
-    mov dx, WA_HR-1
-.cb:
-    and bl, 0xFE                ; half-rows -> row x 2 (wa_rowo2's index)
-    and dl, 0xFE
-    cmp bx, dx
-    jg .out
-    mov [wa_fbr], dx            ; the last row x 2
-    mov [wa_frow], bx           ; ...and the first
-    mov si, [wa_fiz]            ; the box's columns: is the figure in front
-    mov bx, [wa_fbc]            ; of the wall there? (wa_fvis) - and if not
-    mov cx, [wa_fbw]            ; in one of them, nothing of it shows: no
-    xor dx, dx                  ; limbs, no sweep. DL = the columns showing,
-.rc:                            ; DH = those with something hidden
-    mov ax, [wa_colz+bx]
-    cmp ax, 0xFFFF
-    jne .rz                     ; asked already this frame
-    mov di, [wa_cov+bx]
-    or di, di
-    jz .vis                     ; no wall at all
-    mov ax, [wa_spih+di]        ; A BOUND FIRST: a span opens only columns
-    mov bp, ax                  ; whose centres lie inside its ends (wa_span),
-    add bp, [wa_spsl+di]        ; so wa_wallz's value there lies between its
-    cmp ax, bp                  ; ends' inverse depths - and a figure in
-    jle .lo                     ; front of both, or behind both, needs no
-    xchg ax, bp                 ; divide to say so
-.lo:
-    cmp bp, si
-    jbe .vis                    ; nearer than the whole span
-    cmp ax, si
-    ja .hid                     ; farther than the whole span
-    call wa_wallz               ; (between: the exact depth)
-    mov ax, [wa_colz+bx]
-.rz:
-    cmp ax, si
-    ja .hid                     ; the wall there is nearer
-.vis:
-    inc dx                      ; (wa_fvis stays 0: nothing hidden)
-    jmp .rn
-.hid:
-    mov byte [wa_fvis+bx], 1    ; (hidden from half-row 0 down)
-    inc dh
-.rn:
-    inc bx
-    inc bx
-    loop .rc
-    cmp byte [wa_hflat], 0      ; heights: from which row a nearer platform
-    jne .fl                     ; hides it, per column (wa_fvis)
-    call wa_fthrs
-.fl:
-    mov [wa_fnh], dh
-    or dl, dl
-    jnz .some
-    call wa_fvclr               ; (nothing shows: wa_fvis clean again)
-    jmp .out
-.some:
     mov word [wa_flfn], wa_fline
-    cmp byte [wa_fon], 0
-    je .limbs
+    cmp byte [wa_foff], 0
+    jne .limbs
     mov word [wa_flfn], wa_flinef
 .limbs:
     cmp byte [wa_fgib], 0
@@ -3338,7 +3423,7 @@ wa_fjdone:                      ; (wa_fjl comes back here)
 .limbs0:
     cmp byte [wa_fsub], 4       ; (J: a small figure's ends alone)
     je .few
-    WA_LIMB 2, 4                ; pass 2: the limbs into wa_fbuf (joint x 2
+    WA_LIMB 2, 4                ; step 3: the limbs into wa_fbuf (joint x 2
     WA_LIMB 2, 14               ; at each end, tools/arenagen.py's JORDER:
     WA_LIMB 14, 6               ; neck-pelvis, the arms, the legs)
     WA_LIMB 2, 16
@@ -3360,9 +3445,6 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     dec si
     call wa_fpix
     jmp wa_femit
-.out:
-    pop di
-    ret
 .few:                           ; J: neck-pelvis, neck to each hand, pelvis
     WA_LIMB 2, 4                ; to each foot, straight
     WA_LIMB 2, 6
@@ -3371,9 +3453,14 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     WA_LIMB 4, 12
     jmp .head
 .gib:                           ; GIB (WEAPONS-PLAN 2.3): each joint alone,
-    mov si, wa_jsx              ; a 2x2 block when near (the head's) - the
-.gj:                            ; bits; the joints' box allows for the
-    push si                     ; reach, as for the head
+    mov cx, WA_NJ               ; a 2x2 block when near (the head's) - the
+    cmp byte [wa_fsub], 4       ; bits; the box allows for the reach, as for
+    jne .g0                     ; the head (J: the seven joints it made)
+    mov cl, 7
+.g0:
+    mov si, wa_jsx
+.gj:
+    push si
     mov di, [si+WA_NJ*2]
     mov si, [si]
     call wa_fpix
@@ -3389,8 +3476,7 @@ wa_fjdone:                      ; (wa_fjl comes back here)
     pop si
     inc si
     inc si
-    cmp si, wa_jsx + WA_NJ*2
-    jb .gj
+    loop .gj
     jmp wa_femit
 ; wa_fchest - a shielded figure's chest (WEAPONS-PLAN 2.3), after its sweep:
 ; down its neck-pelvis limb a cell row at a time, the cell under the limb
@@ -3767,15 +3853,6 @@ wa_fthrs:
     mov [di+WA_NJ*2-2], ax      ; y (wa_jsy follows wa_jsx)
     cmp di, wa_jsx+%3*2
     jb .j1%2
-  %if %3 < WA_NJ
-    mov ax, [wa_jsx]
-    mov cx, WA_NJ - %3
-    rep stosw
-    mov ax, [wa_jsy]
-    add di, WA_NJ*2 - (WA_NJ - %3)*2
-    mov cx, WA_NJ - %3
-    rep stosw
-  %endif
     jmp wa_fjdone
 %endmacro
 wa_fjl:
@@ -3785,6 +3862,7 @@ wa_fjl:
     xor bx, bx
     mov bl, [wa_fsub]
     shl bx, 1
+    mov si, [wa_pa]
     mov ax, [wa_fs8]
     cmp ax, 128
     jae .wide
@@ -3795,19 +3873,7 @@ wa_fjl:
     jl .wide                    ; most that, is under it unless below 0)
     mov cl, al
     mov ch, dl
-    imul word [wa_fcx]          ; K = fcx fs8 + 256 W...
-    mov bp, [wa_w]
-    xchg bp, ax
-    mov ah, al
-    mov al, 0
-    xchg bp, ax
-    add ax, bp
-    adc dx, 0
-    mov [wa_fk], al             ; ...Klo
-    mov byte [wa_fk+1], 0
-    mov al, ah
-    mov ah, dl
-    mov bp, ax                  ; ...and Khi
+    mov bp, [wa_fkh]            ; (K: wa_figure made it)
     mov al, ch                  ; E = eye fv8 + 256 hh + 255 (mod 2^16: the
     xor ah, ah                  ; difference it ends in fits)
     mul word [wa_feye]
@@ -3816,13 +3882,14 @@ wa_fjl:
     add ax, dx
     mov [wa_fe], ax
     mov ax, [.tab+8+bx]
-    mov bx, di
+    mov bx, [wa_pb]
     sub bx, si                  ; BX = B - A
     mov di, wa_jsx
     jmp ax
 .wide:
     and bx, 6                   ; (J's q 4 is q 0 here: all eleven joints)
     mov ax, [.tab+bx]
+    mov di, [wa_pb]
     xor bx, bx                  ; (BX: the joint x 2)
     jmp ax
 .tab:
@@ -3835,8 +3902,7 @@ wa_fjl:
     WA_FJN 1, 1, WA_NJ
     WA_FJN 2, 2, WA_NJ
     WA_FJN 3, 3, WA_NJ
-    WA_FJN 0, r, 7              ; J: the first seven alone - and the other
-                                ; four made the head's, for the box
+    WA_FJN 0, r, 7              ; J: the first seven alone
 
 ; WA_FPIXI - SI = sub-column, DI = half-row: one sub-pixel into wa_fbuf,
 ; clipped (wa_fpix inline, for the clipped walk). Clobbers AX, BX, DX.
@@ -4111,6 +4177,18 @@ wa_fl_xtab:
     dw wa_fxR00, wa_fxR01, wa_fxR10, wa_fxR11
     dw wa_fxL00, wa_fxL01, wa_fxL10, wa_fxL11
 
+; wa_fyh - AX = a height above the figure's floor, units: AX = the half-row
+; it projects to, hh - ((h - eye) fv8 >> 8) - a joint's very number
+; (wa_fjl). Clobbers DX.
+wa_fyh:
+    sub ax, [wa_feye]
+    imul word [wa_fv8]
+    mov al, ah
+    mov ah, dl
+    neg ax
+    add ax, [wa_hh]
+    ret
+
 ; wa_marker - DI = a figure too far for limbs: a one-sub-column bar from
 ; head to feet, its attribute already chosen. The trigger's extents too.
 wa_marker:
@@ -4122,12 +4200,7 @@ wa_marker:
     mov [di+F_PCX], ax
     mov si, ax                  ; SI = the sub-column
     mov ax, 112                 ; the head, 1.75 m
-    sub ax, [wa_feye]
-    imul word [wa_fv8]
-    mov al, ah
-    mov ah, dl
-    neg ax
-    add ax, [wa_hh]
+    call wa_fyh
     mov [di+F_PTOP], ax
     mov cx, ax                  ; CX = top half-row
     mov ax, [wa_feye]           ; the feet, the floor
